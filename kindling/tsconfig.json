@@ -1,0 +1,15 @@
+{
+	"extends": "../tsconfig.base.json",
+	"compilerOptions": {
+		"composite": true,
+		"module": "NodeNext",
+		"moduleResolution": "NodeNext",
+		"lib": ["ES2022", "DOM"],
+		"types": ["node"],
+		"declaration": true,
+		"declarationMap": true,
+		"rootDir": "src",
+		"outDir": "dist"
+	},
+	"include": ["src"]
+}

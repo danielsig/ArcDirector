@@ -1,0 +1,34 @@
+{
+	"name": "@arc-director/game",
+	"private": true,
+	"version": "0.0.0",
+	"type": "module",
+	"scripts": {
+		"dev": "vite",
+		"predev": "tsc -p ../arc-director/tsconfig.json && tsc -p ../kindling/tsconfig.json",
+		"prebuild": "tsc -p ../arc-director/tsconfig.json && tsc -p ../kindling/tsconfig.json",
+		"pretypecheck": "tsc -p ../arc-director/tsconfig.json && tsc -p ../kindling/tsconfig.json",
+		"build": "vue-tsc --noEmit && vite build",
+		"preview": "vite preview",
+		"typecheck": "vue-tsc --noEmit",
+		"normals": "node scripts/depth_to_normal.mjs",
+		"art-cache": "node scripts/artCachePack.mjs",
+		"pack-sheets": "node scripts/pack_character_sheets.mjs",
+		"unpack-depths": "node scripts/unpack_sheet_depth.mjs"
+	},
+	"dependencies": {
+		"@arc-director/kindling": "workspace:*",
+		"arc-director": "workspace:*",
+		"three": "^0.185.1",
+		"vue": "^3.5.41"
+	},
+	"devDependencies": {
+		"@techstark/opencv-js": "5.0.0-release.1",
+		"@types/three": "^0.185.4",
+		"@vitejs/plugin-vue": "^6.0.8",
+		"pngjs": "^7.0.0",
+		"typescript": "^6.0.3",
+		"vite": "^8.2.1",
+		"vue-tsc": "^3.3.10"
+	}
+}

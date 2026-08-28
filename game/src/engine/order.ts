@@ -1,0 +1,20 @@
+/** Kindling dispatch order. Physics runs between `update` and `lateUpdate`. */
+export const Order = {
+	pick: -10,
+	playerInput: 0,
+	director: 10,
+	npcInput: 20,
+	humanSprite: 30,
+	motor: 40,
+	door: 50,
+	torch: 60,
+	heldTorch: 70,
+	light: 80,
+	mesh: 90,
+	celebrating: 0,
+	streaming: 10,
+	camera: 20,
+	present: 30,
+	hud: 40,
+	persist: 50,
+} as const;

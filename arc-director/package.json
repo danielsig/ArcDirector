@@ -1,0 +1,28 @@
+{
+	"name": "arc-director",
+	"private": false,
+	"version": "0.0.1",
+	"type": "module",
+	"exports": {
+		".": {
+			"types": "./dist/index.d.ts",
+			"import": "./dist/index.js"
+		}
+	},
+	"main": "./dist/index.js",
+	"types": "./dist/index.d.ts",
+	"files": [
+		"dist"
+	],
+	"scripts": {
+		"build": "tsc -p tsconfig.json",
+		"typecheck": "tsc -p tsconfig.json --noEmit",
+		"test": "tsc -p tsconfig.json && node --test --test-reporter spec dist/json.test.js dist/action/parse.test.js dist/memory/store.test.js dist/perception/describe.test.js dist/agent/agent.test.js dist/agent/talk.test.js dist/agent/watches.test.js dist/agent/map.test.js dist/inference/models.test.js dist/inference/openaiHttp.test.js dist/expr/expr.test.js dist/think/queue.test.js",
+		"demo": "tsc -p tsconfig.json && node dist/scripts/fakeHost.js",
+		"fixture": "tsc -p tsconfig.json && node dist/scripts/fixtureGoTo.js"
+	},
+	"devDependencies": {
+		"@types/node": "^20.19.43",
+		"typescript": "^6.0.3"
+	}
+}

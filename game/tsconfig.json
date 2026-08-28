@@ -1,0 +1,17 @@
+{
+	"extends": "../tsconfig.base.json",
+	"compilerOptions": {
+		"composite": true,
+		"module": "ESNext",
+		"moduleResolution": "bundler",
+		"lib": ["ES2022", "DOM", "DOM.Iterable"],
+		"jsx": "preserve",
+		"noEmit": true,
+		"types": ["vite/client"],
+		"paths": {
+			"@/*": ["./src/*"]
+		}
+		// Vite owns emit. Do not set rootDir/outDir/declaration here.
+	},
+	"include": ["src/**/*.ts", "src/**/*.tsx", "src/**/*.vue", "src/**/*.d.ts"]
+}

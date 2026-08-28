@@ -1,0 +1,25 @@
+{
+	// Solution-style config for the workspace. There is no root src/.
+	// Per-package: game/tsconfig.json, arc-director/tsconfig.json
+	"files": [],
+	"references": [
+		{ "path": "./kindling" },
+		{ "path": "./arc-director" },
+		{ "path": "./game" }
+	]
+	// Old single-package shape (replaced):
+	// "compilerOptions": {
+	//   "strict": true,
+	//   "module": "CommonJS",
+	//   "target": "ES2021",
+	//   "declaration": true,
+	//   "noImplicitOverride": true,
+	//   "sourceMap": true,
+	//   "declarationMap": true,
+	//   "esModuleInterop": true,
+	//   "skipLibCheck": true,
+	//   "rootDir": "src",
+	//   "outDir": "dist"
+	// },
+	// "include": ["src"]
+}
