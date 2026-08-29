@@ -97,6 +97,14 @@ function rowVision(row:Record<string, unknown>):boolean | undefined {
 }
 
 export function asModelList(payload:unknown):ModelInfo[] {
+	const fromData = asChatCompletionsList(payload);
+	if (fromData.length > 0) {
+		return fromData;
+	}
+	return asNativeList(payload);
+}
+
+function asChatCompletionsList(payload:unknown):ModelInfo[] {
 	if (!isRecord(payload) || !Array.isArray(payload.data)) {
 		return [];
 	}
@@ -111,6 +119,32 @@ export function asModelList(payload:unknown):ModelInfo[] {
 			type: typeof row.type === 'string' ? row.type : undefined,
 			loaded: typeof row.loaded === 'boolean' ? row.loaded : undefined,
 			vision: rowVision(row),
+		});
+	}
+	return out;
+}
+
+function asNativeList(payload:unknown):ModelInfo[] {
+	if (!isRecord(payload) || !Array.isArray(payload.models)) {
+		return [];
+	}
+	const out:ModelInfo[] = [];
+	for (const row of payload.models) {
+		if (!isRecord(row)) {
+			continue;
+		}
+		const id = typeof row.key === 'string' ? row.key
+			: typeof row.id === 'string' ? row.id : '';
+		if (!id) {
+			continue;
+		}
+		const instances = Array.isArray(row.loaded_instances) ? row.loaded_instances : [];
+		const caps = isRecord(row.capabilities) ? row.capabilities : {};
+		out.push({
+			id,
+			type: typeof row.type === 'string' ? row.type : undefined,
+			loaded: instances.length > 0,
+			vision: typeof caps.vision === 'boolean' ? caps.vision : rowVision(row),
 		});
 	}
 	return out;
@@ -155,10 +189,10 @@ export function pickSingleChatModel(
 
 function catalogURLs(root:string):string[] {
 	const r = root.replace(/\/+$/, '');
-	return [`${r}/api/v0/models`, `${r}/v1/models`];
+	return [`${r}/api/v1/models`, `${r}/api/v0/models`, `${r}/v1/models`];
 }
 
-/** LM Studio `/api/v0/models` includes `state`; OpenAI `/v1/models` does not. */
+/** Native `/api/v0/models` includes `state`; `/v1/models` often does not. */
 export async function fetchModelCatalog(
 	root:string,
 	opts:{ timeoutMs?:number; headers?:Record<string, string> } = {},

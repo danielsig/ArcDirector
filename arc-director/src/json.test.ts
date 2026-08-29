@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { extractJson, readId } from './json.js';
+import { extractJson, readID } from './json.js';
 
 describe('extractJson', () => {
 	it('parses a complete object', () => {
@@ -24,11 +24,11 @@ describe('extractJson', () => {
 	});
 });
 
-describe('readId', () => {
+describe('readID', () => {
 	it('prefers id and falls back to ID', () => {
-		assert.equal(readId({ id: 'a' }), 'a');
-		assert.equal(readId(JSON.parse('{"ID":"b"}')), 'b');
-		assert.equal(readId(JSON.parse('{"id":"a","ID":"b"}')), 'a');
-		assert.equal(readId({}), undefined);
+		assert.equal(readID({ id: 'a' }), 'a');
+		assert.equal(readID(JSON.parse('{"ID":"b"}')), 'b');
+		assert.equal(readID(JSON.parse('{"id":"a","ID":"b"}')), 'a');
+		assert.equal(readID({}), undefined);
 	});
 });

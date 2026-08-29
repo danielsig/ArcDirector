@@ -4,7 +4,7 @@ import { Order } from '../engine/order';
 import { yawToward } from '../engine/math';
 import { conversePoint, facePeer } from '../npc/talkAttend';
 import { TILE_HEIGHT } from '../world/constants';
-import { NpcInput } from './NpcInput';
+import { NPCInput } from './NPCInput';
 import { PlayerInput } from './PlayerInput';
 
 export class CharacterMotor extends Component {
@@ -93,7 +93,7 @@ export class CharacterMotor extends Component {
 		if (this.destinationPoint) {
 			return this.destinationPoint;
 		}
-		const npc = this.gameObject.getComponent(NpcInput);
+		const npc = this.gameObject.getComponent(NPCInput);
 		if (npc?.destinationPoint) {
 			return npc.destinationPoint;
 		}

@@ -23,22 +23,63 @@ const commonRules = {
 		"properties": "never",
 		"allow": ["^[a-z][a-z0-9]*(_[a-z0-9]+)+$"],
 	}],
+	// Units (Mb/MB, Ms/MS, …) are not acronyms — do not add them here.
 	"no-restricted-syntax": ["error",
 		{
+			selector: "Identifier[name=/[a-z]Id[A-Z]/], Identifier[name=/[a-z]Id$/]",
+			message: "Never Id. Use ID (npcID, readID, findByID).",
+		},
+		{
+			selector: "Identifier[name=/[a-z]Hp[A-Z]/], Identifier[name=/[a-z]Hp$/]",
+			message: "Never Hp. Use HP (maxHP, rememberHP).",
+		},
+		{
+			selector: "Identifier[name=/[a-z]Npc[A-Z]/], Identifier[name=/[a-z]Npc$/]",
+			message: "Never Npc. Use NPC (spawnNPC, NPCDirector).",
+		},
+		{
+			selector: "Identifier[name=/[a-z]Url[A-Z]/], Identifier[name=/[a-z]Url$/]",
+			message: "Never Url. Use URL (fromURL, URLView).",
+		},
+		{
+			selector: "Identifier[name=/[a-z]Utc[A-Z]/], Identifier[name=/[a-z]Utc$/]",
+			message: "Never Utc. Use UTC (toUTC, createdUTC).",
+		},
+		{
+			selector: "Identifier[name='Id'], Identifier[name=/^Id[A-Z]/]",
+			message: "Never Id. PascalCase: IDMap. camelCase: id, idMap.",
+		},
+		{
+			selector: "Identifier[name='Hp'], Identifier[name=/^Hp[A-Z]/]",
+			message: "Never Hp. PascalCase: HPBar. camelCase: hp.",
+		},
+		{
+			selector: "Identifier[name='Npc'], Identifier[name=/^Npc[A-Z]/]",
+			message: "Never Npc. PascalCase: NPCDirector. camelCase: npc.",
+		},
+		{
+			selector: "Identifier[name='Url'], Identifier[name=/^Url[A-Z]/]",
+			message: "Never Url. PascalCase: URLView. camelCase: url.",
+		},
+		{
+			selector: "Identifier[name='Utc'], Identifier[name=/^Utc[A-Z]/]",
+			message: "Never Utc. PascalCase: UTCTime. camelCase: utc.",
+		},
+		{
 			selector: "Identifier[name='ID']",
-			message: "Leading acronym: use id (suffix stays caps: npcID).",
+			message: "Whole name: use id. Suffix stays caps: npcID.",
 		},
 		{
 			selector: "Identifier[name='HP']",
-			message: "Leading acronym: use hp (suffix stays caps: maxHP).",
+			message: "Whole name: use hp. Suffix stays caps: maxHP.",
 		},
 		{
 			selector: "Identifier[name='NPC']",
-			message: "Leading acronym: use npc (suffix stays caps: npcID).",
+			message: "Whole name: use npc. PascalCase stays NPCDirector; suffix stays spawnNPC.",
 		},
 		{
-			selector: "Identifier[name='Npc']",
-			message: "Leading acronym: use npc, not Npc.",
+			selector: "Identifier[name='UTC']",
+			message: "Whole name: use utc. Suffix stays caps: createdUTC. Fields: _utc.",
 		},
 	],
 	"space-before-blocks": ["error", "always"],

@@ -9,10 +9,10 @@ import { observeExpr } from '../expr/stringify.js';
 import type { Catalog } from '../expr/types.js';
 import { isVisionModel, PREFERRED_MODELS } from '../inference/models.js';
 import type { ChatMessage, InferenceProvider, ToolDef } from '../inference/provider.js';
-import { extractJson, isRecord, readId } from '../json.js';
+import { extractJson, isRecord, readID } from '../json.js';
 import { MemoryStore, type MemoryRecord } from '../memory/store.js';
 import type { PerceptionRecipe, ToolSpec } from './types.js';
-import { parseMapZoom, stampMap, type MapSense } from './map.js';
+import { parseMapZoom, stampMap, isMapSnapshot, DEFAULT_YOU_SYMBOL, type MapPrev, type MapSense } from './map.js';
 import { planRepairHint, sayRangeHint, shortTermBlock, stablePrefix, volatileBlock } from './prompt.js';
 import { runPlan } from './run.js';
 import type { SayTo, TalkNet } from './talk.js';
@@ -139,6 +139,7 @@ export class Agent<HostCtx = unknown> {
 	private recentSummary = '';
 	private recentAbsorbed = 0;
 	private pendingSeeMapImage:string | undefined;
+	private lastMap:MapPrev & { legend:string } | undefined;
 
 	constructor(opts:AgentOptions<HostCtx>) {
 		this.id = opts.id;
@@ -282,7 +283,7 @@ export class Agent<HostCtx = unknown> {
 	}
 
 	static fromJSON<HostCtx>(json:AgentJSON, deps:AgentDeps<HostCtx>):Agent<HostCtx> {
-		const id = readId(json);
+		const id = readID(json);
 		if (!id) {
 			throw new Error('agent json missing id');
 		}
@@ -352,9 +353,16 @@ export class Agent<HostCtx = unknown> {
 	}
 
 	private async reviseGoals():Promise<void> {
-		const system = stablePrefix(this.identity, this.goals, this.memory.pinned(), true);
+		const system = stablePrefix(this.identity, this.verbs, {
+			includeWatches: true,
+			canSeeMap: this.seeMapOn(),
+			youSymbol: this.youSymbol(),
+		});
 		const stm = this.shortTermText();
 		const user = (stm ? `${stm}\n\n` : '')
+			+ (this.goals.length > 0
+				? `Goals (highest first):\n${[...this.goals].sort((a, b) => (b.priority ?? 0) - (a.priority ?? 0)).map((g) => `- ${g.text}`).join('\n')}\n\n`
+				: '')
 			+ 'Revise goals if what you just learned changes what you must do. '
 			+ 'Harm, theft, and threats outrank standing work — put that first in goals. '
 			+ 'Do not change identity unless who you are has actually changed for good. '
@@ -363,6 +371,7 @@ export class Agent<HostCtx = unknown> {
 			+ `Keep at most ${this.maxGoals} goals. Do not emit movement.`;
 		const res = await this.provider.chat({
 			model: this.model,
+			thread: this.id,
 			messages: [
 				{ role: 'system', content: system },
 				{ role: 'user', content: user },
@@ -411,18 +420,22 @@ export class Agent<HostCtx = unknown> {
 			.map((v) => typeof v === 'string' ? v : JSON.stringify(v))
 			.join('\n');
 		const intrusion = this.maybeIntrude(perceptionText);
-		const system = stablePrefix(this.identity, this.goals, this.memory.pinned(), true);
+		const system = stablePrefix(this.identity, this.verbs, {
+			includeWatches: true,
+			canSeeMap: this.seeMapOn(),
+			youSymbol: this.youSymbol(),
+		});
 		const user = volatileBlock({
 			pushed,
 			intrusion,
 			lastResult: this.lastResult,
-			verbs: this.verbs,
+			goals: this.goals,
+			pinned: this.memory.pinned(),
 			watches: this.effectiveWatches(),
 			pinnedWatches: this.pinnedWatches,
 			watchesWritable: this.watchesWritable,
 			recent: this.recent,
 			recentSummary: this.recentSummary,
-			canSeeMap: this.seeMapOn(),
 		});
 		const messages:ChatMessage[] = [
 			{ role: 'system', content: system },
@@ -431,6 +444,7 @@ export class Agent<HostCtx = unknown> {
 		const tools = this.toolDefs();
 		const seeMapBoost = this.seeMapOn() && this.toolRoundCap <= 0 ? 1 : 0;
 		let toolsLeft = tools.length === 0 ? 0 : this.toolRoundCap + seeMapBoost;
+		const sendTools = tools.length > 0 && (this.toolRoundCap > 0 || seeMapBoost > 0);
 		let repairsLeft = this.planRetryCap;
 		let rangeLeft = this.talk ? Math.max(1, this.planRetryCap) : 0;
 		let lastErr:Error | null = null;
@@ -439,8 +453,10 @@ export class Agent<HostCtx = unknown> {
 			const allowTools = toolsLeft > 0 && tools.length > 0;
 			const res = await this.provider.chat({
 				model: this.model,
+				thread: this.id,
 				messages,
-				tools: allowTools ? tools : undefined,
+				tools: sendTools ? tools : undefined,
+				toolChoice: sendTools ? (allowTools ? 'auto' : 'none') : undefined,
 				responseFormat: allowTools
 					? undefined
 					: { name: 'action_plan', schema: actionPlanSchema(this.verbs), strict: false },
@@ -764,7 +780,7 @@ export class Agent<HostCtx = unknown> {
 		}
 		if (this.seeMapOn() && !tools.see_map) {
 			tools.see_map = {
-				description: 'See a top-down map. zoom=1 is close around you; zoom=0 is the whole loaded land; values in between zoom. Names only; pick go_to targets from the legend.',
+				description: 'Pictogram of the land. Prefer the English scene; only call this if you cannot pick a go_to from names you already have. A second look soon after, without moving, returns the same legend and no new picture.',
 				parameters: {
 					type: 'object',
 					additionalProperties: false,
@@ -785,6 +801,11 @@ export class Agent<HostCtx = unknown> {
 		return !!this.map && this.visionCapable();
 	}
 
+	private youSymbol():string {
+		const you = this.map?.you?.trim();
+		return you || DEFAULT_YOU_SYMBOL;
+	}
+
 	private visionCapable():boolean {
 		if (this.vision === false) {
 			return false;
@@ -800,9 +821,10 @@ export class Agent<HostCtx = unknown> {
 		if (!this.map) {
 			return { ok: false, zoom, reason: 'no map' };
 		}
+		const prev = this.lastMap;
 		let snap;
 		try {
-			snap = await this.map.snapshot(zoom, { id: this.id, goals: this.goals });
+			snap = await this.map.snapshot(this.id, zoom, prev);
 		}
 		catch (err) {
 			return { ok: false, zoom, reason: err instanceof Error ? err.message : String(err) };
@@ -810,8 +832,29 @@ export class Agent<HostCtx = unknown> {
 		if (!snap) {
 			return { ok: false, zoom, reason: 'no map' };
 		}
+		if (prev && snap.image === prev.image) {
+			this.pendingSeeMapImage = undefined;
+			return {
+				ok: true,
+				zoom,
+				legend: prev.legend,
+				unchanged: true,
+				reason: 'map unchanged since last look',
+			};
+		}
+		if (!isMapSnapshot(snap)) {
+			return { ok: false, zoom, reason: 'no map' };
+		}
 		const stamped = await stampMap(snap);
 		this.pendingSeeMapImage = stamped.image;
+		this.lastMap = {
+			timestamp: this.now,
+			zoom,
+			legend: stamped.legend,
+			image: stamped.image,
+			x: snap.x,
+			y: snap.y,
+		};
 		return { ok: true, zoom, legend: stamped.legend };
 	}
 

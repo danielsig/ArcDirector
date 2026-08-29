@@ -4,14 +4,14 @@ import type { Renderer } from '@arc-director/kindling';
 import { Order } from './order';
 import { patchHud } from './patchHud';
 import { syncHeldTorchLight } from '../items/heldLight';
-import type { NpcDirector } from '../npc/adapter';
+import type { NPCDirector } from '../npc/adapter';
 import { WorldPresent } from '../render/present';
 import type { HudModel } from '../ui/hudModel';
 import { ChunkStreamer } from '../world/ChunkStreamer';
 
 export class DirectorPulse extends Component {
 	static override order = Order.director;
-	director!:NpcDirector;
+	director!:NPCDirector;
 
 	override update(dt:number):void {
 		this.director.observe(dt);
@@ -115,7 +115,7 @@ export class WorldView extends Component {
 export class Hud extends Component {
 	static override order = Order.hud;
 	model!:HudModel;
-	director!:NpcDirector;
+	director!:NPCDirector;
 	getRenderer:()=>Renderer | null = () => null;
 
 	override lateUpdate(_dt:number):void {
@@ -129,6 +129,7 @@ export class Hud extends Component {
 			return;
 		}
 		patchHud(world, this.model, renderer, this.director.statusLabels());
+		this.director.patchInfer(this.model);
 	}
 }
 

@@ -155,7 +155,7 @@ function chromaMagenta(img:HTMLImageElement):HTMLCanvasElement {
 	const canvas = document.createElement('canvas');
 	canvas.width = img.naturalWidth;
 	canvas.height = img.naturalHeight;
-	const ctx = canvas.getContext('2d');
+	const ctx = canvas.getContext('2d', { willReadFrequently: true });
 	if (!ctx) {
 		throw new Error('2d context');
 	}
@@ -239,7 +239,7 @@ function hash2(x:number, y:number):number {
 }
 
 function tintShire(canvas:HTMLCanvasElement):void {
-	const ctx = canvas.getContext('2d');
+	const ctx = canvas.getContext('2d', { willReadFrequently: true });
 	if (!ctx) {
 		return;
 	}
@@ -271,7 +271,7 @@ function tintShire(canvas:HTMLCanvasElement):void {
 }
 
 function meanOpaque(src:HTMLCanvasElement):[number, number, number] {
-	const ctx = src.getContext('2d');
+	const ctx = src.getContext('2d', { willReadFrequently: true });
 	if (!ctx) {
 		return [46, 96, 48];
 	}
@@ -296,7 +296,7 @@ function meanOpaque(src:HTMLCanvasElement):[number, number, number] {
 }
 
 function recodeOpaque(canvas:HTMLCanvasElement, rgb:[number, number, number]):void {
-	const ctx = canvas.getContext('2d');
+	const ctx = canvas.getContext('2d', { willReadFrequently: true });
 	if (!ctx) {
 		return;
 	}
@@ -316,7 +316,7 @@ function recodeOpaque(canvas:HTMLCanvasElement, rgb:[number, number, number]):vo
 }
 
 function outlineCutout(canvas:HTMLCanvasElement, rgb:[number, number, number]):void {
-	const ctx = canvas.getContext('2d');
+	const ctx = canvas.getContext('2d', { willReadFrequently: true });
 	if (!ctx) {
 		return;
 	}
@@ -383,7 +383,7 @@ function smoothstep(e0:number, e1:number, x:number):number {
 }
 
 function matchMean(canvas:HTMLCanvasElement, target:[number, number, number]):void {
-	const ctx = canvas.getContext('2d');
+	const ctx = canvas.getContext('2d', { willReadFrequently: true });
 	if (!ctx) {
 		return;
 	}
@@ -445,7 +445,7 @@ function paintGrassyTile(pasture:[number, number, number]):HTMLCanvasElement {
 	const out = document.createElement('canvas');
 	out.width = size;
 	out.height = size;
-	const ctx = out.getContext('2d');
+	const ctx = out.getContext('2d', { willReadFrequently: true });
 	if (!ctx) {
 		return out;
 	}
@@ -522,7 +522,7 @@ function paintToonWater():HTMLCanvasElement {
 	const out = document.createElement('canvas');
 	out.width = size;
 	out.height = size;
-	const ctx = out.getContext('2d');
+	const ctx = out.getContext('2d', { willReadFrequently: true });
 	if (!ctx) {
 		return out;
 	}
@@ -561,7 +561,7 @@ function paintToonWater():HTMLCanvasElement {
 }
 
 function contentUVFromCanvas(canvas:HTMLCanvasElement):{ u0:number; v0:number; u1:number; v1:number } {
-	const ctx = canvas.getContext('2d');
+	const ctx = canvas.getContext('2d', { willReadFrequently: true });
 	if (!ctx) {
 		return { u0: 0, v0: 0, u1: 1, v1: 1 };
 	}

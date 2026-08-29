@@ -10,7 +10,7 @@ export { PREFERRED_MODELS } from '../inference/models.js';
 const LM_STUDIO_URL = 'http://127.0.0.1:1234/v1';
 const OLLAMA_URL = 'http://127.0.0.1:11434/v1';
 
-export async function probeOpenAI(baseURL:string, timeoutMs = 2500):Promise<boolean> {
+export async function probeHttp(baseURL:string, timeoutMs = 2500):Promise<boolean> {
 	const root = baseURL.replace(/\/+$/, '').replace(/\/v1$/, '');
 	const urls = [`${baseURL.replace(/\/+$/, '')}/models`, `${root}/api/tags`];
 	for (const url of urls) {
@@ -36,10 +36,10 @@ export async function resolveInferenceBaseURL():Promise<string> {
 	if (override) {
 		return override;
 	}
-	if (await probeOpenAI(LM_STUDIO_URL)) {
+	if (await probeHttp(LM_STUDIO_URL)) {
 		return LM_STUDIO_URL;
 	}
-	if (await probeOpenAI(OLLAMA_URL)) {
+	if (await probeHttp(OLLAMA_URL)) {
 		return OLLAMA_URL;
 	}
 	return defaultInferenceBaseURL();

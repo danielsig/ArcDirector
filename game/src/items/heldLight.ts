@@ -24,4 +24,8 @@ export function syncHeldTorchLight(actor:GameObject, dt:number):void {
 	light.range = 9;
 	light.intensity = 32 * light.pulse(dt);
 	light.decay = 1;
+	light.offsetY = 0.5;
+	light.offsetZ = 0.3;
+	light.offsetX = -0.4;
+
 }

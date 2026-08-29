@@ -1,7 +1,7 @@
 import {
 	Agent,
 	FakeProvider,
-	OpenAICompatProvider,
+	HttpProvider,
 	VerbRegistry,
 	formatPlan,
 	goToNamedInteractable,
@@ -11,7 +11,7 @@ import {
 	type PerceptionRecipe,
 } from '../index.js';
 import { fixtureParagraph, type FixtureCtx } from './scene.js';
-import { resolveInferenceBaseURL, resolveLiveModel, probeOpenAI } from './probe.js';
+import { resolveInferenceBaseURL, resolveLiveModel, probeHttp } from './probe.js';
 
 function recipe():PerceptionRecipe<FixtureCtx> {
 	return {
@@ -30,10 +30,10 @@ async function liveProvider():Promise<{ provider:InferenceProvider; baseURL:stri
 		return { provider: new FakeProvider(goToNamedInteractable()), baseURL: 'mock' };
 	}
 	const baseURL = await resolveInferenceBaseURL();
-	if (!await probeOpenAI(baseURL)) {
+	if (!await probeHttp(baseURL)) {
 		return null;
 	}
-	return { provider: withQueue(new OpenAICompatProvider({ baseURL, timeoutMs: 180_000 }), 1), baseURL };
+	return { provider: withQueue(new HttpProvider({ baseURL, timeoutMs: 180_000 }), 1), baseURL };
 }
 
 async function main():Promise<void> {

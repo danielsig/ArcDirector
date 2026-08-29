@@ -139,7 +139,7 @@ async function loadKind(id:HumanKind):Promise<HumanAnims> {
 	};
 }
 
-export async function loadNpcAnims(kinds:readonly HumanKind[] = HUMAN_KINDS):Promise<void> {
+export async function loadNPCAnims(kinds:readonly HumanKind[] = HUMAN_KINDS):Promise<void> {
 	await Promise.all(kinds.map((id) => {
 		const have = npcAnims.get(id);
 		if (have) {
@@ -245,7 +245,7 @@ export function pickPocketMaps(
 	return frames[i] ?? null;
 }
 
-export function disposeNpcAnims():void {
+export function disposeNPCAnims():void {
 	npcAnims.clear();
 	loading.clear();
 }

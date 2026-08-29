@@ -5,7 +5,6 @@ export const SAY_COMMANDS = [
 	{ verb: 'pay', usage: '/pay <amount> [to] <person>', hint: 'Give gold from your purse' },
 	{ verb: 'buy', usage: '/buy <item> [from] <person> [offer]', hint: 'Pay gold and take a good' },
 	{ verb: 'sell', usage: '/sell <item> [to] <person> [ask]', hint: 'Take gold and give a good' },
-	{ verb: 'haggle', usage: '/haggle [with] <person> <item> <offer>', hint: 'Agree a price before buying' },
 	{ verb: 'help', usage: '/help', hint: 'List slash commands' },
 ] as const;
 
@@ -31,7 +30,6 @@ export type ParsedSlash =
 	| { ok:true; verb:'pay'; amount:number; to:string }
 	| { ok:true; verb:'buy'; item:string; from:string; offer?:number }
 	| { ok:true; verb:'sell'; item:string; to:string; ask?:number }
-	| { ok:true; verb:'haggle'; with:string; item:string; offer:number }
 	| { ok:false; reason:string };
 
 export const SLASH_HELP = SAY_COMMANDS.map((c) => c.usage).join('   ');
@@ -95,9 +93,6 @@ export function parseSlash(line:string):ParsedSlash | null {
 	}
 	if (verb === 'sell') {
 		return parseSell(args);
-	}
-	if (verb === 'haggle') {
-		return parseHaggle(args);
 	}
 	return { ok: false, reason: `unknown /${verb} — try /help` };
 }
@@ -176,23 +171,6 @@ function parseSell(args:string[]):ParsedSlash {
 		return { ok: false, reason: 'sell to whom?' };
 	}
 	return { ok: true, verb: 'sell', item: body[0], to: body[1], ask };
-}
-
-function parseHaggle(args:string[]):ParsedSlash {
-	if (args.length < 3) {
-		return { ok: false, reason: 'usage: /haggle <person> <item> <offer>' };
-	}
-	const offerRaw = args[2];
-	if (!isAmount(offerRaw)) {
-		return { ok: false, reason: 'name an offer in gold' };
-	}
-	return {
-		ok: true,
-		verb: 'haggle',
-		with: args[0],
-		item: args[1],
-		offer: Math.floor(Number(offerRaw)),
-	};
 }
 
 function uniq(values:string[]):string[] {
@@ -310,9 +288,6 @@ export function suggestSay(draft:string, catalog:SayCatalog):SaySuggestion[] {
 	if (verb === 'sell') {
 		return suggestSell(bits.head, bits.partial, afterVerb, catalog);
 	}
-	if (verb === 'haggle') {
-		return suggestHaggle(bits.head, bits.partial, afterVerb, catalog);
-	}
 	return [];
 }
 
@@ -396,28 +371,6 @@ function suggestSell(
 	}
 	if (args.length === 1) {
 		return namedInserts(head, catalog.peers, partial, false, 'person');
-	}
-	return [];
-}
-
-function suggestHaggle(
-	head:string,
-	partial:string,
-	args:string[],
-	catalog:SayCatalog,
-):SaySuggestion[] {
-	if (args.length === 0) {
-		return namedInserts(head, catalog.peers, partial, true, 'seller');
-	}
-	if (args.length === 1) {
-		const goods = uniq(
-			catalog.goods.filter((g) => compact(g.from) === compact(args[0])).map((g) => g.item),
-		);
-		return namedInserts(head, goods.length > 0 ? goods : uniq(catalog.goods.map((g) => g.item)), partial, true, 'item');
-	}
-	if (args.length === 2) {
-		const amounts = catalog.gold > 0 ? [String(catalog.gold)] : [];
-		return namedInserts(head, amounts, partial, false, 'offer');
 	}
 	return [];
 }

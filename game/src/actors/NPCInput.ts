@@ -47,7 +47,7 @@ function segmentCrossesDoor(
 	return Math.abs(px + t * (tx - px) - dx) <= DOOR_HALF;
 }
 
-export type NpcActionResult = {
+export type NPCActionResult = {
 	ok:boolean;
 	interrupted?:boolean;
 	reason?:string;
@@ -55,13 +55,13 @@ export type NpcActionResult = {
 };
 
 type Job =
-	| { kind:'go_to'; name:string; startedAt:number; done:(r:NpcActionResult)=>void }
-	| { kind:'follow'; name:string; startedAt:number; until:number; done:(r:NpcActionResult)=>void }
-	| { kind:'wander'; startedAt:number; until:number; done:(r:NpcActionResult)=>void }
-	| { kind:'wait'; until:number; done:(r:NpcActionResult)=>void };
+	| { kind:'go_to'; name:string; startedAt:number; done:(r:NPCActionResult)=>void }
+	| { kind:'follow'; name:string; startedAt:number; until:number; done:(r:NPCActionResult)=>void }
+	| { kind:'wander'; startedAt:number; until:number; done:(r:NPCActionResult)=>void }
+	| { kind:'wait'; until:number; done:(r:NPCActionResult)=>void };
 
 /** Named destinations + conversation overlay. No yaw verb. */
-export class NpcInput extends Component {
+export class NPCInput extends Component {
 	static override order = Order.npcInput;
 	destinationName:string | null = null;
 	destinationPoint:{ x:number; z:number } | null = null;
@@ -81,7 +81,7 @@ export class NpcInput extends Component {
 	/** Side of a door we started on (+1 / −1). Frozen so an open-door walk does not flip dest. */
 	private doorPass = 0;
 
-	goTo(name:string):Promise<NpcActionResult> {
+	goTo(name:string):Promise<NPCActionResult> {
 		return this.begin({
 			kind: 'go_to',
 			name,
@@ -90,7 +90,7 @@ export class NpcInput extends Component {
 		});
 	}
 
-	follow(name:string, seconds = 6):Promise<NpcActionResult> {
+	follow(name:string, seconds = 6):Promise<NPCActionResult> {
 		return this.begin({
 			kind: 'follow',
 			name,
@@ -100,7 +100,7 @@ export class NpcInput extends Component {
 		});
 	}
 
-	wander(seconds = 4):Promise<NpcActionResult> {
+	wander(seconds = 4):Promise<NPCActionResult> {
 		return this.begin({
 			kind: 'wander',
 			startedAt: this.now(),
@@ -109,7 +109,7 @@ export class NpcInput extends Component {
 		});
 	}
 
-	wait(seconds = 1):Promise<NpcActionResult> {
+	wait(seconds = 1):Promise<NPCActionResult> {
 		return this.begin({
 			kind: 'wait',
 			until: this.now() + seconds,
@@ -232,7 +232,7 @@ export class NpcInput extends Component {
 		this.steer(null, next);
 	}
 
-	private begin(job:Job):Promise<NpcActionResult> {
+	private begin(job:Job):Promise<NPCActionResult> {
 		this.gameObject.getComponent(Celebrating)?.stop();
 		if (this.job) {
 			this.finish({ ok: false, interrupted: true, verb: this.job.kind, reason: 'replaced' });
@@ -293,7 +293,7 @@ export class NpcInput extends Component {
 		});
 	}
 
-	private finish(result:NpcActionResult):void {
+	private finish(result:NPCActionResult):void {
 		const job = this.job;
 		this.job = null;
 		this.stuckFor = 0;

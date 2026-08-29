@@ -3,9 +3,9 @@ import { resetHudPatch } from './patchHud';
 import { World } from './World';
 import { GameObject } from './GameObject';
 import { Wallet } from './components';
-import { NpcDirector } from '../npc/adapter';
+import { NPCDirector } from '../npc/adapter';
 import { rendererLook } from '../render/look';
-import { loadNpcAnims } from '../render/humanAnims';
+import { loadNPCAnims } from '../render/humanAnims';
 import { loadNature } from '../render/nature';
 import { loadSpritesheet } from '../render/spritesheet';
 import { loadSwordAnims } from '../render/swordAnims';
@@ -13,14 +13,14 @@ import type { HudModel } from '../ui/hudModel';
 import { loadModelPref } from './modelPref';
 import { ChunkStreamer } from '../world/ChunkStreamer';
 import { decodeGlyphChunk } from '../world/decodeGlyphChunk';
-import { spawnCamera, spawnNpc, spawnPlayer } from '../world/spawn';
+import { spawnCamera, spawnNPC, spawnPlayer } from '../world/spawn';
 import { DEFAULT_SCENE_ID, humanKindsForScene, sceneByID, type SceneDef } from '../data/scenes';
 import { DirectorPulse, GroundPick, Hud, WorldStream, WorldView } from './systems';
 import { Session } from './Session';
 import { applyWorld, loadSave } from './gameSave';
 import { loadViewPose } from './viewPersist';
 import { loadDevFlags, resolveDevFlags } from './devFlags';
-import { readUrlFlags } from './urlView';
+import { readURLFlags } from './urlView';
 
 const AUTOSAVE_ENABLED = false;
 
@@ -55,7 +55,7 @@ export class Game extends KindlingGame<World> {
 		const decodedByID = new Map(decoded.map((d) => [d.chunk.id, d]));
 		for (const npc of this.scene.npcs) {
 			const home = decodedByID.get(npc.chunkID) ?? startDecoded;
-			spawnNpc(this.world, home.chunk, {
+			spawnNPC(this.world, home.chunk, {
 				id: npc.id,
 				meshID: npc.meshID,
 				localX: npc.localX,
@@ -71,7 +71,7 @@ export class Game extends KindlingGame<World> {
 		}
 		spawnCamera(this.world);
 		const auto = AUTOSAVE_ENABLED ? loadSave(this.scene.id, 'auto') : null;
-		const director = new NpcDirector(this.world, hud.chat, hud.aiLog, {
+		const director = new NPCDirector(this.world, hud.chat, hud.aiLog, {
 			sceneID: this.scene.id,
 			ambient: this.scene.ambient,
 			agents: auto?.agents,
@@ -104,7 +104,7 @@ export class Game extends KindlingGame<World> {
 		this.session.getRunning = () => this.running;
 		stream.onGained = (keys) => this.session.overlayLoadedChunks(keys);
 		this.world.add(systems);
-		this.session.applyDevFlags(resolveDevFlags(readUrlFlags(), loadDevFlags()));
+		this.session.applyDevFlags(resolveDevFlags(readURLFlags(), loadDevFlags()));
 		this.session.homePose = this.session.readPose() ?? this.session.homePose;
 		if (auto) {
 			applyWorld(this.world, auto.world);
@@ -118,7 +118,7 @@ export class Game extends KindlingGame<World> {
 				this.session.applyPose(saved);
 			}
 		}
-		this.session.applyShotFromUrl();
+		this.session.applyShotFromURL();
 		stream.streamer.tick(this.world);
 		stream.mark(this.world);
 		if (this.session.live) {
@@ -130,7 +130,7 @@ export class Game extends KindlingGame<World> {
 		this.hud.maxParallel = director.liveMaxParallel();
 		this.session.persistAutosave();
 		this.session.persistView();
-		this.session.syncUrlView();
+		this.session.syncURLView();
 		this.session.refreshSlots();
 	}
 
@@ -142,7 +142,7 @@ export class Game extends KindlingGame<World> {
 	private async loadArt():Promise<void> {
 		const jobs:Promise<unknown>[] = [
 			loadSpritesheet(),
-			loadNpcAnims(humanKindsForScene(this.scene)),
+			loadNPCAnims(humanKindsForScene(this.scene)),
 			loadSwordAnims(),
 		];
 		if (this.scene.look === 'glen' || this.scene.look === 'market') {

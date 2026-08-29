@@ -1,5 +1,5 @@
 import { CharacterMotor } from '../actors/CharacterMotor';
-import { NpcInput } from '../actors/NpcInput';
+import { NPCInput } from '../actors/NPCInput';
 import { PlayerInput } from '../actors/PlayerInput';
 import { Camera as RenderCamera } from '@arc-director/kindling';
 import {
@@ -83,7 +83,7 @@ function spawnTorch(world:World, chunk:Chunk, ent:ChunkEntity):void {
 	light.range = 11;
 	light.castShadow = true;
 	light.offsetY = 0.35;
-	light.offsetZ = 0.2;
+	light.offsetZ = 0.18;
 	light.intensityFlicker = 0.75;
 	light.intensityFlickerSpeed = 0.5;
 	light.positionalFlicker = 0.012;
@@ -463,7 +463,7 @@ function spawnStall(world:World, chunk:Chunk, ent:ChunkEntity):void {
 	world.add(go);
 }
 
-export type NpcSpawnOpts = {
+export type NPCSpawnOpts = {
 	id:string;
 	meshID:string;
 	localX:number;
@@ -480,10 +480,10 @@ export type NpcSpawnOpts = {
 	companion?:boolean;
 };
 
-export function spawnNpc(world:World, chunk:Chunk, opts:NpcSpawnOpts):GameObject {
+export function spawnNPC(world:World, chunk:Chunk, opts:NPCSpawnOpts):GameObject {
 	const pos = chunk.worldCellCenter(opts.localX, opts.localZ);
 	const tile = chunk.tile(opts.localX, opts.localZ);
-	const go = new GameObject(opts.id, 'Npc');
+	const go = new GameObject(opts.id, 'NPC');
 	go.transform.position.x = pos.x;
 	go.transform.position.y = (tile?.height ?? 0) * TILE_HEIGHT;
 	go.transform.position.z = pos.z;
@@ -492,7 +492,7 @@ export function spawnNpc(world:World, chunk:Chunk, opts:NpcSpawnOpts):GameObject
 	}
 	go.addComponent(new MeshRenderer()).meshID = opts.meshID;
 	go.addComponent(new HumanSprite()).kind = animIDFromMeshID(opts.meshID);
-	go.addComponent(new NpcInput());
+	go.addComponent(new NPCInput());
 	const motor = go.addComponent(new CharacterMotor());
 	if (opts.destLocalX !== undefined && opts.destLocalZ !== undefined) {
 		const dest = chunk.worldCellCenter(opts.destLocalX, opts.destLocalZ);

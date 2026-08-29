@@ -280,7 +280,7 @@ export function captureWorld(world:World):WorldSave {
 	}
 	const actors:ActorSave[] = [];
 	for (const go of world.objects) {
-		if (go.id !== 'Player' && go.name !== 'Npc') {
+		if (go.id !== 'Player' && go.name !== 'NPC') {
 			continue;
 		}
 		const row = captureActor(go);

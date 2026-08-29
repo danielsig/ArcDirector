@@ -7,6 +7,7 @@ import { builtinLodLayers } from '../perception/lod.js';
 import { builtinStringifiers } from '../perception/stringifiers.js';
 import type { PerceptionObject } from '../perception/types.js';
 import { Agent } from './agent.js';
+import { DEFAULT_YOU_SYMBOL } from './map.js';
 import { TalkNet } from './talk.js';
 import type { PerceptionRecipe } from './types.js';
 
@@ -800,16 +801,21 @@ describe('Agent', () => {
 			calls += 1;
 			if (calls === 1) {
 				assert.deepEqual((req.tools ?? []).map((t) => t.name), ['see_map']);
+				assert.equal(req.toolChoice, 'auto');
+				const system = req.messages.find((m) => m.role === 'system');
+				assert.match(String(system?.content), new RegExp(`${DEFAULT_YOU_SYMBOL} = you`));
 				return {
 					content: null,
 					toolCalls: [{ id: 'call_map', name: 'see_map', arguments: '{"zoom":1}' }],
 				};
 			}
+			assert.deepEqual((req.tools ?? []).map((t) => t.name), ['see_map']);
+			assert.equal(req.toolChoice, 'none');
 			const tool = req.messages.find((m) => m.role === 'tool');
 			const body = JSON.parse(String(tool?.content));
 			assert.equal(body.ok, true);
 			assert.equal(body.zoom, 1);
-			assert.match(String(body.legend), /⭐ = you/);
+			assert.match(String(body.legend), new RegExp(`${DEFAULT_YOU_SYMBOL} = you`));
 			assert.match(String(body.legend), /⛩️ = EastGate/);
 			assert.equal(/\d/.test(String(body.legend)), false);
 			const pictured = req.messages.find((m) => m.role === 'user' && Array.isArray(m.content));
@@ -834,7 +840,7 @@ describe('Agent', () => {
 			planRetryCap: 0,
 			vision: true,
 			map: {
-				snapshot: (zoom) => {
+				snapshot: (_npcID, zoom) => {
 					assert.equal(zoom, 1);
 					return {
 						image: 'data:image/png;base64,xx',
@@ -842,7 +848,7 @@ describe('Agent', () => {
 						height: 8,
 						toPixel: (x, y) => ({ u: x, v: y }),
 						marks: [
-							{ symbol: '⭐', description: 'you', x: 1, y: 1 },
+							{ symbol: DEFAULT_YOU_SYMBOL, description: 'you', x: 1, y: 1 },
 							{ symbol: '⛩️', description: 'EastGate', x: 4, y: 1 },
 						],
 					};
@@ -852,5 +858,115 @@ describe('Agent', () => {
 		const plan = await agent.tick(1);
 		assert.equal(calls, 2);
 		assert.equal(plan?.head.verb, 'go_to');
+	});
+
+	it('puts map.you in the standing see_map hint', async () => {
+		const provider = new FakeProvider((req) => {
+			const system = req.messages.find((m) => m.role === 'system');
+			assert.match(String(system?.content), /🎯 = you/);
+			assert.equal(String(system?.content).includes(`${DEFAULT_YOU_SYMBOL} = you`), false);
+			return goToNamedInteractable()(req);
+		});
+		await new Agent<Ctx>({
+			id: 'Guard',
+			identity: { name: 'Guard', role: 'guard' },
+			goals: [{ text: 'Go to EastGate' }],
+			provider,
+			verbs: registerCoreVerbs(new VerbRegistry()),
+			recipe: recipe(),
+			context: () => ({ paragraph: paragraph() }),
+			model: 'fake',
+			toolRoundCap: 0,
+			planRetryCap: 0,
+			vision: true,
+			map: {
+				you: '🎯',
+				snapshot: () => ({
+					image: 'data:image/png;base64,xx',
+					width: 8,
+					height: 8,
+					toPixel: (x, y) => ({ u: x, v: y }),
+					marks: [{ symbol: '🎯', description: 'you', x: 1, y: 1 }],
+				}),
+			},
+		}).tick(1);
+	});
+
+	it('lets the host keep the last picture by returning that image', async () => {
+		let snaps = 0;
+		let paints = 0;
+		let loc = { x: 0, y: 0 };
+		const snapshot = (_npcID:string, zoom:number, prev?:{ image:string; zoom:number; timestamp:number; x?:number; y?:number }) => {
+			snaps += 1;
+			if (prev && prev.x !== undefined && prev.y !== undefined && zoom === prev.zoom
+				&& Math.hypot(loc.x - prev.x, loc.y - prev.y) < 2) {
+				return { image: prev.image };
+			}
+			paints += 1;
+			return {
+				image: `data:image/png;base64,${paints}`,
+				width: 8,
+				height: 8,
+				toPixel: (x:number, y:number) => ({ u: x, v: y }),
+				marks: [{ symbol: DEFAULT_YOU_SYMBOL, description: 'you', x: 1, y: 1 }],
+				x: loc.x,
+				y: loc.y,
+			};
+		};
+		let looks = 0;
+		const provider = new FakeProvider((req) => {
+			const hasTool = req.messages.some((m) => m.role === 'tool');
+			if (!hasTool) {
+				return {
+					content: null,
+					toolCalls: [{ id: 'call_map', name: 'see_map', arguments: '{"zoom":1}' }],
+				};
+			}
+			looks += 1;
+			const tool = req.messages.find((m) => m.role === 'tool');
+			const body = JSON.parse(String(tool?.content));
+			const pictured = req.messages.some((m) => m.role === 'user' && Array.isArray(m.content));
+			if (looks === 1) {
+				assert.equal(body.unchanged, undefined);
+				assert.equal(pictured, true);
+			}
+			else if (looks === 2) {
+				assert.equal(body.unchanged, true);
+				assert.equal(pictured, false);
+			}
+			else {
+				assert.equal(body.unchanged, undefined);
+				assert.equal(pictured, true);
+			}
+			return goToNamedInteractable()(req);
+		});
+		const agent = new Agent<Ctx>({
+			id: 'Guard',
+			identity: { name: 'Guard', role: 'guard' },
+			goals: [{ text: 'Go to EastGate' }],
+			provider,
+			verbs: registerCoreVerbs(new VerbRegistry()),
+			recipe: recipe(),
+			context: () => ({ paragraph: paragraph() }),
+			model: 'fake',
+			heartbeat: 0,
+			toolRoundCap: 0,
+			planRetryCap: 0,
+			vision: true,
+			map: {
+				snapshot,
+			},
+		});
+		await agent.tick(1);
+		assert.equal(snaps, 1);
+		assert.equal(paints, 1);
+		await agent.tick(30);
+		assert.equal(snaps, 2);
+		assert.equal(paints, 1);
+		loc = { x: 8, y: 0 };
+		await agent.tick(40);
+		assert.equal(snaps, 3);
+		assert.equal(paints, 2);
+		assert.equal(looks, 3);
 	});
 });

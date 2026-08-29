@@ -12,10 +12,11 @@ export type {
 	InferenceProvider,
 	JsonSchemaResponseFormat,
 	ToolCall,
+	ToolChoice,
 	ToolDef,
 } from './inference/provider.js';
 export { chatContentText } from './inference/provider.js';
-export { OpenAICompatProvider, type OpenAICompatConfig, type ReasoningEffort, REASONING_EFFORTS } from './inference/openaiHttp.js';
+export { HttpProvider, parseChatTimings, mergeClientTimings, type HttpProviderConfig, type HttpLoadConfig, type ReasoningEffort, REASONING_EFFORTS, serverRoot } from './inference/http.js';
 export {
 	PREFERRED_MODELS,
 	MODEL_TIERS,
@@ -92,17 +93,17 @@ export { Agent, type AgentDeps, type AgentJSON, type AgentOptions } from './agen
 export {
 	stampMap,
 	formatLegend,
-	uniquifyMarks,
 	clampMapZoom,
 	parseMapZoom,
-	type MapAsk,
+	DEFAULT_YOU_SYMBOL,
 	type MapMark,
+	type MapPrev,
 	type MapSense,
 	type MapSnapshot,
 	type StampedMap,
 } from './agent/map.js';
 export { runPlan } from './agent/run.js';
-export { planRepairHint, sayRangeHint, shortTermBlock, stablePrefix, volatileBlock, WATCH_CHEAT_SHEET } from './agent/prompt.js';
+export { planRepairHint, sayRangeHint, shortTermBlock, stablePrefix, volatileBlock, WATCH_CHEAT_SHEET, SEE_MAP_HINT, seeMapHint } from './agent/prompt.js';
 export {
 	TalkNet,
 	DEFAULT_TALK_CONFIG,

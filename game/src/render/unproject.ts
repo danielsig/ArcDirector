@@ -162,7 +162,7 @@ export function warpQuad(
 	const canvas = document.createElement('canvas');
 	canvas.width = outW;
 	canvas.height = outH;
-	const ctx = canvas.getContext('2d');
+	const ctx = canvas.getContext('2d', { willReadFrequently: true });
 	if (!ctx) {
 		throw new Error('2d context');
 	}

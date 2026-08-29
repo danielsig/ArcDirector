@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { inject, watch } from 'vue';
-import type { HudModel } from './hudModel';
+import { saveDevStatsOpen, type HudModel } from './hudModel';
 import { sessionKey } from './sessionKey';
 import { MAX_PARALLEL_THINKERS, MIN_PARALLEL_THINKERS } from '../engine/thinkPref';
 
@@ -54,8 +54,38 @@ function pickThinkers():void {
 	session?.value?.applyMaxParallel();
 }
 
-function dumpNpcMaps():void {
-	void session?.value?.dumpNpcMaps();
+function dumpNPCMaps():void {
+	void session?.value?.dumpNPCMaps();
+}
+
+function resetInferStats():void {
+	session?.value?.resetInferStats();
+}
+
+function onDevStatsToggle(ev:Event):void {
+	const el = ev.currentTarget as HTMLDetailsElement;
+	props.hud.devStatsOpen = el.open;
+	saveDevStatsOpen(el.open);
+}
+
+function fmtMs(ms:number | null):string {
+	if (ms === null || !Number.isFinite(ms)) {
+		return '—';
+	}
+	if (ms < 1000) {
+		return `${Math.round(ms)} ms`;
+	}
+	if (ms < 10_000) {
+		return `${(ms / 1000).toFixed(1)} s`;
+	}
+	return `${Math.round(ms / 1000)} s`;
+}
+
+function avg(sum:number, n:number):number | null {
+	if (n <= 0) {
+		return null;
+	}
+	return sum / n;
 }
 
 function select(id:string):void {
@@ -140,7 +170,7 @@ function when(iso:string):string {
 					>
 						{{ hud.arcDirectorOn ? 'ArcDirector on' : 'ArcDirector paused' }}
 					</button>
-					<button type="button" @click.stop="dumpNpcMaps">
+					<button type="button" @click.stop="dumpNPCMaps">
 						NPC maps
 					</button>
 				</div>
@@ -184,6 +214,47 @@ function when(iso:string):string {
 						@change.stop="pickThinkers"
 					>
 				</label>
+				<details
+					class="dev-stats"
+					:open="hud.devStatsOpen"
+					@toggle="onDevStatsToggle"
+				>
+					<summary>Dev stats</summary>
+					<table>
+						<thead>
+							<tr>
+								<th></th>
+								<th>Last</th>
+								<th>Avg</th>
+								<th>Total</th>
+							</tr>
+						</thead>
+						<tbody>
+							<tr>
+								<td>Context load</td>
+								<td>{{ fmtMs(hud.inferLastContextMs) }}</td>
+								<td>{{ fmtMs(avg(hud.inferContextMs, hud.inferContextKnown)) }}</td>
+								<td>{{ fmtMs(hud.inferContextKnown > 0 ? hud.inferContextMs : null) }}</td>
+							</tr>
+							<tr>
+								<td>Thinking</td>
+								<td>{{ fmtMs(hud.inferLastGenerateMs) }}</td>
+								<td>{{ fmtMs(avg(hud.inferGenerateMs, hud.inferCalls)) }}</td>
+								<td>{{ fmtMs(hud.inferCalls > 0 ? hud.inferGenerateMs : null) }}</td>
+							</tr>
+							<tr>
+								<td>Round trip</td>
+								<td>{{ fmtMs(hud.inferLastWallMs) }}</td>
+								<td>{{ fmtMs(avg(hud.inferWallMs, hud.inferCalls)) }}</td>
+								<td>{{ fmtMs(hud.inferCalls > 0 ? hud.inferWallMs : null) }}</td>
+							</tr>
+						</tbody>
+					</table>
+					<div class="row stats-foot">
+						<span class="calls">{{ hud.inferCalls }} call{{ hud.inferCalls === 1 ? '' : 's' }}</span>
+						<button type="button" @click.stop="resetInferStats">Reset</button>
+					</div>
+				</details>
 				<h3>Save states</h3>
 				<ul class="slots">
 					<li v-if="hud.saveSlots.length === 0" class="empty">No saves yet</li>
@@ -260,7 +331,7 @@ function when(iso:string):string {
 }
 
 .hud-menu-panel {
-	width: min(420px, 92vw);
+	width: min(460px, 92vw);
 	max-height: min(78vh, 640px);
 	overflow: auto;
 	background: #d4c4a0;
@@ -383,6 +454,53 @@ h3 {
 
 .name input[type="number"] {
 	width: 4.5em;
+}
+
+.dev-stats {
+	margin: 12px 0 4px;
+	font-size: 12px;
+	letter-spacing: 0.04em;
+}
+
+.dev-stats summary {
+	cursor: pointer;
+	font-size: 13px;
+	letter-spacing: 0.08em;
+	font-weight: 700;
+	list-style-position: outside;
+}
+
+.dev-stats table {
+	width: 100%;
+	margin: 10px 0 8px;
+	border-collapse: collapse;
+}
+
+.dev-stats th,
+.dev-stats td {
+	text-align: left;
+	padding: 4px 0;
+}
+
+.dev-stats th:not(:first-child),
+.dev-stats td:not(:first-child) {
+	text-align: right;
+	font-variant-numeric: tabular-nums;
+}
+
+.dev-stats th {
+	font-size: 11px;
+	opacity: 0.7;
+	font-weight: 500;
+}
+
+.stats-foot {
+	align-items: center;
+	justify-content: space-between;
+}
+
+.calls {
+	opacity: 0.75;
 }
 
 .notice {

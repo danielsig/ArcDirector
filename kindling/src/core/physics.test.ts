@@ -73,7 +73,7 @@ describe('stepPhysics', () => {
 		resetAllocID();
 		const world = new World();
 		const player = padded('Player', 0.5);
-		const npc = padded('Npc', 0, 4.2);
+		const npc = padded('NPC', 0, 4.2);
 		world.add(player.go);
 		world.add(npc.go);
 		stepPhysics(world, 0.1);

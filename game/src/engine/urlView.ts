@@ -2,14 +2,14 @@
 import type { DevFlags } from './devFlags';
 import type { ViewPose } from './viewPersist';
 
-export type UrlView = {
+export type URLView = {
 	x:number;
 	y:number;
 	z:number;
 	yaw:number;
 };
 
-export type UrlFlags = {
+export type URLFlags = {
 	observer?:boolean;
 	ai?:boolean;
 };
@@ -25,7 +25,7 @@ function finiteNum(raw:string):number | undefined {
 }
 
 /** Present key: empty/`1`/`true`/`yes`/`on` → true; `0`/`false`/`no`/`off` → false. */
-export function parseUrlBool(raw:string | null):boolean | undefined {
+export function parseURLBool(raw:string | null):boolean | undefined {
 	if (raw === null) {
 		return undefined;
 	}
@@ -44,7 +44,7 @@ function compact(n:number):string {
 }
 
 /** `view=x,y,z,yaw` — all four or nothing. */
-export function parseUrlView(raw:string | null):UrlView | null {
+export function parseURLView(raw:string | null):URLView | null {
 	if (raw === null || raw === '') {
 		return null;
 	}
@@ -62,24 +62,24 @@ export function parseUrlView(raw:string | null):UrlView | null {
 	return { x, y, z, yaw };
 }
 
-export function packUrlView(pose:ViewPose):string {
+export function packURLView(pose:ViewPose):string {
 	return `${compact(pose.x)},${compact(pose.y)},${compact(pose.z)},${compact(pose.camYaw)}`;
 }
 
-export function readUrlView(search = window.location.search):UrlView | null {
-	return parseUrlView(new URLSearchParams(search).get('view'));
+export function readURLView(search = window.location.search):URLView | null {
+	return parseURLView(new URLSearchParams(search).get('view'));
 }
 
-export function readUrlFlags(search = window.location.search):UrlFlags {
+export function readURLFlags(search = window.location.search):URLFlags {
 	const q = new URLSearchParams(search);
 	return {
-		observer: parseUrlBool(q.has('observer') ? (q.get('observer') ?? '') : null),
-		ai: parseUrlBool(q.has('ai') ? (q.get('ai') ?? '') : null),
+		observer: parseURLBool(q.has('observer') ? (q.get('observer') ?? '') : null),
+		ai: parseURLBool(q.has('ai') ? (q.get('ai') ?? '') : null),
 	};
 }
 
 /** Apply a full URL shot. `yaw` sets both player facing and camera yaw. */
-export function applyUrlView(pose:ViewPose, view:UrlView):ViewPose {
+export function applyURLView(pose:ViewPose, view:URLView):ViewPose {
 	return {
 		...pose,
 		x: view.x,
@@ -94,7 +94,7 @@ export function applyUrlView(pose:ViewPose, view:UrlView):ViewPose {
  * Keep `?scene=` plus `observer`/`ai` in the bar (no history entries).
  * `view` is agent-only: never add it; if already present, keep it in sync.
  */
-export function writeUrlView(pose:ViewPose, flags:DevFlags):void {
+export function writeURLView(pose:ViewPose, flags:DevFlags):void {
 	if (!window.location.search.includes('scene=')) {
 		return;
 	}
@@ -103,7 +103,7 @@ export function writeUrlView(pose:ViewPose, flags:DevFlags):void {
 		url.searchParams.delete(key);
 	}
 	if (url.searchParams.has('view')) {
-		url.searchParams.set('view', packUrlView(pose));
+		url.searchParams.set('view', packURLView(pose));
 	}
 	url.searchParams.set('observer', flags.observer ? '1' : '0');
 	url.searchParams.set('ai', flags.ai ? '1' : '0');
@@ -113,7 +113,7 @@ export function writeUrlView(pose:ViewPose, flags:DevFlags):void {
 	window.history.replaceState({}, '', url);
 }
 
-export function clearUrlView():void {
+export function clearURLView():void {
 	const url = new URL(window.location.href);
 	for (const key of [...VIEW_KEYS, 'observer', 'ai']) {
 		url.searchParams.delete(key);

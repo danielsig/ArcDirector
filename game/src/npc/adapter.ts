@@ -1,6 +1,6 @@
 import {
 	Agent,
-	OpenAICompatProvider,
+	HttpProvider,
 	VerbRegistry,
 	builtinLodLayers,
 	builtinStringifiers,
@@ -48,7 +48,7 @@ import {
 	type MapSnapshot,
 	type ThinkRow,
 } from 'arc-director';
-import { NpcInput } from '../actors/NpcInput';
+import { NPCInput } from '../actors/NPCInput';
 import {
 	BODY_SLOTS,
 	BrewHearth,
@@ -104,6 +104,7 @@ import { useItem } from '../items/use';
 import { talkCanSee, talkFace, canHearClearly, SPEECH_LIFE, CLEAR_RANGE } from './talkAttend';
 import { yawToForward } from '../engine/math';
 import { whereabouts, enclosureAt, interiorContains } from '../world/interior';
+import { YOU_SYMBOL } from './mapMarks';
 import { snapshotMap } from './mapView';
 
 const SIGHT = 24;
@@ -126,7 +127,7 @@ const NEAR_RADIUS = CLEAR_RANGE;
 const HEARD_WINDOW = 8;
 const STALL_VERBS = new Set(['wait', 'wander', 'say', 'set_status']);
 const PROGRESS_VERBS = new Set([
-	'pick_up', 'give', 'use', 'buy', 'sell', 'haggle', 'steal', 'drop', 'equip', 'unequip', 'rest',
+	'pick_up', 'give', 'use', 'buy', 'sell', 'steal', 'drop', 'equip', 'unequip', 'rest',
 ]);
 
 function stepKey(plan:ActionPlan | null | undefined, result:ActionResult):string {
@@ -326,7 +327,7 @@ export function talkOthers(world:World, speakerID:string):string[] {
 export type HostCtx = {
 	world:World;
 	actor:GameObject;
-	director:NpcDirector;
+	director:NPCDirector;
 };
 
 function argString(step:Step, key:string):string {
@@ -376,7 +377,7 @@ function tagsOf(go:GameObject):string[] {
 	if (go.getComponent(Pickupable) || go.getComponent(Item)) {
 		tags.push('item');
 	}
-	if (go.id === 'Player' || go.name === 'Npc') {
+	if (go.id === 'Player' || go.name === 'NPC') {
 		tags.push('agent', 'person');
 	}
 	if (go.getComponent(Torch) && !go.getComponent(Item)) {
@@ -755,7 +756,7 @@ function examineWorld(go:GameObject):Record<string, unknown> {
 		if (shop) {
 			row.sells = shop.specialty;
 			row.ask = shop.ask;
-			row.haggleFloor = shop.floor;
+			row.lowest = shop.floor;
 		}
 		const mark = go.getComponent(Wanted);
 		if (mark?.enabled) {
@@ -766,7 +767,7 @@ function examineWorld(go:GameObject):Record<string, unknown> {
 	return row;
 }
 
-function recipe(director:NpcDirector):PerceptionRecipe<HostCtx> {
+function recipe(director:NPCDirector):PerceptionRecipe<HostCtx> {
 	return {
 		push: {
 			environment: {
@@ -838,9 +839,9 @@ function recipe(director:NpcDirector):PerceptionRecipe<HostCtx> {
 }
 
 async function executeStep(step:Step, ctx:HostCtx):Promise<ActionResult> {
-	const npc = ctx.actor.getComponent(NpcInput);
+	const npc = ctx.actor.getComponent(NPCInput);
 	if (!npc) {
-		return { ok: false, verb: step.verb, reason: 'no NpcInput' };
+		return { ok: false, verb: step.verb, reason: 'no NPCInput' };
 	}
 	switch (step.verb) {
 		case 'go_to': {
@@ -896,8 +897,6 @@ async function executeStep(step:Step, ctx:HostCtx):Promise<ActionResult> {
 			return doBuy(ctx, npc, argString(step, 'item'), argString(step, 'from'), argNumber(step, 'offer', NaN));
 		case 'sell':
 			return doSell(ctx, npc, argString(step, 'item'), argString(step, 'to'), argNumber(step, 'ask', NaN));
-		case 'haggle':
-			return doHaggle(ctx, npc, argString(step, 'with'), argString(step, 'item'), argNumber(step, 'offer', NaN));
 		case 'steal':
 			return doSteal(ctx, npc, argString(step, 'item'), argString(step, 'from'));
 		case 'set_status':
@@ -914,7 +913,7 @@ async function executeStep(step:Step, ctx:HostCtx):Promise<ActionResult> {
 }
 
 async function ensureRange(
-	npc:NpcInput,
+	npc:NPCInput,
 	actor:GameObject,
 	target:GameObject,
 	name:string,
@@ -927,7 +926,7 @@ async function ensureRange(
 
 async function doUse(
 	ctx:HostCtx,
-	npc:NpcInput,
+	npc:NPCInput,
 	itemName:string,
 	targetName?:string,
 ):Promise<ActionResult> {
@@ -991,7 +990,7 @@ async function doUnequip(ctx:HostCtx, slotName:string):Promise<ActionResult> {
 	return { ok: true, verb: 'unequip' };
 }
 
-async function doPickUp(ctx:HostCtx, npc:NpcInput, name:string):Promise<ActionResult> {
+async function doPickUp(ctx:HostCtx, npc:NPCInput, name:string):Promise<ActionResult> {
 	const loot = ctx.world.findNamed(name);
 	if (loot?.getComponent(Pickupable)) {
 		const crop = loot.getComponent(Harvest);
@@ -1094,7 +1093,7 @@ function tooFar(actor:GameObject, target:GameObject, name:string):string | null 
 	return null;
 }
 
-function settleGive(from:GameObject, to:GameObject, itemName:string, director:NpcDirector):ActionResult {
+function settleGive(from:GameObject, to:GameObject, itemName:string, director:NPCDirector):ActionResult {
 	if (to === from) {
 		return { ok: false, verb: 'give', reason: 'cannot give to yourself' };
 	}
@@ -1129,7 +1128,7 @@ function settleGive(from:GameObject, to:GameObject, itemName:string, director:Np
 	return { ok: true, verb: 'give', reason: `gave ${label} to ${bodyName(to)}` };
 }
 
-function settlePay(from:GameObject, to:GameObject, amount:number, director:NpcDirector):ActionResult {
+function settlePay(from:GameObject, to:GameObject, amount:number, director:NPCDirector):ActionResult {
 	if (to === from) {
 		return { ok: false, verb: 'give', reason: 'cannot give to yourself' };
 	}
@@ -1149,7 +1148,7 @@ function settleBuy(
 	seller:GameObject,
 	itemName:string,
 	offer:number,
-	director:NpcDirector,
+	director:NPCDirector,
 ):ActionResult {
 	const fromName = bodyName(seller);
 	const stock = findSaleItem(seller, itemName);
@@ -1167,22 +1166,7 @@ function settleBuy(
 		if (offer + 1e-6 < quote.floor) {
 			return { ok: false, verb: 'buy', reason: `${fromName} will not go below ${quote.floor} gold` };
 		}
-		if (quote.agreed !== undefined) {
-			if (offer + 1e-6 < quote.agreed) {
-				return { ok: false, verb: 'buy', reason: `agreed price is ${quote.agreed} gold` };
-			}
-			price = Math.floor(offer);
-		}
-		else if (offer + 1e-6 < quote.ask) {
-			return {
-				ok: false,
-				verb: 'buy',
-				reason: `ask is ${quote.ask} gold — haggle first or offer at least ${quote.ask}`,
-			};
-		}
-		else {
-			price = Math.floor(offer);
-		}
+		price = Math.floor(offer);
 	}
 	const err = transferCoins(buyer, seller, price);
 	if (err) {
@@ -1211,7 +1195,7 @@ function settleSell(
 	buyer:GameObject,
 	itemName:string,
 	ask:number,
-	director:NpcDirector,
+	director:NPCDirector,
 ):ActionResult {
 	const toName = bodyName(buyer);
 	const stock = findSaleItem(seller, itemName) ?? findItem(seller, itemName);
@@ -1251,45 +1235,9 @@ function settleSell(
 	return { ok: true, verb: 'sell', reason: `sold ${label} to ${toName} for ${price} gold` };
 }
 
-function settleHaggle(buyer:GameObject, seller:GameObject, itemName:string, offer:number):ActionResult {
-	const withName = bodyName(seller);
-	if (!Number.isFinite(offer) || offer <= 0) {
-		return { ok: false, verb: 'haggle', reason: 'name an offer in gold' };
-	}
-	const stock = findSaleItem(seller, itemName);
-	if (!stock) {
-		return { ok: false, verb: 'haggle', reason: `${withName} has no ${itemName}` };
-	}
-	const quote = priceFor(seller, stock, bodyName(buyer));
-	if (!quote) {
-		return { ok: false, verb: 'haggle', reason: `${itemName} is not for sale` };
-	}
-	const bid = Math.floor(offer);
-	if (bid < quote.floor) {
-		return {
-			ok: false,
-			verb: 'haggle',
-			reason: `${withName} will not go below ${quote.floor} gold (ask ${quote.ask})`,
-		};
-	}
-	let shop = seller.getComponent(Merchant);
-	if (!shop) {
-		shop = seller.addComponent(new Merchant());
-		shop.specialty = stock.name;
-		shop.ask = quote.ask;
-		shop.floor = quote.floor;
-	}
-	shop.deals[bodyName(buyer)] = bid;
-	return {
-		ok: true,
-		verb: 'haggle',
-		reason: `${withName} agrees to ${bid} gold for ${pascalCase(stock.name) || stock.name}`,
-	};
-}
-
 async function doGive(
 	ctx:HostCtx,
-	npc:NpcInput,
+	npc:NPCInput,
 	itemName:string,
 	toName:string,
 ):Promise<ActionResult> {
@@ -1309,7 +1257,7 @@ async function doGive(
 
 async function doBuy(
 	ctx:HostCtx,
-	npc:NpcInput,
+	npc:NPCInput,
 	itemName:string,
 	fromName:string,
 	offer:number,
@@ -1330,7 +1278,7 @@ async function doBuy(
 
 async function doSell(
 	ctx:HostCtx,
-	npc:NpcInput,
+	npc:NPCInput,
 	itemName:string,
 	toName:string,
 	ask:number,
@@ -1349,30 +1297,9 @@ async function doSell(
 	return settleSell(ctx.actor, buyer, itemName, ask, ctx.director);
 }
 
-async function doHaggle(
-	ctx:HostCtx,
-	npc:NpcInput,
-	withName:string,
-	itemName:string,
-	offer:number,
-):Promise<ActionResult> {
-	if (!withName) {
-		return { ok: false, verb: 'haggle', reason: 'haggle with whom?' };
-	}
-	const seller = findBody(ctx.world, withName);
-	if (!seller) {
-		return { ok: false, verb: 'haggle', reason: `no such person ${withName}` };
-	}
-	const walk = await ensureRange(npc, ctx.actor, seller, withName);
-	if (!walk.ok) {
-		return { ...walk, verb: 'haggle' };
-	}
-	return settleHaggle(ctx.actor, seller, itemName, offer);
-}
-
 async function doSteal(
 	ctx:HostCtx,
-	npc:NpcInput,
+	npc:NPCInput,
 	itemName:string,
 	fromName:string,
 ):Promise<ActionResult> {
@@ -1419,17 +1346,17 @@ async function resolveBrowserModel(requested?:string):Promise<{ id:string; catal
 		const hit = chat.find((m) => m.id === want)
 			?? chat.find((m) => m.id.endsWith(want) || m.id.includes(want));
 		if (hit) {
-			console.info('NpcDirector: catalog', listed, '→', hit.id, '(menu)');
+			console.info('NPCDirector: catalog', listed, '→', hit.id, '(menu)');
 			return { id: hit.id, catalog };
 		}
 		if (chat.length === 0) {
-			console.info('NpcDirector: catalog empty, trying', want);
+			console.info('NPCDirector: catalog empty, trying', want);
 			return { id: want, catalog };
 		}
 	}
 	const picked = pickSingleChatModel(catalog, PREFERRED_MODELS) ?? null;
 	if (picked) {
-		console.info('NpcDirector: catalog', listed, '→', picked);
+		console.info('NPCDirector: catalog', listed, '→', picked);
 		return { id: picked, catalog };
 	}
 	return null;
@@ -1448,7 +1375,7 @@ function whoFromMessages(messages:ChatMessage[]):string | undefined {
 	return undefined;
 }
 
-type NpcMind = {
+type NPCMind = {
 	id:string;
 	agent:Agent<HostCtx>;
 	busy:boolean;
@@ -1648,11 +1575,33 @@ const SERVANT_SEED:MindSeed = {
 
 const GLEN_SEEDS:MindSeed[] = [FORAGER_SEED, MILLER_SEED, ANGLER_SEED, SERVANT_SEED];
 
-export class NpcDirector {
+function emptyInferClock():{
+	calls:number;
+	contextMs:number;
+	generateMs:number;
+	wallMs:number;
+	contextKnown:number;
+	lastContextMs:number | null;
+	lastGenerateMs:number | null;
+	lastWallMs:number | null;
+} {
+	return {
+		calls: 0,
+		contextMs: 0,
+		generateMs: 0,
+		wallMs: 0,
+		contextKnown: 0,
+		lastContextMs: null,
+		lastGenerateMs: null,
+		lastWallMs: null,
+	};
+}
+
+export class NPCDirector {
 	readonly talk:TalkNet;
 	ambient:string;
 	private readonly sceneID:string;
-	private readonly minds:NpcMind[] = [];
+	private readonly minds:NPCMind[] = [];
 	private readonly inbox = new Map<string, AgentEvent[]>();
 	private ready = false;
 	private disposed = false;
@@ -1680,6 +1629,7 @@ export class NpcDirector {
 	private readonly readyThink:ThinkRow[] = [];
 	private readonly acting = new Set<string>();
 	private posedEvents:PosedFact[] = [];
+	private infer = emptyInferClock();
 
 	constructor(
 		private readonly world:World,
@@ -1744,15 +1694,13 @@ export class NpcDirector {
 			ids.push(go.id);
 		});
 		let n = 0;
-		for (const id of ids) {
-			const mind = this.minds.find((m) => m.id === id);
-			const ask = { id, goals: mind?.agent.goals ?? [] };
+		for (const npcID of ids) {
 			for (const zoom of [1, 0]) {
-				const snap = snapshotMap(this.world, zoom, ask);
-				if (!snap) {
+				const snap = snapshotMap(this.world, npcID, zoom);
+				if (!snap || !('marks' in snap)) {
 					continue;
 				}
-				await this.logLook(id, zoom, snap);
+				await this.logLook(npcID, zoom, snap);
 				n += 1;
 			}
 		}
@@ -1814,10 +1762,52 @@ export class NpcDirector {
 		saveThinkPref(v);
 	}
 
-	private syncVision(modelId:string):void {
-		const row = this.catalog.find((m) => m.id === modelId)
-			?? this.catalog.find((m) => m.id.endsWith(modelId) || m.id.includes(modelId));
-		this.vision = isVisionModel(row ?? modelId);
+	patchInfer(hud:HudModel):void {
+		hud.inferCalls = this.infer.calls;
+		hud.inferContextMs = this.infer.contextMs;
+		hud.inferGenerateMs = this.infer.generateMs;
+		hud.inferWallMs = this.infer.wallMs;
+		hud.inferContextKnown = this.infer.contextKnown;
+		hud.inferLastContextMs = this.infer.lastContextMs;
+		hud.inferLastGenerateMs = this.infer.lastGenerateMs;
+		hud.inferLastWallMs = this.infer.lastWallMs;
+	}
+
+	resetInferStats():void {
+		this.infer = emptyInferClock();
+	}
+
+	private recordInfer(wallMs:number, res:{ promptMs?:number; generateMs?:number }):void {
+		const context = res.promptMs;
+		let generate = res.generateMs;
+		if (generate === undefined && context !== undefined) {
+			generate = Math.max(0, wallMs - context);
+		}
+		this.infer.calls += 1;
+		this.infer.wallMs += wallMs;
+		this.infer.lastWallMs = wallMs;
+		if (context !== undefined) {
+			this.infer.contextMs += context;
+			this.infer.contextKnown += 1;
+			this.infer.lastContextMs = context;
+		}
+		else {
+			this.infer.lastContextMs = null;
+		}
+		if (generate !== undefined) {
+			this.infer.generateMs += generate;
+			this.infer.lastGenerateMs = generate;
+		}
+		else {
+			this.infer.generateMs += wallMs;
+			this.infer.lastGenerateMs = wallMs;
+		}
+	}
+
+	private syncVision(modelID:string):void {
+		const row = this.catalog.find((m) => m.id === modelID)
+			?? this.catalog.find((m) => m.id.endsWith(modelID) || m.id.includes(modelID));
+		this.vision = isVisionModel(row ?? modelID);
 		for (const mind of this.minds) {
 			mind.agent.vision = this.vision;
 		}
@@ -1834,7 +1824,7 @@ export class NpcDirector {
 		}
 		this.model = name;
 		this.syncVision(name);
-		this.pushLog('NpcDirector', `using ${name}${this.vision ? ' (vision)' : ''}`);
+		this.pushLog('NPCDirector', `using ${name}${this.vision ? ' (vision)' : ''}`);
 		for (const mind of this.minds) {
 			mind.agent.model = name;
 			mind.agent.vision = this.vision;
@@ -1928,7 +1918,7 @@ export class NpcDirector {
 	}
 
 	publishDebug():void {
-		(window as unknown as { __npcWatch:ReturnType<NpcDirector['debug']> }).__npcWatch = this.debug();
+		(window as unknown as { __npcWatch:ReturnType<NPCDirector['debug']> }).__npcWatch = this.debug();
 		publishAiLog(this.log);
 	}
 
@@ -1956,18 +1946,24 @@ export class NpcDirector {
 		}
 		const resolved = await resolveBrowserModel(this.model || loadModelPref());
 		if (!resolved) {
-			console.warn('NpcDirector: no local model at', INFERENCE_BASE);
-			this.pushLog('NpcDirector', `no local model at ${INFERENCE_BASE}`);
+			console.warn('NPCDirector: no local model at', INFERENCE_BASE);
+			this.pushLog('NPCDirector', `no local model at ${INFERENCE_BASE}`);
 			this.world.setMessage('NPCs idle — start LM Studio on port 1234');
 			return;
 		}
 		const model = resolved.id;
 		this.catalog = resolved.catalog;
-		const http = new OpenAICompatProvider({
+		const http = new HttpProvider({
 			baseURL: INFERENCE_BASE,
 			timeoutMs: 60_000,
 			enableThinking: false,
 			maxTokens: 1024,
+			load: {
+				flashAttention: true,
+				offloadKvCacheToGpu: true,
+				evalBatchSize: 512,
+				parallel: this.queue.maxParallel,
+			},
 		});
 		const queued = withQueue(http, 2);
 		const provider:InferenceProvider = {
@@ -1977,7 +1973,17 @@ export class NpcDirector {
 				try {
 					const res = await queued.chat(req);
 					const ms = Math.round(performance.now() - t0);
+					this.recordInfer(ms, res);
 					const parts = [`${ms}ms`];
+					if (res.promptMs !== undefined) {
+						parts.push(`ctx ${Math.round(res.promptMs)}ms`);
+					}
+					if (res.generateMs !== undefined) {
+						parts.push(`gen ${Math.round(res.generateMs)}ms`);
+					}
+					if (res.cachedTokens) {
+						parts.push(`cache ${res.cachedTokens}`);
+					}
 					if (res.toolCalls.length > 0) {
 						parts.push(`tool ${res.toolCalls.map((c) => c.name).join(', ')}`);
 					}
@@ -1992,6 +1998,7 @@ export class NpcDirector {
 				}
 				catch (err:unknown) {
 					const ms = Math.round(performance.now() - t0);
+					this.recordInfer(ms, {});
 					const text = err instanceof Error ? err.message : String(err);
 					this.pushLog(name, `${ms}ms\n${text}`);
 					throw err;
@@ -2005,7 +2012,7 @@ export class NpcDirector {
 		if (!pref) {
 			saveModelPref(this.model);
 		}
-		this.pushLog('NpcDirector', `using ${this.model}${this.vision ? ' (vision)' : ''}`);
+		this.pushLog('NPCDirector', `using ${this.model}${this.vision ? ' (vision)' : ''}`);
 		const seeds = this.sceneSeeds();
 		for (const seed of seeds) {
 			const mind = this.bootMind(seed, provider, this.model, this.storedAgents[seed.id]);
@@ -2017,8 +2024,8 @@ export class NpcDirector {
 			return;
 		}
 		this.ready = true;
-		this.pushLog('NpcDirector', `${this.minds.map((m) => m.id).join(', ')} on ${this.model}${this.vision ? ' (vision)' : ''}`);
-		console.info(`NpcDirector: ${this.minds.map((m) => m.id).join(', ')} on ${this.model}${this.vision ? ' (vision)' : ''}`);
+		this.pushLog('NPCDirector', `${this.minds.map((m) => m.id).join(', ')} on ${this.model}${this.vision ? ' (vision)' : ''}`);
+		console.info(`NPCDirector: ${this.minds.map((m) => m.id).join(', ')} on ${this.model}${this.vision ? ' (vision)' : ''}`);
 	}
 
 	private sceneSeeds():MindSeed[] {
@@ -2090,11 +2097,11 @@ export class NpcDirector {
 		provider:InferenceProvider,
 		model:string,
 		stored?:AgentJSON,
-	):NpcMind | null {
+	):NPCMind | null {
 		const actor = this.world.findByID(seed.id);
 		if (!actor) {
-			console.warn(`NpcDirector: no ${seed.id}`);
-			this.pushLog('NpcDirector', `no ${seed.id} in the world`);
+			console.warn(`NPCDirector: no ${seed.id}`);
+			this.pushLog('NPCDirector', `no ${seed.id} in the world`);
 			return null;
 		}
 		const named = actor.getComponent(Named);
@@ -2118,7 +2125,7 @@ export class NpcDirector {
 		this.applySeedWatches(agent, seed, !stored);
 		this.restoreCompanionHold(actor, agent);
 		this.hookTalk(id, agent);
-		const npc = actor.getComponent(NpcInput);
+		const npc = actor.getComponent(NPCInput);
 		if (npc) {
 			npc.aiOn = true;
 		}
@@ -2202,7 +2209,6 @@ export class NpcDirector {
 				.add('give', { item: 'id', to: 'id' })
 				.add('buy', { item: 'id', from: 'id', offer: 'number?' })
 				.add('sell', { item: 'id', to: 'id', ask: 'number?' })
-				.add('haggle', { with: 'id', item: 'id', offer: 'number' })
 				.add('steal', { item: 'id', from: 'id' })
 				.add('set_status', { text: 'string', seconds: 'number?' })
 				.add('rest', {}),
@@ -2222,10 +2228,11 @@ export class NpcDirector {
 			planRetryCap: PLAN_RETRY_CAP,
 			talk: this.talk,
 			map: {
-				snapshot: (zoom, ask) => {
-					const snap = snapshotMap(director.world, zoom, ask);
-					if (snap) {
-						void director.logLook(ask.id, zoom, snap);
+				you: YOU_SYMBOL,
+				snapshot: (npcID, zoom, prev) => {
+					const snap = snapshotMap(director.world, npcID, zoom, prev);
+					if (snap && 'marks' in snap) {
+						void director.logLook(npcID, zoom, snap);
 					}
 					return snap;
 				},
@@ -2620,7 +2627,7 @@ export class NpcDirector {
 				continue;
 			}
 			const go = this.world.findByID(mind.id);
-			const npc = go?.getComponent(NpcInput);
+			const npc = go?.getComponent(NPCInput);
 			if (this.acting.has(mind.id)) {
 				if (row.reason === 'major' || (row.reason === 'watch' && this.queue.rankScore(row.npcID, row.score) >= 0.5)) {
 					npc?.interrupt('urgent');
@@ -2660,7 +2667,7 @@ export class NpcDirector {
 		if (!mind.aiOn) {
 			mind.aiOn = true;
 			this.queue.setAiOn(mind.id, true);
-			const npc = go?.getComponent(NpcInput);
+			const npc = go?.getComponent(NPCInput);
 			if (npc) {
 				npc.aiOn = true;
 			}
@@ -2718,7 +2725,7 @@ export class NpcDirector {
 		}
 	}
 
-	private runMind(mind:NpcMind):void {
+	private runMind(mind:NPCMind):void {
 		mind.busy = true;
 		mind.thoughtAt = this.world.time;
 		mind.note = `${mind.id} is thinking...`;
@@ -2770,7 +2777,7 @@ export class NpcDirector {
 			});
 	}
 
-	private noteThinkResult(mind:NpcMind, plan:ActionPlan, result:ActionResult):void {
+	private noteThinkResult(mind:NPCMind, plan:ActionPlan, result:ActionResult):void {
 		const verb = result.verb ?? plan.head.verb ?? '';
 		const key = stepKey(plan, result);
 		if (result.ok && (PROGRESS_VERBS.has(verb) || verb === 'go_to' || verb === 'follow')) {
@@ -3078,7 +3085,7 @@ export class NpcDirector {
 			});
 		});
 		for (const go of doomed) {
-			this.despawnNpc(go);
+			this.despawnNPC(go);
 		}
 		if (this.world.time < this.nextCrowdAt) {
 			return;
@@ -3120,7 +3127,7 @@ export class NpcDirector {
 		if (crowd.wants.length > 0) {
 			this.setGoals(
 				bodyName(go),
-				`Still need ${crowd.wants.join(' and ')}. Buy or haggle. Then leave through ${crowd.leaveGate || 'EastGate'}.`,
+				`Still need ${crowd.wants.join(' and ')}. Buy what you came for. Then leave through ${crowd.leaveGate || 'EastGate'}.`,
 				3,
 			);
 			return;
@@ -3132,7 +3139,7 @@ export class NpcDirector {
 		this.setGoals(bodyName(go), `You have what you came for. go_to(${gate}) now and leave. Do not linger.`, 3);
 	}
 
-	private despawnNpc(go:GameObject):void {
+	private despawnNPC(go:GameObject):void {
 		const id = bodyName(go);
 		this.talk.detach(id);
 		const i = this.minds.findIndex((m) => m.id === id);
@@ -3257,15 +3264,15 @@ export class NpcDirector {
 			crowd.leaving = true;
 			const gate = crowd.leaveGate || 'EastGate';
 			this.setGoals(who, `The watch caught you. go_to(${gate}) and leave. Do not steal again.`, 3);
-			const npc = thief.getComponent(NpcInput);
+			const npc = thief.getComponent(NPCInput);
 			if (npc && npc.headingTo() !== gate) {
 				void npc.goTo(gate);
 			}
 		}
 		const post = guard.getComponent(Crowd)?.leaveGate || 'WestGate';
-		const postNpc = guard.getComponent(NpcInput);
-		if (postNpc && postNpc.headingTo() !== post) {
-			void postNpc.goTo(post);
+		const postNPC = guard.getComponent(NPCInput);
+		if (postNPC && postNPC.headingTo() !== post) {
+			void postNPC.goTo(post);
 		}
 	}
 
@@ -3518,7 +3525,7 @@ export class NpcDirector {
 		this.setGoals(id, extra, priority);
 	}
 
-	private mindByID(id:string):NpcMind | undefined {
+	private mindByID(id:string):NPCMind | undefined {
 		const direct = this.minds.find((m) => m.id === id);
 		if (direct) {
 			return direct;
@@ -3543,7 +3550,7 @@ export class NpcDirector {
 	}
 
 	/** World address is Named.id. Spawn id stays put so minds and saves still key off it. */
-	private revealChosenName(mind:NpcMind):void {
+	private revealChosenName(mind:NPCMind):void {
 		const go = this.world.findByID(mind.id);
 		const named = go?.getComponent(Named);
 		if (!go || !named) {
@@ -3631,7 +3638,7 @@ export class NpcDirector {
 			}
 		}
 		if (bond.hold) {
-			const npc = actor.getComponent(NpcInput);
+			const npc = actor.getComponent(NPCInput);
 			if (npc?.headingTo() === bond.targetID || npc?.headingTo() === 'Player') {
 				void npc.wait(0.2);
 			}
@@ -3696,11 +3703,8 @@ export class NpcDirector {
 			}
 			return settleSell(player, target.who, slash.item, slash.ask ?? NaN, this);
 		}
-		const target = this.playerReach(player, slash.with, 'haggle');
-		if (!target.ok) {
-			return target;
-		}
-		return settleHaggle(player, target.who, slash.item, slash.offer);
+		const unseen:never = slash;
+		return { ok: false, verb: 'buy', reason: String(unseen) };
 	}
 
 	private playerReach(

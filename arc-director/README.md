@@ -4,7 +4,7 @@ Game-agnostic and Engine-agnostic LLM powered NPC agents.
 
 Designed to be used with locally running LLMs.
 
-Covers NPC planning, memory, perception, chat, priority queue, reactivity heuristics, and OpenAI-compatible inference. No renderer, no physics, no coordinate system, no UI. The host supplies a world snapshot (as names and expressions) and functions to understand it and functions to execute NPC actions.
+Covers NPC planning, memory, perception, chat, priority queue, reactivity heuristics, and local HTTP inference. No renderer, no physics, no coordinate system, no UI. The host supplies a world snapshot (as names and expressions) and functions to understand it and functions to execute NPC actions.
 
 ```
 pnpm test
@@ -35,7 +35,7 @@ Identity of an agent is `id` (string).
 ## Quick start
 
 ```ts
-const provider = new OpenAICompatProvider(); // ARC_DIRECTOR_BASE_URL or http://127.0.0.1:1234/v1
+const provider = new HttpProvider(); // ARC_DIRECTOR_BASE_URL or http://127.0.0.1:1234/v1
 const verbs = registerCoreVerbs(new VerbRegistry());
 
 const agent = new Agent({
@@ -85,7 +85,7 @@ Without `execute`, `tick` still returns a plan; the host runs it later and calls
 
 Defaults: `heartbeat` 30, `strategicInterval` 180 (same time unit as `gameTime`; typically seconds). `strategicInterval <= 0` disables the periodic pass. Major pending events still trigger a strategic pass (goals; identity only if who they are actually changed).
 
-Tactical: assemble pushed perception → optional memory intrusion → tools (`recall`, `observe`, `earshot`, `see_map` when the host maps and the model can see, plus recipe tools) up to `toolRoundCap` → JSON `ActionPlan`. The same JSON may include lasting `goals` (or `set_goal`). `identity` / `set_identity` is for a rare, lasting who-you-are change, not orders, weather, or nicknames. A new `name` only applies when `role` also changes. Bad plans retry `planRetryCap` times (default 0). Major pending events also trigger a strategic pass that may revise goals (and identity only if needed), even if `strategicInterval` is 0.
+Tactical: assemble pushed perception → optional memory intrusion → tools (`recall`, `observe`, `earshot`, `see_map` when the host maps and the model can see, plus recipe tools) up to `toolRoundCap` → JSON `ActionPlan`. System prompt is identity + standing instructions (verbs, JSON shape); goals, pinned memory, watches, and perception sit in the user block so local servers can reuse the KV prefix. The same JSON may include lasting `goals` (or `set_goal`). `identity` / `set_identity` is for a rare, lasting who-you-are change, not orders, weather, or nicknames. A new `name` only applies when `role` also changes. Bad plans retry `planRetryCap` times (default 0). Major pending events also trigger a strategic pass that may revise goals (and identity only if needed), even if `strategicInterval` is 0.
 
 ### Options
 
@@ -99,7 +99,7 @@ Tactical: assemble pushed perception → optional memory intrusion → tools (`r
 | `intrusionThreshold` / `intrusionCooldown` | 0.55 / 45 | Unbidden memory into the prompt |
 | `recallK` | 5 | Default `recall` hit count |
 | `hideObserve` | false | Omit the built-in `observe` tool |
-| `map` | — | Host snapshots for `see_map`. Omitted unless `vision` is also on |
+| `map` | — | Host snapshots for `see_map`. Omitted unless `vision` is also on. `map.you` is the self pictogram (default `❌`) |
 | `vision` | heuristic | `true` / `false` for image input. `false` never offers `see_map` |
 | `watches` / `pinnedWatches` | `[]` | See [Watches](#watches) |
 | `watchesWritable` | true | LLM may replace non-pinned watches in the plan JSON |
@@ -221,7 +221,7 @@ Joins: `then_if_ok` (`&&`), `then` (`;`), `then_if_err` (`||`). At most four cha
 
 ## Memory
 
-`MemoryStore`: episodic / semantic / identity. Pinned rows skip eviction and go in the system prompt. Episodic cap `maxEpisodic` (256) drops oldest unpinned.
+`MemoryStore`: episodic / semantic / identity. Pinned rows skip eviction and go in the **user** block (with goals and perception) so the system prefix can stay byte-stable for local KV cache. Episodic cap `maxEpisodic` (256) drops oldest unpinned.
 
 Heard speech (and other non-`action_result` events) is also copied into a **short-term** buffer shown every think: last 8 lines, older ones folded into an `Earlier:` summary. That buffer survives after the one-shot event inbox is drained, so an NPC asked "what did I just say?" still knows. `recall` returns those recent lines first, then scored episodic hits.
 
@@ -247,9 +247,11 @@ Names that are not agents can still be addressed if `inRange` is true.
 
 `see_map({ zoom })` is omitted unless **both** are set: a host `map.snapshot` and `vision` (or a catalog/id that `isVisionModel` accepts). Do not advertise a see_map that comes back text-only.
 
-`zoom` is 0..1: **1** is close around the agent, **0** is the whole loaded land, values in between crop between those. The host paints the picture and supplies marks (`symbol`, `description`, world `x`/`y`). The library stamps unique pictograms and returns a legend `⭐ = you, 🎚️ = MillLever, 🏠 = Cottage` — names only, no coordinates. The tool result is that JSON; a follow-up user message carries the image parts.
+The English scene already names nearby things. Prompts tell the model **not** to call see_map unless that text is not enough. Every look calls `map.snapshot(npcID, zoom, prev?)`. `prev` is the last picture (`image`, `zoom`, `timestamp`, optional map `x`/`y`). Return `{ image: prev.image }` to keep it — the library returns the same legend and **does not** inject another image.
 
-If `toolRoundCap` is 0, an enabled see_map still gets **one** tool round (and only the `see_map` tool is advertised). Raise the cap to mix see_map with `recall` / `earshot` / recipe tools.
+`zoom` is 0..1: **1** is close around the agent, **0** is the whole loaded land, values in between crop between those. The host paints the picture and supplies marks (`symbol`, `description`, map `x`/`y`). The library stamps those symbols and returns a legend `❌ = you, 🎚️ = MillLever, 🏠 = Cottage` — names only, no coordinates. Set `map.you` to the same pictogram the host stamps so the standing prompt matches the legend (default `❌`). The tool result is that JSON; a follow-up user message carries the image parts on a fresh look only.
+
+If `toolRoundCap` is 0, an enabled see_map still gets **one** tool round (and only the `see_map` tool is advertised). Tool defs stay on later turns of that think with `tool_choice: "none"` so the KV prefix does not rewrite. Raise the cap to mix see_map with `recall` / `earshot` / recipe tools.
 
 Plans stay `go_to(MillLever)`. Never put numbers in the legend or the prompt.
 
@@ -271,7 +273,7 @@ The dump is names and relations. The host owns where things sit.
 
 | | |
 |--|--|
-| `OpenAICompatProvider` | `/v1/chat/completions` (+ embeddings). Default base `ARC_DIRECTOR_BASE_URL` or `OLLAMA_HOST` or `http://127.0.0.1:1234/v1`. |
+| `HttpProvider` | Local HTTP chat. Uses `/v1/chat/completions` by default. If `GET {root}/api/v1/models` returns a native catalog, it loads with `POST /api/v1/models/load` (flash attention, GPU KV cache, eval batch size, optional `parallel`) and chats through `/v1/responses`. Each agent id keeps multiple `response_id`s; the next call sends `previous_response_id` for the longest stored exact prefix of the current messages. Default base `ARC_DIRECTOR_BASE_URL` or `OLLAMA_HOST` or `http://127.0.0.1:1234/v1`. |
 | `withQueue(provider, n)` | Cap in-flight HTTP. |
 | `FakeProvider` | Tests; `goToNamedInteractable()` is a canned planner. |
 | `fetchModelCatalog` / `pickSingleChatModel` | Prefer an already-loaded chat model. |
@@ -291,6 +293,6 @@ src/
   action/            verbs, parse, validate
   memory/            MemoryStore
   perception/        optional scene English
-  inference/         OpenAI HTTP, fake, model catalog
+  inference/         HTTP chat, fake, model catalog
   scripts/           demo + fixtures
 ```

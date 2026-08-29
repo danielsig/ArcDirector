@@ -1,5 +1,5 @@
 import { HUMAN_KINDS } from '../engine/components';
-import { loadNpcAnims } from './humanAnims';
+import { loadNPCAnims } from './humanAnims';
 import { loadNature } from './nature';
 import { loadSpritesheet } from './spritesheet';
 import { loadSwordAnims } from './swordAnims';
@@ -14,7 +14,7 @@ export function preloadArt():Promise<void> {
 	pending = Promise.all([
 		loadSpritesheet(),
 		loadNature(),
-		loadNpcAnims(HUMAN_KINDS),
+		loadNPCAnims(HUMAN_KINDS),
 		loadSwordAnims(),
 	]).then(() => undefined).catch((err:unknown) => {
 		pending = null;

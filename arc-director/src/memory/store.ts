@@ -1,4 +1,4 @@
-import { readId } from '../json.js';
+import { readID } from '../json.js';
 
 export type MemoryCategory = 'episodic' | 'semantic' | 'identity';
 
@@ -203,7 +203,7 @@ export class MemoryStore {
 		const store = new MemoryStore();
 		let max = 0;
 		for (const row of rows) {
-			const id = readId(row) ?? '';
+			const id = readID(row) ?? '';
 			store.records.push({
 				...row,
 				id,

@@ -40,7 +40,7 @@ import {
 	type RockStamp,
 } from './rocksAtlas';
 import { rasterizeImage, warpQuad, type AtlasPixels } from './unproject';
-import { disposeNpcAnims } from './humanAnims';
+import { disposeNPCAnims } from './humanAnims';
 import { disposeSwordAnims } from './swordAnims';
 
 export type ChestFaces = {
@@ -565,7 +565,7 @@ function groutNormal(src:HTMLCanvasElement, scale:number):HTMLCanvasElement {
 	const out = document.createElement('canvas');
 	out.width = w;
 	out.height = h;
-	const octx = out.getContext('2d');
+	const octx = out.getContext('2d', { willReadFrequently: true });
 	if (!octx) {
 		throw new Error('2d context');
 	}
@@ -634,7 +634,7 @@ function stackWallMaps(
 	const mapCanvas = document.createElement('canvas');
 	mapCanvas.width = stampW;
 	mapCanvas.height = stampH * WALL_ROW_COUNT;
-	const mapCtx = mapCanvas.getContext('2d');
+	const mapCtx = mapCanvas.getContext('2d', { willReadFrequently: true });
 	if (!mapCtx) {
 		throw new Error('2d context');
 	}
@@ -1007,6 +1007,6 @@ export function disposeSpritesheet():void {
 	matByKey.clear();
 	textures = null;
 	pending = null;
-	disposeNpcAnims();
+	disposeNPCAnims();
 	disposeSwordAnims();
 }

@@ -1,4 +1,4 @@
-/** Host-drawn top-down maps for the `see_map` tool. Coordinates stay host-side. */
+/** Host-drawn top-down maps for the `see_map` tool. */
 
 import { isRecord } from '../json.js';
 
@@ -33,9 +33,7 @@ export function parseMapZoom(args:unknown):number {
 export type MapMark = {
 	symbol:string;
 	description:string;
-	/** World X (east). */
 	x:number;
-	/** World Z (south). Named `y` so the overlay math stays 2D. */
 	y:number;
 };
 
@@ -46,64 +44,43 @@ export type MapSnapshot = {
 	height:number;
 	toPixel:(x:number, y:number)=>{ u:number; v:number };
 	marks:MapMark[];
+	x?:number;
+	y?:number;
 };
 
-export type MapAsk = {
-	id:string;
-	goals:{ text:string }[];
+/** Last picture. Return `{ image: prev.image }` to keep it. */
+export type MapPrev = {
+	image:string;
+	zoom:number;
+	timestamp:number;
+	x?:number;
+	y?:number;
 };
+
+export function isMapSnapshot(snap:MapSnapshot | { image:string }):snap is MapSnapshot {
+	return 'marks' in snap && 'toPixel' in snap;
+}
+
+/** Default pictogram for this agent's own location on `see_map`. */
+export const DEFAULT_YOU_SYMBOL = '❌';
 
 export type MapSense = {
-	/** `zoom` is 0 (whole land) .. 1 (close). */
-	snapshot:(zoom:number, ask:MapAsk)=>MapSnapshot | Promise<MapSnapshot | null> | null;
+	snapshot:(
+		npcID:string,
+		zoom:number,
+		prev?:MapPrev,
+	)=>MapSnapshot | { image:string } | Promise<MapSnapshot | { image:string } | null> | null;
+	/**
+	 * Pictogram for this agent's own location. Must match the mark the host
+	 * stamps. Standing prompts use this so the legend and the hint agree.
+	 * Defaults to `DEFAULT_YOU_SYMBOL`.
+	 */
+	you?:string;
 };
-
-const SYMBOL_POOL = [
-	'⭐',
-	'🏠',
-	'🚪',
-	'🔥',
-	'🎚️',
-	'🌉',
-	'🍄',
-	'⛩️',
-	'🧰',
-	'🛏️',
-	'🌿',
-	'🌾',
-	'🎣',
-	'🧹',
-	'🧍',
-	'🦊',
-	'🐸',
-	'🦉',
-	'🐺',
-	'🐻',
-	'🐱',
-	'🐰',
-	'🐷',
-	'🐮',
-	'🐵',
-	'❓',
-];
-
-export function uniquifyMarks(marks:MapMark[]):MapMark[] {
-	const used = new Set<string>();
-	return marks.map((m) => {
-		let symbol = m.symbol.trim();
-		if (!symbol || used.has(symbol)) {
-			symbol = SYMBOL_POOL.find((s) => !used.has(s)) ?? '?';
-		}
-		used.add(symbol);
-		return { ...m, symbol };
-	});
-}
 
 /** `symbol = description` pairs, comma-separated. No numbers. */
 export function formatLegend(marks:MapMark[]):string {
-	return uniquifyMarks(marks)
-		.map((m) => `${m.symbol} = ${m.description}`)
-		.join(', ');
+	return marks.map((m) => `${m.symbol} = ${m.description}`).join(', ');
 }
 
 export type StampedMap = {
@@ -112,12 +89,11 @@ export type StampedMap = {
 };
 
 /**
- * Stamp unique symbols onto the snapshot. Node and other canvas-less
+ * Stamp host symbols onto the snapshot. Node and other canvas-less
  * runtimes return the source image plus a legend — tests still cover gating.
  */
 export async function stampMap(snap:MapSnapshot):Promise<StampedMap> {
-	const marks = uniquifyMarks(snap.marks);
-	const legend = formatLegend(marks);
+	const legend = formatLegend(snap.marks);
 	const ctx = makeStampContext(snap.width, snap.height);
 	if (!ctx) {
 		return { image: snap.image, legend };
@@ -127,7 +103,7 @@ export async function stampMap(snap:MapSnapshot):Promise<StampedMap> {
 		return { image: snap.image, legend };
 	}
 	ctx.drawImage(bitmap, 0, 0, snap.width, snap.height);
-	for (const mark of marks) {
+	for (const mark of snap.marks) {
 		const { u, v } = snap.toPixel(mark.x, mark.y);
 		if (u < 0 || v < 0 || u > snap.width || v > snap.height) {
 			continue;
@@ -173,7 +149,7 @@ async function decodeBitmap(src:string):Promise<unknown | null> {
 	if (typeof create !== 'function') {
 		return null;
 	}
-	const blob = dataUrlToBlob(src);
+	const blob = dataURLToBlob(src);
 	if (!blob) {
 		return null;
 	}
@@ -195,7 +171,7 @@ async function canvasPng(ctx:StampCtx):Promise<string | null> {
 	}
 	if (typeof canvas.convertToBlob === 'function') {
 		const blob = await canvas.convertToBlob({ type: 'image/png' });
-		return blobToDataUrl(blob);
+		return blobToDataURL(blob);
 	}
 	return null;
 }
@@ -211,7 +187,7 @@ function drawMark(ctx:StampCtx, u:number, v:number, symbol:string):void {
 	ctx.fillText(symbol, u, v + 1);
 }
 
-function dataUrlToBlob(url:string):Blob | null {
+function dataURLToBlob(url:string):Blob | null {
 	const hit = /^data:([^;,]+)?(?:;charset=[^;,]+)?;base64,(.+)$/i.exec(url);
 	if (!hit) {
 		return null;
@@ -229,7 +205,7 @@ function dataUrlToBlob(url:string):Blob | null {
 	}
 }
 
-async function blobToDataUrl(blob:Blob):Promise<string> {
+async function blobToDataURL(blob:Blob):Promise<string> {
 	const buf = await blob.arrayBuffer();
 	const bytes = new Uint8Array(buf);
 	let bin = '';

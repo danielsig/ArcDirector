@@ -13,8 +13,8 @@ pnpm workspace at the repo root (`package.json`, `pnpm-workspace.yaml`).
 
 ## Stack
 
-- **Language:** TypeScript (strict), pnpm workspaces — not a single root `src/`.
-- **`arc-director`:** pure TS library. Local models over OpenAI-compatible HTTP (LM Studio / Ollama).
+- **Language:** TypeScript (strict), pnpm workspaces — not a single root `src/`. 2–3 letter acronyms `ID` / `HP` / `NPC` / `URL` / `UTC` (`NPCDirector`, `npcID` — never `Id`, `Hp`, `Npc`, `Url`, `Utc`). Not units (`Mb` ≠ `MB`, `Ms` ≠ `MS`).
+- **`arc-director`:** pure TS library. Local models over HTTP (LM Studio / Ollama).
 - **`kindling`:** Unity-shaped runtime. Owns canvas, `Renderer`, frame loop, `GameObject` / `Transform` / physics. Three.js is the scene graph.
 - **`game`:** Vue 3 (Composition API, one SFC per file) + Vite. Subclasses Kindling `Game` / `World` / `GameObject` / `Component`. Simulation is not Vue state; HUD is DOM over the canvas.
 

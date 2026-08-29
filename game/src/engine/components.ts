@@ -180,12 +180,12 @@ export class Wallet extends Component {
 	coins = 0;
 }
 
-/** Street vendor with a list price and a haggle floor. */
+/** Street vendor with a list price and a lowest they will take. */
 export class Merchant extends Component {
 	specialty = '';
 	ask = 0;
 	floor = 0;
-	/** Buyer id → agreed coin price after a successful haggle. */
+	/** Buyer id → agreed coin price, if any. */
 	deals:Record<string, number> = {};
 }
 

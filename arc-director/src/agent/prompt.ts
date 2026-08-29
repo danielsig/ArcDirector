@@ -2,13 +2,25 @@ import { verbHelp } from '../action/schema.js';
 import type { VerbRegistry } from '../action/registry.js';
 import type { ActionResult } from '../action/types.js';
 import type { MemoryRecord } from '../memory/store.js';
+import { DEFAULT_YOU_SYMBOL } from './map.js';
 import type { AgentIdentity, Goal } from './types.js';
 
+export type StablePrefixOpts = {
+	includeWatches?:boolean;
+	canSeeMap?:boolean;
+	/** Pictogram for this agent's own location. Used in the see_map hint. */
+	youSymbol?:string;
+};
+
+/**
+ * Identity + standing instructions. Keep this byte-stable across thinks so
+ * local servers can reuse the KV prefix. Goals, memory, and perception go
+ * in `volatileBlock`.
+ */
 export function stablePrefix(
 	identity:AgentIdentity,
-	goals:Goal[],
-	pinned:MemoryRecord[],
-	includeWatches = false,
+	verbs:VerbRegistry,
+	opts:StablePrefixOpts = {},
 ):string {
 	const lines = [
 		`You are ${identity.name}. Role: ${identity.role}.`,
@@ -18,22 +30,13 @@ export function stablePrefix(
 	if (identity.traits && identity.traits.length > 0) {
 		lines.push(`Traits: ${identity.traits.join(', ')}.`);
 	}
-	if (pinned.length > 0) {
-		lines.push('Pinned memories:');
-		for (const m of pinned) {
-			lines.push(`- ${m.text}`);
-		}
-	}
-	if (goals.length > 0) {
-		const sorted = [...goals].sort((a, b) => (b.priority ?? 0) - (a.priority ?? 0));
-		lines.push('Goals (highest first):');
-		for (const g of sorted) {
-			lines.push(`- ${g.text}`);
-		}
-	}
-	if (includeWatches) {
+	if (opts.includeWatches) {
 		lines.push(WATCH_CHEAT_SHEET);
 	}
+	if (opts.canSeeMap) {
+		lines.push(seeMapHint(opts.youSymbol));
+	}
+	lines.push(planInstructions(verbs));
 	return lines.join('\n');
 }
 
@@ -49,6 +52,34 @@ export const WATCH_CHEAT_SHEET = [
 	'trueScore applies only to a boolean watch root, not inside arithmetic.',
 ].join(' ');
 
+export function seeMapHint(youSymbol = DEFAULT_YOU_SYMBOL):string {
+	const you = youSymbol.trim() || DEFAULT_YOU_SYMBOL;
+	return [
+		'The English scene already names who and what is near, with distances in paces.',
+		'Do not call see_map unless that text is not enough to pick a go_to.',
+		'see_map({zoom:1}) is close around you; see_map({zoom:0}) is the whole loaded land; in-between values zoom.',
+		`Pictograms. Match the legend (${you} = you) to names. No coordinates.`,
+		'Calling it again soon, without having moved, returns the same legend and no new picture.',
+	].join(' ');
+}
+
+export const SEE_MAP_HINT = seeMapHint();
+
+function planInstructions(verbs:VerbRegistry):string {
+	return `Change goals when what you must do changed (a standing order, harm, theft, a threat) — put `
+		+ `"goals":[{"text":"...","priority":0}] on the same ActionPlan JSON; that change is lasting. `
+		+ `Omit identity. Do not emit identity or set_identity unless who you are has actually changed for good. `
+		+ `Weather, an order, helping, and danger are not a new identity. `
+		+ `Do not pick a nickname or shorten the role. A new name only sticks with a new role, and both need that same rare bar. `
+		+ `Harm, theft, and threats outrank standing role text this think. `
+		+ `set_goal and drop_goal also work as verbs. Avoid set_identity. `
+		+ `Chain several steps with then_if_ok when you already know the next action. `
+		+ `Prefer the scene text. Tools are optional; skip them if you can already act. `
+		+ `Then emit one ActionPlan as JSON. `
+		+ `Never emit coordinates. Names only. Available verbs: ${verbHelp(verbs)}. `
+		+ `JSON shape: {"head":{"verb":"go_to","args":{"name":"EastGate"}},"then":{"join":"then_if_ok","plan":{"head":{"verb":"wait","args":{"seconds":1}}}}}. `
+		+ `Close every brace. Do not write "...". At most four chained steps.`;
+}
 
 function stringifyPush(value:unknown):string {
 	if (typeof value === 'string') {
@@ -64,19 +95,26 @@ export function volatileBlock(opts:{
 	pushed:Record<string, unknown>;
 	intrusion?:string;
 	lastResult?:ActionResult;
-	verbs:VerbRegistry;
+	goals?:Goal[];
+	pinned?:MemoryRecord[];
 	watches?:string[];
 	pinnedWatches?:string[];
 	watchesWritable?:boolean;
 	scold?:string;
 	recentSummary?:string;
 	recent?:string[];
-	canSeeMap?:boolean;
 }):string {
 	const parts:string[] = [];
 	const recent = shortTermBlock(opts.recentSummary ?? '', opts.recent ?? []);
 	if (recent) {
 		parts.push(recent);
+	}
+	if (opts.goals && opts.goals.length > 0) {
+		const sorted = [...opts.goals].sort((a, b) => (b.priority ?? 0) - (a.priority ?? 0));
+		parts.push(`Goals (highest first):\n${sorted.map((g) => `- ${g.text}`).join('\n')}`);
+	}
+	if (opts.pinned && opts.pinned.length > 0) {
+		parts.push(`Pinned memories:\n${opts.pinned.map((m) => `- ${m.text}`).join('\n')}`);
 	}
 	for (const [name, value] of Object.entries(opts.pushed)) {
 		const text = stringifyPush(value).trim();
@@ -108,26 +146,9 @@ export function volatileBlock(opts:{
 	if (opts.watchesWritable) {
 		parts.push('You may replace the non-required watches in the ActionPlan JSON as "watches": ["expr", ...]. Required watches stay even if omitted.');
 	}
-	if (opts.canSeeMap) {
-		parts.push('see_map({zoom:1}) is close around you; see_map({zoom:0}) is the whole loaded land; in-between values zoom. Pictograms. Match the legend (⭐ = you) to names; go_to those names. No coordinates.');
-	}
 	if (opts.scold) {
 		parts.push(`[watch: ${opts.scold}]`);
 	}
-	parts.push(
-		`Change goals when what you must do changed (a standing order, harm, theft, a threat) — put `
-		+ `"goals":[{"text":"...","priority":0}] on the same ActionPlan JSON; that change is lasting. `
-		+ `Omit identity. Do not emit identity or set_identity unless who you are has actually changed for good. `
-		+ `Weather, an order, helping, and danger are not a new identity. `
-		+ `Do not pick a nickname or shorten the role. A new name only sticks with a new role, and both need that same rare bar. `
-		+ `Harm, theft, and threats outrank standing role text this think. `
-		+ `set_goal and drop_goal also work as verbs. Avoid set_identity. `
-		+ `Chain several steps with then_if_ok when you already know the next action. `
-		+ `Use tools first if you lack information you need. Then emit one ActionPlan as JSON. `
-		+ `Never emit coordinates. Names only. Available verbs: ${verbHelp(opts.verbs)}. `
-		+ `JSON shape: {"head":{"verb":"go_to","args":{"name":"EastGate"}},"then":{"join":"then_if_ok","plan":{"head":{"verb":"wait","args":{"seconds":1}}}}}. `
-		+ `Close every brace. Do not write "...". At most four chained steps.`,
-	);
 	return parts.join('\n\n');
 }
 

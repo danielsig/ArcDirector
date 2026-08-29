@@ -1,30 +1,18 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { formatLegend, parseMapZoom, stampMap, uniquifyMarks, type MapMark } from './map.js';
+import { formatLegend, parseMapZoom, stampMap, DEFAULT_YOU_SYMBOL, type MapMark } from './map.js';
 
 const marks:MapMark[] = [
-	{ symbol: '⭐', description: 'you', x: 1, y: 2 },
+	{ symbol: DEFAULT_YOU_SYMBOL, description: 'you', x: 1, y: 2 },
 	{ symbol: '🏠', description: 'Cottage', x: 4, y: 2 },
-	{ symbol: '🏠', description: 'MillLever', x: 8, y: 3 },
+	{ symbol: '🎚️', description: 'MillLever', x: 8, y: 3 },
 ];
 
 describe('map legend', () => {
-	it('keeps unique symbols and reassigns clashes', () => {
-		const uniq = uniquifyMarks(marks);
-		assert.equal(uniq[0].symbol, '⭐');
-		assert.equal(uniq[1].symbol, '🏠');
-		assert.notEqual(uniq[2].symbol, '🏠');
-		assert.equal(uniq[2].symbol, '🚪');
+	it('joins symbols to names and omits numbers', () => {
 		const legend = formatLegend(marks);
-		assert.equal(legend, '⭐ = you, 🏠 = Cottage, 🚪 = MillLever');
+		assert.equal(legend, `${DEFAULT_YOU_SYMBOL} = you, 🏠 = Cottage, 🎚️ = MillLever`);
 		assert.equal(/\d/.test(legend), false);
-	});
-
-	it('omits numbers from the legend text', () => {
-		const legend = formatLegend(marks);
-		assert.equal(legend.includes('1'), false);
-		assert.equal(legend.includes('2'), false);
-		assert.equal(legend.includes('4'), false);
 	});
 
 	it('returns the source image when there is no canvas to stamp', async () => {
@@ -37,7 +25,7 @@ describe('map legend', () => {
 			marks,
 		});
 		assert.equal(stamped.image, image);
-		assert.equal(stamped.legend, '⭐ = you, 🏠 = Cottage, 🚪 = MillLever');
+		assert.equal(stamped.legend, `${DEFAULT_YOU_SYMBOL} = you, 🏠 = Cottage, 🎚️ = MillLever`);
 	});
 });
 

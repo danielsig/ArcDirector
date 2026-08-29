@@ -5,7 +5,7 @@ import { MeshRenderer } from './MeshRenderer';
 import { Order } from './order';
 import { PlayerInput } from '../actors/PlayerInput';
 import type { SceneDef } from '../data/scenes';
-import { NpcDirector, playerSayCatalog } from '../npc/adapter';
+import { NPCDirector, playerSayCatalog } from '../npc/adapter';
 import { parseSlash } from '../ui/sayCommands';
 import type { HudModel } from '../ui/hudModel';
 import { loadModelPref } from './modelPref';
@@ -34,9 +34,9 @@ import {
 	type DevFlags,
 } from './devFlags';
 import {
-	applyUrlView,
-	readUrlView,
-	writeUrlView,
+	applyURLView,
+	readURLView,
+	writeURLView,
 } from './urlView';
 import type { Hud, WorldStream, WorldView } from './systems';
 
@@ -46,7 +46,7 @@ const AUTOSAVE_ENABLED = false;
 export class Session extends Component {
 	static override order = Order.persist;
 	hud!:HudModel;
-	director!:NpcDirector;
+	director!:NPCDirector;
 	scene!:SceneDef;
 	stream!:WorldStream;
 	view!:WorldView;
@@ -115,7 +115,7 @@ export class Session extends Component {
 		this.persistAcc = 0;
 		this.persistAutosave();
 		this.persistView();
-		this.syncUrlView();
+		this.syncURLView();
 	}
 
 	override onDestroy():void {
@@ -244,7 +244,12 @@ export class Session extends Component {
 		this.hud.menuNotice = `${n} thinker${n === 1 ? '' : 's'}`;
 	}
 
-	async dumpNpcMaps():Promise<void> {
+	resetInferStats():void {
+		this.director.resetInferStats();
+		this.director.patchInfer(this.hud);
+	}
+
+	async dumpNPCMaps():Promise<void> {
 		const n = await this.director.dumpLookMaps();
 		this.hud.menuOpen = false;
 		this.hud.aiLogOpen = true;
@@ -261,7 +266,7 @@ export class Session extends Component {
 		if (world) {
 			this.stream.streamer.tick(world);
 		}
-		this.syncUrlView();
+		this.syncURLView();
 		this.hud.menuNotice = 'Location reset';
 	}
 
@@ -294,7 +299,7 @@ export class Session extends Component {
 		}
 		this.lastFlagsPacked = packed;
 		saveDevFlags(flags);
-		this.syncUrlView();
+		this.syncURLView();
 	}
 
 	applyDevFlags(flags:DevFlags):void {
@@ -320,8 +325,8 @@ export class Session extends Component {
 		this.director.setMaxParallel(n);
 	}
 
-	applyShotFromUrl():void {
-		const shot = readUrlView();
+	applyShotFromURL():void {
+		const shot = readURLView();
 		if (!shot) {
 			return;
 		}
@@ -329,7 +334,7 @@ export class Session extends Component {
 		if (!pose) {
 			return;
 		}
-		this.applyPose(applyUrlView(pose, shot));
+		this.applyPose(applyURLView(pose, shot));
 	}
 
 	readPose():ViewPose | null {
@@ -428,10 +433,10 @@ export class Session extends Component {
 		this.hud.saveSlots = listSaves(this.scene.id);
 	}
 
-	syncUrlView():void {
+	syncURLView():void {
 		const pose = this.readPose();
 		if (pose) {
-			writeUrlView(pose, this.liveFlags());
+			writeURLView(pose, this.liveFlags());
 		}
 	}
 
@@ -493,7 +498,7 @@ export class Session extends Component {
 		this.stream.mark(world);
 		this.overlayLoadedChunks(new Set(world.chunks.keys()));
 		this.persistView();
-		this.syncUrlView();
+		this.syncURLView();
 	}
 
 	private buildSave(id:string, label:string):GameSave | null {

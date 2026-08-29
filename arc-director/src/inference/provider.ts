@@ -55,18 +55,30 @@ export type JsonSchemaResponseFormat = {
 	strict?:boolean;
 };
 
+export type ToolChoice = 'auto' | 'none';
+
 export type ChatRequest = {
 	model:string;
 	messages:ChatMessage[];
 	tools?:ToolDef[];
+	/** Keep `tools` listed with `none` on plan turns so the KV prefix stays identical. */
+	toolChoice?:ToolChoice;
 	responseFormat?:JsonSchemaResponseFormat;
 	temperature?:number;
 	maxTokens?:number;
+	/** Agent id (or similar) so the HTTP layer can pick a cached response thread. */
+	thread?:string;
 };
 
 export type ChatResponse = {
 	content:string | null;
 	toolCalls:ToolCall[];
+	/** Prompt tokens served from a server-side cache, when the server reports them. */
+	cachedTokens?:number;
+	/** Prompt / KV load (time to first token, prompt_ms, …) in milliseconds. */
+	promptMs?:number;
+	/** Token generation time in milliseconds. */
+	generateMs?:number;
 };
 
 export type InferenceProvider = {

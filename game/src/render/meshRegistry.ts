@@ -335,14 +335,17 @@ export function createDoorMesh():THREE.Group {
 	const left = new THREE.Mesh(post, frameMat);
 	left.position.set(0, 1.11, -0.47);
 	left.castShadow = true;
+	left.receiveShadow = true;
 	g.add(left);
 	const right = new THREE.Mesh(post, frameMat);
 	right.position.set(0, 1.11, 0.47);
 	right.castShadow = true;
+	right.receiveShadow = true;
 	g.add(right);
 	const lintel = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.12, 1), frameMat);
 	lintel.position.set(0, 2.16, 0);
 	lintel.castShadow = true;
+	lintel.receiveShadow = true;
 	g.add(lintel);
 
 	const hinge = new THREE.Group();

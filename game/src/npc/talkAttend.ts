@@ -1,4 +1,4 @@
-import { NpcInput } from '../actors/NpcInput';
+import { NPCInput } from '../actors/NPCInput';
 import { PlayerInput } from '../actors/PlayerInput';
 import { clamp, lerpAngle, yawToward } from '../engine/math';
 import type { GameObject } from '../engine/GameObject';
@@ -74,7 +74,7 @@ export function talkFace(world:World, who:string, toward:string):void {
 		return;
 	}
 	actor.transform.yaw = yawToward(dx, dz);
-	actor.getComponent(NpcInput)?.faceToward(toward, world.time + SPEECH_LIFE);
+	actor.getComponent(NPCInput)?.faceToward(toward, world.time + SPEECH_LIFE);
 }
 
 export function talkApproach(world:World, who:string, toward:string):void {
@@ -82,12 +82,12 @@ export function talkApproach(world:World, who:string, toward:string):void {
 	if (!actor || actor.getComponent(PlayerInput)) {
 		return;
 	}
-	actor.getComponent(NpcInput)?.attend(toward);
+	actor.getComponent(NPCInput)?.attend(toward);
 }
 
 export function conversePoint(actor:GameObject):{ x:number; z:number } | null {
 	const world = actor.world;
-	const npc = actor.getComponent(NpcInput);
+	const npc = actor.getComponent(NPCInput);
 	if (!world || !npc?.converseName) {
 		return null;
 	}
@@ -114,7 +114,7 @@ export function conversePoint(actor:GameObject):{ x:number; z:number } | null {
 
 export function facePeer(actor:GameObject, dt:number):void {
 	const world = actor.world;
-	const npc = actor.getComponent(NpcInput);
+	const npc = actor.getComponent(NPCInput);
 	if (!world || !npc?.faceName) {
 		return;
 	}

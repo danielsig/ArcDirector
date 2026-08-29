@@ -99,7 +99,7 @@ export function isRecord(v:unknown):v is Record<string, unknown> {
 }
 
 /** Current `id`, or a saved blob that still uses `ID`. */
-export function readId(row:unknown):string | undefined {
+export function readID(row:unknown):string | undefined {
 	if (!isRecord(row)) {
 		return undefined;
 	}

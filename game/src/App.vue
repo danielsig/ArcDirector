@@ -8,18 +8,18 @@ import { emptyHud } from './ui/hudModel';
 import { sessionKey } from './ui/sessionKey';
 import type { Session } from './engine/Session';
 import { SCENES } from './data/scenes';
-import { clearUrlView } from './engine/urlView';
+import { clearURLView } from './engine/urlView';
 import { preloadArt } from './render/preloadArt';
 
 preloadArt();
 
 const params = new URLSearchParams(window.location.search);
-const fromUrl = params.get('scene');
+const fromURL = params.get('scene');
 const hud = reactive(emptyHud());
 const session = shallowRef<Session | null>(null);
 provide(sessionKey, session);
 const sceneID = ref<string | null>(
-	fromUrl && SCENES[fromUrl] ? fromUrl : null,
+	fromURL && SCENES[fromURL] ? fromURL : null,
 );
 
 function pick(id:string):void {
@@ -39,7 +39,7 @@ function leave():void {
 	const url = new URL(window.location.href);
 	url.searchParams.delete('scene');
 	window.history.replaceState({}, '', url);
-	clearUrlView();
+	clearURLView();
 }
 </script>
 
@@ -53,7 +53,7 @@ function leave():void {
 		<button type="button" @click="pick('abbey_vault')">Abbey Vault</button>
 	</div>
 	<template v-else>
-		<KindlingView :hud="hud" :scene-id="sceneID" />
+		<KindlingView :hud="hud" :sceneID="sceneID" />
 		<HudPickup :hud="hud" />
 		<HudLayer :hud="hud" @scenes="leave" />
 		<CursorLayer />

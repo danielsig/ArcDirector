@@ -49,6 +49,26 @@ export type HudModelOption = {
 	loaded:boolean;
 };
 
+const DEV_STATS_KEY = 'arc-director.devStatsOpen.v1';
+
+export function loadDevStatsOpen():boolean {
+	try {
+		return localStorage.getItem(DEV_STATS_KEY) === '1';
+	}
+	catch {
+		return false;
+	}
+}
+
+export function saveDevStatsOpen(open:boolean):void {
+	try {
+		localStorage.setItem(DEV_STATS_KEY, open ? '1' : '0');
+	}
+	catch {
+		// quota / private mode
+	}
+}
+
 export type HudModel = {
 	hp:number;
 	maxHP:number;
@@ -89,6 +109,16 @@ export type HudModel = {
 	maxParallel:number;
 	/** Local server catalog (embeddings omitted). */
 	models:HudModelOption[];
+	/** Foldable menu panel for inference timings. */
+	devStatsOpen:boolean;
+	inferCalls:number;
+	inferContextMs:number;
+	inferGenerateMs:number;
+	inferWallMs:number;
+	inferContextKnown:number;
+	inferLastContextMs:number | null;
+	inferLastGenerateMs:number | null;
+	inferLastWallMs:number | null;
 	minimap:{
 		originX:number;
 		originZ:number;
@@ -144,6 +174,15 @@ export function emptyHud():HudModel {
 		model: '',
 		maxParallel: DEFAULT_PARALLEL_THINKERS,
 		models: [],
+		devStatsOpen: loadDevStatsOpen(),
+		inferCalls: 0,
+		inferContextMs: 0,
+		inferGenerateMs: 0,
+		inferWallMs: 0,
+		inferContextKnown: 0,
+		inferLastContextMs: null,
+		inferLastGenerateMs: null,
+		inferLastWallMs: null,
 		minimap: {
 			originX: 0,
 			originZ: 0,

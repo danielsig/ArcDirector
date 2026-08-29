@@ -42,7 +42,8 @@ export function artCachePlugin():Plugin {
 	}
 
 	function notify(server:ViteDevServer):void {
-		const mod = server.moduleGraph.getModuleById(RESOLVED);
+		// Vite's graph API is getModuleById — not ours to rename.
+		const mod = server.moduleGraph.getModuleById(RESOLVED); // eslint-disable-line no-restricted-syntax
 		if (mod) {
 			void server.reloadModule(mod);
 		}
@@ -57,7 +58,7 @@ export function artCachePlugin():Plugin {
 		buildStart() {
 			rebuild();
 		},
-		resolveId(id) {
+		resolveId(id) { // eslint-disable-line no-restricted-syntax
 			if (id === VIRTUAL) {
 				return RESOLVED;
 			}

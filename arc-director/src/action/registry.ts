@@ -25,6 +25,11 @@ export class VerbRegistry {
 		return this;
 	}
 
+	remove(name:string):this {
+		this.verbs.delete(name);
+		return this;
+	}
+
 	get(name:string):VerbSpec | undefined {
 		return this.verbs.get(name);
 	}
@@ -70,7 +75,22 @@ export class VerbRegistry {
 	}
 }
 
-/** Host dungeon verbs. Not baked into the library loop. */
+/** Add core verbs to a registry. The core verbs are:
+ * - go_to: move to a target by id
+ * - follow: follow a target by id
+ * - wander: wander randomly
+ * - use: use an item on a target
+ * - equip: equip an item
+ * - unequip: unequip an item
+ * - pick_up: pick up an item
+ * - drop: drop an item
+ * - say: say a message to a target
+ * - wait: wait for a number of seconds
+ * - remember: add a string to one's memory with optional string tags
+ * - set_goal: set a goal
+ * - drop_goal: drop a goal
+ * - set_identity: set one's own identity
+ */
 export function registerCoreVerbs(registry:VerbRegistry):VerbRegistry {
 	return registry
 		.add('go_to', { name: 'id' })

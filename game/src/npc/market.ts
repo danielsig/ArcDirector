@@ -4,7 +4,7 @@ import type { GameObject } from '../engine/GameObject';
 import type { World } from '../engine/World';
 import { findCarried } from '../items/inventory';
 import { coinsOf } from '../items/wallet';
-import { spawnNpc, type NpcSpawnOpts } from '../world/spawn';
+import { spawnNPC, type NPCSpawnOpts } from '../world/spawn';
 import type { Chunk } from '../world/Chunk';
 
 export type MindSeed = {
@@ -18,12 +18,12 @@ export type MindSeed = {
 	skipMajor?:boolean;
 };
 
-const PRICES = 'List prices in gold: Loaf 5 (haggle floor 3), Scarf 6 (floor 4), Bowl 4 (floor 2), Knife 7 (floor 4), Apple 3, Candle 2.';
+const PRICES = 'List prices in gold: Loaf 5 (lowest 3), Scarf 6 (lowest 4), Bowl 4 (lowest 2), Knife 7 (lowest 4), Apple 3, Candle 2.';
 
-const TRADE = 'Gold lives in your purse. buy(item, from, offer) pays gold and takes the good. If you cannot afford the ask, first haggle(with, item, offer) at or above the floor, then buy at that offer. sell(item, to, ask) if you brought goods. give() is a gift, not a sale. Do not steal — Holt and Pike watch WestGate, Brant and Cass watch EastGate, and they will catch a thief. Use names, never coordinates.';
+const TRADE = 'Gold lives in your purse. buy(item, from, offer) pays gold and takes the good. Name the list price, or a lower offer down to the seller\'s lowest. sell(item, to, ask) if you brought goods. give() is a gift, not a sale. Do not steal — Holt and Pike watch WestGate, Brant and Cass watch EastGate, and they will catch a thief. Use names, never coordinates.';
 
 function vendorRole(name:string, stall:string, good:string, ask:number, floor:number, want:string, coins:number):string {
-	return `You are ${name}, a street vendor at ${stall}. You sell ${good} for ${ask} gold (you may haggle down to ${floor}, never lower). You have ${coins} gold in your purse. You want ${want} for yourself — buy it when you can. Stay at ${stall}. Do not leave through WestGate or EastGate. ${TRADE} Act; do not only talk.`;
+	return `You are ${name}, a street vendor at ${stall}. You sell ${good} for ${ask} gold. You will not take less than ${floor}. Quote the list price. Do not volunteer a discount, and do not tell anyone they can talk the price down — that is the buyer's move. If a buyer offers less, they must buy() at that offer; you may refuse. You have ${coins} gold in your purse. You want ${want} for yourself — buy it when you can. Stay at ${stall}. Do not leave through WestGate or EastGate. ${TRADE} Act; do not only talk.`;
 }
 
 function vendorSeed(
@@ -72,7 +72,7 @@ function customerSeed(
 	memory:string,
 ):MindSeed {
 	const goal = wants.length > 0
-		? `Get ${wants.join(' and ')} by buying (haggle if you cannot pay the ask). Then go_to(${leave}).`
+		? `Get ${wants.join(' and ')} by buying. If you cannot pay list, buy() with a lower offer. Then go_to(${leave}).`
 		: `go_to(${leave}) and leave. Do not linger.`;
 	return {
 		id,
@@ -127,9 +127,9 @@ export const MARKET_SEEDS:MindSeed[] = [
 		['Loaf'],
 		4,
 		'EastGate',
-		'A Loaf is 5 gold and you only have 4 — you must haggle with Baker. ',
+		'A Loaf is 5 gold and you only have 4 — talk to Baker, then buy(Loaf, from, Baker, 4). ',
 		['shy', 'hungry', 'polite'],
-		'I want a Loaf. Baker asks 5. I have 4 gold. I will haggle, then leave through EastGate.',
+		'I want a Loaf. Baker asks 5. I have 4 gold. I will offer 4, then leave through EastGate.',
 	),
 	customerSeed(
 		'Tomas',
@@ -145,7 +145,7 @@ export const MARKET_SEEDS:MindSeed[] = [
 		['Scarf'],
 		3,
 		'WestGate',
-		'You sell Apple (3 gold). A Scarf is 6 — sell your apples and/or haggle. ',
+		'You sell Apple (3 gold). A Scarf is 6 — sell your apples, then buy, offering less if you must. ',
 		['wily', 'cheerful', 'broke'],
 		'I have Apples to sell. I want a Scarf from Weaver. I am short on gold. Then WestGate.',
 	),
@@ -175,23 +175,23 @@ type CustomerTemplate = {
 };
 
 const TEMPLATES:CustomerTemplate[] = [
-	{ wants: ['Loaf'], wallet: [3, 4], note: 'Short on gold for a Loaf — haggle with Baker.' },
+	{ wants: ['Loaf'], wallet: [3, 4], note: 'Short on gold for a Loaf — offer Baker less than 5.' },
 	{ wants: ['Scarf'], wallet: [8, 12], note: 'Buy a Scarf; pay list if you must.' },
 	{ wants: ['Bowl', 'Apple'], wallet: [6, 9], note: 'You want a Bowl and an Apple if anyone sells one.' },
-	{ wants: ['Knife'], wallet: [4, 6], note: 'Knife list is 7; haggle with Cutler.' },
+	{ wants: ['Knife'], wallet: [4, 6], note: 'Knife list is 7; offer Cutler less if you cannot pay.' },
 	{ wants: ['Bowl'], wallet: [5, 8], note: 'Buy a Bowl from Potter.' },
 	{ wants: ['Candle', 'Loaf'], wallet: [8, 11], note: 'You want a Candle and a Loaf. Ask around.' },
 	{
 		wants: ['Scarf'],
 		wallet: [2, 4],
 		loot: { defID: 'candle', name: 'Candle', count: 2 },
-		note: 'Sell Candles (2 gold) and haggle for a Scarf.',
+		note: 'Sell Candles (2 gold) and offer Weaver less than 6 for a Scarf.',
 	},
 	{
 		wants: ['Knife'],
 		wallet: [3, 5],
 		loot: { defID: 'apple', name: 'Apple', count: 2 },
-		note: 'Sell Apples and haggle for a Knife.',
+		note: 'Sell Apples and offer Cutler less than 7 for a Knife.',
 	},
 ];
 
@@ -278,7 +278,7 @@ export function spawnRandomCustomer(world:World):{ go:GameObject; seed:MindSeed 
 	const inward = spawnGate.getComponent(Named)?.id === 'WestGate' ? 2 : -2;
 	const tmpl = TEMPLATES[Math.floor(Math.random() * TEMPLATES.length)];
 	const wallet = tmpl.wallet[0] + Math.floor(Math.random() * (tmpl.wallet[1] - tmpl.wallet[0] + 1));
-	const opts:NpcSpawnOpts = {
+	const opts:NPCSpawnOpts = {
 		id,
 		meshID: POOL_MESH[Math.floor(Math.random() * POOL_MESH.length)],
 		localX: local.localX + inward,
@@ -289,7 +289,7 @@ export function spawnRandomCustomer(world:World):{ go:GameObject; seed:MindSeed 
 		wallet,
 		crowd: { kind: 'customer', wants: [...tmpl.wants], leaveGate },
 	};
-	const go = spawnNpc(world, chunk as Chunk, opts);
+	const go = spawnNPC(world, chunk as Chunk, opts);
 	const extra = tmpl.loot ? `You also sell ${tmpl.loot.name}. ` : '';
 	const seed = customerSeed(id, tmpl.wants, wallet, leaveGate, `${tmpl.note} ${extra}`, ['new', 'eager'], tmpl.note);
 	return { go, seed };

@@ -1,21 +1,12 @@
+import { DEFAULT_YOU_SYMBOL } from 'arc-director';
+
 /** Pictograms for NPC `see_map` stamps. Letters are too similar on a tiny map. */
 
+/** Self mark. Must match `map.you` on the agent. */
+export const YOU_SYMBOL = DEFAULT_YOU_SYMBOL;
+
 const NAMED:Record<string, string> = {
-	you: '⭐',
-	Player: '🧍',
-	Cottage: '🏠',
-	CottageDoor: '🚪',
-	CottageHearth: '🔥',
-	BrewHearth: '🧪',
-	MillLever: '🎚️',
-	MillBridge: '🌉',
-	MillCrank: '⚙️',
-	FireMushroom: '🍄',
-	EastGate: '⛩️',
-	WestGate: '🏯',
-	NollCot: '🛏️',
-	LinaCot: '🛌',
-	ArmoryChest: '🧰',
+	you: YOU_SYMBOL,
 	Forager: '🌿',
 	Miller: '🌾',
 	Angler: '🎣',

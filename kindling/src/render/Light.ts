@@ -61,6 +61,7 @@ export class Light extends Component {
 			p.shadow.mapSize.set(512, 512);
 			p.shadow.bias = -0.001;
 			p.shadow.normalBias = 0.01;
+			p.shadow.camera.near = 0.01;
 			this.gameObject.transform.object3D.add(p);
 			this.native = p;
 		}
@@ -90,6 +91,8 @@ export class Light extends Component {
 		if (lamp instanceof THREE.PointLight) {
 			lamp.distance = this.range;
 			lamp.decay = this.decay;
+			lamp.shadow.camera.near = 0.1;
+			lamp.shadow.camera.far = this.range + 0.1;
 		}
 		if (lamp instanceof THREE.DirectionalLight) {
 			const xf = this.gameObject.transform;

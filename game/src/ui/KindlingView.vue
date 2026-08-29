@@ -7,7 +7,7 @@ import { preloadArt } from '../render/preloadArt';
 
 const props = defineProps<{
 	hud:HudModel;
-	sceneId:string;
+	sceneID:string;
 }>();
 
 const session = inject(sessionKey);
@@ -43,7 +43,7 @@ async function boot():Promise<void> {
 	if (!el) {
 		return;
 	}
-	game = new Game(props.hud, props.sceneId);
+	game = new Game(props.hud, props.sceneID);
 	if (session) {
 		session.value = game.session;
 	}

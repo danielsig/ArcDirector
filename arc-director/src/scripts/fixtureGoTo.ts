@@ -1,7 +1,7 @@
 import {
 	Agent,
 	FakeProvider,
-	OpenAICompatProvider,
+	HttpProvider,
 	VerbRegistry,
 	formatPlan,
 	goToNamedInteractable,
@@ -12,7 +12,7 @@ import {
 	type PerceptionRecipe,
 } from '../index.js';
 import { fixtureParagraph, type FixtureCtx } from './scene.js';
-import { resolveInferenceBaseURL, resolveLiveModel, probeOpenAI } from './probe.js';
+import { resolveInferenceBaseURL, resolveLiveModel, probeHttp } from './probe.js';
 
 const NAMES = new Set(['EastGate']);
 const RUNS = 20;
@@ -56,12 +56,12 @@ async function makeProvider():Promise<{ provider:InferenceProvider; mock:boolean
 		return { provider: new FakeProvider(goToNamedInteractable()), mock: true, baseURL: 'mock' };
 	}
 	const baseURL = await resolveInferenceBaseURL();
-	if (!await probeOpenAI(baseURL)) {
+	if (!await probeHttp(baseURL)) {
 		throw new Error(
-			`Local model not reachable at ${baseURL}. Start LM Studio (lms server start) or set ARC_DIRECTOR_MOCK=1.`,
+			`Local model not reachable at ${baseURL}. Start the local server or set ARC_DIRECTOR_MOCK=1.`,
 		);
 	}
-	return { provider: withQueue(new OpenAICompatProvider({ baseURL, timeoutMs: 180_000 }), 1), mock: false, baseURL };
+	return { provider: withQueue(new HttpProvider({ baseURL, timeoutMs: 180_000 }), 1), mock: false, baseURL };
 }
 
 async function main():Promise<void> {

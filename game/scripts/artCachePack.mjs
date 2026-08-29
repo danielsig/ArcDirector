@@ -145,7 +145,7 @@ function writeHashed(dir, prefix, hash, alb, nrm) {
 	return { albName, nrmName, wrote };
 }
 
-function relUrl(...parts) {
+function relURL(...parts) {
 	return [CACHE_PUBLIC, ...parts].join('/');
 }
 
@@ -226,8 +226,8 @@ export function packKind(root, kind) {
 	const written = writeHashed(clockDir, kind, hash, alb, nrm);
 	return {
 		hash,
-		alb: relUrl('clock', written.albName),
-		nrm: relUrl('clock', written.nrmName),
+		alb: relURL('clock', written.albName),
+		nrm: relURL('clock', written.nrmName),
 		w: alb.w,
 		h: alb.h,
 		frames: alb.frames,
@@ -252,8 +252,8 @@ export function packSword(root) {
 	const written = writeHashed(out, 'sword', hash, alb, nrm);
 	return {
 		hash,
-		alb: relUrl('sword', written.albName),
-		nrm: relUrl('sword', written.nrmName),
+		alb: relURL('sword', written.albName),
+		nrm: relURL('sword', written.nrmName),
 		w: alb.w,
 		h: alb.h,
 		frames: alb.frames,

@@ -9,7 +9,7 @@ import { market_0_0 } from './chunks/market_0_0';
 import { market_1_0 } from './chunks/market_1_0';
 import { HUMAN_KINDS, type CrowdKind, type HumanKind } from '../engine/components';
 
-export type NpcSpawnDef = {
+export type NPCSpawnDef = {
 	id:string;
 	meshID:string;
 	chunkID:string;
@@ -31,7 +31,7 @@ export type SceneDef = {
 	title:string;
 	look:SceneLook;
 	chunks:ChunkFile[];
-	npcs:NpcSpawnDef[];
+	npcs:NPCSpawnDef[];
 	ambient:string;
 	message:string;
 	playerWallet?:number;
@@ -244,7 +244,7 @@ export const MARKETPLACE:SceneDef = {
 			crowd: { kind: 'guard', wants: [], leaveGate: 'EastGate' },
 		},
 	],
-	ambient: 'A busy street flea market. Gold is in your purse, not as coins in a pack. Pay with buy(item, from, offer). List prices: Loaf 5, Scarf 6, Bowl 4, Knife 7, Apple 3, Candle 2. If you cannot afford the ask, haggle(with, item, offer) then buy at the agreed offer. sell(item, to, ask) if you brought goods. Holt and Pike watch WestGate; Brant and Cass watch EastGate. steal(item, from) is a crime — the watch will catch you and take the goods back. Do not steal. Vendors stay at their stalls. Customers: when you have what you came for, go_to your leave gate (WestGate or EastGate) and walk to it — do not linger. Act; talk to trade; use names, never coordinates.',
+	ambient: 'A busy street flea market. Gold is in your purse, not as coins in a pack. Pay with buy(item, from, offer). List prices: Loaf 5, Scarf 6, Bowl 4, Knife 7, Apple 3, Candle 2. A buyer who cannot pay list may offer less on buy(); a seller may refuse. sell(item, to, ask) if you brought goods. Holt and Pike watch WestGate; Brant and Cass watch EastGate. steal(item, from) is a crime — the watch will catch you and take the goods back. Do not steal. Vendors stay at their stalls. Customers: when you have what you came for, go_to your leave gate (WestGate or EastGate) and walk to it — do not linger. Act; talk to trade; use names, never coordinates.',
 	message: 'E pick up / unlock   F use   Enter talk   /give   Tab chat',
 };
 
