@@ -3,7 +3,8 @@ import type { VerbRegistry } from '../action/registry.js';
 import type { ActionResult } from '../action/types.js';
 import type { MemoryRecord } from '../memory/store.js';
 import { DEFAULT_YOU_SYMBOL } from './map.js';
-import type { AgentIdentity, Goal } from './types.js';
+import type { AgentIdentity, Goal, Watches } from './types.js';
+import { extrasWithoutPins, formatWatches, watchCount, watchNames } from './watch.js';
 
 export type StablePrefixOpts = {
 	includeWatches?:boolean;
@@ -42,7 +43,7 @@ export function stablePrefix(
 
 export const WATCH_CHEAT_SHEET = [
 	'Watch language (JS-looking calls, not a JS subset). Bindings: me, others, items; host names like Player, events.',
-	'Standing conditions go in JSON watches: ["expr", ...]. One-shot questions this think: observe({expr}).',
+	'Standing conditions: addWatches / editWatches / removeWatches, or replace extras with watches: {name: expr, ...}. Keys are short names. One-shot questions this think: observe({expr}).',
 	'Two-arg relations: distance(me, Player), isNear(me, Player), isNear(me, Player, 16), hasSightline(me, Player), facing(me, Player), isFacing(me, Player).',
 	'hasSightline is line of sight only. isFacing is facing(a,b) > √2/2 (90° cone).',
 	'Infix is matches id, name, or tag: i is "Lantern". find/filter/some/all take a predicate or a string needle.',
@@ -73,6 +74,8 @@ function planInstructions(verbs:VerbRegistry):string {
 		+ `Do not pick a nickname or shorten the role. A new name only sticks with a new role, and both need that same rare bar. `
 		+ `Harm, theft, and threats outrank standing role text this think. `
 		+ `set_goal and drop_goal also work as verbs. Avoid set_identity. `
+		+ `think(about?) always runs last; several merge into one. about is optional. Do not think() twice in a row — act first. `
+		+ `wait(for) parks with a one-shot watch (same language as watches), dropped the next think. Do not addWatches for a one-check. `
 		+ `Chain several steps with then_if_ok when you already know the next action. `
 		+ `Prefer the scene text. Tools are optional; skip them if you can already act. `
 		+ `Then emit one ActionPlan as JSON. `
@@ -97,12 +100,13 @@ export function volatileBlock(opts:{
 	lastResult?:ActionResult;
 	goals?:Goal[];
 	pinned?:MemoryRecord[];
-	watches?:string[];
-	pinnedWatches?:string[];
+	watches?:Watches;
+	pinnedWatches?:Watches;
 	watchesWritable?:boolean;
 	scold?:string;
 	recentSummary?:string;
 	recent?:string[];
+	thinkAbout?:string;
 }):string {
 	const parts:string[] = [];
 	const recent = shortTermBlock(opts.recentSummary ?? '', opts.recent ?? []);
@@ -132,19 +136,33 @@ export function volatileBlock(opts:{
 		const reason = r.reason ? ` — ${r.reason}` : '';
 		parts.push(`Last action result: ${r.verb ?? 'action'} ${status}${reason}`);
 	}
-	if (opts.pinnedWatches && opts.pinnedWatches.length > 0) {
-		parts.push(`Required watches (host; do not remove):\n${opts.pinnedWatches.map((w) => `- ${w}`).join('\n')}`);
+	if (opts.thinkAbout) {
+		parts.push(`You asked to think about: ${opts.thinkAbout}`);
 	}
-	if (opts.watches && opts.watches.length > 0) {
-		const extra = opts.pinnedWatches?.length
-			? opts.watches.filter((w) => !opts.pinnedWatches!.includes(w))
+	if (opts.pinnedWatches && watchCount(opts.pinnedWatches) > 0) {
+		parts.push(`Required watches (host; do not edit or remove):\n${formatWatches(opts.pinnedWatches)}`);
+	}
+	if (opts.watches && watchCount(opts.watches) > 0) {
+		const extra = opts.pinnedWatches && watchCount(opts.pinnedWatches) > 0
+			? extrasWithoutPins(opts.watches, opts.pinnedWatches)
 			: opts.watches;
-		if (extra.length > 0) {
-			parts.push(`Current watches:\n${extra.map((w) => `- ${w}`).join('\n')}`);
+		if (watchCount(extra) > 0) {
+			parts.push(`Current watches:\n${formatWatches(extra)}`);
 		}
 	}
 	if (opts.watchesWritable) {
-		parts.push('You may replace the non-required watches in the ActionPlan JSON as "watches": ["expr", ...]. Required watches stay even if omitted.');
+		const pinNames = watchNames(opts.pinnedWatches ?? {}).join(', ');
+		const pinNote = pinNames
+			? ` Required watches (${pinNames}) stay. Do not reuse those names.`
+			: ' Required watches stay. Do not reuse their names.';
+		parts.push(
+			'You may add, edit, or remove non-required watches on the ActionPlan JSON: '
+			+ '"addWatches":{"theft":"some(events.filter(\\"theft\\").nearby(16))"}, '
+			+ '"editWatches":{"theft":"..."}, '
+			+ '"removeWatches":["theft"]. '
+			+ 'To replace all extras at once: "watches":{"theft":"..."} (empty object {} clears extras). '
+			+ pinNote,
+		);
 	}
 	if (opts.scold) {
 		parts.push(`[watch: ${opts.scold}]`);

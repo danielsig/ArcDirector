@@ -56,14 +56,14 @@ const agent = new Agent({
 	context: () => host.ctx(),
 	execute: (step, ctx) => host.do(step, ctx),
 	catalog: (ctx) => buildCatalog(host.kernels(ctx)),
-	pinnedWatches: ['isHurt(me)'],
+	pinnedWatches: { hurt: 'isHurt(me)' },
 	heartbeat: 0, // ThinkQueue decides when to call tick
 });
 
 const plan = await agent.tick(now); // ActionPlan | null
 ```
 
-`remember`, `set_goal`, `drop_goal`, and `say` (when `TalkNet` is attached) run inside the agent. Every other verb goes to `execute`.
+`remember`, `think`, `set_goal`, `drop_goal`, and `say` (when `TalkNet` is attached) run inside the agent. Every other verb goes to `execute`.
 
 Without `execute`, `tick` still returns a plan; the host runs it later and calls `ingestResult`.
 
@@ -101,12 +101,12 @@ Tactical: assemble pushed perception → optional memory intrusion → tools (`r
 | `hideObserve` | false | Omit the built-in `observe` tool |
 | `map` | — | Host snapshots for `see_map`. Omitted unless `vision` is also on. `map.you` is the self pictogram (default `❌`) |
 | `vision` | heuristic | `true` / `false` for image input. `false` never offers `see_map` |
-| `watches` / `pinnedWatches` | `[]` | See [Watches](#watches) |
-| `watchesWritable` | true | LLM may replace non-pinned watches in the plan JSON |
+| `watches` / `pinnedWatches` | `{}` | Name → expr dicts. See [Watches](#watches) |
+| `watchesWritable` | true | LLM may add / edit / remove extra watches, or replace all extras, in the plan JSON. Pinned watches are never writable. |
 
 `pushEvent` queues text for the next think (`major` wakes immediately). `remember(text, tags)` writes episodic memory (embeds when the provider can).
 
-`toJSON` / `fromJSON` round-trip identity, goals, memory, watches, and last plan. `fromJSON` merges host `pinnedWatches` with saved pins (host first, no duplicates).
+`toJSON` / `fromJSON` round-trip identity, goals, memory, watches, and last plan. `fromJSON` merges host `pinnedWatches` with saved pins (host first, by name). Old saves that stored watches as a list of `{ name, expr }` or bare expr strings still load (`watch_1`, …).
 
 ---
 
@@ -122,13 +122,17 @@ queue.setAiOn(id, true);
 const catalogs = new Map([[id, buildCatalog(kernels)]]);
 const rows = queue.tick(dt, catalogs, httpInFlight);
 for (const row of rows) {
+	queue.clearOnce(row.npcID); // drop wait(for) from the previous think
 	await agents.get(row.npcID)?.tick(now);
 	queue.noteResult(row.npcID, stalled);
+	queue.enqueuePlan(row.npcID, plan, ok); // after the plan; skip if interrupted
 }
 kernels.cache.commit(); // after sampling; approaching / isHPFalling need a previous frame
 ```
 
-Each tick: accumulate time → sample watches every `watchInterval` (0.25) → emit rows every `processInterval` (1) → at most `maxParallel - inFlight` minds (default `maxParallel` 2). Reasons: `watch`, `major` (`enqueueMajor`), `heartbeat`.
+Each tick: accumulate time → sample watches every `watchInterval` (0.25) → emit rows every `processInterval` (1) → at most `maxParallel - inFlight` minds (default `maxParallel` 2). Reasons: `watch`, `major` (`enqueueMajor`), `action` (`enqueuePlan` after a plan), `heartbeat`.
+
+After a plan, call `enqueuePlan(id, plan, ok)` unless it was interrupted. Scores are listed under [Plans](#plans). Call `queue.clearOnce(id)` when that mind starts a think, and `queue.armOnce(id, expr)` when `wait(for)` runs.
 
 Watch score: boolean true → `trueScore` (0.51); numbers in 0–1 used as-is; `> 1` clamps to 1 and scolds. Score must exceed `epsilon` (0.05) to enqueue.
 
@@ -142,9 +146,25 @@ Heartbeat (per mind): starts at `heartbeatStart` (120), clamped `[heartbeatMin, 
 
 ## Watches
 
-Standing conditions. Evaluated against a `Catalog` built from `HostKernels`. The LLM may emit `"watches": ["expr", ...]` on the plan when `watchesWritable`. **Pinned** watches always evaluate, always appear in the prompt as required, and cannot be removed that way.
+Standing conditions. Evaluated against a `Catalog` built from `HostKernels`. Stored as a dict: short **name** → **expr**. Adding a watch — from the model or from code — requires a name.
 
-`effectiveWatches()` = pins then extra, de-duplicated.
+**Pinned** watches (`pinnedWatches`) are host-authored. They always evaluate, always appear in the prompt as required, and the LLM cannot add over, edit, or remove them (`addPinnedWatch` is host-only). Extra watches live in `watches`.
+
+When `watchesWritable`, the plan JSON may include:
+
+```json
+"addWatches": { "theft": "some(events.filter(\"theft\").nearby(16))" },
+"editWatches": { "theft": "..." },
+"removeWatches": ["theft"]
+```
+
+Or replace every extra at once with `"watches": { "theft": "..." }` (`{}` or `[]` clears extras). Pinned watches are never in that object’s effect.
+
+If both a full `watches` dict and add/edit/remove are present, replace runs first, then the ops (remove, edit, add). `watchesWritable: false` ignores the fields. Lists of `{ name, expr }` (and `id` as an alias for `name`) still parse.
+
+Code: `addWatch(name, expr)`, `editWatch(name, expr)`, `removeWatch(name)` — all refuse pinned names. `addPinnedWatch` is for hosts.
+
+`effectiveWatches()` = pin then extra exprs (for `ThinkQueue.setWatches`). `watchList()` returns the merged dict (pins first).
 
 Language looks like JS calls; it is not a JS subset. Bindings: `me`, `others`, `items`, plus host names (`bindings`) and optional `hasHeard`, `prevThought`, `prevActions`.
 
@@ -203,19 +223,46 @@ type HostKernels = {
 
 ---
 
-## Actions
+## Plans
+
+A plan is a chain of steps:
 
 ```ts
 { head: { verb: 'go_to', args: { name: 'Target' } }, then?: { join, plan } }
 ```
 
-Joins: `then_if_ok` (`&&`), `then` (`;`), `then_if_err` (`||`). At most four chained steps. `runPlan` executes the chain; `interrupted` stops it.
+Joins: `then_if_ok` (`&&`), `then` (`;`), `then_if_err` (`||`). At most four steps. `runPlan` walks the chain; `interrupted` stops it.
 
-`VerbRegistry.add(name, args)` — arg kinds `id` / `string` / `number` / `string[]`, optional with `?`.
+`think()` is always moved to the end. Several thinks merge (their `about` strings concatenate). That last think still runs if an earlier `&&` failed, unless the body was interrupted.
 
-`registerCoreVerbs` is an optional starter set (`go_to`, `follow`, `wander`, `use`, `equip`, `unequip`, `pick_up`, `drop`, `say`, `wait`, `remember`, `set_goal`, `drop_goal`, `set_identity`). Use it or register your own.
+`wait(seconds?, for?)` parks. `for` is a one-shot watch in the same language as standing watches — sampled, can wake the mind, dropped on the next think (`armOnce` / `clearOnce`). It is not a named extra watch. A `wait` without `for` is just idle.
 
-`ActionResult`: `{ ok, interrupted?, reason?, verb? }`. Feed it back with `ingestResult` if you ran the plan outside `tick`. Hosts that execute the plan themselves must call `agent.perform(step)` for `remember`, `set_goal`, `drop_goal`, and `set_identity` — those are not world verbs.
+`registerCoreVerbs` is optional: `go_to`, `follow`, `wander`, `use`, `equip`, `unequip`, `pick_up`, `drop`, `say`, `wait`, `remember`, `think`, `set_goal`, `drop_goal`, `set_identity`. `VerbRegistry.add(name, args)` — kinds `id` / `string` / `number` / `string[]`, optional with `?`.
+
+`remember`, `think`, `set_goal`, `drop_goal`, `set_identity`, and `say` (when `TalkNet` is attached) run inside the agent. Everything else goes to `execute`. If you run the plan yourself, `perform` those mind steps and `noteVerb` the world ones, then `ingestResult`.
+
+`ActionResult`: `{ ok, interrupted?, reason?, verb? }`.
+
+### Follow-up think
+
+After a plan, `enqueuePlan` uses the **highest** score among steps **after** the last `wait(for)`. `steal ; wait(for=…) ; go_to` scores as `go_to`. A `wait` without `for` does not cut. Failure is at least 0.3. Override or add verbs with `actionScores`. `skipMajor` does not drop these.
+
+| Verb | Score |
+|------|------:|
+| `steal` | 0.95 |
+| `use` | 0.65 |
+| `give` / `buy` / `sell` / `pick_up` | 0.6 |
+| `drop` | 0.55 |
+| `think(about)` | 0.55 |
+| `go_to` / `equip` / `unequip` | 0.5 |
+| `set_goal` | 0.45 |
+| `think()` | 0.35 |
+| `wander` | 0.3 |
+| `say` | 0.25 |
+| `drop_goal` | 0.2 |
+| `wait` / `rest` / `remember` / `follow` | 0 |
+
+0 means no follow-up on success.
 
 ---
 

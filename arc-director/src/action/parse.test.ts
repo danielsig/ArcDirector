@@ -58,5 +58,8 @@ describe('ActionPlan parse', () => {
 			() => parsePlanText('fly(EastGate)', registry),
 			ActionError,
 		);
+		assert.equal(parsePlanText('think("how to open EastGate")', registry).head.args.about, 'how to open EastGate');
+		assert.deepEqual(parsePlanText('think()', registry).head.args, {});
+		assert.equal(parsePlanText('wait(for=hasHeard)', registry).head.args.for, 'hasHeard');
 	});
 });

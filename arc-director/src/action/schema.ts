@@ -60,9 +60,24 @@ function planSchemaAt(registry:VerbRegistry, depth:number):JsonSchema {
 }
 
 export function actionPlanSchema(registry:VerbRegistry):JsonSchema {
+	const plan = planSchemaAt(registry, THEN_DEPTH);
+	const watchDict:JsonSchema = {
+		type: 'object',
+		additionalProperties: { type: 'string' },
+	};
 	return {
 		title: 'ActionPlan',
-		...planSchemaAt(registry, THEN_DEPTH),
+		...plan,
+		properties: {
+			...(plan.properties ?? {}),
+			addWatches: watchDict,
+			editWatches: watchDict,
+			removeWatches: {
+				type: 'array',
+				items: { type: 'string' },
+			},
+			watches: watchDict,
+		},
 	};
 }
 

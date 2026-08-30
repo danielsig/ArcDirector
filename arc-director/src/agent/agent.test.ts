@@ -969,4 +969,125 @@ describe('Agent', () => {
 		assert.equal(paints, 2);
 		assert.equal(looks, 3);
 	});
+
+	it('think(about) is a one-shot note and cannot follow itself', async () => {
+		const seen:string[] = [];
+		const provider = new FakeProvider((req) => {
+			const user = req.messages.find((m) => m.role === 'user');
+			if (typeof user?.content === 'string') {
+				seen.push(user.content);
+			}
+			return {
+				content: JSON.stringify({ head: { verb: 'wait', args: { seconds: 1 } } }),
+				toolCalls: [],
+			};
+		});
+		const agent = new Agent<Ctx>({
+			id: 'Guard',
+			identity: { name: 'Guard', role: 'guard' },
+			provider,
+			verbs: registerCoreVerbs(new VerbRegistry()),
+			recipe: recipe(),
+			context: () => ({ paragraph: paragraph() }),
+			model: 'fake',
+			heartbeat: 0,
+			toolRoundCap: 0,
+			planRetryCap: 0,
+		});
+		const ok = await agent.perform({ verb: 'think', args: { about: 'how to open EastGate' } });
+		assert.equal(ok.ok, true);
+		const twice = await agent.perform({ verb: 'think', args: { about: 'something else' } });
+		assert.equal(twice.ok, false);
+		assert.match(twice.reason ?? '', /act first/);
+		const empty = await agent.perform({ verb: 'set_goal', args: { goal: 'open EastGate' } });
+		assert.equal(empty.ok, true);
+		const blank = await agent.perform({ verb: 'think', args: { about: '   ' } });
+		assert.equal(blank.ok, true);
+		assert.equal(agent.toJSON().thinkAbout, undefined);
+		const blocked = await agent.perform({ verb: 'think', args: { about: 'which key' } });
+		assert.equal(blocked.ok, false);
+		await agent.perform({ verb: 'set_goal', args: { goal: 'find the key' } });
+		const again = await agent.perform({ verb: 'think', args: { about: 'which key' } });
+		assert.equal(again.ok, true);
+		await agent.tick(1);
+		assert.ok(seen.some((s) => s.includes('You asked to think about: which key')));
+		await agent.tick(2);
+		assert.equal(seen.filter((s) => s.includes('which key')).length, 1);
+		const long = 'x'.repeat(300);
+		await agent.perform({ verb: 'set_goal', args: { goal: 'keep going' } });
+		const capped = await agent.perform({ verb: 'think', args: { about: long } });
+		assert.equal(capped.ok, true);
+		const json = agent.toJSON();
+		assert.equal(json.thinkAbout?.length, 200);
+		assert.equal(json.lastVerb, 'think');
+	});
+
+	it('allows think after a world verb in the same plan', async () => {
+		const provider = new FakeProvider(() => ({
+			content: JSON.stringify({
+				head: { verb: 'go_to', args: { name: 'EastGate' } },
+				then: {
+					join: 'then_if_ok',
+					plan: { head: { verb: 'think', args: { about: 'how to open it' } } },
+				},
+			}),
+			toolCalls: [],
+		}));
+		const agent = new Agent<Ctx>({
+			id: 'Guard',
+			identity: { name: 'Guard', role: 'guard' },
+			provider,
+			verbs: registerCoreVerbs(new VerbRegistry()),
+			recipe: recipe(),
+			context: () => ({ paragraph: paragraph() }),
+			execute: async (step) => ({ ok: true, verb: step.verb }),
+			model: 'fake',
+			heartbeat: 0,
+			toolRoundCap: 0,
+			planRetryCap: 0,
+		});
+		const plan = await agent.tick(1);
+		assert.equal(plan?.head.verb, 'go_to');
+		assert.equal(agent.toJSON().thinkAbout, 'how to open it');
+		assert.equal(agent.toJSON().lastVerb, 'think');
+	});
+
+	it('moves think to the end and concatenates abouts', async () => {
+		const provider = new FakeProvider(() => ({
+			content: JSON.stringify({
+				head: { verb: 'think', args: { about: 'the lock' } },
+				then: {
+					join: 'then_if_ok',
+					plan: {
+						head: { verb: 'go_to', args: { name: 'EastGate' } },
+						then: {
+							join: 'then',
+							plan: { head: { verb: 'think', args: { about: 'which key' } } },
+						},
+					},
+				},
+			}),
+			toolCalls: [],
+		}));
+		const agent = new Agent<Ctx>({
+			id: 'Guard',
+			identity: { name: 'Guard', role: 'guard' },
+			provider,
+			verbs: registerCoreVerbs(new VerbRegistry()),
+			recipe: recipe(),
+			context: () => ({ paragraph: paragraph() }),
+			execute: async (step) => ({ ok: true, verb: step.verb }),
+			model: 'fake',
+			heartbeat: 0,
+			toolRoundCap: 0,
+			planRetryCap: 0,
+		});
+		const plan = await agent.tick(1);
+		assert.equal(plan?.head.verb, 'go_to');
+		assert.equal(plan?.then?.join, 'then');
+		assert.equal(plan?.then?.plan.head.verb, 'think');
+		assert.equal(plan?.then?.plan.head.args.about, 'the lock which key');
+		assert.equal(agent.toJSON().thinkAbout, 'the lock which key');
+		assert.equal(agent.toJSON().lastVerb, 'think');
+	});
 });

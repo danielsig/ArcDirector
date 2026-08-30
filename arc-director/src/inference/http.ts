@@ -401,19 +401,29 @@ function isFirstTokenEvent(ev:Record<string, unknown>):boolean {
 }
 
 function parseSseData(block:string):Record<string, unknown> | 'done' | undefined {
+	let eventName = '';
 	const lines:string[] = [];
 	for (const line of block.split(/\r?\n/)) {
-		if (line.startsWith('data:')) {
+		if (line.startsWith('event:')) {
+			eventName = line.slice(6).trim();
+		}
+		else if (line.startsWith('data:')) {
 			lines.push(line.slice(5).trimStart());
 		}
 	}
 	const data = lines.join('\n').trim();
 	if (!data || data === '[DONE]') {
-		return data === '[DONE]' ? 'done' : undefined;
+		return data === '[DONE]' || eventName === 'done' ? 'done' : undefined;
 	}
 	try {
 		const json:unknown = JSON.parse(data);
-		return isRecord(json) ? json : undefined;
+		if (!isRecord(json)) {
+			return undefined;
+		}
+		if (typeof json.type !== 'string' && eventName) {
+			json.type = eventName;
+		}
+		return json;
 	}
 	catch {
 		return undefined;
@@ -434,6 +444,130 @@ function takeSseBlocks(buf:string):{ events:Array<Record<string, unknown> | 'don
 		}
 	}
 	return { events, rest };
+}
+
+function flushSse(buf:string):Array<Record<string, unknown> | 'done'> {
+	if (!buf.trim()) {
+		return [];
+	}
+	return takeSseBlocks(`${buf.replace(/\s+$/, '')}\n\n`).events;
+}
+
+function streamErrorMessage(ev:Record<string, unknown>):string | undefined {
+	const type = typeof ev.type === 'string' ? ev.type : '';
+	if (type !== 'error' && type !== 'response.failed') {
+		return undefined;
+	}
+	const err = isRecord(ev.error)
+		? ev.error
+		: isRecord(ev.response) && isRecord(ev.response.error)
+			? ev.response.error
+			: undefined;
+	if (err && typeof err.message === 'string' && err.message.trim()) {
+		return err.message;
+	}
+	if (typeof ev.message === 'string' && ev.message.trim()) {
+		return ev.message;
+	}
+	return type;
+}
+
+function sidecarOnto(target:Record<string, unknown>, ev:Record<string, unknown>):void {
+	for (const key of ['usage', 'timings', 'stats'] as const) {
+		if (target[key] === undefined && ev[key] !== undefined) {
+			target[key] = ev[key];
+		}
+	}
+}
+
+function terminalResponse(ev:Record<string, unknown>):Record<string, unknown> | undefined {
+	const type = typeof ev.type === 'string' ? ev.type : '';
+	if (type !== 'response.completed' && type !== 'response.incomplete') {
+		return undefined;
+	}
+	const base = isRecord(ev.response)
+		? { ...ev.response }
+		: Array.isArray(ev.output) ? { ...ev } : undefined;
+	if (!base) {
+		return undefined;
+	}
+	sidecarOnto(base, ev);
+	return base;
+}
+
+function noteFunctionItem(
+	item:Record<string, unknown>,
+	funcs:Map<string, { id:string; name:string; arguments:string }>,
+):void {
+	const type = typeof item.type === 'string' ? item.type : '';
+	if (type !== 'function_call' && type !== 'tool_call') {
+		return;
+	}
+	const callID = typeof item['call_id'] === 'string'
+		? item['call_id']
+		: typeof item.id === 'string' ? item.id : `call_${funcs.size}`;
+	const key = typeof item.id === 'string' ? item.id : callID;
+	const prev = funcs.get(key);
+	funcs.set(key, {
+		id: callID,
+		name: typeof item.name === 'string' && item.name ? item.name : (prev?.name ?? ''),
+		arguments: typeof item.arguments === 'string' ? item.arguments : (prev?.arguments ?? ''),
+	});
+}
+
+function responsesFromStream(args:{
+	id:string | undefined;
+	usage:Record<string, unknown> | undefined;
+	timings:Record<string, unknown> | undefined;
+	stats:Record<string, unknown> | undefined;
+	doneItems:Record<string, unknown>[];
+	text:string;
+	reasoning:string;
+	funcs:Map<string, { id:string; name:string; arguments:string }>;
+}):Record<string, unknown> | undefined {
+	const output:Record<string, unknown>[] = args.doneItems.length > 0 ? [...args.doneItems] : [];
+	if (output.length === 0) {
+		if (args.reasoning) {
+			output.push({
+				type: 'reasoning',
+				content: [{ type: 'reasoning_text', text: args.reasoning }],
+			});
+		}
+		if (args.text) {
+			output.push({
+				type: 'message',
+				content: [{ type: 'output_text', text: args.text }],
+			});
+		}
+		for (const fc of args.funcs.values()) {
+			if (!fc.name) {
+				continue;
+			}
+			output.push({
+				type: 'function_call',
+				call_id: fc.id,
+				name: fc.name,
+				arguments: fc.arguments,
+			});
+		}
+	}
+	if (output.length === 0) {
+		return undefined;
+	}
+	const json:Record<string, unknown> = { output };
+	if (args.id) {
+		json.id = args.id;
+	}
+	if (args.usage) {
+		json.usage = args.usage;
+	}
+	if (args.timings) {
+		json.timings = args.timings;
+	}
+	if (args.stats) {
+		json.stats = args.stats;
+	}
+	return json;
 }
 
 function parseJsonRecord(text:string, url:string, status:number):Record<string, unknown> {
@@ -466,10 +600,109 @@ async function readInferenceResponse(
 	let firstMs:number | undefined;
 	let completed:Record<string, unknown> | undefined;
 	let lastChunk:Record<string, unknown> | undefined;
+	let lastType = '';
+	let responseId:string | undefined;
 	let usage:Record<string, unknown> | undefined;
+	let timings:Record<string, unknown> | undefined;
+	let stats:Record<string, unknown> | undefined;
+	let streamErr:string | undefined;
 	let assembledContent = '';
 	let assembledReasoning = '';
 	let assembledTools:unknown = undefined;
+	let assembledText = '';
+	let responsesReasoning = '';
+	const doneItems:Record<string, unknown>[] = [];
+	const funcs = new Map<string, { id:string; name:string; arguments:string }>();
+	const ingest = (raw:Record<string, unknown> | 'done'):void => {
+		if (raw === 'done') {
+			return;
+		}
+		const ev = raw;
+		lastChunk = ev;
+		const type = typeof ev.type === 'string' ? ev.type : '';
+		if (type) {
+			lastType = type;
+		}
+		if (isFirstTokenEvent(ev) && firstMs === undefined) {
+			firstMs = nowMs() - t0;
+		}
+		const err = streamErrorMessage(ev);
+		if (err) {
+			streamErr = err;
+		}
+		const term = terminalResponse(ev);
+		if (term) {
+			completed = term;
+			if (typeof term.id === 'string') {
+				responseId = term.id;
+			}
+		}
+		if (isRecord(ev.response) && typeof ev.response.id === 'string') {
+			responseId = responseId ?? ev.response.id;
+		}
+		if (isRecord(ev.usage)) {
+			usage = ev.usage;
+		}
+		if (isRecord(ev.timings)) {
+			timings = ev.timings;
+		}
+		if (isRecord(ev.stats)) {
+			stats = ev.stats;
+		}
+		if (type === 'response.output_item.done' && isRecord(ev.item)) {
+			doneItems.push(ev.item);
+			noteFunctionItem(ev.item, funcs);
+		}
+		else if (type === 'response.output_item.added' && isRecord(ev.item)) {
+			noteFunctionItem(ev.item, funcs);
+		}
+		else if (type === 'response.function_call_arguments.delta' && typeof ev.delta === 'string') {
+			const key = typeof ev.item_id === 'string' ? ev.item_id : '_';
+			const prev = funcs.get(key) ?? {
+				id: typeof ev['call_id'] === 'string' ? ev['call_id'] : key,
+				name: '',
+				arguments: '',
+			};
+			prev.arguments += ev.delta;
+			funcs.set(key, prev);
+		}
+		else if (type === 'response.output_text.delta' && typeof ev.delta === 'string') {
+			assembledText += ev.delta;
+		}
+		else if (type === 'response.output_text.done' && typeof ev.text === 'string') {
+			assembledText = ev.text;
+		}
+		else if (
+			(type === 'response.reasoning_text.delta' || type === 'response.reasoning.delta')
+			&& typeof ev.delta === 'string'
+		) {
+			responsesReasoning += ev.delta;
+		}
+		const choices = Array.isArray(ev.choices) ? ev.choices : [];
+		const choice = isRecord(choices[0]) ? choices[0] : {};
+		if (isRecord(choice.message)) {
+			const msg = choice.message;
+			if (typeof msg.content === 'string') {
+				assembledContent = msg.content;
+			}
+			if (typeof msg['reasoning_content'] === 'string') {
+				assembledReasoning = msg['reasoning_content'];
+			}
+			if (msg['tool_calls'] !== undefined) {
+				assembledTools = msg['tool_calls'];
+			}
+		}
+		const delta = isRecord(choice.delta) ? choice.delta : {};
+		if (typeof delta.content === 'string') {
+			assembledContent += delta.content;
+		}
+		if (typeof delta['reasoning_content'] === 'string') {
+			assembledReasoning += delta['reasoning_content'];
+		}
+		if (delta['tool_calls'] !== undefined) {
+			assembledTools = delta['tool_calls'];
+		}
+	};
 	for (;;) {
 		const { done, value } = await reader.read();
 		if (value) {
@@ -491,46 +724,7 @@ async function readInferenceResponse(
 			const split = takeSseBlocks(buf);
 			buf = split.rest;
 			for (const ev of split.events) {
-				if (ev === 'done') {
-					continue;
-				}
-				lastChunk = ev;
-				if (isFirstTokenEvent(ev) && firstMs === undefined) {
-					firstMs = nowMs() - t0;
-				}
-				if (ev.type === 'response.completed' && isRecord(ev.response)) {
-					completed = ev.response;
-				}
-				else if (ev.type === 'response.completed' && Array.isArray(ev.output)) {
-					completed = ev;
-				}
-				if (isRecord(ev.usage)) {
-					usage = ev.usage;
-				}
-				const choices = Array.isArray(ev.choices) ? ev.choices : [];
-				const choice = isRecord(choices[0]) ? choices[0] : {};
-				if (isRecord(choice.message)) {
-					const msg = choice.message;
-					if (typeof msg.content === 'string') {
-						assembledContent = msg.content;
-					}
-					if (typeof msg['reasoning_content'] === 'string') {
-						assembledReasoning = msg['reasoning_content'];
-					}
-					if (msg['tool_calls'] !== undefined) {
-						assembledTools = msg['tool_calls'];
-					}
-				}
-				const delta = isRecord(choice.delta) ? choice.delta : {};
-				if (typeof delta.content === 'string') {
-					assembledContent += delta.content;
-				}
-				if (typeof delta['reasoning_content'] === 'string') {
-					assembledReasoning += delta['reasoning_content'];
-				}
-				if (delta['tool_calls'] !== undefined) {
-					assembledTools = delta['tool_calls'];
-				}
+				ingest(ev);
 			}
 		}
 		if (done) {
@@ -539,8 +733,28 @@ async function readInferenceResponse(
 	}
 	const wallMs = nowMs() - t0;
 	if (mode === 'sse') {
+		for (const ev of flushSse(buf)) {
+			ingest(ev);
+		}
+		if (streamErr) {
+			throw new Error(`inference ${url} ${streamErr}`);
+		}
 		if (completed) {
+			sidecarOnto(completed, { usage, timings, stats });
 			return { json: completed, firstMs, wallMs };
+		}
+		const fromResponses = responsesFromStream({
+			id: responseId,
+			usage,
+			timings,
+			stats,
+			doneItems,
+			text: assembledText,
+			reasoning: responsesReasoning,
+			funcs,
+		});
+		if (fromResponses) {
+			return { json: fromResponses, firstMs, wallMs };
 		}
 		if (assembledContent || assembledReasoning || assembledTools !== undefined) {
 			const message:Record<string, unknown> = { role: 'assistant', content: assembledContent };
@@ -562,7 +776,15 @@ async function readInferenceResponse(
 		if (lastChunk && (Array.isArray(lastChunk.choices) || Array.isArray(lastChunk.output))) {
 			return { json: lastChunk, firstMs, wallMs };
 		}
-		throw new Error(`inference ${url} stream ended without a response`);
+		if (
+			isRecord(lastChunk?.response)
+			&& Array.isArray(lastChunk.response.output)
+			&& lastChunk.response.output.length > 0
+		) {
+			return { json: lastChunk.response, firstMs, wallMs };
+		}
+		const hint = lastType ? ` (last event: ${lastType})` : '';
+		throw new Error(`inference ${url} stream ended without a response${hint}`);
 	}
 	return { json: parseJsonRecord(buf, url, res.status), firstMs, wallMs };
 }
@@ -686,6 +908,10 @@ export class HttpProvider implements InferenceProvider {
 			}
 			catch (err) {
 				if (this.responses === true) {
+					const msg = err instanceof Error ? err.message : String(err);
+					if (/stream ended without a response/.test(msg)) {
+						return this.chatCompletions(req, messages);
+					}
 					throw err;
 				}
 				this.responses = false;
@@ -1015,7 +1241,17 @@ export class HttpProvider implements InferenceProvider {
 				}
 				throw lastErr;
 			}
-			return readInferenceResponse(res, url, t0);
+			try {
+				return await readInferenceResponse(res, url, t0);
+			}
+			catch (err) {
+				lastErr = err instanceof Error ? err : new Error(String(err));
+				if (stream && /stream ended without a response/.test(lastErr.message) && attempt < 3) {
+					stream = false;
+					continue;
+				}
+				throw lastErr;
+			}
 		}
 		throw lastErr ?? new Error(`inference ${url} failed`);
 	}

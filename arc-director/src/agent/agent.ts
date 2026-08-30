@@ -14,9 +14,21 @@ import { MemoryStore, type MemoryRecord } from '../memory/store.js';
 import type { PerceptionRecipe, ToolSpec } from './types.js';
 import { parseMapZoom, stampMap, isMapSnapshot, DEFAULT_YOU_SYMBOL, type MapPrev, type MapSense } from './map.js';
 import { planRepairHint, sayRangeHint, shortTermBlock, stablePrefix, volatileBlock } from './prompt.js';
-import { runPlan } from './run.js';
+import { runPlan, deferThinks, THINK_ABOUT_CAP } from './run.js';
 import type { SayTo, TalkNet } from './talk.js';
-import type { AgentEvent, AgentIdentity, Goal } from './types.js';
+import type { AgentEvent, AgentIdentity, Goal, WatchInput, Watches } from './types.js';
+import {
+	applyWatchOps,
+	asWatches,
+	copyWatches,
+	extrasWithoutPins,
+	findWatchName,
+	hasWatch,
+	mergePinnedWatches,
+	watchCount,
+	watchExprs,
+	watchOpsFromPlan,
+} from './watch.js';
 
 export type AgentJSON = {
 	id:string;
@@ -24,8 +36,8 @@ export type AgentJSON = {
 	goals:Goal[];
 	memories:MemoryRecord[];
 	events?:AgentEvent[];
-	watches?:string[];
-	pinnedWatches?:string[];
+	watches?:WatchInput;
+	pinnedWatches?:WatchInput;
 	watchesWritable?:boolean;
 	lastResult?:ActionResult;
 	lastPlan?:ActionPlan;
@@ -37,6 +49,8 @@ export type AgentJSON = {
 	maxEpisodic:number;
 	recent?:string[];
 	recentSummary?:string;
+	thinkAbout?:string;
+	lastVerb?:string;
 };
 
 export type AgentDeps<HostCtx = unknown> = {
@@ -67,8 +81,8 @@ export type AgentDeps<HostCtx = unknown> = {
 	 * Omit to fall back to `isVisionModel(model)`.
 	 */
 	vision?:boolean;
-	watches?:string[];
-	pinnedWatches?:string[];
+	watches?:WatchInput;
+	pinnedWatches?:WatchInput;
 	watchesWritable?:boolean;
 };
 
@@ -123,8 +137,8 @@ export class Agent<HostCtx = unknown> {
 	hideObserve:boolean;
 	map:MapSense | undefined;
 	vision:boolean | undefined;
-	watches:string[];
-	pinnedWatches:string[];
+	watches:Watches;
+	pinnedWatches:Watches;
 	watchesWritable:boolean;
 
 	lastResult:ActionResult | undefined;
@@ -140,6 +154,8 @@ export class Agent<HostCtx = unknown> {
 	private recentAbsorbed = 0;
 	private pendingSeeMapImage:string | undefined;
 	private lastMap:MapPrev & { legend:string } | undefined;
+	private pendingAbout:string | undefined;
+	private lastVerb:string | undefined;
 
 	constructor(opts:AgentOptions<HostCtx>) {
 		this.id = opts.id;
@@ -166,8 +182,8 @@ export class Agent<HostCtx = unknown> {
 		this.hideObserve = opts.hideObserve ?? false;
 		this.map = opts.map;
 		this.vision = opts.vision;
-		this.pinnedWatches = opts.pinnedWatches ? [...opts.pinnedWatches] : [];
-		this.watches = (opts.watches ? [...opts.watches] : []).filter((w) => !this.pinnedWatches.includes(w));
+		this.pinnedWatches = asWatches(opts.pinnedWatches);
+		this.watches = extrasWithoutPins(asWatches(opts.watches), this.pinnedWatches);
 		this.watchesWritable = opts.watchesWritable ?? true;
 		if (this.talk) {
 			this.talk.attach(this);
@@ -181,7 +197,14 @@ export class Agent<HostCtx = unknown> {
 		this.pendingEvents.push({ ...event, at: event.at ?? this.now });
 	}
 
-	/** Hosts that run the plan themselves still need this for remember / set_goal / set_identity. */
+	/** Hosts that run world verbs themselves should call this so think() cooldown sees them. */
+	noteVerb(verb:string):void {
+		if (verb) {
+			this.lastVerb = verb;
+		}
+	}
+
+	/** Hosts that run the plan themselves still need this for remember / think / set_goal / set_identity. */
 	async perform(step:Step, ctx:HostCtx = this.context()):Promise<ActionResult> {
 		return this.runStep(step, ctx);
 	}
@@ -237,6 +260,7 @@ export class Agent<HostCtx = unknown> {
 		}
 		try {
 			const plan = await this.tactical();
+			this.pendingAbout = undefined;
 			this.lastPlan = plan;
 			this.lastTacticalAt = gameTime;
 			this.pendingEvents.length = 0;
@@ -266,8 +290,8 @@ export class Agent<HostCtx = unknown> {
 			goals: this.goals.map((g) => ({ ...g })),
 			memories: this.memory.toJSON(),
 			events: this.pendingEvents.map((e) => ({ ...e, tags: e.tags ? [...e.tags] : undefined })),
-			watches: [...this.watches],
-			pinnedWatches: [...this.pinnedWatches],
+			watches: copyWatches(this.watches),
+			pinnedWatches: copyWatches(this.pinnedWatches),
 			watchesWritable: this.watchesWritable,
 			lastResult: this.lastResult ? { ...this.lastResult } : undefined,
 			lastPlan: this.lastPlan,
@@ -279,6 +303,8 @@ export class Agent<HostCtx = unknown> {
 			maxEpisodic: this.memory.maxEpisodic,
 			recent: [...this.recent],
 			recentSummary: this.recentSummary || undefined,
+			thinkAbout: this.pendingAbout,
+			lastVerb: this.lastVerb,
 		};
 	}
 
@@ -302,17 +328,10 @@ export class Agent<HostCtx = unknown> {
 		agent.lastStrategicAt = json.lastStrategicAt ?? 0;
 		agent.lastIntrusionAt = json.lastIntrusionAt ?? Number.NEGATIVE_INFINITY;
 		agent.livePlan = json.livePlan;
-		const hostPins = deps.pinnedWatches ? [...deps.pinnedWatches] : [];
-		const jsonPins = json.pinnedWatches ?? [];
-		const pinSeen = new Set<string>();
-		agent.pinnedWatches = [...hostPins, ...jsonPins].filter((w) => {
-			if (pinSeen.has(w)) {
-				return false;
-			}
-			pinSeen.add(w);
-			return true;
-		});
-		agent.watches = (json.watches ? [...json.watches] : []).filter((w) => !agent.pinnedWatches.includes(w));
+		const hostPins = asWatches(deps.pinnedWatches);
+		const jsonPins = asWatches(json.pinnedWatches);
+		agent.pinnedWatches = mergePinnedWatches(hostPins, jsonPins);
+		agent.watches = extrasWithoutPins(asWatches(json.watches), agent.pinnedWatches);
 		agent.watchesWritable = json.watchesWritable ?? true;
 		for (const e of json.events ?? []) {
 			agent.pendingEvents.push(e);
@@ -320,6 +339,8 @@ export class Agent<HostCtx = unknown> {
 		agent.recent = json.recent ? [...json.recent] : [];
 		agent.recentSummary = json.recentSummary ?? '';
 		agent.recentAbsorbed = agent.pendingEvents.length;
+		agent.pendingAbout = json.thinkAbout;
+		agent.lastVerb = json.lastVerb;
 		return agent;
 	}
 
@@ -431,11 +452,12 @@ export class Agent<HostCtx = unknown> {
 			lastResult: this.lastResult,
 			goals: this.goals,
 			pinned: this.memory.pinned(),
-			watches: this.effectiveWatches(),
+			watches: this.watches,
 			pinnedWatches: this.pinnedWatches,
 			watchesWritable: this.watchesWritable,
 			recent: this.recent,
 			recentSummary: this.recentSummary,
+			thinkAbout: this.pendingAbout,
 		});
 		const messages:ChatMessage[] = [
 			{ role: 'system', content: system },
@@ -505,7 +527,7 @@ export class Agent<HostCtx = unknown> {
 					raw = (trimmed.startsWith('{') || trimmed.startsWith('```'))
 						? extractJson(trimmed)
 						: trimmed;
-					plan = parsePlan(raw, this.verbs);
+					plan = deferThinks(parsePlan(raw, this.verbs));
 				}
 				catch (err) {
 					lastErr = err instanceof Error ? err : new ActionError(String(err));
@@ -558,15 +580,79 @@ export class Agent<HostCtx = unknown> {
 	}
 
 	effectiveWatches():string[] {
-		const seen = new Set(this.pinnedWatches);
-		const extra = this.watches.filter((w) => {
-			if (seen.has(w)) {
-				return false;
-			}
-			seen.add(w);
-			return true;
+		return watchExprs(this.watchList());
+	}
+
+	/** Pins first, then extra, de-duplicated by name. */
+	watchList():Watches {
+		return { ...this.pinnedWatches, ...extrasWithoutPins(this.watches, this.pinnedWatches) };
+	}
+
+	/** Host or tests. Fails if the name is taken (pinned or extra) or empty. */
+	addWatch(name:string, expr:string):boolean {
+		const next = applyWatchOps(this.watches, this.pinnedWatches, {
+			add: asWatches({ [name]: expr }),
+			edit: {},
+			remove: [],
 		});
-		return [...this.pinnedWatches, ...extra];
+		if (watchCount(next) === watchCount(this.watches)) {
+			return false;
+		}
+		this.watches = next;
+		return true;
+	}
+
+	/** Host or tests. Fails if missing or pinned. */
+	editWatch(name:string, expr:string):boolean {
+		if (!hasWatch(this.watches, name) || hasWatch(this.pinnedWatches, name)) {
+			return false;
+		}
+		const patched = asWatches({ [name]: expr });
+		if (watchCount(patched) === 0) {
+			return false;
+		}
+		this.watches = applyWatchOps(this.watches, this.pinnedWatches, {
+			add: {},
+			edit: patched,
+			remove: [],
+		});
+		return true;
+	}
+
+	/** Host or tests. Fails if missing or pinned. */
+	removeWatch(name:string):boolean {
+		const next = applyWatchOps(this.watches, this.pinnedWatches, {
+			add: {},
+			edit: {},
+			remove: [name],
+		});
+		if (watchCount(next) === watchCount(this.watches)) {
+			return false;
+		}
+		this.watches = next;
+		return true;
+	}
+
+	/** Dev-authored pin. Overwrites a pin of the same name; drops a colliding extra. */
+	addPinnedWatch(name:string, expr:string):boolean {
+		const row = asWatches({ [name]: expr });
+		const n = Object.keys(row)[0];
+		if (!n) {
+			return false;
+		}
+		const extra = findWatchName(this.watches, n);
+		if (extra) {
+			const next = { ...this.watches };
+			delete next[extra];
+			this.watches = next;
+		}
+		const pin = findWatchName(this.pinnedWatches, n);
+		if (pin) {
+			this.pinnedWatches = { ...this.pinnedWatches, [pin]: row[n] };
+			return true;
+		}
+		this.pinnedWatches = { ...this.pinnedWatches, [n]: row[n] };
+		return true;
 	}
 
 	private absorbPending():void {
@@ -614,12 +700,17 @@ export class Agent<HostCtx = unknown> {
 	}
 
 	private applyWatches(raw:unknown):void {
-		if (!this.watchesWritable || !isRecord(raw) || !Array.isArray(raw.watches)) {
+		if (!this.watchesWritable || !isRecord(raw)) {
 			return;
 		}
-		this.watches = raw.watches.filter((x):x is string => (
-			typeof x === 'string' && !this.pinnedWatches.includes(x)
-		));
+		if (raw.watches !== undefined) {
+			this.watches = extrasWithoutPins(asWatches(raw.watches), this.pinnedWatches);
+		}
+		const ops = watchOpsFromPlan(raw);
+		if (watchCount(ops.add) === 0 && watchCount(ops.edit) === 0 && ops.remove.length === 0) {
+			return;
+		}
+		this.watches = applyWatchOps(this.watches, this.pinnedWatches, ops);
 	}
 
 	private applyMind(raw:unknown):void {
@@ -979,7 +1070,28 @@ export class Agent<HostCtx = unknown> {
 		}
 	}
 
+	private runThink(step:Step):ActionResult {
+		if (this.lastVerb === 'think') {
+			return {
+				ok: false,
+				verb: 'think',
+				reason: 'act first; think() cannot follow think()',
+			};
+		}
+		let about = String(step.args.about ?? '').replace(/\s+/g, ' ').trim();
+		if (about.length > THINK_ABOUT_CAP) {
+			about = about.slice(0, THINK_ABOUT_CAP).trim();
+		}
+		this.pendingAbout = about.length > 0 ? about : undefined;
+		this.lastVerb = 'think';
+		return { ok: true, verb: 'think' };
+	}
+
 	private async runStep(step:Step, ctx:HostCtx):Promise<ActionResult> {
+		if (step.verb === 'think') {
+			return this.runThink(step);
+		}
+		this.noteVerb(step.verb);
 		if (step.verb === 'remember') {
 			const content = String(step.args.content ?? '');
 			const tags = asStringArray(step.args.tags);

@@ -11,6 +11,12 @@ export type Goal = {
 	priority?:number;
 };
 
+/** Standing conditions: short name → watch-language expr. */
+export type Watches = Record<string, string>;
+
+/** Dict, or a legacy list of exprs / `{ name, expr }` objects. */
+export type WatchInput = Watches | readonly unknown[];
+
 export type GoalRevision = {
 	goals:Goal[];
 };

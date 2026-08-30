@@ -1,3 +1,4 @@
+import type { ActionPlan, Step } from '../action/types.js';
 import { evaluate } from '../expr/eval.js';
 import { clampTrueScore, watchScore } from '../expr/score.js';
 import {
@@ -7,7 +8,7 @@ import {
 	type ScoldReason,
 } from '../expr/types.js';
 
-export type ThinkReason = 'watch' | 'major' | 'heartbeat';
+export type ThinkReason = 'watch' | 'major' | 'action' | 'heartbeat';
 
 export type ThinkRow = {
 	npcID:string;
@@ -27,7 +28,99 @@ export type ThinkQueueOpts = {
 	heartbeatMin?:number;
 	heartbeatMax?:number;
 	heartbeatAdjust?:HeartbeatAdjust;
+	/** Override or add verb → score for `enqueueAction`. 0 suppresses a default. */
+	actionScores?:Record<string, number>;
 };
+
+/**
+ * Follow-up think scores after a plan. 0 means do not enqueue on success.
+ * Hosts merge extras via `actionScores`.
+ */
+export const ACTION_THINK_SCORES:Readonly<Record<string, number>> = {
+	steal: 0.95,
+	use: 0.65,
+	give: 0.6,
+	buy: 0.6,
+	sell: 0.6,
+	pick_up: 0.6,
+	drop: 0.55,
+	equip: 0.5,
+	unequip: 0.5,
+	go_to: 0.5,
+	set_goal: 0.45,
+	think: 0.35,
+	wander: 0.3,
+	say: 0.25,
+	drop_goal: 0.2,
+	follow: 0,
+};
+
+/** Bare think() (no about). Same as ACTION_THINK_SCORES.think. */
+export const THINK_BARE_SCORE = ACTION_THINK_SCORES.think;
+/** think(about=…) */
+export const THINK_ABOUT_SCORE = 0.55;
+
+/** Every failed verb re-thinks at least this high. */
+const ACTION_FAIL_SCORE = 0.3;
+
+export function actionThinkScore(
+	verb:string,
+	ok = true,
+	extra?:Record<string, number>,
+):number {
+	const raw = extra?.[verb] ?? ACTION_THINK_SCORES[verb] ?? 0;
+	const base = Number.isFinite(raw) ? Math.min(1, Math.max(0, raw)) : 0;
+	if (!ok) {
+		return Math.min(1, Math.max(base, ACTION_FAIL_SCORE));
+	}
+	return base;
+}
+
+export function waitForOf(step:Step):string {
+	if (step.verb !== 'wait') {
+		return '';
+	}
+	return typeof step.args.for === 'string' ? step.args.for.replace(/\s+/g, ' ').trim() : '';
+}
+
+function stepWarrant(step:Step, extra?:Record<string, number>):number {
+	if (step.verb === 'think') {
+		const about = typeof step.args.about === 'string' ? step.args.about.trim() : '';
+		return about ? THINK_ABOUT_SCORE : actionThinkScore('think', true, extra);
+	}
+	return actionThinkScore(step.verb, true, extra);
+}
+
+/** Highest score among verbs after the last wait(for). Failures still floor at 0.3. */
+export function planActionScore(
+	plan:ActionPlan,
+	ok = true,
+	extra?:Record<string, number>,
+):number {
+	const steps:Step[] = [];
+	let cur:ActionPlan | undefined = plan;
+	while (cur) {
+		steps.push(cur.head);
+		cur = cur.then?.plan;
+	}
+	let start = 0;
+	for (let i = 0; i < steps.length; i++) {
+		if (waitForOf(steps[i])) {
+			start = i + 1;
+		}
+	}
+	let max = 0;
+	for (let i = start; i < steps.length; i++) {
+		const s = stepWarrant(steps[i], extra);
+		if (s > max) {
+			max = s;
+		}
+	}
+	if (!ok) {
+		return Math.min(1, Math.max(max, ACTION_FAIL_SCORE));
+	}
+	return max;
+}
 
 type MindState = {
 	watches:string[];
@@ -40,6 +133,7 @@ type MindState = {
 	thoughtOnce:boolean;
 	sinceThought:number;
 	aiOn:boolean;
+	once?:string;
 };
 
 const HEARTBEAT_SCORE = 0.001;
@@ -73,6 +167,7 @@ export class ThinkQueue {
 	readonly heartbeatMin:number;
 	readonly heartbeatMax:number;
 	readonly heartbeatAdjust:HeartbeatAdjust;
+	readonly actionScores:Record<string, number>;
 	private watchClock = 0;
 	private processClock = 0;
 	private rows:ThinkRow[] = [];
@@ -88,6 +183,7 @@ export class ThinkQueue {
 		this.heartbeatMin = opts.heartbeatMin ?? 30;
 		this.heartbeatMax = opts.heartbeatMax ?? 300;
 		this.heartbeatAdjust = opts.heartbeatAdjust ?? 'auto';
+		this.actionScores = { ...ACTION_THINK_SCORES, ...opts.actionScores };
 	}
 
 	ensure(npcID:string, opts?:{ skipHeartbeat?:boolean; skipMajor?:boolean }):MindState {
@@ -122,9 +218,28 @@ export class ThinkQueue {
 		this.ensure(npcID).watches = [...watches];
 	}
 
+	/** One-shot watch from wait(for). Sampled with standing watches; dropped by `clearOnce`. */
+	armOnce(npcID:string, expr:string):void {
+		const text = expr.replace(/\s+/g, ' ').trim();
+		if (!text) {
+			return;
+		}
+		this.ensure(npcID).once = text;
+	}
+
+	/** Call when a think starts so wait(for) does not survive that tick. */
+	clearOnce(npcID:string):void {
+		const mind = this.minds.get(npcID);
+		if (mind) {
+			mind.once = undefined;
+		}
+	}
+
 	setAiOn(npcID:string, on:boolean):void {
-		this.ensure(npcID).aiOn = on;
+		const mind = this.ensure(npcID);
+		mind.aiOn = on;
 		if (!on) {
+			mind.once = undefined;
 			this.rows = this.rows.filter((r) => r.npcID !== npcID);
 		}
 	}
@@ -157,7 +272,8 @@ export class ThinkQueue {
 		const mind = this.ensure(npcID);
 		let max = 0;
 		let scold:ScoldReason | undefined;
-		for (const expr of mind.watches) {
+		const exprs = mind.once ? [...mind.watches, mind.once] : mind.watches;
+		for (const expr of exprs) {
 			const r = evaluate(expr, catalog);
 			if (r.error) {
 				scold = r.error.reason;
@@ -192,6 +308,27 @@ export class ThinkQueue {
 			return;
 		}
 		this.insert({ npcID, score: MAJOR_SCORE, reason: 'major' });
+	}
+
+	/** After a world verb. Score from seriousness; 0 / wait / rest / follow do not enqueue on success. Failures always do (≥ 0.3). */
+	enqueueAction(npcID:string, verb:string, ok = true):void {
+		this.enqueueScore(npcID, actionThinkScore(verb, ok, this.actionScores));
+	}
+
+	/** After a plan. Highest score after the last wait(for). */
+	enqueuePlan(npcID:string, plan:ActionPlan, ok = true):void {
+		this.enqueueScore(npcID, planActionScore(plan, ok, this.actionScores));
+	}
+
+	private enqueueScore(npcID:string, score:number):void {
+		const mind = this.ensure(npcID);
+		if (!mind.aiOn) {
+			return;
+		}
+		if (score <= this.epsilon) {
+			return;
+		}
+		this.insert({ npcID, score, reason: 'action' });
 	}
 
 	noteResult(npcID:string, stalled:boolean):void {

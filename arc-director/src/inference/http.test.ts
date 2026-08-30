@@ -301,6 +301,209 @@ describe('HttpProvider native server', () => {
 		assert.ok((res.generateMs ?? 0) >= 0);
 		assert.ok((res.promptMs ?? 0) + (res.generateMs ?? 0) < 5000);
 	});
+
+	it('reads a completed Responses event that never got a trailing blank line', async () => {
+		const provider = new HttpProvider({
+			baseURL: 'http://127.0.0.1:9/v1',
+			fetch: async (input, init) => {
+				const url = String(input);
+				if (url.endsWith('/api/v1/models') && init?.method !== 'POST') {
+					return new Response(JSON.stringify({
+						models: [{ key: 'guard', loaded_instances: [{ id: 'guard' }] }],
+					}), { status: 200 });
+				}
+				if (url.includes('/responses')) {
+					const stream = new ReadableStream({
+						start(controller) {
+							controller.enqueue(new TextEncoder().encode(
+								'event: response.completed\ndata: {"response":{"id":"resp_s","output":[{"type":"message","content":[{"type":"output_text","text":"hi"}]}]}}',
+							));
+							controller.close();
+						},
+					});
+					return new Response(stream, {
+						status: 200,
+						headers: { 'content-type': 'text/event-stream' },
+					});
+				}
+				return new Response('nope', { status: 404 });
+			},
+		});
+		const res = await provider.chat({
+			model: 'guard',
+			messages: [{ role: 'user', content: 'hi' }],
+		});
+		assert.equal(res.content, 'hi');
+	});
+
+	it('treats response.incomplete as a finished payload', async () => {
+		const provider = new HttpProvider({
+			baseURL: 'http://127.0.0.1:9/v1',
+			fetch: async (input, init) => {
+				const url = String(input);
+				if (url.endsWith('/api/v1/models') && init?.method !== 'POST') {
+					return new Response(JSON.stringify({
+						models: [{ key: 'guard', loaded_instances: [{ id: 'guard' }] }],
+					}), { status: 200 });
+				}
+				if (url.includes('/responses')) {
+					return new Response(
+						'event: response.incomplete\ndata: {"type":"response.incomplete","response":{"id":"resp_i","status":"incomplete","output":[{"type":"message","content":[{"type":"output_text","text":"{\\"head\\":{\\"verb\\":\\"wait\\"}}"}]}]}}\n\n',
+						{ status: 200, headers: { 'content-type': 'text/event-stream' } },
+					);
+				}
+				return new Response('nope', { status: 404 });
+			},
+		});
+		const res = await provider.chat({
+			model: 'guard',
+			messages: [{ role: 'user', content: 'hi' }],
+		});
+		assert.match(String(res.content), /wait/);
+	});
+
+	it('assembles Responses output from deltas when completed never arrives', async () => {
+		const provider = new HttpProvider({
+			baseURL: 'http://127.0.0.1:9/v1',
+			fetch: async (input, init) => {
+				const url = String(input);
+				if (url.endsWith('/api/v1/models') && init?.method !== 'POST') {
+					return new Response(JSON.stringify({
+						models: [{ key: 'guard', loaded_instances: [{ id: 'guard' }] }],
+					}), { status: 200 });
+				}
+				if (url.includes('/responses')) {
+					return new Response(
+						'event: response.output_text.delta\ndata: {"type":"response.output_text.delta","delta":"{\\"ok\\":true}"}\n\n',
+						{ status: 200, headers: { 'content-type': 'text/event-stream' } },
+					);
+				}
+				return new Response('nope', { status: 404 });
+			},
+		});
+		const res = await provider.chat({
+			model: 'guard',
+			messages: [{ role: 'user', content: 'hi' }],
+		});
+		assert.equal(res.content, '{"ok":true}');
+	});
+
+	it('reads a function call from output_item.done without response.completed', async () => {
+		const provider = new HttpProvider({
+			baseURL: 'http://127.0.0.1:9/v1',
+			fetch: async (input, init) => {
+				const url = String(input);
+				if (url.endsWith('/api/v1/models') && init?.method !== 'POST') {
+					return new Response(JSON.stringify({
+						models: [{ key: 'guard', loaded_instances: [{ id: 'guard' }] }],
+					}), { status: 200 });
+				}
+				if (url.includes('/responses')) {
+					return new Response(
+						'event: response.output_item.done\ndata: {"type":"response.output_item.done","item":{"type":"function_call","call_id":"c1","name":"see_map","arguments":"{}"}}\n\n',
+						{ status: 200, headers: { 'content-type': 'text/event-stream' } },
+					);
+				}
+				return new Response('nope', { status: 404 });
+			},
+		});
+		const res = await provider.chat({
+			model: 'guard',
+			thread: 'Guard',
+			messages: [{ role: 'user', content: 'look' }],
+			tools: [{
+				name: 'see_map',
+				description: 'map',
+				parameters: { type: 'object', properties: {} },
+			}],
+		});
+		assert.equal(res.toolCalls[0]?.name, 'see_map');
+		assert.equal(res.toolCalls[0]?.id, 'c1');
+	});
+
+	it('retries responses without streaming when the SSE body is empty', async () => {
+		let n = 0;
+		const bodies:Record<string, unknown>[] = [];
+		const provider = new HttpProvider({
+			baseURL: 'http://127.0.0.1:9/v1',
+			fetch: async (input, init) => {
+				const url = String(input);
+				if (url.endsWith('/api/v1/models') && init?.method !== 'POST') {
+					return new Response(JSON.stringify({
+						models: [{ key: 'guard', loaded_instances: [{ id: 'guard' }] }],
+					}), { status: 200 });
+				}
+				if (url.includes('/responses')) {
+					n += 1;
+					bodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+					if (n === 1) {
+						return new Response(
+							'event: response.created\ndata: {"type":"response.created"}\n\n',
+							{ status: 200, headers: { 'content-type': 'text/event-stream' } },
+						);
+					}
+					assert.equal(bodies[1]?.stream, false);
+					return new Response(JSON.stringify({
+						id: 'resp_2',
+						output: [{
+							type: 'message',
+							content: [{ type: 'output_text', text: 'hi' }],
+						}],
+					}), { status: 200 });
+				}
+				return new Response('nope', { status: 404 });
+			},
+		});
+		const res = await provider.chat({
+			model: 'guard',
+			messages: [{ role: 'user', content: 'hi' }],
+		});
+		assert.equal(res.content, 'hi');
+		assert.equal(n, 2);
+	});
+
+	it('surfaces a Responses stream error', async () => {
+		let n = 0;
+		const provider = new HttpProvider({
+			baseURL: 'http://127.0.0.1:9/v1',
+			fetch: async (input, init) => {
+				const url = String(input);
+				if (url.endsWith('/api/v1/models') && init?.method !== 'POST') {
+					return new Response(JSON.stringify({
+						models: [{ key: 'guard', loaded_instances: [{ id: 'guard' }] }],
+					}), { status: 200 });
+				}
+				if (url.includes('/responses')) {
+					n += 1;
+					if (n === 1) {
+						return new Response(JSON.stringify({
+							id: 'resp_1',
+							output: [{
+								type: 'message',
+								content: [{ type: 'output_text', text: 'ok' }],
+							}],
+						}), { status: 200 });
+					}
+					return new Response(
+						'event: error\ndata: {"type":"error","error":{"message":"image too large"}}\n\n',
+						{ status: 200, headers: { 'content-type': 'text/event-stream' } },
+					);
+				}
+				return new Response('nope', { status: 404 });
+			},
+		});
+		await provider.chat({
+			model: 'guard',
+			messages: [{ role: 'user', content: 'hi' }],
+		});
+		await assert.rejects(
+			() => provider.chat({
+				model: 'guard',
+				messages: [{ role: 'user', content: 'hi' }],
+			}),
+			/image too large/,
+		);
+	});
 });
 
 describe('parseChatTimings', () => {

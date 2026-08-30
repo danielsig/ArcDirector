@@ -12,6 +12,8 @@ describe('prompt split', () => {
 		assert.match(system, /You are Guard/);
 		assert.match(system, /Traits: alert/);
 		assert.match(system, /Available verbs/);
+		assert.match(system, /think\(about\?\)/);
+		assert.match(system, /wait\(for\)/);
 		assert.match(system, /Do not call see_map/);
 		assert.match(system, /❌ = you/);
 		assert.equal(system.includes('Goals (highest first)'), false);
@@ -39,6 +41,30 @@ describe('prompt split', () => {
 		assert.match(user, /a damp hall/);
 		assert.equal(user.includes('Available verbs'), false);
 		assert.equal(user.includes('see_map'), false);
+	});
+
+	it('lists a one-shot think-about note', () => {
+		const user = volatileBlock({
+			pushed: { environment: 'a hall' },
+			thinkAbout: 'how to open EastGate',
+		});
+		assert.match(user, /You asked to think about: how to open EastGate/);
+	});
+
+	it('lists named watches and tells the model to add, edit, or remove', () => {
+		const user = volatileBlock({
+			pushed: { environment: 'a glen' },
+			pinnedWatches: { hurt: 'isHurt(me)' },
+			watches: { theft: 'some(events.filter("theft").nearby(16))' },
+			watchesWritable: true,
+		});
+		assert.match(user, /Required watches/);
+		assert.match(user, /hurt: isHurt\(me\)/);
+		assert.match(user, /theft: some/);
+		assert.match(user, /addWatches/);
+		assert.match(user, /editWatches/);
+		assert.match(user, /removeWatches/);
+		assert.match(user, /"watches"/);
 	});
 
 	it('uses the configured you pictogram in the see_map hint', () => {

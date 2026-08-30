@@ -85,8 +85,9 @@ export class VerbRegistry {
  * - pick_up: pick up an item
  * - drop: drop an item
  * - say: say a message to a target
- * - wait: wait for a number of seconds
+ * - wait: wait for a number of seconds; for is a one-shot watch until the next think
  * - remember: add a string to one's memory with optional string tags
+ * - think: queue a follow-up think; about is optional
  * - set_goal: set a goal
  * - drop_goal: drop a goal
  * - set_identity: set one's own identity
@@ -102,8 +103,9 @@ export function registerCoreVerbs(registry:VerbRegistry):VerbRegistry {
 		.add('pick_up', { name: 'id' })
 		.add('drop', { name: 'id' })
 		.add('say', { text: 'string', to: 'id?' })
-		.add('wait', { seconds: 'number?' })
+		.add('wait', { seconds: 'number?', for: 'string?' })
 		.add('remember', { content: 'string', tags: 'string[]?' })
+		.add('think', { about: 'string?' })
 		.add('set_goal', { goal: 'string', priority: 'number?' })
 		.add('drop_goal', { goal: 'string?' })
 		.add('set_identity', { name: 'string?', role: 'string?', traits: 'string[]?' });

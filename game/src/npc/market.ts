@@ -1,4 +1,4 @@
-import type { AgentIdentity, Goal } from 'arc-director';
+import type { AgentIdentity, Goal, Watches } from 'arc-director';
 import { Crowd, Merchant, Named } from '../engine/components';
 import type { GameObject } from '../engine/GameObject';
 import type { World } from '../engine/World';
@@ -13,7 +13,7 @@ export type MindSeed = {
 	identity:AgentIdentity;
 	goals:Goal[];
 	memories:{ text:string; tags:string[]; pinned?:boolean }[];
-	watches?:string[];
+	watches?:Watches;
 	skipHeartbeat?:boolean;
 	skipMajor?:boolean;
 };
@@ -111,7 +111,7 @@ function guardSeed(id:string, post:string, traits:string[]):MindSeed {
 				pinned: true,
 			},
 		],
-		watches: ['some(events.filter("theft").nearby(16))'],
+		watches: { theft: 'some(events.filter("theft").nearby(16))' },
 		skipHeartbeat: true,
 		skipMajor: true,
 	};

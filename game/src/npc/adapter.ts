@@ -24,6 +24,7 @@ import {
 	dummyEntity,
 	SampleCache,
 	runPlan,
+	waitForOf,
 	roleMentionTitles,
 	stampMap,
 	type ActionPlan,
@@ -47,6 +48,7 @@ import {
 	type Stringifiers,
 	type MapSnapshot,
 	type ThinkRow,
+	type Watches,
 } from 'arc-director';
 import { NPCInput } from '../actors/NPCInput';
 import {
@@ -843,6 +845,9 @@ async function executeStep(step:Step, ctx:HostCtx):Promise<ActionResult> {
 	if (!npc) {
 		return { ok: false, verb: step.verb, reason: 'no NPCInput' };
 	}
+	if (step.verb !== 'think') {
+		ctx.director.noteActorVerb(ctx.actor, step.verb);
+	}
 	switch (step.verb) {
 		case 'go_to': {
 			const result = await npc.goTo(argString(step, 'name'));
@@ -869,8 +874,13 @@ async function executeStep(step:Step, ctx:HostCtx):Promise<ActionResult> {
 			}
 			return npc.wander();
 		}
-		case 'wait':
+		case 'wait': {
+			const forExpr = waitForOf(step);
+			if (forExpr) {
+				ctx.director.armWaitFor(ctx.actor, forExpr);
+			}
 			return npc.wait(argNumber(step, 'seconds', 1));
+		}
 		case 'say': {
 			const text = argString(step, 'text');
 			const to = argString(step, 'to');
@@ -1398,8 +1408,8 @@ type MindSeed = {
 	identity:AgentIdentity;
 	goals:Goal[];
 	memories:{ text:string; tags:string[]; pinned?:boolean }[];
-	watches?:string[];
-	pinnedWatches?:string[];
+	watches?:Watches;
+	pinnedWatches?:Watches;
 	watchesWritable?:boolean;
 	skipHeartbeat?:boolean;
 	skipMajor?:boolean;
@@ -1501,7 +1511,10 @@ const FORAGER_SEED:MindSeed = {
 			pinned: true,
 		},
 	],
-	pinnedWatches: ['isHurt(me)', 'hasHeard || some(others.nearby().approaching())'],
+	pinnedWatches: {
+		hurt: 'isHurt(me)',
+		approaching: 'hasHeard || some(others.nearby().approaching())',
+	},
 	watchesWritable: false,
 	skipHeartbeat: true,
 	skipMajor: true,
@@ -1547,7 +1560,7 @@ const ANGLER_SEED:MindSeed = {
 			pinned: true,
 		},
 	],
-	watches: ['hasJustOpened(MillBridge) || some(events.filter("bridge"))'],
+	watches: { bridge: 'hasJustOpened(MillBridge) || some(events.filter("bridge"))' },
 	skipHeartbeat: true,
 	skipMajor: true,
 };
@@ -2239,7 +2252,7 @@ export class NPCDirector {
 			},
 			vision: this.vision,
 			watchesWritable: seed?.watchesWritable ?? true,
-			pinnedWatches: seed?.pinnedWatches ?? ['isHurt(me)'],
+			pinnedWatches: seed?.pinnedWatches ?? { hurt: 'isHurt(me)' },
 		};
 	}
 
@@ -2248,15 +2261,21 @@ export class NPCDirector {
 			agent.watchesWritable = seed.watchesWritable;
 		}
 		if (seed.pinnedWatches !== undefined) {
-			agent.pinnedWatches = [...seed.pinnedWatches];
+			agent.pinnedWatches = { ...seed.pinnedWatches };
+		}
+		const pinNames = new Set(Object.keys(agent.pinnedWatches).map((n) => n.trim().toLowerCase()));
+		const extras:Watches = {};
+		for (const [name, expr] of Object.entries(seed.watches ?? {})) {
+			if (!pinNames.has(name.trim().toLowerCase())) {
+				extras[name] = expr;
+			}
 		}
 		if (seed.watchesWritable === false) {
-			const pins = new Set(agent.pinnedWatches);
-			agent.watches = (seed.watches ?? []).filter((w) => !pins.has(w));
+			agent.watches = extras;
 			return;
 		}
 		if (fresh && seed.watches) {
-			agent.watches = seed.watches.filter((w) => !agent.pinnedWatches.includes(w));
+			agent.watches = extras;
 		}
 	}
 
@@ -2636,7 +2655,7 @@ export class NPCDirector {
 				held.push(row);
 				continue;
 			}
-			if (row.reason === 'heartbeat' && npc?.busy()) {
+			if ((row.reason === 'heartbeat' || row.reason === 'action') && npc?.busy()) {
 				held.push(row);
 				continue;
 			}
@@ -2726,6 +2745,7 @@ export class NPCDirector {
 	}
 
 	private runMind(mind:NPCMind):void {
+		this.queue.clearOnce(mind.id);
 		mind.busy = true;
 		mind.thoughtAt = this.world.time;
 		mind.note = `${mind.id} is thinking...`;
@@ -2786,6 +2806,9 @@ export class NPCDirector {
 		}
 		const stalled = !result.ok || !!result.interrupted || STALL_VERBS.has(verb);
 		this.queue.noteResult(mind.id, stalled);
+		if (!result.interrupted) {
+			this.queue.enqueuePlan(mind.id, plan, result.ok);
+		}
 		const status = result.ok ? (result.reason || 'ok') : `failed — ${result.reason ?? 'error'}`;
 		if (mind.aiOn) {
 			mind.note = `${mind.id}: ${verb} ${status}`;
@@ -3536,6 +3559,18 @@ export class NPCDirector {
 		}
 		return this.minds.find((m) => m.id === go.id)
 			?? this.minds.find((m) => m.id === bodyName(go));
+	}
+
+	noteActorVerb(actor:GameObject, verb:string):void {
+		const mind = this.mindByID(actor.id) ?? this.mindByID(bodyName(actor));
+		mind?.agent.noteVerb(verb);
+	}
+
+	armWaitFor(actor:GameObject, expr:string):void {
+		const mind = this.mindByID(actor.id) ?? this.mindByID(bodyName(actor));
+		if (mind) {
+			this.queue.armOnce(mind.id, expr);
+		}
 	}
 
 	performAgentStep(actor:GameObject, step:Step):Promise<ActionResult> {

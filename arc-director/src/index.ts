@@ -88,8 +88,21 @@ export type {
 	PerceptionRecipe,
 	Pusher,
 	ToolSpec,
+	WatchInput,
+	Watches,
 } from './agent/types.js';
 export { Agent, type AgentDeps, type AgentJSON, type AgentOptions } from './agent/agent.js';
+export {
+	applyWatchOps,
+	asWatch,
+	asWatches,
+	findWatchName,
+	formatWatch,
+	formatWatches,
+	hasWatch,
+	watchKey,
+	type WatchOps,
+} from './agent/watch.js';
 export {
 	stampMap,
 	formatLegend,
@@ -102,7 +115,7 @@ export {
 	type MapSnapshot,
 	type StampedMap,
 } from './agent/map.js';
-export { runPlan } from './agent/run.js';
+export { runPlan, deferThinks, planSteps, THINK_ABOUT_CAP } from './agent/run.js';
 export { planRepairHint, sayRangeHint, shortTermBlock, stablePrefix, volatileBlock, WATCH_CHEAT_SHEET, SEE_MAP_HINT, seeMapHint } from './agent/prompt.js';
 export {
 	TalkNet,
@@ -137,4 +150,17 @@ export {
 	type StringifierKind,
 	type Stringifiers,
 } from './expr/index.js';
-export { ThinkQueue, thinkRecencyScale, type ThinkQueueOpts, type ThinkRow, type HeartbeatAdjust } from './think/queue.js';
+export {
+	ThinkQueue,
+	thinkRecencyScale,
+	actionThinkScore,
+	planActionScore,
+	waitForOf,
+	ACTION_THINK_SCORES,
+	THINK_BARE_SCORE,
+	THINK_ABOUT_SCORE,
+	type ThinkQueueOpts,
+	type ThinkRow,
+	type ThinkReason,
+	type HeartbeatAdjust,
+} from './think/queue.js';
