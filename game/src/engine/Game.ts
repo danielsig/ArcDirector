@@ -3,7 +3,7 @@ import { resetHudPatch } from './patchHud';
 import { World } from './World';
 import { GameObject } from './GameObject';
 import { Wallet } from './components';
-import { NPCDirector } from '../npc/adapter';
+import { GameHost } from '../npc/adapter';
 import { rendererLook } from '../render/look';
 import { loadNPCAnims } from '../render/humanAnims';
 import { loadNature } from '../render/nature';
@@ -11,6 +11,7 @@ import { loadSpritesheet } from '../render/spritesheet';
 import { loadSwordAnims } from '../render/swordAnims';
 import type { HudModel } from '../ui/hudModel';
 import { loadModelPref } from './modelPref';
+import { loadBatchThinkPref, loadThinkPref, loadThinkingBudgetPref } from './thinkPref';
 import { ChunkStreamer } from '../world/ChunkStreamer';
 import { decodeGlyphChunk } from '../world/decodeGlyphChunk';
 import { spawnCamera, spawnNPC, spawnPlayer } from '../world/spawn';
@@ -71,14 +72,15 @@ export class Game extends KindlingGame<World> {
 		}
 		spawnCamera(this.world);
 		const auto = AUTOSAVE_ENABLED ? loadSave(this.scene.id, 'auto') : null;
-		const director = new NPCDirector(this.world, hud.chat, hud.aiLog, {
-			sceneID: this.scene.id,
+		const host = new GameHost(this.world, hud.chat, hud.aiLog, {
 			ambient: this.scene.ambient,
 			agents: auto?.agents,
 			bargainDone: auto?.bargainDone,
 		});
+		const director = this.scene.createDirector(host);
+		host.bind(director);
 		this.world.pickedUp = (actor, name) => {
-			director.afterPickUp(actor, name);
+			host.hooks.afterPickUp?.(host, actor, name);
 		};
 		const systems = new GameObject('Systems', 'Systems');
 		const view = systems.addComponent(new WorldView());
@@ -87,15 +89,15 @@ export class Game extends KindlingGame<World> {
 		pick.getRenderer = () => this.renderer;
 		const hudView = systems.addComponent(new Hud());
 		hudView.model = this.hud;
-		hudView.director = director;
+		hudView.director = host;
 		hudView.getRenderer = () => this.renderer;
 		const stream = systems.addComponent(new WorldStream());
 		stream.streamer = streamer;
 		const pulse = systems.addComponent(new DirectorPulse());
-		pulse.director = director;
+		pulse.director = host;
 		this.session = systems.addComponent(new Session());
 		this.session.hud = this.hud;
-		this.session.director = director;
+		this.session.director = host;
 		this.session.scene = this.scene;
 		this.session.stream = stream;
 		this.session.view = view;
@@ -126,8 +128,10 @@ export class Game extends KindlingGame<World> {
 		}
 		this.world.setMessage(this.scene.message);
 		this.hud.menuOpen = false;
-		this.hud.model = director.liveModel() || loadModelPref();
-		this.hud.maxParallel = director.liveMaxParallel();
+		this.hud.model = host.arc?.model || loadModelPref();
+		this.hud.maxParallel = host.arc?.liveMaxParallel() ?? loadThinkPref();
+		this.hud.batchThinks = host.arc?.liveBatchThinks() ?? loadBatchThinkPref();
+		this.hud.thinkingBudget = host.arc ? host.arc.liveThinkingBudget() : loadThinkingBudgetPref();
 		this.session.persistAutosave();
 		this.session.persistView();
 		this.session.syncURLView();

@@ -46,4 +46,17 @@ describe('MemoryStore', () => {
 		const texts = store.all().map((r) => r.text).sort();
 		assert.deepEqual(texts, ['keep me', 'mid', 'new']);
 	});
+
+	it('recalls by lexical overlap without embeddings or matching tags', () => {
+		const store = new MemoryStore();
+		store.add({
+			text: 'Miller says the mill-fee is FireMushroom.',
+			tags: ['speech'],
+			createdAt: 1,
+		});
+		store.add({ text: 'I like soup', tags: ['food'], createdAt: 2 });
+		const hit = store.recall({ query: 'Trade FireMushroom for SilverTrout', now: 10, k: 1 });
+		assert.equal(hit.length, 1);
+		assert.equal(hit[0].text.includes('FireMushroom'), true);
+	});
 });

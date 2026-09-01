@@ -1,39 +1,16 @@
 import {
-	Agent,
-	FakeProvider,
-	HttpProvider,
-	VerbRegistry,
+	ArcDirector,
 	formatPlan,
 	goToNamedInteractable,
-	registerCoreVerbs,
-	withQueue,
-	type InferenceProvider,
-	type PerceptionRecipe,
+	STOCK_VERBS,
 } from '../index.js';
-import { fixtureParagraph, type FixtureCtx } from './scene.js';
-import { resolveInferenceBaseURL, resolveLiveModel, probeHttp } from './probe.js';
+import { fixtureParagraph, fixtureSight, type FixtureCtx } from './scene.js';
+import { resolveInferenceBaseURL, probeHttp } from './probe.js';
 
-function recipe():PerceptionRecipe<FixtureCtx> {
-	return {
-		push: {
-			environment: {
-				description: 'English scene. Names only. No coordinates.',
-				gather: (ctx) => ctx.paragraph,
-			},
-		},
-		tools: {},
-	};
-}
-
-async function liveProvider():Promise<{ provider:InferenceProvider; baseURL:string } | null> {
-	if (process.env.ARC_DIRECTOR_MOCK === '1') {
-		return { provider: new FakeProvider(goToNamedInteractable()), baseURL: 'mock' };
-	}
-	const baseURL = await resolveInferenceBaseURL();
-	if (!await probeHttp(baseURL)) {
-		return null;
-	}
-	return { provider: withQueue(new HttpProvider({ baseURL, timeoutMs: 180_000 }), 1), baseURL };
+function sleep(ms:number):Promise<void> {
+	return new Promise((resolve) => {
+		setTimeout(resolve, ms);
+	});
 }
 
 async function main():Promise<void> {
@@ -42,47 +19,76 @@ async function main():Promise<void> {
 	console.log(paragraph);
 	console.log('');
 
-	const live = await liveProvider();
-	if (!live) {
-		console.log('No local model at ARC_DIRECTOR_BASE_URL (default LM Studio http://127.0.0.1:1234/v1).');
-		console.log('Start LM Studio with `lms server start`, or rerun with ARC_DIRECTOR_MOCK=1.');
+	const mock = process.env.ARC_DIRECTOR_MOCK === '1';
+	const director = new ArcDirector<FixtureCtx>()
+		.withPriorityQueue({
+			maxParallel: 1,
+			processInterval: 0,
+			heartbeatStart: 0.01,
+			heartbeatMin: 0.01,
+		})
+		.addStockVerbs()
+		.withDefaultKit({ verbs: STOCK_VERBS })
+		.onVerb((call) => {
+			console.log(`host execute: ${call.verb}`, call.args);
+			return { ok: true, verb: call.verb };
+		})
+		.withSight(() => fixtureSight())
+		.withContext(() => ({ paragraph }))
+		.addAgent({
+			id: 'Guard',
+			identity: {
+				name: 'Guard',
+				role: 'A dungeon guard. Walk to the named interactable you can see. Never emit coordinates.',
+				traits: ['dutiful'],
+			},
+			goals: [{ text: 'Go to EastGate', priority: 1 }],
+			memories: [{
+				text: 'EastGate is the door in the east wall.',
+				tags: ['gate', 'EastGate'],
+				pinned: true,
+			}],
+		});
+
+	if (mock) {
+		director.withFakeInference(goToNamedInteractable());
+	}
+	else {
+		const baseURL = await resolveInferenceBaseURL();
+		if (!await probeHttp(baseURL)) {
+			console.log('No local model at ARC_DIRECTOR_BASE_URL (default LM Studio http://127.0.0.1:1234/v1).');
+			console.log('Start LM Studio with `lms server start`, or rerun with ARC_DIRECTOR_MOCK=1.');
+			process.exitCode = 1;
+			return;
+		}
+		director.withHttpInference({ baseURL, timeoutMs: 180_000 });
+	}
+
+	try {
+		await director.start();
+	}
+	catch (err:unknown) {
+		console.error(err instanceof Error ? err.message : err);
 		process.exitCode = 1;
 		return;
 	}
-	const { provider, baseURL } = live;
-	const model = baseURL === 'mock' ? 'mock' : await resolveLiveModel(baseURL);
-	if (baseURL !== 'mock') {
-		console.log(`provider: ${baseURL}  model: ${model}`);
+
+	if (!mock) {
+		console.log(`model: ${director.model}`);
 	}
 
-	const agent = new Agent<FixtureCtx>({
-		id: 'Guard',
-		identity: {
-			name: 'Guard',
-			role: 'A dungeon guard. Walk to the named interactable you can see. Never emit coordinates.',
-			traits: ['dutiful'],
-		},
-		goals: [{ text: 'Go to EastGate', priority: 1 }],
-		provider,
-		verbs: registerCoreVerbs(new VerbRegistry()),
-		recipe: recipe(),
-		context: () => ({ paragraph }),
-		execute: async (step) => {
-			console.log(`host execute: ${step.verb}`, step.args);
-			return { ok: true, verb: step.verb };
-		},
-		model: process.env.ARC_DIRECTOR_MODEL ?? model,
-		heartbeat: 30,
-		strategicInterval: 10_000,
-	});
-	await agent.remember('EastGate is the door in the east wall.', ['gate', 'EastGate'], 0);
-
-	const plan = await agent.tick(1);
-	if (!plan) {
-		throw new Error('agent returned no plan');
+	director.tick(1, 1);
+	const t0 = Date.now();
+	while (!director.agent('Guard')?.lastPlan) {
+		if (Date.now() - t0 > 180_000) {
+			throw new Error('agent returned no plan');
+		}
+		await sleep(20);
 	}
+	const plan = director.agent('Guard')!.lastPlan!;
 	console.log('plan:', formatPlan(plan));
 	console.log(JSON.stringify(plan, null, 2));
+	director.dispose();
 }
 
 main().catch((err:unknown) => {

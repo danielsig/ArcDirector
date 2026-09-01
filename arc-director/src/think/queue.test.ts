@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import type { ActionPlan } from '../action/types.js';
 import { buildCatalog, dummyEntity, SampleCache, type ExprEntity } from '../expr/index.js';
-import { ACTION_THINK_SCORES, THINK_ABOUT_SCORE, THINK_BARE_SCORE, ThinkQueue, actionThinkScore, planActionScore, thinkRecencyScale } from './queue.js';
+import { ACTION_THINK_SCORES, THINK_ABOUT_SCORE, THINK_BARE_SCORE, SimpleQueue, ThinkQueue, actionThinkScore, planActionScore, thinkRecencyScale, withPriorityQueue } from './queue.js';
 import { DEFAULT_TRUE_SCORE } from '../expr/types.js';
 
 type Posed = ExprEntity & { x:number; z:number };
@@ -41,7 +41,7 @@ describe('ThinkQueue', () => {
 		q.setWatches('Guard', ['hasHeard', 'isNear(me, Player)']);
 		q.ensure('Guard');
 		const catalogs = new Map([['Guard', cat]]);
-		const rows = q.tick(1, catalogs, 0);
+		const rows = q.tick(1, catalogs);
 		assert.equal(rows.length, 1);
 		assert.equal(rows[0].npcID, 'Guard');
 		assert.ok(rows[0].score <= 0.51 + 1e-9);
@@ -59,37 +59,60 @@ describe('ThinkQueue', () => {
 		q.ensure('A');
 		q.ensure('B', { skipHeartbeat: true });
 		q.enqueueMajor('A');
-		q.tick(1, new Map(), 0);
+		q.tick(1, new Map());
 		q.enqueueMajor('A');
 		const catalogs = new Map();
-		const rows = q.tick(1, catalogs, 0);
+		const rows = q.tick(1, catalogs);
 		assert.equal(rows.filter((r) => r.npcID === 'A').length, 1);
 		assert.ok(rows[0].score >= 0.99);
 	});
 
-	it('maxParallel minus HTTP inFlight; motor does not occupy a slot', () => {
+	it('HTTP beginThink occupies a slot; a live plan does not', () => {
 		const q = new ThinkQueue({ watchInterval: 100, processInterval: 0, maxParallel: 2 });
-		q.enqueueMajor('A');
+		q.ensure('A', { skipHeartbeat: true });
+		q.ensure('B', { skipHeartbeat: true });
+		q.ensure('C', { skipHeartbeat: true });
+		q.beginThink('A');
 		q.enqueueMajor('B');
 		q.enqueueMajor('C');
-		const rows = q.tick(1, new Map(), 1);
-		assert.equal(rows.length, 1);
+		assert.equal(q.tick(1, new Map()).length, 1);
+		q.endThink('A');
+		q.beginPlan('A', { head: { verb: 'go_to', args: { name: 'Gate' } } });
+		q.enqueueMajor('B');
+		q.enqueueMajor('C');
+		assert.equal(q.tick(1, new Map()).length, 2);
 	});
 
 	it('skipMajor drops enqueue unless forced', () => {
 		const q = new ThinkQueue({ watchInterval: 100, processInterval: 0, maxParallel: 2 });
 		q.ensure('A', { skipMajor: true, skipHeartbeat: true });
 		q.enqueueMajor('A');
-		assert.equal(q.tick(1, new Map(), 0).length, 0);
+		assert.equal(q.tick(1, new Map()).length, 0);
 		q.enqueueMajor('A', true);
-		assert.equal(q.tick(1, new Map(), 0).length, 1);
+		assert.equal(q.tick(1, new Map()).length, 1);
+	});
+
+	it('heartbeat is a low-priority pulse every 3s and does not stretch', () => {
+		const q = new ThinkQueue({ watchInterval: 100, processInterval: 0, maxParallel: 1 });
+		q.ensure('A');
+		const first = q.tick(0, new Map());
+		assert.equal(first.length, 1);
+		assert.equal(first[0].reason, 'heartbeat');
+		assert.equal(first[0].score, 0.001);
+		q.noteResult('A', true);
+		assert.equal(q.heartbeatSeconds('A'), 3);
+		assert.equal(q.tick(2.9, new Map()).length, 0);
+		const again = q.tick(0.2, new Map());
+		assert.equal(again.length, 1);
+		assert.equal(again[0].reason, 'heartbeat');
+		assert.equal(again[0].score, 0.001);
 	});
 
 	it('drop rows when think starts', () => {
 		const q = new ThinkQueue({ watchInterval: 100, processInterval: 0, maxParallel: 2 });
 		q.enqueueMajor('A');
 		q.drop('A');
-		const rows = q.tick(1, new Map(), 0);
+		const rows = q.tick(1, new Map());
 		assert.equal(rows.length, 0);
 	});
 
@@ -111,11 +134,11 @@ describe('ThinkQueue', () => {
 		q.noteResult('Hot', false);
 		q.enqueueMajor('Hot');
 		q.enqueueMajor('Cold');
-		const first = q.tick(1, new Map(), 0);
+		const first = q.tick(1, new Map());
 		assert.equal(first.length, 1);
 		assert.equal(first[0].npcID, 'Cold');
 		q.enqueueMajor('Hot');
-		const later = q.tick(60, new Map(), 0);
+		const later = q.tick(60, new Map());
 		assert.equal(later[0].npcID, 'Hot');
 		assert.ok(Math.abs(q.recencyScale('Hot') - 1) < 1e-9);
 	});
@@ -131,25 +154,25 @@ describe('ThinkQueue', () => {
 		assert.equal(actionThinkScore('follow', false), 0.3);
 		assert.equal(actionThinkScore('wait', false), 0.3);
 		assert.ok(actionThinkScore('steal', false) >= 0.3);
-		assert.equal(ACTION_THINK_SCORES.go_to, 0.5);
+		assert.equal(ACTION_THINK_SCORES.go_to, 0.8);
 
 		const q = new ThinkQueue({ watchInterval: 100, processInterval: 0, maxParallel: 2 });
 		q.ensure('A', { skipHeartbeat: true });
 		q.enqueueAction('A', 'wait');
-		assert.equal(q.tick(1, new Map(), 0).length, 0);
+		assert.equal(q.tick(1, new Map()).length, 0);
 		q.enqueueAction('A', 'follow');
-		assert.equal(q.tick(1, new Map(), 0).length, 0);
+		assert.equal(q.tick(1, new Map()).length, 0);
 		q.enqueueAction('A', 'follow', false);
-		const lost = q.tick(1, new Map(), 0);
+		const lost = q.tick(1, new Map());
 		assert.equal(lost.length, 1);
 		assert.equal(lost[0].score, 0.3);
 		q.enqueueAction('A', 'wander');
-		const wander = q.tick(1, new Map(), 0);
+		const wander = q.tick(1, new Map());
 		assert.equal(wander.length, 1);
 		assert.equal(wander[0].reason, 'action');
 		assert.equal(wander[0].score, ACTION_THINK_SCORES.wander);
 		q.enqueueAction('A', 'wait', false);
-		const failed = q.tick(1, new Map(), 0);
+		const failed = q.tick(1, new Map());
 		assert.equal(failed.length, 1);
 		assert.equal(failed[0].score, 0.3);
 	});
@@ -160,7 +183,7 @@ describe('ThinkQueue', () => {
 		q.enqueueMajor('A');
 		q.enqueueAction('A', 'wander');
 		q.enqueueAction('A', 'go_to');
-		const rows = q.tick(1, new Map(), 0);
+		const rows = q.tick(1, new Map());
 		assert.equal(rows.length, 1);
 		assert.equal(rows[0].reason, 'action');
 		assert.equal(rows[0].score, ACTION_THINK_SCORES.go_to);
@@ -175,9 +198,9 @@ describe('ThinkQueue', () => {
 		});
 		q.ensure('A', { skipHeartbeat: true });
 		q.enqueueAction('A', 'wander');
-		assert.equal(q.tick(1, new Map(), 0).length, 0);
+		assert.equal(q.tick(1, new Map()).length, 0);
 		q.enqueueAction('A', 'inspect');
-		const rows = q.tick(1, new Map(), 0);
+		const rows = q.tick(1, new Map());
 		assert.equal(rows.length, 1);
 		assert.equal(rows[0].score, 0.5);
 	});
@@ -196,7 +219,7 @@ describe('ThinkQueue', () => {
 		assert.equal(planActionScore({
 			head: { verb: 'go_to', args: { name: 'EastGate' } },
 			then: { join: 'then', plan: { head: { verb: 'think', args: { about: 'the lock' } } } },
-		}), THINK_ABOUT_SCORE);
+		}), ACTION_THINK_SCORES.go_to);
 		assert.equal(planActionScore({
 			head: { verb: 'go_to', args: { name: 'EastGate' } },
 			then: { join: 'then', plan: { head: { verb: 'think', args: {} } } },
@@ -208,7 +231,7 @@ describe('ThinkQueue', () => {
 			head: { verb: 'wait', args: {} },
 			then: { join: 'then', plan: { head: { verb: 'think', args: { about: 'the lock' } } } },
 		});
-		const rows = q.tick(1, new Map(), 0);
+		const rows = q.tick(1, new Map());
 		assert.equal(rows.length, 1);
 		assert.equal(rows[0].score, THINK_ABOUT_SCORE);
 		assert.equal(rows[0].reason, 'action');
@@ -261,11 +284,66 @@ describe('ThinkQueue', () => {
 			hasHeard: true,
 		});
 		const catalogs = new Map([['Guard', cat]]);
-		const rows = q.tick(1, catalogs, 0);
+		const rows = q.tick(1, catalogs);
 		assert.equal(rows.length, 1);
 		assert.equal(rows[0].reason, 'watch');
 		q.clearOnce('Guard');
-		assert.equal(q.tick(1, catalogs, 0).length, 0);
+		assert.equal(q.tick(1, catalogs).length, 0);
+	});
+
+	it('default mayThink blocks while a plan is live; callback can allow it', () => {
+		const q = new ThinkQueue({ watchInterval: 100, processInterval: 0, maxParallel: 2 });
+		q.ensure('A', { skipHeartbeat: true });
+		q.beginPlan('A', {
+			head: { verb: 'go_to', args: { name: 'Gate' } },
+			then: { join: 'then', plan: { head: { verb: 'steal', args: { item: 'Loaf', from: 'Baker' } } } },
+		});
+		q.enqueueMajor('A');
+		assert.equal(q.tick(1, new Map()).length, 0);
+		q.mayThink = (ctx) => {
+			assert.deepEqual(ctx.verbs, ['go_to', 'steal']);
+			assert.equal(ctx.plan?.head.verb, 'go_to');
+			return ctx.reason === 'major';
+		};
+		q.enqueueMajor('A');
+		const rows = q.tick(1, new Map());
+		assert.equal(rows.length, 1);
+		assert.equal(q.allowThink(rows[0]), true);
+	});
+
+	it('withPriorityQueue is one shared queue to spread into agents', () => {
+		const think = withPriorityQueue({
+			watchInterval: 100,
+			processInterval: 0,
+			maxParallel: 2,
+			mayThink: ({ plan }) => !plan,
+		});
+		assert.equal(think.heartbeat, 0);
+		think.queue.ensure('A', { skipHeartbeat: true });
+		think.queue.enqueueMajor('A');
+		assert.equal(think.queue.tick(1, new Map()).length, 1);
+	});
+
+	it('simple queue is first come, first served', () => {
+		const q = new SimpleQueue({ watchInterval: 100, processInterval: 0, maxParallel: 1 });
+		q.ensure('Late', { skipHeartbeat: true });
+		q.ensure('Early', { skipHeartbeat: true });
+		q.enqueueMajor('Early');
+		q.enqueueMajor('Late');
+		const first = q.tick(1, new Map());
+		assert.equal(first.length, 1);
+		assert.equal(first[0].npcID, 'Early');
+		const second = q.tick(1, new Map());
+		assert.equal(second[0].npcID, 'Late');
+	});
+
+	it('simple queue does not let a later major jump the line', () => {
+		const q = new SimpleQueue({ watchInterval: 100, processInterval: 0, maxParallel: 1 });
+		q.ensure('Early', { skipHeartbeat: true });
+		q.ensure('Loud', { skipHeartbeat: true });
+		q.enqueueAction('Early', 'wander');
+		q.enqueueMajor('Loud');
+		assert.equal(q.tick(1, new Map())[0].npcID, 'Early');
 	});
 });
 

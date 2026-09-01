@@ -25,9 +25,26 @@ export class VerbRegistry {
 		return this;
 	}
 
-	remove(name:string):this {
-		this.verbs.delete(name);
+	remove(...names:string[]):this {
+		for (const name of names) {
+			this.verbs.delete(name);
+		}
 		return this;
+	}
+
+	/** Catalog names in `allow`, in catalog order. `null` / omit = this registry. */
+	view(allow?:readonly string[] | null):VerbRegistry {
+		if (allow == null) {
+			return this;
+		}
+		const wanted = new Set(allow);
+		const next = new VerbRegistry();
+		for (const spec of this.list()) {
+			if (wanted.has(spec.name)) {
+				next.add(spec.name, spec.args);
+			}
+		}
+		return next;
 	}
 
 	get(name:string):VerbSpec | undefined {
@@ -75,38 +92,42 @@ export class VerbRegistry {
 	}
 }
 
-/** Add core verbs to a registry. The core verbs are:
- * - go_to: move to a target by id
- * - follow: follow a target by id
- * - wander: wander randomly
- * - use: use an item on a target
- * - equip: equip an item
- * - unequip: unequip an item
- * - pick_up: pick up an item
- * - drop: drop an item
- * - say: say a message to a target
- * - wait: wait for a number of seconds; for is a one-shot watch until the next think
- * - remember: add a string to one's memory with optional string tags
- * - think: queue a follow-up think; about is optional
- * - set_goal: set a goal
- * - drop_goal: drop a goal
- * - set_identity: set one's own identity
- */
-export function registerCoreVerbs(registry:VerbRegistry):VerbRegistry {
-	return registry
-		.add('go_to', { name: 'id' })
-		.add('follow', { name: 'id' })
-		.add('wander', {})
-		.add('use', { item: 'id', target: 'id?' })
-		.add('equip', { item: 'id', slot: 'string?' })
-		.add('unequip', { slot: 'string' })
-		.add('pick_up', { name: 'id' })
-		.add('drop', { name: 'id' })
-		.add('say', { text: 'string', to: 'id?' })
-		.add('wait', { seconds: 'number?', for: 'string?' })
-		.add('remember', { content: 'string', tags: 'string[]?' })
-		.add('think', { about: 'string?' })
-		.add('set_goal', { goal: 'string', priority: 'number?' })
-		.add('drop_goal', { goal: 'string?' })
-		.add('set_identity', { name: 'string?', role: 'string?', traits: 'string[]?' });
+export const STOCK_MOVE_VERBS = ['go_to', 'follow', 'wander'] as const;
+export const STOCK_ITEM_VERBS = ['use', 'equip', 'unequip', 'pick_up', 'drop', 'give', 'examine'] as const;
+export const STOCK_MIND_VERBS = ['say', 'wait', 'remember', 'think', 'set_goal', 'drop_goal', 'set_identity'] as const;
+export const STOCK_VERBS = [...STOCK_MOVE_VERBS, ...STOCK_ITEM_VERBS, ...STOCK_MIND_VERBS] as const;
+export type StockVerb = (typeof STOCK_VERBS)[number];
+
+export const STOCK_VERB_ARGS:Record<StockVerb, VerbArgMap> = {
+	go_to: { name: 'id' },
+	follow: { name: 'id' },
+	wander: { for: 'string?', until: 'string?', seconds: 'number?' },
+	use: { item: 'id', target: 'id?' },
+	equip: { item: 'id', slot: 'string?' },
+	unequip: { slot: 'string' },
+	pick_up: { name: 'id' },
+	drop: { name: 'id' },
+	give: { item: 'id', to: 'id' },
+	examine: { name: 'id' },
+	say: { text: 'string', to: 'id?' },
+	wait: { seconds: 'number?', for: 'string?' },
+	remember: { content: 'string', tags: 'string[]?' },
+	think: { about: 'string?' },
+	set_goal: { goal: 'string', priority: 'number?' },
+	drop_goal: { goal: 'string?' },
+	set_identity: { name: 'string?', role: 'string?', traits: 'string[]?' },
+};
+
+/** Schema-only. Omit `verbs` to register the full stock set. Already-registered names are skipped. */
+export function registerStockVerbs(registry:VerbRegistry, ...verbs:StockVerb[]):VerbRegistry {
+	const list = verbs.length > 0 ? verbs : STOCK_VERBS;
+	for (const name of list) {
+		if (!(name in STOCK_VERB_ARGS)) {
+			throw new Error(`ArcDirector: '${name}' is not a stock verb`);
+		}
+		if (!registry.has(name)) {
+			registry.add(name, STOCK_VERB_ARGS[name]);
+		}
+	}
+	return registry;
 }

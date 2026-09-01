@@ -53,12 +53,12 @@ describe('pickSingleChatModel', () => {
 		assert.equal(picked, first);
 	});
 
-	it('honors an explicit request only if that id is in the chosen pool', () => {
+	it('honors an explicit request even if another model is in VRAM', () => {
 		const picked = pickSingleChatModel([
 			model(first, { state: 'loaded' }),
 			model(later),
 		], undefined, laterShort);
-		assert.equal(picked, first);
+		assert.equal(picked, later);
 	});
 });
 
@@ -70,6 +70,11 @@ describe('isThinkingModel', () => {
 		assert.ok(plain);
 		assert.equal(isThinkingModel(thinking), true);
 		assert.equal(isThinkingModel(plain), false);
+	});
+
+	it('does not list qwen on the preferred roster', () => {
+		assert.equal(PREFERRED_MODELS.some((id) => /qwen/i.test(id)), false);
+		assert.equal(MODEL_TIERS.some((t) => /qwen/i.test(t.id)), false);
 	});
 });
 

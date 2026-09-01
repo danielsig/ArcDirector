@@ -138,7 +138,7 @@ export function whereabouts(actor:GameObject):string {
 		const name = namedOf(near);
 		const way = doorOfBuilding(world, name);
 		const doorName = way ? namedOf(way) : 'the door';
-		return `You are outdoors, outside ${name}. To go inside, use ${doorName} and go_to(${name}). Do not go_to(${doorName}) after you are inside.`;
+		return `You are outdoors, outside ${name}. ${doorName} leads inside.`;
 	}
 	return 'You are outdoors.';
 }

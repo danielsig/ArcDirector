@@ -1,77 +1,228 @@
 # ArcDirector
 
-Game-agnostic and Engine-agnostic LLM powered NPC agents.
-
-Designed to be used with locally running LLMs.
-
-Covers NPC planning, memory, perception, chat, priority queue, reactivity heuristics, and local HTTP inference. No renderer, no physics, no coordinate system, no UI. The host supplies a world snapshot (as names and expressions) and functions to understand it and functions to execute NPC actions.
+A multi-agent runtime for LLM-powered characters: planning, memory, perception, talk, a priority think queue, and local HTTP inference. The host supplies the world. This package has no renderer, physics, coordinates, or UI.
 
 ```
 pnpm test
 pnpm demo      # live model, or ARC_DIRECTOR_MOCK=1
 ```
 
----
+## Getting started
 
-## Host contract
-
-You own the world. This library owns the mind.
-
-| You provide | The library |
-|-------------|-------------|
-| `InferenceProvider` (HTTP or fake) | Chat + optional embeddings |
-| `VerbRegistry` + `execute(step)` | Parse / validate `ActionPlan`, run built-in verbs |
-| `PerceptionRecipe` (pushed text + tools) | Prompt assembly, tool rounds, JSON plan |
-| `catalog(ctx)` → `buildCatalog(kernels)` | Watch language, `observe({ expr })` |
-| Distances, LOS, hp, inventory (optional kernels) | `isNear`, `approaching`, `isHurt`, … |
-| `TalkSense` (range / hear / face) | `TalkNet.say` → `HeardSpeech` events |
-| `MapSense` + `vision` (optional) | `see_map({ zoom })` — image + name legend, no coordinates |
-| A scheduler (`ThinkQueue` or your own) | Who thinks, scored from watches |
-
-Identity of an agent is `id` (string).
-
----
-
-## Quick start
+1. `new ArcDirector()` starts empty.
+2. Chain `with…` (one subsystem) and `add…` (lists). Order does not matter.
+3. `await start()` is the only assemble step (wires agents, probes the model,
+   checks kit names).
+4. `tick(dt, now)` each game frame. Do not call it while AI is paused.
 
 ```ts
-const provider = new HttpProvider(); // ARC_DIRECTOR_BASE_URL or http://127.0.0.1:1234/v1
-const verbs = registerCoreVerbs(new VerbRegistry());
-
-const agent = new Agent({
-	id: 'Watcher',
-	identity: { name: 'Watcher', role: 'Pays attention to who is nearby.', traits: ['alert'] },
-	goals: [{ text: 'Stay aware of others', priority: 1 }],
-	provider,
-	verbs,
-	recipe: {
-		push: {
-			scene: {
-				description: 'What you can see. Names only.',
-				gather: (ctx) => ctx.paragraph,
-			},
+const director = await new ArcDirector<HostCtx>()
+	.withLMStudioInference()
+	.addStockVerbs()
+	.withDefaultKit({ verbs: STOCK_VERBS })
+	.onVerb(host.do)
+	.addSense('scene', {
+		description: 'What you can see. Names only.',
+		gather: (ctx) => ctx.paragraph,
+	})
+	.withContext((id) => host.ctx(id))
+	.addAgent({
+		id: 'Watcher',
+		identity: {
+			name: 'Watcher',
+			role: 'Pays attention.',
+			traits: ['alert'],
 		},
-		tools: {},
-	},
-	context: () => host.ctx(),
-	execute: (step, ctx) => host.do(step, ctx),
-	catalog: (ctx) => buildCatalog(host.kernels(ctx)),
-	pinnedWatches: { hurt: 'isHurt(me)' },
-	heartbeat: 0, // ThinkQueue decides when to call tick
-});
+	})
+	.start();
 
-const plan = await agent.tick(now); // ActionPlan | null
+director.tick(dt, now);
 ```
 
-`remember`, `think`, `set_goal`, `drop_goal`, and `say` (when `TalkNet` is attached) run inside the agent. Every other verb goes to `execute`.
+`start()` returns `Promise<this>`. Every other chain method returns `this`. After a successful `start()`, `with*` throws `Error('ArcDirector already started')`. Lists stay open: `addAgent` / `removeAgent`, `addStockVerbs` / `addVerb` / `removeVerbs`, `addSense` / `addTool` / `removeSense` / `removeTool`. A failed start (no model, unknown kit name) may be retried; success then `start()` again is a no-op.
 
-Without `execute`, `tick` still returns a plan; the host runs it later and calls `ingestResult`.
+`start({ ignoreMissing: true })` logs unknown names via `onLog` instead of throwing.
+
+Scripts with no frame loop may use `runLoop(hz)` (returns a stop function). Games must not; they already have a tick.
 
 ---
 
-## Agent
+## Subsystems
 
-`Agent<HostCtx>` is one mind. `tick(gameTime)` may revise goals (strategic) and emit one `ActionPlan` (tactical).
+Each `with*` sets or replaces one slot. Omit the ones you do not need. The happy path omits `.withPriorityQueue()` (priority is the default). Stock verbs are opt-in via `addStockVerbs()`.
+
+### Inference
+
+How chat happens. `start()` rejects if there is no model (`onLog` can print it).
+
+| | |
+|--|--|
+| `withLMStudioInference(opts?)` | Default `http://127.0.0.1:1234/v1`, flash-attn load, pick a loaded chat model, set `vision`. Pass `baseURL: '/inference/v1'` when a page proxies LM Studio |
+| `withOllamaInference(opts?)` | Default `http://127.0.0.1:11434/v1`; pass `baseURL` if yours differs |
+| `withHttpInference(opts)` | Any OpenAI-compat base URL |
+| `withFakeInference(chat?)` | Tests; default canned `go_to` of a PascalCase name |
+| `withInference(provider)` | Your own `chat` / `embed` |
+
+Do not wrap HTTP in a second in-flight queue. The mind queue’s `inFlight` is the cap. `.onLog` wraps chat once (timings + content) so the host does not wrap `chat`.
+
+Live: `setModel`, `model`, `vision`, `catalog`, `infer`.
+
+Inference opts: `baseURL`, `model`, `apiKey`, `enableThinking`, `reasoningEffort`, `thinkingBudget`, `batchThinks`, `batchWait`. If you omit `apiKey`, `ARC_DIRECTOR_API_KEY` or `OPENAI_API_KEY` is used. Thinking/CoT is off unless `enableThinking` is true. A `thinkingBudget` caps CoT tokens when thinking is on. Preferred chat model is Muse Glimmer (speculative decode). Native LM Studio load reuses a matching instance and unloads extra copies of it. Parallel thinkers are a queue cap, not load copies. If the preferred model is not already loaded, every other loaded instance is unloaded first so it has VRAM; a failed load unloads any remaining residents and retries. `batchThinks` / `batchWait` are scheduling (same as the queue); the queue's values win if both are set.
+
+### Mind queue
+
+Who thinks next. Default is priority (watch / verb scores + recency).
+
+| | |
+|--|--|
+| `withPriorityQueue(opts?)` | Highest score first |
+| `withSimpleQueue(opts?)` | FIFO |
+| `withQueue(instance)` | Your `MindQueue` |
+
+`tick(dt, now)` is **sync**. Sample catalogs, `queue.tick`, buffer ready minds. `batchThinks` (default true) holds new starts while any think is in flight — a new prompt's prefill stalls decode of the rest — then starts up to `maxParallel` together when idle, or after `batchWait` seconds (default 20, same clock as `now`). Set `batchThinks: false` to fill a free slot immediately. HTTP and `enact` continue across frames. `dt` / `now` are **game time**.
+
+`mayThink` (on queue opts): idle / live plan / major / watch score. If a live plan exists and think is allowed, the director calls `onAbortPlan(id)` and skips that mind this frame (host motor interrupt).
+
+Standalone `withPriorityQueue()` spread helpers remain for `new Agent({...})` tests. They are not the documented path.
+
+### Verbs
+
+| | |
+|--|--|
+| `addStockVerbs(...verbs)` | Schema only. No args = all stock verbs. Pass names to opt in to a subset: `addStockVerbs(...STOCK_MOVE_VERBS)` is `go_to` / `follow` / `wander`; `STOCK_ITEM_VERBS` is `use` / `equip` / `unequip` / `pick_up` / `drop` / `give` / `examine`; `STOCK_MIND_VERBS` is `say` / `wait` / `remember` / `think` / `set_goal` / `drop_goal` / `set_identity`. Same name again is skipped. |
+| `addVerb(name, args, handler?)` | Schema + optional world function. Same name again binds/replaces the handler. |
+| `removeVerbs(...names)` | Drop catalog schemas and named handlers. Missing names are skipped. Empty rest is a no-op. |
+| `withDefaultKit(kit)` | Object or `(ctx) => kit` used when `addAgent` omits `kit`. Same fetch-every-tick rules. |
+| `onVerb(fn)` | Catch-all. Typical: `addStockVerbs().onVerb(host.do)` |
+| `withVerbs(registry)` | Replace the whole registry |
+
+The catalog is shared (`addStockVerbs` / `addVerb` / `removeVerbs`). What a mind may use is its **kit**, fetched every tick: a plain object (mutate it, or use getters) or `(ctx) => kit`. Registering a verb does not grant it. `withDefaultKit` is the common grant; per-agent `kit` overrides it. Fetching every tick is cheap; **changing** the grant is not, because the verb list is in the system prefix ([Prompt prefix](#prompt-prefix)).
+
+```ts
+type Kit = { verbs?: string[]; senses?: string[]; tools?: string[] };
+
+director.withDefaultKit({ verbs: STOCK_VERBS });
+director.addAgent({ id: 'Holt' }); // default kit
+director.addAgent({ id: 'Baker', kit: vendorKit }); // same object; mutate later
+director.addAgent({ id: 'Cook', kit: (ctx) => kitFor(ctx) }); // callback
+```
+
+`verbs` omitted or `[]` = none. `senses` / `tools` omitted = all registered senses / tools; `[]` = none. `start()` throws if a kit names a verb, sense, or tool that is not registered (`recall` / `observe` always; `earshot` with talk; `see_map` with map and vision).
+
+**Senses** are English always in the user block (`scene`, inventory, events). **Tools** are on-demand (`recall`, `observe`, `see_map`). Kit `senses` / `tools` lists are allowlists over what you registered, not extra gatherers.
+
+Prompt, JSON schema, and parse use the kit. A step whose verb is not available fails closed. `agent.verbs` is the catalog; `agent.activeVerbs()` is this tick. Assign `agent.kit` when the grant actually changes, not every frame.
+
+Handlers receive a **`VerbCall`**: `{ verb, args, agent, ctx }`. The full plan is on `agent.lastPlan` / `agent.planIndex`, not on the call. Per-verb handlers ignore `verb`; `addVerb('give', { item: 'id', to: 'id' }, host.give)` already bound the name.
+
+Mind-internal verbs never hit the host: `remember`, `think`, `set_goal`, `drop_goal`, `set_identity`, and `say` when TalkNet is attached.
+
+### Perception
+
+Senses every think in the user block; tools on demand. `addSense` / `addTool` replace the same name and stay open after `start()`.
+
+| | |
+|--|--|
+| `withSight(look)` | Stock sense `sight`. callback returns a `Sight` of `SeenObject[]` (`at` vectors). |
+| `withInventory(look)` | Stock sense `carrying`. callback returns an `Inventory` bag. |
+| `withLineOfSight((aID, bID) => boolean)` | One occlusion callback for sight, talk `canSee`, and watch `hasSightline`. |
+| `addSense(name, spec)` | Host-only sense. `spec` is `{ description, gather }`. |
+| `addTool(name, spec)` | `spec` is `{ description, parameters, handler }`. |
+| `removeSense(...names)` | Missing names are skipped. Empty rest is a no-op. |
+| `removeTool(...names)` | Same. |
+
+`Sight.self.id` is the name. Noun is `id`. Omit `withLineOfSight` and every body in `look()` is seen. Omit `addTool` and the host adds no tools. Built-in `recall` / `observe` / `see_map` still appear when those subsystems are on.
+
+### Context and kernels
+
+The library knows minds by **id**. It does not know your `World`.
+
+- **`withContext((id) => ctx)`:** find this mind’s body. Perception `gather(ctx)` and verb handlers use it.
+- **`withKernels((ctx) => kernels)`:** measurements for watches (`isHurt(me)`, `others.nearby()`). The library always `buildCatalog`. Director owns each agent’s `SampleCache` (overwrites `cache`; you do not commit it). It also overwrites `hasHeard` / `prevThought` / `prevActions` from that mind, and `canSee` when `withLineOfSight` is set.
+
+Verbs need objects. Watches need measurements. Same `ctx`, two jobs.
+
+### Talk and map
+
+- **`withTalk(sense, onSpoke?, config?)`:** range and routing. Library routes `say()`. Line of sight is `withLineOfSight`.
+- **`withMap(sense)`:** host paints `see_map` pictures; library stamps a name legend (no coordinates). Omitted unless vision is on.
+
+### Agents
+
+`addAgent(spec: AgentSpec)` before or after `start()`. `removeAgent(id)` drops a live mind.
+
+```ts
+type AgentSpec = {
+	id: string;
+	identity: { name: string; role: string; traits?: string[] };
+	goals?: Goal[];
+	memories?: MemoryDraft[];
+	watches?: WatchInput;
+	pinnedWatches?: WatchInput;
+	watchesWritable?: boolean;
+	skipHeartbeat?: boolean;
+	skipMajor?: boolean;
+	rank?: number; // tie-break after watch score
+	kit?: Kit | ((ctx) => Kit); // fetched every tick; omit = withDefaultKit
+};
+```
+
+`director.agent(id)`, `director.agents()`, `exportAgents` / `restoreAgents`, `pushEvent`.
+
+Identity is who they are. Do not rewrite name, role, or traits to recap a mood, an order, or this think. That belongs in goals and events ([Prompt prefix](#prompt-prefix)).
+
+### Prompt prefix
+
+Each think is two messages. The **system** message is identity, standing instructions, and the kit’s verb list (plus a `see_map` hint when vision is on). The **user** message is everything that is supposed to change: scene, carrying, events, goals, pinned memory, watches, last action.
+
+Local servers (LM Studio, llama.cpp, Ollama) keep a **KV cache**: the attention state for a run of tokens. If the next request starts with the same tokens as a recent one, they reuse that state and skip the work. Reuse only holds while the tokens match from the start. The first token that differs, they recompute from there through the end, including the long user block you meant to be cheap. One early edit costs a full prompt reload.
+
+Keep the system side still across thinks:
+
+- **Identity:** lasting who. A new role is a life change, not “I am angry” or “Player told me to wait.” The model is already told not to rewrite identity to recap a moment; the host should not either.
+- **Kit:** lasting grant. Returning the same kit every tick is fine. Flipping verbs, senses, or tools every tick (gag for one line, vendor only while the player looks, unconscious = empty kit) busts the prefix for that mind. A gag or a stall that lasts a scene is one change, then leave it. Unconscious should skip the think (`mayThink`), not rewrite the kit for a frame.
+- **Vision / `see_map` / you-mark:** leave them on or off for the session. The library already keeps tools listed (`tool_choice: none`) on plan turns so follow-ups *inside* a think share a prefix.
+
+`addVerb` / `removeVerbs` rewrite the shared verb catalog. `addTool` / `removeTool` change the tool list on the request. Same cost as changing the kit if those lists are in the prefix.
+
+---
+
+## Full example
+
+```ts
+const director = await new ArcDirector<HostCtx>()
+	.withQueue(new MyMindQueue())
+	.withInference(myProvider)
+	.addStockVerbs()
+	.addVerb('give', { item: 'id', to: 'id' }, host.give)
+	.addVerb('steal', { item: 'id', from: 'id' }, host.steal)
+	.withDefaultKit({ verbs: [...STOCK_VERBS, 'steal'] })
+	.onVerb(({ verb }) => ({ ok: false, verb, reason: `unhandled ${verb}` }))
+	.withSight((ctx) => host.look(ctx))
+	.withInventory((ctx) => host.inventory(ctx))
+	.withLineOfSight((a, b) => host.canSee(a, b))
+	.withKernels((ctx) => host.kernels(ctx))
+	.withTalk(host.talkSense)
+	.withMap(host.mapSense)
+	.withContext((id) => host.ctx(id))
+	.onAbortPlan((id) => host.interrupt(id))
+	.onLog((entry) => hud.push(entry))
+	.addAgent({
+		id: 'Captain',
+		identity,
+		goals,
+		pinnedWatches: { hurt: 'isHurt(me)' },
+	})
+	.start();
+```
+
+---
+
+## Agent (low-level)
+
+`new Agent({...})` is for unit tests and advanced hosts. Getting started does not use it.
+
+`Agent<HostCtx>` is one mind. `tick(gameTime)` may revise goals (strategic) and emit one `ActionPlan` (tactical). If `execute` is set, `tick` walks the plan unless `autoEnact` is false. `enact` needs `execute`. `planIndex` is the 0-based step currently running inside `enact`.
 
 ### When tactical runs
 
@@ -80,252 +231,176 @@ Without `execute`, `tick` still returns a plan; the host runs it later and calls
 | First `tick` | Always thinks |
 | `lastResult.interrupted` | Thinks |
 | Pending event with `major: true` | Thinks |
-| `heartbeat <= 0` | Thinks if no live plan |
+| `heartbeat <= 0` | Thinks (the queue already picked this mind) |
 | Else | Thinks if `gameTime - lastTacticalAt >= heartbeat` |
 
-Defaults: `heartbeat` 30, `strategicInterval` 180 (same time unit as `gameTime`; typically seconds). `strategicInterval <= 0` disables the periodic pass. Major pending events still trigger a strategic pass (goals; identity only if who they are actually changed).
+Defaults: `heartbeat` 30, `strategicInterval` 180. `strategicInterval <= 0` disables the periodic pass.
 
-Tactical: assemble pushed perception → optional memory intrusion → tools (`recall`, `observe`, `earshot`, `see_map` when the host maps and the model can see, plus recipe tools) up to `toolRoundCap` → JSON `ActionPlan`. System prompt is identity + standing instructions (verbs, JSON shape); goals, pinned memory, watches, and perception sit in the user block so local servers can reuse the KV prefix. The same JSON may include lasting `goals` (or `set_goal`). `identity` / `set_identity` is for a rare, lasting who-you-are change, not orders, weather, or nicknames. A new `name` only applies when `role` also changes. Bad plans retry `planRetryCap` times (default 0). Major pending events also trigger a strategic pass that may revise goals (and identity only if needed), even if `strategicInterval` is 0.
+Tactical: assemble senses → optional memory intrusion → tools (`recall`, `observe`, `earshot`, `see_map` when the host maps and the model can see, plus host tools) up to `toolRoundCap` → JSON `ActionPlan`. System vs user split is under [Prompt prefix](#prompt-prefix).
 
 ### Options
 
 | | Default | |
 |--|---------|--|
-| `model` | `ARC_DIRECTOR_MODEL` or first preferred | Chat model id |
-| `embedModel` | `ARC_DIRECTOR_EMBED_MODEL` | Optional embeddings |
+| `model` | first preferred | Chat model id |
+| `embedModel` | none | Optional embeddings |
 | `toolRoundCap` | 2 | Tool turns before the plan must appear |
 | `planRetryCap` | 0 | Extra turns after a bad plan |
 | `maxGoals` | 5 | Trim by priority |
 | `intrusionThreshold` / `intrusionCooldown` | 0.55 / 45 | Unbidden memory into the prompt |
 | `recallK` | 5 | Default `recall` hit count |
 | `hideObserve` | false | Omit the built-in `observe` tool |
-| `map` | — | Host snapshots for `see_map`. Omitted unless `vision` is also on. `map.you` is the self pictogram (default `❌`) |
-| `vision` | heuristic | `true` / `false` for image input. `false` never offers `see_map` |
-| `watches` / `pinnedWatches` | `{}` | Name → expr dicts. See [Watches](#watches) |
-| `watchesWritable` | true | LLM may add / edit / remove extra watches, or replace all extras, in the plan JSON. Pinned watches are never writable. |
+| `map` | none | Host snapshots for `see_map` |
+| `vision` | heuristic | `true` / `false` for image input |
+| `watches` / `pinnedWatches` | `{}` | Name → expr dicts |
+| `watchesWritable` | true | LLM may add / edit / remove extra watches |
 
-`pushEvent` queues text for the next think (`major` wakes immediately). `remember(text, tags)` writes episodic memory (embeds when the provider can).
-
-`toJSON` / `fromJSON` round-trip identity, goals, memory, watches, and last plan. `fromJSON` merges host `pinnedWatches` with saved pins (host first, by name). Old saves that stored watches as a list of `{ name, expr }` or bare expr strings still load (`watch_1`, …).
+`pushEvent` queues text for the next think (`major` wakes immediately). `remember(text, tags)` writes episodic memory. `toJSON` / `fromJSON` round-trip identity, goals, memory, watches, and last plan.
 
 ---
 
-## Think queue
+## Think queue (details)
 
-`ThinkQueue` picks who may call `agent.tick`. It does not call the model.
+Each tick: accumulate time → sample watches every `watchInterval` (0.25) → emit rows every `processInterval` (1) → buffer ready minds. With `batchThinks` (default true) the director starts a wave of up to `maxParallel` (default 2) only when `inFlight` is 0, or after `batchWait` seconds (default 20) if someone is still generating. `batchThinks: false` fills a free slot as soon as one opens. Set these on `withPriorityQueue` or `withHttpInference` (queue wins if both set). Walking a plan does not count as in flight. Reasons: `watch`, `major`, `action`, `heartbeat`.
 
-```ts
-queue.ensure(id);
-queue.setWatches(id, agent.effectiveWatches());
-queue.setAiOn(id, true);
-
-const catalogs = new Map([[id, buildCatalog(kernels)]]);
-const rows = queue.tick(dt, catalogs, httpInFlight);
-for (const row of rows) {
-	queue.clearOnce(row.npcID); // drop wait(for) from the previous think
-	await agents.get(row.npcID)?.tick(now);
-	queue.noteResult(row.npcID, stalled);
-	queue.enqueuePlan(row.npcID, plan, ok); // after the plan; skip if interrupted
-}
-kernels.cache.commit(); // after sampling; approaching / isHPFalling need a previous frame
-```
-
-Each tick: accumulate time → sample watches every `watchInterval` (0.25) → emit rows every `processInterval` (1) → at most `maxParallel - inFlight` minds (default `maxParallel` 2). Reasons: `watch`, `major` (`enqueueMajor`), `action` (`enqueuePlan` after a plan), `heartbeat`.
-
-After a plan, call `enqueuePlan(id, plan, ok)` unless it was interrupted. Scores are listed under [Plans](#plans). Call `queue.clearOnce(id)` when that mind starts a think, and `queue.armOnce(id, expr)` when `wait(for)` runs.
+`mayThink` is optional. Omit it and a live plan blocks a new think. The callback gets `npcID`, `reason`, `score`, `rankedScore`, the live `plan` (or `null`), and `verbs` on that plan.
 
 Watch score: boolean true → `trueScore` (0.51); numbers in 0–1 used as-is; `> 1` clamps to 1 and scolds. Score must exceed `epsilon` (0.05) to enqueue.
 
-Ranking multiplies that score by a recency scale: just after a think it is `trueScore` (0.51); it lerps to 1 by `heartbeatStart / 2` (60s at the default 120). Never-thought minds stay at 1. Hosts that keep a ready list should rank with `queue.rankScore(id, row.score)`.
+Priority ranking multiplies that score by a recency scale: just after a think it is `trueScore` (0.51); it lerps to 1 by `heartbeatStart / 2` (1.5s at the default 3). Never-thought minds stay at 1.
 
-Heartbeat (per mind): starts at `heartbeatStart` (120), clamped `[heartbeatMin, heartbeatMax]` (30–300). After a think, `noteResult(id, stalled)`: `'auto'` stretches the interval when stalled, shrinks when not; or pass a function / `false`.
-
-`inFlight` should count **HTTP** calls only, so a busy provider does not starve the queue.
+Heartbeat (per mind): a low-priority (0.001) pulse every `heartbeatStart` (3s), clamped `[heartbeatMin, heartbeatMax]` (3–300). Interval is fixed unless you set `heartbeatAdjust: 'auto'` (stretch on stall, shrink otherwise) or a callback.
 
 ---
 
 ## Watches
 
-Standing conditions. Evaluated against a `Catalog` built from `HostKernels`. Stored as a dict: short **name** → **expr**. Adding a watch — from the model or from code — requires a name.
+Standing conditions against a `Catalog` from `HostKernels`. Dict: short **name** → **expr**.
 
-**Pinned** watches (`pinnedWatches`) are host-authored. They always evaluate, always appear in the prompt as required, and the LLM cannot add over, edit, or remove them (`addPinnedWatch` is host-only). Extra watches live in `watches`.
+**Pinned** watches (`pinnedWatches`) are host-authored. The LLM cannot add over, edit, or remove them. Extra watches live in `watches`. When `watchesWritable`, the plan JSON may include `addWatches` / `editWatches` / `removeWatches`, or replace extras with `"watches": { … }`.
 
-When `watchesWritable`, the plan JSON may include:
-
-```json
-"addWatches": { "theft": "some(events.filter(\"theft\").nearby(16))" },
-"editWatches": { "theft": "..." },
-"removeWatches": ["theft"]
-```
-
-Or replace every extra at once with `"watches": { "theft": "..." }` (`{}` or `[]` clears extras). Pinned watches are never in that object’s effect.
-
-If both a full `watches` dict and add/edit/remove are present, replace runs first, then the ops (remove, edit, add). `watchesWritable: false` ignores the fields. Lists of `{ name, expr }` (and `id` as an alias for `name`) still parse.
-
-Code: `addWatch(name, expr)`, `editWatch(name, expr)`, `removeWatch(name)` — all refuse pinned names. `addPinnedWatch` is for hosts.
-
-`effectiveWatches()` = pin then extra exprs (for `ThinkQueue.setWatches`). `watchList()` returns the merged dict (pins first).
-
-Language looks like JS calls; it is not a JS subset. Bindings: `me`, `others`, `items`, plus host names (`bindings`) and optional `hasHeard`, `prevThought`, `prevActions`.
+Language looks like JS calls; it is not a JS subset. Bindings: `me`, `others`, `items`, plus host names (`bindings`). `hasHeard`, `prevThought`, and `prevActions` come from the mind when you go through `ArcDirector` (unabsorbed `HeardSpeech`, last think, last `ActionResult`). Pass them yourself only to standalone `buildCatalog`.
 
 ```
 hasHeard || some(others.nearby().approaching())
 isHurt(me)
 isNear(me, Other, 16)
-distance(me, Target)         // wrap in clamp / softClamp for a 0–1 score
-i is "marked"                // id, name, or tag
+distance(me, Target)
+i is "marked"
 ```
 
 | | |
 |--|--|
-| Relations (two entities) | `distance`, `isNear(a, b)` / `isNear(a, b, r)`, `isApproaching`, `isDeparting`, `hasSightline`, `hasJustSeen`, `hasLostSight`, `facing`, `isFacing` (cos > √2/2), `isBehind` |
-| List filters | `others.nearby()`, `.nearby(16)`, `.approaching()`, `.departing()` — also `events.filter("alarm").nearby(16)` |
-| Lists | `filter` / `find` / `some` / `all` take a predicate **or** a string needle; `map`, `sortBy`, `count`, `includes`, `first`, `max` / `min` / `maxBy` / `minBy`, `sum`, `avg`, `reduce` |
-| Logic | `&&` / `\|\|` on bools are and/or; on numbers, min/max. Gate analog with `*`. Ternary `? :`. `??` coalesces **absent** only (keeps `0` and `false`). `!` / `!!`. Dot on absent does not throw. |
-| Host extras | `hp` / `maxHP`, `isHurt`, `isHPFalling`; `isCarrying`; `isOpen` / `hasJustOpened` — only if you plugged the kernel |
+| Relations | `distance`, `isNear`, `isApproaching`, `isDeparting`, `hasSightline`, `hasJustSeen`, `hasLostSight`, `facing`, `isFacing`, `isBehind` |
+| List filters | `others.nearby()`, `.nearby(16)`, `.approaching()`, `.departing()` |
+| Lists | `filter` / `find` / `some` / `all`, `map`, `sortBy`, `count`, `includes`, `first`, `max` / `min`, `sum`, `avg`, `reduce` |
+| Logic | `&&` / `\|\|`, `*`, ternary, `??` (absent only), `!` / `!!` |
+| Host extras | `hp` / `maxHP`, `isHurt`, `isHPFalling`; `isCarrying`; `isOpen` / `hasJustOpened` |
 
 Identifiers: leading acronyms are lowercase (`id`, `hp`, `npc`); later in a name they stay caps (`maxHP`, `npcID`).
 
-`observe({ expr })` evaluates once and stringifies (host `stringifierKind` + `stringifiers`). Standing conditions belong in watches, not observe.
-
-Commit `SampleCache` after each watch sample so motion / hp / open deltas see a previous value.
+`observe({ expr })` evaluates once and stringifies. Standing conditions belong in watches.
 
 ---
 
 ## Catalog kernels
 
-`buildCatalog(host)` wires natives from what you pass. Omit a kernel and those functions are absent.
+`buildCatalog(host)` wires natives from what you pass. Omit a kernel and those functions are absent. `withKernels` is the public path; `buildCatalog` stays for tests.
 
 ```ts
 type HostKernels = {
 	me: ExprEntity;
 	others: ExprEntity[];
 	items: ExprEntity[];
-	cache: SampleCache;
+	cache: SampleCache;           // director injects this
 	bindings?: Record<string, ExprVal>;
 	hostFns?: Record<string, NativeFn>;
 	distance?: (a, b) => number | undefined;
-	nearRadius?: number;          // enables isNear / nearby
-	canSee?: (a, b) => boolean;
-	facing?: (a, b) => number;    // cosine; else isFacing?: boolean
+	nearRadius?: number;
+	canSee?: (a, b) => boolean;   // director overwrites when withLineOfSight
+	facing?: (a, b) => number;
 	inventory?: (who) => ExprEntity[];
 	hp?: (who) => { hp: number; maxHP: number } | undefined;
 	isOpen?: (who) => boolean | undefined;
-	hasHeard?: boolean;
-	prevThought?: { secondsAgo: number };
-	prevActions?: { secondsAgo: number; isOk: boolean; reason: string; verb: string }[];
+	hasHeard?: boolean;           // director injects
+	prevThought?: { secondsAgo: number }; // director injects
+	prevActions?: {               // director injects
+		secondsAgo: number;
+		isOk: boolean;
+		reason: string;
+		verb: string;
+	}[];
 	stringifiers?: Stringifiers;
-	stringifierKind?: (entity) => StringifierKind; // default `entity`
+	stringifierKind?: (entity) => StringifierKind;
 };
 ```
 
-`ExprEntity`: `{ id, name?, tags, fields? }`. Space enters expressions only through host callbacks (`distance`, `facing`, `canSee`).
+Space enters expressions only through host callbacks (`distance`, `facing`, `canSee`).
 
 ---
 
 ## Plans
 
-A plan is a chain of steps:
-
 ```ts
 { head: { verb: 'go_to', args: { name: 'Target' } }, then?: { join, plan } }
 ```
 
-Joins: `then_if_ok` (`&&`), `then` (`;`), `then_if_err` (`||`). At most four steps. `runPlan` walks the chain; `interrupted` stops it.
-
-`think()` is always moved to the end. Several thinks merge (their `about` strings concatenate). That last think still runs if an earlier `&&` failed, unless the body was interrupted.
-
-`wait(seconds?, for?)` parks. `for` is a one-shot watch in the same language as standing watches — sampled, can wake the mind, dropped on the next think (`armOnce` / `clearOnce`). It is not a named extra watch. A `wait` without `for` is just idle.
-
-`registerCoreVerbs` is optional: `go_to`, `follow`, `wander`, `use`, `equip`, `unequip`, `pick_up`, `drop`, `say`, `wait`, `remember`, `think`, `set_goal`, `drop_goal`, `set_identity`. `VerbRegistry.add(name, args)` — kinds `id` / `string` / `number` / `string[]`, optional with `?`.
-
-`remember`, `think`, `set_goal`, `drop_goal`, `set_identity`, and `say` (when `TalkNet` is attached) run inside the agent. Everything else goes to `execute`. If you run the plan yourself, `perform` those mind steps and `noteVerb` the world ones, then `ingestResult`.
+Joins: `then_if_ok` (`&&`), `then` (`;`), `then_if_err` (`||`). At most four steps. `think()` is always moved to the end. `wait(seconds?, for?)` parks; `for` is a one-shot watch.
 
 `ActionResult`: `{ ok, interrupted?, reason?, verb? }`.
 
 ### Follow-up think
 
-After a plan, `enqueuePlan` uses the **highest** score among steps **after** the last `wait(for)`. `steal ; wait(for=…) ; go_to` scores as `go_to`. A `wait` without `for` does not cut. Failure is at least 0.3. Override or add verbs with `actionScores`. `skipMajor` does not drop these.
+After a plan, `enqueuePlan` uses the **highest** score among steps **after** the last `wait(for)`. Failure is at least 0.3. Override with `actionScores`. 0 means no follow-up on success.
 
 | Verb | Score |
 |------|------:|
 | `steal` | 0.95 |
+| `go_to` | 0.8 |
 | `use` | 0.65 |
 | `give` / `buy` / `sell` / `pick_up` | 0.6 |
 | `drop` | 0.55 |
 | `think(about)` | 0.55 |
-| `go_to` / `equip` / `unequip` | 0.5 |
-| `set_goal` | 0.45 |
+| `equip` / `unequip` | 0.5 |
+| `set_goal` / `remember` | 0.45 |
 | `think()` | 0.35 |
 | `wander` | 0.3 |
 | `say` | 0.25 |
 | `drop_goal` | 0.2 |
-| `wait` / `rest` / `remember` / `follow` | 0 |
-
-0 means no follow-up on success.
+| `wait` / `rest` / `follow` | 0 |
 
 ---
 
 ## Memory
 
-`MemoryStore`: episodic / semantic / identity. Pinned rows skip eviction and go in the **user** block (with goals and perception) so the system prefix can stay byte-stable for local KV cache. Episodic cap `maxEpisodic` (256) drops oldest unpinned.
-
-Heard speech (and other non-`action_result` events) is also copied into a **short-term** buffer shown every think: last 8 lines, older ones folded into an `Earlier:` summary. That buffer survives after the one-shot event inbox is drained, so an NPC asked "what did I just say?" still knows. `recall` returns those recent lines first, then scored episodic hits.
-
-`recall` scores cosine × recency + tag hits. `intrusion` may inject one emotional or tag-matching row into the user block (`[unbidden: …]`).
+`MemoryStore`: episodic / semantic / identity. Pinned rows skip eviction and go in the user block. Each think also injects `recallK` (5) unpinned hits scored by cosine (if embeddings exist) plus lexical overlap and tag hits, so speech and `remember()` facts show up without a tool call. Episodic cap `maxEpisodic` (256). Heard speech is copied into a short-term buffer (last 8 lines) and into episodic memory with name tags. Sight names persist as last-seen semantic rows. `remember(content)` writes semantic memory. `intrusion` may inject one extra unbidden row.
 
 ---
 
 ## Talk
 
-`TalkNet` is name-only. You implement `TalkSense`: `inRange`, `others`, optional `canSee`, `clearHear`, `names`, `face`, `approach`.
+`TalkNet` is name-only. Implement `TalkSense`: `inRange`, `others`, optional `canSee`, `clearHear`, `names`, `face`, `approach`.
 
-Each think, the prompt lists who is in talking range. `say(to)` is only valid for those names. `canSay(speaker, to)` is the same check without speaking. The `earshot` tool lists names, or `earshot({ to })` returns an error if that name is out of range (no speech).
-
-If the model still emits a `say` plan whose audience is out of range, the library **does not speak**. It feeds the miss back on the same thread (`sayRangeHint`) so the model can `go_to` them and continue. A `go_to` then `say` chain is allowed — only the **head** step is preflighted. Broadcast with nobody nearby also fails closed (`no one in earshot`).
-
-`say(speakerID, text, to?)` delivers `HeardSpeech` events when `canSay` is ok. Out of clear-hear range, text is muffled and listeners are told to `go_to` the speaker. A muffled eavesdrop is not major unless the line names them (`names`, their id, or a short role title). After a successful say, TalkNet may ask the host to face and approach (default on).
-
-Names that are not agents can still be addressed if `inRange` is true.
+Each think, the prompt lists who is in talking range. `say(to)` is only valid for those names. Out of range, the library does not speak; it feeds `sayRangeHint` so the model can `go_to` them. Out of clear-hear range, text is muffled.
 
 ---
 
 ## Map
 
-`see_map({ zoom })` is omitted unless **both** are set: a host `map.snapshot` and `vision` (or a catalog/id that `isVisionModel` accepts). Do not advertise a see_map that comes back text-only.
+`see_map({ zoom })` is omitted unless **both** are set: a host `map.snapshot` and `vision`. `zoom` is 0..1 (1 close, 0 whole land). The host paints; the library stamps symbols and returns a legend of names only, no coordinates. Default you-mark is `❌`.
 
-The English scene already names nearby things. Prompts tell the model **not** to call see_map unless that text is not enough. Every look calls `map.snapshot(npcID, zoom, prev?)`. `prev` is the last picture (`image`, `zoom`, `timestamp`, optional map `x`/`y`). Return `{ image: prev.image }` to keep it — the library returns the same legend and **does not** inject another image.
-
-`zoom` is 0..1: **1** is close around the agent, **0** is the whole loaded land, values in between crop between those. The host paints the picture and supplies marks (`symbol`, `description`, map `x`/`y`). The library stamps those symbols and returns a legend `❌ = you, 🎚️ = MillLever, 🏠 = Cottage` — names only, no coordinates. Set `map.you` to the same pictogram the host stamps so the standing prompt matches the legend (default `❌`). The tool result is that JSON; a follow-up user message carries the image parts on a fresh look only.
-
-If `toolRoundCap` is 0, an enabled see_map still gets **one** tool round (and only the `see_map` tool is advertised). Tool defs stay on later turns of that think with `tool_choice: "none"` so the KV prefix does not rewrite. Raise the cap to mix see_map with `recall` / `earshot` / recipe tools.
-
-Plans stay `go_to(MillLever)`. Never put numbers in the legend or the prompt.
+If `toolRoundCap` is 0, an enabled see_map still gets **one** tool round.
 
 ---
 
 ## Perception helpers
 
-Optional English scene dump for a pusher — not required to use `Agent`.
+- `formatSight(sight: Sight)` writes what character is seeing.
+- `formatInventory(bag)` writes what character is carrying.
 
-`describeScene(input)` takes tagged objects with host `describe` callbacks, LOD layers, and relationship stringifiers; it returns prose with quantized distances. Host `distance(a, b)` is the metric; optional `bearing(obj)` fills `DescribeCtx` with relative words (default `away`). Optional `pluralize` labels tag crowds. Default is `basicPluralize` (`city`→`cities`, `city's`→`cities'`, `cactus`→`cacti`, `bus`→`buses`, else append `s`). Hosts import it and wrap irregulars: `pluralize: (w) => w === 'sheep' ? 'sheep' : basicPluralize(w)`. Built-ins: `builtinLodLayers`, `attachmentStringifier`, `proximityPairStringifier`, `tagCrowdStringifier`.
+> [!NOTE]
+> Use `withSight` / `withInventory` rather than calling these functions.
 
-The dump is names and relations. The host owns where things sit.
-
----
-
-## Inference
-
-`InferenceProvider`: `chat(req)` and optional `embed(texts, model?)`.
-
-| | |
-|--|--|
-| `HttpProvider` | Local HTTP chat. Uses `/v1/chat/completions` by default. If `GET {root}/api/v1/models` returns a native catalog, it loads with `POST /api/v1/models/load` (flash attention, GPU KV cache, eval batch size, optional `parallel`) and chats through `/v1/responses`. Each agent id keeps multiple `response_id`s; the next call sends `previous_response_id` for the longest stored exact prefix of the current messages. Default base `ARC_DIRECTOR_BASE_URL` or `OLLAMA_HOST` or `http://127.0.0.1:1234/v1`. |
-| `withQueue(provider, n)` | Cap in-flight HTTP. |
-| `FakeProvider` | Tests; `goToNamedInteractable()` is a canned planner. |
-| `fetchModelCatalog` / `pickSingleChatModel` | Prefer an already-loaded chat model. |
-
-Env (all optional): `ARC_DIRECTOR_BASE_URL`, `ARC_DIRECTOR_API_KEY` / `OPENAI_API_KEY`, `ARC_DIRECTOR_MODEL`, `ARC_DIRECTOR_EMBED_MODEL`, `ARC_DIRECTOR_ENABLE_THINKING`, `ARC_DIRECTOR_REASONING_EFFORT`, `ARC_DIRECTOR_THINKING_BUDGET`. Thinking/CoT is off unless you enable it — a thinking budget on every tick is expensive.
 
 ---
 
@@ -334,12 +409,13 @@ Env (all optional): `ARC_DIRECTOR_BASE_URL`, `ARC_DIRECTOR_API_KEY` / `OPENAI_AP
 ```
 src/
   index.ts           public API
+  director/          ArcDirector facade, AgentSpec, VerbCall
   agent/             Agent, prompts, TalkNet, runPlan
-  think/             ThinkQueue
+  think/             MindQueue: ThinkQueue, SimpleQueue
   expr/              watch language, catalog, stringify
   action/            verbs, parse, validate
   memory/            MemoryStore
   perception/        optional scene English
-  inference/         HTTP chat, fake, model catalog
+  inference/         HTTP chat, fake, presets, model catalog
   scripts/           demo + fixtures
 ```

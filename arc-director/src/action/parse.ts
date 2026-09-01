@@ -191,8 +191,27 @@ export function parsePlan(input:string | unknown, registry:VerbRegistry):ActionP
 		return asPlan(input, registry);
 	}
 	const trimmed = input.trim();
-	if (trimmed.startsWith('{') || trimmed.startsWith('```')) {
+	const json = lastHeadJson(trimmed);
+	if (json !== undefined) {
+		return asPlan(extractJson(json), registry);
+	}
+	if (trimmed.startsWith('```')) {
 		return asPlan(extractJson(trimmed), registry);
 	}
 	return parsePlanText(trimmed, registry);
+}
+
+/** Last root `{"head"` in CoT. Nested `then.plan.head` is skipped. */
+function lastHeadJson(text:string):string | undefined {
+	let at = -1;
+	const re = /\{\s*"head"/g;
+	let m:RegExpExecArray | null;
+	while ((m = re.exec(text))) {
+		const before = text.slice(Math.max(0, m.index - 16), m.index);
+		if (/"plan"\s*:\s*$/.test(before)) {
+			continue;
+		}
+		at = m.index;
+	}
+	return at >= 0 ? text.slice(at) : undefined;
 }

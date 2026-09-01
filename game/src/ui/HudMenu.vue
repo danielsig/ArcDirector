@@ -2,7 +2,12 @@
 import { inject, watch } from 'vue';
 import { saveDevStatsOpen, type HudModel } from './hudModel';
 import { sessionKey } from './sessionKey';
-import { MAX_PARALLEL_THINKERS, MIN_PARALLEL_THINKERS } from '../engine/thinkPref';
+import {
+	MAX_PARALLEL_THINKERS,
+	MAX_THINKING_BUDGET,
+	MIN_PARALLEL_THINKERS,
+	MIN_THINKING_BUDGET,
+} from '../engine/thinkPref';
 
 const props = defineProps<{
 	hud:HudModel;
@@ -52,6 +57,10 @@ function pickModel():void {
 
 function pickThinkers():void {
 	session?.value?.applyMaxParallel();
+}
+
+function toggleBatchThinks():void {
+	props.hud.batchThinks = !props.hud.batchThinks;
 }
 
 function dumpNPCMaps():void {
@@ -203,15 +212,34 @@ function when(iso:string):string {
 						</option>
 					</select>
 				</label>
+				<div class="row">
+					<label class="name">
+						Parallel thinkers
+						<input
+							v-model.number="hud.maxParallel"
+							type="number"
+							:min="MIN_PARALLEL_THINKERS"
+							:max="MAX_PARALLEL_THINKERS"
+							step="1"
+							@change.stop="pickThinkers"
+						>
+					</label>
+					<button
+						type="button"
+						:class="{ on: hud.batchThinks }"
+						@click.stop="toggleBatchThinks"
+					>
+						{{ hud.batchThinks ? 'Wait for idle on' : 'Wait for idle off' }}
+					</button>
+				</div>
 				<label class="name">
-					Parallel thinkers
+					Thinking
 					<input
-						v-model.number="hud.maxParallel"
+						v-model.number="hud.thinkingBudget"
 						type="number"
-						:min="MIN_PARALLEL_THINKERS"
-						:max="MAX_PARALLEL_THINKERS"
+						:min="MIN_THINKING_BUDGET"
+						:max="MAX_THINKING_BUDGET"
 						step="1"
-						@change.stop="pickThinkers"
 					>
 				</label>
 				<details
@@ -356,7 +384,12 @@ h3 {
 .row {
 	display: flex;
 	flex-wrap: wrap;
+	align-items: flex-end;
 	gap: 8px;
+}
+
+.row .name {
+	margin: 0;
 }
 
 .row button,

@@ -54,10 +54,16 @@ export type NPCActionResult = {
 	verb?:string;
 };
 
+export type WanderGuide = {
+	stop?:()=>boolean;
+	dest?:()=>{ x:number; z:number } | null;
+	note?:()=>void;
+};
+
 type Job =
 	| { kind:'go_to'; name:string; startedAt:number; done:(r:NPCActionResult)=>void }
 	| { kind:'follow'; name:string; startedAt:number; until:number; done:(r:NPCActionResult)=>void }
-	| { kind:'wander'; startedAt:number; until:number; done:(r:NPCActionResult)=>void }
+	| { kind:'wander'; startedAt:number; until:number; guide?:WanderGuide; notedAt:number; done:(r:NPCActionResult)=>void }
 	| { kind:'wait'; until:number; done:(r:NPCActionResult)=>void };
 
 /** Named destinations + conversation overlay. No yaw verb. */
@@ -100,11 +106,13 @@ export class NPCInput extends Component {
 		});
 	}
 
-	wander(seconds = 4):Promise<NPCActionResult> {
+	wander(seconds = 6, guide?:WanderGuide):Promise<NPCActionResult> {
 		return this.begin({
 			kind: 'wander',
 			startedAt: this.now(),
 			until: this.now() + seconds,
+			guide,
+			notedAt: 0,
 			done: () => undefined,
 		});
 	}
@@ -176,12 +184,17 @@ export class NPCInput extends Component {
 			return;
 		}
 		if (job.kind === 'wander') {
+			this.noteWander(job);
+			if (job.guide?.stop?.()) {
+				this.finish({ ok: true, verb: 'wander', reason: 'until' });
+				return;
+			}
 			if (now >= job.until) {
 				this.finish({ ok: true, verb: 'wander' });
 				return;
 			}
 			if (!this.wanderDest || this.arrivedAt(this.wanderDest, 0.45)) {
-				this.wanderDest = this.randomWalkPoint();
+				this.wanderDest = job.guide?.dest?.() ?? this.randomWalkPoint();
 				this.clearRoute();
 			}
 			if (!this.wanderDest) {
@@ -282,7 +295,11 @@ export class NPCInput extends Component {
 				this.steer(null, this.followPath(dest, 0) ?? dest);
 			}
 			else if (job.kind === 'wander') {
-				this.wanderDest = this.randomWalkPoint();
+				if (job.guide?.stop?.()) {
+					this.finish({ ok: true, verb: 'wander', reason: 'until' });
+					return;
+				}
+				this.wanderDest = job.guide?.dest?.() ?? this.randomWalkPoint();
 				if (this.wanderDest) {
 					this.steer(null, this.followPath(this.wanderDest, 0) ?? this.wanderDest);
 				}
@@ -573,6 +590,15 @@ export class NPCInput extends Component {
 			return via;
 		}
 		return null;
+	}
+
+	private noteWander(job:Extract<Job, { kind:'wander' }>):void {
+		const now = this.now();
+		if (now - job.notedAt < 0.25) {
+			return;
+		}
+		job.notedAt = now;
+		job.guide?.note?.();
 	}
 
 	private randomWalkPoint():{ x:number; z:number } | null {

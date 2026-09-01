@@ -79,6 +79,8 @@ export type ChatResponse = {
 	promptMs?:number;
 	/** Token generation time in milliseconds. */
 	generateMs?:number;
+	/** Chain-of-thought text when the server splits it from `content`. */
+	reasoning?:string;
 };
 
 export type InferenceProvider = {

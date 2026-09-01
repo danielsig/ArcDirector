@@ -5,11 +5,25 @@ import { MeshRenderer } from './MeshRenderer';
 import { Order } from './order';
 import { PlayerInput } from '../actors/PlayerInput';
 import type { SceneDef } from '../data/scenes';
-import { NPCDirector, playerSayCatalog } from '../npc/adapter';
+import { GameHost } from '../npc/adapter';
+import { playerSay, playerSayCatalog } from '../npc/playerTalk';
+import { dumpLookMaps } from '../npc/aiLogSink';
+import { patchInfer } from './patchHud';
 import { parseSlash } from '../ui/sayCommands';
-import type { HudModel } from '../ui/hudModel';
-import { loadModelPref } from './modelPref';
-import { clampParallelThinkers } from './thinkPref';
+import type { HudModel, HudModelOption } from '../ui/hudModel';
+import { loadModelPref, saveModelPref } from './modelPref';
+import {
+	clampParallelThinkers,
+	clampThinkingBudget,
+	saveBatchThinkPref,
+	saveThinkPref,
+	saveThinkingBudgetPref,
+} from './thinkPref';
+import {
+	fetchModelCatalog,
+	isEmbeddingModel,
+	isLoadedModel,
+} from 'arc-director';
 import {
 	applyWorld,
 	captureWorld,
@@ -46,7 +60,7 @@ const AUTOSAVE_ENABLED = false;
 export class Session extends Component {
 	static override order = Order.persist;
 	hud!:HudModel;
-	director!:NPCDirector;
+	director!:GameHost;
 	scene!:SceneDef;
 	stream!:WorldStream;
 	view!:WorldView;
@@ -182,7 +196,7 @@ export class Session extends Component {
 			this.hud.observer = false;
 			this.persistFlags();
 		}
-		this.director.playerSay(spoken);
+		playerSay(this.director, spoken);
 	}
 
 	save():void {
@@ -233,24 +247,29 @@ export class Session extends Component {
 	}
 
 	applyModel():void {
-		this.director.setModel(this.hud.model);
+		const name = this.hud.model.trim();
+		if (name) {
+			saveModelPref(name);
+			this.director.arc?.setModel(name);
+		}
 		this.hud.menuNotice = this.hud.model ? this.hud.model : 'No model';
 	}
 
 	applyMaxParallel():void {
 		const n = clampParallelThinkers(this.hud.maxParallel);
 		this.hud.maxParallel = n;
-		this.director.setMaxParallel(n);
+		this.director.arc?.setMaxParallel(n);
+		saveThinkPref(n);
 		this.hud.menuNotice = `${n} thinker${n === 1 ? '' : 's'}`;
 	}
 
 	resetInferStats():void {
-		this.director.resetInferStats();
-		this.director.patchInfer(this.hud);
+		this.director.arc?.resetInferStats();
+		patchInfer(this.director, this.hud);
 	}
 
 	async dumpNPCMaps():Promise<void> {
-		const n = await this.director.dumpLookMaps();
+		const n = await dumpLookMaps(this.director);
 		this.hud.menuOpen = false;
 		this.hud.aiLogOpen = true;
 		this.dropPointerLock();
@@ -270,15 +289,50 @@ export class Session extends Component {
 		this.hud.menuNotice = 'Location reset';
 	}
 
+	async refreshHudModels():Promise<void> {
+		const catalog = await fetchModelCatalog('/inference');
+		if (this.director.arc) {
+			this.director.arc.catalog = catalog;
+		}
+		const chat = catalog.filter((m) => !isEmbeddingModel(m));
+		chat.sort((a, b) => {
+			const la = isLoadedModel(a) ? 0 : 1;
+			const lb = isLoadedModel(b) ? 0 : 1;
+			if (la !== lb) {
+				return la - lb;
+			}
+			return a.id.localeCompare(b.id);
+		});
+		const models:HudModelOption[] = chat.map((m) => ({
+			id: m.id,
+			loaded: isLoadedModel(m),
+		}));
+		const current = this.director.arc?.model || loadModelPref();
+		if (current && !models.some((m) => m.id === current)) {
+			models.unshift({ id: current, loaded: false });
+		}
+		if (this.hud.model && !models.some((m) => m.id === this.hud.model)) {
+			models.unshift({ id: this.hud.model, loaded: false });
+		}
+		this.hud.models = models;
+		if (!this.hud.model) {
+			this.hud.model = current || models[0]?.id || '';
+		}
+	}
+
 	onMenuOpened():void {
 		this.hud.menuNotice = '';
 		this.persistAutosave();
 		this.persistView();
 		this.refreshSlots();
 		this.dropPointerLock();
-		this.hud.model = this.director.liveModel() || loadModelPref() || this.hud.model;
-		this.hud.maxParallel = this.director.liveMaxParallel();
-		void this.director.refreshHudModels(this.hud);
+		this.hud.model = this.director.arc?.model || loadModelPref() || this.hud.model;
+		this.hud.maxParallel = this.director.arc?.liveMaxParallel() ?? this.hud.maxParallel;
+		this.hud.batchThinks = this.director.arc?.liveBatchThinks() ?? this.hud.batchThinks;
+		if (this.director.arc) {
+			this.hud.thinkingBudget = this.director.arc.liveThinkingBudget();
+		}
+		void this.refreshHudModels();
 	}
 
 	onMenuClosed():void {
@@ -315,14 +369,18 @@ export class Session extends Component {
 	}
 
 	persistThinkers():void {
-		if (!Number.isFinite(this.hud.maxParallel)) {
-			return;
+		if (Number.isFinite(this.hud.maxParallel)) {
+			const n = clampParallelThinkers(this.hud.maxParallel);
+			this.director.arc?.setMaxParallel(n);
+			saveThinkPref(n);
 		}
-		const n = clampParallelThinkers(this.hud.maxParallel);
-		if (this.hud.maxParallel !== n) {
-			this.hud.maxParallel = n;
+		this.director.arc?.setBatchThinks(this.hud.batchThinks);
+		saveBatchThinkPref(this.hud.batchThinks);
+		if (Number.isFinite(this.hud.thinkingBudget)) {
+			const budget = clampThinkingBudget(this.hud.thinkingBudget);
+			this.director.arc?.setThinkingBudget(budget);
+			saveThinkingBudgetPref(budget);
 		}
-		this.director.setMaxParallel(n);
 	}
 
 	applyShotFromURL():void {

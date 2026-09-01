@@ -212,7 +212,7 @@ export class Wanted extends Component {
 /** Stays with a named body when idle. Always perceives that body, even in observer. */
 export class Companion extends Component {
 	targetID = 'Player';
-	/** When true, idle steering does not follow the master (stay/wait orders). */
+	/** When true, idle steering does not follow the bonded body (stay/wait). */
 	hold = false;
 }
 

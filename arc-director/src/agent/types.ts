@@ -29,7 +29,8 @@ export type AgentEvent = {
 	at?:number;
 };
 
-export type Pusher<HostCtx = unknown> = {
+/** Named English that is always in the user block this think. */
+export type Sense<HostCtx = unknown> = {
 	description:string;
 	gather:(ctx:HostCtx)=>unknown;
 };
@@ -40,7 +41,15 @@ export type ToolSpec<HostCtx = unknown> = {
 	handler:(ctx:HostCtx, args:unknown)=>unknown;
 };
 
-export type PerceptionRecipe<HostCtx = unknown> = {
-	push:Record<string, Pusher<HostCtx>>;
-	tools:Record<string, ToolSpec<HostCtx>>;
+/**
+ * What this mind may use. Fetched every tick from `Agent.kit`.
+ * `verbs` omitted or empty = none. `senses` / `tools` omitted = all registered senses / tools; `[]` = none.
+ */
+export type Kit = {
+	verbs?:readonly string[];
+	senses?:readonly string[];
+	tools?:readonly string[];
 };
+
+/** Plain object (mutate in place, or use getters) or a callback. */
+export type KitSource<HostCtx = unknown> = Kit | ((ctx:HostCtx)=>Kit);

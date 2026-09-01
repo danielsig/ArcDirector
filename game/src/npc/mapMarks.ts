@@ -10,7 +10,7 @@ const NAMED:Record<string, string> = {
 	Forager: '🌿',
 	Miller: '🌾',
 	Angler: '🎣',
-	Servant: '🧹',
+	Servant: '🎒',
 	Herbalist: '🌱',
 	Alchemist: '⚗️',
 	Captain: '🛡️',

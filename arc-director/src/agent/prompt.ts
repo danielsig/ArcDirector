@@ -42,7 +42,7 @@ export function stablePrefix(
 }
 
 export const WATCH_CHEAT_SHEET = [
-	'Watch language (JS-looking calls, not a JS subset). Bindings: me, others, items; host names like Player, events.',
+	'Watch language (JS-looking calls, not a JS subset). Bindings: me, others, items, landmarks; host names like Player, Cottage, events.',
 	'Standing conditions: addWatches / editWatches / removeWatches, or replace extras with watches: {name: expr, ...}. Keys are short names. One-shot questions this think: observe({expr}).',
 	'Two-arg relations: distance(me, Player), isNear(me, Player), isNear(me, Player, 16), hasSightline(me, Player), facing(me, Player), isFacing(me, Player).',
 	'hasSightline is line of sight only. isFacing is facing(a,b) > √2/2 (90° cone).',
@@ -57,7 +57,8 @@ export function seeMapHint(youSymbol = DEFAULT_YOU_SYMBOL):string {
 	const you = youSymbol.trim() || DEFAULT_YOU_SYMBOL;
 	return [
 		'The English scene already names who and what is near, with distances in paces.',
-		'Do not call see_map unless that text is not enough to pick a go_to.',
+		'If you are looking for something the scene has not named, wander(for) with a watch expr rather than guessing a go_to.',
+		'Do not call see_map unless that text is not enough to pick a go_to or a wander(for).',
 		'see_map({zoom:1}) is close around you; see_map({zoom:0}) is the whole loaded land; in-between values zoom.',
 		`Pictograms. Match the legend (${you} = you) to names. No coordinates.`,
 		'Calling it again soon, without having moved, returns the same legend and no new picture.',
@@ -67,15 +68,15 @@ export function seeMapHint(youSymbol = DEFAULT_YOU_SYMBOL):string {
 export const SEE_MAP_HINT = seeMapHint();
 
 function planInstructions(verbs:VerbRegistry):string {
-	return `Change goals when what you must do changed (a standing order, harm, theft, a threat) — put `
-		+ `"goals":[{"text":"...","priority":0}] on the same ActionPlan JSON; that change is lasting. `
+	return `Goals are standing wants, not the next action. Do not replace a goal with the next verb. `
 		+ `Omit identity. Do not emit identity or set_identity unless who you are has actually changed for good. `
 		+ `Weather, an order, helping, and danger are not a new identity. `
 		+ `Do not pick a nickname or shorten the role. A new name only sticks with a new role, and both need that same rare bar. `
 		+ `Harm, theft, and threats outrank standing role text this think. `
-		+ `set_goal and drop_goal also work as verbs. Avoid set_identity. `
+		+ `remember(content, tags?) keeps a fact you will still know later. Use it when you learn who someone is, what they want, or how a thing works. `
 		+ `think(about?) always runs last; several merge into one. about is optional. Do not think() twice in a row — act first. `
 		+ `wait(for) parks with a one-shot watch (same language as watches), dropped the next think. Do not addWatches for a one-check. `
+		+ `Looking for a thing or place the scene has not named? wander(for) with a watch expr — it walks and stops when the expr is true (same language as watches). Examples: some(landmarks.filter("tree").nearby(16)), some(items.filter("FireMushroom").nearby()), isNear(me, Cottage). Do not invent a go_to name. go_to only a name you already see. The wander result lists names you passed. `
 		+ `Chain several steps with then_if_ok when you already know the next action. `
 		+ `Prefer the scene text. Tools are optional; skip them if you can already act. `
 		+ `Then emit one ActionPlan as JSON. `
@@ -84,7 +85,7 @@ function planInstructions(verbs:VerbRegistry):string {
 		+ `Close every brace. Do not write "...". At most four chained steps.`;
 }
 
-function stringifyPush(value:unknown):string {
+function stringifySense(value:unknown):string {
 	if (typeof value === 'string') {
 		return value;
 	}
@@ -95,11 +96,12 @@ function stringifyPush(value:unknown):string {
 }
 
 export function volatileBlock(opts:{
-	pushed:Record<string, unknown>;
+	senses?:Record<string, unknown>;
 	intrusion?:string;
 	lastResult?:ActionResult;
 	goals?:Goal[];
 	pinned?:MemoryRecord[];
+	recalled?:MemoryRecord[];
 	watches?:Watches;
 	pinnedWatches?:Watches;
 	watchesWritable?:boolean;
@@ -120,8 +122,11 @@ export function volatileBlock(opts:{
 	if (opts.pinned && opts.pinned.length > 0) {
 		parts.push(`Pinned memories:\n${opts.pinned.map((m) => `- ${m.text}`).join('\n')}`);
 	}
-	for (const [name, value] of Object.entries(opts.pushed)) {
-		const text = stringifyPush(value).trim();
+	if (opts.recalled && opts.recalled.length > 0) {
+		parts.push(`You remember:\n${opts.recalled.map((m) => `- ${m.text}`).join('\n')}`);
+	}
+	for (const [name, value] of Object.entries(opts.senses ?? {})) {
+		const text = stringifySense(value).trim();
 		if (!text) {
 			continue;
 		}

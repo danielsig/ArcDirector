@@ -2,23 +2,23 @@ import { Component } from './Component';
 import type { World } from './World';
 import type { Renderer } from '@arc-director/kindling';
 import { Order } from './order';
-import { patchHud } from './patchHud';
+import { patchHud, patchInfer, statusLabels } from './patchHud';
 import { syncHeldTorchLight } from '../items/heldLight';
-import type { NPCDirector } from '../npc/adapter';
+import type { GameHost } from '../npc/adapter';
 import { WorldPresent } from '../render/present';
 import type { HudModel } from '../ui/hudModel';
 import { ChunkStreamer } from '../world/ChunkStreamer';
 
 export class DirectorPulse extends Component {
 	static override order = Order.director;
-	director!:NPCDirector;
+	director!:GameHost;
 
 	override update(dt:number):void {
 		this.director.observe(dt);
 		if (!this.gameObject.world?.arcDirectorOn) {
 			return;
 		}
-		this.director.pulse();
+		this.director.pulse(dt);
 	}
 }
 
@@ -115,7 +115,7 @@ export class WorldView extends Component {
 export class Hud extends Component {
 	static override order = Order.hud;
 	model!:HudModel;
-	director!:NPCDirector;
+	director!:GameHost;
 	getRenderer:()=>Renderer | null = () => null;
 
 	override lateUpdate(_dt:number):void {
@@ -128,8 +128,8 @@ export class Hud extends Component {
 		if (!world || !renderer) {
 			return;
 		}
-		patchHud(world, this.model, renderer, this.director.statusLabels());
-		this.director.patchInfer(this.model);
+		patchHud(world, this.model, renderer, statusLabels(this.director));
+		patchInfer(this.director, this.model);
 	}
 }
 

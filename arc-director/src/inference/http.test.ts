@@ -1,12 +1,15 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { MODEL_TIERS, type ThinkOff } from './models.js';
-import { HttpProvider, parseChatTimings } from './http.js';
+import { HttpProvider, loadConfigFits, parseChatTimings } from './http.js';
 
 function idWithThinkOff(mode:ThinkOff):string {
 	const row = MODEL_TIERS.find((t) => t.thinking && t.thinkOff === mode);
-	assert.ok(row);
-	return row.id;
+	if (row) {
+		return row.id;
+	}
+	assert.equal(mode, 'no_think');
+	return 'qwen3.8-27b';
 }
 
 async function captureBody(
@@ -33,6 +36,11 @@ async function captureBody(
 }
 
 describe('HttpProvider thinking', () => {
+	it('does not send max_tokens unless configured', async () => {
+		const body = await captureBody({}, 'other-llm');
+		assert.equal('max_tokens' in body, false);
+	});
+
 	it('does not send a thinking budget when think-off is no_think', async () => {
 		const model = idWithThinkOff('no_think');
 		const body = await captureBody({ thinkingBudget: 128, maxTokens: 384 }, model);
@@ -42,16 +50,6 @@ describe('HttpProvider thinking', () => {
 		const messages = body.messages as Array<{ role?:string; content?:string }>;
 		const system = messages.find((m) => m.role === 'system');
 		assert.match(String(system?.content), /\/no_think/);
-		assert.equal(String(messages.at(-1)?.content), 'pong');
-	});
-
-	it('uses a low reasoning effort when think-off is effort_low', async () => {
-		const model = idWithThinkOff('effort_low');
-		const body = await captureBody({ thinkingBudget: 128, maxTokens: 384 }, model);
-		assert.equal(body['thinking_budget'], undefined);
-		assert.equal(body['enable_thinking'], undefined);
-		assert.equal(body['reasoning_effort'], 'low');
-		const messages = body.messages as Array<{ content?:string }>;
 		assert.equal(String(messages.at(-1)?.content), 'pong');
 	});
 
@@ -68,10 +66,11 @@ describe('HttpProvider thinking', () => {
 			}), { status: 200 }),
 		});
 		const res = await provider.chat({
-			model: idWithThinkOff('effort_low'),
+			model: idWithThinkOff('no_think'),
 			messages: [{ role: 'user', content: 'pong' }],
 		});
 		assert.equal(res.content, null);
+		assert.equal(res.reasoning, 'Need emit JSON {"head": ... but never does');
 	});
 
 	it('reads reasoning_content when a JSON plan is only in reasoning_content', async () => {
@@ -87,7 +86,7 @@ describe('HttpProvider thinking', () => {
 			}), { status: 200 }),
 		});
 		const res = await provider.chat({
-			model: idWithThinkOff('effort_low'),
+			model: idWithThinkOff('no_think'),
 			messages: [{ role: 'user', content: 'pong' }],
 		});
 		assert.equal(res.content, '{"head":{"verb":"wait","args":{"seconds":1}}}');
@@ -100,7 +99,21 @@ describe('HttpProvider thinking', () => {
 			maxTokens: 384,
 		}, idWithThinkOff('no_think'));
 		assert.equal(body['thinking_budget'], 128);
+		assert.equal(body['enable_thinking'], true);
+		assert.deepEqual(body['chat_template_kwargs'], { enable_thinking: true });
+	});
+
+	it('caps muse-glimmer with reasoning_strength low and a thinking budget', async () => {
+		const model = idWithThinkOff('strength');
+		const body = await captureBody({
+			enableThinking: true,
+			thinkingBudget: 160,
+			maxTokens: 384,
+		}, model);
+		assert.equal(body['thinking_budget'], 160);
 		assert.equal(body['enable_thinking'], undefined);
+		assert.equal(body['reasoning_effort'], 'low');
+		assert.deepEqual(body['chat_template_kwargs'], { reasoning_strength: 'low' });
 	});
 
 	it('puts /no_think on the system message, not image user parts', async () => {
@@ -172,6 +185,329 @@ describe('HttpProvider native server', () => {
 			messages: [{ role: 'user', content: 'hi' }],
 		});
 		assert.ok(urls.some((u) => u.includes('/api/v1/models/load')));
+	});
+
+	it('reuses a loaded instance when flash-attn, KV, batch, and parallel fit', async () => {
+		const urls:string[] = [];
+		const provider = new HttpProvider({
+			baseURL: 'http://127.0.0.1:9/v1',
+			load: { parallel: 2, evalBatchSize: 512 },
+			fetch: async (input, init) => {
+				const url = String(input);
+				urls.push(`${init?.method ?? 'GET'} ${url}`);
+				if (url.endsWith('/api/v1/models') && init?.method !== 'POST') {
+					return new Response(JSON.stringify({
+						models: [{
+							key: 'other-llm',
+							type: 'llm',
+							loaded_instances: [{
+								id: 'other-llm',
+								config: {
+									flash_attention: true,
+									offload_kv_cache_to_gpu: true,
+									eval_batch_size: 512,
+									parallel: 4,
+								},
+							}],
+						}],
+					}), { status: 200 });
+				}
+				if (url.includes('/api/v1/models/load') || url.includes('/api/v1/models/unload')) {
+					return new Response('should not load', { status: 500 });
+				}
+				return new Response(JSON.stringify({
+					choices: [{ message: { content: '{"ok":true}' } }],
+				}), { status: 200 });
+			},
+		});
+		await provider.chat({
+			model: 'other-llm',
+			messages: [{ role: 'user', content: 'hi' }],
+		});
+		assert.equal(urls.some((u) => u.includes('/models/load')), false);
+		assert.equal(urls.some((u) => u.includes('/models/unload')), false);
+	});
+
+	it('unloads a same-id instance whose config is too small, then loads', async () => {
+		const urls:string[] = [];
+		const provider = new HttpProvider({
+			baseURL: 'http://127.0.0.1:9/v1',
+			load: { parallel: 2, evalBatchSize: 512 },
+			fetch: async (input, init) => {
+				const url = String(input);
+				urls.push(`${init?.method ?? 'GET'} ${url}`);
+				if (url.endsWith('/api/v1/models') && init?.method !== 'POST') {
+					return new Response(JSON.stringify({
+						models: [{
+							key: 'other-llm',
+							type: 'llm',
+							loaded_instances: [{
+								id: 'other-llm',
+								config: {
+									flash_attention: true,
+									offload_kv_cache_to_gpu: true,
+									eval_batch_size: 512,
+									parallel: 1,
+								},
+							}],
+						}],
+					}), { status: 200 });
+				}
+				if (url.includes('/api/v1/models/unload')) {
+					const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+					assert.equal(body.instance_id, 'other-llm');
+					return new Response(JSON.stringify({ instance_id: body.instance_id }), { status: 200 });
+				}
+				if (url.includes('/api/v1/models/load')) {
+					return new Response(JSON.stringify({
+						status: 'loaded',
+						instance_id: 'other-llm',
+						load_config: {
+							flash_attention: true,
+							offload_kv_cache_to_gpu: true,
+							eval_batch_size: 512,
+							parallel: 2,
+						},
+					}), { status: 200 });
+				}
+				return new Response(JSON.stringify({
+					choices: [{ message: { content: '{"ok":true}' } }],
+				}), { status: 200 });
+			},
+		});
+		await provider.chat({
+			model: 'other-llm',
+			messages: [{ role: 'user', content: 'hi' }],
+		});
+		assert.ok(urls.some((u) => u.includes('/models/unload')));
+		assert.ok(urls.some((u) => u.includes('/models/load')));
+	});
+
+	it('ejects other loaded models before loading the preferred one', async () => {
+		let loads = 0;
+		const urls:string[] = [];
+		const provider = new HttpProvider({
+			baseURL: 'http://127.0.0.1:9/v1',
+			load: { parallel: 2 },
+			fetch: async (input, init) => {
+				const url = String(input);
+				urls.push(`${init?.method ?? 'GET'} ${url}`);
+				if (url.endsWith('/api/v1/models') && init?.method !== 'POST') {
+					return new Response(JSON.stringify({
+						models: [{
+							key: 'meta/muse-glimmer',
+							type: 'llm',
+							loaded_instances: [{
+								id: 'meta/muse-glimmer',
+								config: { flash_attention: true, offload_kv_cache_to_gpu: true },
+							}],
+						}, {
+							key: 'other-llm',
+							type: 'llm',
+							loaded_instances: [],
+						}],
+					}), { status: 200 });
+				}
+				if (url.includes('/api/v1/models/unload')) {
+					const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+					assert.equal(body.instance_id, 'meta/muse-glimmer');
+					return new Response(JSON.stringify({ instance_id: body.instance_id }), { status: 200 });
+				}
+				if (url.includes('/api/v1/models/load')) {
+					loads += 1;
+					return new Response(JSON.stringify({
+						status: 'loaded',
+						instance_id: 'other-llm',
+					}), { status: 200 });
+				}
+				return new Response(JSON.stringify({
+					choices: [{ message: { content: '{"ok":true}' } }],
+				}), { status: 200 });
+			},
+		});
+		await provider.chat({
+			model: 'other-llm',
+			messages: [{ role: 'user', content: 'hi' }],
+		});
+		assert.equal(loads, 1);
+		const unloadAt = urls.findIndex((u) => u.includes('/models/unload'));
+		const loadAt = urls.findIndex((u) => u.includes('/models/load'));
+		assert.ok(unloadAt >= 0 && loadAt > unloadAt);
+	});
+
+	it('ejects other loaded models after any failed preferred load, not only VRAM-worded errors', async () => {
+		let loads = 0;
+		const urls:string[] = [];
+		const provider = new HttpProvider({
+			baseURL: 'http://127.0.0.1:9/v1',
+			fetch: async (input, init) => {
+				const url = String(input);
+				urls.push(`${init?.method ?? 'GET'} ${url}`);
+				if (url.endsWith('/api/v1/models') && init?.method !== 'POST') {
+					return new Response(JSON.stringify({
+						models: [{
+							key: 'meta/muse-glimmer',
+							type: 'llm',
+							loaded_instances: [{ id: 'meta/muse-glimmer', config: {} }],
+						}, {
+							key: 'google/gemma-4-31b-qat',
+							type: 'llm',
+							loaded_instances: [],
+						}],
+					}), { status: 200 });
+				}
+				if (url.includes('/api/v1/models/unload')) {
+					return new Response(JSON.stringify({
+						instance_id: JSON.parse(String(init?.body)).instance_id,
+					}), { status: 200 });
+				}
+				if (url.includes('/api/v1/models/load')) {
+					loads += 1;
+					if (loads === 1) {
+						return new Response(JSON.stringify({
+							error: { message: 'failed to load model' },
+						}), { status: 400 });
+					}
+					return new Response(JSON.stringify({
+						status: 'loaded',
+						instance_id: 'google/gemma-4-31b-qat',
+					}), { status: 200 });
+				}
+				return new Response(JSON.stringify({
+					choices: [{ message: { content: '{"ok":true}' } }],
+				}), { status: 200 });
+			},
+		});
+		await provider.chat({
+			model: 'google/gemma-4-31b-qat',
+			messages: [{ role: 'user', content: 'hi' }],
+		});
+		assert.equal(loads, 2);
+		assert.ok(urls.some((u) => u.includes('/models/unload')));
+	});
+
+	it('unloads extra copies of the preferred model and keeps one', async () => {
+		const unloaded:string[] = [];
+		const provider = new HttpProvider({
+			baseURL: 'http://127.0.0.1:9/v1',
+			fetch: async (input, init) => {
+				const url = String(input);
+				if (url.endsWith('/api/v1/models') && init?.method !== 'POST') {
+					return new Response(JSON.stringify({
+						models: [{
+							key: 'google/gemma-4-31b-qat',
+							type: 'llm',
+							loaded_instances: [
+								{ id: 'google/gemma-4-31b-qat', config: { flash_attention: true } },
+								{ id: 'google/gemma-4-31b-qat-2', config: { flash_attention: true } },
+								{ id: 'google/gemma-4-31b-qat-3', config: { flash_attention: true } },
+								{ id: 'google/gemma-4-31b-qat-4', config: { flash_attention: true } },
+							],
+						}],
+					}), { status: 200 });
+				}
+				if (url.includes('/api/v1/models/unload')) {
+					unloaded.push(String(JSON.parse(String(init?.body)).instance_id));
+					return new Response(JSON.stringify({ instance_id: unloaded.at(-1) }), { status: 200 });
+				}
+				if (url.includes('/api/v1/models/load')) {
+					return new Response('should not load', { status: 500 });
+				}
+				return new Response(JSON.stringify({
+					choices: [{ message: { content: '{"ok":true}' } }],
+				}), { status: 200 });
+			},
+		});
+		await provider.chat({
+			model: 'google/gemma-4-31b-qat',
+			messages: [{ role: 'user', content: 'hi' }],
+		});
+		assert.equal(unloaded.length, 3);
+		assert.equal(unloaded.includes('google/gemma-4-31b-qat'), false);
+	});
+
+	it('loads one instance when four chats start together', async () => {
+		let loads = 0;
+		let loaded = false;
+		const provider = new HttpProvider({
+			baseURL: 'http://127.0.0.1:9/v1',
+			fetch: async (input, init) => {
+				const url = String(input);
+				if (url.endsWith('/api/v1/models') && init?.method !== 'POST') {
+					return new Response(JSON.stringify({
+						models: [{
+							key: 'meta/muse-glimmer',
+							type: 'llm',
+							loaded_instances: loaded
+								? [{
+									id: 'meta/muse-glimmer',
+									config: {
+										flash_attention: true,
+										offload_kv_cache_to_gpu: true,
+										eval_batch_size: 512,
+									},
+								}]
+								: [],
+						}],
+					}), { status: 200 });
+				}
+				if (url.includes('/api/v1/models/load')) {
+					loads += 1;
+					await new Promise((resolve) => setTimeout(resolve, 40));
+					loaded = true;
+					return new Response(JSON.stringify({
+						status: 'loaded',
+						instance_id: 'meta/muse-glimmer',
+						load_config: {
+							flash_attention: true,
+							offload_kv_cache_to_gpu: true,
+							eval_batch_size: 512,
+						},
+					}), { status: 200 });
+				}
+				if (url.includes('/models/unload')) {
+					return new Response('should not unload', { status: 500 });
+				}
+				return new Response(JSON.stringify({
+					choices: [{ message: { content: '{"ok":true}' } }],
+				}), { status: 200 });
+			},
+		});
+		await Promise.all([0, 1, 2, 3].map(() => provider.chat({
+			model: 'meta/muse-glimmer',
+			messages: [{ role: 'user', content: 'hi' }],
+		})));
+		assert.equal(loads, 1);
+	});
+
+	it('does not JIT four copies when the load endpoint is missing', async () => {
+		let startedWhileCold = 0;
+		let cold = true;
+		let completions = 0;
+		const provider = new HttpProvider({
+			baseURL: 'http://127.0.0.1:9/v1',
+			fetch: async (input, init) => {
+				const url = String(input);
+				if (url.endsWith('/api/v1/models') && init?.method !== 'POST') {
+					return new Response('no native catalog', { status: 404 });
+				}
+				if (cold) {
+					startedWhileCold += 1;
+				}
+				await new Promise((resolve) => setTimeout(resolve, 30));
+				cold = false;
+				completions += 1;
+				return new Response(JSON.stringify({
+					choices: [{ message: { content: '{"ok":true}' } }],
+				}), { status: 200 });
+			},
+		});
+		await Promise.all([0, 1, 2, 3].map(() => provider.chat({
+			model: 'meta/muse-glimmer',
+			messages: [{ role: 'user', content: 'hi' }],
+		})));
+		assert.equal(startedWhileCold, 1);
+		assert.equal(completions, 4);
 	});
 
 	it('continues the longest cached thread with previous_response_id', async () => {
@@ -503,6 +839,30 @@ describe('HttpProvider native server', () => {
 			}),
 			/image too large/,
 		);
+	});
+});
+
+describe('loadConfigFits', () => {
+	it('accepts a larger parallel and batch than requested', () => {
+		assert.equal(loadConfigFits({
+			flash_attention: true,
+			offload_kv_cache_to_gpu: true,
+			eval_batch_size: 1024,
+			parallel: 4,
+		}, { parallel: 2, evalBatchSize: 512 }), true);
+	});
+
+	it('rejects missing flash attention or too-small parallel', () => {
+		assert.equal(loadConfigFits({
+			flash_attention: false,
+			offload_kv_cache_to_gpu: true,
+			parallel: 4,
+		}, { parallel: 2 }), false);
+		assert.equal(loadConfigFits({
+			flash_attention: true,
+			offload_kv_cache_to_gpu: true,
+			parallel: 1,
+		}, { parallel: 2 }), false);
 	});
 });
 

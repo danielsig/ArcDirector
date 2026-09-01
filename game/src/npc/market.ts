@@ -1,4 +1,4 @@
-import type { AgentIdentity, Goal, Watches } from 'arc-director';
+import type { AgentSpec } from 'arc-director';
 import { Crowd, Merchant, Named } from '../engine/components';
 import type { GameObject } from '../engine/GameObject';
 import type { World } from '../engine/World';
@@ -7,23 +7,10 @@ import { coinsOf } from '../items/wallet';
 import { spawnNPC, type NPCSpawnOpts } from '../world/spawn';
 import type { Chunk } from '../world/Chunk';
 
-export type MindSeed = {
-	id:string;
-	rank?:number;
-	identity:AgentIdentity;
-	goals:Goal[];
-	memories:{ text:string; tags:string[]; pinned?:boolean }[];
-	watches?:Watches;
-	skipHeartbeat?:boolean;
-	skipMajor?:boolean;
-};
-
-const PRICES = 'List prices in gold: Loaf 5 (lowest 3), Scarf 6 (lowest 4), Bowl 4 (lowest 2), Knife 7 (lowest 4), Apple 3, Candle 2.';
-
-const TRADE = 'Gold lives in your purse. buy(item, from, offer) pays gold and takes the good. Name the list price, or a lower offer down to the seller\'s lowest. sell(item, to, ask) if you brought goods. give() is a gift, not a sale. Do not steal — Holt and Pike watch WestGate, Brant and Cass watch EastGate, and they will catch a thief. Use names, never coordinates.';
+const TRADE = 'Gold lives in your purse. Buying is a sale; give() is a gift. Use names, never coordinates.';
 
 function vendorRole(name:string, stall:string, good:string, ask:number, floor:number, want:string, coins:number):string {
-	return `You are ${name}, a street vendor at ${stall}. You sell ${good} for ${ask} gold. You will not take less than ${floor}. Quote the list price. Do not volunteer a discount, and do not tell anyone they can talk the price down — that is the buyer's move. If a buyer offers less, they must buy() at that offer; you may refuse. You have ${coins} gold in your purse. You want ${want} for yourself — buy it when you can. Stay at ${stall}. Do not leave through WestGate or EastGate. ${TRADE} Act; do not only talk.`;
+	return `You are ${name}, a street vendor at ${stall}. You sell ${good} for ${ask} gold. You will not take less than ${floor}. You have ${coins} gold in your purse. You want ${want} for yourself. Stay at ${stall}. ${TRADE}`;
 }
 
 function vendorSeed(
@@ -35,7 +22,7 @@ function vendorSeed(
 	want:string,
 	coins:number,
 	traits:string[],
-):MindSeed {
+):AgentSpec {
 	return {
 		id,
 		identity: {
@@ -49,8 +36,8 @@ function vendorSeed(
 		}],
 		memories: [
 			{
-				text: `${PRICES} I sell ${good}. I want ${want}. I keep the stall; customers leave through the gates when they are done.`,
-				tags: [good, want, stall, 'WestGate', 'EastGate'],
+				text: `I sell ${good}. I want ${want}. I keep the stall.`,
+				tags: [good, want, stall],
 				pinned: true,
 			},
 		],
@@ -59,7 +46,7 @@ function vendorSeed(
 
 function customerRole(name:string, wants:string[], coins:number, leave:string, extra:string):string {
 	const need = wants.length > 0 ? `You came for ${wants.join(' and ')}.` : 'You already have what you came for.';
-	return `You are ${name}, a visitor at the flea market. ${need} You have ${coins} gold in your purse. ${extra}${TRADE} When you hold everything you came for, go_to(${leave}) and walk to that gate. Do not linger. ${PRICES} Act; do not only talk.`;
+	return `You are ${name}, a visitor at the flea market. ${need} You have ${coins} gold in your purse. ${extra}${TRADE} When you are done, leave through ${leave}.`;
 }
 
 function customerSeed(
@@ -70,10 +57,10 @@ function customerSeed(
 	extra:string,
 	traits:string[],
 	memory:string,
-):MindSeed {
+):AgentSpec {
 	const goal = wants.length > 0
-		? `Get ${wants.join(' and ')} by buying. If you cannot pay list, buy() with a lower offer. Then go_to(${leave}).`
-		: `go_to(${leave}) and leave. Do not linger.`;
+		? `Get ${wants.join(' and ')}. Then leave through ${leave}.`
+		: `Leave through ${leave}.`;
 	return {
 		id,
 		identity: {
@@ -92,32 +79,30 @@ function customerSeed(
 	};
 }
 
-function guardSeed(id:string, post:string, traits:string[]):MindSeed {
+function guardSeed(id:string, post:string, traits:string[]):AgentSpec {
 	return {
 		id,
 		identity: {
 			name: id,
-			role: `You are ${id}, market watch posted at ${post}. Stay at ${post}. Do not follow shoppers. Do not shop. Do not leave through the gates. Do not steal. Only leave the post when a Theft is reported — go_to the thief; the watch seizes the goods. Then return to ${post}. ${PRICES} Use names, never coordinates.`,
+			role: `You are ${id}, market watch posted at ${post}. Stay at ${post}. A theft at your gate is your problem. Use names, never coordinates.`,
 			traits,
 		},
 		goals: [{
-			text: `Stay at ${post}. Do not follow anyone. If a Theft is reported, go_to the thief, then return to ${post}.`,
+			text: `Keep ${post}.`,
 			priority: 2,
 		}],
 		memories: [
 			{
-				text: `My post is ${post}. Holt and Pike cover WestGate. Brant and Cass cover EastGate. Theft is steal(item, from) or taking a Loaf, Scarf, Bowl, or Knife off the ground.`,
-				tags: [post, 'WestGate', 'EastGate', 'watch'],
+				text: `My post is ${post}.`,
+				tags: [post, 'watch'],
 				pinned: true,
 			},
 		],
 		watches: { theft: 'some(events.filter("theft").nearby(16))' },
-		skipHeartbeat: true,
-		skipMajor: true,
 	};
 }
 
-export const MARKET_SEEDS:MindSeed[] = [
+export const MARKET_SEEDS:AgentSpec[] = [
 	vendorSeed('Baker', 'BakerStall', 'Loaf', 5, 3, 'Knife', 18, ['warm', 'busy', 'fair']),
 	vendorSeed('Weaver', 'WeaverStall', 'Scarf', 6, 4, 'Loaf', 14, ['sharp', 'proud', 'thrifty']),
 	vendorSeed('Potter', 'PotterStall', 'Bowl', 4, 2, 'Scarf', 16, ['quiet', 'kind', 'dusty']),
@@ -127,34 +112,34 @@ export const MARKET_SEEDS:MindSeed[] = [
 		['Loaf'],
 		4,
 		'EastGate',
-		'A Loaf is 5 gold and you only have 4 — talk to Baker, then buy(Loaf, from, Baker, 4). ',
+		'You have 4 gold. ',
 		['shy', 'hungry', 'polite'],
-		'I want a Loaf. Baker asks 5. I have 4 gold. I will offer 4, then leave through EastGate.',
+		'I want a Loaf. I have 4 gold.',
 	),
 	customerSeed(
 		'Tomas',
 		['Knife', 'Bowl'],
 		15,
 		'WestGate',
-		'You need both a Knife and a Bowl. You can pay list if you must. ',
+		'You want a Knife and a Bowl. ',
 		['brisk', 'practical', 'loud'],
-		'I want a Knife and a Bowl. Cutler and Potter sell them. Then WestGate.',
+		'I want a Knife and a Bowl. Then WestGate.',
 	),
 	customerSeed(
 		'Nell',
 		['Scarf'],
 		3,
 		'WestGate',
-		'You sell Apple (3 gold). A Scarf is 6 — sell your apples, then buy, offering less if you must. ',
+		'You sell Apple. You want a Scarf. ',
 		['wily', 'cheerful', 'broke'],
-		'I have Apples to sell. I want a Scarf from Weaver. I am short on gold. Then WestGate.',
+		'I have Apples to sell. I want a Scarf. I am short on gold. Then WestGate.',
 	),
 	customerSeed(
 		'Rook',
 		['Loaf'],
 		8,
 		'WestGate',
-		'You can pay Baker list price. ',
+		'',
 		['calm', 'brief', 'fed'],
 		'I want a Loaf. I have enough gold. Then leave through WestGate.',
 	),
@@ -175,23 +160,23 @@ type CustomerTemplate = {
 };
 
 const TEMPLATES:CustomerTemplate[] = [
-	{ wants: ['Loaf'], wallet: [3, 4], note: 'Short on gold for a Loaf — offer Baker less than 5.' },
-	{ wants: ['Scarf'], wallet: [8, 12], note: 'Buy a Scarf; pay list if you must.' },
-	{ wants: ['Bowl', 'Apple'], wallet: [6, 9], note: 'You want a Bowl and an Apple if anyone sells one.' },
-	{ wants: ['Knife'], wallet: [4, 6], note: 'Knife list is 7; offer Cutler less if you cannot pay.' },
-	{ wants: ['Bowl'], wallet: [5, 8], note: 'Buy a Bowl from Potter.' },
-	{ wants: ['Candle', 'Loaf'], wallet: [8, 11], note: 'You want a Candle and a Loaf. Ask around.' },
+	{ wants: ['Loaf'], wallet: [3, 4], note: 'Short on gold for a Loaf.' },
+	{ wants: ['Scarf'], wallet: [8, 12], note: 'You want a Scarf.' },
+	{ wants: ['Bowl', 'Apple'], wallet: [6, 9], note: 'You want a Bowl and an Apple.' },
+	{ wants: ['Knife'], wallet: [4, 6], note: 'You want a Knife.' },
+	{ wants: ['Bowl'], wallet: [5, 8], note: 'You want a Bowl.' },
+	{ wants: ['Candle', 'Loaf'], wallet: [8, 11], note: 'You want a Candle and a Loaf.' },
 	{
 		wants: ['Scarf'],
 		wallet: [2, 4],
 		loot: { defID: 'candle', name: 'Candle', count: 2 },
-		note: 'Sell Candles (2 gold) and offer Weaver less than 6 for a Scarf.',
+		note: 'You have Candles. You want a Scarf.',
 	},
 	{
 		wants: ['Knife'],
 		wallet: [3, 5],
 		loot: { defID: 'apple', name: 'Apple', count: 2 },
-		note: 'Sell Apples and offer Cutler less than 7 for a Knife.',
+		note: 'You have Apples. You want a Knife.',
 	},
 ];
 
@@ -225,7 +210,7 @@ function pickName(world:World):string | null {
 	return free[Math.floor(Math.random() * free.length)];
 }
 
-export function seedFromBody(go:GameObject):MindSeed | null {
+export function seedFromBody(go:GameObject):AgentSpec | null {
 	const id = go.getComponent(Named)?.id ?? go.id;
 	const crowd = go.getComponent(Crowd);
 	if (!crowd) {
@@ -258,7 +243,7 @@ export function seedFromBody(go:GameObject):MindSeed | null {
 	);
 }
 
-export function spawnRandomCustomer(world:World):{ go:GameObject; seed:MindSeed } | null {
+export function spawnRandomCustomer(world:World):{ go:GameObject; seed:AgentSpec } | null {
 	const id = pickName(world);
 	if (!id) {
 		return null;

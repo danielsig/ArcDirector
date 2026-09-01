@@ -1,20 +1,18 @@
 import { isRecord } from '../json.js';
 
-export type ThinkOff = 'no_think' | 'effort_low';
+export type ThinkOff = 'no_think' | 'strength';
 
 export type ModelTier = {
 	id:string;
 	thinking?:boolean;
-	/** How to disable CoT when `enableThinking` is false. */
+	/** How to shrink CoT when `enableThinking` is false. Default `no_think`. */
 	thinkOff?:ThinkOff;
 };
 
 /** Prefer these when nothing is already loaded. Speed first, then tool-use, then size. */
 export const MODEL_TIERS:ModelTier[] = [
-	{ id: 'meta/muse-glimmer', thinking: true, thinkOff: 'effort_low' },
-	{ id: 'muse-glimmer', thinking: true, thinkOff: 'effort_low' },
-	{ id: 'qwen/qwen3.8-27b', thinking: true, thinkOff: 'no_think' },
-	{ id: 'qwen3.8-27b', thinking: true, thinkOff: 'no_think' },
+	{ id: 'meta/muse-glimmer', thinking: true, thinkOff: 'strength' },
+	{ id: 'muse-glimmer', thinking: true, thinkOff: 'strength' },
 	{ id: 'google/gemma-4-31b-qat' },
 	{ id: 'gemma-4-31b-qat' },
 ];
@@ -63,15 +61,24 @@ function matchingTier(id:string):ModelTier | undefined {
 }
 
 export function isThinkingModel(id:string):boolean {
-	return matchingTier(id)?.thinking === true;
+	if (matchingTier(id)?.thinking === true) {
+		return true;
+	}
+	return thinkOffMode(id) === 'no_think';
 }
 
 export function thinkOffMode(id:string):ThinkOff | undefined {
 	const row = matchingTier(id);
-	if (!row?.thinking) {
+	if (row?.thinking) {
+		return row.thinkOff ?? 'no_think';
+	}
+	if (row) {
 		return undefined;
 	}
-	return row.thinkOff ?? 'no_think';
+	if (/qwen3|qwq/i.test(id)) {
+		return 'no_think';
+	}
+	return undefined;
 }
 
 export function isLoadedModel(model:ModelInfo):boolean {
@@ -151,7 +158,14 @@ function asNativeList(payload:unknown):ModelInfo[] {
 }
 
 function matchesName(model:ModelInfo, name:string):boolean {
-	return model.id === name || model.id.endsWith(name) || model.id.includes(name);
+	return modelIDsMatch(model.id, name);
+}
+
+export function modelIDsMatch(id:string, name:string):boolean {
+	if (id === name) {
+		return true;
+	}
+	return id.endsWith(name) || name.endsWith(id) || id.includes(name) || name.includes(id);
 }
 
 function findNamed(pool:ModelInfo[], name:string):ModelInfo | undefined {
@@ -159,10 +173,10 @@ function findNamed(pool:ModelInfo[], name:string):ModelInfo | undefined {
 }
 
 /**
- * One chat model only. If anything is already in VRAM, stay on it — requesting
- * a different catalog id can unload the one that is already loaded.
- * Preferred names only rank *within* the loaded set, or the full catalog when
- * the server does not report load state.
+ * One chat model only. An explicit `requested` id wins if it is in the catalog
+ * (loading it may unload whatever is in VRAM). Otherwise stay on a loaded
+ * model. Preferred names only rank *within* the loaded set, or the full
+ * catalog when the server does not report load state.
  */
 export function pickSingleChatModel(
 	models:ModelInfo[],
@@ -173,7 +187,7 @@ export function pickSingleChatModel(
 	const loaded = chat.filter(isLoadedModel);
 	const pool = loaded.length > 0 ? loaded : chat;
 	if (requested) {
-		const hit = findNamed(pool, requested);
+		const hit = findNamed(chat, requested) ?? findNamed(pool, requested);
 		if (hit) {
 			return hit.id;
 		}

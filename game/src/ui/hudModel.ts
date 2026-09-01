@@ -1,5 +1,9 @@
 import type { SaveSlotInfo } from '../engine/gameSave';
-import { DEFAULT_PARALLEL_THINKERS } from '../engine/thinkPref';
+import {
+	DEFAULT_BATCH_THINKS,
+	DEFAULT_PARALLEL_THINKERS,
+	DEFAULT_THINKING_BUDGET,
+} from '../engine/thinkPref';
 
 export type MinimapCell = {
 	def:string;
@@ -107,6 +111,10 @@ export type HudModel = {
 	model:string;
 	/** ThinkQueue slots (HTTP in flight). Menu + localStorage. */
 	maxParallel:number;
+	/** Hold new NPC thinks until the model is idle (or batchWait), then start a wave. Menu + localStorage. */
+	batchThinks:boolean;
+	/** CoT token cap. 0 disables thinking. Menu + localStorage. */
+	thinkingBudget:number;
 	/** Local server catalog (embeddings omitted). */
 	models:HudModelOption[];
 	/** Foldable menu panel for inference timings. */
@@ -173,6 +181,8 @@ export function emptyHud():HudModel {
 		arcDirectorOn: true,
 		model: '',
 		maxParallel: DEFAULT_PARALLEL_THINKERS,
+		batchThinks: DEFAULT_BATCH_THINKS,
+		thinkingBudget: DEFAULT_THINKING_BUDGET,
 		models: [],
 		devStatsOpen: loadDevStatsOpen(),
 		inferCalls: 0,

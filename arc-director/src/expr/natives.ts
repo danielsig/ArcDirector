@@ -32,8 +32,11 @@ export type HostKernels = {
 	inventory?:(who:ExprEntity)=>ExprEntity[];
 	hp?:(who:ExprEntity)=>{ hp:number; maxHP:number } | undefined;
 	isOpen?:(who:ExprEntity)=>boolean | undefined;
+	/** Director fills from unabsorbed `HeardSpeech`. Standalone `buildCatalog` may set it. */
 	hasHeard?:boolean;
+	/** Director fills from `lastTacticalAt`. */
 	prevThought?:{ secondsAgo:number };
+	/** Director fills from `lastResult`. */
 	prevActions?:{ secondsAgo:number; isOk:boolean; reason:string; verb:string }[];
 	stringifiers?:Stringifiers;
 	/** Host picks the stringifier key. The library never inspects tags for doors/people/items. */

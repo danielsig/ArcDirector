@@ -1,5 +1,6 @@
 import { NPCInput } from '../actors/NPCInput';
 import { PlayerInput } from '../actors/PlayerInput';
+import { Companion, Named } from '../engine/components';
 import { clamp, lerpAngle, yawToward } from '../engine/math';
 import type { GameObject } from '../engine/GameObject';
 import type { World } from '../engine/World';
@@ -24,10 +25,26 @@ function bodyNamed(world:World, id:string):GameObject | undefined {
 	return world.findNamed(id) ?? world.findByID(id);
 }
 
+/** Observer hide, plus companion exception for the body they follow. */
+export function talkNotices(viewer:GameObject, go:GameObject):boolean {
+	const world = viewer.world;
+	if (!world) {
+		return false;
+	}
+	if (world.npcCanSee(go)) {
+		return true;
+	}
+	const bond = viewer.getComponent(Companion);
+	return !!bond && (go.id === bond.targetID || go.getComponent(Named)?.id === bond.targetID);
+}
+
 export function talkCanSee(world:World, aID:string, bID:string):boolean {
-	const a = bodyOf(world, aID);
-	const b = bodyOf(world, bID);
+	const a = bodyNamed(world, aID);
+	const b = bodyNamed(world, bID);
 	if (!a || !b || a === b) {
+		return false;
+	}
+	if (!talkNotices(a, b)) {
 		return false;
 	}
 	return lineClear(

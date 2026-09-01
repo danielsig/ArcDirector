@@ -8,6 +8,7 @@ import { CHUNK_SIZE } from '../world/constants';
 import { countDef, slotItem } from '../items/inventory';
 import { nearestPickup, pickupLabel } from '../items/pickup';
 import type { HudModel, MinimapCell } from '../ui/hudModel';
+import type { GameHost } from '../npc/adapter';
 
 const MSG_LIFE = 3.2;
 
@@ -232,4 +233,36 @@ export function patchHud(
 	hud.minimap.playerX = p?.x ?? 0;
 	hud.minimap.playerZ = p?.z ?? 0;
 	hud.minimap.playerYaw = player?.transform.yaw ?? 0;
+}
+
+export function statusLabels(host:GameHost):{ id:string; text:string }[] {
+	const now = host.world.time;
+	const out:{ id:string; text:string }[] = [];
+	const queue = host.arc?.mindQueue();
+	for (const agent of host.arc?.agents() ?? []) {
+		if (queue?.isThinking(agent.id)) {
+			out.push({ id: agent.id, text: 'thinking...' });
+			continue;
+		}
+		const row = host.labels.get(agent.id);
+		if (row && now < row.until) {
+			out.push({ id: agent.id, text: row.text });
+		}
+	}
+	return out;
+}
+
+export function patchInfer(host:GameHost, hud:HudModel):void {
+	const infer = host.arc?.infer;
+	if (!infer) {
+		return;
+	}
+	hud.inferCalls = infer.calls;
+	hud.inferContextMs = infer.contextMs;
+	hud.inferGenerateMs = infer.generateMs;
+	hud.inferWallMs = infer.wallMs;
+	hud.inferContextKnown = infer.contextKnown;
+	hud.inferLastContextMs = infer.lastContextMs;
+	hud.inferLastGenerateMs = infer.lastGenerateMs;
+	hud.inferLastWallMs = infer.lastWallMs;
 }

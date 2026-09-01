@@ -16,16 +16,22 @@ function preview(message:string):string {
 	return `${line.slice(0, 140)}…`;
 }
 
+function atBottom(el:HTMLElement):boolean {
+	return el.scrollHeight - el.scrollTop - el.clientHeight < 8;
+}
+
 watch(
 	() => [props.hud.aiLog.length, props.hud.aiLogOpen] as const,
-	async () => {
-		if (!props.hud.aiLogOpen) {
+	async (curr, prev) => {
+		if (!curr[1]) {
 			return;
 		}
-		await nextTick();
 		const el = logEl.value;
-		if (el) {
-			el.scrollTop = el.scrollHeight;
+		const stick = !prev?.[1] || (el != null && atBottom(el));
+		await nextTick();
+		const box = logEl.value;
+		if (stick && box) {
+			box.scrollTop = box.scrollHeight;
 		}
 	},
 );

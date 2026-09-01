@@ -7,13 +7,13 @@ This repo is an **LLM NPC framework** with a small 3D game attached so we can te
 | `arc-director/` | `arc-director` | Engine-agnostic agents: plan, memory, perception, talk, HTTP inference. No Vue, no Three, no physics. |
 | `kindling/` | `@arc-director/kindling` | GameObject runtime: `Game`, `World`, `Component`, tick, physics, Three.js view. Hosts subclass; they do not own this. |
 | `game/` | `@arc-director/game` | Example host used for testing: walkable world, items, streaming chunks, Vue HUD, adapter into ArcDirector. Subclasses Kindling. |
-| `brainstorming/` | — | Concept art and old notes. |
+| `brainstorming/` | none | Concept art and old notes. |
 
 pnpm workspace at the repo root (`package.json`, `pnpm-workspace.yaml`).
 
 ## Stack
 
-- **Language:** TypeScript (strict), pnpm workspaces — not a single root `src/`. 2–3 letter acronyms `ID` / `HP` / `NPC` / `URL` / `UTC` (`NPCDirector`, `npcID` — never `Id`, `Hp`, `Npc`, `Url`, `Utc`). Not units (`Mb` ≠ `MB`, `Ms` ≠ `MS`).
+- **Language:** TypeScript (strict), pnpm workspaces, not a single root `src/`. 2–3 letter acronyms `ID` / `HP` / `NPC` / `URL` / `UTC` (`NPCDirector`, `npcID`; never `Id`, `Hp`, `Npc`, `Url`, `Utc`). Not units (`Mb` ≠ `MB`, `Ms` ≠ `MS`).
 - **`arc-director`:** pure TS library. Local models over HTTP (LM Studio / Ollama).
 - **`kindling`:** Unity-shaped runtime. Owns canvas, `Renderer`, frame loop, `GameObject` / `Transform` / physics. Three.js is the scene graph.
 - **`game`:** Vue 3 (Composition API, one SFC per file) + Vite. Subclasses Kindling `Game` / `World` / `GameObject` / `Component`. Simulation is not Vue state; HUD is DOM over the canvas.
@@ -64,7 +64,7 @@ Ground is **XZ**. **Y** is height (tile height underfoot). Yaw is around Y, in r
 | **−Z** | north (top of a glyph map; yaw `0` faces this way) |
 | **+Z** | south |
 
-WASD is camera-relative on XZ. NPCs never see these numbers — actions and prompts use names only. URL `observer`/`ai` (and agent-only `view`) are **testing-only** (see below).
+WASD is camera-relative on XZ. NPCs never see these numbers; actions and prompts use names only. URL `observer`/`ai` (and agent-only `view`) are **testing-only** (see below).
 
 ## Dev server
 
@@ -78,7 +78,7 @@ The game is served at `http://localhost:5173/` (Vite default). There is no path 
 
 ## URL query schema
 
-`scene` is the real deep link. **`observer` / `ai` are testing flags** kept in the address bar (and localStorage). **`view` is agent-only** — never add it when playing as a user. Player pose (position + camera yaw) autosaves to localStorage; `view` overrides that pose when present.
+`scene` is the real deep link. **`observer` / `ai` are testing flags** kept in the address bar (and localStorage). **`view` is agent-only:** never add it when playing as a user. Player pose (position + camera yaw) autosaves to localStorage; `view` overrides that pose when present.
 
 | Param | Kind | Meaning |
 |-------|------|---------|
@@ -123,9 +123,9 @@ http://localhost:5173/?scene=marketplace&view=16,0,8,1.57
 
 When the work is visual or location-specific, **agents must pass `view`**. Do not treat a default spawn / last-autosave glance as enough.
 
-1. Open a `scene` + `view` URL (include `observer`/`ai` as needed). After moving, copy the bar — `view` stays in sync only if it was already present.
+1. Open a `scene` + `view` URL (include `observer`/`ai` as needed). After moving, copy the bar. `view` stays in sync only if it was already present.
 2. Wait until the canvas has rendered (spritesheet load).
-3. Take a screenshot. Open the pause menu only with the top-right **Menu** button — Esc does not toggle it.
+3. Take a screenshot. Open the pause menu only with the top-right **Menu** button. Esc does not toggle it.
 
 Need a distant chunk: put that X/Z in `view` so the streaming anchor (the player) loads it.
 
@@ -137,13 +137,13 @@ Recommended flag values:
 | Watch NPCs act without them noticing you (default) | `observer=1&ai=1` |
 | Talk, give, or otherwise interact as a visible player | `observer=0&ai=1` |
 
-Example — glen screenshot with ArcDirector paused:
+Example: glen screenshot with ArcDirector paused:
 
 ```
 http://localhost:5173/?scene=glen&view=8,0,12,1.57&observer=1&ai=0
 ```
 
-Example — marketplace with ArcDirector paused:
+Example: marketplace with ArcDirector paused:
 
 ```
 http://localhost:5173/?scene=marketplace&view=16,0,8,1.57&observer=1&ai=0

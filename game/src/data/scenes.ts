@@ -1,3 +1,4 @@
+import type { ArcDirector } from 'arc-director';
 import type { ChunkFile } from '../world/decodeGlyphChunk';
 import { dungeon_0_0 } from './chunks/dungeon_0_0';
 import { dungeon_1_0 } from './chunks/dungeon_1_0';
@@ -8,6 +9,10 @@ import { glen_1_1 } from './chunks/glen_1_1';
 import { market_0_0 } from './chunks/market_0_0';
 import { market_1_0 } from './chunks/market_1_0';
 import { HUMAN_KINDS, type CrowdKind, type HumanKind } from '../engine/components';
+import type { GameHost, HostCtx } from '../npc/adapter';
+import { createDirector as createAbbeyDirector } from '../npc/scenes/abbey';
+import { createDirector as createGlenDirector } from '../npc/scenes/glen';
+import { createDirector as createMarketDirector } from '../npc/scenes/market';
 
 export type NPCSpawnDef = {
 	id:string;
@@ -35,6 +40,7 @@ export type SceneDef = {
 	ambient:string;
 	message:string;
 	playerWallet?:number;
+	createDirector:(host:GameHost)=>ArcDirector<HostCtx>;
 };
 
 export const ABBEY_VAULT:SceneDef = {
@@ -59,8 +65,9 @@ export const ABBEY_VAULT:SceneDef = {
 			],
 		},
 	],
-	ambient: 'A damp stone hall of the abbey. Act now; do not idle; talk only to coordinate. EastGate is locked. Share only what you personally know; do not invent facts you were not told. Once EastGate is open, walk through it — do not linger in the doorway. Only Herbalist harvests Bitterroot. Alchemist brews two MagicPotion with use(Bitterroot, BrewHearth) only after holding GoldCoin, keeps the coin, and gives the vials. Herbalist uses a vial on NollCot. Captain uses a vial on LinaCot. Do not drink MagicPotion. Do not finish in the hall. Use give(item, to). Use names, never coordinates.',
+	ambient: 'A damp stone hall of the abbey.',
 	message: 'E pick up / unlock   F use   Enter talk   /give   Tab chat',
+	createDirector: createAbbeyDirector,
 };
 
 export const RIVER_GLEN:SceneDef = {
@@ -69,7 +76,7 @@ export const RIVER_GLEN:SceneDef = {
 	look: 'glen',
 	chunks: [glen_0_0, glen_1_0, glen_0_1, glen_1_1],
 	npcs: [
-		{ id: 'Forager', meshID: 'human', chunkID: 'glen_0_0', localX: 7, localZ: 8, pack: true },
+		{ id: 'Forager', meshID: 'human', chunkID: 'glen_1_1', localX: 9, localZ: 3, pack: true },
 		{
 			id: 'Miller',
 			meshID: 'human_robe',
@@ -99,8 +106,9 @@ export const RIVER_GLEN:SceneDef = {
 			companion: true,
 		},
 	],
-	ambient: 'A windy river glen. Act now; do not idle; talk only to coordinate. MillBridge is raised — water blocks it. Miller wants FireMushroom and will not lower the bridge unpaid. Forager must pick_up(FireMushroom) and give it to Miller. Miller then use(MillCrank, MillLever). Forager, Miller, and Angler ignore CottageDoor. Angler stays south until the bridge is down, then crosses MillBridge and give(SilverTrout, Forager). Servant serves Player and obeys them — she is not part of the mill bargain. If she needs an item Player holds, she must say() and ask them to give() it. Use names, never coordinates.',
+	ambient: 'A windy river glen.',
 	message: 'E pick up / unlock   F use   Enter talk   /give   Tab chat',
+	createDirector: createGlenDirector,
 };
 
 export const MARKETPLACE:SceneDef = {
@@ -244,8 +252,9 @@ export const MARKETPLACE:SceneDef = {
 			crowd: { kind: 'guard', wants: [], leaveGate: 'EastGate' },
 		},
 	],
-	ambient: 'A busy street flea market. Gold is in your purse, not as coins in a pack. Pay with buy(item, from, offer). List prices: Loaf 5, Scarf 6, Bowl 4, Knife 7, Apple 3, Candle 2. A buyer who cannot pay list may offer less on buy(); a seller may refuse. sell(item, to, ask) if you brought goods. Holt and Pike watch WestGate; Brant and Cass watch EastGate. steal(item, from) is a crime — the watch will catch you and take the goods back. Do not steal. Vendors stay at their stalls. Customers: when you have what you came for, go_to your leave gate (WestGate or EastGate) and walk to it — do not linger. Act; talk to trade; use names, never coordinates.',
+	ambient: 'A busy street flea market.',
 	message: 'E pick up / unlock   F use   Enter talk   /give   Tab chat',
+	createDirector: createMarketDirector,
 };
 
 export const SCENES:Record<string, SceneDef> = {

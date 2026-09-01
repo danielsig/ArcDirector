@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { VerbRegistry, registerCoreVerbs } from '../action/registry.js';
+import { VerbRegistry, registerStockVerbs } from '../action/registry.js';
 import {
 	buildCatalog,
 	dummyEntity,
@@ -15,7 +15,7 @@ import {
 import { FakeProvider } from '../inference/fake.js';
 import { ThinkQueue } from '../think/queue.js';
 import { Agent } from './agent.js';
-import type { PerceptionRecipe, WatchInput } from './types.js';
+import type { WatchInput } from './types.js';
 
 type Ctx = Record<string, never>;
 
@@ -61,8 +61,8 @@ function hostAt(dist:number, extra:Partial<HostKernels> = {}):{ host:HostKernels
 	return { host, cat: buildCatalog(host) };
 }
 
-function recipe():PerceptionRecipe<Ctx> {
-	return { push: { scene: { description: 'x', gather: () => 'a glen' } }, tools: {} };
+function perception():{ senses:Record<string, { description:string; gather:()=>string }>; tools:Record<string, never> } {
+	return { senses: { scene: { description: 'x', gather: () => 'a glen' } }, tools: {} };
 }
 
 function agentOf(opts:{
@@ -77,8 +77,8 @@ function agentOf(opts:{
 		id: 'Forager',
 		identity: { name: 'Forager', role: 'Watch the glen.' },
 		provider: opts.provider,
-		verbs: registerCoreVerbs(new VerbRegistry()),
-		recipe: recipe(),
+		verbs: registerStockVerbs(new VerbRegistry()),
+		...perception(),
 		context: () => ({}),
 		catalog: opts.catalog,
 		watches: opts.watches,
@@ -114,10 +114,10 @@ describe('agent watches', () => {
 		q.setWatches('Forager', a.effectiveWatches());
 		const far = hostAt(20);
 		live = far.cat;
-		q.tick(1, new Map([['Forager', far.cat]]), 0);
+		q.tick(1, new Map([['Forager', far.cat]]));
 		assert.equal(q.lastMax('Forager') > 0.05, false);
 		const near = hostAt(5);
-		const rows = q.tick(1, new Map([['Forager', near.cat]]), 0);
+		const rows = q.tick(1, new Map([['Forager', near.cat]]));
 		assert.ok(rows.some((r) => r.npcID === 'Forager'));
 
 		const frozen = agentOf({
@@ -132,8 +132,8 @@ describe('agent watches', () => {
 		const json = a.toJSON();
 		const restored = Agent.fromJSON(json, {
 			provider,
-			verbs: registerCoreVerbs(new VerbRegistry()),
-			recipe: recipe(),
+			verbs: registerStockVerbs(new VerbRegistry()),
+			...perception(),
 			context: () => ({}),
 			catalog: () => live,
 			model: 'fake',
@@ -250,8 +250,8 @@ describe('agent watches', () => {
 		assert.deepEqual(json.pinnedWatches, { hurt: 'isHurt(me)' });
 		const restored = Agent.fromJSON(json, {
 			provider,
-			verbs: registerCoreVerbs(new VerbRegistry()),
-			recipe: recipe(),
+			verbs: registerStockVerbs(new VerbRegistry()),
+			...perception(),
 			context: () => ({}),
 			catalog: () => cat,
 			model: 'fake',
@@ -261,8 +261,8 @@ describe('agent watches', () => {
 		oldSave.pinnedWatches = {};
 		const merged = Agent.fromJSON(oldSave, {
 			provider,
-			verbs: registerCoreVerbs(new VerbRegistry()),
-			recipe: recipe(),
+			verbs: registerStockVerbs(new VerbRegistry()),
+			...perception(),
 			context: () => ({}),
 			catalog: () => cat,
 			model: 'fake',
@@ -289,8 +289,8 @@ describe('agent watches', () => {
 			maxEpisodic: 40,
 		}, {
 			provider,
-			verbs: registerCoreVerbs(new VerbRegistry()),
-			recipe: recipe(),
+			verbs: registerStockVerbs(new VerbRegistry()),
+			...perception(),
 			context: () => ({}),
 			catalog: () => cat,
 			model: 'fake',
@@ -306,16 +306,16 @@ describe('agent watches', () => {
 		q.ensure('G', { skipHeartbeat: true });
 		q.setWatches('G', ['isNear(me, Player)']);
 		const at5 = hostAt(5);
-		let rows = q.tick(1, new Map([['G', at5.cat]]), 0);
+		let rows = q.tick(1, new Map([['G', at5.cat]]));
 		assert.ok(rows.length === 1);
 		q.ensure('G2', { skipHeartbeat: true });
 		q.setWatches('G2', ['isNear(me, Player)']);
 		const at12 = hostAt(12);
-		rows = q.tick(1, new Map([['G2', at12.cat]]), 0);
+		rows = q.tick(1, new Map([['G2', at12.cat]]));
 		assert.equal(rows.some((r) => r.npcID === 'G2'), false);
 		q.ensure('G3', { skipHeartbeat: true });
 		q.setWatches('G3', ['isNear(me, Player, 16)']);
-		rows = q.tick(1, new Map([['G3', at12.cat]]), 0);
+		rows = q.tick(1, new Map([['G3', at12.cat]]));
 		assert.ok(rows.some((r) => r.npcID === 'G3'));
 		q.ensure('G4', { skipHeartbeat: true });
 		q.setWatches('G4', ['events.filter("theft").nearby(16)']);
@@ -354,7 +354,7 @@ describe('agent watches', () => {
 			nearRadius: 8,
 			bindings: { events: { kind: 'list', value: [{ kind: 'entity', value: closer }] } },
 		};
-		const rows = q.tick(1, new Map([['G', buildCatalog(host)]]), 0);
+		const rows = q.tick(1, new Map([['G', buildCatalog(host)]]));
 		assert.ok(rows.some((r) => r.npcID === 'G'));
 	});
 

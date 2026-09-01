@@ -1,8 +1,13 @@
-import type { PerceptionObject, RelationshipHit, RelationshipStringifier, StringifyCtx } from './types.js';
+import type { SeenObject, RelationshipHit, RelationshipStringifier, StringifyCtx } from './types.js';
+
+function isBareToken(text:string):boolean {
+	const body = text.replace(/^what seems to be /, '').trimStart();
+	return body.startsWith('*') || /^[A-Z]/.test(body);
+}
 
 function indefinite(text:string):string {
 	const body = text.replace(/^what seems to be /, '');
-	if (/^(a|an|the|\*)\b/i.test(body)) {
+	if (/^(a|an|the|\*)\b/i.test(body) || isBareToken(text)) {
 		return text;
 	}
 	const article = /^[aeiou]/i.test(body) ? 'an ' : 'a ';
@@ -12,7 +17,7 @@ function indefinite(text:string):string {
 	return `${article}${text}`;
 }
 
-function attachPhrase(ground:string, figure:string, mode:PerceptionObject['attachMode']):string {
+function attachPhrase(ground:string, figure:string, mode:SeenObject['attachMode']):string {
 	switch (mode) {
 		case 'worn':
 			return `${ground} wearing ${figure}`;
@@ -30,8 +35,8 @@ export const attachmentStringifier:RelationshipStringifier = {
 	tier: 90,
 	stringify(objects, ctx) {
 		const byID = new Map(objects.map((o) => [o.id, o]));
-		let bestFigure:PerceptionObject | null = null;
-		let bestGround:PerceptionObject | null = null;
+		let bestFigure:SeenObject | null = null;
+		let bestGround:SeenObject | null = null;
 		let bestSpan = Infinity;
 		for (const fig of objects) {
 			if (!fig.attachedTo) {
@@ -57,9 +62,9 @@ export const attachmentStringifier:RelationshipStringifier = {
 			bestFigure.attachMode,
 		);
 		const unused = objects.filter((o) => o !== bestFigure && o !== bestGround);
-		const reduceTo:PerceptionObject = {
+		const reduceTo:SeenObject = {
 			...bestGround,
-			describe: () => text,
+			label: text,
 		};
 		return { text, unused, mode: 'reduce', reduceTo };
 	},
@@ -96,8 +101,9 @@ export function basicPluralize(word:string):string {
 export const tagCrowdStringifier:RelationshipStringifier = {
 	id: 'tagCrowd',
 	tier: 40,
+	excludeTags: ['agent', 'person', 'npc', 'item', 'landmark'],
 	stringify(objects, ctx) {
-		const counts = new Map<string, PerceptionObject[]>();
+		const counts = new Map<string, SeenObject[]>();
 		for (const obj of objects) {
 			for (const tag of obj.tags) {
 				const list = counts.get(tag) ?? [];
@@ -106,7 +112,7 @@ export const tagCrowdStringifier:RelationshipStringifier = {
 			}
 		}
 		let bestTag = '';
-		let bestList:PerceptionObject[] = [];
+		let bestList:SeenObject[] = [];
 		for (const [tag, list] of counts) {
 			const unique = uniqueByID(list);
 			if (unique.length < 3) {
@@ -123,16 +129,16 @@ export const tagCrowdStringifier:RelationshipStringifier = {
 		const claimed = new Set(bestList.map((o) => o.id));
 		const unused = objects.filter((o) => !claimed.has(o.id));
 		return {
-			text: `a cluster of ${ctx.pluralize(bestTag)}`,
+			text: ctx.pluralize(bestTag),
 			unused,
 			mode: 'utter',
 		};
 	},
 };
 
-function uniqueByID(list:PerceptionObject[]):PerceptionObject[] {
+function uniqueByID(list:SeenObject[]):SeenObject[] {
 	const seen = new Set<string>();
-	const out:PerceptionObject[] = [];
+	const out:SeenObject[] = [];
 	for (const o of list) {
 		if (seen.has(o.id)) {
 			continue;
@@ -143,6 +149,12 @@ function uniqueByID(list:PerceptionObject[]):PerceptionObject[] {
 	return out;
 }
 
+function pairPhrase(figure:string, ground:string):string {
+	const fig = isBareToken(figure) ? figure : indefinite(figure);
+	const grd = isBareToken(ground) ? ground : indefinite(ground);
+	return `${fig} next to ${grd}`;
+}
+
 export const proximityPairStringifier:RelationshipStringifier = {
 	id: 'proximityPair',
 	tier: 10,
@@ -150,16 +162,21 @@ export const proximityPairStringifier:RelationshipStringifier = {
 		if (ctx.clusterFactor <= 0 || objects.length < 2) {
 			return null;
 		}
-		let bestA:PerceptionObject | null = null;
-		let bestB:PerceptionObject | null = null;
+		let bestA:SeenObject | null = null;
+		let bestB:SeenObject | null = null;
 		let bestD = ctx.clusterFactor;
 		for (let i = 0; i < objects.length; i++) {
 			for (let j = i + 1; j < objects.length; j++) {
-				const d = ctx.distance(objects[i], objects[j]);
+				const a = objects[i];
+				const b = objects[j];
+				if (ctx.noun(a) === ctx.noun(b)) {
+					continue;
+				}
+				const d = ctx.distance(a, b);
 				if (Number.isFinite(d) && d <= bestD) {
 					bestD = d;
-					bestA = objects[i];
-					bestB = objects[j];
+					bestA = a;
+					bestB = b;
 				}
 			}
 		}
@@ -167,7 +184,7 @@ export const proximityPairStringifier:RelationshipStringifier = {
 			return null;
 		}
 		const { ground, figure } = ctx.groundAndFigure(bestA, bestB);
-		const text = `${indefinite(ctx.noun(figure))} next to the ${ctx.noun(ground)}`;
+		const text = pairPhrase(ctx.noun(figure), ctx.noun(ground));
 		const unused = objects.filter((o) => o !== bestA && o !== bestB);
 		return { text, unused, mode: 'utter' };
 	},
@@ -177,7 +194,7 @@ export function builtinStringifiers():RelationshipStringifier[] {
 	return [attachmentStringifier, tagCrowdStringifier, proximityPairStringifier];
 }
 
-export function claimedOf(objects:PerceptionObject[], hit:RelationshipHit):PerceptionObject[] {
+export function claimedOf(objects:SeenObject[], hit:RelationshipHit):SeenObject[] {
 	const unused = new Set(hit.unused);
 	return objects.filter((o) => !unused.has(o));
 }

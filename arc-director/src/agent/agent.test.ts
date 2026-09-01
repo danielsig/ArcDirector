@@ -1,73 +1,51 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { VerbRegistry, registerCoreVerbs } from '../action/registry.js';
+import { VerbRegistry, registerStockVerbs } from '../action/registry.js';
 import { FakeProvider, goToNamedInteractable, hashEmbed } from '../inference/fake.js';
-import { describeScene } from '../perception/describe.js';
-import { builtinLodLayers } from '../perception/lod.js';
-import { builtinStringifiers } from '../perception/stringifiers.js';
-import type { PerceptionObject } from '../perception/types.js';
+import { formatSight } from '../perception/sight.js';
+import type { SeenObject } from '../perception/types.js';
 import { Agent } from './agent.js';
 import { DEFAULT_YOU_SYMBOL } from './map.js';
 import { TalkNet } from './talk.js';
-import type { PerceptionRecipe } from './types.js';
+import type { Sense, ToolSpec } from './types.js';
+import { withPriorityQueue } from '../think/queue.js';
+import { buildCatalog, dummyEntity, SampleCache } from '../expr/index.js';
 
 type Ctx = { paragraph:string };
 
-type Posed = PerceptionObject & { x:number; z:number };
-
-function xz(a:PerceptionObject, b:PerceptionObject):number {
-	const pa = a as Partial<Posed>;
-	const pb = b as Partial<Posed>;
-	return Math.hypot((pa.x ?? 0) - (pb.x ?? 0), (pa.z ?? 0) - (pb.z ?? 0));
-}
-
-function named(id:string, extra:Partial<Posed> = {}):Posed {
+function named(id:string, extra:Partial<SeenObject> & { x?:number; z?:number } = {}):SeenObject {
+	const { x, z, ...rest } = extra;
 	return {
 		id,
+		at: [x ?? 0, z ?? 0],
 		tags: extra.tags ?? [],
-		landmarkTier: extra.landmarkTier ?? 50,
-		x: extra.x ?? 0,
-		z: extra.z ?? 0,
-		movable: extra.movable,
-		interesting: extra.interesting,
-		interactable: extra.interactable,
-		describe: extra.describe ?? (() => id),
-		...extra,
+		...rest,
 	};
 }
 
 function paragraph():string {
-	return describeScene({
-		self: { id: 'Guard' },
-		radius: 20,
+	return formatSight({
+		self: { id: 'Guard', at: [0, 0] },
 		ambient: 'damp stone hall',
 		objects: [
 			named('EastGate', {
 				tags: ['door', 'landmark'],
 				movable: false,
 				interactable: true,
-				landmarkTier: 80,
 				x: 8,
 				z: 0,
-				describe: () => 'east gate',
 			}),
-			named('OakA', { tags: ['tree'], landmarkTier: 40, x: -1, z: -6 }),
-			named('OakB', { tags: ['tree'], landmarkTier: 40, x: 0, z: -6 }),
-			named('OakC', { tags: ['tree'], landmarkTier: 40, x: 1, z: -6 }),
-			named('OakD', { tags: ['tree'], landmarkTier: 40, x: 0.3, z: -5.4 }),
+			named('OakA', { tags: ['tree'], x: -1, z: -6 }),
+			named('OakB', { tags: ['tree'], x: 0, z: -6 }),
+			named('OakC', { tags: ['tree'], x: 1, z: -6 }),
+			named('OakD', { tags: ['tree'], x: 0.3, z: -5.4 }),
 		],
-		closeness: 2,
-		farDistance: 12,
-		clusterFactor: 1.2,
-		lodLayers: builtinLodLayers(),
-		relationships: builtinStringifiers(),
-		distance: xz,
 	});
 }
 
-function recipe():PerceptionRecipe<Ctx> {
+function perception():{ senses:Record<string, Sense<Ctx>>; tools:Record<string, ToolSpec<Ctx>> } {
 	return {
-		push: {
+		senses: {
 			environment: {
 				description: 'Described scene; no coordinates.',
 				gather: (ctx) => ctx.paragraph,
@@ -81,8 +59,8 @@ describe('Agent', () => {
 	it('emits a go_to plan from a described scene', async () => {
 		const scene = paragraph();
 		assert.equal(scene.includes('EastGate'), true);
-		assert.equal(scene.includes('cluster of trees'), true);
-		assert.equal(/\(\s*-?\d/.test(scene), false);
+		assert.equal(scene.includes('trees'), true);
+		assert.equal(scene.includes('cluster of'), false);
 
 		const agent = new Agent<Ctx>({
 			id: 'Guard',
@@ -92,8 +70,8 @@ describe('Agent', () => {
 			},
 			goals: [{ text: 'Go to EastGate', priority: 1 }],
 			provider: new FakeProvider(goToNamedInteractable()),
-			verbs: registerCoreVerbs(new VerbRegistry()),
-			recipe: recipe(),
+			verbs: registerStockVerbs(new VerbRegistry()),
+			...perception(),
 			context: () => ({ paragraph: scene }),
 			model: 'fake',
 		});
@@ -105,8 +83,8 @@ describe('Agent', () => {
 		const json = agent.toJSON();
 		const restored = Agent.fromJSON(json, {
 			provider: new FakeProvider(goToNamedInteractable()),
-			verbs: registerCoreVerbs(new VerbRegistry()),
-			recipe: recipe(),
+			verbs: registerStockVerbs(new VerbRegistry()),
+			...perception(),
 			context: () => ({ paragraph: scene }),
 			model: 'fake',
 		});
@@ -132,8 +110,8 @@ describe('Agent', () => {
 			"maxEpisodic": 256
 		}`), {
 			provider: new FakeProvider(goToNamedInteractable()),
-			verbs: registerCoreVerbs(new VerbRegistry()),
-			recipe: recipe(),
+			verbs: registerStockVerbs(new VerbRegistry()),
+			...perception(),
 			context: () => ({ paragraph: '' }),
 			model: 'fake',
 		});
@@ -165,8 +143,8 @@ describe('Agent', () => {
 			identity: { name: 'Guard', role: 'guard' },
 			goals: [{ text: 'Go to EastGate' }],
 			provider,
-			verbs: registerCoreVerbs(new VerbRegistry()),
-			recipe: recipe(),
+			verbs: registerStockVerbs(new VerbRegistry()),
+			...perception(),
 			context: () => ({ paragraph: scene }),
 			model: 'fake',
 		});
@@ -175,6 +153,89 @@ describe('Agent', () => {
 		assert.equal(sawRecall, true);
 		assert.equal(plan?.head.verb, 'go_to');
 		assert.equal(plan?.head.args.name, 'EastGate');
+	});
+
+	it('surfaces unpinned speech in the next think without a recall tool', async () => {
+		const users:string[] = [];
+		const provider = new FakeProvider((req) => {
+			users.push(String(req.messages[req.messages.length - 1]?.content ?? ''));
+			return {
+				content: JSON.stringify({ head: { verb: 'wait', args: { seconds: 1 } } }),
+				toolCalls: [],
+			};
+		});
+		const agent = new Agent<Ctx>({
+			id: 'Forager',
+			identity: { name: 'Forager', role: 'forager' },
+			goals: [{ text: 'Trade FireMushroom for SilverTrout.' }],
+			provider,
+			verbs: registerStockVerbs(new VerbRegistry()),
+			...perception(),
+			context: () => ({ paragraph: paragraph() }),
+			model: 'fake',
+			heartbeat: 0,
+			toolRoundCap: 0,
+			planRetryCap: 0,
+			strategicInterval: 0,
+		});
+		agent.pushEvent({
+			kind: 'HeardSpeech',
+			text: 'Miller says to Forager: "The mill-fee is FireMushroom."',
+			tags: ['speech'],
+		});
+		await agent.tick(1);
+		for (let i = 0; i < 8; i++) {
+			agent.pushEvent({
+				kind: 'HeardSpeech',
+				text: `Player says: "Noise ${i}."`,
+				tags: ['speech'],
+			});
+		}
+		users.length = 0;
+		await agent.tick(2);
+		assert.match(users[0] ?? '', /You remember:/);
+		assert.match(users[0] ?? '', /mill-fee is FireMushroom/);
+	});
+
+	it('keeps last-seen of a name after it leaves sight', async () => {
+		let scene = formatSight({
+			self: { id: 'Angler', at: [0, 0] },
+			objects: [named('Forager', { tags: ['person'], x: 3, z: 0 })],
+		});
+		const users:string[] = [];
+		const provider = new FakeProvider((req) => {
+			users.push(String(req.messages[req.messages.length - 1]?.content ?? ''));
+			return {
+				content: JSON.stringify({ head: { verb: 'wait', args: { seconds: 1 } } }),
+				toolCalls: [],
+			};
+		});
+		const agent = new Agent<Ctx>({
+			id: 'Angler',
+			identity: { name: 'Angler', role: 'angler' },
+			goals: [{ text: 'Pay Forager with SilverTrout.' }],
+			provider,
+			verbs: registerStockVerbs(new VerbRegistry()),
+			senses: {
+				environment: {
+					description: 'Described scene; no coordinates.',
+					gather: (ctx) => ctx.paragraph,
+				},
+			},
+			tools: {},
+			context: () => ({ paragraph: scene }),
+			model: 'fake',
+			heartbeat: 0,
+			toolRoundCap: 0,
+			planRetryCap: 0,
+			strategicInterval: 0,
+		});
+		await agent.tick(1);
+		assert.equal((users[0] ?? '').includes('Last I saw Forager'), false);
+		scene = 'empty grass.';
+		users.length = 0;
+		await agent.tick(2);
+		assert.match(users[0] ?? '', /Last I saw Forager/);
 	});
 
 	it('retries a bad plan on the same thread when the host sets planRetryCap', async () => {
@@ -201,8 +262,8 @@ describe('Agent', () => {
 			identity: { name: 'Guard', role: 'guard' },
 			goals: [{ text: 'Go to EastGate' }],
 			provider,
-			verbs: registerCoreVerbs(new VerbRegistry()),
-			recipe: recipe(),
+			verbs: registerStockVerbs(new VerbRegistry()),
+			...perception(),
 			context: () => ({ paragraph: scene }),
 			model: 'fake',
 			toolRoundCap: 0,
@@ -224,8 +285,8 @@ describe('Agent', () => {
 				calls += 1;
 				return { content: '{"nope":true}', toolCalls: [] };
 			}),
-			verbs: registerCoreVerbs(new VerbRegistry()),
-			recipe: recipe(),
+			verbs: registerStockVerbs(new VerbRegistry()),
+			...perception(),
 			context: () => ({ paragraph: paragraph() }),
 			model: 'fake',
 			toolRoundCap: 0,
@@ -257,8 +318,8 @@ describe('Agent', () => {
 			identity: { name: 'Guard', role: 'guard' },
 			goals: [{ text: 'Go to EastGate' }],
 			provider,
-			verbs: registerCoreVerbs(new VerbRegistry()),
-			recipe: recipe(),
+			verbs: registerStockVerbs(new VerbRegistry()),
+			...perception(),
 			context: () => ({ paragraph: paragraph() }),
 			model: 'fake',
 			toolRoundCap: 1,
@@ -271,8 +332,8 @@ describe('Agent', () => {
 
 	it('turns a thrown tool handler into an error result on the thread', async () => {
 		let calls = 0;
-		const recipeWithBoom:PerceptionRecipe<Ctx> = {
-			...recipe(),
+		const perceptionWithBoom = {
+			...perception(),
 			tools: {
 				boom: {
 					description: 'Always throws.',
@@ -300,8 +361,8 @@ describe('Agent', () => {
 			identity: { name: 'Guard', role: 'guard' },
 			goals: [{ text: 'Go to EastGate' }],
 			provider,
-			verbs: registerCoreVerbs(new VerbRegistry()),
-			recipe: recipeWithBoom,
+			verbs: registerStockVerbs(new VerbRegistry()),
+			...perceptionWithBoom,
 			context: () => ({ paragraph: paragraph() }),
 			model: 'fake',
 			toolRoundCap: 1,
@@ -346,8 +407,8 @@ describe('Agent', () => {
 			identity: { name: 'Acolyte', role: 'Ask the guard.' },
 			goals: [{ text: 'Talk to Guard' }],
 			provider,
-			verbs: registerCoreVerbs(new VerbRegistry()),
-			recipe: recipe(),
+			verbs: registerStockVerbs(new VerbRegistry()),
+			...perception(),
 			context: () => ({ paragraph: paragraph() }),
 			model: 'fake',
 			talk,
@@ -380,8 +441,8 @@ describe('Agent', () => {
 			id: 'Acolyte',
 			identity: { name: 'Acolyte', role: 'Ask the guard.' },
 			provider,
-			verbs: registerCoreVerbs(new VerbRegistry()),
-			recipe: recipe(),
+			verbs: registerStockVerbs(new VerbRegistry()),
+			...perception(),
 			context: () => ({ paragraph: paragraph() }),
 			model: 'fake',
 			talk,
@@ -426,8 +487,8 @@ describe('Agent', () => {
 			id: 'Acolyte',
 			identity: { name: 'Acolyte', role: 'Ask the guard.' },
 			provider,
-			verbs: registerCoreVerbs(new VerbRegistry()),
-			recipe: recipe(),
+			verbs: registerStockVerbs(new VerbRegistry()),
+			...perception(),
 			context: () => ({ paragraph: paragraph() }),
 			model: 'fake',
 			talk,
@@ -452,10 +513,10 @@ describe('Agent', () => {
 		});
 		const agent = new Agent<Ctx>({
 			id: 'Servant',
-			identity: { name: 'Servant', role: 'Obey Player.' },
+			identity: { name: 'Servant', role: 'You serve Player.' },
 			provider,
-			verbs: registerCoreVerbs(new VerbRegistry()),
-			recipe: recipe(),
+			verbs: registerStockVerbs(new VerbRegistry()),
+			...perception(),
 			context: () => ({ paragraph: paragraph() }),
 			model: 'fake',
 			heartbeat: 0,
@@ -478,8 +539,8 @@ describe('Agent', () => {
 		assert.ok((saved.recent ?? []).some((line) => line.includes('Stay inside the cottage')));
 		const restored = Agent.fromJSON(saved, {
 			provider,
-			verbs: registerCoreVerbs(new VerbRegistry()),
-			recipe: recipe(),
+			verbs: registerStockVerbs(new VerbRegistry()),
+			...perception(),
 			context: () => ({ paragraph: paragraph() }),
 			model: 'fake',
 			heartbeat: 0,
@@ -506,8 +567,8 @@ describe('Agent', () => {
 			id: 'Guard',
 			identity: { name: 'Guard', role: 'Watch.' },
 			provider,
-			verbs: registerCoreVerbs(new VerbRegistry()),
-			recipe: recipe(),
+			verbs: registerStockVerbs(new VerbRegistry()),
+			...perception(),
 			context: () => ({ paragraph: paragraph() }),
 			model: 'fake',
 			heartbeat: 0,
@@ -524,10 +585,11 @@ describe('Agent', () => {
 			});
 		}
 		await agent.tick(1);
-		const text = users[0] ?? '';
-		assert.match(text, /Earlier:/);
-		assert.match(text, /Order 9/);
-		assert.doesNotMatch(text, /^- Player says to you: "Order 0\."$/m);
+		const text = users.find((u) => u.includes('environment:')) ?? users.at(-1) ?? '';
+		const stm = text.split(/\n\nYou remember:/)[0] ?? text;
+		assert.match(stm, /Earlier:/);
+		assert.match(stm, /Order 9/);
+		assert.doesNotMatch(stm, /^- Player says to you: "Order 0\."$/m);
 	});
 
 	it('applies identity and goals from the plan JSON', async () => {
@@ -544,8 +606,8 @@ describe('Agent', () => {
 			identity: { name: 'Servant', role: 'You serve Player.', traits: ['obedient'] },
 			goals: [{ text: 'Follow Player', priority: 2 }],
 			provider,
-			verbs: registerCoreVerbs(new VerbRegistry()),
-			recipe: recipe(),
+			verbs: registerStockVerbs(new VerbRegistry()),
+			...perception(),
 			context: () => ({ paragraph: paragraph() }),
 			model: 'fake',
 			heartbeat: 0,
@@ -574,8 +636,8 @@ describe('Agent', () => {
 			id: 'Servant',
 			identity: { name: 'Servant', role: 'You serve Player.', traits: ['obedient'] },
 			provider,
-			verbs: registerCoreVerbs(new VerbRegistry()),
-			recipe: recipe(),
+			verbs: registerStockVerbs(new VerbRegistry()),
+			...perception(),
 			context: () => ({ paragraph: paragraph() }),
 			execute: async () => ({ ok: true }),
 			model: 'fake',
@@ -604,8 +666,8 @@ describe('Agent', () => {
 			id: 'Servant',
 			identity: { name: 'Servant', role: 'You serve Player.', traits: ['obedient'] },
 			provider,
-			verbs: registerCoreVerbs(new VerbRegistry()),
-			recipe: recipe(),
+			verbs: registerStockVerbs(new VerbRegistry()),
+			...perception(),
 			context: () => ({ paragraph: paragraph() }),
 			model: 'fake',
 			heartbeat: 0,
@@ -631,8 +693,8 @@ describe('Agent', () => {
 				content: JSON.stringify({ head: { verb: 'wait', args: { seconds: 1 } } }),
 				toolCalls: [],
 			})),
-			verbs: registerCoreVerbs(new VerbRegistry()),
-			recipe: recipe(),
+			verbs: registerStockVerbs(new VerbRegistry()),
+			...perception(),
 			context: () => ({ paragraph: paragraph() }),
 			model: 'fake',
 			heartbeat: 0,
@@ -674,8 +736,8 @@ describe('Agent', () => {
 			id: 'Servant',
 			identity: { name: 'Servant', role: 'You serve Player.' },
 			provider,
-			verbs: registerCoreVerbs(new VerbRegistry()),
-			recipe: recipe(),
+			verbs: registerStockVerbs(new VerbRegistry()),
+			...perception(),
 			context: () => ({ paragraph: paragraph() }),
 			model: 'fake',
 			heartbeat: 0,
@@ -700,8 +762,8 @@ describe('Agent', () => {
 			id: 'Servant',
 			identity: { name: 'Servant', role: 'You serve Player.' },
 			provider,
-			verbs: registerCoreVerbs(new VerbRegistry()),
-			recipe: recipe(),
+			verbs: registerStockVerbs(new VerbRegistry()),
+			...perception(),
 			context: () => ({ paragraph: paragraph() }),
 			model: 'fake',
 			heartbeat: 0,
@@ -736,8 +798,8 @@ describe('Agent', () => {
 			identity: { name: 'Servant', role: 'You serve Player.' },
 			goals: [{ text: 'Follow Player', priority: 2 }],
 			provider,
-			verbs: registerCoreVerbs(new VerbRegistry()),
-			recipe: recipe(),
+			verbs: registerStockVerbs(new VerbRegistry()),
+			...perception(),
 			context: () => ({ paragraph: paragraph() }),
 			model: 'fake',
 			heartbeat: 0,
@@ -768,8 +830,8 @@ describe('Agent', () => {
 			identity: { name: 'Guard', role: 'guard' },
 			goals: [{ text: 'Go to EastGate' }],
 			provider: capture,
-			verbs: registerCoreVerbs(new VerbRegistry()),
-			recipe: recipe(),
+			verbs: registerStockVerbs(new VerbRegistry()),
+			...perception(),
 			context: () => ({ paragraph: paragraph() }),
 			model: 'fake',
 			toolRoundCap: 0,
@@ -832,8 +894,8 @@ describe('Agent', () => {
 			identity: { name: 'Guard', role: 'guard' },
 			goals: [{ text: 'Go to EastGate' }],
 			provider,
-			verbs: registerCoreVerbs(new VerbRegistry()),
-			recipe: recipe(),
+			verbs: registerStockVerbs(new VerbRegistry()),
+			...perception(),
 			context: () => ({ paragraph: paragraph() }),
 			model: 'fake',
 			toolRoundCap: 0,
@@ -872,8 +934,8 @@ describe('Agent', () => {
 			identity: { name: 'Guard', role: 'guard' },
 			goals: [{ text: 'Go to EastGate' }],
 			provider,
-			verbs: registerCoreVerbs(new VerbRegistry()),
-			recipe: recipe(),
+			verbs: registerStockVerbs(new VerbRegistry()),
+			...perception(),
 			context: () => ({ paragraph: paragraph() }),
 			model: 'fake',
 			toolRoundCap: 0,
@@ -945,8 +1007,8 @@ describe('Agent', () => {
 			identity: { name: 'Guard', role: 'guard' },
 			goals: [{ text: 'Go to EastGate' }],
 			provider,
-			verbs: registerCoreVerbs(new VerbRegistry()),
-			recipe: recipe(),
+			verbs: registerStockVerbs(new VerbRegistry()),
+			...perception(),
 			context: () => ({ paragraph: paragraph() }),
 			model: 'fake',
 			heartbeat: 0,
@@ -986,8 +1048,8 @@ describe('Agent', () => {
 			id: 'Guard',
 			identity: { name: 'Guard', role: 'guard' },
 			provider,
-			verbs: registerCoreVerbs(new VerbRegistry()),
-			recipe: recipe(),
+			verbs: registerStockVerbs(new VerbRegistry()),
+			...perception(),
 			context: () => ({ paragraph: paragraph() }),
 			model: 'fake',
 			heartbeat: 0,
@@ -1037,8 +1099,8 @@ describe('Agent', () => {
 			id: 'Guard',
 			identity: { name: 'Guard', role: 'guard' },
 			provider,
-			verbs: registerCoreVerbs(new VerbRegistry()),
-			recipe: recipe(),
+			verbs: registerStockVerbs(new VerbRegistry()),
+			...perception(),
 			context: () => ({ paragraph: paragraph() }),
 			execute: async (step) => ({ ok: true, verb: step.verb }),
 			model: 'fake',
@@ -1073,8 +1135,8 @@ describe('Agent', () => {
 			id: 'Guard',
 			identity: { name: 'Guard', role: 'guard' },
 			provider,
-			verbs: registerCoreVerbs(new VerbRegistry()),
-			recipe: recipe(),
+			verbs: registerStockVerbs(new VerbRegistry()),
+			...perception(),
 			context: () => ({ paragraph: paragraph() }),
 			execute: async (step) => ({ ok: true, verb: step.verb }),
 			model: 'fake',
@@ -1089,5 +1151,53 @@ describe('Agent', () => {
 		assert.equal(plan?.then?.plan.head.args.about, 'the lock which key');
 		assert.equal(agent.toJSON().thinkAbout, 'the lock which key');
 		assert.equal(agent.toJSON().lastVerb, 'think');
+	});
+
+	it('tick occupies a think slot; enact arms wait(for) and notes the queue', async () => {
+		const think = withPriorityQueue({ watchInterval: 100, processInterval: 0, maxParallel: 2 });
+		const q = think.queue;
+		const provider = new FakeProvider(() => ({
+			content: JSON.stringify({
+				head: { verb: 'go_to', args: { name: 'EastGate' } },
+				then: {
+					join: 'then',
+					plan: { head: { verb: 'wait', args: { for: 'hasHeard' } } },
+				},
+			}),
+			toolCalls: [],
+		}));
+		const agent = new Agent<Ctx>({
+			id: 'Guard',
+			identity: { name: 'Guard', role: 'guard' },
+			provider,
+			verbs: registerStockVerbs(new VerbRegistry()),
+			...perception(),
+			context: () => ({ paragraph: paragraph() }),
+			execute: async (step) => ({ ok: true, verb: step.verb }),
+			...think,
+			autoEnact: false,
+			model: 'fake',
+			toolRoundCap: 0,
+			planRetryCap: 0,
+		});
+		q.ensure('Guard', { skipHeartbeat: true });
+		const plan = await agent.tick(1);
+		assert.equal(q.inFlight, 0);
+		assert.equal(plan?.head.verb, 'go_to');
+		await agent.enact(plan!);
+		assert.equal(q.planOf('Guard'), null);
+		const me = dummyEntity('me');
+		const cat = buildCatalog({
+			me,
+			others: [],
+			items: [],
+			cache: new SampleCache(),
+			distance: () => 1,
+			nearRadius: 8,
+			hasHeard: true,
+		});
+		assert.ok(q.scoreWatches('Guard', cat) > 0.05);
+		q.beginThink('Guard');
+		assert.equal(q.scoreWatches('Guard', cat), 0);
 	});
 });

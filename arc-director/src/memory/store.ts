@@ -52,6 +52,75 @@ export function cosine(a:number[], b:number[]):number {
 	return d === 0 ? 0 : dot / d;
 }
 
+const NAME_RE = /[A-Z][a-z]+(?:[A-Z][a-z0-9]*)*/g;
+const NOT_NAME = new Set([
+	'The', 'And', 'For', 'But', 'Not', 'You', 'Your', 'They', 'Them', 'This', 'That',
+	'With', 'From', 'Have', 'Were', 'Been', 'Will', 'When', 'What', 'Who', 'How',
+	'Last', 'Near', 'Into', 'Then', 'Than',
+]);
+const STOP = new Set([
+	'the', 'and', 'you', 'are', 'for', 'with', 'that', 'this', 'from', 'your',
+	'have', 'was', 'were', 'not', 'but', 'they', 'them', 'then', 'than', 'into',
+	'near', 'pace', 'paces', 'said', 'says',
+]);
+
+/** PascalCase names in English text (EastGate, FireMushroom). Skips sentence-case The/And. */
+export function nameTags(text:string):string[] {
+	const found = text.match(NAME_RE) ?? [];
+	const out:string[] = [];
+	const seen = new Set<string>();
+	for (const n of found) {
+		if (NOT_NAME.has(n) || seen.has(n)) {
+			continue;
+		}
+		seen.add(n);
+		out.push(n);
+	}
+	return out;
+}
+
+export function mergeTags(...lists:Array<readonly string[] | undefined>):string[] {
+	const out:string[] = [];
+	const seen = new Set<string>();
+	for (const list of lists) {
+		for (const raw of list ?? []) {
+			const t = raw.trim();
+			if (!t || seen.has(t)) {
+				continue;
+			}
+			seen.add(t);
+			out.push(t);
+		}
+	}
+	return out;
+}
+
+export function lexicalTokens(text:string):string[] {
+	const names = nameTags(text).map((n) => n.toLowerCase());
+	const words = (text.toLowerCase().match(/[a-z][a-z0-9]{3,}/g) ?? [])
+		.filter((w) => !STOP.has(w));
+	return [...new Set([...names, ...words])];
+}
+
+/** Fraction of query tokens that appear in `text`. Used when embeddings are missing. */
+export function lexicalOverlap(query:string, text:string):number {
+	const q = lexicalTokens(query);
+	if (q.length === 0) {
+		return 0;
+	}
+	const t = new Set(lexicalTokens(text));
+	if (t.size === 0) {
+		return 0;
+	}
+	let hit = 0;
+	for (const w of q) {
+		if (t.has(w)) {
+			hit += 1;
+		}
+	}
+	return hit / q.length;
+}
+
 export function defaultRecallScore(args:{
 	cosine:number;
 	recency:number;
@@ -132,6 +201,7 @@ export class MemoryStore {
 					: 0;
 				const hits = tagHits(record, tags, opts.query);
 				const recency = recencyBonus(record.createdAt, now);
+				const lex = lexicalOverlap(opts.query, record.text);
 				return {
 					record,
 					value: this.score({
@@ -140,7 +210,7 @@ export class MemoryStore {
 						tagHits: hits,
 						record,
 						now,
-					}),
+					}) + 0.7 * lex,
 				};
 			})
 			.filter((s) => s.value > 0)
@@ -163,11 +233,12 @@ export class MemoryStore {
 		let best:MemoryRecord | null = null;
 		let bestScore = threshold;
 		for (const record of this.records) {
-			if (!record.emotional && record.tags.length === 0) {
+			const lex = lexicalOverlap(opts.query, record.text);
+			const hits = tagHits(record, opts.tags ?? [], opts.query);
+			if (!record.emotional && record.tags.length === 0 && lex < 0.15) {
 				continue;
 			}
-			const hits = tagHits(record, opts.tags ?? [], opts.query);
-			if (!record.emotional && hits === 0) {
+			if (!record.emotional && hits === 0 && lex < 0.15) {
 				continue;
 			}
 			const cos = opts.embedding && record.embedding
@@ -179,7 +250,7 @@ export class MemoryStore {
 				tagHits: hits,
 				record,
 				now: opts.now,
-			});
+			}) + 0.7 * lex;
 			if (value > bestScore) {
 				bestScore = value;
 				best = record;

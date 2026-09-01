@@ -5,7 +5,7 @@ alwaysApply: true
 
 # Naming
 
-Only `ID`, `HP`, `NPC`, `URL`, `UTC`. Not HTTP, JSON, or units — casing there is meaning (`Mb` ≠ `MB`, `Ms` ≠ `MS`).
+Only `ID`, `HP`, `NPC`, `URL`, `UTC`. Not HTTP, JSON, or units: casing there is meaning (`Mb` ≠ `MB`, `Ms` ≠ `MS`).
 
 Never `Id`, `Hp`, `Npc`, `Url`, `Utc`. PascalCase: `NPCDirector`. camelCase: `npcID`, `fromURL`. Whole name: `id`, `hp`, `npc`, `url`, `utc`.
 

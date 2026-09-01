@@ -157,7 +157,7 @@ export const ITEM_DEFS:Record<string, ItemDef> = {
 		maxStack: 9,
 		meshID: 'item_potion',
 		color: 0xe07030,
-		components: {},
+		components: { Goods: { ask: 3 } },
 	},
 	silver_trout: {
 		id: 'silver_trout',

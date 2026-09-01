@@ -12,7 +12,7 @@ export function builtinLodLayers():LodLayer[] {
 	return [
 		{
 			id: 'uncertain_far',
-			when: (obj, ctx) => !!obj.interesting && ctx.distance > ctx.farDistance,
+			when: (obj, ctx) => (obj.interesting ?? 0) > 0 && !obj.interactable && ctx.distance > ctx.farDistance,
 			wrap: (text) => {
 				if (text.startsWith('what seems to be ')) {
 					return text;

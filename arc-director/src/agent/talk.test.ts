@@ -242,11 +242,11 @@ describe('TalkNet', () => {
 			['Miller', 'Oat', 'miller of the cottage'],
 		);
 		assert.deepEqual(
-			roleMentionTitles('You are Bram, a forager. The hall names you Herbalist.'),
-			['Herbalist', 'Bram', 'forager'],
+			roleMentionTitles('You are Fern, a forager. The hall names you Herbalist.'),
+			['Herbalist', 'Fern', 'forager'],
 		);
 		assert.ok(!roleMentionTitles(
-			'You serve Player. The land names you Servant. Do not join Forager, Miller, or Angler.',
+			'You are Lira, a servant. The land names you Servant. Do not join Forager, Miller, or Angler.',
 		).includes('Forager'));
 		assert.deepEqual(roleMentionTitles('I keep the mill. I do not fish.'), ['I keep the mill']);
 	});

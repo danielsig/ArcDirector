@@ -15,17 +15,37 @@ export type DescribeCtx = {
 	bearing:Bearing;
 };
 
-export type PerceptionObject = {
+export type SeenObject = {
 	id:string;
+	at:number[];
+	facing?:number[];
 	tags:string[];
 	count?:number;
-	interesting?:boolean;
+	interesting?:number;
 	interactable?:boolean;
 	movable?:boolean;
-	landmarkTier:number;
+	landmarkTier?:number;
 	attachedTo?:string;
 	attachMode?:'on' | 'in' | 'worn' | 'held';
-	describe:(ctx:DescribeCtx)=>string;
+	/** Compound phrase from a reduce hit. Host snapshots omit this. */
+	label?:string;
+};
+
+export type Sight = {
+	self:{ id:string; at:number[]; facing?:number[] };
+	ambient?:string;
+	objects:SeenObject[];
+};
+
+export type SightOpts = {
+	radius?:number;
+	unitName?:string;
+	closeness?:number;
+	farDistance?:number;
+	clusterFactor?:number;
+	lodLayers?:LodLayer[];
+	relationships?:RelationshipStringifier[];
+	pluralize?:(word:string)=>string;
 };
 
 export type LodCtx = DescribeCtx & {
@@ -35,27 +55,27 @@ export type LodCtx = DescribeCtx & {
 export type LodLayer = {
 	id:string;
 	enabled?:boolean;
-	when:(obj:PerceptionObject, ctx:LodCtx)=>boolean;
-	wrap?:(text:string, obj:PerceptionObject, ctx:LodCtx)=>string;
+	when:(obj:SeenObject, ctx:LodCtx)=>boolean;
+	wrap?:(text:string, obj:SeenObject, ctx:LodCtx)=>string;
 };
 
 export type RelationshipHit = {
 	text:string;
-	unused:PerceptionObject[];
+	unused:SeenObject[];
 	mode:'reduce' | 'utter';
-	reduceTo?:PerceptionObject;
+	reduceTo?:SeenObject;
 };
 
 export type StringifyCtx = {
 	self:{ id:string };
 	closeness:number;
 	clusterFactor:number;
-	groundAndFigure:(a:PerceptionObject, b:PerceptionObject)=>{
-		ground:PerceptionObject;
-		figure:PerceptionObject;
+	groundAndFigure:(a:SeenObject, b:SeenObject)=>{
+		ground:SeenObject;
+		figure:SeenObject;
 	};
-	noun:(obj:PerceptionObject)=>string;
-	distance:(a:PerceptionObject, b:PerceptionObject)=>number;
+	noun:(obj:SeenObject)=>string;
+	distance:(a:SeenObject, b:SeenObject)=>number;
 	pluralize:(word:string)=>string;
 };
 
@@ -67,23 +87,7 @@ export type RelationshipStringifier = {
 	excludeTags?:string[];
 	maxDistance?:number;
 	stringify:(
-		objects:PerceptionObject[],
+		objects:SeenObject[],
 		ctx:StringifyCtx,
 	)=>RelationshipHit | null;
-};
-
-export type PerceptionInput = {
-	self:{ id:string };
-	radius:number;
-	unitName?:string;
-	ambient?:string;
-	objects:PerceptionObject[];
-	closeness:number;
-	farDistance:number;
-	clusterFactor:number;
-	lodLayers:LodLayer[];
-	relationships:RelationshipStringifier[];
-	distance:(a:PerceptionObject, b:PerceptionObject)=>number;
-	bearing?:(obj:PerceptionObject)=>Bearing;
-	pluralize?:(word:string)=>string;
 };

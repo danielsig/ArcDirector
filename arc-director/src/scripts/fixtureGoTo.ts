@@ -5,11 +5,11 @@ import {
 	VerbRegistry,
 	formatPlan,
 	goToNamedInteractable,
-	registerCoreVerbs,
-	withQueue,
+	registerStockVerbs,
 	type ActionPlan,
 	type InferenceProvider,
-	type PerceptionRecipe,
+	type Sense,
+	type ToolSpec,
 } from '../index.js';
 import { fixtureParagraph, type FixtureCtx } from './scene.js';
 import { resolveInferenceBaseURL, resolveLiveModel, probeHttp } from './probe.js';
@@ -17,9 +17,9 @@ import { resolveInferenceBaseURL, resolveLiveModel, probeHttp } from './probe.js
 const NAMES = new Set(['EastGate']);
 const RUNS = 20;
 
-function recipe():PerceptionRecipe<FixtureCtx> {
+function perception():{ senses:Record<string, Sense<FixtureCtx>>; tools:Record<string, ToolSpec<FixtureCtx>> } {
 	return {
-		push: {
+		senses: {
 			environment: {
 				description: 'English scene with grouped trees and one PascalCase interactable. No coordinates.',
 				gather: (ctx) => ctx.paragraph,
@@ -61,7 +61,7 @@ async function makeProvider():Promise<{ provider:InferenceProvider; mock:boolean
 			`Local model not reachable at ${baseURL}. Start the local server or set ARC_DIRECTOR_MOCK=1.`,
 		);
 	}
-	return { provider: withQueue(new HttpProvider({ baseURL, timeoutMs: 180_000 }), 1), mock: false, baseURL };
+	return { provider: new HttpProvider({ baseURL, timeoutMs: 180_000 }), mock: false, baseURL };
 }
 
 async function main():Promise<void> {
@@ -86,8 +86,8 @@ async function main():Promise<void> {
 			},
 			goals: [{ text: 'Go to EastGate', priority: 1 }],
 			provider,
-			verbs: registerCoreVerbs(new VerbRegistry()),
-			recipe: recipe(),
+			verbs: registerStockVerbs(new VerbRegistry()),
+			...perception(),
 			context: () => ({ paragraph }),
 			model,
 			heartbeat: 30,

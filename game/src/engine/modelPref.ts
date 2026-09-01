@@ -1,5 +1,6 @@
 /** Last model the player picked in the menu. Used on the next inference connect. */
 const KEY = 'arc-director.model.v1';
+const FALLBACK = 'meta/muse-glimmer';
 
 export function loadModelPref():string {
 	try {
@@ -23,4 +24,9 @@ export function saveModelPref(id:string):void {
 	catch {
 		// quota / private mode
 	}
+}
+
+/** Menu pick if set else Glimmer. */
+export function preferredChatModel():string {
+	return loadModelPref() ?? FALLBACK;
 }

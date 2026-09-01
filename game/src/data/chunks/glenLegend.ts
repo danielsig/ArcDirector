@@ -28,5 +28,6 @@ export const GLEN_LEGEND:Record<string, TerrainLegend | EntityLegend> = {
 	'=': { kind: 'entity', def: 'bridge_span', over: '>' },
 	'W': { kind: 'entity', def: 'waterfall', over: '~' },
 	'm': { kind: 'entity', def: 'fire_mushroom', over: '.' },
+	'n': { kind: 'entity', def: 'fire_mushroom', over: '.' },
 	'@': { kind: 'entity', def: 'player_start' },
 };

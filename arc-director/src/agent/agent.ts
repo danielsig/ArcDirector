@@ -3,20 +3,20 @@ import { actionPlanSchema } from '../action/schema.js';
 import type { VerbRegistry } from '../action/registry.js';
 import type { ActionPlan, ActionResult, Step } from '../action/types.js';
 import { ActionError } from '../action/types.js';
-import { envGet } from '../env.js';
 import { evaluate } from '../expr/eval.js';
 import { observeExpr } from '../expr/stringify.js';
 import type { Catalog } from '../expr/types.js';
 import { isVisionModel, PREFERRED_MODELS } from '../inference/models.js';
 import type { ChatMessage, InferenceProvider, ToolDef } from '../inference/provider.js';
 import { extractJson, isRecord, readID } from '../json.js';
-import { MemoryStore, type MemoryRecord } from '../memory/store.js';
-import type { PerceptionRecipe, ToolSpec } from './types.js';
+import { MemoryStore, mergeTags, nameTags, type MemoryRecord } from '../memory/store.js';
+import type { Sense, ToolSpec, Kit, KitSource } from './types.js';
 import { parseMapZoom, stampMap, isMapSnapshot, DEFAULT_YOU_SYMBOL, type MapPrev, type MapSense } from './map.js';
-import { planRepairHint, sayRangeHint, shortTermBlock, stablePrefix, volatileBlock } from './prompt.js';
+import { planRepairHint, sayRangeHint, stablePrefix, volatileBlock } from './prompt.js';
 import { runPlan, deferThinks, THINK_ABOUT_CAP } from './run.js';
 import type { SayTo, TalkNet } from './talk.js';
 import type { AgentEvent, AgentIdentity, Goal, WatchInput, Watches } from './types.js';
+import { waitForOf, type MindQueue } from '../think/queue.js';
 import {
 	applyWatchOps,
 	asWatches,
@@ -56,9 +56,15 @@ export type AgentJSON = {
 export type AgentDeps<HostCtx = unknown> = {
 	provider:InferenceProvider;
 	verbs:VerbRegistry;
-	recipe:PerceptionRecipe<HostCtx>;
+	senses?:Record<string, Sense<HostCtx>>;
+	tools?:Record<string, ToolSpec<HostCtx>>;
 	context:()=>HostCtx;
 	execute?:(step:Step, ctx:HostCtx)=>Promise<ActionResult>;
+	/** When `execute` is set, `tick` runs the plan unless this is false. */
+	autoEnact?:boolean;
+	queue?:MindQueue;
+	/** Heartbeat stretch after a plan. Default: failed or interrupted. */
+	stalled?:(result:ActionResult)=>boolean;
 	model?:string;
 	embedModel?:string;
 	heartbeat?:number;
@@ -84,6 +90,11 @@ export type AgentDeps<HostCtx = unknown> = {
 	watches?:WatchInput;
 	pinnedWatches?:WatchInput;
 	watchesWritable?:boolean;
+	/**
+	 * Object or `(ctx) => kit`. Omit = all catalog verbs and all registered senses / tools (Agent tests).
+	 * Director always passes a kit (`{}` if the spec omitted it).
+	 */
+	kit?:KitSource<HostCtx>;
 };
 
 export type AgentOptions<HostCtx = unknown> = AgentDeps<HostCtx> & {
@@ -102,7 +113,7 @@ function asStringArray(v:unknown):string[] {
 
 const RECENT_CAP = 8;
 const RECENT_SUMMARY_MAX = 600;
-const SKIP_RECENT = new Set(['action_result']);
+const BARE_RESULT = new Set(['ok', 'failed', 'interrupted']);
 
 function foldRecent(prev:string, overflow:string[]):string {
 	const next = [prev, ...overflow].filter((s) => s.trim().length > 0).join(' ').replace(/\s+/g, ' ').trim();
@@ -112,16 +123,31 @@ function foldRecent(prev:string, overflow:string[]):string {
 	return next.slice(next.length - RECENT_SUMMARY_MAX).trim();
 }
 
+function isBareResult(text:string):boolean {
+	const t = text.trim().toLowerCase();
+	return !t || BARE_RESULT.has(t) || /^\d+s$/.test(t);
+}
+
+function clauseAbout(scene:string, name:string):string {
+	const parts = scene.split(/(?<=[.!?])\s+/);
+	const hit = parts.find((p) => p.includes(name));
+	return (hit ?? scene).replace(/\s+/g, ' ').trim().slice(0, 220);
+}
+
 export class Agent<HostCtx = unknown> {
 	readonly id:string;
 	identity:AgentIdentity;
 	goals:Goal[];
 	readonly memory:MemoryStore;
 	readonly verbs:VerbRegistry;
-	readonly recipe:PerceptionRecipe<HostCtx>;
+	readonly senses:Record<string, Sense<HostCtx>>;
+	readonly tools:Record<string, ToolSpec<HostCtx>>;
 	readonly provider:InferenceProvider;
 	readonly context:()=>HostCtx;
 	readonly execute?:(step:Step, ctx:HostCtx)=>Promise<ActionResult>;
+	readonly autoEnact:boolean;
+	readonly queue:MindQueue | undefined;
+	stalled?:(result:ActionResult)=>boolean;
 	model:string;
 	embedModel:string | undefined;
 	heartbeat:number;
@@ -140,9 +166,14 @@ export class Agent<HostCtx = unknown> {
 	watches:Watches;
 	pinnedWatches:Watches;
 	watchesWritable:boolean;
+	/** Object or callback. Assign a new one any time. Fetched every tick. */
+	kit:KitSource<HostCtx> | undefined;
+	private currentKit:Kit = {};
 
 	lastResult:ActionResult | undefined;
 	lastPlan:ActionPlan | undefined;
+	/** Index of the step currently running inside `enact` (0-based). */
+	planIndex = 0;
 	lastTacticalAt = Number.NEGATIVE_INFINITY;
 	lastStrategicAt = 0;
 	lastIntrusionAt = Number.NEGATIVE_INFINITY;
@@ -163,12 +194,16 @@ export class Agent<HostCtx = unknown> {
 		this.goals = opts.goals ? [...opts.goals] : [];
 		this.memory = opts.memory ?? new MemoryStore();
 		this.verbs = opts.verbs;
-		this.recipe = opts.recipe;
+		this.senses = opts.senses ?? {};
+		this.tools = opts.tools ?? {};
 		this.provider = opts.provider;
 		this.context = opts.context;
 		this.execute = opts.execute;
-		this.model = opts.model ?? envGet('ARC_DIRECTOR_MODEL') ?? PREFERRED_MODELS[0];
-		this.embedModel = opts.embedModel ?? envGet('ARC_DIRECTOR_EMBED_MODEL');
+		this.autoEnact = opts.autoEnact ?? true;
+		this.queue = opts.queue;
+		this.stalled = opts.stalled;
+		this.model = opts.model ?? PREFERRED_MODELS[0];
+		this.embedModel = opts.embedModel;
 		this.heartbeat = opts.heartbeat ?? 30;
 		this.toolRoundCap = opts.toolRoundCap ?? 2;
 		this.planRetryCap = opts.planRetryCap ?? 0;
@@ -185,6 +220,7 @@ export class Agent<HostCtx = unknown> {
 		this.pinnedWatches = asWatches(opts.pinnedWatches);
 		this.watches = extrasWithoutPins(asWatches(opts.watches), this.pinnedWatches);
 		this.watchesWritable = opts.watchesWritable ?? true;
+		this.kit = opts.kit;
 		if (this.talk) {
 			this.talk.attach(this);
 		}
@@ -193,8 +229,82 @@ export class Agent<HostCtx = unknown> {
 		}
 	}
 
+	/** Resolve `kit` (object, getters, or callback). Director calls this each tick. */
+	refreshKit():Kit {
+		const src = this.kit;
+		if (src === undefined) {
+			this.currentKit = {};
+			return this.currentKit;
+		}
+		if (typeof src === 'function') {
+			try {
+				this.currentKit = src(this.context()) ?? {};
+			}
+			catch {
+				this.currentKit = {};
+			}
+			return this.currentKit;
+		}
+		this.currentKit = src;
+		return this.currentKit;
+	}
+
+	/** Catalog filtered by the current kit. Unset `kit` (standalone Agent) = whole catalog. */
+	activeVerbs():VerbRegistry {
+		this.refreshKit();
+		if (this.kit === undefined) {
+			return this.verbs;
+		}
+		return this.verbs.view(this.currentKit.verbs ?? []);
+	}
+
+	private senseAllowed(name:string):boolean {
+		if (this.kit === undefined) {
+			return true;
+		}
+		const list = this.currentKit.senses;
+		if (list === undefined) {
+			return true;
+		}
+		return list.includes(name);
+	}
+
+	private toolsAllowed():readonly string[] | undefined {
+		if (this.kit === undefined) {
+			return undefined;
+		}
+		return this.currentKit.tools;
+	}
+
+	private toolAllowed(name:string):boolean {
+		const list = this.toolsAllowed();
+		if (list === undefined) {
+			return true;
+		}
+		return list.includes(name);
+	}
+
+	private filterTools(tools:Record<string, ToolSpec<HostCtx>>):Record<string, ToolSpec<HostCtx>> {
+		const list = this.toolsAllowed();
+		if (list === undefined) {
+			return tools;
+		}
+		const next:Record<string, ToolSpec<HostCtx>> = {};
+		for (const name of list) {
+			if (tools[name]) {
+				next[name] = tools[name];
+			}
+		}
+		return next;
+	}
+
 	pushEvent(event:AgentEvent):void {
 		this.pendingEvents.push({ ...event, at: event.at ?? this.now });
+	}
+
+	/** Unabsorbed `HeardSpeech`. Cleared after a tactical think. */
+	hasHeard():boolean {
+		return this.pendingEvents.some((e) => e.kind === 'HeardSpeech');
 	}
 
 	/** Hosts that run world verbs themselves should call this so think() cooldown sees them. */
@@ -226,6 +336,29 @@ export class Agent<HostCtx = unknown> {
 				tags: [result.ok ? 'ok' : 'fail'],
 			});
 		}
+		this.syncQueue(result);
+	}
+
+	/** Walk a plan (world verbs via `execute`). Arms wait(for), then notes the queue. */
+	async enact(plan:ActionPlan):Promise<ActionResult> {
+		this.livePlan = true;
+		this.planIndex = 0;
+		this.queue?.beginPlan(this.id, plan);
+		try {
+			const ctx = this.context();
+			let i = 0;
+			const result = await runPlan(plan, (step) => {
+				this.planIndex = i;
+				i += 1;
+				return this.runStep(step, ctx);
+			});
+			this.ingestResult(result);
+			return result;
+		}
+		finally {
+			this.livePlan = false;
+			this.queue?.endPlan(this.id);
+		}
 	}
 
 	async remember(text:string, tags:string[] = [], at = this.now):Promise<MemoryRecord> {
@@ -240,9 +373,9 @@ export class Agent<HostCtx = unknown> {
 			}
 		}
 		return this.memory.add({
-			category: 'episodic',
+			category: 'semantic',
 			text,
-			tags,
+			tags: mergeTags(tags, nameTags(text)),
 			createdAt: at,
 			embedding,
 		}, at);
@@ -250,37 +383,42 @@ export class Agent<HostCtx = unknown> {
 
 	async tick(gameTime:number):Promise<ActionPlan | null> {
 		this.now = gameTime;
+		this.refreshKit();
 		this.absorbPending();
-		if (this.strategicDue(gameTime)) {
-			await this.reviseGoals();
-			this.lastStrategicAt = gameTime;
-		}
-		if (!this.tacticalDue(gameTime)) {
+		const strategic = this.strategicDue(gameTime);
+		const tactical = this.tacticalDue(gameTime);
+		if (!strategic && !tactical) {
 			return null;
 		}
+		this.queue?.beginThink(this.id);
+		let plan:ActionPlan | null = null;
 		try {
-			const plan = await this.tactical();
+			if (strategic) {
+				await this.reviseGoals();
+				this.lastStrategicAt = gameTime;
+			}
+			if (!tactical) {
+				return null;
+			}
+			plan = await this.tactical();
 			this.pendingAbout = undefined;
 			this.lastPlan = plan;
 			this.lastTacticalAt = gameTime;
 			this.pendingEvents.length = 0;
 			this.recentAbsorbed = 0;
-			if (this.execute) {
-				this.livePlan = true;
-				const ctx = this.context();
-				const result = await runPlan(plan, (step) => this.runStep(step, ctx));
-				this.ingestResult(result);
-			}
-			else {
-				this.livePlan = false;
-			}
-			return plan;
 		}
 		catch (err) {
 			this.lastTacticalAt = gameTime;
 			this.livePlan = false;
 			throw err;
 		}
+		finally {
+			this.queue?.endThink(this.id);
+		}
+		if (plan && this.execute && this.autoEnact) {
+			await this.enact(plan);
+		}
+		return plan;
 	}
 
 	toJSON():AgentJSON {
@@ -355,7 +493,7 @@ export class Agent<HostCtx = unknown> {
 			return true;
 		}
 		if (this.heartbeat <= 0) {
-			return !this.livePlan;
+			return true;
 		}
 		return gameTime - this.lastTacticalAt >= this.heartbeat;
 	}
@@ -374,16 +512,18 @@ export class Agent<HostCtx = unknown> {
 	}
 
 	private async reviseGoals():Promise<void> {
-		const system = stablePrefix(this.identity, this.verbs, {
+		const system = stablePrefix(this.identity, this.activeVerbs(), {
 			includeWatches: true,
-			canSeeMap: this.seeMapOn(),
+			canSeeMap: this.seeMapOn() && this.toolAllowed('see_map'),
 			youSymbol: this.youSymbol(),
 		});
-		const stm = this.shortTermText();
-		const user = (stm ? `${stm}\n\n` : '')
-			+ (this.goals.length > 0
-				? `Goals (highest first):\n${[...this.goals].sort((a, b) => (b.priority ?? 0) - (a.priority ?? 0)).map((g) => `- ${g.text}`).join('\n')}\n\n`
-				: '')
+		const user = `${volatileBlock({
+			goals: this.goals,
+			pinned: this.memory.pinned(),
+			recalled: this.recallForPrompt(),
+			recent: this.recent,
+			recentSummary: this.recentSummary,
+		})}\n\n`
 			+ 'Revise goals if what you just learned changes what you must do. '
 			+ 'Harm, theft, and threats outrank standing work — put that first in goals. '
 			+ 'Do not change identity unless who you are has actually changed for good. '
@@ -430,28 +570,36 @@ export class Agent<HostCtx = unknown> {
 
 	private async tactical():Promise<ActionPlan> {
 		const ctx = this.context();
-		const pushed:Record<string, unknown> = {};
-		for (const [name, pusher] of Object.entries(this.recipe.push)) {
-			pushed[name] = pusher.gather(ctx);
+		this.refreshKit();
+		const sensed:Record<string, unknown> = {};
+		for (const [name, sense] of Object.entries(this.senses)) {
+			if (!this.senseAllowed(name)) {
+				continue;
+			}
+			sensed[name] = sense.gather(ctx);
 		}
 		if (this.talk) {
-			pushed.earshot = this.earshotPush();
+			sensed.earshot = this.earshotText();
 		}
-		const perceptionText = Object.values(pushed)
+		const perceptionText = Object.values(sensed)
 			.map((v) => typeof v === 'string' ? v : JSON.stringify(v))
 			.join('\n');
 		const intrusion = this.maybeIntrude(perceptionText);
-		const system = stablePrefix(this.identity, this.verbs, {
+		this.noteSeen(perceptionText);
+		const recalled = this.recallForPrompt(perceptionText);
+		const verbs = this.activeVerbs();
+		const system = stablePrefix(this.identity, verbs, {
 			includeWatches: true,
-			canSeeMap: this.seeMapOn(),
+			canSeeMap: this.seeMapOn() && this.toolAllowed('see_map'),
 			youSymbol: this.youSymbol(),
 		});
 		const user = volatileBlock({
-			pushed,
+			senses: sensed,
 			intrusion,
 			lastResult: this.lastResult,
 			goals: this.goals,
 			pinned: this.memory.pinned(),
+			recalled,
 			watches: this.watches,
 			pinnedWatches: this.pinnedWatches,
 			watchesWritable: this.watchesWritable,
@@ -481,7 +629,7 @@ export class Agent<HostCtx = unknown> {
 				toolChoice: sendTools ? (allowTools ? 'auto' : 'none') : undefined,
 				responseFormat: allowTools
 					? undefined
-					: { name: 'action_plan', schema: actionPlanSchema(this.verbs), strict: false },
+					: { name: 'action_plan', schema: actionPlanSchema(verbs), strict: false },
 				temperature: 0,
 			});
 			if (res.toolCalls.length > 0 && allowTools) {
@@ -527,7 +675,7 @@ export class Agent<HostCtx = unknown> {
 					raw = (trimmed.startsWith('{') || trimmed.startsWith('```'))
 						? extractJson(trimmed)
 						: trimmed;
-					plan = deferThinks(parsePlan(raw, this.verbs));
+					plan = deferThinks(parsePlan(raw, verbs));
 				}
 				catch (err) {
 					lastErr = err instanceof Error ? err : new ActionError(String(err));
@@ -658,11 +806,19 @@ export class Agent<HostCtx = unknown> {
 	private absorbPending():void {
 		for (let i = this.recentAbsorbed; i < this.pendingEvents.length; i++) {
 			const e = this.pendingEvents[i];
-			if (!e || SKIP_RECENT.has(e.kind)) {
+			if (!e) {
 				continue;
 			}
 			const text = e.text.trim();
 			if (!text) {
+				continue;
+			}
+			if (e.kind === 'action_result') {
+				if (isBareResult(text)) {
+					continue;
+				}
+				this.noteRecent(text);
+				this.keepFact(text, mergeTags(['result'], e.tags, nameTags(text)));
 				continue;
 			}
 			this.noteRecent(text);
@@ -673,7 +829,7 @@ export class Agent<HostCtx = unknown> {
 					this.memory.add({
 						category: 'episodic',
 						text,
-						tags: e.tags ? [...e.tags] : ['speech'],
+						tags: mergeTags(e.tags ?? ['speech'], nameTags(text)),
 						createdAt: e.at ?? this.now,
 					}, e.at ?? this.now);
 				}
@@ -695,8 +851,82 @@ export class Agent<HostCtx = unknown> {
 		this.recentSummary = foldRecent(this.recentSummary, overflow);
 	}
 
-	private shortTermText():string {
-		return shortTermBlock(this.recentSummary, this.recent);
+	private keepFact(text:string, tags:string[]):void {
+		const line = text.trim();
+		if (!line) {
+			return;
+		}
+		const rows = this.memory.all();
+		if (rows[rows.length - 1]?.text === line) {
+			return;
+		}
+		this.memory.add({
+			category: 'semantic',
+			text: line,
+			tags,
+			createdAt: this.now,
+		}, this.now);
+	}
+
+	private noteSeen(scene:string):void {
+		const text = scene.trim();
+		if (!text) {
+			return;
+		}
+		const skip = new Set([this.id, this.identity.name]);
+		for (const name of nameTags(text)) {
+			if (skip.has(name)) {
+				continue;
+			}
+			const snippet = clauseAbout(text, name);
+			if (!snippet) {
+				continue;
+			}
+			const line = `Last I saw ${name}: ${snippet}`;
+			const tag = `seen:${name}`;
+			const existing = this.memory.all().find((r) => r.category === 'semantic' && r.tags.includes(tag));
+			if (existing) {
+				if (existing.text !== line) {
+					existing.text = line;
+					existing.lastAccessed = this.now;
+				}
+				continue;
+			}
+			this.memory.add({
+				category: 'semantic',
+				text: line,
+				tags: mergeTags([tag, name, 'seen'], nameTags(snippet)),
+				createdAt: this.now,
+			}, this.now);
+		}
+	}
+
+	private recallForPrompt(scene = ''):MemoryRecord[] {
+		const query = [
+			...this.goals.map((g) => g.text),
+			this.pendingAbout ?? '',
+			...this.recent,
+			this.recentSummary,
+		].filter((s) => s.trim().length > 0).join(' ');
+		if (!query.trim()) {
+			return [];
+		}
+		const pinnedIds = new Set(this.memory.pinned().map((r) => r.id));
+		const recentSet = new Set(this.recent);
+		return this.memory.recall({
+			query,
+			k: this.recallK,
+			now: this.now,
+		}).filter((r) => {
+			if (r.pinned || pinnedIds.has(r.id) || recentSet.has(r.text)) {
+				return false;
+			}
+			const seen = r.tags.find((t) => t.startsWith('seen:') && t.length > 5);
+			if (seen && scene.includes(seen.slice('seen:'.length))) {
+				return false;
+			}
+			return true;
+		});
 	}
 
 	private applyWatches(raw:unknown):void {
@@ -806,7 +1036,7 @@ export class Agent<HostCtx = unknown> {
 			tags,
 			threshold: this.intrusionThreshold,
 		});
-		if (!hit) {
+		if (!hit || hit.tags.includes('seen')) {
 			return undefined;
 		}
 		this.lastIntrusionAt = this.now;
@@ -826,7 +1056,7 @@ export class Agent<HostCtx = unknown> {
 	}
 
 	private mergedTools():Record<string, ToolSpec<HostCtx>> {
-		const tools:{ [k:string]:ToolSpec<HostCtx> } = { ...this.recipe.tools };
+		const tools:{ [k:string]:ToolSpec<HostCtx> } = { ...this.tools };
 		if (!tools.recall) {
 			tools.recall = {
 				description: 'Search this agent\'s episodic and semantic memory. Prefer names, not coordinates.',
@@ -871,7 +1101,7 @@ export class Agent<HostCtx = unknown> {
 		}
 		if (this.seeMapOn() && !tools.see_map) {
 			tools.see_map = {
-				description: 'Pictogram of the land. Prefer the English scene; only call this if you cannot pick a go_to from names you already have. A second look soon after, without moving, returns the same legend and no new picture.',
+				description: 'Pictogram of the land. Prefer the English scene. If you are looking for something unnamed, wander(for) with a watch expr. Only call this if you still cannot pick a go_to or wander. A second look soon after, without moving, returns the same legend and no new picture.',
 				parameters: {
 					type: 'object',
 					additionalProperties: false,
@@ -883,9 +1113,9 @@ export class Agent<HostCtx = unknown> {
 			};
 		}
 		if (this.seeMapOn() && this.toolRoundCap <= 0 && tools.see_map) {
-			return { see_map: tools.see_map };
+			return this.filterTools({ see_map: tools.see_map });
 		}
-		return tools;
+		return this.filterTools(tools);
 	}
 
 	private seeMapOn():boolean {
@@ -949,7 +1179,7 @@ export class Agent<HostCtx = unknown> {
 		return { ok: true, zoom, legend: stamped.legend };
 	}
 
-	private earshotPush():string {
+	private earshotText():string {
 		const names = this.talk?.nearby(this.id) ?? [];
 		if (names.length === 0) {
 			return 'No one in talking range. say(to) will fail until you go_to them.';
@@ -1087,7 +1317,24 @@ export class Agent<HostCtx = unknown> {
 		return { ok: true, verb: 'think' };
 	}
 
+	private syncQueue(result:ActionResult):void {
+		if (!this.queue) {
+			return;
+		}
+		const stalled = this.stalled
+			? this.stalled(result)
+			: !result.ok || !!result.interrupted;
+		this.queue.noteResult(this.id, stalled);
+		if (!result.interrupted && this.lastPlan) {
+			this.queue.enqueuePlan(this.id, this.lastPlan, result.ok);
+		}
+	}
+
 	private async runStep(step:Step, ctx:HostCtx):Promise<ActionResult> {
+		this.refreshKit();
+		if (!this.activeVerbs().has(step.verb)) {
+			return { ok: false, verb: step.verb, reason: `verb '${step.verb}' is not available` };
+		}
 		if (step.verb === 'think') {
 			return this.runThink(step);
 		}
@@ -1146,6 +1393,10 @@ export class Agent<HostCtx = unknown> {
 		}
 		if (!this.execute) {
 			return { ok: false, verb: step.verb, reason: `host has no executor for ${step.verb}` };
+		}
+		const once = waitForOf(step);
+		if (once) {
+			this.queue?.armOnce(this.id, once);
 		}
 		return this.execute(step, ctx);
 	}

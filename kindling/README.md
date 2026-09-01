@@ -1,6 +1,6 @@
 # Kindling
 
-Unity-shaped runtime on Three.js. Same nouns (`Game`, `World`, `GameObject`, `Transform`, `Component`) and a similar lifecycle — not Unity itself.
+Unity-shaped runtime on Three.js. Same nouns (`Game`, `World`, `GameObject`, `Transform`, `Component`) and a similar lifecycle, but it is not Unity.
 
 Kindling **owns** the canvas, `Renderer`, requestAnimationFrame loop, and the Three.js scene (`world.native`). You **subclass** `Game` / `World` / `GameObject` / `Component`. The playground (or your UI) only mounts that canvas. Simulation is not UI state. Identity on a GameObject is `id`.
 
@@ -116,7 +116,7 @@ Wraps `THREE.Object3D` (`transform.object3D`). `position` is a world `{ x, y, z 
 |-------|--------|
 | `position`, `setWorldPosition` | `localPosition` |
 | `yaw` / `pitch` / `roll` | `localYaw` |
-| `forward` / `right` / `up` | — |
+| `forward` / `right` / `up` | world only |
 | `scale` (uniform) | `localScale` |
 
 `forward` is Kindling forward: **−Z**. `setParent(..., true)` keeps world position and rotation.
@@ -198,13 +198,13 @@ RAF:
 
 `stepPhysics` is XZ only, then optional Y snap.
 
-1. **Integrate** — every enabled `Rigidbody`: `position.xz += velocity.xz * dt` (stores `prevX` / `prevZ`).
-2. **Collide** — enabled, solid, non-trigger `BoxCollider` on an object that also has a `Rigidbody`:
+1. **Integrate.** Every enabled `Rigidbody`: `position.xz += velocity.xz * dt` (stores `prevX` / `prevZ`).
+2. **Collide.** Enabled, solid, non-trigger `BoxCollider` on an object that also has a `Rigidbody`:
    - tile AABB vs `World.sampleTerrain` when `tileSize > 0` (`blocked` cells)
    - other solid boxes (minimum translation on X or Z)
    - **crowd**: both colliders `pad > 0` → shove along walk velocity (`CROWD_YIELD`), not a hard block
    - cliffs: `sampleTerrain` height / `climbable`; revert to previous XZ if the step is illegal
-3. **Ground** — `Rigidbody.grounded`: lerp Y toward `sampleTerrain.worldY` (skip if the rise exceeds `stepHeight`).
+3. **Ground.** `Rigidbody.grounded`: lerp Y toward `sampleTerrain.worldY` (skip if the rise exceeds `stepHeight`).
 
 `World.sampleTerrain` returns `{ height, worldY, blocked, climbable }` or `undefined`. Override it if you have a heightfield or grid; the default is no terrain.
 
@@ -235,7 +235,8 @@ Shader patches: `insertAfterChunk` / `applyShaderFeatures` insert GLSL after a d
 
 ```ts
 register('crate', () => proceduralBox(0x886644));
-await registerGltf('tri', '/triangle.gltf'); // clone of the glTF scene; does not attach
+// Clone of the glTF scene; does not attach.
+await registerGltf('tri', '/triangle.gltf');
 ```
 
 `create(id)` / `meshReady(id)` are what `MeshRenderer` uses. `registerGltf` is async; the renderer retries until the factory exists.
@@ -246,8 +247,8 @@ await registerGltf('tri', '/triangle.gltf'); // clone of the glTF scene; does no
 
 Typical host:
 
-- `class MyGame extends Game<MyWorld>` — inject a custom `World`, override `tick` if you own pause or extra frame work.
-- `class MyWorld extends World` — set `tileSize`, override `sampleTerrain`, add queries.
+- `class MyGame extends Game<MyWorld>`: inject a custom `World`, override `tick` if you own pause or extra frame work.
+- `class MyWorld extends World`: set `tileSize`, override `sampleTerrain`, add queries.
 - Optionally subclass `GameObject` / `Component` so `world` / `gameObject` are your types.
 
 Kindling has no UI framework, no scene format, and no gameplay systems beyond the types above.
@@ -259,7 +260,7 @@ Kindling has no UI framework, no scene format, and no gameplay systems beyond th
 ```
 src/
   index.ts           public API
-  core/              Game, World, GameObject, Transform, Component, Time, physics
+  core/              Game, World, GameObject, Transform, Time, physics
   render/            Renderer, Camera, Light, MeshRenderer, shader inserts
   assets/            mesh registry, glTF
 playground/          Vite cube / parent / glTF / light demo
