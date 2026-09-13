@@ -4,6 +4,7 @@ import {
 	DEFAULT_PARALLEL_THINKERS,
 	DEFAULT_THINKING_BUDGET,
 } from '../engine/thinkPref';
+import { prefs } from '../prefs';
 
 export type MinimapCell = {
 	def:string;
@@ -127,6 +128,9 @@ export type HudModel = {
 	inferLastContextMs:number | null;
 	inferLastGenerateMs:number | null;
 	inferLastWallMs:number | null;
+	musicVolume:number;
+	sfxVolume:number;
+	audioMuted:boolean;
 	minimap:{
 		originX:number;
 		originZ:number;
@@ -142,6 +146,7 @@ export type HudModel = {
 };
 
 export function emptyHud():HudModel {
+	const p = prefs();
 	return {
 		hp: 5,
 		maxHP: 5,
@@ -193,6 +198,9 @@ export function emptyHud():HudModel {
 		inferLastContextMs: null,
 		inferLastGenerateMs: null,
 		inferLastWallMs: null,
+		musicVolume: p.music,
+		sfxVolume: p.sfx,
+		audioMuted: p.muted,
 		minimap: {
 			originX: 0,
 			originZ: 0,

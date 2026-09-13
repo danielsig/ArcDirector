@@ -1,3 +1,4 @@
+import { Audio } from '../audio/Audio.js';
 import * as THREE from 'three';
 import type { Component } from './Component.js';
 import type { GameObject } from './GameObject.js';
@@ -15,6 +16,8 @@ export type TerrainSample = {
 export class World {
 	readonly objects:GameObject[] = [];
 	readonly native = new THREE.Scene();
+	/** Procedural mixer. Silent when AudioContext is missing. */
+	readonly audio = new Audio();
 	/** 0 = no tile collision. Hosts set this to their cell size. */
 	tileSize = 0;
 	private readonly doomed:GameObject[] = [];

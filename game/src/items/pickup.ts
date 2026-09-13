@@ -7,6 +7,7 @@ import { equipItem } from './equip';
 import { actorIs, distXZ, findCarried, findReady, itemMatchesName, tryInsert } from './inventory';
 import { instantiateDef, isBackpack, type ItemInstance } from './instance';
 import { captureItem, spawnWorldItem } from '../world/spawnItem';
+import { cueAt } from '../audio/cue';
 
 export const PICKUP_RANGE = 1.7;
 export const USE_RANGE = 2.2;
@@ -56,12 +57,14 @@ export function pickup(actor:GameObject, loot:GameObject):string {
 			return err;
 		}
 		world.remove(loot);
+		cueAt(world, 'take', actor);
 		return `equipped ${inst.name}`;
 	}
 	if (!tryInsert(actor, inst)) {
 		return 'no room';
 	}
 	world.remove(loot);
+	cueAt(world, 'take', actor);
 	return `picked up ${inst.name}`;
 }
 
@@ -73,6 +76,7 @@ export function dropItem(actor:GameObject, item:import('./instance').ItemInstanc
 	const p = actor.transform.position;
 	const fwd = { x: -Math.sin(actor.transform.yaw), z: -Math.cos(actor.transform.yaw) };
 	spawnWorldItem(world, item, p.x + fwd.x * 0.7, p.y, p.z + fwd.z * 0.7);
+	cueAt(world, 'drop', actor);
 }
 
 export function spawnDefAt(
@@ -94,6 +98,7 @@ export function spawnDefAt(
 }
 
 export function interactDoor(actor:GameObject, doorGo:GameObject):string {
+	const world = actor.world;
 	const lock = doorGo.getComponent(Lock);
 	const door = doorGo.getComponent(Door);
 	if (!door) {
@@ -109,10 +114,17 @@ export function interactDoor(actor:GameObject, doorGo:GameObject):string {
 		lock.locked = false;
 		door.open = true;
 		door.syncCollision();
+		if (world) {
+			cueAt(world, 'unlock', doorGo);
+			cueAt(world, 'doorOpen', doorGo);
+		}
 		return 'unlocked';
 	}
 	door.open = !door.open;
 	door.syncCollision();
+	if (world) {
+		cueAt(world, door.open ? 'doorOpen' : 'doorClose', doorGo);
+	}
 	return door.open ? 'opened' : 'closed';
 }
 
@@ -174,6 +186,7 @@ export function takeFromChest(actor:GameObject, held:ChestHold):string {
 	if (i >= 0) {
 		held.bag.contents.splice(i, 1);
 	}
+	cueAt(actor.world, 'take', actor);
 	return `took ${held.item.name} from ${chestName}`;
 }
 
@@ -194,10 +207,13 @@ export function interactChest(actor:GameObject, chestGo:GameObject):string {
 		}
 		lock.locked = false;
 		chest.open = true;
+		cueAt(actor.world, 'unlock', chestGo);
+		cueAt(actor.world, 'chestOpen', chestGo);
 		return 'unlocked';
 	}
 	if (!chest.open) {
 		chest.open = true;
+		cueAt(actor.world, 'chestOpen', chestGo);
 		return 'opened';
 	}
 	const first = bag.contents[0];

@@ -4,6 +4,7 @@ import { equipItem, itemInHeldSlot } from './equip';
 import { actorIs, distXZ, findCarried, healActor, inBackpack, removeFromBags, tryInsert } from './inventory';
 import { instantiateDef, type ItemInstance } from './instance';
 import { getDef } from './defs';
+import { cueAt } from '../audio/cue';
 
 export type UseResult = {
 	ok:boolean;
@@ -82,10 +83,17 @@ export function useItem(actor:GameObject, item:ItemInstance, target:GameObject |
 				if (door) {
 					door.open = true;
 					door.syncCollision();
+					cueAt(world, 'unlock', target);
+					cueAt(world, 'doorOpen', target);
 				}
 				const chest = target.getComponent(Chest);
 				if (chest) {
 					chest.open = true;
+					cueAt(world, 'unlock', target);
+					cueAt(world, 'chestOpen', target);
+				}
+				if (!door && !chest) {
+					cueAt(world, 'unlock', target);
 				}
 				return ok('unlocked');
 			}

@@ -26,7 +26,7 @@ Headless (no `document`): `renderer` / `canvas` are null. `tick(dt)` still runs 
 | `Script execution order` | `static order` (lower first, per hook) |
 | `Time.deltaTime` / `fixedDeltaTime` | `Time` object (`fixedDeltaTime` default 0.02) |
 | `Rigidbody` + box collider | `Rigidbody` (XZ) + `BoxCollider` |
-| Camera / light / mesh | `Camera`, `Light`, `MeshRenderer` |
+| Camera / light / mesh / audio | `Camera`, `Light`, `MeshRenderer`, `AudioSource` |
 
 Differences that matter: there is no scene file or inspector. `Transform.position` / `yaw` / `pitch` / `roll` are **world** space (local is `localPosition` / `localYaw`). Physics is 2.5D (XZ motion, optional Y snap to terrain). Destroy is queued until the end of `simulate`.
 
@@ -231,6 +231,81 @@ Shader patches: `insertAfterChunk` / `applyShaderFeatures` insert GLSL after a d
 
 ---
 
+## Audio
+
+`world.audio` is a procedural mixer (Web Audio). No sample files. Missing `AudioContext` (Node tests, headless) is a silent no-op. While a score or loop is playing, the mixer schedules itself — you do not call `update()` unless you are headless.
+
+```ts
+world.audio.connectUnlock(canvas); // click / key / touch → resume
+await world.audio.resume();
+world.audio.playMusic(score);
+world.audio.playSfx(patch, { x, z }); // optional world position
+world.audio.playLoop('river', patch, { x, z, hear: 16 });
+world.audio.stopLoop('river');
+world.audio.playLoop('radio', score, { x, z, hear: 12 });
+world.audio.setListener(x, y, z, yaw); // HRTF stereo; yaw 0 faces Kindling −Z
+world.audio.musicVolume = 0.5;
+world.audio.sfxVolume = 0.8;
+world.audio.muted = false;
+world.audio.duck = 0.2; // pause menu
+world.audio.warnDropped = true; // one console.warn per drop reason
+world.audio.pauseMusic();
+world.audio.unpauseMusic();
+world.audio.seekMusic(8);
+world.audio.stopMusic();
+```
+
+Invalid `Score` throws from `playMusic` / `playLoop` (same checks as `piece()`). The first SFX before `resume` is queued and played on unlock; later ones before resume are dropped and warned. Pass a **stable** object into `playLoop` (not a fresh patch or `piece()` every frame) or the source restarts. A posed `Score` is HRTF like a river bed: SFX volume, no music reverb / pause / duck. `playMusic` can run at the same time.
+
+`AudioSource` on a GameObject poses SFX/loops at `transform.position` (world x/y/z). Other components play by ref:
+
+```ts
+const speaker = go.addComponent(new AudioSource());
+speaker.hear = 12;
+speaker.play(knock);     // one-shot
+speaker.loop = radio;    // patch or score; follows the object
+speaker.loop = null;     // stop
+```
+
+Built-in voice instruments: `pad`, `pluck` (guitar / harp), `lead`, `bass`, `bell`, `drum` (MIDI `<40` dum, `<45` tek, else tap), `air`, `piano`. Anything else is `registerInstrument` before `piece` / `playMusic`.
+
+```ts
+import { registerInstrument } from '@arc-director/kindling';
+export const violin = registerInstrument('violin', 'sustaining', (ctx, dest, noise, when, midi, dur, gain) => { /* oscillators */ });
+```
+
+`percussive` locks loudness when the note starts. `sustaining` lets a dim/cres turn the volume on a note that is already playing (pad, bass, lead, air, violin, brass, flute). Override a track with `track(piano, { envelope: 'sustaining' })`.
+
+### Score (`@arc-director/kindling/score`)
+
+You can pass a hand-built `{ bpm, loop, voices }` into `playMusic`. Or compile:
+
+```ts
+import { arpeggio, bar, chord, root, track, pad, pluck, bass, piece } from '@arc-director/kindling/score';
+
+const bed = track(pad, { cutoff: 640 });
+const harp = track(pluck);
+const low = track(bass, { transpose: -12 });
+const score = piece({ bpm: 96, id: 'hi' }, [
+	bar(8, bed(chord('C')), harp(arpeggio('C')), low(root('C'))),
+	bar(8, bed(chord('G')), harp(arpeggio('G')), low(root('G'))),
+]);
+```
+
+`piece({ loops: 1, ...})` plays once (`-1` / omit is forever). `callback(fn)` between bars (or after the last) runs when playback reaches that beat — stop, swap the song, whatever.
+
+`c4:2` is C4 for 2 beats. `r:4` is four beats of rest. Durationless cells split one beat (`g4 b4 d5 b4` = sixteenths). `|` is visual when notes have `:n`. `chord('C')` is all tones together (optional `beats`, else the bar; `D-`, `Bb2`, `C#7`). `.range('a2', 'a5')` or `.range(0, 3)` keeps every chord tone in that span. `.include(0, 3)` or `.include('c3', 'c4')` keeps those tones. `.exclude(1, 2)` drops them from the span. `root('C')` is the lowest tone. `arpeggio('C')` plays those tones one after another (omit `beats` and it fills the bar). `changes(['D-', 4], ['C', 4])` is a chord list; pass it to `chord` / `arpeggio` / `root`, or `ch.as(fn)` for any voicing.
+
+Each **part** in a `bar` starts at that bar’s downbeat (overlay). Sequential notes belong in **one** track call: `low('c2:4 g2:4')`. Offset a second idea with rest: `low('c2:4'), low('r:4 g2:4')`. Two `track(bass)` calls are two tracks (different gain / cutoff).
+
+Dynamics: `p`, `mp`, `mf`, `f`, `ff`. Marks follow the notes they apply to. `crescendo(f)` / `diminuendo(p)` ride `sustaining` instruments; otherwise velocity is taken at note start.
+
+`slot()` stores a phrase for replay / `.with` / `.without`. `start()` / `end()` trim while listening. `callback(fn)` fires when playback reaches that point.
+
+SFX layers: `noise`, `thump`, `click`, `creak`, `pluck`, `fm`, `chirp`, `murmur`. Posed SFX use HRTF. `opts.dur` / `opts.freq` apply to **every** layer. Music is centered. Distance is `1 / (1 + (dist * falloff)²)`; mute past `hear`.
+
+---
+
 ## Meshes
 
 ```ts
@@ -263,5 +338,6 @@ src/
   core/              Game, World, GameObject, Transform, Time, physics
   render/            Renderer, Camera, Light, MeshRenderer, shader inserts
   assets/            mesh registry, glTF
+  audio/             procedural mixer, scores, SFX
 playground/          Vite cube / parent / glTF / light demo
 ```

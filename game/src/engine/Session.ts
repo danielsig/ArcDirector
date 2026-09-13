@@ -18,7 +18,10 @@ import {
 	saveBatchThinkPref,
 	saveThinkPref,
 	saveThinkingBudgetPref,
-} from './thinkPref';
+	prefs,
+	setPrefs,
+	type Prefs,
+} from '../prefs';
 import {
 	fetchModelCatalog,
 	isEmbeddingModel,
@@ -81,6 +84,7 @@ export class Session extends Component {
 	private lastPacked = '';
 	private lastViewPacked = '';
 	private lastFlagsPacked = '';
+	private lastAudioPacked = '';
 
 	override awake():void {
 		this.getCanvas()?.addEventListener('click', this.onClick);
@@ -143,6 +147,7 @@ export class Session extends Component {
 	poll():void {
 		this.persistFlags();
 		this.persistThinkers();
+		this.persistAudio();
 		const world = this.gameObject.world;
 		if (!world) {
 			return;
@@ -594,5 +599,20 @@ export class Session extends Component {
 		}
 		this.getCanvas()?.focus();
 		this.gameObject.world?.input.requestLock();
+		void this.gameObject.world?.audio.resume();
 	};
+
+	private persistAudio():void {
+		const packed = `${this.hud.musicVolume}:${this.hud.sfxVolume}:${this.hud.audioMuted ? 1 : 0}`;
+		if (packed === this.lastAudioPacked) {
+			return;
+		}
+		this.lastAudioPacked = packed;
+		setPrefs({
+			music: this.hud.musicVolume,
+			sfx: this.hud.sfxVolume,
+			muted: this.hud.audioMuted,
+			menuMusicMuted: this.hud.musicVolume > 0 ? false : prefs().menuMusicMuted,
+		});
+	}
 }

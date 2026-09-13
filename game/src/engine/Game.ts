@@ -2,7 +2,7 @@ import { Game as KindlingGame, resetTime, Time } from '@arc-director/kindling';
 import { resetHudPatch } from './patchHud';
 import { World } from './World';
 import { GameObject } from './GameObject';
-import { Wallet } from './components';
+import { Wallet, Camera } from './components';
 import { GameHost } from '../npc/adapter';
 import { rendererLook } from '../render/look';
 import { loadNPCAnims } from '../render/humanAnims';
@@ -12,6 +12,7 @@ import { loadSwordAnims } from '../render/swordAnims';
 import type { HudModel } from '../ui/hudModel';
 import { loadModelPref } from './modelPref';
 import { loadBatchThinkPref, loadThinkPref, loadThinkingBudgetPref } from './thinkPref';
+import { flagsFromURL, prefs } from '../prefs';
 import { ChunkStreamer } from '../world/ChunkStreamer';
 import { decodeGlyphChunk } from '../world/decodeGlyphChunk';
 import { spawnCamera, spawnNPC, spawnPlayer } from '../world/spawn';
@@ -22,6 +23,8 @@ import { applyWorld, loadSave } from './gameSave';
 import { loadViewPose } from './viewPersist';
 import { loadDevFlags, resolveDevFlags } from './devFlags';
 import { readURLFlags } from './urlView';
+import { songForScene } from '../audio/songs';
+import { syncWaterAudio } from '../audio/water';
 
 const AUTOSAVE_ENABLED = false;
 
@@ -136,10 +139,16 @@ export class Game extends KindlingGame<World> {
 		this.session.persistView();
 		this.session.syncURLView();
 		this.session.refreshSlots();
+		this.applyAudioPref();
 	}
 
 	protected override onStart():void {
 		this.session.beginPlay();
+		if (this.canvas) {
+			this.world.audio.connectUnlock(this.canvas);
+		}
+		this.world.audio.playMusic(songForScene(this.scene.id));
+		void this.world.audio.resume();
 		void this.loadArt();
 	}
 
@@ -181,6 +190,32 @@ export class Game extends KindlingGame<World> {
 		else {
 			this.session.pausePresent();
 		}
+		this.syncAudio();
 		this.world.input.endFrame();
+	}
+
+	private applyAudioPref():void {
+		const pref = prefs();
+		this.hud.musicVolume = pref.music;
+		this.hud.sfxVolume = pref.sfx;
+		this.hud.audioMuted = pref.muted;
+		this.world.audio.musicVolume = pref.music;
+		this.world.audio.sfxVolume = pref.sfx;
+		this.world.audio.muted = pref.muted;
+	}
+
+	private syncAudio():void {
+		this.world.audio.duck = this.hud.menuOpen ? 0.2 : 1;
+		this.world.audio.musicVolume = this.hud.musicVolume;
+		this.world.audio.sfxVolume = this.hud.sfxVolume;
+		this.world.audio.muted = this.hud.audioMuted;
+		const player = this.world.findByID('Player');
+		if (!player) {
+			return;
+		}
+		const p = player.transform.position;
+		const cam = this.world.findByID('MainCamera')?.getComponent(Camera);
+		this.world.audio.setListener(p.x, p.y + 1.35, p.z, cam?.yaw ?? player.transform.yaw);
+		syncWaterAudio(this.world, p.x, p.z);
 	}
 }

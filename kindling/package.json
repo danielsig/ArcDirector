@@ -7,6 +7,10 @@
 		".": {
 			"types": "./dist/index.d.ts",
 			"import": "./dist/index.js"
+		},
+		"./score": {
+			"types": "./dist/score/index.d.ts",
+			"import": "./dist/score/index.js"
 		}
 	},
 	"main": "./dist/index.js",

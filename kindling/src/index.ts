@@ -21,6 +21,21 @@ export {
 	type ShaderUniforms,
 } from './render/shader.js';
 
+export { Audio, type LoopSrc } from './audio/Audio.js';
+export { AudioSource } from './audio/AudioSource.js';
+export { midiHz, scoreProblems } from './audio/midi.js';
+export { registerInstrument, type InstrumentEnvelope, type InstrumentPlay } from './audio/instruments.js';
+export type {
+	ListenerPose,
+	Note,
+	Score,
+	SfxKind,
+	SfxLayer,
+	SfxOpts,
+	SfxPatch,
+	Voice,
+} from './audio/types.js';
+
 export {
 	register,
 	create,

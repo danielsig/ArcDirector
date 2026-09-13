@@ -242,6 +242,37 @@ function when(iso:string):string {
 						step="1"
 					>
 				</label>
+				<h3>Audio</h3>
+				<div class="row">
+					<button
+						type="button"
+						:class="{ on: hud.audioMuted }"
+						:aria-pressed="hud.audioMuted"
+						@click.stop="hud.audioMuted = !hud.audioMuted"
+					>
+						{{ hud.audioMuted ? 'Muted' : 'Mute' }}
+					</button>
+					<label class="name">
+						Music
+						<input
+							v-model.number="hud.musicVolume"
+							type="range"
+							min="0"
+							max="1"
+							step="0.01"
+						>
+					</label>
+					<label class="name">
+						SFX
+						<input
+							v-model.number="hud.sfxVolume"
+							type="range"
+							min="0"
+							max="1"
+							step="0.01"
+						>
+					</label>
+				</div>
 				<details
 					class="dev-stats"
 					:open="hud.devStatsOpen"

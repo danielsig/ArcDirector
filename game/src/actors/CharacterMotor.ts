@@ -4,6 +4,7 @@ import { Order } from '../engine/order';
 import { yawToward } from '../engine/math';
 import { conversePoint, facePeer } from '../npc/talkAttend';
 import { TILE_HEIGHT } from '../world/constants';
+import { cueAt, stepKind } from '../audio/cue';
 import { NPCInput } from './NPCInput';
 import { PlayerInput } from './PlayerInput';
 
@@ -14,6 +15,7 @@ export class CharacterMotor extends Component {
 	arriveEpsilon = 0.35;
 	stepHeight = TILE_HEIGHT + 0.05;
 	maxSpeed = 4.2;
+	private stepPhase = 0.4;
 
 	override awake():void {
 		const rb = this.gameObject.getComponent(RigidBody);
@@ -87,6 +89,29 @@ export class CharacterMotor extends Component {
 		rb.velocity.x = (dx / dist) * this.maxSpeed;
 		rb.velocity.z = (dz / dist) * this.maxSpeed;
 		this.gameObject.transform.yaw = yawToward(dx, dz);
+	}
+
+	override lateUpdate(dt:number):void {
+		const world = this.gameObject.world;
+		const rb = this.gameObject.getComponent(RigidBody);
+		if (!world || !rb) {
+			return;
+		}
+		const speed = Math.hypot(rb.velocity.x, rb.velocity.z);
+		if (speed < 0.55) {
+			this.stepPhase = 0.35;
+			return;
+		}
+		this.stepPhase += speed * dt;
+		if (this.stepPhase < 1.55) {
+			return;
+		}
+		this.stepPhase %= 1.55;
+		const p = this.gameObject.transform.position;
+		cueAt(world, stepKind(world.tileAtWorld(p.x, p.z)?.def), this.gameObject, {
+			gain: 0.52 + Math.random() * 0.22,
+			freq: 72 + Math.random() * 36,
+		});
 	}
 
 	private resolveDestination():{ x:number; z:number } | null {

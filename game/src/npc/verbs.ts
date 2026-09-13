@@ -30,6 +30,7 @@ import {
 import { cloneItem, type ItemInstance } from '../items/instance';
 import { coinsOf, findSaleItem, noteWant, priceFor, transferCoins } from '../items/wallet';
 import { dropItem, findChestHolding, pickup, takeFromChest, USE_RANGE } from '../items/pickup';
+import { cueAt } from '../audio/cue';
 import { equipItem, unequipSlot } from '../items/equip';
 import { useItem } from '../items/use';
 import type { GameHost } from './adapter';
@@ -399,6 +400,7 @@ export function settleGive(from:GameObject, to:GameObject, itemName:string, host
 			const t = from.world?.time ?? 0;
 			from.getComponent(HumanSprite)?.playClip('give', t);
 			to.getComponent(HumanSprite)?.playClip('take', t);
+			cueAt(from.world, 'give', from);
 			host.pushEvent({
 				kind: 'Given',
 				text: `${bodyName(from)} gave ${label} to ${bodyName(to)}`,
@@ -418,6 +420,7 @@ export function settleGive(from:GameObject, to:GameObject, itemName:string, host
 	const t = from.world?.time ?? 0;
 	from.getComponent(HumanSprite)?.playClip('give', t);
 	to.getComponent(HumanSprite)?.playClip('take', t);
+	cueAt(from.world, 'give', from);
 	host.pushEvent({
 		kind: 'Given',
 		text: `${bodyName(from)} gave ${label} to ${bodyName(to)}`,
@@ -438,6 +441,7 @@ export function settlePay(from:GameObject, to:GameObject, amount:number, host:Ga
 	const t = from.world?.time ?? 0;
 	from.getComponent(HumanSprite)?.playClip('give', t);
 	to.getComponent(HumanSprite)?.playClip('take', t);
+	cueAt(from.world, 'give', from);
 	host.pushEvent({
 		kind: 'Given',
 		text: `${bodyName(from)} gave ${amount} gold to ${bodyName(to)}`,
@@ -490,6 +494,7 @@ export function settleBuy(
 	const t = buyer.world?.time ?? 0;
 	buyer.getComponent(HumanSprite)?.playClip('take', t);
 	seller.getComponent(HumanSprite)?.playClip('give', t);
+	cueAt(seller.world, 'give', seller);
 	if (price > 0) {
 		host.pushEvent({
 			kind: 'Bought',
@@ -543,6 +548,7 @@ export function settleSell(
 	const t = seller.world?.time ?? 0;
 	seller.getComponent(HumanSprite)?.playClip('give', t);
 	buyer.getComponent(HumanSprite)?.playClip('take', t);
+	cueAt(seller.world, 'give', seller);
 	if (price > 0) {
 		host.pushEvent({
 			kind: 'Bought',

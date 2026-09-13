@@ -89,4 +89,14 @@ camGo.transform.pitch = -Math.atan2(5, Math.hypot(6, 8));
 camGo.addComponent(new Camera());
 game.world.add(camGo);
 
+if (game.canvas) {
+	game.world.audio.connectUnlock(game.canvas);
+	game.world.audio.playMusic({
+		bpm: 90,
+		loop: 8,
+		id: 'hi',
+		voices: [{ instrument: 'pad', notes: [{ pitch: 60, beat: 0, dur: 8, vel: 0.35 }] }],
+	});
+}
+
 game.start();

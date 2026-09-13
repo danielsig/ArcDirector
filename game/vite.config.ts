@@ -9,6 +9,7 @@ export default defineConfig({
 	plugins: [vue(), aiLogPlugin(), artCachePlugin()],
 	resolve: {
 		alias: {
+			'@arc-director/kindling/score': fileURLToPath(new URL('../kindling/src/score/index.ts', import.meta.url)),
 			'@arc-director/kindling': fileURLToPath(new URL('../kindling/src/index.ts', import.meta.url)),
 			'arc-director': fileURLToPath(new URL('../arc-director/src/index.ts', import.meta.url)),
 		},

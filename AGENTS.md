@@ -36,6 +36,7 @@ Unity-shaped, not Unity. `@arc-director/kindling` owns the canvas, `Renderer`, R
 | `BoxCollider` | XZ AABB; `solid` / `isTrigger` / `pad` (crowd). |
 | `Camera` / `Light` / `MeshRenderer` | View. Renderer finds the first enabled `Camera`. |
 | `Renderer` | WebGL, fog/hemi/fill/sun look, resize. Null when headless. |
+| `Audio` | Procedural mixer on `world.audio`. Scores + HRTF stereo SFX, no sample files. Silent when headless. |
 
 ### Hierarchy
 

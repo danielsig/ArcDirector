@@ -11,6 +11,7 @@ import { bodyName, findBody } from './names';
 import { carriedLabels } from './perception';
 import { talkNotices, canHearClearly, CLEAR_RANGE, SPEECH_LIFE } from './talkAttend';
 import { settleBuy, settleGive, settlePay, settleSell, tooFar } from './verbs';
+import { cueAt, talkAsks, talkDur, talkHz } from '../audio/cue';
 
 const TALK_RANGE = CLEAR_RANGE;
 const HEAR_RANGE = 16;
@@ -269,6 +270,12 @@ export function showSpeech(host:GameHost, actor:GameObject, text:string, to?:str
 	}
 	bubble.text = to ? `${spoken} (${to})` : spoken;
 	bubble.until = host.world.time + life;
+	const hz = talkHz(actor.id);
+	cueAt(host.world, 'talk', actor, {
+		freq: hz,
+		dur: talkDur(spoken),
+		freqTo: talkAsks(spoken) ? hz * 1.35 : undefined,
+	});
 	pushChat(host, bodyName(actor), spoken, to);
 }
 

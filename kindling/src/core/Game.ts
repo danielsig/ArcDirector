@@ -87,6 +87,7 @@ export class Game<W extends World = World> {
 
 	dispose():void {
 		this.stop();
+		this.world.audio.dispose();
 		this.renderer?.dispose();
 	}
 
