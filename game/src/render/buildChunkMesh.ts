@@ -19,7 +19,7 @@ import { attachChunkAo } from './bakeAo';
 const FLOOR_SALT = 11;
 const WALL_SALT = 29;
 const STAIR_SALT = 47;
-export const CHUNK_MESH_REV = 66;
+export const CHUNK_MESH_REV = 67;
 
 function cellX(chunk:Chunk, lx:number):number {
 	return chunk.origin.cx * CHUNK_SIZE + lx;

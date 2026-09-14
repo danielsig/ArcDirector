@@ -150,7 +150,7 @@ export const MARKET_SEEDS:AgentSpec[] = [
 ];
 
 const POOL_NAMES = ['Pip', 'Gwen', 'Cal', 'Ivo', 'Bess', 'Quin', 'Odo', 'Faye', 'Lars', 'Nia', 'Wim', 'Tess'];
-const POOL_MESH = ['human', 'human_merchant', 'human_robe', 'human_princess', 'human_sorceress'];
+const POOL_MESH = ['human_mannequin', 'human_merchant', 'human_robe', 'human_princess', 'human_sorceress'];
 
 type CustomerTemplate = {
 	wants:string[];

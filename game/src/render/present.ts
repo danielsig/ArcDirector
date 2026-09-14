@@ -1,36 +1,46 @@
 import * as THREE from 'three';
-import { Chest, Door, HumanBody, HUMAN_KINDS, HumanSprite, RigidBody, Torch, Bridge, type HumanKind } from '../engine/components';
+import { Chest, Door, HumanBody, HumanSprite, RigidBody, Torch, Bridge, type HumanKind } from '../engine/components';
 import { MeshRenderer } from '../engine/MeshRenderer';
-import { yawToForward, yawToward } from '../engine/math';
+import { yawToForward } from '../engine/math';
 import type { World } from '../engine/World';
 import type { GameObject } from '../engine/GameObject';
 import { buildChunkMesh, CHUNK_MESH_REV } from './buildChunkMesh';
-import { ensureHeldSprites, HUMAN_PLANE_H, HUMAN_PLANE_W, HUMAN_SPRITE_SIZE, PLAYER_SPRITE_SIZE, PLAYER_SPRITE_SLIM } from './meshRegistry';
-import { getSheet, sheetReady } from './spritesheet';
+import { ensureHeldFlame, ensureHeldSprites, HUMAN_PLANE_H, HUMAN_PLANE_W } from './meshRegistry';
+import { getSheet, sheetReady, unlitSpriteMaterial } from './spritesheet';
 import {
 	getHumanAnims,
+	hasHumanAnims,
+	hourFromViewDeg,
 	pickClockMaps,
 	pickPocketMaps,
+	resolveClockHour,
 	snapWalkHour,
 	walkFrameIndex,
-	type IdleHour,
-	type WalkHour,
+	type ClockAnims,
+	type ClockHour,
+	type ClockMaps,
 } from './humanAnims';
 import { natureReady, tickNature, untrackNature } from './nature';
 import { createGroundBox } from './groundBox';
 import { disposeGrassBatch, syncGrassBatch } from './grassBatch';
 import { nearestPickup } from '../items/pickup';
 import { slotItem } from '../items/inventory';
-import { handsAt, SWORD_HILT, swordClockHour } from './attachPoints';
+import { handsAt, heldItemDepth, heldItemGrip, PLAYER_CARD } from './attachPoints';
 import { getSwordMaps } from './swordAnims';
+import { characterHeight, characterTakeFps, characterWalkFps, isPackedKind } from './artCache';
 
 const worldPos = new THREE.Vector3();
 const camPos = new THREE.Vector3();
 const camRight = new THREE.Vector3();
 const camQuat = new THREE.Quaternion();
 
+function torchMesh(meshID:string | undefined):boolean {
+	return meshID === 'item_torch';
+}
+
 /** Sprite, door, chunk, and glow presentation on Kindling's scene graph. */
 export class WorldPresent {
+	detailMaps = true;
 	private camera:THREE.Camera = new THREE.PerspectiveCamera();
 	private host:THREE.Scene | null = null;
 	private readonly chunkMeshes = new Map<string, THREE.Group>();
@@ -124,7 +134,7 @@ export class WorldPresent {
 			}
 			else if (kind === 'item') {
 				obj.rotation.y = -yaw;
-				this.syncItem(obj, go === focus, world.time);
+				this.syncItem(obj, go, go === focus, world.time);
 			}
 			else if (kind === 'door') {
 				obj.rotation.y = 0;
@@ -283,43 +293,20 @@ export class WorldPresent {
 		return { deg: Math.atan2(side, toward) * (180 / Math.PI) };
 	}
 
-	/** Twelve idle views: 1–6 and 12 authored, 7–11 as FlipX of 5–1. */
-	private idleFacing(yaw:number, x:number, z:number):{ hour:IdleHour; flip:number } {
-		const deg = this.viewAngle(yaw, x, z).deg;
-		const a = Math.abs(deg);
-		const bins:IdleHour[] = [6, 5, 4, 3, 2, 1, 12];
-		const i = Math.min(6, Math.round(a / 30));
-		const hour = bins[i];
-		// Front and back are the same drawing on both sides. FlipX only
-		// mirrors the normal map, so a torch on the right shades the left.
-		const flip = hour === 6 || hour === 12 ? 1 : (deg < 0 ? -1 : 1);
-		return { hour, flip };
+	/** 45° octant (2=1:30, 4=4:30, 8=7:30, 10=10:30); FlipX only if that hour's art is missing. */
+	private clockFacing(
+		clock:ClockAnims,
+		walking:boolean,
+		yaw:number,
+		x:number,
+		z:number,
+	):{ hour:ClockHour; flip:number; face:ClockHour } {
+		const face = hourFromViewDeg(this.viewAngle(yaw, x, z).deg);
+		return { ...resolveClockHour(clock, face, walking), face };
 	}
 
-	/** Six walk views: 12/2/4/6 from art, 8/10 as FlipX of 4/2. */
-	private walkFacing(yaw:number, x:number, z:number):{ hour:WalkHour; flip:number } {
-		const deg = this.viewAngle(yaw, x, z).deg;
-		if (deg > -30 && deg <= 30) {
-			return { hour: 6, flip: 1 };
-		}
-		if (deg > 30 && deg <= 90) {
-			return { hour: 4, flip: 1 };
-		}
-		if (deg > 90 && deg <= 150) {
-			return { hour: 2, flip: 1 };
-		}
-		if (deg > 150 || deg <= -150) {
-			return { hour: 12, flip: 1 };
-		}
-		if (deg > -150 && deg <= -90) {
-			return { hour: 2, flip: -1 };
-		}
-		return { hour: 4, flip: -1 };
-	}
-
-	private isIdleHour(hour:number):hour is IdleHour {
-		return hour === 1 || hour === 2 || hour === 3 || hour === 4
-			|| hour === 5 || hour === 6 || hour === 12;
+	private isClockHour(hour:number):hour is ClockHour {
+		return Number.isInteger(hour) && hour >= 1 && hour <= 12;
 	}
 
 	private syncHuman(obj:THREE.Object3D, go:GameObject):void {
@@ -329,57 +316,86 @@ export class WorldPresent {
 		}
 		const appearance = go.getComponent(HumanSprite);
 		const kind = appearance?.kind ?? ((obj.userData.animID as string | undefined) ?? 'player');
+		if (!hasHumanAnims(kind)) {
+			return;
+		}
 		const anims = getHumanAnims(kind);
 		const rb = go.getComponent(RigidBody);
 		const speed = rb ? Math.hypot(rb.velocity.x, rb.velocity.z) : 0;
 		const clip = appearance?.clip ?? 'auto';
 		const pocket = clip === 'take' || clip === 'give';
 		const walking = !pocket && (clip === 'walk' || (clip === 'auto' && speed > 0.35));
-		const yaw = walking && rb && speed > 0.35
-			? yawToward(rb.velocity.x, rb.velocity.z)
-			: go.transform.yaw;
+		const yaw = go.transform.yaw;
 		const p = go.transform.position;
 		const t = go.world?.time ?? 0;
-		const fps = appearance?.walkFps ?? 8;
 		const offset = appearance?.animOffset ?? 0;
+		const lockedWalkFps = appearance && appearance.walkFps > 0 ? appearance.walkFps : 0;
+		const takeFps = appearance && appearance.takeFps > 0
+			? appearance.takeFps
+			: characterTakeFps(kind);
 		const clock = anims.clock;
-		let maps = clock.idle[6];
+		let maps = clock.idle[6] ?? clock.idle[12] ?? clock.idle[4];
+		if (!maps) {
+			return;
+		}
 		let flip = 1;
-		let hour:IdleHour = 6;
+		let hour:ClockHour = 6;
+		let face:ClockHour = 6;
+		let fps = lockedWalkFps || characterWalkFps(kind, 6);
 		if (pocket && appearance) {
-			maps = pickPocketMaps(clock, clip, appearance.clipT0, t, appearance.takeFps)
+			maps = pickPocketMaps(clock, clip, appearance.clipT0, t, takeFps)
 				?? pickClockMaps(clock, 6, false, t, fps, offset);
 			flip = appearance.flip ? appearance.flip : 1;
 		}
 		else {
-			const autoView = walking
-				? this.walkFacing(yaw, p.x, p.z)
-				: this.idleFacing(yaw, p.x, p.z);
+			const autoView = this.clockFacing(clock, walking, yaw, p.x, p.z);
 			const locked = appearance?.hour ?? 0;
-			hour = this.isIdleHour(locked)
+			hour = this.isClockHour(locked)
 				? (walking ? snapWalkHour(locked) : locked)
 				: autoView.hour;
+			face = this.isClockHour(locked)
+				? (walking ? snapWalkHour(locked) : locked)
+				: autoView.face;
 			flip = appearance?.flip ? appearance.flip : autoView.flip;
+			fps = lockedWalkFps || characterWalkFps(kind, hour);
 			maps = pickClockMaps(clock, hour, walking, t, fps, offset);
 		}
 		sprite.receiveShadow = true;
 		const mat = sprite.material as THREE.MeshLambertMaterial;
-		if (mat.map !== maps.map || mat.normalMap !== maps.nrm) {
+		const cel = maps.map.userData.cel === true;
+		const nrm = this.detailMaps ? maps.nrm : null;
+		if (mat.map !== maps.map || mat.normalMap !== nrm) {
 			mat.map = maps.map;
-			mat.normalMap = maps.nrm;
+			mat.normalMap = nrm;
+			mat.normalScale.set(cel ? 0.55 : 0.85, cel ? 0.55 : 0.85);
+			mat.alphaTest = cel ? 0.12 : 0.28;
 			mat.needsUpdate = true;
 		}
-		const img = maps.map.image as HTMLCanvasElement | undefined;
-		const aspect = img && img.height > 0 ? img.width / img.height : 0.64;
+		const img = maps.map.image as { width?:number; height?:number } | undefined;
+		const iw = img?.width ?? 0;
+		const ih = img?.height ?? 0;
+		const box = maps.map.userData.content as { x:number; y:number; w:number; h:number } | undefined;
+		const contentH = box && box.h > 0 ? box.h : ih;
+		// Size the person from idle_06, not each clip. Per-cel fillH made idle
+		// and walk of the same hour different heights.
+		const frameFillH = ih > 0 ? Math.min(1, Math.max(0.4, contentH / ih)) : 1;
+		const fillH = clock.lockFillH && clock.lockFillH > 0 ? clock.lockFillH : frameFillH;
+		const aspect = iw && ih ? iw / ih : 0.64;
 		const pitch = Math.abs(this.camPitch);
 		const unflat = 1 / Math.max(Math.cos(pitch), 0.45);
-		const size = kind === 'player' ? PLAYER_SPRITE_SIZE : HUMAN_SPRITE_SIZE;
-		const slim = kind === 'player' ? PLAYER_SPRITE_SLIM : 1;
-		sprite.scale.x = flip * (HUMAN_PLANE_H * aspect * size * slim) / HUMAN_PLANE_W;
-		sprite.scale.y = unflat * size;
-		// Y-billboard feet sit at the origin, which is the far rim of the ground
-		// blob from a 40° camera. Pull the card toward the camera so boots land
-		// in the shadow; tiny Y sink covers the 1–2px pack pad.
+		const heightKey:HumanKind = isPackedKind(kind) ? kind : 'player';
+		const heightM = appearance && appearance.height > 0
+			? appearance.height
+			: characterHeight(heightKey);
+		const size = heightM / HUMAN_PLANE_H;
+		sprite.scale.x = flip * (heightM * aspect) / HUMAN_PLANE_W / fillH;
+		sprite.scale.y = unflat * size / fillH;
+		// ImageBitmap is flipY: empty below the opaque box is PNG headroom.
+		// Plant the crown, not the feet, so idle and walk of the same hour
+		// share a head height against walls. Stride may dip a boot.
+		const padTop = ih > 0 && box ? Math.max(0, (ih - box.y - box.h) / ih) : 0;
+		const planeH = HUMAN_PLANE_H * sprite.scale.y;
+		const headWorld = unflat * heightM - 0.02;
 		obj.getWorldPosition(worldPos);
 		const toCamX = camPos.x - worldPos.x;
 		const toCamZ = camPos.z - worldPos.z;
@@ -387,23 +403,25 @@ export class WorldPresent {
 		const lead = 0.11;
 		sprite.position.set(
 			(toCamX / toCam) * lead,
-			HUMAN_PLANE_H * sprite.scale.y * 0.5 - 0.02,
+			headWorld - planeH * (0.5 - padTop),
 			(toCamZ / toCam) * lead,
 		);
 		this.billboardY(sprite);
 		const walkHour = snapWalkHour(hour);
 		const walkCount = clock.walk[walkHour]?.length ?? 0;
 		const frame = walking ? walkFrameIndex(t, fps, walkCount, offset) : 0;
-		this.syncHeldSwords(sprite, go, kind, hour, walking, frame);
+		this.syncHeldSwords(sprite, go, kind, hour, face, walking, frame, t);
 	}
 
 	private syncHeldSwords(
 		sprite:THREE.Mesh,
 		go:GameObject,
 		kind:string,
-		hour:IdleHour,
+		hour:ClockHour,
+		face:ClockHour,
 		walking:boolean,
 		walkFrame:number,
+		t:number,
 	):void {
 		let leftMesh = sprite.getObjectByName('heldLeft') as THREE.Mesh | undefined;
 		let rightMesh = sprite.getObjectByName('heldRight') as THREE.Mesh | undefined;
@@ -419,58 +437,125 @@ export class WorldPresent {
 		const leftItem = body ? slotItem(body, 'hands.left.held') : null;
 		const rightItem = body ? slotItem(body, 'hands.right.held') : null;
 		const twoHand = !!(leftItem && leftItem === rightItem);
-		const bodyKind:HumanKind = (HUMAN_KINDS as readonly string[]).includes(kind)
-			? kind as HumanKind
-			: 'player';
-		this.placeHeldSword(sprite, leftMesh, bodyKind, hour, leftItem?.meshID, 'left', !twoHand, walking, walkFrame);
-		this.placeHeldSword(sprite, rightMesh, bodyKind, hour, rightItem?.meshID, 'right', true, walking, walkFrame);
+		const bodyKind:HumanKind = isPackedKind(kind) ? kind : 'player';
+		this.placeHeldItem(sprite, leftMesh, bodyKind, hour, face, leftItem, 'left', !twoHand, walking, walkFrame, t);
+		this.placeHeldItem(sprite, rightMesh, bodyKind, hour, face, rightItem, 'right', true, walking, walkFrame, t);
 	}
 
-	private placeHeldSword(
+	private heldItemMaps(meshID:string, hour:ClockHour):ClockMaps | null {
+		if (sheetReady()) {
+			const sheet = getSheet().items[meshID];
+			if (sheet) {
+				return sheet;
+			}
+		}
+		if (meshID === 'item_sword') {
+			return getSwordMaps(6) ?? getSwordMaps(12) ?? null;
+		}
+		return null;
+	}
+
+	private placeHeldItem(
 		sprite:THREE.Mesh,
 		mesh:THREE.Mesh,
 		kind:HumanKind,
-		hour:IdleHour,
-		meshID:string | undefined,
+		hour:ClockHour,
+		face:ClockHour,
+		item:{ meshID:string; Torch?:{ lit:boolean; animOffset?:number; flickerRate?:number } } | null,
 		side:'left' | 'right',
 		include:boolean,
 		walking:boolean,
 		walkFrame:number,
+		t:number,
 	):void {
-		const show = include && meshID === 'item_sword';
-		mesh.visible = show;
-		if (!show) {
-			return;
-		}
-		const clockHour = swordClockHour(hour);
-		const maps = getSwordMaps(clockHour);
-		if (!maps) {
+		const meshID = include ? item?.meshID : undefined;
+		const maps = meshID && !torchMesh(meshID) ? this.heldItemMaps(meshID, hour) : null;
+		const torch = torchMesh(meshID);
+		if ((!maps && !torch) || !meshID) {
 			mesh.visible = false;
+			const flame = mesh.getObjectByName('heldFlame');
+			if (flame) {
+				flame.visible = false;
+			}
 			return;
 		}
-		const mat = mesh.material as THREE.MeshLambertMaterial;
-		if (mat.map !== maps.map || mat.normalMap !== maps.nrm) {
-			mat.map = maps.map;
-			mat.normalMap = maps.nrm;
-			mat.needsUpdate = true;
+		mesh.visible = true;
+		const sheet = sheetReady() ? getSheet() : null;
+		const stickMap = torch ? sheet?.torchStick : maps?.map;
+		const itemImg = stickMap?.image as HTMLCanvasElement | undefined;
+		if (torch && sheet && stickMap) {
+			let unlit = mesh.userData.heldUnlit as THREE.MeshBasicMaterial | undefined;
+			if (!unlit) {
+				unlit = unlitSpriteMaterial(stickMap);
+				unlit.depthTest = true;
+				unlit.depthWrite = false;
+				mesh.userData.heldUnlit = unlit;
+			}
+			else if (unlit.map !== stickMap) {
+				unlit.map = stickMap;
+				unlit.needsUpdate = true;
+			}
+			mesh.material = unlit;
+			this.playHeldFlame(ensureHeldFlame(mesh), item?.Torch?.lit === true, t);
+		}
+		else {
+			const flame = mesh.getObjectByName('heldFlame');
+			if (flame) {
+				flame.visible = false;
+			}
+			const lambert = (mesh.userData.heldLambert as THREE.MeshLambertMaterial | undefined)
+				?? (mesh.material as THREE.MeshLambertMaterial);
+			mesh.material = lambert;
+			lambert.depthTest = true;
+			lambert.depthWrite = false;
+			if (maps && (lambert.map !== maps.map || lambert.normalMap !== (this.detailMaps ? maps.nrm : null))) {
+				lambert.map = maps.map;
+				lambert.normalMap = this.detailMaps ? maps.nrm : null;
+				lambert.needsUpdate = true;
+			}
 		}
 		const charImg = (sprite.material as THREE.MeshLambertMaterial).map?.image as HTMLCanvasElement | undefined;
-		const swordImg = maps.map.image as HTMLCanvasElement | undefined;
-		if (!charImg?.width || !charImg.height || !swordImg?.width || !swordImg.height) {
+		if (!charImg?.width || !charImg.height || !itemImg?.width || !itemImg.height) {
 			return;
 		}
-		const mpp = HUMAN_PLANE_H / charImg.height;
-		const sw = swordImg.width * mpp;
-		const sh = swordImg.height * mpp;
+		const cardW = kind === 'player' ? PLAYER_CARD.w : charImg.width;
+		const cardH = kind === 'player' ? PLAYER_CARD.h : charImg.height;
+		const mpp = HUMAN_PLANE_H / cardH;
+		const sw = itemImg.width * mpp;
+		const sh = itemImg.height * mpp;
 		mesh.scale.set(sw, sh, 1);
 		const hands = handsAt(kind, hour, walking, walkFrame);
 		const hand = side === 'left' ? hands.left : hands.right;
-		const hilt = SWORD_HILT[clockHour];
-		const hx = (hand.x / charImg.width - 0.5) * HUMAN_PLANE_W;
-		const hy = (0.5 - hand.y / charImg.height) * HUMAN_PLANE_H;
-		const ox = (hilt.x / swordImg.width - 0.5) * sw;
-		const oy = (0.5 - hilt.y / swordImg.height) * sh;
-		mesh.position.set(hx - ox, hy - oy, 0.02);
+		const grip = heldItemGrip(meshID, hour) ?? { x: itemImg.width * 0.5, y: itemImg.height * 0.65 };
+		const hx = (hand.x / cardW - 0.5) * HUMAN_PLANE_W;
+		const hy = (0.5 - hand.y / cardH) * HUMAN_PLANE_H;
+		const heading = hand.r ?? 0;
+		const z = -heading;
+		const ox = (grip.x / itemImg.width - 0.5) * sw;
+		const oy = (0.5 - grip.y / itemImg.height) * sh;
+		const c = Math.cos(z);
+		const s = Math.sin(z);
+		mesh.rotation.z = z;
+		mesh.position.set(
+			hx - (ox * c - oy * s),
+			hy - (ox * s + oy * c),
+			heldItemDepth(side, face),
+		);
+	}
+
+	private playHeldFlame(flame:THREE.Mesh, lit:boolean, t:number):void {
+		flame.visible = lit;
+		if (!lit || !sheetReady()) {
+			return;
+		}
+		const frames = getSheet().flame;
+		const n = frames.length;
+		const map = frames[(Math.floor(t * 10) % n + n) % n];
+		const mat = flame.material as THREE.MeshBasicMaterial;
+		if (mat.map !== map) {
+			mat.map = map;
+			mat.needsUpdate = true;
+		}
 	}
 
 	private syncTorch(obj:THREE.Object3D, go:GameObject):void {
@@ -478,11 +563,15 @@ export class WorldPresent {
 		if (holster) {
 			holster.rotation.y = go.transform.yaw;
 		}
+		const torch = go.getComponent(Torch);
 		const flame = obj.userData.flame as THREE.Mesh | undefined;
 		if (!flame) {
 			return;
 		}
-		const torch = go.getComponent(Torch);
+		flame.visible = !torch || torch.lit;
+		if (!flame.visible) {
+			return;
+		}
 		const sheet = getSheet();
 		const n = sheet.flame.length;
 		const t = go.world?.time ?? 0;
@@ -499,7 +588,7 @@ export class WorldPresent {
 		this.billboardY(obj.getObjectByName('stick'));
 	}
 
-	private syncItem(obj:THREE.Object3D, highlighted:boolean, t:number):void {
+	private syncItem(obj:THREE.Object3D, go:GameObject, highlighted:boolean, t:number):void {
 		const sprite = obj.userData.sprite as THREE.Mesh | undefined;
 		if (!sprite) {
 			return;
@@ -512,14 +601,20 @@ export class WorldPresent {
 		sprite.scale.y = unflat * pulse;
 		const h = (obj.userData.itemH as number | undefined) ?? 0.36;
 		sprite.position.y = h * unflat * 0.5 + 0.02;
-		const mat = sprite.material as THREE.MeshLambertMaterial;
-		if (highlighted) {
-			mat.emissive.setHex(0xd4b45c);
-			mat.emissiveIntensity = 0.24 + (0.5 + 0.5 * Math.sin(t * 3.4)) * 0.22;
+		const mat = sprite.material;
+		if (mat instanceof THREE.MeshLambertMaterial) {
+			if (highlighted) {
+				mat.emissive.setHex(0xd4b45c);
+				mat.emissiveIntensity = 0.24 + (0.5 + 0.5 * Math.sin(t * 3.4)) * 0.22;
+			}
+			else {
+				mat.emissive.setHex(0x000000);
+				mat.emissiveIntensity = 0;
+			}
 		}
-		else {
-			mat.emissive.setHex(0x000000);
-			mat.emissiveIntensity = 0;
+		const flame = obj.userData.flame as THREE.Mesh | undefined;
+		if (flame) {
+			this.playHeldFlame(flame, go.getComponent(Torch)?.lit === true, t);
 		}
 	}
 

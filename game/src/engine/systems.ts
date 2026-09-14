@@ -97,6 +97,7 @@ export class WorldView extends Component {
 		if (!world || !renderer) {
 			return;
 		}
+		this.present.detailMaps = renderer.detailMaps;
 		this.present.syncChunks(world);
 		this.present.mountGroundBox(world);
 		const player = world.findByID('Player');

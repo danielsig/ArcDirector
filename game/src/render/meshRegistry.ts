@@ -24,6 +24,10 @@ function std(color:number, extras:THREE.MeshStandardMaterialParameters = {}):THR
 
 export const HUMAN_PLANE_W = 0.78;
 export const HUMAN_PLANE_H = 1.22;
+/** Ground/other-sprite blob; do not shrink — sprites skip this caster in the shader instead. */
+export const HUMAN_SHADOW_RADIUS_TOP = 0.18;
+export const HUMAN_SHADOW_RADIUS_BOT = 0.22;
+export const HUMAN_SHADOW_HEIGHT = 1.05;
 
 function spritePlane(w:number, h:number):THREE.PlaneGeometry {
 	const geo = new THREE.PlaneGeometry(w, h);
@@ -46,10 +50,6 @@ function spritePlane(w:number, h:number):THREE.PlaneGeometry {
 	geo.computeTangents();
 	return geo;
 }
-export const HUMAN_SPRITE_SIZE = 1.25;
-export const PLAYER_SPRITE_SIZE = 1.12;
-/** Player-only X squeeze; hat-wide frames read chubby at square pixels. */
-export const PLAYER_SPRITE_SLIM = 0.82;
 
 export function meshReady(meshID:string):boolean {
 	if (meshID === 'human' || meshID.startsWith('human_')) {
@@ -78,11 +78,11 @@ export function createHumanMesh(animID = 'player'):THREE.Group {
 	g.userData.animID = animID;
 
 	const caster = new THREE.Mesh(
-		new THREE.CylinderGeometry(0.18, 0.22, 1.05, 8),
+		new THREE.CylinderGeometry(HUMAN_SHADOW_RADIUS_TOP, HUMAN_SHADOW_RADIUS_BOT, HUMAN_SHADOW_HEIGHT, 8),
 		std(0x000000, { colorWrite: false, depthWrite: false }),
 	);
 	caster.name = 'shadowCaster';
-	caster.position.y = 0.525;
+	caster.position.y = HUMAN_SHADOW_HEIGHT * 0.5;
 	caster.castShadow = true;
 	caster.receiveShadow = false;
 	caster.frustumCulled = false;
@@ -105,7 +105,7 @@ export function createHumanMesh(animID = 'player'):THREE.Group {
 }
 
 function addHeldSprite(sprite:THREE.Mesh, name:string):void {
-	const maps = getSwordMaps(6);
+	const maps = getSwordMaps(6) ?? (sheetReady() ? getSheet().items['item_torch'] : undefined);
 	if (!maps) {
 		return;
 	}
@@ -117,13 +117,37 @@ function addHeldSprite(sprite:THREE.Mesh, name:string):void {
 	held.visible = false;
 	held.castShadow = false;
 	held.receiveShadow = false;
+	// Draw after the body so alpha-tested holes reveal a behind item (negative z).
 	held.renderOrder = 1;
-	(held.material as THREE.MeshLambertMaterial).depthWrite = false;
+	const heldMat = held.material as THREE.MeshLambertMaterial;
+	heldMat.depthTest = true;
+	heldMat.depthWrite = false;
+	held.userData.heldLambert = heldMat;
 	sprite.add(held);
 }
 
+export function ensureHeldFlame(held:THREE.Mesh):THREE.Mesh {
+	let flame = held.getObjectByName('heldFlame') as THREE.Mesh | undefined;
+	if (flame) {
+		return flame;
+	}
+	const sheet = getSheet();
+	flame = new THREE.Mesh(spritePlane(1, 1), flameMaterial(sheet.flame[0]));
+	flame.name = 'heldFlame';
+	flame.castShadow = false;
+	flame.receiveShadow = false;
+	flame.renderOrder = 2;
+	flame.position.set(0, 0.62, 0.02);
+	flame.scale.set(1.2, 0.85, 1);
+	held.add(flame);
+	return flame;
+}
+
 export function ensureHeldSprites(sprite:THREE.Mesh):void {
-	if (sprite.getObjectByName('heldLeft') || !swordsReady()) {
+	if (sprite.getObjectByName('heldLeft')) {
+		return;
+	}
+	if (!swordsReady() && !sheetReady()) {
 		return;
 	}
 	addHeldSprite(sprite, 'heldLeft');
@@ -292,14 +316,57 @@ const ITEM_HEIGHT:Record<string, number> = {
 	'item_pack': 0.36,
 };
 
+function itemTorchProp(h:number):THREE.Group {
+	const sheet = getSheet();
+	const g = new THREE.Group();
+	g.userData.kind = 'item';
+	const stickImg = sheet.torchStick.image as HTMLCanvasElement | undefined;
+	const aspect = stickImg && stickImg.height > 0 ? stickImg.width / stickImg.height : 0.68;
+	const stickH = h * 0.72;
+	const stick = new THREE.Mesh(
+		spritePlane(stickH * aspect, stickH),
+		unlitSpriteMaterial(sheet.torchStick),
+	);
+	stick.name = 'sprite';
+	stick.position.y = stickH * 0.5 + 0.02;
+	stick.castShadow = false;
+	g.add(stick);
+	const fh = stickH * 0.9;
+	const flame = new THREE.Mesh(
+		spritePlane(fh * 0.88, fh),
+		flameMaterial(sheet.flame[0]),
+	);
+	flame.name = 'flame';
+	flame.position.set(0, stickH * 0.52, 0.01);
+	flame.castShadow = false;
+	flame.renderOrder = 2;
+	flame.visible = false;
+	stick.add(flame);
+	const blob = new THREE.Mesh(
+		new THREE.CylinderGeometry(0.1, 0.12, 0.04, 8),
+		std(0x000000, { colorWrite: false, depthWrite: false }),
+	);
+	blob.position.y = 0.02;
+	blob.castShadow = true;
+	blob.receiveShadow = false;
+	g.add(blob);
+	g.userData.sprite = stick;
+	g.userData.flame = flame;
+	g.userData.itemH = stickH;
+	return g;
+}
+
 function itemProp(meshID:string):THREE.Group {
+	const h = ITEM_HEIGHT[meshID] ?? 0.36;
+	if (meshID === 'item_torch') {
+		return itemTorchProp(h);
+	}
 	const sheet = getSheet();
 	const g = new THREE.Group();
 	g.userData.kind = 'item';
 	const maps = sheet.items[meshID] ?? sheet.items['item_key'];
 	const img = maps.map.image as HTMLCanvasElement;
 	const aspect = img.height > 0 ? img.width / img.height : 1;
-	const h = ITEM_HEIGHT[meshID] ?? 0.36;
 	const sprite = new THREE.Mesh(
 		spritePlane(h * aspect, h),
 		spriteMaterial(maps.map, maps.nrm, maps.met),
@@ -361,11 +428,12 @@ export function createDoorMesh():THREE.Group {
 	hinge.add(leaf);
 	g.add(hinge);
 	const occ = new THREE.Mesh(
-		new THREE.BoxGeometry(0.14, 2.35, 0.98),
-		std(0x000000, { colorWrite: false }),
+		new THREE.PlaneGeometry(0.98, DOOR_LEAF_H),
+		std(0x000000, { colorWrite: false, side: THREE.DoubleSide }),
 	);
 	occ.name = 'doorOccluder';
-	occ.position.y = 1.175;
+	occ.rotation.y = Math.PI / 2;
+	occ.position.y = DOOR_LEAF_H * 0.5;
 	occ.castShadow = true;
 	occ.receiveShadow = false;
 	g.add(occ);

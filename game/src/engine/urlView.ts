@@ -1,5 +1,5 @@
 /** Testing-only URL flags (`observer` `ai`) and optional agent `view` shot. */
-import type { DevFlags } from './devFlags';
+import type { Prefs } from '../prefs';
 import type { ViewPose } from './viewPersist';
 
 export type URLView = {
@@ -94,7 +94,7 @@ export function applyURLView(pose:ViewPose, view:URLView):ViewPose {
  * Keep `?scene=` plus `observer`/`ai` in the bar (no history entries).
  * `view` is agent-only: never add it; if already present, keep it in sync.
  */
-export function writeURLView(pose:ViewPose, flags:DevFlags):void {
+export function writeURLView(pose:ViewPose, flags:Pick<Prefs, 'observer' | 'ai'>):void {
 	if (!window.location.search.includes('scene=')) {
 		return;
 	}

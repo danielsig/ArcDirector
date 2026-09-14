@@ -16,6 +16,7 @@ export default defineConfig({
 	},
 	optimizeDeps: {
 		exclude: ['arc-director', '@arc-director/kindling'],
+		include: ['three', 'three/addons/loaders/GLTFLoader.js'],
 	},
 	server: {
 		watch: {

@@ -13,13 +13,13 @@ export type RockStamp = {
 
 /** World size of one brick course on unprojected 3-course front faces. */
 export const BRICK_HEIGHT = 1 / 6;
-export const WALL_OUT_W = 1344;
-export const WALL_OUT_H = 120;
+export const WALL_OUT_W = 672;
+export const WALL_OUT_H = 60;
 export const WALL_ROW_COUNT = 3;
 export const WALL_PERIOD_V = 3 * WALL_ROW_COUNT * BRICK_HEIGHT;
 export const WALL_PERIOD_U = (WALL_OUT_W / (WALL_OUT_H * WALL_ROW_COUNT)) * WALL_PERIOD_V;
 
-export const FLOOR_OUT = 160;
+export const FLOOR_OUT = 80;
 
 /**
  * Front faces of the three continuous wall rows (skip the gapped top row).

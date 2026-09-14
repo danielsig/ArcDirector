@@ -108,11 +108,15 @@ export async function executeStep(host:GameHost, step:Step, ctx:HostCtx):Promise
 					seen.add(name);
 				}
 			};
-			const result = await npc.wander(seconds, until ? {
+			const guide = until ? {
 				stop: () => wanderUntilMet(ctx, host.posedEvents, until),
-				dest: () => pickWanderPoint(ctx.actor, until),
+				dest: () => pickWanderPoint(ctx, host.posedEvents, until),
 				note,
-			} : { note });
+			} : { note };
+			let result = await npc.wander(seconds, guide);
+			for (let n = 0; until && n < 3 && result.ok && !result.interrupted && result.reason !== 'until'; n++) {
+				result = await npc.wander(seconds, guide);
+			}
 			note();
 			const saw = formatWanderSeen(seen);
 			if (result.reason === 'until') {

@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
+import { parsePlan } from '../action/parse.js';
 import { VerbRegistry, registerStockVerbs } from '../action/registry.js';
 import { stablePrefix, volatileBlock, seeMapHint } from './prompt.js';
 
@@ -16,11 +17,28 @@ describe('prompt split', () => {
 		assert.match(system, /think\(about\?\)/);
 		assert.match(system, /wait\(for\)/);
 		assert.match(system, /wander\(for\)/);
+		assert.match(system, /args\.for/);
+		assert.match(system, /"verb":"wander"/);
 		assert.match(system, /Looking for a thing or place/);
+		assert.match(system, /isReachable\(me, Cottage\)/);
+		assert.match(system, /wrap list watches in some/);
+		assert.match(system, /Answer immediately with only the ActionPlan JSON/);
+		assert.match(system, /No preamble, no scratchpad, no prose before or after it/);
+		assert.match(system, /Do not think\(\) twice in a row/);
 		assert.match(system, /Do not call see_map/);
+		assert.match(system, /If the last wander already met args\.for/);
+		assert.equal(system.includes('wander(for) with a watch expr'), false);
+		assert.equal(system.includes('Then emit one ActionPlan as JSON'), false);
 		assert.match(system, /❌ = you/);
 		assert.equal(system.includes('Goals (highest first)'), false);
 		assert.equal(system.includes('Pinned memories'), false);
+		const wanderJson = system.match(/\{"head":\{"verb":"wander","args":\{"for":"(?:\\.|[^"\\])*"\}\}\}/);
+		assert.ok(wanderJson);
+		assert.equal(parsePlan(wanderJson[0], verbs).head.verb, 'wander');
+		assert.equal(
+			parsePlan(wanderJson[0], verbs).head.args.for,
+			'some(items.filter("FireMushroom").nearby())',
+		);
 	});
 
 	it('puts goals and pinned memory in the user block', () => {

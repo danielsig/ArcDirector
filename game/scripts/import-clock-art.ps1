@@ -1,5 +1,5 @@
 param(
-	[Parameter(Mandatory = $true)][ValidateSet('player', 'guard', 'robe', 'merchant', 'princess', 'sorceress')][string]$Kind,
+	[Parameter(Mandatory = $true)][string]$Kind,
 	[Parameter(Mandatory = $true)][string]$Stage,
 	[switch]$IdleOnly,
 	[switch]$TakeOnly
@@ -7,7 +7,16 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $root = Split-Path $PSScriptRoot -Parent
-$destDir = Join-Path $root "public\characters\$Kind"
+Push-Location $PSScriptRoot
+try {
+	$folder = & node --input-type=module -e "import { folderForKind } from './characters.mjs'; process.stdout.write(folderForKind(process.argv.at(-1)))" -- $Kind
+} finally {
+	Pop-Location
+}
+if (-not $folder) {
+	throw "no character folder for kind $Kind"
+}
+$destDir = Join-Path $root "public\characters\$folder"
 $idle06 = Join-Path $destDir 'idle_06.png'
 if (-not (Test-Path $idle06)) {
 	throw "missing $idle06"

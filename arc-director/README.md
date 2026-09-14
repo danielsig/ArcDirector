@@ -291,8 +291,8 @@ i is "marked"
 
 | | |
 |--|--|
-| Relations | `distance`, `isNear`, `isApproaching`, `isDeparting`, `hasSightline`, `hasJustSeen`, `hasLostSight`, `facing`, `isFacing`, `isBehind` |
-| List filters | `others.nearby()`, `.nearby(16)`, `.approaching()`, `.departing()` |
+| Relations | `distance`, `isNear`, `isReachable`, `isApproaching`, `isDeparting`, `hasSightline`, `hasJustSeen`, `hasLostSight`, `facing`, `isFacing`, `isBehind` |
+| List filters | `others.nearby()`, `.nearby(16)`, `others.reachable()`, `.approaching()`, `.departing()` |
 | Lists | `filter` / `find` / `some` / `all`, `map`, `sortBy`, `count`, `includes`, `first`, `max` / `min`, `sum`, `avg`, `reduce` |
 | Logic | `&&` / `\|\|`, `*`, ternary, `??` (absent only), `!` / `!!` |
 | Host extras | `hp` / `maxHP`, `isHurt`, `isHPFalling`; `isCarrying`; `isOpen` / `hasJustOpened` |
@@ -317,6 +317,7 @@ type HostKernels = {
 	hostFns?: Record<string, NativeFn>;
 	distance?: (a, b) => number | undefined;
 	nearRadius?: number;
+	walkDistance?: (a, b) => number | undefined;  // meters of path; undefined = none; 0 = same cell
 	canSee?: (a, b) => boolean;   // director overwrites when withLineOfSight
 	facing?: (a, b) => number;
 	inventory?: (who) => ExprEntity[];
@@ -335,7 +336,7 @@ type HostKernels = {
 };
 ```
 
-Space enters expressions only through host callbacks (`distance`, `facing`, `canSee`).
+Space enters expressions only through host callbacks (`distance`, `facing`, `canSee`, `walkDistance`).
 
 ---
 

@@ -18,7 +18,7 @@ import {
 } from './types.js';
 
 const RELATIONS = new Set([
-	'distance', 'isNear', 'isApproaching', 'isDeparting', 'hasSightline',
+	'distance', 'isNear', 'isReachable', 'isApproaching', 'isDeparting', 'hasSightline',
 	'isFacing', 'isBehind', 'facing', 'wasJustFacing', 'hasJustSeen', 'hasLostSight',
 ]);
 

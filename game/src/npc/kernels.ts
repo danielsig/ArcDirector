@@ -25,6 +25,7 @@ import { listCarried } from '../items/inventory';
 import type { ItemInstance } from '../items/instance';
 import { yawToForward } from '../engine/math';
 import { enclosureAt, interiorContains } from '../world/interior';
+import { walkDistance as pathMeters } from '../world/path';
 import { CLEAR_RANGE } from './talkAttend';
 import { bodyName } from './names';
 import { tagsOf } from './perception';
@@ -87,8 +88,8 @@ function landmarkEntity(go:GameObject):ExprEntity {
 	return dummyEntity(go.id, { name, tags });
 }
 
-function nearbyLandmarks(world:World, actor:GameObject):GameObject[] {
-	const p = actor.transform.position;
+function nearbyLandmarks(world:World, actor:GameObject, here?:{ x:number; z:number }):GameObject[] {
+	const p = here ?? actor.transform.position;
 	const ranked:{ go:GameObject; dist:number }[] = [];
 	for (const go of world.objects) {
 		if (go === actor || go.getComponent(HumanBody) || go.getComponent(Pickupable)) {
@@ -135,7 +136,11 @@ function poseOf(
 	posed:PosedFact[],
 	id:string,
 	now:number,
+	here?:{ ids:Set<string>; x:number; z:number },
 ):{ x:number; z:number } | undefined {
+	if (here?.ids.has(id)) {
+		return { x: here.x, z: here.z };
+	}
 	const go = lookupGo(world, id);
 	if (go) {
 		const p = go.transform.position;
@@ -148,10 +153,17 @@ function poseOf(
 	return { x: fact.x, z: fact.z };
 }
 
-/** World census for watches. Director still injects cache / hasHeard / prev*. */
-export function kernelsOf(world:World, actor:GameObject, posed:PosedFact[]) {
+/** World census for watches. Director still injects cache / hasHeard / prev*. `here` poses `me` without moving the body. */
+export function kernelsOf(world:World, actor:GameObject, posed:PosedFact[], here?:{ x:number; z:number }) {
 	const hidePlayer = world.playerInperceivable;
 	const me = entityOf(actor);
+	const meAt = here
+		? {
+			ids: new Set([actor.id, bodyName(actor), actor.getComponent(Named)?.id].filter((id):id is string => !!id)),
+			x: here.x,
+			z: here.z,
+		}
+		: undefined;
 	const others:ExprEntity[] = [];
 	const items:ExprEntity[] = [];
 	const bindings:Record<string, ExprVal> = {};
@@ -178,7 +190,7 @@ export function kernelsOf(world:World, actor:GameObject, posed:PosedFact[]) {
 			bindings[name] = { kind: 'entity', value: entityOf(go) };
 		}
 	}
-	const landmarks = nearbyLandmarks(world, actor);
+	const landmarks = nearbyLandmarks(world, actor, here);
 	bindings.landmarks = {
 		kind: 'list',
 		value: landmarks.map((go) => ({
@@ -207,18 +219,46 @@ export function kernelsOf(world:World, actor:GameObject, posed:PosedFact[]) {
 		items,
 		bindings,
 		distance: (a:ExprEntity, b:ExprEntity) => {
-			const pa = poseOf(world, posed, a.id, now);
-			const pb = poseOf(world, posed, b.id, now);
+			const pa = poseOf(world, posed, a.id, now, meAt);
+			const pb = poseOf(world, posed, b.id, now, meAt);
 			if (!pa || !pb) {
 				return undefined;
 			}
 			return Math.hypot(pa.x - pb.x, pa.z - pb.z);
 		},
 		nearRadius: NEAR_RADIUS,
+		walkDistance: (a:ExprEntity, b:ExprEntity) => {
+			const pa = poseOf(world, posed, a.id, now, meAt);
+			const pb = poseOf(world, posed, b.id, now, meAt);
+			if (!pa || !pb) {
+				return undefined;
+			}
+			const ignore = [a.id, b.id];
+			if (a.name) {
+				ignore.push(a.name);
+			}
+			if (b.name) {
+				ignore.push(b.name);
+			}
+			return pathMeters(world, pa.x, pa.z, pb.x, pb.z, ignore);
+		},
 		facing: (a:ExprEntity, b:ExprEntity) => {
+			const pb = poseOf(world, posed, b.id, now, meAt);
+			if (!pb) {
+				return 0;
+			}
+			if (meAt && meAt.ids.has(a.id)) {
+				const f = yawToForward(actor.transform.yaw);
+				const dx = pb.x - meAt.x;
+				const dz = pb.z - meAt.z;
+				const len = Math.hypot(dx, dz);
+				if (len < 1e-6) {
+					return 1;
+				}
+				return Math.max(-1, Math.min(1, (f.x * dx + f.z * dz) / len));
+			}
 			const from = lookupGo(world, a.id);
-			const pb = poseOf(world, posed, b.id, now);
-			if (!from || !pb) {
+			if (!from) {
 				return 0;
 			}
 			return facingToward(from, pb.x, pb.z);
@@ -287,7 +327,7 @@ export function kernelsOf(world:World, actor:GameObject, posed:PosedFact[]) {
 				if (!body) {
 					return { kind: 'bool' as const, value: false };
 				}
-				const p = body.transform.position;
+				const p = meAt && meAt.ids.has(who.id) ? meAt : body.transform.position;
 				if (buildingID) {
 					const building = world.findNamed(buildingID) ?? world.findByID(buildingID);
 					const box = building?.getComponent(Interior);

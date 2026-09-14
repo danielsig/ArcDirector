@@ -108,7 +108,7 @@ export function applyInstance(go:GameObject, inst:ItemInstance):void {
 		const light = go.addComponent(new Light());
 		light.color = 0xff9a4a;
 		light.intensity = torch.baseIntensity;
-		light.decay = torch.baseDecay * 0.5;
+		light.decay = torch.baseDecay * Torch.decayScale;
 		light.range = 7;
 		light.castShadow = true;
 		light.enabled = inst.Torch.lit;
@@ -157,7 +157,7 @@ export function spawnWorldItem(
 	if (inst.name === 'GoldCoin') {
 		named.aliases = ['Gold Coin', 'coin'];
 	}
-	if (inst.name === GLEN_FEE_NAME) {
+	if (inst.name === GLEN_FEE_NAME || inst.name === 'FireMushroomB') {
 		named.aliases = ['Fire Mushroom', 'mushroom'];
 	}
 	if (inst.name === 'SilverTrout') {

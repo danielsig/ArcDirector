@@ -48,6 +48,7 @@ export const WATCH_CHEAT_SHEET = [
 	'hasSightline is line of sight only. isFacing is facing(a,b) > √2/2 (90° cone).',
 	'Infix is matches id, name, or tag: i is "Lantern". find/filter/some/all take a predicate or a string needle.',
 	'Lists: others.nearby(), others.nearby(16), others.approaching(), others.departing(), events.filter("theft").nearby(16).',
+	'isReachable(me, Cottage), others.reachable() (walk path, nearest first); wrap list watches in some.',
 	'&& / || on numbers are min / max; on bools, and / or. Gate analog with *. Ternary cond ? a : b. ?? is absent-coalesce only (keeps 0 and false).',
 	'! / !!. Dot on absent does not throw. Wrap raw distance in clamp or softClamp. hp / maxHP if the host plugged them.',
 	'trueScore applies only to a boolean watch root, not inside arithmetic.',
@@ -57,8 +58,8 @@ export function seeMapHint(youSymbol = DEFAULT_YOU_SYMBOL):string {
 	const you = youSymbol.trim() || DEFAULT_YOU_SYMBOL;
 	return [
 		'The English scene already names who and what is near, with distances in paces.',
-		'If you are looking for something the scene has not named, wander(for) with a watch expr rather than guessing a go_to.',
-		'Do not call see_map unless that text is not enough to pick a go_to or a wander(for).',
+		'If you are looking for something the scene has not named, wander(for) with args.for a watch-expr string rather than guessing a go_to.',
+		'Do not call see_map unless that text is not enough to pick a go_to or wander(for).',
 		'see_map({zoom:1}) is close around you; see_map({zoom:0}) is the whole loaded land; in-between values zoom.',
 		`Pictograms. Match the legend (${you} = you) to names. No coordinates.`,
 		'Calling it again soon, without having moved, returns the same legend and no new picture.',
@@ -76,10 +77,13 @@ function planInstructions(verbs:VerbRegistry):string {
 		+ `remember(content, tags?) keeps a fact you will still know later. Use it when you learn who someone is, what they want, or how a thing works. `
 		+ `think(about?) always runs last; several merge into one. about is optional. Do not think() twice in a row — act first. `
 		+ `wait(for) parks with a one-shot watch (same language as watches), dropped the next think. Do not addWatches for a one-check. `
-		+ `Looking for a thing or place the scene has not named? wander(for) with a watch expr — it walks and stops when the expr is true (same language as watches). Examples: some(landmarks.filter("tree").nearby(16)), some(items.filter("FireMushroom").nearby()), isNear(me, Cottage). Do not invent a go_to name. go_to only a name you already see. The wander result lists names you passed. `
+		+ `Looking for a thing or place the scene has not named? wander(for) walks until the watch expr in args.for is true (same language as watches). `
+		+ `Example: {"head":{"verb":"wander","args":{"for":"some(items.filter(\\"FireMushroom\\").nearby())"}}}. `
+		+ `Other for strings: some(landmarks.filter("tree").nearby(16)), isNear(me, Cottage). Do not invent a go_to name. go_to only a name you already see. The wander result lists names you passed. `
+		+ `If the last wander already met args.for (until), do not wander that same expr again — pick_up or go_to a name from the result. `
 		+ `Chain several steps with then_if_ok when you already know the next action. `
 		+ `Prefer the scene text. Tools are optional; skip them if you can already act. `
-		+ `Then emit one ActionPlan as JSON. `
+		+ `Answer immediately with only the ActionPlan JSON. No preamble, no scratchpad, no prose before or after it. `
 		+ `Never emit coordinates. Names only. Available verbs: ${verbHelp(verbs)}. `
 		+ `JSON shape: {"head":{"verb":"go_to","args":{"name":"EastGate"}},"then":{"join":"then_if_ok","plan":{"head":{"verb":"wait","args":{"seconds":1}}}}}. `
 		+ `Close every brace. Do not write "...". At most four chained steps.`;
@@ -199,7 +203,7 @@ export function shortTermBlock(summary:string, recent:string[]):string {
 /** Follow-up user turn after a bad plan or a tool call when tools are closed. Keeps the thread. */
 export function planRepairHint(reason:string):string {
 	return `That was not a valid ActionPlan (${reason}). Keep this conversation. `
-		+ `Emit one valid ActionPlan JSON now. Names only, no coordinates. Close every brace.`;
+		+ `Emit only one valid ActionPlan JSON now — no prose. Names only, no coordinates. Close every brace.`;
 }
 
 /** Follow-up after a say plan whose audience is out of range. Speech did not happen. */
@@ -209,5 +213,5 @@ export function sayRangeHint(reason:string, nearby:string[]):string {
 		: 'No one is in talking range.';
 	return `${reason}. That say did not happen. ${range} `
 		+ `Keep this conversation. go_to the name first, or say to someone already in range. `
-		+ `Then emit one valid ActionPlan JSON. Names only, no coordinates.`;
+		+ `Then emit only one valid ActionPlan JSON — no prose. Names only, no coordinates.`;
 }

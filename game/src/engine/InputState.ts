@@ -42,6 +42,7 @@ export class InputState {
 			|| e.code === 'KeyE'
 			|| e.code === 'KeyF'
 			|| e.code === 'KeyG'
+			|| e.code === 'KeyX'
 			|| e.code === 'ArrowUp'
 			|| e.code === 'ArrowDown'
 			|| e.code === 'ArrowLeft'

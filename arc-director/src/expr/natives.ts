@@ -7,6 +7,7 @@ import {
 	entityName,
 	ExprError,
 	FACING_COS,
+	LIST_CAP,
 	needleMatch,
 	type Catalog,
 	type ExprEntity,
@@ -26,6 +27,8 @@ export type HostKernels = {
 	hostFns?:Record<string, NativeFn>;
 	distance?:(a:ExprEntity, b:ExprEntity)=>number | undefined;
 	nearRadius?:number;
+	/** Meters of walkable path; undefined = no path; 0 = same cell. */
+	walkDistance?:(a:ExprEntity, b:ExprEntity)=>number | undefined;
 	canSee?:(a:ExprEntity, b:ExprEntity)=>boolean;
 	facing?:(a:ExprEntity, b:ExprEntity)=>number;
 	isFacing?:(a:ExprEntity, b:ExprEntity)=>boolean;
@@ -68,6 +71,18 @@ function distOf(host:HostKernels, a:ExprEntity, b:ExprEntity):number | undefined
 	if (d === undefined || !Number.isFinite(d)) {
 		return undefined;
 	}
+	return d;
+}
+
+function walkOf(host:HostKernels, a:ExprEntity, b:ExprEntity):number | undefined {
+	if (!host.walkDistance) {
+		return undefined;
+	}
+	const d = host.walkDistance(a, b);
+	if (d === undefined || !Number.isFinite(d)) {
+		return undefined;
+	}
+	host.cache.rememberWalk(a.id, b.id, d);
 	return d;
 }
 
@@ -180,6 +195,9 @@ export function buildCatalog(host:HostKernels):Catalog {
 
 	if (host.distance) {
 		bindDistance(host, fns);
+	}
+	if (host.walkDistance) {
+		bindWalk(host, fns);
 	}
 	if (host.canSee) {
 		bindSight(host, fns);
@@ -319,6 +337,38 @@ function nearbyList(host:HostKernels, args:ExprVal[], me:ExprEntity, defaultR:nu
 		}
 	}
 	return capList(out);
+}
+
+function bindWalk(host:HostKernels, fns:Map<string, NativeFn>):void {
+	fns.set('isReachable', (args) => {
+		const pair = twoEnt(args);
+		if (!pair) {
+			return { kind: 'bool', value: false };
+		}
+		return { kind: 'bool', value: walkOf(host, pair[0], pair[1]) !== undefined };
+	});
+	fns.set('reachable', (args, ctx) => reachableList(host, args, ctx.catalog.me));
+}
+
+function reachableList(host:HostKernels, args:ExprVal[], me:ExprEntity):ExprVal {
+	const rows = args[0]?.kind === 'list' ? args[0].value : undefined;
+	if (!rows) {
+		throw new ExprError('reachable needs a list');
+	}
+	const from = args[1]?.kind === 'entity' ? args[1].value : me;
+	const ranked:{ row:ExprVal; d:number }[] = [];
+	for (const row of rows) {
+		if (row.kind !== 'entity') {
+			continue;
+		}
+		const d = walkOf(host, from, row.value);
+		if (d === undefined) {
+			continue;
+		}
+		ranked.push({ row, d });
+	}
+	ranked.sort((a, b) => a.d - b.d);
+	return { kind: 'list', value: ranked.slice(0, LIST_CAP).map((r) => r.row) };
 }
 
 function bindSight(host:HostKernels, fns:Map<string, NativeFn>):void {

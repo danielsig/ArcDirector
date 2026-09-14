@@ -9,10 +9,10 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { PNG } from 'pngjs';
+import { listCharacterEntries } from './characters.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../public/characters');
 const OUT = path.join(ROOT, '_sheets');
-const KINDS = ['player', 'guard', 'robe', 'merchant', 'princess', 'sorceress'];
 const COLS = 8;
 const ROWS = 4;
 const FRAMES = [
@@ -42,17 +42,20 @@ function blit(dst, src, dx, dy) {
 	}
 }
 
-function packKind(kind) {
-	const dir = path.join(ROOT, kind);
+function packKind(kind, dir) {
 	const pngs = FRAMES.map((stem) => {
 		const file = path.join(dir, `${stem}.png`);
 		if (!fs.existsSync(file)) {
-			throw new Error(`missing ${file}`);
+			return { stem, png: null };
 		}
 		return { stem, png: readPng(file) };
 	});
-	const cellW = Math.max(...pngs.map((p) => p.png.width));
-	const cellH = Math.max(...pngs.map((p) => p.png.height));
+	const sized = pngs.filter((p) => p.png);
+	if (!sized.length) {
+		throw new Error(`no albedo frames in ${dir}`);
+	}
+	const cellW = Math.max(...sized.map((p) => p.png.width));
+	const cellH = Math.max(...sized.map((p) => p.png.height));
 	const sheet = new PNG({ width: cellW * COLS, height: cellH * ROWS, colorType: 6 });
 	sheet.data.fill(0);
 	const cells = [];
@@ -60,6 +63,18 @@ function packKind(kind) {
 		const col = i % COLS;
 		const row = Math.floor(i / COLS);
 		const { stem, png } = pngs[i];
+		if (!png) {
+			cells.push({
+				stem,
+				col,
+				row,
+				x: col * cellW,
+				y: row * cellH,
+				w: cellW,
+				h: cellH,
+			});
+			continue;
+		}
 		const ox = col * cellW + Math.floor((cellW - png.width) / 2);
 		const oy = row * cellH + (cellH - png.height);
 		blit(sheet, png, ox, oy);
@@ -90,6 +105,6 @@ function packKind(kind) {
 	console.log(`packed ${kind} ${sheet.width}x${sheet.height} -> ${pngPath}`);
 }
 
-for (const kind of KINDS) {
-	packKind(kind);
+for (const { kind, dir } of listCharacterEntries()) {
+	packKind(kind, dir);
 }

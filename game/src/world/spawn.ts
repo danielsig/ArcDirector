@@ -38,6 +38,8 @@ import { getDef } from '../items/defs';
 import { instantiateDef } from '../items/instance';
 import { spawnDefAt } from '../items/pickup';
 import { animIDFromMeshID } from '../render/humanAnims';
+import { characterHeight, resolvePlayerKind } from '../render/artCache';
+import { prefs } from '../prefs';
 import { CELL_SIZE, CHUNK_SIZE, TILE_HEIGHT } from './constants';
 import { innerWallAABB } from './interior';
 import type { Chunk, ChunkEntity } from './Chunk';
@@ -79,7 +81,7 @@ function spawnTorch(world:World, chunk:Chunk, ent:ChunkEntity):void {
 	const light = go.addComponent(new Light());
 	light.color = 0xff9a4a;
 	light.intensity = torch.baseIntensity;
-	light.decay = torch.baseDecay * 0.5;
+	light.decay = torch.baseDecay * Torch.decayScale;
 	light.range = 11;
 	light.castShadow = true;
 	light.offsetY = 0.35;
@@ -337,9 +339,11 @@ function spawnProp(
 		col.solid = false;
 		col.isTrigger = true;
 	}
-	if (ent.name) {
+	const namedID = ent.name
+		?? (meshID === 'tree_oak' || meshID === 'tree_pine' ? go.id : '');
+	if (namedID) {
 		const named = go.addComponent(new Named());
-		named.id = ent.name;
+		named.id = namedID;
 	}
 	bindChunk(go, chunk.id);
 	world.add(go);
@@ -490,8 +494,13 @@ export function spawnNPC(world:World, chunk:Chunk, opts:NPCSpawnOpts):GameObject
 	if (opts.yaw !== undefined) {
 		go.transform.yaw = opts.yaw;
 	}
+	if (opts.meshID === 'human') {
+		throw new Error(`NPC ${opts.id} meshID 'human' is the player; use human_<kind>`);
+	}
 	go.addComponent(new MeshRenderer()).meshID = opts.meshID;
-	go.addComponent(new HumanSprite()).kind = animIDFromMeshID(opts.meshID);
+	const sprite = go.addComponent(new HumanSprite());
+	sprite.kind = animIDFromMeshID(opts.meshID);
+	sprite.height = characterHeight(sprite.kind);
 	go.addComponent(new NPCInput());
 	const motor = go.addComponent(new CharacterMotor());
 	if (opts.destLocalX !== undefined && opts.destLocalZ !== undefined) {
@@ -563,7 +572,10 @@ export function spawnPlayer(
 	go.transform.position.y = (tile?.height ?? 0) * TILE_HEIGHT;
 	go.transform.position.z = pos.z;
 	go.addComponent(new MeshRenderer()).meshID = 'human';
-	go.addComponent(new HumanSprite()).kind = 'player';
+	const sprite = go.addComponent(new HumanSprite());
+	const kind = resolvePlayerKind(prefs().playerKind);
+	sprite.kind = kind;
+	sprite.height = characterHeight(kind);
 	go.addComponent(new PlayerInput());
 	go.addComponent(new CharacterMotor());
 	const rb = go.addComponent(new RigidBody());
@@ -601,6 +613,7 @@ export function spawnCamera(world:World):void {
 	cam.targetID = 'Player';
 	if (player) {
 		cam.yaw = player.transform.yaw;
+		cam.orbitYaw = player.getComponent(PlayerInput)?.lookYaw ?? player.transform.yaw;
 	}
 	go.addComponent(new RenderCamera());
 	world.add(go);

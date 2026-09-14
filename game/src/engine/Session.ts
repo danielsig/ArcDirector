@@ -1,5 +1,5 @@
 import { Camera } from '@arc-director/kindling';
-import { Camera as FollowCamera, RigidBody } from './components';
+import { Camera as FollowCamera, HumanSprite, RigidBody } from './components';
 import { Component } from './Component';
 import { MeshRenderer } from './MeshRenderer';
 import { Order } from './order';
@@ -11,13 +11,9 @@ import { dumpLookMaps } from '../npc/aiLogSink';
 import { patchInfer } from './patchHud';
 import { parseSlash } from '../ui/sayCommands';
 import type { HudModel, HudModelOption } from '../ui/hudModel';
-import { loadModelPref, saveModelPref } from './modelPref';
 import {
 	clampParallelThinkers,
 	clampThinkingBudget,
-	saveBatchThinkPref,
-	saveThinkPref,
-	saveThinkingBudgetPref,
 	prefs,
 	setPrefs,
 	type Prefs,
@@ -47,15 +43,18 @@ import {
 	type ViewPose,
 } from './viewPersist';
 import {
-	saveDevFlags,
-	type DevFlags,
-} from './devFlags';
-import {
 	applyURLView,
 	readURLView,
 	writeURLView,
 } from './urlView';
 import type { Hud, WorldStream, WorldView } from './systems';
+import {
+	characterHeight,
+	characterLabel,
+	characterOptions,
+	resolvePlayerKind,
+} from '../render/artCache';
+import { hasHumanAnims, loadNPCAnims } from '../render/humanAnims';
 
 const AUTOSAVE_ENABLED = false;
 
@@ -85,6 +84,7 @@ export class Session extends Component {
 	private lastViewPacked = '';
 	private lastFlagsPacked = '';
 	private lastAudioPacked = '';
+	private lastThinkersPacked = '';
 
 	override awake():void {
 		this.getCanvas()?.addEventListener('click', this.onClick);
@@ -98,6 +98,7 @@ export class Session extends Component {
 			const player = world.findByID('Player');
 			if (cam) {
 				cam.yaw = yaw;
+				cam.orbitYaw = yaw;
 				cam.pitch = pitch;
 				cam.lateUpdate(8);
 			}
@@ -254,17 +255,32 @@ export class Session extends Component {
 	applyModel():void {
 		const name = this.hud.model.trim();
 		if (name) {
-			saveModelPref(name);
+			setPrefs({ model: name });
 			this.director.arc?.setModel(name);
 		}
 		this.hud.menuNotice = this.hud.model ? this.hud.model : 'No model';
+	}
+
+	applyPlayerKind():void {
+		const kind = resolvePlayerKind(this.hud.playerKind);
+		this.hud.playerKind = kind;
+		setPrefs({ playerKind: kind });
+		const sprite = this.gameObject.world?.findByID('Player')?.getComponent(HumanSprite);
+		if (sprite) {
+			sprite.kind = kind;
+			sprite.height = characterHeight(kind);
+		}
+		if (!hasHumanAnims(kind)) {
+			void loadNPCAnims([kind]);
+		}
+		this.hud.menuNotice = characterLabel(kind);
 	}
 
 	applyMaxParallel():void {
 		const n = clampParallelThinkers(this.hud.maxParallel);
 		this.hud.maxParallel = n;
 		this.director.arc?.setMaxParallel(n);
-		saveThinkPref(n);
+		setPrefs({ maxParallel: n });
 		this.hud.menuNotice = `${n} thinker${n === 1 ? '' : 's'}`;
 	}
 
@@ -295,6 +311,9 @@ export class Session extends Component {
 	}
 
 	async refreshHudModels():Promise<void> {
+		if (!this.hud.arcDirectorOn) {
+			return;
+		}
 		const catalog = await fetchModelCatalog('/inference');
 		if (this.director.arc) {
 			this.director.arc.catalog = catalog;
@@ -312,7 +331,7 @@ export class Session extends Component {
 			id: m.id,
 			loaded: isLoadedModel(m),
 		}));
-		const current = this.director.arc?.model || loadModelPref();
+		const current = this.director.arc?.model || prefs().model;
 		if (current && !models.some((m) => m.id === current)) {
 			models.unshift({ id: current, loaded: false });
 		}
@@ -331,7 +350,10 @@ export class Session extends Component {
 		this.persistView();
 		this.refreshSlots();
 		this.dropPointerLock();
-		this.hud.model = this.director.arc?.model || loadModelPref() || this.hud.model;
+		this.hud.model = this.director.arc?.model || prefs().model || this.hud.model;
+		this.hud.playerKinds = characterOptions();
+		const liveKind = this.gameObject.world?.findByID('Player')?.getComponent(HumanSprite)?.kind;
+		this.hud.playerKind = resolvePlayerKind(liveKind || this.hud.playerKind || prefs().playerKind);
 		this.hud.maxParallel = this.director.arc?.liveMaxParallel() ?? this.hud.maxParallel;
 		this.hud.batchThinks = this.director.arc?.liveBatchThinks() ?? this.hud.batchThinks;
 		if (this.director.arc) {
@@ -357,11 +379,11 @@ export class Session extends Component {
 			return;
 		}
 		this.lastFlagsPacked = packed;
-		saveDevFlags(flags);
+		setPrefs(flags);
 		this.syncURLView();
 	}
 
-	applyDevFlags(flags:DevFlags):void {
+	applyDevFlags(flags:Pick<Prefs, 'observer' | 'ai'>):void {
 		this.hud.observer = flags.observer;
 		this.hud.arcDirectorOn = flags.ai;
 		const world = this.gameObject.world;
@@ -370,22 +392,32 @@ export class Session extends Component {
 			world.arcDirectorOn = flags.ai;
 		}
 		this.lastFlagsPacked = `${flags.observer ? '1' : '0'}:${flags.ai ? '1' : '0'}`;
-		saveDevFlags(flags);
+		setPrefs(flags);
 	}
 
 	persistThinkers():void {
+		const patch:{
+			maxParallel?:number;
+			batchThinks:boolean;
+			thinkingBudget?:number;
+		} = { batchThinks: this.hud.batchThinks };
 		if (Number.isFinite(this.hud.maxParallel)) {
 			const n = clampParallelThinkers(this.hud.maxParallel);
 			this.director.arc?.setMaxParallel(n);
-			saveThinkPref(n);
+			patch.maxParallel = n;
 		}
 		this.director.arc?.setBatchThinks(this.hud.batchThinks);
-		saveBatchThinkPref(this.hud.batchThinks);
 		if (Number.isFinite(this.hud.thinkingBudget)) {
 			const budget = clampThinkingBudget(this.hud.thinkingBudget);
 			this.director.arc?.setThinkingBudget(budget);
-			saveThinkingBudgetPref(budget);
+			patch.thinkingBudget = budget;
 		}
+		const packed = `${patch.maxParallel ?? ''}:${patch.batchThinks ? 1 : 0}:${patch.thinkingBudget ?? ''}`;
+		if (packed === this.lastThinkersPacked) {
+			return;
+		}
+		this.lastThinkersPacked = packed;
+		setPrefs(patch);
 	}
 
 	applyShotFromURL():void {
@@ -444,6 +476,7 @@ export class Session extends Component {
 			rb.prevZ = pose.z;
 		}
 		cam.yaw = pose.camYaw;
+		cam.orbitYaw = pose.yaw;
 		cam.pitch = pose.pitch;
 		cam.distance = Math.max(cam.minDistance, Math.min(cam.maxDistance, pose.distance));
 		cam.lateUpdate(8);
@@ -503,7 +536,7 @@ export class Session extends Component {
 		}
 	}
 
-	private liveFlags():DevFlags {
+	private liveFlags():Pick<Prefs, 'observer' | 'ai'> {
 		return { observer: this.hud.observer, ai: this.hud.arcDirectorOn };
 	}
 

@@ -67,6 +67,23 @@ Ground is **XZ**. **Y** is height (tile height underfoot). Yaw is around Y, in r
 
 WASD is camera-relative on XZ. NPCs never see these numbers; actions and prompts use names only. URL `observer`/`ai` (and agent-only `view`) are **testing-only** (see below).
 
+## Sprite clock
+
+Human idle/walk art is an 8-way clock. **6** is face-on, **12** is the back. Stems **2 / 4 / 8 / 10 are 45° diagonals**, not analog 2:00 / 4:00 (`2` means 1:30). Runtime: `game/src/render/humanAnims.ts` (`hourFromViewDeg`). Art: `.cursor/skills/anime-clock-character/`.
+
+| Stem | Means | From 12 (back, clockwise) | From 6 (camera; + = screen-right) |
+|------|--------|---------------------------|-------------------------------------|
+| 12 | 12:00 | 0° | ±180° |
+| 2 | 1:30 | 45° | +135° |
+| 3 | 3:00 | 90° | +90° |
+| 4 | 4:30 | 135° | +45° |
+| 6 | 6:00 | 180° | 0° |
+| 8 | 7:30 | 225° | −45° |
+| 9 | 9:00 | 270° | −90° |
+| 10 | 10:30 | 315° | −135° |
+
+8 / 9 / 10 FlipX from 4 / 3 / 2 when that art is missing. `idle_01` / `idle_05` are not facing hours.
+
 ## Dev server
 
 From the repo root:

@@ -1,7 +1,7 @@
 import { RigidBody, HumanSprite } from '../engine/components';
 import { Component } from '../engine/Component';
 import { Order } from '../engine/order';
-import { yawToward } from '../engine/math';
+import { lerpAngle, yawToward } from '../engine/math';
 import { conversePoint, facePeer } from '../npc/talkAttend';
 import { TILE_HEIGHT } from '../world/constants';
 import { cueAt, stepKind } from '../audio/cue';
@@ -16,6 +16,8 @@ export class CharacterMotor extends Component {
 	stepHeight = TILE_HEIGHT + 0.05;
 	maxSpeed = 4.2;
 	private stepPhase = 0.4;
+	/** Seconds to ease body yaw toward WASD. Staggers A+S release so we keep ~8, not 6 or 9. */
+	private static readonly faceTurn = 0.09;
 
 	override awake():void {
 		const rb = this.gameObject.getComponent(RigidBody);
@@ -39,16 +41,13 @@ export class CharacterMotor extends Component {
 		if (pocket) {
 			rb.velocity.x = 0;
 			rb.velocity.z = 0;
-			if (player) {
-				this.gameObject.transform.yaw = player.lookYaw;
-			}
 			return;
 		}
 
 		if (player) {
 			rb.velocity.x = player.moveX * this.maxSpeed;
 			rb.velocity.z = player.moveZ * this.maxSpeed;
-			this.gameObject.transform.yaw = player.lookYaw;
+			this.turnTowardWish(player.moveX, player.moveZ, dt);
 			return;
 		}
 
@@ -112,6 +111,18 @@ export class CharacterMotor extends Component {
 			gain: 0.52 + Math.random() * 0.22,
 			freq: 72 + Math.random() * 36,
 		});
+	}
+
+	private turnTowardWish(moveX:number, moveZ:number, dt:number):void {
+		if (Math.hypot(moveX, moveZ) < 1e-6) {
+			return;
+		}
+		const k = 1 - Math.exp(-dt / CharacterMotor.faceTurn);
+		this.gameObject.transform.yaw = lerpAngle(
+			this.gameObject.transform.yaw,
+			yawToward(moveX, moveZ),
+			k,
+		);
 	}
 
 	private resolveDestination():{ x:number; z:number } | null {

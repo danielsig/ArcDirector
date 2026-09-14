@@ -10,18 +10,16 @@ import { loadNature } from '../render/nature';
 import { loadSpritesheet } from '../render/spritesheet';
 import { loadSwordAnims } from '../render/swordAnims';
 import type { HudModel } from '../ui/hudModel';
-import { loadModelPref } from './modelPref';
-import { loadBatchThinkPref, loadThinkPref, loadThinkingBudgetPref } from './thinkPref';
 import { flagsFromURL, prefs } from '../prefs';
 import { ChunkStreamer } from '../world/ChunkStreamer';
 import { decodeGlyphChunk } from '../world/decodeGlyphChunk';
 import { spawnCamera, spawnNPC, spawnPlayer } from '../world/spawn';
-import { DEFAULT_SCENE_ID, humanKindsForScene, sceneByID, type SceneDef } from '../data/scenes';
+import { DEFAULT_SCENE_ID, sceneByID, type SceneDef } from '../data/scenes';
+import { packedKinds } from '../render/artCache';
 import { DirectorPulse, GroundPick, Hud, WorldStream, WorldView } from './systems';
 import { Session } from './Session';
 import { applyWorld, loadSave } from './gameSave';
 import { loadViewPose } from './viewPersist';
-import { loadDevFlags, resolveDevFlags } from './devFlags';
 import { readURLFlags } from './urlView';
 import { songForScene } from '../audio/songs';
 import { syncWaterAudio } from '../audio/water';
@@ -42,6 +40,10 @@ export class Game extends KindlingGame<World> {
 		this.hud = hud;
 		this.scene = sceneByID(sceneID);
 		resetTime();
+		if (this.renderer) {
+			this.renderer.detailMaps = this.hud.detailMaps;
+			this.renderer.shadows = this.hud.shadows;
+		}
 		this.renderer?.applyLook(rendererLook(this.scene.look));
 		this.world.input.attach(canvas);
 		const streamer = new ChunkStreamer(this.scene.chunks);
@@ -109,7 +111,7 @@ export class Game extends KindlingGame<World> {
 		this.session.getRunning = () => this.running;
 		stream.onGained = (keys) => this.session.overlayLoadedChunks(keys);
 		this.world.add(systems);
-		this.session.applyDevFlags(resolveDevFlags(readURLFlags(), loadDevFlags()));
+		this.session.applyDevFlags(flagsFromURL(readURLFlags()));
 		this.session.homePose = this.session.readPose() ?? this.session.homePose;
 		if (auto) {
 			applyWorld(this.world, auto.world);
@@ -131,10 +133,12 @@ export class Game extends KindlingGame<World> {
 		}
 		this.world.setMessage(this.scene.message);
 		this.hud.menuOpen = false;
-		this.hud.model = host.arc?.model || loadModelPref();
-		this.hud.maxParallel = host.arc?.liveMaxParallel() ?? loadThinkPref();
-		this.hud.batchThinks = host.arc?.liveBatchThinks() ?? loadBatchThinkPref();
-		this.hud.thinkingBudget = host.arc ? host.arc.liveThinkingBudget() : loadThinkingBudgetPref();
+		this.hud.minimap.follow = this.scene.minimapFollow !== false;
+		const stored = prefs();
+		this.hud.model = host.arc?.model || stored.model;
+		this.hud.maxParallel = host.arc?.liveMaxParallel() ?? stored.maxParallel;
+		this.hud.batchThinks = host.arc?.liveBatchThinks() ?? stored.batchThinks;
+		this.hud.thinkingBudget = host.arc ? host.arc.liveThinkingBudget() : stored.thinkingBudget;
 		this.session.persistAutosave();
 		this.session.persistView();
 		this.session.syncURLView();
@@ -155,7 +159,7 @@ export class Game extends KindlingGame<World> {
 	private async loadArt():Promise<void> {
 		const jobs:Promise<unknown>[] = [
 			loadSpritesheet(),
-			loadNPCAnims(humanKindsForScene(this.scene)),
+			loadNPCAnims(packedKinds()),
 			loadSwordAnims(),
 		];
 		if (this.scene.look === 'glen' || this.scene.look === 'market') {
@@ -181,6 +185,10 @@ export class Game extends KindlingGame<World> {
 
 	override tick(dt:number):void {
 		this.session.poll();
+		if (this.renderer) {
+			this.renderer.detailMaps = this.hud.detailMaps;
+			this.renderer.shadows = this.hud.shadows;
+		}
 		if (!this.hud.menuOpen) {
 			this.world.time += dt;
 			Time.deltaTime = dt;

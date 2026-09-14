@@ -63,6 +63,10 @@ describe('ActionPlan parse', () => {
 		assert.equal(parsePlanText('wait(for=hasHeard)', registry).head.args.for, 'hasHeard');
 		assert.equal(parsePlanText('wander(for=hasHeard)', registry).head.args.for, 'hasHeard');
 		assert.equal(
+			parsePlanText('wander(for=\'some(items.filter("FireMushroom").nearby())\')', registry).head.args.for,
+			'some(items.filter("FireMushroom").nearby())',
+		);
+		assert.equal(
 			parsePlan(
 				'{"head":{"verb":"wander","args":{"for":"some(landmarks.filter(\\"tree\\").nearby(16))"}}}',
 				registry,

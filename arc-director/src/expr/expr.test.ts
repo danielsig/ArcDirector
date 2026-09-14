@@ -146,6 +146,7 @@ describe('evaluate', () => {
 		assert.equal(val('items.find("nope") ?? items.find("Lantern")').value.kind, 'entity');
 		assert.equal(bool('items.find("nope") == null'), true);
 		assert.equal(bool('isNear(items.find("nope"), me)'), false);
+		assert.equal(bool('isReachable(items.find("nope"), me)', world({ walkDistance: xz })), false);
 		assert.ok(val('distance(items.find("nope"), me)').error);
 	});
 
@@ -226,6 +227,99 @@ describe('evaluate', () => {
 		assert.equal(bool('isFacing(me, Player)', onlyBool), true);
 	});
 
+	it('isReachable / reachable', () => {
+		const island = posed('Island', { x: 99, z: 0, tags: ['place'] });
+		const near = posed('NearTree', { x: 2, z: 0, tags: ['tree'] });
+		const far = posed('FarTree', { x: 20, z: 0, tags: ['tree'] });
+		const base = world();
+		const host = world({
+			walkDistance: (a, b) => {
+				if (a.id === 'Island' || b.id === 'Island') {
+					return undefined;
+				}
+				return xz(a, b);
+			},
+			bindings: {
+				...base.bindings,
+				Island: { kind: 'entity', value: island },
+				NearTree: { kind: 'entity', value: near },
+				FarTree: { kind: 'entity', value: far },
+				landmarks: {
+					kind: 'list',
+					value: [
+						{ kind: 'entity', value: far },
+						{ kind: 'entity', value: island },
+						{ kind: 'entity', value: near },
+					],
+				},
+			},
+		});
+		assert.equal(bool('isReachable(me, A)', host), true);
+		assert.equal(bool('isReachable(me, Island)', host), false);
+		assert.equal(bool('isReachable(me, me)', host), true);
+		assert.equal(bool('isReachable(A)', host), bool('isReachable(A, me)', host));
+		assert.equal(bool('isReachable(items.find("nope"), me)', host), false);
+		assert.equal(bool('isReachable("Angler")', host), false);
+		assert.ok(val('pathTo(me, A)', host).error);
+		assert.ok(val('pathLength(me, A)', host).error);
+		const reached = val('landmarks.filter("tree").reachable()', host);
+		assert.equal(reached.value.kind, 'list');
+		if (reached.value.kind === 'list') {
+			const ids = reached.value.value.filter((x) => x.kind === 'entity').map((x) => x.value.id);
+			assert.deepEqual(ids, ['NearTree', 'FarTree']);
+		}
+		assert.deepEqual(
+			val('landmarks.filter("tree").reachable()', host).value,
+			val('reachable(landmarks.filter("tree"))', host).value,
+		);
+		assert.equal(bool('some(landmarks.filter("tree").reachable())', host), true);
+		const none = val('reachable([Island])', host);
+		assert.equal(none.value.kind, 'list');
+		if (none.value.kind === 'list') {
+			assert.equal(none.value.value.length, 0);
+		}
+		assert.equal(bool('some(reachable([Island]))', host), false);
+		const fromA = val('landmarks.filter("tree").reachable(A)', host);
+		assert.equal(fromA.value.kind, 'list');
+		if (fromA.value.kind === 'list') {
+			const ids = fromA.value.value.filter((x) => x.kind === 'entity').map((x) => x.value.id);
+			assert.equal(ids[0], 'NearTree');
+		}
+	});
+
+	it('isReachable / reachable unbound without walkDistance', () => {
+		const r = val('isReachable(me, A)');
+		assert.ok(r.error);
+		const n = val('others.reachable()');
+		assert.ok(n.error);
+	});
+
+	it('reachable silent LIST_CAP keeps nearest', () => {
+		const rows:ExprEntity[] = [];
+		for (let i = 0; i < 40; i++) {
+			rows.push(posed(`N${i}`, { x: 40 - i, z: 0, tags: ['tree'] }));
+		}
+		const host = world({
+			walkDistance: xz,
+			bindings: {
+				landmarks: {
+					kind: 'list',
+					value: rows.map((e) => ({ kind: 'entity' as const, value: e })),
+				},
+			},
+		});
+		const got = val('landmarks.reachable()', host);
+		assert.equal(got.error, undefined, got.error?.message);
+		assert.equal(got.value.kind, 'list');
+		if (got.value.kind === 'list') {
+			assert.equal(got.value.value.length, 32);
+			const ids = got.value.value.filter((x) => x.kind === 'entity').map((x) => x.value.id);
+			assert.equal(ids[0], 'N39');
+			assert.equal(ids[31], 'N8');
+			assert.ok(!ids.includes('N0'));
+		}
+	});
+
 	it('hasSightline vs isFacing', () => {
 		assert.equal(bool('hasSightline(me, Player)'), true);
 		assert.equal(bool('hasSightline(Player, me)'), true);
@@ -260,6 +354,7 @@ describe('evaluate', () => {
 
 	it('unary relation f(x) ≡ f(x, me)', () => {
 		assert.equal(bool('isNear(A)'), bool('isNear(A, me)'));
+		assert.equal(bool('isReachable(A)', world({ walkDistance: xz })), bool('isReachable(A, me)', world({ walkDistance: xz })));
 	});
 
 	it('approaching / departing list filters', () => {

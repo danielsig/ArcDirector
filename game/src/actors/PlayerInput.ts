@@ -5,6 +5,7 @@ import { yawToForward } from '../engine/math';
 import { aimTarget } from './aim';
 import { carryBags, slotItem } from '../items/inventory';
 import type { ItemInstance } from '../items/instance';
+import { swapHeldHands } from '../items/equip';
 import { dropItem, interactChest, interactDoor, nearestPickup, pickup } from '../items/pickup';
 import { useItem } from '../items/use';
 
@@ -20,9 +21,18 @@ export class PlayerInput extends Component {
 
 	override update(_dt:number):void {
 		const world = this.gameObject.world;
-		if (!world || world.sayOpen) {
+		if (!world) {
 			this.moveX = 0;
 			this.moveZ = 0;
+			return;
+		}
+		const cam = world.findByID('MainCamera')?.getComponent(Camera);
+		if (world.sayOpen) {
+			this.moveX = 0;
+			this.moveZ = 0;
+			if (cam) {
+				cam.orbitYaw = this.lookYaw;
+			}
 			return;
 		}
 		const input = world.input;
@@ -46,7 +56,6 @@ export class PlayerInput extends Component {
 			wishZ /= len;
 		}
 
-		const cam = world.findByID('MainCamera')?.getComponent(Camera);
 		const yaw = cam?.yaw ?? 0;
 		const fwd = yawToForward(yaw);
 		const rightX = -fwd.z;
@@ -56,6 +65,9 @@ export class PlayerInput extends Component {
 
 		if (input.pointerLocked) {
 			this.lookYaw -= input.lookDeltaX * YAW_SENS;
+		}
+		if (cam) {
+			cam.orbitYaw = this.lookYaw;
 		}
 
 		for (let d = 1; d <= 8; d++) {
@@ -109,6 +121,10 @@ export class PlayerInput extends Component {
 		}
 		if (input.pressed('KeyY')) {
 			this.gameObject.getComponent(HumanSprite)?.playClip('give', world.time);
+		}
+
+		if (input.pressed('KeyX')) {
+			world.setMessage(swapHeldHands(this.gameObject));
 		}
 
 		if (input.pressed('KeyG')) {

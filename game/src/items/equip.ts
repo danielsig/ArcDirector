@@ -109,3 +109,21 @@ export function itemInHeldSlot(actor:GameObject, item:ItemInstance):boolean {
 	return slotItem(body, 'hands.left.held') === item
 		|| slotItem(body, 'hands.right.held') === item;
 }
+
+export function swapHeldHands(actor:GameObject):string {
+	const body = actor.getComponent(HumanBody);
+	if (!body) {
+		return 'no hands';
+	}
+	const left = body.slots['hands.left.held'];
+	const right = body.slots['hands.right.held'];
+	if (isOccupied(left) || isOccupied(right)) {
+		return 'both hands are busy';
+	}
+	if (!left && !right) {
+		return 'empty hands';
+	}
+	body.slots['hands.left.held'] = right;
+	body.slots['hands.right.held'] = left;
+	return 'swapped hands';
+}

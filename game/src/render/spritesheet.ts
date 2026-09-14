@@ -425,33 +425,6 @@ function fillKeyBleed(canvas:HTMLCanvasElement):void {
 	ctx.putImageData(img, 0, 0);
 }
 
-function lumAt(px:Uint8ClampedArray, w:number, h:number, x:number, y:number, fallback:number):number {
-	x = Math.min(w - 1, Math.max(0, x));
-	y = Math.min(h - 1, Math.max(0, y));
-	const i = (y * w + x) * 4;
-	if (isRockKey(px, i)) {
-		return fallback;
-	}
-	return Math.pow((px[i] * 0.2126 + px[i + 1] * 0.7152 + px[i + 2] * 0.0722) / 255, 1.45);
-}
-
-function lumField(px:Uint8ClampedArray, w:number, h:number):Float32Array {
-	const lum = new Float32Array(w * h);
-	for (let y = 0; y < h; y++) {
-		for (let x = 0; x < w; x++) {
-			lum[y * w + x] = lumAt(px, w, h, x, y, 0.5);
-		}
-	}
-	return lum;
-}
-
-function sampleF(src:Float32Array, w:number, h:number, x:number, y:number, fallback:number):number {
-	if (x < 0 || y < 0 || x >= w || y >= h) {
-		return fallback;
-	}
-	return src[y * w + x];
-}
-
 function medianField(src:Float32Array, w:number, h:number, radius:number):Float32Array {
 	const out = new Float32Array(src.length);
 	const win = new Float32Array((2 * radius + 1) ** 2);
@@ -531,74 +504,6 @@ function keepLongRuns(src:Float32Array, w:number, h:number, minRun:number):Float
 	return keep;
 }
 
-/**
- * Drop brick-face grain. Keep only dark grout as a hard ridge — no Gaussian,
- * no photo mix. 5×5 median kills speckles; black-hat finds mortar; a high
- * relative cut plus a long-run filter throws pits away and leaves sharp lines.
- */
-function groutNormal(src:HTMLCanvasElement, scale:number):HTMLCanvasElement {
-	const ctx = src.getContext('2d', { willReadFrequently: true });
-	if (!ctx) {
-		throw new Error('2d context');
-	}
-	const w = src.width;
-	const h = src.height;
-	const px = ctx.getImageData(0, 0, w, h).data;
-	const lum = medianField(lumField(px, w, h), w, h, 2);
-	const radius = Math.min(8, Math.max(5, Math.round(Math.min(w, h) / 22)));
-	const closed = morph(morph(lum, w, h, radius, true), w, h, radius, false);
-	const height = new Float32Array(w * h);
-	let maxGroove = 0;
-	for (let i = 0; i < height.length; i++) {
-		const groove = Math.max(0, closed[i] - lum[i]);
-		height[i] = groove;
-		if (groove > maxGroove) {
-			maxGroove = groove;
-		}
-	}
-	const thresh = Math.max(0.03, maxGroove * 0.28);
-	for (let i = 0; i < height.length; i++) {
-		height[i] = height[i] > thresh ? 1 : 0;
-	}
-	const minRun = Math.max(14, Math.round(Math.min(w, h) / 10));
-	height.set(keepLongRuns(height, w, h, minRun));
-	const out = document.createElement('canvas');
-	out.width = w;
-	out.height = h;
-	const octx = out.getContext('2d', { willReadFrequently: true });
-	if (!octx) {
-		throw new Error('2d context');
-	}
-	const dst = octx.createImageData(w, h);
-	const d = dst.data;
-	for (let y = 0; y < h; y++) {
-		for (let x = 0; x < w; x++) {
-			const i = (y * w + x) * 4;
-			const c = height[y * w + x];
-			const tl = sampleF(height, w, h, x - 1, y - 1, c);
-			const t = sampleF(height, w, h, x, y - 1, c);
-			const tr = sampleF(height, w, h, x + 1, y - 1, c);
-			const l = sampleF(height, w, h, x - 1, y, c);
-			const r = sampleF(height, w, h, x + 1, y, c);
-			const bl = sampleF(height, w, h, x - 1, y + 1, c);
-			const b = sampleF(height, w, h, x, y + 1, c);
-			const br = sampleF(height, w, h, x + 1, y + 1, c);
-			const gx = (tr + 2 * r + br) - (tl + 2 * l + bl);
-			const gy = (bl + 2 * b + br) - (tl + 2 * t + tr);
-			const nx = -gx * scale;
-			const ny = gy * scale;
-			const nz = 1;
-			const len = Math.hypot(nx, ny, nz) || 1;
-			d[i] = (nx / len * 127.5 + 128) | 0;
-			d[i + 1] = (ny / len * 127.5 + 128) | 0;
-			d[i + 2] = (nz / len * 127.5 + 128) | 0;
-			d[i + 3] = 255;
-		}
-	}
-	octx.putImageData(dst, 0, 0);
-	return out;
-}
-
 function rockMaps(
 	albedo:AtlasPixels,
 	nrm:AtlasPixels,
@@ -608,10 +513,10 @@ function rockMaps(
 ):SpriteMaps {
 	const mapCanvas = warpQuad(albedo, stamp.quad, stamp.outW, stamp.outH, ROCKS_W, ROCKS_H);
 	fillKeyBleed(mapCanvas);
-	void nrm;
+	const nrmCanvas = warpQuad(nrm, stamp.quad, stamp.outW, stamp.outH, ROCKS_W, ROCKS_H);
 	return {
 		map: rockTex(mapCanvas, { wrap }),
-		nrm: rockTex(groutNormal(mapCanvas, 10), { normal: true, wrap }),
+		nrm: rockTex(nrmCanvas, { normal: true, wrap }),
 		met,
 	};
 }
@@ -638,16 +543,23 @@ function stackWallMaps(
 	if (!mapCtx) {
 		throw new Error('2d context');
 	}
+	const nrmCanvas = document.createElement('canvas');
+	nrmCanvas.width = stampW;
+	nrmCanvas.height = stampH * WALL_ROW_COUNT;
+	const nrmCtx = nrmCanvas.getContext('2d', { willReadFrequently: true });
+	if (!nrmCtx) {
+		throw new Error('2d context');
+	}
 	for (let i = 0; i < order.length; i++) {
 		const stamp = WALL_STAMPS[order[i]];
 		const mapPiece = warpQuad(albedo, stamp.quad, stamp.outW, stamp.outH, ROCKS_W, ROCKS_H);
 		fillKeyBleed(mapPiece);
 		mapCtx.drawImage(mapPiece, 0, i * stampH);
+		nrmCtx.drawImage(warpQuad(nrm, stamp.quad, stamp.outW, stamp.outH, ROCKS_W, ROCKS_H), 0, i * stampH);
 	}
-	void nrm;
 	return {
 		map: rockTex(mapCanvas, { wrap }),
-		nrm: rockTex(groutNormal(mapCanvas, 10), { normal: true, wrap }),
+		nrm: rockTex(nrmCanvas, { normal: true, wrap }),
 		met,
 	};
 }
@@ -845,6 +757,26 @@ export function pixelArtImage(
 	return tex;
 }
 
+/** Cel clocks: nearest like grass / pixel NPCs. Linear turns a close-up into mush. */
+export function celArtImage(
+	image:ImageBitmap | HTMLImageElement,
+	srgb:boolean,
+	wrap:THREE.Wrapping = THREE.ClampToEdgeWrapping,
+):THREE.Texture {
+	const tex = new THREE.Texture(image);
+	tex.magFilter = THREE.NearestFilter;
+	tex.minFilter = THREE.NearestFilter;
+	tex.generateMipmaps = false;
+	tex.colorSpace = srgb ? THREE.SRGBColorSpace : THREE.NoColorSpace;
+	tex.wrapS = wrap;
+	tex.wrapT = wrap;
+	tex.flipY = false;
+	tex.userData.cel = true;
+	tex.needsUpdate = true;
+	owned.push(tex);
+	return tex;
+}
+
 export function sheetReady():boolean {
 	return textures !== null;
 }
@@ -890,18 +822,25 @@ export function spriteMaterial(
 	map:THREE.Texture,
 	normalMap?:THREE.Texture,
 	metalnessMap?:THREE.Texture,
+	opts:{ alphaTest?:number } = {},
 ):THREE.MeshLambertMaterial {
+	const cel = map.userData.cel === true;
+	const alphaTest = opts.alphaTest ?? (cel ? 0.12 : 0.28);
 	const mat = new THREE.MeshLambertMaterial({
 		map,
 		normalMap: normalMap ?? null,
-		transparent: true,
-		alphaTest: 0.28,
-		normalScale: new THREE.Vector2(0.85, 0.85),
-		side: THREE.DoubleSide,
+		// alphaTest already discards holes. transparent+black RGB fringe
+		// blends a dark card around cel take/walk pads.
+		transparent: false,
+		alphaTest,
+		normalScale: new THREE.Vector2(cel ? 0.55 : 0.85, cel ? 0.55 : 0.85),
+		side: cel ? THREE.FrontSide : THREE.DoubleSide,
 		depthWrite: true,
 		toneMapped: true,
 	});
-	mat.customProgramCacheKey = () => 'spriteLambert';
+	mat.customProgramCacheKey = () => cel ? 'spriteSkipCaster5Cel' : 'spriteSkipCaster5';
+	// Pull the shadow sample past the body cylinder so it still shades the
+	// floor and other sprites, not this billboard. Do not shrink the caster.
 	mat.onBeforeCompile = (shader) => {
 		shader.vertexShader = shader.vertexShader.replace(
 			'#include <shadowmap_vertex>',
@@ -910,7 +849,12 @@ export function spriteMaterial(
 	for ( int i = 0; i < NUM_POINT_LIGHT_SHADOWS; i ++ ) {
 		vec3 toFrag = vPointShadowCoord[ i ].xyz;
 		float dist = length( toFrag );
-		vPointShadowCoord[ i ].xyz = toFrag * ( max( dist - 0.14, 0.04 ) / max( dist, 1e-4 ) );
+		vPointShadowCoord[ i ].xyz = toFrag * ( max( dist - 0.9, 0.04 ) / max( dist, 1e-4 ) );
+	}
+#endif
+#if defined( USE_SHADOWMAP ) && ( NUM_DIR_LIGHT_SHADOWS > 0 )
+	for ( int i = 0; i < NUM_DIR_LIGHT_SHADOWS; i ++ ) {
+		vDirectionalShadowCoord[ i ].z -= 0.02 * vDirectionalShadowCoord[ i ].w;
 	}
 #endif`,
 		);

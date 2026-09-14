@@ -2,9 +2,9 @@ import { markRaw } from 'vue';
 import { PlayerInput } from '../actors/PlayerInput';
 import { HumanBody, Named, SpeechBubble, Vitals, Wallet } from './components';
 import type { GameObject } from './GameObject';
-import type { World } from './World';
+import { worldToChunk, type World } from './World';
 import type { Renderer } from '@arc-director/kindling';
-import { CHUNK_SIZE } from '../world/constants';
+import { CELL_SIZE, CHUNK_SIZE } from '../world/constants';
 import { countDef, slotItem } from '../items/inventory';
 import { nearestPickup, pickupLabel } from '../items/pickup';
 import type { HudModel, MinimapCell } from '../ui/hudModel';
@@ -21,57 +21,71 @@ function chunkStamp(world:World):string {
 	return s;
 }
 
-let lastChunkStamp = '';
+let lastMinimapStamp = '';
 
 export function resetHudPatch():void {
-	lastChunkStamp = '';
+	lastMinimapStamp = '';
 }
 
-function rebuildMinimap(world:World, hud:HudModel):void {
-	let minCX = 0;
-	let minCZ = 0;
-	let maxCX = 0;
-	let maxCZ = 0;
-	let first = true;
-	for (const chunk of world.chunks.values()) {
-		if (first) {
-			minCX = maxCX = chunk.origin.cx;
-			minCZ = maxCZ = chunk.origin.cz;
-			first = false;
-		}
-		else {
-			minCX = Math.min(minCX, chunk.origin.cx);
-			minCZ = Math.min(minCZ, chunk.origin.cz);
-			maxCX = Math.max(maxCX, chunk.origin.cx);
-			maxCZ = Math.max(maxCZ, chunk.origin.cz);
-		}
+function voidCell():MinimapCell {
+	return { def: 'void', blocked: true, height: 0 };
+}
+
+function fillTile(world:World, x:number, z:number):MinimapCell {
+	const tile = world.tileAtWorld(x, z);
+	if (!tile) {
+		return voidCell();
 	}
-	const width = (maxCX - minCX + 1) * CHUNK_SIZE;
-	const height = (maxCZ - minCZ + 1) * CHUNK_SIZE;
+	return { def: tile.def, blocked: tile.blocked, height: tile.height };
+}
+
+function minimapStamp(world:World, follow:boolean, x:number, z:number):string {
+	const chunks = chunkStamp(world);
+	if (follow) {
+		const half = (CHUNK_SIZE * CELL_SIZE) / 2;
+		const ox = Math.floor((x - half) / CELL_SIZE);
+		const oz = Math.floor((z - half) / CELL_SIZE);
+		return `f:${ox}:${oz}:${chunks}`;
+	}
+	const { cx, cz } = worldToChunk(x, z);
+	return `c:${cx}:${cz}:${chunks}`;
+}
+
+function rebuildMinimap(world:World, hud:HudModel, x:number, z:number):void {
+	const follow = hud.minimap.follow;
+	let originX:number;
+	let originZ:number;
+	let width:number;
+	let height:number;
+	if (follow) {
+		const half = (CHUNK_SIZE * CELL_SIZE) / 2;
+		originX = Math.floor((x - half) / CELL_SIZE) * CELL_SIZE;
+		originZ = Math.floor((z - half) / CELL_SIZE) * CELL_SIZE;
+		width = CHUNK_SIZE + 1;
+		height = CHUNK_SIZE + 1;
+	}
+	else {
+		const chunk = world.chunkAtWorld(x, z);
+		originX = chunk?.worldOriginX()
+			?? Math.floor(x / (CHUNK_SIZE * CELL_SIZE)) * CHUNK_SIZE * CELL_SIZE;
+		originZ = chunk?.worldOriginZ()
+			?? Math.floor(z / (CHUNK_SIZE * CELL_SIZE)) * CHUNK_SIZE * CELL_SIZE;
+		width = CHUNK_SIZE;
+		height = CHUNK_SIZE;
+	}
 	const cells:MinimapCell[] = new Array(width * height);
-	for (let i = 0; i < cells.length; i++) {
-		cells[i] = { def: 'void', blocked: true, height: 0 };
-	}
-	for (const chunk of world.chunks.values()) {
-		const ox = (chunk.origin.cx - minCX) * CHUNK_SIZE;
-		const oz = (chunk.origin.cz - minCZ) * CHUNK_SIZE;
-		for (let lz = 0; lz < CHUNK_SIZE; lz++) {
-			for (let lx = 0; lx < CHUNK_SIZE; lx++) {
-				const tile = chunk.tile(lx, lz);
-				if (!tile) {
-					continue;
-				}
-				cells[(oz + lz) * width + (ox + lx)] = {
-					def: tile.def,
-					blocked: tile.blocked,
-					height: tile.height,
-				};
-			}
+	for (let lz = 0; lz < height; lz++) {
+		for (let lx = 0; lx < width; lx++) {
+			cells[lz * width + lx] = fillTile(
+				world,
+				originX + (lx + 0.5) * CELL_SIZE,
+				originZ + (lz + 0.5) * CELL_SIZE,
+			);
 		}
 	}
 	const m = hud.minimap;
-	m.originX = minCX * CHUNK_SIZE;
-	m.originZ = minCZ * CHUNK_SIZE;
+	m.originX = originX;
+	m.originZ = originZ;
 	m.width = width;
 	m.height = height;
 	m.cells = markRaw(cells);
@@ -194,6 +208,7 @@ export function patchHud(
 	hud.bombs = player ? countDef(player, 'bomb') : 0;
 	hud.gold = player?.getComponent(Wallet)?.coins ?? 0;
 	hud.message = world.time - world.hudMessageAt < MSG_LIFE ? world.hudMessage : '';
+	hud.graphicsMemory = view.graphicsMemory();
 	const input = player?.getComponent(PlayerInput);
 	hud.cursorName = input?.cursorName ?? '';
 	const loot = player ? nearestPickup(player) : null;
@@ -224,14 +239,16 @@ export function patchHud(
 
 	patchOverhead(world, hud, view, npcNotes);
 
-	const stamp = chunkStamp(world);
-	if (stamp !== lastChunkStamp) {
-		lastChunkStamp = stamp;
-		rebuildMinimap(world, hud);
-	}
 	const p = player?.transform.position;
-	hud.minimap.playerX = p?.x ?? 0;
-	hud.minimap.playerZ = p?.z ?? 0;
+	const px = p?.x ?? 0;
+	const pz = p?.z ?? 0;
+	const stamp = minimapStamp(world, hud.minimap.follow, px, pz);
+	if (stamp !== lastMinimapStamp) {
+		lastMinimapStamp = stamp;
+		rebuildMinimap(world, hud, px, pz);
+	}
+	hud.minimap.playerX = px;
+	hud.minimap.playerZ = pz;
 	hud.minimap.playerYaw = player?.transform.yaw ?? 0;
 }
 

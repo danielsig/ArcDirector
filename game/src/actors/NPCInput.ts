@@ -185,7 +185,7 @@ export class NPCInput extends Component {
 		}
 		if (job.kind === 'wander') {
 			this.noteWander(job);
-			if (job.guide?.stop?.()) {
+			if (this.wanderUntilReached()) {
 				this.finish({ ok: true, verb: 'wander', reason: 'until' });
 				return;
 			}
@@ -201,7 +201,14 @@ export class NPCInput extends Component {
 				this.steer(null, null);
 				return;
 			}
-			this.steer(null, this.followPath(this.wanderDest, dt) ?? this.wanderDest);
+			const next = this.followPath(this.wanderDest, dt);
+			if (!next) {
+				this.wanderDest = null;
+				this.clearRoute();
+				this.steer(null, null);
+				return;
+			}
+			this.steer(null, next);
 			return;
 		}
 		const target = this.findNamed(job.name);
@@ -295,7 +302,7 @@ export class NPCInput extends Component {
 				this.steer(null, this.followPath(dest, 0) ?? dest);
 			}
 			else if (job.kind === 'wander') {
-				if (job.guide?.stop?.()) {
+				if (this.wanderUntilReached()) {
 					this.finish({ ok: true, verb: 'wander', reason: 'until' });
 					return;
 				}
@@ -590,6 +597,10 @@ export class NPCInput extends Component {
 			return via;
 		}
 		return null;
+	}
+
+	private wanderUntilReached():boolean {
+		return this.job?.kind === 'wander' && !!this.job.guide?.stop?.();
 	}
 
 	private noteWander(job:Extract<Job, { kind:'wander' }>):void {

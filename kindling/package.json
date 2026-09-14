@@ -21,7 +21,7 @@
 	"scripts": {
 		"build": "tsc -p tsconfig.json",
 		"typecheck": "tsc -p tsconfig.json --noEmit",
-		"test": "tsc -p tsconfig.json && node --test --test-reporter spec dist/core/Component.test.js dist/core/Transform.test.js dist/core/Game.test.js dist/core/physics.test.js dist/render/shader.test.js",
+		"test": "tsc -p tsconfig.json && node --test --test-reporter spec dist/core/Component.test.js dist/core/Transform.test.js dist/core/Game.test.js dist/core/physics.test.js dist/render/shader.test.js dist/audio/Audio.test.js dist/score/score.test.js",
 		"dev": "vite --config playground/vite.config.ts"
 	},
 	"dependencies": {

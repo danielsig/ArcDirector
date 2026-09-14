@@ -5,90 +5,24 @@ import {
 	evaluate,
 	pascalCase,
 	watchScore,
+	type ExprVal,
 } from 'arc-director';
-import { Interior, Named } from '../engine/components';
+import { Named } from '../engine/components';
 import type { GameObject } from '../engine/GameObject';
-import { MeshRenderer } from '../engine/MeshRenderer';
-import { distXZ } from '../items/inventory';
-import { Item, Pickupable } from '../items/components';
 import { CELL_SIZE } from '../world/constants';
 import { cellWalkable } from '../world/path';
 import { kernelsOf, type PosedFact } from './kernels';
 import { bodyName } from './names';
 import { tagsOf } from './perception';
 import type { HostCtx } from './types';
+import { Item, Pickupable } from '../items/components';
 
-const SKIP_NEEDLES = new Set([
-	'me', 'others', 'items', 'events', 'landmarks',
-	'hasHeard', 'prevThought', 'prevActions',
-	'true', 'false',
-]);
 const STEP = 8;
-const SAMPLE = 16;
+const SAMPLE_NEAR = 16;
+const SAMPLE_FAR = 8;
+const FAR = 24;
 const SEEN_CAP = 12;
 const SIGHT = 24;
-
-export function wanderNeedles(expr:string):string[] {
-	const out:string[] = [];
-	const seen = new Set<string>();
-	const add = (raw:string) => {
-		const text = raw.trim();
-		if (!text || SKIP_NEEDLES.has(text) || seen.has(text.toLowerCase())) {
-			return;
-		}
-		seen.add(text.toLowerCase());
-		out.push(text);
-	};
-	for (const hit of expr.matchAll(/"([^"]+)"|'([^']+)'/g)) {
-		add(hit[1] ?? hit[2] ?? '');
-	}
-	for (const hit of expr.matchAll(/\b([A-Z][A-Za-z0-9]+)\b/g)) {
-		add(hit[1] ?? '');
-	}
-	return out;
-}
-
-export function wanderSeeksWater(needles:readonly string[]):boolean {
-	return needles.some((n) => /^(river|water|waterfall|stream|bank)$/i.test(n));
-}
-
-function needleHits(go:GameObject, needle:string):boolean {
-	const want = needle.toLowerCase();
-	const named = go.getComponent(Named)?.id ?? '';
-	const mesh = go.getComponent(MeshRenderer)?.meshID ?? '';
-	const tags = tagsOf(go);
-	const labels = [go.id, named, mesh, ...tags];
-	if (tags.includes('tree')) {
-		labels.push('Tree', 'trees', 'forest');
-	}
-	if (go.getComponent(Interior)) {
-		labels.push('house', 'home', 'cottage');
-	}
-	return labels.some((s) => s.toLowerCase() === want);
-}
-
-function nearestMatch(actor:GameObject, needles:readonly string[]):GameObject | null {
-	const world = actor.world;
-	if (!world || needles.length === 0) {
-		return null;
-	}
-	let best:GameObject | null = null;
-	let bestDist = Infinity;
-	for (const go of world.objects) {
-		if (go === actor || go.id === 'MainCamera') {
-			continue;
-		}
-		if (!needles.some((n) => needleHits(go, n))) {
-			continue;
-		}
-		const d = distXZ(actor, go);
-		if (d < bestDist) {
-			best = go;
-			bestDist = d;
-		}
-	}
-	return best;
-}
 
 function waterAdjacent(world:NonNullable<GameObject['world']>, x:number, z:number):boolean {
 	const step = CELL_SIZE;
@@ -100,16 +34,17 @@ function waterAdjacent(world:NonNullable<GameObject['world']>, x:number, z:numbe
 	return false;
 }
 
-function sampleWalkable(actor:GameObject):{ x:number; z:number }[] {
+function sampleWalkable(actor:GameObject, count:number, minR:number, maxR:number):{ x:number; z:number }[] {
 	const world = actor.world;
 	if (!world) {
 		return [];
 	}
 	const p = actor.transform.position;
+	const span = Math.max(0, maxR - minR);
 	const out:{ x:number; z:number }[] = [];
-	for (let i = 0; i < SAMPLE; i++) {
+	for (let i = 0; i < count; i++) {
 		const a = Math.random() * Math.PI * 2;
-		const r = 3 + Math.random() * STEP;
+		const r = minR + Math.random() * span;
 		const x = p.x + Math.cos(a) * r;
 		const z = p.z + Math.sin(a) * r;
 		if (cellWalkable(world, x, z)) {
@@ -119,31 +54,56 @@ function sampleWalkable(actor:GameObject):{ x:number; z:number }[] {
 	return out;
 }
 
-export function pickWanderPoint(actor:GameObject, expr:string):{ x:number; z:number } | null {
+function fitness(value:ExprVal):number {
+	if (value.kind === 'list') {
+		return value.value.length > 0 ? 1 : 0;
+	}
+	if (value.kind === 'entity') {
+		return 1;
+	}
+	return watchScore(value).score;
+}
+
+function scoreAt(ctx:HostCtx, posed:PosedFact[], expr:string, at:{ x:number; z:number }):number {
+	try {
+		const catalog = buildCatalog({
+			...kernelsOf(ctx.world, ctx.actor, posed, at),
+			cache: new SampleCache(),
+		});
+		const r = evaluate(expr, catalog);
+		if (r.error) {
+			return 0;
+		}
+		return fitness(r.value);
+	}
+	catch {
+		return 0;
+	}
+}
+
+export function pickWanderPoint(ctx:HostCtx, posed:PosedFact[], expr:string):{ x:number; z:number } | null {
+	const actor = ctx.actor;
 	const world = actor.world;
 	if (!world) {
 		return null;
 	}
+	const text = expr.replace(/\s+/g, ' ').trim();
 	const p = actor.transform.position;
-	const needles = wanderNeedles(expr);
-	const samples = sampleWalkable(actor);
+	const samples = [
+		...sampleWalkable(actor, SAMPLE_NEAR, 3, 3 + STEP),
+		...sampleWalkable(actor, SAMPLE_FAR, 3 + STEP, FAR),
+	];
 	if (samples.length === 0) {
 		return { x: p.x, z: p.z };
 	}
-	const target = nearestMatch(actor, needles);
-	const wantWater = wanderSeeksWater(needles);
+	if (!text) {
+		return samples[Math.floor(Math.random() * samples.length)] ?? { x: p.x, z: p.z };
+	}
 	let best = samples[0];
-	let bestScore = Infinity;
+	let bestScore = -Infinity;
 	for (const pt of samples) {
-		let score = Math.random();
-		if (target) {
-			const t = target.transform.position;
-			score += Math.hypot(pt.x - t.x, pt.z - t.z);
-		}
-		if (wantWater) {
-			score += waterAdjacent(world, pt.x, pt.z) ? 0 : 12;
-		}
-		if (score < bestScore) {
+		const score = scoreAt(ctx, posed, text, pt) + Math.random() * 0.02;
+		if (score > bestScore) {
 			bestScore = score;
 			best = pt;
 		}
@@ -156,27 +116,8 @@ export function wanderUntilMet(ctx:HostCtx, posed:PosedFact[], expr:string):bool
 	if (!text) {
 		return false;
 	}
-	try {
-		const catalog = buildCatalog({
-			...kernelsOf(ctx.world, ctx.actor, posed),
-			cache: new SampleCache(),
-		});
-		const r = evaluate(text, catalog);
-		if (r.error) {
-			return false;
-		}
-		const v = r.value;
-		if (v.kind === 'list') {
-			return v.value.length > 0;
-		}
-		if (v.kind === 'entity') {
-			return true;
-		}
-		return watchScore(v).score > DEFAULT_EPSILON;
-	}
-	catch {
-		return false;
-	}
+	const p = ctx.actor.transform.position;
+	return scoreAt(ctx, posed, text, { x: p.x, z: p.z }) > DEFAULT_EPSILON;
 }
 
 export function namesAlongPath(actor:GameObject):string[] {

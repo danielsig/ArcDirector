@@ -21,12 +21,7 @@ import {
 } from '../engine/components';
 import type { World } from '../engine/World';
 import type { HudAiLogEntry, HudChatLine } from '../ui/hudModel';
-import { preferredChatModel, saveModelPref } from '../engine/modelPref';
-import {
-	loadBatchThinkPref,
-	loadThinkPref,
-	loadThinkingBudgetPref,
-} from '../engine/thinkPref';
+import { prefs, preferredChatModel, setPrefs } from '../prefs';
 import { publishAiLog, resetAiLogSink, pushLog, logLook } from './aiLogSink';
 import { rewriteRetiredFeeNames } from '../engine/gameSave';
 import { talkFace, canHearClearly } from './talkAttend';
@@ -107,19 +102,24 @@ export class GameHost {
 	}
 
 	configure(director:ArcDirector<HostCtx>):ArcDirector<HostCtx> {
+		const addAgent = director.addAgent.bind(director);
+		director.addAgent = (spec) => addAgent({ ...spec, skipHeartbeat: true });
 		return director
 			.withPriorityQueue({
-				maxParallel: loadThinkPref(),
-				batchThinks: loadBatchThinkPref(),
+				maxParallel: prefs().maxParallel,
+				batchThinks: prefs().batchThinks,
 				batchWait: 5,
 				mayThink: (ctx) => {
+					if (ctx.reason === 'heartbeat') {
+						return false;
+					}
 					const go = this.world.findByID(ctx.npcID);
 					const npc = go?.getComponent(NPCInput);
+					if (npc?.busy()) {
+						return ctx.reason === 'major';
+					}
 					if (ctx.plan) {
 						return ctx.reason === 'major' || (ctx.reason === 'watch' && ctx.rankedScore >= 0.5);
-					}
-					if ((ctx.reason === 'heartbeat' || ctx.reason === 'action') && npc?.busy()) {
-						return false;
 					}
 					return true;
 				},
@@ -127,8 +127,8 @@ export class GameHost {
 			.withLMStudioInference({
 				baseURL: '/inference/v1',
 				model: preferredChatModel(),
-				enableThinking: loadThinkingBudgetPref() > 0,
-				thinkingBudget: loadThinkingBudgetPref() || undefined,
+				enableThinking: prefs().thinkingBudget > 0,
+				thinkingBudget: prefs().thinkingBudget || undefined,
 				maxTokens: 10_000,
 			})
 			.addStockVerbs()
@@ -189,7 +189,7 @@ export class GameHost {
 	kernels:KernelSource<HostCtx> = (ctx) => kernelsOf(this.world, ctx.actor, this.posedEvents);
 
 	async start():Promise<void> {
-		if (this.disposed || !this.arc || this.starting || this.arc.ready) {
+		if (this.disposed || !this.arc || this.starting || this.arc.ready || !this.world.arcDirectorOn) {
 			return;
 		}
 		this.starting = true;
@@ -208,7 +208,7 @@ export class GameHost {
 		if (pref !== this.arc.model) {
 			this.arc.setModel(pref);
 		}
-		saveModelPref(this.arc.model);
+		setPrefs({ model: this.arc.model });
 		if (Object.keys(this.storedAgents).length > 0) {
 			this.arc.restoreAgents(this.storedAgents);
 		}
@@ -256,6 +256,7 @@ export class GameHost {
 				}
 			},
 		});
+		this.arc?.mindQueue()?.ensure(agent.id, { skipHeartbeat: true });
 		this.arc?.mindQueue()?.setAiOn(agent.id, true);
 	}
 

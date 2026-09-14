@@ -71,6 +71,8 @@ Creates a `World` (or takes one), and a `Renderer` when `document` exists.
 | `destroy(go)` | Queues `world.destroy`. |
 | `dispose()` | Stop + renderer dispose. |
 
+`unfocusedHz` (default `3`) caps canvas draws while the document is unfocused. Hosts set it on the `Game` instance.
+
 If you own pause, override `tick` and **do not** call `super.tick` (that advances `Time` again). Set `Time.deltaTime` / `Time.time`, then `this.simulate(dt)`.
 
 Override `onStart` for one-shot setup when the loop begins.
@@ -214,7 +216,7 @@ RAF:
 
 ## Rendering
 
-`Renderer` creates the WebGL canvas, hemisphere + ambient fill, optional directional sun, fog, and shadows. It renders with the first **enabled** `Camera` in `world.objects`.
+`Renderer` creates the WebGL canvas, hemisphere + ambient fill, optional directional sun, fog, and shadows. It renders with the first **enabled** `Camera` in `world.objects`. `detailMaps` (default on) samples normal and metalness maps; off disposes them from the GPU. `shadows` (default on) is realtime shadow maps. `graphicsMemory()` estimates GPU bytes in use.
 
 | | |
 |--|--|

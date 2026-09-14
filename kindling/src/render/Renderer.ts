@@ -24,14 +24,44 @@ export type RendererLook = {
 	};
 };
 
+const DETAIL_STASH = 'kindlingDetailMaps';
+
+type DetailStash = {
+	normalMap:THREE.Texture | null;
+	metalnessMap:THREE.Texture | null;
+	metalness:number | undefined;
+};
+
+function textureBytes(tex:THREE.Texture):number {
+	const img = tex.image as { width?:number; height?:number; naturalWidth?:number; naturalHeight?:number } | undefined;
+	const w = img?.naturalWidth ?? img?.width ?? 0;
+	const h = img?.naturalHeight ?? img?.height ?? 0;
+	if (w < 1 || h < 1) {
+		return 0;
+	}
+	let bytes = w * h * 4;
+	const mip = tex.generateMipmaps
+		&& tex.minFilter !== THREE.NearestFilter
+		&& tex.minFilter !== THREE.LinearFilter;
+	if (mip) {
+		bytes = (bytes * 4 / 3) | 0;
+	}
+	return bytes;
+}
+
 export class Renderer {
 	readonly gl:THREE.WebGLRenderer;
 	readonly canvas:HTMLCanvasElement;
+	/** Normal and metalness maps. Off disposes them from the GPU. */
+	detailMaps = true;
+	/** Realtime shadow maps. Off disposes light shadow targets. */
+	shadows = true;
 	private readonly world:World;
 	private readonly hemi:THREE.HemisphereLight;
 	private readonly fill:THREE.AmbientLight;
 	private sun:THREE.DirectionalLight | null = null;
 	private disposed = false;
+	private readonly stripped = new Set<THREE.Texture>();
 	private readonly ro:ResizeObserver | null;
 
 	constructor(world:World) {
@@ -171,7 +201,153 @@ export class Renderer {
 		if (!cam) {
 			return;
 		}
+		this.applyQuality();
 		this.gl.render(this.world.native, cam.native);
+	}
+
+	/** Estimated GPU bytes: framebuffer, shadow maps, and textures on scene materials. */
+	graphicsMemory():number {
+		this.applyQuality();
+		const ctx = this.gl.getContext();
+		const w = ctx.drawingBufferWidth;
+		const h = ctx.drawingBufferHeight;
+		const msaa = ctx.getContextAttributes()?.antialias ? 4 : 1;
+		let bytes = w * h * 4 * (msaa + 1) + w * h * 4 * msaa;
+		const seen = new Set<object>();
+		const addTex = (tex:THREE.Texture | null | undefined):void => {
+			if (!tex || seen.has(tex)) {
+				return;
+			}
+			seen.add(tex);
+			bytes += textureBytes(tex);
+		};
+		const addTarget = (rt:THREE.WebGLRenderTarget | null | undefined):void => {
+			if (!rt || seen.has(rt)) {
+				return;
+			}
+			seen.add(rt);
+			const faces = (rt as THREE.WebGLCubeRenderTarget).isWebGLCubeRenderTarget ? 6 : 1;
+			const layer = rt.width * rt.height * 4 * faces;
+			bytes += layer;
+			if (rt.depthTexture) {
+				bytes += layer;
+			}
+		};
+		this.world.native.traverse((obj) => {
+			if ((obj as THREE.Light).isLight) {
+				addTarget((obj as THREE.Light).shadow?.map ?? null);
+			}
+			if (!(obj as THREE.Mesh).isMesh) {
+				return;
+			}
+			const mats = obj.material;
+			for (const mat of (Array.isArray(mats) ? mats : [mats])) {
+				const std = mat as THREE.MeshStandardMaterial;
+				addTex(std.map);
+				addTex(std.normalMap);
+				addTex(std.metalnessMap);
+				addTex(std.roughnessMap);
+				addTex(std.aoMap);
+				addTex(std.emissiveMap);
+				addTex(std.alphaMap);
+				addTex(std.bumpMap);
+			}
+		});
+		return bytes;
+	}
+
+	private applyQuality():void {
+		const shadowsChanged = this.gl.shadowMap.enabled !== this.shadows;
+		this.gl.shadowMap.enabled = this.shadows;
+		if (shadowsChanged) {
+			this.gl.shadowMap.needsUpdate = true;
+		}
+		if (this.detailMaps && this.stripped.size > 0) {
+			for (const tex of this.stripped) {
+				tex.needsUpdate = true;
+			}
+			this.stripped.clear();
+		}
+		const seen = new Set<THREE.Material>();
+		this.world.native.traverse((obj) => {
+			if ((obj as THREE.Light).isLight && (obj as THREE.Light).shadow && !this.shadows && (obj as THREE.Light).shadow.map) {
+				(obj as THREE.Light).shadow.map.dispose();
+				(obj as THREE.Light).shadow.map = null;
+			}
+			if (!(obj as THREE.Mesh).isMesh) {
+				return;
+			}
+			const mats = obj.material;
+			for (const mat of (Array.isArray(mats) ? mats : [mats])) {
+				if (seen.has(mat)) {
+					continue;
+				}
+				seen.add(mat);
+				this.applyDetailMaps(mat);
+				if (shadowsChanged) {
+					mat.needsUpdate = true;
+				}
+			}
+		});
+	}
+
+	private applyDetailMaps(mat:THREE.Material):void {
+		const std = mat as THREE.MeshStandardMaterial;
+		if (!('normalMap' in std) && !('metalnessMap' in std)) {
+			return;
+		}
+		if (this.detailMaps) {
+			const stash = std.userData[DETAIL_STASH] as DetailStash | undefined;
+			if (!stash) {
+				return;
+			}
+			if (stash.normalMap) {
+				std.normalMap = stash.normalMap;
+				std.normalMap.needsUpdate = true;
+			}
+			if (stash.metalnessMap) {
+				std.metalnessMap = stash.metalnessMap;
+				std.metalnessMap.needsUpdate = true;
+				if (stash.metalness !== undefined) {
+					std.metalness = stash.metalness;
+				}
+			}
+			delete std.userData[DETAIL_STASH];
+			std.needsUpdate = true;
+			return;
+		}
+		const stash = (std.userData[DETAIL_STASH] as DetailStash | undefined) ?? {
+			normalMap: null,
+			metalnessMap: null,
+			metalness: undefined,
+		};
+		let changed = false;
+		if (std.normalMap) {
+			stash.normalMap = std.normalMap;
+			this.stripTexture(std.normalMap);
+			std.normalMap = null;
+			changed = true;
+		}
+		if (std.metalnessMap) {
+			stash.metalnessMap = std.metalnessMap;
+			stash.metalness = std.metalness;
+			this.stripTexture(std.metalnessMap);
+			std.metalnessMap = null;
+			std.metalness = 0;
+			changed = true;
+		}
+		std.userData[DETAIL_STASH] = stash;
+		if (changed) {
+			std.needsUpdate = true;
+		}
+	}
+
+	private stripTexture(tex:THREE.Texture):void {
+		if (this.stripped.has(tex)) {
+			return;
+		}
+		this.stripped.add(tex);
+		tex.dispose();
 	}
 
 	dispose():void {

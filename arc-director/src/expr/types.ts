@@ -50,7 +50,7 @@ export const RESERVED = new Set([
 	'me', 'others', 'items', 'prevThought', 'prevActions',
 	'clamp', 'softClamp', 'map', 'find', 'findLast', 'filter', 'includes',
 	'first', 'sortBy', 'max', 'min', 'maxBy', 'minBy', 'sum', 'avg', 'count',
-	'reduce', 'some', 'all', 'matches', 'search', 'nearby', 'approaching', 'departing',
+	'reduce', 'some', 'all', 'matches', 'search', 'nearby', 'reachable', 'approaching', 'departing',
 ]);
 
 export type StringifierKind = 'person' | 'item' | 'list' | 'number' | 'bool' | 'entity';
@@ -86,6 +86,8 @@ export class SampleCache {
 	private nextHP = new Map<string, number>();
 	private open = new Map<string, boolean>();
 	private nextOpen = new Map<string, boolean>();
+	private walk = new Map<string, number>();
+	private nextWalk = new Map<string, number>();
 
 	static pair(a:string, b:string):string {
 		return `${a}\0${b}`;
@@ -123,6 +125,12 @@ export class SampleCache {
 		return this.open.get(id);
 	}
 
+	rememberWalk(a:string, b:string, d:number):number | undefined {
+		const k = SampleCache.pair(a, b);
+		this.nextWalk.set(k, d);
+		return this.walk.get(k);
+	}
+
 	commit():void {
 		for (const [k, v] of this.nextDist) {
 			this.dist.set(k, v);
@@ -144,6 +152,10 @@ export class SampleCache {
 			this.open.set(k, v);
 		}
 		this.nextOpen.clear();
+		for (const [k, v] of this.nextWalk) {
+			this.walk.set(k, v);
+		}
+		this.nextWalk.clear();
 	}
 }
 

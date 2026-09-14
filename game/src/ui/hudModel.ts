@@ -1,10 +1,6 @@
 import type { SaveSlotInfo } from '../engine/gameSave';
-import {
-	DEFAULT_BATCH_THINKS,
-	DEFAULT_PARALLEL_THINKERS,
-	DEFAULT_THINKING_BUDGET,
-} from '../engine/thinkPref';
 import { prefs } from '../prefs';
+import { characterOptions, resolvePlayerKind } from '../render/artCache';
 
 export type MinimapCell = {
 	def:string;
@@ -54,26 +50,6 @@ export type HudModelOption = {
 	loaded:boolean;
 };
 
-const DEV_STATS_KEY = 'arc-director.devStatsOpen.v1';
-
-export function loadDevStatsOpen():boolean {
-	try {
-		return localStorage.getItem(DEV_STATS_KEY) === '1';
-	}
-	catch {
-		return false;
-	}
-}
-
-export function saveDevStatsOpen(open:boolean):void {
-	try {
-		localStorage.setItem(DEV_STATS_KEY, open ? '1' : '0');
-	}
-	catch {
-		// quota / private mode
-	}
-}
-
 export type HudModel = {
 	hp:number;
 	maxHP:number;
@@ -118,8 +94,15 @@ export type HudModel = {
 	thinkingBudget:number;
 	/** Local server catalog (embeddings omitted). */
 	models:HudModelOption[];
+	/** Packed kind currently drawn on the player (`player` = witch). */
+	playerKind:string;
+	/** Packed kinds for the Testing character dropdown. */
+	playerKinds:{ id:string; label:string }[];
 	/** Foldable menu panel for inference timings. */
 	devStatsOpen:boolean;
+	graphicsMemory:number;
+	detailMaps:boolean;
+	shadows:boolean;
 	inferCalls:number;
 	inferContextMs:number;
 	inferGenerateMs:number;
@@ -142,6 +125,8 @@ export type HudModel = {
 		playerX:number;
 		playerZ:number;
 		playerYaw:number;
+		/** Centered player, scrolling map. False = current-chunk map, moving arrow. */
+		follow:boolean;
 	};
 };
 
@@ -182,14 +167,19 @@ export function emptyHud():HudModel {
 		saveLabel: '',
 		saveSelectedID: '',
 		saveSlots: [],
-		observer: true,
-		arcDirectorOn: true,
-		model: '',
-		maxParallel: DEFAULT_PARALLEL_THINKERS,
-		batchThinks: DEFAULT_BATCH_THINKS,
-		thinkingBudget: DEFAULT_THINKING_BUDGET,
+		observer: p.observer,
+		arcDirectorOn: p.ai,
+		model: p.model,
+		maxParallel: p.maxParallel,
+		batchThinks: p.batchThinks,
+		thinkingBudget: p.thinkingBudget,
 		models: [],
-		devStatsOpen: loadDevStatsOpen(),
+		playerKind: resolvePlayerKind(p.playerKind),
+		playerKinds: characterOptions(),
+		devStatsOpen: p.devStatsOpen,
+		graphicsMemory: 0,
+		detailMaps: p.detailMaps,
+		shadows: p.shadows,
 		inferCalls: 0,
 		inferContextMs: 0,
 		inferGenerateMs: 0,
@@ -211,6 +201,7 @@ export function emptyHud():HudModel {
 			playerX: 0,
 			playerZ: 0,
 			playerYaw: 0,
+			follow: true,
 		},
 	};
 }

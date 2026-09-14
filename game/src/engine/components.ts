@@ -8,6 +8,7 @@ import {
 import { Order } from './order';
 import { clamp, lerpAngle } from './math';
 import { TILE_HEIGHT } from '../world/constants';
+import { characterHeight, characterTakeFps } from '../render/artCache';
 
 export { BoxCollider };
 
@@ -252,21 +253,25 @@ export type OccupiedRef = {
 
 export type SlotFill = import('../items/instance').ItemInstance | OccupiedRef | null;
 
-export const HUMAN_KINDS = ['player', 'guard', 'robe', 'merchant', 'princess', 'sorceress'] as const;
-export type HumanKind = typeof HUMAN_KINDS[number];
+export type HumanKind = string;
 export type HumanClip = 'auto' | 'idle' | 'walk' | 'take' | 'give';
-/** 0 = camera-relative. Idle authors 1–6 and 12; walk stays 2/4/6/12. */
-export type HumanHour = 0 | 1 | 2 | 3 | 4 | 5 | 6 | 12;
+/** 0 = body yaw vs camera. 8 octants; 2/4/8/10 = 1:30/4:30/7:30/10:30 (45° diagonals). */
+export type HumanHour = 0 | 1 | 2 | 3 | 4 | 5 | 6 | 8 | 9 | 10 | 12;
 export const POCKET_FRAMES = 8;
+/** Fallback when `character.json` omits walkFps. Witch sets 16; pixel kinds stay at 8. */
+export const PLAYER_WALK_FPS = 16;
 
 /** Which character art to show and which clip to play. Complements HumanBody (slots), not a renderer. */
 export class HumanSprite extends Component {
 	static override order = Order.humanSprite;
 	kind:HumanKind = 'player';
+	/** Meters. `0` uses the character folder's `character.json` height. */
+	height = 0;
 	clip:HumanClip = 'auto';
-	walkFps = 8;
-	/** Pocket take/give is slower than walk (walk is 8). */
-	takeFps = 5;
+	/** Cells/sec. `0` uses `character.json` walkFps (per hour when set). */
+	walkFps = 0;
+	/** Cells/sec. `0` uses `character.json` takeFps. */
+	takeFps = 0;
 	hour:HumanHour = 0;
 	/** 0 = FlipX from camera. 1 / -1 lock. */
 	flip:-1 | 0 | 1 = 0;
@@ -283,7 +288,8 @@ export class HumanSprite extends Component {
 			return;
 		}
 		const t = this.gameObject.world?.time ?? 0;
-		if (t - this.clipT0 >= POCKET_FRAMES / this.takeFps) {
+		const fps = this.takeFps > 0 ? this.takeFps : characterTakeFps(this.kind);
+		if (t - this.clipT0 >= POCKET_FRAMES / fps) {
 			this.clip = 'auto';
 		}
 	}
@@ -347,6 +353,8 @@ export class Torch extends Component {
 	lit = true;
 	baseIntensity = 48;
 	baseDecay = 2;
+	/** `baseDecay` scale. 0.5 is inverse-linear; 1 is inverse-square. */
+	static decayScale = 0.65;
 	/** 0–1 start phase so flame loops are not globally synced. */
 	animOffset = Math.random();
 	/** Frames per second for the flame sprite. */
@@ -362,7 +370,7 @@ export class Torch extends Component {
 			return;
 		}
 		light.intensity = this.baseIntensity * light.pulse(dt);
-		light.decay = this.baseDecay * 0.5;
+		light.decay = this.baseDecay * Torch.decayScale;
 	}
 }
 
@@ -377,8 +385,10 @@ export class Camera extends Component {
 	/** Radians down from horizontal. */
 	pitch = 40 * Math.PI / 180;
 	easeBehind = 3.2;
-	/** Independent of player yaw; eases to stay behind. */
+	/** Independent of player body yaw; eases toward `orbitYaw` (mouse look). */
 	yaw = 0;
+	/** Desired orbit yaw in radians. PlayerInput writes look here; body facing does not. */
+	orbitYaw = 0;
 	/** Dolly along the follow offset; pitch stays fixed. */
 	distance = Math.hypot(CAMERA_HEIGHT, CAMERA_BEHIND);
 	minDistance = 3;
@@ -414,12 +424,16 @@ export class Camera extends Component {
 		}
 		this.yaw = lerpAngle(
 			this.yaw,
-			target.transform.yaw,
+			this.orbitYaw,
 			1 - Math.exp(-this.easeBehind * dt),
 		);
 		const t = target.transform.position;
+		const body = target.getComponent(HumanSprite);
+		const lookAt = body
+			? (body.height > 0 ? body.height : characterHeight(body.kind)) * 0.82
+			: this.lookHeight;
 		this.gameObject.transform.position.x = t.x + Math.sin(this.yaw) * this.behind;
-		this.gameObject.transform.position.y = t.y + this.lookHeight + this.height;
+		this.gameObject.transform.position.y = t.y + lookAt + this.height;
 		this.gameObject.transform.position.z = t.z + Math.cos(this.yaw) * this.behind;
 		this.gameObject.transform.yaw = this.yaw;
 		this.gameObject.transform.pitch = -this.pitch;

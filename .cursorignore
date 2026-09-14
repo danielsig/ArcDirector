@@ -1,0 +1,9 @@
+# Re-include gitignored paths so Agent can still read them.
+!.cursor/skills/**/junk/
+!.cursor/skills/**/junk/**
+!**/_gen/
+!**/_gen/**
+!game/public/characters/**/_refs/
+!game/public/characters/**/_refs/**
+!game/public/characters/**/_old_maps/
+!game/public/characters/**/_old_maps/**

@@ -1,3 +1,5 @@
+import { lsDel, lsGet, lsSet } from '../prefs';
+
 export type ViewPose = {
 	x:number;
 	y:number;
@@ -60,32 +62,14 @@ export function parseViewPose(raw:string):ViewPose | null {
 }
 
 export function loadViewPose(sceneID:string):ViewPose | null {
-	try {
-		const raw = localStorage.getItem(storageKey(sceneID));
-		if (!raw) {
-			return null;
-		}
-		return parseViewPose(raw);
-	}
-	catch {
-		return null;
-	}
+	const raw = lsGet(storageKey(sceneID));
+	return raw ? parseViewPose(raw) : null;
 }
 
 export function saveViewPose(sceneID:string, packed:string):void {
-	try {
-		localStorage.setItem(storageKey(sceneID), packed);
-	}
-	catch {
-		// quota / private mode
-	}
+	lsSet(storageKey(sceneID), packed);
 }
 
 export function clearViewPose(sceneID:string):void {
-	try {
-		localStorage.removeItem(storageKey(sceneID));
-	}
-	catch {
-		// private mode
-	}
+	lsDel(storageKey(sceneID));
 }

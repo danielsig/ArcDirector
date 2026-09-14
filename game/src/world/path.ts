@@ -252,6 +252,22 @@ export function findPath(
 	return null;
 }
 
+/** Meters along the same A* `go_to` uses. `undefined` = no path; `0` = same cell. */
+export function walkDistance(
+	world:World,
+	x0:number,
+	z0:number,
+	tx:number,
+	tz:number,
+	ignore?:readonly string[],
+):number | undefined {
+	const path = findPath(world, x0, z0, tx, tz, ignore);
+	if (!path) {
+		return undefined;
+	}
+	return path.length * CELL_SIZE;
+}
+
 /** Grid DDA. Start and end cells are open so occupants do not occlude themselves. */
 export function lineClear(world:World, x0:number, z0:number, x1:number, z1:number):boolean {
 	const occ = mergeSets(hardObstacles(world), crowdCells(world));

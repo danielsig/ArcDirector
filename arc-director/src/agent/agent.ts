@@ -1101,7 +1101,7 @@ export class Agent<HostCtx = unknown> {
 		}
 		if (this.seeMapOn() && !tools.see_map) {
 			tools.see_map = {
-				description: 'Pictogram of the land. Prefer the English scene. If you are looking for something unnamed, wander(for) with a watch expr. Only call this if you still cannot pick a go_to or wander. A second look soon after, without moving, returns the same legend and no new picture.',
+				description: 'Pictogram of the land. Prefer the English scene. If you are looking for something unnamed, wander(for) with args.for a watch-expr string. Only call this if you still cannot pick a go_to or wander. A second look soon after, without moving, returns the same legend and no new picture.',
 				parameters: {
 					type: 'object',
 					additionalProperties: false,

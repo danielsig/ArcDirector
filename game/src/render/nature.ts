@@ -153,13 +153,14 @@ if (import.meta.hot) {
 
 function chromaMagenta(img:HTMLImageElement):HTMLCanvasElement {
 	const canvas = document.createElement('canvas');
-	canvas.width = img.naturalWidth;
-	canvas.height = img.naturalHeight;
+	const scale = Math.min(1, 768 / Math.max(img.naturalWidth, img.naturalHeight));
+	canvas.width = Math.max(1, Math.round(img.naturalWidth * scale));
+	canvas.height = Math.max(1, Math.round(img.naturalHeight * scale));
 	const ctx = canvas.getContext('2d', { willReadFrequently: true });
 	if (!ctx) {
 		throw new Error('2d context');
 	}
-	ctx.drawImage(img, 0, 0);
+	ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
 	const data = ctx.getImageData(0, 0, canvas.width, canvas.height);
 	const px = data.data;
 	for (let i = 0; i < px.length; i += 4) {
@@ -441,7 +442,7 @@ function scatterPts(size:number, cells:number, salt:number):{ x:number; y:number
 
 /** Top-down cartoon lawn: round plant canopies and tip speckles, never side-view blades. */
 function paintGrassyTile(pasture:[number, number, number]):HTMLCanvasElement {
-	const size = 512;
+	const size = 256;
 	const out = document.createElement('canvas');
 	out.width = size;
 	out.height = size;
@@ -514,7 +515,7 @@ function foamEdge(d:number, cell:number, vary:number):number {
 
 /** Dense organic foam web — hex-staggered sites so it does not read as a square tile. */
 function paintToonWater():HTMLCanvasElement {
-	const size = 512;
+	const size = 256;
 	const cellsA = 16;
 	const cellsB = 11;
 	const cellA = size / cellsA;

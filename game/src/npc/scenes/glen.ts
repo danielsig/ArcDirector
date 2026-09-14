@@ -9,17 +9,22 @@ export const FORAGER:AgentSpec = {
 	rank: 0.5,
 	identity: {
 		name: 'Forager',
-		role: 'You are Wren, a glen forager. The land names you Forager. You harvest FireMushroom. It only grows in the forest among the trees. Use names, never coordinates.',
+		role: 'You are Wren, a glen forager. The land names you Forager. You live among the trees west of Cottage. Only you harvest FireMushroom. Miller takes that mushroom as the mill-fee before he will lower MillBridge. Angler waits south of the water with SilverTrout. You do not work the sluice. You do not walk into water. Use names, never coordinates.',
 		traits: ['quiet', 'hungry', 'kind'],
 	},
 	goals: [{
-		text: 'Trade FireMushroom for SilverTrout.',
+		text: "Harvest FireMushroom and trade it for Angler's SilverTrout.",
 		priority: 2,
 	}],
 	memories: [
 		{
-			text: 'FireMushroom only grows in the forest among the trees. I pick_up FireMushroom there.',
-			tags: ['FireMushroom'],
+			text: 'FireMushroom grows among the trees west of Cottage, outdoors. If I am not carrying FireMushroom and the scene has not named it, wander(for=\'some(items.filter("FireMushroom").nearby())\'). When that wander ends, pick_up(FireMushroom) — do not wander that same search again.',
+			tags: ['FireMushroom', 'trees'],
+			pinned: true,
+		},
+		{
+			text: 'Miller wants FireMushroom as the mill-fee and works near Cottage, east of these woods. If I am carrying FireMushroom and cannot see Miller, wander(for="isNear(me, Miller)"). After he has the mushroom he lowers MillBridge with MillCrank on MillLever. Angler has SilverTrout south of the water and cannot cross until MillBridge is down. CottageDoor is not my work.',
+			tags: ['Miller', 'Angler', 'MillBridge', 'SilverTrout', 'Cottage'],
 			pinned: true,
 		},
 	],
@@ -28,7 +33,10 @@ export const FORAGER:AgentSpec = {
 		approaching: 'hasHeard || some(others.nearby().approaching())',
 		bridge: 'hasJustOpened(MillBridge) || some(events.filter("bridge"))',
 	},
-	watchesWritable: false,
+	watches: {
+		mushroom: 'some(items.filter("FireMushroom").nearby())',
+	},
+	watchesWritable: true,
 };
 
 export const MILLER:AgentSpec = {
@@ -113,7 +121,18 @@ function goalDone(host:GameHost, id:string):boolean {
 	return false;
 }
 
+const wokeForager = new WeakSet<GameHost>();
+
+function wakeForagerOnce(host:GameHost):void {
+	if (wokeForager.has(host) || !host.arc?.ready) {
+		return;
+	}
+	wokeForager.add(host);
+	host.arc.mindQueue()?.enqueueMajor('Forager', true);
+}
+
 function checkBargain(host:GameHost):void {
+	wakeForagerOnce(host);
 	if (host.bargainDone) {
 		return;
 	}

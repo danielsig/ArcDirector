@@ -13,8 +13,9 @@ export function syncHeldTorchLight(actor:GameObject, dt:number):void {
 	}
 	const left = slotItem(body, 'hands.left.held');
 	const right = slotItem(body, 'hands.right.held');
-	const torch = left?.Torch ?? right?.Torch;
-	if (!torch?.lit) {
+	const rightLit = right?.Torch?.lit === true;
+	const leftLit = left?.Torch?.lit === true;
+	if (!rightLit && !leftLit) {
 		light.enabled = false;
 		return;
 	}
@@ -24,8 +25,8 @@ export function syncHeldTorchLight(actor:GameObject, dt:number):void {
 	light.range = 9;
 	light.intensity = 32 * light.pulse(dt);
 	light.decay = 1;
+	/** Host-local +X is body-right. */
+	light.offsetX = rightLit ? 0.4 : -0.4;
 	light.offsetY = 0.5;
 	light.offsetZ = 0.3;
-	light.offsetX = -0.4;
-
 }

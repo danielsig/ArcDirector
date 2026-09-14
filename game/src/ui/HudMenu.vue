@@ -1,13 +1,14 @@
 <script setup lang="ts">
 import { inject, watch } from 'vue';
-import { saveDevStatsOpen, type HudModel } from './hudModel';
+import { type HudModel } from './hudModel';
 import { sessionKey } from './sessionKey';
 import {
 	MAX_PARALLEL_THINKERS,
 	MAX_THINKING_BUDGET,
 	MIN_PARALLEL_THINKERS,
 	MIN_THINKING_BUDGET,
-} from '../engine/thinkPref';
+	setPrefs,
+} from '../prefs';
 
 const props = defineProps<{
 	hud:HudModel;
@@ -51,8 +52,28 @@ function toggleArcDirector():void {
 	props.hud.arcDirectorOn = !props.hud.arcDirectorOn;
 }
 
+function toggleMinimapFollow():void {
+	props.hud.minimap.follow = !props.hud.minimap.follow;
+}
+
+function toggleDetailMaps():void {
+	const on = !props.hud.detailMaps;
+	props.hud.detailMaps = on;
+	setPrefs({ detailMaps: on });
+}
+
+function toggleShadows():void {
+	const on = !props.hud.shadows;
+	props.hud.shadows = on;
+	setPrefs({ shadows: on });
+}
+
 function pickModel():void {
 	session?.value?.applyModel();
+}
+
+function pickCharacter():void {
+	session?.value?.applyPlayerKind();
 }
 
 function pickThinkers():void {
@@ -74,7 +95,18 @@ function resetInferStats():void {
 function onDevStatsToggle(ev:Event):void {
 	const el = ev.currentTarget as HTMLDetailsElement;
 	props.hud.devStatsOpen = el.open;
-	saveDevStatsOpen(el.open);
+	setPrefs({ devStatsOpen: el.open });
+}
+
+function fmtMem(bytes:number):string {
+	if (!Number.isFinite(bytes) || bytes <= 0) {
+		return '—';
+	}
+	if (bytes < 1024 * 1024) {
+		return `${Math.max(1, Math.round(bytes / 1024))} KB`;
+	}
+	const mb = bytes / (1024 * 1024);
+	return mb < 10 ? `${mb.toFixed(1)} MB` : `${Math.round(mb)} MB`;
 }
 
 function fmtMs(ms:number | null):string {
@@ -182,7 +214,53 @@ function when(iso:string):string {
 					<button type="button" @click.stop="dumpNPCMaps">
 						NPC maps
 					</button>
+					<button
+						type="button"
+						:class="{ on: hud.minimap.follow }"
+						:aria-pressed="hud.minimap.follow"
+						@click.stop="toggleMinimapFollow"
+					>
+						{{ hud.minimap.follow ? 'Minimap follow' : 'Minimap chunk' }}
+					</button>
+					<button
+						type="button"
+						:class="{ on: hud.detailMaps }"
+						:aria-pressed="hud.detailMaps"
+						@click.stop="toggleDetailMaps"
+					>
+						{{ hud.detailMaps ? 'Maps on' : 'Maps off' }}
+					</button>
+					<button
+						type="button"
+						:class="{ on: hud.shadows }"
+						:aria-pressed="hud.shadows"
+						@click.stop="toggleShadows"
+					>
+						{{ hud.shadows ? 'Shadows on' : 'Shadows off' }}
+					</button>
 				</div>
+				<label class="name">
+					Character
+					<select
+						v-model="hud.playerKind"
+						:disabled="hud.playerKinds.length === 0"
+						@change.stop="pickCharacter"
+					>
+						<option
+							v-if="hud.playerKind && !hud.playerKinds.some((c) => c.id === hud.playerKind)"
+							:value="hud.playerKind"
+						>
+							{{ hud.playerKind }}
+						</option>
+						<option
+							v-for="c in hud.playerKinds"
+							:key="c.id"
+							:value="c.id"
+						>
+							{{ c.label }}
+						</option>
+					</select>
+				</label>
 				<label class="name">
 					Model
 					<select
@@ -310,6 +388,7 @@ function when(iso:string):string {
 						</tbody>
 					</table>
 					<div class="row stats-foot">
+						<span class="calls">Graphics memory {{ fmtMem(hud.graphicsMemory) }}</span>
 						<span class="calls">{{ hud.inferCalls }} call{{ hud.inferCalls === 1 ? '' : 's' }}</span>
 						<button type="button" @click.stop="resetInferStats">Reset</button>
 					</div>
@@ -518,6 +597,14 @@ h3 {
 
 .name input[type="number"] {
 	width: 4.5em;
+}
+
+.name input[type="range"] {
+	width: 8em;
+	box-shadow: none;
+	padding: 6px 0;
+	cursor: pointer;
+	accent-color: #1a1208;
 }
 
 .dev-stats {

@@ -8,7 +8,7 @@ import { glen_1_0 } from './chunks/glen_1_0';
 import { glen_1_1 } from './chunks/glen_1_1';
 import { market_0_0 } from './chunks/market_0_0';
 import { market_1_0 } from './chunks/market_1_0';
-import { HUMAN_KINDS, type CrowdKind, type HumanKind } from '../engine/components';
+import { type CrowdKind, type HumanKind } from '../engine/components';
 import type { GameHost, HostCtx } from '../npc/adapter';
 import { createDirector as createAbbeyDirector } from '../npc/scenes/abbey';
 import { createDirector as createGlenDirector } from '../npc/scenes/glen';
@@ -40,6 +40,8 @@ export type SceneDef = {
 	ambient:string;
 	message:string;
 	playerWallet?:number;
+	/** Player stays centered and the chunk-sized map scrolls. `false` = current chunk, moving arrow. */
+	minimapFollow?:boolean;
 	createDirector:(host:GameHost)=>ArcDirector<HostCtx>;
 };
 
@@ -47,6 +49,7 @@ export const ABBEY_VAULT:SceneDef = {
 	id: 'abbey_vault',
 	title: 'Abbey Vault',
 	look: 'dungeon',
+	minimapFollow: true,
 	chunks: [dungeon_0_0, dungeon_1_0],
 	npcs: [
 		{ id: 'Herbalist', meshID: 'human_princess', chunkID: 'dungeon_0_0', localX: 5, localZ: 10, pack: true },
@@ -66,7 +69,7 @@ export const ABBEY_VAULT:SceneDef = {
 		},
 	],
 	ambient: 'A damp stone hall of the abbey.',
-	message: 'E pick up / unlock   F use   Enter talk   /give   Tab chat',
+	message: 'E pick up / unlock   F use   X swap hands   Enter talk   /give   Tab chat',
 	createDirector: createAbbeyDirector,
 };
 
@@ -74,9 +77,10 @@ export const RIVER_GLEN:SceneDef = {
 	id: 'glen',
 	title: 'River Glen',
 	look: 'glen',
+	minimapFollow: true,
 	chunks: [glen_0_0, glen_1_0, glen_0_1, glen_1_1],
 	npcs: [
-		{ id: 'Forager', meshID: 'human', chunkID: 'glen_1_1', localX: 9, localZ: 3, pack: true },
+		{ id: 'Forager', meshID: 'human_mannequin', chunkID: 'glen_1_1', localX: 9, localZ: 3, pack: true },
 		{
 			id: 'Miller',
 			meshID: 'human_robe',
@@ -107,7 +111,7 @@ export const RIVER_GLEN:SceneDef = {
 		},
 	],
 	ambient: 'A windy river glen.',
-	message: 'E pick up / unlock   F use   Enter talk   /give   Tab chat',
+	message: 'E pick up / unlock   F use   X swap hands   Enter talk   /give   Tab chat',
 	createDirector: createGlenDirector,
 };
 
@@ -115,6 +119,7 @@ export const MARKETPLACE:SceneDef = {
 	id: 'marketplace',
 	title: 'Marketplace',
 	look: 'market',
+	minimapFollow: true,
 	playerWallet: 20,
 	chunks: [market_0_0, market_1_0],
 	npcs: [
@@ -170,7 +175,7 @@ export const MARKETPLACE:SceneDef = {
 		},
 		{
 			id: 'Mira',
-			meshID: 'human',
+			meshID: 'human_mannequin',
 			chunkID: 'market_0_0',
 			localX: 6,
 			localZ: 7,
@@ -203,7 +208,7 @@ export const MARKETPLACE:SceneDef = {
 		},
 		{
 			id: 'Rook',
-			meshID: 'human',
+			meshID: 'human_mannequin',
 			chunkID: 'market_1_0',
 			localX: 10,
 			localZ: 8,
@@ -253,7 +258,7 @@ export const MARKETPLACE:SceneDef = {
 		},
 	],
 	ambient: 'A busy street flea market.',
-	message: 'E pick up / unlock   F use   Enter talk   /give   Tab chat',
+	message: 'E pick up / unlock   F use   X swap hands   Enter talk   /give   Tab chat',
 	createDirector: createMarketDirector,
 };
 
@@ -273,14 +278,10 @@ export function humanKindsForScene(scene:SceneDef):HumanKind[] {
 	const set = new Set<HumanKind>(['player']);
 	for (const npc of scene.npcs) {
 		if (npc.meshID === 'human') {
-			set.add('player');
-			continue;
+			throw new Error(`${scene.id} NPC ${npc.id} meshID 'human' is the player; use human_<kind>`);
 		}
 		if (npc.meshID.startsWith('human_')) {
-			const kind = npc.meshID.slice('human_'.length);
-			if ((HUMAN_KINDS as readonly string[]).includes(kind)) {
-				set.add(kind as HumanKind);
-			}
+			set.add(npc.meshID.slice('human_'.length));
 		}
 	}
 	return [...set];

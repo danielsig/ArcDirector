@@ -2,17 +2,19 @@
 import { computed, onMounted, ref, watch } from 'vue';
 import type { HudModel } from './hudModel';
 import { tileFill } from '../world/tileFill';
+import { CHUNK_SIZE } from '../world/constants';
 
 const props = defineProps<{
 	hud:HudModel;
 }>();
 
 const cell = 7;
+const view = CHUNK_SIZE * cell;
 const canvasRef = ref<HTMLCanvasElement | null>(null);
 
 const size = computed(() => ({
-	w: Math.max(1, props.hud.minimap.width) * cell,
-	h: Math.max(1, props.hud.minimap.height) * cell,
+	w: view,
+	h: view,
 }));
 
 function paint():void {
@@ -44,13 +46,26 @@ function paint():void {
 	}
 }
 
+const mapShift = computed(() => {
+	const m = props.hud.minimap;
+	if (!m.follow) {
+		return 'none';
+	}
+	const tx = Math.round(view / 2 - (m.playerX - m.originX) * cell);
+	const ty = Math.round(view / 2 - (m.playerZ - m.originZ) * cell);
+	return `translate(${tx}px, ${ty}px)`;
+});
+
 const playerPx = computed(() => {
 	const m = props.hud.minimap;
+	const deg = -(m.playerYaw * 180) / Math.PI;
+	if (m.follow) {
+		return { x: view / 2, y: view / 2, deg };
+	}
 	return {
 		x: (m.playerX - m.originX) * cell,
 		y: (m.playerZ - m.originZ) * cell,
-		// World +yaw is CCW from above; SVG rotate() is clockwise.
-		deg: -(m.playerYaw * 180) / Math.PI,
+		deg,
 	};
 });
 
@@ -60,7 +75,7 @@ onMounted(paint);
 
 <template>
 	<div class="hud-minimap" :style="{ width: `${size.w}px`, height: `${size.h}px` }" aria-label="minimap">
-		<canvas ref="canvasRef" />
+		<canvas ref="canvasRef" :style="{ transform: mapShift }" />
 		<svg
 			class="player-overlay"
 			:width="size.w"
@@ -81,6 +96,7 @@ onMounted(paint);
 	position: absolute;
 	right: 16px;
 	bottom: 16px;
+	overflow: hidden;
 	opacity: 0.88;
 	pointer-events: none;
 	image-rendering: pixelated;
@@ -88,7 +104,14 @@ onMounted(paint);
 	background: #141018;
 }
 
-.hud-minimap canvas,
+.hud-minimap canvas {
+	position: absolute;
+	left: 0;
+	top: 0;
+	display: block;
+	transform-origin: 0 0;
+}
+
 .player-overlay {
 	position: absolute;
 	inset: 0;

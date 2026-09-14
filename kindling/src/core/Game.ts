@@ -14,8 +14,11 @@ export class Game<W extends World = World> {
 	readonly world:W;
 	readonly renderer:Renderer | null;
 	running = false;
+	/** Canvas draws per second while `document` is unfocused. Simulation still runs every RAF. */
+	unfocusedHz = 3;
 	private raf = 0;
 	private last = 0;
+	private lastDraw = 0;
 
 	constructor(world?:W) {
 		this.world = world ?? (new World() as W);
@@ -101,7 +104,10 @@ export class Game<W extends World = World> {
 			dt = MAX_DT;
 		}
 		this.tick(dt);
-		this.renderer?.render();
+		if (typeof document === 'undefined' || document.hasFocus() || now - this.lastDraw >= 1000 / this.unfocusedHz) {
+			this.renderer?.render();
+			this.lastDraw = now;
+		}
 		this.raf = requestAnimationFrame(this.frame);
 	};
 }

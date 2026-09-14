@@ -3,6 +3,7 @@ import artCache from 'virtual:art-cache';
 import { cropBitmap, loadBitmap, pixelArtImage } from './spritesheet';
 import type { ClockMaps, WalkHour } from './humanAnims';
 
+/** Sword views: 12, 2 (1:30 / 45° from 12), 4 (4:30 / 135° from 12), 6. */
 const SWORD_HOURS:WalkHour[] = [12, 2, 4, 6];
 
 let swordMaps:Record<WalkHour, ClockMaps> | null = null;
@@ -64,7 +65,7 @@ export function disposeSwordAnims():void {
 }
 
 export function getSwordMaps(hour:WalkHour):ClockMaps | null {
-	return swordMaps?.[hour] ?? swordMaps?.[6] ?? null;
+	return swordMaps?.[hour] ?? swordMaps?.[4] ?? swordMaps?.[6] ?? null;
 }
 
 if (import.meta.hot) {

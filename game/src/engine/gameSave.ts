@@ -1,4 +1,5 @@
 import type { AgentJSON } from 'arc-director';
+import { lsDel, lsGet, lsSet } from '../prefs';
 import {
 	BODY_SLOTS,
 	BoxCollider,
@@ -546,39 +547,20 @@ export function listSaves(sceneID:string):SaveSlotInfo[] {
 }
 
 export function loadSave(sceneID:string, id:string):GameSave | null {
-	try {
-		const raw = localStorage.getItem(storageKey(sceneID, id));
-		if (!raw) {
-			return null;
-		}
-		const save = parseSave(raw);
-		if (!save || save.sceneID !== sceneID) {
-			return null;
-		}
-		return save;
-	}
-	catch {
+	const raw = lsGet(storageKey(sceneID, id));
+	if (!raw) {
 		return null;
 	}
+	const save = parseSave(raw);
+	return save && save.sceneID === sceneID ? save : null;
 }
 
 export function writeSave(save:GameSave):boolean {
-	try {
-		localStorage.setItem(storageKey(save.sceneID, save.id), JSON.stringify(save));
-		return true;
-	}
-	catch {
-		return false;
-	}
+	return lsSet(storageKey(save.sceneID, save.id), JSON.stringify(save));
 }
 
 export function deleteSave(sceneID:string, id:string):void {
-	try {
-		localStorage.removeItem(storageKey(sceneID, id));
-	}
-	catch {
-		// private mode
-	}
+	lsDel(storageKey(sceneID, id));
 }
 
 export function userSlotCount(sceneID:string):number {
