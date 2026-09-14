@@ -1,12 +1,13 @@
 <script setup lang="ts">
 import { inject, watch } from 'vue';
-import { type HudModel } from './hudModel';
+import { type HudModel, type MenuPage } from './hudModel';
 import { sessionKey } from './sessionKey';
 import {
 	MAX_PARALLEL_THINKERS,
 	MAX_THINKING_BUDGET,
 	MIN_PARALLEL_THINKERS,
 	MIN_THINKING_BUDGET,
+	clampParallelThinkers,
 	setPrefs,
 } from '../prefs';
 
@@ -19,6 +20,14 @@ const emit = defineEmits<{
 }>();
 
 const session = inject(sessionKey);
+
+const PAGES:{ id:MenuPage; label:string }[] = [
+	{ id: 'game', label: 'Game' },
+	{ id: 'display', label: 'Display' },
+	{ id: 'audio', label: 'Audio' },
+	{ id: 'saves', label: 'Saves' },
+	{ id: 'testing', label: 'Testing' },
+];
 
 watch(
 	() => props.hud.menuOpen,
@@ -40,6 +49,10 @@ function resume():void {
 	props.hud.menuOpen = false;
 }
 
+function go(page:MenuPage):void {
+	props.hud.menuPage = page;
+}
+
 function reset():void {
 	session?.value?.resetLocation();
 }
@@ -52,8 +65,8 @@ function toggleArcDirector():void {
 	props.hud.arcDirectorOn = !props.hud.arcDirectorOn;
 }
 
-function toggleMinimapFollow():void {
-	props.hud.minimap.follow = !props.hud.minimap.follow;
+function setMinimapFollow(follow:boolean):void {
+	props.hud.minimap.follow = follow;
 }
 
 function toggleDetailMaps():void {
@@ -80,6 +93,11 @@ function pickThinkers():void {
 	session?.value?.applyMaxParallel();
 }
 
+function nudgeParallel(delta:number):void {
+	props.hud.maxParallel = clampParallelThinkers(props.hud.maxParallel + delta);
+	pickThinkers();
+}
+
 function toggleBatchThinks():void {
 	props.hud.batchThinks = !props.hud.batchThinks;
 }
@@ -90,12 +108,6 @@ function dumpNPCMaps():void {
 
 function resetInferStats():void {
 	session?.value?.resetInferStats();
-}
-
-function onDevStatsToggle(ev:Event):void {
-	const el = ev.currentTarget as HTMLDetailsElement;
-	props.hud.devStatsOpen = el.open;
-	setPrefs({ devStatsOpen: el.open });
 }
 
 function fmtMem(bytes:number):string {
@@ -127,6 +139,20 @@ function avg(sum:number, n:number):number | null {
 		return null;
 	}
 	return sum / n;
+}
+
+function pct(n:number):string {
+	if (!Number.isFinite(n)) {
+		return '0';
+	}
+	return String(Math.round(Math.max(0, Math.min(1, n)) * 100));
+}
+
+function thinkingLabel(n:number):string {
+	if (!Number.isFinite(n) || n <= 0) {
+		return 'Off';
+	}
+	return String(Math.round(n));
 }
 
 function select(id:string):void {
@@ -184,243 +210,322 @@ function when(iso:string):string {
 			<div
 				class="hud-menu-panel"
 				role="dialog"
-				aria-label="Game menu"
+				aria-label="Paused"
 				@click.stop
 			>
-				<h2>Menu</h2>
-				<div class="row">
-					<button type="button" @click.stop="resume">Resume</button>
-					<button type="button" @click.stop="reset">Reset location</button>
-					<button type="button" @click.stop="emit('scenes')">Scenes</button>
-				</div>
-				<h3>Testing</h3>
-				<div class="row">
-					<button
-						type="button"
-						:class="{ on: hud.observer }"
-						:aria-pressed="hud.observer"
-						@click.stop="toggleObserver"
-					>
-						{{ hud.observer ? 'Observer on' : 'Observer off' }}
-					</button>
-					<button
-						type="button"
-						:class="{ on: hud.arcDirectorOn }"
-						:aria-pressed="hud.arcDirectorOn"
-						@click.stop="toggleArcDirector"
-					>
-						{{ hud.arcDirectorOn ? 'ArcDirector on' : 'ArcDirector paused' }}
-					</button>
-					<button type="button" @click.stop="dumpNPCMaps">
-						NPC maps
-					</button>
-					<button
-						type="button"
-						:class="{ on: hud.minimap.follow }"
-						:aria-pressed="hud.minimap.follow"
-						@click.stop="toggleMinimapFollow"
-					>
-						{{ hud.minimap.follow ? 'Minimap follow' : 'Minimap chunk' }}
-					</button>
-					<button
-						type="button"
-						:class="{ on: hud.detailMaps }"
-						:aria-pressed="hud.detailMaps"
-						@click.stop="toggleDetailMaps"
-					>
-						{{ hud.detailMaps ? 'Maps on' : 'Maps off' }}
-					</button>
-					<button
-						type="button"
-						:class="{ on: hud.shadows }"
-						:aria-pressed="hud.shadows"
-						@click.stop="toggleShadows"
-					>
-						{{ hud.shadows ? 'Shadows on' : 'Shadows off' }}
-					</button>
-				</div>
-				<label class="name">
-					Character
-					<select
-						v-model="hud.playerKind"
-						:disabled="hud.playerKinds.length === 0"
-						@change.stop="pickCharacter"
-					>
-						<option
-							v-if="hud.playerKind && !hud.playerKinds.some((c) => c.id === hud.playerKind)"
-							:value="hud.playerKind"
+				<header class="head">
+					<h2>Paused</h2>
+					<button type="button" class="resume" @click.stop="resume">Resume</button>
+				</header>
+				<div class="body">
+					<nav class="rail" aria-label="Menu pages">
+						<button
+							v-for="page in PAGES"
+							:key="page.id"
+							type="button"
+							:class="{ on: hud.menuPage === page.id }"
+							@click.stop="go(page.id)"
 						>
-							{{ hud.playerKind }}
-						</option>
-						<option
-							v-for="c in hud.playerKinds"
-							:key="c.id"
-							:value="c.id"
-						>
-							{{ c.label }}
-						</option>
-					</select>
-				</label>
-				<label class="name">
-					Model
-					<select
-						v-model="hud.model"
-						:disabled="hud.models.length === 0 && !hud.model"
-						@change.stop="pickModel"
-					>
-						<option
-							v-if="hud.models.length === 0 && !hud.model"
-							value=""
-							disabled
-						>
-							No models found
-						</option>
-						<option
-							v-if="hud.model && !hud.models.some((m) => m.id === hud.model)"
-							:value="hud.model"
-						>
-							{{ hud.model }}
-						</option>
-						<option
-							v-for="m in hud.models"
-							:key="m.id"
-							:value="m.id"
-						>
-							{{ m.loaded ? `${m.id} · loaded` : m.id }}
-						</option>
-					</select>
-				</label>
-				<div class="row">
-					<label class="name">
-						Parallel thinkers
-						<input
-							v-model.number="hud.maxParallel"
-							type="number"
-							:min="MIN_PARALLEL_THINKERS"
-							:max="MAX_PARALLEL_THINKERS"
-							step="1"
-							@change.stop="pickThinkers"
-						>
-					</label>
-					<button
-						type="button"
-						:class="{ on: hud.batchThinks }"
-						@click.stop="toggleBatchThinks"
-					>
-						{{ hud.batchThinks ? 'Wait for idle on' : 'Wait for idle off' }}
-					</button>
-				</div>
-				<label class="name">
-					Thinking
-					<input
-						v-model.number="hud.thinkingBudget"
-						type="number"
-						:min="MIN_THINKING_BUDGET"
-						:max="MAX_THINKING_BUDGET"
-						step="1"
-					>
-				</label>
-				<h3>Audio</h3>
-				<div class="row">
-					<button
-						type="button"
-						:class="{ on: hud.audioMuted }"
-						:aria-pressed="hud.audioMuted"
-						@click.stop="hud.audioMuted = !hud.audioMuted"
-					>
-						{{ hud.audioMuted ? 'Muted' : 'Mute' }}
-					</button>
-					<label class="name">
-						Music
-						<input
-							v-model.number="hud.musicVolume"
-							type="range"
-							min="0"
-							max="1"
-							step="0.01"
-						>
-					</label>
-					<label class="name">
-						SFX
-						<input
-							v-model.number="hud.sfxVolume"
-							type="range"
-							min="0"
-							max="1"
-							step="0.01"
-						>
-					</label>
-				</div>
-				<details
-					class="dev-stats"
-					:open="hud.devStatsOpen"
-					@toggle="onDevStatsToggle"
-				>
-					<summary>Dev stats</summary>
-					<table>
-						<thead>
-							<tr>
-								<th></th>
-								<th>Last</th>
-								<th>Avg</th>
-								<th>Total</th>
-							</tr>
-						</thead>
-						<tbody>
-							<tr>
-								<td>Context load</td>
-								<td>{{ fmtMs(hud.inferLastContextMs) }}</td>
-								<td>{{ fmtMs(avg(hud.inferContextMs, hud.inferContextKnown)) }}</td>
-								<td>{{ fmtMs(hud.inferContextKnown > 0 ? hud.inferContextMs : null) }}</td>
-							</tr>
-							<tr>
-								<td>Thinking</td>
-								<td>{{ fmtMs(hud.inferLastGenerateMs) }}</td>
-								<td>{{ fmtMs(avg(hud.inferGenerateMs, hud.inferCalls)) }}</td>
-								<td>{{ fmtMs(hud.inferCalls > 0 ? hud.inferGenerateMs : null) }}</td>
-							</tr>
-							<tr>
-								<td>Round trip</td>
-								<td>{{ fmtMs(hud.inferLastWallMs) }}</td>
-								<td>{{ fmtMs(avg(hud.inferWallMs, hud.inferCalls)) }}</td>
-								<td>{{ fmtMs(hud.inferCalls > 0 ? hud.inferWallMs : null) }}</td>
-							</tr>
-						</tbody>
-					</table>
-					<div class="row stats-foot">
-						<span class="calls">Graphics memory {{ fmtMem(hud.graphicsMemory) }}</span>
-						<span class="calls">{{ hud.inferCalls }} call{{ hud.inferCalls === 1 ? '' : 's' }}</span>
-						<button type="button" @click.stop="resetInferStats">Reset</button>
-					</div>
-				</details>
-				<h3>Save states</h3>
-				<ul class="slots">
-					<li v-if="hud.saveSlots.length === 0" class="empty">No saves yet</li>
-					<li
-						v-for="slot in hud.saveSlots"
-						:key="slot.id"
-						:class="{ selected: hud.saveSelectedID === slot.id }"
-					>
-						<button type="button" class="slot" @click.stop="select(slot.id)">
-							<span class="label">{{ slot.auto ? 'Autosave' : slot.label }}</span>
-							<span class="when">{{ when(slot.savedAt) }}</span>
+							{{ page.label }}
 						</button>
-					</li>
-				</ul>
-				<label class="name">
-					Slot name
-					<input
-						v-model="hud.saveLabel"
-						type="text"
-						maxlength="48"
-						autocomplete="off"
-						placeholder="optional"
-					>
-				</label>
-				<div class="row">
-					<button type="button" @click.stop="save">Save</button>
-					<button type="button" @click.stop="load">Load</button>
-					<button type="button" @click.stop="remove">Delete</button>
+						<button
+							type="button"
+							class="scenes"
+							@click.stop="emit('scenes')"
+						>
+							Scenes
+						</button>
+					</nav>
+					<div class="page">
+						<template v-if="hud.menuPage === 'game'">
+							<label class="set">
+								<span class="name">Character</span>
+								<select
+									v-model="hud.playerKind"
+									:disabled="hud.playerKinds.length === 0"
+									@change.stop="pickCharacter"
+								>
+									<option
+										v-if="hud.playerKind && !hud.playerKinds.some((c) => c.id === hud.playerKind)"
+										:value="hud.playerKind"
+									>
+										{{ hud.playerKind }}
+									</option>
+									<option
+										v-for="c in hud.playerKinds"
+										:key="c.id"
+										:value="c.id"
+									>
+										{{ c.label }}
+									</option>
+								</select>
+							</label>
+							<div class="page-actions">
+								<button type="button" @click.stop="reset">Reset location</button>
+							</div>
+						</template>
+						<template v-else-if="hud.menuPage === 'display'">
+							<div class="set">
+								<span class="name">Maps</span>
+								<button
+									type="button"
+									class="switch"
+									:class="{ on: hud.detailMaps }"
+									:aria-pressed="hud.detailMaps"
+									@click.stop="toggleDetailMaps"
+								>
+									{{ hud.detailMaps ? 'On' : 'Off' }}
+								</button>
+							</div>
+							<div class="set">
+								<span class="name">Shadows</span>
+								<button
+									type="button"
+									class="switch"
+									:class="{ on: hud.shadows }"
+									:aria-pressed="hud.shadows"
+									@click.stop="toggleShadows"
+								>
+									{{ hud.shadows ? 'On' : 'Off' }}
+								</button>
+							</div>
+							<div class="set">
+								<span class="name">Minimap</span>
+								<div class="seg" role="group" aria-label="Minimap">
+									<button
+										type="button"
+										:class="{ on: hud.minimap.follow }"
+										:aria-pressed="hud.minimap.follow"
+										@click.stop="setMinimapFollow(true)"
+									>
+										Follow
+									</button>
+									<button
+										type="button"
+										:class="{ on: !hud.minimap.follow }"
+										:aria-pressed="!hud.minimap.follow"
+										@click.stop="setMinimapFollow(false)"
+									>
+										Chunk
+									</button>
+								</div>
+							</div>
+						</template>
+						<template v-else-if="hud.menuPage === 'audio'">
+							<div class="set">
+								<span class="name">Mute</span>
+								<button
+									type="button"
+									class="switch"
+									:class="{ on: hud.audioMuted }"
+									:aria-pressed="hud.audioMuted"
+									@click.stop="hud.audioMuted = !hud.audioMuted"
+								>
+									{{ hud.audioMuted ? 'On' : 'Off' }}
+								</button>
+							</div>
+							<label class="set stack" :class="{ dim: hud.audioMuted }">
+								<span class="name">
+									Music
+									<span class="readout">{{ pct(hud.musicVolume) }}%</span>
+								</span>
+								<input
+									v-model.number="hud.musicVolume"
+									type="range"
+									min="0"
+									max="1"
+									step="0.01"
+								>
+							</label>
+							<label class="set stack" :class="{ dim: hud.audioMuted }">
+								<span class="name">
+									SFX
+									<span class="readout">{{ pct(hud.sfxVolume) }}%</span>
+								</span>
+								<input
+									v-model.number="hud.sfxVolume"
+									type="range"
+									min="0"
+									max="1"
+									step="0.01"
+								>
+							</label>
+						</template>
+						<template v-else-if="hud.menuPage === 'saves'">
+							<ul class="slots">
+								<li v-if="hud.saveSlots.length === 0" class="empty">No saves yet</li>
+								<li
+									v-for="slot in hud.saveSlots"
+									:key="slot.id"
+									:class="{ selected: hud.saveSelectedID === slot.id }"
+								>
+									<button type="button" class="slot" @click.stop="select(slot.id)">
+										<span class="label">{{ slot.auto ? 'Autosave' : slot.label }}</span>
+										<span class="when">{{ when(slot.savedAt) }}</span>
+									</button>
+								</li>
+							</ul>
+							<label class="set stack">
+								<span class="name">Slot name</span>
+								<input
+									v-model="hud.saveLabel"
+									type="text"
+									maxlength="48"
+									autocomplete="off"
+									placeholder="optional"
+								>
+							</label>
+							<div class="page-actions">
+								<button type="button" @click.stop="save">Save</button>
+								<button type="button" @click.stop="load">Load</button>
+								<button type="button" @click.stop="remove">Delete</button>
+							</div>
+						</template>
+						<template v-else>
+							<h3>World</h3>
+							<div class="set">
+								<span class="name">Observer</span>
+								<button
+									type="button"
+									class="switch"
+									:class="{ on: hud.observer }"
+									:aria-pressed="hud.observer"
+									@click.stop="toggleObserver"
+								>
+									{{ hud.observer ? 'On' : 'Off' }}
+								</button>
+							</div>
+							<div class="set">
+								<span class="name">ArcDirector</span>
+								<button
+									type="button"
+									class="switch"
+									:class="{ on: hud.arcDirectorOn }"
+									:aria-pressed="hud.arcDirectorOn"
+									@click.stop="toggleArcDirector"
+								>
+									{{ hud.arcDirectorOn ? 'On' : 'Off' }}
+								</button>
+							</div>
+							<div class="set">
+								<span class="name">NPC maps</span>
+								<button type="button" class="act" @click.stop="dumpNPCMaps">
+									Dump
+								</button>
+							</div>
+							<h3>Inference</h3>
+							<label class="set">
+								<span class="name">Model</span>
+								<select
+									v-model="hud.model"
+									:disabled="hud.models.length === 0 && !hud.model"
+									@change.stop="pickModel"
+								>
+									<option
+										v-if="hud.models.length === 0 && !hud.model"
+										value=""
+										disabled
+									>
+										No models found
+									</option>
+									<option
+										v-if="hud.model && !hud.models.some((m) => m.id === hud.model)"
+										:value="hud.model"
+									>
+										{{ hud.model }}
+									</option>
+									<option
+										v-for="m in hud.models"
+										:key="m.id"
+										:value="m.id"
+									>
+										{{ m.loaded ? `${m.id} · loaded` : m.id }}
+									</option>
+								</select>
+							</label>
+							<div class="set">
+								<span class="name">Parallel thinkers</span>
+								<div class="stepper">
+									<button
+										type="button"
+										:disabled="hud.maxParallel <= MIN_PARALLEL_THINKERS"
+										@click.stop="nudgeParallel(-1)"
+									>
+										−
+									</button>
+									<span>{{ hud.maxParallel }}</span>
+									<button
+										type="button"
+										:disabled="hud.maxParallel >= MAX_PARALLEL_THINKERS"
+										@click.stop="nudgeParallel(1)"
+									>
+										+
+									</button>
+								</div>
+							</div>
+							<div class="set">
+								<span class="name">Wait for idle</span>
+								<button
+									type="button"
+									class="switch"
+									:class="{ on: hud.batchThinks }"
+									:aria-pressed="hud.batchThinks"
+									@click.stop="toggleBatchThinks"
+								>
+									{{ hud.batchThinks ? 'On' : 'Off' }}
+								</button>
+							</div>
+							<label class="set stack">
+								<span class="name">
+									Thinking
+									<span class="readout">{{ thinkingLabel(hud.thinkingBudget) }}</span>
+								</span>
+								<input
+									v-model.number="hud.thinkingBudget"
+									type="range"
+									:min="MIN_THINKING_BUDGET"
+									:max="MAX_THINKING_BUDGET"
+									step="32"
+								>
+							</label>
+							<h3>Stats</h3>
+							<table class="stats">
+								<thead>
+									<tr>
+										<th></th>
+										<th>Last</th>
+										<th>Avg</th>
+										<th>Total</th>
+									</tr>
+								</thead>
+								<tbody>
+									<tr>
+										<td>Context load</td>
+										<td>{{ fmtMs(hud.inferLastContextMs) }}</td>
+										<td>{{ fmtMs(avg(hud.inferContextMs, hud.inferContextKnown)) }}</td>
+										<td>{{ fmtMs(hud.inferContextKnown > 0 ? hud.inferContextMs : null) }}</td>
+									</tr>
+									<tr>
+										<td>Thinking</td>
+										<td>{{ fmtMs(hud.inferLastGenerateMs) }}</td>
+										<td>{{ fmtMs(avg(hud.inferGenerateMs, hud.inferCalls)) }}</td>
+										<td>{{ fmtMs(hud.inferCalls > 0 ? hud.inferGenerateMs : null) }}</td>
+									</tr>
+									<tr>
+										<td>Round trip</td>
+										<td>{{ fmtMs(hud.inferLastWallMs) }}</td>
+										<td>{{ fmtMs(avg(hud.inferWallMs, hud.inferCalls)) }}</td>
+										<td>{{ fmtMs(hud.inferCalls > 0 ? hud.inferWallMs : null) }}</td>
+									</tr>
+								</tbody>
+							</table>
+							<div class="stats-foot">
+								<span>Graphics memory {{ fmtMem(hud.graphicsMemory) }}</span>
+								<span>{{ hud.inferCalls }} call{{ hud.inferCalls === 1 ? '' : 's' }}</span>
+								<button type="button" class="act" @click.stop="resetInferStats">Reset</button>
+							</div>
+						</template>
+					</div>
 				</div>
 				<p v-if="hud.menuNotice" class="notice">{{ hud.menuNotice }}</p>
 			</div>
@@ -430,6 +535,11 @@ function when(iso:string):string {
 
 <style scoped>
 .hud-menu-root {
+	--ink: #1a1208;
+	--parchment: #d4c4a0;
+	--cream: #f0e6c8;
+	--highlight: #fff6dc;
+	--rule: #c4b490;
 	position: absolute;
 	inset: 0;
 	pointer-events: none;
@@ -443,17 +553,17 @@ function when(iso:string):string {
 	font-family: ui-monospace, "Cascadia Code", monospace;
 	font-size: 14px;
 	letter-spacing: 0.1em;
-	color: #1a1208;
-	background: #d4c4a0;
+	color: var(--ink);
+	background: var(--parchment);
 	border: 0;
 	padding: 6px 12px;
 	cursor: pointer;
-	box-shadow: 0 2px 0 #1a1208, 0 4px 12px rgba(0, 0, 0, 0.35);
+	box-shadow: 0 2px 0 var(--ink), 0 4px 12px rgba(0, 0, 0, 0.35);
 	z-index: 3;
 }
 
 .hud-menu-btn:hover {
-	background: #f0e6c8;
+	background: var(--cream);
 }
 
 .hud-menu-dim {
@@ -469,64 +579,287 @@ function when(iso:string):string {
 }
 
 .hud-menu-panel {
-	width: min(460px, 92vw);
-	max-height: min(78vh, 640px);
-	overflow: auto;
-	background: #d4c4a0;
-	color: #1a1208;
+	width: min(720px, 92vw);
+	height: min(520px, 80vh);
+	display: flex;
+	flex-direction: column;
+	background: var(--parchment);
+	color: var(--ink);
 	font-family: ui-monospace, "Cascadia Code", monospace;
-	padding: 18px 20px 16px;
-	box-shadow: 0 2px 0 #1a1208, 0 16px 40px rgba(0, 0, 0, 0.45);
+	box-shadow: 0 2px 0 var(--ink), 0 16px 40px rgba(0, 0, 0, 0.45);
+}
+
+.head {
+	flex: 0 0 auto;
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 12px;
+	padding: 12px 16px;
+	border-bottom: 1px solid var(--rule);
 }
 
 h2 {
-	margin: 0 0 12px;
-	font-size: 18px;
-	letter-spacing: 0.12em;
+	margin: 0;
+	font-size: 15px;
+	font-weight: 700;
+	letter-spacing: 0.18em;
+	text-transform: uppercase;
+}
+
+.resume,
+.page-actions button,
+.act,
+.slot,
+.rail button {
+	font: inherit;
+	color: var(--ink);
+	background: var(--cream);
+	border: 0;
+	cursor: pointer;
+	box-shadow: 0 2px 0 var(--ink);
+}
+
+.resume {
+	font-size: 13px;
+	padding: 6px 12px;
+}
+
+.resume:hover,
+.page-actions button:hover,
+.act:hover,
+.rail button:hover:not(.on) {
+	background: var(--highlight);
+}
+
+.body {
+	flex: 1 1 auto;
+	min-height: 0;
+	display: flex;
+}
+
+.rail {
+	flex: 0 0 168px;
+	width: 168px;
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
+	padding: 10px 8px;
+	border-right: 1px solid var(--rule);
+}
+
+.rail button {
+	text-align: left;
+	font-size: 12px;
+	letter-spacing: 0.1em;
+	text-transform: uppercase;
+	padding: 9px 12px;
+}
+
+.rail button.on {
+	background: var(--highlight);
+	box-shadow: inset 0 0 0 2px var(--ink), 0 2px 0 var(--ink);
+}
+
+.rail .scenes {
+	margin-top: auto;
+}
+
+.page {
+	flex: 1 1 auto;
+	min-width: 0;
+	overflow: auto;
+	padding: 8px 18px 16px;
 }
 
 h3 {
-	margin: 16px 0 8px;
-	font-size: 13px;
-	letter-spacing: 0.08em;
+	margin: 14px 0 4px;
+	font-size: 11px;
+	letter-spacing: 0.12em;
+	text-transform: uppercase;
+	opacity: 0.7;
+	font-weight: 700;
 }
 
-.row {
+h3:first-child {
+	margin-top: 8px;
+}
+
+.set {
 	display: flex;
-	flex-wrap: wrap;
-	align-items: flex-end;
+	align-items: center;
+	justify-content: space-between;
+	gap: 16px;
+	min-height: 44px;
+	padding: 6px 0;
+	border-bottom: 1px solid var(--rule);
+}
+
+.set.stack {
+	flex-direction: column;
+	align-items: stretch;
 	gap: 8px;
+	padding: 10px 0;
 }
 
-.row .name {
-	margin: 0;
+.set.dim {
+	opacity: 0.45;
 }
 
-.row button,
-.name input,
-.name select {
+.name {
+	font-size: 13px;
+	letter-spacing: 0.06em;
+	display: flex;
+	align-items: baseline;
+	justify-content: space-between;
+	gap: 12px;
+}
+
+.readout {
+	opacity: 0.7;
+	font-size: 12px;
+	font-variant-numeric: tabular-nums;
+	letter-spacing: 0.04em;
+}
+
+.set select,
+.set input[type="text"] {
 	font: inherit;
 	font-size: 13px;
-	color: #1a1208;
-	background: #f0e6c8;
+	color: var(--ink);
+	background: var(--cream);
 	border: 0;
 	padding: 6px 10px;
+	max-width: min(280px, 58%);
+	box-shadow: inset 0 0 0 2px var(--ink);
+}
+
+.set.stack select,
+.set.stack input[type="text"] {
+	max-width: none;
+	width: 100%;
+}
+
+.set select {
 	cursor: pointer;
-	box-shadow: 0 2px 0 #1a1208;
 }
 
-.row button:hover {
-	background: #fff6dc;
+.set select:disabled {
+	opacity: 0.7;
+	cursor: default;
 }
 
-.row button.on {
-	background: #fff6dc;
-	box-shadow: inset 0 0 0 2px #1a1208, 0 2px 0 #1a1208;
+.set input[type="text"] {
+	cursor: text;
+}
+
+.set input[type="range"] {
+	width: 100%;
+	height: 8px;
+	margin: 2px 0 4px;
+	padding: 0;
+	cursor: pointer;
+	accent-color: var(--ink);
+	background: var(--rule);
+	box-shadow: inset 0 0 0 1px var(--ink);
+	-webkit-appearance: none;
+	appearance: none;
+}
+
+.set input[type="range"]::-webkit-slider-thumb {
+	-webkit-appearance: none;
+	width: 14px;
+	height: 18px;
+	background: var(--ink);
+	border: 0;
+	cursor: pointer;
+}
+
+.set input[type="range"]::-moz-range-thumb {
+	width: 14px;
+	height: 18px;
+	background: var(--ink);
+	border: 0;
+	border-radius: 0;
+	cursor: pointer;
+}
+
+.switch {
+	flex: 0 0 56px;
+	width: 56px;
+	height: 22px;
+	padding: 0;
+	font: inherit;
+	font-size: 10px;
+	letter-spacing: 0.08em;
+	text-transform: uppercase;
+	color: var(--ink);
+	background: var(--rule);
+	border: 0;
+	cursor: pointer;
+	box-shadow: inset 0 0 0 2px var(--ink);
+}
+
+.switch.on {
+	color: var(--cream);
+	background: var(--ink);
+}
+
+.seg,
+.stepper {
+	display: flex;
+	align-items: stretch;
+}
+
+.seg button,
+.stepper button,
+.act {
+	font: inherit;
+	font-size: 12px;
+	color: var(--ink);
+	background: var(--cream);
+	border: 0;
+	padding: 5px 10px;
+	cursor: pointer;
+	box-shadow: inset 0 0 0 2px var(--ink);
+}
+
+.seg button.on {
+	background: var(--ink);
+	color: var(--cream);
+}
+
+.stepper span {
+	min-width: 2.2em;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	font-size: 13px;
+	font-variant-numeric: tabular-nums;
+	background: var(--cream);
+	box-shadow: inset 0 0 0 2px var(--ink);
+}
+
+.stepper button:disabled {
+	opacity: 0.45;
+	cursor: default;
+}
+
+.page-actions {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 8px;
+	margin-top: 14px;
+}
+
+.page-actions button {
+	font-size: 13px;
+	padding: 6px 12px;
 }
 
 .slots {
 	list-style: none;
-	margin: 0;
+	margin: 8px 0 0;
 	padding: 0;
 	display: flex;
 	flex-direction: column;
@@ -538,27 +871,25 @@ h3 {
 .empty {
 	opacity: 0.7;
 	font-size: 13px;
-	padding: 6px 0;
+	padding: 10px 0;
 }
 
 .slot {
 	width: 100%;
 	display: flex;
 	justify-content: space-between;
+	align-items: baseline;
 	gap: 12px;
 	text-align: left;
-	font: inherit;
 	font-size: 13px;
-	color: #1a1208;
-	background: #c4b490;
-	border: 0;
 	padding: 8px 10px;
-	cursor: pointer;
+	box-shadow: none;
+	background: var(--rule);
 }
 
 .selected .slot {
-	background: #f0e6c8;
-	box-shadow: inset 0 0 0 2px #1a1208;
+	background: var(--cream);
+	box-shadow: inset 0 0 0 2px var(--ink);
 }
 
 .label {
@@ -570,92 +901,75 @@ h3 {
 	font-size: 11px;
 }
 
-.name {
-	display: flex;
-	flex-direction: column;
-	gap: 4px;
-	margin: 12px 0;
-	font-size: 12px;
-	letter-spacing: 0.06em;
-}
-
-.name input,
-.name select {
-	cursor: text;
-	box-shadow: inset 0 0 0 2px #1a1208;
-}
-
-.name select {
-	cursor: pointer;
-	max-width: 100%;
-}
-
-.name select:disabled {
-	opacity: 0.7;
-	cursor: default;
-}
-
-.name input[type="number"] {
-	width: 4.5em;
-}
-
-.name input[type="range"] {
-	width: 8em;
-	box-shadow: none;
-	padding: 6px 0;
-	cursor: pointer;
-	accent-color: #1a1208;
-}
-
-.dev-stats {
-	margin: 12px 0 4px;
-	font-size: 12px;
-	letter-spacing: 0.04em;
-}
-
-.dev-stats summary {
-	cursor: pointer;
-	font-size: 13px;
-	letter-spacing: 0.08em;
-	font-weight: 700;
-	list-style-position: outside;
-}
-
-.dev-stats table {
+.stats {
 	width: 100%;
-	margin: 10px 0 8px;
+	margin: 8px 0 10px;
 	border-collapse: collapse;
+	font-size: 12px;
 }
 
-.dev-stats th,
-.dev-stats td {
+.stats th,
+.stats td {
 	text-align: left;
 	padding: 4px 0;
 }
 
-.dev-stats th:not(:first-child),
-.dev-stats td:not(:first-child) {
+.stats th:not(:first-child),
+.stats td:not(:first-child) {
 	text-align: right;
 	font-variant-numeric: tabular-nums;
 }
 
-.dev-stats th {
+.stats th {
 	font-size: 11px;
 	opacity: 0.7;
 	font-weight: 500;
 }
 
 .stats-foot {
+	display: flex;
+	flex-wrap: wrap;
 	align-items: center;
 	justify-content: space-between;
-}
-
-.calls {
-	opacity: 0.75;
+	gap: 8px;
+	font-size: 12px;
+	opacity: 0.85;
 }
 
 .notice {
-	margin: 12px 0 0;
+	flex: 0 0 auto;
+	margin: 0;
+	padding: 8px 16px 12px;
 	font-size: 12px;
+	border-top: 1px solid var(--rule);
+}
+
+@media (max-width: 560px) {
+	.hud-menu-panel {
+		height: min(80vh, 640px);
+	}
+
+	.body {
+		flex-direction: column;
+	}
+
+	.rail {
+		flex: 0 0 auto;
+		width: 100%;
+		flex-direction: row;
+		flex-wrap: wrap;
+		border-right: 0;
+		border-bottom: 1px solid var(--rule);
+	}
+
+	.rail .scenes {
+		margin-top: 0;
+		margin-left: auto;
+	}
+
+	.set select,
+	.set input[type="text"] {
+		max-width: min(220px, 55%);
+	}
 }
 </style>

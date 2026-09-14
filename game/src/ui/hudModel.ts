@@ -50,6 +50,8 @@ export type HudModelOption = {
 	loaded:boolean;
 };
 
+export type MenuPage = 'game' | 'display' | 'audio' | 'saves' | 'testing';
+
 export type HudModel = {
 	hp:number;
 	maxHP:number;
@@ -76,6 +78,8 @@ export type HudModel = {
 	sayItems:string[];
 	sayGoods:{ item:string; from:string }[];
 	menuOpen:boolean;
+	/** Last pause-menu page this session. Not persisted. */
+	menuPage:MenuPage;
 	menuNotice:string;
 	saveLabel:string;
 	saveSelectedID:string;
@@ -96,9 +100,9 @@ export type HudModel = {
 	models:HudModelOption[];
 	/** Packed kind currently drawn on the player (`player` = witch). */
 	playerKind:string;
-	/** Packed kinds for the Testing character dropdown. */
+	/** Packed kinds for the Character dropdown. */
 	playerKinds:{ id:string; label:string }[];
-	/** Foldable menu panel for inference timings. */
+	/** Leftover pref; the Testing page always shows stats. */
 	devStatsOpen:boolean;
 	graphicsMemory:number;
 	detailMaps:boolean;
@@ -163,6 +167,7 @@ export function emptyHud():HudModel {
 		sayItems: [],
 		sayGoods: [],
 		menuOpen: false,
+		menuPage: 'game',
 		menuNotice: '',
 		saveLabel: '',
 		saveSelectedID: '',

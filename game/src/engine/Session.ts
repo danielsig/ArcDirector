@@ -569,10 +569,13 @@ export class Session extends Component {
 				this.dropPointerLock();
 			}
 		}
+		if (this.hud.menuOpen && world.input.pressed('Escape')) {
+			this.hud.menuOpen = false;
+			return;
+		}
 		if (
 			this.hud.aiLogOpen
 			&& !this.hud.sayOpen
-			&& !this.hud.menuOpen
 			&& world.input.pressed('Escape')
 		) {
 			this.hud.aiLogOpen = false;
