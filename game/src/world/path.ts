@@ -7,7 +7,7 @@ import { waterOpenAt } from './water';
 const PATH_CAP = 2048;
 const SNAP_CAP = 24;
 /** Step cost onto a cell another body occupies. Empty floor is 1. */
-const CROWD_COST = 8;
+const OCCUPANT_COST = 8;
 
 /** Props that sit on walkable floor but occupy the cell for motors. */
 const CELL_PROPS = new Set(['tree', 'boulder', 'stall']);
@@ -71,7 +71,7 @@ function hardObstacles(world:World):Set<string> {
 	return out;
 }
 
-function crowdCells(world:World, ignore?:readonly string[]):Set<string> {
+function occupantCells(world:World, ignore?:readonly string[]):Set<string> {
 	const skip = ignoreNames(ignore);
 	const out = new Set<string>();
 	world.forEachComponent(HumanBody, (_body, go) => {
@@ -114,7 +114,7 @@ export function cellWalkable(
 	ignore?:readonly string[],
 ):boolean {
 	const c = cellOf(x, z);
-	return !blocked(world, c.gx, c.gz, mergeSets(hardObstacles(world), crowdCells(world, ignore)));
+	return !blocked(world, c.gx, c.gz, mergeSets(hardObstacles(world), occupantCells(world, ignore)));
 }
 
 function snapGoal(
@@ -180,7 +180,7 @@ function reconstruct(
  *
  * Closed doors, walls, water, and props are impassable. Other bodies (including
  * the player) are soft: stepping onto their cell costs 8 instead of 1, so A*
- * goes around a crowd when a detour exists and through it when it does not.
+ * goes around occupied bodies when a detour exists and through them when it does not.
  * `ignore` is the mover — they are not occupancy on their own cell.
  */
 export function findPath(
@@ -192,7 +192,7 @@ export function findPath(
 	ignore?:readonly string[],
 ):{ x:number; z:number }[] | null {
 	const hard = hardObstacles(world);
-	const crowd = crowdCells(world, ignore);
+	const occupied = occupantCells(world, ignore);
 	const start = cellOf(x0, z0);
 	const snapped = snapGoal(world, cellOf(tx, tz).gx, cellOf(tx, tz).gz, hard, start);
 	if (!snapped) {
@@ -239,7 +239,7 @@ export function findPath(
 			if (nk !== startKey && blocked(world, nx, nz, hard)) {
 				continue;
 			}
-			const step = crowd.has(nk) && nk !== startKey ? CROWD_COST : 1;
+			const step = occupied.has(nk) && nk !== startKey ? OCCUPANT_COST : 1;
 			const tentative = g + step;
 			if (tentative >= (gScore.get(nk) ?? Infinity)) {
 				continue;
@@ -270,7 +270,7 @@ export function walkDistance(
 
 /** Grid DDA. Start and end cells are open so occupants do not occlude themselves. */
 export function lineClear(world:World, x0:number, z0:number, x1:number, z1:number):boolean {
-	const occ = mergeSets(hardObstacles(world), crowdCells(world));
+	const occ = mergeSets(hardObstacles(world), occupantCells(world));
 	const a = cellOf(x0, z0);
 	const b = cellOf(x1, z1);
 	if (a.gx === b.gx && a.gz === b.gz) {

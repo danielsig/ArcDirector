@@ -53,13 +53,14 @@ export function snapshotMap(
 	npcID:string,
 	zoom:number,
 	prev?:MapPrev,
+	origin?:{ x:number; z:number },
 ):MapSnapshot | { image:string } | null {
 	const go = world.findByID(npcID);
-	const p = go?.transform.position;
+	const p = origin ?? go?.transform.position;
 	if (prev && p && holdLastPicture(world.time, prev, zoom, p.x, p.z)) {
 		return { image: prev.image };
 	}
-	const bounds = viewBounds(world, npcID, zoom);
+	const bounds = viewBounds(world, npcID, zoom, origin);
 	if (!bounds) {
 		return null;
 	}
@@ -69,7 +70,7 @@ export function snapshotMap(
 	if (!painted) {
 		return null;
 	}
-	const marks = collectMarks(world, npcID, zoom >= DETAIL_ZOOM, bounds);
+	const marks = collectMarks(world, npcID, zoom >= DETAIL_ZOOM, bounds, origin);
 	return {
 		image: painted.image,
 		width: painted.width,
@@ -127,12 +128,11 @@ function worldBounds(world:World):Bounds | null {
 	};
 }
 
-function nearBounds(world:World, npcID:string):Bounds | null {
-	const body = world.findByID(npcID);
-	if (!body || world.chunks.size === 0) {
+function nearBounds(world:World, npcID:string, origin?:{ x:number; z:number }):Bounds | null {
+	const p = origin ?? world.findByID(npcID)?.transform.position;
+	if (!p || world.chunks.size === 0) {
 		return null;
 	}
-	const p = body.transform.position;
 	const originX = Math.floor(p.x / CELL_SIZE) * CELL_SIZE - CLOSE_RADIUS * CELL_SIZE;
 	const originY = Math.floor(p.z / CELL_SIZE) * CELL_SIZE - CLOSE_RADIUS * CELL_SIZE;
 	return {
@@ -147,9 +147,9 @@ function mix(a:number, b:number, t:number):number {
 	return a + (b - a) * t;
 }
 
-function viewBounds(world:World, npcID:string, zoom:number):Bounds | null {
+function viewBounds(world:World, npcID:string, zoom:number, origin?:{ x:number; z:number }):Bounds | null {
 	const far = worldBounds(world);
-	const close = nearBounds(world, npcID);
+	const close = nearBounds(world, npcID, origin);
 	if (!far) {
 		return null;
 	}
@@ -191,7 +191,13 @@ function paintTiles(world:World, bounds:Bounds, px:number):{ image:string; width
 	return { image: canvas.toDataURL('image/png'), width: canvas.width, height: canvas.height };
 }
 
-function collectMarks(world:World, npcID:string, detail:boolean, bounds:Bounds):MapMark[] {
+function collectMarks(
+	world:World,
+	npcID:string,
+	detail:boolean,
+	bounds:Bounds,
+	origin?:{ x:number; z:number },
+):MapMark[] {
 	const out:MapMark[] = [];
 	const seen = new Set<string>();
 
@@ -220,6 +226,15 @@ function collectMarks(world:World, npcID:string, detail:boolean, bounds:Bounds):
 
 	const self = world.findByID(npcID);
 	add(self, 'you', YOU_SYMBOL);
+	if (!self && origin && inView(origin.x, origin.z, bounds)) {
+		out.push({
+			symbol: YOU_SYMBOL,
+			description: 'you',
+			x: origin.x,
+			y: origin.z,
+		});
+		seen.add('you');
+	}
 
 	world.forEachComponent(HumanBody, (_body, go) => {
 		if (go.id === npcID || !world.npcCanSee(go)) {

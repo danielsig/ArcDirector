@@ -29,6 +29,15 @@ export type SeenObject = {
 	attachMode?:'on' | 'in' | 'worn' | 'held';
 	/** Compound phrase from a reduce hit. Host snapshots omit this. */
 	label?:string;
+	/** Object ids folded into a reduce compound. Host snapshots omit this. */
+	claimedIDs?:string[];
+};
+
+/** One irreducible phrase `formatSight` cannot union further. */
+export type SightClause = {
+	text:string;
+	claimedIDs:string[];
+	ambient?:boolean;
 };
 
 export type Sight = {
@@ -46,6 +55,10 @@ export type SightOpts = {
 	lodLayers?:LodLayer[];
 	relationships?:RelationshipStringifier[];
 	pluralize?:(word:string)=>string;
+	/** Leftover distances read as `Door 10 paces from Mira` instead of bearing. */
+	fromName?:string;
+	/** Skip the ambient sentence (hive merge already kept one). */
+	skipAmbient?:boolean;
 };
 
 export type LodCtx = DescribeCtx & {

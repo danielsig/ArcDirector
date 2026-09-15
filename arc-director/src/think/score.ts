@@ -47,11 +47,11 @@ export function actionThinkScore(
 	return base;
 }
 
-export function waitForOf(step:Step):string {
+export function waitUntilOf(step:Step):string {
 	if (step.verb !== 'wait') {
 		return '';
 	}
-	return typeof step.args.for === 'string' ? step.args.for.replace(/\s+/g, ' ').trim() : '';
+	return typeof step.args.until === 'string' ? step.args.until.replace(/\s+/g, ' ').trim() : '';
 }
 
 function stepWarrant(step:Step, extra?:Record<string, number>):number {
@@ -62,7 +62,7 @@ function stepWarrant(step:Step, extra?:Record<string, number>):number {
 	return actionThinkScore(step.verb, true, extra);
 }
 
-/** Highest score among verbs after the last wait(for). Failures still floor at 0.3. */
+/** Highest score among verbs after the last wait(until). Failures still floor at 0.3. */
 export function planActionScore(
 	plan:ActionPlan,
 	ok = true,
@@ -71,12 +71,14 @@ export function planActionScore(
 	const steps:Step[] = [];
 	let cur:ActionPlan | undefined = plan;
 	while (cur) {
-		steps.push(cur.head);
+		if (cur.head) {
+			steps.push(cur.head);
+		}
 		cur = cur.then?.plan;
 	}
 	let start = 0;
 	for (let i = 0; i < steps.length; i++) {
-		if (waitForOf(steps[i])) {
+		if (waitUntilOf(steps[i])) {
 			start = i + 1;
 		}
 	}
@@ -115,7 +117,9 @@ export function planActionVerbs(plan:ActionPlan):string[] {
 	const verbs:string[] = [];
 	let cur:ActionPlan | undefined = plan;
 	while (cur) {
-		verbs.push(cur.head.verb);
+		if (cur.head) {
+			verbs.push(cur.head.verb);
+		}
 		cur = cur.then?.plan;
 	}
 	return verbs;

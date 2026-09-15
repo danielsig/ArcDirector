@@ -17,9 +17,14 @@ import {
 	type NativeFn,
 } from './types.js';
 
+function listCapOf(ctx:EvalCtx):number {
+	return ctx.catalog.listCap ?? LIST_CAP;
+}
+
 const RELATIONS = new Set([
 	'distance', 'isNear', 'isReachable', 'isApproaching', 'isDeparting', 'hasSightline',
 	'isFacing', 'isBehind', 'facing', 'wasJustFacing', 'hasJustSeen', 'hasLostSight',
+	'manhattan', 'chebyshev', 'inSquare',
 ]);
 
 function identLookup(name:string, ctx:EvalCtx):ExprVal {
@@ -129,7 +134,7 @@ function evalAst(ast:Ast, ctx:EvalCtx):ExprVal {
 			return identLookup(ast.name, ctx);
 		case 'array': {
 			const items = ast.items.map((x) => evalAst(x, ctx));
-			return capList(items);
+			return capList(items, listCapOf(ctx));
 		}
 		case 'lambda':
 			return { kind: 'lambda', params: ast.params, body: ast.body };
@@ -335,14 +340,14 @@ export const builtins:Record<string, NativeFn> = {
 		if (!list || fn?.kind !== 'lambda') {
 			throw new ExprError('map(list, fn)');
 		}
-		return capList(list.map((x) => applyLambda(fn, [x], ctx)));
+		return capList(list.map((x) => applyLambda(fn, [x], ctx)), listCapOf(ctx));
 	},
 	filter(args, ctx) {
 		const list = asList(args[0]);
 		if (!list) {
 			throw new ExprError('filter needs a list');
 		}
-		return capList(predOrNeedle(list, args[1], ctx));
+		return capList(predOrNeedle(list, args[1], ctx), listCapOf(ctx));
 	},
 	find(args, ctx) {
 		const list = asList(args[0]);
@@ -386,7 +391,7 @@ export const builtins:Record<string, NativeFn> = {
 		}
 		const keyed = list.map((x) => ({ x, k: asNum(applyLambda(fn, [x], ctx)) ?? 0 }));
 		keyed.sort((a, b) => a.k - b.k);
-		return capList(keyed.map((r) => r.x));
+		return capList(keyed.map((r) => r.x), listCapOf(ctx));
 	},
 	max(args) {
 		return extrema(args, true);
@@ -542,7 +547,7 @@ export function evaluate(expr:string, catalog:Catalog):EvalResult {
 		const { ast } = parse(expr);
 		const ctx:EvalCtx = { catalog, env: new Map(), nodes: 0 };
 		const value = evalAst(ast, ctx);
-		if (value.kind === 'list' && value.value.length > LIST_CAP) {
+		if (value.kind === 'list' && value.value.length > (catalog.listCap ?? LIST_CAP)) {
 			throw new ExprError('list cap', 'capTie');
 		}
 		return { value };

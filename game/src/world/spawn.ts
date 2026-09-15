@@ -24,10 +24,10 @@ import {
 	Vitals,
 	Wallet,
 	Merchant,
-	Crowd,
-	CrowdExit,
+	MarketNPC,
+	MarketGate,
 	Companion,
-	type CrowdKind,
+	type MarketNPCKind,
 } from '../engine/components';
 import { MeshRenderer } from '../engine/MeshRenderer';
 import { HeldTorchLight } from '../engine/systems';
@@ -157,7 +157,7 @@ function spawnDoor(world:World, chunk:Chunk, ent:ChunkEntity):void {
 	lock.locked = ent.locked ?? true;
 	go.addComponent(new MeshRenderer()).meshID = 'door';
 	if (ent.exit) {
-		go.addComponent(new CrowdExit());
+		go.addComponent(new MarketGate());
 	}
 	if (ent.name) {
 		const named = go.addComponent(new Named());
@@ -480,7 +480,7 @@ export type NPCSpawnOpts = {
 	packLoot?:{ defID:string; name:string; count?:number }[];
 	wallet?:number;
 	merchant?:{ specialty:string; ask:number; floor:number };
-	crowd?:{ kind:CrowdKind; wants:string[]; leaveGate?:string };
+	marketNPC?:{ kind:MarketNPCKind; wants:string[]; leaveGate?:string };
 	companion?:boolean;
 };
 
@@ -544,11 +544,11 @@ export function spawnNPC(world:World, chunk:Chunk, opts:NPCSpawnOpts):GameObject
 		shop.ask = opts.merchant.ask;
 		shop.floor = opts.merchant.floor;
 	}
-	if (opts.crowd) {
-		const crowd = go.addComponent(new Crowd());
-		crowd.kind = opts.crowd.kind;
-		crowd.wants = [...opts.crowd.wants];
-		crowd.leaveGate = opts.crowd.leaveGate ?? '';
+	if (opts.marketNPC) {
+		const npc = go.addComponent(new MarketNPC());
+		npc.kind = opts.marketNPC.kind;
+		npc.wants = [...opts.marketNPC.wants];
+		npc.leaveGate = opts.marketNPC.leaveGate ?? '';
 	}
 	if (opts.companion) {
 		go.addComponent(new Companion());

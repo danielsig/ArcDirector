@@ -13,10 +13,11 @@ import { MemoryStore, mergeTags, nameTags, type MemoryRecord } from '../memory/s
 import type { Sense, ToolSpec, Kit, KitSource } from './types.js';
 import { parseMapZoom, stampMap, isMapSnapshot, DEFAULT_YOU_SYMBOL, type MapPrev, type MapSense } from './map.js';
 import { planRepairHint, sayRangeHint, stablePrefix, volatileBlock } from './prompt.js';
-import { runPlan, deferThinks, THINK_ABOUT_CAP } from './run.js';
+import { runPlan, deferThinks, createPlanSession, DEFAULT_COOLDOWN, THINK_ABOUT_CAP, type PlanSession } from './run.js';
+import { firstStep } from '../action/types.js';
 import type { SayTo, TalkNet } from './talk.js';
 import type { AgentEvent, AgentIdentity, Goal, WatchInput, Watches } from './types.js';
-import { waitForOf, type MindQueue } from '../think/queue.js';
+import { waitUntilOf, type MindQueue } from '../think/queue.js';
 import {
 	applyWatchOps,
 	asWatches,
@@ -29,6 +30,13 @@ import {
 	watchExprs,
 	watchOpsFromPlan,
 } from './watch.js';
+import {
+	asFocusList,
+	DEFAULT_MAX_SIGHT_FOCUS,
+	effectiveSightFocus,
+	extrasWithoutPinnedFocus,
+	mergePinnedFocus,
+} from './focus.js';
 
 export type AgentJSON = {
 	id:string;
@@ -39,6 +47,11 @@ export type AgentJSON = {
 	watches?:WatchInput;
 	pinnedWatches?:WatchInput;
 	watchesWritable?:boolean;
+	pinnedSightFocus?:string[];
+	sightFocus?:string[];
+	sightFocusWritable?:boolean;
+	maxSightFocus?:number;
+	sightLimit?:number;
 	lastResult?:ActionResult;
 	lastPlan?:ActionPlan;
 	lastTacticalAt?:number;
@@ -58,8 +71,11 @@ export type AgentDeps<HostCtx = unknown> = {
 	verbs:VerbRegistry;
 	senses?:Record<string, Sense<HostCtx>>;
 	tools?:Record<string, ToolSpec<HostCtx>>;
-	context:()=>HostCtx;
-	execute?:(step:Step, ctx:HostCtx)=>Promise<ActionResult>;
+	context:()=>HostCtx | undefined;
+	execute?:(step:Step, ctx:HostCtx | undefined, actorID?:string)=>Promise<ActionResult>;
+	abortPlan?:(id:string)=>void;
+	/** Host cooldown in game seconds after a handler pops or aborts. Default 8. */
+	cooldown?:number;
 	/** When `execute` is set, `tick` runs the plan unless this is false. */
 	autoEnact?:boolean;
 	queue?:MindQueue;
@@ -90,6 +106,11 @@ export type AgentDeps<HostCtx = unknown> = {
 	watches?:WatchInput;
 	pinnedWatches?:WatchInput;
 	watchesWritable?:boolean;
+	pinnedSightFocus?:string[];
+	sightFocus?:string[];
+	sightFocusWritable?:boolean;
+	maxSightFocus?:number;
+	sightLimit?:number;
 	/**
 	 * Object or `(ctx) => kit`. Omit = all catalog verbs and all registered senses / tools (Agent tests).
 	 * Director always passes a kit (`{}` if the spec omitted it).
@@ -143,9 +164,12 @@ export class Agent<HostCtx = unknown> {
 	readonly senses:Record<string, Sense<HostCtx>>;
 	readonly tools:Record<string, ToolSpec<HostCtx>>;
 	readonly provider:InferenceProvider;
-	readonly context:()=>HostCtx;
-	readonly execute?:(step:Step, ctx:HostCtx)=>Promise<ActionResult>;
+	readonly context:()=>HostCtx | undefined;
+	readonly execute?:(step:Step, ctx:HostCtx | undefined, actorID?:string)=>Promise<ActionResult>;
+	readonly abortPlan?:(id:string)=>void;
+	cooldown:number;
 	readonly autoEnact:boolean;
+	planSession:PlanSession | null = null;
 	readonly queue:MindQueue | undefined;
 	stalled?:(result:ActionResult)=>boolean;
 	model:string;
@@ -166,6 +190,11 @@ export class Agent<HostCtx = unknown> {
 	watches:Watches;
 	pinnedWatches:Watches;
 	watchesWritable:boolean;
+	pinnedSightFocus:string[];
+	sightFocus:string[];
+	sightFocusWritable:boolean;
+	maxSightFocus:number;
+	sightLimit:number | undefined;
 	/** Object or callback. Assign a new one any time. Fetched every tick. */
 	kit:KitSource<HostCtx> | undefined;
 	private currentKit:Kit = {};
@@ -178,7 +207,7 @@ export class Agent<HostCtx = unknown> {
 	lastStrategicAt = 0;
 	lastIntrusionAt = Number.NEGATIVE_INFINITY;
 	livePlan = false;
-	private now = 0;
+	protected now = 0;
 	private readonly pendingEvents:AgentEvent[] = [];
 	private recent:string[] = [];
 	private recentSummary = '';
@@ -199,6 +228,8 @@ export class Agent<HostCtx = unknown> {
 		this.provider = opts.provider;
 		this.context = opts.context;
 		this.execute = opts.execute;
+		this.abortPlan = opts.abortPlan;
+		this.cooldown = opts.cooldown ?? DEFAULT_COOLDOWN;
 		this.autoEnact = opts.autoEnact ?? true;
 		this.queue = opts.queue;
 		this.stalled = opts.stalled;
@@ -220,6 +251,14 @@ export class Agent<HostCtx = unknown> {
 		this.pinnedWatches = asWatches(opts.pinnedWatches);
 		this.watches = extrasWithoutPins(asWatches(opts.watches), this.pinnedWatches);
 		this.watchesWritable = opts.watchesWritable ?? true;
+		this.pinnedSightFocus = asFocusList(opts.pinnedSightFocus, Number.POSITIVE_INFINITY);
+		this.maxSightFocus = opts.maxSightFocus ?? DEFAULT_MAX_SIGHT_FOCUS;
+		this.sightFocus = extrasWithoutPinnedFocus(
+			asFocusList(opts.sightFocus, this.maxSightFocus),
+			this.pinnedSightFocus,
+		);
+		this.sightFocusWritable = opts.sightFocusWritable ?? true;
+		this.sightLimit = opts.sightLimit;
 		this.kit = opts.kit;
 		if (this.talk) {
 			this.talk.attach(this);
@@ -238,7 +277,8 @@ export class Agent<HostCtx = unknown> {
 		}
 		if (typeof src === 'function') {
 			try {
-				this.currentKit = src(this.context()) ?? {};
+				const ctx = this.context();
+				this.currentKit = ctx !== undefined ? (src(ctx) ?? {}) : {};
 			}
 			catch {
 				this.currentKit = {};
@@ -302,6 +342,10 @@ export class Agent<HostCtx = unknown> {
 		this.pendingEvents.push({ ...event, at: event.at ?? this.now });
 	}
 
+	stamp(now:number):void {
+		this.now = now;
+	}
+
 	/** Unabsorbed `HeardSpeech`. Cleared after a tactical think. */
 	hasHeard():boolean {
 		return this.pendingEvents.some((e) => e.kind === 'HeardSpeech');
@@ -315,7 +359,7 @@ export class Agent<HostCtx = unknown> {
 	}
 
 	/** Hosts that run the plan themselves still need this for remember / think / set_goal / set_identity. */
-	async perform(step:Step, ctx:HostCtx = this.context()):Promise<ActionResult> {
+	async perform(step:Step, ctx:HostCtx | undefined = this.context()):Promise<ActionResult> {
 		return this.runStep(step, ctx);
 	}
 
@@ -339,24 +383,33 @@ export class Agent<HostCtx = unknown> {
 		this.syncQueue(result);
 	}
 
-	/** Walk a plan (world verbs via `execute`). Arms wait(for), then notes the queue. */
+	/** Walk a plan (world verbs via `execute`). Arms wait(until), then notes the queue. */
 	async enact(plan:ActionPlan):Promise<ActionResult> {
 		this.livePlan = true;
 		this.planIndex = 0;
 		this.queue?.beginPlan(this.id, plan);
+		this.planSession = createPlanSession({
+			cooldown: this.cooldown,
+			now: () => this.now,
+			catalog: () => {
+				const ctx = this.context();
+				return ctx && this.catalog ? this.catalog(ctx) : undefined;
+			},
+			abortHost: () => this.abortPlan?.(this.id),
+		});
 		try {
-			const ctx = this.context();
 			let i = 0;
 			const result = await runPlan(plan, (step) => {
 				this.planIndex = i;
 				i += 1;
-				return this.runStep(step, ctx);
-			});
+				return this.runStep(step, this.context());
+			}, { session: this.planSession });
 			this.ingestResult(result);
 			return result;
 		}
 		finally {
 			this.livePlan = false;
+			this.planSession = null;
 			this.queue?.endPlan(this.id);
 		}
 	}
@@ -431,6 +484,11 @@ export class Agent<HostCtx = unknown> {
 			watches: copyWatches(this.watches),
 			pinnedWatches: copyWatches(this.pinnedWatches),
 			watchesWritable: this.watchesWritable,
+			pinnedSightFocus: [...this.pinnedSightFocus],
+			sightFocus: [...this.sightFocus],
+			sightFocusWritable: this.sightFocusWritable,
+			maxSightFocus: this.maxSightFocus,
+			sightLimit: this.sightLimit,
 			lastResult: this.lastResult ? { ...this.lastResult } : undefined,
 			lastPlan: this.lastPlan,
 			lastTacticalAt: Number.isFinite(this.lastTacticalAt) ? this.lastTacticalAt : undefined,
@@ -458,28 +516,45 @@ export class Agent<HostCtx = unknown> {
 			goals: json.goals,
 			memory: MemoryStore.fromJSON(json.memories),
 		});
-		agent.memory.maxEpisodic = json.maxEpisodic;
-		agent.maxGoals = json.maxGoals;
-		agent.lastResult = json.lastResult;
-		agent.lastPlan = json.lastPlan;
-		agent.lastTacticalAt = json.lastTacticalAt ?? Number.NEGATIVE_INFINITY;
-		agent.lastStrategicAt = json.lastStrategicAt ?? 0;
-		agent.lastIntrusionAt = json.lastIntrusionAt ?? Number.NEGATIVE_INFINITY;
-		agent.livePlan = json.livePlan;
-		const hostPins = asWatches(deps.pinnedWatches);
-		const jsonPins = asWatches(json.pinnedWatches);
-		agent.pinnedWatches = mergePinnedWatches(hostPins, jsonPins);
-		agent.watches = extrasWithoutPins(asWatches(json.watches), agent.pinnedWatches);
-		agent.watchesWritable = json.watchesWritable ?? true;
-		for (const e of json.events ?? []) {
-			agent.pendingEvents.push(e);
-		}
-		agent.recent = json.recent ? [...json.recent] : [];
-		agent.recentSummary = json.recentSummary ?? '';
-		agent.recentAbsorbed = agent.pendingEvents.length;
-		agent.pendingAbout = json.thinkAbout;
-		agent.lastVerb = json.lastVerb;
+		agent.loadJSON(json, deps);
 		return agent;
+	}
+
+	protected loadJSON(json:AgentJSON, deps?:AgentDeps<HostCtx>):void {
+		this.memory.maxEpisodic = json.maxEpisodic;
+		this.maxGoals = json.maxGoals;
+		this.lastResult = json.lastResult;
+		this.lastPlan = json.lastPlan;
+		this.lastTacticalAt = json.lastTacticalAt ?? Number.NEGATIVE_INFINITY;
+		this.lastStrategicAt = json.lastStrategicAt ?? 0;
+		this.lastIntrusionAt = json.lastIntrusionAt ?? Number.NEGATIVE_INFINITY;
+		this.livePlan = json.livePlan;
+		const hostPins = asWatches(deps?.pinnedWatches);
+		const jsonPins = asWatches(json.pinnedWatches);
+		this.pinnedWatches = mergePinnedWatches(hostPins, jsonPins);
+		this.watches = extrasWithoutPins(asWatches(json.watches), this.pinnedWatches);
+		this.watchesWritable = json.watchesWritable ?? true;
+		const hostFocus = asFocusList(deps?.pinnedSightFocus, Number.POSITIVE_INFINITY);
+		const jsonFocus = asFocusList(json.pinnedSightFocus, Number.POSITIVE_INFINITY);
+		this.pinnedSightFocus = mergePinnedFocus(hostFocus, jsonFocus);
+		this.maxSightFocus = json.maxSightFocus ?? deps?.maxSightFocus ?? DEFAULT_MAX_SIGHT_FOCUS;
+		this.sightFocus = extrasWithoutPinnedFocus(
+			asFocusList(json.sightFocus, this.maxSightFocus),
+			this.pinnedSightFocus,
+		);
+		this.sightFocusWritable = json.sightFocusWritable ?? true;
+		this.sightLimit = json.sightLimit ?? deps?.sightLimit;
+		for (const e of json.events ?? []) {
+			this.pendingEvents.push(e);
+		}
+		this.recent = json.recent ? [...json.recent] : [];
+		this.recentSummary = json.recentSummary ?? '';
+		this.recentAbsorbed = this.pendingEvents.length;
+		this.pendingAbout = json.thinkAbout;
+		this.lastVerb = json.lastVerb;
+		if (json.maxGoals !== undefined) {
+			this.trimGoals();
+		}
 	}
 
 	private tacticalDue(gameTime:number):boolean {
@@ -559,7 +634,11 @@ export class Agent<HostCtx = unknown> {
 		}
 	}
 
-	private trimGoals():void {
+	protected extraVolatile():string {
+		return '';
+	}
+
+	protected trimGoals():void {
 		if (this.goals.length <= this.maxGoals) {
 			return;
 		}
@@ -576,7 +655,12 @@ export class Agent<HostCtx = unknown> {
 			if (!this.senseAllowed(name)) {
 				continue;
 			}
-			sensed[name] = sense.gather(ctx);
+			try {
+				sensed[name] = sense.gather(ctx as HostCtx);
+			}
+			catch {
+				continue;
+			}
 		}
 		if (this.talk) {
 			sensed.earshot = this.earshotText();
@@ -593,7 +677,7 @@ export class Agent<HostCtx = unknown> {
 			canSeeMap: this.seeMapOn() && this.toolAllowed('see_map'),
 			youSymbol: this.youSymbol(),
 		});
-		const user = volatileBlock({
+		const user = [volatileBlock({
 			senses: sensed,
 			intrusion,
 			lastResult: this.lastResult,
@@ -603,10 +687,13 @@ export class Agent<HostCtx = unknown> {
 			watches: this.watches,
 			pinnedWatches: this.pinnedWatches,
 			watchesWritable: this.watchesWritable,
+			pinnedSightFocus: this.pinnedSightFocus,
+			sightFocus: this.sightFocus,
+			sightFocusWritable: this.sightFocusWritable,
 			recent: this.recent,
 			recentSummary: this.recentSummary,
 			thinkAbout: this.pendingAbout,
-		});
+		}), this.extraVolatile()].filter(Boolean).join('\n\n');
 		const messages:ChatMessage[] = [
 			{ role: 'system', content: system },
 			{ role: 'user', content: user },
@@ -943,8 +1030,23 @@ export class Agent<HostCtx = unknown> {
 		this.watches = applyWatchOps(this.watches, this.pinnedWatches, ops);
 	}
 
+	effectiveSightFocus():string[] {
+		return effectiveSightFocus(this.pinnedSightFocus, this.sightFocus);
+	}
+
+	private applySightFocus(raw:unknown):void {
+		if (!this.sightFocusWritable || !isRecord(raw) || raw.sightFocus === undefined) {
+			return;
+		}
+		this.sightFocus = extrasWithoutPinnedFocus(
+			asFocusList(raw.sightFocus, this.maxSightFocus),
+			this.pinnedSightFocus,
+		);
+	}
+
 	private applyMind(raw:unknown):void {
 		this.applyWatches(raw);
+		this.applySightFocus(raw);
 		if (!isRecord(raw)) {
 			return;
 		}
@@ -1101,7 +1203,7 @@ export class Agent<HostCtx = unknown> {
 		}
 		if (this.seeMapOn() && !tools.see_map) {
 			tools.see_map = {
-				description: 'Pictogram of the land. Prefer the English scene. If you are looking for something unnamed, wander(for) with args.for a watch-expr string. Only call this if you still cannot pick a go_to or wander. A second look soon after, without moving, returns the same legend and no new picture.',
+				description: 'Pictogram of the land. Prefer the English scene. If you are looking for something unnamed, wander(until) with args.until a watch-expr string. Only call this if you still cannot pick a go_to or wander. A second look soon after, without moving, returns the same legend and no new picture.',
 				parameters: {
 					type: 'object',
 					additionalProperties: false,
@@ -1187,7 +1289,7 @@ export class Agent<HostCtx = unknown> {
 		return `In talking range: ${names.join(', ')}. say(to) only those names; go_to anyone else first. Far-off speech is muffled.`;
 	}
 
-	private sayToOf(args:Record<string, string | number | boolean | string[]>):SayTo | undefined {
+	protected sayToOf(args:Step['args']):SayTo | undefined {
 		const to = args.to;
 		if (Array.isArray(to)) {
 			const names = to.filter((x):x is string => typeof x === 'string' && x.trim().length > 0);
@@ -1200,10 +1302,11 @@ export class Agent<HostCtx = unknown> {
 	}
 
 	private unreachableSay(plan:ActionPlan):{ reason:string; nearby:string[] } | undefined {
-		if (!this.talk || plan.head.verb !== 'say') {
+		const head = firstStep(plan);
+		if (!this.talk || head?.verb !== 'say') {
 			return undefined;
 		}
-		const check = this.talk.canSay(this.id, this.sayToOf(plan.head.args));
+		const check = this.talk.canSay(this.id, this.sayToOf(head.args));
 		if (check.ok) {
 			return undefined;
 		}
@@ -1278,7 +1381,10 @@ export class Agent<HostCtx = unknown> {
 		].slice(0, k);
 	}
 
-	private async runTool(name:string, rawArgs:string, ctx:HostCtx):Promise<unknown> {
+	private async runTool(name:string, rawArgs:string, ctx:HostCtx | undefined):Promise<unknown> {
+		if (ctx === undefined) {
+			return { error: 'no ctx' };
+		}
 		const spec = this.mergedTools()[name];
 		if (!spec) {
 			return { error: `unknown tool '${name}'` };
@@ -1330,7 +1436,7 @@ export class Agent<HostCtx = unknown> {
 		}
 	}
 
-	private async runStep(step:Step, ctx:HostCtx):Promise<ActionResult> {
+	private async runStep(step:Step, ctx:HostCtx | undefined):Promise<ActionResult> {
 		this.refreshKit();
 		if (!this.activeVerbs().has(step.verb)) {
 			return { ok: false, verb: step.verb, reason: `verb '${step.verb}' is not available` };
@@ -1394,7 +1500,7 @@ export class Agent<HostCtx = unknown> {
 		if (!this.execute) {
 			return { ok: false, verb: step.verb, reason: `host has no executor for ${step.verb}` };
 		}
-		const once = waitForOf(step);
+		const once = waitUntilOf(step);
 		if (once) {
 			this.queue?.armOnce(this.id, once);
 		}

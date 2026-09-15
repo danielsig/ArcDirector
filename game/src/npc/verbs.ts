@@ -9,7 +9,7 @@ import {
 	MillLever,
 	Named,
 	Companion,
-	Crowd,
+	MarketNPC,
 	Merchant,
 	Door,
 	Wanted,
@@ -96,7 +96,7 @@ export async function executeStep(host:GameHost, step:Step, ctx:HostCtx):Promise
 			if (bond) {
 				return npc.follow(bond.targetID);
 			}
-			const until = (typeof step.args.for === 'string' ? step.args.for : typeof step.args.until === 'string' ? step.args.until : '')
+			const until = (typeof step.args.until === 'string' ? step.args.until : '')
 				.replace(/\s+/g, ' ')
 				.trim();
 			const seconds = typeof step.args.seconds === 'number'
@@ -125,7 +125,11 @@ export async function executeStep(host:GameHost, step:Step, ctx:HostCtx):Promise
 			return { ...result, verb: 'wander', reason: saw || result.reason };
 		}
 		case 'wait': {
-			return npc.wait(typeof step.args.seconds === 'number' ? step.args.seconds : 1);
+			const until = typeof step.args.until === 'string' ? step.args.until : '';
+			const seconds = typeof step.args.seconds === 'number'
+				? step.args.seconds
+				: until ? 20 : 1;
+			return npc.wait(seconds, until ? () => wanderUntilMet(ctx, host.posedEvents, until) : undefined);
 		}
 		case 'say': {
 			const text = String(step.args.text ?? '');
@@ -321,7 +325,7 @@ async function doPickUp(host:GameHost, ctx:HostCtx, npc:NPCInput, name:string):P
 			reason: `${name} is a sluice, not loot. Only Miller uses MillCrank on MillLever`,
 		};
 	}
-	if (named?.getComponent(HumanBody) || named?.getComponent(Crowd)) {
+	if (named?.getComponent(HumanBody) || named?.getComponent(MarketNPC)) {
 		return { ok: false, verb: 'pick_up', reason: `cannot pick up ${name}` };
 	}
 	if (named) {
@@ -528,9 +532,9 @@ export function settleSell(
 	if (price === undefined || price <= 0) {
 		return { ok: false, verb: 'sell', reason: `${itemName} has no price — name an ask` };
 	}
-	const crowd = buyer.getComponent(Crowd);
-	if (crowd && crowd.wants.length > 0) {
-		const want = crowd.wants.some((w) => compactName(w) === compactName(itemName));
+	const npc = buyer.getComponent(MarketNPC);
+	if (npc && npc.wants.length > 0) {
+		const want = npc.wants.some((w) => compactName(w) === compactName(itemName));
 		if (!want && toName !== 'Player') {
 			return { ok: false, verb: 'sell', reason: `${toName} does not want ${itemName}` };
 		}
@@ -640,7 +644,7 @@ export async function doSteal(
 	if (!fromName) {
 		return { ok: false, verb: 'steal', reason: 'steal from whom?' };
 	}
-	if (ctx.actor.getComponent(Crowd)?.kind === 'guard') {
+	if (ctx.actor.getComponent(MarketNPC)?.kind === 'guard') {
 		return { ok: false, verb: 'steal', reason: 'the watch does not steal' };
 	}
 	const victim = findBody(ctx.world, fromName);
@@ -679,7 +683,7 @@ export function reportTheft(
 	if (!host.hooks.allowTheft) {
 		return;
 	}
-	if (thief.getComponent(Crowd)?.kind === 'guard') {
+	if (thief.getComponent(MarketNPC)?.kind === 'guard') {
 		return;
 	}
 	let mark = thief.getComponent(Wanted);

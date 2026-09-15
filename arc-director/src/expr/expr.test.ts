@@ -440,4 +440,51 @@ describe('stringify', () => {
 		});
 		assert.equal(stringifyVal({ kind: 'entity', value: marked }, hosted), 'item:Latch');
 	});
+
+	it('manhattan / chebyshev / inSquare use host.at', () => {
+		const host = world({
+			at: (who) => {
+				const p = who as Partial<Posed>;
+				return { x: p.x ?? 0, z: p.z ?? 0 };
+			},
+		});
+		assert.equal(num('manhattan(me, A)', host), 5);
+		assert.equal(num('chebyshev(me, B)', host), 12);
+		assert.equal(bool('inSquare(me, A, 5)', host), true);
+		assert.equal(bool('inSquare(me, B, 5)', host), false);
+	});
+
+	it('isBusy / doing read entity fields; listCap lifts selector cap', () => {
+		const mira = dummyEntity('Mira', {
+			tags: ['agent'],
+			fields: {
+				busy: { kind: 'bool', value: true },
+				verb: { kind: 'string', value: 'go_to' },
+			},
+		});
+		const host = world({
+			bindings: {
+				...world().bindings,
+				Mira: { kind: 'entity', value: mira },
+			},
+		});
+		assert.equal(bool('isBusy(Mira)', host), true);
+		assert.equal(bool('doing(Mira, "go_to")', host), true);
+		assert.equal(bool('doing(Mira, "wait")', host), false);
+		const rows = Array.from({ length: 40 }, (_, i) => dummyEntity(`U${i}`, { tags: ['agent'] }));
+		const cat = buildCatalog({
+			...world(),
+			listCap: 40,
+			bindings: {
+				units: {
+					kind: 'list',
+					value: rows.map((e) => ({ kind: 'entity' as const, value: e })),
+				},
+			},
+		});
+		const r = evaluate('units', cat);
+		assert.equal(r.error, undefined);
+		assert.equal(r.value.kind, 'list');
+		assert.equal(r.value.kind === 'list' ? r.value.value.length : 0, 40);
+	});
 });

@@ -154,7 +154,7 @@ describe('ArcDirector', () => {
 		assert.throws(() => director.withPriorityQueue(), /already started/);
 		assert.throws(() => director.withContext(() => ({ paragraph: '', id: '' })), /already started/);
 		assert.throws(() => director.withDefaultKit({ verbs: [] }), /already started/);
-		assert.throws(() => director.withSight(() => ({ self: { id: 'Watcher', at: [0, 0] }, objects: [] })), /already started/);
+		assert.throws(() => director.withSight({ look: () => ({ self: { id: 'Watcher', at: [0, 0] }, objects: [] }) }), /already started/);
 		assert.throws(() => director.withInventory(() => ({})), /already started/);
 		director.dispose();
 	});
@@ -520,7 +520,7 @@ describe('ArcDirector', () => {
 			.withFakeInference(goToNamedInteractable())
 			.addStockVerbs()
 			.withDefaultKit(KIT)
-			.withSight(() => sight)
+			.withSight({ look: () => sight })
 			.withContext((id) => ({ paragraph: scene(), id }))
 			.addAgent({
 				id: 'Captain',
@@ -547,7 +547,7 @@ describe('ArcDirector', () => {
 			.withFakeInference(goToNamedInteractable())
 			.addStockVerbs()
 			.withDefaultKit(KIT)
-			.withSight(() => sight)
+			.withSight({ look: () => sight })
 			.withLineOfSight((_a, b) => b !== 'HiddenLoot')
 			.withContext((id) => ({ paragraph: scene(), id }))
 			.addAgent({

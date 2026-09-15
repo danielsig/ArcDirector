@@ -33,7 +33,7 @@ async function main():Promise<void> {
 			console.log(`host execute: ${call.verb}`, call.args);
 			return { ok: true, verb: call.verb };
 		})
-		.withSight(() => fixtureSight())
+		.withSight({ look: () => fixtureSight() })
 		.withContext(() => ({ paragraph }))
 		.addAgent({
 			id: 'Guard',

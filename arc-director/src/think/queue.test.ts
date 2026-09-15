@@ -237,13 +237,13 @@ describe('ThinkQueue', () => {
 		assert.equal(rows[0].reason, 'action');
 	});
 
-	it('wait(for) drops warrants before it; wait without for does not', () => {
+	it('wait(until) drops warrants before it; wait without until does not', () => {
 		const stealThenGo:ActionPlan = {
 			head: { verb: 'steal', args: { item: 'Loaf', from: 'Baker' } },
 			then: {
 				join: 'then',
 				plan: {
-					head: { verb: 'wait', args: { for: 'some(others.approaching())' } },
+					head: { verb: 'wait', args: { until: 'some(others.approaching())' } },
 					then: { join: 'then', plan: { head: { verb: 'go_to', args: { name: 'EastGate' } } } },
 				},
 			},
@@ -251,7 +251,7 @@ describe('ThinkQueue', () => {
 		assert.equal(planActionScore(stealThenGo), ACTION_THINK_SCORES.go_to);
 		assert.equal(planActionScore({
 			head: { verb: 'steal', args: { item: 'Loaf', from: 'Baker' } },
-			then: { join: 'then', plan: { head: { verb: 'wait', args: { for: 'hasHeard' } } } },
+			then: { join: 'then', plan: { head: { verb: 'wait', args: { until: 'hasHeard' } } } },
 		}), 0);
 		assert.equal(planActionScore({
 			head: { verb: 'steal', args: { item: 'Loaf', from: 'Baker' } },
@@ -259,7 +259,7 @@ describe('ThinkQueue', () => {
 		}), ACTION_THINK_SCORES.steal);
 		assert.equal(planActionScore({
 			head: { verb: 'steal', args: { item: 'Loaf', from: 'Baker' } },
-			then: { join: 'then', plan: { head: { verb: 'wait', args: { for: 'hasHeard' } } } },
+			then: { join: 'then', plan: { head: { verb: 'wait', args: { until: 'hasHeard' } } } },
 		}, false), 0.3);
 	});
 

@@ -31,6 +31,9 @@ function perception():{ senses:Record<string, Sense<FixtureCtx>>; tools:Record<s
 
 function walk(plan:ActionPlan, visit:(p:ActionPlan)=>void):void {
 	visit(plan);
+	if (plan.group) {
+		walk(plan.group, visit);
+	}
 	if (plan.then) {
 		walk(plan.then.plan, visit);
 	}
@@ -39,10 +42,14 @@ function walk(plan:ActionPlan, visit:(p:ActionPlan)=>void):void {
 function isValidGoTo(plan:ActionPlan):boolean {
 	let ok = false;
 	walk(plan, (p) => {
-		if (p.head.verb === 'go_to' && typeof p.head.args.name === 'string' && NAMES.has(p.head.args.name)) {
+		const head = p.head;
+		if (!head) {
+			return;
+		}
+		if (head.verb === 'go_to' && typeof head.args.name === 'string' && NAMES.has(head.args.name)) {
 			ok = true;
 		}
-		for (const key of Object.keys(p.head.args)) {
+		for (const key of Object.keys(head.args)) {
 			if (key === 'x' || key === 'z' || key === 'y') {
 				ok = false;
 			}

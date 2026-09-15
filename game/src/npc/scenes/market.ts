@@ -1,5 +1,5 @@
 import { pascalCase, STOCK_VERBS, type AgentSpec, ArcDirector } from 'arc-director';
-import { Crowd, CrowdExit, Merchant, Wanted } from '../../engine/components';
+import { MarketNPC, MarketGate, Merchant, Wanted } from '../../engine/components';
 import type { GameObject } from '../../engine/GameObject';
 import { compactName, distXZ, findCarried, itemMatchesName, tryInsert } from '../../items/inventory';
 import { dropItem, USE_RANGE } from '../../items/pickup';
@@ -9,7 +9,7 @@ import { bodyName, findBody } from '../names';
 import { takeOne, reportTheft } from '../verbs';
 import { showSpeech } from '../playerTalk';
 
-const nextCrowdAt = new WeakMap<GameHost, number>();
+const nextMarketNPCAt = new WeakMap<GameHost, number>();
 
 function stallOwner(host:GameHost, itemName:string):GameObject | undefined {
 	let owner:GameObject | undefined;
@@ -22,7 +22,7 @@ function stallOwner(host:GameHost, itemName:string):GameObject | undefined {
 }
 
 function afterPickUp(host:GameHost, actor:GameObject, name:string):void {
-	if (actor.getComponent(Crowd)?.kind === 'guard') {
+	if (actor.getComponent(MarketNPC)?.kind === 'guard') {
 		return;
 	}
 	const owner = stallOwner(host, name);
@@ -85,16 +85,16 @@ function catchThief(host:GameHost, guard:GameObject, thief:GameObject):void {
 		major: true,
 	});
 	host.world.setMessage(`${watch} caught ${who} stealing`);
-	const crowd = thief.getComponent(Crowd);
-	if (crowd?.kind === 'customer') {
-		crowd.wants = [];
-		crowd.leaving = true;
+	const npc = thief.getComponent(MarketNPC);
+	if (npc?.kind === 'customer') {
+		npc.wants = [];
+		npc.leaving = true;
 	}
 }
 
 function seizeNearby(host:GameHost):void {
-	host.world.forEachComponent(Crowd, (crowd, guard) => {
-		if (crowd.kind !== 'guard') {
+	host.world.forEachComponent(MarketNPC, (npc, guard) => {
+		if (npc.kind !== 'guard') {
 			return;
 		}
 		host.world.forEachComponent(Wanted, (mark, thief) => {
@@ -108,18 +108,18 @@ function seizeNearby(host:GameHost):void {
 	});
 }
 
-function tickCrowd(host:GameHost):void {
+function tickMarketNPC(host:GameHost):void {
 	seizeNearby(host);
 	const doomed:GameObject[] = [];
-	host.world.forEachComponent(CrowdExit, (_exit, gate) => {
-		host.world.forEachComponent(Crowd, (crowd, go) => {
-			if (crowd.kind !== 'customer' || crowd.wants.length > 0) {
+	host.world.forEachComponent(MarketGate, (_exit, gate) => {
+		host.world.forEachComponent(MarketNPC, (npc, go) => {
+			if (npc.kind !== 'customer' || npc.wants.length > 0) {
 				return;
 			}
 			if (go.getComponent(Wanted)?.enabled) {
 				return;
 			}
-			if (crowd.leaveGate && bodyName(gate) !== crowd.leaveGate) {
+			if (npc.leaveGate && bodyName(gate) !== npc.leaveGate) {
 				return;
 			}
 			if (distXZ(go, gate) <= USE_RANGE) {
@@ -130,11 +130,11 @@ function tickCrowd(host:GameHost):void {
 	for (const go of doomed) {
 		despawn(host, go);
 	}
-	const due = nextCrowdAt.get(host) ?? 12;
+	const due = nextMarketNPCAt.get(host) ?? 12;
 	if (host.world.time < due) {
 		return;
 	}
-	nextCrowdAt.set(host, host.world.time + 10 + Math.random() * 12);
+	nextMarketNPCAt.set(host, host.world.time + 10 + Math.random() * 12);
 	if (customerCount(host.world) >= 4) {
 		return;
 	}
@@ -148,7 +148,7 @@ function tickCrowd(host:GameHost):void {
 	host.pushEvent({
 		kind: 'Arrived',
 		text: `${spawned.seed.id} arrived from the street`,
-		tags: [spawned.seed.id, 'crowd'],
+		tags: [spawned.seed.id, 'market'],
 		major: true,
 	});
 	if (!host.arc?.ready) {
@@ -163,7 +163,7 @@ export function createDirector(host:GameHost):ArcDirector<HostCtx> {
 	host.hooks = {
 		allowTheft: true,
 		afterPickUp,
-		tickCrowd,
+		tickMarketNPC,
 	};
 	host.kit = { verbs: [...STOCK_VERBS, 'buy', 'sell', 'steal'] };
 	const d = host.configure(new ArcDirector<HostCtx>())

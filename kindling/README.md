@@ -204,7 +204,7 @@ RAF:
 2. **Collide.** Enabled, solid, non-trigger `BoxCollider` on an object that also has a `Rigidbody`:
    - tile AABB vs `World.sampleTerrain` when `tileSize > 0` (`blocked` cells)
    - other solid boxes (minimum translation on X or Z)
-   - **crowd**: both colliders `pad > 0` → shove along walk velocity (`CROWD_YIELD`), not a hard block
+   - **shove**: both colliders `pad > 0` → shove along walk velocity (`SHOVE_YIELD`), not a hard block
    - cliffs: `sampleTerrain` height / `climbable`; revert to previous XZ if the step is illegal
 3. **Ground.** `Rigidbody.grounded`: lerp Y toward `sampleTerrain.worldY` (skip if the rise exceeds `stepHeight`).
 

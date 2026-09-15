@@ -73,7 +73,7 @@ export {
 	actionThinkScore,
 	planActionScore,
 	thinkRecencyScale,
-	waitForOf,
+	waitUntilOf,
 } from './score.js';
 export {
 	DEFAULT_BATCH_THINKS,

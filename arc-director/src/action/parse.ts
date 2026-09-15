@@ -1,12 +1,15 @@
 import { extractJson } from '../json.js';
-import { asPlan } from './validate.js';
-import { ActionError, JOIN_SYMBOL, SYMBOL_JOIN, type ActionPlan, type Join, type Step } from './types.js';
+import { asPlan, isActionPlan } from './validate.js';
+import { ActionError, JOIN_SYMBOL, SYMBOL_JOIN, firstStep, type ActionPlan, type Join, type Step } from './types.js';
 import type { VerbRegistry } from './registry.js';
 import type { StepArg } from './validate.js';
 
 function formatArg(v:StepArg):string {
 	if (Array.isArray(v)) {
 		return v.join(',');
+	}
+	if (isActionPlan(v)) {
+		return formatPlan(v);
 	}
 	if (typeof v === 'string') {
 		if (/[\s,"()]/.test(v)) {
@@ -29,11 +32,21 @@ export function formatStep(step:Step):string {
 	return `${step.verb}(${inner})`;
 }
 
+function formatNode(plan:ActionPlan):string {
+	if (plan.group) {
+		return `(${formatPlan(plan.group)})`;
+	}
+	if (plan.head) {
+		return formatStep(plan.head);
+	}
+	return 'think()';
+}
+
 export function formatPlan(plan:ActionPlan):string {
-	let out = formatStep(plan.head);
+	let out = formatNode(plan);
 	let cur:ActionPlan | undefined = plan;
 	while (cur.then) {
-		out += ` ${JOIN_SYMBOL[cur.then.join]} ${formatStep(cur.then.plan.head)}`;
+		out += ` ${JOIN_SYMBOL[cur.then.join]} ${formatNode(cur.then.plan)}`;
 		cur = cur.then.plan;
 	}
 	return out;
@@ -65,23 +78,114 @@ function parseQuoted(s:string, i:number):{ value:string; next:number } {
 	throw new ActionError('unterminated string in plan text');
 }
 
+function parseBalanced(s:string, i:number):{ value:string; next:number } {
+	i = skipWs(s, i);
+	const start = i;
+	let depth = 0;
+	let quote:string | null = null;
+	let escape = false;
+	while (i < s.length) {
+		const c = s[i];
+		if (quote) {
+			if (escape) {
+				escape = false;
+				i += 1;
+				continue;
+			}
+			if (c === '\\') {
+				escape = true;
+				i += 1;
+				continue;
+			}
+			if (c === quote) {
+				quote = null;
+			}
+			i += 1;
+			continue;
+		}
+		if (c === '"' || c === "'") {
+			quote = c;
+			i += 1;
+			continue;
+		}
+		if (c === '(' || c === '[' || c === '{') {
+			depth += 1;
+			i += 1;
+			continue;
+		}
+		if (c === ')' || c === ']' || c === '}') {
+			if (depth === 0) {
+				break;
+			}
+			depth -= 1;
+			i += 1;
+			continue;
+		}
+		if (depth === 0 && c === ',') {
+			break;
+		}
+		i += 1;
+	}
+	return { value: s.slice(start, i).trim(), next: i };
+}
+
 function parseValue(s:string, i:number):{ value:StepArg; next:number } {
 	i = skipWs(s, i);
 	if (s[i] === '"' || s[i] === "'") {
 		return parseQuoted(s, i);
 	}
-	let j = i;
-	while (j < s.length && !/[\s,)=]/.test(s[j])) {
-		j += 1;
-	}
-	const raw = s.slice(i, j);
+	const parsed = parseBalanced(s, i);
+	const raw = parsed.value;
 	if (raw === 'true' || raw === 'false') {
-		return { value: raw === 'true', next: j };
+		return { value: raw === 'true', next: parsed.next };
 	}
 	if (/^-?\d+(\.\d+)?$/.test(raw)) {
-		return { value: Number(raw), next: j };
+		return { value: Number(raw), next: parsed.next };
 	}
-	return { value: raw, next: j };
+	return { value: raw, next: parsed.next };
+}
+
+function argBase(kind:string | undefined):string {
+	if (!kind) {
+		return '';
+	}
+	return kind.endsWith('?') ? kind.slice(0, -1) : kind;
+}
+
+function parsePlanAtom(s:string, i:number, registry:VerbRegistry):{ value:ActionPlan; next:number } {
+	i = skipWs(s, i);
+	if (s[i] === '(') {
+		const inner = parseNestedPlan(s, i + 1, registry);
+		const j = skipWs(s, inner.next);
+		if (s[j] !== ')') {
+			throw new ActionError('missing ) for grouped plan');
+		}
+		return { value: { head: { verb: 'group', args: {} }, group: inner.value }, next: j + 1 };
+	}
+	const step = parseStepText(s, i, registry);
+	return { value: { head: step.step }, next: step.next };
+}
+
+function parseNestedPlan(s:string, i:number, registry:VerbRegistry):{ value:ActionPlan; next:number } {
+	const first = parsePlanAtom(s, i, registry);
+	const plan:ActionPlan = first.value;
+	let pos = first.next;
+	let tail = plan;
+	while (true) {
+		const j = skipWs(s, pos);
+		if (j >= s.length || s[j] === ',' || s[j] === ')') {
+			break;
+		}
+		const join = parseJoin(s, pos);
+		if (!join) {
+			break;
+		}
+		const nxt = parsePlanAtom(s, join.next, registry);
+		tail.then = { join: join.join, plan: nxt.value };
+		tail = tail.then.plan;
+		pos = nxt.next;
+	}
+	return { value: plan, next: pos };
 }
 
 function parseStepText(s:string, i:number, registry:VerbRegistry):{ step:Step; next:number } {
@@ -115,21 +219,35 @@ function parseStepText(s:string, i:number, registry:VerbRegistry):{ step:Step; n
 				i = skipWs(s, i);
 				if (s[i] === '=') {
 					i += 1;
-					const parsed = parseValue(s, i);
-					args[ident] = parsed.value;
-					i = parsed.next;
+					if (argBase(spec.args[ident]) === 'plan') {
+						const parsed = parseNestedPlan(s, i, registry);
+						args[ident] = parsed.value;
+						i = parsed.next;
+					}
+					else {
+						const parsed = parseValue(s, i);
+						args[ident] = parsed.value;
+						i = parsed.next;
+					}
 				}
 				else {
 					i = nameStart;
-					const parsed = parseValue(s, i);
 					const keys = Object.keys(spec.args);
 					const key = keys[positional] ?? registry.firstRequiredArg(spec);
 					if (!key) {
 						throw new ActionError(`verb '${verb}' got an unexpected positional arg`);
 					}
-					args[key] = parsed.value;
+					if (argBase(spec.args[key]) === 'plan') {
+						const parsed = parseNestedPlan(s, i, registry);
+						args[key] = parsed.value;
+						i = parsed.next;
+					}
+					else {
+						const parsed = parseValue(s, i);
+						args[key] = parsed.value;
+						i = parsed.next;
+					}
 					positional += 1;
-					i = parsed.next;
 				}
 				i = skipWs(s, i);
 				if (s[i] === ',') {
@@ -165,25 +283,12 @@ function parseJoin(s:string, i:number):{ join:Join; next:number } | null {
 }
 
 export function parsePlanText(text:string, registry:VerbRegistry):ActionPlan {
-	const { step, next } = parseStepText(text, 0, registry);
-	const plan:ActionPlan = { head: step };
-	let i = next;
-	let tail = plan;
-	while (true) {
-		const join = parseJoin(text, i);
-		if (!join) {
-			break;
-		}
-		const nxt = parseStepText(text, join.next, registry);
-		tail.then = { join: join.join, plan: { head: nxt.step } };
-		tail = tail.then.plan;
-		i = nxt.next;
-	}
-	i = skipWs(text, i);
+	const parsed = parseNestedPlan(text, 0, registry);
+	const i = skipWs(text, parsed.next);
 	if (i < text.length) {
 		throw new ActionError(`unexpected trailing text: ${text.slice(i)}`);
 	}
-	return plan;
+	return parsed.value;
 }
 
 export function parsePlan(input:string | unknown, registry:VerbRegistry):ActionPlan {
@@ -201,10 +306,10 @@ export function parsePlan(input:string | unknown, registry:VerbRegistry):ActionP
 	return parsePlanText(trimmed, registry);
 }
 
-/** Last root `{"head"` in CoT. Nested `then.plan.head` is skipped. */
+/** Last root `{"head"` / `{"group"` in CoT. Nested `then.plan.head` is skipped. */
 function lastHeadJson(text:string):string | undefined {
 	let at = -1;
-	const re = /\{\s*"head"/g;
+	const re = /\{\s*"(?:head|group)"/g;
 	let m:RegExpExecArray | null;
 	while ((m = re.exec(text))) {
 		const before = text.slice(Math.max(0, m.index - 16), m.index);
@@ -215,3 +320,5 @@ function lastHeadJson(text:string):string | undefined {
 	}
 	return at >= 0 ? text.slice(at) : undefined;
 }
+
+export { firstStep };

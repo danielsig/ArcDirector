@@ -47,7 +47,7 @@ export type Ast =
 	| { type:'lambda'; params:string[]; body:Ast };
 
 export const RESERVED = new Set([
-	'me', 'others', 'items', 'prevThought', 'prevActions',
+	'me', 'others', 'items', 'units', 'it', 'fail', 'prevThought', 'prevActions',
 	'clamp', 'softClamp', 'map', 'find', 'findLast', 'filter', 'includes',
 	'first', 'sortBy', 'max', 'min', 'maxBy', 'minBy', 'sum', 'avg', 'count',
 	'reduce', 'some', 'all', 'matches', 'search', 'nearby', 'reachable', 'approaching', 'departing',
@@ -67,6 +67,8 @@ export type Catalog = {
 	stringifiers?:Stringifiers;
 	/** Host maps entity → stringifier key. Default is `entity`. */
 	stringifierKind?:(entity:ExprEntity)=>StringifierKind;
+	/** Override watch LIST_CAP. Crowd selectors use roster size. */
+	listCap?:number;
 };
 
 export type EvalCtx = {
@@ -207,8 +209,8 @@ export function needleMatch(e:ExprEntity, needle:string):boolean {
 	return e.tags.includes(needle);
 }
 
-export function capList(items:ExprVal[]):ExprVal {
-	if (items.length > LIST_CAP) {
+export function capList(items:ExprVal[], cap = LIST_CAP):ExprVal {
+	if (items.length > cap) {
 		throw new ExprError('list cap', 'capTie');
 	}
 	return { kind: 'list', value: items };

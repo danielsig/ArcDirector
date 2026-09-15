@@ -1,5 +1,5 @@
 import type { AgentSpec } from 'arc-director';
-import { Crowd, Merchant, Named } from '../engine/components';
+import { MarketNPC, Merchant, Named } from '../engine/components';
 import type { GameObject } from '../engine/GameObject';
 import type { World } from '../engine/World';
 import { findCarried } from '../items/inventory';
@@ -182,8 +182,8 @@ const TEMPLATES:CustomerTemplate[] = [
 
 export function customerCount(world:World):number {
 	let n = 0;
-	world.forEachComponent(Crowd, (crowd) => {
-		if (crowd.kind === 'customer') {
+	world.forEachComponent(MarketNPC, (npc) => {
+		if (npc.kind === 'customer') {
 			n += 1;
 		}
 	});
@@ -212,17 +212,17 @@ function pickName(world:World):string | null {
 
 export function seedFromBody(go:GameObject):AgentSpec | null {
 	const id = go.getComponent(Named)?.id ?? go.id;
-	const crowd = go.getComponent(Crowd);
-	if (!crowd) {
+	const npc = go.getComponent(MarketNPC);
+	if (!npc) {
 		return null;
 	}
 	const coins = coinsOf(go);
 	const shop = go.getComponent(Merchant);
-	if (crowd.kind === 'vendor' && shop) {
-		return vendorSeed(id, `${id}Stall`, shop.specialty, shop.ask, shop.floor, crowd.wants[0] ?? 'nothing', coins, ['busy']);
+	if (npc.kind === 'vendor' && shop) {
+		return vendorSeed(id, `${id}Stall`, shop.specialty, shop.ask, shop.floor, npc.wants[0] ?? 'nothing', coins, ['busy']);
 	}
-	if (crowd.kind === 'guard') {
-		return guardSeed(id, crowd.leaveGate || 'WestGate', ['watchful']);
+	if (npc.kind === 'guard') {
+		return guardSeed(id, npc.leaveGate || 'WestGate', ['watchful']);
 	}
 	const held:string[] = [];
 	if (findCarried(go, (it) => it.defID === 'apple')) {
@@ -234,12 +234,12 @@ export function seedFromBody(go:GameObject):AgentSpec | null {
 	const extra = held.length > 0 ? `You also sell ${held.join(' and ')}. ` : '';
 	return customerSeed(
 		id,
-		[...crowd.wants],
+		[...npc.wants],
 		coins,
-		crowd.leaveGate || 'EastGate',
+		npc.leaveGate || 'EastGate',
 		extra,
 		['curious', 'thrifty'],
-		`I came to the market for ${crowd.wants.join(' and ') || 'nothing'}. Then ${crowd.leaveGate}.`,
+		`I came to the market for ${npc.wants.join(' and ') || 'nothing'}. Then ${npc.leaveGate}.`,
 	);
 }
 
@@ -272,7 +272,7 @@ export function spawnRandomCustomer(world:World):{ go:GameObject; seed:AgentSpec
 		pack: true,
 		packLoot: tmpl.loot ? [tmpl.loot] : undefined,
 		wallet,
-		crowd: { kind: 'customer', wants: [...tmpl.wants], leaveGate },
+		marketNPC: { kind: 'customer', wants: [...tmpl.wants], leaveGate },
 	};
 	const go = spawnNPC(world, chunk as Chunk, opts);
 	const extra = tmpl.loot ? `You also sell ${tmpl.loot.name}. ` : '';

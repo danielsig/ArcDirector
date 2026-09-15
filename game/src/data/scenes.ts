@@ -8,7 +8,7 @@ import { glen_1_0 } from './chunks/glen_1_0';
 import { glen_1_1 } from './chunks/glen_1_1';
 import { market_0_0 } from './chunks/market_0_0';
 import { market_1_0 } from './chunks/market_1_0';
-import { type CrowdKind, type HumanKind } from '../engine/components';
+import { type MarketNPCKind, type HumanKind } from '../engine/components';
 import type { GameHost, HostCtx } from '../npc/adapter';
 import { createDirector as createAbbeyDirector } from '../npc/scenes/abbey';
 import { createDirector as createGlenDirector } from '../npc/scenes/glen';
@@ -25,7 +25,7 @@ export type NPCSpawnDef = {
 	packLoot?:{ defID:string; name:string; count?:number }[];
 	wallet?:number;
 	merchant?:{ specialty:string; ask:number; floor:number };
-	crowd?:{ kind:CrowdKind; wants:string[]; leaveGate?:string };
+	marketNPC?:{ kind:MarketNPCKind; wants:string[]; leaveGate?:string };
 	companion?:boolean;
 };
 
@@ -134,7 +134,7 @@ export const MARKETPLACE:SceneDef = {
 			packLoot: [{ defID: 'loaf', name: 'Loaf', count: 3 }],
 			wallet: 18,
 			merchant: { specialty: 'Loaf', ask: 5, floor: 3 },
-			crowd: { kind: 'vendor', wants: ['Knife'] },
+			marketNPC: { kind: 'vendor', wants: ['Knife'] },
 		},
 		{
 			id: 'Weaver',
@@ -147,7 +147,7 @@ export const MARKETPLACE:SceneDef = {
 			packLoot: [{ defID: 'scarf', name: 'Scarf', count: 2 }],
 			wallet: 14,
 			merchant: { specialty: 'Scarf', ask: 6, floor: 4 },
-			crowd: { kind: 'vendor', wants: ['Loaf'] },
+			marketNPC: { kind: 'vendor', wants: ['Loaf'] },
 		},
 		{
 			id: 'Potter',
@@ -159,7 +159,7 @@ export const MARKETPLACE:SceneDef = {
 			packLoot: [{ defID: 'bowl', name: 'Bowl', count: 3 }],
 			wallet: 16,
 			merchant: { specialty: 'Bowl', ask: 4, floor: 2 },
-			crowd: { kind: 'vendor', wants: ['Scarf'] },
+			marketNPC: { kind: 'vendor', wants: ['Scarf'] },
 		},
 		{
 			id: 'Cutler',
@@ -171,7 +171,7 @@ export const MARKETPLACE:SceneDef = {
 			packLoot: [{ defID: 'kitchen_knife', name: 'Knife', count: 2 }],
 			wallet: 22,
 			merchant: { specialty: 'Knife', ask: 7, floor: 4 },
-			crowd: { kind: 'vendor', wants: ['Bowl'] },
+			marketNPC: { kind: 'vendor', wants: ['Bowl'] },
 		},
 		{
 			id: 'Mira',
@@ -181,7 +181,7 @@ export const MARKETPLACE:SceneDef = {
 			localZ: 7,
 			pack: true,
 			wallet: 4,
-			crowd: { kind: 'customer', wants: ['Loaf'], leaveGate: 'EastGate' },
+			marketNPC: { kind: 'customer', wants: ['Loaf'], leaveGate: 'EastGate' },
 		},
 		{
 			id: 'Tomas',
@@ -192,7 +192,7 @@ export const MARKETPLACE:SceneDef = {
 			yaw: Math.PI / 2,
 			pack: true,
 			wallet: 15,
-			crowd: { kind: 'customer', wants: ['Knife', 'Bowl'], leaveGate: 'WestGate' },
+			marketNPC: { kind: 'customer', wants: ['Knife', 'Bowl'], leaveGate: 'WestGate' },
 		},
 		{
 			id: 'Nell',
@@ -204,7 +204,7 @@ export const MARKETPLACE:SceneDef = {
 			pack: true,
 			packLoot: [{ defID: 'apple', name: 'Apple', count: 2 }],
 			wallet: 3,
-			crowd: { kind: 'customer', wants: ['Scarf'], leaveGate: 'WestGate' },
+			marketNPC: { kind: 'customer', wants: ['Scarf'], leaveGate: 'WestGate' },
 		},
 		{
 			id: 'Rook',
@@ -214,7 +214,7 @@ export const MARKETPLACE:SceneDef = {
 			localZ: 8,
 			pack: true,
 			wallet: 8,
-			crowd: { kind: 'customer', wants: ['Loaf'], leaveGate: 'WestGate' },
+			marketNPC: { kind: 'customer', wants: ['Loaf'], leaveGate: 'WestGate' },
 		},
 		{
 			id: 'Holt',
@@ -224,7 +224,7 @@ export const MARKETPLACE:SceneDef = {
 			localZ: 5,
 			yaw: -Math.PI / 2,
 			pack: true,
-			crowd: { kind: 'guard', wants: [], leaveGate: 'WestGate' },
+			marketNPC: { kind: 'guard', wants: [], leaveGate: 'WestGate' },
 		},
 		{
 			id: 'Pike',
@@ -234,7 +234,7 @@ export const MARKETPLACE:SceneDef = {
 			localZ: 9,
 			yaw: -Math.PI / 2,
 			pack: true,
-			crowd: { kind: 'guard', wants: [], leaveGate: 'WestGate' },
+			marketNPC: { kind: 'guard', wants: [], leaveGate: 'WestGate' },
 		},
 		{
 			id: 'Brant',
@@ -244,7 +244,7 @@ export const MARKETPLACE:SceneDef = {
 			localZ: 5,
 			yaw: Math.PI / 2,
 			pack: true,
-			crowd: { kind: 'guard', wants: [], leaveGate: 'EastGate' },
+			marketNPC: { kind: 'guard', wants: [], leaveGate: 'EastGate' },
 		},
 		{
 			id: 'Cass',
@@ -254,7 +254,7 @@ export const MARKETPLACE:SceneDef = {
 			localZ: 9,
 			yaw: Math.PI / 2,
 			pack: true,
-			crowd: { kind: 'guard', wants: [], leaveGate: 'EastGate' },
+			marketNPC: { kind: 'guard', wants: [], leaveGate: 'EastGate' },
 		},
 	],
 	ambient: 'A busy street flea market.',

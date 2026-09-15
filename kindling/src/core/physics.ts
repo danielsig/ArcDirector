@@ -4,8 +4,8 @@ import type { GameObject } from './GameObject.js';
 import type { TerrainSample, World } from './World.js';
 
 /** Padded characters: pad-only overlap shoves at this fraction of the walker’s speed. */
-export const CROWD_YIELD = 0.1;
-const CROWD_MIN_SPEED = 0.05;
+export const SHOVE_YIELD = 0.1;
+const SHOVE_MIN_SPEED = 0.05;
 
 type AABB = {
 	minX:number;
@@ -134,10 +134,10 @@ function shoveAlong(
 	speed:number,
 	dt:number,
 ):void {
-	if (dt <= 0 || speed < CROWD_MIN_SPEED) {
+	if (dt <= 0 || speed < SHOVE_MIN_SPEED) {
 		return;
 	}
-	const step = speed * CROWD_YIELD * dt;
+	const step = speed * SHOVE_YIELD * dt;
 	pos.x += (vx / speed) * step;
 	pos.z += (vz / speed) * step;
 }
@@ -147,7 +147,7 @@ function settleMover(world:World, go:GameObject, col:BoxCollider, rb:Rigidbody):
 	blockCliffs(go, rb, world);
 }
 
-function resolveCrowdPair(
+function resolveShovePair(
 	world:World,
 	a:{ go:GameObject; col:BoxCollider; rb:Rigidbody },
 	b:{ go:GameObject; col:BoxCollider; rb:Rigidbody },
@@ -170,8 +170,8 @@ function resolveCrowdPair(
 	const dz = bPos.z - aPos.z;
 	const aSpeed = Math.hypot(a.rb.velocity.x, a.rb.velocity.z);
 	const bSpeed = Math.hypot(b.rb.velocity.x, b.rb.velocity.z);
-	const aToward = aSpeed >= CROWD_MIN_SPEED && dx * a.rb.velocity.x + dz * a.rb.velocity.z > 0;
-	const bToward = bSpeed >= CROWD_MIN_SPEED && -dx * b.rb.velocity.x - dz * b.rb.velocity.z > 0;
+	const aToward = aSpeed >= SHOVE_MIN_SPEED && dx * a.rb.velocity.x + dz * a.rb.velocity.z > 0;
+	const bToward = bSpeed >= SHOVE_MIN_SPEED && -dx * b.rb.velocity.x - dz * b.rb.velocity.z > 0;
 	if (aToward) {
 		shoveAlong(bPos, a.rb.velocity.x, a.rb.velocity.z, aSpeed, dt);
 	}
@@ -206,7 +206,7 @@ function resolveCrowdPair(
 	}
 }
 
-function resolveCrowd(world:World, dt:number):void {
+function resolveShove(world:World, dt:number):void {
 	const bodies:{ go:GameObject; col:BoxCollider; rb:Rigidbody }[] = [];
 	world.forEachComponent(BoxCollider, (col, go) => {
 		if (!col.enabled || !col.solid || col.isTrigger || col.pad <= 0) {
@@ -220,7 +220,7 @@ function resolveCrowd(world:World, dt:number):void {
 	});
 	for (let i = 0; i < bodies.length; i++) {
 		for (let j = i + 1; j < bodies.length; j++) {
-			resolveCrowdPair(world, bodies[i], bodies[j], dt);
+			resolveShovePair(world, bodies[i], bodies[j], dt);
 		}
 	}
 }
@@ -310,7 +310,7 @@ function resolveCollisions(world:World, dt:number):void {
 		resolveAgainstTiles(go, col, world);
 		resolveAgainstOthers(world, go, col);
 	});
-	resolveCrowd(world, dt);
+	resolveShove(world, dt);
 	world.forEachComponent(BoxCollider, (col, go) => {
 		if (!col.enabled || !col.solid || col.isTrigger) {
 			return;

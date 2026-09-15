@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { parsePlan, parsePlanText, formatPlan } from './parse.js';
 import { VerbRegistry, registerStockVerbs, STOCK_MOVE_VERBS, STOCK_VERBS } from './registry.js';
+import { registerStockCrowdVerbs } from '../conductor/verbs.js';
 import { ActionError } from './types.js';
 import { asPlan } from './validate.js';
 
@@ -26,6 +27,20 @@ describe('ActionPlan parse', () => {
 			formatPlan(plan),
 			'go_to(EastGate) && use(item=BrassKey, target=EastGate) ; say("After you.")',
 		);
+	});
+
+	it('parses when who= expr and nested plan=', () => {
+		const registry = registerStockCrowdVerbs(registerStockVerbs(new VerbRegistry()));
+		const plan = parsePlanText(
+			'when(who=units.filter("Guard"), plan=go_to(Keep) && wait(seconds=1))',
+			registry,
+		);
+		assert.equal(plan.head?.verb, 'when');
+		assert.equal(plan.head?.args.who, 'units.filter("Guard")');
+		const inner = plan.head.args.plan as { head:{ verb:string; args:Record<string, unknown> }; then?:{ plan:{ head:{ verb:string } } } };
+		assert.equal(inner.head.verb, 'go_to');
+		assert.equal(inner.head.args.name, 'Keep');
+		assert.equal(inner.then?.plan.head.verb, 'wait');
 	});
 
 	it('parses truncated nested JSON by closing braces', () => {
@@ -60,17 +75,18 @@ describe('ActionPlan parse', () => {
 		);
 		assert.equal(parsePlanText('think("how to open EastGate")', registry).head.args.about, 'how to open EastGate');
 		assert.deepEqual(parsePlanText('think()', registry).head.args, {});
-		assert.equal(parsePlanText('wait(for=hasHeard)', registry).head.args.for, 'hasHeard');
-		assert.equal(parsePlanText('wander(for=hasHeard)', registry).head.args.for, 'hasHeard');
+		assert.equal(parsePlanText('wait(until=hasHeard)', registry).head.args.until, 'hasHeard');
+		assert.equal(parsePlanText('wait(until=isNear(me, Cottage))', registry).head.args.until, 'isNear(me, Cottage)');
+		assert.equal(parsePlanText('wander(until=hasHeard)', registry).head.args.until, 'hasHeard');
 		assert.equal(
-			parsePlanText('wander(for=\'some(items.filter("FireMushroom").nearby())\')', registry).head.args.for,
+			parsePlanText('wander(until=\'some(items.filter("FireMushroom").nearby())\')', registry).head.args.until,
 			'some(items.filter("FireMushroom").nearby())',
 		);
 		assert.equal(
 			parsePlan(
-				'{"head":{"verb":"wander","args":{"for":"some(landmarks.filter(\\"tree\\").nearby(16))"}}}',
+				'{"head":{"verb":"wander","args":{"until":"some(landmarks.filter(\\"tree\\").nearby(16))"}}}',
 				registry,
-			).head.args.for,
+			).head.args.until,
 			'some(landmarks.filter("tree").nearby(16))',
 		);
 		assert.equal(
@@ -112,6 +128,18 @@ describe('registerStockVerbs', () => {
 			verbs.list().map((v) => v.name),
 			['go_to', 'follow', 'wander', 'say'],
 		);
+	});
+
+	it('parses grouped (A && B) || C', () => {
+		const plan = parsePlanText(
+			'(go_to(Keep) && wait(seconds=1)) || say(fail.reason)',
+			verbs(),
+		);
+		assert.ok(plan.group);
+		assert.equal(plan.group?.head?.verb, 'go_to');
+		assert.equal(plan.then?.join, 'then_if_err');
+		assert.equal(plan.then?.plan.head?.verb, 'say');
+		assert.equal(formatPlan(plan), '(go_to(Keep) && wait(1)) || say(fail.reason)');
 	});
 
 	it('registers the full stock set when called with no verbs', () => {

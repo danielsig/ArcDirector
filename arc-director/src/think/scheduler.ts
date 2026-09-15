@@ -93,12 +93,12 @@ export type MindQueue = {
 	scold(npcID:string):ScoldReason | undefined;
 	rankScore(npcID:string, raw:number):number;
 	heartbeatSeconds(npcID:string):number;
-	scoreWatches(npcID:string, catalog:Catalog):number;
+	scoreWatches(npcID:string, catalog:Catalog | readonly Catalog[]):number;
 	enqueueMajor(npcID:string, force?:boolean):void;
 	enqueueAction(npcID:string, verb:string, ok?:boolean):void;
 	enqueuePlan(npcID:string, plan:ActionPlan, ok?:boolean):void;
 	noteResult(npcID:string, stalled:boolean):void;
-	tick(dt:number, catalogs:Map<string, Catalog>):ThinkRow[];
+	tick(dt:number, catalogs:Map<string, Catalog | readonly Catalog[]>):ThinkRow[];
 	drop(npcID:string):void;
 };
 
@@ -280,22 +280,25 @@ export abstract class MindScheduler implements MindQueue {
 		return this.minds.get(npcID)?.heartbeat ?? this.heartbeatStart;
 	}
 
-	scoreWatches(npcID:string, catalog:Catalog):number {
+	scoreWatches(npcID:string, catalog:Catalog | readonly Catalog[]):number {
 		const mind = this.ensure(npcID);
 		let max = 0;
 		let scold:ScoldReason | undefined;
 		const exprs = mind.once ? [...mind.watches, mind.once] : mind.watches;
-		for (const expr of exprs) {
-			const r = evaluate(expr, catalog);
-			if (r.error) {
-				scold = r.error.reason;
-			}
-			const s = watchScore(r.error ? { kind: 'absent' } : r.value, this.trueScore);
-			if (s.scold) {
-				scold = s.scold;
-			}
-			if (s.score > max) {
-				max = s.score;
+		const catalogs = Array.isArray(catalog) ? catalog : [catalog];
+		for (const cat of catalogs) {
+			for (const expr of exprs) {
+				const r = evaluate(expr, cat);
+				if (r.error) {
+					scold = r.error.reason;
+				}
+				const s = watchScore(r.error ? { kind: 'absent' } : r.value, this.trueScore);
+				if (s.scold) {
+					scold = s.scold;
+				}
+				if (s.score > max) {
+					max = s.score;
+				}
 			}
 		}
 		mind.lastMax = max;
@@ -303,7 +306,7 @@ export abstract class MindScheduler implements MindQueue {
 		return max;
 	}
 
-	sampleWatches(npcID:string, catalog:Catalog):void {
+	sampleWatches(npcID:string, catalog:Catalog | readonly Catalog[]):void {
 		const mind = this.ensure(npcID);
 		if (!mind.aiOn) {
 			return;
@@ -350,7 +353,7 @@ export abstract class MindScheduler implements MindQueue {
 		}
 	}
 
-	tick(dt:number, catalogs:Map<string, Catalog>):ThinkRow[] {
+	tick(dt:number, catalogs:Map<string, Catalog | readonly Catalog[]>):ThinkRow[] {
 		if (dt > 0) {
 			this.watchClock += dt;
 			this.processClock += dt;

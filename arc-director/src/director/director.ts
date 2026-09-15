@@ -1,16 +1,46 @@
 import { registerStockVerbs, VerbRegistry, type StockVerb, type VerbArgMap } from '../action/registry.js';
 import { formatPlan } from '../action/parse.js';
 import type { ActionResult, Step } from '../action/types.js';
+import { firstStep } from '../action/types.js';
 import { Agent, type AgentDeps, type AgentJSON } from '../agent/agent.js';
 import type { Kit, KitSource, Sense, ToolSpec } from '../agent/types.js';
 import { TalkNet, type SpeechUtterance, type TalkConfig, type TalkSense } from '../agent/talk.js';
 import type { MapSense } from '../agent/map.js';
-import { buildCatalog, type HostKernels } from '../expr/natives.js';
+import { buildCatalog, dummyEntity, type HostKernels } from '../expr/natives.js';
+import { evaluate } from '../expr/eval.js';
+import { watchScore } from '../expr/score.js';
 import { SampleCache } from '../expr/types.js';
-import { formatSight } from '../perception/sight.js';
+import {
+	formatSight,
+	formatSightClauses,
+	joinSightClauses,
+	mergeHiveClauses,
+	orderSightClauses,
+} from '../perception/sight.js';
 import { formatInventory } from '../perception/formatInventory.js';
 import type { Inventory } from '../perception/inventory.js';
-import type { Sight } from '../perception/types.js';
+import type { SeenObject, Sight } from '../perception/types.js';
+import {
+	CrowdConductor,
+	isCrowdConductor,
+	registerStockCrowdVerbs,
+	STOCK_CROWD_VERBS,
+	FORMATION_VERBS,
+	evaluateWho,
+	buildCrowdCatalog,
+	planArg,
+	lawMatches,
+	type CrowdLawSpec,
+	type CrowdUnitSpec,
+	type StockCrowdVerb,
+} from '../conductor/index.js';
+import {
+	DEFAULT_COOLDOWN,
+	createPlanSession,
+	firstStartable,
+	pollPlanSession,
+	type PlanHandler,
+} from '../agent/run.js';
 import type { ChatRequest, ChatResponse, InferenceProvider } from '../inference/provider.js';
 import type { FakeChatFn } from '../inference/fake.js';
 import { isVisionModel, type ModelInfo } from '../inference/models.js';
@@ -104,9 +134,12 @@ export class ArcDirector<HostCtx = unknown> {
 	private senses:Record<string, Sense<HostCtx>> = {};
 	private tools:Record<string, ToolSpec<HostCtx>> = {};
 	private losFn:((aID:string, bID:string)=>boolean) | undefined;
-	private contextFn:((id:string)=>HostCtx) | undefined;
+	private sightLook:((ctx:HostCtx)=>Sight) | undefined;
+	private sightLimitDefault:number | undefined;
+	private contextFn:((id:string)=>HostCtx | undefined) | undefined;
 	private kernelFn:KernelSource<HostCtx> | undefined;
 	private defaultKit:KitSource<HostCtx> | undefined;
+	private cooldownDefault = DEFAULT_COOLDOWN;
 	private talkSense:TalkSense | undefined;
 	private onSpoke:((utterance:SpeechUtterance)=>void) | undefined;
 	private talkConfig:Partial<TalkConfig> | undefined;
@@ -199,19 +232,26 @@ export class ArcDirector<HostCtx = unknown> {
 		return this;
 	}
 
-	withSight(look:(ctx:HostCtx)=>Sight):this {
+	withSight({ look, limit }:{ look?:(ctx:HostCtx)=>Sight, limit?:number }):this {
 		this.assertBuilder();
+		if (limit !== undefined) {
+			this.sightLimitDefault = limit;
+		}
+		if (!look) return this;
+		this.sightLook = look;
 		this.senses.sight = {
 			description: 'What you can see. Names only, distances in paces.',
 			gather: (ctx) => {
-				const snap = look(ctx);
-				const los = this.losFn;
-				const objects = los
-					? snap.objects.filter((o) => los(snap.self.id, o.id))
-					: snap.objects;
-				return formatSight({ ...snap, objects });
+				const snap = this.filterSight(look(ctx));
+				return formatSight(snap);
 			},
 		};
+		return this;
+	}
+
+	withCooldown(seconds:number):this {
+		this.assertBuilder();
+		this.cooldownDefault = seconds;
 		return this;
 	}
 
@@ -246,7 +286,7 @@ export class ArcDirector<HostCtx = unknown> {
 		return this;
 	}
 
-	withContext(fn:(id:string)=>HostCtx):this {
+	withContext(fn:(id:string)=>HostCtx | undefined):this {
 		this.assertBuilder();
 		this.contextFn = fn;
 		return this;
@@ -299,6 +339,12 @@ export class ArcDirector<HostCtx = unknown> {
 	/** Schema-only. Omit `verbs` to register the full stock set. Already-registered names are skipped. */
 	addStockVerbs(...verbs:StockVerb[]):this {
 		registerStockVerbs(this.verbs, ...verbs);
+		return this;
+	}
+
+	/** Schema-only crowd verbs (`when`, `law`, formations). Kit still has to grant them. */
+	addStockCrowdVerbs(...verbs:StockCrowdVerb[]):this {
+		registerStockCrowdVerbs(this.verbs, ...verbs);
 		return this;
 	}
 
@@ -355,6 +401,62 @@ export class ArcDirector<HostCtx = unknown> {
 		}
 		this.reportMissingNames(next);
 		this.wireAgent(next);
+		return this;
+	}
+
+	addCrowdConductor(spec:AgentSpec<HostCtx>):this {
+		return this.addAgent({ ...spec, units: spec.units ?? [] });
+	}
+
+	addCrowdUnit(conductorID:string, spec:CrowdUnitSpec):this {
+		const add = ():void => {
+			const agent = this.rows.get(conductorID)?.agent;
+			if (!isCrowdConductor(agent)) {
+				throw new Error(`ArcDirector: '${conductorID}' is not a CrowdConductor`);
+			}
+			agent.addUnit(spec);
+		};
+		if (!this.started) {
+			const pending = this.pending.find((s) => s.id === conductorID);
+			if (pending) {
+				pending.units = [...(pending.units ?? []), spec];
+				return this;
+			}
+			throw new Error(`ArcDirector: no conductor '${conductorID}'`);
+		}
+		add();
+		return this;
+	}
+
+	removeCrowdUnit(conductorID:string, unitID:string):this {
+		if (!this.started) {
+			const pending = this.pending.find((s) => s.id === conductorID);
+			if (pending?.units) {
+				pending.units = pending.units.filter((u) => u.id !== unitID);
+			}
+			return this;
+		}
+		const agent = this.rows.get(conductorID)?.agent;
+		if (isCrowdConductor(agent)) {
+			agent.removeUnit(unitID);
+		}
+		return this;
+	}
+
+	addCrowdLaw(conductorID:string, spec:CrowdLawSpec):this {
+		if (!this.started) {
+			const pending = this.pending.find((s) => s.id === conductorID);
+			if (pending) {
+				pending.laws = [...(pending.laws ?? []), spec];
+				return this;
+			}
+			throw new Error(`ArcDirector: no conductor '${conductorID}'`);
+		}
+		const agent = this.rows.get(conductorID)?.agent;
+		if (!isCrowdConductor(agent)) {
+			throw new Error(`ArcDirector: '${conductorID}' is not a CrowdConductor`);
+		}
+		agent.addCrowdLaw(spec, spec.pinned);
 		return this;
 	}
 
@@ -693,7 +795,7 @@ export class ArcDirector<HostCtx = unknown> {
 		return {
 			provider: this.provider!,
 			verbs: this.verbs,
-			senses: this.senses,
+			senses: this.sensesFor(row),
 			tools: this.tools,
 			context: () => {
 				if (!this.contextFn) {
@@ -701,7 +803,9 @@ export class ArcDirector<HostCtx = unknown> {
 				}
 				return this.contextFn(id);
 			},
-			execute: async (step, ctx) => this.dispatch(row, step, ctx),
+			execute: async (step, ctx, actorID) => this.dispatch(row, step, ctx, actorID),
+			abortPlan: (unitID) => this.abortPlanFn?.(unitID),
+			cooldown: this.cooldownDefault,
 			autoEnact: true,
 			queue: this.queue,
 			model: this.model,
@@ -715,24 +819,312 @@ export class ArcDirector<HostCtx = unknown> {
 			watches: row.spec.watches,
 			pinnedWatches: row.spec.pinnedWatches,
 			watchesWritable: row.spec.watchesWritable,
+			pinnedSightFocus: row.spec.pinnedSightFocus,
+			sightFocus: row.spec.sightFocus,
+			sightFocusWritable: row.spec.sightFocusWritable,
+			maxSightFocus: row.spec.maxSightFocus,
+			sightLimit: row.spec.sightLimit ?? this.sightLimitDefault,
 		};
+	}
+
+	private sensesFor(row:AgentRow<HostCtx>):Record<string, Sense<HostCtx>> {
+		const wrapSight = !!(this.sightLook && this.senses.sight);
+		let skipCarrying = false;
+		if (this.senses.carrying && isCrowdConductor(row.agent) && this.contextFn) {
+			if (this.tryCtx(row.spec.id) === undefined) {
+				skipCarrying = true;
+			}
+		}
+		if (!wrapSight && !skipCarrying) {
+			return this.senses;
+		}
+		const senses:{ [k:string]:Sense<HostCtx> } = { ...this.senses };
+		if (wrapSight && this.senses.sight) {
+			senses.sight = {
+				description: this.senses.sight.description,
+				gather: (ctx) => this.gatherSight(row, ctx),
+			};
+		}
+		if (skipCarrying) {
+			delete senses.carrying;
+		}
+		return senses;
+	}
+
+	private filterSight(snap:Sight):Sight {
+		const los = this.losFn;
+		if (!los) {
+			return snap;
+		}
+		return { ...snap, objects: snap.objects.filter((o) => los(snap.self.id, o.id)) };
+	}
+
+	private gatherSight(row:AgentRow<HostCtx>, ctx:HostCtx):string {
+		const look = this.sightLook;
+		if (!look) {
+			return '';
+		}
+		const agent = row.agent;
+		const focus = agent?.effectiveSightFocus() ?? [];
+		const limit = agent?.sightLimit ?? this.sightLimitDefault;
+		const scores = new Map<string, number>();
+		if (isCrowdConductor(agent) && agent.crowd.size > 0 && this.contextFn) {
+			const groups:{ unitID:string; clauses:ReturnType<typeof formatSightClauses> }[] = [];
+			for (const unit of agent.crowd.list()) {
+				const unitCtx = this.tryCtx(unit.id);
+				if (!unitCtx) {
+					continue;
+				}
+				const snap = this.filterSight(look(unitCtx));
+				const clauses = formatSightClauses(snap, {
+					fromName: unit.id,
+					skipAmbient: groups.length > 0,
+				});
+				groups.push({ unitID: unit.id, clauses });
+				if (focus.length > 0) {
+					this.scoreSightObjects(snap.objects, focus, unitCtx, row, scores);
+				}
+			}
+			const merged = mergeHiveClauses(groups, focus.length > 0 ? scores : undefined);
+			return joinSightClauses(orderSightClauses(merged, scores, limit, focus.length > 0));
+		}
+		const snap = this.filterSight(look(ctx));
+		const clauses = formatSightClauses(snap);
+		if (focus.length > 0) {
+			this.scoreSightObjects(snap.objects, focus, ctx, row, scores);
+		}
+		return joinSightClauses(orderSightClauses(clauses, scores, limit, focus.length > 0));
+	}
+
+	private scoreSightObjects(
+		objects:SeenObject[],
+		exprs:string[],
+		ctx:HostCtx,
+		row:AgentRow<HostCtx>,
+		into:Map<string, number>,
+	):void {
+		if (!this.kernelFn) {
+			return;
+		}
+		const kernels = this.kernelsFor(row, ctx);
+		for (const obj of objects) {
+			const it = dummyEntity(obj.id, { name: obj.id, tags: obj.tags });
+			const cat = buildCatalog({
+				...kernels,
+				bindings: { ...kernels.bindings, it: { kind: 'entity', value: it } },
+			});
+			let best = 0;
+			for (let i = 0; i < exprs.length; i++) {
+				const r = evaluate(exprs[i], cat);
+				const s = watchScore(r.error ? { kind: 'absent' } : r.value).score * (0.8 ** i);
+				if (s > best) {
+					best = s;
+				}
+			}
+			const prev = into.get(obj.id) ?? 0;
+			if (best > prev) {
+				into.set(obj.id, best);
+			}
+		}
 	}
 
 	private dispatch(
 		row:AgentRow<HostCtx>,
 		step:Step,
-		ctx:HostCtx,
+		ctx:HostCtx | undefined,
+		actorID?:string,
 	):Promise<ActionResult> | ActionResult {
 		const agent = row.agent;
 		if (!agent) {
 			return { ok: false, verb: step.verb, reason: 'no agent' };
 		}
-		const call = { verb: step.verb, args: step.args as Record<string, unknown>, agent, ctx };
+		const liveID = actorID ?? agent.id;
+		let liveCtx = ctx;
+		const next = this.tryCtx(liveID);
+		if (next !== undefined) {
+			liveCtx = next;
+		}
+		if (STOCK_CROWD_VERBS.includes(step.verb as typeof STOCK_CROWD_VERBS[number])) {
+			return this.handleCrowdVerb(row, step, liveCtx, liveID);
+		}
+		const call = {
+			verb: step.verb,
+			args: step.args as Record<string, unknown>,
+			agent,
+			ctx: liveCtx as HostCtx,
+			actorID: liveID,
+		};
 		const handler = this.handlers.get(step.verb) ?? this.catchAll;
 		if (!handler) {
 			return { ok: false, verb: step.verb, reason: `unhandled ${step.verb}` };
 		}
 		return handler(call);
+	}
+
+	private handleCrowdVerb(
+		row:AgentRow<HostCtx>,
+		step:Step,
+		ctx:HostCtx | undefined,
+		actorID:string,
+	):ActionResult | Promise<ActionResult> {
+		const agent = row.agent;
+		if (!isCrowdConductor(agent)) {
+			return { ok: false, verb: step.verb, reason: 'not a CrowdConductor' };
+		}
+		if (step.verb === 'when') {
+			return this.handleWhen(row, agent, step, ctx, actorID);
+		}
+		if (step.verb === 'law') {
+			const who = typeof step.args.who === 'string' ? step.args.who : undefined;
+			const watch = typeof step.args.watch === 'string' ? step.args.watch : '';
+			const name = typeof step.args.name === 'string' ? step.args.name : undefined;
+			const plan = planArg(step.args.plan, this.verbs);
+			if (!watch || !plan) {
+				return { ok: false, verb: 'law', reason: 'law needs watch and plan' };
+			}
+			agent.addCrowdLaw({ name, who, watch, plan });
+			return { ok: true, verb: 'law' };
+		}
+		if (step.verb === 'unlaw') {
+			const name = typeof step.args.name === 'string' ? step.args.name : '';
+			if (!name) {
+				return { ok: false, verb: 'unlaw', reason: 'unlaw needs name' };
+			}
+			agent.removeCrowdLaw(name);
+			return { ok: true, verb: 'unlaw' };
+		}
+		if (step.verb === 'tag' || step.verb === 'untag') {
+			const who = typeof step.args.who === 'string' ? step.args.who : '';
+			const name = typeof step.args.name === 'string' ? step.args.name : '';
+			if (!who || !name) {
+				return { ok: false, verb: step.verb, reason: `${step.verb} needs who and name` };
+			}
+			const cat = this.crowdCatalog(row, agent, ctx);
+			const units = cat ? evaluateWho(who, cat, agent.crowd) : [];
+			if (step.verb === 'tag') {
+				agent.tagUnits(units, name);
+			}
+			else {
+				agent.untagUnits(units, name);
+			}
+			return { ok: true, verb: step.verb };
+		}
+		if (FORMATION_VERBS.has(step.verb)) {
+			return { ok: false, verb: step.verb, reason: 'formation must be when plan head' };
+		}
+		return { ok: false, verb: step.verb, reason: `unhandled ${step.verb}` };
+	}
+
+	private handleWhen(
+		row:AgentRow<HostCtx>,
+		agent:CrowdConductor<HostCtx>,
+		step:Step,
+		ctx:HostCtx | undefined,
+		actorID:string,
+	):ActionResult | Promise<ActionResult> {
+		const who = typeof step.args.who === 'string' ? step.args.who.trim() : '';
+		const watch = typeof step.args.watch === 'string' ? step.args.watch.trim() : '';
+		const plan = planArg(step.args.plan, this.verbs);
+		if (who && watch) {
+			return { ok: false, verb: 'when', reason: 'who+watch is law, not when' };
+		}
+		if (watch && plan && !who) {
+			return { ok: false, verb: 'when', reason: 'when(watch) belongs in a plan body' };
+		}
+		if (!who || !plan) {
+			return { ok: false, verb: 'when', reason: 'when needs who and plan' };
+		}
+		const cat = this.crowdCatalog(row, agent, ctx);
+		const units = cat ? evaluateWho(who, cat, agent.crowd) : [];
+		const head = firstStep(plan);
+		if (head && FORMATION_VERBS.has(head.verb)) {
+			const handler = this.handlers.get(head.verb) ?? this.catchAll;
+			if (handler && ctx !== undefined) {
+				const result = handler({
+					verb: head.verb,
+					args: head.args as Record<string, unknown>,
+					agent,
+					ctx,
+					actorID,
+					units: units.map((u) => u.id),
+				});
+				if (result && typeof result === 'object' && 'then' in result) {
+					void (result as Promise<ActionResult>);
+				}
+			}
+			if (plan.then) {
+				agent.assignPlan(units, plan.then.plan);
+			}
+			return { ok: true, verb: 'when' };
+		}
+		agent.assignPlan(units, plan);
+		return { ok: true, verb: 'when' };
+	}
+
+	private tryCtx(id:string):HostCtx | undefined {
+		if (!this.contextFn) {
+			return undefined;
+		}
+		try {
+			return this.contextFn(id);
+		}
+		catch {
+			return undefined;
+		}
+	}
+
+	private dummyHiveKernels(row:AgentRow<HostCtx>, agent:CrowdConductor<HostCtx>):HostKernels | undefined {
+		if (!this.kernelFn) {
+			return undefined;
+		}
+		const poses:{ x:number; z:number }[] = [];
+		let sample:HostKernels | undefined;
+		for (const unit of agent.crowd.list()) {
+			const ctx = this.tryCtx(unit.id);
+			if (!ctx) {
+				continue;
+			}
+			const kernels = this.kernelsFor(row, ctx);
+			sample = kernels;
+			const at = kernels.at?.(kernels.me);
+			if (at) {
+				poses.push(at);
+			}
+		}
+		if (!sample) {
+			return undefined;
+		}
+		const cx = poses.length > 0 ? poses.reduce((s, p) => s + p.x, 0) / poses.length : 0;
+		const cz = poses.length > 0 ? poses.reduce((s, p) => s + p.z, 0) / poses.length : 0;
+		const me = dummyEntity(agent.id, { name: agent.id, tags: ['agent'] });
+		return {
+			...sample,
+			me,
+			inventory: undefined,
+			at: (who) => {
+				if (who.id === agent.id) {
+					return { x: cx, z: cz };
+				}
+				return sample.at?.(who);
+			},
+		};
+	}
+
+	private crowdCatalog(
+		row:AgentRow<HostCtx>,
+		agent:CrowdConductor<HostCtx>,
+		ctx:HostCtx | undefined,
+	):ReturnType<typeof buildCrowdCatalog> | undefined {
+		if (!this.kernelFn) {
+			return undefined;
+		}
+		const kernels = ctx
+			? this.kernelsFor(row, ctx)
+			: this.dummyHiveKernels(row, agent);
+		if (!kernels) {
+			return undefined;
+		}
+		return buildCrowdCatalog(kernels, agent.crowd, agent.id);
 	}
 
 	private applySpec(agent:Agent<HostCtx>, spec:AgentSpec<HostCtx>, fresh:boolean):void {
@@ -774,6 +1166,29 @@ export class ArcDirector<HostCtx = unknown> {
 		if (spec.watchesWritable !== undefined) {
 			agent.watchesWritable = spec.watchesWritable;
 		}
+		if (spec.sightFocusWritable !== undefined) {
+			agent.sightFocusWritable = spec.sightFocusWritable;
+		}
+		if (spec.sightLimit !== undefined) {
+			agent.sightLimit = spec.sightLimit;
+		}
+		else if (this.sightLimitDefault !== undefined && agent.sightLimit === undefined) {
+			agent.sightLimit = this.sightLimitDefault;
+		}
+		if (isCrowdConductor(agent)) {
+			for (const unit of spec.units ?? []) {
+				agent.addUnit(unit);
+			}
+			for (const law of spec.laws ?? []) {
+				agent.addCrowdLaw(law, law.pinned);
+			}
+			if (spec.maxLaws !== undefined) {
+				agent.maxLaws = spec.maxLaws;
+			}
+			if (spec.cooldown !== undefined) {
+				agent.cooldown = spec.cooldown;
+			}
+		}
 		agent.kit = this.kitFor(spec);
 	}
 
@@ -812,7 +1227,11 @@ export class ArcDirector<HostCtx = unknown> {
 			return { error: `withContext required to resolve kit (${where})` };
 		}
 		try {
-			return { kit: src(this.contextFn(id)) ?? {} };
+			const ctx = this.contextFn(id);
+			if (ctx === undefined) {
+				return { error: `withContext returned undefined (${where})` };
+			}
+			return { kit: src(ctx) ?? {} };
 		}
 		catch (err:unknown) {
 			const text = err instanceof Error ? err.message : String(err);
@@ -917,14 +1336,28 @@ export class ArcDirector<HostCtx = unknown> {
 		};
 		this.rows.set(spec.id, row);
 		const deps = this.deps(spec.id, row);
+		const isCrowd = spec.units !== undefined || spec.laws !== undefined;
 		const agent = stored
-			? Agent.fromJSON(stored, deps)
-			: new Agent<HostCtx>({
-				id: spec.id,
-				identity: spec.identity,
-				goals: spec.goals ? spec.goals.map((g) => ({ ...g })) : [],
-				...deps,
-			});
+			? isCrowd
+				? CrowdConductor.fromJSON(stored, deps)
+				: Agent.fromJSON(stored, deps)
+			: isCrowd
+				? new CrowdConductor<HostCtx>({
+					...deps,
+					id: spec.id,
+					identity: spec.identity,
+					goals: spec.goals ? spec.goals.map((g) => ({ ...g })) : [],
+					units: spec.units,
+					laws: spec.laws,
+					maxLaws: spec.maxLaws,
+					cooldown: spec.cooldown ?? this.cooldownDefault,
+				})
+				: new Agent<HostCtx>({
+					id: spec.id,
+					identity: spec.identity,
+					goals: spec.goals ? spec.goals.map((g) => ({ ...g })) : [],
+					...deps,
+				});
 		row.agent = agent;
 		this.applySpec(agent, spec, !stored);
 		this.attachTalk(agent);
@@ -974,7 +1407,10 @@ export class ArcDirector<HostCtx = unknown> {
 				continue;
 			}
 			this.talk?.detach(row.spec.id);
-			row.agent = Agent.fromJSON(json, this.deps(row.spec.id, row));
+			const deps = this.deps(row.spec.id, row);
+			row.agent = (row.spec.units !== undefined || row.spec.laws !== undefined)
+				? CrowdConductor.fromJSON(json, deps)
+				: Agent.fromJSON(json, deps);
 			this.applySpec(row.agent, row.spec, false);
 			this.attachTalk(row.agent);
 			this.queue?.setWatches(row.spec.id, row.agent.effectiveWatches());
@@ -995,18 +1431,18 @@ export class ArcDirector<HostCtx = unknown> {
 			return;
 		}
 		this.clock = now;
-		const catalogs = new Map<string, ReturnType<typeof buildCatalog>>();
+		const catalogs = new Map<string, ReturnType<typeof buildCatalog> | ReturnType<typeof buildCatalog>[]>();
 		for (const row of this.rows.values()) {
 			if (!row.agent) {
 				continue;
 			}
+			row.agent.stamp(now);
 			row.agent.refreshKit();
 			if (!this.kernelFn || !this.contextFn) {
 				continue;
 			}
 			try {
-				const ctx = this.contextFn(row.spec.id);
-				catalogs.set(row.spec.id, buildCatalog(this.kernelsFor(row, ctx)));
+				catalogs.set(row.spec.id, this.catalogsFor(row));
 			}
 			catch {
 				continue;
@@ -1019,8 +1455,94 @@ export class ArcDirector<HostCtx = unknown> {
 		this.readyThink.push(...rows);
 		for (const row of this.rows.values()) {
 			row.cache.commit();
+			this.tickLaws(row);
+			if (row.agent?.planSession) {
+				pollPlanSession(row.agent.planSession);
+			}
 		}
 		this.drain(now);
+	}
+
+	private catalogsFor(row:AgentRow<HostCtx>):ReturnType<typeof buildCatalog> | ReturnType<typeof buildCatalog>[] {
+		const agent = row.agent;
+		const thinkerCtx = this.tryCtx(row.spec.id);
+		const thinkerKernels = thinkerCtx
+			? this.kernelsFor(row, thinkerCtx)
+			: (isCrowdConductor(agent) ? this.dummyHiveKernels(row, agent) : undefined);
+		if (!thinkerKernels) {
+			throw new Error('no ctx');
+		}
+		const thinker = buildCatalog(thinkerKernels);
+		if (!isCrowdConductor(agent) || agent.crowd.size === 0) {
+			return thinker;
+		}
+		const unitCats:ReturnType<typeof buildCatalog>[] = [];
+		for (const unit of agent.crowd.list()) {
+			const unitCtx = this.tryCtx(unit.id);
+			if (!unitCtx) {
+				continue;
+			}
+			unitCats.push(buildCrowdCatalog(this.kernelsFor(row, unitCtx), agent.crowd, agent.id));
+		}
+		return unitCats.length > 0 ? unitCats : thinker;
+	}
+
+	private unitCatalog(
+		row:AgentRow<HostCtx>,
+		agent:CrowdConductor<HostCtx>,
+		unitID:string,
+		whoCat:ReturnType<typeof buildCrowdCatalog>,
+	):ReturnType<typeof buildCrowdCatalog> {
+		const unitCtx = this.tryCtx(unitID);
+		if (!unitCtx) {
+			return whoCat;
+		}
+		return buildCrowdCatalog(this.kernelsFor(row, unitCtx), agent.crowd, agent.id);
+	}
+
+	private tickLaws(row:AgentRow<HostCtx>):void {
+		const agent = row.agent;
+		if (!isCrowdConductor(agent) || !this.kernelFn) {
+			return;
+		}
+		const thinkerCtx = this.tryCtx(agent.id);
+		const whoKernels = thinkerCtx
+			? this.kernelsFor(row, thinkerCtx)
+			: this.dummyHiveKernels(row, agent);
+		if (!whoKernels) {
+			return;
+		}
+		const whoCat = buildCrowdCatalog(whoKernels, agent.crowd, agent.id);
+		for (const unit of agent.crowd.list()) {
+			const extras = ():PlanHandler[] => agent.lawHandlers(unit, (law) => lawMatches(law, unit, whoCat, agent.crowd));
+			const catalog = ():ReturnType<typeof buildCrowdCatalog> => this.unitCatalog(row, agent, unit.id, whoCat);
+			if (unit.session) {
+				unit.session.catalog = catalog;
+				unit.session.now = () => this.clock;
+				unit.session.extraHandlers = extras;
+				unit.session.abortHost = () => this.abortPlanFn?.(unit.id);
+				unit.session.cooldown = agent.cooldown;
+				pollPlanSession(unit.session);
+				continue;
+			}
+			const probe = createPlanSession({
+				cooldown: agent.cooldown,
+				coolUntil: unit.coolUntil,
+				catalog,
+				now: () => this.clock,
+				extraHandlers: extras,
+			});
+			const first = firstStartable(probe);
+			if (first) {
+				agent.beginHandler(unit, first, {
+					cooldown: agent.cooldown,
+					catalog,
+					now: () => this.clock,
+					abortHost: () => this.abortPlanFn?.(unit.id),
+					extraHandlers: extras,
+				});
+			}
+		}
 	}
 
 	private drain(now:number):void {
@@ -1133,7 +1655,7 @@ export class ArcDirector<HostCtx = unknown> {
 			});
 	}
 
-	/** Wall-clock loop for scripts. Games must not use this — they already have a frame tick. */
+	/** Wall-clock loop for laws. Games must not use this — they already have a frame tick. */
 	runLoop(hz:number):()=>void {
 		if (!this.started) {
 			throw new Error('ArcDirector: start() before runLoop');

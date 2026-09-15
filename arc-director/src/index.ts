@@ -53,10 +53,11 @@ export {
 } from './inference/fake.js';
 
 export type { ActionPlan, ActionResult, Join, Step } from './action/types.js';
+export { firstStep, isHoistedWhen, PLAN_BODY_CAP } from './action/types.js';
 export { ActionError, JOIN_SYMBOL, JOINS, SYMBOL_JOIN } from './action/types.js';
 export { VerbRegistry, registerStockVerbs, STOCK_VERBS, STOCK_MOVE_VERBS, STOCK_ITEM_VERBS, STOCK_MIND_VERBS, STOCK_VERB_ARGS, type StockVerb, type VerbArgKind, type VerbArgMap, type VerbSpec } from './action/registry.js';
 export { actionPlanSchema, verbHelp } from './action/schema.js';
-export { asPlan, asStep, validatePlan, validateStep } from './action/validate.js';
+export { asPlan, asStep, validatePlan, validateStep, isActionPlan } from './action/validate.js';
 export { formatPlan, formatStep, parsePlan, parsePlanText } from './action/parse.js';
 
 export {
@@ -79,6 +80,7 @@ export type {
 	RelationshipStringifier,
 	SeenObject,
 	Sight,
+	SightClause,
 	StringifyCtx,
 } from './perception/types.js';
 export type { Inventory } from './perception/inventory.js';
@@ -91,7 +93,7 @@ export {
 	proximityPairStringifier,
 	tagCrowdStringifier,
 } from './perception/stringifiers.js';
-export { formatSight, quantizeDistance, hypotAt, bearingOf, DEFAULT_SIGHT } from './perception/sight.js';
+export { formatSight, formatSightClauses, joinSightClauses, orderSightClauses, mergeHiveClauses, dedupIntersectingClauses, clauseScore, quantizeDistance, hypotAt, bearingOf, DEFAULT_SIGHT } from './perception/sight.js';
 export { formatInventory } from './perception/formatInventory.js';
 
 export type {
@@ -171,7 +173,7 @@ export {
 	thinkRecencyScale,
 	actionThinkScore,
 	planActionScore,
-	waitForOf,
+	waitUntilOf,
 	ACTION_THINK_SCORES,
 	THINK_BARE_SCORE,
 	THINK_ABOUT_SCORE,
@@ -192,6 +194,28 @@ export {
 	type WithMindQueue,
 	type WithThinkQueue,
 } from './think/queue.js';
+export {
+	Crowd,
+	CrowdUnit,
+	CrowdConductor,
+	isCrowdConductor,
+	STOCK_CROWD_VERBS,
+	STOCK_CROWD_VERB_ARGS,
+	FORMATION_VERBS,
+	registerStockCrowdVerbs,
+	squadTag,
+	shortTag,
+	evaluateWho,
+	buildCrowdCatalog,
+	DEFAULT_MAX_LAWS,
+	type CrowdUnitJSON,
+	type CrowdUnitSpec,
+	type CrowdConductorJSON,
+	type CrowdConductorOptions,
+	type StockCrowdVerb,
+	type CrowdLaw,
+	type CrowdLawSpec,
+} from './conductor/index.js';
 export { ArcDirector } from './director/director.js';
 export type {
 	AgentSpec,

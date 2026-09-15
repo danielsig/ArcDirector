@@ -1,7 +1,11 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import type { ActionPlan, Step } from '../action/types.js';
-import { deferThinks, planSteps, runPlan, THINK_ABOUT_CAP } from './run.js';
+import type { ActionPlan, ActionResult, Step } from '../action/types.js';
+import { parsePlanText } from '../action/parse.js';
+import { VerbRegistry, registerStockVerbs } from '../action/registry.js';
+import { dummyEntity, buildCatalog } from '../expr/natives.js';
+import { SampleCache } from '../expr/types.js';
+import { createPlanSession, deferThinks, planSteps, pollPlanSession, runPlan, THINK_ABOUT_CAP } from './run.js';
 
 function go(name:string):Step {
 	return { verb: 'go_to', args: { name } };
@@ -127,5 +131,125 @@ describe('runPlan', () => {
 		});
 		assert.deepEqual(verbs, ['go_to']);
 		assert.equal(result.interrupted, true);
+	});
+});
+
+describe('groups, fail, loop, when(watch)', () => {
+	it('runs (A && B) || C and interpolates fail.reason', async () => {
+		const seen:string[] = [];
+		const plan = parsePlanText('(go_to(Keep) && wait(seconds=1)) || say(fail.reason)', registerStockVerbs(new VerbRegistry()));
+		const result = await runPlan(plan, async (step) => {
+			seen.push(`${step.verb}:${String(step.args.text ?? step.args.name ?? '')}`);
+			if (step.verb === 'go_to') {
+				return { ok: false, verb: 'go_to', reason: 'locked' };
+			}
+			return { ok: true, verb: step.verb };
+		});
+		assert.equal(result.ok, true);
+		assert.deepEqual(seen, ['go_to:Keep', 'say:locked']);
+	});
+
+	it('loop times and until-fail', async () => {
+		const n:string[] = [];
+		const plan = parsePlanText('loop(times=3, plan=go_to(Keep))', registerStockVerbs(new VerbRegistry()));
+		await runPlan(plan, async (step) => {
+			n.push(step.verb);
+			return { ok: true, verb: step.verb };
+		});
+		assert.deepEqual(n, ['go_to', 'go_to', 'go_to']);
+		const failAt:string[] = [];
+		await runPlan(parsePlanText('loop(plan=go_to(Keep))', registerStockVerbs(new VerbRegistry())), async (step) => {
+			failAt.push(step.verb);
+			return { ok: failAt.length < 2, verb: step.verb };
+		});
+		assert.equal(failAt.length, 2);
+	});
+
+	it('loop through=x in expr binds x', async () => {
+		const names:string[] = [];
+		const catalog = buildCatalog({
+			me: dummyEntity('Mira'),
+			others: [dummyEntity('Able'), dummyEntity('Baker')],
+			items: [],
+			cache: new SampleCache(),
+		});
+		const session = createPlanSession({
+			catalog: () => catalog,
+			cooldown: 0,
+		});
+		const plan = parsePlanText('loop(through=x in others, plan=follow(x))', registerStockVerbs(new VerbRegistry()));
+		await runPlan(plan, async (step) => {
+			names.push(String(step.args.name ?? ''));
+			return { ok: true, verb: step.verb };
+		}, { session });
+		assert.deepEqual(names, ['Able', 'Baker']);
+	});
+
+	it('watch false aborts a handler and resumes the parent', async () => {
+		const verbs:string[] = [];
+		let heard = true;
+		const catalog = ():ReturnType<typeof buildCatalog> => buildCatalog({
+			me: dummyEntity('Mira'),
+			others: [],
+			items: [],
+			cache: new SampleCache(),
+			hasHeard: heard,
+		});
+		const session = createPlanSession({ catalog, cooldown: 0, now: () => 0 });
+		const execute = async (step:Step):Promise<ActionResult> => {
+			verbs.push(step.verb);
+			if (step.verb === 'go_to' && step.args.name === 'Keep') {
+				heard = false;
+				pollPlanSession(session);
+				return { ok: false, interrupted: true, verb: step.verb };
+			}
+			return { ok: true, verb: step.verb };
+		};
+		const plan = parsePlanText(
+			'when(watch=hasHeard, plan=go_to(Keep)) ; wander()',
+			registerStockVerbs(new VerbRegistry()),
+		);
+		const result = await runPlan(plan, execute, { session });
+		assert.equal(result.ok, true);
+		assert.ok(verbs.includes('go_to'));
+		assert.ok(verbs.includes('wander'));
+	});
+
+	it('earlier when(watch) runs before later; later waits while earlier watch is true', async () => {
+		const seen:string[] = [];
+		let first = true;
+		let second = true;
+		const catalog = ():ReturnType<typeof buildCatalog> => buildCatalog({
+			me: dummyEntity('Mira'),
+			others: [],
+			items: [],
+			cache: new SampleCache(),
+			bindings: {
+				first: { kind: 'bool', value: first },
+				second: { kind: 'bool', value: second },
+			},
+		});
+		const session = createPlanSession({ catalog, cooldown: 0, now: () => 0 });
+		const execute = async (step:Step):Promise<ActionResult> => {
+			seen.push(`${step.verb}:${String(step.args.text ?? '')}`);
+			if (step.verb === 'say' && step.args.text === 'A') {
+				pollPlanSession(session);
+				assert.equal(seen.includes('say:B'), false);
+				first = false;
+				pollPlanSession(session);
+				return { ok: false, interrupted: true, verb: step.verb };
+			}
+			if (step.verb === 'say' && step.args.text === 'B') {
+				second = false;
+			}
+			return { ok: true, verb: step.verb };
+		};
+		const plan = parsePlanText(
+			'when(watch=first, plan=say("A")) ; when(watch=second, plan=say("B")) ; wait()',
+			registerStockVerbs(new VerbRegistry()),
+		);
+		const result = await runPlan(plan, execute, { session });
+		assert.equal(result.ok, true);
+		assert.deepEqual(seen, ['say:A', 'say:B', 'wait:']);
 	});
 });

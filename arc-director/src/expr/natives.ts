@@ -44,6 +44,10 @@ export type HostKernels = {
 	stringifiers?:Stringifiers;
 	/** Host picks the stringifier key. The library never inspects tags for doors/people/items. */
 	stringifierKind?:(entity:ExprEntity)=>StringifierKind;
+	/** Ground XZ for manhattan / chebyshev / inSquare. */
+	at?:(who:ExprEntity)=>{ x:number; z:number } | undefined;
+	/** Override watch LIST_CAP (Crowd `who` uses roster size). */
+	listCap?:number;
 };
 
 function ent(e:ExprEntity):ExprVal {
@@ -196,6 +200,9 @@ export function buildCatalog(host:HostKernels):Catalog {
 	if (host.distance) {
 		bindDistance(host, fns);
 	}
+	if (host.at) {
+		bindGrid(host, fns);
+	}
 	if (host.walkDistance) {
 		bindWalk(host, fns);
 	}
@@ -211,11 +218,20 @@ export function buildCatalog(host:HostKernels):Catalog {
 	if (host.isOpen) {
 		bindOpen(host, fns);
 	}
+	bindBusy(fns);
 	for (const [k, fn] of Object.entries(host.hostFns ?? {})) {
 		fns.set(k, fn);
 	}
 
-	return { names, fns, me: host.me, cache: host.cache, stringifiers: host.stringifiers, stringifierKind: host.stringifierKind };
+	return {
+		names,
+		fns,
+		me: host.me,
+		cache: host.cache,
+		stringifiers: host.stringifiers,
+		stringifierKind: host.stringifierKind,
+		listCap: host.listCap,
+	};
 }
 
 function bindDistance(host:HostKernels, fns:Map<string, NativeFn>):void {
@@ -298,7 +314,7 @@ function filterMotion(
 			out.push(row);
 		}
 	}
-	return capList(out);
+	return capList(out, host.listCap ?? LIST_CAP);
 }
 
 function nearbyList(host:HostKernels, args:ExprVal[], me:ExprEntity, defaultR:number):ExprVal {
@@ -336,7 +352,7 @@ function nearbyList(host:HostKernels, args:ExprVal[], me:ExprEntity, defaultR:nu
 			out.push(row);
 		}
 	}
-	return capList(out);
+	return capList(out, host.listCap ?? LIST_CAP);
 }
 
 function bindWalk(host:HostKernels, fns:Map<string, NativeFn>):void {
@@ -368,7 +384,7 @@ function reachableList(host:HostKernels, args:ExprVal[], me:ExprEntity):ExprVal 
 		ranked.push({ row, d });
 	}
 	ranked.sort((a, b) => a.d - b.d);
-	return { kind: 'list', value: ranked.slice(0, LIST_CAP).map((r) => r.row) };
+	return { kind: 'list', value: ranked.slice(0, host.listCap ?? LIST_CAP).map((r) => r.row) };
 }
 
 function bindSight(host:HostKernels, fns:Map<string, NativeFn>):void {
@@ -469,6 +485,71 @@ function bindFacingBool(host:HostKernels, fns:Map<string, NativeFn>):void {
 		const v = !!read(pair[0], pair[1]);
 		const prev = host.cache.rememberFacing(pair[0].id, pair[1].id, v);
 		return { kind: 'bool', value: v && prev === false };
+	});
+}
+
+function bindGrid(host:HostKernels, fns:Map<string, NativeFn>):void {
+	const atOf = host.at!;
+	const pairAt = (args:ExprVal[]):{ ax:number; az:number; bx:number; bz:number } | undefined => {
+		const pair = twoEnt(args);
+		if (!pair) {
+			return undefined;
+		}
+		const a = atOf(pair[0]);
+		const b = atOf(pair[1]);
+		if (!a || !b) {
+			return undefined;
+		}
+		return { ax: a.x, az: a.z, bx: b.x, bz: b.z };
+	};
+	fns.set('manhattan', (args) => {
+		const p = pairAt(args);
+		if (!p) {
+			throw new ExprError('manhattan needs two people or things');
+		}
+		return { kind: 'number', value: Math.abs(p.ax - p.bx) + Math.abs(p.az - p.bz) };
+	});
+	fns.set('chebyshev', (args) => {
+		const p = pairAt(args);
+		if (!p) {
+			throw new ExprError('chebyshev needs two people or things');
+		}
+		return { kind: 'number', value: Math.max(Math.abs(p.ax - p.bx), Math.abs(p.az - p.bz)) };
+	});
+	fns.set('inSquare', (args) => {
+		const p = pairAt(args);
+		if (!p) {
+			return { kind: 'bool', value: false };
+		}
+		const r = asNum(args[2]) ?? host.nearRadius ?? 0;
+		const d = Math.max(Math.abs(p.ax - p.bx), Math.abs(p.az - p.bz));
+		return { kind: 'bool', value: d <= r };
+	});
+}
+
+function bindBusy(fns:Map<string, NativeFn>):void {
+	const busyOf = (who:ExprEntity):boolean => {
+		const v = who.fields?.busy;
+		return v?.kind === 'bool' && v.value;
+	};
+	const verbOf = (who:ExprEntity):string => {
+		const v = who.fields?.verb;
+		return v?.kind === 'string' ? v.value : '';
+	};
+	fns.set('isBusy', (args) => {
+		const who = args[0]?.kind === 'entity' ? args[0].value : undefined;
+		if (!who) {
+			return { kind: 'bool', value: false };
+		}
+		return { kind: 'bool', value: busyOf(who) };
+	});
+	fns.set('doing', (args) => {
+		const who = args[0]?.kind === 'entity' ? args[0].value : undefined;
+		const verb = args[1]?.kind === 'string' ? args[1].value : '';
+		if (!who || !verb) {
+			return { kind: 'bool', value: false };
+		}
+		return { kind: 'bool', value: verbOf(who) === verb };
 	});
 }
 

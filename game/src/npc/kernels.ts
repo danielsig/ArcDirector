@@ -226,6 +226,7 @@ export function kernelsOf(world:World, actor:GameObject, posed:PosedFact[], here
 			}
 			return Math.hypot(pa.x - pb.x, pa.z - pb.z);
 		},
+		at: (who:ExprEntity) => poseOf(world, posed, who.id, now, meAt),
 		nearRadius: NEAR_RADIUS,
 		walkDistance: (a:ExprEntity, b:ExprEntity) => {
 			const pa = poseOf(world, posed, a.id, now, meAt);

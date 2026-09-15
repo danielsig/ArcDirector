@@ -14,6 +14,11 @@ export type AgentSpec<HostCtx = unknown> = {
 	watches?:WatchInput;
 	pinnedWatches?:WatchInput;
 	watchesWritable?:boolean;
+	pinnedSightFocus?:string[];
+	sightFocus?:string[];
+	sightFocusWritable?:boolean;
+	maxSightFocus?:number;
+	sightLimit?:number;
 	skipHeartbeat?:boolean;
 	skipMajor?:boolean;
 	/** Tie-break after watch `rankScore`. Higher goes first. Default 0. */
@@ -24,6 +29,18 @@ export type AgentSpec<HostCtx = unknown> = {
 	 * `senses` / `tools` omitted on the kit = all registered senses / tools.
 	 */
 	kit?:KitSource<HostCtx>;
+	/** Bulk spawn for `addCrowdConductor`. */
+	units?:{ id:string; tags?:string[] }[];
+	laws?:{
+		name?:string;
+		who?:string;
+		watch:string;
+		plan:import('../action/types.js').ActionPlan | string;
+		pinned?:boolean;
+	}[];
+	maxLaws?:number;
+	/** Override director handler cooldown (game seconds). */
+	cooldown?:number;
 };
 
 export type VerbCall<HostCtx = unknown> = {
@@ -31,6 +48,8 @@ export type VerbCall<HostCtx = unknown> = {
 	args:Record<string, unknown>;
 	agent:Agent<HostCtx>;
 	ctx:HostCtx;
+	actorID:string;
+	units?:string[];
 };
 
 export type VerbHandler<HostCtx = unknown> = (

@@ -1153,7 +1153,7 @@ describe('Agent', () => {
 		assert.equal(agent.toJSON().lastVerb, 'think');
 	});
 
-	it('tick occupies a think slot; enact arms wait(for) and notes the queue', async () => {
+	it('tick occupies a think slot; enact arms wait(until) and notes the queue', async () => {
 		const think = withPriorityQueue({ watchInterval: 100, processInterval: 0, maxParallel: 2 });
 		const q = think.queue;
 		const provider = new FakeProvider(() => ({
@@ -1161,7 +1161,7 @@ describe('Agent', () => {
 				head: { verb: 'go_to', args: { name: 'EastGate' } },
 				then: {
 					join: 'then',
-					plan: { head: { verb: 'wait', args: { for: 'hasHeard' } } },
+					plan: { head: { verb: 'wait', args: { until: 'hasHeard' } } },
 				},
 			}),
 			toolCalls: [],

@@ -19,7 +19,7 @@ import {
 	Bridge,
 	Wallet,
 	Merchant,
-	Crowd,
+	MarketNPC,
 	Companion,
 	Wanted,
 	Interior,
@@ -127,7 +127,7 @@ function seenOf(go:GameObject):SeenObject {
 		|| !!go.getComponent(Sickbed)
 		|| go.id === 'MillLever'
 		|| go.id === 'MillBridge'
-		|| !!go.getComponent(Crowd)
+		|| !!go.getComponent(MarketNPC)
 		|| !!go.getComponent(Merchant)
 		|| !!go.getComponent(Interior);
 	const pose = poseXZ(go);
@@ -331,13 +331,13 @@ function examineWorld(go:GameObject):Record<string, unknown> {
 			? bag.contents.map((it) => pascalCase(it.name) || it.name)
 			: lock?.locked ? 'locked' : 'closed';
 	}
-	if (go.getComponent(Crowd) || go.getComponent(HumanBody)) {
+	if (go.getComponent(MarketNPC) || go.getComponent(HumanBody)) {
 		row.purse = coinsOf(go);
 		row.carrying = carriedLabels(go);
-		const crowd = go.getComponent(Crowd);
-		if (crowd) {
-			row.role = crowd.kind;
-			row.wants = crowd.wants;
+		const npc = go.getComponent(MarketNPC);
+		if (npc) {
+			row.role = npc.kind;
+			row.wants = npc.wants;
 		}
 		const shop = go.getComponent(Merchant);
 		if (shop) {

@@ -1,8 +1,11 @@
 import {
 	Agent,
 	ArcDirector,
+	CrowdConductor,
 	TalkNet,
 	STOCK_VERBS,
+	FORMATION_VERBS,
+	isCrowdConductor,
 	roleMentionTitles,
 	type ActionResult,
 	type AgentEvent,
@@ -19,6 +22,7 @@ import {
 	Named,
 	Companion,
 } from '../engine/components';
+import type { GameObject } from '../engine/GameObject';
 import type { World } from '../engine/World';
 import type { HudAiLogEntry, HudChatLine } from '../ui/hudModel';
 import { prefs, preferredChatModel, setPrefs } from '../prefs';
@@ -33,6 +37,7 @@ import { kernelsOf, scanWorld, type PosedFact } from './kernels';
 import { hostCanSee, lookWorld, inventoryOf, followedCarry } from './perception';
 import { executeStep } from './verbs';
 import { restoreCompanionHold } from './companion';
+import { runFormation } from './formations';
 import {
 	inTalkRange,
 	talkOthers,
@@ -90,10 +95,10 @@ export class GameHost {
 		this.storedAgents = JSON.parse(rewriteRetiredFeeNames(JSON.stringify(opts.agents ?? {}))) as Record<string, AgentJSON>;
 		this.bargainDone = opts.bargainDone ?? false;
 		this.talk = new TalkNet({
-			inRange: (speakerID, listenerID) => inTalkRange(world, speakerID, listenerID),
-			others: (speakerID) => talkOthers(world, speakerID),
-			canSee: (a, b) => hostCanSee(world, a, b),
-			clearHear: (a, b) => canHearClearly(world, a, b),
+			inRange: (speakerID, listenerID) => this.inCrowdRange(speakerID, listenerID),
+			others: (speakerID) => this.talkOthersOf(speakerID),
+			canSee: (a, b) => this.crowdCanSee(a, b),
+			clearHear: (a, b) => this.crowdClearHear(a, b),
 			names: (id) => talkNames(this, id),
 			face: (who, toward) => talkFace(world, who, toward),
 		}, (utterance) => onSpoke(this, utterance), { approach: false });
@@ -112,6 +117,15 @@ export class GameHost {
 				mayThink: (ctx) => {
 					if (ctx.reason === 'heartbeat') {
 						return false;
+					}
+					const mind = this.arc?.agent(ctx.npcID);
+					if (isCrowdConductor(mind)) {
+						const body = this.world.findByID(ctx.npcID) ?? findBody(this.world, ctx.npcID);
+						const npc = body?.getComponent(NPCInput);
+						if (npc?.busy()) {
+							return ctx.reason === 'major';
+						}
+						return true;
 					}
 					const go = this.world.findByID(ctx.npcID);
 					const npc = go?.getComponent(NPCInput);
@@ -132,8 +146,9 @@ export class GameHost {
 				maxTokens: 10_000,
 			})
 			.addStockVerbs()
+			.addStockCrowdVerbs()
 			.onVerb(this.do)
-			.withSight((ctx) => lookWorld(ctx.actor, this.ambient))
+			.withSight({ look: (ctx) => lookWorld(ctx.actor, this.ambient) })
 			.withInventory((ctx) => inventoryOf(ctx.actor))
 			.withLineOfSight((a, b) => hostCanSee(this.world, a, b))
 			.addSense('followed', {
@@ -159,18 +174,28 @@ export class GameHost {
 	}
 
 	do = (call:VerbCall<HostCtx>):Promise<ActionResult> | ActionResult => {
+		if (FORMATION_VERBS.has(call.verb)) {
+			return runFormation(this, call);
+		}
 		return executeStep(this, { verb: call.verb, args: call.args as Step['args'] }, call.ctx);
 	};
 
-	context = (id:string):HostCtx => {
-		const body = this.world.findByID(id);
-		if (!body) {
-			throw new Error(`missing body ${id}`);
+	context = (id:string):HostCtx | undefined => {
+		const body = this.world.findByID(id) ?? findBody(this.world, id);
+		if (body) {
+			return { world: this.world, actor: body };
 		}
-		return { world: this.world, actor: body };
+		return undefined;
 	};
 
 	abortPlan = (id:string):void => {
+		const hive = this.arc?.agent(id);
+		if (isCrowdConductor(hive) && hive.id === id) {
+			for (const unit of hive.crowd.list()) {
+				this.world.findByID(unit.id)?.getComponent(NPCInput)?.interrupt('urgent');
+				this.world.findByID(unit.id)?.getComponent(Celebrating)?.stop();
+			}
+		}
 		this.world.findByID(id)?.getComponent(NPCInput)?.interrupt('urgent');
 		this.world.findByID(id)?.getComponent(Celebrating)?.stop();
 	};
@@ -178,7 +203,8 @@ export class GameHost {
 	private readonly mapSense:MapSense = {
 		you: YOU_SYMBOL,
 		snapshot: (npcID, zoom, prev) => {
-			const snap = snapshotMap(this.world, npcID, zoom, prev);
+			const origin = this.lookOrigin(npcID);
+			const snap = snapshotMap(this.world, npcID, zoom, prev, origin);
 			if (snap && 'marks' in snap) {
 				void logLook(this, npcID, zoom, snap);
 			}
@@ -221,6 +247,10 @@ export class GameHost {
 		const actor = this.world.findByID(id) ?? findBody(this.world, id);
 		const agent = this.agentByID(id);
 		if (!actor) {
+			if (isCrowdConductor(agent) && agent.crowd.size > 0) {
+				this.attachMind(agent.id, agent);
+				return;
+			}
 			console.warn(`GameHost: no ${id}`);
 			pushLog(this, 'GameHost', `no ${id} in the world`);
 			this.arc?.removeAgent(id);
@@ -239,14 +269,18 @@ export class GameHost {
 		if (npc) {
 			npc.aiOn = true;
 		}
-		agent.toolRoundCap = 0;
-		agent.planRetryCap = PLAN_RETRY_CAP;
-		agent.stalled = (result) => !result.ok || !!result.interrupted || STALL_VERBS.has(result.verb ?? '');
 		if (actor.getComponent(Companion)) {
 			agent.strategicInterval = 0;
 		}
+		this.attachMind(agent.id, agent);
+	}
+
+	private attachMind(id:string, agent:Agent<HostCtx>):void {
+		agent.toolRoundCap = 0;
+		agent.planRetryCap = PLAN_RETRY_CAP;
+		agent.stalled = (result) => !result.ok || !!result.interrupted || STALL_VERBS.has(result.verb ?? '');
 		this.talk.attach({
-			id: agent.id,
+			id,
 			pushEvent: (event) => {
 				const stamped = { ...event, at: event.at ?? this.world.time };
 				agent.pushEvent(stamped);
@@ -256,8 +290,8 @@ export class GameHost {
 				}
 			},
 		});
-		this.arc?.mindQueue()?.ensure(agent.id, { skipHeartbeat: true });
-		this.arc?.mindQueue()?.setAiOn(agent.id, true);
+		this.arc?.mindQueue()?.ensure(id, { skipHeartbeat: true });
+		this.arc?.mindQueue()?.setAiOn(id, true);
 	}
 
 	exportAgents():Record<string, AgentJSON> {
@@ -280,7 +314,7 @@ export class GameHost {
 	observe(_dt = 0):void {
 		scanWorld(this);
 		this.hooks.checkBargain?.(this);
-		this.hooks.tickCrowd?.(this);
+		this.hooks.tickMarketNPC?.(this);
 		hearIfClose(this);
 		publishAiLog(this.log);
 		if (!this.arc?.ready && this.world.time >= this.nextTryAt) {
@@ -327,10 +361,164 @@ export class GameHost {
 			return a;
 		}
 		const go = findBody(this.world, id);
-		if (!go) {
-			return;
+		if (go) {
+			const named = this.arc?.agent(go.id) ?? this.arc?.agent(bodyName(go));
+			if (named) {
+				return named;
+			}
 		}
-		return this.arc?.agent(go.id) ?? this.arc?.agent(bodyName(go));
+		for (const agent of this.arc?.agents() ?? []) {
+			if (isCrowdConductor(agent) && agent.crowd.has(id)) {
+				return agent;
+			}
+		}
+		return undefined;
+	}
+
+	private conductorOf(id:string):CrowdConductor<HostCtx> | undefined {
+		const agent = this.arc?.agent(id);
+		if (isCrowdConductor(agent)) {
+			return agent;
+		}
+		for (const row of this.arc?.agents() ?? []) {
+			if (isCrowdConductor(row) && (row.crowd.has(id) || row.id === id)) {
+				return row;
+			}
+		}
+		return undefined;
+	}
+
+	private crowdBodies(conductor:CrowdConductor<HostCtx>):GameObject[] {
+		const out:GameObject[] = [];
+		for (const unit of conductor.crowd.list()) {
+			const go = findBody(this.world, unit.id);
+			if (go) {
+				out.push(go);
+			}
+		}
+		return out;
+	}
+
+	private lookOrigin(id:string):{ x:number; z:number } | undefined {
+		if (this.world.findByID(id) ?? findBody(this.world, id)) {
+			return undefined;
+		}
+		const hive = this.conductorOf(id);
+		if (!hive) {
+			return undefined;
+		}
+		const bodies = this.crowdBodies(hive);
+		if (bodies.length === 0) {
+			return undefined;
+		}
+		let x = 0;
+		let z = 0;
+		for (const go of bodies) {
+			x += go.transform.position.x;
+			z += go.transform.position.z;
+		}
+		return { x: x / bodies.length, z: z / bodies.length };
+	}
+
+	private inCrowdRange(speakerID:string, listenerID:string):boolean {
+		if (inTalkRange(this.world, speakerID, listenerID)) {
+			return true;
+		}
+		const listen = this.conductorOf(listenerID);
+		if (listen) {
+			for (const unit of listen.crowd.list()) {
+				if (inTalkRange(this.world, speakerID, unit.id)) {
+					return true;
+				}
+			}
+		}
+		const speak = this.conductorOf(speakerID);
+		if (speak && !findBody(this.world, speakerID)) {
+			for (const unit of speak.crowd.list()) {
+				if (inTalkRange(this.world, unit.id, listenerID)) {
+					return true;
+				}
+			}
+		}
+		return false;
+	}
+
+	private talkOthersOf(speakerID:string):string[] {
+		const speak = this.conductorOf(speakerID);
+		if (speak && !findBody(this.world, speakerID)) {
+			const names = new Set<string>();
+			for (const unit of speak.crowd.list()) {
+				for (const name of talkOthers(this.world, unit.id)) {
+					names.add(name);
+				}
+			}
+			return [...names];
+		}
+		return talkOthers(this.world, speakerID);
+	}
+
+	private crowdCanSee(a:string, b:string):boolean {
+		if (hostCanSee(this.world, a, b)) {
+			return true;
+		}
+		const listen = this.conductorOf(b);
+		if (listen) {
+			for (const unit of listen.crowd.list()) {
+				if (hostCanSee(this.world, a, unit.id)) {
+					return true;
+				}
+			}
+		}
+		const speak = this.conductorOf(a);
+		if (speak) {
+			for (const unit of speak.crowd.list()) {
+				if (hostCanSee(this.world, unit.id, b)) {
+					return true;
+				}
+			}
+			if (listen) {
+				for (const su of speak.crowd.list()) {
+					for (const lu of listen.crowd.list()) {
+						if (hostCanSee(this.world, su.id, lu.id)) {
+							return true;
+						}
+					}
+				}
+			}
+		}
+		return false;
+	}
+
+	private crowdClearHear(a:string, b:string):boolean {
+		if (canHearClearly(this.world, a, b)) {
+			return true;
+		}
+		const listen = this.conductorOf(b);
+		if (listen) {
+			for (const unit of listen.crowd.list()) {
+				if (canHearClearly(this.world, a, unit.id)) {
+					return true;
+				}
+			}
+		}
+		const speak = this.conductorOf(a);
+		if (speak) {
+			for (const unit of speak.crowd.list()) {
+				if (canHearClearly(this.world, unit.id, b)) {
+					return true;
+				}
+			}
+			if (listen) {
+				for (const su of speak.crowd.list()) {
+					for (const lu of listen.crowd.list()) {
+						if (canHearClearly(this.world, su.id, lu.id)) {
+							return true;
+						}
+					}
+				}
+			}
+		}
+		return false;
 	}
 
 	dispose():void {

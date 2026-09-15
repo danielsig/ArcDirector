@@ -190,18 +190,18 @@ export class Merchant extends Component {
 	deals:Record<string, number> = {};
 }
 
-export type CrowdKind = 'vendor' | 'customer' | 'guard';
+export type MarketNPCKind = 'vendor' | 'customer' | 'guard';
 
 /** Flea-market role: vendors stay; customers leave through a gate when satisfied. */
-export class Crowd extends Component {
-	kind:CrowdKind = 'customer';
+export class MarketNPC extends Component {
+	kind:MarketNPCKind = 'customer';
 	wants:string[] = [];
 	leaveGate = '';
 	leaving = false;
 }
 
 /** Walking into this door despawns a satisfied customer. */
-export class CrowdExit extends Component {}
+export class MarketGate extends Component {}
 
 /** Marked for the market watch — stolen goods, unpaid take. */
 export class Wanted extends Component {

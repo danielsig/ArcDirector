@@ -1,4 +1,4 @@
-import { Crowd, Merchant, Wallet } from '../engine/components';
+import { MarketNPC, Merchant, Wallet } from '../engine/components';
 import type { GameObject } from '../engine/GameObject';
 import { getDef } from './defs';
 import { compactName, findCarried, itemMatchesName } from './inventory';
@@ -58,15 +58,15 @@ export function findSaleItem(seller:GameObject, name:string):ItemInstance | null
 }
 
 export function noteWant(actor:GameObject, itemName:string):boolean {
-	const crowd = actor.getComponent(Crowd);
-	if (!crowd) {
+	const npc = actor.getComponent(MarketNPC);
+	if (!npc) {
 		return false;
 	}
 	const want = compactName(itemName);
-	const i = crowd.wants.findIndex((w) => compactName(w) === want);
+	const i = npc.wants.findIndex((w) => compactName(w) === want);
 	if (i < 0) {
 		return false;
 	}
-	crowd.wants.splice(i, 1);
+	npc.wants.splice(i, 1);
 	return true;
 }

@@ -1,18 +1,23 @@
 export type Join = 'then_if_ok' | 'then' | 'then_if_err';
 
+export type StepArg = string | number | boolean | string[] | ActionPlan;
+
 export type Step = {
 	verb:string;
-	args:Record<string, string | number | boolean | string[]>;
+	args:Record<string, StepArg>;
 };
 
 export type ActionPlan = {
 	head:Step;
+	group?:ActionPlan;
 	then?:{ join:Join; plan:ActionPlan };
 };
 
 export type ActionResult = {
 	ok:boolean;
 	interrupted?:boolean;
+	/** Handler watch went false or a higher-rank handler stole the step. Not a fail. */
+	preempted?:boolean;
 	reason?:string;
 	verb?:string;
 };
@@ -37,3 +42,21 @@ export const SYMBOL_JOIN:Record<string, Join> = {
 	';': 'then',
 	'||': 'then_if_err',
 };
+
+export const PLAN_BODY_CAP = 4;
+
+export function firstStep(plan:ActionPlan):Step | undefined {
+	if (plan.group) {
+		return firstStep(plan.group);
+	}
+	if (plan.head.verb === 'group') {
+		return undefined;
+	}
+	return plan.head;
+}
+
+export function isHoistedWhen(step:Step):boolean {
+	const watch = typeof step.args.watch === 'string' ? step.args.watch.trim() : '';
+	const who = typeof step.args.who === 'string' ? step.args.who.trim() : '';
+	return step.verb === 'when' && watch.length > 0 && who.length === 0;
+}

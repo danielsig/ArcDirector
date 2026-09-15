@@ -6,7 +6,7 @@ export { Game } from './core/Game.js';
 export { Time, resetTime, MAX_DT } from './core/Time.js';
 export { Rigidbody } from './core/Rigidbody.js';
 export { BoxCollider } from './core/BoxCollider.js';
-export { CROWD_YIELD, stepPhysics } from './core/physics.js';
+export { SHOVE_YIELD, stepPhysics } from './core/physics.js';
 export type { TerrainSample } from './core/World.js';
 export type { Constructor, ComponentClass } from './core/types.js';
 

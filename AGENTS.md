@@ -33,7 +33,7 @@ Unity-shaped, not Unity. `@arc-director/kindling` owns the canvas, `Renderer`, R
 | `Component` | Host logic. `enabled`, `static order`. |
 | `Time` | `time`, `deltaTime`, `fixedDeltaTime` (0.02), `fixedTime`. Clamp `MAX_DT` = 0.05. |
 | `Rigidbody` | XZ `velocity`; optional `grounded` Y snap. |
-| `BoxCollider` | XZ AABB; `solid` / `isTrigger` / `pad` (crowd). |
+| `BoxCollider` | XZ AABB; `solid` / `isTrigger` / `pad` (shove). |
 | `Camera` / `Light` / `MeshRenderer` | View. Renderer finds the first enabled `Camera`. |
 | `Renderer` | WebGL, fog/hemi/fill/sun look, resize. Null when headless. |
 | `Audio` | Procedural mixer on `world.audio`. Scores + HRTF stereo SFX, no sample files. Silent when headless. |

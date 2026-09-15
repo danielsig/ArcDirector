@@ -89,7 +89,8 @@ Standalone `withPriorityQueue()` spread helpers remain for `new Agent({...})` te
 
 | | |
 |--|--|
-| `addStockVerbs(...verbs)` | Schema only. No args = all stock verbs. Pass names to opt in to a subset: `addStockVerbs(...STOCK_MOVE_VERBS)` is `go_to` / `follow` / `wander`; `STOCK_ITEM_VERBS` is `use` / `equip` / `unequip` / `pick_up` / `drop` / `give` / `examine`; `STOCK_MIND_VERBS` is `say` / `wait` / `remember` / `think` / `set_goal` / `drop_goal` / `set_identity`. Same name again is skipped. |
+| `addStockVerbs(...verbs)` | Schema only. No args = all stock verbs. Pass names to opt in to a subset: `addStockVerbs(...STOCK_MOVE_VERBS)` is `go_to` / `follow` / `wander`; `STOCK_ITEM_VERBS` is `use` / `equip` / `unequip` / `pick_up` / `drop` / `give` / `examine`; `STOCK_MIND_VERBS` is `say` / `wait` / `remember` / `think` / `set_goal` / `drop_goal` / `set_identity` / `when` / `loop`. Same name again is skipped. |
+| `addStockCrowdVerbs(...verbs)` | Schema only for `when` / `law` / `unlaw` / `tag` / `untag` / `spread` / `circle` / `hold_line`. Registering does not grant; the conductor’s kit does. |
 | `addVerb(name, args, handler?)` | Schema + optional world function. Same name again binds/replaces the handler. |
 | `removeVerbs(...names)` | Drop catalog schemas and named handlers. Missing names are skipped. Empty rest is a no-op. |
 | `withDefaultKit(kit)` | Object or `(ctx) => kit` used when `addAgent` omits `kit`. Same fetch-every-tick rules. |
@@ -113,7 +114,7 @@ director.addAgent({ id: 'Cook', kit: (ctx) => kitFor(ctx) }); // callback
 
 Prompt, JSON schema, and parse use the kit. A step whose verb is not available fails closed. `agent.verbs` is the catalog; `agent.activeVerbs()` is this tick. Assign `agent.kit` when the grant actually changes, not every frame.
 
-Handlers receive a **`VerbCall`**: `{ verb, args, agent, ctx }`. The full plan is on `agent.lastPlan` / `agent.planIndex`, not on the call. Per-verb handlers ignore `verb`; `addVerb('give', { item: 'id', to: 'id' }, host.give)` already bound the name.
+Handlers receive a **`VerbCall`**: `{ verb, args, agent, ctx, actorID, units? }`. `actorID` is the body performing the step (a CrowdUnit id during inner `plan=`). `units` is set when a formation verb runs once on a set. The full plan is on `agent.lastPlan` / `agent.planIndex`, not on the call. Per-verb handlers ignore `verb`; `addVerb('give', { item: 'id', to: 'id' }, host.give)` already bound the name.
 
 Mind-internal verbs never hit the host: `remember`, `think`, `set_goal`, `drop_goal`, `set_identity`, and `say` when TalkNet is attached.
 
@@ -123,7 +124,7 @@ Senses every think in the user block; tools on demand. `addSense` / `addTool` re
 
 | | |
 |--|--|
-| `withSight(look)` | Stock sense `sight`. callback returns a `Sight` of `SeenObject[]` (`at` vectors). |
+| `withSight({ look, limit })` | Stock sense `sight`. `look` returns a `Sight` of `SeenObject[]` (`at` vectors). `limit` is the default max **irreducible sight clauses** after `sightFocus` order. Per-mind `AgentSpec.sightLimit` overrides. Omit `look` to set only the cap; omit `limit` for no cap. |
 | `withInventory(look)` | Stock sense `carrying`. callback returns an `Inventory` bag. |
 | `withLineOfSight((aID, bID) => boolean)` | One occlusion callback for sight, talk `canSee`, and watch `hasSightline`. |
 | `addSense(name, spec)` | Host-only sense. `spec` is `{ description, gather }`. |
@@ -160,6 +161,11 @@ type AgentSpec = {
 	watches?: WatchInput;
 	pinnedWatches?: WatchInput;
 	watchesWritable?: boolean;
+	pinnedSightFocus?: string[];
+	sightFocus?: string[];
+	sightFocusWritable?: boolean;
+	maxSightFocus?: number;
+	sightLimit?: number;
 	skipHeartbeat?: boolean;
 	skipMajor?: boolean;
 	rank?: number; // tie-break after watch score
@@ -170,6 +176,40 @@ type AgentSpec = {
 `director.agent(id)`, `director.agents()`, `exportAgents` / `restoreAgents`, `pushEvent`.
 
 Identity is who they are. Do not rewrite name, role, or traits to recap a mood, an order, or this think. That belongs in goals and events ([Prompt prefix](#prompt-prefix)).
+
+### CrowdConductor
+
+One LLM mind, many dumb bodies. A hive is `addCrowdConductor` + `addCrowdUnit` on the same `with*` / `add*` chain as `addAgent`. `addCrowdConductor` / `addCrowdUnit` / `addCrowdLaw` / `removeCrowdUnit` stay open after `start()`. Spec may also pass `units` / `laws` for a bulk spawn.
+
+```ts
+const director = await new ArcDirector<HostCtx>()
+	.withLMStudioInference()
+	.addStockVerbs()
+	.addStockCrowdVerbs()
+	.withDefaultKit({ verbs: STOCK_VERBS })
+	.withSight({ look: (ctx) => host.look(ctx), limit: 16 })
+	.withContext((id) => host.ctx(id))
+	.addCrowdConductor({
+		id: 'MarketHive',
+		identity: { name: 'Market', role: 'Keeps the square moving.' },
+		pinnedSightFocus: ['isHurt(it)', 'isNear(it, Player)'],
+		kit: { verbs: [...STOCK_VERBS, ...STOCK_CROWD_VERBS] },
+	})
+	.addCrowdUnit('MarketHive', { id: 'Mira', tags: ['Guard'] })
+	.addCrowdLaw('MarketHive', {
+		name: 'flee',
+		who: 'units.filter(u => !u.busy)',
+		watch: 'isHurt(me)',
+		plan: 'go_to(Keep)',
+	})
+	.start();
+```
+
+**`when(who, plan)` is instantaneous.** It issues orders and returns `ok` without waiting for units to walk, talk, or finish. `&&` `;` `||` on the *thinker’s* plan sequence *your* steps, so `when(...) && when(...)` starts both groups at once. `&&` `;` `||` *inside* `plan=` sequence that unit. `then_if_ok` after `when` means orders issued, not units finished. To wait on units from the thinker: `wait(until=...)` over the Crowd.
+
+`who=` is an expr on `units` (this roster), not `others`. Squad tags are stored `` `${conductor.id}:${short}` ``; exprs and prompts use the short name. `law` / `unlaw` are standing emergencies (no LLM) that push a stack frame when `watch` is true. `when(watch)` on a job is critical (hoisted). Formations (`spread` / `circle` / `hold_line`) run once on the set and must be the `when` plan head.
+
+A CrowdConductor may be bodiless (hive) or have a body (commander). Inner `me` in `plan=` / law `watch=` is that CrowdUnit. A bodiless hive’s thinker `me` is a dummy at the average of unit poses (no carrying).
 
 ### Prompt prefix
 
@@ -198,7 +238,7 @@ const director = await new ArcDirector<HostCtx>()
 	.addVerb('steal', { item: 'id', from: 'id' }, host.steal)
 	.withDefaultKit({ verbs: [...STOCK_VERBS, 'steal'] })
 	.onVerb(({ verb }) => ({ ok: false, verb, reason: `unhandled ${verb}` }))
-	.withSight((ctx) => host.look(ctx))
+	.withSight({ look: (ctx) => host.look(ctx) })
 	.withInventory((ctx) => host.inventory(ctx))
 	.withLineOfSight((a, b) => host.canSee(a, b))
 	.withKernels((ctx) => host.kernels(ctx))
@@ -317,6 +357,8 @@ type HostKernels = {
 	hostFns?: Record<string, NativeFn>;
 	distance?: (a, b) => number | undefined;
 	nearRadius?: number;
+	at?: (who) => { x: number; z: number } | undefined; // manhattan / chebyshev / inSquare
+	listCap?: number;                 // Crowd who= caps at roster size
 	walkDistance?: (a, b) => number | undefined;  // meters of path; undefined = none; 0 = same cell
 	canSee?: (a, b) => boolean;   // director overwrites when withLineOfSight
 	facing?: (a, b) => number;
@@ -336,7 +378,7 @@ type HostKernels = {
 };
 ```
 
-Space enters expressions only through host callbacks (`distance`, `facing`, `canSee`, `walkDistance`).
+Space enters expressions only through host callbacks (`distance`, `facing`, `canSee`, `walkDistance`, `at`).
 
 ---
 
@@ -346,13 +388,13 @@ Space enters expressions only through host callbacks (`distance`, `facing`, `can
 { head: { verb: 'go_to', args: { name: 'Target' } }, then?: { join, plan } }
 ```
 
-Joins: `then_if_ok` (`&&`), `then` (`;`), `then_if_err` (`||`). At most four steps. `think()` is always moved to the end. `wait(seconds?, for?)` parks; `for` is a one-shot watch.
+Joins: `then_if_ok` (`&&`), `then` (`;`), `then_if_err` (`||`). At most four steps. `think()` is always moved to the end. `wait(seconds?, until?)` parks; `until` is a one-shot watch.
 
 `ActionResult`: `{ ok, interrupted?, reason?, verb? }`.
 
 ### Follow-up think
 
-After a plan, `enqueuePlan` uses the **highest** score among steps **after** the last `wait(for)`. Failure is at least 0.3. Override with `actionScores`. 0 means no follow-up on success.
+After a plan, `enqueuePlan` uses the **highest** score among steps **after** the last `wait(until)`. Failure is at least 0.3. Override with `actionScores`. 0 means no follow-up on success.
 
 | Verb | Score |
 |------|------:|

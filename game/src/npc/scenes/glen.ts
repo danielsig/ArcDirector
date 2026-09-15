@@ -18,12 +18,12 @@ export const FORAGER:AgentSpec = {
 	}],
 	memories: [
 		{
-			text: 'FireMushroom grows among the trees west of Cottage, outdoors. If I am not carrying FireMushroom and the scene has not named it, wander(for=\'some(items.filter("FireMushroom").nearby())\'). When that wander ends, pick_up(FireMushroom) — do not wander that same search again.',
+			text: 'FireMushroom grows among the trees west of Cottage, outdoors. If I am not carrying FireMushroom and the scene has not named it, wander(until=\'some(items.filter("FireMushroom").nearby())\'). When that wander ends, pick_up(FireMushroom) — do not wander that same search again.',
 			tags: ['FireMushroom', 'trees'],
 			pinned: true,
 		},
 		{
-			text: 'Miller wants FireMushroom as the mill-fee and works near Cottage, east of these woods. If I am carrying FireMushroom and cannot see Miller, wander(for="isNear(me, Miller)"). After he has the mushroom he lowers MillBridge with MillCrank on MillLever. Angler has SilverTrout south of the water and cannot cross until MillBridge is down. CottageDoor is not my work.',
+			text: 'Miller wants FireMushroom as the mill-fee and works near Cottage, east of these woods. If I am carrying FireMushroom and cannot see Miller, wander(until="isNear(me, Miller)"). After he has the mushroom he lowers MillBridge with MillCrank on MillLever. Angler has SilverTrout south of the water and cannot cross until MillBridge is down. CottageDoor is not my work.',
 			tags: ['Miller', 'Angler', 'MillBridge', 'SilverTrout', 'Cottage'],
 			pinned: true,
 		},

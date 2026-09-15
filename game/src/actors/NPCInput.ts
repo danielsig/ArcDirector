@@ -64,7 +64,8 @@ type Job =
 	| { kind:'go_to'; name:string; startedAt:number; done:(r:NPCActionResult)=>void }
 	| { kind:'follow'; name:string; startedAt:number; until:number; done:(r:NPCActionResult)=>void }
 	| { kind:'wander'; startedAt:number; until:number; guide?:WanderGuide; notedAt:number; done:(r:NPCActionResult)=>void }
-	| { kind:'wait'; until:number; done:(r:NPCActionResult)=>void };
+	| { kind:'wait'; until:number; stop?:()=>boolean; done:(r:NPCActionResult)=>void }
+	| { kind:'point'; dest:{ x:number; z:number }; startedAt:number; done:(r:NPCActionResult)=>void };
 
 /** Named destinations + conversation overlay. No yaw verb. */
 export class NPCInput extends Component {
@@ -117,10 +118,20 @@ export class NPCInput extends Component {
 		});
 	}
 
-	wait(seconds = 1):Promise<NPCActionResult> {
+	wait(seconds = 1, stop?:()=>boolean):Promise<NPCActionResult> {
 		return this.begin({
 			kind: 'wait',
 			until: this.now() + seconds,
+			stop,
+			done: () => undefined,
+		});
+	}
+
+	goToPoint(x:number, z:number):Promise<NPCActionResult> {
+		return this.begin({
+			kind: 'point',
+			dest: { x, z },
+			startedAt: this.now(),
 			done: () => undefined,
 		});
 	}
@@ -178,9 +189,34 @@ export class NPCInput extends Component {
 		const now = this.now();
 		if (job.kind === 'wait') {
 			this.steer(null, null);
+			if (job.stop?.()) {
+				this.finish({ ok: true, verb: 'wait', reason: 'until' });
+				return;
+			}
 			if (now >= job.until) {
 				this.finish({ ok: true, verb: 'wait' });
 			}
+			return;
+		}
+		if (job.kind === 'point') {
+			if (now - job.startedAt > GO_TO_TIMEOUT) {
+				this.finish({ ok: false, verb: 'go_to', reason: 'stuck' });
+				return;
+			}
+			if (this.arrivedAt(job.dest, 0.45)) {
+				this.finish({ ok: true, verb: 'go_to' });
+				return;
+			}
+			const next = this.followPath(job.dest, dt);
+			if (!next) {
+				this.finish({
+					ok: false,
+					verb: 'go_to',
+					reason: 'cannot reach point — path blocked (locked door, water, or walls)',
+				});
+				return;
+			}
+			this.steer(null, next);
 			return;
 		}
 		if (job.kind === 'wander') {

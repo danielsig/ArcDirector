@@ -1,6 +1,6 @@
 import type { JsonSchema } from '../json.js';
 
-export type VerbArgKind = 'id' | 'id?' | 'string' | 'string?' | 'number' | 'number?' | 'string[]' | 'string[]?';
+export type VerbArgKind = 'id' | 'id?' | 'string' | 'string?' | 'number' | 'number?' | 'string[]' | 'string[]?' | 'plan' | 'plan?';
 
 export type VerbArgMap = Record<string, VerbArgKind>;
 
@@ -78,6 +78,9 @@ export class VerbRegistry {
 		if (base === 'string[]') {
 			return { type: 'array', items: { type: 'string' } };
 		}
+		if (base === 'plan') {
+			return { type: 'object' };
+		}
 		return { type: 'string' };
 	}
 
@@ -94,14 +97,16 @@ export class VerbRegistry {
 
 export const STOCK_MOVE_VERBS = ['go_to', 'follow', 'wander'] as const;
 export const STOCK_ITEM_VERBS = ['use', 'equip', 'unequip', 'pick_up', 'drop', 'give', 'examine'] as const;
-export const STOCK_MIND_VERBS = ['say', 'wait', 'remember', 'think', 'set_goal', 'drop_goal', 'set_identity'] as const;
+export const STOCK_MIND_VERBS = [
+	'say', 'wait', 'remember', 'think', 'set_goal', 'drop_goal', 'set_identity', 'when', 'loop',
+] as const;
 export const STOCK_VERBS = [...STOCK_MOVE_VERBS, ...STOCK_ITEM_VERBS, ...STOCK_MIND_VERBS] as const;
 export type StockVerb = (typeof STOCK_VERBS)[number];
 
 export const STOCK_VERB_ARGS:Record<StockVerb, VerbArgMap> = {
 	go_to: { name: 'id' },
 	follow: { name: 'id' },
-	wander: { for: 'string?', until: 'string?', seconds: 'number?' },
+	wander: { until: 'string?', seconds: 'number?' },
 	use: { item: 'id', target: 'id?' },
 	equip: { item: 'id', slot: 'string?' },
 	unequip: { slot: 'string' },
@@ -110,12 +115,14 @@ export const STOCK_VERB_ARGS:Record<StockVerb, VerbArgMap> = {
 	give: { item: 'id', to: 'id' },
 	examine: { name: 'id' },
 	say: { text: 'string', to: 'id?' },
-	wait: { seconds: 'number?', for: 'string?' },
+	wait: { seconds: 'number?', until: 'string?' },
 	remember: { content: 'string', tags: 'string[]?' },
 	think: { about: 'string?' },
 	set_goal: { goal: 'string', priority: 'number?' },
 	drop_goal: { goal: 'string?' },
 	set_identity: { name: 'string?', role: 'string?', traits: 'string[]?' },
+	when: { who: 'string?', watch: 'string?', plan: 'plan', name: 'string?' },
+	loop: { plan: 'plan', through: 'string?', until: 'string?', times: 'number?' },
 };
 
 /** Schema-only. Omit `verbs` to register the full stock set. Already-registered names are skipped. */

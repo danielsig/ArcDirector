@@ -8,6 +8,7 @@ import type {
 	RelationshipHit,
 	SeenObject,
 	Sight,
+	SightClause,
 	StringifyCtx,
 } from './types.js';
 
@@ -153,19 +154,6 @@ function trimPeriod(s:string):string {
 	return s.replace(/[.\s]+$/, '');
 }
 
-function joinAnd(parts:string[]):string {
-	if (parts.length === 0) {
-		return '';
-	}
-	if (parts.length === 1) {
-		return parts[0];
-	}
-	if (parts.length === 2) {
-		return `${parts[0]} and ${parts[1]}`;
-	}
-	return `${parts.slice(0, -1).join(', ')}, and ${parts.slice(-1)[0]}`;
-}
-
 function isPerson(obj:SeenObject):boolean {
 	return obj.tags.includes('agent') || obj.tags.includes('person');
 }
@@ -236,7 +224,13 @@ function leftoverClause(
 	obj:SeenObject,
 	me:SeenObject,
 	distance:DistFn,
-	opts:{ closeness:number; unitName:string; farDistance:number; lodLayers:NonNullable<SightOpts['lodLayers']> },
+	opts:{
+		closeness:number;
+		unitName:string;
+		farDistance:number;
+		lodLayers:NonNullable<SightOpts['lodLayers']>;
+		fromName?:string;
+	},
 	npcID:string,
 	bearingFn:(obj:SeenObject)=>Bearing,
 	hasFacing:boolean,
@@ -244,13 +238,137 @@ function leftoverClause(
 	const text = lodNoun(obj, opts, me, distance, npcID, bearingFn);
 	const d = quantizeDistance(finite(distance(obj, me)), opts.closeness);
 	const unit = `${opts.unitName}${d === 1 ? '' : 's'}`;
+	if (opts.fromName) {
+		return `${text} ${d} ${unit} from ${opts.fromName}`;
+	}
 	if (!hasFacing) {
 		return `${text} ${d} ${unit}`;
 	}
 	return `${text} ${d} ${unit} ${bearingFn(obj)}`;
 }
 
-export function formatSight(sight:Sight, opts:SightOpts = {}):string {
+function idsOf(obj:SeenObject):string[] {
+	return obj.claimedIDs && obj.claimedIDs.length > 0 ? obj.claimedIDs : [obj.id];
+}
+
+function uniqueIDs(ids:string[]):string[] {
+	const seen = new Set<string>();
+	const out:string[] = [];
+	for (const id of ids) {
+		if (!id || seen.has(id)) {
+			continue;
+		}
+		seen.add(id);
+		out.push(id);
+	}
+	return out;
+}
+
+function stampClaimed(obj:SeenObject, extra:SeenObject[]):SeenObject {
+	return {
+		...obj,
+		claimedIDs: uniqueIDs([
+			...idsOf(obj),
+			...extra.flatMap(idsOf),
+		]),
+	};
+}
+
+export function joinSightClauses(clauses:SightClause[]):string {
+	const texts = clauses.map((c) => trimPeriod(c.text)).filter((t) => t.length > 0);
+	if (texts.length === 0) {
+		return '';
+	}
+	return `${texts.join('. ')}.`;
+}
+
+export function clauseScore(clause:SightClause, objectScores?:Map<string, number>):number {
+	if (!objectScores || clause.claimedIDs.length === 0) {
+		return 0;
+	}
+	let max = 0;
+	for (const id of clause.claimedIDs) {
+		const s = objectScores.get(id) ?? 0;
+		if (s > max) {
+			max = s;
+		}
+	}
+	return max;
+}
+
+/** Intersecting claimed sets collapse to one clause. Disjoint sets stay separate. */
+export function dedupIntersectingClauses(
+	clauses:SightClause[],
+	objectScores?:Map<string, number>,
+):SightClause[] {
+	const out:SightClause[] = [];
+	for (const clause of clauses) {
+		if (clause.ambient || clause.claimedIDs.length === 0) {
+			out.push(clause);
+			continue;
+		}
+		const set = new Set(clause.claimedIDs);
+		const idx = out.findIndex((row) => (
+			!row.ambient && row.claimedIDs.some((id) => set.has(id))
+		));
+		if (idx < 0) {
+			out.push(clause);
+			continue;
+		}
+		const prev = out[idx];
+		if (clauseScore(clause, objectScores) > clauseScore(prev, objectScores)) {
+			out[idx] = clause;
+		}
+	}
+	return out;
+}
+
+export function orderSightClauses(
+	clauses:SightClause[],
+	objectScores?:Map<string, number>,
+	sightLimit?:number,
+	rank = false,
+):SightClause[] {
+	const doRank = rank || !!(objectScores && objectScores.size > 0);
+	let ordered:SightClause[];
+	if (doRank) {
+		const ambient = clauses.filter((c) => c.ambient);
+		const rest = clauses.filter((c) => !c.ambient);
+		const keyed = rest.map((c, i) => ({ c, i, score: clauseScore(c, objectScores) }));
+		keyed.sort((a, b) => b.score - a.score || a.i - b.i);
+		ordered = [...ambient, ...keyed.map((k) => k.c)];
+	}
+	else {
+		ordered = clauses;
+	}
+	if (sightLimit !== undefined && Number.isFinite(sightLimit) && sightLimit >= 0) {
+		ordered = ordered.slice(0, Math.max(0, Math.floor(sightLimit)));
+	}
+	return ordered;
+}
+
+export function mergeHiveClauses(
+	groups:{ unitID:string; clauses:SightClause[] }[],
+	objectScores?:Map<string, number>,
+):SightClause[] {
+	const merged:SightClause[] = [];
+	let ambient:SightClause | undefined;
+	for (const group of groups) {
+		for (const clause of group.clauses) {
+			if (clause.ambient) {
+				if (!ambient && clause.text.trim()) {
+					ambient = clause;
+				}
+				continue;
+			}
+			merged.push(clause);
+		}
+	}
+	const rows = ambient ? [ambient, ...merged] : merged;
+	return dedupIntersectingClauses(rows, objectScores);
+}
+
+export function formatSightClauses(sight:Sight, opts:SightOpts = {}):SightClause[] {
 	const radius = opts.radius ?? DEFAULT_SIGHT.radius;
 	const unitName = opts.unitName ?? DEFAULT_SIGHT.unitName;
 	const closeness = opts.closeness ?? DEFAULT_SIGHT.closeness;
@@ -280,7 +398,7 @@ export function formatSight(sight:Sight, opts:SightOpts = {}):string {
 		pluralize,
 	};
 
-	const hits:string[] = [];
+	const hits:{ text:string; claimedIDs:string[] }[] = [];
 	let pool = remaining;
 	while (pool.length > 0) {
 		let best:{ hit:RelationshipHit; claimed:SeenObject[] } | null = null;
@@ -310,37 +428,44 @@ export function formatSight(sight:Sight, opts:SightOpts = {}):string {
 		const claimedSet = new Set(best.claimed);
 		const unusedFromPool = pool.filter((o) => !claimedSet.has(o));
 		if (best.hit.mode === 'utter') {
-			hits.push(best.hit.text);
+			hits.push({
+				text: best.hit.text,
+				claimedIDs: uniqueIDs(best.claimed.flatMap(idsOf)),
+			});
 			pool = unusedFromPool;
 		}
 		else {
 			if (!best.hit.reduceTo) {
 				throw new Error(`relationship hit '${best.hit.text}' used reduce without reduceTo`);
 			}
-			pool = [...unusedFromPool, fillSeen(best.hit.reduceTo)];
+			pool = [...unusedFromPool, fillSeen(stampClaimed(best.hit.reduceTo, best.claimed))];
 		}
 	}
 
-	const leftoverOpts = { closeness, unitName, farDistance, lodLayers };
+	const leftoverOpts = { closeness, unitName, farDistance, lodLayers, fromName: opts.fromName };
 	const leftovers = [...pool]
 		.sort((a, b) => leftoverRank(b) - leftoverRank(a)
 			|| (b.landmarkTier ?? 0) - (a.landmarkTier ?? 0)
 			|| (b.interesting ?? 0) - (a.interesting ?? 0)
 			|| a.id.localeCompare(b.id))
-		.map((o) => leftoverClause(o, me, distance, leftoverOpts, npcID, bearingFn, hasFacing));
+		.map((o) => ({
+			text: leftoverClause(o, me, distance, leftoverOpts, npcID, bearingFn, hasFacing),
+			claimedIDs: idsOf(o),
+		}));
 
-	const clauses:string[] = [];
-	if (sight.ambient && sight.ambient.trim()) {
-		clauses.push(trimPeriod(sight.ambient.trim()));
+	const clauses:SightClause[] = [];
+	if (!opts.skipAmbient && sight.ambient && sight.ambient.trim()) {
+		clauses.push({ text: trimPeriod(sight.ambient.trim()), claimedIDs: [], ambient: true });
 	}
 	for (const h of hits) {
-		clauses.push(trimPeriod(h));
+		clauses.push({ text: trimPeriod(h.text), claimedIDs: h.claimedIDs });
 	}
-	if (leftovers.length > 0) {
-		clauses.push(trimPeriod(joinAnd(leftovers)));
+	for (const leftover of leftovers) {
+		clauses.push({ text: trimPeriod(leftover.text), claimedIDs: leftover.claimedIDs });
 	}
-	if (clauses.length === 0) {
-		return '';
-	}
-	return `${clauses.join('. ')}.`;
+	return clauses;
+}
+
+export function formatSight(sight:Sight, opts:SightOpts = {}):string {
+	return joinSightClauses(formatSightClauses(sight, opts));
 }

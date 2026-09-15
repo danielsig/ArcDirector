@@ -76,7 +76,7 @@ const HALL:Sight = {
 	],
 };
 
-const HALL_GOLDEN = 'A damp stone hall of the abbey. boxes. Alchemist 3 paces ahead, Herbalist 4 paces left, *ArmoryChest* 4 paces ahead, *BrewHearth* 10 paces ahead, *EastGate* 5 paces right, *LinaCot* 10 paces right, *NollCot* 10 paces right, *Pillar* 5 paces ahead, *WestGate* 10 paces left, Bitterroot 15 paces ahead, BrassKey 5 paces ahead, Broom 10 paces left, Bucket 5 paces left, ChestKey 2 paces behind, GoldCoin 4 paces right, Lantern 4 paces behind, LeatherGlove 2 paces right, Rag 10 paces right, TorchA 5 paces left, TorchB 5 paces right, and WorkGlove 2 paces left.';
+const HALL_GOLDEN = 'A damp stone hall of the abbey. boxes. Alchemist 3 paces ahead. Herbalist 4 paces left. *ArmoryChest* 4 paces ahead. *BrewHearth* 10 paces ahead. *EastGate* 5 paces right. *LinaCot* 10 paces right. *NollCot* 10 paces right. *Pillar* 5 paces ahead. *WestGate* 10 paces left. Bitterroot 15 paces ahead. BrassKey 5 paces ahead. Broom 10 paces left. Bucket 5 paces left. ChestKey 2 paces behind. GoldCoin 4 paces right. Lantern 4 paces behind. LeatherGlove 2 paces right. Rag 10 paces right. TorchA 5 paces left. TorchB 5 paces right. WorkGlove 2 paces left.';
 
 const GLEN:Sight = {
 	self: { id: 'Forager', at: [7, 8], facing: [1, 0] },
@@ -169,7 +169,7 @@ describe('formatSight', () => {
 		assert.equal(/\bagents\b/.test(paragraph), false);
 		assert.equal(
 			paragraph,
-			'A windy river glen. Angler 15 paces right, Miller 10 paces ahead, Servant 5 paces ahead, *Cottage* 5 paces right, *CottageDoor* 3 paces right, *Falls* 15 paces ahead, *MillBridge* 10 paces right, *MillLever* 5 paces ahead, *MillStone* 10 paces ahead, *OakA* 5 paces behind, *OakB* 10 paces right, Basket 2 paces behind, CottageKey 1 pace ahead, FireMushroom 5 paces behind, Net 15 paces right, Oar 15 paces ahead, Pebble 2 paces left, ReedA 10 paces right, ReedB 10 paces right, SilverTrout 20 paces ahead, and Stick 3 paces ahead.',
+			'A windy river glen. Angler 15 paces right. Miller 10 paces ahead. Servant 5 paces ahead. *Cottage* 5 paces right. *CottageDoor* 3 paces right. *Falls* 15 paces ahead. *MillBridge* 10 paces right. *MillLever* 5 paces ahead. *MillStone* 10 paces ahead. *OakA* 5 paces behind. *OakB* 10 paces right. Basket 2 paces behind. CottageKey 1 pace ahead. FireMushroom 5 paces behind. Net 15 paces right. Oar 15 paces ahead. Pebble 2 paces left. ReedA 10 paces right. ReedB 10 paces right. SilverTrout 20 paces ahead. Stick 3 paces ahead.',
 		);
 	});
 
@@ -180,7 +180,7 @@ describe('formatSight', () => {
 		assert.equal(/\bagents\b/.test(paragraph), false);
 		assert.equal(
 			paragraph,
-			'A busy street flea market. boxes. Cutler next to *CutlerStall*. Weaver next to *WeaverStall*. Baker next to *BakerStall*. Potter next to *PotterStall*. Brant 15 paces ahead, Cass 15 paces ahead, Pike 2 paces right, VisitorA 10 paces ahead, VisitorB 10 paces ahead, VisitorC 5 paces right, *EastGate* 20 paces ahead, *WestGate* 4 paces behind, Apple 5 paces ahead, Bowl 15 paces ahead, Candle 10 paces ahead, Knife 15 paces ahead, Loaf 5 paces ahead, and Scarf 5 paces ahead.',
+			'A busy street flea market. boxes. Cutler next to *CutlerStall*. Weaver next to *WeaverStall*. Baker next to *BakerStall*. Potter next to *PotterStall*. Brant 15 paces ahead. Cass 15 paces ahead. Pike 2 paces right. VisitorA 10 paces ahead. VisitorB 10 paces ahead. VisitorC 5 paces right. *EastGate* 20 paces ahead. *WestGate* 4 paces behind. Apple 5 paces ahead. Bowl 15 paces ahead. Candle 10 paces ahead. Knife 15 paces ahead. Loaf 5 paces ahead. Scarf 5 paces ahead.',
 		);
 	});
 

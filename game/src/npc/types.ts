@@ -8,7 +8,7 @@ export type HostCtx = {
 
 export type SceneHooks<H> = {
 	afterPickUp?:(host:H, actor:GameObject, name:string)=>void;
-	tickCrowd?:(host:H)=>void;
+	tickMarketNPC?:(host:H)=>void;
 	checkBargain?:(host:H)=>void;
 	goalDone?:(host:H, id:string)=>boolean;
 	allowTheft?:boolean;
