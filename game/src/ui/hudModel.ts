@@ -18,6 +18,8 @@ export type HudSpeech = {
 	id:string;
 	text:string;
 	status:string;
+	hp:number;
+	maxHP:number;
 	x:number;
 	y:number;
 	visible:boolean;
@@ -48,6 +50,16 @@ export type HudAiLogEntry = {
 export type HudModelOption = {
 	id:string;
 	loaded:boolean;
+};
+
+export type HudHeartrate = {
+	id:string;
+	name:string;
+	/** Queue pulse seconds. `null` when this mind skips heartbeat. */
+	pulse:number | null;
+	/** Seconds since last tactical think. `null` if never. */
+	ago:number | null;
+	thinking:boolean;
 };
 
 export type MenuPage = 'game' | 'display' | 'audio' | 'saves' | 'testing';
@@ -94,16 +106,16 @@ export type HudModel = {
 	maxParallel:number;
 	/** Hold new NPC thinks until the model is idle (or batchWait), then start a wave. Menu + localStorage. */
 	batchThinks:boolean;
-	/** CoT token cap. 0 disables thinking. Menu + localStorage. */
-	thinkingBudget:number;
+	/** CoT on. Menu + localStorage. */
+	thinkingBudget:boolean;
+	/** Ask for ActionPlan text instead of JSON. Menu + localStorage. Testing. */
+	planText:boolean;
 	/** Local server catalog (embeddings omitted). */
 	models:HudModelOption[];
 	/** Packed kind currently drawn on the player (`player` = witch). */
 	playerKind:string;
 	/** Packed kinds for the Character dropdown. */
 	playerKinds:{ id:string; label:string }[];
-	/** Leftover pref; the Testing page always shows stats. */
-	devStatsOpen:boolean;
 	graphicsMemory:number;
 	detailMaps:boolean;
 	shadows:boolean;
@@ -115,6 +127,7 @@ export type HudModel = {
 	inferLastContextMs:number | null;
 	inferLastGenerateMs:number | null;
 	inferLastWallMs:number | null;
+	heartrates:HudHeartrate[];
 	musicVolume:number;
 	sfxVolume:number;
 	audioMuted:boolean;
@@ -167,7 +180,7 @@ export function emptyHud():HudModel {
 		sayItems: [],
 		sayGoods: [],
 		menuOpen: false,
-		menuPage: 'game',
+		menuPage: 'testing',
 		menuNotice: '',
 		saveLabel: '',
 		saveSelectedID: '',
@@ -178,10 +191,10 @@ export function emptyHud():HudModel {
 		maxParallel: p.maxParallel,
 		batchThinks: p.batchThinks,
 		thinkingBudget: p.thinkingBudget,
+		planText: p.planText,
 		models: [],
 		playerKind: resolvePlayerKind(p.playerKind),
 		playerKinds: characterOptions(),
-		devStatsOpen: p.devStatsOpen,
 		graphicsMemory: 0,
 		detailMaps: p.detailMaps,
 		shadows: p.shadows,
@@ -193,6 +206,7 @@ export function emptyHud():HudModel {
 		inferLastContextMs: null,
 		inferLastGenerateMs: null,
 		inferLastWallMs: null,
+		heartrates: [],
 		musicVolume: p.music,
 		sfxVolume: p.sfx,
 		audioMuted: p.muted,

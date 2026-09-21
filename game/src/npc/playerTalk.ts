@@ -17,11 +17,14 @@ const TALK_RANGE = CLEAR_RANGE;
 const HEAR_RANGE = 16;
 const CHAT_CAP = 80;
 
-export function sayToLabel(to?:string | string[]):string | undefined {
+function chatTo(to?:string | string[]):string | undefined {
 	if (to == null) {
 		return undefined;
 	}
-	return Array.isArray(to) ? to.join(', ') : to;
+	if (Array.isArray(to)) {
+		return to.length === 1 ? to[0] : undefined;
+	}
+	return to;
 }
 
 export function inTalkRange(world:World, speakerID:string, listenerID:string):boolean {
@@ -84,16 +87,30 @@ export function playerSayCatalog(world:World):SayCatalog {
 	return { peers, items, gold, goods };
 }
 
-export function parseDirectedLine(spoken:string):{ to:string; text:string } | undefined {
-	const m = spoken.match(/^@(\S+)\s+([\s\S]+)$/);
-	if (!m) {
+export function parseDirectedLine(spoken:string, peers:string[] = []):{ to:string; text:string } | undefined {
+	const at = spoken.match(/^@(\S+)\s+([\s\S]+)$/);
+	if (at) {
+		const text = at[2].trim();
+		if (!text) {
+			return undefined;
+		}
+		return { to: matchPeer(at[1], peers) ?? at[1], text };
+	}
+	const vocative = spoken.match(/^([A-Za-z][A-Za-z0-9]+),\s+([\s\S]+)$/);
+	if (!vocative) {
 		return undefined;
 	}
-	const text = m[2].trim();
-	if (!text) {
+	const text = vocative[2].trim();
+	const to = matchPeer(vocative[1], peers);
+	if (!to || !text) {
 		return undefined;
 	}
-	return { to: m[1], text };
+	return { to, text };
+}
+
+function matchPeer(raw:string, peers:string[]):string | undefined {
+	const want = raw.replace(/^@/, '').toLowerCase();
+	return peers.find((p) => p.toLowerCase() === want);
 }
 
 export function talkOthers(world:World, speakerID:string):string[] {
@@ -140,8 +157,8 @@ export function playerSay(host:GameHost, text:string):void {
 		playerSlash(host, slash);
 		return;
 	}
-	const directed = parseDirectedLine(spoken);
 	const peers = nearbyTalkPeers(host.world, 'Player');
+	const directed = parseDirectedLine(spoken, talkOthers(host.world, 'Player'));
 	const line = directed?.text ?? spoken;
 	const to = directed?.to ?? (peers.length <= 1 ? peers[0] : peers);
 	const result = host.talk.say('Player', line, to, host.world.time);
@@ -268,7 +285,7 @@ export function showSpeech(host:GameHost, actor:GameObject, text:string, to?:str
 	if (!bubble) {
 		bubble = actor.addComponent(new SpeechBubble());
 	}
-	bubble.text = to ? `${spoken} (${to})` : spoken;
+	bubble.text = spoken;
 	bubble.until = host.world.time + life;
 	const hz = talkHz(actor.id);
 	cueAt(host.world, 'talk', actor, {
@@ -282,7 +299,7 @@ export function showSpeech(host:GameHost, actor:GameObject, text:string, to?:str
 export function onSpoke(host:GameHost, utterance:SpeechUtterance):void {
 	const actor = findBody(host.world, utterance.speakerID);
 	if (actor) {
-		showSpeech(host, actor, utterance.text, sayToLabel(utterance.to));
+		showSpeech(host, actor, utterance.text, chatTo(utterance.to));
 	}
 	const targets = utterance.to == null
 		? []

@@ -3,8 +3,10 @@ import {
 	SampleCache,
 	buildCatalog,
 	evaluate,
+	leftoverFilterHint,
 	pascalCase,
 	watchScore,
+	type ExprEntity,
 	type ExprVal,
 } from 'arc-director';
 import { Named } from '../engine/components';
@@ -109,6 +111,28 @@ export function pickWanderPoint(ctx:HostCtx, posed:PosedFact[], expr:string):{ x
 		}
 	}
 	return best;
+}
+
+function catalogEntities(ctx:HostCtx, posed:PosedFact[]):ExprEntity[] {
+	const kernels = kernelsOf(ctx.world, ctx.actor, posed);
+	const out:ExprEntity[] = [kernels.me, ...kernels.others, ...kernels.items];
+	for (const v of Object.values(kernels.bindings)) {
+		if (v.kind === 'entity') {
+			out.push(v.value);
+		}
+		else if (v.kind === 'list') {
+			for (const item of v.value) {
+				if (item.kind === 'entity') {
+					out.push(item.value);
+				}
+			}
+		}
+	}
+	return out;
+}
+
+export function wanderFilterHint(ctx:HostCtx, posed:PosedFact[], expr:string):string | undefined {
+	return leftoverFilterHint(expr, catalogEntities(ctx, posed));
 }
 
 export function wanderUntilMet(ctx:HostCtx, posed:PosedFact[], expr:string):boolean {

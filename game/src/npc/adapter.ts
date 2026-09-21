@@ -4,8 +4,8 @@ import {
 	CrowdConductor,
 	TalkNet,
 	STOCK_VERBS,
-	FORMATION_VERBS,
 	isCrowdConductor,
+	isFormationVerb,
 	roleMentionTitles,
 	type ActionResult,
 	type AgentEvent,
@@ -31,6 +31,7 @@ import { rewriteRetiredFeeNames } from '../engine/gameSave';
 import { talkFace, canHearClearly } from './talkAttend';
 import { YOU_SYMBOL } from './mapMarks';
 import { snapshotMap } from './mapView';
+import { WORLD_ENCYCLOPEDIAS } from './encyclopedias';
 import type { HostCtx, SceneHooks } from './types';
 import { bodyName, findBody } from './names';
 import { kernelsOf, scanWorld, type PosedFact } from './kernels';
@@ -38,6 +39,7 @@ import { hostCanSee, lookWorld, inventoryOf, followedCarry } from './perception'
 import { executeStep } from './verbs';
 import { restoreCompanionHold } from './companion';
 import { runFormation } from './formations';
+import { resolveFightName } from './fight';
 import {
 	inTalkRange,
 	talkOthers,
@@ -56,6 +58,7 @@ export class GameHost {
 	readonly talk:TalkNet;
 	ambient:string;
 	bargainDone = false;
+	readonly scene:string;
 	hooks:SceneHooks<GameHost> = {};
 	arc:ArcDirector<HostCtx> | null = null;
 	/** Shared kit for this scene. Mutate `verbs` / `tools`; fetched every tick. */
@@ -86,11 +89,13 @@ export class GameHost {
 			ambient?:string;
 			agents?:Record<string, AgentJSON>;
 			bargainDone?:boolean;
+			scene?:string;
 		} = {},
 	) {
 		this.world = world;
 		this.chat = chat;
 		this.log = log;
+		this.scene = opts.scene ?? '';
 		this.ambient = opts.ambient ?? 'A damp stone hall of the abbey.';
 		this.storedAgents = JSON.parse(rewriteRetiredFeeNames(JSON.stringify(opts.agents ?? {}))) as Record<string, AgentJSON>;
 		this.bargainDone = opts.bargainDone ?? false;
@@ -108,32 +113,26 @@ export class GameHost {
 
 	configure(director:ArcDirector<HostCtx>):ArcDirector<HostCtx> {
 		const addAgent = director.addAgent.bind(director);
-		director.addAgent = (spec) => addAgent({ ...spec, skipHeartbeat: true });
+		director.addAgent = (spec) => addAgent({
+			...spec,
+			skipHeartbeat: spec.skipHeartbeat ?? true,
+		});
 		return director
 			.withPriorityQueue({
 				maxParallel: prefs().maxParallel,
 				batchThinks: prefs().batchThinks,
 				batchWait: 5,
+				heartbeatStart: 2,
+				heartbeatMin: 2,
 				mayThink: (ctx) => {
-					if (ctx.reason === 'heartbeat') {
-						return false;
-					}
 					const mind = this.arc?.agent(ctx.npcID);
 					if (isCrowdConductor(mind)) {
-						const body = this.world.findByID(ctx.npcID) ?? findBody(this.world, ctx.npcID);
-						const npc = body?.getComponent(NPCInput);
-						if (npc?.busy()) {
-							return ctx.reason === 'major';
-						}
 						return true;
 					}
-					const go = this.world.findByID(ctx.npcID);
-					const npc = go?.getComponent(NPCInput);
-					if (npc?.busy()) {
-						return ctx.reason === 'major';
-					}
-					if (ctx.plan) {
-						return ctx.reason === 'major' || (ctx.reason === 'watch' && ctx.rankedScore >= 0.5);
+					if (ctx.reason === 'heartbeat') {
+						const go = this.world.findByID(ctx.npcID);
+						const npc = go?.getComponent(NPCInput);
+						return !!(npc?.busy() || ctx.plan);
 					}
 					return true;
 				},
@@ -141,16 +140,15 @@ export class GameHost {
 			.withLMStudioInference({
 				baseURL: '/inference/v1',
 				model: preferredChatModel(),
-				enableThinking: prefs().thinkingBudget > 0,
-				thinkingBudget: prefs().thinkingBudget || undefined,
-				maxTokens: 10_000,
+				enableThinking: prefs().thinkingBudget,
 			})
+			.withPlanText(prefs().planText)
 			.addStockVerbs()
 			.addStockCrowdVerbs()
 			.onVerb(this.do)
-			.withSight({ look: (ctx) => lookWorld(ctx.actor, this.ambient) })
+			.withSight({ look: (ctx) => lookWorld(ctx.actor, this.ambient, this), unitName: 'm' })
 			.withInventory((ctx) => inventoryOf(ctx.actor))
-			.withLineOfSight((a, b) => hostCanSee(this.world, a, b))
+			.withLineOfSight((a, b) => hostCanSee(this.world, a, resolveFightName(this, a, b)))
 			.addSense('followed', {
 				description: 'What the person you follow is carrying.',
 				gather: followedCarry,
@@ -159,6 +157,7 @@ export class GameHost {
 			.withKernels(this.kernels)
 			.withTalk(this.talk)
 			.withMap(this.mapSense)
+			.withEncyclopedia((ctx) => WORLD_ENCYCLOPEDIAS[ctx.scene] ?? [])
 			.onAbortPlan(this.abortPlan)
 			.onLog((entry) => pushLog(this, entry.name, entry.message, entry.image));
 	}
@@ -174,7 +173,7 @@ export class GameHost {
 	}
 
 	do = (call:VerbCall<HostCtx>):Promise<ActionResult> | ActionResult => {
-		if (FORMATION_VERBS.has(call.verb)) {
+		if (isFormationVerb(call.verb)) {
 			return runFormation(this, call);
 		}
 		return executeStep(this, { verb: call.verb, args: call.args as Step['args'] }, call.ctx);
@@ -183,21 +182,19 @@ export class GameHost {
 	context = (id:string):HostCtx | undefined => {
 		const body = this.world.findByID(id) ?? findBody(this.world, id);
 		if (body) {
-			return { world: this.world, actor: body };
+			return { world: this.world, actor: body, scene: this.scene };
 		}
 		return undefined;
 	};
 
 	abortPlan = (id:string):void => {
-		const hive = this.arc?.agent(id);
-		if (isCrowdConductor(hive) && hive.id === id) {
-			for (const unit of hive.crowd.list()) {
-				this.world.findByID(unit.id)?.getComponent(NPCInput)?.interrupt('urgent');
-				this.world.findByID(unit.id)?.getComponent(Celebrating)?.stop();
-			}
+		if (this.bargainDone) {
+			return;
 		}
-		this.world.findByID(id)?.getComponent(NPCInput)?.interrupt('urgent');
-		this.world.findByID(id)?.getComponent(Celebrating)?.stop();
+		const body = this.world.findByID(id) ?? findBody(this.world, id);
+		const npc = body?.getComponent(NPCInput);
+		npc?.interrupt('urgent');
+		body?.getComponent(Celebrating)?.stop();
 	};
 
 	private readonly mapSense:MapSense = {
@@ -290,7 +287,7 @@ export class GameHost {
 				}
 			},
 		});
-		this.arc?.mindQueue()?.ensure(id, { skipHeartbeat: true });
+		this.arc?.mindQueue()?.ensure(id);
 		this.arc?.mindQueue()?.setAiOn(id, true);
 	}
 

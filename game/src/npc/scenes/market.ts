@@ -1,10 +1,11 @@
-import { pascalCase, STOCK_VERBS, type AgentSpec, ArcDirector } from 'arc-director';
+import { pascalCase, STOCK_CROWD_VERBS, STOCK_VERBS, ArcDirector } from 'arc-director';
 import { MarketNPC, MarketGate, Merchant, Wanted } from '../../engine/components';
 import type { GameObject } from '../../engine/GameObject';
+import { NPCInput } from '../../actors/NPCInput';
 import { compactName, distXZ, findCarried, itemMatchesName, tryInsert } from '../../items/inventory';
 import { dropItem, USE_RANGE } from '../../items/pickup';
 import type { GameHost, HostCtx } from '../adapter';
-import { customerCount, spawnRandomCustomer, MARKET_SEEDS } from '../market';
+import { customerCount, spawnRandomCustomer, MARKET_SEEDS, HIVE_UNITS } from '../market';
 import { bodyName, findBody } from '../names';
 import { takeOne, reportTheft } from '../verbs';
 import { showSpeech } from '../playerTalk';
@@ -38,6 +39,7 @@ function afterPickUp(host:GameHost, actor:GameObject, name:string):void {
 function despawn(host:GameHost, go:GameObject):void {
 	const id = bodyName(go);
 	host.talk.detach(id);
+	host.arc?.removeCrowdUnit('MarketHive', id);
 	host.arc?.removeAgent(id);
 	host.world.remove(go);
 	host.pushEvent({
@@ -108,7 +110,18 @@ function seizeNearby(host:GameHost):void {
 	});
 }
 
+const wokeHive = new WeakSet<GameHost>();
+
+function wakeHive(host:GameHost):void {
+	if (wokeHive.has(host) || !host.arc?.ready) {
+		return;
+	}
+	wokeHive.add(host);
+	host.arc.mindQueue()?.enqueueMajor('MarketHive', true);
+}
+
 function tickMarketNPC(host:GameHost):void {
+	wakeHive(host);
 	seizeNearby(host);
 	const doomed:GameObject[] = [];
 	host.world.forEachComponent(MarketGate, (_exit, gate) => {
@@ -135,7 +148,7 @@ function tickMarketNPC(host:GameHost):void {
 		return;
 	}
 	nextMarketNPCAt.set(host, host.world.time + 10 + Math.random() * 12);
-	if (customerCount(host.world) >= 4) {
+	if (customerCount(host.world) >= 10) {
 		return;
 	}
 	if (Math.random() < 0.35) {
@@ -147,16 +160,15 @@ function tickMarketNPC(host:GameHost):void {
 	}
 	host.pushEvent({
 		kind: 'Arrived',
-		text: `${spawned.seed.id} arrived from the street`,
-		tags: [spawned.seed.id, 'market'],
+		text: `${spawned.id} arrived from the street`,
+		tags: [spawned.id, 'market'],
 		major: true,
 	});
 	if (!host.arc?.ready) {
 		return;
 	}
-	const seed:AgentSpec<HostCtx> = spawned.seed;
-	host.arc.addAgent(seed);
-	host.wireBody(seed.id);
+	host.arc.addCrowdUnit('MarketHive', { id: spawned.id, tags: spawned.tags });
+	spawned.go.getComponent(NPCInput)!.aiOn = true;
 }
 
 export function createDirector(host:GameHost):ArcDirector<HostCtx> {
@@ -166,11 +178,40 @@ export function createDirector(host:GameHost):ArcDirector<HostCtx> {
 		tickMarketNPC,
 	};
 	host.kit = { verbs: [...STOCK_VERBS, 'buy', 'sell', 'steal'] };
+	const hiveKit = { verbs: [...STOCK_VERBS, ...STOCK_CROWD_VERBS, 'buy', 'steal'] };
 	const d = host.configure(new ArcDirector<HostCtx>())
 		.addVerb('buy', { item: 'id', from: 'id', offer: 'number?' })
 		.addVerb('sell', { item: 'id', to: 'id', ask: 'number?' })
 		.addVerb('steal', { item: 'id', from: 'id' })
-		.withDefaultKit(host.kit);
+		.withSight({ limit: 16 })
+		.withDefaultKit(host.kit)
+		.addCrowdConductor({
+			id: 'MarketHive',
+			skipHeartbeat: true,
+			kit: hiveKit,
+			identity: {
+				name: 'Market',
+				role: 'You are the canal-market hive. You have no body. The upper square is above the steps; the quay and canal sit below. Shoppers are tagged Shopper plus what they came for (Loaf, Scarf, Bowl, Knife, Apple, Candle) and their leave gate (EastGate or WestGate). Guards are tagged Guard. Baker Weaver Potter Cutler keep stalls BakerStall WeaverStall PotterStall CutlerStall. Send idle shoppers to the stall that sells what they tagged, buy, then go_to their leave gate. Guards hold_line at their gate facing the street. Use issue(who, plan). Names, never coordinates.',
+				traits: ['busy', 'fair', 'watchful'],
+			},
+			goals: [{
+				text: 'Keep the square moving: shoppers get what they came for and leave; guards hold the gates.',
+				priority: 2,
+			}],
+			pinnedSightFocus: ['isHurt(it)', 'isNear(it, Player)'],
+			pinnedWatches: {
+				idle: 'some(units.filter(u => !u.busy))',
+				theft: 'some(events.filter("theft"))',
+			},
+			units: HIVE_UNITS,
+			laws: [{
+				name: 'flee',
+				who: 'units.filter("Shopper")',
+				watch: 'isHurt(me)',
+				plan: 'go_to(WestGate)',
+				pinned: true,
+			}],
+		});
 	for (const seed of MARKET_SEEDS) {
 		d.addAgent(seed);
 	}

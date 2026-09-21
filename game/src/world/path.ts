@@ -269,8 +269,17 @@ export function walkDistance(
 }
 
 /** Grid DDA. Start and end cells are open so occupants do not occlude themselves. */
-export function lineClear(world:World, x0:number, z0:number, x1:number, z1:number):boolean {
-	const occ = mergeSets(hardObstacles(world), occupantCells(world));
+export function lineClear(
+	world:World,
+	x0:number,
+	z0:number,
+	x1:number,
+	z1:number,
+	ignoreBodies = false,
+):boolean {
+	const occ = ignoreBodies
+		? hardObstacles(world)
+		: mergeSets(hardObstacles(world), occupantCells(world));
 	const a = cellOf(x0, z0);
 	const b = cellOf(x1, z1);
 	if (a.gx === b.gx && a.gz === b.gz) {

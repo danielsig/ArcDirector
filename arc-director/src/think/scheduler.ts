@@ -92,7 +92,7 @@ export type MindQueue = {
 	lastMax(npcID:string):number;
 	scold(npcID:string):ScoldReason | undefined;
 	rankScore(npcID:string, raw:number):number;
-	heartbeatSeconds(npcID:string):number;
+	heartbeatSeconds(npcID:string):number | null;
 	scoreWatches(npcID:string, catalog:Catalog | readonly Catalog[]):number;
 	enqueueMajor(npcID:string, force?:boolean):void;
 	enqueueAction(npcID:string, verb:string, ok?:boolean):void;
@@ -206,7 +206,7 @@ export abstract class MindScheduler implements MindQueue {
 		if (this.mayThink) {
 			return this.mayThink(ctx);
 		}
-		return !plan;
+		return true;
 	}
 
 	ensure(npcID:string, opts?:{ skipHeartbeat?:boolean; skipMajor?:boolean }):MindState {
@@ -276,8 +276,12 @@ export abstract class MindScheduler implements MindQueue {
 
 	abstract rankScore(npcID:string, raw:number):number;
 
-	heartbeatSeconds(npcID:string):number {
-		return this.minds.get(npcID)?.heartbeat ?? this.heartbeatStart;
+	heartbeatSeconds(npcID:string):number | null {
+		const mind = this.minds.get(npcID);
+		if (mind?.skipHeartbeat) {
+			return null;
+		}
+		return mind?.heartbeat ?? this.heartbeatStart;
 	}
 
 	scoreWatches(npcID:string, catalog:Catalog | readonly Catalog[]):number {

@@ -2,13 +2,17 @@ function isTypingTarget(target:EventTarget | null):boolean {
 	if (!(target instanceof HTMLElement)) {
 		return false;
 	}
-	if (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement) {
+	if (
+		target instanceof HTMLInputElement
+		|| target instanceof HTMLTextAreaElement
+		|| target instanceof HTMLSelectElement
+	) {
 		return true;
 	}
 	if (target.isContentEditable) {
 		return true;
 	}
-	return target.closest('input, textarea, [contenteditable="true"]') !== null;
+	return target.closest('input, textarea, select, [contenteditable="true"]') !== null;
 }
 
 export class InputState {

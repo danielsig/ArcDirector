@@ -5,6 +5,7 @@ import {
 	dummyEntity,
 	evaluate,
 	FACING_COS,
+	leftoverFilterHint,
 	parse,
 	SampleCache,
 	stringifyVal,
@@ -88,7 +89,7 @@ describe('parse', () => {
 		assert.ok(parse('a ? b : c'));
 		assert.ok(parse('x ?? y'));
 		assert.ok(parse('p => p is "key"'));
-		assert.ok(parse('matches(first(prevActions).reason, "locked|blocked")'));
+		assert.ok(parse('matches(first(prev.actions).reason, "locked|blocked")'));
 	});
 
 	it('desugars extension calls', () => {
@@ -221,10 +222,43 @@ describe('evaluate', () => {
 		assert.equal(bool('isFacing(me, Player)', world({ facing: () => 0 })), false);
 		assert.equal(bool('isBehind(me, Player)', world({ facing: () => 0 })), false);
 		assert.equal(bool('isBehind(me, Player)', world({ facing: () => -1 })), true);
+		const left = world({ facing: () => 0, side: () => -1 });
+		assert.equal(bool('isLeft(me, Player)', left), true);
+		assert.equal(bool('isRight(me, Player)', left), false);
+		const right = world({ facing: () => 0, side: () => 1 });
+		assert.equal(bool('isRight(me, Player)', right), true);
+		assert.equal(bool('isLeft(me, Player)', right), false);
 		const onlyBool = world({ facing: undefined, isFacing: () => true });
 		delete (onlyBool as { facing?:unknown }).facing;
 		assert.ok(val('facing(me, Player)', onlyBool).error);
 		assert.equal(bool('isFacing(me, Player)', onlyBool), true);
+	});
+
+	it('isFacing / isLeft / isRight / isBehind any of a type list', () => {
+		const ahead = posed('oak_a', { name: 'Tree', tags: ['tree'], x: 0, z: -5 });
+		const back = posed('oak_b', { name: 'Tree', tags: ['tree'], x: 0, z: 5 });
+		const leftT = posed('oak_l', { name: 'Tree', tags: ['tree'], x: -5, z: 0 });
+		const rightT = posed('oak_r', { name: 'Tree', tags: ['tree'], x: 5, z: 0 });
+		const base = world();
+		const host = world({
+			facing: (_a, b) => (b.id === 'oak_a' ? 1 : b.id === 'oak_b' ? -1 : 0),
+			side: (_a, b) => (b.id === 'oak_l' ? -1 : b.id === 'oak_r' ? 1 : 0),
+			bindings: {
+				...base.bindings,
+				landmarks: {
+					kind: 'list',
+					value: [ahead, back, leftT, rightT].map((e) => ({ kind: 'entity' as const, value: e })),
+				},
+			},
+		});
+		assert.equal(bool('isFacing(me, Tree)', host), true);
+		assert.equal(bool('isBehind(me, Tree)', host), true);
+		assert.equal(bool('isLeft(me, Tree)', host), true);
+		assert.equal(bool('isRight(me, Tree)', host), true);
+		assert.equal(
+			bool('isFacing(me, Tree) && isBehind(me, Tree) && isLeft(me, Tree) && isRight(me, Tree)', host),
+			true,
+		);
 	});
 
 	it('isReachable / reachable', () => {
@@ -326,11 +360,72 @@ describe('evaluate', () => {
 		assert.equal(bool('isFacing(me, Player)'), true);
 	});
 
+	it('leftover English is not a name when Tree is in the list', () => {
+		const tree = dummyEntity('oak_1', { name: 'Tree', tags: ['tree'] });
+		assert.equal(
+			leftoverFilterHint('some(landmarks.filter("trees").nearby())', [tree]),
+			'no such name trees — leftover English is not a name. Use Tree',
+		);
+		assert.equal(
+			leftoverFilterHint('some(trees.nearby())', [tree]),
+			'no such name trees — leftover English is not a name. Use Tree',
+		);
+		assert.equal(leftoverFilterHint('some(landmarks.filter("Tree").nearby())', [tree]), undefined);
+		assert.equal(leftoverFilterHint('some(landmarks.filter("tree").nearby())', [tree]), undefined);
+		assert.equal(leftoverFilterHint('some(Tree.nearby())', [tree]), undefined);
+		assert.equal(leftoverFilterHint('some(events.filter("theft"))', [dummyEntity('e', { tags: ['theft'] })]), undefined);
+		assert.equal(leftoverFilterHint('some(others.nearby())', [tree]), undefined);
+	});
+
+	it('unbound Tree is the landmark list; count nearby is measurable', () => {
+		const near = posed('oak_1', { name: 'Tree', tags: ['tree'], x: 2, z: 0 });
+		const also = posed('oak_3', { name: 'Tree', tags: ['tree'], x: 3, z: 1 });
+		const far = posed('oak_2', { name: 'Tree', tags: ['tree'], x: 20, z: 0 });
+		const host = world({
+			bindings: {
+				...world().bindings,
+				landmarks: {
+					kind: 'list',
+					value: [
+						{ kind: 'entity', value: near },
+						{ kind: 'entity', value: also },
+						{ kind: 'entity', value: far },
+					],
+				},
+			},
+		});
+		const all = val('Tree', host);
+		assert.equal(all.value.kind, 'list');
+		if (all.value.kind === 'list') {
+			assert.equal(all.value.value.length, 3);
+		}
+		assert.equal(num('count(Tree.nearby())', host), 2);
+		assert.equal(bool('count(Tree.nearby()) > 1', host), true);
+		assert.equal(bool('count(Tree.nearby()) > 3', host), false);
+		assert.equal(bool('some(Tree.nearby())', host), true);
+		assert.equal(bool('isNear(me, Tree)', host), true);
+		assert.match(val('some(trees.nearby())', host).error?.message ?? '', /leftover English is not a name\. Use Tree/);
+		assert.equal(val('Forest', host).value.kind, 'absent');
+		assert.ok(val('some(Forest.nearby())', host).error);
+	});
+
 	it('inventory needle same as is', () => {
 		assert.equal(bool('isCarrying("key")'), true);
 		assert.equal(bool('isCarrying("Lantern")'), true);
 		assert.equal(bool('items.find("Lantern") is "key"'), true);
 		assert.ok(val('isCarrying(Player, "key")').error);
+	});
+
+	it('prev.me is a freeze; hasJustReceived is the bag edge', () => {
+		const empty = dummyEntity('Guard', { tags: ['agent'] });
+		empty.fields = { inventory: { kind: 'list', value: [] } };
+		const host = world({ prev: { secondsAgo: 2, me: empty } });
+		assert.equal(bool('isCarrying("Lantern")', host), true);
+		assert.equal(bool('wasCarrying("Lantern")', host), false);
+		assert.equal(bool('hasJustReceived("Lantern")', host), true);
+		assert.equal(bool('hasJustLost("Lantern")', host), false);
+		assert.equal(num('prev.secondsAgo', host), 2);
+		assert.equal(bool('some(prev.me.inventory.filter("Lantern"))', host), false);
 	});
 
 	it('hp / maxHP / isHurt', () => {

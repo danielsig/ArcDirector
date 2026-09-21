@@ -8,11 +8,14 @@ import { glen_1_0 } from './chunks/glen_1_0';
 import { glen_1_1 } from './chunks/glen_1_1';
 import { market_0_0 } from './chunks/market_0_0';
 import { market_1_0 } from './chunks/market_1_0';
+import { ruins_0_0 } from './chunks/ruins_0_0';
+import { ruins_1_0 } from './chunks/ruins_1_0';
 import { type MarketNPCKind, type HumanKind } from '../engine/components';
 import type { GameHost, HostCtx } from '../npc/adapter';
 import { createDirector as createAbbeyDirector } from '../npc/scenes/abbey';
 import { createDirector as createGlenDirector } from '../npc/scenes/glen';
 import { createDirector as createMarketDirector } from '../npc/scenes/market';
+import { createDirector as createRuinsDirector } from '../npc/scenes/ruins';
 
 export type NPCSpawnDef = {
 	id:string;
@@ -80,7 +83,7 @@ export const RIVER_GLEN:SceneDef = {
 	minimapFollow: true,
 	chunks: [glen_0_0, glen_1_0, glen_0_1, glen_1_1],
 	npcs: [
-		{ id: 'Forager', meshID: 'human_mannequin', chunkID: 'glen_1_1', localX: 9, localZ: 3, pack: true },
+		{ id: 'Forager', meshID: 'human_scout', chunkID: 'glen_1_1', localX: 9, localZ: 3, pack: true, wallet: 5 },
 		{
 			id: 'Miller',
 			meshID: 'human_robe',
@@ -89,6 +92,8 @@ export const RIVER_GLEN:SceneDef = {
 			localZ: 9,
 			pack: true,
 			packLoot: [{ defID: 'mill_crank', name: 'MillCrank' }],
+			merchant: { specialty: 'FireMushroom', ask: 10, floor: 10 },
+			marketNPC: { kind: 'vendor', wants: ['FireMushroom'] },
 		},
 		{
 			id: 'Angler',
@@ -98,10 +103,11 @@ export const RIVER_GLEN:SceneDef = {
 			localZ: 10,
 			yaw: Math.PI,
 			pack: true,
+			wallet: 5,
 			packLoot: [{ defID: 'silver_trout', name: 'SilverTrout' }],
 		},
 		{
-			id: 'Servant',
+			id: 'Assistant',
 			meshID: 'human_sorceress',
 			chunkID: 'glen_1_0',
 			localX: 5,
@@ -140,7 +146,7 @@ export const MARKETPLACE:SceneDef = {
 			id: 'Weaver',
 			meshID: 'human_princess',
 			chunkID: 'market_0_0',
-			localX: 8,
+			localX: 12,
 			localZ: 3,
 			yaw: Math.PI,
 			pack: true,
@@ -165,7 +171,7 @@ export const MARKETPLACE:SceneDef = {
 			id: 'Cutler',
 			meshID: 'human_guard',
 			chunkID: 'market_0_0',
-			localX: 8,
+			localX: 12,
 			localZ: 10,
 			pack: true,
 			packLoot: [{ defID: 'kitchen_knife', name: 'Knife', count: 2 }],
@@ -177,8 +183,8 @@ export const MARKETPLACE:SceneDef = {
 			id: 'Mira',
 			meshID: 'human_mannequin',
 			chunkID: 'market_0_0',
-			localX: 6,
-			localZ: 7,
+			localX: 8,
+			localZ: 4,
 			pack: true,
 			wallet: 4,
 			marketNPC: { kind: 'customer', wants: ['Loaf'], leaveGate: 'EastGate' },
@@ -187,8 +193,8 @@ export const MARKETPLACE:SceneDef = {
 			id: 'Tomas',
 			meshID: 'human_merchant',
 			chunkID: 'market_0_0',
-			localX: 12,
-			localZ: 7,
+			localX: 10,
+			localZ: 8,
 			yaw: Math.PI / 2,
 			pack: true,
 			wallet: 15,
@@ -198,8 +204,8 @@ export const MARKETPLACE:SceneDef = {
 			id: 'Nell',
 			meshID: 'human_princess',
 			chunkID: 'market_1_0',
-			localX: 4,
-			localZ: 7,
+			localX: 8,
+			localZ: 4,
 			yaw: -Math.PI / 2,
 			pack: true,
 			packLoot: [{ defID: 'apple', name: 'Apple', count: 2 }],
@@ -221,7 +227,7 @@ export const MARKETPLACE:SceneDef = {
 			meshID: 'human_guard',
 			chunkID: 'market_0_0',
 			localX: 2,
-			localZ: 5,
+			localZ: 7,
 			yaw: -Math.PI / 2,
 			pack: true,
 			marketNPC: { kind: 'guard', wants: [], leaveGate: 'WestGate' },
@@ -231,7 +237,7 @@ export const MARKETPLACE:SceneDef = {
 			meshID: 'human_guard',
 			chunkID: 'market_0_0',
 			localX: 2,
-			localZ: 9,
+			localZ: 8,
 			yaw: -Math.PI / 2,
 			pack: true,
 			marketNPC: { kind: 'guard', wants: [], leaveGate: 'WestGate' },
@@ -241,7 +247,7 @@ export const MARKETPLACE:SceneDef = {
 			meshID: 'human_guard',
 			chunkID: 'market_1_0',
 			localX: 13,
-			localZ: 5,
+			localZ: 7,
 			yaw: Math.PI / 2,
 			pack: true,
 			marketNPC: { kind: 'guard', wants: [], leaveGate: 'EastGate' },
@@ -251,21 +257,47 @@ export const MARKETPLACE:SceneDef = {
 			meshID: 'human_guard',
 			chunkID: 'market_1_0',
 			localX: 13,
-			localZ: 9,
+			localZ: 8,
 			yaw: Math.PI / 2,
 			pack: true,
 			marketNPC: { kind: 'guard', wants: [], leaveGate: 'EastGate' },
 		},
 	],
-	ambient: 'A busy street flea market.',
+	ambient: 'A canal-side market plaza under colored awnings.',
 	message: 'E pick up / unlock   F use   X swap hands   Enter talk   /give   Tab chat',
 	createDirector: createMarketDirector,
+};
+
+const SWORD = [{ defID: 'iron_sword', name: 'IronSword' }];
+
+export const RUINS:SceneDef = {
+	id: 'ruins',
+	title: 'Ruin Fight',
+	look: 'glen',
+	minimapFollow: true,
+	chunks: [ruins_0_0, ruins_1_0],
+	npcs: [
+		{ id: 'Dawn', meshID: 'human_robe', chunkID: 'ruins_0_0', localX: 11, localZ: 8, yaw: -Math.PI / 2, pack: true },
+		{ id: 'Cinder', meshID: 'human_witch', chunkID: 'ruins_0_0', localX: 9, localZ: 6, yaw: -Math.PI / 2, pack: true },
+		{ id: 'Brune', meshID: 'human_guard', chunkID: 'ruins_0_0', localX: 12, localZ: 6, yaw: -Math.PI / 2, pack: true, packLoot: SWORD },
+		{ id: 'Wisp', meshID: 'human_scout', chunkID: 'ruins_0_0', localX: 9, localZ: 10, yaw: -Math.PI / 2, pack: true },
+		{ id: 'Cade', meshID: 'human_mannequin', chunkID: 'ruins_0_0', localX: 12, localZ: 10, yaw: -Math.PI / 2, pack: true, packLoot: SWORD },
+		{ id: 'Dusk', meshID: 'human_sorceress', chunkID: 'ruins_1_0', localX: 4, localZ: 8, yaw: Math.PI / 2, pack: true },
+		{ id: 'Nyx', meshID: 'human_witch', chunkID: 'ruins_1_0', localX: 2, localZ: 6, yaw: Math.PI / 2, pack: true },
+		{ id: 'Helms', meshID: 'human_guard', chunkID: 'ruins_1_0', localX: 5, localZ: 6, yaw: Math.PI / 2, pack: true, packLoot: SWORD },
+		{ id: 'Ash', meshID: 'human_scout', chunkID: 'ruins_1_0', localX: 2, localZ: 10, yaw: Math.PI / 2, pack: true },
+		{ id: 'Flint', meshID: 'human_mannequin', chunkID: 'ruins_1_0', localX: 5, localZ: 10, yaw: Math.PI / 2, pack: true, packLoot: SWORD },
+	],
+	ambient: 'Two companies fight to the death in a ruined forest colonnade. No quarter.',
+	message: 'E pick up / unlock   F use   X swap hands   Enter talk   /give   Tab chat',
+	createDirector: createRuinsDirector,
 };
 
 export const SCENES:Record<string, SceneDef> = {
 	abbey_vault: ABBEY_VAULT,
 	glen: RIVER_GLEN,
 	marketplace: MARKETPLACE,
+	ruins: RUINS,
 };
 
 export const DEFAULT_SCENE_ID = 'abbey_vault';

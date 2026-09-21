@@ -1,30 +1,28 @@
 import { VerbRegistry, type VerbArgMap } from '../action/registry.js';
 
+export const STOCK_FORMATION_VERBS = ['spread', 'circle', 'hold_line'] as const;
+
 export const STOCK_CROWD_VERBS = [
-	'when',
-	'law',
-	'unlaw',
+	'issue',
 	'tag',
 	'untag',
-	'spread',
-	'circle',
-	'hold_line',
+	...STOCK_FORMATION_VERBS,
 ] as const;
 
 export type StockCrowdVerb = (typeof STOCK_CROWD_VERBS)[number];
 
-export const FORMATION_VERBS = new Set(['spread', 'circle', 'hold_line']);
-
 export const STOCK_CROWD_VERB_ARGS:Record<StockCrowdVerb, VerbArgMap> = {
-	when: { who: 'string?', watch: 'string?', plan: 'plan', name: 'string?' },
-	law: { who: 'string?', watch: 'string', plan: 'plan', name: 'string?' },
-	unlaw: { name: 'string' },
+	issue: { who: 'string', plan: 'plan' },
 	tag: { who: 'string', name: 'string' },
 	untag: { who: 'string', name: 'string' },
 	spread: { around: 'id?', paces: 'number?' },
 	circle: { around: 'id?', paces: 'number?' },
 	hold_line: { at: 'id?', facing: 'id?', paces: 'number?' },
 };
+
+export function isFormationVerb(name:string):boolean {
+	return (STOCK_FORMATION_VERBS as readonly string[]).includes(name);
+}
 
 export function registerStockCrowdVerbs(registry:VerbRegistry, ...verbs:StockCrowdVerb[]):VerbRegistry {
 	const list = verbs.length > 0 ? verbs : STOCK_CROWD_VERBS;

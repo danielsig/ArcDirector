@@ -47,7 +47,8 @@ export function lmStudioConfig(opts:HttpInferenceOpts = {}):HttpInferenceOpts {
 		apiKey: opts.apiKey,
 		fetch: opts.fetch,
 		reasoningEffort: opts.reasoningEffort,
-		thinkingBudget: opts.thinkingBudget,
+		applyPromptTemplate: opts.applyPromptTemplate,
+		onRequest: opts.onRequest,
 		batchThinks: opts.batchThinks,
 		batchWait: opts.batchWait,
 	};
@@ -63,7 +64,8 @@ export function ollamaConfig(opts:HttpInferenceOpts = {}):HttpInferenceOpts {
 		apiKey: opts.apiKey,
 		fetch: opts.fetch,
 		reasoningEffort: opts.reasoningEffort,
-		thinkingBudget: opts.thinkingBudget,
+		applyPromptTemplate: opts.applyPromptTemplate,
+		onRequest: opts.onRequest,
 		batchThinks: opts.batchThinks,
 		batchWait: opts.batchWait,
 	};

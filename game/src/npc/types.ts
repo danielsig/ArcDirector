@@ -4,6 +4,8 @@ import type { World } from '../engine/World';
 export type HostCtx = {
 	world:World;
 	actor:GameObject;
+	/** Scene id from the game host. ArcDirector does not interpret it. */
+	scene:string;
 };
 
 export type SceneHooks<H> = {

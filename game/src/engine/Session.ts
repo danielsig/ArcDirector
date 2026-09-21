@@ -13,7 +13,6 @@ import { parseSlash } from '../ui/sayCommands';
 import type { HudModel, HudModelOption } from '../ui/hudModel';
 import {
 	clampParallelThinkers,
-	clampThinkingBudget,
 	prefs,
 	setPrefs,
 	type Prefs,
@@ -357,7 +356,8 @@ export class Session extends Component {
 		this.hud.maxParallel = this.director.arc?.liveMaxParallel() ?? this.hud.maxParallel;
 		this.hud.batchThinks = this.director.arc?.liveBatchThinks() ?? this.hud.batchThinks;
 		if (this.director.arc) {
-			this.hud.thinkingBudget = this.director.arc.liveThinkingBudget();
+			this.hud.thinkingBudget = this.director.arc.liveThinking();
+			this.hud.planText = this.director.arc.livePlanText();
 		}
 		void this.refreshHudModels();
 	}
@@ -399,20 +399,22 @@ export class Session extends Component {
 		const patch:{
 			maxParallel?:number;
 			batchThinks:boolean;
-			thinkingBudget?:number;
-		} = { batchThinks: this.hud.batchThinks };
+			thinkingBudget:boolean;
+			planText:boolean;
+		} = {
+			batchThinks: this.hud.batchThinks,
+			thinkingBudget: this.hud.thinkingBudget,
+			planText: this.hud.planText,
+		};
 		if (Number.isFinite(this.hud.maxParallel)) {
 			const n = clampParallelThinkers(this.hud.maxParallel);
 			this.director.arc?.setMaxParallel(n);
 			patch.maxParallel = n;
 		}
 		this.director.arc?.setBatchThinks(this.hud.batchThinks);
-		if (Number.isFinite(this.hud.thinkingBudget)) {
-			const budget = clampThinkingBudget(this.hud.thinkingBudget);
-			this.director.arc?.setThinkingBudget(budget);
-			patch.thinkingBudget = budget;
-		}
-		const packed = `${patch.maxParallel ?? ''}:${patch.batchThinks ? 1 : 0}:${patch.thinkingBudget ?? ''}`;
+		this.director.arc?.setThinking(this.hud.thinkingBudget);
+		this.director.arc?.setPlanText(this.hud.planText);
+		const packed = `${patch.maxParallel ?? ''}:${patch.batchThinks ? 1 : 0}:${patch.thinkingBudget ? 1 : 0}:${patch.planText ? 1 : 0}`;
 		if (packed === this.lastThinkersPacked) {
 			return;
 		}

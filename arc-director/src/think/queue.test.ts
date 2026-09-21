@@ -291,7 +291,7 @@ describe('ThinkQueue', () => {
 		assert.equal(q.tick(1, catalogs).length, 0);
 	});
 
-	it('default mayThink blocks while a plan is live; callback can allow it', () => {
+	it('default mayThink allows while a plan is live; callback can block it', () => {
 		const q = new ThinkQueue({ watchInterval: 100, processInterval: 0, maxParallel: 2 });
 		q.ensure('A', { skipHeartbeat: true });
 		q.beginPlan('A', {
@@ -299,16 +299,14 @@ describe('ThinkQueue', () => {
 			then: { join: 'then', plan: { head: { verb: 'steal', args: { item: 'Loaf', from: 'Baker' } } } },
 		});
 		q.enqueueMajor('A');
-		assert.equal(q.tick(1, new Map()).length, 0);
+		assert.equal(q.tick(1, new Map()).length, 1);
 		q.mayThink = (ctx) => {
 			assert.deepEqual(ctx.verbs, ['go_to', 'steal']);
 			assert.equal(ctx.plan?.head.verb, 'go_to');
-			return ctx.reason === 'major';
+			return false;
 		};
 		q.enqueueMajor('A');
-		const rows = q.tick(1, new Map());
-		assert.equal(rows.length, 1);
-		assert.equal(q.allowThink(rows[0]), true);
+		assert.equal(q.tick(1, new Map()).length, 0);
 	});
 
 	it('withPriorityQueue is one shared queue to spread into agents', () => {

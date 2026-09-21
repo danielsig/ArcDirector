@@ -246,7 +246,7 @@ describe('TalkNet', () => {
 			['Herbalist', 'Fern', 'forager'],
 		);
 		assert.ok(!roleMentionTitles(
-			'You are Lira, a servant. The land names you Servant. Do not join Forager, Miller, or Angler.',
+			'You are Lira, an assistant. The land names you Assistant. Do not join Forager, Miller, or Angler.',
 		).includes('Forager'));
 		assert.deepEqual(roleMentionTitles('I keep the mill. I do not fish.'), ['I keep the mill']);
 	});
@@ -255,7 +255,7 @@ describe('TalkNet', () => {
 		const miller = mind('Miller');
 		const talk = new TalkNet({
 			inRange: () => true,
-			others: () => ['Oat', 'Servant'],
+			others: () => ['Oat', 'Assistant'],
 			clearHear: () => true,
 			names: (id) => (id === 'Miller' ? ['Miller', 'Oat'] : [id]),
 		});

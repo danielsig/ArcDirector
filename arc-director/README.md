@@ -67,7 +67,7 @@ Do not wrap HTTP in a second in-flight queue. The mind queue’s `inFlight` is t
 
 Live: `setModel`, `model`, `vision`, `catalog`, `infer`.
 
-Inference opts: `baseURL`, `model`, `apiKey`, `enableThinking`, `reasoningEffort`, `thinkingBudget`, `batchThinks`, `batchWait`. If you omit `apiKey`, `ARC_DIRECTOR_API_KEY` or `OPENAI_API_KEY` is used. Thinking/CoT is off unless `enableThinking` is true. A `thinkingBudget` caps CoT tokens when thinking is on. Preferred chat model is Muse Glimmer (speculative decode). Native LM Studio load reuses a matching instance and unloads extra copies of it. Parallel thinkers are a queue cap, not load copies. If the preferred model is not already loaded, every other loaded instance is unloaded first so it has VRAM; a failed load unloads any remaining residents and retries. `batchThinks` / `batchWait` are scheduling (same as the queue); the queue's values win if both are set.
+Inference opts: `baseURL`, `model`, `apiKey`, `enableThinking`, `reasoningEffort`, `batchThinks`, `batchWait`. If you omit `apiKey`, `ARC_DIRECTOR_API_KEY` or `OPENAI_API_KEY` is used. Thinking/CoT is off unless `enableThinking` is true. When it is off, the last message is an assistant prefill that skips the reasoning channel: an empty `<redacted_thinking>` block, or the model's Harmony `to=user` header when `applyPromptTemplate` is set (same method as LM Studio's imageVision plugin). `reasoning` / `reasoning_effort` are sent only when `/api/v1/models` lists that option for the model (`low` when thinking is on and allowed; `on`/`off` for binary models; omitted when the catalog has no reasoning config). The default chat model is whichever catalog id `modelGrade` ranks highest (active params nearest 4B, then total size nearest 20B). An explicit `model` still wins. Native LM Studio load reuses a matching instance and unloads extra copies of it. Parallel thinkers are a queue cap, not load copies. If the preferred model is not already loaded, every other loaded instance is unloaded first so it has VRAM; a failed load unloads any remaining residents and retries. `batchThinks` / `batchWait` are scheduling (same as the queue); the queue's values win if both are set. `onLog` gets the outbound JSON **before** each model call (message bodies in fences below it; images as images, not base64), then the reply.
 
 ### Mind queue
 
@@ -89,8 +89,8 @@ Standalone `withPriorityQueue()` spread helpers remain for `new Agent({...})` te
 
 | | |
 |--|--|
-| `addStockVerbs(...verbs)` | Schema only. No args = all stock verbs. Pass names to opt in to a subset: `addStockVerbs(...STOCK_MOVE_VERBS)` is `go_to` / `follow` / `wander`; `STOCK_ITEM_VERBS` is `use` / `equip` / `unequip` / `pick_up` / `drop` / `give` / `examine`; `STOCK_MIND_VERBS` is `say` / `wait` / `remember` / `think` / `set_goal` / `drop_goal` / `set_identity` / `when` / `loop`. Same name again is skipped. |
-| `addStockCrowdVerbs(...verbs)` | Schema only for `when` / `law` / `unlaw` / `tag` / `untag` / `spread` / `circle` / `hold_line`. Registering does not grant; the conductor’s kit does. |
+| `addStockVerbs(...verbs)` | Schema only. No args = all stock verbs. Pass names to opt in to a subset: `addStockVerbs(...STOCK_MOVE_VERBS)` is `go_to` / `follow` / `wander`; `STOCK_ITEM_VERBS` is `use` / `equip` / `unequip` / `pick_up` / `drop` / `give` / `examine`; `STOCK_MIND_VERBS` is `say` / `wait` / `remember` / `think` / `set_goal` / `drop_goal` / `set_identity`; `STOCK_PLAN_VERBS` is `law` / `unlaw` / `when` / `loop` (spread last into `STOCK_VERBS`). Same name again is skipped. |
+| `addStockCrowdVerbs(...verbs)` | Schema only for `tag` / `untag` / `spread` / `circle` / `hold_line`. No args also registers `law` / `unlaw` / `when` if missing. Registering does not grant; the conductor’s kit does. |
 | `addVerb(name, args, handler?)` | Schema + optional world function. Same name again binds/replaces the handler. |
 | `removeVerbs(...names)` | Drop catalog schemas and named handlers. Missing names are skipped. Empty rest is a no-op. |
 | `withDefaultKit(kit)` | Object or `(ctx) => kit` used when `addAgent` omits `kit`. Same fetch-every-tick rules. |
@@ -108,9 +108,9 @@ director.addAgent({ id: 'Baker', kit: vendorKit }); // same object; mutate later
 director.addAgent({ id: 'Cook', kit: (ctx) => kitFor(ctx) }); // callback
 ```
 
-`verbs` omitted or `[]` = none. `senses` / `tools` omitted = all registered senses / tools; `[]` = none. `start()` throws if a kit names a verb, sense, or tool that is not registered (`recall` / `observe` always; `earshot` with talk; `see_map` with map and vision).
+`verbs` omitted or `[]` = none. `senses` / `tools` omitted = all registered senses / tools; `[]` = none. `start()` throws if a kit names a verb, sense, or tool that is not registered (`recall` / `observe` always; `earshot` with talk; `see_map` with map and vision; `grep_world_encyclopedia` with `withEncyclopedia`).
 
-**Senses** are English always in the user block (`scene`, inventory, events). **Tools** are on-demand (`recall`, `observe`, `see_map`). Kit `senses` / `tools` lists are allowlists over what you registered, not extra gatherers.
+**Senses** are English always in the user block (`scene`, inventory, events). **Tools** are on-demand (`recall`, `observe`, `see_map`, `grep_world_encyclopedia`). Kit `senses` / `tools` lists are allowlists over what you registered, not extra gatherers.
 
 Prompt, JSON schema, and parse use the kit. A step whose verb is not available fails closed. `agent.verbs` is the catalog; `agent.activeVerbs()` is this tick. Assign `agent.kit` when the grant actually changes, not every frame.
 
@@ -124,22 +124,23 @@ Senses every think in the user block; tools on demand. `addSense` / `addTool` re
 
 | | |
 |--|--|
-| `withSight({ look, limit })` | Stock sense `sight`. `look` returns a `Sight` of `SeenObject[]` (`at` vectors). `limit` is the default max **irreducible sight clauses** after `sightFocus` order. Per-mind `AgentSpec.sightLimit` overrides. Omit `look` to set only the cap; omit `limit` for no cap. |
+| `withSight({ look, limit, unitName })` | Stock sense `sight`. `look` returns a `Sight` of `SeenObject[]` (`at` vectors). `limit` is the default max **irreducible sight clauses** after `sightFocus` order. Per-mind `AgentSpec.sightLimit` overrides. `unitName` is the leftover distance unit (`m`, `pace`, `foot`); omit for `pace`. Omit `look` to set only the cap; omit `limit` for no cap. |
 | `withInventory(look)` | Stock sense `carrying`. callback returns an `Inventory` bag. |
+| `withEncyclopedia(pages)` | Stock tool `grep_world_encyclopedia`. `pages` is `{ name, aliases?, text }[]` or `(ctx) => pages`. `crowdEncyclopedia({ name, tag, inside })` builds a leftover-crowd article from `formatSight` (a bunch around you). Query leftover English (`trees`, `house`) or a spoken place (`forest`) for the Capitalized type. Empty query lists names. Articles stay out of the standing prefix. |
 | `withLineOfSight((aID, bID) => boolean)` | One occlusion callback for sight, talk `canSee`, and watch `hasSightline`. |
 | `addSense(name, spec)` | Host-only sense. `spec` is `{ description, gather }`. |
 | `addTool(name, spec)` | `spec` is `{ description, parameters, handler }`. |
 | `removeSense(...names)` | Missing names are skipped. Empty rest is a no-op. |
 | `removeTool(...names)` | Same. |
 
-`Sight.self.id` is the name. Noun is `id`. Omit `withLineOfSight` and every body in `look()` is seen. Omit `addTool` and the host adds no tools. Built-in `recall` / `observe` / `see_map` still appear when those subsystems are on.
+`Sight.self.id` is the name. Noun is `id`. Omit `withLineOfSight` and every body in `look()` is seen. Omit `addTool` and the host adds no tools. Built-in `recall` / `observe` / `see_map` / `grep_world_encyclopedia` still appear when those subsystems are on.
 
 ### Context and kernels
 
 The library knows minds by **id**. It does not know your `World`.
 
 - **`withContext((id) => ctx)`:** find this mind’s body. Perception `gather(ctx)` and verb handlers use it.
-- **`withKernels((ctx) => kernels)`:** measurements for watches (`isHurt(me)`, `others.nearby()`). The library always `buildCatalog`. Director owns each agent’s `SampleCache` (overwrites `cache`; you do not commit it). It also overwrites `hasHeard` / `prevThought` / `prevActions` from that mind, and `canSee` when `withLineOfSight` is set.
+- **`withKernels((ctx) => kernels)`:** measurements for watches (`isHurt(me)`, `others.nearby()`). The library always `buildCatalog`. Director owns each agent’s `SampleCache` (overwrites `cache`; you do not commit it). It also overwrites `hasHeard` / `prev` from that mind, and `canSee` when `withLineOfSight` is set.
 
 Verbs need objects. Watches need measurements. Same `ctx`, two jobs.
 
@@ -147,6 +148,7 @@ Verbs need objects. Watches need measurements. Same `ctx`, two jobs.
 
 - **`withTalk(sense, onSpoke?, config?)`:** range and routing. Library routes `say()`. Line of sight is `withLineOfSight`.
 - **`withMap(sense)`:** host paints `see_map` pictures; library stamps a name legend (no coordinates). Omitted unless vision is on.
+- **`withEncyclopedia(pages)`:** host type docs; minds `grep_world_encyclopedia(query)` instead of stuffing every type into the standing prefix.
 
 ### Agents
 
@@ -205,9 +207,9 @@ const director = await new ArcDirector<HostCtx>()
 	.start();
 ```
 
-**`when(who, plan)` is instantaneous.** It issues orders and returns `ok` without waiting for units to walk, talk, or finish. `&&` `;` `||` on the *thinker’s* plan sequence *your* steps, so `when(...) && when(...)` starts both groups at once. `&&` `;` `||` *inside* `plan=` sequence that unit. `then_if_ok` after `when` means orders issued, not units finished. To wait on units from the thinker: `wait(until=...)` over the Crowd.
+**`issue(who, plan)` is instantaneous.** It assigns sticky programs and returns `ok` without waiting for units to walk, talk, or finish. Join several `issue` with `;` so later ones still run. `&&` `;` `||` *inside* `plan=` sequence that unit. `then_if_ok` after `issue` means orders assigned, not units finished. To wait on units from the thinker: `wait(until=...)` over the Crowd.
 
-`who=` is an expr on `units` (this roster), not `others`. Squad tags are stored `` `${conductor.id}:${short}` ``; exprs and prompts use the short name. `law` / `unlaw` are standing emergencies (no LLM) that push a stack frame when `watch` is true. `when(watch)` on a job is critical (hoisted). Formations (`spread` / `circle` / `hold_line`) run once on the set and must be the `when` plan head.
+`who=` is an expr on `units` (this roster), not `others`. Issue by tag. Combat verbs take a fight role you can see, never an outsider's body id or given name. Squad tags are stored `` `${conductor.id}:${short}` ``; exprs and prompts use the short name. `law` / `unlaw` are standing emergencies (no LLM) that push a stack frame when `watch` is true. `when(watch)` on a job is critical (hoisted). Formations (`spread` / `circle` / `hold_line`) run once on the set and must be the `issue` plan head.
 
 A CrowdConductor may be bodiless (hive) or have a body (commander). Inner `me` in `plan=` / law `watch=` is that CrowdUnit. A bodiless hive’s thinker `me` is a dummy at the average of unit poses (no carrying).
 
@@ -262,7 +264,7 @@ const director = await new ArcDirector<HostCtx>()
 
 `new Agent({...})` is for unit tests and advanced hosts. Getting started does not use it.
 
-`Agent<HostCtx>` is one mind. `tick(gameTime)` may revise goals (strategic) and emit one `ActionPlan` (tactical). If `execute` is set, `tick` walks the plan unless `autoEnact` is false. `enact` needs `execute`. `planIndex` is the 0-based step currently running inside `enact`.
+`Agent<HostCtx>` is one mind. `tick(gameTime)` may revise goals (strategic) and emit one `ActionPlan` (tactical). `planText` skips the JSON goals pass so the only chat is the text plan. If `execute` is set, `tick` walks the plan unless `autoEnact` is false. `enact` needs `execute`. `planIndex` is the 0-based step currently running inside `enact`.
 
 ### When tactical runs
 
@@ -276,7 +278,7 @@ const director = await new ArcDirector<HostCtx>()
 
 Defaults: `heartbeat` 30, `strategicInterval` 180. `strategicInterval <= 0` disables the periodic pass.
 
-Tactical: assemble senses → optional memory intrusion → tools (`recall`, `observe`, `earshot`, `see_map` when the host maps and the model can see, plus host tools) up to `toolRoundCap` → JSON `ActionPlan`. System vs user split is under [Prompt prefix](#prompt-prefix).
+Tactical: assemble senses → optional memory intrusion → tools (`recall`, `observe`, `earshot`, `see_map` when the host maps and the model can see, `grep_world_encyclopedia` when `withEncyclopedia` is set, plus host tools) up to `toolRoundCap` → `ActionPlan` (JSON, or `go_to() && wait()` text when `planText` is on). System vs user split is under [Prompt prefix](#prompt-prefix).
 
 ### Options
 
@@ -291,6 +293,7 @@ Tactical: assemble senses → optional memory intrusion → tools (`recall`, `ob
 | `recallK` | 5 | Default `recall` hit count |
 | `hideObserve` | false | Omit the built-in `observe` tool |
 | `map` | none | Host snapshots for `see_map` |
+| `encyclopedia` | none | Host type articles for `grep_world_encyclopedia` |
 | `vision` | heuristic | `true` / `false` for image input |
 | `watches` / `pinnedWatches` | `{}` | Name → expr dicts |
 | `watchesWritable` | true | LLM may add / edit / remove extra watches |
@@ -319,7 +322,7 @@ Standing conditions against a `Catalog` from `HostKernels`. Dict: short **name**
 
 **Pinned** watches (`pinnedWatches`) are host-authored. The LLM cannot add over, edit, or remove them. Extra watches live in `watches`. When `watchesWritable`, the plan JSON may include `addWatches` / `editWatches` / `removeWatches`, or replace extras with `"watches": { … }`.
 
-Language looks like JS calls; it is not a JS subset. Bindings: `me`, `others`, `items`, plus host names (`bindings`). `hasHeard`, `prevThought`, and `prevActions` come from the mind when you go through `ArcDirector` (unabsorbed `HeardSpeech`, last think, last `ActionResult`). Pass them yourself only to standalone `buildCatalog`.
+Language looks like JS calls; it is not a JS subset. Bindings: `me`, `others`, `items`, plus host names (`bindings`). `hasHeard` and `prev` come from the mind when you go through `ArcDirector` (`prev.me` / `prev.secondsAgo` / `prev.actions`: last think, or spawn freeze if they have never thought). Pass `prev` yourself only to standalone `buildCatalog`.
 
 ```
 hasHeard || some(others.nearby().approaching())
@@ -335,7 +338,7 @@ i is "marked"
 | List filters | `others.nearby()`, `.nearby(16)`, `others.reachable()`, `.approaching()`, `.departing()` |
 | Lists | `filter` / `find` / `some` / `all`, `map`, `sortBy`, `count`, `includes`, `first`, `max` / `min`, `sum`, `avg`, `reduce` |
 | Logic | `&&` / `\|\|`, `*`, ternary, `??` (absent only), `!` / `!!` |
-| Host extras | `hp` / `maxHP`, `isHurt`, `isHPFalling`; `isCarrying`; `isOpen` / `hasJustOpened` |
+| Host extras | `hp` / `maxHP`, `isHurt`, `isHPFalling`; `isCarrying` / `wasCarrying` / `hasJustReceived` / `hasJustLost` (only if `inventory`); `isOpen` / `hasJustOpened` |
 
 Identifiers: leading acronyms are lowercase (`id`, `hp`, `npc`); later in a name they stay caps (`maxHP`, `npcID`).
 
@@ -366,13 +369,16 @@ type HostKernels = {
 	hp?: (who) => { hp: number; maxHP: number } | undefined;
 	isOpen?: (who) => boolean | undefined;
 	hasHeard?: boolean;           // director injects
-	prevThought?: { secondsAgo: number }; // director injects
-	prevActions?: {               // director injects
-		secondsAgo: number;
-		isOk: boolean;
-		reason: string;
-		verb: string;
-	}[];
+	prev?: {                      // director injects (last think; spawn freeze if never)
+		secondsAgo?: number;
+		me: ExprEntity;
+		actions?: {
+			secondsAgo: number;
+			isOk: boolean;
+			reason: string;
+			verb: string;
+		}[];
+	};
 	stringifiers?: Stringifiers;
 	stringifierKind?: (entity) => StringifierKind;
 };
@@ -388,7 +394,7 @@ Space enters expressions only through host callbacks (`distance`, `facing`, `can
 { head: { verb: 'go_to', args: { name: 'Target' } }, then?: { join, plan } }
 ```
 
-Joins: `then_if_ok` (`&&`), `then` (`;`), `then_if_err` (`||`). At most four steps. `think()` is always moved to the end. `wait(seconds?, until?)` parks; `until` is a one-shot watch.
+Joins: `then_if_ok` (`&&`), `then` (`;`), `then_if_err` (`||`). Chain as far as the next verbs are known. A think is expensive — emit that whole chain this think, not one verb and not only the first step of a spoken then-order. `then` still runs after a failed `pick_up` (already holding). `think()` is always moved to the end. `wait(seconds?, until?)` parks; `until` is a one-shot watch.
 
 `ActionResult`: `{ ok, interrupted?, reason?, verb? }`.
 
@@ -430,15 +436,18 @@ Each think, the prompt lists who is in talking range. `say(to)` is only valid fo
 
 ## Map
 
-`see_map({ zoom })` is omitted unless **both** are set: a host `map.snapshot` and `vision`. `zoom` is 0..1 (1 close, 0 whole land). The host paints; the library stamps symbols and returns a legend of names only, no coordinates. Default you-mark is `❌`.
+`see_map` is a **tool**, not an ActionPlan verb. It is omitted unless **both** are set: a host `map.snapshot` and `vision`. Arg `zoom` is 0..1 (1 close, 0 whole land). The host paints; the library stamps symbols and returns a legend of names only, no coordinates. Default you-mark is `❌`. Never write `see_map(...)` in the plan.
 
 If `toolRoundCap` is 0, an enabled see_map still gets **one** tool round.
+
+`grep_world_encyclopedia` is the same kind of tool for **types**. Host pages are `{ name, aliases?, text }`, or `crowdEncyclopedia({ name, tag, inside })` which stringifies a bunch of that tag and distills leftover English plus surround-sense (being inside a spoken place). Query leftover English (`trees`, `house`) or a spoken place (`forest`); empty query lists names. Articles are not in the standing prefix. Never write `grep_world_encyclopedia(...)` in the plan.
 
 ---
 
 ## Perception helpers
 
 - `formatSight(sight: Sight)` writes what character is seeing.
+- `crowdEncyclopedia({ name, tag, inside })` stringifies a bunch of `tag` around you and writes the leftover-crowd article.
 - `formatInventory(bag)` writes what character is carrying.
 
 > [!NOTE]

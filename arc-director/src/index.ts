@@ -18,6 +18,10 @@ export type {
 export { chatContentText } from './inference/provider.js';
 export { HttpProvider, parseChatTimings, mergeClientTimings, loadConfigFits, type HttpProviderConfig, type HttpLoadConfig, type ReasoningEffort, REASONING_EFFORTS, serverRoot } from './inference/http.js';
 export {
+	type ApplyPromptTemplate,
+	type PromptTemplateMessage,
+} from './inference/assistantThink.js';
+export {
 	PREFERRED_MODELS,
 	MODEL_TIERS,
 	asModelList,
@@ -27,11 +31,15 @@ export {
 	isThinkingModel,
 	isVisionModel,
 	thinkOffMode,
+	pickReasoningOption,
+	modelGrade,
 	pickSingleChatModel,
 	modelIDsMatch,
 	type ModelInfo,
 	type ModelTier,
 	type ThinkOff,
+	type ReasoningOption,
+	REASONING_OPTIONS,
 } from './inference/models.js';
 export {
 	fakeInference,
@@ -53,9 +61,9 @@ export {
 } from './inference/fake.js';
 
 export type { ActionPlan, ActionResult, Join, Step } from './action/types.js';
-export { firstStep, isHoistedWhen, PLAN_BODY_CAP } from './action/types.js';
+export { firstStep, isHoistedWhen, isIssue } from './action/types.js';
 export { ActionError, JOIN_SYMBOL, JOINS, SYMBOL_JOIN } from './action/types.js';
-export { VerbRegistry, registerStockVerbs, STOCK_VERBS, STOCK_MOVE_VERBS, STOCK_ITEM_VERBS, STOCK_MIND_VERBS, STOCK_VERB_ARGS, type StockVerb, type VerbArgKind, type VerbArgMap, type VerbSpec } from './action/registry.js';
+export { VerbRegistry, registerStockVerbs, STOCK_VERBS, STOCK_MOVE_VERBS, STOCK_ITEM_VERBS, STOCK_MIND_VERBS, STOCK_PLAN_VERBS, STOCK_VERB_ARGS, type StockVerb, type VerbArgKind, type VerbArgMap, type VerbSpec } from './action/registry.js';
 export { actionPlanSchema, verbHelp } from './action/schema.js';
 export { asPlan, asStep, validatePlan, validateStep, isActionPlan } from './action/validate.js';
 export { formatPlan, formatStep, parsePlan, parsePlanText } from './action/parse.js';
@@ -132,8 +140,17 @@ export {
 	type MapSnapshot,
 	type StampedMap,
 } from './agent/map.js';
+export {
+	GREP_WORLD_ENCYCLOPEDIA,
+	encyclopediaPages,
+	grepEncyclopedia,
+	crowdEncyclopedia,
+	type EncyclopediaEntry,
+	type EncyclopediaSource,
+	type CrowdEncyclopediaSpec,
+} from './agent/encyclopedia.js';
 export { runPlan, deferThinks, planSteps, THINK_ABOUT_CAP } from './agent/run.js';
-export { planRepairHint, sayRangeHint, shortTermBlock, stablePrefix, volatileBlock, WATCH_CHEAT_SHEET, SEE_MAP_HINT, seeMapHint } from './agent/prompt.js';
+export { planRepairHint, sayRangeHint, shortTermBlock, stablePrefix, volatileBlock, WATCH_CHEAT_SHEET, SEE_MAP_HINT, seeMapHint, encyclopediaHint } from './agent/prompt.js';
 export {
 	TalkNet,
 	DEFAULT_TALK_CONFIG,
@@ -157,6 +174,7 @@ export {
 	watchScore,
 	SampleCache,
 	ExprError,
+	leftoverFilterHint,
 	DEFAULT_TRUE_SCORE,
 	DEFAULT_EPSILON,
 	FACING_COS,
@@ -201,8 +219,9 @@ export {
 	isCrowdConductor,
 	STOCK_CROWD_VERBS,
 	STOCK_CROWD_VERB_ARGS,
-	FORMATION_VERBS,
+	STOCK_FORMATION_VERBS,
 	registerStockCrowdVerbs,
+	isFormationVerb,
 	squadTag,
 	shortTag,
 	evaluateWho,

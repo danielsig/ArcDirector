@@ -45,6 +45,8 @@ import { whereabouts } from '../world/interior';
 import { talkCanSee } from './talkAttend';
 import { bodyName } from './names';
 import type { HostCtx } from './types';
+import type { GameHost } from './adapter';
+import { seenFightName } from './fight';
 
 const SIGHT = 24;
 
@@ -116,7 +118,7 @@ function poseXZ(go:GameObject):{ at:number[]; facing:number[] } {
 	return { at: [p.x, p.z], facing: [f.x, f.z] };
 }
 
-function seenOf(go:GameObject):SeenObject {
+function seenOf(go:GameObject, observer?:GameObject, host?:GameHost):SeenObject {
 	const tags = tagsOf(go);
 	const agent = tags.includes('agent') || tags.includes('person');
 	const interactable = agent
@@ -131,8 +133,9 @@ function seenOf(go:GameObject):SeenObject {
 		|| !!go.getComponent(Merchant)
 		|| !!go.getComponent(Interior);
 	const pose = poseXZ(go);
+	const id = host && observer ? seenFightName(host, observer, go) : go.getComponent(Named)?.id || go.id;
 	const row:SeenObject = {
-		id: go.getComponent(Named)?.id || go.id,
+		id,
 		at: pose.at,
 		facing: pose.facing,
 		tags,
@@ -156,7 +159,7 @@ function seenOf(go:GameObject):SeenObject {
 	return row;
 }
 
-export function lookWorld(actor:GameObject, ambient:string):Sight {
+export function lookWorld(actor:GameObject, ambient:string, host?:GameHost):Sight {
 	const pose = poseXZ(actor);
 	const self = { id: actor.getComponent(Named)?.id ?? actor.id, at: pose.at, facing: pose.facing };
 	const place = [whereabouts(actor), ambient].filter(Boolean).join(' ');
@@ -180,7 +183,7 @@ export function lookWorld(actor:GameObject, ambient:string):Sight {
 		if (Math.hypot(gp.x - ax, gp.z - az) > SIGHT) {
 			continue;
 		}
-		const row = seenOf(go);
+		const row = seenOf(go, actor, host);
 		objects.push(row);
 		const chest = go.getComponent(Chest);
 		const bag = go.getComponent(Container);
@@ -247,7 +250,7 @@ export function hostCanSee(world:World, aID:string, bID:string):boolean {
 
 export function followedCarry(ctx:HostCtx):string {
 	const bond = ctx.actor.getComponent(Companion);
-	if (!bond) {
+	if (!bond || bond.hold) {
 		return '';
 	}
 	const followed = ctx.world.findByID(bond.targetID);

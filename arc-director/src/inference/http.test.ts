@@ -2,6 +2,12 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { MODEL_TIERS, type ThinkOff } from './models.js';
 import { HttpProvider, loadConfigFits, parseChatTimings } from './http.js';
+import {
+	EMPTY_THINK_PREFILL,
+	DONE_THOUGHT,
+	PREFILL_MARKER,
+	clearAssistantThinkCache,
+} from './assistantThink.js';
 
 function idWithThinkOff(mode:ThinkOff):string {
 	const row = MODEL_TIERS.find((t) => t.thinking && t.thinkOff === mode);
@@ -15,12 +21,24 @@ function idWithThinkOff(mode:ThinkOff):string {
 async function captureBody(
 	config:ConstructorParameters<typeof HttpProvider>[0],
 	model:string,
+	catalog?:{ models:unknown[] },
+	extra?:{ enableThinking?:boolean; fakeThought?:boolean },
 ):Promise<Record<string, unknown>> {
 	let body:Record<string, unknown> | undefined;
 	const provider = new HttpProvider({
 		...config,
 		baseURL: 'http://127.0.0.1:9/v1',
-		fetch: async (_input, init) => {
+		fetch: async (input, init) => {
+			const url = String(input);
+			if (url.endsWith('/api/v1/models') && init?.method !== 'POST') {
+				if (!catalog) {
+					return new Response('nope', { status: 404 });
+				}
+				return new Response(JSON.stringify(catalog), { status: 200 });
+			}
+			if (url.includes('/responses')) {
+				return new Response('nope', { status: 404 });
+			}
 			body = JSON.parse(String(init?.body)) as Record<string, unknown>;
 			return new Response(JSON.stringify({
 				choices: [{ message: { content: '{"ok":true}' } }],
@@ -30,9 +48,20 @@ async function captureBody(
 	await provider.chat({
 		model,
 		messages: [{ role: 'user', content: 'pong' }],
+		...extra,
 	});
 	assert.ok(body);
 	return body;
+}
+
+function catalogWithReasoning(id:string, allowed:string[]):{ models:unknown[] } {
+	return {
+		models: [{
+			key: id,
+			loaded_instances: [{ id }],
+			capabilities: { reasoning: { allowed_options: allowed } },
+		}],
+	};
 }
 
 describe('HttpProvider thinking', () => {
@@ -41,16 +70,98 @@ describe('HttpProvider thinking', () => {
 		assert.equal('max_tokens' in body, false);
 	});
 
-	it('does not send a thinking budget when think-off is no_think', async () => {
+	it('caps thinking output so CoT cannot fill the window', async () => {
+		const model = 'other-llm';
+		const body = await captureBody(
+			{ enableThinking: true },
+			model,
+			catalogWithReasoning(model, ['off', 'on']),
+		);
+		assert.equal(body.reasoning, 'on');
+		assert.equal(body['max_tokens'], 512);
+	});
+
+	it('turns reasoning off and shrinks output when the engine exceeds context', async () => {
+		const bodies:Record<string, unknown>[] = [];
+		const model = 'other-llm';
+		const provider = new HttpProvider({
+			baseURL: 'http://127.0.0.1:9/v1',
+			enableThinking: true,
+			fetch: async (input, init) => {
+				const url = String(input);
+				if (url.endsWith('/api/v1/models') && init?.method !== 'POST') {
+					return new Response(JSON.stringify(catalogWithReasoning(model, ['off', 'on'])), { status: 200 });
+				}
+				if (url.includes('/responses')) {
+					return new Response('nope', { status: 404 });
+				}
+				bodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+				if (bodies.length === 1) {
+					return new Response(
+						'event: error\ndata: {"type":"error","error":{"message":"Engine protocol predict stream returned an error: {\\"code\\":500,\\"message\\":\\"Context size has been exceeded.\\",\\"type\\":\\"server_error\\"}"}}\n\n',
+						{ status: 200, headers: { 'content-type': 'text/event-stream' } },
+					);
+				}
+				return new Response(JSON.stringify({
+					choices: [{ message: { content: '{"ok":true}' } }],
+				}), { status: 200 });
+			},
+		});
+		const res = await provider.chat({
+			model,
+			messages: [{ role: 'user', content: 'hi' }],
+		});
+		assert.equal(res.content, '{"ok":true}');
+		assert.equal(bodies[0]?.reasoning, 'on');
+		assert.equal(bodies[0]?.['max_tokens'], 512);
+		assert.equal(bodies[1]?.reasoning, 'off');
+		assert.equal(bodies[1]?.['max_tokens'], 256);
+	});
+
+	it('think-off no_think prefixes /no_think and prefills', async () => {
 		const model = idWithThinkOff('no_think');
-		const body = await captureBody({ thinkingBudget: 128, maxTokens: 384 }, model);
-		assert.equal(body['thinking_budget'], undefined);
+		const body = await captureBody({ maxTokens: 384 }, model);
 		assert.equal(body['enable_thinking'], false);
-		assert.equal(body['reasoning_effort'], 'none');
 		const messages = body.messages as Array<{ role?:string; content?:string }>;
 		const system = messages.find((m) => m.role === 'system');
 		assert.match(String(system?.content), /\/no_think/);
-		assert.equal(String(messages.at(-1)?.content), 'pong');
+		assert.equal(messages.find((m) => m.role === 'user')?.content, 'pong');
+		assert.equal(messages.at(-1)?.role, 'assistant');
+		assert.equal(messages.at(-1)?.content, EMPTY_THINK_PREFILL);
+	});
+
+	it('reports the prepared body before the HTTP send', async () => {
+		const order:string[] = [];
+		let logged:Record<string, unknown> | undefined;
+		const model = idWithThinkOff('strength');
+		const provider = new HttpProvider({
+			baseURL: 'http://127.0.0.1:9/v1',
+			onRequest: ({ body, path }) => {
+				order.push('request');
+				logged = body;
+				assert.match(path, /chat\/completions$/);
+			},
+			fetch: async (input, init) => {
+				const url = String(input);
+				if (url.includes('/responses') || url.endsWith('/api/v1/models')) {
+					return new Response('nope', { status: 404 });
+				}
+				order.push('fetch');
+				assert.ok(logged);
+				assert.deepEqual(logged, JSON.parse(String(init?.body)));
+				return new Response(JSON.stringify({
+					choices: [{ message: { content: '{"ok":true}' } }],
+				}), { status: 200 });
+			},
+		});
+		await provider.chat({
+			model,
+			messages: [{ role: 'user', content: 'pong' }],
+		});
+		assert.deepEqual(order, ['request', 'fetch']);
+		const messages = logged?.messages as Array<{ role?:string; content?:string }>;
+		assert.equal(messages.at(-1)?.role, 'assistant');
+		assert.equal(messages.at(-1)?.content, EMPTY_THINK_PREFILL);
 	});
 
 	it('ignores reasoning_content that is not a JSON plan', async () => {
@@ -92,28 +203,172 @@ describe('HttpProvider thinking', () => {
 		assert.equal(res.content, '{"head":{"verb":"wait","args":{"seconds":1}}}');
 	});
 
-	it('sends a thinking budget only when thinking is enabled', async () => {
+	it('enables thinking on no_think models', async () => {
 		const body = await captureBody({
 			enableThinking: true,
-			thinkingBudget: 128,
 			maxTokens: 384,
 		}, idWithThinkOff('no_think'));
-		assert.equal(body['thinking_budget'], 128);
 		assert.equal(body['enable_thinking'], true);
 		assert.deepEqual(body['chat_template_kwargs'], { enable_thinking: true });
 	});
 
-	it('caps muse-glimmer with reasoning_strength low and a thinking budget', async () => {
+	it('does not send reasoning low unless the catalog allows it', async () => {
 		const model = idWithThinkOff('strength');
 		const body = await captureBody({
 			enableThinking: true,
-			thinkingBudget: 160,
 			maxTokens: 384,
 		}, model);
-		assert.equal(body['thinking_budget'], 160);
-		assert.equal(body['enable_thinking'], undefined);
+		assert.equal(body.reasoning, undefined);
+	});
+
+	it('sends reasoning low when the listed model allows low', async () => {
+		const model = idWithThinkOff('strength');
+		const body = await captureBody({
+			enableThinking: true,
+			maxTokens: 384,
+		}, model, catalogWithReasoning(model, ['off', 'on', 'low', 'medium', 'high']));
+		assert.equal(body.reasoning, 'low');
 		assert.equal(body['reasoning_effort'], 'low');
+		assert.equal(body['enable_thinking'], undefined);
 		assert.deepEqual(body['chat_template_kwargs'], { reasoning_strength: 'low' });
+	});
+
+	it('sends reasoning off when thinking is off and off is allowed', async () => {
+		const model = idWithThinkOff('strength');
+		const body = await captureBody({
+			maxTokens: 384,
+		}, model, catalogWithReasoning(model, ['off', 'on', 'low', 'medium', 'high']));
+		assert.equal(body.reasoning, 'off');
+		const messages = body.messages as Array<{ role?:string; content?:string }>;
+		assert.equal(messages.at(-1)?.role, 'assistant');
+		assert.equal(messages.at(-1)?.content, EMPTY_THINK_PREFILL);
+	});
+
+	it('does not prefill when thinking is on', async () => {
+		const model = idWithThinkOff('strength');
+		const body = await captureBody({
+			enableThinking: true,
+			maxTokens: 384,
+		}, model, catalogWithReasoning(model, ['off', 'on', 'low', 'medium', 'high']));
+		const messages = body.messages as Array<{ role?:string; content?:string }>;
+		assert.equal(messages.at(-1)?.role, 'user');
+		assert.equal(messages.at(-1)?.content, 'pong');
+	});
+
+	it('prefills a canned thought for one request when thinking stays on', async () => {
+		const model = idWithThinkOff('strength');
+		const body = await captureBody({
+			enableThinking: true,
+			maxTokens: 384,
+		}, model, catalogWithReasoning(model, ['off', 'on', 'low', 'medium', 'high']), { fakeThought: true });
+		assert.equal(body.reasoning, 'low');
+		const messages = body.messages as Array<{ role?:string; content?:string }>;
+		assert.equal(messages.at(-1)?.role, 'assistant');
+		assert.equal(messages.at(-1)?.content, `<redacted_thinking>\n${DONE_THOUGHT}\n</redacted_thinking>`);
+	});
+
+	it('turns thinking off for one request even when the provider has it on', async () => {
+		const model = idWithThinkOff('strength');
+		const body = await captureBody({
+			enableThinking: true,
+			maxTokens: 384,
+		}, model, catalogWithReasoning(model, ['off', 'on', 'low', 'medium', 'high']), { enableThinking: false });
+		assert.equal(body.reasoning, 'off');
+		const messages = body.messages as Array<{ role?:string; content?:string }>;
+		assert.equal(messages.at(-1)?.role, 'assistant');
+		assert.equal(messages.at(-1)?.content, EMPTY_THINK_PREFILL);
+	});
+
+	it('uses the Harmony to=user prefill from applyPromptTemplate', async () => {
+		clearAssistantThinkCache();
+		const header = '<|start|>assistant to=user<|channel|>final<|message|>';
+		const model = idWithThinkOff('strength');
+		const body = await captureBody({
+			applyPromptTemplate: async (messages) => {
+				const marked = messages.at(-1)?.role === 'assistant' ? PREFILL_MARKER : '';
+				return `<|start|>user<|message|>y<|end|>${header}${marked}`;
+			},
+		}, model);
+		const messages = body.messages as Array<{ role?:string; content?:string }>;
+		assert.equal(messages.at(-1)?.role, 'assistant');
+		assert.equal(messages.at(-1)?.content, header);
+		clearAssistantThinkCache();
+	});
+
+	it('prefills a canned Harmony thought from applyPromptTemplate', async () => {
+		clearAssistantThinkCache();
+		const header = '<|start|>assistant to=user<|channel|>final<|message|>';
+		const model = idWithThinkOff('strength');
+		const body = await captureBody({
+			enableThinking: true,
+			applyPromptTemplate: async (messages) => {
+				if (messages.at(-1)?.role === 'assistant') {
+					return `<|start|>user<|message|>y<|end|>${header}${PREFILL_MARKER}`;
+				}
+				return '<|start|>user<|message|>y<|end|><|start|>assistant<|channel|>analysis<|message|><think>';
+			},
+		}, model, catalogWithReasoning(model, ['off', 'on', 'low', 'medium', 'high']), { fakeThought: true });
+		const messages = body.messages as Array<{ role?:string; content?:string }>;
+		assert.equal(body.reasoning, 'low');
+		assert.equal(messages.at(-1)?.role, 'assistant');
+		assert.equal(messages.at(-1)?.content, `<think>\n${DONE_THOUGHT}\n</think>${header}`);
+		clearAssistantThinkCache();
+	});
+
+	it('sends reasoning on for on/off models, not low', async () => {
+		const model = 'google/gemma-4-26b-a4b';
+		const body = await captureBody({
+			enableThinking: true,
+			maxTokens: 384,
+		}, model, catalogWithReasoning(model, ['off', 'on']));
+		assert.equal(body.reasoning, 'on');
+	});
+
+	it('does not send reasoning off when the model only allows on', async () => {
+		const model = 'deepseek-r1';
+		const body = await captureBody({
+			maxTokens: 384,
+		}, model, catalogWithReasoning(model, ['on']));
+		assert.equal(body.reasoning, undefined);
+	});
+
+	it('sends reasoning low on the responses API when the catalog allows it', async () => {
+		let body:Record<string, unknown> | undefined;
+		const provider = new HttpProvider({
+			enableThinking: true,
+			baseURL: 'http://127.0.0.1:9/v1',
+			fetch: async (input, init) => {
+				const url = String(input);
+				if (url.endsWith('/api/v1/models') && init?.method !== 'POST') {
+					return new Response(JSON.stringify({
+						models: [{
+							key: 'google/gemma-4-26b-a4b-qat',
+							loaded_instances: [{ id: 'google/gemma-4-26b-a4b-qat' }],
+							capabilities: {
+								reasoning: { allowed_options: ['off', 'on', 'low', 'medium', 'high'] },
+							},
+						}],
+					}), { status: 200 });
+				}
+				if (url.includes('/responses')) {
+					body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+					return new Response(JSON.stringify({
+						id: 'resp_1',
+						output: [{
+							type: 'message',
+							content: [{ type: 'output_text', text: '{"ok":true}' }],
+						}],
+					}), { status: 200 });
+				}
+				return new Response('nope', { status: 404 });
+			},
+		});
+		await provider.chat({
+			model: 'google/gemma-4-26b-a4b-qat',
+			messages: [{ role: 'user', content: 'pong' }],
+		});
+		assert.ok(body);
+		assert.equal(body.reasoning, 'low');
 	});
 
 	it('puts /no_think on the system message, not image user parts', async () => {
@@ -141,7 +396,8 @@ describe('HttpProvider thinking', () => {
 		const messages = body.messages as Array<{ role?:string; content?:unknown }>;
 		const system = messages.find((m) => m.role === 'system');
 		assert.match(String(system?.content), /\/no_think/);
-		const content = messages.at(-1)?.content as Array<{
+		const user = messages.find((m) => m.role === 'user');
+		const content = user?.content as Array<{
 			type?:string;
 			text?:string;
 			image_url?:{ url?:string };
@@ -152,6 +408,8 @@ describe('HttpProvider thinking', () => {
 		assert.equal(String(content[0]?.text).includes('/no_think'), false);
 		assert.equal(content[1]?.type, 'image_url');
 		assert.equal(content[1]?.image_url?.url, 'data:image/png;base64,xx');
+		assert.equal(messages.at(-1)?.role, 'assistant');
+		assert.equal(messages.at(-1)?.content, EMPTY_THINK_PREFILL);
 	});
 });
 
@@ -295,10 +553,10 @@ describe('HttpProvider native server', () => {
 				if (url.endsWith('/api/v1/models') && init?.method !== 'POST') {
 					return new Response(JSON.stringify({
 						models: [{
-							key: 'meta/muse-glimmer',
+							key: 'google/gemma-4-26b-a4b-qat',
 							type: 'llm',
 							loaded_instances: [{
-								id: 'meta/muse-glimmer',
+								id: 'google/gemma-4-26b-a4b-qat',
 								config: { flash_attention: true, offload_kv_cache_to_gpu: true },
 							}],
 						}, {
@@ -310,7 +568,7 @@ describe('HttpProvider native server', () => {
 				}
 				if (url.includes('/api/v1/models/unload')) {
 					const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
-					assert.equal(body.instance_id, 'meta/muse-glimmer');
+					assert.equal(body.instance_id, 'google/gemma-4-26b-a4b-qat');
 					return new Response(JSON.stringify({ instance_id: body.instance_id }), { status: 200 });
 				}
 				if (url.includes('/api/v1/models/load')) {
@@ -346,9 +604,9 @@ describe('HttpProvider native server', () => {
 				if (url.endsWith('/api/v1/models') && init?.method !== 'POST') {
 					return new Response(JSON.stringify({
 						models: [{
-							key: 'meta/muse-glimmer',
+							key: 'google/gemma-4-26b-a4b-qat',
 							type: 'llm',
-							loaded_instances: [{ id: 'meta/muse-glimmer', config: {} }],
+							loaded_instances: [{ id: 'google/gemma-4-26b-a4b-qat', config: {} }],
 						}, {
 							key: 'google/gemma-4-31b-qat',
 							type: 'llm',
@@ -436,11 +694,11 @@ describe('HttpProvider native server', () => {
 				if (url.endsWith('/api/v1/models') && init?.method !== 'POST') {
 					return new Response(JSON.stringify({
 						models: [{
-							key: 'meta/muse-glimmer',
+							key: 'google/gemma-4-26b-a4b-qat',
 							type: 'llm',
 							loaded_instances: loaded
 								? [{
-									id: 'meta/muse-glimmer',
+									id: 'google/gemma-4-26b-a4b-qat',
 									config: {
 										flash_attention: true,
 										offload_kv_cache_to_gpu: true,
@@ -457,7 +715,7 @@ describe('HttpProvider native server', () => {
 					loaded = true;
 					return new Response(JSON.stringify({
 						status: 'loaded',
-						instance_id: 'meta/muse-glimmer',
+						instance_id: 'google/gemma-4-26b-a4b-qat',
 						load_config: {
 							flash_attention: true,
 							offload_kv_cache_to_gpu: true,
@@ -474,7 +732,7 @@ describe('HttpProvider native server', () => {
 			},
 		});
 		await Promise.all([0, 1, 2, 3].map(() => provider.chat({
-			model: 'meta/muse-glimmer',
+			model: 'google/gemma-4-26b-a4b-qat',
 			messages: [{ role: 'user', content: 'hi' }],
 		})));
 		assert.equal(loads, 1);
@@ -503,7 +761,7 @@ describe('HttpProvider native server', () => {
 			},
 		});
 		await Promise.all([0, 1, 2, 3].map(() => provider.chat({
-			model: 'meta/muse-glimmer',
+			model: 'google/gemma-4-26b-a4b-qat',
 			messages: [{ role: 'user', content: 'hi' }],
 		})));
 		assert.equal(startedWhileCold, 1);
@@ -755,6 +1013,55 @@ describe('HttpProvider native server', () => {
 		});
 		assert.equal(res.toolCalls[0]?.name, 'see_map');
 		assert.equal(res.toolCalls[0]?.id, 'c1');
+	});
+
+	it('merges streamed completions tool_call fragments', async () => {
+		const provider = new HttpProvider({
+			baseURL: 'http://127.0.0.1:9/v1',
+			fetch: async (input) => {
+				const url = String(input);
+				if (url.endsWith('/api/v1/models')) {
+					return new Response(JSON.stringify({
+						models: [{ key: 'guard', loaded_instances: [{ id: 'guard' }] }],
+					}), { status: 200 });
+				}
+				if (url.includes('/responses')) {
+					return new Response('nope', { status: 404 });
+				}
+				const stream = new ReadableStream({
+					start(controller) {
+						const enc = new TextEncoder();
+						controller.enqueue(enc.encode(
+							'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_1","type":"function","function":{"name":"see_map","arguments":""}}]}}]}\n\n',
+						));
+						controller.enqueue(enc.encode(
+							'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{\\"zoom\\":1}"}}]}}]}\n\n',
+						));
+						controller.enqueue(enc.encode(
+							'data: {"choices":[{"delta":{},"finish_reason":"tool_calls"}]}\n\n',
+						));
+						controller.enqueue(enc.encode('data: [DONE]\n\n'));
+						controller.close();
+					},
+				});
+				return new Response(stream, {
+					status: 200,
+					headers: { 'content-type': 'text/event-stream' },
+				});
+			},
+		});
+		const res = await provider.chat({
+			model: 'guard',
+			messages: [{ role: 'user', content: 'look' }],
+			tools: [{
+				name: 'see_map',
+				description: 'map',
+				parameters: { type: 'object', properties: {} },
+			}],
+		});
+		assert.equal(res.toolCalls[0]?.name, 'see_map');
+		assert.equal(res.toolCalls[0]?.id, 'call_1');
+		assert.equal(res.toolCalls[0]?.arguments, '{"zoom":1}');
 	});
 
 	it('retries responses without streaming when the SSE body is empty', async () => {

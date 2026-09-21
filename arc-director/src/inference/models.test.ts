@@ -5,6 +5,8 @@ import {
 	isThinkingModel,
 	isVisionModel,
 	MODEL_TIERS,
+	pickReasoningOption,
+	modelGrade,
 	pickSingleChatModel,
 	PREFERRED_MODELS,
 	type ModelInfo,
@@ -14,62 +16,71 @@ function model(id:string, extra:Partial<ModelInfo> = {}):ModelInfo {
 	return { id, ...extra };
 }
 
-const first = PREFERRED_MODELS[0];
-const later = PREFERRED_MODELS[2];
-const laterShort = PREFERRED_MODELS[3];
 const embed = 'embed-test';
 
+describe('modelGrade', () => {
+	it('favors active params near 4B, then total size near 20B', () => {
+		const a4 = modelGrade('google/gemma-4-26b-a4b-qat');
+		const a3 = modelGrade('qwen3-30b-a3b');
+		const dense = modelGrade('meta/llama-3.1-8b');
+		assert.ok(a4 > a3);
+		assert.ok(a3 > dense);
+		assert.ok(modelGrade('other-20b-a4b') > modelGrade('other-70b-a4b'));
+	});
+});
+
 describe('pickSingleChatModel', () => {
-	it('stays on a loaded preferred id instead of another catalog id', () => {
+	const a4 = 'google/gemma-4-26b-a4b-qat';
+	const dense = 'google/gemma-4-31b-qat';
+
+	it('stays on a loaded model instead of an unloaded higher grade', () => {
 		const picked = pickSingleChatModel([
-			model(later),
-			model(first, { state: 'loaded' }),
+			model(dense, { state: 'loaded' }),
+			model(a4),
 			model(embed, { type: 'embeddings' }),
 		]);
-		assert.equal(picked, first);
+		assert.equal(picked, dense);
 	});
 
-	it('does not JIT-load a preferred id over a model that is already in VRAM', () => {
+	it('does not JIT-load a higher grade over a model that is already in VRAM', () => {
 		const picked = pickSingleChatModel([
-			model(later, { state: 'loaded' }),
-			model(first),
+			model(dense, { state: 'loaded' }),
+			model(a4),
 		]);
-		assert.equal(picked, later);
+		assert.equal(picked, dense);
 	});
 
-	it('ranks preferred ids when the server does not report load state', () => {
+	it('picks the higher grade when the server does not report load state', () => {
 		const picked = pickSingleChatModel([
-			model(later),
-			model(first),
+			model(dense),
+			model(a4),
 		]);
-		assert.equal(picked, first);
+		assert.equal(picked, a4);
 	});
 
 	it('treats loaded:true as in VRAM', () => {
 		const picked = pickSingleChatModel([
-			model(first, { loaded: true }),
-			model(later),
+			model(a4, { loaded: true }),
+			model(dense),
 		]);
-		assert.equal(picked, first);
+		assert.equal(picked, a4);
 	});
 
 	it('honors an explicit request even if another model is in VRAM', () => {
 		const picked = pickSingleChatModel([
-			model(first, { state: 'loaded' }),
-			model(later),
-		], undefined, laterShort);
-		assert.equal(picked, later);
+			model(a4, { state: 'loaded' }),
+			model(dense),
+		], undefined, 'gemma-4-31b-qat');
+		assert.equal(picked, dense);
 	});
 });
 
 describe('isThinkingModel', () => {
-	it('follows thinking flags on the preferred tier list', () => {
+	it('follows thinking flags on the tier list', () => {
 		const thinking = MODEL_TIERS.find((t) => t.thinking)?.id;
-		const plain = MODEL_TIERS.find((t) => !t.thinking)?.id;
 		assert.ok(thinking);
-		assert.ok(plain);
 		assert.equal(isThinkingModel(thinking), true);
-		assert.equal(isThinkingModel(plain), false);
+		assert.equal(isThinkingModel('plain-chat'), false);
 	});
 
 	it('does not list qwen on the preferred roster', () => {
@@ -98,5 +109,49 @@ describe('isVisionModel', () => {
 		assert.equal(list[0]?.vision, true);
 		assert.equal(list[1]?.vision, false);
 		assert.equal(list[2]?.vision, true);
+	});
+
+	it('reads reasoning allowed_options from the native catalog', () => {
+		const list = asModelList({
+			models: [
+				{
+					key: 'google/gemma-4-26b-a4b-qat',
+					loaded_instances: [],
+					capabilities: {
+						reasoning: { allowed_options: ['off', 'on', 'low', 'medium', 'high'], default: 'low' },
+					},
+				},
+				{
+					key: 'google/gemma-4-26b-a4b',
+					loaded_instances: [],
+					capabilities: {
+						reasoning: { allowed_options: ['off', 'on'], default: 'on' },
+					},
+				},
+				{ key: 'plain-chat', loaded_instances: [] },
+			],
+		});
+		assert.deepEqual(list[0]?.reasoning, {
+			allowed: ['off', 'on', 'low', 'medium', 'high'],
+			default: 'low',
+		});
+		assert.deepEqual(list[1]?.reasoning, { allowed: ['off', 'on'], default: 'on' });
+		assert.equal(list[2]?.reasoning, undefined);
+	});
+});
+
+describe('pickReasoningOption', () => {
+	it('prefers low when thinking is on and low is listed', () => {
+		assert.equal(pickReasoningOption(['off', 'on', 'low', 'high'], true, 'low'), 'low');
+	});
+
+	it('uses on when the model only lists on/off', () => {
+		assert.equal(pickReasoningOption(['off', 'on'], true, 'low'), 'on');
+		assert.equal(pickReasoningOption(['off', 'on'], false), 'off');
+	});
+
+	it('sends nothing when the catalog has no match', () => {
+		assert.equal(pickReasoningOption(undefined, true, 'low'), undefined);
+		assert.equal(pickReasoningOption(['on'], false), undefined);
 	});
 });

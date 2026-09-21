@@ -66,6 +66,16 @@ export type ChatRequest = {
 	responseFormat?:JsonSchemaResponseFormat;
 	temperature?:number;
 	maxTokens?:number;
+	/**
+	 * When false, this turn skips chain-of-thought even if the provider has thinking on.
+	 * Omit to follow the provider setting.
+	 */
+	enableThinking?:boolean;
+	/**
+	 * Prefill a finished thought so this turn does not generate new CoT.
+	 * Thinking stays on; only the canned thought is injected.
+	 */
+	fakeThought?:boolean;
 	/** Agent id (or similar) so the HTTP layer can pick a cached response thread. */
 	thread?:string;
 };

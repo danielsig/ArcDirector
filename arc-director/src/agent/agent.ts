@@ -1,19 +1,35 @@
-import { parsePlan } from '../action/parse.js';
+import { formatPlan, parsePlan } from '../action/parse.js';
 import { actionPlanSchema } from '../action/schema.js';
 import type { VerbRegistry } from '../action/registry.js';
 import type { ActionPlan, ActionResult, Step } from '../action/types.js';
 import { ActionError } from '../action/types.js';
 import { evaluate } from '../expr/eval.js';
 import { observeExpr } from '../expr/stringify.js';
-import type { Catalog } from '../expr/types.js';
-import { isVisionModel, PREFERRED_MODELS } from '../inference/models.js';
+import type { Catalog, ExprEntity } from '../expr/types.js';
+import { cloneEntity, prevMeFromJSON } from '../expr/prev.js';
+import { isVisionModel } from '../inference/models.js';
 import type { ChatMessage, InferenceProvider, ToolDef } from '../inference/provider.js';
 import { extractJson, isRecord, readID } from '../json.js';
 import { MemoryStore, mergeTags, nameTags, type MemoryRecord } from '../memory/store.js';
 import type { Sense, ToolSpec, Kit, KitSource } from './types.js';
 import { parseMapZoom, stampMap, isMapSnapshot, DEFAULT_YOU_SYMBOL, type MapPrev, type MapSense } from './map.js';
+import {
+	encyclopediaPages,
+	grepEncyclopedia,
+	GREP_WORLD_ENCYCLOPEDIA,
+	type EncyclopediaSource,
+} from './encyclopedia.js';
 import { planRepairHint, sayRangeHint, stablePrefix, volatileBlock } from './prompt.js';
-import { runPlan, deferThinks, createPlanSession, DEFAULT_COOLDOWN, THINK_ABOUT_CAP, type PlanSession } from './run.js';
+import {
+	runPlan,
+	deferThinks,
+	createPlanSession,
+	DEFAULT_COOLDOWN,
+	THINK_ABOUT_CAP,
+	type PlanHandler,
+	type PlanSession,
+	type PlanSessionOpts,
+} from './run.js';
 import { firstStep } from '../action/types.js';
 import type { SayTo, TalkNet } from './talk.js';
 import type { AgentEvent, AgentIdentity, Goal, WatchInput, Watches } from './types.js';
@@ -37,6 +53,14 @@ import {
 	extrasWithoutPinnedFocus,
 	mergePinnedFocus,
 } from './focus.js';
+import {
+	DEFAULT_MAX_LAWS,
+	dropLaw,
+	lawFromSpec,
+	upsertLaw,
+	type CrowdLaw,
+	type CrowdLawSpec,
+} from '../conductor/laws.js';
 
 export type AgentJSON = {
 	id:string;
@@ -64,6 +88,10 @@ export type AgentJSON = {
 	recentSummary?:string;
 	thinkAbout?:string;
 	lastVerb?:string;
+	laws?:CrowdLaw[];
+	maxLaws?:number;
+	cooldown?:number;
+	prevMe?:ExprEntity;
 };
 
 export type AgentDeps<HostCtx = unknown> = {
@@ -87,6 +115,12 @@ export type AgentDeps<HostCtx = unknown> = {
 	toolRoundCap?:number;
 	/** Extra chat turns after a bad plan or a tool call with tools closed. Host sets this; 0 means fail on the first bad reply. */
 	planRetryCap?:number;
+	/** Ask for `go_to() && wait()` text instead of ActionPlan JSON. Testing toggle. Skips the JSON goals pass. */
+	planText?:boolean;
+	/** Standing think line. Omit for {@link DEFAULT_THINK_INSTRUCTIONS}. */
+	thinkInstructions?:string;
+	/** Standing verb-chain line. Omit for {@link DEFAULT_VERB_INSTRUCTIONS}. */
+	verbInstructions?:string;
 	maxGoals?:number;
 	intrusionThreshold?:number;
 	intrusionCooldown?:number;
@@ -97,6 +131,8 @@ export type AgentDeps<HostCtx = unknown> = {
 	hideObserve?:boolean;
 	/** Host top-down snapshots. `see_map` is omitted unless this and vision are both set. */
 	map?:MapSense;
+	/** Host world-type articles. `grep_world_encyclopedia` is omitted unless this is set. */
+	encyclopedia?:EncyclopediaSource<HostCtx>;
 	/**
 	 * Whether the current model accepts image parts.
 	 * `false` never offers `see_map`. `true` offers it when `map` is set.
@@ -123,6 +159,9 @@ export type AgentOptions<HostCtx = unknown> = AgentDeps<HostCtx> & {
 	identity:AgentIdentity;
 	goals?:Goal[];
 	memory?:MemoryStore;
+	laws?:CrowdLawSpec[];
+	maxLaws?:number;
+	defaultLawWho?:string;
 };
 
 function asStringArray(v:unknown):string[] {
@@ -168,6 +207,9 @@ export class Agent<HostCtx = unknown> {
 	readonly execute?:(step:Step, ctx:HostCtx | undefined, actorID?:string)=>Promise<ActionResult>;
 	readonly abortPlan?:(id:string)=>void;
 	cooldown:number;
+	laws:CrowdLaw[] = [];
+	maxLaws:number;
+	protected defaultLawWho:string;
 	readonly autoEnact:boolean;
 	planSession:PlanSession | null = null;
 	readonly queue:MindQueue | undefined;
@@ -177,6 +219,10 @@ export class Agent<HostCtx = unknown> {
 	heartbeat:number;
 	toolRoundCap:number;
 	planRetryCap:number;
+	/** Mutable so the Testing toggle can flip live agents. */
+	planText:boolean;
+	thinkInstructions:string | undefined;
+	verbInstructions:string | undefined;
 	maxGoals:number;
 	intrusionThreshold:number;
 	intrusionCooldown:number;
@@ -186,6 +232,7 @@ export class Agent<HostCtx = unknown> {
 	catalog?:(ctx:HostCtx)=>Catalog;
 	hideObserve:boolean;
 	map:MapSense | undefined;
+	encyclopedia:EncyclopediaSource<HostCtx> | undefined;
 	vision:boolean | undefined;
 	watches:Watches;
 	pinnedWatches:Watches;
@@ -204,6 +251,8 @@ export class Agent<HostCtx = unknown> {
 	/** Index of the step currently running inside `enact` (0-based). */
 	planIndex = 0;
 	lastTacticalAt = Number.NEGATIVE_INFINITY;
+	/** Self at last tactical think; spawn freeze until then. */
+	prevMe:ExprEntity | undefined;
 	lastStrategicAt = 0;
 	lastIntrusionAt = Number.NEGATIVE_INFINITY;
 	livePlan = false;
@@ -230,14 +279,19 @@ export class Agent<HostCtx = unknown> {
 		this.execute = opts.execute;
 		this.abortPlan = opts.abortPlan;
 		this.cooldown = opts.cooldown ?? DEFAULT_COOLDOWN;
+		this.maxLaws = opts.maxLaws ?? DEFAULT_MAX_LAWS;
+		this.defaultLawWho = opts.defaultLawWho ?? 'me';
 		this.autoEnact = opts.autoEnact ?? true;
 		this.queue = opts.queue;
 		this.stalled = opts.stalled;
-		this.model = opts.model ?? PREFERRED_MODELS[0];
+		this.model = opts.model ?? '';
 		this.embedModel = opts.embedModel;
 		this.heartbeat = opts.heartbeat ?? 30;
 		this.toolRoundCap = opts.toolRoundCap ?? 2;
 		this.planRetryCap = opts.planRetryCap ?? 0;
+		this.planText = opts.planText === true;
+		this.thinkInstructions = opts.thinkInstructions;
+		this.verbInstructions = opts.verbInstructions;
 		this.maxGoals = opts.maxGoals ?? 5;
 		this.intrusionThreshold = opts.intrusionThreshold ?? 0.55;
 		this.intrusionCooldown = opts.intrusionCooldown ?? 45;
@@ -247,6 +301,7 @@ export class Agent<HostCtx = unknown> {
 		this.catalog = opts.catalog;
 		this.hideObserve = opts.hideObserve ?? false;
 		this.map = opts.map;
+		this.encyclopedia = opts.encyclopedia;
 		this.vision = opts.vision;
 		this.pinnedWatches = asWatches(opts.pinnedWatches);
 		this.watches = extrasWithoutPins(asWatches(opts.watches), this.pinnedWatches);
@@ -265,6 +320,9 @@ export class Agent<HostCtx = unknown> {
 		}
 		if (opts.maxGoals !== undefined) {
 			this.trimGoals();
+		}
+		for (const spec of opts.laws ?? []) {
+			this.addLaw(spec, spec.pinned);
 		}
 	}
 
@@ -292,10 +350,61 @@ export class Agent<HostCtx = unknown> {
 	/** Catalog filtered by the current kit. Unset `kit` (standalone Agent) = whole catalog. */
 	activeVerbs():VerbRegistry {
 		this.refreshKit();
-		if (this.kit === undefined) {
-			return this.verbs;
+		const view = this.kit === undefined
+			? this.verbs
+			: this.verbs.view(this.currentKit.verbs ?? []);
+		if (this.crowdLawWho() || !view.has('law')) {
+			return view;
 		}
-		return this.verbs.view(this.currentKit.verbs ?? []);
+		return view.withoutArg('law', 'who');
+	}
+
+	protected crowdLawWho():boolean {
+		return false;
+	}
+
+	addLaw(spec:CrowdLawSpec, pinned = false):CrowdLaw | undefined {
+		const law = lawFromSpec(
+			{ ...spec, pinned: pinned || spec.pinned },
+			this.verbs,
+			spec.name ?? `law_${this.laws.length + 1}`,
+			this.defaultLawWho,
+		);
+		if (!law) {
+			return undefined;
+		}
+		this.laws = upsertLaw(this.laws, law, this.maxLaws);
+		return this.laws.find((s) => s.name === law.name);
+	}
+
+	removeLaw(name:string):void {
+		this.laws = dropLaw(this.laws, name);
+	}
+
+	lawHandlers(matches?:(law:CrowdLaw)=>boolean):PlanHandler[] {
+		const out:PlanHandler[] = [];
+		this.laws.forEach((law, i) => {
+			if (matches && !matches(law)) {
+				return;
+			}
+			out.push({
+				key: `law:${law.name}`,
+				watch: law.watch,
+				plan: law.plan,
+				rank: i,
+			});
+		});
+		return out;
+	}
+
+	beginLaw(handler:PlanHandler, sessionOpts?:PlanSessionOpts):void {
+		if (this.planSession && (this.livePlan || this.planSession.parked)) {
+			this.planSession.pending = { kind: 'preempt', handler };
+			this.planSession.token += 1;
+			this.abortPlan?.(this.id);
+			return;
+		}
+		void this.enact(handler.plan, handler, sessionOpts);
 	}
 
 	private senseAllowed(name:string):boolean {
@@ -351,6 +460,14 @@ export class Agent<HostCtx = unknown> {
 		return this.pendingEvents.some((e) => e.kind === 'HeardSpeech');
 	}
 
+	private capturePrevMe():void {
+		const ctx = this.context();
+		if (!ctx || !this.catalog) {
+			return;
+		}
+		this.prevMe = cloneEntity(this.catalog(ctx).me);
+	}
+
 	/** Hosts that run world verbs themselves should call this so think() cooldown sees them. */
 	noteVerb(verb:string):void {
 		if (verb) {
@@ -384,34 +501,64 @@ export class Agent<HostCtx = unknown> {
 	}
 
 	/** Walk a plan (world verbs via `execute`). Arms wait(until), then notes the queue. */
-	async enact(plan:ActionPlan):Promise<ActionResult> {
+	async enact(
+		plan:ActionPlan,
+		handler?:PlanHandler,
+		sessionOpts?:PlanSessionOpts,
+	):Promise<ActionResult> {
+		this.replaceProgram();
 		this.livePlan = true;
 		this.planIndex = 0;
 		this.queue?.beginPlan(this.id, plan);
-		this.planSession = createPlanSession({
-			cooldown: this.cooldown,
+		const session = createPlanSession({
 			now: () => this.now,
 			catalog: () => {
 				const ctx = this.context();
 				return ctx && this.catalog ? this.catalog(ctx) : undefined;
 			},
 			abortHost: () => this.abortPlan?.(this.id),
+			...sessionOpts,
 		});
+		this.planSession = session;
 		try {
 			let i = 0;
-			const result = await runPlan(plan, (step) => {
+			const result = await runPlan(plan, async (step) => {
 				this.planIndex = i;
 				i += 1;
-				return this.runStep(step, this.context());
-			}, { session: this.planSession });
+				const out = await this.runStep(step, this.context());
+				this.lastResult = out;
+				return out;
+			}, { session, asHandler: handler });
+			if (this.planSession !== session) {
+				return result;
+			}
+			if (session.parked) {
+				this.livePlan = false;
+				this.queue?.endPlan(this.id);
+				return result;
+			}
 			this.ingestResult(result);
 			return result;
 		}
 		finally {
-			this.livePlan = false;
-			this.planSession = null;
-			this.queue?.endPlan(this.id);
+			if (this.planSession === session && !session.parked) {
+				this.livePlan = false;
+				this.planSession = null;
+				this.queue?.endPlan(this.id);
+			}
 		}
+	}
+
+	replaceProgram():void {
+		if (this.planSession) {
+			this.planSession.token += 1;
+			this.planSession.pending = { kind: 'abort' };
+			this.planSession.abortHost?.();
+		}
+		this.abortPlan?.(this.id);
+		this.planSession = null;
+		this.livePlan = false;
+		this.queue?.endPlan(this.id);
 	}
 
 	async remember(text:string, tags:string[] = [], at = this.now):Promise<MemoryRecord> {
@@ -457,12 +604,13 @@ export class Agent<HostCtx = unknown> {
 			this.pendingAbout = undefined;
 			this.lastPlan = plan;
 			this.lastTacticalAt = gameTime;
+			this.capturePrevMe();
 			this.pendingEvents.length = 0;
 			this.recentAbsorbed = 0;
 		}
 		catch (err) {
 			this.lastTacticalAt = gameTime;
-			this.livePlan = false;
+			this.capturePrevMe();
 			throw err;
 		}
 		finally {
@@ -501,6 +649,10 @@ export class Agent<HostCtx = unknown> {
 			recentSummary: this.recentSummary || undefined,
 			thinkAbout: this.pendingAbout,
 			lastVerb: this.lastVerb,
+			laws: this.laws.map((s) => ({ ...s, plan: s.plan })),
+			maxLaws: this.maxLaws,
+			cooldown: this.cooldown,
+			prevMe: this.prevMe ? cloneEntity(this.prevMe) : undefined,
 		};
 	}
 
@@ -552,6 +704,16 @@ export class Agent<HostCtx = unknown> {
 		this.recentAbsorbed = this.pendingEvents.length;
 		this.pendingAbout = json.thinkAbout;
 		this.lastVerb = json.lastVerb;
+		if (json.maxLaws !== undefined) {
+			this.maxLaws = json.maxLaws;
+		}
+		if (json.cooldown !== undefined) {
+			this.cooldown = json.cooldown;
+		}
+		this.prevMe = prevMeFromJSON(json.prevMe);
+		if (json.laws) {
+			this.laws = json.laws.map((s) => ({ ...s }));
+		}
 		if (json.maxGoals !== undefined) {
 			this.trimGoals();
 		}
@@ -587,10 +749,17 @@ export class Agent<HostCtx = unknown> {
 	}
 
 	private async reviseGoals():Promise<void> {
+		if (this.planText) {
+			return;
+		}
 		const system = stablePrefix(this.identity, this.activeVerbs(), {
 			includeWatches: true,
 			canSeeMap: this.seeMapOn() && this.toolAllowed('see_map'),
+			canGrepEncyclopedia: this.encyclopediaOn() && this.toolAllowed(GREP_WORLD_ENCYCLOPEDIA),
 			youSymbol: this.youSymbol(),
+			thinkInstructions: this.thinkInstructions,
+			verbInstructions: this.verbInstructions,
+			omitPlan: true,
 		});
 		const user = `${volatileBlock({
 			goals: this.goals,
@@ -635,7 +804,15 @@ export class Agent<HostCtx = unknown> {
 	}
 
 	protected extraVolatile():string {
-		return '';
+		if (this.laws.length === 0) {
+			return '';
+		}
+		const lines = this.laws.map((law) => (
+			this.crowdLawWho()
+				? `- ${law.name}: who=${law.who} watch=${law.watch} → ${formatPlan(law.plan)}`
+				: `- ${law.name}: watch=${law.watch} → ${formatPlan(law.plan)}`
+		));
+		return `Laws (emergencies, list order; unlaw to drop):\n${lines.join('\n')}`;
 	}
 
 	protected trimGoals():void {
@@ -647,9 +824,8 @@ export class Agent<HostCtx = unknown> {
 			.slice(0, this.maxGoals);
 	}
 
-	private async tactical():Promise<ActionPlan> {
+	private gatherSensed():Record<string, unknown> {
 		const ctx = this.context();
-		this.refreshKit();
 		const sensed:Record<string, unknown> = {};
 		for (const [name, sense] of Object.entries(this.senses)) {
 			if (!this.senseAllowed(name)) {
@@ -665,19 +841,17 @@ export class Agent<HostCtx = unknown> {
 		if (this.talk) {
 			sensed.earshot = this.earshotText();
 		}
+		return sensed;
+	}
+
+	private volatileUser(sensed:Record<string, unknown>, extra?:string):string {
 		const perceptionText = Object.values(sensed)
 			.map((v) => typeof v === 'string' ? v : JSON.stringify(v))
 			.join('\n');
 		const intrusion = this.maybeIntrude(perceptionText);
 		this.noteSeen(perceptionText);
 		const recalled = this.recallForPrompt(perceptionText);
-		const verbs = this.activeVerbs();
-		const system = stablePrefix(this.identity, verbs, {
-			includeWatches: true,
-			canSeeMap: this.seeMapOn() && this.toolAllowed('see_map'),
-			youSymbol: this.youSymbol(),
-		});
-		const user = [volatileBlock({
+		return [extra, volatileBlock({
 			senses: sensed,
 			intrusion,
 			lastResult: this.lastResult,
@@ -694,14 +868,98 @@ export class Agent<HostCtx = unknown> {
 			recentSummary: this.recentSummary,
 			thinkAbout: this.pendingAbout,
 		}), this.extraVolatile()].filter(Boolean).join('\n\n');
+	}
+
+	private parsePlanContent(content:string, verbs:VerbRegistry):{ plan:ActionPlan; raw:unknown } | null {
+		try {
+			const trimmed = content.trim();
+			if (!trimmed) {
+				return null;
+			}
+			const raw = (trimmed.startsWith('{') || trimmed.startsWith('```'))
+				? extractJson(trimmed)
+				: trimmed;
+			const plan = deferThinks(parsePlan(raw, verbs));
+			if (!firstStep(plan)?.verb) {
+				return null;
+			}
+			return { plan, raw };
+		}
+		catch {
+			return null;
+		}
+	}
+
+	private async settleLivePlan(
+		plan:ActionPlan,
+		firstContent:string | null,
+		messages:ChatMessage[],
+		verbs:VerbRegistry,
+		liveVerbAtThink:string | undefined,
+		sendTools:boolean,
+		tools:ToolDef[],
+	):Promise<ActionPlan> {
+		if (!liveVerbAtThink || !this.livePlan || this.lastVerb === liveVerbAtThink) {
+			return plan;
+		}
+		this.absorbPending();
+		const sensed = this.gatherSensed();
+		const form = this.planText ? 'ActionPlan text' : 'ActionPlan JSON';
+		const hint = `While you thought, the live verb changed from ${liveVerbAtThink} to ${this.lastVerb}. `
+			+ `Do not think again. Emit a new ${form} if that changes your choices, or confirm the plan you already wrote.`;
+		messages.push({ role: 'assistant', content: firstContent });
+		messages.push({ role: 'user', content: this.volatileUser(sensed, hint) });
+		const res = await this.provider.chat({
+			model: this.model,
+			thread: this.id,
+			messages,
+			tools: sendTools ? tools : undefined,
+			toolChoice: sendTools ? 'none' : undefined,
+			responseFormat: this.planText
+				? undefined
+				: { name: 'action_plan', schema: actionPlanSchema(verbs), strict: false },
+			temperature: 0,
+			fakeThought: true,
+		});
+		if (res.toolCalls.length > 0 || !res.content) {
+			return plan;
+		}
+		const parsed = this.parsePlanContent(res.content, verbs);
+		if (!parsed) {
+			return plan;
+		}
+		if (typeof parsed.raw !== 'string') {
+			this.applyMind(parsed.raw);
+		}
+		return parsed.plan;
+	}
+
+	private async tactical():Promise<ActionPlan> {
+		const ctx = this.context();
+		this.refreshKit();
+		const liveVerbAtThink = this.livePlan ? this.lastVerb : undefined;
+		const sensed = this.gatherSensed();
+		const verbs = this.activeVerbs();
+		const tools = this.toolDefs();
+		const seeMapBoost = this.seeMapOn() && this.toolRoundCap <= 0 ? 1 : 0;
+		const sendTools = tools.length > 0 && (this.toolRoundCap > 0 || seeMapBoost > 0);
+		const toolNames = sendTools ? tools.map((t) => t.name) : [];
+		const system = stablePrefix(this.identity, verbs, {
+			includeWatches: this.watchesWritable || watchCount(this.watchList()) > 0,
+			canSeeMap: this.seeMapOn() && this.toolAllowed('see_map'),
+			canGrepEncyclopedia: this.encyclopediaOn() && this.toolAllowed(GREP_WORLD_ENCYCLOPEDIA),
+			youSymbol: this.youSymbol(),
+			planText: this.planText,
+			thinkInstructions: this.thinkInstructions,
+			verbInstructions: this.verbInstructions,
+			tools: toolNames,
+		});
+		const user = this.volatileUser(sensed);
 		const messages:ChatMessage[] = [
 			{ role: 'system', content: system },
 			{ role: 'user', content: user },
 		];
-		const tools = this.toolDefs();
-		const seeMapBoost = this.seeMapOn() && this.toolRoundCap <= 0 ? 1 : 0;
 		let toolsLeft = tools.length === 0 ? 0 : this.toolRoundCap + seeMapBoost;
-		const sendTools = tools.length > 0 && (this.toolRoundCap > 0 || seeMapBoost > 0);
 		let repairsLeft = this.planRetryCap;
 		let rangeLeft = this.talk ? Math.max(1, this.planRetryCap) : 0;
 		let lastErr:Error | null = null;
@@ -714,7 +972,7 @@ export class Agent<HostCtx = unknown> {
 				messages,
 				tools: sendTools ? tools : undefined,
 				toolChoice: sendTools ? (allowTools ? 'auto' : 'none') : undefined,
-				responseFormat: allowTools
+				responseFormat: allowTools || this.planText
 					? undefined
 					: { name: 'action_plan', schema: actionPlanSchema(verbs), strict: false },
 				temperature: 0,
@@ -748,7 +1006,7 @@ export class Agent<HostCtx = unknown> {
 			}
 			if (res.toolCalls.length > 0) {
 				lastErr = new ActionError('model called a tool when it must emit an ActionPlan');
-				if (!this.pushRepair(messages, res, lastErr, repairsLeft)) {
+				if (!this.pushRepair(messages, res, lastErr, repairsLeft, toolNames)) {
 					throw lastErr;
 				}
 				repairsLeft -= 1;
@@ -766,7 +1024,7 @@ export class Agent<HostCtx = unknown> {
 				}
 				catch (err) {
 					lastErr = err instanceof Error ? err : new ActionError(String(err));
-					if (!this.pushRepair(messages, res, lastErr, repairsLeft)) {
+					if (!this.pushRepair(messages, res, lastErr, repairsLeft, toolNames)) {
 						throw lastErr;
 					}
 					repairsLeft -= 1;
@@ -780,16 +1038,24 @@ export class Agent<HostCtx = unknown> {
 					}
 					rangeLeft -= 1;
 					messages.push({ role: 'assistant', content: res.content });
-					messages.push({ role: 'user', content: sayRangeHint(blocked.reason, blocked.nearby) });
+					messages.push({ role: 'user', content: sayRangeHint(blocked.reason, blocked.nearby, this.planText) });
 					continue;
 				}
 				if (typeof raw !== 'string') {
 					this.applyMind(raw);
 				}
-				return plan;
+				return this.settleLivePlan(
+					plan,
+					res.content,
+					messages,
+					verbs,
+					liveVerbAtThink,
+					sendTools,
+					tools,
+				);
 			}
 			lastErr = new ActionError('model returned no plan');
-			if (!this.pushRepair(messages, res, lastErr, repairsLeft)) {
+			if (!this.pushRepair(messages, res, lastErr, repairsLeft, toolNames)) {
 				throw lastErr;
 			}
 			repairsLeft -= 1;
@@ -802,6 +1068,7 @@ export class Agent<HostCtx = unknown> {
 		res:{ content:string | null; toolCalls:{ name:string }[] },
 		err:Error,
 		repairsLeft:number,
+		toolNames:string[],
 	):boolean {
 		if (repairsLeft <= 0) {
 			return false;
@@ -809,8 +1076,9 @@ export class Agent<HostCtx = unknown> {
 		const called = res.toolCalls.map((c) => c.name);
 		const shown = res.content
 			?? (called.length > 0 ? `(tool call: ${called.join(', ')})` : '');
-		messages.push({ role: 'assistant', content: shown || null });
-		messages.push({ role: 'user', content: planRepairHint(err.message) });
+		const dropProse = !/^\s*[{`]/.test(shown) && !shown.includes('(');
+		messages.push({ role: 'assistant', content: dropProse ? null : (shown || null) });
+		messages.push({ role: 'user', content: planRepairHint(err.message, this.planText, toolNames) });
 		return true;
 	}
 
@@ -1203,7 +1471,7 @@ export class Agent<HostCtx = unknown> {
 		}
 		if (this.seeMapOn() && !tools.see_map) {
 			tools.see_map = {
-				description: 'Pictogram of the land. Prefer the English scene. If you are looking for something unnamed, wander(until) with args.until a watch-expr string. Only call this if you still cannot pick a go_to or wander. A second look soon after, without moving, returns the same legend and no new picture.',
+				description: 'Pictogram of the land. Prefer the English scene. Unnamed place: wander(until) or ask. A second look soon, without moving, is the same legend and no new picture.',
 				parameters: {
 					type: 'object',
 					additionalProperties: false,
@@ -1214,6 +1482,19 @@ export class Agent<HostCtx = unknown> {
 				handler: (_ctx, args) => this.handleSeeMap(args),
 			};
 		}
+		if (this.encyclopediaOn() && !tools[GREP_WORLD_ENCYCLOPEDIA]) {
+			tools[GREP_WORLD_ENCYCLOPEDIA] = {
+				description: 'Grep world-type docs. Query leftover English (trees, house) for the Capitalized name. Empty query lists names.',
+				parameters: {
+					type: 'object',
+					additionalProperties: false,
+					properties: {
+						query: { type: 'string' },
+					},
+				},
+				handler: (ctx, args) => this.handleGrepEncyclopedia(ctx, args),
+			};
+		}
 		if (this.seeMapOn() && this.toolRoundCap <= 0 && tools.see_map) {
 			return this.filterTools({ see_map: tools.see_map });
 		}
@@ -1222,6 +1503,10 @@ export class Agent<HostCtx = unknown> {
 
 	private seeMapOn():boolean {
 		return !!this.map && this.visionCapable();
+	}
+
+	private encyclopediaOn():boolean {
+		return this.encyclopedia !== undefined;
 	}
 
 	private youSymbol():string {
@@ -1344,6 +1629,13 @@ export class Agent<HostCtx = unknown> {
 			return { error: 'no catalog' };
 		}
 		return observeExpr(expr, this.catalog(ctx), evaluate);
+	}
+
+	private handleGrepEncyclopedia(ctx:HostCtx | undefined, args:unknown):unknown {
+		const row = isRecord(args) ? args : {};
+		const query = typeof row.query === 'string' ? row.query : '';
+		const pages = encyclopediaPages(this.encyclopedia, ctx);
+		return grepEncyclopedia(pages, query);
 	}
 
 	private async handleRecall(args:unknown):Promise<unknown> {

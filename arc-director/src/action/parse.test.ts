@@ -29,18 +29,46 @@ describe('ActionPlan parse', () => {
 		);
 	});
 
-	it('parses when who= expr and nested plan=', () => {
+	it('formats wander until as a named expr, not a JSON string', () => {
+		const plan = parsePlanText(
+			'wander(until=some(landmarks.filter("waterfall").nearby()))',
+			verbs(),
+		);
+		assert.equal(plan.head.args.until, 'some(landmarks.filter("waterfall").nearby())');
+		assert.equal(
+			formatPlan(plan),
+			'wander(until=some(landmarks.filter("waterfall").nearby()))',
+		);
+	});
+
+	it('parses issue who= expr and nested plan=', () => {
 		const registry = registerStockCrowdVerbs(registerStockVerbs(new VerbRegistry()));
 		const plan = parsePlanText(
-			'when(who=units.filter("Guard"), plan=go_to(Keep) && wait(seconds=1))',
+			'issue(who=units.filter("Guard"), plan=go_to(Keep) && wait(seconds=1))',
 			registry,
 		);
-		assert.equal(plan.head?.verb, 'when');
+		assert.equal(plan.head?.verb, 'issue');
 		assert.equal(plan.head?.args.who, 'units.filter("Guard")');
 		const inner = plan.head.args.plan as { head:{ verb:string; args:Record<string, unknown> }; then?:{ plan:{ head:{ verb:string } } } };
 		assert.equal(inner.head.verb, 'go_to');
 		assert.equal(inner.head.args.name, 'Keep');
 		assert.equal(inner.then?.plan.head.verb, 'wait');
+		assert.equal(
+			formatPlan(plan),
+			'issue(who=units.filter("Guard"), plan=go_to(Keep) && wait(1))',
+		);
+	});
+
+	it('rejects when(who) and issue(watch) with migration errors', () => {
+		const registry = registerStockCrowdVerbs(registerStockVerbs(new VerbRegistry()));
+		assert.throws(
+			() => parsePlanText('when(who=units.filter("Guard"), plan=go_to(Keep))', registry),
+			/when\(who\) is issue/,
+		);
+		assert.throws(
+			() => parsePlanText('issue(watch=isHurt(me), plan=go_to(Keep))', registry),
+			/issue\(watch\) is when/,
+		);
 	});
 
 	it('parses truncated nested JSON by closing braces', () => {
@@ -147,6 +175,10 @@ describe('registerStockVerbs', () => {
 		assert.equal(verbs.list().length, STOCK_VERBS.length);
 		assert.ok(verbs.has('go_to'));
 		assert.ok(verbs.has('set_identity'));
+		assert.ok(verbs.has('law'));
+		assert.ok(verbs.has('unlaw'));
+		assert.ok(verbs.has('when'));
+		assert.ok(verbs.has('loop'));
 	});
 });
 
@@ -159,5 +191,97 @@ describe('VerbRegistry view and remove', () => {
 		assert.deepEqual(verbs.list().map((v) => v.name), ['go_to']);
 		verbs.remove();
 		assert.ok(verbs.has('go_to'));
+	});
+});
+
+describe('kit views and issue(who)', () => {
+	function fightKit():VerbRegistry {
+		const catalog = registerStockCrowdVerbs(registerStockVerbs(new VerbRegistry()));
+		catalog.add('hex', { name: 'id' });
+		catalog.add('smite', { name: 'id' });
+		return catalog.view(['issue', 'go_to', 'smite']);
+	}
+
+	it('parses unit verbs inside issue(who) that the kit does not grant the thinker', () => {
+		const kit = fightKit();
+		const plan = parsePlanText(
+			'issue(who=units.filter("Witch"), plan=hex("Healer")) ; smite("Healer")',
+			kit,
+		);
+		assert.equal(plan.head.verb, 'issue');
+		const inner = plan.head.args.plan as { head:{ verb:string; args:{ name:string } } };
+		assert.equal(inner.head.verb, 'hex');
+		assert.equal(inner.head.args.name, 'Healer');
+		assert.equal(plan.then?.join, 'then');
+		assert.equal(plan.then?.plan.head.verb, 'smite');
+		assert.throws(() => parsePlanText('hex("Healer")', kit), /unknown verb 'hex'/);
+	});
+
+	it('hoists then off issue args when the model nests the join there', () => {
+		const kit = fightKit();
+		const plan = parsePlan({
+			head: {
+				verb: 'issue',
+				args: {
+					who: 'Brune',
+					plan: { head: { verb: 'hex', args: { name: 'Healer' } } },
+					then: {
+						join: 'then',
+						plan: {
+							head: {
+								verb: 'issue',
+								args: {
+									who: 'Cade',
+									plan: { head: { verb: 'hex', args: { name: 'Witch' } } },
+								},
+							},
+						},
+					},
+				},
+			},
+		}, kit);
+		assert.equal(plan.head.args.who, 'Brune');
+		assert.equal(plan.then?.join, 'then');
+		assert.equal(plan.then?.plan.head.verb, 'issue');
+		assert.equal(plan.then?.plan.head.args.who, 'Cade');
+		assert.equal(
+			formatPlan(plan),
+			'issue(who=Brune, plan=hex(Healer)) ; issue(who=Cade, plan=hex(Witch))',
+		);
+	});
+
+	it('parses a truncated issue chain from CoT JSON', () => {
+		const catalog = registerStockCrowdVerbs(registerStockVerbs(new VerbRegistry()));
+		catalog.add('slash', { name: 'id' });
+		catalog.add('cleave', { name: 'id' });
+		const kit = catalog.view(['issue', 'loop', 'slash', 'cleave']);
+		const raw = '{"head":{"verb":"issue","args":{"who":"allUnits","plan":{"head":{"verb":"loop","args":{"plan":{"head":{"verb":"slash","args":{"name":"Blade"}}}}}}},"then":{"join":"then_if_ok","plan":{"head":{"verb":"issue","args":{"who":"allUnits","plan":{"head":{"verb":"loop","args":{"plan":{"head":{"verb":"cleave","args":{"name":"Knight"}}}}}}}}}}';
+		const plan = parsePlan(raw, kit);
+		assert.equal(plan.head.args.who, 'allUnits');
+		assert.equal(plan.then?.plan.head.args.who, 'allUnits');
+		assert.equal(
+			formatPlan(plan),
+			'issue(who=allUnits, plan=loop(slash(Blade))) && issue(who=allUnits, plan=loop(cleave(Knight)))',
+		);
+	});
+
+	it('parses long chains; nested plan= is a separate tree', () => {
+		const kit = fightKit();
+		const plan = parsePlanText(
+			'issue(who=units.filter("Witch"), plan=hex("Healer")) '
+			+ '; issue(who=units.filter("Archer"), plan=hex("Witch")) '
+			+ '; issue(who=units.filter("Knight"), plan=hex("Archer")) '
+			+ '; issue(who=units.filter("Blade"), plan=hex("Blade")) '
+			+ '; smite("Healer")',
+			kit,
+		);
+		assert.equal(plan.head.verb, 'issue');
+		assert.equal(plan.then?.plan.then?.plan.then?.plan.then?.plan.head.verb, 'smite');
+		const long = parsePlanText(
+			'go_to(A) && go_to(B) && go_to(C) && go_to(D) && go_to(E)',
+			kit,
+		);
+		assert.equal(long.head.verb, 'go_to');
+		assert.equal(long.then?.plan.then?.plan.then?.plan.then?.plan.head.args.name, 'E');
 	});
 });

@@ -21,7 +21,6 @@ export class CrowdUnit {
 	stepToken = 0;
 	inflight:Promise<void> | null = null;
 	session:PlanSession | null = null;
-	coolUntil = new Map<string, number>();
 
 	constructor(id:string, tags:string[] = []) {
 		this.id = id;
@@ -29,7 +28,16 @@ export class CrowdUnit {
 	}
 
 	get busy():boolean {
-		return this.plan !== null || this.inflight !== null;
+		if (this.inflight !== null) {
+			return true;
+		}
+		if (!this.session?.parked) {
+			return this.plan !== null;
+		}
+		if (this.session.running.length > 0) {
+			return true;
+		}
+		return this.session.frames.some((f) => f.handlers.length > 0);
 	}
 
 	interrupt():void {

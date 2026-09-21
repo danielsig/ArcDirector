@@ -1,9 +1,30 @@
 <script setup lang="ts">
-import type { HudModel } from './hudModel';
+import type { HudModel, HudSpeech } from './hudModel';
 
 defineProps<{
 	hud:HudModel;
 }>();
+
+function fillPct(s:HudSpeech):number {
+	if (s.maxHP <= 0) {
+		return 0;
+	}
+	return Math.max(0, Math.min(100, (s.hp / s.maxHP) * 100));
+}
+
+function fillColor(s:HudSpeech):string {
+	const t = s.maxHP <= 0 ? 0 : s.hp / s.maxHP;
+	if (t <= 0) {
+		return '#3a322c';
+	}
+	if (t <= 0.34) {
+		return '#c43c2c';
+	}
+	if (t <= 0.67) {
+		return '#d4a017';
+	}
+	return '#5b9a3a';
+}
 </script>
 
 <template>
@@ -17,6 +38,14 @@ defineProps<{
 		>
 			<div v-if="s.text" class="bubble">{{ s.text }}</div>
 			<div v-if="s.status" class="status">{{ s.status }}</div>
+			<div v-if="s.maxHP > 0" class="hp">
+				<div class="hp-track">
+					<div
+						class="hp-fill"
+						:style="{ width: `${fillPct(s)}%`, background: fillColor(s) }"
+					/>
+				</div>
+			</div>
 		</div>
 	</div>
 </template>
@@ -37,6 +66,7 @@ defineProps<{
 	align-items: center;
 	gap: 4px;
 	max-width: 220px;
+	padding-bottom: 8px;
 }
 
 .bubble {
@@ -67,5 +97,22 @@ defineProps<{
 	-webkit-box-orient: vertical;
 	-webkit-line-clamp: 3;
 	overflow: hidden;
+}
+
+.hp {
+	padding-bottom: 2px;
+}
+
+.hp-track {
+	width: 38px;
+	height: 5px;
+	background: rgba(18, 14, 10, 0.82);
+	border: 1px solid #2a1c10;
+	box-shadow: 0 1px 0 rgba(0, 0, 0, 0.45);
+	overflow: hidden;
+}
+
+.hp-fill {
+	height: 100%;
 }
 </style>

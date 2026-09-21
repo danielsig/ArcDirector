@@ -64,5 +64,5 @@ export async function resolveLiveModel(baseURL:string):Promise<string> {
 	if (picked) {
 		return picked;
 	}
-	return requested ?? PREFERRED_MODELS[0];
+	return requested ?? '';
 }

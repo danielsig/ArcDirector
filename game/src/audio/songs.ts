@@ -37,7 +37,7 @@ function abbey():Score {
 	]);
 }
 
-function glen():Score {
+function glenTheme(id:string):Score {
 	const bed = track(pad, { gain: 0.7, cutoff: 1100, dynamic: mf });
 	const guitar = track(pluck, { gain: 0.62, dynamic: mp });
 	const low = track(bass, { gain: 0.85, cutoff: 240, dynamic: mf, transpose: -12 });
@@ -53,7 +53,7 @@ function glen():Score {
 		wind(mel),
 		...(ding ? [sparkle(ding)] : []),
 	);
-	return piece({ bpm: 92, gain: 0.88, id: 'glen' }, [
+	return piece({ bpm: 92, gain: 0.88, id }, [
 		row('G2', 'b4:1 d5:1 g4:2 | a4:2 e4:2'),
 		row('E-2', 'd4:1 g4:1 a4:2 | b4:4', 'd6:1.6'),
 		row('C', 'd5:2 b4:1 a4:1 | g4:2 e4:2'),
@@ -63,6 +63,14 @@ function glen():Score {
 		row('C', 'b4:1 a4:1 g4:2 | e4:2 d4:2'),
 		row('Dsus4', 'g4:3 d4:1 | g4:4', 'd6:2'),
 	]);
+}
+
+function glen():Score {
+	return glenTheme('glen');
+}
+
+function ruins():Score {
+	return glenTheme('ruins');
 }
 
 function market():Score {
@@ -93,6 +101,7 @@ export const SONGS:Record<string, Score> = {
 	abbey_vault: abbey(),
 	glen: glen(),
 	marketplace: market(),
+	ruins: ruins(),
 };
 
 export function songForScene(sceneID:string):Score {

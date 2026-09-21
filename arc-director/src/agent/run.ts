@@ -31,8 +31,6 @@ export type PlanPending =
 
 export type PlanSession = {
 	token:number;
-	cooldown:number;
-	coolUntil:Map<string, number>;
 	running:PlanHandler[];
 	frames:{ handlers:PlanHandler[] }[];
 	pending?:PlanPending;
@@ -42,11 +40,11 @@ export type PlanSession = {
 	now:()=>number;
 	abortHost?:()=>void;
 	extraHandlers?:()=>PlanHandler[];
+	/** Body finished; hoisted `when` still poll until the program is replaced. */
+	parked?:boolean;
 };
 
 export type PlanSessionOpts = {
-	cooldown?:number;
-	coolUntil?:Map<string, number>;
 	catalog?:()=>Catalog | undefined;
 	now?:()=>number;
 	abortHost?:()=>void;
@@ -56,8 +54,6 @@ export type PlanSessionOpts = {
 export function createPlanSession(opts:PlanSessionOpts = {}):PlanSession {
 	return {
 		token: 0,
-		cooldown: opts.cooldown ?? DEFAULT_COOLDOWN,
-		coolUntil: opts.coolUntil ?? new Map(),
 		running: [],
 		frames: [],
 		bindings: new Map(),
@@ -65,6 +61,7 @@ export function createPlanSession(opts:PlanSessionOpts = {}):PlanSession {
 		now: opts.now ?? (() => 0),
 		abortHost: opts.abortHost,
 		extraHandlers: opts.extraHandlers,
+		parked: false,
 	};
 }
 
@@ -107,10 +104,6 @@ export function watchIsTrue(watch:string, catalog:Catalog):boolean {
 	return watchScore(r.value).score > 0;
 }
 
-function cool(session:PlanSession, key:string):void {
-	session.coolUntil.set(key, session.now() + session.cooldown);
-}
-
 function allHandlers(session:PlanSession):PlanHandler[] {
 	const extras = session.extraHandlers?.() ?? [];
 	const inner:PlanHandler[] = [];
@@ -126,16 +119,12 @@ export function pollPlanSession(session:PlanSession):void {
 	if (!catalog) {
 		return;
 	}
-	const now = session.now();
 	const candidates = allHandlers(session);
 	for (const h of candidates) {
 		if (!watchIsTrue(h.watch, catalog)) {
 			continue;
 		}
 		if (session.running.some((r) => r.key === h.key)) {
-			return;
-		}
-		if (now < (session.coolUntil.get(h.key) ?? 0)) {
 			return;
 		}
 		const top = session.running[session.running.length - 1];
@@ -160,15 +149,11 @@ export function firstStartable(session:PlanSession):PlanHandler | undefined {
 	if (!catalog) {
 		return undefined;
 	}
-	const now = session.now();
 	for (const h of allHandlers(session)) {
 		if (!watchIsTrue(h.watch, catalog)) {
 			continue;
 		}
 		if (session.running.some((r) => r.key === h.key)) {
-			return undefined;
-		}
-		if (now < (session.coolUntil.get(h.key) ?? 0)) {
 			return undefined;
 		}
 		return h;
@@ -316,7 +301,7 @@ function hoistWhen(plan:ActionPlan, depth:number):{ handlers:PlanHandler[]; body
 				key: `when:${watch}:${formatPlan(inner)}`,
 				watch,
 				plan: inner,
-				rank: 1000 - depth * 100 + i,
+				rank: 100 + i,
 			});
 			i += 1;
 		}
@@ -398,7 +383,6 @@ async function drainPending(
 		}
 		finally {
 			session.running.pop();
-			cool(session, pending.handler.key);
 		}
 	}
 	return undefined;
@@ -531,6 +515,7 @@ async function runLoop(
 		if (until && cat && watchIsTrue(until, cat)) {
 			return { ok: true, verb: 'loop' };
 		}
+		const clock = session.now();
 		last = await runFrame(inner, execute, session, depth + 1);
 		i += 1;
 		if (last.interrupted) {
@@ -542,11 +527,10 @@ async function runLoop(
 		if (!last.ok && !last.preempted) {
 			return last;
 		}
-		if (times === undefined && !until) {
-			continue;
-		}
-		if (times === undefined && until) {
-			continue;
+		if (session.now() === clock) {
+			await new Promise<void>((resolve) => {
+				setTimeout(resolve, 0);
+			});
 		}
 	}
 }
@@ -618,12 +602,21 @@ async function runFrame(
 			return stolen;
 		}
 		if (!body) {
+			if (depth === 0 && handlers.length > 0) {
+				session.parked = true;
+			}
 			return { ok: true, verb: 'when' };
 		}
-		return await runChain(body, execute, session, depth);
+		const result = await runChain(body, execute, session, depth);
+		if (depth === 0 && !result.interrupted && handlers.length > 0) {
+			session.parked = true;
+		}
+		return result;
 	}
 	finally {
-		session.frames.pop();
+		if (!(session.parked && depth === 0)) {
+			session.frames.pop();
+		}
 	}
 }
 
@@ -660,7 +653,6 @@ export async function runPlan(
 	finally {
 		if (opts.asHandler) {
 			session.running.pop();
-			cool(session, opts.asHandler.key);
 		}
 	}
 }

@@ -1,8 +1,13 @@
 import { extractJson } from '../json.js';
-import { asPlan, isActionPlan } from './validate.js';
+import { asPlan, isActionPlan, validatePlan } from './validate.js';
 import { ActionError, JOIN_SYMBOL, SYMBOL_JOIN, firstStep, type ActionPlan, type Join, type Step } from './types.js';
 import type { VerbRegistry } from './registry.js';
 import type { StepArg } from './validate.js';
+
+/** Watch / who exprs: `some(...)`, `isNear(me, Miller)`, `units.filter("Guard")`. */
+function isCallExpr(s:string):boolean {
+	return /[A-Za-z_][\w.]*\(/.test(s);
+}
 
 function formatArg(v:StepArg):string {
 	if (Array.isArray(v)) {
@@ -12,6 +17,9 @@ function formatArg(v:StepArg):string {
 		return formatPlan(v);
 	}
 	if (typeof v === 'string') {
+		if (isCallExpr(v)) {
+			return v;
+		}
 		if (/[\s,"()]/.test(v)) {
 			return JSON.stringify(v);
 		}
@@ -20,15 +28,25 @@ function formatArg(v:StepArg):string {
 	return String(v);
 }
 
+function isBareArg(formatted:string):boolean {
+	return /^-?\d+(\.\d+)?$/.test(formatted)
+		|| /^[A-Za-z][A-Za-z0-9_.]*$/.test(formatted)
+		|| ((formatted.startsWith('"') || formatted.startsWith("'")) && formatted.endsWith(formatted[0]));
+}
+
 export function formatStep(step:Step):string {
 	const keys = Object.keys(step.args);
 	if (keys.length === 0) {
 		return `${step.verb}()`;
 	}
-	if (keys.length === 1) {
-		return `${step.verb}(${formatArg(step.args[keys[0]])})`;
-	}
-	const inner = keys.map((k) => `${k}=${formatArg(step.args[k])}`).join(', ');
+	const inner = keys.map((k) => {
+		const value = step.args[k];
+		const formatted = formatArg(value);
+		if (keys.length === 1 && (isBareArg(formatted) || isActionPlan(value))) {
+			return formatted;
+		}
+		return `${k}=${formatted}`;
+	}).join(', ');
 	return `${step.verb}(${inner})`;
 }
 
@@ -220,7 +238,7 @@ function parseStepText(s:string, i:number, registry:VerbRegistry):{ step:Step; n
 				if (s[i] === '=') {
 					i += 1;
 					if (argBase(spec.args[ident]) === 'plan') {
-						const parsed = parseNestedPlan(s, i, registry);
+						const parsed = parseNestedPlan(s, i, registry.nested());
 						args[ident] = parsed.value;
 						i = parsed.next;
 					}
@@ -238,7 +256,7 @@ function parseStepText(s:string, i:number, registry:VerbRegistry):{ step:Step; n
 						throw new ActionError(`verb '${verb}' got an unexpected positional arg`);
 					}
 					if (argBase(spec.args[key]) === 'plan') {
-						const parsed = parseNestedPlan(s, i, registry);
+						const parsed = parseNestedPlan(s, i, registry.nested());
 						args[key] = parsed.value;
 						i = parsed.next;
 					}
@@ -288,6 +306,7 @@ export function parsePlanText(text:string, registry:VerbRegistry):ActionPlan {
 	if (i < text.length) {
 		throw new ActionError(`unexpected trailing text: ${text.slice(i)}`);
 	}
+	validatePlan(parsed.value, registry);
 	return parsed.value;
 }
 

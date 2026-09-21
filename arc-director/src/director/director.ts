@@ -6,7 +6,12 @@ import { Agent, type AgentDeps, type AgentJSON } from '../agent/agent.js';
 import type { Kit, KitSource, Sense, ToolSpec } from '../agent/types.js';
 import { TalkNet, type SpeechUtterance, type TalkConfig, type TalkSense } from '../agent/talk.js';
 import type { MapSense } from '../agent/map.js';
+import {
+	GREP_WORLD_ENCYCLOPEDIA,
+	type EncyclopediaSource,
+} from '../agent/encyclopedia.js';
 import { buildCatalog, dummyEntity, type HostKernels } from '../expr/natives.js';
+import { freezeMe, type MeFreezeHost } from '../expr/prev.js';
 import { evaluate } from '../expr/eval.js';
 import { watchScore } from '../expr/score.js';
 import { SampleCache } from '../expr/types.js';
@@ -25,11 +30,11 @@ import {
 	isCrowdConductor,
 	registerStockCrowdVerbs,
 	STOCK_CROWD_VERBS,
-	FORMATION_VERBS,
 	evaluateWho,
 	buildCrowdCatalog,
 	planArg,
 	lawMatches,
+	isFormationVerb,
 	type CrowdLawSpec,
 	type CrowdUnitSpec,
 	type StockCrowdVerb,
@@ -40,11 +45,13 @@ import {
 	firstStartable,
 	pollPlanSession,
 	type PlanHandler,
+	type PlanSession,
 } from '../agent/run.js';
 import type { ChatRequest, ChatResponse, InferenceProvider } from '../inference/provider.js';
 import type { FakeChatFn } from '../inference/fake.js';
 import { isVisionModel, type ModelInfo } from '../inference/models.js';
 import { HttpProvider } from '../inference/http.js';
+import { formatChatLog } from '../inference/chatLog.js';
 import {
 	connectHttpInference,
 	fakeInference,
@@ -113,12 +120,11 @@ function whoFromMessages(req:ChatRequest):string {
 	return 'ArcDirector';
 }
 
-function clipThought(text:string, max = 600):string {
-	const t = text.replace(/\s+/g, ' ').trim();
-	if (t.length <= max) {
-		return t;
-	}
-	return `${t.slice(0, max)}…`;
+function sightDistanceDescription(unitName?:string):string {
+	const dist = !unitName || unitName === 'pace'
+		? 'distances in paces'
+		: `distances in ${unitName}`;
+	return `What you can see. Names only, ${dist}.`;
 }
 
 export class ArcDirector<HostCtx = unknown> {
@@ -136,6 +142,7 @@ export class ArcDirector<HostCtx = unknown> {
 	private losFn:((aID:string, bID:string)=>boolean) | undefined;
 	private sightLook:((ctx:HostCtx)=>Sight) | undefined;
 	private sightLimitDefault:number | undefined;
+	private sightUnitName:string | undefined;
 	private contextFn:((id:string)=>HostCtx | undefined) | undefined;
 	private kernelFn:KernelSource<HostCtx> | undefined;
 	private defaultKit:KitSource<HostCtx> | undefined;
@@ -145,9 +152,14 @@ export class ArcDirector<HostCtx = unknown> {
 	private talkConfig:Partial<TalkConfig> | undefined;
 	talk:TalkNet | undefined;
 	private map:MapSense | undefined;
+	private encyclopedia:EncyclopediaSource<HostCtx> | undefined;
 	private abortPlanFn:((id:string)=>void) | undefined;
+	private commanderVacantFn:((conductorID:string, unitID:string)=>void) | undefined;
 	private logFn:((entry:DirectorLog)=>void) | undefined;
 	private ignoreMissing = false;
+	private planText = false;
+	private thinkInstructions:string | undefined;
+	private verbInstructions:string | undefined;
 	private readonly pending:AgentSpec<HostCtx>[] = [];
 	private readonly rows = new Map<string, AgentRow<HostCtx>>();
 	private readonly readyThink:ThinkRow[] = [];
@@ -232,18 +244,28 @@ export class ArcDirector<HostCtx = unknown> {
 		return this;
 	}
 
-	withSight({ look, limit }:{ look?:(ctx:HostCtx)=>Sight, limit?:number }):this {
+	withSight({ look, limit, unitName }:{
+		look?:(ctx:HostCtx)=>Sight;
+		limit?:number;
+		unitName?:string;
+	}):this {
 		this.assertBuilder();
 		if (limit !== undefined) {
 			this.sightLimitDefault = limit;
 		}
+		if (unitName !== undefined) {
+			this.sightUnitName = unitName;
+		}
+		if (this.senses.sight) {
+			this.senses.sight.description = sightDistanceDescription(this.sightUnitName);
+		}
 		if (!look) return this;
 		this.sightLook = look;
 		this.senses.sight = {
-			description: 'What you can see. Names only, distances in paces.',
+			description: sightDistanceDescription(this.sightUnitName),
 			gather: (ctx) => {
 				const snap = this.filterSight(look(ctx));
-				return formatSight(snap);
+				return formatSight(snap, this.sightFormatOpts());
 			},
 		};
 		return this;
@@ -252,6 +274,26 @@ export class ArcDirector<HostCtx = unknown> {
 	withCooldown(seconds:number):this {
 		this.assertBuilder();
 		this.cooldownDefault = seconds;
+		return this;
+	}
+
+	withPlanText(on:boolean):this {
+		this.assertBuilder();
+		this.planText = on;
+		return this;
+	}
+
+	/** Standing think line. Default: "Think in 5 sentences, then emit the plan." */
+	withThinkInstructions(text:string):this {
+		this.assertBuilder();
+		this.thinkInstructions = text;
+		return this;
+	}
+
+	/** Standing verb-chain line. Default: "A think is expensive. Chain every next verb you already know, as far as you can see this think — not only the first step of an order." */
+	withVerbInstructions(text:string):this {
+		this.assertBuilder();
+		this.verbInstructions = text;
 		return this;
 	}
 
@@ -330,6 +372,12 @@ export class ArcDirector<HostCtx = unknown> {
 		return this;
 	}
 
+	withEncyclopedia(pages:EncyclopediaSource<HostCtx>):this {
+		this.assertBuilder();
+		this.encyclopedia = pages;
+		return this;
+	}
+
 	withVerbs(registry:VerbRegistry):this {
 		this.assertBuilder();
 		this.verbs = registry;
@@ -342,7 +390,7 @@ export class ArcDirector<HostCtx = unknown> {
 		return this;
 	}
 
-	/** Schema-only crowd verbs (`when`, `law`, formations). Kit still has to grant them. */
+	/** Schema-only crowd verbs (`issue`, `tag`, formations). `when` / `law` / `unlaw` ride on stock plan verbs. Kit still has to grant them. */
 	addStockCrowdVerbs(...verbs:StockCrowdVerb[]):this {
 		registerStockCrowdVerbs(this.verbs, ...verbs);
 		return this;
@@ -374,6 +422,20 @@ export class ArcDirector<HostCtx = unknown> {
 
 	onAbortPlan(fn:(id:string)=>void):this {
 		this.abortPlanFn = fn;
+		return this;
+	}
+
+	onCommanderVacant(fn:(conductorID:string, unitID:string)=>void):this {
+		this.commanderVacantFn = fn;
+		return this;
+	}
+
+	setCrowdCommander(conductorID:string, unitID:string | null):this {
+		const agent = this.rows.get(conductorID)?.agent;
+		if (!isCrowdConductor(agent)) {
+			throw new Error(`ArcDirector: '${conductorID}' is not a CrowdConductor`);
+		}
+		agent.setCommander(unitID);
 		return this;
 	}
 
@@ -535,25 +597,29 @@ export class ArcDirector<HostCtx = unknown> {
 		return this.thinkBatchPolicy().batchThinks;
 	}
 
-	setThinkingBudget(n:number):void {
-		const enable = Number.isFinite(n) && n > 0;
-		const budget = enable ? Math.round(n) : undefined;
-		this.http?.setThinking(enable, budget);
+	setThinking(on:boolean):void {
+		this.http?.setThinking(on);
 		if (this.inference.kind === 'http') {
-			this.inference.opts.enableThinking = enable;
-			this.inference.opts.thinkingBudget = budget;
+			this.inference.opts.enableThinking = on;
 		}
 	}
 
-	liveThinkingBudget():number {
+	liveThinking():boolean {
 		if (this.inference.kind === 'http') {
-			if (this.inference.opts.enableThinking === false) {
-				return 0;
-			}
-			const n = this.inference.opts.thinkingBudget;
-			return typeof n === 'number' && Number.isFinite(n) && n > 0 ? n : 0;
+			return this.inference.opts.enableThinking === true;
 		}
-		return 0;
+		return false;
+	}
+
+	setPlanText(on:boolean):void {
+		this.planText = on;
+		for (const agent of this.agents()) {
+			agent.planText = on;
+		}
+	}
+
+	livePlanText():boolean {
+		return this.planText;
 	}
 
 	liveMaxParallel():number {
@@ -637,6 +703,10 @@ export class ArcDirector<HostCtx = unknown> {
 				const name = whoFromMessages(req);
 				const t0 = nowMs();
 				try {
+					if (!this.http) {
+						const dump = formatChatLog(req);
+						this.emitLog({ name, message: `prompt\n${dump.message}`, image: dump.image });
+					}
 					const res = await inner.chat(req);
 					const ms = Math.round(nowMs() - t0);
 					this.recordInfer(ms, res);
@@ -653,13 +723,15 @@ export class ArcDirector<HostCtx = unknown> {
 					if (res.toolCalls.length > 0) {
 						parts.push(`tool ${res.toolCalls.map((c) => c.name).join(', ')}`);
 					}
+					const thought = res.reasoning?.trim() ?? '';
+					const body = res.content?.trim() ?? '';
+					if (thought && thought !== body && !body.includes(thought)) {
+						parts.push(`(thinking)\n${thought}`);
+					}
 					if (res.content) {
 						parts.push(res.content);
 					}
-					else if (res.reasoning) {
-						parts.push(`(thinking)\n${clipThought(res.reasoning)}`);
-					}
-					else if (res.toolCalls.length === 0) {
+					else if (!thought && res.toolCalls.length === 0) {
 						parts.push('(empty content)');
 					}
 					this.emitLog({ name, message: parts.join('\n') });
@@ -713,7 +785,18 @@ export class ArcDirector<HostCtx = unknown> {
 		const load = opts.load ? { ...opts.load } : undefined;
 		try {
 			const connected = await connectHttpInference(
-				{ ...opts, load },
+				{
+					...opts,
+					load,
+					onRequest: ({ req, body, path }) => {
+						const dump = formatChatLog(body);
+						this.emitLog({
+							name: whoFromMessages(req),
+							message: `prompt ${path}\n${dump.message}`,
+							image: dump.image,
+						});
+					},
+				},
 				opts.model,
 			);
 			this.catalog = connected.catalog;
@@ -779,16 +862,31 @@ export class ArcDirector<HostCtx = unknown> {
 			cache: row.cache,
 			...(los ? { canSee: (a, b) => los(a.id, b.id) } : {}),
 			hasHeard: agent ? agent.hasHeard() : false,
-			prevThought: ago !== undefined ? { secondsAgo: ago } : undefined,
-			prevActions: last
-				? [{
-					secondsAgo: ago ?? 0,
-					isOk: last.ok,
-					reason: last.reason ?? '',
-					verb: last.verb ?? '',
-				}]
-				: [],
+			prev: {
+				secondsAgo: ago,
+				me: this.prevMeOf(row, kernels),
+				actions: last
+					? [{
+						secondsAgo: ago ?? 0,
+						isOk: last.ok,
+						reason: last.reason ?? '',
+						verb: last.verb ?? '',
+					}]
+					: [],
+			},
 		} as HostKernels;
+	}
+
+	private prevMeOf(row:AgentRow<HostCtx>, kernels:MeFreezeHost) {
+		const agent = row.agent;
+		if (agent?.prevMe) {
+			return agent.prevMe;
+		}
+		const frozen = freezeMe(kernels);
+		if (agent) {
+			agent.prevMe = frozen;
+		}
+		return frozen;
 	}
 
 	private deps(id:string, row:AgentRow<HostCtx>):AgentDeps<HostCtx> {
@@ -815,6 +913,7 @@ export class ArcDirector<HostCtx = unknown> {
 				? (ctx) => buildCatalog(this.kernelsFor(row, ctx))
 				: undefined,
 			map: this.map,
+			encyclopedia: this.encyclopedia,
 			vision: this.vision,
 			watches: row.spec.watches,
 			pinnedWatches: row.spec.pinnedWatches,
@@ -824,6 +923,9 @@ export class ArcDirector<HostCtx = unknown> {
 			sightFocusWritable: row.spec.sightFocusWritable,
 			maxSightFocus: row.spec.maxSightFocus,
 			sightLimit: row.spec.sightLimit ?? this.sightLimitDefault,
+			planText: this.planText,
+			thinkInstructions: this.thinkInstructions,
+			verbInstructions: this.verbInstructions,
 		};
 	}
 
@@ -859,6 +961,10 @@ export class ArcDirector<HostCtx = unknown> {
 		return { ...snap, objects: snap.objects.filter((o) => los(snap.self.id, o.id)) };
 	}
 
+	private sightFormatOpts():{ unitName?:string } {
+		return this.sightUnitName ? { unitName: this.sightUnitName } : {};
+	}
+
 	private gatherSight(row:AgentRow<HostCtx>, ctx:HostCtx):string {
 		const look = this.sightLook;
 		if (!look) {
@@ -868,7 +974,7 @@ export class ArcDirector<HostCtx = unknown> {
 		const focus = agent?.effectiveSightFocus() ?? [];
 		const limit = agent?.sightLimit ?? this.sightLimitDefault;
 		const scores = new Map<string, number>();
-		if (isCrowdConductor(agent) && agent.crowd.size > 0 && this.contextFn) {
+		if (isCrowdConductor(agent) && agent.crowd.size > 0 && this.contextFn && !this.tryCtx(agent.id)) {
 			const groups:{ unitID:string; clauses:ReturnType<typeof formatSightClauses> }[] = [];
 			for (const unit of agent.crowd.list()) {
 				const unitCtx = this.tryCtx(unit.id);
@@ -877,6 +983,7 @@ export class ArcDirector<HostCtx = unknown> {
 				}
 				const snap = this.filterSight(look(unitCtx));
 				const clauses = formatSightClauses(snap, {
+					...this.sightFormatOpts(),
 					fromName: unit.id,
 					skipAmbient: groups.length > 0,
 				});
@@ -889,7 +996,7 @@ export class ArcDirector<HostCtx = unknown> {
 			return joinSightClauses(orderSightClauses(merged, scores, limit, focus.length > 0));
 		}
 		const snap = this.filterSight(look(ctx));
-		const clauses = formatSightClauses(snap);
+		const clauses = formatSightClauses(snap, this.sightFormatOpts());
 		if (focus.length > 0) {
 			this.scoreSightObjects(snap.objects, focus, ctx, row, scores);
 		}
@@ -938,13 +1045,17 @@ export class ArcDirector<HostCtx = unknown> {
 		if (!agent) {
 			return { ok: false, verb: step.verb, reason: 'no agent' };
 		}
-		const liveID = actorID ?? agent.id;
+		const liveID = actorID
+			?? (isCrowdConductor(agent) ? (agent.commanderID ?? agent.id) : agent.id);
 		let liveCtx = ctx;
 		const next = this.tryCtx(liveID);
 		if (next !== undefined) {
 			liveCtx = next;
 		}
-		if (STOCK_CROWD_VERBS.includes(step.verb as typeof STOCK_CROWD_VERBS[number])) {
+		if (step.verb === 'law' || step.verb === 'unlaw') {
+			return this.handleLaw(agent, step);
+		}
+		if ((STOCK_CROWD_VERBS as readonly string[]).includes(step.verb)) {
 			return this.handleCrowdVerb(row, step, liveCtx, liveID);
 		}
 		const call = {
@@ -971,27 +1082,8 @@ export class ArcDirector<HostCtx = unknown> {
 		if (!isCrowdConductor(agent)) {
 			return { ok: false, verb: step.verb, reason: 'not a CrowdConductor' };
 		}
-		if (step.verb === 'when') {
-			return this.handleWhen(row, agent, step, ctx, actorID);
-		}
-		if (step.verb === 'law') {
-			const who = typeof step.args.who === 'string' ? step.args.who : undefined;
-			const watch = typeof step.args.watch === 'string' ? step.args.watch : '';
-			const name = typeof step.args.name === 'string' ? step.args.name : undefined;
-			const plan = planArg(step.args.plan, this.verbs);
-			if (!watch || !plan) {
-				return { ok: false, verb: 'law', reason: 'law needs watch and plan' };
-			}
-			agent.addCrowdLaw({ name, who, watch, plan });
-			return { ok: true, verb: 'law' };
-		}
-		if (step.verb === 'unlaw') {
-			const name = typeof step.args.name === 'string' ? step.args.name : '';
-			if (!name) {
-				return { ok: false, verb: 'unlaw', reason: 'unlaw needs name' };
-			}
-			agent.removeCrowdLaw(name);
-			return { ok: true, verb: 'unlaw' };
+		if (step.verb === 'issue') {
+			return this.handleIssue(row, agent, step, ctx, actorID);
 		}
 		if (step.verb === 'tag' || step.verb === 'untag') {
 			const who = typeof step.args.who === 'string' ? step.args.who : '';
@@ -1009,13 +1101,36 @@ export class ArcDirector<HostCtx = unknown> {
 			}
 			return { ok: true, verb: step.verb };
 		}
-		if (FORMATION_VERBS.has(step.verb)) {
-			return { ok: false, verb: step.verb, reason: 'formation must be when plan head' };
+		if (isFormationVerb(step.verb)) {
+			return { ok: false, verb: step.verb, reason: 'formation must be issue plan head' };
 		}
 		return { ok: false, verb: step.verb, reason: `unhandled ${step.verb}` };
 	}
 
-	private handleWhen(
+	private handleLaw(agent:Agent<HostCtx>, step:Step):ActionResult {
+		if (step.verb === 'unlaw') {
+			const name = typeof step.args.name === 'string' ? step.args.name : '';
+			if (!name) {
+				return { ok: false, verb: 'unlaw', reason: 'unlaw needs name' };
+			}
+			agent.removeLaw(name);
+			return { ok: true, verb: 'unlaw' };
+		}
+		const who = typeof step.args.who === 'string' ? step.args.who : undefined;
+		if (who && !isCrowdConductor(agent)) {
+			return { ok: false, verb: 'law', reason: 'solo law has no who' };
+		}
+		const watch = typeof step.args.watch === 'string' ? step.args.watch : '';
+		const name = typeof step.args.name === 'string' ? step.args.name : undefined;
+		const plan = planArg(step.args.plan, this.verbs);
+		if (!watch || !plan) {
+			return { ok: false, verb: 'law', reason: 'law needs watch and plan' };
+		}
+		agent.addLaw({ name, who, watch, plan });
+		return { ok: true, verb: 'law' };
+	}
+
+	private handleIssue(
 		row:AgentRow<HostCtx>,
 		agent:CrowdConductor<HostCtx>,
 		step:Step,
@@ -1023,21 +1138,20 @@ export class ArcDirector<HostCtx = unknown> {
 		actorID:string,
 	):ActionResult | Promise<ActionResult> {
 		const who = typeof step.args.who === 'string' ? step.args.who.trim() : '';
-		const watch = typeof step.args.watch === 'string' ? step.args.watch.trim() : '';
 		const plan = planArg(step.args.plan, this.verbs);
-		if (who && watch) {
-			return { ok: false, verb: 'when', reason: 'who+watch is law, not when' };
-		}
-		if (watch && plan && !who) {
-			return { ok: false, verb: 'when', reason: 'when(watch) belongs in a plan body' };
-		}
 		if (!who || !plan) {
-			return { ok: false, verb: 'when', reason: 'when needs who and plan' };
+			return { ok: false, verb: 'issue', reason: 'issue needs who and plan' };
 		}
 		const cat = this.crowdCatalog(row, agent, ctx);
-		const units = cat ? evaluateWho(who, cat, agent.crowd) : [];
+		const raw = cat ? evaluateWho(who, cat, agent.crowd) : [];
+		const units = agent.commanderID
+			? raw.filter((u) => u.id !== agent.commanderID)
+			: raw;
+		if (raw.length > 0 && units.length === 0) {
+			return { ok: false, verb: 'issue', reason: 'issue never lands on the commander' };
+		}
 		const head = firstStep(plan);
-		if (head && FORMATION_VERBS.has(head.verb)) {
+		if (head && isFormationVerb(head.verb)) {
 			const handler = this.handlers.get(head.verb) ?? this.catchAll;
 			if (handler && ctx !== undefined) {
 				const result = handler({
@@ -1053,12 +1167,12 @@ export class ArcDirector<HostCtx = unknown> {
 				}
 			}
 			if (plan.then) {
-				agent.assignPlan(units, plan.then.plan);
+				agent.issueUnits(units, plan.then.plan);
 			}
-			return { ok: true, verb: 'when' };
+			return { ok: true, verb: 'issue' };
 		}
-		agent.assignPlan(units, plan);
-		return { ok: true, verb: 'when' };
+		agent.issueUnits(units, plan);
+		return { ok: true, verb: 'issue' };
 	}
 
 	private tryCtx(id:string):HostCtx | undefined {
@@ -1124,7 +1238,7 @@ export class ArcDirector<HostCtx = unknown> {
 		if (!kernels) {
 			return undefined;
 		}
-		return buildCrowdCatalog(kernels, agent.crowd, agent.id);
+		return buildCrowdCatalog(kernels, agent.crowd, agent.id, agent.commanderID);
 	}
 
 	private applySpec(agent:Agent<HostCtx>, spec:AgentSpec<HostCtx>, fresh:boolean):void {
@@ -1175,6 +1289,12 @@ export class ArcDirector<HostCtx = unknown> {
 		else if (this.sightLimitDefault !== undefined && agent.sightLimit === undefined) {
 			agent.sightLimit = this.sightLimitDefault;
 		}
+		if (spec.maxLaws !== undefined) {
+			agent.maxLaws = spec.maxLaws;
+		}
+		if (spec.cooldown !== undefined) {
+			agent.cooldown = spec.cooldown;
+		}
 		if (isCrowdConductor(agent)) {
 			for (const unit of spec.units ?? []) {
 				agent.addUnit(unit);
@@ -1182,11 +1302,13 @@ export class ArcDirector<HostCtx = unknown> {
 			for (const law of spec.laws ?? []) {
 				agent.addCrowdLaw(law, law.pinned);
 			}
-			if (spec.maxLaws !== undefined) {
-				agent.maxLaws = spec.maxLaws;
+			if (spec.commander) {
+				agent.setCommander(spec.commander);
 			}
-			if (spec.cooldown !== undefined) {
-				agent.cooldown = spec.cooldown;
+		}
+		else {
+			for (const law of spec.laws ?? []) {
+				agent.addLaw(law, law.pinned);
 			}
 		}
 		agent.kit = this.kitFor(spec);
@@ -1207,6 +1329,9 @@ export class ArcDirector<HostCtx = unknown> {
 			return true;
 		}
 		if (name === 'see_map' && this.map && this.vision) {
+			return true;
+		}
+		if (name === GREP_WORLD_ENCYCLOPEDIA && this.encyclopedia) {
 			return true;
 		}
 		return false;
@@ -1336,7 +1461,7 @@ export class ArcDirector<HostCtx = unknown> {
 		};
 		this.rows.set(spec.id, row);
 		const deps = this.deps(spec.id, row);
-		const isCrowd = spec.units !== undefined || spec.laws !== undefined;
+		const isCrowd = spec.units !== undefined || spec.commander !== undefined;
 		const agent = stored
 			? isCrowd
 				? CrowdConductor.fromJSON(stored, deps)
@@ -1351,6 +1476,8 @@ export class ArcDirector<HostCtx = unknown> {
 					laws: spec.laws,
 					maxLaws: spec.maxLaws,
 					cooldown: spec.cooldown ?? this.cooldownDefault,
+					commander: spec.commander,
+					onCommanderVacant: (unitID) => this.commanderVacantFn?.(spec.id, unitID),
 				})
 				: new Agent<HostCtx>({
 					id: spec.id,
@@ -1482,7 +1609,7 @@ export class ArcDirector<HostCtx = unknown> {
 			if (!unitCtx) {
 				continue;
 			}
-			unitCats.push(buildCrowdCatalog(this.kernelsFor(row, unitCtx), agent.crowd, agent.id));
+			unitCats.push(buildCrowdCatalog(this.kernelsFor(row, unitCtx), agent.crowd, agent.id, agent.commanderID));
 		}
 		return unitCats.length > 0 ? unitCats : thinker;
 	}
@@ -1497,12 +1624,16 @@ export class ArcDirector<HostCtx = unknown> {
 		if (!unitCtx) {
 			return whoCat;
 		}
-		return buildCrowdCatalog(this.kernelsFor(row, unitCtx), agent.crowd, agent.id);
+		return buildCrowdCatalog(this.kernelsFor(row, unitCtx), agent.crowd, agent.id, agent.commanderID);
 	}
 
 	private tickLaws(row:AgentRow<HostCtx>):void {
 		const agent = row.agent;
+		if (!agent) {
+			return;
+		}
 		if (!isCrowdConductor(agent) || !this.kernelFn) {
+			this.tickAgentLaws(row);
 			return;
 		}
 		const thinkerCtx = this.tryCtx(agent.id);
@@ -1512,22 +1643,23 @@ export class ArcDirector<HostCtx = unknown> {
 		if (!whoKernels) {
 			return;
 		}
-		const whoCat = buildCrowdCatalog(whoKernels, agent.crowd, agent.id);
+		const whoCat = buildCrowdCatalog(whoKernels, agent.crowd, agent.id, agent.commanderID);
 		for (const unit of agent.crowd.list()) {
-			const extras = ():PlanHandler[] => agent.lawHandlers(unit, (law) => lawMatches(law, unit, whoCat, agent.crowd));
+			const extras = ():PlanHandler[] => agent.lawHandlers((law) => lawMatches(law, unit, whoCat, agent.crowd));
 			const catalog = ():ReturnType<typeof buildCrowdCatalog> => this.unitCatalog(row, agent, unit.id, whoCat);
+			if (unit.id === agent.commanderID) {
+				this.pollAgentSession(agent, extras, catalog, unit.id);
+				continue;
+			}
 			if (unit.session) {
 				unit.session.catalog = catalog;
 				unit.session.now = () => this.clock;
 				unit.session.extraHandlers = extras;
 				unit.session.abortHost = () => this.abortPlanFn?.(unit.id);
-				unit.session.cooldown = agent.cooldown;
 				pollPlanSession(unit.session);
 				continue;
 			}
 			const probe = createPlanSession({
-				cooldown: agent.cooldown,
-				coolUntil: unit.coolUntil,
 				catalog,
 				now: () => this.clock,
 				extraHandlers: extras,
@@ -1535,13 +1667,66 @@ export class ArcDirector<HostCtx = unknown> {
 			const first = firstStartable(probe);
 			if (first) {
 				agent.beginHandler(unit, first, {
-					cooldown: agent.cooldown,
 					catalog,
 					now: () => this.clock,
 					abortHost: () => this.abortPlanFn?.(unit.id),
 					extraHandlers: extras,
 				});
 			}
+		}
+	}
+
+	private tickAgentLaws(row:AgentRow<HostCtx>):void {
+		const agent = row.agent;
+		if (!agent) {
+			return;
+		}
+		if (agent.laws.length === 0 && !agent.planSession) {
+			return;
+		}
+		const extras = ():PlanHandler[] => agent.lawHandlers();
+		let catalog = agent.planSession?.catalog;
+		if (!catalog && this.kernelFn && this.contextFn) {
+			catalog = () => {
+				const ctx = this.tryCtx(agent.id);
+				if (!ctx) {
+					return undefined;
+				}
+				return buildCatalog(this.kernelsFor(row, ctx));
+			};
+		}
+		this.pollAgentSession(agent, extras, catalog, agent.id);
+	}
+
+	private pollAgentSession(
+		agent:Agent<HostCtx>,
+		extras:()=>PlanHandler[],
+		catalog:PlanSession['catalog'],
+		abortID:string,
+	):void {
+		if (agent.planSession) {
+			if (catalog) {
+				agent.planSession.catalog = catalog;
+			}
+			agent.planSession.now = () => this.clock;
+			agent.planSession.extraHandlers = extras;
+			agent.planSession.abortHost = () => this.abortPlanFn?.(abortID);
+			pollPlanSession(agent.planSession);
+			return;
+		}
+		const probe = createPlanSession({
+			catalog,
+			now: () => this.clock,
+			extraHandlers: extras,
+		});
+		const first = firstStartable(probe);
+		if (first) {
+			agent.beginLaw(first, {
+				catalog,
+				now: () => this.clock,
+				abortHost: () => this.abortPlanFn?.(abortID),
+				extraHandlers: extras,
+			});
 		}
 	}
 
@@ -1574,11 +1759,6 @@ export class ArcDirector<HostCtx = unknown> {
 				continue;
 			}
 			if (!queue.allowThink(row)) {
-				held.push(row);
-				continue;
-			}
-			if (queue.planOf(row.npcID)) {
-				this.abortPlanFn?.(row.npcID);
 				held.push(row);
 				continue;
 			}

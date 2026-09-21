@@ -157,7 +157,7 @@ export const ITEM_DEFS:Record<string, ItemDef> = {
 		maxStack: 9,
 		meshID: 'item_potion',
 		color: 0xe07030,
-		components: { Goods: { ask: 3 } },
+		components: { Goods: { ask: 10 } },
 	},
 	silver_trout: {
 		id: 'silver_trout',
@@ -166,7 +166,7 @@ export const ITEM_DEFS:Record<string, ItemDef> = {
 		maxStack: 9,
 		meshID: 'item_potion',
 		color: 0x9eb4c8,
-		components: {},
+		components: { Goods: { ask: 5 } },
 	},
 	bitterroot: {
 		id: 'bitterroot',

@@ -12,6 +12,9 @@ export type VerbSpec = {
 export class VerbRegistry {
 	private readonly verbs = new Map<string, VerbSpec>();
 
+	/** Catalog used to parse nested `plan=` args. Kit views point at the unfiltered registry. */
+	private nestedSource:VerbRegistry | null = null;
+
 	add(name:string, args:VerbArgMap = {}):this {
 		if (this.verbs.has(name)) {
 			throw new Error(`verb already registered: ${name}`);
@@ -23,6 +26,27 @@ export class VerbRegistry {
 		}
 		this.verbs.set(name, { name, args });
 		return this;
+	}
+
+	/** Full catalog. Nested unit / loop / law plans may name verbs this kit does not grant the thinker. */
+	nested():VerbRegistry {
+		return this.nestedSource ?? this;
+	}
+
+	/** Copy with `key` dropped from `verb` (solo `law` has no `who`). */
+	withoutArg(verb:string, key:string):VerbRegistry {
+		const next = new VerbRegistry();
+		next.nestedSource = this.nestedSource ?? this;
+		for (const spec of this.list()) {
+			if (spec.name !== verb) {
+				next.add(spec.name, spec.args);
+				continue;
+			}
+			const args = { ...spec.args };
+			delete args[key];
+			next.add(spec.name, args);
+		}
+		return next;
 	}
 
 	remove(...names:string[]):this {
@@ -39,6 +63,7 @@ export class VerbRegistry {
 		}
 		const wanted = new Set(allow);
 		const next = new VerbRegistry();
+		next.nestedSource = this.nestedSource ?? this;
 		for (const spec of this.list()) {
 			if (wanted.has(spec.name)) {
 				next.add(spec.name, spec.args);
@@ -98,9 +123,10 @@ export class VerbRegistry {
 export const STOCK_MOVE_VERBS = ['go_to', 'follow', 'wander'] as const;
 export const STOCK_ITEM_VERBS = ['use', 'equip', 'unequip', 'pick_up', 'drop', 'give', 'examine'] as const;
 export const STOCK_MIND_VERBS = [
-	'say', 'wait', 'remember', 'think', 'set_goal', 'drop_goal', 'set_identity', 'when', 'loop',
+	'say', 'wait', 'remember', 'think', 'set_goal', 'drop_goal', 'set_identity',
 ] as const;
-export const STOCK_VERBS = [...STOCK_MOVE_VERBS, ...STOCK_ITEM_VERBS, ...STOCK_MIND_VERBS] as const;
+export const STOCK_PLAN_VERBS = ['when', 'loop', 'law', 'unlaw'] as const;
+export const STOCK_VERBS = [...STOCK_MOVE_VERBS, ...STOCK_ITEM_VERBS, ...STOCK_MIND_VERBS, ...STOCK_PLAN_VERBS] as const;
 export type StockVerb = (typeof STOCK_VERBS)[number];
 
 export const STOCK_VERB_ARGS:Record<StockVerb, VerbArgMap> = {
@@ -121,8 +147,10 @@ export const STOCK_VERB_ARGS:Record<StockVerb, VerbArgMap> = {
 	set_goal: { goal: 'string', priority: 'number?' },
 	drop_goal: { goal: 'string?' },
 	set_identity: { name: 'string?', role: 'string?', traits: 'string[]?' },
-	when: { who: 'string?', watch: 'string?', plan: 'plan', name: 'string?' },
+	when: { watch: 'string', plan: 'plan' },
 	loop: { plan: 'plan', through: 'string?', until: 'string?', times: 'number?' },
+	law: { who: 'string?', watch: 'string', plan: 'plan', name: 'string?' },
+	unlaw: { name: 'string' },
 };
 
 /** Schema-only. Omit `verbs` to register the full stock set. Already-registered names are skipped. */

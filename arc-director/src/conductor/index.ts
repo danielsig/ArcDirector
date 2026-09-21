@@ -4,8 +4,9 @@ export { CrowdConductor, isCrowdConductor, type CrowdConductorJSON, type CrowdCo
 export {
 	STOCK_CROWD_VERBS,
 	STOCK_CROWD_VERB_ARGS,
-	FORMATION_VERBS,
+	STOCK_FORMATION_VERBS,
 	registerStockCrowdVerbs,
+	isFormationVerb,
 	type StockCrowdVerb,
 } from './verbs.js';
 export { squadTag, shortTag, isSquadTag } from './tags.js';
@@ -15,7 +16,7 @@ export {
 	buildCrowdCatalog,
 	crowdKernels,
 	planArg,
-} from './select.js';
+} from './who.js';
 export {
 	lawFromSpec,
 	upsertLaw,

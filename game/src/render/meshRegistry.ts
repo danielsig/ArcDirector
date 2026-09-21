@@ -476,14 +476,33 @@ function createCotMesh():THREE.Group {
 	return g;
 }
 
-function createStallMesh():THREE.Group {
+type StallPalette = { canvas:number; stripe:number; cloth:number };
+
+const STALL_PALETTES:Record<string, StallPalette> = {
+	stall: { canvas: 0xd45a3a, stripe: 0xf0e0a8, cloth: 0xc43a32 },
+	stall_pink: { canvas: 0xc45a8a, stripe: 0xf5d4dc, cloth: 0xa83870 },
+	stall_yellow: { canvas: 0xe8c040, stripe: 0xfff3c0, cloth: 0xd4a010 },
+	stall_blue: { canvas: 0x4a7ec8, stripe: 0xe8f0f8, cloth: 0x2a5a9a },
+	stall_green: { canvas: 0x5aaa5a, stripe: 0xd8f0c8, cloth: 0x3a8a40 },
+};
+
+function stallPalette(meshID:string):StallPalette {
+	return STALL_PALETTES[meshID] ?? STALL_PALETTES.stall;
+}
+
+function isStallMesh(meshID:string):boolean {
+	return meshID === 'stall' || meshID.startsWith('stall_');
+}
+
+function createStallMesh(meshID = 'stall'):THREE.Group {
 	const g = new THREE.Group();
 	g.userData.kind = 'stall';
+	const paint = stallPalette(meshID);
 	const wood = std(0x6b4423);
 	const post = std(0x4a301c);
-	const canvas = std(0xd45a3a, { roughness: 0.95 });
-	const stripe = std(0xf0e0a8, { roughness: 0.95 });
-	const cloth = std(0xc43a32, { roughness: 0.98, side: THREE.DoubleSide });
+	const canvas = std(paint.canvas, { roughness: 0.95 });
+	const stripe = std(paint.stripe, { roughness: 0.95 });
+	const cloth = std(paint.cloth, { roughness: 0.98, side: THREE.DoubleSide });
 	const top = new THREE.Mesh(new THREE.BoxGeometry(1.12, 0.08, 0.64), wood);
 	top.position.set(0, 0.5, -0.12);
 	top.castShadow = true;
@@ -562,7 +581,7 @@ export function createMesh(meshID:string, color?:number):THREE.Object3D {
 	if (meshID === 'human' || meshID.startsWith('human_')) {
 		return createHumanMesh(animIDFromMeshID(meshID));
 	}
-	if (sharedProps.has(meshID)) {
+	if (sharedProps.has(meshID) || isStallMesh(meshID)) {
 		return cloneProp(meshID, () => buildMesh(meshID, color));
 	}
 	return buildMesh(meshID, color);
@@ -595,7 +614,11 @@ function buildMesh(meshID:string, color?:number):THREE.Object3D {
 		case 'cot':
 			return createCotMesh();
 		case 'stall':
-			return createStallMesh();
+		case 'stall_pink':
+		case 'stall_yellow':
+		case 'stall_blue':
+		case 'stall_green':
+			return createStallMesh(meshID);
 		default: {
 			if (meshID.startsWith('item_')) {
 				return itemProp(meshID);

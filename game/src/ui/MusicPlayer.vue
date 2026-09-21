@@ -25,6 +25,7 @@ const TITLES:Record<string, string> = {
 	abbey_vault: 'Abbey Vault',
 	glen: 'River Glen',
 	marketplace: 'Marketplace',
+	ruins: 'Ruin Fight',
 };
 
 function isTyping(target:EventTarget | null):boolean {

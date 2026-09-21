@@ -11,6 +11,7 @@ import {
 	Door,
 	HumanBody,
 	HumanSprite,
+	HurtFlash,
 	Light,
 	Lock,
 	MillLever,
@@ -448,6 +449,21 @@ function spawnBridge(world:World, chunk:Chunk, spans:ChunkEntity[]):void {
 	world.add(go);
 }
 
+const STALL_MESH:Record<string, string> = {
+	BakerStall: 'stall',
+	WeaverStall: 'stall_pink',
+	PotterStall: 'stall_yellow',
+	CutlerStall: 'stall_blue',
+	SpiceStall: 'stall_green',
+	CandleStall: 'stall_yellow',
+	FruitStall: 'stall_green',
+	RibbonStall: 'stall_pink',
+};
+
+function stallMeshFor(name:string | undefined):string {
+	return (name && STALL_MESH[name]) || 'stall';
+}
+
 function spawnStall(world:World, chunk:Chunk, ent:ChunkEntity):void {
 	const center = chunk.worldCellCenter(ent.localX, ent.localZ);
 	const tile = chunk.tile(ent.localX, ent.localZ);
@@ -456,7 +472,7 @@ function spawnStall(world:World, chunk:Chunk, ent:ChunkEntity):void {
 	go.transform.position.y = (tile?.height ?? 0) * TILE_HEIGHT;
 	go.transform.position.z = center.z;
 	go.transform.yaw = ent.localZ < 8 ? Math.PI : 0;
-	go.addComponent(new MeshRenderer()).meshID = 'stall';
+	go.addComponent(new MeshRenderer()).meshID = stallMeshFor(ent.name);
 	const col = go.addComponent(new BoxCollider());
 	col.size = { x: 0.55, y: 0.9, z: 0.4 };
 	if (ent.name) {
@@ -501,6 +517,8 @@ export function spawnNPC(world:World, chunk:Chunk, opts:NPCSpawnOpts):GameObject
 	const sprite = go.addComponent(new HumanSprite());
 	sprite.kind = animIDFromMeshID(opts.meshID);
 	sprite.height = characterHeight(sprite.kind);
+	const flash = go.addComponent(new HurtFlash());
+	flash.enabled = false;
 	go.addComponent(new NPCInput());
 	const motor = go.addComponent(new CharacterMotor());
 	if (opts.destLocalX !== undefined && opts.destLocalZ !== undefined) {
@@ -576,6 +594,8 @@ export function spawnPlayer(
 	const kind = resolvePlayerKind(prefs().playerKind);
 	sprite.kind = kind;
 	sprite.height = characterHeight(kind);
+	const flash = go.addComponent(new HurtFlash());
+	flash.enabled = false;
 	go.addComponent(new PlayerInput());
 	go.addComponent(new CharacterMotor());
 	const rb = go.addComponent(new RigidBody());

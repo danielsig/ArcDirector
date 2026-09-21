@@ -100,7 +100,7 @@ The game is served at `http://localhost:5173/` (Vite default). There is no path 
 
 | Param | Kind | Meaning |
 |-------|------|---------|
-| `scene` | play | Scene id. `abbey_vault`, `glen`, or `marketplace`. Omit (or unknown id) → scene picker. |
+| `scene` | play | Scene id. `abbey_vault`, `glen`, `marketplace`, or `ruins`. Omit (or unknown id) → scene picker. |
 | `observer` | test | `1` = player is inperceivable by NPCs (observer). `0` = NPCs can see, hear, and walk to the player. Also `true`/`false`. |
 | `ai` | test | `1` = ArcDirector runs (NPCs think and move). `0` = paused (no inference, NPC motors frozen). Also `true`/`false`. |
 | `view` | agent | Full camera shot: `x,y,z,yaw`. All four numbers or the param is ignored (no partial pose). X/Z are meters on the ground; Y is height; yaw is radians. `0` yaw looks toward −Z (north); `1.5708` (π/2) toward −X (west); `3.1416` (π) toward +Z (south). Yaw also faces the player. Camera follows the player. |
@@ -131,10 +131,16 @@ Agent forced test view (prefer this when checking a specific place):
 http://localhost:5173/?scene=glen&view=8,0,12,1.57
 ```
 
-Marketplace (street looking west):
+Marketplace (canal plaza looking north):
 
 ```
-http://localhost:5173/?scene=marketplace&view=16,0,8,1.57
+http://localhost:5173/?scene=marketplace&view=20,0,8,0
+```
+
+Ruin fight (clearing looking north):
+
+```
+http://localhost:5173/?scene=ruins&view=16,0,11,0
 ```
 
 ### Testing / screenshots
@@ -164,5 +170,11 @@ http://localhost:5173/?scene=glen&view=8,0,12,1.57&observer=1&ai=0
 Example: marketplace with ArcDirector paused:
 
 ```
-http://localhost:5173/?scene=marketplace&view=16,0,8,1.57&observer=1&ai=0
+http://localhost:5173/?scene=marketplace&view=20,0,8,0&observer=1&ai=0
+```
+
+Example: ruin fight with ArcDirector paused:
+
+```
+http://localhost:5173/?scene=ruins&view=16,0,11,0&observer=1&ai=0
 ```

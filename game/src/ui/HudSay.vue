@@ -2,6 +2,7 @@
 import { computed, inject, nextTick, ref, watch } from 'vue';
 import type { HudModel } from './hudModel';
 import { parseSlash, slashComplete, suggestSay, type SaySuggestion } from './sayCommands';
+import { lsDel, lsGet, lsSet } from '../prefs';
 import { sessionKey } from './sessionKey';
 
 const props = defineProps<{
@@ -12,6 +13,34 @@ const session = inject(sessionKey);
 const field = ref<HTMLInputElement | null>(null);
 const draft = ref('');
 const pick = ref(0);
+const histKey = 'arc-director.sayHistory';
+const hist = ref<string[]>([]);
+const histAt = ref(-1);
+const histLive = ref('');
+
+function readHist():string[] {
+	try {
+		const raw = JSON.parse(lsGet(histKey) ?? '[]');
+		return Array.isArray(raw)
+			? raw.filter((s):s is string => typeof s === 'string' && s.length > 0).slice(-20)
+			: [];
+	}
+	catch {
+		return [];
+	}
+}
+
+function remember(text:string):void {
+	const rows = readHist();
+	if (rows[rows.length - 1] === text) {
+		hist.value = rows;
+		return;
+	}
+	rows.push(text);
+	const next = rows.slice(-20);
+	hist.value = next;
+	lsSet(histKey, JSON.stringify(next));
+}
 
 const catalog = computed(() => ({
 	peers: props.hud.sayPeers,
@@ -28,8 +57,11 @@ watch(
 		if (!open) {
 			draft.value = '';
 			pick.value = 0;
+			histAt.value = -1;
 			return;
 		}
+		hist.value = readHist();
+		histAt.value = -1;
 		await nextTick();
 		field.value?.focus();
 		field.value?.select();
@@ -65,6 +97,13 @@ function send():void {
 	draft.value = '';
 	props.hud.sayOpen = false;
 	if (text.length > 0) {
+		if (/^\/clear$/i.test(text)) {
+			lsDel(histKey);
+			hist.value = [];
+			histAt.value = -1;
+			return;
+		}
+		remember(text);
 		session?.value?.say(text);
 	}
 }
@@ -85,6 +124,37 @@ function keepFocus():void {
 
 function onFieldKey(e:KeyboardEvent):void {
 	const rows = suggestions.value;
+	if (e.code === 'ArrowUp' && rows.length === 0) {
+		e.preventDefault();
+		e.stopPropagation();
+		if (hist.value.length === 0) {
+			return;
+		}
+		if (histAt.value < 0) {
+			histLive.value = draft.value;
+			histAt.value = hist.value.length;
+		}
+		if (histAt.value > 0) {
+			histAt.value -= 1;
+			draft.value = hist.value[histAt.value] ?? '';
+		}
+		return;
+	}
+	if (e.code === 'ArrowDown' && rows.length === 0) {
+		e.preventDefault();
+		e.stopPropagation();
+		if (histAt.value < 0) {
+			return;
+		}
+		histAt.value += 1;
+		if (histAt.value >= hist.value.length) {
+			histAt.value = -1;
+			draft.value = histLive.value;
+			return;
+		}
+		draft.value = hist.value[histAt.value] ?? '';
+		return;
+	}
 	if (e.code === 'ArrowDown' && rows.length > 0) {
 		e.preventDefault();
 		e.stopPropagation();

@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { Chest, Door, HumanBody, HumanSprite, RigidBody, Torch, Bridge, type HumanKind } from '../engine/components';
+import { HurtFlash, Chest, Door, HumanBody, HumanSprite, RigidBody, Torch, Bridge, Vitals, type HumanKind } from '../engine/components';
 import { MeshRenderer } from '../engine/MeshRenderer';
 import { yawToForward } from '../engine/math';
 import type { World } from '../engine/World';
@@ -322,9 +322,11 @@ export class WorldPresent {
 		const anims = getHumanAnims(kind);
 		const rb = go.getComponent(RigidBody);
 		const speed = rb ? Math.hypot(rb.velocity.x, rb.velocity.z) : 0;
+		const down = (go.getComponent(Vitals)?.hp ?? 1) <= 0;
 		const clip = appearance?.clip ?? 'auto';
-		const pocket = clip === 'take' || clip === 'give';
-		const walking = !pocket && (clip === 'walk' || (clip === 'auto' && speed > 0.35));
+		const pocket = !down && (clip === 'take' || clip === 'give');
+		const hurting = !down && go.getComponent(HurtFlash)?.active === true;
+		const walking = !down && !pocket && !hurting && (clip === 'walk' || (clip === 'auto' && speed > 0.35));
 		const yaw = go.transform.yaw;
 		const p = go.transform.position;
 		const t = go.world?.time ?? 0;
@@ -342,7 +344,13 @@ export class WorldPresent {
 		let hour:ClockHour = 6;
 		let face:ClockHour = 6;
 		let fps = lockedWalkFps || characterWalkFps(kind, 6);
-		if (pocket && appearance) {
+		if (down) {
+			maps = clock.idle[6] ?? clock.idle[12] ?? clock.idle[4] ?? maps;
+			flip = 1;
+			hour = 6;
+			face = 6;
+		}
+		else if (pocket && appearance) {
 			maps = pickPocketMaps(clock, clip, appearance.clipT0, t, takeFps)
 				?? pickClockMaps(clock, 6, false, t, fps, offset);
 			flip = appearance.flip ? appearance.flip : 1;
@@ -368,9 +376,9 @@ export class WorldPresent {
 			mat.map = maps.map;
 			mat.normalMap = nrm;
 			mat.normalScale.set(cel ? 0.55 : 0.85, cel ? 0.55 : 0.85);
-			mat.alphaTest = cel ? 0.12 : 0.28;
 			mat.needsUpdate = true;
 		}
+		this.paintHurt(mat, go, t, cel);
 		const img = maps.map.image as { width?:number; height?:number } | undefined;
 		const iw = img?.width ?? 0;
 		const ih = img?.height ?? 0;
@@ -387,6 +395,14 @@ export class WorldPresent {
 		const heightM = appearance && appearance.height > 0
 			? appearance.height
 			: characterHeight(heightKey);
+		if (down) {
+			sprite.scale.x = (heightM * aspect) / HUMAN_PLANE_W / fillH;
+			sprite.scale.y = (heightM / HUMAN_PLANE_H) / fillH;
+			sprite.position.set(0, 0.36, 0);
+			sprite.rotation.set(-Math.PI / 2, 0, 0);
+			this.hideHeld(sprite);
+			return;
+		}
 		const size = heightM / HUMAN_PLANE_H;
 		sprite.scale.x = flip * (heightM * aspect) / HUMAN_PLANE_W / fillH;
 		sprite.scale.y = unflat * size / fillH;
@@ -411,6 +427,49 @@ export class WorldPresent {
 		const walkCount = clock.walk[walkHour]?.length ?? 0;
 		const frame = walking ? walkFrameIndex(t, fps, walkCount, offset) : 0;
 		this.syncHeldSwords(sprite, go, kind, hour, face, walking, frame, t);
+	}
+
+	private hideHeld(sprite:THREE.Mesh):void {
+		for (const name of ['heldLeft', 'heldRight'] as const) {
+			const mesh = sprite.getObjectByName(name);
+			if (!mesh) {
+				continue;
+			}
+			mesh.visible = false;
+			const flame = mesh.getObjectByName('heldFlame');
+			if (flame) {
+				flame.visible = false;
+			}
+		}
+	}
+
+	private paintHurt(mat:THREE.MeshLambertMaterial, go:GameObject, t:number, cel:boolean):void {
+		if ((go.getComponent(Vitals)?.hp ?? 1) <= 0) {
+			mat.color.setHex(0xffffff);
+			mat.emissive.setHex(0x000000);
+			mat.transparent = false;
+			mat.opacity = 1;
+			mat.alphaTest = cel ? 0.12 : 0.28;
+			mat.depthWrite = true;
+			return;
+		}
+		const flash = go.getComponent(HurtFlash);
+		if (flash?.active) {
+			const blink = Math.floor(t * 14) % 2 === 0;
+			mat.color.setHex(blink ? 0xff1408 : 0xff6a4a);
+			mat.emissive.setHex(blink ? 0x5a0800 : 0x2a0400);
+			mat.transparent = true;
+			mat.opacity = blink ? 0.22 : 0.62;
+			mat.alphaTest = 0.02;
+			mat.depthWrite = false;
+			return;
+		}
+		mat.color.setHex(0xffffff);
+		mat.emissive.setHex(0x000000);
+		mat.transparent = false;
+		mat.opacity = 1;
+		mat.alphaTest = cel ? 0.12 : 0.28;
+		mat.depthWrite = true;
 	}
 
 	private syncHeldSwords(

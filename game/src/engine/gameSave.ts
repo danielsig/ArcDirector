@@ -116,7 +116,10 @@ export function rewriteRetiredFeeNames(text:string):string {
 		.replaceAll('Foxfire', GLEN_FEE_NAME)
 		.replaceAll('mooncap', GLEN_FEE_DEF)
 		.replaceAll('dewcap', GLEN_FEE_DEF)
-		.replaceAll('foxfire', GLEN_FEE_DEF);
+		.replaceAll('foxfire', GLEN_FEE_DEF)
+		.replaceAll('a servant', 'an assistant')
+		.replaceAll('Servant', 'Assistant')
+		.replaceAll('servant', 'assistant');
 }
 
 export function copyItem(item:ItemInstance):ItemInstance {

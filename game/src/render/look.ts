@@ -19,16 +19,16 @@ export function rendererLook(look:SceneLook):RendererLook {
 	}
 	if (look === 'market') {
 		return {
-			background: 0xc9b48a,
-			fogNear: 22,
-			fogFar: 56,
-			exposure: 1.35,
+			background: 0x8eb8d4,
+			fogNear: 24,
+			fogFar: 62,
+			exposure: 1.42,
 			hemiSky: 0xffe8c4,
 			hemiGround: 0x6b5a3a,
-			hemiIntensity: 1.15,
+			hemiIntensity: 1.2,
 			fillColor: 0xc4a878,
-			fillIntensity: 0.42,
-			sun: { color: 0xffe2b0, intensity: 2.2 },
+			fillIntensity: 0.4,
+			sun: { color: 0xffe2b0, intensity: 2.45 },
 		};
 	}
 	return {

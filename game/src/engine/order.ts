@@ -6,6 +6,7 @@ export const Order = {
 	npcInput: 20,
 	humanSprite: 30,
 	motor: 40,
+	hurt: 45,
 	door: 50,
 	torch: 60,
 	heldTorch: 70,

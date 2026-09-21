@@ -8,6 +8,7 @@ import {
 	ExprError,
 	isTruthy,
 	LIST_CAP,
+	leftoverEnglishHint,
 	needleMatch,
 	type Ast,
 	type Catalog,
@@ -23,7 +24,7 @@ function listCapOf(ctx:EvalCtx):number {
 
 const RELATIONS = new Set([
 	'distance', 'isNear', 'isReachable', 'isApproaching', 'isDeparting', 'hasSightline',
-	'isFacing', 'isBehind', 'facing', 'wasJustFacing', 'hasJustSeen', 'hasLostSight',
+	'isFacing', 'isBehind', 'isLeft', 'isRight', 'facing', 'wasJustFacing', 'hasJustSeen', 'hasLostSight',
 	'manhattan', 'chebyshev', 'inSquare',
 ]);
 
@@ -39,7 +40,65 @@ function identLookup(name:string, ctx:EvalCtx):ExprVal {
 	if (ctx.catalog.fns.has(name)) {
 		return { kind: 'fn', name };
 	}
-	return ABSENT;
+	const leftover = leftoverEnglishHint(name, typeListEntities(ctx));
+	if (leftover) {
+		throw new ExprError(leftover);
+	}
+	return inferTypeList(name, ctx) ?? ABSENT;
+}
+
+function typeListEntities(ctx:EvalCtx):ExprEntity[] {
+	const out:ExprEntity[] = [];
+	const seen = new Set<string>();
+	for (const key of ['landmarks', 'items', 'others', 'units'] as const) {
+		const bound = ctx.catalog.names.get(key);
+		if (bound?.kind !== 'list') {
+			continue;
+		}
+		for (const row of bound.value) {
+			if (row.kind !== 'entity' || seen.has(row.value.id)) {
+				continue;
+			}
+			seen.add(row.value.id);
+			out.push(row.value);
+		}
+	}
+	return out;
+}
+
+/** Unbound `Tree` is the landmark/item list that matches that type, not reachable with go_to. */
+function inferTypeList(name:string, ctx:EvalCtx):ExprVal | undefined {
+	if (!/^[A-Z][A-Za-z0-9]*$/.test(name)) {
+		return undefined;
+	}
+	const lower = name.charAt(0).toLowerCase() + name.slice(1);
+	const needles = lower === name ? [name] : [name, lower];
+	const out:ExprVal[] = [];
+	const seen = new Set<string>();
+	for (const key of ['landmarks', 'items', 'others', 'units'] as const) {
+		const bound = ctx.catalog.names.get(key);
+		if (bound?.kind !== 'list') {
+			continue;
+		}
+		for (const row of bound.value) {
+			if (row.kind !== 'entity') {
+				continue;
+			}
+			const e = row.value;
+			if (seen.has(e.id)) {
+				continue;
+			}
+			if (needles.some((n) => needleMatch(e, n))) {
+				seen.add(e.id);
+				out.push(row);
+			}
+		}
+	}
+	if (out.length === 0) {
+		return undefined;
+	}
+	const cap = listCapOf(ctx);
+	return { kind: 'list', value: out.length > cap ? out.slice(0, cap) : out };
 }
 
 function asEntity(v:ExprVal):ExprEntity | undefined {

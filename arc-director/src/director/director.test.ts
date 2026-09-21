@@ -3,6 +3,7 @@ import { describe, it } from 'node:test';
 import { STOCK_MOVE_VERBS, STOCK_VERBS } from '../action/registry.js';
 import { goToNamedInteractable } from '../inference/fake.js';
 import { dummyEntity } from '../expr/natives.js';
+import { SampleCache } from '../expr/types.js';
 import { formatSight } from '../perception/sight.js';
 import { formatInventory } from '../perception/formatInventory.js';
 import { ArcDirector } from './director.js';
@@ -141,6 +142,53 @@ describe('ArcDirector', () => {
 		assert.equal(calls[0].verb, 'go_to');
 		assert.equal(calls[0].agent.id, 'Watcher');
 		assert.equal(calls[0].ctx.id, 'Watcher');
+		director.dispose();
+	});
+
+	it('logs reasoning alongside the plan', async () => {
+		const logs:string[] = [];
+		const plan = JSON.stringify({ head: { verb: 'wait', args: {} } });
+		const director = await new ArcDirector<Ctx>()
+			.withPriorityQueue({
+				processInterval: 0,
+				watchInterval: 0,
+				heartbeatStart: 0.01,
+				heartbeatMin: 0.01,
+				maxParallel: 2,
+			})
+			.withFakeInference(() => ({
+				content: plan,
+				reasoning: 'Blade is close; loop slash, do not go_to.',
+				toolCalls: [],
+			}))
+			.addStockVerbs()
+			.withDefaultKit(KIT)
+			.onVerb(() => ({ ok: true, verb: 'wait' }))
+			.onLog((entry) => logs.push(entry.message))
+			.addSense('scene', {
+				description: 'What you can see. Names only.',
+				gather: (ctx) => ctx.paragraph,
+			})
+			.withContext((id) => ({ paragraph: scene(), id }))
+			.addAgent({
+				id: 'Dawn',
+				kit: KIT,
+				identity: { name: 'Dawn', role: 'Fights.' },
+				goals: [{ text: 'Win.', priority: 1 }],
+			})
+			.start();
+		director.tick(1, 1);
+		await waitFor(() => logs.some((m) => m.includes('(thinking)')));
+		const prompt = logs.find((m) => m.startsWith('prompt\n')) ?? '';
+		assert.match(prompt, /"role":"system"/);
+		assert.match(prompt, /You are Dawn/);
+		assert.ok(
+			logs.findIndex((m) => m.startsWith('prompt\n'))
+			< logs.findIndex((m) => m.includes('(thinking)')),
+		);
+		const hit = logs.find((m) => m.includes('(thinking)')) ?? '';
+		assert.match(hit, /Blade is close; loop slash, do not go_to\./);
+		assert.match(hit, /"verb":"wait"/);
 		director.dispose();
 	});
 
@@ -464,6 +512,13 @@ describe('ArcDirector', () => {
 		director.dispose();
 	});
 
+	it('start throws when a kit names grep_world_encyclopedia without pages', async () => {
+		const director = directorOf()
+			.withDefaultKit({ verbs: ['go_to'], tools: ['grep_world_encyclopedia'] });
+		await assert.rejects(() => director.start(), /tool 'grep_world_encyclopedia' is not registered/);
+		director.dispose();
+	});
+
 	it('start({ ignoreMissing }) logs unknown names and continues', async () => {
 		const logs:string[] = [];
 		const director = await directorOf()
@@ -505,6 +560,19 @@ describe('ArcDirector', () => {
 		director.dispose();
 	});
 
+	it('start accepts grep_world_encyclopedia when pages are set', async () => {
+		const director = await directorOf()
+			.withEncyclopedia([{ name: 'Tree', aliases: ['trees'], text: 'Landmark type.' }])
+			.withDefaultKit({ verbs: ['go_to'], tools: ['grep_world_encyclopedia'] })
+			.addAgent({
+				id: 'Guard',
+				identity: { name: 'Guard', role: 'Walks.' },
+			})
+			.start();
+		assert.ok(director.ready);
+		director.dispose();
+	});
+
 	it('withSight gather matches formatSight', async () => {
 		const sight = {
 			self: { id: 'Captain', at: [11.5, 10.5], facing: [0, -1] as number[] },
@@ -530,6 +598,35 @@ describe('ArcDirector', () => {
 			.start();
 		const agent = director.agent('Captain')!;
 		assert.equal(agent.senses.sight.gather({ paragraph: scene(), id: 'Captain' }), formatSight(sight));
+		director.dispose();
+	});
+
+	it('withSight unitName is passed to formatSight', async () => {
+		const sight = {
+			self: { id: 'Captain', at: [0, 0], facing: [0, -1] as number[] },
+			objects: [
+				{ id: 'Alchemist', at: [-4, 0], tags: ['agent', 'person'], interactable: true },
+			],
+		};
+		const director = await new ArcDirector<Ctx>()
+			.withPriorityQueue({ processInterval: 0, watchInterval: 0, heartbeatStart: 0.01, heartbeatMin: 0.01, maxParallel: 2 })
+			.withFakeInference(goToNamedInteractable())
+			.addStockVerbs()
+			.withDefaultKit(KIT)
+			.withSight({ look: () => sight, unitName: 'm' })
+			.withContext((id) => ({ paragraph: scene(), id }))
+			.addAgent({
+				id: 'Captain',
+				kit: { verbs: ['go_to'], senses: ['sight'] },
+				identity: { name: 'Captain', role: 'Pays attention.' },
+			})
+			.start();
+		const agent = director.agent('Captain')!;
+		assert.equal(
+			agent.senses.sight.gather({ paragraph: scene(), id: 'Captain' }),
+			formatSight(sight, { unitName: 'm' }),
+		);
+		assert.match(agent.senses.sight.description, /distances in m/);
 		director.dispose();
 	});
 
@@ -695,6 +792,54 @@ describe('ArcDirector', () => {
 			release();
 		}
 		await waitFor(() => queue.inFlight === 0);
+		director.dispose();
+	});
+
+	it('solo pinned law runs with no live plan', async () => {
+		const seen:string[] = [];
+		const director = await new ArcDirector<Ctx>()
+			.withFakeInference(() => ({
+				content: JSON.stringify({ head: { verb: 'wait', args: {} } }),
+				toolCalls: [],
+			}))
+			.withPriorityQueue({
+				processInterval: 0,
+				heartbeatStart: 100,
+				heartbeatMin: 100,
+				maxParallel: 1,
+			})
+			.addStockVerbs()
+			.withDefaultKit(KIT)
+			.withKernels(() => ({
+				me: dummyEntity('Miller'),
+				others: [],
+				items: [],
+				cache: new SampleCache(),
+			}))
+			.onVerb((call) => {
+				seen.push(call.verb);
+				return { ok: true, verb: call.verb };
+			})
+			.addSense('scene', {
+				description: 'see',
+				gather: (ctx) => ctx.paragraph,
+			})
+			.withContext((id) => ({ paragraph: scene(), id }))
+			.addAgent({
+				id: 'Miller',
+				skipHeartbeat: true,
+				kit: KIT,
+				identity: { name: 'Miller', role: 'Works the sluice.' },
+				laws: [{
+					name: 'sluice',
+					watch: '1 > 0',
+					plan: 'go_to(EastGate)',
+					pinned: true,
+				}],
+			})
+			.start();
+		director.tick(1, 1);
+		await waitFor(() => seen.includes('go_to'));
 		director.dispose();
 	});
 });

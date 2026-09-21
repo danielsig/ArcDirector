@@ -23,6 +23,7 @@ import type { World } from '../engine/World';
 import { Item, Pickupable } from '../items/components';
 import { listCarried } from '../items/inventory';
 import type { ItemInstance } from '../items/instance';
+import { coinsOf } from '../items/wallet';
 import { yawToForward } from '../engine/math';
 import { enclosureAt, interiorContains } from '../world/interior';
 import { walkDistance as pathMeters } from '../world/path';
@@ -76,6 +77,9 @@ function itemEntity(item:ItemInstance):ExprEntity {
 	if (item.Key) {
 		tags.push('key');
 	}
+	if (/mushroom/i.test(item.name)) {
+		tags.push('mushroom');
+	}
 	return dummyEntity(item.id || id, { name: id, tags });
 }
 
@@ -116,15 +120,27 @@ function nearbyLandmarks(world:World, actor:GameObject, here?:{ x:number; z:numb
 	return ranked.slice(0, 16).map((r) => r.go);
 }
 
-function facingToward(from:GameObject, x:number, z:number):number {
-	const f = yawToForward(from.transform.yaw);
-	const dx = x - from.transform.position.x;
-	const dz = z - from.transform.position.z;
+function facingParts(fx:number, fz:number, fromX:number, fromZ:number, toX:number, toZ:number):{ dot:number; cross:number } {
+	const dx = toX - fromX;
+	const dz = toZ - fromZ;
 	const len = Math.hypot(dx, dz);
 	if (len < 1e-6) {
-		return 1;
+		return { dot: 1, cross: 0 };
 	}
-	return Math.max(-1, Math.min(1, (f.x * dx + f.z * dz) / len));
+	return {
+		dot: Math.max(-1, Math.min(1, (fx * dx + fz * dz) / len)),
+		cross: Math.max(-1, Math.min(1, (fx * dz - fz * dx) / len)),
+	};
+}
+
+function facingToward(from:GameObject, x:number, z:number):number {
+	const f = yawToForward(from.transform.yaw);
+	return facingParts(f.x, f.z, from.transform.position.x, from.transform.position.z, x, z).dot;
+}
+
+function sideToward(from:GameObject, x:number, z:number):number {
+	const f = yawToForward(from.transform.yaw);
+	return facingParts(f.x, f.z, from.transform.position.x, from.transform.position.z, x, z).cross;
 }
 
 function lookupGo(world:World, id:string):GameObject | undefined {
@@ -157,6 +173,7 @@ function poseOf(
 export function kernelsOf(world:World, actor:GameObject, posed:PosedFact[], here?:{ x:number; z:number }) {
 	const hidePlayer = world.playerInperceivable;
 	const me = entityOf(actor);
+	me.fields = { gold: { kind: 'number', value: coinsOf(actor) } };
 	const meAt = here
 		? {
 			ids: new Set([actor.id, bodyName(actor), actor.getComponent(Named)?.id].filter((id):id is string => !!id)),
@@ -250,19 +267,28 @@ export function kernelsOf(world:World, actor:GameObject, posed:PosedFact[], here
 			}
 			if (meAt && meAt.ids.has(a.id)) {
 				const f = yawToForward(actor.transform.yaw);
-				const dx = pb.x - meAt.x;
-				const dz = pb.z - meAt.z;
-				const len = Math.hypot(dx, dz);
-				if (len < 1e-6) {
-					return 1;
-				}
-				return Math.max(-1, Math.min(1, (f.x * dx + f.z * dz) / len));
+				return facingParts(f.x, f.z, meAt.x, meAt.z, pb.x, pb.z).dot;
 			}
 			const from = lookupGo(world, a.id);
 			if (!from) {
 				return 0;
 			}
 			return facingToward(from, pb.x, pb.z);
+		},
+		side: (a:ExprEntity, b:ExprEntity) => {
+			const pb = poseOf(world, posed, b.id, now, meAt);
+			if (!pb) {
+				return 0;
+			}
+			if (meAt && meAt.ids.has(a.id)) {
+				const f = yawToForward(actor.transform.yaw);
+				return facingParts(f.x, f.z, meAt.x, meAt.z, pb.x, pb.z).cross;
+			}
+			const from = lookupGo(world, a.id);
+			if (!from) {
+				return 0;
+			}
+			return sideToward(from, pb.x, pb.z);
 		},
 		inventory: (who:ExprEntity) => {
 			const go = lookupGo(world, who.id);
@@ -385,7 +411,7 @@ export function scanWorld(host:GameHost):void {
 				kind: 'DoorOpened',
 				text: `${name} opened`,
 				tags: ['door', name],
-				major: true,
+				major: false,
 			});
 		}
 		host.doorOpen.set(name, door.open);
@@ -402,7 +428,7 @@ export function scanWorld(host:GameHost):void {
 				kind: 'ChestOpened',
 				text: `${name} opened`,
 				tags: ['chest', name],
-				major: true,
+				major: false,
 			});
 			for (const agent of host.arc?.agents() ?? []) {
 				agent.memory.add({

@@ -220,6 +220,56 @@ function filterEligible(
 	});
 }
 
+function inflectUnit(d:number, unitName:string):string {
+	if (unitName.length <= 1 || d === 1) {
+		return unitName;
+	}
+	if (/^foot$/i.test(unitName)) {
+		return unitName[0] === 'F' ? 'Feet' : 'feet';
+	}
+	return basicPluralize(unitName);
+}
+
+function formatMeasure(d:number, unitName:string):string {
+	const unit = inflectUnit(d, unitName);
+	return `${d}${unit.length > 1 ? ` ${unit}` : unit}`;
+}
+
+function bearingPhrase(bearing:Bearing):string {
+	switch (bearing) {
+		case 'ahead':
+			return 'in front of you';
+		case 'behind':
+			return 'behind you';
+		case 'left':
+			return 'to your left';
+		case 'right':
+			return 'to your right';
+		case 'north':
+			return 'north of you';
+		case 'east':
+			return 'east of you';
+		case 'south':
+			return 'south of you';
+		case 'west':
+			return 'west of you';
+		default:
+			return 'away from you';
+	}
+}
+
+function leftoverHead(
+	obj:SeenObject,
+	text:string,
+	pluralize:(word:string)=>string,
+):string {
+	const n = obj.count;
+	if (n !== undefined && n > 1) {
+		return `${n} ${pluralize(text)}`;
+	}
+	return text;
+}
+
 function leftoverClause(
 	obj:SeenObject,
 	me:SeenObject,
@@ -230,21 +280,28 @@ function leftoverClause(
 		farDistance:number;
 		lodLayers:NonNullable<SightOpts['lodLayers']>;
 		fromName?:string;
+		pluralize:(word:string)=>string;
 	},
 	npcID:string,
 	bearingFn:(obj:SeenObject)=>Bearing,
 	hasFacing:boolean,
 ):string {
-	const text = lodNoun(obj, opts, me, distance, npcID, bearingFn);
-	const d = quantizeDistance(finite(distance(obj, me)), opts.closeness);
-	const unit = `${opts.unitName}${d === 1 ? '' : 's'}`;
+	const text = leftoverHead(
+		obj,
+		lodNoun(obj, opts, me, distance, npcID, bearingFn),
+		opts.pluralize,
+	);
+	const measure = formatMeasure(
+		quantizeDistance(finite(distance(obj, me)), opts.closeness),
+		opts.unitName,
+	);
 	if (opts.fromName) {
-		return `${text} ${d} ${unit} from ${opts.fromName}`;
+		return `${text} ${measure} from ${opts.fromName}`;
 	}
 	if (!hasFacing) {
-		return `${text} ${d} ${unit}`;
+		return `${text} ${measure}`;
 	}
-	return `${text} ${d} ${unit} ${bearingFn(obj)}`;
+	return `${text} ${measure} ${bearingPhrase(bearingFn(obj))}`;
 }
 
 function idsOf(obj:SeenObject):string[] {
@@ -442,7 +499,7 @@ export function formatSightClauses(sight:Sight, opts:SightOpts = {}):SightClause
 		}
 	}
 
-	const leftoverOpts = { closeness, unitName, farDistance, lodLayers, fromName: opts.fromName };
+	const leftoverOpts = { closeness, unitName, farDistance, lodLayers, fromName: opts.fromName, pluralize };
 	const leftovers = [...pool]
 		.sort((a, b) => leftoverRank(b) - leftoverRank(a)
 			|| (b.landmarkTier ?? 0) - (a.landmarkTier ?? 0)

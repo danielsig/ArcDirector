@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { nextTick, ref, watch } from 'vue';
+import { computed, nextTick, ref, watch } from 'vue';
+import { prefs, setPrefs } from '../prefs';
 import type { HudModel } from './hudModel';
 
 const props = defineProps<{
@@ -7,6 +8,25 @@ const props = defineProps<{
 }>();
 
 const logEl = ref<HTMLElement | null>(null);
+const source = ref(prefs().aiLogSource);
+
+const sources = computed(() => {
+	const names = new Set(props.hud.aiLog.map((entry) => entry.name));
+	if (source.value) {
+		names.add(source.value);
+	}
+	return [...names].sort();
+});
+
+const rows = computed(() => (
+	source.value
+		? props.hud.aiLog.filter((entry) => entry.name === source.value)
+		: props.hud.aiLog
+));
+
+function pickSource():void {
+	setPrefs({ aiLogSource: source.value });
+}
 
 function preview(message:string):string {
 	const line = message.replace(/\s+/g, ' ').trim();
@@ -21,7 +41,7 @@ function atBottom(el:HTMLElement):boolean {
 }
 
 watch(
-	() => [props.hud.aiLog.length, props.hud.aiLogOpen] as const,
+	() => [rows.value.length, props.hud.aiLogOpen, source.value] as const,
 	async (curr, prev) => {
 		if (!curr[1]) {
 			return;
@@ -46,12 +66,26 @@ watch(
 		>
 			<div class="head">
 				AI log
+				<select
+					v-model="source"
+					aria-label="Source"
+					@change.stop="pickSource"
+				>
+					<option value="">All</option>
+					<option
+						v-for="name in sources"
+						:key="name"
+						:value="name"
+					>
+						{{ name }}
+					</option>
+				</select>
 				<span class="hint">~ to close</span>
 			</div>
 			<div ref="logEl" class="rows">
-				<div v-if="hud.aiLog.length === 0" class="empty">No AI entries yet.</div>
+				<div v-if="rows.length === 0" class="empty">No AI entries yet.</div>
 				<details
-					v-for="entry in hud.aiLog"
+					v-for="entry in rows"
 					:key="entry.seq"
 					class="row"
 					:open="!!entry.image"
@@ -92,6 +126,9 @@ watch(
 
 .head {
 	flex: 0 0 auto;
+	display: flex;
+	align-items: center;
+	gap: 10px;
 	padding: 8px 14px 6px;
 	font-size: 12px;
 	letter-spacing: 0.14em;
@@ -101,8 +138,20 @@ watch(
 	text-shadow: 0 1px 0 #1a1208;
 }
 
+.head select {
+	font: inherit;
+	font-size: 11px;
+	letter-spacing: 0.04em;
+	text-transform: none;
+	color: #f0e6c8;
+	background: rgba(8, 6, 4, 0.55);
+	border: 1px solid rgba(58, 42, 34, 0.85);
+	padding: 2px 6px;
+	cursor: pointer;
+}
+
 .hint {
-	float: right;
+	margin-left: auto;
 	letter-spacing: 0.04em;
 	text-transform: none;
 	opacity: 0.55;

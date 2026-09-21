@@ -2,8 +2,6 @@ import { isRecord } from '../json.js';
 import {
 	ActionError,
 	JOINS,
-	PLAN_BODY_CAP,
-	isHoistedWhen,
 	type ActionPlan,
 	type Join,
 	type Step,
@@ -42,11 +40,23 @@ function argBase(kind:string):string {
 	return kind.endsWith('?') ? kind.slice(0, -1) : kind;
 }
 
+function rejectMigrationArgs(verb:string, args:Record<string, unknown>):void {
+	const who = typeof args.who === 'string' ? args.who.trim() : '';
+	const watch = typeof args.watch === 'string' ? args.watch.trim() : '';
+	if (verb === 'when' && who) {
+		throw new ActionError('when(who) is issue(who, plan); when is when(watch, plan)');
+	}
+	if (verb === 'issue' && watch) {
+		throw new ActionError('issue(watch) is when(watch, plan); issue is issue(who, plan)');
+	}
+}
+
 export function validateStep(step:Step, registry:VerbRegistry):void {
 	const spec = registry.get(step.verb);
 	if (!spec) {
 		throw new ActionError(`unknown verb '${step.verb}'`);
 	}
+	rejectMigrationArgs(step.verb, step.args);
 	for (const key of Object.keys(step.args)) {
 		if (COORD_KEYS.has(key.toLowerCase())) {
 			throw new ActionError(`coordinate arg '${key}' is not allowed`);
@@ -77,7 +87,7 @@ export function validateStep(step:Step, registry:VerbRegistry):void {
 			if (!isActionPlan(value)) {
 				throw new ActionError(`verb '${step.verb}' arg '${key}' must be a plan`);
 			}
-			validatePlan(value, registry);
+			validatePlan(value, registry.nested());
 		}
 		if (typeof value === 'string' && /^-?\d+(\.\d+)?\s*,\s*-?\d+/.test(value)) {
 			throw new ActionError(`arg '${key}' looks like coordinates`);
@@ -85,24 +95,7 @@ export function validateStep(step:Step, registry:VerbRegistry):void {
 	}
 }
 
-function bodyWidth(plan:ActionPlan):number {
-	let n = 0;
-	let cur:ActionPlan | undefined = plan;
-	while (cur) {
-		if (cur.head && isHoistedWhen(cur.head)) {
-			cur = cur.then?.plan;
-			continue;
-		}
-		n += 1;
-		cur = cur.then?.plan;
-	}
-	return n;
-}
-
 export function validatePlan(plan:ActionPlan, registry:VerbRegistry):void {
-	if (bodyWidth(plan) > PLAN_BODY_CAP) {
-		throw new ActionError(`plan has more than ${PLAN_BODY_CAP} chained steps`);
-	}
 	if (plan.group) {
 		validatePlan(plan.group, registry);
 	}
@@ -132,13 +125,13 @@ export function asStep(raw:unknown, registry:VerbRegistry):Step {
 			throw new ActionError('step.args must be an object');
 		}
 		for (const [k, v] of Object.entries(argsRaw)) {
-			if (v === undefined || v === null) {
+			if (k === 'then' || v === undefined || v === null) {
 				continue;
 			}
 			const kind = spec?.args[k];
 			const base = kind ? argBase(kind) : '';
 			if (base === 'plan') {
-				args[k] = asPlan(v, registry);
+				args[k] = asPlan(v, registry.nested());
 				continue;
 			}
 			if (!isStepArg(v)) {
@@ -152,6 +145,22 @@ export function asStep(raw:unknown, registry:VerbRegistry):Step {
 	return step;
 }
 
+function thenRow(raw:unknown):unknown {
+	if (isRecord(raw) && raw.then !== undefined && raw.then !== null) {
+		return raw.then;
+	}
+	if (!isRecord(raw) || !isRecord(raw.head)) {
+		return undefined;
+	}
+	if (raw.head.then !== undefined && raw.head.then !== null) {
+		return raw.head.then;
+	}
+	if (isRecord(raw.head.args) && raw.head.args.then !== undefined && raw.head.args.then !== null) {
+		return raw.head.args.then;
+	}
+	return undefined;
+}
+
 export function asPlan(raw:unknown, registry:VerbRegistry):ActionPlan {
 	if (!isRecord(raw)) {
 		throw new ActionError('plan is not an object');
@@ -162,6 +171,7 @@ export function asPlan(raw:unknown, registry:VerbRegistry):ActionPlan {
 			return asPlan(nested, registry);
 		}
 	}
+	const thenRaw = thenRow(raw);
 	let plan:ActionPlan;
 	if (raw.group !== undefined) {
 		plan = { head: { verb: 'group', args: {} }, group: asPlan(raw.group, registry) };
@@ -172,17 +182,16 @@ export function asPlan(raw:unknown, registry:VerbRegistry):ActionPlan {
 	else {
 		throw new ActionError('plan is not an object');
 	}
-	if (raw.then !== undefined && raw.then !== null) {
-		if (!isRecord(raw.then)) {
+	if (thenRaw !== undefined) {
+		if (!isRecord(thenRaw)) {
 			throw new ActionError('then is not an object');
 		}
-		const thenRow = raw.then;
-		if (typeof thenRow.join !== 'string') {
+		if (typeof thenRaw.join !== 'string') {
 			throw new ActionError('then.join must be a string');
 		}
 		plan.then = {
-			join: thenRow.join as Join,
-			plan: asPlan(thenRow.plan, registry),
+			join: thenRaw.join as Join,
+			plan: asPlan(thenRaw.plan, registry),
 		};
 	}
 	validatePlan(plan, registry);

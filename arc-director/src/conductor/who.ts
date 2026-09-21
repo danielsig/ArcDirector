@@ -30,18 +30,38 @@ export function withUnitsCatalog(base:Catalog, units:ExprVal, listCap:number):Ca
 	return { ...base, names, listCap };
 }
 
+function asList(entities:ExprEntity[]):ExprVal {
+	return {
+		kind: 'list',
+		value: entities.map((e) => ({ kind: 'entity' as const, value: e })),
+	};
+}
+
 export function crowdKernels(
 	base:HostKernels,
 	crowd:Crowd,
 	conductorID:string,
+	commanderID?:string | null,
 ):HostKernels {
-	const entities = crowd.list().map((u) => unitEntity(u, conductorID));
+	const all = crowd.list();
+	const commander = commanderID ? crowd.get(commanderID) : undefined;
+	const troops = commanderID
+		? all.filter((u) => u.id !== commanderID)
+		: all;
+	const allEntities = all.map((u) => unitEntity(u, conductorID));
+	const troopEntities = troops.map((u) => unitEntity(u, conductorID));
+	const me = commander
+		? unitEntity(commander, conductorID)
+		: (base.me ?? dummyEntity(conductorID, { name: conductorID, tags: ['agent'] }));
 	return {
 		...base,
+		me,
 		listCap: Math.max(crowd.size, 1),
 		bindings: {
 			...base.bindings,
-			units: { kind: 'list', value: entities.map((e) => ({ kind: 'entity' as const, value: e })) },
+			me: { kind: 'entity', value: me },
+			units: asList(troopEntities),
+			allUnits: asList(allEntities),
 		},
 	};
 }
@@ -100,6 +120,11 @@ export function planArg(raw:unknown, registry:VerbRegistry):ActionPlan | undefin
 	return undefined;
 }
 
-export function buildCrowdCatalog(base:HostKernels, crowd:Crowd, conductorID:string):Catalog {
-	return buildCatalog(crowdKernels(base, crowd, conductorID));
+export function buildCrowdCatalog(
+	base:HostKernels,
+	crowd:Crowd,
+	conductorID:string,
+	commanderID?:string | null,
+):Catalog {
+	return buildCatalog(crowdKernels(base, crowd, conductorID, commanderID));
 }

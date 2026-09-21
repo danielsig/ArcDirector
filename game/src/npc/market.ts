@@ -107,46 +107,17 @@ export const MARKET_SEEDS:AgentSpec[] = [
 	vendorSeed('Weaver', 'WeaverStall', 'Scarf', 6, 4, 'Loaf', 14, ['sharp', 'proud', 'thrifty']),
 	vendorSeed('Potter', 'PotterStall', 'Bowl', 4, 2, 'Scarf', 16, ['quiet', 'kind', 'dusty']),
 	vendorSeed('Cutler', 'CutlerStall', 'Knife', 7, 4, 'Bowl', 22, ['gruff', 'honest', 'impatient']),
-	customerSeed(
-		'Mira',
-		['Loaf'],
-		4,
-		'EastGate',
-		'You have 4 gold. ',
-		['shy', 'hungry', 'polite'],
-		'I want a Loaf. I have 4 gold.',
-	),
-	customerSeed(
-		'Tomas',
-		['Knife', 'Bowl'],
-		15,
-		'WestGate',
-		'You want a Knife and a Bowl. ',
-		['brisk', 'practical', 'loud'],
-		'I want a Knife and a Bowl. Then WestGate.',
-	),
-	customerSeed(
-		'Nell',
-		['Scarf'],
-		3,
-		'WestGate',
-		'You sell Apple. You want a Scarf. ',
-		['wily', 'cheerful', 'broke'],
-		'I have Apples to sell. I want a Scarf. I am short on gold. Then WestGate.',
-	),
-	customerSeed(
-		'Rook',
-		['Loaf'],
-		8,
-		'WestGate',
-		'',
-		['calm', 'brief', 'fed'],
-		'I want a Loaf. I have enough gold. Then leave through WestGate.',
-	),
-	guardSeed('Holt', 'WestGate', ['stern', 'watchful']),
-	guardSeed('Pike', 'WestGate', ['quiet', 'sharp']),
-	guardSeed('Brant', 'EastGate', ['loud', 'firm']),
-	guardSeed('Cass', 'EastGate', ['calm', 'unsmiling']),
+];
+
+export const HIVE_UNITS:{ id:string; tags:string[] }[] = [
+	{ id: 'Mira', tags: ['Shopper', 'Loaf', 'EastGate'] },
+	{ id: 'Tomas', tags: ['Shopper', 'Knife', 'Bowl', 'WestGate'] },
+	{ id: 'Nell', tags: ['Shopper', 'Scarf', 'WestGate'] },
+	{ id: 'Rook', tags: ['Shopper', 'Loaf', 'WestGate'] },
+	{ id: 'Holt', tags: ['Guard', 'WestGate'] },
+	{ id: 'Pike', tags: ['Guard', 'WestGate'] },
+	{ id: 'Brant', tags: ['Guard', 'EastGate'] },
+	{ id: 'Cass', tags: ['Guard', 'EastGate'] },
 ];
 
 const POOL_NAMES = ['Pip', 'Gwen', 'Cal', 'Ivo', 'Bess', 'Quin', 'Odo', 'Faye', 'Lars', 'Nia', 'Wim', 'Tess'];
@@ -243,7 +214,7 @@ export function seedFromBody(go:GameObject):AgentSpec | null {
 	);
 }
 
-export function spawnRandomCustomer(world:World):{ go:GameObject; seed:AgentSpec } | null {
+export function spawnRandomCustomer(world:World):{ go:GameObject; id:string; tags:string[] } | null {
 	const id = pickName(world);
 	if (!id) {
 		return null;
@@ -275,7 +246,9 @@ export function spawnRandomCustomer(world:World):{ go:GameObject; seed:AgentSpec
 		marketNPC: { kind: 'customer', wants: [...tmpl.wants], leaveGate },
 	};
 	const go = spawnNPC(world, chunk as Chunk, opts);
-	const extra = tmpl.loot ? `You also sell ${tmpl.loot.name}. ` : '';
-	const seed = customerSeed(id, tmpl.wants, wallet, leaveGate, `${tmpl.note} ${extra}`, ['new', 'eager'], tmpl.note);
-	return { go, seed };
+	return {
+		go,
+		id,
+		tags: ['Shopper', ...tmpl.wants, leaveGate],
+	};
 }

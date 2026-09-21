@@ -41,6 +41,8 @@ export type AgentSpec<HostCtx = unknown> = {
 	maxLaws?:number;
 	/** Override director handler cooldown (game seconds). */
 	cooldown?:number;
+	/** Host-set commander body. Must be a unit on this crowd. */
+	commander?:string;
 };
 
 export type VerbCall<HostCtx = unknown> = {
@@ -92,7 +94,7 @@ export function emptyInferClock():InferClock {
 	};
 }
 
-/** Host measurements for watches. Director injects `cache`, `hasHeard`, `prevThought`, and `prevActions`; do not commit `cache`. */
+/** Host measurements for watches. Director injects `cache`, `hasHeard`, and `prev`; do not commit `cache`. */
 export type KernelSource<HostCtx> = (
 	ctx:HostCtx,
 )=>Omit<HostKernels, 'cache'> & { cache?:SampleCache };

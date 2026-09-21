@@ -1,12 +1,13 @@
 import { markRaw } from 'vue';
 import { PlayerInput } from '../actors/PlayerInput';
-import { HumanBody, Named, SpeechBubble, Vitals, Wallet } from './components';
+import { HumanBody, HumanSprite, Named, SpeechBubble, Vitals, Wallet } from './components';
 import type { GameObject } from './GameObject';
 import { worldToChunk, type World } from './World';
 import type { Renderer } from '@arc-director/kindling';
 import { CELL_SIZE, CHUNK_SIZE } from '../world/constants';
 import { countDef, slotItem } from '../items/inventory';
 import { nearestPickup, pickupLabel } from '../items/pickup';
+import { characterHeight } from '../render/artCache';
 import type { HudModel, MinimapCell } from '../ui/hudModel';
 import type { GameHost } from '../npc/adapter';
 
@@ -92,7 +93,49 @@ function rebuildMinimap(world:World, hud:HudModel, x:number, z:number):void {
 	m.tileRev += 1;
 }
 
-const HEAD_Y = 1.42;
+/** Same XZ lead as the character billboard in `present.ts`. */
+const SPRITE_LEAD = 0.11;
+/** Extra meters above the unflattened sprite crown. */
+const HEAD_PAD = 0.28;
+/** Above the flat corpse in present.ts (0.36) so the name clears the body. */
+const DOWNED_Y = 0.48;
+
+function cameraPitch(view:Renderer):number {
+	return view.findCamera()?.gameObject.transform.pitch ?? 0;
+}
+
+/** Visual crown in meters above feet. Matches `present.ts` unflatten. */
+function spriteCrownY(go:GameObject, pitch:number):number {
+	const sprite = go.getComponent(HumanSprite);
+	const heightM = sprite && sprite.height > 0
+		? sprite.height
+		: characterHeight(sprite?.kind ?? 'player');
+	return (1 / Math.max(Math.cos(Math.abs(pitch)), 0.45)) * heightM - 0.02;
+}
+
+function overheadY(go:GameObject, pitch:number, downed:boolean):number {
+	return downed ? DOWNED_Y : spriteCrownY(go, pitch) + HEAD_PAD;
+}
+
+function projectOverhead(
+	go:GameObject,
+	height:number,
+	view:Renderer,
+):{ x:number; y:number; visible:boolean } {
+	const p = go.transform.position;
+	const cam = view.findCamera()?.gameObject.transform.position;
+	if (!cam) {
+		return view.projectToCanvas(p.x, p.y + height, p.z);
+	}
+	const dx = cam.x - p.x;
+	const dz = cam.z - p.z;
+	const len = Math.hypot(dx, dz) || 1;
+	return view.projectToCanvas(
+		p.x + (dx / len) * SPRITE_LEAD,
+		p.y + height,
+		p.z + (dz / len) * SPRITE_LEAD,
+	);
+}
 
 function patchOverhead(
 	world:World,
@@ -100,7 +143,15 @@ function patchOverhead(
 	view:Renderer,
 	npcNotes:{ id:string; text:string }[],
 ):void {
-	const byID = new Map<string, { go:GameObject; text:string; status:string; height:number }>();
+	const pitch = cameraPitch(view);
+	const byID = new Map<string, {
+		go:GameObject;
+		text:string;
+		status:string;
+		height:number;
+		hp:number;
+		maxHP:number;
+	}>();
 	world.forEachComponent(SpeechBubble, (bubble, go) => {
 		if (!bubble.text || world.time >= bubble.until) {
 			return;
@@ -109,7 +160,9 @@ function patchOverhead(
 			go,
 			text: bubble.text,
 			status: '',
-			height: bubble.height,
+			height: overheadY(go, pitch, false),
+			hp: 0,
+			maxHP: 0,
 		});
 	});
 	for (const note of npcNotes) {
@@ -129,21 +182,46 @@ function patchOverhead(
 				go,
 				text: '',
 				status: note.text,
-				height: HEAD_Y,
+				height: overheadY(go, pitch, false),
+				hp: 0,
+				maxHP: 0,
 			});
 		}
 	}
+	world.forEachComponent(Vitals, (vitals, go) => {
+		if (go.id === 'Player' || !go.getComponent(HumanBody)) {
+			return;
+		}
+		const barY = overheadY(go, pitch, vitals.hp <= 0);
+		const row = byID.get(go.id);
+		if (row) {
+			row.hp = vitals.hp;
+			row.maxHP = vitals.maxHP;
+			row.height = barY;
+		}
+		else {
+			byID.set(go.id, {
+				go,
+				text: '',
+				status: '',
+				height: barY,
+				hp: vitals.hp,
+				maxHP: vitals.maxHP,
+			});
+		}
+	});
 
 	const speech = hud.speech;
 	let n = 0;
 	for (const [id, row] of byID) {
-		const p = row.go.transform.position;
-		const screen = view.projectToCanvas(p.x, p.y + row.height, p.z);
+		const screen = projectOverhead(row.go, row.height, view);
 		if (n < speech.length) {
 			const slot = speech[n];
 			slot.id = id;
 			slot.text = row.text;
 			slot.status = row.status;
+			slot.hp = row.hp;
+			slot.maxHP = row.maxHP;
 			slot.x = screen.x;
 			slot.y = screen.y;
 			slot.visible = screen.visible;
@@ -153,6 +231,8 @@ function patchOverhead(
 				id,
 				text: row.text,
 				status: row.status,
+				hp: row.hp,
+				maxHP: row.maxHP,
 				x: screen.x,
 				y: screen.y,
 				visible: screen.visible,
@@ -271,9 +351,23 @@ export function statusLabels(host:GameHost):{ id:string; text:string }[] {
 
 export function patchInfer(host:GameHost, hud:HudModel):void {
 	const infer = host.arc?.infer;
-	if (!infer) {
-		return;
-	}
+	const queue = host.arc?.mindQueue();
+	const now = host.world.time;
+	const rows = host.arc?.agents() ?? [];
+	const next = rows.map((agent) => {
+		const last = agent.lastTacticalAt;
+		return {
+			id: agent.id,
+			name: agent.identity.name || agent.id,
+			pulse: queue?.heartbeatSeconds(agent.id) ?? null,
+			ago: Number.isFinite(last) ? Math.max(0, now - last) : null,
+			thinking: queue?.isThinking(agent.id) ?? false,
+		};
+	});
+	next.sort((a, b) => a.name.localeCompare(b.name));
+	hud.heartrates = next;
+
+	if (!infer) return;
 	hud.inferCalls = infer.calls;
 	hud.inferContextMs = infer.contextMs;
 	hud.inferGenerateMs = infer.generateMs;

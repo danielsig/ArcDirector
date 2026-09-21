@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { VerbRegistry, registerStockVerbs } from '../action/registry.js';
 import { FakeProvider, goToNamedInteractable, hashEmbed } from '../inference/fake.js';
+import { chatContentText } from '../inference/provider.js';
 import { formatSight } from '../perception/sight.js';
 import type { SeenObject } from '../perception/types.js';
 import { Agent } from './agent.js';
@@ -53,6 +54,16 @@ function perception():{ senses:Record<string, Sense<Ctx>>; tools:Record<string, 
 		},
 		tools: {},
 	};
+}
+
+async function waitUntil(fn:()=>boolean, ms = 400):Promise<void> {
+	const t0 = Date.now();
+	while (!fn()) {
+		if (Date.now() - t0 > ms) {
+			throw new Error('timeout');
+		}
+		await new Promise((r) => setTimeout(r, 5));
+	}
 }
 
 describe('Agent', () => {
@@ -268,6 +279,37 @@ describe('Agent', () => {
 			model: 'fake',
 			toolRoundCap: 0,
 			planRetryCap: 2,
+		});
+		const plan = await agent.tick(1);
+		assert.equal(calls, 2);
+		assert.equal(plan?.head.verb, 'go_to');
+		assert.equal(plan?.head.args.name, 'EastGate');
+	});
+
+	it('does not keep verb-less prose on the repair thread', async () => {
+		let calls = 0;
+		const scene = paragraph();
+		const provider = new FakeProvider((req) => {
+			calls += 1;
+			if (calls === 1) {
+				return { content: 'I will follow the Player now.', toolCalls: [] };
+			}
+			assert.equal(req.messages.some((m) => String(m.content).includes('I will follow')), false);
+			assert.match(String(req.messages[req.messages.length - 1]?.content), /not a valid ActionPlan/);
+			return { content: 'go_to(EastGate)', toolCalls: [] };
+		});
+		const agent = new Agent<Ctx>({
+			id: 'Guard',
+			identity: { name: 'Guard', role: 'guard' },
+			goals: [{ text: 'Go to EastGate' }],
+			provider,
+			verbs: registerStockVerbs(new VerbRegistry()),
+			...perception(),
+			context: () => ({ paragraph: scene }),
+			model: 'fake',
+			toolRoundCap: 0,
+			planRetryCap: 2,
+			planText: true,
 		});
 		const plan = await agent.tick(1);
 		assert.equal(calls, 2);
@@ -512,8 +554,8 @@ describe('Agent', () => {
 			};
 		});
 		const agent = new Agent<Ctx>({
-			id: 'Servant',
-			identity: { name: 'Servant', role: 'You serve Player.' },
+			id: 'Assistant',
+			identity: { name: 'Assistant', role: 'You assist Player.' },
 			provider,
 			verbs: registerStockVerbs(new VerbRegistry()),
 			...perception(),
@@ -595,15 +637,15 @@ describe('Agent', () => {
 	it('applies identity and goals from the plan JSON', async () => {
 		const provider = new FakeProvider(() => ({
 			content: JSON.stringify({
-				identity: { name: 'Servant', role: 'Night watch of EastGate.' },
+				identity: { name: 'Assistant', role: 'Night watch of EastGate.' },
 				goals: [{ text: 'Hold EastGate.', priority: 3 }],
 				head: { verb: 'wait', args: { seconds: 8 } },
 			}),
 			toolCalls: [],
 		}));
 		const agent = new Agent<Ctx>({
-			id: 'Servant',
-			identity: { name: 'Servant', role: 'You serve Player.', traits: ['obedient'] },
+			id: 'Assistant',
+			identity: { name: 'Assistant', role: 'You assist Player.', traits: ['obedient'] },
 			goals: [{ text: 'Follow Player', priority: 2 }],
 			provider,
 			verbs: registerStockVerbs(new VerbRegistry()),
@@ -633,8 +675,8 @@ describe('Agent', () => {
 			toolCalls: [],
 		}));
 		const agent = new Agent<Ctx>({
-			id: 'Servant',
-			identity: { name: 'Servant', role: 'You serve Player.', traits: ['obedient'] },
+			id: 'Assistant',
+			identity: { name: 'Assistant', role: 'You assist Player.', traits: ['obedient'] },
 			provider,
 			verbs: registerStockVerbs(new VerbRegistry()),
 			...perception(),
@@ -663,8 +705,8 @@ describe('Agent', () => {
 			toolCalls: [],
 		}));
 		const agent = new Agent<Ctx>({
-			id: 'Servant',
-			identity: { name: 'Servant', role: 'You serve Player.', traits: ['obedient'] },
+			id: 'Assistant',
+			identity: { name: 'Assistant', role: 'You assist Player.', traits: ['obedient'] },
 			provider,
 			verbs: registerStockVerbs(new VerbRegistry()),
 			...perception(),
@@ -677,7 +719,7 @@ describe('Agent', () => {
 		});
 		const plan = await agent.tick(1);
 		assert.equal(plan?.head.verb, 'set_identity');
-		assert.equal(agent.identity.role, 'You serve Player.');
+		assert.equal(agent.identity.role, 'You assist Player.');
 		const result = await agent.perform(plan!.head);
 		assert.equal(result.ok, true);
 		assert.equal(result.verb, 'set_identity');
@@ -687,8 +729,8 @@ describe('Agent', () => {
 
 	it('renames only when set_identity also changes role', async () => {
 		const agent = new Agent<Ctx>({
-			id: 'Servant',
-			identity: { name: 'Servant', role: 'You serve Player.' },
+			id: 'Assistant',
+			identity: { name: 'Assistant', role: 'You assist Player.' },
 			provider: new FakeProvider(() => ({
 				content: JSON.stringify({ head: { verb: 'wait', args: { seconds: 1 } } }),
 				toolCalls: [],
@@ -708,13 +750,13 @@ describe('Agent', () => {
 		});
 		assert.equal(blocked.ok, false);
 		assert.equal(blocked.reason, 'name only changes with a new role');
-		assert.equal(agent.identity.name, 'Servant');
+		assert.equal(agent.identity.name, 'Assistant');
 		const sameRole = await agent.perform({
 			verb: 'set_identity',
-			args: { name: 'Lira', role: 'You serve Player.' },
+			args: { name: 'Lira', role: 'You assist Player.' },
 		});
 		assert.equal(sameRole.ok, false);
-		assert.equal(agent.identity.name, 'Servant');
+		assert.equal(agent.identity.name, 'Assistant');
 		const ok = await agent.perform({
 			verb: 'set_identity',
 			args: { name: 'Lira', role: 'I joined the abbey watch.' },
@@ -733,8 +775,8 @@ describe('Agent', () => {
 			toolCalls: [],
 		}));
 		const agent = new Agent<Ctx>({
-			id: 'Servant',
-			identity: { name: 'Servant', role: 'You serve Player.' },
+			id: 'Assistant',
+			identity: { name: 'Assistant', role: 'You assist Player.' },
 			provider,
 			verbs: registerStockVerbs(new VerbRegistry()),
 			...perception(),
@@ -759,8 +801,8 @@ describe('Agent', () => {
 			toolCalls: [],
 		}));
 		const agent = new Agent<Ctx>({
-			id: 'Servant',
-			identity: { name: 'Servant', role: 'You serve Player.' },
+			id: 'Assistant',
+			identity: { name: 'Assistant', role: 'You assist Player.' },
 			provider,
 			verbs: registerStockVerbs(new VerbRegistry()),
 			...perception(),
@@ -772,7 +814,7 @@ describe('Agent', () => {
 			strategicInterval: 0,
 		});
 		await agent.tick(1);
-		assert.equal(agent.identity.name, 'Servant');
+		assert.equal(agent.identity.name, 'Assistant');
 	});
 
 	it('revises identity on a major event even when strategicInterval is 0', async () => {
@@ -794,8 +836,8 @@ describe('Agent', () => {
 			};
 		});
 		const agent = new Agent<Ctx>({
-			id: 'Servant',
-			identity: { name: 'Servant', role: 'You serve Player.' },
+			id: 'Assistant',
+			identity: { name: 'Assistant', role: 'You assist Player.' },
 			goals: [{ text: 'Follow Player', priority: 2 }],
 			provider,
 			verbs: registerStockVerbs(new VerbRegistry()),
@@ -817,6 +859,81 @@ describe('Agent', () => {
 		assert.equal(calls, 2);
 		assert.equal(agent.identity.role, 'I hold EastGate now.');
 		assert.equal(agent.goals[0]?.text, 'Hold EastGate.');
+	});
+
+	it('skips JSON goal revision when planText is on', async () => {
+		let calls = 0;
+		const provider = new FakeProvider(() => {
+			calls += 1;
+			return { content: 'wait(seconds=1)', toolCalls: [] };
+		});
+		const agent = new Agent<Ctx>({
+			id: 'Assistant',
+			identity: { name: 'Assistant', role: 'You assist Player.' },
+			goals: [{ text: 'Follow Player', priority: 2 }],
+			provider,
+			verbs: registerStockVerbs(new VerbRegistry()),
+			...perception(),
+			context: () => ({ paragraph: paragraph() }),
+			model: 'fake',
+			heartbeat: 0,
+			toolRoundCap: 0,
+			planRetryCap: 0,
+			strategicInterval: 0,
+			planText: true,
+		});
+		agent.pushEvent({
+			kind: 'HeardSpeech',
+			text: 'Player says to you: "Go to the waterfall."',
+			tags: ['speech', 'Player'],
+			major: true,
+		});
+		await agent.tick(1);
+		assert.equal(calls, 1);
+		assert.equal(agent.goals[0]?.text, 'Follow Player');
+	});
+
+	it('greps the world encyclopedia for leftover English', async () => {
+		let grepped = '';
+		const provider = new FakeProvider((req) => {
+			const hasTool = req.messages.some((m) => m.role === 'tool');
+			if (!hasTool && req.tools?.some((t) => t.name === 'grep_world_encyclopedia')) {
+				assert.match(String(req.messages.find((m) => m.role === 'system')?.content), /grep_world_encyclopedia is a tool this think/);
+				return {
+					content: null,
+					toolCalls: [{
+						id: 'g1',
+						name: 'grep_world_encyclopedia',
+						arguments: JSON.stringify({ query: 'trees' }),
+					}],
+				};
+			}
+			const tool = req.messages.find((m) => m.role === 'tool');
+			grepped = String(tool?.content ?? '');
+			return goToNamedInteractable()(req);
+		});
+		const agent = new Agent<Ctx>({
+			id: 'Guard',
+			identity: { name: 'Guard', role: 'guard' },
+			goals: [{ text: 'Find the forest' }],
+			provider,
+			verbs: registerStockVerbs(new VerbRegistry()),
+			...perception(),
+			context: () => ({ paragraph: paragraph() }),
+			model: 'fake',
+			hideObserve: true,
+			toolRoundCap: 1,
+			planRetryCap: 0,
+			strategicInterval: 0,
+			encyclopedia: [{
+				name: 'Tree',
+				aliases: ['trees'],
+				text: 'Landmark type. Many; not reachable with go_to.',
+			}],
+		});
+		await agent.tick(1);
+		assert.match(grepped, /^Tree \(trees\)/);
+		assert.match(grepped, /not reachable with go_to/);
 	});
 
 	it('omits see_map when the host has no map or the model cannot see', async () => {
@@ -920,6 +1037,52 @@ describe('Agent', () => {
 		const plan = await agent.tick(1);
 		assert.equal(calls, 2);
 		assert.equal(plan?.head.verb, 'go_to');
+	});
+
+	it('does not treat see_map plan text as a tool call', async () => {
+		let calls = 0;
+		let snaps = 0;
+		const provider = new FakeProvider((req) => {
+			calls += 1;
+			if (calls === 1) {
+				return { content: 'see_map({zoom:1})', toolCalls: [] };
+			}
+			const last = req.messages[req.messages.length - 1];
+			assert.equal(last?.role, 'user');
+			assert.match(String(last?.content), /see_map is a tool, not a verb/);
+			assert.equal(req.messages.some((m) => m.role === 'tool'), false);
+			return { content: 'wait(seconds=1)', toolCalls: [] };
+		});
+		const agent = new Agent<Ctx>({
+			id: 'Guard',
+			identity: { name: 'Guard', role: 'guard' },
+			goals: [{ text: 'Go to EastGate' }],
+			provider,
+			verbs: registerStockVerbs(new VerbRegistry()),
+			...perception(),
+			context: () => ({ paragraph: paragraph() }),
+			model: 'fake',
+			toolRoundCap: 0,
+			planRetryCap: 1,
+			planText: true,
+			vision: true,
+			map: {
+				snapshot: () => {
+					snaps += 1;
+					return {
+						image: 'data:image/png;base64,xx',
+						width: 8,
+						height: 8,
+						toPixel: () => ({ u: 0, v: 0 }),
+						marks: [],
+					};
+				},
+			},
+		});
+		const plan = await agent.tick(1);
+		assert.equal(calls, 2);
+		assert.equal(snaps, 0);
+		assert.equal(plan?.head.verb, 'wait');
 	});
 
 	it('puts map.you in the standing see_map hint', async () => {
@@ -1199,5 +1362,202 @@ describe('Agent', () => {
 		assert.ok(q.scoreWatches('Guard', cat) > 0.05);
 		q.beginThink('Guard');
 		assert.equal(q.scoreWatches('Guard', cat), 0);
+	});
+
+	it('replaces a live plan when the current verb did not change during think', async () => {
+		const think = withPriorityQueue({ watchInterval: 100, processInterval: 0, maxParallel: 2 });
+		let releaseGoTo:(()=>void) | undefined;
+		const chats:Array<{ enableThinking?:boolean; fakeThought?:boolean; user:string }> = [];
+		const replies = [
+			JSON.stringify({ head: { verb: 'go_to', args: { name: 'EastGate' } } }),
+			JSON.stringify({ head: { verb: 'wait', args: {} } }),
+		];
+		const provider = new FakeProvider((req) => {
+			const lastUser = [...req.messages].reverse().find((m) => m.role === 'user');
+			chats.push({
+				enableThinking: req.enableThinking,
+				fakeThought: req.fakeThought,
+				user: chatContentText(lastUser?.content),
+			});
+			return { content: replies.shift() ?? '', toolCalls: [] };
+		});
+		const agent = new Agent<Ctx>({
+			id: 'Guard',
+			identity: { name: 'Guard', role: 'guard' },
+			provider,
+			verbs: registerStockVerbs(new VerbRegistry()),
+			...perception(),
+			context: () => ({ paragraph: paragraph() }),
+			execute: async (step) => {
+				if (step.verb === 'go_to') {
+					await new Promise<void>((r) => {
+						releaseGoTo = r;
+					});
+					return { ok: true, verb: 'go_to' };
+				}
+				return { ok: true, verb: step.verb };
+			},
+			abortPlan: () => {
+				releaseGoTo?.();
+			},
+			...think,
+			heartbeat: 0,
+			model: 'fake',
+			toolRoundCap: 0,
+			planRetryCap: 0,
+		});
+		void agent.tick(1);
+		await waitUntil(() => agent.toJSON().lastVerb === 'go_to');
+		const next = await agent.tick(2);
+		assert.equal(next?.head.verb, 'wait');
+		assert.equal(agent.lastPlan?.head.verb, 'wait');
+		assert.equal(chats.length, 2);
+		assert.equal(chats[1]?.enableThinking, undefined);
+		assert.equal(chats[1]?.fakeThought, undefined);
+		assert.equal(chats[1]?.user.includes('live verb changed'), false);
+	});
+
+	it('asks again with a canned thought when the live verb changed, and confirm keeps the first plan', async () => {
+		const think = withPriorityQueue({ watchInterval: 100, processInterval: 0, maxParallel: 2 });
+		const gates = new Map<string, (result:{ ok:boolean; interrupted?:boolean; verb:string })=>void>();
+		let hangThink:((res:{ content:string; toolCalls:[] })=>void) | undefined;
+		const chats:Array<{ enableThinking?:boolean; fakeThought?:boolean; user:string }> = [];
+		const provider = new FakeProvider((req) => {
+			const lastUser = [...req.messages].reverse().find((m) => m.role === 'user');
+			chats.push({
+				enableThinking: req.enableThinking,
+				fakeThought: req.fakeThought,
+				user: chatContentText(lastUser?.content),
+			});
+			if (chats.length === 1) {
+				return {
+					content: JSON.stringify({
+						head: { verb: 'go_to', args: { name: 'EastGate' } },
+						then: { join: 'then', plan: { head: { verb: 'pick_up', args: { name: 'Lantern' } } } },
+					}),
+					toolCalls: [],
+				};
+			}
+			if (chats.length === 2) {
+				return new Promise((resolve) => {
+					hangThink = resolve;
+				});
+			}
+			return { content: 'looks good', toolCalls: [] };
+		});
+		const agent = new Agent<Ctx>({
+			id: 'Guard',
+			identity: { name: 'Guard', role: 'guard' },
+			provider,
+			verbs: registerStockVerbs(new VerbRegistry()),
+			...perception(),
+			context: () => ({ paragraph: paragraph() }),
+			execute: (step) => {
+				if (step.verb === 'go_to' || step.verb === 'pick_up') {
+					return new Promise((resolve) => {
+						gates.set(step.verb, resolve);
+					});
+				}
+				return Promise.resolve({ ok: true, verb: step.verb });
+			},
+			abortPlan: () => {
+				for (const [verb, resolve] of gates) {
+					resolve({ ok: false, interrupted: true, verb });
+				}
+				gates.clear();
+			},
+			...think,
+			heartbeat: 0,
+			model: 'fake',
+			toolRoundCap: 0,
+			planRetryCap: 0,
+		});
+		void agent.tick(1);
+		await waitUntil(() => gates.has('go_to'));
+		const second = agent.tick(2);
+		await waitUntil(() => hangThink !== undefined);
+		gates.get('go_to')!({ ok: true, verb: 'go_to' });
+		await waitUntil(() => agent.toJSON().lastVerb === 'pick_up');
+		hangThink!({
+			content: JSON.stringify({ head: { verb: 'wander', args: {} } }),
+			toolCalls: [],
+		});
+		const plan = await second;
+		assert.equal(plan?.head.verb, 'wander');
+		assert.equal(agent.lastPlan?.head.verb, 'wander');
+		assert.equal(chats.length, 3);
+		assert.equal(chats[2]?.enableThinking, undefined);
+		assert.equal(chats[2]?.fakeThought, true);
+		assert.match(chats[2]?.user ?? '', /live verb changed from go_to to pick_up/);
+		assert.match(chats[2]?.user ?? '', /Do not think again/);
+	});
+
+	it('uses a new verb list from the canned-thought follow-up when the live verb changed', async () => {
+		const think = withPriorityQueue({ watchInterval: 100, processInterval: 0, maxParallel: 2 });
+		const gates = new Map<string, (result:{ ok:boolean; interrupted?:boolean; verb:string })=>void>();
+		let hangThink:((res:{ content:string; toolCalls:[] })=>void) | undefined;
+		const chats:Array<{ fakeThought?:boolean }> = [];
+		const provider = new FakeProvider((req) => {
+			chats.push({ fakeThought: req.fakeThought });
+			if (chats.length === 1) {
+				return {
+					content: JSON.stringify({
+						head: { verb: 'go_to', args: { name: 'EastGate' } },
+						then: { join: 'then', plan: { head: { verb: 'pick_up', args: { name: 'Lantern' } } } },
+					}),
+					toolCalls: [],
+				};
+			}
+			if (chats.length === 2) {
+				return new Promise((resolve) => {
+					hangThink = resolve;
+				});
+			}
+			return {
+				content: JSON.stringify({ head: { verb: 'wait', args: {} } }),
+				toolCalls: [],
+			};
+		});
+		const agent = new Agent<Ctx>({
+			id: 'Guard',
+			identity: { name: 'Guard', role: 'guard' },
+			provider,
+			verbs: registerStockVerbs(new VerbRegistry()),
+			...perception(),
+			context: () => ({ paragraph: paragraph() }),
+			execute: (step) => {
+				if (step.verb === 'go_to' || step.verb === 'pick_up') {
+					return new Promise((resolve) => {
+						gates.set(step.verb, resolve);
+					});
+				}
+				return Promise.resolve({ ok: true, verb: step.verb });
+			},
+			abortPlan: () => {
+				for (const [verb, resolve] of gates) {
+					resolve({ ok: false, interrupted: true, verb });
+				}
+				gates.clear();
+			},
+			...think,
+			heartbeat: 0,
+			model: 'fake',
+			toolRoundCap: 0,
+			planRetryCap: 0,
+		});
+		void agent.tick(1);
+		await waitUntil(() => gates.has('go_to'));
+		const second = agent.tick(2);
+		await waitUntil(() => hangThink !== undefined);
+		gates.get('go_to')!({ ok: true, verb: 'go_to' });
+		await waitUntil(() => agent.toJSON().lastVerb === 'pick_up');
+		hangThink!({
+			content: JSON.stringify({ head: { verb: 'wander', args: {} } }),
+			toolCalls: [],
+		});
+		const plan = await second;
+		assert.equal(plan?.head.verb, 'wait');
+		assert.equal(chats.length, 3);
+		assert.equal(chats[2]?.fakeThought, true);
 	});
 });

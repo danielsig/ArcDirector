@@ -1,7 +1,8 @@
-import { pascalCase, type ActionResult, type Step } from 'arc-director';
+import { isCrowdConductor, pascalCase, type ActionResult, type Step } from 'arc-director';
 import { NPCInput } from '../actors/NPCInput';
 import {
 	BODY_SLOTS,
+	BoxCollider,
 	Bridge,
 	HumanBody,
 	HumanSprite,
@@ -13,10 +14,14 @@ import {
 	Merchant,
 	Door,
 	Wanted,
+	Vitals,
+	Celebrating,
 	type BodySlot,
 } from '../engine/components';
 import type { GameObject } from '../engine/GameObject';
+import type { World } from '../engine/World';
 import { Harvest, Pickupable } from '../items/components';
+import { getDef } from '../items/defs';
 import {
 	distXZ,
 	findCarried,
@@ -26,6 +31,7 @@ import {
 	tryInsert,
 	compactName,
 	actorIs,
+	healActor,
 } from '../items/inventory';
 import { cloneItem, type ItemInstance } from '../items/instance';
 import { coinsOf, findSaleItem, noteWant, priceFor, transferCoins } from '../items/wallet';
@@ -37,11 +43,22 @@ import type { GameHost } from './adapter';
 import { bodyName, findBody } from './names';
 import { poseFact } from './kernels';
 import { doExamine } from './perception';
+import { applyHit } from './hitFeel';
+import {
+	agilityOf,
+	fightLabel,
+	fightRole,
+	findFightTarget,
+	isRivalBody,
+	type FightRole,
+} from './fight';
+import { lineClear } from '../world/path';
 import type { HostCtx } from './types';
 import {
 	formatWanderSeen,
 	namesAlongPath,
 	pickWanderPoint,
+	wanderFilterHint,
 	wanderUntilMet,
 } from './wander';
 
@@ -51,6 +68,15 @@ function findItem(actor:GameObject, name:string):ItemInstance | null {
 
 function asSlot(raw:string):BodySlot | undefined {
 	return (BODY_SLOTS as readonly string[]).includes(raw) ? raw as BodySlot : undefined;
+}
+
+function heldFromPlayer(ctx:HostCtx, name:string, target?:GameObject):boolean {
+	const bond = ctx.actor.getComponent(Companion);
+	if (!bond?.hold) {
+		return false;
+	}
+	const dest = target ? bodyName(target) : '';
+	return name === bond.targetID || name === 'Player' || dest === bond.targetID || dest === 'Player';
 }
 
 function setOverhead(host:GameHost, id:string, text:string, seconds:number):ActionResult {
@@ -72,33 +98,54 @@ export async function executeStep(host:GameHost, step:Step, ctx:HostCtx):Promise
 	if (!npc) {
 		return { ok: false, verb: step.verb, reason: 'no NPCInput' };
 	}
+	if ((ctx.actor.getComponent(Vitals)?.hp ?? 1) <= 0) {
+		return { ok: false, verb: step.verb, reason: 'down' };
+	}
+	if (host.bargainDone && fightRole(host, ctx.actor)) {
+		return { ok: false, interrupted: true, verb: step.verb, reason: 'won' };
+	}
+	const hop = ctx.actor.getComponent(Celebrating);
+	if (
+		hop?.enabled
+		&& (ctx.actor.world?.time ?? 0) < hop.until
+		&& step.verb !== 'think'
+	) {
+		return { ok: false, interrupted: true, verb: step.verb, reason: 'celebrating' };
+	}
 	if (step.verb !== 'think') {
 		const agent = host.agentByID(ctx.actor.id) ?? host.agentByID(bodyName(ctx.actor));
 		agent?.noteVerb(step.verb);
 	}
 	switch (step.verb) {
 		case 'go_to': {
-			return npc.goTo(String(step.args.name ?? ''));
+			const name = String(step.args.name ?? '');
+			const target = findFightTarget(host, ctx.actor, name);
+			if (!target) {
+				return { ok: false, verb: 'go_to', reason: `no such place ${name} — not reachable with go_to. see_map, ask, or wander(until) until the scene names it` };
+			}
+			if (isRivalBody(host, ctx.actor, target)) {
+				return { ok: false, verb: 'go_to', reason: 'go_to is not an attack; use hex, shoot, cleave, slash, or smite' };
+			}
+			if (heldFromPlayer(ctx, name, target)) {
+				return { ok: false, verb: 'go_to', reason: 'held: walking to Player is not the spoken job' };
+			}
+			return npc.goTo(bodyName(target));
 		}
 		case 'follow': {
 			const name = String(step.args.name ?? '');
-			const bond = ctx.actor.getComponent(Companion);
-			if (bond?.hold && (name === bond.targetID || name === 'Player')) {
-				return npc.wait(8);
+			if (heldFromPlayer(ctx, name)) {
+				return { ok: false, verb: 'follow', reason: 'held: walking to Player is not the spoken job' };
 			}
 			return npc.follow(name);
 		}
 		case 'wander': {
-			const bond = ctx.actor.getComponent(Companion);
-			if (bond?.hold) {
-				return npc.wait(8);
-			}
-			if (bond) {
-				return npc.follow(bond.targetID);
-			}
 			const until = (typeof step.args.until === 'string' ? step.args.until : '')
 				.replace(/\s+/g, ' ')
 				.trim();
+			const leftover = until ? wanderFilterHint(ctx, host.posedEvents, until) : undefined;
+			if (leftover) {
+				return { ok: false, verb: 'wander', reason: leftover };
+			}
 			const seconds = typeof step.args.seconds === 'number'
 				? step.args.seconds
 				: until ? 20 : 6;
@@ -126,6 +173,10 @@ export async function executeStep(host:GameHost, step:Step, ctx:HostCtx):Promise
 		}
 		case 'wait': {
 			const until = typeof step.args.until === 'string' ? step.args.until : '';
+			const leftover = until ? wanderFilterHint(ctx, host.posedEvents, until) : undefined;
+			if (leftover) {
+				return { ok: false, verb: 'wait', reason: leftover };
+			}
 			const seconds = typeof step.args.seconds === 'number'
 				? step.args.seconds
 				: until ? 20 : 1;
@@ -188,6 +239,14 @@ export async function executeStep(host:GameHost, step:Step, ctx:HostCtx):Promise
 				verb: 'rest',
 				reason: host.hooks.goalDone?.(host, bodyName(ctx.actor)) ? 'done — still listening' : 'goal still open',
 			};
+		case 'hex':
+		case 'shoot':
+		case 'cleave':
+		case 'slash':
+		case 'smite':
+			return doAttack(host, ctx, npc, step.verb, String(step.args.name ?? ''));
+		case 'heal':
+			return doHeal(host, ctx, npc, String(step.args.name ?? ''));
 		default:
 			return { ok: false, verb: step.verb, reason: `unhandled verb ${step.verb}` };
 	}
@@ -203,6 +262,288 @@ async function ensureRange(
 		return { ok: true };
 	}
 	return npc.goTo(name);
+}
+
+function heldWeapon(actor:GameObject):{ damage:number; range:number } | undefined {
+	const body = actor.getComponent(HumanBody);
+	if (body) {
+		for (const slot of ['hands.left.held', 'hands.right.held'] as const) {
+			const item = slotItem(body, slot);
+			if (item?.Weapon) {
+				return item.Weapon;
+			}
+		}
+	}
+	const packed = findCarried(actor, (it) => !!it.Weapon);
+	return packed?.Weapon;
+}
+
+function dropDown(host:GameHost, who:GameObject):void {
+	who.getComponent(NPCInput)?.interrupt('urgent');
+	const npc = who.getComponent(NPCInput);
+	if (npc) {
+		npc.enabled = false;
+		npc.aiOn = false;
+	}
+	const col = who.getComponent(BoxCollider);
+	if (col) {
+		col.enabled = false;
+	}
+	const id = bodyName(who);
+	const arc = host.arc;
+	for (const agent of arc?.agents() ?? []) {
+		if (!isCrowdConductor(agent) || !agent.crowd.has(id)) {
+			continue;
+		}
+		if (agent.commanderID === id) {
+			arc?.setCrowdCommander(agent.id, null);
+		}
+		const alive = agent.crowd.list().some((unit) => {
+			const body = findBody(host.world, unit.id);
+			return (body?.getComponent(Vitals)?.hp ?? 0) > 0;
+		});
+		if (!alive) {
+			arc?.removeAgent(agent.id);
+		}
+	}
+	host.pushEvent({
+		kind: 'Hurt',
+		text: `${fightLabel(host, who)} is down`,
+		tags: [fightLabel(host, who), 'down'],
+		major: false,
+	});
+}
+
+function combatSight(world:World, a:GameObject, b:GameObject):boolean {
+	return lineClear(
+		world,
+		a.transform.position.x,
+		a.transform.position.z,
+		b.transform.position.x,
+		b.transform.position.z,
+		true,
+	);
+}
+
+type AttackKind = {
+	roles:FightRole[];
+	range:number;
+	damage:number;
+	los:boolean;
+	word:string;
+	/** Wind-up before the hit, seconds of `world.time`. */
+	castTime:number;
+	/** Recovery after the hit before the next cast, seconds of `world.time`. */
+	cooldown:number;
+	/** Hit chance at point-blank before target agility, 0..1. */
+	accuracy:number;
+	/** Ranged only. Accuracy multiplier at max range (1 = no drop). */
+	falloff?:number;
+};
+
+const ATTACKS:Record<string, AttackKind> = {
+	slash: { roles: ['Blade'], range: 1.7, damage: 1, los: false, word: 'slashed', castTime: 0.28, cooldown: 0.72, accuracy: 0.9 },
+	smite: { roles: ['Healer'], range: 2.2, damage: 2, los: false, word: 'smote', castTime: 0.4, cooldown: 1.2, accuracy: 0.86 },
+	hex: { roles: ['Witch'], range: 8, damage: 3, los: true, word: 'hexed', castTime: 1.8, cooldown: 1.4, accuracy: 0.84, falloff: 0.5 },
+	cleave: { roles: ['Knight'], range: 2.2, damage: 4, los: false, word: 'cleaved', castTime: 0.8, cooldown: 1.6, accuracy: 0.74 },
+	shoot: { roles: ['Archer'], range: 12, damage: 5, los: true, word: 'shot', castTime: 1.5, cooldown: 3.5, accuracy: 0.78, falloff: 0.28 },
+};
+
+/** Slow ritual. Game seconds. `hp` is restored (capped at maxHP). */
+const HEAL = { castTime: 5, cooldown: 24, hp: 4 };
+
+function attackOf(verb:string):{ name:string; spec:AttackKind } | undefined {
+	const spec = ATTACKS[verb];
+	return spec ? { name: verb, spec } : undefined;
+}
+
+async function holdReady(
+	npc:NPCInput,
+	now:number,
+	readyAt:number,
+	castTime:number,
+):Promise<ActionResult> {
+	const cool = readyAt - now;
+	if (cool > 0.02) {
+		const waited = await npc.wait(cool);
+		if (!waited.ok || waited.interrupted) {
+			return { ok: false, interrupted: waited.interrupted, reason: waited.reason, verb: 'wait' };
+		}
+	}
+	if (castTime > 0.02) {
+		const cast = await npc.wait(castTime);
+		if (!cast.ok || cast.interrupted) {
+			return { ok: false, interrupted: cast.interrupted, reason: cast.reason ?? 'cast', verb: 'wait' };
+		}
+	}
+	return { ok: true };
+}
+
+function rangeAccuracy(spec:AttackKind, dist:number):number {
+	if (!spec.los) {
+		return spec.accuracy;
+	}
+	const span = Math.max(spec.range, 0.01);
+	const t = Math.min(1, Math.max(0, dist / span));
+	const far = spec.falloff ?? 0.4;
+	return spec.accuracy * (1 - t * (1 - far));
+}
+
+function hitChance(spec:AttackKind, dist:number, agility:number):number {
+	return Math.min(0.97, Math.max(0.05, rangeAccuracy(spec, dist) - agility));
+}
+
+async function doAttack(
+	host:GameHost,
+	ctx:HostCtx,
+	npc:NPCInput,
+	verb:string,
+	name:string,
+):Promise<ActionResult> {
+	const role = fightRole(host, ctx.actor);
+	const attack = attackOf(verb);
+	if (!attack) {
+		return { ok: false, verb, reason: `unhandled attack ${verb}` };
+	}
+	if (role && !attack.spec.roles.includes(role)) {
+		const need = attack.spec.roles.join(' or ');
+		return { ok: false, verb, reason: `only a ${need} can ${attack.name}` };
+	}
+	let target = findFightTarget(host, ctx.actor, name);
+	if (!target) {
+		return { ok: false, verb: attack.name, reason: `no such person ${name}` };
+	}
+	if (target === ctx.actor) {
+		return { ok: false, verb: attack.name, reason: `cannot ${attack.name} yourself` };
+	}
+	const dest = bodyName(target);
+	const weapon = heldWeapon(ctx.actor);
+	const melee = !attack.spec.los;
+	const range = melee ? Math.max(attack.spec.range, weapon?.range ?? 0) : attack.spec.range;
+	const close = Math.max(0.9, range - 0.6);
+	if (distXZ(ctx.actor, target) > close) {
+		const walk = await npc.goTo(dest, close);
+		if (!walk.ok) {
+			return { ...walk, verb: attack.name };
+		}
+	}
+	if (distXZ(ctx.actor, target) > range + 0.5) {
+		return { ok: false, verb: attack.name, reason: 'too far' };
+	}
+	if (attack.spec.los && !combatSight(ctx.world, ctx.actor, target)) {
+		const squeeze = Math.max(0.9, close * 0.45);
+		if (distXZ(ctx.actor, target) > squeeze) {
+			const walk = await npc.goTo(dest, squeeze);
+			if (!walk.ok) {
+				return { ...walk, verb: attack.name };
+			}
+		}
+		if (!combatSight(ctx.world, ctx.actor, target)) {
+			return { ok: false, verb: attack.name, reason: 'no line of sight' };
+		}
+	}
+	npc.faceToward(dest);
+	const held = await holdReady(npc, ctx.world.time, npc.attackReadyAt, attack.spec.castTime);
+	if (!held.ok) {
+		return { ...held, verb: attack.name };
+	}
+	target = findFightTarget(host, ctx.actor, name) ?? target;
+	if (target === ctx.actor) {
+		return { ok: false, verb: attack.name, reason: `cannot ${attack.name} yourself` };
+	}
+	if (distXZ(ctx.actor, target) > range + 0.5) {
+		return { ok: false, verb: attack.name, reason: 'too far' };
+	}
+	if (attack.spec.los && !combatSight(ctx.world, ctx.actor, target)) {
+		return { ok: false, verb: attack.name, reason: 'no line of sight' };
+	}
+	const vitals = target.getComponent(Vitals);
+	if (!vitals) {
+		return { ok: false, verb: attack.name, reason: 'no vitals' };
+	}
+	npc.attackReadyAt = ctx.world.time + attack.spec.cooldown;
+	if (vitals.hp <= 0) {
+		return { ok: true, verb: attack.name, reason: 'already down' };
+	}
+	const dist = distXZ(ctx.actor, target);
+	const chance = hitChance(attack.spec, dist, agilityOf(host, target));
+	const who = fightLabel(host, ctx.actor);
+	const foe = fightLabel(host, target);
+	npc.faceToward(bodyName(target));
+	if (Math.random() >= chance) {
+		host.pushEvent({
+			kind: 'Miss',
+			text: `${who} missed ${foe}`,
+			tags: [who, foe, 'miss', attack.name],
+			major: false,
+		});
+		return { ok: true, verb: attack.name, reason: `missed ${foe}` };
+	}
+	const dmg = melee ? Math.max(attack.spec.damage, weapon?.damage ?? 0) : attack.spec.damage;
+	vitals.hp = Math.max(0, vitals.hp - dmg);
+	applyHit(ctx.world, ctx.actor, target);
+	host.pushEvent({
+		kind: 'Hurt',
+		text: `${who} ${attack.spec.word} ${foe}`,
+		tags: [who, foe, 'hurt', attack.name],
+		major: false,
+	});
+	if (vitals.hp <= 0) {
+		dropDown(host, target);
+		return { ok: true, verb: attack.name, reason: `${foe} is down` };
+	}
+	return { ok: true, verb: attack.name, reason: `${foe} ${vitals.hp}/${vitals.maxHP}` };
+}
+
+async function doHeal(
+	host:GameHost,
+	ctx:HostCtx,
+	npc:NPCInput,
+	name:string,
+):Promise<ActionResult> {
+	const role = fightRole(host, ctx.actor);
+	if (role && role !== 'Healer') {
+		return { ok: false, verb: 'heal', reason: 'only a healer can heal' };
+	}
+	let target = name ? findFightTarget(host, ctx.actor, name) : ctx.actor;
+	if (!target) {
+		return { ok: false, verb: 'heal', reason: `no such person ${name}` };
+	}
+	if (target !== ctx.actor) {
+		if (isRivalBody(host, ctx.actor, target)) {
+			return { ok: false, verb: 'heal', reason: 'heal your company, not the enemy' };
+		}
+		const walk = await ensureRange(npc, ctx.actor, target, bodyName(target));
+		if (!walk.ok) {
+			return { ...walk, verb: 'heal' };
+		}
+	}
+	if (target !== ctx.actor) {
+		npc.faceToward(bodyName(target));
+	}
+	const held = await holdReady(npc, ctx.world.time, npc.healReadyAt, HEAL.castTime);
+	if (!held.ok) {
+		return { ...held, verb: 'heal' };
+	}
+	target = name ? findFightTarget(host, ctx.actor, name) ?? target : ctx.actor;
+	if (target !== ctx.actor) {
+		if (isRivalBody(host, ctx.actor, target)) {
+			return { ok: false, verb: 'heal', reason: 'heal your company, not the enemy' };
+		}
+		if (distXZ(ctx.actor, target) > USE_RANGE) {
+			return { ok: false, verb: 'heal', reason: 'too far' };
+		}
+	}
+	const vitals = target.getComponent(Vitals);
+	if (!vitals) {
+		return { ok: false, verb: 'heal', reason: 'no vitals' };
+	}
+	if (vitals.hp <= 0) {
+		return { ok: false, verb: 'heal', reason: 'down' };
+	}
+	npc.healReadyAt = ctx.world.time + HEAL.cooldown;
+	healActor(target, HEAL.hp);
+	return { ok: true, verb: 'heal', reason: `${bodyName(target)} ${vitals.hp}/${vitals.maxHP}` };
 }
 
 async function doUse(
@@ -235,7 +576,7 @@ async function doUse(
 			kind: 'DoorOpened',
 			text: `${name} opened`,
 			tags: ['door', name],
-			major: true,
+			major: false,
 		});
 	}
 	return { ok: result.ok, verb: 'use', reason: result.reason };
@@ -286,7 +627,7 @@ async function doPickUp(host:GameHost, ctx:HostCtx, npc:NPCInput, name:string):P
 				kind: 'PickedUp',
 				text: `${bodyName(ctx.actor)} picked up ${name}`,
 				tags: ['item', name, bodyName(ctx.actor)],
-				major: true,
+				major: false,
 			});
 			host.hooks.afterPickUp?.(host, ctx.actor, name);
 		}
@@ -311,7 +652,7 @@ async function doPickUp(host:GameHost, ctx:HostCtx, npc:NPCInput, name:string):P
 				kind: 'PickedUp',
 				text: `${bodyName(ctx.actor)} picked up ${name}`,
 				tags: ['item', name, bodyName(ctx.actor)],
-				major: true,
+				major: false,
 			});
 			host.hooks.afterPickUp?.(host, ctx.actor, name);
 		}
@@ -391,9 +732,16 @@ export function tooFar(actor:GameObject, target:GameObject, name:string):string 
 	return null;
 }
 
+function purseGoldAmount():number {
+	return getDef('fire_mushroom').components.Goods?.ask ?? 3;
+}
+
 export function settleGive(from:GameObject, to:GameObject, itemName:string, host:GameHost):ActionResult {
 	if (to === from) {
 		return { ok: false, verb: 'give', reason: 'cannot give to yourself' };
+	}
+	if (compactName(itemName) === 'gold' && !findItem(from, itemName)) {
+		return settlePay(from, to, purseGoldAmount(), host);
 	}
 	const item = findItem(from, itemName);
 	if (!item) {
@@ -413,7 +761,7 @@ export function settleGive(from:GameObject, to:GameObject, itemName:string, host
 				kind: 'Given',
 				text: `${bodyName(from)} gave ${label} to ${bodyName(to)}`,
 				tags: ['give', label, bodyName(from), bodyName(to)],
-				major: true,
+				major: false,
 			});
 			return {
 				ok: true,
@@ -433,7 +781,7 @@ export function settleGive(from:GameObject, to:GameObject, itemName:string, host
 		kind: 'Given',
 		text: `${bodyName(from)} gave ${label} to ${bodyName(to)}`,
 		tags: ['give', label, bodyName(from), bodyName(to)],
-		major: true,
+		major: false,
 	});
 	return { ok: true, verb: 'give', reason: `gave ${label} to ${bodyName(to)}` };
 }
@@ -454,7 +802,7 @@ export function settlePay(from:GameObject, to:GameObject, amount:number, host:Ga
 		kind: 'Given',
 		text: `${bodyName(from)} gave ${amount} gold to ${bodyName(to)}`,
 		tags: ['give', 'gold', bodyName(from), bodyName(to)],
-		major: true,
+		major: false,
 	});
 	return { ok: true, verb: 'give', reason: `gave ${amount} gold to ${bodyName(to)}` };
 }
@@ -508,7 +856,7 @@ export function settleBuy(
 			kind: 'Bought',
 			text: `${bodyName(buyer)} bought ${label} from ${bodyName(seller)} for ${price} gold`,
 			tags: ['buy', label, bodyName(buyer), bodyName(seller)],
-			major: true,
+			major: false,
 		});
 	}
 	noteWant(buyer, label);
@@ -562,7 +910,7 @@ export function settleSell(
 			kind: 'Bought',
 			text: `${bodyName(buyer)} bought ${label} from ${bodyName(seller)} for ${price} gold`,
 			tags: ['buy', label, bodyName(buyer), bodyName(seller)],
-			major: true,
+			major: false,
 		});
 	}
 	noteWant(buyer, label);

@@ -61,7 +61,7 @@ export type WanderGuide = {
 };
 
 type Job =
-	| { kind:'go_to'; name:string; startedAt:number; done:(r:NPCActionResult)=>void }
+	| { kind:'go_to'; name:string; startedAt:number; within:number; done:(r:NPCActionResult)=>void }
 	| { kind:'follow'; name:string; startedAt:number; until:number; done:(r:NPCActionResult)=>void }
 	| { kind:'wander'; startedAt:number; until:number; guide?:WanderGuide; notedAt:number; done:(r:NPCActionResult)=>void }
 	| { kind:'wait'; until:number; stop?:()=>boolean; done:(r:NPCActionResult)=>void }
@@ -76,6 +76,10 @@ export class NPCInput extends Component {
 	faceUntil = 0;
 	converseName:string | null = null;
 	aiOn = true;
+	/** Next time `world.time` this body may start a cast. */
+	attackReadyAt = 0;
+	/** Next time `world.time` this body may start a heal. */
+	healReadyAt = 0;
 	private job:Job | null = null;
 	private lastX = 0;
 	private lastZ = 0;
@@ -88,10 +92,11 @@ export class NPCInput extends Component {
 	/** Side of a door we started on (+1 / −1). Frozen so an open-door walk does not flip dest. */
 	private doorPass = 0;
 
-	goTo(name:string):Promise<NPCActionResult> {
+	goTo(name:string, within = APPROACH):Promise<NPCActionResult> {
 		return this.begin({
 			kind: 'go_to',
 			name,
+			within,
 			startedAt: this.now(),
 			done: () => undefined,
 		});
@@ -154,6 +159,10 @@ export class NPCInput extends Component {
 
 	busy():boolean {
 		return this.job !== null;
+	}
+
+	jobKind():string | null {
+		return this.job?.kind ?? null;
 	}
 
 	interrupt(reason = 'urgent'):void {
@@ -271,8 +280,8 @@ export class NPCInput extends Component {
 			this.finish({ ok: false, verb: 'go_to', reason: `${name} is locked — unlock it first` });
 			return;
 		}
-		const dest = this.approachPoint(target);
-		if (this.reachedGoTo(target, dest)) {
+		const dest = this.approachPoint(target, job.within);
+		if (this.reachedGoTo(target, dest, job.within)) {
 			this.finish({ ok: true, verb: 'go_to' });
 			return;
 		}
@@ -289,7 +298,11 @@ export class NPCInput extends Component {
 	}
 
 	private begin(job:Job):Promise<NPCActionResult> {
-		this.gameObject.getComponent(Celebrating)?.stop();
+		const hop = this.gameObject.getComponent(Celebrating);
+		const now = this.gameObject.world?.time ?? 0;
+		if (!hop?.enabled || now >= hop.until) {
+			hop?.stop();
+		}
 		if (this.job) {
 			this.finish({ ok: false, interrupted: true, verb: this.job.kind, reason: 'replaced' });
 		}
@@ -317,8 +330,8 @@ export class NPCInput extends Component {
 						});
 						return;
 					}
-					const dest = this.approachPoint(target);
-					if (this.reachedGoTo(target, dest)) {
+					const dest = this.approachPoint(target, job.within);
+					if (this.reachedGoTo(target, dest, job.within)) {
 						this.finish({ ok: true, verb: 'go_to' });
 						return;
 					}
@@ -467,7 +480,10 @@ export class NPCInput extends Component {
 		return best;
 	}
 
-	private reachedGoTo(target:GameObject, dest:{ x:number; z:number }):boolean {
+	private reachedGoTo(target:GameObject, dest:{ x:number; z:number }, within = APPROACH):boolean {
+		if (distXZ(this.gameObject, target) <= within) {
+			return true;
+		}
 		const p = this.gameObject.transform.position;
 		const room = target.getComponent(Interior);
 		if (room && interiorContains(room, p.x, p.z)) {

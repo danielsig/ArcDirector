@@ -55,7 +55,7 @@ export type SightOpts = {
 	lodLayers?:LodLayer[];
 	relationships?:RelationshipStringifier[];
 	pluralize?:(word:string)=>string;
-	/** Leftover distances read as `Door 10 paces from Mira` instead of bearing. */
+	/** Leftover distances read as `Door 10 paces from Mira` / `Door 10m from Mira`. */
 	fromName?:string;
 	/** Skip the ambient sentence (hive merge already kept one). */
 	skipAmbient?:boolean;

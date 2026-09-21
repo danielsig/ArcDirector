@@ -8,7 +8,6 @@ import {
 	ExprError,
 	FACING_COS,
 	LIST_CAP,
-	needleMatch,
 	type Catalog,
 	type ExprEntity,
 	type ExprVal,
@@ -17,6 +16,8 @@ import {
 	type StringifierKind,
 	type Stringifiers,
 } from './types.js';
+import { bindCarry, bindRoster, asEntityVal } from './me.js';
+import { bindPrev, cloneEntity, freezeMe, type PrevSpec } from './prev.js';
 
 export type HostKernels = {
 	me:ExprEntity;
@@ -31,16 +32,16 @@ export type HostKernels = {
 	walkDistance?:(a:ExprEntity, b:ExprEntity)=>number | undefined;
 	canSee?:(a:ExprEntity, b:ExprEntity)=>boolean;
 	facing?:(a:ExprEntity, b:ExprEntity)=>number;
+	/** Signed left/right of a's facing toward b (−1 left … +1 right). */
+	side?:(a:ExprEntity, b:ExprEntity)=>number;
 	isFacing?:(a:ExprEntity, b:ExprEntity)=>boolean;
 	inventory?:(who:ExprEntity)=>ExprEntity[];
 	hp?:(who:ExprEntity)=>{ hp:number; maxHP:number } | undefined;
 	isOpen?:(who:ExprEntity)=>boolean | undefined;
 	/** Director fills from unabsorbed `HeardSpeech`. Standalone `buildCatalog` may set it. */
 	hasHeard?:boolean;
-	/** Director fills from `lastTacticalAt`. */
-	prevThought?:{ secondsAgo:number };
-	/** Director fills from `lastResult`. */
-	prevActions?:{ secondsAgo:number; isOk:boolean; reason:string; verb:string }[];
+	/** Last-think freeze. Director injects; standalone may omit (then `prev.me` is this catalog's `me`). */
+	prev?:PrevSpec;
 	stringifiers?:Stringifiers;
 	/** Host picks the stringifier key. The library never inspects tags for doors/people/items. */
 	stringifierKind?:(entity:ExprEntity)=>StringifierKind;
@@ -50,14 +51,6 @@ export type HostKernels = {
 	listCap?:number;
 };
 
-function ent(e:ExprEntity):ExprVal {
-	return { kind: 'entity', value: e };
-}
-
-function list(rows:ExprEntity[]):ExprVal {
-	return { kind: 'list', value: rows.map(ent) };
-}
-
 function twoEnt(args:ExprVal[]):[ExprEntity, ExprEntity] | undefined {
 	const a = args[0]?.kind === 'entity' ? args[0].value : undefined;
 	const b = args[1]?.kind === 'entity' ? args[1].value : undefined;
@@ -65,6 +58,31 @@ function twoEnt(args:ExprVal[]):[ExprEntity, ExprEntity] | undefined {
 		return undefined;
 	}
 	return [a, b];
+}
+
+/** True if pred holds for any entity pair; lists expand. */
+function anyPair(args:ExprVal[], pred:(a:ExprEntity, b:ExprEntity)=>boolean):boolean {
+	const a = args[0];
+	const b = args[1];
+	if (!a || !b) {
+		return false;
+	}
+	const left = a.kind === 'list' ? a.value : [a];
+	const right = b.kind === 'list' ? b.value : [b];
+	for (const x of left) {
+		if (x.kind !== 'entity') {
+			continue;
+		}
+		for (const y of right) {
+			if (y.kind !== 'entity') {
+				continue;
+			}
+			if (pred(x.value, y.value)) {
+				return true;
+			}
+		}
+	}
+	return false;
 }
 
 function distOf(host:HostKernels, a:ExprEntity, b:ExprEntity):number | undefined {
@@ -76,6 +94,23 @@ function distOf(host:HostKernels, a:ExprEntity, b:ExprEntity):number | undefined
 		return undefined;
 	}
 	return d;
+}
+
+function nearAny(host:HostKernels, a:ExprVal | undefined, b:ExprVal | undefined, r:number):boolean {
+	if (!a || !b) {
+		return false;
+	}
+	if (a.kind === 'list') {
+		return a.value.some((row) => nearAny(host, row, b, r));
+	}
+	if (b.kind === 'list') {
+		return b.value.some((row) => nearAny(host, a, row, r));
+	}
+	if (a.kind !== 'entity' || b.kind !== 'entity') {
+		return false;
+	}
+	const d = distOf(host, a.value, b.value);
+	return d !== undefined && d <= r;
 }
 
 function walkOf(host:HostKernels, a:ExprEntity, b:ExprEntity):number | undefined {
@@ -93,39 +128,9 @@ function walkOf(host:HostKernels, a:ExprEntity, b:ExprEntity):number | undefined
 export function buildCatalog(host:HostKernels):Catalog {
 	const names = new Map<string, ExprVal>();
 	const fns = new Map<string, NativeFn>(Object.entries(builtins));
-	names.set('me', ent(host.me));
-	names.set('others', list(host.others));
-	names.set('items', list(host.items));
+	bindRoster(names, host);
 	if (host.hasHeard !== undefined) {
 		names.set('hasHeard', { kind: 'bool', value: host.hasHeard });
-	}
-	if (host.prevThought) {
-		names.set('prevThought', {
-			kind: 'entity',
-			value: {
-				id: 'prevThought',
-				tags: [],
-				fields: { secondsAgo: { kind: 'number', value: host.prevThought.secondsAgo } },
-			},
-		});
-	}
-	if (host.prevActions) {
-		names.set('prevActions', {
-			kind: 'list',
-			value: host.prevActions.map((a, i) => ({
-				kind: 'entity' as const,
-				value: {
-					id: `action${i}`,
-					tags: [],
-					fields: {
-						secondsAgo: { kind: 'number', value: a.secondsAgo },
-						isOk: { kind: 'bool', value: a.isOk },
-						reason: { kind: 'string', value: a.reason },
-						verb: { kind: 'string', value: a.verb },
-					},
-				},
-			})),
-		});
 	}
 	for (const [k, v] of Object.entries(host.bindings ?? {})) {
 		if (!names.has(k)) {
@@ -135,27 +140,19 @@ export function buildCatalog(host:HostKernels):Catalog {
 
 	if (host.inventory) {
 		const pack = host.inventory;
-		host.me.fields = {
-			...host.me.fields,
-			inventory: list(pack(host.me)),
-		};
-		names.set('me', ent(host.me));
-		fns.set('isCarrying', (args) => {
-			if (args.length > 1 && args[1]?.kind !== 'absent') {
-				throw new ExprError('isCarrying takes one argument');
-			}
-			const bag = pack(host.me);
-			const x = args[0];
-			if (!x || x.kind === 'absent') {
-				return { kind: 'bool', value: false };
-			}
-			if (x.kind === 'string') {
-				return { kind: 'bool', value: bag.some((i) => needleMatch(i, x.value)) };
-			}
-			if (x.kind === 'entity') {
-				return { kind: 'bool', value: bag.some((i) => i.id === x.value.id) };
-			}
-			throw new ExprError('isCarrying needle or entity');
+		const prevMe = host.prev?.me ?? freezeMe(host);
+		bindCarry({ me: host.me, inventory: pack }, prevMe, names, fns);
+		bindPrev(names, {
+			secondsAgo: host.prev?.secondsAgo,
+			me: prevMe,
+			actions: host.prev?.actions ?? [],
+		});
+	}
+	else {
+		bindPrev(names, {
+			secondsAgo: host.prev?.secondsAgo,
+			me: host.prev?.me ?? cloneEntity(host.me),
+			actions: host.prev?.actions ?? [],
 		});
 	}
 
@@ -177,7 +174,7 @@ export function buildCatalog(host:HostKernels):Catalog {
 		for (const o of host.others) {
 			attach(o);
 		}
-		names.set('me', ent(host.me));
+		names.set('me', asEntityVal(host.me));
 		fns.set('isHurt', (args) => {
 			const who = args[0]?.kind === 'entity' ? args[0].value : host.me;
 			const v = read(who);
@@ -276,16 +273,8 @@ function bindDistance(host:HostKernels, fns:Map<string, NativeFn>):void {
 	if (host.nearRadius !== undefined) {
 		const r0 = host.nearRadius;
 		fns.set('isNear', (args) => {
-			const pair = twoEnt(args);
-			if (!pair) {
-				return { kind: 'bool', value: false };
-			}
 			const r = asNum(args[2]) ?? r0;
-			const d = distOf(host, pair[0], pair[1]);
-			if (d === undefined) {
-				return { kind: 'bool', value: false };
-			}
-			return { kind: 'bool', value: d <= r };
+			return { kind: 'bool', value: nearAny(host, args[0], args[1], r) };
 		});
 		fns.set('nearby', (args, ctx) => nearbyList(host, args, ctx.catalog.me, r0));
 	}
@@ -429,23 +418,35 @@ function bindFacingNumber(host:HostKernels, fns:Map<string, NativeFn>):void {
 		host.cache.rememberFacing(pair[0].id, pair[1].id, v);
 		return { kind: 'number', value: v };
 	});
-	fns.set('isFacing', (args) => {
-		const pair = twoEnt(args);
-		if (!pair) {
-			return { kind: 'bool', value: false };
-		}
-		const v = read(pair[0], pair[1]);
-		host.cache.rememberFacing(pair[0].id, pair[1].id, v);
-		return { kind: 'bool', value: v > FACING_COS };
-	});
-	fns.set('isBehind', (args) => {
-		const pair = twoEnt(args);
-		if (!pair) {
-			return { kind: 'bool', value: false };
-		}
-		const v = read(pair[0], pair[1]);
-		return { kind: 'bool', value: v < 0 };
-	});
+	fns.set('isFacing', (args) => ({
+		kind: 'bool',
+		value: anyPair(args, (a, b) => {
+			const v = read(a, b);
+			host.cache.rememberFacing(a.id, b.id, v);
+			return v > FACING_COS;
+		}),
+	}));
+	fns.set('isBehind', (args) => ({
+		kind: 'bool',
+		value: anyPair(args, (a, b) => read(a, b) < 0),
+	}));
+	if (host.side) {
+		const sideOf = host.side;
+		fns.set('isLeft', (args) => ({
+			kind: 'bool',
+			value: anyPair(args, (a, b) => {
+				const cross = sideOf(a, b);
+				return cross < 0 && Math.abs(cross) > Math.abs(read(a, b));
+			}),
+		}));
+		fns.set('isRight', (args) => ({
+			kind: 'bool',
+			value: anyPair(args, (a, b) => {
+				const cross = sideOf(a, b);
+				return cross > 0 && Math.abs(cross) > Math.abs(read(a, b));
+			}),
+		}));
+	}
 	fns.set('wasJustFacing', (args) => {
 		const pair = twoEnt(args);
 		if (!pair) {

@@ -9,15 +9,19 @@ export type ModelTier = {
 	thinkOff?:ThinkOff;
 };
 
-/** Prefer these when nothing is already loaded. Speed first, then tool-use, then size. */
+/** Think-off hints. Not a model preference; `modelGrade` picks the default. */
 export const MODEL_TIERS:ModelTier[] = [
-	{ id: 'meta/muse-glimmer', thinking: true, thinkOff: 'strength' },
-	{ id: 'muse-glimmer', thinking: true, thinkOff: 'strength' },
-	{ id: 'google/gemma-4-31b-qat' },
-	{ id: 'gemma-4-31b-qat' },
+	/** Harmony think-off. Not chosen unless a catalog id contains this string. */
+	{ id: 'harmony/think-off', thinking: true, thinkOff: 'strength' },
 ];
 
-export const PREFERRED_MODELS = MODEL_TIERS.map((t) => t.id);
+export const PREFERRED_MODELS = MODEL_TIERS
+	.filter((t) => t.thinkOff !== 'strength')
+	.map((t) => t.id);
+
+/** Public LM Studio reasoning settings. Sending any other value errors. */
+export const REASONING_OPTIONS = ['off', 'on', 'low', 'medium', 'high'] as const;
+export type ReasoningOption = typeof REASONING_OPTIONS[number];
 
 export type ModelInfo = {
 	id:string;
@@ -26,6 +30,11 @@ export type ModelInfo = {
 	loaded?:boolean;
 	/** Host/catalog: this id accepts image parts. `false` wins over the id heuristic. */
 	vision?:boolean;
+	/** From `capabilities.reasoning`. Absent when the catalog does not expose it. */
+	reasoning?:{
+		allowed:ReasoningOption[];
+		default?:ReasoningOption;
+	};
 };
 
 export function isVisionModel(model:ModelInfo | string):boolean {
@@ -89,6 +98,53 @@ export function isLoadedModel(model:ModelInfo):boolean {
 	return state === 'loaded' || state === 'ready';
 }
 
+function isReasoningOption(value:unknown):value is ReasoningOption {
+	return typeof value === 'string' && (REASONING_OPTIONS as readonly string[]).includes(value);
+}
+
+function rowReasoning(row:Record<string, unknown>):ModelInfo['reasoning'] {
+	const caps = isRecord(row.capabilities) ? row.capabilities : {};
+	const raw = isRecord(caps.reasoning) ? caps.reasoning
+		: isRecord(row.reasoning) ? row.reasoning : undefined;
+	if (!raw) {
+		return undefined;
+	}
+	const allowed = Array.isArray(raw.allowed_options)
+		? raw.allowed_options.filter(isReasoningOption)
+		: [];
+	if (allowed.length === 0) {
+		return undefined;
+	}
+	return {
+		allowed,
+		default: isReasoningOption(raw.default) ? raw.default : undefined,
+	};
+}
+
+/** Pick a listed option. `prefer` is used when thinking is on (`low` if allowed). */
+export function pickReasoningOption(
+	allowed:ReasoningOption[] | undefined,
+	thinking:boolean,
+	prefer?:ReasoningOption,
+):ReasoningOption | undefined {
+	if (!allowed || allowed.length === 0) {
+		return undefined;
+	}
+	if (!thinking) {
+		return allowed.includes('off') ? 'off' : undefined;
+	}
+	if (prefer && allowed.includes(prefer)) {
+		return prefer;
+	}
+	if (allowed.includes('low')) {
+		return 'low';
+	}
+	if (allowed.includes('on')) {
+		return 'on';
+	}
+	return undefined;
+}
+
 function rowVision(row:Record<string, unknown>):boolean | undefined {
 	if (typeof row.vision === 'boolean') {
 		return row.vision;
@@ -126,6 +182,7 @@ function asChatCompletionsList(payload:unknown):ModelInfo[] {
 			type: typeof row.type === 'string' ? row.type : undefined,
 			loaded: typeof row.loaded === 'boolean' ? row.loaded : undefined,
 			vision: rowVision(row),
+			reasoning: rowReasoning(row),
 		});
 	}
 	return out;
@@ -152,6 +209,7 @@ function asNativeList(payload:unknown):ModelInfo[] {
 			type: typeof row.type === 'string' ? row.type : undefined,
 			loaded: instances.length > 0,
 			vision: typeof caps.vision === 'boolean' ? caps.vision : rowVision(row),
+			reasoning: rowReasoning(row),
 		});
 	}
 	return out;
@@ -172,15 +230,23 @@ function findNamed(pool:ModelInfo[], name:string):ModelInfo | undefined {
 	return pool.find((m) => matchesName(m, name));
 }
 
+/** Higher is a better default. Active params near 4B, then total size near `targetB` (20). */
+export function modelGrade(id:string, targetB = 20):number {
+	const active = Number(id.match(/\W[ae](\d+)b(?:-|$)/i)?.[1]);
+	const total = Number(id.match(/(?:^|\W)(\d+)b(?:-|$)/i)?.[1]);
+	return (Number.isFinite(active) ? -Math.abs(active - 4) : -8)
+		+ (Number.isFinite(total) ? -Math.abs(total - targetB) / 10 : -4);
+}
+
 /**
  * One chat model only. An explicit `requested` id wins if it is in the catalog
  * (loading it may unload whatever is in VRAM). Otherwise stay on a loaded
- * model. Preferred names only rank *within* the loaded set, or the full
- * catalog when the server does not report load state.
+ * model. Within that set — or the full catalog when load state is unknown —
+ * `modelGrade` picks the default.
  */
 export function pickSingleChatModel(
 	models:ModelInfo[],
-	preferred:string[] = PREFERRED_MODELS,
+	_preferred:string[] = PREFERRED_MODELS,
 	requested?:string,
 ):string | undefined {
 	const chat = models.filter((m) => !isEmbeddingModel(m));
@@ -192,13 +258,7 @@ export function pickSingleChatModel(
 			return hit.id;
 		}
 	}
-	for (const pref of preferred) {
-		const hit = findNamed(pool, pref);
-		if (hit) {
-			return hit.id;
-		}
-	}
-	return pool[0]?.id;
+	return pool.slice().sort((a, b) => modelGrade(b.id) - modelGrade(a.id))[0]?.id;
 }
 
 function catalogURLs(root:string):string[] {

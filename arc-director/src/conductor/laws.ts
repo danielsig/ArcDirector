@@ -6,7 +6,7 @@ import { evaluate } from '../expr/eval.js';
 import type { Catalog } from '../expr/types.js';
 import { watchScore } from '../expr/score.js';
 import type { CrowdUnit } from './unit.js';
-import { evaluateWho } from './select.js';
+import { evaluateWho } from './who.js';
 import type { Crowd } from './crowd.js';
 
 export type CrowdLaw = {
@@ -42,9 +42,14 @@ export function asLawPlan(raw:ActionPlan | string, registry:VerbRegistry):Action
 	return undefined;
 }
 
-export function lawFromSpec(spec:CrowdLawSpec, registry:VerbRegistry, fallbackName:string):CrowdLaw | undefined {
+export function lawFromSpec(
+	spec:CrowdLawSpec,
+	registry:VerbRegistry,
+	fallbackName:string,
+	defaultWho = 'units',
+):CrowdLaw | undefined {
 	const plan = asLawPlan(spec.plan, registry);
-	const who = (spec.who ?? 'units').trim() || 'units';
+	const who = (spec.who ?? defaultWho).trim() || defaultWho;
 	const watch = spec.watch.trim();
 	if (!plan || !watch) {
 		return undefined;

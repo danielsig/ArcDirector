@@ -104,6 +104,23 @@ export const SFX = {
 			{ kind: 'noise', dur: 1, cutoff: 3800, q: 0.55, gain: 0.3, filter: 'highpass' },
 		],
 	},
+	hit: {
+		gain: 0.88,
+		layers: [
+			{ kind: 'thump', dur: 0.09, freq: 78, gain: 0.85 },
+			{ kind: 'noise', dur: 0.08, cutoff: 1400, gain: 0.4 },
+			{ kind: 'click', dur: 0.04, freq: 520, when: 0.02, cutoff: 2200, gain: 0.35 },
+		],
+	},
+	knock: {
+		gain: 1,
+		layers: [
+			{ kind: 'thump', dur: 0.11, freq: 88, gain: 0.95 },
+			{ kind: 'thump', dur: 0.08, freq: 48, when: 0.02, gain: 0.7 },
+			{ kind: 'click', dur: 0.05, freq: 210, cutoff: 780, gain: 0.55 },
+			{ kind: 'noise', dur: 0.07, cutoff: 320, gain: 0.32 },
+		],
+	},
 } as const satisfies Record<string, SfxPatch>;
 
 export type SfxName = keyof typeof SFX;

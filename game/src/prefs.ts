@@ -7,8 +7,6 @@
 
 export const MIN_PARALLEL_THINKERS = 1;
 export const MAX_PARALLEL_THINKERS = 10;
-export const MIN_THINKING_BUDGET = 0;
-export const MAX_THINKING_BUDGET = 2048;
 
 const DEFAULT = {
 	observer: true,
@@ -20,12 +18,13 @@ const DEFAULT = {
 	muted: false,
 	menuMusicMuted: false,
 	musicPlayerOpen: false,
-	devStatsOpen: false,
 	model: '',
 	playerKind: '',
 	maxParallel: 2,
 	batchThinks: true,
-	thinkingBudget: 160,
+	thinkingBudget: true,
+	planText: false,
+	aiLogSource: '',
 };
 
 export type Prefs = typeof DEFAULT;
@@ -42,12 +41,16 @@ function coerce(raw:Partial<Prefs>):Prefs {
 		muted: bool(raw.muted, DEFAULT.muted),
 		menuMusicMuted: bool(raw.menuMusicMuted, DEFAULT.menuMusicMuted),
 		musicPlayerOpen: bool(raw.musicPlayerOpen, DEFAULT.musicPlayerOpen),
-		devStatsOpen: bool(raw.devStatsOpen, DEFAULT.devStatsOpen),
 		model: typeof raw.model === 'string' ? raw.model.trim() : DEFAULT.model,
 		playerKind: typeof raw.playerKind === 'string' ? raw.playerKind.trim() : DEFAULT.playerKind,
 		maxParallel: clampParallelThinkers(raw.maxParallel as number),
 		batchThinks: bool(raw.batchThinks, DEFAULT.batchThinks),
-		thinkingBudget: clampThinkingBudget(raw.thinkingBudget as number),
+		thinkingBudget: bool(
+			typeof raw.thinkingBudget === 'number' ? raw.thinkingBudget > 0 : raw.thinkingBudget,
+			DEFAULT.thinkingBudget,
+		),
+		planText: bool(raw.planText, DEFAULT.planText),
+		aiLogSource: typeof raw.aiLogSource === 'string' ? raw.aiLogSource.trim() : DEFAULT.aiLogSource,
 	};
 }
 
@@ -87,7 +90,11 @@ export function setMenuMusicMuted(muted:boolean):Prefs {
 }
 
 export function preferredChatModel():string {
-	return prefs().model || 'meta/muse-glimmer';
+	const stored = prefs().model;
+	if (!stored || stored === 'meta/muse-glimmer' || stored === 'muse-glimmer') {
+		return '';
+	}
+	return stored;
 }
 
 export function lsGet(key:string):string | null {
@@ -120,10 +127,6 @@ export function lsDel(key:string):void {
 
 export function clampParallelThinkers(n:number):number {
 	return clampInt(n, MIN_PARALLEL_THINKERS, MAX_PARALLEL_THINKERS, DEFAULT.maxParallel);
-}
-
-export function clampThinkingBudget(n:number):number {
-	return clampInt(n, MIN_THINKING_BUDGET, MAX_THINKING_BUDGET, DEFAULT.thinkingBudget);
 }
 
 const KEY = 'arc-director.prefs.v1';

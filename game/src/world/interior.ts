@@ -1,4 +1,4 @@
-import { Door, Interior, Named } from '../engine/components';
+import { Door, Interior, Lock, Named } from '../engine/components';
 import type { GameObject } from '../engine/GameObject';
 import type { World } from '../engine/World';
 import { CELL_SIZE } from './constants';
@@ -100,6 +100,21 @@ function namedOf(go:GameObject):string {
 	return go.getComponent(Named)?.id ?? go.id;
 }
 
+function doorStatus(doorGo:GameObject):string {
+	const lock = doorGo.getComponent(Lock);
+	const door = doorGo.getComponent(Door);
+	if (lock?.locked) {
+		return 'shut and locked';
+	}
+	if (door && !door.open) {
+		return 'shut';
+	}
+	if (door?.open) {
+		return 'open';
+	}
+	return 'the doorway';
+}
+
 /** English line for the think prompt. Empty when the scene has no interiors. */
 export function whereabouts(actor:GameObject):string {
 	const world = actor.world;
@@ -118,10 +133,11 @@ export function whereabouts(actor:GameObject):string {
 	if (door) {
 		const dname = namedOf(door);
 		const building = door.getComponent(Door)?.buildingID;
+		const status = doorStatus(door);
 		if (building) {
-			return `You are in the ${dname} doorway, not inside ${building} yet. Step through ${dname} into ${building}. The other side is outdoors.`;
+			return `You are in the ${dname} doorway, not inside ${building} yet. ${dname} is ${status}. Inside is ${building}, not this doorway. The other side is outdoors.`;
 		}
-		return `You are in the ${dname} doorway.`;
+		return `You are in the ${dname} doorway. ${dname} is ${status}.`;
 	}
 	let near:GameObject | undefined;
 	let nearD = 14;
@@ -137,8 +153,11 @@ export function whereabouts(actor:GameObject):string {
 	if (near) {
 		const name = namedOf(near);
 		const way = doorOfBuilding(world, name);
-		const doorName = way ? namedOf(way) : 'the door';
-		return `You are outdoors, outside ${name}. ${doorName} leads inside.`;
+		if (way) {
+			const doorName = namedOf(way);
+			return `You are outdoors, outside ${name}. You are not inside ${name}. ${doorName} is ${doorStatus(way)}. Standing at ${doorName} is still outdoors.`;
+		}
+		return `You are outdoors, outside ${name}. You are not inside ${name}.`;
 	}
 	return 'You are outdoors.';
 }

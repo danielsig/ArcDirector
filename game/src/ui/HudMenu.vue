@@ -4,9 +4,7 @@ import { type HudModel, type MenuPage } from './hudModel';
 import { sessionKey } from './sessionKey';
 import {
 	MAX_PARALLEL_THINKERS,
-	MAX_THINKING_BUDGET,
 	MIN_PARALLEL_THINKERS,
-	MIN_THINKING_BUDGET,
 	clampParallelThinkers,
 	setPrefs,
 } from '../prefs';
@@ -22,11 +20,11 @@ const emit = defineEmits<{
 const session = inject(sessionKey);
 
 const PAGES:{ id:MenuPage; label:string }[] = [
+	{ id: 'testing', label: 'Arc Director' },
 	{ id: 'game', label: 'Game' },
 	{ id: 'display', label: 'Display' },
 	{ id: 'audio', label: 'Audio' },
 	{ id: 'saves', label: 'Saves' },
-	{ id: 'testing', label: 'Testing' },
 ];
 
 watch(
@@ -102,6 +100,14 @@ function toggleBatchThinks():void {
 	props.hud.batchThinks = !props.hud.batchThinks;
 }
 
+function toggleThinking():void {
+	props.hud.thinkingBudget = !props.hud.thinkingBudget;
+}
+
+function togglePlanText():void {
+	props.hud.planText = !props.hud.planText;
+}
+
 function dumpNPCMaps():void {
 	void session?.value?.dumpNPCMaps();
 }
@@ -141,18 +147,29 @@ function avg(sum:number, n:number):number | null {
 	return sum / n;
 }
 
+function fmtSec(n:number):string {
+	if (!Number.isFinite(n)) {
+		return '—';
+	}
+	if (n < 10) {
+		return `${n.toFixed(1)}s`;
+	}
+	return `${Math.round(n)}s`;
+}
+
+function fmtPulse(n:number | null):string {
+	return n === null ? 'off' : fmtSec(n);
+}
+
+function fmtAgo(n:number | null):string {
+	return n === null ? '—' : fmtSec(n);
+}
+
 function pct(n:number):string {
 	if (!Number.isFinite(n)) {
 		return '0';
 	}
 	return String(Math.round(Math.max(0, Math.min(1, n)) * 100));
-}
-
-function thinkingLabel(n:number):string {
-	if (!Number.isFinite(n) || n <= 0) {
-		return 'Off';
-	}
-	return String(Math.round(n));
 }
 
 function select(id:string):void {
@@ -384,6 +401,18 @@ function when(iso:string):string {
 						<template v-else>
 							<h3>World</h3>
 							<div class="set">
+								<span class="name">Arc Director</span>
+								<button
+									type="button"
+									class="switch"
+									:class="{ on: hud.arcDirectorOn }"
+									:aria-pressed="hud.arcDirectorOn"
+									@click.stop="toggleArcDirector"
+								>
+									{{ hud.arcDirectorOn ? 'On' : 'Off' }}
+								</button>
+							</div>
+							<div class="set">
 								<span class="name">Observer</span>
 								<button
 									type="button"
@@ -393,18 +422,6 @@ function when(iso:string):string {
 									@click.stop="toggleObserver"
 								>
 									{{ hud.observer ? 'On' : 'Off' }}
-								</button>
-							</div>
-							<div class="set">
-								<span class="name">ArcDirector</span>
-								<button
-									type="button"
-									class="switch"
-									:class="{ on: hud.arcDirectorOn }"
-									:aria-pressed="hud.arcDirectorOn"
-									@click.stop="toggleArcDirector"
-								>
-									{{ hud.arcDirectorOn ? 'On' : 'Off' }}
 								</button>
 							</div>
 							<div class="set">
@@ -419,6 +436,7 @@ function when(iso:string):string {
 								<select
 									v-model="hud.model"
 									:disabled="hud.models.length === 0 && !hud.model"
+									@mousedown="session?.refreshHudModels()"
 									@change.stop="pickModel"
 								>
 									<option
@@ -475,19 +493,30 @@ function when(iso:string):string {
 									{{ hud.batchThinks ? 'On' : 'Off' }}
 								</button>
 							</div>
-							<label class="set stack">
-								<span class="name">
-									Thinking
-									<span class="readout">{{ thinkingLabel(hud.thinkingBudget) }}</span>
-								</span>
-								<input
-									v-model.number="hud.thinkingBudget"
-									type="range"
-									:min="MIN_THINKING_BUDGET"
-									:max="MAX_THINKING_BUDGET"
-									step="32"
+							<div class="set">
+								<span class="name">Thinking</span>
+								<button
+									type="button"
+									class="switch"
+									:class="{ on: hud.thinkingBudget }"
+									:aria-pressed="hud.thinkingBudget"
+									@click.stop="toggleThinking"
 								>
-							</label>
+									{{ hud.thinkingBudget ? 'On' : 'Off' }}
+								</button>
+							</div>
+							<div class="set">
+								<span class="name">Plan text</span>
+								<button
+									type="button"
+									class="switch"
+									:class="{ on: hud.planText }"
+									:aria-pressed="hud.planText"
+									@click.stop="togglePlanText"
+								>
+									{{ hud.planText ? 'On' : 'Off' }}
+								</button>
+							</div>
 							<h3>Stats</h3>
 							<table class="stats">
 								<thead>
@@ -524,6 +553,22 @@ function when(iso:string):string {
 								<span>{{ hud.inferCalls }} call{{ hud.inferCalls === 1 ? '' : 's' }}</span>
 								<button type="button" class="act" @click.stop="resetInferStats">Reset</button>
 							</div>
+							<table v-if="hud.heartrates.length" class="stats">
+								<thead>
+									<tr>
+										<th>Heartrate</th>
+										<th>Pulse</th>
+										<th>Ago</th>
+									</tr>
+								</thead>
+								<tbody>
+									<tr v-for="row in hud.heartrates" :key="row.id">
+										<td>{{ row.name }}</td>
+										<td>{{ fmtPulse(row.pulse) }}</td>
+										<td>{{ row.thinking ? 'thinking' : fmtAgo(row.ago) }}</td>
+									</tr>
+								</tbody>
+							</table>
 						</template>
 					</div>
 				</div>
@@ -575,8 +620,6 @@ function when(iso:string):string {
 	display: flex;
 	align-items: center;
 	justify-content: center;
-	z-index: 2;
-}
 
 .hud-menu-panel {
 	width: min(720px, 92vw);

@@ -175,7 +175,6 @@ describe('groups, fail, loop, when(watch)', () => {
 		});
 		const session = createPlanSession({
 			catalog: () => catalog,
-			cooldown: 0,
 		});
 		const plan = parsePlanText('loop(through=x in others, plan=follow(x))', registerStockVerbs(new VerbRegistry()));
 		await runPlan(plan, async (step) => {
@@ -195,7 +194,7 @@ describe('groups, fail, loop, when(watch)', () => {
 			cache: new SampleCache(),
 			hasHeard: heard,
 		});
-		const session = createPlanSession({ catalog, cooldown: 0, now: () => 0 });
+		const session = createPlanSession({ catalog, now: () => 0 });
 		const execute = async (step:Step):Promise<ActionResult> => {
 			verbs.push(step.verb);
 			if (step.verb === 'go_to' && step.args.name === 'Keep') {
@@ -229,7 +228,7 @@ describe('groups, fail, loop, when(watch)', () => {
 				second: { kind: 'bool', value: second },
 			},
 		});
-		const session = createPlanSession({ catalog, cooldown: 0, now: () => 0 });
+		const session = createPlanSession({ catalog, now: () => 0 });
 		const execute = async (step:Step):Promise<ActionResult> => {
 			seen.push(`${step.verb}:${String(step.args.text ?? '')}`);
 			if (step.verb === 'say' && step.args.text === 'A') {
@@ -251,5 +250,37 @@ describe('groups, fail, loop, when(watch)', () => {
 		const result = await runPlan(plan, execute, { session });
 		assert.equal(result.ok, true);
 		assert.deepEqual(seen, ['say:A', 'say:B', 'wait:']);
+	});
+
+	it('parks when(watch) after the body so the session still polls', async () => {
+		const verbs:string[] = [];
+		const catalog = ():ReturnType<typeof buildCatalog> => buildCatalog({
+			me: dummyEntity('Mira'),
+			others: [],
+			items: [],
+			cache: new SampleCache(),
+			hasHeard: false,
+		});
+		const session = createPlanSession({ catalog, now: () => 0 });
+		const plan = parsePlanText(
+			'when(watch=hasHeard, plan=say("ow")) ; wait()',
+			registerStockVerbs(new VerbRegistry()),
+		);
+		const result = await runPlan(plan, async (step) => {
+			verbs.push(step.verb);
+			return { ok: true, verb: step.verb };
+		}, { session });
+		assert.equal(result.ok, true);
+		assert.equal(session.parked, true);
+		assert.ok((session.frames[0]?.handlers.length ?? 0) > 0);
+		assert.deepEqual(verbs, ['wait']);
+	});
+
+	it('does not park a finished body with no when', async () => {
+		const session = createPlanSession();
+		const plan = parsePlanText('wait()', registerStockVerbs(new VerbRegistry()));
+		const result = await runPlan(plan, async (step) => ({ ok: true, verb: step.verb }), { session });
+		assert.equal(result.ok, true);
+		assert.equal(session.parked, false);
 	});
 });

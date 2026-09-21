@@ -1,6 +1,13 @@
 import { envGet } from '../env.js';
 import { extractJson, isRecord } from '../json.js';
-import { isThinkingModel, modelIDsMatch, thinkOffMode } from './models.js';
+import {
+	asModelList,
+	isThinkingModel,
+	modelIDsMatch,
+	pickReasoningOption,
+	thinkOffMode,
+	type ReasoningOption,
+} from './models.js';
 import type {
 	ChatContent,
 	ChatContentPart,
@@ -11,6 +18,14 @@ import type {
 	ToolCall,
 	ToolDef,
 } from './provider.js';
+import {
+	EMPTY_THINK_PREFILL,
+	fallbackThoughtPrefill,
+	resolveAssistantPrefill,
+	resolveThoughtPrefill,
+	withAssistantPrefill,
+	type ApplyPromptTemplate,
+} from './assistantThink.js';
 import {
 	pickBestThread,
 	rememberThread,
@@ -85,22 +100,32 @@ export type HttpProviderConfig = {
 	apiKey?:string;
 	fetch?:typeof fetch;
 	timeoutMs?:number;
-	/** Sent as `max_tokens` only if set. Omit so the server uses remaining context. */
+	/** Sent as `max_tokens` only if set. When omitted, thinking still gets a 512-token cap so CoT cannot fill the window. */
 	maxTokens?:number;
 	/**
 	 * When false (default), disable chain-of-thought on thinking models.
-	 * A thinking budget without this flag enables thinking on every NPC tick.
 	 */
 	enableThinking?:boolean;
 	/**
 	 * Thinking intensity (`low` / `medium` / `xhigh`).
-	 * Ignored unless `enableThinking` is true. Do not set together with `thinkingBudget`.
+	 * Ignored unless `enableThinking` is true, and only sent when the listed
+	 * model allows that option (`low` if omitted and allowed).
 	 */
 	reasoningEffort?:ReasoningEffort;
-	/** Cap thinking tokens. Only sent when `enableThinking` is true. */
-	thinkingBudget?:number;
 	/** Used when POST /api/v1/models/load exists. */
 	load?:HttpLoadConfig;
+	/**
+	 * Apply the model's prompt template (LM Studio SDK `applyPromptTemplate`).
+	 * When thinking is off, used to derive the Harmony `to=user` / empty-think prefill.
+	 * When a turn asks for a canned thought, used to wrap it in the model's think tokens.
+	 */
+	applyPromptTemplate?:ApplyPromptTemplate;
+	/** Fired with the exact JSON body after prepare, immediately before the HTTP send. */
+	onRequest?:(info:{
+		req:ChatRequest;
+		body:Record<string, unknown>;
+		path:string;
+	})=>void;
 };
 
 function withNoThink(messages:ChatMessage[]):ChatMessage[] {
@@ -148,6 +173,23 @@ function setTemplateKwargs(body:Record<string, unknown>, patch:Record<string, un
 	body['chat_template_kwargs'] = { ...prev, ...patch };
 }
 
+function preferReasoning(effort:ReasoningEffort | undefined):ReasoningOption {
+	if (effort === 'xhigh') {
+		return 'high';
+	}
+	return effort ?? 'low';
+}
+
+function setReasoningOption(body:Record<string, unknown>, option:ReasoningOption, responses:boolean):void {
+	body.reasoning = option;
+	if (!responses && (option === 'low' || option === 'medium' || option === 'high')) {
+		body['reasoning_effort'] = option;
+	}
+	if (!responses && option === 'low') {
+		setTemplateKwargs(body, { reasoning_strength: 'low' });
+	}
+}
+
 function defaultBaseURL():string {
 	return 'http://127.0.0.1:1234/v1';
 }
@@ -167,8 +209,61 @@ function sleep(ms:number):Promise<void> {
 	});
 }
 
+function isContextOverflow(msg:string):boolean {
+	return /context size has been exceeded|exceeds the (available )?context/i.test(msg);
+}
+
+const THINK_OUT = 512;
+const OVERFLOW_OUT = 256;
+
+function estimateTokens(value:unknown):number {
+	return Math.max(1, Math.ceil(JSON.stringify(value).length / 4));
+}
+
+function configNumber(config:Record<string, unknown>, ...keys:string[]):number | undefined {
+	for (const key of keys) {
+		const n = config[key];
+		if (typeof n === 'number' && Number.isFinite(n) && n > 0) {
+			return n;
+		}
+	}
+	return undefined;
+}
+
+function instanceContextLength(config:Record<string, unknown>):number | undefined {
+	return configNumber(config, 'context_length', 'contextLength', 'n_ctx', 'max_context_length');
+}
+
+function shrinkForOverflow(body:Record<string, unknown>):boolean {
+	let changed = false;
+	if (body.reasoning !== undefined && body.reasoning !== 'off') {
+		body.reasoning = 'off';
+		delete body['reasoning_effort'];
+		changed = true;
+	}
+	if (body['enable_thinking'] === true) {
+		body['enable_thinking'] = false;
+		changed = true;
+	}
+	const kwargs = isRecord(body['chat_template_kwargs']) ? body['chat_template_kwargs'] : undefined;
+	if (kwargs && (kwargs.enable_thinking === true || kwargs.reasoning_strength !== undefined)) {
+		body['chat_template_kwargs'] = { ...kwargs, enable_thinking: false };
+		delete (body['chat_template_kwargs'] as Record<string, unknown>).reasoning_strength;
+		changed = true;
+	}
+	if (body['max_tokens'] !== OVERFLOW_OUT) {
+		body['max_tokens'] = OVERFLOW_OUT;
+		changed = true;
+	}
+	if ('max_output_tokens' in body && body['max_output_tokens'] !== OVERFLOW_OUT) {
+		body['max_output_tokens'] = OVERFLOW_OUT;
+		changed = true;
+	}
+	return changed;
+}
+
 function shouldRetry(status:number, body:string):boolean {
-	if (isVramError(body)) {
+	if (isVramError(body) || isContextOverflow(body)) {
 		return false;
 	}
 	if (status >= 500) {
@@ -243,6 +338,69 @@ function messageText(message:Record<string, unknown>):string | null {
 	catch {
 		return null;
 	}
+}
+
+function mergeArgFragments(prev:string, next:string):string {
+	if (!next) {
+		return prev;
+	}
+	if (!prev) {
+		return next;
+	}
+	if (next.startsWith(prev) || prev.startsWith(next)) {
+		return next.length >= prev.length ? next : prev;
+	}
+	return prev + next;
+}
+
+/** OpenAI streams `tool_calls` as per-index fragments. Replacing the array drops the name. */
+function mergeToolCallDeltas(acc:unknown, delta:unknown):unknown[] {
+	const out:unknown[] = Array.isArray(acc)
+		? acc.map((row) => {
+			if (!isRecord(row)) {
+				return row;
+			}
+			const fn = isRecord(row.function) ? row.function : undefined;
+			return fn ? { ...row, function: { ...fn } } : { ...row };
+		})
+		: [];
+	if (!Array.isArray(delta)) {
+		return out;
+	}
+	for (const item of delta) {
+		if (!isRecord(item)) {
+			continue;
+		}
+		const index = typeof item.index === 'number' ? item.index : out.length;
+		while (out.length <= index) {
+			out.push({});
+		}
+		const prev = isRecord(out[index]) ? out[index] : {};
+		const prevFn = isRecord(prev.function) ? prev.function : {};
+		const nextFn = isRecord(item.function) ? item.function : {};
+		const prevArgs = typeof prevFn.arguments === 'string' ? prevFn.arguments : '';
+		const nextArgs = typeof nextFn.arguments === 'string' ? nextFn.arguments : '';
+		const name = typeof nextFn.name === 'string' && nextFn.name
+			? nextFn.name
+			: typeof prevFn.name === 'string' ? prevFn.name : '';
+		const id = typeof item.id === 'string' && item.id
+			? item.id
+			: typeof prev.id === 'string' ? prev.id : undefined;
+		out[index] = {
+			...prev,
+			...item,
+			index,
+			...(id ? { id } : {}),
+			type: typeof item.type === 'string' ? item.type : (typeof prev.type === 'string' ? prev.type : 'function'),
+			function: {
+				...prevFn,
+				...nextFn,
+				name,
+				arguments: mergeArgFragments(prevArgs, nextArgs),
+			},
+		};
+	}
+	return out;
 }
 
 function parseToolCalls(raw:unknown):ToolCall[] {
@@ -733,7 +891,7 @@ async function readInferenceResponse(
 			assembledReasoning += delta['reasoning_content'];
 		}
 		if (delta['tool_calls'] !== undefined) {
-			assembledTools = delta['tool_calls'];
+			assembledTools = mergeToolCallDeltas(assembledTools, delta['tool_calls']);
 		}
 	};
 	for (;;) {
@@ -905,12 +1063,18 @@ export class HttpProvider implements InferenceProvider {
 	private readonly maxTokens:number | undefined;
 	private enableThinking:boolean;
 	private reasoningEffort:ReasoningEffort | undefined;
-	private thinkingBudget:number | undefined;
 	private readonly loadOpts:HttpLoadConfig;
+	private readonly applyPromptTemplateFn:ApplyPromptTemplate | undefined;
+	private readonly onRequest?:(info:{
+		req:ChatRequest;
+		body:Record<string, unknown>;
+		path:string;
+	})=>void;
 	private responses:boolean | undefined;
 	private loadEndpoint = false;
 	private probed = false;
 	private instances:LoadedInstance[] = [];
+	private readonly reasoningByModel = new Map<string, ReasoningOption[]>();
 	private readonly threads = new Map<string, ThreadSnapshot[]>();
 	private readyChain:Promise<void> = Promise.resolve();
 	private jitFirst:Promise<ChatResponse> | null = null;
@@ -924,26 +1088,19 @@ export class HttpProvider implements InferenceProvider {
 		this.timeoutMs = config.timeoutMs ?? 180_000;
 		this.maxTokens = config.maxTokens;
 		this.enableThinking = config.enableThinking ?? false;
-		this.thinkingBudget = config.thinkingBudget;
-		this.reasoningEffort = this.thinkingBudget !== undefined
-			? undefined
-			: config.reasoningEffort;
+		this.reasoningEffort = config.reasoningEffort;
 		this.loadOpts = {
 			flashAttention: config.load?.flashAttention ?? true,
 			offloadKvCacheToGpu: config.load?.offloadKvCacheToGpu ?? true,
 			evalBatchSize: config.load?.evalBatchSize ?? 512,
 			parallel: config.load?.parallel,
 		};
+		this.applyPromptTemplateFn = config.applyPromptTemplate;
+		this.onRequest = config.onRequest;
 	}
 
-	setThinking(enableThinking:boolean, thinkingBudget?:number):void {
+	setThinking(enableThinking:boolean):void {
 		this.enableThinking = enableThinking;
-		this.thinkingBudget = enableThinking && thinkingBudget !== undefined && thinkingBudget > 0
-			? thinkingBudget
-			: undefined;
-		if (this.thinkingBudget !== undefined) {
-			this.reasoningEffort = undefined;
-		}
 	}
 
 	/** Load one copy of `model` (and eject extras). Safe to call from setModel. */
@@ -990,22 +1147,61 @@ export class HttpProvider implements InferenceProvider {
 		return rows.map((r) => r.vec);
 	}
 
-	private prepareMessages(req:ChatRequest):ChatMessage[] {
+	private thinkingOn(req:ChatRequest):boolean {
+		return this.enableThinking && req.enableThinking !== false;
+	}
+
+	private async thinkOffPrefill(model:string, thinkingOn:boolean):Promise<string | null> {
+		if (thinkingOn) {
+			return null;
+		}
+		if (!isThinkingModel(model) && !thinkOffMode(model)) {
+			return null;
+		}
+		if (this.applyPromptTemplateFn) {
+			const derived = await resolveAssistantPrefill(this.applyPromptTemplateFn, model);
+			if (derived) {
+				return derived;
+			}
+		}
+		return EMPTY_THINK_PREFILL;
+	}
+
+	private async thoughtDonePrefill(model:string):Promise<string> {
+		if (this.applyPromptTemplateFn) {
+			return resolveThoughtPrefill(this.applyPromptTemplateFn, model);
+		}
+		return fallbackThoughtPrefill();
+	}
+
+	private async prepareMessages(req:ChatRequest):Promise<ChatMessage[]> {
+		const thinkingOn = this.thinkingOn(req);
 		const thinkingModel = isThinkingModel(req.model);
-		const think = this.enableThinking && thinkingModel;
+		let messages = req.messages;
+		if (req.fakeThought && thinkingOn && (thinkingModel || thinkOffMode(req.model))) {
+			return withAssistantPrefill(messages, await this.thoughtDonePrefill(req.model));
+		}
+		if (thinkingOn && thinkingModel) {
+			return messages;
+		}
 		const off = thinkOffMode(req.model);
-		if (think) {
-			return req.messages;
-		}
 		if (off === 'no_think') {
-			return withNoThink(req.messages);
+			messages = withNoThink(messages);
 		}
-		return req.messages;
+		const prefill = await this.thinkOffPrefill(req.model, thinkingOn);
+		if (prefill) {
+			messages = withAssistantPrefill(messages, prefill);
+		}
+		return messages;
+	}
+
+	private emitRequest(req:ChatRequest, body:Record<string, unknown>, path:string):void {
+		this.onRequest?.({ req, body, path });
 	}
 
 	private async chatCompletions(req:ChatRequest, messages:ChatMessage[]):Promise<ChatResponse> {
 		const body = this.completionBody(req, messages);
-		const got = await this.postChat(joinURL(this.baseURL, 'chat/completions'), body, true);
+		const got = await this.postChat(joinURL(this.baseURL, 'chat/completions'), body, true, req);
 		const json = got.json;
 		const choices = Array.isArray(json.choices) ? json.choices : [];
 		const first = isRecord(choices[0]) ? choices[0] : {};
@@ -1037,10 +1233,6 @@ export class HttpProvider implements InferenceProvider {
 			body['previous_response_id'] = hit.id;
 		}
 		this.applyThinkFields(req, body, true);
-		const cap = req.maxTokens ?? this.maxTokens;
-		if (cap !== undefined) {
-			body['max_output_tokens'] = cap;
-		}
 		const tools = responseTools(req.tools);
 		if (tools) {
 			body.tools = tools;
@@ -1048,9 +1240,10 @@ export class HttpProvider implements InferenceProvider {
 				body['tool_choice'] = req.toolChoice;
 			}
 		}
+		this.applyOutputCap(req, body, true);
 		let got:{ json:Record<string, unknown>; firstMs?:number; wallMs:number };
 		try {
-			got = await this.postChat(joinURL(this.baseURL, 'responses'), body, false);
+			got = await this.postChat(joinURL(this.baseURL, 'responses'), body, false, req);
 		}
 		catch (err) {
 			const msg = err instanceof Error ? err.message : String(err);
@@ -1091,10 +1284,6 @@ export class HttpProvider implements InferenceProvider {
 			temperature: req.temperature ?? 0,
 		};
 		this.applyThinkFields(req, body, false);
-		const cap = req.maxTokens ?? this.maxTokens;
-		if (cap !== undefined) {
-			body['max_tokens'] = cap;
-		}
 		if (req.tools && req.tools.length > 0) {
 			body.tools = req.tools.map((t) => ({
 				type: 'function',
@@ -1108,61 +1297,80 @@ export class HttpProvider implements InferenceProvider {
 				body['tool_choice'] = req.toolChoice;
 			}
 		}
+		this.applyOutputCap(req, body, false);
 		return body;
 	}
 
 	private applyThinkFields(req:ChatRequest, body:Record<string, unknown>, responses:boolean):void {
+		const thinkingOn = this.thinkingOn(req);
 		const thinkingModel = isThinkingModel(req.model);
-		const think = this.enableThinking && thinkingModel;
 		const off = thinkOffMode(req.model);
-		if (think) {
-			if (this.thinkingBudget !== undefined) {
-				body['thinking_budget'] = this.thinkingBudget;
-			}
-			else if (this.reasoningEffort !== undefined) {
-				body[responses ? 'reasoning' : 'reasoning_effort'] = responses
-					? { effort: this.reasoningEffort }
-					: this.reasoningEffort;
-			}
-			if (off === 'strength') {
-				setTemplateKwargs(body, { reasoning_strength: 'low' });
-				if (responses) {
-					body.reasoning = { effort: 'low' };
-				}
-				else {
-					body['reasoning_effort'] = 'low';
-				}
-			}
-			else if (!responses) {
+		const option = pickReasoningOption(
+			this.allowedReasoning(req.model),
+			thinkingOn,
+			thinkingOn ? preferReasoning(this.reasoningEffort) : undefined,
+		);
+		if (option) {
+			setReasoningOption(body, option, responses);
+		}
+		if (thinkingOn) {
+			if (thinkingModel && off === 'no_think' && !responses) {
 				body['enable_thinking'] = true;
 				setTemplateKwargs(body, { enable_thinking: true });
 			}
 			return;
 		}
-		if (off === 'strength') {
-			setTemplateKwargs(body, { reasoning_strength: 'low' });
-			if (responses) {
-				body.reasoning = { effort: 'low' };
-			}
-			else {
-				body['reasoning_effort'] = 'low';
-			}
+		if (off === 'no_think' && !responses) {
+			body['enable_thinking'] = false;
+			body['chat_template_kwargs'] = { enable_thinking: false };
+		}
+	}
+
+	private slotContext(model:string):number | undefined {
+		const inst = this.instances.find((row) => this.instanceMatches(row, model));
+		return inst ? instanceContextLength(inst.config) : undefined;
+	}
+
+	private applyOutputCap(req:ChatRequest, body:Record<string, unknown>, responses:boolean):void {
+		const thinkingOn = this.thinkingOn(req);
+		const want = req.maxTokens ?? this.maxTokens ?? (thinkingOn ? THINK_OUT : undefined);
+		const slot = this.slotContext(req.model);
+		if (want === undefined && slot === undefined) {
 			return;
 		}
-		if (off === 'no_think') {
-			if (responses) {
-				body.reasoning = { effort: 'none' };
+		const prompt = estimateTokens(body);
+		let cap = want ?? THINK_OUT;
+		if (slot !== undefined) {
+			cap = Math.min(cap, Math.max(1, slot - prompt - 32));
+		}
+		if (responses) {
+			body['max_output_tokens'] = cap;
+		}
+		else {
+			body['max_tokens'] = cap;
+		}
+	}
+
+	private allowedReasoning(model:string):ReasoningOption[] | undefined {
+		for (const [id, allowed] of this.reasoningByModel) {
+			if (modelIDsMatch(id, model)) {
+				return allowed;
 			}
-			else {
-				body['enable_thinking'] = false;
-				body['reasoning_effort'] = 'none';
-				body['chat_template_kwargs'] = { enable_thinking: false };
+		}
+		return undefined;
+	}
+
+	private rememberReasoning(models:unknown[]):void {
+		this.reasoningByModel.clear();
+		for (const row of asModelList({ models })) {
+			if (row.reasoning && row.reasoning.allowed.length > 0) {
+				this.reasoningByModel.set(row.id, row.reasoning.allowed);
 			}
 		}
 	}
 
 	private async dispatchChat(req:ChatRequest):Promise<ChatResponse> {
-		const messages = this.prepareMessages(req);
+		const messages = await this.prepareMessages(req);
 		if (this.responses === true || (this.responses !== false && this.loadEndpoint)) {
 			try {
 				return await this.chatResponses(req, messages);
@@ -1267,6 +1475,7 @@ export class HttpProvider implements InferenceProvider {
 			throw new Error('inference models: no catalog');
 		}
 		this.instances = readLoadedInstances(json.models);
+		this.rememberReasoning(json.models);
 	}
 
 	private async loadModel(model:string):Promise<void> {
@@ -1412,6 +1621,7 @@ export class HttpProvider implements InferenceProvider {
 		url:string,
 		body:Record<string, unknown>,
 		completions:boolean,
+		req:ChatRequest,
 	):Promise<{ json:Record<string, unknown>; firstMs?:number; wallMs:number }> {
 		let lastErr:Error | null = null;
 		let stream = true;
@@ -1423,6 +1633,7 @@ export class HttpProvider implements InferenceProvider {
 			if (stream && completions) {
 				payload['stream_options'] = { include_usage: true };
 			}
+			this.emitRequest(req, payload, url);
 			const t0 = nowMs();
 			const res = await this.fetchImpl(url, {
 				method: 'POST',
@@ -1448,6 +1659,9 @@ export class HttpProvider implements InferenceProvider {
 					stream = false;
 					continue;
 				}
+				if (isContextOverflow(`${msg} ${text}`) && shrinkForOverflow(body) && attempt < 3) {
+					continue;
+				}
 				if (shouldRetry(res.status, text) && attempt < 3) {
 					continue;
 				}
@@ -1458,6 +1672,9 @@ export class HttpProvider implements InferenceProvider {
 			}
 			catch (err) {
 				lastErr = err instanceof Error ? err : new Error(String(err));
+				if (isContextOverflow(lastErr.message) && shrinkForOverflow(body) && attempt < 3) {
+					continue;
+				}
 				if (stream && /stream ended without a response/.test(lastErr.message) && attempt < 3) {
 					stream = false;
 					continue;

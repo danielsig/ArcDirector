@@ -90,6 +90,7 @@ function leave():void {
 		<img class="brand" src="/logo.png" alt="Arc Director" />
 		<h1>Scenes</h1>
 		<button type="button" @click="pick('marketplace')">Marketplace</button>
+		<button type="button" @click="pick('ruins')">Ruin Fight</button>
 		<button type="button" @click="pick('glen')">River Glen</button>
 		<button type="button" @click="pick('abbey_vault')">Abbey Vault</button>
 		<label class="music-toggle">

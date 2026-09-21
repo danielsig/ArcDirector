@@ -1,7 +1,7 @@
 import type { JsonSchema } from '../json.js';
-import type { VerbRegistry } from './registry.js';
+import type { VerbRegistry, VerbSpec } from './registry.js';
 
-const THEN_DEPTH = 4;
+const THEN_DEPTH = 8;
 
 function stepSchema(registry:VerbRegistry, depth:number):JsonSchema {
 	const properties:Record<string, JsonSchema> = {};
@@ -13,7 +13,7 @@ function stepSchema(registry:VerbRegistry, depth:number):JsonSchema {
 		const kind = spec.args[name];
 		const base = kind.endsWith('?') ? kind.slice(0, -1) : kind;
 		properties[name] = base === 'plan'
-			? (depth <= 0 ? { type: 'object', additionalProperties: true } : planSchemaAt(registry, depth - 1))
+			? (depth <= 0 ? { type: 'object', additionalProperties: true } : planSchemaAt(registry.nested(), depth - 1))
 			: registry.argSchema(kind);
 	}
 	return {
@@ -86,21 +86,41 @@ export function actionPlanSchema(registry:VerbRegistry):JsonSchema {
 	};
 }
 
+function formatVerbHelp(spec:VerbSpec):string {
+	const parts = Object.entries(spec.args).map(([k, kind]) => {
+		return kind.endsWith('?') ? `${k}?` : k;
+	});
+	const base = parts.length === 0 ? spec.name : `${spec.name}(${parts.join(', ')})`;
+	if (spec.name === 'when') {
+		return `${base} — this job's interrupt; no extra think`;
+	}
+	if (spec.name === 'issue') {
+		return `${base} — assigns a sticky program to matching units, never the commander`;
+	}
+	if (spec.name === 'law') {
+		return `${base} — standing reaction until unlaw; no extra think`;
+	}
+	if (spec.name === 'unlaw' || spec.name === 'tag' || spec.name === 'untag') {
+		return `${base} — assigns only`;
+	}
+	if (spec.name === 'loop') {
+		return `${base} — repeats until fail`;
+	}
+	return base;
+}
+
 export function verbHelp(registry:VerbRegistry):string {
-	return registry.list().map((spec) => {
-		const parts = Object.entries(spec.args).map(([k, kind]) => {
-			return kind.endsWith('?') ? `${k}?` : k;
-		});
-		const base = parts.length === 0 ? spec.name : `${spec.name}(${parts.join(', ')})`;
-		if (spec.name === 'when') {
-			return `${base} — who= issues orders immediately; watch= is critical on this job`;
-		}
-		if (spec.name === 'law' || spec.name === 'unlaw' || spec.name === 'tag' || spec.name === 'untag') {
-			return `${base} — assigns only`;
-		}
-		if (spec.name === 'loop') {
-			return `${base} — repeats until fail`;
-		}
-		return base;
-	}).join(', ');
+	const kit = registry.list().map(formatVerbHelp).join(', ');
+	if (!registry.has('issue')) {
+		return kit;
+	}
+	const nested = registry.nested();
+	if (nested === registry) {
+		return kit;
+	}
+	const extras = nested.list().filter((spec) => !registry.has(spec.name)).map(formatVerbHelp);
+	if (extras.length === 0) {
+		return kit;
+	}
+	return `${kit}. Nested plan verbs: ${extras.join(', ')}`;
 }

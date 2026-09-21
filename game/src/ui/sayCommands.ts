@@ -6,6 +6,7 @@ export const SAY_COMMANDS = [
 	{ verb: 'buy', usage: '/buy <item> [from] <person> [offer]', hint: 'Pay gold and take a good' },
 	{ verb: 'sell', usage: '/sell <item> [to] <person> [ask]', hint: 'Take gold and give a good' },
 	{ verb: 'help', usage: '/help', hint: 'List slash commands' },
+	{ verb: 'clear', usage: '/clear', hint: 'Clear say history' },
 ] as const;
 
 const SKIP = new Set(['to', 'from', 'with']);
@@ -198,7 +199,7 @@ function finish(head:string, value:string, more:boolean):string {
 function commandInserts(partial:string):SaySuggestion[] {
 	const hits = SAY_COMMANDS.filter((c) => c.verb.startsWith(partial.toLowerCase()));
 	return hits.slice(0, SUGGEST_CAP).map((c) => ({
-		insert: finish('/', c.verb, c.verb !== 'help'),
+		insert: finish('/', c.verb, c.verb !== 'help' && c.verb !== 'clear'),
 		label: `/${c.verb}`,
 		hint: c.hint,
 	}));

@@ -47,7 +47,7 @@ export type Ast =
 	| { type:'lambda'; params:string[]; body:Ast };
 
 export const RESERVED = new Set([
-	'me', 'others', 'items', 'units', 'it', 'fail', 'prevThought', 'prevActions',
+	'me', 'others', 'items', 'units', 'it', 'fail', 'prev',
 	'clamp', 'softClamp', 'map', 'find', 'findLast', 'filter', 'includes',
 	'first', 'sortBy', 'max', 'min', 'maxBy', 'minBy', 'sum', 'avg', 'count',
 	'reduce', 'some', 'all', 'matches', 'search', 'nearby', 'reachable', 'approaching', 'departing',
@@ -207,6 +207,49 @@ export function needleMatch(e:ExprEntity, needle:string):boolean {
 		return true;
 	}
 	return e.tags.includes(needle);
+}
+
+const LEFTOVER_BINDINGS = new Set(['me', 'others', 'items', 'units', 'landmarks', 'events', 'i']);
+
+/** Leftover sight English (`trees`) is not a name when `Tree` / `tree` is in the list. */
+export function leftoverEnglishHint(word:string, entities:ExprEntity[]):string | undefined {
+	if (LEFTOVER_BINDINGS.has(word) || !/^[a-z]/.test(word)) {
+		return undefined;
+	}
+	if (entities.some((e) => needleMatch(e, word))) {
+		return undefined;
+	}
+	const stem = word.length > 3 && /s$/.test(word) && !/(ss|us|is)$/.test(word)
+		? word.slice(0, -1)
+		: '';
+	if (!stem) {
+		return undefined;
+	}
+	const name = stem.charAt(0).toUpperCase() + stem.slice(1);
+	if (entities.some((e) => needleMatch(e, stem) || needleMatch(e, name))) {
+		return `no such name ${word} — leftover English is not a name. Use ${name}`;
+	}
+	return undefined;
+}
+
+export function leftoverFilterHint(expr:string, entities:ExprEntity[]):string | undefined {
+	const re = /filter\("([^"]+)"\)/g;
+	let m:RegExpExecArray | null;
+	while ((m = re.exec(expr))) {
+		const hint = leftoverEnglishHint(m[1], entities);
+		if (hint) {
+			return hint;
+		}
+	}
+	const stripped = expr.replace(/"[^"]*"/g, ' ');
+	const idents = stripped.match(/\b[A-Za-z_][A-Za-z0-9_]*\b/g) ?? [];
+	for (const word of idents) {
+		const hint = leftoverEnglishHint(word, entities);
+		if (hint) {
+			return hint;
+		}
+	}
+	return undefined;
 }
 
 export function capList(items:ExprVal[], cap = LIST_CAP):ExprVal {

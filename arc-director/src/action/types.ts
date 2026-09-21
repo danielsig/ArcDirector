@@ -43,8 +43,6 @@ export const SYMBOL_JOIN:Record<string, Join> = {
 	'||': 'then_if_err',
 };
 
-export const PLAN_BODY_CAP = 4;
-
 export function firstStep(plan:ActionPlan):Step | undefined {
 	if (plan.group) {
 		return firstStep(plan.group);
@@ -57,6 +55,9 @@ export function firstStep(plan:ActionPlan):Step | undefined {
 
 export function isHoistedWhen(step:Step):boolean {
 	const watch = typeof step.args.watch === 'string' ? step.args.watch.trim() : '';
-	const who = typeof step.args.who === 'string' ? step.args.who.trim() : '';
-	return step.verb === 'when' && watch.length > 0 && who.length === 0;
+	return step.verb === 'when' && watch.length > 0;
+}
+
+export function isIssue(step:Step):boolean {
+	return step.verb === 'issue';
 }

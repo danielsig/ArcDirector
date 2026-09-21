@@ -32,6 +32,8 @@ type DetailStash = {
 	metalness:number | undefined;
 };
 
+type LightWithShadow = THREE.Light & { shadow?:THREE.LightShadow };
+
 function textureBytes(tex:THREE.Texture):number {
 	const img = tex.image as { width?:number; height?:number; naturalWidth?:number; naturalHeight?:number } | undefined;
 	const w = img?.naturalWidth ?? img?.width ?? 0;
@@ -221,12 +223,12 @@ export class Renderer {
 			seen.add(tex);
 			bytes += textureBytes(tex);
 		};
-		const addTarget = (rt:THREE.WebGLRenderTarget | null | undefined):void => {
+		const addTarget = (rt:THREE.RenderTarget | null | undefined):void => {
 			if (!rt || seen.has(rt)) {
 				return;
 			}
 			seen.add(rt);
-			const faces = (rt as THREE.WebGLCubeRenderTarget).isWebGLCubeRenderTarget ? 6 : 1;
+			const faces = rt instanceof THREE.WebGLCubeRenderTarget ? 6 : 1;
 			const layer = rt.width * rt.height * 4 * faces;
 			bytes += layer;
 			if (rt.depthTexture) {
@@ -235,12 +237,12 @@ export class Renderer {
 		};
 		this.world.native.traverse((obj) => {
 			if ((obj as THREE.Light).isLight) {
-				addTarget((obj as THREE.Light).shadow?.map ?? null);
+				addTarget((obj as LightWithShadow).shadow?.map ?? null);
 			}
 			if (!(obj as THREE.Mesh).isMesh) {
 				return;
 			}
-			const mats = obj.material;
+			const mats = (obj as THREE.Mesh).material;
 			for (const mat of (Array.isArray(mats) ? mats : [mats])) {
 				const std = mat as THREE.MeshStandardMaterial;
 				addTex(std.map);
@@ -270,14 +272,15 @@ export class Renderer {
 		}
 		const seen = new Set<THREE.Material>();
 		this.world.native.traverse((obj) => {
-			if ((obj as THREE.Light).isLight && (obj as THREE.Light).shadow && !this.shadows && (obj as THREE.Light).shadow.map) {
-				(obj as THREE.Light).shadow.map.dispose();
-				(obj as THREE.Light).shadow.map = null;
+			const shadow = (obj as THREE.Light).isLight ? (obj as LightWithShadow).shadow : undefined;
+			if (shadow?.map && !this.shadows) {
+				shadow.map.dispose();
+				shadow.map = null;
 			}
 			if (!(obj as THREE.Mesh).isMesh) {
 				return;
 			}
-			const mats = obj.material;
+			const mats = (obj as THREE.Mesh).material;
 			for (const mat of (Array.isArray(mats) ? mats : [mats])) {
 				if (seen.has(mat)) {
 					continue;

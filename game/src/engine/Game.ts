@@ -81,6 +81,7 @@ export class Game extends KindlingGame<World> {
 			ambient: this.scene.ambient,
 			agents: auto?.agents,
 			bargainDone: auto?.bargainDone,
+			scene: this.scene.id,
 		});
 		const director = this.scene.createDirector(host);
 		host.bind(director);
@@ -138,7 +139,8 @@ export class Game extends KindlingGame<World> {
 		this.hud.model = host.arc?.model || stored.model;
 		this.hud.maxParallel = host.arc?.liveMaxParallel() ?? stored.maxParallel;
 		this.hud.batchThinks = host.arc?.liveBatchThinks() ?? stored.batchThinks;
-		this.hud.thinkingBudget = host.arc ? host.arc.liveThinkingBudget() : stored.thinkingBudget;
+		this.hud.thinkingBudget = host.arc ? host.arc.liveThinking() : stored.thinkingBudget;
+		this.hud.planText = host.arc ? host.arc.livePlanText() : stored.planText;
 		this.session.persistAutosave();
 		this.session.persistView();
 		this.session.syncURLView();

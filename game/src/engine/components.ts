@@ -213,7 +213,7 @@ export class Wanted extends Component {
 /** Stays with a named body when idle. Always perceives that body, even in observer. */
 export class Companion extends Component {
 	targetID = 'Player';
-	/** When true, idle steering does not follow the bonded body (stay/wait). */
+	/** When true, idle steering does not follow — a spoken job is in effect, or they were told to stay. */
 	hold = false;
 }
 
@@ -317,33 +317,97 @@ export class Vitals extends Component {
 	maxMana = 5;
 }
 
+const HURT_LIFE = 0.42;
+
+/** Knockback + blink after a hit. Runs after the motor so the shove wins that frame. */
+export class HurtFlash extends Component {
+	static override order = Order.hurt;
+	until = 0;
+	vx = 0;
+	vz = 0;
+
+	get active():boolean {
+		const now = this.gameObject.world?.time ?? 0;
+		return this.enabled && now < this.until;
+	}
+
+	strike(vx:number, vz:number, now:number, life = HURT_LIFE):void {
+		this.vx = vx;
+		this.vz = vz;
+		this.until = now + life;
+		this.enabled = true;
+	}
+
+	override update(_dt:number):void {
+		const world = this.gameObject.world;
+		const rb = this.gameObject.getComponent(RigidBody);
+		if (!world || !rb || world.time >= this.until) {
+			this.enabled = false;
+			return;
+		}
+		const u = Math.max(0, (this.until - world.time) / HURT_LIFE);
+		rb.velocity.x = this.vx * u;
+		rb.velocity.z = this.vz * u;
+	}
+}
+
 export class SpeechBubble extends Component {
 	text = '';
 	until = 0;
-	height = 1.42;
+	height = 2.2;
 }
+
+/** One up-and-down hop. `abs(sin(ω t))` lands when `ω t = π`. */
+const HOP_OMEGA = 12;
+const HOP_PERIOD = Math.PI / HOP_OMEGA;
 
 /** Hop in place after a win — applied after ground snap so it stays visible. */
 export class Celebrating extends Component {
 	until = 0;
+	/** Counted hops from rest. 0 = until-only, phase locked to world time. */
+	hops = 0;
+	startedAt = 0;
 
 	static override order = Order.celebrating;
+
+	beginHops(time:number, count:number):void {
+		this.hops = count;
+		this.startedAt = time;
+		this.until = time + count * HOP_PERIOD + 0.02;
+		this.enabled = true;
+	}
 
 	override lateUpdate(_dt:number):void {
 		const world = this.gameObject.world;
 		const p = this.gameObject.transform.position;
 		const tile = world?.tileAtWorld(p.x, p.z);
 		const base = (tile?.height ?? 0) * TILE_HEIGHT;
-		if (!world || world.time >= this.until) {
+		if (!world) {
 			p.y = base;
 			this.enabled = false;
 			return;
 		}
-		p.y = base + Math.abs(Math.sin(world.time * 12)) * 0.38;
+		if (this.hops > 0) {
+			const elapsed = world.time - this.startedAt;
+			if (elapsed >= this.hops * HOP_PERIOD) {
+				p.y = base;
+				this.enabled = false;
+				return;
+			}
+			p.y = base + Math.abs(Math.sin(elapsed * HOP_OMEGA)) * 0.38;
+			return;
+		}
+		if (world.time >= this.until) {
+			p.y = base;
+			this.enabled = false;
+			return;
+		}
+		p.y = base + Math.abs(Math.sin(world.time * HOP_OMEGA)) * 0.38;
 	}
 
 	stop():void {
 		this.until = 0;
+		this.hops = 0;
 		this.lateUpdate(0);
 	}
 }

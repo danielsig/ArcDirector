@@ -76,7 +76,7 @@ const HALL:Sight = {
 	],
 };
 
-const HALL_GOLDEN = 'A damp stone hall of the abbey. boxes. Alchemist 3 paces ahead. Herbalist 4 paces left. *ArmoryChest* 4 paces ahead. *BrewHearth* 10 paces ahead. *EastGate* 5 paces right. *LinaCot* 10 paces right. *NollCot* 10 paces right. *Pillar* 5 paces ahead. *WestGate* 10 paces left. Bitterroot 15 paces ahead. BrassKey 5 paces ahead. Broom 10 paces left. Bucket 5 paces left. ChestKey 2 paces behind. GoldCoin 4 paces right. Lantern 4 paces behind. LeatherGlove 2 paces right. Rag 10 paces right. TorchA 5 paces left. TorchB 5 paces right. WorkGlove 2 paces left.';
+const HALL_GOLDEN = 'A damp stone hall of the abbey. boxes. Alchemist 3 paces in front of you. Herbalist 4 paces to your left. *ArmoryChest* 4 paces in front of you. *BrewHearth* 10 paces in front of you. *EastGate* 5 paces to your right. *LinaCot* 10 paces to your right. *NollCot* 10 paces to your right. *Pillar* 5 paces in front of you. *WestGate* 10 paces to your left. Bitterroot 15 paces in front of you. BrassKey 5 paces in front of you. Broom 10 paces to your left. Bucket 5 paces to your left. ChestKey 2 paces behind you. GoldCoin 4 paces to your right. Lantern 4 paces behind you. LeatherGlove 2 paces to your right. Rag 10 paces to your right. TorchA 5 paces to your left. TorchB 5 paces to your right. WorkGlove 2 paces to your left.';
 
 const GLEN:Sight = {
 	self: { id: 'Forager', at: [7, 8], facing: [1, 0] },
@@ -84,7 +84,7 @@ const GLEN:Sight = {
 	objects: [
 		person('Miller', [16, 9]),
 		person('Angler', [16, 18]),
-		person('Servant', [13, 11]),
+		person('Assistant', [13, 11]),
 		item('CottageKey', [7.6, 8]),
 		item('FireMushroom', [4, 5]),
 		item('SilverTrout', [22, 22]),
@@ -169,7 +169,7 @@ describe('formatSight', () => {
 		assert.equal(/\bagents\b/.test(paragraph), false);
 		assert.equal(
 			paragraph,
-			'A windy river glen. Angler 15 paces right. Miller 10 paces ahead. Servant 5 paces ahead. *Cottage* 5 paces right. *CottageDoor* 3 paces right. *Falls* 15 paces ahead. *MillBridge* 10 paces right. *MillLever* 5 paces ahead. *MillStone* 10 paces ahead. *OakA* 5 paces behind. *OakB* 10 paces right. Basket 2 paces behind. CottageKey 1 pace ahead. FireMushroom 5 paces behind. Net 15 paces right. Oar 15 paces ahead. Pebble 2 paces left. ReedA 10 paces right. ReedB 10 paces right. SilverTrout 20 paces ahead. Stick 3 paces ahead.',
+			'A windy river glen. Angler 15 paces to your right. Assistant 5 paces in front of you. Miller 10 paces in front of you. *Cottage* 5 paces to your right. *CottageDoor* 3 paces to your right. *Falls* 15 paces in front of you. *MillBridge* 10 paces to your right. *MillLever* 5 paces in front of you. *MillStone* 10 paces in front of you. *OakA* 5 paces behind you. *OakB* 10 paces to your right. Basket 2 paces behind you. CottageKey 1 pace in front of you. FireMushroom 5 paces behind you. Net 15 paces to your right. Oar 15 paces in front of you. Pebble 2 paces to your left. ReedA 10 paces to your right. ReedB 10 paces to your right. SilverTrout 20 paces in front of you. Stick 3 paces in front of you.',
 		);
 	});
 
@@ -180,8 +180,32 @@ describe('formatSight', () => {
 		assert.equal(/\bagents\b/.test(paragraph), false);
 		assert.equal(
 			paragraph,
-			'A busy street flea market. boxes. Cutler next to *CutlerStall*. Weaver next to *WeaverStall*. Baker next to *BakerStall*. Potter next to *PotterStall*. Brant 15 paces ahead. Cass 15 paces ahead. Pike 2 paces right. VisitorA 10 paces ahead. VisitorB 10 paces ahead. VisitorC 5 paces right. *EastGate* 20 paces ahead. *WestGate* 4 paces behind. Apple 5 paces ahead. Bowl 15 paces ahead. Candle 10 paces ahead. Knife 15 paces ahead. Loaf 5 paces ahead. Scarf 5 paces ahead.',
+			'A busy street flea market. boxes. Cutler next to *CutlerStall*. Weaver next to *WeaverStall*. Baker next to *BakerStall*. Potter next to *PotterStall*. Brant 15 paces in front of you. Cass 15 paces in front of you. Pike 2 paces to your right. VisitorA 10 paces in front of you. VisitorB 10 paces in front of you. VisitorC 5 paces to your right. *EastGate* 20 paces in front of you. *WestGate* 4 paces behind you. Apple 5 paces in front of you. Bowl 15 paces in front of you. Candle 10 paces in front of you. Knife 15 paces in front of you. Loaf 5 paces in front of you. Scarf 5 paces in front of you.',
 		);
+	});
+
+	it('sticks a 1-char unit to the number and keeps bearing as a heading', () => {
+		const paragraph = formatSight({
+			self: { id: 'Assistant', at: [0, 0], facing: [0, -1] },
+			objects: [person('Player', [-4, 0])],
+		}, { unitName: 'm', relationships: [] });
+		assert.equal(paragraph, 'Player 4m to your left.');
+	});
+
+	it('keeps a space before a long unit', () => {
+		const paragraph = formatSight({
+			self: { id: 'Assistant', at: [0, 0], facing: [0, -1] },
+			objects: [seen('Table', [0, -4], { tags: ['landmark'], movable: false })],
+		}, { relationships: [] });
+		assert.equal(paragraph, '*Table* 4 paces in front of you.');
+	});
+
+	it('pluralizes foot and can count leftovers', () => {
+		const paragraph = formatSight({
+			self: { id: 'Assistant', at: [0, 0], facing: [0, -1] },
+			objects: [seen('tree', [0, 20], { tags: ['plant'], count: 3 })],
+		}, { unitName: 'foot', relationships: [] });
+		assert.equal(paragraph, '3 trees 20 feet behind you.');
 	});
 
 	it('PascalCases an interactable leftover', () => {

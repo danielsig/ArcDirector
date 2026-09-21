@@ -14,26 +14,22 @@ import { Crowd } from './crowd.js';
 import { CrowdUnit, type CrowdUnitSpec } from './unit.js';
 import { squadTag, isSquadTag, shortTag } from './tags.js';
 import {
-	DEFAULT_MAX_LAWS,
-	dropLaw,
-	lawFromSpec,
-	upsertLaw,
 	type CrowdLaw,
 	type CrowdLawSpec,
 } from './laws.js';
-import { FORMATION_VERBS } from './verbs.js';
+import { isFormationVerb } from './verbs.js';
 
 export type CrowdConductorJSON = AgentJSON & {
 	crowd?:{ id:string; tags:string[] }[];
-	laws?:CrowdLaw[];
-	maxLaws?:number;
-	cooldown?:number;
+	commanderID?:string | null;
 };
 
 export type CrowdConductorOptions<HostCtx = unknown> = AgentOptions<HostCtx> & {
 	units?:CrowdUnitSpec[];
 	laws?:CrowdLawSpec[];
 	maxLaws?:number;
+	commander?:string;
+	onCommanderVacant?:(unitID:string)=>void;
 };
 
 export function isCrowdConductor<HostCtx>(
@@ -44,18 +40,27 @@ export function isCrowdConductor<HostCtx>(
 
 export class CrowdConductor<HostCtx = unknown> extends Agent<HostCtx> {
 	readonly crowd = new Crowd();
-	laws:CrowdLaw[] = [];
-	maxLaws:number;
+	commanderID:string | null = null;
+	onCommanderVacant?:(unitID:string)=>void;
 
 	constructor(opts:CrowdConductorOptions<HostCtx>) {
-		super(opts);
-		this.maxLaws = opts.maxLaws ?? DEFAULT_MAX_LAWS;
+		super({ ...opts, defaultLawWho: opts.defaultLawWho ?? 'units' });
 		for (const spec of opts.units ?? []) {
 			this.addUnit(spec);
 		}
 		for (const spec of opts.laws ?? []) {
 			this.addCrowdLaw(spec, spec.pinned);
 		}
+		if (opts.commander) {
+			this.setCommander(opts.commander);
+		}
+		if (opts.onCommanderVacant) {
+			this.onCommanderVacant = opts.onCommanderVacant;
+		}
+	}
+
+	protected override crowdLawWho():boolean {
+		return true;
 	}
 
 	addUnit(spec:CrowdUnitSpec):CrowdUnit {
@@ -71,36 +76,37 @@ export class CrowdConductor<HostCtx = unknown> extends Agent<HostCtx> {
 	}
 
 	removeUnit(id:string):CrowdUnit | undefined {
+		if (this.commanderID === id) {
+			this.vacateCommander(id);
+		}
 		return this.crowd.remove(id);
 	}
 
-	addCrowdLaw(spec:CrowdLawSpec, pinned = false):CrowdLaw | undefined {
-		const law = lawFromSpec({ ...spec, pinned: pinned || spec.pinned }, this.verbs, spec.name ?? `law_${this.laws.length + 1}`);
-		if (!law) {
-			return undefined;
+	setCommander(id:string | null):void {
+		if (id === null) {
+			const prev = this.commanderID;
+			if (prev) {
+				this.vacateCommander(prev);
+			}
+			return;
 		}
-		this.laws = upsertLaw(this.laws, law, this.maxLaws);
-		return this.laws.find((s) => s.name === law.name);
+		if (!this.crowd.get(id)) {
+			throw new Error(`ArcDirector: no unit '${id}' to command`);
+		}
+		this.commanderID = id;
+	}
+
+	private vacateCommander(unitID:string):void {
+		this.commanderID = null;
+		this.onCommanderVacant?.(unitID);
+	}
+
+	addCrowdLaw(spec:CrowdLawSpec, pinned = false):CrowdLaw | undefined {
+		return this.addLaw(spec, pinned);
 	}
 
 	removeCrowdLaw(name:string):void {
-		this.laws = dropLaw(this.laws, name);
-	}
-
-	lawHandlers(unit:CrowdUnit, matches:(law:CrowdLaw)=>boolean):PlanHandler[] {
-		const out:PlanHandler[] = [];
-		this.laws.forEach((law, i) => {
-			if (!matches(law)) {
-				return;
-			}
-			out.push({
-				key: `law:${law.name}`,
-				watch: law.watch,
-				plan: law.plan,
-				rank: i,
-			});
-		});
-		return out;
+		this.removeLaw(name);
 	}
 
 	tagUnits(units:CrowdUnit[], short:string):void {
@@ -127,11 +133,18 @@ export class CrowdConductor<HostCtx = unknown> extends Agent<HostCtx> {
 		return shortTag(this.id, stored);
 	}
 
-	assignPlan(units:CrowdUnit[], plan:ActionPlan):void {
-		for (const unit of units) {
+	issueUnits(units:CrowdUnit[], plan:ActionPlan):void {
+		const troops = this.commanderID
+			? units.filter((u) => u.id !== this.commanderID)
+			: units;
+		for (const unit of troops) {
 			unit.interrupt();
 			this.spawnUnitPlan(unit, plan);
 		}
+	}
+
+	assignPlan(units:CrowdUnit[], plan:ActionPlan):void {
+		this.issueUnits(units, plan);
 	}
 
 	beginHandler(unit:CrowdUnit, handler:PlanHandler, sessionOpts?:PlanSessionOpts):void {
@@ -155,8 +168,6 @@ export class CrowdConductor<HostCtx = unknown> extends Agent<HostCtx> {
 		unit.verb = firstStep(plan)?.verb ?? '';
 		const session = createPlanSession({
 			...sessionOpts,
-			cooldown: sessionOpts?.cooldown ?? this.cooldown,
-			coolUntil: unit.coolUntil,
 			now: sessionOpts?.now ?? (() => this.now),
 			abortHost: sessionOpts?.abortHost ?? (() => this.abortPlan?.(unit.id)),
 		});
@@ -167,6 +178,9 @@ export class CrowdConductor<HostCtx = unknown> extends Agent<HostCtx> {
 		unit.inflight = run.finally(() => {
 			if (unit.generation === gen) {
 				unit.inflight = null;
+				if (session.parked) {
+					return;
+				}
 				if (unit.plan === plan) {
 					unit.plan = null;
 					unit.verb = '';
@@ -196,7 +210,7 @@ export class CrowdConductor<HostCtx = unknown> extends Agent<HostCtx> {
 			unit.verb = step.verb;
 			const result = await this.performUnitStep(unit, step);
 			if (unit.generation !== gen) {
-				return { ok: false, interrupted: true, verb: step.verb };
+				return { ok: false, interrupted: true, verb: step.verb, reason: result.reason };
 			}
 			if (unit.stepToken !== session.token || (result.interrupted && session.pending)) {
 				return { ok: false, preempted: true, interrupted: false, verb: step.verb, reason: result.reason };
@@ -206,8 +220,8 @@ export class CrowdConductor<HostCtx = unknown> extends Agent<HostCtx> {
 	}
 
 	private async performUnitStep(unit:CrowdUnit, step:Step):Promise<ActionResult> {
-		if (FORMATION_VERBS.has(step.verb)) {
-			return { ok: false, verb: step.verb, reason: 'formation must be when plan head' };
+		if (isFormationVerb(step.verb)) {
+			return { ok: false, verb: step.verb, reason: 'formation must be issue plan head' };
 		}
 		if (!this.execute) {
 			return { ok: false, verb: step.verb, reason: `host has no executor for ${step.verb}` };
@@ -236,22 +250,48 @@ export class CrowdConductor<HostCtx = unknown> extends Agent<HostCtx> {
 	}
 
 	protected override extraVolatile():string {
-		if (this.laws.length === 0) {
-			return '';
+		const parts:string[] = [];
+		const roster = this.crowd.list();
+		if (roster.length > 0) {
+			const lines = roster.map((unit) => {
+				const tags = unit.tags.map((t) => this.shortOf(t)).filter((t) => t.length > 0);
+				const you = unit.id === this.commanderID ? ' (you)' : '';
+				return tags.length > 0
+					? `- ${unit.id}: ${tags.join(', ')}${you}`
+					: `- ${unit.id}${you}`;
+			});
+			parts.push(
+				`Units (issue who=units.filter("Tag") is this roster; allUnits is every troop, one program):\n${lines.join('\n')}`,
+			);
 		}
-		const lines = this.laws.map((law) => (
-			`- ${law.name}: who=${law.who} watch=${law.watch} → ${formatPlan(law.plan)}`
-		));
-		return `Laws (emergencies, list order; unlaw to drop):\n${lines.join('\n')}`;
+		if (this.laws.length > 0) {
+			const lines = this.laws.map((law) => (
+				`- ${law.name}: who=${law.who} watch=${law.watch} → ${formatPlan(law.plan)}`
+			));
+			parts.push(`Laws (emergencies, list order; unlaw to drop):\n${lines.join('\n')}`);
+		}
+		const groups = new Map<string, string[]>();
+		for (const unit of this.crowd.list()) {
+			if (unit.id === this.commanderID || !unit.busy || !unit.plan) {
+				continue;
+			}
+			const key = formatPlan(unit.plan);
+			const ids = groups.get(key) ?? [];
+			ids.push(unit.id);
+			groups.set(key, ids);
+		}
+		if (groups.size > 0) {
+			const lines = [...groups].map(([plan, ids]) => `- ${ids.join(', ')}: ${plan}`);
+			parts.push(`Unit programs:\n${lines.join('\n')}`);
+		}
+		return parts.join('\n');
 	}
 
 	override toJSON():CrowdConductorJSON {
 		return {
 			...super.toJSON(),
 			crowd: this.crowd.toJSON(),
-			laws: this.laws.map((s) => ({ ...s, plan: s.plan })),
-			maxLaws: this.maxLaws,
-			cooldown: this.cooldown,
+			commanderID: this.commanderID,
 		};
 	}
 
@@ -264,6 +304,7 @@ export class CrowdConductor<HostCtx = unknown> extends Agent<HostCtx> {
 			memory: MemoryStore.fromJSON(json.memories),
 			maxLaws: json.maxLaws,
 			cooldown: json.cooldown ?? deps.cooldown,
+			defaultLawWho: 'units',
 		});
 		conductor.loadJSON(json, deps);
 		if (json.crowd) {
@@ -271,8 +312,8 @@ export class CrowdConductor<HostCtx = unknown> extends Agent<HostCtx> {
 				conductor.crowd.add(CrowdUnit.fromJSON(row));
 			}
 		}
-		if (json.laws) {
-			conductor.laws = json.laws.map((s) => ({ ...s }));
+		if (json.commanderID) {
+			conductor.commanderID = json.commanderID;
 		}
 		return conductor;
 	}

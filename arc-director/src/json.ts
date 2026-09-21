@@ -65,14 +65,19 @@ function parseLooseObject(body:string):unknown {
 			stack.push('[');
 			continue;
 		}
-		if (ch === '}' || ch === ']') {
+	if (ch === '}' || ch === ']') {
 			const open = stack.pop();
 			const expected:Frame = ch === '}' ? '{' : '[';
 			if (open !== expected) {
 				break;
 			}
 			if (stack.length === 0) {
-				return JSON.parse(body.slice(start, i + 1));
+				const first = body.slice(start, i + 1);
+				const rest = body.slice(i + 1);
+				if (/^\s*,\s*"then"/.test(rest)) {
+					return parseLooseObject(first.slice(0, -1) + rest);
+				}
+				return JSON.parse(first);
 			}
 		}
 	}

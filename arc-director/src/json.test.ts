@@ -22,6 +22,17 @@ describe('extractJson', () => {
 	it('takes the first complete object when extra braces follow', () => {
 		assert.deepEqual(extractJson('{"a":1}}'), { a: 1 });
 	});
+
+	it('keeps a trailing then after an early-closed head', () => {
+		const raw = '{"head":{"verb":"wait","args":{"seconds":1}}},"then":{"join":"then","plan":{"head":{"verb":"say","args":{"text":"ok"}}}}}';
+		const got = extractJson(raw) as {
+			head:{ verb:string };
+			then:{ join:string; plan:{ head:{ verb:string } } };
+		};
+		assert.equal(got.head.verb, 'wait');
+		assert.equal(got.then.join, 'then');
+		assert.equal(got.then.plan.head.verb, 'say');
+	});
 });
 
 describe('readID', () => {
