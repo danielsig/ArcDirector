@@ -1,6 +1,6 @@
-import { verbHelp } from '../action/schema.js';
-import type { VerbRegistry } from '../action/registry.js';
-import type { ActionResult } from '../action/types.js';
+import { verbHelp } from '../arc/schema.js';
+import type { VerbRegistry } from '../arc/stock-verbs.js';
+import type { ArcResult } from '../arc/types.js';
 import type { MemoryRecord } from '../memory/store.js';
 import { DEFAULT_YOU_SYMBOL } from './map.js';
 import type { AgentIdentity, Goal, Watches } from './types.js';
@@ -13,15 +13,15 @@ export type StablePrefixOpts = {
 	youSymbol?:string;
 	/** Offer `grep_world_encyclopedia` this think. */
 	canGrepEncyclopedia?:boolean;
-	/** Ask for `pick_up(Lantern) ; go_to(Player) && give(...)` instead of ActionPlan JSON. */
-	planText?:boolean;
+	/** Ask for `pick_up(Lantern) ; go_to(Player) && give(...)` instead of Arc JSON. */
+	arcText?:boolean;
 	/** Replaces {@link DEFAULT_THINK_INSTRUCTIONS}. */
 	thinkInstructions?:string;
 	/** Replaces {@link DEFAULT_VERB_INSTRUCTIONS}. */
 	verbInstructions?:string;
-	/** Goals revision: identity only, no ActionPlan emit rules. */
-	omitPlan?:boolean;
-	/** Tool names offered this think. Never listed as ActionPlan verbs. */
+	/** Goals revision: identity only, no Arc emit rules. */
+	omitArc?:boolean;
+	/** Tool names offered this think. Never listed as Arc verbs. */
 	tools?:string[];
 };
 
@@ -52,8 +52,8 @@ export function stablePrefix(
 	if (opts.canSeeMap) {
 		lines.push(seeMapHint(opts.youSymbol, opts.canGrepEncyclopedia === true, verbs.has('wander')));
 	}
-	if (!opts.omitPlan) {
-		lines.push(planInstructions(verbs, opts.planText === true, opts.tools ?? [], {
+	if (!opts.omitArc) {
+		lines.push(arcInstructions(verbs, opts.arcText === true, opts.tools ?? [], {
 			think: opts.thinkInstructions,
 			verbs: opts.verbInstructions,
 		}));
@@ -62,7 +62,7 @@ export function stablePrefix(
 }
 
 export const WATCH_CHEAT_SHEET = [
-	'Watch language (not JS). Bindings: me, others, items, units (this Crowd roster, not others), landmarks, events, prev (last think: prev.me, prev.secondsAgo, prev.actions).',
+	'Watch language (not JS). Bindings: me, others, items, units (this Crowd roster, not others), landmarks, events, prev (last think: prev.me, prev.secondsAgo, prev.verbs).',
 	'Standing: addWatches / editWatches / removeWatches. One-shot this think: observe(expr).',
 	'Relations: distance(me, Player), isNear(me, Player, 16), hasSightline, isFacing, manhattan(me, Player), isReachable(me, Cottage); wrap list watches in some.',
 	'i is "Lantern". filter/count/find/some/all. others.nearby(16), isLeft, isRight, events.filter("theft"). &&/|| numbers=min/max, bools=and/or. Crowd: doing(u, "go_to"). isCarrying / wasCarrying / hasJustReceived / hasJustLost when you carry.',
@@ -70,7 +70,7 @@ export const WATCH_CHEAT_SHEET = [
 
 export function encyclopediaHint(includeUnnamed = false, canWander = true):string {
 	const lines = [
-		'grep_world_encyclopedia is a tool this think, not a verb. Query leftover English or a spoken place to get the Capitalized name. Never write it in the ActionPlan. Empty query lists names.',
+		'grep_world_encyclopedia is a tool this think, not a verb. Query leftover English or a spoken place to get the Capitalized name. Never write it in the Arc. Empty query lists names.',
 	];
 	if (includeUnnamed) {
 		const wander = canWander ? ', or wander(until)' : '';
@@ -88,7 +88,7 @@ export function seeMapHint(youSymbol = DEFAULT_YOU_SYMBOL, encyclopedia = false,
 		? `A spoken place that is not a Capitalized or *starred* name: Call grep_world_encyclopedia, see_map, ask the speaker where it is${wander}. A second look soon, without moving, returns the same legend and no new picture.`
 		: `A spoken place that is not a Capitalized or *starred* name: Call see_map, ask the speaker where it is${wander}. A second look soon, without moving, returns the same legend and no new picture.`;
 	return [
-		`see_map is a tool this think, not a verb. Never write it in the ActionPlan. zoom 1 close, 0 whole land. Match the legend (${you} = you).`,
+		`see_map is a tool this think, not a verb. Never write it in the Arc. zoom 1 close, 0 whole land. Match the legend (${you} = you).`,
 		unnamed,
 	].join(' ');
 }
@@ -96,7 +96,7 @@ export function seeMapHint(youSymbol = DEFAULT_YOU_SYMBOL, encyclopedia = false,
 export const SEE_MAP_HINT = seeMapHint();
 
 /** Standing think line when the host does not call `withThinkInstructions`. */
-export const DEFAULT_THINK_INSTRUCTIONS = 'Think in 5 sentences, then emit the plan.';
+export const DEFAULT_THINK_INSTRUCTIONS = 'Think in 5 sentences, then emit the arc.';
 
 /** Standing verb-chain line when the host does not call `withVerbInstructions`. */
 export const DEFAULT_VERB_INSTRUCTIONS = 'A think is expensive. Chain every next verb you already know, as far as you can see this think — not only the first step of an order.';
@@ -108,23 +108,23 @@ function joinSentences(parts:Array<string | false>):string {
 		.join(' ');
 }
 
-function planInstructions(
+function arcInstructions(
 	verbs:VerbRegistry,
-	planText:boolean,
+	arcText:boolean,
 	toolNames:string[] = [],
 	lines: { think?:string; verbs?:string } = {},
 ):string {
 	const has = (name:string):boolean => verbs.has(name);
 	const chain = has('pick_up') && has('go_to') && has('give');
 	return joinSentences([
-		'Goals are standing wants, not the next action.',
+		'Goals are standing wants, not the next verb.',
 		has('set_identity') && 'Do not emit identity or set_identity unless who you are changed for good.',
 		has('remember') && 'remember(content, tags?) keeps a lasting fact.',
 		has('think') && 'think(about?) last; several merge. Do not think() twice in a row — act first.',
 		lines.think === undefined ? DEFAULT_THINK_INSTRUCTIONS : lines.think,
 		has('wait') && 'wait(until) is a one-shot watch, dropped next think.',
 		has('wander') && 'Looking for a thing or place? wander(until) with args.until a watch expr.',
-		has('wander') && wanderExample(planText),
+		has('wander') && wanderExample(arcText),
 		unnamedPlace(verbs),
 		afterWander(verbs),
 		has('wander') && 'wander(until) is one step, not the rest of the think.',
@@ -135,29 +135,29 @@ function planInstructions(
 		has('use') && has('go_to') && 'go_to a doorway is still outside; inside is the building.',
 		lines.verbs === undefined ? DEFAULT_VERB_INSTRUCTIONS : lines.verbs,
 		walkIntoRange(verbs),
-		planText
+		arcText
 			? '&& continues only on success; ; always continues; || is the failure fallback.'
 			: 'then_if_ok continues only on success; then always continues; then_if_err is the failure fallback.',
-		toolNames.length > 0 && `Tools this think, not verbs: ${toolNames.join(', ')}. Call the tool; never write a tool name in the ActionPlan. Skip tools if you can already act.`,
-		emitSentence(planText, toolNames.length > 0, chain),
+		toolNames.length > 0 && `Tools this think, not verbs: ${toolNames.join(', ')}. Call the tool; never write a tool name in the Arc. Skip tools if you can already act.`,
+		emitSentence(arcText, toolNames.length > 0, chain),
 		`Names only, no coordinates. Available verbs: ${verbHelp(verbs)}.`,
 	]);
 }
 
-function wanderExample(planText:boolean):string {
-	return planText
+function wanderExample(arcText:boolean):string {
+	return arcText
 		? 'Example: wander(until=some(items.filter("FireMushroom").nearby())).'
 		: 'Example: {"head":{"verb":"wander","args":{"until":"some(items.filter(\\"FireMushroom\\").nearby())"}}}.';
 }
 
-function emitSentence(planText:boolean, tools:boolean, chain:boolean):string {
+function emitSentence(arcText:boolean, tools:boolean, chain:boolean):string {
 	const lead = tools ? 'After any tool, emit only' : 'Answer immediately with only';
-	const kind = planText ? 'the ActionPlan text' : 'the ActionPlan JSON';
+	const kind = arcText ? 'the Arc text' : 'the Arc JSON';
 	const example = chain
-		? (planText
+		? (arcText
 			? 'Example: pick_up(Lantern) ; go_to(Player) && give(item=Lantern, to=Player). No JSON, no prose.'
-			: 'Example: {"head":{"verb":"pick_up","args":{"name":"Lantern"}},"then":{"join":"then","plan":{"head":{"verb":"go_to","args":{"name":"Player"}},"then":{"join":"then_if_ok","plan":{"head":{"verb":"give","args":{"item":"Lantern","to":"Player"}}}}}}}. Close every brace. No prose.')
-		: (planText ? 'No JSON, no prose.' : 'Close every brace. No prose.');
+			: 'Example: {"head":{"verb":"pick_up","args":{"name":"Lantern"}},"then":{"join":"then","arc":{"head":{"verb":"go_to","args":{"name":"Player"}},"then":{"join":"then_if_ok","arc":{"head":{"verb":"give","args":{"item":"Lantern","to":"Player"}}}}}}}. Close every brace. No prose.')
+		: (arcText ? 'No JSON, no prose.' : 'Close every brace. No prose.');
 	return `${lead} ${kind}. ${example}`;
 }
 
@@ -219,22 +219,22 @@ function crowdInstructions(verbs:VerbRegistry):string {
 	const parts:string[] = [];
 	if (verbs.has('when')) {
 		parts.push(
-			`when(watch, plan) is this job's interrupt: it stays until the program is replaced and needs no extra think. Put known reactions on when instead of waiting to think. `,
+			`when(watch, arc) is this job's interrupt: it stays until the program is replaced and needs no extra think. Put known reactions on when instead of waiting to think. `,
 		);
 	}
 	if (verbs.has('issue')) {
 		parts.push(
-			`issue(who, plan) assigns a sticky program to matching units (never you). who is YOUR roster (units.filter("Witch")), never an enemy. `
-			+ `allUnits is one identical program for every troop. Join several issue with ;. Each issue plan is that unit's full chain. `,
+			`issue(who, arc) assigns a sticky program to matching units (never you). who is YOUR roster (units.filter("Witch")), never an enemy. `
+			+ `allUnits is one identical program for every troop. Join several issue with ;. Each issue arc is that unit's full chain. `,
 		);
 	}
 	if (verbs.has('loop')) {
-		parts.push('loop(plan) repeats until fail. through= / until= / times=. ');
+		parts.push('loop(arc) repeats until fail. through= / until= / times=. ');
 	}
 	if (verbs.has('law') || verbs.has('unlaw')) {
 		const who = verbs.has('issue')
-			? `law(who?, watch, plan, name?) is a standing reaction until unlaw(name) — it outlives the program and needs no think. Omitted who = units (troops). `
-			: `law(watch, plan, name?) is a standing reaction until unlaw(name) — it outlives the program and needs no think. `;
+			? `law(who?, watch, arc, name?) is a standing reaction until unlaw(name) — it outlives the program and needs no think. Omitted who = units (troops). `
+			: `law(watch, arc, name?) is a standing reaction until unlaw(name) — it outlives the program and needs no think. `;
 		parts.push(who);
 	}
 	return parts.join('');
@@ -253,7 +253,7 @@ function stringifySense(value:unknown):string {
 export function volatileBlock(opts:{
 	senses?:Record<string, unknown>;
 	intrusion?:string;
-	lastResult?:ActionResult;
+	lastResult?:ArcResult;
 	goals?:Goal[];
 	pinned?:MemoryRecord[];
 	recalled?:MemoryRecord[];
@@ -297,7 +297,7 @@ export function volatileBlock(opts:{
 		const r = opts.lastResult;
 		const status = r.interrupted ? 'interrupted' : r.ok ? 'ok' : 'failed';
 		const reason = r.reason ? ` — ${r.reason}` : '';
-		parts.push(`Last action result: ${r.verb ?? 'action'} ${status}${reason}`);
+		parts.push(`Last verb result: ${r.verb ?? 'verb'} ${status}${reason}`);
 	}
 	if (opts.thinkAbout) {
 		parts.push(`You asked to think about: ${opts.thinkAbout}`);
@@ -361,37 +361,37 @@ export function shortTermBlock(summary:string, recent:string[]):string {
 	return lines.join('\n');
 }
 
-/** Follow-up user turn after a bad plan or a tool call when tools are closed. Keeps the thread. */
-export function planRepairHint(reason:string, planText = false, tools:string[] = []):string {
+/** Follow-up user turn after a bad arc or a tool call when tools are closed. Keeps the thread. */
+export function arcRepairHint(reason:string, arcText = false, tools:string[] = []):string {
 	const asVerb = reason.match(/unknown verb '([^']+)'/);
 	const name = asVerb?.[1];
-	const emit = planText
-		? `Emit only one valid ActionPlan text now — no JSON, no prose. Names only, no coordinates.`
-		: `Emit only one valid ActionPlan JSON now — no prose. Names only, no coordinates. Close every brace.`;
+	const emit = arcText
+		? `Emit only one valid Arc text now — no JSON, no prose. Names only, no coordinates.`
+		: `Emit only one valid Arc JSON now — no prose. Names only, no coordinates. Close every brace.`;
 	if (name && tools.includes(name)) {
-		const next = planText
-			? `Then emit only one valid ActionPlan text — no JSON, no prose. Names only, no coordinates.`
-			: `Then emit only one valid ActionPlan JSON — no prose. Names only, no coordinates. Close every brace.`;
-		return `${name} is a tool, not a verb. Call the tool. Never write ${name}(...) in the ActionPlan. Keep this conversation. ${next}`;
+		const next = arcText
+			? `Then emit only one valid Arc text — no JSON, no prose. Names only, no coordinates.`
+			: `Then emit only one valid Arc JSON — no prose. Names only, no coordinates. Close every brace.`;
+		return `${name} is a tool, not a verb. Call the tool. Never write ${name}(...) in the Arc. Keep this conversation. ${next}`;
 	}
 	const toolNote = tools.length > 0
-		? ` Tools (${tools.join(', ')}) are not verbs — call them, then emit the plan.`
+		? ` Tools (${tools.join(', ')}) are not verbs — call them, then emit the arc.`
 		: '';
-	if (reason === 'expected verb' || reason === 'model returned no plan') {
-		return `That was not a valid ActionPlan (${reason}). That prose is discarded. `
+	if (reason === 'expected verb' || reason === 'model returned no arc') {
+		return `That was not a valid Arc (${reason}). That prose is discarded. `
 			+ `Do the spoken job, not go_to or follow the speaker. Keep this conversation. ${emit}${toolNote}`;
 	}
-	return `That was not a valid ActionPlan (${reason}). Keep this conversation. ${emit}${toolNote}`;
+	return `That was not a valid Arc (${reason}). Keep this conversation. ${emit}${toolNote}`;
 }
 
-/** Follow-up after a say plan whose audience is out of range. Speech did not happen. */
-export function sayRangeHint(reason:string, nearby:string[], planText = false):string {
+/** Follow-up after a say arc whose audience is out of range. Speech did not happen. */
+export function sayRangeHint(reason:string, nearby:string[], arcText = false):string {
 	const range = nearby.length > 0
 		? `In talking range: ${nearby.join(', ')}.`
 		: 'No one is in talking range.';
 	return `${reason}. That say did not happen. ${range} `
 		+ `Keep this conversation. go_to the name first, or say to someone already in range. `
-		+ (planText
-			? `Then emit only one valid ActionPlan text — no JSON, no prose. Names only, no coordinates.`
-			: `Then emit only one valid ActionPlan JSON — no prose. Names only, no coordinates.`);
+		+ (arcText
+			? `Then emit only one valid Arc text — no JSON, no prose. Names only, no coordinates.`
+			: `Then emit only one valid Arc JSON — no prose. Names only, no coordinates.`);
 }

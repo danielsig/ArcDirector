@@ -35,7 +35,7 @@ describe('thread cache', () => {
 		const later:ChatMessage = { role: 'assistant', content: '{"head":{"verb":"wait"}}' };
 		const stored:ThreadSnapshot[] = [
 			{ id: 'resp_tool', messages: [sys, userA, asst] },
-			{ id: 'resp_plan', messages: [sys, userA, asst, tool, later] },
+			{ id: 'resp_arc', messages: [sys, userA, asst, tool, later] },
 		];
 		const other:ChatMessage = { role: 'tool', content: '{"elsewhere":true}', toolCallID: 'c1' };
 		const hit = pickBestThread(stored, [sys, userA, asst, other]);

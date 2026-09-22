@@ -1,6 +1,6 @@
 import {
 	ArcDirector,
-	formatPlan,
+	formatArc,
 	goToNamedInteractable,
 	STOCK_VERBS,
 } from '../index.js';
@@ -79,15 +79,15 @@ async function main():Promise<void> {
 
 	director.tick(1, 1);
 	const t0 = Date.now();
-	while (!director.agent('Guard')?.lastPlan) {
+	while (!director.agent('Guard')?.lastArc) {
 		if (Date.now() - t0 > 180_000) {
-			throw new Error('agent returned no plan');
+			throw new Error('agent returned no arc');
 		}
 		await sleep(20);
 	}
-	const plan = director.agent('Guard')!.lastPlan!;
-	console.log('plan:', formatPlan(plan));
-	console.log(JSON.stringify(plan, null, 2));
+	const arc = director.agent('Guard')!.lastArc!;
+	console.log('arc:', formatArc(arc));
+	console.log(JSON.stringify(arc, null, 2));
 	director.dispose();
 }
 

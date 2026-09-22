@@ -23,7 +23,7 @@ const DEFAULT = {
 	maxParallel: 2,
 	batchThinks: true,
 	thinkingBudget: true,
-	planText: false,
+	arcText: false,
 	aiLogSource: '',
 };
 
@@ -49,7 +49,7 @@ function coerce(raw:Partial<Prefs>):Prefs {
 			typeof raw.thinkingBudget === 'number' ? raw.thinkingBudget > 0 : raw.thinkingBudget,
 			DEFAULT.thinkingBudget,
 		),
-		planText: bool(raw.planText, DEFAULT.planText),
+		arcText: bool(raw.arcText, DEFAULT.arcText),
 		aiLogSource: typeof raw.aiLogSource === 'string' ? raw.aiLogSource.trim() : DEFAULT.aiLogSource,
 	};
 }

@@ -1,19 +1,19 @@
 import { isRecord } from '../json.js';
 import {
-	ActionError,
+	ArcError,
 	JOINS,
-	type ActionPlan,
+	type Arc,
 	type Join,
 	type Step,
 	type StepArg,
 } from './types.js';
-import type { VerbRegistry } from './registry.js';
+import type { VerbRegistry } from './stock-verbs.js';
 
 const COORD_KEYS = new Set(['x', 'z', 'y', 'xz', 'xy', 'pos', 'position']);
 
 export type { StepArg };
 
-export function isActionPlan(v:unknown):v is ActionPlan {
+export function isArc(v:unknown):v is Arc {
 	if (!isRecord(v)) {
 		return false;
 	}
@@ -21,7 +21,7 @@ export function isActionPlan(v:unknown):v is ActionPlan {
 		return true;
 	}
 	if (v.group !== undefined) {
-		return isActionPlan(v.group);
+		return isArc(v.group);
 	}
 	return false;
 }
@@ -33,7 +33,7 @@ function isStepArg(v:unknown):v is StepArg {
 	if (Array.isArray(v) && v.every((x) => typeof x === 'string')) {
 		return true;
 	}
-	return isActionPlan(v);
+	return isArc(v);
 }
 
 function argBase(kind:string):string {
@@ -44,85 +44,85 @@ function rejectMigrationArgs(verb:string, args:Record<string, unknown>):void {
 	const who = typeof args.who === 'string' ? args.who.trim() : '';
 	const watch = typeof args.watch === 'string' ? args.watch.trim() : '';
 	if (verb === 'when' && who) {
-		throw new ActionError('when(who) is issue(who, plan); when is when(watch, plan)');
+		throw new ArcError('when(who) is issue(who, arc); when is when(watch, arc)');
 	}
 	if (verb === 'issue' && watch) {
-		throw new ActionError('issue(watch) is when(watch, plan); issue is issue(who, plan)');
+		throw new ArcError('issue(watch) is when(watch, arc); issue is issue(who, arc)');
 	}
 }
 
 export function validateStep(step:Step, registry:VerbRegistry):void {
 	const spec = registry.get(step.verb);
 	if (!spec) {
-		throw new ActionError(`unknown verb '${step.verb}'`);
+		throw new ArcError(`unknown verb '${step.verb}'`);
 	}
 	rejectMigrationArgs(step.verb, step.args);
 	for (const key of Object.keys(step.args)) {
 		if (COORD_KEYS.has(key.toLowerCase())) {
-			throw new ActionError(`coordinate arg '${key}' is not allowed`);
+			throw new ArcError(`coordinate arg '${key}' is not allowed`);
 		}
 		if (!(key in spec.args)) {
-			throw new ActionError(`verb '${step.verb}' has no arg '${key}'`);
+			throw new ArcError(`verb '${step.verb}' has no arg '${key}'`);
 		}
 	}
 	for (const [key, kind] of Object.entries(spec.args)) {
 		const value = step.args[key];
 		if (value === undefined) {
 			if (!kind.endsWith('?')) {
-				throw new ActionError(`verb '${step.verb}' missing required arg '${key}'`);
+				throw new ArcError(`verb '${step.verb}' missing required arg '${key}'`);
 			}
 			continue;
 		}
 		const base = argBase(kind);
 		if (base === 'number' && typeof value !== 'number') {
-			throw new ActionError(`verb '${step.verb}' arg '${key}' must be a number`);
+			throw new ArcError(`verb '${step.verb}' arg '${key}' must be a number`);
 		}
 		if (base === 'string[]' && !(Array.isArray(value) && value.every((x) => typeof x === 'string'))) {
-			throw new ActionError(`verb '${step.verb}' arg '${key}' must be string[]`);
+			throw new ArcError(`verb '${step.verb}' arg '${key}' must be string[]`);
 		}
 		if ((base === 'id' || base === 'string') && typeof value !== 'string') {
-			throw new ActionError(`verb '${step.verb}' arg '${key}' must be a string`);
+			throw new ArcError(`verb '${step.verb}' arg '${key}' must be a string`);
 		}
-		if (base === 'plan') {
-			if (!isActionPlan(value)) {
-				throw new ActionError(`verb '${step.verb}' arg '${key}' must be a plan`);
+		if (base === 'arc') {
+			if (!isArc(value)) {
+				throw new ArcError(`verb '${step.verb}' arg '${key}' must be an arc`);
 			}
-			validatePlan(value, registry.nested());
+			validateArc(value, registry.nested());
 		}
 		if (typeof value === 'string' && /^-?\d+(\.\d+)?\s*,\s*-?\d+/.test(value)) {
-			throw new ActionError(`arg '${key}' looks like coordinates`);
+			throw new ArcError(`arg '${key}' looks like coordinates`);
 		}
 	}
 }
 
-export function validatePlan(plan:ActionPlan, registry:VerbRegistry):void {
-	if (plan.group) {
-		validatePlan(plan.group, registry);
+export function validateArc(arc:Arc, registry:VerbRegistry):void {
+	if (arc.group) {
+		validateArc(arc.group, registry);
 	}
 	else {
-		validateStep(plan.head, registry);
+		validateStep(arc.head, registry);
 	}
-	if (plan.then) {
-		if (!JOINS.includes(plan.then.join)) {
-			throw new ActionError(`unknown join '${String(plan.then.join)}'`);
+	if (arc.then) {
+		if (!JOINS.includes(arc.then.join)) {
+			throw new ArcError(`unknown join '${String(arc.then.join)}'`);
 		}
-		validatePlan(plan.then.plan, registry);
+		validateArc(arc.then.arc, registry);
 	}
 }
 
 export function asStep(raw:unknown, registry:VerbRegistry):Step {
 	if (!isRecord(raw)) {
-		throw new ActionError('step is not an object');
+		throw new ArcError('step is not an object');
 	}
 	if (typeof raw.verb !== 'string') {
-		throw new ActionError('step.verb must be a string');
+		throw new ArcError('step.verb must be a string');
 	}
 	const spec = registry.get(raw.verb);
 	const argsRaw = raw.args;
 	const args:Record<string, StepArg> = {};
 	if (argsRaw !== undefined) {
 		if (!isRecord(argsRaw)) {
-			throw new ActionError('step.args must be an object');
+			throw new ArcError('step.args must be an object');
 		}
 		for (const [k, v] of Object.entries(argsRaw)) {
 			if (k === 'then' || v === undefined || v === null) {
@@ -130,12 +130,12 @@ export function asStep(raw:unknown, registry:VerbRegistry):Step {
 			}
 			const kind = spec?.args[k];
 			const base = kind ? argBase(kind) : '';
-			if (base === 'plan') {
-				args[k] = asPlan(v, registry.nested());
+			if (base === 'arc') {
+				args[k] = asArc(v, registry.nested());
 				continue;
 			}
 			if (!isStepArg(v)) {
-				throw new ActionError(`arg '${k}' has an unsupported type`);
+				throw new ArcError(`arg '${k}' has an unsupported type`);
 			}
 			args[k] = v;
 		}
@@ -161,39 +161,39 @@ function thenRow(raw:unknown):unknown {
 	return undefined;
 }
 
-export function asPlan(raw:unknown, registry:VerbRegistry):ActionPlan {
+export function asArc(raw:unknown, registry:VerbRegistry):Arc {
 	if (!isRecord(raw)) {
-		throw new ActionError('plan is not an object');
+		throw new ArcError('arc is not an object');
 	}
 	if (raw.head === undefined && raw.group === undefined) {
-		const nested = raw['action_plan'] ?? raw.plan;
+		const nested = raw.arc;
 		if (nested !== undefined) {
-			return asPlan(nested, registry);
+			return asArc(nested, registry);
 		}
 	}
 	const thenRaw = thenRow(raw);
-	let plan:ActionPlan;
+	let arc:Arc;
 	if (raw.group !== undefined) {
-		plan = { head: { verb: 'group', args: {} }, group: asPlan(raw.group, registry) };
+		arc = { head: { verb: 'group', args: {} }, group: asArc(raw.group, registry) };
 	}
 	else if (raw.head !== undefined) {
-		plan = { head: asStep(raw.head, registry) };
+		arc = { head: asStep(raw.head, registry) };
 	}
 	else {
-		throw new ActionError('plan is not an object');
+		throw new ArcError('arc is not an object');
 	}
 	if (thenRaw !== undefined) {
 		if (!isRecord(thenRaw)) {
-			throw new ActionError('then is not an object');
+			throw new ArcError('then is not an object');
 		}
 		if (typeof thenRaw.join !== 'string') {
-			throw new ActionError('then.join must be a string');
+			throw new ArcError('then.join must be a string');
 		}
-		plan.then = {
+		arc.then = {
 			join: thenRaw.join as Join,
-			plan: asPlan(thenRaw.plan, registry),
+			arc: asArc(thenRaw.arc, registry),
 		};
 	}
-	validatePlan(plan, registry);
-	return plan;
+	validateArc(arc, registry);
+	return arc;
 }

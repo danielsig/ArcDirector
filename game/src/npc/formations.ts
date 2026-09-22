@@ -1,4 +1,4 @@
-import { type ActionResult, type VerbCall } from 'arc-director';
+import { type ArcResult, type VerbCall } from 'arc-director';
 import { NPCInput } from '../actors/NPCInput';
 import type { GameObject } from '../engine/GameObject';
 import type { GameHost } from './adapter';
@@ -45,7 +45,7 @@ function walkTo(go:GameObject, x:number, z:number):void {
 	go.getComponent(NPCInput)?.goToPoint(x, z);
 }
 
-export function runFormation(host:GameHost, call:VerbCall<HostCtx>):ActionResult {
+export function runFormation(host:GameHost, call:VerbCall<HostCtx>):ArcResult {
 	const bodies = bodiesOf(host, call.units ?? []);
 	if (bodies.length === 0) {
 		return { ok: false, verb: call.verb, reason: 'no units' };

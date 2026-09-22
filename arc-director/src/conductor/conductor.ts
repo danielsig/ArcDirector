@@ -1,14 +1,14 @@
 import { Agent, type AgentDeps, type AgentJSON, type AgentOptions } from '../agent/agent.js';
-import type { ActionPlan, ActionResult, Step } from '../action/types.js';
-import { firstStep } from '../action/types.js';
-import { formatPlan } from '../action/parse.js';
+import type { Arc, ArcResult, Step } from '../arc/types.js';
+import { firstStep } from '../arc/types.js';
+import { formatArc } from '../arc/parse.js';
 import { MemoryStore } from '../memory/store.js';
 import {
-	createPlanSession,
-	runPlan,
-	type PlanHandler,
-	type PlanSession,
-	type PlanSessionOpts,
+	createArcSession,
+	runArc,
+	type ArcHandler,
+	type ArcSession,
+	type ArcSessionOpts,
 } from '../agent/run.js';
 import { Crowd } from './crowd.js';
 import { CrowdUnit, type CrowdUnitSpec } from './unit.js';
@@ -17,7 +17,7 @@ import {
 	type CrowdLaw,
 	type CrowdLawSpec,
 } from './laws.js';
-import { isFormationVerb } from './verbs.js';
+import { isFormationVerb } from './conductor-verbs.js';
 
 export type CrowdConductorJSON = AgentJSON & {
 	crowd?:{ id:string; tags:string[] }[];
@@ -133,56 +133,56 @@ export class CrowdConductor<HostCtx = unknown> extends Agent<HostCtx> {
 		return shortTag(this.id, stored);
 	}
 
-	issueUnits(units:CrowdUnit[], plan:ActionPlan):void {
+	issueUnits(units:CrowdUnit[], arc:Arc):void {
 		const troops = this.commanderID
 			? units.filter((u) => u.id !== this.commanderID)
 			: units;
 		for (const unit of troops) {
 			unit.interrupt();
-			this.spawnUnitPlan(unit, plan);
+			this.spawnUnitArc(unit, arc);
 		}
 	}
 
-	assignPlan(units:CrowdUnit[], plan:ActionPlan):void {
-		this.issueUnits(units, plan);
+	assignArc(units:CrowdUnit[], arc:Arc):void {
+		this.issueUnits(units, arc);
 	}
 
-	beginHandler(unit:CrowdUnit, handler:PlanHandler, sessionOpts?:PlanSessionOpts):void {
+	beginHandler(unit:CrowdUnit, handler:ArcHandler, sessionOpts?:ArcSessionOpts):void {
 		if (unit.inflight && unit.session) {
 			unit.session.pending = { kind: 'preempt', handler };
 			unit.session.token += 1;
-			this.abortPlan?.(unit.id);
+			this.abortArc?.(unit.id);
 			return;
 		}
-		this.spawnUnitPlan(unit, handler.plan, handler, sessionOpts);
+		this.spawnUnitArc(unit, handler.arc, handler, sessionOpts);
 	}
 
-	private spawnUnitPlan(
+	private spawnUnitArc(
 		unit:CrowdUnit,
-		plan:ActionPlan,
-		handler?:PlanHandler,
-		sessionOpts?:PlanSessionOpts,
+		arc:Arc,
+		handler?:ArcHandler,
+		sessionOpts?:ArcSessionOpts,
 	):void {
-		unit.plan = plan;
+		unit.arc = arc;
 		unit.lawName = handler?.key.startsWith('law:') ? handler.key.slice(4) : null;
-		unit.verb = firstStep(plan)?.verb ?? '';
-		const session = createPlanSession({
+		unit.verb = firstStep(arc)?.verb ?? '';
+		const session = createArcSession({
 			...sessionOpts,
 			now: sessionOpts?.now ?? (() => this.now),
-			abortHost: sessionOpts?.abortHost ?? (() => this.abortPlan?.(unit.id)),
+			abortHost: sessionOpts?.abortHost ?? (() => this.abortArc?.(unit.id)),
 		});
 		unit.session = session;
 		unit.stepToken = session.token;
 		const gen = unit.generation;
-		const run = this.runUnitPlan(unit, plan, gen, session, handler);
+		const run = this.runUnitArc(unit, arc, gen, session, handler);
 		unit.inflight = run.finally(() => {
 			if (unit.generation === gen) {
 				unit.inflight = null;
 				if (session.parked) {
 					return;
 				}
-				if (unit.plan === plan) {
-					unit.plan = null;
+				if (unit.arc === arc) {
+					unit.arc = null;
 					unit.verb = '';
 					unit.lawName = null;
 				}
@@ -193,14 +193,14 @@ export class CrowdConductor<HostCtx = unknown> extends Agent<HostCtx> {
 		});
 	}
 
-	private async runUnitPlan(
+	private async runUnitArc(
 		unit:CrowdUnit,
-		plan:ActionPlan,
+		arc:Arc,
 		gen:number,
-		session:PlanSession,
-		handler?:PlanHandler,
+		session:ArcSession,
+		handler?:ArcHandler,
 	):Promise<void> {
-		await runPlan(plan, async (step) => {
+		await runArc(arc, async (step) => {
 			if (unit.generation !== gen) {
 				return { ok: false, interrupted: true, verb: step.verb };
 			}
@@ -219,9 +219,9 @@ export class CrowdConductor<HostCtx = unknown> extends Agent<HostCtx> {
 		}, { session, asHandler: handler });
 	}
 
-	private async performUnitStep(unit:CrowdUnit, step:Step):Promise<ActionResult> {
+	private async performUnitStep(unit:CrowdUnit, step:Step):Promise<ArcResult> {
 		if (isFormationVerb(step.verb)) {
-			return { ok: false, verb: step.verb, reason: 'formation must be issue plan head' };
+			return { ok: false, verb: step.verb, reason: 'formation must be issue arc head' };
 		}
 		if (!this.execute) {
 			return { ok: false, verb: step.verb, reason: `host has no executor for ${step.verb}` };
@@ -266,22 +266,22 @@ export class CrowdConductor<HostCtx = unknown> extends Agent<HostCtx> {
 		}
 		if (this.laws.length > 0) {
 			const lines = this.laws.map((law) => (
-				`- ${law.name}: who=${law.who} watch=${law.watch} → ${formatPlan(law.plan)}`
+				`- ${law.name}: who=${law.who} watch=${law.watch} → ${formatArc(law.arc)}`
 			));
 			parts.push(`Laws (emergencies, list order; unlaw to drop):\n${lines.join('\n')}`);
 		}
 		const groups = new Map<string, string[]>();
 		for (const unit of this.crowd.list()) {
-			if (unit.id === this.commanderID || !unit.busy || !unit.plan) {
+			if (unit.id === this.commanderID || !unit.busy || !unit.arc) {
 				continue;
 			}
-			const key = formatPlan(unit.plan);
+			const key = formatArc(unit.arc);
 			const ids = groups.get(key) ?? [];
 			ids.push(unit.id);
 			groups.set(key, ids);
 		}
 		if (groups.size > 0) {
-			const lines = [...groups].map(([plan, ids]) => `- ${ids.join(', ')}: ${plan}`);
+			const lines = [...groups].map(([arc, ids]) => `- ${ids.join(', ')}: ${arc}`);
 			parts.push(`Unit programs:\n${lines.join('\n')}`);
 		}
 		return parts.join('\n');

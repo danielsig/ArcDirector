@@ -145,14 +145,14 @@ export function buildCatalog(host:HostKernels):Catalog {
 		bindPrev(names, {
 			secondsAgo: host.prev?.secondsAgo,
 			me: prevMe,
-			actions: host.prev?.actions ?? [],
+			verbs: host.prev?.verbs ?? [],
 		});
 	}
 	else {
 		bindPrev(names, {
 			secondsAgo: host.prev?.secondsAgo,
 			me: host.prev?.me ?? cloneEntity(host.me),
-			actions: host.prev?.actions ?? [],
+			verbs: host.prev?.verbs ?? [],
 		});
 	}
 

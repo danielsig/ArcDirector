@@ -1,5 +1,5 @@
 import type { JsonSchema } from '../json.js';
-import type { VerbRegistry, VerbSpec } from './registry.js';
+import type { VerbRegistry, VerbSpec } from './stock-verbs.js';
 
 const THEN_DEPTH = 8;
 
@@ -12,8 +12,8 @@ function stepSchema(registry:VerbRegistry, depth:number):JsonSchema {
 		}
 		const kind = spec.args[name];
 		const base = kind.endsWith('?') ? kind.slice(0, -1) : kind;
-		properties[name] = base === 'plan'
-			? (depth <= 0 ? { type: 'object', additionalProperties: true } : planSchemaAt(registry.nested(), depth - 1))
+		properties[name] = base === 'arc'
+			? (depth <= 0 ? { type: 'object', additionalProperties: true } : arcSchemaAt(registry.nested(), depth - 1))
 			: registry.argSchema(kind);
 	}
 	return {
@@ -34,17 +34,17 @@ function stepSchema(registry:VerbRegistry, depth:number):JsonSchema {
 	};
 }
 
-function planSchemaAt(registry:VerbRegistry, depth:number):JsonSchema {
+function arcSchemaAt(registry:VerbRegistry, depth:number):JsonSchema {
 	const step = stepSchema(registry, depth);
 	const thenJoin:JsonSchema = {
 		type: 'object',
 		additionalProperties: false,
-		required: ['join', 'plan'],
+		required: ['join', 'arc'],
 		properties: {
 			join: { type: 'string', enum: ['then_if_ok', 'then', 'then_if_err'] },
-			plan: depth <= 0
+			arc: depth <= 0
 				? { type: 'object', additionalProperties: true }
-				: planSchemaAt(registry, depth - 1),
+				: arcSchemaAt(registry, depth - 1),
 		},
 	};
 	return {
@@ -54,23 +54,23 @@ function planSchemaAt(registry:VerbRegistry, depth:number):JsonSchema {
 			head: step,
 			group: depth <= 0
 				? { type: 'object', additionalProperties: true }
-				: planSchemaAt(registry, depth - 1),
+				: arcSchemaAt(registry, depth - 1),
 			then: thenJoin,
 		},
 	};
 }
 
-export function actionPlanSchema(registry:VerbRegistry):JsonSchema {
-	const plan = planSchemaAt(registry, THEN_DEPTH);
+export function arcSchema(registry:VerbRegistry):JsonSchema {
+	const arc = arcSchemaAt(registry, THEN_DEPTH);
 	const watchDict:JsonSchema = {
 		type: 'object',
 		additionalProperties: { type: 'string' },
 	};
 	return {
-		title: 'ActionPlan',
-		...plan,
+		title: 'Arc',
+		...arc,
 		properties: {
-			...(plan.properties ?? {}),
+			...(arc.properties ?? {}),
 			addWatches: watchDict,
 			editWatches: watchDict,
 			removeWatches: {
@@ -122,5 +122,5 @@ export function verbHelp(registry:VerbRegistry):string {
 	if (extras.length === 0) {
 		return kit;
 	}
-	return `${kit}. Nested plan verbs: ${extras.join(', ')}`;
+	return `${kit}. Nested arc verbs: ${extras.join(', ')}`;
 }

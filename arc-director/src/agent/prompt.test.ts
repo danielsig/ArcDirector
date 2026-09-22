@@ -1,9 +1,9 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { parsePlan } from '../action/parse.js';
-import { VerbRegistry, registerStockVerbs } from '../action/registry.js';
-import { registerStockCrowdVerbs } from '../conductor/verbs.js';
-import { stablePrefix, volatileBlock, seeMapHint, planRepairHint } from './prompt.js';
+import { parseArc } from '../arc/parse.js';
+import { VerbRegistry, registerStockVerbs } from '../arc/stock-verbs.js';
+import { registerStockCrowdVerbs } from '../conductor/conductor-verbs.js';
+import { stablePrefix, volatileBlock, seeMapHint, arcRepairHint } from './prompt.js';
 
 describe('prompt split', () => {
 	const verbs = registerStockVerbs(new VerbRegistry());
@@ -25,7 +25,7 @@ describe('prompt split', () => {
 		assert.match(system, /Looking for a thing or place/);
 		assert.match(system, /isReachable\(me, Cottage\)/);
 		assert.match(system, /wrap list watches in some/);
-		assert.match(system, /Answer immediately with only the ActionPlan JSON/);
+		assert.match(system, /Answer immediately with only the Arc JSON/);
 		assert.match(system, /No prose/);
 		assert.match(system, /Do not think\(\) twice in a row/);
 		assert.match(system, /Think in 5 sentences/);
@@ -49,9 +49,9 @@ describe('prompt split', () => {
 		assert.match(system, /not go_to or follow the speaker/);
 		assert.match(system, /Call see_map, ask the speaker where it is, or wander\(until\)/);
 		assert.equal(system.includes('grep_world_encyclopedia'), false);
-		assert.match(system, /when\(watch, plan\) is this job's interrupt/);
+		assert.match(system, /when\(watch, arc\) is this job's interrupt/);
 		assert.match(system, /instead of waiting to think/);
-		assert.match(system, /law\(watch, plan, name\?\) is a standing reaction/);
+		assert.match(system, /law\(watch, arc, name\?\) is a standing reaction/);
 		assert.match(system, /outlives the program and needs no think/);
 		assert.match(system, /then always continues/);
 		assert.match(system, /"verb":"pick_up"/);
@@ -70,9 +70,9 @@ describe('prompt split', () => {
 		assert.ok(system.length < 5000, `standing prefix ${system.length} chars`);
 		const wanderJson = system.match(/\{"head":\{"verb":"wander","args":\{"until":"(?:\\.|[^"\\])*"\}\}\}/);
 		assert.ok(wanderJson);
-		assert.equal(parsePlan(wanderJson[0], verbs).head.verb, 'wander');
+		assert.equal(parseArc(wanderJson[0], verbs).head.verb, 'wander');
 		assert.equal(
-			parsePlan(wanderJson[0], verbs).head.args.until,
+			parseArc(wanderJson[0], verbs).head.args.until,
 			'some(items.filter("FireMushroom").nearby())',
 		);
 		const chainAt = system.indexOf('{"head":{"verb":"pick_up"');
@@ -80,21 +80,21 @@ describe('prompt split', () => {
 		const chainSlice = system.slice(chainAt);
 		const chainEnd = chainSlice.indexOf('. Close every brace');
 		assert.ok(chainEnd > 0);
-		const chained = parsePlan(chainSlice.slice(0, chainEnd), verbs);
+		const chained = parseArc(chainSlice.slice(0, chainEnd), verbs);
 		assert.equal(chained.head.verb, 'pick_up');
 		assert.equal(chained.then?.join, 'then');
-		assert.equal(chained.then?.plan.head.verb, 'go_to');
-		assert.equal(chained.then?.plan.then?.join, 'then_if_ok');
-		assert.equal(chained.then?.plan.then?.plan.head.verb, 'give');
-		assert.equal(chained.then?.plan.then?.plan.head.args.to, 'Player');
+		assert.equal(chained.then?.arc.head.verb, 'go_to');
+		assert.equal(chained.then?.arc.then?.join, 'then_if_ok');
+		assert.equal(chained.then?.arc.then?.arc.head.verb, 'give');
+		assert.equal(chained.then?.arc.then?.arc.head.args.to, 'Player');
 	});
 
 	it('replaces the think and verb lines when the host sets them', () => {
 		const system = stablePrefix(identity, verbs, {
-			thinkInstructions: 'Be brief, then the plan.',
+			thinkInstructions: 'Be brief, then the arc.',
 			verbInstructions: 'One verb is enough.',
 		});
-		assert.match(system, /Be brief, then the plan/);
+		assert.match(system, /Be brief, then the arc/);
 		assert.match(system, /One verb is enough/);
 		assert.equal(system.includes('Think in 5 sentences'), false);
 		assert.equal(system.includes('A think is expensive'), false);
@@ -104,9 +104,9 @@ describe('prompt split', () => {
 		assert.equal(cleared.includes('Be brief'), false);
 	});
 
-	it('asks for ActionPlan text when planText is on', () => {
-		const system = stablePrefix(identity, verbs, { planText: true });
-		assert.match(system, /Answer immediately with only the ActionPlan text/);
+	it('asks for Arc text when arcText is on', () => {
+		const system = stablePrefix(identity, verbs, { arcText: true });
+		assert.match(system, /Answer immediately with only the Arc text/);
 		assert.match(system, /pick_up\(Lantern\) ; go_to\(Player\) && give\(item=Lantern, to=Player\)/);
 		assert.match(system, /wander\(until=/);
 		assert.match(system, /A think is expensive/);
@@ -120,56 +120,56 @@ describe('prompt split', () => {
 		assert.match(system, /Write wander\(until\) as a program/);
 		assert.match(system, /not go_to or follow the speaker/);
 		assert.match(system, /&& continues only on success/);
-		assert.equal(system.includes('ActionPlan JSON'), false);
+		assert.equal(system.includes('Arc JSON'), false);
 		assert.equal(system.includes('"verb":"wander"'), false);
 		assert.equal(system.includes('JSON shape'), false);
 		const wanderText = system.match(/wander\(until=some\(items\.filter\("FireMushroom"\)\.nearby\(\)\)\)/);
 		assert.ok(wanderText);
-		assert.equal(parsePlan(wanderText[0], verbs).head.verb, 'wander');
+		assert.equal(parseArc(wanderText[0], verbs).head.verb, 'wander');
 		const chainText = system.match(/pick_up\(Lantern\) ; go_to\(Player\) && give\(item=Lantern, to=Player\)/);
 		assert.ok(chainText);
-		const chained = parsePlan(chainText[0], verbs);
+		const chained = parseArc(chainText[0], verbs);
 		assert.equal(chained.head.verb, 'pick_up');
 		assert.equal(chained.then?.join, 'then');
-		assert.equal(chained.then?.plan.head.verb, 'go_to');
-		assert.equal(chained.then?.plan.then?.join, 'then_if_ok');
-		assert.equal(chained.then?.plan.then?.plan.head.verb, 'give');
+		assert.equal(chained.then?.arc.head.verb, 'go_to');
+		assert.equal(chained.then?.arc.then?.join, 'then_if_ok');
+		assert.equal(chained.then?.arc.then?.arc.head.verb, 'give');
 	});
 
-	it('lists tools as tools, never as ActionPlan verbs', () => {
+	it('lists tools as tools, never as Arc verbs', () => {
 		const system = stablePrefix(identity, verbs, {
 			canSeeMap: true,
-			planText: true,
+			arcText: true,
 			tools: ['see_map', 'observe'],
 		});
 		assert.match(system, /Tools this think, not verbs: see_map, observe/);
-		assert.match(system, /never write a tool name in the ActionPlan/);
-		assert.match(system, /After any tool, emit only the ActionPlan text/);
+		assert.match(system, /never write a tool name in the Arc/);
+		assert.match(system, /After any tool, emit only the Arc text/);
 		assert.match(system, /see_map is a tool this think, not a verb/);
 		assert.equal(system.includes('see_map({'), false);
 		assert.equal(system.includes('observe({expr})'), false);
-		assert.equal(system.includes('Answer immediately with only the ActionPlan'), false);
+		assert.equal(system.includes('Answer immediately with only the Arc'), false);
 	});
 
-	it('repairs a tool written as a plan verb', () => {
-		const hint = planRepairHint("unknown verb 'see_map'", true, ['see_map']);
+	it('repairs a tool written as an arc verb', () => {
+		const hint = arcRepairHint("unknown verb 'see_map'", true, ['see_map']);
 		assert.match(hint, /see_map is a tool, not a verb/);
-		assert.match(hint, /Never write see_map\(\.\.\.\) in the ActionPlan/);
+		assert.match(hint, /Never write see_map\(\.\.\.\) in the Arc/);
 		assert.equal(hint.includes('unknown verb'), false);
 	});
 
 	it('discards verb-less prose on repair', () => {
-		const hint = planRepairHint('expected verb', true, ['see_map']);
+		const hint = arcRepairHint('expected verb', true, ['see_map']);
 		assert.match(hint, /That prose is discarded/);
 		assert.match(hint, /Do the spoken job, not go_to or follow the speaker/);
 	});
 
-	it('omits ActionPlan emit rules when revising goals', () => {
-		const system = stablePrefix(identity, verbs, { includeWatches: true, omitPlan: true });
+	it('omits Arc emit rules when revising goals', () => {
+		const system = stablePrefix(identity, verbs, { includeWatches: true, omitArc: true });
 		assert.match(system, /You are Guard/);
 		assert.match(system, /Watch language/);
-		assert.equal(system.includes('ActionPlan JSON'), false);
-		assert.equal(system.includes('ActionPlan text'), false);
+		assert.equal(system.includes('Arc JSON'), false);
+		assert.equal(system.includes('Arc text'), false);
 		assert.equal(system.includes('Available verbs'), false);
 		assert.equal(system.includes('JSON shape'), false);
 	});
@@ -265,16 +265,16 @@ describe('prompt split', () => {
 		catalog.add('slash', { name: 'id' });
 		const verbs = catalog.view(['issue', 'when', 'law', 'unlaw', 'loop', 'smite']);
 		const system = stablePrefix(identity, verbs);
-		assert.match(system, /issue\(who, plan\) assigns a sticky program/);
+		assert.match(system, /issue\(who, arc\) assigns a sticky program/);
 		assert.match(system, /who is YOUR roster/);
 		assert.match(system, /units\.filter\("Witch"\)/);
 		assert.match(system, /allUnits is one identical program/);
 		assert.match(system, /Join several issue with ;/);
-		assert.match(system, /Each issue plan is that unit's full chain/);
-		assert.match(system, /law\(who\?, watch, plan, name\?\) is a standing reaction/);
-		assert.match(system, /when\(watch, plan\) is this job's interrupt/);
+		assert.match(system, /Each issue arc is that unit's full chain/);
+		assert.match(system, /law\(who\?, watch, arc, name\?\) is a standing reaction/);
+		assert.match(system, /when\(watch, arc\) is this job's interrupt/);
 		assert.match(system, /Omitted who = units/);
-		assert.match(system, /Nested plan verbs/);
+		assert.match(system, /Nested arc verbs/);
 		assert.match(system, /slash\(name\)/);
 		assert.equal(system.includes('when(who'), false);
 	});
@@ -282,7 +282,7 @@ describe('prompt split', () => {
 	it('solo law has no who', () => {
 		const verbs = registerStockVerbs(new VerbRegistry()).withoutArg('law', 'who');
 		const system = stablePrefix(identity, verbs);
-		assert.match(system, /law\(watch, plan, name\?\) is a standing reaction/);
+		assert.match(system, /law\(watch, arc, name\?\) is a standing reaction/);
 		assert.equal(system.includes('law(who'), false);
 		assert.equal(system.includes('allUnits'), false);
 		assert.equal(system.includes('Omitted who'), false);

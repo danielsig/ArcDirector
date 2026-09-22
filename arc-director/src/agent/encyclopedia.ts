@@ -7,7 +7,7 @@ import type { SeenObject } from '../perception/types.js';
 export const GREP_WORLD_ENCYCLOPEDIA = 'grep_world_encyclopedia';
 
 export type EncyclopediaEntry = {
-	/** Capitalized name used in plans (`Tree`, `Cottage`). */
+	/** Capitalized name used in arcs (`Tree`, `Cottage`). */
 	name:string;
 	/** Leftover or spoken English (`trees`, `house`, `forest`). */
 	aliases?:string[];

@@ -1,6 +1,6 @@
 import { ABSENT, type ExprEntity, type ExprVal } from './types.js';
 
-export type PrevAction = {
+export type PrevVerb = {
 	secondsAgo:number;
 	isOk:boolean;
 	reason:string;
@@ -11,7 +11,7 @@ export type PrevSpec = {
 	/** Absent until the first tactical think. */
 	secondsAgo?:number;
 	me:ExprEntity;
-	actions?:PrevAction[];
+	verbs?:PrevVerb[];
 };
 
 export type MeFreezeHost = {
@@ -79,11 +79,11 @@ export function freezeMe(host:MeFreezeHost):ExprEntity {
 	return frozen;
 }
 
-function actionEntity(a:PrevAction, i:number):ExprVal {
+function verbEntity(a:PrevVerb, i:number):ExprVal {
 	return {
 		kind: 'entity',
 		value: {
-			id: `action${i}`,
+			id: `verb${i}`,
 			tags: [],
 			fields: {
 				secondsAgo: { kind: 'number', value: a.secondsAgo },
@@ -98,9 +98,9 @@ function actionEntity(a:PrevAction, i:number):ExprVal {
 export function bindPrev(names:Map<string, ExprVal>, prev:PrevSpec):void {
 	const fields:Record<string, ExprVal> = {
 		me: { kind: 'entity', value: cloneEntity(prev.me) },
-		actions: {
+		verbs: {
 			kind: 'list',
-			value: (prev.actions ?? []).map(actionEntity),
+			value: (prev.verbs ?? []).map(verbEntity),
 		},
 	};
 	if (prev.secondsAgo !== undefined && Number.isFinite(prev.secondsAgo)) {

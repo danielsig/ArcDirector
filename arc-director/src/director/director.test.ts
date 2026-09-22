@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { STOCK_MOVE_VERBS, STOCK_VERBS } from '../action/registry.js';
+import { STOCK_MOVE_VERBS, STOCK_VERBS } from '../arc/stock-verbs.js';
 import { goToNamedInteractable } from '../inference/fake.js';
 import { dummyEntity } from '../expr/natives.js';
 import { SampleCache } from '../expr/types.js';
@@ -134,10 +134,10 @@ describe('ArcDirector', () => {
 			})
 			.start();
 		director.tick(1, 1);
-		await waitFor(() => !!director.agent('Watcher')?.lastPlan);
-		const plan = director.agent('Watcher')!.lastPlan!;
-		assert.equal(plan.head.verb, 'go_to');
-		assert.equal(plan.head.args.name, 'EastGate');
+		await waitFor(() => !!director.agent('Watcher')?.lastArc);
+		const arc = director.agent('Watcher')!.lastArc!;
+		assert.equal(arc.head.verb, 'go_to');
+		assert.equal(arc.head.args.name, 'EastGate');
 		await waitFor(() => calls.length > 0);
 		assert.equal(calls[0].verb, 'go_to');
 		assert.equal(calls[0].agent.id, 'Watcher');
@@ -145,9 +145,9 @@ describe('ArcDirector', () => {
 		director.dispose();
 	});
 
-	it('logs reasoning alongside the plan', async () => {
+	it('logs reasoning alongside the arc', async () => {
 		const logs:string[] = [];
-		const plan = JSON.stringify({ head: { verb: 'wait', args: {} } });
+		const arc = JSON.stringify({ head: { verb: 'wait', args: {} } });
 		const director = await new ArcDirector<Ctx>()
 			.withPriorityQueue({
 				processInterval: 0,
@@ -157,7 +157,7 @@ describe('ArcDirector', () => {
 				maxParallel: 2,
 			})
 			.withFakeInference(() => ({
-				content: plan,
+				content: arc,
 				reasoning: 'Blade is close; loop slash, do not go_to.',
 				toolCalls: [],
 			}))
@@ -235,8 +235,8 @@ describe('ArcDirector', () => {
 		});
 		assert.ok(director.agent('Guard'));
 		director.tick(1, 1);
-		await waitFor(() => !!director.agent('Guard')?.lastPlan);
-		assert.equal(director.agent('Guard')!.lastPlan!.head.verb, 'go_to');
+		await waitFor(() => !!director.agent('Guard')?.lastArc);
+		assert.equal(director.agent('Guard')!.lastArc!.head.verb, 'go_to');
 		director.removeAgent('Guard');
 		assert.equal(director.agent('Guard'), undefined);
 		director.dispose();
@@ -328,12 +328,12 @@ describe('ArcDirector', () => {
 			goals: [{ text: 'Go to EastGate', priority: 1 }],
 		}).start();
 		const stop = director.runLoop(50);
-		await waitFor(() => !!director.agent('Watcher')?.lastPlan, 800);
+		await waitFor(() => !!director.agent('Watcher')?.lastArc, 800);
 		stop();
 		director.dispose();
 	});
 
-	it('sets planIndex while enacting', async () => {
+	it('sets verbIndex while enacting', async () => {
 		const seen:number[] = [];
 		const director = await new ArcDirector<Ctx>()
 			.withFakeInference(() => ({
@@ -341,7 +341,7 @@ describe('ArcDirector', () => {
 					head: { verb: 'go_to', args: { name: 'EastGate' } },
 					then: {
 						join: 'then',
-						plan: { head: { verb: 'wait', args: { seconds: 1 } } },
+						arc: { head: { verb: 'wait', args: { seconds: 1 } } },
 					},
 				}),
 				toolCalls: [],
@@ -354,7 +354,7 @@ describe('ArcDirector', () => {
 			})
 			.addStockVerbs()
 			.onVerb((call) => {
-				seen.push(call.agent.planIndex);
+				seen.push(call.agent.verbIndex);
 				return { ok: true, verb: call.verb };
 			})
 			.addSense('scene', {
@@ -721,7 +721,7 @@ describe('ArcDirector', () => {
 			})
 			.start();
 		director.tick(1, 1);
-		assert.equal(director.agent('Guard')?.lastPlan, undefined);
+		assert.equal(director.agent('Guard')?.lastArc, undefined);
 		director.agent('Guard')!.pushEvent({
 			kind: 'HeardSpeech',
 			text: 'hey',
@@ -730,7 +730,7 @@ describe('ArcDirector', () => {
 			at: 1,
 		});
 		director.tick(1, 2);
-		await waitFor(() => !!director.agent('Guard')?.lastPlan);
+		await waitFor(() => !!director.agent('Guard')?.lastArc);
 		director.dispose();
 	});
 
@@ -795,7 +795,7 @@ describe('ArcDirector', () => {
 		director.dispose();
 	});
 
-	it('solo pinned law runs with no live plan', async () => {
+	it('solo pinned law runs with no live arc', async () => {
 		const seen:string[] = [];
 		const director = await new ArcDirector<Ctx>()
 			.withFakeInference(() => ({
@@ -833,7 +833,7 @@ describe('ArcDirector', () => {
 				laws: [{
 					name: 'sluice',
 					watch: '1 > 0',
-					plan: 'go_to(EastGate)',
+					arc: 'go_to(EastGate)',
 					pinned: true,
 				}],
 			})

@@ -104,8 +104,8 @@ function toggleThinking():void {
 	props.hud.thinkingBudget = !props.hud.thinkingBudget;
 }
 
-function togglePlanText():void {
-	props.hud.planText = !props.hud.planText;
+function toggleArcText():void {
+	props.hud.arcText = !props.hud.arcText;
 }
 
 function dumpNPCMaps():void {
@@ -506,15 +506,15 @@ function when(iso:string):string {
 								</button>
 							</div>
 							<div class="set">
-								<span class="name">Plan text</span>
+								<span class="name">Arc text</span>
 								<button
 									type="button"
 									class="switch"
-									:class="{ on: hud.planText }"
-									:aria-pressed="hud.planText"
-									@click.stop="togglePlanText"
+									:class="{ on: hud.arcText }"
+									:aria-pressed="hud.arcText"
+									@click.stop="toggleArcText"
 								>
-									{{ hud.planText ? 'On' : 'Off' }}
+									{{ hud.arcText ? 'On' : 'Off' }}
 								</button>
 							</div>
 							<h3>Stats</h3>
@@ -620,6 +620,7 @@ function when(iso:string):string {
 	display: flex;
 	align-items: center;
 	justify-content: center;
+}
 
 .hud-menu-panel {
 	width: min(720px, 92vw);

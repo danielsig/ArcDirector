@@ -1,4 +1,4 @@
-import { isCrowdConductor, pascalCase, type ActionResult, type Step } from 'arc-director';
+import { isCrowdConductor, pascalCase, type ArcResult, type Step } from 'arc-director';
 import { NPCInput } from '../actors/NPCInput';
 import {
 	BODY_SLOTS,
@@ -79,7 +79,7 @@ function heldFromPlayer(ctx:HostCtx, name:string, target?:GameObject):boolean {
 	return name === bond.targetID || name === 'Player' || dest === bond.targetID || dest === 'Player';
 }
 
-function setOverhead(host:GameHost, id:string, text:string, seconds:number):ActionResult {
+function setOverhead(host:GameHost, id:string, text:string, seconds:number):ArcResult {
 	const agent = host.agentByID(id);
 	if (!agent) {
 		return { ok: false, verb: 'set_status', reason: 'no mind' };
@@ -93,7 +93,7 @@ function setOverhead(host:GameHost, id:string, text:string, seconds:number):Acti
 	return { ok: true, verb: 'set_status', reason: `${life}s` };
 }
 
-export async function executeStep(host:GameHost, step:Step, ctx:HostCtx):Promise<ActionResult> {
+export async function executeStep(host:GameHost, step:Step, ctx:HostCtx):Promise<ArcResult> {
 	const npc = ctx.actor.getComponent(NPCInput);
 	if (!npc) {
 		return { ok: false, verb: step.verb, reason: 'no NPCInput' };
@@ -257,7 +257,7 @@ async function ensureRange(
 	actor:GameObject,
 	target:GameObject,
 	name:string,
-):Promise<ActionResult> {
+):Promise<ArcResult> {
 	if (distXZ(actor, target) <= USE_RANGE) {
 		return { ok: true };
 	}
@@ -362,7 +362,7 @@ async function holdReady(
 	now:number,
 	readyAt:number,
 	castTime:number,
-):Promise<ActionResult> {
+):Promise<ArcResult> {
 	const cool = readyAt - now;
 	if (cool > 0.02) {
 		const waited = await npc.wait(cool);
@@ -399,7 +399,7 @@ async function doAttack(
 	npc:NPCInput,
 	verb:string,
 	name:string,
-):Promise<ActionResult> {
+):Promise<ArcResult> {
 	const role = fightRole(host, ctx.actor);
 	const attack = attackOf(verb);
 	if (!attack) {
@@ -500,7 +500,7 @@ async function doHeal(
 	ctx:HostCtx,
 	npc:NPCInput,
 	name:string,
-):Promise<ActionResult> {
+):Promise<ArcResult> {
 	const role = fightRole(host, ctx.actor);
 	if (role && role !== 'Healer') {
 		return { ok: false, verb: 'heal', reason: 'only a healer can heal' };
@@ -552,7 +552,7 @@ async function doUse(
 	npc:NPCInput,
 	itemName:string,
 	targetName?:string,
-):Promise<ActionResult> {
+):Promise<ArcResult> {
 	const item = findItem(ctx.actor, itemName);
 	if (!item) {
 		return { ok: false, verb: 'use', reason: `not carrying ${itemName}` };
@@ -582,7 +582,7 @@ async function doUse(
 	return { ok: result.ok, verb: 'use', reason: result.reason };
 }
 
-async function doEquip(ctx:HostCtx, itemName:string, slotName?:string):Promise<ActionResult> {
+async function doEquip(ctx:HostCtx, itemName:string, slotName?:string):Promise<ArcResult> {
 	const item = findItem(ctx.actor, itemName);
 	if (!item) {
 		return { ok: false, verb: 'equip', reason: `not carrying ${itemName}` };
@@ -599,7 +599,7 @@ async function doEquip(ctx:HostCtx, itemName:string, slotName?:string):Promise<A
 	return { ok: true, verb: 'equip' };
 }
 
-async function doUnequip(ctx:HostCtx, slotName:string):Promise<ActionResult> {
+async function doUnequip(ctx:HostCtx, slotName:string):Promise<ArcResult> {
 	const slot = asSlot(slotName);
 	if (!slot) {
 		return { ok: false, verb: 'unequip', reason: `no slot ${slotName}` };
@@ -608,7 +608,7 @@ async function doUnequip(ctx:HostCtx, slotName:string):Promise<ActionResult> {
 	return { ok: true, verb: 'unequip' };
 }
 
-async function doPickUp(host:GameHost, ctx:HostCtx, npc:NPCInput, name:string):Promise<ActionResult> {
+async function doPickUp(host:GameHost, ctx:HostCtx, npc:NPCInput, name:string):Promise<ArcResult> {
 	const loot = ctx.world.findNamed(name);
 	if (loot?.getComponent(Pickupable)) {
 		const crop = loot.getComponent(Harvest);
@@ -680,7 +680,7 @@ async function doPickUp(host:GameHost, ctx:HostCtx, npc:NPCInput, name:string):P
 	return { ok: false, verb: 'pick_up', reason: `no such item ${name}` };
 }
 
-async function doDrop(ctx:HostCtx, name:string):Promise<ActionResult> {
+async function doDrop(ctx:HostCtx, name:string):Promise<ArcResult> {
 	const item = findItem(ctx.actor, name);
 	if (!item) {
 		return { ok: false, verb: 'drop', reason: `not carrying ${name}` };
@@ -736,7 +736,7 @@ function purseGoldAmount():number {
 	return getDef('fire_mushroom').components.Goods?.ask ?? 3;
 }
 
-export function settleGive(from:GameObject, to:GameObject, itemName:string, host:GameHost):ActionResult {
+export function settleGive(from:GameObject, to:GameObject, itemName:string, host:GameHost):ArcResult {
 	if (to === from) {
 		return { ok: false, verb: 'give', reason: 'cannot give to yourself' };
 	}
@@ -786,7 +786,7 @@ export function settleGive(from:GameObject, to:GameObject, itemName:string, host
 	return { ok: true, verb: 'give', reason: `gave ${label} to ${bodyName(to)}` };
 }
 
-export function settlePay(from:GameObject, to:GameObject, amount:number, host:GameHost):ActionResult {
+export function settlePay(from:GameObject, to:GameObject, amount:number, host:GameHost):ArcResult {
 	if (to === from) {
 		return { ok: false, verb: 'give', reason: 'cannot give to yourself' };
 	}
@@ -813,7 +813,7 @@ export function settleBuy(
 	itemName:string,
 	offer:number,
 	host:GameHost,
-):ActionResult {
+):ArcResult {
 	const fromName = bodyName(seller);
 	const stock = findSaleItem(seller, itemName);
 	if (!stock) {
@@ -869,7 +869,7 @@ export function settleSell(
 	itemName:string,
 	ask:number,
 	host:GameHost,
-):ActionResult {
+):ArcResult {
 	const toName = bodyName(buyer);
 	const stock = findSaleItem(seller, itemName) ?? findItem(seller, itemName);
 	if (!stock) {
@@ -923,7 +923,7 @@ export async function doGive(
 	npc:NPCInput,
 	itemName:string,
 	toName:string,
-):Promise<ActionResult> {
+):Promise<ArcResult> {
 	if (!toName) {
 		return { ok: false, verb: 'give', reason: 'give to whom?' };
 	}
@@ -945,7 +945,7 @@ export async function doBuy(
 	itemName:string,
 	fromName:string,
 	offer:number,
-):Promise<ActionResult> {
+):Promise<ArcResult> {
 	if (!fromName) {
 		return { ok: false, verb: 'buy', reason: 'buy from whom?' };
 	}
@@ -967,7 +967,7 @@ export async function doSell(
 	itemName:string,
 	toName:string,
 	ask:number,
-):Promise<ActionResult> {
+):Promise<ArcResult> {
 	if (!toName) {
 		return { ok: false, verb: 'sell', reason: 'sell to whom?' };
 	}
@@ -988,7 +988,7 @@ export async function doSteal(
 	npc:NPCInput,
 	itemName:string,
 	fromName:string,
-):Promise<ActionResult> {
+):Promise<ArcResult> {
 	if (!fromName) {
 		return { ok: false, verb: 'steal', reason: 'steal from whom?' };
 	}

@@ -1,7 +1,7 @@
-import type { ActionPlan } from '../action/types.js';
-import { parsePlan } from '../action/parse.js';
-import type { VerbRegistry } from '../action/registry.js';
-import { isActionPlan } from '../action/validate.js';
+import type { Arc } from '../arc/types.js';
+import { parseArc } from '../arc/parse.js';
+import type { VerbRegistry } from '../arc/stock-verbs.js';
+import { isArc } from '../arc/validate.js';
 import { evaluate } from '../expr/eval.js';
 import type { Catalog } from '../expr/types.js';
 import { watchScore } from '../expr/score.js';
@@ -13,7 +13,7 @@ export type CrowdLaw = {
 	name:string;
 	who:string;
 	watch:string;
-	plan:ActionPlan;
+	arc:Arc;
 	pinned?:boolean;
 };
 
@@ -21,19 +21,19 @@ export type CrowdLawSpec = {
 	name?:string;
 	who?:string;
 	watch:string;
-	plan:ActionPlan | string;
+	arc:Arc | string;
 	pinned?:boolean;
 };
 
 export const DEFAULT_MAX_LAWS = 8;
 
-export function asLawPlan(raw:ActionPlan | string, registry:VerbRegistry):ActionPlan | undefined {
-	if (isActionPlan(raw)) {
+export function asLawArc(raw:Arc | string, registry:VerbRegistry):Arc | undefined {
+	if (isArc(raw)) {
 		return raw;
 	}
 	if (typeof raw === 'string' && raw.trim()) {
 		try {
-			return parsePlan(raw, registry);
+			return parseArc(raw, registry);
 		}
 		catch {
 			return undefined;
@@ -48,17 +48,17 @@ export function lawFromSpec(
 	fallbackName:string,
 	defaultWho = 'units',
 ):CrowdLaw | undefined {
-	const plan = asLawPlan(spec.plan, registry);
+	const arc = asLawArc(spec.arc, registry);
 	const who = (spec.who ?? defaultWho).trim() || defaultWho;
 	const watch = spec.watch.trim();
-	if (!plan || !watch) {
+	if (!arc || !watch) {
 		return undefined;
 	}
 	const name = (spec.name ?? fallbackName).trim();
 	if (!name) {
 		return undefined;
 	}
-	return { name, who, watch, plan, pinned: spec.pinned };
+	return { name, who, watch, arc, pinned: spec.pinned };
 }
 
 export function upsertLaw(laws:CrowdLaw[], next:CrowdLaw, max:number):CrowdLaw[] {

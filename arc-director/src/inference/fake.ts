@@ -28,7 +28,7 @@ export function goToNamedInteractable():FakeChatFn {
 		const lastUser = [...req.messages].reverse().find((m) => m.role === 'user');
 		const text = chatContentText(lastUser?.content);
 		const names = text.match(/\b[A-Z][A-Za-z0-9]+(?:[A-Z][A-Za-z0-9]+)+\b/g) ?? [];
-		const name = names.find((n) => n !== 'ActionPlan') ?? 'EastGate';
+		const name = names.find((n) => n !== 'Arc') ?? 'EastGate';
 		return {
 			content: JSON.stringify({
 				head: { verb: 'go_to', args: { name } },
@@ -38,7 +38,7 @@ export function goToNamedInteractable():FakeChatFn {
 	};
 }
 
-export function parseFakePlan(content:string):unknown {
+export function parseFakeArc(content:string):unknown {
 	return extractJson(content);
 }
 

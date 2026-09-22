@@ -357,7 +357,7 @@ export class Session extends Component {
 		this.hud.batchThinks = this.director.arc?.liveBatchThinks() ?? this.hud.batchThinks;
 		if (this.director.arc) {
 			this.hud.thinkingBudget = this.director.arc.liveThinking();
-			this.hud.planText = this.director.arc.livePlanText();
+			this.hud.arcText = this.director.arc.liveArcText();
 		}
 		void this.refreshHudModels();
 	}
@@ -400,11 +400,11 @@ export class Session extends Component {
 			maxParallel?:number;
 			batchThinks:boolean;
 			thinkingBudget:boolean;
-			planText:boolean;
+			arcText:boolean;
 		} = {
 			batchThinks: this.hud.batchThinks,
 			thinkingBudget: this.hud.thinkingBudget,
-			planText: this.hud.planText,
+			arcText: this.hud.arcText,
 		};
 		if (Number.isFinite(this.hud.maxParallel)) {
 			const n = clampParallelThinkers(this.hud.maxParallel);
@@ -413,8 +413,8 @@ export class Session extends Component {
 		}
 		this.director.arc?.setBatchThinks(this.hud.batchThinks);
 		this.director.arc?.setThinking(this.hud.thinkingBudget);
-		this.director.arc?.setPlanText(this.hud.planText);
-		const packed = `${patch.maxParallel ?? ''}:${patch.batchThinks ? 1 : 0}:${patch.thinkingBudget ? 1 : 0}:${patch.planText ? 1 : 0}`;
+		this.director.arc?.setArcText(this.hud.arcText);
+		const packed = `${patch.maxParallel ?? ''}:${patch.batchThinks ? 1 : 0}:${patch.thinkingBudget ? 1 : 0}:${patch.arcText ? 1 : 0}`;
 		if (packed === this.lastThinkersPacked) {
 			return;
 		}

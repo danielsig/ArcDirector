@@ -7,7 +7,7 @@ import {
 	isCrowdConductor,
 	isFormationVerb,
 	roleMentionTitles,
-	type ActionResult,
+	type ArcResult,
 	type AgentEvent,
 	type AgentJSON,
 	type Kit,
@@ -50,7 +50,7 @@ import {
 
 export type { HostCtx, SceneHooks };
 
-const PLAN_RETRY_CAP = 3;
+const ARC_RETRY_CAP = 3;
 const STALL_VERBS = new Set(['wait', 'wander', 'say', 'set_status']);
 
 export class GameHost {
@@ -132,7 +132,7 @@ export class GameHost {
 					if (ctx.reason === 'heartbeat') {
 						const go = this.world.findByID(ctx.npcID);
 						const npc = go?.getComponent(NPCInput);
-						return !!(npc?.busy() || ctx.plan);
+						return !!(npc?.busy() || ctx.arc);
 					}
 					return true;
 				},
@@ -142,7 +142,7 @@ export class GameHost {
 				model: preferredChatModel(),
 				enableThinking: prefs().thinkingBudget,
 			})
-			.withPlanText(prefs().planText)
+			.withArcText(prefs().arcText)
 			.addStockVerbs()
 			.addStockCrowdVerbs()
 			.onVerb(this.do)
@@ -158,7 +158,7 @@ export class GameHost {
 			.withTalk(this.talk)
 			.withMap(this.mapSense)
 			.withEncyclopedia((ctx) => WORLD_ENCYCLOPEDIAS[ctx.scene] ?? [])
-			.onAbortPlan(this.abortPlan)
+			.onAbortArc(this.abortArc)
 			.onLog((entry) => pushLog(this, entry.name, entry.message, entry.image));
 	}
 
@@ -172,7 +172,7 @@ export class GameHost {
 		}
 	}
 
-	do = (call:VerbCall<HostCtx>):Promise<ActionResult> | ActionResult => {
+	do = (call:VerbCall<HostCtx>):Promise<ArcResult> | ArcResult => {
 		if (isFormationVerb(call.verb)) {
 			return runFormation(this, call);
 		}
@@ -187,7 +187,7 @@ export class GameHost {
 		return undefined;
 	};
 
-	abortPlan = (id:string):void => {
+	abortArc = (id:string):void => {
 		if (this.bargainDone) {
 			return;
 		}
@@ -274,7 +274,7 @@ export class GameHost {
 
 	private attachMind(id:string, agent:Agent<HostCtx>):void {
 		agent.toolRoundCap = 0;
-		agent.planRetryCap = PLAN_RETRY_CAP;
+		agent.arcRetryCap = ARC_RETRY_CAP;
 		agent.stalled = (result) => !result.ok || !!result.interrupted || STALL_VERBS.has(result.verb ?? '');
 		this.talk.attach({
 			id,

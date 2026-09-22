@@ -1,7 +1,7 @@
-import type { ActionPlan } from '../action/types.js';
-import { isActionPlan } from '../action/validate.js';
-import { parsePlan } from '../action/parse.js';
-import type { VerbRegistry } from '../action/registry.js';
+import type { Arc } from '../arc/types.js';
+import { isArc } from '../arc/validate.js';
+import { parseArc } from '../arc/parse.js';
+import type { VerbRegistry } from '../arc/stock-verbs.js';
 import { evaluate } from '../expr/eval.js';
 import { dummyEntity, type HostKernels } from '../expr/natives.js';
 import { buildCatalog } from '../expr/natives.js';
@@ -105,13 +105,13 @@ export function evaluateWho(who:string, catalog:Catalog, crowd:Crowd):CrowdUnit[
 	return unitsFromVal(r.value, crowd);
 }
 
-export function planArg(raw:unknown, registry:VerbRegistry):ActionPlan | undefined {
-	if (isActionPlan(raw)) {
+export function arcArg(raw:unknown, registry:VerbRegistry):Arc | undefined {
+	if (isArc(raw)) {
 		return raw;
 	}
 	if (typeof raw === 'string' && raw.trim()) {
 		try {
-			return parsePlan(raw, registry);
+			return parseArc(raw, registry);
 		}
 		catch {
 			return undefined;

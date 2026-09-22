@@ -1,7 +1,7 @@
 import { extractJson } from '../json.js';
-import { asPlan, isActionPlan, validatePlan } from './validate.js';
-import { ActionError, JOIN_SYMBOL, SYMBOL_JOIN, firstStep, type ActionPlan, type Join, type Step } from './types.js';
-import type { VerbRegistry } from './registry.js';
+import { asArc, isArc, validateArc } from './validate.js';
+import { ArcError, JOIN_SYMBOL, SYMBOL_JOIN, firstStep, type Arc, type Join, type Step } from './types.js';
+import type { VerbRegistry } from './stock-verbs.js';
 import type { StepArg } from './validate.js';
 
 /** Watch / who exprs: `some(...)`, `isNear(me, Miller)`, `units.filter("Guard")`. */
@@ -13,8 +13,8 @@ function formatArg(v:StepArg):string {
 	if (Array.isArray(v)) {
 		return v.join(',');
 	}
-	if (isActionPlan(v)) {
-		return formatPlan(v);
+	if (isArc(v)) {
+		return formatArc(v);
 	}
 	if (typeof v === 'string') {
 		if (isCallExpr(v)) {
@@ -42,7 +42,7 @@ export function formatStep(step:Step):string {
 	const inner = keys.map((k) => {
 		const value = step.args[k];
 		const formatted = formatArg(value);
-		if (keys.length === 1 && (isBareArg(formatted) || isActionPlan(value))) {
+		if (keys.length === 1 && (isBareArg(formatted) || isArc(value))) {
 			return formatted;
 		}
 		return `${k}=${formatted}`;
@@ -50,22 +50,22 @@ export function formatStep(step:Step):string {
 	return `${step.verb}(${inner})`;
 }
 
-function formatNode(plan:ActionPlan):string {
-	if (plan.group) {
-		return `(${formatPlan(plan.group)})`;
+function formatNode(arc:Arc):string {
+	if (arc.group) {
+		return `(${formatArc(arc.group)})`;
 	}
-	if (plan.head) {
-		return formatStep(plan.head);
+	if (arc.head) {
+		return formatStep(arc.head);
 	}
 	return 'think()';
 }
 
-export function formatPlan(plan:ActionPlan):string {
-	let out = formatNode(plan);
-	let cur:ActionPlan | undefined = plan;
+export function formatArc(arc:Arc):string {
+	let out = formatNode(arc);
+	let cur:Arc | undefined = arc;
 	while (cur.then) {
-		out += ` ${JOIN_SYMBOL[cur.then.join]} ${formatNode(cur.then.plan)}`;
-		cur = cur.then.plan;
+		out += ` ${JOIN_SYMBOL[cur.then.join]} ${formatNode(cur.then.arc)}`;
+		cur = cur.then.arc;
 	}
 	return out;
 }
@@ -93,7 +93,7 @@ function parseQuoted(s:string, i:number):{ value:string; next:number } {
 		out += s[i];
 		i += 1;
 	}
-	throw new ActionError('unterminated string in plan text');
+	throw new ArcError('unterminated string in arc text');
 }
 
 function parseBalanced(s:string, i:number):{ value:string; next:number } {
@@ -170,13 +170,13 @@ function argBase(kind:string | undefined):string {
 	return kind.endsWith('?') ? kind.slice(0, -1) : kind;
 }
 
-function parsePlanAtom(s:string, i:number, registry:VerbRegistry):{ value:ActionPlan; next:number } {
+function parseArcAtom(s:string, i:number, registry:VerbRegistry):{ value:Arc; next:number } {
 	i = skipWs(s, i);
 	if (s[i] === '(') {
-		const inner = parseNestedPlan(s, i + 1, registry);
+		const inner = parseNestedArc(s, i + 1, registry);
 		const j = skipWs(s, inner.next);
 		if (s[j] !== ')') {
-			throw new ActionError('missing ) for grouped plan');
+			throw new ArcError('missing ) for grouped arc');
 		}
 		return { value: { head: { verb: 'group', args: {} }, group: inner.value }, next: j + 1 };
 	}
@@ -184,11 +184,11 @@ function parsePlanAtom(s:string, i:number, registry:VerbRegistry):{ value:Action
 	return { value: { head: step.step }, next: step.next };
 }
 
-function parseNestedPlan(s:string, i:number, registry:VerbRegistry):{ value:ActionPlan; next:number } {
-	const first = parsePlanAtom(s, i, registry);
-	const plan:ActionPlan = first.value;
+function parseNestedArc(s:string, i:number, registry:VerbRegistry):{ value:Arc; next:number } {
+	const first = parseArcAtom(s, i, registry);
+	const arc:Arc = first.value;
 	let pos = first.next;
-	let tail = plan;
+	let tail = arc;
 	while (true) {
 		const j = skipWs(s, pos);
 		if (j >= s.length || s[j] === ',' || s[j] === ')') {
@@ -198,12 +198,12 @@ function parseNestedPlan(s:string, i:number, registry:VerbRegistry):{ value:Acti
 		if (!join) {
 			break;
 		}
-		const nxt = parsePlanAtom(s, join.next, registry);
-		tail.then = { join: join.join, plan: nxt.value };
-		tail = tail.then.plan;
+		const nxt = parseArcAtom(s, join.next, registry);
+		tail.then = { join: join.join, arc: nxt.value };
+		tail = tail.then.arc;
 		pos = nxt.next;
 	}
-	return { value: plan, next: pos };
+	return { value: arc, next: pos };
 }
 
 function parseStepText(s:string, i:number, registry:VerbRegistry):{ step:Step; next:number } {
@@ -214,12 +214,12 @@ function parseStepText(s:string, i:number, registry:VerbRegistry):{ step:Step; n
 	}
 	const verb = s.slice(start, i);
 	if (!verb) {
-		throw new ActionError('expected verb');
+		throw new ArcError('expected verb');
 	}
 	i = skipWs(s, i);
 	const spec = registry.get(verb);
 	if (!spec) {
-		throw new ActionError(`unknown verb '${verb}'`);
+		throw new ArcError(`unknown verb '${verb}'`);
 	}
 	const args:Record<string, StepArg> = {};
 	if (s[i] === '(') {
@@ -237,8 +237,8 @@ function parseStepText(s:string, i:number, registry:VerbRegistry):{ step:Step; n
 				i = skipWs(s, i);
 				if (s[i] === '=') {
 					i += 1;
-					if (argBase(spec.args[ident]) === 'plan') {
-						const parsed = parseNestedPlan(s, i, registry.nested());
+					if (argBase(spec.args[ident]) === 'arc') {
+						const parsed = parseNestedArc(s, i, registry.nested());
 						args[ident] = parsed.value;
 						i = parsed.next;
 					}
@@ -253,10 +253,10 @@ function parseStepText(s:string, i:number, registry:VerbRegistry):{ step:Step; n
 					const keys = Object.keys(spec.args);
 					const key = keys[positional] ?? registry.firstRequiredArg(spec);
 					if (!key) {
-						throw new ActionError(`verb '${verb}' got an unexpected positional arg`);
+						throw new ArcError(`verb '${verb}' got an unexpected positional arg`);
 					}
-					if (argBase(spec.args[key]) === 'plan') {
-						const parsed = parseNestedPlan(s, i, registry.nested());
+					if (argBase(spec.args[key]) === 'arc') {
+						const parsed = parseNestedArc(s, i, registry.nested());
 						args[key] = parsed.value;
 						i = parsed.next;
 					}
@@ -275,11 +275,11 @@ function parseStepText(s:string, i:number, registry:VerbRegistry):{ step:Step; n
 				if (s[i] === ')') {
 					break;
 				}
-				throw new ActionError(`expected ',' or ')' in ${verb}(...)`);
+				throw new ArcError(`expected ',' or ')' in ${verb}(...)`);
 			}
 		}
 		if (s[i] !== ')') {
-			throw new ActionError(`missing ')' for ${verb}`);
+			throw new ArcError(`missing ')' for ${verb}`);
 		}
 		i += 1;
 	}
@@ -300,39 +300,39 @@ function parseJoin(s:string, i:number):{ join:Join; next:number } | null {
 	return null;
 }
 
-export function parsePlanText(text:string, registry:VerbRegistry):ActionPlan {
-	const parsed = parseNestedPlan(text, 0, registry);
+export function parseArcText(text:string, registry:VerbRegistry):Arc {
+	const parsed = parseNestedArc(text, 0, registry);
 	const i = skipWs(text, parsed.next);
 	if (i < text.length) {
-		throw new ActionError(`unexpected trailing text: ${text.slice(i)}`);
+		throw new ArcError(`unexpected trailing text: ${text.slice(i)}`);
 	}
-	validatePlan(parsed.value, registry);
+	validateArc(parsed.value, registry);
 	return parsed.value;
 }
 
-export function parsePlan(input:string | unknown, registry:VerbRegistry):ActionPlan {
+export function parseArc(input:string | unknown, registry:VerbRegistry):Arc {
 	if (typeof input !== 'string') {
-		return asPlan(input, registry);
+		return asArc(input, registry);
 	}
 	const trimmed = input.trim();
 	const json = lastHeadJson(trimmed);
 	if (json !== undefined) {
-		return asPlan(extractJson(json), registry);
+		return asArc(extractJson(json), registry);
 	}
 	if (trimmed.startsWith('```')) {
-		return asPlan(extractJson(trimmed), registry);
+		return asArc(extractJson(trimmed), registry);
 	}
-	return parsePlanText(trimmed, registry);
+	return parseArcText(trimmed, registry);
 }
 
-/** Last root `{"head"` / `{"group"` in CoT. Nested `then.plan.head` is skipped. */
+/** Last root `{"head"` / `{"group"` in CoT. Nested `then.arc.head` is skipped. */
 function lastHeadJson(text:string):string | undefined {
 	let at = -1;
 	const re = /\{\s*"(?:head|group)"/g;
 	let m:RegExpExecArray | null;
 	while ((m = re.exec(text))) {
 		const before = text.slice(Math.max(0, m.index - 16), m.index);
-		if (/"plan"\s*:\s*$/.test(before)) {
+		if (/"arc"\s*:\s*$/.test(before)) {
 			continue;
 		}
 		at = m.index;

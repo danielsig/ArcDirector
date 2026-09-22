@@ -1,15 +1,15 @@
-import { formatPlan } from '../action/parse.js';
-import { isActionPlan } from '../action/validate.js';
+import { formatArc } from '../arc/parse.js';
+import { isArc } from '../arc/validate.js';
 import {
 	firstStep,
 	isHoistedWhen,
-	type ActionPlan,
-	type ActionResult,
+	type Arc,
+	type ArcResult,
 	type Join,
 	type Step,
-} from '../action/types.js';
+} from '../arc/types.js';
 import { evaluate } from '../expr/eval.js';
-import { parse as parseExpr } from '../expr/parse.js';
+import { parse } from '../expr/parse.js';
 import { dummyEntity } from '../expr/natives.js';
 import { watchScore } from '../expr/score.js';
 import { stringifyVal } from '../expr/stringify.js';
@@ -18,40 +18,40 @@ import { LIST_CAP, SampleCache, type Ast, type Catalog, type ExprVal } from '../
 export const THINK_ABOUT_CAP = 200;
 export const DEFAULT_COOLDOWN = 8;
 
-export type PlanHandler = {
+export type ArcHandler = {
 	key:string;
 	watch:string;
-	plan:ActionPlan;
+	arc:Arc;
 	rank:number;
 };
 
-export type PlanPending =
-	| { kind:'preempt'; handler:PlanHandler }
+export type ArcPending =
+	| { kind:'preempt'; handler:ArcHandler }
 	| { kind:'abort' };
 
-export type PlanSession = {
+export type ArcSession = {
 	token:number;
-	running:PlanHandler[];
-	frames:{ handlers:PlanHandler[] }[];
-	pending?:PlanPending;
+	running:ArcHandler[];
+	frames:{ handlers:ArcHandler[] }[];
+	pending?:ArcPending;
 	fail?:{ verb:string; reason:string };
 	bindings:Map<string, ExprVal>;
 	catalog?:()=>Catalog | undefined;
 	now:()=>number;
 	abortHost?:()=>void;
-	extraHandlers?:()=>PlanHandler[];
+	extraHandlers?:()=>ArcHandler[];
 	/** Body finished; hoisted `when` still poll until the program is replaced. */
 	parked?:boolean;
 };
 
-export type PlanSessionOpts = {
+export type ArcSessionOpts = {
 	catalog?:()=>Catalog | undefined;
 	now?:()=>number;
 	abortHost?:()=>void;
-	extraHandlers?:()=>PlanHandler[];
+	extraHandlers?:()=>ArcHandler[];
 };
 
-export function createPlanSession(opts:PlanSessionOpts = {}):PlanSession {
+export function createArcSession(opts:ArcSessionOpts = {}):ArcSession {
 	return {
 		token: 0,
 		running: [],
@@ -65,7 +65,7 @@ export function createPlanSession(opts:PlanSessionOpts = {}):PlanSession {
 	};
 }
 
-function liveCatalog(session:PlanSession):Catalog | undefined {
+function liveCatalog(session:ArcSession):Catalog | undefined {
 	const base = session.catalog?.();
 	if (!base && !session.fail && session.bindings.size === 0) {
 		return undefined;
@@ -104,9 +104,9 @@ export function watchIsTrue(watch:string, catalog:Catalog):boolean {
 	return watchScore(r.value).score > 0;
 }
 
-function allHandlers(session:PlanSession):PlanHandler[] {
+function allHandlers(session:ArcSession):ArcHandler[] {
 	const extras = session.extraHandlers?.() ?? [];
-	const inner:PlanHandler[] = [];
+	const inner:ArcHandler[] = [];
 	for (let f = session.frames.length - 1; f >= 0; f--) {
 		inner.push(...session.frames[f].handlers);
 	}
@@ -114,7 +114,7 @@ function allHandlers(session:PlanSession):PlanHandler[] {
 }
 
 /** Director tick: abort a dead watch, or preempt with a higher-rank true handler. */
-export function pollPlanSession(session:PlanSession):void {
+export function pollArcSession(session:ArcSession):void {
 	const catalog = liveCatalog(session);
 	if (!catalog) {
 		return;
@@ -144,7 +144,7 @@ export function pollPlanSession(session:PlanSession):void {
 	}
 }
 
-export function firstStartable(session:PlanSession):PlanHandler | undefined {
+export function firstStartable(session:ArcSession):ArcHandler | undefined {
 	const catalog = liveCatalog(session);
 	if (!catalog) {
 		return undefined;
@@ -164,13 +164,13 @@ export function firstStartable(session:PlanSession):PlanHandler | undefined {
 type Row = {
 	kind:'step' | 'group';
 	step?:Step;
-	group?:ActionPlan;
+	group?:Arc;
 	join:Join | undefined;
 };
 
-export function planSteps(plan:ActionPlan):Step[] {
+export function arcSteps(arc:Arc):Step[] {
 	const steps:Step[] = [];
-	let cur:ActionPlan | undefined = plan;
+	let cur:Arc | undefined = arc;
 	while (cur) {
 		if (cur.head) {
 			steps.push(cur.head);
@@ -181,14 +181,14 @@ export function planSteps(plan:ActionPlan):Step[] {
 				steps.push(inner);
 			}
 		}
-		cur = cur.then?.plan;
+		cur = cur.then?.arc;
 	}
 	return steps;
 }
 
-function flatten(plan:ActionPlan):Row[] {
+function flatten(arc:Arc):Row[] {
 	const rows:Row[] = [];
-	let cur:ActionPlan | undefined = plan;
+	let cur:Arc | undefined = arc;
 	while (cur) {
 		if (cur.group) {
 			rows.push({ kind: 'group', group: cur.group, join: cur.then?.join });
@@ -196,39 +196,39 @@ function flatten(plan:ActionPlan):Row[] {
 		else if (cur.head.verb !== 'group') {
 			rows.push({ kind: 'step', step: cur.head, join: cur.then?.join });
 		}
-		cur = cur.then?.plan;
+		cur = cur.then?.arc;
 	}
 	return rows;
 }
 
-function unflatten(rows:Row[]):ActionPlan {
+function unflatten(rows:Row[]):Arc {
 	if (rows.length === 0) {
 		return { head: { verb: 'think', args: {} } };
 	}
 	const last = rows[rows.length - 1];
-	let plan:ActionPlan = last.kind === 'group' && last.group
+	let arc:Arc = last.kind === 'group' && last.group
 		? { head: { verb: 'group', args: {} }, group: last.group }
 		: { head: last.step ?? { verb: 'think', args: {} } };
 	for (let i = rows.length - 2; i >= 0; i--) {
 		const row = rows[i];
-		const node:ActionPlan = row.kind === 'group' && row.group
+		const node:Arc = row.kind === 'group' && row.group
 			? { head: { verb: 'group', args: {} }, group: row.group }
 			: { head: row.step ?? { verb: 'think', args: {} } };
-		node.then = { join: row.join ?? 'then', plan };
-		plan = node;
+		node.then = { join: row.join ?? 'then', arc };
+		arc = node;
 	}
-	return plan;
+	return arc;
 }
 
 function thinkAbout(step:Step):string {
 	return typeof step.args.about === 'string' ? step.args.about.replace(/\s+/g, ' ').trim() : '';
 }
 
-function splitTrailingThink(plan:ActionPlan):{ body:ActionPlan | undefined; think:Step | undefined } {
-	const rows = flatten(plan);
+function splitTrailingThink(arc:Arc):{ body:Arc | undefined; think:Step | undefined } {
+	const rows = flatten(arc);
 	const last = rows[rows.length - 1];
 	if (!last || last.kind !== 'step' || last.step?.verb !== 'think') {
-		return { body: plan, think: undefined };
+		return { body: arc, think: undefined };
 	}
 	const bodyRows = rows.slice(0, -1);
 	if (bodyRows.length === 0) {
@@ -238,22 +238,22 @@ function splitTrailingThink(plan:ActionPlan):{ body:ActionPlan | undefined; thin
 	return { body: unflatten(bodyRows), think: last.step };
 }
 
-function withVerb(result:ActionResult, step:Step):ActionResult {
+function withVerb(result:ArcResult, step:Step):ArcResult {
 	return { ...result, verb: result.verb ?? step.verb };
 }
 
 /** Pull every think() out, concat abouts, append one think at the end. */
-export function deferThinks(plan:ActionPlan):ActionPlan {
-	if (plan.group) {
+export function deferThinks(arc:Arc):Arc {
+	if (arc.group) {
 		return {
 			head: { verb: 'group', args: {} },
-			group: deferThinks(plan.group),
-			then: plan.then
-				? { join: plan.then.join, plan: deferThinks(plan.then.plan) }
+			group: deferThinks(arc.group),
+			then: arc.then
+				? { join: arc.then.join, arc: deferThinks(arc.then.arc) }
 				: undefined,
 		};
 	}
-	const rows = flatten(plan);
+	const rows = flatten(arc);
 	const abouts:string[] = [];
 	const body:Row[] = [];
 	let had = false;
@@ -273,7 +273,7 @@ export function deferThinks(plan:ActionPlan):ActionPlan {
 		body.push(row);
 	}
 	if (!had) {
-		return plan;
+		return arc;
 	}
 	let about = abouts.join(' ');
 	if (about.length > THINK_ABOUT_CAP) {
@@ -288,19 +288,19 @@ export function deferThinks(plan:ActionPlan):ActionPlan {
 	return unflatten(body);
 }
 
-function hoistWhen(plan:ActionPlan, depth:number):{ handlers:PlanHandler[]; body:ActionPlan | undefined } {
-	const handlers:PlanHandler[] = [];
+function hoistWhen(arc:Arc, depth:number):{ handlers:ArcHandler[]; body:Arc | undefined } {
+	const handlers:ArcHandler[] = [];
 	const kept:Row[] = [];
 	let i = 0;
-	let cur:ActionPlan | undefined = plan;
+	let cur:Arc | undefined = arc;
 	while (cur) {
-		if (cur.head && isHoistedWhen(cur.head) && isActionPlan(cur.head.args.plan)) {
+		if (cur.head && isHoistedWhen(cur.head) && isArc(cur.head.args.arc)) {
 			const watch = String(cur.head.args.watch).trim();
-			const inner = cur.head.args.plan;
+			const inner = cur.head.args.arc;
 			handlers.push({
-				key: `when:${watch}:${formatPlan(inner)}`,
+				key: `when:${watch}:${formatArc(inner)}`,
 				watch,
-				plan: inner,
+				arc: inner,
 				rank: 100 + i,
 			});
 			i += 1;
@@ -311,7 +311,7 @@ function hoistWhen(plan:ActionPlan, depth:number):{ handlers:PlanHandler[]; body
 		else if (cur.head.verb !== 'group') {
 			kept.push({ kind: 'step', step: cur.head, join: cur.then?.join });
 		}
-		cur = cur.then?.plan;
+		cur = cur.then?.arc;
 	}
 	if (kept.length === 0) {
 		return { handlers, body: undefined };
@@ -320,7 +320,7 @@ function hoistWhen(plan:ActionPlan, depth:number):{ handlers:PlanHandler[]; body
 	return { handlers, body: unflatten(kept) };
 }
 
-function rootedAtBinding(ast:Ast, session:PlanSession):boolean {
+function rootedAtBinding(ast:Ast, session:ArcSession):boolean {
 	if (ast.type === 'ident') {
 		return ast.name === 'fail' || session.bindings.has(ast.name);
 	}
@@ -330,7 +330,7 @@ function rootedAtBinding(ast:Ast, session:PlanSession):boolean {
 	return false;
 }
 
-function interpolateStep(step:Step, session:PlanSession):Step {
+function interpolateStep(step:Step, session:ArcSession):Step {
 	if (!session.fail && session.bindings.size === 0) {
 		return step;
 	}
@@ -345,7 +345,7 @@ function interpolateStep(step:Step, session:PlanSession):Step {
 			continue;
 		}
 		try {
-			const { ast } = parseExpr(value);
+			const { ast } = parse(value);
 			if (!rootedAtBinding(ast, session)) {
 				continue;
 			}
@@ -364,10 +364,10 @@ function interpolateStep(step:Step, session:PlanSession):Step {
 }
 
 async function drainPending(
-	session:PlanSession,
-	execute:(step:Step)=>Promise<ActionResult>,
+	session:ArcSession,
+	execute:(step:Step)=>Promise<ArcResult>,
 	depth:number,
-):Promise<ActionResult | undefined> {
+):Promise<ArcResult | undefined> {
 	while (session.pending) {
 		const pending = session.pending;
 		session.pending = undefined;
@@ -376,7 +376,7 @@ async function drainPending(
 		}
 		session.running.push(pending.handler);
 		try {
-			const result = await runFrame(pending.handler.plan, execute, session, depth + 1);
+			const result = await runFrame(pending.handler.arc, execute, session, depth + 1);
 			if (result.interrupted) {
 				return result;
 			}
@@ -389,12 +389,12 @@ async function drainPending(
 }
 
 async function pumpHandlers(
-	session:PlanSession,
-	execute:(step:Step)=>Promise<ActionResult>,
+	session:ArcSession,
+	execute:(step:Step)=>Promise<ArcResult>,
 	depth:number,
-):Promise<ActionResult | undefined> {
+):Promise<ArcResult | undefined> {
 	for (let n = 0; n < 32; n++) {
-		pollPlanSession(session);
+		pollArcSession(session);
 		if (!session.pending) {
 			return undefined;
 		}
@@ -408,10 +408,10 @@ async function pumpHandlers(
 
 async function execStep(
 	step:Step,
-	execute:(step:Step)=>Promise<ActionResult>,
-	session:PlanSession,
+	execute:(step:Step)=>Promise<ArcResult>,
+	session:ArcSession,
 	depth:number,
-):Promise<ActionResult> {
+):Promise<ArcResult> {
 	const before = await pumpHandlers(session, execute, depth);
 	if (before) {
 		return before;
@@ -448,13 +448,13 @@ function parseThrough(through:string):{ name:string; expr:string } | undefined {
 
 async function runLoop(
 	step:Step,
-	execute:(step:Step)=>Promise<ActionResult>,
-	session:PlanSession,
+	execute:(step:Step)=>Promise<ArcResult>,
+	session:ArcSession,
 	depth:number,
-):Promise<ActionResult> {
-	const inner = isActionPlan(step.args.plan) ? step.args.plan : undefined;
+):Promise<ArcResult> {
+	const inner = isArc(step.args.arc) ? step.args.arc : undefined;
 	if (!inner) {
-		return { ok: false, verb: 'loop', reason: 'loop needs plan' };
+		return { ok: false, verb: 'loop', reason: 'loop needs arc' };
 	}
 	const through = typeof step.args.through === 'string' ? step.args.through : '';
 	const until = typeof step.args.until === 'string' ? step.args.until.trim() : '';
@@ -477,7 +477,7 @@ async function runLoop(
 		if (items.length > cap) {
 			return { ok: false, verb: 'loop', reason: 'through list cap' };
 		}
-		let last:ActionResult = { ok: true, verb: 'loop' };
+		let last:ArcResult = { ok: true, verb: 'loop' };
 		for (let i = 0; i < items.length; i++) {
 			if (times !== undefined && i >= times) {
 				break;
@@ -506,7 +506,7 @@ async function runLoop(
 		return { ...last, verb: last.verb ?? 'loop' };
 	}
 	let i = 0;
-	let last:ActionResult = { ok: true, verb: 'loop' };
+	let last:ArcResult = { ok: true, verb: 'loop' };
 	while (true) {
 		if (times !== undefined && i >= times) {
 			return { ...last, verb: last.verb ?? 'loop' };
@@ -535,7 +535,7 @@ async function runLoop(
 	}
 }
 
-function shouldContinue(result:ActionResult, join:Join):boolean {
+function shouldContinue(result:ArcResult, join:Join):boolean {
 	if (result.interrupted) {
 		return false;
 	}
@@ -552,49 +552,49 @@ function shouldContinue(result:ActionResult, join:Join):boolean {
 }
 
 async function runChain(
-	plan:ActionPlan,
-	execute:(step:Step)=>Promise<ActionResult>,
-	session:PlanSession,
+	arc:Arc,
+	execute:(step:Step)=>Promise<ArcResult>,
+	session:ArcSession,
 	depth:number,
-):Promise<ActionResult> {
-	let result:ActionResult;
-	if (plan.group) {
-		result = await runFrame(plan.group, execute, session, depth + 1);
+):Promise<ArcResult> {
+	let result:ArcResult;
+	if (arc.group) {
+		result = await runFrame(arc.group, execute, session, depth + 1);
 	}
 	else {
-		result = await execStep(plan.head, execute, session, depth);
+		result = await execStep(arc.head, execute, session, depth);
 	}
-	if (!plan.then || result.interrupted) {
+	if (!arc.then || result.interrupted) {
 		return result;
 	}
 	if (result.preempted && !result.ok) {
 		return result;
 	}
-	if (!shouldContinue(result, plan.then.join)) {
+	if (!shouldContinue(result, arc.then.join)) {
 		return result;
 	}
-	if (plan.then.join === 'then_if_err') {
+	if (arc.then.join === 'then_if_err') {
 		session.fail = {
-			verb: result.verb ?? firstStep(plan)?.verb ?? '',
+			verb: result.verb ?? firstStep(arc)?.verb ?? '',
 			reason: result.reason ?? '',
 		};
 		try {
-			return await runFrame(plan.then.plan, execute, session, depth + 1);
+			return await runFrame(arc.then.arc, execute, session, depth + 1);
 		}
 		finally {
 			session.fail = undefined;
 		}
 	}
-	return runChain(plan.then.plan, execute, session, depth);
+	return runChain(arc.then.arc, execute, session, depth);
 }
 
 async function runFrame(
-	plan:ActionPlan,
-	execute:(step:Step)=>Promise<ActionResult>,
-	session:PlanSession,
+	arc:Arc,
+	execute:(step:Step)=>Promise<ArcResult>,
+	session:ArcSession,
 	depth:number,
-):Promise<ActionResult> {
-	const { handlers, body } = hoistWhen(plan, depth);
+):Promise<ArcResult> {
+	const { handlers, body } = hoistWhen(arc, depth);
 	session.frames.push({ handlers });
 	try {
 		const stolen = await pumpHandlers(session, execute, depth);
@@ -620,23 +620,23 @@ async function runFrame(
 	}
 }
 
-export type RunPlanOpts = {
-	session?:PlanSession;
-	asHandler?:PlanHandler;
+export type RunArcOpts = {
+	session?:ArcSession;
+	asHandler?:ArcHandler;
 	onStep?:(step:Step)=>void;
 };
 
-export async function runPlan(
-	plan:ActionPlan,
-	execute:(step:Step)=>Promise<ActionResult>,
-	opts:RunPlanOpts = {},
-):Promise<ActionResult> {
-	const session = opts.session ?? createPlanSession();
-	const run = async (step:Step):Promise<ActionResult> => {
+export async function runArc(
+	arc:Arc,
+	execute:(step:Step)=>Promise<ArcResult>,
+	opts:RunArcOpts = {},
+):Promise<ArcResult> {
+	const session = opts.session ?? createArcSession();
+	const run = async (step:Step):Promise<ArcResult> => {
 		opts.onStep?.(step);
 		return execute(step);
 	};
-	const ordered = deferThinks(plan);
+	const ordered = deferThinks(arc);
 	const { body, think } = splitTrailingThink(ordered);
 	const work = body ?? (think ? { head: think } : { head: { verb: 'think', args: {} } });
 	const trail = body ? think : undefined;

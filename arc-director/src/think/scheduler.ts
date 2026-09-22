@@ -1,4 +1,4 @@
-import type { ActionPlan } from '../action/types.js';
+import type { Arc } from '../arc/types.js';
 import { evaluate } from '../expr/eval.js';
 import { clampTrueScore, watchScore } from '../expr/score.js';
 import {
@@ -7,9 +7,9 @@ import {
 	type Catalog,
 	type ScoldReason,
 } from '../expr/types.js';
-import { planActionVerbs } from './score.js';
+import { arcVerbs } from './score.js';
 
-export type ThinkReason = 'watch' | 'major' | 'action' | 'heartbeat';
+export type ThinkReason = 'watch' | 'major' | 'verb' | 'heartbeat';
 
 export type ThinkRow = {
 	npcID:string;
@@ -20,15 +20,15 @@ export type ThinkRow = {
 /** Keep a fixed interval (`false`, default), or stretch/shrink (`'auto'`), or return seconds. */
 export type HeartbeatAdjust = false | 'auto' | ((npcID:string, stalled:boolean)=>number);
 
-/** Asked before a think starts while a plan may still be running. */
+/** Asked before a think starts while an arc may still be running. */
 export type MayThink = {
 	npcID:string;
 	reason:ThinkReason;
 	score:number;
 	rankedScore:number;
-	/** Live plan, if this mind is still executing one. */
-	plan:ActionPlan | null;
-	/** Verbs on that plan, in order. Empty when `plan` is null. */
+	/** Live arc, if this mind is still executing one. */
+	arc:Arc | null;
+	/** Verbs on that arc, in order. Empty when `arc` is null. */
 	verbs:string[];
 };
 
@@ -64,8 +64,8 @@ export type MindQueueOpts = ThinkBatchOpts & {
 	heartbeatMax?:number;
 	heartbeatAdjust?:HeartbeatAdjust;
 	/**
-	 * May this mind start a think? Default: yes when idle, no while a plan is live.
-	 * Return true to think (host should abort the plan if it cannot overlap).
+	 * May this mind start a think? Default: yes when idle, no while an arc is live.
+	 * Return true to think (host should abort the arc if it cannot overlap).
 	 */
 	mayThink?:(ctx:MayThink)=>boolean;
 };
@@ -78,11 +78,11 @@ export type MindQueue = {
 	mayThink:((ctx:MayThink)=>boolean) | undefined;
 	readonly inFlight:number;
 	isThinking(npcID:string):boolean;
-	planOf(npcID:string):ActionPlan | null;
+	arcOf(npcID:string):Arc | null;
 	beginThink(npcID:string):void;
 	endThink(npcID:string):void;
-	beginPlan(npcID:string, plan:ActionPlan):void;
-	endPlan(npcID:string):void;
+	beginArc(npcID:string, arc:Arc):void;
+	endArc(npcID:string):void;
 	allowThink(row:ThinkRow):boolean;
 	ensure(npcID:string, opts?:{ skipHeartbeat?:boolean; skipMajor?:boolean }):void;
 	setWatches(npcID:string, watches:string[]):void;
@@ -95,8 +95,8 @@ export type MindQueue = {
 	heartbeatSeconds(npcID:string):number | null;
 	scoreWatches(npcID:string, catalog:Catalog | readonly Catalog[]):number;
 	enqueueMajor(npcID:string, force?:boolean):void;
-	enqueueAction(npcID:string, verb:string, ok?:boolean):void;
-	enqueuePlan(npcID:string, plan:ActionPlan, ok?:boolean):void;
+	enqueueVerb(npcID:string, verb:string, ok?:boolean):void;
+	enqueueArc(npcID:string, arc:Arc, ok?:boolean):void;
 	noteResult(npcID:string, stalled:boolean):void;
 	tick(dt:number, catalogs:Map<string, Catalog | readonly Catalog[]>):ThinkRow[];
 	drop(npcID:string):void;
@@ -143,7 +143,7 @@ export abstract class MindScheduler implements MindQueue {
 	protected rows:ThinkRow[] = [];
 	protected readonly minds = new Map<string, MindState>();
 	protected readonly thinking = new Set<string>();
-	protected readonly executing = new Map<string, ActionPlan>();
+	protected readonly executing = new Map<string, Arc>();
 	protected nextSeq = 1;
 
 	constructor(opts:MindQueueOpts = {}) {
@@ -169,7 +169,7 @@ export abstract class MindScheduler implements MindQueue {
 		return this.thinking.has(npcID);
 	}
 
-	planOf(npcID:string):ActionPlan | null {
+	arcOf(npcID:string):Arc | null {
 		return this.executing.get(npcID) ?? null;
 	}
 
@@ -184,24 +184,24 @@ export abstract class MindScheduler implements MindQueue {
 		this.thinking.delete(npcID);
 	}
 
-	beginPlan(npcID:string, plan:ActionPlan):void {
+	beginArc(npcID:string, arc:Arc):void {
 		this.ensure(npcID);
-		this.executing.set(npcID, plan);
+		this.executing.set(npcID, arc);
 	}
 
-	endPlan(npcID:string):void {
+	endArc(npcID:string):void {
 		this.executing.delete(npcID);
 	}
 
 	allowThink(row:ThinkRow):boolean {
-		const plan = this.planOf(row.npcID);
+		const arc = this.arcOf(row.npcID);
 		const ctx:MayThink = {
 			npcID: row.npcID,
 			reason: row.reason,
 			score: row.score,
 			rankedScore: this.rankScore(row.npcID, row.score),
-			plan,
-			verbs: plan ? planActionVerbs(plan) : [],
+			arc,
+			verbs: arc ? arcVerbs(arc) : [],
 		};
 		if (this.mayThink) {
 			return this.mayThink(ctx);
@@ -329,12 +329,12 @@ export abstract class MindScheduler implements MindQueue {
 		this.insert({ npcID, score: MAJOR_SCORE, reason: 'major' });
 	}
 
-	enqueueAction(npcID:string, verb:string, ok = true):void {
-		this.enqueueScore(npcID, this.actionScore(verb, ok));
+	enqueueVerb(npcID:string, verb:string, ok = true):void {
+		this.enqueueScore(npcID, this.verbScore(verb, ok));
 	}
 
-	enqueuePlan(npcID:string, plan:ActionPlan, ok = true):void {
-		this.enqueueScore(npcID, this.planScore(plan, ok));
+	enqueueArc(npcID:string, arc:Arc, ok = true):void {
+		this.enqueueScore(npcID, this.arcScore(arc, ok));
 	}
 
 	noteResult(npcID:string, stalled:boolean):void {
@@ -419,8 +419,8 @@ export abstract class MindScheduler implements MindQueue {
 
 	protected abstract prune():void;
 	protected abstract order():void;
-	protected abstract actionScore(verb:string, ok:boolean):number;
-	protected abstract planScore(plan:ActionPlan, ok:boolean):number;
+	protected abstract verbScore(verb:string, ok:boolean):number;
+	protected abstract arcScore(arc:Arc, ok:boolean):number;
 
 	protected enqueueScore(npcID:string, score:number):void {
 		const mind = this.ensure(npcID);
@@ -430,7 +430,7 @@ export abstract class MindScheduler implements MindQueue {
 		if (score <= this.epsilon) {
 			return;
 		}
-		this.insert({ npcID, score, reason: 'action' });
+		this.insert({ npcID, score, reason: 'verb' });
 	}
 
 	protected insert(row:ThinkRow):void {

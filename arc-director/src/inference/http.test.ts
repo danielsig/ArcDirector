@@ -164,7 +164,7 @@ describe('HttpProvider thinking', () => {
 		assert.equal(messages.at(-1)?.content, EMPTY_THINK_PREFILL);
 	});
 
-	it('ignores reasoning_content that is not a JSON plan', async () => {
+	it('ignores reasoning_content that is not a JSON arc', async () => {
 		const provider = new HttpProvider({
 			baseURL: 'http://127.0.0.1:9/v1',
 			fetch: async () => new Response(JSON.stringify({
@@ -184,7 +184,7 @@ describe('HttpProvider thinking', () => {
 		assert.equal(res.reasoning, 'Need emit JSON {"head": ... but never does');
 	});
 
-	it('reads reasoning_content when a JSON plan is only in reasoning_content', async () => {
+	it('reads reasoning_content when a JSON arc is only in reasoning_content', async () => {
 		const provider = new HttpProvider({
 			baseURL: 'http://127.0.0.1:9/v1',
 			fetch: async () => new Response(JSON.stringify({

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { parsePlan, parsePlanText, formatPlan } from '../action/parse.js';
-import { VerbRegistry, registerStockVerbs, STOCK_VERBS } from '../action/registry.js';
+import { parseArc, parseArcText, formatArc } from '../arc/parse.js';
+import { VerbRegistry, registerStockVerbs, STOCK_VERBS } from '../arc/stock-verbs.js';
 import { dummyEntity } from '../expr/natives.js';
 import { FakeProvider } from '../inference/fake.js';
 import {
@@ -13,7 +13,7 @@ import {
 import { ArcDirector } from '../director/director.js';
 import type { VerbCall } from '../director/types.js';
 import { CrowdConductor, isCrowdConductor } from './conductor.js';
-import { registerStockCrowdVerbs, STOCK_CROWD_VERBS } from './verbs.js';
+import { registerStockCrowdVerbs, STOCK_CROWD_VERBS } from './conductor-verbs.js';
 import { squadTag } from './tags.js';
 
 type Ctx = { id:string };
@@ -102,7 +102,7 @@ async function hiveOf(opts:{
 				name: 'flee',
 				who: 'units.filter(u => !u.busy)',
 				watch: 'isHurt(me)',
-				plan: 'go_to(Keep)',
+				arc: 'go_to(Keep)',
 				pinned: true,
 			}],
 		})
@@ -140,7 +140,7 @@ describe('CrowdConductor chain', () => {
 			name: 'follow',
 			who: 'units.filter("Pike")',
 			watch: 'isNear(me, Player)',
-			plan: 'follow(Player)',
+			arc: 'follow(Player)',
 		});
 		const hive = director.agent('Hive');
 		assert.ok(isCrowdConductor(hive));
@@ -152,27 +152,27 @@ describe('CrowdConductor chain', () => {
 });
 
 describe('issue(who)', () => {
-	it('parses unquoted who= and nested plan=', () => {
+	it('parses unquoted who= and nested arc=', () => {
 		const registry = crowdVerbs();
-		const plan = parsePlanText(
-			'issue(who=units.filter("Loaf").filter(u => !u.busy), plan=go_to(BakerStall)) '
-			+ '; issue(who=units.filter("Guard"), plan=go_to(Tomas) && give(item=Loaf, to=Tomas))',
+		const arc = parseArcText(
+			'issue(who=units.filter("Loaf").filter(u => !u.busy), arc=go_to(BakerStall)) '
+			+ '; issue(who=units.filter("Guard"), arc=go_to(Tomas) && give(item=Loaf, to=Tomas))',
 			registry,
 		);
-		assert.equal(plan.head?.verb, 'issue');
-		assert.equal(plan.head?.args.who, 'units.filter("Loaf").filter(u => !u.busy)');
-		assert.equal(typeof plan.head?.args.plan, 'object');
-		assert.ok(plan.head?.args.plan && typeof plan.head.args.plan === 'object' && 'head' in plan.head.args.plan);
-		const inner = plan.head.args.plan as { head:{ verb:string }; then?:{ plan:{ head:{ verb:string } } } };
+		assert.equal(arc.head?.verb, 'issue');
+		assert.equal(arc.head?.args.who, 'units.filter("Loaf").filter(u => !u.busy)');
+		assert.equal(typeof arc.head?.args.arc, 'object');
+		assert.ok(arc.head?.args.arc && typeof arc.head.args.arc === 'object' && 'head' in arc.head.args.arc);
+		const inner = arc.head.args.arc as { head:{ verb:string }; then?:{ arc:{ head:{ verb:string } } } };
 		assert.equal(inner.head.verb, 'go_to');
-		assert.equal(plan.then?.plan.head?.verb, 'issue');
-		const second = plan.then!.plan.head!.args.plan as {
+		assert.equal(arc.then?.arc.head?.verb, 'issue');
+		const second = arc.then!.arc.head!.args.arc as {
 			head:{ verb:string };
-			then?:{ plan:{ head:{ verb:string; args:Record<string, unknown> } } };
+			then?:{ arc:{ head:{ verb:string; args:Record<string, unknown> } } };
 		};
 		assert.equal(second.head.verb, 'go_to');
-		assert.equal(second.then?.plan.head.verb, 'give');
-		assert.match(formatPlan(plan), /issue\(/);
+		assert.equal(second.then?.arc.head.verb, 'give');
+		assert.match(formatArc(arc), /issue\(/);
 	});
 
 	it('is instantaneous and fans out with actorID', async () => {
@@ -181,8 +181,8 @@ describe('issue(who)', () => {
 		const hive = director.agent('Hive');
 		assert.ok(isCrowdConductor(hive));
 		const t0 = Date.now();
-		const result = await hive.enact(parsePlan(
-			'issue(who=units.filter("Guard"), plan=go_to(Keep))',
+		const result = await hive.enact(parseArc(
+			'issue(who=units.filter("Guard"), arc=go_to(Keep))',
 			hive.verbs,
 		));
 		assert.ok(Date.now() - t0 < 30);
@@ -199,9 +199,9 @@ describe('issue(who)', () => {
 		const director = await hiveOf({ calls, slow: true });
 		const hive = director.agent('Hive');
 		assert.ok(isCrowdConductor(hive));
-		const result = await hive.enact(parsePlan(
-			'issue(who=units.filter("Mira"), plan=go_to(WestGate)) '
-			+ '; issue(who=units.filter("Tomas"), plan=go_to(EastGate))',
+		const result = await hive.enact(parseArc(
+			'issue(who=units.filter("Mira"), arc=go_to(WestGate)) '
+			+ '; issue(who=units.filter("Tomas"), arc=go_to(EastGate))',
 			hive.verbs,
 		));
 		assert.equal(result.ok, true);
@@ -212,13 +212,13 @@ describe('issue(who)', () => {
 		director.dispose();
 	});
 
-	it('inner plan= is sequential per unit', async () => {
+	it('inner arc= is sequential per unit', async () => {
 		const calls:VerbCall<Ctx>[] = [];
 		const director = await hiveOf({ calls });
 		const hive = director.agent('Hive');
 		assert.ok(isCrowdConductor(hive));
-		await hive.enact(parsePlan(
-			'issue(who=units.filter("Mira"), plan=go_to(Tomas) && wait(seconds=1))',
+		await hive.enact(parseArc(
+			'issue(who=units.filter("Mira"), arc=go_to(Tomas) && wait(seconds=1))',
 			hive.verbs,
 		));
 		await waitFor(() => calls.filter((c) => c.actorID === 'Mira').length >= 2);
@@ -232,13 +232,13 @@ describe('issue(who)', () => {
 		const director = await hiveOf({ calls, slow: true });
 		const hive = director.agent('Hive');
 		assert.ok(isCrowdConductor(hive));
-		void hive.enact(parsePlan(
-			'issue(who=units.filter("Guard"), plan=go_to(Keep))',
+		void hive.enact(parseArc(
+			'issue(who=units.filter("Guard"), arc=go_to(Keep))',
 			hive.verbs,
 		));
 		await waitFor(() => hive.crowd.get('Mira')?.busy === true);
-		await hive.enact(parsePlan(
-			'issue(who=units.filter("Mira"), plan=go_to(Home))',
+		await hive.enact(parseArc(
+			'issue(who=units.filter("Mira"), arc=go_to(Home))',
 			hive.verbs,
 		));
 		await waitFor(() => calls.some((c) => c.actorID === 'Mira' && String(c.args.name) === 'Home'));
@@ -251,9 +251,9 @@ describe('issue(who)', () => {
 		const director = await hiveOf({ calls });
 		const hive = director.agent('Hive');
 		assert.ok(isCrowdConductor(hive));
-		await hive.enact(parsePlan(
-			'issue(who=units.filter("Mira"), plan=wander(until=isNear(me, Tomas))) '
-			+ '; issue(who=units.filter("Tomas"), plan=wander(until=isNear(me, Mira)))',
+		await hive.enact(parseArc(
+			'issue(who=units.filter("Mira"), arc=wander(until=isNear(me, Tomas))) '
+			+ '; issue(who=units.filter("Tomas"), arc=wander(until=isNear(me, Mira)))',
 			hive.verbs,
 		));
 		await waitFor(() => calls.filter((c) => c.verb === 'wander').length >= 2);
@@ -269,8 +269,8 @@ describe('issue(who)', () => {
 		const director = await hiveOf({ calls });
 		const hive = director.agent('Hive');
 		assert.ok(isCrowdConductor(hive));
-		await hive.enact(parsePlan(
-			'issue(who=units.filter("Guard"), plan=hold_line(at=WestGate, facing=Player))',
+		await hive.enact(parseArc(
+			'issue(who=units.filter("Guard"), arc=hold_line(at=WestGate, facing=Player))',
 			hive.verbs,
 		));
 		const lines = calls.filter((c) => c.verb === 'hold_line');
@@ -287,16 +287,16 @@ describe('laws and tags', () => {
 		const director = await hiveOf({ calls, hurt, slow: true });
 		const hive = director.agent('Hive');
 		assert.ok(isCrowdConductor(hive));
-		assert.equal(hive.lastPlan, undefined);
+		assert.equal(hive.lastArc, undefined);
 		director.tick(0.05, 1);
 		await waitFor(() => calls.some((c) => c.actorID === 'Mira' && c.verb === 'go_to'));
-		assert.equal(hive.lastPlan, undefined);
+		assert.equal(hive.lastArc, undefined);
 		const n = calls.filter((c) => c.actorID === 'Mira' && c.verb === 'go_to').length;
 		director.tick(0.05, 2);
 		await sleep(20);
 		assert.equal(calls.filter((c) => c.actorID === 'Mira' && c.verb === 'go_to').length, n);
-		await hive.enact(parsePlan(
-			'issue(who=units.filter("Mira"), plan=go_to(Home))',
+		await hive.enact(parseArc(
+			'issue(who=units.filter("Mira"), arc=go_to(Home))',
 			hive.verbs,
 		));
 		await waitFor(() => calls.some((c) => c.actorID === 'Mira' && String(c.args.name) === 'Home'));
@@ -335,10 +335,10 @@ describe('laws and tags', () => {
 		assert.ok(isCrowdConductor(red) && isCrowdConductor(blue));
 		assert.equal(red.crowd.get('Able')?.tags.includes(squadTag('Red', 'Guard')), true);
 		assert.equal(blue.crowd.get('Baker')?.tags.includes(squadTag('Blue', 'Guard')), true);
-		await red.enact(parsePlan('issue(who=units.filter("Guard"), plan=go_to(Keep))', red.verbs));
+		await red.enact(parseArc('issue(who=units.filter("Guard"), arc=go_to(Keep))', red.verbs));
 		await waitFor(() => calls.some((c) => c.actorID === 'Able'));
 		assert.equal(calls.some((c) => c.actorID === 'Baker'), false);
-		await red.enact(parsePlan('tag(who=units.filter("Able"), name=Flank)', red.verbs));
+		await red.enact(parseArc('tag(who=units.filter("Able"), name=Flank)', red.verbs));
 		assert.ok(red.crowd.get('Able')?.tags.includes(squadTag('Red', 'Flank')));
 		assert.equal(blue.crowd.get('Baker')?.tags.includes(squadTag('Red', 'Flank')), false);
 		director.dispose();
@@ -368,8 +368,8 @@ describe('commander body and sightFocus', () => {
 			.start();
 		const captain = director.agent('Captain');
 		assert.ok(isCrowdConductor(captain));
-		await captain.enact(parsePlan(
-			'issue(who=units.filter("Mira"), plan=go_to(Keep)) ; go_to(WestGate)',
+		await captain.enact(parseArc(
+			'issue(who=units.filter("Mira"), arc=go_to(Keep)) ; go_to(WestGate)',
 			captain.verbs,
 		));
 		await waitFor(() => (
@@ -451,9 +451,9 @@ describe('actorID, laws, dummy me', () => {
 		const director = await hiveOf({ calls, slow: true });
 		const hive = director.agent('Hive');
 		assert.ok(isCrowdConductor(hive));
-		await hive.enact(parsePlan(
-			'issue(who=units.filter("Mira"), plan=go_to(WestGate)) '
-			+ '; issue(who=units.filter("Tomas"), plan=go_to(EastGate))',
+		await hive.enact(parseArc(
+			'issue(who=units.filter("Mira"), arc=go_to(WestGate)) '
+			+ '; issue(who=units.filter("Tomas"), arc=go_to(EastGate))',
 			hive.verbs,
 		));
 		await waitFor(() => (
@@ -476,8 +476,8 @@ describe('actorID, laws, dummy me', () => {
 		const hive = director.agent('Hive');
 		assert.ok(isCrowdConductor(hive));
 		assert.ok(hive.laws.some((l) => l.name === 'flee'));
-		await hive.enact(parsePlan(
-			'issue(who=units.filter("Mira"), plan=say("hold"))',
+		await hive.enact(parseArc(
+			'issue(who=units.filter("Mira"), arc=say("hold"))',
 			hive.verbs,
 		));
 		assert.ok(hive.laws.some((l) => l.name === 'flee'));
@@ -533,8 +533,8 @@ describe('actorID, laws, dummy me', () => {
 		const director = await hiveOf({ calls });
 		const hive = director.agent('Hive');
 		assert.ok(isCrowdConductor(hive));
-		await hive.enact(parsePlan(
-			'issue(who=units.filter("Mira"), plan=go_to(Keep) && hold_line(at=WestGate, facing=Player))',
+		await hive.enact(parseArc(
+			'issue(who=units.filter("Mira"), arc=go_to(Keep) && hold_line(at=WestGate, facing=Player))',
 			hive.verbs,
 		));
 		await waitFor(() => calls.some((c) => c.verb === 'go_to' && c.actorID === 'Mira'));
@@ -571,10 +571,10 @@ describe('commander pointer and sticky issue', () => {
 		const captain = director.agent('Captain');
 		assert.ok(isCrowdConductor(captain));
 		assert.equal(captain.commanderID, 'Captain');
-		const me = await captain.enact(parsePlan('issue(who=me, plan=go_to(Keep))', captain.verbs));
+		const me = await captain.enact(parseArc('issue(who=me, arc=go_to(Keep))', captain.verbs));
 		assert.equal(me.ok, false);
 		assert.equal(calls.some((c) => c.actorID === 'Captain' && c.verb === 'go_to'), false);
-		await captain.enact(parsePlan('issue(who=allUnits, plan=go_to(Home))', captain.verbs));
+		await captain.enact(parseArc('issue(who=allUnits, arc=go_to(Home))', captain.verbs));
 		await waitFor(() => calls.some((c) => c.actorID === 'Mira' && String(c.args.name) === 'Home'));
 		assert.equal(calls.some((c) => c.actorID === 'Captain' && String(c.args.name) === 'Home'), false);
 		director.dispose();
@@ -584,8 +584,8 @@ describe('commander pointer and sticky issue', () => {
 		const director = await hiveOf({ slow: true });
 		const hive = director.agent('Hive');
 		assert.ok(isCrowdConductor(hive));
-		await hive.enact(parsePlan(
-			'issue(who=units.filter("Guard"), plan=go_to(Keep))',
+		await hive.enact(parseArc(
+			'issue(who=units.filter("Guard"), arc=go_to(Keep))',
 			hive.verbs,
 		));
 		await waitFor(() => hive.crowd.get('Mira')?.busy === true && hive.crowd.get('Tomas')?.busy === true);
@@ -650,7 +650,7 @@ describe('solo law', () => {
 				laws: [{
 					name: 'flee',
 					watch: 'isHurt(me)',
-					plan: 'go_to(Keep)',
+					arc: 'go_to(Keep)',
 				}],
 			})
 			.start();
@@ -658,10 +658,10 @@ describe('solo law', () => {
 		assert.ok(guard);
 		assert.ok(guard.laws.some((l) => l.name === 'flee'));
 		assert.equal(guard.activeVerbs().get('law')?.args.who, undefined);
-		await guard.enact(parsePlan('go_to(EastGate)', guard.verbs));
+		await guard.enact(parseArc('go_to(EastGate)', guard.verbs));
 		assert.ok(guard.laws.some((l) => l.name === 'flee'));
 		assert.throws(
-			() => parsePlanText('law(who=me, watch=isHurt(me), plan=go_to(Keep))', guard.activeVerbs()),
+			() => parseArcText('law(who=me, watch=isHurt(me), arc=go_to(Keep))', guard.activeVerbs()),
 			/has no arg 'who'/,
 		);
 		director.dispose();

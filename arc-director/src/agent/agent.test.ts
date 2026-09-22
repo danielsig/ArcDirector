@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { VerbRegistry, registerStockVerbs } from '../action/registry.js';
+import { VerbRegistry, registerStockVerbs } from '../arc/stock-verbs.js';
 import { FakeProvider, goToNamedInteractable, hashEmbed } from '../inference/fake.js';
 import { chatContentText } from '../inference/provider.js';
 import { formatSight } from '../perception/sight.js';
@@ -67,7 +67,7 @@ async function waitUntil(fn:()=>boolean, ms = 400):Promise<void> {
 }
 
 describe('Agent', () => {
-	it('emits a go_to plan from a described scene', async () => {
+	it('emits a go_to arc from a described scene', async () => {
 		const scene = paragraph();
 		assert.equal(scene.includes('EastGate'), true);
 		assert.equal(scene.includes('trees'), true);
@@ -86,10 +86,10 @@ describe('Agent', () => {
 			context: () => ({ paragraph: scene }),
 			model: 'fake',
 		});
-		const plan = await agent.tick(1);
-		assert.ok(plan);
-		assert.equal(plan.head.verb, 'go_to');
-		assert.equal(plan.head.args.name, 'EastGate');
+		const arc = await agent.tick(1);
+		assert.ok(arc);
+		assert.equal(arc.head.verb, 'go_to');
+		assert.equal(arc.head.args.name, 'EastGate');
 
 		const json = agent.toJSON();
 		const restored = Agent.fromJSON(json, {
@@ -116,7 +116,7 @@ describe('Agent', () => {
 				"createdAt": 0,
 				"lastAccessed": 0
 			}],
-			"livePlan": false,
+			"liveArc": false,
 			"maxGoals": 4,
 			"maxEpisodic": 256
 		}`), {
@@ -130,7 +130,7 @@ describe('Agent', () => {
 		assert.equal(restored.memory.all()[0].id, 'mem_1');
 	});
 
-	it('can tool-call recall before planning', async () => {
+	it('can tool-call recall before the arc', async () => {
 		let sawRecall = false;
 		const scene = paragraph();
 		const provider = new FakeProvider((req) => {
@@ -160,10 +160,10 @@ describe('Agent', () => {
 			model: 'fake',
 		});
 		await agent.remember('EastGate is the door in the east wall', ['gate', 'EastGate'], 0);
-		const plan = await agent.tick(1);
+		const arc = await agent.tick(1);
 		assert.equal(sawRecall, true);
-		assert.equal(plan?.head.verb, 'go_to');
-		assert.equal(plan?.head.args.name, 'EastGate');
+		assert.equal(arc?.head.verb, 'go_to');
+		assert.equal(arc?.head.args.name, 'EastGate');
 	});
 
 	it('surfaces unpinned speech in the next think without a recall tool', async () => {
@@ -186,7 +186,7 @@ describe('Agent', () => {
 			model: 'fake',
 			heartbeat: 0,
 			toolRoundCap: 0,
-			planRetryCap: 0,
+			arcRetryCap: 0,
 			strategicInterval: 0,
 		});
 		agent.pushEvent({
@@ -238,7 +238,7 @@ describe('Agent', () => {
 			model: 'fake',
 			heartbeat: 0,
 			toolRoundCap: 0,
-			planRetryCap: 0,
+			arcRetryCap: 0,
 			strategicInterval: 0,
 		});
 		await agent.tick(1);
@@ -249,7 +249,7 @@ describe('Agent', () => {
 		assert.match(users[0] ?? '', /Last I saw Forager/);
 	});
 
-	it('retries a bad plan on the same thread when the host sets planRetryCap', async () => {
+	it('retries a bad arc on the same thread when the host sets arcRetryCap', async () => {
 		let calls = 0;
 		const scene = paragraph();
 		const provider = new FakeProvider((req) => {
@@ -259,7 +259,7 @@ describe('Agent', () => {
 			}
 			const last = req.messages[req.messages.length - 1];
 			assert.equal(last?.role, 'user');
-			assert.match(String(last?.content), /not a valid ActionPlan/);
+			assert.match(String(last?.content), /not a valid Arc/);
 			assert.equal(req.messages.some((m) => m.role === 'system'), true);
 			assert.equal(req.messages.some((m) => m.role === 'assistant' && String(m.content).includes('"nope"')), true);
 			assert.equal(req.messages.some((m) => m.role === 'user' && String(m.content).includes('EastGate')), true);
@@ -278,12 +278,12 @@ describe('Agent', () => {
 			context: () => ({ paragraph: scene }),
 			model: 'fake',
 			toolRoundCap: 0,
-			planRetryCap: 2,
+			arcRetryCap: 2,
 		});
-		const plan = await agent.tick(1);
+		const arc = await agent.tick(1);
 		assert.equal(calls, 2);
-		assert.equal(plan?.head.verb, 'go_to');
-		assert.equal(plan?.head.args.name, 'EastGate');
+		assert.equal(arc?.head.verb, 'go_to');
+		assert.equal(arc?.head.args.name, 'EastGate');
 	});
 
 	it('does not keep verb-less prose on the repair thread', async () => {
@@ -295,7 +295,7 @@ describe('Agent', () => {
 				return { content: 'I will follow the Player now.', toolCalls: [] };
 			}
 			assert.equal(req.messages.some((m) => String(m.content).includes('I will follow')), false);
-			assert.match(String(req.messages[req.messages.length - 1]?.content), /not a valid ActionPlan/);
+			assert.match(String(req.messages[req.messages.length - 1]?.content), /not a valid Arc/);
 			return { content: 'go_to(EastGate)', toolCalls: [] };
 		});
 		const agent = new Agent<Ctx>({
@@ -308,16 +308,16 @@ describe('Agent', () => {
 			context: () => ({ paragraph: scene }),
 			model: 'fake',
 			toolRoundCap: 0,
-			planRetryCap: 2,
-			planText: true,
+			arcRetryCap: 2,
+			arcText: true,
 		});
-		const plan = await agent.tick(1);
+		const arc = await agent.tick(1);
 		assert.equal(calls, 2);
-		assert.equal(plan?.head.verb, 'go_to');
-		assert.equal(plan?.head.args.name, 'EastGate');
+		assert.equal(arc?.head.verb, 'go_to');
+		assert.equal(arc?.head.args.name, 'EastGate');
 	});
 
-	it('does not retry a bad plan when planRetryCap is 0', async () => {
+	it('does not retry a bad arc when arcRetryCap is 0', async () => {
 		let calls = 0;
 		const agent = new Agent<Ctx>({
 			id: 'Guard',
@@ -332,13 +332,13 @@ describe('Agent', () => {
 			context: () => ({ paragraph: paragraph() }),
 			model: 'fake',
 			toolRoundCap: 0,
-			planRetryCap: 0,
+			arcRetryCap: 0,
 		});
-		await assert.rejects(() => agent.tick(1), /step is not an object|plan is not an object/);
+		await assert.rejects(() => agent.tick(1), /step is not an object|arc is not an object/);
 		assert.equal(calls, 1);
 	});
 
-	it('feeds unknown tool errors back and still plans', async () => {
+	it('feeds unknown tool errors back and still arcs', async () => {
 		let calls = 0;
 		let sawToolError = false;
 		const provider = new FakeProvider((req) => {
@@ -365,11 +365,11 @@ describe('Agent', () => {
 			context: () => ({ paragraph: paragraph() }),
 			model: 'fake',
 			toolRoundCap: 1,
-			planRetryCap: 0,
+			arcRetryCap: 0,
 		});
-		const plan = await agent.tick(1);
+		const arc = await agent.tick(1);
 		assert.equal(sawToolError, true);
-		assert.equal(plan?.head.verb, 'go_to');
+		assert.equal(arc?.head.verb, 'go_to');
 	});
 
 	it('turns a thrown tool handler into an error result on the thread', async () => {
@@ -408,14 +408,14 @@ describe('Agent', () => {
 			context: () => ({ paragraph: paragraph() }),
 			model: 'fake',
 			toolRoundCap: 1,
-			planRetryCap: 0,
+			arcRetryCap: 0,
 		});
-		const plan = await agent.tick(1);
-		assert.equal(plan?.head.verb, 'go_to');
+		const arc = await agent.tick(1);
+		assert.equal(arc?.head.verb, 'go_to');
 		assert.equal(calls, 2);
 	});
 
-	it('rejects an out-of-range say plan without speaking and keeps thinking', async () => {
+	it('rejects an out-of-range say arc without speaking and keeps thinking', async () => {
 		const spoke:string[] = [];
 		const talk = new TalkNet({
 			inRange: () => false,
@@ -455,12 +455,12 @@ describe('Agent', () => {
 			model: 'fake',
 			talk,
 			toolRoundCap: 0,
-			planRetryCap: 0,
+			arcRetryCap: 0,
 		});
-		const plan = await agent.tick(1);
+		const arc = await agent.tick(1);
 		assert.equal(calls, 2);
-		assert.equal(plan?.head.verb, 'go_to');
-		assert.equal(plan?.head.args.name, 'Guard');
+		assert.equal(arc?.head.verb, 'go_to');
+		assert.equal(arc?.head.args.name, 'Guard');
 		assert.equal(spoke.length, 0);
 	});
 
@@ -489,12 +489,12 @@ describe('Agent', () => {
 			model: 'fake',
 			talk,
 			toolRoundCap: 0,
-			planRetryCap: 0,
+			arcRetryCap: 0,
 		});
-		const plan = await agent.tick(1);
+		const arc = await agent.tick(1);
 		assert.equal(calls, 1);
-		assert.equal(plan?.head.verb, 'say');
-		assert.equal(plan?.head.args.to, 'Guard');
+		assert.equal(arc?.head.verb, 'say');
+		assert.equal(arc?.head.args.to, 'Guard');
 	});
 
 	it('lets earshot({to}) fail closed so the model can go_to instead', async () => {
@@ -535,11 +535,11 @@ describe('Agent', () => {
 			model: 'fake',
 			talk,
 			toolRoundCap: 1,
-			planRetryCap: 0,
+			arcRetryCap: 0,
 		});
-		const plan = await agent.tick(1);
+		const arc = await agent.tick(1);
 		assert.equal(sawError, true);
-		assert.equal(plan?.head.verb, 'go_to');
+		assert.equal(arc?.head.verb, 'go_to');
 		assert.equal(calls, 2);
 	});
 
@@ -563,7 +563,7 @@ describe('Agent', () => {
 			model: 'fake',
 			heartbeat: 0,
 			toolRoundCap: 0,
-			planRetryCap: 0,
+			arcRetryCap: 0,
 			strategicInterval: 0,
 		});
 		agent.pushEvent({
@@ -587,7 +587,7 @@ describe('Agent', () => {
 			model: 'fake',
 			heartbeat: 0,
 			toolRoundCap: 0,
-			planRetryCap: 0,
+			arcRetryCap: 0,
 			strategicInterval: 0,
 		});
 		users.length = 0;
@@ -615,7 +615,7 @@ describe('Agent', () => {
 			model: 'fake',
 			heartbeat: 0,
 			toolRoundCap: 0,
-			planRetryCap: 0,
+			arcRetryCap: 0,
 			strategicInterval: 0,
 		});
 		for (let i = 0; i < 10; i++) {
@@ -634,7 +634,7 @@ describe('Agent', () => {
 		assert.doesNotMatch(stm, /^- Player says to you: "Order 0\."$/m);
 	});
 
-	it('applies identity and goals from the plan JSON', async () => {
+	it('applies identity and goals from the arc JSON', async () => {
 		const provider = new FakeProvider(() => ({
 			content: JSON.stringify({
 				identity: { name: 'Assistant', role: 'Night watch of EastGate.' },
@@ -654,11 +654,11 @@ describe('Agent', () => {
 			model: 'fake',
 			heartbeat: 0,
 			toolRoundCap: 0,
-			planRetryCap: 0,
+			arcRetryCap: 0,
 			strategicInterval: 0,
 		});
-		const plan = await agent.tick(1);
-		assert.equal(plan?.head.verb, 'wait');
+		const arc = await agent.tick(1);
+		assert.equal(arc?.head.verb, 'wait');
 		assert.equal(agent.identity.role, 'Night watch of EastGate.');
 		assert.equal(agent.goals[0]?.text, 'Hold EastGate.');
 		assert.ok(agent.memory.pinned().some((m) => m.text.includes('Night watch of EastGate')));
@@ -685,16 +685,16 @@ describe('Agent', () => {
 			model: 'fake',
 			heartbeat: 0,
 			toolRoundCap: 0,
-			planRetryCap: 0,
+			arcRetryCap: 0,
 			strategicInterval: 0,
 		});
-		const plan = await agent.tick(1);
-		assert.equal(plan?.head.verb, 'set_identity');
+		const arc = await agent.tick(1);
+		assert.equal(arc?.head.verb, 'set_identity');
 		assert.equal(agent.identity.role, 'Night watch of EastGate.');
 		assert.deepEqual(agent.identity.traits, ['stern']);
 	});
 
-	it('perform applies set_identity when the host runs the plan', async () => {
+	it('perform applies set_identity when the host runs the arc', async () => {
 		const provider = new FakeProvider(() => ({
 			content: JSON.stringify({
 				head: {
@@ -714,13 +714,13 @@ describe('Agent', () => {
 			model: 'fake',
 			heartbeat: 0,
 			toolRoundCap: 0,
-			planRetryCap: 0,
+			arcRetryCap: 0,
 			strategicInterval: 0,
 		});
-		const plan = await agent.tick(1);
-		assert.equal(plan?.head.verb, 'set_identity');
+		const arc = await agent.tick(1);
+		assert.equal(arc?.head.verb, 'set_identity');
 		assert.equal(agent.identity.role, 'You assist Player.');
-		const result = await agent.perform(plan!.head);
+		const result = await agent.perform(arc!.head);
 		assert.equal(result.ok, true);
 		assert.equal(result.verb, 'set_identity');
 		assert.equal(agent.identity.role, 'Watch');
@@ -741,7 +741,7 @@ describe('Agent', () => {
 			model: 'fake',
 			heartbeat: 0,
 			toolRoundCap: 0,
-			planRetryCap: 0,
+			arcRetryCap: 0,
 			strategicInterval: 0,
 		});
 		const blocked = await agent.perform({
@@ -766,7 +766,7 @@ describe('Agent', () => {
 		assert.equal(agent.identity.role, 'I joined the abbey watch.');
 	});
 
-	it('applies a new name from plan JSON only with a new role', async () => {
+	it('applies a new name from arc JSON only with a new role', async () => {
 		const provider = new FakeProvider(() => ({
 			content: JSON.stringify({
 				identity: { name: 'Lira', role: 'I joined the abbey watch.' },
@@ -784,7 +784,7 @@ describe('Agent', () => {
 			model: 'fake',
 			heartbeat: 0,
 			toolRoundCap: 0,
-			planRetryCap: 0,
+			arcRetryCap: 0,
 			strategicInterval: 0,
 		});
 		await agent.tick(1);
@@ -792,7 +792,7 @@ describe('Agent', () => {
 		assert.equal(agent.identity.role, 'I joined the abbey watch.');
 	});
 
-	it('ignores a new name in plan JSON when role is unchanged', async () => {
+	it('ignores a new name in arc JSON when role is unchanged', async () => {
 		const provider = new FakeProvider(() => ({
 			content: JSON.stringify({
 				identity: { name: 'Lira' },
@@ -810,7 +810,7 @@ describe('Agent', () => {
 			model: 'fake',
 			heartbeat: 0,
 			toolRoundCap: 0,
-			planRetryCap: 0,
+			arcRetryCap: 0,
 			strategicInterval: 0,
 		});
 		await agent.tick(1);
@@ -846,7 +846,7 @@ describe('Agent', () => {
 			model: 'fake',
 			heartbeat: 0,
 			toolRoundCap: 0,
-			planRetryCap: 0,
+			arcRetryCap: 0,
 			strategicInterval: 0,
 		});
 		agent.pushEvent({
@@ -861,7 +861,7 @@ describe('Agent', () => {
 		assert.equal(agent.goals[0]?.text, 'Hold EastGate.');
 	});
 
-	it('skips JSON goal revision when planText is on', async () => {
+	it('skips JSON goal revision when arcText is on', async () => {
 		let calls = 0;
 		const provider = new FakeProvider(() => {
 			calls += 1;
@@ -878,9 +878,9 @@ describe('Agent', () => {
 			model: 'fake',
 			heartbeat: 0,
 			toolRoundCap: 0,
-			planRetryCap: 0,
+			arcRetryCap: 0,
 			strategicInterval: 0,
-			planText: true,
+			arcText: true,
 		});
 		agent.pushEvent({
 			kind: 'HeardSpeech',
@@ -923,7 +923,7 @@ describe('Agent', () => {
 			model: 'fake',
 			hideObserve: true,
 			toolRoundCap: 1,
-			planRetryCap: 0,
+			arcRetryCap: 0,
 			strategicInterval: 0,
 			encyclopedia: [{
 				name: 'Tree',
@@ -952,7 +952,7 @@ describe('Agent', () => {
 			context: () => ({ paragraph: paragraph() }),
 			model: 'fake',
 			toolRoundCap: 0,
-			planRetryCap: 0,
+			arcRetryCap: 0,
 		};
 		await new Agent<Ctx>({ ...base, vision: true }).tick(1);
 		await new Agent<Ctx>({
@@ -1016,7 +1016,7 @@ describe('Agent', () => {
 			context: () => ({ paragraph: paragraph() }),
 			model: 'fake',
 			toolRoundCap: 0,
-			planRetryCap: 0,
+			arcRetryCap: 0,
 			vision: true,
 			map: {
 				snapshot: (_npcID, zoom) => {
@@ -1034,12 +1034,12 @@ describe('Agent', () => {
 				},
 			},
 		});
-		const plan = await agent.tick(1);
+		const arc = await agent.tick(1);
 		assert.equal(calls, 2);
-		assert.equal(plan?.head.verb, 'go_to');
+		assert.equal(arc?.head.verb, 'go_to');
 	});
 
-	it('does not treat see_map plan text as a tool call', async () => {
+	it('does not treat see_map arc text as a tool call', async () => {
 		let calls = 0;
 		let snaps = 0;
 		const provider = new FakeProvider((req) => {
@@ -1063,8 +1063,8 @@ describe('Agent', () => {
 			context: () => ({ paragraph: paragraph() }),
 			model: 'fake',
 			toolRoundCap: 0,
-			planRetryCap: 1,
-			planText: true,
+			arcRetryCap: 1,
+			arcText: true,
 			vision: true,
 			map: {
 				snapshot: () => {
@@ -1079,10 +1079,10 @@ describe('Agent', () => {
 				},
 			},
 		});
-		const plan = await agent.tick(1);
+		const arc = await agent.tick(1);
 		assert.equal(calls, 2);
 		assert.equal(snaps, 0);
-		assert.equal(plan?.head.verb, 'wait');
+		assert.equal(arc?.head.verb, 'wait');
 	});
 
 	it('puts map.you in the standing see_map hint', async () => {
@@ -1102,7 +1102,7 @@ describe('Agent', () => {
 			context: () => ({ paragraph: paragraph() }),
 			model: 'fake',
 			toolRoundCap: 0,
-			planRetryCap: 0,
+			arcRetryCap: 0,
 			vision: true,
 			map: {
 				you: '🎯',
@@ -1176,7 +1176,7 @@ describe('Agent', () => {
 			model: 'fake',
 			heartbeat: 0,
 			toolRoundCap: 0,
-			planRetryCap: 0,
+			arcRetryCap: 0,
 			vision: true,
 			map: {
 				snapshot,
@@ -1217,7 +1217,7 @@ describe('Agent', () => {
 			model: 'fake',
 			heartbeat: 0,
 			toolRoundCap: 0,
-			planRetryCap: 0,
+			arcRetryCap: 0,
 		});
 		const ok = await agent.perform({ verb: 'think', args: { about: 'how to open EastGate' } });
 		assert.equal(ok.ok, true);
@@ -1247,13 +1247,13 @@ describe('Agent', () => {
 		assert.equal(json.lastVerb, 'think');
 	});
 
-	it('allows think after a world verb in the same plan', async () => {
+	it('allows think after a world verb in the same arc', async () => {
 		const provider = new FakeProvider(() => ({
 			content: JSON.stringify({
 				head: { verb: 'go_to', args: { name: 'EastGate' } },
 				then: {
 					join: 'then_if_ok',
-					plan: { head: { verb: 'think', args: { about: 'how to open it' } } },
+					arc: { head: { verb: 'think', args: { about: 'how to open it' } } },
 				},
 			}),
 			toolCalls: [],
@@ -1269,10 +1269,10 @@ describe('Agent', () => {
 			model: 'fake',
 			heartbeat: 0,
 			toolRoundCap: 0,
-			planRetryCap: 0,
+			arcRetryCap: 0,
 		});
-		const plan = await agent.tick(1);
-		assert.equal(plan?.head.verb, 'go_to');
+		const arc = await agent.tick(1);
+		assert.equal(arc?.head.verb, 'go_to');
 		assert.equal(agent.toJSON().thinkAbout, 'how to open it');
 		assert.equal(agent.toJSON().lastVerb, 'think');
 	});
@@ -1283,11 +1283,11 @@ describe('Agent', () => {
 				head: { verb: 'think', args: { about: 'the lock' } },
 				then: {
 					join: 'then_if_ok',
-					plan: {
+					arc: {
 						head: { verb: 'go_to', args: { name: 'EastGate' } },
 						then: {
 							join: 'then',
-							plan: { head: { verb: 'think', args: { about: 'which key' } } },
+							arc: { head: { verb: 'think', args: { about: 'which key' } } },
 						},
 					},
 				},
@@ -1305,13 +1305,13 @@ describe('Agent', () => {
 			model: 'fake',
 			heartbeat: 0,
 			toolRoundCap: 0,
-			planRetryCap: 0,
+			arcRetryCap: 0,
 		});
-		const plan = await agent.tick(1);
-		assert.equal(plan?.head.verb, 'go_to');
-		assert.equal(plan?.then?.join, 'then');
-		assert.equal(plan?.then?.plan.head.verb, 'think');
-		assert.equal(plan?.then?.plan.head.args.about, 'the lock which key');
+		const arc = await agent.tick(1);
+		assert.equal(arc?.head.verb, 'go_to');
+		assert.equal(arc?.then?.join, 'then');
+		assert.equal(arc?.then?.arc.head.verb, 'think');
+		assert.equal(arc?.then?.arc.head.args.about, 'the lock which key');
 		assert.equal(agent.toJSON().thinkAbout, 'the lock which key');
 		assert.equal(agent.toJSON().lastVerb, 'think');
 	});
@@ -1324,7 +1324,7 @@ describe('Agent', () => {
 				head: { verb: 'go_to', args: { name: 'EastGate' } },
 				then: {
 					join: 'then',
-					plan: { head: { verb: 'wait', args: { until: 'hasHeard' } } },
+					arc: { head: { verb: 'wait', args: { until: 'hasHeard' } } },
 				},
 			}),
 			toolCalls: [],
@@ -1341,14 +1341,14 @@ describe('Agent', () => {
 			autoEnact: false,
 			model: 'fake',
 			toolRoundCap: 0,
-			planRetryCap: 0,
+			arcRetryCap: 0,
 		});
 		q.ensure('Guard', { skipHeartbeat: true });
-		const plan = await agent.tick(1);
+		const arc = await agent.tick(1);
 		assert.equal(q.inFlight, 0);
-		assert.equal(plan?.head.verb, 'go_to');
-		await agent.enact(plan!);
-		assert.equal(q.planOf('Guard'), null);
+		assert.equal(arc?.head.verb, 'go_to');
+		await agent.enact(arc!);
+		assert.equal(q.arcOf('Guard'), null);
 		const me = dummyEntity('me');
 		const cat = buildCatalog({
 			me,
@@ -1364,7 +1364,7 @@ describe('Agent', () => {
 		assert.equal(q.scoreWatches('Guard', cat), 0);
 	});
 
-	it('replaces a live plan when the current verb did not change during think', async () => {
+	it('replaces a live arc when the current verb did not change during think', async () => {
 		const think = withPriorityQueue({ watchInterval: 100, processInterval: 0, maxParallel: 2 });
 		let releaseGoTo:(()=>void) | undefined;
 		const chats:Array<{ enableThinking?:boolean; fakeThought?:boolean; user:string }> = [];
@@ -1397,27 +1397,27 @@ describe('Agent', () => {
 				}
 				return { ok: true, verb: step.verb };
 			},
-			abortPlan: () => {
+			abortArc: () => {
 				releaseGoTo?.();
 			},
 			...think,
 			heartbeat: 0,
 			model: 'fake',
 			toolRoundCap: 0,
-			planRetryCap: 0,
+			arcRetryCap: 0,
 		});
 		void agent.tick(1);
 		await waitUntil(() => agent.toJSON().lastVerb === 'go_to');
 		const next = await agent.tick(2);
 		assert.equal(next?.head.verb, 'wait');
-		assert.equal(agent.lastPlan?.head.verb, 'wait');
+		assert.equal(agent.lastArc?.head.verb, 'wait');
 		assert.equal(chats.length, 2);
 		assert.equal(chats[1]?.enableThinking, undefined);
 		assert.equal(chats[1]?.fakeThought, undefined);
 		assert.equal(chats[1]?.user.includes('live verb changed'), false);
 	});
 
-	it('asks again with a canned thought when the live verb changed, and confirm keeps the first plan', async () => {
+	it('asks again with a canned thought when the live verb changed, and confirm keeps the first arc', async () => {
 		const think = withPriorityQueue({ watchInterval: 100, processInterval: 0, maxParallel: 2 });
 		const gates = new Map<string, (result:{ ok:boolean; interrupted?:boolean; verb:string })=>void>();
 		let hangThink:((res:{ content:string; toolCalls:[] })=>void) | undefined;
@@ -1433,7 +1433,7 @@ describe('Agent', () => {
 				return {
 					content: JSON.stringify({
 						head: { verb: 'go_to', args: { name: 'EastGate' } },
-						then: { join: 'then', plan: { head: { verb: 'pick_up', args: { name: 'Lantern' } } } },
+						then: { join: 'then', arc: { head: { verb: 'pick_up', args: { name: 'Lantern' } } } },
 					}),
 					toolCalls: [],
 				};
@@ -1460,7 +1460,7 @@ describe('Agent', () => {
 				}
 				return Promise.resolve({ ok: true, verb: step.verb });
 			},
-			abortPlan: () => {
+			abortArc: () => {
 				for (const [verb, resolve] of gates) {
 					resolve({ ok: false, interrupted: true, verb });
 				}
@@ -1470,7 +1470,7 @@ describe('Agent', () => {
 			heartbeat: 0,
 			model: 'fake',
 			toolRoundCap: 0,
-			planRetryCap: 0,
+			arcRetryCap: 0,
 		});
 		void agent.tick(1);
 		await waitUntil(() => gates.has('go_to'));
@@ -1482,9 +1482,9 @@ describe('Agent', () => {
 			content: JSON.stringify({ head: { verb: 'wander', args: {} } }),
 			toolCalls: [],
 		});
-		const plan = await second;
-		assert.equal(plan?.head.verb, 'wander');
-		assert.equal(agent.lastPlan?.head.verb, 'wander');
+		const arc = await second;
+		assert.equal(arc?.head.verb, 'wander');
+		assert.equal(agent.lastArc?.head.verb, 'wander');
 		assert.equal(chats.length, 3);
 		assert.equal(chats[2]?.enableThinking, undefined);
 		assert.equal(chats[2]?.fakeThought, true);
@@ -1503,7 +1503,7 @@ describe('Agent', () => {
 				return {
 					content: JSON.stringify({
 						head: { verb: 'go_to', args: { name: 'EastGate' } },
-						then: { join: 'then', plan: { head: { verb: 'pick_up', args: { name: 'Lantern' } } } },
+						then: { join: 'then', arc: { head: { verb: 'pick_up', args: { name: 'Lantern' } } } },
 					}),
 					toolCalls: [],
 				};
@@ -1533,7 +1533,7 @@ describe('Agent', () => {
 				}
 				return Promise.resolve({ ok: true, verb: step.verb });
 			},
-			abortPlan: () => {
+			abortArc: () => {
 				for (const [verb, resolve] of gates) {
 					resolve({ ok: false, interrupted: true, verb });
 				}
@@ -1543,7 +1543,7 @@ describe('Agent', () => {
 			heartbeat: 0,
 			model: 'fake',
 			toolRoundCap: 0,
-			planRetryCap: 0,
+			arcRetryCap: 0,
 		});
 		void agent.tick(1);
 		await waitUntil(() => gates.has('go_to'));
@@ -1555,8 +1555,8 @@ describe('Agent', () => {
 			content: JSON.stringify({ head: { verb: 'wander', args: {} } }),
 			toolCalls: [],
 		});
-		const plan = await second;
-		assert.equal(plan?.head.verb, 'wait');
+		const arc = await second;
+		assert.equal(arc?.head.verb, 'wait');
 		assert.equal(chats.length, 3);
 		assert.equal(chats[2]?.fakeThought, true);
 	});

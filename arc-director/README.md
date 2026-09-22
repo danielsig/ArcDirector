@@ -1,6 +1,6 @@
 # ArcDirector
 
-A multi-agent runtime for LLM-powered characters: planning, memory, perception, talk, a priority think queue, and local HTTP inference. The host supplies the world. This package has no renderer, physics, coordinates, or UI.
+A multi-agent runtime for LLM-powered characters: arcs, memory, perception, talk, a priority think queue, and local HTTP inference. The host supplies the world. This package has no renderer, physics, coordinates, or UI.
 
 ```
 pnpm test
@@ -81,7 +81,7 @@ Who thinks next. Default is priority (watch / verb scores + recency).
 
 `tick(dt, now)` is **sync**. Sample catalogs, `queue.tick`, buffer ready minds. `batchThinks` (default true) holds new starts while any think is in flight — a new prompt's prefill stalls decode of the rest — then starts up to `maxParallel` together when idle, or after `batchWait` seconds (default 20, same clock as `now`). Set `batchThinks: false` to fill a free slot immediately. HTTP and `enact` continue across frames. `dt` / `now` are **game time**.
 
-`mayThink` (on queue opts): idle / live plan / major / watch score. If a live plan exists and think is allowed, the director calls `onAbortPlan(id)` and skips that mind this frame (host motor interrupt).
+`mayThink` (on queue opts): idle / live arc / major / watch score. If a live arc exists and think is allowed, the director calls `onAbortArc(id)` and skips that mind this frame (host motor interrupt).
 
 Standalone `withPriorityQueue()` spread helpers remain for `new Agent({...})` tests. They are not the documented path.
 
@@ -89,7 +89,7 @@ Standalone `withPriorityQueue()` spread helpers remain for `new Agent({...})` te
 
 | | |
 |--|--|
-| `addStockVerbs(...verbs)` | Schema only. No args = all stock verbs. Pass names to opt in to a subset: `addStockVerbs(...STOCK_MOVE_VERBS)` is `go_to` / `follow` / `wander`; `STOCK_ITEM_VERBS` is `use` / `equip` / `unequip` / `pick_up` / `drop` / `give` / `examine`; `STOCK_MIND_VERBS` is `say` / `wait` / `remember` / `think` / `set_goal` / `drop_goal` / `set_identity`; `STOCK_PLAN_VERBS` is `law` / `unlaw` / `when` / `loop` (spread last into `STOCK_VERBS`). Same name again is skipped. |
+| `addStockVerbs(...verbs)` | Schema only. No args = all stock verbs. Pass names to opt in to a subset: `addStockVerbs(...STOCK_MOVE_VERBS)` is `go_to` / `follow` / `wander`; `STOCK_ITEM_VERBS` is `use` / `equip` / `unequip` / `pick_up` / `drop` / `give` / `examine`; `STOCK_MIND_VERBS` is `say` / `wait` / `remember` / `think` / `set_goal` / `drop_goal` / `set_identity`; `STOCK_ARC_VERBS` is `law` / `unlaw` / `when` / `loop` (spread last into `STOCK_VERBS`). Same name again is skipped. |
 | `addStockCrowdVerbs(...verbs)` | Schema only for `tag` / `untag` / `spread` / `circle` / `hold_line`. No args also registers `law` / `unlaw` / `when` if missing. Registering does not grant; the conductor’s kit does. |
 | `addVerb(name, args, handler?)` | Schema + optional world function. Same name again binds/replaces the handler. |
 | `removeVerbs(...names)` | Drop catalog schemas and named handlers. Missing names are skipped. Empty rest is a no-op. |
@@ -114,7 +114,7 @@ director.addAgent({ id: 'Cook', kit: (ctx) => kitFor(ctx) }); // callback
 
 Prompt, JSON schema, and parse use the kit. A step whose verb is not available fails closed. `agent.verbs` is the catalog; `agent.activeVerbs()` is this tick. Assign `agent.kit` when the grant actually changes, not every frame.
 
-Handlers receive a **`VerbCall`**: `{ verb, args, agent, ctx, actorID, units? }`. `actorID` is the body performing the step (a CrowdUnit id during inner `plan=`). `units` is set when a formation verb runs once on a set. The full plan is on `agent.lastPlan` / `agent.planIndex`, not on the call. Per-verb handlers ignore `verb`; `addVerb('give', { item: 'id', to: 'id' }, host.give)` already bound the name.
+Handlers receive a **`VerbCall`**: `{ verb, args, agent, ctx, actorID, units? }`. `actorID` is the body performing the step (a CrowdUnit id during inner `arc=`). `units` is set when a formation verb runs once on a set. The full arc is on `agent.lastArc` / `agent.verbIndex`, not on the call. Per-verb handlers ignore `verb`; `addVerb('give', { item: 'id', to: 'id' }, host.give)` already bound the name.
 
 Mind-internal verbs never hit the host: `remember`, `think`, `set_goal`, `drop_goal`, `set_identity`, and `say` when TalkNet is attached.
 
@@ -202,20 +202,20 @@ const director = await new ArcDirector<HostCtx>()
 		name: 'flee',
 		who: 'units.filter(u => !u.busy)',
 		watch: 'isHurt(me)',
-		plan: 'go_to(Keep)',
+		arc: 'go_to(Keep)',
 	})
 	.start();
 ```
 
-**`issue(who, plan)` is instantaneous.** It assigns sticky programs and returns `ok` without waiting for units to walk, talk, or finish. Join several `issue` with `;` so later ones still run. `&&` `;` `||` *inside* `plan=` sequence that unit. `then_if_ok` after `issue` means orders assigned, not units finished. To wait on units from the thinker: `wait(until=...)` over the Crowd.
+**`issue(who, arc)` is instantaneous.** It assigns sticky programs and returns `ok` without waiting for units to walk, talk, or finish. Join several `issue` with `;` so later ones still run. `&&` `;` `||` *inside* `arc=` sequence that unit. `then_if_ok` after `issue` means orders assigned, not units finished. To wait on units from the thinker: `wait(until=...)` over the Crowd.
 
-`who=` is an expr on `units` (this roster), not `others`. Issue by tag. Combat verbs take a fight role you can see, never an outsider's body id or given name. Squad tags are stored `` `${conductor.id}:${short}` ``; exprs and prompts use the short name. `law` / `unlaw` are standing emergencies (no LLM) that push a stack frame when `watch` is true. `when(watch)` on a job is critical (hoisted). Formations (`spread` / `circle` / `hold_line`) run once on the set and must be the `issue` plan head.
+`who=` is an expr on `units` (this roster), not `others`. Issue by tag. Combat verbs take a fight role you can see, never an outsider's body id or given name. Squad tags are stored `` `${conductor.id}:${short}` ``; exprs and prompts use the short name. `law` / `unlaw` are standing emergencies (no LLM) that push a stack frame when `watch` is true. `when(watch)` on a job is critical (hoisted). Formations (`spread` / `circle` / `hold_line`) run once on the set and must be the `issue` arc head.
 
-A CrowdConductor may be bodiless (hive) or have a body (commander). Inner `me` in `plan=` / law `watch=` is that CrowdUnit. A bodiless hive’s thinker `me` is a dummy at the average of unit poses (no carrying).
+A CrowdConductor may be bodiless (hive) or have a body (commander). Inner `me` in `arc=` / law `watch=` is that CrowdUnit. A bodiless hive’s thinker `me` is a dummy at the average of unit poses (no carrying).
 
 ### Prompt prefix
 
-Each think is two messages. The **system** message is identity, standing instructions, and the kit’s verb list (plus a `see_map` hint when vision is on). The **user** message is everything that is supposed to change: scene, carrying, events, goals, pinned memory, watches, last action.
+Each think is two messages. The **system** message is identity, standing instructions, and the kit’s verb list (plus a `see_map` hint when vision is on). The **user** message is everything that is supposed to change: scene, carrying, events, goals, pinned memory, watches, last verb.
 
 Local servers (LM Studio, llama.cpp, Ollama) keep a **KV cache**: the attention state for a run of tokens. If the next request starts with the same tokens as a recent one, they reuse that state and skip the work. Reuse only holds while the tokens match from the start. The first token that differs, they recompute from there through the end, including the long user block you meant to be cheap. One early edit costs a full prompt reload.
 
@@ -223,7 +223,7 @@ Keep the system side still across thinks:
 
 - **Identity:** lasting who. A new role is a life change, not “I am angry” or “Player told me to wait.” The model is already told not to rewrite identity to recap a moment; the host should not either.
 - **Kit:** lasting grant. Returning the same kit every tick is fine. Flipping verbs, senses, or tools every tick (gag for one line, vendor only while the player looks, unconscious = empty kit) busts the prefix for that mind. A gag or a stall that lasts a scene is one change, then leave it. Unconscious should skip the think (`mayThink`), not rewrite the kit for a frame.
-- **Vision / `see_map` / you-mark:** leave them on or off for the session. The library already keeps tools listed (`tool_choice: none`) on plan turns so follow-ups *inside* a think share a prefix.
+- **Vision / `see_map` / you-mark:** leave them on or off for the session. The library already keeps tools listed (`tool_choice: none`) on arc turns so follow-ups *inside* a think share a prefix.
 
 `addVerb` / `removeVerbs` rewrite the shared verb catalog. `addTool` / `removeTool` change the tool list on the request. Same cost as changing the kit if those lists are in the prefix.
 
@@ -247,7 +247,7 @@ const director = await new ArcDirector<HostCtx>()
 	.withTalk(host.talkSense)
 	.withMap(host.mapSense)
 	.withContext((id) => host.ctx(id))
-	.onAbortPlan((id) => host.interrupt(id))
+	.onAbortArc((id) => host.interrupt(id))
 	.onLog((entry) => hud.push(entry))
 	.addAgent({
 		id: 'Captain',
@@ -264,7 +264,7 @@ const director = await new ArcDirector<HostCtx>()
 
 `new Agent({...})` is for unit tests and advanced hosts. Getting started does not use it.
 
-`Agent<HostCtx>` is one mind. `tick(gameTime)` may revise goals (strategic) and emit one `ActionPlan` (tactical). `planText` skips the JSON goals pass so the only chat is the text plan. If `execute` is set, `tick` walks the plan unless `autoEnact` is false. `enact` needs `execute`. `planIndex` is the 0-based step currently running inside `enact`.
+`Agent<HostCtx>` is one mind. `tick(gameTime)` may revise goals (strategic) and emit one `Arc` (tactical). `arcText` skips the JSON goals pass so the only chat is the text arc. If `execute` is set, `tick` walks the arc unless `autoEnact` is false. `enact` needs `execute`. `verbIndex` is the 0-based step currently running inside `enact`.
 
 ### When tactical runs
 
@@ -278,7 +278,7 @@ const director = await new ArcDirector<HostCtx>()
 
 Defaults: `heartbeat` 30, `strategicInterval` 180. `strategicInterval <= 0` disables the periodic pass.
 
-Tactical: assemble senses → optional memory intrusion → tools (`recall`, `observe`, `earshot`, `see_map` when the host maps and the model can see, `grep_world_encyclopedia` when `withEncyclopedia` is set, plus host tools) up to `toolRoundCap` → `ActionPlan` (JSON, or `go_to() && wait()` text when `planText` is on). System vs user split is under [Prompt prefix](#prompt-prefix).
+Tactical: assemble senses → optional memory intrusion → tools (`recall`, `observe`, `earshot`, `see_map` when the host maps and the model can see, `grep_world_encyclopedia` when `withEncyclopedia` is set, plus host tools) up to `toolRoundCap` → `Arc` (JSON, or `go_to() && wait()` text when `arcText` is on). System vs user split is under [Prompt prefix](#prompt-prefix).
 
 ### Options
 
@@ -286,8 +286,8 @@ Tactical: assemble senses → optional memory intrusion → tools (`recall`, `ob
 |--|---------|--|
 | `model` | first preferred | Chat model id |
 | `embedModel` | none | Optional embeddings |
-| `toolRoundCap` | 2 | Tool turns before the plan must appear |
-| `planRetryCap` | 0 | Extra turns after a bad plan |
+| `toolRoundCap` | 2 | Tool turns before the arc must appear |
+| `arcRetryCap` | 0 | Extra turns after a bad arc |
 | `maxGoals` | 5 | Trim by priority |
 | `intrusionThreshold` / `intrusionCooldown` | 0.55 / 45 | Unbidden memory into the prompt |
 | `recallK` | 5 | Default `recall` hit count |
@@ -298,15 +298,15 @@ Tactical: assemble senses → optional memory intrusion → tools (`recall`, `ob
 | `watches` / `pinnedWatches` | `{}` | Name → expr dicts |
 | `watchesWritable` | true | LLM may add / edit / remove extra watches |
 
-`pushEvent` queues text for the next think (`major` wakes immediately). `remember(text, tags)` writes episodic memory. `toJSON` / `fromJSON` round-trip identity, goals, memory, watches, and last plan.
+`pushEvent` queues text for the next think (`major` wakes immediately). `remember(text, tags)` writes episodic memory. `toJSON` / `fromJSON` round-trip identity, goals, memory, watches, and last arc.
 
 ---
 
 ## Think queue (details)
 
-Each tick: accumulate time → sample watches every `watchInterval` (0.25) → emit rows every `processInterval` (1) → buffer ready minds. With `batchThinks` (default true) the director starts a wave of up to `maxParallel` (default 2) only when `inFlight` is 0, or after `batchWait` seconds (default 20) if someone is still generating. `batchThinks: false` fills a free slot as soon as one opens. Set these on `withPriorityQueue` or `withHttpInference` (queue wins if both set). Walking a plan does not count as in flight. Reasons: `watch`, `major`, `action`, `heartbeat`.
+Each tick: accumulate time → sample watches every `watchInterval` (0.25) → emit rows every `processInterval` (1) → buffer ready minds. With `batchThinks` (default true) the director starts a wave of up to `maxParallel` (default 2) only when `inFlight` is 0, or after `batchWait` seconds (default 20) if someone is still generating. `batchThinks: false` fills a free slot as soon as one opens. Set these on `withPriorityQueue` or `withHttpInference` (queue wins if both set). Walking an arc does not count as in flight. Reasons: `watch`, `major`, `verb`, `heartbeat`.
 
-`mayThink` is optional. Omit it and a live plan blocks a new think. The callback gets `npcID`, `reason`, `score`, `rankedScore`, the live `plan` (or `null`), and `verbs` on that plan.
+`mayThink` is optional. Omit it and a live arc blocks a new think. The callback gets `npcID`, `reason`, `score`, `rankedScore`, the live `arc` (or `null`), and `verbs` on that arc.
 
 Watch score: boolean true → `trueScore` (0.51); numbers in 0–1 used as-is; `> 1` clamps to 1 and scolds. Score must exceed `epsilon` (0.05) to enqueue.
 
@@ -320,9 +320,9 @@ Heartbeat (per mind): a low-priority (0.001) pulse every `heartbeatStart` (3s), 
 
 Standing conditions against a `Catalog` from `HostKernels`. Dict: short **name** → **expr**.
 
-**Pinned** watches (`pinnedWatches`) are host-authored. The LLM cannot add over, edit, or remove them. Extra watches live in `watches`. When `watchesWritable`, the plan JSON may include `addWatches` / `editWatches` / `removeWatches`, or replace extras with `"watches": { … }`.
+**Pinned** watches (`pinnedWatches`) are host-authored. The LLM cannot add over, edit, or remove them. Extra watches live in `watches`. When `watchesWritable`, the arc JSON may include `addWatches` / `editWatches` / `removeWatches`, or replace extras with `"watches": { … }`.
 
-Language looks like JS calls; it is not a JS subset. Bindings: `me`, `others`, `items`, plus host names (`bindings`). `hasHeard` and `prev` come from the mind when you go through `ArcDirector` (`prev.me` / `prev.secondsAgo` / `prev.actions`: last think, or spawn freeze if they have never thought). Pass `prev` yourself only to standalone `buildCatalog`.
+Language looks like JS calls; it is not a JS subset. Bindings: `me`, `others`, `items`, plus host names (`bindings`). `hasHeard` and `prev` come from the mind when you go through `ArcDirector` (`prev.me` / `prev.secondsAgo` / `prev.verbs`: last think, or spawn freeze if they have never thought). Pass `prev` yourself only to standalone `buildCatalog`.
 
 ```
 hasHeard || some(others.nearby().approaching())
@@ -372,7 +372,7 @@ type HostKernels = {
 	prev?: {                      // director injects (last think; spawn freeze if never)
 		secondsAgo?: number;
 		me: ExprEntity;
-		actions?: {
+		verbs?: {
 			secondsAgo: number;
 			isOk: boolean;
 			reason: string;
@@ -388,19 +388,19 @@ Space enters expressions only through host callbacks (`distance`, `facing`, `can
 
 ---
 
-## Plans
+## Arcs
 
 ```ts
-{ head: { verb: 'go_to', args: { name: 'Target' } }, then?: { join, plan } }
+{ head: { verb: 'go_to', args: { name: 'Target' } }, then?: { join, arc } }
 ```
 
 Joins: `then_if_ok` (`&&`), `then` (`;`), `then_if_err` (`||`). Chain as far as the next verbs are known. A think is expensive — emit that whole chain this think, not one verb and not only the first step of a spoken then-order. `then` still runs after a failed `pick_up` (already holding). `think()` is always moved to the end. `wait(seconds?, until?)` parks; `until` is a one-shot watch.
 
-`ActionResult`: `{ ok, interrupted?, reason?, verb? }`.
+`ArcResult`: `{ ok, interrupted?, reason?, verb? }`.
 
 ### Follow-up think
 
-After a plan, `enqueuePlan` uses the **highest** score among steps **after** the last `wait(until)`. Failure is at least 0.3. Override with `actionScores`. 0 means no follow-up on success.
+After an arc, `enqueueArc` uses the **highest** score among steps **after** the last `wait(until)`. Failure is at least 0.3. Override with `verbScores`. 0 means no follow-up on success.
 
 | Verb | Score |
 |------|------:|
@@ -436,11 +436,11 @@ Each think, the prompt lists who is in talking range. `say(to)` is only valid fo
 
 ## Map
 
-`see_map` is a **tool**, not an ActionPlan verb. It is omitted unless **both** are set: a host `map.snapshot` and `vision`. Arg `zoom` is 0..1 (1 close, 0 whole land). The host paints; the library stamps symbols and returns a legend of names only, no coordinates. Default you-mark is `❌`. Never write `see_map(...)` in the plan.
+`see_map` is a **tool**, not an Arc verb. It is omitted unless **both** are set: a host `map.snapshot` and `vision`. Arg `zoom` is 0..1 (1 close, 0 whole land). The host paints; the library stamps symbols and returns a legend of names only, no coordinates. Default you-mark is `❌`. Never write `see_map(...)` in the arc.
 
 If `toolRoundCap` is 0, an enabled see_map still gets **one** tool round.
 
-`grep_world_encyclopedia` is the same kind of tool for **types**. Host pages are `{ name, aliases?, text }`, or `crowdEncyclopedia({ name, tag, inside })` which stringifies a bunch of that tag and distills leftover English plus surround-sense (being inside a spoken place). Query leftover English (`trees`, `house`) or a spoken place (`forest`); empty query lists names. Articles are not in the standing prefix. Never write `grep_world_encyclopedia(...)` in the plan.
+`grep_world_encyclopedia` is the same kind of tool for **types**. Host pages are `{ name, aliases?, text }`, or `crowdEncyclopedia({ name, tag, inside })` which stringifies a bunch of that tag and distills leftover English plus surround-sense (being inside a spoken place). Query leftover English (`trees`, `house`) or a spoken place (`forest`); empty query lists names. Articles are not in the standing prefix. Never write `grep_world_encyclopedia(...)` in the arc.
 
 ---
 
@@ -462,10 +462,10 @@ If `toolRoundCap` is 0, an enabled see_map still gets **one** tool round.
 src/
   index.ts           public API
   director/          ArcDirector facade, AgentSpec, VerbCall
-  agent/             Agent, prompts, TalkNet, runPlan
+  agent/             Agent, prompts, TalkNet, runArc
   think/             MindQueue: ThinkQueue, SimpleQueue
   expr/              watch language, catalog, stringify
-  action/            verbs, parse, validate
+  arc/            verbs, parse, validate
   memory/            MemoryStore
   perception/        optional scene English
   inference/         HTTP chat, fake, presets, model catalog

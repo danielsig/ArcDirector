@@ -1,19 +1,19 @@
 export type Join = 'then_if_ok' | 'then' | 'then_if_err';
 
-export type StepArg = string | number | boolean | string[] | ActionPlan;
+export type StepArg = string | number | boolean | string[] | Arc;
 
 export type Step = {
 	verb:string;
 	args:Record<string, StepArg>;
 };
 
-export type ActionPlan = {
+export type Arc = {
 	head:Step;
-	group?:ActionPlan;
-	then?:{ join:Join; plan:ActionPlan };
+	group?:Arc;
+	then?:{ join:Join; arc:Arc };
 };
 
-export type ActionResult = {
+export type ArcResult = {
 	ok:boolean;
 	interrupted?:boolean;
 	/** Handler watch went false or a higher-rank handler stole the step. Not a fail. */
@@ -22,10 +22,10 @@ export type ActionResult = {
 	verb?:string;
 };
 
-export class ActionError extends Error {
+export class ArcError extends Error {
 	constructor(message:string) {
 		super(message);
-		this.name = 'ActionError';
+		this.name = 'ArcError';
 	}
 }
 
@@ -43,14 +43,14 @@ export const SYMBOL_JOIN:Record<string, Join> = {
 	'||': 'then_if_err',
 };
 
-export function firstStep(plan:ActionPlan):Step | undefined {
-	if (plan.group) {
-		return firstStep(plan.group);
+export function firstStep(arc:Arc):Step | undefined {
+	if (arc.group) {
+		return firstStep(arc.group);
 	}
-	if (plan.head.verb === 'group') {
+	if (arc.head.verb === 'group') {
 		return undefined;
 	}
-	return plan.head;
+	return arc.head;
 }
 
 export function isHoistedWhen(step:Step):boolean {

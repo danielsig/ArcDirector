@@ -1,12 +1,12 @@
-import type { ActionPlan, Step } from '../action/types.js';
+import type { Arc, Step } from '../arc/types.js';
 import { clampTrueScore } from '../expr/score.js';
 import { DEFAULT_TRUE_SCORE } from '../expr/types.js';
 
 /**
- * Follow-up think scores after a plan. 0 means do not enqueue on success.
- * Hosts merge extras via `actionScores`.
+ * Follow-up think scores after an arc. 0 means do not enqueue on success.
+ * Hosts merge extras via `verbScores`.
  */
-export const ACTION_THINK_SCORES:Readonly<Record<string, number>> = {
+export const VERB_THINK_SCORES:Readonly<Record<string, number>> = {
 	steal: 0.95,
 	go_to: 0.8,
 	use: 0.65,
@@ -26,23 +26,23 @@ export const ACTION_THINK_SCORES:Readonly<Record<string, number>> = {
 	follow: 0,
 };
 
-/** Bare think() (no about). Same as ACTION_THINK_SCORES.think. */
-export const THINK_BARE_SCORE = ACTION_THINK_SCORES.think;
+/** Bare think() (no about). Same as VERB_THINK_SCORES.think. */
+export const THINK_BARE_SCORE = VERB_THINK_SCORES.think;
 /** think(about=…) */
 export const THINK_ABOUT_SCORE = 0.55;
 
 /** Every failed verb re-thinks at least this high. */
-const ACTION_FAIL_SCORE = 0.3;
+const VERB_FAIL_SCORE = 0.3;
 
-export function actionThinkScore(
+export function verbThinkScore(
 	verb:string,
 	ok = true,
 	extra?:Record<string, number>,
 ):number {
-	const raw = extra?.[verb] ?? ACTION_THINK_SCORES[verb] ?? 0;
+	const raw = extra?.[verb] ?? VERB_THINK_SCORES[verb] ?? 0;
 	const base = Number.isFinite(raw) ? Math.min(1, Math.max(0, raw)) : 0;
 	if (!ok) {
-		return Math.min(1, Math.max(base, ACTION_FAIL_SCORE));
+		return Math.min(1, Math.max(base, VERB_FAIL_SCORE));
 	}
 	return base;
 }
@@ -57,24 +57,24 @@ export function waitUntilOf(step:Step):string {
 function stepWarrant(step:Step, extra?:Record<string, number>):number {
 	if (step.verb === 'think') {
 		const about = typeof step.args.about === 'string' ? step.args.about.trim() : '';
-		return about ? THINK_ABOUT_SCORE : actionThinkScore('think', true, extra);
+		return about ? THINK_ABOUT_SCORE : verbThinkScore('think', true, extra);
 	}
-	return actionThinkScore(step.verb, true, extra);
+	return verbThinkScore(step.verb, true, extra);
 }
 
 /** Highest score among verbs after the last wait(until). Failures still floor at 0.3. */
-export function planActionScore(
-	plan:ActionPlan,
+export function arcScore(
+	arc:Arc,
 	ok = true,
 	extra?:Record<string, number>,
 ):number {
 	const steps:Step[] = [];
-	let cur:ActionPlan | undefined = plan;
+	let cur:Arc | undefined = arc;
 	while (cur) {
 		if (cur.head) {
 			steps.push(cur.head);
 		}
-		cur = cur.then?.plan;
+		cur = cur.then?.arc;
 	}
 	let start = 0;
 	for (let i = 0; i < steps.length; i++) {
@@ -90,7 +90,7 @@ export function planActionScore(
 		}
 	}
 	if (!ok) {
-		return Math.min(1, Math.max(max, ACTION_FAIL_SCORE));
+		return Math.min(1, Math.max(max, VERB_FAIL_SCORE));
 	}
 	return max;
 }
@@ -113,14 +113,14 @@ export function thinkRecencyScale(
 	return fresh + (1 - fresh) * t;
 }
 
-export function planActionVerbs(plan:ActionPlan):string[] {
+export function arcVerbs(arc:Arc):string[] {
 	const verbs:string[] = [];
-	let cur:ActionPlan | undefined = plan;
+	let cur:Arc | undefined = arc;
 	while (cur) {
 		if (cur.head) {
 			verbs.push(cur.head.verb);
 		}
-		cur = cur.then?.plan;
+		cur = cur.then?.arc;
 	}
 	return verbs;
 }

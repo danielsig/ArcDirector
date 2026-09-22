@@ -3,10 +3,10 @@ import {
 	FakeProvider,
 	HttpProvider,
 	VerbRegistry,
-	formatPlan,
+	formatArc,
 	goToNamedInteractable,
 	registerStockVerbs,
-	type ActionPlan,
+	type Arc,
 	type InferenceProvider,
 	type Sense,
 	type ToolSpec,
@@ -29,19 +29,19 @@ function perception():{ senses:Record<string, Sense<FixtureCtx>>; tools:Record<s
 	};
 }
 
-function walk(plan:ActionPlan, visit:(p:ActionPlan)=>void):void {
-	visit(plan);
-	if (plan.group) {
-		walk(plan.group, visit);
+function walk(arc:Arc, visit:(p:Arc)=>void):void {
+	visit(arc);
+	if (arc.group) {
+		walk(arc.group, visit);
 	}
-	if (plan.then) {
-		walk(plan.then.plan, visit);
+	if (arc.then) {
+		walk(arc.then.arc, visit);
 	}
 }
 
-function isValidGoTo(plan:ActionPlan):boolean {
+function isValidGoTo(arc:Arc):boolean {
 	let ok = false;
-	walk(plan, (p) => {
+	walk(arc, (p) => {
 		const head = p.head;
 		if (!head) {
 			return;
@@ -100,28 +100,28 @@ async function main():Promise<void> {
 			heartbeat: 30,
 			strategicInterval: 10_000,
 			toolRoundCap: 2,
-			planRetryCap: 2,
+			arcRetryCap: 2,
 		});
 		await agent.remember('EastGate is the door in the east wall.', ['gate', 'EastGate'], 0);
 		try {
-			const plan = await agent.tick(1);
-			if (!plan) {
-				failures.push(`#${i + 1}: no plan`);
+			const arc = await agent.tick(1);
+			if (!arc) {
+				failures.push(`#${i + 1}: no arc`);
 				continue;
 			}
-			if (!isValidGoTo(plan)) {
-				failures.push(`#${i + 1}: ${formatPlan(plan)}`);
+			if (!isValidGoTo(arc)) {
+				failures.push(`#${i + 1}: ${formatArc(arc)}`);
 				continue;
 			}
 			pass += 1;
-			console.log(`#${i + 1} ok  ${formatPlan(plan)}`);
+			console.log(`#${i + 1} ok  ${formatArc(arc)}`);
 		}
 		catch (err) {
 			failures.push(`#${i + 1}: ${err instanceof Error ? err.message : String(err)}`);
 		}
 	}
 
-	console.log(`${pass}/${RUNS} valid go_to(Name) plans`);
+	console.log(`${pass}/${RUNS} valid go_to(Name) arcs`);
 	if (failures.length > 0) {
 		console.error('failures:');
 		for (const f of failures) {

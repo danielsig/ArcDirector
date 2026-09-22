@@ -9,7 +9,7 @@ import type { ChatMessage } from './provider.js';
  */
 const thinkingTag = 'redacted_thinking';
 export const EMPTY_THINK_PREFILL = `<${thinkingTag}></${thinkingTag}>`;
-export const DONE_THOUGHT = 'I have to respond either with "ok" or a new ActionPlan adapted to the circumstances but only if I must.\n\nI\'m ready to respond.';
+export const DONE_THOUGHT = 'I have to respond either with "ok" or a new Arc adapted to the circumstances but only if I must.\n\nI\'m ready to respond.';
 const THINK_TAG_RE = /<\/?(?:redacted_)?think(?:ing)?>/i;
 const THINK_OPEN_RE = /<(redacted_thinking|think(?:ing)?)>/i;
 export const PREFILL_MARKER = '§PREFILL§';

@@ -140,7 +140,7 @@ export class Game extends KindlingGame<World> {
 		this.hud.maxParallel = host.arc?.liveMaxParallel() ?? stored.maxParallel;
 		this.hud.batchThinks = host.arc?.liveBatchThinks() ?? stored.batchThinks;
 		this.hud.thinkingBudget = host.arc ? host.arc.liveThinking() : stored.thinkingBudget;
-		this.hud.planText = host.arc ? host.arc.livePlanText() : stored.planText;
+		this.hud.arcText = host.arc ? host.arc.liveArcText() : stored.arcText;
 		this.session.persistAutosave();
 		this.session.persistView();
 		this.session.syncURLView();

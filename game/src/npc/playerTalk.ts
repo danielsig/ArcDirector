@@ -1,4 +1,4 @@
-import { pascalCase, roleMentionTitles, type ActionResult, type SpeechUtterance } from 'arc-director';
+import { pascalCase, roleMentionTitles, type ArcResult, type SpeechUtterance } from 'arc-director';
 import { HumanBody, Named, SpeechBubble } from '../engine/components';
 import type { GameObject } from '../engine/GameObject';
 import type { World } from '../engine/World';
@@ -192,7 +192,7 @@ export function runPlayerSlash(
 	host:GameHost,
 	player:GameObject,
 	slash:Exclude<ParsedSlash, { ok:false } | { ok:true; verb:'help' }>,
-):ActionResult {
+):ArcResult {
 	if (slash.verb === 'give') {
 		const target = playerReach(host, player, slash.to, 'give');
 		if (!target.ok) {

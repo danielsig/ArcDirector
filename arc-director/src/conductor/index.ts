@@ -8,14 +8,14 @@ export {
 	registerStockCrowdVerbs,
 	isFormationVerb,
 	type StockCrowdVerb,
-} from './verbs.js';
+} from './conductor-verbs.js';
 export { squadTag, shortTag, isSquadTag } from './tags.js';
 export {
 	evaluateWho,
 	unitEntity,
 	buildCrowdCatalog,
 	crowdKernels,
-	planArg,
+	arcArg,
 } from './who.js';
 export {
 	lawFromSpec,

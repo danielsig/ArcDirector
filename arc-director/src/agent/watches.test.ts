@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { VerbRegistry, registerStockVerbs } from '../action/registry.js';
+import { VerbRegistry, registerStockVerbs } from '../arc/stock-verbs.js';
 import {
 	buildCatalog,
 	dummyEntity,
@@ -284,7 +284,7 @@ describe('agent watches', () => {
 			memories: [],
 			watches: ['some(others.approaching())'],
 			pinnedWatches: ['isHurt(me)'],
-			livePlan: false,
+			liveArc: false,
 			maxGoals: 5,
 			maxEpisodic: 40,
 		}, {
@@ -358,7 +358,7 @@ describe('agent watches', () => {
 		assert.ok(rows.some((r) => r.npcID === 'G'));
 	});
 
-	it('observe tool round then plan; toolRoundCap 0 never calls it', async () => {
+	it('observe tool round then arc; toolRoundCap 0 never calls it', async () => {
 		let observed = false;
 		const { cat } = hostAt(5);
 		const provider = new FakeProvider((req) => {
@@ -380,8 +380,8 @@ describe('agent watches', () => {
 			};
 		});
 		const a = agentOf({ provider, catalog: () => cat, toolRoundCap: 1 });
-		const plan = await a.tick(1);
-		assert.ok(plan);
+		const arc = await a.tick(1);
+		assert.ok(arc);
 		assert.equal(observed, true);
 		observed = false;
 		const b = agentOf({ provider, catalog: () => cat, toolRoundCap: 0 });

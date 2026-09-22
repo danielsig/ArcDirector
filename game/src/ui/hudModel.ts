@@ -108,8 +108,8 @@ export type HudModel = {
 	batchThinks:boolean;
 	/** CoT on. Menu + localStorage. */
 	thinkingBudget:boolean;
-	/** Ask for ActionPlan text instead of JSON. Menu + localStorage. Testing. */
-	planText:boolean;
+	/** Ask for Arc text instead of JSON. Menu + localStorage. Testing. */
+	arcText:boolean;
 	/** Local server catalog (embeddings omitted). */
 	models:HudModelOption[];
 	/** Packed kind currently drawn on the player (`player` = witch). */
@@ -191,7 +191,7 @@ export function emptyHud():HudModel {
 		maxParallel: p.maxParallel,
 		batchThinks: p.batchThinks,
 		thinkingBudget: p.thinkingBudget,
-		planText: p.planText,
+		arcText: p.arcText,
 		models: [],
 		playerKind: resolvePlayerKind(p.playerKind),
 		playerKinds: characterOptions(),

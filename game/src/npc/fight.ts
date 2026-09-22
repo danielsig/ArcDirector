@@ -81,7 +81,7 @@ export function fightLabel(host:GameHost, go:GameObject):string {
 	return fightRole(host, go) ?? bodyName(go);
 }
 
-/** Map a plan / sight id onto a real body name from this observer. */
+/** Map an arc / sight id onto a real body name from this observer. */
 export function resolveFightName(host:GameHost, observerID:string, name:string):string {
 	const observer = findBody(host.world, observerID);
 	if (!observer) {
@@ -142,7 +142,7 @@ function isOtherCompanyName(host:GameHost, observer:GameObject, name:string):boo
 	return false;
 }
 
-/** Resolve a plan name from this observer. Rival given names do not resolve. */
+/** Resolve an arc name from this observer. Rival given names do not resolve. */
 export function findFightTarget(
 	host:GameHost,
 	observer:GameObject,

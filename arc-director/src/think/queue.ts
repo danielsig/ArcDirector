@@ -1,20 +1,20 @@
-import type { ActionPlan } from '../action/types.js';
-import { ACTION_THINK_SCORES, actionThinkScore, planActionScore, thinkRecencyScale } from './score.js';
+import type { Arc } from '../arc/types.js';
+import { VERB_THINK_SCORES, verbThinkScore, arcScore, thinkRecencyScale } from './score.js';
 import { SimpleQueue, type SimpleQueueOpts } from './simple.js';
 import { MindScheduler, type MindQueueOpts, type ThinkRow, type WithMindQueue } from './scheduler.js';
 
 export type ThinkQueueOpts = MindQueueOpts & {
-	/** Override or add verb → score for `enqueueAction`. 0 suppresses a default. */
-	actionScores?:Record<string, number>;
+	/** Override or add verb → score for `enqueueVerb`. 0 suppresses a default. */
+	verbScores?:Record<string, number>;
 };
 
-/** Highest watch / plan score first, then recency. */
+/** Highest watch / arc score first, then recency. */
 export class ThinkQueue extends MindScheduler {
-	readonly actionScores:Record<string, number>;
+	readonly verbScores:Record<string, number>;
 
 	constructor(opts:ThinkQueueOpts = {}) {
 		super(opts);
-		this.actionScores = { ...ACTION_THINK_SCORES, ...opts.actionScores };
+		this.verbScores = { ...VERB_THINK_SCORES, ...opts.verbScores };
 	}
 
 	override rankScore(npcID:string, raw:number):number {
@@ -44,12 +44,12 @@ export class ThinkQueue extends MindScheduler {
 		this.rows.sort((a, b) => this.rankScore(b.npcID, b.score) - this.rankScore(a.npcID, a.score));
 	}
 
-	protected override actionScore(verb:string, ok:boolean):number {
-		return actionThinkScore(verb, ok, this.actionScores);
+	protected override verbScore(verb:string, ok:boolean):number {
+		return verbThinkScore(verb, ok, this.verbScores);
 	}
 
-	protected override planScore(plan:ActionPlan, ok:boolean):number {
-		return planActionScore(plan, ok, this.actionScores);
+	protected override arcScore(arc:Arc, ok:boolean):number {
+		return arcScore(arc, ok, this.verbScores);
 	}
 }
 
@@ -67,11 +67,11 @@ export const withThinkQueue = withPriorityQueue;
 export type WithThinkQueue = WithMindQueue;
 
 export {
-	ACTION_THINK_SCORES,
+	VERB_THINK_SCORES,
 	THINK_ABOUT_SCORE,
 	THINK_BARE_SCORE,
-	actionThinkScore,
-	planActionScore,
+	verbThinkScore,
+	arcScore,
 	thinkRecencyScale,
 	waitUntilOf,
 } from './score.js';

@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import type { ActionPlan } from '../action/types.js';
+import type { Arc } from '../arc/types.js';
 import { buildCatalog, dummyEntity, SampleCache, type ExprEntity } from '../expr/index.js';
-import { ACTION_THINK_SCORES, THINK_ABOUT_SCORE, THINK_BARE_SCORE, SimpleQueue, ThinkQueue, actionThinkScore, planActionScore, thinkRecencyScale, withPriorityQueue } from './queue.js';
+import { VERB_THINK_SCORES, THINK_ABOUT_SCORE, THINK_BARE_SCORE, SimpleQueue, ThinkQueue, verbThinkScore, arcScore, thinkRecencyScale, withPriorityQueue } from './queue.js';
 import { DEFAULT_TRUE_SCORE } from '../expr/types.js';
 
 type Posed = ExprEntity & { x:number; z:number };
@@ -67,7 +67,7 @@ describe('ThinkQueue', () => {
 		assert.ok(rows[0].score >= 0.99);
 	});
 
-	it('HTTP beginThink occupies a slot; a live plan does not', () => {
+	it('HTTP beginThink occupies a slot; a live arc does not', () => {
 		const q = new ThinkQueue({ watchInterval: 100, processInterval: 0, maxParallel: 2 });
 		q.ensure('A', { skipHeartbeat: true });
 		q.ensure('B', { skipHeartbeat: true });
@@ -77,7 +77,7 @@ describe('ThinkQueue', () => {
 		q.enqueueMajor('C');
 		assert.equal(q.tick(1, new Map()).length, 1);
 		q.endThink('A');
-		q.beginPlan('A', { head: { verb: 'go_to', args: { name: 'Gate' } } });
+		q.beginArc('A', { head: { verb: 'go_to', args: { name: 'Gate' } } });
 		q.enqueueMajor('B');
 		q.enqueueMajor('C');
 		assert.equal(q.tick(1, new Map()).length, 2);
@@ -143,123 +143,123 @@ describe('ThinkQueue', () => {
 		assert.ok(Math.abs(q.recencyScale('Hot') - 1) < 1e-9);
 	});
 
-	it('enqueueAction uses seriousness; wait is silent; fail still wakes', () => {
-		assert.ok(actionThinkScore('steal') > actionThinkScore('go_to'));
-		assert.ok(actionThinkScore('go_to') > actionThinkScore('think'));
-		assert.ok(actionThinkScore('think') > actionThinkScore('wander'));
-		assert.ok(actionThinkScore('wander') > actionThinkScore('wait'));
-		assert.equal(actionThinkScore('wait'), 0);
-		assert.ok(actionThinkScore('wait', false) > 0);
-		assert.equal(actionThinkScore('follow'), 0);
-		assert.equal(actionThinkScore('follow', false), 0.3);
-		assert.equal(actionThinkScore('wait', false), 0.3);
-		assert.ok(actionThinkScore('steal', false) >= 0.3);
-		assert.equal(ACTION_THINK_SCORES.go_to, 0.8);
+	it('enqueueVerb uses seriousness; wait is silent; fail still wakes', () => {
+		assert.ok(verbThinkScore('steal') > verbThinkScore('go_to'));
+		assert.ok(verbThinkScore('go_to') > verbThinkScore('think'));
+		assert.ok(verbThinkScore('think') > verbThinkScore('wander'));
+		assert.ok(verbThinkScore('wander') > verbThinkScore('wait'));
+		assert.equal(verbThinkScore('wait'), 0);
+		assert.ok(verbThinkScore('wait', false) > 0);
+		assert.equal(verbThinkScore('follow'), 0);
+		assert.equal(verbThinkScore('follow', false), 0.3);
+		assert.equal(verbThinkScore('wait', false), 0.3);
+		assert.ok(verbThinkScore('steal', false) >= 0.3);
+		assert.equal(VERB_THINK_SCORES.go_to, 0.8);
 
 		const q = new ThinkQueue({ watchInterval: 100, processInterval: 0, maxParallel: 2 });
 		q.ensure('A', { skipHeartbeat: true });
-		q.enqueueAction('A', 'wait');
+		q.enqueueVerb('A', 'wait');
 		assert.equal(q.tick(1, new Map()).length, 0);
-		q.enqueueAction('A', 'follow');
+		q.enqueueVerb('A', 'follow');
 		assert.equal(q.tick(1, new Map()).length, 0);
-		q.enqueueAction('A', 'follow', false);
+		q.enqueueVerb('A', 'follow', false);
 		const lost = q.tick(1, new Map());
 		assert.equal(lost.length, 1);
 		assert.equal(lost[0].score, 0.3);
-		q.enqueueAction('A', 'wander');
+		q.enqueueVerb('A', 'wander');
 		const wander = q.tick(1, new Map());
 		assert.equal(wander.length, 1);
-		assert.equal(wander[0].reason, 'action');
-		assert.equal(wander[0].score, ACTION_THINK_SCORES.wander);
-		q.enqueueAction('A', 'wait', false);
+		assert.equal(wander[0].reason, 'verb');
+		assert.equal(wander[0].score, VERB_THINK_SCORES.wander);
+		q.enqueueVerb('A', 'wait', false);
 		const failed = q.tick(1, new Map());
 		assert.equal(failed.length, 1);
 		assert.equal(failed[0].score, 0.3);
 	});
 
-	it('prunes action rows to the more serious verb; skipMajor does not drop them', () => {
+	it('prunes verb rows to the more serious verb; skipMajor does not drop them', () => {
 		const q = new ThinkQueue({ watchInterval: 100, processInterval: 0, maxParallel: 2 });
 		q.ensure('A', { skipHeartbeat: true, skipMajor: true });
 		q.enqueueMajor('A');
-		q.enqueueAction('A', 'wander');
-		q.enqueueAction('A', 'go_to');
+		q.enqueueVerb('A', 'wander');
+		q.enqueueVerb('A', 'go_to');
 		const rows = q.tick(1, new Map());
 		assert.equal(rows.length, 1);
-		assert.equal(rows[0].reason, 'action');
-		assert.equal(rows[0].score, ACTION_THINK_SCORES.go_to);
+		assert.equal(rows[0].reason, 'verb');
+		assert.equal(rows[0].score, VERB_THINK_SCORES.go_to);
 	});
 
-	it('actionScores overrides defaults, including suppressing a verb', () => {
+	it('verbScores overrides defaults, including suppressing a verb', () => {
 		const q = new ThinkQueue({
 			watchInterval: 100,
 			processInterval: 0,
 			maxParallel: 2,
-			actionScores: { wander: 0, inspect: 0.5 },
+			verbScores: { wander: 0, inspect: 0.5 },
 		});
 		q.ensure('A', { skipHeartbeat: true });
-		q.enqueueAction('A', 'wander');
+		q.enqueueVerb('A', 'wander');
 		assert.equal(q.tick(1, new Map()).length, 0);
-		q.enqueueAction('A', 'inspect');
+		q.enqueueVerb('A', 'inspect');
 		const rows = q.tick(1, new Map());
 		assert.equal(rows.length, 1);
 		assert.equal(rows[0].score, 0.5);
 	});
 
-	it('planActionScore is the max warrant; think(about) is 0.55', () => {
+	it('arcScore is the max warrant; think(about) is 0.55', () => {
 		assert.equal(THINK_BARE_SCORE, 0.35);
 		assert.equal(THINK_ABOUT_SCORE, 0.55);
-		assert.equal(planActionScore({
+		assert.equal(arcScore({
 			head: { verb: 'wait', args: {} },
-			then: { join: 'then', plan: { head: { verb: 'think', args: {} } } },
+			then: { join: 'then', arc: { head: { verb: 'think', args: {} } } },
 		}), THINK_BARE_SCORE);
-		assert.equal(planActionScore({
+		assert.equal(arcScore({
 			head: { verb: 'wait', args: {} },
-			then: { join: 'then', plan: { head: { verb: 'think', args: { about: 'the lock' } } } },
+			then: { join: 'then', arc: { head: { verb: 'think', args: { about: 'the lock' } } } },
 		}), THINK_ABOUT_SCORE);
-		assert.equal(planActionScore({
+		assert.equal(arcScore({
 			head: { verb: 'go_to', args: { name: 'EastGate' } },
-			then: { join: 'then', plan: { head: { verb: 'think', args: { about: 'the lock' } } } },
-		}), ACTION_THINK_SCORES.go_to);
-		assert.equal(planActionScore({
+			then: { join: 'then', arc: { head: { verb: 'think', args: { about: 'the lock' } } } },
+		}), VERB_THINK_SCORES.go_to);
+		assert.equal(arcScore({
 			head: { verb: 'go_to', args: { name: 'EastGate' } },
-			then: { join: 'then', plan: { head: { verb: 'think', args: {} } } },
-		}), ACTION_THINK_SCORES.go_to);
+			then: { join: 'then', arc: { head: { verb: 'think', args: {} } } },
+		}), VERB_THINK_SCORES.go_to);
 
 		const q = new ThinkQueue({ watchInterval: 100, processInterval: 0, maxParallel: 2 });
 		q.ensure('A', { skipHeartbeat: true });
-		q.enqueuePlan('A', {
+		q.enqueueArc('A', {
 			head: { verb: 'wait', args: {} },
-			then: { join: 'then', plan: { head: { verb: 'think', args: { about: 'the lock' } } } },
+			then: { join: 'then', arc: { head: { verb: 'think', args: { about: 'the lock' } } } },
 		});
 		const rows = q.tick(1, new Map());
 		assert.equal(rows.length, 1);
 		assert.equal(rows[0].score, THINK_ABOUT_SCORE);
-		assert.equal(rows[0].reason, 'action');
+		assert.equal(rows[0].reason, 'verb');
 	});
 
 	it('wait(until) drops warrants before it; wait without until does not', () => {
-		const stealThenGo:ActionPlan = {
+		const stealThenGo:Arc = {
 			head: { verb: 'steal', args: { item: 'Loaf', from: 'Baker' } },
 			then: {
 				join: 'then',
-				plan: {
+				arc: {
 					head: { verb: 'wait', args: { until: 'some(others.approaching())' } },
-					then: { join: 'then', plan: { head: { verb: 'go_to', args: { name: 'EastGate' } } } },
+					then: { join: 'then', arc: { head: { verb: 'go_to', args: { name: 'EastGate' } } } },
 				},
 			},
 		};
-		assert.equal(planActionScore(stealThenGo), ACTION_THINK_SCORES.go_to);
-		assert.equal(planActionScore({
+		assert.equal(arcScore(stealThenGo), VERB_THINK_SCORES.go_to);
+		assert.equal(arcScore({
 			head: { verb: 'steal', args: { item: 'Loaf', from: 'Baker' } },
-			then: { join: 'then', plan: { head: { verb: 'wait', args: { until: 'hasHeard' } } } },
+			then: { join: 'then', arc: { head: { verb: 'wait', args: { until: 'hasHeard' } } } },
 		}), 0);
-		assert.equal(planActionScore({
+		assert.equal(arcScore({
 			head: { verb: 'steal', args: { item: 'Loaf', from: 'Baker' } },
-			then: { join: 'then', plan: { head: { verb: 'wait', args: { seconds: 8 } } } },
-		}), ACTION_THINK_SCORES.steal);
-		assert.equal(planActionScore({
+			then: { join: 'then', arc: { head: { verb: 'wait', args: { seconds: 8 } } } },
+		}), VERB_THINK_SCORES.steal);
+		assert.equal(arcScore({
 			head: { verb: 'steal', args: { item: 'Loaf', from: 'Baker' } },
-			then: { join: 'then', plan: { head: { verb: 'wait', args: { until: 'hasHeard' } } } },
+			then: { join: 'then', arc: { head: { verb: 'wait', args: { until: 'hasHeard' } } } },
 		}, false), 0.3);
 	});
 
@@ -291,18 +291,18 @@ describe('ThinkQueue', () => {
 		assert.equal(q.tick(1, catalogs).length, 0);
 	});
 
-	it('default mayThink allows while a plan is live; callback can block it', () => {
+	it('default mayThink allows while an arc is live; callback can block it', () => {
 		const q = new ThinkQueue({ watchInterval: 100, processInterval: 0, maxParallel: 2 });
 		q.ensure('A', { skipHeartbeat: true });
-		q.beginPlan('A', {
+		q.beginArc('A', {
 			head: { verb: 'go_to', args: { name: 'Gate' } },
-			then: { join: 'then', plan: { head: { verb: 'steal', args: { item: 'Loaf', from: 'Baker' } } } },
+			then: { join: 'then', arc: { head: { verb: 'steal', args: { item: 'Loaf', from: 'Baker' } } } },
 		});
 		q.enqueueMajor('A');
 		assert.equal(q.tick(1, new Map()).length, 1);
 		q.mayThink = (ctx) => {
 			assert.deepEqual(ctx.verbs, ['go_to', 'steal']);
-			assert.equal(ctx.plan?.head.verb, 'go_to');
+			assert.equal(ctx.arc?.head.verb, 'go_to');
 			return false;
 		};
 		q.enqueueMajor('A');
@@ -314,7 +314,7 @@ describe('ThinkQueue', () => {
 			watchInterval: 100,
 			processInterval: 0,
 			maxParallel: 2,
-			mayThink: ({ plan }) => !plan,
+			mayThink: ({ arc }) => !arc,
 		});
 		assert.equal(think.heartbeat, 0);
 		think.queue.ensure('A', { skipHeartbeat: true });
@@ -339,7 +339,7 @@ describe('ThinkQueue', () => {
 		const q = new SimpleQueue({ watchInterval: 100, processInterval: 0, maxParallel: 1 });
 		q.ensure('Early', { skipHeartbeat: true });
 		q.ensure('Loud', { skipHeartbeat: true });
-		q.enqueueAction('Early', 'wander');
+		q.enqueueVerb('Early', 'wander');
 		q.enqueueMajor('Loud');
 		assert.equal(q.tick(1, new Map())[0].npcID, 'Early');
 	});

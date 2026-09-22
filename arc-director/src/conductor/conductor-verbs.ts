@@ -1,4 +1,4 @@
-import { VerbRegistry, type VerbArgMap } from '../action/registry.js';
+import { VerbRegistry, type VerbArgMap } from '../arc/stock-verbs.js';
 
 export const STOCK_FORMATION_VERBS = ['spread', 'circle', 'hold_line'] as const;
 
@@ -12,7 +12,7 @@ export const STOCK_CROWD_VERBS = [
 export type StockCrowdVerb = (typeof STOCK_CROWD_VERBS)[number];
 
 export const STOCK_CROWD_VERB_ARGS:Record<StockCrowdVerb, VerbArgMap> = {
-	issue: { who: 'string', plan: 'plan' },
+	issue: { who: 'string', arc: 'arc' },
 	tag: { who: 'string', name: 'string' },
 	untag: { who: 'string', name: 'string' },
 	spread: { around: 'id?', paces: 'number?' },

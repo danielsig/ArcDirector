@@ -160,7 +160,7 @@ export type WatchOps = {
 	remove:string[];
 };
 
-export function watchOpsFromPlan(raw:Record<string, unknown>):WatchOps {
+export function watchOpsFromArc(raw:Record<string, unknown>):WatchOps {
 	return {
 		add: asWatches(raw.addWatches ?? raw.addWatch),
 		edit: asWatches(raw.editWatches ?? raw.editWatch),

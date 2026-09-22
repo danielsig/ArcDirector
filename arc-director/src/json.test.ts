@@ -9,14 +9,14 @@ describe('extractJson', () => {
 		});
 	});
 
-	it('closes truncated ActionPlan braces', () => {
-		const raw = '{"head":{"verb":"go_to","args":{"name":"Lantern"}},"then":{"join":"then_if_ok","plan":{"head":{"verb":"pick_up","args":{"name":"Lantern"}},"then":{"join":"then_if_ok","plan":{"head":{"verb":"go_to","args":{"name":"Miller"}},"then":{"join":"then_if_ok","plan":{"head":{"verb":"give","args":{"item":"Lantern","to":"Miller"}},"then":{"join":"then_if_ok","plan":{"head":{"verb":"wait","args":{"seconds":1}}}}}}}}';
+	it('closes truncated Arc braces', () => {
+		const raw = '{"head":{"verb":"go_to","args":{"name":"Lantern"}},"then":{"join":"then_if_ok","arc":{"head":{"verb":"pick_up","args":{"name":"Lantern"}},"then":{"join":"then_if_ok","arc":{"head":{"verb":"go_to","args":{"name":"Miller"}},"then":{"join":"then_if_ok","arc":{"head":{"verb":"give","args":{"item":"Lantern","to":"Miller"}},"then":{"join":"then_if_ok","arc":{"head":{"verb":"wait","args":{"seconds":1}}}}}}}}';
 		const got = extractJson(raw) as {
 			head:{ verb:string };
-			then:{ plan:{ then:{ plan:{ then:{ plan:{ then:{ plan:{ head:{ verb:string } } } } } } } } };
+			then:{ arc:{ then:{ arc:{ then:{ arc:{ then:{ arc:{ head:{ verb:string } } } } } } } } };
 		};
 		assert.equal(got.head.verb, 'go_to');
-		assert.equal(got.then.plan.then.plan.then.plan.then.plan.head.verb, 'wait');
+		assert.equal(got.then.arc.then.arc.then.arc.then.arc.head.verb, 'wait');
 	});
 
 	it('takes the first complete object when extra braces follow', () => {
@@ -24,14 +24,14 @@ describe('extractJson', () => {
 	});
 
 	it('keeps a trailing then after an early-closed head', () => {
-		const raw = '{"head":{"verb":"wait","args":{"seconds":1}}},"then":{"join":"then","plan":{"head":{"verb":"say","args":{"text":"ok"}}}}}';
+		const raw = '{"head":{"verb":"wait","args":{"seconds":1}}},"then":{"join":"then","arc":{"head":{"verb":"say","args":{"text":"ok"}}}}}';
 		const got = extractJson(raw) as {
 			head:{ verb:string };
-			then:{ join:string; plan:{ head:{ verb:string } } };
+			then:{ join:string; arc:{ head:{ verb:string } } };
 		};
 		assert.equal(got.head.verb, 'wait');
 		assert.equal(got.then.join, 'then');
-		assert.equal(got.then.plan.head.verb, 'say');
+		assert.equal(got.then.arc.head.verb, 'say');
 	});
 });
 

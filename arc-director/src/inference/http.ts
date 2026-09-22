@@ -1030,7 +1030,7 @@ function parseResponsesOutput(json:Record<string, unknown>):{
 					texts.push(text);
 				}
 				catch {
-					// chain-of-thought, not a plan
+					// chain-of-thought, not an arc
 				}
 			}
 		}

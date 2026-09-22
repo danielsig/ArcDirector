@@ -69,7 +69,7 @@ export const MILLER:AgentSpec = {
 	laws: [{
 		name: 'sluice',
 		watch: `(isCarrying("FireMushroom") || me.gold >= ${MILL_FEE}) && !isOpen(MillBridge)`,
-		plan: 'use(item=MillCrank, target=MillLever)',
+		arc: 'use(item=MillCrank, target=MillLever)',
 		pinned: true,
 	}],
 };

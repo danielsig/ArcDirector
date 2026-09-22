@@ -60,13 +60,13 @@ export {
 	type FakeEmbedFn,
 } from './inference/fake.js';
 
-export type { ActionPlan, ActionResult, Join, Step } from './action/types.js';
-export { firstStep, isHoistedWhen, isIssue } from './action/types.js';
-export { ActionError, JOIN_SYMBOL, JOINS, SYMBOL_JOIN } from './action/types.js';
-export { VerbRegistry, registerStockVerbs, STOCK_VERBS, STOCK_MOVE_VERBS, STOCK_ITEM_VERBS, STOCK_MIND_VERBS, STOCK_PLAN_VERBS, STOCK_VERB_ARGS, type StockVerb, type VerbArgKind, type VerbArgMap, type VerbSpec } from './action/registry.js';
-export { actionPlanSchema, verbHelp } from './action/schema.js';
-export { asPlan, asStep, validatePlan, validateStep, isActionPlan } from './action/validate.js';
-export { formatPlan, formatStep, parsePlan, parsePlanText } from './action/parse.js';
+export type { Arc, ArcResult, Join, Step } from './arc/types.js';
+export { firstStep, isHoistedWhen, isIssue } from './arc/types.js';
+export { ArcError, JOIN_SYMBOL, JOINS, SYMBOL_JOIN } from './arc/types.js';
+export { VerbRegistry, registerStockVerbs, STOCK_VERBS, STOCK_MOVE_VERBS, STOCK_ITEM_VERBS, STOCK_MIND_VERBS, STOCK_ARC_VERBS, STOCK_VERB_ARGS, type StockVerb, type VerbArgKind, type VerbArgMap, type VerbSpec } from './arc/stock-verbs.js';
+export { arcSchema, verbHelp } from './arc/schema.js';
+export { asArc, asStep, validateArc, validateStep, isArc } from './arc/validate.js';
+export { formatArc, formatStep, parseArc, parseArcText } from './arc/parse.js';
 
 export {
 	MemoryStore,
@@ -149,8 +149,8 @@ export {
 	type EncyclopediaSource,
 	type CrowdEncyclopediaSpec,
 } from './agent/encyclopedia.js';
-export { runPlan, deferThinks, planSteps, THINK_ABOUT_CAP } from './agent/run.js';
-export { planRepairHint, sayRangeHint, shortTermBlock, stablePrefix, volatileBlock, WATCH_CHEAT_SHEET, SEE_MAP_HINT, seeMapHint, encyclopediaHint } from './agent/prompt.js';
+export { runArc, deferThinks, arcSteps, THINK_ABOUT_CAP } from './agent/run.js';
+export { arcRepairHint, sayRangeHint, shortTermBlock, stablePrefix, volatileBlock, WATCH_CHEAT_SHEET, SEE_MAP_HINT, seeMapHint, encyclopediaHint } from './agent/prompt.js';
 export {
 	TalkNet,
 	DEFAULT_TALK_CONFIG,
@@ -189,10 +189,10 @@ export {
 	ThinkQueue,
 	SimpleQueue,
 	thinkRecencyScale,
-	actionThinkScore,
-	planActionScore,
+	verbThinkScore,
+	arcScore,
 	waitUntilOf,
-	ACTION_THINK_SCORES,
+	VERB_THINK_SCORES,
 	THINK_BARE_SCORE,
 	THINK_ABOUT_SCORE,
 	withPriorityQueue,

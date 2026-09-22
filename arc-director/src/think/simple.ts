@@ -1,5 +1,5 @@
-import type { ActionPlan } from '../action/types.js';
-import { actionThinkScore, planActionScore } from './score.js';
+import type { Arc } from '../arc/types.js';
+import { verbThinkScore, arcScore } from './score.js';
 import { MindScheduler, type MindQueueOpts, type ThinkRow } from './scheduler.js';
 
 export type SimpleQueueOpts = MindQueueOpts;
@@ -38,11 +38,11 @@ export class SimpleQueue extends MindScheduler {
 		});
 	}
 
-	protected override actionScore(verb:string, ok:boolean):number {
-		return actionThinkScore(verb, ok);
+	protected override verbScore(verb:string, ok:boolean):number {
+		return verbThinkScore(verb, ok);
 	}
 
-	protected override planScore(plan:ActionPlan, ok:boolean):number {
-		return planActionScore(plan, ok);
+	protected override arcScore(arc:Arc, ok:boolean):number {
+		return arcScore(arc, ok);
 	}
 }

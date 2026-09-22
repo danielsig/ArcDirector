@@ -61,7 +61,7 @@ export type ChatRequest = {
 	model:string;
 	messages:ChatMessage[];
 	tools?:ToolDef[];
-	/** Keep `tools` listed with `none` on plan turns so the KV prefix stays identical. */
+	/** Keep `tools` listed with `none` on arc turns so the KV prefix stays identical. */
 	toolChoice?:ToolChoice;
 	responseFormat?:JsonSchemaResponseFormat;
 	temperature?:number;

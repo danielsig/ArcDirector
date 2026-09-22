@@ -4,7 +4,7 @@ This repo is an **LLM NPC framework** with a small 3D game attached so we can te
 
 | Folder | Package | Job |
 |--------|---------|-----|
-| `arc-director/` | `arc-director` | Engine-agnostic agents: plan, memory, perception, talk, HTTP inference. No Vue, no Three, no physics. |
+| `arc-director/` | `arc-director` | Engine-agnostic agents: arcs, memory, perception, talk, HTTP inference. No Vue, no Three, no physics. |
 | `kindling/` | `@arc-director/kindling` | GameObject runtime: `Game`, `World`, `Component`, tick, physics, Three.js view. Hosts subclass; they do not own this. |
 | `game/` | `@arc-director/game` | Example host used for testing: walkable world, items, streaming chunks, Vue HUD, adapter into ArcDirector. Subclasses Kindling. |
 | `brainstorming/` | none | Concept art and old notes. |
@@ -65,7 +65,7 @@ Ground is **XZ**. **Y** is height (tile height underfoot). Yaw is around Y, in r
 | **−Z** | north (top of a glyph map; yaw `0` faces this way) |
 | **+Z** | south |
 
-WASD is camera-relative on XZ. NPCs never see these numbers; actions and prompts use names only. URL `observer`/`ai` (and agent-only `view`) are **testing-only** (see below).
+WASD is camera-relative on XZ. NPCs never see these numbers; verbs and prompts use names only. URL `observer`/`ai` (and agent-only `view`) are **testing-only** (see below).
 
 ## Sprite clock
 

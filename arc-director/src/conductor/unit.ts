@@ -1,5 +1,5 @@
-import type { ActionPlan } from '../action/types.js';
-import type { PlanSession } from '../agent/run.js';
+import type { Arc } from '../arc/types.js';
+import type { ArcSession } from '../agent/run.js';
 
 export type CrowdUnitJSON = {
 	id:string;
@@ -14,13 +14,13 @@ export type CrowdUnitSpec = {
 export class CrowdUnit {
 	readonly id:string;
 	tags:string[];
-	plan:ActionPlan | null = null;
+	arc:Arc | null = null;
 	verb = '';
 	lawName:string | null = null;
 	generation = 0;
 	stepToken = 0;
 	inflight:Promise<void> | null = null;
-	session:PlanSession | null = null;
+	session:ArcSession | null = null;
 
 	constructor(id:string, tags:string[] = []) {
 		this.id = id;
@@ -32,7 +32,7 @@ export class CrowdUnit {
 			return true;
 		}
 		if (!this.session?.parked) {
-			return this.plan !== null;
+			return this.arc !== null;
 		}
 		if (this.session.running.length > 0) {
 			return true;
@@ -43,7 +43,7 @@ export class CrowdUnit {
 	interrupt():void {
 		this.generation += 1;
 		this.stepToken += 1;
-		this.plan = null;
+		this.arc = null;
 		this.verb = '';
 		this.lawName = null;
 		this.inflight = null;

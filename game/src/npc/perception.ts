@@ -1,6 +1,6 @@
 import {
 	pascalCase,
-	type ActionResult,
+	type ArcResult,
 	type Inventory,
 	type SeenObject,
 	type Sight,
@@ -261,7 +261,7 @@ export function followedCarry(ctx:HostCtx):string {
 	return `${bond.targetID} is carrying: ${items.length > 0 ? items.join(', ') : 'nothing you can see'}.`;
 }
 
-export function doExamine(ctx:HostCtx, name:string):ActionResult {
+export function doExamine(ctx:HostCtx, name:string):ArcResult {
 	const held = findCarried(ctx.actor, (it) => itemMatchesName(it, name));
 	if (held) {
 		return { ok: true, verb: 'examine', reason: JSON.stringify(examineItem(held)) };

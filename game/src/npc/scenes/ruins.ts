@@ -16,7 +16,7 @@ function woundedLaw(captain:string) {
 		name: 'wounded',
 		who: 'units',
 		watch: 'isHurt(me)',
-		plan: `go_to(${captain})`,
+		arc: `go_to(${captain})`,
 		pinned: true,
 	};
 }
@@ -25,7 +25,7 @@ const BIND_LAW = {
 	name: 'bind',
 	who: 'me',
 	watch: 'isHurt(me)',
-	plan: 'heal()',
+	arc: 'heal()',
 	pinned: true,
 };
 
@@ -33,7 +33,7 @@ const MEND_LAW = {
 	name: 'mend',
 	who: 'me',
 	watch: 'some(units.filter(u => isHurt(u)))',
-	plan: 'loop(through=x in units.filter(u => isHurt(u)), plan=heal(x))',
+	arc: 'loop(through=x in units.filter(u => isHurt(u)), arc=heal(x))',
 	pinned: true,
 };
 
@@ -48,8 +48,8 @@ function companyRole(name:string):string {
 		'Your units are fully programmable RTS units: sticky programs, laws, when, loop. You are a unit and the commander; issue() never targets you.',
 		'The enemy shows as Witch, Knight, Archer, Blade, Healer — never given names. Attack those roles, never an outsider\'s name.',
 		'Thinking is dangerous. The enemy is very likely already killing your units while you think. Do not wait for another think. Keep the wounded law. Issue a looping fight program to every unit by YOUR tag (join issue with ;). Never issue(allUnits) a fight — that is one program, so a Witch would slash.',
-		'go_to is not a fight — they walk there and stop. Combat verbs walk into range. The verb matches YOUR tag; the name is an enemy role: issue(who=units.filter("Witch"), plan=loop(hex(Witch) && hex(Healer))). Archer shoot, Knight cleave, Blade slash. who=Blade is your Blade, not the enemy Blade.',
-		'A program that ends is idle in a knife fight. Inside the issued plan, && is the next step after success (the hit landed or the foe is down). Perhaps || another role, or go_to you, if that step fails. loop the chain. Join several issue with ; — never && between issue().',
+		'go_to is not a fight — they walk there and stop. Combat verbs walk into range. The verb matches YOUR tag; the name is an enemy role: issue(who=units.filter("Witch"), arc=loop(hex(Witch) && hex(Healer))). Archer shoot, Knight cleave, Blade slash. who=Blade is your Blade, not the enemy Blade.',
+		'A program that ends is idle in a knife fight. Inside the issued arc, && is the next step after success (the hit landed or the foe is down). Perhaps || another role, or go_to you, if that step fails. loop the chain. Join several issue with ; — never && between issue().',
 		'Hurt troops already have law wounded: isHurt(me) → go_to the commander. You already have bind (heal yourself) and mend (heal hurt troops). Keep them. Never unlaw wounded, bind, or mend.',
 		'smite and heal are yours alone (commander body, arm\'s reach). Never issue smite. Never issue heal. Units cannot smite.',
 	].join(' ');

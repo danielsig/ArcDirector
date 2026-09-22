@@ -1,8 +1,8 @@
-import { formatPlan, parsePlan } from '../action/parse.js';
-import { actionPlanSchema } from '../action/schema.js';
-import type { VerbRegistry } from '../action/registry.js';
-import type { ActionPlan, ActionResult, Step } from '../action/types.js';
-import { ActionError } from '../action/types.js';
+import { formatArc, parseArc } from '../arc/parse.js';
+import { arcSchema } from '../arc/schema.js';
+import type { VerbRegistry } from '../arc/stock-verbs.js';
+import type { Arc, ArcResult, Step } from '../arc/types.js';
+import { ArcError } from '../arc/types.js';
 import { evaluate } from '../expr/eval.js';
 import { observeExpr } from '../expr/stringify.js';
 import type { Catalog, ExprEntity } from '../expr/types.js';
@@ -19,18 +19,18 @@ import {
 	GREP_WORLD_ENCYCLOPEDIA,
 	type EncyclopediaSource,
 } from './encyclopedia.js';
-import { planRepairHint, sayRangeHint, stablePrefix, volatileBlock } from './prompt.js';
+import { arcRepairHint, sayRangeHint, stablePrefix, volatileBlock } from './prompt.js';
 import {
-	runPlan,
+	runArc,
 	deferThinks,
-	createPlanSession,
+	createArcSession,
 	DEFAULT_COOLDOWN,
 	THINK_ABOUT_CAP,
-	type PlanHandler,
-	type PlanSession,
-	type PlanSessionOpts,
+	type ArcHandler,
+	type ArcSession,
+	type ArcSessionOpts,
 } from './run.js';
-import { firstStep } from '../action/types.js';
+import { firstStep } from '../arc/types.js';
 import type { SayTo, TalkNet } from './talk.js';
 import type { AgentEvent, AgentIdentity, Goal, WatchInput, Watches } from './types.js';
 import { waitUntilOf, type MindQueue } from '../think/queue.js';
@@ -44,7 +44,7 @@ import {
 	mergePinnedWatches,
 	watchCount,
 	watchExprs,
-	watchOpsFromPlan,
+	watchOpsFromArc,
 } from './watch.js';
 import {
 	asFocusList,
@@ -76,12 +76,12 @@ export type AgentJSON = {
 	sightFocusWritable?:boolean;
 	maxSightFocus?:number;
 	sightLimit?:number;
-	lastResult?:ActionResult;
-	lastPlan?:ActionPlan;
+	lastResult?:ArcResult;
+	lastArc?:Arc;
 	lastTacticalAt?:number;
 	lastStrategicAt?:number;
 	lastIntrusionAt?:number;
-	livePlan:boolean;
+	liveArc:boolean;
 	maxGoals:number;
 	maxEpisodic:number;
 	recent?:string[];
@@ -100,23 +100,23 @@ export type AgentDeps<HostCtx = unknown> = {
 	senses?:Record<string, Sense<HostCtx>>;
 	tools?:Record<string, ToolSpec<HostCtx>>;
 	context:()=>HostCtx | undefined;
-	execute?:(step:Step, ctx:HostCtx | undefined, actorID?:string)=>Promise<ActionResult>;
-	abortPlan?:(id:string)=>void;
+	execute?:(step:Step, ctx:HostCtx | undefined, actorID?:string)=>Promise<ArcResult>;
+	abortArc?:(id:string)=>void;
 	/** Host cooldown in game seconds after a handler pops or aborts. Default 8. */
 	cooldown?:number;
-	/** When `execute` is set, `tick` runs the plan unless this is false. */
+	/** When `execute` is set, `tick` runs the arc unless this is false. */
 	autoEnact?:boolean;
 	queue?:MindQueue;
-	/** Heartbeat stretch after a plan. Default: failed or interrupted. */
-	stalled?:(result:ActionResult)=>boolean;
+	/** Heartbeat stretch after an arc. Default: failed or interrupted. */
+	stalled?:(result:ArcResult)=>boolean;
 	model?:string;
 	embedModel?:string;
 	heartbeat?:number;
 	toolRoundCap?:number;
-	/** Extra chat turns after a bad plan or a tool call with tools closed. Host sets this; 0 means fail on the first bad reply. */
-	planRetryCap?:number;
-	/** Ask for `go_to() && wait()` text instead of ActionPlan JSON. Testing toggle. Skips the JSON goals pass. */
-	planText?:boolean;
+	/** Extra chat turns after a bad arc or a tool call with tools closed. Host sets this; 0 means fail on the first bad reply. */
+	arcRetryCap?:number;
+	/** Ask for `go_to() && wait()` text instead of Arc JSON. Testing toggle. Skips the JSON goals pass. */
+	arcText?:boolean;
 	/** Standing think line. Omit for {@link DEFAULT_THINK_INSTRUCTIONS}. */
 	thinkInstructions?:string;
 	/** Standing verb-chain line. Omit for {@link DEFAULT_VERB_INSTRUCTIONS}. */
@@ -204,23 +204,23 @@ export class Agent<HostCtx = unknown> {
 	readonly tools:Record<string, ToolSpec<HostCtx>>;
 	readonly provider:InferenceProvider;
 	readonly context:()=>HostCtx | undefined;
-	readonly execute?:(step:Step, ctx:HostCtx | undefined, actorID?:string)=>Promise<ActionResult>;
-	readonly abortPlan?:(id:string)=>void;
+	readonly execute?:(step:Step, ctx:HostCtx | undefined, actorID?:string)=>Promise<ArcResult>;
+	readonly abortArc?:(id:string)=>void;
 	cooldown:number;
 	laws:CrowdLaw[] = [];
 	maxLaws:number;
 	protected defaultLawWho:string;
 	readonly autoEnact:boolean;
-	planSession:PlanSession | null = null;
+	arcSession:ArcSession | null = null;
 	readonly queue:MindQueue | undefined;
-	stalled?:(result:ActionResult)=>boolean;
+	stalled?:(result:ArcResult)=>boolean;
 	model:string;
 	embedModel:string | undefined;
 	heartbeat:number;
 	toolRoundCap:number;
-	planRetryCap:number;
+	arcRetryCap:number;
 	/** Mutable so the Testing toggle can flip live agents. */
-	planText:boolean;
+	arcText:boolean;
 	thinkInstructions:string | undefined;
 	verbInstructions:string | undefined;
 	maxGoals:number;
@@ -246,16 +246,16 @@ export class Agent<HostCtx = unknown> {
 	kit:KitSource<HostCtx> | undefined;
 	private currentKit:Kit = {};
 
-	lastResult:ActionResult | undefined;
-	lastPlan:ActionPlan | undefined;
+	lastResult:ArcResult | undefined;
+	lastArc:Arc | undefined;
 	/** Index of the step currently running inside `enact` (0-based). */
-	planIndex = 0;
+	verbIndex = 0;
 	lastTacticalAt = Number.NEGATIVE_INFINITY;
 	/** Self at last tactical think; spawn freeze until then. */
 	prevMe:ExprEntity | undefined;
 	lastStrategicAt = 0;
 	lastIntrusionAt = Number.NEGATIVE_INFINITY;
-	livePlan = false;
+	liveArc = false;
 	protected now = 0;
 	private readonly pendingEvents:AgentEvent[] = [];
 	private recent:string[] = [];
@@ -277,7 +277,7 @@ export class Agent<HostCtx = unknown> {
 		this.provider = opts.provider;
 		this.context = opts.context;
 		this.execute = opts.execute;
-		this.abortPlan = opts.abortPlan;
+		this.abortArc = opts.abortArc;
 		this.cooldown = opts.cooldown ?? DEFAULT_COOLDOWN;
 		this.maxLaws = opts.maxLaws ?? DEFAULT_MAX_LAWS;
 		this.defaultLawWho = opts.defaultLawWho ?? 'me';
@@ -288,8 +288,8 @@ export class Agent<HostCtx = unknown> {
 		this.embedModel = opts.embedModel;
 		this.heartbeat = opts.heartbeat ?? 30;
 		this.toolRoundCap = opts.toolRoundCap ?? 2;
-		this.planRetryCap = opts.planRetryCap ?? 0;
-		this.planText = opts.planText === true;
+		this.arcRetryCap = opts.arcRetryCap ?? 0;
+		this.arcText = opts.arcText === true;
 		this.thinkInstructions = opts.thinkInstructions;
 		this.verbInstructions = opts.verbInstructions;
 		this.maxGoals = opts.maxGoals ?? 5;
@@ -381,8 +381,8 @@ export class Agent<HostCtx = unknown> {
 		this.laws = dropLaw(this.laws, name);
 	}
 
-	lawHandlers(matches?:(law:CrowdLaw)=>boolean):PlanHandler[] {
-		const out:PlanHandler[] = [];
+	lawHandlers(matches?:(law:CrowdLaw)=>boolean):ArcHandler[] {
+		const out:ArcHandler[] = [];
 		this.laws.forEach((law, i) => {
 			if (matches && !matches(law)) {
 				return;
@@ -390,21 +390,21 @@ export class Agent<HostCtx = unknown> {
 			out.push({
 				key: `law:${law.name}`,
 				watch: law.watch,
-				plan: law.plan,
+				arc: law.arc,
 				rank: i,
 			});
 		});
 		return out;
 	}
 
-	beginLaw(handler:PlanHandler, sessionOpts?:PlanSessionOpts):void {
-		if (this.planSession && (this.livePlan || this.planSession.parked)) {
-			this.planSession.pending = { kind: 'preempt', handler };
-			this.planSession.token += 1;
-			this.abortPlan?.(this.id);
+	beginLaw(handler:ArcHandler, sessionOpts?:ArcSessionOpts):void {
+		if (this.arcSession && (this.liveArc || this.arcSession.parked)) {
+			this.arcSession.pending = { kind: 'preempt', handler };
+			this.arcSession.token += 1;
+			this.abortArc?.(this.id);
 			return;
 		}
-		void this.enact(handler.plan, handler, sessionOpts);
+		void this.enact(handler.arc, handler, sessionOpts);
 	}
 
 	private senseAllowed(name:string):boolean {
@@ -475,14 +475,14 @@ export class Agent<HostCtx = unknown> {
 		}
 	}
 
-	/** Hosts that run the plan themselves still need this for remember / think / set_goal / set_identity. */
-	async perform(step:Step, ctx:HostCtx | undefined = this.context()):Promise<ActionResult> {
+	/** Hosts that run the arc themselves still need this for remember / think / set_goal / set_identity. */
+	async perform(step:Step, ctx:HostCtx | undefined = this.context()):Promise<ArcResult> {
 		return this.runStep(step, ctx);
 	}
 
-	ingestResult(result:ActionResult):void {
+	ingestResult(result:ArcResult):void {
 		this.lastResult = result;
-		this.livePlan = false;
+		this.liveArc = false;
 		if (result.interrupted) {
 			this.pushEvent({
 				kind: 'Interrupted',
@@ -492,7 +492,7 @@ export class Agent<HostCtx = unknown> {
 		}
 		else {
 			this.pushEvent({
-				kind: 'action_result',
+				kind: 'arc_result',
 				text: result.reason ?? (result.ok ? 'ok' : 'failed'),
 				tags: [result.ok ? 'ok' : 'fail'],
 			});
@@ -500,65 +500,65 @@ export class Agent<HostCtx = unknown> {
 		this.syncQueue(result);
 	}
 
-	/** Walk a plan (world verbs via `execute`). Arms wait(until), then notes the queue. */
+	/** Walk an arc (world verbs via `execute`). Arms wait(until), then notes the queue. */
 	async enact(
-		plan:ActionPlan,
-		handler?:PlanHandler,
-		sessionOpts?:PlanSessionOpts,
-	):Promise<ActionResult> {
+		arc:Arc,
+		handler?:ArcHandler,
+		sessionOpts?:ArcSessionOpts,
+	):Promise<ArcResult> {
 		this.replaceProgram();
-		this.livePlan = true;
-		this.planIndex = 0;
-		this.queue?.beginPlan(this.id, plan);
-		const session = createPlanSession({
+		this.liveArc = true;
+		this.verbIndex = 0;
+		this.queue?.beginArc(this.id, arc);
+		const session = createArcSession({
 			now: () => this.now,
 			catalog: () => {
 				const ctx = this.context();
 				return ctx && this.catalog ? this.catalog(ctx) : undefined;
 			},
-			abortHost: () => this.abortPlan?.(this.id),
+			abortHost: () => this.abortArc?.(this.id),
 			...sessionOpts,
 		});
-		this.planSession = session;
+		this.arcSession = session;
 		try {
 			let i = 0;
-			const result = await runPlan(plan, async (step) => {
-				this.planIndex = i;
+			const result = await runArc(arc, async (step) => {
+				this.verbIndex = i;
 				i += 1;
 				const out = await this.runStep(step, this.context());
 				this.lastResult = out;
 				return out;
 			}, { session, asHandler: handler });
-			if (this.planSession !== session) {
+			if (this.arcSession !== session) {
 				return result;
 			}
 			if (session.parked) {
-				this.livePlan = false;
-				this.queue?.endPlan(this.id);
+				this.liveArc = false;
+				this.queue?.endArc(this.id);
 				return result;
 			}
 			this.ingestResult(result);
 			return result;
 		}
 		finally {
-			if (this.planSession === session && !session.parked) {
-				this.livePlan = false;
-				this.planSession = null;
-				this.queue?.endPlan(this.id);
+			if (this.arcSession === session && !session.parked) {
+				this.liveArc = false;
+				this.arcSession = null;
+				this.queue?.endArc(this.id);
 			}
 		}
 	}
 
 	replaceProgram():void {
-		if (this.planSession) {
-			this.planSession.token += 1;
-			this.planSession.pending = { kind: 'abort' };
-			this.planSession.abortHost?.();
+		if (this.arcSession) {
+			this.arcSession.token += 1;
+			this.arcSession.pending = { kind: 'abort' };
+			this.arcSession.abortHost?.();
 		}
-		this.abortPlan?.(this.id);
-		this.planSession = null;
-		this.livePlan = false;
-		this.queue?.endPlan(this.id);
+		this.abortArc?.(this.id);
+		this.arcSession = null;
+		this.liveArc = false;
+		this.queue?.endArc(this.id);
 	}
 
 	async remember(text:string, tags:string[] = [], at = this.now):Promise<MemoryRecord> {
@@ -581,7 +581,7 @@ export class Agent<HostCtx = unknown> {
 		}, at);
 	}
 
-	async tick(gameTime:number):Promise<ActionPlan | null> {
+	async tick(gameTime:number):Promise<Arc | null> {
 		this.now = gameTime;
 		this.refreshKit();
 		this.absorbPending();
@@ -591,7 +591,7 @@ export class Agent<HostCtx = unknown> {
 			return null;
 		}
 		this.queue?.beginThink(this.id);
-		let plan:ActionPlan | null = null;
+		let arc:Arc | null = null;
 		try {
 			if (strategic) {
 				await this.reviseGoals();
@@ -600,9 +600,9 @@ export class Agent<HostCtx = unknown> {
 			if (!tactical) {
 				return null;
 			}
-			plan = await this.tactical();
+			arc = await this.tactical();
 			this.pendingAbout = undefined;
-			this.lastPlan = plan;
+			this.lastArc = arc;
 			this.lastTacticalAt = gameTime;
 			this.capturePrevMe();
 			this.pendingEvents.length = 0;
@@ -616,10 +616,10 @@ export class Agent<HostCtx = unknown> {
 		finally {
 			this.queue?.endThink(this.id);
 		}
-		if (plan && this.execute && this.autoEnact) {
-			await this.enact(plan);
+		if (arc && this.execute && this.autoEnact) {
+			await this.enact(arc);
 		}
-		return plan;
+		return arc;
 	}
 
 	toJSON():AgentJSON {
@@ -638,18 +638,18 @@ export class Agent<HostCtx = unknown> {
 			maxSightFocus: this.maxSightFocus,
 			sightLimit: this.sightLimit,
 			lastResult: this.lastResult ? { ...this.lastResult } : undefined,
-			lastPlan: this.lastPlan,
+			lastArc: this.lastArc,
 			lastTacticalAt: Number.isFinite(this.lastTacticalAt) ? this.lastTacticalAt : undefined,
 			lastStrategicAt: Number.isFinite(this.lastStrategicAt) ? this.lastStrategicAt : undefined,
 			lastIntrusionAt: Number.isFinite(this.lastIntrusionAt) ? this.lastIntrusionAt : undefined,
-			livePlan: this.livePlan,
+			liveArc: this.liveArc,
 			maxGoals: this.maxGoals,
 			maxEpisodic: this.memory.maxEpisodic,
 			recent: [...this.recent],
 			recentSummary: this.recentSummary || undefined,
 			thinkAbout: this.pendingAbout,
 			lastVerb: this.lastVerb,
-			laws: this.laws.map((s) => ({ ...s, plan: s.plan })),
+			laws: this.laws.map((s) => ({ ...s, arc: s.arc })),
 			maxLaws: this.maxLaws,
 			cooldown: this.cooldown,
 			prevMe: this.prevMe ? cloneEntity(this.prevMe) : undefined,
@@ -676,11 +676,11 @@ export class Agent<HostCtx = unknown> {
 		this.memory.maxEpisodic = json.maxEpisodic;
 		this.maxGoals = json.maxGoals;
 		this.lastResult = json.lastResult;
-		this.lastPlan = json.lastPlan;
+		this.lastArc = json.lastArc;
 		this.lastTacticalAt = json.lastTacticalAt ?? Number.NEGATIVE_INFINITY;
 		this.lastStrategicAt = json.lastStrategicAt ?? 0;
 		this.lastIntrusionAt = json.lastIntrusionAt ?? Number.NEGATIVE_INFINITY;
-		this.livePlan = json.livePlan;
+		this.liveArc = json.liveArc;
 		const hostPins = asWatches(deps?.pinnedWatches);
 		const jsonPins = asWatches(json.pinnedWatches);
 		this.pinnedWatches = mergePinnedWatches(hostPins, jsonPins);
@@ -749,7 +749,7 @@ export class Agent<HostCtx = unknown> {
 	}
 
 	private async reviseGoals():Promise<void> {
-		if (this.planText) {
+		if (this.arcText) {
 			return;
 		}
 		const system = stablePrefix(this.identity, this.activeVerbs(), {
@@ -759,7 +759,7 @@ export class Agent<HostCtx = unknown> {
 			youSymbol: this.youSymbol(),
 			thinkInstructions: this.thinkInstructions,
 			verbInstructions: this.verbInstructions,
-			omitPlan: true,
+			omitArc: true,
 		});
 		const user = `${volatileBlock({
 			goals: this.goals,
@@ -809,8 +809,8 @@ export class Agent<HostCtx = unknown> {
 		}
 		const lines = this.laws.map((law) => (
 			this.crowdLawWho()
-				? `- ${law.name}: who=${law.who} watch=${law.watch} → ${formatPlan(law.plan)}`
-				: `- ${law.name}: watch=${law.watch} → ${formatPlan(law.plan)}`
+				? `- ${law.name}: who=${law.who} watch=${law.watch} → ${formatArc(law.arc)}`
+				: `- ${law.name}: watch=${law.watch} → ${formatArc(law.arc)}`
 		));
 		return `Laws (emergencies, list order; unlaw to drop):\n${lines.join('\n')}`;
 	}
@@ -870,7 +870,7 @@ export class Agent<HostCtx = unknown> {
 		}), this.extraVolatile()].filter(Boolean).join('\n\n');
 	}
 
-	private parsePlanContent(content:string, verbs:VerbRegistry):{ plan:ActionPlan; raw:unknown } | null {
+	private parseArcContent(content:string, verbs:VerbRegistry):{ arc:Arc; raw:unknown } | null {
 		try {
 			const trimmed = content.trim();
 			if (!trimmed) {
@@ -879,34 +879,34 @@ export class Agent<HostCtx = unknown> {
 			const raw = (trimmed.startsWith('{') || trimmed.startsWith('```'))
 				? extractJson(trimmed)
 				: trimmed;
-			const plan = deferThinks(parsePlan(raw, verbs));
-			if (!firstStep(plan)?.verb) {
+			const arc = deferThinks(parseArc(raw, verbs));
+			if (!firstStep(arc)?.verb) {
 				return null;
 			}
-			return { plan, raw };
+			return { arc, raw };
 		}
 		catch {
 			return null;
 		}
 	}
 
-	private async settleLivePlan(
-		plan:ActionPlan,
+	private async settleLiveArc(
+		arc:Arc,
 		firstContent:string | null,
 		messages:ChatMessage[],
 		verbs:VerbRegistry,
 		liveVerbAtThink:string | undefined,
 		sendTools:boolean,
 		tools:ToolDef[],
-	):Promise<ActionPlan> {
-		if (!liveVerbAtThink || !this.livePlan || this.lastVerb === liveVerbAtThink) {
-			return plan;
+	):Promise<Arc> {
+		if (!liveVerbAtThink || !this.liveArc || this.lastVerb === liveVerbAtThink) {
+			return arc;
 		}
 		this.absorbPending();
 		const sensed = this.gatherSensed();
-		const form = this.planText ? 'ActionPlan text' : 'ActionPlan JSON';
+		const form = this.arcText ? 'Arc text' : 'Arc JSON';
 		const hint = `While you thought, the live verb changed from ${liveVerbAtThink} to ${this.lastVerb}. `
-			+ `Do not think again. Emit a new ${form} if that changes your choices, or confirm the plan you already wrote.`;
+			+ `Do not think again. Emit a new ${form} if that changes your choices, or confirm the arc you already wrote.`;
 		messages.push({ role: 'assistant', content: firstContent });
 		messages.push({ role: 'user', content: this.volatileUser(sensed, hint) });
 		const res = await this.provider.chat({
@@ -915,29 +915,29 @@ export class Agent<HostCtx = unknown> {
 			messages,
 			tools: sendTools ? tools : undefined,
 			toolChoice: sendTools ? 'none' : undefined,
-			responseFormat: this.planText
+			responseFormat: this.arcText
 				? undefined
-				: { name: 'action_plan', schema: actionPlanSchema(verbs), strict: false },
+				: { name: 'arc', schema: arcSchema(verbs), strict: false },
 			temperature: 0,
 			fakeThought: true,
 		});
 		if (res.toolCalls.length > 0 || !res.content) {
-			return plan;
+			return arc;
 		}
-		const parsed = this.parsePlanContent(res.content, verbs);
+		const parsed = this.parseArcContent(res.content, verbs);
 		if (!parsed) {
-			return plan;
+			return arc;
 		}
 		if (typeof parsed.raw !== 'string') {
 			this.applyMind(parsed.raw);
 		}
-		return parsed.plan;
+		return parsed.arc;
 	}
 
-	private async tactical():Promise<ActionPlan> {
+	private async tactical():Promise<Arc> {
 		const ctx = this.context();
 		this.refreshKit();
-		const liveVerbAtThink = this.livePlan ? this.lastVerb : undefined;
+		const liveVerbAtThink = this.liveArc ? this.lastVerb : undefined;
 		const sensed = this.gatherSensed();
 		const verbs = this.activeVerbs();
 		const tools = this.toolDefs();
@@ -949,7 +949,7 @@ export class Agent<HostCtx = unknown> {
 			canSeeMap: this.seeMapOn() && this.toolAllowed('see_map'),
 			canGrepEncyclopedia: this.encyclopediaOn() && this.toolAllowed(GREP_WORLD_ENCYCLOPEDIA),
 			youSymbol: this.youSymbol(),
-			planText: this.planText,
+			arcText: this.arcText,
 			thinkInstructions: this.thinkInstructions,
 			verbInstructions: this.verbInstructions,
 			tools: toolNames,
@@ -960,10 +960,10 @@ export class Agent<HostCtx = unknown> {
 			{ role: 'user', content: user },
 		];
 		let toolsLeft = tools.length === 0 ? 0 : this.toolRoundCap + seeMapBoost;
-		let repairsLeft = this.planRetryCap;
-		let rangeLeft = this.talk ? Math.max(1, this.planRetryCap) : 0;
+		let repairsLeft = this.arcRetryCap;
+		let rangeLeft = this.talk ? Math.max(1, this.arcRetryCap) : 0;
 		let lastErr:Error | null = null;
-		const budget = this.toolRoundCap + seeMapBoost + this.planRetryCap + 1 + (this.talk ? 1 : 0);
+		const budget = this.toolRoundCap + seeMapBoost + this.arcRetryCap + 1 + (this.talk ? 1 : 0);
 		for (let turn = 0; turn < budget; turn++) {
 			const allowTools = toolsLeft > 0 && tools.length > 0;
 			const res = await this.provider.chat({
@@ -972,9 +972,9 @@ export class Agent<HostCtx = unknown> {
 				messages,
 				tools: sendTools ? tools : undefined,
 				toolChoice: sendTools ? (allowTools ? 'auto' : 'none') : undefined,
-				responseFormat: allowTools || this.planText
+				responseFormat: allowTools || this.arcText
 					? undefined
-					: { name: 'action_plan', schema: actionPlanSchema(verbs), strict: false },
+					: { name: 'arc', schema: arcSchema(verbs), strict: false },
 				temperature: 0,
 			});
 			if (res.toolCalls.length > 0 && allowTools) {
@@ -1005,7 +1005,7 @@ export class Agent<HostCtx = unknown> {
 				continue;
 			}
 			if (res.toolCalls.length > 0) {
-				lastErr = new ActionError('model called a tool when it must emit an ActionPlan');
+				lastErr = new ArcError('model called a tool when it must emit an Arc');
 				if (!this.pushRepair(messages, res, lastErr, repairsLeft, toolNames)) {
 					throw lastErr;
 				}
@@ -1013,39 +1013,39 @@ export class Agent<HostCtx = unknown> {
 				continue;
 			}
 			if (res.content) {
-				let plan:ActionPlan;
+				let arc:Arc;
 				let raw:unknown;
 				try {
 					const trimmed = res.content.trim();
 					raw = (trimmed.startsWith('{') || trimmed.startsWith('```'))
 						? extractJson(trimmed)
 						: trimmed;
-					plan = deferThinks(parsePlan(raw, verbs));
+					arc = deferThinks(parseArc(raw, verbs));
 				}
 				catch (err) {
-					lastErr = err instanceof Error ? err : new ActionError(String(err));
+					lastErr = err instanceof Error ? err : new ArcError(String(err));
 					if (!this.pushRepair(messages, res, lastErr, repairsLeft, toolNames)) {
 						throw lastErr;
 					}
 					repairsLeft -= 1;
 					continue;
 				}
-				const blocked = this.unreachableSay(plan);
+				const blocked = this.unreachableSay(arc);
 				if (blocked) {
-					lastErr = new ActionError(blocked.reason);
+					lastErr = new ArcError(blocked.reason);
 					if (rangeLeft <= 0) {
 						throw lastErr;
 					}
 					rangeLeft -= 1;
 					messages.push({ role: 'assistant', content: res.content });
-					messages.push({ role: 'user', content: sayRangeHint(blocked.reason, blocked.nearby, this.planText) });
+					messages.push({ role: 'user', content: sayRangeHint(blocked.reason, blocked.nearby, this.arcText) });
 					continue;
 				}
 				if (typeof raw !== 'string') {
 					this.applyMind(raw);
 				}
-				return this.settleLivePlan(
-					plan,
+				return this.settleLiveArc(
+					arc,
 					res.content,
 					messages,
 					verbs,
@@ -1054,13 +1054,13 @@ export class Agent<HostCtx = unknown> {
 					tools,
 				);
 			}
-			lastErr = new ActionError('model returned no plan');
+			lastErr = new ArcError('model returned no arc');
 			if (!this.pushRepair(messages, res, lastErr, repairsLeft, toolNames)) {
 				throw lastErr;
 			}
 			repairsLeft -= 1;
 		}
-		throw lastErr ?? new ActionError('failed to obtain ActionPlan');
+		throw lastErr ?? new ArcError('failed to obtain Arc');
 	}
 
 	private pushRepair(
@@ -1078,7 +1078,7 @@ export class Agent<HostCtx = unknown> {
 			?? (called.length > 0 ? `(tool call: ${called.join(', ')})` : '');
 		const dropProse = !/^\s*[{`]/.test(shown) && !shown.includes('(');
 		messages.push({ role: 'assistant', content: dropProse ? null : (shown || null) });
-		messages.push({ role: 'user', content: planRepairHint(err.message, this.planText, toolNames) });
+		messages.push({ role: 'user', content: arcRepairHint(err.message, this.arcText, toolNames) });
 		return true;
 	}
 
@@ -1168,7 +1168,7 @@ export class Agent<HostCtx = unknown> {
 			if (!text) {
 				continue;
 			}
-			if (e.kind === 'action_result') {
+			if (e.kind === 'arc_result') {
 				if (isBareResult(text)) {
 					continue;
 				}
@@ -1291,7 +1291,7 @@ export class Agent<HostCtx = unknown> {
 		if (raw.watches !== undefined) {
 			this.watches = extrasWithoutPins(asWatches(raw.watches), this.pinnedWatches);
 		}
-		const ops = watchOpsFromPlan(raw);
+		const ops = watchOpsFromArc(raw);
 		if (watchCount(ops.add) === 0 && watchCount(ops.edit) === 0 && ops.remove.length === 0) {
 			return;
 		}
@@ -1458,7 +1458,7 @@ export class Agent<HostCtx = unknown> {
 		}
 		if (this.talk && !tools.earshot) {
 			tools.earshot = {
-				description: 'Who you can say(to) right now. Pass to to check one name before you plan a say. Out of range: error, no speech; go_to them first. Omit to to list everyone in range.',
+				description: 'Who you can say(to) right now. Pass to to check one name before you arc a say. Out of range: error, no speech; go_to them first. Omit to to list everyone in range.',
 				parameters: {
 					type: 'object',
 					additionalProperties: false,
@@ -1586,8 +1586,8 @@ export class Agent<HostCtx = unknown> {
 		return undefined;
 	}
 
-	private unreachableSay(plan:ActionPlan):{ reason:string; nearby:string[] } | undefined {
-		const head = firstStep(plan);
+	private unreachableSay(arc:Arc):{ reason:string; nearby:string[] } | undefined {
+		const head = firstStep(arc);
 		if (!this.talk || head?.verb !== 'say') {
 			return undefined;
 		}
@@ -1698,7 +1698,7 @@ export class Agent<HostCtx = unknown> {
 		}
 	}
 
-	private runThink(step:Step):ActionResult {
+	private runThink(step:Step):ArcResult {
 		if (this.lastVerb === 'think') {
 			return {
 				ok: false,
@@ -1715,7 +1715,7 @@ export class Agent<HostCtx = unknown> {
 		return { ok: true, verb: 'think' };
 	}
 
-	private syncQueue(result:ActionResult):void {
+	private syncQueue(result:ArcResult):void {
 		if (!this.queue) {
 			return;
 		}
@@ -1723,12 +1723,12 @@ export class Agent<HostCtx = unknown> {
 			? this.stalled(result)
 			: !result.ok || !!result.interrupted;
 		this.queue.noteResult(this.id, stalled);
-		if (!result.interrupted && this.lastPlan) {
-			this.queue.enqueuePlan(this.id, this.lastPlan, result.ok);
+		if (!result.interrupted && this.lastArc) {
+			this.queue.enqueueArc(this.id, this.lastArc, result.ok);
 		}
 	}
 
-	private async runStep(step:Step, ctx:HostCtx | undefined):Promise<ActionResult> {
+	private async runStep(step:Step, ctx:HostCtx | undefined):Promise<ArcResult> {
 		this.refreshKit();
 		if (!this.activeVerbs().has(step.verb)) {
 			return { ok: false, verb: step.verb, reason: `verb '${step.verb}' is not available` };

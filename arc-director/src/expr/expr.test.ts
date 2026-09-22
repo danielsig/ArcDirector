@@ -89,7 +89,7 @@ describe('parse', () => {
 		assert.ok(parse('a ? b : c'));
 		assert.ok(parse('x ?? y'));
 		assert.ok(parse('p => p is "key"'));
-		assert.ok(parse('matches(first(prev.actions).reason, "locked|blocked")'));
+		assert.ok(parse('matches(first(prev.verbs).reason, "locked|blocked")'));
 	});
 
 	it('desugars extension calls', () => {

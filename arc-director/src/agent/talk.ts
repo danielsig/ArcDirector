@@ -1,4 +1,4 @@
-import type { ActionResult } from '../action/types.js';
+import type { ArcResult } from '../arc/types.js';
 import type { AgentEvent } from './types.js';
 
 /** A mind that can receive speech. The library never sees coordinates. */
@@ -280,7 +280,7 @@ export class TalkNet {
 	/**
 	 * Whether `say` would deliver. Does not speak. Directed `to` must be in
 	 * range; a broadcast needs at least one listener. Use this before committing
-	 * a say plan, or from the `earshot` tool.
+	 * a say arc, or from the `earshot` tool.
 	 */
 	canSay(speakerID:string, to?:SayTo):{ ok:boolean; reason?:string; nearby:string[] } {
 		const nearby = this.nearby(speakerID);
@@ -302,7 +302,7 @@ export class TalkNet {
 		return { ok: true, nearby };
 	}
 
-	say(speakerID:string, text:string, to?:SayTo, at = 0):ActionResult {
+	say(speakerID:string, text:string, to?:SayTo, at = 0):ArcResult {
 		const spoken = text.trim();
 		if (!spoken) {
 			return { ok: false, verb: 'say', reason: 'nothing to say' };

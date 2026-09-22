@@ -1,4 +1,4 @@
-import type { ActionResult } from '../action/types.js';
+import type { ArcResult } from '../arc/types.js';
 import type { Agent } from '../agent/agent.js';
 import type { AgentIdentity, Goal, KitSource, WatchInput } from '../agent/types.js';
 import type { MemoryDraft } from '../memory/store.js';
@@ -35,7 +35,7 @@ export type AgentSpec<HostCtx = unknown> = {
 		name?:string;
 		who?:string;
 		watch:string;
-		plan:import('../action/types.js').ActionPlan | string;
+		arc:import('../arc/types.js').Arc | string;
 		pinned?:boolean;
 	}[];
 	maxLaws?:number;
@@ -56,7 +56,7 @@ export type VerbCall<HostCtx = unknown> = {
 
 export type VerbHandler<HostCtx = unknown> = (
 	call:VerbCall<HostCtx>,
-)=>ActionResult | Promise<ActionResult>;
+)=>ArcResult | Promise<ArcResult>;
 
 export type DirectorLog = {
 	name:string;
