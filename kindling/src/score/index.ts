@@ -1,10 +1,12 @@
 import { instrumentOf, type InstrumentEnvelope } from '../audio/instruments.js';
 import { scoreProblems } from '../audio/midi.js';
-import type { Note, Score, Voice } from '../audio/types.js';
+import type { Note, Score, SoundFilter, Voice } from '../audio/types.js';
 import '../audio/synth.js';
 
 export { registerInstrument, type InstrumentEnvelope, type InstrumentPlay } from '../audio/instruments.js';
 export { pad, pluck, lead, bass, bell, drum, air, piano } from '../audio/synth.js';
+export { overdrive, reverb } from '../audio/filters.js';
+export type { OverdriveFilter, ReverbFilter, SoundFilter } from '../audio/types.js';
 
 const STEP:Record<string, number> = { c: 0, d: 2, e: 4, f: 5, g: 7, a: 9, b: 11 };
 
@@ -57,6 +59,7 @@ export type Track = ((...args:CallArg[]) => Part) & {
 	transpose?:number;
 	dynamic?:Dyn;
 	envelope?:InstrumentEnvelope;
+	filters?:SoundFilter[];
 };
 type CallArg = Matter | Mark | Matter[];
 type Playback = {
@@ -424,6 +427,8 @@ export type TrackOpts = {
 	dynamic?:Dyn;
 	/** Override the instrument: `sustaining` rides dim/cres on a held note. */
 	envelope?:InstrumentEnvelope;
+	/** Insert on this track (`overdrive()`, `reverb()`). Series, first to last. */
+	filters?:SoundFilter[];
 };
 
 /** A track is one lane of an instrument (gain, cutoff, transpose, dynamic, envelope). Two `track()` calls are two tracks even if the instrument matches. Same track twice in one bar overlays (both start at the bar’s downbeat). Sequential notes live in one call, or offset with `r:`. */
@@ -435,6 +440,7 @@ export function track(src:{ instrument:string }, opts:TrackOpts = {}):Track {
 	out.transpose = opts.transpose;
 	out.dynamic = opts.dynamic;
 	out.envelope = opts.envelope;
+	out.filters = opts.filters;
 	return out;
 }
 
@@ -713,7 +719,10 @@ function flatten(events:Event[]):{ bars:Bar[]; cues:{ beat:number; fn:()=>void }
 }
 
 /** Compile bars into a looping `Score`. `loops` is `-1` (forever, default) or a count. `callback(fn)` in the event list runs at that beat. Throws if an instrument is unknown or a part overruns its bar. */
-export function piece(opts:{ bpm:number; gain?:number; id?:string; loops?:number }, events:Event[]):Score {
+export function piece(
+	opts:{ bpm:number; gain?:number; id?:string; loops?:number; filters?:SoundFilter[] },
+	events:Event[],
+):Score {
 	const loops = opts.loops ?? -1;
 	if (loops !== -1 && !(Number.isInteger(loops) && loops > 0)) {
 		throw new Error('loops');
@@ -760,6 +769,7 @@ export function piece(opts:{ bpm:number; gain?:number; id?:string; loops?:number
 			notes: ride ? tieSustain(notes) : notes,
 			gain: track.gain,
 			cutoff: track.cutoff,
+			...(track.filters?.length ? { filters: track.filters } : {}),
 		});
 	}
 	const score:Score = {
@@ -770,6 +780,7 @@ export function piece(opts:{ bpm:number; gain?:number; id?:string; loops?:number
 		id: opts.id,
 		...(loops !== -1 ? { loops } : {}),
 		...(cues.length ? { cues } : {}),
+		...(opts.filters?.length ? { filters: opts.filters } : {}),
 	};
 	const bad = scoreProblems(score);
 	if (bad.length) {

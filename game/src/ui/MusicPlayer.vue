@@ -21,11 +21,14 @@ let raf = 0;
 const TITLES:Record<string, string> = {
 	pretty_harm: 'Harmonics',
 	menu_orch: 'Menu',
+	heros_path: "Hero's Path",
 	menu: 'Hymn',
 	abbey_vault: 'Abbey Vault',
 	glen: 'River Glen',
 	marketplace: 'Marketplace',
+	heros_tale: "Hero's Tale",
 	ruins: 'Ruin Fight',
+	heros_might: "Hero's Might",
 };
 
 function isTyping(target:EventTarget | null):boolean {
@@ -43,14 +46,14 @@ function isTyping(target:EventTarget | null):boolean {
 
 function snap():void {
 	const a = props.audio;
-	const score = a?.playing ?? null;
+	const music = a?.music ?? null;
 	if (!dragging.value) {
 		beat.value = a?.musicBeat() ?? 0;
 	}
-	loop.value = score?.loop ?? 0;
-	bpm.value = score?.bpm ?? 0;
-	title.value = score?.id ? (TITLES[score.id] ?? score.id) : '—';
-	paused.value = !score || !!a?.musicPaused;
+	loop.value = music?.loop ?? 0;
+	bpm.value = music?.bpm ?? 0;
+	title.value = music?.id ? (TITLES[music.id] ?? music.id) : '—';
+	paused.value = !music || !!a?.musicPaused;
 }
 
 function setOpen(next:boolean):void {
@@ -67,13 +70,13 @@ function toggleOpen():void {
 
 async function togglePlay():Promise<void> {
 	const a = props.audio;
-	const first = !a?.playing;
+	const first = !a?.music;
 	props.kick?.();
 	if (!a) {
 		return;
 	}
 	await a.resume();
-	if (first || !a.playing) {
+	if (first || !a.music) {
 		return;
 	}
 	if (a.musicPaused) {
@@ -91,7 +94,7 @@ function restart():void {
 
 function skip(delta:number):void {
 	const a = props.audio;
-	if (!a?.playing) {
+	if (!a?.music) {
 		props.kick?.();
 		return;
 	}
@@ -100,7 +103,7 @@ function skip(delta:number):void {
 
 function onSeek(ev:Event):void {
 	const a = props.audio;
-	if (!a?.playing) {
+	if (!a?.music) {
 		return;
 	}
 	const value = Number((ev.target as HTMLInputElement).value);

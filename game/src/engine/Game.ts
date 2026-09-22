@@ -21,7 +21,7 @@ import { Session } from './Session';
 import { applyWorld, loadSave } from './gameSave';
 import { loadViewPose } from './viewPersist';
 import { readURLFlags } from './urlView';
-import { songForScene } from '../audio/songs';
+import { startSceneMusic } from '../audio/songs';
 import { syncWaterAudio } from '../audio/water';
 
 const AUTOSAVE_ENABLED = false;
@@ -153,7 +153,7 @@ export class Game extends KindlingGame<World> {
 		if (this.canvas) {
 			this.world.audio.connectUnlock(this.canvas);
 		}
-		this.world.audio.playMusic(songForScene(this.scene.id));
+		startSceneMusic(this.world.audio, this.scene.id);
 		void this.world.audio.resume();
 		void this.loadArt();
 	}

@@ -1,3 +1,4 @@
+import { createFilterChain, createReverbSend, filterProblems, openScoreFilters } from './filters.js';
 import { scoreProblems } from './midi.js';
 import { distanceGain, forceStereo, makePanner, placePanner, poseListener } from './spatial.js';
 import { makeNoise, playLayer, playVoiceNote, startLoopLayers, type LoopNodes } from './synth.js';
@@ -16,6 +17,39 @@ const HEAR = 22;
 const AHEAD = 0.008;
 /** First beat after play/resume. Lets the context wake so beat 0 is not skipped. */
 const START_LEAD = 0.18;
+
+function wrap(value:number, span:number):number {
+	if (!(span > 0)) {
+		return 0;
+	}
+	const w = value % span;
+	return w < 0 ? w + span : w;
+}
+
+/**
+ * Where a recording playhead sits. `position` is the unwrapped start plus
+ * elapsed seconds. Playback runs up to `loopEnd`, then jumps to `loopStart`.
+ */
+export function placeRecording(position:number, loopStart:number, loopEnd:number):number {
+	if (!(loopEnd > 0)) {
+		return 0;
+	}
+	if (position < loopEnd) {
+		return position < 0 ? 0 : position;
+	}
+	const span = loopEnd - loopStart;
+	if (!(span > 0)) {
+		return loopStart;
+	}
+	let into = (position - loopEnd) % span;
+	if (into < 0) {
+		into += span;
+	}
+	if (into > span - 1e-4) {
+		into = 0;
+	}
+	return loopStart + into;
+}
 
 /** True when a note should be sent to Web Audio this frame. */
 export function noteIsDue(t:number, now:number, lookahead = LOOKAHEAD):boolean {
@@ -39,7 +73,10 @@ type LoopVoice = {
 	panner:PannerNode;
 	dist:GainNode;
 	voice:LoopNodes | null;
-	local:GainNode | null;
+	local:AudioNode | null;
+	/** Per-voice insert, when that voice lists filters. Otherwise notes use `local`. */
+	voiceDest:AudioNode[] | null;
+	release:()=>void;
 	origin:number;
 	clockDirty:boolean;
 	scheduled:Set<string>;
@@ -48,7 +85,9 @@ type LoopVoice = {
 };
 
 /**
- * Procedural mixer. No samples. Headless (no AudioContext) is a silent no-op.
+ * Mixer. Scores are procedural. `playRecording` plays a finished file on the
+ * music output, dry, so a mastered track is not sent through the synth room.
+ * Headless (no AudioContext) is a silent no-op.
  *
  * ```ts
  * world.audio.connectUnlock(canvas);
@@ -74,10 +113,27 @@ export class Audio {
 	private musicGain:GainNode | null = null;
 	private sfxGain:GainNode | null = null;
 	private musicBus:GainNode | null = null;
+	/** Where score notes connect. Filter input when the score lists filters, else the bus. */
+	private noteDest:AudioNode | null = null;
+	private voiceDest:AudioNode[] | null = null;
+	private filterNodes:AudioNode[] = [];
 	private musicDry:GainNode | null = null;
 	private musicWetIn:AudioNode | null = null;
 	private noise:AudioBuffer | null = null;
 	private score:Score | null = null;
+	/** Finished file on the music output. Loops. Not sent through the synth room. */
+	private recording:AudioBufferSourceNode | null = null;
+	private recordingBuffer:AudioBuffer | null = null;
+	private recordingGain = 1;
+	private recordingToken = 0;
+	private recordingOffset = 0;
+	private recordingOrigin = 0;
+	private recordingID:string | null = null;
+	/** Seconds. 0 means the start of the file. */
+	private recordingLoopStart = 0;
+	/** Seconds. 0 means the end of the file. */
+	private recordingLoopEnd = 0;
+	private pendingRecording:{ bytes:ArrayBuffer; gain:number } | null = null;
 	private origin = 0;
 	private musicHold = 0;
 	private pausedMusic = false;
@@ -109,12 +165,37 @@ export class Audio {
 		return this.score;
 	}
 
+	/**
+	 * What the transport is driving. A recording uses 60 BPM so one beat is one
+	 * second and `loop` is where playback jumps back (`end`, or the file length).
+	 */
+	get music():{ id:string; bpm:number; loop:number } | null {
+		if (this.score) {
+			return {
+				id: this.score.id ?? '',
+				bpm: this.score.bpm,
+				loop: this.score.loop,
+			};
+		}
+		if (!this.recordingID) {
+			return null;
+		}
+		return {
+			id: this.recordingID,
+			bpm: 60,
+			loop: this.recordingBounds().end,
+		};
+	}
+
 	get musicPaused():boolean {
 		return this.pausedMusic;
 	}
 
 	/** Beats from loop start, in `[0, loop)`. */
 	musicBeat():number {
+		if (this.recordingID) {
+			return this.recordingSec();
+		}
 		const score = this.score;
 		if (!score) {
 			return 0;
@@ -126,6 +207,16 @@ export class Audio {
 	}
 
 	pauseMusic():void {
+		if (this.recordingID) {
+			if (this.pausedMusic) {
+				return;
+			}
+			this.recordingOffset = this.recordingSec();
+			this.pausedMusic = true;
+			this.releaseRecordingNode();
+			this.applyMix(true);
+			return;
+		}
 		if (!this.score || this.pausedMusic) {
 			return;
 		}
@@ -135,6 +226,16 @@ export class Audio {
 	}
 
 	unpauseMusic():void {
+		if (this.recordingID) {
+			if (!this.pausedMusic) {
+				return;
+			}
+			this.pausedMusic = false;
+			this.startRecordingNode();
+			this.applyMix(true);
+			this.armPump();
+			return;
+		}
 		if (!this.score || !this.pausedMusic) {
 			return;
 		}
@@ -147,6 +248,15 @@ export class Audio {
 	}
 
 	seekMusic(beat:number):void {
+		if (this.recordingID) {
+			const { end } = this.recordingBounds();
+			this.recordingOffset = end > 0 ? wrap(beat, end) : 0;
+			if (!this.pausedMusic) {
+				this.releaseRecordingNode();
+				this.startRecordingNode();
+			}
+			return;
+		}
 		const score = this.score;
 		if (!score) {
 			return;
@@ -189,6 +299,7 @@ export class Audio {
 		this.applyMix(true);
 		this.armPendingLoops();
 		this.flushPendingSfx();
+		this.flushPendingRecording();
 		if (this.score && this.clockDirty) {
 			this.armClock();
 		}
@@ -214,11 +325,62 @@ export class Audio {
 		return off;
 	}
 
+	/**
+	 * Loop a finished recording on the music output (volume, mute, duck).
+	 * Dry: it does not pass through the synth room. A string is fetched;
+	 * an `ArrayBuffer` is decoded. Headless queues nothing audible.
+	 *
+	 * Playback starts at 0. It runs until `loop.end` (default: the end of the
+	 * file), then jumps to `loop.start` (default: 0) and repeats that span.
+	 */
+	async playRecording(
+		src:string | ArrayBuffer,
+		gain = 1,
+		id = 'recording',
+		loop?:{ start?:number; end?:number },
+	):Promise<void> {
+		const token = ++this.recordingToken;
+		this.pendingRecording = null;
+		this.releaseRecordingNode();
+		this.recordingBuffer = null;
+		this.recordingOffset = 0;
+		this.recordingLoopStart = loop?.start ?? 0;
+		this.recordingLoopEnd = loop?.end ?? 0;
+		this.recordingID = id;
+		this.score = null;
+		this.pausedMusic = false;
+		this.musicHold = 0;
+		this.clockDirty = true;
+		this.firedCues.clear();
+		this.cutMusicVoices();
+		const ctx = this.ensure();
+		let bytes:ArrayBuffer;
+		if (typeof src === 'string') {
+			const res = await fetch(src);
+			if (!res.ok) {
+				throw new Error(`recording: HTTP ${res.status}`);
+			}
+			bytes = await res.arrayBuffer();
+		}
+		else {
+			bytes = src.slice(0);
+		}
+		if (token !== this.recordingToken) {
+			return;
+		}
+		if (!ctx) {
+			this.pendingRecording = { bytes, gain };
+			return;
+		}
+		await this.attachRecording(ctx, bytes, gain, token);
+	}
+
 	playMusic(score:Score):void {
 		const bad = scoreProblems(score);
 		if (bad.length) {
 			throw new Error(`${score.id ?? 'score'}: ${bad.join(', ')}`);
 		}
+		this.stopRecording();
 		const ctx = this.ensure();
 		this.score = score;
 		this.pausedMusic = false;
@@ -262,6 +424,7 @@ export class Audio {
 		}
 		this.scheduled.clear();
 		this.pruneCycle = -1;
+		this.releaseMusicFilters();
 		if (!ctx || !this.musicDry || !this.musicWetIn) {
 			this.musicBus = null;
 			return;
@@ -271,6 +434,56 @@ export class Audio {
 		bus.connect(this.musicDry);
 		bus.connect(this.musicWetIn);
 		this.musicBus = bus;
+		this.noteDest = bus;
+		const score = this.score;
+		if (score) {
+			const opened = openScoreFilters(ctx, score, bus);
+			if (opened) {
+				this.noteDest = opened.input;
+				this.voiceDest = opened.voiceDest;
+				this.filterNodes = opened.nodes;
+			}
+		}
+	}
+
+	private releaseMusicFilters():void {
+		for (const node of this.filterNodes) {
+			try {
+				node.disconnect();
+			}
+			catch {
+				// already gone
+			}
+		}
+		this.filterNodes = [];
+		this.noteDest = null;
+		this.voiceDest = null;
+	}
+
+	private insertPatchFilters(ctx:AudioContext, dest:AudioNode, patch:SfxPatch, when:number):AudioNode {
+		if (!patch.filters || patch.filters.length === 0) {
+			return dest;
+		}
+		const chain = createFilterChain(ctx, patch.filters);
+		chain.output.connect(dest);
+		let hold = 0.2;
+		for (const layer of patch.layers) {
+			hold = Math.max(hold, (layer.when ?? 0) + layer.dur);
+		}
+		const due = when + hold + 1.6;
+		const fire = ():void => {
+			if (ctx.state === 'closed') {
+				return;
+			}
+			const wait = due - ctx.currentTime;
+			if (wait > 0.05) {
+				setTimeout(fire, wait * 1000);
+				return;
+			}
+			chain.disconnect();
+		};
+		setTimeout(fire, Math.max(0, due - ctx.currentTime) * 1000);
+		return chain.input;
 	}
 
 	private armClock():void {
@@ -284,7 +497,117 @@ export class Audio {
 		this.clockDirty = false;
 	}
 
+	private stopRecording():void {
+		this.recordingToken += 1;
+		this.pendingRecording = null;
+		this.recordingBuffer = null;
+		this.recordingOffset = 0;
+		this.recordingLoopStart = 0;
+		this.recordingLoopEnd = 0;
+		this.recordingID = null;
+		this.releaseRecordingNode();
+	}
+
+	/** Playable span. `end` is 0 until a buffer is decoded. */
+	private recordingBounds():{ start:number; end:number } {
+		const dur = this.recordingBuffer?.duration ?? 0;
+		if (!(dur > 0)) {
+			return { start: 0, end: 0 };
+		}
+		let end = this.recordingLoopEnd > 0 ? Math.min(this.recordingLoopEnd, dur) : dur;
+		let start = this.recordingLoopStart;
+		if (!(start >= 0) || !(end > start)) {
+			start = 0;
+			end = dur;
+		}
+		return { start, end };
+	}
+
+	/** Seconds into the file. One beat on the transport. */
+	private recordingSec():number {
+		const { start, end } = this.recordingBounds();
+		let sec = this.recordingOffset;
+		if (!this.pausedMusic && this.recording && this.ctx) {
+			sec += this.ctx.currentTime - this.recordingOrigin;
+		}
+		return placeRecording(sec, start, end);
+	}
+
+	private startRecordingNode():void {
+		const ctx = this.ctx;
+		const buffer = this.recordingBuffer;
+		const dest = this.musicGain;
+		if (!ctx || !buffer || !dest || this.pausedMusic) {
+			return;
+		}
+		const { start, end } = this.recordingBounds();
+		let offset = end > 0 ? wrap(this.recordingOffset, end) : 0;
+		if (offset >= end - 0.001) {
+			offset = start;
+		}
+		const node = ctx.createBufferSource();
+		node.buffer = buffer;
+		node.loop = true;
+		if (start > 0 || end < buffer.duration - 0.0005) {
+			node.loopStart = start;
+			node.loopEnd = end;
+		}
+		node.connect(dest);
+		const when = ctx.currentTime;
+		node.start(when, offset);
+		this.recording = node;
+		this.recordingOrigin = when;
+		this.recordingOffset = offset;
+	}
+
+	private releaseRecordingNode():void {
+		const node = this.recording;
+		this.recording = null;
+		if (!node) {
+			return;
+		}
+		try {
+			node.stop();
+			node.disconnect();
+		}
+		catch {
+			// already stopped
+		}
+	}
+
+	private async attachRecording(
+		ctx:AudioContext,
+		bytes:ArrayBuffer,
+		gain:number,
+		token:number,
+	):Promise<void> {
+		const buffer = await ctx.decodeAudioData(bytes.slice(0));
+		if (token !== this.recordingToken || this.ctx !== ctx || !this.musicGain) {
+			return;
+		}
+		this.releaseRecordingNode();
+		this.recordingBuffer = buffer;
+		this.recordingGain = gain;
+		this.recordingOffset = 0;
+		if (!this.pausedMusic) {
+			this.startRecordingNode();
+		}
+		this.applyMix(true);
+		this.armPump();
+	}
+
+	private flushPendingRecording():void {
+		const pending = this.pendingRecording;
+		const ctx = this.ctx;
+		if (!pending || !ctx) {
+			return;
+		}
+		this.pendingRecording = null;
+		void this.attachRecording(ctx, pending.bytes, pending.gain, this.recordingToken);
+	}
+
 	stopMusic():void {
+		this.stopRecording();
 		this.score = null;
 		this.pausedMusic = false;
 		this.musicHold = 0;
@@ -300,6 +623,10 @@ export class Audio {
 	}
 
 	playSfx(patch:SfxPatch, opts:SfxOpts = {}):void {
+		const bad = filterProblems(patch.filters, 'sfx filter');
+		if (bad.length) {
+			throw new Error(`sfx: ${bad.join(', ')}`);
+		}
 		const ctx = this.ensure();
 		const bus = this.sfxGain;
 		const noise = this.noise;
@@ -331,10 +658,11 @@ export class Audio {
 		opts:SfxOpts,
 	):void {
 		const when = ctx.currentTime + 0.01;
-		const dest = this.spatialize(ctx, bus, opts, when);
-		if (!dest) {
+		const placed = this.spatialize(ctx, bus, opts, when);
+		if (!placed) {
 			return;
 		}
+		const dest = this.insertPatchFilters(ctx, placed, patch, when);
 		const g = (patch.gain ?? 1) * (opts.gain ?? 1);
 		for (const layer of patch.layers) {
 			playLayer(ctx, dest, noise, layer, when, { ...opts, gain: g });
@@ -352,6 +680,12 @@ export class Audio {
 				throw new Error(`${id}: ${bad.join(', ')}`);
 			}
 		}
+		else {
+			const bad = filterProblems(src.filters, 'sfx filter');
+			if (bad.length) {
+				throw new Error(`${id}: ${bad.join(', ')}`);
+			}
+		}
 		this.pendingLoops.set(id, { src, opts: { ...opts } });
 		this.armLoop(id);
 		this.armPump();
@@ -364,6 +698,7 @@ export class Audio {
 			return;
 		}
 		this.loops.delete(id);
+		loop.release();
 		const ctx = this.ctx;
 		const when = ctx ? ctx.currentTime + 0.04 : 0;
 		if (ctx) {
@@ -409,7 +744,16 @@ export class Audio {
 		if (this.clockDirty || this.pausedMusic) {
 			return;
 		}
-		this.pruneCycle = this.pumpScoreNotes(score, this.origin, this.scheduled, this.pruneCycle, bus, 'late music note');
+		const dest = this.noteDest ?? bus;
+		this.pruneCycle = this.pumpScoreNotes(
+			score,
+			this.origin,
+			this.scheduled,
+			this.pruneCycle,
+			dest,
+			'late music note',
+			this.voiceDest,
+		);
 	}
 
 	private scheduleLoopScores():void {
@@ -437,6 +781,7 @@ export class Audio {
 				loop.pruneCycle,
 				dest,
 				'late posed note',
+				loop.voiceDest,
 			);
 		}
 	}
@@ -448,6 +793,7 @@ export class Audio {
 		pruneCycle:number,
 		dest:AudioNode | null,
 		lateReason:string,
+		voiceDest:AudioNode[] | null = null,
 	):number {
 		const ctx = this.ctx;
 		const noise = this.noise;
@@ -508,7 +854,7 @@ export class Audio {
 					scheduled.add(id);
 					playVoiceNote(
 						ctx,
-						dest,
+						voiceDest?.[vi] ?? dest,
 						noise,
 						voice,
 						t,
@@ -621,6 +967,8 @@ export class Audio {
 	}
 
 	dispose():void {
+		this.stopRecording();
+		this.releaseMusicFilters();
 		this.score = null;
 		if (this.pump) {
 			cancelAnimationFrame(this.pump);
@@ -697,29 +1045,12 @@ export class Audio {
 	}
 
 	private reverb(ctx:AudioContext):{ in:AudioNode; out:AudioNode } {
-		const input = ctx.createGain();
-		const out = ctx.createGain();
-		out.gain.value = 0.28;
-		const times = [0.029, 0.043, 0.071, 0.103];
-		for (const d of times) {
-			const delay = ctx.createDelay(0.2);
-			delay.delayTime.value = d;
-			const lp = ctx.createBiquadFilter();
-			lp.type = 'lowpass';
-			lp.frequency.value = 2400;
-			const fb = ctx.createGain();
-			fb.gain.value = 0.38;
-			input.connect(delay);
-			delay.connect(lp);
-			lp.connect(fb);
-			fb.connect(delay);
-			lp.connect(out);
-		}
-		return { in: input, out };
+		const send = createReverbSend(ctx);
+		return { in: send.in, out: send.out };
 	}
 
 	private applyMix(force:boolean):void {
-		const key = `${this.muted ? 1 : 0}:${this.musicVolume}:${this.sfxVolume}:${this.duck}:${this.score ? 1 : 0}`;
+		const key = `${this.muted ? 1 : 0}:${this.musicVolume}:${this.sfxVolume}:${this.duck}:${this.score ? 1 : 0}:${this.recording ? 1 : 0}:${this.recordingGain}`;
 		if (!force && key === this.lastMix) {
 			return;
 		}
@@ -730,7 +1061,9 @@ export class Audio {
 		}
 		const now = ctx.currentTime;
 		this.master.gain.setTargetAtTime(this.muted ? 0.0001 : 1, now, 0.04);
-		const music = this.score ? this.musicVolume * this.duck * (this.score.gain ?? 1) : 0.0001;
+		const musicOn = !!this.score || !!this.recording;
+		const gain = this.score?.gain ?? (this.recording ? this.recordingGain : 1);
+		const music = musicOn ? this.musicVolume * this.duck * gain : 0.0001;
 		this.musicGain.gain.setTargetAtTime(Math.max(0.0001, music), now, 0.08);
 		this.sfxGain.gain.setTargetAtTime(Math.max(0.0001, this.sfxVolume), now, 0.04);
 	}
@@ -752,7 +1085,7 @@ export class Audio {
 			if (!this.ctx) {
 				return;
 			}
-			const busy = !!this.score || this.loops.size > 0 || this.pendingLoops.size > 0;
+			const busy = !!this.score || !!this.recordingID || this.loops.size > 0 || this.pendingLoops.size > 0;
 			if (!busy) {
 				return;
 			}
@@ -779,6 +1112,7 @@ export class Audio {
 			return;
 		}
 		if (live) {
+			live.release();
 			const now = this.ctx?.currentTime ?? 0;
 			live.voice?.stop(now);
 			try {
@@ -805,18 +1139,46 @@ export class Audio {
 		panner.connect(dist);
 		dist.connect(bus);
 		let voice:LoopNodes | null = null;
-		let local:GainNode | null = null;
+		let local:AudioNode | null = null;
+		let voiceDest:AudioNode[] | null = null;
+		let release = ():void => {};
 		if (isScore(spec.src)) {
-			local = ctx.createGain();
-			local.gain.value = 1;
-			local.connect(panner);
+			const gain = ctx.createGain();
+			gain.gain.value = 1;
+			local = gain;
+			const opened = openScoreFilters(ctx, spec.src, panner);
+			if (opened) {
+				local = opened.input;
+				voiceDest = opened.voiceDest;
+				const nodes = opened.nodes;
+				release = ():void => {
+					for (const node of nodes) {
+						try {
+							node.disconnect();
+						}
+						catch {
+							// already gone
+						}
+					}
+				};
+			}
+			else {
+				local.connect(panner);
+			}
 		}
 		else {
 			const noise = this.loopNoise ?? this.noise;
 			if (!noise) {
 				return;
 			}
-			voice = startLoopLayers(ctx, panner, noise, spec.src.layers, spec.src.gain ?? 1);
+			let layerDest:AudioNode = panner;
+			if (spec.src.filters && spec.src.filters.length > 0) {
+				const chain = createFilterChain(ctx, spec.src.filters);
+				chain.output.connect(panner);
+				layerDest = chain.input;
+				release = chain.disconnect;
+			}
+			voice = startLoopLayers(ctx, layerDest, noise, spec.src.layers, spec.src.gain ?? 1);
 		}
 		const loop:LoopVoice = {
 			x: spec.opts.x ?? 0,
@@ -830,6 +1192,8 @@ export class Audio {
 			dist,
 			voice,
 			local,
+			voiceDest,
+			release,
 			origin: 0,
 			clockDirty: true,
 			scheduled: new Set(),

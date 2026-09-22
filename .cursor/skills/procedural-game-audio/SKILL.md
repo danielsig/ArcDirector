@@ -48,4 +48,4 @@ A patch is a few layers (`noise`, `thump`, `click`, `creak`, `pluck`, `fm`, `chi
 
 ## Quality
 
-Warm filtered saw pads, Karplus-Strong plucks, additive piano, sine flute, FM bells, lowpass drums. Reverb is already on the music bus. Do not stack five leads; add rests and at most one countermelody. Raw square/pulse is not the whole piece.
+Warm filtered saw pads, Karplus-Strong plucks, additive piano, sine flute, FM bells, lowpass drums. Reverb is already on the music bus. `track(lead, { filters: [overdrive({ drive: 0.4 })] })` or `piece({ filters: [reverb()] })` inserts in front of that room (`overdrive` / `reverb` from `@arc-director/kindling/score`). Posed scores and SFX do not get the bus room. Do not stack five leads; add rests and at most one countermelody. Raw square/pulse is not the whole piece.

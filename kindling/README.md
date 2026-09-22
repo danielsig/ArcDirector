@@ -235,12 +235,13 @@ Shader patches: `insertAfterChunk` / `applyShaderFeatures` insert GLSL after a d
 
 ## Audio
 
-`world.audio` is a procedural mixer (Web Audio). No sample files. Missing `AudioContext` (Node tests, headless) is a silent no-op. While a score or loop is playing, the mixer schedules itself — you do not call `update()` unless you are headless.
+`world.audio` is a Web Audio mixer. Scores are procedural. `playRecording` loops a finished file (URL or `ArrayBuffer`) on the music output — volume, mute, and duck — without the synth room. Omit the loop and it runs from 0 to the end of the file, then repeats. Pass `{ start, end }` in seconds to play from 0 until `end`, then jump to `start` and repeat that span. Pause, seek, and the beat clock drive that file the same way they drive a score (60 BPM, so one beat is one second; the bar ends at `end`). Missing `AudioContext` (Node tests, headless) is a silent no-op. While a score, recording, or loop is playing, the mixer schedules itself — you do not call `update()` unless you are headless.
 
 ```ts
 world.audio.connectUnlock(canvas); // click / key / touch → resume
 await world.audio.resume();
 world.audio.playMusic(score);
+await world.audio.playRecording('/theme.mp3'); // finished file, dry, loops
 world.audio.playSfx(patch, { x, z }); // optional world position
 world.audio.playLoop('river', patch, { x, z, hear: 16 });
 world.audio.stopLoop('river');
@@ -277,6 +278,8 @@ export const violin = registerInstrument('violin', 'sustaining', (ctx, dest, noi
 ```
 
 `percussive` locks loudness when the note starts. `sustaining` lets a dim/cres turn the volume on a note that is already playing (pad, bass, lead, air, violin, brass, flute). Override a track with `track(piano, { envelope: 'sustaining' })`.
+
+Sound filters are inserts: `reverb({ mix, decay, tone })` adds a short room on top of the dry signal, `overdrive({ drive, tone })` is a waveshaper plus a tone lowpass. Put them on a track (`track(lead, { filters: [overdrive()] })`), the whole piece (`piece({ filters: [reverb()] })` or `score.filters`), or an SFX patch (`patch.filters`). Series, first to last. Voice filters run, then the score filters, then the music-bus room (that room is always there for `playMusic`). A posed score or SFX does not use the music-bus room, so add `reverb()` on it when it should bloom.
 
 ### Score (`@arc-director/kindling/score`)
 

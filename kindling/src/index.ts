@@ -23,6 +23,7 @@ export {
 
 export { Audio, type LoopSrc } from './audio/Audio.js';
 export { AudioSource } from './audio/AudioSource.js';
+export { overdrive, reverb } from './audio/filters.js';
 export { midiHz, scoreProblems } from './audio/midi.js';
 export { registerInstrument, type InstrumentEnvelope, type InstrumentPlay } from './audio/instruments.js';
 export type {
@@ -33,6 +34,9 @@ export type {
 	SfxLayer,
 	SfxOpts,
 	SfxPatch,
+	SoundFilter,
+	OverdriveFilter,
+	ReverbFilter,
 	Voice,
 } from './audio/types.js';
 

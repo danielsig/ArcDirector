@@ -381,17 +381,19 @@ function playDrum(
 		const osc = ctx.createOscillator();
 		osc.type = 'sine';
 		const deep = Math.max(0, 36 - midi);
+		const ring = Math.max(0.32 + deep * 0.03, dur);
+		const drop = Math.min(0.16 + deep * 0.012, ring * 0.45);
 		osc.frequency.setValueAtTime(Math.max(48, 86 - deep * 3.4), t0);
-		osc.frequency.exponentialRampToValueAtTime(Math.max(22, 42 - deep * 1.7), t0 + 0.14 + deep * 0.012);
+		osc.frequency.exponentialRampToValueAtTime(Math.max(22, 42 - deep * 1.7), t0 + drop);
 		const og = ctx.createGain();
 		og.gain.setValueAtTime(gain * (0.7 + deep * 0.03), t0);
-		og.gain.exponentialRampToValueAtTime(0.0001, t0 + Math.max(dur, 0.22 + deep * 0.04));
+		og.gain.exponentialRampToValueAtTime(0.0001, t0 + ring);
 		osc.connect(og);
 		og.connect(dest);
 		osc.start(t0);
-		osc.stop(t0 + 0.32 + deep * 0.03);
+		osc.stop(t0 + ring + 0.02);
 		noiseBurst(ctx, dest, noise, t0, 0.1, gain * 0.38, Math.max(140, 280 - deep * 12), 'lowpass', 0.6);
-		disconnectSoon([osc, og], t0, ctx, 0.45 + deep * 0.04);
+		disconnectSoon([osc, og], t0, ctx, ring + 0.08);
 		return;
 	}
 	const cutoff = kind === 'tek' ? 2200 : 1400;

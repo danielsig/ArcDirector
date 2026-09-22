@@ -250,7 +250,7 @@ function when(iso:string):string {
 							class="scenes"
 							@click.stop="emit('scenes')"
 						>
-							Scenes
+							Main Menu
 						</button>
 					</nav>
 					<div class="page">

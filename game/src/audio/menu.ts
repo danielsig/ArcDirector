@@ -1,7 +1,7 @@
 import { Audio } from '@arc-director/kindling';
 import { prefs } from '../prefs';
-import { MENU_SONG_ORCH } from './songs';
 import { preloadArt } from '../render/preloadArt';
+import MENU_TRACK from './herosPath.mp3';
 
 const MENU_VOL = 0.4;
 const FADE_SEC = 5;
@@ -65,10 +65,17 @@ export function startMenuAudio(target:HTMLElement):MenuAudioHandle {
 				if (dead || begun || audio.muted) {
 					return;
 				}
-				begun = true;
 				audio.musicVolume = 0;
+				await audio.playRecording(MENU_TRACK, 1, 'heros_path', { start: 7.6, end: 178.3 });
+				if (dead) {
+					return;
+				}
+				if (audio.muted) {
+					audio.stopMusic();
+					return;
+				}
+				begun = true;
 				fadeAt = performance.now();
-				audio.playMusic(MENU_SONG_ORCH);
 			}
 			finally {
 				if (!begun) {

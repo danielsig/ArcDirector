@@ -16,8 +16,10 @@ import {
 	p,
 	pad,
 	piano,
+	overdrive,
 	piece,
 	pitch,
+	reverb,
 	registerInstrument,
 	root,
 	slot,
@@ -25,6 +27,16 @@ import {
 } from './index.js';
 
 describe('score', () => {
+	it('places overdrive on a track and reverb on the piece', () => {
+		const horn = track(piano, { filters: [overdrive({ drive: 0.4, tone: 1800 })] });
+		const score = piece({ bpm: 80, filters: [reverb({ mix: 0.2 })] }, [
+			bar(4, horn('c4:4')),
+		]);
+		assert.equal(score.filters?.[0]?.kind, 'reverb');
+		assert.equal(score.filters?.[0] && 'mix' in score.filters[0] ? score.filters[0].mix : 0, 0.2);
+		assert.equal(score.voices[0]?.filters?.[0]?.kind, 'overdrive');
+	});
+
 	it('durationless cells split a beat', () => {
 		const n = line('g4 b4 d5 b4 | c4');
 		assert.equal(n.length, 5);

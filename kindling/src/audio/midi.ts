@@ -1,4 +1,6 @@
+import { filterProblems } from './filters.js';
 import { instrumentOf } from './instruments.js';
+import type { SoundFilter } from './types.js';
 
 export function midiHz(midi:number):number {
 	return 440 * 2 ** ((midi - 69) / 12);
@@ -38,6 +40,7 @@ export function scoreProblems(score:ScoreLike):string[] {
 		if (!voice.instrument || !instrumentOf(voice.instrument)) {
 			out.push(`voice ${v} instrument`);
 		}
+		out.push(...filterProblems(voice.filters, `voice ${v} filter`));
 		for (let i = 0; i < voice.notes.length; i++) {
 			const n = voice.notes[i];
 			if (!n || !Number.isFinite(n.pitch) || !Number.isFinite(n.beat) || !(n.dur > 0)) {
@@ -49,6 +52,7 @@ export function scoreProblems(score:ScoreLike):string[] {
 			}
 		}
 	}
+	out.push(...filterProblems(score.filters, 'filter'));
 	return out;
 }
 
@@ -57,5 +61,6 @@ type ScoreLike = {
 	loop:number;
 	loops?:number;
 	cues?:{ beat:number; fn:()=>void }[];
-	voices:{ instrument?:string; notes:{ pitch:number; beat:number; dur:number }[] }[];
+	filters?:SoundFilter[];
+	voices:{ instrument?:string; filters?:SoundFilter[]; notes:{ pitch:number; beat:number; dur:number }[] }[];
 };
