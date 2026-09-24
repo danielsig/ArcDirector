@@ -736,7 +736,19 @@ export async function loadBitmap(src:string, srgb:boolean):Promise<ImageBitmap> 
 
 /** Crop a flipped atlas using PNG/top-left rects from the packer. */
 export function cropBitmap(src:ImageBitmap, x:number, y:number, w:number, h:number):Promise<ImageBitmap> {
-	return createImageBitmap(src, x, src.height - y - h, w, h);
+	const sx = x;
+	const sy = src.height - y - h;
+	// Firefox WebGL ignores ImageBitmap crop rects (bug 1797567) and can share
+	// the 4096² atlas backing store — one cell upload becomes the whole sheet.
+	const canvas = document.createElement('canvas');
+	canvas.width = w;
+	canvas.height = h;
+	const ctx = canvas.getContext('2d');
+	if (!ctx) {
+		return createImageBitmap(src, sx, sy, w, h);
+	}
+	ctx.drawImage(src, sx, sy, w, h, 0, 0, w, h);
+	return createImageBitmap(canvas, { premultiplyAlpha: 'none' });
 }
 
 export function pixelArtImage(

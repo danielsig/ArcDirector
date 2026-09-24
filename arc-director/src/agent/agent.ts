@@ -581,6 +581,16 @@ export class Agent<HostCtx = unknown> {
 		}, at);
 	}
 
+	/** Chat thread / log name. Crowd commanders use the living commander. */
+	thinkThread():string {
+		return this.id;
+	}
+
+	/** Cancel this mind's in-flight think. Same as `queue.abortThink(id)`. */
+	abortThink():void {
+		this.queue?.abortThink(this.id);
+	}
+
 	async tick(gameTime:number):Promise<Arc | null> {
 		this.now = gameTime;
 		this.refreshKit();
@@ -590,17 +600,20 @@ export class Agent<HostCtx = unknown> {
 		if (!strategic && !tactical) {
 			return null;
 		}
-		this.queue?.beginThink(this.id);
+		const signal = this.queue?.beginThink(this.id);
 		let arc:Arc | null = null;
 		try {
 			if (strategic) {
 				await this.reviseGoals();
 				this.lastStrategicAt = gameTime;
 			}
-			if (!tactical) {
+			if (!tactical || signal?.aborted) {
 				return null;
 			}
 			arc = await this.tactical();
+			if (signal?.aborted) {
+				return null;
+			}
 			this.pendingAbout = undefined;
 			this.lastArc = arc;
 			this.lastTacticalAt = gameTime;
@@ -609,12 +622,18 @@ export class Agent<HostCtx = unknown> {
 			this.recentAbsorbed = 0;
 		}
 		catch (err) {
+			if (signal?.aborted) {
+				return null;
+			}
 			this.lastTacticalAt = gameTime;
 			this.capturePrevMe();
 			throw err;
 		}
 		finally {
 			this.queue?.endThink(this.id);
+		}
+		if (signal?.aborted) {
+			return null;
 		}
 		if (arc && this.execute && this.autoEnact) {
 			await this.enact(arc);
@@ -1532,7 +1551,7 @@ export class Agent<HostCtx = unknown> {
 		const prev = this.lastMap;
 		let snap;
 		try {
-			snap = await this.map.snapshot(this.id, zoom, prev);
+			snap = await this.map.snapshot(this.thinkThread(), zoom, prev);
 		}
 		catch (err) {
 			return { ok: false, zoom, reason: err instanceof Error ? err.message : String(err) };

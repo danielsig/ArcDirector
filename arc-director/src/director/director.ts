@@ -105,9 +105,6 @@ function nowMs():number {
 }
 
 function whoFromMessages(req:ChatRequest):string {
-	if (req.thread) {
-		return req.thread;
-	}
 	for (const m of req.messages) {
 		if (m.role !== 'system' || typeof m.content !== 'string') {
 			continue;
@@ -117,7 +114,7 @@ function whoFromMessages(req:ChatRequest):string {
 			return hit[1].trim();
 		}
 	}
-	return 'ArcDirector';
+	return req.thread ?? 'ArcDirector';
 }
 
 function sightDistanceDescription(unitName?:string):string {
@@ -534,6 +531,12 @@ export class ArcDirector<HostCtx = unknown> {
 		return this;
 	}
 
+	/** Cancel an in-flight think by mind id. Same as `queue.abortThink(id)`. */
+	abortThink(id:string):this {
+		this.queue?.abortThink(id);
+		return this;
+	}
+
 	agent(id:string):Agent<HostCtx> | undefined {
 		return this.rows.get(id)?.agent ?? undefined;
 	}
@@ -702,12 +705,13 @@ export class ArcDirector<HostCtx = unknown> {
 			chat: async (req:ChatRequest):Promise<ChatResponse> => {
 				const name = whoFromMessages(req);
 				const t0 = nowMs();
+				const signal = req.thread ? this.queue?.thinkSignal(req.thread) : undefined;
 				try {
 					if (!this.http) {
 						const dump = formatChatLog(req);
 						this.emitLog({ name, message: `prompt\n${dump.message}`, image: dump.image });
 					}
-					const res = await inner.chat(req);
+					const res = await inner.chat(signal ? { ...req, signal } : req);
 					const ms = Math.round(nowMs() - t0);
 					this.recordInfer(ms, res);
 					const parts = [`${ms}ms`];
@@ -740,7 +744,9 @@ export class ArcDirector<HostCtx = unknown> {
 				catch (err:unknown) {
 					const ms = Math.round(nowMs() - t0);
 					this.recordInfer(ms, {});
-					const text = err instanceof Error ? err.message : String(err);
+					const text = signal?.aborted
+						? 'aborted'
+						: err instanceof Error ? err.message : String(err);
 					this.emitLog({ name, message: `${ms}ms\n${text}` });
 					throw err;
 				}
@@ -899,7 +905,7 @@ export class ArcDirector<HostCtx = unknown> {
 				if (!this.contextFn) {
 					throw new Error(`ArcDirector: withContext required (agent ${id})`);
 				}
-				return this.contextFn(id);
+				return this.contextFn(row.agent?.thinkThread() || id);
 			},
 			execute: async (step, ctx, actorID) => this.dispatch(row, step, ctx, actorID),
 			abortArc: (unitID) => this.abortArcFn?.(unitID),
@@ -933,7 +939,7 @@ export class ArcDirector<HostCtx = unknown> {
 		const wrapSight = !!(this.sightLook && this.senses.sight);
 		let skipCarrying = false;
 		if (this.senses.carrying && isCrowdConductor(row.agent) && this.contextFn) {
-			if (this.tryCtx(row.spec.id) === undefined) {
+			if (this.tryCtx(row.agent?.thinkThread() || row.spec.id) === undefined) {
 				skipCarrying = true;
 			}
 		}
@@ -974,7 +980,8 @@ export class ArcDirector<HostCtx = unknown> {
 		const focus = agent?.effectiveSightFocus() ?? [];
 		const limit = agent?.sightLimit ?? this.sightLimitDefault;
 		const scores = new Map<string, number>();
-		if (isCrowdConductor(agent) && agent.crowd.size > 0 && this.contextFn && !this.tryCtx(agent.id)) {
+		const originID = agent?.thinkThread() || agent?.id || '';
+		if (isCrowdConductor(agent) && agent.crowd.size > 0 && this.contextFn && !this.tryCtx(originID)) {
 			const groups:{ unitID:string; clauses:ReturnType<typeof formatSightClauses> }[] = [];
 			for (const unit of agent.crowd.list()) {
 				const unitCtx = this.tryCtx(unit.id);
@@ -1645,6 +1652,12 @@ export class ArcDirector<HostCtx = unknown> {
 		}
 		const whoCat = buildCrowdCatalog(whoKernels, agent.crowd, agent.id, agent.commanderID);
 		for (const unit of agent.crowd.list()) {
+			if (!this.tryCtx(unit.id)) {
+				if (unit.id !== agent.commanderID) {
+					unit.interrupt();
+				}
+				continue;
+			}
 			const extras = ():ArcHandler[] => agent.lawHandlers((law) => lawMatches(law, unit, whoCat, agent.crowd));
 			const catalog = ():ReturnType<typeof buildCrowdCatalog> => this.unitCatalog(row, agent, unit.id, whoCat);
 			if (unit.id === agent.commanderID) {
@@ -1826,11 +1839,11 @@ export class ArcDirector<HostCtx = unknown> {
 					this.queue?.noteResult(agent.id, true);
 					return;
 				}
-				this.emitLog({ name: agent.id, message: formatArc(arc) });
+				this.emitLog({ name: agent.thinkThread(), message: formatArc(arc) });
 			})
 			.catch((err:unknown) => {
 				const text = err instanceof Error ? err.message : String(err);
-				this.emitLog({ name: agent.id, message: `stalled: ${text}` });
+				this.emitLog({ name: agent.thinkThread(), message: `stalled: ${text}` });
 				this.queue?.noteResult(agent.id, true);
 			});
 	}

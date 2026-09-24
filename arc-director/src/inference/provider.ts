@@ -78,6 +78,8 @@ export type ChatRequest = {
 	fakeThought?:boolean;
 	/** Agent id (or similar) so the HTTP layer can pick a cached response thread. */
 	thread?:string;
+	/** Abort in-flight chat. */
+	signal?:AbortSignal;
 };
 
 export type ChatResponse = {

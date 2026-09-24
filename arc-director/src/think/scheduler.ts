@@ -79,8 +79,10 @@ export type MindQueue = {
 	readonly inFlight:number;
 	isThinking(npcID:string):boolean;
 	arcOf(npcID:string):Arc | null;
-	beginThink(npcID:string):void;
+	beginThink(npcID:string):AbortSignal;
 	endThink(npcID:string):void;
+	abortThink(npcID:string):void;
+	thinkSignal(npcID:string):AbortSignal | undefined;
 	beginArc(npcID:string, arc:Arc):void;
 	endArc(npcID:string):void;
 	allowThink(row:ThinkRow):boolean;
@@ -142,7 +144,7 @@ export abstract class MindScheduler implements MindQueue {
 	protected processClock = 0;
 	protected rows:ThinkRow[] = [];
 	protected readonly minds = new Map<string, MindState>();
-	protected readonly thinking = new Set<string>();
+	protected readonly inflight = new Map<string, AbortController>();
 	protected readonly executing = new Map<string, Arc>();
 	protected nextSeq = 1;
 
@@ -162,26 +164,36 @@ export abstract class MindScheduler implements MindQueue {
 	}
 
 	get inFlight():number {
-		return this.thinking.size;
+		return this.inflight.size;
 	}
 
 	isThinking(npcID:string):boolean {
-		return this.thinking.has(npcID);
+		return this.inflight.has(npcID);
 	}
 
 	arcOf(npcID:string):Arc | null {
 		return this.executing.get(npcID) ?? null;
 	}
 
-	beginThink(npcID:string):void {
+	beginThink(npcID:string):AbortSignal {
 		this.ensure(npcID);
 		this.clearOnce(npcID);
-		this.drop(npcID);
-		this.thinking.add(npcID);
+		this.rows = this.rows.filter((r) => r.npcID !== npcID);
+		const ac = new AbortController();
+		this.inflight.set(npcID, ac);
+		return ac.signal;
 	}
 
 	endThink(npcID:string):void {
-		this.thinking.delete(npcID);
+		this.inflight.delete(npcID);
+	}
+
+	abortThink(npcID:string):void {
+		this.inflight.get(npcID)?.abort();
+	}
+
+	thinkSignal(npcID:string):AbortSignal | undefined {
+		return this.inflight.get(npcID)?.signal;
 	}
 
 	beginArc(npcID:string, arc:Arc):void {
@@ -263,6 +275,7 @@ export abstract class MindScheduler implements MindQueue {
 		if (!on) {
 			mind.once = undefined;
 			this.rows = this.rows.filter((r) => r.npcID !== npcID);
+			this.abortThink(npcID);
 		}
 	}
 
@@ -394,7 +407,7 @@ export abstract class MindScheduler implements MindQueue {
 			return [];
 		}
 		this.processClock = 0;
-		const slots = Math.max(0, this.maxParallel - this.thinking.size);
+		const slots = Math.max(0, this.maxParallel - this.inflight.size);
 		if (slots === 0) {
 			return [];
 		}
@@ -403,7 +416,7 @@ export abstract class MindScheduler implements MindQueue {
 		const picked:ThinkRow[] = [];
 		const leftover:ThinkRow[] = [];
 		for (const row of this.rows) {
-			if (picked.length >= slots || this.thinking.has(row.npcID) || !this.allowThink(row)) {
+			if (picked.length >= slots || this.inflight.has(row.npcID) || !this.allowThink(row)) {
 				leftover.push(row);
 				continue;
 			}
@@ -414,6 +427,7 @@ export abstract class MindScheduler implements MindQueue {
 	}
 
 	drop(npcID:string):void {
+		this.abortThink(npcID);
 		this.rows = this.rows.filter((r) => r.npcID !== npcID);
 	}
 

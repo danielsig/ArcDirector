@@ -79,5 +79,5 @@ export function startSceneMusic(audio:Audio, sceneID:string):void {
 		void audio.playRecording(TALE_TRACK, 1, 'heros_tale', { start: 24.5, end: 167.8 });
 		return;
 	}
-	SONGS[sceneID] ?? SONGS.abbey_vault!;
+	void audio.playMusic(SONGS[sceneID] ?? SONGS.abbey_vault);
 }

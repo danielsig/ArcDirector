@@ -2,6 +2,7 @@ import { stampMap, type MapSnapshot } from 'arc-director';
 import { HumanBody } from '../engine/components';
 import type { HudAiLogEntry } from '../ui/hudModel';
 import { snapshotMap } from './mapView';
+import { isLiving } from './names';
 import type { GameHost } from './adapter';
 
 const AI_LOG_CAP = 250;
@@ -67,7 +68,7 @@ export async function logLook(host:GameHost, id:string, zoom:number, snap:MapSna
 export async function dumpLookMaps(host:GameHost):Promise<number> {
 	const ids:string[] = [];
 	host.world.forEachComponent(HumanBody, (_body, go) => {
-		if (go.id === 'Player') {
+		if (go.id === 'Player' || !isLiving(go)) {
 			return;
 		}
 		ids.push(go.id);

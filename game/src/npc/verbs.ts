@@ -40,16 +40,19 @@ import { cueAt } from '../audio/cue';
 import { equipItem, unequipSlot } from '../items/equip';
 import { useItem } from '../items/use';
 import type { GameHost } from './adapter';
-import { bodyName, findBody } from './names';
+import { bodyName, findBody, isLiving } from './names';
 import { poseFact } from './kernels';
 import { doExamine } from './perception';
 import { applyHit } from './hitFeel';
 import {
 	agilityOf,
+	fightCompany,
 	fightLabel,
 	fightRole,
+	fightTags,
 	findFightTarget,
 	isRivalBody,
+	nearestRival,
 	type FightRole,
 } from './fight';
 import { lineClear } from '../world/path';
@@ -98,7 +101,7 @@ export async function executeStep(host:GameHost, step:Step, ctx:HostCtx):Promise
 	if (!npc) {
 		return { ok: false, verb: step.verb, reason: 'no NPCInput' };
 	}
-	if ((ctx.actor.getComponent(Vitals)?.hp ?? 1) <= 0) {
+	if (!isLiving(ctx.actor)) {
 		return { ok: false, verb: step.verb, reason: 'down' };
 	}
 	if (host.bargainDone && fightRole(host, ctx.actor)) {
@@ -245,6 +248,8 @@ export async function executeStep(host:GameHost, step:Step, ctx:HostCtx):Promise
 		case 'slash':
 		case 'smite':
 			return doAttack(host, ctx, npc, step.verb, String(step.args.name ?? ''));
+		case 'protect':
+			return doProtect(host, ctx, npc);
 		case 'heal':
 			return doHeal(host, ctx, npc, String(step.args.name ?? ''));
 		default:
@@ -291,17 +296,16 @@ function dropDown(host:GameHost, who:GameObject):void {
 	}
 	const id = bodyName(who);
 	const arc = host.arc;
+	const own = arc?.agent(id);
+	if (own && !isCrowdConductor(own)) {
+		arc?.removeAgent(id);
+	}
 	for (const agent of arc?.agents() ?? []) {
 		if (!isCrowdConductor(agent) || !agent.crowd.has(id)) {
 			continue;
 		}
-		if (agent.commanderID === id) {
-			arc?.setCrowdCommander(agent.id, null);
-		}
-		const alive = agent.crowd.list().some((unit) => {
-			const body = findBody(host.world, unit.id);
-			return (body?.getComponent(Vitals)?.hp ?? 0) > 0;
-		});
+		arc?.removeCrowdUnit(agent.id, id);
+		const alive = agent.crowd.list().some((unit) => isLiving(findBody(host.world, unit.id)));
 		if (!alive) {
 			arc?.removeAgent(agent.id);
 		}
@@ -495,6 +499,172 @@ async function doAttack(
 	return { ok: true, verb: attack.name, reason: `${foe} ${vitals.hp}/${vitals.maxHP}` };
 }
 
+/** Knight screens a hurt ally in this order, standing between them and the nearest rival. */
+const PROTECT_ORDER = ['Healer', 'Captain', 'Archer', 'Witch'] as const;
+const PROTECT_COVER = 1.2;
+
+function interceptPoint(ward:GameObject, threat:GameObject):{ x:number; z:number } {
+	const a = ward.transform.position;
+	const t = threat.transform.position;
+	const dx = t.x - a.x;
+	const dz = t.z - a.z;
+	const len = Math.hypot(dx, dz);
+	if (len < 0.15) {
+		return { x: a.x, z: a.z };
+	}
+	const cover = Math.min(PROTECT_COVER, len * 0.45);
+	return { x: a.x + (dx / len) * cover, z: a.z + (dz / len) * cover };
+}
+
+function protectWard(host:GameHost, knight:GameObject):GameObject | undefined {
+	const company = fightCompany(host, knight);
+	if (!company) {
+		return undefined;
+	}
+	const wards:GameObject[] = [];
+	const seen = new Set<string>();
+	for (const role of PROTECT_ORDER) {
+		for (const unit of company.crowd.list()) {
+			if (seen.has(unit.id)) {
+				continue;
+			}
+			const go = findBody(host.world, unit.id);
+			if (!isLiving(go) || go === knight) {
+				continue;
+			}
+			const tags = fightTags(host, go);
+			const captain = role === 'Captain' && company.commanderID === unit.id;
+			if (!tags.includes(role) && !captain) {
+				continue;
+			}
+			seen.add(unit.id);
+			wards.push(go);
+		}
+	}
+	return wards.find(isHurtBody);
+}
+
+async function doProtect(host:GameHost, ctx:HostCtx, npc:NPCInput):Promise<ArcResult> {
+	if (fightRole(host, ctx.actor) !== 'Knight') {
+		return { ok: false, verb: 'protect', reason: 'only a knight can protect' };
+	}
+	const ward = protectWard(host, ctx.actor);
+	if (!ward) {
+		return { ok: false, verb: 'protect', reason: 'no one to protect' };
+	}
+	const threat = nearestRival(host, ward);
+	if (!threat) {
+		const walk = await npc.goTo(bodyName(ward), 1.4);
+		if (!walk.ok) {
+			return { ...walk, verb: 'protect' };
+		}
+		const hold = await npc.wait(0.35);
+		if (!hold.ok) {
+			return { ...hold, verb: 'protect' };
+		}
+		return { ok: true, verb: 'protect', reason: `guard ${bodyName(ward)}` };
+	}
+	const screen = interceptPoint(ward, threat);
+	const here = ctx.actor.transform.position;
+	if (Math.hypot(screen.x - here.x, screen.z - here.z) > 0.55) {
+		const walk = await npc.goToPoint(screen.x, screen.z);
+		if (walk.interrupted) {
+			return { ...walk, verb: 'protect' };
+		}
+	}
+	npc.faceToward(bodyName(threat));
+	const role = fightRole(host, threat);
+	if (role && distXZ(ctx.actor, threat) <= ATTACKS.cleave.range + 0.8) {
+		return doAttack(host, ctx, npc, 'cleave', role);
+	}
+	const hold = await npc.wait(0.35);
+	if (!hold.ok) {
+		return { ...hold, verb: 'protect' };
+	}
+	return { ok: true, verb: 'protect', reason: `screen ${bodyName(ward)}` };
+}
+
+const HEAL_REST = ['Witch', 'Archer', 'Blade'] as const;
+
+function isHurtBody(go:GameObject):boolean {
+	const vitals = go.getComponent(Vitals);
+	return !!vitals && vitals.hp > 0 && vitals.hp < vitals.maxHP;
+}
+
+function companyLiving(host:GameHost, actor:GameObject):GameObject[] {
+	const company = fightCompany(host, actor);
+	if (!company) {
+		return isLiving(actor) ? [actor] : [];
+	}
+	const out:GameObject[] = [];
+	const seen = new Set<string>();
+	for (const unit of company.crowd.list()) {
+		const go = findBody(host.world, unit.id);
+		if (!isLiving(go) || seen.has(go.id)) {
+			continue;
+		}
+		seen.add(go.id);
+		out.push(go);
+	}
+	if (isLiving(actor) && !seen.has(actor.id)) {
+		out.push(actor);
+	}
+	return out;
+}
+
+function hasHealTag(host:GameHost, go:GameObject, tag:string):boolean {
+	const tags = fightTags(host, go);
+	if (tags.includes(tag)) {
+		return true;
+	}
+	if (tag === 'Captain') {
+		return fightCompany(host, go)?.commanderID === bodyName(go);
+	}
+	return false;
+}
+
+function pickHealTarget(host:GameHost, healer:GameObject):GameObject | undefined {
+	const hurt = companyLiving(host, healer).filter(isHurtBody);
+	if (hurt.length === 0) {
+		return undefined;
+	}
+	const knight = hurt.find((go) => hasHealTag(host, go, 'Knight'));
+	if (knight) {
+		return knight;
+	}
+	if (hurt.includes(healer)) {
+		return healer;
+	}
+	const captain = hurt.find((go) => hasHealTag(host, go, 'Captain'));
+	if (captain) {
+		return captain;
+	}
+	for (const tag of HEAL_REST) {
+		const hit = hurt.find((go) => hasHealTag(host, go, tag));
+		if (hit) {
+			return hit;
+		}
+	}
+	return hurt.find((go) => go !== healer) ?? hurt[0];
+}
+
+function findHealNamed(host:GameHost, healer:GameObject, name:string):GameObject | undefined {
+	const trimmed = name.trim();
+	if (!trimmed) {
+		return undefined;
+	}
+	const living = companyLiving(host, healer);
+	const tagged = living.filter((go) => hasHealTag(host, go, trimmed));
+	if (tagged.length > 0) {
+		return tagged.find(isHurtBody) ?? tagged[0];
+	}
+	const go = findBody(healer.world ?? host.world, trimmed);
+	if (!go || isRivalBody(host, healer, go)) {
+		return undefined;
+	}
+	return living.includes(go) ? go : undefined;
+}
+
 async function doHeal(
 	host:GameHost,
 	ctx:HostCtx,
@@ -505,27 +675,32 @@ async function doHeal(
 	if (role && role !== 'Healer') {
 		return { ok: false, verb: 'heal', reason: 'only a healer can heal' };
 	}
-	let target = name ? findFightTarget(host, ctx.actor, name) : ctx.actor;
+	let target = name.trim()
+		? findHealNamed(host, ctx.actor, name)
+		: pickHealTarget(host, ctx.actor);
 	if (!target) {
-		return { ok: false, verb: 'heal', reason: `no such person ${name}` };
+		return {
+			ok: false,
+			verb: 'heal',
+			reason: name.trim() ? `no such person ${name}` : 'no one hurt',
+		};
 	}
+	const id = bodyName(target);
 	if (target !== ctx.actor) {
-		if (isRivalBody(host, ctx.actor, target)) {
-			return { ok: false, verb: 'heal', reason: 'heal your company, not the enemy' };
-		}
-		const walk = await ensureRange(npc, ctx.actor, target, bodyName(target));
+		const walk = await ensureRange(npc, ctx.actor, target, id);
 		if (!walk.ok) {
 			return { ...walk, verb: 'heal' };
 		}
-	}
-	if (target !== ctx.actor) {
-		npc.faceToward(bodyName(target));
+		npc.faceToward(id);
 	}
 	const held = await holdReady(npc, ctx.world.time, npc.healReadyAt, HEAL.castTime);
 	if (!held.ok) {
 		return { ...held, verb: 'heal' };
 	}
-	target = name ? findFightTarget(host, ctx.actor, name) ?? target : ctx.actor;
+	target = findBody(ctx.world, id) ?? target;
+	if (!isLiving(target)) {
+		return { ok: false, verb: 'heal', reason: 'down' };
+	}
 	if (target !== ctx.actor) {
 		if (isRivalBody(host, ctx.actor, target)) {
 			return { ok: false, verb: 'heal', reason: 'heal your company, not the enemy' };
@@ -537,9 +712,6 @@ async function doHeal(
 	const vitals = target.getComponent(Vitals);
 	if (!vitals) {
 		return { ok: false, verb: 'heal', reason: 'no vitals' };
-	}
-	if (vitals.hp <= 0) {
-		return { ok: false, verb: 'heal', reason: 'down' };
 	}
 	npc.healReadyAt = ctx.world.time + HEAL.cooldown;
 	healActor(target, HEAL.hp);

@@ -1,6 +1,6 @@
 # Agent notes
 
-This repo is an **LLM NPC framework** with a small 3D game attached so we can test it. The library is the product; the dungeon/glen is the host.
+This repo is an **LLM NPC framework** with a small 3D game attached so we can test it. The library is the product; the game is the host. No backwards compatiblity, library is still experimental, not released. We prioritize code quality and library easy-of-use and extendibility, and code simplicity. Do not simplify anything with large surface area (referenced a lot) without user confirmation for maximum future proofing while still avoiding overengineering. We follow SOLID and POLA principles and keep things DRY and prefer refactors that yield less code (especially less code for the game host) over solutions that look like afterthoughts. For every problem being solved, wheneever there's a more elegant solution that results in less overall code in the codebase, always propose it to the user with emphasis on the simplicity and extendability gains (if any). Push back on hacks.
 
 | Folder | Package | Job |
 |--------|---------|-----|

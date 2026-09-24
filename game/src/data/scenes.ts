@@ -27,6 +27,7 @@ export type NPCSpawnDef = {
 	pack?:boolean;
 	packLoot?:{ defID:string; name:string; count?:number }[];
 	wallet?:number;
+	hp?:number;
 	merchant?:{ specialty:string; ask:number; floor:number };
 	marketNPC?:{ kind:MarketNPCKind; wants:string[]; leaveGate?:string };
 	companion?:boolean;
@@ -277,16 +278,16 @@ export const RUINS:SceneDef = {
 	minimapFollow: true,
 	chunks: [ruins_0_0, ruins_1_0],
 	npcs: [
-		{ id: 'Dawn', meshID: 'human_robe', chunkID: 'ruins_0_0', localX: 11, localZ: 8, yaw: -Math.PI / 2, pack: true },
-		{ id: 'Cinder', meshID: 'human_witch', chunkID: 'ruins_0_0', localX: 9, localZ: 6, yaw: -Math.PI / 2, pack: true },
-		{ id: 'Brune', meshID: 'human_guard', chunkID: 'ruins_0_0', localX: 12, localZ: 6, yaw: -Math.PI / 2, pack: true, packLoot: SWORD },
-		{ id: 'Wisp', meshID: 'human_scout', chunkID: 'ruins_0_0', localX: 9, localZ: 10, yaw: -Math.PI / 2, pack: true },
-		{ id: 'Cade', meshID: 'human_mannequin', chunkID: 'ruins_0_0', localX: 12, localZ: 10, yaw: -Math.PI / 2, pack: true, packLoot: SWORD },
-		{ id: 'Dusk', meshID: 'human_sorceress', chunkID: 'ruins_1_0', localX: 4, localZ: 8, yaw: Math.PI / 2, pack: true },
-		{ id: 'Nyx', meshID: 'human_witch', chunkID: 'ruins_1_0', localX: 2, localZ: 6, yaw: Math.PI / 2, pack: true },
-		{ id: 'Helms', meshID: 'human_guard', chunkID: 'ruins_1_0', localX: 5, localZ: 6, yaw: Math.PI / 2, pack: true, packLoot: SWORD },
-		{ id: 'Ash', meshID: 'human_scout', chunkID: 'ruins_1_0', localX: 2, localZ: 10, yaw: Math.PI / 2, pack: true },
-		{ id: 'Flint', meshID: 'human_mannequin', chunkID: 'ruins_1_0', localX: 5, localZ: 10, yaw: Math.PI / 2, pack: true, packLoot: SWORD },
+		{ id: 'Dawn', meshID: 'human_robe', chunkID: 'ruins_0_0', localX: 4, localZ: 8, yaw: -Math.PI / 2, pack: true, hp: 12 },
+		{ id: 'Cinder', meshID: 'human_witch', chunkID: 'ruins_0_0', localX: 5, localZ: 4, yaw: -Math.PI / 2, pack: true, hp: 12 },
+		{ id: 'Brune', meshID: 'human_guard', chunkID: 'ruins_0_0', localX: 10, localZ: 6, yaw: -Math.PI / 2, pack: true, packLoot: SWORD, hp: 28 },
+		{ id: 'Wisp', meshID: 'human_scout', chunkID: 'ruins_0_0', localX: 5, localZ: 12, yaw: -Math.PI / 2, pack: true, hp: 12 },
+		{ id: 'Cade', meshID: 'human_mannequin', chunkID: 'ruins_0_0', localX: 10, localZ: 10, yaw: -Math.PI / 2, pack: true, packLoot: SWORD, hp: 20 },
+		{ id: 'Dusk', meshID: 'human_sorceress', chunkID: 'ruins_1_0', localX: 11, localZ: 8, yaw: Math.PI / 2, pack: true, hp: 12 },
+		{ id: 'Nyx', meshID: 'human_witch', chunkID: 'ruins_1_0', localX: 10, localZ: 4, yaw: Math.PI / 2, pack: true, hp: 12 },
+		{ id: 'Helms', meshID: 'human_guard', chunkID: 'ruins_1_0', localX: 5, localZ: 6, yaw: Math.PI / 2, pack: true, packLoot: SWORD, hp: 28 },
+		{ id: 'Ash', meshID: 'human_scout', chunkID: 'ruins_1_0', localX: 10, localZ: 12, yaw: Math.PI / 2, pack: true, hp: 12 },
+		{ id: 'Flint', meshID: 'human_mannequin', chunkID: 'ruins_1_0', localX: 5, localZ: 10, yaw: Math.PI / 2, pack: true, packLoot: SWORD, hp: 20 },
 	],
 	ambient: 'Two companies fight to the death in a ruined forest colonnade. No quarter.',
 	message: 'E pick up / unlock   F use   X swap hands   Enter talk   /give   Tab chat',

@@ -1,8 +1,7 @@
 import { isCrowdConductor, shortTag } from 'arc-director';
-import { Vitals } from '../engine/components';
 import type { GameObject } from '../engine/GameObject';
 import type { GameHost } from './adapter';
-import { bodyName, findBody } from './names';
+import { bodyName, findBody, isLiving } from './names';
 
 export type FightRole = 'Witch' | 'Knight' | 'Archer' | 'Blade' | 'Healer';
 
@@ -91,16 +90,44 @@ export function resolveFightName(host:GameHost, observerID:string, name:string):
 	return target ? bodyName(target) : name;
 }
 
+export function fightTags(host:GameHost, actor:GameObject):string[] {
+	const company = fightCompany(host, actor);
+	if (!company) {
+		return [];
+	}
+	const unit = company.crowd.get(bodyName(actor));
+	if (unit) {
+		return unit.tags.map((t) => shortTag(company.id, t));
+	}
+	if (company.id === bodyName(actor) || company.commanderID === bodyName(actor)) {
+		return ['Captain', 'Healer'];
+	}
+	return [];
+}
+
+/** Closest living rival to `from`. */
+export function nearestRival(host:GameHost, from:GameObject):GameObject | undefined {
+	return nearestRivalWhere(host, from);
+}
+
 function nearestRivalWithRole(
 	host:GameHost,
 	observer:GameObject,
 	role:FightRole,
 ):GameObject | undefined {
-	const mine = fightCompany(host, observer);
+	return nearestRivalWhere(host, observer, (go) => fightRole(host, go) === role);
+}
+
+function nearestRivalWhere(
+	host:GameHost,
+	from:GameObject,
+	ok:(go:GameObject)=>boolean = () => true,
+):GameObject | undefined {
+	const mine = fightCompany(host, from);
 	if (!mine) {
 		return undefined;
 	}
-	const here = observer.transform.position;
+	const here = from.transform.position;
 	let best:GameObject | undefined;
 	let bestDist = Infinity;
 	for (const agent of host.arc?.agents() ?? []) {
@@ -109,10 +136,7 @@ function nearestRivalWithRole(
 		}
 		for (const unit of agent.crowd.list()) {
 			const go = findBody(host.world, unit.id);
-			if (!go || (go.getComponent(Vitals)?.hp ?? 0) <= 0) {
-				continue;
-			}
-			if (fightRole(host, go) !== role) {
+			if (!isLiving(go) || !ok(go)) {
 				continue;
 			}
 			const p = go.transform.position;

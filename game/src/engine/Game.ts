@@ -70,6 +70,7 @@ export class Game extends KindlingGame<World> {
 				pack: npc.pack,
 				packLoot: npc.packLoot,
 				wallet: npc.wallet,
+				hp: npc.hp,
 				merchant: npc.merchant,
 				marketNPC: npc.marketNPC,
 				companion: npc.companion,

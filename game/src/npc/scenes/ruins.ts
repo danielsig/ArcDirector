@@ -1,10 +1,10 @@
 import { ArcDirector, isCrowdConductor, type AgentSpec, type Kit } from 'arc-director';
 import { CharacterMotor } from '../../actors/CharacterMotor';
 import { NPCInput } from '../../actors/NPCInput';
-import { Celebrating, Vitals } from '../../engine/components';
+import { Celebrating } from '../../engine/components';
 import type { GameObject } from '../../engine/GameObject';
 import type { GameHost, HostCtx } from '../adapter';
-import { findBody } from '../names';
+import { findBody, isLiving } from '../names';
 
 const FIGHT:Kit = {
 	verbs: ['issue', 'when', 'law', 'unlaw', 'loop', 'smite', 'heal'],
@@ -21,24 +21,29 @@ function woundedLaw(captain:string) {
 	};
 }
 
-const BIND_LAW = {
-	name: 'bind',
-	who: 'me',
-	watch: 'isHurt(me)',
-	arc: 'heal()',
-	pinned: true,
-};
-
 const MEND_LAW = {
 	name: 'mend',
 	who: 'me',
-	watch: 'some(units.filter(u => isHurt(u)))',
-	arc: 'loop(through=x in units.filter(u => isHurt(u)), arc=heal(x))',
+	watch: 'isHurt(me) || some(allUnits.filter(u => isHurt(u)))',
+	arc: 'loop(heal())',
+	pinned: true,
+};
+
+const GUARD_LAW = {
+	name: 'guard',
+	who: 'units.filter("Knight")',
+	watch: [
+		'some(allUnits.filter("Healer").filter(u => isHurt(u)))',
+		'some(allUnits.filter("Captain").filter(u => isHurt(u)))',
+		'some(allUnits.filter("Archer").filter(u => isHurt(u)))',
+		'some(allUnits.filter("Witch").filter(u => isHurt(u)))',
+	].join(' || '),
+	arc: 'loop(protect())',
 	pinned: true,
 };
 
 function companyLaws(captain:string) {
-	return [woundedLaw(captain), BIND_LAW, MEND_LAW];
+	return [woundedLaw(captain), MEND_LAW, GUARD_LAW];
 }
 
 function companyRole(name:string):string {
@@ -50,7 +55,8 @@ function companyRole(name:string):string {
 		'Thinking is dangerous. The enemy is very likely already killing your units while you think. Do not wait for another think. Keep the wounded law. Issue a looping fight program to every unit by YOUR tag (join issue with ;). Never issue(allUnits) a fight — that is one program, so a Witch would slash.',
 		'go_to is not a fight — they walk there and stop. Combat verbs walk into range. The verb matches YOUR tag; the name is an enemy role: issue(who=units.filter("Witch"), arc=loop(hex(Witch) && hex(Healer))). Archer shoot, Knight cleave, Blade slash. who=Blade is your Blade, not the enemy Blade.',
 		'A program that ends is idle in a knife fight. Inside the issued arc, && is the next step after success (the hit landed or the foe is down). Perhaps || another role, or go_to you, if that step fails. loop the chain. Join several issue with ; — never && between issue().',
-		'Hurt troops already have law wounded: isHurt(me) → go_to the commander. You already have bind (heal yourself) and mend (heal hurt troops). Keep them. Never unlaw wounded, bind, or mend.',
+		'Hurt troops already have law wounded: isHurt(me) → go_to the commander. You already have mend: heal() loops Knight, then yourself, then Captain, then the rest. Keep wounded and mend. Never unlaw them.',
+		'Knight already has law guard: someone hurt → protect() between them and whoever is on them (Healer, Captain, Archer, Witch). Keep it.',
 		'smite and heal are yours alone (commander body, arm\'s reach). Never issue smite. Never issue heal. Units cannot smite.',
 	].join(' ');
 }
@@ -128,8 +134,7 @@ function roleRank(tags:string[]):number {
 }
 
 function livingCommand(host:GameHost, id:string):boolean {
-	const body = findBody(host.world, id);
-	return (body?.getComponent(Vitals)?.hp ?? 0) > 0;
+	return isLiving(findBody(host.world, id));
 }
 
 /** When the commander is down, the farthest living role takes the body. */
@@ -219,7 +224,7 @@ function livingOf(host:GameHost, spec:AgentSpec<HostCtx>):GameObject[] {
 	const out:GameObject[] = [];
 	for (const id of roster(spec)) {
 		const go = findBody(host.world, id);
-		if (!go || (go.getComponent(Vitals)?.hp ?? 0) <= 0) {
+		if (!isLiving(go)) {
 			continue;
 		}
 		out.push(go);
@@ -292,6 +297,7 @@ export function createDirector(host:GameHost):ArcDirector<HostCtx> {
 		.addVerb('slash', { name: 'id' })
 		.addVerb('smite', { name: 'id' })
 		.addVerb('heal', { name: 'id?' })
+		.addVerb('protect')
 		.withSight({ limit: 16 })
 		.withDefaultKit(host.kit)
 		.addCrowdConductor(DAWN)

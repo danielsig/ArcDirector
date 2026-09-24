@@ -67,6 +67,24 @@ describe('ThinkQueue', () => {
 		assert.ok(rows[0].score >= 0.99);
 	});
 
+	it('abortThink trips the inflight signal; drop and setAiOn(false) abort', () => {
+		const q = new ThinkQueue({ watchInterval: 100, processInterval: 0 });
+		q.ensure('A', { skipHeartbeat: true });
+		const sig = q.beginThink('A');
+		assert.equal(q.thinkSignal('A'), sig);
+		assert.equal(sig.aborted, false);
+		q.abortThink('A');
+		assert.equal(sig.aborted, true);
+		q.endThink('A');
+		const dropSig = q.beginThink('A');
+		q.drop('A');
+		assert.equal(dropSig.aborted, true);
+		q.endThink('A');
+		const offSig = q.beginThink('A');
+		q.setAiOn('A', false);
+		assert.equal(offSig.aborted, true);
+	});
+
 	it('HTTP beginThink occupies a slot; a live arc does not', () => {
 		const q = new ThinkQueue({ watchInterval: 100, processInterval: 0, maxParallel: 2 });
 		q.ensure('A', { skipHeartbeat: true });

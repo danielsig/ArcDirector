@@ -182,6 +182,7 @@ function leave():void {
 			}"
 		/>
 		<div ref="menuEl" class="menu" :style="{ left: `${menuLeft}px` }">
+			<img class="text-logo" src="/text-logo.png" alt="Arc Director" />
 			<h1>Demos</h1>
 			<button type="button" @click="pick('ruins')">5v5 Combat</button>
 			<button type="button" @click="pick('marketplace')">Marketplace</button>
@@ -241,6 +242,12 @@ function leave():void {
 	width: max-content;
 	max-width: calc(100% - 48px);
 	transform: translate(-50%, -50%);
+}
+.text-logo {
+	width: 520px;
+	max-width: 80dvw;
+	margin-bottom: 8dvh;
+	filter: drop-shadow(#EB99 0px 0px 16px);
 }
 .picker h1 {
 	margin: 0;

@@ -110,6 +110,50 @@ async function hiveOf(opts:{
 	return director;
 }
 
+async function hangingDawn():Promise<{
+	director:ArcDirector<Ctx>;
+	dawn:CrowdConductor<Ctx>;
+	calls:VerbCall<Ctx>[];
+	pending:Promise<unknown>;
+	release:()=>void;
+}> {
+	const calls:VerbCall<Ctx>[] = [];
+	let release:()=>void = () => undefined;
+	const hang = new Promise<void>((resolve) => {
+		release = resolve;
+	});
+	const director = await new ArcDirector<Ctx>()
+		.withArcText(true)
+		.withFakeInference(async () => {
+			await hang;
+			return { content: 'go_to(Keep)', toolCalls: [] };
+		})
+		.addStockVerbs()
+		.addStockCrowdVerbs()
+		.withKernels(kernels())
+		.onVerb((call) => {
+			calls.push(call);
+			return { ok: true, verb: call.verb };
+		})
+		.withContext((id) => ({ id }))
+		.addCrowdConductor({
+			id: 'Dawn',
+			skipHeartbeat: true,
+			kit: CROWD_KIT,
+			commander: 'Dawn',
+			identity: { name: 'Dawn', role: 'Leads.' },
+			units: [{ id: 'Dawn' }, { id: 'Wisp' }],
+		})
+		.start();
+	const dawn = director.agent('Dawn');
+	assert.ok(isCrowdConductor(dawn));
+	const pending = dawn.tick(1);
+	await sleep(20);
+	return { director, dawn, calls, pending, release };
+}
+
+type Hang = Awaited<ReturnType<typeof hangingDawn>>;
+
 describe('CrowdConductor chain', () => {
 	it('addStockCrowdVerbs registers; kit must still grant when', async () => {
 		const director = await new ArcDirector<Ctx>()
@@ -147,6 +191,22 @@ describe('CrowdConductor chain', () => {
 		assert.ok(hive.crowd.has('Pike'));
 		assert.ok(hive.laws.some((s) => s.name === 'follow'));
 		assert.equal(hive.crowd.get('Pike')?.tags.includes(squadTag('Hive', 'Flank')), true);
+		director.dispose();
+	});
+
+	it('removeCrowdUnit drops them from the roster and issue who', async () => {
+		const calls:VerbCall<Ctx>[] = [];
+		const director = await hiveOf({ calls });
+		director.removeCrowdUnit('Hive', 'Mira');
+		const hive = director.agent('Hive');
+		assert.ok(isCrowdConductor(hive));
+		assert.equal(hive.crowd.has('Mira'), false);
+		const text = (hive as unknown as { extraVolatile():string }).extraVolatile();
+		assert.equal(/Mira/.test(text), false);
+		await hive.enact(parseArc('issue(who=allUnits, arc=go_to(Keep))', hive.verbs));
+		await waitFor(() => calls.some((c) => c.verb === 'go_to'));
+		assert.equal(calls.some((c) => c.actorID === 'Mira'), false);
+		assert.equal(calls.some((c) => c.actorID === 'Tomas' && c.verb === 'go_to'), true);
 		director.dispose();
 	});
 });
@@ -544,6 +604,49 @@ describe('actorID, laws, dummy me', () => {
 });
 
 describe('commander pointer and sticky issue', () => {
+	it('thinkThread and identity follow the living commander', async () => {
+		const director = await new ArcDirector<Ctx>()
+			.withFakeInference()
+			.addStockVerbs()
+			.addStockCrowdVerbs()
+			.withKernels(kernels())
+			.onVerb(() => ({ ok: true, verb: 'go_to' }))
+			.withContext((id) => ({ id }))
+			.addCrowdConductor({
+				id: 'Dawn',
+				skipHeartbeat: true,
+				kit: CROWD_KIT,
+				commander: 'Dawn',
+				identity: { name: 'Dawn', role: 'Leads.' },
+				units: [{ id: 'Dawn' }, { id: 'Wisp' }],
+			})
+			.start();
+		const dawn = director.agent('Dawn');
+		assert.ok(isCrowdConductor(dawn));
+		assert.equal(dawn.thinkThread(), 'Dawn');
+		director.setCrowdCommander('Dawn', 'Wisp');
+		assert.equal(dawn.thinkThread(), 'Wisp');
+		assert.equal(dawn.identity.name, 'Wisp');
+		director.dispose();
+	});
+
+	for (const [name, abort] of [
+		['abortThink', (h:Hang) => h.dawn.abortThink()],
+		['director.abortThink', (h:Hang) => h.director.abortThink('Dawn')],
+		['vacating the commander', (h:Hang) => h.director.removeCrowdUnit('Dawn', 'Dawn')],
+		['removeAgent', (h:Hang) => h.director.removeAgent('Dawn')],
+		['setAiOn(false)', (h:Hang) => h.director.mindQueue()?.setAiOn('Dawn', false)],
+	] as const) {
+		it(`${name} aborts the in-flight think`, async () => {
+			const h = await hangingDawn();
+			abort(h);
+			assert.equal(await h.pending, null);
+			assert.equal(h.calls.length, 0);
+			h.release();
+			h.director.dispose();
+		});
+	}
+
 	it('issue(me) fails; allUnits skips the commander', async () => {
 		const calls:VerbCall<Ctx>[] = [];
 		const director = await new ArcDirector<Ctx>()
@@ -602,6 +705,48 @@ describe('commander pointer and sticky issue', () => {
 		assert.match(text, /Units \(issue who=units\.filter\("Tag"\)/);
 		assert.match(text, /- Mira: Guard/);
 		assert.match(text, /- Tomas: Guard/);
+		director.dispose();
+	});
+
+	it('does not start a law on a unit with no host context', async () => {
+		const calls:VerbCall<Ctx>[] = [];
+		const director = await new ArcDirector<Ctx>()
+			.withPriorityQueue({
+				processInterval: 0,
+				watchInterval: 0,
+				heartbeatStart: 100,
+				heartbeatMin: 100,
+			})
+			.withFakeInference()
+			.addStockVerbs()
+			.addStockCrowdVerbs()
+			.withKernels(kernels(new Set(['Mira', 'Tomas'])))
+			.onVerb((call) => {
+				calls.push(call);
+				return { ok: true, verb: call.verb };
+			})
+			.withContext((id) => (id === 'Mira' ? undefined : { id }))
+			.addCrowdConductor({
+				id: 'Hive',
+				skipHeartbeat: true,
+				kit: CROWD_KIT,
+				identity: { name: 'Hive', role: 'Keeps the square moving.' },
+				units: [
+					{ id: 'Mira', tags: ['Guard'] },
+					{ id: 'Tomas', tags: ['Guard'] },
+				],
+				laws: [{
+					name: 'flee',
+					who: 'units',
+					watch: 'isHurt(me)',
+					arc: 'go_to(Keep)',
+					pinned: true,
+				}],
+			})
+			.start();
+		director.tick(1, 1);
+		await waitFor(() => calls.some((c) => c.actorID === 'Tomas' && c.verb === 'go_to'));
+		assert.equal(calls.some((c) => c.actorID === 'Mira'), false);
 		director.dispose();
 	});
 

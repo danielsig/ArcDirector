@@ -33,7 +33,7 @@ import { YOU_SYMBOL } from './mapMarks';
 import { snapshotMap } from './mapView';
 import { WORLD_ENCYCLOPEDIAS } from './encyclopedias';
 import type { HostCtx, SceneHooks } from './types';
-import { bodyName, findBody } from './names';
+import { bodyName, findBody, isLiving } from './names';
 import { kernelsOf, scanWorld, type PosedFact } from './kernels';
 import { hostCanSee, lookWorld, inventoryOf, followedCarry } from './perception';
 import { executeStep } from './verbs';
@@ -127,10 +127,13 @@ export class GameHost {
 				mayThink: (ctx) => {
 					const mind = this.arc?.agent(ctx.npcID);
 					if (isCrowdConductor(mind)) {
-						return true;
+						return mind.crowd.list().some((unit) => isLiving(findBody(this.world, unit.id)));
+					}
+					const go = this.world.findByID(ctx.npcID) ?? findBody(this.world, ctx.npcID);
+					if (!isLiving(go)) {
+						return false;
 					}
 					if (ctx.reason === 'heartbeat') {
-						const go = this.world.findByID(ctx.npcID);
 						const npc = go?.getComponent(NPCInput);
 						return !!(npc?.busy() || ctx.arc);
 					}
@@ -181,10 +184,10 @@ export class GameHost {
 
 	context = (id:string):HostCtx | undefined => {
 		const body = this.world.findByID(id) ?? findBody(this.world, id);
-		if (body) {
-			return { world: this.world, actor: body, scene: this.scene };
+		if (!isLiving(body)) {
+			return undefined;
 		}
-		return undefined;
+		return { world: this.world, actor: body, scene: this.scene };
 	};
 
 	abortArc = (id:string):void => {
@@ -389,7 +392,7 @@ export class GameHost {
 		const out:GameObject[] = [];
 		for (const unit of conductor.crowd.list()) {
 			const go = findBody(this.world, unit.id);
-			if (go) {
+			if (isLiving(go)) {
 				out.push(go);
 			}
 		}
@@ -397,7 +400,7 @@ export class GameHost {
 	}
 
 	private lookOrigin(id:string):{ x:number; z:number } | undefined {
-		if (this.world.findByID(id) ?? findBody(this.world, id)) {
+		if (isLiving(this.world.findByID(id) ?? findBody(this.world, id))) {
 			return undefined;
 		}
 		const hive = this.conductorOf(id);

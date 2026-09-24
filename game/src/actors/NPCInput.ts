@@ -350,6 +350,22 @@ export class NPCInput extends Component {
 				const dest = this.approachPoint(target);
 				this.steer(null, this.followPath(dest, 0) ?? dest);
 			}
+			else if (job.kind === 'point') {
+				if (this.arrivedAt(job.dest, 0.45)) {
+					this.finish({ ok: true, verb: 'go_to' });
+					return;
+				}
+				const next = this.followPath(job.dest, 0);
+				if (!next) {
+					this.finish({
+						ok: false,
+						verb: 'go_to',
+						reason: 'cannot reach point — path blocked (locked door, water, or walls)',
+					});
+					return;
+				}
+				this.steer(null, next);
+			}
 			else if (job.kind === 'wander') {
 				if (this.wanderUntilReached()) {
 					this.finish({ ok: true, verb: 'wander', reason: 'until' });

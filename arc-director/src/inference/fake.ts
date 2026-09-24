@@ -4,6 +4,12 @@ import { chatContentText, type ChatRequest, type ChatResponse, type InferencePro
 export type FakeChatFn = (req:ChatRequest)=>ChatResponse | Promise<ChatResponse>;
 export type FakeEmbedFn = (texts:string[], model?:string)=>number[][] | Promise<number[][]>;
 
+function abortError():Error {
+	const err = new Error('aborted');
+	err.name = 'AbortError';
+	return err;
+}
+
 export class FakeProvider implements InferenceProvider {
 	constructor(
 		private readonly chatFn:FakeChatFn,
@@ -11,7 +17,20 @@ export class FakeProvider implements InferenceProvider {
 	) {}
 
 	chat(req:ChatRequest):Promise<ChatResponse> {
-		return Promise.resolve(this.chatFn(req));
+		const run = Promise.resolve(this.chatFn(req));
+		const signal = req.signal;
+		if (!signal) {
+			return run;
+		}
+		if (signal.aborted) {
+			return Promise.reject(abortError());
+		}
+		return Promise.race([
+			run,
+			new Promise<ChatResponse>((_, reject) => {
+				signal.addEventListener('abort', () => reject(abortError()), { once: true });
+			}),
+		]);
 	}
 
 	embed(texts:string[], model?:string):Promise<number[][]> {

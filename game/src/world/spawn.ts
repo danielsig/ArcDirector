@@ -495,6 +495,7 @@ export type NPCSpawnOpts = {
 	packKey?:boolean;
 	packLoot?:{ defID:string; name:string; count?:number }[];
 	wallet?:number;
+	hp?:number;
 	merchant?:{ specialty:string; ask:number; floor:number };
 	marketNPC?:{ kind:MarketNPCKind; wants:string[]; leaveGate?:string };
 	companion?:boolean;
@@ -550,8 +551,9 @@ export function spawnNPC(world:World, chunk:Chunk, opts:NPCSpawnOpts):GameObject
 		body.slots.back = pack;
 	}
 	const vitals = go.addComponent(new Vitals());
-	vitals.hp = 5;
-	vitals.maxHP = 5;
+	const hp = opts.hp && opts.hp > 0 ? Math.round(opts.hp) : 5;
+	vitals.hp = hp;
+	vitals.maxHP = hp;
 	const named = go.addComponent(new Named());
 	named.id = opts.id;
 	const wallet = go.addComponent(new Wallet());

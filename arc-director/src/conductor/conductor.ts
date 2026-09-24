@@ -82,6 +82,10 @@ export class CrowdConductor<HostCtx = unknown> extends Agent<HostCtx> {
 		return this.crowd.remove(id);
 	}
 
+	override thinkThread():string {
+		return this.commanderID ?? super.thinkThread();
+	}
+
 	setCommander(id:string | null):void {
 		if (id === null) {
 			const prev = this.commanderID;
@@ -94,9 +98,13 @@ export class CrowdConductor<HostCtx = unknown> extends Agent<HostCtx> {
 			throw new Error(`ArcDirector: no unit '${id}' to command`);
 		}
 		this.commanderID = id;
+		if (this.identity.name !== id) {
+			this.identity = { ...this.identity, name: id };
+		}
 	}
 
 	private vacateCommander(unitID:string):void {
+		this.abortThink();
 		this.commanderID = null;
 		this.onCommanderVacant?.(unitID);
 	}

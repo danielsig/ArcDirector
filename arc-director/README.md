@@ -83,6 +83,8 @@ Who thinks next. Default is priority (watch / verb scores + recency).
 
 `mayThink` (on queue opts): idle / live arc / major / watch score. If a live arc exists and think is allowed, the director calls `onAbortArc(id)` and skips that mind this frame (host motor interrupt).
 
+In-flight chat is occupancy of a mind-id slot. `agent.abortThink()`, `director.abortThink(id)`, and `queue.abortThink(id)` trip that slot's `AbortSignal`. `removeAgent`, `setAiOn(false)`, `drop`, and vacating a crowd commander abort as a side effect. A completed reply is discarded if the slot was aborted before enact.
+
 Standalone `withPriorityQueue()` spread helpers remain for `new Agent({...})` tests. They are not the documented path.
 
 ### Verbs

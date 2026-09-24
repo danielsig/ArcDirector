@@ -1626,6 +1626,9 @@ export class HttpProvider implements InferenceProvider {
 		let lastErr:Error | null = null;
 		let stream = true;
 		for (let attempt = 0; attempt < 4; attempt++) {
+			if (req.signal?.aborted) {
+				throw req.signal.reason instanceof Error ? req.signal.reason : new Error('aborted');
+			}
 			if (attempt > 0) {
 				await sleep(350 * attempt);
 			}
@@ -1639,7 +1642,7 @@ export class HttpProvider implements InferenceProvider {
 				method: 'POST',
 				headers: this.headers(),
 				body: JSON.stringify(payload),
-				signal: AbortSignal.timeout(this.timeoutMs),
+				signal: req.signal ?? AbortSignal.timeout(this.timeoutMs),
 			});
 			if (!res.ok) {
 				const text = await res.text();
@@ -1672,6 +1675,9 @@ export class HttpProvider implements InferenceProvider {
 			}
 			catch (err) {
 				lastErr = err instanceof Error ? err : new Error(String(err));
+				if (req.signal?.aborted) {
+					throw lastErr;
+				}
 				if (isContextOverflow(lastErr.message) && shrinkForOverflow(body) && attempt < 3) {
 					continue;
 				}
