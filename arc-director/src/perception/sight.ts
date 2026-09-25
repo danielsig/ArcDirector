@@ -160,7 +160,10 @@ function isPerson(obj:SeenObject):boolean {
 
 function leftoverRank(obj:SeenObject):number {
 	if (isPerson(obj)) {
-		return 300 + (obj.interesting ?? 0);
+		const hurt = obj.hp !== undefined && obj.maxHP !== undefined && obj.hp < obj.maxHP
+			? 50 + (1 - obj.hp / Math.max(obj.maxHP, 1)) * 40
+			: 0;
+		return 300 + (obj.interesting ?? 0) + hurt;
 	}
 	if (obj.movable === false || obj.tags.includes('landmark')) {
 		return 200 + (obj.landmarkTier ?? 0);
@@ -258,6 +261,18 @@ function bearingPhrase(bearing:Bearing):string {
 	}
 }
 
+function vitalsBit(obj:SeenObject):string {
+	if (obj.hp === undefined || obj.maxHP === undefined) {
+		return '';
+	}
+	return ` ${obj.hp}/${obj.maxHP} hp`;
+}
+
+function noteBit(obj:SeenObject):string {
+	const note = obj.note?.trim();
+	return note ? `, ${note}` : '';
+}
+
 function leftoverHead(
 	obj:SeenObject,
 	text:string,
@@ -290,7 +305,7 @@ function leftoverClause(
 		obj,
 		lodNoun(obj, opts, me, distance, npcID, bearingFn),
 		opts.pluralize,
-	);
+	) + vitalsBit(obj) + noteBit(obj);
 	const measure = formatMeasure(
 		quantizeDistance(finite(distance(obj, me)), opts.closeness),
 		opts.unitName,
@@ -399,7 +414,14 @@ export function orderSightClauses(
 		ordered = clauses;
 	}
 	if (sightLimit !== undefined && Number.isFinite(sightLimit) && sightLimit >= 0) {
-		ordered = ordered.slice(0, Math.max(0, Math.floor(sightLimit)));
+		const cap = Math.max(0, Math.floor(sightLimit));
+		if (ordered.some((c) => c.prefer)) {
+			const ambient = ordered.filter((c) => c.ambient);
+			const prefer = ordered.filter((c) => !c.ambient && c.prefer);
+			const rest = ordered.filter((c) => !c.ambient && !c.prefer);
+			ordered = [...ambient, ...prefer, ...rest];
+		}
+		ordered = ordered.slice(0, cap);
 	}
 	return ordered;
 }
@@ -455,7 +477,7 @@ export function formatSightClauses(sight:Sight, opts:SightOpts = {}):SightClause
 		pluralize,
 	};
 
-	const hits:{ text:string; claimedIDs:string[] }[] = [];
+	const hits:{ text:string; claimedIDs:string[]; prefer:boolean }[] = [];
 	let pool = remaining;
 	while (pool.length > 0) {
 		let best:{ hit:RelationshipHit; claimed:SeenObject[] } | null = null;
@@ -488,6 +510,7 @@ export function formatSightClauses(sight:Sight, opts:SightOpts = {}):SightClause
 			hits.push({
 				text: best.hit.text,
 				claimedIDs: uniqueIDs(best.claimed.flatMap(idsOf)),
+				prefer: best.claimed.some(isPerson),
 			});
 			pool = unusedFromPool;
 		}
@@ -508,6 +531,7 @@ export function formatSightClauses(sight:Sight, opts:SightOpts = {}):SightClause
 		.map((o) => ({
 			text: leftoverClause(o, me, distance, leftoverOpts, npcID, bearingFn, hasFacing),
 			claimedIDs: idsOf(o),
+			prefer: isPerson(o),
 		}));
 
 	const clauses:SightClause[] = [];
@@ -515,10 +539,18 @@ export function formatSightClauses(sight:Sight, opts:SightOpts = {}):SightClause
 		clauses.push({ text: trimPeriod(sight.ambient.trim()), claimedIDs: [], ambient: true });
 	}
 	for (const h of hits) {
-		clauses.push({ text: trimPeriod(h.text), claimedIDs: h.claimedIDs });
+		clauses.push({
+			text: trimPeriod(h.text),
+			claimedIDs: h.claimedIDs,
+			prefer: h.prefer,
+		});
 	}
 	for (const leftover of leftovers) {
-		clauses.push({ text: trimPeriod(leftover.text), claimedIDs: leftover.claimedIDs });
+		clauses.push({
+			text: trimPeriod(leftover.text),
+			claimedIDs: leftover.claimedIDs,
+			prefer: leftover.prefer,
+		});
 	}
 	return clauses;
 }

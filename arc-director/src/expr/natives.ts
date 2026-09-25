@@ -51,6 +51,15 @@ export type HostKernels = {
 	listCap?:number;
 };
 
+function hpFromFields(who:ExprEntity):{ hp:number; maxHP:number } | undefined {
+	const hp = who.fields?.hp;
+	const maxHP = who.fields?.maxHP;
+	if (hp?.kind !== 'number' || maxHP?.kind !== 'number') {
+		return undefined;
+	}
+	return { hp: hp.value, maxHP: maxHP.value };
+}
+
 function twoEnt(args:ExprVal[]):[ExprEntity, ExprEntity] | undefined {
 	const a = args[0]?.kind === 'entity' ? args[0].value : undefined;
 	const b = args[1]?.kind === 'entity' ? args[1].value : undefined;
@@ -177,11 +186,11 @@ export function buildCatalog(host:HostKernels):Catalog {
 		names.set('me', asEntityVal(host.me));
 		fns.set('isHurt', (args) => {
 			const who = args[0]?.kind === 'entity' ? args[0].value : host.me;
-			const v = read(who);
+			const v = read(who) ?? hpFromFields(who);
 			if (!v) {
 				return { kind: 'bool', value: false };
 			}
-			return { kind: 'bool', value: v.hp < v.maxHP };
+			return { kind: 'bool', value: v.hp > 0 && v.hp < v.maxHP };
 		});
 		fns.set('isHPFalling', (args) => {
 			const who = args[0]?.kind === 'entity' ? args[0].value : host.me;

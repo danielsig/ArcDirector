@@ -4,27 +4,26 @@ import { NPCInput } from '../../actors/NPCInput';
 import { Celebrating } from '../../engine/components';
 import type { GameObject } from '../../engine/GameObject';
 import type { GameHost, HostCtx } from '../adapter';
+import { BACK_STANDOFF, FIGHT_WALK, SPELL_RANGE, formatFightRules } from '../fight';
 import { findBody, isLiving } from '../names';
 
 const FIGHT:Kit = {
-	verbs: ['issue', 'when', 'law', 'unlaw', 'loop', 'smite', 'heal'],
+	verbs: ['issue', 'when', 'law', 'unlaw', 'loop', 'smite', 'heal', 'attack', 'rank'],
 	tools: [],
 };
 
-function woundedLaw(captain:string) {
-	return {
-		name: 'wounded',
-		who: 'units',
-		watch: 'isHurt(me)',
-		arc: `go_to(${captain})`,
-		pinned: true,
-	};
-}
+const WOUNDED_LAW = {
+	name: 'wounded',
+	who: 'units',
+	watch: `isHurt(me) && some(allUnits.filter("Healer")) && !isNear(me, allUnits.filter("Healer"), ${SPELL_RANGE})`,
+	arc: 'go_to(Healer)',
+	pinned: true,
+};
 
 const MEND_LAW = {
 	name: 'mend',
 	who: 'me',
-	watch: 'isHurt(me) || some(allUnits.filter(u => isHurt(u)))',
+	watch: `me is "Healer" && (isHurt(me) || some(allUnits.filter(u => isHurt(u)))) && !isNear(me, others.filter("enemy"), ${BACK_STANDOFF})`,
 	arc: 'loop(heal())',
 	pinned: true,
 };
@@ -32,32 +31,44 @@ const MEND_LAW = {
 const GUARD_LAW = {
 	name: 'guard',
 	who: 'units.filter("Knight")',
-	watch: [
-		'some(allUnits.filter("Healer").filter(u => isHurt(u)))',
-		'some(allUnits.filter("Captain").filter(u => isHurt(u)))',
-		'some(allUnits.filter("Archer").filter(u => isHurt(u)))',
-		'some(allUnits.filter("Witch").filter(u => isHurt(u)))',
-	].join(' || '),
+	watch: 'some(allUnits.filter("Healer")) && some(allUnits.filter(u => isHurt(u)))',
 	arc: 'loop(protect())',
 	pinned: true,
 };
 
-function companyLaws(captain:string) {
-	return [woundedLaw(captain), MEND_LAW, GUARD_LAW];
-}
+const STRIKE_LAW = {
+	name: 'strike',
+	who: 'me',
+	watch: 'some(others.filter("enemy")) && !(me is "Healer")',
+	arc: 'loop(attack())',
+	pinned: true,
+};
+
+const RANK_LAW = {
+	name: 'rank',
+	who: 'me',
+	watch: `me is "Healer" && some(others.filter("enemy")) && (some(allUnits.filter("Knight")) || some(allUnits.filter("Blade")) || isNear(me, others.filter("enemy"), ${BACK_STANDOFF}))`,
+	arc: 'loop(rank())',
+	pinned: true,
+};
+
+const COMPANY_LAWS = [WOUNDED_LAW, MEND_LAW, GUARD_LAW, STRIKE_LAW, RANK_LAW];
 
 function companyRole(name:string):string {
 	return [
 		'IMPORTANT! DO NOT THINK! RESPOND IMMEDIATELY!',
 		`You command ${name}'s company. Win.`,
+		formatFightRules(),
 		'Your units are fully programmable RTS units: sticky programs, laws, when, loop. You are a unit and the commander; issue() never targets you.',
 		'The enemy shows as Witch, Knight, Archer, Blade, Healer — never given names. Attack those roles, never an outsider\'s name.',
-		'Thinking is dangerous. The enemy is very likely already killing your units while you think. Do not wait for another think. Keep the wounded law. Issue a looping fight program to every unit by YOUR tag (join issue with ;). Never issue(allUnits) a fight — that is one program, so a Witch would slash.',
-		'go_to is not a fight — they walk there and stop. Combat verbs walk into range. The verb matches YOUR tag; the name is an enemy role: issue(who=units.filter("Witch"), arc=loop(hex(Witch) && hex(Healer))). Archer shoot, Knight cleave, Blade slash. who=Blade is your Blade, not the enemy Blade.',
-		'A program that ends is idle in a knife fight. Inside the issued arc, && is the next step after success (the hit landed or the foe is down). Perhaps || another role, or go_to you, if that step fails. loop the chain. Join several issue with ; — never && between issue().',
-		'Hurt troops already have law wounded: isHurt(me) → go_to the commander. You already have mend: heal() loops Knight, then yourself, then Captain, then the rest. Keep wounded and mend. Never unlaw them.',
-		'Knight already has law guard: someone hurt → protect() between them and whoever is on them (Healer, Captain, Archer, Witch). Keep it.',
-		'smite and heal are yours alone (commander body, arm\'s reach). Never issue smite. Never issue heal. Units cannot smite.',
+		'Thinking is dangerous. The enemy is very likely already killing your units while you think. Do not wait for another think. Keep the wounded law. First think: four looping issue joined with ; — copy the Example. Later thinks only edit. Prefer law for anything that should apply to more than one unit. Never issue(allUnits) a fight — that is one program, so a Witch would slash.',
+		'go_to is not a fight — they walk there and stop. Issued combat verbs walk those units into range. You stay behind the line. The verb matches YOUR tag. who=Blade is your Blade, not the enemy Blade. Enemies in programs are others.filter("enemy") — never an outsider\'s given name.',
+		'Flank with spread, circle, or go_to a Tree or Boulder so shoot has a clear view.',
+		'A program that ends is idle in a knife fight. Inside the issued arc, && is the next step after success (the hit landed or the foe is down). loop the chain. Join several issue with ; — never && between issue().',
+		'Sight is about 10 seconds old. If someone is almost dead and under fire they are probably down — do not program around that snapshot. First think: emit the four looping issue in the Example — one score per tag, parens matched. Do not nest when or law on that think.',
+		'Hurt troops already have law wounded: out of heal range of a Healer → go_to(Healer) until they are in range, then they keep fighting. You already have mend: heal() loops Knight, then yourself, then Captain, then the rest — only while you are a Healer and no rival is in knife range. Guard protect()s whoever is hurt while a Healer lives: the Knight screens them and attacks that threat, then goes back to their program. Strike is attack() with your tag when you are not a Healer. Rank holds you behind the Knight and Blade, clear of knife range. If a rival is close, rank() away — do not heal or smite in a scrum. Keep wounded, mend, guard, strike, and rank. Never unlaw them. Peel later inside an issued arc: attack the rival that isNear your Healer.',
+		`smite, heal, attack(), and rank() are yours (commander body). smite is arm's reach — never walk in for it while a Knight or Blade lives. heal from ${SPELL_RANGE}m like hex. Never go_to an enemy. Never issue smite, heal, attack, or rank. Units cannot smite.`,
+		'You may law(who=units, watch=me.hp/me.maxHP<0.25, arc=go_to(Healer), name=lastStand).',
 	].join(' ');
 }
 
@@ -69,6 +80,7 @@ const DAWN:AgentSpec<HostCtx> = {
 	skipHeartbeat: false,
 	skipMajor: true,
 	watchesWritable: false,
+	pinnedSightFocus: ['isHurt(it)'],
 	kit: FIGHT,
 	commander: 'Dawn',
 	identity: {
@@ -87,7 +99,7 @@ const DAWN:AgentSpec<HostCtx> = {
 		{ id: 'Wisp', tags: ['Archer', 'Dawn'] },
 		{ id: 'Cade', tags: ['Blade', 'Dawn'] },
 	],
-	laws: companyLaws('Dawn'),
+	laws: COMPANY_LAWS,
 };
 
 const DUSK:AgentSpec<HostCtx> = {
@@ -95,6 +107,7 @@ const DUSK:AgentSpec<HostCtx> = {
 	skipHeartbeat: false,
 	skipMajor: true,
 	watchesWritable: false,
+	pinnedSightFocus: ['isHurt(it)'],
 	kit: FIGHT,
 	commander: 'Dusk',
 	identity: {
@@ -113,7 +126,7 @@ const DUSK:AgentSpec<HostCtx> = {
 		{ id: 'Ash', tags: ['Archer', 'Dusk'] },
 		{ id: 'Flint', tags: ['Blade', 'Dusk'] },
 	],
-	laws: companyLaws('Dusk'),
+	laws: COMPANY_LAWS,
 };
 
 /** Farther from the fight outranks. Healer, archer, mage, swordsman, tank. */
@@ -163,19 +176,15 @@ function succeedCommand(host:GameHost, conductorID:string):void {
 		return;
 	}
 	host.arc?.setCrowdCommander(conductorID, best.id);
-	agent.addLaw(woundedLaw(best.id), true);
 	agent.crowd.get(best.id)?.interrupt();
 	findBody(host.world, best.id)?.getComponent(NPCInput)?.interrupt('attack');
 }
-
-/** Battlefield slog. Default motor speed is 4.2. */
-const RUINS_WALK = 2.2;
 
 function paceRuins(host:GameHost):void {
 	for (const go of host.world.objects) {
 		const motor = go.getComponent(CharacterMotor);
 		if (motor) {
-			motor.maxSpeed = RUINS_WALK;
+			motor.maxSpeed = FIGHT_WALK;
 		}
 	}
 }
@@ -257,7 +266,7 @@ function hopWin(host:GameHost, winners:GameObject[], name:string):void {
 	}
 	winner.replaceProgram();
 	winner.goals = [{ text: 'You won. Stay. Speak when someone approaches or gives you something.', priority: 2 }];
-	winner.kit = { verbs: [...FIGHT.verbs, 'say'], tools: [] };
+	winner.kit = { verbs: [...(FIGHT.verbs ?? []), 'say'], tools: [] };
 	for (const unit of winner.crowd.list()) {
 		unit.interrupt();
 	}
@@ -297,7 +306,9 @@ export function createDirector(host:GameHost):ArcDirector<HostCtx> {
 		.addVerb('slash', { name: 'id' })
 		.addVerb('smite', { name: 'id' })
 		.addVerb('heal', { name: 'id?' })
-		.addVerb('protect')
+		.addVerb('protect', { name: 'id?' })
+		.addVerb('attack', { name: 'id?' })
+		.addVerb('rank', {})
 		.withSight({ limit: 16 })
 		.withDefaultKit(host.kit)
 		.addCrowdConductor(DAWN)

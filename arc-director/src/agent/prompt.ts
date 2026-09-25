@@ -53,7 +53,7 @@ export function stablePrefix(
 		lines.push(seeMapHint(opts.youSymbol, opts.canGrepEncyclopedia === true, verbs.has('wander')));
 	}
 	if (!opts.omitArc) {
-		lines.push(arcInstructions(verbs, opts.arcText === true, opts.tools ?? [], {
+		lines.push(arcInstructions(verbs, shouldEmitArcText(verbs, opts.arcText === true), opts.tools ?? [], {
 			think: opts.thinkInstructions,
 			verbs: opts.verbInstructions,
 		}));
@@ -65,7 +65,7 @@ export const WATCH_CHEAT_SHEET = [
 	'Watch language (not JS). Bindings: me, others, items, units (this Crowd roster, not others), landmarks, events, prev (last think: prev.me, prev.secondsAgo, prev.verbs).',
 	'Standing: addWatches / editWatches / removeWatches. One-shot this think: observe(expr).',
 	'Relations: distance(me, Player), isNear(me, Player, 16), hasSightline, isFacing, manhattan(me, Player), isReachable(me, Cottage); wrap list watches in some.',
-	'i is "Lantern". filter/count/find/some/all. others.nearby(16), isLeft, isRight, events.filter("theft"). &&/|| numbers=min/max, bools=and/or. Crowd: doing(u, "go_to"). isCarrying / wasCarrying / hasJustReceived / hasJustLost when you carry.',
+	'i is "Lantern". filter/count/find/some/all/minBy/maxBy. others.nearby(16), isLeft, isRight, events.filter("theft"). &&/|| numbers=min/max, bools=and/or. Crowd: doing(u, "go_to"). isCarrying / wasCarrying / hasJustReceived / hasJustLost when you carry.',
 ].join(' ');
 
 export function encyclopediaHint(includeUnnamed = false, canWander = true):string {
@@ -100,6 +100,11 @@ export const DEFAULT_THINK_INSTRUCTIONS = 'Think in 5 sentences, then emit the a
 
 /** Standing verb-chain line when the host does not call `withVerbInstructions`. */
 export const DEFAULT_VERB_INSTRUCTIONS = 'A think is expensive. Chain every next verb you already know, as far as you can see this think — not only the first step of an order.';
+
+/** Crowd `issue` examples are Arc text (`issue(...) ; issue(...)`). Ask for that, not JSON. */
+export function shouldEmitArcText(verbs:VerbRegistry, arcText = false):boolean {
+	return arcText || verbs.has('issue');
+}
 
 function joinSentences(parts:Array<string | false>):string {
 	return parts
@@ -139,26 +144,39 @@ function arcInstructions(
 			? '&& continues only on success; ; always continues; || is the failure fallback.'
 			: 'then_if_ok continues only on success; then always continues; then_if_err is the failure fallback.',
 		toolNames.length > 0 && `Tools this think, not verbs: ${toolNames.join(', ')}. Call the tool; never write a tool name in the Arc. Skip tools if you can already act.`,
-		emitSentence(arcText, toolNames.length > 0, chain),
+		emitSentence(arcText, toolNames.length > 0),
 		`Names only, no coordinates. Available verbs: ${verbHelp(verbs)}.`,
+		arcExample(arcText, chain, has('issue'), fightKit(verbs.nested())),
 	]);
 }
 
 function wanderExample(arcText:boolean):string {
 	return arcText
-		? 'Example: wander(until=some(items.filter("FireMushroom").nearby())).'
-		: 'Example: {"head":{"verb":"wander","args":{"until":"some(items.filter(\\"FireMushroom\\").nearby())"}}}.';
+		? 'Example: wander(until=some(items.filter("FireMushroom").nearby()))'
+		: 'Example: {"head":{"verb":"wander","args":{"until":"some(items.filter(\\"FireMushroom\\").nearby())"}}}';
 }
 
-function emitSentence(arcText:boolean, tools:boolean, chain:boolean):string {
+function emitSentence(arcText:boolean, tools:boolean):string {
 	const lead = tools ? 'After any tool, emit only' : 'Answer immediately with only';
 	const kind = arcText ? 'the Arc text' : 'the Arc JSON';
-	const example = chain
-		? (arcText
-			? 'Example: pick_up(Lantern) ; go_to(Player) && give(item=Lantern, to=Player). No JSON, no prose.'
-			: 'Example: {"head":{"verb":"pick_up","args":{"name":"Lantern"}},"then":{"join":"then","arc":{"head":{"verb":"go_to","args":{"name":"Player"}},"then":{"join":"then_if_ok","arc":{"head":{"verb":"give","args":{"item":"Lantern","to":"Player"}}}}}}}. Close every brace. No prose.')
-		: (arcText ? 'No JSON, no prose.' : 'Close every brace. No prose.');
-	return `${lead} ${kind}. ${example}`;
+	const ban = arcText ? 'No JSON, no prose.' : 'Close every brace. No prose.';
+	return `${lead} ${kind}. ${ban}`;
+}
+
+/** Last in the prefix so a copied Example is valid Arc, with no trailing sentence. */
+function arcExample(arcText:boolean, chain:boolean, crowd:boolean, fight:boolean):string | false {
+	if (crowd && arcText && fight) {
+		return `Example: ${FIGHT_OPENING}`;
+	}
+	if (crowd && arcText) {
+		return 'Example: issue(who=units.filter("Guard"), arc=go_to(Keep)) ; issue(who=units.filter("Scout"), arc=go_to(EastGate))';
+	}
+	if (chain) {
+		return arcText
+			? 'Example: pick_up(Lantern) ; go_to(Player) && give(item=Lantern, to=Player)'
+			: 'Example: {"head":{"verb":"pick_up","args":{"name":"Lantern"}},"then":{"join":"then","arc":{"head":{"verb":"go_to","args":{"name":"Player"}},"then":{"join":"then_if_ok","arc":{"head":{"verb":"give","args":{"item":"Lantern","to":"Player"}}}}}}}';
+	}
+	return false;
 }
 
 function unnamedPlace(verbs:VerbRegistry):string {
@@ -233,12 +251,50 @@ function crowdInstructions(verbs:VerbRegistry):string {
 	}
 	if (verbs.has('law') || verbs.has('unlaw')) {
 		const who = verbs.has('issue')
-			? `law(who?, watch, arc, name?) is a standing reaction until unlaw(name) — it outlives the program and needs no think. Omitted who = units (troops). `
+			? `law(who?, watch, arc, name?) is a standing reaction until unlaw(name) — it outlives the program and needs no think. Omitted who = units (troops). Prefer law for any reaction that should apply to more than one unit; when is one job. `
 			: `law(watch, arc, name?) is a standing reaction until unlaw(name) — it outlives the program and needs no think. `;
 		parts.push(who);
 	}
+	if (verbs.has('issue') && (verbs.has('loop') || verbs.has('when')) && !fightKit(verbs.nested())) {
+		parts.push(
+			'Issue looping programs with a bunch of when(watch, arc) reactions so they keep working without another think. A later think only edits — replace one program or add a law, do not rewrite the whole roster. ',
+		);
+	}
+	const nested = verbs.nested();
+	if (nested.has('shoot') || nested.has('hex') || nested.has('heal')) {
+		parts.push(
+			'Arrows need a clear line of sight past trees, walls, and bodies; spells (hex, heal) through cover are weaker. Flank around cover for a better view of the target. ',
+		);
+	}
+	if (nested.has('protect')) {
+		parts.push(
+			'protect(name?) stands between an ally and the threat, then attacks that threat. Peeling is also protect: when a rival isNear a precious ally, attack that same rival. ',
+		);
+	}
+	if (verbs.has('issue') && fightKit(nested)) {
+		parts.push(FIGHT_DOCTRINE);
+	}
 	return parts.join('');
 }
+
+function fightKit(verbs:VerbRegistry):boolean {
+	return ['shoot', 'hex', 'cleave', 'slash', 'smite', 'heal', 'protect'].some((name) => verbs.has(name));
+}
+
+/** First-think fight programs. Gemma copies this; keep it short and paren-balanced. */
+const FIGHT_OPENING = [
+	'issue(who=units.filter("Knight"), arc=loop(cleave(others.filter("enemy").minBy(u => distance(me, u)))))',
+	'issue(who=units.filter("Blade"), arc=loop(slash(others.filter("enemy").minBy(u => distance(me, u)))))',
+	'issue(who=units.filter("Archer"), arc=loop(shoot(others.filter("enemy").minBy(u => u.hp + distance(me, u)))))',
+	'issue(who=units.filter("Witch"), arc=loop(hex(others.filter("enemy").minBy(u => u.hp + distance(me, u)))))',
+].join(' ; ');
+
+/** Standing 5v5 doctrine when the catalog has a fight kit. */
+const FIGHT_DOCTRINE = [
+	'Teamfight: Knight and Blade hold a line on the nearest. Archer, Witch, and Healer sit behind that line and pick among enemies they can hit. Healer: stay back, heal from range, never walk toward an enemy. Live minBy every swing — do not hex(Healer) from this snapshot. Sight is ~10s stale.',
+	'First think: emit the four issue loops in the Example. Match parens. Do not nest when or law on that first think. Guard already protect()s while someone is hurt and a Healer lives. Peel later inside an issued arc: attack the rival that isNear your Healer.',
+	'Later thinks only edit. Never a weak allUnits. Optional: law(who=units, watch=me.hp/me.maxHP<0.25, arc=go_to(Healer), name=lastStand).',
+].join(' ');
 
 function stringifySense(value:unknown):string {
 	if (typeof value === 'string') {

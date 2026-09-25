@@ -1022,7 +1022,16 @@ export class ArcDirector<HostCtx = unknown> {
 		}
 		const kernels = this.kernelsFor(row, ctx);
 		for (const obj of objects) {
-			const it = dummyEntity(obj.id, { name: obj.id, tags: obj.tags });
+			const it = dummyEntity(obj.id, {
+				name: obj.id,
+				tags: obj.tags,
+				fields: obj.hp !== undefined && obj.maxHP !== undefined
+					? {
+						hp: { kind: 'number', value: obj.hp },
+						maxHP: { kind: 'number', value: obj.maxHP },
+					}
+					: undefined,
+			});
 			const cat = buildCatalog({
 				...kernels,
 				bindings: { ...kernels.bindings, it: { kind: 'entity', value: it } },
@@ -1052,8 +1061,7 @@ export class ArcDirector<HostCtx = unknown> {
 		if (!agent) {
 			return { ok: false, verb: step.verb, reason: 'no agent' };
 		}
-		const liveID = actorID
-			?? (isCrowdConductor(agent) ? (agent.commanderID ?? agent.id) : agent.id);
+		const liveID = actorID ?? agent.thinkThread();
 		let liveCtx = ctx;
 		const next = this.tryCtx(liveID);
 		if (next !== undefined) {

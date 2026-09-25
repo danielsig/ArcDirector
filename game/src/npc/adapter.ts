@@ -39,7 +39,7 @@ import { hostCanSee, lookWorld, inventoryOf, followedCarry } from './perception'
 import { executeStep } from './verbs';
 import { restoreCompanionHold } from './companion';
 import { runFormation } from './formations';
-import { resolveFightName } from './fight';
+import { fightExprTags, resolveFightName } from './fight';
 import {
 	inTalkRange,
 	talkOthers,
@@ -212,7 +212,13 @@ export class GameHost {
 		},
 	};
 
-	kernels:KernelSource<HostCtx> = (ctx) => kernelsOf(this.world, ctx.actor, this.posedEvents);
+	kernels:KernelSource<HostCtx> = (ctx) => kernelsOf(
+		this.world,
+		ctx.actor,
+		this.posedEvents,
+		undefined,
+		(go) => fightExprTags(this, ctx.actor, go),
+	);
 
 	async start():Promise<void> {
 		if (this.disposed || !this.arc || this.starting || this.arc.ready || !this.world.arcDirectorOn) {

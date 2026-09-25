@@ -345,6 +345,20 @@ function snapGround(world:World, dt:number):void {
 	});
 }
 
+/** Push `go` out of blocked tiles, solid colliders, and illegal cliffs. */
+export function resolveBody(world:World, go:GameObject):void {
+	const col = go.getComponent(BoxCollider);
+	if (!col?.enabled || !col.solid || col.isTrigger) {
+		return;
+	}
+	resolveAgainstTiles(go, col, world);
+	resolveAgainstOthers(world, go, col);
+	const rb = go.getComponent(Rigidbody);
+	if (rb?.enabled) {
+		blockCliffs(go, rb, world);
+	}
+}
+
 /** Integrate rigidbodies, resolve colliders, snap grounded Y. */
 export function stepPhysics(world:World, dt:number):void {
 	integrate(world, dt);

@@ -437,6 +437,38 @@ describe('evaluate', () => {
 		assert.equal(id.value.kind === 'string' ? id.value.value : '', 'Guard');
 	});
 
+	it('isHurt is false at 0 hp', () => {
+		const it = dummyEntity('Witch', {
+			tags: ['agent'],
+			fields: {
+				hp: { kind: 'number', value: 0 },
+				maxHP: { kind: 'number', value: 12 },
+			},
+		});
+		const host = world({
+			hp: (who) => who.id === 'Witch' ? { hp: 0, maxHP: 12 } : { hp: 3, maxHP: 5 },
+		});
+		host.bindings = { ...host.bindings, it: { kind: 'entity', value: it } };
+		assert.equal(bool('isHurt(it)', host), false);
+		assert.equal(bool('isHurt(me)', host), true);
+	});
+
+	it('isHurt reads snapshot hp on it when lookup has no body', () => {
+		const it = dummyEntity('Witch', {
+			tags: ['agent'],
+			fields: {
+				hp: { kind: 'number', value: 2 },
+				maxHP: { kind: 'number', value: 12 },
+			},
+		});
+		const host = world({
+			hp: (who) => who.id === 'Guard' ? { hp: 3, maxHP: 5 } : undefined,
+		});
+		host.bindings = { ...host.bindings, it: { kind: 'entity', value: it } };
+		assert.equal(bool('isHurt(it)', host), true);
+		assert.equal(bool('isHurt(me)', host), true);
+	});
+
 	it('host events filter theft', () => {
 		assert.equal(bool('some(events.filter("theft"))'), true);
 		assert.equal(bool('some(events.filter("theft").nearby(16))'), true);

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { formatSight } from './sight.js';
+import { formatSight, formatSightClauses, joinSightClauses, orderSightClauses } from './sight.js';
 import { groundAndFigure } from './ground.js';
 import { builtinStringifiers, basicPluralize } from './stringifiers.js';
 import type { SeenObject, Sight, RelationshipStringifier } from './types.js';
@@ -182,6 +182,48 @@ describe('formatSight', () => {
 			paragraph,
 			'A busy street flea market. boxes. Cutler next to *CutlerStall*. Weaver next to *WeaverStall*. Baker next to *BakerStall*. Potter next to *PotterStall*. Brant 15 paces in front of you. Cass 15 paces in front of you. Pike 2 paces to your right. VisitorA 10 paces in front of you. VisitorB 10 paces in front of you. VisitorC 5 paces to your right. *EastGate* 20 paces in front of you. *WestGate* 4 paces behind you. Apple 5 paces in front of you. Bowl 15 paces in front of you. Candle 10 paces in front of you. Knife 15 paces in front of you. Loaf 5 paces in front of you. Scarf 5 paces in front of you.',
 		);
+	});
+
+	it('sightLimit keeps people when trees would crowd the cap', () => {
+		const trees:SeenObject[] = [];
+		for (let i = 0; i < 12; i++) {
+			trees.push(seen(`tree_oak_${i}`, [i * 1.1, -1], { tags: ['tree'] }));
+			trees.push(seen(`tree_pine_${i}`, [i * 1.1 + 0.4, -1.2], { tags: ['tree'] }));
+		}
+		const clauses = formatSightClauses({
+			self: { id: 'Dawn', at: [0, 0], facing: [0, -1] },
+			ambient: 'A ruined colonnade.',
+			objects: [
+				person('Witch', [0, -20]),
+				person('Blade', [2, -15]),
+				person('Healer', [1, -18]),
+				...trees,
+			],
+		});
+		const limited = orderSightClauses(clauses, undefined, 6);
+		const text = joinSightClauses(limited);
+		assert.match(text, /Witch/);
+		assert.match(text, /Blade/);
+		assert.match(text, /Healer/);
+		assert.equal(limited.length <= 6, true);
+	});
+
+	it('appends hp and a nearby-threat note on leftover people', () => {
+		const paragraph = formatSight({
+			self: { id: 'Dawn', at: [0, 0], facing: [0, -1] },
+			objects: [
+				seen('Healer', [0, -3], {
+					tags: ['agent', 'person'],
+					interactable: true,
+					interesting: 1,
+					movable: true,
+					hp: 4,
+					maxHP: 12,
+					note: 'Blade 3m away',
+				}),
+			],
+		}, { unitName: 'm', relationships: [] });
+		assert.equal(paragraph, 'Healer 4/12 hp, Blade 3m away 3m in front of you.');
 	});
 
 	it('sticks a 1-char unit to the number and keeps bearing as a heading', () => {

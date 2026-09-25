@@ -1,4 +1,13 @@
-import { isCrowdConductor, pascalCase, type ArcResult, type Step } from 'arc-director';
+import {
+	buildCatalog,
+	evaluate,
+	isCrowdConductor,
+	pascalCase,
+	SampleCache,
+	type ArcResult,
+	type ExprVal,
+	type Step,
+} from 'arc-director';
 import { NPCInput } from '../actors/NPCInput';
 import {
 	BODY_SLOTS,
@@ -41,19 +50,29 @@ import { equipItem, unequipSlot } from '../items/equip';
 import { useItem } from '../items/use';
 import type { GameHost } from './adapter';
 import { bodyName, findBody, isLiving } from './names';
-import { poseFact } from './kernels';
+import { kernelsOf, poseFact } from './kernels';
 import { doExamine } from './perception';
 import { applyHit } from './hitFeel';
 import {
 	agilityOf,
+	ATTACKS,
+	attackVerbFor,
+	COVER_SOFTEN,
 	fightCompany,
 	fightLabel,
 	fightRole,
 	fightTags,
+	fightExprTags,
+	findAllyTarget,
 	findFightTarget,
+	HEAL,
+	isBackRole,
+	isFrontRole,
 	isRivalBody,
+	nearestAlly,
 	nearestRival,
-	type FightRole,
+	rankSlot,
+	type AttackKind,
 } from './fight';
 import { lineClear } from '../world/path';
 import type { HostCtx } from './types';
@@ -64,6 +83,70 @@ import {
 	wanderFilterHint,
 	wanderUntilMet,
 } from './wander';
+
+function looksLikeTargetExpr(s:string):boolean {
+	return /[()]/.test(s) || s.includes('.') || s.includes('=>');
+}
+
+function bodyFromExprVal(host:GameHost, observer:GameObject, v:ExprVal):GameObject | undefined {
+	if (v.kind === 'entity') {
+		return findBody(observer.world ?? host.world, v.value.id);
+	}
+	if (v.kind === 'string' && v.value) {
+		return findAllyTarget(host, observer, v.value) ?? findFightTarget(host, observer, v.value);
+	}
+	if (v.kind === 'list') {
+		for (const row of v.value) {
+			const go = bodyFromExprVal(host, observer, row);
+			if (go) {
+				return go;
+			}
+		}
+	}
+	return undefined;
+}
+
+function evalTarget(host:GameHost, observer:GameObject, raw:string):GameObject | undefined {
+	const trimmed = raw.trim();
+	if (!trimmed || !looksLikeTargetExpr(trimmed)) {
+		return undefined;
+	}
+	const catalog = buildCatalog({
+		...kernelsOf(
+			host.world,
+			observer,
+			host.posedEvents,
+			undefined,
+			(go) => fightExprTags(host, observer, go),
+		),
+		cache: new SampleCache(),
+	});
+	const r = evaluate(trimmed, catalog);
+	if (r.error) {
+		return undefined;
+	}
+	const go = bodyFromExprVal(host, observer, r.value);
+	if (!go || go === observer || !isLiving(go)) {
+		return undefined;
+	}
+	return go;
+}
+
+function resolveFoe(host:GameHost, observer:GameObject, raw:string):GameObject | undefined {
+	const scored = evalTarget(host, observer, raw);
+	if (scored && isRivalBody(host, observer, scored)) {
+		return scored;
+	}
+	return findFightTarget(host, observer, raw);
+}
+
+function resolveAlly(host:GameHost, observer:GameObject, raw:string):GameObject | undefined {
+	const scored = evalTarget(host, observer, raw);
+	if (scored && !isRivalBody(host, observer, scored)) {
+		return scored;
+	}
+	return findAllyTarget(host, observer, raw);
+}
 
 function findItem(actor:GameObject, name:string):ItemInstance | null {
 	return findCarried(actor, (it) => itemMatchesName(it, name));
@@ -122,7 +205,9 @@ export async function executeStep(host:GameHost, step:Step, ctx:HostCtx):Promise
 	switch (step.verb) {
 		case 'go_to': {
 			const name = String(step.args.name ?? '');
-			const target = findFightTarget(host, ctx.actor, name);
+			const target = evalTarget(host, ctx.actor, name)
+				?? findAllyTarget(host, ctx.actor, name)
+				?? findFightTarget(host, ctx.actor, name);
 			if (!target) {
 				return { ok: false, verb: 'go_to', reason: `no such place ${name} — not reachable with go_to. see_map, ask, or wander(until) until the scene names it` };
 			}
@@ -248,8 +333,18 @@ export async function executeStep(host:GameHost, step:Step, ctx:HostCtx):Promise
 		case 'slash':
 		case 'smite':
 			return doAttack(host, ctx, npc, step.verb, String(step.args.name ?? ''));
+		case 'attack': {
+			const role = fightRole(host, ctx.actor);
+			const verb = role ? attackVerbFor(role) : undefined;
+			if (!verb) {
+				return { ok: false, verb: 'attack', reason: 'no attack' };
+			}
+			return doAttack(host, ctx, npc, verb, String(step.args.name ?? ''));
+		}
+		case 'rank':
+			return doRank(host, ctx, npc);
 		case 'protect':
-			return doProtect(host, ctx, npc);
+			return doProtect(host, ctx, npc, String(step.args.name ?? ''));
 		case 'heal':
 			return doHeal(host, ctx, npc, String(step.args.name ?? ''));
 		default:
@@ -325,36 +420,66 @@ function combatSight(world:World, a:GameObject, b:GameObject):boolean {
 		a.transform.position.z,
 		b.transform.position.x,
 		b.transform.position.z,
-		true,
 	);
 }
 
-type AttackKind = {
-	roles:FightRole[];
-	range:number;
-	damage:number;
-	los:boolean;
-	word:string;
-	/** Wind-up before the hit, seconds of `world.time`. */
-	castTime:number;
-	/** Recovery after the hit before the next cast, seconds of `world.time`. */
-	cooldown:number;
-	/** Hit chance at point-blank before target agility, 0..1. */
-	accuracy:number;
-	/** Ranged only. Accuracy multiplier at max range (1 = no drop). */
-	falloff?:number;
-};
+const RANK_ARRIVE = 1.2;
 
-const ATTACKS:Record<string, AttackKind> = {
-	slash: { roles: ['Blade'], range: 1.7, damage: 1, los: false, word: 'slashed', castTime: 0.28, cooldown: 0.72, accuracy: 0.9 },
-	smite: { roles: ['Healer'], range: 2.2, damage: 2, los: false, word: 'smote', castTime: 0.4, cooldown: 1.2, accuracy: 0.86 },
-	hex: { roles: ['Witch'], range: 8, damage: 3, los: true, word: 'hexed', castTime: 1.8, cooldown: 1.4, accuracy: 0.84, falloff: 0.5 },
-	cleave: { roles: ['Knight'], range: 2.2, damage: 4, los: false, word: 'cleaved', castTime: 0.8, cooldown: 1.6, accuracy: 0.74 },
-	shoot: { roles: ['Archer'], range: 12, damage: 5, los: true, word: 'shot', castTime: 1.5, cooldown: 3.5, accuracy: 0.78, falloff: 0.28 },
-};
+async function closeTo(
+	host:GameHost,
+	npc:NPCInput,
+	actor:GameObject,
+	target:GameObject,
+	name:string,
+	range:number,
+	useRank = true,
+):Promise<ArcResult> {
+	const role = fightRole(host, actor);
+	const slot = useRank ? rankSlot(host, actor) : undefined;
+	if (slot && (isBackRole(role) || isFrontRole(role))) {
+		const here = actor.transform.position;
+		if (Math.hypot(here.x - slot.x, here.z - slot.z) > RANK_ARRIVE) {
+			const walk = await npc.goToPoint(slot.x, slot.z);
+			if (!walk.ok) {
+				return walk;
+			}
+		}
+		if (distXZ(actor, target) <= range + 0.5) {
+			return { ok: true };
+		}
+		if (isBackRole(role)) {
+			return { ok: false, reason: 'too far' };
+		}
+	}
+	const close = Math.max(0.9, range - 0.6);
+	if (distXZ(actor, target) > close) {
+		const walk = await npc.goTo(name, close);
+		if (!walk.ok) {
+			return walk;
+		}
+	}
+	if (distXZ(actor, target) > range + 0.5) {
+		return { ok: false, reason: 'too far' };
+	}
+	return { ok: true };
+}
 
-/** Slow ritual. Game seconds. `hp` is restored (capped at maxHP). */
-const HEAL = { castTime: 5, cooldown: 24, hp: 4 };
+async function doRank(host:GameHost, ctx:HostCtx, npc:NPCInput):Promise<ArcResult> {
+	const slot = rankSlot(host, ctx.actor);
+	if (!slot) {
+		return { ok: false, verb: 'rank', reason: 'no line' };
+	}
+	const here = ctx.actor.transform.position;
+	if (Math.hypot(here.x - slot.x, here.z - slot.z) <= RANK_ARRIVE) {
+		const hold = await npc.wait(0.35);
+		if (!hold.ok) {
+			return { ...hold, verb: 'rank' };
+		}
+		return { ok: true, verb: 'rank' };
+	}
+	const walk = await npc.goToPoint(slot.x, slot.z);
+	return { ...walk, verb: 'rank' };
+}
 
 function attackOf(verb:string):{ name:string; spec:AttackKind } | undefined {
 	const spec = ATTACKS[verb];
@@ -384,7 +509,7 @@ async function holdReady(
 }
 
 function rangeAccuracy(spec:AttackKind, dist:number):number {
-	if (!spec.los) {
+	if (!spec.cover) {
 		return spec.accuracy;
 	}
 	const span = Math.max(spec.range, 0.01);
@@ -403,6 +528,7 @@ async function doAttack(
 	npc:NPCInput,
 	verb:string,
 	name:string,
+	locked?:GameObject,
 ):Promise<ArcResult> {
 	const role = fightRole(host, ctx.actor);
 	const attack = attackOf(verb);
@@ -413,53 +539,51 @@ async function doAttack(
 		const need = attack.spec.roles.join(' or ');
 		return { ok: false, verb, reason: `only a ${need} can ${attack.name}` };
 	}
-	let target = findFightTarget(host, ctx.actor, name);
+	let target = locked
+		?? (name.trim()
+			? resolveFoe(host, ctx.actor, name)
+			: nearestRival(host, ctx.actor));
 	if (!target) {
-		return { ok: false, verb: attack.name, reason: `no such person ${name}` };
+		return {
+			ok: false,
+			verb: attack.name,
+			reason: name.trim() ? `no such person ${name}` : 'no one to attack',
+		};
 	}
 	if (target === ctx.actor) {
 		return { ok: false, verb: attack.name, reason: `cannot ${attack.name} yourself` };
 	}
 	const dest = bodyName(target);
 	const weapon = heldWeapon(ctx.actor);
-	const melee = !attack.spec.los;
+	const melee = !attack.spec.cover;
 	const range = melee ? Math.max(attack.spec.range, weapon?.range ?? 0) : attack.spec.range;
-	const close = Math.max(0.9, range - 0.6);
-	if (distXZ(ctx.actor, target) > close) {
-		const walk = await npc.goTo(dest, close);
-		if (!walk.ok) {
-			return { ...walk, verb: attack.name };
-		}
-	}
-	if (distXZ(ctx.actor, target) > range + 0.5) {
-		return { ok: false, verb: attack.name, reason: 'too far' };
-	}
-	if (attack.spec.los && !combatSight(ctx.world, ctx.actor, target)) {
-		const squeeze = Math.max(0.9, close * 0.45);
-		if (distXZ(ctx.actor, target) > squeeze) {
-			const walk = await npc.goTo(dest, squeeze);
-			if (!walk.ok) {
-				return { ...walk, verb: attack.name };
-			}
-		}
-		if (!combatSight(ctx.world, ctx.actor, target)) {
-			return { ok: false, verb: attack.name, reason: 'no line of sight' };
-		}
+	const walk = await closeTo(host, npc, ctx.actor, target, dest, range, !locked);
+	if (!walk.ok) {
+		return { ...walk, verb: attack.name };
 	}
 	npc.faceToward(dest);
 	const held = await holdReady(npc, ctx.world.time, npc.attackReadyAt, attack.spec.castTime);
 	if (!held.ok) {
 		return { ...held, verb: attack.name };
 	}
-	target = findFightTarget(host, ctx.actor, name) ?? target;
+	target = resolveFoe(host, ctx.actor, name) ?? target;
 	if (target === ctx.actor) {
 		return { ok: false, verb: attack.name, reason: `cannot ${attack.name} yourself` };
 	}
 	if (distXZ(ctx.actor, target) > range + 0.5) {
 		return { ok: false, verb: attack.name, reason: 'too far' };
 	}
-	if (attack.spec.los && !combatSight(ctx.world, ctx.actor, target)) {
-		return { ok: false, verb: attack.name, reason: 'no line of sight' };
+	const clear = !attack.spec.cover || combatSight(ctx.world, ctx.actor, target);
+	const who = fightLabel(host, ctx.actor);
+	const foe = fightLabel(host, target);
+	if (attack.spec.cover === 'block' && !clear) {
+		host.pushEvent({
+			kind: 'Miss',
+			text: `${who} has no shot at ${foe} — flank`,
+			tags: [who, foe, 'cover', attack.name],
+			major: false,
+		});
+		return { ok: false, verb: attack.name, reason: 'no line of sight — flank for a clear shot' };
 	}
 	const vitals = target.getComponent(Vitals);
 	if (!vitals) {
@@ -470,37 +594,48 @@ async function doAttack(
 		return { ok: true, verb: attack.name, reason: 'already down' };
 	}
 	const dist = distXZ(ctx.actor, target);
-	const chance = hitChance(attack.spec, dist, agilityOf(host, target));
-	const who = fightLabel(host, ctx.actor);
-	const foe = fightLabel(host, target);
+	const covered = attack.spec.cover === 'soften' && !clear;
+	let chance = hitChance(attack.spec, dist, agilityOf(host, target));
+	if (covered) {
+		chance = Math.min(0.97, Math.max(0.05, chance * COVER_SOFTEN));
+	}
 	npc.faceToward(bodyName(target));
 	if (Math.random() >= chance) {
 		host.pushEvent({
 			kind: 'Miss',
-			text: `${who} missed ${foe}`,
-			tags: [who, foe, 'miss', attack.name],
+			text: covered ? `${who} missed ${foe} through cover` : `${who} missed ${foe}`,
+			tags: [who, foe, 'miss', attack.name, ...(covered ? ['cover'] : [])],
 			major: false,
 		});
-		return { ok: true, verb: attack.name, reason: `missed ${foe}` };
+		return { ok: true, verb: attack.name, reason: covered ? `missed ${foe} through cover` : `missed ${foe}` };
 	}
-	const dmg = melee ? Math.max(attack.spec.damage, weapon?.damage ?? 0) : attack.spec.damage;
+	let dmg = melee ? Math.max(attack.spec.damage, weapon?.damage ?? 0) : attack.spec.damage;
+	if (covered) {
+		dmg = Math.max(1, Math.round(dmg * COVER_SOFTEN));
+	}
 	vitals.hp = Math.max(0, vitals.hp - dmg);
-	applyHit(ctx.world, ctx.actor, target);
+	applyHit(ctx.world, ctx.actor, target, attack.spec.knock ?? 1);
 	host.pushEvent({
 		kind: 'Hurt',
-		text: `${who} ${attack.spec.word} ${foe}`,
-		tags: [who, foe, 'hurt', attack.name],
+		text: covered
+			? `${who} ${attack.spec.word} ${foe} through cover`
+			: `${who} ${attack.spec.word} ${foe}`,
+		tags: [who, foe, 'hurt', attack.name, ...(covered ? ['cover'] : [])],
 		major: false,
 	});
 	if (vitals.hp <= 0) {
 		dropDown(host, target);
 		return { ok: true, verb: attack.name, reason: `${foe} is down` };
 	}
-	return { ok: true, verb: attack.name, reason: `${foe} ${vitals.hp}/${vitals.maxHP}` };
+	return {
+		ok: true,
+		verb: attack.name,
+		reason: covered
+			? `${foe} ${vitals.hp}/${vitals.maxHP} through cover`
+			: `${foe} ${vitals.hp}/${vitals.maxHP}`,
+	};
 }
 
-/** Knight screens a hurt ally in this order, standing between them and the nearest rival. */
-const PROTECT_ORDER = ['Healer', 'Captain', 'Archer', 'Witch'] as const;
 const PROTECT_COVER = 1.2;
 
 function interceptPoint(ward:GameObject, threat:GameObject):{ x:number; z:number } {
@@ -516,41 +651,22 @@ function interceptPoint(ward:GameObject, threat:GameObject):{ x:number; z:number
 	return { x: a.x + (dx / len) * cover, z: a.z + (dz / len) * cover };
 }
 
-function protectWard(host:GameHost, knight:GameObject):GameObject | undefined {
-	const company = fightCompany(host, knight);
-	if (!company) {
-		return undefined;
+function protectWard(host:GameHost, actor:GameObject, name:string):GameObject | undefined {
+	const trimmed = name.trim();
+	if (trimmed) {
+		return resolveAlly(host, actor, trimmed);
 	}
-	const wards:GameObject[] = [];
-	const seen = new Set<string>();
-	for (const role of PROTECT_ORDER) {
-		for (const unit of company.crowd.list()) {
-			if (seen.has(unit.id)) {
-				continue;
-			}
-			const go = findBody(host.world, unit.id);
-			if (!isLiving(go) || go === knight) {
-				continue;
-			}
-			const tags = fightTags(host, go);
-			const captain = role === 'Captain' && company.commanderID === unit.id;
-			if (!tags.includes(role) && !captain) {
-				continue;
-			}
-			seen.add(unit.id);
-			wards.push(go);
-		}
-	}
-	return wards.find(isHurtBody);
+	return nearestAlly(host, actor, isHurtBody);
 }
 
-async function doProtect(host:GameHost, ctx:HostCtx, npc:NPCInput):Promise<ArcResult> {
-	if (fightRole(host, ctx.actor) !== 'Knight') {
-		return { ok: false, verb: 'protect', reason: 'only a knight can protect' };
-	}
-	const ward = protectWard(host, ctx.actor);
+async function doProtect(host:GameHost, ctx:HostCtx, npc:NPCInput, name:string):Promise<ArcResult> {
+	const ward = protectWard(host, ctx.actor, name);
 	if (!ward) {
-		return { ok: false, verb: 'protect', reason: 'no one to protect' };
+		return {
+			ok: false,
+			verb: 'protect',
+			reason: name.trim() ? `no such person ${name}` : 'no one to protect',
+		};
 	}
 	const threat = nearestRival(host, ward);
 	if (!threat) {
@@ -568,14 +684,16 @@ async function doProtect(host:GameHost, ctx:HostCtx, npc:NPCInput):Promise<ArcRe
 	const here = ctx.actor.transform.position;
 	if (Math.hypot(screen.x - here.x, screen.z - here.z) > 0.55) {
 		const walk = await npc.goToPoint(screen.x, screen.z);
-		if (walk.interrupted) {
+		if (!walk.ok) {
 			return { ...walk, verb: 'protect' };
 		}
 	}
 	npc.faceToward(bodyName(threat));
-	const role = fightRole(host, threat);
-	if (role && distXZ(ctx.actor, threat) <= ATTACKS.cleave.range + 0.8) {
-		return doAttack(host, ctx, npc, 'cleave', role);
+	const swing = fightRole(host, ctx.actor);
+	const verb = swing ? attackVerbFor(swing) : undefined;
+	if (verb) {
+		const hit = await doAttack(host, ctx, npc, verb, '', threat);
+		return { ...hit, verb: 'protect', reason: hit.reason ?? `peel ${bodyName(threat)}` };
 	}
 	const hold = await npc.wait(0.35);
 	if (!hold.ok) {
@@ -653,6 +771,10 @@ function findHealNamed(host:GameHost, healer:GameObject, name:string):GameObject
 	if (!trimmed) {
 		return undefined;
 	}
+	const scored = resolveAlly(host, healer, trimmed);
+	if (scored) {
+		return scored;
+	}
 	const living = companyLiving(host, healer);
 	const tagged = living.filter((go) => hasHealTag(host, go, trimmed));
 	if (tagged.length > 0) {
@@ -687,7 +809,7 @@ async function doHeal(
 	}
 	const id = bodyName(target);
 	if (target !== ctx.actor) {
-		const walk = await ensureRange(npc, ctx.actor, target, id);
+		const walk = await closeTo(host, npc, ctx.actor, target, id, HEAL.range);
 		if (!walk.ok) {
 			return { ...walk, verb: 'heal' };
 		}
@@ -705,7 +827,7 @@ async function doHeal(
 		if (isRivalBody(host, ctx.actor, target)) {
 			return { ok: false, verb: 'heal', reason: 'heal your company, not the enemy' };
 		}
-		if (distXZ(ctx.actor, target) > USE_RANGE) {
+		if (distXZ(ctx.actor, target) > HEAL.range + 0.5) {
 			return { ok: false, verb: 'heal', reason: 'too far' };
 		}
 	}
@@ -713,9 +835,25 @@ async function doHeal(
 	if (!vitals) {
 		return { ok: false, verb: 'heal', reason: 'no vitals' };
 	}
+	const covered = target !== ctx.actor && !combatSight(ctx.world, ctx.actor, target);
+	const hp = covered ? Math.max(1, Math.round(HEAL.hp * COVER_SOFTEN)) : HEAL.hp;
 	npc.healReadyAt = ctx.world.time + HEAL.cooldown;
-	healActor(target, HEAL.hp);
-	return { ok: true, verb: 'heal', reason: `${bodyName(target)} ${vitals.hp}/${vitals.maxHP}` };
+	healActor(target, hp);
+	const who = fightLabel(host, ctx.actor);
+	const ally = fightLabel(host, target);
+	host.pushEvent({
+		kind: 'Heal',
+		text: covered ? `${who} healed ${ally} through cover` : `${who} healed ${ally}`,
+		tags: [who, ally, 'heal', ...(covered ? ['cover'] : [])],
+		major: false,
+	});
+	return {
+		ok: true,
+		verb: 'heal',
+		reason: covered
+			? `${bodyName(target)} ${vitals.hp}/${vitals.maxHP} through cover`
+			: `${bodyName(target)} ${vitals.hp}/${vitals.maxHP}`,
+	};
 }
 
 async function doUse(

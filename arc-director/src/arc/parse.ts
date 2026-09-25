@@ -1,7 +1,7 @@
-import { extractJson } from '../json.js';
+import { extractJson, isRecord } from '../json.js';
 import { asArc, isArc, validateArc } from './validate.js';
 import { ArcError, JOIN_SYMBOL, SYMBOL_JOIN, firstStep, type Arc, type Join, type Step } from './types.js';
-import type { VerbRegistry } from './stock-verbs.js';
+import type { VerbRegistry, VerbSpec } from './stock-verbs.js';
 import type { StepArg } from './validate.js';
 
 /** Watch / who exprs: `some(...)`, `isNear(me, Miller)`, `units.filter("Guard")`. */
@@ -250,8 +250,7 @@ function parseStepText(s:string, i:number, registry:VerbRegistry):{ step:Step; n
 				}
 				else {
 					i = nameStart;
-					const keys = Object.keys(spec.args);
-					const key = keys[positional] ?? registry.firstRequiredArg(spec);
+					const key = nextPositionalKey(spec, args, positional);
 					if (!key) {
 						throw new ArcError(`verb '${verb}' got an unexpected positional arg`);
 					}
@@ -300,30 +299,131 @@ function parseJoin(s:string, i:number):{ join:Join; next:number } | null {
 	return null;
 }
 
+function nextPositionalKey(
+	spec:VerbSpec,
+	args:Record<string, StepArg>,
+	from:number,
+):string | undefined {
+	const keys = Object.keys(spec.args);
+	for (let i = from; i < keys.length; i++) {
+		if (!(keys[i] in args)) {
+			return keys[i];
+		}
+	}
+	for (const key of keys) {
+		if (!(key in args)) {
+			return key;
+		}
+	}
+	return undefined;
+}
+
+function lastArc(arc:Arc):Arc {
+	let cur = arc;
+	while (cur.then) {
+		cur = cur.then.arc;
+	}
+	return cur;
+}
+
+/** Gemma copies the Example including a trailing period, and extra `)` between issue(). */
+function skipTrail(s:string, i:number):number {
+	i = skipWs(s, i);
+	while (i < s.length && (s[i] === ')' || s[i] === '.')) {
+		i = skipWs(s, i + 1);
+	}
+	return i;
+}
+
 export function parseArcText(text:string, registry:VerbRegistry):Arc {
 	const parsed = parseNestedArc(text, 0, registry);
-	const i = skipWs(text, parsed.next);
-	if (i < text.length) {
-		throw new ArcError(`unexpected trailing text: ${text.slice(i)}`);
+	const arc = parsed.value;
+	let i = skipTrail(text, parsed.next);
+	let tail = lastArc(arc);
+	while (i < text.length) {
+		const join = parseJoin(text, i);
+		if (!join) {
+			throw new ArcError(`unexpected trailing text: ${text.slice(i)}`);
+		}
+		const nxt = parseNestedArc(text, join.next, registry);
+		tail.then = { join: join.join, arc: nxt.value };
+		tail = lastArc(nxt.value);
+		i = skipTrail(text, nxt.next);
 	}
-	validateArc(parsed.value, registry);
-	return parsed.value;
+	validateArc(arc, registry);
+	return arc;
 }
 
 export function parseArc(input:string | unknown, registry:VerbRegistry):Arc {
 	if (typeof input !== 'string') {
-		return asArc(input, registry);
+		return parseArcValue(input, registry);
 	}
 	const trimmed = input.trim();
 	const json = lastHeadJson(trimmed);
 	if (json !== undefined) {
-		return asArc(extractJson(json), registry);
+		return parseArcValue(extractJson(json), registry);
 	}
-	if (trimmed.startsWith('```')) {
-		return asArc(extractJson(trimmed), registry);
+	if (trimmed.startsWith('{') || trimmed.startsWith('```')) {
+		return parseArcValue(extractJson(trimmed), registry);
 	}
 	return parseArcText(trimmed, registry);
 }
+
+function parseArcValue(raw:unknown, registry:VerbRegistry):Arc {
+	const bag = joinArcTextParts(raw);
+	if (bag) {
+		return parseArcText(bag, registry);
+	}
+	return asArc(raw, registry);
+}
+
+/** `{issue:"issue(...)", when:"when(...)"}` or `{commands:["issue(...)"]}`. */
+function joinArcTextParts(raw:unknown):string | undefined {
+	if (!isRecord(raw)) {
+		return undefined;
+	}
+	if (isRecord(raw.head) || raw.group !== undefined || isRecord(raw.arc)) {
+		return undefined;
+	}
+	const parts:string[] = [];
+	const take = (v:unknown):void => {
+		if (typeof v === 'string') {
+			const s = v.trim();
+			if (/^[A-Za-z_][\w]*\s*\(/.test(s)) {
+				parts.push(s.replace(/[;\s]+$/, ''));
+			}
+			return;
+		}
+		if (Array.isArray(v)) {
+			for (const item of v) {
+				take(item);
+			}
+		}
+	};
+	take(raw.arc);
+	if (parts.length === 0) {
+		for (const [key, value] of Object.entries(raw)) {
+			if (MIND_KEYS.has(key)) {
+				continue;
+			}
+			take(value);
+		}
+	}
+	if (parts.length === 0) {
+		return undefined;
+	}
+	return parts.join(' ; ');
+}
+
+const MIND_KEYS = new Set([
+	'addWatches',
+	'editWatches',
+	'removeWatches',
+	'watches',
+	'sightFocus',
+	'goals',
+	'identity',
+]);
 
 /** Last root `{"head"` / `{"group"` in CoT. Nested `then.arc.head` is skipped. */
 function lastHeadJson(text:string):string | undefined {

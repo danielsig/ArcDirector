@@ -265,6 +265,33 @@ describe('kit views and issue(who)', () => {
 		);
 	});
 
+	it('parses a JSON bag of issue() / when() strings', () => {
+		const catalog = registerStockCrowdVerbs(registerStockVerbs(new VerbRegistry()));
+		catalog.add('hex', { name: 'id' });
+		const kit = catalog.view(['issue', 'when', 'go_to', 'hex']);
+		const arc = parseArc({
+			issue: [
+				'issue(who=units.filter("Witch"), arc=hex("Healer"))',
+				'issue(who=units.filter("Archer"), arc=hex("Witch"))',
+			],
+			when: 'when(isHurt(me), go_to(Keep))',
+		}, kit);
+		assert.equal(arc.head.verb, 'issue');
+		assert.equal(arc.head.args.who, 'units.filter("Witch")');
+		assert.equal(arc.then?.arc.head.verb, 'issue');
+		assert.equal(arc.then?.arc.then?.arc.head.verb, 'when');
+		assert.equal(
+			formatArc(arc),
+			'issue(who=units.filter("Witch"), arc=hex(Healer)) ; issue(who=units.filter("Archer"), arc=hex(Witch)) ; when(watch=isHurt(me), arc=go_to(Keep))',
+		);
+		const wrapped = parseArc(
+			'{"issue":"issue(who=units.filter(\\"Witch\\"), arc=hex(Healer))","when":"when(isHurt(me), go_to(Keep))"}',
+			kit,
+		);
+		assert.equal(wrapped.head.verb, 'issue');
+		assert.equal(wrapped.then?.arc.head.verb, 'when');
+	});
+
 	it('parses long chains; nested arc= is a separate tree', () => {
 		const kit = fightKit();
 		const arc = parseArcText(
@@ -283,5 +310,43 @@ describe('kit views and issue(who)', () => {
 		);
 		assert.equal(long.head.verb, 'go_to');
 		assert.equal(long.then?.arc.then?.arc.then?.arc.then?.arc.head.args.name, 'E');
+	});
+
+	it('skips extra closing parens between joined issue() steps', () => {
+		const kit = fightKit();
+		const arc = parseArcText(
+			'issue(who=units.filter("Knight"), arc=loop(hex(Healer)))))) ; issue(who=units.filter("Blade"), arc=loop(hex(Witch)))',
+			kit,
+		);
+		assert.equal(arc.head.verb, 'issue');
+		assert.equal(arc.head.args.who, 'units.filter("Knight")');
+		assert.equal(arc.then?.join, 'then');
+		assert.equal(arc.then?.arc.head.args.who, 'units.filter("Blade")');
+	});
+
+	it('skips a trailing period after copied Example text', () => {
+		const kit = fightKit();
+		const arc = parseArcText(
+			'issue(who=units.filter("Knight"), arc=loop(hex(Healer))) ; issue(who=units.filter("Blade"), arc=loop(hex(Witch))).',
+			kit,
+		);
+		assert.equal(arc.head.verb, 'issue');
+		assert.equal(arc.then?.arc.head.args.who, 'units.filter("Blade")');
+		assert.equal(arc.then?.arc.then, undefined);
+	});
+
+	it('binds a leftover positional to the next unset law arg', () => {
+		const registry = registerStockCrowdVerbs(registerStockVerbs(new VerbRegistry()));
+		const arc = parseArcText(
+			'law(who=units, watch=isHurt(me), go_to(Keep), name=lastStand)',
+			registry,
+		);
+		assert.equal(arc.head.verb, 'law');
+		assert.equal(arc.head.args.who, 'units');
+		assert.equal(arc.head.args.watch, 'isHurt(me)');
+		assert.equal(arc.head.args.name, 'lastStand');
+		const inner = arc.head.args.arc as { head:{ verb:string; args:{ name:string } } };
+		assert.equal(inner.head.verb, 'go_to');
+		assert.equal(inner.head.args.name, 'Keep');
 	});
 });

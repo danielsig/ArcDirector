@@ -26,6 +26,7 @@ describe('prompt split', () => {
 		assert.match(system, /isReachable\(me, Cottage\)/);
 		assert.match(system, /wrap list watches in some/);
 		assert.match(system, /Answer immediately with only the Arc JSON/);
+		assert.match(system, /Close every brace\. No prose/);
 		assert.match(system, /No prose/);
 		assert.match(system, /Do not think\(\) twice in a row/);
 		assert.match(system, /Think in 5 sentences/);
@@ -75,12 +76,10 @@ describe('prompt split', () => {
 			parseArc(wanderJson[0], verbs).head.args.until,
 			'some(items.filter("FireMushroom").nearby())',
 		);
+		assert.match(system, /Close every brace\. No prose/);
 		const chainAt = system.indexOf('{"head":{"verb":"pick_up"');
 		assert.ok(chainAt >= 0);
-		const chainSlice = system.slice(chainAt);
-		const chainEnd = chainSlice.indexOf('. Close every brace');
-		assert.ok(chainEnd > 0);
-		const chained = parseArc(chainSlice.slice(0, chainEnd), verbs);
+		const chained = parseArc(system.slice(chainAt), verbs);
 		assert.equal(chained.head.verb, 'pick_up');
 		assert.equal(chained.then?.join, 'then');
 		assert.equal(chained.then?.arc.head.verb, 'go_to');
@@ -260,6 +259,54 @@ describe('prompt split', () => {
 		assert.equal(encyclopediaOnly.includes('see_map is a tool'), false);
 	});
 
+	it('nested combat verbs teach line of sight and flanking', () => {
+		const catalog = registerStockCrowdVerbs(registerStockVerbs(new VerbRegistry()));
+		catalog.add('shoot', { name: 'id' });
+		catalog.add('hex', { name: 'id' });
+		catalog.add('heal', { name: 'id?' });
+		catalog.add('protect', { name: 'id?' });
+		catalog.add('cleave', { name: 'id' });
+		catalog.add('slash', { name: 'id' });
+		const verbs = catalog.view(['issue', 'when', 'law', 'unlaw', 'loop', 'smite']);
+		const system = stablePrefix(identity, verbs);
+		assert.match(system, /Arrows need a clear line of sight/);
+		assert.match(system, /spells \(hex, heal\) through cover are weaker/);
+		assert.match(system, /Flank around cover for a better view of the target/);
+		assert.match(system, /protect\(name\?\) stands between an ally and the threat, then attacks that threat/);
+		assert.match(system, /shoot\(name\) — needs a clear line of sight; flank around cover/);
+		assert.match(system, /hex\(name\) — weaker through cover; flank for a full hit/);
+		assert.match(system, /heal\(name\?\) — weaker through cover; flank for a full heal/);
+		assert.match(system, /protect\(name\?\) — stand between an ally and the threat, then attack that threat/);
+		assert.match(system, /Peeling is also protect/);
+		assert.match(system, /Sight is ~10s stale/);
+		assert.match(system, /others\.filter\("enemy"\)\.minBy/);
+		assert.match(system, /Do not nest when or law on that first think/);
+		assert.match(system, /Later thinks only edit/);
+		assert.match(system, /Prefer law for any reaction that should apply to more than one unit/);
+		assert.match(system, /law\(who=units, watch=me\.hp\/me\.maxHP<0\.25, arc=go_to\(Healer\), name=lastStand\)/);
+		assert.equal(system.includes('(u is "Healer") * 8'), false);
+		assert.equal(system.includes('Same minBy'), false);
+		assert.equal(system.includes('a dead Healer loses'), false);
+		assert.equal(system.includes('Syntax only, not a recommendation'), false);
+		assert.match(system, /Answer immediately with only the Arc text/);
+		assert.match(system, /No JSON, no prose/);
+		assert.match(system, /issue\(who=units\.filter\("Knight"\), arc=loop\(cleave/);
+		assert.match(system, /Knight and Blade hold a line on the nearest/);
+		assert.match(system, /Archer, Witch, and Healer sit behind that line/);
+		assert.match(system, /Healer: stay back, heal from range, never walk toward an enemy/);
+		assert.match(system, /issue\(who=units\.filter\("Blade"\), arc=loop\(slash\(others\.filter\("enemy"\)\.minBy\(u => distance/);
+		assert.equal(system.includes('go_to(Tree)'), false);
+		assert.match(system, /Guard already protect\(\)s while someone is hurt and a Healer lives/);
+		assert.equal(system.includes('issue(who=units.filter("Guard")'), false);
+		assert.equal(system.includes('Arc JSON'), false);
+		const opening = system.match(/Example: (issue\(who=units\.filter\("Knight"\).+)$/);
+		assert.ok(opening);
+		const arc = parseArc(opening[1], verbs);
+		assert.equal(arc.head.verb, 'issue');
+		assert.equal(arc.head.args.who, 'units.filter("Knight")');
+		assert.equal(arc.then?.arc.then?.arc.then?.arc.head.args.who, 'units.filter("Witch")');
+	});
+
 	it('issue and law rules appear when the kit has crowd verbs', () => {
 		const catalog = registerStockCrowdVerbs(registerStockVerbs(new VerbRegistry()));
 		catalog.add('slash', { name: 'id' });
@@ -277,6 +324,8 @@ describe('prompt split', () => {
 		assert.match(system, /Nested arc verbs/);
 		assert.match(system, /slash\(name\)/);
 		assert.equal(system.includes('when(who'), false);
+		assert.match(system, /Answer immediately with only the Arc text/);
+		assert.equal(system.includes('Arc JSON'), false);
 	});
 
 	it('solo law has no who', () => {

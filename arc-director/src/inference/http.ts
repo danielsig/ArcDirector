@@ -213,7 +213,7 @@ function isContextOverflow(msg:string):boolean {
 	return /context size has been exceeded|exceeds the (available )?context/i.test(msg);
 }
 
-const THINK_OUT = 512;
+const THINK_OUT = 4096;
 const OVERFLOW_OUT = 256;
 
 function estimateTokens(value:unknown):number {

@@ -86,6 +86,7 @@ export class CrowdConductor<HostCtx = unknown> extends Agent<HostCtx> {
 		return this.commanderID ?? super.thinkThread();
 	}
 
+
 	setCommander(id:string | null):void {
 		if (id === null) {
 			const prev = this.commanderID;

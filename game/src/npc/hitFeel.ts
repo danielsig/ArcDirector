@@ -1,3 +1,4 @@
+import { resolveBody } from '@arc-director/kindling';
 import { HurtFlash, RigidBody } from '../engine/components';
 import { yawToForward } from '../engine/math';
 import type { GameObject } from '../engine/GameObject';
@@ -7,8 +8,8 @@ import { cueAt } from '../audio/cue';
 const KNOCK_SPEED = 6.2;
 const KNOCK_SHOVE = 0.38;
 
-/** Knock the hurt body away from the striker. No attack clips. */
-export function applyHit(world:World, striker:GameObject, hurt:GameObject):void {
+/** Knock the hurt body away from the striker. `knock` scales shove and speed (cleave is heavier). */
+export function applyHit(world:World, striker:GameObject, hurt:GameObject, knock = 1):void {
 	const a = striker.transform.position;
 	const b = hurt.transform.position;
 	let dx = b.x - a.x;
@@ -22,14 +23,22 @@ export function applyHit(world:World, striker:GameObject, hurt:GameObject):void 
 	}
 	const nx = dx / len;
 	const nz = dz / len;
-	b.x += nx * KNOCK_SHOVE;
-	b.z += nz * KNOCK_SHOVE;
-	const flash = hurt.getComponent(HurtFlash) ?? hurt.addComponent(new HurtFlash());
-	flash.strike(nx * KNOCK_SPEED, nz * KNOCK_SPEED, world.time);
+	const scale = Math.max(0.2, knock);
+	const shove = KNOCK_SHOVE * scale;
+	const speed = KNOCK_SPEED * scale;
 	const rb = hurt.getComponent(RigidBody);
 	if (rb) {
-		rb.velocity.x = nx * KNOCK_SPEED;
-		rb.velocity.z = nz * KNOCK_SPEED;
+		rb.prevX = b.x;
+		rb.prevZ = b.z;
+	}
+	b.x += nx * shove;
+	b.z += nz * shove;
+	resolveBody(world, hurt);
+	const flash = hurt.getComponent(HurtFlash) ?? hurt.addComponent(new HurtFlash());
+	flash.strike(nx * speed, nz * speed, world.time);
+	if (rb) {
+		rb.velocity.x = nx * speed;
+		rb.velocity.z = nz * speed;
 	}
 	cueAt(world, 'knock', hurt);
 }

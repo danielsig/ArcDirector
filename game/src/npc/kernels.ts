@@ -28,7 +28,7 @@ import { yawToForward } from '../engine/math';
 import { enclosureAt, interiorContains } from '../world/interior';
 import { walkDistance as pathMeters } from '../world/path';
 import { CLEAR_RANGE } from './talkAttend';
-import { bodyName } from './names';
+import { bodyName, isLiving } from './names';
 import { tagsOf } from './perception';
 import type { GameHost } from './adapter';
 
@@ -64,10 +64,18 @@ function exprKind(entity:{ tags:string[] }):StringifierKind {
 	return 'entity';
 }
 
-export function entityOf(go:GameObject):ExprEntity {
+export function entityOf(go:GameObject, extraTags?:string[]):ExprEntity {
+	const tags = tagsOf(go);
+	if (extraTags) {
+		for (const tag of extraTags) {
+			if (tag && !tags.includes(tag)) {
+				tags.push(tag);
+			}
+		}
+	}
 	return dummyEntity(bodyName(go), {
 		name: go.getComponent(Named)?.id ?? go.id,
-		tags: tagsOf(go),
+		tags,
 	});
 }
 
@@ -170,7 +178,13 @@ function poseOf(
 }
 
 /** World census for watches. Director still injects cache / hasHeard / prev*. `here` poses `me` without moving the body. */
-export function kernelsOf(world:World, actor:GameObject, posed:PosedFact[], here?:{ x:number; z:number }) {
+export function kernelsOf(
+	world:World,
+	actor:GameObject,
+	posed:PosedFact[],
+	here?:{ x:number; z:number },
+	extraTags?:(go:GameObject)=>string[],
+) {
 	const hidePlayer = world.playerInperceivable;
 	const me = entityOf(actor);
 	me.fields = { gold: { kind: 'number', value: coinsOf(actor) } };
@@ -192,7 +206,10 @@ export function kernelsOf(world:World, actor:GameObject, posed:PosedFact[], here
 			if (hidePlayer && go.id === 'Player') {
 				continue;
 			}
-			others.push(entityOf(go));
+			if (!isLiving(go)) {
+				continue;
+			}
+			others.push(entityOf(go, extraTags?.(go)));
 		}
 		if ((go.getComponent(Pickupable) || go.getComponent(Item)) && !go.getComponent(HumanBody)) {
 			items.push(entityOf(go));

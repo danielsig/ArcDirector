@@ -19,7 +19,7 @@ import {
 	GREP_WORLD_ENCYCLOPEDIA,
 	type EncyclopediaSource,
 } from './encyclopedia.js';
-import { arcRepairHint, sayRangeHint, stablePrefix, volatileBlock } from './prompt.js';
+import { arcRepairHint, sayRangeHint, shouldEmitArcText, stablePrefix, volatileBlock } from './prompt.js';
 import {
 	runArc,
 	deferThinks,
@@ -581,7 +581,7 @@ export class Agent<HostCtx = unknown> {
 		}, at);
 	}
 
-	/** Chat thread / log name. Crowd commanders use the living commander. */
+	/** Living commander (crowd) or this mind. Chat thread, logs, and world face. */
 	thinkThread():string {
 		return this.id;
 	}
@@ -923,7 +923,8 @@ export class Agent<HostCtx = unknown> {
 		}
 		this.absorbPending();
 		const sensed = this.gatherSensed();
-		const form = this.arcText ? 'Arc text' : 'Arc JSON';
+		const emitText = this.emitText(verbs);
+		const form = emitText ? 'Arc text' : 'Arc JSON';
 		const hint = `While you thought, the live verb changed from ${liveVerbAtThink} to ${this.lastVerb}. `
 			+ `Do not think again. Emit a new ${form} if that changes your choices, or confirm the arc you already wrote.`;
 		messages.push({ role: 'assistant', content: firstContent });
@@ -934,7 +935,7 @@ export class Agent<HostCtx = unknown> {
 			messages,
 			tools: sendTools ? tools : undefined,
 			toolChoice: sendTools ? 'none' : undefined,
-			responseFormat: this.arcText
+			responseFormat: emitText
 				? undefined
 				: { name: 'arc', schema: arcSchema(verbs), strict: false },
 			temperature: 0,
@@ -963,12 +964,13 @@ export class Agent<HostCtx = unknown> {
 		const seeMapBoost = this.seeMapOn() && this.toolRoundCap <= 0 ? 1 : 0;
 		const sendTools = tools.length > 0 && (this.toolRoundCap > 0 || seeMapBoost > 0);
 		const toolNames = sendTools ? tools.map((t) => t.name) : [];
+		const emitText = this.emitText(verbs);
 		const system = stablePrefix(this.identity, verbs, {
 			includeWatches: this.watchesWritable || watchCount(this.watchList()) > 0,
 			canSeeMap: this.seeMapOn() && this.toolAllowed('see_map'),
 			canGrepEncyclopedia: this.encyclopediaOn() && this.toolAllowed(GREP_WORLD_ENCYCLOPEDIA),
 			youSymbol: this.youSymbol(),
-			arcText: this.arcText,
+			arcText: emitText,
 			thinkInstructions: this.thinkInstructions,
 			verbInstructions: this.verbInstructions,
 			tools: toolNames,
@@ -991,7 +993,7 @@ export class Agent<HostCtx = unknown> {
 				messages,
 				tools: sendTools ? tools : undefined,
 				toolChoice: sendTools ? (allowTools ? 'auto' : 'none') : undefined,
-				responseFormat: allowTools || this.arcText
+				responseFormat: allowTools || emitText
 					? undefined
 					: { name: 'arc', schema: arcSchema(verbs), strict: false },
 				temperature: 0,
@@ -1025,7 +1027,7 @@ export class Agent<HostCtx = unknown> {
 			}
 			if (res.toolCalls.length > 0) {
 				lastErr = new ArcError('model called a tool when it must emit an Arc');
-				if (!this.pushRepair(messages, res, lastErr, repairsLeft, toolNames)) {
+				if (!this.pushRepair(messages, res, lastErr, repairsLeft, toolNames, emitText)) {
 					throw lastErr;
 				}
 				repairsLeft -= 1;
@@ -1043,7 +1045,7 @@ export class Agent<HostCtx = unknown> {
 				}
 				catch (err) {
 					lastErr = err instanceof Error ? err : new ArcError(String(err));
-					if (!this.pushRepair(messages, res, lastErr, repairsLeft, toolNames)) {
+					if (!this.pushRepair(messages, res, lastErr, repairsLeft, toolNames, emitText)) {
 						throw lastErr;
 					}
 					repairsLeft -= 1;
@@ -1057,7 +1059,7 @@ export class Agent<HostCtx = unknown> {
 					}
 					rangeLeft -= 1;
 					messages.push({ role: 'assistant', content: res.content });
-					messages.push({ role: 'user', content: sayRangeHint(blocked.reason, blocked.nearby, this.arcText) });
+					messages.push({ role: 'user', content: sayRangeHint(blocked.reason, blocked.nearby, emitText) });
 					continue;
 				}
 				if (typeof raw !== 'string') {
@@ -1074,12 +1076,16 @@ export class Agent<HostCtx = unknown> {
 				);
 			}
 			lastErr = new ArcError('model returned no arc');
-			if (!this.pushRepair(messages, res, lastErr, repairsLeft, toolNames)) {
+			if (!this.pushRepair(messages, res, lastErr, repairsLeft, toolNames, emitText)) {
 				throw lastErr;
 			}
 			repairsLeft -= 1;
 		}
 		throw lastErr ?? new ArcError('failed to obtain Arc');
+	}
+
+	private emitText(verbs:VerbRegistry):boolean {
+		return shouldEmitArcText(verbs, this.arcText);
 	}
 
 	private pushRepair(
@@ -1088,6 +1094,7 @@ export class Agent<HostCtx = unknown> {
 		err:Error,
 		repairsLeft:number,
 		toolNames:string[],
+		emitText:boolean,
 	):boolean {
 		if (repairsLeft <= 0) {
 			return false;
@@ -1097,7 +1104,7 @@ export class Agent<HostCtx = unknown> {
 			?? (called.length > 0 ? `(tool call: ${called.join(', ')})` : '');
 		const dropProse = !/^\s*[{`]/.test(shown) && !shown.includes('(');
 		messages.push({ role: 'assistant', content: dropProse ? null : (shown || null) });
-		messages.push({ role: 'user', content: arcRepairHint(err.message, this.arcText, toolNames) });
+		messages.push({ role: 'user', content: arcRepairHint(err.message, emitText, toolNames) });
 		return true;
 	}
 

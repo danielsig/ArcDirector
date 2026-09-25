@@ -15,6 +15,7 @@ import {
 	MillLever,
 	Named,
 	Sickbed,
+	Vitals,
 	Torch,
 	Bridge,
 	Wallet,
@@ -43,10 +44,10 @@ import { findChestHolding } from '../items/pickup';
 import { yawToForward } from '../engine/math';
 import { whereabouts } from '../world/interior';
 import { talkCanSee } from './talkAttend';
-import { bodyName } from './names';
+import { bodyName, isLiving } from './names';
 import type { HostCtx } from './types';
 import type { GameHost } from './adapter';
-import { seenFightName } from './fight';
+import { fightProximityNote, fightRole, seenFightName } from './fight';
 
 const SIGHT = 24;
 
@@ -144,6 +145,17 @@ function seenOf(go:GameObject, observer?:GameObject, host?:GameHost):SeenObject 
 		row.interactable = true;
 		row.interesting = 1;
 	}
+	if (host && observer && agent) {
+		const vitals = go.getComponent(Vitals);
+		if (vitals && fightRole(host, go)) {
+			row.hp = vitals.hp;
+			row.maxHP = vitals.maxHP;
+		}
+		const note = fightProximityNote(host, observer, go);
+		if (note) {
+			row.note = note;
+		}
+	}
 	if (
 		go.getComponent(Door)
 		|| go.getComponent(Chest)
@@ -174,6 +186,9 @@ export function lookWorld(actor:GameObject, ambient:string, host?:GameHost):Sigh
 		if (go === actor || go.id === 'MainCamera') {
 			continue;
 		}
+		if (go.getComponent(HumanBody) && !isLiving(go)) {
+			continue;
+		}
 		const named = go.getComponent(Named);
 		const torch = go.getComponent(Torch) && !go.getComponent(Item);
 		if (!named && !torch) {
@@ -184,6 +199,9 @@ export function lookWorld(actor:GameObject, ambient:string, host?:GameHost):Sigh
 			continue;
 		}
 		const row = seenOf(go, actor, host);
+		if (row.tags.includes('tree') || row.tags.includes('boulder')) {
+			continue;
+		}
 		objects.push(row);
 		const chest = go.getComponent(Chest);
 		const bag = go.getComponent(Container);

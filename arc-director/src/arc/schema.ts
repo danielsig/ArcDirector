@@ -106,6 +106,18 @@ function formatVerbHelp(spec:VerbSpec):string {
 	if (spec.name === 'loop') {
 		return `${base} — repeats until fail`;
 	}
+	if (spec.name === 'shoot') {
+		return `${base} — needs a clear line of sight; flank around cover`;
+	}
+	if (spec.name === 'hex') {
+		return `${base} — weaker through cover; flank for a full hit`;
+	}
+	if (spec.name === 'heal') {
+		return `${base} — weaker through cover; flank for a full heal`;
+	}
+	if (spec.name === 'protect') {
+		return `${base} — stand between an ally and the threat, then attack that threat`;
+	}
 	return base;
 }
 

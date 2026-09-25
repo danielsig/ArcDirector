@@ -624,9 +624,11 @@ describe('commander pointer and sticky issue', () => {
 		const dawn = director.agent('Dawn');
 		assert.ok(isCrowdConductor(dawn));
 		assert.equal(dawn.thinkThread(), 'Dawn');
+		director.removeCrowdUnit('Dawn', 'Dawn');
 		director.setCrowdCommander('Dawn', 'Wisp');
 		assert.equal(dawn.thinkThread(), 'Wisp');
 		assert.equal(dawn.identity.name, 'Wisp');
+		assert.notEqual(dawn.thinkThread(), dawn.id);
 		director.dispose();
 	});
 

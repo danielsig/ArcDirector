@@ -10,6 +10,7 @@ import { nearestPickup, pickupLabel } from '../items/pickup';
 import { characterHeight } from '../render/artCache';
 import type { HudModel, MinimapCell } from '../ui/hudModel';
 import type { GameHost } from '../npc/adapter';
+import { bodyName, findBody, isLiving } from '../npc/names';
 
 const MSG_LIFE = 3.2;
 
@@ -169,7 +170,7 @@ function patchOverhead(
 		if (!note.text) {
 			continue;
 		}
-		const go = world.findByID(note.id) ?? world.findNamed(note.id);
+		const go = findBody(world, note.id);
 		if (!go) {
 			continue;
 		}
@@ -332,18 +333,32 @@ export function patchHud(
 	hud.minimap.playerYaw = player?.transform.yaw ?? 0;
 }
 
+/** Living body `thinkThread` names. Reject `findNamed` loose matches. */
+function overheadID(host:GameHost, agent:{ thinkThread():string }):string | undefined {
+	const want = agent.thinkThread();
+	const body = findBody(host.world, want);
+	if (!isLiving(body) || (bodyName(body) !== want && body.id !== want)) {
+		return undefined;
+	}
+	return bodyName(body);
+}
+
 export function statusLabels(host:GameHost):{ id:string; text:string }[] {
 	const now = host.world.time;
 	const out:{ id:string; text:string }[] = [];
 	const queue = host.arc?.mindQueue();
 	for (const agent of host.arc?.agents() ?? []) {
+		const id = overheadID(host, agent);
+		if (!id) {
+			continue;
+		}
 		if (queue?.isThinking(agent.id)) {
-			out.push({ id: agent.id, text: 'thinking...' });
+			out.push({ id, text: 'thinking...' });
 			continue;
 		}
 		const row = host.labels.get(agent.id);
 		if (row && now < row.until) {
-			out.push({ id: agent.id, text: row.text });
+			out.push({ id, text: row.text });
 		}
 	}
 	return out;

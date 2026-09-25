@@ -3,8 +3,8 @@ import { describe, it } from 'node:test';
 import { BoxCollider } from './BoxCollider.js';
 import { GameObject, resetAllocID } from './GameObject.js';
 import { Rigidbody } from './Rigidbody.js';
-import { World } from './World.js';
-import { stepPhysics } from './physics.js';
+import { World, type TerrainSample } from './World.js';
+import { resolveBody, stepPhysics } from './physics.js';
 
 describe('stepPhysics', () => {
 	it('integrates velocity on XZ', () => {
@@ -90,5 +90,48 @@ describe('stepPhysics', () => {
 		world.add(idle.go);
 		stepPhysics(world, 0.1);
 		assert.equal(idle.go.transform.position.x, 0);
+	});
+
+	class WallWorld extends World {
+		override sampleTerrain(x:number, _z:number):TerrainSample | undefined {
+			return { height: 0, worldY: 0, blocked: x >= 2, climbable: false };
+		}
+	}
+
+	it('resolveBody does not push a body through a blocked tile', () => {
+		resetAllocID();
+		const world = new WallWorld();
+		world.tileSize = 1;
+		const go = new GameObject('hurt');
+		go.transform.position.x = 1.4;
+		const rb = go.addComponent(new Rigidbody());
+		rb.prevX = 1.4;
+		rb.prevZ = 0;
+		const col = go.addComponent(new BoxCollider());
+		col.size = { x: 0.45, y: 1.1, z: 0.45 };
+		world.add(go);
+		go.transform.position.x = 2.2;
+		resolveBody(world, go);
+		assert.ok(go.transform.position.x + col.size.x * 0.5 <= 2 + 1e-6, `through wall at ${go.transform.position.x}`);
+	});
+
+	it('resolveBody does not push a body through a solid collider', () => {
+		resetAllocID();
+		const world = new World();
+		const wall = new GameObject('wall');
+		wall.transform.position.x = 2;
+		const wallCol = wall.addComponent(new BoxCollider());
+		wallCol.size = { x: 1, y: 2, z: 1 };
+		world.add(wall);
+		const go = new GameObject('hurt');
+		go.transform.position.x = 1.1;
+		go.addComponent(new Rigidbody());
+		const col = go.addComponent(new BoxCollider());
+		col.size = { x: 0.45, y: 1.1, z: 0.45 };
+		world.add(go);
+		go.transform.position.x = 1.6;
+		resolveBody(world, go);
+		const gap = wall.transform.position.x - go.transform.position.x;
+		assert.ok(gap >= (1 + 0.45) * 0.5 - 1e-6, `inside wall gap ${gap}`);
 	});
 });

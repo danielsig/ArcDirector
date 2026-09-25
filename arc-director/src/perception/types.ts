@@ -31,6 +31,10 @@ export type SeenObject = {
 	label?:string;
 	/** Object ids folded into a reduce compound. Host snapshots omit this. */
 	claimedIDs?:string[];
+	hp?:number;
+	maxHP?:number;
+	/** Extra clause after the name, e.g. `Blade 3m away`. */
+	note?:string;
 };
 
 /** One irreducible phrase `formatSight` cannot union further. */
@@ -38,6 +42,8 @@ export type SightClause = {
 	text:string;
 	claimedIDs:string[];
 	ambient?:boolean;
+	/** Keep ahead of scenery when `sightLimit` slices. People, not trees. */
+	prefer?:boolean;
 };
 
 export type Sight = {
