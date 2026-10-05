@@ -17,7 +17,7 @@
 	"scripts": {
 		"build": "tsc -p tsconfig.json",
 		"typecheck": "tsc -p tsconfig.json --noEmit",
-		"test": "tsc -p tsconfig.json && node --test --test-reporter spec dist/json.test.js dist/arc/parse.test.js dist/memory/store.test.js dist/perception/sight.test.js dist/agent/agent.test.js dist/agent/talk.test.js dist/agent/watches.test.js dist/agent/map.test.js dist/agent/prompt.test.js dist/agent/encyclopedia.test.js dist/agent/run.test.js dist/inference/models.test.js dist/inference/http.test.js dist/inference/assistantThink.test.js dist/inference/chatLog.test.js dist/inference/threadCache.test.js dist/expr/expr.test.js dist/think/queue.test.js dist/director/director.test.js dist/conductor/conductor.test.js",
+		"test": "tsc -p tsconfig.json && node --test --test-reporter spec dist/json.test.js dist/arc/parse.test.js dist/memory/store.test.js dist/perception/sight.test.js dist/agent/agent.test.js dist/agent/talk.test.js dist/agent/watches.test.js dist/agent/map.test.js dist/agent/prompt.test.js dist/agent/encyclopedia.test.js dist/agent/run.test.js dist/inference/models.test.js dist/inference/http.test.js dist/inference/assistantThink.test.js dist/inference/chatLog.test.js dist/inference/threadCache.test.js dist/expr/expr.test.js dist/think/queue.test.js dist/director/director.test.js dist/conductor/conductor.test.js dist/world/world.test.js",
 		"demo": "tsc -p tsconfig.json && node dist/scripts/fakeHost.js",
 		"fixture": "tsc -p tsconfig.json && node dist/scripts/fixtureGoTo.js"
 	},

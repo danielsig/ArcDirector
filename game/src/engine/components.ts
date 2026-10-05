@@ -111,15 +111,6 @@ export class Named extends Component {
 	aliases:string[] | undefined;
 }
 
-export class StreamingAnchor extends Component {
-	viewRadius = 20;
-	hysteresis = 8;
-}
-
-export class ChunkBound extends Component {
-	chunkID = '';
-}
-
 export class Attached extends Component {
 	toID = '';
 	mode:'on' | 'in' | 'worn' | 'held' = 'on';
@@ -127,6 +118,7 @@ export class Attached extends Component {
 
 export class Door extends Component {
 	static override order = Order.door;
+	static override saved = ['open'];
 	open = false;
 	axis:'x' | 'z' = 'x';
 	blockedWhenClosed = true;
@@ -146,7 +138,7 @@ export class Door extends Component {
 		col.isTrigger = !blocking;
 	}
 
-	override update(_dt:number):void {
+	override update(dt:number):void {
 		this.syncCollision();
 	}
 }
@@ -160,29 +152,34 @@ export class Interior extends Component {
 }
 
 export class Lock extends Component {
+	static override saved = ['keyID', 'locked'];
 	keyID = '';
 	locked = true;
 }
 
 export class Chest extends Component {
+	static override saved = ['open'];
 	open = false;
 }
 
 /** Drawbridge over water. When closed, the river cannot be crossed. */
 export class Bridge extends Component {
+	static override saved = ['open'];
 	open = false;
 	cells:{ x:number; z:number }[] = [];
 }
 
-export class MillLever extends Component {}
+export class BridgeLever extends Component {}
 
 /** Coins on a person — not an inventory stack. */
 export class Wallet extends Component {
+	static override saved = ['coins'];
 	coins = 0;
 }
 
 /** Street vendor with a list price and a lowest they will take. */
 export class Merchant extends Component {
+	static override saved = ['deals'];
 	specialty = '';
 	ask = 0;
 	floor = 0;
@@ -194,6 +191,7 @@ export type MarketNPCKind = 'vendor' | 'customer' | 'guard';
 
 /** Flea-market role: vendors stay; customers leave through a gate when satisfied. */
 export class MarketNPC extends Component {
+	static override saved = ['wants', 'leaveGate', 'leaving'];
 	kind:MarketNPCKind = 'customer';
 	wants:string[] = [];
 	leaveGate = '';
@@ -211,15 +209,15 @@ export class Wanted extends Component {
 }
 
 /** Stays with a named body when idle. Always perceives that body, even in observer. */
+/** Serves `targetID`: always notices them, and hands them what will not fit in their bags. Following is the mind's program, not this component. */
 export class Companion extends Component {
 	targetID = 'Player';
-	/** When true, idle steering does not follow — a spoken job is in effect, or they were told to stay. */
-	hold = false;
 }
 
 export class BrewHearth extends Component {}
 
 export class Sickbed extends Component {
+	static override saved = ['tended'];
 	caretaker = '';
 	tended = false;
 }
@@ -229,6 +227,7 @@ export class Flame extends Component {
 }
 
 export class Flammable extends Component {
+	static override saved = ['burning', 'spread'];
 	burning = false;
 	spread = false;
 }
@@ -283,7 +282,7 @@ export class HumanSprite extends Component {
 		this.clipT0 = t;
 	}
 
-	override update(_dt:number):void {
+	override update(dt:number):void {
 		if (this.clip !== 'take' && this.clip !== 'give') {
 			return;
 		}
@@ -296,6 +295,7 @@ export class HumanSprite extends Component {
 }
 
 export class HumanBody extends Component {
+	static override saved = ['slots'];
 	slots:Record<BodySlot, SlotFill> = {
 		head: null,
 		torso: null,
@@ -311,10 +311,9 @@ export class HumanBody extends Component {
 }
 
 export class Vitals extends Component {
+	static override saved = ['hp', 'maxHP'];
 	hp = 5;
 	maxHP = 5;
-	mana = 5;
-	maxMana = 5;
 }
 
 const HURT_LIFE = 0.42;
@@ -338,11 +337,21 @@ export class HurtFlash extends Component {
 		this.enabled = true;
 	}
 
-	override update(_dt:number):void {
+	override update(dt:number):void {
 		const world = this.gameObject.world;
 		const rb = this.gameObject.getComponent(RigidBody);
 		if (!world || !rb || world.time >= this.until) {
 			this.enabled = false;
+			if ((this.gameObject.getComponent(Vitals)?.hp ?? 1) <= 0) {
+				if (rb) {
+					rb.velocity.x = 0;
+					rb.velocity.z = 0;
+				}
+				const col = this.gameObject.getComponent(BoxCollider);
+				if (col) {
+					col.enabled = false;
+				}
+			}
 			return;
 		}
 		const u = Math.max(0, (this.until - world.time) / HURT_LIFE);
@@ -366,18 +375,18 @@ export class Celebrating extends Component {
 	until = 0;
 	/** Counted hops from rest. 0 = until-only, phase locked to world time. */
 	hops = 0;
-	startedAt = 0;
+	timestamp = 0;
 
 	static override order = Order.celebrating;
 
 	beginHops(time:number, count:number):void {
 		this.hops = count;
-		this.startedAt = time;
+		this.timestamp = time;
 		this.until = time + count * HOP_PERIOD + 0.02;
 		this.enabled = true;
 	}
 
-	override lateUpdate(_dt:number):void {
+	override lateUpdate(dt:number):void {
 		const world = this.gameObject.world;
 		const p = this.gameObject.transform.position;
 		const tile = world?.tileAtWorld(p.x, p.z);
@@ -388,7 +397,7 @@ export class Celebrating extends Component {
 			return;
 		}
 		if (this.hops > 0) {
-			const elapsed = world.time - this.startedAt;
+			const elapsed = world.time - this.timestamp;
 			if (elapsed >= this.hops * HOP_PERIOD) {
 				p.y = base;
 				this.enabled = false;
@@ -414,6 +423,7 @@ export class Celebrating extends Component {
 
 export class Torch extends Component {
 	static override order = Order.torch;
+	static override saved = ['lit'];
 	lit = true;
 	baseIntensity = 48;
 	baseDecay = 2;

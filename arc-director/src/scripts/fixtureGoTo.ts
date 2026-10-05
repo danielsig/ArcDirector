@@ -29,24 +29,24 @@ function perception():{ senses:Record<string, Sense<FixtureCtx>>; tools:Record<s
 	};
 }
 
-function walk(arc:Arc, visit:(p:Arc)=>void):void {
+function eachArc(arc:Arc, visit:(p:Arc)=>void):void {
 	visit(arc);
 	if (arc.group) {
-		walk(arc.group, visit);
+		eachArc(arc.group, visit);
 	}
 	if (arc.then) {
-		walk(arc.then.arc, visit);
+		eachArc(arc.then.arc, visit);
 	}
 }
 
 function isValidGoTo(arc:Arc):boolean {
 	let ok = false;
-	walk(arc, (p) => {
+	eachArc(arc, (p) => {
 		const head = p.head;
 		if (!head) {
 			return;
 		}
-		if (head.verb === 'go_to' && typeof head.args.name === 'string' && NAMES.has(head.args.name)) {
+		if (head.verb === 'go_to' && typeof head.args.target === 'string' && NAMES.has(head.args.target)) {
 			ok = true;
 		}
 		for (const key of Object.keys(head.args)) {
@@ -87,10 +87,7 @@ async function main():Promise<void> {
 	for (let i = 0; i < RUNS; i++) {
 		const agent = new Agent<FixtureCtx>({
 			id: 'Guard',
-			identity: {
-				name: 'Guard',
-				role: 'A dungeon guard. When you see a named interactable such as EastGate, walk to it with go_to. Never emit coordinates.',
-			},
+			identity: { role: 'Guard' },
 			goals: [{ text: 'Go to EastGate', priority: 1 }],
 			provider,
 			verbs: registerStockVerbs(new VerbRegistry()),
@@ -102,6 +99,10 @@ async function main():Promise<void> {
 			toolRoundCap: 2,
 			arcRetryCap: 2,
 		});
+		agent.memory.add({
+			text: 'I am a dungeon guard. When I see a named interactable such as EastGate, I go to it with go_to. Never emit coordinates.',
+			pinned: true,
+		}, 0);
 		await agent.remember('EastGate is the door in the east wall.', ['gate', 'EastGate'], 0);
 		try {
 			const arc = await agent.tick(1);

@@ -18,6 +18,7 @@ export class ExprError extends Error {
 
 export type ExprEntity = {
 	id:string;
+	/** The observer's label for `id` (`EnemyWitch`). Only the library's naming writes it; hosts give `id`. */
 	name?:string;
 	tags:string[];
 	fields?:Record<string, ExprVal>;
@@ -53,7 +54,8 @@ export const RESERVED = new Set([
 	'reduce', 'some', 'all', 'matches', 'search', 'nearby', 'reachable', 'approaching', 'departing',
 ]);
 
-export type StringifierKind = 'person' | 'item' | 'list' | 'number' | 'bool' | 'entity';
+/** One host stringifier per value kind. */
+export type StringifierKind = 'list' | 'number' | 'bool' | 'entity';
 
 export type Stringifiers = Partial<Record<StringifierKind, (value:ExprVal)=>string>>;
 
@@ -65,8 +67,6 @@ export type Catalog = {
 	me:ExprEntity;
 	cache:SampleCache;
 	stringifiers?:Stringifiers;
-	/** Host maps entity → stringifier key. Default is `entity`. */
-	stringifierKind?:(entity:ExprEntity)=>StringifierKind;
 	/** Override watch LIST_CAP. Crowd selectors use roster size. */
 	listCap?:number;
 };
@@ -88,8 +88,8 @@ export class SampleCache {
 	private nextHP = new Map<string, number>();
 	private open = new Map<string, boolean>();
 	private nextOpen = new Map<string, boolean>();
-	private walk = new Map<string, number>();
-	private nextWalk = new Map<string, number>();
+	private path = new Map<string, number>();
+	private nextPath = new Map<string, number>();
 
 	static pair(a:string, b:string):string {
 		return `${a}\0${b}`;
@@ -127,10 +127,10 @@ export class SampleCache {
 		return this.open.get(id);
 	}
 
-	rememberWalk(a:string, b:string, d:number):number | undefined {
+	rememberPath(a:string, b:string, d:number):number | undefined {
 		const k = SampleCache.pair(a, b);
-		this.nextWalk.set(k, d);
-		return this.walk.get(k);
+		this.nextPath.set(k, d);
+		return this.path.get(k);
 	}
 
 	commit():void {
@@ -154,10 +154,10 @@ export class SampleCache {
 			this.open.set(k, v);
 		}
 		this.nextOpen.clear();
-		for (const [k, v] of this.nextWalk) {
-			this.walk.set(k, v);
+		for (const [k, v] of this.nextPath) {
+			this.path.set(k, v);
 		}
-		this.nextWalk.clear();
+		this.nextPath.clear();
 	}
 }
 

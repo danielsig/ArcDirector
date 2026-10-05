@@ -1,4 +1,4 @@
-import { pascalCase, roleMentionTitles, type ArcResult, type SpeechUtterance } from 'arc-director';
+import { pascalCase, type ArcResult, type SpeechUtterance } from 'arc-director';
 import { HumanBody, Named, SpeechBubble } from '../engine/components';
 import type { GameObject } from '../engine/GameObject';
 import type { World } from '../engine/World';
@@ -6,11 +6,10 @@ import { compactName, distXZ, listCarried } from '../items/inventory';
 import { coinsOf, goodsAsk } from '../items/wallet';
 import { parseSlash, SLASH_HELP, type ParsedSlash, type SayCatalog } from '../ui/sayCommands';
 import type { GameHost } from './adapter';
-import { takePlayerOrder } from './companion';
 import { bodyName, findBody } from './names';
 import { carriedLabels } from './perception';
-import { talkNotices, canHearClearly, CLEAR_RANGE, SPEECH_LIFE } from './talkAttend';
-import { settleBuy, settleGive, settlePay, settleSell, tooFar } from './verbs';
+import { talkNotices, CLEAR_RANGE, SPEECH_LIFE } from './talkAttend';
+import { settleBuy, settleGive, settlePay, settleSell, tooFar } from './items';
 import { cueAt, talkAsks, talkDur, talkHz } from '../audio/cue';
 
 const TALK_RANGE = CLEAR_RANGE;
@@ -136,17 +135,6 @@ export function talkOthers(world:World, speakerID:string):string[] {
 	return names;
 }
 
-function dispatchPlayerOrder(host:GameHost, text:string, to?:string | string[]):void {
-	const names = to == null
-		? nearbyTalkPeers(host.world, 'Player')
-		: Array.isArray(to)
-			? to
-			: [to];
-	for (const name of names) {
-		takePlayerOrder(host, name, text);
-	}
-}
-
 export function playerSay(host:GameHost, text:string):void {
 	const spoken = text.trim();
 	if (!spoken) {
@@ -164,9 +152,7 @@ export function playerSay(host:GameHost, text:string):void {
 	const result = host.talk.say('Player', line, to, host.world.time);
 	if (!result.ok) {
 		host.world.setMessage(result.reason ?? 'no one heard');
-		return;
 	}
-	dispatchPlayerOrder(host, line, to);
 }
 
 export function playerSlash(host:GameHost, slash:ParsedSlash):void {
@@ -261,16 +247,11 @@ export function talkNames(host:GameHost, id:string):string[] {
 	for (const alias of named?.aliases ?? []) {
 		add(alias);
 	}
-	const agent = host.agentByID(id);
-	add(agent?.identity.name);
-	for (const title of roleMentionTitles(agent?.identity.role ?? '')) {
-		add(title);
-	}
 	return out;
 }
 
 export function pushChat(host:GameHost, speaker:string, text:string, to?:string):void {
-	host.chat.push({ speaker, text, to, at: host.world.time });
+	host.chat.push({ speaker, text, to, timestamp: host.world.time });
 	if (host.chat.length > CHAT_CAP) {
 		host.chat.splice(0, host.chat.length - CHAT_CAP);
 	}
@@ -300,65 +281,5 @@ export function onSpoke(host:GameHost, utterance:SpeechUtterance):void {
 	const actor = findBody(host.world, utterance.speakerID);
 	if (actor) {
 		showSpeech(host, actor, utterance.text, chatTo(utterance.to));
-	}
-	const targets = utterance.to == null
-		? []
-		: Array.isArray(utterance.to)
-			? utterance.to
-			: [utterance.to];
-	for (const id of utterance.heardBy) {
-		if (canHearClearly(host.world, utterance.speakerID, id)) {
-			continue;
-		}
-		const list = host.pendingHear.get(id) ?? [];
-		list.push({
-			speakerID: utterance.speakerID,
-			spoken: utterance.text,
-			addressed: targets.includes(id),
-			until: host.world.time + SPEECH_LIFE,
-		});
-		host.pendingHear.set(id, list);
-	}
-}
-
-export function hearIfClose(host:GameHost):void {
-	const now = host.world.time;
-	for (const [listener, rows] of host.pendingHear) {
-		const keep:{
-			speakerID:string;
-			spoken:string;
-			addressed:boolean;
-			until:number;
-		}[] = [];
-		for (const row of rows) {
-			if (now >= row.until) {
-				continue;
-			}
-			if (!canHearClearly(host.world, row.speakerID, listener)) {
-				keep.push(row);
-				continue;
-			}
-			const agent = host.agentByID(listener);
-			if (!agent) {
-				continue;
-			}
-			agent.pushEvent({
-				kind: 'HeardSpeech',
-				text: row.addressed
-					? `${row.speakerID} says to you, now clear: "${row.spoken}"`
-					: `${row.speakerID} says, now clear: "${row.spoken}"`,
-				tags: ['speech', row.speakerID],
-				major: true,
-				at: now,
-			});
-			host.wakeMind(agent.id);
-			host.arc?.mindQueue()?.enqueueMajor(agent.id, true);
-		}
-		if (keep.length > 0) {
-			host.pendingHear.set(listener, keep);
-		}
-		else {
-			host.pendingHear.delete(listener);
-		}
 	}
 }

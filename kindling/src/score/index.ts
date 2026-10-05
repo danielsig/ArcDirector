@@ -31,9 +31,9 @@ const VEL:Record<string, number> = { pp: 0.22, p: 0.38, mp: 0.52, mf: 0.68, f: 0
 const NAMES = ['pp', 'p', 'mp', 'mf', 'f', 'ff'] as const;
 type DynName = (typeof NAMES)[number];
 
-export type Dyn = { readonly _d: 1; name:DynName };
-type Hair = { readonly _h: 1; dir:'up' | 'down'; to?:Dyn };
-type Block = { readonly _b: 1; pitches:number[]; beats?:number };
+export type Dyn = { readonly d:1; name:DynName };
+type Hair = { readonly h:1; dir:'up' | 'down'; to?:Dyn };
+type Block = { readonly b:1; pitches:number[]; beats?:number };
 type Tone = number | string;
 export type ChordBlock = Block & {
 	/** Every chord tone from `from` through `to`. Number is an index; string is a note. */
@@ -43,16 +43,16 @@ export type ChordBlock = Block & {
 	/** Drop those tones from the current span. Number is an index; string is a note. */
 	exclude(...tones:Tone[]):Block;
 };
-export type Arpeggio = { readonly _a: 1; pitches:number[]; beats?:number; step:number };
+export type Arpeggio = { readonly a:1; pitches:number[]; beats?:number; step:number };
 type Mark = Dyn | Hair;
 type Matter = string | Block | Arpeggio;
 type Chunk = { matters:Matter[]; mark?:Mark };
-export type Part = { readonly _p: 1; track:Track; chunks:Chunk[] };
-export type Bar = { readonly _bar: 1; beats:number; parts:Part[] };
-type Start = { readonly _s: 1 };
-type End = { readonly _e: 1 };
-type Call = { readonly _cb: 1; fn:()=>void };
-export type Track = ((...args:CallArg[]) => Part) & {
+export type Part = { readonly p:1; track:Track; chunks:Chunk[] };
+export type Bar = { readonly bar:1; beats:number; parts:Part[] };
+type Start = { readonly s:1 };
+type End = { readonly e:1 };
+type Call = { readonly cb:1; fn:()=>void };
+export type Track = ((...args:CallArg[])=>Part) & {
 	instrument:string;
 	gain?:number;
 	cutoff?:number;
@@ -63,14 +63,14 @@ export type Track = ((...args:CallArg[]) => Part) & {
 };
 type CallArg = Matter | Mark | Matter[];
 type Playback = {
-	readonly _play: 1;
+	readonly play:1;
 	bars:Bar[];
-	with:(...parts:Part[]) => Playback;
-	without:(...tracks:Track[]) => Playback;
+	with:(...parts:Part[])=>Playback;
+	without:(...tracks:Track[])=>Playback;
 };
-type Phrase = ((...bars:Bar[]) => Playback) & {
-	with:(...parts:Part[]) => Playback;
-	without:(...tracks:Track[]) => Playback;
+type Phrase = ((...bars:Bar[])=>Playback) & {
+	with:(...parts:Part[])=>Playback;
+	without:(...tracks:Track[])=>Playback;
 };
 type Event = Bar | Playback | Start | End | Call;
 
@@ -172,7 +172,7 @@ function pcOf(n:number):number {
 }
 
 function blockOf(pitches:number[], beats?:number):Block {
-	return { _b: 1, pitches, beats };
+	return { b: 1, pitches, beats };
 }
 
 /** Chord tone `i` steps from `row[0]`. `row` is one MIDI per pitch class, lowest first. */
@@ -202,7 +202,7 @@ function midiOf(row:number[], x:Tone):number {
 function chordBlock(pitches:number[], beats:number | undefined):ChordBlock {
 	const row = pitches.filter((n) => n < pitches[0]! + 12);
 	const self:ChordBlock = {
-		_b: 1,
+		b: 1,
 		pitches,
 		beats,
 		range(from:Tone, to:Tone):ChordBlock {
@@ -224,9 +224,9 @@ type ChangeCell = { symbol:string; beats?:number };
 
 /** Named chords in order. One name fills the bar; several need beats: `['D-', 4]`. */
 export type Changes = {
-	readonly _ch: 1;
+	readonly ch:1;
 	/** Run each chord through `chord` / `arpeggio` / `root` / any `(symbol, beats?) => …`. */
-	as<T>(fn:(symbol:string, beats?:number) => T):T[];
+	as<T>(fn:(symbol:string, beats?:number)=>T):T[];
 };
 
 function changeOf(c:Change):ChangeCell {
@@ -234,7 +234,7 @@ function changeOf(c:Change):ChangeCell {
 }
 
 function isChanges(x:unknown):x is Changes {
-	return !!x && typeof x === 'object' && (x as Changes)._ch === 1;
+	return !!x && typeof x === 'object' && (x as Changes).ch === 1;
 }
 
 /** Chord list. Realize with `chord(ch)`, `arpeggio(ch)`, `root(ch)`, or `ch.as(fn)`. */
@@ -244,7 +244,7 @@ export function changes(head:Change, ...rest:Change[]):Changes {
 		throw new Error('changes: beats on every chord');
 	}
 	return {
-		_ch: 1,
+		ch: 1,
 		as(fn) {
 			return cells.map((c) => fn(c.symbol, c.beats));
 		},
@@ -269,14 +269,14 @@ export function chord(src:string | Changes, beats?:number):ChordBlock | ChordBlo
 
 /** Simultaneous named pitches. */
 export function stack(notes:string[], beats?:number):Block {
-	return { _b: 1, pitches: notes.map(pitch), beats };
+	return { b: 1, pitches: notes.map(pitch), beats };
 }
 
 function oneArpeggio(src:string | Block, beats?:number, step = 0.5):Arpeggio {
 	const raw = typeof src === 'string' ? parseChord(src) : src.pitches;
 	const pitches = raw.length === 3 ? [...raw, raw[0]! + 12] : raw;
 	const n = beats ?? (typeof src === 'string' ? undefined : src.beats);
-	return { _a: 1, pitches, beats: n, step };
+	return { a: 1, pitches, beats: n, step };
 }
 
 /** Broken chord: tones in order, one every `step` (default half a beat). Omit `beats` and it fills the bar (or the block’s length). A triad also gets its high octave. Playback goes up, then back down the inner tones. Pass `changes(...)` for several chords in order. */
@@ -305,7 +305,7 @@ export function voicing(midi:number[], beat:number, dur:number, vel?:number):Not
 }
 
 function dyn(name:DynName):Dyn {
-	return { _d: 1, name };
+	return { d: 1, name };
 }
 
 export const pp:Dyn = dyn('pp');
@@ -315,9 +315,9 @@ export const mf:Dyn = dyn('mf');
 export const f:Dyn = dyn('f');
 export const ff:Dyn = dyn('ff');
 
-function hair(dir:'up' | 'down'):Hair & ((to?:Dyn) => Hair) {
-	const fn = ((to?:Dyn) => ({ _h: 1 as const, dir, to })) as Hair & ((to?:Dyn) => Hair);
-	return Object.assign(fn, { _h: 1 as const, dir });
+function hair(dir:'up' | 'down'):Hair & ((to?:Dyn)=>Hair) {
+	const fn = ((to?:Dyn) => ({ h: 1 as const, dir, to })) as Hair & ((to?:Dyn)=>Hair);
+	return Object.assign(fn, { h: 1 as const, dir });
 }
 
 /** Open a crescendo. Pass a target (`crescendo(f)`) or look ahead to the next absolute dynamic. */
@@ -326,35 +326,35 @@ export const crescendo = hair('up');
 export const diminuendo = hair('down');
 
 function isDyn(x:unknown):x is Dyn {
-	return !!x && typeof x === 'object' && (x as Dyn)._d === 1;
+	return !!x && typeof x === 'object' && (x as Dyn).d === 1;
 }
 
 function isHair(x:unknown):x is Hair {
-	return !!x && typeof x !== 'string' && (x as Hair)._h === 1;
+	return !!x && typeof x !== 'string' && (x as Hair).h === 1;
 }
 
 function isBlock(x:unknown):x is Block {
-	return !!x && typeof x === 'object' && (x as Block)._b === 1;
+	return !!x && typeof x === 'object' && (x as Block).b === 1;
 }
 
 function isArpeggio(x:unknown):x is Arpeggio {
-	return !!x && typeof x === 'object' && (x as Arpeggio)._a === 1;
+	return !!x && typeof x === 'object' && (x as Arpeggio).a === 1;
 }
 
 function isPart(x:unknown):x is Part {
-	return !!x && typeof x === 'object' && (x as Part)._p === 1;
+	return !!x && typeof x === 'object' && (x as Part).p === 1;
 }
 
 function isBar(x:unknown):x is Bar {
-	return !!x && typeof x === 'object' && (x as Bar)._bar === 1;
+	return !!x && typeof x === 'object' && (x as Bar).bar === 1;
 }
 
 function isPlay(x:unknown):x is Playback {
-	return !!x && typeof x === 'object' && (x as Playback)._play === 1;
+	return !!x && typeof x === 'object' && (x as Playback).play === 1;
 }
 
 function isCall(x:unknown):x is Call {
-	return !!x && typeof x === 'object' && (x as Call)._cb === 1;
+	return !!x && typeof x === 'object' && (x as Call).cb === 1;
 }
 
 function vOf(d:Dyn | undefined):number {
@@ -417,7 +417,7 @@ function parseArgs(track:Track, args:CallArg[]):Part {
 		pending.push(arg);
 	}
 	flush();
-	return { _p: 1, track, chunks };
+	return { p: 1, track, chunks };
 }
 
 export type TrackOpts = {
@@ -449,15 +449,15 @@ export function bar(beats:number, ...parts:Part[]):Bar {
 	if (!(beats > 0)) {
 		throw new Error('bar beats');
 	}
-	return { _bar: 1, beats, parts };
+	return { bar: 1, beats, parts };
 }
 
 export function start():Start {
-	return { _s: 1 };
+	return { s: 1 };
 }
 
 export function end():End {
-	return { _e: 1 };
+	return { e: 1 };
 }
 
 /** Run `fn` when playback reaches this point (between bars, or after the last). */
@@ -465,7 +465,7 @@ export function callback(fn:()=>void):Call {
 	if (typeof fn !== 'function') {
 		throw new Error('callback');
 	}
-	return { _cb: 1, fn };
+	return { cb: 1, fn };
 }
 
 function overlay(bars:Bar[], extra:Part[], mute:Track[]):Bar[] {
@@ -488,16 +488,16 @@ function overlay(bars:Bar[], extra:Part[], mute:Track[]):Bar[] {
 		if (!parts.length) {
 			throw new Error('without: bar would be empty');
 		}
-		return { _bar: 1, beats: b.beats, parts };
+		return { bar: 1, beats: b.beats, parts };
 	});
 }
 
 function playback(bars:Bar[]):Playback {
 	const self:Playback = {
-		_play: 1,
+		play: 1,
 		bars,
-		with:(...parts:Part[]) => playback(overlay(bars, parts, [])),
-		without:(...tracks:Track[]) => playback(overlay(bars, [], tracks)),
+		with: (...parts:Part[]) => playback(overlay(bars, parts, [])),
+		without: (...tracks:Track[]) => playback(overlay(bars, [], tracks)),
 	};
 	return self;
 }
@@ -658,12 +658,12 @@ function flatten(events:Event[]):{ bars:Bar[]; cues:{ beat:number; fn:()=>void }
 	let ends = 0;
 	const rows:{ kind:'bar' | 'start' | 'end' | 'cue'; bar?:Bar; fn?:()=>void }[] = [];
 	for (const e of events) {
-		if (e && typeof e === 'object' && (e as Start)._s === 1) {
+		if (e && typeof e === 'object' && (e as Start).s === 1) {
 			starts += 1;
 			rows.push({ kind: 'start' });
 			continue;
 		}
-		if (e && typeof e === 'object' && (e as End)._e === 1) {
+		if (e && typeof e === 'object' && (e as End).e === 1) {
 			ends += 1;
 			rows.push({ kind: 'end' });
 			continue;

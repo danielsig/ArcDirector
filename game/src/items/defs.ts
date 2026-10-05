@@ -141,9 +141,9 @@ export const ITEM_DEFS:Record<string, ItemDef> = {
 		color: 0xe6c34a,
 		components: {},
 	},
-	mill_crank: {
-		id: 'mill_crank',
-		name: 'Mill crank',
+	bridge_crank: {
+		id: 'bridge_crank',
+		name: 'Bridge crank',
 		meshID: 'item_key',
 		color: 0x8a5a32,
 		components: {
@@ -234,9 +234,6 @@ export const ITEM_DEFS:Record<string, ItemDef> = {
 		components: { Goods: { ask: 2 } },
 	},
 };
-
-export const GLEN_FEE_DEF = 'fire_mushroom';
-export const GLEN_FEE_NAME = 'FireMushroom';
 
 export function getDef(defID:string):ItemDef {
 	const def = ITEM_DEFS[defID];

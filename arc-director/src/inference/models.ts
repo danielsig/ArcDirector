@@ -246,7 +246,7 @@ export function modelGrade(id:string, targetB = 20):number {
  */
 export function pickSingleChatModel(
 	models:ModelInfo[],
-	_preferred:string[] = PREFERRED_MODELS,
+	preferred:string[] = PREFERRED_MODELS,
 	requested?:string,
 ):string | undefined {
 	const chat = models.filter((m) => !isEmbeddingModel(m));

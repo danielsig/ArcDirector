@@ -196,7 +196,7 @@ async function loadKind(id:HumanKind):Promise<HumanAnims> {
 		loadBitmap(`${base}${entry.alb}`, true),
 		loadBitmap(`${base}${entry.nrm}`, false),
 	]);
-	const sample = Object.values(entry.frames)[0];
+	const sample = Object.values<AtlasRect>(entry.frames)[0];
 	const cel = entry.cel === true || (!!sample && sample[2] >= 160);
 	const idle = {} as Partial<Record<ClockHour, ClockMaps>>;
 	const walk = {} as Partial<Record<ClockHour, ClockMaps[]>>;

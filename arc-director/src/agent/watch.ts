@@ -132,41 +132,11 @@ export function asWatches(raw:unknown):Watches {
 	return out;
 }
 
-export function asRemoveNames(raw:unknown):string[] {
-	const rows = raw == null ? [] : Array.isArray(raw) ? raw : [raw];
-	const out:string[] = [];
-	const seen = new Set<string>();
-	for (const row of rows) {
-		let name = '';
-		if (typeof row === 'string') {
-			name = row.trim();
-		}
-		else if (isRecord(row)) {
-			name = (typeof row.name === 'string' ? row.name : typeof row.id === 'string' ? row.id : '').trim();
-		}
-		const key = watchKey(name);
-		if (!key || seen.has(key)) {
-			continue;
-		}
-		seen.add(key);
-		out.push(name);
-	}
-	return out;
-}
-
 export type WatchOps = {
 	add:Watches;
 	edit:Watches;
 	remove:string[];
 };
-
-export function watchOpsFromArc(raw:Record<string, unknown>):WatchOps {
-	return {
-		add: asWatches(raw.addWatches ?? raw.addWatch),
-		edit: asWatches(raw.editWatches ?? raw.editWatch),
-		remove: asRemoveNames(raw.removeWatches ?? raw.removeWatch),
-	};
-}
 
 /** Drop extras whose names collide with pins. Pins win. */
 export function extrasWithoutPins(extras:Watches, pinned:Watches):Watches {

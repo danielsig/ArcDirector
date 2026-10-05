@@ -9,4 +9,6 @@ Only `ID`, `HP`, `NPC`, `URL`, `UTC`. Not HTTP, JSON, or units: casing there is 
 
 Never `Id`, `Hp`, `Npc`, `Url`, `Utc`. PascalCase: `NPCDirector`. camelCase: `npcID`, `fromURL`. Whole name: `id`, `hp`, `npc`, `url`, `utc`.
 
-Timestamps: game time is `timestamp`; UTC fields end `_utc`. Not `at`.
+Timestamps: game time fields/variables are named `timestamp` or `*Timestamp`. UTC fields/variables end with `UTC` (`savedUTC`). Never `At`.
+
+No leading or trailing `_` on names (`no-underscore-dangle`). Privacy is the `private` keyword, not a prefix.

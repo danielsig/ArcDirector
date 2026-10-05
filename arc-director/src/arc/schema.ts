@@ -61,29 +61,7 @@ function arcSchemaAt(registry:VerbRegistry, depth:number):JsonSchema {
 }
 
 export function arcSchema(registry:VerbRegistry):JsonSchema {
-	const arc = arcSchemaAt(registry, THEN_DEPTH);
-	const watchDict:JsonSchema = {
-		type: 'object',
-		additionalProperties: { type: 'string' },
-	};
-	return {
-		title: 'Arc',
-		...arc,
-		properties: {
-			...(arc.properties ?? {}),
-			addWatches: watchDict,
-			editWatches: watchDict,
-			removeWatches: {
-				type: 'array',
-				items: { type: 'string' },
-			},
-			watches: watchDict,
-			sightFocus: {
-				type: 'array',
-				items: { type: 'string' },
-			},
-		},
-	};
+	return { title: 'Arc', ...arcSchemaAt(registry, THEN_DEPTH) };
 }
 
 function formatVerbHelp(spec:VerbSpec):string {
@@ -91,35 +69,9 @@ function formatVerbHelp(spec:VerbSpec):string {
 		return kind.endsWith('?') ? `${k}?` : k;
 	});
 	const base = parts.length === 0 ? spec.name : `${spec.name}(${parts.join(', ')})`;
-	if (spec.name === 'when') {
-		return `${base} — this job's interrupt; no extra think`;
-	}
-	if (spec.name === 'issue') {
-		return `${base} — assigns a sticky program to matching units, never the commander`;
-	}
-	if (spec.name === 'law') {
-		return `${base} — standing reaction until unlaw; no extra think`;
-	}
-	if (spec.name === 'unlaw' || spec.name === 'tag' || spec.name === 'untag') {
-		return `${base} — assigns only`;
-	}
-	if (spec.name === 'loop') {
-		return `${base} — repeats until fail`;
-	}
-	if (spec.name === 'shoot') {
-		return `${base} — needs a clear line of sight; flank around cover`;
-	}
-	if (spec.name === 'hex') {
-		return `${base} — weaker through cover; flank for a full hit`;
-	}
-	if (spec.name === 'heal') {
-		return `${base} — weaker through cover; flank for a full heal`;
-	}
-	if (spec.name === 'protect') {
-		return `${base} — stand between an ally and the threat, then attack that threat`;
-	}
-	return base;
+	return spec.help ? `${base} — ${spec.help}` : base;
 }
+
 
 export function verbHelp(registry:VerbRegistry):string {
 	const kit = registry.list().map(formatVerbHelp).join(', ');

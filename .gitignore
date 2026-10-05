@@ -2,8 +2,8 @@ node_modules
 dist
 *.tsbuildinfo
 .DS_Store
-.ai-log.txt
-.ai-log.jsonl
+*.ai-log.txt
+*.ai-log.jsonl
 game/cache
 brainstorming
 .env

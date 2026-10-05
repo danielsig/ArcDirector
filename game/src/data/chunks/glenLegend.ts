@@ -24,7 +24,7 @@ export const GLEN_LEGEND:Record<string, TerrainLegend | EntityLegend> = {
 	'D': { kind: 'entity', def: 'door', axis: 'z', over: ',', keyID: 'brass' },
 	'T': { kind: 'entity', def: 'wall_torch', over: ',' },
 	'k': { kind: 'entity', def: 'brass_key', over: '.' },
-	'L': { kind: 'entity', def: 'mill_lever', over: '.' },
+	'L': { kind: 'entity', def: 'bridge_lever', over: '.' },
 	'=': { kind: 'entity', def: 'bridge_span', over: '>' },
 	'W': { kind: 'entity', def: 'waterfall', over: '~' },
 	'm': { kind: 'entity', def: 'fire_mushroom', over: '.' },

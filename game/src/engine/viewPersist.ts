@@ -1,4 +1,4 @@
-import { lsDel, lsGet, lsSet } from '../prefs';
+import { lsGet, lsSet } from '../prefs';
 
 export type ViewPose = {
 	x:number;
@@ -68,8 +68,4 @@ export function loadViewPose(sceneID:string):ViewPose | null {
 
 export function saveViewPose(sceneID:string, packed:string):void {
 	lsSet(storageKey(sceneID), packed);
-}
-
-export function clearViewPose(sceneID:string):void {
-	lsDel(storageKey(sceneID));
 }

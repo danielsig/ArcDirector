@@ -8,7 +8,7 @@ import type { GameHost } from './adapter';
 const AI_LOG_CAP = 250;
 
 type Host = {
-	__aiLog:HudAiLogEntry[];
+	aiLog:HudAiLogEntry[];
 };
 
 function host():Host {
@@ -16,7 +16,7 @@ function host():Host {
 }
 
 export function publishAiLog(entries:HudAiLogEntry[]):void {
-	host().__aiLog = entries;
+	host().aiLog = entries;
 }
 
 export function resetAiLogSink():void {
@@ -67,7 +67,7 @@ export async function logLook(host:GameHost, id:string, zoom:number, snap:MapSna
 
 export async function dumpLookMaps(host:GameHost):Promise<number> {
 	const ids:string[] = [];
-	host.world.forEachComponent(HumanBody, (_body, go) => {
+	host.world.forEachComponent(HumanBody, (body, go) => {
 		if (go.id === 'Player' || !isLiving(go)) {
 			return;
 		}

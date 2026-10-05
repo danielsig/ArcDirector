@@ -3,18 +3,10 @@ import {
 	ArcDirector,
 	CrowdConductor,
 	TalkNet,
-	STOCK_VERBS,
 	isCrowdConductor,
-	isFormationVerb,
-	roleMentionTitles,
-	type ArcResult,
-	type AgentEvent,
-	type AgentJSON,
 	type Kit,
 	type KernelSource,
 	type MapSense,
-	type Step,
-	type VerbCall,
 } from 'arc-director';
 import { NPCInput } from '../actors/NPCInput';
 import {
@@ -27,28 +19,25 @@ import type { World } from '../engine/World';
 import type { HudAiLogEntry, HudChatLine } from '../ui/hudModel';
 import { prefs, preferredChatModel, setPrefs } from '../prefs';
 import { publishAiLog, resetAiLogSink, pushLog, logLook } from './aiLogSink';
-import { rewriteRetiredFeeNames } from '../engine/gameSave';
-import { talkFace, canHearClearly } from './talkAttend';
+import { talkFace, canHearClearly, SPEECH_LIFE } from './talkAttend';
 import { YOU_SYMBOL } from './mapMarks';
 import { snapshotMap } from './mapView';
 import { WORLD_ENCYCLOPEDIAS } from './encyclopedias';
-import type { HostCtx, SceneHooks } from './types';
+import type { AgentCtx, SceneHooks } from './types';
 import { bodyName, findBody, isLiving } from './names';
-import { kernelsOf, scanWorld, type PosedFact } from './kernels';
+import { kernelsOf, scanWorld } from './kernels';
 import { hostCanSee, lookWorld, inventoryOf, followedCarry } from './perception';
-import { executeStep } from './verbs';
-import { restoreCompanionHold } from './companion';
-import { runFormation } from './formations';
-import { fightExprTags, resolveFightName } from './fight';
+import { addBodyVerbs, GAME_VERBS, verbGate } from './verbs';
+import { gameWorld } from './world';
+import { fightExprTags } from './fight';
 import {
 	inTalkRange,
 	talkOthers,
 	talkNames,
 	onSpoke,
-	hearIfClose,
 } from './playerTalk';
 
-export type { HostCtx, SceneHooks };
+export type { AgentCtx, SceneHooks };
 
 const ARC_RETRY_CAP = 3;
 const STALL_VERBS = new Set(['wait', 'wander', 'say', 'set_status']);
@@ -60,26 +49,18 @@ export class GameHost {
 	bargainDone = false;
 	readonly scene:string;
 	hooks:SceneHooks<GameHost> = {};
-	arc:ArcDirector<HostCtx> | null = null;
+	arc:ArcDirector<AgentCtx> | null = null;
 	/** Shared kit for this scene. Mutate `verbs` / `tools`; fetched every tick. */
-	kit:Kit = { verbs: [...STOCK_VERBS] };
-	posedEvents:PosedFact[] = [];
+	kit:Kit = { verbs: [...GAME_VERBS] };
 	readonly doorOpen = new Map<string, boolean>();
 	readonly chestOpen = new Map<string, boolean>();
-	readonly pendingHear = new Map<string, {
-		speakerID:string;
-		spoken:string;
-		addressed:boolean;
-		until:number;
-	}[]>();
 	readonly labels = new Map<string, { text:string; until:number }>();
 	logSeq = 0;
 	readonly chat:HudChatLine[];
 	readonly log:HudAiLogEntry[];
-	private storedAgents:Record<string, AgentJSON>;
 	private disposed = false;
 	private starting = false;
-	private nextTryAt = 0;
+	private nextTryTimestamp = 0;
 
 	constructor(
 		world:World,
@@ -87,8 +68,6 @@ export class GameHost {
 		log:HudAiLogEntry[],
 		opts:{
 			ambient?:string;
-			agents?:Record<string, AgentJSON>;
-			bargainDone?:boolean;
 			scene?:string;
 		} = {},
 	) {
@@ -96,9 +75,7 @@ export class GameHost {
 		this.chat = chat;
 		this.log = log;
 		this.scene = opts.scene ?? '';
-		this.ambient = opts.ambient ?? 'A damp stone hall of the abbey.';
-		this.storedAgents = JSON.parse(rewriteRetiredFeeNames(JSON.stringify(opts.agents ?? {}))) as Record<string, AgentJSON>;
-		this.bargainDone = opts.bargainDone ?? false;
+		this.ambient = opts.ambient ?? 'A damp stone hall of the dungeon.';
 		this.talk = new TalkNet({
 			inRange: (speakerID, listenerID) => this.inCrowdRange(speakerID, listenerID),
 			others: (speakerID) => this.talkOthersOf(speakerID),
@@ -106,22 +83,23 @@ export class GameHost {
 			clearHear: (a, b) => this.crowdClearHear(a, b),
 			names: (id) => talkNames(this, id),
 			face: (who, toward) => talkFace(world, who, toward),
-		}, (utterance) => onSpoke(this, utterance), { approach: false });
+		}, (utterance) => onSpoke(this, utterance), { approach: false, rehear: SPEECH_LIFE });
 		this.log.length = 0;
 		resetAiLogSink();
 	}
 
-	configure(director:ArcDirector<HostCtx>):ArcDirector<HostCtx> {
+	configure(director:ArcDirector<AgentCtx>):ArcDirector<AgentCtx> {
 		const addAgent = director.addAgent.bind(director);
 		director.addAgent = (spec) => addAgent({
 			...spec,
 			skipHeartbeat: spec.skipHeartbeat ?? true,
 		});
-		return director
+		return addBodyVerbs(director)
 			.withPriorityQueue({
 				maxParallel: prefs().maxParallel,
 				batchThinks: prefs().batchThinks,
 				batchWait: 5,
+				verbScores: { steal: 0.95, equip: 0.5, unequip: 0.5 },
 				heartbeatStart: 2,
 				heartbeatMin: 2,
 				mayThink: (ctx) => {
@@ -134,8 +112,7 @@ export class GameHost {
 						return false;
 					}
 					if (ctx.reason === 'heartbeat') {
-						const npc = go?.getComponent(NPCInput);
-						return !!(npc?.busy() || ctx.arc);
+						return !!ctx.arc;
 					}
 					return true;
 				},
@@ -148,10 +125,14 @@ export class GameHost {
 			.withArcText(prefs().arcText)
 			.addStockVerbs()
 			.addStockCrowdVerbs()
-			.onVerb(this.do)
+			.withWorld(gameWorld(this))
+			.withVerbGate(verbGate(this))
+			.withToolRounds(0)
+			.withRepair({ retries: ARC_RETRY_CAP })
+			.withStalled((result) => !result.ok || !!result.interrupted || STALL_VERBS.has(result.verb ?? ''))
 			.withSight({ look: (ctx) => lookWorld(ctx.actor, this.ambient, this), unitName: 'm' })
 			.withInventory((ctx) => inventoryOf(ctx.actor))
-			.withLineOfSight((a, b) => hostCanSee(this.world, a, resolveFightName(this, a, b)))
+			.withLineOfSight((a, b) => hostCanSee(this.world, a, b))
 			.addSense('followed', {
 				description: 'What the person you follow is carrying.',
 				gather: followedCarry,
@@ -165,39 +146,24 @@ export class GameHost {
 			.onLog((entry) => pushLog(this, entry.name, entry.message, entry.image));
 	}
 
-	bind(director:ArcDirector<HostCtx>):void {
+	bind(director:ArcDirector<AgentCtx>):void {
 		this.arc = director;
-		if (this.arc.ready && Object.keys(this.storedAgents).length > 0) {
-			this.arc.restoreAgents(this.storedAgents);
-			for (const agent of this.arc.agents()) {
-				this.wireBody(agent.id);
-			}
-		}
 	}
 
-	do = (call:VerbCall<HostCtx>):Promise<ArcResult> | ArcResult => {
-		if (isFormationVerb(call.verb)) {
-			return runFormation(this, call);
-		}
-		return executeStep(this, { verb: call.verb, args: call.args as Step['args'] }, call.ctx);
-	};
-
-	context = (id:string):HostCtx | undefined => {
+	context = (id:string):AgentCtx | undefined => {
 		const body = this.world.findByID(id) ?? findBody(this.world, id);
-		if (!isLiving(body)) {
+		const npc = body?.getComponent(NPCInput);
+		if (!isLiving(body) || !npc) {
 			return undefined;
 		}
-		return { world: this.world, actor: body, scene: this.scene };
+		return { world: this.world, actor: body, npc, scene: this.scene };
 	};
 
 	abortArc = (id:string):void => {
 		if (this.bargainDone) {
 			return;
 		}
-		const body = this.world.findByID(id) ?? findBody(this.world, id);
-		const npc = body?.getComponent(NPCInput);
-		npc?.interrupt('urgent');
-		body?.getComponent(Celebrating)?.stop();
+		(this.world.findByID(id) ?? findBody(this.world, id))?.getComponent(Celebrating)?.stop();
 	};
 
 	private readonly mapSense:MapSense = {
@@ -212,11 +178,10 @@ export class GameHost {
 		},
 	};
 
-	kernels:KernelSource<HostCtx> = (ctx) => kernelsOf(
+	kernels:KernelSource<AgentCtx> = (ctx, point) => kernelsOf(
 		this.world,
 		ctx.actor,
-		this.posedEvents,
-		undefined,
+		point && { x: point[0], z: point[1] },
 		(go) => fightExprTags(this, ctx.actor, go),
 	);
 
@@ -229,7 +194,7 @@ export class GameHost {
 			await this.arc.start();
 		}
 		catch {
-			this.nextTryAt = this.world.time + 3;
+			this.nextTryTimestamp = this.world.time + 3;
 			this.world.setMessage('NPCs idle — start LM Studio on port 1234');
 			return;
 		}
@@ -241,9 +206,6 @@ export class GameHost {
 			this.arc.setModel(pref);
 		}
 		setPrefs({ model: this.arc.model });
-		if (Object.keys(this.storedAgents).length > 0) {
-			this.arc.restoreAgents(this.storedAgents);
-		}
 		for (const agent of this.arc.agents()) {
 			this.wireBody(agent.id);
 		}
@@ -254,7 +216,6 @@ export class GameHost {
 		const agent = this.agentByID(id);
 		if (!actor) {
 			if (isCrowdConductor(agent) && agent.crowd.size > 0) {
-				this.attachMind(agent.id, agent);
 				return;
 			}
 			console.warn(`GameHost: no ${id}`);
@@ -266,11 +227,9 @@ export class GameHost {
 			return;
 		}
 		const named = actor.getComponent(Named);
-		if (named) {
-			const given = roleMentionTitles(agent.identity.role).filter((t) => /^[A-Z][A-Za-z0-9]*$/.test(t));
-			named.aliases = [...new Set([...(named.aliases ?? []), agent.identity.name, ...given])];
+		if (named && agent.identity.role) {
+			named.aliases = [...new Set([...(named.aliases ?? []), agent.identity.role])];
 		}
-		restoreCompanionHold(this, actor, agent);
 		const npc = actor.getComponent(NPCInput);
 		if (npc) {
 			npc.aiOn = true;
@@ -278,52 +237,14 @@ export class GameHost {
 		if (actor.getComponent(Companion)) {
 			agent.strategicInterval = 0;
 		}
-		this.attachMind(agent.id, agent);
 	}
 
-	private attachMind(id:string, agent:Agent<HostCtx>):void {
-		agent.toolRoundCap = 0;
-		agent.arcRetryCap = ARC_RETRY_CAP;
-		agent.stalled = (result) => !result.ok || !!result.interrupted || STALL_VERBS.has(result.verb ?? '');
-		this.talk.attach({
-			id,
-			pushEvent: (event) => {
-				const stamped = { ...event, at: event.at ?? this.world.time };
-				agent.pushEvent(stamped);
-				if (stamped.major) {
-					this.wakeMind(agent.id);
-					this.arc?.mindQueue()?.enqueueMajor(agent.id, true);
-				}
-			},
-		});
-		this.arc?.mindQueue()?.ensure(id);
-		this.arc?.mindQueue()?.setAiOn(id, true);
-	}
-
-	exportAgents():Record<string, AgentJSON> {
-		return this.arc?.exportAgents() ?? {};
-	}
-
-	restoreAgents(agents:Record<string, AgentJSON>):void {
-		this.storedAgents = JSON.parse(rewriteRetiredFeeNames(JSON.stringify(agents))) as Record<string, AgentJSON>;
-		this.doorOpen.clear();
-		this.chestOpen.clear();
-		if (!this.arc?.ready) {
-			return;
-		}
-		this.arc.restoreAgents(this.storedAgents);
-		for (const agent of this.arc.agents()) {
-			this.wireBody(agent.id);
-		}
-	}
-
-	observe(_dt = 0):void {
+	observe(dt = 0):void {
 		scanWorld(this);
 		this.hooks.checkBargain?.(this);
 		this.hooks.tickMarketNPC?.(this);
-		hearIfClose(this);
 		publishAiLog(this.log);
-		if (!this.arc?.ready && this.world.time >= this.nextTryAt) {
+		if (!this.arc?.ready && this.world.time >= this.nextTryTimestamp) {
 			void this.start();
 		}
 	}
@@ -338,30 +259,7 @@ export class GameHost {
 		this.arc.tick(dt, this.world.time);
 	}
 
-	wakeMind(id:string):void {
-		const go = this.world.findByID(id) ?? findBody(this.world, id);
-		go?.getComponent(Celebrating)?.stop();
-		this.arc?.mindQueue()?.setAiOn(id, true);
-		const npc = go?.getComponent(NPCInput);
-		if (npc) {
-			npc.aiOn = true;
-		}
-	}
-
-	pushEvent(event:AgentEvent):void {
-		const stamped = { ...event, at: event.at ?? this.world.time };
-		this.arc?.pushEvent(stamped);
-		const urgent = /^(Theft|HeardSpeech|Hurt)$/i.test(stamped.kind)
-			|| (stamped.tags ?? []).some((t) => /^(steal|theft|hurt|speech|threat)$/i.test(t));
-		if (!stamped.major || !urgent) {
-			return;
-		}
-		for (const agent of this.arc?.agents() ?? []) {
-			this.wakeMind(agent.id);
-		}
-	}
-
-	agentByID(id:string):Agent<HostCtx> | undefined {
+	agentByID(id:string):Agent<AgentCtx> | undefined {
 		const a = this.arc?.agent(id);
 		if (a) {
 			return a;
@@ -381,7 +279,7 @@ export class GameHost {
 		return undefined;
 	}
 
-	private conductorOf(id:string):CrowdConductor<HostCtx> | undefined {
+	private conductorOf(id:string):CrowdConductor<AgentCtx> | undefined {
 		const agent = this.arc?.agent(id);
 		if (isCrowdConductor(agent)) {
 			return agent;
@@ -394,7 +292,7 @@ export class GameHost {
 		return undefined;
 	}
 
-	private crowdBodies(conductor:CrowdConductor<HostCtx>):GameObject[] {
+	private crowdBodies(conductor:CrowdConductor<AgentCtx>):GameObject[] {
 		const out:GameObject[] = [];
 		for (const unit of conductor.crowd.list()) {
 			const go = findBody(this.world, unit.id);

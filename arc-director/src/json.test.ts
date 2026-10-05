@@ -10,7 +10,7 @@ describe('extractJson', () => {
 	});
 
 	it('closes truncated Arc braces', () => {
-		const raw = '{"head":{"verb":"go_to","args":{"name":"Lantern"}},"then":{"join":"then_if_ok","arc":{"head":{"verb":"pick_up","args":{"name":"Lantern"}},"then":{"join":"then_if_ok","arc":{"head":{"verb":"go_to","args":{"name":"Miller"}},"then":{"join":"then_if_ok","arc":{"head":{"verb":"give","args":{"item":"Lantern","to":"Miller"}},"then":{"join":"then_if_ok","arc":{"head":{"verb":"wait","args":{"seconds":1}}}}}}}}';
+		const raw = '{"head":{"verb":"go_to","args":{"target":"Lantern"}},"then":{"join":"then_if_ok","arc":{"head":{"verb":"pick_up","args":{"item":"Lantern"}},"then":{"join":"then_if_ok","arc":{"head":{"verb":"go_to","args":{"target":"BridgeKeeper"}},"then":{"join":"then_if_ok","arc":{"head":{"verb":"give","args":{"item":"Lantern","to":"BridgeKeeper"}},"then":{"join":"then_if_ok","arc":{"head":{"verb":"wait","args":{"seconds":1}}}}}}}}';
 		const got = extractJson(raw) as {
 			head:{ verb:string };
 			then:{ arc:{ then:{ arc:{ then:{ arc:{ then:{ arc:{ head:{ verb:string } } } } } } } } };

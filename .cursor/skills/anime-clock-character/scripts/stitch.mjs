@@ -195,7 +195,7 @@ function stripCells(src, nHint) {
 		else n = 1;
 	}
 	const cw = Math.floor(src.width / n);
-	return Array.from({ length: n }, (_, i) => crop(src, i * cw, 0, cw, src.height));
+	return Array.from({ length: n }, (element, i) => crop(src, i * cw, 0, cw, src.height));
 }
 
 function fitIntoCell(src, cw, ch, figH, headY) {

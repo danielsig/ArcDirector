@@ -322,8 +322,13 @@ function textFrom(value:unknown):string | null {
 	return joined.length > 0 ? joined : null;
 }
 
+/** Chat-template tokens a model leaks into content: `<|x|>`, `<|x>`, `<x|>`, or a dangling `<|x` at the end. */
+export function stripTemplateTokens(text:string | null):string | null {
+	return text?.replace(/<\|[\w-]+\|?>|<[\w-]+\|>|<\|[\w-]*$/g, '').trim() || null;
+}
+
 function messageText(message:Record<string, unknown>):string | null {
-	const content = textFrom(message.content);
+	const content = stripTemplateTokens(textFrom(message.content));
 	if (content) {
 		return content;
 	}
@@ -792,7 +797,7 @@ async function readInferenceResponse(
 	let completed:Record<string, unknown> | undefined;
 	let lastChunk:Record<string, unknown> | undefined;
 	let lastType = '';
-	let responseId:string | undefined;
+	let responseID:string | undefined;
 	let usage:Record<string, unknown> | undefined;
 	let timings:Record<string, unknown> | undefined;
 	let stats:Record<string, unknown> | undefined;
@@ -800,6 +805,7 @@ async function readInferenceResponse(
 	let assembledContent = '';
 	let assembledReasoning = '';
 	let assembledTools:unknown = undefined;
+	let finishReason:unknown = undefined;
 	let assembledText = '';
 	let responsesReasoning = '';
 	const doneItems:Record<string, unknown>[] = [];
@@ -825,11 +831,11 @@ async function readInferenceResponse(
 		if (term) {
 			completed = term;
 			if (typeof term.id === 'string') {
-				responseId = term.id;
+				responseID = term.id;
 			}
 		}
 		if (isRecord(ev.response) && typeof ev.response.id === 'string') {
-			responseId = responseId ?? ev.response.id;
+			responseID = responseID ?? ev.response.id;
 		}
 		if (isRecord(ev.usage)) {
 			usage = ev.usage;
@@ -883,6 +889,7 @@ async function readInferenceResponse(
 				assembledTools = msg['tool_calls'];
 			}
 		}
+		finishReason = choice['finish_reason'] ?? finishReason;
 		const delta = isRecord(choice.delta) ? choice.delta : {};
 		if (typeof delta.content === 'string') {
 			assembledContent += delta.content;
@@ -935,7 +942,7 @@ async function readInferenceResponse(
 			return { json: completed, firstMs, wallMs };
 		}
 		const fromResponses = responsesFromStream({
-			id: responseId,
+			id: responseID,
 			usage,
 			timings,
 			stats,
@@ -957,7 +964,7 @@ async function readInferenceResponse(
 			}
 			return {
 				json: {
-					choices: [{ message }],
+					choices: [{ message, finish_reason: finishReason }],
 					usage: usage ?? lastChunk?.usage,
 				},
 				firstMs,
@@ -985,6 +992,7 @@ function parseResponsesOutput(json:Record<string, unknown>):{
 	reasoning:string | undefined;
 	toolCalls:ToolCall[];
 	id:string | undefined;
+	truncated:boolean;
 	cachedTokens:number | undefined;
 	promptMs:number | undefined;
 	generateMs:number | undefined;
@@ -1036,10 +1044,11 @@ function parseResponsesOutput(json:Record<string, unknown>):{
 		}
 	}
 	return {
-		content: texts.length > 0 ? texts.join('\n') : null,
+		content: stripTemplateTokens(texts.length > 0 ? texts.join('\n') : null),
 		reasoning: thoughts.length > 0 ? thoughts.join('\n') : undefined,
 		toolCalls,
 		id,
+		truncated: json.status === 'incomplete',
 		cachedTokens: cached,
 		promptMs: stats.promptMs,
 		generateMs: stats.generateMs,
@@ -1212,6 +1221,7 @@ export class HttpProvider implements InferenceProvider {
 			content: messageText(message),
 			reasoning: messageReasoning(message),
 			toolCalls: parseToolCalls(message['tool_calls'] ?? message['toolCalls']),
+			truncated: first['finish_reason'] === 'length',
 			cachedTokens: timings.cachedTokens,
 			promptMs: split.promptMs,
 			generateMs: split.generateMs,
@@ -1264,6 +1274,7 @@ export class HttpProvider implements InferenceProvider {
 			content: parsed.content,
 			reasoning: parsed.reasoning,
 			toolCalls: parsed.toolCalls,
+			truncated: parsed.truncated,
 			cachedTokens: parsed.cachedTokens,
 			promptMs: split.promptMs,
 			generateMs: split.generateMs,

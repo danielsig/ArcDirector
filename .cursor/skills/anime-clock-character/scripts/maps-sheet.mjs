@@ -133,18 +133,6 @@ function contentBox(png) {
 	return { x0, y0, x1, y1 };
 }
 
-function magFrac(png) {
-	const { data } = png;
-	let n = 0;
-	const total = data.length / 4;
-	for (let i = 0; i < data.length; i += 4) {
-		if (magDist(data[i], data[i + 1], data[i + 2]) < 48) {
-			n += 1;
-		}
-	}
-	return n / total;
-}
-
 function gridBox(src, aspect) {
 	const { width: w, height: h } = src;
 	const srcA = w / h;
@@ -182,16 +170,6 @@ function sampleBilinear(src, fx, fy) {
 	return out;
 }
 
-function isDepthBg(r, g, b, a) {
-	if (a < 8) {
-		return true;
-	}
-	if (isKeyMag(r, g, b, a)) {
-		return true;
-	}
-	return r < 18 && g < 18 && b < 18;
-}
-
 /** Back-quarter robes sit at lum ~7–26; isDepthBg would drop them and bbox only hair/hands. */
 function isMetalBg(r, g, b, a) {
 	if (a < 8) {
@@ -201,33 +179,6 @@ function isMetalBg(r, g, b, a) {
 		return true;
 	}
 	return r + g + b < 6;
-}
-
-function occupancyBands(arr, minRun, minLen) {
-	const out = [];
-	let i = 0;
-	while (i < arr.length) {
-		if (arr[i] >= minRun) {
-			let j = i;
-			while (j < arr.length && arr[j] >= minRun) {
-				j += 1;
-			}
-			if (j - i >= minLen) {
-				out.push({ a: i, b: j });
-			}
-			i = j;
-			continue;
-		}
-		i += 1;
-	}
-	return out;
-}
-
-function expandToGutters(bands, limit) {
-	return bands.map((b, i) => ({
-		a: i === 0 ? Math.max(0, b.a) : Math.floor((bands[i - 1].b + b.a) / 2),
-		b: i === bands.length - 1 ? Math.min(limit, b.b) : Math.ceil((b.b + bands[i + 1].a) / 2),
-	}));
 }
 
 /** Equal cols×rows of the source canvas. Metal gens are too dark for occupancy bands. */
@@ -247,47 +198,6 @@ function evenGridBands(src, cols, rows) {
 		});
 	}
 	return { colBands, rowBands, how: `${cols}x${rows} even-grid` };
-}
-
-function findOccupancyBands(src, cols, rows) {
-	const { width: w, height: h, data } = src;
-	const colN = new Array(w).fill(0);
-	const rowN = new Array(h).fill(0);
-	for (let y = 0; y < h; y++) {
-		for (let x = 0; x < w; x++) {
-			const i = (y * w + x) * 4;
-			if (isDepthBg(data[i], data[i + 1], data[i + 2], data[i + 3])) {
-				continue;
-			}
-			colN[x] += 1;
-			rowN[y] += 1;
-		}
-	}
-	const colBands = occupancyBands(colN, Math.max(3, h * 0.008), 6);
-	const rowBands = occupancyBands(rowN, Math.max(3, w * 0.006), 6);
-	if (colBands.length !== cols || rowBands.length !== rows) {
-		return null;
-	}
-	return {
-		colBands: expandToGutters(colBands, w),
-		rowBands: expandToGutters(rowBands, h),
-		how: `${cols}x${rows} cell-bands`,
-	};
-}
-
-function occupiedGridBox(src, cols, rows) {
-	const bands = findOccupancyBands(src, cols, rows);
-	if (!bands) {
-		return null;
-	}
-	const { colBands, rowBands } = bands;
-	return {
-		x0: colBands[0].a,
-		y0: rowBands[0].a,
-		x1: colBands[colBands.length - 1].b,
-		y1: rowBands[rowBands.length - 1].b,
-		how: `${cols}x${rows} bands`,
-	};
 }
 
 function largestComponentBox(png, isBg) {
@@ -365,17 +275,6 @@ function largestComponentBox(png, isBg) {
 		}
 	}
 	return best;
-}
-
-function depthGenBox(src, layout, forceLetterbox = false) {
-	if (!forceLetterbox) {
-		const occupied = occupiedGridBox(src, layout.cols, layout.rows);
-		if (occupied) {
-			return occupied;
-		}
-	}
-	const box = gridBox(src, layout.sheetW / layout.sheetH);
-	return { ...box, how: 'letterbox' };
 }
 
 function cropAlbedoCell(sheet, cell) {
@@ -567,41 +466,6 @@ function mapMetalOntoAlbedo(src, srcBox, albedo) {
 	return mapUniformOntoAlbedo(src, srcBox, albedo, null);
 }
 
-function mapBoxOntoAlbedo(src, srcBox, albedo, skipDepthBg) {
-	const w = albedo.width;
-	const h = albedo.height;
-	const dst = emptyPng(w, h, DEPTH_BG);
-	const aBox = figureBox(albedo, null);
-	if (!aBox || !srcBox || srcBox.w < 2 || srcBox.h < 2) {
-		return dst;
-	}
-	for (let y = 0; y < h; y++) {
-		for (let x = 0; x < w; x++) {
-			const ai = (y * w + x) * 4;
-			if (isKeyMag(albedo.data[ai], albedo.data[ai + 1], albedo.data[ai + 2], albedo.data[ai + 3])) {
-				continue;
-			}
-			const fx = srcBox.x0 + ((x + 0.5 - aBox.x0) * srcBox.w) / aBox.w - 0.5;
-			const fy = srcBox.y0 + ((y + 0.5 - aBox.y0) * srcBox.h) / aBox.h - 0.5;
-			if (fx < srcBox.x0 - 1 || fy < srcBox.y0 - 1 || fx >= srcBox.x1 || fy >= srcBox.y1) {
-				continue;
-			}
-			const [r, g, b, a] = sampleBilinear(src, fx, fy);
-			if (isKeyMag(r, g, b, a)) {
-				continue;
-			}
-			if (skipDepthBg && isDepthBg(r, g, b, a)) {
-				continue;
-			}
-			dst.data[ai] = r;
-			dst.data[ai + 1] = g;
-			dst.data[ai + 2] = b;
-			dst.data[ai + 3] = 255;
-		}
-	}
-	return dst;
-}
-
 function fitDepthCell(depth, albedo) {
 	const dBox = largestComponentBox(depth, isMetalBg) ?? figureBox(depth, DEPTH_BG);
 	return mapUniformOntoAlbedo(depth, dBox, albedo, isMetalBg);
@@ -770,35 +634,6 @@ function fitDCmd() {
 		writePng(sheetOut, fittedSheet);
 	}
 	console.log(`fit-d ${n} _d cells -> ${out} (${bands.how}+uniform)${sheetOut ? ` sheet ${sheetOut}` : ''}`);
-}
-
-function maskStampCell(src, albedo) {
-	const w = albedo.width;
-	const h = albedo.height;
-	const dst = emptyPng(w, h, DEPTH_BG);
-	for (let y = 0; y < h; y++) {
-		for (let x = 0; x < w; x++) {
-			const i = (y * w + x) * 4;
-			if (isKeyMag(albedo.data[i], albedo.data[i + 1], albedo.data[i + 2], albedo.data[i + 3])) {
-				continue;
-			}
-			const sx = Math.min(src.width - 1, Math.max(0, x));
-			const sy = Math.min(src.height - 1, Math.max(0, y));
-			const si = (sy * src.width + sx) * 4;
-			const r = src.data[si];
-			const g = src.data[si + 1];
-			const b = src.data[si + 2];
-			const a = src.data[si + 3];
-			if (isKeyMag(r, g, b, a)) {
-				continue;
-			}
-			dst.data[i] = r;
-			dst.data[i + 1] = g;
-			dst.data[i + 2] = b;
-			dst.data[i + 3] = 255;
-		}
-	}
-	return dst;
 }
 
 function fitMCmd() {

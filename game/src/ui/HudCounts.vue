@@ -8,9 +8,7 @@ defineProps<{
 
 <template>
 	<div class="hud-counts">
-		<div class="row">KEY {{ hud.keys }}</div>
-		<div class="row">BOMB {{ hud.bombs }}</div>
-		<div class="row">GOLD {{ hud.gold }}</div>
+		<div v-if="hud.showGold" class="row">GOLD {{ hud.gold }}</div>
 	</div>
 </template>
 

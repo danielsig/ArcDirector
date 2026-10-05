@@ -7,7 +7,7 @@ function named(
 	const { x, z, ...rest } = extra;
 	return {
 		id,
-		at: [x ?? 0, z ?? 0],
+		point: [x ?? 0, z ?? 0],
 		tags: extra.tags ?? [],
 		...rest,
 	};
@@ -15,7 +15,7 @@ function named(
 
 export function fixtureSight():Sight {
 	return {
-		self: { id: 'Guard', at: [0, 0] },
+		self: { id: 'Guard', point: [0, 0] },
 		ambient: 'damp stone hall',
 		objects: [
 			named('EastGate', {

@@ -65,7 +65,7 @@ function parseLooseObject(body:string):unknown {
 			stack.push('[');
 			continue;
 		}
-	if (ch === '}' || ch === ']') {
+		if (ch === '}' || ch === ']') {
 			const open = stack.pop();
 			const expected:Frame = ch === '}' ? '{' : '[';
 			if (open !== expected) {

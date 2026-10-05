@@ -106,7 +106,7 @@ export function artCachePlugin():Plugin {
 	};
 }
 
-function watchArt(server:ViteDevServer, onChange:(only?:string) => void):void {
+function watchArt(server:ViteDevServer, onChange:(only?:string)=>void):void {
 	server.watcher.add(path.join(dir, 'public', 'characters'));
 	server.watcher.add(path.join(dir, 'public', 'items', 'sword'));
 	let timer:ReturnType<typeof setTimeout> | null = null;

@@ -1,10 +1,11 @@
-import { BoxCollider, BrewHearth, Bridge, Chest, Door, Flammable, HumanBody, Lock, MillLever, Named, Sickbed, Vitals } from '../engine/components';
+import { BoxCollider, BrewHearth, Bridge, BridgeLever, Chest, Door, Flammable, HumanBody, Lock, Named, Sickbed, Vitals } from '../engine/components';
 import type { GameObject } from '../engine/GameObject';
 import { equipItem, itemInHeldSlot } from './equip';
 import { actorIs, distXZ, findCarried, healActor, inBackpack, removeFromBags, tryInsert } from './inventory';
 import { instantiateDef, type ItemInstance } from './instance';
 import { getDef } from './defs';
 import { cueAt } from '../audio/cue';
+import { applyHit } from '../npc/hitFeel';
 
 export type UseResult = {
 	ok:boolean;
@@ -124,20 +125,20 @@ export function useItem(actor:GameObject, item:ItemInstance, target:GameObject |
 			bed.tended = true;
 			return ok('tended');
 		}
-		const lever = target.getComponent(MillLever);
+		const lever = target.getComponent(BridgeLever);
 		if (lever) {
-			if (!actorIs(actor, 'Miller')) {
-				return fail('only Miller can work the sluice');
+			if (!actorIs(actor, 'BridgeKeeper')) {
+				return fail('only BridgeKeeper can work the sluice');
 			}
-			if (item.defID !== 'mill_crank') {
-				return fail('use MillCrank on MillLever');
+			if (item.defID !== 'bridge_crank') {
+				return fail('use BridgeCrank on BridgeLever');
 			}
 			let bridge:GameObject | undefined;
-			world.forEachComponent(Bridge, (_b, go) => {
+			world.forEachComponent(Bridge, (b, go) => {
 				bridge = go;
 			});
 			if (!bridge) {
-				return fail('no mill bridge');
+				return fail('no Bridge');
 			}
 			const span = bridge.getComponent(Bridge);
 			if (span) {
@@ -152,7 +153,7 @@ export function useItem(actor:GameObject, item:ItemInstance, target:GameObject |
 				col.solid = false;
 				col.isTrigger = true;
 			}
-			return ok('lowered MillBridge');
+			return ok('lowered Bridge');
 		}
 	}
 
@@ -194,7 +195,14 @@ export function useItem(actor:GameObject, item:ItemInstance, target:GameObject |
 		}
 		const hp = target.getComponent(Vitals);
 		if (hp) {
-			hp.hp = Math.max(0, hp.hp - item.Weapon.damage);
+			const dealt = Math.min(hp.hp, item.Weapon.damage);
+			hp.hp -= dealt;
+			if (dealt > 0) {
+				if (actor.id === 'Player') {
+					world.playerHits.add(target.getComponent(Named)?.id ?? target.id);
+				}
+				applyHit(world, actor, target);
+			}
 		}
 		return ok('hit');
 	}

@@ -1,6 +1,7 @@
 import { Component } from './Component.js';
 
 export class BoxCollider extends Component {
+	static override saved = ['isTrigger', 'solid'];
 	size = { x: 1, y: 1, z: 1 };
 	isTrigger = false;
 	solid = true;

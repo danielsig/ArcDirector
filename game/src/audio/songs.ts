@@ -69,7 +69,7 @@ export const SONGS:Record<string, Score> = {
 	glen: glenTheme(),
 };
 
-/** Ruin fight plays the Hero's Might recording. Other scenes play a score. */
+/** 5v5 Combat plays the Hero's Might recording. Other scenes play a score. */
 export function startSceneMusic(audio:Audio, sceneID:string):void {
 	if (sceneID === 'ruins') {
 		void audio.playRecording(MIGHT_TRACK, 1, 'heros_might', { start: 7.35, end: 115.8 });

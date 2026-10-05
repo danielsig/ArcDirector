@@ -1,12 +1,25 @@
 import type { JsonSchema } from '../json.js';
 
-export type VerbArgKind = 'id' | 'id?' | 'string' | 'string?' | 'number' | 'number?' | 'string[]' | 'string[]?' | 'arc' | 'arc?';
+/**
+ * `id` is a body or place; the host always receives a real id, even when the model wrote its own name for it
+ * or an expression that picks one. `text` is prose: unquoted, it runs to the closing `)` or the next `, key=`.
+ * `watch` is a watch-language expression; the host reads it through `VerbCall.holds` / `score`.
+ */
+export type VerbArgKind = 'id' | 'id?' | 'string' | 'string?' | 'text' | 'text?' | 'watch' | 'watch?' | 'number' | 'number?' | 'string[]' | 'string[]?' | 'arc' | 'arc?';
 
 export type VerbArgMap = Record<string, VerbArgKind>;
 
 export type VerbSpec = {
 	name:string;
 	args:VerbArgMap;
+	/** One line shown after the verb in the prompt's verb list. */
+	help?:string;
+};
+
+/** What `addVerb` and `VerbRegistry.add` take. */
+export type VerbDef = {
+	args?:VerbArgMap;
+	help?:string;
 };
 
 export class VerbRegistry {
@@ -15,7 +28,7 @@ export class VerbRegistry {
 	/** Catalog used to parse nested `arc=` args. Kit views point at the unfiltered registry. */
 	private nestedSource:VerbRegistry | null = null;
 
-	add(name:string, args:VerbArgMap = {}):this {
+	add(name:string, { args = {}, help }:VerbDef = {}):this {
 		if (this.verbs.has(name)) {
 			throw new Error(`verb already registered: ${name}`);
 		}
@@ -24,7 +37,7 @@ export class VerbRegistry {
 				throw new Error(`verb ${name}: coordinate arg '${key}' is not allowed`);
 			}
 		}
-		this.verbs.set(name, { name, args });
+		this.verbs.set(name, { name, args, help });
 		return this;
 	}
 
@@ -39,12 +52,12 @@ export class VerbRegistry {
 		next.nestedSource = this.nestedSource ?? this;
 		for (const spec of this.list()) {
 			if (spec.name !== verb) {
-				next.add(spec.name, spec.args);
+				next.add(spec.name, spec);
 				continue;
 			}
 			const args = { ...spec.args };
 			delete args[key];
-			next.add(spec.name, args);
+			next.add(spec.name, { ...spec, args });
 		}
 		return next;
 	}
@@ -66,7 +79,7 @@ export class VerbRegistry {
 		next.nestedSource = this.nestedSource ?? this;
 		for (const spec of this.list()) {
 			if (wanted.has(spec.name)) {
-				next.add(spec.name, spec.args);
+				next.add(spec.name, spec);
 			}
 		}
 		return next;
@@ -121,47 +134,57 @@ export class VerbRegistry {
 }
 
 export const STOCK_MOVE_VERBS = ['go_to', 'follow', 'wander'] as const;
-export const STOCK_ITEM_VERBS = ['use', 'equip', 'unequip', 'pick_up', 'drop', 'give', 'examine'] as const;
+export const STOCK_ITEM_VERBS = ['use', 'pick_up', 'drop', 'give', 'examine'] as const;
+/** Registered with the rest; not in `STOCK_VERBS`, so a kit grants them only where there is trade. */
+export const STOCK_TRADE_VERBS = ['buy', 'sell'] as const;
 export const STOCK_MIND_VERBS = [
 	'say', 'wait', 'remember', 'think', 'set_goal', 'drop_goal', 'set_identity',
+	'watch', 'unwatch', 'focus', 'unfocus',
 ] as const;
+/** Withheld from an agent whose `watchesWritable` / `sightFocusWritable` is off, whatever its kit says. */
+export const WATCH_EDIT_VERBS:readonly string[] = ['watch', 'unwatch'];
+export const FOCUS_EDIT_VERBS:readonly string[] = ['focus', 'unfocus'];
 export const STOCK_ARC_VERBS = ['when', 'loop', 'law', 'unlaw'] as const;
 export const STOCK_VERBS = [...STOCK_MOVE_VERBS, ...STOCK_ITEM_VERBS, ...STOCK_MIND_VERBS, ...STOCK_ARC_VERBS] as const;
-export type StockVerb = (typeof STOCK_VERBS)[number];
+export type StockVerb = (typeof STOCK_VERBS)[number] | (typeof STOCK_TRADE_VERBS)[number];
 
-export const STOCK_VERB_ARGS:Record<StockVerb, VerbArgMap> = {
-	go_to: { name: 'id' },
-	follow: { name: 'id' },
-	wander: { until: 'string?', seconds: 'number?' },
-	use: { item: 'id', target: 'id?' },
-	equip: { item: 'id', slot: 'string?' },
-	unequip: { slot: 'string' },
-	pick_up: { name: 'id' },
-	drop: { name: 'id' },
-	give: { item: 'id', to: 'id' },
-	examine: { name: 'id' },
-	say: { text: 'string', to: 'id?' },
-	wait: { seconds: 'number?', until: 'string?' },
-	remember: { content: 'string', tags: 'string[]?' },
-	think: { about: 'string?' },
-	set_goal: { goal: 'string', priority: 'number?' },
-	drop_goal: { goal: 'string?' },
-	set_identity: { name: 'string?', role: 'string?', traits: 'string[]?' },
-	when: { watch: 'string', arc: 'arc' },
-	loop: { arc: 'arc', through: 'string?', until: 'string?', times: 'number?' },
-	law: { who: 'string?', watch: 'string', arc: 'arc', name: 'string?' },
-	unlaw: { name: 'string' },
-};
+export const STOCK_VERB_DEFS = {
+	go_to: { args: { target: 'id' } },
+	follow: { args: { target: 'id' }, help: 'keeps following until your next arc' },
+	wander: { args: { until: 'watch?', seconds: 'number?' } },
+	use: { args: { item: 'id', target: 'id?' }, help: 'goes to the target first' },
+	pick_up: { args: { item: 'id' }, help: 'goes to it first' },
+	drop: { args: { item: 'id' } },
+	give: { args: { item: 'id', to: 'id' }, help: 'goes to them first' },
+	examine: { args: { target: 'id' } },
+	buy: { args: { item: 'id', from: 'id', offer: 'number?', quantity: 'number?' }, help: 'goes to the seller first; offer is for all of them' },
+	sell: { args: { item: 'id', to: 'id', ask: 'number?', quantity: 'number?' }, help: 'goes to the buyer first; ask is for all of them' },
+	say: { args: { text: 'text', to: 'id?' } },
+	wait: { args: { seconds: 'number?', until: 'watch?' } },
+	remember: { args: { content: 'text', tags: 'string[]?' } },
+	think: { args: { about: 'text?' } },
+	set_goal: { args: { goal: 'text', priority: 'number?' } },
+	drop_goal: { args: { goal: 'text?' } },
+	set_identity: { args: { role: 'string?', traits: 'string[]?' } },
+	watch: { args: { name: 'string', expr: 'string' } },
+	unwatch: { args: { name: 'string' } },
+	focus: { args: { expr: 'string' } },
+	unfocus: { args: { expr: 'string' } },
+	when: { args: { watch: 'watch', arc: 'arc' }, help: `this job's interrupt; no extra think` },
+	loop: { args: { arc: 'arc', through: 'watch?', until: 'watch?', times: 'number?' }, help: 'repeats until fail' },
+	law: { args: { who: 'string?', watch: 'watch', arc: 'arc', name: 'string?' }, help: 'standing reaction until unlaw; no extra think' },
+	unlaw: { args: { name: 'string' }, help: 'drops that law' },
+} as const satisfies Record<StockVerb, VerbDef>;
 
 /** Schema-only. Omit `verbs` to register the full stock set. Already-registered names are skipped. */
 export function registerStockVerbs(registry:VerbRegistry, ...verbs:StockVerb[]):VerbRegistry {
-	const list = verbs.length > 0 ? verbs : STOCK_VERBS;
+	const list = verbs.length > 0 ? verbs : [...STOCK_VERBS, ...STOCK_TRADE_VERBS];
 	for (const name of list) {
-		if (!(name in STOCK_VERB_ARGS)) {
+		if (!(name in STOCK_VERB_DEFS)) {
 			throw new Error(`ArcDirector: '${name}' is not a stock verb`);
 		}
 		if (!registry.has(name)) {
-			registry.add(name, STOCK_VERB_ARGS[name]);
+			registry.add(name, STOCK_VERB_DEFS[name]);
 		}
 	}
 	return registry;

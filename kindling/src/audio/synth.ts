@@ -110,7 +110,7 @@ export function playVoiceNote(
 function playPad(
 	ctx:AudioContext,
 	dest:AudioNode,
-	_noise:AudioBuffer,
+	noise:AudioBuffer,
 	when:number,
 	midi:number,
 	dur:number,
@@ -148,7 +148,7 @@ function playPad(
 function playBass(
 	ctx:AudioContext,
 	dest:AudioNode,
-	_noise:AudioBuffer,
+	noise:AudioBuffer,
 	when:number,
 	midi:number,
 	dur:number,
@@ -176,7 +176,7 @@ function playBass(
 function playLead(
 	ctx:AudioContext,
 	dest:AudioNode,
-	_noise:AudioBuffer,
+	noise:AudioBuffer,
 	when:number,
 	midi:number,
 	dur:number,
@@ -295,7 +295,7 @@ function bellHz(
 function playBell(
 	ctx:AudioContext,
 	dest:AudioNode,
-	_noise:AudioBuffer,
+	noise:AudioBuffer,
 	when:number,
 	midi:number,
 	dur:number,

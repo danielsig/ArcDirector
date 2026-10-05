@@ -5,21 +5,13 @@ import { clamp, lerpAngle, yawToward } from '../engine/math';
 import type { GameObject } from '../engine/GameObject';
 import type { World } from '../engine/World';
 import { distXZ } from '../items/inventory';
-import { lineClear, pathStep } from '../world/path';
+import { lineClear } from '../world/path';
 
 export const CONVERSE_RANGE = 2;
 /** Clear-with-LOS cutoff (meters). Closer than CONVERSE_RANGE is always clear. */
 export const CLEAR_RANGE = 8;
 /** Speech bubble and glance toward a speaker last this long. */
 export const SPEECH_LIFE = 4.8;
-
-function bodyOf(world:World, id:string):GameObject | undefined {
-	const go = world.findNamed(id) ?? world.findByID(id);
-	if (!go || !world.npcCanSee(go)) {
-		return undefined;
-	}
-	return go;
-}
 
 function bodyNamed(world:World, id:string):GameObject | undefined {
 	return world.findNamed(id) ?? world.findByID(id);
@@ -92,41 +84,6 @@ export function talkFace(world:World, who:string, toward:string):void {
 	}
 	actor.transform.yaw = yawToward(dx, dz);
 	actor.getComponent(NPCInput)?.faceToward(toward, world.time + SPEECH_LIFE);
-}
-
-export function talkApproach(world:World, who:string, toward:string):void {
-	const actor = bodyOf(world, who);
-	if (!actor || actor.getComponent(PlayerInput)) {
-		return;
-	}
-	actor.getComponent(NPCInput)?.attend(toward);
-}
-
-export function conversePoint(actor:GameObject):{ x:number; z:number } | null {
-	const world = actor.world;
-	const npc = actor.getComponent(NPCInput);
-	if (!world || !npc?.converseName) {
-		return null;
-	}
-	const peer = bodyOf(world, npc.converseName);
-	if (!peer) {
-		return null;
-	}
-	const p = actor.transform.position;
-	const t = peer.transform.position;
-	const dist = distXZ(actor, peer);
-	const see = lineClear(world, p.x, p.z, t.x, t.z);
-	if (dist <= CONVERSE_RANGE && see) {
-		return null;
-	}
-	if (see) {
-		if (dist < 0.05) {
-			return { x: t.x - CONVERSE_RANGE, z: t.z };
-		}
-		const scale = CONVERSE_RANGE / dist;
-		return { x: t.x + (p.x - t.x) * scale, z: t.z + (p.z - t.z) * scale };
-	}
-	return pathStep(world, p.x, p.z, t.x, t.z, [actor.id]);
 }
 
 export function facePeer(actor:GameObject, dt:number):void {

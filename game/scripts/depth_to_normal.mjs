@@ -570,7 +570,7 @@ let filterRe = null;
 if (filterRaw) {
 	try {
 		filterRe = new RegExp(filterRaw);
-	} catch (err) {
+	} catch {
 		console.error(`--filter: invalid regex ${JSON.stringify(filterRaw)}`);
 		process.exit(1);
 	}

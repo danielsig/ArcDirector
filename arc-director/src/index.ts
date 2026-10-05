@@ -63,7 +63,7 @@ export {
 export type { Arc, ArcResult, Join, Step } from './arc/types.js';
 export { firstStep, isHoistedWhen, isIssue } from './arc/types.js';
 export { ArcError, JOIN_SYMBOL, JOINS, SYMBOL_JOIN } from './arc/types.js';
-export { VerbRegistry, registerStockVerbs, STOCK_VERBS, STOCK_MOVE_VERBS, STOCK_ITEM_VERBS, STOCK_MIND_VERBS, STOCK_ARC_VERBS, STOCK_VERB_ARGS, type StockVerb, type VerbArgKind, type VerbArgMap, type VerbSpec } from './arc/stock-verbs.js';
+export { VerbRegistry, registerStockVerbs, STOCK_VERBS, STOCK_MOVE_VERBS, STOCK_ITEM_VERBS, STOCK_TRADE_VERBS, STOCK_MIND_VERBS, STOCK_ARC_VERBS, STOCK_VERB_DEFS, type StockVerb, type VerbArgKind, type VerbArgMap, type VerbDef, type VerbSpec } from './arc/stock-verbs.js';
 export { arcSchema, verbHelp } from './arc/schema.js';
 export { asArc, asStep, validateArc, validateStep, isArc } from './arc/validate.js';
 export { formatArc, formatStep, parseArc, parseArcText } from './arc/parse.js';
@@ -116,6 +116,7 @@ export type {
 	WatchInput,
 	Watches,
 } from './agent/types.js';
+export { NameBook, type NameBookJSON, type NameTarget } from './agent/names.js';
 export { Agent, type AgentDeps, type AgentJSON, type AgentOptions } from './agent/agent.js';
 export {
 	applyWatchOps,
@@ -150,13 +151,12 @@ export {
 	type CrowdEncyclopediaSpec,
 } from './agent/encyclopedia.js';
 export { runArc, deferThinks, arcSteps, THINK_ABOUT_CAP } from './agent/run.js';
-export { arcRepairHint, sayRangeHint, shortTermBlock, stablePrefix, volatileBlock, WATCH_CHEAT_SHEET, SEE_MAP_HINT, seeMapHint, encyclopediaHint } from './agent/prompt.js';
+export { arcRepairHint, sayRangeHint, shortTermBlock, stablePrefix, volatileBlock, watchCheatSheet, DEFAULT_THINK_INSTRUCTIONS, DEFAULT_VERB_INSTRUCTIONS, DEFAULT_CROWD_INSTRUCTIONS, type ThinkInstructions, SEE_MAP_HINT, seeMapHint, encyclopediaHint } from './agent/prompt.js';
 export {
 	TalkNet,
 	DEFAULT_TALK_CONFIG,
 	muffleSpeech,
 	speechMentionsName,
-	roleMentionTitles,
 	type SayTo,
 	type SpeechUtterance,
 	type TalkConfig,
@@ -218,7 +218,7 @@ export {
 	CrowdConductor,
 	isCrowdConductor,
 	STOCK_CROWD_VERBS,
-	STOCK_CROWD_VERB_ARGS,
+	STOCK_CROWD_VERB_DEFS,
 	STOCK_FORMATION_VERBS,
 	registerStockCrowdVerbs,
 	isFormationVerb,
@@ -241,8 +241,15 @@ export type {
 	DirectorLog,
 	InferClock,
 	KernelSource,
+	NameObserver,
+	SeenName,
+	StockVerbArgs,
+	StockVerbName,
+	VerbArgs,
+	VerbGate,
 	StartOpts,
 	VerbCall,
 	VerbHandler,
 } from './director/types.js';
-
+export type { Deal, HostWorld, ItemMove, Outcome, PathStep, Pose, Vec } from './world/types.js';
+export { findRoute, reachablePoints, type Blocked, type Route } from './world/route.js';

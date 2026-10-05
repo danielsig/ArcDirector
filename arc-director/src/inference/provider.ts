@@ -93,6 +93,8 @@ export type ChatResponse = {
 	generateMs?:number;
 	/** Chain-of-thought text when the server splits it from `content`. */
 	reasoning?:string;
+	/** The reply stopped at the output-token cap, so `content` is cut off. */
+	truncated?:boolean;
 };
 
 export type InferenceProvider = {

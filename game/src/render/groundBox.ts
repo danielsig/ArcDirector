@@ -1,6 +1,5 @@
 import * as THREE from 'three';
 import type { World } from '../engine/World';
-import { CELL_SIZE, CHUNK_SIZE } from '../world/constants';
 import { applyWorldBrickUVs } from './rocksAtlas';
 import { getSheet, tileMaterial } from './spritesheet';
 import { getNature, grassLookMat, GRASS_UV_REP, GRASS_Y } from './nature';
@@ -10,32 +9,8 @@ const OUTER = 96;
 const TUCK = 0.72;
 
 function mapBounds(world:World):{ minX:number; maxX:number; minZ:number; maxZ:number; cx:number; cz:number } {
-	let minX = Infinity;
-	let maxX = -Infinity;
-	let minZ = Infinity;
-	let maxZ = -Infinity;
-	for (const chunk of world.chunks.values()) {
-		const x0 = chunk.worldOriginX();
-		const z0 = chunk.worldOriginZ();
-		minX = Math.min(minX, x0);
-		maxX = Math.max(maxX, x0 + CHUNK_SIZE * CELL_SIZE);
-		minZ = Math.min(minZ, z0);
-		maxZ = Math.max(maxZ, z0 + CHUNK_SIZE * CELL_SIZE);
-	}
-	if (!Number.isFinite(minX)) {
-		minX = 0;
-		maxX = 32;
-		minZ = 0;
-		maxZ = 32;
-	}
-	return {
-		minX,
-		maxX,
-		minZ,
-		maxZ,
-		cx: (minX + maxX) * 0.5,
-		cz: (minZ + maxZ) * 0.5,
-	};
+	const { minX, maxX, minZ, maxZ } = world.chunkBounds() ?? { minX: 0, maxX: 32, minZ: 0, maxZ: 32 };
+	return { minX, maxX, minZ, maxZ, cx: (minX + maxX) * 0.5, cz: (minZ + maxZ) * 0.5 };
 }
 
 function stoneMat():THREE.MeshStandardMaterial {

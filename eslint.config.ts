@@ -4,6 +4,12 @@ import js from '@eslint/js';
 import ts from 'typescript-eslint';
 import stylistic from '@stylistic/eslint-plugin';
 
+// Defaults skip class fields and method names. Turn those on so `private _foo` is rejected.
+const noUnderscoreDangle = ["error", {
+	"enforceInClassFields": true,
+	"enforceInMethodNames": true,
+}] as const;
+
 const commonRules = {
 	// JavaScript
 	// Core indent fights @stylistic/indent — keep stylistic as source of truth.
@@ -43,7 +49,11 @@ const commonRules = {
 		},
 		{
 			selector: "Identifier[name=/[a-z]Utc[A-Z]/], Identifier[name=/[a-z]Utc$/]",
-			message: "Never Utc. Use UTC (toUTC, createdUTC).",
+			message: "Never Utc. Use UTC (toUTC, savedUTC).",
+		},
+		{
+			selector: "Identifier[name=/^(created|updated|started|ended|deleted|noted|saved|loaded|modified|accessed|ready|fade|last)At$|[A-Za-z](Tactical|Strategic|Intrusion|Ready|Held|Message|Try|MarketNPC)At$/]",
+			message: "Game time fields/variables are named timestamp or *Timestamp. UTC fields/variables end with UTC (savedUTC). Not At.",
 		},
 		{
 			selector: "Identifier[name='Id'], Identifier[name=/^Id[A-Z]/]",
@@ -79,9 +89,10 @@ const commonRules = {
 		},
 		{
 			selector: "Identifier[name='UTC']",
-			message: "Whole name: use utc. Suffix stays caps: createdUTC. Fields: _utc.",
+			message: "Whole name: use utc. Suffix stays UTC (toUTC, savedUTC).",
 		},
 	],
+	"no-underscore-dangle": noUnderscoreDangle,
 	"space-before-blocks": ["error", "always"],
 	"no-whitespace-before-property": "error",
 	"no-unexpected-multiline": "off",
@@ -191,6 +202,17 @@ export default defineConfig(
 		files: ['game/**/*.ts', 'kindling/**/*.ts'],
 		languageOptions: {
 			globals: { ...globals.browser },
+		},
+	},
+
+	// Build / art scripts run under Node.
+	{
+		files: ['**/*.mjs'],
+		languageOptions: {
+			globals: { ...globals.node },
+		},
+		rules: {
+			"no-underscore-dangle": noUnderscoreDangle,
 		},
 	},
 

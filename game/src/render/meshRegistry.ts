@@ -36,10 +36,11 @@ function spritePlane(w:number, h:number):THREE.PlaneGeometry {
 	const n = new THREE.Vector3();
 	for (let i = 0; i < pos.count; i++) {
 		n.set(pos.getX(i), pos.getY(i), 0).normalize();
-		if(n.y < 0) {
+		if (n.y < 0) {
 			n.y = 0.05;
 			n.z = 0.1;
-		} else {
+		}
+		else {
 			n.y *= 0.5;
 			n.z = 0.3;
 		}
@@ -57,7 +58,7 @@ export function meshReady(meshID:string):boolean {
 	}
 	if (
 		meshID === 'tree_oak' || meshID === 'tree_pine' || meshID === 'boulder'
-		|| meshID === 'bridge' || meshID === 'waterfall' || meshID === 'mill_lever'
+		|| meshID === 'bridge' || meshID === 'waterfall' || meshID === 'bridge_lever'
 		|| meshID === 'cottage'
 	) {
 		return natureReady();
@@ -607,7 +608,7 @@ function buildMesh(meshID:string, color?:number):THREE.Object3D {
 			return createBridgeMesh();
 		case 'waterfall':
 			return createWaterfallMesh();
-		case 'mill_lever':
+		case 'bridge_lever':
 			return createLeverMesh();
 		case 'hearth':
 			return createHearthMesh();

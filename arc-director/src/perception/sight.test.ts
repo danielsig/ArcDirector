@@ -8,19 +8,19 @@ import { formatInventory } from './formatInventory.js';
 
 function seen(
 	id:string,
-	at:number[],
+	point:number[],
 	extra:Partial<SeenObject> = {},
 ):SeenObject {
 	return {
 		id,
-		at,
+		point,
 		tags: extra.tags ?? [],
 		...extra,
 	};
 }
 
-function person(id:string, at:number[]):SeenObject {
-	return seen(id, at, {
+function person(id:string, point:number[]):SeenObject {
+	return seen(id, point, {
 		tags: ['agent', 'person'],
 		interactable: true,
 		interesting: 1,
@@ -28,8 +28,8 @@ function person(id:string, at:number[]):SeenObject {
 	});
 }
 
-function item(id:string, at:number[], extra:Partial<SeenObject> = {}):SeenObject {
-	return seen(id, at, {
+function item(id:string, point:number[], extra:Partial<SeenObject> = {}):SeenObject {
+	return seen(id, point, {
 		tags: ['item'],
 		interactable: true,
 		movable: true,
@@ -37,8 +37,8 @@ function item(id:string, at:number[], extra:Partial<SeenObject> = {}):SeenObject
 	});
 }
 
-function door(id:string, at:number[]):SeenObject {
-	return seen(id, at, {
+function door(id:string, point:number[]):SeenObject {
+	return seen(id, point, {
 		tags: ['door', 'landmark'],
 		interactable: true,
 		movable: false,
@@ -46,8 +46,8 @@ function door(id:string, at:number[]):SeenObject {
 }
 
 const HALL:Sight = {
-	self: { id: 'Captain', at: [11.5, 10.5], facing: [0, -1] },
-	ambient: 'A damp stone hall of the abbey.',
+	self: { id: 'Captain', point: [11.5, 10.5], facing: [0, -1] },
+	ambient: 'A damp stone hall of the dungeon.',
 	objects: [
 		person('Alchemist', [11.5, 7.5]),
 		person('Herbalist', [8, 10.5]),
@@ -76,13 +76,13 @@ const HALL:Sight = {
 	],
 };
 
-const HALL_GOLDEN = 'A damp stone hall of the abbey. boxes. Alchemist 3 paces in front of you. Herbalist 4 paces to your left. *ArmoryChest* 4 paces in front of you. *BrewHearth* 10 paces in front of you. *EastGate* 5 paces to your right. *LinaCot* 10 paces to your right. *NollCot* 10 paces to your right. *Pillar* 5 paces in front of you. *WestGate* 10 paces to your left. Bitterroot 15 paces in front of you. BrassKey 5 paces in front of you. Broom 10 paces to your left. Bucket 5 paces to your left. ChestKey 2 paces behind you. GoldCoin 4 paces to your right. Lantern 4 paces behind you. LeatherGlove 2 paces to your right. Rag 10 paces to your right. TorchA 5 paces to your left. TorchB 5 paces to your right. WorkGlove 2 paces to your left.';
+const HALL_GOLDEN = 'A damp stone hall of the dungeon. boxes. Alchemist 3 paces in front of you. Herbalist 4 paces to your left. *ArmoryChest* 4 paces in front of you. *BrewHearth* 10 paces in front of you. *EastGate* 5 paces to your right. *LinaCot* 10 paces to your right. *NollCot* 10 paces to your right. *Pillar* 5 paces in front of you. *WestGate* 10 paces to your left. Bitterroot 15 paces in front of you. BrassKey 5 paces in front of you. Broom 10 paces to your left. Bucket 5 paces to your left. ChestKey 2 paces behind you. GoldCoin 4 paces to your right. Lantern 4 paces behind you. LeatherGlove 2 paces to your right. Rag 10 paces to your right. TorchA 5 paces to your left. TorchB 5 paces to your right. WorkGlove 2 paces to your left.';
 
 const GLEN:Sight = {
-	self: { id: 'Forager', at: [7, 8], facing: [1, 0] },
+	self: { id: 'Forager', point: [7, 8], facing: [1, 0] },
 	ambient: 'A windy river glen.',
 	objects: [
-		person('Miller', [16, 9]),
+		person('BridgeKeeper', [16, 9]),
 		person('Angler', [16, 18]),
 		person('Assistant', [13, 11]),
 		item('CottageKey', [7.6, 8]),
@@ -90,8 +90,8 @@ const GLEN:Sight = {
 		item('SilverTrout', [22, 22]),
 		seen('Cottage', [6, 12], { tags: ['landmark'], interactable: true, movable: false }),
 		door('CottageDoor', [6, 10.5]),
-		seen('MillBridge', [12, 14], { tags: ['bridge', 'landmark'], interactable: true, movable: false }),
-		seen('MillLever', [14, 10], { tags: ['landmark'], interactable: true, movable: false }),
+		seen('Bridge', [12, 14], { tags: ['bridge', 'landmark'], interactable: true, movable: false }),
+		seen('BridgeLever', [14, 10], { tags: ['landmark'], interactable: true, movable: false }),
 		seen('Falls', [20, 4], { tags: ['landmark'], movable: false }),
 		seen('OakA', [2, 3], { tags: ['tree'], movable: false }),
 		seen('OakB', [3, 16], { tags: ['tree'], movable: false }),
@@ -100,14 +100,14 @@ const GLEN:Sight = {
 		item('Pebble', [8, 6]),
 		item('Stick', [9, 10]),
 		item('Basket', [5, 9]),
-		seen('MillStone', [17, 8], { tags: ['landmark'], movable: false }),
+		seen('BridgeStone', [17, 8], { tags: ['landmark'], movable: false }),
 		item('Net', [15, 20]),
 		item('Oar', [18, 17]),
 	],
 };
 
 const STREET:Sight = {
-	self: { id: 'Holt', at: [4, 8], facing: [1, 0] },
+	self: { id: 'Holt', point: [4, 8], facing: [1, 0] },
 	ambient: 'A busy street flea market.',
 	objects: [
 		person('Potter', [16.2, 8]),
@@ -169,7 +169,7 @@ describe('formatSight', () => {
 		assert.equal(/\bagents\b/.test(paragraph), false);
 		assert.equal(
 			paragraph,
-			'A windy river glen. Angler 15 paces to your right. Assistant 5 paces in front of you. Miller 10 paces in front of you. *Cottage* 5 paces to your right. *CottageDoor* 3 paces to your right. *Falls* 15 paces in front of you. *MillBridge* 10 paces to your right. *MillLever* 5 paces in front of you. *MillStone* 10 paces in front of you. *OakA* 5 paces behind you. *OakB* 10 paces to your right. Basket 2 paces behind you. CottageKey 1 pace in front of you. FireMushroom 5 paces behind you. Net 15 paces to your right. Oar 15 paces in front of you. Pebble 2 paces to your left. ReedA 10 paces to your right. ReedB 10 paces to your right. SilverTrout 20 paces in front of you. Stick 3 paces in front of you.',
+			'A windy river glen. Angler 15 paces to your right. Assistant 5 paces in front of you. BridgeKeeper 10 paces in front of you. *Bridge* 10 paces to your right. *BridgeLever* 5 paces in front of you. *BridgeStone* 10 paces in front of you. *Cottage* 5 paces to your right. *CottageDoor* 3 paces to your right. *Falls* 15 paces in front of you. *OakA* 5 paces behind you. *OakB* 10 paces to your right. Basket 2 paces behind you. CottageKey 1 pace in front of you. FireMushroom 5 paces behind you. Net 15 paces to your right. Oar 15 paces in front of you. Pebble 2 paces to your left. ReedA 10 paces to your right. ReedB 10 paces to your right. SilverTrout 20 paces in front of you. Stick 3 paces in front of you.',
 		);
 	});
 
@@ -191,7 +191,7 @@ describe('formatSight', () => {
 			trees.push(seen(`tree_pine_${i}`, [i * 1.1 + 0.4, -1.2], { tags: ['tree'] }));
 		}
 		const clauses = formatSightClauses({
-			self: { id: 'Dawn', at: [0, 0], facing: [0, -1] },
+			self: { id: 'Dawn', point: [0, 0], facing: [0, -1] },
 			ambient: 'A ruined colonnade.',
 			objects: [
 				person('Witch', [0, -20]),
@@ -210,7 +210,7 @@ describe('formatSight', () => {
 
 	it('appends hp and a nearby-threat note on leftover people', () => {
 		const paragraph = formatSight({
-			self: { id: 'Dawn', at: [0, 0], facing: [0, -1] },
+			self: { id: 'Dawn', point: [0, 0], facing: [0, -1] },
 			objects: [
 				seen('Healer', [0, -3], {
 					tags: ['agent', 'person'],
@@ -228,7 +228,7 @@ describe('formatSight', () => {
 
 	it('sticks a 1-char unit to the number and keeps bearing as a heading', () => {
 		const paragraph = formatSight({
-			self: { id: 'Assistant', at: [0, 0], facing: [0, -1] },
+			self: { id: 'Assistant', point: [0, 0], facing: [0, -1] },
 			objects: [person('Player', [-4, 0])],
 		}, { unitName: 'm', relationships: [] });
 		assert.equal(paragraph, 'Player 4m to your left.');
@@ -236,7 +236,7 @@ describe('formatSight', () => {
 
 	it('keeps a space before a long unit', () => {
 		const paragraph = formatSight({
-			self: { id: 'Assistant', at: [0, 0], facing: [0, -1] },
+			self: { id: 'Assistant', point: [0, 0], facing: [0, -1] },
 			objects: [seen('Table', [0, -4], { tags: ['landmark'], movable: false })],
 		}, { relationships: [] });
 		assert.equal(paragraph, '*Table* 4 paces in front of you.');
@@ -244,7 +244,7 @@ describe('formatSight', () => {
 
 	it('pluralizes foot and can count leftovers', () => {
 		const paragraph = formatSight({
-			self: { id: 'Assistant', at: [0, 0], facing: [0, -1] },
+			self: { id: 'Assistant', point: [0, 0], facing: [0, -1] },
 			objects: [seen('tree', [0, 20], { tags: ['plant'], count: 3 })],
 		}, { unitName: 'foot', relationships: [] });
 		assert.equal(paragraph, '3 trees 20 feet behind you.');
@@ -252,7 +252,7 @@ describe('formatSight', () => {
 
 	it('PascalCases an interactable leftover', () => {
 		const paragraph = formatSight({
-			self: { id: 'Watcher', at: [0, 0] },
+			self: { id: 'Watcher', point: [0, 0] },
 			ambient: 'damp stone hall',
 			objects: [
 				seen('EastGate', [8, 0], {
@@ -288,7 +288,7 @@ describe('formatSight', () => {
 			},
 		};
 		const paragraph = formatSight({
-			self: { id: 'Watcher', at: [0, 0] },
+			self: { id: 'Watcher', point: [0, 0] },
 			ambient: 'a dusty room',
 			objects: [
 				seen('WoodenTable', [2, 0], {
@@ -331,7 +331,7 @@ describe('formatSight', () => {
 			tags: ['agent'],
 			movable: true,
 		});
-		const { ground, figure } = groundAndFigure(oak, merchant, (o) => hypot(o.at, [0, 0]));
+		const { ground, figure } = groundAndFigure(oak, merchant, (o) => hypot(o.point, [0, 0]));
 		assert.equal(ground.id, 'OldOak');
 		assert.equal(figure.id, 'Merchant');
 	});
@@ -342,7 +342,7 @@ describe('formatSight', () => {
 			movable: true,
 		}));
 		const paragraph = formatSight({
-			self: { id: 'Watcher', at: [0, 0] },
+			self: { id: 'Watcher', point: [0, 0] },
 			ambient: 'green grass as far as the eye can see',
 			objects: boxes,
 		}, { clusterFactor: 0 });
@@ -356,7 +356,7 @@ describe('formatSight', () => {
 			movable: true,
 		}));
 		const paragraph = formatSight({
-			self: { id: 'Watcher', at: [0, 0] },
+			self: { id: 'Watcher', point: [0, 0] },
 			ambient: 'green grass as far as the eye can see',
 			objects: herd,
 		}, {

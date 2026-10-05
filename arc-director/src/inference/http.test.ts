@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { MODEL_TIERS, type ThinkOff } from './models.js';
-import { HttpProvider, loadConfigFits, parseChatTimings } from './http.js';
+import { HttpProvider, loadConfigFits, parseChatTimings, stripTemplateTokens } from './http.js';
 import {
 	EMPTY_THINK_PREFILL,
 	DONE_THOUGHT,
@@ -375,7 +375,7 @@ describe('HttpProvider thinking', () => {
 		let body:Record<string, unknown> | undefined;
 		const provider = new HttpProvider({
 			baseURL: 'http://127.0.0.1:9/v1',
-			fetch: async (_input, init) => {
+			fetch: async (input, init) => {
 				body = JSON.parse(String(init?.body)) as Record<string, unknown>;
 				return new Response(JSON.stringify({
 					choices: [{ message: { content: '{"ok":true}' } }],
@@ -801,8 +801,8 @@ describe('HttpProvider native server', () => {
 							type: 'message',
 							content: [{ type: 'output_text', text: '{"head":{"verb":"wait"}}' }],
 						}],
-							usage: { input_tokens_details: { cached_tokens: 40 } },
-							stats: { time_to_first_token_seconds: 0.25, generation_time: 0.1 },
+						usage: { input_tokens_details: { cached_tokens: 40 } },
+						stats: { time_to_first_token_seconds: 0.25, generation_time: 0.1 },
 					}), { status: 200 });
 				}
 				return new Response('nope', { status: 404 });
@@ -1198,5 +1198,42 @@ describe('parseChatTimings', () => {
 		});
 		assert.equal(t.promptMs, 90);
 		assert.equal(t.generateMs, 210);
+	});
+});
+
+describe('reply cleanup', () => {
+	function providerFor(payload:unknown):HttpProvider {
+		return new HttpProvider({
+			baseURL: 'http://127.0.0.1:9/v1',
+			fetch: async (input, init) => {
+				const url = String(input);
+				if (init?.method !== 'POST' || url.includes('/responses')) {
+					return new Response('nope', { status: 404 });
+				}
+				return new Response(JSON.stringify(payload), { status: 200 });
+			},
+		});
+	}
+
+	it('strips leaked chat-template tokens and leaves watch operators alone', () => {
+		assert.equal(
+			stripTemplateTokens('think(pay the fee)<tool_call|>use(item=BridgeCrank, target=BridgeLever) <|thought'),
+			'think(pay the fee)use(item=BridgeCrank, target=BridgeLever)',
+		);
+		assert.equal(stripTemplateTokens('<|channel|>go_to(Keep)<|end>'), 'go_to(Keep)');
+		assert.equal(stripTemplateTokens('wait(until=a<b||c>d)'), 'wait(until=a<b||c>d)');
+		assert.equal(stripTemplateTokens('<|eot|>'), null);
+	});
+
+	it('cleans chat content and flags a reply that hit the token cap', async () => {
+		const cut = await providerFor({
+			choices: [{ message: { content: 'go_to(Keep<|thought' }, finish_reason: 'length' }],
+		}).chat({ model: 'guard', messages: [{ role: 'user', content: 'go' }] });
+		assert.equal(cut.content, 'go_to(Keep');
+		assert.equal(cut.truncated, true);
+		const whole = await providerFor({
+			choices: [{ message: { content: 'go_to(Keep)' }, finish_reason: 'stop' }],
+		}).chat({ model: 'guard', messages: [{ role: 'user', content: 'go' }] });
+		assert.equal(whole.truncated, false);
 	});
 });

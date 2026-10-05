@@ -3,7 +3,6 @@ import {
 	pascalCase,
 	type ExprEntity,
 	type ExprVal,
-	type StringifierKind,
 	type Stringifiers,
 } from 'arc-director';
 import {
@@ -24,27 +23,31 @@ import { Item, Pickupable } from '../items/components';
 import { listCarried } from '../items/inventory';
 import type { ItemInstance } from '../items/instance';
 import { coinsOf } from '../items/wallet';
-import { yawToForward } from '../engine/math';
 import { enclosureAt, interiorContains } from '../world/interior';
-import { walkDistance as pathMeters } from '../world/path';
 import { CLEAR_RANGE } from './talkAttend';
 import { bodyName, isLiving } from './names';
 import { tagsOf } from './perception';
 import type { GameHost } from './adapter';
 
-export type PosedFact = {
-	id:string;
-	tags:string[];
-	x:number;
-	z:number;
-	until?:number;
-};
+/** Id of the open theft `thief` is wanted for, as watches see it in `events`. */
+export function theftID(thief:GameObject):string {
+	return `Theft:${bodyName(thief)}`;
+}
+
+/** The wanted thief a theft id names: the event is wherever the thief is, for as long as the mark is on. */
+export function thiefOf(world:World, id:string):GameObject | undefined {
+	let thief:GameObject | undefined;
+	world.forEachComponent(Wanted, (mark, go) => {
+		if (mark.enabled && theftID(go) === id) {
+			thief = go;
+		}
+	});
+	return thief;
+}
 
 const NEAR_RADIUS = CLEAR_RANGE;
 
 const EXPR_STRINGIFIERS:Stringifiers = {
-	person: (v) => (v.kind === 'entity' ? (v.value.name ?? v.value.id) : ''),
-	item: (v) => (v.kind === 'entity' ? (v.value.name ?? v.value.id) : ''),
 	number: (v) => {
 		if (v.kind !== 'number') {
 			return '';
@@ -53,16 +56,6 @@ const EXPR_STRINGIFIERS:Stringifiers = {
 	},
 	bool: (v) => (v.kind === 'bool' ? (v.value ? 'true' : 'false') : ''),
 };
-
-function exprKind(entity:{ tags:string[] }):StringifierKind {
-	if (entity.tags.includes('agent') || entity.tags.includes('person')) {
-		return 'person';
-	}
-	if (entity.tags.includes('item')) {
-		return 'item';
-	}
-	return 'entity';
-}
 
 export function entityOf(go:GameObject, extraTags?:string[]):ExprEntity {
 	const tags = tagsOf(go);
@@ -73,10 +66,7 @@ export function entityOf(go:GameObject, extraTags?:string[]):ExprEntity {
 			}
 		}
 	}
-	return dummyEntity(bodyName(go), {
-		name: go.getComponent(Named)?.id ?? go.id,
-		tags,
-	});
+	return dummyEntity(bodyName(go), { tags });
 }
 
 function itemEntity(item:ItemInstance):ExprEntity {
@@ -88,16 +78,16 @@ function itemEntity(item:ItemInstance):ExprEntity {
 	if (/mushroom/i.test(item.name)) {
 		tags.push('mushroom');
 	}
-	return dummyEntity(item.id || id, { name: id, tags });
+	return dummyEntity(id, { tags });
 }
 
+const LANDMARK_KINDS = ['Tree', 'Waterfall', 'Boulder'];
+
+/** A landmark also carries its kind as a name-cased tag, so `landmarks.filter("Tree")` matches. */
 function landmarkEntity(go:GameObject):ExprEntity {
-	const tags = tagsOf(go);
-	const name = tags.includes('tree') ? 'Tree'
-		: tags.includes('waterfall') ? 'Waterfall'
-		: tags.includes('boulder') ? 'Boulder'
-		: bodyName(go);
-	return dummyEntity(go.id, { name, tags });
+	const e = entityOf(go);
+	e.tags.push(...LANDMARK_KINDS.filter((kind) => e.tags.includes(kind.toLowerCase())));
+	return e;
 }
 
 function nearbyLandmarks(world:World, actor:GameObject, here?:{ x:number; z:number }):GameObject[] {
@@ -128,64 +118,18 @@ function nearbyLandmarks(world:World, actor:GameObject, here?:{ x:number; z:numb
 	return ranked.slice(0, 16).map((r) => r.go);
 }
 
-function facingParts(fx:number, fz:number, fromX:number, fromZ:number, toX:number, toZ:number):{ dot:number; cross:number } {
-	const dx = toX - fromX;
-	const dz = toZ - fromZ;
-	const len = Math.hypot(dx, dz);
-	if (len < 1e-6) {
-		return { dot: 1, cross: 0 };
-	}
-	return {
-		dot: Math.max(-1, Math.min(1, (fx * dx + fz * dz) / len)),
-		cross: Math.max(-1, Math.min(1, (fx * dz - fz * dx) / len)),
-	};
-}
-
-function facingToward(from:GameObject, x:number, z:number):number {
-	const f = yawToForward(from.transform.yaw);
-	return facingParts(f.x, f.z, from.transform.position.x, from.transform.position.z, x, z).dot;
-}
-
-function sideToward(from:GameObject, x:number, z:number):number {
-	const f = yawToForward(from.transform.yaw);
-	return facingParts(f.x, f.z, from.transform.position.x, from.transform.position.z, x, z).cross;
-}
-
 function lookupGo(world:World, id:string):GameObject | undefined {
 	return world.findNamed(id) ?? world.findByID(id);
 }
 
-function poseOf(
-	world:World,
-	posed:PosedFact[],
-	id:string,
-	now:number,
-	here?:{ ids:Set<string>; x:number; z:number },
-):{ x:number; z:number } | undefined {
-	if (here?.ids.has(id)) {
-		return { x: here.x, z: here.z };
-	}
-	const go = lookupGo(world, id);
-	if (go) {
-		const p = go.transform.position;
-		return { x: p.x, z: p.z };
-	}
-	const fact = posed.find((e) => e.id === id && (e.until === undefined || e.until > now));
-	if (!fact) {
-		return undefined;
-	}
-	return { x: fact.x, z: fact.z };
-}
-
-/** World census for watches. Director still injects cache / hasHeard / prev*. `here` poses `me` without moving the body. */
+/** World census for watches. ArcDirector adds geometry from `withWorld` and its own cache / hasHeard / prev. `here` poses `me` without moving the body. */
 export function kernelsOf(
 	world:World,
 	actor:GameObject,
-	posed:PosedFact[],
 	here?:{ x:number; z:number },
 	extraTags?:(go:GameObject)=>string[],
 ) {
-	const hidePlayer = world.playerInperceivable;
+	const hidePlayer = world.playerInperceivable && world.playerHits.size === 0;
 	const me = entityOf(actor);
 	me.fields = { gold: { kind: 'number', value: coinsOf(actor) } };
 	const meAt = here
@@ -238,75 +182,19 @@ export function kernelsOf(
 			bindings.Player = { kind: 'entity', value: entityOf(player) };
 		}
 	}
-	const now = world.time;
-	const facts = posed.filter((e) => e.until === undefined || e.until > now);
-	bindings.events = {
-		kind: 'list',
-		value: facts.map((e) => ({
-			kind: 'entity' as const,
-			value: dummyEntity(e.id, { tags: e.tags }),
-		})),
-	};
+	const events:ExprVal[] = [];
+	world.forEachComponent(Wanted, (mark, go) => {
+		if (mark.enabled) {
+			events.push({ kind: 'entity', value: dummyEntity(theftID(go), { tags: ['theft', 'event'] }) });
+		}
+	});
+	bindings.events = { kind: 'list', value: events };
 	return {
 		me,
 		others,
 		items,
 		bindings,
-		distance: (a:ExprEntity, b:ExprEntity) => {
-			const pa = poseOf(world, posed, a.id, now, meAt);
-			const pb = poseOf(world, posed, b.id, now, meAt);
-			if (!pa || !pb) {
-				return undefined;
-			}
-			return Math.hypot(pa.x - pb.x, pa.z - pb.z);
-		},
-		at: (who:ExprEntity) => poseOf(world, posed, who.id, now, meAt),
 		nearRadius: NEAR_RADIUS,
-		walkDistance: (a:ExprEntity, b:ExprEntity) => {
-			const pa = poseOf(world, posed, a.id, now, meAt);
-			const pb = poseOf(world, posed, b.id, now, meAt);
-			if (!pa || !pb) {
-				return undefined;
-			}
-			const ignore = [a.id, b.id];
-			if (a.name) {
-				ignore.push(a.name);
-			}
-			if (b.name) {
-				ignore.push(b.name);
-			}
-			return pathMeters(world, pa.x, pa.z, pb.x, pb.z, ignore);
-		},
-		facing: (a:ExprEntity, b:ExprEntity) => {
-			const pb = poseOf(world, posed, b.id, now, meAt);
-			if (!pb) {
-				return 0;
-			}
-			if (meAt && meAt.ids.has(a.id)) {
-				const f = yawToForward(actor.transform.yaw);
-				return facingParts(f.x, f.z, meAt.x, meAt.z, pb.x, pb.z).dot;
-			}
-			const from = lookupGo(world, a.id);
-			if (!from) {
-				return 0;
-			}
-			return facingToward(from, pb.x, pb.z);
-		},
-		side: (a:ExprEntity, b:ExprEntity) => {
-			const pb = poseOf(world, posed, b.id, now, meAt);
-			if (!pb) {
-				return 0;
-			}
-			if (meAt && meAt.ids.has(a.id)) {
-				const f = yawToForward(actor.transform.yaw);
-				return facingParts(f.x, f.z, meAt.x, meAt.z, pb.x, pb.z).cross;
-			}
-			const from = lookupGo(world, a.id);
-			if (!from) {
-				return 0;
-			}
-			return sideToward(from, pb.x, pb.z);
-		},
 		inventory: (who:ExprEntity) => {
 			const go = lookupGo(world, who.id);
 			if (!go) {
@@ -342,7 +230,6 @@ export function kernelsOf(
 			return undefined;
 		},
 		stringifiers: EXPR_STRINGIFIERS,
-		stringifierKind: exprKind,
 		hostFns: {
 			isInside: (args:ExprVal[], kctx:{ catalog:{ me:ExprEntity } }) => {
 				let who = kctx.catalog.me;
@@ -383,38 +270,6 @@ export function kernelsOf(
 	};
 }
 
-export function poseFact(host:GameHost, fact:PosedFact):void {
-	const i = host.posedEvents.findIndex((e) => e.id === fact.id);
-	if (i >= 0) {
-		host.posedEvents[i] = fact;
-		return;
-	}
-	host.posedEvents.push(fact);
-}
-
-export function syncPosedEvents(host:GameHost):void {
-	const now = host.world.time;
-	const live = new Set<string>();
-	host.world.forEachComponent(Wanted, (mark, go) => {
-		if (!mark.enabled) {
-			return;
-		}
-		const id = `Theft:${bodyName(go)}`;
-		live.add(id);
-		const p = go.transform.position;
-		poseFact(host, { id, tags: ['theft', 'event'], x: p.x, z: p.z });
-	});
-	host.posedEvents = host.posedEvents.filter((e) => {
-		if (e.until !== undefined && e.until <= now) {
-			return false;
-		}
-		if (e.tags.includes('theft') && !live.has(e.id)) {
-			return false;
-		}
-		return true;
-	});
-}
-
 export function scanWorld(host:GameHost):void {
 	host.world.forEachComponent(Door, (door, go) => {
 		const name = go.getComponent(Named)?.id ?? go.id;
@@ -424,7 +279,7 @@ export function scanWorld(host:GameHost):void {
 			return;
 		}
 		if (door.open && !was) {
-			host.pushEvent({
+			host.arc?.pushEvent({
 				kind: 'DoorOpened',
 				text: `${name} opened`,
 				tags: ['door', name],
@@ -441,19 +296,13 @@ export function scanWorld(host:GameHost):void {
 			return;
 		}
 		if (chest.open && !was) {
-			host.pushEvent({
+			host.arc?.pushEvent({
 				kind: 'ChestOpened',
 				text: `${name} opened`,
 				tags: ['chest', name],
 				major: false,
+				remember: true,
 			});
-			for (const agent of host.arc?.agents() ?? []) {
-				agent.memory.add({
-					category: 'episodic',
-					text: `${name} opened`,
-					tags: ['chest', name],
-				}, host.world.time);
-			}
 		}
 		host.chestOpen.set(name, chest.open);
 	});
@@ -465,5 +314,4 @@ export function scanWorld(host:GameHost):void {
 			bubble.text = '';
 		}
 	});
-	syncPosedEvents(host);
 }

@@ -32,7 +32,7 @@ export class Light extends Component {
 		}
 	}
 
-	override update(_dt:number):void {
+	override update(dt:number):void {
 		this.syncNative();
 	}
 

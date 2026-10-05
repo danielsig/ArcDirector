@@ -174,22 +174,22 @@ function extractMatters(s) {
 		});
 	};
 
-	consume(/stack\(\s*\[([^\]]*)\]\s*(?:,\s*([\d.]+))?\s*\)/gi, (_full, inner, beats) => {
+	consume(/stack\(\s*\[([^\]]*)\]\s*(?:,\s*([\d.]+))?\s*\)/gi, (full, inner, beats) => {
 		const notes = inner.split(/[,\s]+/).map((t) => t.replace(/['"]/g, '').trim()).filter(Boolean);
 		return { kind: 'block', pitches: notes.map(pitch), beats: beats ? Number(beats) : undefined };
 	});
-	consume(/chord\(\s*['"]([^'"]+)['"]\s*(?:,\s*([\d.]+))?\s*\)/gi, (_full, sym, beats) => {
+	consume(/chord\(\s*['"]([^'"]+)['"]\s*(?:,\s*([\d.]+))?\s*\)/gi, (full, sym, beats) => {
 		return { kind: 'block', pitches: parseChord(sym), beats: beats ? Number(beats) : undefined };
 	});
-	consume(/'([^']+)'|"([^"]+)"/g, (_full, a, b) => {
+	consume(/'([^']+)'|"([^"]+)"/g, (full, a, b) => {
 		const src = (a ?? b ?? '').trim();
 		return src ? { kind: 'line', src } : null;
 	});
-	consume(/\bstack\b((?:\s+[a-g][#b]?-?\d+)+)(?:\s*[,:]?\s*([\d.]+))?/gi, (_full, body, beats) => {
+	consume(/\bstack\b((?:\s+[a-g][#b]?-?\d+)+)(?:\s*[,:]?\s*([\d.]+))?/gi, (full, body, beats) => {
 		const notes = body.trim().split(/\s+/);
 		return { kind: 'block', pitches: notes.map(pitch), beats: beats ? Number(beats) : undefined };
 	});
-	consume(/\bchord\b\s+([A-G][#b]?[A-Za-z0-9+-]*)(?:\s+([\d.]+))?/g, (_full, sym, beats) => {
+	consume(/\bchord\b\s+([A-G][#b]?[A-Za-z0-9+-]*)(?:\s+([\d.]+))?/g, (full, sym, beats) => {
 		return { kind: 'block', pitches: parseChord(sym), beats: beats ? Number(beats) : undefined };
 	});
 

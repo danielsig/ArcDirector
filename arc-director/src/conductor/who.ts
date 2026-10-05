@@ -15,7 +15,6 @@ export function unitEntity(unit:CrowdUnit, conductorID:string):ExprEntity {
 		.map((t) => shortTag(conductorID, t))
 		.filter((t) => t.length > 0);
 	return dummyEntity(unit.id, {
-		name: unit.id,
 		tags: shorts,
 		fields: {
 			busy: { kind: 'bool', value: unit.busy },
@@ -52,7 +51,7 @@ export function crowdKernels(
 	const troopEntities = troops.map((u) => unitEntity(u, conductorID));
 	const me = commander
 		? unitEntity(commander, conductorID)
-		: (base.me ?? dummyEntity(conductorID, { name: conductorID, tags: ['agent'] }));
+		: (base.me ?? dummyEntity(conductorID, { tags: ['agent'] }));
 	return {
 		...base,
 		me,

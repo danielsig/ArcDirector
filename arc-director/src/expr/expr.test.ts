@@ -12,7 +12,6 @@ import {
 	watchScore,
 	type ExprEntity,
 	type HostKernels,
-	type Stringifiers,
 } from './index.js';
 
 type Posed = ExprEntity & { x:number; z:number };
@@ -47,14 +46,14 @@ function world(extra:Partial<HostKernels> = {}):HostKernels {
 		facing: () => 1,
 		inventory: (who) => who.id === 'Guard' ? [lantern] : [],
 		hp: (who) => who.id === 'Guard' ? { hp: 3, maxHP: 5 } : { hp: 5, maxHP: 5 },
-		isOpen: (who) => who.id === 'CottageDoor' || who.id === 'MillBridge',
+		isOpen: (who) => who.id === 'CottageDoor' || who.id === 'Bridge',
 		hasHeard: false,
 		bindings: {
 			Player: { kind: 'entity', value: Player },
 			A: { kind: 'entity', value: A },
 			B: { kind: 'entity', value: B },
 			CottageDoor: { kind: 'entity', value: door },
-			MillBridge: { kind: 'entity', value: dummyEntity('MillBridge', { tags: ['bridge'] }) },
+			Bridge: { kind: 'entity', value: dummyEntity('Bridge', { tags: ['bridge'] }) },
 			events: { kind: 'list', value: [{ kind: 'entity', value: theft }] },
 			Lantern: { kind: 'entity', value: lantern },
 		},
@@ -147,7 +146,7 @@ describe('evaluate', () => {
 		assert.equal(val('items.find("nope") ?? items.find("Lantern")').value.kind, 'entity');
 		assert.equal(bool('items.find("nope") == null'), true);
 		assert.equal(bool('isNear(items.find("nope"), me)'), false);
-		assert.equal(bool('isReachable(items.find("nope"), me)', world({ walkDistance: xz })), false);
+		assert.equal(bool('isReachable(items.find("nope"), me)', world({ pathDistance: xz })), false);
 		assert.ok(val('distance(items.find("nope"), me)').error);
 	});
 
@@ -235,14 +234,14 @@ describe('evaluate', () => {
 	});
 
 	it('isFacing / isLeft / isRight / isBehind any of a type list', () => {
-		const ahead = posed('oak_a', { name: 'Tree', tags: ['tree'], x: 0, z: -5 });
-		const back = posed('oak_b', { name: 'Tree', tags: ['tree'], x: 0, z: 5 });
-		const leftT = posed('oak_l', { name: 'Tree', tags: ['tree'], x: -5, z: 0 });
-		const rightT = posed('oak_r', { name: 'Tree', tags: ['tree'], x: 5, z: 0 });
+		const ahead = posed('oak_a', { tags: ['tree', 'Tree'], x: 0, z: -5 });
+		const back = posed('oak_b', { tags: ['tree', 'Tree'], x: 0, z: 5 });
+		const leftT = posed('oak_l', { tags: ['tree', 'Tree'], x: -5, z: 0 });
+		const rightT = posed('oak_r', { tags: ['tree', 'Tree'], x: 5, z: 0 });
 		const base = world();
 		const host = world({
-			facing: (_a, b) => (b.id === 'oak_a' ? 1 : b.id === 'oak_b' ? -1 : 0),
-			side: (_a, b) => (b.id === 'oak_l' ? -1 : b.id === 'oak_r' ? 1 : 0),
+			facing: (a, b) => (b.id === 'oak_a' ? 1 : b.id === 'oak_b' ? -1 : 0),
+			side: (a, b) => (b.id === 'oak_l' ? -1 : b.id === 'oak_r' ? 1 : 0),
 			bindings: {
 				...base.bindings,
 				landmarks: {
@@ -267,7 +266,7 @@ describe('evaluate', () => {
 		const far = posed('FarTree', { x: 20, z: 0, tags: ['tree'] });
 		const base = world();
 		const host = world({
-			walkDistance: (a, b) => {
+			pathDistance: (a, b) => {
 				if (a.id === 'Island' || b.id === 'Island') {
 					return undefined;
 				}
@@ -321,7 +320,7 @@ describe('evaluate', () => {
 		}
 	});
 
-	it('isReachable / reachable unbound without walkDistance', () => {
+	it('isReachable / reachable unbound without pathDistance', () => {
 		const r = val('isReachable(me, A)');
 		assert.ok(r.error);
 		const n = val('others.reachable()');
@@ -334,7 +333,7 @@ describe('evaluate', () => {
 			rows.push(posed(`N${i}`, { x: 40 - i, z: 0, tags: ['tree'] }));
 		}
 		const host = world({
-			walkDistance: xz,
+			pathDistance: xz,
 			bindings: {
 				landmarks: {
 					kind: 'list',
@@ -361,7 +360,7 @@ describe('evaluate', () => {
 	});
 
 	it('leftover English is not a name when Tree is in the list', () => {
-		const tree = dummyEntity('oak_1', { name: 'Tree', tags: ['tree'] });
+		const tree = dummyEntity('oak_1', { tags: ['tree', 'Tree'] });
 		assert.equal(
 			leftoverFilterHint('some(landmarks.filter("trees").nearby())', [tree]),
 			'no such name trees — leftover English is not a name. Use Tree',
@@ -378,9 +377,9 @@ describe('evaluate', () => {
 	});
 
 	it('unbound Tree is the landmark list; count nearby is measurable', () => {
-		const near = posed('oak_1', { name: 'Tree', tags: ['tree'], x: 2, z: 0 });
-		const also = posed('oak_3', { name: 'Tree', tags: ['tree'], x: 3, z: 1 });
-		const far = posed('oak_2', { name: 'Tree', tags: ['tree'], x: 20, z: 0 });
+		const near = posed('oak_1', { tags: ['tree', 'Tree'], x: 2, z: 0 });
+		const also = posed('oak_3', { tags: ['tree', 'Tree'], x: 3, z: 1 });
+		const far = posed('oak_2', { tags: ['tree', 'Tree'], x: 20, z: 0 });
 		const host = world({
 			bindings: {
 				...world().bindings,
@@ -481,7 +480,7 @@ describe('evaluate', () => {
 
 	it('unary relation f(x) ≡ f(x, me)', () => {
 		assert.equal(bool('isNear(A)'), bool('isNear(A, me)'));
-		assert.equal(bool('isReachable(A)', world({ walkDistance: xz })), bool('isReachable(A, me)', world({ walkDistance: xz })));
+		assert.equal(bool('isReachable(A)', world({ pathDistance: xz })), bool('isReachable(A, me)', world({ pathDistance: xz })));
 	});
 
 	it('approaching / departing list filters', () => {
@@ -552,27 +551,11 @@ describe('stringify', () => {
 		assert.equal(stringifyVal({ kind: 'entity', value: dummyEntity('Lantern') }, cat), 'Lantern');
 	});
 
-	it('does not guess kind from tags; host stringifierKind picks the key', () => {
-		const marked = dummyEntity('Latch', { tags: ['portal'] });
-		const stringifiers:Stringifiers = {
-			item: (v) => (v.kind === 'entity' ? `item:${v.value.name ?? v.value.id}` : ''),
-			entity: (v) => (v.kind === 'entity' ? `ent:${v.value.id}` : ''),
-		};
-		const guessed = buildCatalog({ ...world(), stringifiers });
-		assert.equal(stringifyVal({ kind: 'entity', value: marked }, guessed), 'ent:Latch');
-		const hosted = buildCatalog({
-			...world(),
-			stringifiers,
-			stringifierKind: (e) => (e.tags.includes('portal') ? 'item' : 'entity'),
-		});
-		assert.equal(stringifyVal({ kind: 'entity', value: marked }, hosted), 'item:Latch');
-	});
-
 	it('manhattan / chebyshev / inSquare use host.at', () => {
 		const host = world({
-			at: (who) => {
+			point: (who) => {
 				const p = who as Partial<Posed>;
-				return { x: p.x ?? 0, z: p.z ?? 0 };
+				return [p.x ?? 0, p.z ?? 0];
 			},
 		});
 		assert.equal(num('manhattan(me, A)', host), 5);
@@ -598,7 +581,7 @@ describe('stringify', () => {
 		assert.equal(bool('isBusy(Mira)', host), true);
 		assert.equal(bool('doing(Mira, "go_to")', host), true);
 		assert.equal(bool('doing(Mira, "wait")', host), false);
-		const rows = Array.from({ length: 40 }, (_, i) => dummyEntity(`U${i}`, { tags: ['agent'] }));
+		const rows = Array.from({ length: 40 }, (element, i) => dummyEntity(`U${i}`, { tags: ['agent'] }));
 		const cat = buildCatalog({
 			...world(),
 			listCap: 40,

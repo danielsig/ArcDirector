@@ -1,4 +1,4 @@
-import { Game as KindlingGame, resetTime, Time } from '@arc-director/kindling';
+import { Game as KindlingGame, captureWorld, resetAllocID, resetTime, Time } from '@arc-director/kindling';
 import { resetHudPatch } from './patchHud';
 import { World } from './World';
 import { GameObject } from './GameObject';
@@ -11,20 +11,20 @@ import { loadSpritesheet } from '../render/spritesheet';
 import { loadSwordAnims } from '../render/swordAnims';
 import type { HudModel } from '../ui/hudModel';
 import { flagsFromURL, prefs } from '../prefs';
-import { ChunkStreamer } from '../world/ChunkStreamer';
 import { decodeGlyphChunk } from '../world/decodeGlyphChunk';
+import { getDef } from '../items/defs';
+import { equipItem } from '../items/equip';
+import { instantiateDef } from '../items/instance';
 import { spawnCamera, spawnNPC, spawnPlayer } from '../world/spawn';
 import { DEFAULT_SCENE_ID, sceneByID, type SceneDef } from '../data/scenes';
 import { packedKinds } from '../render/artCache';
 import { DirectorPulse, GroundPick, Hud, WorldStream, WorldView } from './systems';
 import { Session } from './Session';
-import { applyWorld, loadSave } from './gameSave';
+import { readSave } from './save';
 import { loadViewPose } from './viewPersist';
 import { readURLFlags } from './urlView';
 import { startSceneMusic } from '../audio/songs';
 import { syncWaterAudio } from '../audio/water';
-
-const AUTOSAVE_ENABLED = false;
 
 export class Game extends KindlingGame<World> {
 	readonly session:Session;
@@ -40,13 +40,13 @@ export class Game extends KindlingGame<World> {
 		this.hud = hud;
 		this.scene = sceneByID(sceneID);
 		resetTime();
+		resetAllocID();
 		if (this.renderer) {
 			this.renderer.detailMaps = this.hud.detailMaps;
 			this.renderer.shadows = this.hud.shadows;
 		}
 		this.renderer?.applyLook(rendererLook(this.scene.look));
 		this.world.input.attach(canvas);
-		const streamer = new ChunkStreamer(this.scene.chunks);
 		const decoded = this.scene.chunks.map(decodeGlyphChunk);
 		const startDecoded = decoded.find((d) => d.playerStart) ?? decoded[0];
 		if (!startDecoded) {
@@ -57,6 +57,9 @@ export class Game extends KindlingGame<World> {
 		const purse = player?.getComponent(Wallet);
 		if (purse && this.scene.playerWallet !== undefined) {
 			purse.coins = this.scene.playerWallet;
+		}
+		if (player && this.scene.id === 'ruins') {
+			equipItem(player, instantiateDef(getDef('iron_sword')), this.world);
 		}
 		const decodedByID = new Map(decoded.map((d) => [d.chunk.id, d]));
 		for (const npc of this.scene.npcs) {
@@ -77,11 +80,8 @@ export class Game extends KindlingGame<World> {
 			});
 		}
 		spawnCamera(this.world);
-		const auto = AUTOSAVE_ENABLED ? loadSave(this.scene.id, 'auto') : null;
 		const host = new GameHost(this.world, hud.chat, hud.aiLog, {
 			ambient: this.scene.ambient,
-			agents: auto?.agents,
-			bargainDone: auto?.bargainDone,
 			scene: this.scene.id,
 		});
 		const director = this.scene.createDirector(host);
@@ -99,7 +99,7 @@ export class Game extends KindlingGame<World> {
 		hudView.director = host;
 		hudView.getRenderer = () => this.renderer;
 		const stream = systems.addComponent(new WorldStream());
-		stream.streamer = streamer;
+		stream.chunks = decoded.map((d) => d.chunk);
 		const pulse = systems.addComponent(new DirectorPulse());
 		pulse.director = host;
 		this.session = systems.addComponent(new Session());
@@ -111,28 +111,25 @@ export class Game extends KindlingGame<World> {
 		this.session.hudView = hudView;
 		this.session.getCanvas = () => this.canvas;
 		this.session.getRunning = () => this.running;
-		stream.onGained = (keys) => this.session.overlayLoadedChunks(keys);
 		this.world.add(systems);
+		stream.loadAll();
+		this.session.fresh = captureWorld(this.world);
 		this.session.applyDevFlags(flagsFromURL(readURLFlags()));
 		this.session.homePose = this.session.readPose() ?? this.session.homePose;
-		if (auto) {
-			applyWorld(this.world, auto.world);
-			this.session.applyPose(auto.pose);
-			this.world.time = auto.time;
-			this.session.live = auto;
+		const save = readSave(this.scene.id);
+		this.hud.savedUTC = save?.savedUTC ?? '';
+		if (save && this.hud.loading) {
+			this.session.restore(save);
 		}
 		else {
-			const saved = loadViewPose(this.scene.id);
-			if (saved) {
-				this.session.applyPose(saved);
+			const pose = loadViewPose(this.scene.id);
+			if (pose) {
+				this.session.applyPose(pose);
 			}
 		}
+		this.hud.loading = false;
 		this.session.applyShotFromURL();
-		stream.streamer.tick(this.world);
-		stream.mark(this.world);
-		if (this.session.live) {
-			this.session.overlayLoadedChunks(new Set(this.world.chunks.keys()));
-		}
+		stream.stream();
 		this.world.setMessage(this.scene.message);
 		this.hud.menuOpen = false;
 		this.hud.minimap.follow = this.scene.minimapFollow !== false;
@@ -142,10 +139,8 @@ export class Game extends KindlingGame<World> {
 		this.hud.batchThinks = host.arc?.liveBatchThinks() ?? stored.batchThinks;
 		this.hud.thinkingBudget = host.arc ? host.arc.liveThinking() : stored.thinkingBudget;
 		this.hud.arcText = host.arc ? host.arc.liveArcText() : stored.arcText;
-		this.session.persistAutosave();
 		this.session.persistView();
 		this.session.syncURLView();
-		this.session.refreshSlots();
 		this.applyAudioPref();
 	}
 
@@ -177,7 +172,6 @@ export class Game extends KindlingGame<World> {
 	}
 
 	override dispose():void {
-		this.session.persistAutosave();
 		this.session.persistView();
 		this.world.input.detach();
 		this.session.view.present.dispose();

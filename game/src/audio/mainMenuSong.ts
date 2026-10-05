@@ -66,7 +66,7 @@ function mainMenuSong():Score {
 	const kit = track(drum, { gain: 0.58, dynamic: mp });
 	const bellChime = track(bell, { gain: 0.26, dynamic: p });
 
-	const hold = (pitches:number[], beats:number) => ({ _b: 1 as const, pitches, beats });
+	const hold = (pitches:number[], beats:number) => ({ b: 1 as const, pitches, beats });
 	const enter = (tones:{ pitches:number[] }, wait:number, total:number) => {
 		const body = hold(tones.pitches, total - wait);
 		return wait > 0 ? ([`r:${wait}`, body] as const) : ([body] as const);
@@ -423,7 +423,7 @@ function mainMenuSong():Score {
 			alto: 'd#4:1 r:.5 b3:.5 | f#3:1 d#4:1 | b3:.5 r:.5 f#3:1 | d#3:2',
 		}),
 		wall({
-			beats: 4, chord: 'B', from: 'b2', to: 'f#4', brass: [3, 4],
+			beats: 4, chord: 'B', from: 'b2', to: 'f#4',
 			root: ['b1', 'b2'], punch: 'now', shell: [0, 1], brass: [2, 3],
 			shellAt: 0, brassAt: 1, kit: false,
 			tune: 'd#4:1 f#4:1 | b3:2',

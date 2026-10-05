@@ -1,14 +1,14 @@
 import * as THREE from 'three';
-import { Component } from './Component.js';
+import { Component, type ComponentState } from './Component.js';
 
-const _worldPos = new THREE.Vector3();
-const _localPos = new THREE.Vector3();
-const _worldQ = new THREE.Quaternion();
-const _parentQ = new THREE.Quaternion();
-const _euler = new THREE.Euler(0, 0, 0, 'YXZ');
-const _fwd = new THREE.Vector3();
-const _right = new THREE.Vector3();
-const _up = new THREE.Vector3();
+const worldPos = new THREE.Vector3();
+const localPos = new THREE.Vector3();
+const worldQ = new THREE.Quaternion();
+const parentQ = new THREE.Quaternion();
+const euler = new THREE.Euler(0, 0, 0, 'YXZ');
+const fwd = new THREE.Vector3();
+const right = new THREE.Vector3();
+const up = new THREE.Vector3();
 
 export type Vec3 = {
 	x:number;
@@ -20,30 +20,30 @@ class WorldPosition implements Vec3 {
 	constructor(private readonly xf:Transform) {}
 
 	get x():number {
-		return this.xf.worldPositionVec(_worldPos).x;
+		return this.xf.worldPositionVec(worldPos).x;
 	}
 
 	set x(v:number) {
-		this.xf.worldPositionVec(_worldPos);
-		this.xf.setWorldPosition(v, _worldPos.y, _worldPos.z);
+		this.xf.worldPositionVec(worldPos);
+		this.xf.setWorldPosition(v, worldPos.y, worldPos.z);
 	}
 
 	get y():number {
-		return this.xf.worldPositionVec(_worldPos).y;
+		return this.xf.worldPositionVec(worldPos).y;
 	}
 
 	set y(v:number) {
-		this.xf.worldPositionVec(_worldPos);
-		this.xf.setWorldPosition(_worldPos.x, v, _worldPos.z);
+		this.xf.worldPositionVec(worldPos);
+		this.xf.setWorldPosition(worldPos.x, v, worldPos.z);
 	}
 
 	get z():number {
-		return this.xf.worldPositionVec(_worldPos).z;
+		return this.xf.worldPositionVec(worldPos).z;
 	}
 
 	set z(v:number) {
-		this.xf.worldPositionVec(_worldPos);
-		this.xf.setWorldPosition(_worldPos.x, _worldPos.y, v);
+		this.xf.worldPositionVec(worldPos);
+		this.xf.setWorldPosition(worldPos.x, worldPos.y, v);
 	}
 }
 
@@ -59,6 +59,19 @@ export class Transform extends Component {
 
 	override awake():void {
 		this.object3D.name = this.gameObject.name;
+	}
+
+	/** World pose. */
+	override saveState():ComponentState {
+		const p = this.position;
+		return { x: p.x, y: p.y, z: p.z, yaw: this.yaw, pitch: this.pitch, roll: this.roll };
+	}
+
+	override loadState(state:ComponentState):void {
+		for (const [key, value] of Object.entries(state)) {
+			const target = key === 'x' || key === 'y' || key === 'z' ? this.position : this;
+			(target as unknown as ComponentState)[key] = value;
+		}
 	}
 
 	get localPosition():THREE.Vector3 {
@@ -119,21 +132,21 @@ export class Transform extends Component {
 	}
 
 	get forward():Vec3 {
-		this.object3D.getWorldQuaternion(_worldQ);
-		_fwd.set(0, 0, -1).applyQuaternion(_worldQ);
-		return { x: _fwd.x, y: _fwd.y, z: _fwd.z };
+		this.object3D.getWorldQuaternion(worldQ);
+		fwd.set(0, 0, -1).applyQuaternion(worldQ);
+		return { x: fwd.x, y: fwd.y, z: fwd.z };
 	}
 
 	get right():Vec3 {
-		this.object3D.getWorldQuaternion(_worldQ);
-		_right.set(1, 0, 0).applyQuaternion(_worldQ);
-		return { x: _right.x, y: _right.y, z: _right.z };
+		this.object3D.getWorldQuaternion(worldQ);
+		right.set(1, 0, 0).applyQuaternion(worldQ);
+		return { x: right.x, y: right.y, z: right.z };
 	}
 
 	get up():Vec3 {
-		this.object3D.getWorldQuaternion(_worldQ);
-		_up.set(0, 1, 0).applyQuaternion(_worldQ);
-		return { x: _up.x, y: _up.y, z: _up.z };
+		this.object3D.getWorldQuaternion(worldQ);
+		up.set(0, 1, 0).applyQuaternion(worldQ);
+		return { x: up.x, y: up.y, z: up.z };
 	}
 
 	getObjectByName(name:string):THREE.Object3D | undefined {
@@ -146,39 +159,39 @@ export class Transform extends Component {
 	}
 
 	setWorldPosition(x:number, y:number, z:number):void {
-		_worldPos.set(x, y, z);
+		worldPos.set(x, y, z);
 		const parent = this.object3D.parent;
 		if (parent) {
 			parent.updateWorldMatrix(true, false);
-			parent.worldToLocal(_localPos.copy(_worldPos));
-			this.object3D.position.copy(_localPos);
+			parent.worldToLocal(localPos.copy(worldPos));
+			this.object3D.position.copy(localPos);
 		}
 		else {
-			this.object3D.position.copy(_worldPos);
+			this.object3D.position.copy(worldPos);
 		}
 	}
 
 	setWorldRotation(pitch:number, yaw:number, roll:number):void {
-		_euler.set(pitch, yaw, roll, 'YXZ');
-		_worldQ.setFromEuler(_euler);
+		euler.set(pitch, yaw, roll, 'YXZ');
+		worldQ.setFromEuler(euler);
 		const parent = this.object3D.parent;
 		if (parent) {
 			parent.updateWorldMatrix(true, false);
-			parent.getWorldQuaternion(_parentQ);
-			this.object3D.quaternion.copy(_parentQ.invert().multiply(_worldQ));
+			parent.getWorldQuaternion(parentQ);
+			this.object3D.quaternion.copy(parentQ.invert().multiply(worldQ));
 		}
 		else {
-			this.object3D.quaternion.copy(_worldQ);
+			this.object3D.quaternion.copy(worldQ);
 		}
 	}
 
 	private worldEuler():THREE.Euler {
 		this.object3D.updateWorldMatrix(true, false);
-		this.object3D.getWorldQuaternion(_worldQ);
-		return _euler.setFromQuaternion(_worldQ, 'YXZ');
+		this.object3D.getWorldQuaternion(worldQ);
+		return euler.setFromQuaternion(worldQ, 'YXZ');
 	}
 
 	private localEuler():THREE.Euler {
-		return _euler.setFromQuaternion(this.object3D.quaternion, 'YXZ');
+		return euler.setFromQuaternion(this.object3D.quaternion, 'YXZ');
 	}
 }

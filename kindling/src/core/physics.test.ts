@@ -93,7 +93,7 @@ describe('stepPhysics', () => {
 	});
 
 	class WallWorld extends World {
-		override sampleTerrain(x:number, _z:number):TerrainSample | undefined {
+		override sampleTerrain(x:number, z:number):TerrainSample | undefined {
 			return { height: 0, worldY: 0, blocked: x >= 2, climbable: false };
 		}
 	}
@@ -115,6 +115,29 @@ describe('stepPhysics', () => {
 		assert.ok(go.transform.position.x + col.size.x * 0.5 <= 2 + 1e-6, `through wall at ${go.transform.position.x}`);
 	});
 
+	class CellWorld extends World {
+		override sampleTerrain(x:number, z:number):TerrainSample | undefined {
+			return { height: 0, worldY: 0, blocked: x >= 2 && x < 3, climbable: false };
+		}
+	}
+
+	it('resolveBody does not eject a body through a blocked cell', () => {
+		resetAllocID();
+		const world = new CellWorld();
+		world.tileSize = 1;
+		const go = new GameObject('hurt');
+		go.transform.position.x = 1.4;
+		const rb = go.addComponent(new Rigidbody());
+		rb.prevX = 1.4;
+		rb.prevZ = 0;
+		const col = go.addComponent(new BoxCollider());
+		col.size = { x: 0.45, y: 1.1, z: 0.45 };
+		world.add(go);
+		go.transform.position.x = 2.6;
+		resolveBody(world, go);
+		assert.ok(go.transform.position.x + col.size.x * 0.5 <= 2 + 1e-6, `through cell at ${go.transform.position.x}`);
+	});
+
 	it('resolveBody does not push a body through a solid collider', () => {
 		resetAllocID();
 		const world = new World();
@@ -129,9 +152,25 @@ describe('stepPhysics', () => {
 		const col = go.addComponent(new BoxCollider());
 		col.size = { x: 0.45, y: 1.1, z: 0.45 };
 		world.add(go);
+		world.reindex();
 		go.transform.position.x = 1.6;
 		resolveBody(world, go);
 		const gap = wall.transform.position.x - go.transform.position.x;
 		assert.ok(gap >= (1 + 0.45) * 0.5 - 1e-6, `inside wall gap ${gap}`);
+	});
+
+	it('finds a wide collider whose centre is tiles away', () => {
+		resetAllocID();
+		const world = new World();
+		const bridge = new GameObject('bridge');
+		bridge.addComponent(new BoxCollider()).size = { x: 8, y: 1, z: 1 };
+		const go = new GameObject('walker');
+		go.transform.position.x = 3.9;
+		go.addComponent(new Rigidbody());
+		go.addComponent(new BoxCollider()).size = { x: 0.45, y: 1, z: 0.45 };
+		world.add(bridge);
+		world.add(go);
+		stepPhysics(world, 0.02);
+		assert.ok(go.transform.position.x - 0.45 * 0.5 >= 4 - 1e-6, `inside bridge at ${go.transform.position.x}`);
 	});
 });

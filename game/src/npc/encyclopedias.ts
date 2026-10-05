@@ -10,7 +10,7 @@ const TREE = crowdEncyclopedia({
 const BOULDER:EncyclopediaEntry = {
 	name: 'Boulder',
 	aliases: ['rock', 'rocks'],
-	text: 'Landmark type. filter("Boulder"). Not MillStone.',
+	text: 'Landmark type. filter("Boulder"). Not BridgeStone.',
 };
 
 const RIVER:EncyclopediaEntry = {
@@ -45,25 +45,25 @@ const GLEN:EncyclopediaEntry[] = [
 		text: 'Door into Cottage. go_to a doorway is still outside; inside is the building.',
 	},
 	{
-		name: 'MillBridge',
-		aliases: ['bridge', 'sluice'],
-		text: 'Named bridge. go_to(MillBridge) when the scene shows it. MillLever and MillCrank work the sluice.',
+		name: 'Bridge',
+		aliases: ['sluice'],
+		text: 'Named bridge. go_to(Bridge) when the scene shows it. BridgeLever and BridgeCrank work the sluice.',
 	},
 	{
-		name: 'MillLever',
+		name: 'BridgeLever',
 		aliases: ['lever'],
-		text: 'Named sluice lever by MillBridge. A miller works it with MillCrank.',
+		text: 'Named sluice lever by Bridge. BridgeKeeper works it with BridgeCrank.',
 	},
 	{
-		name: 'MillStone',
-		aliases: ['mill'],
-		text: 'Named mill stone. Not Boulder.',
+		name: 'BridgeStone',
+		aliases: ['stone'],
+		text: 'Named bridge stone. Not Boulder.',
 	},
 	BUY,
 	{
 		name: 'FireMushroom',
 		aliases: ['mushroom', 'mushrooms'],
-		text: 'Item. Worth 10 gold. Foragers harvest it outdoors. Millers take it as a mill-fee or sell it.',
+		text: 'Item. Worth 10 gold. Forager harvests it outdoors. BridgeKeeper takes it as the bridge fee or sells it.',
 	},
 	{
 		name: 'SilverTrout',
@@ -71,9 +71,9 @@ const GLEN:EncyclopediaEntry[] = [
 		text: 'Item. Worth 5 gold. Silver trout can be bought from anglers.',
 	},
 	{
-		name: 'MillCrank',
+		name: 'BridgeCrank',
 		aliases: ['crank'],
-		text: 'Item. Used on MillLever to work a sluice.',
+		text: 'Item. Used on BridgeLever to work a sluice.',
 	},
 ];
 
@@ -121,7 +121,7 @@ const ABBEY_VAULT:EncyclopediaEntry[] = [
 	{
 		name: 'EastGate',
 		aliases: ['east gate'],
-		text: 'The door on the east side of the abbey vault. Walk to it with go_to(EastGate).',
+		text: 'The door on the east side of the dungeon vault. Walk to it with go_to(EastGate).',
 	},
 ];
 

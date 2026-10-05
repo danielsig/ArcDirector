@@ -1,0 +1,101 @@
+import type { Chunk } from './Chunk.js';
+import { Component } from './Component.js';
+import type { GameObject } from './GameObject.js';
+
+/** Keeps the chunks around its object loaded. */
+export class StreamingAnchor extends Component {
+	/** Unloaded chunks this close (meters to their edge) load. */
+	viewRadius = 20;
+	/** Loaded chunks stay until this much past `viewRadius`. */
+	hysteresis = 8;
+}
+
+/** Parks with chunk `chunkID` when it unloads, and comes back when it loads. */
+export class ChunkBound extends Component {
+	chunkID = '';
+}
+
+/**
+ * Loads `chunks` near any enabled `StreamingAnchor` and unloads the rest, each `lateUpdate`.
+ * With no anchors, nothing changes. Unloading parks the chunk's `ChunkBound` objects
+ * (`World.remove`); loading adds them back as they were. Override `spawn` to populate a chunk the first time it loads.
+ */
+export class ChunkStreamer<C extends Chunk = Chunk> extends Component {
+	/** Every chunk of the scene, loaded or not. */
+	chunks:C[] = [];
+	private readonly parked = new Map<C, GameObject[]>();
+
+	/** The first time `chunk` loads, right after `World.addChunk`. */
+	spawn(chunk:C):void {}
+
+	/** Load every chunk, so the whole scene is in the world (e.g. before a save). The next `stream` unloads far ones again. */
+	loadAll():void {
+		for (const chunk of this.chunks) {
+			if (!this.loaded(chunk)) {
+				this.load(chunk);
+			}
+		}
+	}
+
+	override lateUpdate(dt:number):void {
+		this.stream();
+	}
+
+	/** Load and unload by anchor distance now. */
+	stream():void {
+		const world = this.gameObject.world;
+		if (!world) {
+			return;
+		}
+		const anchors:{ go:GameObject; anchor:StreamingAnchor }[] = [];
+		world.forEachComponent(StreamingAnchor, (anchor, go) => {
+			if (anchor.enabled) {
+				anchors.push({ go, anchor });
+			}
+		});
+		if (anchors.length === 0) {
+			return;
+		}
+		for (const chunk of this.chunks) {
+			const loaded = this.loaded(chunk);
+			const keep = anchors.some(({ go, anchor }) => {
+				const p = go.transform.position;
+				return chunk.distanceTo(p.x, p.z) <= anchor.viewRadius + (loaded ? anchor.hysteresis : 0);
+			});
+			if (keep && !loaded) {
+				this.load(chunk);
+			}
+			else if (!keep && loaded) {
+				this.unload(chunk);
+			}
+		}
+	}
+
+	private loaded(chunk:C):boolean {
+		return this.gameObject.world?.chunkAt(chunk.origin.cx, chunk.origin.cz) === chunk;
+	}
+
+	private load(chunk:C):void {
+		const world = this.gameObject.world!;
+		world.addChunk(chunk);
+		const parked = this.parked.get(chunk);
+		if (!parked) {
+			this.spawn(chunk);
+			return;
+		}
+		this.parked.delete(chunk);
+		for (const go of parked) {
+			world.add(go);
+		}
+	}
+
+	private unload(chunk:C):void {
+		const world = this.gameObject.world!;
+		const parked = world.objects.filter((go) => go.getComponent(ChunkBound)?.chunkID === chunk.id);
+		for (const go of parked) {
+			world.remove(go);
+		}
+		this.parked.set(chunk, parked);
+		world.removeChunk(chunk);
+	}
+}

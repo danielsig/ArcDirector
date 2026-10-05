@@ -1,9 +1,12 @@
+import type { NPCInput } from '../actors/NPCInput';
 import type { GameObject } from '../engine/GameObject';
 import type { World } from '../engine/World';
 
-export type HostCtx = {
+export type AgentCtx = {
 	world:World;
 	actor:GameObject;
+	/** Where ArcDirector steers this body, and its cooldowns. Every body ArcDirector drives has one. */
+	npc:NPCInput;
 	/** Scene id from the game host. ArcDirector does not interpret it. */
 	scene:string;
 };

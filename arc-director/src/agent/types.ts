@@ -1,8 +1,8 @@
 import type { JsonSchema } from '../json.js';
 
+/** The agent's id is its name. `role` is an optional plain tag others may also address it by (`Herbalist`). */
 export type AgentIdentity = {
-	name:string;
-	role:string;
+	role?:string;
 	traits?:string[];
 };
 
@@ -26,19 +26,24 @@ export type AgentEvent = {
 	text:string;
 	tags?:string[];
 	major?:boolean;
-	at?:number;
+	/** Game time. Default: when the agent receives it. */
+	timestamp?:number;
+	/** Also keep it as an episodic memory, not only in short-term memory. */
+	remember?:boolean;
+	/** Real ids for `{0}`, `{1}`, … in `text`. Each listener reads its own name for them, and gets those names as tags. */
+	who?:string[];
 };
 
 /** Named English that is always in the user block this think. */
-export type Sense<HostCtx = unknown> = {
+export type Sense<TAgentCtx = unknown> = {
 	description:string;
-	gather:(ctx:HostCtx)=>unknown;
+	gather:(ctx:TAgentCtx)=>unknown;
 };
 
-export type ToolSpec<HostCtx = unknown> = {
+export type ToolSpec<TAgentCtx = unknown> = {
 	description:string;
 	parameters:JsonSchema;
-	handler:(ctx:HostCtx, args:unknown)=>unknown;
+	handler:(ctx:TAgentCtx, args:unknown)=>unknown;
 };
 
 /**
@@ -52,4 +57,4 @@ export type Kit = {
 };
 
 /** Plain object (mutate in place, or use getters) or a callback. */
-export type KitSource<HostCtx = unknown> = Kit | ((ctx:HostCtx)=>Kit);
+export type KitSource<TAgentCtx = unknown> = Kit | ((ctx:TAgentCtx)=>Kit);

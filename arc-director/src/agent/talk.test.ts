@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import type { AgentEvent } from './types.js';
-import { TalkNet, type TalkMind, roleMentionTitles } from './talk.js';
+import { TalkNet, type TalkMind } from './talk.js';
 
 function mind(id:string):TalkMind & { events:AgentEvent[] } {
 	const events:AgentEvent[] = [];
@@ -180,7 +180,7 @@ describe('TalkNet', () => {
 		]);
 	});
 
-	it('muffles far speech and asks the listener to walk closer', () => {
+	it('muffles far speech and asks the listener to come closer', () => {
 		const guard = mind('Guard');
 		const talk = new TalkNet({
 			inRange: () => true,
@@ -191,7 +191,7 @@ describe('TalkNet', () => {
 		const ok = talk.say('Baker', 'Which of you sells swords?', 'Guard');
 		assert.equal(ok.ok, true);
 		assert.match(guard.events[0].text, /only catch/);
-		assert.match(guard.events[0].text, /go_to\(Baker\)/);
+		assert.match(guard.events[0].text, /Get closer to Baker to hear clearly/);
 		assert.match(guard.events[0].text, /Wh—/);
 		assert.equal(guard.events[0].major, true);
 	});
@@ -201,7 +201,7 @@ describe('TalkNet', () => {
 		const talk = new TalkNet({
 			inRange: () => true,
 			others: () => ['Guard', 'Captain'],
-			clearHear: (_speaker, listener) => listener === 'Guard',
+			clearHear: (speaker, listener) => listener === 'Guard',
 		});
 		talk.attach(captain);
 		talk.say('Baker', 'The loaf is two gold.', 'Guard');
@@ -224,60 +224,68 @@ describe('TalkNet', () => {
 	});
 
 	it('treats host aliases as a name mention', () => {
-		const miller = mind('Miller');
+		const fern = mind('Fern');
 		const talk = new TalkNet({
 			inRange: () => true,
-			others: () => ['Miller', 'Guard'],
+			others: () => ['Fern', 'Guard'],
 			clearHear: () => false,
-			names: (id) => (id === 'Miller' ? ['Miller', 'Oat'] : [id]),
+			names: (id) => (id === 'Fern' ? ['Fern', 'Herbalist'] : [id]),
 		});
-		talk.attach(miller);
-		talk.say('Player', 'Oat, stay inside.', 'Guard');
-		assert.equal(miller.events[0].major, true);
+		talk.attach(fern);
+		talk.say('Player', 'Herbalist, stay inside.', 'Guard');
+		assert.equal(fern.events[0].major, true);
 	});
 
-	it('extracts short role titles without scanning the instruction blob', () => {
-		assert.deepEqual(
-			roleMentionTitles('You are Oat, miller of the cottage. The land names you Miller. Ignore CottageDoor.'),
-			['Miller', 'Oat', 'miller of the cottage'],
-		);
-		assert.deepEqual(
-			roleMentionTitles('You are Fern, a forager. The hall names you Herbalist.'),
-			['Herbalist', 'Fern', 'forager'],
-		);
-		assert.ok(!roleMentionTitles(
-			'You are Lira, an assistant. The land names you Assistant. Do not join Forager, Miller, or Angler.',
-		).includes('Forager'));
-		assert.deepEqual(roleMentionTitles('I keep the mill. I do not fish.'), ['I keep the mill']);
-	});
-
-	it('delivers to an attached spawn id when the host lists a chosen name', () => {
-		const miller = mind('Miller');
+	it('delivers to an attached id when the host lists its role', () => {
+		const fern = mind('Fern');
 		const talk = new TalkNet({
 			inRange: () => true,
-			others: () => ['Oat', 'Assistant'],
+			others: () => ['Herbalist', 'Lys'],
 			clearHear: () => true,
-			names: (id) => (id === 'Miller' ? ['Miller', 'Oat'] : [id]),
+			names: (id) => (id === 'Fern' ? ['Fern', 'Herbalist'] : [id]),
 		});
-		talk.attach(miller);
-		const ok = talk.say('Player', 'Oat, save your friends.');
+		talk.attach(fern);
+		const ok = talk.say('Player', 'Herbalist, save your friends.');
 		assert.equal(ok.ok, true);
-		assert.equal(miller.events.length, 1);
-		assert.equal(miller.events[0].kind, 'HeardSpeech');
-		assert.equal(miller.events[0].major, true);
-		assert.match(miller.events[0].text, /save your friends/);
+		assert.equal(fern.events.length, 1);
+		assert.equal(fern.events[0].kind, 'HeardSpeech');
+		assert.equal(fern.events[0].major, true);
+		assert.match(fern.events[0].text, /save your friends/);
 	});
 
 	it('makes a muffled role mention major', () => {
-		const miller = mind('Miller');
+		const fern = mind('Fern');
 		const talk = new TalkNet({
 			inRange: () => true,
-			others: () => ['Miller', 'Guard'],
+			others: () => ['Fern', 'Guard'],
 			clearHear: () => false,
-			names: (id) => (id === 'Miller' ? ['Miller', ...roleMentionTitles('You are Oat, miller of the cottage.')] : [id]),
+			names: (id) => (id === 'Fern' ? ['Fern', 'Herbalist'] : [id]),
 		});
-		talk.attach(miller);
-		talk.say('Player', 'Send the miller outside.', 'Guard');
-		assert.equal(miller.events[0].major, true);
+		talk.attach(fern);
+		talk.say('Player', 'Send the herbalist outside.', 'Guard');
+		assert.equal(fern.events[0].major, true);
+	});
+});
+
+describe('TalkNet muffled speech', () => {
+	it('delivers a muffled line in full once the listener comes close, within the rehear window', () => {
+		const guard = mind('Guard');
+		let close = false;
+		const talk = new TalkNet({
+			inRange: () => true,
+			others: (speaker) => ['Guard', 'BridgeKeeper'].filter((id) => id !== speaker),
+			clearHear: () => close,
+		}, undefined, { face: false, approach: false, rehear: 5 });
+		talk.attach(guard);
+		talk.say('BridgeKeeper', 'The bridge is down', undefined, 10);
+		assert.match(guard.events[0]?.text ?? '', /You catch/);
+		talk.tick(12);
+		assert.equal(guard.events.length, 1);
+		close = true;
+		talk.tick(13);
+		assert.equal(guard.events[1]?.text, 'BridgeKeeper says, now clear: "The bridge is down"');
+		assert.equal(guard.events[1]?.remember, true);
+		talk.tick(14);
+		assert.equal(guard.events.length, 2);
 	});
 });

@@ -75,26 +75,6 @@ function blit(dst, src, dx, dy) {
 	}
 }
 
-function sample(src, x, y) {
-	const x0 = Math.max(0, Math.min(src.width - 1, Math.floor(x)));
-	const y0 = Math.max(0, Math.min(src.height - 1, Math.floor(y)));
-	const x1 = Math.max(0, Math.min(src.width - 1, x0 + 1));
-	const y1 = Math.max(0, Math.min(src.height - 1, y0 + 1));
-	const tx = x - x0;
-	const ty = y - y0;
-	const i00 = (y0 * src.width + x0) * 4;
-	const i10 = (y0 * src.width + x1) * 4;
-	const i01 = (y1 * src.width + x0) * 4;
-	const i11 = (y1 * src.width + x1) * 4;
-	const out = [0, 0, 0, 0];
-	for (let c = 0; c < 4; c++) {
-		const a = src.data[i00 + c] + (src.data[i10 + c] - src.data[i00 + c]) * tx;
-		const b = src.data[i01 + c] + (src.data[i11 + c] - src.data[i01 + c]) * tx;
-		out[c] = a + (b - a) * ty;
-	}
-	return out;
-}
-
 function scalePng(src, dw, dh) {
 	if (src.width === dw && src.height === dh) {
 		return src;
@@ -382,15 +362,6 @@ function packPrepared(items, layer, gutter = 0, max = MAX_ATLAS, padSquare = fal
 		frames[stem] = [ox, oy, png.width, png.height];
 	}
 	return { sheet, frames, w: sheet.width, h: sheet.height, gutter: usedGutter };
-}
-
-function padSheet(packed, w, h, fill) {
-	if (packed.w >= w && packed.h >= h) {
-		return packed;
-	}
-	const sheet = emptyPng(Math.max(packed.w, w), Math.max(packed.h, h), fill);
-	blit(sheet, packed.sheet, 0, 0);
-	return { ...packed, sheet, w: sheet.width, h: sheet.height };
 }
 
 function packSheet(dir, stems, layer) {

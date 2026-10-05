@@ -85,40 +85,37 @@ function addStairs(group:THREE.Group, chunk:Chunk, wallMats:THREE.Material[]):vo
 		return geom;
 	};
 
-	for (let lz = 0; lz < CHUNK_SIZE; lz++) {
-		for (let lx = 0; lx < CHUNK_SIZE; lx++) {
-			const tile = chunk.tile(lx, lz);
-			if (!tile || tile.def !== 'stairs') {
-				continue;
-			}
-			const uphill = stairUphill(chunk, lx, lz);
-			const top = tile.height * TILE_HEIGHT;
-			const alongZ = uphill.dx === 0;
-			const variant = rockRunVariant(cellX(chunk, lx), cellZ(chunk, lz), STAIR_SALT, wallMats.length);
-			const mat = wallMats[variant];
-			for (let i = 0; i < steps; i++) {
-				const h = ((i + 1) / steps) * top;
-				const sx = alongZ ? CELL_SIZE : stepLen;
-				const sz = alongZ ? stepLen : CELL_SIZE;
-				const mesh = new THREE.Mesh(geomAt(sx, h, sz), mat);
-				mesh.castShadow = true;
-				mesh.receiveShadow = true;
-				let x = ox + (lx + 0.5) * CELL_SIZE;
-				let z = oz + (lz + 0.5) * CELL_SIZE;
-				const along = uphill.dx + uphill.dz < 0
-					? CELL_SIZE - (i + 0.5) * stepLen
-					: (i + 0.5) * stepLen;
-				if (alongZ) {
-					z = oz + lz * CELL_SIZE + along;
-				}
-				else {
-					x = ox + lx * CELL_SIZE + along;
-				}
-				mesh.position.set(x, h * 0.5, z);
-				group.add(mesh);
-			}
+	chunk.forEachTile((tile, lx, lz) => {
+		if (tile.def !== 'stairs') {
+			return;
 		}
-	}
+		const uphill = stairUphill(chunk, lx, lz);
+		const top = tile.height * TILE_HEIGHT;
+		const alongZ = uphill.dx === 0;
+		const variant = rockRunVariant(cellX(chunk, lx), cellZ(chunk, lz), STAIR_SALT, wallMats.length);
+		const mat = wallMats[variant];
+		for (let i = 0; i < steps; i++) {
+			const h = ((i + 1) / steps) * top;
+			const sx = alongZ ? CELL_SIZE : stepLen;
+			const sz = alongZ ? stepLen : CELL_SIZE;
+			const mesh = new THREE.Mesh(geomAt(sx, h, sz), mat);
+			mesh.castShadow = true;
+			mesh.receiveShadow = true;
+			let x = ox + (lx + 0.5) * CELL_SIZE;
+			let z = oz + (lz + 0.5) * CELL_SIZE;
+			const along = uphill.dx + uphill.dz < 0
+				? CELL_SIZE - (i + 0.5) * stepLen
+				: (i + 0.5) * stepLen;
+			if (alongZ) {
+				z = oz + lz * CELL_SIZE + along;
+			}
+			else {
+				x = ox + lx * CELL_SIZE + along;
+			}
+			mesh.position.set(x, h * 0.5, z);
+			group.add(mesh);
+		}
+	});
 }
 
 function addFlatFloors(
@@ -137,22 +134,19 @@ function addFlatFloors(
 	for (let i = 0; i < n * 2; i++) {
 		buckets.push([]);
 	}
-	for (let lz = 0; lz < CHUNK_SIZE; lz++) {
-		for (let lx = 0; lx < CHUNK_SIZE; lx++) {
-			const tile = chunk.tile(lx, lz);
-			if (!tile || tile.blocked || tile.def === 'stairs' || tile.height > 0) {
-				continue;
-			}
-			if (tile.def === 'grass' || tile.def === 'water') {
-				continue;
-			}
-			const gx = cellX(chunk, lx);
-			const gz = cellZ(chunk, lz);
-			const v = rockVariant(gx, gz, FLOOR_SALT, n);
-			const flip = rockFlip(gx, gz, FLOOR_SALT) ? 1 : 0;
-			buckets[v * 2 + flip].push({ lx, lz });
+	chunk.forEachTile((tile, lx, lz) => {
+		if (tile.blocked || tile.def === 'stairs' || tile.height > 0) {
+			return;
 		}
-	}
+		if (tile.def === 'grass' || tile.def === 'water') {
+			return;
+		}
+		const gx = cellX(chunk, lx);
+		const gz = cellZ(chunk, lz);
+		const v = rockVariant(gx, gz, FLOOR_SALT, n);
+		const flip = rockFlip(gx, gz, FLOOR_SALT) ? 1 : 0;
+		buckets[v * 2 + flip].push({ lx, lz });
+	});
 	for (let b = 0; b < buckets.length; b++) {
 		const cells = buckets[b];
 		if (cells.length === 0) {
@@ -189,41 +183,38 @@ function addRaisedFloors(
 	const ox = chunk.worldOriginX();
 	const oz = chunk.worldOriginZ();
 	const geoms = new Map<number, THREE.BoxGeometry>();
-	for (let lz = 0; lz < CHUNK_SIZE; lz++) {
-		for (let lx = 0; lx < CHUNK_SIZE; lx++) {
-			const tile = chunk.tile(lx, lz);
-			if (!tile || tile.blocked || tile.def === 'stairs' || tile.height <= 0) {
-				continue;
-			}
-			const h = tile.height * TILE_HEIGHT;
-			let geom = geoms.get(h);
-			if (!geom) {
-				geom = new THREE.BoxGeometry(CELL_SIZE, h, CELL_SIZE);
-				insetBoxTopUVs(geom);
-				geoms.set(h, geom);
-			}
-			const gx = cellX(chunk, lx);
-			const gz = cellZ(chunk, lz);
-			const floorMat = floorMats[rockVariant(gx, gz, FLOOR_SALT, floorMats.length)];
-			const wallMat = wallMats[rockRunVariant(gx, gz, WALL_SALT, wallMats.length)];
-			const mesh = new THREE.Mesh(geom, [
-				wallMat,
-				wallMat,
-				floorMat,
-				floorMat,
-				wallMat,
-				wallMat,
-			]);
-			mesh.receiveShadow = true;
-			mesh.castShadow = true;
-			mesh.position.set(
-				ox + (lx + 0.5) * CELL_SIZE,
-				h * 0.5,
-				oz + (lz + 0.5) * CELL_SIZE,
-			);
-			group.add(mesh);
+	chunk.forEachTile((tile, lx, lz) => {
+		if (tile.blocked || tile.def === 'stairs' || tile.height <= 0) {
+			return;
 		}
-	}
+		const h = tile.height * TILE_HEIGHT;
+		let geom = geoms.get(h);
+		if (!geom) {
+			geom = new THREE.BoxGeometry(CELL_SIZE, h, CELL_SIZE);
+			insetBoxTopUVs(geom);
+			geoms.set(h, geom);
+		}
+		const gx = cellX(chunk, lx);
+		const gz = cellZ(chunk, lz);
+		const floorMat = floorMats[rockVariant(gx, gz, FLOOR_SALT, floorMats.length)];
+		const wallMat = wallMats[rockRunVariant(gx, gz, WALL_SALT, wallMats.length)];
+		const mesh = new THREE.Mesh(geom, [
+			wallMat,
+			wallMat,
+			floorMat,
+			floorMat,
+			wallMat,
+			wallMat,
+		]);
+		mesh.receiveShadow = true;
+		mesh.castShadow = true;
+		mesh.position.set(
+			ox + (lx + 0.5) * CELL_SIZE,
+			h * 0.5,
+			oz + (lz + 0.5) * CELL_SIZE,
+		);
+		group.add(mesh);
+	});
 }
 
 function addWalls(group:THREE.Group, chunk:Chunk, mats:THREE.Material[]):void {
@@ -236,18 +227,16 @@ function addWalls(group:THREE.Group, chunk:Chunk, mats:THREE.Material[]):void {
 	for (let i = 0; i < n; i++) {
 		buckets.push([]);
 	}
-	for (let lz = 0; lz < CHUNK_SIZE; lz++) {
-		for (let lx = 0; lx < CHUNK_SIZE; lx++) {
-			if (!chunk.tile(lx, lz)?.blocked) {
-				continue;
-			}
-			if (chunk.tile(lx, lz)?.def === 'water' || chunk.tile(lx, lz)?.def === 'wood_wall') {
-				continue;
-			}
-			const v = rockRunVariant(cellX(chunk, lx), cellZ(chunk, lz), WALL_SALT, n);
-			buckets[v].push({ lx, lz });
+	chunk.forEachTile((tile, lx, lz) => {
+		if (!tile.blocked) {
+			return;
 		}
-	}
+		if (tile.def === 'water' || tile.def === 'wood_wall') {
+			return;
+		}
+		const v = rockRunVariant(cellX(chunk, lx), cellZ(chunk, lz), WALL_SALT, n);
+		buckets[v].push({ lx, lz });
+	});
 	for (let v = 0; v < n; v++) {
 		const cells = buckets[v];
 		if (cells.length === 0) {
@@ -291,22 +280,20 @@ function addWoodWalls(group:THREE.Group, chunk:Chunk):void {
 		shadowSide: THREE.DoubleSide,
 	});
 	const geom = new THREE.BoxGeometry(CELL_SIZE * 1.04, WALL_HEIGHT, CELL_SIZE * 1.04);
-	for (let lz = 0; lz < CHUNK_SIZE; lz++) {
-		for (let lx = 0; lx < CHUNK_SIZE; lx++) {
-			if (chunk.tile(lx, lz)?.def !== 'wood_wall') {
-				continue;
-			}
-			const mesh = new THREE.Mesh(geom, mat);
-			mesh.position.set(
-				ox + (lx + 0.5) * CELL_SIZE,
-				WALL_HEIGHT * 0.5,
-				oz + (lz + 0.5) * CELL_SIZE,
-			);
-			mesh.castShadow = true;
-			mesh.receiveShadow = true;
-			group.add(mesh);
+	chunk.forEachTile((tile, lx, lz) => {
+		if (tile.def !== 'wood_wall') {
+			return;
 		}
-	}
+		const mesh = new THREE.Mesh(geom, mat);
+		mesh.position.set(
+			ox + (lx + 0.5) * CELL_SIZE,
+			WALL_HEIGHT * 0.5,
+			oz + (lz + 0.5) * CELL_SIZE,
+		);
+		mesh.castShadow = true;
+		mesh.receiveShadow = true;
+		group.add(mesh);
+	});
 }
 
 function addPlankFloors(group:THREE.Group, chunk:Chunk):void {
@@ -323,13 +310,11 @@ function addPlankFloors(group:THREE.Group, chunk:Chunk):void {
 	const geom = new THREE.PlaneGeometry(CELL_SIZE, CELL_SIZE);
 	const dummy = new THREE.Object3D();
 	const cells:{ lx:number; lz:number }[] = [];
-	for (let lz = 0; lz < CHUNK_SIZE; lz++) {
-		for (let lx = 0; lx < CHUNK_SIZE; lx++) {
-			if (chunk.tile(lx, lz)?.def === 'plank') {
-				cells.push({ lx, lz });
-			}
+	chunk.forEachTile((tile, lx, lz) => {
+		if (tile.def === 'plank') {
+			cells.push({ lx, lz });
 		}
-	}
+	});
 	if (cells.length === 0) {
 		return;
 	}
@@ -397,8 +382,8 @@ function pushYPoly(
 	pts:{ x:number; z:number }[],
 	y:number,
 	rep:number,
-	flowAt?:(x:number, z:number) => Flow,
-	shoreAt?:(x:number, z:number) => number,
+	flowAt?:(x:number, z:number)=>Flow,
+	shoreAt?:(x:number, z:number)=>number,
 ):void {
 	if (pts.length < 3) {
 		return;
@@ -609,8 +594,8 @@ function fillWaterSheet(
 	chunk:Chunk,
 	cells:{ lx:number; lz:number }[],
 	y:number,
-	flowAt:(x:number, z:number) => Flow,
-	shoreAt:(x:number, z:number) => number,
+	flowAt:(x:number, z:number)=>Flow,
+	shoreAt:(x:number, z:number)=>number,
 ):void {
 	const ox = chunk.worldOriginX();
 	const oz = chunk.worldOriginZ();
@@ -630,61 +615,59 @@ function fillWaterSheet(
 				const za = z0 + (z1 - z0) * (iz / div);
 				const zb = z0 + (z1 - z0) * ((iz + 1) / div);
 				const quad = [{ x: xa, z: za }, { x: xb, z: za }, { x: xb, z: zb }, { x: xa, z: zb }];
-				pushYPoly(buf, quad, y, waterRep, (_x, _z) => cellF, shoreAt);
+				pushYPoly(buf, quad, y, waterRep, (x, z) => cellF, shoreAt);
 			}
 		}
 	}
-	for (let lz = 0; lz < CHUNK_SIZE; lz++) {
-		for (let lx = 0; lx < CHUNK_SIZE; lx++) {
-			if (chunk.tile(lx, lz)?.def !== 'grass') {
-				continue;
-			}
-			const x0 = ox + lx * CELL_SIZE;
-			const z0 = oz + lz * CELL_SIZE;
-			const x1 = x0 + CELL_SIZE;
-			const z1 = z0 + CELL_SIZE;
-			const n = isWater(chunk, lx, lz - 1);
-			const s = isWater(chunk, lx, lz + 1);
-			const e = isWater(chunk, lx + 1, lz);
-			const w = isWater(chunk, lx - 1, lz);
-			const nF = n ? flowAt(x0 + CELL_SIZE * 0.5, z0 - CELL_SIZE * 0.5) : undefined;
-			const sF = s ? flowAt(x0 + CELL_SIZE * 0.5, z1 + CELL_SIZE * 0.5) : undefined;
-			const eF = e ? flowAt(x1 + CELL_SIZE * 0.5, z0 + CELL_SIZE * 0.5) : undefined;
-			const wF = w ? flowAt(x0 - CELL_SIZE * 0.5, z0 + CELL_SIZE * 0.5) : undefined;
-			const cornerFlow = (a?:Flow, b?:Flow):Flow => a ?? b ?? { x: 0, z: 0 };
-			const pushCorner = (pts:[number, number][], f:Flow):void => {
-				pushYTri(
-					buf,
-					pts[0][0],
-					pts[0][1],
-					pts[1][0],
-					pts[1][1],
-					pts[2][0],
-					pts[2][1],
-					y,
-					waterRep,
-					f,
-					f,
-					f,
-					shoreAt(pts[0][0], pts[0][1]),
-					shoreAt(pts[1][0], pts[1][1]),
-					shoreAt(pts[2][0], pts[2][1]),
-				);
-			};
-			if (n && w) {
-				pushCorner([[x0, z0], [x0 + cut, z0], [x0, z0 + cut]], cornerFlow(nF, wF));
-			}
-			if (n && e) {
-				pushCorner([[x1, z0], [x1 - cut, z0], [x1, z0 + cut]], cornerFlow(nF, eF));
-			}
-			if (s && e) {
-				pushCorner([[x1, z1], [x1, z1 - cut], [x1 - cut, z1]], cornerFlow(sF, eF));
-			}
-			if (s && w) {
-				pushCorner([[x0, z1], [x0 + cut, z1], [x0, z1 - cut]], cornerFlow(sF, wF));
-			}
+	chunk.forEachTile((tile, lx, lz) => {
+		if (tile.def !== 'grass') {
+			return;
 		}
-	}
+		const x0 = ox + lx * CELL_SIZE;
+		const z0 = oz + lz * CELL_SIZE;
+		const x1 = x0 + CELL_SIZE;
+		const z1 = z0 + CELL_SIZE;
+		const n = isWater(chunk, lx, lz - 1);
+		const s = isWater(chunk, lx, lz + 1);
+		const e = isWater(chunk, lx + 1, lz);
+		const w = isWater(chunk, lx - 1, lz);
+		const nF = n ? flowAt(x0 + CELL_SIZE * 0.5, z0 - CELL_SIZE * 0.5) : undefined;
+		const sF = s ? flowAt(x0 + CELL_SIZE * 0.5, z1 + CELL_SIZE * 0.5) : undefined;
+		const eF = e ? flowAt(x1 + CELL_SIZE * 0.5, z0 + CELL_SIZE * 0.5) : undefined;
+		const wF = w ? flowAt(x0 - CELL_SIZE * 0.5, z0 + CELL_SIZE * 0.5) : undefined;
+		const cornerFlow = (a?:Flow, b?:Flow):Flow => a ?? b ?? { x: 0, z: 0 };
+		const pushCorner = (pts:[number, number][], f:Flow):void => {
+			pushYTri(
+				buf,
+				pts[0][0],
+				pts[0][1],
+				pts[1][0],
+				pts[1][1],
+				pts[2][0],
+				pts[2][1],
+				y,
+				waterRep,
+				f,
+				f,
+				f,
+				shoreAt(pts[0][0], pts[0][1]),
+				shoreAt(pts[1][0], pts[1][1]),
+				shoreAt(pts[2][0], pts[2][1]),
+			);
+		};
+		if (n && w) {
+			pushCorner([[x0, z0], [x0 + cut, z0], [x0, z0 + cut]], cornerFlow(nF, wF));
+		}
+		if (n && e) {
+			pushCorner([[x1, z0], [x1 - cut, z0], [x1, z0 + cut]], cornerFlow(nF, eF));
+		}
+		if (s && e) {
+			pushCorner([[x1, z1], [x1, z1 - cut], [x1 - cut, z1]], cornerFlow(sF, eF));
+		}
+		if (s && w) {
+			pushCorner([[x0, z1], [x0 + cut, z1], [x0, z1 - cut]], cornerFlow(sF, wF));
+		}
+	});
 }
 
 function addWater(group:THREE.Group, chunk:Chunk, cells:{ lx:number; lz:number }[], nature:ReturnType<typeof getNature>):void {
@@ -710,17 +693,14 @@ function addGrassAndWater(group:THREE.Group, chunk:Chunk):void {
 	}
 	const grassCells:{ lx:number; lz:number }[] = [];
 	const waterCells:{ lx:number; lz:number }[] = [];
-	for (let lz = 0; lz < CHUNK_SIZE; lz++) {
-		for (let lx = 0; lx < CHUNK_SIZE; lx++) {
-			const tile = chunk.tile(lx, lz);
-			if (tile?.def === 'grass') {
-				grassCells.push({ lx, lz });
-			}
-			else if (tile?.def === 'water') {
-				waterCells.push({ lx, lz });
-			}
+	chunk.forEachTile((tile, lx, lz) => {
+		if (tile.def === 'grass') {
+			grassCells.push({ lx, lz });
 		}
-	}
+		else if (tile.def === 'water') {
+			waterCells.push({ lx, lz });
+		}
+	});
 	if (grassCells.length > 0) {
 		addGrassFloor(group, chunk, grassCells, grassLookMat(nature.grass));
 	}

@@ -3,16 +3,21 @@ import { describe, it } from 'node:test';
 import { formatLegend, parseMapZoom, stampMap, DEFAULT_YOU_SYMBOL, type MapMark } from './map.js';
 
 const marks:MapMark[] = [
-	{ symbol: DEFAULT_YOU_SYMBOL, description: 'you', x: 1, y: 2 },
-	{ symbol: '🏠', description: 'Cottage', x: 4, y: 2 },
-	{ symbol: '🎚️', description: 'MillLever', x: 8, y: 3 },
+	{ symbol: DEFAULT_YOU_SYMBOL, id: 'you', x: 1, y: 2 },
+	{ symbol: '🏠', id: 'Cottage', x: 4, y: 2 },
+	{ symbol: '🎚️', id: 'BridgeLever', x: 8, y: 3 },
 ];
 
 describe('map legend', () => {
 	it('joins symbols to names and omits numbers', () => {
 		const legend = formatLegend(marks);
-		assert.equal(legend, `${DEFAULT_YOU_SYMBOL} = you, 🏠 = Cottage, 🎚️ = MillLever`);
+		assert.equal(legend, `${DEFAULT_YOU_SYMBOL} = you, 🏠 = Cottage, 🎚️ = BridgeLever`);
 		assert.equal(/\d/.test(legend), false);
+	});
+
+	it('labels each mark with the observer name for its id', () => {
+		const legend = formatLegend(marks, (id) => (id === 'Cottage' ? 'House' : id));
+		assert.equal(legend, `${DEFAULT_YOU_SYMBOL} = you, 🏠 = House, 🎚️ = BridgeLever`);
 	});
 
 	it('returns the source image when there is no canvas to stamp', async () => {
@@ -25,7 +30,7 @@ describe('map legend', () => {
 			marks,
 		});
 		assert.equal(stamped.image, image);
-		assert.equal(stamped.legend, `${DEFAULT_YOU_SYMBOL} = you, 🏠 = Cottage, 🎚️ = MillLever`);
+		assert.equal(stamped.legend, `${DEFAULT_YOU_SYMBOL} = you, 🏠 = Cottage, 🎚️ = BridgeLever`);
 	});
 });
 

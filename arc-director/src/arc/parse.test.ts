@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { parseArc, parseArcText, formatArc } from './parse.js';
-import { VerbRegistry, registerStockVerbs, STOCK_MOVE_VERBS, STOCK_VERBS } from './stock-verbs.js';
+import { VerbRegistry, registerStockVerbs, STOCK_MOVE_VERBS, STOCK_TRADE_VERBS, STOCK_VERBS } from './stock-verbs.js';
 import { registerStockCrowdVerbs } from '../conductor/conductor-verbs.js';
 import { ArcError } from './types.js';
 import { asArc } from './validate.js';
@@ -17,14 +17,14 @@ describe('Arc parse', () => {
 			verbs(),
 		);
 		assert.equal(arc.head.verb, 'go_to');
-		assert.equal(arc.head.args.name, 'EastGate');
+		assert.equal(arc.head.args.target, 'EastGate');
 		assert.equal(arc.then?.join, 'then_if_ok');
 		assert.equal(arc.then?.arc.head.verb, 'use');
 		assert.equal(arc.then?.arc.head.args.item, 'BrassKey');
 		assert.equal(arc.then?.arc.then?.join, 'then');
 		assert.equal(arc.then?.arc.then?.arc.head.args.text, 'After you.');
 		assert.equal(
-			formatArc(arc),
+			formatArc(arc, verbs()),
 			'go_to(EastGate) && use(item=BrassKey, target=EastGate) ; say("After you.")',
 		);
 	});
@@ -36,7 +36,7 @@ describe('Arc parse', () => {
 		);
 		assert.equal(arc.head.args.until, 'some(landmarks.filter("waterfall").nearby())');
 		assert.equal(
-			formatArc(arc),
+			formatArc(arc, verbs()),
 			'wander(until=some(landmarks.filter("waterfall").nearby()))',
 		);
 	});
@@ -51,10 +51,10 @@ describe('Arc parse', () => {
 		assert.equal(arc.head?.args.who, 'units.filter("Guard")');
 		const inner = arc.head.args.arc as { head:{ verb:string; args:Record<string, unknown> }; then?:{ arc:{ head:{ verb:string } } } };
 		assert.equal(inner.head.verb, 'go_to');
-		assert.equal(inner.head.args.name, 'Keep');
+		assert.equal(inner.head.args.target, 'Keep');
 		assert.equal(inner.then?.arc.head.verb, 'wait');
 		assert.equal(
-			formatArc(arc),
+			formatArc(arc, verbs()),
 			'issue(who=units.filter("Guard"), arc=go_to(Keep) && wait(1))',
 		);
 	});
@@ -73,7 +73,7 @@ describe('Arc parse', () => {
 
 	it('parses truncated nested JSON by closing braces', () => {
 		const registry = verbs();
-		const raw = '{"head":{"verb":"go_to","args":{"name":"Lantern"}},"then":{"join":"then_if_ok","arc":{"head":{"verb":"wait","args":{"seconds":1}}}}';
+		const raw = '{"head":{"verb":"go_to","args":{"target":"Lantern"}},"then":{"join":"then_if_ok","arc":{"head":{"verb":"wait","args":{"seconds":1}}}}';
 		const arc = parseArc(raw, registry);
 		assert.equal(arc.head.verb, 'go_to');
 		assert.equal(arc.then?.arc.head.verb, 'wait');
@@ -82,18 +82,18 @@ describe('Arc parse', () => {
 	it('parses JSON and rejects coordinates', () => {
 		const registry = verbs();
 		const arc = parseArc({
-			head: { verb: 'go_to', args: { name: 'EastGate' } },
+			head: { verb: 'go_to', args: { target: 'EastGate' } },
 		}, registry);
-		assert.equal(arc.head.args.name, 'EastGate');
+		assert.equal(arc.head.args.target, 'EastGate');
 		assert.throws(
 			() => asArc({
-				head: { verb: 'go_to', args: { name: 'EastGate', x: 3, z: 4 } },
+				head: { verb: 'go_to', args: { target: 'EastGate', x: 3, z: 4 } },
 			}, registry),
 			ArcError,
 		);
 		assert.throws(
 			() => asArc({
-				head: { verb: 'go_to', args: { name: '3, 4' } },
+				head: { verb: 'go_to', args: { target: '3, 4' } },
 			}, registry),
 			ArcError,
 		);
@@ -130,12 +130,12 @@ describe('Arc parse', () => {
 		const registry = verbs();
 		const arc = parseArc(
 			'The user wants me to act.\n'
-			+ 'Example: {"head":{"verb":"go_to","args":{"name":"EastGate"}}}\n'
-			+ 'Final: {"head":{"verb":"follow","args":{"name":"Player"}}}',
+			+ 'Example: {"head":{"verb":"go_to","args":{"target":"EastGate"}}}\n'
+			+ 'Final: {"head":{"verb":"follow","args":{"target":"Player"}}}',
 			registry,
 		);
 		assert.equal(arc.head.verb, 'follow');
-		assert.equal(arc.head.args.name, 'Player');
+		assert.equal(arc.head.args.target, 'Player');
 	});
 });
 
@@ -167,12 +167,12 @@ describe('registerStockVerbs', () => {
 		assert.equal(arc.group?.head?.verb, 'go_to');
 		assert.equal(arc.then?.join, 'then_if_err');
 		assert.equal(arc.then?.arc.head?.verb, 'say');
-		assert.equal(formatArc(arc), '(go_to(Keep) && wait(1)) || say(fail.reason)');
+		assert.equal(formatArc(arc, verbs()), '(go_to(Keep) && wait(1)) || say(fail.reason)');
 	});
 
 	it('registers the full stock set when called with no verbs', () => {
 		const verbs = registerStockVerbs(new VerbRegistry());
-		assert.equal(verbs.list().length, STOCK_VERBS.length);
+		assert.equal(verbs.list().length, STOCK_VERBS.length + STOCK_TRADE_VERBS.length);
 		assert.ok(verbs.has('go_to'));
 		assert.ok(verbs.has('set_identity'));
 		assert.ok(verbs.has('law'));
@@ -197,8 +197,8 @@ describe('VerbRegistry view and remove', () => {
 describe('kit views and issue(who)', () => {
 	function fightKit():VerbRegistry {
 		const catalog = registerStockCrowdVerbs(registerStockVerbs(new VerbRegistry()));
-		catalog.add('hex', { name: 'id' });
-		catalog.add('smite', { name: 'id' });
+		catalog.add('hex', { args: { target: 'id' } });
+		catalog.add('smite', { args: { target: 'id' } });
 		return catalog.view(['issue', 'go_to', 'smite']);
 	}
 
@@ -209,9 +209,9 @@ describe('kit views and issue(who)', () => {
 			kit,
 		);
 		assert.equal(arc.head.verb, 'issue');
-		const inner = arc.head.args.arc as { head:{ verb:string; args:{ name:string } } };
+		const inner = arc.head.args.arc as { head:{ verb:string; args:{ target:string } } };
 		assert.equal(inner.head.verb, 'hex');
-		assert.equal(inner.head.args.name, 'Healer');
+		assert.equal(inner.head.args.target, 'Healer');
 		assert.equal(arc.then?.join, 'then');
 		assert.equal(arc.then?.arc.head.verb, 'smite');
 		assert.throws(() => parseArcText('hex("Healer")', kit), /unknown verb 'hex'/);
@@ -224,7 +224,7 @@ describe('kit views and issue(who)', () => {
 				verb: 'issue',
 				args: {
 					who: 'Brune',
-					arc: { head: { verb: 'hex', args: { name: 'Healer' } } },
+					arc: { head: { verb: 'hex', args: { target: 'Healer' } } },
 					then: {
 						join: 'then',
 						arc: {
@@ -232,7 +232,7 @@ describe('kit views and issue(who)', () => {
 								verb: 'issue',
 								args: {
 									who: 'Cade',
-									arc: { head: { verb: 'hex', args: { name: 'Witch' } } },
+									arc: { head: { verb: 'hex', args: { target: 'Witch' } } },
 								},
 							},
 						},
@@ -245,29 +245,29 @@ describe('kit views and issue(who)', () => {
 		assert.equal(arc.then?.arc.head.verb, 'issue');
 		assert.equal(arc.then?.arc.head.args.who, 'Cade');
 		assert.equal(
-			formatArc(arc),
+			formatArc(arc, kit),
 			'issue(who=Brune, arc=hex(Healer)) ; issue(who=Cade, arc=hex(Witch))',
 		);
 	});
 
 	it('parses a truncated issue chain from CoT JSON', () => {
 		const catalog = registerStockCrowdVerbs(registerStockVerbs(new VerbRegistry()));
-		catalog.add('slash', { name: 'id' });
-		catalog.add('cleave', { name: 'id' });
+		catalog.add('slash', { args: { target: 'id' } });
+		catalog.add('cleave', { args: { target: 'id' } });
 		const kit = catalog.view(['issue', 'loop', 'slash', 'cleave']);
-		const raw = '{"head":{"verb":"issue","args":{"who":"allUnits","arc":{"head":{"verb":"loop","args":{"arc":{"head":{"verb":"slash","args":{"name":"Blade"}}}}}}},"then":{"join":"then_if_ok","arc":{"head":{"verb":"issue","args":{"who":"allUnits","arc":{"head":{"verb":"loop","args":{"arc":{"head":{"verb":"cleave","args":{"name":"Knight"}}}}}}}}}}';
+		const raw = '{"head":{"verb":"issue","args":{"who":"allUnits","arc":{"head":{"verb":"loop","args":{"arc":{"head":{"verb":"slash","args":{"target":"Blade"}}}}}}},"then":{"join":"then_if_ok","arc":{"head":{"verb":"issue","args":{"who":"allUnits","arc":{"head":{"verb":"loop","args":{"arc":{"head":{"verb":"cleave","args":{"target":"Knight"}}}}}}}}}}';
 		const arc = parseArc(raw, kit);
 		assert.equal(arc.head.args.who, 'allUnits');
 		assert.equal(arc.then?.arc.head.args.who, 'allUnits');
 		assert.equal(
-			formatArc(arc),
+			formatArc(arc, kit),
 			'issue(who=allUnits, arc=loop(slash(Blade))) && issue(who=allUnits, arc=loop(cleave(Knight)))',
 		);
 	});
 
 	it('parses a JSON bag of issue() / when() strings', () => {
 		const catalog = registerStockCrowdVerbs(registerStockVerbs(new VerbRegistry()));
-		catalog.add('hex', { name: 'id' });
+		catalog.add('hex', { args: { target: 'id' } });
 		const kit = catalog.view(['issue', 'when', 'go_to', 'hex']);
 		const arc = parseArc({
 			issue: [
@@ -281,7 +281,7 @@ describe('kit views and issue(who)', () => {
 		assert.equal(arc.then?.arc.head.verb, 'issue');
 		assert.equal(arc.then?.arc.then?.arc.head.verb, 'when');
 		assert.equal(
-			formatArc(arc),
+			formatArc(arc, kit),
 			'issue(who=units.filter("Witch"), arc=hex(Healer)) ; issue(who=units.filter("Archer"), arc=hex(Witch)) ; when(watch=isHurt(me), arc=go_to(Keep))',
 		);
 		const wrapped = parseArc(
@@ -309,7 +309,7 @@ describe('kit views and issue(who)', () => {
 			kit,
 		);
 		assert.equal(long.head.verb, 'go_to');
-		assert.equal(long.then?.arc.then?.arc.then?.arc.then?.arc.head.args.name, 'E');
+		assert.equal(long.then?.arc.then?.arc.then?.arc.then?.arc.head.args.target, 'E');
 	});
 
 	it('skips extra closing parens between joined issue() steps', () => {
@@ -345,8 +345,83 @@ describe('kit views and issue(who)', () => {
 		assert.equal(arc.head.args.who, 'units');
 		assert.equal(arc.head.args.watch, 'isHurt(me)');
 		assert.equal(arc.head.args.name, 'lastStand');
-		const inner = arc.head.args.arc as { head:{ verb:string; args:{ name:string } } };
+		const inner = arc.head.args.arc as { head:{ verb:string; args:{ target:string } } };
 		assert.equal(inner.head.verb, 'go_to');
-		assert.equal(inner.head.args.name, 'Keep');
+		assert.equal(inner.head.args.target, 'Keep');
+	});
+});
+
+describe('small-model slips from the AI logs', () => {
+	it('reads prose with commas and apostrophes as one text arg', () => {
+		const arc = parseArcText(
+			"think(I have the FireMushroom from the Forager. According to my rules, I must use BridgeKeeper's crank.)use(item=BridgeCrank, target=BridgeLever)",
+			verbs(),
+		);
+		assert.equal(arc.head.verb, 'think');
+		assert.equal(arc.head.args.about, "I have the FireMushroom from the Forager. According to my rules, I must use BridgeKeeper's crank.");
+		assert.equal(arc.then?.join, 'then');
+		assert.equal(arc.then?.arc.head.args.target, 'BridgeLever');
+	});
+
+	it('ends raw text at the next named arg of the verb', () => {
+		const raw = parseArcText('say(Hello there, friend, to=Player) ; go_to(BridgeKeeper)', verbs());
+		assert.equal(raw.head.args.text, 'Hello there, friend');
+		assert.equal(raw.head.args.to, 'Player');
+		assert.equal(raw.then?.arc.head.verb, 'go_to');
+		const named = parseArcText("think(about=Check BridgeKeeper's stall (the big one)) ; go_to(BridgeKeeper)", verbs());
+		assert.equal(named.head.args.about, "Check BridgeKeeper's stall (the big one)");
+		assert.equal(named.then?.arc.head.verb, 'go_to');
+		const quoted = parseArcText('say("Wait :) here", to=Player)', verbs());
+		assert.equal(quoted.head.args.text, 'Wait :) here');
+		assert.equal(quoted.head.args.to, 'Player');
+		assert.equal(parseArcText("say('I don't know')", verbs()).head.args.text, "I don't know");
+		assert.equal(parseArcText('say(Hello, Player)', verbs()).head.args.text, 'Hello, Player');
+	});
+
+	it('closes what the model left open at the end', () => {
+		const arc = parseArcText('go_to(BridgeKeeper) && give(item=FireMushroom, to=BridgeKeeper', verbs());
+		assert.equal(arc.then?.arc.head.args.to, 'BridgeKeeper');
+		assert.equal(parseArcText('say("Good day', verbs()).head.args.text, 'Good day');
+		assert.equal(parseArcText('(go_to(BridgeKeeper) && wait(seconds=2)', verbs()).group?.then?.arc.head.verb, 'wait');
+		assert.throws(() => parseArcText('go_to(', verbs()), /missing required arg 'target'/);
+	});
+
+	it('still rejects an issue cut off before its arc, and an issue swallowed by the one before it', () => {
+		const crowd = registerStockCrowdVerbs(verbs());
+		crowd.add('slash', { args: { target: 'id' } });
+		assert.throws(
+			() => parseArcText('issue(who=units.filter("Witch"), arc=loop(slash(Foe))) ; issue(who', crowd),
+			/missing required arg 'arc'/,
+		);
+		assert.throws(
+			() => parseArcText('issue(who=units.filter("Blade"), arc=loop(slash(Foe)) ; issue(who=units.filter("Witch"), arc=loop(slash(Foe)))', crowd),
+			/issue inside an issue arc/,
+		);
+	});
+
+	it('drops a join with nothing after it, and refuses a half-written expression', () => {
+		const arc = parseArcText('go_to(BridgeKeeper) && give(item=FireMushroom, to=BridgeKeeper) ;', verbs());
+		assert.equal(arc.then?.arc.then, undefined);
+		assert.throws(
+			() => parseArcText('wander(until=some(items.filter("FireMushroom"', verbs()),
+			/expression cut off/,
+		);
+	});
+
+	it('prints a lone arg bare only where the parser reads a positional one', () => {
+		for (const text of ['wait(until=Player)', 'wait(5)', 'go_to(BridgeKeeper)', 'wander(seconds=5)']) {
+			assert.equal(formatArc(parseArcText(text, verbs()), verbs()), text);
+		}
+		assert.equal(formatArc(parseArcText('go_to(BridgeKeeper)', verbs())), 'go_to(target=BridgeKeeper)');
+	});
+
+	it('drops a stray comma after extra closers', () => {
+		const crowd = registerStockCrowdVerbs(verbs());
+		crowd.add('slash', { args: { target: 'id' } });
+		const arc = parseArcText(
+			'issue(who=units.filter("Blade"), arc=loop(slash(Foe)))), ; issue(who=units.filter("Witch"), arc=loop(slash(Foe)))',
+			crowd,
+		);
+		assert.equal(arc.then?.arc.head.args.who, 'units.filter("Witch")');
 	});
 });

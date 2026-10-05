@@ -1,15 +1,15 @@
 import type { MapMark, MapPrev, MapSnapshot } from 'arc-director';
 import {
 	Bridge,
+	BridgeLever,
 	Chest,
 	Door,
 	HumanBody,
-	MillLever,
 	Named,
 } from '../engine/components';
 import type { GameObject } from '../engine/GameObject';
 import type { World } from '../engine/World';
-import { CELL_SIZE, CHUNK_SIZE } from '../world/constants';
+import { CELL_SIZE } from '../world/constants';
 import { tileFill } from '../world/tileFill';
 import { markSymbol, YOU_SYMBOL } from './mapMarks';
 
@@ -28,9 +28,9 @@ const LANDMARKS:{ [symbol:string]:string } = {
 	'🏠': 'Cottage',
 	'🚪': 'CottageDoor',
 	'🔥': 'CottageHearth',
-	'🎚️': 'MillLever',
-	'🌉': 'MillBridge',
-	'⚙️': 'MillCrank',
+	'🎚️': 'BridgeLever',
+	'🌉': 'Bridge',
+	'⚙️': 'BridgeCrank',
 	'🍄': 'FireMushroom',
 	'⛩️': 'EastGate',
 	'🏯': 'WestGate',
@@ -99,32 +99,15 @@ function holdLastPicture(now:number, prev:MapPrev, zoom:number, x:number, y:numb
 }
 
 function worldBounds(world:World):Bounds | null {
-	let minCX = 0;
-	let minCZ = 0;
-	let maxCX = 0;
-	let maxCZ = 0;
-	let first = true;
-	for (const chunk of world.chunks.values()) {
-		if (first) {
-			minCX = maxCX = chunk.origin.cx;
-			minCZ = maxCZ = chunk.origin.cz;
-			first = false;
-		}
-		else {
-			minCX = Math.min(minCX, chunk.origin.cx);
-			minCZ = Math.min(minCZ, chunk.origin.cz);
-			maxCX = Math.max(maxCX, chunk.origin.cx);
-			maxCZ = Math.max(maxCZ, chunk.origin.cz);
-		}
-	}
-	if (first) {
+	const b = world.chunkBounds();
+	if (!b) {
 		return null;
 	}
 	return {
-		originX: minCX * CHUNK_SIZE * CELL_SIZE,
-		originY: minCZ * CHUNK_SIZE * CELL_SIZE,
-		cols: (maxCX - minCX + 1) * CHUNK_SIZE,
-		rows: (maxCZ - minCZ + 1) * CHUNK_SIZE,
+		originX: b.minX,
+		originY: b.minZ,
+		cols: (b.maxX - b.minX) / CELL_SIZE,
+		rows: (b.maxZ - b.minZ) / CELL_SIZE,
 	};
 }
 
@@ -201,11 +184,11 @@ function collectMarks(
 	const out:MapMark[] = [];
 	const seen = new Set<string>();
 
-	const add = (go:GameObject | undefined, description:string, symbol?:string):void => {
+	const add = (go:GameObject | undefined, id:string, symbol?:string):void => {
 		if (!go) {
 			return;
 		}
-		const label = description.trim();
+		const label = id.trim();
 		if (!label || seen.has(label)) {
 			return;
 		}
@@ -218,7 +201,7 @@ function collectMarks(
 		seen.add(label);
 		out.push({
 			symbol: symbol ?? symbolFor(label),
-			description: label,
+			id: label,
 			x,
 			y,
 		});
@@ -229,14 +212,14 @@ function collectMarks(
 	if (!self && origin && inView(origin.x, origin.z, bounds)) {
 		out.push({
 			symbol: YOU_SYMBOL,
-			description: 'you',
+			id: 'you',
 			x: origin.x,
 			y: origin.z,
 		});
 		seen.add('you');
 	}
 
-	world.forEachComponent(HumanBody, (_body, go) => {
+	world.forEachComponent(HumanBody, (body, go) => {
 		if (go.id === npcID || !world.npcCanSee(go)) {
 			return;
 		}
@@ -255,16 +238,16 @@ function collectMarks(
 	}
 
 	if (detail) {
-		world.forEachComponent(Door, (_c, go) => {
+		world.forEachComponent(Door, (c, go) => {
 			add(go, markName(go));
 		});
-		world.forEachComponent(Chest, (_c, go) => {
+		world.forEachComponent(Chest, (c, go) => {
 			add(go, markName(go));
 		});
-		world.forEachComponent(Bridge, (_c, go) => {
+		world.forEachComponent(Bridge, (c, go) => {
 			add(go, markName(go));
 		});
-		world.forEachComponent(MillLever, (_c, go) => {
+		world.forEachComponent(BridgeLever, (c, go) => {
 			add(go, markName(go));
 		});
 	}

@@ -2,13 +2,9 @@ import { World as KindlingWorld, type Component, type Constructor, type TerrainS
 import type { GameObject } from './GameObject';
 import { InputState } from './InputState';
 import { Named } from './components';
-import type { Chunk, Tile } from '../world/Chunk';
+import { SOLID_PROPS, type Chunk, type Tile } from '../world/Chunk';
 import { CELL_SIZE, CHUNK_SIZE, TILE_HEIGHT } from '../world/constants';
 import { waterOpenAt } from '../world/water';
-
-export function chunkKey(cx:number, cz:number):string {
-	return `${cx}:${cz}`;
-}
 
 function nameQuery(name:string):{ want:string; compact:string } {
 	let s = name.trim().toLowerCase();
@@ -17,43 +13,39 @@ function nameQuery(name:string):{ want:string; compact:string } {
 	return { want: s, compact: s.replace(/[^a-z0-9]/g, '') };
 }
 
-export function worldToChunk(x:number, z:number):{ cx:number; cz:number } {
-	return {
-		cx: Math.floor(x / (CHUNK_SIZE * CELL_SIZE)),
-		cz: Math.floor(z / (CHUNK_SIZE * CELL_SIZE)),
-	};
-}
-
 export class World extends KindlingWorld {
 	declare readonly objects:GameObject[];
 	readonly input = new InputState();
-	readonly chunks = new Map<string, Chunk>();
-	chunk:Chunk | null = null;
+	declare readonly chunks:Map<number, Chunk>;
 	time = 0;
 	hudMessage = '';
-	hudMessageAt = 0;
+	hudMessageTimestamp = 0;
 	playerInperceivable = false;
+	/** Body ids this player has damaged. A company that owns one treats the player as a rival. */
+	playerHits = new Set<string>();
 	arcDirectorOn = true;
 	sayOpen = false;
 	pickedUp:(actor:GameObject, name:string)=>void = () => undefined;
 	override tileSize = CELL_SIZE;
+	override chunkSize = CHUNK_SIZE;
 
 	override sampleTerrain(x:number, z:number):TerrainSample | undefined {
-		const tile = this.tileAtWorld(x, z);
-		if (!tile) {
+		const chunk = this.chunkAtWorld(x, z);
+		const tile = chunk?.tileAtWorld(x, z);
+		if (!chunk || !tile) {
 			return undefined;
 		}
 		const water = tile.def === 'water' && waterOpenAt(this, x, z);
 		return {
 			height: tile.height,
 			worldY: tile.height * TILE_HEIGHT,
-			blocked: !!tile.blocked && !water,
+			blocked: (!!tile.blocked && !water) || SOLID_PROPS.has(chunk.propAtWorld(x, z) ?? ''),
 			climbable: tile.def === 'stairs',
 		};
 	}
 
 	npcCanSee(go:GameObject):boolean {
-		return !(this.playerInperceivable && go.id === 'Player');
+		return !(this.playerInperceivable && go.id === 'Player' && this.playerHits.size === 0);
 	}
 
 	override add(go:GameObject):GameObject {
@@ -62,6 +54,10 @@ export class World extends KindlingWorld {
 
 	override findByID(id:string):GameObject | undefined {
 		return super.findByID(id) as GameObject | undefined;
+	}
+
+	override objectsInTile(tx:number, tz:number):readonly GameObject[] {
+		return super.objectsInTile(tx, tz) as readonly GameObject[];
 	}
 
 	override forEachComponent<T extends Component>(
@@ -78,7 +74,7 @@ export class World extends KindlingWorld {
 
 	setMessage(text:string):void {
 		this.hudMessage = text;
-		this.hudMessageAt = this.time;
+		this.hudMessageTimestamp = this.time;
 	}
 
 	findNamed(name:string):GameObject | undefined {
@@ -115,28 +111,11 @@ export class World extends KindlingWorld {
 		return loose;
 	}
 
-	chunkAtWorld(x:number, z:number):Chunk | undefined {
-		const { cx, cz } = worldToChunk(x, z);
-		return this.chunks.get(chunkKey(cx, cz));
+	override chunkAtWorld(x:number, z:number):Chunk | undefined {
+		return super.chunkAtWorld(x, z) as Chunk | undefined;
 	}
 
-	tileAtWorld(x:number, z:number):Tile | undefined {
-		return this.chunkAtWorld(x, z)?.tileAtWorld(x, z);
-	}
-
-	addChunk(chunk:Chunk):void {
-		const key = chunkKey(chunk.origin.cx, chunk.origin.cz);
-		this.chunks.set(key, chunk);
-		if (!this.chunk) {
-			this.chunk = chunk;
-		}
-	}
-
-	removeChunk(chunk:Chunk):void {
-		this.chunks.delete(chunkKey(chunk.origin.cx, chunk.origin.cz));
-		if (this.chunk === chunk) {
-			const next = this.chunks.values().next();
-			this.chunk = next.done ? null : next.value;
-		}
+	override tileAtWorld(x:number, z:number):Tile | undefined {
+		return super.tileAtWorld(x, z) as Tile | undefined;
 	}
 }

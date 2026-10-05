@@ -24,11 +24,11 @@ class Probe extends Component {
 		Probe.log.push('start');
 	}
 
-	override fixedUpdate(_dt:number):void {
+	override fixedUpdate(dt:number):void {
 		Probe.log.push('fixed');
 	}
 
-	override update(_dt:number):void {
+	override update(dt:number):void {
 		Probe.log.push('update');
 	}
 
@@ -40,11 +40,11 @@ class Probe extends Component {
 class Batch extends Component {
 	static log:string[] = [];
 
-	static update(_dt:number, list:Batch[]):void {
+	static update(dt:number, list:Batch[]):void {
 		Batch.log.push(`static:${list.length}`);
 	}
 
-	override update(_dt:number):void {
+	override update(dt:number):void {
 		Batch.log.push('instance');
 	}
 }
@@ -141,10 +141,10 @@ describe('component loop', () => {
 	it('runs lateUpdate after update', () => {
 		class Late extends Component {
 			log:string[] = [];
-			override update(_dt:number):void {
+			override update(dt:number):void {
 				this.log.push('update');
 			}
-			override lateUpdate(_dt:number):void {
+			override lateUpdate(dt:number):void {
 				this.log.push('late');
 			}
 		}
@@ -160,13 +160,13 @@ describe('component loop', () => {
 		const log:string[] = [];
 		class High extends Component {
 			static override order = 20;
-			override update(_dt:number):void {
+			override update(dt:number):void {
 				log.push('high');
 			}
 		}
 		class Low extends Component {
 			static override order = 5;
-			override update(_dt:number):void {
+			override update(dt:number):void {
 				log.push('low');
 			}
 		}

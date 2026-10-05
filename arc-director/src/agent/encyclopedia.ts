@@ -22,17 +22,17 @@ export type CrowdEncyclopediaSpec = {
 	unitName?:string;
 };
 
-export type EncyclopediaSource<HostCtx = unknown> =
+export type EncyclopediaSource<TAgentCtx = unknown> =
 	| readonly EncyclopediaEntry[]
-	| ((ctx:HostCtx)=>readonly EncyclopediaEntry[]);
+	| ((ctx:TAgentCtx)=>readonly EncyclopediaEntry[]);
 
 const HIT_CAP = 8;
 const INDEX_CAP = 48;
 const MIN_TOKEN = 3;
 
-export function encyclopediaPages<HostCtx>(
-	src:EncyclopediaSource<HostCtx> | undefined,
-	ctx:HostCtx | undefined,
+export function encyclopediaPages<TAgentCtx>(
+	src:EncyclopediaSource<TAgentCtx> | undefined,
+	ctx:TAgentCtx | undefined,
 ):EncyclopediaEntry[] {
 	if (!src) {
 		return [];
@@ -122,7 +122,7 @@ export function crowdEncyclopedia(spec:CrowdEncyclopediaSpec):EncyclopediaEntry 
 	const inside = spec.inside.map((s) => s.trim()).filter(Boolean);
 	const unitName = spec.unitName ?? DEFAULT_SIGHT.unitName;
 	const objects = crowdAround(tag);
-	const self = { id: 'You', at: [0, 0], facing: [0, -1] };
+	const self = { id: 'You', point: [0, 0], facing: [0, -1] };
 	const leftover = firstClause(formatSight({ self, objects }, { unitName }));
 	const around = formatSight({ self, objects }, { unitName, relationships: [] }).trim();
 	const y = inside[0] ?? leftover;
@@ -143,9 +143,9 @@ export function crowdEncyclopedia(spec:CrowdEncyclopediaSpec):EncyclopediaEntry 
 }
 
 function crowdAround(tag:string):SeenObject[] {
-	return CARDINALS.map((at, i) => ({
+	return CARDINALS.map((point, i) => ({
 		id: `${tag}_${i}`,
-		at,
+		point,
 		tags: [tag],
 		count: 2,
 		label: tag,

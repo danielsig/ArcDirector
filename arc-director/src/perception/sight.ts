@@ -56,20 +56,20 @@ export function hypotAt(a:number[], b:number[]):number {
 }
 
 export function bearingOf(
-	self:{ at:number[]; facing?:number[] },
-	obj:{ at:number[] },
+	self:{ point:number[]; facing?:number[] },
+	obj:{ point:number[] },
 ):Bearing {
 	const f = self.facing;
 	if (!f || f.length === 0) {
 		return 'away';
 	}
-	const n = Math.min(self.at.length, obj.at.length, f.length);
+	const n = Math.min(self.point.length, obj.point.length, f.length);
 	if (n === 0) {
 		return 'away';
 	}
 	const delta:number[] = [];
 	for (let i = 0; i < n; i++) {
-		delta.push((obj.at[i] ?? 0) - (self.at[i] ?? 0));
+		delta.push((obj.point[i] ?? 0) - (self.point[i] ?? 0));
 	}
 	let dot = 0;
 	for (let i = 0; i < n; i++) {
@@ -96,7 +96,7 @@ function fillSeen(obj:SeenObject):SeenObject {
 function selfObject(sight:Sight, objects:SeenObject[]):SeenObject {
 	return objects.find((o) => o.id === sight.self.id) ?? {
 		id: sight.self.id,
-		at: sight.self.at,
+		point: sight.self.point,
 		facing: sight.self.facing,
 		tags: [],
 		landmarkTier: 0,
@@ -460,7 +460,7 @@ export function formatSightClauses(sight:Sight, opts:SightOpts = {}):SightClause
 	const npcID = sight.self.id;
 	const objects = sight.objects.map(fillSeen);
 	const me = selfObject(sight, objects);
-	const distance:DistFn = (a, b) => hypotAt(a.at, b.at);
+	const distance:DistFn = (a, b) => hypotAt(a.point, b.point);
 	const hasFacing = !!(sight.self.facing && sight.self.facing.length > 0);
 	const bearingFn = (obj:SeenObject):Bearing => bearingOf(sight.self, obj);
 

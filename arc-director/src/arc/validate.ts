@@ -51,10 +51,13 @@ function rejectMigrationArgs(verb:string, args:Record<string, unknown>):void {
 	}
 }
 
-export function validateStep(step:Step, registry:VerbRegistry):void {
+export function validateStep(step:Step, registry:VerbRegistry, inIssue = false):void {
 	const spec = registry.get(step.verb);
 	if (!spec) {
 		throw new ArcError(`unknown verb '${step.verb}'`);
+	}
+	if (inIssue && step.verb === 'issue') {
+		throw new ArcError('issue inside an issue arc; close each issue(...) before the next');
 	}
 	rejectMigrationArgs(step.verb, step.args);
 	for (const key of Object.keys(step.args)) {
@@ -80,14 +83,14 @@ export function validateStep(step:Step, registry:VerbRegistry):void {
 		if (base === 'string[]' && !(Array.isArray(value) && value.every((x) => typeof x === 'string'))) {
 			throw new ArcError(`verb '${step.verb}' arg '${key}' must be string[]`);
 		}
-		if ((base === 'id' || base === 'string') && typeof value !== 'string') {
+		if ((base === 'id' || base === 'string' || base === 'text' || base === 'watch') && typeof value !== 'string') {
 			throw new ArcError(`verb '${step.verb}' arg '${key}' must be a string`);
 		}
 		if (base === 'arc') {
 			if (!isArc(value)) {
 				throw new ArcError(`verb '${step.verb}' arg '${key}' must be an arc`);
 			}
-			validateArc(value, registry.nested());
+			validateArc(value, registry.nested(), inIssue || step.verb === 'issue');
 		}
 		if (typeof value === 'string' && /^-?\d+(\.\d+)?\s*,\s*-?\d+/.test(value)) {
 			throw new ArcError(`arg '${key}' looks like coordinates`);
@@ -95,18 +98,18 @@ export function validateStep(step:Step, registry:VerbRegistry):void {
 	}
 }
 
-export function validateArc(arc:Arc, registry:VerbRegistry):void {
+export function validateArc(arc:Arc, registry:VerbRegistry, inIssue = false):void {
 	if (arc.group) {
-		validateArc(arc.group, registry);
+		validateArc(arc.group, registry, inIssue);
 	}
 	else {
-		validateStep(arc.head, registry);
+		validateStep(arc.head, registry, inIssue);
 	}
 	if (arc.then) {
 		if (!JOINS.includes(arc.then.join)) {
 			throw new ArcError(`unknown join '${String(arc.then.join)}'`);
 		}
-		validateArc(arc.then.arc, registry);
+		validateArc(arc.then.arc, registry, inIssue);
 	}
 }
 

@@ -15,7 +15,7 @@ export function compactName(s:string):string {
 	return s.toLowerCase().replace(/[^a-z0-9]/g, '');
 }
 
-/** Spawn id, chosen name, or alias — after set_identity, Named.id may be Oat while go.id stays Miller. */
+/** Spawn id or alias — an NPC's role (`Herbalist`) is an alias of its id (`Fern`). */
 export function actorIs(go:GameObject, name:string):boolean {
 	const want = name.trim().toLowerCase();
 	if (!want) {

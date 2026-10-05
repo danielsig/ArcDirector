@@ -27,16 +27,16 @@ export function startMenuAudio(target:HTMLElement):MenuAudioHandle {
 	let begun = false;
 	let dead = false;
 	let arming:Promise<void> | null = null;
-	let fadeAt = 0;
+	let fadeStart = 0;
 	const fadeTick = ():void => {
-		if (!begun || audio.muted || fadeAt <= 0) {
+		if (!begun || audio.muted || fadeStart <= 0) {
 			return;
 		}
-		const u = Math.min(1, (performance.now() - fadeAt) / 1000 / FADE_SEC);
+		const u = Math.min(1, (performance.now() - fadeStart) / 1000 / FADE_SEC);
 		const eased = 1 - (1 - u) * (1 - u);
 		audio.musicVolume = MENU_VOL * eased;
 		if (u >= 1) {
-			fadeAt = 0;
+			fadeStart = 0;
 		}
 	};
 	const kick = ():void => {
@@ -75,7 +75,7 @@ export function startMenuAudio(target:HTMLElement):MenuAudioHandle {
 					return;
 				}
 				begun = true;
-				fadeAt = performance.now();
+				fadeStart = performance.now();
 			}
 			finally {
 				if (!begun) {
@@ -98,7 +98,7 @@ export function startMenuAudio(target:HTMLElement):MenuAudioHandle {
 		kick();
 	}
 	return {
-		stop:():void => {
+		stop: ():void => {
 			dead = true;
 			cancelAnimationFrame(raf);
 			target.removeEventListener('pointerdown', kick);
@@ -106,12 +106,12 @@ export function startMenuAudio(target:HTMLElement):MenuAudioHandle {
 			target.removeEventListener('touchstart', kick);
 			audio.dispose();
 		},
-		setMuted:(muted:boolean):void => {
+		setMuted: (muted:boolean):void => {
 			audio.muted = muted;
 			if (!muted) {
 				if (begun) {
 					audio.musicVolume = MENU_VOL;
-					fadeAt = 0;
+					fadeStart = 0;
 				}
 				void kick();
 			}

@@ -77,7 +77,7 @@ export function doorInteriorAlong(doorGo:GameObject):number {
 export function nearestDoorway(world:World, x:number, z:number, range = DOORWAY):GameObject | undefined {
 	let best:GameObject | undefined;
 	let bestD = range;
-	world.forEachComponent(Door, (_door, go) => {
+	world.forEachComponent(Door, (door, go) => {
 		const p = go.transform.position;
 		const d = Math.hypot(p.x - x, p.z - z);
 		if (d < bestD) {

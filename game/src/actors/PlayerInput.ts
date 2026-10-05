@@ -19,7 +19,7 @@ export class PlayerInput extends Component {
 	selected = 0;
 	cursorName = '';
 
-	override update(_dt:number):void {
+	override update(dt:number):void {
 		const world = this.gameObject.world;
 		if (!world) {
 			this.moveX = 0;

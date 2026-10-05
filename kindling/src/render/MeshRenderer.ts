@@ -15,7 +15,7 @@ export class MeshRenderer extends Component {
 	private builtID:string | null = null;
 	private painted:number | undefined = undefined;
 
-	override update(_dt:number):void {
+	override update(dt:number):void {
 		const uTime = this.shaderUniforms.uTime;
 		if (uTime) {
 			uTime.value = Time.time;

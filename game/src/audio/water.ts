@@ -1,6 +1,5 @@
 import { MeshRenderer } from '../engine/MeshRenderer';
 import type { World } from '../engine/World';
-import { CHUNK_SIZE } from '../world/constants';
 import { SFX } from './sfx';
 
 const RIVER_HEAR = 7;
@@ -57,26 +56,23 @@ function nearestRiver(
 	let best:{ x:number; z:number } | null = null;
 	let bestScore = RIVER_HEAR;
 	for (const chunk of world.chunks.values()) {
-		for (let lz = 0; lz < CHUNK_SIZE; lz++) {
-			for (let lx = 0; lx < CHUNK_SIZE; lx++) {
-				const tile = chunk.tile(lx, lz);
-				if (tile?.def !== 'water') {
-					continue;
-				}
-				const c = chunk.worldCellCenter(lx, lz);
-				if (falls.some((f) => Math.hypot(f.x - c.x, f.z - c.z) < FALLS_CLEAR)) {
-					continue;
-				}
-				const d = Math.hypot(c.x - px, c.z - pz);
-				const flow = tile.flow;
-				const flowing = !!flow && (flow.x !== 0 || flow.z !== 0);
-				const score = flowing ? d : d + 0.85;
-				if (score < bestScore) {
-					bestScore = score;
-					best = c;
-				}
+		chunk.forEachTile((tile, lx, lz) => {
+			if (tile.def !== 'water') {
+				return;
 			}
-		}
+			const c = chunk.worldCellCenter(lx, lz);
+			if (falls.some((f) => Math.hypot(f.x - c.x, f.z - c.z) < FALLS_CLEAR)) {
+				return;
+			}
+			const d = Math.hypot(c.x - px, c.z - pz);
+			const flow = tile.flow;
+			const flowing = !!flow && (flow.x !== 0 || flow.z !== 0);
+			const score = flowing ? d : d + 0.85;
+			if (score < bestScore) {
+				bestScore = score;
+				best = c;
+			}
+		});
 	}
 	return best;
 }

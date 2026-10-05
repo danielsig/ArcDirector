@@ -40,18 +40,19 @@ function identLookup(name:string, ctx:EvalCtx):ExprVal {
 	if (ctx.catalog.fns.has(name)) {
 		return { kind: 'fn', name };
 	}
-	const leftover = leftoverEnglishHint(name, typeListEntities(ctx));
+	const leftover = leftoverEnglishHint(name, catalogEntities(ctx.catalog));
 	if (leftover) {
 		throw new ExprError(leftover);
 	}
 	return inferTypeList(name, ctx) ?? ABSENT;
 }
 
-function typeListEntities(ctx:EvalCtx):ExprEntity[] {
+/** Every entity in the catalog's landmarks, items, others, and units. */
+export function catalogEntities(catalog:Catalog):ExprEntity[] {
 	const out:ExprEntity[] = [];
 	const seen = new Set<string>();
 	for (const key of ['landmarks', 'items', 'others', 'units'] as const) {
-		const bound = ctx.catalog.names.get(key);
+		const bound = catalog.names.get(key);
 		if (bound?.kind !== 'list') {
 			continue;
 		}

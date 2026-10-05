@@ -13,7 +13,6 @@ import {
 	type ExprVal,
 	type NativeFn,
 	type SampleCache,
-	type StringifierKind,
 	type Stringifiers,
 } from './types.js';
 import { bindCarry, bindRoster, asEntityVal } from './me.js';
@@ -28,8 +27,8 @@ export type HostKernels = {
 	hostFns?:Record<string, NativeFn>;
 	distance?:(a:ExprEntity, b:ExprEntity)=>number | undefined;
 	nearRadius?:number;
-	/** Meters of walkable path; undefined = no path; 0 = same cell. */
-	walkDistance?:(a:ExprEntity, b:ExprEntity)=>number | undefined;
+	/** Length of the route a body would take; undefined = no way there. */
+	pathDistance?:(a:ExprEntity, b:ExprEntity)=>number | undefined;
 	canSee?:(a:ExprEntity, b:ExprEntity)=>boolean;
 	facing?:(a:ExprEntity, b:ExprEntity)=>number;
 	/** Signed left/right of a's facing toward b (−1 left … +1 right). */
@@ -43,10 +42,8 @@ export type HostKernels = {
 	/** Last-think freeze. Director injects; standalone may omit (then `prev.me` is this catalog's `me`). */
 	prev?:PrevSpec;
 	stringifiers?:Stringifiers;
-	/** Host picks the stringifier key. The library never inspects tags for doors/people/items. */
-	stringifierKind?:(entity:ExprEntity)=>StringifierKind;
-	/** Ground XZ for manhattan / chebyshev / inSquare. */
-	at?:(who:ExprEntity)=>{ x:number; z:number } | undefined;
+	/** Position for manhattan / chebyshev / inSquare. */
+	point?:(who:ExprEntity)=>number[] | undefined;
 	/** Override watch LIST_CAP (Crowd `who` uses roster size). */
 	listCap?:number;
 };
@@ -122,15 +119,12 @@ function nearAny(host:HostKernels, a:ExprVal | undefined, b:ExprVal | undefined,
 	return d !== undefined && d <= r;
 }
 
-function walkOf(host:HostKernels, a:ExprEntity, b:ExprEntity):number | undefined {
-	if (!host.walkDistance) {
-		return undefined;
-	}
-	const d = host.walkDistance(a, b);
+function pathOf(host:HostKernels, a:ExprEntity, b:ExprEntity):number | undefined {
+	const d = host.pathDistance?.(a, b);
 	if (d === undefined || !Number.isFinite(d)) {
 		return undefined;
 	}
-	host.cache.rememberWalk(a.id, b.id, d);
+	host.cache.rememberPath(a.id, b.id, d);
 	return d;
 }
 
@@ -206,11 +200,11 @@ export function buildCatalog(host:HostKernels):Catalog {
 	if (host.distance) {
 		bindDistance(host, fns);
 	}
-	if (host.at) {
+	if (host.point) {
 		bindGrid(host, fns);
 	}
-	if (host.walkDistance) {
-		bindWalk(host, fns);
+	if (host.pathDistance) {
+		bindPath(host, fns);
 	}
 	if (host.canSee) {
 		bindSight(host, fns);
@@ -235,7 +229,6 @@ export function buildCatalog(host:HostKernels):Catalog {
 		me: host.me,
 		cache: host.cache,
 		stringifiers: host.stringifiers,
-		stringifierKind: host.stringifierKind,
 		listCap: host.listCap,
 	};
 }
@@ -353,13 +346,13 @@ function nearbyList(host:HostKernels, args:ExprVal[], me:ExprEntity, defaultR:nu
 	return capList(out, host.listCap ?? LIST_CAP);
 }
 
-function bindWalk(host:HostKernels, fns:Map<string, NativeFn>):void {
+function bindPath(host:HostKernels, fns:Map<string, NativeFn>):void {
 	fns.set('isReachable', (args) => {
 		const pair = twoEnt(args);
 		if (!pair) {
 			return { kind: 'bool', value: false };
 		}
-		return { kind: 'bool', value: walkOf(host, pair[0], pair[1]) !== undefined };
+		return { kind: 'bool', value: pathOf(host, pair[0], pair[1]) !== undefined };
 	});
 	fns.set('reachable', (args, ctx) => reachableList(host, args, ctx.catalog.me));
 }
@@ -375,7 +368,7 @@ function reachableList(host:HostKernels, args:ExprVal[], me:ExprEntity):ExprVal 
 		if (row.kind !== 'entity') {
 			continue;
 		}
-		const d = walkOf(host, from, row.value);
+		const d = pathOf(host, from, row.value);
 		if (d === undefined) {
 			continue;
 		}
@@ -499,41 +492,35 @@ function bindFacingBool(host:HostKernels, fns:Map<string, NativeFn>):void {
 }
 
 function bindGrid(host:HostKernels, fns:Map<string, NativeFn>):void {
-	const atOf = host.at!;
-	const pairAt = (args:ExprVal[]):{ ax:number; az:number; bx:number; bz:number } | undefined => {
+	const atOf = host.point!;
+	/** Per-axis gaps between two entities, or undefined when either has no position. */
+	const gaps = (args:ExprVal[]):number[] | undefined => {
 		const pair = twoEnt(args);
-		if (!pair) {
-			return undefined;
-		}
-		const a = atOf(pair[0]);
-		const b = atOf(pair[1]);
-		if (!a || !b) {
-			return undefined;
-		}
-		return { ax: a.x, az: a.z, bx: b.x, bz: b.z };
+		const a = pair && atOf(pair[0]);
+		const b = pair && atOf(pair[1]);
+		return a && b ? a.map((v, i) => Math.abs(v - (b[i] ?? 0))) : undefined;
 	};
 	fns.set('manhattan', (args) => {
-		const p = pairAt(args);
-		if (!p) {
+		const g = gaps(args);
+		if (!g) {
 			throw new ExprError('manhattan needs two people or things');
 		}
-		return { kind: 'number', value: Math.abs(p.ax - p.bx) + Math.abs(p.az - p.bz) };
+		return { kind: 'number', value: g.reduce((sum, v) => sum + v, 0) };
 	});
 	fns.set('chebyshev', (args) => {
-		const p = pairAt(args);
-		if (!p) {
+		const g = gaps(args);
+		if (!g) {
 			throw new ExprError('chebyshev needs two people or things');
 		}
-		return { kind: 'number', value: Math.max(Math.abs(p.ax - p.bx), Math.abs(p.az - p.bz)) };
+		return { kind: 'number', value: Math.max(0, ...g) };
 	});
 	fns.set('inSquare', (args) => {
-		const p = pairAt(args);
-		if (!p) {
+		const g = gaps(args);
+		if (!g) {
 			return { kind: 'bool', value: false };
 		}
 		const r = asNum(args[2]) ?? host.nearRadius ?? 0;
-		const d = Math.max(Math.abs(p.ax - p.bx), Math.abs(p.az - p.bz));
-		return { kind: 'bool', value: d <= r };
+		return { kind: 'bool', value: Math.max(0, ...g) <= r };
 	});
 }
 
@@ -594,8 +581,8 @@ function bindOpen(host:HostKernels, fns:Map<string, NativeFn>):void {
 	});
 }
 
-export function dummyEntity(id:string, extra:Partial<ExprEntity> = {}):ExprEntity {
-	return { id, name: extra.name ?? id, tags: extra.tags ?? [], fields: extra.fields };
+export function dummyEntity(id:string, extra:Omit<Partial<ExprEntity>, 'id'> = {}):ExprEntity {
+	return { ...extra, id, tags: extra.tags ?? [] };
 }
 
 export { entityName, ABSENT };

@@ -85,11 +85,17 @@ Override `onStart` for one-shot setup when the loop begins.
 | `native` | `THREE.Scene`. |
 | `tileSize` | `0` = no tile collision. Set this to your cell size if you use a grid. |
 | `sampleTerrain(x, z)` | Override to supply height / blocked / climbable. Default `undefined`. |
+| `chunkSize` / `chunks` | Tiles per chunk side (`0` = no chunks) and the loaded `Chunk`s. See [Chunks](#chunks). |
+| `addChunk` / `removeChunk` / `chunkAt(cx, cz)` / `chunkAtWorld(x, z)` / `chunkCoordAt(x, z)` / `tileAtWorld(x, z)` / `chunkBounds()` | Chunk registry and lookups. `chunkBounds` is the XZ box around every loaded chunk. |
 | `add(go)` | Registers the tree, parents roots to the scene, runs `awakeAll`. |
 | `remove(go)` | Unregisters **this** object now. No `onDestroy`; children stay. |
 | `destroy(go)` | Queue; flushed at end of `simulate`. Children follow. |
 | `findByID(id)` | First match in `objects`. |
 | `forEachComponent(ctor, fn)` | One component per object (does not skip `enabled === false`). |
+| `tileCoordAt(x, z)` / `tileCenter(tx, tz)` | World XZ ↔ tile coordinate (`tileSize`, or 1 when 0). |
+| `objectsInTile(tx, tz)` | Spatial hash: objects whose position is in that tile (`tileSize`, or 1 when 0). |
+| `forEachNear(minX, minZ, maxX, maxZ, fn)` | Broadphase: every object whose `BoxCollider` may overlap the XZ box. Check exactly. |
+| `reindex()` | Rebuild the hash. Physics does this once per step, after integrating, so queries see positions (and adds / removes) as of that step. |
 
 A GameObject may belong to only one World.
 
@@ -200,7 +206,7 @@ RAF:
 
 `stepPhysics` is XZ only, then optional Y snap.
 
-1. **Integrate.** Every enabled `Rigidbody`: `position.xz += velocity.xz * dt` (stores `prevX` / `prevZ`).
+1. **Integrate.** Every enabled `Rigidbody`: `position.xz += velocity.xz * dt` (stores `prevX` / `prevZ`). Then `World.reindex()`, so collision pairs come from the spatial hash, not every pair of objects.
 2. **Collide.** Enabled, solid, non-trigger `BoxCollider` on an object that also has a `Rigidbody`:
    - tile AABB vs `World.sampleTerrain` when `tileSize > 0` (`blocked` cells)
    - other solid boxes (minimum translation on X or Z)
@@ -211,6 +217,56 @@ RAF:
 `World.sampleTerrain` returns `{ height, worldY, blocked, climbable }` or `undefined`. Override it if you have a heightfield or grid; the default is no terrain.
 
 `kinematic` and `mass` exist on `Rigidbody` but are not used by `stepPhysics` yet.
+
+---
+
+## Chunks
+
+A tile grid split into square `Chunk<T>`s: `size` × `size` tiles of `cellSize` meters, row-major, at chunk coordinate `origin`. `T` is the host's tile type. Kindling does not interpret tiles; `sampleTerrain` is still the host's.
+
+```ts
+world.tileSize = 1;
+world.chunkSize = 16;
+world.addChunk(new Chunk('meadow', { cx: 0, cz: 0 }, 16, 1, tiles)); // must match chunkSize / tileSize
+world.tileAtWorld(3.5, 7.5); // tiles[7 * 16 + 3]
+```
+
+Chunk helpers: `tile(localX, localZ)`, `forEachTile((tile, localX, localZ) => …)`, `tileAtWorld`, `worldToLocal`, `worldCellCenter`, `worldOriginX/Z`, `distanceTo(x, z)`.
+
+**Streaming.** Put a `ChunkStreamer` on one object and give it every chunk of the scene. Each `lateUpdate` it loads chunks within an enabled `StreamingAnchor`'s `viewRadius` (meters to the chunk edge) and unloads them past `viewRadius + hysteresis`. With no anchors, nothing changes.
+
+```ts
+class Stream extends ChunkStreamer<MyChunk> {
+	override spawn(chunk: MyChunk): void { /* first load only: add its objects */ }
+}
+const stream = systems.addComponent(new Stream());
+stream.chunks = allChunks;
+stream.loadAll(); // whole scene in, e.g. before captureWorld
+```
+
+Unloading **parks** every object whose `ChunkBound.chunkID` is the chunk's `id` (`World.remove`). Loading adds the same objects back as they were; `spawn` never runs twice for a chunk. Parked objects are not in `world.objects`, so call `loadAll()` before `captureWorld` / `restoreWorld`; the next `stream()` parks the far ones again.
+
+---
+
+## Saves
+
+A save is what changed since the scene was built, not a dump of it.
+
+```ts
+class Door extends Component {
+	static override saved = ['open'];   // JSON fields only
+	open = false;
+}
+
+const fresh = captureWorld(world);              // right after building the scene
+const save = diffWorld(fresh, captureWorld(world)); // later: changed fields, removed ids, allocID serial
+restoreWorld(rebuilt, save, (recipe) => spawn(rebuilt, recipe));
+```
+
+- **`static saved`** lists the fields a component keeps. `saveState()` / `loadState()` read and write them; override for state that is not a plain field (`Transform` saves its world pose, `BoxCollider` its `solid` / `isTrigger`).
+- **Diff.** Objects are matched by `id`; components by class name, then `Name#1` for a second one on the same object. Only changed fields are stored. Keep class names through minify (`esbuild.keepNames`).
+- **New objects.** An object the fresh scene does not have is stored whole with its `GameObject.recipe` (plain data the host's spawner stamps). `restoreWorld` calls `spawn(recipe)`, then applies its state.
+- **Ids.** A fresh scene must mint the same ids every time: `resetAllocID()` before building it. The save carries the `allocID` serial so restored objects never collide with new ones.
 
 ---
 

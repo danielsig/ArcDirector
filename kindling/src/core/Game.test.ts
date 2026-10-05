@@ -10,11 +10,11 @@ class Stepper extends Component {
 	fixed = 0;
 	frames = 0;
 
-	override fixedUpdate(_dt:number):void {
+	override fixedUpdate(dt:number):void {
 		this.fixed += 1;
 	}
 
-	override update(_dt:number):void {
+	override update(dt:number):void {
 		this.frames += 1;
 	}
 }

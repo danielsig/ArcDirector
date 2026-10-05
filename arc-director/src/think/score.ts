@@ -4,10 +4,9 @@ import { DEFAULT_TRUE_SCORE } from '../expr/types.js';
 
 /**
  * Follow-up think scores after an arc. 0 means do not enqueue on success.
- * Hosts merge extras via `verbScores`.
+ * Stock verbs only; hosts add their own verbs via `verbScores`.
  */
 export const VERB_THINK_SCORES:Readonly<Record<string, number>> = {
-	steal: 0.95,
 	go_to: 0.8,
 	use: 0.65,
 	give: 0.6,
@@ -15,8 +14,6 @@ export const VERB_THINK_SCORES:Readonly<Record<string, number>> = {
 	sell: 0.6,
 	pick_up: 0.6,
 	drop: 0.55,
-	equip: 0.5,
-	unequip: 0.5,
 	set_goal: 0.45,
 	remember: 0.45,
 	think: 0.35,

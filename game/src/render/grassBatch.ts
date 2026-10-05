@@ -60,52 +60,32 @@ function worldClipMask(world:World):{
 	sizeX:number;
 	sizeZ:number;
 } | null {
-	let minCX = 0;
-	let minCZ = 0;
-	let maxCX = 0;
-	let maxCZ = 0;
-	let first = true;
-	for (const chunk of world.chunks.values()) {
-		if (first) {
-			minCX = maxCX = chunk.origin.cx;
-			minCZ = maxCZ = chunk.origin.cz;
-			first = false;
-		}
-		else {
-			minCX = Math.min(minCX, chunk.origin.cx);
-			minCZ = Math.min(minCZ, chunk.origin.cz);
-			maxCX = Math.max(maxCX, chunk.origin.cx);
-			maxCZ = Math.max(maxCZ, chunk.origin.cz);
-		}
-	}
-	if (first) {
+	const b = world.chunkBounds();
+	if (!b) {
 		return null;
 	}
-	const tilesX = (maxCX - minCX + 1) * CHUNK_SIZE;
-	const tilesZ = (maxCZ - minCZ + 1) * CHUNK_SIZE;
+	const tilesX = (b.maxX - b.minX) / CELL_SIZE;
+	const tilesZ = (b.maxZ - b.minZ) / CELL_SIZE;
 	const data = new Uint8Array(tilesX * tilesZ * 4);
 	for (const chunk of world.chunks.values()) {
-		const ox = (chunk.origin.cx - minCX) * CHUNK_SIZE;
-		const oz = (chunk.origin.cz - minCZ) * CHUNK_SIZE;
-		for (let lz = 0; lz < CHUNK_SIZE; lz++) {
-			for (let lx = 0; lx < CHUNK_SIZE; lx++) {
-				const tile = chunk.tile(lx, lz);
-				const grass = tile?.def === 'grass';
-				const keep = grass ? 255 : 0;
-				let top = 0;
-				if (!grass) {
-					const h = (tile?.height ?? 0) * TILE_HEIGHT;
-					top = h > 0.05
-						? Math.max(1, Math.min(255, Math.round((h / GRASS_CLIP_MAX_Y) * 255)))
-						: 255;
-				}
-				const i = ((oz + lz) * tilesX + (ox + lx)) * 4;
-				data[i] = keep;
-				data[i + 1] = top;
-				data[i + 2] = keep;
-				data[i + 3] = 255;
+		const ox = (chunk.worldOriginX() - b.minX) / CELL_SIZE;
+		const oz = (chunk.worldOriginZ() - b.minZ) / CELL_SIZE;
+		chunk.forEachTile((tile, lx, lz) => {
+			const grass = tile.def === 'grass';
+			const keep = grass ? 255 : 0;
+			let top = 0;
+			if (!grass) {
+				const h = (tile.height ?? 0) * TILE_HEIGHT;
+				top = h > 0.05
+					? Math.max(1, Math.min(255, Math.round((h / GRASS_CLIP_MAX_Y) * 255)))
+					: 255;
 			}
-		}
+			const i = ((oz + lz) * tilesX + (ox + lx)) * 4;
+			data[i] = keep;
+			data[i + 1] = top;
+			data[i + 2] = keep;
+			data[i + 3] = 255;
+		});
 	}
 	const tex = new THREE.DataTexture(data, tilesX, tilesZ);
 	tex.minFilter = THREE.NearestFilter;
@@ -116,8 +96,8 @@ function worldClipMask(world:World):{
 	tex.needsUpdate = true;
 	return {
 		tex,
-		originX: minCX * CHUNK_SIZE * CELL_SIZE,
-		originZ: minCZ * CHUNK_SIZE * CELL_SIZE,
+		originX: b.minX,
+		originZ: b.minZ,
 		sizeX: tilesX * CELL_SIZE,
 		sizeZ: tilesZ * CELL_SIZE,
 	};
@@ -171,31 +151,29 @@ function fillInstances(mesh:THREE.InstancedMesh, world:World):number {
 	for (const chunk of world.chunks.values()) {
 		const ox = chunk.worldOriginX();
 		const oz = chunk.worldOriginZ();
-		for (let lz = 0; lz < CHUNK_SIZE; lz++) {
-			for (let lx = 0; lx < CHUNK_SIZE; lx++) {
-				if (chunk.tile(lx, lz)?.def !== 'grass') {
-					continue;
-				}
-				const gx = chunk.origin.cx * CHUNK_SIZE + lx;
-				const gz = chunk.origin.cz * CHUNK_SIZE + lz;
-				for (let t = 0; t < PER_CELL; t++) {
-					const hx = cellHash(gx, gz, t * 3 + 1);
-					const hz = cellHash(gx, gz, t * 3 + 2);
-					const hs = cellHash(gx, gz, t * 3 + 3);
-					dummy.position.set(
-						ox + (lx + 0.08 + hx * 0.84) * CELL_SIZE,
-						0,
-						oz + (lz + 0.08 + hz * 0.84) * CELL_SIZE,
-					);
-					dummy.rotation.set(0, hs * Math.PI * 2, 0);
-					const scl = 1.12 + hx * 0.38;
-					dummy.scale.set(scl, 1.15 + hz * 0.3, scl);
-					dummy.updateMatrix();
-					mesh.setMatrixAt(n, dummy.matrix);
-					n += 1;
-				}
+		chunk.forEachTile((tile, lx, lz) => {
+			if (tile.def !== 'grass') {
+				return;
 			}
-		}
+			const gx = chunk.origin.cx * CHUNK_SIZE + lx;
+			const gz = chunk.origin.cz * CHUNK_SIZE + lz;
+			for (let t = 0; t < PER_CELL; t++) {
+				const hx = cellHash(gx, gz, t * 3 + 1);
+				const hz = cellHash(gx, gz, t * 3 + 2);
+				const hs = cellHash(gx, gz, t * 3 + 3);
+				dummy.position.set(
+					ox + (lx + 0.08 + hx * 0.84) * CELL_SIZE,
+					0,
+					oz + (lz + 0.08 + hz * 0.84) * CELL_SIZE,
+				);
+				dummy.rotation.set(0, hs * Math.PI * 2, 0);
+				const scl = 1.12 + hx * 0.38;
+				dummy.scale.set(scl, 1.15 + hz * 0.3, scl);
+				dummy.updateMatrix();
+				mesh.setMatrixAt(n, dummy.matrix);
+				n += 1;
+			}
+		});
 	}
 	return n;
 }

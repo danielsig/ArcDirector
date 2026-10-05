@@ -4,11 +4,11 @@ import { SFX, type SfxName } from './sfx';
 
 type CueExtra = { gain?:number; freq?:number; freqTo?:number; dur?:number };
 
-export function cue(world:World, name:SfxName, at?:{ x:number; y?:number; z:number }, extra?:CueExtra):void {
+export function cue(world:World, name:SfxName, point?:{ x:number; y?:number; z:number }, extra?:CueExtra):void {
 	world.audio.playSfx(SFX[name], {
-		x: at?.x,
-		y: at?.y,
-		z: at?.z,
+		x: point?.x,
+		y: point?.y,
+		z: point?.z,
 		gain: extra?.gain,
 		freq: extra?.freq,
 		freqTo: extra?.freqTo,

@@ -90,10 +90,11 @@ export class InputState {
 	};
 
 	readonly onMouseDown = (e:MouseEvent):void => {
-		if (e.button === 0 && this.pointerLocked) {
-			this.justClick = true;
-			e.preventDefault();
+		if (e.button !== 0 || !this.pointerLocked || document.activeElement !== this.canvas) {
+			return;
 		}
+		this.justClick = true;
+		e.preventDefault();
 	};
 
 	readonly onPointerLockChange = ():void => {

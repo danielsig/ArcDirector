@@ -11,7 +11,7 @@ import { market_1_0 } from './chunks/market_1_0';
 import { ruins_0_0 } from './chunks/ruins_0_0';
 import { ruins_1_0 } from './chunks/ruins_1_0';
 import { type MarketNPCKind, type HumanKind } from '../engine/components';
-import type { GameHost, HostCtx } from '../npc/adapter';
+import type { GameHost, AgentCtx } from '../npc/adapter';
 import { createDirector as createAbbeyDirector } from '../npc/scenes/abbey';
 import { createDirector as createGlenDirector } from '../npc/scenes/glen';
 import { createDirector as createMarketDirector } from '../npc/scenes/market';
@@ -43,23 +43,25 @@ export type SceneDef = {
 	npcs:NPCSpawnDef[];
 	ambient:string;
 	message:string;
+	/** One paragraph: what this scene is for, and how the agents usually get there. */
+	brief:string;
 	playerWallet?:number;
 	/** Player stays centered and the chunk-sized map scrolls. `false` = current chunk, moving arrow. */
 	minimapFollow?:boolean;
-	createDirector:(host:GameHost)=>ArcDirector<HostCtx>;
+	createDirector:(host:GameHost)=>ArcDirector<AgentCtx>;
 };
 
 export const ABBEY_VAULT:SceneDef = {
 	id: 'abbey_vault',
-	title: 'Abbey Vault',
+	title: 'Dungeon Vault',
 	look: 'dungeon',
 	minimapFollow: true,
 	chunks: [dungeon_0_0, dungeon_1_0],
 	npcs: [
-		{ id: 'Herbalist', meshID: 'human_princess', chunkID: 'dungeon_0_0', localX: 5, localZ: 10, pack: true },
-		{ id: 'Alchemist', meshID: 'human_sorceress', chunkID: 'dungeon_0_0', localX: 8, localZ: 10, pack: true },
+		{ id: 'Fern', meshID: 'human_princess', chunkID: 'dungeon_0_0', localX: 5, localZ: 10, pack: true },
+		{ id: 'Sable', meshID: 'human_sorceress', chunkID: 'dungeon_0_0', localX: 8, localZ: 10, pack: true },
 		{
-			id: 'Captain',
+			id: 'Lys',
 			meshID: 'human_guard',
 			chunkID: 'dungeon_0_0',
 			localX: 11,
@@ -72,8 +74,13 @@ export const ABBEY_VAULT:SceneDef = {
 			],
 		},
 	],
-	ambient: 'A damp stone hall of the abbey.',
+	ambient: 'A damp stone hall of the dungeon.',
 	message: 'E pick up / unlock   F use   X swap hands   Enter talk   /give   Tab chat',
+	brief: `Three people in this dungeon each want one thing, and none of them can do it alone. Each one only knows their own goal. They have to talk and hand things to each other.
+
+Fern wants her son Noll to get well. Lys, captain of the watch, wants her sister Lina to get well. Both are lying sick in beds in a back room, behind a locked gate, and the herb they need grows in that room. Lys is carrying gold and the key to a locked chest. Sable is the alchemist. She brews at her fireplace only once she is paid: the herb and that gold coin become two potions. She keeps the coin and gives the potions away. Only she knows the chest holds the key to the gate.
+
+The usual way through is to open the chest, unlock the gate, pick the herb, pay Sable, brew, and give one potion to each patient.`,
 	createDirector: createAbbeyDirector,
 };
 
@@ -86,13 +93,13 @@ export const RIVER_GLEN:SceneDef = {
 	npcs: [
 		{ id: 'Forager', meshID: 'human_scout', chunkID: 'glen_1_1', localX: 9, localZ: 3, pack: true, wallet: 5 },
 		{
-			id: 'Miller',
+			id: 'BridgeKeeper',
 			meshID: 'human_robe',
 			chunkID: 'glen_1_0',
 			localX: 8,
 			localZ: 9,
 			pack: true,
-			packLoot: [{ defID: 'mill_crank', name: 'MillCrank' }],
+			packLoot: [{ defID: 'bridge_crank', name: 'BridgeCrank' }],
 			merchant: { specialty: 'FireMushroom', ask: 10, floor: 10 },
 			marketNPC: { kind: 'vendor', wants: ['FireMushroom'] },
 		},
@@ -119,6 +126,13 @@ export const RIVER_GLEN:SceneDef = {
 	],
 	ambient: 'A windy river glen.',
 	message: 'E pick up / unlock   F use   X swap hands   Enter talk   /give   Tab chat',
+	brief: `The forager, the bridge keeper, and the angler each need a different end to the same errand. The assistant only does what you ask.
+
+The angler is on the other side of the river, so the forager must cross the bridge to reach him. Lowering it costs 10 gold. The forager is carrying 5, enough for the trout and not the bridge. A mushroom in the west woods is worth 10, and the keeper accepts anything of equal value, so the forager pays with one, crosses, and spends their 5 on the trout.
+
+The angler wants that mushroom, which the keeper sells for 10 gold. The angler starts with 5, takes 5 for the trout, and spends that 10 buying it.
+
+End condition: the bridge is down, the keeper has 10 gold, the forager has a trout, and the angler has a mushroom.`,
 	createDirector: createGlenDirector,
 };
 
@@ -234,7 +248,7 @@ export const MARKETPLACE:SceneDef = {
 			marketNPC: { kind: 'guard', wants: [], leaveGate: 'WestGate' },
 		},
 		{
-			id: 'Pike',
+			id: 'Angler',
 			meshID: 'human_guard',
 			chunkID: 'market_0_0',
 			localX: 2,
@@ -266,6 +280,11 @@ export const MARKETPLACE:SceneDef = {
 	],
 	ambient: 'A canal-side market plaza under colored awnings.',
 	message: 'E pick up / unlock   F use   X swap hands   Enter talk   /give   Tab chat',
+	brief: `Four sellers think for themselves. Everyone else in the square is steered by one mind that has no character of its own.
+
+The baker, the weaver, the potter, and the knife-seller each stay at a stall, sell one thing, and want something from another stall. Shoppers show up wanting a specific item, buy it, and leave through a gate. New shoppers keep arriving. Guards stand at the gates and take back anything stolen.
+
+That mind sends each shopper to the stall that sells what they came for, then to the gate they leave by, and keeps the guards at their posts. The sellers haggle and can buy for themselves. It is working when shoppers leave with their goods, and someone who grabs something without paying gets caught.`,
 	createDirector: createMarketDirector,
 };
 
@@ -273,7 +292,7 @@ const SWORD = [{ defID: 'iron_sword', name: 'IronSword' }];
 
 export const RUINS:SceneDef = {
 	id: 'ruins',
-	title: 'Ruin Fight',
+	title: '5v5 Combat',
 	look: 'glen',
 	minimapFollow: true,
 	chunks: [ruins_0_0, ruins_1_0],
@@ -291,6 +310,11 @@ export const RUINS:SceneDef = {
 	],
 	ambient: 'Two companies fight to the death in a ruined forest colonnade. No quarter.',
 	message: 'E pick up / unlock   F use   X swap hands   Enter talk   /give   Tab chat',
+	brief: `Dawn and Dusk are the two captains. Each leads a squad of five: a knight, a swordsman, an archer, a witch, and the captain, who also heals. Both sides are trying to kill the other. Nobody has a scripted attack.
+
+A captain writes orders the squad keeps following, who to hit and who stays back, and changes those orders as the fight moves. The usual way a side wins is the knight and the swordsman hold the nearest enemies, the archer and the witch shoot from behind them, and the captain stays clear and heals. Hurt fighters walk back to their captain instead of standing in the melee.
+
+If a captain dies, someone else in the squad takes over. It ends when one squad is gone.`,
 	createDirector: createRuinsDirector,
 };
 

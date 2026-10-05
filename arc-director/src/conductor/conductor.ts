@@ -24,7 +24,7 @@ export type CrowdConductorJSON = AgentJSON & {
 	commanderID?:string | null;
 };
 
-export type CrowdConductorOptions<HostCtx = unknown> = AgentOptions<HostCtx> & {
+export type CrowdConductorOptions<TAgentCtx = unknown> = AgentOptions<TAgentCtx> & {
 	units?:CrowdUnitSpec[];
 	laws?:CrowdLawSpec[];
 	maxLaws?:number;
@@ -32,18 +32,18 @@ export type CrowdConductorOptions<HostCtx = unknown> = AgentOptions<HostCtx> & {
 	onCommanderVacant?:(unitID:string)=>void;
 };
 
-export function isCrowdConductor<HostCtx>(
-	agent:Agent<HostCtx> | null | undefined,
-):agent is CrowdConductor<HostCtx> {
+export function isCrowdConductor<TAgentCtx>(
+	agent:Agent<TAgentCtx> | null | undefined,
+):agent is CrowdConductor<TAgentCtx> {
 	return agent instanceof CrowdConductor;
 }
 
-export class CrowdConductor<HostCtx = unknown> extends Agent<HostCtx> {
+export class CrowdConductor<TAgentCtx = unknown> extends Agent<TAgentCtx> {
 	readonly crowd = new Crowd();
 	commanderID:string | null = null;
 	onCommanderVacant?:(unitID:string)=>void;
 
-	constructor(opts:CrowdConductorOptions<HostCtx>) {
+	constructor(opts:CrowdConductorOptions<TAgentCtx>) {
 		super({ ...opts, defaultLawWho: opts.defaultLawWho ?? 'units' });
 		for (const spec of opts.units ?? []) {
 			this.addUnit(spec);
@@ -99,9 +99,6 @@ export class CrowdConductor<HostCtx = unknown> extends Agent<HostCtx> {
 			throw new Error(`ArcDirector: no unit '${id}' to command`);
 		}
 		this.commanderID = id;
-		if (this.identity.name !== id) {
-			this.identity = { ...this.identity, name: id };
-		}
 	}
 
 	private vacateCommander(unitID:string):void {
@@ -240,7 +237,7 @@ export class CrowdConductor<HostCtx = unknown> extends Agent<HostCtx> {
 			const tags = Array.isArray(step.args.tags)
 				? step.args.tags.filter((x):x is string => typeof x === 'string')
 				: [];
-			await this.remember(content, [...tags, `unit:${unit.id}`], this.lastTacticalAt);
+			await this.remember(content, [...tags, `unit:${unit.id}`], this.lastTacticalTimestamp);
 			return { ok: true, verb: 'remember' };
 		}
 		if (step.verb === 'set_goal') {
@@ -266,8 +263,8 @@ export class CrowdConductor<HostCtx = unknown> extends Agent<HostCtx> {
 				const tags = unit.tags.map((t) => this.shortOf(t)).filter((t) => t.length > 0);
 				const you = unit.id === this.commanderID ? ' (you)' : '';
 				return tags.length > 0
-					? `- ${unit.id}: ${tags.join(', ')}${you}`
-					: `- ${unit.id}${you}`;
+					? `- ${this.nameOf(unit.id)}: ${tags.join(', ')}${you}`
+					: `- ${this.nameOf(unit.id)}${you}`;
 			});
 			parts.push(
 				`Units (issue who=units.filter("Tag") is this roster; allUnits is every troop, one program):\n${lines.join('\n')}`,
@@ -275,7 +272,7 @@ export class CrowdConductor<HostCtx = unknown> extends Agent<HostCtx> {
 		}
 		if (this.laws.length > 0) {
 			const lines = this.laws.map((law) => (
-				`- ${law.name}: who=${law.who} watch=${law.watch} → ${formatArc(law.arc)}`
+				`- ${law.name}: who=${law.who} watch=${law.watch} → ${formatArc(law.arc, this.verbs.nested())}`
 			));
 			parts.push(`Laws (emergencies, list order; unlaw to drop):\n${lines.join('\n')}`);
 		}
@@ -284,9 +281,9 @@ export class CrowdConductor<HostCtx = unknown> extends Agent<HostCtx> {
 			if (unit.id === this.commanderID || !unit.busy || !unit.arc) {
 				continue;
 			}
-			const key = formatArc(unit.arc);
+			const key = formatArc(unit.arc, this.verbs.nested());
 			const ids = groups.get(key) ?? [];
-			ids.push(unit.id);
+			ids.push(this.nameOf(unit.id));
 			groups.set(key, ids);
 		}
 		if (groups.size > 0) {
@@ -304,8 +301,8 @@ export class CrowdConductor<HostCtx = unknown> extends Agent<HostCtx> {
 		};
 	}
 
-	static override fromJSON<HostCtx>(json:CrowdConductorJSON, deps:AgentDeps<HostCtx>):CrowdConductor<HostCtx> {
-		const conductor = new CrowdConductor<HostCtx>({
+	static override fromJSON<TAgentCtx>(json:CrowdConductorJSON, deps:AgentDeps<TAgentCtx>):CrowdConductor<TAgentCtx> {
+		const conductor = new CrowdConductor<TAgentCtx>({
 			...deps,
 			id: json.id,
 			identity: json.identity,

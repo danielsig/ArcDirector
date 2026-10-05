@@ -2,6 +2,7 @@ import { Component } from '../engine/Component';
 import type { ItemInstance } from './instance';
 
 export class Item extends Component {
+	static override saved = ['count'];
 	defID = '';
 	count = 1;
 	stackable = false;
@@ -16,6 +17,7 @@ export class Equipable extends Component {
 }
 
 export class Container extends Component {
+	static override saved = ['size', 'contents'];
 	size = 2;
 	contents:ItemInstance[] = [];
 }

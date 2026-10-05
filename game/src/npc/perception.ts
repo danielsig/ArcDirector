@@ -12,12 +12,12 @@ import {
 	Door,
 	HumanBody,
 	Lock,
-	MillLever,
 	Named,
 	Sickbed,
 	Vitals,
 	Torch,
 	Bridge,
+	BridgeLever,
 	Wallet,
 	Merchant,
 	MarketNPC,
@@ -45,9 +45,9 @@ import { yawToForward } from '../engine/math';
 import { whereabouts } from '../world/interior';
 import { talkCanSee } from './talkAttend';
 import { bodyName, isLiving } from './names';
-import type { HostCtx } from './types';
+import type { AgentCtx } from './types';
 import type { GameHost } from './adapter';
-import { fightProximityNote, fightRole, seenFightName } from './fight';
+import { fightExprTags, fightProximityNote, fightRole } from './fight';
 
 const SIGHT = 24;
 
@@ -82,7 +82,7 @@ export function tagsOf(go:GameObject):string[] {
 	if (go.getComponent(Bridge)) {
 		tags.push('bridge', 'landmark');
 	}
-	if (go.getComponent(MillLever)) {
+	if (go.getComponent(BridgeLever)) {
 		tags.push('sluice', 'landmark');
 	}
 	if (go.getComponent(Chest)) {
@@ -113,14 +113,14 @@ export function tagsOf(go:GameObject):string[] {
 	return tags;
 }
 
-function poseXZ(go:GameObject):{ at:number[]; facing:number[] } {
+function poseXZ(go:GameObject):{ point:number[]; facing:number[] } {
 	const p = go.transform.position;
 	const f = yawToForward(go.transform.yaw);
-	return { at: [p.x, p.z], facing: [f.x, f.z] };
+	return { point: [p.x, p.z], facing: [f.x, f.z] };
 }
 
 function seenOf(go:GameObject, observer?:GameObject, host?:GameHost):SeenObject {
-	const tags = tagsOf(go);
+	const tags = host && observer ? [...tagsOf(go), ...fightExprTags(host, observer, go)] : tagsOf(go);
 	const agent = tags.includes('agent') || tags.includes('person');
 	const interactable = agent
 		|| !!go.getComponent(Door)
@@ -128,16 +128,15 @@ function seenOf(go:GameObject, observer?:GameObject, host?:GameHost):SeenObject 
 		|| !!go.getComponent(Pickupable)
 		|| !!go.getComponent(BrewHearth)
 		|| !!go.getComponent(Sickbed)
-		|| go.id === 'MillLever'
-		|| go.id === 'MillBridge'
+		|| go.id === 'BridgeLever'
+		|| go.id === 'Bridge'
 		|| !!go.getComponent(MarketNPC)
 		|| !!go.getComponent(Merchant)
 		|| !!go.getComponent(Interior);
 	const pose = poseXZ(go);
-	const id = host && observer ? seenFightName(host, observer, go) : go.getComponent(Named)?.id || go.id;
 	const row:SeenObject = {
-		id,
-		at: pose.at,
+		id: go.getComponent(Named)?.id || go.id,
+		point: pose.point,
 		facing: pose.facing,
 		tags,
 	};
@@ -161,11 +160,11 @@ function seenOf(go:GameObject, observer?:GameObject, host?:GameHost):SeenObject 
 		|| go.getComponent(Chest)
 		|| go.getComponent(Interior)
 		|| go.getComponent(Bridge)
-		|| go.getComponent(MillLever)
+		|| go.getComponent(BridgeLever)
 	) {
 		row.movable = false;
 	}
-	else if (!!go.getComponent(Pickupable)) {
+	else if (go.getComponent(Pickupable)) {
 		row.movable = true;
 	}
 	return row;
@@ -173,7 +172,7 @@ function seenOf(go:GameObject, observer?:GameObject, host?:GameHost):SeenObject 
 
 export function lookWorld(actor:GameObject, ambient:string, host?:GameHost):Sight {
 	const pose = poseXZ(actor);
-	const self = { id: actor.getComponent(Named)?.id ?? actor.id, at: pose.at, facing: pose.facing };
+	const self = { id: actor.getComponent(Named)?.id ?? actor.id, point: pose.point, facing: pose.facing };
 	const place = [whereabouts(actor), ambient].filter(Boolean).join(' ');
 	const world = actor.world;
 	const objects:SeenObject[] = [];
@@ -210,7 +209,7 @@ export function lookWorld(actor:GameObject, ambient:string, host?:GameHost):Sigh
 			for (const it of bag.contents) {
 				objects.push({
 					id: pascalCase(it.name) || pascalCase(it.defID) || it.id,
-					at: row.at,
+					point: row.point,
 					tags: ['item'],
 					interesting: 1,
 					interactable: true,
@@ -266,9 +265,9 @@ export function hostCanSee(world:World, aID:string, bID:string):boolean {
 	return talkCanSee(world, aID, bodyName(held.chest));
 }
 
-export function followedCarry(ctx:HostCtx):string {
+export function followedCarry(ctx:AgentCtx):string {
 	const bond = ctx.actor.getComponent(Companion);
-	if (!bond || bond.hold) {
+	if (!bond) {
 		return '';
 	}
 	const followed = ctx.world.findByID(bond.targetID);
@@ -279,16 +278,17 @@ export function followedCarry(ctx:HostCtx):string {
 	return `${bond.targetID} is carrying: ${items.length > 0 ? items.join(', ') : 'nothing you can see'}.`;
 }
 
-export function doExamine(ctx:HostCtx, name:string):ArcResult {
-	const held = findCarried(ctx.actor, (it) => itemMatchesName(it, name));
+/** What `actor` learns examining `name`: an item it carries, or a thing in sight. */
+export function doExamine(world:World, actor:GameObject, name:string):ArcResult {
+	const held = findCarried(actor, (it) => itemMatchesName(it, name));
 	if (held) {
 		return { ok: true, verb: 'examine', reason: JSON.stringify(examineItem(held)) };
 	}
-	const go = ctx.world.findNamed(name);
+	const go = world.findNamed(name);
 	if (!go) {
 		return { ok: false, verb: 'examine', reason: `unknown name ${name}` };
 	}
-	if (!hostCanSee(ctx.world, bodyName(ctx.actor), bodyName(go)) || distXZ(ctx.actor, go) > SIGHT) {
+	if (!hostCanSee(world, bodyName(actor), bodyName(go)) || distXZ(actor, go) > SIGHT) {
 		return { ok: false, verb: 'examine', reason: `${name} is not in sight` };
 	}
 	return { ok: true, verb: 'examine', reason: JSON.stringify(examineWorld(go)) };
@@ -327,7 +327,7 @@ function examineWorld(go:GameObject):Record<string, unknown> {
 		row.kind = 'door';
 		row.open = door.open;
 	}
-	if (go.getComponent(MillLever)) {
+	if (go.getComponent(BridgeLever)) {
 		row.kind = 'sluice';
 		row.note = 'not loot';
 	}

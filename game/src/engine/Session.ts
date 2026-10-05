@@ -22,20 +22,8 @@ import {
 	isEmbeddingModel,
 	isLoadedModel,
 } from 'arc-director';
-import {
-	applyWorld,
-	captureWorld,
-	deleteSave,
-	listSaves,
-	loadSave,
-	MAX_USER_SLOTS,
-	mergeWorldSave,
-	newUserSlotID,
-	overlayStreamed,
-	userSlotCount,
-	writeSave,
-	type GameSave,
-} from './gameSave';
+import { captureWorld, diffWorld, restoreWorld, type WorldState } from '@arc-director/kindling';
+import { readSave, respawn, writeSave, type GameSave } from './save';
 import {
 	packViewPose,
 	saveViewPose,
@@ -55,9 +43,7 @@ import {
 } from '../render/artCache';
 import { hasHumanAnims, loadNPCAnims } from '../render/humanAnims';
 
-const AUTOSAVE_ENABLED = false;
-
-/** Host session: Vue calls save/load/say; Kindling runs keys, flags, persist. */
+/** Host session: Vue calls say / save / load; Kindling runs keys, flags, persist. */
 export class Session extends Component {
 	static override order = Order.persist;
 	hud!:HudModel;
@@ -77,9 +63,9 @@ export class Session extends Component {
 		pitch: 40 * Math.PI / 180,
 		distance: Math.hypot(11, 7.4),
 	};
-	live:GameSave | null = null;
+	/** The scene as built, before play. Saves are a diff against it. */
+	fresh:WorldState = {};
 	private persistAcc = 0;
-	private lastPacked = '';
 	private lastViewPacked = '';
 	private lastFlagsPacked = '';
 	private lastAudioPacked = '';
@@ -87,8 +73,8 @@ export class Session extends Component {
 
 	override awake():void {
 		this.getCanvas()?.addEventListener('click', this.onClick);
-		const lookHost = window as unknown as { __setLook?:(yaw:number, pitch:number)=>void };
-		lookHost.__setLook = (yaw:number, pitch:number):void => {
+		const lookHost = window as unknown as { setLook?:(yaw:number, pitch:number)=>void };
+		lookHost.setLook = (yaw:number, pitch:number):void => {
 			const world = this.gameObject.world;
 			if (!world) {
 				return;
@@ -107,8 +93,8 @@ export class Session extends Component {
 			world.forEachComponent(PlayerInput, (c) => {
 				c.lookYaw = yaw;
 			});
-			const stateHost = window as unknown as { __lookState?:{ yaw:number; pitch:number } };
-			stateHost.__lookState = { yaw, pitch };
+			const stateHost = window as unknown as { lookState?:{ yaw:number; pitch:number } };
+			stateHost.lookState = { yaw, pitch };
 		};
 	}
 
@@ -116,11 +102,7 @@ export class Session extends Component {
 		if (!this.hud.arcDirectorOn) {
 			return;
 		}
-		void this.director.start().then(() => {
-			if (this.getRunning()) {
-				this.persistAutosave();
-			}
-		}).catch((err:unknown) => {
+		void this.director.start().catch((err:unknown) => {
 			console.error(err);
 		});
 	}
@@ -131,7 +113,6 @@ export class Session extends Component {
 			return;
 		}
 		this.persistAcc = 0;
-		this.persistAutosave();
 		this.persistView();
 		this.syncURLView();
 	}
@@ -139,8 +120,8 @@ export class Session extends Component {
 	override onDestroy():void {
 		this.getCanvas()?.removeEventListener('click', this.onClick);
 		this.director.dispose();
-		const lookHost = window as unknown as { __setLook?:(yaw:number, pitch:number)=>void };
-		lookHost.__setLook = undefined;
+		const lookHost = window as unknown as { setLook?:(yaw:number, pitch:number)=>void };
+		lookHost.setLook = undefined;
 	}
 
 	/** Runs every frame, including while the menu pauses simulation. */
@@ -165,7 +146,7 @@ export class Session extends Component {
 			this.patchSayCatalog();
 			world.sayOpen = true;
 		}
-		else if (world.input.pressed('Enter') || world.input.pressed('NumpadEnter')) {
+		else if (!this.hud.briefOpen && (world.input.pressed('Enter') || world.input.pressed('NumpadEnter'))) {
 			this.hud.sayOpen = true;
 			world.sayOpen = true;
 			this.patchSayCatalog();
@@ -174,6 +155,12 @@ export class Session extends Component {
 		}
 		else {
 			world.sayOpen = false;
+		}
+		if (this.hud.briefOpen) {
+			world.sayOpen = true;
+			if (world.input.pointerLocked) {
+				this.dropPointerLock();
+			}
 		}
 		this.hudKeys();
 	}
@@ -205,50 +192,49 @@ export class Session extends Component {
 	}
 
 	save():void {
-		const selected = this.hud.saveSlots.find((s) => s.id === this.hud.saveSelectedID);
-		let id = selected && !selected.auto ? selected.id : '';
-		if (!id) {
-			if (userSlotCount(this.scene.id) >= MAX_USER_SLOTS) {
-				this.hud.menuNotice = 'Eight saves — delete one first';
-				return;
-			}
-			id = newUserSlotID();
+		const world = this.gameObject.world;
+		const pose = this.readPose();
+		if (!world || !pose) {
+			return;
 		}
-		const label = this.hud.saveLabel.trim() || new Date().toLocaleString();
-		const save = this.buildSave(id, label);
-		if (!save || !writeSave(save)) {
+		this.stream.loadAll();
+		const save:GameSave = {
+			savedUTC: new Date().toISOString(),
+			time: world.time,
+			bargainDone: this.director.bargainDone,
+			pose,
+			world: diffWorld(this.fresh, captureWorld(world)),
+			agents: this.director.arc?.exportAgents() ?? {},
+		};
+		if (!writeSave(this.scene.id, save)) {
 			this.hud.menuNotice = 'Save failed';
 			return;
 		}
-		this.live = save;
-		this.hud.saveSelectedID = id;
+		this.hud.savedUTC = save.savedUTC;
 		this.hud.menuNotice = 'Saved';
-		this.refreshSlots();
 	}
 
+	/** Boot a fresh Game that restores this scene's save. */
 	load():void {
-		const save = loadSave(this.scene.id, this.hud.saveSelectedID);
-		if (!save) {
-			this.hud.menuNotice = 'Load failed';
+		if (!readSave(this.scene.id)) {
+			this.hud.menuNotice = 'No save';
 			return;
 		}
-		this.applyGameSave(save);
-		this.hud.menuNotice = 'Loaded';
-		this.refreshSlots();
+		this.hud.loading = true;
+		this.hud.boots += 1;
 	}
 
-	removeSave():void {
-		const id = this.hud.saveSelectedID;
-		if (!id) {
-			this.hud.menuNotice = 'Select a slot';
+	/** Apply `save` to the scene just built. Minds restore when ArcDirector starts. */
+	restore(save:GameSave):void {
+		const world = this.gameObject.world;
+		if (!world) {
 			return;
 		}
-		deleteSave(this.scene.id, id);
-		if (this.hud.saveSelectedID === id) {
-			this.hud.saveSelectedID = '';
-		}
-		this.hud.menuNotice = 'Deleted';
-		this.refreshSlots();
+		restoreWorld(world, save.world, (recipe) => respawn(world, recipe));
+		world.time = save.time;
+		this.director.bargainDone = save.bargainDone;
+		this.director.arc?.restoreAgents(save.agents);
+		this.applyPose(save.pose);
 	}
 
 	applyModel():void {
@@ -297,14 +283,11 @@ export class Session extends Component {
 	}
 
 	resetLocation():void {
-		const world = this.gameObject.world;
 		this.applyPose(this.homePose);
 		this.lastViewPacked = '';
 		this.persistAcc = 0;
 		this.persistView();
-		if (world) {
-			this.stream.streamer.tick(world);
-		}
+		this.stream.stream();
 		this.syncURLView();
 		this.hud.menuNotice = 'Location reset';
 	}
@@ -345,9 +328,7 @@ export class Session extends Component {
 
 	onMenuOpened():void {
 		this.hud.menuNotice = '';
-		this.persistAutosave();
 		this.persistView();
-		this.refreshSlots();
 		this.dropPointerLock();
 		this.hud.model = this.director.arc?.model || prefs().model || this.hud.model;
 		this.hud.playerKinds = characterOptions();
@@ -484,23 +465,6 @@ export class Session extends Component {
 		cam.lateUpdate(8);
 	}
 
-	persistAutosave():void {
-		if (!AUTOSAVE_ENABLED) {
-			return;
-		}
-		const save = this.buildSave('auto', 'Autosave');
-		if (!save) {
-			return;
-		}
-		const packed = JSON.stringify({ ...save, savedAt: '' });
-		if (packed === this.lastPacked) {
-			return;
-		}
-		this.lastPacked = packed;
-		this.live = save;
-		writeSave(save);
-	}
-
 	persistView():void {
 		const pose = this.readPose();
 		if (!pose) {
@@ -512,23 +476,6 @@ export class Session extends Component {
 		}
 		this.lastViewPacked = packed;
 		saveViewPose(this.scene.id, packed);
-	}
-
-	overlayLoadedChunks(ids:Iterable<string>):void {
-		const world = this.gameObject.world;
-		if (!this.live || !world) {
-			return;
-		}
-		for (const key of ids) {
-			const chunk = world.chunks.get(key);
-			if (chunk) {
-				overlayStreamed(world, this.live.world, chunk.id);
-			}
-		}
-	}
-
-	refreshSlots():void {
-		this.hud.saveSlots = listSaves(this.scene.id);
 	}
 
 	syncURLView():void {
@@ -559,6 +506,12 @@ export class Session extends Component {
 		if (!world) {
 			return;
 		}
+		if (this.hud.briefOpen) {
+			if (world.input.pressed('Escape')) {
+				this.hud.briefOpen = false;
+			}
+			return;
+		}
 		if (!this.hud.sayOpen && world.input.pressed('Tab')) {
 			this.hud.chatOpen = !this.hud.chatOpen;
 			if (this.hud.chatOpen) {
@@ -584,46 +537,6 @@ export class Session extends Component {
 		}
 	}
 
-	private applyGameSave(save:GameSave):void {
-		const world = this.gameObject.world;
-		if (!world) {
-			return;
-		}
-		applyWorld(world, save.world);
-		this.applyPose(save.pose);
-		world.time = save.time;
-		this.director.bargainDone = save.bargainDone;
-		this.director.restoreAgents(save.agents);
-		this.live = save;
-		this.stream.streamer.tick(world);
-		this.stream.mark(world);
-		this.overlayLoadedChunks(new Set(world.chunks.keys()));
-		this.persistView();
-		this.syncURLView();
-	}
-
-	private buildSave(id:string, label:string):GameSave | null {
-		const world = this.gameObject.world;
-		const pose = this.readPose();
-		if (!world || !pose) {
-			return null;
-		}
-		const agents = this.director.exportAgents();
-		const keep = Object.keys(agents).length > 0 ? agents : (this.live?.agents ?? {});
-		return {
-			version: 1,
-			sceneID: this.scene.id,
-			id,
-			label,
-			savedAt: new Date().toISOString(),
-			pose,
-			time: world.time,
-			bargainDone: this.director.bargainDone,
-			agents: keep,
-			world: mergeWorldSave(this.live?.world, captureWorld(world), world),
-		};
-	}
-
 	private dropPointerLock():void {
 		const canvas = this.getCanvas();
 		if (document.pointerLockElement === canvas) {
@@ -632,7 +545,7 @@ export class Session extends Component {
 	}
 
 	private readonly onClick = ():void => {
-		if (this.hud.sayOpen || this.hud.menuOpen) {
+		if (this.hud.sayOpen || this.hud.menuOpen || this.hud.briefOpen) {
 			return;
 		}
 		this.getCanvas()?.focus();

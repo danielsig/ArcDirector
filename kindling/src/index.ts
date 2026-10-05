@@ -1,7 +1,10 @@
-export { Component } from './core/Component.js';
-export { GameObject, allocID, resetAllocID } from './core/GameObject.js';
+export { Component, type ComponentState } from './core/Component.js';
+export { GameObject, allocID, allocSerial, resetAllocID } from './core/GameObject.js';
+export { captureWorld, diffWorld, restoreWorld, type ObjectState, type WorldSave, type WorldState } from './core/save.js';
 export { Transform, type Vec3 } from './core/Transform.js';
 export { World } from './core/World.js';
+export { Chunk } from './core/Chunk.js';
+export { ChunkBound, ChunkStreamer, StreamingAnchor } from './core/ChunkStreamer.js';
 export { Game } from './core/Game.js';
 export { Time, resetTime, MAX_DT } from './core/Time.js';
 export { Rigidbody } from './core/Rigidbody.js';

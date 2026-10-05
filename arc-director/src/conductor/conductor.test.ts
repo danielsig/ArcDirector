@@ -15,6 +15,7 @@ import type { VerbCall } from '../director/types.js';
 import { CrowdConductor, isCrowdConductor } from './conductor.js';
 import { registerStockCrowdVerbs, STOCK_CROWD_VERBS } from './conductor-verbs.js';
 import { squadTag } from './tags.js';
+import { OPEN_WORLD } from '../testing/world.js';
 
 type Ctx = { id:string };
 
@@ -48,7 +49,7 @@ function kernels(hurt:Set<string> = new Set()) {
 		hp: (who:{ id:string }) => (
 			hurt.has(who.id) ? { hp: 1, maxHP: 5 } : { hp: 5, maxHP: 5 }
 		),
-		at: (who:{ id:string }) => {
+		point: (who:{ id:string }) => {
 			if (who.id === 'Mira') {
 				return { x: 0, z: 0 };
 			}
@@ -91,7 +92,7 @@ async function hiveOf(opts:{
 			id: 'Hive',
 			skipHeartbeat: true,
 			kit: opts.kit ?? CROWD_KIT,
-			identity: { name: 'Hive', role: 'Keeps the square moving.' },
+			identity: { role: 'Keeps the square moving.' },
 			pinnedSightFocus: ['isHurt(it)'],
 			sightFocus: ['isNear(it, Player)'],
 			units: [
@@ -141,7 +142,7 @@ async function hangingDawn():Promise<{
 			skipHeartbeat: true,
 			kit: CROWD_KIT,
 			commander: 'Dawn',
-			identity: { name: 'Dawn', role: 'Leads.' },
+			identity: { role: 'Leads.' },
 			units: [{ id: 'Dawn' }, { id: 'Wisp' }],
 		})
 		.start();
@@ -165,7 +166,7 @@ describe('CrowdConductor chain', () => {
 				id: 'Hive',
 				skipHeartbeat: true,
 				kit: { verbs: ['wait'] },
-				identity: { name: 'Hive', role: 'Waits.' },
+				identity: { role: 'Waits.' },
 				units: [{ id: 'Mira' }],
 			})
 			.start();
@@ -266,8 +267,8 @@ describe('issue(who)', () => {
 		));
 		assert.equal(result.ok, true);
 		await waitFor(() => (
-			calls.some((c) => c.actorID === 'Mira' && String(c.args.name) === 'WestGate')
-			&& calls.some((c) => c.actorID === 'Tomas' && String(c.args.name) === 'EastGate')
+			calls.some((c) => c.actorID === 'Mira' && String(c.args.target) === 'WestGate')
+			&& calls.some((c) => c.actorID === 'Tomas' && String(c.args.target) === 'EastGate')
 		));
 		director.dispose();
 	});
@@ -278,12 +279,12 @@ describe('issue(who)', () => {
 		const hive = director.agent('Hive');
 		assert.ok(isCrowdConductor(hive));
 		await hive.enact(parseArc(
-			'issue(who=units.filter("Mira"), arc=go_to(Tomas) && wait(seconds=1))',
+			'issue(who=units.filter("Mira"), arc=go_to(Tomas) && examine(Tomas))',
 			hive.verbs,
 		));
 		await waitFor(() => calls.filter((c) => c.actorID === 'Mira').length >= 2);
 		const mine = calls.filter((c) => c.actorID === 'Mira').map((c) => c.verb);
-		assert.deepEqual(mine.slice(0, 2), ['go_to', 'wait']);
+		assert.deepEqual(mine.slice(0, 2), ['go_to', 'examine']);
 		director.dispose();
 	});
 
@@ -301,7 +302,7 @@ describe('issue(who)', () => {
 			'issue(who=units.filter("Mira"), arc=go_to(Home))',
 			hive.verbs,
 		));
-		await waitFor(() => calls.some((c) => c.actorID === 'Mira' && String(c.args.name) === 'Home'));
+		await waitFor(() => calls.some((c) => c.actorID === 'Mira' && String(c.args.target) === 'Home'));
 		assert.ok(hive.crowd.get('Tomas')?.busy);
 		director.dispose();
 	});
@@ -359,7 +360,7 @@ describe('laws and tags', () => {
 			'issue(who=units.filter("Mira"), arc=go_to(Home))',
 			hive.verbs,
 		));
-		await waitFor(() => calls.some((c) => c.actorID === 'Mira' && String(c.args.name) === 'Home'));
+		await waitFor(() => calls.some((c) => c.actorID === 'Mira' && String(c.args.target) === 'Home'));
 		director.dispose();
 	});
 
@@ -379,14 +380,14 @@ describe('laws and tags', () => {
 				id: 'Red',
 				skipHeartbeat: true,
 				kit: CROWD_KIT,
-				identity: { name: 'Red', role: 'Commands red.' },
+				identity: { role: 'Commands red.' },
 				units: [{ id: 'Able', tags: ['Guard'] }],
 			})
 			.addCrowdConductor({
 				id: 'Blue',
 				skipHeartbeat: true,
 				kit: CROWD_KIT,
-				identity: { name: 'Blue', role: 'Commands blue.' },
+				identity: { role: 'Commands blue.' },
 				units: [{ id: 'Baker', tags: ['Guard'] }],
 			})
 			.start();
@@ -422,7 +423,7 @@ describe('commander body and sightFocus', () => {
 				id: 'Captain',
 				skipHeartbeat: true,
 				kit: CROWD_KIT,
-				identity: { name: 'Captain', role: 'Leads.' },
+				identity: { role: 'Leads.' },
 				units: [{ id: 'Mira', tags: ['Guard'] }],
 			})
 			.start();
@@ -434,12 +435,12 @@ describe('commander body and sightFocus', () => {
 		));
 		await waitFor(() => (
 			calls.some((c) => c.actorID === 'Mira' && c.verb === 'go_to')
-			&& calls.some((c) => c.actorID === 'Captain' && String(c.args.name) === 'WestGate')
+			&& calls.some((c) => c.actorID === 'Captain' && String(c.args.target) === 'WestGate')
 		));
 		director.dispose();
 	});
 
-	it('pinnedSightFocus stays; extras replace; sightLimit slices clauses', () => {
+	it('pinnedSightFocus stays; focus edits extras; sightLimit slices clauses', async () => {
 		const clauses = [
 			{ text: 'A damp hall', claimedIDs: [] as string[], ambient: true },
 			{ text: 'pebble', claimedIDs: ['Pebble'] },
@@ -455,7 +456,7 @@ describe('commander body and sightFocus', () => {
 		assert.equal(ranked.length, 3);
 		const conductor = new CrowdConductor<Ctx>({
 			id: 'Hive',
-			identity: { name: 'Hive', role: 'Sees.' },
+			identity: { role: 'Sees.' },
 			pinnedSightFocus: ['isHurt(it)'],
 			sightFocus: ['isNear(it, Player)'],
 			provider: new FakeProvider(() => ({ content: '{}', toolCalls: [] })),
@@ -466,26 +467,27 @@ describe('commander body and sightFocus', () => {
 		});
 		assert.deepEqual(conductor.pinnedSightFocus, ['isHurt(it)']);
 		assert.deepEqual(conductor.sightFocus, ['isNear(it, Player)']);
-		(conductor as unknown as { applySightFocus:(raw:unknown)=>void })
-			.applySightFocus({ sightFocus: ['isHurt(it)', 'isNear(it, EastGate)'] });
+		assert.equal((await conductor.perform({ verb: 'focus', args: { expr: 'isHurt(it)' } })).ok, false);
+		await conductor.perform({ verb: 'focus', args: { expr: 'isNear(it, EastGate)' } });
+		await conductor.perform({ verb: 'unfocus', args: { expr: 'isNear(it, Player)' } });
 		assert.deepEqual(conductor.pinnedSightFocus, ['isHurt(it)']);
 		assert.deepEqual(conductor.sightFocus, ['isNear(it, EastGate)']);
 	});
 
 	it('hive merge keeps disjoint stalls and fromName leftovers', () => {
 		const west = formatSightClauses({
-			self: { id: 'Mira', at: [0, 0] },
+			self: { id: 'Mira', point: [0, 0] },
 			ambient: 'A square.',
 			objects: [
-				{ id: 'WestStall', at: [2, 0], tags: ['landmark', 'stall'], interactable: true, movable: false },
-				{ id: 'Door', at: [8, 0], tags: ['door'], interactable: true, movable: false },
+				{ id: 'WestStall', point: [2, 0], tags: ['landmark', 'stall'], interactable: true, movable: false },
+				{ id: 'Door', point: [8, 0], tags: ['door'], interactable: true, movable: false },
 			],
 		}, { fromName: 'Mira' });
 		const east = formatSightClauses({
-			self: { id: 'Tomas', at: [40, 0] },
+			self: { id: 'Tomas', point: [40, 0] },
 			ambient: 'A square.',
 			objects: [
-				{ id: 'EastStall', at: [42, 0], tags: ['landmark', 'stall'], interactable: true, movable: false },
+				{ id: 'EastStall', point: [42, 0], tags: ['landmark', 'stall'], interactable: true, movable: false },
 			],
 		}, { fromName: 'Tomas', skipAmbient: true });
 		const merged = mergeHiveClauses([
@@ -522,10 +524,10 @@ describe('actorID, laws, dummy me', () => {
 		));
 		for (const call of calls.filter((c) => c.verb === 'go_to')) {
 			if (call.actorID === 'Mira') {
-				assert.equal(String(call.args.name), 'WestGate');
+				assert.equal(String(call.args.target), 'WestGate');
 			}
 			if (call.actorID === 'Tomas') {
-				assert.equal(String(call.args.name), 'EastGate');
+				assert.equal(String(call.args.target), 'EastGate');
 			}
 		}
 		director.dispose();
@@ -561,6 +563,7 @@ describe('actorID, laws, dummy me', () => {
 	it('bodiless hive uses dummy me and skips carrying', async () => {
 		let hiveCarry = 0;
 		const director = await new ArcDirector<Ctx>()
+			.withWorld(OPEN_WORLD)
 			.withFakeInference()
 			.addStockVerbs()
 			.addStockCrowdVerbs()
@@ -576,7 +579,7 @@ describe('actorID, laws, dummy me', () => {
 				id: 'Hive',
 				skipHeartbeat: true,
 				kit: CROWD_KIT,
-				identity: { name: 'Hive', role: 'Sees.' },
+				identity: { role: 'Sees.' },
 				units: [
 					{ id: 'Mira', tags: ['Guard'] },
 					{ id: 'Tomas', tags: ['Guard'] },
@@ -617,7 +620,7 @@ describe('commander pointer and sticky issue', () => {
 				skipHeartbeat: true,
 				kit: CROWD_KIT,
 				commander: 'Dawn',
-				identity: { name: 'Dawn', role: 'Leads.' },
+				identity: { role: 'Leads.' },
 				units: [{ id: 'Dawn' }, { id: 'Wisp' }],
 			})
 			.start();
@@ -627,7 +630,6 @@ describe('commander pointer and sticky issue', () => {
 		director.removeCrowdUnit('Dawn', 'Dawn');
 		director.setCrowdCommander('Dawn', 'Wisp');
 		assert.equal(dawn.thinkThread(), 'Wisp');
-		assert.equal(dawn.identity.name, 'Wisp');
 		assert.notEqual(dawn.thinkThread(), dawn.id);
 		director.dispose();
 	});
@@ -666,7 +668,7 @@ describe('commander pointer and sticky issue', () => {
 				skipHeartbeat: true,
 				kit: CROWD_KIT,
 				commander: 'Captain',
-				identity: { name: 'Captain', role: 'Leads.' },
+				identity: { role: 'Leads.' },
 				units: [
 					{ id: 'Captain', tags: ['Lead'] },
 					{ id: 'Mira', tags: ['Guard'] },
@@ -680,8 +682,8 @@ describe('commander pointer and sticky issue', () => {
 		assert.equal(me.ok, false);
 		assert.equal(calls.some((c) => c.actorID === 'Captain' && c.verb === 'go_to'), false);
 		await captain.enact(parseArc('issue(who=allUnits, arc=go_to(Home))', captain.verbs));
-		await waitFor(() => calls.some((c) => c.actorID === 'Mira' && String(c.args.name) === 'Home'));
-		assert.equal(calls.some((c) => c.actorID === 'Captain' && String(c.args.name) === 'Home'), false);
+		await waitFor(() => calls.some((c) => c.actorID === 'Mira' && String(c.args.target) === 'Home'));
+		assert.equal(calls.some((c) => c.actorID === 'Captain' && String(c.args.target) === 'Home'), false);
 		director.dispose();
 	});
 
@@ -732,7 +734,7 @@ describe('commander pointer and sticky issue', () => {
 				id: 'Hive',
 				skipHeartbeat: true,
 				kit: CROWD_KIT,
-				identity: { name: 'Hive', role: 'Keeps the square moving.' },
+				identity: { role: 'Keeps the square moving.' },
 				units: [
 					{ id: 'Mira', tags: ['Guard'] },
 					{ id: 'Tomas', tags: ['Guard'] },
@@ -767,7 +769,7 @@ describe('commander pointer and sticky issue', () => {
 				skipHeartbeat: true,
 				kit: CROWD_KIT,
 				commander: 'Captain',
-				identity: { name: 'Captain', role: 'Leads.' },
+				identity: { role: 'Leads.' },
 				units: [{ id: 'Captain' }, { id: 'Mira' }],
 			})
 			.start();
@@ -793,7 +795,7 @@ describe('solo law', () => {
 				id: 'Guard',
 				skipHeartbeat: true,
 				kit: { verbs: [...STOCK_VERBS] },
-				identity: { name: 'Guard', role: 'Watches.' },
+				identity: { role: 'Watches.' },
 				laws: [{
 					name: 'flee',
 					watch: 'isHurt(me)',

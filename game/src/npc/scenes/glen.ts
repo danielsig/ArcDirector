@@ -1,36 +1,38 @@
-import { ArcDirector, STOCK_VERBS, type AgentSpec } from 'arc-director';
+import { ArcDirector, type AgentSpec } from 'arc-director';
 import { Bridge, Celebrating } from '../../engine/components';
 import type { GameHost } from '../adapter';
-import type { HostCtx } from '../types';
+import { BUILDING_VERB_INSTRUCTIONS, GAME_VERBS } from '../verbs';
+import type { AgentCtx } from '../types';
 import { getDef } from '../../items/defs';
 import { findCarried, itemMatchesName } from '../../items/inventory';
 import { coinsOf } from '../../items/wallet';
 
 const GOT_MUSHROOM = 'hasJustReceived("mushroom")';
-const MILL_FEE = getDef('fire_mushroom').components.Goods?.ask ?? 10;
+const BRIDGE_FEE = getDef('fire_mushroom').components.Goods?.ask ?? 10;
 const TROUT_ASK = getDef('silver_trout').components.Goods?.ask ?? 5;
 
-export const FORAGER:AgentSpec = {
+const FORAGER:AgentSpec = {
 	id: 'Forager',
 	rank: 0.5,
-	identity: {
-		name: 'Forager',
-		role: `You are Wren, a glen forager. The land names you Forager. You live among the trees west of Cottage. Only you harvest FireMushroom. Miller's mill-fee is FireMushroom or ${MILL_FEE} gold. You start with ${TROUT_ASK} gold, enough for SilverTrout, not the mill-fee. Give one FireMushroom to Miller, then buy SilverTrout from Angler. Once you are carrying SilverTrout, that errand is finished. Do not search for another FireMushroom. You do not work the sluice. You do not walk into water. Use names, never coordinates.`,
-		traits: ['quiet', 'hungry', 'kind'],
-	},
+	identity: { traits: ['quiet', 'hungry', 'kind'] },
 	goals: [{
-		text: 'Give one FireMushroom to Miller, then buy SilverTrout from Angler. Once you are carrying SilverTrout, stop. Do not search for another FireMushroom.',
+		text: 'Give one FireMushroom to BridgeKeeper, then buy SilverTrout from Angler. Once you are carrying SilverTrout, stop. Do not search for another FireMushroom.',
 		priority: 2,
 	}],
 	memories: [
+		{
+			text: `I am a glen forager. I live among the trees west of Cottage. Only I harvest FireMushroom. BridgeKeeper's bridge fee is FireMushroom or ${BRIDGE_FEE} gold. I start with ${TROUT_ASK} gold, enough for SilverTrout, not the bridge fee. I do not work the sluice. I do not walk into water. Use names, never coordinates.`,
+			tags: ['backstory', 'BridgeKeeper', 'FireMushroom', 'SilverTrout'],
+			pinned: true,
+		},
 		{
 			text: 'FireMushroom grows among the trees west of Cottage, outdoors. Search only while I am not carrying SilverTrout. If I am not carrying FireMushroom and not carrying SilverTrout and the scene has not named it, wander(until=some(items.filter("FireMushroom").nearby())). When that wander ends, pick_up(FireMushroom) — do not wander that same search again. Once I am carrying SilverTrout, do not search for FireMushroom.',
 			tags: ['FireMushroom', 'trees'],
 			pinned: true,
 		},
 		{
-			text: `give(item=FireMushroom, to=Miller) once. I start with ${TROUT_ASK} gold — enough for SilverTrout, not Miller's ${MILL_FEE}-gold mill-fee. go_to(Angler) and buy(item=SilverTrout, from=Angler). buy offer is gold. When I am carrying SilverTrout, the errand is done. CottageDoor is not my work.`,
-			tags: ['Miller', 'Angler', 'SilverTrout', 'gold'],
+			text: `give(item=FireMushroom, to=BridgeKeeper) once. I start with ${TROUT_ASK} gold — enough for SilverTrout, not the ${BRIDGE_FEE}-gold bridge fee. go_to(Angler) and buy(item=SilverTrout, from=Angler). buy offer is gold. When I am carrying SilverTrout, the errand is done. CottageDoor is not my work.`,
+			tags: ['BridgeKeeper', 'Angler', 'SilverTrout', 'gold'],
 			pinned: true,
 		},
 	],
@@ -38,7 +40,7 @@ export const FORAGER:AgentSpec = {
 		gotMushroom: GOT_MUSHROOM,
 		hurt: 'isHurt(me)',
 		approaching: 'hasHeard || some(others.nearby().approaching())',
-		bridge: 'hasJustOpened(MillBridge) || some(events.filter("bridge"))',
+		bridge: 'hasJustOpened(Bridge)',
 	},
 	watches: {
 		mushroom: 'some(items.filter("FireMushroom").nearby())',
@@ -46,70 +48,73 @@ export const FORAGER:AgentSpec = {
 	watchesWritable: true,
 };
 
-export const MILLER:AgentSpec = {
-	id: 'Miller',
+const BRIDGE_KEEPER:AgentSpec = {
+	id: 'BridgeKeeper',
 	rank: 0.5,
-	identity: {
-		name: 'Miller',
-		role: `You are Oat, miller of the cottage. The land names you Miller. You work the sluice. The mill-fee is FireMushroom or ${MILL_FEE} gold — FireMushroom is worth ${MILL_FEE} gold. Do not lower MillBridge unpaid. Paid work is still work: once you have FireMushroom or ${MILL_FEE} gold, lower the sluice. You sell FireMushroom to Angler for ${MILL_FEE} gold. You do not buy SilverTrout. Do not ask Forager for gold. CottageDoor and CottageKey are not your job. Use names, never coordinates.`,
-		traits: ['stubborn', 'fair', 'dutiful'],
-	},
+	identity: { traits: ['stubborn', 'fair', 'dutiful'] },
 	goals: [{
-		text: `Take FireMushroom or ${MILL_FEE} gold as the mill-fee, then lower MillBridge. Sell FireMushroom to Angler for ${MILL_FEE} gold.`,
+		text: `Take FireMushroom or ${BRIDGE_FEE} gold as the bridge fee, then lower Bridge. Sell FireMushroom to Angler for ${BRIDGE_FEE} gold.`,
 		priority: 2,
 	}],
 	memories: [
 		{
-			text: `MillCrank is in my pack. MillLever is the sluice. Do not lower MillBridge unpaid. When I am carrying FireMushroom or me.gold >= ${MILL_FEE}, use(item=MillCrank, target=MillLever). I sell FireMushroom to Angler; I do not buy SilverTrout. CottageDoor is not my work.`,
-			tags: ['MillCrank', 'MillLever', 'MillBridge', 'FireMushroom', 'Angler', 'gold'],
+			text: `I keep Bridge at the cottage and work the sluice. The bridge fee is FireMushroom or ${BRIDGE_FEE} gold — FireMushroom is worth ${BRIDGE_FEE} gold. Do not lower Bridge unpaid. Paid work is still work: once I have FireMushroom or ${BRIDGE_FEE} gold, I lower the sluice. I do not ask Forager for gold. CottageDoor and CottageKey are not my job. Use names, never coordinates.`,
+			tags: ['backstory', 'Bridge', 'FireMushroom', 'Forager', 'gold'],
+			pinned: true,
+		},
+		{
+			text: `BridgeCrank is in my pack. BridgeLever is the sluice. Do not lower Bridge unpaid. When I am carrying FireMushroom or me.gold >= ${BRIDGE_FEE}, use(item=BridgeCrank, target=BridgeLever). I sell FireMushroom to Angler; I do not buy SilverTrout. CottageDoor is not my work.`,
+			tags: ['BridgeCrank', 'BridgeLever', 'Bridge', 'FireMushroom', 'Angler', 'gold'],
 			pinned: true,
 		},
 	],
 	pinnedWatches: { gotMushroom: GOT_MUSHROOM },
 	laws: [{
 		name: 'sluice',
-		watch: `(isCarrying("FireMushroom") || me.gold >= ${MILL_FEE}) && !isOpen(MillBridge)`,
-		arc: 'use(item=MillCrank, target=MillLever)',
+		watch: `(isCarrying("FireMushroom") || me.gold >= ${BRIDGE_FEE}) && !isOpen(Bridge)`,
+		arc: 'use(item=BridgeCrank, target=BridgeLever)',
 		pinned: true,
 	}],
 };
 
-export const ANGLER:AgentSpec = {
+const ANGLER:AgentSpec = {
 	id: 'Angler',
 	rank: 0.5,
-	identity: {
-		name: 'Angler',
-		role: `You are Pike, an angler. The land names you Angler. You have ${TROUT_ASK} gold and SilverTrout. Sell SilverTrout to Forager for ${TROUT_ASK} gold — not to Miller. Then you have ${MILL_FEE} gold. Buy FireMushroom from Miller. Do not buy the mushroom until you have ${MILL_FEE} gold. Use names, never coordinates.`,
-		traits: ['wet', 'impatient', 'hungry'],
-	},
+	identity: { traits: ['wet', 'impatient', 'hungry'] },
 	goals: [{
-		text: `Sell SilverTrout to Forager for ${TROUT_ASK} gold. Buy FireMushroom from Miller for ${MILL_FEE} gold.`,
+		text: `Sell SilverTrout to Forager for ${TROUT_ASK} gold. Buy FireMushroom from BridgeKeeper for ${BRIDGE_FEE} gold.`,
 		priority: 2,
 	}],
 	memories: [
 		{
-			text: `SilverTrout is in my pack and costs ${TROUT_ASK} gold. I will not drop it in the water. sell(item=SilverTrout, to=Forager). Miller does not buy trout. I start with ${TROUT_ASK} gold. wait(until=me.gold >= ${MILL_FEE}) then go_to(Miller) and buy(item=FireMushroom, from=Miller).`,
-			tags: ['SilverTrout', 'FireMushroom', 'Miller', 'Forager', 'gold'],
+			text: `I am an angler. I sell SilverTrout to Forager for ${TROUT_ASK} gold — not to BridgeKeeper. Then I have ${BRIDGE_FEE} gold and buy FireMushroom from BridgeKeeper. I do not buy the mushroom until I have ${BRIDGE_FEE} gold. Use names, never coordinates.`,
+			tags: ['backstory', 'Forager', 'BridgeKeeper', 'SilverTrout', 'FireMushroom'],
+			pinned: true,
+		},
+		{
+			text: `SilverTrout is in my pack and costs ${TROUT_ASK} gold. I will not drop it in the water. sell(item=SilverTrout, to=Forager). BridgeKeeper does not buy trout. I start with ${TROUT_ASK} gold. wait(until=me.gold >= ${BRIDGE_FEE}) then go_to(BridgeKeeper) and buy(item=FireMushroom, from=BridgeKeeper).`,
+			tags: ['SilverTrout', 'FireMushroom', 'BridgeKeeper', 'Forager', 'gold'],
 			pinned: true,
 		},
 	],
-	watches: { bridge: 'hasJustOpened(MillBridge) || some(events.filter("bridge"))' },
+	watches: { bridge: 'hasJustOpened(Bridge)' },
 	pinnedWatches: { gotMushroom: GOT_MUSHROOM },
 };
 
-export const ASSISTANT:AgentSpec = {
+const ASSISTANT:AgentSpec = {
 	id: 'Assistant',
 	rank: 1,
-	identity: {
-		name: 'Assistant',
-		role: 'You are Lira, a helpful assistant. The land names you Assistant. Answer Player, fetch what they ask, and do their jobs. You have no errand of your own. Be useful, honest, and brief. Use names, never coordinates.',
-		traits: ['helpful', 'honest', 'careful'],
-	},
-	goals: [{
-		text: 'Help Player with whatever they ask.',
-		priority: 2,
-	}],
+	identity: { traits: ['helpful', 'honest', 'careful'] },
+	goals: [
+		{ text: 'Help Player with whatever they ask.', priority: 2 },
+		{ text: 'When Player has given you no job, follow(Player). When Player tells you to stay or wait, stop following until they call you again.', priority: 1 },
+	],
 	memories: [
+		{
+			text: 'I am a helpful assistant. I answer Player, fetch what they ask, and do their jobs. I have no errand of my own. Be useful, honest, and brief. Use names, never coordinates.',
+			tags: ['backstory', 'Player'],
+			pinned: true,
+		},
 		{
 			text: 'I help Player. If CottageDoor is locked I need CottageKey.',
 			tags: ['Player', 'CottageDoor', 'CottageKey'],
@@ -119,29 +124,27 @@ export const ASSISTANT:AgentSpec = {
 	pinnedWatches: { gotMushroom: GOT_MUSHROOM },
 };
 
-export const GLEN_SEEDS:AgentSpec[] = [FORAGER, MILLER, ANGLER, ASSISTANT];
-
-function millSold(host:GameHost):boolean {
-	const miller = host.world.findByID('Miller');
-	return !!miller && coinsOf(miller) >= MILL_FEE;
+function bridgeFeePaid(host:GameHost):boolean {
+	const keeper = host.world.findByID(BRIDGE_KEEPER.id);
+	return !!keeper && coinsOf(keeper) >= BRIDGE_FEE;
 }
 
 function goalDone(host:GameHost, id:string):boolean {
-	if (id === 'Miller') {
+	if (id === BRIDGE_KEEPER.id) {
 		let bridgeOpen = false;
 		host.world.forEachComponent(Bridge, (span) => {
 			if (span.open) {
 				bridgeOpen = true;
 			}
 		});
-		return bridgeOpen && millSold(host);
+		return bridgeOpen && bridgeFeePaid(host);
 	}
-	if (id === 'Forager') {
-		const forager = host.world.findByID('Forager');
+	if (id === FORAGER.id) {
+		const forager = host.world.findByID(FORAGER.id);
 		return !!forager && !!findCarried(forager, (it) => itemMatchesName(it, 'SilverTrout'));
 	}
-	if (id === 'Angler') {
-		const angler = host.world.findByID('Angler');
+	if (id === ANGLER.id) {
+		const angler = host.world.findByID(ANGLER.id);
 		return !!angler && !!findCarried(angler, (it) => itemMatchesName(it, 'FireMushroom'));
 	}
 	return false;
@@ -155,7 +158,7 @@ function wakeForagerOnce(host:GameHost):void {
 		return;
 	}
 	wokeForager.add(host);
-	host.arc.mindQueue()?.enqueueMajor('Forager', true);
+	host.arc.mindQueue()?.enqueueMajor(FORAGER.id, true);
 }
 
 function cheerOnce(host:GameHost, id:string):void {
@@ -181,19 +184,19 @@ function cheerOnce(host:GameHost, id:string):void {
 
 function checkBargain(host:GameHost):void {
 	wakeForagerOnce(host);
-	const forager = host.world.findByID('Forager');
-	const miller = host.world.findByID('Miller');
-	const angler = host.world.findByID('Angler');
+	const forager = host.world.findByID(FORAGER.id);
+	const keeper = host.world.findByID(BRIDGE_KEEPER.id);
+	const angler = host.world.findByID(ANGLER.id);
 	if (forager && findCarried(forager, (it) => itemMatchesName(it, 'SilverTrout'))) {
-		cheerOnce(host, 'Forager');
+		cheerOnce(host, FORAGER.id);
 	}
-	if (miller && coinsOf(miller) >= MILL_FEE) {
-		cheerOnce(host, 'Miller');
+	if (keeper && coinsOf(keeper) >= BRIDGE_FEE) {
+		cheerOnce(host, BRIDGE_KEEPER.id);
 	}
 	if (angler && findCarried(angler, (it) => itemMatchesName(it, 'FireMushroom'))) {
-		cheerOnce(host, 'Angler');
+		cheerOnce(host, ANGLER.id);
 	}
-	if (host.bargainDone || !forager || !miller || !angler) {
+	if (host.bargainDone || !forager || !keeper || !angler) {
 		return;
 	}
 	let bridgeOpen = false;
@@ -204,22 +207,21 @@ function checkBargain(host:GameHost):void {
 	});
 	const trout = !!findCarried(forager, (it) => itemMatchesName(it, 'SilverTrout'));
 	const mushroom = !!findCarried(angler, (it) => itemMatchesName(it, 'FireMushroom'));
-	if (!bridgeOpen || !trout || !mushroom || !millSold(host)) {
+	if (!bridgeOpen || !trout || !mushroom || !bridgeFeePaid(host)) {
 		return;
 	}
 	host.bargainDone = true;
 	host.world.setMessage('The glen holds — trout, mushroom, and a lowered bridge');
 }
 
-export function createDirector(host:GameHost):ArcDirector<HostCtx> {
+export function createDirector(host:GameHost):ArcDirector<AgentCtx> {
 	host.hooks = { checkBargain, goalDone };
-	host.kit = { verbs: [...STOCK_VERBS, 'buy', 'sell'] };
-	return host.configure(new ArcDirector<HostCtx>())
-		.addVerb('buy', { item: 'id', from: 'id', offer: 'number?' })
-		.addVerb('sell', { item: 'id', to: 'id', ask: 'number?' })
+	host.kit = { verbs: [...GAME_VERBS, 'buy', 'sell'] };
+	return host.configure(new ArcDirector<AgentCtx>())
 		.withDefaultKit(host.kit)
+		.withVerbInstructions(BUILDING_VERB_INSTRUCTIONS)
 		.addAgent(FORAGER)
-		.addAgent(MILLER)
+		.addAgent(BRIDGE_KEEPER)
 		.addAgent(ANGLER)
 		.addAgent(ASSISTANT);
 }

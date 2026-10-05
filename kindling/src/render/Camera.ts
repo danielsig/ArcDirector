@@ -13,7 +13,7 @@ export class Camera extends Component {
 		this.gameObject.transform.object3D.add(this.native);
 	}
 
-	override update(_dt:number):void {
+	override update(dt:number):void {
 		this.syncNative();
 	}
 

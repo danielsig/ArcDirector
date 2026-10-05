@@ -2,10 +2,12 @@ import { markRaw } from 'vue';
 import { PlayerInput } from '../actors/PlayerInput';
 import { HumanBody, HumanSprite, Named, SpeechBubble, Vitals, Wallet } from './components';
 import type { GameObject } from './GameObject';
-import { worldToChunk, type World } from './World';
+import type { World } from './World';
 import type { Renderer } from '@arc-director/kindling';
 import { CELL_SIZE, CHUNK_SIZE } from '../world/constants';
-import { countDef, slotItem } from '../items/inventory';
+import { Container, Item } from '../items/components';
+import { allEquipped, slotItem } from '../items/inventory';
+import type { ItemInstance } from '../items/instance';
 import { nearestPickup, pickupLabel } from '../items/pickup';
 import { characterHeight } from '../render/artCache';
 import type { HudModel, MinimapCell } from '../ui/hudModel';
@@ -49,7 +51,7 @@ function minimapStamp(world:World, follow:boolean, x:number, z:number):string {
 		const oz = Math.floor((z - half) / CELL_SIZE);
 		return `f:${ox}:${oz}:${chunks}`;
 	}
-	const { cx, cz } = worldToChunk(x, z);
+	const { cx, cz } = world.chunkCoordAt(x, z);
 	return `c:${cx}:${cz}:${chunks}`;
 }
 
@@ -273,6 +275,61 @@ function patchHotbar(hud:HudModel, bar:{ name:string; count:number }[], sel:numb
 	}
 }
 
+function walkCoin(it:ItemInstance):boolean {
+	if (it.defID === 'gold_coin') {
+		return true;
+	}
+	const nested = it.Container?.contents;
+	if (!nested) {
+		return false;
+	}
+	for (const child of nested) {
+		if (walkCoin(child)) {
+			return true;
+		}
+	}
+	return false;
+}
+
+/** A purse with coins, or a gold coin on the ground, in a chest, or in a pack. */
+function sceneHasGold(world:World):boolean {
+	let found = false;
+	world.forEachComponent(Wallet, (purse) => {
+		if (purse.coins > 0) {
+			found = true;
+		}
+	});
+	if (found) {
+		return true;
+	}
+	world.forEachComponent(Container, (bag) => {
+		for (const it of bag.contents) {
+			if (walkCoin(it)) {
+				found = true;
+			}
+		}
+	});
+	if (found) {
+		return true;
+	}
+	world.forEachComponent(Item, (item) => {
+		if (item.defID === 'gold_coin') {
+			found = true;
+		}
+	});
+	if (found) {
+		return true;
+	}
+	world.forEachComponent(HumanBody, (body) => {
+		for (const it of allEquipped(body)) {
+			if (walkCoin(it)) {
+				found = true;
+			}
+		}
+	});
+	return found;
+}
+
 export function patchHud(
 	world:World,
 	hud:HudModel,
@@ -283,12 +340,9 @@ export function patchHud(
 	const vitals = player?.getComponent(Vitals);
 	hud.hp = vitals?.hp ?? 0;
 	hud.maxHP = vitals?.maxHP ?? 5;
-	hud.mana = vitals?.mana ?? 0;
-	hud.maxMana = vitals?.maxMana ?? 5;
-	hud.keys = player ? countDef(player, 'brass_key') : 0;
-	hud.bombs = player ? countDef(player, 'bomb') : 0;
 	hud.gold = player?.getComponent(Wallet)?.coins ?? 0;
-	hud.message = world.time - world.hudMessageAt < MSG_LIFE ? world.hudMessage : '';
+	hud.showGold = sceneHasGold(world);
+	hud.message = world.time - world.hudMessageTimestamp < MSG_LIFE ? world.hudMessage : '';
 	hud.graphicsMemory = view.graphicsMemory();
 	const input = player?.getComponent(PlayerInput);
 	hud.cursorName = input?.cursorName ?? '';
@@ -370,16 +424,15 @@ export function patchInfer(host:GameHost, hud:HudModel):void {
 	const now = host.world.time;
 	const rows = host.arc?.agents() ?? [];
 	const next = rows.map((agent) => {
-		const last = agent.lastTacticalAt;
+		const last = agent.lastTacticalTimestamp;
 		return {
 			id: agent.id,
-			name: agent.identity.name || agent.id,
 			pulse: queue?.heartbeatSeconds(agent.id) ?? null,
 			ago: Number.isFinite(last) ? Math.max(0, now - last) : null,
 			thinking: queue?.isThinking(agent.id) ?? false,
 		};
 	});
-	next.sort((a, b) => a.name.localeCompare(b.name));
+	next.sort((a, b) => a.id.localeCompare(b.id));
 	hud.heartrates = next;
 
 	if (!infer) return;

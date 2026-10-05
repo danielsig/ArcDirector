@@ -7,7 +7,7 @@ export type MemoryRecord = {
 	category:MemoryCategory;
 	text:string;
 	tags:string[];
-	createdAt:number;
+	timestamp:number;
 	lastAccessed:number;
 	pinned?:boolean;
 	emotional?:boolean;
@@ -19,7 +19,7 @@ export type MemoryDraft = {
 	category?:MemoryCategory;
 	text:string;
 	tags?:string[];
-	createdAt?:number;
+	timestamp?:number;
 	pinned?:boolean;
 	emotional?:boolean;
 	embedding?:number[];
@@ -133,8 +133,8 @@ export function defaultRecallScore(args:{
 	return args.cosine * (1 + 0.08 * args.recency) + (args.tagHits > 0 ? 0.4 : 0);
 }
 
-function recencyBonus(createdAt:number, now:number):number {
-	const age = Math.max(0, now - createdAt);
+function recencyBonus(timestamp:number, now:number):number {
+	const age = Math.max(0, now - timestamp);
 	return 1 / (1 + age);
 }
 
@@ -156,14 +156,14 @@ export class MemoryStore {
 	private records:MemoryRecord[] = [];
 	private next = 1;
 
-	add(draft:MemoryDraft, now = draft.createdAt ?? 0):MemoryRecord {
+	add(draft:MemoryDraft, now = draft.timestamp ?? 0):MemoryRecord {
 		const rec:MemoryRecord = {
 			id: draft.id ?? `mem_${this.next++}`,
 			category: draft.category ?? 'episodic',
 			text: draft.text,
 			tags: draft.tags ? [...draft.tags] : [],
-			createdAt: draft.createdAt ?? now,
-			lastAccessed: draft.createdAt ?? now,
+			timestamp: draft.timestamp ?? now,
+			lastAccessed: draft.timestamp ?? now,
 			pinned: draft.pinned,
 			emotional: draft.emotional,
 			embedding: draft.embedding ? [...draft.embedding] : undefined,
@@ -200,7 +200,7 @@ export class MemoryStore {
 					? cosine(opts.embedding, record.embedding)
 					: 0;
 				const hits = tagHits(record, tags, opts.query);
-				const recency = recencyBonus(record.createdAt, now);
+				const recency = recencyBonus(record.timestamp, now);
 				const lex = lexicalOverlap(opts.query, record.text);
 				return {
 					record,
@@ -246,7 +246,7 @@ export class MemoryStore {
 				: 0;
 			const value = this.score({
 				cosine: cos,
-				recency: recencyBonus(record.createdAt, opts.now),
+				recency: recencyBonus(record.timestamp, opts.now),
 				tagHits: hits,
 				record,
 				now: opts.now,
@@ -296,7 +296,7 @@ export class MemoryStore {
 		if (overflow <= 0) {
 			return;
 		}
-		episodic.sort((a, b) => a.createdAt - b.createdAt);
+		episodic.sort((a, b) => a.timestamp - b.timestamp);
 		const drop = new Set(episodic.slice(0, overflow).map((r) => r.id));
 		this.records = this.records.filter((r) => !drop.has(r.id));
 	}

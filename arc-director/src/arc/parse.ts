@@ -4,17 +4,17 @@ import { ArcError, JOIN_SYMBOL, SYMBOL_JOIN, firstStep, type Arc, type Join, typ
 import type { VerbRegistry, VerbSpec } from './stock-verbs.js';
 import type { StepArg } from './validate.js';
 
-/** Watch / who exprs: `some(...)`, `isNear(me, Miller)`, `units.filter("Guard")`. */
+/** Watch / who exprs: `some(...)`, `isNear(me, BridgeKeeper)`, `units.filter("Guard")`. */
 function isCallExpr(s:string):boolean {
 	return /[A-Za-z_][\w.]*\(/.test(s);
 }
 
-function formatArg(v:StepArg):string {
+function formatArg(v:StepArg, verbs?:VerbRegistry):string {
 	if (Array.isArray(v)) {
 		return v.join(',');
 	}
 	if (isArc(v)) {
-		return formatArc(v);
+		return formatArc(v, verbs?.nested());
 	}
 	if (typeof v === 'string') {
 		if (isCallExpr(v)) {
@@ -34,15 +34,20 @@ function isBareArg(formatted:string):boolean {
 		|| ((formatted.startsWith('"') || formatted.startsWith("'")) && formatted.endsWith(formatted[0]));
 }
 
-export function formatStep(step:Step):string {
+/**
+ * Arc text that parses back to the same step. A lone arg drops its `key=` only when it is the verb's
+ * first arg, which is where the parser puts a positional value; without `verbs` every arg keeps its key.
+ */
+export function formatStep(step:Step, verbs?:VerbRegistry):string {
 	const keys = Object.keys(step.args);
 	if (keys.length === 0) {
 		return `${step.verb}()`;
 	}
+	const first = Object.keys(verbs?.get(step.verb)?.args ?? {})[0];
 	const inner = keys.map((k) => {
 		const value = step.args[k];
-		const formatted = formatArg(value);
-		if (keys.length === 1 && (isBareArg(formatted) || isArc(value))) {
+		const formatted = formatArg(value, verbs);
+		if (keys.length === 1 && k === first && (isBareArg(formatted) || isArc(value))) {
 			return formatted;
 		}
 		return `${k}=${formatted}`;
@@ -50,21 +55,21 @@ export function formatStep(step:Step):string {
 	return `${step.verb}(${inner})`;
 }
 
-function formatNode(arc:Arc):string {
+function formatNode(arc:Arc, verbs?:VerbRegistry):string {
 	if (arc.group) {
-		return `(${formatArc(arc.group)})`;
+		return `(${formatArc(arc.group, verbs)})`;
 	}
 	if (arc.head) {
-		return formatStep(arc.head);
+		return formatStep(arc.head, verbs);
 	}
 	return 'think()';
 }
 
-export function formatArc(arc:Arc):string {
-	let out = formatNode(arc);
+export function formatArc(arc:Arc, verbs?:VerbRegistry):string {
+	let out = formatNode(arc, verbs);
 	let cur:Arc | undefined = arc;
 	while (cur.then) {
-		out += ` ${JOIN_SYMBOL[cur.then.join]} ${formatNode(cur.then.arc)}`;
+		out += ` ${JOIN_SYMBOL[cur.then.join]} ${formatNode(cur.then.arc, verbs)}`;
 		cur = cur.then.arc;
 	}
 	return out;
@@ -93,7 +98,56 @@ function parseQuoted(s:string, i:number):{ value:string; next:number } {
 		out += s[i];
 		i += 1;
 	}
-	throw new ArcError('unterminated string in arc text');
+	return { value: out, next: i };
+}
+
+/** Index past the `)` at `i`. End of input stands in for every closer the model left off. */
+function closeAt(s:string, i:number, missing:string):number {
+	if (i >= s.length) {
+		return i;
+	}
+	if (s[i] !== ')') {
+		throw new ArcError(missing);
+	}
+	return i + 1;
+}
+
+/** True when `, key=` at `i` starts another arg of this verb. */
+function namedArgAt(s:string, i:number, keys:string[]):boolean {
+	const m = /^\s*([A-Za-z_]\w*)\s*=(?!=)/.exec(s.slice(i, i + 64));
+	return !!m && keys.includes(m[1]);
+}
+
+/**
+ * Prose arg (`text` kind). Double-quoted, or raw up to the closing `)` or the next
+ * `, key=` of this verb. Commas and apostrophes are plain text.
+ */
+function parseText(s:string, i:number, keys:string[]):{ value:string; next:number } {
+	i = skipWs(s, i);
+	if (s[i] === '"') {
+		return parseQuoted(s, i);
+	}
+	const start = i;
+	let depth = 0;
+	while (i < s.length) {
+		const c = s[i];
+		if (c === '(') {
+			depth += 1;
+		}
+		else if (c === ')') {
+			if (depth === 0) {
+				break;
+			}
+			depth -= 1;
+		}
+		else if (c === ',' && depth === 0 && namedArgAt(s, i + 1, keys)) {
+			break;
+		}
+		i += 1;
+	}
+	const raw = s.slice(start, i).trim();
+	const quoted = raw.length > 1 && raw.startsWith("'") && raw.endsWith("'");
+	return { value: quoted ? raw.slice(1, -1) : raw, next: i };
 }
 
 function parseBalanced(s:string, i:number):{ value:string; next:number } {
@@ -144,6 +198,9 @@ function parseBalanced(s:string, i:number):{ value:string; next:number } {
 		}
 		i += 1;
 	}
+	if (depth > 0) {
+		throw new ArcError('expression cut off before its closing bracket');
+	}
 	return { value: s.slice(start, i).trim(), next: i };
 }
 
@@ -174,11 +231,8 @@ function parseArcAtom(s:string, i:number, registry:VerbRegistry):{ value:Arc; ne
 	i = skipWs(s, i);
 	if (s[i] === '(') {
 		const inner = parseNestedArc(s, i + 1, registry);
-		const j = skipWs(s, inner.next);
-		if (s[j] !== ')') {
-			throw new ArcError('missing ) for grouped arc');
-		}
-		return { value: { head: { verb: 'group', args: {} }, group: inner.value }, next: j + 1 };
+		const next = closeAt(s, skipWs(s, inner.next), 'missing ) for grouped arc');
+		return { value: { head: { verb: 'group', args: {} }, group: inner.value }, next };
 	}
 	const step = parseStepText(s, i, registry);
 	return { value: { head: step.step }, next: step.next };
@@ -194,7 +248,7 @@ function parseNestedArc(s:string, i:number, registry:VerbRegistry):{ value:Arc; 
 		if (j >= s.length || s[j] === ',' || s[j] === ')') {
 			break;
 		}
-		const join = parseJoin(s, pos);
+		const join = joinAt(s, pos);
 		if (!join) {
 			break;
 		}
@@ -222,10 +276,20 @@ function parseStepText(s:string, i:number, registry:VerbRegistry):{ step:Step; n
 		throw new ArcError(`unknown verb '${verb}'`);
 	}
 	const args:Record<string, StepArg> = {};
+	const read = (key:string, at:number):{ value:StepArg; next:number } => {
+		const base = argBase(spec.args[key]);
+		if (base === 'arc') {
+			return parseNestedArc(s, at, registry.nested());
+		}
+		if (base === 'text') {
+			return parseText(s, at, Object.keys(spec.args).filter((k) => k !== key));
+		}
+		return parseValue(s, at);
+	};
 	if (s[i] === '(') {
 		i += 1;
 		i = skipWs(s, i);
-		if (s[i] !== ')') {
+		if (i < s.length && s[i] !== ')') {
 			let positional = 0;
 			while (true) {
 				i = skipWs(s, i);
@@ -235,35 +299,21 @@ function parseStepText(s:string, i:number, registry:VerbRegistry):{ step:Step; n
 				}
 				const ident = s.slice(nameStart, i);
 				i = skipWs(s, i);
-				if (s[i] === '=') {
-					i += 1;
-					if (argBase(spec.args[ident]) === 'arc') {
-						const parsed = parseNestedArc(s, i, registry.nested());
-						args[ident] = parsed.value;
-						i = parsed.next;
-					}
-					else {
-						const parsed = parseValue(s, i);
-						args[ident] = parsed.value;
-						i = parsed.next;
-					}
+				const key = nextPositionalKey(spec, args, positional);
+				// Prose may hold `=`: only this verb's own arg names start a named arg there.
+				const prose = !!key && argBase(spec.args[key]) === 'text' && !(ident in spec.args);
+				if (s[i] === '=' && !prose) {
+					const parsed = read(ident, i + 1);
+					args[ident] = parsed.value;
+					i = parsed.next;
 				}
 				else {
-					i = nameStart;
-					const key = nextPositionalKey(spec, args, positional);
 					if (!key) {
 						throw new ArcError(`verb '${verb}' got an unexpected positional arg`);
 					}
-					if (argBase(spec.args[key]) === 'arc') {
-						const parsed = parseNestedArc(s, i, registry.nested());
-						args[key] = parsed.value;
-						i = parsed.next;
-					}
-					else {
-						const parsed = parseValue(s, i);
-						args[key] = parsed.value;
-						i = parsed.next;
-					}
+					const parsed = read(key, nameStart);
+					args[key] = parsed.value;
+					i = parsed.next;
 					positional += 1;
 				}
 				i = skipWs(s, i);
@@ -271,16 +321,13 @@ function parseStepText(s:string, i:number, registry:VerbRegistry):{ step:Step; n
 					i += 1;
 					continue;
 				}
-				if (s[i] === ')') {
+				if (i >= s.length || s[i] === ')') {
 					break;
 				}
 				throw new ArcError(`expected ',' or ')' in ${verb}(...)`);
 			}
 		}
-		if (s[i] !== ')') {
-			throw new ArcError(`missing ')' for ${verb}`);
-		}
-		i += 1;
+		i = closeAt(s, i, `missing ')' for ${verb}`);
 	}
 	return { step: { verb, args }, next: i };
 }
@@ -297,6 +344,16 @@ function parseJoin(s:string, i:number):{ join:Join; next:number } | null {
 		return { join: SYMBOL_JOIN[';'], next: i + 1 };
 	}
 	return null;
+}
+
+/** A join, or `;` when the next atom follows with none (`think(...)use(...)`). A join with nothing after it is dropped. */
+function joinAt(s:string, i:number):{ join:Join; next:number } | null {
+	const join = parseJoin(s, i);
+	if (join) {
+		return skipWs(s, join.next) < s.length ? join : null;
+	}
+	const j = skipWs(s, i);
+	return /[A-Za-z_(]/.test(s[j] ?? '') ? { join: SYMBOL_JOIN[';'], next: j } : null;
 }
 
 function nextPositionalKey(
@@ -326,10 +383,10 @@ function lastArc(arc:Arc):Arc {
 	return cur;
 }
 
-/** Gemma copies the Example including a trailing period, and extra `)` between issue(). */
-function skipTrail(s:string, i:number):number {
+/** Gemma copies the Example including a trailing period, and adds `)` or `,` between issue(). */
+function fixTrail(s:string, i:number):number {
 	i = skipWs(s, i);
-	while (i < s.length && (s[i] === ')' || s[i] === '.')) {
+	while (i < s.length && (s[i] === ')' || s[i] === '.' || s[i] === ',')) {
 		i = skipWs(s, i + 1);
 	}
 	return i;
@@ -338,17 +395,20 @@ function skipTrail(s:string, i:number):number {
 export function parseArcText(text:string, registry:VerbRegistry):Arc {
 	const parsed = parseNestedArc(text, 0, registry);
 	const arc = parsed.value;
-	let i = skipTrail(text, parsed.next);
+	let i = fixTrail(text, parsed.next);
 	let tail = lastArc(arc);
 	while (i < text.length) {
-		const join = parseJoin(text, i);
+		const join = joinAt(text, i);
 		if (!join) {
+			if (parseJoin(text, i)) {
+				break;
+			}
 			throw new ArcError(`unexpected trailing text: ${text.slice(i)}`);
 		}
 		const nxt = parseNestedArc(text, join.next, registry);
 		tail.then = { join: join.join, arc: nxt.value };
 		tail = lastArc(nxt.value);
-		i = skipTrail(text, nxt.next);
+		i = fixTrail(text, nxt.next);
 	}
 	validateArc(arc, registry);
 	return arc;
@@ -415,15 +475,7 @@ function joinArcTextParts(raw:unknown):string | undefined {
 	return parts.join(' ; ');
 }
 
-const MIND_KEYS = new Set([
-	'addWatches',
-	'editWatches',
-	'removeWatches',
-	'watches',
-	'sightFocus',
-	'goals',
-	'identity',
-]);
+const MIND_KEYS = new Set(['goals', 'identity']);
 
 /** Last root `{"head"` / `{"group"` in CoT. Nested `then.arc.head` is skipped. */
 function lastHeadJson(text:string):string | undefined {

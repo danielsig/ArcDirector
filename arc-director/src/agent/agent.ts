@@ -1,6 +1,6 @@
 import { formatArc, parseArc } from '../arc/parse.js';
 import { arcSchema } from '../arc/schema.js';
-import type { VerbRegistry } from '../arc/stock-verbs.js';
+import { FOCUS_EDIT_VERBS, WATCH_EDIT_VERBS, type VerbRegistry } from '../arc/stock-verbs.js';
 import type { Arc, ArcResult, Step } from '../arc/types.js';
 import { ArcError } from '../arc/types.js';
 import { evaluate } from '../expr/eval.js';
@@ -19,7 +19,8 @@ import {
 	GREP_WORLD_ENCYCLOPEDIA,
 	type EncyclopediaSource,
 } from './encyclopedia.js';
-import { arcRepairHint, sayRangeHint, shouldEmitArcText, stablePrefix, volatileBlock } from './prompt.js';
+import { arcRepairHint, sayRangeHint, shouldEmitArcText, stablePrefix, volatileBlock, type ThinkInstructions } from './prompt.js';
+import { NameBook, type NameBookJSON, type NameTarget } from './names.js';
 import {
 	runArc,
 	deferThinks,
@@ -44,7 +45,6 @@ import {
 	mergePinnedWatches,
 	watchCount,
 	watchExprs,
-	watchOpsFromArc,
 } from './watch.js';
 import {
 	asFocusList,
@@ -78,9 +78,9 @@ export type AgentJSON = {
 	sightLimit?:number;
 	lastResult?:ArcResult;
 	lastArc?:Arc;
-	lastTacticalAt?:number;
-	lastStrategicAt?:number;
-	lastIntrusionAt?:number;
+	lastTacticalTimestamp?:number;
+	lastStrategicTimestamp?:number;
+	lastIntrusionTimestamp?:number;
 	liveArc:boolean;
 	maxGoals:number;
 	maxEpisodic:number;
@@ -92,15 +92,16 @@ export type AgentJSON = {
 	maxLaws?:number;
 	cooldown?:number;
 	prevMe?:ExprEntity;
+	names?:NameBookJSON;
 };
 
-export type AgentDeps<HostCtx = unknown> = {
+export type AgentDeps<TAgentCtx = unknown> = {
 	provider:InferenceProvider;
 	verbs:VerbRegistry;
-	senses?:Record<string, Sense<HostCtx>>;
-	tools?:Record<string, ToolSpec<HostCtx>>;
-	context:()=>HostCtx | undefined;
-	execute?:(step:Step, ctx:HostCtx | undefined, actorID?:string)=>Promise<ArcResult>;
+	senses?:Record<string, Sense<TAgentCtx>>;
+	tools?:Record<string, ToolSpec<TAgentCtx>>;
+	context:()=>TAgentCtx | undefined;
+	execute?:(step:Step, ctx:TAgentCtx | undefined, actorID?:string)=>Promise<ArcResult>;
 	abortArc?:(id:string)=>void;
 	/** Host cooldown in game seconds after a handler pops or aborts. Default 8. */
 	cooldown?:number;
@@ -117,22 +118,29 @@ export type AgentDeps<HostCtx = unknown> = {
 	arcRetryCap?:number;
 	/** Ask for `go_to() && wait()` text instead of Arc JSON. Testing toggle. Skips the JSON goals pass. */
 	arcText?:boolean;
-	/** Standing think line. Omit for {@link DEFAULT_THINK_INSTRUCTIONS}. */
-	thinkInstructions?:string;
+	/** Sampling temperature from the second repair turn on, so a model stuck on one bad reply moves. Default 0.4. */
+	repairTemperature?:number;
+	thinkInstructions?:ThinkInstructions;
+	/** Whether the model reasons before it answers. Picks the think line. Default: it does. */
+	thinking?:()=>boolean;
 	/** Standing verb-chain line. Omit for {@link DEFAULT_VERB_INSTRUCTIONS}. */
 	verbInstructions?:string;
+	/** Arc that replaces the closing Example in the prompt. */
+	arcExample?:string;
+	/** Host naming policy seen from this agent: the base name for a body. Omit to use ids. */
+	seenAs?:(target:NameTarget)=>string;
 	maxGoals?:number;
 	intrusionThreshold?:number;
 	intrusionCooldown?:number;
 	recallK?:number;
 	strategicInterval?:number;
 	talk?:TalkNet;
-	catalog?:(ctx:HostCtx)=>Catalog;
+	catalog?:(ctx:TAgentCtx)=>Catalog;
 	hideObserve?:boolean;
 	/** Host top-down snapshots. `see_map` is omitted unless this and vision are both set. */
 	map?:MapSense;
 	/** Host world-type articles. `grep_world_encyclopedia` is omitted unless this is set. */
-	encyclopedia?:EncyclopediaSource<HostCtx>;
+	encyclopedia?:EncyclopediaSource<TAgentCtx>;
 	/**
 	 * Whether the current model accepts image parts.
 	 * `false` never offers `see_map`. `true` offers it when `map` is set.
@@ -151,10 +159,10 @@ export type AgentDeps<HostCtx = unknown> = {
 	 * Object or `(ctx) => kit`. Omit = all catalog verbs and all registered senses / tools (Agent tests).
 	 * Director always passes a kit (`{}` if the spec omitted it).
 	 */
-	kit?:KitSource<HostCtx>;
+	kit?:KitSource<TAgentCtx>;
 };
 
-export type AgentOptions<HostCtx = unknown> = AgentDeps<HostCtx> & {
+export type AgentOptions<TAgentCtx = unknown> = AgentDeps<TAgentCtx> & {
 	id:string;
 	identity:AgentIdentity;
 	goals?:Goal[];
@@ -194,17 +202,17 @@ function clauseAbout(scene:string, name:string):string {
 	return (hit ?? scene).replace(/\s+/g, ' ').trim().slice(0, 220);
 }
 
-export class Agent<HostCtx = unknown> {
+export class Agent<TAgentCtx = unknown> {
 	readonly id:string;
 	identity:AgentIdentity;
 	goals:Goal[];
 	readonly memory:MemoryStore;
 	readonly verbs:VerbRegistry;
-	readonly senses:Record<string, Sense<HostCtx>>;
-	readonly tools:Record<string, ToolSpec<HostCtx>>;
+	readonly senses:Record<string, Sense<TAgentCtx>>;
+	readonly tools:Record<string, ToolSpec<TAgentCtx>>;
 	readonly provider:InferenceProvider;
-	readonly context:()=>HostCtx | undefined;
-	readonly execute?:(step:Step, ctx:HostCtx | undefined, actorID?:string)=>Promise<ArcResult>;
+	readonly context:()=>TAgentCtx | undefined;
+	readonly execute?:(step:Step, ctx:TAgentCtx | undefined, actorID?:string)=>Promise<ArcResult>;
 	readonly abortArc?:(id:string)=>void;
 	cooldown:number;
 	laws:CrowdLaw[] = [];
@@ -221,18 +229,24 @@ export class Agent<HostCtx = unknown> {
 	arcRetryCap:number;
 	/** Mutable so the Testing toggle can flip live agents. */
 	arcText:boolean;
-	thinkInstructions:string | undefined;
+	repairTemperature:number;
+	thinkInstructions:ThinkInstructions | undefined;
+	thinking:()=>boolean;
 	verbInstructions:string | undefined;
+	arcExample:string | undefined;
+	readonly seenAs:((target:NameTarget)=>string) | undefined;
+	/** This agent's names for other bodies. Saved, because memories quote them. */
+	readonly names = new NameBook();
 	maxGoals:number;
 	intrusionThreshold:number;
 	intrusionCooldown:number;
 	recallK:number;
 	strategicInterval:number;
 	talk:TalkNet | undefined;
-	catalog?:(ctx:HostCtx)=>Catalog;
+	catalog?:(ctx:TAgentCtx)=>Catalog;
 	hideObserve:boolean;
 	map:MapSense | undefined;
-	encyclopedia:EncyclopediaSource<HostCtx> | undefined;
+	encyclopedia:EncyclopediaSource<TAgentCtx> | undefined;
 	vision:boolean | undefined;
 	watches:Watches;
 	pinnedWatches:Watches;
@@ -243,18 +257,18 @@ export class Agent<HostCtx = unknown> {
 	maxSightFocus:number;
 	sightLimit:number | undefined;
 	/** Object or callback. Assign a new one any time. Fetched every tick. */
-	kit:KitSource<HostCtx> | undefined;
+	kit:KitSource<TAgentCtx> | undefined;
 	private currentKit:Kit = {};
 
 	lastResult:ArcResult | undefined;
 	lastArc:Arc | undefined;
 	/** Index of the step currently running inside `enact` (0-based). */
 	verbIndex = 0;
-	lastTacticalAt = Number.NEGATIVE_INFINITY;
+	lastTacticalTimestamp = Number.NEGATIVE_INFINITY;
 	/** Self at last tactical think; spawn freeze until then. */
 	prevMe:ExprEntity | undefined;
-	lastStrategicAt = 0;
-	lastIntrusionAt = Number.NEGATIVE_INFINITY;
+	lastStrategicTimestamp = 0;
+	lastIntrusionTimestamp = Number.NEGATIVE_INFINITY;
 	liveArc = false;
 	protected now = 0;
 	private readonly pendingEvents:AgentEvent[] = [];
@@ -266,7 +280,7 @@ export class Agent<HostCtx = unknown> {
 	private pendingAbout:string | undefined;
 	private lastVerb:string | undefined;
 
-	constructor(opts:AgentOptions<HostCtx>) {
+	constructor(opts:AgentOptions<TAgentCtx>) {
 		this.id = opts.id;
 		this.identity = opts.identity;
 		this.goals = opts.goals ? [...opts.goals] : [];
@@ -290,8 +304,12 @@ export class Agent<HostCtx = unknown> {
 		this.toolRoundCap = opts.toolRoundCap ?? 2;
 		this.arcRetryCap = opts.arcRetryCap ?? 0;
 		this.arcText = opts.arcText === true;
+		this.repairTemperature = opts.repairTemperature ?? 0.4;
 		this.thinkInstructions = opts.thinkInstructions;
+		this.thinking = opts.thinking ?? (() => true);
 		this.verbInstructions = opts.verbInstructions;
+		this.arcExample = opts.arcExample;
+		this.seenAs = opts.seenAs;
 		this.maxGoals = opts.maxGoals ?? 5;
 		this.intrusionThreshold = opts.intrusionThreshold ?? 0.55;
 		this.intrusionCooldown = opts.intrusionCooldown ?? 45;
@@ -347,12 +365,22 @@ export class Agent<HostCtx = unknown> {
 		return this.currentKit;
 	}
 
-	/** Catalog filtered by the current kit. Unset `kit` (standalone Agent) = whole catalog. */
+	/**
+	 * Catalog filtered by the current kit. Unset `kit` (standalone Agent) = whole catalog.
+	 * The watch and focus verbs also need `watchesWritable` / `sightFocusWritable`.
+	 */
 	activeVerbs():VerbRegistry {
 		this.refreshKit();
-		const view = this.kit === undefined
+		const off = [
+			...(this.watchesWritable ? [] : WATCH_EDIT_VERBS),
+			...(this.sightFocusWritable ? [] : FOCUS_EDIT_VERBS),
+		];
+		const granted = this.kit === undefined
+			? this.verbs.list().map((spec) => spec.name)
+			: this.currentKit.verbs ?? [];
+		const view = this.kit === undefined && off.length === 0
 			? this.verbs
-			: this.verbs.view(this.currentKit.verbs ?? []);
+			: this.verbs.view(granted.filter((name) => !off.includes(name)));
 		if (this.crowdLawWho() || !view.has('law')) {
 			return view;
 		}
@@ -425,20 +453,12 @@ export class Agent<HostCtx = unknown> {
 		return this.currentKit.tools;
 	}
 
-	private toolAllowed(name:string):boolean {
-		const list = this.toolsAllowed();
-		if (list === undefined) {
-			return true;
-		}
-		return list.includes(name);
-	}
-
-	private filterTools(tools:Record<string, ToolSpec<HostCtx>>):Record<string, ToolSpec<HostCtx>> {
+	private filterTools(tools:Record<string, ToolSpec<TAgentCtx>>):Record<string, ToolSpec<TAgentCtx>> {
 		const list = this.toolsAllowed();
 		if (list === undefined) {
 			return tools;
 		}
-		const next:Record<string, ToolSpec<HostCtx>> = {};
+		const next:Record<string, ToolSpec<TAgentCtx>> = {};
 		for (const name of list) {
 			if (tools[name]) {
 				next[name] = tools[name];
@@ -447,8 +467,24 @@ export class Agent<HostCtx = unknown> {
 		return next;
 	}
 
-	pushEvent(event:AgentEvent):void {
-		this.pendingEvents.push({ ...event, at: event.at ?? this.now });
+	/** This agent's name for a body it is sampling now. Assigns one on first sight. */
+	seen(target:NameTarget):string {
+		return this.seenAs ? this.names.name(target.id, this.seenAs(target)) : target.id;
+	}
+
+	/** This agent's name for `id`. A body it never sampled gets the policy's answer for a bare id, unrecorded. */
+	nameOf(id:string):string {
+		return this.names.peek(id) ?? this.seenAs?.({ id }) ?? id;
+	}
+
+	pushEvent({ who, ...event }:AgentEvent):void {
+		const names = (who ?? []).map((id) => this.nameOf(id));
+		this.pendingEvents.push({
+			...event,
+			text: event.text.replace(/\{(\d+)\}/g, (hit, n) => names[Number(n)] ?? hit),
+			tags: names.length > 0 ? mergeTags(event.tags, names) : event.tags,
+			timestamp: event.timestamp ?? this.now,
+		});
 	}
 
 	stamp(now:number):void {
@@ -476,7 +512,7 @@ export class Agent<HostCtx = unknown> {
 	}
 
 	/** Hosts that run the arc themselves still need this for remember / think / set_goal / set_identity. */
-	async perform(step:Step, ctx:HostCtx | undefined = this.context()):Promise<ArcResult> {
+	async perform(step:Step, ctx:TAgentCtx | undefined = this.context()):Promise<ArcResult> {
 		return this.runStep(step, ctx);
 	}
 
@@ -500,7 +536,7 @@ export class Agent<HostCtx = unknown> {
 		this.syncQueue(result);
 	}
 
-	/** Walk an arc (world verbs via `execute`). Arms wait(until), then notes the queue. */
+	/** Run an arc (world verbs via `execute`). Arms wait(until), then notes the queue. */
 	async enact(
 		arc:Arc,
 		handler?:ArcHandler,
@@ -561,7 +597,7 @@ export class Agent<HostCtx = unknown> {
 		this.queue?.endArc(this.id);
 	}
 
-	async remember(text:string, tags:string[] = [], at = this.now):Promise<MemoryRecord> {
+	async remember(text:string, tags:string[] = [], timestamp = this.now):Promise<MemoryRecord> {
 		let embedding:number[] | undefined;
 		if (this.provider.embed) {
 			try {
@@ -576,9 +612,9 @@ export class Agent<HostCtx = unknown> {
 			category: 'semantic',
 			text,
 			tags: mergeTags(tags, nameTags(text)),
-			createdAt: at,
+			timestamp,
 			embedding,
-		}, at);
+		}, timestamp);
 	}
 
 	/** Living commander (crowd) or this mind. Chat thread, logs, and world face. */
@@ -605,7 +641,7 @@ export class Agent<HostCtx = unknown> {
 		try {
 			if (strategic) {
 				await this.reviseGoals();
-				this.lastStrategicAt = gameTime;
+				this.lastStrategicTimestamp = gameTime;
 			}
 			if (!tactical || signal?.aborted) {
 				return null;
@@ -616,7 +652,7 @@ export class Agent<HostCtx = unknown> {
 			}
 			this.pendingAbout = undefined;
 			this.lastArc = arc;
-			this.lastTacticalAt = gameTime;
+			this.lastTacticalTimestamp = gameTime;
 			this.capturePrevMe();
 			this.pendingEvents.length = 0;
 			this.recentAbsorbed = 0;
@@ -625,7 +661,7 @@ export class Agent<HostCtx = unknown> {
 			if (signal?.aborted) {
 				return null;
 			}
-			this.lastTacticalAt = gameTime;
+			this.lastTacticalTimestamp = gameTime;
 			this.capturePrevMe();
 			throw err;
 		}
@@ -658,9 +694,9 @@ export class Agent<HostCtx = unknown> {
 			sightLimit: this.sightLimit,
 			lastResult: this.lastResult ? { ...this.lastResult } : undefined,
 			lastArc: this.lastArc,
-			lastTacticalAt: Number.isFinite(this.lastTacticalAt) ? this.lastTacticalAt : undefined,
-			lastStrategicAt: Number.isFinite(this.lastStrategicAt) ? this.lastStrategicAt : undefined,
-			lastIntrusionAt: Number.isFinite(this.lastIntrusionAt) ? this.lastIntrusionAt : undefined,
+			lastTacticalTimestamp: Number.isFinite(this.lastTacticalTimestamp) ? this.lastTacticalTimestamp : undefined,
+			lastStrategicTimestamp: Number.isFinite(this.lastStrategicTimestamp) ? this.lastStrategicTimestamp : undefined,
+			lastIntrusionTimestamp: Number.isFinite(this.lastIntrusionTimestamp) ? this.lastIntrusionTimestamp : undefined,
 			liveArc: this.liveArc,
 			maxGoals: this.maxGoals,
 			maxEpisodic: this.memory.maxEpisodic,
@@ -672,10 +708,11 @@ export class Agent<HostCtx = unknown> {
 			maxLaws: this.maxLaws,
 			cooldown: this.cooldown,
 			prevMe: this.prevMe ? cloneEntity(this.prevMe) : undefined,
+			names: this.names.toJSON(),
 		};
 	}
 
-	static fromJSON<HostCtx>(json:AgentJSON, deps:AgentDeps<HostCtx>):Agent<HostCtx> {
+	static fromJSON<TAgentCtx>(json:AgentJSON, deps:AgentDeps<TAgentCtx>):Agent<TAgentCtx> {
 		const id = readID(json);
 		if (!id) {
 			throw new Error('agent json missing id');
@@ -691,14 +728,14 @@ export class Agent<HostCtx = unknown> {
 		return agent;
 	}
 
-	protected loadJSON(json:AgentJSON, deps?:AgentDeps<HostCtx>):void {
+	protected loadJSON(json:AgentJSON, deps?:AgentDeps<TAgentCtx>):void {
 		this.memory.maxEpisodic = json.maxEpisodic;
 		this.maxGoals = json.maxGoals;
 		this.lastResult = json.lastResult;
 		this.lastArc = json.lastArc;
-		this.lastTacticalAt = json.lastTacticalAt ?? Number.NEGATIVE_INFINITY;
-		this.lastStrategicAt = json.lastStrategicAt ?? 0;
-		this.lastIntrusionAt = json.lastIntrusionAt ?? Number.NEGATIVE_INFINITY;
+		this.lastTacticalTimestamp = json.lastTacticalTimestamp ?? Number.NEGATIVE_INFINITY;
+		this.lastStrategicTimestamp = json.lastStrategicTimestamp ?? 0;
+		this.lastIntrusionTimestamp = json.lastIntrusionTimestamp ?? Number.NEGATIVE_INFINITY;
 		this.liveArc = json.liveArc;
 		const hostPins = asWatches(deps?.pinnedWatches);
 		const jsonPins = asWatches(json.pinnedWatches);
@@ -730,6 +767,7 @@ export class Agent<HostCtx = unknown> {
 			this.cooldown = json.cooldown;
 		}
 		this.prevMe = prevMeFromJSON(json.prevMe);
+		this.names.load(json.names);
 		if (json.laws) {
 			this.laws = json.laws.map((s) => ({ ...s }));
 		}
@@ -739,7 +777,7 @@ export class Agent<HostCtx = unknown> {
 	}
 
 	private tacticalDue(gameTime:number):boolean {
-		if (!Number.isFinite(this.lastTacticalAt)) {
+		if (!Number.isFinite(this.lastTacticalTimestamp)) {
 			return true;
 		}
 		if (this.lastResult?.interrupted) {
@@ -751,7 +789,7 @@ export class Agent<HostCtx = unknown> {
 		if (this.heartbeat <= 0) {
 			return true;
 		}
-		return gameTime - this.lastTacticalAt >= this.heartbeat;
+		return gameTime - this.lastTacticalTimestamp >= this.heartbeat;
 	}
 
 	private strategicDue(gameTime:number):boolean {
@@ -761,23 +799,18 @@ export class Agent<HostCtx = unknown> {
 		if (this.strategicInterval <= 0) {
 			return false;
 		}
-		if (!Number.isFinite(this.lastStrategicAt)) {
+		if (!Number.isFinite(this.lastStrategicTimestamp)) {
 			return false;
 		}
-		return gameTime - this.lastStrategicAt >= this.strategicInterval;
+		return gameTime - this.lastStrategicTimestamp >= this.strategicInterval;
 	}
 
 	private async reviseGoals():Promise<void> {
 		if (this.arcText) {
 			return;
 		}
-		const system = stablePrefix(this.identity, this.activeVerbs(), {
+		const system = stablePrefix(this.id, this.identity, this.activeVerbs(), {
 			includeWatches: true,
-			canSeeMap: this.seeMapOn() && this.toolAllowed('see_map'),
-			canGrepEncyclopedia: this.encyclopediaOn() && this.toolAllowed(GREP_WORLD_ENCYCLOPEDIA),
-			youSymbol: this.youSymbol(),
-			thinkInstructions: this.thinkInstructions,
-			verbInstructions: this.verbInstructions,
 			omitArc: true,
 		});
 		const user = `${volatileBlock({
@@ -790,8 +823,8 @@ export class Agent<HostCtx = unknown> {
 			+ 'Revise goals if what you just learned changes what you must do. '
 			+ 'Harm, theft, and threats outrank standing work — put that first in goals. '
 			+ 'Do not change identity unless who you are has actually changed for good. '
-			+ 'Omit identity otherwise. Do not rename or rewrite the role to summarize this moment. '
-			+ 'Emit JSON {"goals":[{"text":"...","priority":0}]} and only if needed "identity":{"name":"...","role":"...","traits":["..."]}. '
+			+ 'Omit identity otherwise. Do not rewrite the role to summarize this moment. '
+			+ 'Emit JSON {"goals":[{"text":"...","priority":0}]} and only if needed "identity":{"role":"...","traits":["..."]}. '
 			+ `Keep at most ${this.maxGoals} goals. Do not emit movement.`;
 		const res = await this.provider.chat({
 			model: this.model,
@@ -828,8 +861,8 @@ export class Agent<HostCtx = unknown> {
 		}
 		const lines = this.laws.map((law) => (
 			this.crowdLawWho()
-				? `- ${law.name}: who=${law.who} watch=${law.watch} → ${formatArc(law.arc)}`
-				: `- ${law.name}: watch=${law.watch} → ${formatArc(law.arc)}`
+				? `- ${law.name}: who=${law.who} watch=${law.watch} → ${formatArc(law.arc, this.verbs.nested())}`
+				: `- ${law.name}: watch=${law.watch} → ${formatArc(law.arc, this.verbs.nested())}`
 		));
 		return `Laws (emergencies, list order; unlaw to drop):\n${lines.join('\n')}`;
 	}
@@ -851,7 +884,7 @@ export class Agent<HostCtx = unknown> {
 				continue;
 			}
 			try {
-				sensed[name] = sense.gather(ctx as HostCtx);
+				sensed[name] = sense.gather(ctx as TAgentCtx);
 			}
 			catch {
 				continue;
@@ -879,10 +912,10 @@ export class Agent<HostCtx = unknown> {
 			recalled,
 			watches: this.watches,
 			pinnedWatches: this.pinnedWatches,
-			watchesWritable: this.watchesWritable,
+			watchesWritable: this.activeVerbs().has('watch'),
 			pinnedSightFocus: this.pinnedSightFocus,
 			sightFocus: this.sightFocus,
-			sightFocusWritable: this.sightFocusWritable,
+			sightFocusWritable: this.activeVerbs().has('focus'),
 			recent: this.recent,
 			recentSummary: this.recentSummary,
 			thinkAbout: this.pendingAbout,
@@ -965,14 +998,18 @@ export class Agent<HostCtx = unknown> {
 		const sendTools = tools.length > 0 && (this.toolRoundCap > 0 || seeMapBoost > 0);
 		const toolNames = sendTools ? tools.map((t) => t.name) : [];
 		const emitText = this.emitText(verbs);
-		const system = stablePrefix(this.identity, verbs, {
+		const system = stablePrefix(this.id, this.identity, verbs, {
 			includeWatches: this.watchesWritable || watchCount(this.watchList()) > 0,
-			canSeeMap: this.seeMapOn() && this.toolAllowed('see_map'),
-			canGrepEncyclopedia: this.encyclopediaOn() && this.toolAllowed(GREP_WORLD_ENCYCLOPEDIA),
+			watchesWritable: verbs.has('watch'),
+			canObserve: toolNames.includes('observe'),
+			canSeeMap: toolNames.includes('see_map'),
+			canGrepEncyclopedia: toolNames.includes(GREP_WORLD_ENCYCLOPEDIA),
 			youSymbol: this.youSymbol(),
 			arcText: emitText,
 			thinkInstructions: this.thinkInstructions,
+			thinking: this.thinking(),
 			verbInstructions: this.verbInstructions,
+			arcExample: this.arcExample,
 			tools: toolNames,
 		});
 		const user = this.volatileUser(sensed);
@@ -996,8 +1033,16 @@ export class Agent<HostCtx = unknown> {
 				responseFormat: allowTools || emitText
 					? undefined
 					: { name: 'arc', schema: arcSchema(verbs), strict: false },
-				temperature: 0,
+				temperature: this.arcRetryCap - repairsLeft > 1 ? this.repairTemperature : 0,
 			});
+			if (res.truncated) {
+				lastErr = new ArcError('reply was cut off at the token limit; answer shorter');
+				if (!this.pushRepair(messages, { content: null, toolCalls: [] }, lastErr, repairsLeft, toolNames, emitText)) {
+					throw lastErr;
+				}
+				repairsLeft -= 1;
+				continue;
+			}
 			if (res.toolCalls.length > 0 && allowTools) {
 				messages.push({
 					role: 'assistant',
@@ -1203,16 +1248,16 @@ export class Agent<HostCtx = unknown> {
 				continue;
 			}
 			this.noteRecent(text);
-			if (e.kind === 'HeardSpeech') {
+			if (e.remember) {
 				const rows = this.memory.all();
 				const last = rows[rows.length - 1];
 				if (last?.text !== text) {
 					this.memory.add({
 						category: 'episodic',
 						text,
-						tags: mergeTags(e.tags ?? ['speech'], nameTags(text)),
-						createdAt: e.at ?? this.now,
-					}, e.at ?? this.now);
+						tags: mergeTags(e.tags, nameTags(text)),
+						timestamp: e.timestamp ?? this.now,
+					}, e.timestamp ?? this.now);
 				}
 			}
 		}
@@ -1245,7 +1290,7 @@ export class Agent<HostCtx = unknown> {
 			category: 'semantic',
 			text: line,
 			tags,
-			createdAt: this.now,
+			timestamp: this.now,
 		}, this.now);
 	}
 
@@ -1254,9 +1299,8 @@ export class Agent<HostCtx = unknown> {
 		if (!text) {
 			return;
 		}
-		const skip = new Set([this.id, this.identity.name]);
 		for (const name of nameTags(text)) {
-			if (skip.has(name)) {
+			if (name === this.id) {
 				continue;
 			}
 			const snippet = clauseAbout(text, name);
@@ -1277,7 +1321,7 @@ export class Agent<HostCtx = unknown> {
 				category: 'semantic',
 				text: line,
 				tags: mergeTags([tag, name, 'seen'], nameTags(snippet)),
-				createdAt: this.now,
+				timestamp: this.now,
 			}, this.now);
 		}
 	}
@@ -1310,37 +1354,11 @@ export class Agent<HostCtx = unknown> {
 		});
 	}
 
-	private applyWatches(raw:unknown):void {
-		if (!this.watchesWritable || !isRecord(raw)) {
-			return;
-		}
-		if (raw.watches !== undefined) {
-			this.watches = extrasWithoutPins(asWatches(raw.watches), this.pinnedWatches);
-		}
-		const ops = watchOpsFromArc(raw);
-		if (watchCount(ops.add) === 0 && watchCount(ops.edit) === 0 && ops.remove.length === 0) {
-			return;
-		}
-		this.watches = applyWatchOps(this.watches, this.pinnedWatches, ops);
-	}
-
 	effectiveSightFocus():string[] {
 		return effectiveSightFocus(this.pinnedSightFocus, this.sightFocus);
 	}
 
-	private applySightFocus(raw:unknown):void {
-		if (!this.sightFocusWritable || !isRecord(raw) || raw.sightFocus === undefined) {
-			return;
-		}
-		this.sightFocus = extrasWithoutPinnedFocus(
-			asFocusList(raw.sightFocus, this.maxSightFocus),
-			this.pinnedSightFocus,
-		);
-	}
-
 	private applyMind(raw:unknown):void {
-		this.applyWatches(raw);
-		this.applySightFocus(raw);
 		if (!isRecord(raw)) {
 			return;
 		}
@@ -1356,17 +1374,10 @@ export class Agent<HostCtx = unknown> {
 		if (!isRecord(raw)) {
 			return false;
 		}
-		const nextName = typeof raw.name === 'string' ? raw.name.trim() : '';
 		const nextRole = typeof raw.role === 'string' ? raw.role.trim() : '';
-		const rename = nextName.length > 0 && nextName !== this.identity.name;
-		const reroled = nextRole.length > 0 && nextRole !== this.identity.role;
 		let changed = false;
-		if (reroled) {
+		if (nextRole.length > 0 && nextRole !== this.identity.role) {
 			this.identity.role = nextRole;
-			changed = true;
-		}
-		if (rename && reroled) {
-			this.identity.name = nextName;
 			changed = true;
 		}
 		if (Array.isArray(raw.traits)) {
@@ -1401,7 +1412,7 @@ export class Agent<HostCtx = unknown> {
 	}
 
 	private stampIdentity():void {
-		const text = `I am ${this.identity.name}. ${this.identity.role}`;
+		const text = this.identity.role ? `I am ${this.id}. Role: ${this.identity.role}.` : `I am ${this.id}.`;
 		const existing = this.memory.pinned().find((row) => (
 			row.category === 'identity' || row.tags.includes('identity')
 		));
@@ -1422,7 +1433,7 @@ export class Agent<HostCtx = unknown> {
 	}
 
 	private maybeIntrude(perceptionText:string):string | undefined {
-		if (this.now - this.lastIntrusionAt < this.intrusionCooldown) {
+		if (this.now - this.lastIntrusionTimestamp < this.intrusionCooldown) {
 			return undefined;
 		}
 		const tags = this.pendingEvents.flatMap((e) => e.tags ?? []);
@@ -1435,7 +1446,7 @@ export class Agent<HostCtx = unknown> {
 		if (!hit || hit.tags.includes('seen')) {
 			return undefined;
 		}
-		this.lastIntrusionAt = this.now;
+		this.lastIntrusionTimestamp = this.now;
 		return hit.text;
 	}
 
@@ -1451,8 +1462,8 @@ export class Agent<HostCtx = unknown> {
 		return out;
 	}
 
-	private mergedTools():Record<string, ToolSpec<HostCtx>> {
-		const tools:{ [k:string]:ToolSpec<HostCtx> } = { ...this.tools };
+	private mergedTools():Record<string, ToolSpec<TAgentCtx>> {
+		const tools:{ [k:string]:ToolSpec<TAgentCtx> } = { ...this.tools };
 		if (!tools.recall) {
 			tools.recall = {
 				description: 'Search this agent\'s episodic and semantic memory. Prefer names, not coordinates.',
@@ -1465,7 +1476,7 @@ export class Agent<HostCtx = unknown> {
 						k: { type: 'number' },
 					},
 				},
-				handler: (_ctx, args) => this.handleRecall(args),
+				handler: (ctx, args) => this.handleRecall(args),
 			};
 		}
 		if (!this.hideObserve && !tools.observe) {
@@ -1484,7 +1495,7 @@ export class Agent<HostCtx = unknown> {
 		}
 		if (this.talk && !tools.earshot) {
 			tools.earshot = {
-				description: 'Who you can say(to) right now. Pass to to check one name before you arc a say. Out of range: error, no speech; go_to them first. Omit to to list everyone in range.',
+				description: 'Who you can say(to) right now. Pass to to check one name before you arc a say. Out of range: error, no speech; get closer first. Omit to to list everyone in range.',
 				parameters: {
 					type: 'object',
 					additionalProperties: false,
@@ -1492,7 +1503,7 @@ export class Agent<HostCtx = unknown> {
 						to: { type: 'string' },
 					},
 				},
-				handler: (_ctx, args) => this.handleEarshot(args),
+				handler: (ctx, args) => this.handleEarshot(args),
 			};
 		}
 		if (this.seeMapOn() && !tools.see_map) {
@@ -1505,7 +1516,7 @@ export class Agent<HostCtx = unknown> {
 						zoom: { type: 'number', minimum: 0, maximum: 1 },
 					},
 				},
-				handler: (_ctx, args) => this.handleSeeMap(args),
+				handler: (ctx, args) => this.handleSeeMap(args),
 			};
 		}
 		if (this.encyclopediaOn() && !tools[GREP_WORLD_ENCYCLOPEDIA]) {
@@ -1579,7 +1590,7 @@ export class Agent<HostCtx = unknown> {
 		if (!isMapSnapshot(snap)) {
 			return { ok: false, zoom, reason: 'no map' };
 		}
-		const stamped = await stampMap(snap);
+		const stamped = await stampMap(snap, (id) => this.nameOf(id));
 		this.pendingSeeMapImage = stamped.image;
 		this.lastMap = {
 			timestamp: this.now,
@@ -1593,21 +1604,24 @@ export class Agent<HostCtx = unknown> {
 	}
 
 	private earshotText():string {
-		const names = this.talk?.nearby(this.id) ?? [];
+		const names = (this.talk?.nearby(this.id) ?? []).map((id) => this.nameOf(id));
 		if (names.length === 0) {
-			return 'No one in talking range. say(to) will fail until you go_to them.';
+			return 'No one in talking range. say(to) will fail until you are closer.';
 		}
-		return `In talking range: ${names.join(', ')}. say(to) only those names; go_to anyone else first. Far-off speech is muffled.`;
+		return `In talking range: ${names.join(', ')}. say(to) only those names; get closer to anyone else first. Far-off speech is muffled.`;
 	}
 
+	/** Addressee ids. The model writes its own names for them. */
 	protected sayToOf(args:Step['args']):SayTo | undefined {
 		const to = args.to;
 		if (Array.isArray(to)) {
-			const names = to.filter((x):x is string => typeof x === 'string' && x.trim().length > 0);
-			return names.length > 0 ? names : undefined;
+			const ids = to
+				.filter((x):x is string => typeof x === 'string' && x.trim().length > 0)
+				.map((name) => this.names.resolve(name));
+			return ids.length > 0 ? ids : undefined;
 		}
 		if (typeof to === 'string' && to.trim()) {
-			return to;
+			return this.names.resolve(to);
 		}
 		return undefined;
 	}
@@ -1621,7 +1635,7 @@ export class Agent<HostCtx = unknown> {
 		if (check.ok) {
 			return undefined;
 		}
-		return { reason: check.reason ?? 'not in earshot', nearby: check.nearby };
+		return { reason: check.reason ?? 'not in earshot', nearby: check.nearby.map((id) => this.nameOf(id)) };
 	}
 
 	private handleEarshot(args:unknown):unknown {
@@ -1630,22 +1644,18 @@ export class Agent<HostCtx = unknown> {
 		}
 		const row = isRecord(args) ? args : {};
 		const to = typeof row.to === 'string' ? row.to.trim() : '';
+		const nearby = this.talk.nearby(this.id).map((id) => this.nameOf(id));
 		if (!to) {
-			const names = this.talk.nearby(this.id);
-			return names.length > 0 ? names : 'No one in talking range.';
+			return nearby.length > 0 ? nearby : 'No one in talking range.';
 		}
-		const check = this.talk.canSay(this.id, to);
+		const check = this.talk.canSay(this.id, this.names.resolve(to));
 		if (!check.ok) {
-			return {
-				error: check.reason,
-				inRange: false,
-				nearby: check.nearby,
-			};
+			return { error: check.reason, inRange: false, nearby };
 		}
-		return { ok: true, inRange: true, nearby: check.nearby };
+		return { ok: true, inRange: true, nearby };
 	}
 
-	private handleObserve(ctx:HostCtx, args:unknown):unknown {
+	private handleObserve(ctx:TAgentCtx, args:unknown):unknown {
 		const row = isRecord(args) ? args : {};
 		const expr = typeof row.expr === 'string' ? row.expr : '';
 		if (!expr) {
@@ -1657,7 +1667,7 @@ export class Agent<HostCtx = unknown> {
 		return observeExpr(expr, this.catalog(ctx), evaluate);
 	}
 
-	private handleGrepEncyclopedia(ctx:HostCtx | undefined, args:unknown):unknown {
+	private handleGrepEncyclopedia(ctx:TAgentCtx | undefined, args:unknown):unknown {
 		const row = isRecord(args) ? args : {};
 		const query = typeof row.query === 'string' ? row.query : '';
 		const pages = encyclopediaPages(this.encyclopedia, ctx);
@@ -1699,7 +1709,7 @@ export class Agent<HostCtx = unknown> {
 		].slice(0, k);
 	}
 
-	private async runTool(name:string, rawArgs:string, ctx:HostCtx | undefined):Promise<unknown> {
+	private async runTool(name:string, rawArgs:string, ctx:TAgentCtx | undefined):Promise<unknown> {
 		if (ctx === undefined) {
 			return { error: 'no ctx' };
 		}
@@ -1741,6 +1751,34 @@ export class Agent<HostCtx = unknown> {
 		return { ok: true, verb: 'think' };
 	}
 
+	/** watch(name, expr) adds or replaces an extra watch; unwatch(name) drops one. Pins fail closed. */
+	private runWatch(step:Step):ArcResult {
+		const name = String(step.args.name ?? '');
+		if (hasWatch(this.pinnedWatches, name)) {
+			return { ok: false, verb: step.verb, reason: `${name} is a required watch` };
+		}
+		const expr = String(step.args.expr ?? '');
+		const ok = step.verb === 'unwatch'
+			? this.removeWatch(name)
+			: this.editWatch(name, expr) || this.addWatch(name, expr);
+		if (ok) {
+			this.queue?.setWatches(this.id, this.effectiveWatches());
+		}
+		return { ok, verb: step.verb, reason: ok ? undefined : `no watch ${name}` };
+	}
+
+	/** focus(expr) puts an extra sightFocus first; unfocus(expr) drops one. Pins fail closed. */
+	private runFocus(step:Step):ArcResult {
+		const expr = String(step.args.expr ?? '').trim();
+		if (this.pinnedSightFocus.includes(expr)) {
+			return { ok: false, verb: step.verb, reason: 'that sightFocus is required' };
+		}
+		const rest = this.sightFocus.filter((e) => e !== expr);
+		const ok = step.verb === 'focus' ? expr.length > 0 : rest.length < this.sightFocus.length;
+		this.sightFocus = step.verb === 'focus' ? asFocusList([expr, ...rest], this.maxSightFocus) : rest;
+		return { ok, verb: step.verb, reason: ok ? undefined : 'no such sightFocus' };
+	}
+
 	private syncQueue(result:ArcResult):void {
 		if (!this.queue) {
 			return;
@@ -1754,7 +1792,7 @@ export class Agent<HostCtx = unknown> {
 		}
 	}
 
-	private async runStep(step:Step, ctx:HostCtx | undefined):Promise<ArcResult> {
+	private async runStep(step:Step, ctx:TAgentCtx | undefined):Promise<ArcResult> {
 		this.refreshKit();
 		if (!this.activeVerbs().has(step.verb)) {
 			return { ok: false, verb: step.verb, reason: `verb '${step.verb}' is not available` };
@@ -1763,6 +1801,12 @@ export class Agent<HostCtx = unknown> {
 			return this.runThink(step);
 		}
 		this.noteVerb(step.verb);
+		if (WATCH_EDIT_VERBS.includes(step.verb)) {
+			return this.runWatch(step);
+		}
+		if (FOCUS_EDIT_VERBS.includes(step.verb)) {
+			return this.runFocus(step);
+		}
 		if (step.verb === 'remember') {
 			const content = String(step.args.content ?? '');
 			const tags = asStringArray(step.args.tags);
@@ -1787,22 +1831,7 @@ export class Agent<HostCtx = unknown> {
 			return { ok: true, verb: 'drop_goal' };
 		}
 		if (step.verb === 'set_identity') {
-			const nextName = typeof step.args.name === 'string' ? step.args.name.trim() : '';
-			const nextRole = typeof step.args.role === 'string' ? step.args.role.trim() : '';
-			const rename = nextName.length > 0 && nextName !== this.identity.name;
-			const reroled = nextRole.length > 0 && nextRole !== this.identity.role;
-			const changed = this.applyIdentityPatch({
-				name: step.args.name,
-				role: step.args.role,
-				traits: step.args.traits,
-			});
-			if (rename && !reroled && !changed) {
-				return {
-					ok: false,
-					verb: 'set_identity',
-					reason: 'name only changes with a new role',
-				};
-			}
+			const changed = this.applyIdentityPatch(step.args);
 			return { ok: changed, verb: 'set_identity', reason: changed ? undefined : 'nothing to change' };
 		}
 		if (step.verb === 'say' && this.talk) {
@@ -1810,7 +1839,7 @@ export class Agent<HostCtx = unknown> {
 			const to = this.sayToOf(step.args);
 			const result = this.talk.say(this.id, text, to, this.now);
 			if (result.ok && text.trim()) {
-				const who = Array.isArray(to) ? to.join(', ') : to;
+				const who = [to ?? []].flat().map((id) => this.nameOf(id)).join(', ');
 				this.noteRecent(who ? `You said to ${who}: "${text.trim()}"` : `You said: "${text.trim()}"`);
 			}
 			return result;

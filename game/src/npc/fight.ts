@@ -1,6 +1,6 @@
-import { isCrowdConductor, shortTag } from 'arc-director';
+import { isCrowdConductor, shortTag, type SeenName } from 'arc-director';
 import type { GameObject } from '../engine/GameObject';
-import type { GameHost } from './adapter';
+import type { GameHost, AgentCtx } from './adapter';
 import { bodyName, findBody, isLiving } from './names';
 
 export type FightRole = 'Witch' | 'Knight' | 'Archer' | 'Blade' | 'Healer';
@@ -100,10 +100,6 @@ export function formatFightRules():string {
 	].join(' ');
 }
 
-export function isFightRole(name:string):name is FightRole {
-	return (FIGHT_ROLES as readonly string[]).includes(name);
-}
-
 export function fightCompany(host:GameHost, actor:GameObject) {
 	if (!isLiving(actor)) {
 		return undefined;
@@ -153,31 +149,37 @@ export function agilityOf(host:GameHost, actor:GameObject):number {
 export function isRivalBody(host:GameHost, actor:GameObject, target:GameObject):boolean {
 	const mine = fightCompany(host, actor);
 	const theirs = fightCompany(host, target);
-	return !!mine && !!theirs && mine !== theirs;
-}
-
-/** What `observer` is allowed to call this body. Rival given names become the fight role. */
-export function seenFightName(host:GameHost, observer:GameObject, target:GameObject):string {
-	const role = fightRole(host, target);
-	if (role && isRivalBody(host, observer, target)) {
-		return role;
+	if (mine && theirs && mine !== theirs) {
+		return true;
 	}
-	return bodyName(target);
-}
-
-/** Role when the body is in a fight company; otherwise the given name. Shared event text uses this. */
-export function fightLabel(host:GameHost, go:GameObject):string {
-	return fightRole(host, go) ?? bodyName(go);
-}
-
-/** Map an arc / sight id onto a real body name from this observer. */
-export function resolveFightName(host:GameHost, observerID:string, name:string):string {
-	const observer = findBody(host.world, observerID);
-	if (!observer) {
-		return name;
+	if (!mine || target.id !== 'Player') {
+		return false;
 	}
-	const target = findFightTarget(host, observer, name);
-	return target ? bodyName(target) : name;
+	for (const unit of mine.crowd.list()) {
+		if (host.world.playerHits.has(unit.id)) {
+			return true;
+		}
+	}
+	return false;
+}
+
+/** Naming policy: a rival is `Enemy<Role>`, never its given name. Reads only the tags from {@link fightExprTags}. */
+export const seenInFight:SeenName<AgentCtx> = (observer, target) => {
+	const enemy = target.tags?.includes('enemy');
+	const role = enemy && FIGHT_ROLES.find((r) => target.tags?.includes(r));
+	if (role) {
+		return `Enemy${role}`;
+	}
+	return enemy && target.id === 'Player' ? 'EnemyPlayer' : target.id;
+};
+
+/** What `observer`'s mind calls `target`, for text the host writes itself. */
+export function seenName(host:GameHost, observer:GameObject, target:GameObject):string {
+	const id = bodyName(target);
+	const mind = fightCompany(host, observer);
+	return mind && host.arc
+		? host.arc.seen(mind.id, { id, tags: fightExprTags(host, observer, target) })
+		: id;
 }
 
 export function fightTags(host:GameHost, actor:GameObject):string[] {
@@ -198,14 +200,6 @@ export function fightTags(host:GameHost, actor:GameObject):string[] {
 /** Closest living rival to `from`. */
 export function nearestRival(host:GameHost, from:GameObject):GameObject | undefined {
 	return nearestRivalWhere(host, from);
-}
-
-function nearestRivalWithRole(
-	host:GameHost,
-	observer:GameObject,
-	role:FightRole,
-):GameObject | undefined {
-	return nearestRivalWhere(host, observer, (go) => fightRole(host, go) === role);
 }
 
 function nearestWhere(
@@ -450,7 +444,7 @@ export function fightProximityNote(host:GameHost, observer:GameObject, go:GameOb
 			continue;
 		}
 		if (!best || dist < best.dist) {
-			best = { name: seenFightName(host, observer, other), dist };
+			best = { name: seenName(host, observer, other), dist };
 		}
 	}
 	if (!best) {
@@ -476,6 +470,10 @@ function rivalBodies(host:GameHost, actor:GameObject):GameObject[] {
 			}
 		}
 	}
+	const player = host.world.findByID('Player');
+	if (player && isRivalBody(host, actor, player)) {
+		out.push(player);
+	}
 	return out;
 }
 
@@ -494,64 +492,4 @@ export function nearestAlly(
 	ok:(go:GameObject)=>boolean = () => true,
 ):GameObject | undefined {
 	return nearestWhere(from, companyBodies(host, from), ok);
-}
-
-/** Resolve an ally name from this observer. Rival given names do not resolve. */
-export function findAllyTarget(
-	host:GameHost,
-	observer:GameObject,
-	name:string,
-):GameObject | undefined {
-	const trimmed = name.trim();
-	if (!trimmed) {
-		return undefined;
-	}
-	const go = findBody(observer.world ?? host.world, trimmed);
-	if (go) {
-		if (!isLiving(go) || go === observer) {
-			return undefined;
-		}
-		if (isRivalBody(host, observer, go)) {
-			return undefined;
-		}
-		return go;
-	}
-	return nearestAlly(host, observer, (ally) => fightTags(host, ally).includes(trimmed));
-}
-
-function isOtherCompanyName(host:GameHost, observer:GameObject, name:string):boolean {
-	const mine = fightCompany(host, observer);
-	if (!mine) {
-		return false;
-	}
-	for (const agent of host.arc?.agents() ?? []) {
-		if (!isCrowdConductor(agent) || agent === mine) {
-			continue;
-		}
-		if (agent.id === name || agent.commanderID === name || agent.crowd.has(name)) {
-			return true;
-		}
-	}
-	return false;
-}
-
-/** Resolve an arc name from this observer. Rival given names do not resolve. */
-export function findFightTarget(
-	host:GameHost,
-	observer:GameObject,
-	name:string,
-):GameObject | undefined {
-	const trimmed = name.trim();
-	if (!trimmed) {
-		return undefined;
-	}
-	if (fightCompany(host, observer)) {
-		if (isFightRole(trimmed)) {
-			return nearestRivalWithRole(host, observer, trimmed);
-		}
-		if (isOtherCompanyName(host, observer, trimmed)) {
-			return undefined;
-		}
-	}
-	return findBody(observer.world ?? host.world, trimmed);
 }

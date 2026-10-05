@@ -20,6 +20,8 @@ type Mtv = {
 	depth:number;
 };
 
+type Shover = { go:GameObject; col:BoxCollider; rb:Rigidbody };
+
 function actorAABB(go:GameObject, col:BoxCollider, pad = 0):AABB {
 	const p = go.transform.position;
 	const hx = col.size.x * 0.5 + pad;
@@ -149,8 +151,8 @@ function settleMover(world:World, go:GameObject, col:BoxCollider, rb:Rigidbody):
 
 function resolveShovePair(
 	world:World,
-	a:{ go:GameObject; col:BoxCollider; rb:Rigidbody },
-	b:{ go:GameObject; col:BoxCollider; rb:Rigidbody },
+	a:Shover,
+	b:Shover,
 	dt:number,
 ):void {
 	const pad = a.col.pad > 0 && b.col.pad > 0 ? Math.max(a.col.pad, b.col.pad) : 0;
@@ -206,30 +208,36 @@ function resolveShovePair(
 	}
 }
 
+/** A padded, solid, moving body, which shoves rather than blocks. */
+function shoverOf(go:GameObject):Shover | undefined {
+	const col = go.getComponent(BoxCollider);
+	const rb = go.getComponent(Rigidbody);
+	return col?.enabled && col.solid && !col.isTrigger && col.pad > 0 && rb?.enabled ? { go, col, rb } : undefined;
+}
+
 function resolveShove(world:World, dt:number):void {
-	const bodies:{ go:GameObject; col:BoxCollider; rb:Rigidbody }[] = [];
-	world.forEachComponent(BoxCollider, (col, go) => {
-		if (!col.enabled || !col.solid || col.isTrigger || col.pad <= 0) {
-			return;
+	for (const go of world.objects) {
+		const a = shoverOf(go);
+		if (!a) {
+			continue;
 		}
-		const rb = go.getComponent(Rigidbody);
-		if (!rb?.enabled) {
-			return;
-		}
-		bodies.push({ go, col, rb });
-	});
-	for (let i = 0; i < bodies.length; i++) {
-		for (let j = i + 1; j < bodies.length; j++) {
-			resolveShovePair(world, bodies[i], bodies[j], dt);
-		}
+		const near = actorAABB(go, a.col, a.col.pad);
+		world.forEachNear(near.minX, near.minZ, near.maxX, near.maxZ, (other) => {
+			const b = other.id > go.id ? shoverOf(other) : undefined;
+			if (b) {
+				resolveShovePair(world, a, b, dt);
+			}
+		});
 	}
 }
 
 function resolveAgainstOthers(world:World, go:GameObject, col:BoxCollider):void {
 	const pos = go.transform.position;
 	const a = actorAABB(go, col);
-	world.forEachComponent(BoxCollider, (otherCol, other) => {
-		if (other === go || !otherCol.enabled || !otherCol.solid || otherCol.isTrigger) {
+	const near = actorAABB(go, col, col.pad);
+	world.forEachNear(near.minX, near.minZ, near.maxX, near.maxZ, (other) => {
+		const otherCol = other.getComponent(BoxCollider);
+		if (other === go || !otherCol?.enabled || !otherCol.solid || otherCol.isTrigger) {
 			return;
 		}
 		if (col.pad > 0 && otherCol.pad > 0 && other.getComponent(Rigidbody)) {
@@ -307,6 +315,7 @@ function resolveCollisions(world:World, dt:number):void {
 		if (!rb) {
 			return;
 		}
+		blockCliffs(go, rb, world);
 		resolveAgainstTiles(go, col, world);
 		resolveAgainstOthers(world, go, col);
 	});
@@ -351,9 +360,12 @@ export function resolveBody(world:World, go:GameObject):void {
 	if (!col?.enabled || !col.solid || col.isTrigger) {
 		return;
 	}
+	const rb = go.getComponent(Rigidbody);
+	if (rb?.enabled) {
+		blockCliffs(go, rb, world);
+	}
 	resolveAgainstTiles(go, col, world);
 	resolveAgainstOthers(world, go, col);
-	const rb = go.getComponent(Rigidbody);
 	if (rb?.enabled) {
 		blockCliffs(go, rb, world);
 	}
@@ -362,6 +374,8 @@ export function resolveBody(world:World, go:GameObject):void {
 /** Integrate rigidbodies, resolve colliders, snap grounded Y. */
 export function stepPhysics(world:World, dt:number):void {
 	integrate(world, dt);
+	world.reindex();
 	resolveCollisions(world, dt);
 	snapGround(world, dt);
+	world.reindex();
 }

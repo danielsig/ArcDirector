@@ -30,9 +30,10 @@ export function parseMapZoom(args:unknown):number {
 	return 1;
 }
 
+/** `id` is the body or place marked; the legend shows the agent's own name for it. */
 export type MapMark = {
 	symbol:string;
-	description:string;
+	id:string;
 	x:number;
 	y:number;
 };
@@ -78,9 +79,9 @@ export type MapSense = {
 	you?:string;
 };
 
-/** `symbol = description` pairs, comma-separated. No numbers. */
-export function formatLegend(marks:MapMark[]):string {
-	return marks.map((m) => `${m.symbol} = ${m.description}`).join(', ');
+/** `symbol = name` pairs, comma-separated. No numbers. */
+export function formatLegend(marks:MapMark[], name:(id:string)=>string = (id) => id):string {
+	return marks.map((m) => `${m.symbol} = ${name(m.id)}`).join(', ');
 }
 
 export type StampedMap = {
@@ -92,8 +93,8 @@ export type StampedMap = {
  * Stamp host symbols onto the snapshot. Node and other canvas-less
  * runtimes return the source image plus a legend — tests still cover gating.
  */
-export async function stampMap(snap:MapSnapshot):Promise<StampedMap> {
-	const legend = formatLegend(snap.marks);
+export async function stampMap(snap:MapSnapshot, name?:(id:string)=>string):Promise<StampedMap> {
+	const legend = formatLegend(snap.marks, name);
 	const ctx = makeStampContext(snap.width, snap.height);
 	if (!ctx) {
 		return { image: snap.image, legend };

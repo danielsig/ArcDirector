@@ -24,7 +24,7 @@ const PAGES:{ id:MenuPage; label:string }[] = [
 	{ id: 'game', label: 'Game' },
 	{ id: 'display', label: 'Display' },
 	{ id: 'audio', label: 'Audio' },
-	{ id: 'saves', label: 'Saves' },
+	{ id: 'save', label: 'Save' },
 ];
 
 watch(
@@ -53,6 +53,14 @@ function go(page:MenuPage):void {
 
 function reset():void {
 	session?.value?.resetLocation();
+}
+
+function save():void {
+	session?.value?.save();
+}
+
+function load():void {
+	session?.value?.load();
 }
 
 function toggleObserver():void {
@@ -170,42 +178,6 @@ function pct(n:number):string {
 		return '0';
 	}
 	return String(Math.round(Math.max(0, Math.min(1, n)) * 100));
-}
-
-function select(id:string):void {
-	props.hud.saveSelectedID = id;
-	const slot = props.hud.saveSlots.find((s) => s.id === id);
-	if (slot && !slot.auto) {
-		props.hud.saveLabel = slot.label;
-	}
-}
-
-function save():void {
-	session?.value?.save();
-}
-
-function load():void {
-	if (!props.hud.saveSelectedID) {
-		props.hud.menuNotice = 'Select a slot';
-		return;
-	}
-	session?.value?.load();
-}
-
-function remove():void {
-	if (!props.hud.saveSelectedID) {
-		props.hud.menuNotice = 'Select a slot';
-		return;
-	}
-	session?.value?.removeSave();
-}
-
-function when(iso:string):string {
-	const d = new Date(iso);
-	if (Number.isNaN(d.getTime())) {
-		return iso;
-	}
-	return d.toLocaleString();
 }
 </script>
 
@@ -328,6 +300,13 @@ function when(iso:string):string {
 								</div>
 							</div>
 						</template>
+						<template v-else-if="hud.menuPage === 'save'">
+							<p class="readout">{{ hud.savedUTC ? `Saved ${new Date(hud.savedUTC).toLocaleString()}` : 'No save yet' }}</p>
+							<div class="page-actions">
+								<button type="button" @click.stop="save">Save</button>
+								<button type="button" :disabled="!hud.savedUTC" @click.stop="load">Load</button>
+							</div>
+						</template>
 						<template v-else-if="hud.menuPage === 'audio'">
 							<div class="set">
 								<span class="name">Mute</span>
@@ -367,36 +346,6 @@ function when(iso:string):string {
 									step="0.01"
 								>
 							</label>
-						</template>
-						<template v-else-if="hud.menuPage === 'saves'">
-							<ul class="slots">
-								<li v-if="hud.saveSlots.length === 0" class="empty">No saves yet</li>
-								<li
-									v-for="slot in hud.saveSlots"
-									:key="slot.id"
-									:class="{ selected: hud.saveSelectedID === slot.id }"
-								>
-									<button type="button" class="slot" @click.stop="select(slot.id)">
-										<span class="label">{{ slot.auto ? 'Autosave' : slot.label }}</span>
-										<span class="when">{{ when(slot.savedAt) }}</span>
-									</button>
-								</li>
-							</ul>
-							<label class="set stack">
-								<span class="name">Slot name</span>
-								<input
-									v-model="hud.saveLabel"
-									type="text"
-									maxlength="48"
-									autocomplete="off"
-									placeholder="optional"
-								>
-							</label>
-							<div class="page-actions">
-								<button type="button" @click.stop="save">Save</button>
-								<button type="button" @click.stop="load">Load</button>
-								<button type="button" @click.stop="remove">Delete</button>
-							</div>
 						</template>
 						<template v-else>
 							<h3>World</h3>
@@ -563,7 +512,7 @@ function when(iso:string):string {
 								</thead>
 								<tbody>
 									<tr v-for="row in hud.heartrates" :key="row.id">
-										<td>{{ row.name }}</td>
+										<td>{{ row.id }}</td>
 										<td>{{ fmtPulse(row.pulse) }}</td>
 										<td>{{ row.thinking ? 'thinking' : fmtAgo(row.ago) }}</td>
 									</tr>
@@ -654,7 +603,6 @@ h2 {
 .resume,
 .page-actions button,
 .act,
-.slot,
 .rail button {
 	font: inherit;
 	color: var(--ink);
@@ -766,8 +714,7 @@ h3:first-child {
 	letter-spacing: 0.04em;
 }
 
-.set select,
-.set input[type="text"] {
+.set select {
 	font: inherit;
 	font-size: 13px;
 	color: var(--ink);
@@ -778,8 +725,7 @@ h3:first-child {
 	box-shadow: inset 0 0 0 2px var(--ink);
 }
 
-.set.stack select,
-.set.stack input[type="text"] {
+.set.stack select {
 	max-width: none;
 	width: 100%;
 }
@@ -791,10 +737,6 @@ h3:first-child {
 .set select:disabled {
 	opacity: 0.7;
 	cursor: default;
-}
-
-.set input[type="text"] {
-	cursor: text;
 }
 
 .set input[type="range"] {
@@ -901,50 +843,6 @@ h3:first-child {
 	padding: 6px 12px;
 }
 
-.slots {
-	list-style: none;
-	margin: 8px 0 0;
-	padding: 0;
-	display: flex;
-	flex-direction: column;
-	gap: 4px;
-	max-height: 220px;
-	overflow: auto;
-}
-
-.empty {
-	opacity: 0.7;
-	font-size: 13px;
-	padding: 10px 0;
-}
-
-.slot {
-	width: 100%;
-	display: flex;
-	justify-content: space-between;
-	align-items: baseline;
-	gap: 12px;
-	text-align: left;
-	font-size: 13px;
-	padding: 8px 10px;
-	box-shadow: none;
-	background: var(--rule);
-}
-
-.selected .slot {
-	background: var(--cream);
-	box-shadow: inset 0 0 0 2px var(--ink);
-}
-
-.label {
-	font-weight: 600;
-}
-
-.when {
-	opacity: 0.7;
-	font-size: 11px;
-}
-
 .stats {
 	width: 100%;
 	margin: 8px 0 10px;
@@ -1011,8 +909,7 @@ h3:first-child {
 		margin-left: auto;
 	}
 
-	.set select,
-	.set input[type="text"] {
+	.set select {
 		max-width: min(220px, 55%);
 	}
 }

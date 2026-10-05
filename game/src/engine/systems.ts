@@ -1,13 +1,14 @@
 import { Component } from './Component';
-import type { World } from './World';
-import type { Renderer } from '@arc-director/kindling';
+import { ChunkStreamer, type Renderer } from '@arc-director/kindling';
 import { Order } from './order';
 import { patchHud, patchInfer, statusLabels } from './patchHud';
 import { syncHeldTorchLight } from '../items/heldLight';
 import type { GameHost } from '../npc/adapter';
 import { WorldPresent } from '../render/present';
 import type { HudModel } from '../ui/hudModel';
-import { ChunkStreamer } from '../world/ChunkStreamer';
+import type { Chunk } from '../world/Chunk';
+import { spawnChunkEntities } from '../world/spawn';
+import type { World } from './World';
 
 export class DirectorPulse extends Component {
 	static override order = Order.director;
@@ -22,36 +23,11 @@ export class DirectorPulse extends Component {
 	}
 }
 
-export class WorldStream extends Component {
+export class WorldStream extends ChunkStreamer<Chunk> {
 	static override order = Order.streaming;
-	streamer!:ChunkStreamer;
-	onGained:(keys:string[])=>void = () => undefined;
-	private stamp = '';
 
-	override lateUpdate(_dt:number):void {
-		const world = this.gameObject.world;
-		if (!world) {
-			return;
-		}
-		const before = this.stamp;
-		this.streamer.tick(world);
-		const after = [...world.chunks.keys()].sort().join(';');
-		if (after === before) {
-			return;
-		}
-		this.stamp = after;
-		const prev = new Set(before.split(';').filter(Boolean));
-		const gained:string[] = [];
-		for (const key of world.chunks.keys()) {
-			if (!prev.has(key)) {
-				gained.push(key);
-			}
-		}
-		this.onGained(gained);
-	}
-
-	mark(world:World):void {
-		this.stamp = [...world.chunks.keys()].sort().join(';');
+	override spawn(chunk:Chunk):void {
+		spawnChunkEntities(this.gameObject.world as World, chunk);
 	}
 }
 
@@ -59,7 +35,7 @@ export class GroundPick extends Component {
 	static override order = Order.pick;
 	getRenderer:()=>Renderer | null = () => null;
 
-	override update(_dt:number):void {
+	override update(dt:number):void {
 		this.pickGround();
 	}
 
@@ -87,7 +63,7 @@ export class WorldView extends Component {
 	present = new WorldPresent();
 	getRenderer:()=>Renderer | null = () => null;
 
-	override lateUpdate(_dt:number):void {
+	override lateUpdate(dt:number):void {
 		this.sync();
 	}
 
@@ -119,7 +95,7 @@ export class Hud extends Component {
 	director!:GameHost;
 	getRenderer:()=>Renderer | null = () => null;
 
-	override lateUpdate(_dt:number):void {
+	override lateUpdate(dt:number):void {
 		this.sync();
 	}
 

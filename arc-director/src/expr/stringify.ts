@@ -1,4 +1,4 @@
-import { entityName, type Catalog, type ExprEntity, type ExprVal, type StringifierKind } from './types.js';
+import { entityName, type Catalog, type ExprVal } from './types.js';
 
 export function stringifyVal(value:ExprVal, catalog?:Catalog):string {
 	if (value.kind === 'absent') {
@@ -16,9 +16,7 @@ export function stringifyVal(value:ExprVal, catalog?:Catalog):string {
 		return value.value;
 	}
 	if (value.kind === 'entity') {
-		const kind = entityKind(value.value, catalog);
-		const host = catalog?.stringifiers?.[kind]?.(value) ?? catalog?.stringifiers?.entity?.(value);
-		return host ?? entityName(value.value);
+		return catalog?.stringifiers?.entity?.(value) ?? entityName(value.value);
 	}
 	if (value.kind === 'list') {
 		const host = catalog?.stringifiers?.list?.(value);
@@ -28,10 +26,6 @@ export function stringifyVal(value:ExprVal, catalog?:Catalog):string {
 		return value.value.map((x) => stringifyVal(x, catalog)).filter(Boolean).join(', ');
 	}
 	return '';
-}
-
-function entityKind(entity:ExprEntity, catalog?:Catalog):StringifierKind {
-	return catalog?.stringifierKind?.(entity) ?? 'entity';
 }
 
 export function observeExpr(expr:string, catalog:Catalog, evaluateFn:(e:string, c:Catalog)=>{ value:ExprVal; error?:Error }):string | { error:string } {

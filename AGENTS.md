@@ -34,9 +34,11 @@ Unity-shaped, not Unity. `@arc-director/kindling` owns the canvas, `Renderer`, R
 | `Time` | `time`, `deltaTime`, `fixedDeltaTime` (0.02), `fixedTime`. Clamp `MAX_DT` = 0.05. |
 | `Rigidbody` | XZ `velocity`; optional `grounded` Y snap. |
 | `BoxCollider` | XZ AABB; `solid` / `isTrigger` / `pad` (shove). |
+| `Chunk` / `ChunkStreamer` | Square tile chunks on `World.chunks`. The streamer loads near `StreamingAnchor`s and parks far `ChunkBound` objects. |
 | `Camera` / `Light` / `MeshRenderer` | View. Renderer finds the first enabled `Camera`. |
 | `Renderer` | WebGL, fog/hemi/fill/sun look, resize. Null when headless. |
 | `Audio` | Procedural mixer on `world.audio`. Scores + HRTF stereo SFX, no sample files. Silent when headless. |
+| `captureWorld` / `diffWorld` / `restoreWorld` | Saves: fields listed in `static saved`, diffed against the freshly built scene. Objects the scene lacks rebuild from `GameObject.recipe`. |
 
 ### Hierarchy
 
@@ -58,7 +60,7 @@ Ground is **XZ**. **Y** is height (tile height underfoot). Yaw is around Y, in r
 
 | Axis | Direction |
 |------|-----------|
-| **+X** | east (Abbey `EastGate` / vault chunk) |
+| **+X** | east (Dungeon `EastGate` / vault chunk) |
 | **−X** | west |
 | **+Y** | up |
 | **−Y** | down |
@@ -107,7 +109,7 @@ The game is served at `http://localhost:5173/` (Vite default). There is no path 
 
 **Defaults** (when the param is omitted and nothing is stored): **`observer=1`**, **`ai=1`**. Menu **Testing** toggles write both to localStorage and the URL; they survive reloads. Query params override the stored values for the fields you set.
 
-Pose comes from autosave (or last view blob if there is no autosave). **`view` overrides that pose as a whole.** World and agent JSON still load from autosave.
+Pose comes from the last saved pose for that scene. **`view` overrides that pose as a whole.** World and agents start fresh unless you press **Load** (Menu → Save): one save per scene in localStorage, a Kindling diff of the world plus `exportAgents`. Every chunk loads at boot so the fresh scene is the same each time; far chunks park their objects instead of dropping them.
 
 While a scene is running, the game `replaceState`s `observer` and `ai`. It never injects `view` for a normal play session. If `view` is already in the query (agent test), it is kept in sync so the bar stays a copyable shot. Returning to Scenes strips them.
 
@@ -137,7 +139,7 @@ Marketplace (canal plaza looking north):
 http://localhost:5173/?scene=marketplace&view=20,0,8,0
 ```
 
-Ruin fight (clearing looking north):
+5v5 Combat (clearing looking north):
 
 ```
 http://localhost:5173/?scene=ruins&view=16,0,11,0
@@ -173,7 +175,7 @@ Example: marketplace with ArcDirector paused:
 http://localhost:5173/?scene=marketplace&view=20,0,8,0&observer=1&ai=0
 ```
 
-Example: ruin fight with ArcDirector paused:
+Example: 5v5 Combat with ArcDirector paused:
 
 ```
 http://localhost:5173/?scene=ruins&view=16,0,11,0&observer=1&ai=0

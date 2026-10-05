@@ -23,11 +23,11 @@ const TITLES:Record<string, string> = {
 	menu_orch: 'Menu',
 	heros_path: "Hero's Path",
 	menu: 'Hymn',
-	abbey_vault: 'Abbey Vault',
+	abbey_vault: 'Dungeon Vault',
 	glen: 'River Glen',
 	marketplace: 'Marketplace',
 	heros_tale: "Hero's Tale",
-	ruins: 'Ruin Fight',
+	ruins: '5v5 Combat',
 	heros_might: "Hero's Might",
 };
 

@@ -3,10 +3,10 @@ import type { World } from '../core/World.js';
 import { Camera } from './Camera.js';
 
 const CLEAR_COLOR = 0x000000;
-const _hit = new THREE.Vector3();
-const _ndc = new THREE.Vector2();
-const _ray = new THREE.Raycaster();
-const _plane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
+const hit = new THREE.Vector3();
+const ndc = new THREE.Vector2();
+const ray = new THREE.Raycaster();
+const plane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
 
 export type RendererLook = {
 	background:number;
@@ -159,14 +159,14 @@ export class Renderer {
 		if (!cam) {
 			return { x: 0, y: 0, visible: false };
 		}
-		_hit.set(x, y, z).project(cam.native);
+		hit.set(x, y, z).project(cam.native);
 		const w = this.canvas.clientWidth;
 		const h = this.canvas.clientHeight;
-		const onScreen = _hit.x > -1.2 && _hit.x < 1.2 && _hit.y > -1.2 && _hit.y < 1.2;
-		const inFront = _hit.z >= -1 && _hit.z <= 1;
+		const onScreen = hit.x > -1.2 && hit.x < 1.2 && hit.y > -1.2 && hit.y < 1.2;
+		const inFront = hit.z >= -1 && hit.z <= 1;
 		return {
-			x: (_hit.x * 0.5 + 0.5) * w,
-			y: (-_hit.y * 0.5 + 0.5) * h,
+			x: (hit.x * 0.5 + 0.5) * w,
+			y: (-hit.y * 0.5 + 0.5) * h,
 			visible: onScreen && inFront,
 		};
 	}
@@ -176,11 +176,11 @@ export class Renderer {
 		if (!cam) {
 			return null;
 		}
-		_ndc.set(ndcX, ndcY);
-		_ray.setFromCamera(_ndc, cam.native);
-		_plane.constant = -planeY;
-		const hit = _ray.ray.intersectPlane(_plane, _hit);
-		return hit ? { x: hit.x, z: hit.z } : null;
+		ndc.set(ndcX, ndcY);
+		ray.setFromCamera(ndc, cam.native);
+		plane.constant = -planeY;
+		const point = ray.ray.intersectPlane(plane, hit);
+		return point ? { x: point.x, z: point.z } : null;
 	}
 
 	resize():void {

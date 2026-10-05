@@ -5,11 +5,13 @@ import type { AgentEvent } from './types.js';
 export type TalkMind = {
 	id:string;
 	pushEvent(event:AgentEvent):void;
+	/** This mind's name for another body. Default: the id. */
+	nameOf?(id:string):string;
 };
 
 /**
  * Host-owned range, sight, and pose. The library asks by name; the game
- * measures distance, LOS, and walking however it wants.
+ * measures distance, LOS, and movement however it wants.
  */
 export type TalkSense = {
 	inRange:(speakerID:string, listenerID:string)=>boolean;
@@ -20,25 +22,28 @@ export type TalkSense = {
 	/**
 	 * Close enough to catch every word. If omitted, every in-range listener
 	 * hears clearly. If false, TalkNet muffles the line and tells them to
-	 * go_to the speaker if they care.
+	 * get closer to the speaker if they care.
 	 */
 	clearHear?:(speakerID:string, listenerID:string)=>boolean;
-	/** Names that count as this listener (id, chosen name, aliases). Default `[id]`. */
+	/** Names that count as this listener (id, role, aliases). Default `[id]`. */
 	names?:(listenerID:string)=>string[];
 	/** Turn `who` to face `toward`. */
 	face?:(who:string, toward:string)=>void;
-	/** Close distance / walk into view of `toward`. Fire-and-forget. */
+	/** Close distance / move into view of `toward`. Fire-and-forget. */
 	approach?:(who:string, toward:string)=>void;
 };
 
 export type TalkConfig = {
+	/** Seconds a muffled line stays catchable: come close enough in that time and it arrives in full. 0 = never. Default 8. */
+	rehear:number;
 	/** Face the person you speak to or hear, when you can see them. Default true. */
 	face:boolean;
-	/** Walk closer and seek a clear view of them. Default true. */
+	/** Move closer and seek a clear view of them. Default true. */
 	approach:boolean;
 };
 
 export const DEFAULT_TALK_CONFIG:TalkConfig = {
+	rehear: 8,
 	face: true,
 	approach: true,
 };
@@ -51,8 +56,10 @@ export type SpeechUtterance = {
 	text:string;
 	to?:SayTo;
 	heardBy:string[];
-	at:number;
+	timestamp:number;
 };
+
+type Muffled = { speakerID:string; spoken:string; targets:string[]; until:number };
 
 function addressees(to?:SayTo):string[] {
 	if (to == null) {
@@ -96,58 +103,6 @@ export function speechMentionsName(spoken:string, names:readonly string[]):boole
 	return false;
 }
 
-const ROLE_STOP = new Set([
-	'the', 'a', 'an', 'you', 'are', 'i', 'am', 'not', 'and', 'for', 'with', 'your',
-	'their', 'this', 'that', 'from', 'into', 'do', 'don', 'street', 'pay',
-]);
-
-/**
- * Short titles from a role string. Ignores the long instruction blob; keeps
- * "names you X", "You are Name, miller of the cottage", and brief revised roles.
- */
-export function roleMentionTitles(role:string):string[] {
-	const text = role.trim();
-	if (!text) {
-		return [];
-	}
-	const out:string[] = [];
-	const add = (raw:string | undefined):void => {
-		const title = raw?.trim().replace(/[.,;:]+$/u, '');
-		if (!title || title.length < 3 || title.length > 48) {
-			return;
-		}
-		if (out.some((row) => row.toLowerCase() === title.toLowerCase())) {
-			return;
-		}
-		out.push(title);
-	};
-	for (const m of text.matchAll(/\bnames you ([A-Za-z][A-Za-z0-9]*)/gi)) {
-		add(m[1]);
-	}
-	const youAre = text.match(/^You are ([A-Za-z][A-Za-z0-9]*)\b/i);
-	if (youAre && !ROLE_STOP.has(youAre[1].toLowerCase())) {
-		add(youAre[1]);
-	}
-	const appositive = text.match(/^You are [A-Za-z][A-Za-z0-9]*,\s+(?:a |an )?([^.]{3,48})/i);
-	if (appositive) {
-		add(appositive[1]);
-		const head = appositive[1].trim().split(/\s+/)[0]?.replace(/[^A-Za-z0-9-]/g, '');
-		if (head && !ROLE_STOP.has(head.toLowerCase())) {
-			add(head);
-		}
-	}
-	if (text.length <= 80) {
-		const first = text.split(/[.!?]/)[0];
-		if (first && first.split(/\s+/).length <= 6 && !/^You are\b/i.test(first)) {
-			add(first);
-		}
-		if (text.split(/\s+/).length <= 6 && !/^You are\b/i.test(text)) {
-			add(text);
-		}
-	}
-	return out;
-}
-
 function listenerNames(sense:TalkSense, id:string):string[] {
 	const listed = sense.names?.(id);
 	if (listed && listed.length > 0) {
@@ -171,37 +126,34 @@ function uniqueNames(names:readonly string[]):string[] {
 	return out;
 }
 
+function saysLine(speaker:string, spoken:string, addressed:boolean, toLabel:string, tail = ''):string {
+	if (addressed) {
+		return `${speaker} says to you${tail}: "${spoken}"`;
+	}
+	return toLabel ? `${speaker} says to ${toLabel}${tail}: "${spoken}"` : `${speaker} says${tail}: "${spoken}"`;
+}
+
+/** `speaker` and `toLabel` are already the listener's names for those bodies. */
 function heardLine(
-	speakerID:string,
+	speaker:string,
 	spoken:string,
-	listenerID:string,
-	targets:string[],
+	addressed:boolean,
+	toLabel:string,
 	clear:boolean,
 	mentioned:boolean,
-	aliases:readonly string[] = [],
 ):{ text:string; major:boolean } {
-	const known = uniqueNames([listenerID, ...aliases]);
-	const addressed = targets.some((t) => known.some((n) => n.toLowerCase() === t.toLowerCase()));
-	const toLabel = targets.join(', ');
 	const major = clear || addressed || mentioned;
 	if (clear) {
-		return {
-			major,
-			text: addressed
-				? `${speakerID} says to you: "${spoken}"`
-				: toLabel
-					? `${speakerID} says to ${toLabel}: "${spoken}"`
-					: `${speakerID} says: "${spoken}"`,
-		};
+		return { major, text: saysLine(speaker, spoken, addressed, toLabel) };
 	}
 	const muff = muffleSpeech(spoken);
-	const hint = `go_to(${speakerID}) if you want to hear clearly.`;
+	const hint = `Get closer to ${speaker} to hear clearly.`;
 	const named = mentioned && !addressed ? ' You hear yourself spoken of.' : '';
 	return {
 		major,
 		text: addressed
-			? `${speakerID} is speaking to you, but you only catch: "${muff}". ${hint}`
-			: `${speakerID} is talking nearby. You catch: "${muff}". ${hint}${named}`,
+			? `${speaker} is speaking to you, but you only catch: "${muff}". ${hint}`
+			: `${speaker} is talking nearby. You catch: "${muff}". ${hint}${named}`,
 	};
 }
 
@@ -216,6 +168,7 @@ function heardLine(
  */
 export class TalkNet {
 	private readonly minds = new Map<string, TalkMind>();
+	private readonly muffled = new Map<string, Muffled[]>();
 	readonly config:TalkConfig;
 
 	constructor(
@@ -238,11 +191,7 @@ export class TalkNet {
 		return this.mindFor(id) !== undefined;
 	}
 
-	/**
-	 * Attach key, or a host-facing name that `names()` maps back to one.
-	 * After a chosen-name reveal the world may list "Oat" while the mind
-	 * is still attached as "Miller".
-	 */
+	/** Attach key, or a host-facing name that `names()` maps back to one (`Herbalist` for Fern). */
 	private mindFor(id:string):TalkMind | undefined {
 		const direct = this.minds.get(id);
 		if (direct) {
@@ -263,7 +212,12 @@ export class TalkNet {
 		return undefined;
 	}
 
-	/** Names currently close enough to talk to `speakerID`. */
+	/** `id` as `observerID`'s mind names it. */
+	private label(observerID:string, id:string):string {
+		return this.mindFor(observerID)?.nameOf?.(id) ?? id;
+	}
+
+	/** Ids currently close enough to talk to `speakerID`. */
 	nearby(speakerID:string):string[] {
 		const out:string[] = [];
 		for (const id of this.sense.others(speakerID)) {
@@ -296,13 +250,13 @@ export class TalkNet {
 		}
 		for (const name of targets) {
 			if (!this.sense.inRange(speakerID, name)) {
-				return { ok: false, reason: `${name} is not in earshot`, nearby };
+				return { ok: false, reason: `${this.label(speakerID, name)} is not in earshot`, nearby };
 			}
 		}
 		return { ok: true, nearby };
 	}
 
-	say(speakerID:string, text:string, to?:SayTo, at = 0):ArcResult {
+	say(speakerID:string, text:string, to?:SayTo, timestamp = 0):ArcResult {
 		const spoken = text.trim();
 		if (!spoken) {
 			return { ok: false, verb: 'say', reason: 'nothing to say' };
@@ -323,11 +277,10 @@ export class TalkNet {
 			text: spoken,
 			to: addressedTo,
 			heardBy,
-			at,
+			timestamp,
 		};
 		this.attend(utterance);
 		this.onSpoke?.(utterance);
-		const toLabel = targets.join(', ');
 		for (const id of heardBy) {
 			const mind = this.mindFor(id);
 			if (!mind) {
@@ -341,19 +294,59 @@ export class TalkNet {
 			]);
 			const clear = this.sense.clearHear?.(speakerID, id) ?? true;
 			const mentioned = speechMentionsName(spoken, names);
-			const heard = heardLine(speakerID, spoken, id, targets, clear, mentioned, names);
-			mind.pushEvent({
-				kind: 'HeardSpeech',
-				text: heard.text,
-				tags: ['speech', speakerID, ...targets],
-				major: heard.major,
-				at,
-			});
+			const addressed = targets.some((t) => names.some((n) => n.toLowerCase() === t.toLowerCase()));
+			const heardTo = targets.map((t) => this.label(id, t));
+			const speaker = this.label(id, speakerID);
+			const heard = heardLine(speaker, spoken, addressed, heardTo.join(', '), clear, mentioned);
+			this.hear(mind, speaker, heardTo, heard.text, heard.major, timestamp);
+			if (!clear && this.config.rehear > 0) {
+				const list = this.muffled.get(id) ?? [];
+				list.push({ speakerID, spoken, targets, until: timestamp + this.config.rehear });
+				this.muffled.set(id, list);
+			}
 		}
 		if (targets.length > 0) {
-			return { ok: true, verb: 'say', reason: `to ${toLabel}` };
+			return { ok: true, verb: 'say', reason: `to ${targets.map((t) => this.label(speakerID, t)).join(', ')}` };
 		}
-		return { ok: true, verb: 'say', reason: `heard by ${heardBy.join(', ')}` };
+		return { ok: true, verb: 'say', reason: `heard by ${heardBy.map((t) => this.label(speakerID, t)).join(', ')}` };
+	}
+
+	/** Deliver muffled lines in full to listeners who came close enough. Call once per frame. */
+	tick(now:number):void {
+		for (const [id, list] of this.muffled) {
+			const keep = list.filter((row) => {
+				if (now >= row.until) {
+					return false;
+				}
+				const mind = this.mindFor(id);
+				if (!mind || !(this.sense.clearHear?.(row.speakerID, id) ?? true)) {
+					return !!mind;
+				}
+				const names = uniqueNames([id, mind.id, ...listenerNames(this.sense, id)]);
+				const addressed = row.targets.some((t) => names.some((n) => n.toLowerCase() === t.toLowerCase()));
+				const heardTo = row.targets.map((t) => this.label(id, t));
+				const speaker = this.label(id, row.speakerID);
+				this.hear(mind, speaker, heardTo, saysLine(speaker, row.spoken, addressed, heardTo.join(', '), ', now clear'), true, now);
+				return false;
+			});
+			if (keep.length > 0) {
+				this.muffled.set(id, keep);
+			}
+			else {
+				this.muffled.delete(id);
+			}
+		}
+	}
+
+	private hear(mind:TalkMind, speaker:string, heardTo:string[], text:string, major:boolean, timestamp:number):void {
+		mind.pushEvent({
+			kind: 'HeardSpeech',
+			text,
+			tags: ['speech', speaker, ...heardTo],
+			major,
+			timestamp,
+			remember: true,
+		});
 	}
 
 	private hearers(speakerID:string, targets:string[]):string[] {

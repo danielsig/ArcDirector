@@ -43,7 +43,7 @@ export class AudioSource extends Component {
 		}
 	}
 
-	override lateUpdate(_dt:number):void {
+	override lateUpdate(dt:number):void {
 		if (this.looping) {
 			this.syncLoop();
 		}

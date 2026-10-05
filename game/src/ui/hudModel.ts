@@ -1,4 +1,3 @@
-import type { SaveSlotInfo } from '../engine/gameSave';
 import { prefs } from '../prefs';
 import { characterOptions, resolvePlayerKind } from '../render/artCache';
 
@@ -36,7 +35,7 @@ export type HudChatLine = {
 	speaker:string;
 	text:string;
 	to?:string;
-	at:number;
+	timestamp:number;
 };
 
 export type HudAiLogEntry = {
@@ -54,7 +53,6 @@ export type HudModelOption = {
 
 export type HudHeartrate = {
 	id:string;
-	name:string;
 	/** Queue pulse seconds. `null` when this mind skips heartbeat. */
 	pulse:number | null;
 	/** Seconds since last tactical think. `null` if never. */
@@ -62,16 +60,14 @@ export type HudHeartrate = {
 	thinking:boolean;
 };
 
-export type MenuPage = 'game' | 'display' | 'audio' | 'saves' | 'testing';
+export type MenuPage = 'game' | 'display' | 'audio' | 'save' | 'testing';
 
 export type HudModel = {
 	hp:number;
 	maxHP:number;
-	mana:number;
-	maxMana:number;
-	keys:number;
-	bombs:number;
 	gold:number;
+	/** Shown when any purse or coin exists in the scene, not only on the player. */
+	showGold:boolean;
 	message:string;
 	cursorName:string;
 	pickupHint:HudPickup;
@@ -90,12 +86,17 @@ export type HudModel = {
 	sayItems:string[];
 	sayGoods:{ item:string; from:string }[];
 	menuOpen:boolean;
+	/** Scene brief. First visit opens it; later visits only the (?) button. */
+	briefOpen:boolean;
 	/** Last pause-menu page this session. Not persisted. */
 	menuPage:MenuPage;
 	menuNotice:string;
-	saveLabel:string;
-	saveSelectedID:string;
-	saveSlots:SaveSlotInfo[];
+	/** When this scene was last saved (ISO). Empty when there is no save. */
+	savedUTC:string;
+	/** The next Game loads this scene's save. */
+	loading:boolean;
+	/** Bump to boot a new Game (load). */
+	boots:number;
 	/** Player hidden from NPC perception (observer). Default on. */
 	observer:boolean;
 	/** ArcDirector ticks and NPC motors. Default on. */
@@ -152,11 +153,8 @@ export function emptyHud():HudModel {
 	return {
 		hp: 5,
 		maxHP: 5,
-		mana: 5,
-		maxMana: 5,
-		keys: 0,
-		bombs: 0,
 		gold: 0,
+		showGold: false,
 		message: '',
 		cursorName: '',
 		pickupHint: {
@@ -180,11 +178,12 @@ export function emptyHud():HudModel {
 		sayItems: [],
 		sayGoods: [],
 		menuOpen: false,
+		briefOpen: false,
 		menuPage: 'testing',
 		menuNotice: '',
-		saveLabel: '',
-		saveSelectedID: '',
-		saveSlots: [],
+		savedUTC: '',
+		loading: false,
+		boots: 0,
 		observer: p.observer,
 		arcDirectorOn: p.ai,
 		model: p.model,

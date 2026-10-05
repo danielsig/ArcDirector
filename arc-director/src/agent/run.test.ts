@@ -84,7 +84,7 @@ describe('runArc', () => {
 				join: 'then_if_ok',
 				arc: {
 					head: go('EastGate'),
-					then: { join: 'then_if_ok', arc: { head: { verb: 'pick_up', args: { name: 'Key' } } } },
+					then: { join: 'then_if_ok', arc: { head: { verb: 'pick_up', args: { item: 'Key' } } } },
 				},
 			},
 		};
@@ -103,7 +103,7 @@ describe('runArc', () => {
 				join: 'then_if_ok',
 				arc: {
 					head: go('EastGate'),
-					then: { join: 'then_if_ok', arc: { head: { verb: 'pick_up', args: { name: 'Key' } } } },
+					then: { join: 'then_if_ok', arc: { head: { verb: 'pick_up', args: { item: 'Key' } } } },
 				},
 			},
 		};
@@ -139,7 +139,7 @@ describe('groups, fail, loop, when(watch)', () => {
 		const seen:string[] = [];
 		const arc = parseArcText('(go_to(Keep) && wait(seconds=1)) || say(fail.reason)', registerStockVerbs(new VerbRegistry()));
 		const result = await runArc(arc, async (step) => {
-			seen.push(`${step.verb}:${String(step.args.text ?? step.args.name ?? '')}`);
+			seen.push(`${step.verb}:${String(step.args.text ?? step.args.target ?? '')}`);
 			if (step.verb === 'go_to') {
 				return { ok: false, verb: 'go_to', reason: 'locked' };
 			}
@@ -178,7 +178,7 @@ describe('groups, fail, loop, when(watch)', () => {
 		});
 		const arc = parseArcText('loop(through=x in others, arc=follow(x))', registerStockVerbs(new VerbRegistry()));
 		await runArc(arc, async (step) => {
-			names.push(String(step.args.name ?? ''));
+			names.push(String(step.args.target ?? ''));
 			return { ok: true, verb: step.verb };
 		}, { session });
 		assert.deepEqual(names, ['Able', 'Baker']);
@@ -197,7 +197,7 @@ describe('groups, fail, loop, when(watch)', () => {
 		const session = createArcSession({ catalog, now: () => 0 });
 		const execute = async (step:Step):Promise<ArcResult> => {
 			verbs.push(step.verb);
-			if (step.verb === 'go_to' && step.args.name === 'Keep') {
+			if (step.verb === 'go_to' && step.args.target === 'Keep') {
 				heard = false;
 				pollArcSession(session);
 				return { ok: false, interrupted: true, verb: step.verb };

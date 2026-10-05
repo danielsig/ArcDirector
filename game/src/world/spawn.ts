@@ -1,26 +1,24 @@
 import { CharacterMotor } from '../actors/CharacterMotor';
 import { NPCInput } from '../actors/NPCInput';
 import { PlayerInput } from '../actors/PlayerInput';
-import { Camera as RenderCamera } from '@arc-director/kindling';
+import { ChunkBound, Camera as RenderCamera, StreamingAnchor } from '@arc-director/kindling';
 import {
 	BoxCollider,
 	Bridge,
+	BridgeLever,
 	Camera,
 	Chest,
-	ChunkBound,
 	Door,
 	HumanBody,
 	HumanSprite,
 	HurtFlash,
 	Light,
 	Lock,
-	MillLever,
 	BrewHearth,
 	Sickbed,
 	Named,
 	Interior,
 	RigidBody,
-	StreamingAnchor,
 	Torch,
 	Vitals,
 	Wallet,
@@ -44,7 +42,6 @@ import { prefs } from '../prefs';
 import { CELL_SIZE, CHUNK_SIZE, TILE_HEIGHT } from './constants';
 import { innerWallAABB } from './interior';
 import type { Chunk, ChunkEntity } from './Chunk';
-import type { DecodedChunk } from './decodeGlyphChunk';
 
 function wallOffset(chunk:Chunk, localX:number, localZ:number):{ x:number; z:number; yaw:number } {
 	const dirs = [
@@ -180,7 +177,7 @@ const ITEM_DEFS_SPAWN = new Set([
 	'gold_coin',
 	'bitterroot',
 	'fire_mushroom',
-	'mill_crank',
+	'bridge_crank',
 	'silver_trout',
 	'bomb',
 	'traveler_pack',
@@ -196,8 +193,7 @@ const ITEM_DEFS_SPAWN = new Set([
 	'candle',
 ]);
 
-export function spawnChunkEntities(world:World, decoded:DecodedChunk):void {
-	const chunk = decoded.chunk;
+export function spawnChunkEntities(world:World, chunk:Chunk):void {
 	const bridgeSpans:ChunkEntity[] = [];
 	for (const ent of chunk.entities) {
 		if (ent.def === 'wall_torch') {
@@ -221,7 +217,7 @@ export function spawnChunkEntities(world:World, decoded:DecodedChunk):void {
 		else if (ent.def === 'waterfall') {
 			spawnProp(world, chunk, ent, 'waterfall', 0.2, Math.PI / 2);
 		}
-		else if (ent.def === 'mill_lever') {
+		else if (ent.def === 'bridge_lever') {
 			spawnLever(world, chunk, ent);
 		}
 		else if (ent.def === 'brew_hearth') {
@@ -259,25 +255,23 @@ function spawnCottage(world:World, chunk:Chunk):void {
 	let maxX = -1;
 	let minZ = CHUNK_SIZE;
 	let maxZ = -1;
-	for (let lz = 0; lz < CHUNK_SIZE; lz++) {
-		for (let lx = 0; lx < CHUNK_SIZE; lx++) {
-			if (chunk.tile(lx, lz)?.def !== 'wood_wall') {
-				continue;
-			}
-			if (lx < minX) {
-				minX = lx;
-			}
-			if (lx > maxX) {
-				maxX = lx;
-			}
-			if (lz < minZ) {
-				minZ = lz;
-			}
-			if (lz > maxZ) {
-				maxZ = lz;
-			}
+	chunk.forEachTile((tile, lx, lz) => {
+		if (tile.def !== 'wood_wall') {
+			return;
 		}
-	}
+		if (lx < minX) {
+			minX = lx;
+		}
+		if (lx > maxX) {
+			maxX = lx;
+		}
+		if (lz < minZ) {
+			minZ = lz;
+		}
+		if (lz > maxZ) {
+			maxZ = lz;
+		}
+	});
 	if (maxX < minX) {
 		return;
 	}
@@ -353,18 +347,18 @@ function spawnProp(
 function spawnLever(world:World, chunk:Chunk, ent:ChunkEntity):void {
 	const center = chunk.worldCellCenter(ent.localX, ent.localZ);
 	const tile = chunk.tile(ent.localX, ent.localZ);
-	const go = new GameObject(ent.name ?? 'MillLever', 'MillLever');
+	const go = new GameObject(ent.name ?? 'BridgeLever', 'BridgeLever');
 	go.transform.position.x = center.x;
 	go.transform.position.y = (tile?.height ?? 0) * TILE_HEIGHT;
 	go.transform.position.z = center.z;
-	go.addComponent(new MeshRenderer()).meshID = 'mill_lever';
-	go.addComponent(new MillLever());
+	go.addComponent(new MeshRenderer()).meshID = 'bridge_lever';
+	go.addComponent(new BridgeLever());
 	const col = go.addComponent(new BoxCollider());
 	col.size = { x: 0.3, y: 1, z: 0.3 };
 	col.solid = false;
 	col.isTrigger = true;
 	const named = go.addComponent(new Named());
-	named.id = ent.name ?? 'MillLever';
+	named.id = ent.name ?? 'BridgeLever';
 	bindChunk(go, chunk.id);
 	world.add(go);
 }
@@ -427,7 +421,7 @@ function spawnBridge(world:World, chunk:Chunk, spans:ChunkEntity[]):void {
 		minZ = Math.min(minZ, c.z);
 		maxZ = Math.max(maxZ, c.z);
 	}
-	const go = new GameObject(spans[0].name ?? 'MillBridge', 'Bridge');
+	const go = new GameObject(spans[0].name ?? 'Bridge', 'Bridge');
 	go.transform.position.x = sx / spans.length;
 	go.transform.position.y = 0.02;
 	go.transform.position.z = sz / spans.length;
@@ -444,7 +438,7 @@ function spawnBridge(world:World, chunk:Chunk, spans:ChunkEntity[]):void {
 	};
 	col.solid = true;
 	const named = go.addComponent(new Named());
-	named.id = spans[0].name ?? 'MillBridge';
+	named.id = spans[0].name ?? 'Bridge';
 	bindChunk(go, chunk.id);
 	world.add(go);
 }
@@ -505,6 +499,7 @@ export function spawnNPC(world:World, chunk:Chunk, opts:NPCSpawnOpts):GameObject
 	const pos = chunk.worldCellCenter(opts.localX, opts.localZ);
 	const tile = chunk.tile(opts.localX, opts.localZ);
 	const go = new GameObject(opts.id, 'NPC');
+	go.recipe = { npc: structuredClone(opts), chunkID: chunk.id };
 	go.transform.position.x = pos.x;
 	go.transform.position.y = (tile?.height ?? 0) * TILE_HEIGHT;
 	go.transform.position.z = pos.z;
@@ -610,8 +605,8 @@ export function spawnPlayer(
 	pockets.size = 2;
 	body.pockets = pockets;
 	const vitals = go.addComponent(new Vitals());
-	vitals.hp = 5;
-	vitals.maxHP = 5;
+	vitals.hp = 20;
+	vitals.maxHP = 20;
 	go.addComponent(new StreamingAnchor());
 	const named = go.addComponent(new Named());
 	named.id = 'Player';

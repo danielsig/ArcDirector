@@ -27,7 +27,7 @@ export class FakeProvider implements InferenceProvider {
 		}
 		return Promise.race([
 			run,
-			new Promise<ChatResponse>((_, reject) => {
+			new Promise<ChatResponse>((resolve, reject) => {
 				signal.addEventListener('abort', () => reject(abortError()), { once: true });
 			}),
 		]);
@@ -50,7 +50,7 @@ export function goToNamedInteractable():FakeChatFn {
 		const name = names.find((n) => n !== 'Arc') ?? 'EastGate';
 		return {
 			content: JSON.stringify({
-				head: { verb: 'go_to', args: { name } },
+				head: { verb: 'go_to', args: { target: name } },
 			}),
 			toolCalls: [],
 		};

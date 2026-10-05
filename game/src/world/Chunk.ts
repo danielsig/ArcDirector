@@ -1,4 +1,11 @@
+import { Chunk as KindlingChunk } from '@arc-director/kindling';
 import { CELL_SIZE, CHUNK_SIZE } from './constants';
+
+/** Props whose collider is thinner than the cell. Physics blocks the whole cell. */
+export const SOLID_PROPS = new Set<string>(['tree', 'boulder']);
+
+/** Props that fill their cell for routes and sight lines. */
+export const CELL_PROPS = new Set<string>([...SOLID_PROPS, 'stall']);
 
 export type Tile = {
 	def:string;
@@ -21,61 +28,27 @@ export type ChunkEntity = {
 	exit:boolean | undefined;
 };
 
-export class Chunk {
-	id:string;
-	origin:{ cx:number; cz:number };
-	tiles:Tile[];
-	entities:ChunkEntity[];
+export class Chunk extends KindlingChunk<Tile> {
+	readonly entities:ChunkEntity[];
+	/** Cell-filling prop defs by cell. Filled on first query; decode pushes entities after `new Chunk`. */
+	private props:(string | undefined)[] | null = null;
 
-	constructor(
-		id:string,
-		origin:{ cx:number; cz:number },
-		tiles:Tile[],
-		entities:ChunkEntity[],
-	) {
-		this.id = id;
-		this.origin = origin;
-		this.tiles = tiles;
+	constructor(id:string, origin:{ cx:number; cz:number }, tiles:Tile[], entities:ChunkEntity[]) {
+		super(id, origin, CHUNK_SIZE, CELL_SIZE, tiles);
 		this.entities = entities;
 	}
 
-	worldOriginX():number {
-		return this.origin.cx * CHUNK_SIZE * CELL_SIZE;
-	}
-
-	worldOriginZ():number {
-		return this.origin.cz * CHUNK_SIZE * CELL_SIZE;
-	}
-
-	tile(localX:number, localZ:number):Tile | undefined {
-		if (
-			localX < 0
-			|| localZ < 0
-			|| localX >= CHUNK_SIZE
-			|| localZ >= CHUNK_SIZE
-		) {
-			return undefined;
+	/** The `CELL_PROPS` prop standing on the cell at a world point, by def. */
+	propAtWorld(x:number, z:number):string | undefined {
+		if (!this.props) {
+			this.props = [];
+			for (const ent of this.entities) {
+				if (CELL_PROPS.has(ent.def)) {
+					this.props[ent.localZ * CHUNK_SIZE + ent.localX] = ent.def;
+				}
+			}
 		}
-		return this.tiles[localZ * CHUNK_SIZE + localX];
-	}
-
-	tileAtWorld(x:number, z:number):Tile | undefined {
-		const localX = Math.floor((x - this.worldOriginX()) / CELL_SIZE);
-		const localZ = Math.floor((z - this.worldOriginZ()) / CELL_SIZE);
-		return this.tile(localX, localZ);
-	}
-
-	worldCellCenter(localX:number, localZ:number):{ x:number; z:number } {
-		return {
-			x: this.worldOriginX() + (localX + 0.5) * CELL_SIZE,
-			z: this.worldOriginZ() + (localZ + 0.5) * CELL_SIZE,
-		};
-	}
-
-	worldToLocal(x:number, z:number):{ localX:number; localZ:number } {
-		return {
-			localX: Math.floor((x - this.worldOriginX()) / CELL_SIZE),
-			localZ: Math.floor((z - this.worldOriginZ()) / CELL_SIZE),
-		};
+		const { localX, localZ } = this.worldToLocal(x, z);
+		return this.tile(localX, localZ) ? this.props[localZ * CHUNK_SIZE + localX] : undefined;
 	}
 }

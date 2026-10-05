@@ -17,7 +17,7 @@ export type DescribeCtx = {
 
 export type SeenObject = {
 	id:string;
-	at:number[];
+	point:number[];
 	facing?:number[];
 	tags:string[];
 	count?:number;
@@ -47,7 +47,7 @@ export type SightClause = {
 };
 
 export type Sight = {
-	self:{ id:string; at:number[]; facing?:number[] };
+	self:{ id:string; point:number[]; facing?:number[] };
 	ambient?:string;
 	objects:SeenObject[];
 };

@@ -2,7 +2,7 @@ import { RigidBody, HumanSprite } from '../engine/components';
 import { Component } from '../engine/Component';
 import { Order } from '../engine/order';
 import { lerpAngle, yawToward } from '../engine/math';
-import { conversePoint, facePeer } from '../npc/talkAttend';
+import { facePeer } from '../npc/talkAttend';
 import { TILE_HEIGHT } from '../world/constants';
 import { cueAt, stepKind } from '../audio/cue';
 import { NPCInput } from './NPCInput';
@@ -64,7 +64,7 @@ export class CharacterMotor extends Component {
 			return;
 		}
 
-		const dest = this.resolveDestination() ?? conversePoint(this.gameObject);
+		const dest = this.resolveDestination();
 		if (!dest) {
 			rb.velocity.x = 0;
 			rb.velocity.z = 0;
@@ -133,7 +133,7 @@ export class CharacterMotor extends Component {
 		if (npc?.destinationPoint) {
 			return npc.destinationPoint;
 		}
-		const name = this.destinationName ?? npc?.destinationName;
+		const name = this.destinationName;
 		if (!name || !this.gameObject.world) {
 			return null;
 		}

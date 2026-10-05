@@ -7,6 +7,8 @@ import { artCachePlugin } from './viteArtCache.ts';
 
 export default defineConfig({
 	plugins: [vue(), aiLogPlugin(), artCachePlugin()],
+	/** Saves key components by class name (`captureWorld`); keep names through minify. */
+	esbuild: { keepNames: true },
 	resolve: {
 		alias: {
 			'@arc-director/kindling/score': fileURLToPath(new URL('../kindling/src/score/index.ts', import.meta.url)),

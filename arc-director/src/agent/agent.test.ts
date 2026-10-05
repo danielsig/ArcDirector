@@ -18,7 +18,7 @@ function named(id:string, extra:Partial<SeenObject> & { x?:number; z?:number } =
 	const { x, z, ...rest } = extra;
 	return {
 		id,
-		at: [x ?? 0, z ?? 0],
+		point: [x ?? 0, z ?? 0],
 		tags: extra.tags ?? [],
 		...rest,
 	};
@@ -26,7 +26,7 @@ function named(id:string, extra:Partial<SeenObject> & { x?:number; z?:number } =
 
 function paragraph():string {
 	return formatSight({
-		self: { id: 'Guard', at: [0, 0] },
+		self: { id: 'Guard', point: [0, 0] },
 		ambient: 'damp stone hall',
 		objects: [
 			named('EastGate', {
@@ -76,7 +76,6 @@ describe('Agent', () => {
 		const agent = new Agent<Ctx>({
 			id: 'Guard',
 			identity: {
-				name: 'Guard',
 				role: 'Walk to named interactables. Never emit coordinates.',
 			},
 			goals: [{ text: 'Go to EastGate', priority: 1 }],
@@ -89,7 +88,7 @@ describe('Agent', () => {
 		const arc = await agent.tick(1);
 		assert.ok(arc);
 		assert.equal(arc.head.verb, 'go_to');
-		assert.equal(arc.head.args.name, 'EastGate');
+		assert.equal(arc.head.args.target, 'EastGate');
 
 		const json = agent.toJSON();
 		const restored = Agent.fromJSON(json, {
@@ -106,14 +105,14 @@ describe('Agent', () => {
 	it('fromJSON reads a legacy ID key', () => {
 		const restored = Agent.fromJSON(JSON.parse(`{
 			"ID": "Guard",
-			"identity": { "name": "Guard", "role": "guard" },
+			"identity": { "role": "guard" },
 			"goals": [],
 			"memories": [{
 				"ID": "mem_1",
 				"category": "episodic",
 				"text": "a gate",
 				"tags": [],
-				"createdAt": 0,
+				"timestamp": 0,
 				"lastAccessed": 0
 			}],
 			"liveArc": false,
@@ -151,7 +150,7 @@ describe('Agent', () => {
 
 		const agent = new Agent<Ctx>({
 			id: 'Guard',
-			identity: { name: 'Guard', role: 'guard' },
+			identity: { role: 'guard' },
 			goals: [{ text: 'Go to EastGate' }],
 			provider,
 			verbs: registerStockVerbs(new VerbRegistry()),
@@ -163,7 +162,7 @@ describe('Agent', () => {
 		const arc = await agent.tick(1);
 		assert.equal(sawRecall, true);
 		assert.equal(arc?.head.verb, 'go_to');
-		assert.equal(arc?.head.args.name, 'EastGate');
+		assert.equal(arc?.head.args.target, 'EastGate');
 	});
 
 	it('surfaces unpinned speech in the next think without a recall tool', async () => {
@@ -177,7 +176,7 @@ describe('Agent', () => {
 		});
 		const agent = new Agent<Ctx>({
 			id: 'Forager',
-			identity: { name: 'Forager', role: 'forager' },
+			identity: { role: 'forager' },
 			goals: [{ text: 'Trade FireMushroom for SilverTrout.' }],
 			provider,
 			verbs: registerStockVerbs(new VerbRegistry()),
@@ -191,13 +190,15 @@ describe('Agent', () => {
 		});
 		agent.pushEvent({
 			kind: 'HeardSpeech',
-			text: 'Miller says to Forager: "The mill-fee is FireMushroom."',
+			remember: true,
+			text: 'BridgeKeeper says to Forager: "The bridge fee is FireMushroom."',
 			tags: ['speech'],
 		});
 		await agent.tick(1);
 		for (let i = 0; i < 8; i++) {
 			agent.pushEvent({
 				kind: 'HeardSpeech',
+				remember: true,
 				text: `Player says: "Noise ${i}."`,
 				tags: ['speech'],
 			});
@@ -205,12 +206,12 @@ describe('Agent', () => {
 		users.length = 0;
 		await agent.tick(2);
 		assert.match(users[0] ?? '', /You remember:/);
-		assert.match(users[0] ?? '', /mill-fee is FireMushroom/);
+		assert.match(users[0] ?? '', /bridge fee is FireMushroom/);
 	});
 
 	it('keeps last-seen of a name after it leaves sight', async () => {
 		let scene = formatSight({
-			self: { id: 'Angler', at: [0, 0] },
+			self: { id: 'Angler', point: [0, 0] },
 			objects: [named('Forager', { tags: ['person'], x: 3, z: 0 })],
 		});
 		const users:string[] = [];
@@ -223,7 +224,7 @@ describe('Agent', () => {
 		});
 		const agent = new Agent<Ctx>({
 			id: 'Angler',
-			identity: { name: 'Angler', role: 'angler' },
+			identity: { role: 'angler' },
 			goals: [{ text: 'Pay Forager with SilverTrout.' }],
 			provider,
 			verbs: registerStockVerbs(new VerbRegistry()),
@@ -264,13 +265,13 @@ describe('Agent', () => {
 			assert.equal(req.messages.some((m) => m.role === 'assistant' && String(m.content).includes('"nope"')), true);
 			assert.equal(req.messages.some((m) => m.role === 'user' && String(m.content).includes('EastGate')), true);
 			return {
-				content: JSON.stringify({ head: { verb: 'go_to', args: { name: 'EastGate' } } }),
+				content: JSON.stringify({ head: { verb: 'go_to', args: { target: 'EastGate' } } }),
 				toolCalls: [],
 			};
 		});
 		const agent = new Agent<Ctx>({
 			id: 'Guard',
-			identity: { name: 'Guard', role: 'guard' },
+			identity: { role: 'guard' },
 			goals: [{ text: 'Go to EastGate' }],
 			provider,
 			verbs: registerStockVerbs(new VerbRegistry()),
@@ -283,7 +284,7 @@ describe('Agent', () => {
 		const arc = await agent.tick(1);
 		assert.equal(calls, 2);
 		assert.equal(arc?.head.verb, 'go_to');
-		assert.equal(arc?.head.args.name, 'EastGate');
+		assert.equal(arc?.head.args.target, 'EastGate');
 	});
 
 	it('does not keep verb-less prose on the repair thread', async () => {
@@ -300,7 +301,7 @@ describe('Agent', () => {
 		});
 		const agent = new Agent<Ctx>({
 			id: 'Guard',
-			identity: { name: 'Guard', role: 'guard' },
+			identity: { role: 'guard' },
 			goals: [{ text: 'Go to EastGate' }],
 			provider,
 			verbs: registerStockVerbs(new VerbRegistry()),
@@ -314,14 +315,14 @@ describe('Agent', () => {
 		const arc = await agent.tick(1);
 		assert.equal(calls, 2);
 		assert.equal(arc?.head.verb, 'go_to');
-		assert.equal(arc?.head.args.name, 'EastGate');
+		assert.equal(arc?.head.args.target, 'EastGate');
 	});
 
 	it('does not retry a bad arc when arcRetryCap is 0', async () => {
 		let calls = 0;
 		const agent = new Agent<Ctx>({
 			id: 'Guard',
-			identity: { name: 'Guard', role: 'guard' },
+			identity: { role: 'guard' },
 			goals: [{ text: 'Go to EastGate' }],
 			provider: new FakeProvider(() => {
 				calls += 1;
@@ -357,7 +358,7 @@ describe('Agent', () => {
 		});
 		const agent = new Agent<Ctx>({
 			id: 'Guard',
-			identity: { name: 'Guard', role: 'guard' },
+			identity: { role: 'guard' },
 			goals: [{ text: 'Go to EastGate' }],
 			provider,
 			verbs: registerStockVerbs(new VerbRegistry()),
@@ -400,7 +401,7 @@ describe('Agent', () => {
 		});
 		const agent = new Agent<Ctx>({
 			id: 'Guard',
-			identity: { name: 'Guard', role: 'guard' },
+			identity: { role: 'guard' },
 			goals: [{ text: 'Go to EastGate' }],
 			provider,
 			verbs: registerStockVerbs(new VerbRegistry()),
@@ -438,15 +439,15 @@ describe('Agent', () => {
 			assert.equal(last?.role, 'user');
 			assert.match(String(last?.content), /not in earshot/);
 			assert.match(String(last?.content), /did not happen/);
-			assert.match(String(last?.content), /go_to/);
+			assert.match(String(last?.content), /Get closer to them first/);
 			return {
-				content: JSON.stringify({ head: { verb: 'go_to', args: { name: 'Guard' } } }),
+				content: JSON.stringify({ head: { verb: 'go_to', args: { target: 'Guard' } } }),
 				toolCalls: [],
 			};
 		});
 		const agent = new Agent<Ctx>({
 			id: 'Acolyte',
-			identity: { name: 'Acolyte', role: 'Ask the guard.' },
+			identity: { role: 'Ask the guard.' },
 			goals: [{ text: 'Talk to Guard' }],
 			provider,
 			verbs: registerStockVerbs(new VerbRegistry()),
@@ -460,7 +461,7 @@ describe('Agent', () => {
 		const arc = await agent.tick(1);
 		assert.equal(calls, 2);
 		assert.equal(arc?.head.verb, 'go_to');
-		assert.equal(arc?.head.args.name, 'Guard');
+		assert.equal(arc?.head.args.target, 'Guard');
 		assert.equal(spoke.length, 0);
 	});
 
@@ -481,7 +482,7 @@ describe('Agent', () => {
 		});
 		const agent = new Agent<Ctx>({
 			id: 'Acolyte',
-			identity: { name: 'Acolyte', role: 'Ask the guard.' },
+			identity: { role: 'Ask the guard.' },
 			provider,
 			verbs: registerStockVerbs(new VerbRegistry()),
 			...perception(),
@@ -521,13 +522,13 @@ describe('Agent', () => {
 			assert.match(String(tool?.content), /not in earshot/);
 			sawError = true;
 			return {
-				content: JSON.stringify({ head: { verb: 'go_to', args: { name: 'Guard' } } }),
+				content: JSON.stringify({ head: { verb: 'go_to', args: { target: 'Guard' } } }),
 				toolCalls: [],
 			};
 		});
 		const agent = new Agent<Ctx>({
 			id: 'Acolyte',
-			identity: { name: 'Acolyte', role: 'Ask the guard.' },
+			identity: { role: 'Ask the guard.' },
 			provider,
 			verbs: registerStockVerbs(new VerbRegistry()),
 			...perception(),
@@ -555,7 +556,7 @@ describe('Agent', () => {
 		});
 		const agent = new Agent<Ctx>({
 			id: 'Assistant',
-			identity: { name: 'Assistant', role: 'You assist Player.' },
+			identity: { role: 'You assist Player.' },
 			provider,
 			verbs: registerStockVerbs(new VerbRegistry()),
 			...perception(),
@@ -607,7 +608,7 @@ describe('Agent', () => {
 		});
 		const agent = new Agent<Ctx>({
 			id: 'Guard',
-			identity: { name: 'Guard', role: 'Watch.' },
+			identity: { role: 'Watch.' },
 			provider,
 			verbs: registerStockVerbs(new VerbRegistry()),
 			...perception(),
@@ -637,7 +638,7 @@ describe('Agent', () => {
 	it('applies identity and goals from the arc JSON', async () => {
 		const provider = new FakeProvider(() => ({
 			content: JSON.stringify({
-				identity: { name: 'Assistant', role: 'Night watch of EastGate.' },
+				identity: { role: 'Night watch of EastGate.' },
 				goals: [{ text: 'Hold EastGate.', priority: 3 }],
 				head: { verb: 'wait', args: { seconds: 8 } },
 			}),
@@ -645,7 +646,7 @@ describe('Agent', () => {
 		}));
 		const agent = new Agent<Ctx>({
 			id: 'Assistant',
-			identity: { name: 'Assistant', role: 'You assist Player.', traits: ['obedient'] },
+			identity: { role: 'You assist Player.', traits: ['obedient'] },
 			goals: [{ text: 'Follow Player', priority: 2 }],
 			provider,
 			verbs: registerStockVerbs(new VerbRegistry()),
@@ -676,7 +677,7 @@ describe('Agent', () => {
 		}));
 		const agent = new Agent<Ctx>({
 			id: 'Assistant',
-			identity: { name: 'Assistant', role: 'You assist Player.', traits: ['obedient'] },
+			identity: { role: 'You assist Player.', traits: ['obedient'] },
 			provider,
 			verbs: registerStockVerbs(new VerbRegistry()),
 			...perception(),
@@ -706,7 +707,7 @@ describe('Agent', () => {
 		}));
 		const agent = new Agent<Ctx>({
 			id: 'Assistant',
-			identity: { name: 'Assistant', role: 'You assist Player.', traits: ['obedient'] },
+			identity: { role: 'You assist Player.', traits: ['obedient'] },
 			provider,
 			verbs: registerStockVerbs(new VerbRegistry()),
 			...perception(),
@@ -727,10 +728,10 @@ describe('Agent', () => {
 		assert.deepEqual(agent.identity.traits, ['stern', 'watchful']);
 	});
 
-	it('renames only when set_identity also changes role', async () => {
+	it('set_identity changes the role, never the id', async () => {
 		const agent = new Agent<Ctx>({
-			id: 'Assistant',
-			identity: { name: 'Assistant', role: 'You assist Player.' },
+			id: 'Fern',
+			identity: { role: 'Herbalist' },
 			provider: new FakeProvider(() => ({
 				content: JSON.stringify({ head: { verb: 'wait', args: { seconds: 1 } } }),
 				toolCalls: [],
@@ -744,39 +745,27 @@ describe('Agent', () => {
 			arcRetryCap: 0,
 			strategicInterval: 0,
 		});
-		const blocked = await agent.perform({
-			verb: 'set_identity',
-			args: { name: 'Lira' },
-		});
-		assert.equal(blocked.ok, false);
-		assert.equal(blocked.reason, 'name only changes with a new role');
-		assert.equal(agent.identity.name, 'Assistant');
-		const sameRole = await agent.perform({
-			verb: 'set_identity',
-			args: { name: 'Lira', role: 'You assist Player.' },
-		});
-		assert.equal(sameRole.ok, false);
-		assert.equal(agent.identity.name, 'Assistant');
-		const ok = await agent.perform({
-			verb: 'set_identity',
-			args: { name: 'Lira', role: 'I joined the abbey watch.' },
-		});
+		const same = await agent.perform({ verb: 'set_identity', args: { role: 'Herbalist' } });
+		assert.equal(same.ok, false);
+		assert.equal(same.reason, 'nothing to change');
+		const ok = await agent.perform({ verb: 'set_identity', args: { role: 'Watchman' } });
 		assert.equal(ok.ok, true);
-		assert.equal(agent.identity.name, 'Lira');
-		assert.equal(agent.identity.role, 'I joined the abbey watch.');
+		assert.equal(agent.id, 'Fern');
+		assert.equal(agent.identity.role, 'Watchman');
+		assert.ok(agent.memory.pinned().some((m) => m.text === 'I am Fern. Role: Watchman.'));
 	});
 
-	it('applies a new name from arc JSON only with a new role', async () => {
+	it('applies a new role from arc JSON', async () => {
 		const provider = new FakeProvider(() => ({
 			content: JSON.stringify({
-				identity: { name: 'Lira', role: 'I joined the abbey watch.' },
+				identity: { role: 'Watchman' },
 				head: { verb: 'wait', args: { seconds: 1 } },
 			}),
 			toolCalls: [],
 		}));
 		const agent = new Agent<Ctx>({
-			id: 'Assistant',
-			identity: { name: 'Assistant', role: 'You assist Player.' },
+			id: 'Fern',
+			identity: { role: 'Herbalist' },
 			provider,
 			verbs: registerStockVerbs(new VerbRegistry()),
 			...perception(),
@@ -788,33 +777,7 @@ describe('Agent', () => {
 			strategicInterval: 0,
 		});
 		await agent.tick(1);
-		assert.equal(agent.identity.name, 'Lira');
-		assert.equal(agent.identity.role, 'I joined the abbey watch.');
-	});
-
-	it('ignores a new name in arc JSON when role is unchanged', async () => {
-		const provider = new FakeProvider(() => ({
-			content: JSON.stringify({
-				identity: { name: 'Lira' },
-				head: { verb: 'wait', args: { seconds: 1 } },
-			}),
-			toolCalls: [],
-		}));
-		const agent = new Agent<Ctx>({
-			id: 'Assistant',
-			identity: { name: 'Assistant', role: 'You assist Player.' },
-			provider,
-			verbs: registerStockVerbs(new VerbRegistry()),
-			...perception(),
-			context: () => ({ paragraph: paragraph() }),
-			model: 'fake',
-			heartbeat: 0,
-			toolRoundCap: 0,
-			arcRetryCap: 0,
-			strategicInterval: 0,
-		});
-		await agent.tick(1);
-		assert.equal(agent.identity.name, 'Assistant');
+		assert.equal(agent.identity.role, 'Watchman');
 	});
 
 	it('revises identity on a major event even when strategicInterval is 0', async () => {
@@ -837,7 +800,7 @@ describe('Agent', () => {
 		});
 		const agent = new Agent<Ctx>({
 			id: 'Assistant',
-			identity: { name: 'Assistant', role: 'You assist Player.' },
+			identity: { role: 'You assist Player.' },
 			goals: [{ text: 'Follow Player', priority: 2 }],
 			provider,
 			verbs: registerStockVerbs(new VerbRegistry()),
@@ -869,7 +832,7 @@ describe('Agent', () => {
 		});
 		const agent = new Agent<Ctx>({
 			id: 'Assistant',
-			identity: { name: 'Assistant', role: 'You assist Player.' },
+			identity: { role: 'You assist Player.' },
 			goals: [{ text: 'Follow Player', priority: 2 }],
 			provider,
 			verbs: registerStockVerbs(new VerbRegistry()),
@@ -914,7 +877,7 @@ describe('Agent', () => {
 		});
 		const agent = new Agent<Ctx>({
 			id: 'Guard',
-			identity: { name: 'Guard', role: 'guard' },
+			identity: { role: 'guard' },
 			goals: [{ text: 'Find the forest' }],
 			provider,
 			verbs: registerStockVerbs(new VerbRegistry()),
@@ -944,7 +907,7 @@ describe('Agent', () => {
 		});
 		const base = {
 			id: 'Guard',
-			identity: { name: 'Guard', role: 'guard' },
+			identity: { role: 'guard' },
 			goals: [{ text: 'Go to EastGate' }],
 			provider: capture,
 			verbs: registerStockVerbs(new VerbRegistry()),
@@ -1008,7 +971,7 @@ describe('Agent', () => {
 		});
 		const agent = new Agent<Ctx>({
 			id: 'Guard',
-			identity: { name: 'Guard', role: 'guard' },
+			identity: { role: 'guard' },
 			goals: [{ text: 'Go to EastGate' }],
 			provider,
 			verbs: registerStockVerbs(new VerbRegistry()),
@@ -1019,7 +982,7 @@ describe('Agent', () => {
 			arcRetryCap: 0,
 			vision: true,
 			map: {
-				snapshot: (_npcID, zoom) => {
+				snapshot: (npcID, zoom) => {
 					assert.equal(zoom, 1);
 					return {
 						image: 'data:image/png;base64,xx',
@@ -1027,8 +990,8 @@ describe('Agent', () => {
 						height: 8,
 						toPixel: (x, y) => ({ u: x, v: y }),
 						marks: [
-							{ symbol: DEFAULT_YOU_SYMBOL, description: 'you', x: 1, y: 1 },
-							{ symbol: '⛩️', description: 'EastGate', x: 4, y: 1 },
+							{ symbol: DEFAULT_YOU_SYMBOL, id: 'you', x: 1, y: 1 },
+							{ symbol: '⛩️', id: 'EastGate', x: 4, y: 1 },
 						],
 					};
 				},
@@ -1055,7 +1018,7 @@ describe('Agent', () => {
 		});
 		const agent = new Agent<Ctx>({
 			id: 'Guard',
-			identity: { name: 'Guard', role: 'guard' },
+			identity: { role: 'guard' },
 			goals: [{ text: 'Go to EastGate' }],
 			provider,
 			verbs: registerStockVerbs(new VerbRegistry()),
@@ -1094,7 +1057,7 @@ describe('Agent', () => {
 		});
 		await new Agent<Ctx>({
 			id: 'Guard',
-			identity: { name: 'Guard', role: 'guard' },
+			identity: { role: 'guard' },
 			goals: [{ text: 'Go to EastGate' }],
 			provider,
 			verbs: registerStockVerbs(new VerbRegistry()),
@@ -1111,7 +1074,7 @@ describe('Agent', () => {
 					width: 8,
 					height: 8,
 					toPixel: (x, y) => ({ u: x, v: y }),
-					marks: [{ symbol: '🎯', description: 'you', x: 1, y: 1 }],
+					marks: [{ symbol: '🎯', id: 'you', x: 1, y: 1 }],
 				}),
 			},
 		}).tick(1);
@@ -1121,7 +1084,7 @@ describe('Agent', () => {
 		let snaps = 0;
 		let paints = 0;
 		let loc = { x: 0, y: 0 };
-		const snapshot = (_npcID:string, zoom:number, prev?:{ image:string; zoom:number; timestamp:number; x?:number; y?:number }) => {
+		const snapshot = (npcID:string, zoom:number, prev?:{ image:string; zoom:number; timestamp:number; x?:number; y?:number }) => {
 			snaps += 1;
 			if (prev && prev.x !== undefined && prev.y !== undefined && zoom === prev.zoom
 				&& Math.hypot(loc.x - prev.x, loc.y - prev.y) < 2) {
@@ -1133,7 +1096,7 @@ describe('Agent', () => {
 				width: 8,
 				height: 8,
 				toPixel: (x:number, y:number) => ({ u: x, v: y }),
-				marks: [{ symbol: DEFAULT_YOU_SYMBOL, description: 'you', x: 1, y: 1 }],
+				marks: [{ symbol: DEFAULT_YOU_SYMBOL, id: 'you', x: 1, y: 1 }],
 				x: loc.x,
 				y: loc.y,
 			};
@@ -1167,7 +1130,7 @@ describe('Agent', () => {
 		});
 		const agent = new Agent<Ctx>({
 			id: 'Guard',
-			identity: { name: 'Guard', role: 'guard' },
+			identity: { role: 'guard' },
 			goals: [{ text: 'Go to EastGate' }],
 			provider,
 			verbs: registerStockVerbs(new VerbRegistry()),
@@ -1209,7 +1172,7 @@ describe('Agent', () => {
 		});
 		const agent = new Agent<Ctx>({
 			id: 'Guard',
-			identity: { name: 'Guard', role: 'guard' },
+			identity: { role: 'guard' },
 			provider,
 			verbs: registerStockVerbs(new VerbRegistry()),
 			...perception(),
@@ -1250,7 +1213,7 @@ describe('Agent', () => {
 	it('allows think after a world verb in the same arc', async () => {
 		const provider = new FakeProvider(() => ({
 			content: JSON.stringify({
-				head: { verb: 'go_to', args: { name: 'EastGate' } },
+				head: { verb: 'go_to', args: { target: 'EastGate' } },
 				then: {
 					join: 'then_if_ok',
 					arc: { head: { verb: 'think', args: { about: 'how to open it' } } },
@@ -1260,7 +1223,7 @@ describe('Agent', () => {
 		}));
 		const agent = new Agent<Ctx>({
 			id: 'Guard',
-			identity: { name: 'Guard', role: 'guard' },
+			identity: { role: 'guard' },
 			provider,
 			verbs: registerStockVerbs(new VerbRegistry()),
 			...perception(),
@@ -1284,7 +1247,7 @@ describe('Agent', () => {
 				then: {
 					join: 'then_if_ok',
 					arc: {
-						head: { verb: 'go_to', args: { name: 'EastGate' } },
+						head: { verb: 'go_to', args: { target: 'EastGate' } },
 						then: {
 							join: 'then',
 							arc: { head: { verb: 'think', args: { about: 'which key' } } },
@@ -1296,7 +1259,7 @@ describe('Agent', () => {
 		}));
 		const agent = new Agent<Ctx>({
 			id: 'Guard',
-			identity: { name: 'Guard', role: 'guard' },
+			identity: { role: 'guard' },
 			provider,
 			verbs: registerStockVerbs(new VerbRegistry()),
 			...perception(),
@@ -1321,7 +1284,7 @@ describe('Agent', () => {
 		const q = think.queue;
 		const provider = new FakeProvider(() => ({
 			content: JSON.stringify({
-				head: { verb: 'go_to', args: { name: 'EastGate' } },
+				head: { verb: 'go_to', args: { target: 'EastGate' } },
 				then: {
 					join: 'then',
 					arc: { head: { verb: 'wait', args: { until: 'hasHeard' } } },
@@ -1331,7 +1294,7 @@ describe('Agent', () => {
 		}));
 		const agent = new Agent<Ctx>({
 			id: 'Guard',
-			identity: { name: 'Guard', role: 'guard' },
+			identity: { role: 'guard' },
 			provider,
 			verbs: registerStockVerbs(new VerbRegistry()),
 			...perception(),
@@ -1369,7 +1332,7 @@ describe('Agent', () => {
 		let releaseGoTo:(()=>void) | undefined;
 		const chats:Array<{ enableThinking?:boolean; fakeThought?:boolean; user:string }> = [];
 		const replies = [
-			JSON.stringify({ head: { verb: 'go_to', args: { name: 'EastGate' } } }),
+			JSON.stringify({ head: { verb: 'go_to', args: { target: 'EastGate' } } }),
 			JSON.stringify({ head: { verb: 'wait', args: {} } }),
 		];
 		const provider = new FakeProvider((req) => {
@@ -1383,7 +1346,7 @@ describe('Agent', () => {
 		});
 		const agent = new Agent<Ctx>({
 			id: 'Guard',
-			identity: { name: 'Guard', role: 'guard' },
+			identity: { role: 'guard' },
 			provider,
 			verbs: registerStockVerbs(new VerbRegistry()),
 			...perception(),
@@ -1432,8 +1395,8 @@ describe('Agent', () => {
 			if (chats.length === 1) {
 				return {
 					content: JSON.stringify({
-						head: { verb: 'go_to', args: { name: 'EastGate' } },
-						then: { join: 'then', arc: { head: { verb: 'pick_up', args: { name: 'Lantern' } } } },
+						head: { verb: 'go_to', args: { target: 'EastGate' } },
+						then: { join: 'then', arc: { head: { verb: 'pick_up', args: { item: 'Lantern' } } } },
 					}),
 					toolCalls: [],
 				};
@@ -1447,7 +1410,7 @@ describe('Agent', () => {
 		});
 		const agent = new Agent<Ctx>({
 			id: 'Guard',
-			identity: { name: 'Guard', role: 'guard' },
+			identity: { role: 'guard' },
 			provider,
 			verbs: registerStockVerbs(new VerbRegistry()),
 			...perception(),
@@ -1502,8 +1465,8 @@ describe('Agent', () => {
 			if (chats.length === 1) {
 				return {
 					content: JSON.stringify({
-						head: { verb: 'go_to', args: { name: 'EastGate' } },
-						then: { join: 'then', arc: { head: { verb: 'pick_up', args: { name: 'Lantern' } } } },
+						head: { verb: 'go_to', args: { target: 'EastGate' } },
+						then: { join: 'then', arc: { head: { verb: 'pick_up', args: { item: 'Lantern' } } } },
 					}),
 					toolCalls: [],
 				};
@@ -1520,7 +1483,7 @@ describe('Agent', () => {
 		});
 		const agent = new Agent<Ctx>({
 			id: 'Guard',
-			identity: { name: 'Guard', role: 'guard' },
+			identity: { role: 'guard' },
 			provider,
 			verbs: registerStockVerbs(new VerbRegistry()),
 			...perception(),
@@ -1559,5 +1522,86 @@ describe('Agent', () => {
 		assert.equal(arc?.head.verb, 'wait');
 		assert.equal(chats.length, 3);
 		assert.equal(chats[2]?.fakeThought, true);
+	});
+});
+
+describe('repairs, mind verbs, and names', () => {
+	function agentOf(provider:FakeProvider, extra:Partial<ConstructorParameters<typeof Agent<Ctx>>[0]> = {}):Agent<Ctx> {
+		return new Agent<Ctx>({
+			id: 'Guard',
+			identity: { role: 'guard' },
+			provider,
+			verbs: registerStockVerbs(new VerbRegistry()),
+			...perception(),
+			context: () => ({ paragraph: paragraph() }),
+			model: 'fake',
+			toolRoundCap: 0,
+			arcRetryCap: 3,
+			arcText: true,
+			...extra,
+		});
+	}
+
+	it('repairs a truncated reply without parsing it, and warms up from the second repair', async () => {
+		const temps:Array<number | undefined> = [];
+		const provider = new FakeProvider((req) => {
+			temps.push(req.temperature);
+			if (temps.length === 1) {
+				return { content: 'go_to(Kee', toolCalls: [], truncated: true };
+			}
+			if (temps.length === 2) {
+				assert.match(String(req.messages.at(-1)?.content), /cut off at the token limit/);
+				assert.equal(req.messages.some((m) => String(m.content).includes('go_to(Kee')), false);
+				return { content: 'nonsense(', toolCalls: [] };
+			}
+			return { content: 'go_to(EastGate)', toolCalls: [] };
+		});
+		const arc = await agentOf(provider, { repairTemperature: 0.7 }).tick(1);
+		assert.equal(arc?.head.args.target, 'EastGate');
+		assert.deepEqual(temps, [0, 0, 0.7]);
+	});
+
+	it('watch, unwatch, focus, and unfocus edit the extras and leave pins alone', async () => {
+		const agent = agentOf(new FakeProvider(() => ({ content: 'wait()', toolCalls: [] })), {
+			pinnedWatches: { hurt: 'isHurt(me)' },
+			pinnedSightFocus: ['isHurt(it)'],
+		});
+		const run = (verb:string, args:Record<string, string>) => agent.perform({ verb, args });
+		assert.equal((await run('watch', { name: 'near', expr: 'isNear(me, Player)' })).ok, true);
+		assert.equal((await run('watch', { name: 'near', expr: 'isNear(me, Player, 4)' })).ok, true);
+		assert.deepEqual(agent.watches, { near: 'isNear(me, Player, 4)' });
+		assert.match((await run('watch', { name: 'hurt', expr: 'false' })).reason ?? '', /required watch/);
+		assert.equal((await run('unwatch', { name: 'near' })).ok, true);
+		assert.equal((await run('unwatch', { name: 'near' })).ok, false);
+		assert.equal((await run('focus', { expr: 'isNear(it, Player)' })).ok, true);
+		assert.deepEqual(agent.effectiveSightFocus(), ['isHurt(it)', 'isNear(it, Player)']);
+		assert.equal((await run('unfocus', { expr: 'isHurt(it)' })).ok, false);
+		assert.equal((await run('unfocus', { expr: 'isNear(it, Player)' })).ok, true);
+		agent.watchesWritable = false;
+		assert.match((await run('watch', { name: 'x', expr: 'true' })).reason ?? '', /not available/);
+	});
+
+	it('names bodies by the host policy, numbers duplicates, and reads events through those names', () => {
+		const provider = new FakeProvider(() => ({ content: 'wait()', toolCalls: [] }));
+		const agent = agentOf(provider, {
+			seenAs: (target) => target.tags?.includes('enemy') ? 'EnemyKnight' : target.id,
+		});
+		assert.equal(agent.seen({ id: 'Helms', tags: ['enemy'] }), 'EnemyKnight');
+		assert.equal(agent.seen({ id: 'Stone', tags: ['enemy'] }), 'EnemyKnight2');
+		assert.equal(agent.seen({ id: 'Helms', tags: ['enemy'] }), 'EnemyKnight');
+		assert.equal(agent.seen({ id: 'Brune', tags: [] }), 'Brune');
+		assert.equal(agent.names.resolve('EnemyKnight2'), 'Stone');
+		assert.equal(agent.names.resolve('Tree'), 'Tree');
+		agent.pushEvent({ kind: 'hit', text: '{0} cleaved {1}', who: ['Brune', 'Helms'], tags: ['hit'] });
+		const json = agent.toJSON();
+		assert.equal(json.events?.[0]?.text, 'Brune cleaved EnemyKnight');
+		assert.deepEqual(json.events?.[0]?.tags, ['hit', 'Brune', 'EnemyKnight']);
+		const restored = Agent.fromJSON(json, {
+			provider,
+			verbs: registerStockVerbs(new VerbRegistry()),
+			context: () => ({ paragraph: paragraph() }),
+		});
+		assert.equal(restored.names.resolve('EnemyKnight2'), 'Stone');
+		assert.equal(restored.nameOf('Helms'), 'EnemyKnight');
 	});
 });

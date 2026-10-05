@@ -75,7 +75,7 @@ function agentOf(opts:{
 }):Agent<Ctx> {
 	return new Agent({
 		id: 'Forager',
-		identity: { name: 'Forager', role: 'Watch the glen.' },
+		identity: { role: 'Watch the glen.' },
 		provider: opts.provider,
 		verbs: registerStockVerbs(new VerbRegistry()),
 		...perception(),
@@ -91,23 +91,17 @@ function agentOf(opts:{
 }
 
 describe('agent watches', () => {
-	it('adds, edits, and removes named watches; frozen mind ignores the fields', async () => {
+	it('adds and removes named watches; a frozen mind cannot', async () => {
 		const { cat } = hostAt(3);
 		let live:Catalog = cat;
-		const provider = new FakeProvider(() => ({
-			content: JSON.stringify({
-				head: { verb: 'wait', args: { seconds: 1 } },
-				addWatches: { theft: 'some(events.filter("theft").nearby(16))' },
-				removeWatches: ['approaching'],
-			}),
-			toolCalls: [],
-		}));
+		const provider = new FakeProvider(() => ({ content: 'wait()', toolCalls: [] }));
 		const a = agentOf({
 			watches: { approaching: 'hasHeard || some(others.approaching())' },
 			provider,
 			catalog: () => live,
 		});
-		await a.tick(1);
+		await a.perform({ verb: 'watch', args: { name: 'theft', expr: 'some(events.filter("theft").nearby(16))' } });
+		await a.perform({ verb: 'unwatch', args: { name: 'approaching' } });
 		assert.deepEqual(a.watches, { theft: 'some(events.filter("theft").nearby(16))' });
 		const q = new ThinkQueue({ watchInterval: 0, processInterval: 0, maxParallel: 2 });
 		q.ensure('Forager', { skipHeartbeat: true });
@@ -126,7 +120,7 @@ describe('agent watches', () => {
 			provider,
 			catalog: () => live,
 		});
-		await frozen.tick(2);
+		assert.equal((await frozen.perform({ verb: 'watch', args: { name: 'x', expr: 'true' } })).ok, false);
 		assert.deepEqual(frozen.watches, { approaching: 'hasHeard || some(others.approaching())' });
 
 		const json = a.toJSON();
@@ -156,80 +150,20 @@ describe('agent watches', () => {
 		assert.deepEqual(a.watches, { approaching: 'some(others.approaching())' });
 	});
 
-	it('replaces extras from a full watches dict; pins stay', async () => {
+	it('watch replaces a watch of the same name', async () => {
 		const { cat } = hostAt(3);
-		const provider = new FakeProvider(() => ({
-			content: JSON.stringify({
-				head: { verb: 'wait', args: { seconds: 1 } },
-				watches: {
-					hurt: 'isNear(me, Player)',
-					heard: 'hasHeard',
-				},
-			}),
-			toolCalls: [],
-		}));
-		const a = agentOf({
-			watches: { approaching: 'some(others.approaching())' },
-			pinnedWatches: { hurt: 'isHurt(me)' },
-			provider,
-			catalog: () => cat,
-		});
-		await a.tick(1);
-		assert.deepEqual(a.pinnedWatches, { hurt: 'isHurt(me)' });
-		assert.deepEqual(a.watches, { heard: 'hasHeard' });
-		assert.deepEqual(a.effectiveWatches(), ['isHurt(me)', 'hasHeard']);
-	});
-
-	it('clears extras with an empty watches object', async () => {
-		const { cat } = hostAt(3);
-		const provider = new FakeProvider(() => ({
-			content: JSON.stringify({
-				head: { verb: 'wait', args: { seconds: 1 } },
-				watches: {},
-			}),
-			toolCalls: [],
-		}));
-		const a = agentOf({
-			watches: { approaching: 'some(others.approaching())' },
-			pinnedWatches: { hurt: 'isHurt(me)' },
-			provider,
-			catalog: () => cat,
-		});
-		await a.tick(1);
-		assert.deepEqual(a.watches, {});
-		assert.deepEqual(a.effectiveWatches(), ['isHurt(me)']);
-	});
-
-	it('edits by name; add refuses a taken name; list id still aliases name', async () => {
-		const { cat } = hostAt(3);
-		const provider = new FakeProvider(() => ({
-			content: JSON.stringify({
-				head: { verb: 'wait', args: { seconds: 1 } },
-				editWatches: { nearby: 'isNear(me, Player, 16)' },
-				addWatches: [{ id: 'nearby', expr: 'isNear(me, Player)' }],
-			}),
-			toolCalls: [],
-		}));
 		const a = agentOf({
 			watches: { nearby: 'isNear(me, Player)' },
-			provider,
+			provider: new FakeProvider(() => ({ content: 'wait()', toolCalls: [] })),
 			catalog: () => cat,
 		});
-		await a.tick(1);
+		assert.equal((await a.perform({ verb: 'watch', args: { name: 'nearby', expr: 'isNear(me, Player, 16)' } })).ok, true);
 		assert.deepEqual(a.watches, { nearby: 'isNear(me, Player, 16)' });
 	});
 
 	it('keeps host pinnedWatches; LLM cannot edit or remove them', async () => {
 		const { cat } = hostAt(3);
-		const provider = new FakeProvider(() => ({
-			content: JSON.stringify({
-				head: { verb: 'wait', args: { seconds: 1 } },
-				addWatches: { heard: 'hasHeard' },
-				editWatches: { hurt: 'isNear(me, Player)' },
-				removeWatches: ['hurt'],
-			}),
-			toolCalls: [],
-		}));
+		const provider = new FakeProvider(() => ({ content: 'wait()', toolCalls: [] }));
 		const a = agentOf({
 			watches: { approaching: 'some(others.approaching())' },
 			pinnedWatches: { hurt: 'isHurt(me)' },
@@ -237,7 +171,9 @@ describe('agent watches', () => {
 			catalog: () => cat,
 		});
 		assert.deepEqual(a.effectiveWatches(), ['isHurt(me)', 'some(others.approaching())']);
-		await a.tick(1);
+		await a.perform({ verb: 'watch', args: { name: 'heard', expr: 'hasHeard' } });
+		assert.equal((await a.perform({ verb: 'watch', args: { name: 'hurt', expr: 'isNear(me, Player)' } })).ok, false);
+		assert.equal((await a.perform({ verb: 'unwatch', args: { name: 'hurt' } })).ok, false);
 		assert.deepEqual(a.watches, {
 			approaching: 'some(others.approaching())',
 			heard: 'hasHeard',
@@ -279,7 +215,7 @@ describe('agent watches', () => {
 		}));
 		const restored = Agent.fromJSON({
 			id: 'Forager',
-			identity: { name: 'Forager', role: 'Watch the glen.' },
+			identity: { role: 'Watch the glen.' },
 			goals: [],
 			memories: [],
 			watches: ['some(others.approaching())'],

@@ -3,7 +3,7 @@ export { CrowdUnit, type CrowdUnitJSON, type CrowdUnitSpec } from './unit.js';
 export { CrowdConductor, isCrowdConductor, type CrowdConductorJSON, type CrowdConductorOptions } from './conductor.js';
 export {
 	STOCK_CROWD_VERBS,
-	STOCK_CROWD_VERB_ARGS,
+	STOCK_CROWD_VERB_DEFS,
 	STOCK_FORMATION_VERBS,
 	registerStockCrowdVerbs,
 	isFormationVerb,

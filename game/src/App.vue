@@ -157,6 +157,7 @@ function pick(id:string):void {
 
 function leave():void {
 	hud.menuOpen = false;
+	hud.briefOpen = false;
 	hud.menuNotice = '';
 	hud.sayOpen = false;
 	hud.chatOpen = false;
@@ -205,9 +206,9 @@ function leave():void {
 		</label>
 	</div>
 	<template v-else>
-		<KindlingView :hud="hud" :sceneID="sceneID" />
+		<KindlingView :key="hud.boots" :hud="hud" :sceneID="sceneID" />
 		<HudPickup :hud="hud" />
-		<HudLayer :hud="hud" @scenes="leave" />
+		<HudLayer :hud="hud" :sceneID="sceneID ?? ''" @scenes="leave" />
 		<CursorLayer />
 	</template>
 	<MusicPlayer :audio="liveAudio" :kick="kickLive" :blocked="hud.sayOpen" />

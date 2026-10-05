@@ -1,4 +1,4 @@
-import { Door, Lock } from '../engine/components';
+import { Door, HumanBody, Lock, Vitals } from '../engine/components';
 import type { GameObject } from '../engine/GameObject';
 import type { World } from '../engine/World';
 import { Pickupable } from '../items/components';
@@ -15,7 +15,11 @@ export function aimTarget(world:World, actor:GameObject):GameObject | null {
 		}
 		const door = go.getComponent(Door) || go.getComponent(Lock);
 		const loot = go.getComponent(Pickupable);
-		if (!door && !loot) {
+		const body = go.getComponent(HumanBody);
+		if (body && (go.getComponent(Vitals)?.hp ?? 1) <= 0) {
+			continue;
+		}
+		if (!door && !loot && !body) {
 			continue;
 		}
 		if (distXZ(actor, go) > USE_RANGE) {

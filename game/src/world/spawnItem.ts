@@ -9,9 +9,9 @@ import {
 	Pickupable,
 	Weapon,
 } from '../items/components';
+import { ChunkBound } from '@arc-director/kindling';
 import {
 	BoxCollider,
-	ChunkBound,
 	Flame,
 	Light,
 	Named,
@@ -22,7 +22,7 @@ import { MeshRenderer } from '../engine/MeshRenderer';
 import { GameObject } from '../engine/GameObject';
 import type { World } from '../engine/World';
 import type { ItemInstance } from '../items/instance';
-import { getDef, GLEN_FEE_NAME } from '../items/defs';
+import { getDef } from '../items/defs';
 
 export function captureItem(go:GameObject):ItemInstance {
 	const item = go.getComponent(Item);
@@ -128,6 +128,7 @@ export function spawnWorldItem(
 	chunkID?:string,
 ):GameObject {
 	const go = new GameObject(inst.id, inst.name);
+	go.recipe = { item: structuredClone(inst), chunkID };
 	go.transform.position.x = x;
 	go.transform.position.y = y;
 	go.transform.position.z = z;
@@ -157,14 +158,14 @@ export function spawnWorldItem(
 	if (inst.name === 'GoldCoin') {
 		named.aliases = ['Gold Coin', 'coin'];
 	}
-	if (inst.name === GLEN_FEE_NAME || inst.name === 'FireMushroomB') {
+	if (inst.name === 'FireMushroom') {
 		named.aliases = ['Fire Mushroom', 'mushroom'];
 	}
 	if (inst.name === 'SilverTrout') {
 		named.aliases = ['Silver Trout', 'trout', 'fish'];
 	}
-	if (inst.name === 'MillCrank') {
-		named.aliases = ['Mill Crank', 'crank'];
+	if (inst.name === 'BridgeCrank') {
+		named.aliases = ['Bridge Crank', 'crank'];
 	}
 	world.add(go);
 	return go;

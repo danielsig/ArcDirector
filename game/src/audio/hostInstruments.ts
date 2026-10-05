@@ -50,7 +50,7 @@ function disconnectSoon(nodes:AudioNode[], when:number, ctx:AudioContext, hold:n
 function playViolin(
 	ctx:AudioContext,
 	dest:AudioNode,
-	_noise:AudioBuffer,
+	noise:AudioBuffer,
 	when:number,
 	midi:number,
 	dur:number,
@@ -97,7 +97,7 @@ function playViolin(
 function playBrass(
 	ctx:AudioContext,
 	dest:AudioNode,
-	_noise:AudioBuffer,
+	noise:AudioBuffer,
 	when:number,
 	midi:number,
 	dur:number,

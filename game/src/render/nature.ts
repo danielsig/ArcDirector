@@ -19,7 +19,7 @@ export const GRASS_Y = 0.012;
 export const WATER_UPPER_Y = GRASS_Y;
 export const WATER_LOWER_Y = GRASS_Y - 0.14;
 export const GRASS_UV_REP = 4;
-/** Occupancy G channel is world-Y / this. Taller than abbey walls. */
+/** Occupancy G channel is world-Y / this. Taller than dungeon walls. */
 export const GRASS_CLIP_MAX_Y = 4;
 
 function windVertex(amount:number):string {
@@ -91,7 +91,7 @@ const matCache = new Map<string, THREE.Material>();
 let maps:NatureMaps | null = null;
 let pending:Promise<NatureMaps> | null = null;
 
-function remember<T extends THREE.Material>(key:string, make:() => T):T {
+function remember<T extends THREE.Material>(key:string, make:()=>T):T {
 	const hit = matCache.get(key);
 	if (hit) {
 		return hit as T;
@@ -631,7 +631,7 @@ async function loadCutout(src:string, repeat:boolean):Promise<THREE.Texture> {
 	return texFromCanvas(chromaMagenta(img), repeat);
 }
 
-async function loadMatchedGrass(_tileSrc:string, bladeSrc:string):Promise<{ grass:THREE.Texture; blade:THREE.Texture }> {
+async function loadMatchedGrass(tileSrc:string, bladeSrc:string):Promise<{ grass:THREE.Texture; blade:THREE.Texture }> {
 	const bladeImg = await loadImage(bladeSrc);
 	const blades = chromaMagenta(bladeImg);
 	const pasture = hslToRgb(0.33, 0.52, 0.34);
@@ -643,8 +643,8 @@ async function loadMatchedGrass(_tileSrc:string, bladeSrc:string):Promise<{ gras
 	bladeTex.minFilter = THREE.LinearMipmapLinearFilter;
 	bladeTex.magFilter = THREE.LinearFilter;
 	const grassTex = texFromCanvas(lawn, true);
-	const host = window as unknown as { __grassDbg?:{ pasture:[number, number, number]; lawn:ReturnType<typeof meanOpaque>; blade:ReturnType<typeof meanOpaque> } };
-	host.__grassDbg = { pasture, lawn: meanOpaque(lawn), blade: meanOpaque(blades) };
+	const host = window as unknown as { grassDbg?:{ pasture:[number, number, number]; lawn:ReturnType<typeof meanOpaque>; blade:ReturnType<typeof meanOpaque> } };
+	host.grassDbg = { pasture, lawn: meanOpaque(lawn), blade: meanOpaque(blades) };
 	return {
 		grass: grassTex,
 		blade: bladeTex,
@@ -1030,8 +1030,8 @@ function makeNatureDepthMat(
 				shader.fragmentShader = `${GRASS_CLIP_FRAG}${shader.fragmentShader}`;
 				shader.fragmentShader = shader.fragmentShader.replace(
 					'#include <clipping_planes_fragment>',
-				GRASS_CLIP_DISCARD,
-			);
+					GRASS_CLIP_DISCARD,
+				);
 			}
 		};
 		track(mat);

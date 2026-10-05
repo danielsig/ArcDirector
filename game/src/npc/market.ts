@@ -1,16 +1,14 @@
 import type { AgentSpec } from 'arc-director';
-import { MarketNPC, Merchant, Named } from '../engine/components';
+import { MarketNPC, Named } from '../engine/components';
 import type { GameObject } from '../engine/GameObject';
 import type { World } from '../engine/World';
-import { findCarried } from '../items/inventory';
-import { coinsOf } from '../items/wallet';
 import { spawnNPC, type NPCSpawnOpts } from '../world/spawn';
 import type { Chunk } from '../world/Chunk';
 
-const TRADE = 'Gold lives in your purse. Buying is a sale; give() is a gift. Use names, never coordinates.';
+const TRADE = 'Gold lives in my purse. Buying is a sale; give() is a gift. Use names, never coordinates.';
 
-function vendorRole(name:string, stall:string, good:string, ask:number, floor:number, want:string, coins:number):string {
-	return `You are ${name}, a street vendor at ${stall}. You sell ${good} for ${ask} gold. You will not take less than ${floor}. You have ${coins} gold in your purse. You want ${want} for yourself. Stay at ${stall}. ${TRADE}`;
+function vendorStory(stall:string, good:string, ask:number, floor:number, want:string, coins:number):string {
+	return `I am a street vendor at ${stall}. I sell ${good} for ${ask} gold. I will not take less than ${floor}. I have ${coins} gold in my purse. I want ${want} for myself. I stay at ${stall}. ${TRADE}`;
 }
 
 function vendorSeed(
@@ -25,80 +23,23 @@ function vendorSeed(
 ):AgentSpec {
 	return {
 		id,
-		identity: {
-			name: id,
-			role: vendorRole(id, stall, good, ask, floor, want, coins),
-			traits,
-		},
+		identity: { role: 'Vendor', traits },
 		goals: [{
 			text: `Sell ${good} from ${stall}. Buy ${want} if you can afford it. Stay at your stall.`,
 			priority: 2,
 		}],
 		memories: [
 			{
+				text: vendorStory(stall, good, ask, floor, want, coins),
+				tags: ['backstory', good, stall],
+				pinned: true,
+			},
+			{
 				text: `I sell ${good}. I want ${want}. I keep the stall.`,
 				tags: [good, want, stall],
 				pinned: true,
 			},
 		],
-	};
-}
-
-function customerRole(name:string, wants:string[], coins:number, leave:string, extra:string):string {
-	const need = wants.length > 0 ? `You came for ${wants.join(' and ')}.` : 'You already have what you came for.';
-	return `You are ${name}, a visitor at the flea market. ${need} You have ${coins} gold in your purse. ${extra}${TRADE} When you are done, leave through ${leave}.`;
-}
-
-function customerSeed(
-	id:string,
-	wants:string[],
-	coins:number,
-	leave:string,
-	extra:string,
-	traits:string[],
-	memory:string,
-):AgentSpec {
-	const goal = wants.length > 0
-		? `Get ${wants.join(' and ')}. Then leave through ${leave}.`
-		: `Leave through ${leave}.`;
-	return {
-		id,
-		identity: {
-			name: id,
-			role: customerRole(id, wants, coins, leave, extra),
-			traits,
-		},
-		goals: [{ text: goal, priority: 2 }],
-		memories: [
-			{
-				text: memory,
-				tags: [...wants, leave, 'market'],
-				pinned: true,
-			},
-		],
-	};
-}
-
-function guardSeed(id:string, post:string, traits:string[]):AgentSpec {
-	return {
-		id,
-		identity: {
-			name: id,
-			role: `You are ${id}, market watch posted at ${post}. Stay at ${post}. A theft at your gate is your problem. Use names, never coordinates.`,
-			traits,
-		},
-		goals: [{
-			text: `Keep ${post}.`,
-			priority: 2,
-		}],
-		memories: [
-			{
-				text: `My post is ${post}.`,
-				tags: [post, 'watch'],
-				pinned: true,
-			},
-		],
-		watches: { theft: 'some(events.filter("theft").nearby(16))' },
 	};
 }
 
@@ -179,39 +120,6 @@ function pickName(world:World):string | null {
 		return null;
 	}
 	return free[Math.floor(Math.random() * free.length)];
-}
-
-export function seedFromBody(go:GameObject):AgentSpec | null {
-	const id = go.getComponent(Named)?.id ?? go.id;
-	const npc = go.getComponent(MarketNPC);
-	if (!npc) {
-		return null;
-	}
-	const coins = coinsOf(go);
-	const shop = go.getComponent(Merchant);
-	if (npc.kind === 'vendor' && shop) {
-		return vendorSeed(id, `${id}Stall`, shop.specialty, shop.ask, shop.floor, npc.wants[0] ?? 'nothing', coins, ['busy']);
-	}
-	if (npc.kind === 'guard') {
-		return guardSeed(id, npc.leaveGate || 'WestGate', ['watchful']);
-	}
-	const held:string[] = [];
-	if (findCarried(go, (it) => it.defID === 'apple')) {
-		held.push('Apple');
-	}
-	if (findCarried(go, (it) => it.defID === 'candle')) {
-		held.push('Candle');
-	}
-	const extra = held.length > 0 ? `You also sell ${held.join(' and ')}. ` : '';
-	return customerSeed(
-		id,
-		[...npc.wants],
-		coins,
-		npc.leaveGate || 'EastGate',
-		extra,
-		['curious', 'thrifty'],
-		`I came to the market for ${npc.wants.join(' and ') || 'nothing'}. Then ${npc.leaveGate}.`,
-	);
 }
 
 export function spawnRandomCustomer(world:World):{ go:GameObject; id:string; tags:string[] } | null {

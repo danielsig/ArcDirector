@@ -37,14 +37,10 @@ async function main():Promise<void> {
 		.withContext(() => ({ paragraph }))
 		.addAgent({
 			id: 'Guard',
-			identity: {
-				name: 'Guard',
-				role: 'A dungeon guard. Walk to the named interactable you can see. Never emit coordinates.',
-				traits: ['dutiful'],
-			},
+			identity: { role: 'Guard', traits: ['dutiful'] },
 			goals: [{ text: 'Go to EastGate', priority: 1 }],
 			memories: [{
-				text: 'EastGate is the door in the east wall.',
+				text: 'I am a dungeon guard. I go to the named interactable I can see. EastGate is the door in the east wall.',
 				tags: ['gate', 'EastGate'],
 				pinned: true,
 			}],

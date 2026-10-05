@@ -157,7 +157,7 @@ export const SWORD_HILT:Partial<Record<WalkHour, Px>> = {
 	2: { x: 4, y: 27 },
 	3: { x: 6, y: 23 },
 	4: { x: 7, y: 19 },
-	6: { x: 4, y: 29 },
+	6: { x: 23, y: 93 },
 };
 
 /** Bottom tip of `torchStick` (38×56). Thumb sits on the butt, not the card center. */

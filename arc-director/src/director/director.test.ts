@@ -6,8 +6,10 @@ import { dummyEntity } from '../expr/natives.js';
 import { SampleCache } from '../expr/types.js';
 import { formatSight } from '../perception/sight.js';
 import { formatInventory } from '../perception/formatInventory.js';
+import { isCrowdConductor } from '../conductor/conductor.js';
 import { ArcDirector } from './director.js';
 import type { VerbCall } from './types.js';
+import { OPEN_WORLD } from '../testing/world.js';
 
 type Ctx = { paragraph:string; id:string };
 
@@ -32,6 +34,7 @@ function scene():string {
 }
 
 const KIT = { verbs: STOCK_VERBS };
+
 
 const WAIT_REPLY = {
 	content: JSON.stringify({ head: { verb: 'wait', args: {} } }),
@@ -74,21 +77,21 @@ async function gatedTrio(opts:{
 			id: 'Able',
 			skipHeartbeat: true,
 			kit: KIT,
-			identity: { name: 'Able', role: 'Goes.' },
+			identity: { role: 'Goes.' },
 			goals: [{ text: 'Wait', priority: 1 }],
 		})
 		.addAgent({
 			id: 'Baker',
 			skipHeartbeat: true,
 			kit: KIT,
-			identity: { name: 'Baker', role: 'Goes.' },
+			identity: { role: 'Goes.' },
 			goals: [{ text: 'Wait', priority: 1 }],
 		})
 		.addAgent({
 			id: 'Charlie',
 			skipHeartbeat: true,
 			kit: KIT,
-			identity: { name: 'Charlie', role: 'Goes.' },
+			identity: { role: 'Goes.' },
 			goals: [{ text: 'Wait', priority: 1 }],
 		})
 		.start();
@@ -113,7 +116,7 @@ function directorOf(calls?:VerbCall<Ctx>[]):ArcDirector<Ctx> {
 		.withDefaultKit(KIT)
 		.onVerb((call) => {
 			calls?.push(call);
-			return { ok: true, verb: call.verb, reason: String(call.args.name ?? '') };
+			return { ok: true, verb: call.verb, reason: String(call.args.target ?? '') };
 		})
 		.addSense('scene', {
 			description: 'What you can see. Names only.',
@@ -129,7 +132,7 @@ describe('ArcDirector', () => {
 			.addAgent({
 				id: 'Watcher',
 				kit: KIT,
-				identity: { name: 'Watcher', role: 'Pays attention.', traits: ['alert'] },
+				identity: { role: 'Pays attention.', traits: ['alert'] },
 				goals: [{ text: 'Go to EastGate', priority: 1 }],
 			})
 			.start();
@@ -137,7 +140,7 @@ describe('ArcDirector', () => {
 		await waitFor(() => !!director.agent('Watcher')?.lastArc);
 		const arc = director.agent('Watcher')!.lastArc!;
 		assert.equal(arc.head.verb, 'go_to');
-		assert.equal(arc.head.args.name, 'EastGate');
+		assert.equal(arc.head.args.target, 'EastGate');
 		await waitFor(() => calls.length > 0);
 		assert.equal(calls[0].verb, 'go_to');
 		assert.equal(calls[0].agent.id, 'Watcher');
@@ -173,7 +176,7 @@ describe('ArcDirector', () => {
 			.addAgent({
 				id: 'Dawn',
 				kit: KIT,
-				identity: { name: 'Dawn', role: 'Fights.' },
+				identity: { role: 'Fights.' },
 				goals: [{ text: 'Win.', priority: 1 }],
 			})
 			.start();
@@ -196,13 +199,13 @@ describe('ArcDirector', () => {
 		const director = await directorOf().addAgent({
 			id: 'Watcher',
 			kit: KIT,
-			identity: { name: 'Watcher', role: 'Pays attention.' },
+			identity: { role: 'Pays attention.' },
 		}).start();
 		assert.throws(() => director.withFakeInference(), /already started/);
 		assert.throws(() => director.withPriorityQueue(), /already started/);
 		assert.throws(() => director.withContext(() => ({ paragraph: '', id: '' })), /already started/);
 		assert.throws(() => director.withDefaultKit({ verbs: [] }), /already started/);
-		assert.throws(() => director.withSight({ look: () => ({ self: { id: 'Watcher', at: [0, 0] }, objects: [] }) }), /already started/);
+		assert.throws(() => director.withSight({ look: () => ({ self: { id: 'Watcher', point: [0, 0] }, objects: [] }) }), /already started/);
 		assert.throws(() => director.withInventory(() => ({})), /already started/);
 		director.dispose();
 	});
@@ -218,7 +221,7 @@ describe('ArcDirector', () => {
 		const director = await directorOf().addAgent({
 			id: 'Watcher',
 			kit: KIT,
-			identity: { name: 'Watcher', role: 'Pays attention.' },
+			identity: { role: 'Pays attention.' },
 		}).start();
 		const again = await director.start();
 		assert.equal(again, director);
@@ -230,7 +233,7 @@ describe('ArcDirector', () => {
 		director.addAgent({
 			id: 'Guard',
 			kit: KIT,
-			identity: { name: 'Guard', role: 'Walks to EastGate.' },
+			identity: { role: 'Walks to EastGate.' },
 			goals: [{ text: 'Go to EastGate', priority: 1 }],
 		});
 		assert.ok(director.agent('Guard'));
@@ -253,7 +256,7 @@ describe('ArcDirector', () => {
 					content: JSON.stringify({
 						head: give
 							? { verb: 'give', args: { item: 'Key', to: 'Player' } }
-							: { verb: 'go_to', args: { name: 'EastGate' } },
+							: { verb: 'go_to', args: { target: 'EastGate' } },
 					}),
 					toolCalls: [],
 				};
@@ -265,9 +268,12 @@ describe('ArcDirector', () => {
 				maxParallel: 1,
 			})
 			.addStockVerbs()
-			.addVerb('give', { item: 'id', to: 'id' }, ({ args }) => {
-				gave.push(String(args.item));
-				return { ok: true, verb: 'give' };
+			.addVerb('give', {
+				args: { item: 'id', to: 'id' },
+				handler: ({ args }) => {
+					gave.push(String(args.item));
+					return { ok: true, verb: 'give' };
+				},
 			})
 			.onVerb(({ verb }) => {
 				other.push(verb);
@@ -281,7 +287,7 @@ describe('ArcDirector', () => {
 			.addAgent({
 				id: 'Giver',
 				kit: { verbs: [...STOCK_VERBS, 'give'] },
-				identity: { name: 'Giver', role: 'Gives the key.' },
+				identity: { role: 'Gives the key.' },
 				goals: [{ text: 'give the key', priority: 1 }],
 			})
 			.start();
@@ -302,14 +308,14 @@ describe('ArcDirector', () => {
 				id: 'Low',
 				rank: 0,
 				kit: KIT,
-				identity: { name: 'Low', role: 'Waits.' },
+				identity: { role: 'Waits.' },
 				goals: [{ text: 'Go to EastGate', priority: 1 }],
 			})
 			.addAgent({
 				id: 'High',
 				rank: 1,
 				kit: KIT,
-				identity: { name: 'High', role: 'Goes first.' },
+				identity: { role: 'Goes first.' },
 				goals: [{ text: 'Go to EastGate', priority: 1 }],
 			})
 			.start();
@@ -324,7 +330,7 @@ describe('ArcDirector', () => {
 		const director = await directorOf().addAgent({
 			id: 'Watcher',
 			kit: KIT,
-			identity: { name: 'Watcher', role: 'Pays attention.' },
+			identity: { role: 'Pays attention.' },
 			goals: [{ text: 'Go to EastGate', priority: 1 }],
 		}).start();
 		const stop = director.runLoop(50);
@@ -338,10 +344,10 @@ describe('ArcDirector', () => {
 		const director = await new ArcDirector<Ctx>()
 			.withFakeInference(() => ({
 				content: JSON.stringify({
-					head: { verb: 'go_to', args: { name: 'EastGate' } },
+					head: { verb: 'go_to', args: { target: 'EastGate' } },
 					then: {
 						join: 'then',
-						arc: { head: { verb: 'wait', args: { seconds: 1 } } },
+						arc: { head: { verb: 'examine', args: { target: 'EastGate' } } },
 					},
 				}),
 				toolCalls: [],
@@ -365,7 +371,7 @@ describe('ArcDirector', () => {
 			.addAgent({
 				id: 'Walker',
 				kit: KIT,
-				identity: { name: 'Walker', role: 'Walks then waits.' },
+				identity: { role: 'Walks then waits.' },
 				goals: [{ text: 'act', priority: 1 }],
 			})
 			.start();
@@ -377,6 +383,7 @@ describe('ArcDirector', () => {
 
 	it('addStockVerbs can register a stock subset', async () => {
 		const director = await new ArcDirector<Ctx>()
+			.withWorld(OPEN_WORLD)
 			.withFakeInference(goToNamedInteractable())
 			.addStockVerbs(...STOCK_MOVE_VERBS)
 			.addStockVerbs('go_to', 'wait')
@@ -384,7 +391,7 @@ describe('ArcDirector', () => {
 			.addAgent({
 				id: 'Guard',
 				kit: { verbs: [...STOCK_MOVE_VERBS, 'wait'] },
-				identity: { name: 'Guard', role: 'Walks.' },
+				identity: { role: 'Walks.' },
 			})
 			.start();
 		const verbs = director.agent('Guard')!.verbs;
@@ -404,7 +411,7 @@ describe('ArcDirector', () => {
 			.addAgent({
 				id: 'Guard',
 				kit: { verbs: ['go_to'] },
-				identity: { name: 'Guard', role: 'Walks.' },
+				identity: { role: 'Walks.' },
 			})
 			.start();
 		const verbs = director.agent('Guard')!.verbs;
@@ -418,13 +425,14 @@ describe('ArcDirector', () => {
 
 	it('withDefaultKit applies when addAgent omits kit', async () => {
 		const director = await new ArcDirector<Ctx>()
+			.withWorld(OPEN_WORLD)
 			.withFakeInference(goToNamedInteractable())
 			.addStockVerbs()
 			.withDefaultKit({ verbs: ['go_to'] })
 			.withContext((id) => ({ paragraph: scene(), id }))
 			.addAgent({
 				id: 'Guard',
-				identity: { name: 'Guard', role: 'Walks.' },
+				identity: { role: 'Walks.' },
 			})
 			.start();
 		assert.deepEqual(
@@ -439,7 +447,7 @@ describe('ArcDirector', () => {
 		const director = await directorOf()
 			.addAgent({
 				id: 'Guard',
-				identity: { name: 'Guard', role: 'Walks.' },
+				identity: { role: 'Walks.' },
 				kit,
 			})
 			.start();
@@ -449,11 +457,11 @@ describe('ArcDirector', () => {
 		kit.verbs = ['wait'];
 		director.tick(1, 2);
 		assert.deepEqual(agent.activeVerbs().list().map((v) => v.name), ['wait']);
-		const denied = await agent.perform({ verb: 'go_to', args: { name: 'EastGate' } });
+		const denied = await agent.perform({ verb: 'go_to', args: { target: 'EastGate' } });
 		assert.equal(denied.ok, false);
 		assert.match(denied.reason ?? '', /not available/);
 		agent.kit = () => ({ verbs: ['go_to'] });
-		const ok = await agent.perform({ verb: 'go_to', args: { name: 'EastGate' } });
+		const ok = await agent.perform({ verb: 'go_to', args: { target: 'EastGate' } });
 		assert.equal(ok.ok, true);
 		director.dispose();
 	});
@@ -463,7 +471,7 @@ describe('ArcDirector', () => {
 			.addAgent({
 				id: 'Guard',
 				kit: KIT,
-				identity: { name: 'Guard', role: 'Walks.' },
+				identity: { role: 'Walks.' },
 			})
 			.start();
 		const agent = director.agent('Guard')!;
@@ -526,7 +534,7 @@ describe('ArcDirector', () => {
 			.withDefaultKit({ verbs: ['fly'], tools: ['examine'] })
 			.addAgent({
 				id: 'Guard',
-				identity: { name: 'Guard', role: 'Walks.' },
+				identity: { role: 'Walks.' },
 			})
 			.start({ ignoreMissing: true });
 		assert.match(logs.join('\n'), /verb 'fly' is not registered/);
@@ -540,7 +548,7 @@ describe('ArcDirector', () => {
 		assert.throws(
 			() => director.addAgent({
 				id: 'Late',
-				identity: { name: 'Late', role: 'Walks.' },
+				identity: { role: 'Walks.' },
 				kit: { verbs: ['nope'] },
 			}),
 			/verb 'nope' is not registered \(agent Late\)/,
@@ -553,7 +561,7 @@ describe('ArcDirector', () => {
 			.withDefaultKit({ verbs: ['go_to'], tools: ['recall', 'observe'] })
 			.addAgent({
 				id: 'Guard',
-				identity: { name: 'Guard', role: 'Walks.' },
+				identity: { role: 'Walks.' },
 			})
 			.start();
 		assert.ok(director.ready);
@@ -566,7 +574,7 @@ describe('ArcDirector', () => {
 			.withDefaultKit({ verbs: ['go_to'], tools: ['grep_world_encyclopedia'] })
 			.addAgent({
 				id: 'Guard',
-				identity: { name: 'Guard', role: 'Walks.' },
+				identity: { role: 'Walks.' },
 			})
 			.start();
 		assert.ok(director.ready);
@@ -575,15 +583,16 @@ describe('ArcDirector', () => {
 
 	it('withSight gather matches formatSight', async () => {
 		const sight = {
-			self: { id: 'Captain', at: [11.5, 10.5], facing: [0, -1] as number[] },
-			ambient: 'A damp stone hall of the abbey.',
+			self: { id: 'Captain', point: [11.5, 10.5], facing: [0, -1] as number[] },
+			ambient: 'A damp stone hall of the dungeon.',
 			objects: [
-				{ id: 'Alchemist', at: [11.5, 7.5], tags: ['agent', 'person'], interactable: true, interesting: 1 },
-				{ id: 'Bitterroot', at: [11.5, -5], tags: ['item'], interactable: true, interesting: 1 },
-				{ id: 'HiddenLoot', at: [12, 10], tags: ['item'] },
+				{ id: 'Alchemist', point: [11.5, 7.5], tags: ['agent', 'person'], interactable: true, interesting: 1 },
+				{ id: 'Bitterroot', point: [11.5, -5], tags: ['item'], interactable: true, interesting: 1 },
+				{ id: 'HiddenLoot', point: [12, 10], tags: ['item'] },
 			],
 		};
 		const director = await new ArcDirector<Ctx>()
+			.withWorld(OPEN_WORLD)
 			.withPriorityQueue({ processInterval: 0, watchInterval: 0, heartbeatStart: 0.01, heartbeatMin: 0.01, maxParallel: 2 })
 			.withFakeInference(goToNamedInteractable())
 			.addStockVerbs()
@@ -593,7 +602,7 @@ describe('ArcDirector', () => {
 			.addAgent({
 				id: 'Captain',
 				kit: { verbs: ['go_to'], senses: ['sight'] },
-				identity: { name: 'Captain', role: 'Pays attention.' },
+				identity: { role: 'Pays attention.' },
 			})
 			.start();
 		const agent = director.agent('Captain')!;
@@ -603,12 +612,13 @@ describe('ArcDirector', () => {
 
 	it('withSight unitName is passed to formatSight', async () => {
 		const sight = {
-			self: { id: 'Captain', at: [0, 0], facing: [0, -1] as number[] },
+			self: { id: 'Captain', point: [0, 0], facing: [0, -1] as number[] },
 			objects: [
-				{ id: 'Alchemist', at: [-4, 0], tags: ['agent', 'person'], interactable: true },
+				{ id: 'Alchemist', point: [-4, 0], tags: ['agent', 'person'], interactable: true },
 			],
 		};
 		const director = await new ArcDirector<Ctx>()
+			.withWorld(OPEN_WORLD)
 			.withPriorityQueue({ processInterval: 0, watchInterval: 0, heartbeatStart: 0.01, heartbeatMin: 0.01, maxParallel: 2 })
 			.withFakeInference(goToNamedInteractable())
 			.addStockVerbs()
@@ -618,7 +628,7 @@ describe('ArcDirector', () => {
 			.addAgent({
 				id: 'Captain',
 				kit: { verbs: ['go_to'], senses: ['sight'] },
-				identity: { name: 'Captain', role: 'Pays attention.' },
+				identity: { role: 'Pays attention.' },
 			})
 			.start();
 		const agent = director.agent('Captain')!;
@@ -632,25 +642,26 @@ describe('ArcDirector', () => {
 
 	it('withLineOfSight drops occluded bodies from sight', async () => {
 		const sight = {
-			self: { id: 'Captain', at: [0, 0] },
-			ambient: 'A damp stone hall of the abbey.',
+			self: { id: 'Captain', point: [0, 0] },
+			ambient: 'A damp stone hall of the dungeon.',
 			objects: [
-				{ id: 'Alchemist', at: [0, 3], tags: ['agent', 'person'], interactable: true },
-				{ id: 'HiddenLoot', at: [1, 0], tags: ['item'] },
+				{ id: 'Alchemist', point: [0, 3], tags: ['agent', 'person'], interactable: true },
+				{ id: 'HiddenLoot', point: [1, 0], tags: ['item'] },
 			],
 		};
 		const director = await new ArcDirector<Ctx>()
+			.withWorld(OPEN_WORLD)
 			.withPriorityQueue({ processInterval: 0, watchInterval: 0, heartbeatStart: 0.01, heartbeatMin: 0.01, maxParallel: 2 })
 			.withFakeInference(goToNamedInteractable())
 			.addStockVerbs()
 			.withDefaultKit(KIT)
 			.withSight({ look: () => sight })
-			.withLineOfSight((_a, b) => b !== 'HiddenLoot')
+			.withLineOfSight((a, b) => b !== 'HiddenLoot')
 			.withContext((id) => ({ paragraph: scene(), id }))
 			.addAgent({
 				id: 'Captain',
 				kit: { verbs: ['go_to'], senses: ['sight'] },
-				identity: { name: 'Captain', role: 'Pays attention.' },
+				identity: { role: 'Pays attention.' },
 			})
 			.start();
 		const text = director.agent('Captain')!.senses.sight.gather({ paragraph: scene(), id: 'Captain' }) as string;
@@ -673,6 +684,7 @@ describe('ArcDirector', () => {
 			pack: { name: "Traveler'sPack", items: ['GoldCoin', 'ChestKey'] },
 		};
 		const director = await new ArcDirector<Ctx>()
+			.withWorld(OPEN_WORLD)
 			.withPriorityQueue({ processInterval: 0, watchInterval: 0, heartbeatStart: 0.01, heartbeatMin: 0.01, maxParallel: 2 })
 			.withFakeInference(goToNamedInteractable())
 			.addStockVerbs()
@@ -682,7 +694,7 @@ describe('ArcDirector', () => {
 			.addAgent({
 				id: 'Captain',
 				kit: { verbs: ['go_to'], senses: ['carrying'] },
-				identity: { name: 'Captain', role: 'Pays attention.' },
+				identity: { role: 'Pays attention.' },
 			})
 			.start();
 		assert.equal(
@@ -694,6 +706,7 @@ describe('ArcDirector', () => {
 
 	it('injects hasHeard from pending HeardSpeech, not host kernels', async () => {
 		const director = await new ArcDirector<Ctx>()
+			.withWorld(OPEN_WORLD)
 			.withPriorityQueue({
 				processInterval: 0,
 				watchInterval: 0,
@@ -714,7 +727,7 @@ describe('ArcDirector', () => {
 			.addAgent({
 				id: 'Guard',
 				kit: KIT,
-				identity: { name: 'Guard', role: 'Listens.' },
+				identity: { role: 'Listens.' },
 				goals: [{ text: 'Go to EastGate', priority: 1 }],
 				skipHeartbeat: true,
 				watches: { heard: 'hasHeard' },
@@ -727,7 +740,7 @@ describe('ArcDirector', () => {
 			text: 'hey',
 			tags: ['speech'],
 			major: true,
-			at: 1,
+			timestamp: 1,
 		});
 		director.tick(1, 2);
 		await waitFor(() => !!director.agent('Guard')?.lastArc);
@@ -811,7 +824,7 @@ describe('ArcDirector', () => {
 			.addStockVerbs()
 			.withDefaultKit(KIT)
 			.withKernels(() => ({
-				me: dummyEntity('Miller'),
+				me: dummyEntity('BridgeKeeper'),
 				others: [],
 				items: [],
 				cache: new SampleCache(),
@@ -826,10 +839,10 @@ describe('ArcDirector', () => {
 			})
 			.withContext((id) => ({ paragraph: scene(), id }))
 			.addAgent({
-				id: 'Miller',
+				id: 'BridgeKeeper',
 				skipHeartbeat: true,
 				kit: KIT,
-				identity: { name: 'Miller', role: 'Works the sluice.' },
+				identity: { role: 'Works the sluice.' },
 				laws: [{
 					name: 'sluice',
 					watch: '1 > 0',
@@ -840,6 +853,158 @@ describe('ArcDirector', () => {
 			.start();
 		director.tick(1, 1);
 		await waitFor(() => seen.includes('go_to'));
+		director.dispose();
+	});
+});
+
+describe('restoreAgents', () => {
+	const keeper = () => ({
+		id: 'BridgeKeeper',
+		skipHeartbeat: true,
+		kit: KIT,
+		identity: { traits: ['stubborn'] },
+		goals: [{ text: 'Lower BridgeLever when paid.', priority: 2 }],
+		laws: [{ name: 'sluice', watch: '1 > 2', arc: 'go_to(EastGate)', pinned: true }],
+	});
+	const director = () => new ArcDirector<Ctx>()
+		.withWorld(OPEN_WORLD)
+		.withFakeInference(() => WAIT_REPLY)
+		.addStockVerbs()
+		.withContext((id) => ({ paragraph: scene(), id }))
+		.addAgent(keeper());
+
+	it('keeps agents restored before start, and a solo agent with laws stays solo', async () => {
+		const first = await director().start();
+		const was = first.agent('BridgeKeeper')!;
+		was.goals = [{ text: 'Rest. The bridge is down.', priority: 1 }];
+		await was.remember('Forager paid the bridge fee.', ['Forager'], 1);
+		const saved = JSON.parse(JSON.stringify(first.exportAgents()));
+		first.dispose();
+
+		const next = director();
+		next.restoreAgents(saved);
+		await next.start();
+		const agent = next.agent('BridgeKeeper')!;
+		assert.equal(isCrowdConductor(agent), false);
+		assert.deepEqual(agent.goals, [{ text: 'Rest. The bridge is down.', priority: 1 }]);
+		assert.ok(agent.memory.all().some((m) => m.text === 'Forager paid the bridge fee.'));
+		assert.deepEqual(agent.laws.map((l) => l.name), ['sluice']);
+		next.dispose();
+	});
+});
+
+describe('withNames', () => {
+	it('renames sight per agent and hands the host real ids', async () => {
+		const calls:VerbCall<Ctx>[] = [];
+		const sight = {
+			self: { id: 'Captain', point: [0, 0] },
+			objects: [
+				{ id: 'Nyx', point: [0, 3], tags: ['agent', 'person', 'enemy'], interactable: true },
+				{ id: 'Ash', point: [0, 5], tags: ['agent', 'person', 'enemy'], interactable: true },
+				{ id: 'Brune', point: [2, 0], tags: ['agent', 'person'], interactable: true },
+			],
+		};
+		const director = await new ArcDirector<Ctx>()
+			.withPriorityQueue({ processInterval: 0, watchInterval: 0, heartbeatStart: 0.01, heartbeatMin: 0.01, maxParallel: 2 })
+			.withFakeInference(() => ({ content: 'go_to(Stranger2)', toolCalls: [] }))
+			.withArcText(true)
+			.addStockVerbs()
+			.onVerb((call) => {
+				calls.push(call);
+				return { ok: true, verb: call.verb };
+			})
+			.withSight({ look: () => sight })
+			.withNames({
+				seen: (observer, target) => (
+					observer.ctx?.id === 'Captain' && target.tags?.includes('enemy') ? 'Stranger' : target.id
+				),
+			})
+			.withContext((id) => ({ paragraph: scene(), id }))
+			.addAgent({
+				id: 'Captain',
+				kit: { verbs: ['go_to'], senses: ['sight'] },
+				identity: { role: 'Pays attention.' },
+			})
+			.start();
+		const text = director.agent('Captain')!.senses.sight.gather({ paragraph: scene(), id: 'Captain' }) as string;
+		assert.match(text, /Stranger /);
+		assert.match(text, /Stranger2 /);
+		assert.match(text, /Brune /);
+		assert.equal(text.includes('Nyx') || text.includes('Ash'), false);
+		assert.equal(director.seen('Captain', { id: 'Ash', tags: ['enemy'] }), 'Stranger2');
+		director.mindQueue()!.enqueueMajor('Captain');
+		director.tick(1, 1);
+		await waitFor(() => calls.length > 0);
+		assert.equal(calls[0]?.args.target, 'Ash');
+		director.dispose();
+	});
+});
+
+describe('host verbs', () => {
+	it('hands handlers real ids from expressions, gates steps, and runs wait itself', async () => {
+		const went:unknown[] = [];
+		const director = await new ArcDirector<Ctx>()
+			.withPriorityQueue({ processInterval: 0, watchInterval: 0, heartbeatStart: 100, heartbeatMin: 100, maxParallel: 1 })
+			.withFakeInference(() => ({
+				content: 'go_to(others.filter("enemy")) ; wait(seconds=2) ; examine(Brune)',
+				toolCalls: [],
+			}))
+			.withArcText(true)
+			.addStockVerbs()
+			.withKernels((ctx) => ({
+				me: dummyEntity(ctx.id, { tags: ['agent'] }),
+				others: [dummyEntity('Nyx', { tags: ['enemy'] }), dummyEntity('Brune', { tags: [] })],
+				items: [],
+			}))
+			.addVerb('go_to', {
+				handler: ({ args }) => {
+					went.push(args.target);
+					return { ok: true, verb: 'go_to' };
+				},
+			})
+			.onVerb(({ verb }) => ({ ok: true, verb }))
+			.withVerbGate(({ verb }) => (verb === 'examine' ? { ok: false, verb, reason: 'gated' } : undefined))
+			.withContext((id) => ({ paragraph: scene(), id }))
+			.addAgent({ id: 'Guard', kit: KIT, identity: { role: 'Guards.' } })
+			.start();
+		director.mindQueue()!.enqueueMajor('Guard');
+		const guard = director.agent('Guard')!;
+		for (let t = 1; t < 12 && guard.lastResult?.verb !== 'examine'; t++) {
+			director.tick(1, t);
+			await sleep(20);
+		}
+		assert.deepEqual(went, ['Nyx']);
+		assert.equal(guard.lastResult?.reason, 'gated');
+		director.dispose();
+	});
+
+	it('scores a watch arg here and as if elsewhere', async () => {
+		let scored:number[] = [];
+		const director = await new ArcDirector<Ctx>()
+			.withWorld(OPEN_WORLD)
+			.withPriorityQueue({ processInterval: 0, watchInterval: 0, heartbeatStart: 100, heartbeatMin: 100, maxParallel: 1 })
+			.withFakeInference(() => ({ content: 'wander(until=some(others.filter("Mushroom")))', toolCalls: [] }))
+			.withArcText(true)
+			.addStockVerbs()
+			.withKernels((ctx, point) => ({
+				me: dummyEntity(ctx.id, { tags: ['agent'] }),
+				others: point ? [dummyEntity('Shroom', { tags: ['Mushroom'] })] : [],
+				items: [],
+			}))
+			.addVerb('wander', {
+				handler: (call) => {
+					scored = [call.score('until'), call.score('until', [5, 0])];
+					return { ok: true, verb: 'wander' };
+				},
+			})
+			.withContext((id) => ({ paragraph: scene(), id }))
+			.addAgent({ id: 'Forager', kit: KIT, identity: { role: 'Forages.' } })
+			.start();
+		director.mindQueue()!.enqueueMajor('Forager');
+		director.tick(1, 1);
+		await waitFor(() => scored.length > 0);
+		assert.equal(scored[0], 0);
+		assert.ok(scored[1] > 0);
 		director.dispose();
 	});
 });

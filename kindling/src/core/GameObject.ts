@@ -9,8 +9,13 @@ export function allocID(prefix = 'go'):string {
 	return `${prefix}_${nextSerial++}`;
 }
 
-export function resetAllocID():void {
-	nextSerial = 1;
+/** The serial the next `allocID` uses. */
+export function allocSerial():number {
+	return nextSerial;
+}
+
+export function resetAllocID(next = 1):void {
+	nextSerial = next;
 }
 
 export class GameObject {
@@ -20,6 +25,8 @@ export class GameObject {
 	parent:GameObject | null = null;
 	children:GameObject[] = [];
 	world:World | null = null;
+	/** How the host rebuilds this object when a save has it and a fresh scene does not. JSON data only. */
+	recipe:unknown;
 
 	private readonly comps:Component[] = [];
 

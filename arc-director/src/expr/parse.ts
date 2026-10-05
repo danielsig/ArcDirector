@@ -21,7 +21,7 @@ class Parser {
 		return t;
 	}
 
-	private node<T extends Ast>(n:T):T {
+	private node<TNode extends Ast>(n:TNode):TNode {
 		this.nodes += 1;
 		if (this.nodes > AST_CAP) {
 			throw new ExprError('expression too large', 'capTie');
