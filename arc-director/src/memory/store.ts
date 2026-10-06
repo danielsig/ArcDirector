@@ -189,12 +189,14 @@ export class MemoryStore {
 		embedding?:number[];
 		tags?:string[];
 		category?:MemoryCategory;
+		/** Records the caller already shows; skipped before the top `k`, so they do not take its places. */
+		skip?:(record:MemoryRecord)=>boolean;
 	}):MemoryRecord[] {
 		const now = opts.now ?? 0;
 		const k = opts.k ?? 5;
 		const tags = opts.tags ?? [];
 		const scored = this.records
-			.filter((r) => opts.category === undefined || r.category === opts.category)
+			.filter((r) => (opts.category === undefined || r.category === opts.category) && !opts.skip?.(r))
 			.map((record) => {
 				const cos = opts.embedding && record.embedding
 					? cosine(opts.embedding, record.embedding)

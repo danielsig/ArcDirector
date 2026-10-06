@@ -708,10 +708,7 @@ export function reportTheft(
 	if (thief.getComponent(MarketNPC)?.kind === 'guard') {
 		return;
 	}
-	let mark = thief.getComponent(Wanted);
-	if (!mark) {
-		mark = thief.addComponent(new Wanted());
-	}
+	const mark = thief.getOrAddComponent(Wanted);
 	mark.enabled = true;
 	mark.reason = reason;
 	if (fromID) {

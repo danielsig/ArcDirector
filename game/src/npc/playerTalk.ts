@@ -1,4 +1,4 @@
-import { pascalCase, type ArcResult, type SpeechUtterance } from 'arc-director';
+import { pascalCase, type ArcResult, type SpeechUtterance, type VerbCall } from 'arc-director';
 import { HumanBody, Named, SpeechBubble } from '../engine/components';
 import type { GameObject } from '../engine/GameObject';
 import type { World } from '../engine/World';
@@ -6,7 +6,8 @@ import { compactName, distXZ, listCarried } from '../items/inventory';
 import { coinsOf, goodsAsk } from '../items/wallet';
 import { parseSlash, SLASH_HELP, type ParsedSlash, type SayCatalog } from '../ui/sayCommands';
 import type { GameHost } from './adapter';
-import { bodyName, findBody } from './names';
+import { bodyName, findBody, isLiving } from './names';
+import type { AgentCtx } from './types';
 import { carriedLabels } from './perception';
 import { talkNotices, CLEAR_RANGE, SPEECH_LIFE } from './talkAttend';
 import { settleBuy, settleGive, settlePay, settleSell, tooFar } from './items';
@@ -250,11 +251,46 @@ export function talkNames(host:GameHost, id:string):string[] {
 	return out;
 }
 
-export function pushChat(host:GameHost, speaker:string, text:string, to?:string):void {
-	host.chat.push({ speaker, text, to, timestamp: host.world.time });
+export function pushChat(host:GameHost, speaker:string, text:string, to?:string, act = false):void {
+	host.chat.push({ speaker, text, to, timestamp: host.world.time, act: act || undefined });
 	if (host.chat.length > CHAT_CAP) {
 		host.chat.splice(0, host.chat.length - CHAT_CAP);
 	}
+}
+
+/** A successful verb aimed at another living body. `say` is already logged by talk. */
+export function noteAct(host:GameHost, call:VerbCall<AgentCtx>, result:ArcResult):void {
+	if (!result.ok || result.verb === 'say') {
+		return;
+	}
+	const self = call.ctx.actor;
+	let to:string | undefined;
+	for (const value of Object.values(call.args)) {
+		if (typeof value !== 'string') {
+			continue;
+		}
+		const go = findBody(host.world, value);
+		if (isLiving(go) && go !== self) {
+			to = bodyName(go);
+			break;
+		}
+	}
+	if (!to) {
+		return;
+	}
+	pushChat(host, bodyName(self), actText(result.verb ?? call.verb, call.args, result.reason), to, true);
+}
+
+function actText(verb:string, args:Record<string, unknown>, reason?:string):string {
+	const title = verb.split('_').map((word) => word.charAt(0).toUpperCase() + word.slice(1)).join(' ');
+	const item = typeof args.item === 'string' ? args.item : '';
+	if (!item) {
+		return title;
+	}
+	const qty = Math.max(1, Math.floor(Number(args.quantity) || 1));
+	const thing = `${qty}×${item}`;
+	const gold = verb === 'buy' || verb === 'sell' ? reason?.match(/for (\d+) gold/)?.[1] : undefined;
+	return gold && gold !== '0' ? `${title}: ${thing} for ${gold} gold` : `${title}: ${thing}`;
 }
 
 export function showSpeech(host:GameHost, actor:GameObject, text:string, to?:string, life = SPEECH_LIFE):void {
@@ -262,12 +298,10 @@ export function showSpeech(host:GameHost, actor:GameObject, text:string, to?:str
 	if (!spoken) {
 		return;
 	}
-	let bubble = actor.getComponent(SpeechBubble);
-	if (!bubble) {
-		bubble = actor.addComponent(new SpeechBubble());
-	}
+	const bubble = actor.getOrAddComponent(SpeechBubble);
 	bubble.text = spoken;
 	bubble.until = host.world.time + life;
+	bubble.timestamp = host.world.time;
 	const hz = talkHz(actor.id);
 	cueAt(host.world, 'talk', actor, {
 		freq: hz,

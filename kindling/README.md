@@ -39,13 +39,13 @@ const game = new Game(); // or `new Game(new MyWorld())`
 game.mount(document.body);
 
 const cube = new GameObject('cube');
-cube.addComponent(new MeshRenderer()).meshID = 'cube';
+cube.addComponent(MeshRenderer, { meshID: 'cube' });
 game.world.add(cube);
 
 const camGo = new GameObject('camera');
 camGo.transform.position.y = 4;
 camGo.transform.position.z = 8;
-camGo.addComponent(new Camera());
+camGo.addComponent(Camera);
 game.world.add(camGo);
 
 game.start(); // RAF: tick â†’ render
@@ -105,12 +105,14 @@ A GameObject may belong to only one World.
 new GameObject(id?, name?)  // id defaults to allocID(); name defaults to id
 ```
 
-Always has `transform`. `addComponent` rejects a second `Transform`.
+Always has `transform`. `addComponent` rejects a second `Transform`; `removeComponent` never removes it. Components are only made by `addComponent`, so one never sits on two objects. `Component` is abstract.
 
 | | |
 |--|--|
-| `addComponent(c)` | Attaches. If already in a world: `awake` then `onEnable`. |
+| `addComponent(ctor, init?)` | Adds `new ctor()` with `init` fields set first. If already in a world: `awake` then `onEnable`. `{ enabled: false }` skips `onEnable`. |
+| `removeComponent(c \| ctor)` | Removes now: that instance, or every instance of the class (`Component` = all but `Transform`). Fires `onDisable` (if enabled) then `onDestroy` once awoken. |
 | `getComponent(ctor)` | First match, including `Transform`. |
+| `getOrAddComponent(ctor)` | `getComponent`, else adds `new ctor()`. |
 | `getComponentsInChildren(ctor)` | This object then descendants. |
 | `setParent(parent, worldPositionStays = true)` | Reparents Kindling + Three.js. If the parent is in a world and this is not, `world.add(this)`. |
 
@@ -239,8 +241,7 @@ Chunk helpers: `tile(localX, localZ)`, `forEachTile((tile, localX, localZ) => â€
 class Stream extends ChunkStreamer<MyChunk> {
 	override spawn(chunk: MyChunk): void { /* first load only: add its objects */ }
 }
-const stream = systems.addComponent(new Stream());
-stream.chunks = allChunks;
+const stream = systems.addComponent(Stream, { chunks: allChunks });
 stream.loadAll(); // whole scene in, e.g. before captureWorld
 ```
 
@@ -319,8 +320,7 @@ Invalid `Score` throws from `playMusic` / `playLoop` (same checks as `piece()`).
 `AudioSource` on a GameObject poses SFX/loops at `transform.position` (world x/y/z). Other components play by ref:
 
 ```ts
-const speaker = go.addComponent(new AudioSource());
-speaker.hear = 12;
+const speaker = go.addComponent(AudioSource, { hear: 12 });
 speaker.play(knock);     // one-shot
 speaker.loop = radio;    // patch or score; follows the object
 speaker.loop = null;     // stop

@@ -12,6 +12,11 @@ export type EncyclopediaEntry = {
 	/** Leftover or spoken English (`trees`, `house`, `forest`). */
 	aliases?:string[];
 	text:string;
+	/**
+	 * A thing a body carries. When the article comes up for being said or heard, it also says whether this
+	 * mind carries one, so talk ("take this FireMushroom") sits next to the truth.
+	 */
+	item?:boolean;
 };
 
 /** Leftover crowd type plus spoken names for being inside that crowd. */
@@ -29,6 +34,57 @@ export type EncyclopediaSource<TAgentCtx = unknown> =
 const HIT_CAP = 8;
 const INDEX_CAP = 48;
 const MIN_TOKEN = 3;
+
+type ItemLike = { id:string; tags?:readonly string[] };
+
+/** Whether one of `items` is what `entry` is about: its id or a tag equals the name or an alias. */
+export function isAboutItem(entry:EncyclopediaEntry, items:readonly ItemLike[]):boolean {
+	const keys = new Set([entry.name, ...(entry.aliases ?? [])].map((key) => key.trim().toLowerCase()));
+	return items.some((item) => [item.id, ...(item.tags ?? [])].some((key) => keys.has(key.toLowerCase())));
+}
+
+/** Articles whose name or alias equals an item id or tag. Empty when nothing matches. */
+export function receivedArticles(entries:readonly EncyclopediaEntry[], items:readonly ItemLike[]):string {
+	return entries
+		.filter((entry) => entry.text.trim() !== '' && isAboutItem(entry, items))
+		.map((entry) => entry.text.trim())
+		.join('\n\n');
+}
+
+/**
+ * `Name: article` for every article whose name `text` mentions as a whole word, so a failure explains
+ * itself (`Bridge is raised` brings the Bridge article). Names only: aliases are plain English and
+ * would match ordinary words. Empty when nothing matches.
+ */
+export function articlesNamedIn(entries:readonly EncyclopediaEntry[], text:string):string {
+	const words = new Set(text.split(/[^A-Za-z0-9_]+/));
+	return entries
+		.filter((entry) => words.has(entry.name.trim()) && entry.text.trim() !== '')
+		.map((entry) => `${entry.name.trim()}: ${entry.text.trim()}`)
+		.join('\n');
+}
+
+/** Lowercase words joined by single spaces, so names and multi-word aliases compare as phrases. */
+function phrase(text:string):string {
+	return text.toLowerCase().split(/[^a-z0-9]+/).filter(Boolean).join(' ');
+}
+
+/**
+ * Articles whose name or alias `text` mentions as a whole word or phrase, most mentions first, at most `cap`.
+ * How talk brings up the facts behind it: "10 gold or items of equal value" brings the article aliased `10 gold`.
+ */
+export function mentionedArticles(entries:readonly EncyclopediaEntry[], text:string, cap:number):EncyclopediaEntry[] {
+	const said = ` ${phrase(text)} `;
+	return entries
+		.map((entry) => ({
+			entry,
+			hits: [entry.name, ...(entry.aliases ?? [])].filter((key) => phrase(key) !== '' && said.includes(` ${phrase(key)} `)).length,
+		}))
+		.filter((row) => row.hits > 0 && row.entry.text.trim() !== '')
+		.sort((a, b) => b.hits - a.hits)
+		.slice(0, Math.max(0, cap))
+		.map((row) => row.entry);
+}
 
 export function encyclopediaPages<TAgentCtx>(
 	src:EncyclopediaSource<TAgentCtx> | undefined,

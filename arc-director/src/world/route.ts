@@ -7,6 +7,19 @@ export type Route = { points:Vec[]; cost:number };
 /** No open way. Each blocked step that leads there, with the cost of the cheapest route through it, cheapest first. */
 export type Blocked = { blockers:{ reason:string; cost:number }[] };
 
+/** Blocked ways named when there is no open way, cheapest first. */
+export const BLOCKERS_TOLD = 3;
+
+/** What a failed move says: `no way to Well`, plus what blocks the way when something does. */
+export function noWayTo(target:string, why:string):string {
+	return why ? `no way to ${target}, blocked on the way: ${why}` : `no way to ${target}`;
+}
+
+/** What stands in the way, as the agent is told: the cheapest few blockers. */
+export function blockedReason(blocked:Blocked):string {
+	return blocked.blockers.slice(0, BLOCKERS_TOLD).map((b) => b.reason).join('; ');
+}
+
 /** Points a search may settle along open ways, and again along blocked ones, before it gives up. */
 export const SEARCH_CAP = 4096;
 

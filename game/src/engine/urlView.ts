@@ -78,6 +78,23 @@ export function readURLFlags(search = window.location.search):URLFlags {
 	};
 }
 
+/** Testing-only client id for the control hub. Empty or omitted → no socket. */
+export function readURLSession(search = window.location.search):string {
+	return (new URLSearchParams(search).get('session') ?? '').trim();
+}
+
+export function writeURLSession(session:string):void {
+	replaceURL((url) => {
+		const id = session.trim();
+		if (id) {
+			url.searchParams.set('session', id);
+		}
+		else {
+			url.searchParams.delete('session');
+		}
+	});
+}
+
 /** Apply a full URL shot. `yaw` sets both player facing and camera yaw. */
 export function applyURLView(pose:ViewPose, view:URLView):ViewPose {
 	return {
@@ -98,25 +115,31 @@ export function writeURLView(pose:ViewPose, flags:Pick<Prefs, 'observer' | 'ai'>
 	if (!window.location.search.includes('scene=')) {
 		return;
 	}
-	const url = new URL(window.location.href);
-	for (const key of ['x', 'y', 'z', 'yaw']) {
-		url.searchParams.delete(key);
-	}
-	if (url.searchParams.has('view')) {
-		url.searchParams.set('view', packURLView(pose));
-	}
-	url.searchParams.set('observer', flags.observer ? '1' : '0');
-	url.searchParams.set('ai', flags.ai ? '1' : '0');
-	if (url.href === window.location.href) {
-		return;
-	}
-	window.history.replaceState({}, '', url);
+	replaceURL((url) => {
+		for (const key of ['x', 'y', 'z', 'yaw']) {
+			url.searchParams.delete(key);
+		}
+		if (url.searchParams.has('view')) {
+			url.searchParams.set('view', packURLView(pose));
+		}
+		url.searchParams.set('observer', flags.observer ? '1' : '0');
+		url.searchParams.set('ai', flags.ai ? '1' : '0');
+	});
 }
 
 export function clearURLView():void {
+	replaceURL((url) => {
+		for (const key of [...VIEW_KEYS, 'observer', 'ai']) {
+			url.searchParams.delete(key);
+		}
+	});
+}
+
+function replaceURL(edit:(url:URL)=>void):void {
 	const url = new URL(window.location.href);
-	for (const key of [...VIEW_KEYS, 'observer', 'ai']) {
-		url.searchParams.delete(key);
+	edit(url);
+	if (url.href === window.location.href) {
+		return;
 	}
 	window.history.replaceState({}, '', url);
 }

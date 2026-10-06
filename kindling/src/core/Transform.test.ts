@@ -11,7 +11,7 @@ describe('Transform', () => {
 	it('keeps Transform on the GameObject and refuses a second one', () => {
 		const go = new GameObject('xf');
 		assert.ok(go.getComponent(Transform));
-		assert.throws(() => go.addComponent(new Transform()));
+		assert.throws(() => go.addComponent(Transform));
 	});
 
 	it('writes world position on a child as local offset', () => {

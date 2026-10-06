@@ -1,8 +1,9 @@
 import { registerStockVerbs, VerbRegistry, type StockVerb, type VerbArgMap } from '../arc/stock-verbs.js';
 import { formatArc } from '../arc/parse.js';
 import type { ArcResult, Step } from '../arc/types.js';
-import { firstStep } from '../arc/types.js';
+import { ArcError, firstStep } from '../arc/types.js';
 import { Agent, type AgentDeps, type AgentJSON } from '../agent/agent.js';
+import { Actor } from '../agent/actor.js';
 import type { AgentEvent, Kit, KitSource, Sense, ToolSpec } from '../agent/types.js';
 import type { NameTarget } from '../agent/names.js';
 import type { ThinkInstructions } from '../agent/prompt.js';
@@ -74,6 +75,7 @@ import {
 } from '../think/queue.js';
 import {
 	emptyInferClock,
+	type ActorSpec,
 	type AgentSpec,
 	type DirectorLog,
 	type InferClock,
@@ -87,7 +89,7 @@ import {
 	type VerbGate,
 	type VerbHandler,
 } from './types.js';
-import { geometryKernels } from '../world/kernels.js';
+import { geometryKernels, wayBlocked } from '../world/kernels.js';
 import { Mover } from '../world/mover.js';
 import { poseOf } from '../world/lookup.js';
 import type { HostWorld, Pose, Vec } from '../world/types.js';
@@ -138,12 +140,24 @@ type QueueSlot =
 	| { kind:'simple'; opts?:SimpleQueueOpts }
 	| { kind:'instance'; queue:MindQueue };
 
+/** What ArcDirector keeps per body: who runs its arcs, and its per-tick sample cache. */
+type ActorRow<TAgentCtx> = {
+	spec:ActorSpec<TAgentCtx>;
+	actor:Actor<TAgentCtx> | null;
+	cache:SampleCache;
+};
+
+/** An agent's row: its body, plus the spec its mind was built from. */
 type AgentRow<TAgentCtx> = {
 	spec:AgentSpec<TAgentCtx>;
-	agent:Agent<TAgentCtx> | null;
+	actor:Agent<TAgentCtx> | null;
 	cache:SampleCache;
 	rank:number;
 };
+
+function isAgentRow<TAgentCtx>(row:ActorRow<TAgentCtx>):row is AgentRow<TAgentCtx> {
+	return row.actor instanceof Agent;
+}
 
 function nowMs():number {
 	return performance.now();
@@ -206,9 +220,11 @@ export class ArcDirector<TAgentCtx = unknown> {
 	talk:TalkNet | undefined;
 	private map:MapSense | undefined;
 	private encyclopedia:EncyclopediaSource<TAgentCtx> | undefined;
+	private mentionCap:number | undefined;
 	private abortArcFn:((id:string)=>void) | undefined;
 	private commanderVacantFn:((conductorID:string, unitID:string)=>void) | undefined;
 	private logFn:((entry:DirectorLog)=>void) | undefined;
+	private stepFn:((call:VerbCall<TAgentCtx>, result:ArcResult)=>void) | undefined;
 	private ignoreMissing = false;
 	private arcText = false;
 	private thinkInstructions:ThinkInstructions | undefined;
@@ -216,8 +232,11 @@ export class ArcDirector<TAgentCtx = unknown> {
 	private arcExample:string | undefined;
 	private repairTemperature:number | undefined;
 	private seenFn:SeenName<TAgentCtx> | undefined;
-	private readonly pending:AgentSpec<TAgentCtx>[] = [];
-	private readonly rows = new Map<string, AgentRow<TAgentCtx>>();
+	private readonly pendingAgents:AgentSpec<TAgentCtx>[] = [];
+	private readonly pendingActors:ActorSpec<TAgentCtx>[] = [];
+	private readonly agentRows = new Map<string, AgentRow<TAgentCtx>>();
+	/** Bodies from `addActor`. Agents' bodies live in `agentRows`. */
+	private readonly actorRows = new Map<string, ActorRow<TAgentCtx>>();
 	private readonly readyThink:ThinkRow[] = [];
 	private batchHeldTimestamp:number | null = null;
 	private clock = 0;
@@ -341,7 +360,7 @@ export class ArcDirector<TAgentCtx = unknown> {
 
 	/**
 	 * Standing think line per reasoning state. The prompt follows the live reasoning switch.
-	 * Defaults: `on` "Think in 5 sentences, then emit the arc.", `off` nothing.
+	 * Defaults: `on` `DEFAULT_THINK_INSTRUCTIONS`, `off` nothing.
 	 */
 	withThinkInstructions(lines:ThinkInstructions):this {
 		this.assertBuilder();
@@ -349,7 +368,7 @@ export class ArcDirector<TAgentCtx = unknown> {
 		return this;
 	}
 
-	/** Standing verb-chain line. Default: "A think is expensive. Chain every next verb you already know, as far as you can see this think — not only the first step of an order." A Crowd's default also asks for looping programs; this replaces both. */
+	/** Standing verb-chain line. Default `DEFAULT_VERB_INSTRUCTIONS`, plus looping programs for a Crowd; this replaces both. */
 	withVerbInstructions(text:string):this {
 		this.assertBuilder();
 		this.verbInstructions = text;
@@ -374,7 +393,7 @@ export class ArcDirector<TAgentCtx = unknown> {
 		return this;
 	}
 
-	/** Tool rounds a think may spend before it must emit the Arc. Default 2. */
+	/** Tool rounds a think may spend before it must emit the Arc. Default `DEFAULT_TOOL_ROUNDS`; 0 offers no tools. */
 	withToolRounds(rounds:number):this {
 		this.assertBuilder();
 		this.toolRounds = rounds;
@@ -402,7 +421,7 @@ export class ArcDirector<TAgentCtx = unknown> {
 
 	/** `observerID`'s name for a body, for host-built text such as a sight `note`. */
 	seen(observerID:string, target:NameTarget):string {
-		return this.rows.get(observerID)?.agent?.seen(target) ?? target.id;
+		return this.agentRows.get(observerID)?.actor?.seen(target) ?? target.id;
 	}
 
 	withInventory(look:(ctx:TAgentCtx)=>Inventory):this {
@@ -431,7 +450,6 @@ export class ArcDirector<TAgentCtx = unknown> {
 		return this;
 	}
 
-	/** Missing names are skipped. Empty rest is a no-op. */
 	removeSense(...names:string[]):this {
 		for (const name of names) {
 			delete this.senses[name];
@@ -439,7 +457,6 @@ export class ArcDirector<TAgentCtx = unknown> {
 		return this;
 	}
 
-	/** Missing names are skipped. Empty rest is a no-op. */
 	removeTool(...names:string[]):this {
 		for (const name of names) {
 			delete this.tools[name];
@@ -459,7 +476,7 @@ export class ArcDirector<TAgentCtx = unknown> {
 		return this;
 	}
 
-	/** Used when `addAgent` omits `kit`. Same object/callback as per-agent kit; fetched every tick. */
+	/** Used when `addAgent` omits `kit`. */
 	withDefaultKit(kit:KitSource<TAgentCtx>):this {
 		this.assertBuilder();
 		this.defaultKit = kit;
@@ -491,9 +508,11 @@ export class ArcDirector<TAgentCtx = unknown> {
 		return this;
 	}
 
-	withEncyclopedia(pages:EncyclopediaSource<TAgentCtx>):this {
+	/** `mentions`: most articles shown per think for names said or heard (default `DEFAULT_MENTION_CAP`; 0 shows none). */
+	withEncyclopedia(pages:EncyclopediaSource<TAgentCtx>, { mentions }:{ mentions?:number } = {}):this {
 		this.assertBuilder();
 		this.encyclopedia = pages;
+		this.mentionCap = mentions;
 		return this;
 	}
 
@@ -539,7 +558,7 @@ export class ArcDirector<TAgentCtx = unknown> {
 		return this;
 	}
 
-	/** Drop catalog schemas and named handlers. Missing names are skipped. Empty rest is a no-op. */
+	/** Drop catalog schemas and their handlers. */
 	removeVerbs(...names:string[]):this {
 		this.verbs.remove(...names);
 		for (const name of names) {
@@ -564,7 +583,7 @@ export class ArcDirector<TAgentCtx = unknown> {
 	}
 
 	setCrowdCommander(conductorID:string, unitID:string | null):this {
-		const agent = this.rows.get(conductorID)?.agent;
+		const agent = this.agentRows.get(conductorID)?.actor;
 		if (!isCrowdConductor(agent)) {
 			throw new Error(`ArcDirector: '${conductorID}' is not a CrowdConductor`);
 		}
@@ -577,6 +596,12 @@ export class ArcDirector<TAgentCtx = unknown> {
 		return this;
 	}
 
+	/** After a host verb resolves. `say` does not come through here. */
+	onStep(fn:(call:VerbCall<TAgentCtx>, result:ArcResult)=>void):this {
+		this.stepFn = fn;
+		return this;
+	}
+
 	addAgent(spec:AgentSpec<TAgentCtx>):this {
 		const next:AgentSpec<TAgentCtx> = {
 			...spec,
@@ -585,12 +610,12 @@ export class ArcDirector<TAgentCtx = unknown> {
 			kit: spec.kit,
 		};
 		if (!this.started) {
-			const i = this.pending.findIndex((s) => s.id === spec.id);
+			const i = this.pendingAgents.findIndex((s) => s.id === spec.id);
 			if (i >= 0) {
-				this.pending[i] = next;
+				this.pendingAgents[i] = next;
 			}
 			else {
-				this.pending.push(next);
+				this.pendingAgents.push(next);
 			}
 			return this;
 		}
@@ -605,14 +630,14 @@ export class ArcDirector<TAgentCtx = unknown> {
 
 	addCrowdUnit(conductorID:string, spec:CrowdUnitSpec):this {
 		const add = ():void => {
-			const agent = this.rows.get(conductorID)?.agent;
+			const agent = this.agentRows.get(conductorID)?.actor;
 			if (!isCrowdConductor(agent)) {
 				throw new Error(`ArcDirector: '${conductorID}' is not a CrowdConductor`);
 			}
 			agent.addUnit(spec);
 		};
 		if (!this.started) {
-			const pending = this.pending.find((s) => s.id === conductorID);
+			const pending = this.pendingAgents.find((s) => s.id === conductorID);
 			if (pending) {
 				pending.units = [...(pending.units ?? []), spec];
 				return this;
@@ -625,13 +650,13 @@ export class ArcDirector<TAgentCtx = unknown> {
 
 	removeCrowdUnit(conductorID:string, unitID:string):this {
 		if (!this.started) {
-			const pending = this.pending.find((s) => s.id === conductorID);
+			const pending = this.pendingAgents.find((s) => s.id === conductorID);
 			if (pending?.units) {
 				pending.units = pending.units.filter((u) => u.id !== unitID);
 			}
 			return this;
 		}
-		const agent = this.rows.get(conductorID)?.agent;
+		const agent = this.agentRows.get(conductorID)?.actor;
 		if (isCrowdConductor(agent)) {
 			agent.removeUnit(unitID);
 		}
@@ -641,14 +666,14 @@ export class ArcDirector<TAgentCtx = unknown> {
 
 	addCrowdLaw(conductorID:string, spec:CrowdLawSpec):this {
 		if (!this.started) {
-			const pending = this.pending.find((s) => s.id === conductorID);
+			const pending = this.pendingAgents.find((s) => s.id === conductorID);
 			if (pending) {
 				pending.laws = [...(pending.laws ?? []), spec];
 				return this;
 			}
 			throw new Error(`ArcDirector: no conductor '${conductorID}'`);
 		}
-		const agent = this.rows.get(conductorID)?.agent;
+		const agent = this.agentRows.get(conductorID)?.actor;
 		if (!isCrowdConductor(agent)) {
 			throw new Error(`ArcDirector: '${conductorID}' is not a CrowdConductor`);
 		}
@@ -658,9 +683,9 @@ export class ArcDirector<TAgentCtx = unknown> {
 
 	removeAgent(id:string):this {
 		if (!this.started) {
-			const i = this.pending.findIndex((s) => s.id === id);
+			const i = this.pendingAgents.findIndex((s) => s.id === id);
 			if (i >= 0) {
-				this.pending.splice(i, 1);
+				this.pendingAgents.splice(i, 1);
 			}
 			return this;
 		}
@@ -668,21 +693,60 @@ export class ArcDirector<TAgentCtx = unknown> {
 		return this;
 	}
 
-	/** Cancel an in-flight think by mind id. Same as `queue.abortThink(id)`. */
+	/** A body the host drives with arcs (`actor(id).enact`). It runs laws and kit verbs but never calls the model. */
+	addActor(spec:ActorSpec<TAgentCtx>):this {
+		if (!this.started) {
+			const i = this.pendingActors.findIndex((s) => s.id === spec.id);
+			this.pendingActors.splice(i >= 0 ? i : this.pendingActors.length, i >= 0 ? 1 : 0, spec);
+			return this;
+		}
+		this.wireActor(spec);
+		return this;
+	}
+
+	removeActor(id:string):this {
+		if (!this.started) {
+			const i = this.pendingActors.findIndex((s) => s.id === id);
+			if (i >= 0) {
+				this.pendingActors.splice(i, 1);
+			}
+			return this;
+		}
+		this.dropActorRow(id);
+		return this;
+	}
+
+	/** Cancel an in-flight think by mind id. */
 	abortThink(id:string):this {
 		this.queue?.abortThink(id);
 		return this;
 	}
 
 	agent(id:string):Agent<TAgentCtx> | undefined {
-		return this.rows.get(id)?.agent ?? undefined;
+		return this.agentRows.get(id)?.actor ?? undefined;
+	}
+
+	/** An agent, or a body from `addActor`. */
+	actor(id:string):Actor<TAgentCtx> | undefined {
+		return this.agent(id) ?? this.actorRows.get(id)?.actor ?? undefined;
+	}
+
+	/** Every body this director runs arcs on: agents first, then bodies from `addActor`. */
+	actors():Actor<TAgentCtx>[] {
+		const out:Actor<TAgentCtx>[] = this.agents();
+		for (const row of this.actorRows.values()) {
+			if (row.actor) {
+				out.push(row.actor);
+			}
+		}
+		return out;
 	}
 
 	agents():Agent<TAgentCtx>[] {
 		const out:Agent<TAgentCtx>[] = [];
-		for (const row of this.rows.values()) {
-			if (row.agent) {
-				out.push(row.agent);
+		for (const row of this.agentRows.values()) {
+			if (row.actor) {
+				out.push(row.actor);
 			}
 		}
 		return out;
@@ -744,6 +808,33 @@ export class ArcDirector<TAgentCtx = unknown> {
 		}
 	}
 
+	setContextLength(n:number):void {
+		const same = this.liveContextLength() === n;
+		if (this.inference.kind === 'http') {
+			this.inference.opts.load = { ...this.inference.opts.load, contextLength: n };
+		}
+		this.http?.setContextLength(n);
+		const model = this.model;
+		if (same || !model || !this.http) {
+			return;
+		}
+		this.emitLog({ name: 'ArcDirector', message: `context ${n}` });
+		void this.http.reload(model).catch((err:unknown) => {
+			const text = err instanceof Error ? err.message : String(err);
+			this.emitLog({ name: 'ArcDirector', message: text, error: true });
+		});
+	}
+
+	liveContextLength():number | undefined {
+		if (this.http) {
+			return this.http.liveContextLength();
+		}
+		if (this.inference.kind === 'http') {
+			return this.inference.opts.load?.contextLength;
+		}
+		return undefined;
+	}
+
 	liveThinking():boolean {
 		if (this.inference.kind === 'http') {
 			return this.inference.opts.enableThinking === true;
@@ -792,7 +883,7 @@ export class ArcDirector<TAgentCtx = unknown> {
 		}
 		void this.http?.ensureLoaded(name).catch((err:unknown) => {
 			const text = err instanceof Error ? err.message : String(err);
-			this.emitLog({ name: 'ArcDirector', message: text });
+			this.emitLog({ name: 'ArcDirector', message: text, error: true });
 		});
 	}
 
@@ -809,12 +900,9 @@ export class ArcDirector<TAgentCtx = unknown> {
 		this.infer = emptyInferClock();
 	}
 
-	private recordInfer(wallMs:number, res:{ promptMs?:number; generateMs?:number }):void {
+	private recordInfer(id:string | undefined, wallMs:number, res:{ promptMs?:number; generateMs?:number }):void {
 		const context = res.promptMs;
-		let generate = res.generateMs;
-		if (generate === undefined && context !== undefined) {
-			generate = Math.max(0, wallMs - context);
-		}
+		const generate = res.generateMs ?? (context !== undefined ? Math.max(0, wallMs - context) : wallMs);
 		this.infer.calls += 1;
 		this.infer.wallMs += wallMs;
 		this.infer.lastWallMs = wallMs;
@@ -826,13 +914,10 @@ export class ArcDirector<TAgentCtx = unknown> {
 		else {
 			this.infer.lastContextMs = null;
 		}
-		if (generate !== undefined) {
-			this.infer.generateMs += generate;
-			this.infer.lastGenerateMs = generate;
-		}
-		else {
-			this.infer.generateMs += wallMs;
-			this.infer.lastGenerateMs = wallMs;
+		this.infer.generateMs += generate;
+		this.infer.lastGenerateMs = generate;
+		if (id) {
+			this.infer.thinkMs[id] = (this.infer.thinkMs[id] ?? 0) + generate;
 		}
 	}
 
@@ -850,7 +935,7 @@ export class ArcDirector<TAgentCtx = unknown> {
 					}
 					const res = await inner.chat(signal ? { ...req, signal } : req);
 					const ms = Math.round(nowMs() - t0);
-					this.recordInfer(ms, res);
+					this.recordInfer(req.thread, ms, res);
 					const parts = [`${ms}ms`];
 					if (res.promptMs !== undefined) {
 						parts.push(`ctx ${Math.round(res.promptMs)}ms`);
@@ -880,11 +965,12 @@ export class ArcDirector<TAgentCtx = unknown> {
 				}
 				catch (err:unknown) {
 					const ms = Math.round(nowMs() - t0);
-					this.recordInfer(ms, {});
-					const text = signal?.aborted
+					this.recordInfer(req.thread, ms, {});
+					const aborted = !!signal?.aborted;
+					const text = aborted
 						? 'aborted'
 						: err instanceof Error ? err.message : String(err);
-					this.emitLog({ name, message: `${ms}ms\n${text}` });
+					this.emitLog({ name, message: `${ms}ms\n${text}`, error: !aborted });
 					throw err;
 				}
 			},
@@ -978,13 +1064,16 @@ export class ArcDirector<TAgentCtx = unknown> {
 		this.mover = new Mover(this.world, () => this.clock);
 		this.bindWorldVerbs();
 		this.reportMissingNames();
-		const specs = this.pending.splice(0, this.pending.length);
+		const specs = this.pendingAgents.splice(0, this.pendingAgents.length);
 		for (const spec of specs) {
 			this.wireAgent(spec, this.stored[spec.id]);
 		}
+		for (const spec of this.pendingActors.splice(0, this.pendingActors.length)) {
+			this.wireActor(spec);
+		}
 		this.stored = {};
 		this.started = true;
-		const ids = [...this.rows.keys()];
+		const ids = [...this.agentRows.keys()];
 		if (ids.length > 0) {
 			this.emitLog({
 				name: 'ArcDirector',
@@ -1012,15 +1101,16 @@ export class ArcDirector<TAgentCtx = unknown> {
 	}
 
 	/** `point`: measure as if the body stood there. */
-	private kernelsFor(row:AgentRow<TAgentCtx>, ctx:TAgentCtx, cache = row.cache, point?:Vec):HostKernels {
-		const agent = row.agent;
-		const kernels = this.namedKernels(agent, this.kernelFn!(ctx, point));
+	private kernelsFor(row:ActorRow<TAgentCtx>, ctx:TAgentCtx, cache = row.cache, point?:Vec):HostKernels {
+		const actor = row.actor;
+		const mind = actor instanceof Agent ? actor : undefined;
+		const kernels = this.namedKernels(actor, this.kernelFn!(ctx, point));
 		const here = point && this.world && poseOf(this.world, kernels.me.id);
 		const geometry = this.world
 			? geometryKernels(this.world, kernels.me.id, here ? new Map([[kernels.me.id, { ...here, point }]]) : undefined)
 			: {};
-		const lastTimestamp = agent?.lastTacticalTimestamp;
-		const last = agent?.lastResult;
+		const lastTimestamp = mind?.lastTacticalTimestamp;
+		const last = actor?.lastResult;
 		const ago = lastTimestamp !== undefined && Number.isFinite(lastTimestamp)
 			? Math.max(0, this.clock - lastTimestamp)
 			: undefined;
@@ -1030,7 +1120,7 @@ export class ArcDirector<TAgentCtx = unknown> {
 			...geometry,
 			cache,
 			...(los ? { canSee: (a, b) => los(a.id, b.id) } : {}),
-			hasHeard: agent ? agent.hasHeard() : false,
+			hasHeard: mind?.hasHeard() ?? false,
 			prev: {
 				secondsAgo: ago,
 				me: this.prevMeOf(row, kernels),
@@ -1046,35 +1136,53 @@ export class ArcDirector<TAgentCtx = unknown> {
 		} as HostKernels;
 	}
 
-	/** Host entities under this agent's names for them, so watch exprs print and bind those names. */
+	/** Host entities under this actor's names for them, so watch exprs print and bind those names. */
 	private namedKernels<TKernels extends Pick<HostKernels, 'others' | 'items' | 'bindings'>>(
-		agent:Agent<TAgentCtx> | null,
+		actor:Actor<TAgentCtx> | null,
 		kernels:TKernels,
 	):TKernels {
-		if (!agent || !this.seenFn) {
+		if (!actor || !this.seenFn) {
 			return kernels;
 		}
-		const named = (e:ExprEntity):ExprEntity => ({ ...e, name: agent.seen(e) });
+		const named = (e:ExprEntity):ExprEntity => ({ ...e, name: actor.seen(e) });
 		const bindings:Record<string, ExprVal> = {};
 		for (const [key, val] of Object.entries(kernels.bindings ?? {})) {
 			if (val.kind !== 'entity') {
 				bindings[key] = val;
 				continue;
 			}
-			const name = agent.seen(val.value);
+			const name = actor.seen(val.value);
 			bindings[key === val.value.id ? name : key] = { kind: 'entity', value: { ...val.value, name } };
 		}
 		return { ...kernels, others: kernels.others.map(named), items: kernels.items.map(named), bindings };
 	}
 
-	private prevMeOf(row:AgentRow<TAgentCtx>, kernels:MeFreezeHost) {
-		const agent = row.agent;
-		if (agent?.prevMe) {
-			return agent.prevMe;
+	/** Spawn snapshot so the first think can see a change. A saved prev is left alone. */
+	private stampPrev(row:ActorRow<TAgentCtx>):void {
+		const actor = row.actor;
+		if (!actor || actor.prevMe || !this.kernelFn || !this.contextFn) {
+			return;
+		}
+		const id = actor instanceof Agent ? actor.thinkThread() : actor.id;
+		try {
+			const ctx = this.contextFn(id);
+			if (ctx) {
+				this.kernelsFor(row, ctx);
+			}
+		}
+		catch {
+			return;
+		}
+	}
+
+	private prevMeOf(row:ActorRow<TAgentCtx>, kernels:MeFreezeHost) {
+		const actor = row.actor;
+		if (actor?.prevMe) {
+			return actor.prevMe;
 		}
 		const frozen = freezeMe(kernels);
-		if (agent) {
-			agent.prevMe = frozen;
+		if (actor) {
+			actor.prevMe = frozen;
 		}
 		return frozen;
 	}
@@ -1089,16 +1197,19 @@ export class ArcDirector<TAgentCtx = unknown> {
 				if (!this.contextFn) {
 					throw new Error(`ArcDirector: withContext required (agent ${id})`);
 				}
-				return this.contextFn(row.agent?.thinkThread() || id);
+				return this.contextFn(row.actor?.thinkThread() || id);
 			},
-			execute: async (step, ctx, actorID) => this.dispatch(row, step, ctx, actorID),
+			execute: async (step, ctx, actorID) => this.dispatch(row, step, ctx, actorID ?? row.actor?.thinkThread() ?? id),
 			abortArc: (unitID) => this.abortArc(unitID),
 			toolRoundCap: this.toolRounds,
+			wayBlocked: (to) => (this.world ? wayBlocked(this.world, row.actor?.thinkThread() || id, to) : undefined),
 			arcRetryCap: this.arcRetries,
 			stalled: this.stalledFn,
 			cooldown: this.cooldownDefault,
 			autoEnact: true,
 			queue: this.queue,
+			// The queue schedules this mind's thinks; an agent heartbeat of its own would drop them.
+			heartbeat: 0,
 			model: this.model,
 			talk: this.talk,
 			kit: this.kitFor(row.spec),
@@ -1107,6 +1218,7 @@ export class ArcDirector<TAgentCtx = unknown> {
 				: undefined,
 			map: this.map,
 			encyclopedia: this.encyclopedia,
+			mentionCap: this.mentionCap,
 			vision: this.vision,
 			watches: row.spec.watches,
 			pinnedWatches: row.spec.pinnedWatches,
@@ -1133,8 +1245,8 @@ export class ArcDirector<TAgentCtx = unknown> {
 			return undefined;
 		}
 		return (target) => {
-			const id = row.agent?.id ?? row.spec.id;
-			const ctx = this.tryCtx(row.agent?.thinkThread() ?? id);
+			const id = row.actor?.id ?? row.spec.id;
+			const ctx = this.tryCtx(row.actor?.thinkThread() ?? id);
 			return seen({ id, ctx }, target);
 		};
 	}
@@ -1142,7 +1254,7 @@ export class ArcDirector<TAgentCtx = unknown> {
 	/** Host look, minus what is out of sight, with each body under this agent's name for it. */
 	private see(row:AgentRow<TAgentCtx>, ctx:TAgentCtx):Sight {
 		const snap = this.filterSight(this.sightLook!(ctx));
-		const agent = row.agent;
+		const agent = row.actor;
 		if (!agent || !this.seenFn) {
 			return snap;
 		}
@@ -1152,8 +1264,8 @@ export class ArcDirector<TAgentCtx = unknown> {
 	private sensesFor(row:AgentRow<TAgentCtx>):Record<string, Sense<TAgentCtx>> {
 		const wrapSight = !!(this.sightLook && this.senses.sight);
 		let skipCarrying = false;
-		if (this.senses.carrying && isCrowdConductor(row.agent) && this.contextFn) {
-			if (this.tryCtx(row.agent?.thinkThread() || row.spec.id) === undefined) {
+		if (this.senses.carrying && isCrowdConductor(row.actor) && this.contextFn) {
+			if (this.tryCtx(row.actor?.thinkThread() || row.spec.id) === undefined) {
 				skipCarrying = true;
 			}
 		}
@@ -1190,7 +1302,7 @@ export class ArcDirector<TAgentCtx = unknown> {
 		if (!look) {
 			return '';
 		}
-		const agent = row.agent;
+		const agent = row.actor;
 		const focus = agent?.effectiveSightFocus() ?? [];
 		const limit = agent?.sightLimit ?? this.sightLimitDefault;
 		const scores = new Map<string, number>();
@@ -1236,7 +1348,7 @@ export class ArcDirector<TAgentCtx = unknown> {
 		}
 		const kernels = this.kernelsFor(row, ctx);
 		for (const obj of objects) {
-			const it = dummyEntity(row.agent?.names.resolve(obj.id) ?? obj.id, {
+			const it = dummyEntity(row.actor?.names.resolve(obj.id) ?? obj.id, {
 				name: obj.id,
 				tags: obj.tags,
 				fields: obj.hp !== undefined && obj.maxHP !== undefined
@@ -1265,23 +1377,25 @@ export class ArcDirector<TAgentCtx = unknown> {
 		}
 	}
 
+	/** One host step for `actorID`, the body acting for `row`'s actor (a crowd unit, a commander, or itself). */
 	private dispatch(
-		row:AgentRow<TAgentCtx>,
+		row:ActorRow<TAgentCtx>,
 		step:Step,
 		ctx:TAgentCtx | undefined,
-		actorID?:string,
+		actorID:string,
 	):Promise<ArcResult> | ArcResult {
-		const agent = row.agent;
-		if (!agent) {
-			return { ok: false, verb: step.verb, reason: 'no agent' };
+		const actor = row.actor;
+		if (!actor) {
+			return { ok: false, verb: step.verb, reason: 'no actor' };
 		}
-		const liveID = actorID ?? agent.thinkThread();
-		const liveCtx = this.tryCtx(liveID) ?? ctx;
+		const liveCtx = this.tryCtx(actorID) ?? ctx;
 		if (step.verb === 'law' || step.verb === 'unlaw') {
-			return this.handleLaw(agent, step);
+			return this.handleLaw(actor, step);
 		}
 		if ((STOCK_CROWD_VERBS as readonly string[]).includes(step.verb)) {
-			return this.handleCrowdVerb(row, step, liveCtx, liveID);
+			return isAgentRow(row)
+				? this.handleCrowdVerb(row, step, liveCtx, actorID)
+				: { ok: false, verb: step.verb, reason: 'not a CrowdConductor' };
 		}
 		const handler = this.handlers.get(step.verb)
 			?? this.stockHandlers.get(step.verb)
@@ -1292,11 +1406,19 @@ export class ArcDirector<TAgentCtx = unknown> {
 		if (liveCtx === undefined) {
 			return { ok: false, verb: step.verb, reason: 'no body' };
 		}
-		const call = this.verbCall(row, agent, step, liveCtx, liveID);
-		if (!('agent' in call)) {
+		const call = this.verbCall(row, actor, step, liveCtx, actorID);
+		if (!('actor' in call)) {
 			return call;
 		}
-		return this.verbGate?.(call) ?? handler(call);
+		const out = this.verbGate?.(call) ?? handler(call);
+		const fn = this.stepFn;
+		if (!fn) {
+			return out;
+		}
+		return Promise.resolve(out).then((result) => {
+			fn(call, result);
+			return result;
+		});
 	}
 
 	/**
@@ -1304,15 +1426,15 @@ export class ArcDirector<TAgentCtx = unknown> {
 	 * picks (`others.filter("enemy").minBy(u => u.hp)`). `watch` args are checked before the host runs.
 	 */
 	private verbCall(
-		row:AgentRow<TAgentCtx>,
-		agent:Agent<TAgentCtx>,
+		row:ActorRow<TAgentCtx>,
+		actor:Actor<TAgentCtx>,
 		step:Step,
 		ctx:TAgentCtx,
 		actorID:string,
 		units?:string[],
 	):VerbCall<TAgentCtx> | ArcResult {
 		const fail = (reason:string):ArcResult => ({ ok: false, verb: step.verb, reason });
-		const catalogAt = (point?:Vec):Catalog | undefined => this.exprCatalog(row, agent, ctx, point ? new SampleCache() : row.cache, point);
+		const catalogAt = (point?:Vec):Catalog | undefined => this.exprCatalog(row, actor, ctx, point ? new SampleCache() : row.cache, point);
 		const kinds = this.verbs.get(step.verb)?.args ?? {};
 		const args:Record<string, unknown> = { ...step.args };
 		for (const [key, value] of Object.entries(args)) {
@@ -1321,7 +1443,7 @@ export class ArcDirector<TAgentCtx = unknown> {
 				continue;
 			}
 			if (kind === 'id') {
-				const named = agent.names.resolve(value);
+				const named = actor.resolveName(value);
 				const catalog = named === value && /[(.]|=>/.test(value) ? catalogAt() : undefined;
 				if (!catalog) {
 					args[key] = named;
@@ -1348,7 +1470,7 @@ export class ArcDirector<TAgentCtx = unknown> {
 		return {
 			verb: step.verb,
 			args,
-			agent,
+			actor,
 			ctx,
 			actorID,
 			units,
@@ -1381,14 +1503,14 @@ export class ArcDirector<TAgentCtx = unknown> {
 		});
 	}
 
-	/** The watch-language view `agent` has from `ctx`: its names, and a Crowd's `units` / `allUnits`. */
-	private exprCatalog(row:AgentRow<TAgentCtx>, agent:Agent<TAgentCtx>, ctx:TAgentCtx, cache:SampleCache, point?:Vec):Catalog | undefined {
+	/** The watch-language view `actor` has from `ctx`: its names, and a Crowd's `units` / `allUnits`. */
+	private exprCatalog(row:ActorRow<TAgentCtx>, actor:Actor<TAgentCtx>, ctx:TAgentCtx, cache:SampleCache, point?:Vec):Catalog | undefined {
 		if (!this.kernelFn) {
 			return undefined;
 		}
 		const kernels = this.kernelsFor(row, ctx, cache, point);
-		return isCrowdConductor(agent)
-			? buildCrowdCatalog(kernels, agent.crowd, agent.id, agent.commanderID)
+		return isCrowdConductor(actor)
+			? buildCrowdCatalog(kernels, actor.crowd, actor.id, actor.commanderID)
 			: buildCatalog(kernels);
 	}
 
@@ -1427,7 +1549,7 @@ export class ArcDirector<TAgentCtx = unknown> {
 		ctx:TAgentCtx | undefined,
 		actorID:string,
 	):ArcResult | Promise<ArcResult> {
-		const agent = row.agent;
+		const agent = row.actor;
 		if (!isCrowdConductor(agent)) {
 			return { ok: false, verb: step.verb, reason: 'not a CrowdConductor' };
 		}
@@ -1456,17 +1578,17 @@ export class ArcDirector<TAgentCtx = unknown> {
 		return { ok: false, verb: step.verb, reason: `unhandled ${step.verb}` };
 	}
 
-	private handleLaw(agent:Agent<TAgentCtx>, step:Step):ArcResult {
+	private handleLaw(actor:Actor<TAgentCtx>, step:Step):ArcResult {
 		if (step.verb === 'unlaw') {
 			const name = typeof step.args.name === 'string' ? step.args.name : '';
 			if (!name) {
 				return { ok: false, verb: 'unlaw', reason: 'unlaw needs name' };
 			}
-			agent.removeLaw(name);
+			actor.removeLaw(name);
 			return { ok: true, verb: 'unlaw' };
 		}
 		const who = typeof step.args.who === 'string' ? step.args.who : undefined;
-		if (who && !isCrowdConductor(agent)) {
+		if (who && !isCrowdConductor(actor)) {
 			return { ok: false, verb: 'law', reason: 'solo law has no who' };
 		}
 		const watch = typeof step.args.watch === 'string' ? step.args.watch : '';
@@ -1475,7 +1597,7 @@ export class ArcDirector<TAgentCtx = unknown> {
 		if (!watch || !arc) {
 			return { ok: false, verb: 'law', reason: 'law needs watch and arc' };
 		}
-		agent.addLaw({ name, who, watch, arc });
+		actor.addLaw({ name, who, watch, arc });
 		return { ok: true, verb: 'law' };
 	}
 
@@ -1505,7 +1627,7 @@ export class ArcDirector<TAgentCtx = unknown> {
 			const call = handler && ctx !== undefined
 				? this.verbCall(row, agent, head, ctx, actorID, units.map((u) => u.id))
 				: undefined;
-			if (handler && call && 'agent' in call) {
+			if (handler && call && 'actor' in call) {
 				void handler(call);
 			}
 			if (arc.then) {
@@ -1642,7 +1764,7 @@ export class ArcDirector<TAgentCtx = unknown> {
 		agent.kit = this.kitFor(spec);
 	}
 
-	private kitFor(spec:AgentSpec<TAgentCtx>):KitSource<TAgentCtx> {
+	private kitFor(spec:ActorSpec<TAgentCtx>):KitSource<TAgentCtx> {
 		return spec.kit ?? this.defaultKit ?? { verbs: [] };
 	}
 
@@ -1731,7 +1853,7 @@ export class ArcDirector<TAgentCtx = unknown> {
 		if (this.defaultKit && typeof this.defaultKit !== 'function') {
 			this.scanKit(this.defaultKit, 'default kit', out);
 		}
-		for (const row of this.pending) {
+		for (const row of this.pendingAgents) {
 			if (row.kit) {
 				const where = `agent ${row.id}`;
 				const read = this.readKit(row.kit, row.id, where);
@@ -1789,11 +1911,11 @@ export class ArcDirector<TAgentCtx = unknown> {
 		this.dropRow(spec.id);
 		const row:AgentRow<TAgentCtx> = {
 			spec,
-			agent: null,
+			actor: null,
 			cache: new SampleCache(),
 			rank: spec.rank ?? 0,
 		};
-		this.rows.set(spec.id, row);
+		this.agentRows.set(spec.id, row);
 		const deps = this.deps(spec.id, row);
 		const isCrowd = spec.units !== undefined || spec.commander !== undefined;
 		const agent = stored
@@ -1819,7 +1941,7 @@ export class ArcDirector<TAgentCtx = unknown> {
 					goals: spec.goals ? spec.goals.map((g) => ({ ...g })) : [],
 					...deps,
 				});
-		row.agent = agent;
+		row.actor = agent;
 		this.applySpec(agent, spec, !stored);
 		this.attachTalk(agent);
 		this.queue?.ensure(spec.id, {
@@ -1828,11 +1950,44 @@ export class ArcDirector<TAgentCtx = unknown> {
 		});
 		this.queue?.setWatches(spec.id, agent.effectiveWatches());
 		this.queue?.setAiOn(spec.id, true);
+		this.stampPrev(row);
 		return agent;
 	}
 
+	private wireActor(spec:ActorSpec<TAgentCtx>):Actor<TAgentCtx> {
+		this.dropActorRow(spec.id);
+		const row:ActorRow<TAgentCtx> = { spec, actor: null, cache: new SampleCache() };
+		const actor = new Actor<TAgentCtx>({
+			id: spec.id,
+			verbs: this.verbs,
+			context: () => this.contextFn?.(spec.id),
+			execute: async (step, ctx, actorID) => this.dispatch(row, step, ctx, actorID ?? spec.id),
+			abortArc: (id) => this.abortArc(id),
+			cooldown: spec.cooldown ?? this.cooldownDefault,
+			talk: this.talk,
+			catalog: this.kernelFn ? (ctx) => buildCatalog(this.kernelsFor(row, ctx)) : undefined,
+			kit: this.kitFor(spec),
+			laws: spec.laws,
+			maxLaws: spec.maxLaws,
+		});
+		row.actor = actor;
+		this.actorRows.set(spec.id, row);
+		this.stampPrev(row);
+		return actor;
+	}
+
+	private dropActorRow(id:string):void {
+		const row = this.actorRows.get(id);
+		if (!row) {
+			return;
+		}
+		row.actor?.replaceProgram();
+		this.mover.stop(id);
+		this.actorRows.delete(id);
+	}
+
 	private dropRow(id:string):void {
-		const row = this.rows.get(id);
+		const row = this.agentRows.get(id);
 		if (!row) {
 			return;
 		}
@@ -1840,7 +1995,7 @@ export class ArcDirector<TAgentCtx = unknown> {
 		this.talk?.detach(id);
 		this.queue?.setAiOn(id, false);
 		this.queue?.drop(id);
-		this.rows.delete(id);
+		this.agentRows.delete(id);
 		let i = this.readyThink.length;
 		while (i--) {
 			if (this.readyThink[i].npcID === id) {
@@ -1851,9 +2006,9 @@ export class ArcDirector<TAgentCtx = unknown> {
 
 	exportAgents():Record<string, AgentJSON> {
 		const out:Record<string, AgentJSON> = {};
-		for (const row of this.rows.values()) {
-			if (row.agent) {
-				out[row.agent.id] = row.agent.toJSON();
+		for (const row of this.agentRows.values()) {
+			if (row.actor) {
+				out[row.actor.id] = row.actor.toJSON();
 			}
 		}
 		return out;
@@ -1865,7 +2020,7 @@ export class ArcDirector<TAgentCtx = unknown> {
 			this.stored = { ...agents };
 			return;
 		}
-		for (const row of [...this.rows.values()]) {
+		for (const row of [...this.agentRows.values()]) {
 			const json = agents[row.spec.id];
 			if (json) {
 				this.wireAgent(row.spec, json);
@@ -1874,8 +2029,8 @@ export class ArcDirector<TAgentCtx = unknown> {
 	}
 
 	pushEvent(event:AgentEvent):void {
-		for (const row of this.rows.values()) {
-			row.agent?.pushEvent(event);
+		for (const row of this.agentRows.values()) {
+			row.actor?.pushEvent(event);
 			if (event.major) {
 				this.queue?.enqueueMajor(row.spec.id, true);
 			}
@@ -1888,12 +2043,12 @@ export class ArcDirector<TAgentCtx = unknown> {
 		}
 		this.clock = now;
 		const catalogs = new Map<string, ReturnType<typeof buildCatalog> | ReturnType<typeof buildCatalog>[]>();
-		for (const row of this.rows.values()) {
-			if (!row.agent) {
+		for (const row of this.agentRows.values()) {
+			if (!row.actor) {
 				continue;
 			}
-			row.agent.stamp(now);
-			row.agent.refreshKit();
+			row.actor.stamp(now);
+			row.actor.refreshKit();
 			if (!this.kernelFn || !this.contextFn) {
 				continue;
 			}
@@ -1904,26 +2059,34 @@ export class ArcDirector<TAgentCtx = unknown> {
 				continue;
 			}
 		}
+		for (const row of this.actorRows.values()) {
+			row.actor?.stamp(now);
+			row.actor?.refreshKit();
+		}
 		const cap = this.queue.maxParallel;
-		this.queue.maxParallel = Math.max(cap, this.rows.size);
+		this.queue.maxParallel = Math.max(cap, this.agentRows.size);
 		const rows = this.queue.tick(dt, catalogs);
 		this.queue.maxParallel = cap;
 		this.readyThink.push(...rows);
 		this.tickWaits();
 		this.mover.tick();
 		this.talk?.tick(now);
-		for (const row of this.rows.values()) {
+		for (const row of this.agentRows.values()) {
 			row.cache.commit();
 			this.tickLaws(row);
-			if (row.agent?.arcSession) {
-				pollArcSession(row.agent.arcSession);
+			if (row.actor?.arcSession) {
+				pollArcSession(row.actor.arcSession);
 			}
+		}
+		for (const row of this.actorRows.values()) {
+			row.cache.commit();
+			this.tickActorLaws(row);
 		}
 		this.drain(now);
 	}
 
 	private catalogsFor(row:AgentRow<TAgentCtx>):ReturnType<typeof buildCatalog> | ReturnType<typeof buildCatalog>[] {
-		const agent = row.agent;
+		const agent = row.actor;
 		const thinkerCtx = this.tryCtx(row.spec.id);
 		const thinkerKernels = thinkerCtx
 			? this.kernelsFor(row, thinkerCtx)
@@ -1960,12 +2123,12 @@ export class ArcDirector<TAgentCtx = unknown> {
 	}
 
 	private tickLaws(row:AgentRow<TAgentCtx>):void {
-		const agent = row.agent;
+		const agent = row.actor;
 		if (!agent) {
 			return;
 		}
 		if (!isCrowdConductor(agent) || !this.kernelFn) {
-			this.tickAgentLaws(row);
+			this.tickActorLaws(row);
 			return;
 		}
 		const thinkerCtx = this.tryCtx(agent.id);
@@ -1986,7 +2149,7 @@ export class ArcDirector<TAgentCtx = unknown> {
 			const extras = ():ArcHandler[] => agent.lawHandlers((law) => lawMatches(law, unit, whoCat, agent.crowd));
 			const catalog = ():ReturnType<typeof buildCrowdCatalog> => this.unitCatalog(row, agent, unit.id, whoCat);
 			if (unit.id === agent.commanderID) {
-				this.pollAgentSession(agent, extras, catalog, unit.id);
+				this.pollActorSession(agent, extras, catalog, unit.id);
 				continue;
 			}
 			if (unit.session) {
@@ -2014,42 +2177,50 @@ export class ArcDirector<TAgentCtx = unknown> {
 		}
 	}
 
-	private tickAgentLaws(row:AgentRow<TAgentCtx>):void {
-		const agent = row.agent;
-		if (!agent) {
+	/** Laws and the live arc session of one body (not a crowd's units). */
+	private tickActorLaws(row:ActorRow<TAgentCtx>):void {
+		const actor = row.actor;
+		if (!actor) {
 			return;
 		}
-		if (agent.laws.length === 0 && !agent.arcSession) {
+		if (actor.laws.length === 0 && !actor.arcSession) {
 			return;
 		}
-		const extras = ():ArcHandler[] => agent.lawHandlers();
-		let catalog = agent.arcSession?.catalog;
+		const extras = ():ArcHandler[] => actor.lawHandlers();
+		let catalog = actor.arcSession?.catalog;
 		if (!catalog && this.kernelFn && this.contextFn) {
 			catalog = () => {
-				const ctx = this.tryCtx(agent.id);
+				const ctx = this.tryCtx(actor.id);
 				if (!ctx) {
 					return undefined;
 				}
 				return buildCatalog(this.kernelsFor(row, ctx));
 			};
 		}
-		this.pollAgentSession(agent, extras, catalog, agent.id);
+		this.pollActorSession(actor, extras, catalog, actor.id);
 	}
 
-	private pollAgentSession(
-		agent:Agent<TAgentCtx>,
+	/** A think is in flight or already queued, so a law must not walk the body out from under it. */
+	private thinkWaiting(npcID:string):boolean {
+		return !!this.queue?.isThinking(npcID)
+			|| !!this.queue?.hasPending(npcID)
+			|| this.readyThink.some((row) => row.npcID === npcID);
+	}
+
+	private pollActorSession(
+		actor:Actor<TAgentCtx>,
 		extras:()=>ArcHandler[],
 		catalog:ArcSession['catalog'],
 		abortID:string,
 	):void {
-		if (agent.arcSession) {
+		if (actor.arcSession) {
 			if (catalog) {
-				agent.arcSession.catalog = catalog;
+				actor.arcSession.catalog = catalog;
 			}
-			agent.arcSession.now = () => this.clock;
-			agent.arcSession.extraHandlers = extras;
-			agent.arcSession.abortHost = () => this.abortArc(abortID);
-			pollArcSession(agent.arcSession);
+			actor.arcSession.now = () => this.clock;
+			actor.arcSession.extraHandlers = extras;
+			actor.arcSession.abortHost = () => this.abortArc(abortID);
+			pollArcSession(actor.arcSession);
 			return;
 		}
 		const probe = createArcSession({
@@ -2058,8 +2229,8 @@ export class ArcDirector<TAgentCtx = unknown> {
 			extraHandlers: extras,
 		});
 		const first = firstStartable(probe);
-		if (first) {
-			agent.beginLaw(first, {
+		if (first && !this.thinkWaiting(actor.id)) {
+			actor.beginLaw(first, {
 				catalog,
 				now: () => this.clock,
 				abortHost: () => this.abortArc(abortID),
@@ -2078,8 +2249,8 @@ export class ArcDirector<TAgentCtx = unknown> {
 			if (score !== 0) {
 				return score;
 			}
-			const rankA = this.rows.get(a.npcID)?.rank ?? 0;
-			const rankB = this.rows.get(b.npcID)?.rank ?? 0;
+			const rankA = this.agentRows.get(a.npcID)?.rank ?? 0;
+			const rankB = this.agentRows.get(b.npcID)?.rank ?? 0;
 			return rankB - rankA;
 		});
 		const slots = this.thinkSlots(queue, now);
@@ -2089,9 +2260,9 @@ export class ArcDirector<TAgentCtx = unknown> {
 		const held:ThinkRow[] = [];
 		let left = slots;
 		for (const row of this.readyThink) {
-			const mind = this.rows.get(row.npcID);
-			if (!mind?.agent || queue.isThinking(row.npcID) || left <= 0) {
-				if (mind?.agent) {
+			const mind = this.agentRows.get(row.npcID);
+			if (!mind?.actor || queue.isThinking(row.npcID) || left <= 0) {
+				if (mind?.actor) {
 					held.push(row);
 				}
 				continue;
@@ -2125,8 +2296,8 @@ export class ArcDirector<TAgentCtx = unknown> {
 			return open;
 		}
 		const waiting = this.readyThink.some((row) => {
-			const mind = this.rows.get(row.npcID);
-			return !!mind?.agent && !queue.isThinking(row.npcID);
+			const mind = this.agentRows.get(row.npcID);
+			return !!mind?.actor && !queue.isThinking(row.npcID);
 		});
 		if (!waiting) {
 			return 0;
@@ -2153,7 +2324,7 @@ export class ArcDirector<TAgentCtx = unknown> {
 	}
 
 	private fireThink(row:AgentRow<TAgentCtx>, now:number):void {
-		const agent = row.agent;
+		const agent = row.actor;
 		if (!agent) {
 			return;
 		}
@@ -2170,6 +2341,15 @@ export class ArcDirector<TAgentCtx = unknown> {
 				const text = err instanceof Error ? err.message : String(err);
 				this.emitLog({ name: agent.thinkThread(), message: `stalled: ${text}` });
 				this.queue?.noteResult(agent.id, true);
+				// An invalid reply ends no arc, so nothing would wake this mind: think again once, told why.
+				// Aborts and inference errors are not the mind's doing.
+				if (err instanceof ArcError) {
+					const again = agent.lastResult?.verb !== 'think' || agent.lastResult.ok;
+					agent.ingestResult({ ok: false, verb: 'think', reason: `your reply was not a valid Arc: ${text}` });
+					if (again) {
+						this.queue?.enqueueVerb(agent.id, 'think', false);
+					}
+				}
 			});
 	}
 
@@ -2198,7 +2378,7 @@ export class ArcDirector<TAgentCtx = unknown> {
 	dispose():void {
 		this.stopLoop();
 		this.disposed = true;
-		for (const id of [...this.rows.keys()]) {
+		for (const id of [...this.agentRows.keys()]) {
 			this.dropRow(id);
 		}
 		this.started = false;

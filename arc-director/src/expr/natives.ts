@@ -339,11 +339,16 @@ function nearbyList(host:HostKernels, args:ExprVal[], me:ExprEntity, defaultR:nu
 			continue;
 		}
 		host.cache.rememberDist(target.id, row.value.id, d);
-		if (d <= r) {
+		if (d <= r && inSight(host, target, row.value)) {
 			out.push(row);
 		}
 	}
 	return capList(out, host.listCap ?? LIST_CAP);
+}
+
+/** No `canSee` means the host has no sight test, so distance is the whole check. */
+function inSight(host:HostKernels, from:ExprEntity, to:ExprEntity):boolean {
+	return host.canSee ? host.canSee(from, to) : true;
 }
 
 function bindPath(host:HostKernels, fns:Map<string, NativeFn>):void {

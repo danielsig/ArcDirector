@@ -1,6 +1,6 @@
 import type { HostKernels } from '../expr/natives.js';
 import type { ExprEntity } from '../expr/types.js';
-import { findRoute } from './route.js';
+import { blockedReason, findRoute } from './route.js';
 import { poseOf } from './lookup.js';
 import type { HostWorld, Pose, Vec } from './types.js';
 import { cosToward, distance } from './vec.js';
@@ -51,6 +51,25 @@ export function geometryKernels(
 			}
 			: undefined,
 	};
+}
+
+/**
+ * Why there is no way for `actorID` into reach of `targetID`: the blockers on the way, or `''` when nothing
+ * names one. Undefined when there is a way, or when the world has no routes to ask.
+ */
+export function wayBlocked(world:HostWorld<unknown>, actorID:string, targetID:string):string | undefined {
+	const actor = world.find(actorID);
+	const target = world.find(targetID);
+	const from = poseOf(world, actorID)?.point;
+	const to = poseOf(world, targetID)?.point;
+	if (!world.getPathGraph || actor === undefined || target === undefined || !from || !to) {
+		return undefined;
+	}
+	const route = findRoute(world.getPathGraph(actor), from, to, world.getReach?.(actor, target) ?? 1);
+	if (!route) {
+		return '';
+	}
+	return 'blockers' in route ? blockedReason(route) : undefined;
 }
 
 function routeLength(from:Vec, points:Vec[]):number {

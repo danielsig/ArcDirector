@@ -63,59 +63,46 @@ export function captureItem(go:GameObject):ItemInstance {
 }
 
 export function applyInstance(go:GameObject, inst:ItemInstance):void {
-	const item = go.addComponent(new Item());
-	item.defID = inst.defID;
-	item.count = inst.count;
-	item.stackable = inst.stackable;
-	item.maxStack = inst.maxStack;
+	go.addComponent(Item, {
+		defID: inst.defID,
+		count: inst.count,
+		stackable: inst.stackable,
+		maxStack: inst.maxStack,
+	});
 	if (inst.Key) {
-		const key = go.addComponent(new Key());
-		key.keyID = inst.Key.keyID;
+		go.addComponent(Key, { keyID: inst.Key.keyID });
 	}
 	if (inst.Equipable) {
-		const eq = go.addComponent(new Equipable());
-		eq.slots = [...inst.Equipable.slots];
-		eq.hands = inst.Equipable.hands;
+		go.addComponent(Equipable, { slots: [...inst.Equipable.slots], hands: inst.Equipable.hands });
 	}
 	if (inst.Container) {
-		const pack = go.addComponent(new Container());
-		pack.size = inst.Container.size;
-		pack.contents = inst.Container.contents.slice();
+		go.addComponent(Container, { size: inst.Container.size, contents: inst.Container.contents.slice() });
 	}
 	if (inst.Weapon) {
-		const wpn = go.addComponent(new Weapon());
-		wpn.damage = inst.Weapon.damage;
-		wpn.range = inst.Weapon.range;
+		go.addComponent(Weapon, { damage: inst.Weapon.damage, range: inst.Weapon.range });
 	}
 	if (inst.Blade) {
-		go.addComponent(new Blade());
+		go.addComponent(Blade);
 	}
 	if (inst.Armor) {
-		const arm = go.addComponent(new Armor());
-		arm.defense = inst.Armor.defense;
-		arm.covers = [...inst.Armor.covers];
+		go.addComponent(Armor, { defense: inst.Armor.defense, covers: [...inst.Armor.covers] });
 	}
 	if (inst.Consumable) {
-		const con = go.addComponent(new Consumable());
-		con.effect = inst.Consumable.effect;
-		con.amount = inst.Consumable.amount;
-		con.consumeOnUse = inst.Consumable.consumeOnUse;
+		go.addComponent(Consumable, { ...inst.Consumable });
 	}
 	if (inst.Torch) {
-		const torch = go.addComponent(new Torch());
-		torch.lit = inst.Torch.lit;
-		torch.baseIntensity = 28;
-		const light = go.addComponent(new Light());
-		light.color = 0xff9a4a;
-		light.intensity = torch.baseIntensity;
-		light.decay = torch.baseDecay * Torch.decayScale;
-		light.range = 7;
-		light.castShadow = true;
-		light.enabled = inst.Torch.lit;
+		const torch = go.addComponent(Torch, { lit: inst.Torch.lit, baseIntensity: 28 });
+		go.addComponent(Light, {
+			color: 0xff9a4a,
+			intensity: torch.baseIntensity,
+			decay: torch.baseDecay * Torch.decayScale,
+			range: 7,
+			castShadow: true,
+			enabled: inst.Torch.lit,
+		});
 	}
 	if (inst.Flame) {
-		const flame = go.addComponent(new Flame());
-		flame.canIgnite = inst.Flame.canIgnite;
+		go.addComponent(Flame, { canIgnite: inst.Flame.canIgnite });
 	}
 }
 
@@ -133,22 +120,14 @@ export function spawnWorldItem(
 	go.transform.position.y = y;
 	go.transform.position.z = z;
 	applyInstance(go, inst);
-	go.addComponent(new Pickupable());
-	const mv = go.addComponent(new MeshRenderer());
-	mv.meshID = inst.meshID;
-	mv.color = inst.color;
-	const col = go.addComponent(new BoxCollider());
-	col.size = { x: 0.35, y: 0.35, z: 0.35 };
-	col.isTrigger = true;
-	col.solid = false;
-	const rb = go.addComponent(new RigidBody());
-	rb.kinematic = true;
+	go.addComponent(Pickupable);
+	go.addComponent(MeshRenderer, { meshID: inst.meshID, color: inst.color });
+	go.addComponent(BoxCollider, { size: { x: 0.35, y: 0.35, z: 0.35 }, isTrigger: true, solid: false });
+	go.addComponent(RigidBody, { kinematic: true });
 	if (chunkID) {
-		const bound = go.addComponent(new ChunkBound());
-		bound.chunkID = chunkID;
+		go.addComponent(ChunkBound, { chunkID });
 	}
-	const named = go.addComponent(new Named());
-	named.id = inst.name;
+	const named = go.addComponent(Named, { id: inst.name });
 	if (inst.name === 'MagicPotion') {
 		named.aliases = ['Magic Potion', 'potion'];
 	}

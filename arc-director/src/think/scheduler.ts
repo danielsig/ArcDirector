@@ -78,9 +78,11 @@ export type MindQueue = {
 	mayThink:((ctx:MayThink)=>boolean) | undefined;
 	readonly inFlight:number;
 	isThinking(npcID:string):boolean;
+	/** A follow-up, watch, or heartbeat is waiting to start. */
+	hasPending(npcID:string):boolean;
 	arcOf(npcID:string):Arc | null;
 	beginThink(npcID:string):AbortSignal;
-	endThink(npcID:string):void;
+	endThink(npcID:string, signal?:AbortSignal):void;
 	abortThink(npcID:string):void;
 	thinkSignal(npcID:string):AbortSignal | undefined;
 	beginArc(npcID:string, arc:Arc):void;
@@ -171,6 +173,10 @@ export abstract class MindScheduler implements MindQueue {
 		return this.inflight.has(npcID);
 	}
 
+	hasPending(npcID:string):boolean {
+		return this.rows.some((row) => row.npcID === npcID);
+	}
+
 	arcOf(npcID:string):Arc | null {
 		return this.executing.get(npcID) ?? null;
 	}
@@ -184,7 +190,11 @@ export abstract class MindScheduler implements MindQueue {
 		return ac.signal;
 	}
 
-	endThink(npcID:string):void {
+	endThink(npcID:string, signal?:AbortSignal):void {
+		const ac = this.inflight.get(npcID);
+		if (signal && ac && ac.signal !== signal) {
+			return;
+		}
 		this.inflight.delete(npcID);
 	}
 

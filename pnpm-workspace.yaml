@@ -2,3 +2,5 @@ packages:
   - game
   - arc-director
   - kindling
+  - control
+  - mcp

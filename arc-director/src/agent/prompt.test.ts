@@ -79,7 +79,7 @@ describe('prompt split', () => {
 		assert.equal(parseArc(wanderJson[0], verbs).head.verb, 'wander');
 		assert.equal(
 			parseArc(wanderJson[0], verbs).head.args.until,
-			'some(items.filter("FireMushroom").nearby())',
+			'some(items.filter("Lantern").nearby())',
 		);
 		assert.match(system, /Close every brace\. No prose/);
 		const chainAt = system.indexOf('{"head":{"verb":"pick_up"');
@@ -125,7 +125,7 @@ describe('prompt split', () => {
 		assert.equal(system.includes('Arc JSON'), false);
 		assert.equal(system.includes('"verb":"wander"'), false);
 		assert.equal(system.includes('JSON shape'), false);
-		const wanderText = system.match(/wander\(until=some\(items\.filter\("FireMushroom"\)\.nearby\(\)\)\)/);
+		const wanderText = system.match(/wander\(until=some\(items\.filter\("Lantern"\)\.nearby\(\)\)\)/);
 		assert.ok(wanderText);
 		assert.equal(parseArc(wanderText[0], verbs).head.verb, 'wander');
 		const chainText = system.match(/pick_up\(Lantern\) && give\(item=Lantern, to=Player\)/);
@@ -136,6 +136,13 @@ describe('prompt split', () => {
 		assert.equal(chained.then?.arc.head.verb, 'give');
 	});
 
+	it('sends a mind with a map to the map before it wanders', () => {
+		const system = stablePrefix('Forager', identity, verbs, { canSeeMap: true, arcText: true, tools: ['see_map'] });
+		assert.match(system, /Looking for someone, a thing, or a place you do not see\? Call see_map first and go_to the name it shows\. wander\(until\) only for what the map does not name/);
+		assert.match(system, /otherwise see_map, ask, or wander\(until\)/);
+		assert.equal(system.includes('Looking for a thing or place? wander'), false);
+	});
+
 	it('lists tools as tools, never as Arc verbs', () => {
 		const system = stablePrefix('Guard', identity, verbs, {
 			canSeeMap: true,
@@ -143,8 +150,13 @@ describe('prompt split', () => {
 			tools: ['see_map', 'observe'],
 		});
 		assert.match(system, /Tools this think, not verbs: see_map, observe/);
-		assert.match(system, /never write a tool name in the Arc/);
-		assert.match(system, /After any tool, emit only the Arc text/);
+		assert.match(system, /Never write a tool name in the Arc/);
+		assert.match(system, /Never guess a fact a tool can check/);
+		assert.match(system, /never repeat a call/);
+		assert.equal(system.includes('with "Bread"'), false);
+		const lookup = stablePrefix('Guard', identity, verbs, { arcText: true, tools: ['observe', 'recall'] });
+		assert.match(lookup, /Call recall with "Bread"/);
+		assert.match(system, /Once you know enough, emit only the Arc text/);
 		assert.match(system, /see_map is a tool this think, not a verb/);
 		assert.equal(system.includes('see_map({'), false);
 		assert.equal(system.includes('observe({expr})'), false);
@@ -211,6 +223,14 @@ describe('prompt split', () => {
 		});
 		assert.match(user, /You remember:/);
 		assert.match(user, /BridgeKeeper wants FireMushroom/);
+	});
+
+	it('shows the articles for a failure under its result', () => {
+		const user = volatileBlock({
+			lastResult: { ok: false, verb: 'go_to', reason: 'no way to Angler: Bridge is raised' },
+			lastResultArticles: 'Bridge: BridgeKeeper lowers it.',
+		});
+		assert.match(user, /Last verb result: go_to failed — no way to Angler: Bridge is raised\n {2}Bridge: BridgeKeeper lowers it\./);
 	});
 
 	it('lists a one-shot think-about note', () => {

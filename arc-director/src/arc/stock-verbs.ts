@@ -144,6 +144,10 @@ export const STOCK_MIND_VERBS = [
 /** Withheld from an agent whose `watchesWritable` / `sightFocusWritable` is off, whatever its kit says. */
 export const WATCH_EDIT_VERBS:readonly string[] = ['watch', 'unwatch'];
 export const FOCUS_EDIT_VERBS:readonly string[] = ['focus', 'unfocus'];
+/** Verbs only a mind can run: they call the model or shape its later prompts. A plain `Actor` never has them. */
+export const MIND_ONLY_VERBS:readonly string[] = [
+	'think', 'remember', 'set_goal', 'drop_goal', 'set_identity', ...WATCH_EDIT_VERBS, ...FOCUS_EDIT_VERBS,
+];
 export const STOCK_ARC_VERBS = ['when', 'loop', 'law', 'unlaw'] as const;
 export const STOCK_VERBS = [...STOCK_MOVE_VERBS, ...STOCK_ITEM_VERBS, ...STOCK_MIND_VERBS, ...STOCK_ARC_VERBS] as const;
 export type StockVerb = (typeof STOCK_VERBS)[number] | (typeof STOCK_TRADE_VERBS)[number];
@@ -153,9 +157,9 @@ export const STOCK_VERB_DEFS = {
 	follow: { args: { target: 'id' }, help: 'keeps following until your next arc' },
 	wander: { args: { until: 'watch?', seconds: 'number?' } },
 	use: { args: { item: 'id', target: 'id?' }, help: 'goes to the target first' },
-	pick_up: { args: { item: 'id' }, help: 'goes to it first' },
+	pick_up: { args: { item: 'id' }, help: 'goes to it first; never from what others carry' },
 	drop: { args: { item: 'id' } },
-	give: { args: { item: 'id', to: 'id' }, help: 'goes to them first' },
+	give: { args: { item: 'id', to: 'id' }, help: 'goes to them first; how you pay or hand anything over, saying so does not' },
 	examine: { args: { target: 'id' } },
 	buy: { args: { item: 'id', from: 'id', offer: 'number?', quantity: 'number?' }, help: 'goes to the seller first; offer is for all of them' },
 	sell: { args: { item: 'id', to: 'id', ask: 'number?', quantity: 'number?' }, help: 'goes to the buyer first; ask is for all of them' },

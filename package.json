@@ -4,7 +4,7 @@
 	"type": "module",
 	"scripts": {
 		"lint": "eslint .",
-		"test": "pnpm --filter arc-director test",
+		"test": "pnpm --filter arc-director test && pnpm --filter @arc-director/control test && pnpm --filter @arc-director/game test",
 		"fixture": "pnpm --filter arc-director fixture"
 	},
 	"devDependencies": {

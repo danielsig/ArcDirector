@@ -21,11 +21,11 @@ function scene():World {
 	resetAllocID();
 	const world = new World();
 	const door = new GameObject('Door');
-	door.addComponent(new Door());
+	door.addComponent(Door);
 	world.add(door);
 	const crate = new GameObject('Crate');
-	crate.addComponent(new Bag()).contents = ['Rope'];
-	crate.addComponent(new Bag());
+	crate.addComponent(Bag).contents = ['Rope'];
+	crate.addComponent(Bag);
 	world.add(crate);
 	world.add(new GameObject(allocID('coin')));
 	return world;

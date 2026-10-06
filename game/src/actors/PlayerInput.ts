@@ -8,6 +8,7 @@ import type { ItemInstance } from '../items/instance';
 import { swapHeldHands } from '../items/equip';
 import { dropItem, interactChest, interactDoor, nearestPickup, pickup } from '../items/pickup';
 import { useItem } from '../items/use';
+import { PlayerPilot } from './PlayerPilot';
 
 const YAW_SENS = 0.0024;
 
@@ -102,7 +103,8 @@ export class PlayerInput extends Component {
 			}
 		}
 
-		if (input.pressed('KeyF') || input.justClick) {
+		const yielded = this.gameObject.getComponent(PlayerPilot)?.consumeYield() === true;
+		if (input.pressed('KeyF') || (input.justClick && !yielded)) {
 			const item = this.activeItem();
 			if (item) {
 				const result = useItem(this.gameObject, item, aimed);

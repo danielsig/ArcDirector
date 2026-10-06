@@ -76,7 +76,7 @@ export function startSceneMusic(audio:Audio, sceneID:string):void {
 		return;
 	}
 	if (sceneID === 'marketplace') {
-		void audio.playRecording(TALE_TRACK, 1, 'heros_tale', { start: 24.5, end: 167.8 });
+		void audio.playRecording(TALE_TRACK, 1, 'heros_tale', { start: 24.6, end: 168 });
 		return;
 	}
 	void audio.playMusic(SONGS[sceneID] ?? SONGS.abbey_vault);

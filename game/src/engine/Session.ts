@@ -4,6 +4,7 @@ import { Component } from './Component';
 import { MeshRenderer } from './MeshRenderer';
 import { Order } from './order';
 import { PlayerInput } from '../actors/PlayerInput';
+import { PlayerPilot } from '../actors/PlayerPilot';
 import type { SceneDef } from '../data/scenes';
 import { GameHost } from '../npc/adapter';
 import { playerSay, playerSayCatalog } from '../npc/playerTalk';
@@ -12,9 +13,11 @@ import { patchInfer } from './patchHud';
 import { parseSlash } from '../ui/sayCommands';
 import type { HudModel, HudModelOption } from '../ui/hudModel';
 import {
-	clampParallelThinkers,
+	contextLabel,
 	prefs,
+	prefsDetached,
 	setPrefs,
+	watchPrefs,
 	type Prefs,
 } from '../prefs';
 import {
@@ -41,6 +44,7 @@ import {
 	characterOptions,
 	resolvePlayerKind,
 } from '../render/artCache';
+import { bindArcControl } from '../control/bind';
 import { hasHumanAnims, loadNPCAnims } from '../render/humanAnims';
 
 /** Host session: Vue calls say / save / load; Kindling runs keys, flags, persist. */
@@ -67,9 +71,8 @@ export class Session extends Component {
 	fresh:WorldState = {};
 	private persistAcc = 0;
 	private lastViewPacked = '';
-	private lastFlagsPacked = '';
-	private lastAudioPacked = '';
-	private lastThinkersPacked = '';
+	private unbindControl = ():void => undefined;
+	private unwatchPrefs = ():void => undefined;
 
 	override awake():void {
 		this.getCanvas()?.addEventListener('click', this.onClick);
@@ -96,6 +99,10 @@ export class Session extends Component {
 			const stateHost = window as unknown as { lookState?:{ yaw:number; pitch:number } };
 			stateHost.lookState = { yaw, pitch };
 		};
+		this.unwatchPrefs = watchPrefs((next, prev) => {
+			this.applyPrefs(next, prev);
+		});
+		this.unbindControl = bindArcControl(this);
 	}
 
 	beginPlay():void {
@@ -120,20 +127,18 @@ export class Session extends Component {
 	override onDestroy():void {
 		this.getCanvas()?.removeEventListener('click', this.onClick);
 		this.director.dispose();
+		this.unwatchPrefs();
+		this.unbindControl();
 		const lookHost = window as unknown as { setLook?:(yaw:number, pitch:number)=>void };
 		lookHost.setLook = undefined;
 	}
 
 	/** Runs every frame, including while the menu pauses simulation. */
 	poll():void {
-		this.persistFlags();
-		this.persistThinkers();
-		this.persistAudio();
 		const world = this.gameObject.world;
 		if (!world) {
 			return;
 		}
-		world.arcDirectorOn = this.hud.arcDirectorOn;
 		world.sayOpen = this.hud.sayOpen;
 		if (this.hud.menuOpen && world.input.pointerLocked) {
 			this.dropPointerLock();
@@ -185,17 +190,17 @@ export class Session extends Component {
 		const slash = parseSlash(spoken.trim());
 		const help = !!slash?.ok && slash.verb === 'help';
 		if (spoken.trim() && !help) {
-			this.hud.observer = false;
-			this.persistFlags();
+			setPrefs({ observer: false });
 		}
 		playerSay(this.director, spoken);
 	}
 
-	save():void {
+	save():GameSave | null {
 		const world = this.gameObject.world;
 		const pose = this.readPose();
 		if (!world || !pose) {
-			return;
+			this.hud.menuNotice = 'Save failed';
+			return null;
 		}
 		this.stream.loadAll();
 		const save:GameSave = {
@@ -208,20 +213,22 @@ export class Session extends Component {
 		};
 		if (!writeSave(this.scene.id, save)) {
 			this.hud.menuNotice = 'Save failed';
-			return;
+			return null;
 		}
 		this.hud.savedUTC = save.savedUTC;
 		this.hud.menuNotice = 'Saved';
+		return save;
 	}
 
 	/** Boot a fresh Game that restores this scene's save. */
-	load():void {
+	load():boolean {
 		if (!readSave(this.scene.id)) {
 			this.hud.menuNotice = 'No save';
-			return;
+			return false;
 		}
 		this.hud.loading = true;
 		this.hud.boots += 1;
+		return true;
 	}
 
 	/** Apply `save` to the scene just built. Minds restore when ArcDirector starts. */
@@ -237,36 +244,32 @@ export class Session extends Component {
 		this.applyPose(save.pose);
 	}
 
+	/** Mirror every pref into the HUD, world, and ArcDirector. Called once at boot; changes arrive through `watchPrefs`. */
+	syncPrefs():void {
+		this.applyPrefs(prefs());
+	}
+
 	applyModel():void {
 		const name = this.hud.model.trim();
 		if (name) {
 			setPrefs({ model: name });
-			this.director.arc?.setModel(name);
 		}
-		this.hud.menuNotice = this.hud.model ? this.hud.model : 'No model';
+		this.hud.menuNotice = name || 'No model';
 	}
 
 	applyPlayerKind():void {
 		const kind = resolvePlayerKind(this.hud.playerKind);
-		this.hud.playerKind = kind;
 		setPrefs({ playerKind: kind });
-		const sprite = this.gameObject.world?.findByID('Player')?.getComponent(HumanSprite);
-		if (sprite) {
-			sprite.kind = kind;
-			sprite.height = characterHeight(kind);
-		}
-		if (!hasHumanAnims(kind)) {
-			void loadNPCAnims([kind]);
-		}
 		this.hud.menuNotice = characterLabel(kind);
 	}
 
-	applyMaxParallel():void {
-		const n = clampParallelThinkers(this.hud.maxParallel);
-		this.hud.maxParallel = n;
-		this.director.arc?.setMaxParallel(n);
-		setPrefs({ maxParallel: n });
-		this.hud.menuNotice = `${n} thinker${n === 1 ? '' : 's'}`;
+	setMaxParallel(n:number):void {
+		const next = setPrefs({ maxParallel: n }).maxParallel;
+		this.hud.menuNotice = `${next} thinker${next === 1 ? '' : 's'}`;
+	}
+
+	setContextLength(n:number):void {
+		this.hud.menuNotice = `${contextLabel(setPrefs({ contextLength: n }).contextLength)} context`;
 	}
 
 	resetInferStats():void {
@@ -334,73 +337,12 @@ export class Session extends Component {
 		this.hud.playerKinds = characterOptions();
 		const liveKind = this.gameObject.world?.findByID('Player')?.getComponent(HumanSprite)?.kind;
 		this.hud.playerKind = resolvePlayerKind(liveKind || this.hud.playerKind || prefs().playerKind);
-		this.hud.maxParallel = this.director.arc?.liveMaxParallel() ?? this.hud.maxParallel;
-		this.hud.batchThinks = this.director.arc?.liveBatchThinks() ?? this.hud.batchThinks;
-		if (this.director.arc) {
-			this.hud.thinkingBudget = this.director.arc.liveThinking();
-			this.hud.arcText = this.director.arc.liveArcText();
-		}
 		void this.refreshHudModels();
 	}
 
 	onMenuClosed():void {
 		this.getCanvas()?.focus();
 		this.gameObject.world?.input.requestLock();
-	}
-
-	persistFlags():void {
-		const world = this.gameObject.world;
-		if (world) {
-			world.playerInperceivable = this.hud.observer;
-			world.arcDirectorOn = this.hud.arcDirectorOn;
-		}
-		const flags = this.liveFlags();
-		const packed = `${flags.observer ? '1' : '0'}:${flags.ai ? '1' : '0'}`;
-		if (packed === this.lastFlagsPacked) {
-			return;
-		}
-		this.lastFlagsPacked = packed;
-		setPrefs(flags);
-		this.syncURLView();
-	}
-
-	applyDevFlags(flags:Pick<Prefs, 'observer' | 'ai'>):void {
-		this.hud.observer = flags.observer;
-		this.hud.arcDirectorOn = flags.ai;
-		const world = this.gameObject.world;
-		if (world) {
-			world.playerInperceivable = flags.observer;
-			world.arcDirectorOn = flags.ai;
-		}
-		this.lastFlagsPacked = `${flags.observer ? '1' : '0'}:${flags.ai ? '1' : '0'}`;
-		setPrefs(flags);
-	}
-
-	persistThinkers():void {
-		const patch:{
-			maxParallel?:number;
-			batchThinks:boolean;
-			thinkingBudget:boolean;
-			arcText:boolean;
-		} = {
-			batchThinks: this.hud.batchThinks,
-			thinkingBudget: this.hud.thinkingBudget,
-			arcText: this.hud.arcText,
-		};
-		if (Number.isFinite(this.hud.maxParallel)) {
-			const n = clampParallelThinkers(this.hud.maxParallel);
-			this.director.arc?.setMaxParallel(n);
-			patch.maxParallel = n;
-		}
-		this.director.arc?.setBatchThinks(this.hud.batchThinks);
-		this.director.arc?.setThinking(this.hud.thinkingBudget);
-		this.director.arc?.setArcText(this.hud.arcText);
-		const packed = `${patch.maxParallel ?? ''}:${patch.batchThinks ? 1 : 0}:${patch.thinkingBudget ? 1 : 0}:${patch.arcText ? 1 : 0}`;
-		if (packed === this.lastThinkersPacked) {
-			return;
-		}
-		this.lastThinkersPacked = packed;
-		setPrefs(patch);
 	}
 
 	applyShotFromURL():void {
@@ -481,12 +423,58 @@ export class Session extends Component {
 	syncURLView():void {
 		const pose = this.readPose();
 		if (pose) {
-			writeURLView(pose, this.liveFlags());
+			writeURLView(pose, prefs());
 		}
 	}
 
-	private liveFlags():Pick<Prefs, 'observer' | 'ai'> {
-		return { observer: this.hud.observer, ai: this.hud.arcDirectorOn };
+	/** No `prev` applies everything; otherwise only what changed reaches ArcDirector and the body. */
+	private applyPrefs(next:Prefs, prev?:Prefs):void {
+		const changed = (key:keyof Prefs):boolean => !prev || prev[key] !== next[key];
+		const hud = this.hud;
+		hud.observer = next.observer;
+		hud.arcDirectorOn = next.ai;
+		hud.detailMaps = next.detailMaps;
+		hud.shadows = next.shadows;
+		hud.musicVolume = next.music;
+		hud.sfxVolume = next.sfx;
+		hud.audioMuted = next.muted;
+		hud.maxParallel = next.maxParallel;
+		hud.contextLength = next.contextLength;
+		hud.batchThinks = next.batchThinks;
+		hud.thinkingBudget = next.thinkingBudget;
+		hud.arcText = next.arcText;
+		hud.prefsDetached = prefsDetached();
+		const arc = this.director.arc;
+		if (next.model && changed('model')) {
+			hud.model = next.model;
+			arc?.setModel(next.model);
+		}
+		if (changed('maxParallel')) {
+			arc?.setMaxParallel(next.maxParallel);
+		}
+		if (changed('contextLength')) {
+			arc?.setContextLength(next.contextLength);
+		}
+		if (changed('batchThinks')) {
+			arc?.setBatchThinks(next.batchThinks);
+		}
+		if (changed('thinkingBudget')) {
+			arc?.setThinking(next.thinkingBudget);
+		}
+		if (changed('arcText')) {
+			arc?.setArcText(next.arcText);
+		}
+		if (next.playerKind && changed('playerKind')) {
+			this.applyPlayerKindToBody(next.playerKind);
+		}
+		const world = this.gameObject.world;
+		if (world) {
+			world.playerInperceivable = next.observer;
+			world.arcDirectorOn = next.ai;
+		}
+		if (changed('observer') || changed('ai')) {
+			this.syncURLView();
+		}
 	}
 
 	private patchSayCatalog():void {
@@ -548,22 +536,22 @@ export class Session extends Component {
 		if (this.hud.sayOpen || this.hud.menuOpen || this.hud.briefOpen) {
 			return;
 		}
+		this.gameObject.world?.findByID('Player')?.getComponent(PlayerPilot)?.interrupt();
 		this.getCanvas()?.focus();
 		this.gameObject.world?.input.requestLock();
 		void this.gameObject.world?.audio.resume();
 	};
 
-	private persistAudio():void {
-		const packed = `${this.hud.musicVolume}:${this.hud.sfxVolume}:${this.hud.audioMuted ? 1 : 0}`;
-		if (packed === this.lastAudioPacked) {
-			return;
+	private applyPlayerKindToBody(kind:string):void {
+		const resolved = resolvePlayerKind(kind);
+		this.hud.playerKind = resolved;
+		const sprite = this.gameObject.world?.findByID('Player')?.getComponent(HumanSprite);
+		if (sprite) {
+			sprite.kind = resolved;
+			sprite.height = characterHeight(resolved);
 		}
-		this.lastAudioPacked = packed;
-		setPrefs({
-			music: this.hud.musicVolume,
-			sfx: this.hud.sfxVolume,
-			muted: this.hud.audioMuted,
-			menuMusicMuted: this.hud.musicVolume > 0 ? false : prefs().menuMusicMuted,
-		});
+		if (!hasHumanAnims(resolved)) {
+			void loadNPCAnims([resolved]);
+		}
 	}
 }

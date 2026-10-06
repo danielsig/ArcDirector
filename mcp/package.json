@@ -1,0 +1,32 @@
+{
+	"name": "@arc-director/mcp",
+	"private": true,
+	"version": "0.0.1",
+	"type": "module",
+	"exports": {
+		".": {
+			"types": "./dist/main.d.ts",
+			"import": "./dist/main.js"
+		}
+	},
+	"files": [
+		"dist"
+	],
+	"scripts": {
+		"prebuild": "tsc -p ../control/tsconfig.json && tsc -p ../arc-director/tsconfig.json",
+		"build": "tsc -p tsconfig.json",
+		"typecheck": "tsc -p tsconfig.json --noEmit",
+		"test": "tsc -p tsconfig.json && node --test --test-reporter spec dist/project.test.js",
+		"start": "node dist/main.js"
+	},
+	"dependencies": {
+		"@arc-director/control": "workspace:*",
+		"@modelcontextprotocol/sdk": "^1.25.2",
+		"arc-director": "workspace:*",
+		"zod": "^3.25.76"
+	},
+	"devDependencies": {
+		"@types/node": "^20.19.43",
+		"typescript": "^6.0.3"
+	}
+}

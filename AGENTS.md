@@ -106,12 +106,13 @@ The game is served at `http://localhost:5173/` (Vite default). There is no path 
 | `observer` | test | `1` = player is inperceivable by NPCs (observer). `0` = NPCs can see, hear, and walk to the player. Also `true`/`false`. |
 | `ai` | test | `1` = ArcDirector runs (NPCs think and move). `0` = paused (no inference, NPC motors frozen). Also `true`/`false`. |
 | `view` | agent | Full camera shot: `x,y,z,yaw`. All four numbers or the param is ignored (no partial pose). X/Z are meters on the ground; Y is height; yaw is radians. `0` yaw looks toward −Z (north); `1.5708` (π/2) toward −X (west); `3.1416` (π) toward +Z (south). Yaw also faces the player. Camera follows the player. |
+| `session` | test | Client id for the control MCP hub. The page installs `window.arcControl` always; it opens a WebSocket to the hub only when this is a non-empty value. A second live page with the same id is renamed (`alpha-2`, `alpha-3`, …) and the query is updated. Cursor: `.cursor/mcp.json`. Claude Code: `.mcp.json`. Both run `mcp/dist/main.js`, so build it first: `pnpm --filter @arc-director/mcp build`. |
 
 **Defaults** (when the param is omitted and nothing is stored): **`observer=1`**, **`ai=1`**. Menu **Testing** toggles write both to localStorage and the URL; they survive reloads. Query params override the stored values for the fields you set.
 
 Pose comes from the last saved pose for that scene. **`view` overrides that pose as a whole.** World and agents start fresh unless you press **Load** (Menu → Save): one save per scene in localStorage, a Kindling diff of the world plus `exportAgents`. Every chunk loads at boot so the fresh scene is the same each time; far chunks park their objects instead of dropping them.
 
-While a scene is running, the game `replaceState`s `observer` and `ai`. It never injects `view` for a normal play session. If `view` is already in the query (agent test), it is kept in sync so the bar stays a copyable shot. Returning to Scenes strips them.
+While a scene is running, the game `replaceState`s `observer` and `ai`. It never injects `view` or `session` for a normal play session. If `view` or `session` is already in the query, it is kept. Returning to Scenes strips `view` / `observer` / `ai` and leaves `session`.
 
 ### Examples
 

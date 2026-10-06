@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { onMounted, onUnmounted, ref, watch } from 'vue';
 import type { Audio } from '@arc-director/kindling';
-import { prefs, setPrefs } from '../prefs';
+import { prefs, setPrefs, watchPrefs } from '../prefs';
 
 const props = defineProps<{
 	audio:Audio | null;
@@ -17,6 +17,7 @@ const paused = ref(true);
 const title = ref('—');
 const dragging = ref(false);
 let raf = 0;
+let stopPrefs:(()=>void) | null = null;
 
 const TITLES:Record<string, string> = {
 	pretty_harm: 'Harmonics',
@@ -59,9 +60,6 @@ function snap():void {
 function setOpen(next:boolean):void {
 	open.value = next;
 	setPrefs({ musicPlayerOpen: next });
-	if (next && document.pointerLockElement) {
-		document.exitPointerLock();
-	}
 }
 
 function toggleOpen():void {
@@ -159,6 +157,9 @@ watch(open, (next) => {
 });
 
 onMounted(() => {
+	stopPrefs = watchPrefs((p) => {
+		open.value = p.musicPlayerOpen;
+	});
 	const tick = ():void => {
 		snap();
 		raf = requestAnimationFrame(tick);
@@ -168,6 +169,7 @@ onMounted(() => {
 });
 
 onUnmounted(() => {
+	stopPrefs?.();
 	cancelAnimationFrame(raf);
 	window.removeEventListener('keydown', onKey);
 });

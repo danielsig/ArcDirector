@@ -217,6 +217,18 @@ describe('kit views and issue(who)', () => {
 		assert.throws(() => parseArcText('hex("Healer")', kit), /unknown verb 'hex'/);
 	});
 
+	it('names an argument written after the closing parenthesis', () => {
+		const verbs = registerStockVerbs(new VerbRegistry());
+		assert.throws(() => parseArcText('say(text="Hi") to=BridgeKeeper', verbs), /to is outside the parentheses/);
+		assert.throws(() => parseArcText('say("Hi") to BridgeKeeper', verbs), /to is outside the parentheses/);
+	});
+
+	it('drops a stuttered key= the model repeated inside its own value', () => {
+		const verbs = registerStockVerbs(new VerbRegistry());
+		const arc = parseArcText('say(text=text="How much?", to=BridgeKeeper)', verbs);
+		assert.deepEqual(arc.head.args, { text: 'How much?', to: 'BridgeKeeper' });
+	});
+
 	it('hoists then off issue args when the model nests the join there', () => {
 		const kit = fightKit();
 		const arc = parseArc({

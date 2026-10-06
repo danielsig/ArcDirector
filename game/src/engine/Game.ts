@@ -10,7 +10,7 @@ import { loadNature } from '../render/nature';
 import { loadSpritesheet } from '../render/spritesheet';
 import { loadSwordAnims } from '../render/swordAnims';
 import type { HudModel } from '../ui/hudModel';
-import { flagsFromURL, prefs } from '../prefs';
+import { flagsFromURL, prefs, setPrefs } from '../prefs';
 import { decodeGlyphChunk } from '../world/decodeGlyphChunk';
 import { getDef } from '../items/defs';
 import { equipItem } from '../items/equip';
@@ -77,6 +77,7 @@ export class Game extends KindlingGame<World> {
 				merchant: npc.merchant,
 				marketNPC: npc.marketNPC,
 				companion: npc.companion,
+				hearOnly: npc.hearOnly,
 			});
 		}
 		spawnCamera(this.world);
@@ -90,31 +91,27 @@ export class Game extends KindlingGame<World> {
 			host.hooks.afterPickUp?.(host, actor, name);
 		};
 		const systems = new GameObject('Systems', 'Systems');
-		const view = systems.addComponent(new WorldView());
-		view.getRenderer = () => this.renderer;
-		const pick = systems.addComponent(new GroundPick());
-		pick.getRenderer = () => this.renderer;
-		const hudView = systems.addComponent(new Hud());
-		hudView.model = this.hud;
-		hudView.director = host;
-		hudView.getRenderer = () => this.renderer;
-		const stream = systems.addComponent(new WorldStream());
-		stream.chunks = decoded.map((d) => d.chunk);
-		const pulse = systems.addComponent(new DirectorPulse());
-		pulse.director = host;
-		this.session = systems.addComponent(new Session());
-		this.session.hud = this.hud;
-		this.session.director = host;
-		this.session.scene = this.scene;
-		this.session.stream = stream;
-		this.session.view = view;
-		this.session.hudView = hudView;
-		this.session.getCanvas = () => this.canvas;
-		this.session.getRunning = () => this.running;
+		const getRenderer = () => this.renderer;
+		const view = systems.addComponent(WorldView, { getRenderer });
+		systems.addComponent(GroundPick, { getRenderer });
+		const hudView = systems.addComponent(Hud, { model: this.hud, director: host, getRenderer });
+		const stream = systems.addComponent(WorldStream, { chunks: decoded.map((d) => d.chunk) });
+		systems.addComponent(DirectorPulse, { director: host });
+		this.session = systems.addComponent(Session, {
+			hud: this.hud,
+			director: host,
+			scene: this.scene,
+			stream,
+			view,
+			hudView,
+			getCanvas: () => this.canvas,
+			getRunning: () => this.running,
+		});
 		this.world.add(systems);
 		stream.loadAll();
 		this.session.fresh = captureWorld(this.world);
-		this.session.applyDevFlags(flagsFromURL(readURLFlags()));
+		setPrefs(flagsFromURL(readURLFlags()));
+		this.session.syncPrefs();
 		this.session.homePose = this.session.readPose() ?? this.session.homePose;
 		const save = readSave(this.scene.id);
 		this.hud.savedUTC = save?.savedUTC ?? '';
@@ -130,18 +127,12 @@ export class Game extends KindlingGame<World> {
 		this.hud.loading = false;
 		this.session.applyShotFromURL();
 		stream.stream();
-		this.world.setMessage(this.scene.message);
+		this.world.setMessage(this.scene.message, 10);
 		this.hud.menuOpen = false;
 		this.hud.minimap.follow = this.scene.minimapFollow !== false;
-		const stored = prefs();
-		this.hud.model = host.arc?.model || stored.model;
-		this.hud.maxParallel = host.arc?.liveMaxParallel() ?? stored.maxParallel;
-		this.hud.batchThinks = host.arc?.liveBatchThinks() ?? stored.batchThinks;
-		this.hud.thinkingBudget = host.arc ? host.arc.liveThinking() : stored.thinkingBudget;
-		this.hud.arcText = host.arc ? host.arc.liveArcText() : stored.arcText;
+		this.hud.model = host.arc?.model || prefs().model;
 		this.session.persistView();
 		this.session.syncURLView();
-		this.applyAudioPref();
 	}
 
 	protected override onStart():void {
@@ -197,16 +188,6 @@ export class Game extends KindlingGame<World> {
 		}
 		this.syncAudio();
 		this.world.input.endFrame();
-	}
-
-	private applyAudioPref():void {
-		const pref = prefs();
-		this.hud.musicVolume = pref.music;
-		this.hud.sfxVolume = pref.sfx;
-		this.hud.audioMuted = pref.muted;
-		this.world.audio.musicVolume = pref.music;
-		this.world.audio.sfxVolume = pref.sfx;
-		this.world.audio.muted = pref.muted;
 	}
 
 	private syncAudio():void {

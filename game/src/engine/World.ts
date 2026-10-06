@@ -20,6 +20,7 @@ export class World extends KindlingWorld {
 	time = 0;
 	hudMessage = '';
 	hudMessageTimestamp = 0;
+	hudMessageLife = 3.2;
 	playerInperceivable = false;
 	/** Body ids this player has damaged. A company that owns one treats the player as a rival. */
 	playerHits = new Set<string>();
@@ -72,9 +73,10 @@ export class World extends KindlingWorld {
 		}
 	}
 
-	setMessage(text:string):void {
+	setMessage(text:string, life = 3.2):void {
 		this.hudMessage = text;
 		this.hudMessageTimestamp = this.time;
+		this.hudMessageLife = life;
 	}
 
 	findNamed(name:string):GameObject | undefined {

@@ -31,6 +31,8 @@ export type NPCSpawnDef = {
 	merchant?:{ specialty:string; ask:number; floor:number };
 	marketNPC?:{ kind:MarketNPCKind; wants:string[]; leaveGate?:string };
 	companion?:boolean;
+	/** Speaker ids this NPC hears. Omit to hear everyone in earshot. */
+	hearOnly?:string[];
 };
 
 export type SceneLook = 'dungeon' | 'glen' | 'market';
@@ -100,8 +102,6 @@ export const RIVER_GLEN:SceneDef = {
 			localZ: 9,
 			pack: true,
 			packLoot: [{ defID: 'bridge_crank', name: 'BridgeCrank' }],
-			merchant: { specialty: 'FireMushroom', ask: 10, floor: 10 },
-			marketNPC: { kind: 'vendor', wants: ['FireMushroom'] },
 		},
 		{
 			id: 'Angler',
@@ -122,10 +122,11 @@ export const RIVER_GLEN:SceneDef = {
 			localZ: 11,
 			pack: true,
 			companion: true,
+			hearOnly: ['Player'],
 		},
 	],
 	ambient: 'A windy river glen.',
-	message: 'E pick up / unlock   F use   X swap hands   Enter talk   /give   Tab chat',
+	message: 'E: pick up / unlock,   F: use,   X: swap hands,   Enter: talk,   /give: give item,   Tab: chat',
 	brief: `The forager, the bridge keeper, and the angler each need a different end to the same errand. The assistant only does what you ask.
 
 The angler is on the other side of the river, so the forager must cross the bridge to reach him. Lowering it costs 10 gold. The forager is carrying 5, enough for the trout and not the bridge. A mushroom in the west woods is worth 10, and the keeper accepts anything of equal value, so the forager pays with one, crosses, and spends their 5 on the trout.
@@ -248,7 +249,7 @@ export const MARKETPLACE:SceneDef = {
 			marketNPC: { kind: 'guard', wants: [], leaveGate: 'WestGate' },
 		},
 		{
-			id: 'Angler',
+			id: 'Pike',
 			meshID: 'human_guard',
 			chunkID: 'market_0_0',
 			localX: 2,

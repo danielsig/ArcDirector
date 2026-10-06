@@ -2,7 +2,7 @@ import type { ArcResult } from '../arc/types.js';
 import type { STOCK_VERB_DEFS, VerbArgMap } from '../arc/stock-verbs.js';
 import type { Arc } from '../arc/types.js';
 import type { STOCK_CROWD_VERB_DEFS } from '../conductor/conductor-verbs.js';
-import type { Agent } from '../agent/agent.js';
+import type { Actor } from '../agent/actor.js';
 import type { NameTarget } from '../agent/names.js';
 import type { AgentIdentity, Goal, KitSource, WatchInput } from '../agent/types.js';
 import type { MemoryDraft } from '../memory/store.js';
@@ -10,9 +10,28 @@ import type { HostKernels } from '../expr/natives.js';
 import type { SampleCache } from '../expr/types.js';
 import type { Vec } from '../world/types.js';
 
-/** Argument to `ArcDirector.addAgent`. Scene files keep literals; they do not redeclare this. */
-export type AgentSpec<TAgentCtx = unknown> = {
+/** Argument to `ArcDirector.addActor`: a body the host drives with arcs. It never calls the model. */
+export type ActorSpec<TAgentCtx = unknown> = {
 	id:string;
+	/**
+	 * Fetched every tick, so the host can mutate it in place. Omit = director `withDefaultKit`, else no verbs.
+	 * `senses` / `tools` omitted on the kit = all registered ones.
+	 */
+	kit?:KitSource<TAgentCtx>;
+	laws?:{
+		name?:string;
+		who?:string;
+		watch:string;
+		arc:import('../arc/types.js').Arc | string;
+		pinned?:boolean;
+	}[];
+	maxLaws?:number;
+	/** Override director handler cooldown (game seconds). */
+	cooldown?:number;
+};
+
+/** Argument to `ArcDirector.addAgent`: a body with a mind. */
+export type AgentSpec<TAgentCtx = unknown> = ActorSpec<TAgentCtx> & {
 	identity:AgentIdentity;
 	goals?:Goal[];
 	memories?:MemoryDraft[];
@@ -28,24 +47,8 @@ export type AgentSpec<TAgentCtx = unknown> = {
 	skipMajor?:boolean;
 	/** Tie-break after watch `rankScore`. Higher goes first. Default 0. */
 	rank?:number;
-	/**
-	 * Object or `(ctx) => kit`, fetched every tick. Same object reference is kept so the host can mutate it.
-	 * Omit = director `withDefaultKit`, or no verbs if that was omitted too.
-	 * `senses` / `tools` omitted on the kit = all registered senses / tools.
-	 */
-	kit?:KitSource<TAgentCtx>;
 	/** Bulk spawn for `addCrowdConductor`. */
 	units?:{ id:string; tags?:string[] }[];
-	laws?:{
-		name?:string;
-		who?:string;
-		watch:string;
-		arc:import('../arc/types.js').Arc | string;
-		pinned?:boolean;
-	}[];
-	maxLaws?:number;
-	/** Override director handler cooldown (game seconds). */
-	cooldown?:number;
 	/** Host-set commander body. Must be a unit on this crowd. */
 	commander?:string;
 };
@@ -74,7 +77,8 @@ export type VerbCall<TAgentCtx = unknown, TArgs = Record<string, unknown>> = {
 	verb:string;
 	/** Checked against the verb's arg map before the handler runs. */
 	args:TArgs;
-	agent:Agent<TAgentCtx>;
+	/** Who runs the arc: an `Agent`, or a host-driven `Actor`. Its names are the ones in `args`. */
+	actor:Actor<TAgentCtx>;
 	ctx:TAgentCtx;
 	actorID:string;
 	units?:string[];
@@ -101,6 +105,8 @@ export type DirectorLog = {
 	name:string;
 	message:string;
 	image?:string;
+	/** A failure the host should surface (inference threw, model failed to load). Not an abort. */
+	error?:boolean;
 };
 
 /** What a naming policy knows about the agent doing the naming. `ctx` is undefined for a bodiless hive. */
@@ -124,6 +130,8 @@ export type InferClock = {
 	lastContextMs:number | null;
 	lastGenerateMs:number | null;
 	lastWallMs:number | null;
+	/** Generate milliseconds keyed by agent id. */
+	thinkMs:Record<string, number>;
 };
 
 export function emptyInferClock():InferClock {
@@ -136,6 +144,7 @@ export function emptyInferClock():InferClock {
 		lastContextMs: null,
 		lastGenerateMs: null,
 		lastWallMs: null,
+		thinkMs: {},
 	};
 }
 

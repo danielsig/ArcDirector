@@ -22,6 +22,8 @@ export type HudSpeech = {
 	x:number;
 	y:number;
 	visible:boolean;
+	/** World time the line was shown. 0 when this row has no bubble text. */
+	timestamp:number;
 };
 
 export type HudPickup = {
@@ -36,6 +38,8 @@ export type HudChatLine = {
 	text:string;
 	to?:string;
 	timestamp:number;
+	/** A verb between bodies, not a spoken line. */
+	act?:boolean;
 };
 
 export type HudAiLogEntry = {
@@ -44,6 +48,8 @@ export type HudAiLogEntry = {
 	message:string;
 	/** Stamped look map (data URL). Omitted for text-only rows. */
 	image?:string;
+	/** Inference or model-load failure. Raises the error toast. */
+	error?:boolean;
 };
 
 export type HudModelOption = {
@@ -58,6 +64,8 @@ export type HudHeartrate = {
 	/** Seconds since last tactical think. `null` if never. */
 	ago:number | null;
 	thinking:boolean;
+	/** Total generate time, milliseconds. */
+	thinkMs:number;
 };
 
 export type MenuPage = 'game' | 'display' | 'audio' | 'save' | 'testing';
@@ -105,6 +113,10 @@ export type HudModel = {
 	model:string;
 	/** ThinkQueue slots (HTTP in flight). Menu + localStorage. */
 	maxParallel:number;
+	/** LM Studio `context_length` when loading the chat model. Menu + localStorage. */
+	contextLength:number;
+	/** This page stopped writing prefs to storage (MCP `set_pref` with `persist: false`). Cleared by a reload. */
+	prefsDetached:boolean;
 	/** Hold new NPC thinks until the model is idle (or batchWait), then start a wave. Menu + localStorage. */
 	batchThinks:boolean;
 	/** CoT on. Menu + localStorage. */
@@ -188,6 +200,8 @@ export function emptyHud():HudModel {
 		arcDirectorOn: p.ai,
 		model: p.model,
 		maxParallel: p.maxParallel,
+		contextLength: p.contextLength,
+		prefsDetached: false,
 		batchThinks: p.batchThinks,
 		thinkingBudget: p.thinkingBudget,
 		arcText: p.arcText,

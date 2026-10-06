@@ -46,13 +46,18 @@ export function useOn(host:GameHost, actor:GameObject, itemName:string, target?:
 		return { ok: false, reason: `not carrying ${itemName}` };
 	}
 	const result = useItem(actor, item, target ?? null);
-	if (result.ok && result.reason === 'unlocked' && target?.getComponent(Door)) {
-		const name = target.getComponent(Named)?.id ?? target.id;
-		host.doorOpen.set(name, true);
+	const targetName = target ? target.getComponent(Named)?.id ?? target.id : undefined;
+	if (result.ok && result.reason === 'unlocked' && target?.getComponent(Door) && targetName) {
+		host.doorOpen.set(targetName, true);
+	}
+	if (result.ok) {
+		// Everyone learns what changed, as with a give or a pick-up: "BridgeKeeper used BridgeCrank on BridgeLever: lowered Bridge".
+		const label = pascalCase(item.name) || item.name;
 		host.arc?.pushEvent({
-			kind: 'DoorOpened',
-			text: `${name} opened`,
-			tags: ['door', name],
+			kind: 'Used',
+			text: targetName ? `{0} used ${label} on ${targetName}: ${result.reason}` : `{0} used ${label}: ${result.reason}`,
+			who: [bodyName(actor)],
+			tags: ['use', label, ...(targetName ? [targetName] : [])],
 			major: false,
 		});
 	}
@@ -106,6 +111,13 @@ export function takeItem(host:GameHost, actor:GameObject, name:string):Outcome {
 				? 'a bridge'
 				: 'not loot';
 		return { ok: false, reason: `${name} is ${kind}` };
+	}
+	// Someone has it: it is theirs to hand over, and saying where it is beats "no such item".
+	const holder = host.world.objects.find((go) => go !== actor && !!go.getComponent(HumanBody)
+		&& !!findCarried(go, (it) => itemMatchesName(it, name)));
+	if (holder) {
+		const who = bodyName(holder);
+		return { ok: false, reason: `${who} carries ${name}. You cannot take it; ${who} must give it to you` };
 	}
 	return { ok: false, reason: `no such item ${name}` };
 }

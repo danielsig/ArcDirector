@@ -1,6 +1,7 @@
 import { CharacterMotor } from '../actors/CharacterMotor';
 import { NPCInput } from '../actors/NPCInput';
 import { PlayerInput } from '../actors/PlayerInput';
+import { PlayerPilot } from '../actors/PlayerPilot';
 import { ChunkBound, Camera as RenderCamera, StreamingAnchor } from '@arc-director/kindling';
 import {
 	BoxCollider,
@@ -26,6 +27,7 @@ import {
 	MarketNPC,
 	MarketGate,
 	Companion,
+	HearOnly,
 	type MarketNPCKind,
 } from '../engine/components';
 import { MeshRenderer } from '../engine/MeshRenderer';
@@ -60,8 +62,7 @@ function wallOffset(chunk:Chunk, localX:number, localZ:number):{ x:number; z:num
 }
 
 function bindChunk(go:GameObject, chunkID:string):void {
-	const bound = go.addComponent(new ChunkBound());
-	bound.chunkID = chunkID;
+	go.addComponent(ChunkBound, { chunkID });
 }
 
 function spawnTorch(world:World, chunk:Chunk, ent:ChunkEntity):void {
@@ -73,24 +74,23 @@ function spawnTorch(world:World, chunk:Chunk, ent:ChunkEntity):void {
 	go.transform.position.y = (tile?.height ?? 0) * TILE_HEIGHT + 1.15;
 	go.transform.position.z = center.z + off.z;
 	go.transform.yaw = off.yaw;
-	go.addComponent(new MeshRenderer()).meshID = 'torch';
-	const torch = go.addComponent(new Torch());
-	torch.lit = true;
-	const light = go.addComponent(new Light());
-	light.color = 0xff9a4a;
-	light.intensity = torch.baseIntensity;
-	light.decay = torch.baseDecay * Torch.decayScale;
-	light.range = 11;
-	light.castShadow = true;
-	light.offsetY = 0.35;
-	light.offsetZ = 0.18;
-	light.intensityFlicker = 0.75;
-	light.intensityFlickerSpeed = 0.5;
-	light.positionalFlicker = 0.012;
-	light.positionalFlickerSpeed = 0.012;
+	go.addComponent(MeshRenderer, { meshID: 'torch' });
+	const torch = go.addComponent(Torch, { lit: true });
+	go.addComponent(Light, {
+		color: 0xff9a4a,
+		intensity: torch.baseIntensity,
+		decay: torch.baseDecay * Torch.decayScale,
+		range: 11,
+		castShadow: true,
+		offsetY: 0.35,
+		offsetZ: 0.18,
+		intensityFlicker: 0.75,
+		intensityFlickerSpeed: 0.5,
+		positionalFlicker: 0.012,
+		positionalFlickerSpeed: 0.012,
+	});
 	if (ent.name) {
-		const named = go.addComponent(new Named());
-		named.id = ent.name;
+		go.addComponent(Named, { id: ent.name });
 	}
 	bindChunk(go, chunk.id);
 	world.add(go);
@@ -104,22 +104,17 @@ function spawnChest(world:World, chunk:Chunk, ent:ChunkEntity):void {
 	go.transform.position.y = (tile?.height ?? 0) * TILE_HEIGHT;
 	go.transform.position.z = center.z;
 	go.transform.yaw = Math.PI;
-	go.addComponent(new MeshRenderer()).meshID = 'chest';
-	go.addComponent(new Chest());
-	const bag = go.addComponent(new Container());
-	bag.size = 8;
-	const lock = go.addComponent(new Lock());
-	lock.keyID = 'iron';
-	lock.locked = true;
+	go.addComponent(MeshRenderer, { meshID: 'chest' });
+	go.addComponent(Chest);
+	const bag = go.addComponent(Container, { size: 8 });
+	go.addComponent(Lock, { keyID: 'iron', locked: true });
 	const doorKey = instantiateDef(getDef('brass_key'));
 	doorKey.name = 'BrassKey';
 	doorKey.id = 'BrassKey';
 	bag.contents.push(doorKey);
-	const col = go.addComponent(new BoxCollider());
-	col.size = { x: 0.7, y: 0.5, z: 0.48 };
+	go.addComponent(BoxCollider, { size: { x: 0.7, y: 0.5, z: 0.48 } });
 	if (ent.name) {
-		const named = go.addComponent(new Named());
-		named.id = ent.name;
+		go.addComponent(Named, { id: ent.name });
 	}
 	bindChunk(go, chunk.id);
 	world.add(go);
@@ -133,33 +128,26 @@ function spawnDoor(world:World, chunk:Chunk, ent:ChunkEntity):void {
 	go.transform.position.x = center.x;
 	go.transform.position.y = (tile?.height ?? 0) * TILE_HEIGHT;
 	go.transform.position.z = center.z;
-	const door = go.addComponent(new Door());
-	door.axis = axis;
-	door.open = false;
+	const door = go.addComponent(Door, { axis, open: false });
 	if (axis === 'x') {
 		door.closedYaw = 0;
 		door.openYaw = -Math.PI / 2;
 		go.transform.yaw = 0;
-		const col = go.addComponent(new BoxCollider());
-		col.size = { x: 0.16, y: 2.12, z: 0.9 };
+		go.addComponent(BoxCollider, { size: { x: 0.16, y: 2.12, z: 0.9 } });
 	}
 	else {
 		door.closedYaw = 0;
 		door.openYaw = -Math.PI / 2;
 		go.transform.yaw = Math.PI / 2;
-		const col = go.addComponent(new BoxCollider());
-		col.size = { x: 0.9, y: 2.12, z: 0.16 };
+		go.addComponent(BoxCollider, { size: { x: 0.9, y: 2.12, z: 0.16 } });
 	}
-	const lock = go.addComponent(new Lock());
-	lock.keyID = ent.keyID ?? 'brass';
-	lock.locked = ent.locked ?? true;
-	go.addComponent(new MeshRenderer()).meshID = 'door';
+	go.addComponent(Lock, { keyID: ent.keyID ?? 'brass', locked: ent.locked ?? true });
+	go.addComponent(MeshRenderer, { meshID: 'door' });
 	if (ent.exit) {
-		go.addComponent(new MarketGate());
+		go.addComponent(MarketGate);
 	}
 	if (ent.name) {
-		const named = go.addComponent(new Named());
-		named.id = ent.name;
+		go.addComponent(Named, { id: ent.name });
 	}
 	bindChunk(go, chunk.id);
 	world.add(go);
@@ -236,8 +224,7 @@ export function spawnChunkEntities(world:World, chunk:Chunk):void {
 			const count = ent.def === 'health_potion' || ent.def === 'bomb' ? 2 : 1;
 			const go = spawnDefAt(world, ent.def, center.x, y, center.z, chunk.id, count, ent.name);
 			if (ent.def === 'bitterroot' || ent.def === 'fire_mushroom') {
-				const crop = go.addComponent(new Harvest());
-				crop.harvester = ent.def === 'fire_mushroom' ? 'Forager' : 'Herbalist';
+				go.addComponent(Harvest, { harvester: ent.def === 'fire_mushroom' ? 'Forager' : 'Herbalist' });
 			}
 		}
 	}
@@ -279,19 +266,10 @@ function spawnCottage(world:World, chunk:Chunk):void {
 	go.transform.position.x = chunk.worldOriginX() + (minX + maxX + 1) * 0.5 * CELL_SIZE;
 	go.transform.position.y = 0;
 	go.transform.position.z = chunk.worldOriginZ() + (minZ + maxZ + 1) * 0.5 * CELL_SIZE;
-	go.addComponent(new MeshRenderer()).meshID = 'cottage';
-	const col = go.addComponent(new BoxCollider());
-	col.size = { x: 0.4, y: 1, z: 0.4 };
-	col.solid = false;
-	col.isTrigger = true;
-	const named = go.addComponent(new Named());
-	named.id = 'Cottage';
-	const room = go.addComponent(new Interior());
-	const inner = innerWallAABB(chunk, minX, maxX, minZ, maxZ);
-	room.minX = inner.minX;
-	room.maxX = inner.maxX;
-	room.minZ = inner.minZ;
-	room.maxZ = inner.maxZ;
+	go.addComponent(MeshRenderer, { meshID: 'cottage' });
+	go.addComponent(BoxCollider, { size: { x: 0.4, y: 1, z: 0.4 }, solid: false, isTrigger: true });
+	go.addComponent(Named, { id: 'Cottage' });
+	go.addComponent(Interior, innerWallAABB(chunk, minX, maxX, minZ, maxZ));
 	bindChunk(go, chunk.id);
 	world.add(go);
 	const door = world.findNamed('CottageDoor');
@@ -327,9 +305,8 @@ function spawnProp(
 		go.transform.position.z += 0.48;
 		go.transform.position.y = 0;
 	}
-	go.addComponent(new MeshRenderer()).meshID = meshID;
-	const col = go.addComponent(new BoxCollider());
-	col.size = { x: radius, y: 1, z: radius };
+	go.addComponent(MeshRenderer, { meshID });
+	const col = go.addComponent(BoxCollider, { size: { x: radius, y: 1, z: radius } });
 	if (meshID === 'waterfall') {
 		col.solid = false;
 		col.isTrigger = true;
@@ -337,8 +314,7 @@ function spawnProp(
 	const namedID = ent.name
 		?? (meshID === 'tree_oak' || meshID === 'tree_pine' ? go.id : '');
 	if (namedID) {
-		const named = go.addComponent(new Named());
-		named.id = namedID;
+		go.addComponent(Named, { id: namedID });
 	}
 	bindChunk(go, chunk.id);
 	world.add(go);
@@ -351,14 +327,10 @@ function spawnLever(world:World, chunk:Chunk, ent:ChunkEntity):void {
 	go.transform.position.x = center.x;
 	go.transform.position.y = (tile?.height ?? 0) * TILE_HEIGHT;
 	go.transform.position.z = center.z;
-	go.addComponent(new MeshRenderer()).meshID = 'bridge_lever';
-	go.addComponent(new BridgeLever());
-	const col = go.addComponent(new BoxCollider());
-	col.size = { x: 0.3, y: 1, z: 0.3 };
-	col.solid = false;
-	col.isTrigger = true;
-	const named = go.addComponent(new Named());
-	named.id = ent.name ?? 'BridgeLever';
+	go.addComponent(MeshRenderer, { meshID: 'bridge_lever' });
+	go.addComponent(BridgeLever);
+	go.addComponent(BoxCollider, { size: { x: 0.3, y: 1, z: 0.3 }, solid: false, isTrigger: true });
+	go.addComponent(Named, { id: ent.name ?? 'BridgeLever' });
 	bindChunk(go, chunk.id);
 	world.add(go);
 }
@@ -370,14 +342,10 @@ function spawnHearth(world:World, chunk:Chunk, ent:ChunkEntity):void {
 	go.transform.position.x = center.x;
 	go.transform.position.y = (tile?.height ?? 0) * TILE_HEIGHT;
 	go.transform.position.z = center.z;
-	go.addComponent(new MeshRenderer()).meshID = 'hearth';
-	go.addComponent(new BrewHearth());
-	const col = go.addComponent(new BoxCollider());
-	col.size = { x: 0.7, y: 0.6, z: 0.7 };
-	col.solid = false;
-	col.isTrigger = true;
-	const named = go.addComponent(new Named());
-	named.id = ent.name ?? 'BrewHearth';
+	go.addComponent(MeshRenderer, { meshID: 'hearth' });
+	go.addComponent(BrewHearth);
+	go.addComponent(BoxCollider, { size: { x: 0.7, y: 0.6, z: 0.7 }, solid: false, isTrigger: true });
+	go.addComponent(Named, { id: ent.name ?? 'BrewHearth' });
 	bindChunk(go, chunk.id);
 	world.add(go);
 }
@@ -390,15 +358,10 @@ function spawnCot(world:World, chunk:Chunk, ent:ChunkEntity):void {
 	go.transform.position.x = center.x;
 	go.transform.position.y = (tile?.height ?? 0) * TILE_HEIGHT;
 	go.transform.position.z = center.z;
-	go.addComponent(new MeshRenderer()).meshID = 'cot';
-	const bed = go.addComponent(new Sickbed());
-	bed.caretaker = id === 'LinaCot' ? 'Captain' : 'Herbalist';
-	const col = go.addComponent(new BoxCollider());
-	col.size = { x: 1.2, y: 0.4, z: 0.7 };
-	col.solid = false;
-	col.isTrigger = true;
-	const named = go.addComponent(new Named());
-	named.id = id;
+	go.addComponent(MeshRenderer, { meshID: 'cot' });
+	go.addComponent(Sickbed, { caretaker: id === 'LinaCot' ? 'Captain' : 'Herbalist' });
+	go.addComponent(BoxCollider, { size: { x: 1.2, y: 0.4, z: 0.7 }, solid: false, isTrigger: true });
+	go.addComponent(Named, { id });
 	bindChunk(go, chunk.id);
 	world.add(go);
 }
@@ -426,19 +389,17 @@ function spawnBridge(world:World, chunk:Chunk, spans:ChunkEntity[]):void {
 	go.transform.position.y = 0.02;
 	go.transform.position.z = sz / spans.length;
 	go.transform.yaw = 0;
-	go.addComponent(new MeshRenderer()).meshID = 'bridge';
-	const span = go.addComponent(new Bridge());
-	span.open = false;
-	span.cells = cells;
-	const col = go.addComponent(new BoxCollider());
-	col.size = {
-		x: Math.max(1.4, maxX - minX + CELL_SIZE),
-		y: 1.2,
-		z: Math.max(1.4, maxZ - minZ + CELL_SIZE),
-	};
-	col.solid = true;
-	const named = go.addComponent(new Named());
-	named.id = spans[0].name ?? 'Bridge';
+	go.addComponent(MeshRenderer, { meshID: 'bridge' });
+	go.addComponent(Bridge, { open: false, cells });
+	go.addComponent(BoxCollider, {
+		size: {
+			x: Math.max(1.4, maxX - minX + CELL_SIZE),
+			y: 1.2,
+			z: Math.max(1.4, maxZ - minZ + CELL_SIZE),
+		},
+		solid: true,
+	});
+	go.addComponent(Named, { id: spans[0].name ?? 'Bridge' });
 	bindChunk(go, chunk.id);
 	world.add(go);
 }
@@ -466,12 +427,10 @@ function spawnStall(world:World, chunk:Chunk, ent:ChunkEntity):void {
 	go.transform.position.y = (tile?.height ?? 0) * TILE_HEIGHT;
 	go.transform.position.z = center.z;
 	go.transform.yaw = ent.localZ < 8 ? Math.PI : 0;
-	go.addComponent(new MeshRenderer()).meshID = stallMeshFor(ent.name);
-	const col = go.addComponent(new BoxCollider());
-	col.size = { x: 0.55, y: 0.9, z: 0.4 };
+	go.addComponent(MeshRenderer, { meshID: stallMeshFor(ent.name) });
+	go.addComponent(BoxCollider, { size: { x: 0.55, y: 0.9, z: 0.4 } });
 	if (ent.name) {
-		const named = go.addComponent(new Named());
-		named.id = ent.name;
+		go.addComponent(Named, { id: ent.name });
 	}
 	bindChunk(go, chunk.id);
 	world.add(go);
@@ -493,6 +452,7 @@ export type NPCSpawnOpts = {
 	merchant?:{ specialty:string; ask:number; floor:number };
 	marketNPC?:{ kind:MarketNPCKind; wants:string[]; leaveGate?:string };
 	companion?:boolean;
+	hearOnly?:string[];
 };
 
 export function spawnNPC(world:World, chunk:Chunk, opts:NPCSpawnOpts):GameObject {
@@ -509,27 +469,19 @@ export function spawnNPC(world:World, chunk:Chunk, opts:NPCSpawnOpts):GameObject
 	if (opts.meshID === 'human') {
 		throw new Error(`NPC ${opts.id} meshID 'human' is the player; use human_<kind>`);
 	}
-	go.addComponent(new MeshRenderer()).meshID = opts.meshID;
-	const sprite = go.addComponent(new HumanSprite());
-	sprite.kind = animIDFromMeshID(opts.meshID);
-	sprite.height = characterHeight(sprite.kind);
-	const flash = go.addComponent(new HurtFlash());
-	flash.enabled = false;
-	go.addComponent(new NPCInput());
-	const motor = go.addComponent(new CharacterMotor());
+	go.addComponent(MeshRenderer, { meshID: opts.meshID });
+	const kind = animIDFromMeshID(opts.meshID);
+	go.addComponent(HumanSprite, { kind, height: characterHeight(kind) });
+	go.addComponent(HurtFlash, { enabled: false });
+	go.addComponent(NPCInput);
+	const motor = go.addComponent(CharacterMotor);
 	if (opts.destLocalX !== undefined && opts.destLocalZ !== undefined) {
 		const dest = chunk.worldCellCenter(opts.destLocalX, opts.destLocalZ);
 		motor.destinationPoint = { x: dest.x, z: dest.z };
 	}
-	const rb = go.addComponent(new RigidBody());
-	rb.kinematic = true;
-	const col = go.addComponent(new BoxCollider());
-	col.size = { x: 0.45, y: 1.1, z: 0.45 };
-	col.pad = 0.36;
-	const body = go.addComponent(new HumanBody());
-	const pockets = go.addComponent(new Container());
-	pockets.size = 2;
-	body.pockets = pockets;
+	go.addComponent(RigidBody, { kinematic: true });
+	go.addComponent(BoxCollider, { size: { x: 0.45, y: 1.1, z: 0.45 }, pad: 0.36 });
+	const body = go.addComponent(HumanBody, { pockets: go.addComponent(Container, { size: 2 }) });
 	if (opts.pack || opts.packKey || opts.packLoot) {
 		const pack = instantiateDef(getDef('traveler_pack'));
 		if (opts.packKey) {
@@ -545,28 +497,29 @@ export function spawnNPC(world:World, chunk:Chunk, opts:NPCSpawnOpts):GameObject
 		}
 		body.slots.back = pack;
 	}
-	const vitals = go.addComponent(new Vitals());
 	const hp = opts.hp && opts.hp > 0 ? Math.round(opts.hp) : 5;
-	vitals.hp = hp;
-	vitals.maxHP = hp;
-	const named = go.addComponent(new Named());
-	named.id = opts.id;
-	const wallet = go.addComponent(new Wallet());
-	wallet.coins = opts.wallet ?? 0;
+	go.addComponent(Vitals, { hp, maxHP: hp });
+	go.addComponent(Named, { id: opts.id });
+	go.addComponent(Wallet, { coins: opts.wallet ?? 0 });
 	if (opts.merchant) {
-		const shop = go.addComponent(new Merchant());
-		shop.specialty = opts.merchant.specialty;
-		shop.ask = opts.merchant.ask;
-		shop.floor = opts.merchant.floor;
+		go.addComponent(Merchant, {
+			specialty: opts.merchant.specialty,
+			ask: opts.merchant.ask,
+			floor: opts.merchant.floor,
+		});
 	}
 	if (opts.marketNPC) {
-		const npc = go.addComponent(new MarketNPC());
-		npc.kind = opts.marketNPC.kind;
-		npc.wants = [...opts.marketNPC.wants];
-		npc.leaveGate = opts.marketNPC.leaveGate ?? '';
+		go.addComponent(MarketNPC, {
+			kind: opts.marketNPC.kind,
+			wants: [...opts.marketNPC.wants],
+			leaveGate: opts.marketNPC.leaveGate ?? '',
+		});
 	}
 	if (opts.companion) {
-		go.addComponent(new Companion());
+		go.addComponent(Companion);
+	}
+	if (opts.hearOnly) {
+		go.addComponent(HearOnly, { from: [...opts.hearOnly] });
 	}
 	world.add(go);
 	return go;
@@ -586,37 +539,23 @@ export function spawnPlayer(
 	go.transform.position.x = pos.x;
 	go.transform.position.y = (tile?.height ?? 0) * TILE_HEIGHT;
 	go.transform.position.z = pos.z;
-	go.addComponent(new MeshRenderer()).meshID = 'human';
-	const sprite = go.addComponent(new HumanSprite());
+	go.addComponent(MeshRenderer, { meshID: 'human' });
 	const kind = resolvePlayerKind(prefs().playerKind);
-	sprite.kind = kind;
-	sprite.height = characterHeight(kind);
-	const flash = go.addComponent(new HurtFlash());
-	flash.enabled = false;
-	go.addComponent(new PlayerInput());
-	go.addComponent(new CharacterMotor());
-	const rb = go.addComponent(new RigidBody());
-	rb.kinematic = true;
-	const col = go.addComponent(new BoxCollider());
-	col.size = { x: 0.45, y: 1.1, z: 0.45 };
-	col.pad = 0.36;
-	const body = go.addComponent(new HumanBody());
-	const pockets = go.addComponent(new Container());
-	pockets.size = 2;
-	body.pockets = pockets;
-	const vitals = go.addComponent(new Vitals());
-	vitals.hp = 20;
-	vitals.maxHP = 20;
-	go.addComponent(new StreamingAnchor());
-	const named = go.addComponent(new Named());
-	named.id = 'Player';
-	go.addComponent(new Wallet());
-	const light = go.addComponent(new Light());
-	light.enabled = false;
-	light.castShadow = true;
-	light.range = 9;
-	light.intensity = 32;
-	go.addComponent(new HeldTorchLight());
+	go.addComponent(HumanSprite, { kind, height: characterHeight(kind) });
+	go.addComponent(HurtFlash, { enabled: false });
+	go.addComponent(PlayerInput);
+	go.addComponent(PlayerPilot);
+	go.addComponent(NPCInput);
+	go.addComponent(CharacterMotor);
+	go.addComponent(RigidBody, { kinematic: true });
+	go.addComponent(BoxCollider, { size: { x: 0.45, y: 1.1, z: 0.45 }, pad: 0.36 });
+	go.addComponent(HumanBody, { pockets: go.addComponent(Container, { size: 2 }) });
+	go.addComponent(Vitals, { hp: 20, maxHP: 20 });
+	go.addComponent(StreamingAnchor);
+	go.addComponent(Named, { id: 'Player' });
+	go.addComponent(Wallet);
+	go.addComponent(Light, { enabled: false, castShadow: true, range: 9, intensity: 32 });
+	go.addComponent(HeldTorchLight);
 	world.add(go);
 }
 
@@ -626,13 +565,12 @@ export function spawnCamera(world:World):void {
 	}
 	const player = world.findByID('Player');
 	const go = new GameObject('MainCamera', 'Camera');
-	const cam = go.addComponent(new Camera());
-	cam.targetID = 'Player';
+	const cam = go.addComponent(Camera, { targetID: 'Player' });
 	if (player) {
 		cam.yaw = player.transform.yaw;
 		cam.orbitYaw = player.getComponent(PlayerInput)?.lookYaw ?? player.transform.yaw;
 	}
-	go.addComponent(new RenderCamera());
+	go.addComponent(RenderCamera);
 	world.add(go);
 	cam.lateUpdate(1);
 }

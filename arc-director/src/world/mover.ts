@@ -1,5 +1,5 @@
 import type { ArcResult } from '../arc/types.js';
-import { findRoute, type Route } from './route.js';
+import { blockedReason, findRoute, noWayTo, type Route } from './route.js';
 import type { HostWorld, Vec } from './types.js';
 import { distance } from './vec.js';
 
@@ -37,8 +37,6 @@ const CHECK_EVERY = 0.25;
 const REPLAN_EVERY = 2;
 const STUCK_AFTER = 1.5;
 const STUCK_TRIES = 3;
-/** Blocked ways named in a failed move, cheapest first. */
-const BLOCKERS_TOLD = 3;
 /** Closing 2% of the gap to the waypoint counts as progress. */
 const PROGRESS = 0.98;
 
@@ -202,10 +200,11 @@ export class Mover {
 		e.next = 0;
 		e.route = undefined;
 		if (!route) {
-			return { ok: false, verb: e.verb, reason: target !== undefined ? `no way to ${target}` : 'no way there' };
+			return { ok: false, verb: e.verb, reason: target !== undefined ? noWayTo(target, '') : 'no way there', unreachable: target };
 		}
 		if ('blockers' in route) {
-			return { ok: false, verb: e.verb, reason: route.blockers.slice(0, BLOCKERS_TOLD).map((b) => b.reason).join('; ') };
+			const why = blockedReason(route);
+			return { ok: false, verb: e.verb, reason: target !== undefined ? noWayTo(target, why) : why, unreachable: target };
 		}
 		e.route = route;
 		return undefined;

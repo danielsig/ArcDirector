@@ -8,6 +8,8 @@ import { DEFAULT_TRUE_SCORE } from '../expr/types.js';
  */
 export const VERB_THINK_SCORES:Readonly<Record<string, number>> = {
 	go_to: 0.8,
+	// Asked to learn something: the answer is only worth anything in the next think.
+	examine: 0.8,
 	use: 0.65,
 	give: 0.6,
 	buy: 0.6,

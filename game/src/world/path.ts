@@ -1,5 +1,5 @@
 import { pascalCase, type PathStep } from 'arc-director';
-import { Door, HumanBody, Lock, Named } from '../engine/components';
+import { Bridge, Door, HumanBody, Lock, Named } from '../engine/components';
 import type { GameObject } from '../engine/GameObject';
 import type { World } from '../engine/World';
 import { CELL_PROPS } from './Chunk';
@@ -14,6 +14,17 @@ const NEIGHBOURS = [[1, 0], [1, 1], [0, 1], [-1, 1], [-1, 0], [-1, -1], [0, -1],
 
 function closedDoorIn(world:World, tx:number, tz:number):GameObject | undefined {
 	return world.objectsInTile(tx, tz).find((go) => go.getComponent(Door)?.open === false);
+}
+
+/** A raised bridge spanning the cell at `x`, `z`: water now, a way across once lowered. */
+function raisedBridgeAt(world:World, x:number, z:number):GameObject | undefined {
+	let found:GameObject | undefined;
+	world.forEachComponent(Bridge, (span, go) => {
+		if (!span.open && span.cells.some((c) => Math.abs(c.x - x) < 0.55 && Math.abs(c.z - z) < 0.55)) {
+			found = go as GameObject;
+		}
+	});
+	return found;
 }
 
 function bodyIn(world:World, tx:number, tz:number, except?:GameObject):GameObject | undefined {
@@ -44,8 +55,8 @@ function doorReason(door:GameObject, body:GameObject):string {
 
 /**
  * The open neighbours of the cell holding a point, for one route search by `body`. Walls, water, and props
- * are not steps, and no diagonal squeezes past a blocked corner; a closed door is a blocked step that tells
- * `body` why; a cell another body stands on costs more, so routes go around people when they can.
+ * are not steps, and no diagonal squeezes past a blocked corner; a closed door or a raised bridge is a
+ * blocked step that tells `body` why; a cell another body stands on costs more, so routes go around people when they can.
  */
 export function cellSteps(world:World, body:GameObject):(point:number[])=>PathStep[] {
 	return (from) => {
@@ -59,6 +70,11 @@ export function cellSteps(world:World, body:GameObject):(point:number[])=>PathSt
 			}
 			if (door) {
 				return [{ point: [x, z], blocked: doorReason(door, body) }];
+			}
+			const bridge = raisedBridgeAt(world, x, z);
+			if (bridge) {
+				const name = bridge.getComponent(Named)?.id ?? bridge.id;
+				return [{ point: [x, z], blocked: `${name} is raised — it must be lowered first` }];
 			}
 			const crowded = bodyIn(world, tx + dx, tz + dz, body) ? OCCUPANT_COST : 1;
 			return open(dx, dz) ? [{ point: [x, z], cost: Math.hypot(dx, dz) * CELL_SIZE * crowded }] : [];

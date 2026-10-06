@@ -217,9 +217,16 @@ export default defineConfig(
 	},
 
 	{
-		files: ['arc-director/**/*.ts', 'eslint.config.ts'],
+		files: ['arc-director/**/*.ts', 'control/**/*.ts', 'mcp/**/*.ts', 'eslint.config.ts'],
 		languageOptions: {
 			globals: { ...globals.node },
+		},
+	},
+
+	{
+		files: ['control/src/client.ts'],
+		languageOptions: {
+			globals: { ...globals.browser },
 		},
 	},
 

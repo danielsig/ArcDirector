@@ -4,6 +4,9 @@ import {
 	crowdEncyclopedia,
 	encyclopediaPages,
 	grepEncyclopedia,
+	articlesNamedIn,
+	mentionedArticles,
+	receivedArticles,
 	type EncyclopediaEntry,
 } from './encyclopedia.js';
 
@@ -62,6 +65,48 @@ describe('grepEncyclopedia', () => {
 	it('says so when nothing matches', () => {
 		assert.match(grepEncyclopedia(PAGES, 'dungeon'), /No encyclopedia match for "dungeon"/);
 		assert.match(grepEncyclopedia(PAGES, 'dungeon'), /Leftover English is not a name/);
+	});
+});
+
+describe('receivedArticles', () => {
+	it('returns the text when a name or alias matches an id or tag', () => {
+		const pages:EncyclopediaEntry[] = [
+			{ name: 'FireMushroom', aliases: ['mushroom'], text: 'Worth 10 gold.' },
+			{ name: 'Tree', text: 'A tree.' },
+		];
+		assert.equal(receivedArticles(pages, [{ id: 'FireMushroom', tags: ['item'] }]), 'Worth 10 gold.');
+		assert.equal(receivedArticles(pages, [{ id: 'Stick', tags: ['item', 'mushroom'] }]), 'Worth 10 gold.');
+		assert.equal(receivedArticles(pages, [{ id: 'Stick', tags: ['item'] }]), '');
+		assert.equal(receivedArticles([], [{ id: 'FireMushroom', tags: [] }]), '');
+	});
+});
+
+describe('articlesNamedIn', () => {
+	it('brings the article of every name the text mentions, never an alias', () => {
+		const pages:EncyclopediaEntry[] = [
+			{ name: 'Bridge', aliases: ['raised'], text: 'BridgeKeeper lowers it.' },
+			{ name: 'BridgeLever', text: 'Works the bridge.' },
+			{ name: 'Angler', text: 'Sells fish.' },
+		];
+		assert.equal(
+			articlesNamedIn(pages, 'no way to Angler: Bridge is raised — it must be lowered first'),
+			'Bridge: BridgeKeeper lowers it.\nAngler: Sells fish.',
+		);
+		assert.equal(articlesNamedIn(pages, 'the bridge is raised'), '');
+	});
+});
+
+describe('mentionedArticles', () => {
+	it('matches names and alias phrases as whole words, most mentions first, up to the cap', () => {
+		const pages:EncyclopediaEntry[] = [
+			{ name: 'SilverTrout', aliases: ['fish', '5 gold'], text: 'Worth 5 gold.' },
+			{ name: 'FireMushroom', aliases: ['mushrooms', '10 gold'], text: 'Worth 10 gold.' },
+			{ name: 'Bridge', text: 'BridgeKeeper lowers it.' },
+		];
+		const said = 'BridgeKeeper says: "10 gold or items of equal value." You said: "I pick mushrooms and want fish."';
+		assert.deepEqual(mentionedArticles(pages, said, 2).map((e) => e.name), ['FireMushroom', 'SilverTrout']);
+		assert.deepEqual(mentionedArticles(pages, said, 0), []);
+		assert.deepEqual(mentionedArticles(pages, 'fishing for 110 gold', 3), []);
 	});
 });
 

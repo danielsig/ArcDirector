@@ -28,7 +28,7 @@ watch(
 		<div class="head">Chat <span class="hint">Tab to close</span></div>
 		<div ref="logEl" class="log">
 			<div v-if="hud.chat.length === 0" class="empty">No one has spoken yet.</div>
-			<div v-for="(line, i) in hud.chat" :key="i" class="line">
+			<div v-for="(line, i) in hud.chat" :key="i" class="line" :class="{ act: line.act }">
 				<div class="who">
 					{{ line.speaker }}<template v-if="line.to"> → {{ line.to }}</template>
 				</div>
@@ -105,5 +105,13 @@ watch(
 	line-height: 1.4;
 	white-space: pre-wrap;
 	text-shadow: 0 1px 0 #1a1208;
+}
+
+.act .who {
+	color: #8eb8a4;
+}
+
+.act .said {
+	color: #c5ddd2;
 }
 </style>

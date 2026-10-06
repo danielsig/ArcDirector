@@ -11,3 +11,4 @@ brainstorming
 **/_gen/
 game/public/characters/**/_refs/
 game/public/characters/**/_old_maps/
+mcp/*.log

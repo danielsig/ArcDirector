@@ -215,7 +215,7 @@ describe('AudioSource', () => {
 		const game = new Game();
 		const go = new GameObject('radio');
 		go.transform.setWorldPosition(4, 1, 2);
-		const src = go.addComponent(new AudioSource());
+		const src = go.addComponent(AudioSource);
 		game.world.add(go);
 		src.play(thump);
 		src.loop = sample;

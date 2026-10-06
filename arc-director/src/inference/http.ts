@@ -40,6 +40,8 @@ export type HttpLoadConfig = {
 	offloadKvCacheToGpu?:boolean;
 	evalBatchSize?:number;
 	parallel?:number;
+	/** LM Studio `context_length` (`n_ctx`). Reload the instance when this changes. */
+	contextLength?:number;
 };
 
 type LoadedInstance = {
@@ -62,6 +64,12 @@ export function loadConfigFits(got:Record<string, unknown>, want:HttpLoadConfig)
 	}
 	if (want.parallel !== undefined && typeof got['parallel'] === 'number' && got['parallel'] < want.parallel) {
 		return false;
+	}
+	if (want.contextLength !== undefined) {
+		const gotCtx = instanceContextLength(got);
+		if (gotCtx !== undefined && gotCtx !== want.contextLength) {
+			return false;
+		}
 	}
 	return true;
 }
@@ -1103,6 +1111,7 @@ export class HttpProvider implements InferenceProvider {
 			offloadKvCacheToGpu: config.load?.offloadKvCacheToGpu ?? true,
 			evalBatchSize: config.load?.evalBatchSize ?? 512,
 			parallel: config.load?.parallel,
+			contextLength: config.load?.contextLength,
 		};
 		this.applyPromptTemplateFn = config.applyPromptTemplate;
 		this.onRequest = config.onRequest;
@@ -1110,6 +1119,34 @@ export class HttpProvider implements InferenceProvider {
 
 	setThinking(enableThinking:boolean):void {
 		this.enableThinking = enableThinking;
+	}
+
+	setContextLength(n:number):void {
+		this.loadOpts.contextLength = n;
+	}
+
+	liveContextLength():number | undefined {
+		return this.loadOpts.contextLength;
+	}
+
+	/** Unload and load so a new `context_length` takes effect. */
+	async reload(model:string):Promise<void> {
+		if (!this.probed) {
+			await this.probe();
+		}
+		if (!this.loadEndpoint) {
+			return;
+		}
+		try {
+			await this.refreshInstances();
+		}
+		catch {
+			// keep remembered instances
+		}
+		for (const inst of this.instances.filter((row) => this.instanceMatches(row, model))) {
+			await this.unloadInstance(inst.id);
+		}
+		await this.loadModel(model);
 	}
 
 	/** Load one copy of `model` (and eject extras). Safe to call from setModel. */
@@ -1549,6 +1586,9 @@ export class HttpProvider implements InferenceProvider {
 		};
 		if (this.loadOpts.parallel !== undefined) {
 			body.parallel = this.loadOpts.parallel;
+		}
+		if (this.loadOpts.contextLength !== undefined) {
+			body.context_length = this.loadOpts.contextLength;
 		}
 		return body;
 	}

@@ -5,12 +5,13 @@
 	"type": "module",
 	"scripts": {
 		"dev": "vite",
-		"predev": "tsc -p ../arc-director/tsconfig.json && tsc -p ../kindling/tsconfig.json",
-		"prebuild": "tsc -p ../arc-director/tsconfig.json && tsc -p ../kindling/tsconfig.json",
-		"pretypecheck": "tsc -p ../arc-director/tsconfig.json && tsc -p ../kindling/tsconfig.json",
+		"predev": "tsc -p ../arc-director/tsconfig.json && tsc -p ../kindling/tsconfig.json && tsc -p ../control/tsconfig.json",
+		"prebuild": "tsc -p ../arc-director/tsconfig.json && tsc -p ../kindling/tsconfig.json && tsc -p ../control/tsconfig.json",
+		"pretypecheck": "tsc -p ../arc-director/tsconfig.json && tsc -p ../kindling/tsconfig.json && tsc -p ../control/tsconfig.json",
 		"build": "vue-tsc --noEmit && vite build",
 		"preview": "vite preview",
 		"typecheck": "vue-tsc --noEmit",
+		"test": "node --experimental-strip-types --test src/prefs.test.ts",
 		"normals": "node scripts/depth_to_normal.mjs",
 		"art-cache": "node scripts/artCachePack.mjs",
 		"pack-sheets": "node scripts/pack_character_sheets.mjs",
@@ -18,6 +19,7 @@
 	},
 	"dependencies": {
 		"@arc-director/kindling": "workspace:*",
+		"@arc-director/control": "workspace:*",
 		"arc-director": "workspace:*",
 		"three": "^0.185.1",
 		"vue": "^3.5.41"

@@ -4,20 +4,25 @@ import {
 	CrowdConductor,
 	TalkNet,
 	isCrowdConductor,
+	parseArc,
+	LM_STUDIO_LOAD,
+	type ArcResult,
 	type Kit,
 	type KernelSource,
 	type MapSense,
 } from 'arc-director';
 import { NPCInput } from '../actors/NPCInput';
+import { PlayerPilot } from '../actors/PlayerPilot';
 import {
 	Celebrating,
 	Named,
 	Companion,
+	HearOnly,
 } from '../engine/components';
 import type { GameObject } from '../engine/GameObject';
 import type { World } from '../engine/World';
 import type { HudAiLogEntry, HudChatLine } from '../ui/hudModel';
-import { prefs, preferredChatModel, setPrefs } from '../prefs';
+import { prefs, setPrefs } from '../prefs';
 import { publishAiLog, resetAiLogSink, pushLog, logLook } from './aiLogSink';
 import { talkFace, canHearClearly, SPEECH_LIFE } from './talkAttend';
 import { YOU_SYMBOL } from './mapMarks';
@@ -35,6 +40,7 @@ import {
 	talkOthers,
 	talkNames,
 	onSpoke,
+	noteAct,
 } from './playerTalk';
 
 export type { AgentCtx, SceneHooks };
@@ -81,6 +87,7 @@ export class GameHost {
 			others: (speakerID) => this.talkOthersOf(speakerID),
 			canSee: (a, b) => this.crowdCanSee(a, b),
 			clearHear: (a, b) => this.crowdClearHear(a, b),
+			hears: (speakerID, listenerID) => this.mayHear(speakerID, listenerID),
 			names: (id) => talkNames(this, id),
 			face: (who, toward) => talkFace(world, who, toward),
 		}, (utterance) => onSpoke(this, utterance), { approach: false, rehear: SPEECH_LIFE });
@@ -119,15 +126,15 @@ export class GameHost {
 			})
 			.withLMStudioInference({
 				baseURL: '/inference/v1',
-				model: preferredChatModel(),
+				model: prefs().model,
 				enableThinking: prefs().thinkingBudget,
+				load: { ...LM_STUDIO_LOAD, contextLength: prefs().contextLength },
 			})
 			.withArcText(prefs().arcText)
 			.addStockVerbs()
 			.addStockCrowdVerbs()
 			.withWorld(gameWorld(this))
 			.withVerbGate(verbGate(this))
-			.withToolRounds(0)
 			.withRepair({ retries: ARC_RETRY_CAP })
 			.withStalled((result) => !result.ok || !!result.interrupted || STALL_VERBS.has(result.verb ?? ''))
 			.withSight({ look: (ctx) => lookWorld(ctx.actor, this.ambient, this), unitName: 'm' })
@@ -143,7 +150,10 @@ export class GameHost {
 			.withMap(this.mapSense)
 			.withEncyclopedia((ctx) => WORLD_ENCYCLOPEDIAS[ctx.scene] ?? [])
 			.onAbortArc(this.abortArc)
-			.onLog((entry) => pushLog(this, entry.name, entry.message, entry.image));
+			.onLog((entry) => pushLog(this, entry.name, entry.message, entry))
+			.onStep((call, result) => noteAct(this, call, result))
+			// The player's body, for `enactPlayer`. No mind: it never calls the model.
+			.addActor({ id: 'Player' });
 	}
 
 	bind(director:ArcDirector<AgentCtx>):void {
@@ -201,7 +211,7 @@ export class GameHost {
 		finally {
 			this.starting = false;
 		}
-		const pref = preferredChatModel();
+		const pref = prefs().model;
 		if (pref !== this.arc.model) {
 			this.arc.setModel(pref);
 		}
@@ -257,6 +267,23 @@ export class GameHost {
 			return;
 		}
 		this.arc.tick(dt, this.world.time);
+	}
+
+	/** Run one arc on the player body. Mind verbs are rejected; a canvas click aborts it. */
+	async enactPlayer(text:string):Promise<ArcResult> {
+		const actor = this.arc?.ready ? this.arc.actor('Player') : undefined;
+		const pilot = this.world.findByID('Player')?.getComponent(PlayerPilot);
+		if (!actor || !pilot) {
+			throw new Error('ArcDirector is not running');
+		}
+		const arc = parseArc(text, actor.activeVerbs());
+		const release = pilot.claim(() => actor.replaceProgram());
+		try {
+			return await actor.enact(arc);
+		}
+		finally {
+			release();
+		}
 	}
 
 	agentByID(id:string):Agent<AgentCtx> | undefined {
@@ -391,6 +418,15 @@ export class GameHost {
 			}
 		}
 		return false;
+	}
+
+	private mayHear(speakerID:string, listenerID:string):boolean {
+		const body = this.world.findByID(listenerID) ?? findBody(this.world, listenerID);
+		const only = body?.getComponent(HearOnly);
+		if (!only) {
+			return true;
+		}
+		return only.from.includes(speakerID);
 	}
 
 	private crowdClearHear(a:string, b:string):boolean {

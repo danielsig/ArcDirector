@@ -3,7 +3,7 @@ import { Sickbed, Celebrating } from '../../engine/components';
 import { findCarried, itemMatchesName } from '../../items/inventory';
 import type { GameHost } from '../adapter';
 import { addStatusVerbs, BUILDING_VERB_INSTRUCTIONS, GAME_VERBS } from '../verbs';
-import type { AgentCtx } from '../types';
+import { withReceived, type AgentCtx } from '../types';
 
 const HERBALIST:AgentSpec = {
 	id: 'Fern',
@@ -123,10 +123,7 @@ function checkBargain(host:GameHost):void {
 	host.bargainDone = true;
 	host.world.setMessage('The vault holds — Noll and Lina tend, the coin is paid');
 	for (const go of [herbalist, alchemist, captain]) {
-		let hop = go.getComponent(Celebrating);
-		if (!hop) {
-			hop = go.addComponent(new Celebrating());
-		}
+		const hop = go.getOrAddComponent(Celebrating);
 		hop.until = host.world.time + 48;
 		hop.enabled = true;
 	}
@@ -138,7 +135,7 @@ export function createDirector(host:GameHost):ArcDirector<AgentCtx> {
 		.withDefaultKit(host.kit = { verbs: [...GAME_VERBS, 'set_status', 'rest'] })
 		.withVerbInstructions(BUILDING_VERB_INSTRUCTIONS)
 		.withNames({ seen: (observer, target) => host.agentByID(target.id)?.identity.role ?? target.id })
-		.addAgent(HERBALIST)
-		.addAgent(ALCHEMIST)
-		.addAgent(CAPTAIN);
+		.addAgent(withReceived(HERBALIST))
+		.addAgent(withReceived(ALCHEMIST))
+		.addAgent(withReceived(CAPTAIN));
 }

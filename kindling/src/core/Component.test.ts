@@ -60,7 +60,7 @@ describe('component loop', () => {
 	it('runs awake, onEnable, start, then update', () => {
 		const game = new Game();
 		const go = new GameObject('probe');
-		go.addComponent(new Probe());
+		go.addComponent(Probe);
 		game.world.add(go);
 		assert.deepEqual(Probe.log, ['awake', 'onEnable']);
 		game.tick(0.01);
@@ -70,7 +70,7 @@ describe('component loop', () => {
 	it('runs fixedUpdate before start on a full fixed step', () => {
 		const game = new Game();
 		const go = new GameObject('probe');
-		go.addComponent(new Probe());
+		go.addComponent(Probe);
 		game.world.add(go);
 		game.tick(Time.fixedDeltaTime);
 		assert.deepEqual(Probe.log, ['awake', 'onEnable', 'fixed', 'start', 'update']);
@@ -80,8 +80,8 @@ describe('component loop', () => {
 		const game = new Game();
 		const a = new GameObject('a');
 		const b = new GameObject('b');
-		a.addComponent(new Batch());
-		b.addComponent(new Batch());
+		a.addComponent(Batch);
+		b.addComponent(Batch);
 		game.world.add(a);
 		game.world.add(b);
 		game.tick(0.01);
@@ -91,7 +91,7 @@ describe('component loop', () => {
 	it('skips update when enabled is false and fires onDisable / onEnable', () => {
 		const game = new Game();
 		const go = new GameObject('probe');
-		const probe = go.addComponent(new Probe());
+		const probe = go.addComponent(Probe);
 		game.world.add(go);
 		probe.enabled = false;
 		game.tick(0.01);
@@ -109,7 +109,7 @@ describe('component loop', () => {
 		const game = new Game();
 		const parent = new GameObject('parent');
 		const child = new GameObject('child');
-		parent.addComponent(new Probe());
+		parent.addComponent(Probe);
 		child.setParent(parent);
 		game.world.add(parent);
 		assert.equal(game.world.objects.length, 2);
@@ -126,7 +126,7 @@ describe('component loop', () => {
 		const game = new Game();
 		const parent = new GameObject('parent');
 		const child = new GameObject('child');
-		parent.addComponent(new Probe());
+		parent.addComponent(Probe);
 		child.setParent(parent);
 		game.world.add(parent);
 		game.world.remove(parent);
@@ -150,7 +150,7 @@ describe('component loop', () => {
 		}
 		const game = new Game();
 		const go = new GameObject('late');
-		const late = go.addComponent(new Late());
+		const late = go.addComponent(Late);
 		game.world.add(go);
 		game.tick(0.01);
 		assert.deepEqual(late.log, ['update', 'late']);
@@ -172,12 +172,73 @@ describe('component loop', () => {
 		}
 		const game = new Game();
 		const a = new GameObject('a');
-		a.addComponent(new High());
+		a.addComponent(High);
 		const b = new GameObject('b');
-		b.addComponent(new Low());
+		b.addComponent(Low);
 		game.world.add(a);
 		game.world.add(b);
 		game.tick(0.01);
 		assert.deepEqual(log, ['low', 'high']);
+	});
+
+	it('sets init fields before awake', () => {
+		class Seen extends Component {
+			label = '';
+			atAwake = '';
+			override awake():void {
+				this.atAwake = this.label;
+			}
+		}
+		const game = new Game();
+		const go = new GameObject('seen');
+		game.world.add(go);
+		const seen = go.addComponent(Seen, { label: 'set' });
+		assert.equal(seen.atAwake, 'set');
+		const off = go.addComponent(Probe, { enabled: false });
+		assert.equal(off.enabled, false);
+		assert.deepEqual(Probe.log, ['awake']);
+	});
+
+	it('removeComponent drops one instance, firing onDisable then onDestroy', () => {
+		const game = new Game();
+		const go = new GameObject('probe');
+		const a = go.addComponent(Probe);
+		const b = go.addComponent(Probe);
+		game.world.add(go);
+		Probe.log = [];
+		go.removeComponent(a);
+		assert.deepEqual(Probe.log, ['onDisable', 'onDestroy']);
+		assert.equal(go.getComponent(Probe), b);
+	});
+
+	it('removeComponent by class drops every match but never Transform', () => {
+		const game = new Game();
+		const go = new GameObject('probe');
+		go.addComponent(Probe);
+		go.addComponent(Probe);
+		go.addComponent(Batch);
+		game.world.add(go);
+		go.removeComponent(Probe);
+		assert.equal(go.getComponent(Probe), undefined);
+		assert.ok(go.getComponent(Batch));
+		go.removeComponent(Component);
+		assert.deepEqual(go.components(), [go.transform]);
+		assert.throws(() => go.removeComponent(go.transform));
+	});
+
+	it('skips update on a component removed earlier in the same frame', () => {
+		class Remover extends Component {
+			static override order = -1;
+			override update(dt:number):void {
+				this.gameObject.removeComponent(Probe);
+			}
+		}
+		const game = new Game();
+		const go = new GameObject('probe');
+		go.addComponent(Remover);
+		go.addComponent(Probe);
+		game.world.add(go);
+		game.tick(0.01);
+		assert.ok(!Probe.log.includes('update'));
 	});
 });

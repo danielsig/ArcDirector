@@ -105,7 +105,7 @@ export class Hud extends Component {
 		if (!world || !renderer) {
 			return;
 		}
-		patchHud(world, this.model, renderer, statusLabels(this.director));
+		patchHud(world, this.model, renderer, statusLabels(this.director), this.director.scene === 'ruins');
 		patchInfer(this.director, this.model);
 	}
 }

@@ -193,6 +193,26 @@ describe('evaluate', () => {
 		assert.equal(around.value.kind, 'list');
 	});
 
+	it('nearby drops anyone out of the anchor\'s line of sight', () => {
+		const hidden = world({ canSee: (_a, b) => b.id !== 'A' });
+		const near = val('others.nearby()', hidden);
+		assert.equal(near.value.kind, 'list');
+		if (near.value.kind === 'list') {
+			const ids = near.value.value.filter((x) => x.kind === 'entity').map((x) => x.value.id);
+			assert.ok(ids.includes('Player'));
+			assert.ok(!ids.includes('A'));
+		}
+		assert.equal(bool('isNear(me, A)', hidden), true);
+		const blind = world();
+		delete (blind as { canSee?:HostKernels['canSee'] }).canSee;
+		const open = val('others.nearby()', blind);
+		assert.equal(open.value.kind, 'list');
+		if (open.value.kind === 'list') {
+			const ids = open.value.value.filter((x) => x.kind === 'entity').map((x) => x.value.id);
+			assert.ok(ids.includes('A'));
+		}
+	});
+
 	it('isNear / nearby unbound without nearRadius even with explicit 16', () => {
 		const host = world({ nearRadius: undefined });
 		delete (host as { nearRadius?:number }).nearRadius;

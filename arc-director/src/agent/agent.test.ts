@@ -318,6 +318,70 @@ describe('Agent', () => {
 		assert.equal(arc?.head.args.target, 'EastGate');
 	});
 
+	it('warns when the same output comes back twice in a row, and again after that', async () => {
+		const same = 'go_to(EastGate)';
+		const warnings:string[] = [];
+		const provider = new FakeProvider((req) => {
+			const last = String(req.messages[req.messages.length - 1]?.content ?? '');
+			if (last.includes('Same output again')) {
+				warnings.push(last);
+			}
+			if (last.includes('3 times in a row')) {
+				return { content: 'go_to(Well)', toolCalls: [] };
+			}
+			return { content: same, toolCalls: [] };
+		});
+		const agent = new Agent<Ctx>({
+			id: 'Guard',
+			identity: { role: 'guard' },
+			goals: [{ text: 'Go to EastGate' }],
+			provider,
+			verbs: registerStockVerbs(new VerbRegistry()),
+			...perception(),
+			context: () => ({ paragraph: paragraph() }),
+			model: 'fake',
+			heartbeat: 0,
+			toolRoundCap: 0,
+			arcRetryCap: 0,
+			arcText: true,
+		});
+		const first = await agent.tick(1);
+		assert.equal(first?.head.args.target, 'EastGate');
+		const insisted = await agent.tick(2);
+		assert.equal(insisted?.head.args.target, 'EastGate');
+		const third = await agent.tick(3);
+		assert.equal(third?.head.args.target, 'Well');
+		assert.match(warnings[0] ?? '', /twice in a row/);
+		assert.match(warnings[1] ?? '', /3 times in a row/);
+	});
+
+	it('does not warn about a repeat when something new came in since the last think', async () => {
+		let warned = false;
+		const agent = new Agent<Ctx>({
+			id: 'Guard',
+			identity: { role: 'guard' },
+			goals: [{ text: 'Go to EastGate' }],
+			provider: new FakeProvider((req) => {
+				const last = String(req.messages[req.messages.length - 1]?.content ?? '');
+				warned ||= last.includes('Same output again');
+				return { content: 'go_to(EastGate)', toolCalls: [] };
+			}),
+			verbs: registerStockVerbs(new VerbRegistry()),
+			...perception(),
+			context: () => ({ paragraph: paragraph() }),
+			model: 'fake',
+			heartbeat: 0,
+			toolRoundCap: 0,
+			arcRetryCap: 0,
+			arcText: true,
+		});
+		await agent.tick(1);
+		agent.pushEvent({ kind: 'HeardSpeech', text: 'Mira: the gate is open' });
+		const again = await agent.tick(2);
+		assert.equal(again?.head.args.target, 'EastGate');
+		assert.equal(warned, false);
+	});
+
 	it('does not retry a bad arc when arcRetryCap is 0', async () => {
 		let calls = 0;
 		const agent = new Agent<Ctx>({
@@ -370,6 +434,172 @@ describe('Agent', () => {
 		});
 		const arc = await agent.tick(1);
 		assert.equal(sawToolError, true);
+		assert.equal(arc?.head.verb, 'go_to');
+	});
+
+	it('refuses the same lookup again in a later think', async () => {
+		const results:string[] = [];
+		const provider = new FakeProvider((req) => {
+			const tool = req.messages.find((m) => m.role === 'tool');
+			if (!tool) {
+				return { content: null, toolCalls: [{ id: `c${results.length}`, name: 'recall', arguments: '{"query":"SilverTrout"}' }] };
+			}
+			results.push(String(tool.content));
+			return { content: `remember(content=Note ${results.length})`, toolCalls: [] };
+		});
+		const agent = new Agent<Ctx>({
+			id: 'Forager',
+			identity: { role: 'forager' },
+			provider,
+			verbs: registerStockVerbs(new VerbRegistry()),
+			...perception(),
+			context: () => ({ paragraph: paragraph() }),
+			model: 'fake',
+			heartbeat: 0,
+			arcText: true,
+			toolRoundCap: 2,
+			arcRetryCap: 0,
+			strategicInterval: 0,
+		});
+		await agent.tick(10);
+		await agent.tick(20);
+		assert.equal(results[0].includes('Duplicate call'), false);
+		assert.match(results[1] ?? '', /Duplicate call/);
+	});
+
+	it('keeps an event that arrives while the model answers for the next think', async () => {
+		const users:string[] = [];
+		const provider = new FakeProvider((req) => {
+			users.push(String(req.messages[1]?.content));
+			if (users.length === 1) {
+				agent.pushEvent({ kind: 'Given', text: '{0} gave FireMushroom to {1}', who: ['Forager', 'BridgeKeeper'], tags: ['give'] });
+			}
+			return { content: `remember(content=Note ${users.length})`, toolCalls: [] };
+		});
+		const agent = new Agent<Ctx>({
+			id: 'BridgeKeeper',
+			identity: { role: 'keeper' },
+			provider,
+			verbs: registerStockVerbs(new VerbRegistry()),
+			...perception(),
+			context: () => ({ paragraph: paragraph() }),
+			model: 'fake',
+			heartbeat: 0,
+			arcText: true,
+			toolRoundCap: 0,
+			arcRetryCap: 0,
+			strategicInterval: 0,
+		});
+		await agent.tick(10);
+		await agent.tick(20);
+		assert.equal(users[0].includes('gave FireMushroom'), false);
+		assert.match(users[1] ?? '', /Forager gave FireMushroom to you/);
+	});
+
+	it('shows the article for what was heard, once, under short-term memory', async () => {
+		const users:string[] = [];
+		const provider = new FakeProvider((req) => {
+			users.push(String(req.messages[1]?.content));
+			return { content: `remember(content=Note ${users.length})`, toolCalls: [] };
+		});
+		const agent = new Agent<Ctx>({
+			id: 'Forager',
+			identity: { role: 'forager' },
+			goals: [{ text: 'Buy SilverTrout.' }],
+			provider,
+			verbs: registerStockVerbs(new VerbRegistry()),
+			...perception(),
+			context: () => ({ paragraph: paragraph() }),
+			model: 'fake',
+			heartbeat: 0,
+			arcText: true,
+			toolRoundCap: 0,
+			arcRetryCap: 0,
+			strategicInterval: 0,
+			encyclopedia: [{ name: 'FireMushroom', aliases: ['10 gold'], text: 'Worth 10 gold.' }],
+		});
+		agent.pushEvent({ kind: 'HeardSpeech', remember: true, text: 'BridgeKeeper says: "10 gold or items of equal value."', tags: ['speech'] });
+		await agent.tick(10);
+		await agent.tick(20);
+		assert.match(users[0] ?? '', /Encyclopedia on what was said:\n- FireMushroom: Worth 10 gold\./);
+		assert.equal((users[1] ?? '').includes('Encyclopedia on what was said'), false);
+	});
+
+	it('makes the think after three talk-only arcs look something up first', async () => {
+		const firstTurns:{ choice?:string; user:string; tools:string[] }[] = [];
+		let n = 0;
+		const provider = new FakeProvider((req) => {
+			if (req.messages.length === 2) {
+				firstTurns.push({ choice: req.toolChoice, user: String(req.messages[1]?.content), tools: (req.tools ?? []).map((t) => t.name) });
+			}
+			n += 1;
+			return { content: `remember(content=Note ${n})`, toolCalls: [] };
+		});
+		const agent = new Agent<Ctx>({
+			id: 'Forager',
+			identity: { role: 'forager' },
+			goals: [{ text: 'Buy SilverTrout.' }],
+			provider,
+			verbs: registerStockVerbs(new VerbRegistry()),
+			...perception(),
+			context: () => ({ paragraph: paragraph() }),
+			model: 'fake',
+			heartbeat: 0,
+			arcText: true,
+			toolRoundCap: 2,
+			arcRetryCap: 0,
+			strategicInterval: 0,
+		});
+		for (let t = 1; t <= 4; t++) {
+			await agent.tick(t * 10);
+		}
+		assert.deepEqual(firstTurns.map((turn) => turn.choice), ['auto', 'auto', 'auto', 'required']);
+		assert.match(firstTurns[3].user, /only talked or waited for 3 thinks\. Look up what you lack/);
+		assert.equal(firstTurns[2].user.includes('Look up what you lack'), false);
+		assert.ok(firstTurns[2].tools.includes('observe'));
+		assert.deepEqual(firstTurns[3].tools, ['recall']);
+	});
+
+	it('refuses a repeated tool call in one think instead of rerunning it', async () => {
+		let calls = 0;
+		let runs = 0;
+		const provider = new FakeProvider((req) => {
+			calls += 1;
+			if (calls <= 2) {
+				return {
+					content: null,
+					toolCalls: [{ id: `call_${calls}`, name: 'count', arguments: calls === 1 ? '{"q":"x"}' : '{ "q": "x" }' }],
+				};
+			}
+			const results = req.messages.filter((m) => m.role === 'tool').map((m) => String(m.content));
+			assert.equal(results.length, 2);
+			assert.match(results[1], /Duplicate call/);
+			return goToNamedInteractable()(req);
+		});
+		const agent = new Agent<Ctx>({
+			id: 'Guard',
+			identity: { role: 'guard' },
+			goals: [{ text: 'Go to EastGate' }],
+			provider,
+			verbs: registerStockVerbs(new VerbRegistry()),
+			...perception(),
+			tools: {
+				count: {
+					description: 'Counts.',
+					parameters: { type: 'object', additionalProperties: false, properties: { q: { type: 'string' } } },
+					handler: () => {
+						runs += 1;
+						return runs;
+					},
+				},
+			},
+			context: () => ({ paragraph: paragraph() }),
+			model: 'fake',
+			toolRoundCap: 3,
+			arcRetryCap: 0,
+		});
+		const arc = await agent.tick(1);
+		assert.equal(runs, 1);
 		assert.equal(arc?.head.verb, 'go_to');
 	});
 
@@ -465,6 +695,171 @@ describe('Agent', () => {
 		assert.equal(spoke.length, 0);
 	});
 
+	it('tells events from its own point of view', () => {
+		const agentOf = (id:string) => new Agent<Ctx>({
+			id,
+			identity: { role: id },
+			provider: new FakeProvider(() => ({ content: 'wait(seconds=1)', toolCalls: [] })),
+			verbs: registerStockVerbs(new VerbRegistry()),
+			...perception(),
+			context: () => ({ paragraph: paragraph() }),
+			model: 'fake',
+		});
+		const given = { kind: 'Given', text: '{0} gave FireMushroom to {1}', who: ['Forager', 'BridgeKeeper'], tags: ['give'] };
+		const views = ['Forager', 'BridgeKeeper', 'Angler'].map((id) => {
+			const agent = agentOf(id);
+			agent.pushEvent(given);
+			return (agent.toJSON().events ?? []).map((e) => e.text);
+		});
+		assert.deepEqual(views, [
+			['You gave FireMushroom to BridgeKeeper'],
+			['Forager gave FireMushroom to you'],
+			['Forager gave FireMushroom to BridgeKeeper'],
+		]);
+	});
+
+	it('puts what it carries next to an item that was talked about', async () => {
+		const users:string[] = [];
+		let carried:ReturnType<typeof dummyEntity>[] = [];
+		const agent = new Agent<Ctx>({
+			id: 'BridgeKeeper',
+			identity: { role: 'keeper' },
+			provider: new FakeProvider((req) => {
+				users.push(String(req.messages[1]?.content));
+				return { content: `remember(content=Note ${users.length})`, toolCalls: [] };
+			}),
+			verbs: registerStockVerbs(new VerbRegistry()),
+			...perception(),
+			context: () => ({ paragraph: paragraph() }),
+			catalog: () => buildCatalog({ me: dummyEntity('me'), others: [], items: [], cache: new SampleCache(), inventory: (who) => (who.id === 'me' ? carried : []) }),
+			model: 'fake',
+			heartbeat: 0,
+			arcText: true,
+			toolRoundCap: 0,
+			arcRetryCap: 0,
+			strategicInterval: 0,
+			encyclopedia: [{ name: 'FireMushroom', text: 'Worth 10 gold.', item: true }, { name: 'Bridge', text: 'Raised unless lowered.' }],
+		});
+		agent.pushEvent({ kind: 'HeardSpeech', remember: true, text: 'Forager says to you: "Here, take this FireMushroom for the Bridge."', tags: ['speech'] });
+		await agent.tick(10);
+		carried = [dummyEntity('FireMushroom', { tags: ['item'] })];
+		await agent.tick(20);
+		assert.match(users[0] ?? '', /- FireMushroom \(you carry none\): Worth 10 gold\./);
+		assert.match(users[0] ?? '', /- Bridge: Raised unless lowered\./);
+		assert.match(users[1] ?? '', /- FireMushroom \(you carry one\)\./);
+		assert.equal((users[1] ?? '').includes('- Bridge'), false);
+	});
+
+	it('waits for an answer only after an arc that ends on a say', async () => {
+		const talk = new TalkNet({ inRange: () => true, others: () => ['Forager'] });
+		const arcs = ['say(text=Very well, the mushroom covers the fee.) && remember(content=Paid)', 'say(text=The bridge is down now.)'];
+		const waits:number[] = [];
+		let n = 0;
+		const agent = new Agent<Ctx>({
+			id: 'BridgeKeeper',
+			identity: { role: 'keeper' },
+			provider: new FakeProvider(() => ({ content: arcs[n++], toolCalls: [] })),
+			execute: async (step) => {
+				if (step.verb === 'wait') {
+					waits.push(n);
+				}
+				return { ok: true, verb: step.verb };
+			},
+			verbs: registerStockVerbs(new VerbRegistry()),
+			...perception(),
+			context: () => ({ paragraph: paragraph() }),
+			model: 'fake',
+			heartbeat: 0,
+			arcText: true,
+			talk,
+			toolRoundCap: 0,
+			arcRetryCap: 0,
+			strategicInterval: 0,
+		});
+		await agent.tick(10);
+		await agent.tick(20);
+		assert.deepEqual(waits, [2]);
+	});
+
+	it('refuses a say that everyone it is for already heard, and lets it reach someone new', async () => {
+		const listeners = ['Forager'];
+		const talk = new TalkNet({ inRange: () => true, others: () => listeners });
+		const lines = [
+			'Excuse me? Could you repeat what you said about the bridge?',
+			'Excuse me, sir? I can lower the bridge for you, but I require ten gold or items of equal value.',
+			'As I have stated, lowering the bridge requires ten gold or items of equal value.',
+			'As I have stated, lowering the bridge requires ten gold or items of equal value.',
+		];
+		let n = 0;
+		const agent = new Agent<Ctx>({
+			id: 'BridgeKeeper',
+			identity: { role: 'keeper' },
+			provider: new FakeProvider(() => ({ content: `say(text=${lines[n++]})`, toolCalls: [] })),
+			execute: async (step) => ({ ok: true, verb: step.verb }),
+			verbs: registerStockVerbs(new VerbRegistry()),
+			...perception(),
+			context: () => ({ paragraph: paragraph() }),
+			model: 'fake',
+			heartbeat: 0,
+			arcText: true,
+			talk,
+			toolRoundCap: 0,
+			arcRetryCap: 0,
+			strategicInterval: 0,
+		});
+		const results:boolean[] = [];
+		for (let t = 1; t <= 3; t++) {
+			await agent.tick(t * 10);
+			results.push(agent.lastResult?.ok === true);
+		}
+		assert.deepEqual(results, [true, true, false]);
+		assert.match(agent.lastResult?.reason ?? '', /already heard you say that \("Excuse me, sir\?/);
+		listeners.push('Angler');
+		await agent.tick(40);
+		assert.equal(agent.lastResult?.ok, true);
+	});
+
+	it('refuses a move that already found no way until the way opens', async () => {
+		let blocked:string | undefined = 'Bridge is raised';
+		const replies = ['go_to(Angler)', 'go_to(target=Angler)', 'wait(1)', 'go_to(Angler)'];
+		const hints:string[] = [];
+		const ran:string[] = [];
+		const agent = new Agent<Ctx>({
+			id: 'Forager',
+			identity: { role: 'forager' },
+			provider: new FakeProvider((req) => {
+				const last = req.messages[req.messages.length - 1];
+				if (req.messages.length > 2) {
+					hints.push(String(last.content));
+				}
+				return { content: replies.shift()!, toolCalls: [] };
+			}),
+			execute: async (step) => {
+				ran.push(step.verb);
+				return step.verb === 'go_to' && blocked
+					? { ok: false, verb: 'go_to', reason: `no way to Angler, blocked on the way: ${blocked}`, unreachable: 'Angler' }
+					: { ok: true, verb: step.verb };
+			},
+			verbs: registerStockVerbs(new VerbRegistry()),
+			...perception(),
+			context: () => ({ paragraph: paragraph() }),
+			model: 'fake',
+			heartbeat: 0,
+			arcText: true,
+			wayBlocked: () => blocked,
+			toolRoundCap: 0,
+			arcRetryCap: 0,
+			strategicInterval: 0,
+		});
+		await agent.tick(10);
+		await agent.tick(20);
+		assert.deepEqual(ran, ['go_to', 'wait']);
+		assert.match(hints[0] ?? '', /^no way to Angler, blocked on the way: Bridge is raised\. That already failed and still would/);
+		blocked = undefined;
+		await agent.tick(30);
+		assert.deepEqual(ran, ['go_to', 'wait', 'go_to']);
+	});
+
 	it('accepts say when the audience is already in range', async () => {
 		const talk = new TalkNet({
 			inRange: () => true,
@@ -496,6 +891,32 @@ describe('Agent', () => {
 		assert.equal(calls, 1);
 		assert.equal(arc?.head.verb, 'say');
 		assert.equal(arc?.head.args.to, 'Guard');
+	});
+
+	it('marks who is in earshot but out of reach, and why', async () => {
+		const talk = new TalkNet({
+			inRange: () => true,
+			others: () => ['Guard', 'Angler'],
+		});
+		let user = '';
+		const provider = new FakeProvider((req) => {
+			user = String(req.messages.find((m) => m.role === 'user')?.content);
+			return { content: JSON.stringify({ head: { verb: 'wait', args: {} } }), toolCalls: [] };
+		});
+		await new Agent<Ctx>({
+			id: 'Forager',
+			identity: { role: 'forager' },
+			provider,
+			verbs: registerStockVerbs(new VerbRegistry()),
+			...perception(),
+			context: () => ({ paragraph: paragraph() }),
+			model: 'fake',
+			talk,
+			wayBlocked: (id) => (id === 'Angler' ? 'Bridge is raised' : undefined),
+			toolRoundCap: 0,
+			arcRetryCap: 0,
+		}).tick(1);
+		assert.match(user, /In talking range: Guard, Angler \(unreachable, blocked on the way: Bridge is raised\)\./);
 	});
 
 	it('lets earshot({to}) fail closed so the model can go_to instead', async () => {
@@ -942,7 +1363,7 @@ describe('Agent', () => {
 		const provider = new FakeProvider((req) => {
 			calls += 1;
 			if (calls === 1) {
-				assert.deepEqual((req.tools ?? []).map((t) => t.name), ['see_map']);
+				assert.ok((req.tools ?? []).some((t) => t.name === 'see_map'));
 				assert.equal(req.toolChoice, 'auto');
 				const system = req.messages.find((m) => m.role === 'system');
 				assert.match(String(system?.content), new RegExp(`${DEFAULT_YOU_SYMBOL} = you`));
@@ -951,7 +1372,7 @@ describe('Agent', () => {
 					toolCalls: [{ id: 'call_map', name: 'see_map', arguments: '{"zoom":1}' }],
 				};
 			}
-			assert.deepEqual((req.tools ?? []).map((t) => t.name), ['see_map']);
+			assert.ok((req.tools ?? []).some((t) => t.name === 'see_map'));
 			assert.equal(req.toolChoice, 'none');
 			const tool = req.messages.find((m) => m.role === 'tool');
 			const body = JSON.parse(String(tool?.content));
@@ -978,7 +1399,7 @@ describe('Agent', () => {
 			...perception(),
 			context: () => ({ paragraph: paragraph() }),
 			model: 'fake',
-			toolRoundCap: 0,
+			toolRoundCap: 1,
 			arcRetryCap: 0,
 			vision: true,
 			map: {
@@ -1025,7 +1446,7 @@ describe('Agent', () => {
 			...perception(),
 			context: () => ({ paragraph: paragraph() }),
 			model: 'fake',
-			toolRoundCap: 0,
+			toolRoundCap: 1,
 			arcRetryCap: 1,
 			arcText: true,
 			vision: true,
@@ -1064,7 +1485,7 @@ describe('Agent', () => {
 			...perception(),
 			context: () => ({ paragraph: paragraph() }),
 			model: 'fake',
-			toolRoundCap: 0,
+			toolRoundCap: 1,
 			arcRetryCap: 0,
 			vision: true,
 			map: {
@@ -1103,6 +1524,10 @@ describe('Agent', () => {
 		};
 		let looks = 0;
 		const provider = new FakeProvider((req) => {
+			const lastUser = [...req.messages].reverse().find((m) => m.role === 'user');
+			if (String(lastUser?.content ?? '').includes('Same output again')) {
+				return goToNamedInteractable()(req);
+			}
 			const hasTool = req.messages.some((m) => m.role === 'tool');
 			if (!hasTool) {
 				return {
@@ -1138,7 +1563,7 @@ describe('Agent', () => {
 			context: () => ({ paragraph: paragraph() }),
 			model: 'fake',
 			heartbeat: 0,
-			toolRoundCap: 0,
+			toolRoundCap: 1,
 			arcRetryCap: 0,
 			vision: true,
 			map: {
@@ -1325,6 +1750,39 @@ describe('Agent', () => {
 		assert.ok(q.scoreWatches('Guard', cat) > 0.05);
 		q.beginThink('Guard');
 		assert.equal(q.scoreWatches('Guard', cat), 0);
+	});
+
+	it('thinkNow skips heartbeat and occupies the think slot', async () => {
+		const think = withPriorityQueue({ watchInterval: 100, processInterval: 0, maxParallel: 2 });
+		const q = think.queue;
+		const agent = new Agent<Ctx>({
+			id: 'Guard',
+			identity: { role: 'guard' },
+			provider: new FakeProvider(() => ({
+				content: JSON.stringify({ head: { verb: 'wait', args: {} } }),
+				toolCalls: [],
+			})),
+			verbs: registerStockVerbs(new VerbRegistry()),
+			...perception(),
+			context: () => ({ paragraph: paragraph() }),
+			execute: async (step) => ({ ok: true, verb: step.verb }),
+			...think,
+			autoEnact: false,
+			heartbeat: 30,
+			model: 'fake',
+			toolRoundCap: 0,
+			arcRetryCap: 0,
+		});
+		q.ensure('Guard', { skipHeartbeat: true });
+		agent.stamp(1);
+		const first = await agent.tick(1);
+		assert.equal(first?.head.verb, 'wait');
+		const skipped = await agent.tick(2);
+		assert.equal(skipped, null);
+		const forced = await agent.thinkNow({ about: 'the gate', enact: false });
+		assert.equal(forced?.head.verb, 'wait');
+		assert.equal(q.inFlight, 0);
+		assert.equal(q.isThinking('Guard'), false);
 	});
 
 	it('replaces a live arc when the current verb did not change during think', async () => {

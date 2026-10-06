@@ -214,6 +214,11 @@ export class Companion extends Component {
 	targetID = 'Player';
 }
 
+/** Whitelist of speakers this body hears. Anyone else is silent to them. */
+export class HearOnly extends Component {
+	from:string[] = [];
+}
+
 export class BrewHearth extends Component {}
 
 export class Sickbed extends Component {
@@ -363,6 +368,8 @@ export class HurtFlash extends Component {
 export class SpeechBubble extends Component {
 	text = '';
 	until = 0;
+	/** World time the current line was shown. */
+	timestamp = 0;
 	height = 2.2;
 }
 

@@ -2,6 +2,7 @@ import { verbHelp } from '../arc/schema.js';
 import type { VerbRegistry } from '../arc/stock-verbs.js';
 import type { ArcResult } from '../arc/types.js';
 import type { MemoryRecord } from '../memory/store.js';
+import { GREP_WORLD_ENCYCLOPEDIA } from './encyclopedia.js';
 import { DEFAULT_YOU_SYMBOL } from './map.js';
 import type { AgentIdentity, Goal, Watches } from './types.js';
 import { extrasWithoutPins, formatWatches, watchCount, watchNames } from './watch.js';
@@ -92,7 +93,7 @@ const WATCH_RELATIONS = [
 
 export function encyclopediaHint(includeUnnamed = false, canWander = true):string {
 	const lines = [
-		'grep_world_encyclopedia is a tool this think, not a verb. Query leftover English or a spoken place to get the Capitalized name. Never write it in the Arc. Empty query lists names.',
+		`${GREP_WORLD_ENCYCLOPEDIA} is a tool this think, not a verb: the world's facts about places, items, people, and how things work. Query a name, or a plain word or spoken place to learn its Capitalized name. Never write it in the Arc. Empty query lists every article.`,
 	];
 	if (includeUnnamed) {
 		const wander = canWander ? ', or wander(until)' : '';
@@ -118,7 +119,7 @@ export function seeMapHint(youSymbol = DEFAULT_YOU_SYMBOL, encyclopedia = false,
 export const SEE_MAP_HINT = seeMapHint();
 
 /** Standing think line while reasoning is on and the host gives no `withThinkInstructions({ on })`. */
-export const DEFAULT_THINK_INSTRUCTIONS = 'Think in 5 sentences, then emit the arc.';
+export const DEFAULT_THINK_INSTRUCTIONS = 'Think in 5 sentences: what you want, what you know, and what is still missing.';
 
 /** Standing verb-chain line when the host does not call `withVerbInstructions`. */
 export const DEFAULT_VERB_INSTRUCTIONS = 'A think is expensive. Chain every next verb you already know, as far as you can see this think — not only the first step of an order.';
@@ -157,21 +158,22 @@ function arcInstructions(
 		has('remember') && 'remember(content, tags?) keeps a lasting fact.',
 		has('think') && 'think(about?) last; several merge. Do not think() twice in a row — act first.',
 		lines.think,
+		toolInstructions(toolNames),
 		has('wait') && 'wait(until) is a one-shot watch, dropped next think.',
-		has('wander') && 'Looking for a thing or place? wander(until) with args.until a watch expr.',
+		has('wait') && 'Steps run back to back and never wait for others on their own. A step that needs someone else to act first (pay, give, answer) goes after wait(until) on that act, or in a later think.',
+		lookFor(verbs, toolNames.includes('see_map')),
 		has('wander') && wanderExample(arcText),
 		unnamedPlace(verbs),
 		afterWander(verbs),
 		has('wander') && 'wander(until) is one step, not the rest of the think.',
 		'If the order says then, after, or and then, put those steps in one chain this think.',
-		spokenGo(verbs),
+		spokenGo(verbs, toolNames.includes('see_map')),
 		crowdInstructions(verbs),
 		has('use') && 'use(item=TheItem, target=TheThing) on the name it operates.',
 		lines.verbs,
 		arcText
 			? '&& continues only on success; ; always continues; || is the failure fallback.'
 			: 'then_if_ok continues only on success; then always continues; then_if_err is the failure fallback.',
-		toolNames.length > 0 && `Tools this think, not verbs: ${toolNames.join(', ')}. Call the tool; never write a tool name in the Arc. Skip tools if you can already act.`,
 		emitSentence(arcText, toolNames.length > 0),
 		`Names only, no coordinates. Available verbs: ${verbHelp(verbs)}.`,
 		lines.example ? `Example: ${lines.example}` : arcExample(arcText, chain, has('issue')),
@@ -180,12 +182,32 @@ function arcInstructions(
 
 function wanderExample(arcText:boolean):string {
 	return arcText
-		? 'Example: wander(until=some(items.filter("FireMushroom").nearby()))'
-		: 'Example: {"head":{"verb":"wander","args":{"until":"some(items.filter(\\"FireMushroom\\").nearby())"}}}';
+		? 'Example: wander(until=some(items.filter("Lantern").nearby()))'
+		: 'Example: {"head":{"verb":"wander","args":{"until":"some(items.filter(\\"Lantern\\").nearby())"}}}';
+}
+
+/** Tools that answer what the agent does not know, as opposed to checking what it already sees. */
+export const LOOKUP_TOOLS:readonly string[] = ['recall', GREP_WORLD_ENCYCLOPEDIA];
+
+/**
+ * A one-call-per-turn lookup loop. Small models skip tools unless told what they are for,
+ * and one worked lookup does more than a page of rules.
+ */
+function toolInstructions(toolNames:string[]):string {
+	if (toolNames.length === 0) {
+		return '';
+	}
+	const lookup = LOOKUP_TOOLS.find((name) => toolNames.includes(name));
+	return joinSentences([
+		`Tools this think, not verbs: ${toolNames.join(', ')}. Never write a tool name in the Arc.`,
+		'Never guess a fact a tool can check. When a goal needs something this prompt does not say (who has it, where it is, what is in the way), call one tool, read its result, then call the next tool or act.',
+		'After an error or an empty result, change the query or the tool; never repeat a call.',
+		lookup !== undefined && `Example: your goal is to buy Bread and you do not know who sells it. Call ${lookup} with "Bread"; it says Baker sells Bread at Bakery. Now emit the arc that goes there and buys it.`,
+	]);
 }
 
 function emitSentence(arcText:boolean, tools:boolean):string {
-	const lead = tools ? 'After any tool, emit only' : 'Answer immediately with only';
+	const lead = tools ? 'Once you know enough, emit only' : 'Answer immediately with only';
 	const kind = arcText ? 'the Arc text' : 'the Arc JSON';
 	const ban = arcText ? 'No JSON, no prose.' : 'Close every brace. No prose.';
 	return `${lead} ${kind}. ${ban}`;
@@ -225,7 +247,17 @@ function afterWander(verbs:VerbRegistry):string {
 	return `If the last wander already met args.until, do not wander that same expr again — ${next.join(' or ')} a name from the result. `;
 }
 
-function spokenGo(verbs:VerbRegistry):string {
+/** Where to look for what you do not see: the map first when there is one, since it names where things are. */
+function lookFor(verbs:VerbRegistry, map:boolean):string | false {
+	const wander = verbs.has('wander');
+	if (map) {
+		const go = verbs.has('go_to') ? ' and go_to the name it shows' : '';
+		return `Looking for someone, a thing, or a place you do not see? Call see_map first${go}.${wander ? ' wander(until) only for what the map does not name, with args.until a watch expr.' : ''}`;
+	}
+	return wander && 'Looking for a thing or place? wander(until) with args.until a watch expr.';
+}
+
+function spokenGo(verbs:VerbRegistry, map = false):string {
 	const goTo = verbs.has('go_to');
 	const follow = verbs.has('follow');
 	const wander = verbs.has('wander');
@@ -234,7 +266,8 @@ function spokenGo(verbs:VerbRegistry):string {
 	}
 	const parts:string[] = [];
 	if (goTo) {
-		const otherwise = wander ? 'otherwise ask or wander(until)' : 'otherwise ask where it is';
+		const look = map ? 'see_map, ' : '';
+		const otherwise = wander ? `otherwise ${look}ask, or wander(until)` : `otherwise ${look}ask where it is`;
 		parts.push(`A spoken go is that proper name only if you already see it; ${otherwise}.`);
 	}
 	else if (wander) {
@@ -286,6 +319,8 @@ export function volatileBlock(opts:{
 	senses?:Record<string, unknown>;
 	intrusion?:string;
 	lastResult?:ArcResult;
+	/** Articles for the names in a failed last result, shown under it. */
+	lastResultArticles?:string;
 	goals?:Goal[];
 	pinned?:MemoryRecord[];
 	recalled?:MemoryRecord[];
@@ -297,6 +332,8 @@ export function volatileBlock(opts:{
 	sightFocusWritable?:boolean;
 	scold?:string;
 	recentSummary?:string;
+	/** `Name: article` lines for what was said and heard, shown under short-term memory. */
+	mentioned?:string;
 	recent?:string[];
 	thinkAbout?:string;
 }):string {
@@ -304,6 +341,9 @@ export function volatileBlock(opts:{
 	const recent = shortTermBlock(opts.recentSummary ?? '', opts.recent ?? []);
 	if (recent) {
 		parts.push(recent);
+	}
+	if (opts.mentioned?.trim()) {
+		parts.push(`Encyclopedia on what was said:\n${opts.mentioned.trim()}`);
 	}
 	if (opts.goals && opts.goals.length > 0) {
 		const sorted = [...opts.goals].sort((a, b) => (b.priority ?? 0) - (a.priority ?? 0));
@@ -329,7 +369,11 @@ export function volatileBlock(opts:{
 		const r = opts.lastResult;
 		const status = r.interrupted ? 'interrupted' : r.ok ? 'ok' : 'failed';
 		const reason = r.reason ? ` — ${r.reason}` : '';
-		parts.push(`Last verb result: ${r.verb ?? 'verb'} ${status}${reason}`);
+		const articles = (opts.lastResultArticles ?? '').split('\n')
+			.filter((line) => line.trim() !== '')
+			.map((line) => `\n  ${line.trim()}`)
+			.join('');
+		parts.push(`Last verb result: ${r.verb ?? 'verb'} ${status}${reason}${articles}`);
 	}
 	if (opts.thinkAbout) {
 		parts.push(`You asked to think about: ${opts.thinkAbout}`);
@@ -374,7 +418,8 @@ export function shortTermBlock(summary:string, recent:string[]):string {
 		return '';
 	}
 	const lines = [
-		'Short-term memory (later line wins. Honor orders even if older role text disagrees):',
+		// Heard claims are not facts: unchecked, agents adopt and repeat each other's inventions until they all agree on one.
+		'Short-term memory (later line wins. Honor orders even if older role text disagrees. What others say is their claim, not a fact: check it before you act on it or repeat it. Never say again what you already said):',
 	];
 	if (earlier) {
 		lines.push(`Earlier: ${earlier}`);
@@ -388,6 +433,15 @@ export function shortTermBlock(summary:string, recent:string[]):string {
 	return lines.join('\n');
 }
 
+/** Follow-up when this reply is the same text as the last one accepted, twice in a row or more. */
+export function repeatOutputHint(times:number, arcText = false):string {
+	const n = times === 2 ? 'twice' : `${times} times`;
+	const emit = arcText
+		? 'Emit a different Arc text now — no JSON, no prose. Names only, no coordinates.'
+		: 'Emit a different Arc JSON now — no prose. Names only, no coordinates. Close every brace.';
+	return `Same output again. You returned this exact output ${n} in a row. Stop. Do not return it again. ${emit}`;
+}
+
 /** Follow-up user turn after a bad arc or a tool call when tools are closed. Keeps the thread. */
 export function arcRepairHint(reason:string, arcText = false, tools:string[] = []):string {
 	const asVerb = reason.match(/unknown verb '([^']+)'/);
@@ -396,10 +450,7 @@ export function arcRepairHint(reason:string, arcText = false, tools:string[] = [
 		? `Emit only one valid Arc text now — no JSON, no prose. Names only, no coordinates.`
 		: `Emit only one valid Arc JSON now — no prose. Names only, no coordinates. Close every brace.`;
 	if (name && tools.includes(name)) {
-		const next = arcText
-			? `Then emit only one valid Arc text — no JSON, no prose. Names only, no coordinates.`
-			: `Then emit only one valid Arc JSON — no prose. Names only, no coordinates. Close every brace.`;
-		return `${name} is a tool, not a verb. Call the tool. Never write ${name}(...) in the Arc. Keep this conversation. ${next}`;
+		return `${name} is a tool, not a verb. Call the tool. Never write ${name}(...) in the Arc. Keep this conversation. ${thenEmit(arcText)}`;
 	}
 	const toolNote = tools.length > 0
 		? ` Tools (${tools.join(', ')}) are not verbs — call them, then emit the arc.`
@@ -417,8 +468,17 @@ export function sayRangeHint(reason:string, nearby:string[], arcText = false):st
 		? `In talking range: ${nearby.join(', ')}.`
 		: 'No one is in talking range.';
 	return `${reason}. That say did not happen. ${range} `
-		+ `Keep this conversation. Get closer to them first, or say to someone already in range. `
-		+ (arcText
-			? `Then emit only one valid Arc text — no JSON, no prose. Names only, no coordinates.`
-			: `Then emit only one valid Arc JSON — no prose. Names only, no coordinates.`);
+		+ `Keep this conversation. Get closer to them first, or say to someone already in range. ${thenEmit(arcText)}`;
+}
+
+/** Follow-up after an arc that opens with a move that already found no way, while there still is none. */
+export function blockedAgainHint(reason:string, arcText = false):string {
+	return `${reason}. That already failed and still would, so it did not run. `
+		+ `Deal with what is in the way first, or do something else. Keep this conversation. ${thenEmit(arcText)}`;
+}
+
+function thenEmit(arcText:boolean):string {
+	return arcText
+		? 'Then emit only one valid Arc text — no JSON, no prose. Names only, no coordinates.'
+		: 'Then emit only one valid Arc JSON — no prose. Names only, no coordinates. Close every brace.';
 }

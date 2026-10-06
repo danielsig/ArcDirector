@@ -11,6 +11,7 @@ import HudAiLog from './HudAiLog.vue';
 import HudSay from './HudSay.vue';
 import HudMenu from './HudMenu.vue';
 import HudBrief from './HudBrief.vue';
+import HudToast from './HudToast.vue';
 
 defineProps<{
 	hud:HudModel;
@@ -32,9 +33,10 @@ const emit = defineEmits<{
 		<HudChat :hud="hud" />
 		<HudAiLog :hud="hud" />
 		<HudSay :hud="hud" />
+		<HudMinimap :hud="hud" />
 		<HudBrief :hud="hud" :sceneID="sceneID" />
 		<HudMenu :hud="hud" @scenes="emit('scenes')" />
-		<HudMinimap :hud="hud" />
+		<HudToast :hud="hud" />
 	</div>
 </template>
 

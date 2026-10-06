@@ -14,8 +14,6 @@ import type { HudModel, MinimapCell } from '../ui/hudModel';
 import type { GameHost } from '../npc/adapter';
 import { bodyName, findBody, isLiving } from '../npc/names';
 
-const MSG_LIFE = 3.2;
-
 function chunkStamp(world:World):string {
 	let s = '';
 	for (const chunk of world.chunks.values()) {
@@ -145,6 +143,7 @@ function patchOverhead(
 	hud:HudModel,
 	view:Renderer,
 	npcNotes:{ id:string; text:string }[],
+	healthBars:boolean,
 ):void {
 	const pitch = cameraPitch(view);
 	const byID = new Map<string, {
@@ -154,6 +153,7 @@ function patchOverhead(
 		height:number;
 		hp:number;
 		maxHP:number;
+		timestamp:number;
 	}>();
 	world.forEachComponent(SpeechBubble, (bubble, go) => {
 		if (!bubble.text || world.time >= bubble.until) {
@@ -166,6 +166,7 @@ function patchOverhead(
 			height: overheadY(go, pitch, false),
 			hp: 0,
 			maxHP: 0,
+			timestamp: bubble.timestamp,
 		});
 	});
 	for (const note of npcNotes) {
@@ -188,10 +189,11 @@ function patchOverhead(
 				height: overheadY(go, pitch, false),
 				hp: 0,
 				maxHP: 0,
+				timestamp: 0,
 			});
 		}
 	}
-	world.forEachComponent(Vitals, (vitals, go) => {
+	if (healthBars) world.forEachComponent(Vitals, (vitals, go) => {
 		if (go.id === 'Player' || !go.getComponent(HumanBody)) {
 			return;
 		}
@@ -210,6 +212,7 @@ function patchOverhead(
 				height: barY,
 				hp: vitals.hp,
 				maxHP: vitals.maxHP,
+				timestamp: 0,
 			});
 		}
 	});
@@ -228,6 +231,7 @@ function patchOverhead(
 			slot.x = screen.x;
 			slot.y = screen.y;
 			slot.visible = screen.visible;
+			slot.timestamp = row.timestamp;
 		}
 		else {
 			speech.push({
@@ -239,6 +243,7 @@ function patchOverhead(
 				x: screen.x,
 				y: screen.y,
 				visible: screen.visible,
+				timestamp: row.timestamp,
 			});
 		}
 		n += 1;
@@ -335,6 +340,7 @@ export function patchHud(
 	hud:HudModel,
 	view:Renderer,
 	npcNotes:{ id:string; text:string }[] = [],
+	healthBars = false,
 ):void {
 	const player = world.findByID('Player');
 	const vitals = player?.getComponent(Vitals);
@@ -342,7 +348,7 @@ export function patchHud(
 	hud.maxHP = vitals?.maxHP ?? 5;
 	hud.gold = player?.getComponent(Wallet)?.coins ?? 0;
 	hud.showGold = sceneHasGold(world);
-	hud.message = world.time - world.hudMessageTimestamp < MSG_LIFE ? world.hudMessage : '';
+	hud.message = world.time - world.hudMessageTimestamp < world.hudMessageLife ? world.hudMessage : '';
 	hud.graphicsMemory = view.graphicsMemory();
 	const input = player?.getComponent(PlayerInput);
 	hud.cursorName = input?.cursorName ?? '';
@@ -372,7 +378,7 @@ export function patchHud(
 	hud.heldRight = body ? slotItem(body, 'hands.right.held')?.name ?? '' : '';
 	hud.back = body ? slotItem(body, 'back')?.name ?? '' : '';
 
-	patchOverhead(world, hud, view, npcNotes);
+	patchOverhead(world, hud, view, npcNotes, healthBars);
 
 	const p = player?.transform.position;
 	const px = p?.x ?? 0;
@@ -430,6 +436,7 @@ export function patchInfer(host:GameHost, hud:HudModel):void {
 			pulse: queue?.heartbeatSeconds(agent.id) ?? null,
 			ago: Number.isFinite(last) ? Math.max(0, now - last) : null,
 			thinking: queue?.isThinking(agent.id) ?? false,
+			thinkMs: infer?.thinkMs[agent.id] ?? 0,
 		};
 	});
 	next.sort((a, b) => a.id.localeCompare(b.id));

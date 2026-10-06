@@ -403,18 +403,19 @@ describe('formatInventory', () => {
 				'Purse: 22 gold',
 				'Pockets: CottageKey',
 				"Backpack Traveler'sPack: GoldCoin, ChestKey",
+				'Nothing else: what is not listed, you do not have.',
 			].join('\n'),
 		);
 	});
 
-	it('empty bag is Nothing worn', () => {
-		assert.equal(formatInventory({}), 'Nothing worn.');
+	it('empty bag carries nothing', () => {
+		assert.equal(formatInventory({}), 'You carry nothing.');
 	});
 
 	it('keeps counts in the pocket label', () => {
 		assert.equal(
 			formatInventory({ pockets: ['Knife x2'] }),
-			'Pockets: Knife x2',
+			'Pockets: Knife x2\nNothing else: what is not listed, you do not have.',
 		);
 	});
 });

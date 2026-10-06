@@ -240,10 +240,7 @@ function hopWin(host:GameHost, winners:GameObject[], name:string):void {
 	host.world.setMessage(`${name} holds the colonnade`);
 	for (const go of winners) {
 		host.arc?.abortArc(bodyName(go));
-		let hop = go.getComponent(Celebrating);
-		if (!hop) {
-			hop = go.addComponent(new Celebrating());
-		}
+		const hop = go.getOrAddComponent(Celebrating);
 		hop.until = host.world.time + 48;
 		hop.enabled = true;
 	}

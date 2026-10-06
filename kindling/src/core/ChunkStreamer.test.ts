@@ -15,7 +15,7 @@ function scene():{ world:World; streamer:ChunkStreamer<Chunk<number>>; anchor:Ga
 		override spawn(chunk:Chunk<number>):void {
 			spawns.push(chunk.id);
 			const crate = new GameObject(`crate_${chunk.id}`);
-			crate.addComponent(new ChunkBound()).chunkID = chunk.id;
+			crate.addComponent(ChunkBound).chunkID = chunk.id;
 			const c = chunk.worldCellCenter(1, 1);
 			crate.transform.position.x = c.x;
 			crate.transform.position.z = c.z;
@@ -23,11 +23,11 @@ function scene():{ world:World; streamer:ChunkStreamer<Chunk<number>>; anchor:Ga
 		}
 	}
 	const host = new GameObject('Streamer');
-	const streamer = host.addComponent(new Streamer());
+	const streamer = host.addComponent(Streamer);
 	streamer.chunks = [0, 1, 2, 3].map((cx) => new Chunk(`c${cx}`, { cx, cz: 0 }, 4, 1, Array.from({ length: 16 }, (element, i) => cx * 100 + i)));
 	world.add(host);
 	const anchor = new GameObject('Anchor');
-	const a = anchor.addComponent(new StreamingAnchor());
+	const a = anchor.addComponent(StreamingAnchor);
 	a.viewRadius = 2;
 	a.hysteresis = 3;
 	anchor.transform.position.x = 2;
@@ -107,7 +107,7 @@ describe('ChunkStreamer', () => {
 	it('uses each anchor\'s own radius', () => {
 		const { world, streamer } = scene();
 		const far = new GameObject('Far');
-		far.addComponent(new StreamingAnchor()).viewRadius = 0;
+		far.addComponent(StreamingAnchor).viewRadius = 0;
 		far.transform.position.x = 14;
 		world.add(far);
 		streamer.stream();

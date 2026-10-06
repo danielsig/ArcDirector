@@ -26,6 +26,19 @@ function net(
 }
 
 describe('TalkNet', () => {
+	it('wakes a listener only for speech meant for them, never for talk between others', () => {
+		const guard = mind('Guard');
+		const baker = mind('Baker');
+		const talk = net(new Set(['Acolyte:Guard', 'Acolyte:Baker']), ['Guard', 'Baker', 'Acolyte']);
+		talk.attach(guard);
+		talk.attach(baker);
+		talk.say('Acolyte', 'Open the gate.', 'Guard');
+		talk.say('Acolyte', 'Good morning, all.');
+		talk.say('Acolyte', 'The Baker said it first.', 'Guard');
+		assert.deepEqual(guard.events.map((e) => e.major), [true, true, true]);
+		assert.deepEqual(baker.events.map((e) => e.major), [false, true, true]);
+	});
+
 	it('delivers speech only to listeners the host says are in range', () => {
 		const guard = mind('Guard');
 		const acolyte = mind('Acolyte');
@@ -48,6 +61,34 @@ describe('TalkNet', () => {
 		assert.match(guard.events[0].text, /says to you/);
 		assert.equal(far.events.length, 0);
 		assert.deepEqual(spoke[0].heardBy, ['Guard']);
+	});
+
+	it('is answerable only when someone, or the addressee, heard it clearly', () => {
+		const muffledFor = new Set<string>();
+		const talk = new TalkNet({
+			inRange: (a, b) => a !== b,
+			others: (speaker) => ['Guard', 'Baker', 'Acolyte'].filter((id) => id !== speaker),
+			clearHear: (speaker, listener) => !muffledFor.has(listener),
+		});
+		assert.equal(talk.say('Acolyte', 'Hello all.').answerable, true);
+		assert.equal(talk.say('Acolyte', 'Hello, Guard.', 'Guard').answerable, true);
+		muffledFor.add('Guard');
+		assert.equal(talk.say('Acolyte', 'Guard, can you hear me?', 'Guard').answerable, false);
+		assert.equal(talk.say('Acolyte', 'Anyone?').answerable, true);
+		muffledFor.add('Baker');
+		assert.equal(talk.say('Acolyte', 'Anyone at all?').answerable, false);
+	});
+
+	it('tells the speaker who was too far to make out the words', () => {
+		const talk = new TalkNet({
+			inRange: (a, b) => a !== b,
+			others: (speaker) => ['Guard', 'Baker', 'Acolyte'].filter((id) => id !== speaker),
+			clearHear: (speaker, listener) => listener !== 'Guard',
+		});
+		assert.equal(talk.say('Acolyte', 'Hello all.').reason, 'heard by Baker; too far for Guard to make out the words: get closer');
+		assert.equal(talk.say('Acolyte', 'Hello, Baker.', 'Baker').reason, 'to Baker');
+		assert.equal(talk.say('Acolyte', 'Hello, Guard.', 'Guard').reason, 'to Guard; too far for Guard to make out the words: get closer');
+		assert.equal(talk.clear('Acolyte', 'Guard'), false);
 	});
 
 	it('rejects say(to) when the host reports out of range', () => {
@@ -98,6 +139,26 @@ describe('TalkNet', () => {
 		assert.equal(result.reason, 'heard by Guard, Player');
 		assert.equal(guard.events.length, 1);
 		assert.match(guard.events[0].text, /Make way/);
+	});
+
+	it('drops a listener the host says cannot hear, even when addressed', () => {
+		const guard = mind('Guard');
+		const player = mind('Player');
+		const talk = new TalkNet({
+			inRange: (a, b) => a !== b,
+			others: (speaker) => ['Guard', 'Player', 'Forager'].filter((id) => id !== speaker),
+			hears: (speaker, listener) => listener !== 'Guard' || speaker === 'Player',
+		});
+		talk.attach(guard);
+		talk.attach(player);
+		const fromForager = talk.say('Forager', 'Help me across.', 'Guard');
+		const fromPlayer = talk.say('Player', 'Stay here.', 'Guard');
+		assert.equal(fromForager.ok, true);
+		assert.equal(guard.events.length, 1);
+		assert.match(guard.events[0].text, /Stay here/);
+		assert.equal(fromPlayer.heard?.includes('Guard'), true);
+		assert.equal(player.events.length, 1);
+		assert.match(player.events[0].text, /Help me across/);
 	});
 
 	it('lets an unattached name hear if the host says they are in range', () => {

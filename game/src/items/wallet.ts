@@ -4,14 +4,6 @@ import { getDef } from './defs';
 import { compactName, findCarried, itemMatchesName } from './inventory';
 import type { ItemInstance } from './instance';
 
-export function purseOf(go:GameObject):Wallet {
-	let wallet = go.getComponent(Wallet);
-	if (!wallet) {
-		wallet = go.addComponent(new Wallet());
-	}
-	return wallet;
-}
-
 export function coinsOf(go:GameObject):number {
 	return go.getComponent(Wallet)?.coins ?? 0;
 }
@@ -21,12 +13,12 @@ export function transferCoins(from:GameObject, to:GameObject, amount:number):str
 		return 'bad amount';
 	}
 	const pay = Math.floor(amount);
-	const src = purseOf(from);
+	const src = from.getOrAddComponent(Wallet);
 	if (src.coins < pay) {
 		return `only ${src.coins} gold in purse`;
 	}
 	src.coins -= pay;
-	purseOf(to).coins += pay;
+	to.getOrAddComponent(Wallet).coins += pay;
 	return null;
 }
 

@@ -7,6 +7,7 @@ import { SampleCache } from '../expr/types.js';
 import { formatSight } from '../perception/sight.js';
 import { formatInventory } from '../perception/formatInventory.js';
 import { isCrowdConductor } from '../conductor/conductor.js';
+import { parseArc } from '../arc/parse.js';
 import { ArcDirector } from './director.js';
 import type { VerbCall } from './types.js';
 import { OPEN_WORLD } from '../testing/world.js';
@@ -126,6 +127,148 @@ function directorOf(calls?:VerbCall<Ctx>[]):ArcDirector<Ctx> {
 }
 
 describe('ArcDirector', () => {
+	it('addActor: a host-driven body runs given arcs but never calls the model', async () => {
+		let chats = 0;
+		const calls:VerbCall<Ctx>[] = [];
+		const director = await new ArcDirector<Ctx>()
+			.withPriorityQueue({
+				processInterval: 0,
+				watchInterval: 100,
+				heartbeatStart: 0.1,
+				heartbeatMin: 0.1,
+				maxParallel: 1,
+			})
+			.withFakeInference(() => {
+				chats += 1;
+				return { content: 'wait()', toolCalls: [] };
+			})
+			.withArcText(true)
+			.addStockVerbs()
+			.withDefaultKit({ verbs: [...STOCK_VERBS] })
+			.onVerb((call) => {
+				calls.push(call);
+				return { ok: true, verb: call.verb };
+			})
+			.addSense('scene', {
+				description: 'see',
+				gather: (ctx) => ctx.paragraph,
+			})
+			.withContext((id) => ({ paragraph: scene(), id }))
+			.addActor({ id: 'Body' })
+			.start();
+		const body = director.actor('Body');
+		assert.ok(body);
+		assert.equal(director.agent('Body'), undefined);
+		assert.deepEqual(director.actors().map((a) => a.id), ['Body']);
+		for (let t = 1; t <= 4; t++) {
+			director.tick(1, t);
+		}
+		await sleep(30);
+		for (const verb of ['think(about=x)', 'remember(content=x)', 'set_goal(goal=x)']) {
+			assert.throws(() => parseArc(verb, body.activeVerbs()));
+		}
+		const result = await body.enact(parseArc('go_to(EastGate)', body.activeVerbs()));
+		assert.equal(result.ok, true);
+		assert.equal(calls.some((c) => c.verb === 'go_to' && c.actorID === 'Body' && c.actor === body), true);
+		assert.equal(chats, 0);
+		director.dispose();
+	});
+
+	it('thinks again on the next tick after go_to, wander, or sell', async () => {
+		const lines = ['go_to(EastGate)', 'wander()', 'sell(item=Loaf, to=Baker)'];
+		for (const line of lines) {
+			let chats = 0;
+			const director = await new ArcDirector<Ctx>()
+				.withPriorityQueue({
+					processInterval: 0,
+					watchInterval: 100,
+					heartbeatStart: 100,
+					heartbeatMin: 100,
+					maxParallel: 1,
+				})
+				.withFakeInference(() => {
+					chats += 1;
+					return { content: line, toolCalls: [] };
+				})
+				.withArcText(true)
+				.addStockVerbs()
+				.withDefaultKit({ verbs: [...STOCK_VERBS, 'sell'] })
+				.onVerb((call) => ({ ok: true, verb: call.verb }))
+				.addSense('scene', {
+					description: 'see',
+					gather: (ctx) => ctx.paragraph,
+				})
+				.withContext((id) => ({ paragraph: scene(), id }))
+				.addAgent({
+					id: 'Npc',
+					skipHeartbeat: true,
+					kit: { verbs: [...STOCK_VERBS, 'sell'] },
+					identity: { role: 'Moves.' },
+				})
+				.start();
+			director.mindQueue()!.enqueueMajor('Npc');
+			director.tick(1, 1);
+			await waitFor(() => chats === 1 && director.agent('Npc')?.lastResult?.ok === true);
+			director.tick(1, 2);
+			await waitFor(() => chats === 2);
+			director.dispose();
+		}
+	});
+
+	it('thinks again, told why, after a reply that never became an arc', async () => {
+		const users:string[] = [];
+		const director = await new ArcDirector<Ctx>()
+			.withPriorityQueue({ processInterval: 0, watchInterval: 100, heartbeatStart: 100, heartbeatMin: 100, maxParallel: 1 })
+			.withFakeInference((req) => {
+				const user = String(req.messages[1]?.content);
+				users.push(user);
+				return { content: user.includes('not a valid Arc: ') ? 'wait()' : 'say(text=Hi) to Guard', toolCalls: [] };
+			})
+			.withArcText(true)
+			.addStockVerbs()
+			.withDefaultKit({ verbs: [...STOCK_VERBS] })
+			.onVerb((call) => ({ ok: true, verb: call.verb }))
+			.addSense('scene', { description: 'see', gather: (ctx) => ctx.paragraph })
+			.withContext((id) => ({ paragraph: scene(), id }))
+			.addAgent({ id: 'Npc', skipHeartbeat: true, identity: { role: 'Talks.' } })
+			.start();
+		director.mindQueue()!.enqueueMajor('Npc');
+		director.tick(1, 1);
+		await waitFor(() => director.agent('Npc')?.lastResult?.verb === 'think');
+		let t = 2;
+		await waitFor(() => {
+			director.tick(1, t++);
+			return director.agent('Npc')?.lastResult?.ok === true;
+		});
+		assert.match(users[users.length - 1], /think failed — your reply was not a valid Arc: to is outside the parentheses/);
+		director.dispose();
+	});
+
+	it('retries a stalled think once, not forever', async () => {
+		let thinks = 0;
+		const director = await new ArcDirector<Ctx>()
+			.withPriorityQueue({ processInterval: 0, watchInterval: 100, heartbeatStart: 100, heartbeatMin: 100, maxParallel: 1 })
+			.withFakeInference((req) => {
+				thinks += req.messages.length === 2 ? 1 : 0;
+				return { content: 'say(text=Hi) to Guard', toolCalls: [] };
+			})
+			.withArcText(true)
+			.addStockVerbs()
+			.withDefaultKit({ verbs: [...STOCK_VERBS] })
+			.onVerb((call) => ({ ok: true, verb: call.verb }))
+			.addSense('scene', { description: 'see', gather: (ctx) => ctx.paragraph })
+			.withContext((id) => ({ paragraph: scene(), id }))
+			.addAgent({ id: 'Npc', skipHeartbeat: true, identity: { role: 'Talks.' } })
+			.start();
+		director.mindQueue()!.enqueueMajor('Npc');
+		for (let t = 1; t <= 10; t++) {
+			director.tick(1, t);
+			await sleep(20);
+		}
+		assert.equal(thinks, 2);
+		director.dispose();
+	});
+
 	it('chains any order, start, tick with FakeProvider', async () => {
 		const calls:VerbCall<Ctx>[] = [];
 		const director = await directorOf(calls)
@@ -143,7 +286,7 @@ describe('ArcDirector', () => {
 		assert.equal(arc.head.args.target, 'EastGate');
 		await waitFor(() => calls.length > 0);
 		assert.equal(calls[0].verb, 'go_to');
-		assert.equal(calls[0].agent.id, 'Watcher');
+		assert.equal(calls[0].actor.id, 'Watcher');
 		assert.equal(calls[0].ctx.id, 'Watcher');
 		director.dispose();
 	});
@@ -300,8 +443,8 @@ describe('ArcDirector', () => {
 	it('rank tie-breaks after score', async () => {
 		const order:string[] = [];
 		const director = await directorOf()
-			.onVerb(({ agent, verb }) => {
-				order.push(agent.id);
+			.onVerb(({ actor, verb }) => {
+				order.push(actor.id);
 				return { ok: true, verb };
 			})
 			.addAgent({
@@ -360,7 +503,7 @@ describe('ArcDirector', () => {
 			})
 			.addStockVerbs()
 			.onVerb((call) => {
-				seen.push(call.agent.verbIndex);
+				seen.push(call.actor.verbIndex);
 				return { ok: true, verb: call.verb };
 			})
 			.addSense('scene', {

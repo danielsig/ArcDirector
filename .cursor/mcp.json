@@ -1,0 +1,8 @@
+{
+	"mcpServers": {
+		"arc-director": {
+			"command": "node",
+			"args": ["mcp/dist/main.js"]
+		}
+	}
+}

@@ -1,4 +1,5 @@
 import { Agent, type AgentDeps, type AgentJSON, type AgentOptions } from '../agent/agent.js';
+import type { Actor } from '../agent/actor.js';
 import type { Arc, ArcResult, Step } from '../arc/types.js';
 import { firstStep } from '../arc/types.js';
 import { formatArc } from '../arc/parse.js';
@@ -33,9 +34,9 @@ export type CrowdConductorOptions<TAgentCtx = unknown> = AgentOptions<TAgentCtx>
 };
 
 export function isCrowdConductor<TAgentCtx>(
-	agent:Agent<TAgentCtx> | null | undefined,
-):agent is CrowdConductor<TAgentCtx> {
-	return agent instanceof CrowdConductor;
+	actor:Actor<TAgentCtx> | null | undefined,
+):actor is CrowdConductor<TAgentCtx> {
+	return actor instanceof CrowdConductor;
 }
 
 export class CrowdConductor<TAgentCtx = unknown> extends Agent<TAgentCtx> {
@@ -145,12 +146,13 @@ export class CrowdConductor<TAgentCtx = unknown> extends Agent<TAgentCtx> {
 			: units;
 		for (const unit of troops) {
 			unit.interrupt();
-			this.spawnUnitArc(unit, arc);
+			void this.spawnUnitArc(unit, arc);
 		}
 	}
 
-	assignArc(units:CrowdUnit[], arc:Arc):void {
-		this.issueUnits(units, arc);
+	async enactUnit(unit:CrowdUnit, arc:Arc):Promise<ArcResult> {
+		unit.interrupt();
+		return this.spawnUnitArc(unit, arc);
 	}
 
 	beginHandler(unit:CrowdUnit, handler:ArcHandler, sessionOpts?:ArcSessionOpts):void {
@@ -160,7 +162,7 @@ export class CrowdConductor<TAgentCtx = unknown> extends Agent<TAgentCtx> {
 			this.abortArc?.(unit.id);
 			return;
 		}
-		this.spawnUnitArc(unit, handler.arc, handler, sessionOpts);
+		void this.spawnUnitArc(unit, handler.arc, handler, sessionOpts);
 	}
 
 	private spawnUnitArc(
@@ -168,7 +170,7 @@ export class CrowdConductor<TAgentCtx = unknown> extends Agent<TAgentCtx> {
 		arc:Arc,
 		handler?:ArcHandler,
 		sessionOpts?:ArcSessionOpts,
-	):void {
+	):Promise<ArcResult> {
 		unit.arc = arc;
 		unit.lawName = handler?.key.startsWith('law:') ? handler.key.slice(4) : null;
 		unit.verb = firstStep(arc)?.verb ?? '';
@@ -181,7 +183,7 @@ export class CrowdConductor<TAgentCtx = unknown> extends Agent<TAgentCtx> {
 		unit.stepToken = session.token;
 		const gen = unit.generation;
 		const run = this.runUnitArc(unit, arc, gen, session, handler);
-		unit.inflight = run.finally(() => {
+		unit.inflight = run.then(() => undefined).finally(() => {
 			if (unit.generation === gen) {
 				unit.inflight = null;
 				if (session.parked) {
@@ -197,6 +199,7 @@ export class CrowdConductor<TAgentCtx = unknown> extends Agent<TAgentCtx> {
 				}
 			}
 		});
+		return run;
 	}
 
 	private async runUnitArc(
@@ -205,8 +208,8 @@ export class CrowdConductor<TAgentCtx = unknown> extends Agent<TAgentCtx> {
 		gen:number,
 		session:ArcSession,
 		handler?:ArcHandler,
-	):Promise<void> {
-		await runArc(arc, async (step) => {
+	):Promise<ArcResult> {
+		return runArc(arc, async (step) => {
 			if (unit.generation !== gen) {
 				return { ok: false, interrupted: true, verb: step.verb };
 			}

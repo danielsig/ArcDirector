@@ -50,6 +50,8 @@ director.tick(dt, now);
 
 `start({ ignoreMissing: true })` logs unknown names via `onLog` instead of throwing.
 
+An `Agent` is an `Actor` with a mind. For a body the host drives itself (a player on rails, a cutscene extra), `addActor({ id, kit?, laws? })` adds a plain `Actor`: it runs laws and kit verbs through the same handlers, but never calls the model, and mind-only verbs (`MIND_ONLY_VERBS`: think, remember, goals, identity, watches, focus) are never in its kit. Drive it with `director.actor(id).enact(parseArc(text, actor.activeVerbs()))`. `actor(id)` / `actors()` find agents too; `agent(id)` / `agents()` find only agents.
+
 Scripts with no frame loop may use `runLoop(hz)` (returns a stop function). Games must not; they already have a tick.
 
 ---
@@ -142,8 +144,8 @@ Senses every think in the user block; tools on demand. `addSense` / `addTool` re
 | | |
 |--|--|
 | `withSight({ look, limit, unitName })` | Stock sense `sight`. `look` returns a `Sight` of `SeenObject[]` (`point` vectors). `limit` is the default max **irreducible sight clauses** after `sightFocus` order. Per-mind `AgentSpec.sightLimit` overrides. `unitName` is the leftover distance unit (`m`, `pace`, `foot`); omit for `pace`. Omit `look` to set only the cap; omit `limit` for no cap. |
-| `withInventory(look)` | Stock sense `carrying`. callback returns an `Inventory` bag. |
-| `withEncyclopedia(pages)` | Stock tool `grep_world_encyclopedia`. `pages` is `{ name, aliases?, text }[]` or `(ctx) => pages`. `crowdEncyclopedia({ name, tag, inside })` builds a leftover-crowd article from `formatSight` (a bunch around you). Query leftover English (`trees`, `house`) or a spoken place (`forest`) for the Capitalized type. Empty query lists names. Articles stay out of the standing prefix. |
+| `withInventory(look)` | Stock sense `carrying`. callback returns an `Inventory` bag. The list ends by saying nothing else is carried, so a role that often has something does not imply it has it now. |
+| `withEncyclopedia(pages, { mentions? })` | Stock tool `grep_world_encyclopedia`. `pages` is `{ name, aliases?, text }[]` or `(ctx) => pages`. Articles also come to a mind unasked: a name or alias said or heard lately brings its article under short-term memory (at most `mentions` per think, default 2, 0 for none; not again for 5 thinks). Mark things a body carries with `item: true`: their mention also says whether this mind carries one ("FireMushroom (you carry none)"), every time, so a claim in talk sits next to the truth for speaker and listener, and a name in a failed verb's reason brings its article under that result. `crowdEncyclopedia({ name, tag, inside })` builds a leftover-crowd article from `formatSight` (a bunch around you). Query leftover English (`trees`, `house`) or a spoken place (`forest`) for the Capitalized type. Empty query lists names. Articles stay out of the standing prefix. |
 | `withLineOfSight((aID, bID) => boolean)` | One occlusion callback for sight, talk `canSee`, and watch `hasSightline`. |
 | `addSense(name, spec)` | Host-only sense. `spec` is `{ description, gather }`. |
 | `addTool(name, spec)` | `spec` is `{ description, parameters, handler }`. |
@@ -177,6 +179,7 @@ Verbs need objects. Watches need measurements. Same `ctx`, two jobs.
 | `trade({ actor, side, other, item, quantity, price? })` | command | `buy`, `sell` |
 
 - **Positions and directions are number arrays**, in world space and in whatever dimension the game uses: `[x]`, `[x, z]`, `[x, y, z]`. A position is always called `point`; a direction is named for where it points (`facing`, `right`, `up`) and is a unit vector. `getPose` returns `{ point, facing?, right? }`, so left and right mean what the game means. A 3D game can set `up` (default `[0, 1, 0]`) for formations.
+- **Earshot is not reach.** Someone can be in talking range and still unreachable (across a river, on the phone). The earshot sense marks them with the same blockers a failed move names: `Angler (unreachable, blocked on the way: Bridge is raised)`. A failed move remembers whom it could not reach (`ArcResult.unreachable`); an arc that opens with the same verb toward them is refused in the same think while the way is still blocked, and goes through once it opens. A think whose reply never became a valid arc, even after repairs, ends nothing that would wake the mind again, so it thinks again with `think failed — your reply was not a valid Arc: …` as its last result.
 - **Routes are the library's.** `getPathGraph(actor)` is called once per search and returns the neighbors of any position: as many `{ point, cost?, blocked? }` steps as there are. Grid cells, navmesh polygons, a weighted waypoint network, or a line: the library runs A* over whatever it gets. The position asked about need not be a node: a route starts where the body stands and arrives through the steps out of the destination (taken backwards), so a network returns the waypoints in sight of an arbitrary position. Bodies differ (a child fits a gap a knight does not), so the graph is per body. `cost` defaults to the step's length and must not be less; raise it to route around crowds or rough roads. A `blocked` step ("EastDoor is locked — you carry IronKey") is avoided. With no open way, the move fails naming every blocker that leads there, cheapest first, so an agent facing two locked doors learns about both and can pick the one it holds the key to. Say in the reason what this body could do about it.
 - **The library moves bodies; the game animates them.** While a body moves, `steerToward(actor, point)` is called every tick with the position of the next waypoint (never a direction), or `null` to stand, and returns whether the body is at `point` by the motor's own measure. Speed, collisions, animation, and how close counts as there stay in the game, so the library needs no notion of units. A body that makes no progress gets a new route, then fails with `stuck`. Without `getPathGraph` / `steerToward`, bodies do not move: `call.goTo` succeeds only when already in reach.
 - **`getReach(actor, target)`** is how close a body must be to act on `target` and to count as there (default 1). A building can return its half-width, so arriving inside counts.
@@ -202,18 +205,18 @@ Each agent keeps its own book. The book keeps a name stable, numbers duplicates 
 
 A stranger is the same mechanism: return `MerchantWithBlueHat` from the target's tags until the agent has been told the name, and the book keeps that label steady with no memo on the host side. Once the policy returns the real id, the old label stays an alias, so memories that quote it still resolve.
 
-Events that mention bodies pass real ids in `who` and number them in the text. Each listener reads its own names, and gets them as tags:
+Events that mention bodies pass real ids in `who` and number them in the text. Each listener reads its own names, and gets them as tags. A listener named in `who` reads itself as "you" (or "You" at the start), so write event texts that read in both persons: past tense, as in `{0} gave Bread to {1}`.
 
 ```ts
 director.pushEvent({ kind: 'Hurt', text: '{0} cleaved {1}', who: ['Brune', 'Helms'], tags: ['hurt'] });
-// one company reads "Brune cleaved EnemyKnight", the other "EnemyKnight cleaved Helms"
+// one company reads "Brune cleaved EnemyKnight", the other "EnemyKnight cleaved Helms"; Helms reads "EnemyKnight cleaved you"
 ```
 
 `director.seen(observerID, target)` gives the same name for text the host writes itself, such as a sight `note`.
 
 ### Talk and map
 
-- **`withTalk(sense, onSpoke?, config?)`:** range and routing. Library routes `say()`. Line of sight is `withLineOfSight`.
+- **`withTalk(sense, onSpoke?, config?)`:** range and routing. Library routes `say()`. Line of sight is `withLineOfSight`. When an arc ends on a `say`, the speaker waits up to 20 s for an answer before its next think (a watch can end it sooner; a `say` mid-arc never pauses the rest), but only when someone who could answer heard it clearly: the addressee when `to` is set, anyone otherwise. Unheard or muffled speech goes straight on. The say result names who it was for but could not make out the words (`heard by Baker; too far for Guard to make out the words: get closer`), and earshot marks them `too far to make out your words`. A `say` whose content words (stemmed) mostly repeat a line everyone it is for already heard clearly is refused before anyone hears it: "they already heard you say that". `hasHeard` is true only for speech meant for this mind.
 - **`withMap(sense)`:** host paints `see_map` pictures and marks bodies and places by `id`; library stamps a legend in the agent's own names (no coordinates). Omitted unless vision is on.
 - **`withEncyclopedia(pages)`:** host type docs; minds `grep_world_encyclopedia(query)` instead of stuffing every type into the standing prefix.
 
@@ -294,7 +297,7 @@ The standing lines are yours to replace:
 | `withVerbInstructions(text)` | The verb-chain line. For a Crowd the default also asks for looping programs; this replaces both. A host's standing doctrine goes here. |
 | `withArcExample(arc)` | The Example that closes the prompt. Small models copy it, so make it valid and paren-balanced. |
 | `withRepair({ retries?, temperature? })` | Repair turns after a bad arc (default 0) and the temperature from the second repair on (default 0.4; the first stays at 0). |
-| `withToolRounds(n)` | Tool rounds a think may spend before it must emit the Arc (default 2). |
+| `withToolRounds(n)` | Tool rounds a think may spend before it must emit the Arc (default 6, `DEFAULT_TOOL_ROUNDS`; small models need several lookups in a row). `0` offers no tools. The same tool with the same arguments twice in one think is refused, not rerun. |
 | `withStalled(fn)` | Whether a finished arc stalled, which stretches that mind's heartbeat (default: failed or interrupted). |
 
 Tool hints (`see_map`, `grep_world_encyclopedia`, `observe`) appear only on thinks where that tool is actually offered.
@@ -372,7 +375,7 @@ Tactical: assemble senses → optional memory intrusion → tools (`recall`, `ob
 |--|---------|--|
 | `model` | first preferred | Chat model id |
 | `embedModel` | none | Optional embeddings |
-| `toolRoundCap` | 2 | Tool turns before the arc must appear |
+| `toolRoundCap` | 6 | Tool turns before the arc must appear; 0 offers no tools |
 | `arcRetryCap` | 0 | Extra turns after a bad arc |
 | `maxGoals` | 5 | Trim by priority |
 | `intrusionThreshold` / `intrusionCooldown` | 0.55 / 45 | Unbidden memory into the prompt |
@@ -384,7 +387,7 @@ Tactical: assemble senses → optional memory intrusion → tools (`recall`, `ob
 | `watches` / `pinnedWatches` | `{}` | Name → expr dicts |
 | `watchesWritable` | true | LLM may add / edit / remove extra watches |
 
-`pushEvent` queues text for the next think (`major` wakes immediately; `remember` also files it as an episodic memory; `timestamp` defaults to now). `remember(text, tags)` writes episodic memory. `toJSON` / `fromJSON` round-trip identity, goals, memory, watches, and last arc.
+`pushEvent` queues text for the next think (`major` wakes immediately; speech is major only when it is to the listener, names them, or is said to everyone and heard clearly, so talk between others is overheard without waking anyone; `remember` also files it as an episodic memory; `timestamp` defaults to now). `remember(text, tags)` writes episodic memory. `toJSON` / `fromJSON` round-trip identity, goals, memory, watches, and last arc.
 
 ---
 
@@ -507,7 +510,7 @@ After an arc, `enqueueArc` uses the **highest** score among steps **after** the 
 
 ## Memory
 
-`MemoryStore`: episodic / semantic / identity. Pinned rows skip eviction and go in the user block. Each think also injects `recallK` (5) unpinned hits scored by cosine (if embeddings exist) plus lexical overlap and tag hits, so speech and `remember()` facts show up without a tool call. Episodic cap `maxEpisodic` (256). Heard speech is copied into a short-term buffer (last 8 lines) and into episodic memory with name tags. Sight names persist as last-seen semantic rows. `remember(content)` writes semantic memory. `intrusion` may inject one extra unbidden row.
+`MemoryStore`: episodic / semantic / identity. Pinned rows skip eviction and go in the user block. Each think also injects `recallK` (5) unpinned hits not already in the prompt (short-term lines are skipped before the top 5 are taken) scored by cosine (if embeddings exist) plus lexical overlap and tag hits, so speech and `remember()` facts show up without a tool call. Episodic cap `maxEpisodic` (256). Heard speech is copied into a short-term buffer (last 8 lines) and into episodic memory with name tags. Sight names persist as last-seen semantic rows. `remember(content)` writes semantic memory. `intrusion` may inject one extra unbidden row.
 
 ---
 
@@ -523,7 +526,7 @@ Each think, the prompt lists who is in talking range. `say(to)` is only valid fo
 
 `see_map` is a **tool**, not an Arc verb. It is omitted unless **both** are set: a host `map.snapshot` and `vision`. Arg `zoom` is 0..1 (1 close, 0 whole land). The host paints; the library stamps symbols and returns a legend of names only, no coordinates. Default you-mark is `❌`. Never write `see_map(...)` in the arc.
 
-If `toolRoundCap` is 0, an enabled see_map still gets **one** tool round.
+If `toolRoundCap` is 0, no tools are offered, see_map included.
 
 `grep_world_encyclopedia` is the same kind of tool for **types**. Host pages are `{ name, aliases?, text }`, or `crowdEncyclopedia({ name, tag, inside })` which stringifies a bunch of that tag and distills leftover English plus surround-sense (being inside a spoken place). Query leftover English (`trees`, `house`) or a spoken place (`forest`); empty query lists names. Articles are not in the standing prefix. Never write `grep_world_encyclopedia(...)` in the arc.
 

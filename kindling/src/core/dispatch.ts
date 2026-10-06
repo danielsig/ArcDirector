@@ -51,7 +51,7 @@ export function dispatch(
 			batch(dt, list);
 		}
 		for (const c of list) {
-			if (overridden(c, hook)) {
+			if (c.enabled && overridden(c, hook)) {
 				c[hook](dt);
 			}
 		}

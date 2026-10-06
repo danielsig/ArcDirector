@@ -44,11 +44,16 @@ export function sinkAiLog(entries:HudAiLogEntry[], added:HudAiLogEntry, trimmed:
 	}).catch(() => undefined);
 }
 
-export function pushLog(host:GameHost, name:string, message:string, image?:string):void {
+export function pushLog(
+	host:GameHost,
+	name:string,
+	message:string,
+	extra:{ image?:string; error?:boolean } = {},
+):void {
 	host.logSeq += 1;
-	const entry:HudAiLogEntry = image
-		? { seq: host.logSeq, name, message, image }
-		: { seq: host.logSeq, name, message };
+	const entry:HudAiLogEntry = { seq: host.logSeq, name, message };
+	if (extra.image) entry.image = extra.image;
+	if (extra.error) entry.error = true;
 	host.log.push(entry);
 	let trimmed = false;
 	if (host.log.length > AI_LOG_CAP) {
@@ -62,7 +67,7 @@ export async function logLook(host:GameHost, id:string, zoom:number, snap:MapSna
 	const stamped = await stampMap(snap);
 	const legend = stamped.legend || '(no marks)';
 	const z = zoom === 0 || zoom === 1 ? String(zoom) : String(Math.round(zoom * 100) / 100);
-	pushLog(host, id, `see_map({zoom:${z}})\n${legend}`, stamped.image);
+	pushLog(host, id, `see_map({zoom:${z}})\n${legend}`, { image: stamped.image });
 }
 
 export async function dumpLookMaps(host:GameHost):Promise<number> {

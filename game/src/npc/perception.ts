@@ -282,7 +282,7 @@ export function followedCarry(ctx:AgentCtx):string {
 export function doExamine(world:World, actor:GameObject, name:string):ArcResult {
 	const held = findCarried(actor, (it) => itemMatchesName(it, name));
 	if (held) {
-		return { ok: true, verb: 'examine', reason: JSON.stringify(examineItem(held)) };
+		return { ok: true, verb: 'examine', reason: examineItem(held) };
 	}
 	const go = world.findNamed(name);
 	if (!go) {
@@ -291,86 +291,68 @@ export function doExamine(world:World, actor:GameObject, name:string):ArcResult 
 	if (!hostCanSee(world, bodyName(actor), bodyName(go)) || distXZ(actor, go) > SIGHT) {
 		return { ok: false, verb: 'examine', reason: `${name} is not in sight` };
 	}
-	return { ok: true, verb: 'examine', reason: JSON.stringify(examineWorld(go)) };
+	return { ok: true, verb: 'examine', reason: examineWorld(go) };
 }
 
-function examineItem(item:ItemInstance):Record<string, unknown> {
-	return {
-		id: pascalCase(item.name) || item.id,
-		name: item.name,
-		defID: item.defID,
-		count: item.count,
-		keyID: item.Key?.keyID,
-		equipable: item.Equipable ? { slots: item.Equipable.slots, hands: item.Equipable.hands } : undefined,
-		container: item.Container
-			? { size: item.Container.size, contents: item.Container.contents.map(itemLabel) }
-			: undefined,
-		ingredient: item.Ingredient
-			? {
-				brewer: item.Ingredient.brewer,
-				fee: item.Ingredient.fee,
-				brew: item.Ingredient.brew,
-				yield: item.Ingredient.yield,
-			}
-			: undefined,
-		ask: goodsAsk(item),
-	};
+/** `A, B and C`, or `nothing`. */
+function listed(names:string[]):string {
+	return names.length === 0 ? 'nothing' : names.length === 1 ? names[0] : `${names.slice(0, -1).join(', ')} and ${names.at(-1)}`;
 }
 
-function examineWorld(go:GameObject):Record<string, unknown> {
-	const named = go.getComponent(Named)?.id ?? go.id;
+/** What `examine` tells about an item you carry, in sentences. */
+function examineItem(item:ItemInstance):string {
+	const id = pascalCase(item.name) || pascalCase(item.defID);
+	const ask = item.defID === 'fire_mushroom' || item.defID === 'silver_trout' ? undefined : goodsAsk(item);
+	return [
+		item.count > 1 ? `You carry ${item.count} ${id}.` : `You carry ${id}.`,
+		item.Key && `It is the ${item.Key.keyID} key.`,
+		item.Equipable && (item.Equipable.hands === 2 ? 'You can equip it, with both hands.' : 'You can equip it.'),
+		item.Container && `It holds ${item.Container.size}: ${listed(item.Container.contents.map(itemLabel))}.`,
+		item.Ingredient && `${item.Ingredient.brewer} brews ${item.Ingredient.yield} ${item.Ingredient.brew} from it, for ${item.Ingredient.fee}.`,
+		ask !== undefined && `It sells for about ${ask} gold.`,
+	].filter(Boolean).join(' ');
+}
+
+/** What `examine` tells about something in sight, in sentences. */
+function examineWorld(go:GameObject):string {
+	const name = go.getComponent(Named)?.id ?? go.id;
 	const lock = go.getComponent(Lock);
+	const locked = lock?.locked ? ` and locked${lock.keyID ? `; it needs the ${lock.keyID} key` : ''}` : '';
 	const door = go.getComponent(Door);
+	const bridge = go.getComponent(Bridge);
+	const chest = go.getComponent(Chest);
 	const item = go.getComponent(Item);
-	const row:Record<string, unknown> = { name: named };
+	const lines:(string | false | undefined)[] = [];
 	if (door) {
-		row.kind = 'door';
-		row.open = door.open;
+		lines.push(`${name} is a door, ${door.open ? 'open' : 'shut'}${locked}.`);
 	}
 	if (go.getComponent(BridgeLever)) {
-		row.kind = 'sluice';
-		row.note = 'not loot';
+		lines.push(`${name} is the fixed lever that raises and lowers the bridge.`);
 	}
-	if (go.getComponent(Bridge)) {
-		row.kind = 'bridge';
-		row.open = !!go.getComponent(Bridge)?.open;
-	}
-	if (lock) {
-		row.locked = lock.locked;
-		row.needs = lock.keyID ? `${lock.keyID} key` : undefined;
+	if (bridge) {
+		lines.push(bridge.open
+			? `${name} is a bridge, lowered: you can cross.`
+			: `${name} is a bridge, raised: no one can cross until it is lowered.`);
 	}
 	if (item) {
-		row.kind = 'item';
-		row.defID = item.defID;
-		row.count = item.count;
+		lines.push(item.count > 1 ? `${item.count} ${name} lie here.` : `${name} lies here.`);
 	}
-	if (go.getComponent(Chest)) {
-		row.kind = 'chest';
-		row.open = !!go.getComponent(Chest)?.open;
+	if (chest) {
 		const bag = go.getComponent(Container);
-		row.contents = bag && go.getComponent(Chest)?.open && !lock?.locked
-			? bag.contents.map((it) => pascalCase(it.name) || it.name)
-			: lock?.locked ? 'locked' : 'closed';
+		const inside = chest.open && !lock?.locked && bag ? ` It holds ${listed(bag.contents.map((it) => pascalCase(it.name) || it.name))}.` : '';
+		lines.push(`${name} is a chest, ${chest.open ? 'open' : 'shut'}${locked}.${inside}`);
 	}
 	if (go.getComponent(MarketNPC) || go.getComponent(HumanBody)) {
-		row.purse = coinsOf(go);
-		row.carrying = carriedLabels(go);
 		const npc = go.getComponent(MarketNPC);
-		if (npc) {
-			row.role = npc.kind;
-			row.wants = npc.wants;
-		}
 		const shop = go.getComponent(Merchant);
-		if (shop) {
-			row.sells = shop.specialty;
-			row.ask = shop.ask;
-			row.lowest = shop.floor;
-		}
 		const mark = go.getComponent(Wanted);
-		if (mark?.enabled) {
-			row.wanted = mark.reason || 'theft';
-			row.stolen = mark.items;
-		}
+		lines.push(
+			npc && `${name} is a ${npc.kind}${npc.wants.length > 0 ? ` who wants ${listed(npc.wants)}` : ''}.`,
+			shop && `${name} sells ${shop.specialty} for ${shop.ask} gold, and no lower than ${shop.floor}.`,
+			`${name} carries ${listed(carriedLabels(go))} and ${coinsOf(go)} gold.`,
+			mark?.enabled && `${name} is wanted for ${mark.reason || 'theft'}${mark.items.length > 0 ? `: ${listed(mark.items)}` : ''}.`,
+		);
 	}
-	return row;
+	const text = lines.filter(Boolean).join(' ');
+	return text || `${name} is nothing out of the ordinary.`;
 }

@@ -3,7 +3,7 @@ import type { GameObject } from './GameObject.js';
 /** One component's saved fields. JSON data only. */
 export type ComponentState = Record<string, unknown>;
 
-export class Component {
+export abstract class Component {
 	/** Lower runs first within a dispatch hook. */
 	static order = 0;
 	/** Fields a save keeps (`captureWorld`). JSON data only; everything else rebuilds with the scene. */

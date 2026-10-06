@@ -1,0 +1,27 @@
+export {
+	COMMAND_TIMEOUT_MS,
+	HUB_HOST,
+	HUB_PORT,
+	encode,
+	errorText,
+	hubWSURL,
+	parseHubMsg,
+	type ActorRow,
+	type CallMsg,
+	type Command,
+	type HelloMsg,
+	type HubMsg,
+	type SessionMsg,
+	type AiLogQuery,
+	type ReconnectResult,
+	type ResultMsg,
+	type RpcMsg,
+	type RpcResultMsg,
+} from './protocol.js';
+export {
+	clearArcControl,
+	connectControl,
+	installArcControl,
+	type ControlDispatch,
+	type ControlLink,
+} from './client.js';

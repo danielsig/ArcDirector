@@ -57,7 +57,7 @@ const FORMATION_PACES = 2;
 /** Stock handlers for every world verb `deps.world` has the parts for. */
 export function worldVerbs<TAgentCtx>(deps:WorldVerbDeps<TAgentCtx>):Handlers<TAgentCtx> {
 	const { world, mover } = deps;
-	const nameOf = (call:VerbCall<TAgentCtx>, id:string):string => call.agent.nameOf(id);
+	const nameOf = (call:VerbCall<TAgentCtx>, id:string):string => call.actor.nameOf(id);
 	const fail = (verb:string, reason:string):ArcResult => ({ ok: false, verb, reason });
 	const outcome = (verb:string, done:{ ok:boolean; reason?:string }):ArcResult => ({ ok: done.ok, verb, reason: done.reason });
 	const formation:VerbHandler<TAgentCtx> = (call) => formationVerb(call, world, mover);
@@ -167,7 +167,7 @@ async function wander<TAgentCtx>(call:Call<TAgentCtx, 'wander'>, deps:WorldVerbD
 	const end = deps.now() + (call.args.seconds ?? (until ? 20 : 6));
 	const saw = new Set<string>();
 	const report = (met:boolean):ArcResult => {
-		const names = [...saw].slice(0, SAW_CAP).map((id) => call.agent.nameOf(id));
+		const names = [...saw].slice(0, SAW_CAP).map((id) => call.actor.nameOf(id));
 		const seen = names.length > 0 ? `saw ${names.join(', ')}` : '';
 		return { ok: true, verb: 'wander', reason: met ? (seen ? `until — ${seen}` : 'until') : seen || undefined };
 	};

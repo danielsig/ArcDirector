@@ -1,0 +1,32 @@
+{
+	"name": "@arc-director/control",
+	"private": true,
+	"version": "0.0.1",
+	"type": "module",
+	"exports": {
+		".": {
+			"types": "./dist/index.d.ts",
+			"import": "./dist/index.js"
+		},
+		"./hub": {
+			"types": "./dist/hub.d.ts",
+			"import": "./dist/hub.js"
+		}
+	},
+	"files": [
+		"dist"
+	],
+	"scripts": {
+		"build": "tsc -p tsconfig.json",
+		"typecheck": "tsc -p tsconfig.json --noEmit",
+		"test": "tsc -p tsconfig.json && node --test --test-reporter spec dist/hub.test.js"
+	},
+	"dependencies": {
+		"ws": "^8.18.3"
+	},
+	"devDependencies": {
+		"@types/node": "^20.19.43",
+		"@types/ws": "^8.18.1",
+		"typescript": "^6.0.3"
+	}
+}

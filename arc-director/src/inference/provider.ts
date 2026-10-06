@@ -55,7 +55,8 @@ export type JsonSchemaResponseFormat = {
 	strict?:boolean;
 };
 
-export type ToolChoice = 'auto' | 'none';
+/** `required`: the reply must be a tool call. */
+export type ToolChoice = 'auto' | 'none' | 'required';
 
 export type ChatRequest = {
 	model:string;

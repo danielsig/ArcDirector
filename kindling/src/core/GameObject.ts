@@ -1,6 +1,6 @@
 import { Transform } from './Transform.js';
 import { Component } from './Component.js';
-import type { Constructor } from './types.js';
+import type { ComponentInit, Constructor } from './types.js';
 import type { World } from './World.js';
 
 let nextSerial = 1;
@@ -39,10 +39,13 @@ export class GameObject {
 		this.comps.push(this.transform);
 	}
 
-	addComponent<T extends Component>(c:T):T {
-		if (c instanceof Transform) {
+	/** Attach a new `ctor()`. `init` fields are set before `awake` / `onEnable` (which run now if this is in a world). */
+	addComponent<T extends Component>(ctor:new ()=>T, init?:ComponentInit<T>):T {
+		if (ctor.prototype === Transform.prototype || ctor.prototype instanceof Transform) {
 			throw new Error('Transform cannot be added; it is already on the GameObject');
 		}
+		const c = new ctor();
+		Object.assign(c, init);
 		c.gameObject = this;
 		this.comps.push(c);
 		if (this.world) {
@@ -55,6 +58,23 @@ export class GameObject {
 		return c;
 	}
 
+	/** Detach now: `onDisable` (if enabled) then `onDestroy`, once awoken. A class removes every instance of it; `Transform` is never removed. */
+	removeComponent(target:Component | Constructor<Component>):void {
+		if (target === this.transform) {
+			throw new Error('Transform cannot be removed');
+		}
+		const doomed = this.comps.filter((c) => {
+			return c !== this.transform && (target instanceof Component ? c === target : c instanceof target);
+		});
+		for (const c of doomed) {
+			this.comps.splice(this.comps.indexOf(c), 1);
+			c.enabled = false;
+			if (c.awoken) {
+				c.onDestroy();
+			}
+		}
+	}
+
 	getComponent<T>(ctor:Constructor<T>):T | undefined {
 		for (const c of this.comps) {
 			if (c instanceof ctor) {
@@ -62,6 +82,11 @@ export class GameObject {
 			}
 		}
 		return undefined;
+	}
+
+	/** `getComponent`, else a new `ctor()` added now. */
+	getOrAddComponent<T extends Component>(ctor:new ()=>T):T {
+		return this.getComponent(ctor) ?? this.addComponent(ctor);
 	}
 
 	getComponentsInChildren<T>(ctor:Constructor<T>):T[] {

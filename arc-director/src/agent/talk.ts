@@ -25,6 +25,11 @@ export type TalkSense = {
 	 * get closer to the speaker if they care.
 	 */
 	clearHear?:(speakerID:string, listenerID:string)=>boolean;
+	/**
+	 * Whether this listener receives the line at all. If omitted, everyone in
+	 * earshot hears it (clear or muffled). False drops them before delivery.
+	 */
+	hears?:(speakerID:string, listenerID:string)=>boolean;
 	/** Names that count as this listener (id, role, aliases). Default `[id]`. */
 	names?:(listenerID:string)=>string[];
 	/** Turn `who` to face `toward`. */
@@ -58,6 +63,12 @@ export type SpeechUtterance = {
 	heardBy:string[];
 	timestamp:number;
 };
+
+/**
+ * A `say` result. `heard`: who heard it clearly. `answerable`: someone who could answer heard it clearly
+ * (a target, when there is one).
+ */
+export type SayResult = ArcResult & { heard?:string[]; answerable?:boolean };
 
 type Muffled = { speakerID:string; spoken:string; targets:string[]; until:number };
 
@@ -142,7 +153,9 @@ function heardLine(
 	clear:boolean,
 	mentioned:boolean,
 ):{ text:string; major:boolean } {
-	const major = clear || addressed || mentioned;
+	// Wakes the listener only when it is meant for them: to them, naming them, or to everyone and clearly heard.
+	// Talk between others is overheard: remembered, read on the next think, but no reason to think now.
+	const major = addressed || mentioned || (clear && toLabel === '');
 	if (clear) {
 		return { major, text: saysLine(speaker, spoken, addressed, toLabel) };
 	}
@@ -231,6 +244,11 @@ export class TalkNet {
 		return out;
 	}
 
+	/** Whether `listenerID` would make out `speakerID`'s words, not just hear them muffled. */
+	clear(speakerID:string, listenerID:string):boolean {
+		return this.sense.clearHear?.(speakerID, listenerID) ?? true;
+	}
+
 	/**
 	 * Whether `say` would deliver. Does not speak. Directed `to` must be in
 	 * range; a broadcast needs at least one listener. Use this before committing
@@ -256,7 +274,7 @@ export class TalkNet {
 		return { ok: true, nearby };
 	}
 
-	say(speakerID:string, text:string, to?:SayTo, timestamp = 0):ArcResult {
+	say(speakerID:string, text:string, to?:SayTo, timestamp = 0):SayResult {
 		const spoken = text.trim();
 		if (!spoken) {
 			return { ok: false, verb: 'say', reason: 'nothing to say' };
@@ -281,7 +299,12 @@ export class TalkNet {
 		};
 		this.attend(utterance);
 		this.onSpoke?.(utterance);
+		const clearly:string[] = [];
 		for (const id of heardBy) {
+			const clear = this.clear(speakerID, id);
+			if (clear && id !== speakerID) {
+				clearly.push(id);
+			}
 			const mind = this.mindFor(id);
 			if (!mind) {
 				continue;
@@ -292,7 +315,6 @@ export class TalkNet {
 				...listenerNames(this.sense, id),
 				...listenerNames(this.sense, mind.id),
 			]);
-			const clear = this.sense.clearHear?.(speakerID, id) ?? true;
 			const mentioned = speechMentionsName(spoken, names);
 			const addressed = targets.some((t) => names.some((n) => n.toLowerCase() === t.toLowerCase()));
 			const heardTo = targets.map((t) => this.label(id, t));
@@ -305,10 +327,13 @@ export class TalkNet {
 				this.muffled.set(id, list);
 			}
 		}
-		if (targets.length > 0) {
-			return { ok: true, verb: 'say', reason: `to ${targets.map((t) => this.label(speakerID, t)).join(', ')}` };
-		}
-		return { ok: true, verb: 'say', reason: `heard by ${heardBy.map((t) => this.label(speakerID, t)).join(', ')}` };
+		const answerable = clearly.some((id) => targets.length === 0 || targets.includes(id));
+		const names = (ids:string[]):string => ids.map((t) => this.label(speakerID, t)).join(', ');
+		// Who it was for and could not make out the words: the speaker must know, or it waits on an answer that cannot come.
+		const muffled = (targets.length > 0 ? targets : heardBy).filter((id) => id !== speakerID && heardBy.includes(id) && !clearly.includes(id));
+		const said = targets.length > 0 ? `to ${names(targets)}` : clearly.length > 0 ? `heard by ${names(clearly)}` : 'no one made out the words';
+		const far = muffled.length > 0 ? `; too far for ${names(muffled)} to make out the words: get closer` : '';
+		return { ok: true, verb: 'say', reason: `${said}${far}`, heard: clearly, answerable };
 	}
 
 	/** Deliver muffled lines in full to listeners who came close enough. Call once per frame. */
@@ -326,7 +351,8 @@ export class TalkNet {
 				const addressed = row.targets.some((t) => names.some((n) => n.toLowerCase() === t.toLowerCase()));
 				const heardTo = row.targets.map((t) => this.label(id, t));
 				const speaker = this.label(id, row.speakerID);
-				this.hear(mind, speaker, heardTo, saysLine(speaker, row.spoken, addressed, heardTo.join(', '), ', now clear'), true, now);
+				const meant = addressed || row.targets.length === 0 || speechMentionsName(row.spoken, names);
+				this.hear(mind, speaker, heardTo, saysLine(speaker, row.spoken, addressed, heardTo.join(', '), ', now clear'), meant, now);
 				return false;
 			});
 			if (keep.length > 0) {
@@ -351,11 +377,11 @@ export class TalkNet {
 
 	private hearers(speakerID:string, targets:string[]):string[] {
 		const nearby = this.nearby(speakerID);
-		if (targets.length === 0) {
-			return nearby;
-		}
-		const extra = targets.filter((name) => !nearby.includes(name));
-		return extra.length === 0 ? nearby : [...nearby, ...extra];
+		const heard = targets.length === 0
+			? nearby
+			: [...nearby, ...targets.filter((name) => !nearby.includes(name))];
+		const allow = this.sense.hears;
+		return allow ? heard.filter((id) => allow(speakerID, id)) : heard;
 	}
 
 	private attend(utterance:SpeechUtterance):void {

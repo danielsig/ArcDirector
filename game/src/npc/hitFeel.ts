@@ -34,7 +34,7 @@ export function applyHit(world:World, striker:GameObject, hurt:GameObject, knock
 	b.x += nx * shove;
 	b.z += nz * shove;
 	resolveBody(world, hurt);
-	const flash = hurt.getComponent(HurtFlash) ?? hurt.addComponent(new HurtFlash());
+	const flash = hurt.getOrAddComponent(HurtFlash);
 	flash.strike(nx * speed, nz * speed, world.time);
 	if (rb) {
 		rb.velocity.x = nx * speed;

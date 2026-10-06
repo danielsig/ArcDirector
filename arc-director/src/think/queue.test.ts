@@ -166,6 +166,8 @@ describe('ThinkQueue', () => {
 		assert.ok(verbThinkScore('go_to') > verbThinkScore('think'));
 		assert.ok(verbThinkScore('think') > verbThinkScore('wander'));
 		assert.ok(verbThinkScore('wander') > verbThinkScore('wait'));
+		// An arc that only learns something must lead to a think that uses it.
+		assert.ok(arcScore({ head: { verb: 'examine', args: { target: 'BridgeLever' } } }) >= verbThinkScore('use'));
 		assert.equal(verbThinkScore('wait'), 0);
 		assert.ok(verbThinkScore('wait', false) > 0);
 		assert.equal(verbThinkScore('follow'), 0);

@@ -11,7 +11,7 @@ export { Rigidbody } from './core/Rigidbody.js';
 export { BoxCollider } from './core/BoxCollider.js';
 export { SHOVE_YIELD, stepPhysics, resolveBody } from './core/physics.js';
 export type { TerrainSample } from './core/World.js';
-export type { Constructor, ComponentClass } from './core/types.js';
+export type { Constructor, ComponentClass, ComponentInit } from './core/types.js';
 
 export { Camera } from './render/Camera.js';
 export { Light, type LightKind } from './render/Light.js';

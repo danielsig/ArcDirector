@@ -13,6 +13,14 @@ describe('MemoryStore', () => {
 		assert.equal(hit[0].text, 'a merchant in a red sash');
 	});
 
+	it('skips records the caller already shows before taking the top k', () => {
+		const store = new MemoryStore();
+		store.add({ text: 'Keeper says: the bridge costs 10 gold', tags: ['bridge'], timestamp: 2 });
+		store.add({ text: 'Angler is across the bridge', tags: ['bridge'], timestamp: 1 });
+		const hit = store.recall({ query: 'Keeper says: the bridge costs 10 gold', now: 4, k: 1, skip: (r) => r.text.startsWith('Keeper') });
+		assert.deepEqual(hit.map((r) => r.text), ['Angler is across the bridge']);
+	});
+
 	it('recalls by cosine when embeddings exist', () => {
 		const store = new MemoryStore();
 		store.add({

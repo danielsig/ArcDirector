@@ -1,3 +1,4 @@
+import type { AgentSpec } from 'arc-director';
 import type { NPCInput } from '../actors/NPCInput';
 import type { GameObject } from '../engine/GameObject';
 import type { World } from '../engine/World';
@@ -18,3 +19,9 @@ export type SceneHooks<H> = {
 	goalDone?:(host:H, id:string)=>boolean;
 	allowTheft?:boolean;
 };
+
+const RECEIVED = 'count(me.inventory) > count(prev.me.inventory) || me.gold > prev.me.gold';
+
+export function withReceived<T>(spec:AgentSpec<T>):AgentSpec<T> {
+	return { ...spec, watches: { received: RECEIVED, ...spec.watches } };
+}

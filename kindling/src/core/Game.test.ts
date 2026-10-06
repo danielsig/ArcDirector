@@ -35,7 +35,7 @@ describe('Game.tick', () => {
 	it('runs two fixed steps when dt covers them', () => {
 		const game = new Game();
 		const go = new GameObject('step');
-		const stepper = go.addComponent(new Stepper());
+		const stepper = go.addComponent(Stepper);
 		game.world.add(go);
 		game.tick(Time.fixedDeltaTime * 2);
 		assert.equal(stepper.fixed, 2);

@@ -54,7 +54,7 @@ async function boot():Promise<void> {
 </script>
 
 <template>
-	<div ref="host" class="kindling-host">
+	<div ref="host" class="kindling-host" :class="{ booting: !booted }">
 		<div v-if="!booted" class="boot">Loading…</div>
 	</div>
 </template>
@@ -63,6 +63,11 @@ async function boot():Promise<void> {
 .kindling-host {
 	position: absolute;
 	inset: 0;
+}
+
+/* Above the HUD (z-index 5) so hearts and other chrome stay hidden until the scene is up. */
+.kindling-host.booting {
+	z-index: 6;
 }
 
 .kindling-host :deep(canvas) {

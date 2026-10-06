@@ -210,6 +210,21 @@ describe('CrowdConductor chain', () => {
 		assert.equal(calls.some((c) => c.actorID === 'Tomas' && c.verb === 'go_to'), true);
 		director.dispose();
 	});
+
+	it('enactUnit runs the arc on that body and returns the result', async () => {
+		const calls:VerbCall<Ctx>[] = [];
+		const director = await hiveOf({ calls });
+		const hive = director.agent('Hive');
+		assert.ok(isCrowdConductor(hive));
+		const mira = hive.crowd.get('Mira');
+		assert.ok(mira);
+		const result = await hive.enactUnit(mira, parseArc('go_to(Keep)', hive.verbs));
+		assert.equal(result.ok, true);
+		assert.equal(result.verb, 'go_to');
+		assert.equal(calls.some((c) => c.actorID === 'Mira' && c.verb === 'go_to'), true);
+		assert.equal(calls.some((c) => c.actorID === 'Tomas'), false);
+		director.dispose();
+	});
 });
 
 describe('issue(who)', () => {

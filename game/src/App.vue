@@ -13,7 +13,7 @@ import { SCENES } from './data/scenes';
 import { clearURLView } from './engine/urlView';
 import { preloadArt } from './render/preloadArt';
 import { startMenuAudio, type MenuAudioHandle } from './audio/menu';
-import { prefs, setMenuMusicMuted } from './prefs';
+import { prefs, setMenuMusicMuted, watchPrefs } from './prefs';
 
 preloadArt();
 
@@ -104,6 +104,7 @@ function layoutPicker():void {
 }
 
 let pickerObserver:ResizeObserver | null = null;
+let stopPrefs:(()=>void) | null = null;
 
 watch(picker, (el) => {
 	menuHandle.value?.stop();
@@ -117,8 +118,17 @@ watch(picker, (el) => {
 		layoutPicker();
 	}
 });
-onMounted(() => layoutPicker());
+onMounted(() => {
+	layoutPicker();
+	stopPrefs = watchPrefs((p) => {
+		menuMusicMuted.value = p.menuMusicMuted;
+		if (!sceneID.value) {
+			hud.musicVolume = p.music;
+		}
+	});
+});
 onUnmounted(() => {
+	stopPrefs?.();
 	pickerObserver?.disconnect();
 	pickerObserver = null;
 	menuHandle.value?.stop();
@@ -142,10 +152,7 @@ function kickLive():void {
 
 function onMenuMusicCheck(ev:Event):void {
 	const on = (ev.target as HTMLInputElement).checked;
-	const next = setMenuMusicMuted(!on);
-	menuMusicMuted.value = next.menuMusicMuted;
-	hud.musicVolume = next.music;
-	menuHandle.value?.setMuted(next.menuMusicMuted);
+	menuHandle.value?.setMuted(setMenuMusicMuted(!on).menuMusicMuted);
 }
 
 function pick(id:string):void {

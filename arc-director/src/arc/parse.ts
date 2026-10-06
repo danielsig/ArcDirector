@@ -260,6 +260,12 @@ function parseNestedArc(s:string, i:number, registry:VerbRegistry):{ value:Arc; 
 	return { value: arc, next: pos };
 }
 
+/** Index past a stuttered `key=` the model repeated after `key=`, as in `say(text=text="Hi")`. */
+function skipRepeatedKey(s:string, i:number, key:string):number {
+	const m = new RegExp(`^\\s*${key}\\s*=(?!=)`).exec(s.slice(i, i + key.length + 16));
+	return m ? i + m[0].length : i;
+}
+
 function parseStepText(s:string, i:number, registry:VerbRegistry):{ step:Step; next:number } {
 	i = skipWs(s, i);
 	const start = i;
@@ -273,6 +279,10 @@ function parseStepText(s:string, i:number, registry:VerbRegistry):{ step:Step; n
 	i = skipWs(s, i);
 	const spec = registry.get(verb);
 	if (!spec) {
+		// A bare word is an argument that slipped out of its verb: `say(text=Hi) to=Guard`, `say(Hi) to Guard`.
+		if (start > 0 && s[i] !== '(') {
+			throw new ArcError(`${verb} is outside the parentheses. Put every argument inside its verb's parentheses, as in say(text=Hi, to=Name)`);
+		}
 		throw new ArcError(`unknown verb '${verb}'`);
 	}
 	const args:Record<string, StepArg> = {};
@@ -303,7 +313,7 @@ function parseStepText(s:string, i:number, registry:VerbRegistry):{ step:Step; n
 				// Prose may hold `=`: only this verb's own arg names start a named arg there.
 				const prose = !!key && argBase(spec.args[key]) === 'text' && !(ident in spec.args);
 				if (s[i] === '=' && !prose) {
-					const parsed = read(ident, i + 1);
+					const parsed = read(ident, skipRepeatedKey(s, i + 1, ident));
 					args[ident] = parsed.value;
 					i = parsed.next;
 				}

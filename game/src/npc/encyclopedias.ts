@@ -25,6 +25,11 @@ const BUY:EncyclopediaEntry = {
 	text: 'Buying is done like this: `buy(item=What, from=Seller)`. Selling is `sell(item=What, to=Buyer)`.',
 };
 
+/** A good one stall sells. */
+function ware(name:string, aliases:string[], seller:string, stall:string, ask:number):EncyclopediaEntry {
+	return { name, aliases, text: `Item. ${seller} sells it at ${stall}, asking ${ask} gold. buy(item=${name}, from=${seller}).`, item: true };
+}
+
 const GLEN:EncyclopediaEntry[] = [
 	TREE,
 	{
@@ -47,12 +52,12 @@ const GLEN:EncyclopediaEntry[] = [
 	{
 		name: 'Bridge',
 		aliases: ['sluice'],
-		text: 'Named bridge. go_to(Bridge) when the scene shows it. BridgeLever and BridgeCrank work the sluice.',
+		text: 'Bridge over the river, raised unless lowered. Only BridgeKeeper can lower it, for a fee. go_to(Bridge) when the scene shows it.',
 	},
 	{
 		name: 'BridgeLever',
 		aliases: ['lever'],
-		text: 'Named sluice lever by Bridge. BridgeKeeper works it with BridgeCrank.',
+		text: 'Sluice lever by Bridge. Only BridgeKeeper works it, with BridgeCrank.',
 	},
 	{
 		name: 'BridgeStone',
@@ -62,18 +67,21 @@ const GLEN:EncyclopediaEntry[] = [
 	BUY,
 	{
 		name: 'FireMushroom',
-		aliases: ['mushroom', 'mushrooms'],
+		aliases: ['mushroom', 'mushrooms', '10 gold'],
 		text: 'Item. Worth 10 gold. Forager harvests it outdoors. BridgeKeeper takes it as the bridge fee or sells it.',
+		item: true,
 	},
 	{
 		name: 'SilverTrout',
-		aliases: ['trout', 'fish'],
+		aliases: ['trout', 'fish', '5 gold'],
 		text: 'Item. Worth 5 gold. Silver trout can be bought from anglers.',
+		item: true,
 	},
 	{
 		name: 'BridgeCrank',
 		aliases: ['crank'],
 		text: 'Item. Used on BridgeLever to work a sluice.',
+		item: true,
 	},
 ];
 
@@ -113,6 +121,17 @@ const MARKETPLACE:EncyclopediaEntry[] = [
 		name: 'CutlerStall',
 		aliases: ['cutler stall'],
 		text: 'A stall where a cutler sells knives. Walk to it with go_to(CutlerStall).',
+	},
+	ware('Loaf', ['bread', 'loaves'], 'Baker', 'BakerStall', 5),
+	ware('Scarf', ['scarves'], 'Weaver', 'WeaverStall', 6),
+	ware('Bowl', ['bowls', 'pottery'], 'Potter', 'PotterStall', 4),
+	ware('Knife', ['knives', 'blade'], 'Cutler', 'CutlerStall', 7),
+	{ name: 'Apple', aliases: ['apples', 'fruit'], text: 'Item. Nobody sells it here; FruitStall is empty today.', item: true },
+	{ name: 'Candle', aliases: ['candles'], text: 'Item. Nobody sells it here; CandleStall is empty today.', item: true },
+	{
+		name: 'Guard',
+		aliases: ['guards', 'watch'],
+		text: 'Guards hold EastGate and WestGate. A Guard who reaches a thief takes the stolen goods back to their stall.',
 	},
 	BUY,
 ];

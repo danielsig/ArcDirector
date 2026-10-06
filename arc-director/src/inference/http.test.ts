@@ -78,7 +78,7 @@ describe('HttpProvider thinking', () => {
 			catalogWithReasoning(model, ['off', 'on']),
 		);
 		assert.equal(body.reasoning, 'on');
-		assert.equal(body['max_tokens'], 512);
+		assert.equal(body['max_tokens'], 4096);
 	});
 
 	it('turns reasoning off and shrinks output when the engine exceeds context', async () => {
@@ -113,7 +113,7 @@ describe('HttpProvider thinking', () => {
 		});
 		assert.equal(res.content, '{"ok":true}');
 		assert.equal(bodies[0]?.reasoning, 'on');
-		assert.equal(bodies[0]?.['max_tokens'], 512);
+		assert.equal(bodies[0]?.['max_tokens'], 4096);
 		assert.equal(bodies[1]?.reasoning, 'off');
 		assert.equal(bodies[1]?.['max_tokens'], 256);
 	});
@@ -431,6 +431,7 @@ describe('HttpProvider native server', () => {
 					assert.equal(body.offload_kv_cache_to_gpu, true);
 					assert.equal(body.eval_batch_size, 1024);
 					assert.equal(body.parallel, 2);
+					assert.equal('context_length' in body, false);
 					return new Response(JSON.stringify({ status: 'loaded', instance_id: 'guard' }), { status: 200 });
 				}
 				return new Response(JSON.stringify({
@@ -443,6 +444,32 @@ describe('HttpProvider native server', () => {
 			messages: [{ role: 'user', content: 'hi' }],
 		});
 		assert.ok(urls.some((u) => u.includes('/api/v1/models/load')));
+	});
+
+	it('sends context_length on load when configured', async () => {
+		let loadBody:Record<string, unknown> | undefined;
+		const provider = new HttpProvider({
+			baseURL: 'http://127.0.0.1:9/v1',
+			load: { contextLength: 8192 },
+			fetch: async (input, init) => {
+				const url = String(input);
+				if (url.endsWith('/api/v1/models') && init?.method !== 'POST') {
+					return new Response(JSON.stringify({ models: [{ key: 'guard', loaded_instances: [] }] }), { status: 200 });
+				}
+				if (url.includes('/api/v1/models/load')) {
+					loadBody = JSON.parse(String(init?.body)) as Record<string, unknown>;
+					return new Response(JSON.stringify({ status: 'loaded', instance_id: 'guard' }), { status: 200 });
+				}
+				return new Response(JSON.stringify({
+					choices: [{ message: { content: '{"ok":true}' } }],
+				}), { status: 200 });
+			},
+		});
+		await provider.chat({
+			model: 'guard',
+			messages: [{ role: 'user', content: 'hi' }],
+		});
+		assert.equal(loadBody?.context_length, 8192);
 	});
 
 	it('reuses a loaded instance when flash-attn, KV, batch, and parallel fit', async () => {
@@ -1170,6 +1197,23 @@ describe('loadConfigFits', () => {
 			offload_kv_cache_to_gpu: true,
 			parallel: 1,
 		}, { parallel: 2 }), false);
+	});
+
+	it('rejects a different echoed context length', () => {
+		assert.equal(loadConfigFits({
+			flash_attention: true,
+			offload_kv_cache_to_gpu: true,
+			context_length: 4096,
+		}, { contextLength: 8192 }), false);
+		assert.equal(loadConfigFits({
+			flash_attention: true,
+			offload_kv_cache_to_gpu: true,
+			context_length: 8192,
+		}, { contextLength: 8192 }), true);
+		assert.equal(loadConfigFits({
+			flash_attention: true,
+			offload_kv_cache_to_gpu: true,
+		}, { contextLength: 8192 }), true);
 	});
 });
 

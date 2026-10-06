@@ -13,5 +13,6 @@
 		}
 		// Vite owns emit. Do not set rootDir/outDir/declaration here.
 	},
-	"include": ["src/**/*.ts", "src/**/*.tsx", "src/**/*.vue", "src/**/*.d.ts"]
+	"include": ["src/**/*.ts", "src/**/*.tsx", "src/**/*.vue", "src/**/*.d.ts"],
+	"exclude": ["src/**/*.test.ts"]
 }

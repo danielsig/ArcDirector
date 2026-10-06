@@ -279,7 +279,7 @@ describe('stock world verbs', () => {
 		const grid = new Grid(walls, '3,0').place('Ann', [0, 0]).place('Well', [6, 0]);
 		grid.doorLocked = true;
 		const { director } = await run(grid, 'go_to(Well)', { kit: ['go_to', 'wait'], seconds: 2 });
-		assert.equal(director.agent('Ann')!.lastResult?.reason, 'Door is locked');
+		assert.equal(director.agent('Ann')!.lastResult?.reason, 'no way to Well, blocked on the way: Door is locked');
 		assert.deepEqual(grid.point.get('Ann'), [0, 0]);
 		director.dispose();
 	});

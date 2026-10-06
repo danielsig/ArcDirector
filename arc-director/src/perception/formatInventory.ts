@@ -2,6 +2,9 @@ import type { Inventory } from './inventory.js';
 
 export type { Inventory };
 
+const ALL = 'Nothing else: what is not listed, you do not have.';
+
+/** Ends by saying the list is all there is, so a mind does not carry what its role says it often has. */
 export function formatInventory(bag:Inventory = {}):string {
 	const lines:string[] = [];
 	if (bag.worn) {
@@ -21,7 +24,7 @@ export function formatInventory(bag:Inventory = {}):string {
 		lines.push(`Backpack ${bag.pack.name}: ${bag.pack.items.join(', ')}`);
 	}
 	if (lines.length === 0) {
-		return 'Nothing worn.';
+		return 'You carry nothing.';
 	}
-	return lines.join('\n');
+	return [...lines, ALL].join('\n');
 }

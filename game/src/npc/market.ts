@@ -5,49 +5,31 @@ import type { World } from '../engine/World';
 import { spawnNPC, type NPCSpawnOpts } from '../world/spawn';
 import type { Chunk } from '../world/Chunk';
 
-const TRADE = 'Gold lives in my purse. Buying is a sale; give() is a gift. Use names, never coordinates.';
+/** Each vendor's stall, by what it sells. */
+const STALL_OF:Record<string, string> = { Loaf: 'BakerStall', Scarf: 'WeaverStall', Bowl: 'PotterStall', Knife: 'CutlerStall' };
 
-function vendorStory(stall:string, good:string, ask:number, floor:number, want:string, coins:number):string {
-	return `I am a street vendor at ${stall}. I sell ${good} for ${ask} gold. I will not take less than ${floor}. I have ${coins} gold in my purse. I want ${want} for myself. I stay at ${stall}. ${TRADE}`;
-}
-
-function vendorSeed(
-	id:string,
-	stall:string,
-	good:string,
-	ask:number,
-	floor:number,
-	want:string,
-	coins:number,
-	traits:string[],
-):AgentSpec {
+function vendorSeed(id:string, good:string, ask:number, floor:number, want:string, traits:string[]):AgentSpec {
+	const stall = STALL_OF[good];
 	return {
 		id,
 		identity: { role: 'Vendor', traits },
-		goals: [{
-			text: `Sell ${good} from ${stall}. Buy ${want} if you can afford it. Stay at your stall.`,
-			priority: 2,
-		}],
-		memories: [
-			{
-				text: vendorStory(stall, good, ask, floor, want, coins),
-				tags: ['backstory', good, stall],
-				pinned: true,
-			},
-			{
-				text: `I sell ${good}. I want ${want}. I keep the stall.`,
-				tags: [good, want, stall],
-				pinned: true,
-			},
+		goals: [
+			{ text: `Sell ${good} at ${stall}.`, priority: 2 },
+			{ text: `Buy ${want} for yourself at ${STALL_OF[want]}, then go back to ${stall}.`, priority: 1 },
 		],
+		memories: [{
+			text: `I am a street vendor at ${stall}. I sell ${good} for ${ask} gold and never take less than ${floor}. I want ${want} for myself.`,
+			tags: ['backstory', good, stall],
+			pinned: true,
+		}],
 	};
 }
 
 export const MARKET_SEEDS:AgentSpec[] = [
-	vendorSeed('Baker', 'BakerStall', 'Loaf', 5, 3, 'Knife', 18, ['warm', 'busy', 'fair']),
-	vendorSeed('Weaver', 'WeaverStall', 'Scarf', 6, 4, 'Loaf', 14, ['sharp', 'proud', 'thrifty']),
-	vendorSeed('Potter', 'PotterStall', 'Bowl', 4, 2, 'Scarf', 16, ['quiet', 'kind', 'dusty']),
-	vendorSeed('Cutler', 'CutlerStall', 'Knife', 7, 4, 'Bowl', 22, ['gruff', 'honest', 'impatient']),
+	vendorSeed('Baker', 'Loaf', 5, 3, 'Knife', ['warm', 'busy', 'fair']),
+	vendorSeed('Weaver', 'Scarf', 6, 4, 'Loaf', ['sharp', 'proud', 'thrifty']),
+	vendorSeed('Potter', 'Bowl', 4, 2, 'Scarf', ['quiet', 'kind', 'dusty']),
+	vendorSeed('Cutler', 'Knife', 7, 4, 'Bowl', ['gruff', 'honest', 'impatient']),
 ];
 
 export const HIVE_UNITS:{ id:string; tags:string[] }[] = [
@@ -65,31 +47,20 @@ const POOL_NAMES = ['Pip', 'Gwen', 'Cal', 'Ivo', 'Bess', 'Quin', 'Odo', 'Faye', 
 const POOL_MESH = ['human_mannequin', 'human_merchant', 'human_robe', 'human_princess', 'human_sorceress'];
 
 type CustomerTemplate = {
+	/** Only what a stall sells: a want nobody sells keeps the shopper in the square for good. */
 	wants:string[];
 	wallet:[number, number];
 	loot?:{ defID:string; name:string; count:number };
-	note:string;
 };
 
 const TEMPLATES:CustomerTemplate[] = [
-	{ wants: ['Loaf'], wallet: [3, 4], note: 'Short on gold for a Loaf.' },
-	{ wants: ['Scarf'], wallet: [8, 12], note: 'You want a Scarf.' },
-	{ wants: ['Bowl', 'Apple'], wallet: [6, 9], note: 'You want a Bowl and an Apple.' },
-	{ wants: ['Knife'], wallet: [4, 6], note: 'You want a Knife.' },
-	{ wants: ['Bowl'], wallet: [5, 8], note: 'You want a Bowl.' },
-	{ wants: ['Candle', 'Loaf'], wallet: [8, 11], note: 'You want a Candle and a Loaf.' },
-	{
-		wants: ['Scarf'],
-		wallet: [2, 4],
-		loot: { defID: 'candle', name: 'Candle', count: 2 },
-		note: 'You have Candles. You want a Scarf.',
-	},
-	{
-		wants: ['Knife'],
-		wallet: [3, 5],
-		loot: { defID: 'apple', name: 'Apple', count: 2 },
-		note: 'You have Apples. You want a Knife.',
-	},
+	{ wants: ['Loaf'], wallet: [3, 4] },
+	{ wants: ['Scarf'], wallet: [8, 12] },
+	{ wants: ['Bowl', 'Loaf'], wallet: [8, 11] },
+	{ wants: ['Knife'], wallet: [4, 6] },
+	{ wants: ['Bowl'], wallet: [5, 8] },
+	{ wants: ['Scarf'], wallet: [2, 4], loot: { defID: 'candle', name: 'Candle', count: 2 } },
+	{ wants: ['Knife'], wallet: [3, 5], loot: { defID: 'apple', name: 'Apple', count: 2 } },
 ];
 
 export function customerCount(world:World):number {

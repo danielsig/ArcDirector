@@ -3,9 +3,13 @@ import { inject, watch } from 'vue';
 import { type HudModel, type MenuPage } from './hudModel';
 import { sessionKey } from './sessionKey';
 import {
+	MAX_CONTEXT_LENGTH,
 	MAX_PARALLEL_THINKERS,
+	MIN_CONTEXT_LENGTH,
 	MIN_PARALLEL_THINKERS,
-	clampParallelThinkers,
+	contextLabel,
+	nudgeContextLength,
+	setMusicVolume,
 	setPrefs,
 } from '../prefs';
 
@@ -64,11 +68,11 @@ function load():void {
 }
 
 function toggleObserver():void {
-	props.hud.observer = !props.hud.observer;
+	setPrefs({ observer: !props.hud.observer });
 }
 
 function toggleArcDirector():void {
-	props.hud.arcDirectorOn = !props.hud.arcDirectorOn;
+	setPrefs({ ai: !props.hud.arcDirectorOn });
 }
 
 function setMinimapFollow(follow:boolean):void {
@@ -76,15 +80,11 @@ function setMinimapFollow(follow:boolean):void {
 }
 
 function toggleDetailMaps():void {
-	const on = !props.hud.detailMaps;
-	props.hud.detailMaps = on;
-	setPrefs({ detailMaps: on });
+	setPrefs({ detailMaps: !props.hud.detailMaps });
 }
 
 function toggleShadows():void {
-	const on = !props.hud.shadows;
-	props.hud.shadows = on;
-	setPrefs({ shadows: on });
+	setPrefs({ shadows: !props.hud.shadows });
 }
 
 function pickModel():void {
@@ -95,25 +95,28 @@ function pickCharacter():void {
 	session?.value?.applyPlayerKind();
 }
 
-function pickThinkers():void {
-	session?.value?.applyMaxParallel();
+function nudgeParallel(delta:number):void {
+	session?.value?.setMaxParallel(props.hud.maxParallel + delta);
 }
 
-function nudgeParallel(delta:number):void {
-	props.hud.maxParallel = clampParallelThinkers(props.hud.maxParallel + delta);
-	pickThinkers();
+function nudgeContext(delta:number):void {
+	session?.value?.setContextLength(nudgeContextLength(props.hud.contextLength, delta));
+}
+
+function onRange(ev:Event):number {
+	return Number((ev.target as HTMLInputElement).value);
 }
 
 function toggleBatchThinks():void {
-	props.hud.batchThinks = !props.hud.batchThinks;
+	setPrefs({ batchThinks: !props.hud.batchThinks });
 }
 
 function toggleThinking():void {
-	props.hud.thinkingBudget = !props.hud.thinkingBudget;
+	setPrefs({ thinkingBudget: !props.hud.thinkingBudget });
 }
 
 function toggleArcText():void {
-	props.hud.arcText = !props.hud.arcText;
+	setPrefs({ arcText: !props.hud.arcText });
 }
 
 function dumpNPCMaps():void {
@@ -315,7 +318,7 @@ function pct(n:number):string {
 									class="switch"
 									:class="{ on: hud.audioMuted }"
 									:aria-pressed="hud.audioMuted"
-									@click.stop="hud.audioMuted = !hud.audioMuted"
+									@click.stop="setPrefs({ muted: !hud.audioMuted })"
 								>
 									{{ hud.audioMuted ? 'On' : 'Off' }}
 								</button>
@@ -326,11 +329,12 @@ function pct(n:number):string {
 									<span class="readout">{{ pct(hud.musicVolume) }}%</span>
 								</span>
 								<input
-									v-model.number="hud.musicVolume"
+									:value="hud.musicVolume"
 									type="range"
 									min="0"
 									max="1"
 									step="0.01"
+									@input="setMusicVolume(onRange($event))"
 								>
 							</label>
 							<label class="set stack" :class="{ dim: hud.audioMuted }">
@@ -339,15 +343,17 @@ function pct(n:number):string {
 									<span class="readout">{{ pct(hud.sfxVolume) }}%</span>
 								</span>
 								<input
-									v-model.number="hud.sfxVolume"
+									:value="hud.sfxVolume"
 									type="range"
 									min="0"
 									max="1"
 									step="0.01"
+									@input="setPrefs({ sfx: onRange($event) })"
 								>
 							</label>
 						</template>
 						<template v-else>
+							<p v-if="hud.prefsDetached" class="readout">Prefs not saved (MCP)</p>
 							<h3>World</h3>
 							<div class="set">
 								<span class="name">Arc Director</span>
@@ -431,6 +437,26 @@ function pct(n:number):string {
 								</div>
 							</div>
 							<div class="set">
+								<span class="name">Context window</span>
+								<div class="stepper">
+									<button
+										type="button"
+										:disabled="hud.contextLength <= MIN_CONTEXT_LENGTH"
+										@click.stop="nudgeContext(-1)"
+									>
+										−
+									</button>
+									<span>{{ contextLabel(hud.contextLength) }}</span>
+									<button
+										type="button"
+										:disabled="hud.contextLength >= MAX_CONTEXT_LENGTH"
+										@click.stop="nudgeContext(1)"
+									>
+										+
+									</button>
+								</div>
+							</div>
+							<div class="set">
 								<span class="name">Wait for idle</span>
 								<button
 									type="button"
@@ -508,6 +534,7 @@ function pct(n:number):string {
 										<th>Heartrate</th>
 										<th>Pulse</th>
 										<th>Ago</th>
+										<th>Think</th>
 									</tr>
 								</thead>
 								<tbody>
@@ -515,6 +542,7 @@ function pct(n:number):string {
 										<td>{{ row.id }}</td>
 										<td>{{ fmtPulse(row.pulse) }}</td>
 										<td>{{ row.thinking ? 'thinking' : fmtAgo(row.ago) }}</td>
+										<td>{{ fmtMs(row.thinkMs || null) }}</td>
 									</tr>
 								</tbody>
 							</table>
@@ -816,7 +844,7 @@ h3:first-child {
 }
 
 .stepper span {
-	min-width: 2.2em;
+	min-width: 3.2em;
 	display: flex;
 	align-items: center;
 	justify-content: center;

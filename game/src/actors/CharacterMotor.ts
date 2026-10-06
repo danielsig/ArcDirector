@@ -7,6 +7,7 @@ import { TILE_HEIGHT } from '../world/constants';
 import { cueAt, stepKind } from '../audio/cue';
 import { NPCInput } from './NPCInput';
 import { PlayerInput } from './PlayerInput';
+import { PlayerPilot } from './PlayerPilot';
 
 export class CharacterMotor extends Component {
 	static override order = Order.motor;
@@ -37,6 +38,7 @@ export class CharacterMotor extends Component {
 		const appearance = this.gameObject.getComponent(HumanSprite);
 		const pocket = appearance?.clip === 'take' || appearance?.clip === 'give';
 		const player = this.gameObject.getComponent(PlayerInput);
+		const piloted = this.gameObject.getComponent(PlayerPilot)?.claimed === true;
 
 		if (pocket) {
 			rb.velocity.x = 0;
@@ -44,7 +46,7 @@ export class CharacterMotor extends Component {
 			return;
 		}
 
-		if (player) {
+		if (player && !piloted) {
 			rb.velocity.x = player.moveX * this.maxSpeed;
 			rb.velocity.z = player.moveZ * this.maxSpeed;
 			this.turnTowardWish(player.moveX, player.moveZ, dt);
