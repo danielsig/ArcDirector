@@ -1,9 +1,9 @@
 import { argBase, registerStockVerbs, VerbRegistry, type StockVerb, type VerbArgMap } from '../arc/stock-verbs.js';
 import { arcArg, formatArc } from '../arc/parse.js';
 import type { ArcResult, Step } from '../arc/types.js';
-import { ArcError, firstStep } from '../arc/types.js';
+import { ArcError } from '../arc/types.js';
 import { lawGroup, type Law, type LawSpec } from '../arc/laws.js';
-import type { ArcRunner, RunnerOptions } from '../character/arc-runner.js';
+import { bodiless, type ArcRunner, type RunnerOptions } from '../character/arc-runner.js';
 import { Character, type CharacterFields, type CharacterJSON, type Wiring } from '../character/character.js';
 import { Persona } from '../character/persona.js';
 import type { Kit, KitSource } from '../character/types.js';
@@ -12,7 +12,7 @@ import { Collective, type CollectiveFields, type CollectiveHost, type Collective
 import { Mind, mindFields, type MindDeps, type MindSettings } from '../mind/mind.js';
 import type { MindEvent, Sense, ToolSpec } from '../mind/types.js';
 import type { ThinkInstructions } from '../mind/prompt.js';
-import { TalkNet, type SpeechUtterance, type TalkConfig, type TalkSense } from '../mind/talk.js';
+import { TalkNet, type SpeechUtterance, type TalkConfig, type TalkMind, type TalkSense } from '../mind/talk.js';
 import type { MapSense } from '../mind/map.js';
 import {
 	GREP_WORLD_ENCYCLOPEDIA,
@@ -33,7 +33,7 @@ import {
 } from '../perception/sight.js';
 import { formatInventory } from '../perception/formatInventory.js';
 import type { Inventory } from '../perception/inventory.js';
-import type { SeenObject, Sight } from '../perception/types.js';
+import type { SeenObject, Sight, SightClause } from '../perception/types.js';
 import {
 	registerStockCollectiveVerbs,
 	STOCK_COLLECTIVE_VERBS,
@@ -99,7 +99,7 @@ import { missingParts, worldVerbs } from '../world/verbs.js';
 const STARTED = 'ArcDirector already started';
 
 /** A wait in progress (stock `wait`, or a handler's `call.wait`), settled by `tick`. */
-type Wait = { characterID:string; verb:string; end:number; seconds:number; met?:()=>boolean; done:(result:ArcResult)=>void };
+type Wait = { runnerID:string; verb:string; end:number; seconds:number; met?:()=>boolean; done:(result:ArcResult)=>void };
 
 /** Watch value as a 0–1 fit. A non-empty list or an entity counts as true. */
 function fit(value:ExprVal):number {
@@ -107,6 +107,12 @@ function fit(value:ExprVal):number {
 		return value.value.length > 0 ? 1 : 0;
 	}
 	return value.kind === 'entity' ? 1 : watchScore(value).score;
+}
+
+/** How well watch `expr` fits in `catalog`, 0–1. No catalog, or an expression that does not evaluate: 0. */
+function watchFit(expr:string, catalog:Catalog | undefined):number {
+	const r = catalog ? evaluate(expr, catalog) : undefined;
+	return r && !r.error ? fit(r.value) : 0;
 }
 
 /** Why a watch expression can never hold (bad syntax, leftover English), as opposed to false right now. */
@@ -245,6 +251,8 @@ export class ArcDirector<TCtx = unknown> {
 	/** What each character's and collective's constructor handed this director, kept past their rows. */
 	private readonly _characterFields = new WeakMap<Character<TCtx>, CharacterFields<TCtx>>();
 	private readonly _collectiveFields = new WeakMap<Collective<TCtx>, CollectiveFields<TCtx>>();
+	/** Each mind owner's talk listener, shared by every character it hears through. */
+	private readonly _talkMinds = new WeakMap<ArcRunner<TCtx>, TalkMind>();
 	private readonly _readyThink:ThinkRow[] = [];
 	private _batchHeldTimestamp:number | null = null;
 	private _clock = 0;
@@ -1161,6 +1169,7 @@ export class ArcDirector<TCtx = unknown> {
 			arcExample: this._arcExample,
 			repairTemperature: this._repairTemperature,
 			seenAs: this.seenAs(mind),
+			worldContext: () => this.tryCtx(owner.voice.id) ?? (owner instanceof Collective ? this.present(owner)?.ctx : undefined),
 		};
 	}
 
@@ -1242,14 +1251,20 @@ export class ArcDirector<TCtx = unknown> {
 				}
 			}
 			const merged = mergeHiveClauses(groups, focus.length > 0 ? scores : undefined);
-			return joinSightClauses(orderSightClauses(merged, scores, limit, focus.length > 0));
+			return this.shown(mind, orderSightClauses(merged, scores, limit, focus.length > 0));
 		}
 		const snap = this.see(mind, ctx);
 		const clauses = formatSightClauses(snap, this.sightFormatOpts());
 		if (focus.length > 0) {
 			this.scoreSightObjects(snap.objects, focus, ctx, mind.voice, scores);
 		}
-		return joinSightClauses(orderSightClauses(clauses, scores, limit, focus.length > 0));
+		return this.shown(mind, orderSightClauses(clauses, scores, limit, focus.length > 0));
+	}
+
+	/** The sight text `mind` is shown; it remembers each name in it as last seen there. */
+	private shown(mind:Mind<TCtx>, clauses:SightClause[]):string {
+		mindFields(mind).sighted(clauses);
+		return joinSightClauses(clauses);
 	}
 
 	private scoreSightObjects(
@@ -1299,20 +1314,23 @@ export class ArcDirector<TCtx = unknown> {
 		if (step.verb === 'law' || step.verb === 'unlaw') {
 			return this.handleLaw(runner, step);
 		}
-		if ((STOCK_COLLECTIVE_VERBS as readonly string[]).includes(step.verb)) {
+		if ((STOCK_COLLECTIVE_VERBS as readonly string[]).includes(step.verb) && !isFormationVerb(step.verb)) {
 			const collective = collectiveOf(runner);
 			return collective
 				? this.handleCollectiveVerb(collective, runner, step, liveCtx)
 				: { ok: false, verb: step.verb, reason: `${step.verb} needs a collective` };
+		}
+		if (!(runner instanceof Character)) {
+			// No body to hand a host: only the director's own clock runs for it.
+			return step.verb === 'wait'
+				? this.stockWait(runner.id, step.args, () => watchFit(String(step.args.until), runner.catalog?.()) > 0)
+				: bodiless(step.verb);
 		}
 		const handler = this._handlers.get(step.verb)
 			?? this._stockHandlers.get(step.verb)
 			?? (step.verb === 'wait' ? this._waitVerb : this._catchAll);
 		if (!handler) {
 			return { ok: false, verb: step.verb, reason: `unhandled ${step.verb}` };
-		}
-		if (!(runner instanceof Character)) {
-			return { ok: false, verb: step.verb, reason: `you are not a character in this scene; issue ${step.verb} to one of your characters` };
 		}
 		if (liveCtx === undefined) {
 			return { ok: false, verb: step.verb, reason: 'not in this scene' };
@@ -1340,7 +1358,6 @@ export class ArcDirector<TCtx = unknown> {
 		character:Character<TCtx>,
 		step:Step,
 		ctx:TCtx,
-		units?:string[],
 	):VerbCall<TCtx> | ArcResult {
 		const fail = (reason:string):ArcResult => ({ ok: false, verb: step.verb, reason });
 		const catalogAt = (point?:Vec):Catalog | undefined => this.exprCatalog(character, ctx, point ? new SampleCache() : this.cacheOf(character), point);
@@ -1370,16 +1387,13 @@ export class ArcDirector<TCtx = unknown> {
 		}
 		const score = (arg:string, point?:Vec):number => {
 			const expr = args[arg];
-			const catalog = typeof expr === 'string' && expr.trim() ? catalogAt(point) : undefined;
-			const r = catalog ? evaluate(expr as string, catalog) : undefined;
-			return r && !r.error ? fit(r.value) : 0;
+			return typeof expr === 'string' && expr.trim() ? watchFit(expr, catalogAt(point)) : 0;
 		};
 		return {
 			verb: step.verb,
 			args,
 			character,
 			ctx,
-			units,
 			score,
 			holds: (arg, point) => score(arg, point) > 0,
 			goTo: (target, within) => this.goTo(character.id, step.verb, { target }, within),
@@ -1403,9 +1417,9 @@ export class ArcDirector<TCtx = unknown> {
 		return Promise.resolve(ok ? { ok: true, verb } : { ok: false, verb, reason: 'out of reach' });
 	}
 
-	private waitFor(characterID:string, seconds:number, verb:string, met?:()=>boolean):Promise<ArcResult> {
+	private waitFor(runnerID:string, seconds:number, verb:string, met?:()=>boolean):Promise<ArcResult> {
 		return new Promise((done) => {
-			this._waits.add({ characterID, verb, end: this._clock + seconds, seconds, met, done });
+			this._waits.add({ runnerID, verb, end: this._clock + seconds, seconds, met, done });
 		});
 	}
 
@@ -1419,12 +1433,15 @@ export class ArcDirector<TCtx = unknown> {
 		return collective ? buildCollectiveCatalog(kernels, collective) : buildCatalog(kernels);
 	}
 
-	/** Stock `wait`: game time passes until `seconds`, or until the `until` watch holds. A host `wait` handler replaces it. */
-	private readonly _waitVerb:VerbHandler<TCtx> = (call) => {
-		const until = typeof call.args.until === 'string' && call.args.until.trim() !== '';
-		const seconds = typeof call.args.seconds === 'number' ? call.args.seconds : until ? 20 : 1;
-		return this.waitFor(call.character.id, seconds, 'wait', until ? () => call.holds('until') : undefined);
-	};
+	/** Stock `wait` for a character. A host `wait` handler replaces it. */
+	private readonly _waitVerb:VerbHandler<TCtx> = (call) => this.stockWait(call.character.id, call.args, () => call.holds('until'));
+
+	/** Game time passes for runner `id` until `seconds`, or until `until` holds when the `until` arg is set. */
+	private stockWait(id:string, args:Record<string, unknown>, until:()=>boolean):Promise<ArcResult> {
+		const watching = typeof args.until === 'string' && args.until.trim() !== '';
+		const seconds = typeof args.seconds === 'number' ? args.seconds : watching ? 20 : 1;
+		return this.waitFor(id, seconds, 'wait', watching ? until : undefined);
+	}
 
 	private tickWaits():void {
 		for (const wait of this._waits) {
@@ -1439,7 +1456,7 @@ export class ArcDirector<TCtx = unknown> {
 	/** Stop whatever character `id` is doing now: its waits and moves here, the rest through `onAbortArc`. */
 	public abortArc(id:string):void {
 		for (const wait of this._waits) {
-			if (wait.characterID === id) {
+			if (wait.runnerID === id) {
 				this._waits.delete(wait);
 				wait.done({ ok: false, interrupted: true, verb: wait.verb });
 			}
@@ -1472,9 +1489,6 @@ export class ArcDirector<TCtx = unknown> {
 				collective.untagCharacters(characters, name);
 			}
 			return { ok: true, verb: step.verb };
-		}
-		if (isFormationVerb(step.verb)) {
-			return { ok: false, verb: step.verb, reason: 'formation must be issue arc head' };
 		}
 		return { ok: false, verb: step.verb, reason: `unhandled ${step.verb}` };
 	}
@@ -1526,23 +1540,6 @@ export class ArcDirector<TCtx = unknown> {
 		if (named.length > 0 && troops.length === 0) {
 			return { ok: false, verb: 'issue', reason: 'issue never lands on the commander' };
 		}
-		const head = firstStep(arc);
-		if (head && isFormationVerb(head.verb)) {
-			const handler = this._handlers.get(head.verb) ?? this._catchAll;
-			// A collective with no commander forms up through its first character.
-			const by = issuer instanceof Character ? issuer : troops[0];
-			const byCtx = by === issuer ? ctx : by && this.tryCtx(by.id);
-			const call = handler && by && byCtx !== undefined
-				? this.verbCall(by, head, byCtx, troops.map((c) => c.id))
-				: undefined;
-			if (handler && call && 'character' in call) {
-				void handler(call);
-			}
-			if (arc.then) {
-				collective.issue(troops, arc.then.arc);
-			}
-			return { ok: true, verb: 'issue' };
-		}
 		collective.issue(troops, arc);
 		return { ok: true, verb: 'issue' };
 	}
@@ -1559,18 +1556,25 @@ export class ArcDirector<TCtx = unknown> {
 		}
 	}
 
+	/** `collective`'s first character in this scene, with its context: where a collective with no commander looks from. */
+	private present(collective:Collective<TCtx>):{ character:Character<TCtx>; ctx:TCtx } | undefined {
+		for (const character of collective.characters) {
+			const ctx = this.tryCtx(character.id);
+			if (ctx !== undefined) {
+				return { character, ctx };
+			}
+		}
+		return undefined;
+	}
+
 	/** The view of a collective with no commander: its first living character's kernels, measured from the middle of them all. */
 	private dummyHiveKernels(collective:Collective<TCtx>):HostKernels | undefined {
-		if (!this._kernelFn) {
-			return undefined;
-		}
-		const members = collective.characters.map((character) => ({ character, ctx: this.tryCtx(character.id) }));
-		const first = members.find((m) => m.ctx !== undefined);
-		if (!first?.ctx) {
+		const first = this._kernelFn ? this.present(collective) : undefined;
+		if (!first) {
 			return undefined;
 		}
 		const sample = this.kernelsFor(first.character, first.ctx);
-		const center = centroid(members.flatMap(({ character }) => {
+		const center = centroid(collective.characters.flatMap((character) => {
 			const point = this._world && poseOf(this._world, character.id)?.point;
 			return point ? [point] : [];
 		}));
@@ -1594,6 +1598,15 @@ export class ArcDirector<TCtx = unknown> {
 		}
 		const kernels = ctx ? this.kernelsFor(runner, ctx) : this.dummyHiveKernels(collective);
 		return kernels ? buildCollectiveCatalog(kernels, collective) : undefined;
+	}
+
+	/** `runner`'s view now: from its voice, or, for a collective with no commander, pooled from its characters. */
+	private runnerCatalog(runner:ArcRunner<TCtx>):Catalog | undefined {
+		const ctx = runner.context();
+		if (ctx !== undefined) {
+			return buildCatalog(this.kernelsFor(runner, ctx));
+		}
+		return runner instanceof Collective ? this.collectiveCatalog(runner, runner, undefined) : undefined;
 	}
 
 	/** A spec's kit, else the default one. Something that can run no verb is a mistake, so it throws. */
@@ -1743,7 +1756,7 @@ export class ArcDirector<TCtx = unknown> {
 			abortArc: (id) => this.abortArc(id),
 			cooldown: spec.cooldown ?? this._cooldownDefault,
 			talk: this.talk,
-			catalog: this._kernelFn ? (ctx) => buildCatalog(this.kernelsFor(runner(), ctx)) : undefined,
+			catalog: this._kernelFn ? () => this.runnerCatalog(runner()) : undefined,
 			kit,
 			laws: spec.laws,
 			maxLaws: spec.maxLaws,
@@ -2079,28 +2092,40 @@ export class ArcDirector<TCtx = unknown> {
 		mindFields(mind).detach();
 	}
 
-	/** Speech `runner` hears reaches its mind when it is that mind's voice. */
-	private listen(runner:ArcRunner<TCtx>):void {
-		this.talk?.attach({
-			id: runner.id,
-			nameOf: (id) => runner.mind?.nameOf(id) ?? id,
-			pushEvent: (event) => {
-				const mind = runner.isVoice ? runner.mind : null;
-				if (!mind) {
-					return;
-				}
-				mind.pushEvent(event);
-				if (event.major) {
-					this._queue?.enqueueMajor(mind.id, true);
-				}
-			},
-		});
+	/** The listener for `owner`'s mind: one per character with a mind of its own, and one per collective. */
+	private talkMindOf(owner:Character<TCtx> | Collective<TCtx>):TalkMind {
+		let listener = this._talkMinds.get(owner);
+		if (!listener) {
+			listener = {
+				id: owner.id,
+				nameOf: (id) => owner.mind?.nameOf(id) ?? id,
+				voice: () => owner.voice.id,
+				pushEvent: (event) => {
+					const mind = owner.mind;
+					if (!mind) {
+						return;
+					}
+					mind.pushEvent(event);
+					if (event.major) {
+						this._queue?.enqueueMajor(mind.id, true);
+					}
+				},
+			};
+			this._talkMinds.set(owner, listener);
+		}
+		return listener;
 	}
 
-	/** A character listens to talk while a mind thinks for it. */
+	/** Speech said to a collective by name reaches its mind; what its characters hear does too (`syncListener`). */
+	private listen(collective:Collective<TCtx>):void {
+		this.talk?.attach(this.talkMindOf(collective));
+	}
+
+	/** A character hears for the mind that thinks for it: its own, or its collective's. The host's hears nothing. */
 	private syncListener(character:Character<TCtx>):void {
-		if (character.mind) {
-			this.listen(character);
+		const owner = character.collective ?? (character.mind ? character : null);
+		if (owner) {
+			this.talk?.attach(this.talkMindOf(owner), character.id);
 		}
 		else {
 			this.talk?.detach(character.id);

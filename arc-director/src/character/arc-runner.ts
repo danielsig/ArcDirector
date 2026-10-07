@@ -35,7 +35,8 @@ export type RunnerDeps<TCtx = unknown> = {
 	/** Host cooldown in game seconds after a handler pops or aborts. Default 8. */
 	cooldown?:number;
 	talk?:TalkNet;
-	catalog?:(ctx:TCtx)=>Catalog;
+	/** The watch-language view of the world from this runner now, or undefined when it has none. */
+	catalog?:()=>Catalog | undefined;
 	/** What it may use. Object or callback, fetched every tick, so the host can mutate it in place. */
 	kit:KitSource<TCtx>;
 };
@@ -75,7 +76,7 @@ export abstract class ArcRunner<TCtx = unknown> {
 	protected defaultLawWho:string;
 	public arcSession:ArcSession | null = null;
 	public talk:TalkNet | undefined;
-	public catalog?:(ctx:TCtx)=>Catalog;
+	public catalog?:()=>Catalog | undefined;
 	/** Object or callback. Assign a new one any time. Fetched every tick. */
 	public kit:KitSource<TCtx>;
 	/** The kit as of the last refresh. */
@@ -114,6 +115,9 @@ export abstract class ArcRunner<TCtx = unknown> {
 			this.addLaw(spec, spec.pinned);
 		}
 	}
+
+	/** Whether it stands in the world itself, so it can speak and walk: a character, not a collective. */
+	public abstract get embodied():boolean;
 
 	/** Whether this runner speaks and acts for its mind: the arcs that mind writes run here. */
 	public get isVoice():boolean {
@@ -252,10 +256,7 @@ export abstract class ArcRunner<TCtx = unknown> {
 		const session = createArcSession({
 			verbs: this.verbs,
 			now: () => this.now,
-			catalog: () => {
-				const ctx = this.context();
-				return ctx && this.catalog ? this.catalog(ctx) : undefined;
-			},
+			catalog: () => this.catalog?.(),
 			abortHost: () => this.abortArc?.(this.id),
 			...sessionOpts,
 		});
@@ -347,7 +348,10 @@ export abstract class ArcRunner<TCtx = unknown> {
 	/** One step of a running arc: mind verbs through the mind, `say` through talk, the rest through the host. */
 	protected async runStep(step:Step, ctx:TCtx | undefined):Promise<ArcResult> {
 		if (!this.activeVerbs().has(step.verb)) {
-			return { ok: false, verb: step.verb, reason: `verb '${step.verb}' is not available` };
+			// Its kit grants it, but it has no body to run it with.
+			return !this.embodied && this.currentKit.verbs.includes(step.verb)
+				? bodiless(step.verb)
+				: { ok: false, verb: step.verb, reason: `verb '${step.verb}' is not available` };
 		}
 		const done = await this.mind?.perform(step, this);
 		if (done) {
@@ -396,6 +400,11 @@ export abstract class ArcRunner<TCtx = unknown> {
 			this.mind!.ingestResult(result);
 		}
 	}
+}
+
+/** Why a runner with no body of its own (a collective with no commander) cannot run `verb` itself. */
+export function bodiless(verb:string):ArcResult {
+	return { ok: false, verb, reason: `you are not a character in this scene; issue ${verb} to one of your characters` };
 }
 
 /** Addressee ids of a `say`. */

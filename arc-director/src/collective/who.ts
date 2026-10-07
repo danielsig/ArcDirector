@@ -6,15 +6,12 @@ import { buildCatalog, dummyEntity, type HostKernels } from '../expr/natives.js'
 import type { Catalog, ExprEntity, ExprVal } from '../expr/types.js';
 import type { Character } from '../character/character.js';
 import type { Collective } from './collective.js';
-import { shortTag } from './tags.js';
+import { shortTags } from './tags.js';
 
 /** A character as its collective sees it in `units`: its tags (the collective's own shortened), `busy`, and its verb. */
 export function memberEntity<TCtx>(character:Character<TCtx>, collectiveID:string):ExprEntity {
-	const shorts = character.tags
-		.map((t) => shortTag(collectiveID, t))
-		.filter((t) => t.length > 0);
 	return dummyEntity(character.id, {
-		tags: shorts,
+		tags: shortTags(collectiveID, character.tags),
 		fields: {
 			busy: { kind: 'bool', value: character.busy },
 			verb: { kind: 'string', value: character.verb },

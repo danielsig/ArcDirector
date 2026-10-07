@@ -105,6 +105,11 @@ export class Character<TCtx = unknown> extends ArcRunner<TCtx> {
 		return this._collective;
 	}
 
+	/** Who a formation it runs lines up: the characters it was last issued a program with, or itself alone. */
+	public get squad():string[] {
+		return this._collective?.squadOf(this) ?? [this.id];
+	}
+
 	/**
 	 * Move into `collective`, straight from any other, or leave with `null`: then it thinks with a fresh mind of
 	 * its own when it had settings for one, else the host drives it. Its laws, tags and running arc come along.
@@ -116,6 +121,10 @@ export class Character<TCtx = unknown> extends ArcRunner<TCtx> {
 	/** A character acts for itself. */
 	public get voice():ArcRunner<TCtx> {
 		return this;
+	}
+
+	public get embodied():boolean {
+		return true;
 	}
 
 	/** In a collective, its laws live there as its own: `flee` is kept as `Tom.flee` and reaches only it. */

@@ -320,7 +320,7 @@ describe('stock world verbs', () => {
 	});
 
 	it('forms a line of units across the way to the foe', async () => {
-		const grid = new Grid().place('A', [0, 0]).place('B', [1, 0]).place('C', [2, 0]).place('Gate', [0, 8]);
+		const grid = new Grid().place('A', [0, 0]).place('B', [1, 3]).place('C', [2, -3]).place('Gate', [0, 8]);
 		const { director } = await run(grid, 'issue(who=units, arc=hold_line(at=A, facing=Gate, paces=2))', {
 			kit: ['issue', 'hold_line', 'wait'],
 			units: ['A', 'B', 'C'],

@@ -7,6 +7,8 @@ export type TalkMind = {
 	pushEvent(event:MindEvent):void;
 	/** This mind's name for another character. Default: the id. */
 	nameOf?(id:string):string;
+	/** The character that speaks for this mind. Its own lines are not heard back; its other characters' are. Default: `id`. */
+	voice?():string;
 };
 
 /**
@@ -170,6 +172,16 @@ function heardLine(
 	};
 }
 
+/** Whether any of `targets` is one of `names`, ignoring case. */
+function isNamed(targets:readonly string[], names:readonly string[]):boolean {
+	return targets.some((t) => names.some((n) => n.toLowerCase() === t.toLowerCase()));
+}
+
+/** Whether `mind`'s own voice said it: a mind already knows what it said, so it does not hear it back. */
+function saidBy(mind:TalkMind, speakerID:string):boolean {
+	return (mind.voice?.() ?? mind.id) === speakerID;
+}
+
 /**
  * Native NPC-to-NPC talk. `say` reaches whoever the host says is in range.
  * Attach listeners so their minds receive `HeardSpeech` events; unattached names can
@@ -192,8 +204,12 @@ export class TalkNet {
 		this.config = { ...DEFAULT_TALK_CONFIG, ...config };
 	}
 
-	public attach(mind:TalkMind):void {
-		this._minds.set(mind.id, mind);
+	/**
+	 * Listen for `mind` with the character `id` (default its own id). One mind may listen through several
+	 * characters, as a collective does through each of its own; it hears each line once, from whichever heard it best.
+	 */
+	public attach(mind:TalkMind, id = mind.id):void {
+		this._minds.set(id, mind);
 	}
 
 	public detach(id:string):void {
@@ -300,27 +316,26 @@ export class TalkNet {
 		this.attend(utterance);
 		this._onSpoke?.(utterance);
 		const clearly:string[] = [];
-		for (const id of heardBy) {
-			const clear = this.clear(speakerID, id);
+		const reached = new Set<TalkMind>();
+		const clearness = new Map(heardBy.map((id) => [id, this.clear(speakerID, id)]));
+		// Clear hearers first, so a mind listening through several characters takes the clearest.
+		for (const id of [...heardBy].sort((a, b) => Number(clearness.get(b)) - Number(clearness.get(a)))) {
+			const clear = clearness.get(id) === true;
 			if (clear && id !== speakerID) {
 				clearly.push(id);
 			}
 			const mind = this.mindFor(id);
-			if (!mind) {
+			if (!mind || reached.has(mind) || saidBy(mind, speakerID)) {
 				continue;
 			}
-			const names = uniqueNames([
-				id,
-				mind.id,
-				...listenerNames(this.sense, id),
-				...listenerNames(this.sense, mind.id),
-			]);
-			const mentioned = speechMentionsName(spoken, names);
-			const addressed = targets.some((t) => names.some((n) => n.toLowerCase() === t.toLowerCase()));
+			reached.add(mind);
+			const names = this.namesFor(mind);
+			const mentioned = speechMentionsName(spoken, names.ours);
 			const heardTo = targets.map((t) => this.label(id, t));
 			const speaker = this.label(id, speakerID);
-			const heard = heardLine(speaker, spoken, addressed, heardTo.join(', '), clear, mentioned);
-			this.hear(mind, speaker, heardTo, heard.text, heard.major, timestamp);
+			const heard = heardLine(speaker, spoken, isNamed(targets, names.you), heardTo.join(', '), clear, mentioned);
+			// Said to any of its characters, it is meant for this mind, though only its voice is "you".
+			this.hear(mind, speaker, heardTo, heard.text, heard.major || isNamed(targets, names.ours), timestamp);
 			if (!clear && this.config.rehear > 0) {
 				const list = this._muffled.get(id) ?? [];
 				list.push({ speakerID, spoken, targets, until: timestamp + this.config.rehear });
@@ -344,14 +359,17 @@ export class TalkNet {
 					return false;
 				}
 				const mind = this.mindFor(id);
+				if (mind && saidBy(mind, row.speakerID)) {
+					return false;
+				}
 				if (!mind || !(this.sense.clearHear?.(row.speakerID, id) ?? true)) {
 					return !!mind;
 				}
-				const names = uniqueNames([id, mind.id, ...listenerNames(this.sense, id)]);
-				const addressed = row.targets.some((t) => names.some((n) => n.toLowerCase() === t.toLowerCase()));
+				const names = this.namesFor(mind);
+				const addressed = isNamed(row.targets, names.you);
 				const heardTo = row.targets.map((t) => this.label(id, t));
 				const speaker = this.label(id, row.speakerID);
-				const meant = addressed || row.targets.length === 0 || speechMentionsName(row.spoken, names);
+				const meant = isNamed(row.targets, names.ours) || row.targets.length === 0 || speechMentionsName(row.spoken, names.ours);
 				this.hear(mind, speaker, heardTo, saysLine(speaker, row.spoken, addressed, heardTo.join(', '), ', now clear'), meant, now);
 				return false;
 			});
@@ -362,6 +380,13 @@ export class TalkNet {
 				this._muffled.delete(id);
 			}
 		}
+	}
+
+	/** The names a line uses when it is for `mind`: any character it listens through (`ours`), or its voice (`you`). */
+	private namesFor(mind:TalkMind):{ ours:string[]; you:string[] } {
+		const named = (ids:string[]):string[] => uniqueNames(ids.flatMap((id) => [id, ...listenerNames(this.sense, id)]));
+		const listening = [...this._minds].filter(([, m]) => m === mind).map(([id]) => id);
+		return { ours: named([mind.id, ...listening]), you: named([mind.voice?.() ?? mind.id, mind.id]) };
 	}
 
 	private hear(mind:TalkMind, speaker:string, heardTo:string[], text:string, major:boolean, timestamp:number):void {

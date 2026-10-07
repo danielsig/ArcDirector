@@ -217,6 +217,7 @@ export {
 	isFormationVerb,
 	squadTag,
 	shortTag,
+	shortTags,
 	evaluateWho,
 	buildCollectiveCatalog,
 	chatHandover,

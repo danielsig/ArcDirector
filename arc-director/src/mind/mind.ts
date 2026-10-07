@@ -24,6 +24,7 @@ import {
 } from './encyclopedia.js';
 import { LOOKUP_TOOLS, arcRepairHint, blockedAgainHint, repeatOutputHint, sayRangeHint, shouldEmitArcText, stablePrefix, volatileBlock, type ThinkInstructions } from './prompt.js';
 import type { TalkNet } from './talk.js';
+import type { SightClause } from '../perception/types.js';
 import { idsOf, mapArc, mapExpr, mapLawName, namesOf } from './ids.js';
 import type { NameTarget } from '../character/names.js';
 import type { Persona } from '../character/persona.js';
@@ -109,6 +110,8 @@ export type MindDeps<TCtx = unknown> = {
 	intrusionCooldown?:number;
 	recallK?:number;
 	hideObserve?:boolean;
+	/** The context its tools and articles look from. Default: its voice's. */
+	worldContext?:()=>TCtx | undefined;
 	/** Host top-down snapshots. `see_map` is omitted unless this and vision are both set. */
 	map?:MapSense;
 	/** Host world-type articles. `grep_world_encyclopedia` is omitted unless this is set. */
@@ -161,25 +164,24 @@ const MENTION_REPEAT = 5;
 const LOOKUP_REPEAT = 5;
 const RECENT_CAP = 8;
 const RECENT_SUMMARY_MAX = 600;
+const RECENT_SEPARATOR = '; ';
 const BARE_RESULT = new Set(['ok', 'failed', 'interrupted']);
 
+/** The folded summary with `overflow` added: lines kept apart, the oldest whole lines dropped past the cap. */
 function foldRecent(prev:string, overflow:string[]):string {
-	const next = [prev, ...overflow].filter((s) => s.trim().length > 0).join(' ').replace(/\s+/g, ' ').trim();
+	const lines = [prev, ...overflow].map((s) => s.replace(/\s+/g, ' ').trim()).filter((s) => s.length > 0);
+	const next = lines.join(RECENT_SEPARATOR);
 	if (next.length <= RECENT_SUMMARY_MAX) {
 		return next;
 	}
-	return next.slice(next.length - RECENT_SUMMARY_MAX).trim();
+	const tail = next.slice(next.length - RECENT_SUMMARY_MAX);
+	const cut = tail.indexOf(RECENT_SEPARATOR);
+	return (cut < 0 ? tail : tail.slice(cut + RECENT_SEPARATOR.length)).trim();
 }
 
 function isBareResult(text:string):boolean {
 	const t = text.trim().toLowerCase();
 	return !t || BARE_RESULT.has(t) || /^\d+s$/.test(t);
-}
-
-function clauseAbout(scene:string, name:string):string {
-	const parts = scene.split(/(?<=[.!?])\s+/);
-	const hit = parts.find((p) => p.includes(name));
-	return (hit ?? scene).replace(/\s+/g, ' ').trim().slice(0, 220);
 }
 
 /** What a mind's constructor hands the director that attaches it: the director's only way into its private fields. */
@@ -188,6 +190,8 @@ export type MindFields<TCtx> = {
 	attach(owner:MindOwner<TCtx>, deps:MindDeps<TCtx>):void;
 	/** Let go of it: it thinks for no one, and may think for someone else later. */
 	detach():void;
+	/** What its sight showed this think, each clause with the names of what it saw: its sightings to remember. */
+	sighted(clauses:readonly SightClause[]):void;
 };
 
 /** Every mind's fields. `index.ts` does not export `mindFields`, so only the library reaches them. */
@@ -246,6 +250,7 @@ export class Mind<TCtx = unknown> {
 	public verbInstructions:string | undefined;
 	public arcExample:string | undefined;
 	public seenAs:((target:NameTarget)=>string) | undefined;
+	public worldContext:()=>TCtx | undefined = () => undefined;
 	public intrusionThreshold = 0.55;
 	public intrusionCooldown = 45;
 	public recallK = 5;
@@ -283,6 +288,8 @@ export class Mind<TCtx = unknown> {
 	private readonly _calledOn = new Map<string, number>();
 	/** `verb id` pairs whose move found no way; `blockedAgain` refuses them until the way opens. */
 	private readonly _noWay = new Set<string>();
+	/** What its sight showed since it last noted sightings. */
+	private _sighted:readonly SightClause[] = [];
 
 	constructor(settings:MindSettings = {}) {
 		this.skipHeartbeat = settings.skipHeartbeat ?? false;
@@ -294,6 +301,9 @@ export class Mind<TCtx = unknown> {
 			attach: (owner, deps) => this.attach(owner, deps),
 			detach: () => {
 				this._owner = undefined;
+			},
+			sighted: (clauses) => {
+				this._sighted = clauses;
 			},
 		};
 		allFields.set(this, fields);
@@ -321,6 +331,7 @@ export class Mind<TCtx = unknown> {
 		this.verbInstructions = deps.verbInstructions;
 		this.arcExample = deps.arcExample;
 		this.seenAs = deps.seenAs;
+		this.worldContext = deps.worldContext ?? (() => this.voice.context());
 		this.intrusionThreshold = deps.intrusionThreshold ?? 0.55;
 		this.intrusionCooldown = deps.intrusionCooldown ?? 45;
 		this.recallK = deps.recallK ?? 5;
@@ -456,12 +467,10 @@ export class Mind<TCtx = unknown> {
 	}
 
 	private capturePrevMe():void {
-		const voice = this.voice;
-		const ctx = voice.context();
-		if (!ctx || !voice.catalog) {
-			return;
+		const me = this.voice.catalog?.()?.me;
+		if (me) {
+			this.voice.prevMe = cloneEntity(me);
 		}
-		voice.prevMe = cloneEntity(voice.catalog(ctx).me);
 	}
 
 	/** Hosts that run world verbs on the voice themselves should call this so think() cooldown sees them. */
@@ -485,10 +494,12 @@ export class Mind<TCtx = unknown> {
 			});
 		}
 		else {
+			// What happened in the world is worth keeping; how its own think went (a bad reply) is not.
 			this.pushEvent({
 				kind: 'arc_result',
 				text: result.reason ?? (result.ok ? 'ok' : 'failed'),
 				tags: [result.ok ? 'ok' : 'fail'],
+				remember: result.verb !== 'think',
 			});
 		}
 		this.syncQueue(result);
@@ -758,31 +769,35 @@ export class Mind<TCtx = unknown> {
 		return formatArc(mapArc(arc, verbs, namesOf(this.persona.names)), verbs);
 	}
 
-	/** The owner's laws in list order, as this mind's model reads them. */
+	/**
+	 * The owner's laws in list order, as this mind's model reads them: sentences, not arcs, so a small model does
+	 * not copy them back as its reply.
+	 */
 	public lawsSection():string {
 		const laws = this.owner.laws;
 		if (laws.length === 0) {
 			return '';
 		}
 		const line = (law:Law):string => {
-			const who = this.owner.lawsTakeWho() ? ` who=${this.named(law.who)}` : '';
-			return `- ${mapLawName(law.name, namesOf(this.persona.names))}:${who} watch=${this.named(law.watch)} → ${this.namedArc(law.arc)}`;
+			const who = this.owner.lawsTakeWho() && law.who !== 'me' ? ` (for ${this.named(law.who)})` : '';
+			return `- ${mapLawName(law.name, namesOf(this.persona.names))}${who}: when ${this.named(law.watch)}, run ${this.namedArc(law.arc)}`;
 		};
-		return `Laws (emergencies, list order; unlaw to drop):\n${laws.map(line).join('\n')}`;
+		const intro = 'Laws (emergencies that already run on their own, first listed first; do not repeat them in your reply; unlaw(name) drops one):';
+		return `${intro}\n${laws.map(line).join('\n')}`;
 	}
 
 	private receivedSinceThink():string {
 		const voice = this.voice;
-		const ctx = voice.context();
-		if (!this.encyclopedia || !voice.catalog || !voice.prevMe || ctx === undefined) {
+		const me = this.encyclopedia && voice.prevMe ? voice.catalog?.()?.me : undefined;
+		if (!me || !voice.prevMe) {
 			return '';
 		}
-		const pages = encyclopediaPages(this.encyclopedia, ctx);
+		const pages = encyclopediaPages(this.encyclopedia, this.worldContext());
 		if (pages.length === 0) {
 			return '';
 		}
 		const prev = new Set(bagOf(voice.prevMe).map((item) => item.id));
-		const gained = bagOf(voice.catalog(ctx).me).filter((item) => !prev.has(item.id));
+		const gained = bagOf(me).filter((item) => !prev.has(item.id));
 		return receivedArticles(pages, gained);
 	}
 
@@ -809,12 +824,12 @@ export class Mind<TCtx = unknown> {
 	 * The article text itself is not repeated within a few thinks.
 	 */
 	private mentionedText():string {
-		const voice = this.voice;
-		const ctx = this.encyclopedia && this._mentionCap > 0 && this._recent.length > 0 ? voice.context() : undefined;
+		const ctx = this.encyclopedia && this._mentionCap > 0 && this._recent.length > 0 ? this.worldContext() : undefined;
 		if (!this.encyclopedia || ctx === undefined) {
 			return '';
 		}
-		const bag = voice.catalog ? bagOf(voice.catalog(ctx).me) : undefined;
+		const me = this.voice.catalog?.()?.me;
+		const bag = me ? bagOf(me) : undefined;
 		const lines:string[] = [];
 		for (const entry of mentionedArticles(encyclopediaPages(this.encyclopedia, ctx), this._recent.join('\n'), Infinity)) {
 			if (lines.length >= this._mentionCap) {
@@ -839,7 +854,7 @@ export class Mind<TCtx = unknown> {
 	 */
 	private failureArticles():string {
 		const reason = this.lastResult && !this.lastResult.ok ? this.lastResult.reason : undefined;
-		const ctx = reason ? this.voice.context() : undefined;
+		const ctx = reason ? this.worldContext() : undefined;
 		if (!reason || !this.encyclopedia || ctx === undefined) {
 			return '';
 		}
@@ -861,7 +876,7 @@ export class Mind<TCtx = unknown> {
 				continue;
 			}
 		}
-		if (this.talk) {
+		if (this.talk && this.voice.embodied) {
 			sensed.earshot = this.earshotText();
 		}
 		return sensed;
@@ -872,7 +887,7 @@ export class Mind<TCtx = unknown> {
 			.map((v) => typeof v === 'string' ? v : JSON.stringify(v))
 			.join('\n');
 		const intrusion = this.maybeIntrude(perceptionText);
-		this.noteSeen(perceptionText);
+		this.noteSeen();
 		const recalled = this.recallForPrompt(perceptionText);
 		return [extra, volatileBlock({
 			senses: sensed,
@@ -971,7 +986,7 @@ export class Mind<TCtx = unknown> {
 
 	private async tactical():Promise<Arc> {
 		this._thinks += 1;
-		const ctx = this.voice.context();
+		const ctx = this.worldContext();
 		this.owner.refreshKit();
 		const liveVerbAtThink = this.voice.liveArc ? this._lastVerb : undefined;
 		// A repeat after new input (speech, an interruption, a nudge) can be right; without any, the model is stuck.
@@ -1028,6 +1043,8 @@ export class Mind<TCtx = unknown> {
 				temperature: this.arcRetryCap - repairsLeft > 1 || this._emitStreak >= 2
 					? this.repairTemperature
 					: 0,
+				// A repair keeps the whole conversation, so reasoning on top of it runs out of tokens again.
+				enableThinking: repairsLeft < this.arcRetryCap ? false : undefined,
 			});
 			if (res.truncated) {
 				lastErr = new ArcError('reply was cut off at the token limit; answer shorter');
@@ -1200,7 +1217,9 @@ export class Mind<TCtx = unknown> {
 					continue;
 				}
 				this.noteRecent(text);
-				this.keepFact(text, mergeTags(['result'], e.tags, nameTags(text)));
+				if (e.remember) {
+					this.keepFact(text, mergeTags(['result'], e.tags, nameTags(text)));
+				}
 				continue;
 			}
 			this.noteRecent(text);
@@ -1250,17 +1269,12 @@ export class Mind<TCtx = unknown> {
 		}, this._now);
 	}
 
-	private noteSeen(scene:string):void {
-		const text = scene.trim();
-		if (!text) {
-			return;
-		}
-		for (const name of nameTags(text)) {
-			if (this.isSelf(name)) {
-				continue;
-			}
-			const snippet = clauseAbout(text, name);
-			if (!snippet) {
+	/** One "Last I saw" memory per name its sight showed, kept to the latest clause it was seen in. */
+	private noteSeen():void {
+		const sightings = this._sighted.flatMap((clause) => clause.claimedIDs.map((name) => ({ name, snippet: clause.text.trim() })));
+		this._sighted = [];
+		for (const { name, snippet } of sightings) {
+			if (this.isSelf(name) || !snippet) {
 				continue;
 			}
 			const line = `Last I saw ${name}: ${snippet}`;
@@ -1382,10 +1396,10 @@ export class Mind<TCtx = unknown> {
 						expr: { type: 'string' },
 					},
 				},
-				handler: (ctx, args) => this.handleObserve(ctx, args),
+				handler: (ctx, args) => this.handleObserve(args),
 			};
 		}
-		if (this.talk && !tools.earshot) {
+		if (this.talk && this.voice.embodied && !tools.earshot) {
 			tools.earshot = {
 				description: 'Who you can say(to) right now. Pass to to check one name before you arc a say. Out of range: error, no speech; get closer first. Omit to to list everyone in range.',
 				parameters: {
@@ -1560,17 +1574,17 @@ export class Mind<TCtx = unknown> {
 		return { ok: true, inRange: true, nearby };
 	}
 
-	private handleObserve(ctx:TCtx, args:unknown):unknown {
+	private handleObserve(args:unknown):unknown {
 		const row = isRecord(args) ? args : {};
 		const expr = typeof row.expr === 'string' ? row.expr : '';
 		if (!expr) {
 			return { error: 'observe needs expr' };
 		}
-		const catalog = this.voice.catalog;
+		const catalog = this.voice.catalog?.();
 		if (!catalog) {
 			return { error: 'no catalog' };
 		}
-		return observeExpr(expr, catalog(ctx), evaluate);
+		return observeExpr(expr, catalog, evaluate);
 	}
 
 	private handleGrepEncyclopedia(ctx:TCtx | undefined, args:unknown):unknown {
@@ -1617,7 +1631,7 @@ export class Mind<TCtx = unknown> {
 
 	private async runTool(name:string, rawArgs:string, ctx:TCtx | undefined):Promise<unknown> {
 		if (ctx === undefined) {
-			return { error: 'no ctx' };
+			return { error: 'nothing of yours is in this scene to look from' };
 		}
 		const spec = this.mergedTools()[name];
 		if (!spec) {

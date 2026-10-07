@@ -1,4 +1,4 @@
-import { pascalCase, STOCK_COLLECTIVE_VERBS, ArcDirector } from 'arc-director';
+import { pascalCase, STOCK_COLLECTIVE_VERBS, STOCK_FORMATION_VERBS, ArcDirector, type Kit } from 'arc-director';
 import { MarketNPC, MarketGate, Merchant, Wanted } from '../../engine/components';
 import type { GameObject } from '../../engine/GameObject';
 import { NPCInput } from '../../characters/NPCInput';
@@ -166,9 +166,15 @@ function tickMarketNPC(host:GameHost):void {
 	if (!host.arc?.ready) {
 		return;
 	}
-	host.arc.collective('MarketHive')?.addCharacter({ id: spawned.id, tags: spawned.tags });
+	host.arc.collective('MarketHive')?.addCharacter({ id: spawned.id, tags: spawned.tags, kit: HIVE_KIT });
 	spawned.go.getComponent(NPCInput)!.aiOn = true;
 }
+
+/** What anyone at the market may do. */
+const MARKET_VERBS = [...GAME_VERBS, 'buy', 'sell', 'steal'];
+
+/** The hive's characters: the market's verbs, and the formations it lines them up in. */
+const HIVE_KIT:Kit = { verbs: [...MARKET_VERBS, ...STOCK_FORMATION_VERBS] };
 
 export function createDirector(host:GameHost):ArcDirector<CharacterCtx> {
 	host.hooks = {
@@ -176,7 +182,7 @@ export function createDirector(host:GameHost):ArcDirector<CharacterCtx> {
 		afterPickUp,
 		tickMarketNPC,
 	};
-	host.kit = { verbs: [...GAME_VERBS, 'buy', 'sell', 'steal'] };
+	host.kit = { verbs: [...MARKET_VERBS] };
 	const hiveKit = { verbs: [...GAME_VERBS, ...STOCK_COLLECTIVE_VERBS, 'buy', 'steal'] };
 	const d = addStealVerb(host.configure(new ArcDirector<CharacterCtx>()), host)
 		.withSight({ limit: 16 })
@@ -199,7 +205,7 @@ export function createDirector(host:GameHost):ArcDirector<CharacterCtx> {
 				idle: 'some(units.filter(u => !u.busy))',
 				theft: 'some(events.filter("theft"))',
 			},
-			characters: HIVE_UNITS,
+			characters: HIVE_UNITS.map((unit) => ({ ...unit, kit: HIVE_KIT })),
 			laws: [{
 				name: 'flee',
 				who: 'units.filter("Shopper")',

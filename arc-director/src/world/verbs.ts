@@ -60,7 +60,7 @@ export function worldVerbs<TCtx>(deps:WorldVerbDeps<TCtx>):Handlers<TCtx> {
 	const nameOf = (call:VerbCall<TCtx>, id:string):string => call.character.mind?.nameOf(id) ?? id;
 	const fail = (verb:string, reason:string):ArcResult => ({ ok: false, verb, reason });
 	const outcome = (verb:string, done:{ ok:boolean; reason?:string }):ArcResult => ({ ok: done.ok, verb, reason: done.reason });
-	const formation:VerbHandler<TCtx> = (call) => formationVerb(call, world, mover);
+	const formation:VerbHandler<TCtx> = (call) => formationVerb(call, world);
 	/** The acting character and the thing `id` names (when given), or why the verb fails. `what` names it in the failure. */
 	const resolve = (call:VerbCall<TCtx>, id?:string, what = 'thing'):Found | ArcResult => {
 		const character = world.find(call.character.id);
@@ -229,11 +229,12 @@ function wanderPoint<TCtx>(call:Call<TCtx, 'wander'>, world:HostWorld<unknown>, 
 	return best;
 }
 
-/** Send each unit to its slot in a line or a ring. Units move on their own; the step itself is done at once. */
-function formationVerb<TCtx>(call:VerbCall<TCtx>, world:HostWorld<unknown>, mover:Mover):ArcResult {
-	const units = (call.units ?? []).filter((id) => poseOf(world, id));
-	if (units.length === 0) {
-		return { ok: false, verb: call.verb, reason: 'no units' };
+/** This character's place in its squad's formation: every one of them works out the same slots and takes its own. */
+function formationVerb<TCtx>(call:VerbCall<TCtx>, world:HostWorld<unknown>):Promise<ArcResult> | ArcResult {
+	const units = call.character.squad.filter((id) => poseOf(world, id));
+	const mine = units.indexOf(call.character.id);
+	if (mine < 0) {
+		return { ok: false, verb: call.verb, reason: 'not in this scene' };
 	}
 	const placeOf = (key:string):Vec | undefined => {
 		const id = call.args[key];
@@ -263,6 +264,5 @@ function formationVerb<TCtx>(call:VerbCall<TCtx>, world:HostWorld<unknown>, move
 			slots.push(add(center, ground(Math.cos(a), Math.sin(a)), radius));
 		}
 	}
-	units.forEach((id, i) => void mover.go(id, { point: slots[i] }, call.verb));
-	return { ok: true, verb: call.verb };
+	return call.goToPoint(slots[mine]);
 }

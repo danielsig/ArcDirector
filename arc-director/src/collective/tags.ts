@@ -11,3 +11,8 @@ export function shortTag(collectiveID:string, stored:string):string {
 export function isSquadTag(collectiveID:string, stored:string):boolean {
 	return stored.startsWith(`${collectiveID}:`);
 }
+
+/** `stored` tags as the collective names them: its own shortened, each once (`Loaf` and `MarketHive:Loaf` are one). */
+export function shortTags(collectiveID:string, stored:readonly string[]):string[] {
+	return [...new Set(stored.map((t) => shortTag(collectiveID, t)).filter((t) => t.length > 0))];
+}

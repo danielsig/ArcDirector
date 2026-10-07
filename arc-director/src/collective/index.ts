@@ -7,7 +7,7 @@ export {
 	isFormationVerb,
 	type StockCollectiveVerb,
 } from './verbs.js';
-export { squadTag, shortTag, isSquadTag } from './tags.js';
+export { squadTag, shortTag, shortTags, isSquadTag } from './tags.js';
 export {
 	chatHandover,
 	HANDOVER_MEMORY_CAP,

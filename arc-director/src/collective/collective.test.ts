@@ -16,6 +16,7 @@ import { registerStockCollectiveVerbs, STOCK_COLLECTIVE_VERBS } from './verbs.js
 import { squadTag } from './tags.js';
 import { OPEN_WORLD } from '../testing/world.js';
 import { Mind } from '../mind/mind.js';
+import { TalkNet } from '../mind/talk.js';
 
 type Ctx = { id:string };
 
@@ -65,6 +66,8 @@ async function hiveOf(opts:{
 	calls?:VerbCall<Ctx>[];
 	hurt?:Set<string>;
 	slow?:boolean;
+	/** Calls that never finish on their own: still running however long a test takes to look. */
+	hold?:(call:VerbCall<Ctx>)=>boolean;
 	kit?:{ verbs:string[] };
 } = {}):Promise<ArcDirector<Ctx>> {
 	const director = await new ArcDirector<Ctx>()
@@ -83,6 +86,9 @@ async function hiveOf(opts:{
 		.withKernels(kernels(opts.hurt))
 		.onVerb(async (call) => {
 			opts.calls?.push(call);
+			if (opts.hold?.(call)) {
+				await new Promise(() => {});
+			}
 			if (opts.slow) {
 				await sleep(40);
 			}
@@ -357,7 +363,7 @@ describe('issue(who)', () => {
 
 	it('who= uses units not others; later when interrupts that unit only', async () => {
 		const calls:VerbCall<Ctx>[] = [];
-		const director = await hiveOf({ calls, slow: true });
+		const director = await hiveOf({ calls, hold: (call) => call.args.target === 'Keep' });
 		const hive = director.collective('Hive')!;
 		void hive.enact(parseArc(
 			'issue(who=units.filter("Guard"), arc=go_to(Keep))',
@@ -390,7 +396,7 @@ describe('issue(who)', () => {
 		director.dispose();
 	});
 
-	it('formation verbs run once on the set', async () => {
+	it('each character issued a formation takes its own place in the same squad', async () => {
 		const calls:VerbCall<Ctx>[] = [];
 		const director = await hiveOf({ calls });
 		const hive = director.collective('Hive')!;
@@ -398,9 +404,12 @@ describe('issue(who)', () => {
 			'issue(who=units.filter("Guard"), arc=hold_line(at=WestGate, facing=Player))',
 			hive.verbs,
 		));
+		await waitFor(() => calls.filter((c) => c.verb === 'hold_line').length === 2);
 		const lines = calls.filter((c) => c.verb === 'hold_line');
-		assert.equal(lines.length, 1);
-		assert.deepEqual((lines[0].units ?? []).slice().sort(), ['Mira', 'Tomas']);
+		assert.deepEqual(lines.map((c) => c.character.id).sort(), ['Mira', 'Tomas']);
+		for (const line of lines) {
+			assert.deepEqual(line.character.squad, ['Mira', 'Tomas']);
+		}
 		director.dispose();
 	});
 });
@@ -647,7 +656,7 @@ describe('characters, laws, dummy me', () => {
 		director.dispose();
 	});
 
-	it('formation inside a character\'s own arc fails closed', async () => {
+	it('a formation after other steps runs when they are done', async () => {
 		const calls:VerbCall<Ctx>[] = [];
 		const director = await hiveOf({ calls });
 		const hive = director.collective('Hive')!;
@@ -655,8 +664,11 @@ describe('characters, laws, dummy me', () => {
 			'issue(who=units.filter("Mira"), arc=go_to(Keep) && hold_line(at=WestGate, facing=Player))',
 			hive.verbs,
 		));
-		await waitFor(() => calls.some((c) => c.verb === 'go_to' && c.character.id === 'Mira'));
-		assert.equal(calls.some((c) => c.verb === 'hold_line'), false);
+		await waitFor(() => calls.some((c) => c.verb === 'hold_line'));
+		const line = calls.find((c) => c.verb === 'hold_line')!;
+		assert.equal(line.character.id, 'Mira');
+		assert.deepEqual(line.character.squad, ['Mira']);
+		assert.ok(calls.findIndex((c) => c.verb === 'go_to') < calls.indexOf(line));
 		director.dispose();
 	});
 });
@@ -1083,6 +1095,150 @@ describe('transfers', () => {
 		assert.equal(tom.mind?.owner, tom);
 		assert.equal(director.character('Wisp')?.mind, null);
 		release();
+		director.dispose();
+	});
+});
+
+describe('hearing', () => {
+	/** Bodies on a line; talk carries 2 paces. A hive with no commander, and a party whose commander is Dawn. */
+	async function stage(at:Record<string, number>) {
+		const talk = new TalkNet({
+			inRange: (a, b) => Math.abs((at[a] ?? 1e9) - (at[b] ?? -1e9)) <= 2,
+			others: (speaker) => Object.keys(at).filter((id) => id !== speaker),
+		});
+		const director = await new ArcDirector<Ctx>()
+			.withFakeInference(() => ({ content: 'wait()', toolCalls: [] }))
+			.addStockVerbs()
+			.addStockCollectiveVerbs()
+			.withDefaultKit(COLLECTIVE_KIT)
+			.withContext((id) => ({ id }))
+			.onVerb(({ verb }) => ({ ok: true, verb }))
+			.withTalk(talk)
+			.addCharacter({ id: 'Player' })
+			.addCollective({ id: 'Hive', mind: { skipHeartbeat: true }, kit: COLLECTIVE_KIT, characters: [{ id: 'Mira' }, { id: 'Tomas' }] })
+			.addCollective({
+				id: 'DawnParty',
+				mind: { skipHeartbeat: true },
+				kit: COLLECTIVE_KIT,
+				commander: 'Dawn',
+				characters: [{ id: 'Dawn' }, { id: 'Wisp' }],
+			})
+			.start();
+		const speech = (id:string) => director.collective(id)!.mind.events().filter((e) => e.kind === 'HeardSpeech');
+		const heard = (id:string):string[] => speech(id).map((e) => e.text);
+		return { director, talk, heard, speech };
+	}
+
+	it('a collective hears through every character it has, each line once', async () => {
+		const { director, talk, heard } = await stage({ Player: 10, Mira: 11, Tomas: 9, Dawn: 50, Wisp: 12 });
+		talk.say('Player', 'hello there', undefined, 1);
+		assert.equal(heard('Hive').length, 1);
+		assert.match(heard('Hive')[0], /hello there/);
+		assert.equal(heard('DawnParty').length, 1, 'through Wisp, though its commander is far away');
+		director.dispose();
+	});
+
+	it('a collective hears its characters talk to each other, but not its own voice', async () => {
+		const { director, talk, heard } = await stage({ Player: 10, Mira: 11, Tomas: 12, Dawn: 13, Wisp: 14 });
+		talk.say('Mira', 'over here', undefined, 1);
+		assert.equal(heard('Hive').length, 1, 'through Tomas');
+		assert.match(heard('Hive')[0], /Mira.*over here/);
+		talk.say('Wisp', 'behind you', undefined, 2);
+		talk.say('Dawn', 'hold', undefined, 3);
+		const party = heard('DawnParty');
+		assert.ok(party.some((line) => /Wisp.*behind you/.test(line)), 'through Dawn');
+		assert.equal(party.some((line) => /hold/.test(line)), false, 'its commander is its voice');
+		director.dispose();
+	});
+
+	it('two collectives hear their characters talk to each other, and know whom it was for', async () => {
+		const { director, talk, speech } = await stage({ Player: 0, Tomas: 10, Mira: 11, Dawn: 12, Wisp: 13 });
+		talk.say('Mira', 'need a hand?', 'Wisp', 1);
+		const [party] = speech('DawnParty');
+		assert.match(party?.text ?? '', /Mira says to Wisp: "need a hand\?"/, 'Wisp is not its voice, so not "you"');
+		assert.equal(party?.major, true, 'meant for one of its characters, whoever heard it best');
+		const [hive] = speech('Hive');
+		assert.match(hive?.text ?? '', /Mira says to Wisp/, 'its own character, heard through Tomas');
+		assert.equal(hive?.major, false);
+		talk.say('Wisp', 'yes', 'Mira', 2);
+		assert.match(speech('DawnParty')[1]?.text ?? '', /Wisp says to Mira: "yes"/, 'its own character, heard through Dawn');
+		assert.equal(speech('DawnParty')[1]?.major, false);
+		assert.match(speech('Hive')[1]?.text ?? '', /Wisp says to Mira: "yes"/);
+		assert.equal(speech('Hive')[1]?.major, true);
+		director.dispose();
+	});
+
+	it('a collective with no commander does not speak for itself', async () => {
+		const { director } = await stage({ Player: 10 });
+		const hive = director.collective('Hive')!;
+		const result = await hive.enact(parseArc('say(text=hi)', hive.verbs));
+		assert.equal(result.ok, false);
+		assert.match(result.reason ?? '', /not a character in this scene; issue say to one of your characters/);
+		director.dispose();
+	});
+});
+
+describe('a collective with no commander', () => {
+	it('looks things up from its characters, and waits on the director\'s clock', async () => {
+		const toolResults:string[] = [];
+		const director = await new ArcDirector<Ctx>()
+			.withPriorityQueue({ processInterval: 0, watchInterval: 0, heartbeatStart: 100, heartbeatMin: 100, maxParallel: 2 })
+			.withFakeInference((req) => {
+				const results = req.messages.filter((m) => m.role === 'tool').map((m) => String(m.content));
+				if (results.length > 0) {
+					toolResults.push(...results);
+					return { content: 'wait(seconds=1)', toolCalls: [] };
+				}
+				return {
+					content: '',
+					toolCalls: [
+						{ id: 'a', name: 'grep_world_encyclopedia', arguments: '{"query":"Keep"}' },
+						{ id: 'b', name: 'observe', arguments: '{"expr":"units"}' },
+					],
+				};
+			})
+			.addStockVerbs()
+			.addStockCollectiveVerbs()
+			.withDefaultKit(COLLECTIVE_KIT)
+			.withKernels(kernels())
+			.withEncyclopedia((ctx:Ctx) => [{ name: 'Keep', text: `A stone keep, as ${ctx.id} knows it.` }])
+			.withContext((id) => (id === 'Hive' ? undefined : { id }))
+			.onVerb(({ verb }) => ({ ok: true, verb }))
+			.addCollective({ id: 'Hive', mind: { skipHeartbeat: true }, kit: COLLECTIVE_KIT, characters: [{ id: 'Mira' }, { id: 'Tomas' }] })
+			.start();
+		const hive = director.collective('Hive')!;
+		void hive.mind.tick(1);
+		await waitFor(() => hive.verb === 'wait');
+		assert.equal(toolResults.length, 2);
+		assert.match(toolResults[0], /stone keep, as Mira knows it/);
+		assert.match(toolResults[1], /Mira/);
+		assert.match(toolResults[1], /Tomas/);
+		director.tick(2, 3);
+		await waitFor(() => hive.lastResult?.verb === 'wait');
+		assert.equal(hive.lastResult?.ok, true);
+		director.dispose();
+	});
+
+	it('is offered only its own verbs and wait, yet still issues the rest', async () => {
+		const director = await hiveOf();
+		const hive = director.collective('Hive')!;
+		const offered = hive.activeVerbs();
+		assert.equal(offered.has('go_to'), false);
+		assert.equal(offered.has('say'), false);
+		assert.ok(offered.has('wait') && offered.has('issue'));
+		const arc = parseArc('issue(who=units, arc=go_to(Keep))', offered);
+		assert.equal(arc.head.verb, 'issue');
+		hive.commander = hive.character('Mira')!;
+		assert.ok(hive.activeVerbs().has('go_to'));
+		director.dispose();
+	});
+
+	it('shows each roster tag once, though its own and a spec tag shorten alike', async () => {
+		const director = await hiveOf();
+		const hive = director.collective('Hive')!;
+		await hive.enact(parseArc('tag(who=units.filter("Mira"), name=Guard)', hive.verbs));
+		const mira = hive.promptSection(hive.mind).split('\n').find((line) => line.startsWith('- Mira'));
+		assert.equal(mira?.match(/Guard/g)?.length, 1);
 		director.dispose();
 	});
 });

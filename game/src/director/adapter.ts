@@ -83,10 +83,10 @@ export class GameHost {
 		this.scene = opts.scene ?? '';
 		this.ambient = opts.ambient ?? 'A damp stone hall of the dungeon.';
 		this.talk = new TalkNet({
-			inRange: (speakerID, listenerID) => this.inCollectiveRange(speakerID, listenerID),
-			others: (speakerID) => this.talkOthersOf(speakerID),
-			canSee: (a, b) => this.collectiveCanSee(a, b),
-			clearHear: (a, b) => this.collectiveClearHear(a, b),
+			inRange: (speakerID, listenerID) => inTalkRange(world, speakerID, listenerID),
+			others: (speakerID) => talkOthers(world, speakerID),
+			canSee: (a, b) => hostCanSee(world, a, b),
+			clearHear: (a, b) => canHearClearly(world, a, b),
 			hears: (speakerID, listenerID) => this.mayHear(speakerID, listenerID),
 			names: (id) => talkNames(this, id),
 			face: (who, toward) => talkFace(world, who, toward),
@@ -330,75 +330,6 @@ export class GameHost {
 		return { x: x / characters.length, z: z / characters.length };
 	}
 
-	private inCollectiveRange(speakerID:string, listenerID:string):boolean {
-		if (inTalkRange(this.world, speakerID, listenerID)) {
-			return true;
-		}
-		const listen = this.collectiveOf(listenerID);
-		if (listen) {
-			for (const unit of listen.characters) {
-				if (inTalkRange(this.world, speakerID, unit.id)) {
-					return true;
-				}
-			}
-		}
-		const speak = this.collectiveOf(speakerID);
-		if (speak && !findObject(this.world, speakerID)) {
-			for (const unit of speak.characters) {
-				if (inTalkRange(this.world, unit.id, listenerID)) {
-					return true;
-				}
-			}
-		}
-		return false;
-	}
-
-	private talkOthersOf(speakerID:string):string[] {
-		const speak = this.collectiveOf(speakerID);
-		if (speak && !findObject(this.world, speakerID)) {
-			const names = new Set<string>();
-			for (const unit of speak.characters) {
-				for (const name of talkOthers(this.world, unit.id)) {
-					names.add(name);
-				}
-			}
-			return [...names];
-		}
-		return talkOthers(this.world, speakerID);
-	}
-
-	private collectiveCanSee(a:string, b:string):boolean {
-		if (hostCanSee(this.world, a, b)) {
-			return true;
-		}
-		const listen = this.collectiveOf(b);
-		if (listen) {
-			for (const unit of listen.characters) {
-				if (hostCanSee(this.world, a, unit.id)) {
-					return true;
-				}
-			}
-		}
-		const speak = this.collectiveOf(a);
-		if (speak) {
-			for (const unit of speak.characters) {
-				if (hostCanSee(this.world, unit.id, b)) {
-					return true;
-				}
-			}
-			if (listen) {
-				for (const su of speak.characters) {
-					for (const lu of listen.characters) {
-						if (hostCanSee(this.world, su.id, lu.id)) {
-							return true;
-						}
-					}
-				}
-			}
-		}
-		return false;
-	}
-
 	private mayHear(speakerID:string, listenerID:string):boolean {
 		const character = this.world.findByID(listenerID) ?? findObject(this.world, listenerID);
 		const only = character?.getComponent(HearOnly);
@@ -406,38 +337,6 @@ export class GameHost {
 			return true;
 		}
 		return only.from.includes(speakerID);
-	}
-
-	private collectiveClearHear(a:string, b:string):boolean {
-		if (canHearClearly(this.world, a, b)) {
-			return true;
-		}
-		const listen = this.collectiveOf(b);
-		if (listen) {
-			for (const unit of listen.characters) {
-				if (canHearClearly(this.world, a, unit.id)) {
-					return true;
-				}
-			}
-		}
-		const speak = this.collectiveOf(a);
-		if (speak) {
-			for (const unit of speak.characters) {
-				if (canHearClearly(this.world, unit.id, b)) {
-					return true;
-				}
-			}
-			if (listen) {
-				for (const su of speak.characters) {
-					for (const lu of listen.characters) {
-						if (canHearClearly(this.world, su.id, lu.id)) {
-							return true;
-						}
-					}
-				}
-			}
-		}
-		return false;
 	}
 
 	public dispose():void {

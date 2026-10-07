@@ -74,8 +74,6 @@ export type VerbCall<TCtx = unknown, TArgs = Record<string, unknown>> = {
 	/** The character running the step. */
 	character:Character<TCtx>;
 	ctx:TCtx;
-	/** For a formation at the head of `issue`: the characters it lines up. */
-	units?:string[];
 	/** How well a `watch` arg fits right now, 0–1, or as if this character stood at `point`. Missing arg: 0. */
 	score(arg:keyof TArgs & string, point?:Vec):number;
 	/** `score(arg, point) > 0`. */

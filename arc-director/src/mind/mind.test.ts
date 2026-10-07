@@ -3,9 +3,10 @@ import { describe, it } from 'node:test';
 import { STOCK_VERBS, VerbRegistry, registerStockVerbs } from '../arc/stock-verbs.js';
 import { FakeProvider, goToNamedInteractable, hashEmbed } from '../inference/fake.js';
 import { chatContentText } from '../inference/provider.js';
-import { formatSight } from '../perception/sight.js';
+import { formatSight, formatSightClauses } from '../perception/sight.js';
 import type { SeenObject } from '../perception/types.js';
 import { soloCharacter, type SoloOptions } from '../testing/solo.js';
+import { mindFields } from './mind.js';
 import type { Character, CharacterJSON } from '../character/character.js';
 
 /** A saved character, restored on its own. */
@@ -223,11 +224,12 @@ describe('Agent', () => {
 		assert.match(users[0] ?? '', /bridge fee is FireMushroom/);
 	});
 
-	it('keeps last-seen of a name after it leaves sight', async () => {
-		let scene = formatSight({
+	it('keeps last-seen of a name after it leaves sight, and nothing for names it only heard of', async () => {
+		const sight = {
 			self: { id: 'Angler', point: [0, 0] },
 			objects: [named('Forager', { tags: ['person'], x: 3, z: 0 })],
-		});
+		};
+		let scene = `${formatSight(sight)} Carrying: Purse, Knife.`;
 		const users:string[] = [];
 		const provider = new FakeProvider((req) => {
 			users.push(String(req.messages[req.messages.length - 1]?.content ?? ''));
@@ -256,12 +258,15 @@ describe('Agent', () => {
 			arcRetryCap: 0,
 			strategicInterval: 0,
 		});
+		mindFields(agent.mind!).sighted(formatSightClauses(sight));
 		await agent.mind!.tick(1);
 		assert.equal((users[0] ?? '').includes('Last I saw Forager'), false);
 		scene = 'empty grass.';
 		users.length = 0;
 		await agent.mind!.tick(2);
 		assert.match(users[0] ?? '', /Last I saw Forager/);
+		const seen = agent.persona.memory.all().filter((r) => r.tags.includes('seen')).map((r) => r.text);
+		assert.deepEqual(seen.map((text) => text.split(':')[0]), ['Last I saw Forager']);
 	});
 
 	it('retries a bad arc on the same thread when the host sets arcRetryCap', async () => {
@@ -1066,6 +1071,7 @@ describe('Agent', () => {
 		const text = users.find((u) => u.includes('environment:')) ?? users.at(-1) ?? '';
 		const stm = text.split(/\n\nYou remember:/)[0] ?? text;
 		assert.match(stm, /Earlier:/);
+		assert.match(stm, /Earlier: .*"Order 0\."; Player says to you: "Order 1\."/);
 		assert.match(stm, /Order 9/);
 		assert.doesNotMatch(stm, /^- Player says to you: "Order 0\."$/m);
 	});
@@ -2014,10 +2020,12 @@ describe('repairs, mind verbs, and names', () => {
 		});
 	}
 
-	it('repairs a truncated reply without parsing it, and warms up from the second repair', async () => {
+	it('repairs a truncated reply without parsing it or reasoning, and warms up from the second repair', async () => {
 		const temps:Array<number | undefined> = [];
+		const thinking:Array<boolean | undefined> = [];
 		const provider = new FakeProvider((req) => {
 			temps.push(req.temperature);
+			thinking.push(req.enableThinking);
 			if (temps.length === 1) {
 				return { content: 'go_to(Kee', toolCalls: [], truncated: true };
 			}
@@ -2031,6 +2039,7 @@ describe('repairs, mind verbs, and names', () => {
 		const arc = await agentOf(provider, { repairTemperature: 0.7 }).mind!.tick(1);
 		assert.equal(arc?.head.args.target, 'EastGate');
 		assert.deepEqual(temps, [0, 0, 0.7]);
+		assert.deepEqual(thinking, [undefined, false, false]);
 	});
 
 	it('watch, unwatch, focus, and unfocus edit the extras and leave pins alone', async () => {

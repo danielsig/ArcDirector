@@ -1155,7 +1155,7 @@ describe('withNames', () => {
 			director.tick(1, t);
 			await sleep(10);
 		}
-		assert.match(prompts[1] ?? '', /- flee: watch=some\(EnemyWitch2\) && some\(others\.filter\("EnemyWitch2"\)\) → examine\(.*EnemyWitch2\)/);
+		assert.match(prompts[1] ?? '', /- flee: when some\(EnemyWitch2\) && some\(others\.filter\("EnemyWitch2"\)\), run examine\(.*EnemyWitch2\)/);
 		director.dispose();
 	});
 });

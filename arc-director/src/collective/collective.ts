@@ -6,12 +6,16 @@ import type { Character } from '../character/character.js';
 import { Persona, type PersonaJSON } from '../character/persona.js';
 import { Mind, type MindJSON } from '../mind/mind.js';
 import type { CharacterSpec } from '../director/types.js';
-import { squadTag, isSquadTag, shortTag } from './tags.js';
+import { squadTag, isSquadTag, shortTag, shortTags } from './tags.js';
 import { MIND_ONLY_VERBS, STOCK_ARC_VERBS } from '../arc/stock-verbs.js';
-import { STOCK_COLLECTIVE_VERBS } from './verbs.js';
+import { isFormationVerb, STOCK_COLLECTIVE_VERBS } from './verbs.js';
 
-/** Verbs only a collective's voice runs: issuing, tagging, formations, laws, and the mind's own. */
-const VOICE_VERBS = new Set<string>([...STOCK_COLLECTIVE_VERBS, ...STOCK_ARC_VERBS, ...MIND_ONLY_VERBS]);
+/** Verbs only a collective's voice runs: issuing, tagging, laws, and the mind's own. Formations are its characters'. */
+const VOICE_VERBS = new Set<string>([
+	...STOCK_COLLECTIVE_VERBS.filter((verb) => !isFormationVerb(verb)),
+	...STOCK_ARC_VERBS,
+	...MIND_ONLY_VERBS,
+]);
 
 /** A collective's part of a save. Its characters are saved on their own and listed here by id. */
 export type CollectiveJSON = ArcRunnerJSON & {
@@ -64,6 +68,8 @@ export class Collective<TCtx = unknown> extends ArcRunner<TCtx> {
 	public onCommanderVacant?:(character:Character<TCtx>)=>void;
 	private _characters:Character<TCtx>[] = [];
 	private _commander:Character<TCtx> | null = null;
+	/** The characters each was last issued a program with. */
+	private readonly _squads = new WeakMap<Character<TCtx>, readonly string[]>();
 	private readonly _host:CollectiveHost<TCtx>;
 
 	constructor(opts:CollectiveOptions<TCtx>) {
@@ -111,6 +117,20 @@ export class Collective<TCtx = unknown> extends ArcRunner<TCtx> {
 	/** The commander, or the collective itself while it has none. */
 	public get voice():ArcRunner<TCtx> {
 		return this._commander ?? this;
+	}
+
+	/** It stands nowhere itself: its commander speaks and walks for its mind, and without one a character of its must. */
+	public get embodied():boolean {
+		return false;
+	}
+
+	/** With no commander it has no body, so its mind is offered only the verbs it runs itself, and `wait`. */
+	protected override withheldVerbs():readonly string[] {
+		const withheld = super.withheldVerbs();
+		if (this._commander) {
+			return withheld;
+		}
+		return [...withheld, ...this.refreshKit().verbs.filter((verb) => !VOICE_VERBS.has(verb) && verb !== 'wait')];
 	}
 
 	/** A new character, in this collective. Its kit is its spec's, or the director's default. */
@@ -188,11 +208,18 @@ export class Collective<TCtx = unknown> extends ArcRunner<TCtx> {
 
 	/** Give each of `characters` but the commander `arc` as its program, replacing what it ran. */
 	public issue(characters:readonly Character<TCtx>[], arc:Arc):void {
-		for (const character of characters) {
-			if (character !== this._commander) {
-				void character.enact(arc);
-			}
+		const troops = characters.filter((character) => character !== this._commander);
+		const squad = troops.map((character) => character.id);
+		for (const character of troops) {
+			this._squads.set(character, squad);
+			void character.enact(arc);
 		}
+	}
+
+	/** The characters `character` was last issued a program with that are still here, itself among them; else itself alone. */
+	public squadOf(character:Character<TCtx>):string[] {
+		const squad = (this._squads.get(character) ?? []).filter((id) => this.character(id));
+		return squad.includes(character.id) ? squad : [character.id];
 	}
 
 	/** The roster, the laws, and the programs the characters run, for the mind's prompt. */
@@ -200,7 +227,7 @@ export class Collective<TCtx = unknown> extends ArcRunner<TCtx> {
 		const parts:string[] = [];
 		if (this._characters.length > 0) {
 			const lines = this._characters.map((character) => {
-				const tags = character.tags.map((t) => this.shortOf(t)).filter((t) => t.length > 0);
+				const tags = shortTags(this.id, character.tags);
 				const lacks = this.lacking(character);
 				const notes = [
 					character === this._commander ? 'you' : '',
