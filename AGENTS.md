@@ -42,7 +42,7 @@ Unity-shaped, not Unity. `@arc-director/kindling` owns the canvas, `Renderer`, R
 
 ### Hierarchy
 
-`GameObject.setParent(parent, worldPositionStays = true)` reparents in both Kindling and Three.js. Adding a parent to a world registers the whole tree. `World.destroy` / `Game.destroy` queues end-of-frame destroy (children follow, `onDestroy`). `World.remove` unregisters one object now (no `onDestroy`, children stay).
+Assigning `GameObject.parent` reparents in both Kindling and Three.js and keeps the world pose. `children` is the readonly direct-child list. Adding a parent to a world registers the whole tree. `World.destroy` / `Game.destroy` queues end-of-frame destroy (children follow, `onDestroy`). `World.remove` unregisters one object now (no `onDestroy`, children stay).
 
 ### Component callbacks
 

@@ -110,7 +110,7 @@ describe('component loop', () => {
 		const parent = new GameObject('parent');
 		const child = new GameObject('child');
 		parent.addComponent(Probe);
-		child.setParent(parent);
+		child.parent = parent;
 		game.world.add(parent);
 		assert.equal(game.world.objects.length, 2);
 		game.destroy(parent);
@@ -122,12 +122,28 @@ describe('component loop', () => {
 		assert.ok(Probe.log.includes('onDestroy'));
 	});
 
+	it('remove unlinks a child and keeps its world position', () => {
+		const game = new Game();
+		const parent = new GameObject('parent');
+		const child = new GameObject('child');
+		parent.transform.position.x = 1;
+		child.transform.position.x = 5;
+		child.parent = parent;
+		game.world.add(parent);
+		game.world.remove(child);
+		assert.equal(child.parent, null);
+		assert.equal(parent.children.length, 0);
+		assert.equal(game.world.findByID('child'), undefined);
+		assert.ok(game.world.findByID('parent'));
+		assert.ok(Math.abs(child.transform.position.x - 5) < 1e-5);
+	});
+
 	it('remove unregisters immediately without destroying children', () => {
 		const game = new Game();
 		const parent = new GameObject('parent');
 		const child = new GameObject('child');
 		parent.addComponent(Probe);
-		child.setParent(parent);
+		child.parent = parent;
 		game.world.add(parent);
 		game.world.remove(parent);
 		assert.equal(game.world.findByID('parent'), undefined);

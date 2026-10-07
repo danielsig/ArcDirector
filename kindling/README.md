@@ -19,7 +19,7 @@ Headless (no `document`): `renderer` / `canvas` are null. `tick(dt)` still runs 
 |-------|----------|
 | `MonoBehaviour` | `Component` (subclass, override hooks) |
 | `GameObject` | `GameObject` (`id`, `name`, always has `Transform`) |
-| `Transform` parent/child | `setParent`; Three.js `Object3D` tree stays in sync |
+| `Transform` parent/child | `parent =`; Three.js `Object3D` tree stays in sync |
 | `Awake` / `OnEnable` / `Start` | `awake` / `onEnable` / `start` |
 | `FixedUpdate` / `Update` / `LateUpdate` | `fixedUpdate` / `update` / `lateUpdate` |
 | `OnDisable` / `OnDestroy` | `onDisable` / `onDestroy` |
@@ -114,7 +114,8 @@ Always has `transform`. `addComponent` rejects a second `Transform`; `removeComp
 | `getComponent(ctor)` | First match, including `Transform`. |
 | `getOrAddComponent(ctor)` | `getComponent`, else adds `new ctor()`. |
 | `getComponentsInChildren(ctor)` | This object then descendants. |
-| `setParent(parent, worldPositionStays = true)` | Reparents Kindling + Three.js. If the parent is in a world and this is not, `world.add(this)`. |
+| `parent` | Assigning reparents Kindling + Three.js and keeps world position and rotation. `null` unparents. If the new parent is in a world and this is not, `world.add(this)`. |
+| `children` | Readonly direct children, in parenting order. |
 
 `allocID(prefix?)` / `resetAllocID()` are for tests and unnamed objects.
 
@@ -129,7 +130,7 @@ Wraps `THREE.Object3D` (`transform.object3D`). `position` is a world `{ x, y, z 
 | `forward` / `right` / `up` | world only |
 | `scale` (uniform) | `localScale` |
 
-`forward` is Kindling forward: **−Z**. `setParent(..., true)` keeps world position and rotation.
+`forward` is Kindling forward: **−Z**. Assigning `parent` keeps world position and rotation.
 
 ---
 

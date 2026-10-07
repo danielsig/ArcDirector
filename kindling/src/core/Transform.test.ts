@@ -14,13 +14,38 @@ describe('Transform', () => {
 		assert.throws(() => go.addComponent(Transform));
 	});
 
+	it('assigning parent keeps world position and updates children', () => {
+		const parent = new GameObject('parent');
+		const child = new GameObject('child');
+		child.transform.position.x = 4;
+		child.parent = parent;
+		assert.equal(child.parent, parent);
+		assert.deepEqual([...parent.children], [child]);
+		close(child.transform.position.x, 4);
+		child.parent = null;
+		assert.equal(child.parent, null);
+		assert.equal(parent.children.length, 0);
+		close(child.transform.position.x, 4);
+	});
+
+	it('assigning parent keeps world position when the parent is offset', () => {
+		const parent = new GameObject('parent');
+		const child = new GameObject('child');
+		parent.transform.position.x = 10;
+		child.transform.position.x = 3;
+		child.parent = parent;
+		close(child.transform.position.x, 3);
+		close(child.transform.localPosition.x, -7);
+		assert.deepEqual([...parent.children], [child]);
+	});
+
 	it('writes world position on a child as local offset', () => {
 		const parent = new GameObject('parent');
 		const child = new GameObject('child');
 		parent.transform.position.x = 10;
 		parent.transform.position.y = 2;
 		parent.transform.position.z = -4;
-		child.setParent(parent);
+		child.parent = parent;
 		child.transform.position.x = 12;
 		child.transform.position.y = 2;
 		child.transform.position.z = -4;

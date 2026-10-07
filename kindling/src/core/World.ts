@@ -140,7 +140,6 @@ export class World {
 			this._doomed.splice(queued, 1);
 		}
 		if (go.parent) {
-			go.parent.children = go.parent.children.filter((c) => c !== go);
 			go.parent = null;
 		}
 		const i = this.objects.indexOf(go);
@@ -241,7 +240,6 @@ export class World {
 			this.destroyNow(child);
 		}
 		if (go.parent) {
-			go.parent.children = go.parent.children.filter((c) => c !== go);
 			go.parent = null;
 		}
 		for (const c of go.components()) {

@@ -22,12 +22,12 @@ export class GameObject {
 	public id:string;
 	public name:string;
 	public transform:Transform;
-	public parent:GameObject | null = null;
-	public children:GameObject[] = [];
 	public world:World | null = null;
 	/** How the host rebuilds this object when a save has it and a fresh scene does not. JSON data only. */
 	public recipe:unknown;
 
+	private _parent:GameObject | null = null;
+	private readonly _children:GameObject[] = [];
 	private readonly _comps:Component[] = [];
 
 	constructor(id?:string, name?:string) {
@@ -109,7 +109,12 @@ export class GameObject {
 		return this._comps;
 	}
 
-	public setParent(parent:GameObject | null, worldPositionStays = true):void {
+	/** Assigning reparents in Kindling and Three.js. World position and rotation stay. */
+	public get parent():GameObject | null {
+		return this._parent;
+	}
+
+	public set parent(parent:GameObject | null) {
 		const px = this.transform.position.x;
 		const py = this.transform.position.y;
 		const pz = this.transform.position.z;
@@ -117,12 +122,16 @@ export class GameObject {
 		const yaw = this.transform.yaw;
 		const roll = this.transform.roll;
 
-		if (this.parent) {
-			this.parent.children = this.parent.children.filter((c) => c !== this);
+		if (this._parent) {
+			const siblings = this._parent._children;
+			const index = siblings.indexOf(this);
+			if (index >= 0) {
+				siblings.splice(index, 1);
+			}
 		}
-		this.parent = parent;
+		this._parent = parent;
 		if (parent) {
-			parent.children.push(this);
+			parent._children.push(this);
 			parent.transform.object3D.add(this.transform.object3D);
 			if (parent.world && !this.world) {
 				parent.world.add(this);
@@ -135,10 +144,13 @@ export class GameObject {
 			this.transform.object3D.removeFromParent();
 		}
 
-		if (worldPositionStays) {
-			this.transform.setWorldPosition(px, py, pz);
-			this.transform.setWorldRotation(pitch, yaw, roll);
-		}
+		this.transform.setWorldPosition(px, py, pz);
+		this.transform.setWorldRotation(pitch, yaw, roll);
+	}
+
+	/** Direct children, in parenting order. */
+	public get children():readonly GameObject[] {
+		return this._children;
 	}
 
 	public awakeAll():void {

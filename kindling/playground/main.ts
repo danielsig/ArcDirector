@@ -41,7 +41,7 @@ parent.addComponent(MeshRenderer, { meshID: 'cube', color: 0xc45c26 });
 parent.addComponent(Spin);
 
 const child = new GameObject('child');
-child.setParent(parent);
+child.parent = parent;
 child.transform.position.x = 2;
 child.transform.position.y = 0.5;
 child.transform.position.z = 0;
