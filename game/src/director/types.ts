@@ -1,19 +1,19 @@
-import type { AgentSpec } from 'arc-director';
-import type { NPCInput } from '../actors/NPCInput';
+import type { CharacterSpec } from 'arc-director';
+import type { NPCInput } from '../characters/NPCInput';
 import type { GameObject } from '../engine/GameObject';
 import type { World } from '../engine/World';
 
-export type AgentCtx = {
+export type CharacterCtx = {
 	world:World;
-	actor:GameObject;
-	/** Where ArcDirector steers this body, and its cooldowns. Every body ArcDirector drives has one. */
+	character:GameObject;
+	/** Where ArcDirector steers this character, and its cooldowns. Every character ArcDirector drives has one. */
 	npc:NPCInput;
 	/** Scene id from the game host. ArcDirector does not interpret it. */
 	scene:string;
 };
 
 export type SceneHooks<H> = {
-	afterPickUp?:(host:H, actor:GameObject, name:string)=>void;
+	afterPickUp?:(host:H, character:GameObject, name:string)=>void;
 	tickMarketNPC?:(host:H)=>void;
 	checkBargain?:(host:H)=>void;
 	goalDone?:(host:H, id:string)=>boolean;
@@ -22,6 +22,6 @@ export type SceneHooks<H> = {
 
 const RECEIVED = 'count(me.inventory) > count(prev.me.inventory) || me.gold > prev.me.gold';
 
-export function withReceived<T>(spec:AgentSpec<T>):AgentSpec<T> {
+export function withReceived<T>(spec:CharacterSpec<T>):CharacterSpec<T> {
 	return { ...spec, watches: { received: RECEIVED, ...spec.watches } };
 }

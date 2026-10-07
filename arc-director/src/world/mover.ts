@@ -3,11 +3,11 @@ import { blockedReason, findRoute, noWayTo, type Route } from './route.js';
 import type { HostWorld, Vec } from './types.js';
 import { distance } from './vec.js';
 
-/** Where a move heads: a body or thing (followed as it moves), or a fixed point. */
+/** Where a move heads: a character or thing (followed as it moves), or a fixed point. */
 export type MoveDest = { target:string } | { point:Vec };
 
 export type MoveOpts = {
-	/** Arrive this close. Default: `getReach` for a target; for a point, when `steerToward` says the body is there. */
+	/** Arrive this close. Default: `getReach` for a target; for a point, when `steerToward` says the character is there. */
 	within?:number;
 	/** Never finish: keep within reach as the target moves, until replaced or stopped. */
 	sticky?:boolean;
@@ -29,7 +29,7 @@ type Errand = {
 	bestAt:number;
 	stuck:number;
 	checkedAt:number;
-	actor?:unknown;
+	character?:unknown;
 	done:(result:ArcResult)=>void;
 };
 
@@ -40,7 +40,7 @@ const STUCK_TRIES = 3;
 /** Closing 2% of the gap to the waypoint counts as progress. */
 const PROGRESS = 0.98;
 
-/** Drives bodies along routes through the host's `getPathGraph`, one move per body; a new move replaces the old. */
+/** Drives characters along routes through the host's `getPathGraph`, one move per character; a new move replaces the old. */
 export class Mover {
 	private readonly errands = new Map<string, Errand>();
 
@@ -53,18 +53,18 @@ export class Mover {
 		return !!(this.world?.getPathGraph && this.world.steerToward);
 	}
 
-	moving(actorID:string):boolean {
-		return this.errands.has(actorID);
+	moving(characterID:string):boolean {
+		return this.errands.has(characterID);
 	}
 
-	go(actorID:string, dest:MoveDest, verb:string, opts:MoveOpts = {}):Promise<ArcResult> {
+	go(characterID:string, dest:MoveDest, verb:string, opts:MoveOpts = {}):Promise<ArcResult> {
 		if (!this.canMove) {
 			return Promise.resolve({ ok: false, verb, reason: 'cannot move' });
 		}
-		this.stop(actorID, { ok: false, interrupted: true, verb, reason: 'replaced' });
+		this.stop(characterID, { ok: false, interrupted: true, verb, reason: 'replaced' });
 		return new Promise((done) => {
 			const now = this.now();
-			this.errands.set(actorID, {
+			this.errands.set(characterID, {
 				verb,
 				dest,
 				opts,
@@ -80,15 +80,15 @@ export class Mover {
 		});
 	}
 
-	/** End `actorID`'s move, standing still. Default result: interrupted. */
-	stop(actorID:string, result?:ArcResult):void {
-		const errand = this.errands.get(actorID);
+	/** End `characterID`'s move, standing still. Default result: interrupted. */
+	stop(characterID:string, result?:ArcResult):void {
+		const errand = this.errands.get(characterID);
 		if (!errand) {
 			return;
 		}
-		this.errands.delete(actorID);
-		if (errand.actor !== undefined) {
-			this.world?.steerToward?.(errand.actor, null);
+		this.errands.delete(characterID);
+		if (errand.character !== undefined) {
+			this.world?.steerToward?.(errand.character, null);
 		}
 		errand.done(result ?? { ok: false, interrupted: true, verb: errand.verb });
 	}
@@ -105,12 +105,12 @@ export class Mover {
 	/** One tick of one move. A result ends it. */
 	private step(id:string, e:Errand):ArcResult | undefined {
 		const world = this.world!;
-		const actor = world.find(id);
-		const me = actor === undefined ? undefined : world.getPose(actor)?.point;
-		if (actor === undefined || !me) {
-			return { ok: false, verb: e.verb, reason: 'no body' };
+		const character = world.find(id);
+		const me = character === undefined ? undefined : world.getPose(character)?.point;
+		if (character === undefined || !me) {
+			return { ok: false, verb: e.verb, reason: 'not in this scene' };
 		}
-		e.actor = actor;
+		e.character = character;
 		const target = 'target' in e.dest ? e.dest.target : undefined;
 		const goal = target !== undefined ? world.find(target) : undefined;
 		const dest = target !== undefined ? (goal === undefined ? undefined : world.getPose(goal)?.point) : (e.dest as { point:Vec }).point;
@@ -125,9 +125,9 @@ export class Mover {
 				return { ok: true, verb: e.verb, reason: met };
 			}
 		}
-		const within = e.opts.within ?? (target !== undefined ? world.getReach?.(actor, goal) ?? 1 : 0);
+		const within = e.opts.within ?? (target !== undefined ? world.getReach?.(character, goal) ?? 1 : 0);
 		if (distance(me, dest) <= within) {
-			return this.arrive(e, actor, now);
+			return this.arrive(e, character, now);
 		}
 		const moved = target !== undefined && e.goal && distance(dest, e.goal) > within;
 		const stale = target !== undefined && now - e.plannedAt >= REPLAN_EVERY;
@@ -135,22 +135,22 @@ export class Mover {
 			return undefined;
 		}
 		if (!e.route || moved || stale || this.isStuck(e, now)) {
-			const failed = this.plan(e, actor, me, dest, within, target);
+			const failed = this.plan(e, character, me, dest, within, target);
 			if (failed) {
 				if (!e.opts.sticky) {
 					return failed;
 				}
 				e.retryAt = now + REPLAN_EVERY;
 				e.stuck = 0;
-				world.steerToward!(actor, null);
+				world.steerToward!(character, null);
 				return undefined;
 			}
 		}
-		// The game's motor says when the body is at a waypoint. Past the route, head straight for the destination.
+		// The game's motor says when the character is at a waypoint. Past the route, head straight for the destination.
 		const route = e.route!;
 		for (;;) {
 			const waypoint = route.points[e.next] ?? dest;
-			if (!world.steerToward!(actor, waypoint)) {
+			if (!world.steerToward!(character, waypoint)) {
 				const gap = distance(me, waypoint);
 				if (gap < e.bestGap * PROGRESS) {
 					e.bestGap = gap;
@@ -159,7 +159,7 @@ export class Mover {
 				return undefined;
 			}
 			if (e.next >= route.points.length) {
-				return this.arrive(e, actor, now);
+				return this.arrive(e, character, now);
 			}
 			e.next += 1;
 			e.bestGap = Infinity;
@@ -168,14 +168,14 @@ export class Mover {
 	}
 
 	/** In reach: done, or for a sticky move, stand by until the target moves off. */
-	private arrive(e:Errand, actor:unknown, now:number):ArcResult | undefined {
+	private arrive(e:Errand, character:unknown, now:number):ArcResult | undefined {
 		if (!e.opts.sticky) {
 			return { ok: true, verb: e.verb };
 		}
 		e.route = undefined;
 		e.bestAt = now;
 		e.stuck = 0;
-		this.world!.steerToward!(actor, null);
+		this.world!.steerToward!(character, null);
 		return undefined;
 	}
 
@@ -190,11 +190,11 @@ export class Mover {
 	}
 
 	/** New route toward `dest`. A result means there is none. */
-	private plan(e:Errand, actor:unknown, me:Vec, dest:Vec, within:number, target?:string):ArcResult | undefined {
+	private plan(e:Errand, character:unknown, me:Vec, dest:Vec, within:number, target?:string):ArcResult | undefined {
 		if (e.stuck >= STUCK_TRIES) {
 			return { ok: false, verb: e.verb, reason: 'stuck' };
 		}
-		const route = findRoute(this.world!.getPathGraph!(actor), me, dest, within);
+		const route = findRoute(this.world!.getPathGraph!(character), me, dest, within);
 		e.plannedAt = this.now();
 		e.goal = dest;
 		e.next = 0;

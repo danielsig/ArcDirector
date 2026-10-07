@@ -67,4 +67,16 @@ describe('MemoryStore', () => {
 		assert.equal(hit.length, 1);
 		assert.equal(hit[0].text.includes('FireMushroom'), true);
 	});
+
+	it('removes and rewrites a record by id', () => {
+		const store = new MemoryStore();
+		const kept = store.add({ text: 'Dawn leads us', embedding: [1, 0] });
+		const gone = store.add({ text: 'Dusk is the enemy' });
+		assert.equal(store.remove(gone.id), true);
+		assert.equal(store.remove(gone.id), false);
+		assert.equal(store.rewrite(kept.id, 'Dawn led us')?.text, 'Dawn led us');
+		assert.equal(kept.embedding, undefined);
+		assert.equal(store.rewrite('mem_99', 'x'), undefined);
+		assert.deepEqual(store.all().map((r) => r.text), ['Dawn led us']);
+	});
 });

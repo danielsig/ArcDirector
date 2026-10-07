@@ -4,7 +4,7 @@ import type { World } from '../engine/World';
 import { Container, Harvest, Item, Pickupable } from './components';
 import { getDef } from './defs';
 import { equipItem } from './equip';
-import { actorIs, distXZ, findCarried, findReady, itemMatchesName, tryInsert } from './inventory';
+import { characterIs, distXZ, findCarried, findReady, itemMatchesName, tryInsert } from './inventory';
 import { instantiateDef, isBackpack, type ItemInstance } from './instance';
 import { captureItem, spawnWorldItem } from '../world/spawnItem';
 import { cueAt } from '../audio/cue';
@@ -12,18 +12,18 @@ import { cueAt } from '../audio/cue';
 export const PICKUP_RANGE = 1.7;
 export const USE_RANGE = 2.2;
 
-export function nearestPickup(actor:GameObject):GameObject | null {
-	const world = actor.world;
+export function nearestPickup(character:GameObject):GameObject | null {
+	const world = character.world;
 	if (!world) {
 		return null;
 	}
 	let best:GameObject | null = null;
 	let bestD = PICKUP_RANGE;
 	for (const go of world.objects) {
-		if (go === actor || !go.getComponent(Pickupable)) {
+		if (go === character || !go.getComponent(Pickupable)) {
 			continue;
 		}
-		const d = distXZ(actor, go);
+		const d = distXZ(character, go);
 		if (d < bestD) {
 			bestD = d;
 			best = go;
@@ -41,42 +41,42 @@ export function pickupLabel(loot:GameObject):string {
 	return name;
 }
 
-export function pickup(actor:GameObject, loot:GameObject):string {
-	const world = actor.world;
+export function pickup(character:GameObject, loot:GameObject):string {
+	const world = character.world;
 	if (!world) {
 		return 'no world';
 	}
 	const crop = loot.getComponent(Harvest);
-	if (crop && !actorIs(actor, crop.harvester)) {
+	if (crop && !characterIs(character, crop.harvester)) {
 		return `only ${crop.harvester} can harvest that`;
 	}
 	const inst = captureItem(loot);
 	if (isBackpack(inst)) {
-		const err = equipItem(actor, inst, world, 'back');
+		const err = equipItem(character, inst, world, 'back');
 		if (err) {
 			return err;
 		}
 		world.remove(loot);
-		cueAt(world, 'take', actor);
+		cueAt(world, 'take', character);
 		return `equipped ${inst.name}`;
 	}
-	if (!tryInsert(actor, inst)) {
+	if (!tryInsert(character, inst)) {
 		return 'no room';
 	}
 	world.remove(loot);
-	cueAt(world, 'take', actor);
+	cueAt(world, 'take', character);
 	return `picked up ${inst.name}`;
 }
 
-export function dropItem(actor:GameObject, item:import('./instance').ItemInstance):void {
-	const world = actor.world;
+export function dropItem(character:GameObject, item:import('./instance').ItemInstance):void {
+	const world = character.world;
 	if (!world) {
 		return;
 	}
-	const p = actor.transform.position;
-	const fwd = { x: -Math.sin(actor.transform.yaw), z: -Math.cos(actor.transform.yaw) };
+	const p = character.transform.position;
+	const fwd = { x: -Math.sin(character.transform.yaw), z: -Math.cos(character.transform.yaw) };
 	spawnWorldItem(world, item, p.x + fwd.x * 0.7, p.y, p.z + fwd.z * 0.7);
-	cueAt(world, 'drop', actor);
+	cueAt(world, 'drop', character);
 }
 
 export function spawnDefAt(
@@ -97,16 +97,16 @@ export function spawnDefAt(
 	return spawnWorldItem(world, inst, x, y, z, chunkID);
 }
 
-export function interactDoor(actor:GameObject, doorGo:GameObject):string {
-	const world = actor.world;
+export function interactDoor(character:GameObject, doorGo:GameObject):string {
+	const world = character.world;
 	const lock = doorGo.getComponent(Lock);
 	const door = doorGo.getComponent(Door);
 	if (!door) {
 		return 'not a door';
 	}
 	if (lock?.locked) {
-		if (!findReady(actor, (it) => it.Key?.keyID === lock.keyID)) {
-			if (findCarried(actor, (it) => it.Key?.keyID === lock.keyID)) {
+		if (!findReady(character, (it) => it.Key?.keyID === lock.keyID)) {
+			if (findCarried(character, (it) => it.Key?.keyID === lock.keyID)) {
 				return 'the key is in your pack';
 			}
 			return lock.keyID ? `locked — needs a ${lock.keyID} key` : 'locked';
@@ -169,7 +169,7 @@ export function resolveNamedTarget(world:World, name:string):GameObject | undefi
 	return held.chest;
 }
 
-export function takeFromChest(actor:GameObject, held:ChestHold):string {
+export function takeFromChest(character:GameObject, held:ChestHold):string {
 	const lock = held.chest.getComponent(Lock);
 	const chest = held.chest.getComponent(Chest);
 	const chestName = held.chest.getComponent(Named)?.id ?? held.chest.id;
@@ -179,18 +179,18 @@ export function takeFromChest(actor:GameObject, held:ChestHold):string {
 	if (chest && !chest.open) {
 		return `${chestName} is closed`;
 	}
-	if (!tryInsert(actor, held.item)) {
+	if (!tryInsert(character, held.item)) {
 		return 'no room';
 	}
 	const i = held.bag.contents.indexOf(held.item);
 	if (i >= 0) {
 		held.bag.contents.splice(i, 1);
 	}
-	cueAt(actor.world, 'take', actor);
+	cueAt(character.world, 'take', character);
 	return `took ${held.item.name} from ${chestName}`;
 }
 
-export function interactChest(actor:GameObject, chestGo:GameObject):string {
+export function interactChest(character:GameObject, chestGo:GameObject):string {
 	const chest = chestGo.getComponent(Chest);
 	const bag = chestGo.getComponent(Container);
 	const lock = chestGo.getComponent(Lock);
@@ -199,26 +199,26 @@ export function interactChest(actor:GameObject, chestGo:GameObject):string {
 		return 'not a chest';
 	}
 	if (lock?.locked) {
-		if (!findReady(actor, (it) => it.Key?.keyID === lock.keyID)) {
-			if (findCarried(actor, (it) => it.Key?.keyID === lock.keyID)) {
+		if (!findReady(character, (it) => it.Key?.keyID === lock.keyID)) {
+			if (findCarried(character, (it) => it.Key?.keyID === lock.keyID)) {
 				return 'the key is in your pack';
 			}
 			return lock.keyID ? `locked — needs a ${lock.keyID} key` : 'locked';
 		}
 		lock.locked = false;
 		chest.open = true;
-		cueAt(actor.world, 'unlock', chestGo);
-		cueAt(actor.world, 'chestOpen', chestGo);
+		cueAt(character.world, 'unlock', chestGo);
+		cueAt(character.world, 'chestOpen', chestGo);
 		return 'unlocked';
 	}
 	if (!chest.open) {
 		chest.open = true;
-		cueAt(actor.world, 'chestOpen', chestGo);
+		cueAt(character.world, 'chestOpen', chestGo);
 		return 'opened';
 	}
 	const first = bag.contents[0];
 	if (!first) {
 		return `${name} is empty`;
 	}
-	return takeFromChest(actor, { chest: chestGo, item: first, bag });
+	return takeFromChest(character, { chest: chestGo, item: first, bag });
 }

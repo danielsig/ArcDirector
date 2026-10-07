@@ -1,5 +1,5 @@
 import type { JsonSchema } from '../json.js';
-import type { VerbRegistry, VerbSpec } from './stock-verbs.js';
+import { argBase, type VerbRegistry, type VerbSpec } from './stock-verbs.js';
 
 const THEN_DEPTH = 8;
 
@@ -11,8 +11,7 @@ function stepSchema(registry:VerbRegistry, depth:number):JsonSchema {
 			continue;
 		}
 		const kind = spec.args[name];
-		const base = kind.endsWith('?') ? kind.slice(0, -1) : kind;
-		properties[name] = base === 'arc'
+		properties[name] = argBase(kind) === 'arc'
 			? (depth <= 0 ? { type: 'object', additionalProperties: true } : arcSchemaAt(registry.nested(), depth - 1))
 			: registry.argSchema(kind);
 	}

@@ -27,7 +27,7 @@ function raisedBridgeAt(world:World, x:number, z:number):GameObject | undefined 
 	return found;
 }
 
-function bodyIn(world:World, tx:number, tz:number, except?:GameObject):GameObject | undefined {
+function characterIn(world:World, tx:number, tz:number, except?:GameObject):GameObject | undefined {
 	return world.objectsInTile(tx, tz).find((go) => go !== except && go.getComponent(HumanBody)?.enabled);
 }
 
@@ -76,7 +76,7 @@ export function cellSteps(world:World, body:GameObject):(point:number[])=>PathSt
 				const name = bridge.getComponent(Named)?.id ?? bridge.id;
 				return [{ point: [x, z], blocked: `${name} is raised — it must be lowered first` }];
 			}
-			const crowded = bodyIn(world, tx + dx, tz + dz, body) ? OCCUPANT_COST : 1;
+			const crowded = characterIn(world, tx + dx, tz + dz, body) ? OCCUPANT_COST : 1;
 			return open(dx, dz) ? [{ point: [x, z], cost: Math.hypot(dx, dz) * CELL_SIZE * crowded }] : [];
 		});
 	};
@@ -89,9 +89,9 @@ export function lineClear(
 	z0:number,
 	x1:number,
 	z1:number,
-	ignoreBodies = false,
+	ignoreCharacters = false,
 ):boolean {
-	const solid = (tx:number, tz:number) => blocked(world, tx, tz) || (!ignoreBodies && !!bodyIn(world, tx, tz));
+	const solid = (tx:number, tz:number) => blocked(world, tx, tz) || (!ignoreCharacters && !!characterIn(world, tx, tz));
 	const a = world.tileCoordAt(x0, z0);
 	const b = world.tileCoordAt(x1, z1);
 	if (a.tx === b.tx && a.tz === b.tz) {

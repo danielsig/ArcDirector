@@ -3,12 +3,12 @@ import { Camera as FollowCamera, HumanSprite, RigidBody } from './components';
 import { Component } from './Component';
 import { MeshRenderer } from './MeshRenderer';
 import { Order } from './order';
-import { PlayerInput } from '../actors/PlayerInput';
-import { PlayerPilot } from '../actors/PlayerPilot';
+import { PlayerInput } from '../characters/PlayerInput';
+import { PlayerPilot } from '../characters/PlayerPilot';
 import type { SceneDef } from '../data/scenes';
-import { GameHost } from '../npc/adapter';
-import { playerSay, playerSayCatalog } from '../npc/playerTalk';
-import { dumpLookMaps } from '../npc/aiLogSink';
+import { GameHost } from '../director/adapter';
+import { playerSay, playerSayCatalog } from '../director/playerTalk';
+import { dumpLookMaps } from '../director/aiLogSink';
 import { patchInfer } from './patchHud';
 import { parseSlash } from '../ui/sayCommands';
 import type { HudModel, HudModelOption } from '../ui/hudModel';
@@ -209,7 +209,7 @@ export class Session extends Component {
 			bargainDone: this.director.bargainDone,
 			pose,
 			world: diffWorld(this.fresh, captureWorld(world)),
-			agents: this.director.arc?.exportAgents() ?? {},
+			cast: this.director.arc?.exportCast() ?? { characters: {}, collectives: {} },
 		};
 		if (!writeSave(this.scene.id, save)) {
 			this.hud.menuNotice = 'Save failed';
@@ -240,7 +240,7 @@ export class Session extends Component {
 		restoreWorld(world, save.world, (recipe) => respawn(world, recipe));
 		world.time = save.time;
 		this.director.bargainDone = save.bargainDone;
-		this.director.arc?.restoreAgents(save.agents);
+		this.director.arc?.restoreCast(save.cast);
 		this.applyPose(save.pose);
 	}
 
@@ -427,7 +427,7 @@ export class Session extends Component {
 		}
 	}
 
-	/** No `prev` applies everything; otherwise only what changed reaches ArcDirector and the body. */
+	/** No `prev` applies everything; otherwise only what changed reaches ArcDirector and the character. */
 	private applyPrefs(next:Prefs, prev?:Prefs):void {
 		const changed = (key:keyof Prefs):boolean => !prev || prev[key] !== next[key];
 		const hud = this.hud;

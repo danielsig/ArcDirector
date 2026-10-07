@@ -2,17 +2,17 @@ import { HumanBody, Light, Torch } from '../engine/components';
 import type { GameObject } from '../engine/GameObject';
 import { slotItem } from './inventory';
 
-export function syncHeldTorchLight(actor:GameObject, dt:number):void {
-	if (actor.getComponent(Torch)) {
+export function syncHeldTorchLight(character:GameObject, dt:number):void {
+	if (character.getComponent(Torch)) {
 		return;
 	}
-	const body = actor.getComponent(HumanBody);
-	const light = actor.getComponent(Light);
-	if (!body || !light) {
+	const human = character.getComponent(HumanBody);
+	const light = character.getComponent(Light);
+	if (!human || !light) {
 		return;
 	}
-	const left = slotItem(body, 'hands.left.held');
-	const right = slotItem(body, 'hands.right.held');
+	const left = slotItem(human, 'hands.left.held');
+	const right = slotItem(human, 'hands.right.held');
 	const rightLit = right?.Torch?.lit === true;
 	const leftLit = left?.Torch?.lit === true;
 	if (!rightLit && !leftLit) {

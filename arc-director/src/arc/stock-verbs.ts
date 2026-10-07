@@ -1,11 +1,18 @@
 import type { JsonSchema } from '../json.js';
 
 /**
- * `id` is a body or place; the host always receives a real id, even when the model wrote its own name for it
+ * `id` is a character, thing or place; the host always receives a real id, even when the model wrote its own name for it
  * or an expression that picks one. `text` is prose: unquoted, it runs to the closing `)` or the next `, key=`.
  * `watch` is a watch-language expression; the host reads it through `VerbCall.holds` / `score`.
+ * `expr` is any other expression (`units.filter("Archer")`), and `law` a law's name.
+ * A mind stores every `id`, `watch`, `expr`, `law` and `arc` arg in ids, and shows them to its model in its names.
  */
-export type VerbArgKind = 'id' | 'id?' | 'string' | 'string?' | 'text' | 'text?' | 'watch' | 'watch?' | 'number' | 'number?' | 'string[]' | 'string[]?' | 'arc' | 'arc?';
+export type VerbArgKind = 'id' | 'id?' | 'string' | 'string?' | 'text' | 'text?' | 'watch' | 'watch?' | 'expr' | 'expr?' | 'law' | 'law?' | 'number' | 'number?' | 'string[]' | 'string[]?' | 'arc' | 'arc?';
+
+/** A kind without its optional mark: `id?` is `id`. */
+export function argBase(kind:string | undefined):string {
+	return kind?.endsWith('?') ? kind.slice(0, -1) : kind ?? '';
+}
 
 export type VerbArgMap = Record<string, VerbArgKind>;
 
@@ -108,8 +115,7 @@ export class VerbRegistry {
 	}
 
 	argSchema(kind:VerbArgKind):JsonSchema {
-		const optional = kind.endsWith('?');
-		const base = optional ? kind.slice(0, -1) : kind;
+		const base = argBase(kind);
 		if (base === 'number') {
 			return { type: 'number' };
 		}
@@ -141,10 +147,10 @@ export const STOCK_MIND_VERBS = [
 	'say', 'wait', 'remember', 'think', 'set_goal', 'drop_goal', 'set_identity',
 	'watch', 'unwatch', 'focus', 'unfocus',
 ] as const;
-/** Withheld from an agent whose `watchesWritable` / `sightFocusWritable` is off, whatever its kit says. */
+/** Withheld when the mind's persona has `watchesWritable` / `sightFocusWritable` off, whatever the kit says. */
 export const WATCH_EDIT_VERBS:readonly string[] = ['watch', 'unwatch'];
 export const FOCUS_EDIT_VERBS:readonly string[] = ['focus', 'unfocus'];
-/** Verbs only a mind can run: they call the model or shape its later prompts. A plain `Actor` never has them. */
+/** Verbs only a mind can run: they call the model or shape its later prompts. A character without a mind never has them. */
 export const MIND_ONLY_VERBS:readonly string[] = [
 	'think', 'remember', 'set_goal', 'drop_goal', 'set_identity', ...WATCH_EDIT_VERBS, ...FOCUS_EDIT_VERBS,
 ];
@@ -170,14 +176,14 @@ export const STOCK_VERB_DEFS = {
 	set_goal: { args: { goal: 'text', priority: 'number?' } },
 	drop_goal: { args: { goal: 'text?' } },
 	set_identity: { args: { role: 'string?', traits: 'string[]?' } },
-	watch: { args: { name: 'string', expr: 'string' } },
+	watch: { args: { name: 'string', expr: 'expr' } },
 	unwatch: { args: { name: 'string' } },
-	focus: { args: { expr: 'string' } },
-	unfocus: { args: { expr: 'string' } },
+	focus: { args: { expr: 'expr' } },
+	unfocus: { args: { expr: 'expr' } },
 	when: { args: { watch: 'watch', arc: 'arc' }, help: `this job's interrupt; no extra think` },
 	loop: { args: { arc: 'arc', through: 'watch?', until: 'watch?', times: 'number?' }, help: 'repeats until fail' },
-	law: { args: { who: 'string?', watch: 'watch', arc: 'arc', name: 'string?' }, help: 'standing reaction until unlaw; no extra think' },
-	unlaw: { args: { name: 'string' }, help: 'drops that law' },
+	law: { args: { who: 'expr?', watch: 'watch', arc: 'arc', name: 'law?' }, help: 'standing reaction until unlaw; no extra think' },
+	unlaw: { args: { name: 'law' }, help: 'drops that law' },
 } as const satisfies Record<StockVerb, VerbDef>;
 
 /** Schema-only. Omit `verbs` to register the full stock set. Already-registered names are skipped. */

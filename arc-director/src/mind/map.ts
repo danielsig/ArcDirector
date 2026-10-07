@@ -30,7 +30,7 @@ export function parseMapZoom(args:unknown):number {
 	return 1;
 }
 
-/** `id` is the body or place marked; the legend shows the agent's own name for it. */
+/** `id` is the character, thing or place marked; the legend shows the mind's own name for it. */
 export type MapMark = {
 	symbol:string;
 	id:string;
@@ -62,7 +62,7 @@ export function isMapSnapshot(snap:MapSnapshot | { image:string }):snap is MapSn
 	return 'marks' in snap && 'toPixel' in snap;
 }
 
-/** Default pictogram for this agent's own location on `see_map`. */
+/** Default pictogram for the mind's own location on `see_map`. */
 export const DEFAULT_YOU_SYMBOL = '❌';
 
 export type MapSense = {
@@ -72,7 +72,7 @@ export type MapSense = {
 		prev?:MapPrev,
 	)=>MapSnapshot | { image:string } | Promise<MapSnapshot | { image:string } | null> | null;
 	/**
-	 * Pictogram for this agent's own location. Must match the mark the host
+	 * Pictogram for the mind's own location. Must match the mark the host
 	 * stamps. Standing prompts use this so the legend and the hint agree.
 	 * Defaults to `DEFAULT_YOU_SYMBOL`.
 	 */

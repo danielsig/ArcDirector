@@ -17,12 +17,12 @@ describe('SessionHub', () => {
 		const hub = new SessionHub();
 		const [hubSide, gameSide] = pairSockets();
 		gameSide.onMessage((raw) => {
-			reply(gameSide, raw, { actors: [{ id: 'Guard', kind: 'agent' }] });
+			reply(gameSide, raw, { characters: [{ id: 'Guard', mind: 'own' }], collectives: [] });
 		});
 		hub.attach('alpha', hubSide);
 		assert.deepEqual(await hub.sessions(), ['alpha']);
-		const result = await hub.call('alpha', { op: 'listActors' });
-		assert.deepEqual(result, { actors: [{ id: 'Guard', kind: 'agent' }] });
+		const result = await hub.call('alpha', { op: 'listCharacters' });
+		assert.deepEqual(result, { characters: [{ id: 'Guard', mind: 'own' }], collectives: [] });
 		hub.close();
 	});
 

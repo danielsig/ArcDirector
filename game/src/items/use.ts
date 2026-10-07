@@ -1,11 +1,11 @@
 import { BoxCollider, BrewHearth, Bridge, BridgeLever, Chest, Door, Flammable, HumanBody, Lock, Named, Sickbed, Vitals } from '../engine/components';
 import type { GameObject } from '../engine/GameObject';
 import { equipItem, itemInHeldSlot } from './equip';
-import { actorIs, distXZ, findCarried, healActor, inBackpack, removeFromBags, tryInsert } from './inventory';
+import { characterIs, distXZ, findCarried, healCharacter, inBackpack, removeFromBags, tryInsert } from './inventory';
 import { instantiateDef, type ItemInstance } from './instance';
 import { getDef } from './defs';
 import { cueAt } from '../audio/cue';
-import { applyHit } from '../npc/hitFeel';
+import { applyHit } from '../director/hitFeel';
 
 export type UseResult = {
 	ok:boolean;
@@ -20,47 +20,47 @@ function ok(reason = ''):UseResult {
 	return { ok: true, reason };
 }
 
-function consume(actor:GameObject, item:ItemInstance):void {
+function consume(character:GameObject, item:ItemInstance):void {
 	item.count -= 1;
 	if (item.count > 0) {
 		return;
 	}
-	removeFromBags(actor, item);
-	const body = actor.getComponent(HumanBody);
-	if (!body) {
+	removeFromBags(character, item);
+	const human = character.getComponent(HumanBody);
+	if (!human) {
 		return;
 	}
-	for (const slot of Object.keys(body.slots) as Array<keyof typeof body.slots>) {
-		if (body.slots[slot] === item) {
-			body.slots[slot] = null;
+	for (const slot of Object.keys(human.slots) as Array<keyof typeof human.slots>) {
+		if (human.slots[slot] === item) {
+			human.slots[slot] = null;
 		}
 	}
 }
 
-function brewAtHearth(actor:GameObject, item:ItemInstance):UseResult {
+function brewAtHearth(character:GameObject, item:ItemInstance):UseResult {
 	const brew = item.Ingredient;
 	if (!brew) {
 		return fail('nothing to brew');
 	}
-	if (!actorIs(actor, brew.brewer)) {
+	if (!characterIs(character, brew.brewer)) {
 		return fail(`only ${brew.brewer} can brew`);
 	}
-	const fee = findCarried(actor, (it) => it.defID === brew.fee);
+	const fee = findCarried(character, (it) => it.defID === brew.fee);
 	if (!fee) {
 		return fail('unpaid — need GoldCoin as the fee');
 	}
 	const potion = instantiateDef(getDef(brew.brew), brew.yield);
 	potion.name = 'MagicPotion';
 	potion.id = 'MagicPotion';
-	if (!tryInsert(actor, potion)) {
+	if (!tryInsert(character, potion)) {
 		return fail('no room for the brew');
 	}
-	consume(actor, item);
+	consume(character, item);
 	return ok(`brewed ${brew.yield} MagicPotion`);
 }
 
-export function useItem(actor:GameObject, item:ItemInstance, target:GameObject | null):UseResult {
-	const world = actor.world;
+export function useItem(character:GameObject, item:ItemInstance, target:GameObject | null):UseResult {
+	const world = character.world;
 	if (!world) {
 		return fail('no world');
 	}
@@ -69,12 +69,12 @@ export function useItem(actor:GameObject, item:ItemInstance, target:GameObject |
 		const lock = target.getComponent(Lock);
 		if (lock) {
 			if (item.Key) {
-				if (inBackpack(actor, item)) {
-					const err = equipItem(actor, item, world);
+				if (inBackpack(character, item)) {
+					const err = equipItem(character, item, world);
 					if (err) {
 						return fail(err);
 					}
-					removeFromBags(actor, item);
+					removeFromBags(character, item);
 				}
 				if (lock.keyID !== item.Key.keyID) {
 					return fail('wrong key');
@@ -108,11 +108,11 @@ export function useItem(actor:GameObject, item:ItemInstance, target:GameObject |
 			return ok('ignited');
 		}
 		if (target.getComponent(BrewHearth) && item.Ingredient) {
-			return brewAtHearth(actor, item);
+			return brewAtHearth(character, item);
 		}
 		const bed = target.getComponent(Sickbed);
 		if (bed && item.defID === 'magic_potion') {
-			if (!actorIs(actor, bed.caretaker)) {
+			if (!characterIs(character, bed.caretaker)) {
 				return fail(`only ${bed.caretaker} can tend ${target.getComponent(Named)?.id ?? target.id}`);
 			}
 			if (bed.tended) {
@@ -121,13 +121,13 @@ export function useItem(actor:GameObject, item:ItemInstance, target:GameObject |
 			if (!item.Consumable) {
 				return fail('not a draught');
 			}
-			consume(actor, item);
+			consume(character, item);
 			bed.tended = true;
 			return ok('tended');
 		}
 		const lever = target.getComponent(BridgeLever);
 		if (lever) {
-			if (!actorIs(actor, 'BridgeKeeper')) {
+			if (!characterIs(character, 'BridgeKeeper')) {
 				return fail('only BridgeKeeper can work the sluice');
 			}
 			if (item.defID !== 'bridge_crank') {
@@ -167,30 +167,30 @@ export function useItem(actor:GameObject, item:ItemInstance, target:GameObject |
 
 	if (!target && item.Consumable) {
 		if (item.Consumable.effect === 'heal') {
-			healActor(actor, item.Consumable.amount);
+			healCharacter(character, item.Consumable.amount);
 		}
 		if (item.Consumable.consumeOnUse) {
-			consume(actor, item);
+			consume(character, item);
 		}
 		return ok('drank');
 	}
 
-	if (!target && item.Torch && itemInHeldSlot(actor, item)) {
+	if (!target && item.Torch && itemInHeldSlot(character, item)) {
 		item.Torch.lit = !item.Torch.lit;
 		return ok(item.Torch.lit ? 'lit' : 'doused');
 	}
 
-	if (item.Equipable && !itemInHeldSlot(actor, item)) {
-		const err = equipItem(actor, item, world);
+	if (item.Equipable && !itemInHeldSlot(character, item)) {
+		const err = equipItem(character, item, world);
 		if (err) {
 			return fail(err);
 		}
-		removeFromBags(actor, item);
+		removeFromBags(character, item);
 		return ok('equipped');
 	}
 
 	if (target && item.Weapon && (target.getComponent(Vitals) || target.getComponent(HumanBody))) {
-		if (distXZ(actor, target) > item.Weapon.range) {
+		if (distXZ(character, target) > item.Weapon.range) {
 			return fail('too far');
 		}
 		const hp = target.getComponent(Vitals);
@@ -198,10 +198,10 @@ export function useItem(actor:GameObject, item:ItemInstance, target:GameObject |
 			const dealt = Math.min(hp.hp, item.Weapon.damage);
 			hp.hp -= dealt;
 			if (dealt > 0) {
-				if (actor.id === 'Player') {
+				if (character.id === 'Player') {
 					world.playerHits.add(target.getComponent(Named)?.id ?? target.id);
 				}
-				applyHit(world, actor, target);
+				applyHit(world, character, target);
 			}
 		}
 		return ok('hit');

@@ -77,7 +77,7 @@ export type ChatRequest = {
 	 * Thinking stays on; only the canned thought is injected.
 	 */
 	fakeThought?:boolean;
-	/** Agent id (or similar) so the HTTP layer can pick a cached response thread. */
+	/** Mind id (or similar) so the HTTP layer can pick a cached response thread. */
 	thread?:string;
 	/** Abort in-flight chat. */
 	signal?:AbortSignal;

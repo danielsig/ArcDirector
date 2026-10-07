@@ -25,13 +25,13 @@ import type { ItemInstance } from '../items/instance';
 import { coinsOf } from '../items/wallet';
 import { enclosureAt, interiorContains } from '../world/interior';
 import { CLEAR_RANGE } from './talkAttend';
-import { bodyName, isLiving } from './names';
+import { idOf, isLiving } from './names';
 import { tagsOf } from './perception';
 import type { GameHost } from './adapter';
 
 /** Id of the open theft `thief` is wanted for, as watches see it in `events`. */
 export function theftID(thief:GameObject):string {
-	return `Theft:${bodyName(thief)}`;
+	return `Theft:${idOf(thief)}`;
 }
 
 /** The wanted thief a theft id names: the event is wherever the thief is, for as long as the mark is on. */
@@ -66,7 +66,7 @@ export function entityOf(go:GameObject, extraTags?:string[]):ExprEntity {
 			}
 		}
 	}
-	return dummyEntity(bodyName(go), { tags });
+	return dummyEntity(idOf(go), { tags });
 }
 
 function itemEntity(item:ItemInstance):ExprEntity {
@@ -90,11 +90,11 @@ function landmarkEntity(go:GameObject):ExprEntity {
 	return e;
 }
 
-function nearbyLandmarks(world:World, actor:GameObject, here?:{ x:number; z:number }):GameObject[] {
-	const p = here ?? actor.transform.position;
+function nearbyLandmarks(world:World, character:GameObject, here?:{ x:number; z:number }):GameObject[] {
+	const p = here ?? character.transform.position;
 	const ranked:{ go:GameObject; dist:number }[] = [];
 	for (const go of world.objects) {
-		if (go === actor || go.getComponent(HumanBody) || go.getComponent(Pickupable)) {
+		if (go === character || go.getComponent(HumanBody) || go.getComponent(Pickupable)) {
 			continue;
 		}
 		const tags = tagsOf(go);
@@ -122,19 +122,19 @@ function lookupGo(world:World, id:string):GameObject | undefined {
 	return world.findNamed(id) ?? world.findByID(id);
 }
 
-/** World census for watches. ArcDirector adds geometry from `withWorld` and its own cache / hasHeard / prev. `here` poses `me` without moving the body. */
+/** World census for watches. ArcDirector adds geometry from `withWorld` and its own cache / hasHeard / prev. `here` poses `me` without moving the character. */
 export function kernelsOf(
 	world:World,
-	actor:GameObject,
+	character:GameObject,
 	here?:{ x:number; z:number },
 	extraTags?:(go:GameObject)=>string[],
 ) {
 	const hidePlayer = world.playerInperceivable && world.playerHits.size === 0;
-	const me = entityOf(actor);
-	me.fields = { gold: { kind: 'number', value: coinsOf(actor) } };
+	const me = entityOf(character);
+	me.fields = { gold: { kind: 'number', value: coinsOf(character) } };
 	const meAt = here
 		? {
-			ids: new Set([actor.id, bodyName(actor), actor.getComponent(Named)?.id].filter((id):id is string => !!id)),
+			ids: new Set([character.id, idOf(character), character.getComponent(Named)?.id].filter((id):id is string => !!id)),
 			x: here.x,
 			z: here.z,
 		}
@@ -144,7 +144,7 @@ export function kernelsOf(
 	const bindings:Record<string, ExprVal> = {};
 	for (const go of world.objects) {
 		if (go.getComponent(HumanBody)) {
-			if (go === actor) {
+			if (go === character) {
 				continue;
 			}
 			if (hidePlayer && go.id === 'Player') {
@@ -164,11 +164,11 @@ export function kernelsOf(
 			|| go.getComponent(Chest)
 			|| go.getComponent(Interior)
 		) {
-			const name = bodyName(go);
+			const name = idOf(go);
 			bindings[name] = { kind: 'entity', value: entityOf(go) };
 		}
 	}
-	const landmarks = nearbyLandmarks(world, actor, here);
+	const landmarks = nearbyLandmarks(world, character, here);
 	bindings.landmarks = {
 		kind: 'list',
 		value: landmarks.map((go) => ({
@@ -254,11 +254,11 @@ export function kernelsOf(
 				else if (a0?.kind === 'string') {
 					buildingID = a0.value;
 				}
-				const body = lookupGo(world, who.id);
-				if (!body) {
+				const whoGo = lookupGo(world, who.id);
+				if (!whoGo) {
 					return { kind: 'bool' as const, value: false };
 				}
-				const p = meAt && meAt.ids.has(who.id) ? meAt : body.transform.position;
+				const p = meAt && meAt.ids.has(who.id) ? meAt : whoGo.transform.position;
 				if (buildingID) {
 					const building = world.findNamed(buildingID) ?? world.findByID(buildingID);
 					const box = building?.getComponent(Interior);

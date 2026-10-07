@@ -1,5 +1,5 @@
 import { markRaw } from 'vue';
-import { PlayerInput } from '../actors/PlayerInput';
+import { PlayerInput } from '../characters/PlayerInput';
 import { HumanBody, HumanSprite, Named, SpeechBubble, Vitals, Wallet } from './components';
 import type { GameObject } from './GameObject';
 import type { World } from './World';
@@ -11,8 +11,8 @@ import type { ItemInstance } from '../items/instance';
 import { nearestPickup, pickupLabel } from '../items/pickup';
 import { characterHeight } from '../render/artCache';
 import type { HudModel, MinimapCell } from '../ui/hudModel';
-import type { GameHost } from '../npc/adapter';
-import { bodyName, findBody, isLiving } from '../npc/names';
+import type { GameHost } from '../director/adapter';
+import { idOf, findObject, isLiving } from '../director/names';
 
 function chunkStamp(world:World):string {
 	let s = '';
@@ -173,7 +173,7 @@ function patchOverhead(
 		if (!note.text) {
 			continue;
 		}
-		const go = findBody(world, note.id);
+		const go = findObject(world, note.id);
 		if (!go) {
 			continue;
 		}
@@ -394,29 +394,29 @@ export function patchHud(
 }
 
 /** Living body `thinkThread` names. Reject `findNamed` loose matches. */
-function overheadID(host:GameHost, agent:{ thinkThread():string }):string | undefined {
-	const want = agent.thinkThread();
-	const body = findBody(host.world, want);
-	if (!isLiving(body) || (bodyName(body) !== want && body.id !== want)) {
+function overheadID(host:GameHost, mind:{ thinkThread():string }):string | undefined {
+	const want = mind.thinkThread();
+	const body = findObject(host.world, want);
+	if (!isLiving(body) || (idOf(body) !== want && body.id !== want)) {
 		return undefined;
 	}
-	return bodyName(body);
+	return idOf(body);
 }
 
 export function statusLabels(host:GameHost):{ id:string; text:string }[] {
 	const now = host.world.time;
 	const out:{ id:string; text:string }[] = [];
 	const queue = host.arc?.mindQueue();
-	for (const agent of host.arc?.agents() ?? []) {
-		const id = overheadID(host, agent);
+	for (const mind of host.arc?.minds() ?? []) {
+		const id = overheadID(host, mind);
 		if (!id) {
 			continue;
 		}
-		if (queue?.isThinking(agent.id)) {
+		if (queue?.isThinking(mind.id)) {
 			out.push({ id, text: 'thinking...' });
 			continue;
 		}
-		const row = host.labels.get(agent.id);
+		const row = host.labels.get(id);
 		if (row && now < row.until) {
 			out.push({ id, text: row.text });
 		}
@@ -428,15 +428,15 @@ export function patchInfer(host:GameHost, hud:HudModel):void {
 	const infer = host.arc?.infer;
 	const queue = host.arc?.mindQueue();
 	const now = host.world.time;
-	const rows = host.arc?.agents() ?? [];
-	const next = rows.map((agent) => {
-		const last = agent.lastTacticalTimestamp;
+	const rows = host.arc?.minds() ?? [];
+	const next = rows.map((mind) => {
+		const last = mind.lastTacticalTimestamp;
 		return {
-			id: agent.id,
-			pulse: queue?.heartbeatSeconds(agent.id) ?? null,
+			id: mind.id,
+			pulse: queue?.heartbeatSeconds(mind.id) ?? null,
 			ago: Number.isFinite(last) ? Math.max(0, now - last) : null,
-			thinking: queue?.isThinking(agent.id) ?? false,
-			thinkMs: infer?.thinkMs[agent.id] ?? 0,
+			thinking: queue?.isThinking(mind.id) ?? false,
+			thinkMs: infer?.thinkMs[mind.id] ?? 0,
 		};
 	});
 	next.sort((a, b) => a.id.localeCompare(b.id));

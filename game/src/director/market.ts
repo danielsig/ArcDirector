@@ -1,4 +1,4 @@
-import type { AgentSpec } from 'arc-director';
+import type { CharacterSpec } from 'arc-director';
 import { MarketNPC, Named } from '../engine/components';
 import type { GameObject } from '../engine/GameObject';
 import type { World } from '../engine/World';
@@ -8,10 +8,11 @@ import type { Chunk } from '../world/Chunk';
 /** Each vendor's stall, by what it sells. */
 const STALL_OF:Record<string, string> = { Loaf: 'BakerStall', Scarf: 'WeaverStall', Bowl: 'PotterStall', Knife: 'CutlerStall' };
 
-function vendorSeed(id:string, good:string, ask:number, floor:number, want:string, traits:string[]):AgentSpec {
+function vendorSeed(id:string, good:string, ask:number, floor:number, want:string, traits:string[]):CharacterSpec {
 	const stall = STALL_OF[good];
 	return {
 		id,
+		mind: {},
 		identity: { role: 'Vendor', traits },
 		goals: [
 			{ text: `Sell ${good} at ${stall}.`, priority: 2 },
@@ -25,7 +26,7 @@ function vendorSeed(id:string, good:string, ask:number, floor:number, want:strin
 	};
 }
 
-export const MARKET_SEEDS:AgentSpec[] = [
+export const MARKET_SEEDS:CharacterSpec[] = [
 	vendorSeed('Baker', 'Loaf', 5, 3, 'Knife', ['warm', 'busy', 'fair']),
 	vendorSeed('Weaver', 'Scarf', 6, 4, 'Loaf', ['sharp', 'proud', 'thrifty']),
 	vendorSeed('Potter', 'Bowl', 4, 2, 'Scarf', ['quiet', 'kind', 'dusty']),

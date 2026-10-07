@@ -5,27 +5,27 @@ import { Pickupable } from '../items/components';
 import { distXZ } from '../items/inventory';
 import { USE_RANGE } from '../items/pickup';
 
-export function aimTarget(world:World, actor:GameObject):GameObject | null {
+export function aimTarget(world:World, character:GameObject):GameObject | null {
 	const hit = world.input.groundHit;
 	let best:GameObject | null = null;
 	let bestScore = Infinity;
 	for (const go of world.objects) {
-		if (go === actor) {
+		if (go === character) {
 			continue;
 		}
 		const door = go.getComponent(Door) || go.getComponent(Lock);
 		const loot = go.getComponent(Pickupable);
-		const body = go.getComponent(HumanBody);
-		if (body && (go.getComponent(Vitals)?.hp ?? 1) <= 0) {
+		const human = go.getComponent(HumanBody);
+		if (human && (go.getComponent(Vitals)?.hp ?? 1) <= 0) {
 			continue;
 		}
-		if (!door && !loot && !body) {
+		if (!door && !loot && !human) {
 			continue;
 		}
-		if (distXZ(actor, go) > USE_RANGE) {
+		if (distXZ(character, go) > USE_RANGE) {
 			continue;
 		}
-		let score = distXZ(actor, go);
+		let score = distXZ(character, go);
 		if (hit) {
 			const p = go.transform.position;
 			score = Math.hypot(p.x - hit.x, p.z - hit.z) + score * 0.25;
@@ -40,7 +40,7 @@ export function aimTarget(world:World, actor:GameObject):GameObject | null {
 	}
 	if (best && hit) {
 		const p = best.transform.position;
-		if (Math.hypot(p.x - hit.x, p.z - hit.z) > 1.8 && distXZ(actor, best) > 1.4) {
+		if (Math.hypot(p.x - hit.x, p.z - hit.z) > 1.8 && distXZ(character, best) > 1.4) {
 			return null;
 		}
 	}

@@ -1,4 +1,4 @@
-import { MIND_ONLY_VERBS, type VerbRegistry } from '../arc/stock-verbs.js';
+import { FOCUS_EDIT_VERBS, MIND_ONLY_VERBS, WATCH_EDIT_VERBS, type VerbRegistry } from '../arc/stock-verbs.js';
 import type { Arc, ArcResult, Step } from '../arc/types.js';
 import type { Catalog, ExprEntity } from '../expr/types.js';
 import { cloneEntity, prevMeFromJSON } from '../expr/prev.js';
@@ -7,10 +7,9 @@ import {
 	dropLaw,
 	lawFromSpec,
 	upsertLaw,
-	type CrowdLaw,
-	type CrowdLawSpec,
-} from '../conductor/laws.js';
-import type { NameTarget } from './names.js';
+	type Law,
+	type LawSpec,
+} from '../arc/laws.js';
 import {
 	runArc,
 	createArcSession,
@@ -18,74 +17,88 @@ import {
 	type ArcHandler,
 	type ArcSession,
 	type ArcSessionOpts,
-} from './run.js';
-import type { SayResult, SayTo, TalkNet } from './talk.js';
+} from '../arc/run.js';
+import type { Mind } from '../mind/mind.js';
+import type { SayResult, SayTo, TalkNet } from '../mind/talk.js';
 import type { Kit, KitSource } from './types.js';
 
-/** What a body needs from its host to run arcs. */
-export type ActorDeps<TAgentCtx = unknown> = {
+/** What a runner has while its kit cannot be read: a callback kit with no context. */
+const NO_KIT:Kit = Object.freeze({ verbs: [] });
+
+/** What a runner needs from its host to run arcs. */
+export type RunnerDeps<TCtx = unknown> = {
 	verbs:VerbRegistry;
-	context:()=>TAgentCtx | undefined;
-	execute?:(step:Step, ctx:TAgentCtx | undefined, actorID?:string)=>Promise<ArcResult>;
+	context:()=>TCtx | undefined;
+	/** One host step, acted by this runner itself. */
+	execute?:(step:Step, ctx:TCtx | undefined)=>Promise<ArcResult>;
 	abortArc?:(id:string)=>void;
 	/** Host cooldown in game seconds after a handler pops or aborts. Default 8. */
 	cooldown?:number;
 	talk?:TalkNet;
-	catalog?:(ctx:TAgentCtx)=>Catalog;
-	/**
-	 * Omit = all catalog verbs and all registered senses / tools (tests).
-	 * Director always passes a kit (`{}` if the spec omitted it).
-	 */
-	kit?:KitSource<TAgentCtx>;
+	catalog?:(ctx:TCtx)=>Catalog;
+	/** What it may use. Object or callback, fetched every tick, so the host can mutate it in place. */
+	kit:KitSource<TCtx>;
 };
 
-export type ActorOptions<TAgentCtx = unknown> = ActorDeps<TAgentCtx> & {
+export type RunnerOptions<TCtx = unknown> = RunnerDeps<TCtx> & {
 	id:string;
-	laws?:CrowdLawSpec[];
+	laws?:LawSpec[];
 	maxLaws?:number;
 	defaultLawWho?:string;
 };
 
-/** The body's part of a save: its laws and the arc it was running. */
-export type ActorJSON = {
+/** A runner's part of a save: its laws and how its last arc went. */
+export type ArcRunnerJSON = {
 	id:string;
 	lastResult?:ArcResult;
 	liveArc:boolean;
-	laws?:CrowdLaw[];
+	laws?:Law[];
 	maxLaws?:number;
 	cooldown?:number;
 	prevMe?:ExprEntity;
 };
 
 /**
- * A body that runs arcs: its kit, its laws, and the arc it is running now. It never calls the model;
- * `Agent` adds a mind that picks the arcs. A host drives a plain `Actor` itself (`ArcDirector.addActor`).
+ * Anything that runs arcs: a {@link Character}, or a `Collective` with no commander. It holds the kit, the laws and
+ * the arc running now. A runner never calls the model; the `mind` that thinks for it writes its arcs, and a
+ * runner without one is driven by the host.
  */
-export class Actor<TAgentCtx = unknown> {
+export abstract class ArcRunner<TCtx = unknown> {
 	readonly id:string;
 	readonly verbs:VerbRegistry;
-	readonly context:()=>TAgentCtx | undefined;
-	readonly execute?:(step:Step, ctx:TAgentCtx | undefined, actorID?:string)=>Promise<ArcResult>;
+	readonly context:()=>TCtx | undefined;
+	readonly execute?:(step:Step, ctx:TCtx | undefined)=>Promise<ArcResult>;
 	readonly abortArc?:(id:string)=>void;
 	cooldown:number;
-	laws:CrowdLaw[] = [];
+	laws:Law[] = [];
 	maxLaws:number;
 	protected defaultLawWho:string;
 	arcSession:ArcSession | null = null;
 	talk:TalkNet | undefined;
-	catalog?:(ctx:TAgentCtx)=>Catalog;
+	catalog?:(ctx:TCtx)=>Catalog;
 	/** Object or callback. Assign a new one any time. Fetched every tick. */
-	kit:KitSource<TAgentCtx> | undefined;
-	protected currentKit:Kit = {};
+	kit:KitSource<TCtx>;
+	/** The kit as of the last refresh. */
+	currentKit:Kit = NO_KIT;
 	lastResult:ArcResult | undefined;
+	/** The arc running now, or parked on its `when`s. */
+	arc:Arc | null = null;
+	/** The verb of the step running now; `''` between steps. */
+	verb = '';
 	/** Index of the step currently running inside `enact` (0-based). */
 	verbIndex = 0;
-	/** Self as `prev.me` sees it: at an agent's last think, else as first sampled. */
+	/** Self as `prev.me` sees it: at its mind's last think, else as first sampled. */
 	prevMe:ExprEntity | undefined;
 	liveArc = false;
 	protected now = 0;
 
-	constructor(opts:ActorOptions<TAgentCtx>) {
+	/** The mind that thinks for this runner, or null when the host drives it. */
+	abstract get mind():Mind<TCtx> | null;
+
+	/** The runner that acts for this one: a character itself, or a collective's commander. */
+	abstract get voice():ArcRunner<TCtx>;
+
+	constructor(opts:RunnerOptions<TCtx>) {
 		this.id = opts.id;
 		this.verbs = opts.verbs;
 		this.context = opts.context;
@@ -102,78 +115,107 @@ export class Actor<TAgentCtx = unknown> {
 		}
 	}
 
-	/** Resolve `kit` (object, getters, or callback). Director calls this each tick. */
+	/** Whether this runner speaks and acts for its mind: the arcs that mind writes run here. */
+	get isVoice():boolean {
+		return this.mind?.voice === this;
+	}
+
+	/** Running an arc, or parked with a handler that may still fire. */
+	get busy():boolean {
+		if (this.liveArc) {
+			return true;
+		}
+		const session = this.arcSession;
+		return !!session?.parked && (session.running.length > 0 || session.frames.some((f) => f.handlers.length > 0));
+	}
+
+	/** Resolve `kit` (object, getters, or callback). Director calls this each tick. A callback without a context grants nothing. */
 	refreshKit():Kit {
 		const src = this.kit;
-		if (src === undefined) {
-			this.currentKit = {};
-			return this.currentKit;
+		if (typeof src !== 'function') {
+			this.currentKit = src;
+			return src;
 		}
-		if (typeof src === 'function') {
-			try {
-				const ctx = this.context();
-				this.currentKit = ctx !== undefined ? (src(ctx) ?? {}) : {};
-			}
-			catch {
-				this.currentKit = {};
-			}
-			return this.currentKit;
+		try {
+			const ctx = this.context();
+			this.currentKit = ctx !== undefined ? src(ctx) : NO_KIT;
 		}
-		this.currentKit = src;
+		catch {
+			this.currentKit = NO_KIT;
+		}
 		return this.currentKit;
 	}
 
-	/** Catalog filtered by the current kit, less `withheldVerbs`. Unset `kit` = whole catalog. */
+	/** Catalog filtered by the current kit, less `withheldVerbs`. */
 	activeVerbs():VerbRegistry {
-		this.refreshKit();
 		const off = this.withheldVerbs();
-		const granted = this.kit === undefined
-			? this.verbs.list().map((spec) => spec.name)
-			: this.currentKit.verbs ?? [];
-		const view = this.kit === undefined && off.length === 0
-			? this.verbs
-			: this.verbs.view(granted.filter((name) => !off.includes(name)));
-		if (this.crowdLawWho() || !view.has('law')) {
+		const view = this.verbs.view(this.refreshKit().verbs.filter((name) => !off.includes(name)));
+		if (this.lawsTakeWho() || !view.has('law')) {
 			return view;
 		}
 		return view.withoutArg('law', 'who');
 	}
 
-	/** Verbs this body never gets, whatever its kit says. Without a mind, that is every mind-only verb. */
+	/** Verbs this runner never gets, whatever its kit says: every mind verb without a mind, and the edits its persona forbids. */
 	protected withheldVerbs():readonly string[] {
-		return MIND_ONLY_VERBS;
+		const persona = this.mind?.persona;
+		if (!persona) {
+			return MIND_ONLY_VERBS;
+		}
+		return [
+			...(persona.watchesWritable ? [] : WATCH_EDIT_VERBS),
+			...(persona.sightFocusWritable ? [] : FOCUS_EDIT_VERBS),
+		];
 	}
 
-	protected crowdLawWho():boolean {
+	/** Whether `law` takes a `who`: only a collective's laws pick whom they reach. */
+	lawsTakeWho():boolean {
 		return false;
 	}
 
-	addLaw(spec:CrowdLawSpec, pinned = false):CrowdLaw | undefined {
+	addLaw(spec:LawSpec, pinned = false):Law | undefined {
 		const law = lawFromSpec(
 			{ ...spec, pinned: pinned || spec.pinned },
 			this.verbs,
 			spec.name ?? `law_${this.laws.length + 1}`,
 			this.defaultLawWho,
 		);
-		if (!law) {
+		if (!law || !this.lawNameOK(law.name)) {
 			return undefined;
 		}
 		this.laws = upsertLaw(this.laws, law, this.maxLaws);
 		return this.laws.find((s) => s.name === law.name);
 	}
 
+	/**
+	 * @internal Keep `law` itself, not a copy, so an arc it started still counts as its own after a transfer.
+	 * False when its name does not fit here or its group is full.
+	 */
+	keepLaw(law:Law):boolean {
+		if (!this.lawNameOK(law.name)) {
+			return false;
+		}
+		this.laws = upsertLaw(this.laws, law, this.maxLaws);
+		return this.laws.includes(law);
+	}
+
+	/** Law names hold no `.`; a collective's member laws are the exception. */
+	protected lawNameOK(name:string):boolean {
+		return !name.includes('.');
+	}
+
 	removeLaw(name:string):void {
 		this.laws = dropLaw(this.laws, name);
 	}
 
-	lawHandlers(matches?:(law:CrowdLaw)=>boolean):ArcHandler[] {
+	lawHandlers(matches?:(law:Law)=>boolean):ArcHandler[] {
 		const out:ArcHandler[] = [];
 		this.laws.forEach((law, i) => {
 			if (matches && !matches(law)) {
 				return;
 			}
 			out.push({
-				key: `law:${law.name}`,
+				source: law,
 				watch: law.watch,
 				arc: law.arc,
 				rank: i,
@@ -192,21 +234,6 @@ export class Actor<TAgentCtx = unknown> {
 		void this.enact(handler.arc, handler, sessionOpts);
 	}
 
-	/** This body's name for something it samples now. A plain actor uses ids. */
-	seen(target:NameTarget):string {
-		return target.id;
-	}
-
-	/** This body's name for `id`. */
-	nameOf(id:string):string {
-		return id;
-	}
-
-	/** The id a name in an arc arg stands for. A plain actor's names are ids. */
-	resolveName(name:string):string {
-		return name;
-	}
-
 	stamp(now:number):void {
 		this.now = now;
 	}
@@ -219,9 +246,11 @@ export class Actor<TAgentCtx = unknown> {
 	):Promise<ArcResult> {
 		this.replaceProgram();
 		this.liveArc = true;
+		this.arc = arc;
 		this.verbIndex = 0;
 		this.onArcStart(arc);
 		const session = createArcSession({
+			verbs: this.verbs,
 			now: () => this.now,
 			catalog: () => {
 				const ctx = this.context();
@@ -235,6 +264,7 @@ export class Actor<TAgentCtx = unknown> {
 			let i = 0;
 			const result = await runArc(arc, async (step) => {
 				this.verbIndex = i;
+				this.verb = step.verb;
 				i += 1;
 				const out = await this.runStep(step, this.context());
 				this.lastResult = out;
@@ -243,6 +273,7 @@ export class Actor<TAgentCtx = unknown> {
 			if (this.arcSession !== session) {
 				return result;
 			}
+			this.verb = '';
 			if (session.parked) {
 				this.liveArc = false;
 				this.onArcEnd();
@@ -259,6 +290,8 @@ export class Actor<TAgentCtx = unknown> {
 			if (this.arcSession === session && !session.parked) {
 				this.liveArc = false;
 				this.arcSession = null;
+				this.arc = null;
+				this.verb = '';
 				this.onArcEnd();
 			}
 		}
@@ -273,11 +306,18 @@ export class Actor<TAgentCtx = unknown> {
 		}
 		this.abortArc?.(this.id);
 		this.arcSession = null;
+		this.arc = null;
+		this.verb = '';
 		this.liveArc = false;
 		this.onArcEnd();
 	}
 
-	toJSON():ActorJSON {
+	/** One step outside an arc, for hosts that run arcs themselves. */
+	async perform(step:Step, ctx:TCtx | undefined = this.context()):Promise<ArcResult> {
+		return this.runStep(step, ctx);
+	}
+
+	toJSON():ArcRunnerJSON {
 		return {
 			id: this.id,
 			lastResult: this.lastResult ? { ...this.lastResult } : undefined,
@@ -289,7 +329,7 @@ export class Actor<TAgentCtx = unknown> {
 		};
 	}
 
-	protected loadJSON(json:ActorJSON):void {
+	protected loadJSON(json:ArcRunnerJSON):void {
 		this.lastResult = json.lastResult;
 		this.liveArc = json.liveArc;
 		if (json.maxLaws !== undefined) {
@@ -304,10 +344,14 @@ export class Actor<TAgentCtx = unknown> {
 		}
 	}
 
-	/** One step of a running arc: `say` through talk, the rest through the host. */
-	protected async runStep(step:Step, ctx:TAgentCtx | undefined):Promise<ArcResult> {
+	/** One step of a running arc: mind verbs through the mind, `say` through talk, the rest through the host. */
+	protected async runStep(step:Step, ctx:TCtx | undefined):Promise<ArcResult> {
 		if (!this.activeVerbs().has(step.verb)) {
 			return { ok: false, verb: step.verb, reason: `verb '${step.verb}' is not available` };
+		}
+		const done = await this.mind?.perform(step, this);
+		if (done) {
+			return done;
 		}
 		if (step.verb === 'say' && this.talk) {
 			return this.speak(step);
@@ -319,37 +363,47 @@ export class Actor<TAgentCtx = unknown> {
 	}
 
 	/** `say` through talk. Only call with talk attached. */
-	protected speak(step:Step):SayResult {
-		return this.talk!.say(this.id, String(step.args.text ?? ''), this.sayToOf(step.args), this.now);
+	speak(step:Step):SayResult {
+		return this.talk!.say(this.id, String(step.args.text ?? ''), sayToOf(step.args), this.now);
 	}
 
-	/** Addressee ids, from this body's names for them. */
-	protected sayToOf(args:Step['args']):SayTo | undefined {
-		const to = args.to;
-		if (Array.isArray(to)) {
-			const ids = to
-				.filter((x):x is string => typeof x === 'string' && x.trim().length > 0)
-				.map((name) => this.resolveName(name));
-			return ids.length > 0 ? ids : undefined;
+	/** An arc began. A voice tells its mind. */
+	protected onArcStart(arc:Arc):void {
+		if (this.isVoice) {
+			this.mind!.arcStarted(arc);
 		}
-		if (typeof to === 'string' && to.trim()) {
-			return this.resolveName(to);
-		}
-		return undefined;
 	}
 
-	/** An arc began. A mind tells its scheduler. */
-	protected onArcStart(_arc:Arc):void {}
-
-	/** The running arc stopped or parked. A mind tells its scheduler. */
-	protected onArcEnd():void {}
+	/** The running arc stopped or parked. A voice tells its mind. */
+	protected onArcEnd():void {
+		if (this.isVoice) {
+			this.mind!.arcEnded();
+		}
+	}
 
 	/** After the last step, while the arc is still live (a new think can still abort it). */
-	protected async afterArc(result:ArcResult):Promise<void> {}
+	protected async afterArc(result:ArcResult):Promise<void> {
+		if (this.isVoice) {
+			await this.mind!.afterArc(result, this);
+		}
+	}
 
-	/** The arc finished. A mind also turns this into an event for its next think. */
+	/** The arc finished. A voice's mind turns this into an event for its next think. */
 	protected onArcResult(result:ArcResult):void {
 		this.lastResult = result;
 		this.liveArc = false;
+		if (this.isVoice) {
+			this.mind!.ingestResult(result);
+		}
 	}
+}
+
+/** Addressee ids of a `say`. */
+export function sayToOf(args:Step['args']):SayTo | undefined {
+	const to = args.to;
+	if (Array.isArray(to)) {
+		const ids = to.filter((x):x is string => typeof x === 'string' && x.trim().length > 0);
+		return ids.length > 0 ? ids : undefined;
+	}
+	return typeof to === 'string' && to.trim() ? to : undefined;
 }

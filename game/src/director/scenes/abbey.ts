@@ -1,12 +1,13 @@
-import { ArcDirector, type AgentSpec } from 'arc-director';
+import { ArcDirector, type CharacterSpec } from 'arc-director';
 import { Sickbed, Celebrating } from '../../engine/components';
 import { findCarried, itemMatchesName } from '../../items/inventory';
 import type { GameHost } from '../adapter';
 import { addStatusVerbs, BUILDING_VERB_INSTRUCTIONS, GAME_VERBS } from '../verbs';
-import { withReceived, type AgentCtx } from '../types';
+import { withReceived, type CharacterCtx } from '../types';
 
-const HERBALIST:AgentSpec = {
+const HERBALIST:CharacterSpec = {
 	id: 'Fern',
+	mind: {},
 	identity: { role: 'Herbalist', traits: ['plain', 'anxious', 'generous'] },
 	goals: [{
 		text: 'See Noll well again.',
@@ -26,8 +27,9 @@ const HERBALIST:AgentSpec = {
 	],
 };
 
-const ALCHEMIST:AgentSpec = {
+const ALCHEMIST:CharacterSpec = {
 	id: 'Sable',
+	mind: {},
 	identity: { role: 'Alchemist', traits: ['proud', 'hungry', 'exact'] },
 	goals: [{
 		text: 'Get paid, brew the cure, keep the coin.',
@@ -47,8 +49,9 @@ const ALCHEMIST:AgentSpec = {
 	],
 };
 
-const CAPTAIN:AgentSpec = {
+const CAPTAIN:CharacterSpec = {
 	id: 'Lys',
+	mind: {},
 	identity: { role: 'Captain', traits: ['brisk', 'fair', 'worried'] },
 	goals: [{
 		text: 'See Lina well again.',
@@ -129,13 +132,13 @@ function checkBargain(host:GameHost):void {
 	}
 }
 
-export function createDirector(host:GameHost):ArcDirector<AgentCtx> {
+export function createDirector(host:GameHost):ArcDirector<CharacterCtx> {
 	host.hooks = { checkBargain, goalDone };
-	return addStatusVerbs(host.configure(new ArcDirector<AgentCtx>()), host)
+	return addStatusVerbs(host.configure(new ArcDirector<CharacterCtx>()), host)
 		.withDefaultKit(host.kit = { verbs: [...GAME_VERBS, 'set_status', 'rest'] })
 		.withVerbInstructions(BUILDING_VERB_INSTRUCTIONS)
-		.withNames({ seen: (observer, target) => host.agentByID(target.id)?.identity.role ?? target.id })
-		.addAgent(withReceived(HERBALIST))
-		.addAgent(withReceived(ALCHEMIST))
-		.addAgent(withReceived(CAPTAIN));
+		.withNames({ seen: (observer, target) => host.characterOf(target.id)?.persona.identity.role ?? target.id })
+		.addCharacter(withReceived(HERBALIST))
+		.addCharacter(withReceived(ALCHEMIST))
+		.addCharacter(withReceived(CAPTAIN));
 }

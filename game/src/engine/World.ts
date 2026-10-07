@@ -22,11 +22,11 @@ export class World extends KindlingWorld {
 	hudMessageTimestamp = 0;
 	hudMessageLife = 3.2;
 	playerInperceivable = false;
-	/** Body ids this player has damaged. A company that owns one treats the player as a rival. */
+	/** Body ids this player has damaged. A party that owns one treats the player as a rival. */
 	playerHits = new Set<string>();
 	arcDirectorOn = true;
 	sayOpen = false;
-	pickedUp:(actor:GameObject, name:string)=>void = () => undefined;
+	pickedUp:(character:GameObject, name:string)=>void = () => undefined;
 	override tileSize = CELL_SIZE;
 	override chunkSize = CHUNK_SIZE;
 

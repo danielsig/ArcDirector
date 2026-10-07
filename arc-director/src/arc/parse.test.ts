@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { parseArc, parseArcText, formatArc } from './parse.js';
 import { VerbRegistry, registerStockVerbs, STOCK_MOVE_VERBS, STOCK_TRADE_VERBS, STOCK_VERBS } from './stock-verbs.js';
-import { registerStockCrowdVerbs } from '../conductor/conductor-verbs.js';
+import { registerStockCollectiveVerbs } from '../collective/verbs.js';
 import { ArcError } from './types.js';
 import { asArc } from './validate.js';
 
@@ -42,7 +42,7 @@ describe('Arc parse', () => {
 	});
 
 	it('parses issue who= expr and nested arc=', () => {
-		const registry = registerStockCrowdVerbs(registerStockVerbs(new VerbRegistry()));
+		const registry = registerStockCollectiveVerbs(registerStockVerbs(new VerbRegistry()));
 		const arc = parseArcText(
 			'issue(who=units.filter("Guard"), arc=go_to(Keep) && wait(seconds=1))',
 			registry,
@@ -60,7 +60,7 @@ describe('Arc parse', () => {
 	});
 
 	it('rejects when(who) and issue(watch) with migration errors', () => {
-		const registry = registerStockCrowdVerbs(registerStockVerbs(new VerbRegistry()));
+		const registry = registerStockCollectiveVerbs(registerStockVerbs(new VerbRegistry()));
 		assert.throws(
 			() => parseArcText('when(who=units.filter("Guard"), arc=go_to(Keep))', registry),
 			/when\(who\) is issue/,
@@ -196,7 +196,7 @@ describe('VerbRegistry view and remove', () => {
 
 describe('kit views and issue(who)', () => {
 	function fightKit():VerbRegistry {
-		const catalog = registerStockCrowdVerbs(registerStockVerbs(new VerbRegistry()));
+		const catalog = registerStockCollectiveVerbs(registerStockVerbs(new VerbRegistry()));
 		catalog.add('hex', { args: { target: 'id' } });
 		catalog.add('smite', { args: { target: 'id' } });
 		return catalog.view(['issue', 'go_to', 'smite']);
@@ -263,7 +263,7 @@ describe('kit views and issue(who)', () => {
 	});
 
 	it('parses a truncated issue chain from CoT JSON', () => {
-		const catalog = registerStockCrowdVerbs(registerStockVerbs(new VerbRegistry()));
+		const catalog = registerStockCollectiveVerbs(registerStockVerbs(new VerbRegistry()));
 		catalog.add('slash', { args: { target: 'id' } });
 		catalog.add('cleave', { args: { target: 'id' } });
 		const kit = catalog.view(['issue', 'loop', 'slash', 'cleave']);
@@ -278,7 +278,7 @@ describe('kit views and issue(who)', () => {
 	});
 
 	it('parses a JSON bag of issue() / when() strings', () => {
-		const catalog = registerStockCrowdVerbs(registerStockVerbs(new VerbRegistry()));
+		const catalog = registerStockCollectiveVerbs(registerStockVerbs(new VerbRegistry()));
 		catalog.add('hex', { args: { target: 'id' } });
 		const kit = catalog.view(['issue', 'when', 'go_to', 'hex']);
 		const arc = parseArc({
@@ -348,7 +348,7 @@ describe('kit views and issue(who)', () => {
 	});
 
 	it('binds a leftover positional to the next unset law arg', () => {
-		const registry = registerStockCrowdVerbs(registerStockVerbs(new VerbRegistry()));
+		const registry = registerStockCollectiveVerbs(registerStockVerbs(new VerbRegistry()));
 		const arc = parseArcText(
 			'law(who=units, watch=isHurt(me), go_to(Keep), name=lastStand)',
 			registry,
@@ -399,7 +399,7 @@ describe('small-model slips from the AI logs', () => {
 	});
 
 	it('still rejects an issue cut off before its arc, and an issue swallowed by the one before it', () => {
-		const crowd = registerStockCrowdVerbs(verbs());
+		const crowd = registerStockCollectiveVerbs(verbs());
 		crowd.add('slash', { args: { target: 'id' } });
 		assert.throws(
 			() => parseArcText('issue(who=units.filter("Witch"), arc=loop(slash(Foe))) ; issue(who', crowd),
@@ -428,7 +428,7 @@ describe('small-model slips from the AI logs', () => {
 	});
 
 	it('drops a stray comma after extra closers', () => {
-		const crowd = registerStockCrowdVerbs(verbs());
+		const crowd = registerStockCollectiveVerbs(verbs());
 		crowd.add('slash', { args: { target: 'id' } });
 		const arc = parseArcText(
 			'issue(who=units.filter("Blade"), arc=loop(slash(Foe)))), ; issue(who=units.filter("Witch"), arc=loop(slash(Foe)))',

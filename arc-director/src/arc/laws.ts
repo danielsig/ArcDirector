@@ -1,15 +1,9 @@
-import type { Arc } from '../arc/types.js';
-import { parseArc } from '../arc/parse.js';
-import type { VerbRegistry } from '../arc/stock-verbs.js';
-import { isArc } from '../arc/validate.js';
-import { evaluate } from '../expr/eval.js';
-import type { Catalog } from '../expr/types.js';
-import { watchScore } from '../expr/score.js';
-import type { CrowdUnit } from './unit.js';
-import { evaluateWho } from './who.js';
-import type { Crowd } from './crowd.js';
+import type { Arc } from './types.js';
+import { arcArg } from './parse.js';
+import type { VerbRegistry } from './stock-verbs.js';
 
-export type CrowdLaw = {
+/** A standing reaction: while `watch` holds, the runner drops what it is doing and runs `arc`. */
+export type Law = {
 	name:string;
 	who:string;
 	watch:string;
@@ -17,7 +11,7 @@ export type CrowdLaw = {
 	pinned?:boolean;
 };
 
-export type CrowdLawSpec = {
+export type LawSpec = {
 	name?:string;
 	who?:string;
 	watch:string;
@@ -25,30 +19,22 @@ export type CrowdLawSpec = {
 	pinned?:boolean;
 };
 
+/** Most laws per group: a collective's own laws, and each member's. */
 export const DEFAULT_MAX_LAWS = 8;
 
-export function asLawArc(raw:Arc | string, registry:VerbRegistry):Arc | undefined {
-	if (isArc(raw)) {
-		return raw;
-	}
-	if (typeof raw === 'string' && raw.trim()) {
-		try {
-			return parseArc(raw, registry);
-		}
-		catch {
-			return undefined;
-		}
-	}
-	return undefined;
+/** A member's law is `Tom.flee`, in group `Tom`; ids may hold dots, so the group ends at the last one. Own laws: `''`. */
+export function lawGroup(name:string):string {
+	const dot = name.lastIndexOf('.');
+	return dot < 0 ? '' : name.slice(0, dot);
 }
 
 export function lawFromSpec(
-	spec:CrowdLawSpec,
+	spec:LawSpec,
 	registry:VerbRegistry,
 	fallbackName:string,
 	defaultWho = 'units',
-):CrowdLaw | undefined {
-	const arc = asLawArc(spec.arc, registry);
+):Law | undefined {
+	const arc = arcArg(spec.arc, registry);
 	const who = (spec.who ?? defaultWho).trim() || defaultWho;
 	const watch = spec.watch.trim();
 	if (!arc || !watch) {
@@ -61,39 +47,30 @@ export function lawFromSpec(
 	return { name, who, watch, arc, pinned: spec.pinned };
 }
 
-export function upsertLaw(laws:CrowdLaw[], next:CrowdLaw, max:number):CrowdLaw[] {
-	const i = laws.findIndex((s) => s.name === next.name);
-	if (i >= 0) {
-		if (laws[i].pinned && !next.pinned) {
-			return laws;
+/**
+ * Add `next`, or update the law of that name in place. Running handlers hold the law itself, so an
+ * edited law still counts as running. A pinned law only takes pinned edits. Each group holds at most `max`;
+ * own laws stay ahead of members' laws, so they outrank them.
+ */
+export function upsertLaw(laws:Law[], next:Law, max:number):Law[] {
+	const old = laws.find((s) => s.name === next.name);
+	if (old) {
+		if (!old.pinned || next.pinned) {
+			Object.assign(old, next);
 		}
-		const copy = [...laws];
-		copy[i] = next;
-		return copy;
-	}
-	if (laws.length >= max) {
 		return laws;
 	}
-	return [...laws, next];
-}
-
-export function dropLaw(laws:CrowdLaw[], name:string):CrowdLaw[] {
-	return laws.filter((s) => s.name !== name || s.pinned);
-}
-
-export function lawWatchTrue(watch:string, catalog:Catalog, trueScore?:number):boolean {
-	const r = evaluate(watch, catalog);
-	if (r.error) {
-		return false;
+	const group = lawGroup(next.name);
+	if (laws.filter((s) => lawGroup(s.name) === group).length >= max) {
+		return laws;
 	}
-	return watchScore(r.value, trueScore).score > 0;
+	const firstMember = laws.findIndex((s) => lawGroup(s.name) !== '');
+	if (group !== '' || firstMember < 0) {
+		return [...laws, next];
+	}
+	return [...laws.slice(0, firstMember), next, ...laws.slice(firstMember)];
 }
 
-export function lawMatches(
-	law:CrowdLaw,
-	unit:CrowdUnit,
-	whoCatalog:Catalog,
-	crowd:Crowd,
-):boolean {
-	return evaluateWho(law.who, whoCatalog, crowd).some((u) => u.id === unit.id);
+export function dropLaw(laws:Law[], name:string):Law[] {
+	return laws.filter((s) => s.name !== name || s.pinned);
 }

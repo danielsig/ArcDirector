@@ -3,7 +3,7 @@ import { resetHudPatch } from './patchHud';
 import { World } from './World';
 import { GameObject } from './GameObject';
 import { Wallet, Camera } from './components';
-import { GameHost } from '../npc/adapter';
+import { GameHost } from '../director/adapter';
 import { rendererLook } from '../render/look';
 import { loadNPCAnims } from '../render/humanAnims';
 import { loadNature } from '../render/nature';
@@ -87,8 +87,8 @@ export class Game extends KindlingGame<World> {
 		});
 		const director = this.scene.createDirector(host);
 		host.bind(director);
-		this.world.pickedUp = (actor, name) => {
-			host.hooks.afterPickUp?.(host, actor, name);
+		this.world.pickedUp = (character, name) => {
+			host.hooks.afterPickUp?.(host, character, name);
 		};
 		const systems = new GameObject('Systems', 'Systems');
 		const getRenderer = () => this.renderer;

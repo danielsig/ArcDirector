@@ -1,16 +1,27 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { VerbRegistry, registerStockVerbs } from '../arc/stock-verbs.js';
+import { STOCK_VERBS, VerbRegistry, registerStockVerbs } from '../arc/stock-verbs.js';
 import { FakeProvider, goToNamedInteractable, hashEmbed } from '../inference/fake.js';
 import { chatContentText } from '../inference/provider.js';
 import { formatSight } from '../perception/sight.js';
 import type { SeenObject } from '../perception/types.js';
-import { Agent } from './agent.js';
+import { soloCharacter, type SoloOptions } from '../testing/solo.js';
+import type { Character, CharacterJSON } from '../character/character.js';
+
+/** A saved character, restored on its own. */
+function restore<TCtx>(json:CharacterJSON, deps:Omit<SoloOptions<TCtx>, 'id'>) {
+	return soloCharacter<TCtx>({ ...deps, id: json.id }, json);
+}
 import { DEFAULT_YOU_SYMBOL } from './map.js';
 import { TalkNet } from './talk.js';
 import type { Sense, ToolSpec } from './types.js';
 import { withPriorityQueue } from '../think/queue.js';
 import { buildCatalog, dummyEntity, SampleCache } from '../expr/index.js';
+
+/** Every stock verb: registered, and in the kit. */
+function stockVerbs():{ verbs:VerbRegistry; kit:{ verbs:readonly string[] } } {
+	return { verbs: registerStockVerbs(new VerbRegistry()), kit: { verbs: STOCK_VERBS } };
+}
 
 type Ctx = { paragraph:string };
 
@@ -73,60 +84,63 @@ describe('Agent', () => {
 		assert.equal(scene.includes('trees'), true);
 		assert.equal(scene.includes('cluster of'), false);
 
-		const agent = new Agent<Ctx>({
+		const agent = soloCharacter<Ctx>({
 			id: 'Guard',
 			identity: {
 				role: 'Walk to named interactables. Never emit coordinates.',
 			},
 			goals: [{ text: 'Go to EastGate', priority: 1 }],
 			provider: new FakeProvider(goToNamedInteractable()),
-			verbs: registerStockVerbs(new VerbRegistry()),
+			...stockVerbs(),
 			...perception(),
 			context: () => ({ paragraph: scene }),
 			model: 'fake',
 		});
-		const arc = await agent.tick(1);
+		const arc = await agent.mind!.tick(1);
 		assert.ok(arc);
 		assert.equal(arc.head.verb, 'go_to');
 		assert.equal(arc.head.args.target, 'EastGate');
 
 		const json = agent.toJSON();
-		const restored = Agent.fromJSON(json, {
+		const restored = restore(json, {
 			provider: new FakeProvider(goToNamedInteractable()),
-			verbs: registerStockVerbs(new VerbRegistry()),
+			...stockVerbs(),
 			...perception(),
 			context: () => ({ paragraph: scene }),
 			model: 'fake',
 		});
 		assert.equal(restored.id, 'Guard');
-		assert.equal(restored.goals[0].text, 'Go to EastGate');
+		assert.equal(restored.persona.goals[0].text, 'Go to EastGate');
 	});
 
-	it('fromJSON reads a legacy ID key', () => {
-		const restored = Agent.fromJSON(JSON.parse(`{
-			"ID": "Guard",
-			"identity": { "role": "guard" },
-			"goals": [],
-			"memories": [{
-				"ID": "mem_1",
-				"category": "episodic",
-				"text": "a gate",
-				"tags": [],
-				"timestamp": 0,
-				"lastAccessed": 0
-			}],
-			"liveArc": false,
-			"maxGoals": 4,
-			"maxEpisodic": 256
+	it('a saved memory with a legacy ID key loads', () => {
+		const restored = restore(JSON.parse(`{
+			"id": "Guard",
+			"persona": {
+				"identity": { "role": "guard" },
+				"goals": [],
+				"memories": [{
+					"ID": "mem_1",
+					"category": "episodic",
+					"text": "a gate",
+					"tags": [],
+					"timestamp": 0,
+					"lastAccessed": 0
+				}],
+				"maxGoals": 4,
+				"maxEpisodic": 256
+			},
+			"tags": [],
+			"liveArc": false
 		}`), {
 			provider: new FakeProvider(goToNamedInteractable()),
-			verbs: registerStockVerbs(new VerbRegistry()),
+			...stockVerbs(),
 			...perception(),
 			context: () => ({ paragraph: '' }),
 			model: 'fake',
 		});
 		assert.equal(restored.id, 'Guard');
-		assert.equal(restored.memory.all()[0].id, 'mem_1');
+		assert.equal(restored.persona.memory.all()[0].id, 'mem_1');
 	});
 
 	it('can tool-call recall before the arc', async () => {
@@ -148,18 +162,18 @@ describe('Agent', () => {
 			return goToNamedInteractable()(req);
 		}, (texts) => texts.map((t) => hashEmbed(t)));
 
-		const agent = new Agent<Ctx>({
+		const agent = soloCharacter<Ctx>({
 			id: 'Guard',
 			identity: { role: 'guard' },
 			goals: [{ text: 'Go to EastGate' }],
 			provider,
-			verbs: registerStockVerbs(new VerbRegistry()),
+			...stockVerbs(),
 			...perception(),
 			context: () => ({ paragraph: scene }),
 			model: 'fake',
 		});
-		await agent.remember('EastGate is the door in the east wall', ['gate', 'EastGate'], 0);
-		const arc = await agent.tick(1);
+		await agent.mind!.remember('EastGate is the door in the east wall', ['gate', 'EastGate'], 0);
+		const arc = await agent.mind!.tick(1);
 		assert.equal(sawRecall, true);
 		assert.equal(arc?.head.verb, 'go_to');
 		assert.equal(arc?.head.args.target, 'EastGate');
@@ -174,12 +188,12 @@ describe('Agent', () => {
 				toolCalls: [],
 			};
 		});
-		const agent = new Agent<Ctx>({
+		const agent = soloCharacter<Ctx>({
 			id: 'Forager',
 			identity: { role: 'forager' },
 			goals: [{ text: 'Trade FireMushroom for SilverTrout.' }],
 			provider,
-			verbs: registerStockVerbs(new VerbRegistry()),
+			...stockVerbs(),
 			...perception(),
 			context: () => ({ paragraph: paragraph() }),
 			model: 'fake',
@@ -188,15 +202,15 @@ describe('Agent', () => {
 			arcRetryCap: 0,
 			strategicInterval: 0,
 		});
-		agent.pushEvent({
+		agent.mind!.pushEvent({
 			kind: 'HeardSpeech',
 			remember: true,
 			text: 'BridgeKeeper says to Forager: "The bridge fee is FireMushroom."',
 			tags: ['speech'],
 		});
-		await agent.tick(1);
+		await agent.mind!.tick(1);
 		for (let i = 0; i < 8; i++) {
-			agent.pushEvent({
+			agent.mind!.pushEvent({
 				kind: 'HeardSpeech',
 				remember: true,
 				text: `Player says: "Noise ${i}."`,
@@ -204,7 +218,7 @@ describe('Agent', () => {
 			});
 		}
 		users.length = 0;
-		await agent.tick(2);
+		await agent.mind!.tick(2);
 		assert.match(users[0] ?? '', /You remember:/);
 		assert.match(users[0] ?? '', /bridge fee is FireMushroom/);
 	});
@@ -222,12 +236,12 @@ describe('Agent', () => {
 				toolCalls: [],
 			};
 		});
-		const agent = new Agent<Ctx>({
+		const agent = soloCharacter<Ctx>({
 			id: 'Angler',
 			identity: { role: 'angler' },
 			goals: [{ text: 'Pay Forager with SilverTrout.' }],
 			provider,
-			verbs: registerStockVerbs(new VerbRegistry()),
+			...stockVerbs(),
 			senses: {
 				environment: {
 					description: 'Described scene; no coordinates.',
@@ -242,11 +256,11 @@ describe('Agent', () => {
 			arcRetryCap: 0,
 			strategicInterval: 0,
 		});
-		await agent.tick(1);
+		await agent.mind!.tick(1);
 		assert.equal((users[0] ?? '').includes('Last I saw Forager'), false);
 		scene = 'empty grass.';
 		users.length = 0;
-		await agent.tick(2);
+		await agent.mind!.tick(2);
 		assert.match(users[0] ?? '', /Last I saw Forager/);
 	});
 
@@ -269,19 +283,19 @@ describe('Agent', () => {
 				toolCalls: [],
 			};
 		});
-		const agent = new Agent<Ctx>({
+		const agent = soloCharacter<Ctx>({
 			id: 'Guard',
 			identity: { role: 'guard' },
 			goals: [{ text: 'Go to EastGate' }],
 			provider,
-			verbs: registerStockVerbs(new VerbRegistry()),
+			...stockVerbs(),
 			...perception(),
 			context: () => ({ paragraph: scene }),
 			model: 'fake',
 			toolRoundCap: 0,
 			arcRetryCap: 2,
 		});
-		const arc = await agent.tick(1);
+		const arc = await agent.mind!.tick(1);
 		assert.equal(calls, 2);
 		assert.equal(arc?.head.verb, 'go_to');
 		assert.equal(arc?.head.args.target, 'EastGate');
@@ -299,12 +313,12 @@ describe('Agent', () => {
 			assert.match(String(req.messages[req.messages.length - 1]?.content), /not a valid Arc/);
 			return { content: 'go_to(EastGate)', toolCalls: [] };
 		});
-		const agent = new Agent<Ctx>({
+		const agent = soloCharacter<Ctx>({
 			id: 'Guard',
 			identity: { role: 'guard' },
 			goals: [{ text: 'Go to EastGate' }],
 			provider,
-			verbs: registerStockVerbs(new VerbRegistry()),
+			...stockVerbs(),
 			...perception(),
 			context: () => ({ paragraph: scene }),
 			model: 'fake',
@@ -312,7 +326,7 @@ describe('Agent', () => {
 			arcRetryCap: 2,
 			arcText: true,
 		});
-		const arc = await agent.tick(1);
+		const arc = await agent.mind!.tick(1);
 		assert.equal(calls, 2);
 		assert.equal(arc?.head.verb, 'go_to');
 		assert.equal(arc?.head.args.target, 'EastGate');
@@ -331,12 +345,12 @@ describe('Agent', () => {
 			}
 			return { content: same, toolCalls: [] };
 		});
-		const agent = new Agent<Ctx>({
+		const agent = soloCharacter<Ctx>({
 			id: 'Guard',
 			identity: { role: 'guard' },
 			goals: [{ text: 'Go to EastGate' }],
 			provider,
-			verbs: registerStockVerbs(new VerbRegistry()),
+			...stockVerbs(),
 			...perception(),
 			context: () => ({ paragraph: paragraph() }),
 			model: 'fake',
@@ -345,11 +359,11 @@ describe('Agent', () => {
 			arcRetryCap: 0,
 			arcText: true,
 		});
-		const first = await agent.tick(1);
+		const first = await agent.mind!.tick(1);
 		assert.equal(first?.head.args.target, 'EastGate');
-		const insisted = await agent.tick(2);
+		const insisted = await agent.mind!.tick(2);
 		assert.equal(insisted?.head.args.target, 'EastGate');
-		const third = await agent.tick(3);
+		const third = await agent.mind!.tick(3);
 		assert.equal(third?.head.args.target, 'Well');
 		assert.match(warnings[0] ?? '', /twice in a row/);
 		assert.match(warnings[1] ?? '', /3 times in a row/);
@@ -357,7 +371,7 @@ describe('Agent', () => {
 
 	it('does not warn about a repeat when something new came in since the last think', async () => {
 		let warned = false;
-		const agent = new Agent<Ctx>({
+		const agent = soloCharacter<Ctx>({
 			id: 'Guard',
 			identity: { role: 'guard' },
 			goals: [{ text: 'Go to EastGate' }],
@@ -366,7 +380,7 @@ describe('Agent', () => {
 				warned ||= last.includes('Same output again');
 				return { content: 'go_to(EastGate)', toolCalls: [] };
 			}),
-			verbs: registerStockVerbs(new VerbRegistry()),
+			...stockVerbs(),
 			...perception(),
 			context: () => ({ paragraph: paragraph() }),
 			model: 'fake',
@@ -375,16 +389,16 @@ describe('Agent', () => {
 			arcRetryCap: 0,
 			arcText: true,
 		});
-		await agent.tick(1);
-		agent.pushEvent({ kind: 'HeardSpeech', text: 'Mira: the gate is open' });
-		const again = await agent.tick(2);
+		await agent.mind!.tick(1);
+		agent.mind!.pushEvent({ kind: 'HeardSpeech', text: 'Mira: the gate is open' });
+		const again = await agent.mind!.tick(2);
 		assert.equal(again?.head.args.target, 'EastGate');
 		assert.equal(warned, false);
 	});
 
 	it('does not retry a bad arc when arcRetryCap is 0', async () => {
 		let calls = 0;
-		const agent = new Agent<Ctx>({
+		const agent = soloCharacter<Ctx>({
 			id: 'Guard',
 			identity: { role: 'guard' },
 			goals: [{ text: 'Go to EastGate' }],
@@ -392,14 +406,14 @@ describe('Agent', () => {
 				calls += 1;
 				return { content: '{"nope":true}', toolCalls: [] };
 			}),
-			verbs: registerStockVerbs(new VerbRegistry()),
+			...stockVerbs(),
 			...perception(),
 			context: () => ({ paragraph: paragraph() }),
 			model: 'fake',
 			toolRoundCap: 0,
 			arcRetryCap: 0,
 		});
-		await assert.rejects(() => agent.tick(1), /step is not an object|arc is not an object/);
+		await assert.rejects(() => agent.mind!.tick(1), /step is not an object|arc is not an object/);
 		assert.equal(calls, 1);
 	});
 
@@ -420,19 +434,19 @@ describe('Agent', () => {
 			sawToolError = true;
 			return goToNamedInteractable()(req);
 		});
-		const agent = new Agent<Ctx>({
+		const agent = soloCharacter<Ctx>({
 			id: 'Guard',
 			identity: { role: 'guard' },
 			goals: [{ text: 'Go to EastGate' }],
 			provider,
-			verbs: registerStockVerbs(new VerbRegistry()),
+			...stockVerbs(),
 			...perception(),
 			context: () => ({ paragraph: paragraph() }),
 			model: 'fake',
 			toolRoundCap: 1,
 			arcRetryCap: 0,
 		});
-		const arc = await agent.tick(1);
+		const arc = await agent.mind!.tick(1);
 		assert.equal(sawToolError, true);
 		assert.equal(arc?.head.verb, 'go_to');
 	});
@@ -447,11 +461,11 @@ describe('Agent', () => {
 			results.push(String(tool.content));
 			return { content: `remember(content=Note ${results.length})`, toolCalls: [] };
 		});
-		const agent = new Agent<Ctx>({
+		const agent = soloCharacter<Ctx>({
 			id: 'Forager',
 			identity: { role: 'forager' },
 			provider,
-			verbs: registerStockVerbs(new VerbRegistry()),
+			...stockVerbs(),
 			...perception(),
 			context: () => ({ paragraph: paragraph() }),
 			model: 'fake',
@@ -461,8 +475,8 @@ describe('Agent', () => {
 			arcRetryCap: 0,
 			strategicInterval: 0,
 		});
-		await agent.tick(10);
-		await agent.tick(20);
+		await agent.mind!.tick(10);
+		await agent.mind!.tick(20);
 		assert.equal(results[0].includes('Duplicate call'), false);
 		assert.match(results[1] ?? '', /Duplicate call/);
 	});
@@ -472,15 +486,15 @@ describe('Agent', () => {
 		const provider = new FakeProvider((req) => {
 			users.push(String(req.messages[1]?.content));
 			if (users.length === 1) {
-				agent.pushEvent({ kind: 'Given', text: '{0} gave FireMushroom to {1}', who: ['Forager', 'BridgeKeeper'], tags: ['give'] });
+				agent.mind!.pushEvent({ kind: 'Given', text: '{0} gave FireMushroom to {1}', who: ['Forager', 'BridgeKeeper'], tags: ['give'] });
 			}
 			return { content: `remember(content=Note ${users.length})`, toolCalls: [] };
 		});
-		const agent = new Agent<Ctx>({
+		const agent = soloCharacter<Ctx>({
 			id: 'BridgeKeeper',
 			identity: { role: 'keeper' },
 			provider,
-			verbs: registerStockVerbs(new VerbRegistry()),
+			...stockVerbs(),
 			...perception(),
 			context: () => ({ paragraph: paragraph() }),
 			model: 'fake',
@@ -490,8 +504,8 @@ describe('Agent', () => {
 			arcRetryCap: 0,
 			strategicInterval: 0,
 		});
-		await agent.tick(10);
-		await agent.tick(20);
+		await agent.mind!.tick(10);
+		await agent.mind!.tick(20);
 		assert.equal(users[0].includes('gave FireMushroom'), false);
 		assert.match(users[1] ?? '', /Forager gave FireMushroom to you/);
 	});
@@ -502,12 +516,12 @@ describe('Agent', () => {
 			users.push(String(req.messages[1]?.content));
 			return { content: `remember(content=Note ${users.length})`, toolCalls: [] };
 		});
-		const agent = new Agent<Ctx>({
+		const agent = soloCharacter<Ctx>({
 			id: 'Forager',
 			identity: { role: 'forager' },
 			goals: [{ text: 'Buy SilverTrout.' }],
 			provider,
-			verbs: registerStockVerbs(new VerbRegistry()),
+			...stockVerbs(),
 			...perception(),
 			context: () => ({ paragraph: paragraph() }),
 			model: 'fake',
@@ -518,9 +532,9 @@ describe('Agent', () => {
 			strategicInterval: 0,
 			encyclopedia: [{ name: 'FireMushroom', aliases: ['10 gold'], text: 'Worth 10 gold.' }],
 		});
-		agent.pushEvent({ kind: 'HeardSpeech', remember: true, text: 'BridgeKeeper says: "10 gold or items of equal value."', tags: ['speech'] });
-		await agent.tick(10);
-		await agent.tick(20);
+		agent.mind!.pushEvent({ kind: 'HeardSpeech', remember: true, text: 'BridgeKeeper says: "10 gold or items of equal value."', tags: ['speech'] });
+		await agent.mind!.tick(10);
+		await agent.mind!.tick(20);
 		assert.match(users[0] ?? '', /Encyclopedia on what was said:\n- FireMushroom: Worth 10 gold\./);
 		assert.equal((users[1] ?? '').includes('Encyclopedia on what was said'), false);
 	});
@@ -535,12 +549,12 @@ describe('Agent', () => {
 			n += 1;
 			return { content: `remember(content=Note ${n})`, toolCalls: [] };
 		});
-		const agent = new Agent<Ctx>({
+		const agent = soloCharacter<Ctx>({
 			id: 'Forager',
 			identity: { role: 'forager' },
 			goals: [{ text: 'Buy SilverTrout.' }],
 			provider,
-			verbs: registerStockVerbs(new VerbRegistry()),
+			...stockVerbs(),
 			...perception(),
 			context: () => ({ paragraph: paragraph() }),
 			model: 'fake',
@@ -551,7 +565,7 @@ describe('Agent', () => {
 			strategicInterval: 0,
 		});
 		for (let t = 1; t <= 4; t++) {
-			await agent.tick(t * 10);
+			await agent.mind!.tick(t * 10);
 		}
 		assert.deepEqual(firstTurns.map((turn) => turn.choice), ['auto', 'auto', 'auto', 'required']);
 		assert.match(firstTurns[3].user, /only talked or waited for 3 thinks\. Look up what you lack/);
@@ -576,12 +590,12 @@ describe('Agent', () => {
 			assert.match(results[1], /Duplicate call/);
 			return goToNamedInteractable()(req);
 		});
-		const agent = new Agent<Ctx>({
+		const agent = soloCharacter<Ctx>({
 			id: 'Guard',
 			identity: { role: 'guard' },
 			goals: [{ text: 'Go to EastGate' }],
 			provider,
-			verbs: registerStockVerbs(new VerbRegistry()),
+			...stockVerbs(),
 			...perception(),
 			tools: {
 				count: {
@@ -598,7 +612,7 @@ describe('Agent', () => {
 			toolRoundCap: 3,
 			arcRetryCap: 0,
 		});
-		const arc = await agent.tick(1);
+		const arc = await agent.mind!.tick(1);
 		assert.equal(runs, 1);
 		assert.equal(arc?.head.verb, 'go_to');
 	});
@@ -629,19 +643,19 @@ describe('Agent', () => {
 			assert.match(String(tool?.content), /boom failed/);
 			return goToNamedInteractable()(req);
 		});
-		const agent = new Agent<Ctx>({
+		const agent = soloCharacter<Ctx>({
 			id: 'Guard',
 			identity: { role: 'guard' },
 			goals: [{ text: 'Go to EastGate' }],
 			provider,
-			verbs: registerStockVerbs(new VerbRegistry()),
+			...stockVerbs(),
 			...perceptionWithBoom,
 			context: () => ({ paragraph: paragraph() }),
 			model: 'fake',
 			toolRoundCap: 1,
 			arcRetryCap: 0,
 		});
-		const arc = await agent.tick(1);
+		const arc = await agent.mind!.tick(1);
 		assert.equal(arc?.head.verb, 'go_to');
 		assert.equal(calls, 2);
 	});
@@ -675,12 +689,12 @@ describe('Agent', () => {
 				toolCalls: [],
 			};
 		});
-		const agent = new Agent<Ctx>({
+		const agent = soloCharacter<Ctx>({
 			id: 'Acolyte',
 			identity: { role: 'Ask the guard.' },
 			goals: [{ text: 'Talk to Guard' }],
 			provider,
-			verbs: registerStockVerbs(new VerbRegistry()),
+			...stockVerbs(),
 			...perception(),
 			context: () => ({ paragraph: paragraph() }),
 			model: 'fake',
@@ -688,7 +702,7 @@ describe('Agent', () => {
 			toolRoundCap: 0,
 			arcRetryCap: 0,
 		});
-		const arc = await agent.tick(1);
+		const arc = await agent.mind!.tick(1);
 		assert.equal(calls, 2);
 		assert.equal(arc?.head.verb, 'go_to');
 		assert.equal(arc?.head.args.target, 'Guard');
@@ -696,11 +710,11 @@ describe('Agent', () => {
 	});
 
 	it('tells events from its own point of view', () => {
-		const agentOf = (id:string) => new Agent<Ctx>({
+		const agentOf = (id:string) => soloCharacter<Ctx>({
 			id,
 			identity: { role: id },
 			provider: new FakeProvider(() => ({ content: 'wait(seconds=1)', toolCalls: [] })),
-			verbs: registerStockVerbs(new VerbRegistry()),
+			...stockVerbs(),
 			...perception(),
 			context: () => ({ paragraph: paragraph() }),
 			model: 'fake',
@@ -708,8 +722,8 @@ describe('Agent', () => {
 		const given = { kind: 'Given', text: '{0} gave FireMushroom to {1}', who: ['Forager', 'BridgeKeeper'], tags: ['give'] };
 		const views = ['Forager', 'BridgeKeeper', 'Angler'].map((id) => {
 			const agent = agentOf(id);
-			agent.pushEvent(given);
-			return (agent.toJSON().events ?? []).map((e) => e.text);
+			agent.mind!.pushEvent(given);
+			return agent.mind!.events().map((e) => e.text);
 		});
 		assert.deepEqual(views, [
 			['You gave FireMushroom to BridgeKeeper'],
@@ -721,14 +735,14 @@ describe('Agent', () => {
 	it('puts what it carries next to an item that was talked about', async () => {
 		const users:string[] = [];
 		let carried:ReturnType<typeof dummyEntity>[] = [];
-		const agent = new Agent<Ctx>({
+		const agent = soloCharacter<Ctx>({
 			id: 'BridgeKeeper',
 			identity: { role: 'keeper' },
 			provider: new FakeProvider((req) => {
 				users.push(String(req.messages[1]?.content));
 				return { content: `remember(content=Note ${users.length})`, toolCalls: [] };
 			}),
-			verbs: registerStockVerbs(new VerbRegistry()),
+			...stockVerbs(),
 			...perception(),
 			context: () => ({ paragraph: paragraph() }),
 			catalog: () => buildCatalog({ me: dummyEntity('me'), others: [], items: [], cache: new SampleCache(), inventory: (who) => (who.id === 'me' ? carried : []) }),
@@ -740,10 +754,10 @@ describe('Agent', () => {
 			strategicInterval: 0,
 			encyclopedia: [{ name: 'FireMushroom', text: 'Worth 10 gold.', item: true }, { name: 'Bridge', text: 'Raised unless lowered.' }],
 		});
-		agent.pushEvent({ kind: 'HeardSpeech', remember: true, text: 'Forager says to you: "Here, take this FireMushroom for the Bridge."', tags: ['speech'] });
-		await agent.tick(10);
+		agent.mind!.pushEvent({ kind: 'HeardSpeech', remember: true, text: 'Forager says to you: "Here, take this FireMushroom for the Bridge."', tags: ['speech'] });
+		await agent.mind!.tick(10);
 		carried = [dummyEntity('FireMushroom', { tags: ['item'] })];
-		await agent.tick(20);
+		await agent.mind!.tick(20);
 		assert.match(users[0] ?? '', /- FireMushroom \(you carry none\): Worth 10 gold\./);
 		assert.match(users[0] ?? '', /- Bridge: Raised unless lowered\./);
 		assert.match(users[1] ?? '', /- FireMushroom \(you carry one\)\./);
@@ -755,7 +769,7 @@ describe('Agent', () => {
 		const arcs = ['say(text=Very well, the mushroom covers the fee.) && remember(content=Paid)', 'say(text=The bridge is down now.)'];
 		const waits:number[] = [];
 		let n = 0;
-		const agent = new Agent<Ctx>({
+		const agent = soloCharacter<Ctx>({
 			id: 'BridgeKeeper',
 			identity: { role: 'keeper' },
 			provider: new FakeProvider(() => ({ content: arcs[n++], toolCalls: [] })),
@@ -765,7 +779,7 @@ describe('Agent', () => {
 				}
 				return { ok: true, verb: step.verb };
 			},
-			verbs: registerStockVerbs(new VerbRegistry()),
+			...stockVerbs(),
 			...perception(),
 			context: () => ({ paragraph: paragraph() }),
 			model: 'fake',
@@ -776,8 +790,8 @@ describe('Agent', () => {
 			arcRetryCap: 0,
 			strategicInterval: 0,
 		});
-		await agent.tick(10);
-		await agent.tick(20);
+		await agent.mind!.tick(10);
+		await agent.mind!.tick(20);
 		assert.deepEqual(waits, [2]);
 	});
 
@@ -791,12 +805,12 @@ describe('Agent', () => {
 			'As I have stated, lowering the bridge requires ten gold or items of equal value.',
 		];
 		let n = 0;
-		const agent = new Agent<Ctx>({
+		const agent = soloCharacter<Ctx>({
 			id: 'BridgeKeeper',
 			identity: { role: 'keeper' },
 			provider: new FakeProvider(() => ({ content: `say(text=${lines[n++]})`, toolCalls: [] })),
 			execute: async (step) => ({ ok: true, verb: step.verb }),
-			verbs: registerStockVerbs(new VerbRegistry()),
+			...stockVerbs(),
 			...perception(),
 			context: () => ({ paragraph: paragraph() }),
 			model: 'fake',
@@ -809,13 +823,13 @@ describe('Agent', () => {
 		});
 		const results:boolean[] = [];
 		for (let t = 1; t <= 3; t++) {
-			await agent.tick(t * 10);
+			await agent.mind!.tick(t * 10);
 			results.push(agent.lastResult?.ok === true);
 		}
 		assert.deepEqual(results, [true, true, false]);
 		assert.match(agent.lastResult?.reason ?? '', /already heard you say that \("Excuse me, sir\?/);
 		listeners.push('Angler');
-		await agent.tick(40);
+		await agent.mind!.tick(40);
 		assert.equal(agent.lastResult?.ok, true);
 	});
 
@@ -824,7 +838,7 @@ describe('Agent', () => {
 		const replies = ['go_to(Angler)', 'go_to(target=Angler)', 'wait(1)', 'go_to(Angler)'];
 		const hints:string[] = [];
 		const ran:string[] = [];
-		const agent = new Agent<Ctx>({
+		const agent = soloCharacter<Ctx>({
 			id: 'Forager',
 			identity: { role: 'forager' },
 			provider: new FakeProvider((req) => {
@@ -840,7 +854,7 @@ describe('Agent', () => {
 					? { ok: false, verb: 'go_to', reason: `no way to Angler, blocked on the way: ${blocked}`, unreachable: 'Angler' }
 					: { ok: true, verb: step.verb };
 			},
-			verbs: registerStockVerbs(new VerbRegistry()),
+			...stockVerbs(),
 			...perception(),
 			context: () => ({ paragraph: paragraph() }),
 			model: 'fake',
@@ -851,12 +865,12 @@ describe('Agent', () => {
 			arcRetryCap: 0,
 			strategicInterval: 0,
 		});
-		await agent.tick(10);
-		await agent.tick(20);
+		await agent.mind!.tick(10);
+		await agent.mind!.tick(20);
 		assert.deepEqual(ran, ['go_to', 'wait']);
 		assert.match(hints[0] ?? '', /^no way to Angler, blocked on the way: Bridge is raised\. That already failed and still would/);
 		blocked = undefined;
-		await agent.tick(30);
+		await agent.mind!.tick(30);
 		assert.deepEqual(ran, ['go_to', 'wait', 'go_to']);
 	});
 
@@ -875,11 +889,11 @@ describe('Agent', () => {
 				toolCalls: [],
 			};
 		});
-		const agent = new Agent<Ctx>({
+		const agent = soloCharacter<Ctx>({
 			id: 'Acolyte',
 			identity: { role: 'Ask the guard.' },
 			provider,
-			verbs: registerStockVerbs(new VerbRegistry()),
+			...stockVerbs(),
 			...perception(),
 			context: () => ({ paragraph: paragraph() }),
 			model: 'fake',
@@ -887,7 +901,7 @@ describe('Agent', () => {
 			toolRoundCap: 0,
 			arcRetryCap: 0,
 		});
-		const arc = await agent.tick(1);
+		const arc = await agent.mind!.tick(1);
 		assert.equal(calls, 1);
 		assert.equal(arc?.head.verb, 'say');
 		assert.equal(arc?.head.args.to, 'Guard');
@@ -903,11 +917,11 @@ describe('Agent', () => {
 			user = String(req.messages.find((m) => m.role === 'user')?.content);
 			return { content: JSON.stringify({ head: { verb: 'wait', args: {} } }), toolCalls: [] };
 		});
-		await new Agent<Ctx>({
+		await soloCharacter<Ctx>({
 			id: 'Forager',
 			identity: { role: 'forager' },
 			provider,
-			verbs: registerStockVerbs(new VerbRegistry()),
+			...stockVerbs(),
 			...perception(),
 			context: () => ({ paragraph: paragraph() }),
 			model: 'fake',
@@ -915,7 +929,7 @@ describe('Agent', () => {
 			wayBlocked: (id) => (id === 'Angler' ? 'Bridge is raised' : undefined),
 			toolRoundCap: 0,
 			arcRetryCap: 0,
-		}).tick(1);
+		}).mind!.tick(1);
 		assert.match(user, /In talking range: Guard, Angler \(unreachable, blocked on the way: Bridge is raised\)\./);
 	});
 
@@ -947,11 +961,11 @@ describe('Agent', () => {
 				toolCalls: [],
 			};
 		});
-		const agent = new Agent<Ctx>({
+		const agent = soloCharacter<Ctx>({
 			id: 'Acolyte',
 			identity: { role: 'Ask the guard.' },
 			provider,
-			verbs: registerStockVerbs(new VerbRegistry()),
+			...stockVerbs(),
 			...perception(),
 			context: () => ({ paragraph: paragraph() }),
 			model: 'fake',
@@ -959,7 +973,7 @@ describe('Agent', () => {
 			toolRoundCap: 1,
 			arcRetryCap: 0,
 		});
-		const arc = await agent.tick(1);
+		const arc = await agent.mind!.tick(1);
 		assert.equal(sawError, true);
 		assert.equal(arc?.head.verb, 'go_to');
 		assert.equal(calls, 2);
@@ -975,11 +989,11 @@ describe('Agent', () => {
 				toolCalls: [],
 			};
 		});
-		const agent = new Agent<Ctx>({
+		const agent = soloCharacter<Ctx>({
 			id: 'Assistant',
 			identity: { role: 'You assist Player.' },
 			provider,
-			verbs: registerStockVerbs(new VerbRegistry()),
+			...stockVerbs(),
 			...perception(),
 			context: () => ({ paragraph: paragraph() }),
 			model: 'fake',
@@ -988,22 +1002,22 @@ describe('Agent', () => {
 			arcRetryCap: 0,
 			strategicInterval: 0,
 		});
-		agent.pushEvent({
+		agent.mind!.pushEvent({
 			kind: 'HeardSpeech',
 			text: 'Player says to you: "Stay inside the cottage."',
 			tags: ['speech', 'Player'],
 			major: true,
 		});
-		await agent.tick(1);
+		await agent.mind!.tick(1);
 		assert.match(users[0] ?? '', /Stay inside the cottage/);
-		await agent.tick(2);
+		await agent.mind!.tick(2);
 		assert.match(users[1] ?? '', /Short-term memory/);
 		assert.match(users[1] ?? '', /Stay inside the cottage/);
 		const saved = agent.toJSON();
-		assert.ok((saved.recent ?? []).some((line) => line.includes('Stay inside the cottage')));
-		const restored = Agent.fromJSON(saved, {
+		assert.ok((saved.mind!.recent ?? []).some((line) => line.includes('Stay inside the cottage')));
+		const restored = restore(saved, {
 			provider,
-			verbs: registerStockVerbs(new VerbRegistry()),
+			...stockVerbs(),
 			...perception(),
 			context: () => ({ paragraph: paragraph() }),
 			model: 'fake',
@@ -1013,7 +1027,7 @@ describe('Agent', () => {
 			strategicInterval: 0,
 		});
 		users.length = 0;
-		await restored.tick(3);
+		await restored.mind!.tick(3);
 		assert.match(users[0] ?? '', /Stay inside the cottage/);
 	});
 
@@ -1027,11 +1041,11 @@ describe('Agent', () => {
 				toolCalls: [],
 			};
 		});
-		const agent = new Agent<Ctx>({
+		const agent = soloCharacter<Ctx>({
 			id: 'Guard',
 			identity: { role: 'Watch.' },
 			provider,
-			verbs: registerStockVerbs(new VerbRegistry()),
+			...stockVerbs(),
 			...perception(),
 			context: () => ({ paragraph: paragraph() }),
 			model: 'fake',
@@ -1041,14 +1055,14 @@ describe('Agent', () => {
 			strategicInterval: 0,
 		});
 		for (let i = 0; i < 10; i++) {
-			agent.pushEvent({
+			agent.mind!.pushEvent({
 				kind: 'HeardSpeech',
 				text: `Player says to you: "Order ${i}."`,
 				tags: ['speech', 'Player'],
 				major: true,
 			});
 		}
-		await agent.tick(1);
+		await agent.mind!.tick(1);
 		const text = users.find((u) => u.includes('environment:')) ?? users.at(-1) ?? '';
 		const stm = text.split(/\n\nYou remember:/)[0] ?? text;
 		assert.match(stm, /Earlier:/);
@@ -1065,12 +1079,12 @@ describe('Agent', () => {
 			}),
 			toolCalls: [],
 		}));
-		const agent = new Agent<Ctx>({
+		const agent = soloCharacter<Ctx>({
 			id: 'Assistant',
 			identity: { role: 'You assist Player.', traits: ['obedient'] },
 			goals: [{ text: 'Follow Player', priority: 2 }],
 			provider,
-			verbs: registerStockVerbs(new VerbRegistry()),
+			...stockVerbs(),
 			...perception(),
 			context: () => ({ paragraph: paragraph() }),
 			model: 'fake',
@@ -1079,11 +1093,11 @@ describe('Agent', () => {
 			arcRetryCap: 0,
 			strategicInterval: 0,
 		});
-		const arc = await agent.tick(1);
+		const arc = await agent.mind!.tick(1);
 		assert.equal(arc?.head.verb, 'wait');
-		assert.equal(agent.identity.role, 'Night watch of EastGate.');
-		assert.equal(agent.goals[0]?.text, 'Hold EastGate.');
-		assert.ok(agent.memory.pinned().some((m) => m.text.includes('Night watch of EastGate')));
+		assert.equal(agent.persona.identity.role, 'Night watch of EastGate.');
+		assert.equal(agent.persona.goals[0]?.text, 'Hold EastGate.');
+		assert.ok(agent.persona.memory.pinned().some((m) => m.text.includes('Night watch of EastGate')));
 	});
 
 	it('runs set_identity as a verb', async () => {
@@ -1096,11 +1110,11 @@ describe('Agent', () => {
 			}),
 			toolCalls: [],
 		}));
-		const agent = new Agent<Ctx>({
+		const agent = soloCharacter<Ctx>({
 			id: 'Assistant',
 			identity: { role: 'You assist Player.', traits: ['obedient'] },
 			provider,
-			verbs: registerStockVerbs(new VerbRegistry()),
+			...stockVerbs(),
 			...perception(),
 			context: () => ({ paragraph: paragraph() }),
 			execute: async () => ({ ok: true }),
@@ -1110,10 +1124,10 @@ describe('Agent', () => {
 			arcRetryCap: 0,
 			strategicInterval: 0,
 		});
-		const arc = await agent.tick(1);
+		const arc = await agent.mind!.tick(1);
 		assert.equal(arc?.head.verb, 'set_identity');
-		assert.equal(agent.identity.role, 'Night watch of EastGate.');
-		assert.deepEqual(agent.identity.traits, ['stern']);
+		assert.equal(agent.persona.identity.role, 'Night watch of EastGate.');
+		assert.deepEqual(agent.persona.identity.traits, ['stern']);
 	});
 
 	it('perform applies set_identity when the host runs the arc', async () => {
@@ -1126,11 +1140,11 @@ describe('Agent', () => {
 			}),
 			toolCalls: [],
 		}));
-		const agent = new Agent<Ctx>({
+		const agent = soloCharacter<Ctx>({
 			id: 'Assistant',
 			identity: { role: 'You assist Player.', traits: ['obedient'] },
 			provider,
-			verbs: registerStockVerbs(new VerbRegistry()),
+			...stockVerbs(),
 			...perception(),
 			context: () => ({ paragraph: paragraph() }),
 			model: 'fake',
@@ -1139,25 +1153,25 @@ describe('Agent', () => {
 			arcRetryCap: 0,
 			strategicInterval: 0,
 		});
-		const arc = await agent.tick(1);
+		const arc = await agent.mind!.tick(1);
 		assert.equal(arc?.head.verb, 'set_identity');
-		assert.equal(agent.identity.role, 'You assist Player.');
+		assert.equal(agent.persona.identity.role, 'You assist Player.');
 		const result = await agent.perform(arc!.head);
 		assert.equal(result.ok, true);
 		assert.equal(result.verb, 'set_identity');
-		assert.equal(agent.identity.role, 'Watch');
-		assert.deepEqual(agent.identity.traits, ['stern', 'watchful']);
+		assert.equal(agent.persona.identity.role, 'Watch');
+		assert.deepEqual(agent.persona.identity.traits, ['stern', 'watchful']);
 	});
 
 	it('set_identity changes the role, never the id', async () => {
-		const agent = new Agent<Ctx>({
+		const agent = soloCharacter<Ctx>({
 			id: 'Fern',
 			identity: { role: 'Herbalist' },
 			provider: new FakeProvider(() => ({
 				content: JSON.stringify({ head: { verb: 'wait', args: { seconds: 1 } } }),
 				toolCalls: [],
 			})),
-			verbs: registerStockVerbs(new VerbRegistry()),
+			...stockVerbs(),
 			...perception(),
 			context: () => ({ paragraph: paragraph() }),
 			model: 'fake',
@@ -1172,8 +1186,8 @@ describe('Agent', () => {
 		const ok = await agent.perform({ verb: 'set_identity', args: { role: 'Watchman' } });
 		assert.equal(ok.ok, true);
 		assert.equal(agent.id, 'Fern');
-		assert.equal(agent.identity.role, 'Watchman');
-		assert.ok(agent.memory.pinned().some((m) => m.text === 'I am Fern. Role: Watchman.'));
+		assert.equal(agent.persona.identity.role, 'Watchman');
+		assert.ok(agent.persona.memory.pinned().some((m) => m.text === 'I am Fern. Role: Watchman.'));
 	});
 
 	it('applies a new role from arc JSON', async () => {
@@ -1184,11 +1198,11 @@ describe('Agent', () => {
 			}),
 			toolCalls: [],
 		}));
-		const agent = new Agent<Ctx>({
+		const agent = soloCharacter<Ctx>({
 			id: 'Fern',
 			identity: { role: 'Herbalist' },
 			provider,
-			verbs: registerStockVerbs(new VerbRegistry()),
+			...stockVerbs(),
 			...perception(),
 			context: () => ({ paragraph: paragraph() }),
 			model: 'fake',
@@ -1197,8 +1211,8 @@ describe('Agent', () => {
 			arcRetryCap: 0,
 			strategicInterval: 0,
 		});
-		await agent.tick(1);
-		assert.equal(agent.identity.role, 'Watchman');
+		await agent.mind!.tick(1);
+		assert.equal(agent.persona.identity.role, 'Watchman');
 	});
 
 	it('revises identity on a major event even when strategicInterval is 0', async () => {
@@ -1219,12 +1233,12 @@ describe('Agent', () => {
 				toolCalls: [],
 			};
 		});
-		const agent = new Agent<Ctx>({
+		const agent = soloCharacter<Ctx>({
 			id: 'Assistant',
 			identity: { role: 'You assist Player.' },
 			goals: [{ text: 'Follow Player', priority: 2 }],
 			provider,
-			verbs: registerStockVerbs(new VerbRegistry()),
+			...stockVerbs(),
 			...perception(),
 			context: () => ({ paragraph: paragraph() }),
 			model: 'fake',
@@ -1233,16 +1247,16 @@ describe('Agent', () => {
 			arcRetryCap: 0,
 			strategicInterval: 0,
 		});
-		agent.pushEvent({
+		agent.mind!.pushEvent({
 			kind: 'HeardSpeech',
 			text: 'Player says to you: "Guard EastGate."',
 			tags: ['speech', 'Player'],
 			major: true,
 		});
-		await agent.tick(1);
+		await agent.mind!.tick(1);
 		assert.equal(calls, 2);
-		assert.equal(agent.identity.role, 'I hold EastGate now.');
-		assert.equal(agent.goals[0]?.text, 'Hold EastGate.');
+		assert.equal(agent.persona.identity.role, 'I hold EastGate now.');
+		assert.equal(agent.persona.goals[0]?.text, 'Hold EastGate.');
 	});
 
 	it('skips JSON goal revision when arcText is on', async () => {
@@ -1251,12 +1265,12 @@ describe('Agent', () => {
 			calls += 1;
 			return { content: 'wait(seconds=1)', toolCalls: [] };
 		});
-		const agent = new Agent<Ctx>({
+		const agent = soloCharacter<Ctx>({
 			id: 'Assistant',
 			identity: { role: 'You assist Player.' },
 			goals: [{ text: 'Follow Player', priority: 2 }],
 			provider,
-			verbs: registerStockVerbs(new VerbRegistry()),
+			...stockVerbs(),
 			...perception(),
 			context: () => ({ paragraph: paragraph() }),
 			model: 'fake',
@@ -1266,15 +1280,15 @@ describe('Agent', () => {
 			strategicInterval: 0,
 			arcText: true,
 		});
-		agent.pushEvent({
+		agent.mind!.pushEvent({
 			kind: 'HeardSpeech',
 			text: 'Player says to you: "Go to the waterfall."',
 			tags: ['speech', 'Player'],
 			major: true,
 		});
-		await agent.tick(1);
+		await agent.mind!.tick(1);
 		assert.equal(calls, 1);
-		assert.equal(agent.goals[0]?.text, 'Follow Player');
+		assert.equal(agent.persona.goals[0]?.text, 'Follow Player');
 	});
 
 	it('greps the world encyclopedia for leftover English', async () => {
@@ -1296,12 +1310,12 @@ describe('Agent', () => {
 			grepped = String(tool?.content ?? '');
 			return goToNamedInteractable()(req);
 		});
-		const agent = new Agent<Ctx>({
+		const agent = soloCharacter<Ctx>({
 			id: 'Guard',
 			identity: { role: 'guard' },
 			goals: [{ text: 'Find the forest' }],
 			provider,
-			verbs: registerStockVerbs(new VerbRegistry()),
+			...stockVerbs(),
 			...perception(),
 			context: () => ({ paragraph: paragraph() }),
 			model: 'fake',
@@ -1315,7 +1329,7 @@ describe('Agent', () => {
 				text: 'Landmark type. Many; not reachable with go_to.',
 			}],
 		});
-		await agent.tick(1);
+		await agent.mind!.tick(1);
 		assert.match(grepped, /^Tree \(trees\)/);
 		assert.match(grepped, /not reachable with go_to/);
 	});
@@ -1331,15 +1345,15 @@ describe('Agent', () => {
 			identity: { role: 'guard' },
 			goals: [{ text: 'Go to EastGate' }],
 			provider: capture,
-			verbs: registerStockVerbs(new VerbRegistry()),
+			...stockVerbs(),
 			...perception(),
 			context: () => ({ paragraph: paragraph() }),
 			model: 'fake',
 			toolRoundCap: 0,
 			arcRetryCap: 0,
 		};
-		await new Agent<Ctx>({ ...base, vision: true }).tick(1);
-		await new Agent<Ctx>({
+		await soloCharacter<Ctx>({ ...base, vision: true }).mind!.tick(1);
+		await soloCharacter<Ctx>({
 			...base,
 			map: {
 				snapshot: () => ({
@@ -1351,7 +1365,7 @@ describe('Agent', () => {
 				}),
 			},
 			vision: false,
-		}).tick(1);
+		}).mind!.tick(1);
 		assert.equal(names[0]?.includes('see_map'), false);
 		assert.equal(names[1]?.includes('see_map'), false);
 		assert.equal(names[0]?.length ?? 0, 0);
@@ -1390,12 +1404,12 @@ describe('Agent', () => {
 			}
 			return goToNamedInteractable()(req);
 		});
-		const agent = new Agent<Ctx>({
+		const agent = soloCharacter<Ctx>({
 			id: 'Guard',
 			identity: { role: 'guard' },
 			goals: [{ text: 'Go to EastGate' }],
 			provider,
-			verbs: registerStockVerbs(new VerbRegistry()),
+			...stockVerbs(),
 			...perception(),
 			context: () => ({ paragraph: paragraph() }),
 			model: 'fake',
@@ -1418,7 +1432,7 @@ describe('Agent', () => {
 				},
 			},
 		});
-		const arc = await agent.tick(1);
+		const arc = await agent.mind!.tick(1);
 		assert.equal(calls, 2);
 		assert.equal(arc?.head.verb, 'go_to');
 	});
@@ -1437,12 +1451,12 @@ describe('Agent', () => {
 			assert.equal(req.messages.some((m) => m.role === 'tool'), false);
 			return { content: 'wait(seconds=1)', toolCalls: [] };
 		});
-		const agent = new Agent<Ctx>({
+		const agent = soloCharacter<Ctx>({
 			id: 'Guard',
 			identity: { role: 'guard' },
 			goals: [{ text: 'Go to EastGate' }],
 			provider,
-			verbs: registerStockVerbs(new VerbRegistry()),
+			...stockVerbs(),
 			...perception(),
 			context: () => ({ paragraph: paragraph() }),
 			model: 'fake',
@@ -1463,7 +1477,7 @@ describe('Agent', () => {
 				},
 			},
 		});
-		const arc = await agent.tick(1);
+		const arc = await agent.mind!.tick(1);
 		assert.equal(calls, 2);
 		assert.equal(snaps, 0);
 		assert.equal(arc?.head.verb, 'wait');
@@ -1476,12 +1490,12 @@ describe('Agent', () => {
 			assert.equal(String(system?.content).includes(`${DEFAULT_YOU_SYMBOL} = you`), false);
 			return goToNamedInteractable()(req);
 		});
-		await new Agent<Ctx>({
+		await soloCharacter<Ctx>({
 			id: 'Guard',
 			identity: { role: 'guard' },
 			goals: [{ text: 'Go to EastGate' }],
 			provider,
-			verbs: registerStockVerbs(new VerbRegistry()),
+			...stockVerbs(),
 			...perception(),
 			context: () => ({ paragraph: paragraph() }),
 			model: 'fake',
@@ -1498,7 +1512,7 @@ describe('Agent', () => {
 					marks: [{ symbol: '🎯', id: 'you', x: 1, y: 1 }],
 				}),
 			},
-		}).tick(1);
+		}).mind!.tick(1);
 	});
 
 	it('lets the host keep the last picture by returning that image', async () => {
@@ -1553,12 +1567,12 @@ describe('Agent', () => {
 			}
 			return goToNamedInteractable()(req);
 		});
-		const agent = new Agent<Ctx>({
+		const agent = soloCharacter<Ctx>({
 			id: 'Guard',
 			identity: { role: 'guard' },
 			goals: [{ text: 'Go to EastGate' }],
 			provider,
-			verbs: registerStockVerbs(new VerbRegistry()),
+			...stockVerbs(),
 			...perception(),
 			context: () => ({ paragraph: paragraph() }),
 			model: 'fake',
@@ -1570,14 +1584,14 @@ describe('Agent', () => {
 				snapshot,
 			},
 		});
-		await agent.tick(1);
+		await agent.mind!.tick(1);
 		assert.equal(snaps, 1);
 		assert.equal(paints, 1);
-		await agent.tick(30);
+		await agent.mind!.tick(30);
 		assert.equal(snaps, 2);
 		assert.equal(paints, 1);
 		loc = { x: 8, y: 0 };
-		await agent.tick(40);
+		await agent.mind!.tick(40);
 		assert.equal(snaps, 3);
 		assert.equal(paints, 2);
 		assert.equal(looks, 3);
@@ -1595,11 +1609,11 @@ describe('Agent', () => {
 				toolCalls: [],
 			};
 		});
-		const agent = new Agent<Ctx>({
+		const agent = soloCharacter<Ctx>({
 			id: 'Guard',
 			identity: { role: 'guard' },
 			provider,
-			verbs: registerStockVerbs(new VerbRegistry()),
+			...stockVerbs(),
 			...perception(),
 			context: () => ({ paragraph: paragraph() }),
 			model: 'fake',
@@ -1616,23 +1630,23 @@ describe('Agent', () => {
 		assert.equal(empty.ok, true);
 		const blank = await agent.perform({ verb: 'think', args: { about: '   ' } });
 		assert.equal(blank.ok, true);
-		assert.equal(agent.toJSON().thinkAbout, undefined);
+		assert.equal(agent.toJSON().mind!.thinkAbout, undefined);
 		const blocked = await agent.perform({ verb: 'think', args: { about: 'which key' } });
 		assert.equal(blocked.ok, false);
 		await agent.perform({ verb: 'set_goal', args: { goal: 'find the key' } });
 		const again = await agent.perform({ verb: 'think', args: { about: 'which key' } });
 		assert.equal(again.ok, true);
-		await agent.tick(1);
+		await agent.mind!.tick(1);
 		assert.ok(seen.some((s) => s.includes('You asked to think about: which key')));
-		await agent.tick(2);
+		await agent.mind!.tick(2);
 		assert.equal(seen.filter((s) => s.includes('which key')).length, 1);
 		const long = 'x'.repeat(300);
 		await agent.perform({ verb: 'set_goal', args: { goal: 'keep going' } });
 		const capped = await agent.perform({ verb: 'think', args: { about: long } });
 		assert.equal(capped.ok, true);
 		const json = agent.toJSON();
-		assert.equal(json.thinkAbout?.length, 200);
-		assert.equal(json.lastVerb, 'think');
+		assert.equal(json.mind!.thinkAbout?.length, 200);
+		assert.equal(json.mind!.lastVerb, 'think');
 	});
 
 	it('allows think after a world verb in the same arc', async () => {
@@ -1646,11 +1660,11 @@ describe('Agent', () => {
 			}),
 			toolCalls: [],
 		}));
-		const agent = new Agent<Ctx>({
+		const agent = soloCharacter<Ctx>({
 			id: 'Guard',
 			identity: { role: 'guard' },
 			provider,
-			verbs: registerStockVerbs(new VerbRegistry()),
+			...stockVerbs(),
 			...perception(),
 			context: () => ({ paragraph: paragraph() }),
 			execute: async (step) => ({ ok: true, verb: step.verb }),
@@ -1659,10 +1673,10 @@ describe('Agent', () => {
 			toolRoundCap: 0,
 			arcRetryCap: 0,
 		});
-		const arc = await agent.tick(1);
+		const arc = await agent.mind!.tick(1);
 		assert.equal(arc?.head.verb, 'go_to');
-		assert.equal(agent.toJSON().thinkAbout, 'how to open it');
-		assert.equal(agent.toJSON().lastVerb, 'think');
+		assert.equal(agent.toJSON().mind!.thinkAbout, 'how to open it');
+		assert.equal(agent.toJSON().mind!.lastVerb, 'think');
 	});
 
 	it('moves think to the end and concatenates abouts', async () => {
@@ -1682,11 +1696,11 @@ describe('Agent', () => {
 			}),
 			toolCalls: [],
 		}));
-		const agent = new Agent<Ctx>({
+		const agent = soloCharacter<Ctx>({
 			id: 'Guard',
 			identity: { role: 'guard' },
 			provider,
-			verbs: registerStockVerbs(new VerbRegistry()),
+			...stockVerbs(),
 			...perception(),
 			context: () => ({ paragraph: paragraph() }),
 			execute: async (step) => ({ ok: true, verb: step.verb }),
@@ -1695,13 +1709,13 @@ describe('Agent', () => {
 			toolRoundCap: 0,
 			arcRetryCap: 0,
 		});
-		const arc = await agent.tick(1);
+		const arc = await agent.mind!.tick(1);
 		assert.equal(arc?.head.verb, 'go_to');
 		assert.equal(arc?.then?.join, 'then');
 		assert.equal(arc?.then?.arc.head.verb, 'think');
 		assert.equal(arc?.then?.arc.head.args.about, 'the lock which key');
-		assert.equal(agent.toJSON().thinkAbout, 'the lock which key');
-		assert.equal(agent.toJSON().lastVerb, 'think');
+		assert.equal(agent.toJSON().mind!.thinkAbout, 'the lock which key');
+		assert.equal(agent.toJSON().mind!.lastVerb, 'think');
 	});
 
 	it('tick occupies a think slot; enact arms wait(until) and notes the queue', async () => {
@@ -1717,11 +1731,11 @@ describe('Agent', () => {
 			}),
 			toolCalls: [],
 		}));
-		const agent = new Agent<Ctx>({
+		const agent = soloCharacter<Ctx>({
 			id: 'Guard',
 			identity: { role: 'guard' },
 			provider,
-			verbs: registerStockVerbs(new VerbRegistry()),
+			...stockVerbs(),
 			...perception(),
 			context: () => ({ paragraph: paragraph() }),
 			execute: async (step) => ({ ok: true, verb: step.verb }),
@@ -1732,7 +1746,7 @@ describe('Agent', () => {
 			arcRetryCap: 0,
 		});
 		q.ensure('Guard', { skipHeartbeat: true });
-		const arc = await agent.tick(1);
+		const arc = await agent.mind!.tick(1);
 		assert.equal(q.inFlight, 0);
 		assert.equal(arc?.head.verb, 'go_to');
 		await agent.enact(arc!);
@@ -1755,14 +1769,14 @@ describe('Agent', () => {
 	it('thinkNow skips heartbeat and occupies the think slot', async () => {
 		const think = withPriorityQueue({ watchInterval: 100, processInterval: 0, maxParallel: 2 });
 		const q = think.queue;
-		const agent = new Agent<Ctx>({
+		const agent = soloCharacter<Ctx>({
 			id: 'Guard',
 			identity: { role: 'guard' },
 			provider: new FakeProvider(() => ({
 				content: JSON.stringify({ head: { verb: 'wait', args: {} } }),
 				toolCalls: [],
 			})),
-			verbs: registerStockVerbs(new VerbRegistry()),
+			...stockVerbs(),
 			...perception(),
 			context: () => ({ paragraph: paragraph() }),
 			execute: async (step) => ({ ok: true, verb: step.verb }),
@@ -1775,11 +1789,11 @@ describe('Agent', () => {
 		});
 		q.ensure('Guard', { skipHeartbeat: true });
 		agent.stamp(1);
-		const first = await agent.tick(1);
+		const first = await agent.mind!.tick(1);
 		assert.equal(first?.head.verb, 'wait');
-		const skipped = await agent.tick(2);
+		const skipped = await agent.mind!.tick(2);
 		assert.equal(skipped, null);
-		const forced = await agent.thinkNow({ about: 'the gate', enact: false });
+		const forced = await agent.mind!.thinkNow({ about: 'the gate', enact: false });
 		assert.equal(forced?.head.verb, 'wait');
 		assert.equal(q.inFlight, 0);
 		assert.equal(q.isThinking('Guard'), false);
@@ -1802,11 +1816,11 @@ describe('Agent', () => {
 			});
 			return { content: replies.shift() ?? '', toolCalls: [] };
 		});
-		const agent = new Agent<Ctx>({
+		const agent = soloCharacter<Ctx>({
 			id: 'Guard',
 			identity: { role: 'guard' },
 			provider,
-			verbs: registerStockVerbs(new VerbRegistry()),
+			...stockVerbs(),
 			...perception(),
 			context: () => ({ paragraph: paragraph() }),
 			execute: async (step) => {
@@ -1827,11 +1841,11 @@ describe('Agent', () => {
 			toolRoundCap: 0,
 			arcRetryCap: 0,
 		});
-		void agent.tick(1);
-		await waitUntil(() => agent.toJSON().lastVerb === 'go_to');
-		const next = await agent.tick(2);
+		void agent.mind!.tick(1);
+		await waitUntil(() => agent.toJSON().mind!.lastVerb === 'go_to');
+		const next = await agent.mind!.tick(2);
 		assert.equal(next?.head.verb, 'wait');
-		assert.equal(agent.lastArc?.head.verb, 'wait');
+		assert.equal(agent.mind!.lastArc?.head.verb, 'wait');
 		assert.equal(chats.length, 2);
 		assert.equal(chats[1]?.enableThinking, undefined);
 		assert.equal(chats[1]?.fakeThought, undefined);
@@ -1866,11 +1880,11 @@ describe('Agent', () => {
 			}
 			return { content: 'looks good', toolCalls: [] };
 		});
-		const agent = new Agent<Ctx>({
+		const agent = soloCharacter<Ctx>({
 			id: 'Guard',
 			identity: { role: 'guard' },
 			provider,
-			verbs: registerStockVerbs(new VerbRegistry()),
+			...stockVerbs(),
 			...perception(),
 			context: () => ({ paragraph: paragraph() }),
 			execute: (step) => {
@@ -1893,19 +1907,19 @@ describe('Agent', () => {
 			toolRoundCap: 0,
 			arcRetryCap: 0,
 		});
-		void agent.tick(1);
+		void agent.mind!.tick(1);
 		await waitUntil(() => gates.has('go_to'));
-		const second = agent.tick(2);
+		const second = agent.mind!.tick(2);
 		await waitUntil(() => hangThink !== undefined);
 		gates.get('go_to')!({ ok: true, verb: 'go_to' });
-		await waitUntil(() => agent.toJSON().lastVerb === 'pick_up');
+		await waitUntil(() => agent.toJSON().mind!.lastVerb === 'pick_up');
 		hangThink!({
 			content: JSON.stringify({ head: { verb: 'wander', args: {} } }),
 			toolCalls: [],
 		});
 		const arc = await second;
 		assert.equal(arc?.head.verb, 'wander');
-		assert.equal(agent.lastArc?.head.verb, 'wander');
+		assert.equal(agent.mind!.lastArc?.head.verb, 'wander');
 		assert.equal(chats.length, 3);
 		assert.equal(chats[2]?.enableThinking, undefined);
 		assert.equal(chats[2]?.fakeThought, true);
@@ -1939,11 +1953,11 @@ describe('Agent', () => {
 				toolCalls: [],
 			};
 		});
-		const agent = new Agent<Ctx>({
+		const agent = soloCharacter<Ctx>({
 			id: 'Guard',
 			identity: { role: 'guard' },
 			provider,
-			verbs: registerStockVerbs(new VerbRegistry()),
+			...stockVerbs(),
 			...perception(),
 			context: () => ({ paragraph: paragraph() }),
 			execute: (step) => {
@@ -1966,12 +1980,12 @@ describe('Agent', () => {
 			toolRoundCap: 0,
 			arcRetryCap: 0,
 		});
-		void agent.tick(1);
+		void agent.mind!.tick(1);
 		await waitUntil(() => gates.has('go_to'));
-		const second = agent.tick(2);
+		const second = agent.mind!.tick(2);
 		await waitUntil(() => hangThink !== undefined);
 		gates.get('go_to')!({ ok: true, verb: 'go_to' });
-		await waitUntil(() => agent.toJSON().lastVerb === 'pick_up');
+		await waitUntil(() => agent.toJSON().mind!.lastVerb === 'pick_up');
 		hangThink!({
 			content: JSON.stringify({ head: { verb: 'wander', args: {} } }),
 			toolCalls: [],
@@ -1984,12 +1998,12 @@ describe('Agent', () => {
 });
 
 describe('repairs, mind verbs, and names', () => {
-	function agentOf(provider:FakeProvider, extra:Partial<ConstructorParameters<typeof Agent<Ctx>>[0]> = {}):Agent<Ctx> {
-		return new Agent<Ctx>({
+	function agentOf(provider:FakeProvider, extra:Partial<SoloOptions<Ctx>> = {}):Character<Ctx> {
+		return soloCharacter<Ctx>({
 			id: 'Guard',
 			identity: { role: 'guard' },
 			provider,
-			verbs: registerStockVerbs(new VerbRegistry()),
+			...stockVerbs(),
 			...perception(),
 			context: () => ({ paragraph: paragraph() }),
 			model: 'fake',
@@ -2014,7 +2028,7 @@ describe('repairs, mind verbs, and names', () => {
 			}
 			return { content: 'go_to(EastGate)', toolCalls: [] };
 		});
-		const arc = await agentOf(provider, { repairTemperature: 0.7 }).tick(1);
+		const arc = await agentOf(provider, { repairTemperature: 0.7 }).mind!.tick(1);
 		assert.equal(arc?.head.args.target, 'EastGate');
 		assert.deepEqual(temps, [0, 0, 0.7]);
 	});
@@ -2027,39 +2041,41 @@ describe('repairs, mind verbs, and names', () => {
 		const run = (verb:string, args:Record<string, string>) => agent.perform({ verb, args });
 		assert.equal((await run('watch', { name: 'near', expr: 'isNear(me, Player)' })).ok, true);
 		assert.equal((await run('watch', { name: 'near', expr: 'isNear(me, Player, 4)' })).ok, true);
-		assert.deepEqual(agent.watches, { near: 'isNear(me, Player, 4)' });
+		assert.deepEqual(agent.persona.watches, { near: 'isNear(me, Player, 4)' });
 		assert.match((await run('watch', { name: 'hurt', expr: 'false' })).reason ?? '', /required watch/);
 		assert.equal((await run('unwatch', { name: 'near' })).ok, true);
 		assert.equal((await run('unwatch', { name: 'near' })).ok, false);
 		assert.equal((await run('focus', { expr: 'isNear(it, Player)' })).ok, true);
-		assert.deepEqual(agent.effectiveSightFocus(), ['isHurt(it)', 'isNear(it, Player)']);
+		assert.deepEqual(agent.persona.effectiveSightFocus(), ['isHurt(it)', 'isNear(it, Player)']);
 		assert.equal((await run('unfocus', { expr: 'isHurt(it)' })).ok, false);
 		assert.equal((await run('unfocus', { expr: 'isNear(it, Player)' })).ok, true);
-		agent.watchesWritable = false;
+		agent.persona.watchesWritable = false;
 		assert.match((await run('watch', { name: 'x', expr: 'true' })).reason ?? '', /not available/);
 	});
 
-	it('names bodies by the host policy, numbers duplicates, and reads events through those names', () => {
+	it('names characters by the host policy, numbers duplicates, and reads events through those names', () => {
 		const provider = new FakeProvider(() => ({ content: 'wait()', toolCalls: [] }));
 		const agent = agentOf(provider, {
 			seenAs: (target) => target.tags?.includes('enemy') ? 'EnemyKnight' : target.id,
 		});
-		assert.equal(agent.seen({ id: 'Helms', tags: ['enemy'] }), 'EnemyKnight');
-		assert.equal(agent.seen({ id: 'Stone', tags: ['enemy'] }), 'EnemyKnight2');
-		assert.equal(agent.seen({ id: 'Helms', tags: ['enemy'] }), 'EnemyKnight');
-		assert.equal(agent.seen({ id: 'Brune', tags: [] }), 'Brune');
-		assert.equal(agent.names.resolve('EnemyKnight2'), 'Stone');
-		assert.equal(agent.names.resolve('Tree'), 'Tree');
-		agent.pushEvent({ kind: 'hit', text: '{0} cleaved {1}', who: ['Brune', 'Helms'], tags: ['hit'] });
+		assert.equal(agent.mind!.seen({ id: 'Helms', tags: ['enemy'] }), 'EnemyKnight');
+		assert.equal(agent.mind!.seen({ id: 'Stone', tags: ['enemy'] }), 'EnemyKnight2');
+		assert.equal(agent.mind!.seen({ id: 'Helms', tags: ['enemy'] }), 'EnemyKnight');
+		assert.equal(agent.mind!.seen({ id: 'Brune', tags: [] }), 'Brune');
+		assert.equal(agent.persona.names.resolve('EnemyKnight2'), 'Stone');
+		assert.equal(agent.persona.names.resolve('Tree'), 'Tree');
+		agent.mind!.pushEvent({ kind: 'hit', text: '{0} cleaved {1}', who: ['Brune', 'Helms'], tags: ['hit'] });
+		assert.equal(agent.mind!.events()[0]?.text, 'Brune cleaved EnemyKnight');
+		assert.deepEqual(agent.mind!.events()[0]?.tags, ['hit', 'Brune', 'EnemyKnight']);
 		const json = agent.toJSON();
-		assert.equal(json.events?.[0]?.text, 'Brune cleaved EnemyKnight');
-		assert.deepEqual(json.events?.[0]?.tags, ['hit', 'Brune', 'EnemyKnight']);
-		const restored = Agent.fromJSON(json, {
+		assert.deepEqual(json.mind!.events?.[0]?.who, ['Brune', 'Helms']);
+		const restored = restore(json, {
 			provider,
-			verbs: registerStockVerbs(new VerbRegistry()),
+			...stockVerbs(),
 			context: () => ({ paragraph: paragraph() }),
 		});
-		assert.equal(restored.names.resolve('EnemyKnight2'), 'Stone');
-		assert.equal(restored.nameOf('Helms'), 'EnemyKnight');
+		assert.equal(restored.persona.names.resolve('EnemyKnight2'), 'Stone');
+		assert.equal(restored.mind!.nameOf('Helms'), 'EnemyKnight');
+		assert.equal(restored.mind!.events()[0]?.text, 'Brune cleaved EnemyKnight');
 	});
 });

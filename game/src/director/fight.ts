@@ -1,7 +1,7 @@
-import { isCrowdConductor, shortTag, type SeenName } from 'arc-director';
+import { shortTag, type Collective, type SeenName } from 'arc-director';
 import type { GameObject } from '../engine/GameObject';
-import type { GameHost, AgentCtx } from './adapter';
-import { bodyName, findBody, isLiving } from './names';
+import type { GameHost, CharacterCtx } from './adapter';
+import { idOf, findObject, isLiving } from './names';
 
 export type FightRole = 'Witch' | 'Knight' | 'Archer' | 'Blade' | 'Healer';
 
@@ -83,7 +83,7 @@ function attackLine(verb:string, role:FightRole):string {
 	return `${role} ${FIGHT_HP[role]} hp, ${verb} ${spec.damage} dmg, ${spec.range}m, every ${every}s (~${dpsOf(spec)} dps)`;
 }
 
-/** Standing rules sheet for fight conductors. Numbers match ATTACKS / HEAL / FIGHT_WALK. */
+/** Standing rules sheet for the parties' minds. Numbers match ATTACKS / HEAL / FIGHT_WALK. */
 export function formatFightRules():string {
 	const healEvery = hitCycle(HEAL.castTime, HEAL.cooldown).toFixed(0);
 	const cover = Math.round(COVER_SOFTEN * 100);
@@ -100,62 +100,31 @@ export function formatFightRules():string {
 	].join(' ');
 }
 
-export function fightCompany(host:GameHost, actor:GameObject) {
-	if (!isLiving(actor)) {
-		return undefined;
-	}
-	const id = bodyName(actor);
-	for (const agent of host.arc?.agents() ?? []) {
-		if (!isCrowdConductor(agent)) {
-			continue;
-		}
-		if (agent.id === id || agent.crowd.has(id)) {
-			return agent;
-		}
-	}
-	return undefined;
+/** The party a living character fights for: its collective. */
+export function fightParty(host:GameHost, character:GameObject):Collective<CharacterCtx> | undefined {
+	return isLiving(character) ? host.arc?.character(idOf(character))?.collective ?? undefined : undefined;
 }
 
-export function fightRole(host:GameHost, actor:GameObject):FightRole | undefined {
-	if (!isLiving(actor)) {
-		return undefined;
-	}
-	const id = bodyName(actor);
-	for (const agent of host.arc?.agents() ?? []) {
-		if (!isCrowdConductor(agent)) {
-			continue;
-		}
-		const unit = agent.crowd.get(id);
-		if (unit) {
-			const tags = unit.tags.map((t) => shortTag(agent.id, t));
-			for (const role of FIGHT_ROLES) {
-				if (tags.includes(role)) {
-					return role;
-				}
-			}
-		}
-		if (agent.id === id || agent.commanderID === id) {
-			return 'Healer';
-		}
-	}
-	return undefined;
+export function fightRole(host:GameHost, character:GameObject):FightRole | undefined {
+	const tags = fightTags(host, character);
+	return FIGHT_ROLES.find((role) => tags.includes(role));
 }
 
-export function agilityOf(host:GameHost, actor:GameObject):number {
-	const role = fightRole(host, actor);
+export function agilityOf(host:GameHost, character:GameObject):number {
+	const role = fightRole(host, character);
 	return role ? ROLE_AGILITY[role] : 0.1;
 }
 
-export function isRivalBody(host:GameHost, actor:GameObject, target:GameObject):boolean {
-	const mine = fightCompany(host, actor);
-	const theirs = fightCompany(host, target);
+export function isRival(host:GameHost, character:GameObject, target:GameObject):boolean {
+	const mine = fightParty(host, character);
+	const theirs = fightParty(host, target);
 	if (mine && theirs && mine !== theirs) {
 		return true;
 	}
 	if (!mine || target.id !== 'Player') {
 		return false;
 	}
-	for (const unit of mine.crowd.list()) {
+	for (const unit of mine.characters) {
 		if (host.world.playerHits.has(unit.id)) {
 			return true;
 		}
@@ -164,7 +133,7 @@ export function isRivalBody(host:GameHost, actor:GameObject, target:GameObject):
 }
 
 /** Naming policy: a rival is `Enemy<Role>`, never its given name. Reads only the tags from {@link fightExprTags}. */
-export const seenInFight:SeenName<AgentCtx> = (observer, target) => {
+export const seenInFight:SeenName<CharacterCtx> = (observer, target) => {
 	const enemy = target.tags?.includes('enemy');
 	const role = enemy && FIGHT_ROLES.find((r) => target.tags?.includes(r));
 	if (role) {
@@ -175,26 +144,25 @@ export const seenInFight:SeenName<AgentCtx> = (observer, target) => {
 
 /** What `observer`'s mind calls `target`, for text the host writes itself. */
 export function seenName(host:GameHost, observer:GameObject, target:GameObject):string {
-	const id = bodyName(target);
-	const mind = fightCompany(host, observer);
-	return mind && host.arc
-		? host.arc.seen(mind.id, { id, tags: fightExprTags(host, observer, target) })
+	const id = idOf(target);
+	const party = fightParty(host, observer);
+	return party && host.arc
+		? host.arc.seen(party.id, { id, tags: fightExprTags(host, observer, target) })
 		: id;
 }
 
-export function fightTags(host:GameHost, actor:GameObject):string[] {
-	const company = fightCompany(host, actor);
-	if (!company) {
+/** A character's tags as its party reads them. A commander with no role tag fights as a Healer captain. */
+export function fightTags(host:GameHost, character:GameObject):string[] {
+	const party = fightParty(host, character);
+	const member = party?.character(idOf(character));
+	if (!party || !member) {
 		return [];
 	}
-	const unit = company.crowd.get(bodyName(actor));
-	if (unit) {
-		return unit.tags.map((t) => shortTag(company.id, t));
-	}
-	if (company.id === bodyName(actor) || company.commanderID === bodyName(actor)) {
+	const tags = member.tags.map((t) => shortTag(party.id, t));
+	if (member === party.commander && !FIGHT_ROLES.some((role) => tags.includes(role))) {
 		return ['Captain', 'Healer'];
 	}
-	return [];
+	return tags;
 }
 
 /** Closest living rival to `from`. */
@@ -204,13 +172,13 @@ export function nearestRival(host:GameHost, from:GameObject):GameObject | undefi
 
 function nearestWhere(
 	from:GameObject,
-	bodies:Iterable<GameObject>,
+	characters:Iterable<GameObject>,
 	ok:(go:GameObject)=>boolean = () => true,
 ):GameObject | undefined {
 	const here = from.transform.position;
 	let best:GameObject | undefined;
 	let bestDist = Infinity;
-	for (const go of bodies) {
+	for (const go of characters) {
 		if (go === from || !isLiving(go) || !ok(go)) {
 			continue;
 		}
@@ -224,14 +192,14 @@ function nearestWhere(
 	return best;
 }
 
-function companyBodies(host:GameHost, actor:GameObject):GameObject[] {
-	const mine = fightCompany(host, actor);
+function partyOf(host:GameHost, character:GameObject):GameObject[] {
+	const mine = fightParty(host, character);
 	if (!mine) {
 		return [];
 	}
 	const out:GameObject[] = [];
-	for (const unit of mine.crowd.list()) {
-		const go = findBody(host.world, unit.id);
+	for (const unit of mine.characters) {
+		const go = findObject(host.world, unit.id);
 		if (go) {
 			out.push(go);
 		}
@@ -258,9 +226,9 @@ export function isBackRole(role:FightRole | undefined):boolean {
 	return !!role && (BACK_ROLES as readonly string[]).includes(role);
 }
 
-function livingOfRoles(host:GameHost, actor:GameObject, roles:readonly FightRole[]):GameObject[] {
+function livingOfRoles(host:GameHost, character:GameObject, roles:readonly FightRole[]):GameObject[] {
 	const out:GameObject[] = [];
-	for (const go of companyBodies(host, actor)) {
+	for (const go of partyOf(host, character)) {
 		if (!isLiving(go)) {
 			continue;
 		}
@@ -277,19 +245,19 @@ function livingOfRoles(host:GameHost, actor:GameObject, roles:readonly FightRole
 		if (ia !== ib) {
 			return ia - ib;
 		}
-		return bodyName(a).localeCompare(bodyName(b));
+		return idOf(a).localeCompare(idOf(b));
 	});
 	return out;
 }
 
-function centroidOf(bodies:GameObject[]):{ x:number; z:number } {
+function centroidOf(characters:GameObject[]):{ x:number; z:number } {
 	let x = 0;
 	let z = 0;
-	for (const go of bodies) {
+	for (const go of characters) {
 		x += go.transform.position.x;
 		z += go.transform.position.z;
 	}
-	return { x: x / bodies.length, z: z / bodies.length };
+	return { x: x / characters.length, z: z / characters.length };
 }
 
 function slotOnLine(
@@ -327,18 +295,18 @@ function awayFrom(
 	return { x: foe.x + dx * s, z: foe.z + dz * s };
 }
 
-/** Push a backline slot off the actor's nearest rival, and off a path through that rival. */
+/** Push a backline slot off the character's nearest rival, and off a path through that rival. */
 function keepClearOfRival(
 	host:GameHost,
-	actor:GameObject,
+	character:GameObject,
 	slot:{ x:number; z:number },
 ):{ x:number; z:number } {
-	const threat = nearestRival(host, actor);
+	const threat = nearestRival(host, character);
 	if (!threat) {
 		return slot;
 	}
 	const foe = threat.transform.position;
-	const here = actor.transform.position;
+	const here = character.transform.position;
 	const ax = here.x - foe.x;
 	const az = here.z - foe.z;
 	const sx = slot.x - foe.x;
@@ -351,28 +319,28 @@ function keepClearOfRival(
 	return awayFrom(from, foe, BACK_STANDOFF, here);
 }
 
-/** Rank slot for this body: melee line on the rival, backline behind that line. */
-export function rankSlot(host:GameHost, actor:GameObject):{ x:number; z:number } | undefined {
-	const role = fightRole(host, actor);
+/** Rank slot for this character: melee line on the rival, backline behind that line. */
+export function rankSlot(host:GameHost, character:GameObject):{ x:number; z:number } | undefined {
+	const role = fightRole(host, character);
 	if (!role) {
 		return undefined;
 	}
-	const front = livingOfRoles(host, actor, FRONT_ROLES);
-	const back = livingOfRoles(host, actor, BACK_ROLES);
+	const front = livingOfRoles(host, character, FRONT_ROLES);
+	const back = livingOfRoles(host, character, BACK_ROLES);
 	const origin = front.length > 0 ? centroidOf(front) : undefined;
-	const probe = front[0] ?? actor;
+	const probe = front[0] ?? character;
 	const foe = nearestRival(host, probe);
 	if (!foe) {
 		return undefined;
 	}
-	const from = origin ?? actor.transform.position;
+	const from = origin ?? character.transform.position;
 	const dx = foe.transform.position.x - from.x;
 	const dz = foe.transform.position.z - from.z;
 	const len = Math.hypot(dx, dz);
 	if (len < 0.15) {
 		if (isBackRole(role)) {
-			const here = actor.transform.position;
-			return keepClearOfRival(host, actor, { x: here.x, z: here.z });
+			const here = character.transform.position;
+			return keepClearOfRival(host, character, { x: here.x, z: here.z });
 		}
 		return undefined;
 	}
@@ -381,7 +349,7 @@ export function rankSlot(host:GameHost, actor:GameObject):{ x:number; z:number }
 	const px = -fz;
 	const pz = fx;
 	if (isFrontRole(role) && front.length > 0) {
-		const i = front.findIndex((go) => bodyName(go) === bodyName(actor));
+		const i = front.findIndex((go) => idOf(go) === idOf(character));
 		if (i < 0) {
 			return undefined;
 		}
@@ -394,7 +362,7 @@ export function rankSlot(host:GameHost, actor:GameObject):{ x:number; z:number }
 	if (isBackRole(role)) {
 		let slot:{ x:number; z:number } | undefined;
 		if (origin) {
-			const i = back.findIndex((go) => bodyName(go) === bodyName(actor));
+			const i = back.findIndex((go) => idOf(go) === idOf(character));
 			if (i >= 0) {
 				const behind = {
 					x: origin.x - fx * RANK_GAP,
@@ -403,20 +371,20 @@ export function rankSlot(host:GameHost, actor:GameObject):{ x:number; z:number }
 				slot = slotOnLine(behind, px, pz, i, back.length);
 			}
 		}
-		const here = actor.transform.position;
-		return keepClearOfRival(host, actor, slot ?? { x: here.x, z: here.z });
+		const here = character.transform.position;
+		return keepClearOfRival(host, character, slot ?? { x: here.x, z: here.z });
 	}
 	return undefined;
 }
 
-/** Expr tags so `others.filter("enemy")` / `u is "Healer"` work on living fight bodies. */
+/** Expr tags so `others.filter("enemy")` / `u is "Healer"` work on living fight characters. */
 export function fightExprTags(host:GameHost, observer:GameObject, go:GameObject):string[] {
 	const tags:string[] = [];
 	const role = fightRole(host, go);
 	if (role) {
 		tags.push(role);
 	}
-	if (isRivalBody(host, observer, go)) {
+	if (isRival(host, observer, go)) {
 		tags.push('enemy');
 	}
 	return tags;
@@ -430,9 +398,9 @@ export function fightProximityNote(host:GameHost, observer:GameObject, go:GameOb
 		return undefined;
 	}
 	const here = go.transform.position;
-	const pool = isRivalBody(host, observer, go)
-		? companyBodies(host, observer)
-		: rivalBodies(host, observer);
+	const pool = isRival(host, observer, go)
+		? partyOf(host, observer)
+		: rivalsOf(host, observer);
 	let best:{ name:string; dist:number } | undefined;
 	for (const other of pool) {
 		if (other === go || !isLiving(other)) {
@@ -453,25 +421,25 @@ export function fightProximityNote(host:GameHost, observer:GameObject, go:GameOb
 	return `${best.name} ${Math.max(1, Math.round(best.dist))}m away`;
 }
 
-function rivalBodies(host:GameHost, actor:GameObject):GameObject[] {
-	const mine = fightCompany(host, actor);
+function rivalsOf(host:GameHost, character:GameObject):GameObject[] {
+	const mine = fightParty(host, character);
 	if (!mine) {
 		return [];
 	}
 	const out:GameObject[] = [];
-	for (const agent of host.arc?.agents() ?? []) {
-		if (!isCrowdConductor(agent) || agent === mine) {
+	for (const party of host.arc?.collectives() ?? []) {
+		if (party === mine) {
 			continue;
 		}
-		for (const unit of agent.crowd.list()) {
-			const go = findBody(host.world, unit.id);
+		for (const unit of party.characters) {
+			const go = findObject(host.world, unit.id);
 			if (go) {
 				out.push(go);
 			}
 		}
 	}
 	const player = host.world.findByID('Player');
-	if (player && isRivalBody(host, actor, player)) {
+	if (player && isRival(host, character, player)) {
 		out.push(player);
 	}
 	return out;
@@ -482,14 +450,14 @@ function nearestRivalWhere(
 	from:GameObject,
 	ok:(go:GameObject)=>boolean = () => true,
 ):GameObject | undefined {
-	return nearestWhere(from, rivalBodies(host, from), ok);
+	return nearestWhere(from, rivalsOf(host, from), ok);
 }
 
-/** Closest living company member matching `ok`. */
+/** Closest living party member matching `ok`. */
 export function nearestAlly(
 	host:GameHost,
 	from:GameObject,
 	ok:(go:GameObject)=>boolean = () => true,
 ):GameObject | undefined {
-	return nearestWhere(from, companyBodies(host, from), ok);
+	return nearestWhere(from, partyOf(host, from), ok);
 }

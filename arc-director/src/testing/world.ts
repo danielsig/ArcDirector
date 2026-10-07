@@ -8,6 +8,6 @@ export const OPEN_WORLD:HostWorld<string> = {
 	steerToward: () => false,
 	moveItem: () => ({ ok: true }),
 	useItem: () => ({ ok: true }),
-	getDescription: (actor, target) => target,
+	getDescription: (character, target) => target,
 	trade: () => ({ ok: true }),
 };

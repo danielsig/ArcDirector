@@ -11,11 +11,11 @@ import { market_1_0 } from './chunks/market_1_0';
 import { ruins_0_0 } from './chunks/ruins_0_0';
 import { ruins_1_0 } from './chunks/ruins_1_0';
 import { type MarketNPCKind, type HumanKind } from '../engine/components';
-import type { GameHost, AgentCtx } from '../npc/adapter';
-import { createDirector as createAbbeyDirector } from '../npc/scenes/abbey';
-import { createDirector as createGlenDirector } from '../npc/scenes/glen';
-import { createDirector as createMarketDirector } from '../npc/scenes/market';
-import { createDirector as createRuinsDirector } from '../npc/scenes/ruins';
+import type { GameHost, CharacterCtx } from '../director/adapter';
+import { createDirector as createAbbeyDirector } from '../director/scenes/abbey';
+import { createDirector as createGlenDirector } from '../director/scenes/glen';
+import { createDirector as createMarketDirector } from '../director/scenes/market';
+import { createDirector as createRuinsDirector } from '../director/scenes/ruins';
 
 export type NPCSpawnDef = {
 	id:string;
@@ -45,12 +45,12 @@ export type SceneDef = {
 	npcs:NPCSpawnDef[];
 	ambient:string;
 	message:string;
-	/** One paragraph: what this scene is for, and how the agents usually get there. */
+	/** One paragraph: what this scene is for, and how the characters usually get there. */
 	brief:string;
 	playerWallet?:number;
 	/** Player stays centered and the chunk-sized map scrolls. `false` = current chunk, moving arrow. */
 	minimapFollow?:boolean;
-	createDirector:(host:GameHost)=>ArcDirector<AgentCtx>;
+	createDirector:(host:GameHost)=>ArcDirector<CharacterCtx>;
 };
 
 export const ABBEY_VAULT:SceneDef = {
@@ -309,7 +309,7 @@ export const RUINS:SceneDef = {
 		{ id: 'Ash', meshID: 'human_scout', chunkID: 'ruins_1_0', localX: 10, localZ: 12, yaw: Math.PI / 2, pack: true, hp: 12 },
 		{ id: 'Flint', meshID: 'human_mannequin', chunkID: 'ruins_1_0', localX: 5, localZ: 10, yaw: Math.PI / 2, pack: true, packLoot: SWORD, hp: 20 },
 	],
-	ambient: 'Two companies fight to the death in a ruined forest colonnade. No quarter.',
+	ambient: 'Two parties fight to the death in a ruined forest colonnade. No quarter.',
 	message: 'E pick up / unlock   F use   X swap hands   Enter talk   /give   Tab chat',
 	brief: `Dawn and Dusk are the two captains. Each leads a squad of five: a knight, a swordsman, an archer, a witch, and the captain, who also heals. Both sides are trying to kill the other. Nobody has a scripted attack.
 

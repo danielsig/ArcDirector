@@ -7,7 +7,7 @@ import {
 	type Step,
 	type StepArg,
 } from './types.js';
-import type { VerbRegistry } from './stock-verbs.js';
+import { argBase, type VerbRegistry } from './stock-verbs.js';
 
 const COORD_KEYS = new Set(['x', 'z', 'y', 'xz', 'xy', 'pos', 'position']);
 
@@ -36,9 +36,6 @@ function isStepArg(v:unknown):v is StepArg {
 	return isArc(v);
 }
 
-function argBase(kind:string):string {
-	return kind.endsWith('?') ? kind.slice(0, -1) : kind;
-}
 
 function rejectMigrationArgs(verb:string, args:Record<string, unknown>):void {
 	const who = typeof args.who === 'string' ? args.who.trim() : '';
@@ -83,7 +80,7 @@ export function validateStep(step:Step, registry:VerbRegistry, inIssue = false):
 		if (base === 'string[]' && !(Array.isArray(value) && value.every((x) => typeof x === 'string'))) {
 			throw new ArcError(`verb '${step.verb}' arg '${key}' must be string[]`);
 		}
-		if ((base === 'id' || base === 'string' || base === 'text' || base === 'watch') && typeof value !== 'string') {
+		if (['id', 'string', 'text', 'watch', 'expr', 'law'].includes(base) && typeof value !== 'string') {
 			throw new ArcError(`verb '${step.verb}' arg '${key}' must be a string`);
 		}
 		if (base === 'arc') {
@@ -132,7 +129,7 @@ export function asStep(raw:unknown, registry:VerbRegistry):Step {
 				continue;
 			}
 			const kind = spec?.args[k];
-			const base = kind ? argBase(kind) : '';
+			const base = argBase(kind);
 			if (base === 'arc') {
 				args[k] = asArc(v, registry.nested());
 				continue;

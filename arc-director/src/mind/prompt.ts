@@ -4,8 +4,8 @@ import type { ArcResult } from '../arc/types.js';
 import type { MemoryRecord } from '../memory/store.js';
 import { GREP_WORLD_ENCYCLOPEDIA } from './encyclopedia.js';
 import { DEFAULT_YOU_SYMBOL } from './map.js';
-import type { AgentIdentity, Goal, Watches } from './types.js';
-import { extrasWithoutPins, formatWatches, watchCount, watchNames } from './watch.js';
+import type { Identity, Goal, Watches } from '../character/types.js';
+import { extrasWithoutPins, formatWatches, watchCount, watchNames } from '../character/watch.js';
 
 /** Standing think line per reasoning state. `on` defaults to {@link DEFAULT_THINK_INSTRUCTIONS}, `off` to nothing. */
 export type ThinkInstructions = { on?:string; off?:string };
@@ -17,7 +17,7 @@ export type StablePrefixOpts = {
 	/** `observe` is offered as a tool this think. */
 	canObserve?:boolean;
 	canSeeMap?:boolean;
-	/** Pictogram for this agent's own location. Used in the see_map hint. */
+	/** Pictogram for the mind's own location. Used in the see_map hint. */
 	youSymbol?:string;
 	/** Offer `grep_world_encyclopedia` this think. */
 	canGrepEncyclopedia?:boolean;
@@ -26,7 +26,7 @@ export type StablePrefixOpts = {
 	thinkInstructions?:ThinkInstructions;
 	/** Whether the model reasons before it answers. Picks the think line. Default true. */
 	thinking?:boolean;
-	/** Replaces {@link DEFAULT_VERB_INSTRUCTIONS} and, for a Crowd, {@link DEFAULT_CROWD_INSTRUCTIONS}. */
+	/** Replaces {@link DEFAULT_VERB_INSTRUCTIONS} and, for a collective, {@link DEFAULT_COLLECTIVE_INSTRUCTIONS}. */
 	verbInstructions?:string;
 	/** Arc that replaces the closing Example. */
 	arcExample?:string;
@@ -43,7 +43,7 @@ export type StablePrefixOpts = {
  */
 export function stablePrefix(
 	id:string,
-	identity:AgentIdentity,
+	identity:Identity,
 	verbs:VerbRegistry,
 	opts:StablePrefixOpts = {},
 ):string {
@@ -79,7 +79,7 @@ export function stablePrefix(
 /** `edit` names the standing-watch verbs. `observe` names the tool, only when it is offered. */
 export function watchCheatSheet(edit:boolean, observe:boolean):string {
 	return [
-		'Watch language (not JS). Bindings: me, others, items, units (this Crowd roster, not others), landmarks, events, prev (last think: prev.me, prev.secondsAgo, prev.verbs).',
+		'Watch language (not JS). Bindings: me, others, items, units (your roster, not others), landmarks, events, prev (last think: prev.me, prev.secondsAgo, prev.verbs).',
 		edit && 'Standing: watch(name, expr) / unwatch(name).',
 		observe && 'One-shot this think: the observe tool.',
 		WATCH_RELATIONS,
@@ -124,15 +124,15 @@ export const DEFAULT_THINK_INSTRUCTIONS = 'Think in 5 sentences: what you want, 
 /** Standing verb-chain line when the host does not call `withVerbInstructions`. */
 export const DEFAULT_VERB_INSTRUCTIONS = 'A think is expensive. Chain every next verb you already know, as far as you can see this think — not only the first step of an order.';
 
-/** Added to the default verb line for a Crowd that can issue looping programs. */
-export const DEFAULT_CROWD_INSTRUCTIONS = 'Issue looping programs with a bunch of when(watch, arc) reactions so they keep working without another think. A later think only edits — replace one program or add a law, do not rewrite the whole roster.';
+/** Added to the default verb line for a collective that can issue looping programs. */
+export const DEFAULT_COLLECTIVE_INSTRUCTIONS = 'Issue looping programs with a bunch of when(watch, arc) reactions so they keep working without another think. A later think only edits — replace one program or add a law, do not rewrite the whole roster.';
 
 function defaultVerbInstructions(verbs:VerbRegistry):string {
-	const crowd = verbs.has('issue') && (verbs.has('loop') || verbs.has('when'));
-	return crowd ? `${DEFAULT_VERB_INSTRUCTIONS} ${DEFAULT_CROWD_INSTRUCTIONS}` : DEFAULT_VERB_INSTRUCTIONS;
+	const issues = verbs.has('issue') && (verbs.has('loop') || verbs.has('when'));
+	return issues ? `${DEFAULT_VERB_INSTRUCTIONS} ${DEFAULT_COLLECTIVE_INSTRUCTIONS}` : DEFAULT_VERB_INSTRUCTIONS;
 }
 
-/** Crowd `issue` examples are Arc text (`issue(...) ; issue(...)`). Ask for that, not JSON. */
+/** A collective's `issue` examples are Arc text (`issue(...) ; issue(...)`). Ask for that, not JSON. */
 export function shouldEmitArcText(verbs:VerbRegistry, arcText = false):boolean {
 	return arcText || verbs.has('issue');
 }
@@ -168,7 +168,7 @@ function arcInstructions(
 		has('wander') && 'wander(until) is one step, not the rest of the think.',
 		'If the order says then, after, or and then, put those steps in one chain this think.',
 		spokenGo(verbs, toolNames.includes('see_map')),
-		crowdInstructions(verbs),
+		collectiveInstructions(verbs),
 		has('use') && 'use(item=TheItem, target=TheThing) on the name it operates.',
 		lines.verbs,
 		arcText
@@ -186,7 +186,7 @@ function wanderExample(arcText:boolean):string {
 		: 'Example: {"head":{"verb":"wander","args":{"until":"some(items.filter(\\"Lantern\\").nearby())"}}}';
 }
 
-/** Tools that answer what the agent does not know, as opposed to checking what it already sees. */
+/** Tools that answer what the mind does not know, as opposed to checking what it already sees. */
 export const LOOKUP_TOOLS:readonly string[] = ['recall', GREP_WORLD_ENCYCLOPEDIA];
 
 /**
@@ -214,8 +214,8 @@ function emitSentence(arcText:boolean, tools:boolean):string {
 }
 
 /** Last in the prefix so a copied Example is valid Arc, with no trailing sentence. */
-function arcExample(arcText:boolean, chain:boolean, crowd:boolean):string | false {
-	if (crowd && arcText) {
+function arcExample(arcText:boolean, chain:boolean, issues:boolean):string | false {
+	if (issues && arcText) {
 		return 'Example: issue(who=units.filter("Guard"), arc=go_to(Keep)) ; issue(who=units.filter("Scout"), arc=go_to(EastGate))';
 	}
 	if (chain) {
@@ -280,7 +280,7 @@ function spokenGo(verbs:VerbRegistry, map = false):string {
 	return `${parts.join(' ')} `;
 }
 
-function crowdInstructions(verbs:VerbRegistry):string {
+function collectiveInstructions(verbs:VerbRegistry):string {
 	const parts:string[] = [];
 	if (verbs.has('when')) {
 		parts.push(
@@ -403,7 +403,7 @@ export function volatileBlock(opts:{
 		parts.push(`Current sightFocus:\n${opts.sightFocus.map((e) => `- ${e}`).join('\n')}`);
 	}
 	if (opts.sightFocusWritable) {
-		parts.push('focus(expr) lists matching bodies first in sight, as focus(isHurt(it)); unfocus(expr) drops it. Required stay.');
+		parts.push('focus(expr) lists what matches first in sight, as focus(isHurt(it)); unfocus(expr) drops it. Required stay.');
 	}
 	if (opts.scold) {
 		parts.push(`[watch: ${opts.scold}]`);
@@ -418,7 +418,7 @@ export function shortTermBlock(summary:string, recent:string[]):string {
 		return '';
 	}
 	const lines = [
-		// Heard claims are not facts: unchecked, agents adopt and repeat each other's inventions until they all agree on one.
+		// Heard claims are not facts: unchecked, minds adopt and repeat each other's inventions until they all agree on one.
 		'Short-term memory (later line wins. Honor orders even if older role text disagrees. What others say is their claim, not a fact: check it before you act on it or repeat it. Never say again what you already said):',
 	];
 	if (earlier) {

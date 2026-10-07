@@ -7,12 +7,12 @@ import type { HostWorld, Vec } from './types.js';
 import { add, centroid, dot, groundAxes, sub, unit } from './vec.js';
 
 /** What the stock world verbs need besides the call itself. */
-export type WorldVerbDeps<TAgentCtx> = {
+export type WorldVerbDeps<TCtx> = {
 	world:HostWorld<unknown>;
 	mover:Mover;
 	now:()=>number;
-	/** Ids the acting body sees right now. */
-	seen:(call:VerbCall<TAgentCtx>)=>string[];
+	/** Ids the acting character sees right now. */
+	seen:(call:VerbCall<TCtx>)=>string[];
 };
 
 type WorldPart = Exclude<keyof HostWorld<unknown>, 'find' | 'getPose' | 'getReach' | 'up'>;
@@ -42,11 +42,11 @@ export function missingParts(verb:string, world:HostWorld<unknown> | undefined):
 	return world ? parts.filter((part) => !world[part]) : parts;
 }
 
-/** The acting body and the thing a verb is about. */
-type Found = { actor:unknown; target:unknown };
+/** The acting character and the thing a verb is about. */
+type Found = { character:unknown; target:unknown };
 
-type Call<TAgentCtx, TVerb extends StockVerbName> = VerbCall<TAgentCtx, VerbArgs<StockVerbArgs<TVerb>>>;
-type Handlers<TAgentCtx> = { [TVerb in StockVerbName]?:VerbHandler<TAgentCtx, VerbArgs<StockVerbArgs<TVerb>>> };
+type Call<TCtx, TVerb extends StockVerbName> = VerbCall<TCtx, VerbArgs<StockVerbArgs<TVerb>>>;
+type Handlers<TCtx> = { [TVerb in StockVerbName]?:VerbHandler<TCtx, VerbArgs<StockVerbArgs<TVerb>>> };
 
 const SAW_CAP = 12;
 const WANDER_SPREAD = 600;
@@ -55,26 +55,26 @@ const WANDER_MISSES = 3;
 const FORMATION_PACES = 2;
 
 /** Stock handlers for every world verb `deps.world` has the parts for. */
-export function worldVerbs<TAgentCtx>(deps:WorldVerbDeps<TAgentCtx>):Handlers<TAgentCtx> {
+export function worldVerbs<TCtx>(deps:WorldVerbDeps<TCtx>):Handlers<TCtx> {
 	const { world, mover } = deps;
-	const nameOf = (call:VerbCall<TAgentCtx>, id:string):string => call.actor.nameOf(id);
+	const nameOf = (call:VerbCall<TCtx>, id:string):string => call.character.mind?.nameOf(id) ?? id;
 	const fail = (verb:string, reason:string):ArcResult => ({ ok: false, verb, reason });
 	const outcome = (verb:string, done:{ ok:boolean; reason?:string }):ArcResult => ({ ok: done.ok, verb, reason: done.reason });
-	const formation:VerbHandler<TAgentCtx> = (call) => formationVerb(call, world, mover);
-	/** The acting body and the thing `id` names (when given), or why the verb fails. `what` names it in the failure. */
-	const resolve = (call:VerbCall<TAgentCtx>, id?:string, what = 'thing'):Found | ArcResult => {
-		const actor = world.find(call.actorID);
-		if (actor === undefined) {
-			return fail(call.verb, 'no body');
+	const formation:VerbHandler<TCtx> = (call) => formationVerb(call, world, mover);
+	/** The acting character and the thing `id` names (when given), or why the verb fails. `what` names it in the failure. */
+	const resolve = (call:VerbCall<TCtx>, id?:string, what = 'thing'):Found | ArcResult => {
+		const character = world.find(call.character.id);
+		if (character === undefined) {
+			return fail(call.verb, 'not in this scene');
 		}
 		const target = id ? world.find(id) : undefined;
 		if (id && target === undefined) {
 			return fail(call.verb, `no such ${what} ${nameOf(call, id)}`);
 		}
-		return { actor, target };
+		return { character, target };
 	};
 	const failed = (found:Found | ArcResult):found is ArcResult => 'ok' in found;
-	const trade = async (call:VerbCall<TAgentCtx>, side:'buy' | 'sell', other:string, item:string, quantity?:number, price?:number):Promise<ArcResult> => {
+	const trade = async (call:VerbCall<TCtx>, side:'buy' | 'sell', other:string, item:string, quantity?:number, price?:number):Promise<ArcResult> => {
 		const found = resolve(call, other, 'person');
 		if (failed(found)) {
 			return found;
@@ -83,35 +83,35 @@ export function worldVerbs<TAgentCtx>(deps:WorldVerbDeps<TAgentCtx>):Handlers<TA
 		if (!near.ok) {
 			return near;
 		}
-		return outcome(side, world.trade!({ actor: found.actor, side, other: found.target, item, quantity: countOf(quantity), price }));
+		return outcome(side, world.trade!({ character: found.character, side, other: found.target, item, quantity: countOf(quantity), price }));
 	};
 	return {
-		go_to: (call:Call<TAgentCtx, 'go_to'>) => {
+		go_to: (call:Call<TCtx, 'go_to'>) => {
 			const found = resolve(call, call.args.target, 'place');
 			return failed(found) ? found : call.goTo(call.args.target);
 		},
-		follow: (call:Call<TAgentCtx, 'follow'>) => {
+		follow: (call:Call<TCtx, 'follow'>) => {
 			const found = resolve(call, call.args.target, 'person');
-			return failed(found) ? found : mover.go(call.actorID, { target: call.args.target }, 'follow', { sticky: true });
+			return failed(found) ? found : mover.go(call.character.id, { target: call.args.target }, 'follow', { sticky: true });
 		},
-		wander: (call:Call<TAgentCtx, 'wander'>) => wander(call, deps),
+		wander: (call:Call<TCtx, 'wander'>) => wander(call, deps),
 		spread: formation,
 		circle: formation,
 		hold_line: formation,
-		pick_up: async (call:Call<TAgentCtx, 'pick_up'>) => {
+		pick_up: async (call:Call<TCtx, 'pick_up'>) => {
 			const { item } = call.args;
 			const found = resolve(call, item, 'item');
 			if (failed(found)) {
 				return found;
 			}
 			const near = await call.goTo(item);
-			return near.ok ? outcome('pick_up', world.moveItem!({ actor: found.actor, item, to: found.actor })) : near;
+			return near.ok ? outcome('pick_up', world.moveItem!({ character: found.character, item, to: found.character })) : near;
 		},
-		drop: (call:Call<TAgentCtx, 'drop'>) => {
+		drop: (call:Call<TCtx, 'drop'>) => {
 			const found = resolve(call);
-			return failed(found) ? found : outcome('drop', world.moveItem!({ actor: found.actor, item: call.args.item }));
+			return failed(found) ? found : outcome('drop', world.moveItem!({ character: found.character, item: call.args.item }));
 		},
-		give: async (call:Call<TAgentCtx, 'give'>) => {
+		give: async (call:Call<TCtx, 'give'>) => {
 			const { item, to } = call.args;
 			const found = resolve(call, to, 'person');
 			if (failed(found)) {
@@ -121,10 +121,10 @@ export function worldVerbs<TAgentCtx>(deps:WorldVerbDeps<TAgentCtx>):Handlers<TA
 			if (!near.ok) {
 				return near;
 			}
-			const done = world.moveItem!({ actor: found.actor, item, to: found.target });
+			const done = world.moveItem!({ character: found.character, item, to: found.target });
 			return outcome('give', done.ok ? { ok: true, reason: done.reason ?? `gave ${item} to ${nameOf(call, to)}` } : done);
 		},
-		use: async (call:Call<TAgentCtx, 'use'>) => {
+		use: async (call:Call<TCtx, 'use'>) => {
 			const { item, target } = call.args;
 			const found = resolve(call, target);
 			if (failed(found)) {
@@ -136,20 +136,20 @@ export function worldVerbs<TAgentCtx>(deps:WorldVerbDeps<TAgentCtx>):Handlers<TA
 					return near;
 				}
 			}
-			return outcome('use', world.useItem!(found.actor, item, found.target));
+			return outcome('use', world.useItem!(found.character, item, found.target));
 		},
-		examine: (call:Call<TAgentCtx, 'examine'>) => {
+		examine: (call:Call<TCtx, 'examine'>) => {
 			const found = resolve(call, call.args.target);
 			if (failed(found)) {
 				return found;
 			}
-			const text = world.getDescription!(found.actor, call.args.target);
+			const text = world.getDescription!(found.character, call.args.target);
 			return text === undefined
 				? fail('examine', `${nameOf(call, call.args.target)} cannot be examined from here`)
 				: { ok: true, verb: 'examine', reason: text };
 		},
-		buy: (call:Call<TAgentCtx, 'buy'>) => trade(call, 'buy', call.args.from, call.args.item, call.args.quantity, call.args.offer),
-		sell: (call:Call<TAgentCtx, 'sell'>) => trade(call, 'sell', call.args.to, call.args.item, call.args.quantity, call.args.ask),
+		buy: (call:Call<TCtx, 'buy'>) => trade(call, 'buy', call.args.from, call.args.item, call.args.quantity, call.args.offer),
+		sell: (call:Call<TCtx, 'sell'>) => trade(call, 'sell', call.args.to, call.args.item, call.args.quantity, call.args.ask),
 	};
 }
 
@@ -162,12 +162,12 @@ function countOf(quantity:number | undefined):number {
  * Roam for `seconds`, one leg at a time. With `until`, each leg heads for the reachable spot where the
  * watch would fit best, and the wander ends as soon as it holds. The result lists what came into sight.
  */
-async function wander<TAgentCtx>(call:Call<TAgentCtx, 'wander'>, deps:WorldVerbDeps<TAgentCtx>):Promise<ArcResult> {
+async function wander<TCtx>(call:Call<TCtx, 'wander'>, deps:WorldVerbDeps<TCtx>):Promise<ArcResult> {
 	const until = !!call.args.until?.trim();
 	const end = deps.now() + (call.args.seconds ?? (until ? 20 : 6));
 	const saw = new Set<string>();
 	const report = (met:boolean):ArcResult => {
-		const names = [...saw].slice(0, SAW_CAP).map((id) => call.actor.nameOf(id));
+		const names = [...saw].slice(0, SAW_CAP).map((id) => call.character.mind?.nameOf(id) ?? id);
 		const seen = names.length > 0 ? `saw ${names.join(', ')}` : '';
 		return { ok: true, verb: 'wander', reason: met ? (seen ? `until — ${seen}` : 'until') : seen || undefined };
 	};
@@ -189,7 +189,7 @@ async function wander<TAgentCtx>(call:Call<TAgentCtx, 'wander'>, deps:WorldVerbD
 		if (!dest) {
 			break;
 		}
-		const leg = await deps.mover.go(call.actorID, { point: dest }, 'wander', { check });
+		const leg = await deps.mover.go(call.character.id, { point: dest }, 'wander', { check });
 		if (leg.interrupted) {
 			return { ...leg, verb: 'wander' };
 		}
@@ -202,13 +202,13 @@ async function wander<TAgentCtx>(call:Call<TAgentCtx, 'wander'>, deps:WorldVerbD
 }
 
 /** A reachable spot away from here: the best fit for `until` among a spread of samples, or any of them. */
-function wanderPoint<TAgentCtx>(call:Call<TAgentCtx, 'wander'>, world:HostWorld<unknown>, until:boolean):Vec | undefined {
-	const actor = world.find(call.actorID);
-	const me = actor === undefined ? undefined : world.getPose(actor)?.point;
+function wanderPoint<TCtx>(call:Call<TCtx, 'wander'>, world:HostWorld<unknown>, until:boolean):Vec | undefined {
+	const character = world.find(call.character.id);
+	const me = character === undefined ? undefined : world.getPose(character)?.point;
 	if (!me) {
 		return undefined;
 	}
-	const spots = reachablePoints(world.getPathGraph!(actor), me, WANDER_SPREAD);
+	const spots = reachablePoints(world.getPathGraph!(character), me, WANDER_SPREAD);
 	const away = spots.slice(Math.floor(spots.length / 3));
 	if (away.length === 0) {
 		return undefined;
@@ -230,7 +230,7 @@ function wanderPoint<TAgentCtx>(call:Call<TAgentCtx, 'wander'>, world:HostWorld<
 }
 
 /** Send each unit to its slot in a line or a ring. Units move on their own; the step itself is done at once. */
-function formationVerb<TAgentCtx>(call:VerbCall<TAgentCtx>, world:HostWorld<unknown>, mover:Mover):ArcResult {
+function formationVerb<TCtx>(call:VerbCall<TCtx>, world:HostWorld<unknown>, mover:Mover):ArcResult {
 	const units = (call.units ?? []).filter((id) => poseOf(world, id));
 	if (units.length === 0) {
 		return { ok: false, verb: call.verb, reason: 'no units' };

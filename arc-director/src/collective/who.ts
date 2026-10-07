@@ -1,32 +1,25 @@
-import type { Arc } from '../arc/types.js';
-import { isArc } from '../arc/validate.js';
-import { parseArc } from '../arc/parse.js';
+import type { Law } from '../arc/laws.js';
 import type { VerbRegistry } from '../arc/stock-verbs.js';
+import { mapArc, mapExpr } from '../mind/ids.js';
 import { evaluate } from '../expr/eval.js';
-import { dummyEntity, type HostKernels } from '../expr/natives.js';
-import { buildCatalog } from '../expr/natives.js';
+import { buildCatalog, dummyEntity, type HostKernels } from '../expr/natives.js';
 import type { Catalog, ExprEntity, ExprVal } from '../expr/types.js';
-import { CrowdUnit } from './unit.js';
+import type { Character } from '../character/character.js';
+import type { Collective } from './collective.js';
 import { shortTag } from './tags.js';
-import type { Crowd } from './crowd.js';
 
-export function unitEntity(unit:CrowdUnit, conductorID:string):ExprEntity {
-	const shorts = unit.tags
-		.map((t) => shortTag(conductorID, t))
+/** A character as its collective sees it in `units`: its tags (the collective's own shortened), `busy`, and its verb. */
+export function memberEntity<TCtx>(character:Character<TCtx>, collectiveID:string):ExprEntity {
+	const shorts = character.tags
+		.map((t) => shortTag(collectiveID, t))
 		.filter((t) => t.length > 0);
-	return dummyEntity(unit.id, {
+	return dummyEntity(character.id, {
 		tags: shorts,
 		fields: {
-			busy: { kind: 'bool', value: unit.busy },
-			verb: { kind: 'string', value: unit.verb },
+			busy: { kind: 'bool', value: character.busy },
+			verb: { kind: 'string', value: character.verb },
 		},
 	});
-}
-
-export function withUnitsCatalog(base:Catalog, units:ExprVal, listCap:number):Catalog {
-	const names = new Map(base.names);
-	names.set('units', units);
-	return { ...base, names, listCap };
 }
 
 function asList(entities:ExprEntity[]):ExprVal {
@@ -36,36 +29,33 @@ function asList(entities:ExprEntity[]):ExprVal {
 	};
 }
 
-export function crowdKernels(
-	base:HostKernels,
-	crowd:Crowd,
-	conductorID:string,
-	commanderID?:string | null,
-):HostKernels {
-	const all = crowd.list();
-	const commander = commanderID ? crowd.get(commanderID) : undefined;
-	const troops = commanderID
-		? all.filter((u) => u.id !== commanderID)
-		: all;
-	const allEntities = all.map((u) => unitEntity(u, conductorID));
-	const troopEntities = troops.map((u) => unitEntity(u, conductorID));
+/** `base` plus `units` (every member but the commander) and `allUnits`; `me` is the commander, if any. */
+export function collectiveKernels<TCtx>(base:HostKernels, collective:Collective<TCtx>):HostKernels {
+	const all = collective.characters;
+	const commander = collective.commander;
+	const troops = commander ? all.filter((c) => c !== commander) : all;
 	const me = commander
-		? unitEntity(commander, conductorID)
-		: (base.me ?? dummyEntity(conductorID, { tags: ['agent'] }));
+		? memberEntity(commander, collective.id)
+		: (base.me ?? dummyEntity(collective.id, { tags: ['agent'] }));
 	return {
 		...base,
 		me,
-		listCap: Math.max(crowd.size, 1),
+		listCap: Math.max(all.length, 1),
 		bindings: {
 			...base.bindings,
 			me: { kind: 'entity', value: me },
-			units: asList(troopEntities),
-			allUnits: asList(allEntities),
+			units: asList(troops.map((c) => memberEntity(c, collective.id))),
+			allUnits: asList(all.map((c) => memberEntity(c, collective.id))),
 		},
 	};
 }
 
-export function unitsFromVal(value:ExprVal, crowd:Crowd):CrowdUnit[] {
+export function buildCollectiveCatalog<TCtx>(base:HostKernels, collective:Collective<TCtx>):Catalog {
+	return buildCatalog(collectiveKernels(base, collective));
+}
+
+/** The members a `who` value names: entities, lists of them, or ids. */
+export function membersFromVal<TCtx>(value:ExprVal, collective:Collective<TCtx>):Character<TCtx>[] {
 	const ids:string[] = [];
 	const take = (v:ExprVal):void => {
 		if (v.kind === 'entity') {
@@ -81,49 +71,38 @@ export function unitsFromVal(value:ExprVal, crowd:Crowd):CrowdUnit[] {
 		}
 	};
 	take(value);
-	const out:CrowdUnit[] = [];
-	const seen = new Set<string>();
-	for (const id of ids) {
-		if (seen.has(id)) {
-			continue;
-		}
-		seen.add(id);
-		const unit = crowd.get(id);
-		if (unit) {
-			out.push(unit);
+	const out:Character<TCtx>[] = [];
+	for (const id of new Set(ids)) {
+		const member = collective.character(id);
+		if (member) {
+			out.push(member);
 		}
 	}
 	return out;
 }
 
-export function evaluateWho(who:string, catalog:Catalog, crowd:Crowd):CrowdUnit[] {
+export function evaluateWho<TCtx>(who:string, catalog:Catalog, collective:Collective<TCtx>):Character<TCtx>[] {
 	const r = evaluate(who, catalog);
 	if (r.error) {
 		return [];
 	}
-	return unitsFromVal(r.value, crowd);
+	return membersFromVal(r.value, collective);
 }
 
-export function arcArg(raw:unknown, registry:VerbRegistry):Arc | undefined {
-	if (isArc(raw)) {
-		return raw;
-	}
-	if (typeof raw === 'string' && raw.trim()) {
-		try {
-			return parseArc(raw, registry);
-		}
-		catch {
-			return undefined;
-		}
-	}
-	return undefined;
+/** Whether a collective's own `law` reaches `member`: its `who` names that member. */
+export function lawMatches<TCtx>(law:Law, member:Character<TCtx>, whoCatalog:Catalog, collective:Collective<TCtx>):boolean {
+	return evaluateWho(law.who, whoCatalog, collective).includes(member);
 }
 
-export function buildCrowdCatalog(
-	base:HostKernels,
-	crowd:Crowd,
-	conductorID:string,
-	commanderID?:string | null,
-):Catalog {
-	return buildCatalog(crowdKernels(base, crowd, conductorID, commanderID));
+/** Whether `law` needs a collective to make sense: it reads `units` or `allUnits`. */
+export function usesCollective(law:Law, verbs:VerbRegistry):boolean {
+	const words = new Set<string>();
+	const note = (word:string):string => {
+		words.add(word);
+		return word;
+	};
+	mapExpr(law.who, note);
+	mapExpr(law.watch, note);
+	mapArc(law.arc, verbs, note);
+	return words.has('units') || words.has('allUnits');
 }

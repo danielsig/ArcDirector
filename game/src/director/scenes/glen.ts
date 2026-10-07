@@ -1,16 +1,16 @@
-import { ArcDirector, type AgentSpec } from 'arc-director';
+import { ArcDirector, Character, type CharacterSpec } from 'arc-director';
 import { Bridge, Celebrating } from '../../engine/components';
 import type { GameHost } from '../adapter';
 import { BUILDING_VERB_INSTRUCTIONS, GAME_VERBS } from '../verbs';
-import { withReceived, type AgentCtx } from '../types';
+import { withReceived, type CharacterCtx } from '../types';
 import { findCarried, itemMatchesName } from '../../items/inventory';
 import { coinsOf } from '../../items/wallet';
 
 const GOT_MUSHROOM = 'hasJustReceived("mushroom")';
 
-const FORAGER:AgentSpec = {
+const FORAGER:CharacterSpec = {
 	id: 'Forager',
-	rank: 0.5,
+	mind: { rank: 0.5 },
 	identity: { traits: ['quiet', 'hungry', 'kind'] },
 	goals: [{ text: 'Buy SilverTrout.', priority: 2 }],
 	memories: [
@@ -48,9 +48,9 @@ const FORAGER:AgentSpec = {
 	watchesWritable: true,
 };
 
-const BRIDGE_KEEPER:AgentSpec = {
+const BRIDGE_KEEPER:CharacterSpec = {
 	id: 'BridgeKeeper',
-	rank: 0.5,
+	mind: { rank: 0.5 },
 	identity: { traits: ['stubborn', 'fair', 'dutiful', 'greedy'] },
 	goals: [{ text: 'Get gold by charging people a fee for lowering the bridge for them.', priority: 2 }],
 	memories: [
@@ -67,9 +67,9 @@ const BRIDGE_KEEPER:AgentSpec = {
 	],
 };
 
-const ANGLER:AgentSpec = {
+const ANGLER:CharacterSpec = {
 	id: 'Angler',
-	rank: 0.5,
+	mind: { rank: 0.5 },
 	identity: { traits: ['wet', 'impatient', 'hungry'] },
 	goals: [{ text: 'Buy FireMushroom.', priority: 2 }],
 	memories: [
@@ -83,9 +83,9 @@ const ANGLER:AgentSpec = {
 	pinnedWatches: { gotMushroom: GOT_MUSHROOM },
 };
 
-const ASSISTANT:AgentSpec = {
+const ASSISTANT:CharacterSpec = {
 	id: 'Assistant',
-	rank: 1,
+	mind: { rank: 1 },
 	identity: { traits: ['helpful', 'honest', 'careful'] },
 	goals: [
 		{ text: 'Help Player with whatever they ask.', priority: 2 },
@@ -193,14 +193,14 @@ function checkBargain(host:GameHost):void {
 	host.world.setMessage('The glen holds — trout, mushroom, and a lowered bridge');
 }
 
-export function createDirector(host:GameHost):ArcDirector<AgentCtx> {
+export function createDirector(host:GameHost):ArcDirector<CharacterCtx> {
 	host.hooks = { checkBargain, goalDone };
 	host.kit = { verbs: [...GAME_VERBS, 'buy', 'sell'] };
-	return host.configure(new ArcDirector<AgentCtx>())
+	return host.configure(new ArcDirector<CharacterCtx>())
 		.withDefaultKit(host.kit)
 		.withVerbInstructions(BUILDING_VERB_INSTRUCTIONS)
-		.addAgent(withReceived(FORAGER))
-		.addAgent(withReceived(BRIDGE_KEEPER))
-		.addAgent(withReceived(ANGLER))
-		.addAgent(withReceived(ASSISTANT));
+		.addCharacter(withReceived(FORAGER))
+		.addCharacter(withReceived(BRIDGE_KEEPER))
+		.addCharacter(withReceived(ANGLER))
+		.addCharacter(withReceived(ASSISTANT));
 }

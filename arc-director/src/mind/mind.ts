@@ -1,18 +1,16 @@
 import { formatArc, parseArc } from '../arc/parse.js';
 import { arcSchema } from '../arc/schema.js';
 import { FOCUS_EDIT_VERBS, WATCH_EDIT_VERBS, type VerbRegistry } from '../arc/stock-verbs.js';
-import { Actor, type ActorDeps, type ActorJSON, type ActorOptions } from './actor.js';
 import type { Arc, ArcResult, Step } from '../arc/types.js';
 import { ArcError } from '../arc/types.js';
 import { evaluate } from '../expr/eval.js';
 import { observeExpr } from '../expr/stringify.js';
-import type { Catalog, ExprEntity } from '../expr/types.js';
-import { bagOf, cloneEntity, prevMeFromJSON } from '../expr/prev.js';
+import { bagOf, cloneEntity } from '../expr/prev.js';
 import { isVisionModel } from '../inference/models.js';
 import type { ChatMessage, InferenceProvider, ToolDef } from '../inference/provider.js';
-import { extractJson, isRecord, readID } from '../json.js';
-import { MemoryStore, mergeTags, nameTags, type MemoryRecord } from '../memory/store.js';
-import type { Sense, ToolSpec, Kit, KitSource } from './types.js';
+import { extractJson, isRecord } from '../json.js';
+import { mergeTags, nameTags, type MemoryRecord } from '../memory/store.js';
+import type { MindEvent, Sense, ToolSpec } from './types.js';
 import { parseMapZoom, stampMap, isMapSnapshot, DEFAULT_YOU_SYMBOL, type MapPrev, type MapSense } from './map.js';
 import {
 	articlesNamedIn,
@@ -25,93 +23,72 @@ import {
 	type EncyclopediaSource,
 } from './encyclopedia.js';
 import { LOOKUP_TOOLS, arcRepairHint, blockedAgainHint, repeatOutputHint, sayRangeHint, shouldEmitArcText, stablePrefix, volatileBlock, type ThinkInstructions } from './prompt.js';
-import { NameBook, type NameBookJSON, type NameTarget } from './names.js';
-import {
-	runArc,
-	arcSteps,
-	deferThinks,
-	createArcSession,
-	DEFAULT_COOLDOWN,
-	THINK_ABOUT_CAP,
-	type ArcHandler,
-	type ArcSession,
-	type ArcSessionOpts,
-} from './run.js';
+import type { TalkNet } from './talk.js';
+import { idsOf, mapArc, mapExpr, mapLawName, namesOf } from './ids.js';
+import type { NameTarget } from '../character/names.js';
+import type { Persona } from '../character/persona.js';
+import type { Watches } from '../character/types.js';
+import { sayToOf, type ArcRunner } from '../character/arc-runner.js';
+import type { Law } from '../arc/laws.js';
+import { arcSteps, deferThinks, THINK_ABOUT_CAP } from '../arc/run.js';
 import { firstStep } from '../arc/types.js';
-import type { SayTo, TalkNet } from './talk.js';
 import { noWayTo } from '../world/route.js';
-import type { AgentEvent, AgentIdentity, Goal, WatchInput, Watches } from './types.js';
 import { waitUntilOf, type MindQueue } from '../think/queue.js';
-import {
-	applyWatchOps,
-	asWatches,
-	copyWatches,
-	extrasWithoutPins,
-	findWatchName,
-	hasWatch,
-	mergePinnedWatches,
-	watchCount,
-	watchExprs,
-} from './watch.js';
-import {
-	asFocusList,
-	DEFAULT_MAX_SIGHT_FOCUS,
-	effectiveSightFocus,
-	extrasWithoutPinnedFocus,
-	mergePinnedFocus,
-} from './focus.js';
-import {
-	DEFAULT_MAX_LAWS,
-	dropLaw,
-	lawFromSpec,
-	upsertLaw,
-	type CrowdLaw,
-	type CrowdLawSpec,
-} from '../conductor/laws.js';
+import { hasWatch, watchCount } from '../character/watch.js';
+import { asFocusList } from '../character/focus.js';
 
-/** A save: the body's part plus the mind. */
-export type AgentJSON = ActorJSON & {
-	identity:AgentIdentity;
-	goals:Goal[];
-	memories:MemoryRecord[];
-	events?:AgentEvent[];
-	watches?:WatchInput;
-	pinnedWatches?:WatchInput;
-	watchesWritable?:boolean;
-	pinnedSightFocus?:string[];
-	sightFocus?:string[];
-	sightFocusWritable?:boolean;
-	maxSightFocus?:number;
-	sightLimit?:number;
+/** How often a mind thinks and where it stands in the think queue. A host may set these per mind. */
+export type MindSettings = {
+	/** No think on the queue's heartbeat; only watches, events and arc ends wake it. */
+	skipHeartbeat?:boolean;
+	/** Major events do not wake it. */
+	skipMajor?:boolean;
+	/** Tie-break after watch `rankScore`. Higher goes first. Default 0. */
+	rank?:number;
+	/** Fewest game seconds between tactical thinks. Default 0 under a director, whose queue paces thinks. */
+	heartbeat?:number;
+	/** Game seconds between goal revisions; 0 never revises. Default 180. */
+	strategicInterval?:number;
+};
+
+/** A mind's thinking state. Its owner's persona is saved with the owner. */
+export type MindJSON = {
+	settings:MindSettings;
+	events?:MindEvent[];
 	lastArc?:Arc;
+	lastResult?:ArcResult;
 	lastTacticalTimestamp?:number;
 	lastStrategicTimestamp?:number;
 	lastIntrusionTimestamp?:number;
-	maxGoals:number;
-	maxEpisodic:number;
 	recent?:string[];
 	recentSummary?:string;
 	thinkAbout?:string;
 	lastVerb?:string;
-	names?:NameBookJSON;
 };
 
-/** What a mind needs on top of its body's `ActorDeps`. */
-export type AgentDeps<TAgentCtx = unknown> = ActorDeps<TAgentCtx> & {
+/** What a mind thinks for: a character, or a collective. Its `voice` enacts the arcs the mind writes. */
+export type MindOwner<TCtx = unknown> = ArcRunner<TCtx> & {
+	readonly persona:Persona;
+	/** The owner's own block of the prompt, in place of the laws. A collective lists its roster here. */
+	promptSection?(mind:Mind<TCtx>):string;
+};
+
+/** What the director gives a mind when it is attached. */
+export type MindDeps<TCtx = unknown> = {
 	provider:InferenceProvider;
-	senses?:Record<string, Sense<TAgentCtx>>;
-	tools?:Record<string, ToolSpec<TAgentCtx>>;
-	/** When `execute` is set, `tick` runs the arc unless this is false. */
+	senses?:Record<string, Sense<TCtx>>;
+	tools?:Record<string, ToolSpec<TCtx>>;
+	talk?:TalkNet;
+	/** When the voice has an executor, `tick` runs the arc unless this is false. */
 	autoEnact?:boolean;
 	queue?:MindQueue;
 	/** Heartbeat stretch after an arc. Default: failed or interrupted. */
 	stalled?:(result:ArcResult)=>boolean;
 	model?:string;
 	embedModel?:string;
-	heartbeat?:number;
 	/** Tool rounds before the Arc must be emitted. Default {@link DEFAULT_TOOL_ROUNDS}; 0 offers no tools. */
 	toolRoundCap?:number;
-	/** Why there is no way for this body to `id` (`Bridge is raised`, or `''` unnamed), or undefined when there is. Marks unreachable names in earshot. */
+	/** Why there is no way for this character to `id` (`Bridge is raised`, or `''` unnamed), or undefined when there is. Marks unreachable names in earshot. */
 	wayBlocked?:(id:string)=>string | undefined;
 	/** Extra chat turns after a bad arc or a tool call with tools closed. Host sets this; 0 means fail on the first bad reply. */
 	arcRetryCap?:number;
@@ -126,18 +103,16 @@ export type AgentDeps<TAgentCtx = unknown> = ActorDeps<TAgentCtx> & {
 	verbInstructions?:string;
 	/** Arc that replaces the closing Example in the prompt. */
 	arcExample?:string;
-	/** Host naming policy seen from this agent: the base name for a body. Omit to use ids. */
+	/** Host naming policy seen from this mind: the base name for a character. Omit to use ids. */
 	seenAs?:(target:NameTarget)=>string;
-	maxGoals?:number;
 	intrusionThreshold?:number;
 	intrusionCooldown?:number;
 	recallK?:number;
-	strategicInterval?:number;
 	hideObserve?:boolean;
 	/** Host top-down snapshots. `see_map` is omitted unless this and vision are both set. */
 	map?:MapSense;
 	/** Host world-type articles. `grep_world_encyclopedia` is omitted unless this is set. */
-	encyclopedia?:EncyclopediaSource<TAgentCtx>;
+	encyclopedia?:EncyclopediaSource<TCtx>;
 	/** Most articles shown per think for names said or heard. Default {@link DEFAULT_MENTION_CAP}; 0 shows none. */
 	mentionCap?:number;
 	/**
@@ -146,20 +121,6 @@ export type AgentDeps<TAgentCtx = unknown> = ActorDeps<TAgentCtx> & {
 	 * Omit to fall back to `isVisionModel(model)`.
 	 */
 	vision?:boolean;
-	watches?:WatchInput;
-	pinnedWatches?:WatchInput;
-	watchesWritable?:boolean;
-	pinnedSightFocus?:string[];
-	sightFocus?:string[];
-	sightFocusWritable?:boolean;
-	maxSightFocus?:number;
-	sightLimit?:number;
-};
-
-export type AgentOptions<TAgentCtx = unknown> = AgentDeps<TAgentCtx> & ActorOptions<TAgentCtx> & {
-	identity:AgentIdentity;
-	goals?:Goal[];
-	memory?:MemoryStore;
 };
 
 function asStringArray(v:unknown):string[] {
@@ -221,55 +182,69 @@ function clauseAbout(scene:string, name:string):string {
 	return (hit ?? scene).replace(/\s+/g, ' ').trim().slice(0, 220);
 }
 
-/** An `Actor` with a mind: it thinks with the model, remembers, and picks its own arcs. */
-export class Agent<TAgentCtx = unknown> extends Actor<TAgentCtx> {
-	identity:AgentIdentity;
-	goals:Goal[];
-	readonly memory:MemoryStore;
-	readonly senses:Record<string, Sense<TAgentCtx>>;
-	readonly tools:Record<string, ToolSpec<TAgentCtx>>;
-	readonly provider:InferenceProvider;
-	readonly autoEnact:boolean;
-	readonly queue:MindQueue | undefined;
-	stalled?:(result:ArcResult)=>boolean;
-	model:string;
-	embedModel:string | undefined;
+/**
+ * Writes arcs: it thinks with the model about its owner's persona and what the owner's voice senses, and hands
+ * each arc to that voice. It holds no story of its own, only its settings and thinking state, so it can be
+ * swapped or dropped without losing who its owner is. A character owns at most one mind; a collective always
+ * has one, shared by its characters.
+ *
+ * Planned, not built yet: a mind picks one of the director's model configurations instead of all minds
+ * sharing the director's one model.
+ * - The director gets `addModel` / `removeModel` in place of `setModel`. Each added model says which
+ *   inference provider it comes from and carries its own settings, e.g. a Gemma model with one context
+ *   window and a Qwen model with another. `addModel` may instead live inside the provider call.
+ * - Providers become removable too, so `with*Inference` turns into `add*Inference`, with a matching remove.
+ * - A mind never changes a model's settings. It is assigned one of the configured models, and a mind
+ *   with no assignment uses the one marked as default.
+ * - Open points:
+ *   - Think slots per provider: today one shared queue assumes one server.
+ *   - Memory embeddings: they live on the Persona but come from the mind's provider, so moving to
+ *     another embedding model needs either one embedding model for the whole director or a re-embed.
+ */
+export class Mind<TCtx = unknown> {
+	skipHeartbeat:boolean;
+	skipMajor:boolean;
+	rank:number;
 	heartbeat:number;
-	toolRoundCap:number;
-	readonly wayBlocked:((id:string)=>string | undefined) | undefined;
-	arcRetryCap:number;
-	/** Mutable so the Testing toggle can flip live agents. */
-	arcText:boolean;
-	repairTemperature:number;
+	strategicInterval:number;
+	private ownerRef:MindOwner<TCtx> | undefined;
+	/** The owner's id, kept after a detach so a think still finishing can clean up after itself. */
+	private ownerID = '';
+	senses:Record<string, Sense<TCtx>> = {};
+	tools:Record<string, ToolSpec<TCtx>> = {};
+	talk:TalkNet | undefined;
+	provider!:InferenceProvider;
+	autoEnact = true;
+	queue:MindQueue | undefined;
+	stalled?:(result:ArcResult)=>boolean;
+	model = '';
+	embedModel:string | undefined;
+	toolRoundCap = DEFAULT_TOOL_ROUNDS;
+	wayBlocked:((id:string)=>string | undefined) | undefined;
+	arcRetryCap = 0;
+	/** Mutable so the Testing toggle can flip live minds. */
+	arcText = false;
+	repairTemperature = 0.4;
 	thinkInstructions:ThinkInstructions | undefined;
-	thinking:()=>boolean;
+	thinking:()=>boolean = () => true;
 	verbInstructions:string | undefined;
 	arcExample:string | undefined;
-	readonly seenAs:((target:NameTarget)=>string) | undefined;
-	/** This agent's names for other bodies. Saved, because memories quote them. */
-	readonly names = new NameBook();
-	maxGoals:number;
-	intrusionThreshold:number;
-	intrusionCooldown:number;
-	recallK:number;
-	strategicInterval:number;
-	hideObserve:boolean;
+	seenAs:((target:NameTarget)=>string) | undefined;
+	intrusionThreshold = 0.55;
+	intrusionCooldown = 45;
+	recallK = 5;
+	hideObserve = false;
 	map:MapSense | undefined;
-	encyclopedia:EncyclopediaSource<TAgentCtx> | undefined;
+	encyclopedia:EncyclopediaSource<TCtx> | undefined;
 	vision:boolean | undefined;
-	watches:Watches;
-	pinnedWatches:Watches;
-	watchesWritable:boolean;
-	pinnedSightFocus:string[];
-	sightFocus:string[];
-	sightFocusWritable:boolean;
-	maxSightFocus:number;
-	sightLimit:number | undefined;
+	/** The last arc or think's result, as the next prompt shows it. */
+	lastResult:ArcResult | undefined;
 	lastArc:Arc | undefined;
 	lastTacticalTimestamp = Number.NEGATIVE_INFINITY;
 	lastStrategicTimestamp = 0;
 	lastIntrusionTimestamp = Number.NEGATIVE_INFINITY;
-	private readonly pendingEvents:AgentEvent[] = [];
+	private now = 0;
+	private readonly pendingEvents:MindEvent[] = [];
 	private recent:string[] = [];
 	private recentSummary = '';
 	private recentAbsorbed = 0;
@@ -282,9 +257,9 @@ export class Agent<TAgentCtx = unknown> extends Actor<TAgentCtx> {
 	private emitStreak = 0;
 	/** Accepted arcs in a row that only talked or waited. */
 	private talkStreak = 0;
-	/** Recent lines this agent said, with who heard each clearly. */
+	/** Recent lines this mind's voice said, with who heard each clearly. */
 	private said:{ gist:Set<string>; text:string; heard:Set<string> }[] = [];
-	private readonly mentionCap:number;
+	private mentionCap = DEFAULT_MENTION_CAP;
 	private thinks = 0;
 	/** Article name → the think it was last shown on for being mentioned. */
 	private readonly mentionedOn = new Map<string, number>();
@@ -293,72 +268,100 @@ export class Agent<TAgentCtx = unknown> extends Actor<TAgentCtx> {
 	/** `verb id` pairs whose move found no way; `blockedAgain` refuses them until the way opens. */
 	private readonly noWay = new Set<string>();
 
-	constructor(opts:AgentOptions<TAgentCtx>) {
-		super(opts);
-		this.identity = opts.identity;
-		this.goals = opts.goals ? [...opts.goals] : [];
-		this.memory = opts.memory ?? new MemoryStore();
-		this.senses = opts.senses ?? {};
-		this.tools = opts.tools ?? {};
-		this.provider = opts.provider;
-		this.autoEnact = opts.autoEnact ?? true;
-		this.queue = opts.queue;
-		this.stalled = opts.stalled;
-		this.model = opts.model ?? '';
-		this.embedModel = opts.embedModel;
-		this.heartbeat = opts.heartbeat ?? 30;
-		this.toolRoundCap = opts.toolRoundCap ?? DEFAULT_TOOL_ROUNDS;
-		this.wayBlocked = opts.wayBlocked;
-		this.arcRetryCap = opts.arcRetryCap ?? 0;
-		this.arcText = opts.arcText === true;
-		this.repairTemperature = opts.repairTemperature ?? 0.4;
-		this.thinkInstructions = opts.thinkInstructions;
-		this.thinking = opts.thinking ?? (() => true);
-		this.verbInstructions = opts.verbInstructions;
-		this.arcExample = opts.arcExample;
-		this.seenAs = opts.seenAs;
-		this.maxGoals = opts.maxGoals ?? 5;
-		this.intrusionThreshold = opts.intrusionThreshold ?? 0.55;
-		this.intrusionCooldown = opts.intrusionCooldown ?? 45;
-		this.recallK = opts.recallK ?? 5;
-		this.strategicInterval = opts.strategicInterval ?? 180;
-		this.hideObserve = opts.hideObserve ?? false;
-		this.map = opts.map;
-		this.encyclopedia = opts.encyclopedia;
-		this.mentionCap = opts.mentionCap ?? DEFAULT_MENTION_CAP;
-		this.vision = opts.vision;
-		this.pinnedWatches = asWatches(opts.pinnedWatches);
-		this.watches = extrasWithoutPins(asWatches(opts.watches), this.pinnedWatches);
-		this.watchesWritable = opts.watchesWritable ?? true;
-		this.pinnedSightFocus = asFocusList(opts.pinnedSightFocus, Number.POSITIVE_INFINITY);
-		this.maxSightFocus = opts.maxSightFocus ?? DEFAULT_MAX_SIGHT_FOCUS;
-		this.sightFocus = extrasWithoutPinnedFocus(
-			asFocusList(opts.sightFocus, this.maxSightFocus),
-			this.pinnedSightFocus,
-		);
-		this.sightFocusWritable = opts.sightFocusWritable ?? true;
-		this.sightLimit = opts.sightLimit;
-		if (this.talk) {
-			this.talk.attach(this);
-		}
-		if (opts.maxGoals !== undefined) {
-			this.trimGoals();
-		}
+	constructor(settings:MindSettings = {}) {
+		this.skipHeartbeat = settings.skipHeartbeat ?? false;
+		this.skipMajor = settings.skipMajor ?? false;
+		this.rank = settings.rank ?? 0;
+		this.heartbeat = settings.heartbeat ?? 0;
+		this.strategicInterval = settings.strategicInterval ?? 180;
 	}
 
-	/** A mind keeps the mind-only verbs, but not the watch / focus edits its host made read-only. */
-	protected override withheldVerbs():readonly string[] {
-		return [
-			...(this.watchesWritable ? [] : WATCH_EDIT_VERBS),
-			...(this.sightFocusWritable ? [] : FOCUS_EDIT_VERBS),
-		];
+	/** @internal The director wires a mind to the owner it thinks for when it attaches it. */
+	attach(owner:MindOwner<TCtx>, deps:MindDeps<TCtx>):void {
+		this.ownerRef = owner;
+		this.ownerID = owner.id;
+		this.provider = deps.provider;
+		this.senses = deps.senses ?? {};
+		this.tools = deps.tools ?? {};
+		this.talk = deps.talk;
+		this.autoEnact = deps.autoEnact ?? true;
+		this.queue = deps.queue;
+		this.stalled = deps.stalled;
+		this.model = deps.model ?? '';
+		this.embedModel = deps.embedModel;
+		this.toolRoundCap = deps.toolRoundCap ?? DEFAULT_TOOL_ROUNDS;
+		this.wayBlocked = deps.wayBlocked;
+		this.arcRetryCap = deps.arcRetryCap ?? 0;
+		this.arcText = deps.arcText === true;
+		this.repairTemperature = deps.repairTemperature ?? 0.4;
+		this.thinkInstructions = deps.thinkInstructions;
+		this.thinking = deps.thinking ?? (() => true);
+		this.verbInstructions = deps.verbInstructions;
+		this.arcExample = deps.arcExample;
+		this.seenAs = deps.seenAs;
+		this.intrusionThreshold = deps.intrusionThreshold ?? 0.55;
+		this.intrusionCooldown = deps.intrusionCooldown ?? 45;
+		this.recallK = deps.recallK ?? 5;
+		this.hideObserve = deps.hideObserve ?? false;
+		this.map = deps.map;
+		this.encyclopedia = deps.encyclopedia;
+		this.mentionCap = deps.mentionCap ?? DEFAULT_MENTION_CAP;
+		this.vision = deps.vision;
+	}
+
+	/** @internal The director let go of this mind: its think is aborted, and it may think for someone else later. */
+	detach():void {
+		this.ownerRef = undefined;
+	}
+
+	/** The character or collective this mind thinks for. */
+	get owner():MindOwner<TCtx> {
+		if (!this.ownerRef) {
+			throw new Error('ArcDirector: this mind thinks for no one yet');
+		}
+		return this.ownerRef;
+	}
+
+	/** Whether this mind is attached to an owner. */
+	get attached():boolean {
+		return this.ownerRef !== undefined;
+	}
+
+	/** The owner's id. The think queue, chat thread and logs know a mind by it. */
+	get id():string {
+		return this.ownerID;
+	}
+
+	get persona():Persona {
+		return this.owner.persona;
+	}
+
+	/** The runner that enacts this mind's arcs: the character itself, or a collective's commander. */
+	get voice():ArcRunner<TCtx> {
+		return this.owner.voice;
+	}
+
+	/** These settings, to give a character a fresh mind like this one later. */
+	settings():MindSettings {
+		return {
+			skipHeartbeat: this.skipHeartbeat,
+			skipMajor: this.skipMajor,
+			rank: this.rank,
+			heartbeat: this.heartbeat,
+			strategicInterval: this.strategicInterval,
+		};
+	}
+
+	/** Game time, for the events and memories this mind stamps. The director stamps every tick. */
+	stamp(now:number):void {
+		this.now = now;
 	}
 
 	private senseAllowed(name:string):boolean {
-		if (this.kit === undefined) {
+		if (this.owner.kit === undefined) {
 			return true;
 		}
-		const list = this.currentKit.senses;
+		const list = this.owner.currentKit.senses;
 		if (list === undefined) {
 			return true;
 		}
@@ -366,18 +369,18 @@ export class Agent<TAgentCtx = unknown> extends Actor<TAgentCtx> {
 	}
 
 	private toolsAllowed():readonly string[] | undefined {
-		if (this.kit === undefined) {
+		if (this.owner.kit === undefined) {
 			return undefined;
 		}
-		return this.currentKit.tools;
+		return this.owner.currentKit.tools;
 	}
 
-	private filterTools(tools:Record<string, ToolSpec<TAgentCtx>>):Record<string, ToolSpec<TAgentCtx>> {
+	private filterTools(tools:Record<string, ToolSpec<TCtx>>):Record<string, ToolSpec<TCtx>> {
 		const list = this.toolsAllowed();
 		if (list === undefined) {
 			return tools;
 		}
-		const next:Record<string, ToolSpec<TAgentCtx>> = {};
+		const next:Record<string, ToolSpec<TCtx>> = {};
 		for (const name of list) {
 			if (tools[name]) {
 				next[name] = tools[name];
@@ -386,72 +389,77 @@ export class Agent<TAgentCtx = unknown> extends Actor<TAgentCtx> {
 		return next;
 	}
 
-	/** This agent's name for a body it is sampling now. Assigns one on first sight. */
-	override seen(target:NameTarget):string {
-		return this.seenAs ? this.names.name(target.id, this.seenAs(target)) : target.id;
+	/** This mind's name for a character it is sampling now. Assigns one on first sight. */
+	seen(target:NameTarget):string {
+		return this.seenAs ? this.persona.names.name(target.id, this.seenAs(target)) : target.id;
 	}
 
-	/** This agent's name for `id`. A body it never sampled gets the policy's answer for a bare id, unrecorded. */
-	override nameOf(id:string):string {
-		return this.names.peek(id) ?? this.seenAs?.({ id }) ?? id;
+	/** This mind's name for `id`. A character it never sampled gets the policy's answer for a bare id, unrecorded. */
+	nameOf(id:string):string {
+		return this.persona.names.peek(id) ?? this.seenAs?.({ id }) ?? id;
 	}
 
-	/** The id behind a name this agent gave (or an id, unchanged). */
-	override resolveName(name:string):string {
-		return this.names.resolve(name);
+	/** Queue an event for the next think. It is kept in ids and read in this mind's names when that think starts. */
+	pushEvent(event:MindEvent):void {
+		this.pendingEvents.push({ ...event, timestamp: event.timestamp ?? this.now });
+	}
+
+	/** The events waiting for the next think, as this mind reads them now. */
+	events():MindEvent[] {
+		return this.pendingEvents.map((e) => this.render(e));
 	}
 
 	/**
-	 * `{0}`, `{1}`, … in the text become this agent's names for `who`, and this agent itself becomes "you":
+	 * `{0}`, `{1}`, … in the text become this mind's names for `who` now, and its owner or voice becomes "you":
 	 * a small model reads "Forager gave FireMushroom to BridgeKeeper" about someone else, even as BridgeKeeper.
 	 */
-	pushEvent({ who, ...event }:AgentEvent):void {
+	private render({ who, ...event }:MindEvent):MindEvent {
 		const names = (who ?? []).map((id) => this.nameOf(id));
-		this.pendingEvents.push({
+		return {
 			...event,
 			text: event.text.replace(/\{(\d+)\}/g, (hit, n, at:number) => {
 				const id = who?.[Number(n)];
 				if (id === undefined) {
 					return hit;
 				}
-				return id === this.id ? (at === 0 ? 'You' : 'you') : names[Number(n)];
+				return this.isSelf(id) ? (at === 0 ? 'You' : 'you') : names[Number(n)];
 			}),
 			tags: names.length > 0 ? mergeTags(event.tags, names) : event.tags,
-			timestamp: event.timestamp ?? this.now,
-		});
+		};
 	}
 
-	/** Unabsorbed speech meant for this agent: to it, naming it, or to everyone. Overheard talk does not count. */
+	/** Whether `id` is this mind's own: its owner, or the character that speaks for it. */
+	private isSelf(id:string):boolean {
+		return id === this.id || id === this.thinkThread();
+	}
+
+	/** Unabsorbed speech meant for this mind: to it, naming it, or to everyone. Overheard talk does not count. */
 	hasHeard():boolean {
 		return this.pendingEvents.some((e) => e.kind === 'HeardSpeech' && e.major);
 	}
 
 	private capturePrevMe():void {
-		const ctx = this.context();
-		if (!ctx || !this.catalog) {
+		const voice = this.voice;
+		const ctx = voice.context();
+		if (!ctx || !voice.catalog) {
 			return;
 		}
-		this.prevMe = cloneEntity(this.catalog(ctx).me);
+		voice.prevMe = cloneEntity(voice.catalog(ctx).me);
 	}
 
-	/** Hosts that run world verbs themselves should call this so think() cooldown sees them. */
+	/** Hosts that run world verbs on the voice themselves should call this so think() cooldown sees them. */
 	noteVerb(verb:string):void {
 		if (verb) {
 			this.lastVerb = verb;
 		}
 	}
 
-	/** Hosts that run the arc themselves still need this for remember / think / set_goal / set_identity. */
-	async perform(step:Step, ctx:TAgentCtx | undefined = this.context()):Promise<ArcResult> {
-		return this.runStep(step, ctx);
-	}
-
+	/** The result of the arc this mind gave its voice, or of a failed think. The next prompt shows it. */
 	ingestResult(result:ArcResult):void {
 		this.lastResult = result;
 		if (result.unreachable && result.verb) {
 			this.noWay.add(`${result.verb} ${result.unreachable}`);
 		}
-		this.liveArc = false;
 		if (result.interrupted) {
 			this.pushEvent({
 				kind: 'Interrupted',
@@ -469,11 +477,13 @@ export class Agent<TAgentCtx = unknown> extends Actor<TAgentCtx> {
 		this.syncQueue(result);
 	}
 
-	protected override onArcStart(arc:Arc):void {
+	/** The voice began an arc. */
+	arcStarted(arc:Arc):void {
 		this.queue?.beginArc(this.id, arc);
 	}
 
-	protected override onArcEnd():void {
+	/** The voice's arc stopped or parked. */
+	arcEnded():void {
 		this.queue?.endArc(this.id);
 	}
 
@@ -481,15 +491,11 @@ export class Agent<TAgentCtx = unknown> extends Actor<TAgentCtx> {
 	 * An arc that ends on a say someone could answer gives the answer time to come before the next think.
 	 * A say mid-arc does not wait: the rest of the arc (`say(...) && use(...)`) is what was decided.
 	 */
-	protected override async afterArc(result:ArcResult):Promise<void> {
+	async afterArc(result:ArcResult, voice:ArcRunner<TCtx>):Promise<void> {
 		const due = result.ok && result.verb === 'say' && 'answerable' in result && result.answerable === true;
-		if (due && this.execute) {
-			await this.execute({ verb: 'wait', args: { seconds: 20 } }, this.context());
+		if (due && voice.execute) {
+			await voice.execute({ verb: 'wait', args: { seconds: 20 } }, voice.context());
 		}
-	}
-
-	protected override onArcResult(result:ArcResult):void {
-		this.ingestResult(result);
 	}
 
 	async remember(text:string, tags:string[] = [], timestamp = this.now):Promise<MemoryRecord> {
@@ -503,7 +509,7 @@ export class Agent<TAgentCtx = unknown> extends Actor<TAgentCtx> {
 				embedding = undefined;
 			}
 		}
-		return this.memory.add({
+		return this.persona.memory.add({
 			category: 'semantic',
 			text,
 			tags: mergeTags(tags, nameTags(text)),
@@ -512,9 +518,9 @@ export class Agent<TAgentCtx = unknown> extends Actor<TAgentCtx> {
 		}, timestamp);
 	}
 
-	/** Living commander (crowd) or this mind. Chat thread, logs, and world face. */
+	/** The voice's id: the character that acts and speaks for this mind, or the collective's own id while it has no commander. */
 	thinkThread():string {
-		return this.id;
+		return this.ownerRef?.voice.id ?? this.ownerID;
 	}
 
 	/** Cancel this mind's in-flight think. */
@@ -530,7 +536,7 @@ export class Agent<TAgentCtx = unknown> extends Actor<TAgentCtx> {
 		if (opts.now !== undefined) {
 			this.now = opts.now;
 		}
-		this.refreshKit();
+		this.owner.refreshKit();
 		this.absorbPending();
 		if (opts.about !== undefined) {
 			const about = opts.about.replace(/\s+/g, ' ').trim();
@@ -542,7 +548,7 @@ export class Agent<TAgentCtx = unknown> extends Actor<TAgentCtx> {
 
 	async tick(gameTime:number):Promise<Arc | null> {
 		this.now = gameTime;
-		this.refreshKit();
+		this.owner.refreshKit();
 		this.absorbPending();
 		const strategic = this.strategicDue(gameTime);
 		const tactical = this.tacticalDue(gameTime);
@@ -597,92 +603,43 @@ export class Agent<TAgentCtx = unknown> extends Actor<TAgentCtx> {
 		if (signal?.aborted) {
 			return null;
 		}
-		if (arc && this.execute && enact) {
-			await this.enact(arc);
+		if (arc && enact && this.voice.execute) {
+			await this.voice.enact(arc);
 		}
 		return arc;
 	}
 
-	override toJSON():AgentJSON {
+	toJSON():MindJSON {
 		return {
-			...super.toJSON(),
-			identity: { ...this.identity, traits: this.identity.traits ? [...this.identity.traits] : undefined },
-			goals: this.goals.map((g) => ({ ...g })),
-			memories: this.memory.toJSON(),
+			settings: this.settings(),
 			events: this.pendingEvents.map((e) => ({ ...e, tags: e.tags ? [...e.tags] : undefined })),
-			watches: copyWatches(this.watches),
-			pinnedWatches: copyWatches(this.pinnedWatches),
-			watchesWritable: this.watchesWritable,
-			pinnedSightFocus: [...this.pinnedSightFocus],
-			sightFocus: [...this.sightFocus],
-			sightFocusWritable: this.sightFocusWritable,
-			maxSightFocus: this.maxSightFocus,
-			sightLimit: this.sightLimit,
 			lastArc: this.lastArc,
+			lastResult: this.lastResult ? { ...this.lastResult } : undefined,
 			lastTacticalTimestamp: Number.isFinite(this.lastTacticalTimestamp) ? this.lastTacticalTimestamp : undefined,
 			lastStrategicTimestamp: Number.isFinite(this.lastStrategicTimestamp) ? this.lastStrategicTimestamp : undefined,
 			lastIntrusionTimestamp: Number.isFinite(this.lastIntrusionTimestamp) ? this.lastIntrusionTimestamp : undefined,
-			maxGoals: this.maxGoals,
-			maxEpisodic: this.memory.maxEpisodic,
 			recent: [...this.recent],
 			recentSummary: this.recentSummary || undefined,
 			thinkAbout: this.pendingAbout,
 			lastVerb: this.lastVerb,
-			names: this.names.toJSON(),
 		};
 	}
 
-	static fromJSON<TAgentCtx>(json:AgentJSON, deps:AgentDeps<TAgentCtx>):Agent<TAgentCtx> {
-		const id = readID(json);
-		if (!id) {
-			throw new Error('agent json missing id');
-		}
-		const agent = new Agent({
-			...deps,
-			id,
-			identity: json.identity,
-			goals: json.goals,
-			memory: MemoryStore.fromJSON(json.memories),
-		});
-		agent.loadJSON(json, deps);
-		return agent;
-	}
-
-	protected override loadJSON(json:AgentJSON, deps?:AgentDeps<TAgentCtx>):void {
-		super.loadJSON(json);
-		this.memory.maxEpisodic = json.maxEpisodic;
-		this.maxGoals = json.maxGoals;
-		this.lastArc = json.lastArc;
-		this.lastTacticalTimestamp = json.lastTacticalTimestamp ?? Number.NEGATIVE_INFINITY;
-		this.lastStrategicTimestamp = json.lastStrategicTimestamp ?? 0;
-		this.lastIntrusionTimestamp = json.lastIntrusionTimestamp ?? Number.NEGATIVE_INFINITY;
-		const hostPins = asWatches(deps?.pinnedWatches);
-		const jsonPins = asWatches(json.pinnedWatches);
-		this.pinnedWatches = mergePinnedWatches(hostPins, jsonPins);
-		this.watches = extrasWithoutPins(asWatches(json.watches), this.pinnedWatches);
-		this.watchesWritable = json.watchesWritable ?? true;
-		const hostFocus = asFocusList(deps?.pinnedSightFocus, Number.POSITIVE_INFINITY);
-		const jsonFocus = asFocusList(json.pinnedSightFocus, Number.POSITIVE_INFINITY);
-		this.pinnedSightFocus = mergePinnedFocus(hostFocus, jsonFocus);
-		this.maxSightFocus = json.maxSightFocus ?? deps?.maxSightFocus ?? DEFAULT_MAX_SIGHT_FOCUS;
-		this.sightFocus = extrasWithoutPinnedFocus(
-			asFocusList(json.sightFocus, this.maxSightFocus),
-			this.pinnedSightFocus,
-		);
-		this.sightFocusWritable = json.sightFocusWritable ?? true;
-		this.sightLimit = json.sightLimit ?? deps?.sightLimit;
-		for (const e of json.events ?? []) {
-			this.pendingEvents.push(e);
-		}
-		this.recent = json.recent ? [...json.recent] : [];
-		this.recentSummary = json.recentSummary ?? '';
-		this.recentAbsorbed = this.pendingEvents.length;
-		this.pendingAbout = json.thinkAbout;
-		this.lastVerb = json.lastVerb;
-		this.names.load(json.names);
-		if (json.maxGoals !== undefined) {
-			this.trimGoals();
-		}
+	/** A saved mind, not yet attached to anyone. */
+	static fromJSON<TCtx>(json:MindJSON):Mind<TCtx> {
+		const mind = new Mind<TCtx>(json.settings);
+		mind.lastArc = json.lastArc;
+		mind.lastResult = json.lastResult;
+		mind.lastTacticalTimestamp = json.lastTacticalTimestamp ?? Number.NEGATIVE_INFINITY;
+		mind.lastStrategicTimestamp = json.lastStrategicTimestamp ?? 0;
+		mind.lastIntrusionTimestamp = json.lastIntrusionTimestamp ?? Number.NEGATIVE_INFINITY;
+		mind.pendingEvents.push(...json.events ?? []);
+		mind.recent = json.recent ? [...json.recent] : [];
+		mind.recentSummary = json.recentSummary ?? '';
+		mind.recentAbsorbed = mind.pendingEvents.length;
+		mind.pendingAbout = json.thinkAbout;
+		mind.lastVerb = json.lastVerb;
+		return mind;
 	}
 
 	private tacticalDue(gameTime:number):boolean {
@@ -718,13 +675,13 @@ export class Agent<TAgentCtx = unknown> extends Actor<TAgentCtx> {
 		if (this.arcText) {
 			return;
 		}
-		const system = stablePrefix(this.id, this.identity, this.activeVerbs(), {
+		const system = stablePrefix(this.id, this.persona.identity, this.owner.activeVerbs(), {
 			includeWatches: true,
 			omitArc: true,
 		});
 		const user = `${volatileBlock({
-			goals: this.goals,
-			pinned: this.memory.pinned(),
+			goals: this.persona.goals,
+			pinned: this.persona.memory.pinned(),
 			recalled: this.recallForPrompt(),
 			recent: this.recent,
 			recentSummary: this.recentSummary,
@@ -734,7 +691,7 @@ export class Agent<TAgentCtx = unknown> extends Actor<TAgentCtx> {
 			+ 'Do not change identity unless who you are has actually changed for good. '
 			+ 'Omit identity otherwise. Do not rewrite the role to summarize this moment. '
 			+ 'Emit JSON {"goals":[{"text":"...","priority":0}]} and only if needed "identity":{"role":"...","traits":["..."]}. '
-			+ `Keep at most ${this.maxGoals} goals. Do not emit movement.`;
+			+ `Keep at most ${this.persona.maxGoals} goals. Do not emit movement.`;
 		const res = await this.provider.chat({
 			model: this.model,
 			thread: this.id,
@@ -753,10 +710,10 @@ export class Agent<TAgentCtx = unknown> extends Actor<TAgentCtx> {
 				return;
 			}
 			if (raw.identity !== undefined) {
-				this.applyIdentityPatch(raw.identity);
+				this.persona.applyIdentityPatch(raw.identity, this.id, this.now);
 			}
 			if (Array.isArray(raw.goals)) {
-				this.applyGoalList(raw.goals);
+				this.persona.applyGoalList(raw.goals);
 			}
 		}
 		catch {
@@ -764,34 +721,51 @@ export class Agent<TAgentCtx = unknown> extends Actor<TAgentCtx> {
 		}
 	}
 
-	protected extraVolatile():string {
-		const parts:string[] = [];
-		if (this.laws.length > 0) {
-			const lines = this.laws.map((law) => (
-				this.crowdLawWho()
-					? `- ${law.name}: who=${law.who} watch=${law.watch} → ${formatArc(law.arc, this.verbs.nested())}`
-					: `- ${law.name}: watch=${law.watch} → ${formatArc(law.arc, this.verbs.nested())}`
-			));
-			parts.push(`Laws (emergencies, list order; unlaw to drop):\n${lines.join('\n')}`);
+	/** The owner's own block, or the laws and what just came into the voice's hands. */
+	private extraVolatile():string {
+		const section = this.owner.promptSection?.(this);
+		if (section !== undefined) {
+			return section;
 		}
-		const read = this.receivedSinceThink();
-		if (read) {
-			parts.push(read);
+		return [this.lawsSection(), this.receivedSinceThink()].filter(Boolean).join('\n\n');
+	}
+
+	/** A stored expression in this mind's names. */
+	named(expr:string):string {
+		return mapExpr(expr, namesOf(this.persona.names));
+	}
+
+	/** A stored arc in this mind's names, as text. */
+	namedArc(arc:Arc):string {
+		const verbs = this.owner.verbs.nested();
+		return formatArc(mapArc(arc, verbs, namesOf(this.persona.names)), verbs);
+	}
+
+	/** The owner's laws in list order, as this mind's model reads them. */
+	lawsSection():string {
+		const laws = this.owner.laws;
+		if (laws.length === 0) {
+			return '';
 		}
-		return parts.join('\n\n');
+		const line = (law:Law):string => {
+			const who = this.owner.lawsTakeWho() ? ` who=${this.named(law.who)}` : '';
+			return `- ${mapLawName(law.name, namesOf(this.persona.names))}:${who} watch=${this.named(law.watch)} → ${this.namedArc(law.arc)}`;
+		};
+		return `Laws (emergencies, list order; unlaw to drop):\n${laws.map(line).join('\n')}`;
 	}
 
 	private receivedSinceThink():string {
-		const ctx = this.context();
-		if (!this.encyclopedia || !this.catalog || !this.prevMe || ctx === undefined) {
+		const voice = this.voice;
+		const ctx = voice.context();
+		if (!this.encyclopedia || !voice.catalog || !voice.prevMe || ctx === undefined) {
 			return '';
 		}
 		const pages = encyclopediaPages(this.encyclopedia, ctx);
 		if (pages.length === 0) {
 			return '';
 		}
-		const prev = new Set(bagOf(this.prevMe).map((item) => item.id));
-		const gained = bagOf(this.catalog(ctx).me).filter((item) => !prev.has(item.id));
+		const prev = new Set(bagOf(voice.prevMe).map((item) => item.id));
+		const gained = bagOf(voice.catalog(ctx).me).filter((item) => !prev.has(item.id));
 		return receivedArticles(pages, gained);
 	}
 
@@ -804,7 +778,7 @@ export class Agent<TAgentCtx = unknown> extends Actor<TAgentCtx> {
 		if (gist.size < 3 || !this.talk) {
 			return undefined;
 		}
-		const meantFor = [this.sayToOf(args) ?? this.talk.nearby(this.id)].flat();
+		const meantFor = [sayToOf(args) ?? this.talk.nearby(this.thinkThread())].flat();
 		return this.said.find((line) => {
 			const shared = [...gist].filter((w) => line.gist.has(w)).length;
 			return shared / gist.size >= REPEAT_OVERLAP
@@ -813,16 +787,17 @@ export class Agent<TAgentCtx = unknown> extends Actor<TAgentCtx> {
 	}
 
 	/**
-	 * Articles for names said or heard lately: talk carries the outside facts an agent lacks, while its own
+	 * Articles for names said or heard lately: talk carries the outside facts a mind lacks, while its own
 	 * reasoning would only feed its fixation. Item articles always say whether this mind carries one.
 	 * The article text itself is not repeated within a few thinks.
 	 */
 	private mentionedText():string {
-		const ctx = this.encyclopedia && this.mentionCap > 0 && this.recent.length > 0 ? this.context() : undefined;
+		const voice = this.voice;
+		const ctx = this.encyclopedia && this.mentionCap > 0 && this.recent.length > 0 ? voice.context() : undefined;
 		if (!this.encyclopedia || ctx === undefined) {
 			return '';
 		}
-		const bag = this.catalog ? bagOf(this.catalog(ctx).me) : undefined;
+		const bag = voice.catalog ? bagOf(voice.catalog(ctx).me) : undefined;
 		const lines:string[] = [];
 		for (const entry of mentionedArticles(encyclopediaPages(this.encyclopedia, ctx), this.recent.join('\n'), Infinity)) {
 			if (lines.length >= this.mentionCap) {
@@ -847,31 +822,23 @@ export class Agent<TAgentCtx = unknown> extends Actor<TAgentCtx> {
 	 */
 	private failureArticles():string {
 		const reason = this.lastResult && !this.lastResult.ok ? this.lastResult.reason : undefined;
-		const ctx = reason ? this.context() : undefined;
+		const ctx = reason ? this.voice.context() : undefined;
 		if (!reason || !this.encyclopedia || ctx === undefined) {
 			return '';
 		}
 		return articlesNamedIn(encyclopediaPages(this.encyclopedia, ctx), reason);
 	}
 
-	protected trimGoals():void {
-		if (this.goals.length <= this.maxGoals) {
-			return;
-		}
-		this.goals = [...this.goals]
-			.sort((a, b) => (b.priority ?? 0) - (a.priority ?? 0))
-			.slice(0, this.maxGoals);
-	}
 
 	private gatherSensed():Record<string, unknown> {
-		const ctx = this.context();
+		const ctx = this.voice.context();
 		const sensed:Record<string, unknown> = {};
 		for (const [name, sense] of Object.entries(this.senses)) {
 			if (!this.senseAllowed(name)) {
 				continue;
 			}
 			try {
-				sensed[name] = sense.gather(ctx as TAgentCtx);
+				sensed[name] = sense.gather(ctx as TCtx);
 			}
 			catch {
 				continue;
@@ -895,20 +862,29 @@ export class Agent<TAgentCtx = unknown> extends Actor<TAgentCtx> {
 			intrusion,
 			lastResult: this.lastResult,
 			lastResultArticles: this.failureArticles(),
-			goals: this.goals,
-			pinned: this.memory.pinned(),
+			goals: this.persona.goals,
+			pinned: this.persona.memory.pinned(),
 			recalled,
-			watches: this.watches,
-			pinnedWatches: this.pinnedWatches,
-			watchesWritable: this.activeVerbs().has('watch'),
-			pinnedSightFocus: this.pinnedSightFocus,
-			sightFocus: this.sightFocus,
-			sightFocusWritable: this.activeVerbs().has('focus'),
+			watches: this.namedWatches(this.persona.watches),
+			pinnedWatches: this.namedWatches(this.persona.pinnedWatches),
+			watchesWritable: this.owner.activeVerbs().has('watch'),
+			pinnedSightFocus: this.persona.pinnedSightFocus.map((e) => this.named(e)),
+			sightFocus: this.persona.sightFocus.map((e) => this.named(e)),
+			sightFocusWritable: this.owner.activeVerbs().has('focus'),
 			recent: this.recent,
 			recentSummary: this.recentSummary,
 			mentioned: this.mentionedText(),
 			thinkAbout: this.pendingAbout,
 		}), this.extraVolatile()].filter(Boolean).join('\n\n');
+	}
+
+	private namedWatches(watches:Watches):Watches {
+		return Object.fromEntries(Object.entries(watches).map(([name, expr]) => [name, this.named(expr)]));
+	}
+
+	/** The model's reply as an arc in ids. */
+	private readArc(raw:unknown, verbs:VerbRegistry):Arc {
+		return mapArc(deferThinks(parseArc(raw, verbs)), verbs, idsOf(this.persona.names));
 	}
 
 	private parseArcContent(content:string, verbs:VerbRegistry):{ arc:Arc; raw:unknown } | null {
@@ -920,7 +896,7 @@ export class Agent<TAgentCtx = unknown> extends Actor<TAgentCtx> {
 			const raw = (trimmed.startsWith('{') || trimmed.startsWith('```'))
 				? extractJson(trimmed)
 				: trimmed;
-			const arc = deferThinks(parseArc(raw, verbs));
+			const arc = this.readArc(raw, verbs);
 			if (!firstStep(arc)?.verb) {
 				return null;
 			}
@@ -940,7 +916,7 @@ export class Agent<TAgentCtx = unknown> extends Actor<TAgentCtx> {
 		sendTools:boolean,
 		tools:ToolDef[],
 	):Promise<Arc> {
-		if (!liveVerbAtThink || !this.liveArc || this.lastVerb === liveVerbAtThink) {
+		if (!liveVerbAtThink || !this.voice.liveArc || this.lastVerb === liveVerbAtThink) {
 			return arc;
 		}
 		this.absorbPending();
@@ -978,19 +954,19 @@ export class Agent<TAgentCtx = unknown> extends Actor<TAgentCtx> {
 
 	private async tactical():Promise<Arc> {
 		this.thinks += 1;
-		const ctx = this.context();
-		this.refreshKit();
-		const liveVerbAtThink = this.liveArc ? this.lastVerb : undefined;
+		const ctx = this.voice.context();
+		this.owner.refreshKit();
+		const liveVerbAtThink = this.voice.liveArc ? this.lastVerb : undefined;
 		// A repeat after new input (speech, an interruption, a nudge) can be right; without any, the model is stuck.
 		const freshInput = this.hasFreshInput();
 		const sensed = this.gatherSensed();
-		const verbs = this.activeVerbs();
+		const verbs = this.owner.activeVerbs();
 		const tools = this.toolRoundCap > 0 ? this.toolDefs() : [];
 		const sendTools = tools.length > 0;
 		const toolNames = tools.map((t) => t.name);
 		const emitText = this.emitText(verbs);
-		const system = stablePrefix(this.id, this.identity, verbs, {
-			includeWatches: this.watchesWritable || watchCount(this.watchList()) > 0,
+		const system = stablePrefix(this.id, this.persona.identity, verbs, {
+			includeWatches: this.persona.watchesWritable || watchCount(this.persona.watchList()) > 0,
 			watchesWritable: verbs.has('watch'),
 			canObserve: toolNames.includes('observe'),
 			canSeeMap: toolNames.includes('see_map'),
@@ -1053,7 +1029,7 @@ export class Agent<TAgentCtx = unknown> extends Actor<TAgentCtx> {
 				for (const call of res.toolCalls) {
 					const key = `${call.name} ${call.arguments.replace(/\s+/g, '')}`;
 					// A repeat did not help, so it is refused: any call within this think, a lookup within the last few.
-					// Other tools (see_map, observe) may answer differently once the body has moved.
+					// Other tools (see_map, observe) may answer differently once the character has moved.
 					const window = LOOKUP_TOOLS.includes(call.name) ? LOOKUP_REPEAT : 0;
 					const result = this.thinks - (this.calledOn.get(key) ?? -Infinity) <= window
 						? { error: 'Duplicate call. You made it this think or lately. Change the query, call another tool, or emit the arc.' }
@@ -1094,7 +1070,7 @@ export class Agent<TAgentCtx = unknown> extends Actor<TAgentCtx> {
 					raw = (trimmed.startsWith('{') || trimmed.startsWith('```'))
 						? extractJson(trimmed)
 						: trimmed;
-					arc = deferThinks(parseArc(raw, verbs));
+					arc = this.readArc(raw, verbs);
 				}
 				catch (err) {
 					lastErr = err instanceof Error ? err : new ArcError(String(err));
@@ -1164,7 +1140,7 @@ export class Agent<TAgentCtx = unknown> extends Actor<TAgentCtx> {
 		this.emitStreak = this.lastEmit ? 1 : 0;
 	}
 
-	/** Anything since the last accepted think besides this agent's own arc result. */
+	/** Anything since the last accepted think besides this mind's own arc result. */
 	private hasFreshInput():boolean {
 		return this.pendingAbout !== undefined || this.pendingEvents.some((e) => e.kind !== 'arc_result');
 	}
@@ -1189,88 +1165,15 @@ export class Agent<TAgentCtx = unknown> extends Actor<TAgentCtx> {
 		return true;
 	}
 
-	effectiveWatches():string[] {
-		return watchExprs(this.watchList());
-	}
 
-	/** Pins first, then extra, de-duplicated by name. */
-	watchList():Watches {
-		return { ...this.pinnedWatches, ...extrasWithoutPins(this.watches, this.pinnedWatches) };
-	}
 
-	/** Host or tests. Fails if the name is taken (pinned or extra) or empty. */
-	addWatch(name:string, expr:string):boolean {
-		const next = applyWatchOps(this.watches, this.pinnedWatches, {
-			add: asWatches({ [name]: expr }),
-			edit: {},
-			remove: [],
-		});
-		if (watchCount(next) === watchCount(this.watches)) {
-			return false;
-		}
-		this.watches = next;
-		return true;
-	}
 
-	/** Host or tests. Fails if missing or pinned. */
-	editWatch(name:string, expr:string):boolean {
-		if (!hasWatch(this.watches, name) || hasWatch(this.pinnedWatches, name)) {
-			return false;
-		}
-		const patched = asWatches({ [name]: expr });
-		if (watchCount(patched) === 0) {
-			return false;
-		}
-		this.watches = applyWatchOps(this.watches, this.pinnedWatches, {
-			add: {},
-			edit: patched,
-			remove: [],
-		});
-		return true;
-	}
 
-	/** Host or tests. Fails if missing or pinned. */
-	removeWatch(name:string):boolean {
-		const next = applyWatchOps(this.watches, this.pinnedWatches, {
-			add: {},
-			edit: {},
-			remove: [name],
-		});
-		if (watchCount(next) === watchCount(this.watches)) {
-			return false;
-		}
-		this.watches = next;
-		return true;
-	}
 
-	/** Dev-authored pin. Overwrites a pin of the same name; drops a colliding extra. */
-	addPinnedWatch(name:string, expr:string):boolean {
-		const row = asWatches({ [name]: expr });
-		const n = Object.keys(row)[0];
-		if (!n) {
-			return false;
-		}
-		const extra = findWatchName(this.watches, n);
-		if (extra) {
-			const next = { ...this.watches };
-			delete next[extra];
-			this.watches = next;
-		}
-		const pin = findWatchName(this.pinnedWatches, n);
-		if (pin) {
-			this.pinnedWatches = { ...this.pinnedWatches, [pin]: row[n] };
-			return true;
-		}
-		this.pinnedWatches = { ...this.pinnedWatches, [n]: row[n] };
-		return true;
-	}
 
 	private absorbPending():void {
 		for (let i = this.recentAbsorbed; i < this.pendingEvents.length; i++) {
-			const e = this.pendingEvents[i];
-			if (!e) {
-				continue;
-			}
+			const e = this.render(this.pendingEvents[i]);
 			const text = e.text.trim();
 			if (!text) {
 				continue;
@@ -1285,10 +1188,10 @@ export class Agent<TAgentCtx = unknown> extends Actor<TAgentCtx> {
 			}
 			this.noteRecent(text);
 			if (e.remember) {
-				const rows = this.memory.all();
+				const rows = this.persona.memory.all();
 				const last = rows[rows.length - 1];
 				if (last?.text !== text) {
-					this.memory.add({
+					this.persona.memory.add({
 						category: 'episodic',
 						text,
 						tags: mergeTags(e.tags, nameTags(text)),
@@ -1318,11 +1221,11 @@ export class Agent<TAgentCtx = unknown> extends Actor<TAgentCtx> {
 		if (!line) {
 			return;
 		}
-		const rows = this.memory.all();
+		const rows = this.persona.memory.all();
 		if (rows[rows.length - 1]?.text === line) {
 			return;
 		}
-		this.memory.add({
+		this.persona.memory.add({
 			category: 'semantic',
 			text: line,
 			tags,
@@ -1336,7 +1239,7 @@ export class Agent<TAgentCtx = unknown> extends Actor<TAgentCtx> {
 			return;
 		}
 		for (const name of nameTags(text)) {
-			if (name === this.id) {
+			if (this.isSelf(name)) {
 				continue;
 			}
 			const snippet = clauseAbout(text, name);
@@ -1345,7 +1248,7 @@ export class Agent<TAgentCtx = unknown> extends Actor<TAgentCtx> {
 			}
 			const line = `Last I saw ${name}: ${snippet}`;
 			const tag = `seen:${name}`;
-			const existing = this.memory.all().find((r) => r.category === 'semantic' && r.tags.includes(tag));
+			const existing = this.persona.memory.all().find((r) => r.category === 'semantic' && r.tags.includes(tag));
 			if (existing) {
 				if (existing.text !== line) {
 					existing.text = line;
@@ -1353,7 +1256,7 @@ export class Agent<TAgentCtx = unknown> extends Actor<TAgentCtx> {
 				}
 				continue;
 			}
-			this.memory.add({
+			this.persona.memory.add({
 				category: 'semantic',
 				text: line,
 				tags: mergeTags([tag, name, 'seen'], nameTags(snippet)),
@@ -1364,7 +1267,7 @@ export class Agent<TAgentCtx = unknown> extends Actor<TAgentCtx> {
 
 	private recallForPrompt(scene = ''):MemoryRecord[] {
 		const query = [
-			...this.goals.map((g) => g.text),
+			...this.persona.goals.map((g) => g.text),
 			this.pendingAbout ?? '',
 			...this.recent,
 			this.recentSummary,
@@ -1372,9 +1275,9 @@ export class Agent<TAgentCtx = unknown> extends Actor<TAgentCtx> {
 		if (!query.trim()) {
 			return [];
 		}
-		const pinnedIds = new Set(this.memory.pinned().map((r) => r.id));
+		const pinnedIds = new Set(this.persona.memory.pinned().map((r) => r.id));
 		const recentSet = new Set(this.recent);
-		return this.memory.recall({
+		return this.persona.memory.recall({
 			query,
 			k: this.recallK,
 			now: this.now,
@@ -1388,90 +1291,28 @@ export class Agent<TAgentCtx = unknown> extends Actor<TAgentCtx> {
 		});
 	}
 
-	effectiveSightFocus():string[] {
-		return effectiveSightFocus(this.pinnedSightFocus, this.sightFocus);
-	}
 
 	private applyMind(raw:unknown):void {
 		if (!isRecord(raw)) {
 			return;
 		}
 		if (raw.identity !== undefined) {
-			this.applyIdentityPatch(raw.identity);
+			this.persona.applyIdentityPatch(raw.identity, this.id, this.now);
 		}
 		if (raw.goals !== undefined) {
-			this.applyGoalList(raw.goals);
+			this.persona.applyGoalList(raw.goals);
 		}
 	}
 
-	private applyIdentityPatch(raw:unknown):boolean {
-		if (!isRecord(raw)) {
-			return false;
-		}
-		const nextRole = typeof raw.role === 'string' ? raw.role.trim() : '';
-		let changed = false;
-		if (nextRole.length > 0 && nextRole !== this.identity.role) {
-			this.identity.role = nextRole;
-			changed = true;
-		}
-		if (Array.isArray(raw.traits)) {
-			this.identity.traits = raw.traits.filter((x):x is string => (
-				typeof x === 'string' && x.trim().length > 0
-			));
-			changed = true;
-		}
-		if (changed) {
-			this.stampIdentity();
-		}
-		return changed;
-	}
 
-	private applyGoalList(raw:unknown):void {
-		if (!Array.isArray(raw)) {
-			return;
-		}
-		const goals:Goal[] = [];
-		for (const g of raw) {
-			if (isRecord(g) && typeof g.text === 'string' && g.text.trim()) {
-				goals.push({
-					text: g.text.trim(),
-					priority: typeof g.priority === 'number' ? g.priority : undefined,
-				});
-			}
-		}
-		if (goals.length > 0) {
-			this.goals = goals;
-			this.trimGoals();
-		}
-	}
 
-	private stampIdentity():void {
-		const text = this.identity.role ? `I am ${this.id}. Role: ${this.identity.role}.` : `I am ${this.id}.`;
-		const existing = this.memory.pinned().find((row) => (
-			row.category === 'identity' || row.tags.includes('identity')
-		));
-		if (existing) {
-			existing.text = text;
-			existing.category = 'identity';
-			if (!existing.tags.includes('identity')) {
-				existing.tags = [...existing.tags, 'identity'];
-			}
-			return;
-		}
-		this.memory.add({
-			category: 'identity',
-			text,
-			tags: ['identity'],
-			pinned: true,
-		}, this.now);
-	}
 
 	private maybeIntrude(perceptionText:string):string | undefined {
 		if (this.now - this.lastIntrusionTimestamp < this.intrusionCooldown) {
 			return undefined;
 		}
-		const tags = this.pendingEvents.flatMap((e) => e.tags ?? []);
-		const hit = this.memory.intrusion({
+		const tags = this.pendingEvents.flatMap((e) => this.render(e).tags ?? []);
+		const hit = this.persona.memory.intrusion({
 			query: perceptionText,
 			now: this.now,
 			tags,
@@ -1496,8 +1337,8 @@ export class Agent<TAgentCtx = unknown> extends Actor<TAgentCtx> {
 		return out;
 	}
 
-	private mergedTools():Record<string, ToolSpec<TAgentCtx>> {
-		const tools:{ [k:string]:ToolSpec<TAgentCtx> } = { ...this.tools };
+	private mergedTools():Record<string, ToolSpec<TCtx>> {
+		const tools:{ [k:string]:ToolSpec<TCtx> } = { ...this.tools };
 		if (!tools.recall) {
 			tools.recall = {
 				description: 'Search your own memory: what you know, were told, saw, or did. Query the names or keywords your goal needs (Bread, Gate).',
@@ -1635,11 +1476,12 @@ export class Agent<TAgentCtx = unknown> extends Actor<TAgentCtx> {
 	}
 
 	private earshotText():string {
-		// In earshot is not in reach (across a river) or clear (a mumble); unmarked, the agent walks into the river or talks to no avail.
-		const names = (this.talk?.nearby(this.id) ?? []).map((id) => {
+		// In earshot is not in reach (across a river) or clear (a mumble); unmarked, the voice walks into the river or talks to no avail.
+		const voiceID = this.thinkThread();
+		const names = (this.talk?.nearby(voiceID) ?? []).map((id) => {
 			const blocked = this.wayBlocked?.(id);
 			const marks = [
-				!this.talk!.clear(this.id, id) && 'too far to make out your words',
+				!this.talk!.clear(voiceID, id) && 'too far to make out your words',
 				blocked !== undefined && (blocked ? `unreachable, blocked on the way: ${blocked}` : 'unreachable'),
 			].filter(Boolean);
 			return marks.length > 0 ? `${this.nameOf(id)} (${marks.join('; ')})` : this.nameOf(id);
@@ -1657,7 +1499,7 @@ export class Agent<TAgentCtx = unknown> extends Actor<TAgentCtx> {
 	private blockedAgain(arc:Arc):string | undefined {
 		const head = firstStep(arc);
 		for (const arg of Object.values(head?.args ?? {})) {
-			const id = typeof arg === 'string' ? this.names.resolve(arg) : '';
+			const id = typeof arg === 'string' ? arg : '';
 			const key = `${head?.verb} ${id}`;
 			if (!this.noWay.has(key)) {
 				continue;
@@ -1677,7 +1519,7 @@ export class Agent<TAgentCtx = unknown> extends Actor<TAgentCtx> {
 		if (!this.talk || head?.verb !== 'say') {
 			return undefined;
 		}
-		const check = this.talk.canSay(this.id, this.sayToOf(head.args));
+		const check = this.talk.canSay(this.thinkThread(), sayToOf(head.args));
 		if (check.ok) {
 			return undefined;
 		}
@@ -1690,30 +1532,31 @@ export class Agent<TAgentCtx = unknown> extends Actor<TAgentCtx> {
 		}
 		const row = isRecord(args) ? args : {};
 		const to = typeof row.to === 'string' ? row.to.trim() : '';
-		const nearby = this.talk.nearby(this.id).map((id) => this.nameOf(id));
+		const nearby = this.talk.nearby(this.thinkThread()).map((id) => this.nameOf(id));
 		if (!to) {
 			return nearby.length > 0 ? nearby : 'No one in talking range.';
 		}
-		const check = this.talk.canSay(this.id, this.names.resolve(to));
+		const check = this.talk.canSay(this.thinkThread(), this.persona.names.resolve(to));
 		if (!check.ok) {
 			return { error: check.reason, inRange: false, nearby };
 		}
 		return { ok: true, inRange: true, nearby };
 	}
 
-	private handleObserve(ctx:TAgentCtx, args:unknown):unknown {
+	private handleObserve(ctx:TCtx, args:unknown):unknown {
 		const row = isRecord(args) ? args : {};
 		const expr = typeof row.expr === 'string' ? row.expr : '';
 		if (!expr) {
 			return { error: 'observe needs expr' };
 		}
-		if (!this.catalog) {
+		const catalog = this.voice.catalog;
+		if (!catalog) {
 			return { error: 'no catalog' };
 		}
-		return observeExpr(expr, this.catalog(ctx), evaluate);
+		return observeExpr(expr, catalog(ctx), evaluate);
 	}
 
-	private handleGrepEncyclopedia(ctx:TAgentCtx | undefined, args:unknown):unknown {
+	private handleGrepEncyclopedia(ctx:TCtx | undefined, args:unknown):unknown {
 		const row = isRecord(args) ? args : {};
 		const query = typeof row.query === 'string' ? row.query : '';
 		const pages = encyclopediaPages(this.encyclopedia, ctx);
@@ -1741,7 +1584,7 @@ export class Agent<TAgentCtx = unknown> extends Actor<TAgentCtx> {
 				tags: ['recent'],
 				category: 'episodic' as const,
 			})),
-			...this.memory.recall({
+			...this.persona.memory.recall({
 				query,
 				k,
 				now: this.now,
@@ -1755,7 +1598,7 @@ export class Agent<TAgentCtx = unknown> extends Actor<TAgentCtx> {
 		].slice(0, k);
 	}
 
-	private async runTool(name:string, rawArgs:string, ctx:TAgentCtx | undefined):Promise<unknown> {
+	private async runTool(name:string, rawArgs:string, ctx:TCtx | undefined):Promise<unknown> {
 		if (ctx === undefined) {
 			return { error: 'no ctx' };
 		}
@@ -1780,8 +1623,8 @@ export class Agent<TAgentCtx = unknown> extends Actor<TAgentCtx> {
 		}
 	}
 
-	private runThink(step:Step):ArcResult {
-		if (this.lastVerb === 'think') {
+	private runThink(step:Step, voice:boolean):ArcResult {
+		if (voice && this.lastVerb === 'think') {
 			return {
 				ok: false,
 				verb: 'think',
@@ -1793,22 +1636,24 @@ export class Agent<TAgentCtx = unknown> extends Actor<TAgentCtx> {
 			about = about.slice(0, THINK_ABOUT_CAP).trim();
 		}
 		this.pendingAbout = about.length > 0 ? about : undefined;
-		this.lastVerb = 'think';
+		if (voice) {
+			this.lastVerb = 'think';
+		}
 		return { ok: true, verb: 'think' };
 	}
 
 	/** watch(name, expr) adds or replaces an extra watch; unwatch(name) drops one. Pins fail closed. */
 	private runWatch(step:Step):ArcResult {
 		const name = String(step.args.name ?? '');
-		if (hasWatch(this.pinnedWatches, name)) {
+		if (hasWatch(this.persona.pinnedWatches, name)) {
 			return { ok: false, verb: step.verb, reason: `${name} is a required watch` };
 		}
 		const expr = String(step.args.expr ?? '');
 		const ok = step.verb === 'unwatch'
-			? this.removeWatch(name)
-			: this.editWatch(name, expr) || this.addWatch(name, expr);
+			? this.persona.removeWatch(name)
+			: this.persona.editWatch(name, expr) || this.persona.addWatch(name, expr);
 		if (ok) {
-			this.queue?.setWatches(this.id, this.effectiveWatches());
+			this.queue?.setWatches(this.id, this.persona.effectiveWatches());
 		}
 		return { ok, verb: step.verb, reason: ok ? undefined : `no watch ${name}` };
 	}
@@ -1816,12 +1661,12 @@ export class Agent<TAgentCtx = unknown> extends Actor<TAgentCtx> {
 	/** focus(expr) puts an extra sightFocus first; unfocus(expr) drops one. Pins fail closed. */
 	private runFocus(step:Step):ArcResult {
 		const expr = String(step.args.expr ?? '').trim();
-		if (this.pinnedSightFocus.includes(expr)) {
+		if (this.persona.pinnedSightFocus.includes(expr)) {
 			return { ok: false, verb: step.verb, reason: 'that sightFocus is required' };
 		}
-		const rest = this.sightFocus.filter((e) => e !== expr);
-		const ok = step.verb === 'focus' ? expr.length > 0 : rest.length < this.sightFocus.length;
-		this.sightFocus = step.verb === 'focus' ? asFocusList([expr, ...rest], this.maxSightFocus) : rest;
+		const rest = this.persona.sightFocus.filter((e) => e !== expr);
+		const ok = step.verb === 'focus' ? expr.length > 0 : rest.length < this.persona.sightFocus.length;
+		this.persona.sightFocus = step.verb === 'focus' ? asFocusList([expr, ...rest], this.persona.maxSightFocus) : rest;
 		return { ok, verb: step.verb, reason: ok ? undefined : 'no such sightFocus' };
 	}
 
@@ -1838,15 +1683,18 @@ export class Agent<TAgentCtx = unknown> extends Actor<TAgentCtx> {
 		}
 	}
 
-	/** Mind verbs run here; `say` and world verbs run through the body. */
-	protected override async runStep(step:Step, ctx:TAgentCtx | undefined):Promise<ArcResult> {
-		if (!this.activeVerbs().has(step.verb)) {
-			return super.runStep(step, ctx);
-		}
+	/**
+	 * A mind verb that `by` runs: its voice, or another of a collective's characters, whose memories and goals
+	 * are marked as theirs. `say` keeps the voice from repeating itself. Undefined for a step the character runs itself.
+	 */
+	async perform(step:Step, by:ArcRunner<TCtx>):Promise<ArcResult | undefined> {
+		const voice = by === this.voice;
 		if (step.verb === 'think') {
-			return this.runThink(step);
+			return this.runThink(step, voice);
 		}
-		this.noteVerb(step.verb);
+		if (voice) {
+			this.noteVerb(step.verb);
+		}
 		if (WATCH_EDIT_VERBS.includes(step.verb)) {
 			return this.runWatch(step);
 		}
@@ -1856,29 +1704,32 @@ export class Agent<TAgentCtx = unknown> extends Actor<TAgentCtx> {
 		if (step.verb === 'remember') {
 			const content = String(step.args.content ?? '');
 			const tags = asStringArray(step.args.tags);
-			await this.remember(content, tags, this.now);
+			await this.remember(content, voice ? tags : [...tags, `unit:${by.id}`], this.now);
 			return { ok: true, verb: 'remember' };
 		}
 		if (step.verb === 'set_goal') {
 			const goal = String(step.args.goal ?? '');
 			const priority = typeof step.args.priority === 'number' ? step.args.priority : 0;
-			this.goals.push({ text: goal, priority });
-			this.trimGoals();
+			this.persona.goals.push({ text: voice ? goal : `[${by.id}] ${goal}`, priority });
+			this.persona.trimGoals();
 			return { ok: true, verb: 'set_goal' };
 		}
 		if (step.verb === 'drop_goal') {
 			const goal = typeof step.args.goal === 'string' ? step.args.goal : undefined;
 			if (!goal) {
-				this.goals.pop();
+				this.persona.goals.pop();
 			}
 			else {
-				this.goals = this.goals.filter((g) => g.text !== goal);
+				this.persona.goals = this.persona.goals.filter((g) => g.text !== goal);
 			}
 			return { ok: true, verb: 'drop_goal' };
 		}
 		if (step.verb === 'set_identity') {
-			const changed = this.applyIdentityPatch(step.args);
+			const changed = this.persona.applyIdentityPatch(step.args, this.id, this.now);
 			return { ok: changed, verb: 'set_identity', reason: changed ? undefined : 'nothing to change' };
+		}
+		if (!voice) {
+			return undefined;
 		}
 		if (step.verb === 'say' && this.talk) {
 			const text = String(step.args.text ?? '').trim();
@@ -1886,10 +1737,10 @@ export class Agent<TAgentCtx = unknown> extends Actor<TAgentCtx> {
 			if (echo) {
 				return { ok: false, verb: 'say', reason: `they already heard you say that ("${echo}"). Saying it again changes nothing: act on it, or say something new` };
 			}
-			const result = this.speak(step);
+			const result = by.speak(step);
 			if (result.ok && text) {
 				this.said = [...this.said, { gist: gistOf(text), text, heard: new Set(result.heard ?? []) }].slice(-SAID_CAP);
-				const who = [this.sayToOf(step.args) ?? []].flat().map((id) => this.nameOf(id)).join(', ');
+				const who = [sayToOf(step.args) ?? []].flat().map((id) => this.nameOf(id)).join(', ');
 				this.noteRecent(who ? `You said to ${who}: "${text}"` : `You said: "${text}"`);
 			}
 			return result;
@@ -1898,6 +1749,7 @@ export class Agent<TAgentCtx = unknown> extends Actor<TAgentCtx> {
 		if (once) {
 			this.queue?.armOnce(this.id, once);
 		}
-		return super.runStep(step, ctx);
+		return undefined;
 	}
+
 }

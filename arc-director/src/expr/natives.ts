@@ -27,7 +27,7 @@ export type HostKernels = {
 	hostFns?:Record<string, NativeFn>;
 	distance?:(a:ExprEntity, b:ExprEntity)=>number | undefined;
 	nearRadius?:number;
-	/** Length of the route a body would take; undefined = no way there. */
+	/** Length of the route a character would take; undefined = no way there. */
 	pathDistance?:(a:ExprEntity, b:ExprEntity)=>number | undefined;
 	canSee?:(a:ExprEntity, b:ExprEntity)=>boolean;
 	facing?:(a:ExprEntity, b:ExprEntity)=>number;
@@ -44,7 +44,7 @@ export type HostKernels = {
 	stringifiers?:Stringifiers;
 	/** Position for manhattan / chebyshev / inSquare. */
 	point?:(who:ExprEntity)=>number[] | undefined;
-	/** Override watch LIST_CAP (Crowd `who` uses roster size). */
+	/** Override watch LIST_CAP (a collective's `who` uses its roster size). */
 	listCap?:number;
 };
 

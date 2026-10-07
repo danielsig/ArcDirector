@@ -116,12 +116,12 @@ function doorStatus(doorGo:GameObject):string {
 }
 
 /** English line for the think prompt. Empty when the scene has no interiors. */
-export function whereabouts(actor:GameObject):string {
-	const world = actor.world;
+export function whereabouts(character:GameObject):string {
+	const world = character.world;
 	if (!world || !hasInterior(world)) {
 		return '';
 	}
-	const p = actor.transform.position;
+	const p = character.transform.position;
 	const inside = enclosureAt(world, p.x, p.z);
 	if (inside) {
 		const name = namedOf(inside);

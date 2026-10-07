@@ -1,5 +1,5 @@
 import type { WorldSave } from '@arc-director/kindling';
-import type { AgentJSON } from 'arc-director';
+import type { CastJSON } from 'arc-director';
 import type { ItemInstance } from '../items/instance';
 import { lsGet, lsSet } from '../prefs';
 import { spawnNPC, type NPCSpawnOpts } from '../world/spawn';
@@ -8,14 +8,14 @@ import type { GameObject } from './GameObject';
 import type { ViewPose } from './viewPersist';
 import type { World } from './World';
 
-/** One save per scene: the world as a diff of the fresh scene, the minds, and the camera. */
+/** One save per scene: the world as a diff of the fresh scene, the cast, and the camera. */
 export type GameSave = {
 	savedUTC:string;
 	time:number;
 	bargainDone:boolean;
 	pose:ViewPose;
 	world:WorldSave;
-	agents:Record<string, AgentJSON>;
+	cast:CastJSON;
 };
 
 /** What `spawnWorldItem` / `spawnNPC` stamp on `GameObject.recipe`. */

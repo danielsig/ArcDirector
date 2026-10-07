@@ -35,8 +35,9 @@ async function main():Promise<void> {
 		})
 		.withSight({ look: () => fixtureSight() })
 		.withContext(() => ({ paragraph }))
-		.addAgent({
+		.addCharacter({
 			id: 'Guard',
+			mind: {},
 			identity: { role: 'Guard', traits: ['dutiful'] },
 			goals: [{ text: 'Go to EastGate', priority: 1 }],
 			memories: [{
@@ -75,13 +76,13 @@ async function main():Promise<void> {
 
 	director.tick(1, 1);
 	const t0 = Date.now();
-	while (!director.agent('Guard')?.lastArc) {
+	while (!director.character('Guard')?.mind?.lastArc) {
 		if (Date.now() - t0 > 180_000) {
-			throw new Error('agent returned no arc');
+			throw new Error('Guard returned no arc');
 		}
 		await sleep(20);
 	}
-	const arc = director.agent('Guard')!.lastArc!;
+	const arc = director.character('Guard')!.mind!.lastArc!;
 	console.log('arc:', formatArc(arc));
 	console.log(JSON.stringify(arc, null, 2));
 	director.dispose();

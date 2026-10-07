@@ -1,29 +1,25 @@
-export { Crowd } from './crowd.js';
-export { CrowdUnit, type CrowdUnitJSON, type CrowdUnitSpec } from './unit.js';
-export { CrowdConductor, isCrowdConductor, type CrowdConductorJSON, type CrowdConductorOptions } from './conductor.js';
+export { Collective, type CollectiveJSON, type CollectiveOptions } from './collective.js';
 export {
-	STOCK_CROWD_VERBS,
-	STOCK_CROWD_VERB_DEFS,
+	STOCK_COLLECTIVE_VERBS,
+	STOCK_COLLECTIVE_VERB_DEFS,
 	STOCK_FORMATION_VERBS,
-	registerStockCrowdVerbs,
+	registerStockCollectiveVerbs,
 	isFormationVerb,
-	type StockCrowdVerb,
-} from './conductor-verbs.js';
+	type StockCollectiveVerb,
+} from './verbs.js';
 export { squadTag, shortTag, isSquadTag } from './tags.js';
 export {
-	evaluateWho,
-	unitEntity,
-	buildCrowdCatalog,
-	crowdKernels,
-	arcArg,
-} from './who.js';
+	chatHandover,
+	HANDOVER_MEMORY_CAP,
+	HANDOVER_THREAD,
+	type Handover,
+	type Journey,
+	type MemoryEdit,
+} from './handover.js';
 export {
-	lawFromSpec,
-	upsertLaw,
-	dropLaw,
-	lawWatchTrue,
+	evaluateWho,
+	memberEntity,
+	buildCollectiveCatalog,
+	collectiveKernels,
 	lawMatches,
-	DEFAULT_MAX_LAWS,
-	type CrowdLaw,
-	type CrowdLawSpec,
-} from './laws.js';
+} from './who.js';

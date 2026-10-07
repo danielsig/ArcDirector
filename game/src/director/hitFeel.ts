@@ -8,7 +8,7 @@ import { cueAt } from '../audio/cue';
 const KNOCK_SPEED = 6.2;
 const KNOCK_SHOVE = 0.38;
 
-/** Knock the hurt body away from the striker. `knock` scales shove and speed (cleave is heavier). */
+/** Knock the hurt character away from the striker. `knock` scales shove and speed (cleave is heavier). */
 export function applyHit(world:World, striker:GameObject, hurt:GameObject, knock = 1):void {
 	const a = striker.transform.position;
 	const b = hurt.transform.position;

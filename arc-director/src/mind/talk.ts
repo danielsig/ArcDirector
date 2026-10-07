@@ -1,11 +1,11 @@
 import type { ArcResult } from '../arc/types.js';
-import type { AgentEvent } from './types.js';
+import type { MindEvent } from './types.js';
 
 /** A mind that can receive speech. The library never sees coordinates. */
 export type TalkMind = {
 	id:string;
-	pushEvent(event:AgentEvent):void;
-	/** This mind's name for another body. Default: the id. */
+	pushEvent(event:MindEvent):void;
+	/** This mind's name for another character. Default: the id. */
 	nameOf?(id:string):string;
 };
 
@@ -144,7 +144,7 @@ function saysLine(speaker:string, spoken:string, addressed:boolean, toLabel:stri
 	return toLabel ? `${speaker} says to ${toLabel}${tail}: "${spoken}"` : `${speaker} says${tail}: "${spoken}"`;
 }
 
-/** `speaker` and `toLabel` are already the listener's names for those bodies. */
+/** `speaker` and `toLabel` are already the listener's names for those characters. */
 function heardLine(
 	speaker:string,
 	spoken:string,
@@ -172,8 +172,8 @@ function heardLine(
 
 /**
  * Native NPC-to-NPC talk. `say` reaches whoever the host says is in range.
- * Attach agents so they receive `HeardSpeech` events; unattached names can
- * still be addressed if `inRange` is true (mute bodies, the player, …).
+ * Attach listeners so their minds receive `HeardSpeech` events; unattached names can
+ * still be addressed if `inRange` is true (mute characters, the player, …).
  *
  * After a successful `say`, TalkNet asks the host to face and approach so
  * speakers and listeners huddle into line of sight. Default on; pass

@@ -43,7 +43,7 @@ describe('ThinkQueue', () => {
 		const catalogs = new Map([['Guard', cat]]);
 		const rows = q.tick(1, catalogs);
 		assert.equal(rows.length, 1);
-		assert.equal(rows[0].npcID, 'Guard');
+		assert.equal(rows[0].mindID, 'Guard');
 		assert.ok(rows[0].score <= 0.51 + 1e-9);
 		assert.ok(rows[0].score > 0.05);
 	});
@@ -63,7 +63,7 @@ describe('ThinkQueue', () => {
 		q.enqueueMajor('A');
 		const catalogs = new Map();
 		const rows = q.tick(1, catalogs);
-		assert.equal(rows.filter((r) => r.npcID === 'A').length, 1);
+		assert.equal(rows.filter((r) => r.mindID === 'A').length, 1);
 		assert.ok(rows[0].score >= 0.99);
 	});
 
@@ -154,10 +154,10 @@ describe('ThinkQueue', () => {
 		q.enqueueMajor('Cold');
 		const first = q.tick(1, new Map());
 		assert.equal(first.length, 1);
-		assert.equal(first[0].npcID, 'Cold');
+		assert.equal(first[0].mindID, 'Cold');
 		q.enqueueMajor('Hot');
 		const later = q.tick(60, new Map());
-		assert.equal(later[0].npcID, 'Hot');
+		assert.equal(later[0].mindID, 'Hot');
 		assert.ok(Math.abs(q.recencyScale('Hot') - 1) < 1e-9);
 	});
 
@@ -350,9 +350,9 @@ describe('ThinkQueue', () => {
 		q.enqueueMajor('Late');
 		const first = q.tick(1, new Map());
 		assert.equal(first.length, 1);
-		assert.equal(first[0].npcID, 'Early');
+		assert.equal(first[0].mindID, 'Early');
 		const second = q.tick(1, new Map());
-		assert.equal(second[0].npcID, 'Late');
+		assert.equal(second[0].mindID, 'Late');
 	});
 
 	it('simple queue does not let a later major jump the line', () => {
@@ -361,7 +361,7 @@ describe('ThinkQueue', () => {
 		q.ensure('Loud', { skipHeartbeat: true });
 		q.enqueueVerb('Early', 'wander');
 		q.enqueueMajor('Loud');
-		assert.equal(q.tick(1, new Map())[0].npcID, 'Early');
+		assert.equal(q.tick(1, new Map())[0].mindID, 'Early');
 	});
 });
 

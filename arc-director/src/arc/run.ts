@@ -1,5 +1,5 @@
-import { formatArc } from '../arc/parse.js';
-import { isArc } from '../arc/validate.js';
+import { isArc } from './validate.js';
+import { argBase, type VerbRegistry } from './stock-verbs.js';
 import {
 	firstStep,
 	isHoistedWhen,
@@ -7,19 +7,24 @@ import {
 	type ArcResult,
 	type Join,
 	type Step,
-} from '../arc/types.js';
+} from './types.js';
 import { evaluate } from '../expr/eval.js';
 import { parse } from '../expr/parse.js';
 import { dummyEntity } from '../expr/natives.js';
 import { watchScore } from '../expr/score.js';
 import { stringifyVal } from '../expr/stringify.js';
 import { LIST_CAP, SampleCache, type Ast, type Catalog, type ExprVal } from '../expr/types.js';
+import type { Law } from './laws.js';
 
 export const THINK_ABOUT_CAP = 200;
 export const DEFAULT_COOLDOWN = 8;
 
+/**
+ * A reaction a session may run: a law, or a `when` hoisted out of the arc. `source` is that law or that
+ * `when` step itself, so a handler stays recognizable while its law is renamed or edited.
+ */
 export type ArcHandler = {
-	key:string;
+	source:Law | Step;
 	watch:string;
 	arc:Arc;
 	rank:number;
@@ -42,9 +47,12 @@ export type ArcSession = {
 	extraHandlers?:()=>ArcHandler[];
 	/** Body finished; hoisted `when` still poll until the program is replaced. */
 	parked?:boolean;
+	/** The arg kinds, so a bound body fills a `text` arg with its name and every other arg with its id. */
+	verbs?:VerbRegistry;
 };
 
 export type ArcSessionOpts = {
+	verbs?:VerbRegistry;
 	catalog?:()=>Catalog | undefined;
 	now?:()=>number;
 	abortHost?:()=>void;
@@ -62,6 +70,7 @@ export function createArcSession(opts:ArcSessionOpts = {}):ArcSession {
 		abortHost: opts.abortHost,
 		extraHandlers: opts.extraHandlers,
 		parked: false,
+		verbs: opts.verbs,
 	};
 }
 
@@ -110,7 +119,11 @@ function allHandlers(session:ArcSession):ArcHandler[] {
 	for (let f = session.frames.length - 1; f >= 0; f--) {
 		inner.push(...session.frames[f].handlers);
 	}
-	return [...extras, ...inner].sort((a, b) => a.rank - b.rank || a.key.localeCompare(b.key));
+	return [...extras, ...inner].sort((a, b) => a.rank - b.rank);
+}
+
+function isRunning(session:ArcSession, handler:ArcHandler):boolean {
+	return session.running.some((r) => r.source === handler.source);
 }
 
 /** Director tick: abort a dead watch, or preempt with a higher-rank true handler. */
@@ -124,7 +137,7 @@ export function pollArcSession(session:ArcSession):void {
 		if (!watchIsTrue(h.watch, catalog)) {
 			continue;
 		}
-		if (session.running.some((r) => r.key === h.key)) {
+		if (isRunning(session, h)) {
 			return;
 		}
 		const top = session.running[session.running.length - 1];
@@ -153,7 +166,7 @@ export function firstStartable(session:ArcSession):ArcHandler | undefined {
 		if (!watchIsTrue(h.watch, catalog)) {
 			continue;
 		}
-		if (session.running.some((r) => r.key === h.key)) {
+		if (isRunning(session, h)) {
 			return undefined;
 		}
 		return h;
@@ -295,12 +308,10 @@ function hoistWhen(arc:Arc, depth:number):{ handlers:ArcHandler[]; body:Arc | un
 	let cur:Arc | undefined = arc;
 	while (cur) {
 		if (cur.head && isHoistedWhen(cur.head) && isArc(cur.head.args.arc)) {
-			const watch = String(cur.head.args.watch).trim();
-			const inner = cur.head.args.arc;
 			handlers.push({
-				key: `when:${watch}:${formatArc(inner)}`,
-				watch,
-				arc: inner,
+				source: cur.head,
+				watch: String(cur.head.args.watch).trim(),
+				arc: cur.head.args.arc,
 				rank: 100 + i,
 			});
 			i += 1;
@@ -353,7 +364,8 @@ function interpolateStep(step:Step, session:ArcSession):Step {
 			if (r.error) {
 				continue;
 			}
-			args[key] = stringifyVal(r.value, catalog);
+			const prose = argBase(session.verbs?.get(step.verb)?.args[key]) === 'text';
+			args[key] = r.value.kind === 'entity' && !prose ? r.value.value.id : stringifyVal(r.value, catalog);
 			changed = true;
 		}
 		catch {

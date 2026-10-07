@@ -6,15 +6,15 @@ export type SimpleQueueOpts = MindQueueOpts;
 
 /** First come, first served. Watches still wake; they do not jump the line. */
 export class SimpleQueue extends MindScheduler {
-	override rankScore(npcID:string, raw:number):number {
-		return -(this.minds.get(npcID)?.seq ?? 0);
+	override rankScore(mindID:string, raw:number):number {
+		return -(this.minds.get(mindID)?.seq ?? 0);
 	}
 
 	protected override insert(row:ThinkRow):void {
-		if (this.rows.some((r) => r.npcID === row.npcID)) {
+		if (this.rows.some((r) => r.mindID === row.mindID)) {
 			return;
 		}
-		const mind = this.ensure(row.npcID);
+		const mind = this.ensure(row.mindID);
 		mind.seq = this.nextSeq;
 		this.nextSeq += 1;
 		this.rows.push(row);
@@ -23,8 +23,8 @@ export class SimpleQueue extends MindScheduler {
 	protected override prune():void {
 		const first = new Map<string, ThinkRow>();
 		for (const row of this.rows) {
-			if (!first.has(row.npcID)) {
-				first.set(row.npcID, row);
+			if (!first.has(row.mindID)) {
+				first.set(row.mindID, row);
 			}
 		}
 		this.rows = [...first.values()];
@@ -32,8 +32,8 @@ export class SimpleQueue extends MindScheduler {
 
 	protected override order():void {
 		this.rows.sort((a, b) => {
-			const sa = this.minds.get(a.npcID)?.seq ?? 0;
-			const sb = this.minds.get(b.npcID)?.seq ?? 0;
+			const sa = this.minds.get(a.mindID)?.seq ?? 0;
+			const sb = this.minds.get(b.mindID)?.seq ?? 0;
 			return sa - sb;
 		});
 	}

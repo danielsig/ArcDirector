@@ -1,18 +1,18 @@
 import {
-	Agent,
 	ArcDirector,
-	CrowdConductor,
 	TalkNet,
-	isCrowdConductor,
 	parseArc,
 	LM_STUDIO_LOAD,
 	type ArcResult,
+	type Character,
+	type Collective,
 	type Kit,
 	type KernelSource,
 	type MapSense,
+	type Mind,
 } from 'arc-director';
-import { NPCInput } from '../actors/NPCInput';
-import { PlayerPilot } from '../actors/PlayerPilot';
+import { NPCInput } from '../characters/NPCInput';
+import { PlayerPilot } from '../characters/PlayerPilot';
 import {
 	Celebrating,
 	Named,
@@ -28,8 +28,8 @@ import { talkFace, canHearClearly, SPEECH_LIFE } from './talkAttend';
 import { YOU_SYMBOL } from './mapMarks';
 import { snapshotMap } from './mapView';
 import { WORLD_ENCYCLOPEDIAS } from './encyclopedias';
-import type { AgentCtx, SceneHooks } from './types';
-import { bodyName, findBody, isLiving } from './names';
+import type { CharacterCtx, SceneHooks } from './types';
+import { idOf, findObject, isLiving } from './names';
 import { kernelsOf, scanWorld } from './kernels';
 import { hostCanSee, lookWorld, inventoryOf, followedCarry } from './perception';
 import { addBodyVerbs, GAME_VERBS, verbGate } from './verbs';
@@ -43,7 +43,7 @@ import {
 	noteAct,
 } from './playerTalk';
 
-export type { AgentCtx, SceneHooks };
+export type { CharacterCtx, SceneHooks };
 
 const ARC_RETRY_CAP = 3;
 const STALL_VERBS = new Set(['wait', 'wander', 'say', 'set_status']);
@@ -55,7 +55,7 @@ export class GameHost {
 	bargainDone = false;
 	readonly scene:string;
 	hooks:SceneHooks<GameHost> = {};
-	arc:ArcDirector<AgentCtx> | null = null;
+	arc:ArcDirector<CharacterCtx> | null = null;
 	/** Shared kit for this scene. Mutate `verbs` / `tools`; fetched every tick. */
 	kit:Kit = { verbs: [...GAME_VERBS] };
 	readonly doorOpen = new Map<string, boolean>();
@@ -83,10 +83,10 @@ export class GameHost {
 		this.scene = opts.scene ?? '';
 		this.ambient = opts.ambient ?? 'A damp stone hall of the dungeon.';
 		this.talk = new TalkNet({
-			inRange: (speakerID, listenerID) => this.inCrowdRange(speakerID, listenerID),
+			inRange: (speakerID, listenerID) => this.inCollectiveRange(speakerID, listenerID),
 			others: (speakerID) => this.talkOthersOf(speakerID),
-			canSee: (a, b) => this.crowdCanSee(a, b),
-			clearHear: (a, b) => this.crowdClearHear(a, b),
+			canSee: (a, b) => this.collectiveCanSee(a, b),
+			clearHear: (a, b) => this.collectiveClearHear(a, b),
 			hears: (speakerID, listenerID) => this.mayHear(speakerID, listenerID),
 			names: (id) => talkNames(this, id),
 			face: (who, toward) => talkFace(world, who, toward),
@@ -95,13 +95,9 @@ export class GameHost {
 		resetAiLogSink();
 	}
 
-	configure(director:ArcDirector<AgentCtx>):ArcDirector<AgentCtx> {
-		const addAgent = director.addAgent.bind(director);
-		director.addAgent = (spec) => addAgent({
-			...spec,
-			skipHeartbeat: spec.skipHeartbeat ?? true,
-		});
+	configure(director:ArcDirector<CharacterCtx>):ArcDirector<CharacterCtx> {
 		return addBodyVerbs(director)
+			.withMindDefaults({ skipHeartbeat: true })
 			.withPriorityQueue({
 				maxParallel: prefs().maxParallel,
 				batchThinks: prefs().batchThinks,
@@ -110,11 +106,11 @@ export class GameHost {
 				heartbeatStart: 2,
 				heartbeatMin: 2,
 				mayThink: (ctx) => {
-					const mind = this.arc?.agent(ctx.npcID);
-					if (isCrowdConductor(mind)) {
-						return mind.crowd.list().some((unit) => isLiving(findBody(this.world, unit.id)));
+					const collective = this.arc?.collective(ctx.mindID);
+					if (collective) {
+						return collective.characters.some((c) => isLiving(findObject(this.world, c.id)));
 					}
-					const go = this.world.findByID(ctx.npcID) ?? findBody(this.world, ctx.npcID);
+					const go = this.world.findByID(ctx.mindID) ?? findObject(this.world, ctx.mindID);
 					if (!isLiving(go)) {
 						return false;
 					}
@@ -132,13 +128,13 @@ export class GameHost {
 			})
 			.withArcText(prefs().arcText)
 			.addStockVerbs()
-			.addStockCrowdVerbs()
+			.addStockCollectiveVerbs()
 			.withWorld(gameWorld(this))
 			.withVerbGate(verbGate(this))
 			.withRepair({ retries: ARC_RETRY_CAP })
 			.withStalled((result) => !result.ok || !!result.interrupted || STALL_VERBS.has(result.verb ?? ''))
-			.withSight({ look: (ctx) => lookWorld(ctx.actor, this.ambient, this), unitName: 'm' })
-			.withInventory((ctx) => inventoryOf(ctx.actor))
+			.withSight({ look: (ctx) => lookWorld(ctx.character, this.ambient, this), unitName: 'm' })
+			.withInventory((ctx) => inventoryOf(ctx.character))
 			.withLineOfSight((a, b) => hostCanSee(this.world, a, b))
 			.addSense('followed', {
 				description: 'What the person you follow is carrying.',
@@ -152,28 +148,28 @@ export class GameHost {
 			.onAbortArc(this.abortArc)
 			.onLog((entry) => pushLog(this, entry.name, entry.message, entry))
 			.onStep((call, result) => noteAct(this, call, result))
-			// The player's body, for `enactPlayer`. No mind: it never calls the model.
-			.addActor({ id: 'Player' });
+			// The player's character, for `enactPlayer`. No mind: it never calls the model.
+			.addCharacter({ id: 'Player' });
 	}
 
-	bind(director:ArcDirector<AgentCtx>):void {
+	bind(director:ArcDirector<CharacterCtx>):void {
 		this.arc = director;
 	}
 
-	context = (id:string):AgentCtx | undefined => {
-		const body = this.world.findByID(id) ?? findBody(this.world, id);
-		const npc = body?.getComponent(NPCInput);
-		if (!isLiving(body) || !npc) {
+	context = (id:string):CharacterCtx | undefined => {
+		const character = this.world.findByID(id) ?? findObject(this.world, id);
+		const npc = character?.getComponent(NPCInput);
+		if (!isLiving(character) || !npc) {
 			return undefined;
 		}
-		return { world: this.world, actor: body, npc, scene: this.scene };
+		return { world: this.world, character: character, npc, scene: this.scene };
 	};
 
 	abortArc = (id:string):void => {
 		if (this.bargainDone) {
 			return;
 		}
-		(this.world.findByID(id) ?? findBody(this.world, id))?.getComponent(Celebrating)?.stop();
+		(this.world.findByID(id) ?? findObject(this.world, id))?.getComponent(Celebrating)?.stop();
 	};
 
 	private readonly mapSense:MapSense = {
@@ -188,11 +184,11 @@ export class GameHost {
 		},
 	};
 
-	kernels:KernelSource<AgentCtx> = (ctx, point) => kernelsOf(
+	kernels:KernelSource<CharacterCtx> = (ctx, point) => kernelsOf(
 		this.world,
-		ctx.actor,
+		ctx.character,
 		point && { x: point[0], z: point[1] },
-		(go) => fightExprTags(this, ctx.actor, go),
+		(go) => fightExprTags(this, ctx.character, go),
 	);
 
 	async start():Promise<void> {
@@ -216,36 +212,41 @@ export class GameHost {
 			this.arc.setModel(pref);
 		}
 		setPrefs({ model: this.arc.model });
-		for (const agent of this.arc.agents()) {
-			this.wireBody(agent.id);
+		for (const mind of this.arc.minds()) {
+			this.wireVoice(mind);
 		}
 	}
 
-	wireBody(id:string):void {
-		const actor = this.world.findByID(id) ?? findBody(this.world, id);
-		const agent = this.agentByID(id);
-		if (!actor) {
-			if (isCrowdConductor(agent) && agent.crowd.size > 0) {
+	/** Give the character that speaks for `mind` its role as an alias, and its AI. A mind with no character left is removed. */
+	wireVoice(mind:Mind<CharacterCtx>):void {
+		const id = mind.thinkThread();
+		const character = this.world.findByID(id) ?? findObject(this.world, id);
+		if (!character) {
+			const collective = this.arc?.collective(mind.id);
+			if (collective && collective.characters.length > 0) {
 				return;
 			}
 			console.warn(`GameHost: no ${id}`);
 			pushLog(this, 'GameHost', `no ${id} in the world`);
-			this.arc?.removeAgent(id);
+			if (collective) {
+				this.arc?.removeCollective(mind.id);
+			}
+			else {
+				this.arc?.removeCharacter(mind.id);
+			}
 			return;
 		}
-		if (!agent) {
-			return;
+		const named = character.getComponent(Named);
+		const role = mind.persona.identity.role;
+		if (named && role) {
+			named.aliases = [...new Set([...(named.aliases ?? []), role])];
 		}
-		const named = actor.getComponent(Named);
-		if (named && agent.identity.role) {
-			named.aliases = [...new Set([...(named.aliases ?? []), agent.identity.role])];
-		}
-		const npc = actor.getComponent(NPCInput);
+		const npc = character.getComponent(NPCInput);
 		if (npc) {
 			npc.aiOn = true;
 		}
-		if (actor.getComponent(Companion)) {
-			agent.strategicInterval = 0;
+		if (character.getComponent(Companion)) {
+			mind.strategicInterval = 0;
 		}
 	}
 
@@ -269,60 +270,38 @@ export class GameHost {
 		this.arc.tick(dt, this.world.time);
 	}
 
-	/** Run one arc on the player body. Mind verbs are rejected; a canvas click aborts it. */
+	/** Run one arc on the player character. Mind verbs are rejected; a canvas click aborts it. */
 	async enactPlayer(text:string):Promise<ArcResult> {
-		const actor = this.arc?.ready ? this.arc.actor('Player') : undefined;
+		const player = this.arc?.ready ? this.arc.character('Player') : undefined;
 		const pilot = this.world.findByID('Player')?.getComponent(PlayerPilot);
-		if (!actor || !pilot) {
+		if (!player || !pilot) {
 			throw new Error('ArcDirector is not running');
 		}
-		const arc = parseArc(text, actor.activeVerbs());
-		const release = pilot.claim(() => actor.replaceProgram());
+		const arc = parseArc(text, player.activeVerbs());
+		const release = pilot.claim(() => player.replaceProgram());
 		try {
-			return await actor.enact(arc);
+			return await player.enact(arc);
 		}
 		finally {
 			release();
 		}
 	}
 
-	agentByID(id:string):Agent<AgentCtx> | undefined {
-		const a = this.arc?.agent(id);
-		if (a) {
-			return a;
-		}
-		const go = findBody(this.world, id);
-		if (go) {
-			const named = this.arc?.agent(go.id) ?? this.arc?.agent(bodyName(go));
-			if (named) {
-				return named;
-			}
-		}
-		for (const agent of this.arc?.agents() ?? []) {
-			if (isCrowdConductor(agent) && agent.crowd.has(id)) {
-				return agent;
-			}
-		}
-		return undefined;
+	/** The character with id `id`, or one that answers to that name. */
+	characterOf(id:string):Character<CharacterCtx> | undefined {
+		const go = findObject(this.world, id);
+		return this.arc?.character(id) ?? (go ? this.arc?.character(go.id) ?? this.arc?.character(idOf(go)) : undefined);
 	}
 
-	private conductorOf(id:string):CrowdConductor<AgentCtx> | undefined {
-		const agent = this.arc?.agent(id);
-		if (isCrowdConductor(agent)) {
-			return agent;
-		}
-		for (const row of this.arc?.agents() ?? []) {
-			if (isCrowdConductor(row) && (row.crowd.has(id) || row.id === id)) {
-				return row;
-			}
-		}
-		return undefined;
+	/** The collective `id` names, or the one its character belongs to. */
+	private collectiveOf(id:string):Collective<CharacterCtx> | undefined {
+		return this.arc?.collective(id) ?? this.arc?.character(id)?.collective ?? undefined;
 	}
 
-	private crowdBodies(conductor:CrowdConductor<AgentCtx>):GameObject[] {
+	private livingMembers(collective:Collective<CharacterCtx>):GameObject[] {
 		const out:GameObject[] = [];
-		for (const unit of conductor.crowd.list()) {
-			const go = findBody(this.world, unit.id);
+		for (const character of collective.characters) {
+			const go = findObject(this.world, character.id);
 			if (isLiving(go)) {
 				out.push(go);
 			}
@@ -331,41 +310,41 @@ export class GameHost {
 	}
 
 	private lookOrigin(id:string):{ x:number; z:number } | undefined {
-		if (isLiving(this.world.findByID(id) ?? findBody(this.world, id))) {
+		if (isLiving(this.world.findByID(id) ?? findObject(this.world, id))) {
 			return undefined;
 		}
-		const hive = this.conductorOf(id);
+		const hive = this.collectiveOf(id);
 		if (!hive) {
 			return undefined;
 		}
-		const bodies = this.crowdBodies(hive);
-		if (bodies.length === 0) {
+		const characters = this.livingMembers(hive);
+		if (characters.length === 0) {
 			return undefined;
 		}
 		let x = 0;
 		let z = 0;
-		for (const go of bodies) {
+		for (const go of characters) {
 			x += go.transform.position.x;
 			z += go.transform.position.z;
 		}
-		return { x: x / bodies.length, z: z / bodies.length };
+		return { x: x / characters.length, z: z / characters.length };
 	}
 
-	private inCrowdRange(speakerID:string, listenerID:string):boolean {
+	private inCollectiveRange(speakerID:string, listenerID:string):boolean {
 		if (inTalkRange(this.world, speakerID, listenerID)) {
 			return true;
 		}
-		const listen = this.conductorOf(listenerID);
+		const listen = this.collectiveOf(listenerID);
 		if (listen) {
-			for (const unit of listen.crowd.list()) {
+			for (const unit of listen.characters) {
 				if (inTalkRange(this.world, speakerID, unit.id)) {
 					return true;
 				}
 			}
 		}
-		const speak = this.conductorOf(speakerID);
-		if (speak && !findBody(this.world, speakerID)) {
-			for (const unit of speak.crowd.list()) {
+		const speak = this.collectiveOf(speakerID);
+		if (speak && !findObject(this.world, speakerID)) {
+			for (const unit of speak.characters) {
 				if (inTalkRange(this.world, unit.id, listenerID)) {
 					return true;
 				}
@@ -375,10 +354,10 @@ export class GameHost {
 	}
 
 	private talkOthersOf(speakerID:string):string[] {
-		const speak = this.conductorOf(speakerID);
-		if (speak && !findBody(this.world, speakerID)) {
+		const speak = this.collectiveOf(speakerID);
+		if (speak && !findObject(this.world, speakerID)) {
 			const names = new Set<string>();
-			for (const unit of speak.crowd.list()) {
+			for (const unit of speak.characters) {
 				for (const name of talkOthers(this.world, unit.id)) {
 					names.add(name);
 				}
@@ -388,28 +367,28 @@ export class GameHost {
 		return talkOthers(this.world, speakerID);
 	}
 
-	private crowdCanSee(a:string, b:string):boolean {
+	private collectiveCanSee(a:string, b:string):boolean {
 		if (hostCanSee(this.world, a, b)) {
 			return true;
 		}
-		const listen = this.conductorOf(b);
+		const listen = this.collectiveOf(b);
 		if (listen) {
-			for (const unit of listen.crowd.list()) {
+			for (const unit of listen.characters) {
 				if (hostCanSee(this.world, a, unit.id)) {
 					return true;
 				}
 			}
 		}
-		const speak = this.conductorOf(a);
+		const speak = this.collectiveOf(a);
 		if (speak) {
-			for (const unit of speak.crowd.list()) {
+			for (const unit of speak.characters) {
 				if (hostCanSee(this.world, unit.id, b)) {
 					return true;
 				}
 			}
 			if (listen) {
-				for (const su of speak.crowd.list()) {
-					for (const lu of listen.crowd.list()) {
+				for (const su of speak.characters) {
+					for (const lu of listen.characters) {
 						if (hostCanSee(this.world, su.id, lu.id)) {
 							return true;
 						}
@@ -421,36 +400,36 @@ export class GameHost {
 	}
 
 	private mayHear(speakerID:string, listenerID:string):boolean {
-		const body = this.world.findByID(listenerID) ?? findBody(this.world, listenerID);
-		const only = body?.getComponent(HearOnly);
+		const character = this.world.findByID(listenerID) ?? findObject(this.world, listenerID);
+		const only = character?.getComponent(HearOnly);
 		if (!only) {
 			return true;
 		}
 		return only.from.includes(speakerID);
 	}
 
-	private crowdClearHear(a:string, b:string):boolean {
+	private collectiveClearHear(a:string, b:string):boolean {
 		if (canHearClearly(this.world, a, b)) {
 			return true;
 		}
-		const listen = this.conductorOf(b);
+		const listen = this.collectiveOf(b);
 		if (listen) {
-			for (const unit of listen.crowd.list()) {
+			for (const unit of listen.characters) {
 				if (canHearClearly(this.world, a, unit.id)) {
 					return true;
 				}
 			}
 		}
-		const speak = this.conductorOf(a);
+		const speak = this.collectiveOf(a);
 		if (speak) {
-			for (const unit of speak.crowd.list()) {
+			for (const unit of speak.characters) {
 				if (canHearClearly(this.world, unit.id, b)) {
 					return true;
 				}
 			}
 			if (listen) {
-				for (const su of speak.crowd.list()) {
-					for (const lu of listen.crowd.list()) {
+				for (const su of speak.characters) {
+					for (const lu of listen.characters) {
 						if (canHearClearly(this.world, su.id, lu.id)) {
 							return true;
 						}
@@ -463,9 +442,6 @@ export class GameHost {
 
 	dispose():void {
 		this.disposed = true;
-		for (const agent of this.arc?.agents() ?? []) {
-			this.talk.detach(agent.id);
-		}
 		this.arc?.dispose();
 	}
 }

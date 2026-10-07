@@ -25,22 +25,22 @@ async function main():Promise<void> {
 		return text({ sessions: await hub.sessions() });
 	});
 
-	server.registerTool('list_actors', {
-		description: 'List actors in a connected client: agents (with a mind), crowd units, and host-driven actors (the Player).',
+	server.registerTool('list_characters', {
+		description: 'List the characters in a connected client and who thinks for each: its own mind, its collective\'s, or none (the host drives it, like the Player). Also lists each collective, its commander, and its characters.',
 		inputSchema: { session: sessionField },
 	}, async ({ session }) => {
-		return text(await hub.call(session, { op: 'listActors' }));
+		return text(await hub.call(session, { op: 'listCharacters' }));
 	});
 
 	server.registerTool('run_verb', {
-		description: 'Run an arc on an NPC, a CrowdUnit, or the Player. The Player has no mind, so mind verbs (think, remember, goals, identity, watches, focus) are not available to it. A click on the game canvas cancels a Player arc and returns control.',
+		description: 'Run an arc on a character: an NPC, a member of a collective, or the Player. A character with no mind (the Player) cannot run mind verbs (think, remember, goals, identity, watches, focus). A click on the game canvas cancels a Player arc and returns control.',
 		inputSchema: {
 			session: sessionField,
-			actor: z.string().min(1),
+			character: z.string().min(1),
 			arc: z.string().min(1).describe('Arc text, e.g. go_to(EastGate)'),
 		},
-	}, async ({ session, actor, arc }) => {
-		return text(await hub.call(session, { op: 'runVerb', actor, arc }));
+	}, async ({ session, character, arc }) => {
+		return text(await hub.call(session, { op: 'runVerb', character, arc }));
 	});
 
 	server.registerTool('get_prefs', {
@@ -63,15 +63,26 @@ async function main():Promise<void> {
 	});
 
 	server.registerTool('think', {
-		description: 'Run one live tactical LLM think on a named agent in the client. The Player does not think.',
+		description: 'Run one live tactical LLM think in the client: a character\'s mind (its own, or its collective\'s), or a collective\'s by its id. The Player has no mind and does not think.',
 		inputSchema: {
 			session: sessionField,
-			actor: z.string().min(1),
+			id: z.string().min(1).describe('A character or a collective'),
 			about: z.string().optional(),
 			enact: z.boolean().optional(),
 		},
-	}, async ({ session, actor, about, enact }) => {
-		return text(await hub.call(session, { op: 'think', actor, about, enact }));
+	}, async ({ session, id, about, enact }) => {
+		return text(await hub.call(session, { op: 'think', id, about, enact }));
+	});
+
+	server.registerTool('set_collective', {
+		description: 'Move a character into a collective, straight from any other, or out of it with collective=null: then it thinks with a fresh mind of its own if it had one before, else the host drives it. Its running arc, laws and tags come along. For testing transfers live.',
+		inputSchema: {
+			session: sessionField,
+			character: z.string().min(1),
+			collective: z.string().min(1).nullable(),
+		},
+	}, async ({ session, character, collective }) => {
+		return text(await hub.call(session, { op: 'setCollective', character, collective }));
 	});
 
 	server.registerTool('read_ai_log', {

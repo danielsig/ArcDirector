@@ -1,7 +1,7 @@
-import { CharacterMotor } from '../actors/CharacterMotor';
-import { NPCInput } from '../actors/NPCInput';
-import { PlayerInput } from '../actors/PlayerInput';
-import { PlayerPilot } from '../actors/PlayerPilot';
+import { CharacterMotor } from '../characters/CharacterMotor';
+import { NPCInput } from '../characters/NPCInput';
+import { PlayerInput } from '../characters/PlayerInput';
+import { PlayerPilot } from '../characters/PlayerPilot';
 import { ChunkBound, Camera as RenderCamera, StreamingAnchor } from '@arc-director/kindling';
 import {
 	BoxCollider,

@@ -2,7 +2,7 @@ import { RigidBody, HumanSprite } from '../engine/components';
 import { Component } from '../engine/Component';
 import { Order } from '../engine/order';
 import { lerpAngle, yawToward } from '../engine/math';
-import { facePeer } from '../npc/talkAttend';
+import { facePeer } from '../director/talkAttend';
 import { TILE_HEIGHT } from '../world/constants';
 import { cueAt, stepKind } from '../audio/cue';
 import { NPCInput } from './NPCInput';

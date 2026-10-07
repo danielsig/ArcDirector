@@ -9,11 +9,11 @@ export type GeometryKernels = Pick<HostKernels, 'point' | 'distance' | 'facing' 
 
 /**
  * Watch geometry from the host's poses. `poses` overrides where some ids are (`me` standing somewhere
- * else to ask what if, a hive at its units' center). Path distances use `actorID`'s own way of moving.
+ * else to ask what if, a hive at its units' center). Path distances use `characterID`'s own way of moving.
  */
 export function geometryKernels(
 	world:HostWorld<unknown>,
-	actorID:string | undefined,
+	characterID:string | undefined,
 	poses:ReadonlyMap<string, Pose> = new Map(),
 ):GeometryKernels {
 	const whereIs = (who:ExprEntity):Pose | undefined => poses.get(who.id) ?? poseOf(world, who.id);
@@ -22,8 +22,8 @@ export function geometryKernels(
 		const pb = whereIs(b);
 		return pa && pb ? [pa, pb] : undefined;
 	};
-	const actor = actorID === undefined ? undefined : world.find(actorID);
-	const graph = world.getPathGraph && actor !== undefined ? world.getPathGraph.bind(world, actor) : undefined;
+	const character = characterID === undefined ? undefined : world.find(characterID);
+	const graph = world.getPathGraph && character !== undefined ? world.getPathGraph.bind(world, character) : undefined;
 	return {
 		point: (who) => whereIs(who)?.point,
 		distance: (a, b) => {
@@ -45,7 +45,7 @@ export function geometryKernels(
 					return undefined;
 				}
 				const target = world.find(b.id);
-				const near = target === undefined ? 1 : world.getReach?.(actor, target) ?? 1;
+				const near = target === undefined ? 1 : world.getReach?.(character, target) ?? 1;
 				const route = findRoute(graph(), p[0].point, p[1].point, near);
 				return route && 'points' in route ? routeLength(p[0].point, route.points) : undefined;
 			}
@@ -54,18 +54,18 @@ export function geometryKernels(
 }
 
 /**
- * Why there is no way for `actorID` into reach of `targetID`: the blockers on the way, or `''` when nothing
+ * Why there is no way for `characterID` into reach of `targetID`: the blockers on the way, or `''` when nothing
  * names one. Undefined when there is a way, or when the world has no routes to ask.
  */
-export function wayBlocked(world:HostWorld<unknown>, actorID:string, targetID:string):string | undefined {
-	const actor = world.find(actorID);
+export function wayBlocked(world:HostWorld<unknown>, characterID:string, targetID:string):string | undefined {
+	const character = world.find(characterID);
 	const target = world.find(targetID);
-	const from = poseOf(world, actorID)?.point;
+	const from = poseOf(world, characterID)?.point;
 	const to = poseOf(world, targetID)?.point;
-	if (!world.getPathGraph || actor === undefined || target === undefined || !from || !to) {
+	if (!world.getPathGraph || character === undefined || target === undefined || !from || !to) {
 		return undefined;
 	}
-	const route = findRoute(world.getPathGraph(actor), from, to, world.getReach?.(actor, target) ?? 1);
+	const route = findRoute(world.getPathGraph(character), from, to, world.getReach?.(character, target) ?? 1);
 	if (!route) {
 		return '';
 	}

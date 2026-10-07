@@ -6,8 +6,8 @@ import { compactName, distXZ, listCarried } from '../items/inventory';
 import { coinsOf, goodsAsk } from '../items/wallet';
 import { parseSlash, SLASH_HELP, type ParsedSlash, type SayCatalog } from '../ui/sayCommands';
 import type { GameHost } from './adapter';
-import { bodyName, findBody, isLiving } from './names';
-import type { AgentCtx } from './types';
+import { idOf, findObject, isLiving } from './names';
+import type { CharacterCtx } from './types';
 import { carriedLabels } from './perception';
 import { talkNotices, CLEAR_RANGE, SPEECH_LIFE } from './talkAttend';
 import { settleBuy, settleGive, settlePay, settleSell, tooFar } from './items';
@@ -28,8 +28,8 @@ function chatTo(to?:string | string[]):string | undefined {
 }
 
 export function inTalkRange(world:World, speakerID:string, listenerID:string):boolean {
-	const speaker = findBody(world, speakerID);
-	const listener = findBody(world, listenerID);
+	const speaker = findObject(world, speakerID);
+	const listener = findObject(world, listenerID);
 	if (!speaker || !listener || speaker === listener) {
 		return false;
 	}
@@ -37,7 +37,7 @@ export function inTalkRange(world:World, speakerID:string, listenerID:string):bo
 }
 
 export function nearbyTalkPeers(world:World, speakerID:string):string[] {
-	const speaker = findBody(world, speakerID);
+	const speaker = findObject(world, speakerID);
 	if (!speaker) {
 		return [];
 	}
@@ -48,7 +48,7 @@ export function nearbyTalkPeers(world:World, speakerID:string):string[] {
 		}
 		const d = distXZ(speaker, go);
 		if (d <= TALK_RANGE) {
-			hits.push({ name: bodyName(go), d });
+			hits.push({ name: idOf(go), d });
 		}
 	}
 	hits.sort((a, b) => a.d - b.d);
@@ -67,7 +67,7 @@ export function playerSayCatalog(world:World):SayCatalog {
 	const goods:{ item:string; from:string }[] = [];
 	const seen = new Set<string>();
 	for (const name of peers) {
-		const go = findBody(world, name);
+		const go = findObject(world, name);
 		if (!go) {
 			continue;
 		}
@@ -114,7 +114,7 @@ function matchPeer(raw:string, peers:string[]):string | undefined {
 }
 
 export function talkOthers(world:World, speakerID:string):string[] {
-	const speaker = findBody(world, speakerID);
+	const speaker = findObject(world, speakerID);
 	const names:string[] = [];
 	for (const go of world.objects) {
 		if (!go.getComponent(HumanBody)) {
@@ -128,7 +128,7 @@ export function talkOthers(world:World, speakerID:string):string[] {
 		else if (!world.npcCanSee(go)) {
 			continue;
 		}
-		const id = bodyName(go);
+		const id = idOf(go);
 		if (id && id !== speakerID) {
 			names.push(id);
 		}
@@ -218,7 +218,7 @@ export function playerReach(
 	name:string,
 	verb:string,
 ):{ ok:true; who:GameObject } | { ok:false; verb:string; reason:string } {
-	const who = findBody(host.world, name);
+	const who = findObject(host.world, name);
 	if (!who) {
 		return { ok: false, verb, reason: `no such person ${name}` };
 	}
@@ -242,7 +242,7 @@ export function talkNames(host:GameHost, id:string):string[] {
 		out.push(name);
 	};
 	add(id);
-	const go = findBody(host.world, id);
+	const go = findObject(host.world, id);
 	const named = go?.getComponent(Named);
 	add(named?.id);
 	for (const alias of named?.aliases ?? []) {
@@ -258,27 +258,27 @@ export function pushChat(host:GameHost, speaker:string, text:string, to?:string,
 	}
 }
 
-/** A successful verb aimed at another living body. `say` is already logged by talk. */
-export function noteAct(host:GameHost, call:VerbCall<AgentCtx>, result:ArcResult):void {
+/** A successful verb aimed at another living character. `say` is already logged by talk. */
+export function noteAct(host:GameHost, call:VerbCall<CharacterCtx>, result:ArcResult):void {
 	if (!result.ok || result.verb === 'say') {
 		return;
 	}
-	const self = call.ctx.actor;
+	const self = call.ctx.character;
 	let to:string | undefined;
 	for (const value of Object.values(call.args)) {
 		if (typeof value !== 'string') {
 			continue;
 		}
-		const go = findBody(host.world, value);
+		const go = findObject(host.world, value);
 		if (isLiving(go) && go !== self) {
-			to = bodyName(go);
+			to = idOf(go);
 			break;
 		}
 	}
 	if (!to) {
 		return;
 	}
-	pushChat(host, bodyName(self), actText(result.verb ?? call.verb, call.args, result.reason), to, true);
+	pushChat(host, idOf(self), actText(result.verb ?? call.verb, call.args, result.reason), to, true);
 }
 
 function actText(verb:string, args:Record<string, unknown>, reason?:string):string {
@@ -293,27 +293,27 @@ function actText(verb:string, args:Record<string, unknown>, reason?:string):stri
 	return gold && gold !== '0' ? `${title}: ${thing} for ${gold} gold` : `${title}: ${thing}`;
 }
 
-export function showSpeech(host:GameHost, actor:GameObject, text:string, to?:string, life = SPEECH_LIFE):void {
+export function showSpeech(host:GameHost, character:GameObject, text:string, to?:string, life = SPEECH_LIFE):void {
 	const spoken = text.trim();
 	if (!spoken) {
 		return;
 	}
-	const bubble = actor.getOrAddComponent(SpeechBubble);
+	const bubble = character.getOrAddComponent(SpeechBubble);
 	bubble.text = spoken;
 	bubble.until = host.world.time + life;
 	bubble.timestamp = host.world.time;
-	const hz = talkHz(actor.id);
-	cueAt(host.world, 'talk', actor, {
+	const hz = talkHz(character.id);
+	cueAt(host.world, 'talk', character, {
 		freq: hz,
 		dur: talkDur(spoken),
 		freqTo: talkAsks(spoken) ? hz * 1.35 : undefined,
 	});
-	pushChat(host, bodyName(actor), spoken, to);
+	pushChat(host, idOf(character), spoken, to);
 }
 
 export function onSpoke(host:GameHost, utterance:SpeechUtterance):void {
-	const actor = findBody(host.world, utterance.speakerID);
-	if (actor) {
-		showSpeech(host, actor, utterance.text, chatTo(utterance.to));
+	const character = findObject(host.world, utterance.speakerID);
+	if (character) {
+		showSpeech(host, character, utterance.text, chatTo(utterance.to));
 	}
 }

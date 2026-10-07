@@ -21,7 +21,7 @@ function flush():Promise<void> {
 }
 
 /**
- * A 2D grid, 17 cells deep, with walls and one door. Bodies move toward where they are steered at `speed` cells a second.
+ * A 2D grid, 17 cells deep, with walls and one door. Characters move toward where they are steered at `speed` cells a second.
  * `carry` is who holds which item; an item on the ground is at its own spot.
  */
 class Grid {
@@ -71,27 +71,27 @@ class Grid {
 			}
 			return out;
 		},
-		steerToward: (actor, to) => {
-			this.steering.set(actor, to);
-			const point = this.point.get(actor);
+		steerToward: (character, to) => {
+			this.steering.set(character, to);
+			const point = this.point.get(character);
 			return !!(to && point && distance(point, to) < 0.05);
 		},
 		getReach: () => 1.2,
-		moveItem: ({ actor, item, to }) => {
+		moveItem: ({ character, item, to }) => {
 			if (to === undefined) {
 				this.carry.delete(item);
-				this.point.set(item, this.point.get(actor)!);
+				this.point.set(item, this.point.get(character)!);
 				return { ok: true, reason: `dropped ${item}` };
 			}
 			this.carry.set(item, to);
 			return { ok: true };
 		},
-		trade: ({ actor, side, other, item, quantity, price }) => {
+		trade: ({ character, side, other, item, quantity, price }) => {
 			const floor = 5 * quantity;
 			if ((price ?? floor) < floor) {
 				return { ok: false, reason: `not below ${floor} gold` };
 			}
-			this.carry.set(item, side === 'buy' ? actor : other);
+			this.carry.set(item, side === 'buy' ? character : other);
 			return { ok: true, reason: `bought ${quantity} ${item} for ${price ?? floor} gold` };
 		},
 	};
@@ -122,15 +122,16 @@ async function run(grid:Grid, reply:string, opts:{ kit:string[]; seconds?:number
 		})
 		.withArcText(true)
 		.addStockVerbs()
-		.addStockCrowdVerbs()
+		.addStockCollectiveVerbs()
 		.withWorld(grid.world)
+		.withDefaultKit({ verbs: opts.kit })
 		.withKernels((ctx) => ({ me: dummyEntity(ctx.id, { tags: ['agent'] }), others: [], items: [] }))
 		.withContext((id) => (grid.point.has(id) ? { id } : undefined));
 	if (opts.units) {
-		director.addCrowdConductor({ id: 'Hive', kit: { verbs: opts.kit }, identity: { role: 'Leads.' }, units: opts.units.map((id) => ({ id })) });
+		director.addCollective({ id: 'Hive', kit: { verbs: opts.kit }, identity: { role: 'Leads.' }, characters: opts.units.map((id) => ({ id })) });
 	}
 	else {
-		director.addAgent({ id: 'Ann', kit: { verbs: opts.kit }, identity: { role: 'Fetches.' } });
+		director.addCharacter({ id: 'Ann', mind: {}, kit: { verbs: opts.kit }, identity: { role: 'Fetches.' } });
 	}
 	await director.start();
 	director.mindQueue()!.enqueueMajor(opts.units ? 'Hive' : 'Ann');
@@ -202,7 +203,7 @@ describe('findRoute', () => {
 });
 
 describe('Mover', () => {
-	it('drives a body that starts beside a waypoint across a network, with a motor that stops short', async () => {
+	it('drives a character that starts beside a waypoint across a network, with a motor that stops short', async () => {
 		let me:Vec = [0.05, 0];
 		let to:Vec | null = null;
 		let now = 0;
@@ -211,7 +212,7 @@ describe('Mover', () => {
 			find: (id) => id,
 			getPose: (id) => ({ point: id === 'Ann' ? me : [11, 9] }),
 			getPathGraph: () => network,
-			steerToward: (actor, point) => {
+			steerToward: (character, point) => {
 				to = point;
 				return !!point && distance(me, point) <= 0.35;
 			},
@@ -270,7 +271,7 @@ describe('stock world verbs', () => {
 		const { director } = await run(grid, 'pick_up(Lantern) ; give(item=Lantern, to=Smith)', { kit: ['pick_up', 'give', 'wait'] });
 		assert.equal(grid.carry.get('Lantern'), 'Smith');
 		assert.ok(distance(grid.point.get('Ann')!, [0, 6]) <= 1.3);
-		assert.equal(director.agent('Ann')!.lastResult?.reason, 'gave Lantern to Smith');
+		assert.equal(director.character('Ann')!.lastResult?.reason, 'gave Lantern to Smith');
 		director.dispose();
 	});
 
@@ -279,7 +280,7 @@ describe('stock world verbs', () => {
 		const grid = new Grid(walls, '3,0').place('Ann', [0, 0]).place('Well', [6, 0]);
 		grid.doorLocked = true;
 		const { director } = await run(grid, 'go_to(Well)', { kit: ['go_to', 'wait'], seconds: 2 });
-		assert.equal(director.agent('Ann')!.lastResult?.reason, 'no way to Well, blocked on the way: Door is locked');
+		assert.equal(director.character('Ann')!.lastResult?.reason, 'no way to Well, blocked on the way: Door is locked');
 		assert.deepEqual(grid.point.get('Ann'), [0, 0]);
 		director.dispose();
 	});
@@ -288,11 +289,11 @@ describe('stock world verbs', () => {
 		const grid = new Grid().place('Ann', [0, 0]).place('Mira', [4, 0]).place('Bread', [4, 0]);
 		grid.carry.set('Bread', 'Mira');
 		const low = await run(grid, 'buy(item=Bread, from=Mira, offer=12, quantity=3)', { kit: ['buy', 'wait'] });
-		assert.equal(low.director.agent('Ann')!.lastResult?.reason, 'not below 15 gold');
+		assert.equal(low.director.character('Ann')!.lastResult?.reason, 'not below 15 gold');
 		low.director.dispose();
 		const { director } = await run(grid, 'buy(item=Bread, from=Mira)', { kit: ['buy', 'wait'] });
 		assert.equal(grid.carry.get('Bread'), 'Ann');
-		assert.equal(director.agent('Ann')!.lastResult?.reason, 'bought 1 Bread for 5 gold');
+		assert.equal(director.character('Ann')!.lastResult?.reason, 'bought 1 Bread for 5 gold');
 		director.dispose();
 	});
 
@@ -300,7 +301,7 @@ describe('stock world verbs', () => {
 		const grid = new Grid().place('Ann', [0, 0]);
 		const { director } = await run(grid, 'wander(until=1 > 2, seconds=3)', { kit: ['wander', 'wait'], seconds: 4 });
 		assert.ok(distance(grid.point.get('Ann')!, [0, 0]) > 1);
-		assert.equal(director.agent('Ann')!.lastResult?.verb, 'wander');
+		assert.equal(director.character('Ann')!.lastResult?.verb, 'wander');
 		director.dispose();
 	});
 
@@ -336,7 +337,7 @@ describe('stock world verbs', () => {
 			.addStockVerbs()
 			.withWorld({ find: () => undefined, getPose: () => undefined })
 			.withContext((id) => ({ id }))
-			.addAgent({ id: 'Ann', kit: { verbs: ['go_to', 'examine'] }, identity: { role: 'Waits.' } });
+			.addCharacter({ id: 'Ann', mind: {}, kit: { verbs: ['go_to', 'examine'] }, identity: { role: 'Waits.' } });
 		await assert.rejects(director.start(), /go_to' needs withWorld getPathGraph and steerToward.*examine' needs withWorld getDescription/);
 	});
 });

@@ -1,5 +1,4 @@
 import {
-	isCrowdConductor,
 	pascalCase,
 	DEFAULT_VERB_INSTRUCTIONS,
 	STOCK_VERBS,
@@ -29,38 +28,38 @@ import {
 	slotItem,
 	tryInsert,
 	compactName,
-	healActor,
+	healCharacter,
 } from '../items/inventory';
 import { findSaleItem } from '../items/wallet';
 import { equipItem, unequipSlot } from '../items/equip';
-import { NPCInput } from '../actors/NPCInput';
+import { NPCInput } from '../characters/NPCInput';
 import type { GameHost } from './adapter';
 import { findItem, restoreSome, takeSome } from './items';
-import { bodyName, findBody, isLiving } from './names';
+import { idOf, findObject, isLiving } from './names';
 import { applyHit } from './hitFeel';
 import {
 	agilityOf,
 	ATTACKS,
 	attackVerbFor,
 	COVER_SOFTEN,
-	fightCompany,
+	fightParty,
 	seenName,
 	fightRole,
 	fightTags,
 	HEAL,
 	isBackRole,
 	isFrontRole,
-	isRivalBody,
+	isRival,
 	nearestAlly,
 	nearestRival,
 	rankSlot,
 	type AttackKind,
 } from './fight';
 import { lineClear } from '../world/path';
-import type { AgentCtx } from './types';
+import type { CharacterCtx } from './types';
 
-type Director = ArcDirector<AgentCtx>;
-type Call = VerbCall<AgentCtx>;
+type Director = ArcDirector<CharacterCtx>;
+type Call = VerbCall<CharacterCtx>;
 
 /** Every verb this game's NPCs may use, before a scene adds its own. */
 export const GAME_VERBS = [...STOCK_VERBS, 'equip', 'unequip'];
@@ -68,35 +67,35 @@ export const GAME_VERBS = [...STOCK_VERBS, 'equip', 'unequip'];
 /** Verb doctrine for scenes with buildings: going to a door stops outside it. */
 export const BUILDING_VERB_INSTRUCTIONS = `${DEFAULT_VERB_INSTRUCTIONS} go_to a doorway is still outside; inside is the building.`;
 
-/** A living body other than the actor. ArcDirector already turned names and expressions into this id. */
-function bodyOf(ctx:AgentCtx, id:string):GameObject | undefined {
-	const go = id ? findBody(ctx.world, id) : undefined;
-	return isLiving(go) && go !== ctx.actor ? go : undefined;
+/** A living character other than the one acting. ArcDirector already turned names and expressions into this id. */
+function otherCharacter(ctx:CharacterCtx, id:string):GameObject | undefined {
+	const go = id ? findObject(ctx.world, id) : undefined;
+	return isLiving(go) && go !== ctx.character ? go : undefined;
 }
 
 function asSlot(raw:string):BodySlot | undefined {
 	return (BODY_SLOTS as readonly string[]).includes(raw) ? raw as BodySlot : undefined;
 }
 
-/** Steps this body may not take right now: its company already won, it is celebrating, or it would walk into a foe. */
-export function verbGate(host:GameHost):VerbGate<AgentCtx> {
+/** Steps this character may not take right now: its party already won, it is celebrating, or it would walk into a foe. */
+export function verbGate(host:GameHost):VerbGate<CharacterCtx> {
 	return ({ verb, ctx, args }) => {
-		if (host.bargainDone && fightRole(host, ctx.actor)) {
+		if (host.bargainDone && fightRole(host, ctx.character)) {
 			return { ok: false, interrupted: true, verb, reason: 'won' };
 		}
-		const hop = ctx.actor.getComponent(Celebrating);
+		const hop = ctx.character.getComponent(Celebrating);
 		if (hop?.enabled && ctx.world.time < hop.until) {
 			return { ok: false, interrupted: true, verb, reason: 'celebrating' };
 		}
-		const foe = verb === 'go_to' && typeof args.target === 'string' ? findBody(ctx.world, args.target) : undefined;
-		if (foe && isRivalBody(host, ctx.actor, foe)) {
-			return { ok: false, verb, reason: `${seenName(host, ctx.actor, foe)} is an enemy; go_to does not attack` };
+		const foe = verb === 'go_to' && typeof args.target === 'string' ? findObject(ctx.world, args.target) : undefined;
+		if (foe && isRival(host, ctx.character, foe)) {
+			return { ok: false, verb, reason: `${seenName(host, ctx.character, foe)} is an enemy; go_to does not attack` };
 		}
 		return undefined;
 	};
 }
 
-/** What this game's bodies wear and hold. ArcDirector runs the stock world verbs through `withWorld`. */
+/** What this game's characters wear and hold. ArcDirector runs the stock world verbs through `withWorld`. */
 export function addBodyVerbs(director:Director):Director {
 	return director
 		.addVerb('equip', {
@@ -129,7 +128,7 @@ export function addStatusVerbs(director:Director, host:GameHost):Director {
 					return { ok: false, verb: 'set_status', reason: 'nothing to show' };
 				}
 				const life = Math.min(60, Math.max(1, args.seconds ?? 6));
-				host.labels.set(bodyName(ctx.actor), { text: label, until: ctx.world.time + life });
+				host.labels.set(idOf(ctx.character), { text: label, until: ctx.world.time + life });
 				return { ok: true, verb: 'set_status', reason: `${life}s` };
 			},
 		})
@@ -137,7 +136,7 @@ export function addStatusVerbs(director:Director, host:GameHost):Director {
 			handler: ({ ctx }) => ({
 				ok: true,
 				verb: 'rest',
-				reason: host.hooks.goalDone?.(host, bodyName(ctx.actor)) ? 'done — still listening' : 'goal still open',
+				reason: host.hooks.goalDone?.(host, idOf(ctx.character)) ? 'done — still listening' : 'goal still open',
 			}),
 		});
 }
@@ -160,7 +159,7 @@ export function addFightVerbs(director:Director, host:GameHost):Director {
 		.addVerb('attack', {
 			args: { target: 'id?' },
 			handler: (call) => {
-				const role = fightRole(host, call.ctx.actor);
+				const role = fightRole(host, call.ctx.character);
 				const verb = role ? attackVerbFor(role) : undefined;
 				return verb
 					? doAttack(host, call, verb, call.args.target ?? '')
@@ -180,22 +179,22 @@ export function addFightVerbs(director:Director, host:GameHost):Director {
 		.addVerb('rank', { handler: (call) => doRank(host, call) });
 }
 
-function heldWeapon(actor:GameObject):{ damage:number; range:number } | undefined {
-	const body = actor.getComponent(HumanBody);
-	if (body) {
+function heldWeapon(character:GameObject):{ damage:number; range:number } | undefined {
+	const human = character.getComponent(HumanBody);
+	if (human) {
 		for (const slot of ['hands.left.held', 'hands.right.held'] as const) {
-			const item = slotItem(body, slot);
+			const item = slotItem(human, slot);
 			if (item?.Weapon) {
 				return item.Weapon;
 			}
 		}
 	}
-	const packed = findCarried(actor, (it) => !!it.Weapon);
+	const packed = findCarried(character, (it) => !!it.Weapon);
 	return packed?.Weapon;
 }
 
 function dropDown(host:GameHost, who:GameObject):void {
-	host.arc?.abortArc(bodyName(who));
+	host.arc?.abortArc(idOf(who));
 	const npc = who.getComponent(NPCInput);
 	if (npc) {
 		npc.enabled = false;
@@ -205,26 +204,20 @@ function dropDown(host:GameHost, who:GameObject):void {
 	if (col && !who.getComponent(HurtFlash)?.active) {
 		col.enabled = false;
 	}
-	const id = bodyName(who);
+	const id = idOf(who);
 	const arc = host.arc;
-	const own = arc?.agent(id);
-	if (own && !isCrowdConductor(own)) {
-		arc?.removeAgent(id);
+	const character = arc?.character(id);
+	const party = character?.collective;
+	if (character?.mind) {
+		arc?.removeCharacter(id);
 	}
-	for (const agent of arc?.agents() ?? []) {
-		if (!isCrowdConductor(agent) || !agent.crowd.has(id)) {
-			continue;
-		}
-		arc?.removeCrowdUnit(agent.id, id);
-		const alive = agent.crowd.list().some((unit) => isLiving(findBody(host.world, unit.id)));
-		if (!alive) {
-			arc?.removeAgent(agent.id);
-		}
+	if (party && !party.characters.some((c) => isLiving(findObject(host.world, c.id)))) {
+		arc?.removeCollective(party.id);
 	}
 	host.arc?.pushEvent({
 		kind: 'Hurt',
 		text: '{0} is down',
-		who: [bodyName(who)],
+		who: [idOf(who)],
 		tags: ['down'],
 		major: false,
 	});
@@ -243,18 +236,18 @@ function combatSight(world:World, a:GameObject, b:GameObject):boolean {
 const RANK_ARRIVE = 1.2;
 
 async function closeTo(host:GameHost, call:Call, target:GameObject, range:number, useRank = true):Promise<ArcResult> {
-	const actor = call.ctx.actor;
-	const role = fightRole(host, actor);
-	const slot = useRank ? rankSlot(host, actor) : undefined;
+	const character = call.ctx.character;
+	const role = fightRole(host, character);
+	const slot = useRank ? rankSlot(host, character) : undefined;
 	if (slot && (isBackRole(role) || isFrontRole(role))) {
-		const here = actor.transform.position;
+		const here = character.transform.position;
 		if (Math.hypot(here.x - slot.x, here.z - slot.z) > RANK_ARRIVE) {
 			const walk = await call.goToPoint([slot.x, slot.z]);
 			if (!walk.ok) {
 				return walk;
 			}
 		}
-		if (distXZ(actor, target) <= range + 0.5) {
+		if (distXZ(character, target) <= range + 0.5) {
 			return { ok: true };
 		}
 		if (isBackRole(role)) {
@@ -262,24 +255,24 @@ async function closeTo(host:GameHost, call:Call, target:GameObject, range:number
 		}
 	}
 	const close = Math.max(0.9, range - 0.6);
-	if (distXZ(actor, target) > close) {
-		const walk = await call.goTo(bodyName(target), close);
+	if (distXZ(character, target) > close) {
+		const walk = await call.goTo(idOf(target), close);
 		if (!walk.ok) {
 			return walk;
 		}
 	}
-	if (distXZ(actor, target) > range + 0.5) {
+	if (distXZ(character, target) > range + 0.5) {
 		return { ok: false, reason: 'too far' };
 	}
 	return { ok: true };
 }
 
 async function doRank(host:GameHost, call:Call):Promise<ArcResult> {
-	const slot = rankSlot(host, call.ctx.actor);
+	const slot = rankSlot(host, call.ctx.character);
 	if (!slot) {
 		return { ok: false, verb: 'rank', reason: 'no line' };
 	}
-	const here = call.ctx.actor.transform.position;
+	const here = call.ctx.character.transform.position;
 	if (Math.hypot(here.x - slot.x, here.z - slot.z) <= RANK_ARRIVE) {
 		const hold = await call.wait(0.35);
 		if (!hold.ok) {
@@ -335,7 +328,7 @@ function hitChance(spec:AttackKind, dist:number, agility:number):number {
 async function doAttack(host:GameHost, call:Call, verb:string, name:string, locked?:GameObject):Promise<ArcResult> {
 	const { ctx } = call;
 	const npc = ctx.npc;
-	const role = fightRole(host, ctx.actor);
+	const role = fightRole(host, ctx.character);
 	const attack = attackOf(verb);
 	if (!attack) {
 		return { ok: false, verb, reason: `unhandled attack ${verb}` };
@@ -344,7 +337,7 @@ async function doAttack(host:GameHost, call:Call, verb:string, name:string, lock
 		const need = attack.spec.roles.join(' or ');
 		return { ok: false, verb, reason: `only a ${need} can ${attack.name}` };
 	}
-	const target = locked ?? (name.trim() ? bodyOf(ctx, name) : nearestRival(host, ctx.actor));
+	const target = locked ?? (name.trim() ? otherCharacter(ctx, name) : nearestRival(host, ctx.character));
 	if (!target) {
 		return {
 			ok: false,
@@ -352,8 +345,8 @@ async function doAttack(host:GameHost, call:Call, verb:string, name:string, lock
 			reason: name.trim() ? `no such person ${name}` : 'no one to attack',
 		};
 	}
-	const dest = bodyName(target);
-	const weapon = heldWeapon(ctx.actor);
+	const dest = idOf(target);
+	const weapon = heldWeapon(ctx.character);
 	const melee = !attack.spec.cover;
 	const range = melee ? Math.max(attack.spec.range, weapon?.range ?? 0) : attack.spec.range;
 	const walk = await closeTo(host, call, target, range, !locked);
@@ -365,12 +358,12 @@ async function doAttack(host:GameHost, call:Call, verb:string, name:string, lock
 	if (!held.ok) {
 		return { ...held, verb: attack.name };
 	}
-	if (distXZ(ctx.actor, target) > range + 0.5) {
+	if (distXZ(ctx.character, target) > range + 0.5) {
 		return { ok: false, verb: attack.name, reason: 'too far' };
 	}
-	const clear = !attack.spec.cover || combatSight(ctx.world, ctx.actor, target);
-	const who = [bodyName(ctx.actor), bodyName(target)];
-	const foe = seenName(host, ctx.actor, target);
+	const clear = !attack.spec.cover || combatSight(ctx.world, ctx.character, target);
+	const who = [idOf(ctx.character), idOf(target)];
+	const foe = seenName(host, ctx.character, target);
 	if (attack.spec.cover === 'block' && !clear) {
 		host.arc?.pushEvent({
 			kind: 'Miss',
@@ -389,13 +382,13 @@ async function doAttack(host:GameHost, call:Call, verb:string, name:string, lock
 	if (vitals.hp <= 0) {
 		return { ok: true, verb: attack.name, reason: 'already down' };
 	}
-	const dist = distXZ(ctx.actor, target);
+	const dist = distXZ(ctx.character, target);
 	const covered = attack.spec.cover === 'soften' && !clear;
 	let chance = hitChance(attack.spec, dist, agilityOf(host, target));
 	if (covered) {
 		chance = Math.min(0.97, Math.max(0.05, chance * COVER_SOFTEN));
 	}
-	npc.faceToward(bodyName(target));
+	npc.faceToward(idOf(target));
 	if (Math.random() >= chance) {
 		host.arc?.pushEvent({
 			kind: 'Miss',
@@ -411,7 +404,7 @@ async function doAttack(host:GameHost, call:Call, verb:string, name:string, lock
 		dmg = Math.max(1, Math.round(dmg * COVER_SOFTEN));
 	}
 	vitals.hp = Math.max(0, vitals.hp - dmg);
-	applyHit(ctx.world, ctx.actor, target, attack.spec.knock ?? 1);
+	applyHit(ctx.world, ctx.character, target, attack.spec.knock ?? 1);
 	host.arc?.pushEvent({
 		kind: 'Hurt',
 		text: covered ? `{0} ${attack.spec.word} {1} through cover` : `{0} ${attack.spec.word} {1}`,
@@ -447,12 +440,12 @@ function interceptPoint(ward:GameObject, threat:GameObject):{ x:number; z:number
 	return { x: a.x + (dx / len) * cover, z: a.z + (dz / len) * cover };
 }
 
-function protectWard(host:GameHost, ctx:AgentCtx, name:string):GameObject | undefined {
+function protectWard(host:GameHost, ctx:CharacterCtx, name:string):GameObject | undefined {
 	if (!name.trim()) {
-		return nearestAlly(host, ctx.actor, isHurtBody);
+		return nearestAlly(host, ctx.character, isHurt);
 	}
-	const go = bodyOf(ctx, name);
-	return go && !isRivalBody(host, ctx.actor, go) ? go : undefined;
+	const go = otherCharacter(ctx, name);
+	return go && !isRival(host, ctx.character, go) ? go : undefined;
 }
 
 async function doProtect(host:GameHost, call:Call, name:string):Promise<ArcResult> {
@@ -467,7 +460,7 @@ async function doProtect(host:GameHost, call:Call, name:string):Promise<ArcResul
 	}
 	const threat = nearestRival(host, ward);
 	if (!threat) {
-		const walk = await call.goTo(bodyName(ward), 1.4);
+		const walk = await call.goTo(idOf(ward), 1.4);
 		if (!walk.ok) {
 			return { ...walk, verb: 'protect' };
 		}
@@ -475,54 +468,54 @@ async function doProtect(host:GameHost, call:Call, name:string):Promise<ArcResul
 		if (!hold.ok) {
 			return { ...hold, verb: 'protect' };
 		}
-		return { ok: true, verb: 'protect', reason: `guard ${bodyName(ward)}` };
+		return { ok: true, verb: 'protect', reason: `guard ${idOf(ward)}` };
 	}
 	const screen = interceptPoint(ward, threat);
-	const here = ctx.actor.transform.position;
+	const here = ctx.character.transform.position;
 	if (Math.hypot(screen.x - here.x, screen.z - here.z) > 0.55) {
 		const walk = await call.goToPoint([screen.x, screen.z]);
 		if (!walk.ok) {
 			return { ...walk, verb: 'protect' };
 		}
 	}
-	ctx.npc.faceToward(bodyName(threat));
-	const swing = fightRole(host, ctx.actor);
+	ctx.npc.faceToward(idOf(threat));
+	const swing = fightRole(host, ctx.character);
 	const verb = swing ? attackVerbFor(swing) : undefined;
 	if (verb) {
 		const hit = await doAttack(host, call, verb, '', threat);
-		return { ...hit, verb: 'protect', reason: hit.reason ?? `peel ${bodyName(threat)}` };
+		return { ...hit, verb: 'protect', reason: hit.reason ?? `peel ${idOf(threat)}` };
 	}
 	const hold = await call.wait(0.35);
 	if (!hold.ok) {
 		return { ...hold, verb: 'protect' };
 	}
-	return { ok: true, verb: 'protect', reason: `screen ${bodyName(ward)}` };
+	return { ok: true, verb: 'protect', reason: `screen ${idOf(ward)}` };
 }
 
 const HEAL_REST = ['Witch', 'Archer', 'Blade'] as const;
 
-function isHurtBody(go:GameObject):boolean {
+function isHurt(go:GameObject):boolean {
 	const vitals = go.getComponent(Vitals);
 	return !!vitals && vitals.hp > 0 && vitals.hp < vitals.maxHP;
 }
 
-function companyLiving(host:GameHost, actor:GameObject):GameObject[] {
-	const company = fightCompany(host, actor);
-	if (!company) {
-		return isLiving(actor) ? [actor] : [];
+function partyLiving(host:GameHost, character:GameObject):GameObject[] {
+	const party = fightParty(host, character);
+	if (!party) {
+		return isLiving(character) ? [character] : [];
 	}
 	const out:GameObject[] = [];
 	const seen = new Set<string>();
-	for (const unit of company.crowd.list()) {
-		const go = findBody(host.world, unit.id);
+	for (const unit of party.characters) {
+		const go = findObject(host.world, unit.id);
 		if (!isLiving(go) || seen.has(go.id)) {
 			continue;
 		}
 		seen.add(go.id);
 		out.push(go);
 	}
-	if (isLiving(actor) && !seen.has(actor.id)) {
-		out.push(actor);
+	if (isLiving(character) && !seen.has(character.id)) {
+		out.push(character);
 	}
 	return out;
 }
@@ -533,13 +526,13 @@ function hasHealTag(host:GameHost, go:GameObject, tag:string):boolean {
 		return true;
 	}
 	if (tag === 'Captain') {
-		return fightCompany(host, go)?.commanderID === bodyName(go);
+		return fightParty(host, go)?.commander?.id === idOf(go);
 	}
 	return false;
 }
 
 function pickHealTarget(host:GameHost, healer:GameObject):GameObject | undefined {
-	const hurt = companyLiving(host, healer).filter(isHurtBody);
+	const hurt = partyLiving(host, healer).filter(isHurt);
 	if (hurt.length === 0) {
 		return undefined;
 	}
@@ -563,22 +556,22 @@ function pickHealTarget(host:GameHost, healer:GameObject):GameObject | undefined
 	return hurt.find((go) => go !== healer) ?? hurt[0];
 }
 
-/** Someone in the healer's company, the healer included. */
+/** Someone in the healer's party, the healer included. */
 function findHealNamed(host:GameHost, healer:GameObject, name:string):GameObject | undefined {
-	const go = findBody(healer.world ?? host.world, name.trim());
-	return go && companyLiving(host, healer).includes(go) ? go : undefined;
+	const go = findObject(healer.world ?? host.world, name.trim());
+	return go && partyLiving(host, healer).includes(go) ? go : undefined;
 }
 
 async function doHeal(host:GameHost, call:Call, name:string):Promise<ArcResult> {
 	const { ctx } = call;
 	const npc = ctx.npc;
-	const role = fightRole(host, ctx.actor);
+	const role = fightRole(host, ctx.character);
 	if (role && role !== 'Healer') {
 		return { ok: false, verb: 'heal', reason: 'only a healer can heal' };
 	}
 	let target = name.trim()
-		? findHealNamed(host, ctx.actor, name)
-		: pickHealTarget(host, ctx.actor);
+		? findHealNamed(host, ctx.character, name)
+		: pickHealTarget(host, ctx.character);
 	if (!target) {
 		return {
 			ok: false,
@@ -586,8 +579,8 @@ async function doHeal(host:GameHost, call:Call, name:string):Promise<ArcResult> 
 			reason: name.trim() ? `no such person ${name}` : 'no one hurt',
 		};
 	}
-	const id = bodyName(target);
-	if (target !== ctx.actor) {
+	const id = idOf(target);
+	if (target !== ctx.character) {
 		const walk = await closeTo(host, call, target, HEAL.range);
 		if (!walk.ok) {
 			return { ...walk, verb: 'heal' };
@@ -598,15 +591,15 @@ async function doHeal(host:GameHost, call:Call, name:string):Promise<ArcResult> 
 	if (!held.ok) {
 		return { ...held, verb: 'heal' };
 	}
-	target = findBody(ctx.world, id) ?? target;
+	target = findObject(ctx.world, id) ?? target;
 	if (!isLiving(target)) {
 		return { ok: false, verb: 'heal', reason: 'down' };
 	}
-	if (target !== ctx.actor) {
-		if (isRivalBody(host, ctx.actor, target)) {
-			return { ok: false, verb: 'heal', reason: 'heal your company, not the enemy' };
+	if (target !== ctx.character) {
+		if (isRival(host, ctx.character, target)) {
+			return { ok: false, verb: 'heal', reason: 'heal your party, not the enemy' };
 		}
-		if (distXZ(ctx.actor, target) > HEAL.range + 0.5) {
+		if (distXZ(ctx.character, target) > HEAL.range + 0.5) {
 			return { ok: false, verb: 'heal', reason: 'too far' };
 		}
 	}
@@ -614,15 +607,15 @@ async function doHeal(host:GameHost, call:Call, name:string):Promise<ArcResult> 
 	if (!vitals) {
 		return { ok: false, verb: 'heal', reason: 'no vitals' };
 	}
-	const covered = target !== ctx.actor && !combatSight(ctx.world, ctx.actor, target);
+	const covered = target !== ctx.character && !combatSight(ctx.world, ctx.character, target);
 	const hp = covered ? Math.max(1, Math.round(HEAL.hp * COVER_SOFTEN)) : HEAL.hp;
 	npc.healReadyTimestamp = ctx.world.time + HEAL.cooldown;
-	healActor(target, hp);
-	const ally = bodyName(target);
+	healCharacter(target, hp);
+	const ally = idOf(target);
 	host.arc?.pushEvent({
 		kind: 'Heal',
 		text: covered ? '{0} healed {1} through cover' : '{0} healed {1}',
-		who: [bodyName(ctx.actor), ally],
+		who: [idOf(ctx.character), ally],
 		tags: ['heal', ...(covered ? ['cover'] : [])],
 		major: false,
 	});
@@ -635,8 +628,8 @@ async function doHeal(host:GameHost, call:Call, name:string):Promise<ArcResult> 
 	};
 }
 
-async function doEquip(ctx:AgentCtx, itemName:string, slotName?:string):Promise<ArcResult> {
-	const item = findItem(ctx.actor, itemName);
+async function doEquip(ctx:CharacterCtx, itemName:string, slotName?:string):Promise<ArcResult> {
+	const item = findItem(ctx.character, itemName);
 	if (!item) {
 		return { ok: false, verb: 'equip', reason: `not carrying ${itemName}` };
 	}
@@ -644,20 +637,20 @@ async function doEquip(ctx:AgentCtx, itemName:string, slotName?:string):Promise<
 	if (slotName && !slot) {
 		return { ok: false, verb: 'equip', reason: `no slot ${slotName}` };
 	}
-	const err = equipItem(ctx.actor, item, ctx.world, slot);
+	const err = equipItem(ctx.character, item, ctx.world, slot);
 	if (err) {
 		return { ok: false, verb: 'equip', reason: err };
 	}
-	removeFromBags(ctx.actor, item);
+	removeFromBags(ctx.character, item);
 	return { ok: true, verb: 'equip' };
 }
 
-async function doUnequip(ctx:AgentCtx, slotName:string):Promise<ArcResult> {
+async function doUnequip(ctx:CharacterCtx, slotName:string):Promise<ArcResult> {
 	const slot = asSlot(slotName);
 	if (!slot) {
 		return { ok: false, verb: 'unequip', reason: `no slot ${slotName}` };
 	}
-	unequipSlot(ctx.actor, slot, ctx.world);
+	unequipSlot(ctx.character, slot, ctx.world);
 	return { ok: true, verb: 'unequip' };
 }
 
@@ -666,14 +659,14 @@ async function doSteal(host:GameHost, call:Call, itemName:string, fromName:strin
 	if (!fromName) {
 		return { ok: false, verb: 'steal', reason: 'steal from whom?' };
 	}
-	if (ctx.actor.getComponent(MarketNPC)?.kind === 'guard') {
+	if (ctx.character.getComponent(MarketNPC)?.kind === 'guard') {
 		return { ok: false, verb: 'steal', reason: 'the watch does not steal' };
 	}
-	const victim = findBody(ctx.world, fromName);
+	const victim = findObject(ctx.world, fromName);
 	if (!victim) {
 		return { ok: false, verb: 'steal', reason: `no such person ${fromName}` };
 	}
-	if (victim === ctx.actor) {
+	if (victim === ctx.character) {
 		return { ok: false, verb: 'steal', reason: 'cannot steal from yourself' };
 	}
 	const walk = await call.goTo(fromName);
@@ -685,13 +678,13 @@ async function doSteal(host:GameHost, call:Call, itemName:string, fromName:strin
 		return { ok: false, verb: 'steal', reason: `${fromName} has no ${itemName}` };
 	}
 	const gift = takeSome(victim, stock);
-	if (!tryInsert(ctx.actor, gift)) {
+	if (!tryInsert(ctx.character, gift)) {
 		restoreSome(victim, gift, stock);
 		return { ok: false, verb: 'steal', reason: 'no room' };
 	}
 	const label = pascalCase(gift.name) || gift.name;
-	ctx.actor.getComponent(HumanSprite)?.playClip('take', ctx.world.time);
-	reportTheft(host, ctx.actor, label, fromName, 'stole without paying');
+	ctx.character.getComponent(HumanSprite)?.playClip('take', ctx.world.time);
+	reportTheft(host, ctx.character, label, fromName, 'stole without paying');
 	return { ok: true, verb: 'steal', reason: `stole ${label} from ${fromName}` };
 }
 
@@ -717,7 +710,7 @@ export function reportTheft(
 	if (!mark.items.some((it) => compactName(it) === compactName(item))) {
 		mark.items.push(item);
 	}
-	const who = bodyName(thief);
+	const who = idOf(thief);
 	host.arc?.pushEvent({
 		kind: 'Theft',
 		text: `${who} ${reason}: ${item}${fromID ? ` from ${fromID}` : ''}`,

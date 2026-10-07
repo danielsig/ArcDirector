@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { VerbRegistry, registerStockVerbs } from '../arc/stock-verbs.js';
+import { STOCK_VERBS, VerbRegistry, registerStockVerbs } from '../arc/stock-verbs.js';
 import {
 	buildCatalog,
 	dummyEntity,
@@ -14,8 +14,19 @@ import {
 } from '../expr/index.js';
 import { FakeProvider } from '../inference/fake.js';
 import { ThinkQueue } from '../think/queue.js';
-import { Agent } from './agent.js';
+import { soloCharacter, type SoloOptions } from '../testing/solo.js';
+import type { Character, CharacterJSON } from '../character/character.js';
+
+/** A saved character, restored on its own. */
+function restore<TCtx>(json:CharacterJSON, deps:Omit<SoloOptions<TCtx>, 'id'>) {
+	return soloCharacter<TCtx>({ ...deps, id: json.id }, json);
+}
 import type { WatchInput } from './types.js';
+
+/** Every stock verb: registered, and in the kit. */
+function stockVerbs():{ verbs:VerbRegistry; kit:{ verbs:readonly string[] } } {
+	return { verbs: registerStockVerbs(new VerbRegistry()), kit: { verbs: STOCK_VERBS } };
+}
 
 type Ctx = Record<string, never>;
 
@@ -72,12 +83,12 @@ function agentOf(opts:{
 	toolRoundCap?:number;
 	provider:FakeProvider;
 	catalog:()=>Catalog;
-}):Agent<Ctx> {
-	return new Agent({
+}):Character<Ctx> {
+	return soloCharacter({
 		id: 'Forager',
 		identity: { role: 'Watch the glen.' },
 		provider: opts.provider,
-		verbs: registerStockVerbs(new VerbRegistry()),
+		...stockVerbs(),
 		...perception(),
 		context: () => ({}),
 		catalog: opts.catalog,
@@ -102,17 +113,17 @@ describe('agent watches', () => {
 		});
 		await a.perform({ verb: 'watch', args: { name: 'theft', expr: 'some(events.filter("theft").nearby(16))' } });
 		await a.perform({ verb: 'unwatch', args: { name: 'approaching' } });
-		assert.deepEqual(a.watches, { theft: 'some(events.filter("theft").nearby(16))' });
+		assert.deepEqual(a.persona.watches, { theft: 'some(events.filter("theft").nearby(16))' });
 		const q = new ThinkQueue({ watchInterval: 0, processInterval: 0, maxParallel: 2 });
 		q.ensure('Forager', { skipHeartbeat: true });
-		q.setWatches('Forager', a.effectiveWatches());
+		q.setWatches('Forager', a.persona.effectiveWatches());
 		const far = hostAt(20);
 		live = far.cat;
 		q.tick(1, new Map([['Forager', far.cat]]));
 		assert.equal(q.lastMax('Forager') > 0.05, false);
 		const near = hostAt(5);
 		const rows = q.tick(1, new Map([['Forager', near.cat]]));
-		assert.ok(rows.some((r) => r.npcID === 'Forager'));
+		assert.ok(rows.some((r) => r.mindID === 'Forager'));
 
 		const frozen = agentOf({
 			watches: { approaching: 'hasHeard || some(others.approaching())' },
@@ -121,18 +132,18 @@ describe('agent watches', () => {
 			catalog: () => live,
 		});
 		assert.equal((await frozen.perform({ verb: 'watch', args: { name: 'x', expr: 'true' } })).ok, false);
-		assert.deepEqual(frozen.watches, { approaching: 'hasHeard || some(others.approaching())' });
+		assert.deepEqual(frozen.persona.watches, { approaching: 'hasHeard || some(others.approaching())' });
 
 		const json = a.toJSON();
-		const restored = Agent.fromJSON(json, {
+		const restored = restore(json, {
 			provider,
-			verbs: registerStockVerbs(new VerbRegistry()),
+			...stockVerbs(),
 			...perception(),
 			context: () => ({}),
 			catalog: () => live,
 			model: 'fake',
 		});
-		assert.deepEqual(restored.watches, a.watches);
+		assert.deepEqual(restored.persona.watches, a.persona.watches);
 	});
 
 	it('does not replace extras when the model omits watch ops', async () => {
@@ -146,8 +157,8 @@ describe('agent watches', () => {
 			provider,
 			catalog: () => cat,
 		});
-		await a.tick(1);
-		assert.deepEqual(a.watches, { approaching: 'some(others.approaching())' });
+		await a.mind!.tick(1);
+		assert.deepEqual(a.persona.watches, { approaching: 'some(others.approaching())' });
 	});
 
 	it('watch replaces a watch of the same name', async () => {
@@ -158,7 +169,7 @@ describe('agent watches', () => {
 			catalog: () => cat,
 		});
 		assert.equal((await a.perform({ verb: 'watch', args: { name: 'nearby', expr: 'isNear(me, Player, 16)' } })).ok, true);
-		assert.deepEqual(a.watches, { nearby: 'isNear(me, Player, 16)' });
+		assert.deepEqual(a.persona.watches, { nearby: 'isNear(me, Player, 16)' });
 	});
 
 	it('keeps host pinnedWatches; LLM cannot edit or remove them', async () => {
@@ -170,41 +181,41 @@ describe('agent watches', () => {
 			provider,
 			catalog: () => cat,
 		});
-		assert.deepEqual(a.effectiveWatches(), ['isHurt(me)', 'some(others.approaching())']);
+		assert.deepEqual(a.persona.effectiveWatches(), ['isHurt(me)', 'some(others.approaching())']);
 		await a.perform({ verb: 'watch', args: { name: 'heard', expr: 'hasHeard' } });
 		assert.equal((await a.perform({ verb: 'watch', args: { name: 'hurt', expr: 'isNear(me, Player)' } })).ok, false);
 		assert.equal((await a.perform({ verb: 'unwatch', args: { name: 'hurt' } })).ok, false);
-		assert.deepEqual(a.watches, {
+		assert.deepEqual(a.persona.watches, {
 			approaching: 'some(others.approaching())',
 			heard: 'hasHeard',
 		});
-		assert.deepEqual(a.effectiveWatches(), ['isHurt(me)', 'some(others.approaching())', 'hasHeard']);
-		assert.equal(a.editWatch('hurt', 'isNear(me, Player)'), false);
-		assert.equal(a.removeWatch('hurt'), false);
-		assert.equal(a.addWatch('hurt', 'hasHeard'), false);
+		assert.deepEqual(a.persona.effectiveWatches(), ['isHurt(me)', 'some(others.approaching())', 'hasHeard']);
+		assert.equal(a.persona.editWatch('hurt', 'isNear(me, Player)'), false);
+		assert.equal(a.persona.removeWatch('hurt'), false);
+		assert.equal(a.persona.addWatch('hurt', 'hasHeard'), false);
 		const json = a.toJSON();
-		assert.deepEqual(json.pinnedWatches, { hurt: 'isHurt(me)' });
-		const restored = Agent.fromJSON(json, {
+		assert.deepEqual(json.persona.pinnedWatches, { hurt: 'isHurt(me)' });
+		const restored = restore(json, {
 			provider,
-			verbs: registerStockVerbs(new VerbRegistry()),
+			...stockVerbs(),
 			...perception(),
 			context: () => ({}),
 			catalog: () => cat,
 			model: 'fake',
 		});
-		assert.deepEqual(restored.effectiveWatches(), ['isHurt(me)', 'some(others.approaching())', 'hasHeard']);
+		assert.deepEqual(restored.persona.effectiveWatches(), ['isHurt(me)', 'some(others.approaching())', 'hasHeard']);
 		const oldSave = restored.toJSON();
-		oldSave.pinnedWatches = {};
-		const merged = Agent.fromJSON(oldSave, {
+		oldSave.persona.pinnedWatches = {};
+		const merged = restore(oldSave, {
 			provider,
-			verbs: registerStockVerbs(new VerbRegistry()),
+			...stockVerbs(),
 			...perception(),
 			context: () => ({}),
 			catalog: () => cat,
 			model: 'fake',
 			pinnedWatches: { hurt: 'isHurt(me)' },
 		});
-		assert.deepEqual(merged.effectiveWatches(), ['isHurt(me)', 'some(others.approaching())', 'hasHeard']);
+		assert.deepEqual(merged.persona.effectiveWatches(), ['isHurt(me)', 'some(others.approaching())', 'hasHeard']);
 	});
 
 	it('loads legacy string watches as watch_N and still merges host pins', () => {
@@ -213,28 +224,31 @@ describe('agent watches', () => {
 			content: JSON.stringify({ head: { verb: 'wait', args: { seconds: 1 } } }),
 			toolCalls: [],
 		}));
-		const restored = Agent.fromJSON({
+		const restored = restore({
 			id: 'Forager',
-			identity: { role: 'Watch the glen.' },
-			goals: [],
-			memories: [],
-			watches: ['some(others.approaching())'],
-			pinnedWatches: ['isHurt(me)'],
+			persona: {
+				identity: { role: 'Watch the glen.' },
+				goals: [],
+				memories: [],
+				watches: ['some(others.approaching())'],
+				pinnedWatches: ['isHurt(me)'],
+				maxGoals: 5,
+				maxEpisodic: 40,
+			},
+			tags: [],
 			liveArc: false,
-			maxGoals: 5,
-			maxEpisodic: 40,
 		}, {
 			provider,
-			verbs: registerStockVerbs(new VerbRegistry()),
+			...stockVerbs(),
 			...perception(),
 			context: () => ({}),
 			catalog: () => cat,
 			model: 'fake',
 			pinnedWatches: { hurt: 'isHurt(me)' },
 		});
-		assert.deepEqual(restored.pinnedWatches, { hurt: 'isHurt(me)' });
-		assert.equal(Object.keys(restored.watches).length, 1);
-		assert.equal(Object.values(restored.watches)[0], 'some(others.approaching())');
+		assert.deepEqual(restored.persona.pinnedWatches, { hurt: 'isHurt(me)' });
+		assert.equal(Object.keys(restored.persona.watches).length, 1);
+		assert.equal(Object.values(restored.persona.watches)[0], 'some(others.approaching())');
 	});
 
 	it('isNear / nearby radius on/off enqueues; observe names only', () => {
@@ -248,11 +262,11 @@ describe('agent watches', () => {
 		q.setWatches('G2', ['isNear(me, Player)']);
 		const at12 = hostAt(12);
 		rows = q.tick(1, new Map([['G2', at12.cat]]));
-		assert.equal(rows.some((r) => r.npcID === 'G2'), false);
+		assert.equal(rows.some((r) => r.mindID === 'G2'), false);
 		q.ensure('G3', { skipHeartbeat: true });
 		q.setWatches('G3', ['isNear(me, Player, 16)']);
 		rows = q.tick(1, new Map([['G3', at12.cat]]));
-		assert.ok(rows.some((r) => r.npcID === 'G3'));
+		assert.ok(rows.some((r) => r.mindID === 'G3'));
 		q.ensure('G4', { skipHeartbeat: true });
 		q.setWatches('G4', ['events.filter("theft").nearby(16)']);
 		assert.equal(q.scoreWatches('G4', at12.cat) > 0, false);
@@ -291,7 +305,7 @@ describe('agent watches', () => {
 			bindings: { events: { kind: 'list', value: [{ kind: 'entity', value: closer }] } },
 		};
 		const rows = q.tick(1, new Map([['G', buildCatalog(host)]]));
-		assert.ok(rows.some((r) => r.npcID === 'G'));
+		assert.ok(rows.some((r) => r.mindID === 'G'));
 	});
 
 	it('observe tool round then arc; toolRoundCap 0 never calls it', async () => {
@@ -316,12 +330,12 @@ describe('agent watches', () => {
 			};
 		});
 		const a = agentOf({ provider, catalog: () => cat, toolRoundCap: 1 });
-		const arc = await a.tick(1);
+		const arc = await a.mind!.tick(1);
 		assert.ok(arc);
 		assert.equal(observed, true);
 		observed = false;
 		const b = agentOf({ provider, catalog: () => cat, toolRoundCap: 0 });
-		await b.tick(2);
+		await b.mind!.tick(2);
 		assert.equal(observed, false);
 	});
 

@@ -9,26 +9,26 @@ import { spawnWorldItem } from '../world/spawnItem';
 import { isItemFill, isOccupied, slotItem, tryInsert } from './inventory';
 import { isBackpack, type ItemInstance } from './instance';
 
-function displace(actor:GameObject, item:ItemInstance, world:World):void {
-	if (tryInsert(actor, item)) {
+function displace(character:GameObject, item:ItemInstance, world:World):void {
+	if (tryInsert(character, item)) {
 		return;
 	}
-	const p = actor.transform.position;
+	const p = character.transform.position;
 	spawnWorldItem(world, item, p.x, p.y, p.z);
 }
 
-function clearSlot(body:HumanBody, slot:BodySlot):ItemInstance | null {
-	const fill = body.slots[slot];
+function clearSlot(human:HumanBody, slot:BodySlot):ItemInstance | null {
+	const fill = human.slots[slot];
 	if (isOccupied(fill)) {
-		body.slots[slot] = null;
+		human.slots[slot] = null;
 		return null;
 	}
 	if (isItemFill(fill)) {
-		body.slots[slot] = null;
+		human.slots[slot] = null;
 		for (const s of BODY_SLOTS) {
-			const other = body.slots[s];
+			const other = human.slots[s];
 			if (isOccupied(other) && other.occupiedBy === slot) {
-				body.slots[s] = null;
+				human.slots[s] = null;
 			}
 		}
 		return fill;
@@ -41,25 +41,25 @@ function legalSlots(item:ItemInstance):BodySlot[] {
 	return names.filter((s):s is BodySlot => (BODY_SLOTS as readonly string[]).includes(s));
 }
 
-export function unequipSlot(actor:GameObject, slot:BodySlot, world:World):void {
-	const body = actor.getComponent(HumanBody);
-	if (!body) {
+export function unequipSlot(character:GameObject, slot:BodySlot, world:World):void {
+	const human = character.getComponent(HumanBody);
+	if (!human) {
 		return;
 	}
-	const item = clearSlot(body, slot);
+	const item = clearSlot(human, slot);
 	if (item) {
-		displace(actor, item, world);
+		displace(character, item, world);
 	}
 }
 
 export function equipItem(
-	actor:GameObject,
+	character:GameObject,
 	item:ItemInstance,
 	world:World,
 	named?:BodySlot,
 ):string | null {
-	const body = actor.getComponent(HumanBody);
-	if (!body || !item.Equipable) {
+	const human = character.getComponent(HumanBody);
+	if (!human || !item.Equipable) {
 		return 'cannot equip that';
 	}
 	if (isBackpack(item) && named && named !== 'back') {
@@ -73,7 +73,7 @@ export function equipItem(
 	}
 	else {
 		for (const slot of slots) {
-			if (!body.slots[slot]) {
+			if (!human.slots[slot]) {
 				dest = slot;
 				break;
 			}
@@ -85,45 +85,45 @@ export function equipItem(
 	if (!dest || !(BODY_SLOTS as readonly string[]).includes(dest)) {
 		return 'no slot for that';
 	}
-	const prev = clearSlot(body, dest);
+	const prev = clearSlot(human, dest);
 	if (prev) {
-		displace(actor, prev, world);
+		displace(character, prev, world);
 	}
-	body.slots[dest] = item;
+	human.slots[dest] = item;
 	if (hands === 2) {
 		const other = dest === 'hands.left.held' ? 'hands.right.held' : 'hands.left.held';
-		const extra = clearSlot(body, other);
+		const extra = clearSlot(human, other);
 		if (extra) {
-			displace(actor, extra, world);
+			displace(character, extra, world);
 		}
-		body.slots[other] = { occupiedBy: dest };
+		human.slots[other] = { occupiedBy: dest };
 	}
 	return null;
 }
 
-export function itemInHeldSlot(actor:GameObject, item:ItemInstance):boolean {
-	const body = actor.getComponent(HumanBody);
-	if (!body) {
+export function itemInHeldSlot(character:GameObject, item:ItemInstance):boolean {
+	const human = character.getComponent(HumanBody);
+	if (!human) {
 		return false;
 	}
-	return slotItem(body, 'hands.left.held') === item
-		|| slotItem(body, 'hands.right.held') === item;
+	return slotItem(human, 'hands.left.held') === item
+		|| slotItem(human, 'hands.right.held') === item;
 }
 
-export function swapHeldHands(actor:GameObject):string {
-	const body = actor.getComponent(HumanBody);
-	if (!body) {
+export function swapHeldHands(character:GameObject):string {
+	const human = character.getComponent(HumanBody);
+	if (!human) {
 		return 'no hands';
 	}
-	const left = body.slots['hands.left.held'];
-	const right = body.slots['hands.right.held'];
+	const left = human.slots['hands.left.held'];
+	const right = human.slots['hands.right.held'];
 	if (isOccupied(left) || isOccupied(right)) {
 		return 'both hands are busy';
 	}
 	if (!left && !right) {
 		return 'empty hands';
 	}
-	body.slots['hands.left.held'] = right;
-	body.slots['hands.right.held'] = left;
+	human.slots['hands.left.held'] = right;
+	human.slots['hands.right.held'] = left;
 	return 'swapped hands';
 }

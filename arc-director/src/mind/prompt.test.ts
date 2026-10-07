@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { parseArc } from '../arc/parse.js';
 import { VerbRegistry, registerStockVerbs } from '../arc/stock-verbs.js';
-import { registerStockCrowdVerbs } from '../conductor/conductor-verbs.js';
+import { registerStockCollectiveVerbs } from '../collective/verbs.js';
 import { stablePrefix, volatileBlock, seeMapHint, arcRepairHint } from './prompt.js';
 
 describe('prompt split', () => {
@@ -68,7 +68,7 @@ describe('prompt split', () => {
 		assert.match(system, /see_map is a tool this think, not a verb/);
 		assert.equal(system.includes('see_map({'), false);
 		assert.match(system, /If the last wander already met args\.until/);
-		assert.match(system, /units \(this Crowd roster/);
+		assert.match(system, /units \(your roster/);
 		assert.match(system, /manhattan\(me, Player\)/);
 		assert.match(system, /❌ = you/);
 		assert.equal(system.includes('Goals (highest first)'), false);
@@ -298,7 +298,7 @@ describe('prompt split', () => {
 	});
 
 	it('a host example and verb line replace the stock crowd ones', () => {
-		const catalog = registerStockCrowdVerbs(registerStockVerbs(new VerbRegistry()));
+		const catalog = registerStockCollectiveVerbs(registerStockVerbs(new VerbRegistry()));
 		catalog.add('shoot', { args: { target: 'id' }, help: 'needs a clear line of sight' });
 		const verbs = catalog.view(['issue', 'when', 'law', 'unlaw', 'loop', 'smite']);
 		const stock = stablePrefix('Guard', identity, verbs);
@@ -323,7 +323,7 @@ describe('prompt split', () => {
 	});
 
 	it('issue and law rules appear when the kit has crowd verbs', () => {
-		const catalog = registerStockCrowdVerbs(registerStockVerbs(new VerbRegistry()));
+		const catalog = registerStockCollectiveVerbs(registerStockVerbs(new VerbRegistry()));
 		catalog.add('slash', { args: { target: 'id' } });
 		const verbs = catalog.view(['issue', 'when', 'law', 'unlaw', 'loop', 'smite']);
 		const system = stablePrefix('Guard', identity, verbs);
@@ -382,7 +382,7 @@ describe('prompt split', () => {
 		assert.match(user, /isHurt\(it\)/);
 		assert.match(user, /Current sightFocus/);
 		assert.match(user, /isNear\(it, Player\)/);
-		assert.match(user, /focus\(expr\) lists matching bodies first in sight/);
+		assert.match(user, /focus\(expr\) lists what matches first in sight/);
 		assert.equal(user.includes('"sightFocus"'), false);
 	});
 });

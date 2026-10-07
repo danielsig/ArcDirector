@@ -9,7 +9,8 @@ export type TokKind =
 	| 'lp' | 'rp' | 'lb' | 'rb' | 'comma' | 'colon' | 'q' | 'arrow'
 	| 'eof';
 
-export type Tok = { kind:TokKind; raw:string; n?:number; i:number };
+/** `i` is where the token starts in the source. A `str` token's `raw` drops its quotes, so it also has `end`. */
+export type Tok = { kind:TokKind; raw:string; n?:number; i:number; end?:number };
 
 const TWO:Record<string, TokKind> = {
 	'&&': 'amp',
@@ -46,6 +47,7 @@ export function lex(src:string):Tok[] {
 		}
 		if (c === '"' || c === "'") {
 			const q = c;
+			const start = i;
 			i += 1;
 			let s = '';
 			while (i < src.length) {
@@ -61,7 +63,7 @@ export function lex(src:string):Tok[] {
 				s += src[i];
 				i += 1;
 			}
-			out.push({ kind: 'str', raw: s, i: i - s.length });
+			out.push({ kind: 'str', raw: s, i: start, end: i });
 			continue;
 		}
 		if (/[0-9]/.test(c) || (c === '.' && i + 1 < src.length && /[0-9]/.test(src[i + 1]))) {

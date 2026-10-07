@@ -1,7 +1,7 @@
 import { extractJson, isRecord } from '../json.js';
 import { asArc, isArc, validateArc } from './validate.js';
 import { ArcError, JOIN_SYMBOL, SYMBOL_JOIN, firstStep, type Arc, type Join, type Step } from './types.js';
-import type { VerbRegistry, VerbSpec } from './stock-verbs.js';
+import { argBase, type VerbRegistry, type VerbSpec } from './stock-verbs.js';
 import type { StepArg } from './validate.js';
 
 /** Watch / who exprs: `some(...)`, `isNear(me, BridgeKeeper)`, `units.filter("Guard")`. */
@@ -220,12 +220,6 @@ function parseValue(s:string, i:number):{ value:StepArg; next:number } {
 	return { value: raw, next: parsed.next };
 }
 
-function argBase(kind:string | undefined):string {
-	if (!kind) {
-		return '';
-	}
-	return kind.endsWith('?') ? kind.slice(0, -1) : kind;
-}
 
 function parseArcAtom(s:string, i:number, registry:VerbRegistry):{ value:Arc; next:number } {
 	i = skipWs(s, i);
@@ -437,6 +431,22 @@ export function parseArc(input:string | unknown, registry:VerbRegistry):Arc {
 		return parseArcValue(extractJson(trimmed), registry);
 	}
 	return parseArcText(trimmed, registry);
+}
+
+/** An `arc` argument as an `Arc`: already parsed, or text to parse. Undefined when it does not parse. */
+export function arcArg(raw:unknown, registry:VerbRegistry):Arc | undefined {
+	if (isArc(raw)) {
+		return raw;
+	}
+	if (typeof raw !== 'string' || !raw.trim()) {
+		return undefined;
+	}
+	try {
+		return parseArc(raw, registry);
+	}
+	catch {
+		return undefined;
+	}
 }
 
 function parseArcValue(raw:unknown, registry:VerbRegistry):Arc {

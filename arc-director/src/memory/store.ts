@@ -264,6 +264,23 @@ export class MemoryStore {
 		return best;
 	}
 
+	/** Forget the record `id`. False when there is none. */
+	remove(id:string):boolean {
+		const count = this.records.length;
+		this.records = this.records.filter((r) => r.id !== id);
+		return this.records.length < count;
+	}
+
+	/** New text for the record `id`. Its embedding no longer fits the text, so it is dropped. */
+	rewrite(id:string, text:string):MemoryRecord | undefined {
+		const record = this.records.find((r) => r.id === id);
+		if (record) {
+			record.text = text;
+			record.embedding = undefined;
+		}
+		return record;
+	}
+
 	toJSON():MemoryRecord[] {
 		return this.records.map((r) => ({
 			...r,

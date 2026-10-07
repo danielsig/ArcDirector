@@ -20,7 +20,7 @@ export type ArcResult = {
 	preempted?:boolean;
 	reason?:string;
 	verb?:string;
-	/** The body or place this step found no way to reach. */
+	/** The character, thing or place this step found no way to reach. */
 	unreachable?:string;
 };
 

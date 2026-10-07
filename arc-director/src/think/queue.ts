@@ -17,12 +17,12 @@ export class ThinkQueue extends MindScheduler {
 		this.verbScores = { ...VERB_THINK_SCORES, ...opts.verbScores };
 	}
 
-	override rankScore(npcID:string, raw:number):number {
-		return raw * this.recencyScale(npcID);
+	override rankScore(mindID:string, raw:number):number {
+		return raw * this.recencyScale(mindID);
 	}
 
-	recencyScale(npcID:string):number {
-		const mind = this.minds.get(npcID);
+	recencyScale(mindID:string):number {
+		const mind = this.minds.get(mindID);
 		if (!mind?.thoughtOnce) {
 			return 1;
 		}
@@ -32,16 +32,16 @@ export class ThinkQueue extends MindScheduler {
 	protected override prune():void {
 		const best = new Map<string, ThinkRow>();
 		for (const row of this.rows) {
-			const prev = best.get(row.npcID);
+			const prev = best.get(row.mindID);
 			if (!prev || row.score > prev.score) {
-				best.set(row.npcID, row);
+				best.set(row.mindID, row);
 			}
 		}
 		this.rows = [...best.values()];
 	}
 
 	protected override order():void {
-		this.rows.sort((a, b) => this.rankScore(b.npcID, b.score) - this.rankScore(a.npcID, a.score));
+		this.rows.sort((a, b) => this.rankScore(b.mindID, b.score) - this.rankScore(a.mindID, a.score));
 	}
 
 	protected override verbScore(verb:string, ok:boolean):number {

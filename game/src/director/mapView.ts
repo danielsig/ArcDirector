@@ -21,7 +21,7 @@ const TILE_PX_MAX = 16;
 const DETAIL_ZOOM = 0.45;
 /** Game-time seconds before a new picture is allowed. */
 const lookCooldown = 60;
-/** Map units; last picture is unchanged if the agent moved less than this. */
+/** Map units; last picture is unchanged if the character moved less than this. */
 const samePictureIfCloserThan = 2;
 
 const LANDMARKS:{ [symbol:string]:string } = {

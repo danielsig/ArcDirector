@@ -16,7 +16,7 @@ import type { GameObject } from '../engine/GameObject';
 import { Harvest, Pickupable } from '../items/components';
 import { getDef } from '../items/defs';
 import {
-	actorIs,
+	characterIs,
 	compactName,
 	distXZ,
 	findCarried,
@@ -31,21 +31,21 @@ import { dropItem, findChestHolding, pickup, takeFromChest, USE_RANGE } from '..
 import { cueAt } from '../audio/cue';
 import { useItem } from '../items/use';
 import type { GameHost } from './adapter';
-import { bodyName } from './names';
+import { idOf } from './names';
 
 /** The game's item rules: what may change hands, how, and what everyone hears about it. NPCs reach them through `withWorld`, the player through slash commands. */
 
-export function findItem(actor:GameObject, name:string):ItemInstance | null {
-	return findCarried(actor, (it) => itemMatchesName(it, name));
+export function findItem(character:GameObject, name:string):ItemInstance | null {
+	return findCarried(character, (it) => itemMatchesName(it, name));
 }
 
-/** `actor` uses a carried item, on `target` if given. ArcDirector already brought it in reach. */
-export function useOn(host:GameHost, actor:GameObject, itemName:string, target?:GameObject):Outcome {
-	const item = findItem(actor, itemName);
+/** `character` uses a carried item, on `target` if given. ArcDirector already brought it in reach. */
+export function useOn(host:GameHost, character:GameObject, itemName:string, target?:GameObject):Outcome {
+	const item = findItem(character, itemName);
 	if (!item) {
 		return { ok: false, reason: `not carrying ${itemName}` };
 	}
-	const result = useItem(actor, item, target ?? null);
+	const result = useItem(character, item, target ?? null);
 	const targetName = target ? target.getComponent(Named)?.id ?? target.id : undefined;
 	if (result.ok && result.reason === 'unlocked' && target?.getComponent(Door) && targetName) {
 		host.doorOpen.set(targetName, true);
@@ -56,7 +56,7 @@ export function useOn(host:GameHost, actor:GameObject, itemName:string, target?:
 		host.arc?.pushEvent({
 			kind: 'Used',
 			text: targetName ? `{0} used ${label} on ${targetName}: ${result.reason}` : `{0} used ${label}: ${result.reason}`,
-			who: [bodyName(actor)],
+			who: [idOf(character)],
 			tags: ['use', label, ...(targetName ? [targetName] : [])],
 			major: false,
 		});
@@ -64,20 +64,20 @@ export function useOn(host:GameHost, actor:GameObject, itemName:string, target?:
 	return { ok: result.ok, reason: result.reason };
 }
 
-/** `actor` takes `name` off the ground or out of a chest. ArcDirector already brought it in reach. */
-export function takeItem(host:GameHost, actor:GameObject, name:string):Outcome {
+/** `character` takes `name` off the ground or out of a chest. ArcDirector already brought it in reach. */
+export function takeItem(host:GameHost, character:GameObject, name:string):Outcome {
 	const loot = host.world.findNamed(name);
 	if (loot?.getComponent(Pickupable)) {
 		const crop = loot.getComponent(Harvest);
-		if (crop && !actorIs(actor, crop.harvester)) {
+		if (crop && !characterIs(character, crop.harvester)) {
 			return { ok: false, reason: `only ${crop.harvester} can harvest that` };
 		}
-		const reason = pickup(actor, loot);
+		const reason = pickup(character, loot);
 		const ok = reason !== 'no room' && reason !== 'no world';
 		if (ok) {
-			actor.getComponent(HumanSprite)?.playClip('take', host.world.time);
-			host.arc?.pushEvent({ kind: 'PickedUp', text: `{0} picked up ${name}`, who: [bodyName(actor)], tags: ['item', name], major: false });
-			host.hooks.afterPickUp?.(host, actor, name);
+			character.getComponent(HumanSprite)?.playClip('take', host.world.time);
+			host.arc?.pushEvent({ kind: 'PickedUp', text: `{0} picked up ${name}`, who: [idOf(character)], tags: ['item', name], major: false });
+			host.hooks.afterPickUp?.(host, character, name);
 		}
 		return { ok, reason };
 	}
@@ -88,12 +88,12 @@ export function takeItem(host:GameHost, actor:GameObject, name:string):Outcome {
 		if (lock?.locked) {
 			return { ok: false, reason: `${chestName} is locked — unlock it first` };
 		}
-		const reason = takeFromChest(actor, held);
+		const reason = takeFromChest(character, held);
 		const ok = reason.startsWith('took ');
 		if (ok) {
-			actor.getComponent(HumanSprite)?.playClip('take', host.world.time);
-			host.arc?.pushEvent({ kind: 'PickedUp', text: `{0} picked up ${name}`, who: [bodyName(actor)], tags: ['item', name], major: false });
-			host.hooks.afterPickUp?.(host, actor, name);
+			character.getComponent(HumanSprite)?.playClip('take', host.world.time);
+			host.arc?.pushEvent({ kind: 'PickedUp', text: `{0} picked up ${name}`, who: [idOf(character)], tags: ['item', name], major: false });
+			host.hooks.afterPickUp?.(host, character, name);
 		}
 		return { ok, reason };
 	}
@@ -113,44 +113,44 @@ export function takeItem(host:GameHost, actor:GameObject, name:string):Outcome {
 		return { ok: false, reason: `${name} is ${kind}` };
 	}
 	// Someone has it: it is theirs to hand over, and saying where it is beats "no such item".
-	const holder = host.world.objects.find((go) => go !== actor && !!go.getComponent(HumanBody)
+	const holder = host.world.objects.find((go) => go !== character && !!go.getComponent(HumanBody)
 		&& !!findCarried(go, (it) => itemMatchesName(it, name)));
 	if (holder) {
-		const who = bodyName(holder);
+		const who = idOf(holder);
 		return { ok: false, reason: `${who} carries ${name}. You cannot take it; ${who} must give it to you` };
 	}
 	return { ok: false, reason: `no such item ${name}` };
 }
 
-/** `actor` puts a carried item down where it stands. */
-export function dropCarried(actor:GameObject, name:string):Outcome {
-	const item = findItem(actor, name);
+/** `character` puts a carried item down where it stands. */
+export function dropCarried(character:GameObject, name:string):Outcome {
+	const item = findItem(character, name);
 	if (!item) {
 		return { ok: false, reason: `not carrying ${name}` };
 	}
-	removeFromBags(actor, item);
-	const body = actor.getComponent(HumanBody);
-	if (body) {
+	removeFromBags(character, item);
+	const human = character.getComponent(HumanBody);
+	if (human) {
 		for (const slot of BODY_SLOTS) {
-			if (slotItem(body, slot) === item) {
-				body.slots[slot] = null;
+			if (slotItem(human, slot) === item) {
+				human.slots[slot] = null;
 			}
 		}
 	}
-	dropItem(actor, item);
+	dropItem(character, item);
 	return { ok: true, reason: `dropped ${item.name}` };
 }
 
-/** Take `count` off the stack `item` that `actor` carries: a split-off stack, or `item` itself when that is all of it. */
-export function takeSome(actor:GameObject, item:ItemInstance, count = 1):ItemInstance {
+/** Take `count` off the stack `item` that `character` carries: a split-off stack, or `item` itself when that is all of it. */
+export function takeSome(character:GameObject, item:ItemInstance, count = 1):ItemInstance {
 	const gift = item.count > count ? cloneItem(item, count) : item;
 	if (gift === item) {
-		removeFromBags(actor, item);
-		const body = actor.getComponent(HumanBody);
-		if (body) {
+		removeFromBags(character, item);
+		const human = character.getComponent(HumanBody);
+		if (human) {
 			for (const slot of BODY_SLOTS) {
-				if (slotItem(body, slot) === item) {
-					body.slots[slot] = null;
+				if (slotItem(human, slot) === item) {
+					human.slots[slot] = null;
 				}
 			}
 		}
@@ -162,9 +162,9 @@ export function takeSome(actor:GameObject, item:ItemInstance, count = 1):ItemIns
 }
 
 /** Undo `takeSome`: put `taken` back onto `original`. */
-export function restoreSome(actor:GameObject, taken:ItemInstance, original:ItemInstance):void {
+export function restoreSome(character:GameObject, taken:ItemInstance, original:ItemInstance):void {
 	if (taken === original) {
-		tryInsert(actor, taken);
+		tryInsert(character, taken);
 		return;
 	}
 	original.count += taken.count;
@@ -176,8 +176,8 @@ function countedLabel(item:ItemInstance):string {
 	return item.count > 1 ? `${item.count} ${label}` : label;
 }
 
-export function tooFar(actor:GameObject, target:GameObject, name:string):string | null {
-	if (distXZ(actor, target) > USE_RANGE) {
+export function tooFar(character:GameObject, target:GameObject, name:string):string | null {
+	if (distXZ(character, target) > USE_RANGE) {
 		return `too far — go closer to ${name}`;
 	}
 	return null;
@@ -201,30 +201,30 @@ export function settleGive(from:GameObject, to:GameObject, itemName:string, host
 	const gift = takeSome(from, item);
 	if (!tryInsert(to, gift)) {
 		const followedID = from.getComponent(Companion)?.targetID;
-		if (to.id === 'Player' || bodyName(to) === followedID) {
+		if (to.id === 'Player' || idOf(to) === followedID) {
 			dropItem(to, gift);
 			const label = pascalCase(gift.name) || gift.name;
 			const t = from.world?.time ?? 0;
 			from.getComponent(HumanSprite)?.playClip('give', t);
 			to.getComponent(HumanSprite)?.playClip('take', t);
 			cueAt(from.world, 'give', from);
-			host.arc?.pushEvent({ kind: 'Given', text: `{0} gave ${label} to {1}`, who: [bodyName(from), bodyName(to)], tags: ['give', label], major: false });
+			host.arc?.pushEvent({ kind: 'Given', text: `{0} gave ${label} to {1}`, who: [idOf(from), idOf(to)], tags: ['give', label], major: false });
 			return {
 				ok: true,
 				verb: 'give',
-				reason: `gave ${label} to ${bodyName(to)} (left at their feet — no room)`,
+				reason: `gave ${label} to ${idOf(to)} (left at their feet — no room)`,
 			};
 		}
 		restoreSome(from, gift, item);
-		return { ok: false, verb: 'give', reason: `${bodyName(to)} has no room` };
+		return { ok: false, verb: 'give', reason: `${idOf(to)} has no room` };
 	}
 	const label = pascalCase(gift.name) || gift.name;
 	const t = from.world?.time ?? 0;
 	from.getComponent(HumanSprite)?.playClip('give', t);
 	to.getComponent(HumanSprite)?.playClip('take', t);
 	cueAt(from.world, 'give', from);
-	host.arc?.pushEvent({ kind: 'Given', text: `{0} gave ${label} to {1}`, who: [bodyName(from), bodyName(to)], tags: ['give', label], major: false });
-	return { ok: true, verb: 'give', reason: `gave ${label} to ${bodyName(to)}` };
+	host.arc?.pushEvent({ kind: 'Given', text: `{0} gave ${label} to {1}`, who: [idOf(from), idOf(to)], tags: ['give', label], major: false });
+	return { ok: true, verb: 'give', reason: `gave ${label} to ${idOf(to)}` };
 }
 
 export function settlePay(from:GameObject, to:GameObject, amount:number, host:GameHost):ArcResult {
@@ -239,8 +239,8 @@ export function settlePay(from:GameObject, to:GameObject, amount:number, host:Ga
 	from.getComponent(HumanSprite)?.playClip('give', t);
 	to.getComponent(HumanSprite)?.playClip('take', t);
 	cueAt(from.world, 'give', from);
-	host.arc?.pushEvent({ kind: 'Given', text: `{0} gave ${amount} gold to {1}`, who: [bodyName(from), bodyName(to)], tags: ['give', 'gold'], major: false });
-	return { ok: true, verb: 'give', reason: `gave ${amount} gold to ${bodyName(to)}` };
+	host.arc?.pushEvent({ kind: 'Given', text: `{0} gave ${amount} gold to {1}`, who: [idOf(from), idOf(to)], tags: ['give', 'gold'], major: false });
+	return { ok: true, verb: 'give', reason: `gave ${amount} gold to ${idOf(to)}` };
 }
 
 export function settleBuy(
@@ -251,7 +251,7 @@ export function settleBuy(
 	host:GameHost,
 	quantity = 1,
 ):ArcResult {
-	const fromName = bodyName(seller);
+	const fromName = idOf(seller);
 	const stock = findSaleItem(seller, itemName);
 	if (!stock) {
 		return { ok: false, verb: 'buy', reason: `${fromName} has no ${itemName}` };
@@ -259,7 +259,7 @@ export function settleBuy(
 	if (stock.count < quantity) {
 		return { ok: false, verb: 'buy', reason: `${fromName} has only ${stock.count} ${itemName}` };
 	}
-	const buyerID = bodyName(buyer);
+	const buyerID = idOf(buyer);
 	const quote = priceFor(seller, stock, buyerID);
 	if (!quote) {
 		return { ok: false, verb: 'buy', reason: `${itemName} is not for sale` };
@@ -294,7 +294,7 @@ export function settleBuy(
 	seller.getComponent(HumanSprite)?.playClip('give', t);
 	cueAt(seller.world, 'give', seller);
 	if (price > 0) {
-		host.arc?.pushEvent({ kind: 'Bought', text: `{0} bought ${counted} from {1} for ${price} gold`, who: [bodyName(buyer), bodyName(seller)], tags: ['buy', label], major: false });
+		host.arc?.pushEvent({ kind: 'Bought', text: `{0} bought ${counted} from {1} for ${price} gold`, who: [idOf(buyer), idOf(seller)], tags: ['buy', label], major: false });
 	}
 	noteWant(buyer, label);
 	return { ok: true, verb: 'buy', reason: `bought ${counted} from ${fromName} for ${price} gold` };
@@ -308,7 +308,7 @@ export function settleSell(
 	host:GameHost,
 	quantity = 1,
 ):ArcResult {
-	const toName = bodyName(buyer);
+	const toName = idOf(buyer);
 	const stock = findSaleItem(seller, itemName) ?? findItem(seller, itemName);
 	if (!stock) {
 		return { ok: false, verb: 'sell', reason: `not carrying ${itemName}` };
@@ -349,7 +349,7 @@ export function settleSell(
 	buyer.getComponent(HumanSprite)?.playClip('take', t);
 	cueAt(seller.world, 'give', seller);
 	if (price > 0) {
-		host.arc?.pushEvent({ kind: 'Bought', text: `{0} bought ${counted} from {1} for ${price} gold`, who: [bodyName(buyer), bodyName(seller)], tags: ['buy', label], major: false });
+		host.arc?.pushEvent({ kind: 'Bought', text: `{0} bought ${counted} from {1} for ${price} gold`, who: [idOf(buyer), idOf(seller)], tags: ['buy', label], major: false });
 	}
 	noteWant(buyer, label);
 	return { ok: true, verb: 'sell', reason: `sold ${counted} to ${toName} for ${price} gold` };

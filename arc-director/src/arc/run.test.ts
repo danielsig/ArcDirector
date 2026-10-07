@@ -1,11 +1,12 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import type { Arc, ArcResult, Step } from '../arc/types.js';
-import { parseArcText } from '../arc/parse.js';
-import { VerbRegistry, registerStockVerbs } from '../arc/stock-verbs.js';
+import type { Arc, ArcResult, Step } from './types.js';
+import { parseArcText } from './parse.js';
+import { VerbRegistry, registerStockVerbs } from './stock-verbs.js';
 import { dummyEntity, buildCatalog } from '../expr/natives.js';
 import { SampleCache } from '../expr/types.js';
-import { createArcSession, deferThinks, arcSteps, pollArcSession, runArc, THINK_ABOUT_CAP } from './run.js';
+import { createArcSession, deferThinks, arcSteps, firstStartable, pollArcSession, runArc, THINK_ABOUT_CAP, type ArcHandler } from './run.js';
+import { upsertLaw, type Law } from './laws.js';
 
 function go(name:string):Step {
 	return { verb: 'go_to', args: { name } };
@@ -184,6 +185,23 @@ describe('groups, fail, loop, when(watch)', () => {
 		assert.deepEqual(names, ['Able', 'Baker']);
 	});
 
+	it('loop through fills a character by id, and by name only in prose', async () => {
+		const verbs = registerStockVerbs(new VerbRegistry());
+		const catalog = buildCatalog({
+			me: dummyEntity('Mira'),
+			others: [dummyEntity('Nyx', { name: 'EnemyWitch' })],
+			items: [],
+			cache: new SampleCache(),
+		});
+		const args:unknown[] = [];
+		const arc = parseArcText('loop(through=x in others, arc=(go_to(x) ; say(text=x)))', verbs);
+		await runArc(arc, async (step) => {
+			args.push(step.args.target ?? step.args.text);
+			return { ok: true, verb: step.verb };
+		}, { session: createArcSession({ catalog: () => catalog, verbs }) });
+		assert.deepEqual(args, ['Nyx', 'EnemyWitch']);
+	});
+
 	it('watch false aborts a handler and resumes the parent', async () => {
 		const verbs:string[] = [];
 		let heard = true;
@@ -282,5 +300,60 @@ describe('groups, fail, loop, when(watch)', () => {
 		const result = await runArc(arc, async (step) => ({ ok: true, verb: step.verb }), { session });
 		assert.equal(result.ok, true);
 		assert.equal(session.parked, false);
+	});
+});
+
+describe('handlers by reference', () => {
+	const verbs = registerStockVerbs(new VerbRegistry());
+	const flagCatalog = (flags:Record<string, boolean>) => ():ReturnType<typeof buildCatalog> => buildCatalog({
+		me: dummyEntity('Tom'),
+		others: [],
+		items: [],
+		cache: new SampleCache(),
+		bindings: Object.fromEntries(Object.entries(flags).map(([k, v]) => [k, { kind: 'bool' as const, value: v }])),
+	});
+	const handlerOf = (law:Law):ArcHandler => ({ source: law, watch: law.watch, arc: law.arc, rank: 0 });
+
+	it('a law renamed while its arc runs still counts as running', async () => {
+		const law:Law = { name: 'flee', who: 'me', watch: 'danger', arc: parseArcText('say("run")', verbs) };
+		const session = createArcSession({
+			catalog: flagCatalog({ danger: true }),
+			extraHandlers: () => [handlerOf(law)],
+		});
+		const said:string[] = [];
+		await runArc(law.arc, async (step) => {
+			said.push(String(step.args.text));
+			law.name = 'Tom.flee';
+			pollArcSession(session);
+			assert.equal(session.pending, undefined);
+			assert.equal(firstStartable(session), undefined);
+			return { ok: true, verb: step.verb };
+		}, { session, asHandler: handlerOf(law) });
+		assert.deepEqual(said, ['run']);
+	});
+
+	it('upsertLaw edits a law in place, so its handlers still match', () => {
+		const first:Law = { name: 'flee', who: 'me', watch: 'danger', arc: parseArcText('say("run")', verbs) };
+		const laws = upsertLaw([], first, 8);
+		const next = upsertLaw(laws, { ...first, watch: 'fire' }, 8);
+		assert.equal(next[0], first);
+		assert.equal(first.watch, 'fire');
+	});
+
+	it('a when inside a loop does not re-trigger itself', async () => {
+		const flags = { danger: true };
+		const session = createArcSession({ catalog: () => flagCatalog(flags)() });
+		const seen:string[] = [];
+		const arc = parseArcText('loop(times=2, arc=(when(watch=danger, arc=say("hi")) ; wait()))', verbs);
+		await runArc(arc, async (step) => {
+			seen.push(step.verb);
+			if (step.verb === 'say') {
+				pollArcSession(session);
+				assert.equal(session.pending, undefined);
+				flags.danger = false;
+			}
+			return { ok: true, verb: step.verb };
+		}, { session });
+		assert.deepEqual(seen, ['say', 'wait', 'wait']);
 	});
 });

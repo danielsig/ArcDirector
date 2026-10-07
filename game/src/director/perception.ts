@@ -44,8 +44,8 @@ import { findChestHolding } from '../items/pickup';
 import { yawToForward } from '../engine/math';
 import { whereabouts } from '../world/interior';
 import { talkCanSee } from './talkAttend';
-import { bodyName, isLiving } from './names';
-import type { AgentCtx } from './types';
+import { idOf, isLiving } from './names';
+import type { CharacterCtx } from './types';
 import type { GameHost } from './adapter';
 import { fightExprTags, fightProximityNote, fightRole } from './fight';
 
@@ -56,10 +56,10 @@ export function itemLabel(item:ItemInstance):string {
 	return item.count > 1 ? `${id} x${item.count}` : id;
 }
 
-export function carriedLabels(actor:GameObject):string[] {
+export function carriedLabels(character:GameObject):string[] {
 	const seen = new Set<string>();
 	const out:string[] = [];
-	for (const it of listCarried(actor)) {
+	for (const it of listCarried(character)) {
 		const label = pascalCase(it.name) || it.name;
 		const key = compactName(label);
 		if (!key || seen.has(key)) {
@@ -170,19 +170,19 @@ function seenOf(go:GameObject, observer?:GameObject, host?:GameHost):SeenObject 
 	return row;
 }
 
-export function lookWorld(actor:GameObject, ambient:string, host?:GameHost):Sight {
-	const pose = poseXZ(actor);
-	const self = { id: actor.getComponent(Named)?.id ?? actor.id, point: pose.point, facing: pose.facing };
-	const place = [whereabouts(actor), ambient].filter(Boolean).join(' ');
-	const world = actor.world;
+export function lookWorld(character:GameObject, ambient:string, host?:GameHost):Sight {
+	const pose = poseXZ(character);
+	const self = { id: character.getComponent(Named)?.id ?? character.id, point: pose.point, facing: pose.facing };
+	const place = [whereabouts(character), ambient].filter(Boolean).join(' ');
+	const world = character.world;
 	const objects:SeenObject[] = [];
 	if (!world) {
 		return { self, ambient: place || undefined, objects };
 	}
-	const ax = actor.transform.position.x;
-	const az = actor.transform.position.z;
+	const ax = character.transform.position.x;
+	const az = character.transform.position.z;
 	for (const go of world.objects) {
-		if (go === actor || go.id === 'MainCamera') {
+		if (go === character || go.id === 'MainCamera') {
 			continue;
 		}
 		if (go.getComponent(HumanBody) && !isLiving(go)) {
@@ -197,7 +197,7 @@ export function lookWorld(actor:GameObject, ambient:string, host?:GameHost):Sigh
 		if (Math.hypot(gp.x - ax, gp.z - az) > SIGHT) {
 			continue;
 		}
-		const row = seenOf(go, actor, host);
+		const row = seenOf(go, character, host);
 		if (row.tags.includes('tree') || row.tags.includes('boulder')) {
 			continue;
 		}
@@ -223,21 +223,21 @@ export function lookWorld(actor:GameObject, ambient:string, host?:GameHost):Sigh
 	return { self, ambient: place || undefined, objects };
 }
 
-export function inventoryOf(actor:GameObject):Inventory {
+export function inventoryOf(character:GameObject):Inventory {
 	const worn:Record<string, string> = {};
-	const body = actor.getComponent(HumanBody);
-	if (body) {
+	const human = character.getComponent(HumanBody);
+	if (human) {
 		for (const slot of BODY_SLOTS) {
-			const fill = body.slots[slot];
+			const fill = human.slots[slot];
 			if (!fill) {
 				continue;
 			}
 			worn[slot] = isOccupied(fill) ? `occupied by ${fill.occupiedBy}` : itemLabel(fill);
 		}
 	}
-	const purse = actor.getComponent(Wallet);
-	const pocketItems = body?.pockets?.contents.map(itemLabel) ?? [];
-	const packItem = body ? slotItem(body, 'back') : null;
+	const purse = character.getComponent(Wallet);
+	const pocketItems = human?.pockets?.contents.map(itemLabel) ?? [];
+	const packItem = human ? slotItem(human, 'back') : null;
 	const packItems = packItem?.Container?.contents.map(itemLabel) ?? [];
 	return {
 		worn: Object.keys(worn).length > 0 ? worn : undefined,
@@ -262,11 +262,11 @@ export function hostCanSee(world:World, aID:string, bID:string):boolean {
 	if (lock?.locked || (chest && !chest.open)) {
 		return false;
 	}
-	return talkCanSee(world, aID, bodyName(held.chest));
+	return talkCanSee(world, aID, idOf(held.chest));
 }
 
-export function followedCarry(ctx:AgentCtx):string {
-	const bond = ctx.actor.getComponent(Companion);
+export function followedCarry(ctx:CharacterCtx):string {
+	const bond = ctx.character.getComponent(Companion);
 	if (!bond) {
 		return '';
 	}
@@ -278,9 +278,9 @@ export function followedCarry(ctx:AgentCtx):string {
 	return `${bond.targetID} is carrying: ${items.length > 0 ? items.join(', ') : 'nothing you can see'}.`;
 }
 
-/** What `actor` learns examining `name`: an item it carries, or a thing in sight. */
-export function doExamine(world:World, actor:GameObject, name:string):ArcResult {
-	const held = findCarried(actor, (it) => itemMatchesName(it, name));
+/** What `character` learns examining `name`: an item it carries, or a thing in sight. */
+export function doExamine(world:World, character:GameObject, name:string):ArcResult {
+	const held = findCarried(character, (it) => itemMatchesName(it, name));
 	if (held) {
 		return { ok: true, verb: 'examine', reason: examineItem(held) };
 	}
@@ -288,7 +288,7 @@ export function doExamine(world:World, actor:GameObject, name:string):ArcResult 
 	if (!go) {
 		return { ok: false, verb: 'examine', reason: `unknown name ${name}` };
 	}
-	if (!hostCanSee(world, bodyName(actor), bodyName(go)) || distXZ(actor, go) > SIGHT) {
+	if (!hostCanSee(world, idOf(character), idOf(go)) || distXZ(character, go) > SIGHT) {
 		return { ok: false, verb: 'examine', reason: `${name} is not in sight` };
 	}
 	return { ok: true, verb: 'examine', reason: examineWorld(go) };

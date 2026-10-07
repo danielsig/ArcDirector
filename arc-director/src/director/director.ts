@@ -1,18 +1,23 @@
-import { registerStockVerbs, VerbRegistry, type StockVerb, type VerbArgMap } from '../arc/stock-verbs.js';
-import { formatArc } from '../arc/parse.js';
+import { argBase, registerStockVerbs, VerbRegistry, type StockVerb, type VerbArgMap } from '../arc/stock-verbs.js';
+import { arcArg, formatArc } from '../arc/parse.js';
 import type { ArcResult, Step } from '../arc/types.js';
 import { ArcError, firstStep } from '../arc/types.js';
-import { Agent, type AgentDeps, type AgentJSON } from '../agent/agent.js';
-import { Actor } from '../agent/actor.js';
-import type { AgentEvent, Kit, KitSource, Sense, ToolSpec } from '../agent/types.js';
-import type { NameTarget } from '../agent/names.js';
-import type { ThinkInstructions } from '../agent/prompt.js';
-import { TalkNet, type SpeechUtterance, type TalkConfig, type TalkSense } from '../agent/talk.js';
-import type { MapSense } from '../agent/map.js';
+import { lawGroup, type Law, type LawSpec } from '../arc/laws.js';
+import type { ArcRunner, RunnerOptions } from '../character/arc-runner.js';
+import { Character, type CharacterJSON, type Wiring } from '../character/character.js';
+import { Persona } from '../character/persona.js';
+import type { Kit, KitSource } from '../character/types.js';
+import type { NameTarget } from '../character/names.js';
+import { Collective, type CollectiveHost, type CollectiveJSON } from '../collective/collective.js';
+import { Mind, type MindDeps, type MindSettings } from '../mind/mind.js';
+import type { MindEvent, Sense, ToolSpec } from '../mind/types.js';
+import type { ThinkInstructions } from '../mind/prompt.js';
+import { TalkNet, type SpeechUtterance, type TalkConfig, type TalkSense } from '../mind/talk.js';
+import type { MapSense } from '../mind/map.js';
 import {
 	GREP_WORLD_ENCYCLOPEDIA,
 	type EncyclopediaSource,
-} from '../agent/encyclopedia.js';
+} from '../mind/encyclopedia.js';
 import { buildCatalog, dummyEntity, type HostKernels } from '../expr/natives.js';
 import { freezeMe, type MeFreezeHost } from '../expr/prev.js';
 import { catalogEntities, evaluate } from '../expr/eval.js';
@@ -30,19 +35,14 @@ import { formatInventory } from '../perception/formatInventory.js';
 import type { Inventory } from '../perception/inventory.js';
 import type { SeenObject, Sight } from '../perception/types.js';
 import {
-	CrowdConductor,
-	isCrowdConductor,
-	registerStockCrowdVerbs,
-	STOCK_CROWD_VERBS,
-	evaluateWho,
-	buildCrowdCatalog,
-	arcArg,
-	lawMatches,
+	registerStockCollectiveVerbs,
+	STOCK_COLLECTIVE_VERBS,
 	isFormationVerb,
-	type CrowdLawSpec,
-	type CrowdUnitSpec,
-	type StockCrowdVerb,
-} from '../conductor/index.js';
+	type StockCollectiveVerb,
+} from '../collective/verbs.js';
+import { buildCollectiveCatalog, evaluateWho, lawMatches, usesCollective } from '../collective/who.js';
+import { chatHandover, HANDOVER_THREAD, type Handover, type Journey, type MemoryEdit } from '../collective/handover.js';
+import { nameTags, type MemoryRecord } from '../memory/store.js';
 import {
 	DEFAULT_COOLDOWN,
 	createArcSession,
@@ -50,7 +50,7 @@ import {
 	pollArcSession,
 	type ArcHandler,
 	type ArcSession,
-} from '../agent/run.js';
+} from '../arc/run.js';
 import type { ChatRequest, ChatResponse, InferenceProvider } from '../inference/provider.js';
 import type { FakeChatFn } from '../inference/fake.js';
 import { isVisionModel, type ModelInfo } from '../inference/models.js';
@@ -75,8 +75,8 @@ import {
 } from '../think/queue.js';
 import {
 	emptyInferClock,
-	type ActorSpec,
-	type AgentSpec,
+	type CharacterSpec,
+	type CollectiveSpec,
 	type DirectorLog,
 	type InferClock,
 	type KernelSource,
@@ -99,7 +99,7 @@ import { missingParts, worldVerbs } from '../world/verbs.js';
 const STARTED = 'ArcDirector already started';
 
 /** A wait in progress (stock `wait`, or a handler's `call.wait`), settled by `tick`. */
-type Wait = { actorID:string; verb:string; end:number; seconds:number; met?:()=>boolean; done:(result:ArcResult)=>void };
+type Wait = { characterID:string; verb:string; end:number; seconds:number; met?:()=>boolean; done:(result:ArcResult)=>void };
 
 /** Watch value as a 0–1 fit. A non-empty list or an entity counts as true. */
 function fit(value:ExprVal):number {
@@ -120,7 +120,7 @@ function watchProblem(expr:string, catalog:Catalog | undefined):string | undefin
 	return catalog ? leftoverFilterHint(expr, catalogEntities(catalog)) : undefined;
 }
 
-/** The body an `id` expression picked: an entity, or the first entity of a list. */
+/** What an `id` expression picked: an entity, or the first entity of a list. */
 function pickedEntity(value:ExprVal):ExprEntity | undefined {
 	if (value.kind === 'entity') {
 		return value.value;
@@ -140,24 +140,18 @@ type QueueSlot =
 	| { kind:'simple'; opts?:SimpleQueueOpts }
 	| { kind:'instance'; queue:MindQueue };
 
-/** What ArcDirector keeps per body: who runs its arcs, and its per-tick sample cache. */
-type ActorRow<TAgentCtx> = {
-	spec:ActorSpec<TAgentCtx>;
-	actor:Actor<TAgentCtx> | null;
+/** What ArcDirector keeps per character or collective: the spec it was built from, and its per-tick sample cache. */
+type Row<TSpec, TRunner> = {
+	spec:TSpec;
+	runner:TRunner;
 	cache:SampleCache;
 };
 
-/** An agent's row: its body, plus the spec its mind was built from. */
-type AgentRow<TAgentCtx> = {
-	spec:AgentSpec<TAgentCtx>;
-	actor:Agent<TAgentCtx> | null;
-	cache:SampleCache;
-	rank:number;
+/** A save of every character and collective: `ArcDirector.exportCast`. */
+export type CastJSON = {
+	characters:Record<string, CharacterJSON>;
+	collectives:Record<string, CollectiveJSON>;
 };
-
-function isAgentRow<TAgentCtx>(row:ActorRow<TAgentCtx>):row is AgentRow<TAgentCtx> {
-	return row.actor instanceof Agent;
-}
 
 function nowMs():number {
 	return performance.now();
@@ -183,60 +177,71 @@ function sightDistanceDescription(unitName?:string):string {
 	return `What you can see. Names only, ${dist}.`;
 }
 
-export class ArcDirector<TAgentCtx = unknown> {
+export class ArcDirector<TCtx = unknown> {
 	private started = false;
-	/** `restoreAgents` before `start()`; each agent is rebuilt from it when it is wired. */
-	private stored:Record<string, AgentJSON> = {};
+	/** `restoreCast` before `start()`; the cast is built from it when it is wired. */
+	private stored:CastJSON | undefined;
 	private disposed = false;
 	private inference:InferenceSlot = { kind: 'unset' };
 	private queueSlot:QueueSlot = { kind: 'default' };
 	private queue:MindQueue | undefined;
 	private http:HttpProvider | undefined;
 	private verbs = new VerbRegistry();
-	private readonly handlers = new Map<string, VerbHandler<TAgentCtx>>();
-	private catchAll:VerbHandler<TAgentCtx> | undefined;
-	private verbGate:VerbGate<TAgentCtx> | undefined;
+	private readonly handlers = new Map<string, VerbHandler<TCtx>>();
+	private catchAll:VerbHandler<TCtx> | undefined;
+	private verbGate:VerbGate<TCtx> | undefined;
 	private readonly waits = new Set<Wait>();
 	private world:HostWorld<unknown> | undefined;
 	/** Stock world verbs, bound at `start()` for the parts `withWorld` has. A host handler of the same name wins. */
-	private readonly stockHandlers = new Map<string, VerbHandler<TAgentCtx>>();
+	private readonly stockHandlers = new Map<string, VerbHandler<TCtx>>();
 	private mover = new Mover(undefined, () => this.clock);
 	private toolRounds:number | undefined;
 	private arcRetries:number | undefined;
 	private stalledFn:((result:ArcResult)=>boolean) | undefined;
-	private senses:Record<string, Sense<TAgentCtx>> = {};
-	private tools:Record<string, ToolSpec<TAgentCtx>> = {};
+	private senses:Record<string, Sense<TCtx>> = {};
+	private tools:Record<string, ToolSpec<TCtx>> = {};
 	private losFn:((aID:string, bID:string)=>boolean) | undefined;
-	private sightLook:((ctx:TAgentCtx)=>Sight) | undefined;
+	private sightLook:((ctx:TCtx)=>Sight) | undefined;
 	private sightLimitDefault:number | undefined;
 	private sightUnitName:string | undefined;
-	private contextFn:((id:string)=>TAgentCtx | undefined) | undefined;
-	private kernelFn:KernelSource<TAgentCtx> | undefined;
-	private defaultKit:KitSource<TAgentCtx> | undefined;
+	private contextFn:((id:string)=>TCtx | undefined) | undefined;
+	private kernelFn:KernelSource<TCtx> | undefined;
+	private defaultKit:KitSource<TCtx> | undefined;
 	private cooldownDefault = DEFAULT_COOLDOWN;
 	private talkSense:TalkSense | undefined;
 	private onSpoke:((utterance:SpeechUtterance)=>void) | undefined;
 	private talkConfig:Partial<TalkConfig> | undefined;
 	talk:TalkNet | undefined;
 	private map:MapSense | undefined;
-	private encyclopedia:EncyclopediaSource<TAgentCtx> | undefined;
+	private encyclopedia:EncyclopediaSource<TCtx> | undefined;
 	private mentionCap:number | undefined;
 	private abortArcFn:((id:string)=>void) | undefined;
-	private commanderVacantFn:((conductorID:string, unitID:string)=>void) | undefined;
+	private commanderVacantFn:((collective:Collective<TCtx>, character:Character<TCtx>)=>void) | undefined;
 	private logFn:((entry:DirectorLog)=>void) | undefined;
-	private stepFn:((call:VerbCall<TAgentCtx>, result:ArcResult)=>void) | undefined;
+	private stepFn:((call:VerbCall<TCtx>, result:ArcResult)=>void) | undefined;
 	private ignoreMissing = false;
 	private arcText = false;
 	private thinkInstructions:ThinkInstructions | undefined;
 	private verbInstructions:string | undefined;
 	private arcExample:string | undefined;
 	private repairTemperature:number | undefined;
-	private seenFn:SeenName<TAgentCtx> | undefined;
-	private readonly pendingAgents:AgentSpec<TAgentCtx>[] = [];
-	private readonly pendingActors:ActorSpec<TAgentCtx>[] = [];
-	private readonly agentRows = new Map<string, AgentRow<TAgentCtx>>();
-	/** Bodies from `addActor`. Agents' bodies live in `agentRows`. */
-	private readonly actorRows = new Map<string, ActorRow<TAgentCtx>>();
+	private seenFn:SeenName<TCtx> | undefined;
+	private mindDefaults:MindSettings = {};
+	/** `undefined` until `start()` picks the default; `false` when the host turned it off. */
+	private handover:Handover<TCtx> | false | undefined;
+	private handoverTicks = 1;
+	/** Moves waiting for the next handover, one per character: its first `from`, its latest `to`. */
+	private readonly journeys = new Map<Character<TCtx>, Journey<TCtx>>();
+	private journeyTicks = 0;
+	/** A handover call holds one think slot until it answers. */
+	private handoverBusy = false;
+	/** Specs from `addCharacter`, in order: the characters on their own when the cast is built or restored. */
+	private readonly soloSpecs:CharacterSpec<TCtx>[] = [];
+	private readonly collectiveSpecs:CollectiveSpec<TCtx>[] = [];
+	/** Every character spec by id, on its own or in a collective. One id namespace covers characters and collectives. */
+	private readonly specs = new Map<string, CharacterSpec<TCtx>>();
+	private readonly characterRows = new Map<string, Row<CharacterSpec<TCtx>, Character<TCtx>>>();
+	private readonly collectiveRows = new Map<string, Row<CollectiveSpec<TCtx>, Collective<TCtx>>>();
 	private readonly readyThink:ThinkRow[] = [];
 	private batchHeldTimestamp:number | null = null;
 	private clock = 0;
@@ -309,18 +314,18 @@ export class ArcDirector<TAgentCtx = unknown> {
 		return this;
 	}
 
-	addSense(name:string, spec:Sense<TAgentCtx>):this {
+	addSense(name:string, spec:Sense<TCtx>):this {
 		this.senses[name] = spec;
 		return this;
 	}
 
-	addTool(name:string, spec:ToolSpec<TAgentCtx>):this {
+	addTool(name:string, spec:ToolSpec<TCtx>):this {
 		this.tools[name] = spec;
 		return this;
 	}
 
 	withSight({ look, limit, unitName }:{
-		look?:(ctx:TAgentCtx)=>Sight;
+		look?:(ctx:TCtx)=>Sight;
 		limit?:number;
 		unitName?:string;
 	}):this {
@@ -368,7 +373,7 @@ export class ArcDirector<TAgentCtx = unknown> {
 		return this;
 	}
 
-	/** Standing verb-chain line. Default `DEFAULT_VERB_INSTRUCTIONS`, plus looping programs for a Crowd; this replaces both. */
+	/** Standing verb-chain line. Default `DEFAULT_VERB_INSTRUCTIONS`, plus looping programs for a collective; this replaces both. */
 	withVerbInstructions(text:string):this {
 		this.assertBuilder();
 		this.verbInstructions = text;
@@ -408,23 +413,23 @@ export class ArcDirector<TAgentCtx = unknown> {
 	}
 
 	/**
-	 * How each agent names other bodies. `seen` returns a base name from what the agent holds about
-	 * the target; the agent's own book keeps that name stable, numbers duplicates (`EnemyWitch2`),
-	 * and turns it back into the real id before a verb reaches the host. Applied to sight, earshot,
-	 * heard speech, watch-language entities, and event `who`.
+	 * How each mind names other characters. `seen` returns a base name from what the mind holds about
+	 * the target; its owner's book keeps that name stable and numbers duplicates (`EnemyWitch2`).
+	 * Applied to sight, earshot, heard speech, watch-language entities, and event `who`. Arcs, laws and
+	 * watches are kept in ids: each mind turns its model's names into ids as it reads a reply.
 	 */
-	withNames({ seen }:{ seen:SeenName<TAgentCtx> }):this {
+	withNames({ seen }:{ seen:SeenName<TCtx> }):this {
 		this.assertBuilder();
 		this.seenFn = seen;
 		return this;
 	}
 
-	/** `observerID`'s name for a body, for host-built text such as a sight `note`. */
+	/** What the mind of character or collective `observerID` calls a character, for host-built text such as a sight `note`. */
 	seen(observerID:string, target:NameTarget):string {
-		return this.agentRows.get(observerID)?.actor?.seen(target) ?? target.id;
+		return (this.character(observerID) ?? this.collective(observerID))?.mind?.seen(target) ?? target.id;
 	}
 
-	withInventory(look:(ctx:TAgentCtx)=>Inventory):this {
+	withInventory(look:(ctx:TCtx)=>Inventory):this {
 		this.assertBuilder();
 		this.senses.carrying = {
 			description: 'What you wear and carry.',
@@ -434,7 +439,7 @@ export class ArcDirector<TAgentCtx = unknown> {
 	}
 
 	/**
-	 * The game's world: where things are, how bodies move, and how items, uses, looks, and trades work.
+	 * The game's world: where things are, how characters move, and how items, uses, looks, and trades work.
 	 * Runs the stock world verbs (`go_to`, `pick_up`, `buy`, …) and the watch geometry. `TEntity` is the
 	 * game's own type for things in its world; every part but `find` receives one. See `HostWorld`.
 	 */
@@ -464,20 +469,20 @@ export class ArcDirector<TAgentCtx = unknown> {
 		return this;
 	}
 
-	withContext(fn:(id:string)=>TAgentCtx | undefined):this {
+	withContext(fn:(id:string)=>TCtx | undefined):this {
 		this.assertBuilder();
 		this.contextFn = fn;
 		return this;
 	}
 
-	withKernels(fn:KernelSource<TAgentCtx>):this {
+	withKernels(fn:KernelSource<TCtx>):this {
 		this.assertBuilder();
 		this.kernelFn = fn;
 		return this;
 	}
 
-	/** Used when `addAgent` omits `kit`. */
-	withDefaultKit(kit:KitSource<TAgentCtx>):this {
+	/** Used when a character or collective spec omits `kit`, a collective's characters too. */
+	withDefaultKit(kit:KitSource<TCtx>):this {
 		this.assertBuilder();
 		this.defaultKit = kit;
 		return this;
@@ -509,7 +514,7 @@ export class ArcDirector<TAgentCtx = unknown> {
 	}
 
 	/** `mentions`: most articles shown per think for names said or heard (default `DEFAULT_MENTION_CAP`; 0 shows none). */
-	withEncyclopedia(pages:EncyclopediaSource<TAgentCtx>, { mentions }:{ mentions?:number } = {}):this {
+	withEncyclopedia(pages:EncyclopediaSource<TCtx>, { mentions }:{ mentions?:number } = {}):this {
 		this.assertBuilder();
 		this.encyclopedia = pages;
 		this.mentionCap = mentions;
@@ -528,9 +533,9 @@ export class ArcDirector<TAgentCtx = unknown> {
 		return this;
 	}
 
-	/** Schema-only crowd verbs (`issue`, `tag`, formations). `when` / `law` / `unlaw` ride on stock arc verbs. Kit still has to grant them. */
-	addStockCrowdVerbs(...verbs:StockCrowdVerb[]):this {
-		registerStockCrowdVerbs(this.verbs, ...verbs);
+	/** Schema-only collective verbs (`issue`, `tag`, formations). `when` / `law` / `unlaw` ride on stock arc verbs. Kit still has to grant them. */
+	addStockCollectiveVerbs(...verbs:StockCollectiveVerb[]):this {
+		registerStockCollectiveVerbs(this.verbs, ...verbs);
 		return this;
 	}
 
@@ -539,21 +544,21 @@ export class ArcDirector<TAgentCtx = unknown> {
 	 * verb list. The handler's `args` are typed from `args`; a stock verb takes only a handler, typed from
 	 * its stock args. Same name again binds or replaces the handler.
 	 */
-	addVerb<TVerb extends StockVerbName>(name:TVerb, verb:{ help?:string; handler:VerbHandler<TAgentCtx, VerbArgs<StockVerbArgs<TVerb>>> }):this;
-	addVerb<const TArgMap extends VerbArgMap = Record<never, never>>(name:string, verb?:{ args?:TArgMap; help?:string; handler?:VerbHandler<TAgentCtx, VerbArgs<TArgMap>> }):this;
-	addVerb(name:string, { handler, ...def }:{ args?:VerbArgMap; help?:string; handler?:VerbHandler<TAgentCtx, never> } = {}):this {
+	addVerb<TVerb extends StockVerbName>(name:TVerb, verb:{ help?:string; handler:VerbHandler<TCtx, VerbArgs<StockVerbArgs<TVerb>>> }):this;
+	addVerb<const TArgMap extends VerbArgMap = Record<never, never>>(name:string, verb?:{ args?:TArgMap; help?:string; handler?:VerbHandler<TCtx, VerbArgs<TArgMap>> }):this;
+	addVerb(name:string, { handler, ...def }:{ args?:VerbArgMap; help?:string; handler?:VerbHandler<TCtx, never> } = {}):this {
 		if (!this.verbs.has(name)) {
 			this.verbs.add(name, def);
 		}
 		if (handler) {
 			// The schema is checked before dispatch, so the args match what this handler was typed with.
-			this.handlers.set(name, handler as VerbHandler<TAgentCtx>);
+			this.handlers.set(name, handler as VerbHandler<TCtx>);
 		}
 		return this;
 	}
 
-	/** Runs before every host verb. Return a result to refuse the step (a downed body, a cutscene); `undefined` lets it run. */
-	withVerbGate(fn:VerbGate<TAgentCtx>):this {
+	/** Runs before every host verb. Return a result to refuse the step (a downed character, a cutscene); `undefined` lets it run. */
+	withVerbGate(fn:VerbGate<TCtx>):this {
 		this.verbGate = fn;
 		return this;
 	}
@@ -567,7 +572,7 @@ export class ArcDirector<TAgentCtx = unknown> {
 		return this;
 	}
 
-	onVerb(fn:VerbHandler<TAgentCtx>):this {
+	onVerb(fn:VerbHandler<TCtx>):this {
 		this.catchAll = fn;
 		return this;
 	}
@@ -577,17 +582,9 @@ export class ArcDirector<TAgentCtx = unknown> {
 		return this;
 	}
 
-	onCommanderVacant(fn:(conductorID:string, unitID:string)=>void):this {
+	/** A collective's commander left or died. Name a new one with `collective.commander = …`. */
+	onCommanderVacant(fn:(collective:Collective<TCtx>, character:Character<TCtx>)=>void):this {
 		this.commanderVacantFn = fn;
-		return this;
-	}
-
-	setCrowdCommander(conductorID:string, unitID:string | null):this {
-		const agent = this.agentRows.get(conductorID)?.actor;
-		if (!isCrowdConductor(agent)) {
-			throw new Error(`ArcDirector: '${conductorID}' is not a CrowdConductor`);
-		}
-		agent.setCommander(unitID);
 		return this;
 	}
 
@@ -597,122 +594,84 @@ export class ArcDirector<TAgentCtx = unknown> {
 	}
 
 	/** After a host verb resolves. `say` does not come through here. */
-	onStep(fn:(call:VerbCall<TAgentCtx>, result:ArcResult)=>void):this {
+	onStep(fn:(call:VerbCall<TCtx>, result:ArcResult)=>void):this {
 		this.stepFn = fn;
 		return this;
 	}
 
-	addAgent(spec:AgentSpec<TAgentCtx>):this {
-		const next:AgentSpec<TAgentCtx> = {
-			...spec,
-			goals: spec.goals ? spec.goals.map((g) => ({ ...g })) : undefined,
-			memories: spec.memories ? spec.memories.map((m) => ({ ...m, tags: m.tags ? [...m.tags] : undefined })) : undefined,
-			kit: spec.kit,
-		};
-		if (!this.started) {
-			const i = this.pendingAgents.findIndex((s) => s.id === spec.id);
-			if (i >= 0) {
-				this.pendingAgents[i] = next;
-			}
-			else {
-				this.pendingAgents.push(next);
-			}
-			return this;
-		}
-		this.reportMissingNames(next);
-		this.wireAgent(next);
+	/**
+	 * After characters change collectives, one model call fixes the memories of everyone involved: what went
+	 * stale in a collective left, and what a character or a collective joined should now remember. Moves
+	 * within `ticks` director ticks (default 1) share one call. It takes the next free think slot, never
+	 * stops a think, and nothing waits for it. On by default; pass your own `handover`, or `false` to turn it off.
+	 */
+	withMemoryHandover({ ticks = 1, handover }:{ ticks?:number; handover?:Handover<TCtx> | false } = {}):this {
+		this.handoverTicks = Math.max(1, ticks);
+		this.handover = handover;
 		return this;
 	}
 
-	addCrowdConductor(spec:AgentSpec<TAgentCtx>):this {
-		return this.addAgent({ ...spec, units: spec.units ?? [] });
-	}
-
-	addCrowdUnit(conductorID:string, spec:CrowdUnitSpec):this {
-		const add = ():void => {
-			const agent = this.agentRows.get(conductorID)?.actor;
-			if (!isCrowdConductor(agent)) {
-				throw new Error(`ArcDirector: '${conductorID}' is not a CrowdConductor`);
-			}
-			agent.addUnit(spec);
-		};
-		if (!this.started) {
-			const pending = this.pendingAgents.find((s) => s.id === conductorID);
-			if (pending) {
-				pending.units = [...(pending.units ?? []), spec];
-				return this;
-			}
-			throw new Error(`ArcDirector: no conductor '${conductorID}'`);
-		}
-		add();
+	/** Settings every new mind starts from. A spec's `mind` settings win over them. */
+	withMindDefaults(settings:MindSettings):this {
+		this.mindDefaults = { ...settings };
 		return this;
 	}
 
-	removeCrowdUnit(conductorID:string, unitID:string):this {
-		if (!this.started) {
-			const pending = this.pendingAgents.find((s) => s.id === conductorID);
-			if (pending?.units) {
-				pending.units = pending.units.filter((u) => u.id !== unitID);
-			}
-			return this;
+	/**
+	 * A character on its own: an NPC with `mind` settings, or one the host drives (the Player) without them.
+	 * Its id must be new among characters and collectives.
+	 */
+	addCharacter(spec:CharacterSpec<TCtx>):this {
+		this.claimID(spec.id);
+		this.soloSpecs.push(spec);
+		this.specs.set(spec.id, spec);
+		if (this.started) {
+			this.reportMissingNames([spec]);
+			this.wireCharacter(spec);
 		}
-		const agent = this.agentRows.get(conductorID)?.actor;
-		if (isCrowdConductor(agent)) {
-			agent.removeUnit(unitID);
-		}
-		this.abortArc(unitID);
 		return this;
 	}
 
-	addCrowdLaw(conductorID:string, spec:CrowdLawSpec):this {
-		if (!this.started) {
-			const pending = this.pendingAgents.find((s) => s.id === conductorID);
-			if (pending) {
-				pending.laws = [...(pending.laws ?? []), spec];
-				return this;
-			}
-			throw new Error(`ArcDirector: no conductor '${conductorID}'`);
+	/** Characters sharing one mind. Its id and its characters' ids must be new. */
+	addCollective(spec:CollectiveSpec<TCtx>):this {
+		// Its own list: `removeCharacter` trims it, and the host's spec stays whole for the next director.
+		const own = { ...spec, characters: [...(spec.characters ?? [])] };
+		this.claimID(own.id);
+		for (const character of own.characters) {
+			this.claimID(character.id);
+			this.specs.set(character.id, character);
 		}
-		const agent = this.agentRows.get(conductorID)?.actor;
-		if (!isCrowdConductor(agent)) {
-			throw new Error(`ArcDirector: '${conductorID}' is not a CrowdConductor`);
+		this.collectiveSpecs.push(own);
+		if (this.started) {
+			this.reportMissingNames([own, ...own.characters.filter((c) => c.kit)]);
+			this.wireCollective(own);
 		}
-		agent.addCrowdLaw(spec, spec.pinned);
 		return this;
 	}
 
-	removeAgent(id:string):this {
-		if (!this.started) {
-			const i = this.pendingAgents.findIndex((s) => s.id === id);
-			if (i >= 0) {
-				this.pendingAgents.splice(i, 1);
-			}
-			return this;
+	/** Remove a character for good, on its own or from its collective. A commander's leaving tells `onCommanderVacant`. */
+	removeCharacter(id:string):this {
+		this.specs.delete(id);
+		remove(this.soloSpecs, id);
+		for (const spec of this.collectiveSpecs) {
+			remove(spec.characters ?? [], id);
 		}
-		this.dropRow(id);
+		this.dropCharacter(id);
 		return this;
 	}
 
-	/** A body the host drives with arcs (`actor(id).enact`). It runs laws and kit verbs but never calls the model. */
-	addActor(spec:ActorSpec<TAgentCtx>):this {
-		if (!this.started) {
-			const i = this.pendingActors.findIndex((s) => s.id === spec.id);
-			this.pendingActors.splice(i >= 0 ? i : this.pendingActors.length, i >= 0 ? 1 : 0, spec);
-			return this;
-		}
-		this.wireActor(spec);
-		return this;
-	}
-
-	removeActor(id:string):this {
-		if (!this.started) {
-			const i = this.pendingActors.findIndex((s) => s.id === id);
-			if (i >= 0) {
-				this.pendingActors.splice(i, 1);
+	/** Remove a collective. Its characters stay, each on its own: with a fresh mind if their spec gave one settings. */
+	removeCollective(id:string):this {
+		const spec = remove(this.collectiveSpecs, id);
+		const row = this.collectiveRows.get(id);
+		const members = row ? row.runner.characters.map((c) => c.id) : (spec?.characters ?? []).map((c) => c.id);
+		for (const member of members) {
+			const memberSpec = this.specs.get(member);
+			if (memberSpec) {
+				this.soloSpecs.push(memberSpec);
 			}
-			return this;
 		}
-		this.dropActorRow(id);
+		this.dropCollective(id);
 		return this;
 	}
 
@@ -722,34 +681,29 @@ export class ArcDirector<TAgentCtx = unknown> {
 		return this;
 	}
 
-	agent(id:string):Agent<TAgentCtx> | undefined {
-		return this.agentRows.get(id)?.actor ?? undefined;
+	character(id:string):Character<TCtx> | undefined {
+		return this.characterRows.get(id)?.runner;
 	}
 
-	/** An agent, or a body from `addActor`. */
-	actor(id:string):Actor<TAgentCtx> | undefined {
-		return this.agent(id) ?? this.actorRows.get(id)?.actor ?? undefined;
+	/** Every character: on its own or in a collective. */
+	characters():Character<TCtx>[] {
+		return [...this.characterRows.values()].map((row) => row.runner);
 	}
 
-	/** Every body this director runs arcs on: agents first, then bodies from `addActor`. */
-	actors():Actor<TAgentCtx>[] {
-		const out:Actor<TAgentCtx>[] = this.agents();
-		for (const row of this.actorRows.values()) {
-			if (row.actor) {
-				out.push(row.actor);
-			}
-		}
-		return out;
+	collective(id:string):Collective<TCtx> | undefined {
+		return this.collectiveRows.get(id)?.runner;
 	}
 
-	agents():Agent<TAgentCtx>[] {
-		const out:Agent<TAgentCtx>[] = [];
-		for (const row of this.agentRows.values()) {
-			if (row.actor) {
-				out.push(row.actor);
-			}
-		}
-		return out;
+	collectives():Collective<TCtx>[] {
+		return [...this.collectiveRows.values()].map((row) => row.runner);
+	}
+
+	/** Every mind that thinks: characters' own, then collectives'. */
+	minds():Mind<TCtx>[] {
+		return [
+			...this.characters().flatMap((c) => (c.ownMind ? [c.ownMind] : [])),
+			...this.collectives().map((c) => c.mind),
+		];
 	}
 
 	mindQueue():MindQueue | undefined {
@@ -844,8 +798,8 @@ export class ArcDirector<TAgentCtx = unknown> {
 
 	setArcText(on:boolean):void {
 		this.arcText = on;
-		for (const agent of this.agents()) {
-			agent.arcText = on;
+		for (const mind of this.minds()) {
+			mind.arcText = on;
 		}
 	}
 
@@ -877,9 +831,9 @@ export class ArcDirector<TAgentCtx = unknown> {
 		this.model = name;
 		this.syncVision(name);
 		this.emitLog({ name: 'ArcDirector', message: `using ${name}${this.vision ? ' (vision)' : ''}` });
-		for (const agent of this.agents()) {
-			agent.model = name;
-			agent.vision = this.vision;
+		for (const mind of this.minds()) {
+			mind.model = name;
+			mind.vision = this.vision;
 		}
 		void this.http?.ensureLoaded(name).catch((err:unknown) => {
 			const text = err instanceof Error ? err.message : String(err);
@@ -891,8 +845,8 @@ export class ArcDirector<TAgentCtx = unknown> {
 		const row = this.catalog.find((m) => m.id === modelID)
 			?? this.catalog.find((m) => m.id.endsWith(modelID) || m.id.includes(modelID));
 		this.vision = isVisionModel(row ?? modelID);
-		for (const agent of this.agents()) {
-			agent.vision = this.vision;
+		for (const mind of this.minds()) {
+			mind.vision = this.vision;
 		}
 	}
 
@@ -1064,16 +1018,11 @@ export class ArcDirector<TAgentCtx = unknown> {
 		this.mover = new Mover(this.world, () => this.clock);
 		this.bindWorldVerbs();
 		this.reportMissingNames();
-		const specs = this.pendingAgents.splice(0, this.pendingAgents.length);
-		for (const spec of specs) {
-			this.wireAgent(spec, this.stored[spec.id]);
-		}
-		for (const spec of this.pendingActors.splice(0, this.pendingActors.length)) {
-			this.wireActor(spec);
-		}
-		this.stored = {};
+		this.handover ??= chatHandover((req) => this.provider!.chat(req), () => this.model);
+		this.wireCast(this.stored);
+		this.stored = undefined;
 		this.started = true;
-		const ids = [...this.agentRows.keys()];
+		const ids = this.minds().map((mind) => mind.id);
 		if (ids.length > 0) {
 			this.emitLog({
 				name: 'ArcDirector',
@@ -1087,7 +1036,7 @@ export class ArcDirector<TAgentCtx = unknown> {
 		if (!this.world) {
 			return;
 		}
-		const handlers = worldVerbs<TAgentCtx>({
+		const handlers = worldVerbs<TCtx>({
 			world: this.world,
 			mover: this.mover,
 			now: () => this.clock,
@@ -1095,22 +1044,21 @@ export class ArcDirector<TAgentCtx = unknown> {
 		});
 		for (const [verb, handler] of Object.entries(handlers)) {
 			if (missingParts(verb, this.world).length === 0) {
-				this.stockHandlers.set(verb, handler as VerbHandler<TAgentCtx>);
+				this.stockHandlers.set(verb, handler as VerbHandler<TCtx>);
 			}
 		}
 	}
 
-	/** `point`: measure as if the body stood there. */
-	private kernelsFor(row:ActorRow<TAgentCtx>, ctx:TAgentCtx, cache = row.cache, point?:Vec):HostKernels {
-		const actor = row.actor;
-		const mind = actor instanceof Agent ? actor : undefined;
-		const kernels = this.namedKernels(actor, this.kernelFn!(ctx, point));
+	/** `point`: measure as if the character stood there. */
+	private kernelsFor(runner:ArcRunner<TCtx>, ctx:TCtx, cache = this.cacheOf(runner), point?:Vec):HostKernels {
+		const mind = runner.mind;
+		const kernels = this.namedKernels(mind, this.kernelFn!(ctx, point));
 		const here = point && this.world && poseOf(this.world, kernels.me.id);
 		const geometry = this.world
 			? geometryKernels(this.world, kernels.me.id, here ? new Map([[kernels.me.id, { ...here, point }]]) : undefined)
 			: {};
 		const lastTimestamp = mind?.lastTacticalTimestamp;
-		const last = actor?.lastResult;
+		const last = runner.lastResult;
 		const ago = lastTimestamp !== undefined && Number.isFinite(lastTimestamp)
 			? Math.max(0, this.clock - lastTimestamp)
 			: undefined;
@@ -1123,7 +1071,7 @@ export class ArcDirector<TAgentCtx = unknown> {
 			hasHeard: mind?.hasHeard() ?? false,
 			prev: {
 				secondsAgo: ago,
-				me: this.prevMeOf(row, kernels),
+				me: this.prevMeOf(runner, kernels),
 				verbs: last
 					? [{
 						secondsAgo: ago ?? 0,
@@ -1136,147 +1084,113 @@ export class ArcDirector<TAgentCtx = unknown> {
 		} as HostKernels;
 	}
 
-	/** Host entities under this actor's names for them, so watch exprs print and bind those names. */
+	/**
+	 * Host entities under `mind`'s names for them, so its model's own words still evaluate (`observe`).
+	 * A binding keyed by a character's id is bound under its id and under the name.
+	 */
 	private namedKernels<TKernels extends Pick<HostKernels, 'others' | 'items' | 'bindings'>>(
-		actor:Actor<TAgentCtx> | null,
+		mind:Mind<TCtx> | null,
 		kernels:TKernels,
 	):TKernels {
-		if (!actor || !this.seenFn) {
+		if (!mind || !this.seenFn) {
 			return kernels;
 		}
-		const named = (e:ExprEntity):ExprEntity => ({ ...e, name: actor.seen(e) });
+		const named = (e:ExprEntity):ExprEntity => ({ ...e, name: mind.seen(e) });
 		const bindings:Record<string, ExprVal> = {};
 		for (const [key, val] of Object.entries(kernels.bindings ?? {})) {
 			if (val.kind !== 'entity') {
 				bindings[key] = val;
 				continue;
 			}
-			const name = actor.seen(val.value);
-			bindings[key === val.value.id ? name : key] = { kind: 'entity', value: { ...val.value, name } };
+			const name = mind.seen(val.value);
+			const value:ExprVal = { kind: 'entity', value: { ...val.value, name } };
+			bindings[key] = value;
+			if (key === val.value.id) {
+				bindings[name] = value;
+			}
 		}
 		return { ...kernels, others: kernels.others.map(named), items: kernels.items.map(named), bindings };
 	}
 
 	/** Spawn snapshot so the first think can see a change. A saved prev is left alone. */
-	private stampPrev(row:ActorRow<TAgentCtx>):void {
-		const actor = row.actor;
-		if (!actor || actor.prevMe || !this.kernelFn || !this.contextFn) {
+	private stampPrev(runner:ArcRunner<TCtx>):void {
+		if (runner.prevMe || !this.kernelFn || !this.contextFn) {
 			return;
 		}
-		const id = actor instanceof Agent ? actor.thinkThread() : actor.id;
-		try {
-			const ctx = this.contextFn(id);
-			if (ctx) {
-				this.kernelsFor(row, ctx);
+		const ctx = this.tryCtx(runner.id);
+		if (ctx) {
+			try {
+				this.kernelsFor(runner, ctx);
+			}
+			catch {
+				return;
 			}
 		}
-		catch {
-			return;
-		}
 	}
 
-	private prevMeOf(row:ActorRow<TAgentCtx>, kernels:MeFreezeHost) {
-		const actor = row.actor;
-		if (actor?.prevMe) {
-			return actor.prevMe;
-		}
-		const frozen = freezeMe(kernels);
-		if (actor) {
-			actor.prevMe = frozen;
-		}
-		return frozen;
+	private prevMeOf(runner:ArcRunner<TCtx>, kernels:MeFreezeHost) {
+		runner.prevMe ??= freezeMe(kernels);
+		return runner.prevMe;
 	}
 
-	private deps(id:string, row:AgentRow<TAgentCtx>):AgentDeps<TAgentCtx> {
+	/** What `mind` needs from this director to think for `owner`, wired when it attaches. */
+	private mindDeps(mind:Mind<TCtx>, owner:ArcRunner<TCtx>):MindDeps<TCtx> {
 		return {
 			provider: this.provider!,
-			verbs: this.verbs,
-			senses: this.sensesFor(row),
+			senses: this.sensesFor(mind, owner),
 			tools: this.tools,
-			context: () => {
-				if (!this.contextFn) {
-					throw new Error(`ArcDirector: withContext required (agent ${id})`);
-				}
-				return this.contextFn(row.actor?.thinkThread() || id);
-			},
-			execute: async (step, ctx, actorID) => this.dispatch(row, step, ctx, actorID ?? row.actor?.thinkThread() ?? id),
-			abortArc: (unitID) => this.abortArc(unitID),
+			talk: this.talk,
 			toolRoundCap: this.toolRounds,
-			wayBlocked: (to) => (this.world ? wayBlocked(this.world, row.actor?.thinkThread() || id, to) : undefined),
+			wayBlocked: (to) => (this.world ? wayBlocked(this.world, mind.thinkThread(), to) : undefined),
 			arcRetryCap: this.arcRetries,
 			stalled: this.stalledFn,
-			cooldown: this.cooldownDefault,
 			autoEnact: true,
 			queue: this.queue,
-			// The queue schedules this mind's thinks; an agent heartbeat of its own would drop them.
-			heartbeat: 0,
 			model: this.model,
-			talk: this.talk,
-			kit: this.kitFor(row.spec),
-			catalog: this.kernelFn
-				? (ctx) => buildCatalog(this.kernelsFor(row, ctx))
-				: undefined,
 			map: this.map,
 			encyclopedia: this.encyclopedia,
 			mentionCap: this.mentionCap,
 			vision: this.vision,
-			watches: row.spec.watches,
-			pinnedWatches: row.spec.pinnedWatches,
-			watchesWritable: row.spec.watchesWritable,
-			pinnedSightFocus: row.spec.pinnedSightFocus,
-			sightFocus: row.spec.sightFocus,
-			sightFocusWritable: row.spec.sightFocusWritable,
-			maxSightFocus: row.spec.maxSightFocus,
-			sightLimit: row.spec.sightLimit ?? this.sightLimitDefault,
 			arcText: this.arcText,
 			thinkInstructions: this.thinkInstructions,
 			thinking: () => this.liveThinking(),
 			verbInstructions: this.verbInstructions,
 			arcExample: this.arcExample,
 			repairTemperature: this.repairTemperature,
-			seenAs: this.seenAs(row),
+			seenAs: this.seenAs(mind),
 		};
 	}
 
-	/** The host naming policy as one agent sees it. */
-	private seenAs(row:AgentRow<TAgentCtx>):((target:NameTarget)=>string) | undefined {
+	/** The host naming policy as one mind sees it: by its owner's id, from its voice's context. */
+	private seenAs(mind:Mind<TCtx>):((target:NameTarget)=>string) | undefined {
 		const seen = this.seenFn;
 		if (!seen) {
 			return undefined;
 		}
-		return (target) => {
-			const id = row.actor?.id ?? row.spec.id;
-			const ctx = this.tryCtx(row.actor?.thinkThread() ?? id);
-			return seen({ id, ctx }, target);
-		};
+		return (target) => seen({ id: mind.id, ctx: this.tryCtx(mind.thinkThread()) }, target);
 	}
 
-	/** Host look, minus what is out of sight, with each body under this agent's name for it. */
-	private see(row:AgentRow<TAgentCtx>, ctx:TAgentCtx):Sight {
+	/** Host look, minus what is out of sight, with everything seen under `mind`'s name for it. */
+	private see(mind:Mind<TCtx>, ctx:TCtx):Sight {
 		const snap = this.filterSight(this.sightLook!(ctx));
-		const agent = row.actor;
-		if (!agent || !this.seenFn) {
+		if (!this.seenFn) {
 			return snap;
 		}
-		return { ...snap, objects: snap.objects.map((o) => ({ ...o, id: agent.seen(o) })) };
+		return { ...snap, objects: snap.objects.map((o) => ({ ...o, id: mind.seen(o) })) };
 	}
 
-	private sensesFor(row:AgentRow<TAgentCtx>):Record<string, Sense<TAgentCtx>> {
+	private sensesFor(mind:Mind<TCtx>, owner:ArcRunner<TCtx>):Record<string, Sense<TCtx>> {
 		const wrapSight = !!(this.sightLook && this.senses.sight);
-		let skipCarrying = false;
-		if (this.senses.carrying && isCrowdConductor(row.actor) && this.contextFn) {
-			if (this.tryCtx(row.actor?.thinkThread() || row.spec.id) === undefined) {
-				skipCarrying = true;
-			}
-		}
+		const commanderless = owner instanceof Collective && !!this.contextFn && this.tryCtx(owner.voice.id) === undefined;
+		const skipCarrying = !!this.senses.carrying && commanderless;
 		if (!wrapSight && !skipCarrying) {
 			return this.senses;
 		}
-		const senses:{ [k:string]:Sense<TAgentCtx> } = { ...this.senses };
+		const senses:{ [k:string]:Sense<TCtx> } = { ...this.senses };
 		if (wrapSight && this.senses.sight) {
 			senses.sight = {
 				description: this.senses.sight.description,
-				gather: (ctx) => this.gatherSight(row, ctx),
+				gather: (ctx) => this.gatherSight(mind, ctx),
 			};
 		}
 		if (skipCarrying) {
@@ -1297,41 +1211,40 @@ export class ArcDirector<TAgentCtx = unknown> {
 		return this.sightUnitName ? { unitName: this.sightUnitName } : {};
 	}
 
-	private gatherSight(row:AgentRow<TAgentCtx>, ctx:TAgentCtx):string {
-		const look = this.sightLook;
-		if (!look) {
+	/** What `mind`'s voice sees; for a collective with no commander, what all its characters see, pooled. */
+	private gatherSight(mind:Mind<TCtx>, ctx:TCtx):string {
+		if (!this.sightLook) {
 			return '';
 		}
-		const agent = row.actor;
-		const focus = agent?.effectiveSightFocus() ?? [];
-		const limit = agent?.sightLimit ?? this.sightLimitDefault;
+		const focus = mind.persona.effectiveSightFocus();
+		const limit = mind.persona.sightLimit ?? this.sightLimitDefault;
 		const scores = new Map<string, number>();
-		const originID = agent?.thinkThread() || agent?.id || '';
-		if (isCrowdConductor(agent) && agent.crowd.size > 0 && this.contextFn && !this.tryCtx(originID)) {
+		const owner = mind.owner;
+		if (owner instanceof Collective && owner.characters.length > 0 && this.contextFn && !this.tryCtx(mind.thinkThread())) {
 			const groups:{ unitID:string; clauses:ReturnType<typeof formatSightClauses> }[] = [];
-			for (const unit of agent.crowd.list()) {
-				const unitCtx = this.tryCtx(unit.id);
-				if (!unitCtx) {
+			for (const character of owner.characters) {
+				const memberCtx = this.tryCtx(character.id);
+				if (!memberCtx) {
 					continue;
 				}
-				const snap = this.see(row, unitCtx);
+				const snap = this.see(mind, memberCtx);
 				const clauses = formatSightClauses(snap, {
 					...this.sightFormatOpts(),
-					fromName: unit.id,
+					fromName: character.id,
 					skipAmbient: groups.length > 0,
 				});
-				groups.push({ unitID: unit.id, clauses });
+				groups.push({ unitID: character.id, clauses });
 				if (focus.length > 0) {
-					this.scoreSightObjects(snap.objects, focus, unitCtx, row, scores);
+					this.scoreSightObjects(snap.objects, focus, memberCtx, character, scores);
 				}
 			}
 			const merged = mergeHiveClauses(groups, focus.length > 0 ? scores : undefined);
 			return joinSightClauses(orderSightClauses(merged, scores, limit, focus.length > 0));
 		}
-		const snap = this.see(row, ctx);
+		const snap = this.see(mind, ctx);
 		const clauses = formatSightClauses(snap, this.sightFormatOpts());
 		if (focus.length > 0) {
-			this.scoreSightObjects(snap.objects, focus, ctx, row, scores);
+			this.scoreSightObjects(snap.objects, focus, ctx, mind.voice, scores);
 		}
 		return joinSightClauses(orderSightClauses(clauses, scores, limit, focus.length > 0));
 	}
@@ -1339,16 +1252,16 @@ export class ArcDirector<TAgentCtx = unknown> {
 	private scoreSightObjects(
 		objects:SeenObject[],
 		exprs:string[],
-		ctx:TAgentCtx,
-		row:AgentRow<TAgentCtx>,
+		ctx:TCtx,
+		runner:ArcRunner<TCtx>,
 		into:Map<string, number>,
 	):void {
 		if (!this.kernelFn) {
 			return;
 		}
-		const kernels = this.kernelsFor(row, ctx);
+		const kernels = this.kernelsFor(runner, ctx);
 		for (const obj of objects) {
-			const it = dummyEntity(row.actor?.names.resolve(obj.id) ?? obj.id, {
+			const it = dummyEntity(runner.mind?.persona.names.resolve(obj.id) ?? obj.id, {
 				name: obj.id,
 				tags: obj.tags,
 				fields: obj.hp !== undefined && obj.maxHP !== undefined
@@ -1377,25 +1290,17 @@ export class ArcDirector<TAgentCtx = unknown> {
 		}
 	}
 
-	/** One host step for `actorID`, the body acting for `row`'s actor (a crowd unit, a commander, or itself). */
-	private dispatch(
-		row:ActorRow<TAgentCtx>,
-		step:Step,
-		ctx:TAgentCtx | undefined,
-		actorID:string,
-	):Promise<ArcResult> | ArcResult {
-		const actor = row.actor;
-		if (!actor) {
-			return { ok: false, verb: step.verb, reason: 'no actor' };
-		}
-		const liveCtx = this.tryCtx(actorID) ?? ctx;
+	/** One host step, acted by `runner` itself. */
+	private dispatch(runner:ArcRunner<TCtx>, step:Step, ctx:TCtx | undefined):Promise<ArcResult> | ArcResult {
+		const liveCtx = this.tryCtx(runner.id) ?? ctx;
 		if (step.verb === 'law' || step.verb === 'unlaw') {
-			return this.handleLaw(actor, step);
+			return this.handleLaw(runner, step);
 		}
-		if ((STOCK_CROWD_VERBS as readonly string[]).includes(step.verb)) {
-			return isAgentRow(row)
-				? this.handleCrowdVerb(row, step, liveCtx, actorID)
-				: { ok: false, verb: step.verb, reason: 'not a CrowdConductor' };
+		if ((STOCK_COLLECTIVE_VERBS as readonly string[]).includes(step.verb)) {
+			const collective = collectiveOf(runner);
+			return collective
+				? this.handleCollectiveVerb(collective, runner, step, liveCtx)
+				: { ok: false, verb: step.verb, reason: `${step.verb} needs a collective` };
 		}
 		const handler = this.handlers.get(step.verb)
 			?? this.stockHandlers.get(step.verb)
@@ -1403,11 +1308,14 @@ export class ArcDirector<TAgentCtx = unknown> {
 		if (!handler) {
 			return { ok: false, verb: step.verb, reason: `unhandled ${step.verb}` };
 		}
-		if (liveCtx === undefined) {
-			return { ok: false, verb: step.verb, reason: 'no body' };
+		if (!(runner instanceof Character)) {
+			return { ok: false, verb: step.verb, reason: `you are not a character in this scene; issue ${step.verb} to one of your characters` };
 		}
-		const call = this.verbCall(row, actor, step, liveCtx, actorID);
-		if (!('actor' in call)) {
+		if (liveCtx === undefined) {
+			return { ok: false, verb: step.verb, reason: 'not in this scene' };
+		}
+		const call = this.verbCall(runner, step, liveCtx);
+		if (!('character' in call)) {
 			return call;
 		}
 		const out = this.verbGate?.(call) ?? handler(call);
@@ -1422,31 +1330,27 @@ export class ArcDirector<TAgentCtx = unknown> {
 	}
 
 	/**
-	 * The call a handler sees. `id` args become real ids: a name this agent gave, or the body an expression
+	 * The call a handler sees. `id` args are ids already; one written as an expression becomes the character it
 	 * picks (`others.filter("enemy").minBy(u => u.hp)`). `watch` args are checked before the host runs.
 	 */
 	private verbCall(
-		row:ActorRow<TAgentCtx>,
-		actor:Actor<TAgentCtx>,
+		character:Character<TCtx>,
 		step:Step,
-		ctx:TAgentCtx,
-		actorID:string,
+		ctx:TCtx,
 		units?:string[],
-	):VerbCall<TAgentCtx> | ArcResult {
+	):VerbCall<TCtx> | ArcResult {
 		const fail = (reason:string):ArcResult => ({ ok: false, verb: step.verb, reason });
-		const catalogAt = (point?:Vec):Catalog | undefined => this.exprCatalog(row, actor, ctx, point ? new SampleCache() : row.cache, point);
+		const catalogAt = (point?:Vec):Catalog | undefined => this.exprCatalog(character, ctx, point ? new SampleCache() : this.cacheOf(character), point);
 		const kinds = this.verbs.get(step.verb)?.args ?? {};
 		const args:Record<string, unknown> = { ...step.args };
 		for (const [key, value] of Object.entries(args)) {
-			const kind = kinds[key]?.replace('?', '');
+			const kind = argBase(kinds[key]);
 			if (typeof value !== 'string' || !value.trim()) {
 				continue;
 			}
 			if (kind === 'id') {
-				const named = actor.resolveName(value);
-				const catalog = named === value && /[(.]|=>/.test(value) ? catalogAt() : undefined;
+				const catalog = /[(.]|=>/.test(value) ? catalogAt() : undefined;
 				if (!catalog) {
-					args[key] = named;
 					continue;
 				}
 				const r = evaluate(value, catalog);
@@ -1470,55 +1374,53 @@ export class ArcDirector<TAgentCtx = unknown> {
 		return {
 			verb: step.verb,
 			args,
-			actor,
+			character,
 			ctx,
-			actorID,
 			units,
 			score,
 			holds: (arg, point) => score(arg, point) > 0,
-			goTo: (target, within) => this.goTo(actorID, step.verb, { target }, within),
-			goToPoint: (point, within) => this.goTo(actorID, step.verb, { point }, within),
-			wait: (seconds) => this.waitFor(actorID, seconds, step.verb),
+			goTo: (target, within) => this.goTo(character.id, step.verb, { target }, within),
+			goToPoint: (point, within) => this.goTo(character.id, step.verb, { point }, within),
+			wait: (seconds) => this.waitFor(character.id, seconds, step.verb),
 		};
 	}
 
-	/** Move `actorID`, or, in a world where bodies do not move, succeed only when already in reach. */
-	private goTo(actorID:string, verb:string, dest:{ target:string } | { point:Vec }, within?:number):Promise<ArcResult> {
+	/** Move `characterID`, or, in a world where characters do not move, succeed only when already in reach. */
+	private goTo(characterID:string, verb:string, dest:{ target:string } | { point:Vec }, within?:number):Promise<ArcResult> {
 		if (this.mover.canMove) {
-			return this.mover.go(actorID, dest, verb, { within });
+			return this.mover.go(characterID, dest, verb, { within });
 		}
 		const world = this.world;
-		const actor = world?.find(actorID);
+		const character = world?.find(characterID);
 		const target = 'target' in dest ? world?.find(dest.target) : undefined;
 		const point = 'target' in dest ? (target === undefined ? undefined : world?.getPose(target)?.point) : dest.point;
-		const me = actor === undefined ? undefined : world?.getPose(actor)?.point;
-		const near = within ?? (actor !== undefined && target !== undefined ? world?.getReach?.(actor, target) : undefined) ?? 1;
+		const me = character === undefined ? undefined : world?.getPose(character)?.point;
+		const near = within ?? (character !== undefined && target !== undefined ? world?.getReach?.(character, target) : undefined) ?? 1;
 		const ok = !me || !point || distance(me, point) <= near;
 		return Promise.resolve(ok ? { ok: true, verb } : { ok: false, verb, reason: 'out of reach' });
 	}
 
-	private waitFor(actorID:string, seconds:number, verb:string, met?:()=>boolean):Promise<ArcResult> {
+	private waitFor(characterID:string, seconds:number, verb:string, met?:()=>boolean):Promise<ArcResult> {
 		return new Promise((done) => {
-			this.waits.add({ actorID, verb, end: this.clock + seconds, seconds, met, done });
+			this.waits.add({ characterID, verb, end: this.clock + seconds, seconds, met, done });
 		});
 	}
 
-	/** The watch-language view `actor` has from `ctx`: its names, and a Crowd's `units` / `allUnits`. */
-	private exprCatalog(row:ActorRow<TAgentCtx>, actor:Actor<TAgentCtx>, ctx:TAgentCtx, cache:SampleCache, point?:Vec):Catalog | undefined {
+	/** The watch-language view `runner` has from `ctx`: its mind's names, and in a collective `units` / `allUnits`. */
+	private exprCatalog(runner:ArcRunner<TCtx>, ctx:TCtx, cache:SampleCache, point?:Vec):Catalog | undefined {
 		if (!this.kernelFn) {
 			return undefined;
 		}
-		const kernels = this.kernelsFor(row, ctx, cache, point);
-		return isCrowdConductor(actor)
-			? buildCrowdCatalog(kernels, actor.crowd, actor.id, actor.commanderID)
-			: buildCatalog(kernels);
+		const kernels = this.kernelsFor(runner, ctx, cache, point);
+		const collective = collectiveOf(runner);
+		return collective ? buildCollectiveCatalog(kernels, collective) : buildCatalog(kernels);
 	}
 
 	/** Stock `wait`: game time passes until `seconds`, or until the `until` watch holds. A host `wait` handler replaces it. */
-	private readonly waitVerb:VerbHandler<TAgentCtx> = (call) => {
+	private readonly waitVerb:VerbHandler<TCtx> = (call) => {
 		const until = typeof call.args.until === 'string' && call.args.until.trim() !== '';
 		const seconds = typeof call.args.seconds === 'number' ? call.args.seconds : until ? 20 : 1;
-		return this.waitFor(call.actorID, seconds, 'wait', until ? () => call.holds('until') : undefined);
+		return this.waitFor(call.character.id, seconds, 'wait', until ? () => call.holds('until') : undefined);
 	};
 
 	private tickWaits():void {
@@ -1531,10 +1433,10 @@ export class ArcDirector<TAgentCtx = unknown> {
 		}
 	}
 
-	/** Stop whatever body `id` is doing now: its waits and moves here, the rest through `onAbortArc`. */
+	/** Stop whatever character `id` is doing now: its waits and moves here, the rest through `onAbortArc`. */
 	abortArc(id:string):void {
 		for (const wait of this.waits) {
-			if (wait.actorID === id) {
+			if (wait.characterID === id) {
 				this.waits.delete(wait);
 				wait.done({ ok: false, interrupted: true, verb: wait.verb });
 			}
@@ -1543,18 +1445,14 @@ export class ArcDirector<TAgentCtx = unknown> {
 		this.abortArcFn?.(id);
 	}
 
-	private handleCrowdVerb(
-		row:AgentRow<TAgentCtx>,
+	private handleCollectiveVerb(
+		collective:Collective<TCtx>,
+		runner:ArcRunner<TCtx>,
 		step:Step,
-		ctx:TAgentCtx | undefined,
-		actorID:string,
+		ctx:TCtx | undefined,
 	):ArcResult | Promise<ArcResult> {
-		const agent = row.actor;
-		if (!isCrowdConductor(agent)) {
-			return { ok: false, verb: step.verb, reason: 'not a CrowdConductor' };
-		}
 		if (step.verb === 'issue') {
-			return this.handleIssue(row, agent, step, ctx, actorID);
+			return this.handleIssue(collective, runner, step, ctx);
 		}
 		if (step.verb === 'tag' || step.verb === 'untag') {
 			const who = typeof step.args.who === 'string' ? step.args.who : '';
@@ -1562,13 +1460,13 @@ export class ArcDirector<TAgentCtx = unknown> {
 			if (!who || !name) {
 				return { ok: false, verb: step.verb, reason: `${step.verb} needs who and name` };
 			}
-			const cat = this.crowdCatalog(row, agent, ctx);
-			const units = cat ? evaluateWho(who, cat, agent.crowd) : [];
+			const cat = this.collectiveCatalog(collective, runner, ctx);
+			const characters = cat ? evaluateWho(who, cat, collective) : [];
 			if (step.verb === 'tag') {
-				agent.tagUnits(units, name);
+				collective.tagCharacters(characters, name);
 			}
 			else {
-				agent.untagUnits(units, name);
+				collective.untagCharacters(characters, name);
 			}
 			return { ok: true, verb: step.verb };
 		}
@@ -1578,68 +1476,75 @@ export class ArcDirector<TAgentCtx = unknown> {
 		return { ok: false, verb: step.verb, reason: `unhandled ${step.verb}` };
 	}
 
-	private handleLaw(actor:Actor<TAgentCtx>, step:Step):ArcResult {
+	/**
+	 * `law` / `unlaw` from `runner`. The voice of a collective writes the collective's own laws; anyone else
+	 * writes its own, which a character in a collective keeps there (`Tom.flee`).
+	 */
+	private handleLaw(runner:ArcRunner<TCtx>, step:Step):ArcResult {
+		const home = runner.isVoice ? collectiveOf(runner) ?? runner : runner;
+		const name = typeof step.args.name === 'string' && step.args.name ? step.args.name : undefined;
 		if (step.verb === 'unlaw') {
-			const name = typeof step.args.name === 'string' ? step.args.name : '';
 			if (!name) {
 				return { ok: false, verb: 'unlaw', reason: 'unlaw needs name' };
 			}
-			actor.removeLaw(name);
+			home.removeLaw(name);
 			return { ok: true, verb: 'unlaw' };
 		}
 		const who = typeof step.args.who === 'string' ? step.args.who : undefined;
-		if (who && !isCrowdConductor(actor)) {
-			return { ok: false, verb: 'law', reason: 'solo law has no who' };
+		if (who && !home.lawsTakeWho()) {
+			const reason = collectiveOf(runner) ? 'your own law reaches only you; it has no who' : 'solo law has no who';
+			return { ok: false, verb: 'law', reason };
 		}
 		const watch = typeof step.args.watch === 'string' ? step.args.watch : '';
-		const name = typeof step.args.name === 'string' ? step.args.name : undefined;
 		const arc = arcArg(step.args.arc, this.verbs);
 		if (!watch || !arc) {
 			return { ok: false, verb: 'law', reason: 'law needs watch and arc' };
 		}
-		actor.addLaw({ name, who, watch, arc });
+		if (!home.addLaw({ name, who, watch, arc })) {
+			return { ok: false, verb: 'law', reason: `no law${name ? ` ${name}` : ''}: too many laws, or a bad name; unlaw one first` };
+		}
 		return { ok: true, verb: 'law' };
 	}
 
 	private handleIssue(
-		row:AgentRow<TAgentCtx>,
-		agent:CrowdConductor<TAgentCtx>,
+		collective:Collective<TCtx>,
+		issuer:ArcRunner<TCtx>,
 		step:Step,
-		ctx:TAgentCtx | undefined,
-		actorID:string,
+		ctx:TCtx | undefined,
 	):ArcResult | Promise<ArcResult> {
 		const who = typeof step.args.who === 'string' ? step.args.who.trim() : '';
 		const arc = arcArg(step.args.arc, this.verbs);
 		if (!who || !arc) {
 			return { ok: false, verb: 'issue', reason: 'issue needs who and arc' };
 		}
-		const cat = this.crowdCatalog(row, agent, ctx);
-		const raw = cat ? evaluateWho(who, cat, agent.crowd) : [];
-		const units = agent.commanderID
-			? raw.filter((u) => u.id !== agent.commanderID)
-			: raw;
-		if (raw.length > 0 && units.length === 0) {
+		const cat = this.collectiveCatalog(collective, issuer, ctx);
+		const named = cat ? evaluateWho(who, cat, collective) : [];
+		const troops = named.filter((c) => c !== collective.commander);
+		if (named.length > 0 && troops.length === 0) {
 			return { ok: false, verb: 'issue', reason: 'issue never lands on the commander' };
 		}
 		const head = firstStep(arc);
 		if (head && isFormationVerb(head.verb)) {
 			const handler = this.handlers.get(head.verb) ?? this.catchAll;
-			const call = handler && ctx !== undefined
-				? this.verbCall(row, agent, head, ctx, actorID, units.map((u) => u.id))
+			// A collective with no commander forms up through its first character.
+			const by = issuer instanceof Character ? issuer : troops[0];
+			const byCtx = by === issuer ? ctx : by && this.tryCtx(by.id);
+			const call = handler && by && byCtx !== undefined
+				? this.verbCall(by, head, byCtx, troops.map((c) => c.id))
 				: undefined;
-			if (handler && call && 'actor' in call) {
+			if (handler && call && 'character' in call) {
 				void handler(call);
 			}
 			if (arc.then) {
-				agent.issueUnits(units, arc.then.arc);
+				collective.issue(troops, arc.then.arc);
 			}
 			return { ok: true, verb: 'issue' };
 		}
-		agent.issueUnits(units, arc);
+		collective.issue(troops, arc);
 		return { ok: true, verb: 'issue' };
 	}
 
-	private tryCtx(id:string):TAgentCtx | undefined {
+	private tryCtx(id:string):TCtx | undefined {
 		if (!this.contextFn) {
 			return undefined;
 		}
@@ -1651,121 +1556,53 @@ export class ArcDirector<TAgentCtx = unknown> {
 		}
 	}
 
-	private dummyHiveKernels(row:AgentRow<TAgentCtx>, agent:CrowdConductor<TAgentCtx>):HostKernels | undefined {
+	/** The view of a collective with no commander: its first living character's kernels, measured from the middle of them all. */
+	private dummyHiveKernels(collective:Collective<TCtx>):HostKernels | undefined {
 		if (!this.kernelFn) {
 			return undefined;
 		}
-		const units = agent.crowd.list().map((unit) => ({ id: unit.id, ctx: this.tryCtx(unit.id) }));
-		const first = units.find((unit) => unit.ctx !== undefined);
+		const members = collective.characters.map((character) => ({ character, ctx: this.tryCtx(character.id) }));
+		const first = members.find((m) => m.ctx !== undefined);
 		if (!first?.ctx) {
 			return undefined;
 		}
-		const sample = this.kernelsFor(row, first.ctx);
-		const center = centroid(units.flatMap((unit) => {
-			const point = this.world && poseOf(this.world, unit.id)?.point;
+		const sample = this.kernelsFor(first.character, first.ctx);
+		const center = centroid(members.flatMap(({ character }) => {
+			const point = this.world && poseOf(this.world, character.id)?.point;
 			return point ? [point] : [];
 		}));
-		const poses = new Map<string, Pose>(center ? [[agent.id, { point: center }]] : []);
+		const poses = new Map<string, Pose>(center ? [[collective.id, { point: center }]] : []);
 		return {
 			...sample,
-			...(this.world ? geometryKernels(this.world, first.id, poses) : {}),
-			me: dummyEntity(agent.id, { tags: ['agent'] }),
+			...(this.world ? geometryKernels(this.world, first.character.id, poses) : {}),
+			me: dummyEntity(collective.id, { tags: ['agent'] }),
 			inventory: undefined,
 		};
 	}
 
-	private crowdCatalog(
-		row:AgentRow<TAgentCtx>,
-		agent:CrowdConductor<TAgentCtx>,
-		ctx:TAgentCtx | undefined,
-	):ReturnType<typeof buildCrowdCatalog> | undefined {
+	/** `collective`'s view for `who`: from `runner` when a character ran the step, or pooled when the collective did. */
+	private collectiveCatalog(
+		collective:Collective<TCtx>,
+		runner:ArcRunner<TCtx>,
+		ctx:TCtx | undefined,
+	):Catalog | undefined {
 		if (!this.kernelFn) {
 			return undefined;
 		}
-		const kernels = ctx
-			? this.kernelsFor(row, ctx)
-			: this.dummyHiveKernels(row, agent);
-		if (!kernels) {
-			return undefined;
-		}
-		return buildCrowdCatalog(kernels, agent.crowd, agent.id, agent.commanderID);
+		const kernels = ctx ? this.kernelsFor(runner, ctx) : this.dummyHiveKernels(collective);
+		return kernels ? buildCollectiveCatalog(kernels, collective) : undefined;
 	}
 
-	private applySpec(agent:Agent<TAgentCtx>, spec:AgentSpec<TAgentCtx>, fresh:boolean):void {
-		if (fresh) {
-			agent.identity = {
-				...spec.identity,
-				traits: spec.identity.traits ? [...spec.identity.traits] : undefined,
-			};
+	/** A spec's kit, else the default one. Something that can run no verb is a mistake, so it throws. */
+	private kitFor(spec:{ id:string; kit?:KitSource<TCtx> }):KitSource<TCtx> {
+		const kit = spec.kit ?? this.defaultKit;
+		if (!kit) {
+			throw new Error(`ArcDirector: '${spec.id}' has no kit; give it one, or call withDefaultKit`);
 		}
-		for (const mem of spec.memories ?? []) {
-			if (!mem.pinned) {
-				if (fresh) {
-					agent.memory.add({
-						category: mem.category ?? 'episodic',
-						text: mem.text,
-						tags: mem.tags ?? [],
-						pinned: false,
-					}, mem.timestamp ?? 0);
-				}
-				continue;
-			}
-			const tags = mem.tags ?? [];
-			const keyTags = tags.slice(0, 2);
-			const existing = agent.memory.pinned().find((row) => (
-				keyTags.length > 0 && keyTags.every((tag) => row.tags.includes(tag))
-			));
-			if (existing) {
-				existing.text = mem.text;
-				existing.tags = [...tags];
-				continue;
-			}
-			agent.memory.add({
-				category: mem.category ?? 'episodic',
-				text: mem.text,
-				tags,
-				pinned: true,
-			}, mem.timestamp ?? 0);
+		if (typeof kit !== 'function' && kit.verbs.length === 0) {
+			throw new Error(`ArcDirector: '${spec.id}' has a kit with no verbs`);
 		}
-		if (spec.watchesWritable !== undefined) {
-			agent.watchesWritable = spec.watchesWritable;
-		}
-		if (spec.sightFocusWritable !== undefined) {
-			agent.sightFocusWritable = spec.sightFocusWritable;
-		}
-		if (spec.sightLimit !== undefined) {
-			agent.sightLimit = spec.sightLimit;
-		}
-		else if (this.sightLimitDefault !== undefined && agent.sightLimit === undefined) {
-			agent.sightLimit = this.sightLimitDefault;
-		}
-		if (spec.maxLaws !== undefined) {
-			agent.maxLaws = spec.maxLaws;
-		}
-		if (spec.cooldown !== undefined) {
-			agent.cooldown = spec.cooldown;
-		}
-		if (isCrowdConductor(agent)) {
-			for (const unit of spec.units ?? []) {
-				agent.addUnit(unit);
-			}
-			for (const law of spec.laws ?? []) {
-				agent.addCrowdLaw(law, law.pinned);
-			}
-			if (spec.commander) {
-				agent.setCommander(spec.commander);
-			}
-		}
-		else {
-			for (const law of spec.laws ?? []) {
-				agent.addLaw(law, law.pinned);
-			}
-		}
-		agent.kit = this.kitFor(spec);
-	}
-
-	private kitFor(spec:ActorSpec<TAgentCtx>):KitSource<TAgentCtx> {
-		return spec.kit ?? this.defaultKit ?? { verbs: [] };
+		return kit;
 	}
 
 	private toolKnown(name:string):boolean {
@@ -1788,7 +1625,7 @@ export class ArcDirector<TAgentCtx = unknown> {
 	}
 
 	private readKit(
-		src:KitSource<TAgentCtx>,
+		src:KitSource<TCtx>,
 		id:string | undefined,
 		where:string,
 	):{ kit?:Kit; error?:string } {
@@ -1815,7 +1652,7 @@ export class ArcDirector<TAgentCtx = unknown> {
 	}
 
 	private scanKit(kit:Kit, where:string, out:string[]):void {
-		for (const name of kit.verbs ?? []) {
+		for (const name of kit.verbs) {
 			if (name && !this.verbs.has(name)) {
 				out.push(`verb '${name}' is not registered (${where})`);
 				continue;
@@ -1837,49 +1674,35 @@ export class ArcDirector<TAgentCtx = unknown> {
 		}
 	}
 
-	private missingNames(spec?:AgentSpec<TAgentCtx>):string[] {
+	/** Kit names nothing registers: in `specs`, or in the default kit and every spec waiting for `start()`. */
+	private missingNames(specs?:{ id:string; kit?:KitSource<TCtx> }[]):string[] {
 		const out:string[] = [];
-		if (spec) {
-			const where = `agent ${spec.id}`;
-			const read = this.readKit(this.kitFor(spec), spec.id, where);
+		if (!specs && this.defaultKit && typeof this.defaultKit !== 'function') {
+			this.scanKit(this.defaultKit, 'default kit', out);
+		}
+		const list = specs ?? [
+			...this.soloSpecs,
+			...this.collectiveSpecs.flatMap((spec) => [spec, ...(spec.characters ?? []).filter((c) => c.kit)]),
+		];
+		for (const spec of list) {
+			const src = spec.kit ?? (typeof this.defaultKit === 'function' || specs ? this.defaultKit : undefined);
+			if (!src) {
+				continue;
+			}
+			const where = `${spec.id}`;
+			const read = this.readKit(src, spec.id, where);
 			if (read.error) {
 				out.push(read.error);
 			}
 			else if (read.kit) {
 				this.scanKit(read.kit, where, out);
 			}
-			return out;
-		}
-		if (this.defaultKit && typeof this.defaultKit !== 'function') {
-			this.scanKit(this.defaultKit, 'default kit', out);
-		}
-		for (const row of this.pendingAgents) {
-			if (row.kit) {
-				const where = `agent ${row.id}`;
-				const read = this.readKit(row.kit, row.id, where);
-				if (read.error) {
-					out.push(read.error);
-				}
-				else if (read.kit) {
-					this.scanKit(read.kit, where, out);
-				}
-			}
-			else if (typeof this.defaultKit === 'function') {
-				const where = `agent ${row.id}`;
-				const read = this.readKit(this.defaultKit, row.id, where);
-				if (read.error) {
-					out.push(read.error);
-				}
-				else if (read.kit) {
-					this.scanKit(read.kit, where, out);
-				}
-			}
 		}
 		return out;
 	}
 
-	private reportMissingNames(spec?:AgentSpec<TAgentCtx>):void {
-		const parts = this.missingNames(spec);
+	private reportMissingNames(specs?:{ id:string; kit?:KitSource<TCtx> }[]):void {
+		const parts = this.missingNames(specs);
 		if (parts.length === 0) {
 			return;
 		}
@@ -1891,148 +1714,494 @@ export class ArcDirector<TAgentCtx = unknown> {
 		throw new Error(message);
 	}
 
-	private attachTalk(agent:Agent<TAgentCtx>):void {
-		if (!this.talk) {
+	/** Throw when a character or collective already has `id`: they share one namespace. */
+	private claimID(id:string):void {
+		if (this.specs.has(id) || this.collectiveSpecs.some((spec) => spec.id === id)) {
+			throw new Error(`ArcDirector: '${id}' is already a character or a collective`);
+		}
+	}
+
+	/** A runner's per-tick sample cache. */
+	private cacheOf(runner:ArcRunner<TCtx>):SampleCache {
+		return (this.characterRows.get(runner.id) ?? this.collectiveRows.get(runner.id))?.cache ?? new SampleCache();
+	}
+
+	/** The deps every runner gets: dispatch through this director, its catalog, its kit. `runner` is the one built from them. */
+	private runnerDeps(
+		spec:{ id:string; laws?:LawSpec[]; maxLaws?:number; cooldown?:number },
+		kit:KitSource<TCtx>,
+		runner:()=>ArcRunner<TCtx>,
+	):RunnerOptions<TCtx> {
+		return {
+			id: spec.id,
+			verbs: this.verbs,
+			context: () => this.tryCtx(runner().voice.id),
+			execute: async (step, ctx) => this.dispatch(runner(), step, ctx),
+			abortArc: (id) => this.abortArc(id),
+			cooldown: spec.cooldown ?? this.cooldownDefault,
+			talk: this.talk,
+			catalog: this.kernelFn ? (ctx) => buildCatalog(this.kernelsFor(runner(), ctx)) : undefined,
+			kit,
+			laws: spec.laws,
+			maxLaws: spec.maxLaws,
+		};
+	}
+
+	/** Wire a character: alone, or `into` a collective. `json` restores a save. */
+	private wireCharacter(spec:CharacterSpec<TCtx>, json?:CharacterJSON, into?:Collective<TCtx>):Character<TCtx> {
+		const persona = json ? Persona.fromJSON(json.persona, spec) : new Persona(spec);
+		persona.sightLimit ??= this.sightLimitDefault;
+		const kit = this.kitFor(spec);
+		const character:Character<TCtx> = new Character<TCtx>({
+			...this.runnerDeps(spec, kit, () => character),
+			persona,
+			tags: spec.tags,
+			mindSettings: spec.mind,
+			wiring: this.wiring,
+		});
+		this.characterRows.set(spec.id, { spec, runner: character, cache: new SampleCache() });
+		if (json) {
+			character.load(json);
+			for (const law of spec.laws ?? []) {
+				character.addLaw(law, law.pinned);
+			}
+		}
+		if (into) {
+			into.members.push(character);
+			character.memberOf = into;
+			moveLawsInto(character, into);
+		}
+		else if (json?.mind || spec.mind) {
+			this.attachMind(character, json?.mind ? Mind.fromJSON(json.mind) : new Mind({ ...this.mindDefaults, ...spec.mind }));
+		}
+		this.syncListener(character);
+		this.stampPrev(character);
+		return character;
+	}
+
+	/** Wire a collective, its characters, and its mind. `cast` restores a save. */
+	private wireCollective(spec:CollectiveSpec<TCtx>, cast?:CastJSON):Collective<TCtx> {
+		const json = cast?.collectives[spec.id];
+		const persona = json ? Persona.fromJSON(json.persona, spec) : new Persona(spec);
+		persona.sightLimit ??= this.sightLimitDefault;
+		const mind = json ? Mind.fromJSON<TCtx>(json.mind) : new Mind<TCtx>({ ...this.mindDefaults, ...spec.mind });
+		const collective:Collective<TCtx> = new Collective<TCtx>({
+			...this.runnerDeps(spec, this.kitFor(spec), () => collective),
+			defaultLawWho: 'units',
+			persona,
+			mind,
+			host: this.collectiveHost,
+			onCommanderVacant: (character) => this.commanderVacantFn?.(collective, character),
+		});
+		this.collectiveRows.set(spec.id, { spec, runner: collective, cache: new SampleCache() });
+		const ids = json ? json.characters : (spec.characters ?? []).map((c) => c.id);
+		for (const id of ids) {
+			this.wireCharacter(this.specs.get(id) ?? { id }, cast?.characters[id], collective);
+		}
+		if (json) {
+			collective.load(json);
+			for (const law of spec.laws ?? []) {
+				collective.addLaw(law, law.pinned);
+			}
+		}
+		const commander = json ? json.commander : spec.commander;
+		if (commander) {
+			const chief = collective.character(commander);
+			if (!chief) {
+				throw new Error(`ArcDirector: no '${commander}' in '${spec.id}' to command it`);
+			}
+			collective.commander = chief;
+		}
+		this.attachMind(collective, mind);
+		this.listen(collective);
+		this.stampPrev(collective);
+		return collective;
+	}
+
+	/** How a collective adds and removes its characters through this director. */
+	private readonly collectiveHost:CollectiveHost<TCtx> = {
+		addCharacter: (spec, into) => {
+			this.claimID(spec.id);
+			this.specs.set(spec.id, spec);
+			this.reportMissingNames(spec.kit ? [spec] : []);
+			return this.wireCharacter(spec, undefined, into);
+		},
+		removeCharacter: (id) => {
+			this.removeCharacter(id);
+		},
+	};
+
+	/** How `character.mind = …` and `character.collective = …` reach this director. */
+	private readonly wiring:Wiring<TCtx> = {
+		setMind: (character, mind) => this.setMind(character, mind),
+		setCollective: (character, collective) => this.moveCharacter(character, collective),
+	};
+
+	/** `character.mind = mind`: its own mind from now on, out of any collective, or the host's hands for `null`. */
+	private setMind(character:Character<TCtx>, mind:Mind<TCtx> | null):void {
+		if (mind === character.mind) {
 			return;
 		}
-		this.talk.attach({
-			id: agent.id,
-			nameOf: (id) => agent.nameOf(id),
+		const shared = mind && this.collectives().find((c) => c.mind === mind);
+		if (shared) {
+			this.moveCharacter(character, shared);
+			return;
+		}
+		if (mind?.attached && mind.owner !== character) {
+			throw new Error(`ArcDirector: that mind thinks for '${mind.id}', not '${character.id}'`);
+		}
+		const from = character.memberOf;
+		const { dropped } = from ? this.leave(character, from) : { dropped: [] };
+		this.dropOwnMind(character);
+		character.mindSettings = mind?.settings();
+		if (mind) {
+			this.attachMind(character, mind);
+		}
+		this.syncListener(character);
+		if (from) {
+			this.tellMoved(character, from, null, dropped);
+			this.noteJourney(character, from, null);
+		}
+	}
+
+	/** `character.collective = to`: straight from any collective to `to`, or out to its own mind (or the host's hands). */
+	private moveCharacter(character:Character<TCtx>, to:Collective<TCtx> | null):void {
+		const from = character.memberOf;
+		if (from === to) {
+			return;
+		}
+		if (to && this.collectiveRows.get(to.id)?.runner !== to) {
+			throw new Error(`ArcDirector: '${to.id}' is not a collective here`);
+		}
+		const { kept, dropped } = from ? this.leave(character, from, to) : { kept: [], dropped: [] };
+		if (to) {
+			this.join(character, to, kept);
+		}
+		else if (character.mindSettings) {
+			this.attachMind(character, new Mind({ ...this.mindDefaults, ...character.mindSettings }));
+		}
+		this.syncListener(character);
+		this.tellMoved(character, from, to, dropped);
+		this.noteJourney(character, from, to);
+	}
+
+	/** Queue a move for the next memory handover. A character moving again keeps its first `from`. */
+	private noteJourney(character:Character<TCtx>, from:Collective<TCtx> | null, to:Collective<TCtx> | null):void {
+		if (this.handover === false) {
+			return;
+		}
+		const was = this.journeys.get(character);
+		this.journeys.set(character, { character, from: was ? was.from : from, to });
+	}
+
+	/**
+	 * The memory handover for the moves so far, once their window has passed: it takes the next free think slot,
+	 * ahead of thinks still waiting, so memories are fixed before the minds involved think again if it can be.
+	 */
+	private tickHandover():void {
+		if (this.journeys.size === 0) {
+			return;
+		}
+		this.journeyTicks += 1;
+		const queue = this.queue;
+		const full = !!queue && queue.inFlight >= queue.maxParallel;
+		if (this.journeyTicks < this.handoverTicks || this.handoverBusy || full || !this.handover) {
+			return;
+		}
+		const journeys = [...this.journeys.values()].filter((j) => j.from !== j.to && hasIdentity(j.character));
+		this.journeys.clear();
+		this.journeyTicks = 0;
+		if (journeys.length === 0) {
+			return;
+		}
+		this.handoverBusy = true;
+		void this.handover(journeys)
+			.then((edits) => this.applyMemoryEdits(edits))
+			.catch((err:unknown) => {
+				const text = err instanceof Error ? err.message : String(err);
+				this.emitLog({ name: HANDOVER_THREAD, message: `failed: ${text}`, error: true });
+			})
+			.finally(() => {
+				this.handoverBusy = false;
+			});
+	}
+
+	/** Apply a handover's edits. Pinned memories and unknown ids are left alone; embeddings follow later. */
+	private applyMemoryEdits(edits:MemoryEdit[]):void {
+		for (const edit of edits) {
+			const memory = (this.character(edit.id) ?? this.collective(edit.id))?.persona.memory;
+			if (!memory) {
+				continue;
+			}
+			const editable = (id:string):boolean => memory.all().some((m) => m.id === id && !m.pinned);
+			for (const id of edit.remove ?? []) {
+				if (editable(id)) {
+					memory.remove(id);
+				}
+			}
+			for (const { id, text } of edit.rewrite ?? []) {
+				if (editable(id) && text.trim()) {
+					this.embedLater(memory.rewrite(id, text.trim())!);
+				}
+			}
+			for (const text of edit.add ?? []) {
+				const line = text.trim();
+				if (line) {
+					this.embedLater(memory.add({ category: 'semantic', text: line, tags: nameTags(line), timestamp: this.clock }, this.clock));
+				}
+			}
+		}
+	}
+
+	/** Embed a memory written outside a think, without waiting for it. */
+	private embedLater(record:MemoryRecord):void {
+		void this.provider?.embed?.([record.text])
+			.then(([vec]) => {
+				record.embedding = vec;
+			})
+			.catch(() => undefined);
+	}
+
+	/**
+	 * Take `character` out of `from`: the commander post if it held it, `from`'s own tags on it, and its own laws
+	 * there. Moving on to `to`, those laws are `kept` as they are. Leaving for good, they lose their `Tom.`
+	 * prefix and come home, but laws that only work in a collective (`units`, `allUnits`) are `dropped`.
+	 */
+	private leave(
+		character:Character<TCtx>,
+		from:Collective<TCtx>,
+		to:Collective<TCtx> | null = null,
+	):{ kept:Law[]; dropped:Law[] } {
+		from.members = from.members.filter((c) => c !== character);
+		character.memberOf = null;
+		character.tags = character.tags.filter((t) => !from.ownsTag(t));
+		const own = from.laws.filter((law) => lawGroup(law.name) === character.id);
+		from.laws = from.laws.filter((law) => !own.includes(law));
+		from.vacate(character);
+		if (to) {
+			return { kept: own, dropped: [] };
+		}
+		const dropped = own.filter((law) => usesCollective(law, this.verbs));
+		for (const law of own.filter((l) => !dropped.includes(l))) {
+			law.name = law.name.slice(character.id.length + 1);
+			character.keepLaw(law);
+		}
+		return { kept: [], dropped };
+	}
+
+	/** Put `character` in `to`: its own mind goes (its settings are kept), and its laws move in as its own there. */
+	private join(character:Character<TCtx>, to:Collective<TCtx>, carried:Law[]):void {
+		if (character.ownMind) {
+			character.mindSettings = character.ownMind.settings();
+		}
+		this.dropOwnMind(character);
+		to.members.push(character);
+		character.memberOf = to;
+		moveLawsInto(character, to);
+		for (const law of carried) {
+			to.keepLaw(law);
+		}
+	}
+
+	/** Tell each mind involved what changed: a collective who left or joined it, and a character what it left. */
+	private tellMoved(
+		character:Character<TCtx>,
+		from:Collective<TCtx> | null,
+		to:Collective<TCtx> | null,
+		dropped:Law[],
+	):void {
+		const tell = (mind:Mind<TCtx>, event:MindEvent):void => {
+			mind.pushEvent(event);
+			this.queue?.enqueueMajor(mind.id, true);
+		};
+		if (from) {
+			// The name it went by there: once gone, the policy may call it something else (an enemy, say).
+			const name = from.mind.nameOf(character.id);
+			tell(from.mind, { kind: 'Left', text: `${name} left`, tags: [name], major: true });
+		}
+		if (to) {
+			tell(to.mind, { kind: 'Joined', text: '{0} joined', who: [character.id], major: true });
+		}
+		const own = character.ownMind;
+		if (!from || !own) {
+			return;
+		}
+		const doing = character.arc ? ` You are still doing what {0} gave you: ${own.namedArc(character.arc)}.` : '';
+		const gone = dropped.length > 0
+			? ` Your laws that only work in a group are gone: ${dropped.map((law) => law.name.slice(character.id.length + 1)).join(', ')}.`
+			: '';
+		tell(own, { kind: 'Left', text: `You left {0}.${doing}${gone}`, who: [from.id], major: true });
+	}
+
+	/** Drop a character's own mind, if it has one: its think stops, and it leaves the queue. */
+	private dropOwnMind(character:Character<TCtx>):void {
+		if (character.ownMind) {
+			this.detachMind(character.ownMind);
+			character.ownMind = null;
+		}
+	}
+
+	/** Let `mind` think for `owner`: wire it, and give it a place in the think queue. */
+	private attachMind(owner:Character<TCtx> | Collective<TCtx>, mind:Mind<TCtx>):void {
+		if (owner instanceof Character) {
+			owner.ownMind = mind;
+		}
+		mind.attach(owner, this.mindDeps(mind, owner));
+		mind.stamp(this.clock);
+		this.queue?.ensure(mind.id, { skipHeartbeat: mind.skipHeartbeat, skipMajor: mind.skipMajor });
+		this.queue?.setWatches(mind.id, mind.persona.effectiveWatches());
+		this.queue?.setAiOn(mind.id, true);
+	}
+
+	/** Stop `mind` thinking: its think in flight, and its place in the queue. It thinks for no one after. */
+	private detachMind(mind:Mind<TCtx>):void {
+		mind.abortThink();
+		this.queue?.setAiOn(mind.id, false);
+		this.queue?.drop(mind.id);
+		let i = this.readyThink.length;
+		while (i--) {
+			if (this.readyThink[i].mindID === mind.id) {
+				this.readyThink.splice(i, 1);
+			}
+		}
+		mind.detach();
+	}
+
+	/** Speech `runner` hears reaches its mind when it is that mind's voice. */
+	private listen(runner:ArcRunner<TCtx>):void {
+		this.talk?.attach({
+			id: runner.id,
+			nameOf: (id) => runner.mind?.nameOf(id) ?? id,
 			pushEvent: (event) => {
-				agent.pushEvent(event);
+				const mind = runner.isVoice ? runner.mind : null;
+				if (!mind) {
+					return;
+				}
+				mind.pushEvent(event);
 				if (event.major) {
-					this.queue?.enqueueMajor(agent.id, true);
+					this.queue?.enqueueMajor(mind.id, true);
 				}
 			},
 		});
 	}
 
-	private wireAgent(spec:AgentSpec<TAgentCtx>, stored?:AgentJSON):Agent<TAgentCtx> {
-		this.dropRow(spec.id);
-		const row:AgentRow<TAgentCtx> = {
-			spec,
-			actor: null,
-			cache: new SampleCache(),
-			rank: spec.rank ?? 0,
-		};
-		this.agentRows.set(spec.id, row);
-		const deps = this.deps(spec.id, row);
-		const isCrowd = spec.units !== undefined || spec.commander !== undefined;
-		const agent = stored
-			? isCrowd
-				? CrowdConductor.fromJSON(stored, deps)
-				: Agent.fromJSON(stored, deps)
-			: isCrowd
-				? new CrowdConductor<TAgentCtx>({
-					...deps,
-					id: spec.id,
-					identity: spec.identity,
-					goals: spec.goals ? spec.goals.map((g) => ({ ...g })) : [],
-					units: spec.units,
-					laws: spec.laws,
-					maxLaws: spec.maxLaws,
-					cooldown: spec.cooldown ?? this.cooldownDefault,
-					commander: spec.commander,
-					onCommanderVacant: (unitID) => this.commanderVacantFn?.(spec.id, unitID),
-				})
-				: new Agent<TAgentCtx>({
-					id: spec.id,
-					identity: spec.identity,
-					goals: spec.goals ? spec.goals.map((g) => ({ ...g })) : [],
-					...deps,
-				});
-		row.actor = agent;
-		this.applySpec(agent, spec, !stored);
-		this.attachTalk(agent);
-		this.queue?.ensure(spec.id, {
-			skipHeartbeat: spec.skipHeartbeat ?? false,
-			skipMajor: spec.skipMajor ?? false,
-		});
-		this.queue?.setWatches(spec.id, agent.effectiveWatches());
-		this.queue?.setAiOn(spec.id, true);
-		this.stampPrev(row);
-		return agent;
+	/** A character listens to talk while a mind thinks for it. */
+	private syncListener(character:Character<TCtx>):void {
+		if (character.mind) {
+			this.listen(character);
+		}
+		else {
+			this.talk?.detach(character.id);
+		}
 	}
 
-	private wireActor(spec:ActorSpec<TAgentCtx>):Actor<TAgentCtx> {
-		this.dropActorRow(spec.id);
-		const row:ActorRow<TAgentCtx> = { spec, actor: null, cache: new SampleCache() };
-		const actor = new Actor<TAgentCtx>({
-			id: spec.id,
-			verbs: this.verbs,
-			context: () => this.contextFn?.(spec.id),
-			execute: async (step, ctx, actorID) => this.dispatch(row, step, ctx, actorID ?? spec.id),
-			abortArc: (id) => this.abortArc(id),
-			cooldown: spec.cooldown ?? this.cooldownDefault,
-			talk: this.talk,
-			catalog: this.kernelFn ? (ctx) => buildCatalog(this.kernelsFor(row, ctx)) : undefined,
-			kit: this.kitFor(spec),
-			laws: spec.laws,
-			maxLaws: spec.maxLaws,
-		});
-		row.actor = actor;
-		this.actorRows.set(spec.id, row);
-		this.stampPrev(row);
-		return actor;
-	}
-
-	private dropActorRow(id:string):void {
-		const row = this.actorRows.get(id);
+	/** Take a character off the director: its arc, moves, talk, its own mind, and its place in a collective. */
+	private dropCharacter(id:string):void {
+		const row = this.characterRows.get(id);
 		if (!row) {
 			return;
 		}
-		row.actor?.replaceProgram();
-		this.mover.stop(id);
-		this.actorRows.delete(id);
-	}
-
-	private dropRow(id:string):void {
-		const row = this.agentRows.get(id);
-		if (!row) {
-			return;
-		}
+		const character = row.runner;
+		this.characterRows.delete(id);
+		character.replaceProgram();
 		this.mover.stop(id);
 		this.talk?.detach(id);
-		this.queue?.setAiOn(id, false);
-		this.queue?.drop(id);
-		this.agentRows.delete(id);
-		let i = this.readyThink.length;
-		while (i--) {
-			if (this.readyThink[i].npcID === id) {
-				this.readyThink.splice(i, 1);
-			}
+		this.dropOwnMind(character);
+		if (character.memberOf) {
+			this.leave(character, character.memberOf);
 		}
 	}
 
-	exportAgents():Record<string, AgentJSON> {
-		const out:Record<string, AgentJSON> = {};
-		for (const row of this.agentRows.values()) {
-			if (row.actor) {
-				out[row.actor.id] = row.actor.toJSON();
-			}
-		}
-		return out;
-	}
-
-	/** Rebuild agents from `exportAgents`. Before `start()`, they are kept and rebuilt when `start()` wires them. */
-	restoreAgents(agents:Record<string, AgentJSON>):void {
-		if (!this.started) {
-			this.stored = { ...agents };
+	/** Take a collective off the director. Its characters stay, each on its own: a fresh mind if it had settings for one. */
+	private dropCollective(id:string):void {
+		const row = this.collectiveRows.get(id);
+		if (!row) {
 			return;
 		}
-		for (const row of [...this.agentRows.values()]) {
-			const json = agents[row.spec.id];
-			if (json) {
-				this.wireAgent(row.spec, json);
+		const collective = row.runner;
+		for (const character of [...collective.members]) {
+			this.moveCharacter(character, null);
+		}
+		this.collectiveRows.delete(id);
+		collective.replaceProgram();
+		this.talk?.detach(id);
+		this.detachMind(collective.mind);
+	}
+
+	/** Every character and collective, as a save. Restore it with `restoreCast`. */
+	exportCast():CastJSON {
+		const characters:Record<string, CharacterJSON> = {};
+		for (const row of this.characterRows.values()) {
+			characters[row.runner.id] = row.runner.toJSON();
+		}
+		const collectives:Record<string, CollectiveJSON> = {};
+		for (const row of this.collectiveRows.values()) {
+			collectives[row.runner.id] = row.runner.toJSON();
+		}
+		return { characters, collectives };
+	}
+
+	/**
+	 * Rebuild the cast from `exportCast`, under the specs added here. Before `start()` it is kept, and `start()`
+	 * builds from it. A collective's characters come from the save, so ones that joined or died stay that way.
+	 */
+	restoreCast(cast:CastJSON):void {
+		if (!this.started) {
+			this.stored = cast;
+			return;
+		}
+		this.clearCast();
+		this.wireCast(cast);
+	}
+
+	/** Drop every character and collective quietly: no events, no new commanders, no fresh minds. */
+	private clearCast():void {
+		for (const { runner } of this.characterRows.values()) {
+			runner.replaceProgram();
+			this.mover.stop(runner.id);
+			this.talk?.detach(runner.id);
+			this.dropOwnMind(runner);
+			runner.memberOf = null;
+		}
+		for (const { runner } of this.collectiveRows.values()) {
+			runner.replaceProgram();
+			this.talk?.detach(runner.id);
+			this.detachMind(runner.mind);
+			runner.members = [];
+		}
+		this.characterRows.clear();
+		this.collectiveRows.clear();
+		this.journeys.clear();
+	}
+
+	/**
+	 * Build every character and collective from the specs added here, or from `cast` under them: then the save
+	 * says who belongs to which collective, and who is on their own.
+	 */
+	private wireCast(cast?:CastJSON):void {
+		const members = new Set(Object.values(cast?.collectives ?? {}).flatMap((c) => c.characters));
+		const solo = new Set(this.soloSpecs.map((spec) => spec.id));
+		for (const id of Object.keys(cast?.characters ?? {})) {
+			if (!members.has(id) && !solo.has(id) && this.specs.has(id)) {
+				solo.add(id);
 			}
+		}
+		for (const id of solo) {
+			if (!members.has(id)) {
+				this.wireCharacter(this.specs.get(id)!, cast?.characters[id]);
+			}
+		}
+		for (const spec of this.collectiveSpecs) {
+			this.wireCollective(spec, cast);
 		}
 	}
 
-	pushEvent(event:AgentEvent):void {
-		for (const row of this.agentRows.values()) {
-			row.actor?.pushEvent(event);
+	/** Tell every mind once. */
+	pushEvent(event:MindEvent):void {
+		for (const mind of this.minds()) {
+			mind.pushEvent(event);
 			if (event.major) {
-				this.queue?.enqueueMajor(row.spec.id, true);
+				this.queue?.enqueueMajor(mind.id, true);
 			}
 		}
 	}
@@ -2042,185 +2211,137 @@ export class ArcDirector<TAgentCtx = unknown> {
 			return;
 		}
 		this.clock = now;
-		const catalogs = new Map<string, ReturnType<typeof buildCatalog> | ReturnType<typeof buildCatalog>[]>();
-		for (const row of this.agentRows.values()) {
-			if (!row.actor) {
-				continue;
-			}
-			row.actor.stamp(now);
-			row.actor.refreshKit();
+		const rows = [...this.characterRows.values(), ...this.collectiveRows.values()];
+		for (const row of rows) {
+			row.runner.stamp(now);
+			row.runner.refreshKit();
+		}
+		const minds = this.minds();
+		const catalogs = new Map<string, Catalog | Catalog[]>();
+		for (const mind of minds) {
+			mind.stamp(now);
 			if (!this.kernelFn || !this.contextFn) {
 				continue;
 			}
 			try {
-				catalogs.set(row.spec.id, this.catalogsFor(row));
+				catalogs.set(mind.id, this.catalogsFor(mind));
 			}
 			catch {
 				continue;
 			}
 		}
-		for (const row of this.actorRows.values()) {
-			row.actor?.stamp(now);
-			row.actor?.refreshKit();
-		}
 		const cap = this.queue.maxParallel;
-		this.queue.maxParallel = Math.max(cap, this.agentRows.size);
-		const rows = this.queue.tick(dt, catalogs);
+		this.queue.maxParallel = Math.max(cap, minds.length);
+		const ready = this.queue.tick(dt, catalogs);
 		this.queue.maxParallel = cap;
-		this.readyThink.push(...rows);
+		this.readyThink.push(...ready);
 		this.tickWaits();
 		this.mover.tick();
 		this.talk?.tick(now);
-		for (const row of this.agentRows.values()) {
+		for (const row of rows) {
 			row.cache.commit();
-			this.tickLaws(row);
-			if (row.actor?.arcSession) {
-				pollArcSession(row.actor.arcSession);
+		}
+		for (const row of this.characterRows.values()) {
+			if (!row.runner.memberOf) {
+				this.tickLaws(row.runner);
 			}
 		}
-		for (const row of this.actorRows.values()) {
-			row.cache.commit();
-			this.tickActorLaws(row);
+		for (const row of this.collectiveRows.values()) {
+			this.tickCollectiveLaws(row.runner);
 		}
+		this.tickHandover();
 		this.drain(now);
 	}
 
-	private catalogsFor(row:AgentRow<TAgentCtx>):ReturnType<typeof buildCatalog> | ReturnType<typeof buildCatalog>[] {
-		const agent = row.actor;
-		const thinkerCtx = this.tryCtx(row.spec.id);
-		const thinkerKernels = thinkerCtx
-			? this.kernelsFor(row, thinkerCtx)
-			: (isCrowdConductor(agent) ? this.dummyHiveKernels(row, agent) : undefined);
-		if (!thinkerKernels) {
+	/** What `mind`'s watches score against: its voice's view, or one view per character of a collective. */
+	private catalogsFor(mind:Mind<TCtx>):Catalog | Catalog[] {
+		const owner = mind.owner;
+		const voiceCtx = this.tryCtx(mind.thinkThread());
+		const kernels = voiceCtx
+			? this.kernelsFor(mind.voice, voiceCtx)
+			: (owner instanceof Collective ? this.dummyHiveKernels(owner) : undefined);
+		if (!kernels) {
 			throw new Error('no ctx');
 		}
-		const thinker = buildCatalog(thinkerKernels);
-		if (!isCrowdConductor(agent) || agent.crowd.size === 0) {
+		const thinker = buildCatalog(kernels);
+		if (!(owner instanceof Collective)) {
 			return thinker;
 		}
-		const unitCats:ReturnType<typeof buildCatalog>[] = [];
-		for (const unit of agent.crowd.list()) {
-			const unitCtx = this.tryCtx(unit.id);
-			if (!unitCtx) {
-				continue;
+		const views:Catalog[] = [];
+		for (const character of owner.characters) {
+			const ctx = this.tryCtx(character.id);
+			if (ctx) {
+				views.push(buildCollectiveCatalog(this.kernelsFor(character, ctx), owner));
 			}
-			unitCats.push(buildCrowdCatalog(this.kernelsFor(row, unitCtx), agent.crowd, agent.id, agent.commanderID));
 		}
-		return unitCats.length > 0 ? unitCats : thinker;
+		return views.length > 0 ? views : thinker;
 	}
 
-	private unitCatalog(
-		row:AgentRow<TAgentCtx>,
-		agent:CrowdConductor<TAgentCtx>,
-		unitID:string,
-		whoCat:ReturnType<typeof buildCrowdCatalog>,
-	):ReturnType<typeof buildCrowdCatalog> {
-		const unitCtx = this.tryCtx(unitID);
-		if (!unitCtx) {
-			return whoCat;
+	/** Laws and the live arc session of a character on its own. */
+	private tickLaws(character:Character<TCtx>):void {
+		if (character.laws.length === 0 && !character.arcSession) {
+			return;
 		}
-		return buildCrowdCatalog(this.kernelsFor(row, unitCtx), agent.crowd, agent.id, agent.commanderID);
+		let catalog = character.arcSession?.catalog;
+		if (!catalog && this.kernelFn && this.contextFn) {
+			catalog = () => {
+				const ctx = this.tryCtx(character.id);
+				return ctx ? buildCatalog(this.kernelsFor(character, ctx)) : undefined;
+			};
+		}
+		this.pollRunner(character, () => character.lawHandlers(), catalog);
 	}
 
-	private tickLaws(row:AgentRow<TAgentCtx>):void {
-		const agent = row.actor;
-		if (!agent) {
-			return;
-		}
-		if (!isCrowdConductor(agent) || !this.kernelFn) {
-			this.tickActorLaws(row);
-			return;
-		}
-		const thinkerCtx = this.tryCtx(agent.id);
-		const whoKernels = thinkerCtx
-			? this.kernelsFor(row, thinkerCtx)
-			: this.dummyHiveKernels(row, agent);
+	/** A collective's laws on each of its characters, their sessions, and its own session while it has no commander. */
+	private tickCollectiveLaws(collective:Collective<TCtx>):void {
+		const voice = collective.voice;
+		const voiceCtx = this.tryCtx(voice.id);
+		const whoKernels = !this.kernelFn
+			? undefined
+			: voiceCtx ? this.kernelsFor(voice, voiceCtx) : this.dummyHiveKernels(collective);
 		if (!whoKernels) {
 			return;
 		}
-		const whoCat = buildCrowdCatalog(whoKernels, agent.crowd, agent.id, agent.commanderID);
-		for (const unit of agent.crowd.list()) {
-			if (!this.tryCtx(unit.id)) {
-				if (unit.id !== agent.commanderID) {
-					unit.interrupt();
+		const whoCat = buildCollectiveCatalog(whoKernels, collective);
+		for (const character of collective.characters) {
+			const ctx = this.tryCtx(character.id);
+			if (!ctx) {
+				if (character !== collective.commander && character.busy) {
+					character.replaceProgram();
 				}
 				continue;
 			}
-			const extras = ():ArcHandler[] => agent.lawHandlers((law) => lawMatches(law, unit, whoCat, agent.crowd));
-			const catalog = ():ReturnType<typeof buildCrowdCatalog> => this.unitCatalog(row, agent, unit.id, whoCat);
-			if (unit.id === agent.commanderID) {
-				this.pollActorSession(agent, extras, catalog, unit.id);
-				continue;
-			}
-			if (unit.session) {
-				unit.session.catalog = catalog;
-				unit.session.now = () => this.clock;
-				unit.session.extraHandlers = extras;
-				unit.session.abortHost = () => this.abortArc(unit.id);
-				pollArcSession(unit.session);
-				continue;
-			}
-			const probe = createArcSession({
-				catalog,
-				now: () => this.clock,
-				extraHandlers: extras,
-			});
-			const first = firstStartable(probe);
-			if (first) {
-				agent.beginHandler(unit, first, {
-					catalog,
-					now: () => this.clock,
-					abortHost: () => this.abortArc(unit.id),
-					extraHandlers: extras,
-				});
-			}
+			const extras = ():ArcHandler[] => collective.lawHandlersFor(character, (law) => lawMatches(law, character, whoCat, collective));
+			const catalog = ():Catalog => buildCollectiveCatalog(this.kernelsFor(character, this.tryCtx(character.id) ?? ctx), collective);
+			this.pollRunner(character, extras, catalog);
+		}
+		if (voice === collective) {
+			this.pollRunner(collective, () => [], () => whoCat);
 		}
 	}
 
-	/** Laws and the live arc session of one body (not a crowd's units). */
-	private tickActorLaws(row:ActorRow<TAgentCtx>):void {
-		const actor = row.actor;
-		if (!actor) {
-			return;
-		}
-		if (actor.laws.length === 0 && !actor.arcSession) {
-			return;
-		}
-		const extras = ():ArcHandler[] => actor.lawHandlers();
-		let catalog = actor.arcSession?.catalog;
-		if (!catalog && this.kernelFn && this.contextFn) {
-			catalog = () => {
-				const ctx = this.tryCtx(actor.id);
-				if (!ctx) {
-					return undefined;
-				}
-				return buildCatalog(this.kernelsFor(row, ctx));
-			};
-		}
-		this.pollActorSession(actor, extras, catalog, actor.id);
+	/** A think is in flight or already queued, so a law must not walk the character out from under it. */
+	private thinkWaiting(mindID:string):boolean {
+		return !!this.queue?.isThinking(mindID)
+			|| !!this.queue?.hasPending(mindID)
+			|| this.readyThink.some((row) => row.mindID === mindID);
 	}
 
-	/** A think is in flight or already queued, so a law must not walk the body out from under it. */
-	private thinkWaiting(npcID:string):boolean {
-		return !!this.queue?.isThinking(npcID)
-			|| !!this.queue?.hasPending(npcID)
-			|| this.readyThink.some((row) => row.npcID === npcID);
-	}
-
-	private pollActorSession(
-		actor:Actor<TAgentCtx>,
+	/** Poll `runner`'s live session, or start the first law that holds. A voice waits for its mind's think. */
+	private pollRunner(
+		runner:ArcRunner<TCtx>,
 		extras:()=>ArcHandler[],
 		catalog:ArcSession['catalog'],
-		abortID:string,
 	):void {
-		if (actor.arcSession) {
+		const session = runner.arcSession;
+		if (session) {
 			if (catalog) {
-				actor.arcSession.catalog = catalog;
+				session.catalog = catalog;
 			}
-			actor.arcSession.now = () => this.clock;
-			actor.arcSession.extraHandlers = extras;
-			actor.arcSession.abortHost = () => this.abortArc(abortID);
-			pollArcSession(actor.arcSession);
+			session.now = () => this.clock;
+			session.extraHandlers = extras;
+			session.abortHost = () => this.abortArc(runner.id);
+			pollArcSession(session);
 			return;
 		}
 		const probe = createArcSession({
@@ -2229,14 +2350,20 @@ export class ArcDirector<TAgentCtx = unknown> {
 			extraHandlers: extras,
 		});
 		const first = firstStartable(probe);
-		if (first && !this.thinkWaiting(actor.id)) {
-			actor.beginLaw(first, {
+		const mind = runner.isVoice ? runner.mind : null;
+		if (first && !(mind && this.thinkWaiting(mind.id))) {
+			runner.beginLaw(first, {
 				catalog,
 				now: () => this.clock,
-				abortHost: () => this.abortArc(abortID),
+				abortHost: () => this.abortArc(runner.id),
 				extraHandlers: extras,
 			});
 		}
+	}
+
+	/** The mind the queue knows as `id`: a character's own, or a collective's. */
+	private mindByID(id:string):Mind<TCtx> | undefined {
+		return this.characterRows.get(id)?.runner.ownMind ?? this.collectiveRows.get(id)?.runner.mind ?? undefined;
 	}
 
 	private drain(now:number):void {
@@ -2245,13 +2372,11 @@ export class ArcDirector<TAgentCtx = unknown> {
 			return;
 		}
 		this.readyThink.sort((a, b) => {
-			const score = queue.rankScore(b.npcID, b.score) - queue.rankScore(a.npcID, a.score);
+			const score = queue.rankScore(b.mindID, b.score) - queue.rankScore(a.mindID, a.score);
 			if (score !== 0) {
 				return score;
 			}
-			const rankA = this.agentRows.get(a.npcID)?.rank ?? 0;
-			const rankB = this.agentRows.get(b.npcID)?.rank ?? 0;
-			return rankB - rankA;
+			return (this.mindByID(b.mindID)?.rank ?? 0) - (this.mindByID(a.mindID)?.rank ?? 0);
 		});
 		const slots = this.thinkSlots(queue, now);
 		if (slots <= 0) {
@@ -2260,9 +2385,9 @@ export class ArcDirector<TAgentCtx = unknown> {
 		const held:ThinkRow[] = [];
 		let left = slots;
 		for (const row of this.readyThink) {
-			const mind = this.agentRows.get(row.npcID);
-			if (!mind?.actor || queue.isThinking(row.npcID) || left <= 0) {
-				if (mind?.actor) {
+			const mind = this.mindByID(row.mindID);
+			if (!mind || queue.isThinking(row.mindID) || left <= 0) {
+				if (mind) {
 					held.push(row);
 				}
 				continue;
@@ -2271,7 +2396,7 @@ export class ArcDirector<TAgentCtx = unknown> {
 				held.push(row);
 				continue;
 			}
-			queue.drop(row.npcID);
+			queue.drop(row.mindID);
 			this.fireThink(mind, now);
 			left -= 1;
 		}
@@ -2287,7 +2412,7 @@ export class ArcDirector<TAgentCtx = unknown> {
 		if (inFlight === 0) {
 			this.batchHeldTimestamp = null;
 		}
-		const open = queue.maxParallel - inFlight;
+		const open = queue.maxParallel - inFlight - (this.handoverBusy ? 1 : 0);
 		if (open <= 0) {
 			return 0;
 		}
@@ -2295,10 +2420,7 @@ export class ArcDirector<TAgentCtx = unknown> {
 		if (!batchThinks || inFlight === 0) {
 			return open;
 		}
-		const waiting = this.readyThink.some((row) => {
-			const mind = this.agentRows.get(row.npcID);
-			return !!mind?.actor && !queue.isThinking(row.npcID);
-		});
+		const waiting = this.readyThink.some((row) => !!this.mindByID(row.mindID) && !queue.isThinking(row.mindID));
 		if (!waiting) {
 			return 0;
 		}
@@ -2323,31 +2445,33 @@ export class ArcDirector<TAgentCtx = unknown> {
 		};
 	}
 
-	private fireThink(row:AgentRow<TAgentCtx>, now:number):void {
-		const agent = row.actor;
-		if (!agent) {
-			return;
-		}
-		void agent.tick(now)
+	private fireThink(mind:Mind<TCtx>, now:number):void {
+		void mind.tick(now)
 			.then((arc) => {
-				this.queue?.setWatches(agent.id, agent.effectiveWatches());
-				if (!arc) {
-					this.queue?.noteResult(agent.id, true);
+				if (!mind.attached) {
 					return;
 				}
-				this.emitLog({ name: agent.thinkThread(), message: formatArc(arc, this.verbs) });
+				this.queue?.setWatches(mind.id, mind.persona.effectiveWatches());
+				if (!arc) {
+					this.queue?.noteResult(mind.id, true);
+					return;
+				}
+				this.emitLog({ name: mind.thinkThread(), message: formatArc(arc, this.verbs) });
 			})
 			.catch((err:unknown) => {
+				if (!mind.attached) {
+					return;
+				}
 				const text = err instanceof Error ? err.message : String(err);
-				this.emitLog({ name: agent.thinkThread(), message: `stalled: ${text}` });
-				this.queue?.noteResult(agent.id, true);
+				this.emitLog({ name: mind.thinkThread(), message: `stalled: ${text}` });
+				this.queue?.noteResult(mind.id, true);
 				// An invalid reply ends no arc, so nothing would wake this mind: think again once, told why.
 				// Aborts and inference errors are not the mind's doing.
 				if (err instanceof ArcError) {
-					const again = agent.lastResult?.verb !== 'think' || agent.lastResult.ok;
-					agent.ingestResult({ ok: false, verb: 'think', reason: `your reply was not a valid Arc: ${text}` });
+					const again = mind.lastResult?.verb !== 'think' || mind.lastResult.ok;
+					mind.ingestResult({ ok: false, verb: 'think', reason: `your reply was not a valid Arc: ${text}` });
 					if (again) {
-						this.queue?.enqueueVerb(agent.id, 'think', false);
+						this.queue?.enqueueVerb(mind.id, 'think', false);
 					}
 				}
 			});
@@ -2378,9 +2502,37 @@ export class ArcDirector<TAgentCtx = unknown> {
 	dispose():void {
 		this.stopLoop();
 		this.disposed = true;
-		for (const id of [...this.agentRows.keys()]) {
-			this.dropRow(id);
-		}
+		this.clearCast();
 		this.started = false;
 	}
+}
+
+/** Whether a character has an identity worth a memory handover: a role or traits. */
+function hasIdentity<TCtx>(character:Character<TCtx>):boolean {
+	const { role, traits } = character.persona.identity;
+	return !!role || (traits?.length ?? 0) > 0;
+}
+
+/** Remove the spec with `id` from `specs`, and return it. */
+function remove<TSpec extends { id:string }>(specs:TSpec[], id:string):TSpec | undefined {
+	const i = specs.findIndex((spec) => spec.id === id);
+	return i < 0 ? undefined : specs.splice(i, 1)[0];
+}
+
+/**
+ * A character's laws, moved onto `collective` as its own: `flee` becomes `Tom.flee`, reaching only Tom. Each law
+ * object moves itself, so an arc it started still counts as its own.
+ */
+function moveLawsInto<TCtx>(character:Character<TCtx>, collective:Collective<TCtx>):void {
+	for (const law of character.laws) {
+		law.name = `${character.id}.${law.name}`;
+		law.who = 'me';
+		collective.keepLaw(law);
+	}
+	character.laws = [];
+}
+
+/** The collective `runner` acts in: itself, or the one its character belongs to. */
+function collectiveOf<TCtx>(runner:ArcRunner<TCtx>):Collective<TCtx> | null {
+	return runner instanceof Collective ? runner : runner instanceof Character ? runner.collective : null;
 }

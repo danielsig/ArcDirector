@@ -1,4 +1,4 @@
-/** What an agent knows about a body it is about to name. `id` is the only identifier; the name is the agent's own. */
+/** What a mind knows about a character it is about to name. `id` is the only identifier; the name is the mind's own. */
 export type NameTarget = {
 	id:string;
 	tags?:string[];
@@ -15,14 +15,14 @@ export type NameBookJSON = {
 };
 
 /**
- * One agent's names for other bodies. The host policy gives a base name; the book keeps it
+ * One persona's names for other characters. The host policy gives a base name; the book keeps it
  * stable, numbers collisions (`EnemyWitch2`), and maps each name back to the real id.
  */
 export class NameBook {
 	private readonly rows = new Map<string, NameRow>();
 	private readonly names = new Map<string, string>();
 
-	/** This agent's name for `id`, given the policy's current `base`. */
+	/** This book's name for `id`, given the policy's current `base`. */
 	name(id:string, base:string):string {
 		const had = this.rows.get(id);
 		if (had?.base === base) {
@@ -43,6 +43,11 @@ export class NameBook {
 	/** The name already given to `id`, if any. Never assigns. */
 	peek(id:string):string | undefined {
 		return this.rows.get(id)?.name;
+	}
+
+	/** Every id this book has named. */
+	ids():string[] {
+		return [...this.rows.keys()];
 	}
 
 	/** Real id for a name this book gave. Anything else passes through. */

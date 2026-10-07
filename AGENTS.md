@@ -4,7 +4,7 @@ This repo is an **LLM NPC framework** with a small 3D game attached so we can te
 
 | Folder | Package | Job |
 |--------|---------|-----|
-| `arc-director/` | `arc-director` | Engine-agnostic agents: arcs, memory, perception, talk, HTTP inference. No Vue, no Three, no physics. |
+| `arc-director/` | `arc-director` | Engine-agnostic characters, minds and collectives: arcs, memory, perception, talk, HTTP inference. No Vue, no Three, no physics. |
 | `kindling/` | `@arc-director/kindling` | GameObject runtime: `Game`, `World`, `Component`, tick, physics, Three.js view. Hosts subclass; they do not own this. |
 | `game/` | `@arc-director/game` | Example host used for testing: walkable world, items, streaming chunks, Vue HUD, adapter into ArcDirector. Subclasses Kindling. |
 | `brainstorming/` | none | Concept art and old notes. |
@@ -110,7 +110,7 @@ The game is served at `http://localhost:5173/` (Vite default). There is no path 
 
 **Defaults** (when the param is omitted and nothing is stored): **`observer=1`**, **`ai=1`**. Menu **Testing** toggles write both to localStorage and the URL; they survive reloads. Query params override the stored values for the fields you set.
 
-Pose comes from the last saved pose for that scene. **`view` overrides that pose as a whole.** World and agents start fresh unless you press **Load** (Menu → Save): one save per scene in localStorage, a Kindling diff of the world plus `exportAgents`. Every chunk loads at boot so the fresh scene is the same each time; far chunks park their objects instead of dropping them.
+Pose comes from the last saved pose for that scene. **`view` overrides that pose as a whole.** World and the cast start fresh unless you press **Load** (Menu → Save): one save per scene in localStorage, a Kindling diff of the world plus `exportCast`. Every chunk loads at boot so the fresh scene is the same each time; far chunks park their objects instead of dropping them.
 
 While a scene is running, the game `replaceState`s `observer` and `ai`. It never injects `view` or `session` for a normal play session. If `view` or `session` is already in the query, it is kept. Returning to Scenes strips `view` / `observer` / `ai` and leaves `session`.
 

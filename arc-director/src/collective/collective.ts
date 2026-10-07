@@ -1,134 +1,156 @@
-import { Agent, type AgentDeps, type AgentJSON, type AgentOptions } from '../agent/agent.js';
-import type { Actor } from '../agent/actor.js';
-import type { Arc, ArcResult, Step } from '../arc/types.js';
-import { firstStep } from '../arc/types.js';
-import { formatArc } from '../arc/parse.js';
-import { MemoryStore } from '../memory/store.js';
-import {
-	createArcSession,
-	runArc,
-	type ArcHandler,
-	type ArcSession,
-	type ArcSessionOpts,
-} from '../agent/run.js';
-import { Crowd } from './crowd.js';
-import { CrowdUnit, type CrowdUnitSpec } from './unit.js';
+import type { Arc } from '../arc/types.js';
+import { lawGroup, type Law } from '../arc/laws.js';
+import type { ArcHandler } from '../arc/run.js';
+import { ArcRunner, type ArcRunnerJSON, type RunnerOptions } from '../character/arc-runner.js';
+import type { Character } from '../character/character.js';
+import { Persona, type PersonaJSON } from '../character/persona.js';
+import { Mind, type MindJSON } from '../mind/mind.js';
+import type { CharacterSpec } from '../director/types.js';
 import { squadTag, isSquadTag, shortTag } from './tags.js';
-import {
-	type CrowdLaw,
-	type CrowdLawSpec,
-} from './laws.js';
-import { isFormationVerb } from './conductor-verbs.js';
+import { MIND_ONLY_VERBS, STOCK_ARC_VERBS } from '../arc/stock-verbs.js';
+import { STOCK_COLLECTIVE_VERBS } from './verbs.js';
 
-export type CrowdConductorJSON = AgentJSON & {
-	crowd?:{ id:string; tags:string[] }[];
-	commanderID?:string | null;
-};
+/** Verbs only a collective's voice runs: issuing, tagging, formations, laws, and the mind's own. */
+const VOICE_VERBS = new Set<string>([...STOCK_COLLECTIVE_VERBS, ...STOCK_ARC_VERBS, ...MIND_ONLY_VERBS]);
 
-export type CrowdConductorOptions<TAgentCtx = unknown> = AgentOptions<TAgentCtx> & {
-	units?:CrowdUnitSpec[];
-	laws?:CrowdLawSpec[];
-	maxLaws?:number;
+/** A collective's part of a save. Its characters are saved on their own and listed here by id. */
+export type CollectiveJSON = ArcRunnerJSON & {
+	persona:PersonaJSON;
+	mind:MindJSON;
+	/** Its characters' ids, in order. */
+	characters:string[];
 	commander?:string;
-	onCommanderVacant?:(unitID:string)=>void;
 };
 
-export function isCrowdConductor<TAgentCtx>(
-	actor:Actor<TAgentCtx> | null | undefined,
-):actor is CrowdConductor<TAgentCtx> {
-	return actor instanceof CrowdConductor;
-}
+/** @internal What a collective asks of the director that runs it. */
+export type CollectiveHost<TCtx> = {
+	addCharacter(spec:CharacterSpec<TCtx>, into:Collective<TCtx>):Character<TCtx>;
+	removeCharacter(id:string):void;
+};
 
-export class CrowdConductor<TAgentCtx = unknown> extends Agent<TAgentCtx> {
-	readonly crowd = new Crowd();
-	commanderID:string | null = null;
-	onCommanderVacant?:(unitID:string)=>void;
+export type CollectiveOptions<TCtx = unknown> = RunnerOptions<TCtx> & {
+	host:CollectiveHost<TCtx>;
+	persona?:Persona;
+	mind?:Mind<TCtx>;
+	/** The commander left or died. The host may name a new one (`collective.commander = …`). */
+	onCommanderVacant?:(character:Character<TCtx>)=>void;
+};
 
-	constructor(opts:CrowdConductorOptions<TAgentCtx>) {
+/**
+ * Characters sharing one mind. The mind's arcs run on the `commander`, or on the collective itself while it has
+ * none (a hive). Its own laws reach its characters by `who`; a character's own law lives here as
+ * `Tom.flee` and reaches only Tom.
+ */
+export class Collective<TCtx = unknown> extends ArcRunner<TCtx> {
+	readonly persona:Persona;
+	readonly mind:Mind<TCtx>;
+	onCommanderVacant?:(character:Character<TCtx>)=>void;
+	/** @internal Its characters, in order. Only the director changes it. */
+	members:Character<TCtx>[] = [];
+	private chief:Character<TCtx> | null = null;
+	private readonly host:CollectiveHost<TCtx>;
+
+	constructor(opts:CollectiveOptions<TCtx>) {
 		super({ ...opts, defaultLawWho: opts.defaultLawWho ?? 'units' });
-		for (const spec of opts.units ?? []) {
-			this.addUnit(spec);
-		}
-		for (const spec of opts.laws ?? []) {
-			this.addCrowdLaw(spec, spec.pinned);
-		}
-		if (opts.commander) {
-			this.setCommander(opts.commander);
-		}
-		if (opts.onCommanderVacant) {
-			this.onCommanderVacant = opts.onCommanderVacant;
-		}
+		this.persona = opts.persona ?? new Persona();
+		this.mind = opts.mind ?? new Mind<TCtx>();
+		this.host = opts.host;
+		this.onCommanderVacant = opts.onCommanderVacant;
 	}
 
-	protected override crowdLawWho():boolean {
-		return true;
+	get characters():readonly Character<TCtx>[] {
+		return this.members;
 	}
 
-	addUnit(spec:CrowdUnitSpec):CrowdUnit {
-		const existing = this.crowd.get(spec.id);
-		if (existing) {
-			if (spec.tags) {
-				existing.tags = spec.tags.map((t) => t.includes(':') ? t : squadTag(this.id, t));
-			}
-			return existing;
-		}
-		const tags = (spec.tags ?? []).map((t) => t.includes(':') ? t : squadTag(this.id, t));
-		return this.crowd.add(new CrowdUnit(spec.id, tags));
+	character(id:string):Character<TCtx> | undefined {
+		return this.members.find((c) => c.id === id);
 	}
 
-	removeUnit(id:string):CrowdUnit | undefined {
-		if (this.commanderID === id) {
-			this.vacateCommander(id);
-		}
-		return this.crowd.remove(id);
+	/** The character the mind acts through, or null when it has none. */
+	get commander():Character<TCtx> | null {
+		return this.chief;
 	}
 
-	override thinkThread():string {
-		return this.commanderID ?? super.thinkThread();
-	}
-
-
-	setCommander(id:string | null):void {
-		if (id === null) {
-			const prev = this.commanderID;
-			if (prev) {
-				this.vacateCommander(prev);
+	set commander(character:Character<TCtx> | null) {
+		if (character === null) {
+			if (this.chief) {
+				this.vacate(this.chief);
 			}
 			return;
 		}
-		if (!this.crowd.get(id)) {
-			throw new Error(`ArcDirector: no unit '${id}' to command`);
+		if (!this.members.includes(character)) {
+			throw new Error(`ArcDirector: '${character.id}' is not in '${this.id}'`);
 		}
-		this.commanderID = id;
+		this.chief = character;
 	}
 
-	private vacateCommander(unitID:string):void {
-		this.abortThink();
-		this.commanderID = null;
-		this.onCommanderVacant?.(unitID);
+	/** The commander, or the collective itself while it has none. */
+	get voice():ArcRunner<TCtx> {
+		return this.chief ?? this;
 	}
 
-	addCrowdLaw(spec:CrowdLawSpec, pinned = false):CrowdLaw | undefined {
-		return this.addLaw(spec, pinned);
+	/** A new character, in this collective. Its kit is its spec's, or the director's default. */
+	addCharacter(spec:CharacterSpec<TCtx>):Character<TCtx> {
+		return this.host.addCharacter(spec, this);
 	}
 
-	removeCrowdLaw(name:string):void {
-		this.removeLaw(name);
+	/** Remove one of its characters for good, as `ArcDirector.removeCharacter` does. */
+	removeCharacter(id:string):void {
+		if (!this.character(id)) {
+			throw new Error(`ArcDirector: no '${id}' in '${this.id}'`);
+		}
+		this.host.removeCharacter(id);
 	}
 
-	tagUnits(units:CrowdUnit[], short:string):void {
+	/** @internal The commander left: drop the post, stop the think it was the voice for, and tell the host. */
+	vacate(character:Character<TCtx>):void {
+		if (this.chief !== character) {
+			return;
+		}
+		this.chief = null;
+		this.mind.abortThink();
+		this.onCommanderVacant?.(character);
+	}
+
+	override lawsTakeWho():boolean {
+		return true;
+	}
+
+	/** Own law names hold no `.`; `Tom.flee` is Tom's, and Tom must be here. */
+	protected override lawNameOK(name:string):boolean {
+		const group = lawGroup(name);
+		return group === '' || this.character(group) !== undefined;
+	}
+
+	/**
+	 * The laws that may reach `member`: the collective's own (when `matches` says their `who` names it), then its
+	 * own `member.name` laws. Ranks follow that order, so the collective's own laws outrank a member's.
+	 */
+	lawHandlersFor(member:Character<TCtx>, matches:(law:Law)=>boolean):ArcHandler[] {
+		const out:ArcHandler[] = [];
+		this.laws
+			.filter((law) => [ '', member.id ].includes(lawGroup(law.name)))
+			.forEach((law, rank) => {
+				if (lawGroup(law.name) !== '' || matches(law)) {
+					out.push({ source: law, watch: law.watch, arc: law.arc, rank });
+				}
+			});
+		return out;
+	}
+
+	tagCharacters(characters:readonly Character<TCtx>[], short:string):void {
 		const stored = squadTag(this.id, short);
-		for (const unit of units) {
-			if (!unit.tags.includes(stored)) {
-				unit.tags = [...unit.tags, stored];
+		for (const character of characters) {
+			if (!character.tags.includes(stored)) {
+				character.tags = [...character.tags, stored];
 			}
 		}
 	}
 
-	untagUnits(units:CrowdUnit[], short:string):void {
+	untagCharacters(characters:readonly Character<TCtx>[], short:string):void {
 		const stored = squadTag(this.id, short);
-		for (const unit of units) {
-			unit.tags = unit.tags.filter((t) => t !== stored);
+		for (const character of characters) {
+			character.tags = character.tags.filter((t) => t !== stored);
 		}
 	}
 
@@ -140,190 +162,69 @@ export class CrowdConductor<TAgentCtx = unknown> extends Agent<TAgentCtx> {
 		return shortTag(this.id, stored);
 	}
 
-	issueUnits(units:CrowdUnit[], arc:Arc):void {
-		const troops = this.commanderID
-			? units.filter((u) => u.id !== this.commanderID)
-			: units;
-		for (const unit of troops) {
-			unit.interrupt();
-			void this.spawnUnitArc(unit, arc);
-		}
-	}
-
-	async enactUnit(unit:CrowdUnit, arc:Arc):Promise<ArcResult> {
-		unit.interrupt();
-		return this.spawnUnitArc(unit, arc);
-	}
-
-	beginHandler(unit:CrowdUnit, handler:ArcHandler, sessionOpts?:ArcSessionOpts):void {
-		if (unit.inflight && unit.session) {
-			unit.session.pending = { kind: 'preempt', handler };
-			unit.session.token += 1;
-			this.abortArc?.(unit.id);
-			return;
-		}
-		void this.spawnUnitArc(unit, handler.arc, handler, sessionOpts);
-	}
-
-	private spawnUnitArc(
-		unit:CrowdUnit,
-		arc:Arc,
-		handler?:ArcHandler,
-		sessionOpts?:ArcSessionOpts,
-	):Promise<ArcResult> {
-		unit.arc = arc;
-		unit.lawName = handler?.key.startsWith('law:') ? handler.key.slice(4) : null;
-		unit.verb = firstStep(arc)?.verb ?? '';
-		const session = createArcSession({
-			...sessionOpts,
-			now: sessionOpts?.now ?? (() => this.now),
-			abortHost: sessionOpts?.abortHost ?? (() => this.abortArc?.(unit.id)),
-		});
-		unit.session = session;
-		unit.stepToken = session.token;
-		const gen = unit.generation;
-		const run = this.runUnitArc(unit, arc, gen, session, handler);
-		unit.inflight = run.then(() => undefined).finally(() => {
-			if (unit.generation === gen) {
-				unit.inflight = null;
-				if (session.parked) {
-					return;
-				}
-				if (unit.arc === arc) {
-					unit.arc = null;
-					unit.verb = '';
-					unit.lawName = null;
-				}
-				if (unit.session === session) {
-					unit.session = null;
-				}
+	/** Give each of `characters` but the commander `arc` as its program, replacing what it ran. */
+	issue(characters:readonly Character<TCtx>[], arc:Arc):void {
+		for (const character of characters) {
+			if (character !== this.chief) {
+				void character.enact(arc);
 			}
-		});
-		return run;
+		}
 	}
 
-	private async runUnitArc(
-		unit:CrowdUnit,
-		arc:Arc,
-		gen:number,
-		session:ArcSession,
-		handler?:ArcHandler,
-	):Promise<ArcResult> {
-		return runArc(arc, async (step) => {
-			if (unit.generation !== gen) {
-				return { ok: false, interrupted: true, verb: step.verb };
-			}
-			if (unit.stepToken !== session.token) {
-				return { ok: false, preempted: true, verb: step.verb };
-			}
-			unit.verb = step.verb;
-			const result = await this.performUnitStep(unit, step);
-			if (unit.generation !== gen) {
-				return { ok: false, interrupted: true, verb: step.verb, reason: result.reason };
-			}
-			if (unit.stepToken !== session.token || (result.interrupted && session.pending)) {
-				return { ok: false, preempted: true, interrupted: false, verb: step.verb, reason: result.reason };
-			}
-			return result;
-		}, { session, asHandler: handler });
-	}
-
-	private async performUnitStep(unit:CrowdUnit, step:Step):Promise<ArcResult> {
-		if (isFormationVerb(step.verb)) {
-			return { ok: false, verb: step.verb, reason: 'formation must be issue arc head' };
-		}
-		if (!this.execute) {
-			return { ok: false, verb: step.verb, reason: `host has no executor for ${step.verb}` };
-		}
-		if (step.verb === 'remember') {
-			const content = String(step.args.content ?? '');
-			const tags = Array.isArray(step.args.tags)
-				? step.args.tags.filter((x):x is string => typeof x === 'string')
-				: [];
-			await this.remember(content, [...tags, `unit:${unit.id}`], this.lastTacticalTimestamp);
-			return { ok: true, verb: 'remember' };
-		}
-		if (step.verb === 'set_goal') {
-			const goal = String(step.args.goal ?? '');
-			const priority = typeof step.args.priority === 'number' ? step.args.priority : 0;
-			this.goals.push({ text: `[${unit.id}] ${goal}`, priority });
-			this.trimGoals();
-			return { ok: true, verb: 'set_goal' };
-		}
-		if (step.verb === 'say' && this.talk) {
-			const text = String(step.args.text ?? '');
-			const to = this.sayToOf(step.args);
-			return this.talk.say(unit.id, text, to, this.now);
-		}
-		return this.execute(step, this.context(), unit.id);
-	}
-
-	protected override extraVolatile():string {
+	/** The roster, the laws, and the programs the characters run, for the mind's prompt. */
+	promptSection(mind:Mind<TCtx>):string {
 		const parts:string[] = [];
-		const roster = this.crowd.list();
-		if (roster.length > 0) {
-			const lines = roster.map((unit) => {
-				const tags = unit.tags.map((t) => this.shortOf(t)).filter((t) => t.length > 0);
-				const you = unit.id === this.commanderID ? ' (you)' : '';
-				return tags.length > 0
-					? `- ${this.nameOf(unit.id)}: ${tags.join(', ')}${you}`
-					: `- ${this.nameOf(unit.id)}${you}`;
+		if (this.members.length > 0) {
+			const lines = this.members.map((character) => {
+				const tags = character.tags.map((t) => this.shortOf(t)).filter((t) => t.length > 0);
+				const lacks = this.lacking(character);
+				const notes = [
+					character === this.chief ? 'you' : '',
+					lacks.length > 0 ? `cannot ${lacks.join(', ')}` : '',
+				].filter(Boolean);
+				const name = mind.nameOf(character.id);
+				const note = notes.length > 0 ? ` (${notes.join('; ')})` : '';
+				return tags.length > 0 ? `- ${name}: ${tags.join(', ')}${note}` : `- ${name}${note}`;
 			});
-			parts.push(
-				`Units (issue who=units.filter("Tag") is this roster; allUnits is every troop, one program):\n${lines.join('\n')}`,
-			);
+			parts.push(`Units (issue who=units.filter("Tag") is this roster; allUnits is every troop, one program):\n${lines.join('\n')}`);
 		}
-		if (this.laws.length > 0) {
-			const lines = this.laws.map((law) => (
-				`- ${law.name}: who=${law.who} watch=${law.watch} → ${formatArc(law.arc, this.verbs.nested())}`
-			));
-			parts.push(`Laws (emergencies, list order; unlaw to drop):\n${lines.join('\n')}`);
+		const laws = mind.lawsSection();
+		if (laws) {
+			parts.push(laws);
 		}
 		const groups = new Map<string, string[]>();
-		for (const unit of this.crowd.list()) {
-			if (unit.id === this.commanderID || !unit.busy || !unit.arc) {
+		for (const character of this.members) {
+			if (character === this.chief || !character.busy || !character.arc) {
 				continue;
 			}
-			const key = formatArc(unit.arc, this.verbs.nested());
-			const ids = groups.get(key) ?? [];
-			ids.push(this.nameOf(unit.id));
-			groups.set(key, ids);
+			const key = mind.namedArc(character.arc);
+			groups.set(key, [...groups.get(key) ?? [], mind.nameOf(character.id)]);
 		}
 		if (groups.size > 0) {
-			const lines = [...groups].map(([arc, ids]) => `- ${ids.join(', ')}: ${arc}`);
+			const lines = [...groups].map(([arc, names]) => `- ${names.join(', ')}: ${arc}`);
 			parts.push(`Unit programs:\n${lines.join('\n')}`);
 		}
 		return parts.join('\n');
 	}
 
-	override toJSON():CrowdConductorJSON {
+	/** Verbs of this collective's kit a character cannot run with its own. Its voice's verbs do not count. */
+	private lacking(character:Character<TCtx>):string[] {
+		const own = character.activeVerbs();
+		return this.refreshKit().verbs.filter((verb) => !VOICE_VERBS.has(verb) && !own.has(verb));
+	}
+
+	override toJSON():CollectiveJSON {
 		return {
 			...super.toJSON(),
-			crowd: this.crowd.toJSON(),
-			commanderID: this.commanderID,
+			persona: this.persona.toJSON(),
+			mind: this.mind.toJSON(),
+			characters: this.members.map((c) => c.id),
+			commander: this.chief?.id,
 		};
 	}
 
-	static override fromJSON<TAgentCtx>(json:CrowdConductorJSON, deps:AgentDeps<TAgentCtx>):CrowdConductor<TAgentCtx> {
-		const conductor = new CrowdConductor<TAgentCtx>({
-			...deps,
-			id: json.id,
-			identity: json.identity,
-			goals: json.goals,
-			memory: MemoryStore.fromJSON(json.memories),
-			maxLaws: json.maxLaws,
-			cooldown: json.cooldown ?? deps.cooldown,
-			defaultLawWho: 'units',
-		});
-		conductor.loadJSON(json, deps);
-		if (json.crowd) {
-			for (const row of json.crowd) {
-				conductor.crowd.add(CrowdUnit.fromJSON(row));
-			}
-		}
-		if (json.commanderID) {
-			conductor.commanderID = json.commanderID;
-		}
-		return conductor;
+	/** @internal A saved collective's runner part. Its persona, mind and characters are rebuilt by the director. */
+	load(json:CollectiveJSON):void {
+		this.loadJSON(json);
 	}
 }

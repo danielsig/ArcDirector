@@ -13,7 +13,7 @@ export type EncyclopediaEntry = {
 	aliases?:string[];
 	text:string;
 	/**
-	 * A thing a body carries. When the article comes up for being said or heard, it also says whether this
+	 * A thing a character carries. When the article comes up for being said or heard, it also says whether this
 	 * mind carries one, so talk ("take this FireMushroom") sits next to the truth.
 	 */
 	item?:boolean;
@@ -27,9 +27,9 @@ export type CrowdEncyclopediaSpec = {
 	unitName?:string;
 };
 
-export type EncyclopediaSource<TAgentCtx = unknown> =
+export type EncyclopediaSource<TCtx = unknown> =
 	| readonly EncyclopediaEntry[]
-	| ((ctx:TAgentCtx)=>readonly EncyclopediaEntry[]);
+	| ((ctx:TCtx)=>readonly EncyclopediaEntry[]);
 
 const HIT_CAP = 8;
 const INDEX_CAP = 48;
@@ -86,9 +86,9 @@ export function mentionedArticles(entries:readonly EncyclopediaEntry[], text:str
 		.map((row) => row.entry);
 }
 
-export function encyclopediaPages<TAgentCtx>(
-	src:EncyclopediaSource<TAgentCtx> | undefined,
-	ctx:TAgentCtx | undefined,
+export function encyclopediaPages<TCtx>(
+	src:EncyclopediaSource<TCtx> | undefined,
+	ctx:TCtx | undefined,
 ):EncyclopediaEntry[] {
 	if (!src) {
 		return [];

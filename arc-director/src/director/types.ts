@@ -1,55 +1,49 @@
 import type { ArcResult } from '../arc/types.js';
 import type { STOCK_VERB_DEFS, VerbArgMap } from '../arc/stock-verbs.js';
 import type { Arc } from '../arc/types.js';
-import type { STOCK_CROWD_VERB_DEFS } from '../conductor/conductor-verbs.js';
-import type { Actor } from '../agent/actor.js';
-import type { NameTarget } from '../agent/names.js';
-import type { AgentIdentity, Goal, KitSource, WatchInput } from '../agent/types.js';
-import type { MemoryDraft } from '../memory/store.js';
+import type { STOCK_COLLECTIVE_VERB_DEFS } from '../collective/verbs.js';
+import type { Character } from '../character/character.js';
+import type { NameTarget } from '../character/names.js';
+import type { PersonaSpec } from '../character/persona.js';
+import type { KitSource } from '../character/types.js';
+import type { LawSpec } from '../arc/laws.js';
+import type { MindSettings } from '../mind/mind.js';
 import type { HostKernels } from '../expr/natives.js';
 import type { SampleCache } from '../expr/types.js';
 import type { Vec } from '../world/types.js';
 
-/** Argument to `ArcDirector.addActor`: a body the host drives with arcs. It never calls the model. */
-export type ActorSpec<TAgentCtx = unknown> = {
+/** What both a character and a collective spec hold: an id, a kit, laws, and the persona fields. */
+type RunnerSpec<TCtx> = PersonaSpec & {
 	id:string;
 	/**
-	 * Fetched every tick, so the host can mutate it in place. Omit = director `withDefaultKit`, else no verbs.
-	 * `senses` / `tools` omitted on the kit = all registered ones.
+	 * Fetched every tick, so the host can mutate it in place. Omit = director `withDefaultKit`; with neither,
+	 * `start()` throws. `senses` / `tools` omitted on the kit = all registered ones.
 	 */
-	kit?:KitSource<TAgentCtx>;
-	laws?:{
-		name?:string;
-		who?:string;
-		watch:string;
-		arc:import('../arc/types.js').Arc | string;
-		pinned?:boolean;
-	}[];
+	kit?:KitSource<TCtx>;
+	laws?:LawSpec[];
 	maxLaws?:number;
 	/** Override director handler cooldown (game seconds). */
 	cooldown?:number;
 };
 
-/** Argument to `ArcDirector.addAgent`: a body with a mind. */
-export type AgentSpec<TAgentCtx = unknown> = ActorSpec<TAgentCtx> & {
-	identity:AgentIdentity;
-	goals?:Goal[];
-	memories?:MemoryDraft[];
-	watches?:WatchInput;
-	pinnedWatches?:WatchInput;
-	watchesWritable?:boolean;
-	pinnedSightFocus?:string[];
-	sightFocus?:string[];
-	sightFocusWritable?:boolean;
-	maxSightFocus?:number;
-	sightLimit?:number;
-	skipHeartbeat?:boolean;
-	skipMajor?:boolean;
-	/** Tie-break after watch `rankScore`. Higher goes first. Default 0. */
-	rank?:number;
-	/** Bulk spawn for `addCrowdConductor`. */
-	units?:{ id:string; tags?:string[] }[];
-	/** Host-set commander body. Must be a unit on this crowd. */
+/** Argument to `ArcDirector.addCharacter` and `Collective.addCharacter`. */
+export type CharacterSpec<TCtx = unknown> = RunnerSpec<TCtx> & {
+	/** Plain tags. A collective's `tag` adds its own, prefixed, on top. */
+	tags?:string[];
+	/**
+	 * Give it a mind of its own, with these settings (`{}` for the defaults). Omit for a character the host
+	 * drives. In a collective it thinks with the collective's mind, and gets its own when it leaves.
+	 */
+	mind?:MindSettings;
+};
+
+/** Argument to `ArcDirector.addCollective`: characters sharing one mind. */
+export type CollectiveSpec<TCtx = unknown> = RunnerSpec<TCtx> & {
+	/** Settings for its mind. A collective always has one. */
+	mind?:MindSettings;
+	/** Its characters. Each runs steps with its own kit, or the director's default. */
+	characters?:CharacterSpec<TCtx>[];
+	/** The character the mind acts through. Omit for a collective without one, like a market hive. */
 	commander?:string;
 };
 
@@ -65,41 +59,41 @@ export type VerbArgs<TArgMap> = {
 	[K in keyof TArgMap as TArgMap[K] extends `${string}?` ? K : never]?:ArgValue<TArgMap[K]>;
 };
 
-type StockDefs = typeof STOCK_VERB_DEFS & typeof STOCK_CROWD_VERB_DEFS;
+type StockDefs = typeof STOCK_VERB_DEFS & typeof STOCK_COLLECTIVE_VERB_DEFS;
 
-/** Stock and stock crowd verbs, whose args the library already declares. */
+/** Stock and stock collective verbs, whose args the library already declares. */
 export type StockVerbName = keyof StockDefs;
 
 /** Arg map of a stock verb. */
 export type StockVerbArgs<TVerb extends StockVerbName> = StockDefs[TVerb] extends { args:infer TArgMap extends VerbArgMap } ? TArgMap : Record<never, never>;
 
-export type VerbCall<TAgentCtx = unknown, TArgs = Record<string, unknown>> = {
+export type VerbCall<TCtx = unknown, TArgs = Record<string, unknown>> = {
 	verb:string;
 	/** Checked against the verb's arg map before the handler runs. */
 	args:TArgs;
-	/** Who runs the arc: an `Agent`, or a host-driven `Actor`. Its names are the ones in `args`. */
-	actor:Actor<TAgentCtx>;
-	ctx:TAgentCtx;
-	actorID:string;
+	/** The character running the step. */
+	character:Character<TCtx>;
+	ctx:TCtx;
+	/** For a formation at the head of `issue`: the characters it lines up. */
 	units?:string[];
-	/** How well a `watch` arg fits right now, 0–1, or as if this body stood at `point`. Missing arg: 0. */
+	/** How well a `watch` arg fits right now, 0–1, or as if this character stood at `point`. Missing arg: 0. */
 	score(arg:keyof TArgs & string, point?:Vec):number;
 	/** `score(arg, point) > 0`. */
 	holds(arg:keyof TArgs & string, point?:Vec):boolean;
-	/** Move this body until in reach of `target` (`within`, default `withWorld` `getReach`), following it as it moves. */
+	/** Move this character until in reach of `target` (`within`, default `withWorld` `getReach`), following it as it moves. */
 	goTo(target:string, within?:number):Promise<ArcResult>;
-	/** Move this body to a point. */
+	/** Move this character to a point. */
 	goToPoint(point:Vec, within?:number):Promise<ArcResult>;
 	/** Let game time pass. Ends early, interrupted, when the step is aborted. */
 	wait(seconds:number):Promise<ArcResult>;
 };
 
-export type VerbHandler<TAgentCtx = unknown, TArgs = Record<string, unknown>> = (
-	call:VerbCall<TAgentCtx, TArgs>,
+export type VerbHandler<TCtx = unknown, TArgs = Record<string, unknown>> = (
+	call:VerbCall<TCtx, TArgs>,
 )=>ArcResult | Promise<ArcResult>;
 
 /** Runs before every host verb. A result refuses the step; `undefined` lets it run. */
-export type VerbGate<TAgentCtx = unknown> = (call:VerbCall<TAgentCtx>)=>ArcResult | undefined;
+export type VerbGate<TCtx = unknown> = (call:VerbCall<TCtx>)=>ArcResult | undefined;
 
 export type DirectorLog = {
 	name:string;
@@ -109,11 +103,11 @@ export type DirectorLog = {
 	error?:boolean;
 };
 
-/** What a naming policy knows about the agent doing the naming. `ctx` is undefined for a bodiless hive. */
-export type NameObserver<TAgentCtx = unknown> = { id:string; ctx:TAgentCtx | undefined };
+/** What a naming policy knows about the mind doing the naming: its owner's id, and its voice's context (none for a collective with no commander). */
+export type NameObserver<TCtx = unknown> = { id:string; ctx:TCtx | undefined };
 
 /** Base name `observer` gives `target`. Return `target.id` to name it as itself. */
-export type SeenName<TAgentCtx = unknown> = (observer:NameObserver<TAgentCtx>, target:NameTarget)=>string;
+export type SeenName<TCtx = unknown> = (observer:NameObserver<TCtx>, target:NameTarget)=>string;
 
 /** Argument to `ArcDirector.start`. */
 export type StartOpts = {
@@ -130,7 +124,7 @@ export type InferClock = {
 	lastContextMs:number | null;
 	lastGenerateMs:number | null;
 	lastWallMs:number | null;
-	/** Generate milliseconds keyed by agent id. */
+	/** Generate milliseconds keyed by mind id. */
 	thinkMs:Record<string, number>;
 };
 
@@ -152,10 +146,10 @@ export function emptyInferClock():InferClock {
 type WorldMeasures = 'point' | 'distance' | 'pathDistance' | 'facing' | 'side' | 'isFacing';
 
 /**
- * Host measurements for watches. `point` is set when a verb asks what if the body stood there: answer as if it
+ * Host measurements for watches. `point` is set when a verb asks what if the character stood there: answer as if it
  * did. Director injects `cache`, `hasHeard`, `prev`, and the geometry from `withWorld`; do not commit `cache`.
  */
-export type KernelSource<TAgentCtx> = (
-	ctx:TAgentCtx,
+export type KernelSource<TCtx> = (
+	ctx:TCtx,
 	point?:Vec,
 )=>Omit<HostKernels, 'cache' | WorldMeasures> & { cache?:SampleCache };

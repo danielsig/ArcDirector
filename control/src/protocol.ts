@@ -18,21 +18,37 @@ export type AiLogQuery = {
 };
 
 export type Command =
-	| { op:'listActors' }
-	| { op:'runVerb'; actor:string; arc:string }
+	| { op:'listCharacters' }
+	| { op:'runVerb'; character:string; arc:string }
 	| { op:'getPrefs' }
 	| { op:'setPref'; patch:Record<string, unknown>; persist?:boolean }
-	| { op:'think'; actor:string; about?:string; enact?:boolean }
+	/** `id` is a character (it thinks with its own mind, or its collective's) or a collective. */
+	| { op:'think'; id:string; about?:string; enact?:boolean }
+	/** Move `character` into `collective`, or out of any with `null`. */
+	| { op:'setCollective'; character:string; collective:string | null }
 	| ({ op:'readAiLog' } & AiLogQuery)
 	| { op:'saveGame' }
 	| { op:'loadGame' };
 
-/** `actor` is a body the host drives (the Player): no mind, it only runs arcs it is given. */
-export type ActorRow = {
+/** Who thinks for a character: its own mind, its collective's, or none when the host drives it (the Player). */
+export type CharacterRow = {
 	id:string;
-	kind:'agent' | 'unit' | 'actor';
-	conductor?:string;
+	mind:'own' | 'collective' | 'none';
+	collective?:string;
 	tags?:string[];
+};
+
+/** Characters sharing one mind. Its `commander` acts for it; without one it is bodiless. */
+export type CollectiveRow = {
+	id:string;
+	commander?:string;
+	characters:string[];
+};
+
+/** What `listCharacters` answers. */
+export type CastRows = {
+	characters:CharacterRow[];
+	collectives:CollectiveRow[];
 };
 
 /** A command result that means "this page is about to reload": the hub answers once the page says hello again. */

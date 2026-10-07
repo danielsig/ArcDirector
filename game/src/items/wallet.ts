@@ -49,8 +49,8 @@ export function findSaleItem(seller:GameObject, name:string):ItemInstance | null
 		?? findCarried(seller, (it) => itemMatchesName(it, name));
 }
 
-export function noteWant(actor:GameObject, itemName:string):boolean {
-	const npc = actor.getComponent(MarketNPC);
+export function noteWant(character:GameObject, itemName:string):boolean {
+	const npc = character.getComponent(MarketNPC);
 	if (!npc) {
 		return false;
 	}

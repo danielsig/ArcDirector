@@ -1,11 +1,12 @@
 import {
-	Agent,
 	FakeProvider,
 	HttpProvider,
+	STOCK_VERBS,
 	VerbRegistry,
 	formatArc,
 	goToNamedInteractable,
 	registerStockVerbs,
+	soloCharacter,
 	type Arc,
 	type InferenceProvider,
 	type Sense,
@@ -85,12 +86,13 @@ async function main():Promise<void> {
 	let pass = 0;
 	const failures:string[] = [];
 	for (let i = 0; i < RUNS; i++) {
-		const agent = new Agent<FixtureCtx>({
+		const guard = soloCharacter<FixtureCtx>({
 			id: 'Guard',
 			identity: { role: 'Guard' },
 			goals: [{ text: 'Go to EastGate', priority: 1 }],
 			provider,
 			verbs: registerStockVerbs(new VerbRegistry()),
+			kit: { verbs: STOCK_VERBS },
 			...perception(),
 			context: () => ({ paragraph }),
 			model,
@@ -99,13 +101,14 @@ async function main():Promise<void> {
 			toolRoundCap: 2,
 			arcRetryCap: 2,
 		});
-		agent.memory.add({
+		guard.persona.memory.add({
 			text: 'I am a dungeon guard. When I see a named interactable such as EastGate, I go to it with go_to. Never emit coordinates.',
 			pinned: true,
 		}, 0);
-		await agent.remember('EastGate is the door in the east wall.', ['gate', 'EastGate'], 0);
+		const mind = guard.mind!;
+		await mind.remember('EastGate is the door in the east wall.', ['gate', 'EastGate'], 0);
 		try {
-			const arc = await agent.tick(1);
+			const arc = await mind.tick(1);
 			if (!arc) {
 				failures.push(`#${i + 1}: no arc`);
 				continue;

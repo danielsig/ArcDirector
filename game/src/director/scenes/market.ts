@@ -1,12 +1,12 @@
-import { pascalCase, STOCK_CROWD_VERBS, ArcDirector } from 'arc-director';
+import { pascalCase, STOCK_COLLECTIVE_VERBS, ArcDirector } from 'arc-director';
 import { MarketNPC, MarketGate, Merchant, Wanted } from '../../engine/components';
 import type { GameObject } from '../../engine/GameObject';
-import { NPCInput } from '../../actors/NPCInput';
+import { NPCInput } from '../../characters/NPCInput';
 import { compactName, distXZ, findCarried, itemMatchesName, tryInsert } from '../../items/inventory';
 import { dropItem, USE_RANGE } from '../../items/pickup';
-import type { GameHost, AgentCtx } from '../adapter';
+import type { GameHost, CharacterCtx } from '../adapter';
 import { customerCount, spawnRandomCustomer, MARKET_SEEDS, HIVE_UNITS } from '../market';
-import { bodyName, findBody } from '../names';
+import { idOf, findObject } from '../names';
 import { takeSome } from '../items';
 import { reportTheft, addStealVerb, GAME_VERBS } from '../verbs';
 import { showSpeech } from '../playerTalk';
@@ -23,25 +23,23 @@ function stallOwner(host:GameHost, itemName:string):GameObject | undefined {
 	return owner;
 }
 
-function afterPickUp(host:GameHost, actor:GameObject, name:string):void {
-	if (actor.getComponent(MarketNPC)?.kind === 'guard') {
+function afterPickUp(host:GameHost, character:GameObject, name:string):void {
+	if (character.getComponent(MarketNPC)?.kind === 'guard') {
 		return;
 	}
 	const owner = stallOwner(host, name);
 	if (!owner) {
 		return;
 	}
-	if (bodyName(actor) === bodyName(owner)) {
+	if (idOf(character) === idOf(owner)) {
 		return;
 	}
-	reportTheft(host, actor, name, bodyName(owner), 'took unpaid stall goods');
+	reportTheft(host, character, name, idOf(owner), 'took unpaid stall goods');
 }
 
 function despawn(host:GameHost, go:GameObject):void {
-	const id = bodyName(go);
-	host.talk.detach(id);
-	host.arc?.removeCrowdUnit('MarketHive', id);
-	host.arc?.removeAgent(id);
+	const id = idOf(go);
+	host.arc?.removeCharacter(id);
 	host.world.remove(go);
 	host.arc?.pushEvent({
 		kind: 'Left',
@@ -64,7 +62,7 @@ function catchThief(host:GameHost, guard:GameObject, thief:GameObject):void {
 			continue;
 		}
 		const gift = takeSome(thief, stock);
-		const owner = (mark.fromID ? findBody(host.world, mark.fromID) : undefined) ?? stallOwner(host, gift.name);
+		const owner = (mark.fromID ? findObject(host.world, mark.fromID) : undefined) ?? stallOwner(host, gift.name);
 		if (owner && owner !== guard && tryInsert(owner, gift)) {
 			seized.push(pascalCase(gift.name) || gift.name);
 			continue;
@@ -77,8 +75,8 @@ function catchThief(host:GameHost, guard:GameObject, thief:GameObject):void {
 	mark.enabled = false;
 	mark.items = [];
 	mark.reason = '';
-	const who = bodyName(thief);
-	const watch = bodyName(guard);
+	const who = idOf(thief);
+	const watch = idOf(guard);
 	const loot = seized.length > 0 ? seized.join(' and ') : 'the goods';
 	showSpeech(host, guard, `That's stolen. ${loot} goes back.`);
 	host.arc?.pushEvent({
@@ -133,7 +131,7 @@ function tickMarketNPC(host:GameHost):void {
 			if (go.getComponent(Wanted)?.enabled) {
 				return;
 			}
-			if (npc.leaveGate && bodyName(gate) !== npc.leaveGate) {
+			if (npc.leaveGate && idOf(gate) !== npc.leaveGate) {
 				return;
 			}
 			if (distXZ(go, gate) <= USE_RANGE) {
@@ -168,24 +166,23 @@ function tickMarketNPC(host:GameHost):void {
 	if (!host.arc?.ready) {
 		return;
 	}
-	host.arc.addCrowdUnit('MarketHive', { id: spawned.id, tags: spawned.tags });
+	host.arc.collective('MarketHive')?.addCharacter({ id: spawned.id, tags: spawned.tags });
 	spawned.go.getComponent(NPCInput)!.aiOn = true;
 }
 
-export function createDirector(host:GameHost):ArcDirector<AgentCtx> {
+export function createDirector(host:GameHost):ArcDirector<CharacterCtx> {
 	host.hooks = {
 		allowTheft: true,
 		afterPickUp,
 		tickMarketNPC,
 	};
 	host.kit = { verbs: [...GAME_VERBS, 'buy', 'sell', 'steal'] };
-	const hiveKit = { verbs: [...GAME_VERBS, ...STOCK_CROWD_VERBS, 'buy', 'steal'] };
-	const d = addStealVerb(host.configure(new ArcDirector<AgentCtx>()), host)
+	const hiveKit = { verbs: [...GAME_VERBS, ...STOCK_COLLECTIVE_VERBS, 'buy', 'steal'] };
+	const d = addStealVerb(host.configure(new ArcDirector<CharacterCtx>()), host)
 		.withSight({ limit: 16 })
 		.withDefaultKit(host.kit)
-		.addCrowdConductor({
+		.addCollective({
 			id: 'MarketHive',
-			skipHeartbeat: true,
 			kit: hiveKit,
 			identity: { role: 'Hive', traits: ['busy', 'fair', 'watchful'] },
 			goals: [{
@@ -193,7 +190,7 @@ export function createDirector(host:GameHost):ArcDirector<AgentCtx> {
 				priority: 2,
 			}],
 			memories: [{
-				text: 'I am the canal-market hive. I have no body. The upper square is above the steps; the quay and canal sit below. Shoppers are tagged Shopper plus what they came for (Loaf, Scarf, Bowl, Knife) and their leave gate (EastGate or WestGate). Guards are tagged Guard. Baker Weaver Potter Cutler keep stalls BakerStall WeaverStall PotterStall CutlerStall. Send idle shoppers to the stall that sells what they tagged, buy, then go_to their leave gate. Guards hold_line at their gate facing the street. Use issue(who, arc). Names, never coordinates.',
+				text: 'I am the canal-market hive. I am not a character in this scene. The upper square is above the steps; the quay and canal sit below. Shoppers are tagged Shopper plus what they came for (Loaf, Scarf, Bowl, Knife) and their leave gate (EastGate or WestGate). Guards are tagged Guard. Baker Weaver Potter Cutler keep stalls BakerStall WeaverStall PotterStall CutlerStall. Send idle shoppers to the stall that sells what they tagged, buy, then go_to their leave gate. Guards hold_line at their gate facing the street. Use issue(who, arc). Names, never coordinates.',
 				tags: ['backstory', 'market'],
 				pinned: true,
 			}],
@@ -202,7 +199,7 @@ export function createDirector(host:GameHost):ArcDirector<AgentCtx> {
 				idle: 'some(units.filter(u => !u.busy))',
 				theft: 'some(events.filter("theft"))',
 			},
-			units: HIVE_UNITS,
+			characters: HIVE_UNITS,
 			laws: [{
 				name: 'flee',
 				who: 'units.filter("Shopper")',
@@ -212,7 +209,7 @@ export function createDirector(host:GameHost):ArcDirector<AgentCtx> {
 			}],
 		});
 	for (const seed of MARKET_SEEDS) {
-		d.addAgent(seed);
+		d.addCharacter(seed);
 	}
 	return d;
 }

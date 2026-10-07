@@ -12,17 +12,17 @@ import { arcVerbs } from './score.js';
 export type ThinkReason = 'watch' | 'major' | 'verb' | 'heartbeat';
 
 export type ThinkRow = {
-	npcID:string;
+	mindID:string;
 	score:number;
 	reason:ThinkReason;
 };
 
 /** Keep a fixed interval (`false`, default), or stretch/shrink (`'auto'`), or return seconds. */
-export type HeartbeatAdjust = false | 'auto' | ((npcID:string, stalled:boolean)=>number);
+export type HeartbeatAdjust = false | 'auto' | ((mindID:string, stalled:boolean)=>number);
 
 /** Asked before a think starts while an arc may still be running. */
 export type MayThink = {
-	npcID:string;
+	mindID:string;
 	reason:ThinkReason;
 	score:number;
 	rankedScore:number;
@@ -70,40 +70,40 @@ export type MindQueueOpts = ThinkBatchOpts & {
 	mayThink?:(ctx:MayThink)=>boolean;
 };
 
-/** Interchangeable scheduler. Spread `withPriorityQueue` / `withSimpleQueue` into each `Agent`. */
+/** Interchangeable scheduler: the director keeps one, keyed by mind id. */
 export type MindQueue = {
 	maxParallel:number;
 	batchThinks:boolean | undefined;
 	batchWait:number | undefined;
 	mayThink:((ctx:MayThink)=>boolean) | undefined;
 	readonly inFlight:number;
-	isThinking(npcID:string):boolean;
+	isThinking(mindID:string):boolean;
 	/** A follow-up, watch, or heartbeat is waiting to start. */
-	hasPending(npcID:string):boolean;
-	arcOf(npcID:string):Arc | null;
-	beginThink(npcID:string):AbortSignal;
-	endThink(npcID:string, signal?:AbortSignal):void;
-	abortThink(npcID:string):void;
-	thinkSignal(npcID:string):AbortSignal | undefined;
-	beginArc(npcID:string, arc:Arc):void;
-	endArc(npcID:string):void;
+	hasPending(mindID:string):boolean;
+	arcOf(mindID:string):Arc | null;
+	beginThink(mindID:string):AbortSignal;
+	endThink(mindID:string, signal?:AbortSignal):void;
+	abortThink(mindID:string):void;
+	thinkSignal(mindID:string):AbortSignal | undefined;
+	beginArc(mindID:string, arc:Arc):void;
+	endArc(mindID:string):void;
 	allowThink(row:ThinkRow):boolean;
-	ensure(npcID:string, opts?:{ skipHeartbeat?:boolean; skipMajor?:boolean }):void;
-	setWatches(npcID:string, watches:string[]):void;
-	armOnce(npcID:string, expr:string):void;
-	clearOnce(npcID:string):void;
-	setAiOn(npcID:string, on:boolean):void;
-	lastMax(npcID:string):number;
-	scold(npcID:string):ScoldReason | undefined;
-	rankScore(npcID:string, raw:number):number;
-	heartbeatSeconds(npcID:string):number | null;
-	scoreWatches(npcID:string, catalog:Catalog | readonly Catalog[]):number;
-	enqueueMajor(npcID:string, force?:boolean):void;
-	enqueueVerb(npcID:string, verb:string, ok?:boolean):void;
-	enqueueArc(npcID:string, arc:Arc, ok?:boolean):void;
-	noteResult(npcID:string, stalled:boolean):void;
+	ensure(mindID:string, opts?:{ skipHeartbeat?:boolean; skipMajor?:boolean }):void;
+	setWatches(mindID:string, watches:string[]):void;
+	armOnce(mindID:string, expr:string):void;
+	clearOnce(mindID:string):void;
+	setAiOn(mindID:string, on:boolean):void;
+	lastMax(mindID:string):number;
+	scold(mindID:string):ScoldReason | undefined;
+	rankScore(mindID:string, raw:number):number;
+	heartbeatSeconds(mindID:string):number | null;
+	scoreWatches(mindID:string, catalog:Catalog | readonly Catalog[]):number;
+	enqueueMajor(mindID:string, force?:boolean):void;
+	enqueueVerb(mindID:string, verb:string, ok?:boolean):void;
+	enqueueArc(mindID:string, arc:Arc, ok?:boolean):void;
+	noteResult(mindID:string, stalled:boolean):void;
 	tick(dt:number, catalogs:Map<string, Catalog | readonly Catalog[]>):ThinkRow[];
-	drop(npcID:string):void;
+	drop(mindID:string):void;
 };
 
 export type WithMindQueue = {
@@ -169,59 +169,59 @@ export abstract class MindScheduler implements MindQueue {
 		return this.inflight.size;
 	}
 
-	isThinking(npcID:string):boolean {
-		return this.inflight.has(npcID);
+	isThinking(mindID:string):boolean {
+		return this.inflight.has(mindID);
 	}
 
-	hasPending(npcID:string):boolean {
-		return this.rows.some((row) => row.npcID === npcID);
+	hasPending(mindID:string):boolean {
+		return this.rows.some((row) => row.mindID === mindID);
 	}
 
-	arcOf(npcID:string):Arc | null {
-		return this.executing.get(npcID) ?? null;
+	arcOf(mindID:string):Arc | null {
+		return this.executing.get(mindID) ?? null;
 	}
 
-	beginThink(npcID:string):AbortSignal {
-		this.ensure(npcID);
-		this.clearOnce(npcID);
-		this.rows = this.rows.filter((r) => r.npcID !== npcID);
+	beginThink(mindID:string):AbortSignal {
+		this.ensure(mindID);
+		this.clearOnce(mindID);
+		this.rows = this.rows.filter((r) => r.mindID !== mindID);
 		const ac = new AbortController();
-		this.inflight.set(npcID, ac);
+		this.inflight.set(mindID, ac);
 		return ac.signal;
 	}
 
-	endThink(npcID:string, signal?:AbortSignal):void {
-		const ac = this.inflight.get(npcID);
+	endThink(mindID:string, signal?:AbortSignal):void {
+		const ac = this.inflight.get(mindID);
 		if (signal && ac && ac.signal !== signal) {
 			return;
 		}
-		this.inflight.delete(npcID);
+		this.inflight.delete(mindID);
 	}
 
-	abortThink(npcID:string):void {
-		this.inflight.get(npcID)?.abort();
+	abortThink(mindID:string):void {
+		this.inflight.get(mindID)?.abort();
 	}
 
-	thinkSignal(npcID:string):AbortSignal | undefined {
-		return this.inflight.get(npcID)?.signal;
+	thinkSignal(mindID:string):AbortSignal | undefined {
+		return this.inflight.get(mindID)?.signal;
 	}
 
-	beginArc(npcID:string, arc:Arc):void {
-		this.ensure(npcID);
-		this.executing.set(npcID, arc);
+	beginArc(mindID:string, arc:Arc):void {
+		this.ensure(mindID);
+		this.executing.set(mindID, arc);
 	}
 
-	endArc(npcID:string):void {
-		this.executing.delete(npcID);
+	endArc(mindID:string):void {
+		this.executing.delete(mindID);
 	}
 
 	allowThink(row:ThinkRow):boolean {
-		const arc = this.arcOf(row.npcID);
+		const arc = this.arcOf(row.mindID);
 		const ctx:MayThink = {
-			npcID: row.npcID,
+			mindID: row.mindID,
 			reason: row.reason,
 			score: row.score,
-			rankedScore: this.rankScore(row.npcID, row.score),
+			rankedScore: this.rankScore(row.mindID, row.score),
 			arc,
 			verbs: arc ? arcVerbs(arc) : [],
 		};
@@ -231,8 +231,8 @@ export abstract class MindScheduler implements MindQueue {
 		return true;
 	}
 
-	ensure(npcID:string, opts?:{ skipHeartbeat?:boolean; skipMajor?:boolean }):MindState {
-		let m = this.minds.get(npcID);
+	ensure(mindID:string, opts?:{ skipHeartbeat?:boolean; skipMajor?:boolean }):MindState {
+		let m = this.minds.get(mindID);
 		if (!m) {
 			m = {
 				watches: [],
@@ -246,9 +246,9 @@ export abstract class MindScheduler implements MindQueue {
 				aiOn: true,
 				seq: 0,
 			};
-			this.minds.set(npcID, m);
+			this.minds.set(mindID, m);
 			if (!m.skipHeartbeat) {
-				this.insert({ npcID, score: HEARTBEAT_SCORE, reason: 'heartbeat' });
+				this.insert({ mindID, score: HEARTBEAT_SCORE, reason: 'heartbeat' });
 			}
 		}
 		if (opts?.skipHeartbeat !== undefined) {
@@ -260,55 +260,55 @@ export abstract class MindScheduler implements MindQueue {
 		return m;
 	}
 
-	setWatches(npcID:string, watches:string[]):void {
-		this.ensure(npcID).watches = [...watches];
+	setWatches(mindID:string, watches:string[]):void {
+		this.ensure(mindID).watches = [...watches];
 	}
 
-	armOnce(npcID:string, expr:string):void {
+	armOnce(mindID:string, expr:string):void {
 		const text = expr.replace(/\s+/g, ' ').trim();
 		if (!text) {
 			return;
 		}
-		this.ensure(npcID).once = text;
+		this.ensure(mindID).once = text;
 	}
 
-	clearOnce(npcID:string):void {
-		const mind = this.minds.get(npcID);
+	clearOnce(mindID:string):void {
+		const mind = this.minds.get(mindID);
 		if (mind) {
 			mind.once = undefined;
 		}
 	}
 
-	setAiOn(npcID:string, on:boolean):void {
-		const mind = this.ensure(npcID);
+	setAiOn(mindID:string, on:boolean):void {
+		const mind = this.ensure(mindID);
 		mind.aiOn = on;
 		if (!on) {
 			mind.once = undefined;
-			this.rows = this.rows.filter((r) => r.npcID !== npcID);
-			this.abortThink(npcID);
+			this.rows = this.rows.filter((r) => r.mindID !== mindID);
+			this.abortThink(mindID);
 		}
 	}
 
-	lastMax(npcID:string):number {
-		return this.minds.get(npcID)?.lastMax ?? 0;
+	lastMax(mindID:string):number {
+		return this.minds.get(mindID)?.lastMax ?? 0;
 	}
 
-	scold(npcID:string):ScoldReason | undefined {
-		return this.minds.get(npcID)?.scold;
+	scold(mindID:string):ScoldReason | undefined {
+		return this.minds.get(mindID)?.scold;
 	}
 
-	abstract rankScore(npcID:string, raw:number):number;
+	abstract rankScore(mindID:string, raw:number):number;
 
-	heartbeatSeconds(npcID:string):number | null {
-		const mind = this.minds.get(npcID);
+	heartbeatSeconds(mindID:string):number | null {
+		const mind = this.minds.get(mindID);
 		if (mind?.skipHeartbeat) {
 			return null;
 		}
 		return mind?.heartbeat ?? this.heartbeatStart;
 	}
 
-	scoreWatches(npcID:string, catalog:Catalog | readonly Catalog[]):number {
-		const mind = this.ensure(npcID);
+	scoreWatches(mindID:string, catalog:Catalog | readonly Catalog[]):number {
+		const mind = this.ensure(mindID);
 		let max = 0;
 		let scold:ScoldReason | undefined;
 		const exprs = mind.once ? [...mind.watches, mind.once] : mind.watches;
@@ -333,35 +333,35 @@ export abstract class MindScheduler implements MindQueue {
 		return max;
 	}
 
-	sampleWatches(npcID:string, catalog:Catalog | readonly Catalog[]):void {
-		const mind = this.ensure(npcID);
+	sampleWatches(mindID:string, catalog:Catalog | readonly Catalog[]):void {
+		const mind = this.ensure(mindID);
 		if (!mind.aiOn) {
 			return;
 		}
-		const max = this.scoreWatches(npcID, catalog);
+		const max = this.scoreWatches(mindID, catalog);
 		if (max > this.epsilon) {
-			this.insert({ npcID, score: max, reason: 'watch' });
+			this.insert({ mindID, score: max, reason: 'watch' });
 		}
 	}
 
-	enqueueMajor(npcID:string, force = false):void {
-		const mind = this.ensure(npcID);
+	enqueueMajor(mindID:string, force = false):void {
+		const mind = this.ensure(mindID);
 		if (!mind.aiOn || (mind.skipMajor && !force)) {
 			return;
 		}
-		this.insert({ npcID, score: MAJOR_SCORE, reason: 'major' });
+		this.insert({ mindID, score: MAJOR_SCORE, reason: 'major' });
 	}
 
-	enqueueVerb(npcID:string, verb:string, ok = true):void {
-		this.enqueueScore(npcID, this.verbScore(verb, ok));
+	enqueueVerb(mindID:string, verb:string, ok = true):void {
+		this.enqueueScore(mindID, this.verbScore(verb, ok));
 	}
 
-	enqueueArc(npcID:string, arc:Arc, ok = true):void {
-		this.enqueueScore(npcID, this.arcScore(arc, ok));
+	enqueueArc(mindID:string, arc:Arc, ok = true):void {
+		this.enqueueScore(mindID, this.arcScore(arc, ok));
 	}
 
-	noteResult(npcID:string, stalled:boolean):void {
-		const mind = this.ensure(npcID);
+	noteResult(mindID:string, stalled:boolean):void {
+		const mind = this.ensure(mindID);
 		mind.thoughtOnce = true;
 		mind.sinceBeat = 0;
 		mind.sinceThought = 0;
@@ -369,7 +369,7 @@ export abstract class MindScheduler implements MindQueue {
 			return;
 		}
 		if (typeof this.heartbeatAdjust === 'function') {
-			mind.heartbeat = this.clampBeat(this.heartbeatAdjust(npcID, stalled));
+			mind.heartbeat = this.clampBeat(this.heartbeatAdjust(mindID, stalled));
 			return;
 		}
 		if (stalled) {
@@ -396,7 +396,7 @@ export abstract class MindScheduler implements MindQueue {
 				}
 				mind.sinceBeat += dt;
 				if (mind.sinceBeat >= mind.heartbeat) {
-					this.insert({ npcID: id, score: HEARTBEAT_SCORE, reason: 'heartbeat' });
+					this.insert({ mindID: id, score: HEARTBEAT_SCORE, reason: 'heartbeat' });
 					mind.sinceBeat = 0;
 				}
 			}
@@ -426,7 +426,7 @@ export abstract class MindScheduler implements MindQueue {
 		const picked:ThinkRow[] = [];
 		const leftover:ThinkRow[] = [];
 		for (const row of this.rows) {
-			if (picked.length >= slots || this.inflight.has(row.npcID) || !this.allowThink(row)) {
+			if (picked.length >= slots || this.inflight.has(row.mindID) || !this.allowThink(row)) {
 				leftover.push(row);
 				continue;
 			}
@@ -436,9 +436,9 @@ export abstract class MindScheduler implements MindQueue {
 		return picked;
 	}
 
-	drop(npcID:string):void {
-		this.abortThink(npcID);
-		this.rows = this.rows.filter((r) => r.npcID !== npcID);
+	drop(mindID:string):void {
+		this.abortThink(mindID);
+		this.rows = this.rows.filter((r) => r.mindID !== mindID);
 	}
 
 	protected abstract prune():void;
@@ -446,15 +446,15 @@ export abstract class MindScheduler implements MindQueue {
 	protected abstract verbScore(verb:string, ok:boolean):number;
 	protected abstract arcScore(arc:Arc, ok:boolean):number;
 
-	protected enqueueScore(npcID:string, score:number):void {
-		const mind = this.ensure(npcID);
+	protected enqueueScore(mindID:string, score:number):void {
+		const mind = this.ensure(mindID);
 		if (!mind.aiOn) {
 			return;
 		}
 		if (score <= this.epsilon) {
 			return;
 		}
-		this.insert({ npcID, score, reason: 'verb' });
+		this.insert({ mindID, score, reason: 'verb' });
 	}
 
 	protected insert(row:ThinkRow):void {

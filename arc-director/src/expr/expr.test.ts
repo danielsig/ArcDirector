@@ -472,7 +472,7 @@ describe('evaluate', () => {
 		assert.equal(bool('isHurt(me)', host), true);
 	});
 
-	it('isHurt reads snapshot hp on it when lookup has no body', () => {
+	it('isHurt reads snapshot hp on it when lookup finds nothing', () => {
 		const it = dummyEntity('Witch', {
 			tags: ['agent'],
 			fields: {

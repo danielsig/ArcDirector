@@ -2,7 +2,7 @@ import { DEFAULT_YOU_SYMBOL } from 'arc-director';
 
 /** Pictograms for NPC `see_map` stamps. Letters are too similar on a tiny map. */
 
-/** Self mark. Must match `map.you` on the agent. */
+/** Self mark. Must match `map.you` on the mind. */
 export const YOU_SYMBOL = DEFAULT_YOU_SYMBOL;
 
 const NAMED:Record<string, string> = {

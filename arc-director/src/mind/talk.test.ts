@@ -1,10 +1,10 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import type { AgentEvent } from './types.js';
+import type { MindEvent } from './types.js';
 import { TalkNet, type TalkMind } from './talk.js';
 
-function mind(id:string):TalkMind & { events:AgentEvent[] } {
-	const events:AgentEvent[] = [];
+function mind(id:string):TalkMind & { events:MindEvent[] } {
+	const events:MindEvent[] = [];
 	return {
 		id,
 		events,
@@ -130,7 +130,7 @@ describe('TalkNet', () => {
 		assert.equal(far.events.length, 0);
 	});
 
-	it('broadcasts to every nearby name, including mute bodies', () => {
+	it('broadcasts to every nearby name, including mute characters', () => {
 		const guard = mind('Guard');
 		const talk = net(new Set(['Acolyte:Guard', 'Acolyte:Player']), ['Guard', 'Player']);
 		talk.attach(guard);

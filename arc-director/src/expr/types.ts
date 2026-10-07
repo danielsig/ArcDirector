@@ -67,7 +67,7 @@ export type Catalog = {
 	me:ExprEntity;
 	cache:SampleCache;
 	stringifiers?:Stringifiers;
-	/** Override watch LIST_CAP. Crowd selectors use roster size. */
+	/** Override watch LIST_CAP. A collective's selectors use its roster size. */
 	listCap?:number;
 };
 

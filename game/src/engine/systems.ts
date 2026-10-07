@@ -3,7 +3,7 @@ import { ChunkStreamer, type Renderer } from '@arc-director/kindling';
 import { Order } from './order';
 import { patchHud, patchInfer, statusLabels } from './patchHud';
 import { syncHeldTorchLight } from '../items/heldLight';
-import type { GameHost } from '../npc/adapter';
+import type { GameHost } from '../director/adapter';
 import { WorldPresent } from '../render/present';
 import type { HudModel } from '../ui/hudModel';
 import type { Chunk } from '../world/Chunk';
