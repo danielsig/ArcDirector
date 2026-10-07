@@ -150,7 +150,7 @@ export abstract class MindScheduler implements MindQueue {
 	protected readonly executing = new Map<string, Arc>();
 	protected nextSeq = 1;
 
-	public constructor(opts:MindQueueOpts = {}) {
+	constructor(opts:MindQueueOpts = {}) {
 		this.trueScore = clampTrueScore(opts.trueScore ?? DEFAULT_TRUE_SCORE);
 		this.epsilon = opts.epsilon ?? DEFAULT_EPSILON;
 		this.watchInterval = opts.watchInterval ?? 0.25;

@@ -44,7 +44,7 @@ const PROGRESS = 0.98;
 export class Mover {
 	private readonly _errands = new Map<string, Errand>();
 
-	public constructor(
+	constructor(
 		private readonly _world:HostWorld<unknown> | undefined,
 		private readonly _now:()=>number,
 	) {}

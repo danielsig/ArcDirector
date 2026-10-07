@@ -141,8 +141,11 @@ const commonRules = {
 	// TypeScript
 	"@typescript-eslint/no-unused-vars": "off",
 	"@typescript-eslint/no-explicit-any": ["error", { "fixToUnknown": true }],
-	// Every class member says who may use it, constructors included.
-	"@typescript-eslint/explicit-member-accessibility": ["error", { "accessibility": "explicit" }],
+	// Every class member says who may use it. A constructor says so only when it is not public.
+	"@typescript-eslint/explicit-member-accessibility": ["error", {
+		"accessibility": "explicit",
+		"overrides": { "constructors": "no-public" },
+	}],
 	// Only a private field starts with `_` (`private _mind` behind `get mind()`). Which private members need it is
 	// checked in no-restricted-syntax below: this rule counts arrow-function fields as methods.
 	"@typescript-eslint/naming-convention": ["error",

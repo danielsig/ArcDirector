@@ -184,7 +184,7 @@ export class TalkNet {
 	private readonly _muffled = new Map<string, Muffled[]>();
 	public readonly config:TalkConfig;
 
-	public constructor(
+	constructor(
 		public readonly sense:TalkSense,
 		private readonly _onSpoke?:(utterance:SpeechUtterance)=>void,
 		config:Partial<TalkConfig> = {},

@@ -30,7 +30,7 @@ export class GameObject {
 
 	private readonly _comps:Component[] = [];
 
-	public constructor(id?:string, name?:string) {
+	constructor(id?:string, name?:string) {
 		this.id = id ?? allocID();
 		this.name = name ?? this.id;
 		this.transform = new Transform();

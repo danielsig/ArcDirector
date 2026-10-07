@@ -33,7 +33,7 @@ export class Chunk extends KindlingChunk<Tile> {
 	/** Cell-filling prop defs by cell. Filled on first query; decode pushes entities after `new Chunk`. */
 	private _props:(string | undefined)[] | null = null;
 
-	public constructor(id:string, origin:{ cx:number; cz:number }, tiles:Tile[], entities:ChunkEntity[]) {
+	constructor(id:string, origin:{ cx:number; cz:number }, tiles:Tile[], entities:ChunkEntity[]) {
 		super(id, origin, CHUNK_SIZE, CELL_SIZE, tiles);
 		this.entities = entities;
 	}

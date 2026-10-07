@@ -20,7 +20,7 @@ export class Game<W extends World = World> {
 	private _last = 0;
 	private _lastDraw = 0;
 
-	public constructor(world?:W) {
+	constructor(world?:W) {
 		this.world = world ?? (new World() as W);
 		this.renderer = canUseCanvas() ? new Renderer(this.world) : null;
 	}

@@ -12,7 +12,7 @@ export type ThinkQueueOpts = MindQueueOpts & {
 export class ThinkQueue extends MindScheduler {
 	public readonly verbScores:Record<string, number>;
 
-	public constructor(opts:ThinkQueueOpts = {}) {
+	constructor(opts:ThinkQueueOpts = {}) {
 		super(opts);
 		this.verbScores = { ...VERB_THINK_SCORES, ...opts.verbScores };
 	}

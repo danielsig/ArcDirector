@@ -31,7 +31,7 @@ class Grid {
 	public doorLocked = false;
 	public speed = 4;
 
-	public constructor(public readonly walls:Set<string> = new Set(), public readonly door?:string) {}
+	constructor(public readonly walls:Set<string> = new Set(), public readonly door?:string) {}
 
 	public place(id:string, point:Vec):this {
 		this.point.set(id, point);

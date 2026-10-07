@@ -79,7 +79,7 @@ export class Persona {
 	public maxSightFocus:number;
 	public sightLimit:number | undefined;
 
-	public constructor(spec:PersonaSpec = {}, memory = new MemoryStore()) {
+	constructor(spec:PersonaSpec = {}, memory = new MemoryStore()) {
 		this.identity = spec.identity
 			? { ...spec.identity, traits: spec.identity.traits ? [...spec.identity.traits] : undefined }
 			: {};

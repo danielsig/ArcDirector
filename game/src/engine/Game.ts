@@ -31,7 +31,7 @@ export class Game extends KindlingGame<World> {
 	private readonly _hud:HudModel;
 	private readonly _scene:SceneDef;
 
-	public constructor(hud:HudModel, sceneID = DEFAULT_SCENE_ID) {
+	constructor(hud:HudModel, sceneID = DEFAULT_SCENE_ID) {
 		super(new World());
 		const canvas = this.canvas;
 		if (!canvas) {

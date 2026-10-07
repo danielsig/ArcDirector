@@ -66,7 +66,7 @@ export class Collective<TCtx = unknown> extends ArcRunner<TCtx> {
 	private _commander:Character<TCtx> | null = null;
 	private readonly _host:CollectiveHost<TCtx>;
 
-	public constructor(opts:CollectiveOptions<TCtx>) {
+	constructor(opts:CollectiveOptions<TCtx>) {
 		super({ ...opts, defaultLawWho: opts.defaultLawWho ?? 'units' });
 		this.persona = opts.persona ?? new Persona();
 		this.mind = opts.mind ?? new Mind<TCtx>();

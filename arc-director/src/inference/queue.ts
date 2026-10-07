@@ -4,7 +4,7 @@ export class InferenceQueue {
 	private _active = 0;
 	private readonly _waiters:Array<()=>void> = [];
 
-	public constructor(public readonly maxInFlight = 2) {}
+	constructor(public readonly maxInFlight = 2) {}
 
 	public async run<T>(fn:()=>Promise<T>):Promise<T> {
 		await this.acquire();

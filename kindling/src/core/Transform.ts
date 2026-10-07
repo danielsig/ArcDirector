@@ -17,7 +17,7 @@ export type Vec3 = {
 };
 
 class WorldPosition implements Vec3 {
-	public constructor(private readonly _xf:Transform) {}
+	constructor(private readonly _xf:Transform) {}
 
 	public get x():number {
 		return this._xf.worldPositionVec(worldPos).x;
@@ -52,7 +52,7 @@ export class Transform extends Component {
 	public readonly object3D = new THREE.Object3D();
 	public readonly position:Vec3 = new WorldPosition(this);
 
-	public constructor() {
+	constructor() {
 		super();
 		this.object3D.matrixAutoUpdate = true;
 	}

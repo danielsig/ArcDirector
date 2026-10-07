@@ -1097,7 +1097,7 @@ export class HttpProvider implements InferenceProvider {
 	private _jitFirst:Promise<ChatResponse> | null = null;
 	private _jitModel = '';
 
-	public constructor(config:HttpProviderConfig = {}) {
+	constructor(config:HttpProviderConfig = {}) {
 		this.baseURL = (config.baseURL ?? defaultBaseURL()).replace(/\/+$/, '');
 		this.rootURL = serverRoot(this.baseURL);
 		this._apiKey = config.apiKey ?? envGet('ARC_DIRECTOR_API_KEY') ?? envGet('OPENAI_API_KEY');

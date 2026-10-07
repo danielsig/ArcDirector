@@ -67,7 +67,7 @@ export class Renderer {
 	private _sun:THREE.DirectionalLight | null = null;
 	private _disposed = false;
 
-	public constructor(world:World) {
+	constructor(world:World) {
 		const canvas = document.createElement('canvas');
 		canvas.tabIndex = 0;
 		canvas.style.display = 'block';

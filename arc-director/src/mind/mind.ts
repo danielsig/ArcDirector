@@ -284,7 +284,7 @@ export class Mind<TCtx = unknown> {
 	/** `verb id` pairs whose move found no way; `blockedAgain` refuses them until the way opens. */
 	private readonly _noWay = new Set<string>();
 
-	public constructor(settings:MindSettings = {}) {
+	constructor(settings:MindSettings = {}) {
 		this.skipHeartbeat = settings.skipHeartbeat ?? false;
 		this.skipMajor = settings.skipMajor ?? false;
 		this.rank = settings.rank ?? 0;

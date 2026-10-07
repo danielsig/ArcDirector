@@ -1,6 +1,6 @@
 /** A square of `size` × `size` tiles at chunk coordinate `origin`. Tiles are row-major (`localZ * size + localX`). */
 export class Chunk<T = unknown> {
-	public constructor(
+	constructor(
 		public readonly id:string,
 		public readonly origin:{ cx:number; cz:number },
 		/** Tiles per side. */

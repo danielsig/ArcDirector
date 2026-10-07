@@ -237,7 +237,7 @@ class HubPeer implements HubHandle {
 	private readonly _takeID = idCounter();
 	private readonly _pending:Pending = new Map();
 
-	public constructor(private readonly _socket:HubSocket, onLost:()=>void) {
+	constructor(private readonly _socket:HubSocket, onLost:()=>void) {
 		_socket.onMessage((raw) => {
 			const msg = parseHubMsg(raw);
 			if (msg?.kind === 'rpcResult') {
@@ -287,7 +287,7 @@ class HubLink implements HubHandle {
 	private _live:Promise<HubHandle>;
 	private _closed = false;
 
-	public constructor(private readonly _port:number) {
+	constructor(private readonly _port:number) {
 		this._live = this.open();
 	}
 

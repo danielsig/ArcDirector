@@ -68,7 +68,7 @@ export class GameHost {
 	private _starting = false;
 	private _nextTryTimestamp = 0;
 
-	public constructor(
+	constructor(
 		world:World,
 		chat:HudChatLine[],
 		log:HudAiLogEntry[],

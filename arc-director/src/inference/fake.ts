@@ -11,7 +11,7 @@ function abortError():Error {
 }
 
 export class FakeProvider implements InferenceProvider {
-	public constructor(
+	constructor(
 		private readonly _chatFn:FakeChatFn,
 		private readonly _embedFn?:FakeEmbedFn,
 	) {}

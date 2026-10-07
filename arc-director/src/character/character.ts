@@ -65,7 +65,7 @@ export class Character<TCtx = unknown> extends ArcRunner<TCtx> {
 	private _collective:Collective<TCtx> | null = null;
 	private readonly _wiring:Wiring<TCtx>;
 
-	public constructor(opts:CharacterOptions<TCtx>) {
+	constructor(opts:CharacterOptions<TCtx>) {
 		super(opts);
 		this.persona = opts.persona ?? new Persona();
 		this.tags = [...(opts.tags ?? [])];

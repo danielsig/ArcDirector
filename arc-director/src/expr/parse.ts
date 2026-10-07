@@ -6,7 +6,7 @@ export type ParseResult = { ast:Ast; nodes:number };
 class Parser {
 	private _i = 0;
 	public nodes = 0;
-	public constructor(private readonly _toks:Tok[]) {}
+	constructor(private readonly _toks:Tok[]) {}
 
 	private peek():Tok {
 		return this._toks[this._i];

@@ -98,7 +98,7 @@ export abstract class ArcRunner<TCtx = unknown> {
 	/** The runner that acts for this one: a character itself, or a collective's commander. */
 	public abstract get voice():ArcRunner<TCtx>;
 
-	public constructor(opts:RunnerOptions<TCtx>) {
+	constructor(opts:RunnerOptions<TCtx>) {
 		this.id = opts.id;
 		this.verbs = opts.verbs;
 		this.context = opts.context;

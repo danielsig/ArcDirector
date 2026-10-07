@@ -9,7 +9,7 @@ export type ScoldReason = 'typeError' | 'rawOverOne' | 'capTie' | 'fieldCall';
 
 export class ExprError extends Error {
 	public readonly reason:ScoldReason;
-	public constructor(message:string, reason:ScoldReason = 'typeError') {
+	constructor(message:string, reason:ScoldReason = 'typeError') {
 		super(message);
 		this.name = 'ExprError';
 		this.reason = reason;
