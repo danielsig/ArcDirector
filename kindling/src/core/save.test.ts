@@ -6,14 +6,14 @@ import { World } from './World.js';
 import { captureWorld, diffWorld, restoreWorld } from './save.js';
 
 class Door extends Component {
-	static override saved = ['open'];
-	open = false;
-	leaf = 'oak';
+	public static override saved = ['open'];
+	public open = false;
+	public leaf = 'oak';
 }
 
 class Bag extends Component {
-	static override saved = ['contents'];
-	contents:string[] = [];
+	public static override saved = ['contents'];
+	public contents:string[] = [];
 }
 
 /** The same scene every time: a door, a crate with two bags, and a coin. */

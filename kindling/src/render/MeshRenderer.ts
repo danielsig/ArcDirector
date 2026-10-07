@@ -5,17 +5,17 @@ import { applyShaderFeatures, type ShaderInsert, type ShaderUniforms } from './s
 import { create as createMesh, meshReady } from '../assets/meshes.js';
 
 export class MeshRenderer extends Component {
-	meshID = 'cube';
-	color:number | undefined;
-	visible = true;
-	shaderInserts:ShaderInsert[] = [];
-	shaderUniforms:ShaderUniforms = {};
+	public meshID = 'cube';
+	public color:number | undefined;
+	public visible = true;
+	public shaderInserts:ShaderInsert[] = [];
+	public shaderUniforms:ShaderUniforms = {};
+	public mesh:THREE.Object3D | null = null;
 
-	mesh:THREE.Object3D | null = null;
-	private builtID:string | null = null;
-	private painted:number | undefined = undefined;
+	private _builtID:string | null = null;
+	private _painted:number | undefined = undefined;
 
-	override update(dt:number):void {
+	public override update(dt:number):void {
 		const uTime = this.shaderUniforms.uTime;
 		if (uTime) {
 			uTime.value = Time.time;
@@ -23,24 +23,24 @@ export class MeshRenderer extends Component {
 		this.syncMesh();
 	}
 
-	override onEnable():void {
+	public override onEnable():void {
 		if (this.mesh) {
 			this.mesh.visible = this.visible;
 		}
 	}
 
-	override onDisable():void {
+	public override onDisable():void {
 		if (this.mesh) {
 			this.mesh.visible = false;
 		}
 	}
 
-	override onDestroy():void {
+	public override onDestroy():void {
 		this.dropMesh();
 	}
 
 	private syncMesh():void {
-		if (this.builtID !== this.meshID) {
+		if (this._builtID !== this.meshID) {
 			this.dropMesh();
 		}
 		if (!this.mesh) {
@@ -56,21 +56,21 @@ export class MeshRenderer extends Component {
 			this.applyShaders(inst);
 			this.gameObject.transform.object3D.add(inst);
 			this.mesh = inst;
-			this.builtID = this.meshID;
-			this.painted = undefined;
+			this._builtID = this.meshID;
+			this._painted = undefined;
 		}
 		this.mesh.visible = this.enabled && this.visible;
-		if (this.color !== this.painted) {
+		if (this.color !== this._painted) {
 			this.applyColor(this.mesh);
-			this.painted = this.color;
+			this._painted = this.color;
 		}
 	}
 
 	private dropMesh():void {
 		this.mesh?.removeFromParent();
 		this.mesh = null;
-		this.builtID = null;
-		this.painted = undefined;
+		this._builtID = null;
+		this._painted = undefined;
 	}
 
 	private applyColor(root:THREE.Object3D):void {

@@ -30,13 +30,13 @@ export type VerbDef = {
 };
 
 export class VerbRegistry {
-	private readonly verbs = new Map<string, VerbSpec>();
+	private readonly _verbs = new Map<string, VerbSpec>();
 
 	/** Catalog used to parse nested `arc=` args. Kit views point at the unfiltered registry. */
-	private nestedSource:VerbRegistry | null = null;
+	private _nestedSource:VerbRegistry | null = null;
 
-	add(name:string, { args = {}, help }:VerbDef = {}):this {
-		if (this.verbs.has(name)) {
+	public add(name:string, { args = {}, help }:VerbDef = {}):this {
+		if (this._verbs.has(name)) {
 			throw new Error(`verb already registered: ${name}`);
 		}
 		for (const key of Object.keys(args)) {
@@ -44,19 +44,19 @@ export class VerbRegistry {
 				throw new Error(`verb ${name}: coordinate arg '${key}' is not allowed`);
 			}
 		}
-		this.verbs.set(name, { name, args, help });
+		this._verbs.set(name, { name, args, help });
 		return this;
 	}
 
 	/** Full catalog. Nested unit / loop / law arcs may name verbs this kit does not grant the thinker. */
-	nested():VerbRegistry {
-		return this.nestedSource ?? this;
+	public nested():VerbRegistry {
+		return this._nestedSource ?? this;
 	}
 
 	/** Copy with `key` dropped from `verb` (solo `law` has no `who`). */
-	withoutArg(verb:string, key:string):VerbRegistry {
+	public withoutArg(verb:string, key:string):VerbRegistry {
 		const next = new VerbRegistry();
-		next.nestedSource = this.nestedSource ?? this;
+		next._nestedSource = this._nestedSource ?? this;
 		for (const spec of this.list()) {
 			if (spec.name !== verb) {
 				next.add(spec.name, spec);
@@ -69,21 +69,21 @@ export class VerbRegistry {
 		return next;
 	}
 
-	remove(...names:string[]):this {
+	public remove(...names:string[]):this {
 		for (const name of names) {
-			this.verbs.delete(name);
+			this._verbs.delete(name);
 		}
 		return this;
 	}
 
 	/** Catalog names in `allow`, in catalog order. `null` / omit = this registry. */
-	view(allow?:readonly string[] | null):VerbRegistry {
+	public view(allow?:readonly string[] | null):VerbRegistry {
 		if (allow == null) {
 			return this;
 		}
 		const wanted = new Set(allow);
 		const next = new VerbRegistry();
-		next.nestedSource = this.nestedSource ?? this;
+		next._nestedSource = this._nestedSource ?? this;
 		for (const spec of this.list()) {
 			if (wanted.has(spec.name)) {
 				next.add(spec.name, spec);
@@ -92,21 +92,21 @@ export class VerbRegistry {
 		return next;
 	}
 
-	get(name:string):VerbSpec | undefined {
-		return this.verbs.get(name);
+	public get(name:string):VerbSpec | undefined {
+		return this._verbs.get(name);
 	}
 
-	has(name:string):boolean {
-		return this.verbs.has(name);
+	public has(name:string):boolean {
+		return this._verbs.has(name);
 	}
 
-	list():VerbSpec[] {
-		return [...this.verbs.values()];
+	public list():VerbSpec[] {
+		return [...this._verbs.values()];
 	}
 
-	argNames():string[] {
+	public argNames():string[] {
 		const names = new Set<string>();
-		for (const spec of this.verbs.values()) {
+		for (const spec of this._verbs.values()) {
 			for (const key of Object.keys(spec.args)) {
 				names.add(key);
 			}
@@ -114,7 +114,7 @@ export class VerbRegistry {
 		return [...names].sort();
 	}
 
-	argSchema(kind:VerbArgKind):JsonSchema {
+	public argSchema(kind:VerbArgKind):JsonSchema {
 		const base = argBase(kind);
 		if (base === 'number') {
 			return { type: 'number' };
@@ -128,13 +128,13 @@ export class VerbRegistry {
 		return { type: 'string' };
 	}
 
-	requiredArgs(spec:VerbSpec):string[] {
+	public requiredArgs(spec:VerbSpec):string[] {
 		return Object.entries(spec.args)
 			.filter(([, kind]) => !kind.endsWith('?'))
 			.map(([key]) => key);
 	}
 
-	firstRequiredArg(spec:VerbSpec):string | undefined {
+	public firstRequiredArg(spec:VerbSpec):string | undefined {
 		return this.requiredArgs(spec)[0] ?? Object.keys(spec.args)[0];
 	}
 }

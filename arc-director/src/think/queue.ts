@@ -10,18 +10,18 @@ export type ThinkQueueOpts = MindQueueOpts & {
 
 /** Highest watch / arc score first, then recency. */
 export class ThinkQueue extends MindScheduler {
-	readonly verbScores:Record<string, number>;
+	public readonly verbScores:Record<string, number>;
 
-	constructor(opts:ThinkQueueOpts = {}) {
+	public constructor(opts:ThinkQueueOpts = {}) {
 		super(opts);
 		this.verbScores = { ...VERB_THINK_SCORES, ...opts.verbScores };
 	}
 
-	override rankScore(mindID:string, raw:number):number {
+	public override rankScore(mindID:string, raw:number):number {
 		return raw * this.recencyScale(mindID);
 	}
 
-	recencyScale(mindID:string):number {
+	public recencyScale(mindID:string):number {
 		const mind = this.minds.get(mindID);
 		if (!mind?.thoughtOnce) {
 			return 1;

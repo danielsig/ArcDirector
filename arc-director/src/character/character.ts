@@ -4,10 +4,26 @@ import { lawGroup, type Law, type LawSpec } from '../arc/laws.js';
 import { ArcRunner, type ArcRunnerJSON, type RunnerOptions } from './arc-runner.js';
 import { Persona, type PersonaJSON } from './persona.js';
 
-/** How a character's director carries out `character.mind = …` and `character.collective = …`. */
+/**
+ * How a character and its director reach each other, one for each character. The director gives `setMind` and
+ * `setCollective`, which carry out `character.mind = …` and `character.collective = …`. The character's
+ * constructor fills in `fields`: the director's only way into its private fields.
+ */
 export type Wiring<TCtx = unknown> = {
 	setMind(character:Character<TCtx>, mind:Mind<TCtx> | null):void;
 	setCollective(character:Character<TCtx>, collective:Collective<TCtx> | null):void;
+	fields?:CharacterFields<TCtx>;
+};
+
+/** What a character's constructor hands its director through its {@link Wiring}. */
+export type CharacterFields<TCtx = unknown> = {
+	/** Its own mind; null in a collective or when the host drives it. */
+	setMind(mind:Mind<TCtx> | null):void;
+	setCollective(collective:Collective<TCtx> | null):void;
+	/** A saved character's runner part and tags. Its persona and mind are rebuilt by the director. */
+	load(json:CharacterJSON):void;
+	/** Keep `law` itself, not a copy, so an arc it started still counts as its own after a transfer. */
+	keepLaw(law:Law):boolean;
 };
 
 export type CharacterOptions<TCtx = unknown> = RunnerOptions<TCtx> & {
@@ -15,18 +31,16 @@ export type CharacterOptions<TCtx = unknown> = RunnerOptions<TCtx> & {
 	tags?:string[];
 	/** Settings for its own mind, kept while it belongs to a collective. */
 	mindSettings?:MindSettings;
-	/** Its director's. Without one, setting `mind` or `collective` throws. */
+	/** Its own, from its director. Without one, setting `mind` or `collective` throws. */
 	wiring?:Wiring<TCtx>;
 };
 
-const UNWIRED:Wiring = {
-	setMind: (character) => {
+function unwired<TCtx>():Wiring<TCtx> {
+	const fail = (character:Character<TCtx>):never => {
 		throw new Error(`ArcDirector: '${character.id}' was not added to a director`);
-	},
-	setCollective: (character) => {
-		throw new Error(`ArcDirector: '${character.id}' was not added to a director`);
-	},
-};
+	};
+	return { setMind: fail, setCollective: fail };
+}
 
 /** A character's part of a save. Membership is saved on its collective. */
 export type CharacterJSON = ArcRunnerJSON & {
@@ -42,27 +56,40 @@ export type CharacterJSON = ArcRunnerJSON & {
  * arcs: its own mind, its collective's shared one, or none when the host drives it.
  */
 export class Character<TCtx = unknown> extends ArcRunner<TCtx> {
-	readonly persona:Persona;
-	tags:string[];
+	public readonly persona:Persona;
+	public tags:string[];
 	/** Settings for its own mind. Kept while it belongs to a collective, so leaving can give it a fresh mind. */
-	mindSettings:MindSettings | undefined;
-	/** @internal Its own mind; null in a collective or when the host drives it. Only the director sets it. */
-	ownMind:Mind<TCtx> | null = null;
-	/** @internal The collective it belongs to. Only the director sets it. */
-	memberOf:Collective<TCtx> | null = null;
-	private readonly wiring:Wiring<TCtx>;
+	public mindSettings:MindSettings | undefined;
+	/** Its own mind; null in a collective or when the host drives it. */
+	private _mind:Mind<TCtx> | null = null;
+	private _collective:Collective<TCtx> | null = null;
+	private readonly _wiring:Wiring<TCtx>;
 
-	constructor(opts:CharacterOptions<TCtx>) {
+	public constructor(opts:CharacterOptions<TCtx>) {
 		super(opts);
 		this.persona = opts.persona ?? new Persona();
 		this.tags = [...(opts.tags ?? [])];
 		this.mindSettings = opts.mindSettings;
-		this.wiring = opts.wiring ?? UNWIRED as Wiring<TCtx>;
+		this._wiring = opts.wiring ?? unwired();
+		this._wiring.fields = {
+			setMind: (mind) => {
+				this._mind = mind;
+			},
+			setCollective: (collective) => {
+				this._collective = collective;
+			},
+			load: (json) => {
+				this.loadJSON(json);
+				this.tags = [...json.tags];
+				this.mindSettings = json.mindSettings;
+			},
+			keepLaw: (law) => this.keepLaw(law),
+		};
 	}
 
 	/** Its own mind, or its collective's. Null when the host drives it. */
-	get mind():Mind<TCtx> | null {
-		return this.memberOf?.mind ?? this.ownMind;
+	public get mind():Mind<TCtx> | null {
+		return this._collective?.mind ?? this._mind;
 	}
 
 	/**
@@ -70,30 +97,30 @@ export class Character<TCtx = unknown> extends ArcRunner<TCtx> {
 	 * `null` hands the character to the host and forgets its mind's settings. Another character's mind throws.
 	 * The arc it is running keeps running.
 	 */
-	set mind(mind:Mind<TCtx> | null) {
-		this.wiring.setMind(this, mind);
+	public set mind(mind:Mind<TCtx> | null) {
+		this._wiring.setMind(this, mind);
 	}
 
-	get collective():Collective<TCtx> | null {
-		return this.memberOf;
+	public get collective():Collective<TCtx> | null {
+		return this._collective;
 	}
 
 	/**
 	 * Move into `collective`, straight from any other, or leave with `null`: then it thinks with a fresh mind of
 	 * its own when it had settings for one, else the host drives it. Its laws, tags and running arc come along.
 	 */
-	set collective(collective:Collective<TCtx> | null) {
-		this.wiring.setCollective(this, collective);
+	public set collective(collective:Collective<TCtx> | null) {
+		this._wiring.setCollective(this, collective);
 	}
 
 	/** A character acts for itself. */
-	get voice():ArcRunner<TCtx> {
+	public get voice():ArcRunner<TCtx> {
 		return this;
 	}
 
 	/** In a collective, its laws live there as its own: `flee` is kept as `Tom.flee` and reaches only it. */
-	override addLaw(spec:LawSpec, pinned = false):Law | undefined {
-		const home = this.memberOf;
+	public override addLaw(spec:LawSpec, pinned = false):Law | undefined {
+		const home = this._collective;
 		if (!home) {
 			return super.addLaw(spec, pinned);
 		}
@@ -101,28 +128,21 @@ export class Character<TCtx = unknown> extends ArcRunner<TCtx> {
 		return home.addLaw({ ...spec, who: 'me', name: `${this.id}.${spec.name ?? `law_${own + 1}`}` }, pinned);
 	}
 
-	override removeLaw(name:string):void {
-		if (this.memberOf) {
-			this.memberOf.removeLaw(`${this.id}.${name}`);
+	public override removeLaw(name:string):void {
+		if (this._collective) {
+			this._collective.removeLaw(`${this.id}.${name}`);
 			return;
 		}
 		super.removeLaw(name);
 	}
 
-	override toJSON():CharacterJSON {
+	public override toJSON():CharacterJSON {
 		return {
 			...super.toJSON(),
 			persona: this.persona.toJSON(),
 			tags: [...this.tags],
-			mind: this.ownMind?.toJSON(),
+			mind: this._mind?.toJSON(),
 			mindSettings: this.mindSettings && { ...this.mindSettings },
 		};
-	}
-
-	/** @internal A saved character's runner part and tags. Its persona and mind are rebuilt by the director. */
-	load(json:CharacterJSON):void {
-		this.loadJSON(json);
-		this.tags = [...json.tags];
-		this.mindSettings = json.mindSettings;
 	}
 }

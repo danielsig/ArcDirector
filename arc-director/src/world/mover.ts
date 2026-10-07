@@ -42,29 +42,29 @@ const PROGRESS = 0.98;
 
 /** Drives characters along routes through the host's `getPathGraph`, one move per character; a new move replaces the old. */
 export class Mover {
-	private readonly errands = new Map<string, Errand>();
+	private readonly _errands = new Map<string, Errand>();
 
-	constructor(
-		private readonly world:HostWorld<unknown> | undefined,
-		private readonly now:()=>number,
+	public constructor(
+		private readonly _world:HostWorld<unknown> | undefined,
+		private readonly _now:()=>number,
 	) {}
 
-	get canMove():boolean {
-		return !!(this.world?.getPathGraph && this.world.steerToward);
+	public get canMove():boolean {
+		return !!(this._world?.getPathGraph && this._world.steerToward);
 	}
 
-	moving(characterID:string):boolean {
-		return this.errands.has(characterID);
+	public moving(characterID:string):boolean {
+		return this._errands.has(characterID);
 	}
 
-	go(characterID:string, dest:MoveDest, verb:string, opts:MoveOpts = {}):Promise<ArcResult> {
+	public go(characterID:string, dest:MoveDest, verb:string, opts:MoveOpts = {}):Promise<ArcResult> {
 		if (!this.canMove) {
 			return Promise.resolve({ ok: false, verb, reason: 'cannot move' });
 		}
 		this.stop(characterID, { ok: false, interrupted: true, verb, reason: 'replaced' });
 		return new Promise((done) => {
-			const now = this.now();
-			this.errands.set(characterID, {
+			const now = this._now();
+			this._errands.set(characterID, {
 				verb,
 				dest,
 				opts,
@@ -81,20 +81,20 @@ export class Mover {
 	}
 
 	/** End `characterID`'s move, standing still. Default result: interrupted. */
-	stop(characterID:string, result?:ArcResult):void {
-		const errand = this.errands.get(characterID);
+	public stop(characterID:string, result?:ArcResult):void {
+		const errand = this._errands.get(characterID);
 		if (!errand) {
 			return;
 		}
-		this.errands.delete(characterID);
+		this._errands.delete(characterID);
 		if (errand.character !== undefined) {
-			this.world?.steerToward?.(errand.character, null);
+			this._world?.steerToward?.(errand.character, null);
 		}
 		errand.done(result ?? { ok: false, interrupted: true, verb: errand.verb });
 	}
 
-	tick():void {
-		for (const [id, errand] of [...this.errands]) {
+	public tick():void {
+		for (const [id, errand] of [...this._errands]) {
 			const reason = this.step(id, errand);
 			if (reason !== undefined) {
 				this.stop(id, reason);
@@ -104,7 +104,7 @@ export class Mover {
 
 	/** One tick of one move. A result ends it. */
 	private step(id:string, e:Errand):ArcResult | undefined {
-		const world = this.world!;
+		const world = this._world!;
 		const character = world.find(id);
 		const me = character === undefined ? undefined : world.getPose(character)?.point;
 		if (character === undefined || !me) {
@@ -117,7 +117,7 @@ export class Mover {
 		if (!dest) {
 			return { ok: false, verb: e.verb, reason: `${target} is gone` };
 		}
-		const now = this.now();
+		const now = this._now();
 		if (e.opts.check && now - e.checkedAt >= CHECK_EVERY) {
 			e.checkedAt = now;
 			const met = e.opts.check();
@@ -175,7 +175,7 @@ export class Mover {
 		e.route = undefined;
 		e.bestAt = now;
 		e.stuck = 0;
-		this.world!.steerToward!(character, null);
+		this._world!.steerToward!(character, null);
 		return undefined;
 	}
 
@@ -194,8 +194,8 @@ export class Mover {
 		if (e.stuck >= STUCK_TRIES) {
 			return { ok: false, verb: e.verb, reason: 'stuck' };
 		}
-		const route = findRoute(this.world!.getPathGraph!(character), me, dest, within);
-		e.plannedAt = this.now();
+		const route = findRoute(this._world!.getPathGraph!(character), me, dest, within);
+		e.plannedAt = this._now();
 		e.goal = dest;
 		e.next = 0;
 		e.route = undefined;

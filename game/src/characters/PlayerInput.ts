@@ -13,14 +13,14 @@ import { PlayerPilot } from './PlayerPilot';
 const YAW_SENS = 0.0024;
 
 export class PlayerInput extends Component {
-	static override order = Order.playerInput;
-	moveX = 0;
-	moveZ = 0;
-	lookYaw = 0;
-	selected = 0;
-	cursorName = '';
+	public static override order = Order.playerInput;
+	public moveX = 0;
+	public moveZ = 0;
+	public lookYaw = 0;
+	public selected = 0;
+	public cursorName = '';
 
-	override update(dt:number):void {
+	public override update(dt:number):void {
 		const world = this.gameObject.world;
 		if (!world) {
 			this.moveX = 0;
@@ -139,7 +139,7 @@ export class PlayerInput extends Component {
 		}
 	}
 
-	hotbar():ItemInstance[] {
+	public hotbar():ItemInstance[] {
 		const list:ItemInstance[] = [];
 		const body = this.gameObject.getComponent(HumanBody);
 		if (body) {
@@ -160,7 +160,7 @@ export class PlayerInput extends Component {
 		return list;
 	}
 
-	activeItem():ItemInstance | null {
+	public activeItem():ItemInstance | null {
 		const bar = this.hotbar();
 		if (bar.length === 0) {
 			return null;

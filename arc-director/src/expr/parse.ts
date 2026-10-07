@@ -4,12 +4,12 @@ import { lex, type Tok, type TokKind } from './lex.js';
 export type ParseResult = { ast:Ast; nodes:number };
 
 class Parser {
-	private i = 0;
-	nodes = 0;
-	constructor(private readonly toks:Tok[]) {}
+	private _i = 0;
+	public nodes = 0;
+	public constructor(private readonly _toks:Tok[]) {}
 
 	private peek():Tok {
-		return this.toks[this.i];
+		return this._toks[this._i];
 	}
 
 	private eat(kind?:TokKind):Tok {
@@ -17,7 +17,7 @@ class Parser {
 		if (kind && t.kind !== kind) {
 			throw new ExprError(`expected ${kind}, got ${t.kind}`);
 		}
-		this.i += 1;
+		this._i += 1;
 		return t;
 	}
 
@@ -29,7 +29,7 @@ class Parser {
 		return n;
 	}
 
-	parse():Ast {
+	public parse():Ast {
 		const ast = this.ternary();
 		if (this.peek().kind !== 'eof') {
 			throw new ExprError(`unexpected ${this.peek().raw}`);
@@ -209,7 +209,7 @@ class Parser {
 		if (t.kind === 'lp') {
 			this.eat();
 			if (this.peek().kind === 'ident') {
-				const save = this.i;
+				const save = this._i;
 				const params = [this.eat().raw];
 				while (this.peek().kind === 'comma') {
 					this.eat();
@@ -223,7 +223,7 @@ class Parser {
 						return this.node({ type: 'lambda', params, body });
 					}
 				}
-				this.i = save;
+				this._i = save;
 			}
 			const inner = this.ternary();
 			this.eat('rp');

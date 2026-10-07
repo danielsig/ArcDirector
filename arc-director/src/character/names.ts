@@ -19,12 +19,12 @@ export type NameBookJSON = {
  * stable, numbers collisions (`EnemyWitch2`), and maps each name back to the real id.
  */
 export class NameBook {
-	private readonly rows = new Map<string, NameRow>();
-	private readonly names = new Map<string, string>();
+	private readonly _rows = new Map<string, NameRow>();
+	private readonly _names = new Map<string, string>();
 
 	/** This book's name for `id`, given the policy's current `base`. */
-	name(id:string, base:string):string {
-		const had = this.rows.get(id);
+	public name(id:string, base:string):string {
+		const had = this._rows.get(id);
 		if (had?.base === base) {
 			return had.name;
 		}
@@ -32,39 +32,39 @@ export class NameBook {
 			return id;
 		}
 		let name = base;
-		for (let n = 2; (this.names.get(name) ?? id) !== id; n++) {
+		for (let n = 2; (this._names.get(name) ?? id) !== id; n++) {
 			name = `${base}${n}`;
 		}
-		this.rows.set(id, { base, name });
-		this.names.set(name, id);
+		this._rows.set(id, { base, name });
+		this._names.set(name, id);
 		return name;
 	}
 
 	/** The name already given to `id`, if any. Never assigns. */
-	peek(id:string):string | undefined {
-		return this.rows.get(id)?.name;
+	public peek(id:string):string | undefined {
+		return this._rows.get(id)?.name;
 	}
 
 	/** Every id this book has named. */
-	ids():string[] {
-		return [...this.rows.keys()];
+	public ids():string[] {
+		return [...this._rows.keys()];
 	}
 
 	/** Real id for a name this book gave. Anything else passes through. */
-	resolve(name:string):string {
-		return this.names.get(name) ?? name;
+	public resolve(name:string):string {
+		return this._names.get(name) ?? name;
 	}
 
-	toJSON():NameBookJSON {
-		return { rows: Object.fromEntries(this.rows), names: Object.fromEntries(this.names) };
+	public toJSON():NameBookJSON {
+		return { rows: Object.fromEntries(this._rows), names: Object.fromEntries(this._names) };
 	}
 
-	load(json:NameBookJSON | undefined):void {
+	public load(json:NameBookJSON | undefined):void {
 		for (const [id, row] of Object.entries(json?.rows ?? {})) {
-			this.rows.set(id, { ...row });
+			this._rows.set(id, { ...row });
 		}
 		for (const [name, id] of Object.entries(json?.names ?? {})) {
-			this.names.set(name, id);
+			this._names.set(name, id);
 		}
 	}
 }

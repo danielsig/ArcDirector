@@ -6,7 +6,7 @@ export type SimpleQueueOpts = MindQueueOpts;
 
 /** First come, first served. Watches still wake; they do not jump the line. */
 export class SimpleQueue extends MindScheduler {
-	override rankScore(mindID:string, raw:number):number {
+	public override rankScore(mindID:string, raw:number):number {
 		return -(this.minds.get(mindID)?.seq ?? 0);
 	}
 

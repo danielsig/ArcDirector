@@ -49,16 +49,16 @@ import { hasHumanAnims, loadNPCAnims } from '../render/humanAnims';
 
 /** Host session: Vue calls say / save / load; Kindling runs keys, flags, persist. */
 export class Session extends Component {
-	static override order = Order.persist;
-	hud!:HudModel;
-	director!:GameHost;
-	scene!:SceneDef;
-	stream!:WorldStream;
-	view!:WorldView;
-	hudView!:Hud;
-	getCanvas:()=>HTMLCanvasElement | null = () => null;
-	getRunning:()=>boolean = () => false;
-	homePose:ViewPose = {
+	public static override order = Order.persist;
+	public hud!:HudModel;
+	public director!:GameHost;
+	public scene!:SceneDef;
+	public stream!:WorldStream;
+	public view!:WorldView;
+	public hudView!:Hud;
+	public getCanvas:()=>HTMLCanvasElement | null = () => null;
+	public getRunning:()=>boolean = () => false;
+	public homePose:ViewPose = {
 		x: 0,
 		y: 0,
 		z: 0,
@@ -68,14 +68,14 @@ export class Session extends Component {
 		distance: Math.hypot(11, 7.4),
 	};
 	/** The scene as built, before play. Saves are a diff against it. */
-	fresh:WorldState = {};
-	private persistAcc = 0;
-	private lastViewPacked = '';
-	private unbindControl = ():void => undefined;
-	private unwatchPrefs = ():void => undefined;
+	public fresh:WorldState = {};
+	private _persistAcc = 0;
+	private _lastViewPacked = '';
+	private _unbindControl = ():void => undefined;
+	private _unwatchPrefs = ():void => undefined;
 
-	override awake():void {
-		this.getCanvas()?.addEventListener('click', this.onClick);
+	public override awake():void {
+		this.getCanvas()?.addEventListener('click', this._onClick);
 		const lookHost = window as unknown as { setLook?:(yaw:number, pitch:number)=>void };
 		lookHost.setLook = (yaw:number, pitch:number):void => {
 			const world = this.gameObject.world;
@@ -99,13 +99,13 @@ export class Session extends Component {
 			const stateHost = window as unknown as { lookState?:{ yaw:number; pitch:number } };
 			stateHost.lookState = { yaw, pitch };
 		};
-		this.unwatchPrefs = watchPrefs((next, prev) => {
+		this._unwatchPrefs = watchPrefs((next, prev) => {
 			this.applyPrefs(next, prev);
 		});
-		this.unbindControl = bindArcControl(this);
+		this._unbindControl = bindArcControl(this);
 	}
 
-	beginPlay():void {
+	public beginPlay():void {
 		if (!this.hud.arcDirectorOn) {
 			return;
 		}
@@ -114,27 +114,27 @@ export class Session extends Component {
 		});
 	}
 
-	override lateUpdate(dt:number):void {
-		this.persistAcc += dt;
-		if (this.persistAcc < 0.3) {
+	public override lateUpdate(dt:number):void {
+		this._persistAcc += dt;
+		if (this._persistAcc < 0.3) {
 			return;
 		}
-		this.persistAcc = 0;
+		this._persistAcc = 0;
 		this.persistView();
 		this.syncURLView();
 	}
 
-	override onDestroy():void {
-		this.getCanvas()?.removeEventListener('click', this.onClick);
+	public override onDestroy():void {
+		this.getCanvas()?.removeEventListener('click', this._onClick);
 		this.director.dispose();
-		this.unwatchPrefs();
-		this.unbindControl();
+		this._unwatchPrefs();
+		this._unbindControl();
 		const lookHost = window as unknown as { setLook?:(yaw:number, pitch:number)=>void };
 		lookHost.setLook = undefined;
 	}
 
 	/** Runs every frame, including while the menu pauses simulation. */
-	poll():void {
+	public poll():void {
 		const world = this.gameObject.world;
 		if (!world) {
 			return;
@@ -170,7 +170,7 @@ export class Session extends Component {
 		this.hudKeys();
 	}
 
-	pausePresent():void {
+	public pausePresent():void {
 		const world = this.gameObject.world;
 		if (!world) {
 			return;
@@ -185,7 +185,7 @@ export class Session extends Component {
 		this.hudView.sync();
 	}
 
-	say(spoken:string):void {
+	public say(spoken:string):void {
 		this.hud.sayOpen = false;
 		const slash = parseSlash(spoken.trim());
 		const help = !!slash?.ok && slash.verb === 'help';
@@ -195,7 +195,7 @@ export class Session extends Component {
 		playerSay(this.director, spoken);
 	}
 
-	save():GameSave | null {
+	public save():GameSave | null {
 		const world = this.gameObject.world;
 		const pose = this.readPose();
 		if (!world || !pose) {
@@ -221,7 +221,7 @@ export class Session extends Component {
 	}
 
 	/** Boot a fresh Game that restores this scene's save. */
-	load():boolean {
+	public load():boolean {
 		if (!readSave(this.scene.id)) {
 			this.hud.menuNotice = 'No save';
 			return false;
@@ -232,7 +232,7 @@ export class Session extends Component {
 	}
 
 	/** Apply `save` to the scene just built. Minds restore when ArcDirector starts. */
-	restore(save:GameSave):void {
+	public restore(save:GameSave):void {
 		const world = this.gameObject.world;
 		if (!world) {
 			return;
@@ -245,11 +245,11 @@ export class Session extends Component {
 	}
 
 	/** Mirror every pref into the HUD, world, and ArcDirector. Called once at boot; changes arrive through `watchPrefs`. */
-	syncPrefs():void {
+	public syncPrefs():void {
 		this.applyPrefs(prefs());
 	}
 
-	applyModel():void {
+	public applyModel():void {
 		const name = this.hud.model.trim();
 		if (name) {
 			setPrefs({ model: name });
@@ -257,27 +257,27 @@ export class Session extends Component {
 		this.hud.menuNotice = name || 'No model';
 	}
 
-	applyPlayerKind():void {
+	public applyPlayerKind():void {
 		const kind = resolvePlayerKind(this.hud.playerKind);
 		setPrefs({ playerKind: kind });
 		this.hud.menuNotice = characterLabel(kind);
 	}
 
-	setMaxParallel(n:number):void {
+	public setMaxParallel(n:number):void {
 		const next = setPrefs({ maxParallel: n }).maxParallel;
 		this.hud.menuNotice = `${next} thinker${next === 1 ? '' : 's'}`;
 	}
 
-	setContextLength(n:number):void {
+	public setContextLength(n:number):void {
 		this.hud.menuNotice = `${contextLabel(setPrefs({ contextLength: n }).contextLength)} context`;
 	}
 
-	resetInferStats():void {
+	public resetInferStats():void {
 		this.director.arc?.resetInferStats();
 		patchInfer(this.director, this.hud);
 	}
 
-	async dumpNPCMaps():Promise<void> {
+	public async dumpNPCMaps():Promise<void> {
 		const n = await dumpLookMaps(this.director);
 		this.hud.menuOpen = false;
 		this.hud.aiLogOpen = true;
@@ -285,17 +285,17 @@ export class Session extends Component {
 		this.hud.menuNotice = n > 0 ? `Logged ${n} NPC maps` : 'No NPC maps';
 	}
 
-	resetLocation():void {
+	public resetLocation():void {
 		this.applyPose(this.homePose);
-		this.lastViewPacked = '';
-		this.persistAcc = 0;
+		this._lastViewPacked = '';
+		this._persistAcc = 0;
 		this.persistView();
 		this.stream.stream();
 		this.syncURLView();
 		this.hud.menuNotice = 'Location reset';
 	}
 
-	async refreshHudModels():Promise<void> {
+	public async refreshHudModels():Promise<void> {
 		if (!this.hud.arcDirectorOn) {
 			return;
 		}
@@ -329,7 +329,7 @@ export class Session extends Component {
 		}
 	}
 
-	onMenuOpened():void {
+	public onMenuOpened():void {
 		this.hud.menuNotice = '';
 		this.persistView();
 		this.dropPointerLock();
@@ -340,12 +340,12 @@ export class Session extends Component {
 		void this.refreshHudModels();
 	}
 
-	onMenuClosed():void {
+	public onMenuClosed():void {
 		this.getCanvas()?.focus();
 		this.gameObject.world?.input.requestLock();
 	}
 
-	applyShotFromURL():void {
+	public applyShotFromURL():void {
 		const shot = readURLView();
 		if (!shot) {
 			return;
@@ -357,7 +357,7 @@ export class Session extends Component {
 		this.applyPose(applyURLView(pose, shot));
 	}
 
-	readPose():ViewPose | null {
+	public readPose():ViewPose | null {
 		const world = this.gameObject.world;
 		const player = world?.findByID('Player');
 		const cam = world?.findByID('MainCamera')?.getComponent(FollowCamera);
@@ -376,7 +376,7 @@ export class Session extends Component {
 		};
 	}
 
-	applyPose(pose:ViewPose):void {
+	public applyPose(pose:ViewPose):void {
 		const world = this.gameObject.world;
 		const player = world?.findByID('Player');
 		const cam = world?.findByID('MainCamera')?.getComponent(FollowCamera);
@@ -407,20 +407,20 @@ export class Session extends Component {
 		cam.lateUpdate(8);
 	}
 
-	persistView():void {
+	public persistView():void {
 		const pose = this.readPose();
 		if (!pose) {
 			return;
 		}
 		const packed = packViewPose(pose);
-		if (packed === this.lastViewPacked) {
+		if (packed === this._lastViewPacked) {
 			return;
 		}
-		this.lastViewPacked = packed;
+		this._lastViewPacked = packed;
 		saveViewPose(this.scene.id, packed);
 	}
 
-	syncURLView():void {
+	public syncURLView():void {
 		const pose = this.readPose();
 		if (pose) {
 			writeURLView(pose, prefs());
@@ -532,7 +532,7 @@ export class Session extends Component {
 		}
 	}
 
-	private readonly onClick = ():void => {
+	private readonly _onClick = ():void => {
 		if (this.hud.sayOpen || this.hud.menuOpen || this.hud.briefOpen) {
 			return;
 		}

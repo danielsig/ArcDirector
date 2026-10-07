@@ -93,7 +93,7 @@ describe('stepPhysics', () => {
 	});
 
 	class WallWorld extends World {
-		override sampleTerrain(x:number, z:number):TerrainSample | undefined {
+		public override sampleTerrain(x:number, z:number):TerrainSample | undefined {
 			return { height: 0, worldY: 0, blocked: x >= 2, climbable: false };
 		}
 	}
@@ -116,7 +116,7 @@ describe('stepPhysics', () => {
 	});
 
 	class CellWorld extends World {
-		override sampleTerrain(x:number, z:number):TerrainSample | undefined {
+		public override sampleTerrain(x:number, z:number):TerrainSample | undefined {
 			return { height: 0, worldY: 0, blocked: x >= 2 && x < 3, climbable: false };
 		}
 	}

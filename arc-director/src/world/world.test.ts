@@ -25,20 +25,20 @@ function flush():Promise<void> {
  * `carry` is who holds which item; an item on the ground is at its own spot.
  */
 class Grid {
-	readonly point = new Map<string, Vec>();
-	readonly carry = new Map<string, string>();
-	readonly steering = new Map<string, Vec | null>();
-	doorLocked = false;
-	speed = 4;
+	public readonly point = new Map<string, Vec>();
+	public readonly carry = new Map<string, string>();
+	public readonly steering = new Map<string, Vec | null>();
+	public doorLocked = false;
+	public speed = 4;
 
-	constructor(readonly walls:Set<string> = new Set(), readonly door?:string) {}
+	public constructor(public readonly walls:Set<string> = new Set(), public readonly door?:string) {}
 
-	place(id:string, point:Vec):this {
+	public place(id:string, point:Vec):this {
 		this.point.set(id, point);
 		return this;
 	}
 
-	step(dt:number):void {
+	public step(dt:number):void {
 		for (const [id, to] of this.steering) {
 			const point = this.point.get(id);
 			if (!to || !point) {
@@ -51,7 +51,7 @@ class Grid {
 	}
 
 	/** Entities are ids: anything placed or carried. */
-	readonly world:HostWorld<string> = {
+	public readonly world:HostWorld<string> = {
 		find: (id) => (this.point.has(id) || this.carry.has(id) ? id : undefined),
 		getPose: (id) => {
 			const holder = this.carry.get(id);

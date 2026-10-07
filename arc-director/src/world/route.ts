@@ -40,14 +40,14 @@ function before(a:Node, b:Node):boolean {
 
 /** Min-heap: open before blocked, then on `rank`. */
 class Frontier {
-	private readonly heap:Node[] = [];
+	private readonly _size:Node[] = [];
 
-	get size():number {
-		return this.heap.length;
+	public get size():number {
+		return this._size.length;
 	}
 
-	push(node:Node):void {
-		const h = this.heap;
+	public push(node:Node):void {
+		const h = this._size;
 		h.push(node);
 		let i = h.length - 1;
 		while (i > 0) {
@@ -60,8 +60,8 @@ class Frontier {
 		}
 	}
 
-	pop():Node {
-		const h = this.heap;
+	public pop():Node {
+		const h = this._size;
 		const top = h[0];
 		const last = h.pop()!;
 		if (h.length > 0) {

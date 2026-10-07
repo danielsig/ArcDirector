@@ -151,14 +151,14 @@ function tagHits(record:MemoryRecord, tags:string[], query:string):number {
 }
 
 export class MemoryStore {
-	maxEpisodic = 256;
-	score:RecallScoreFn = defaultRecallScore;
-	private records:MemoryRecord[] = [];
-	private next = 1;
+	public maxEpisodic = 256;
+	public score:RecallScoreFn = defaultRecallScore;
+	private _records:MemoryRecord[] = [];
+	private _next = 1;
 
-	add(draft:MemoryDraft, now = draft.timestamp ?? 0):MemoryRecord {
+	public add(draft:MemoryDraft, now = draft.timestamp ?? 0):MemoryRecord {
 		const rec:MemoryRecord = {
-			id: draft.id ?? `mem_${this.next++}`,
+			id: draft.id ?? `mem_${this._next++}`,
 			category: draft.category ?? 'episodic',
 			text: draft.text,
 			tags: draft.tags ? [...draft.tags] : [],
@@ -169,20 +169,20 @@ export class MemoryStore {
 			embedding: draft.embedding ? [...draft.embedding] : undefined,
 			weight: draft.weight ?? 1,
 		};
-		this.records.push(rec);
+		this._records.push(rec);
 		this.evict();
 		return rec;
 	}
 
-	all():MemoryRecord[] {
-		return this.records;
+	public all():MemoryRecord[] {
+		return this._records;
 	}
 
-	pinned():MemoryRecord[] {
-		return this.records.filter((r) => r.pinned);
+	public pinned():MemoryRecord[] {
+		return this._records.filter((r) => r.pinned);
 	}
 
-	recall(opts:{
+	public recall(opts:{
 		query:string;
 		k?:number;
 		now?:number;
@@ -195,7 +195,7 @@ export class MemoryStore {
 		const now = opts.now ?? 0;
 		const k = opts.k ?? 5;
 		const tags = opts.tags ?? [];
-		const scored = this.records
+		const scored = this._records
 			.filter((r) => (opts.category === undefined || r.category === opts.category) && !opts.skip?.(r))
 			.map((record) => {
 				const cos = opts.embedding && record.embedding
@@ -224,7 +224,7 @@ export class MemoryStore {
 		return scored.map((s) => s.record);
 	}
 
-	intrusion(opts:{
+	public intrusion(opts:{
 		query:string;
 		now:number;
 		embedding?:number[];
@@ -234,7 +234,7 @@ export class MemoryStore {
 		const threshold = opts.threshold ?? 0.55;
 		let best:MemoryRecord | null = null;
 		let bestScore = threshold;
-		for (const record of this.records) {
+		for (const record of this._records) {
 			const lex = lexicalOverlap(opts.query, record.text);
 			const hits = tagHits(record, opts.tags ?? [], opts.query);
 			if (!record.emotional && record.tags.length === 0 && lex < 0.15) {
@@ -265,15 +265,15 @@ export class MemoryStore {
 	}
 
 	/** Forget the record `id`. False when there is none. */
-	remove(id:string):boolean {
-		const count = this.records.length;
-		this.records = this.records.filter((r) => r.id !== id);
-		return this.records.length < count;
+	public remove(id:string):boolean {
+		const count = this._records.length;
+		this._records = this._records.filter((r) => r.id !== id);
+		return this._records.length < count;
 	}
 
 	/** New text for the record `id`. Its embedding no longer fits the text, so it is dropped. */
-	rewrite(id:string, text:string):MemoryRecord | undefined {
-		const record = this.records.find((r) => r.id === id);
+	public rewrite(id:string, text:string):MemoryRecord | undefined {
+		const record = this._records.find((r) => r.id === id);
 		if (record) {
 			record.text = text;
 			record.embedding = undefined;
@@ -281,20 +281,20 @@ export class MemoryStore {
 		return record;
 	}
 
-	toJSON():MemoryRecord[] {
-		return this.records.map((r) => ({
+	public toJSON():MemoryRecord[] {
+		return this._records.map((r) => ({
 			...r,
 			tags: [...r.tags],
 			embedding: r.embedding ? [...r.embedding] : undefined,
 		}));
 	}
 
-	static fromJSON(rows:MemoryRecord[]):MemoryStore {
+	public static fromJSON(rows:MemoryRecord[]):MemoryStore {
 		const store = new MemoryStore();
 		let max = 0;
 		for (const row of rows) {
 			const id = readID(row) ?? '';
-			store.records.push({
+			store._records.push({
 				...row,
 				id,
 				tags: [...row.tags],
@@ -305,18 +305,18 @@ export class MemoryStore {
 				max = n;
 			}
 		}
-		store.next = max + 1;
+		store._next = max + 1;
 		return store;
 	}
 
 	private evict():void {
-		const episodic = this.records.filter((r) => r.category === 'episodic' && !r.pinned);
+		const episodic = this._records.filter((r) => r.category === 'episodic' && !r.pinned);
 		const overflow = episodic.length - this.maxEpisodic;
 		if (overflow <= 0) {
 			return;
 		}
 		episodic.sort((a, b) => a.timestamp - b.timestamp);
 		const drop = new Set(episodic.slice(0, overflow).map((r) => r.id));
-		this.records = this.records.filter((r) => !drop.has(r.id));
+		this._records = this._records.filter((r) => !drop.has(r.id));
 	}
 }

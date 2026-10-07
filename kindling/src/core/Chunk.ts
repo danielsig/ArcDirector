@@ -1,24 +1,24 @@
 /** A square of `size` × `size` tiles at chunk coordinate `origin`. Tiles are row-major (`localZ * size + localX`). */
 export class Chunk<T = unknown> {
-	constructor(
-		readonly id:string,
-		readonly origin:{ cx:number; cz:number },
+	public constructor(
+		public readonly id:string,
+		public readonly origin:{ cx:number; cz:number },
 		/** Tiles per side. */
-		readonly size:number,
+		public readonly size:number,
 		/** Meters per tile. */
-		readonly cellSize:number,
-		readonly tiles:T[],
+		public readonly cellSize:number,
+		public readonly tiles:T[],
 	) {}
 
-	worldOriginX():number {
+	public worldOriginX():number {
 		return this.origin.cx * this.size * this.cellSize;
 	}
 
-	worldOriginZ():number {
+	public worldOriginZ():number {
 		return this.origin.cz * this.size * this.cellSize;
 	}
 
-	tile(localX:number, localZ:number):T | undefined {
+	public tile(localX:number, localZ:number):T | undefined {
 		if (localX < 0 || localZ < 0 || localX >= this.size || localZ >= this.size) {
 			return undefined;
 		}
@@ -26,7 +26,7 @@ export class Chunk<T = unknown> {
 	}
 
 	/** Every tile, row by row (`localZ` outer, `localX` inner). */
-	forEachTile(fn:(tile:T, localX:number, localZ:number)=>void):void {
+	public forEachTile(fn:(tile:T, localX:number, localZ:number)=>void):void {
 		for (let localZ = 0; localZ < this.size; localZ++) {
 			for (let localX = 0; localX < this.size; localX++) {
 				fn(this.tiles[localZ * this.size + localX], localX, localZ);
@@ -34,19 +34,19 @@ export class Chunk<T = unknown> {
 		}
 	}
 
-	tileAtWorld(x:number, z:number):T | undefined {
+	public tileAtWorld(x:number, z:number):T | undefined {
 		const { localX, localZ } = this.worldToLocal(x, z);
 		return this.tile(localX, localZ);
 	}
 
-	worldCellCenter(localX:number, localZ:number):{ x:number; z:number } {
+	public worldCellCenter(localX:number, localZ:number):{ x:number; z:number } {
 		return {
 			x: this.worldOriginX() + (localX + 0.5) * this.cellSize,
 			z: this.worldOriginZ() + (localZ + 0.5) * this.cellSize,
 		};
 	}
 
-	worldToLocal(x:number, z:number):{ localX:number; localZ:number } {
+	public worldToLocal(x:number, z:number):{ localX:number; localZ:number } {
 		return {
 			localX: Math.floor((x - this.worldOriginX()) / this.cellSize),
 			localZ: Math.floor((z - this.worldOriginZ()) / this.cellSize),
@@ -54,7 +54,7 @@ export class Chunk<T = unknown> {
 	}
 
 	/** Meters from the point to the nearest edge of this chunk on XZ. 0 inside. */
-	distanceTo(x:number, z:number):number {
+	public distanceTo(x:number, z:number):number {
 		const span = this.size * this.cellSize;
 		const minX = this.worldOriginX();
 		const minZ = this.worldOriginZ();

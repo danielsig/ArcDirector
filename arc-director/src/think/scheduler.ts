@@ -130,18 +130,18 @@ const HEARTBEAT_SCORE = 0.001;
 const MAJOR_SCORE = 1;
 
 export abstract class MindScheduler implements MindQueue {
-	readonly trueScore:number;
-	readonly epsilon:number;
-	readonly watchInterval:number;
-	readonly processInterval:number;
-	maxParallel:number;
-	batchThinks:boolean | undefined;
-	batchWait:number | undefined;
-	readonly heartbeatStart:number;
-	readonly heartbeatMin:number;
-	readonly heartbeatMax:number;
-	readonly heartbeatAdjust:HeartbeatAdjust;
-	mayThink:((ctx:MayThink)=>boolean) | undefined;
+	public readonly trueScore:number;
+	public readonly epsilon:number;
+	public readonly watchInterval:number;
+	public readonly processInterval:number;
+	public maxParallel:number;
+	public batchThinks:boolean | undefined;
+	public batchWait:number | undefined;
+	public readonly heartbeatStart:number;
+	public readonly heartbeatMin:number;
+	public readonly heartbeatMax:number;
+	public readonly heartbeatAdjust:HeartbeatAdjust;
+	public mayThink:((ctx:MayThink)=>boolean) | undefined;
 	protected watchClock = 0;
 	protected processClock = 0;
 	protected rows:ThinkRow[] = [];
@@ -150,7 +150,7 @@ export abstract class MindScheduler implements MindQueue {
 	protected readonly executing = new Map<string, Arc>();
 	protected nextSeq = 1;
 
-	constructor(opts:MindQueueOpts = {}) {
+	public constructor(opts:MindQueueOpts = {}) {
 		this.trueScore = clampTrueScore(opts.trueScore ?? DEFAULT_TRUE_SCORE);
 		this.epsilon = opts.epsilon ?? DEFAULT_EPSILON;
 		this.watchInterval = opts.watchInterval ?? 0.25;
@@ -165,23 +165,23 @@ export abstract class MindScheduler implements MindQueue {
 		this.mayThink = opts.mayThink;
 	}
 
-	get inFlight():number {
+	public get inFlight():number {
 		return this.inflight.size;
 	}
 
-	isThinking(mindID:string):boolean {
+	public isThinking(mindID:string):boolean {
 		return this.inflight.has(mindID);
 	}
 
-	hasPending(mindID:string):boolean {
+	public hasPending(mindID:string):boolean {
 		return this.rows.some((row) => row.mindID === mindID);
 	}
 
-	arcOf(mindID:string):Arc | null {
+	public arcOf(mindID:string):Arc | null {
 		return this.executing.get(mindID) ?? null;
 	}
 
-	beginThink(mindID:string):AbortSignal {
+	public beginThink(mindID:string):AbortSignal {
 		this.ensure(mindID);
 		this.clearOnce(mindID);
 		this.rows = this.rows.filter((r) => r.mindID !== mindID);
@@ -190,7 +190,7 @@ export abstract class MindScheduler implements MindQueue {
 		return ac.signal;
 	}
 
-	endThink(mindID:string, signal?:AbortSignal):void {
+	public endThink(mindID:string, signal?:AbortSignal):void {
 		const ac = this.inflight.get(mindID);
 		if (signal && ac && ac.signal !== signal) {
 			return;
@@ -198,24 +198,24 @@ export abstract class MindScheduler implements MindQueue {
 		this.inflight.delete(mindID);
 	}
 
-	abortThink(mindID:string):void {
+	public abortThink(mindID:string):void {
 		this.inflight.get(mindID)?.abort();
 	}
 
-	thinkSignal(mindID:string):AbortSignal | undefined {
+	public thinkSignal(mindID:string):AbortSignal | undefined {
 		return this.inflight.get(mindID)?.signal;
 	}
 
-	beginArc(mindID:string, arc:Arc):void {
+	public beginArc(mindID:string, arc:Arc):void {
 		this.ensure(mindID);
 		this.executing.set(mindID, arc);
 	}
 
-	endArc(mindID:string):void {
+	public endArc(mindID:string):void {
 		this.executing.delete(mindID);
 	}
 
-	allowThink(row:ThinkRow):boolean {
+	public allowThink(row:ThinkRow):boolean {
 		const arc = this.arcOf(row.mindID);
 		const ctx:MayThink = {
 			mindID: row.mindID,
@@ -231,7 +231,7 @@ export abstract class MindScheduler implements MindQueue {
 		return true;
 	}
 
-	ensure(mindID:string, opts?:{ skipHeartbeat?:boolean; skipMajor?:boolean }):MindState {
+	public ensure(mindID:string, opts?:{ skipHeartbeat?:boolean; skipMajor?:boolean }):MindState {
 		let m = this.minds.get(mindID);
 		if (!m) {
 			m = {
@@ -260,11 +260,11 @@ export abstract class MindScheduler implements MindQueue {
 		return m;
 	}
 
-	setWatches(mindID:string, watches:string[]):void {
+	public setWatches(mindID:string, watches:string[]):void {
 		this.ensure(mindID).watches = [...watches];
 	}
 
-	armOnce(mindID:string, expr:string):void {
+	public armOnce(mindID:string, expr:string):void {
 		const text = expr.replace(/\s+/g, ' ').trim();
 		if (!text) {
 			return;
@@ -272,14 +272,14 @@ export abstract class MindScheduler implements MindQueue {
 		this.ensure(mindID).once = text;
 	}
 
-	clearOnce(mindID:string):void {
+	public clearOnce(mindID:string):void {
 		const mind = this.minds.get(mindID);
 		if (mind) {
 			mind.once = undefined;
 		}
 	}
 
-	setAiOn(mindID:string, on:boolean):void {
+	public setAiOn(mindID:string, on:boolean):void {
 		const mind = this.ensure(mindID);
 		mind.aiOn = on;
 		if (!on) {
@@ -289,17 +289,17 @@ export abstract class MindScheduler implements MindQueue {
 		}
 	}
 
-	lastMax(mindID:string):number {
+	public lastMax(mindID:string):number {
 		return this.minds.get(mindID)?.lastMax ?? 0;
 	}
 
-	scold(mindID:string):ScoldReason | undefined {
+	public scold(mindID:string):ScoldReason | undefined {
 		return this.minds.get(mindID)?.scold;
 	}
 
-	abstract rankScore(mindID:string, raw:number):number;
+	public abstract rankScore(mindID:string, raw:number):number;
 
-	heartbeatSeconds(mindID:string):number | null {
+	public heartbeatSeconds(mindID:string):number | null {
 		const mind = this.minds.get(mindID);
 		if (mind?.skipHeartbeat) {
 			return null;
@@ -307,7 +307,7 @@ export abstract class MindScheduler implements MindQueue {
 		return mind?.heartbeat ?? this.heartbeatStart;
 	}
 
-	scoreWatches(mindID:string, catalog:Catalog | readonly Catalog[]):number {
+	public scoreWatches(mindID:string, catalog:Catalog | readonly Catalog[]):number {
 		const mind = this.ensure(mindID);
 		let max = 0;
 		let scold:ScoldReason | undefined;
@@ -333,7 +333,7 @@ export abstract class MindScheduler implements MindQueue {
 		return max;
 	}
 
-	sampleWatches(mindID:string, catalog:Catalog | readonly Catalog[]):void {
+	public sampleWatches(mindID:string, catalog:Catalog | readonly Catalog[]):void {
 		const mind = this.ensure(mindID);
 		if (!mind.aiOn) {
 			return;
@@ -344,7 +344,7 @@ export abstract class MindScheduler implements MindQueue {
 		}
 	}
 
-	enqueueMajor(mindID:string, force = false):void {
+	public enqueueMajor(mindID:string, force = false):void {
 		const mind = this.ensure(mindID);
 		if (!mind.aiOn || (mind.skipMajor && !force)) {
 			return;
@@ -352,15 +352,15 @@ export abstract class MindScheduler implements MindQueue {
 		this.insert({ mindID, score: MAJOR_SCORE, reason: 'major' });
 	}
 
-	enqueueVerb(mindID:string, verb:string, ok = true):void {
+	public enqueueVerb(mindID:string, verb:string, ok = true):void {
 		this.enqueueScore(mindID, this.verbScore(verb, ok));
 	}
 
-	enqueueArc(mindID:string, arc:Arc, ok = true):void {
+	public enqueueArc(mindID:string, arc:Arc, ok = true):void {
 		this.enqueueScore(mindID, this.arcScore(arc, ok));
 	}
 
-	noteResult(mindID:string, stalled:boolean):void {
+	public noteResult(mindID:string, stalled:boolean):void {
 		const mind = this.ensure(mindID);
 		mind.thoughtOnce = true;
 		mind.sinceBeat = 0;
@@ -380,7 +380,7 @@ export abstract class MindScheduler implements MindQueue {
 		}
 	}
 
-	tick(dt:number, catalogs:Map<string, Catalog | readonly Catalog[]>):ThinkRow[] {
+	public tick(dt:number, catalogs:Map<string, Catalog | readonly Catalog[]>):ThinkRow[] {
 		if (dt > 0) {
 			this.watchClock += dt;
 			this.processClock += dt;
@@ -436,7 +436,7 @@ export abstract class MindScheduler implements MindQueue {
 		return picked;
 	}
 
-	drop(mindID:string):void {
+	public drop(mindID:string):void {
 		this.abortThink(mindID);
 		this.rows = this.rows.filter((r) => r.mindID !== mindID);
 	}

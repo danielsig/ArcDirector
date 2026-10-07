@@ -14,23 +14,23 @@ function nameQuery(name:string):{ want:string; compact:string } {
 }
 
 export class World extends KindlingWorld {
-	declare readonly objects:GameObject[];
-	readonly input = new InputState();
-	declare readonly chunks:Map<number, Chunk>;
-	time = 0;
-	hudMessage = '';
-	hudMessageTimestamp = 0;
-	hudMessageLife = 3.2;
-	playerInperceivable = false;
+	public declare readonly objects:GameObject[];
+	public readonly input = new InputState();
+	public declare readonly chunks:Map<number, Chunk>;
+	public time = 0;
+	public hudMessage = '';
+	public hudMessageTimestamp = 0;
+	public hudMessageLife = 3.2;
+	public playerInperceivable = false;
 	/** Body ids this player has damaged. A party that owns one treats the player as a rival. */
-	playerHits = new Set<string>();
-	arcDirectorOn = true;
-	sayOpen = false;
-	pickedUp:(character:GameObject, name:string)=>void = () => undefined;
-	override tileSize = CELL_SIZE;
-	override chunkSize = CHUNK_SIZE;
+	public playerHits = new Set<string>();
+	public arcDirectorOn = true;
+	public sayOpen = false;
+	public pickedUp:(character:GameObject, name:string)=>void = () => undefined;
+	public override tileSize = CELL_SIZE;
+	public override chunkSize = CHUNK_SIZE;
 
-	override sampleTerrain(x:number, z:number):TerrainSample | undefined {
+	public override sampleTerrain(x:number, z:number):TerrainSample | undefined {
 		const chunk = this.chunkAtWorld(x, z);
 		const tile = chunk?.tileAtWorld(x, z);
 		if (!chunk || !tile) {
@@ -45,23 +45,23 @@ export class World extends KindlingWorld {
 		};
 	}
 
-	npcCanSee(go:GameObject):boolean {
+	public npcCanSee(go:GameObject):boolean {
 		return !(this.playerInperceivable && go.id === 'Player' && this.playerHits.size === 0);
 	}
 
-	override add(go:GameObject):GameObject {
+	public override add(go:GameObject):GameObject {
 		return super.add(go) as GameObject;
 	}
 
-	override findByID(id:string):GameObject | undefined {
+	public override findByID(id:string):GameObject | undefined {
 		return super.findByID(id) as GameObject | undefined;
 	}
 
-	override objectsInTile(tx:number, tz:number):readonly GameObject[] {
+	public override objectsInTile(tx:number, tz:number):readonly GameObject[] {
 		return super.objectsInTile(tx, tz) as readonly GameObject[];
 	}
 
-	override forEachComponent<T extends Component>(
+	public override forEachComponent<T extends Component>(
 		ctor:Constructor<T>,
 		fn:(c:T, go:GameObject)=>void,
 	):void {
@@ -73,13 +73,13 @@ export class World extends KindlingWorld {
 		}
 	}
 
-	setMessage(text:string, life = 3.2):void {
+	public setMessage(text:string, life = 3.2):void {
 		this.hudMessage = text;
 		this.hudMessageTimestamp = this.time;
 		this.hudMessageLife = life;
 	}
 
-	findNamed(name:string):GameObject | undefined {
+	public findNamed(name:string):GameObject | undefined {
 		const raw = nameQuery(name);
 		const want = raw.want;
 		const compact = raw.compact;
@@ -113,11 +113,11 @@ export class World extends KindlingWorld {
 		return loose;
 	}
 
-	override chunkAtWorld(x:number, z:number):Chunk | undefined {
+	public override chunkAtWorld(x:number, z:number):Chunk | undefined {
 		return super.chunkAtWorld(x, z) as Chunk | undefined;
 	}
 
-	override tileAtWorld(x:number, z:number):Tile | undefined {
+	public override tileAtWorld(x:number, z:number):Tile | undefined {
 		return super.tileAtWorld(x, z) as Tile | undefined;
 	}
 }

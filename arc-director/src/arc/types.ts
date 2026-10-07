@@ -25,7 +25,7 @@ export type ArcResult = {
 };
 
 export class ArcError extends Error {
-	constructor(message:string) {
+	public constructor(message:string) {
 		super(message);
 		this.name = 'ArcError';
 	}

@@ -10,9 +10,9 @@ import {
 } from '@arc-director/kindling';
 
 class Spin extends Component {
-	speed = 0.35;
+	public speed = 0.35;
 
-	override update(dt:number):void {
+	public override update(dt:number):void {
 		this.gameObject.transform.yaw += dt * this.speed;
 	}
 }

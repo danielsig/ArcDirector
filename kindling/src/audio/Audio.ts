@@ -101,102 +101,104 @@ type LoopVoice = {
  * Hosts may still call `update()`; it is safe extra times.
  */
 export class Audio {
-	musicVolume = 0.52;
-	sfxVolume = 0.78;
-	muted = false;
+	public musicVolume = 0.52;
+	public sfxVolume = 0.78;
+	public muted = false;
 	/** 0–1 extra music attenuator (pause menu). */
-	duck = 1;
+	public duck = 1;
 	/** `console.warn` once per drop reason (`sfx before resume`, `late music note`). */
-	warnDropped = true;
-	private ctx:AudioContext | null = null;
-	private master:GainNode | null = null;
-	private musicGain:GainNode | null = null;
-	private sfxGain:GainNode | null = null;
-	private musicBus:GainNode | null = null;
-	/** Where score notes connect. Filter input when the score lists filters, else the bus. */
-	private noteDest:AudioNode | null = null;
-	private voiceDest:AudioNode[] | null = null;
-	private filterNodes:AudioNode[] = [];
-	private musicDry:GainNode | null = null;
-	private musicWetIn:AudioNode | null = null;
-	private noise:AudioBuffer | null = null;
-	private score:Score | null = null;
-	/** Finished file on the music output. Loops. Not sent through the synth room. */
-	private recording:AudioBufferSourceNode | null = null;
-	private recordingBuffer:AudioBuffer | null = null;
-	private recordingGain = 1;
-	private recordingToken = 0;
-	private recordingOffset = 0;
-	private recordingOrigin = 0;
-	private recordingID:string | null = null;
-	/** Seconds. 0 means the start of the file. */
-	private recordingLoopStart = 0;
-	/** Seconds. 0 means the end of the file. */
-	private recordingLoopEnd = 0;
-	private pendingRecording:{ bytes:ArrayBuffer; gain:number } | null = null;
-	private origin = 0;
-	private musicHold = 0;
-	private pausedMusic = false;
-	private listener:ListenerPose = { x: 0, y: 0, z: 0, yaw: 0 };
-	private unlocks:Array<()=>void> = [];
-	private lastMix = '';
-	private scheduled = new Set<string>();
-	private firedCues = new Set<string>();
-	private pruneCycle = -1;
-	/** True until the score has an origin on a running context. */
-	private clockDirty = true;
-	private loopNoise:AudioBuffer | null = null;
-	private readonly loops = new Map<string, LoopVoice>();
-	private readonly pendingLoops = new Map<string, { src:LoopSrc; opts:SfxOpts }>();
-	private pendingSfx:{ patch:SfxPatch; opts:SfxOpts } | null = null;
-	private readonly dropped = new Set<string>();
-	private pump = 0;
+	public warnDropped = true;
 
-	get ready():boolean {
-		return !!this.ctx;
+	private _ctx:AudioContext | null = null;
+	private _master:GainNode | null = null;
+	private _musicGain:GainNode | null = null;
+	private _sfxGain:GainNode | null = null;
+	private _musicBus:GainNode | null = null;
+	/** Where score notes connect. Filter input when the score lists filters, else the bus. */
+	private _noteDest:AudioNode | null = null;
+	private _voiceDest:AudioNode[] | null = null;
+	private _filterNodes:AudioNode[] = [];
+	private _musicDry:GainNode | null = null;
+	private _musicWetIn:AudioNode | null = null;
+	private _noise:AudioBuffer | null = null;
+	private _playing:Score | null = null;
+	/** Finished file on the music output. Loops. Not sent through the synth room. */
+	private _recording:AudioBufferSourceNode | null = null;
+	private _recordingBuffer:AudioBuffer | null = null;
+	private _recordingGain = 1;
+	private _recordingToken = 0;
+	private _recordingOffset = 0;
+	private _recordingOrigin = 0;
+	private _recordingID:string | null = null;
+	/** Seconds. 0 means the start of the file. */
+	private _recordingLoopStart = 0;
+	/** Seconds. 0 means the end of the file. */
+	private _recordingLoopEnd = 0;
+	private _pendingRecording:{ bytes:ArrayBuffer; gain:number } | null = null;
+	private _origin = 0;
+	private _musicHold = 0;
+	private _musicPaused = false;
+	private _listener:ListenerPose = { x: 0, y: 0, z: 0, yaw: 0 };
+	private _unlocks:Array<()=>void> = [];
+	private _lastMix = '';
+	private _scheduled = new Set<string>();
+	private _firedCues = new Set<string>();
+	private _pruneCycle = -1;
+	/** True until the score has an origin on a running context. */
+	private _clockDirty = true;
+	private _loopNoise:AudioBuffer | null = null;
+	private _pendingSfx:{ patch:SfxPatch; opts:SfxOpts } | null = null;
+	private _pump = 0;
+
+	private readonly _loops = new Map<string, LoopVoice>();
+	private readonly _pendingLoops = new Map<string, { src:LoopSrc; opts:SfxOpts }>();
+	private readonly _dropped = new Set<string>();
+
+	public get ready():boolean {
+		return !!this._ctx;
 	}
 
 	/** Active looping ids (`playLoop`). */
-	loopIDs():string[] {
-		return [...new Set([...this.loops.keys(), ...this.pendingLoops.keys()])];
+	public loopIDs():string[] {
+		return [...new Set([...this._loops.keys(), ...this._pendingLoops.keys()])];
 	}
 
-	get playing():Score | null {
-		return this.score;
+	public get playing():Score | null {
+		return this._playing;
 	}
 
 	/**
 	 * What the transport is driving. A recording uses 60 BPM so one beat is one
 	 * second and `loop` is where playback jumps back (`end`, or the file length).
 	 */
-	get music():{ id:string; bpm:number; loop:number } | null {
-		if (this.score) {
+	public get music():{ id:string; bpm:number; loop:number } | null {
+		if (this._playing) {
 			return {
-				id: this.score.id ?? '',
-				bpm: this.score.bpm,
-				loop: this.score.loop,
+				id: this._playing.id ?? '',
+				bpm: this._playing.bpm,
+				loop: this._playing.loop,
 			};
 		}
-		if (!this.recordingID) {
+		if (!this._recordingID) {
 			return null;
 		}
 		return {
-			id: this.recordingID,
+			id: this._recordingID,
 			bpm: 60,
 			loop: this.recordingBounds().end,
 		};
 	}
 
-	get musicPaused():boolean {
-		return this.pausedMusic;
+	public get musicPaused():boolean {
+		return this._musicPaused;
 	}
 
 	/** Beats from loop start, in `[0, loop)`. */
-	musicBeat():number {
-		if (this.recordingID) {
+	public musicBeat():number {
+		if (this._recordingID) {
 			return this.recordingSec();
 		}
-		const score = this.score;
+		const score = this._playing;
 		if (!score) {
 			return 0;
 		}
@@ -206,58 +208,58 @@ export class Audio {
 		return wrapped < 0 ? wrapped + loop : wrapped;
 	}
 
-	pauseMusic():void {
-		if (this.recordingID) {
-			if (this.pausedMusic) {
+	public pauseMusic():void {
+		if (this._recordingID) {
+			if (this._musicPaused) {
 				return;
 			}
-			this.recordingOffset = this.recordingSec();
-			this.pausedMusic = true;
+			this._recordingOffset = this.recordingSec();
+			this._musicPaused = true;
 			this.releaseRecordingNode();
 			this.applyMix(true);
 			return;
 		}
-		if (!this.score || this.pausedMusic) {
+		if (!this._playing || this._musicPaused) {
 			return;
 		}
-		this.musicHold = this.elapsedSec();
-		this.pausedMusic = true;
+		this._musicHold = this.elapsedSec();
+		this._musicPaused = true;
 		this.cutMusicVoices();
 	}
 
-	unpauseMusic():void {
-		if (this.recordingID) {
-			if (!this.pausedMusic) {
+	public unpauseMusic():void {
+		if (this._recordingID) {
+			if (!this._musicPaused) {
 				return;
 			}
-			this.pausedMusic = false;
+			this._musicPaused = false;
 			this.startRecordingNode();
 			this.applyMix(true);
 			this.armPump();
 			return;
 		}
-		if (!this.score || !this.pausedMusic) {
+		if (!this._playing || !this._musicPaused) {
 			return;
 		}
-		this.pausedMusic = false;
-		this.clockDirty = true;
-		if (this.ctx?.state === 'running') {
+		this._musicPaused = false;
+		this._clockDirty = true;
+		if (this._ctx?.state === 'running') {
 			this.armClock();
 		}
 		this.armPump();
 	}
 
-	seekMusic(beat:number):void {
-		if (this.recordingID) {
+	public seekMusic(beat:number):void {
+		if (this._recordingID) {
 			const { end } = this.recordingBounds();
-			this.recordingOffset = end > 0 ? wrap(beat, end) : 0;
-			if (!this.pausedMusic) {
+			this._recordingOffset = end > 0 ? wrap(beat, end) : 0;
+			if (!this._musicPaused) {
 				this.releaseRecordingNode();
 				this.startRecordingNode();
 			}
 			return;
 		}
-		const score = this.score;
+		const score = this._playing;
 		if (!score) {
 			return;
 		}
@@ -267,23 +269,23 @@ export class Audio {
 		const b = times < 0
 			? ((beat % loop) + loop) % loop
 			: Math.max(0, Math.min(beat, span));
-		this.musicHold = b * (60 / score.bpm);
+		this._musicHold = b * (60 / score.bpm);
 		this.cutMusicVoices();
-		this.scheduled.clear();
-		this.firedCues.clear();
-		this.pruneCycle = -1;
-		const ctx = this.ctx;
-		if (!this.pausedMusic && ctx && ctx.state === 'running') {
-			this.origin = ctx.currentTime - this.musicHold;
-			this.clockDirty = false;
+		this._scheduled.clear();
+		this._firedCues.clear();
+		this._pruneCycle = -1;
+		const ctx = this._ctx;
+		if (!this._musicPaused && ctx && ctx.state === 'running') {
+			this._origin = ctx.currentTime - this._musicHold;
+			this._clockDirty = false;
 			this.update();
 			return;
 		}
-		this.clockDirty = true;
+		this._clockDirty = true;
 	}
 
 	/** Create / resume the context. Call from a click or key. */
-	async resume():Promise<void> {
+	public async resume():Promise<void> {
 		const ctx = this.ensure();
 		if (!ctx) {
 			return;
@@ -300,7 +302,7 @@ export class Audio {
 		this.armPendingLoops();
 		this.flushPendingSfx();
 		this.flushPendingRecording();
-		if (this.score && this.clockDirty) {
+		if (this._playing && this._clockDirty) {
 			this.armClock();
 		}
 		this.armPump();
@@ -308,7 +310,7 @@ export class Audio {
 	}
 
 	/** One-shot click/keydown/touch listeners that call `resume`. */
-	connectUnlock(target:EventTarget):()=>void {
+	public connectUnlock(target:EventTarget):()=>void {
 		const go = ():void => {
 			void this.resume();
 		};
@@ -321,7 +323,7 @@ export class Audio {
 			target.removeEventListener('keydown', go);
 			target.removeEventListener('touchstart', go);
 		};
-		this.unlocks.push(off);
+		this._unlocks.push(off);
 		return off;
 	}
 
@@ -333,25 +335,25 @@ export class Audio {
 	 * Playback starts at 0. It runs until `loop.end` (default: the end of the
 	 * file), then jumps to `loop.start` (default: 0) and repeats that span.
 	 */
-	async playRecording(
+	public async playRecording(
 		src:string | ArrayBuffer,
 		gain = 1,
 		id = 'recording',
 		loop?:{ start?:number; end?:number },
 	):Promise<void> {
-		const token = ++this.recordingToken;
-		this.pendingRecording = null;
+		const token = ++this._recordingToken;
+		this._pendingRecording = null;
 		this.releaseRecordingNode();
-		this.recordingBuffer = null;
-		this.recordingOffset = 0;
-		this.recordingLoopStart = loop?.start ?? 0;
-		this.recordingLoopEnd = loop?.end ?? 0;
-		this.recordingID = id;
-		this.score = null;
-		this.pausedMusic = false;
-		this.musicHold = 0;
-		this.clockDirty = true;
-		this.firedCues.clear();
+		this._recordingBuffer = null;
+		this._recordingOffset = 0;
+		this._recordingLoopStart = loop?.start ?? 0;
+		this._recordingLoopEnd = loop?.end ?? 0;
+		this._recordingID = id;
+		this._playing = null;
+		this._musicPaused = false;
+		this._musicHold = 0;
+		this._clockDirty = true;
+		this._firedCues.clear();
 		this.cutMusicVoices();
 		const ctx = this.ensure();
 		let bytes:ArrayBuffer;
@@ -365,30 +367,30 @@ export class Audio {
 		else {
 			bytes = src.slice(0);
 		}
-		if (token !== this.recordingToken) {
+		if (token !== this._recordingToken) {
 			return;
 		}
 		if (!ctx) {
-			this.pendingRecording = { bytes, gain };
+			this._pendingRecording = { bytes, gain };
 			return;
 		}
 		await this.attachRecording(ctx, bytes, gain, token);
 	}
 
-	playMusic(score:Score):void {
+	public playMusic(score:Score):void {
 		const bad = scoreProblems(score);
 		if (bad.length) {
 			throw new Error(`${score.id ?? 'score'}: ${bad.join(', ')}`);
 		}
 		this.stopRecording();
 		const ctx = this.ensure();
-		this.score = score;
-		this.pausedMusic = false;
-		this.musicHold = 0;
-		this.scheduled.clear();
-		this.firedCues.clear();
-		this.pruneCycle = -1;
-		this.clockDirty = true;
+		this._playing = score;
+		this._musicPaused = false;
+		this._musicHold = 0;
+		this._scheduled.clear();
+		this._firedCues.clear();
+		this._pruneCycle = -1;
+		this._clockDirty = true;
 		this.cutMusicVoices();
 		this.armPump();
 		if (!ctx) {
@@ -399,19 +401,19 @@ export class Audio {
 	}
 
 	private elapsedSec():number {
-		if (this.pausedMusic || this.clockDirty) {
-			return this.musicHold;
+		if (this._musicPaused || this._clockDirty) {
+			return this._musicHold;
 		}
-		const ctx = this.ctx;
+		const ctx = this._ctx;
 		if (!ctx) {
-			return this.musicHold;
+			return this._musicHold;
 		}
-		return Math.max(0, ctx.currentTime - this.origin);
+		return Math.max(0, ctx.currentTime - this._origin);
 	}
 
 	private cutMusicVoices():void {
-		const ctx = this.ctx;
-		const old = this.musicBus;
+		const ctx = this._ctx;
+		const old = this._musicBus;
 		if (ctx && old) {
 			old.gain.cancelScheduledValues(ctx.currentTime);
 			old.gain.setValueAtTime(0, ctx.currentTime);
@@ -422,32 +424,32 @@ export class Audio {
 				// already gone
 			}
 		}
-		this.scheduled.clear();
-		this.pruneCycle = -1;
+		this._scheduled.clear();
+		this._pruneCycle = -1;
 		this.releaseMusicFilters();
-		if (!ctx || !this.musicDry || !this.musicWetIn) {
-			this.musicBus = null;
+		if (!ctx || !this._musicDry || !this._musicWetIn) {
+			this._musicBus = null;
 			return;
 		}
 		const bus = ctx.createGain();
 		bus.gain.value = 1;
-		bus.connect(this.musicDry);
-		bus.connect(this.musicWetIn);
-		this.musicBus = bus;
-		this.noteDest = bus;
-		const score = this.score;
+		bus.connect(this._musicDry);
+		bus.connect(this._musicWetIn);
+		this._musicBus = bus;
+		this._noteDest = bus;
+		const score = this._playing;
 		if (score) {
 			const opened = openScoreFilters(ctx, score, bus);
 			if (opened) {
-				this.noteDest = opened.input;
-				this.voiceDest = opened.voiceDest;
-				this.filterNodes = opened.nodes;
+				this._noteDest = opened.input;
+				this._voiceDest = opened.voiceDest;
+				this._filterNodes = opened.nodes;
 			}
 		}
 	}
 
 	private releaseMusicFilters():void {
-		for (const node of this.filterNodes) {
+		for (const node of this._filterNodes) {
 			try {
 				node.disconnect();
 			}
@@ -455,9 +457,9 @@ export class Audio {
 				// already gone
 			}
 		}
-		this.filterNodes = [];
-		this.noteDest = null;
-		this.voiceDest = null;
+		this._filterNodes = [];
+		this._noteDest = null;
+		this._voiceDest = null;
 	}
 
 	private insertPatchFilters(ctx:AudioContext, dest:AudioNode, patch:SfxPatch, when:number):AudioNode {
@@ -487,35 +489,35 @@ export class Audio {
 	}
 
 	private armClock():void {
-		const ctx = this.ctx;
-		if (!ctx || ctx.state !== 'running' || !this.score || this.pausedMusic) {
+		const ctx = this._ctx;
+		if (!ctx || ctx.state !== 'running' || !this._playing || this._musicPaused) {
 			return;
 		}
-		this.origin = ctx.currentTime + START_LEAD - this.musicHold;
-		this.scheduled.clear();
-		this.pruneCycle = -1;
-		this.clockDirty = false;
+		this._origin = ctx.currentTime + START_LEAD - this._musicHold;
+		this._scheduled.clear();
+		this._pruneCycle = -1;
+		this._clockDirty = false;
 	}
 
 	private stopRecording():void {
-		this.recordingToken += 1;
-		this.pendingRecording = null;
-		this.recordingBuffer = null;
-		this.recordingOffset = 0;
-		this.recordingLoopStart = 0;
-		this.recordingLoopEnd = 0;
-		this.recordingID = null;
+		this._recordingToken += 1;
+		this._pendingRecording = null;
+		this._recordingBuffer = null;
+		this._recordingOffset = 0;
+		this._recordingLoopStart = 0;
+		this._recordingLoopEnd = 0;
+		this._recordingID = null;
 		this.releaseRecordingNode();
 	}
 
 	/** Playable span. `end` is 0 until a buffer is decoded. */
 	private recordingBounds():{ start:number; end:number } {
-		const dur = this.recordingBuffer?.duration ?? 0;
+		const dur = this._recordingBuffer?.duration ?? 0;
 		if (!(dur > 0)) {
 			return { start: 0, end: 0 };
 		}
-		let end = this.recordingLoopEnd > 0 ? Math.min(this.recordingLoopEnd, dur) : dur;
-		let start = this.recordingLoopStart;
+		let end = this._recordingLoopEnd > 0 ? Math.min(this._recordingLoopEnd, dur) : dur;
+		let start = this._recordingLoopStart;
 		if (!(start >= 0) || !(end > start)) {
 			start = 0;
 			end = dur;
@@ -526,22 +528,22 @@ export class Audio {
 	/** Seconds into the file. One beat on the transport. */
 	private recordingSec():number {
 		const { start, end } = this.recordingBounds();
-		let sec = this.recordingOffset;
-		if (!this.pausedMusic && this.recording && this.ctx) {
-			sec += this.ctx.currentTime - this.recordingOrigin;
+		let sec = this._recordingOffset;
+		if (!this._musicPaused && this._recording && this._ctx) {
+			sec += this._ctx.currentTime - this._recordingOrigin;
 		}
 		return placeRecording(sec, start, end);
 	}
 
 	private startRecordingNode():void {
-		const ctx = this.ctx;
-		const buffer = this.recordingBuffer;
-		const dest = this.musicGain;
-		if (!ctx || !buffer || !dest || this.pausedMusic) {
+		const ctx = this._ctx;
+		const buffer = this._recordingBuffer;
+		const dest = this._musicGain;
+		if (!ctx || !buffer || !dest || this._musicPaused) {
 			return;
 		}
 		const { start, end } = this.recordingBounds();
-		let offset = end > 0 ? wrap(this.recordingOffset, end) : 0;
+		let offset = end > 0 ? wrap(this._recordingOffset, end) : 0;
 		if (offset >= end - 0.001) {
 			offset = start;
 		}
@@ -555,14 +557,14 @@ export class Audio {
 		node.connect(dest);
 		const when = ctx.currentTime;
 		node.start(when, offset);
-		this.recording = node;
-		this.recordingOrigin = when;
-		this.recordingOffset = offset;
+		this._recording = node;
+		this._recordingOrigin = when;
+		this._recordingOffset = offset;
 	}
 
 	private releaseRecordingNode():void {
-		const node = this.recording;
-		this.recording = null;
+		const node = this._recording;
+		this._recording = null;
 		if (!node) {
 			return;
 		}
@@ -582,14 +584,14 @@ export class Audio {
 		token:number,
 	):Promise<void> {
 		const buffer = await ctx.decodeAudioData(bytes.slice(0));
-		if (token !== this.recordingToken || this.ctx !== ctx || !this.musicGain) {
+		if (token !== this._recordingToken || this._ctx !== ctx || !this._musicGain) {
 			return;
 		}
 		this.releaseRecordingNode();
-		this.recordingBuffer = buffer;
-		this.recordingGain = gain;
-		this.recordingOffset = 0;
-		if (!this.pausedMusic) {
+		this._recordingBuffer = buffer;
+		this._recordingGain = gain;
+		this._recordingOffset = 0;
+		if (!this._musicPaused) {
 			this.startRecordingNode();
 		}
 		this.applyMix(true);
@@ -597,42 +599,42 @@ export class Audio {
 	}
 
 	private flushPendingRecording():void {
-		const pending = this.pendingRecording;
-		const ctx = this.ctx;
+		const pending = this._pendingRecording;
+		const ctx = this._ctx;
 		if (!pending || !ctx) {
 			return;
 		}
-		this.pendingRecording = null;
-		void this.attachRecording(ctx, pending.bytes, pending.gain, this.recordingToken);
+		this._pendingRecording = null;
+		void this.attachRecording(ctx, pending.bytes, pending.gain, this._recordingToken);
 	}
 
-	stopMusic():void {
+	public stopMusic():void {
 		this.stopRecording();
-		this.score = null;
-		this.pausedMusic = false;
-		this.musicHold = 0;
-		this.clockDirty = true;
-		this.firedCues.clear();
+		this._playing = null;
+		this._musicPaused = false;
+		this._musicHold = 0;
+		this._clockDirty = true;
+		this._firedCues.clear();
 		this.cutMusicVoices();
-		const ctx = this.ctx;
-		const g = this.musicGain;
+		const ctx = this._ctx;
+		const g = this._musicGain;
 		if (ctx && g) {
 			g.gain.cancelScheduledValues(ctx.currentTime);
 			g.gain.setTargetAtTime(0.0001, ctx.currentTime, 0.12);
 		}
 	}
 
-	playSfx(patch:SfxPatch, opts:SfxOpts = {}):void {
+	public playSfx(patch:SfxPatch, opts:SfxOpts = {}):void {
 		const bad = filterProblems(patch.filters, 'sfx filter');
 		if (bad.length) {
 			throw new Error(`sfx: ${bad.join(', ')}`);
 		}
 		const ctx = this.ensure();
-		const bus = this.sfxGain;
-		const noise = this.noise;
+		const bus = this._sfxGain;
+		const noise = this._noise;
 		if (!ctx || !bus || !noise || ctx.state !== 'running') {
-			if (!this.pendingSfx) {
-				this.pendingSfx = { patch, opts: { ...opts } };
+			if (!this._pendingSfx) {
+				this._pendingSfx = { patch, opts: { ...opts } };
 				return;
 			}
 			this.drop('sfx before resume');
@@ -642,11 +644,11 @@ export class Audio {
 	}
 
 	private flushPendingSfx():void {
-		const pending = this.pendingSfx;
+		const pending = this._pendingSfx;
 		if (!pending) {
 			return;
 		}
-		this.pendingSfx = null;
+		this._pendingSfx = null;
 		this.playSfx(pending.patch, pending.opts);
 	}
 
@@ -673,7 +675,7 @@ export class Audio {
 	 * Start or move a posed loop. Patch (river) or Score (radio). Safe every frame with a new pose.
 	 * Same object keeps the graph / clock; a different object restarts.
 	 */
-	playLoop(id:string, src:LoopSrc, opts:SfxOpts = {}):void {
+	public playLoop(id:string, src:LoopSrc, opts:SfxOpts = {}):void {
 		if (isScore(src)) {
 			const bad = scoreProblems(src);
 			if (bad.length) {
@@ -686,20 +688,20 @@ export class Audio {
 				throw new Error(`${id}: ${bad.join(', ')}`);
 			}
 		}
-		this.pendingLoops.set(id, { src, opts: { ...opts } });
+		this._pendingLoops.set(id, { src, opts: { ...opts } });
 		this.armLoop(id);
 		this.armPump();
 	}
 
-	stopLoop(id:string):void {
-		this.pendingLoops.delete(id);
-		const loop = this.loops.get(id);
+	public stopLoop(id:string):void {
+		this._pendingLoops.delete(id);
+		const loop = this._loops.get(id);
 		if (!loop) {
 			return;
 		}
-		this.loops.delete(id);
+		this._loops.delete(id);
 		loop.release();
-		const ctx = this.ctx;
+		const ctx = this._ctx;
 		const when = ctx ? ctx.currentTime + 0.04 : 0;
 		if (ctx) {
 			loop.dist.gain.setTargetAtTime(0.0001, ctx.currentTime, 0.05);
@@ -717,12 +719,12 @@ export class Audio {
 		}
 	}
 
-	setListener(x:number, y:number, z:number, yaw = 0):void {
-		this.listener = { x, y, z, yaw };
+	public setListener(x:number, y:number, z:number, yaw = 0):void {
+		this._listener = { x, y, z, yaw };
 	}
 
 	/** Schedule upcoming notes and spatialize loops. The mixer calls this itself in the browser; call it from tests / headless. */
-	update():void {
+	public update():void {
 		this.applyMix(false);
 		this.syncLoops();
 		this.fireCues();
@@ -732,37 +734,37 @@ export class Audio {
 	}
 
 	private scheduleMusic():void {
-		const ctx = this.ctx;
-		const bus = this.musicBus;
-		const score = this.score;
-		if (!ctx || !bus || !this.noise || !score || ctx.state !== 'running' || this.pausedMusic) {
+		const ctx = this._ctx;
+		const bus = this._musicBus;
+		const score = this._playing;
+		if (!ctx || !bus || !this._noise || !score || ctx.state !== 'running' || this._musicPaused) {
 			return;
 		}
-		if (this.clockDirty) {
+		if (this._clockDirty) {
 			this.armClock();
 		}
-		if (this.clockDirty || this.pausedMusic) {
+		if (this._clockDirty || this._musicPaused) {
 			return;
 		}
-		const dest = this.noteDest ?? bus;
-		this.pruneCycle = this.pumpScoreNotes(
+		const dest = this._noteDest ?? bus;
+		this._pruneCycle = this.pumpScoreNotes(
 			score,
-			this.origin,
-			this.scheduled,
-			this.pruneCycle,
+			this._origin,
+			this._scheduled,
+			this._pruneCycle,
 			dest,
 			'late music note',
-			this.voiceDest,
+			this._voiceDest,
 		);
 	}
 
 	private scheduleLoopScores():void {
-		const ctx = this.ctx;
-		if (!ctx || !this.noise || ctx.state !== 'running') {
+		const ctx = this._ctx;
+		if (!ctx || !this._noise || ctx.state !== 'running') {
 			return;
 		}
-		const l = this.listener;
-		for (const loop of this.loops.values()) {
+		const l = this._listener;
+		for (const loop of this._loops.values()) {
 			if (!isScore(loop.src) || !loop.local) {
 				continue;
 			}
@@ -795,8 +797,8 @@ export class Audio {
 		lateReason:string,
 		voiceDest:AudioNode[] | null = null,
 	):number {
-		const ctx = this.ctx;
-		const noise = this.noise;
+		const ctx = this._ctx;
+		const noise = this._noise;
 		if (!ctx || !noise) {
 			return pruneCycle;
 		}
@@ -871,8 +873,8 @@ export class Audio {
 	}
 
 	private fireCues():void {
-		const score = this.score;
-		if (!score || this.pausedMusic) {
+		const score = this._playing;
+		if (!score || this._musicPaused) {
 			return;
 		}
 		const cues = score.cues;
@@ -895,25 +897,25 @@ export class Audio {
 						continue;
 					}
 					const id = `${cycle}:${i}`;
-					if (this.firedCues.has(id)) {
+					if (this._firedCues.has(id)) {
 						continue;
 					}
-					this.firedCues.add(id);
-					const still = this.score;
+					this._firedCues.add(id);
+					const still = this._playing;
 					c.fn();
-					if (this.score !== still) {
+					if (this._playing !== still) {
 						return;
 					}
 				}
 			}
 		}
-		if (times >= 0 && elapsedBeats + 1e-9 >= times * score.loop && this.score === score) {
+		if (times >= 0 && elapsedBeats + 1e-9 >= times * score.loop && this._playing === score) {
 			this.stopMusic();
 		}
 	}
 
 	private fireLoopCues():void {
-		for (const [id, loop] of [...this.loops]) {
+		for (const [id, loop] of [...this._loops]) {
 			if (!isScore(loop.src)) {
 				continue;
 			}
@@ -921,9 +923,9 @@ export class Audio {
 			const cues = score.cues;
 			const times = score.loops ?? -1;
 			const spb = 60 / score.bpm;
-			const elapsed = loop.clockDirty || !this.ctx
+			const elapsed = loop.clockDirty || !this._ctx
 				? 0
-				: Math.max(0, this.ctx.currentTime - loop.origin);
+				: Math.max(0, this._ctx.currentTime - loop.origin);
 			const elapsedBeats = elapsed / spb;
 			const toCycle = Math.floor(elapsedBeats / score.loop + 1e-9);
 			let alive = true;
@@ -947,7 +949,7 @@ export class Audio {
 						}
 						loop.firedCues.add(cueID);
 						c.fn();
-						if (this.loops.get(id) !== loop || loop.src !== score) {
+						if (this._loops.get(id) !== loop || loop.src !== score) {
 							alive = false;
 							break;
 						}
@@ -959,49 +961,49 @@ export class Audio {
 				&& times >= 0
 				&& elapsedBeats + 1e-9 >= times * score.loop
 				&& loop.src === score
-				&& this.loops.get(id) === loop
+				&& this._loops.get(id) === loop
 			) {
 				this.stopLoop(id);
 			}
 		}
 	}
 
-	dispose():void {
+	public dispose():void {
 		this.stopRecording();
 		this.releaseMusicFilters();
-		this.score = null;
-		if (this.pump) {
-			cancelAnimationFrame(this.pump);
-			this.pump = 0;
+		this._playing = null;
+		if (this._pump) {
+			cancelAnimationFrame(this._pump);
+			this._pump = 0;
 		}
 		for (const id of [...this.loopIDs()]) {
 			this.stopLoop(id);
 		}
-		this.pendingLoops.clear();
-		this.pendingSfx = null;
-		this.loops.clear();
-		for (const off of this.unlocks) {
+		this._pendingLoops.clear();
+		this._pendingSfx = null;
+		this._loops.clear();
+		for (const off of this._unlocks) {
 			off();
 		}
-		this.unlocks = [];
-		const ctx = this.ctx;
-		this.ctx = null;
-		this.master = null;
-		this.musicGain = null;
-		this.sfxGain = null;
-		this.musicBus = null;
-		this.musicDry = null;
-		this.musicWetIn = null;
-		this.noise = null;
-		this.loopNoise = null;
+		this._unlocks = [];
+		const ctx = this._ctx;
+		this._ctx = null;
+		this._master = null;
+		this._musicGain = null;
+		this._sfxGain = null;
+		this._musicBus = null;
+		this._musicDry = null;
+		this._musicWetIn = null;
+		this._noise = null;
+		this._loopNoise = null;
 		if (ctx && ctx.state !== 'closed') {
 			void ctx.close();
 		}
 	}
 
 	private ensure():AudioContext | null {
-		if (this.ctx) {
-			return this.ctx;
+		if (this._ctx) {
+			return this._ctx;
 		}
 		const Ctor = audioCtor();
 		if (!Ctor) {
@@ -1014,10 +1016,10 @@ export class Audio {
 		catch {
 			ctx = new Ctor();
 		}
-		this.ctx = ctx;
+		this._ctx = ctx;
 		forceStereo(ctx);
-		this.noise = makeNoise(ctx);
-		this.loopNoise = makeNoise(ctx, 4.2);
+		this._noise = makeNoise(ctx);
+		this._loopNoise = makeNoise(ctx, 4.2);
 		const master = ctx.createGain();
 		const musicGain = ctx.createGain();
 		const sfxGain = ctx.createGain();
@@ -1030,15 +1032,15 @@ export class Audio {
 		musicBus.connect(wet.in);
 		dry.connect(musicGain);
 		wet.out.connect(musicGain);
-		this.musicDry = dry;
-		this.musicWetIn = wet.in;
+		this._musicDry = dry;
+		this._musicWetIn = wet.in;
 		musicGain.connect(master);
 		sfxGain.connect(master);
 		master.connect(ctx.destination);
-		this.master = master;
-		this.musicGain = musicGain;
-		this.sfxGain = sfxGain;
-		this.musicBus = musicBus;
+		this._master = master;
+		this._musicGain = musicGain;
+		this._sfxGain = sfxGain;
+		this._musicBus = musicBus;
 		this.applyMix(true);
 		this.armPendingLoops();
 		return ctx;
@@ -1050,70 +1052,70 @@ export class Audio {
 	}
 
 	private applyMix(force:boolean):void {
-		const key = `${this.muted ? 1 : 0}:${this.musicVolume}:${this.sfxVolume}:${this.duck}:${this.score ? 1 : 0}:${this.recording ? 1 : 0}:${this.recordingGain}`;
-		if (!force && key === this.lastMix) {
+		const key = `${this.muted ? 1 : 0}:${this.musicVolume}:${this.sfxVolume}:${this.duck}:${this._playing ? 1 : 0}:${this._recording ? 1 : 0}:${this._recordingGain}`;
+		if (!force && key === this._lastMix) {
 			return;
 		}
-		this.lastMix = key;
-		const ctx = this.ctx;
-		if (!ctx || !this.master || !this.musicGain || !this.sfxGain) {
+		this._lastMix = key;
+		const ctx = this._ctx;
+		if (!ctx || !this._master || !this._musicGain || !this._sfxGain) {
 			return;
 		}
 		const now = ctx.currentTime;
-		this.master.gain.setTargetAtTime(this.muted ? 0.0001 : 1, now, 0.04);
-		const musicOn = !!this.score || !!this.recording;
-		const gain = this.score?.gain ?? (this.recording ? this.recordingGain : 1);
+		this._master.gain.setTargetAtTime(this.muted ? 0.0001 : 1, now, 0.04);
+		const musicOn = !!this._playing || !!this._recording;
+		const gain = this._playing?.gain ?? (this._recording ? this._recordingGain : 1);
 		const music = musicOn ? this.musicVolume * this.duck * gain : 0.0001;
-		this.musicGain.gain.setTargetAtTime(Math.max(0.0001, music), now, 0.08);
-		this.sfxGain.gain.setTargetAtTime(Math.max(0.0001, this.sfxVolume), now, 0.04);
+		this._musicGain.gain.setTargetAtTime(Math.max(0.0001, music), now, 0.08);
+		this._sfxGain.gain.setTargetAtTime(Math.max(0.0001, this.sfxVolume), now, 0.04);
 	}
 
 	private drop(reason:string):void {
-		if (!this.warnDropped || this.dropped.has(reason)) {
+		if (!this.warnDropped || this._dropped.has(reason)) {
 			return;
 		}
-		this.dropped.add(reason);
+		this._dropped.add(reason);
 		console.warn(`[kindling audio] dropped: ${reason}`);
 	}
 
 	private armPump():void {
-		if (this.pump || typeof requestAnimationFrame !== 'function') {
+		if (this._pump || typeof requestAnimationFrame !== 'function') {
 			return;
 		}
 		const tick = ():void => {
-			this.pump = 0;
-			if (!this.ctx) {
+			this._pump = 0;
+			if (!this._ctx) {
 				return;
 			}
-			const busy = !!this.score || !!this.recordingID || this.loops.size > 0 || this.pendingLoops.size > 0;
+			const busy = !!this._playing || !!this._recordingID || this._loops.size > 0 || this._pendingLoops.size > 0;
 			if (!busy) {
 				return;
 			}
 			this.update();
-			this.pump = requestAnimationFrame(tick);
+			this._pump = requestAnimationFrame(tick);
 		};
-		this.pump = requestAnimationFrame(tick);
+		this._pump = requestAnimationFrame(tick);
 	}
 
 	private armPendingLoops():void {
-		for (const id of this.pendingLoops.keys()) {
+		for (const id of this._pendingLoops.keys()) {
 			this.armLoop(id);
 		}
 	}
 
 	private armLoop(id:string):void {
-		const spec = this.pendingLoops.get(id);
+		const spec = this._pendingLoops.get(id);
 		if (!spec) {
 			return;
 		}
-		const live = this.loops.get(id);
+		const live = this._loops.get(id);
 		if (live && live.src === spec.src) {
 			this.poseLoop(live, spec.opts);
 			return;
 		}
 		if (live) {
 			live.release();
-			const now = this.ctx?.currentTime ?? 0;
+			const now = this._ctx?.currentTime ?? 0;
 			live.voice?.stop(now);
 			try {
 				live.local?.disconnect();
@@ -1123,14 +1125,14 @@ export class Audio {
 			catch {
 				// gone
 			}
-			this.loops.delete(id);
+			this._loops.delete(id);
 		}
-		const ctx = this.ctx;
-		const bus = this.sfxGain;
+		const ctx = this._ctx;
+		const bus = this._sfxGain;
 		if (!ctx || !bus) {
 			return;
 		}
-		if (!isScore(spec.src) && !(this.loopNoise ?? this.noise)) {
+		if (!isScore(spec.src) && !(this._loopNoise ?? this._noise)) {
 			return;
 		}
 		const panner = makePanner(ctx, spec.opts.hear ?? HEAR);
@@ -1167,7 +1169,7 @@ export class Audio {
 			}
 		}
 		else {
-			const noise = this.loopNoise ?? this.noise;
+			const noise = this._loopNoise ?? this._noise;
 			if (!noise) {
 				return;
 			}
@@ -1200,7 +1202,7 @@ export class Audio {
 			firedCues: new Set(),
 			pruneCycle: -1,
 		};
-		this.loops.set(id, loop);
+		this._loops.set(id, loop);
 		this.poseLoop(loop, spec.opts);
 	}
 
@@ -1229,17 +1231,17 @@ export class Audio {
 	}
 
 	private syncLoops():void {
-		const ctx = this.ctx;
+		const ctx = this._ctx;
 		if (!ctx || ctx.state !== 'running') {
 			return;
 		}
 		this.armPendingLoops();
 		const now = ctx.currentTime;
-		poseListener(ctx, this.listener, now);
-		for (const loop of this.loops.values()) {
-			const dx = loop.x - this.listener.x;
-			const dy = loop.y - this.listener.y;
-			const dz = loop.z - this.listener.z;
+		poseListener(ctx, this._listener, now);
+		for (const loop of this._loops.values()) {
+			const dx = loop.x - this._listener.x;
+			const dy = loop.y - this._listener.y;
+			const dz = loop.z - this._listener.z;
 			const dist = Math.hypot(dx, dy, dz);
 			const extra = isScore(loop.src) ? (loop.src.gain ?? 1) : 1;
 			const gain = dist > loop.hear ? 0.0001 : loop.userGain * extra * distanceGain(dist, loop.falloff);
@@ -1258,7 +1260,7 @@ export class Audio {
 		if (opts.x === undefined || opts.z === undefined) {
 			return bus;
 		}
-		const l = this.listener;
+		const l = this._listener;
 		const hear = opts.hear ?? HEAR;
 		const dx = opts.x - l.x;
 		const dy = (opts.y ?? 0) - l.y;
@@ -1267,7 +1269,7 @@ export class Audio {
 		if (dist > hear) {
 			return null;
 		}
-		poseListener(ctx, this.listener, when);
+		poseListener(ctx, this._listener, when);
 		const panner = makePanner(ctx, hear);
 		placePanner(panner, opts.x, opts.y ?? 0, opts.z, when, false);
 		const g = ctx.createGain();

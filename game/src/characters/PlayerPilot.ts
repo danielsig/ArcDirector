@@ -6,42 +6,42 @@ import { NPCInput } from './NPCInput';
  * A canvas click calls `interrupt`, which hands the body back and stops the arc.
  */
 export class PlayerPilot extends Component {
-	private onInterrupt:(()=>void) | null = null;
-	private yielded = false;
+	private _claimed:(()=>void) | null = null;
+	private _yielded = false;
 
-	get claimed():boolean {
-		return this.onInterrupt !== null;
+	public get claimed():boolean {
+		return this._claimed !== null;
 	}
 
 	/** Take the body for one arc. Returns the release for this claim; a newer claim makes it a no-op. */
-	claim(onInterrupt:()=>void):()=>void {
-		this.onInterrupt = onInterrupt;
+	public claim(onInterrupt:()=>void):()=>void {
+		this._claimed = onInterrupt;
 		return () => {
-			if (this.onInterrupt === onInterrupt) {
+			if (this._claimed === onInterrupt) {
 				this.release();
 			}
 		};
 	}
 
-	interrupt():void {
-		const stop = this.onInterrupt;
+	public interrupt():void {
+		const stop = this._claimed;
 		if (!stop) {
 			return;
 		}
 		this.release();
-		this.yielded = true;
+		this._yielded = true;
 		stop();
 	}
 
 	/** True once after `interrupt`, so that click does not also use an item. */
-	consumeYield():boolean {
-		const yielded = this.yielded;
-		this.yielded = false;
+	public consumeYield():boolean {
+		const yielded = this._yielded;
+		this._yielded = false;
 		return yielded;
 	}
 
 	private release():void {
-		this.onInterrupt = null;
+		this._claimed = null;
 		const npc = this.gameObject.getComponent(NPCInput);
 		if (npc) {
 			npc.destinationPoint = null;

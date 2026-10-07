@@ -4,5 +4,5 @@ import type { World } from './World';
 export { allocID, resetAllocID };
 
 export class GameObject extends KindlingGO {
-	declare world:World | null;
+	public declare world:World | null;
 }

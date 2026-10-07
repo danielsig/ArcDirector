@@ -7,14 +7,14 @@ import { World } from './World.js';
 import { resetTime, Time, MAX_DT } from './Time.js';
 
 class Stepper extends Component {
-	fixed = 0;
-	frames = 0;
+	public fixed = 0;
+	public frames = 0;
 
-	override fixedUpdate(dt:number):void {
+	public override fixedUpdate(dt:number):void {
 		this.fixed += 1;
 	}
 
-	override update(dt:number):void {
+	public override update(dt:number):void {
 		this.frames += 1;
 	}
 }

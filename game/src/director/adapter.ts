@@ -49,26 +49,26 @@ const ARC_RETRY_CAP = 3;
 const STALL_VERBS = new Set(['wait', 'wander', 'say', 'set_status']);
 
 export class GameHost {
-	readonly world:World;
-	readonly talk:TalkNet;
-	ambient:string;
-	bargainDone = false;
-	readonly scene:string;
-	hooks:SceneHooks<GameHost> = {};
-	arc:ArcDirector<CharacterCtx> | null = null;
+	public readonly world:World;
+	public readonly talk:TalkNet;
+	public ambient:string;
+	public bargainDone = false;
+	public readonly scene:string;
+	public hooks:SceneHooks<GameHost> = {};
+	public arc:ArcDirector<CharacterCtx> | null = null;
 	/** Shared kit for this scene. Mutate `verbs` / `tools`; fetched every tick. */
-	kit:Kit = { verbs: [...GAME_VERBS] };
-	readonly doorOpen = new Map<string, boolean>();
-	readonly chestOpen = new Map<string, boolean>();
-	readonly labels = new Map<string, { text:string; until:number }>();
-	logSeq = 0;
-	readonly chat:HudChatLine[];
-	readonly log:HudAiLogEntry[];
-	private disposed = false;
-	private starting = false;
-	private nextTryTimestamp = 0;
+	public kit:Kit = { verbs: [...GAME_VERBS] };
+	public readonly doorOpen = new Map<string, boolean>();
+	public readonly chestOpen = new Map<string, boolean>();
+	public readonly labels = new Map<string, { text:string; until:number }>();
+	public logSeq = 0;
+	public readonly chat:HudChatLine[];
+	public readonly log:HudAiLogEntry[];
+	private _disposed = false;
+	private _starting = false;
+	private _nextTryTimestamp = 0;
 
-	constructor(
+	public constructor(
 		world:World,
 		chat:HudChatLine[],
 		log:HudAiLogEntry[],
@@ -95,7 +95,7 @@ export class GameHost {
 		resetAiLogSink();
 	}
 
-	configure(director:ArcDirector<CharacterCtx>):ArcDirector<CharacterCtx> {
+	public configure(director:ArcDirector<CharacterCtx>):ArcDirector<CharacterCtx> {
 		return addBodyVerbs(director)
 			.withMindDefaults({ skipHeartbeat: true })
 			.withPriorityQueue({
@@ -143,7 +143,7 @@ export class GameHost {
 			.withContext(this.context)
 			.withKernels(this.kernels)
 			.withTalk(this.talk)
-			.withMap(this.mapSense)
+			.withMap(this._mapSense)
 			.withEncyclopedia((ctx) => WORLD_ENCYCLOPEDIAS[ctx.scene] ?? [])
 			.onAbortArc(this.abortArc)
 			.onLog((entry) => pushLog(this, entry.name, entry.message, entry))
@@ -152,11 +152,11 @@ export class GameHost {
 			.addCharacter({ id: 'Player' });
 	}
 
-	bind(director:ArcDirector<CharacterCtx>):void {
+	public bind(director:ArcDirector<CharacterCtx>):void {
 		this.arc = director;
 	}
 
-	context = (id:string):CharacterCtx | undefined => {
+	public context = (id:string):CharacterCtx | undefined => {
 		const character = this.world.findByID(id) ?? findObject(this.world, id);
 		const npc = character?.getComponent(NPCInput);
 		if (!isLiving(character) || !npc) {
@@ -165,14 +165,14 @@ export class GameHost {
 		return { world: this.world, character: character, npc, scene: this.scene };
 	};
 
-	abortArc = (id:string):void => {
+	public abortArc = (id:string):void => {
 		if (this.bargainDone) {
 			return;
 		}
 		(this.world.findByID(id) ?? findObject(this.world, id))?.getComponent(Celebrating)?.stop();
 	};
 
-	private readonly mapSense:MapSense = {
+	private readonly _mapSense:MapSense = {
 		you: YOU_SYMBOL,
 		snapshot: (npcID, zoom, prev) => {
 			const origin = this.lookOrigin(npcID);
@@ -184,28 +184,28 @@ export class GameHost {
 		},
 	};
 
-	kernels:KernelSource<CharacterCtx> = (ctx, point) => kernelsOf(
+	public kernels:KernelSource<CharacterCtx> = (ctx, point) => kernelsOf(
 		this.world,
 		ctx.character,
 		point && { x: point[0], z: point[1] },
 		(go) => fightExprTags(this, ctx.character, go),
 	);
 
-	async start():Promise<void> {
-		if (this.disposed || !this.arc || this.starting || this.arc.ready || !this.world.arcDirectorOn) {
+	public async start():Promise<void> {
+		if (this._disposed || !this.arc || this._starting || this.arc.ready || !this.world.arcDirectorOn) {
 			return;
 		}
-		this.starting = true;
+		this._starting = true;
 		try {
 			await this.arc.start();
 		}
 		catch {
-			this.nextTryTimestamp = this.world.time + 3;
+			this._nextTryTimestamp = this.world.time + 3;
 			this.world.setMessage('NPCs idle — start LM Studio on port 1234');
 			return;
 		}
 		finally {
-			this.starting = false;
+			this._starting = false;
 		}
 		const pref = prefs().model;
 		if (pref !== this.arc.model) {
@@ -218,7 +218,7 @@ export class GameHost {
 	}
 
 	/** Give the character that speaks for `mind` its role as an alias, and its AI. A mind with no character left is removed. */
-	wireVoice(mind:Mind<CharacterCtx>):void {
+	public wireVoice(mind:Mind<CharacterCtx>):void {
 		const id = mind.thinkThread();
 		const character = this.world.findByID(id) ?? findObject(this.world, id);
 		if (!character) {
@@ -250,18 +250,18 @@ export class GameHost {
 		}
 	}
 
-	observe(dt = 0):void {
+	public observe(dt = 0):void {
 		scanWorld(this);
 		this.hooks.checkBargain?.(this);
 		this.hooks.tickMarketNPC?.(this);
 		publishAiLog(this.log);
-		if (!this.arc?.ready && this.world.time >= this.nextTryTimestamp) {
+		if (!this.arc?.ready && this.world.time >= this._nextTryTimestamp) {
 			void this.start();
 		}
 	}
 
-	pulse(dt = 0):void {
-		if (this.disposed) {
+	public pulse(dt = 0):void {
+		if (this._disposed) {
 			return;
 		}
 		if (!this.arc?.ready) {
@@ -271,7 +271,7 @@ export class GameHost {
 	}
 
 	/** Run one arc on the player character. Mind verbs are rejected; a canvas click aborts it. */
-	async enactPlayer(text:string):Promise<ArcResult> {
+	public async enactPlayer(text:string):Promise<ArcResult> {
 		const player = this.arc?.ready ? this.arc.character('Player') : undefined;
 		const pilot = this.world.findByID('Player')?.getComponent(PlayerPilot);
 		if (!player || !pilot) {
@@ -288,7 +288,7 @@ export class GameHost {
 	}
 
 	/** The character with id `id`, or one that answers to that name. */
-	characterOf(id:string):Character<CharacterCtx> | undefined {
+	public characterOf(id:string):Character<CharacterCtx> | undefined {
 		const go = findObject(this.world, id);
 		return this.arc?.character(id) ?? (go ? this.arc?.character(go.id) ?? this.arc?.character(idOf(go)) : undefined);
 	}
@@ -440,8 +440,8 @@ export class GameHost {
 		return false;
 	}
 
-	dispose():void {
-		this.disposed = true;
+	public dispose():void {
+		this._disposed = true;
 		this.arc?.dispose();
 	}
 }

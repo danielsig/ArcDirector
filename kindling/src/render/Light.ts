@@ -4,21 +4,21 @@ import { Component } from '../core/Component.js';
 export type LightKind = 'point' | 'directional';
 
 export class Light extends Component {
-	kind:LightKind = 'point';
-	color = 0xff9a4a;
-	intensity = 48;
-	range = 11;
-	decay = 2;
-	castShadow = true;
+	public kind:LightKind = 'point';
+	public color = 0xff9a4a;
+	public intensity = 48;
+	public range = 11;
+	public decay = 2;
+	public castShadow = true;
 	/** Local offset. Z is along Kindling forward (−Z). */
-	offsetX = 0;
-	offsetY = 0;
-	offsetZ = 0;
+	public offsetX = 0;
+	public offsetY = 0;
+	public offsetZ = 0;
+	public native:THREE.Light | null = null;
 
-	native:THREE.Light | null = null;
-	private target:THREE.Object3D | null = null;
+	private _target:THREE.Object3D | null = null;
 
-	override onEnable():void {
+	public override onEnable():void {
 		this.ensureNative();
 		if (this.native) {
 			this.native.visible = true;
@@ -26,17 +26,17 @@ export class Light extends Component {
 		this.syncNative();
 	}
 
-	override onDisable():void {
+	public override onDisable():void {
 		if (this.native) {
 			this.native.visible = false;
 		}
 	}
 
-	override update(dt:number):void {
+	public override update(dt:number):void {
 		this.syncNative();
 	}
 
-	override onDestroy():void {
+	public override onDestroy():void {
 		this.dropNative();
 	}
 
@@ -50,7 +50,7 @@ export class Light extends Component {
 			d.name = 'castLight';
 			d.castShadow = this.castShadow;
 			this.gameObject.transform.object3D.add(d);
-			this.target = d.target;
+			this._target = d.target;
 			this.gameObject.world?.native.add(d.target);
 			this.native = d;
 		}
@@ -108,8 +108,8 @@ export class Light extends Component {
 
 	private dropNative():void {
 		this.native?.removeFromParent();
-		this.target?.removeFromParent();
+		this._target?.removeFromParent();
 		this.native = null;
-		this.target = null;
+		this._target = null;
 	}
 }

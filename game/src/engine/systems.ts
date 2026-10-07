@@ -11,10 +11,10 @@ import { spawnChunkEntities } from '../world/spawn';
 import type { World } from './World';
 
 export class DirectorPulse extends Component {
-	static override order = Order.director;
-	director!:GameHost;
+	public static override order = Order.director;
+	public director!:GameHost;
 
-	override update(dt:number):void {
+	public override update(dt:number):void {
 		this.director.observe(dt);
 		if (!this.gameObject.world?.arcDirectorOn) {
 			return;
@@ -24,22 +24,22 @@ export class DirectorPulse extends Component {
 }
 
 export class WorldStream extends ChunkStreamer<Chunk> {
-	static override order = Order.streaming;
+	public static override order = Order.streaming;
 
-	override spawn(chunk:Chunk):void {
+	public override spawn(chunk:Chunk):void {
 		spawnChunkEntities(this.gameObject.world as World, chunk);
 	}
 }
 
 export class GroundPick extends Component {
-	static override order = Order.pick;
-	getRenderer:()=>Renderer | null = () => null;
+	public static override order = Order.pick;
+	public getRenderer:()=>Renderer | null = () => null;
 
-	override update(dt:number):void {
+	public override update(dt:number):void {
 		this.pickGround();
 	}
 
-	pickGround():void {
+	public pickGround():void {
 		const world = this.gameObject.world;
 		const renderer = this.getRenderer();
 		if (!world || !renderer) {
@@ -59,15 +59,15 @@ export class GroundPick extends Component {
 }
 
 export class WorldView extends Component {
-	static override order = Order.present;
-	present = new WorldPresent();
-	getRenderer:()=>Renderer | null = () => null;
+	public static override order = Order.present;
+	public present = new WorldPresent();
+	public getRenderer:()=>Renderer | null = () => null;
 
-	override lateUpdate(dt:number):void {
+	public override lateUpdate(dt:number):void {
 		this.sync();
 	}
 
-	sync():void {
+	public sync():void {
 		const world = this.gameObject.world;
 		const renderer = this.getRenderer();
 		if (!world || !renderer) {
@@ -90,16 +90,16 @@ export class WorldView extends Component {
 
 /** Writes HudModel after present. Vue SFCs only read that model. */
 export class Hud extends Component {
-	static override order = Order.hud;
-	model!:HudModel;
-	director!:GameHost;
-	getRenderer:()=>Renderer | null = () => null;
+	public static override order = Order.hud;
+	public model!:HudModel;
+	public director!:GameHost;
+	public getRenderer:()=>Renderer | null = () => null;
 
-	override lateUpdate(dt:number):void {
+	public override lateUpdate(dt:number):void {
 		this.sync();
 	}
 
-	sync():void {
+	public sync():void {
 		const world = this.gameObject.world;
 		const renderer = this.getRenderer();
 		if (!world || !renderer) {
@@ -111,9 +111,9 @@ export class Hud extends Component {
 }
 
 export class HeldTorchLight extends Component {
-	static override order = Order.heldTorch;
+	public static override order = Order.heldTorch;
 
-	override update(dt:number):void {
+	public override update(dt:number):void {
 		syncHeldTorchLight(this.gameObject, dt);
 	}
 }

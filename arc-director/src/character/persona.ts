@@ -64,22 +64,22 @@ export type PersonaJSON = {
  * swapped or dropped without losing any of it. Watches and sight focus are stored in ids.
  */
 export class Persona {
-	identity:Identity;
-	goals:Goal[];
-	maxGoals:number;
-	readonly memory:MemoryStore;
+	public identity:Identity;
+	public goals:Goal[];
+	public maxGoals:number;
+	public readonly memory:MemoryStore;
 	/** Names for other characters. Saved, because memories quote them. */
-	readonly names = new NameBook();
-	watches:Watches;
-	pinnedWatches:Watches;
-	watchesWritable:boolean;
-	pinnedSightFocus:string[];
-	sightFocus:string[];
-	sightFocusWritable:boolean;
-	maxSightFocus:number;
-	sightLimit:number | undefined;
+	public readonly names = new NameBook();
+	public watches:Watches;
+	public pinnedWatches:Watches;
+	public watchesWritable:boolean;
+	public pinnedSightFocus:string[];
+	public sightFocus:string[];
+	public sightFocusWritable:boolean;
+	public maxSightFocus:number;
+	public sightLimit:number | undefined;
 
-	constructor(spec:PersonaSpec = {}, memory = new MemoryStore()) {
+	public constructor(spec:PersonaSpec = {}, memory = new MemoryStore()) {
 		this.identity = spec.identity
 			? { ...spec.identity, traits: spec.identity.traits ? [...spec.identity.traits] : undefined }
 			: {};
@@ -104,7 +104,7 @@ export class Persona {
 	 * The host's memories. Pinned ones replace the pinned memory with the same first two tags, or are added;
 	 * the rest are added only to a `fresh` persona, not to a loaded one.
 	 */
-	addSpecMemories(drafts:readonly MemoryDraft[], fresh:boolean):void {
+	public addSpecMemories(drafts:readonly MemoryDraft[], fresh:boolean):void {
 		for (const mem of drafts) {
 			const tags = mem.tags ?? [];
 			if (!mem.pinned) {
@@ -126,17 +126,17 @@ export class Persona {
 		}
 	}
 
-	effectiveWatches():string[] {
+	public effectiveWatches():string[] {
 		return watchExprs(this.watchList());
 	}
 
 	/** Pins first, then extra, de-duplicated by name. */
-	watchList():Watches {
+	public watchList():Watches {
 		return { ...this.pinnedWatches, ...extrasWithoutPins(this.watches, this.pinnedWatches) };
 	}
 
 	/** Host or tests. Fails if the name is taken (pinned or extra) or empty. */
-	addWatch(name:string, expr:string):boolean {
+	public addWatch(name:string, expr:string):boolean {
 		const next = applyWatchOps(this.watches, this.pinnedWatches, {
 			add: asWatches({ [name]: expr }),
 			edit: {},
@@ -150,7 +150,7 @@ export class Persona {
 	}
 
 	/** Host or tests. Fails if missing or pinned. */
-	editWatch(name:string, expr:string):boolean {
+	public editWatch(name:string, expr:string):boolean {
 		if (!hasWatch(this.watches, name) || hasWatch(this.pinnedWatches, name)) {
 			return false;
 		}
@@ -167,7 +167,7 @@ export class Persona {
 	}
 
 	/** Host or tests. Fails if missing or pinned. */
-	removeWatch(name:string):boolean {
+	public removeWatch(name:string):boolean {
 		const next = applyWatchOps(this.watches, this.pinnedWatches, {
 			add: {},
 			edit: {},
@@ -181,7 +181,7 @@ export class Persona {
 	}
 
 	/** Dev-authored pin. Overwrites a pin of the same name; drops a colliding extra. */
-	addPinnedWatch(name:string, expr:string):boolean {
+	public addPinnedWatch(name:string, expr:string):boolean {
 		const row = asWatches({ [name]: expr });
 		const n = Object.keys(row)[0];
 		if (!n) {
@@ -198,11 +198,11 @@ export class Persona {
 		return true;
 	}
 
-	effectiveSightFocus():string[] {
+	public effectiveSightFocus():string[] {
 		return effectiveSightFocus(this.pinnedSightFocus, this.sightFocus);
 	}
 
-	trimGoals():void {
+	public trimGoals():void {
 		if (this.goals.length <= this.maxGoals) {
 			return;
 		}
@@ -212,7 +212,7 @@ export class Persona {
 	}
 
 	/** A model's `{ role, traits }`. Returns whether anything changed; a change restamps the identity memory. */
-	applyIdentityPatch(raw:unknown, id:string, now:number):boolean {
+	public applyIdentityPatch(raw:unknown, id:string, now:number):boolean {
 		if (!isRecord(raw)) {
 			return false;
 		}
@@ -235,7 +235,7 @@ export class Persona {
 	}
 
 	/** A model's goal list. Ignored unless it holds at least one goal. */
-	applyGoalList(raw:unknown):void {
+	public applyGoalList(raw:unknown):void {
 		if (!Array.isArray(raw)) {
 			return;
 		}
@@ -275,7 +275,7 @@ export class Persona {
 		}, now);
 	}
 
-	toJSON():PersonaJSON {
+	public toJSON():PersonaJSON {
 		return {
 			identity: { ...this.identity, traits: this.identity.traits ? [...this.identity.traits] : undefined },
 			goals: this.goals.map((g) => ({ ...g })),
@@ -298,7 +298,7 @@ export class Persona {
 	 * A saved persona under the host's current spec: its pins come first (saved pins that repeat them are
 	 * dropped), its pinned memories are refreshed, and its writable flags and sight limit win when set.
 	 */
-	static fromJSON(json:PersonaJSON, host:PersonaSpec = {}):Persona {
+	public static fromJSON(json:PersonaJSON, host:PersonaSpec = {}):Persona {
 		const persona = new Persona({ identity: json.identity, goals: json.goals }, MemoryStore.fromJSON(json.memories));
 		persona.addSpecMemories(host.memories ?? [], false);
 		persona.memory.maxEpisodic = json.maxEpisodic;

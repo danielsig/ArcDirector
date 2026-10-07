@@ -13,8 +13,8 @@ export function bindMesh(meshID:string):void {
 }
 
 export class MeshRenderer extends KindlingMesh {
-	static override order = Order.mesh;
-	override update(dt:number):void {
+	public static override order = Order.mesh;
+	public override update(dt:number):void {
 		bindMesh(this.meshID);
 		super.update(dt);
 	}

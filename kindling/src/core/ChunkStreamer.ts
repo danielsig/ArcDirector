@@ -5,14 +5,14 @@ import type { GameObject } from './GameObject.js';
 /** Keeps the chunks around its object loaded. */
 export class StreamingAnchor extends Component {
 	/** Unloaded chunks this close (meters to their edge) load. */
-	viewRadius = 20;
+	public viewRadius = 20;
 	/** Loaded chunks stay until this much past `viewRadius`. */
-	hysteresis = 8;
+	public hysteresis = 8;
 }
 
 /** Parks with chunk `chunkID` when it unloads, and comes back when it loads. */
 export class ChunkBound extends Component {
-	chunkID = '';
+	public chunkID = '';
 }
 
 /**
@@ -22,14 +22,14 @@ export class ChunkBound extends Component {
  */
 export class ChunkStreamer<C extends Chunk = Chunk> extends Component {
 	/** Every chunk of the scene, loaded or not. */
-	chunks:C[] = [];
-	private readonly parked = new Map<C, GameObject[]>();
+	public chunks:C[] = [];
+	private readonly _parked = new Map<C, GameObject[]>();
 
 	/** The first time `chunk` loads, right after `World.addChunk`. */
-	spawn(chunk:C):void {}
+	public spawn(chunk:C):void {}
 
 	/** Load every chunk, so the whole scene is in the world (e.g. before a save). The next `stream` unloads far ones again. */
-	loadAll():void {
+	public loadAll():void {
 		for (const chunk of this.chunks) {
 			if (!this.loaded(chunk)) {
 				this.load(chunk);
@@ -37,12 +37,12 @@ export class ChunkStreamer<C extends Chunk = Chunk> extends Component {
 		}
 	}
 
-	override lateUpdate(dt:number):void {
+	public override lateUpdate(dt:number):void {
 		this.stream();
 	}
 
 	/** Load and unload by anchor distance now. */
-	stream():void {
+	public stream():void {
 		const world = this.gameObject.world;
 		if (!world) {
 			return;
@@ -78,12 +78,12 @@ export class ChunkStreamer<C extends Chunk = Chunk> extends Component {
 	private load(chunk:C):void {
 		const world = this.gameObject.world!;
 		world.addChunk(chunk);
-		const parked = this.parked.get(chunk);
+		const parked = this._parked.get(chunk);
 		if (!parked) {
 			this.spawn(chunk);
 			return;
 		}
-		this.parked.delete(chunk);
+		this._parked.delete(chunk);
 		for (const go of parked) {
 			world.add(go);
 		}
@@ -95,7 +95,7 @@ export class ChunkStreamer<C extends Chunk = Chunk> extends Component {
 		for (const go of parked) {
 			world.remove(go);
 		}
-		this.parked.set(chunk, parked);
+		this._parked.set(chunk, parked);
 		world.removeChunk(chunk);
 	}
 }

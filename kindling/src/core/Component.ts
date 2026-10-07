@@ -5,25 +5,27 @@ export type ComponentState = Record<string, unknown>;
 
 export abstract class Component {
 	/** Lower runs first within a dispatch hook. */
-	static order = 0;
+	public static order = 0;
 	/** Fields a save keeps (`captureWorld`). JSON data only; everything else rebuilds with the scene. */
-	static saved:readonly string[] = [];
-	gameObject!:GameObject;
-	private isEnabled = true;
-	/** Set after `awake()` has run. */
-	awoken = false;
-	/** Set after `start()` has run. */
-	started = false;
+	public static saved:readonly string[] = [];
 
-	get enabled():boolean {
-		return this.isEnabled;
+	public gameObject!:GameObject;
+	/** Set after `awake()` has run. */
+	public awoken = false;
+	/** Set after `start()` has run. */
+	public started = false;
+
+	private _enabled = true;
+
+	public get enabled():boolean {
+		return this._enabled;
 	}
 
-	set enabled(value:boolean) {
-		if (value === this.isEnabled) {
+	public set enabled(value:boolean) {
+		if (value === this._enabled) {
 			return;
 		}
-		this.isEnabled = value;
+		this._enabled = value;
 		if (!this.awoken || !this.gameObject?.world) {
 			return;
 		}
@@ -36,7 +38,7 @@ export abstract class Component {
 	}
 
 	/** The `saved` fields. Override for state that is not a plain field. */
-	saveState():ComponentState {
+	public saveState():ComponentState {
 		const self = this as unknown as ComponentState;
 		const out:ComponentState = {};
 		for (const key of (this.constructor as typeof Component).saved) {
@@ -46,17 +48,17 @@ export abstract class Component {
 	}
 
 	/** Apply some or all of what `saveState` returned. */
-	loadState(state:ComponentState):void {
+	public loadState(state:ComponentState):void {
 		Object.assign(this, structuredClone(state));
 	}
 
-	awake():void {}
-	start():void {}
-	update(dt:number):void {}
-	fixedUpdate(dt:number):void {}
+	public awake():void {}
+	public start():void {}
+	public update(dt:number):void {}
+	public fixedUpdate(dt:number):void {}
 	/** After physics. */
-	lateUpdate(dt:number):void {}
-	onEnable():void {}
-	onDisable():void {}
-	onDestroy():void {}
+	public lateUpdate(dt:number):void {}
+	public onEnable():void {}
+	public onDisable():void {}
+	public onDestroy():void {}
 }

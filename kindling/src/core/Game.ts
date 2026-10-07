@@ -11,25 +11,25 @@ function canUseCanvas():boolean {
 
 /** Kindling owns the canvas, the renderer, and the frame loop. Hosts subclass and override `tick`. */
 export class Game<W extends World = World> {
-	readonly world:W;
-	readonly renderer:Renderer | null;
-	running = false;
+	public readonly world:W;
+	public readonly renderer:Renderer | null;
+	public running = false;
 	/** Canvas draws per second while `document` is unfocused. Simulation still runs every RAF. */
-	unfocusedHz = 3;
-	private raf = 0;
-	private last = 0;
-	private lastDraw = 0;
+	public unfocusedHz = 3;
+	private _raf = 0;
+	private _last = 0;
+	private _lastDraw = 0;
 
-	constructor(world?:W) {
+	public constructor(world?:W) {
 		this.world = world ?? (new World() as W);
 		this.renderer = canUseCanvas() ? new Renderer(this.world) : null;
 	}
 
-	get canvas():HTMLCanvasElement | null {
+	public get canvas():HTMLCanvasElement | null {
 		return this.renderer?.canvas ?? null;
 	}
 
-	mount(parent:ParentNode):this {
+	public mount(parent:ParentNode):this {
 		if (this.canvas) {
 			parent.appendChild(this.canvas);
 		}
@@ -37,29 +37,29 @@ export class Game<W extends World = World> {
 		return this;
 	}
 
-	start():void {
+	public start():void {
 		if (this.running) {
 			return;
 		}
 		this.running = true;
-		this.last = typeof performance !== 'undefined' ? performance.now() : 0;
+		this._last = typeof performance !== 'undefined' ? performance.now() : 0;
 		this.onStart();
 		if (typeof requestAnimationFrame !== 'function') {
 			return;
 		}
-		this.frame(this.last);
+		this._frame(this._last);
 	}
 
-	stop():void {
+	public stop():void {
 		this.running = false;
-		if (this.raf) {
-			cancelAnimationFrame(this.raf);
-			this.raf = 0;
+		if (this._raf) {
+			cancelAnimationFrame(this._raf);
+			this._raf = 0;
 		}
 	}
 
 	/** One simulation step. Hosts override; do not call `super.tick` if you keep your own order. */
-	tick(dt:number):void {
+	public tick(dt:number):void {
 		if (dt > MAX_DT) {
 			dt = MAX_DT;
 		}
@@ -84,30 +84,30 @@ export class Game<W extends World = World> {
 	/** Runs once when `start` begins the loop. */
 	protected onStart():void {}
 
-	destroy(go:GameObject):void {
+	public destroy(go:GameObject):void {
 		this.world.destroy(go);
 	}
 
-	dispose():void {
+	public dispose():void {
 		this.stop();
 		this.world.audio.dispose();
 		this.renderer?.dispose();
 	}
 
-	private readonly frame = (now:number):void => {
+	private readonly _frame = (now:number):void => {
 		if (!this.running) {
 			return;
 		}
-		let dt = (now - this.last) / 1000;
-		this.last = now;
+		let dt = (now - this._last) / 1000;
+		this._last = now;
 		if (dt > MAX_DT) {
 			dt = MAX_DT;
 		}
 		this.tick(dt);
-		if (typeof document === 'undefined' || document.hasFocus() || now - this.lastDraw >= 1000 / this.unfocusedHz) {
+		if (typeof document === 'undefined' || document.hasFocus() || now - this._lastDraw >= 1000 / this.unfocusedHz) {
 			this.renderer?.render();
-			this.lastDraw = now;
+			this._lastDraw = now;
 		}
-		this.raf = requestAnimationFrame(this.frame);
+		this._raf = requestAnimationFrame(this._frame);
 	};
 }

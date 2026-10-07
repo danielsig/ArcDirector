@@ -40,79 +40,79 @@ function torchMesh(meshID:string | undefined):boolean {
 
 /** Sprite, door, chunk, and glow presentation on Kindling's scene graph. */
 export class WorldPresent {
-	detailMaps = true;
-	private camera:THREE.Camera = new THREE.PerspectiveCamera();
-	private host:THREE.Scene | null = null;
-	private readonly chunkMeshes = new Map<string, THREE.Group>();
-	private readonly liveChunks = new Set<string>();
-	private chunkMeshRev = CHUNK_MESH_REV;
-	private groundHadGrass = false;
-	private groundBox:THREE.Group | null = null;
-	private pickupGlow:THREE.Mesh | null = null;
-	private pickupGlowMap:THREE.CanvasTexture | null = null;
-	private camPitch = 0;
+	public detailMaps = true;
+	private _camera:THREE.Camera = new THREE.PerspectiveCamera();
+	private _host:THREE.Scene | null = null;
+	private readonly _chunkMeshes = new Map<string, THREE.Group>();
+	private readonly _liveChunks = new Set<string>();
+	private _chunkMeshRev = CHUNK_MESH_REV;
+	private _groundHadGrass = false;
+	private _groundBox:THREE.Group | null = null;
+	private _pickupGlow:THREE.Mesh | null = null;
+	private _pickupGlowMap:THREE.CanvasTexture | null = null;
+	private _camPitch = 0;
 
-	mountGroundBox(world:World):void {
+	public mountGroundBox(world:World):void {
 		if (!sheetReady()) {
 			return;
 		}
 		const grass = natureReady();
-		if (this.groundBox && this.groundHadGrass === grass) {
+		if (this._groundBox && this._groundHadGrass === grass) {
 			return;
 		}
-		if (this.groundBox) {
-			this.releaseObject(this.groundBox);
-			this.groundBox = null;
+		if (this._groundBox) {
+			this.releaseObject(this._groundBox);
+			this._groundBox = null;
 		}
 		try {
-			this.groundBox = createGroundBox(world);
-			this.groundHadGrass = grass;
-			world.native.add(this.groundBox);
+			this._groundBox = createGroundBox(world);
+			this._groundHadGrass = grass;
+			world.native.add(this._groundBox);
 		}
 		catch {
-			this.groundBox = null;
+			this._groundBox = null;
 		}
 	}
 
-	syncChunks(world:World):void {
+	public syncChunks(world:World):void {
 		if (!sheetReady()) {
 			return;
 		}
 		if (worldNeedsNature(world) && !natureReady()) {
 			return;
 		}
-		if (this.chunkMeshRev !== CHUNK_MESH_REV) {
-			for (const mesh of this.chunkMeshes.values()) {
+		if (this._chunkMeshRev !== CHUNK_MESH_REV) {
+			for (const mesh of this._chunkMeshes.values()) {
 				this.releaseObject(mesh);
 			}
-			this.chunkMeshes.clear();
-			this.chunkMeshRev = CHUNK_MESH_REV;
+			this._chunkMeshes.clear();
+			this._chunkMeshRev = CHUNK_MESH_REV;
 		}
-		this.liveChunks.clear();
+		this._liveChunks.clear();
 		for (const chunk of world.chunks.values()) {
-			this.liveChunks.add(chunk.id);
-			if (!this.chunkMeshes.has(chunk.id)) {
+			this._liveChunks.add(chunk.id);
+			if (!this._chunkMeshes.has(chunk.id)) {
 				const mesh = buildChunkMesh(chunk);
 				world.native.add(mesh);
-				this.chunkMeshes.set(chunk.id, mesh);
+				this._chunkMeshes.set(chunk.id, mesh);
 			}
 		}
-		for (const [id, mesh] of this.chunkMeshes) {
-			if (!this.liveChunks.has(id)) {
+		for (const [id, mesh] of this._chunkMeshes) {
+			if (!this._liveChunks.has(id)) {
 				this.releaseObject(mesh);
-				this.chunkMeshes.delete(id);
+				this._chunkMeshes.delete(id);
 			}
 		}
 		syncGrassBatch(world.native, world);
 	}
 
-	sync(world:World, camera:THREE.Camera):void {
-		this.host = world.native;
-		this.camera = camera;
-		this.camera.getWorldPosition(camPos);
-		this.camera.getWorldQuaternion(camQuat);
+	public sync(world:World, camera:THREE.Camera):void {
+		this._host = world.native;
+		this._camera = camera;
+		this._camera.getWorldPosition(camPos);
+		this._camera.getWorldQuaternion(camQuat);
 		const e = new THREE.Euler().setFromQuaternion(camQuat, 'YXZ');
-		this.camPitch = e.x;
+		this._camPitch = e.x;
 		const player = world.findByID('Player');
 		const focus = player ? nearestPickup(player) : null;
 		let focusObj:THREE.Object3D | null = null;
@@ -178,26 +178,26 @@ export class WorldPresent {
 		this.syncPickupGlow(focusObj, world.time);
 	}
 
-	tickNature(time:number):void {
+	public tickNature(time:number):void {
 		tickNature(time);
 	}
 
-	dispose():void {
-		for (const mesh of this.chunkMeshes.values()) {
+	public dispose():void {
+		for (const mesh of this._chunkMeshes.values()) {
 			this.releaseObject(mesh);
 		}
-		this.chunkMeshes.clear();
-		if (this.groundBox) {
-			this.releaseObject(this.groundBox);
-			this.groundBox = null;
+		this._chunkMeshes.clear();
+		if (this._groundBox) {
+			this.releaseObject(this._groundBox);
+			this._groundBox = null;
 		}
 		disposeGrassBatch();
-		if (this.pickupGlow) {
-			const mat = this.pickupGlow.material as THREE.MeshBasicMaterial;
+		if (this._pickupGlow) {
+			const mat = this._pickupGlow.material as THREE.MeshBasicMaterial;
 			mat.map?.dispose();
-			this.releaseObject(this.pickupGlow);
-			this.pickupGlow = null;
-			this.pickupGlowMap = null;
+			this.releaseObject(this._pickupGlow);
+			this._pickupGlow = null;
+			this._pickupGlowMap = null;
 		}
 	}
 
@@ -207,7 +207,7 @@ export class WorldPresent {
 			ao.dispose();
 			obj.userData.aoMap = undefined;
 		}
-		this.host?.remove(obj);
+		this._host?.remove(obj);
 		obj.removeFromParent();
 		obj.traverse((node) => {
 			if (node instanceof THREE.Light) {
@@ -389,7 +389,7 @@ export class WorldPresent {
 		const frameFillH = ih > 0 ? Math.min(1, Math.max(0.4, contentH / ih)) : 1;
 		const fillH = clock.lockFillH && clock.lockFillH > 0 ? clock.lockFillH : frameFillH;
 		const aspect = iw && ih ? iw / ih : 0.64;
-		const pitch = Math.abs(this.camPitch);
+		const pitch = Math.abs(this._camPitch);
 		const unflat = 1 / Math.max(Math.cos(pitch), 0.45);
 		const heightKey:HumanKind = isPackedKind(kind) ? kind : 'player';
 		const heightM = appearance && appearance.height > 0
@@ -653,7 +653,7 @@ export class WorldPresent {
 			return;
 		}
 		this.billboardY(sprite);
-		const pitch = Math.abs(this.camPitch);
+		const pitch = Math.abs(this._camPitch);
 		const unflat = 1 / Math.max(Math.cos(pitch), 0.45);
 		const pulse = highlighted ? 1.04 + Math.sin(t * 3.4) * 0.03 : 1;
 		sprite.scale.x = pulse;
@@ -694,12 +694,12 @@ export class WorldPresent {
 	}
 
 	private ensurePickupGlow():THREE.Mesh {
-		if (this.pickupGlow) {
-			return this.pickupGlow;
+		if (this._pickupGlow) {
+			return this._pickupGlow;
 		}
-		this.pickupGlowMap = makePickupGlowMap();
+		this._pickupGlowMap = makePickupGlowMap();
 		const mat = new THREE.MeshBasicMaterial({
-			map: this.pickupGlowMap,
+			map: this._pickupGlowMap,
 			transparent: true,
 			depthWrite: false,
 			blending: THREE.AdditiveBlending,
@@ -710,8 +710,8 @@ export class WorldPresent {
 		mesh.rotation.x = -Math.PI / 2;
 		mesh.renderOrder = 2;
 		mesh.frustumCulled = false;
-		this.host?.add(mesh);
-		this.pickupGlow = mesh;
+		this._host?.add(mesh);
+		this._pickupGlow = mesh;
 		return mesh;
 	}
 }

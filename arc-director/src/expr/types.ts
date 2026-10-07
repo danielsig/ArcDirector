@@ -8,8 +8,8 @@ export const FACING_COS = 0.70710678118;
 export type ScoldReason = 'typeError' | 'rawOverOne' | 'capTie' | 'fieldCall';
 
 export class ExprError extends Error {
-	readonly reason:ScoldReason;
-	constructor(message:string, reason:ScoldReason = 'typeError') {
+	public readonly reason:ScoldReason;
+	public constructor(message:string, reason:ScoldReason = 'typeError') {
 		super(message);
 		this.name = 'ExprError';
 		this.reason = reason;
@@ -78,86 +78,86 @@ export type EvalCtx = {
 };
 
 export class SampleCache {
-	private dist = new Map<string, number>();
-	private nextDist = new Map<string, number>();
-	private seen = new Map<string, boolean>();
-	private nextSeen = new Map<string, boolean>();
-	private facing = new Map<string, number | boolean>();
-	private nextFacing = new Map<string, number | boolean>();
-	private hp = new Map<string, number>();
-	private nextHP = new Map<string, number>();
-	private open = new Map<string, boolean>();
-	private nextOpen = new Map<string, boolean>();
-	private path = new Map<string, number>();
-	private nextPath = new Map<string, number>();
+	private _dist = new Map<string, number>();
+	private _nextDist = new Map<string, number>();
+	private _seen = new Map<string, boolean>();
+	private _nextSeen = new Map<string, boolean>();
+	private _facing = new Map<string, number | boolean>();
+	private _nextFacing = new Map<string, number | boolean>();
+	private _hp = new Map<string, number>();
+	private _nextHP = new Map<string, number>();
+	private _open = new Map<string, boolean>();
+	private _nextOpen = new Map<string, boolean>();
+	private _path = new Map<string, number>();
+	private _nextPath = new Map<string, number>();
 
-	static pair(a:string, b:string):string {
+	public static pair(a:string, b:string):string {
 		return `${a}\0${b}`;
 	}
 
-	static undirected(a:string, b:string):string {
+	public static undirected(a:string, b:string):string {
 		return a < b ? `${a}\0${b}` : `${b}\0${a}`;
 	}
 
-	rememberDist(a:string, b:string, d:number):number | undefined {
+	public rememberDist(a:string, b:string, d:number):number | undefined {
 		const k = SampleCache.undirected(a, b);
-		this.nextDist.set(k, d);
-		return this.dist.get(k);
+		this._nextDist.set(k, d);
+		return this._dist.get(k);
 	}
 
-	rememberSeen(a:string, b:string, v:boolean):boolean | undefined {
+	public rememberSeen(a:string, b:string, v:boolean):boolean | undefined {
 		const k = SampleCache.pair(a, b);
-		this.nextSeen.set(k, v);
-		return this.seen.get(k);
+		this._nextSeen.set(k, v);
+		return this._seen.get(k);
 	}
 
-	rememberFacing(a:string, b:string, v:number | boolean):number | boolean | undefined {
+	public rememberFacing(a:string, b:string, v:number | boolean):number | boolean | undefined {
 		const k = SampleCache.pair(a, b);
-		this.nextFacing.set(k, v);
-		return this.facing.get(k);
+		this._nextFacing.set(k, v);
+		return this._facing.get(k);
 	}
 
-	rememberHP(id:string, v:number):number | undefined {
-		this.nextHP.set(id, v);
-		return this.hp.get(id);
+	public rememberHP(id:string, v:number):number | undefined {
+		this._nextHP.set(id, v);
+		return this._hp.get(id);
 	}
 
-	rememberOpen(id:string, v:boolean):boolean | undefined {
-		this.nextOpen.set(id, v);
-		return this.open.get(id);
+	public rememberOpen(id:string, v:boolean):boolean | undefined {
+		this._nextOpen.set(id, v);
+		return this._open.get(id);
 	}
 
-	rememberPath(a:string, b:string, d:number):number | undefined {
+	public rememberPath(a:string, b:string, d:number):number | undefined {
 		const k = SampleCache.pair(a, b);
-		this.nextPath.set(k, d);
-		return this.path.get(k);
+		this._nextPath.set(k, d);
+		return this._path.get(k);
 	}
 
-	commit():void {
-		for (const [k, v] of this.nextDist) {
-			this.dist.set(k, v);
+	public commit():void {
+		for (const [k, v] of this._nextDist) {
+			this._dist.set(k, v);
 		}
-		this.nextDist.clear();
-		for (const [k, v] of this.nextSeen) {
-			this.seen.set(k, v);
+		this._nextDist.clear();
+		for (const [k, v] of this._nextSeen) {
+			this._seen.set(k, v);
 		}
-		this.nextSeen.clear();
-		for (const [k, v] of this.nextFacing) {
-			this.facing.set(k, v);
+		this._nextSeen.clear();
+		for (const [k, v] of this._nextFacing) {
+			this._facing.set(k, v);
 		}
-		this.nextFacing.clear();
-		for (const [k, v] of this.nextHP) {
-			this.hp.set(k, v);
+		this._nextFacing.clear();
+		for (const [k, v] of this._nextHP) {
+			this._hp.set(k, v);
 		}
-		this.nextHP.clear();
-		for (const [k, v] of this.nextOpen) {
-			this.open.set(k, v);
+		this._nextHP.clear();
+		for (const [k, v] of this._nextOpen) {
+			this._open.set(k, v);
 		}
-		this.nextOpen.clear();
-		for (const [k, v] of this.nextPath) {
-			this.path.set(k, v);
+		this._nextOpen.clear();
+		for (const [k, v] of this._nextPath) {
+			this._path.set(k, v);
 		}
-		this.nextPath.clear();
+		this._nextPath.clear();
 	}
 }
 

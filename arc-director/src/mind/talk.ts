@@ -180,33 +180,33 @@ function heardLine(
  * `{ face: false, approach: false }` to disable.
  */
 export class TalkNet {
-	private readonly minds = new Map<string, TalkMind>();
-	private readonly muffled = new Map<string, Muffled[]>();
-	readonly config:TalkConfig;
+	private readonly _minds = new Map<string, TalkMind>();
+	private readonly _muffled = new Map<string, Muffled[]>();
+	public readonly config:TalkConfig;
 
-	constructor(
-		readonly sense:TalkSense,
-		private readonly onSpoke?:(utterance:SpeechUtterance)=>void,
+	public constructor(
+		public readonly sense:TalkSense,
+		private readonly _onSpoke?:(utterance:SpeechUtterance)=>void,
 		config:Partial<TalkConfig> = {},
 	) {
 		this.config = { ...DEFAULT_TALK_CONFIG, ...config };
 	}
 
-	attach(mind:TalkMind):void {
-		this.minds.set(mind.id, mind);
+	public attach(mind:TalkMind):void {
+		this._minds.set(mind.id, mind);
 	}
 
-	detach(id:string):void {
-		this.minds.delete(id);
+	public detach(id:string):void {
+		this._minds.delete(id);
 	}
 
-	has(id:string):boolean {
+	public has(id:string):boolean {
 		return this.mindFor(id) !== undefined;
 	}
 
 	/** Attach key, or a host-facing name that `names()` maps back to one (`Herbalist` for Fern). */
 	private mindFor(id:string):TalkMind | undefined {
-		const direct = this.minds.get(id);
+		const direct = this._minds.get(id);
 		if (direct) {
 			return direct;
 		}
@@ -214,7 +214,7 @@ export class TalkNet {
 		if (!want) {
 			return undefined;
 		}
-		for (const [key, mind] of this.minds) {
+		for (const [key, mind] of this._minds) {
 			if (key.toLowerCase() === want) {
 				return mind;
 			}
@@ -231,7 +231,7 @@ export class TalkNet {
 	}
 
 	/** Ids currently close enough to talk to `speakerID`. */
-	nearby(speakerID:string):string[] {
+	public nearby(speakerID:string):string[] {
 		const out:string[] = [];
 		for (const id of this.sense.others(speakerID)) {
 			if (!id || id === speakerID) {
@@ -245,7 +245,7 @@ export class TalkNet {
 	}
 
 	/** Whether `listenerID` would make out `speakerID`'s words, not just hear them muffled. */
-	clear(speakerID:string, listenerID:string):boolean {
+	public clear(speakerID:string, listenerID:string):boolean {
 		return this.sense.clearHear?.(speakerID, listenerID) ?? true;
 	}
 
@@ -254,7 +254,7 @@ export class TalkNet {
 	 * range; a broadcast needs at least one listener. Use this before committing
 	 * a say arc, or from the `earshot` tool.
 	 */
-	canSay(speakerID:string, to?:SayTo):{ ok:boolean; reason?:string; nearby:string[] } {
+	public canSay(speakerID:string, to?:SayTo):{ ok:boolean; reason?:string; nearby:string[] } {
 		const nearby = this.nearby(speakerID);
 		const targets = addressees(to);
 		if (targets.includes(speakerID)) {
@@ -274,7 +274,7 @@ export class TalkNet {
 		return { ok: true, nearby };
 	}
 
-	say(speakerID:string, text:string, to?:SayTo, timestamp = 0):SayResult {
+	public say(speakerID:string, text:string, to?:SayTo, timestamp = 0):SayResult {
 		const spoken = text.trim();
 		if (!spoken) {
 			return { ok: false, verb: 'say', reason: 'nothing to say' };
@@ -298,7 +298,7 @@ export class TalkNet {
 			timestamp,
 		};
 		this.attend(utterance);
-		this.onSpoke?.(utterance);
+		this._onSpoke?.(utterance);
 		const clearly:string[] = [];
 		for (const id of heardBy) {
 			const clear = this.clear(speakerID, id);
@@ -322,9 +322,9 @@ export class TalkNet {
 			const heard = heardLine(speaker, spoken, addressed, heardTo.join(', '), clear, mentioned);
 			this.hear(mind, speaker, heardTo, heard.text, heard.major, timestamp);
 			if (!clear && this.config.rehear > 0) {
-				const list = this.muffled.get(id) ?? [];
+				const list = this._muffled.get(id) ?? [];
 				list.push({ speakerID, spoken, targets, until: timestamp + this.config.rehear });
-				this.muffled.set(id, list);
+				this._muffled.set(id, list);
 			}
 		}
 		const answerable = clearly.some((id) => targets.length === 0 || targets.includes(id));
@@ -337,8 +337,8 @@ export class TalkNet {
 	}
 
 	/** Deliver muffled lines in full to listeners who came close enough. Call once per frame. */
-	tick(now:number):void {
-		for (const [id, list] of this.muffled) {
+	public tick(now:number):void {
+		for (const [id, list] of this._muffled) {
 			const keep = list.filter((row) => {
 				if (now >= row.until) {
 					return false;
@@ -356,10 +356,10 @@ export class TalkNet {
 				return false;
 			});
 			if (keep.length > 0) {
-				this.muffled.set(id, keep);
+				this._muffled.set(id, keep);
 			}
 			else {
-				this.muffled.delete(id);
+				this._muffled.delete(id);
 			}
 		}
 	}

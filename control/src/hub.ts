@@ -40,29 +40,29 @@ type GameRow = {
 };
 
 export class SessionHub implements HubHandle {
-	private readonly games = new Map<string, GameRow>();
-	private readonly reconnectWait = new Map<string, Array<()=>void>>();
-	private wss:WebSocketServer | null = null;
-	private readonly takeID = idCounter();
+	private readonly _games = new Map<string, GameRow>();
+	private readonly _reconnectWait = new Map<string, Array<()=>void>>();
+	private _wss:WebSocketServer | null = null;
+	private readonly _takeID = idCounter();
 
-	attach(session:string, socket:HubSocket, instance = ''):string {
+	public attach(session:string, socket:HubSocket, instance = ''):string {
 		const requested = session.trim();
 		if (!requested) {
 			throw new Error('empty session');
 		}
 		const id = this.claim(requested, socket, instance);
-		const prev = this.games.get(id);
+		const prev = this._games.get(id);
 		const row:GameRow = { socket, instance, pending: new Map() };
-		this.games.set(id, row);
-		const waiters = this.reconnectWait.get(id);
+		this._games.set(id, row);
+		const waiters = this._reconnectWait.get(id);
 		if (waiters) {
-			this.reconnectWait.delete(id);
+			this._reconnectWait.delete(id);
 			for (const fn of waiters) {
 				fn();
 			}
 		}
 		socket.onMessage((raw) => {
-			if (this.games.get(id)?.socket !== socket) {
+			if (this._games.get(id)?.socket !== socket) {
 				return;
 			}
 			const msg = parseHubMsg(raw);
@@ -71,10 +71,10 @@ export class SessionHub implements HubHandle {
 			}
 		});
 		socket.onClose(() => {
-			if (this.games.get(id)?.socket !== socket) {
+			if (this._games.get(id)?.socket !== socket) {
 				return;
 			}
-			this.games.delete(id);
+			this._games.delete(id);
 			rejectAll(row.pending, 'client disconnected');
 		});
 		if (prev && prev.socket !== socket) {
@@ -87,18 +87,18 @@ export class SessionHub implements HubHandle {
 		return id;
 	}
 
-	async sessions():Promise<string[]> {
-		return [...this.games.keys()];
+	public async sessions():Promise<string[]> {
+		return [...this._games.keys()];
 	}
 
-	async call(session:string, command:Command, timeoutMs = COMMAND_TIMEOUT_MS):Promise<unknown> {
+	public async call(session:string, command:Command, timeoutMs = COMMAND_TIMEOUT_MS):Promise<unknown> {
 		const id = session.trim();
-		const row = this.games.get(id);
+		const row = this._games.get(id);
 		if (!row) {
 			throw new Error(`no client ${id}`);
 		}
 		const sentTo = row.socket;
-		const callID = this.takeID();
+		const callID = this._takeID();
 		const result = await waitReply(
 			row.pending,
 			callID,
@@ -114,12 +114,12 @@ export class SessionHub implements HubHandle {
 		return { reconnected: true };
 	}
 
-	listen(port = HUB_PORT, host = HUB_HOST):Promise<void> {
+	public listen(port = HUB_PORT, host = HUB_HOST):Promise<void> {
 		return new Promise((resolve, reject) => {
 			const wss = new WebSocketServer({ host, port });
-			this.wss = wss;
+			this._wss = wss;
 			wss.once('error', (err) => {
-				this.wss = null;
+				this._wss = null;
 				reject(err);
 			});
 			wss.once('listening', () => {
@@ -135,17 +135,17 @@ export class SessionHub implements HubHandle {
 		});
 	}
 
-	close():void {
-		for (const row of this.games.values()) {
+	public close():void {
+		for (const row of this._games.values()) {
 			row.socket.close();
 		}
-		this.games.clear();
+		this._games.clear();
 		// ws keeps accepted sockets open after server close; drop peers so they rehost.
-		for (const ws of this.wss?.clients ?? []) {
+		for (const ws of this._wss?.clients ?? []) {
 			ws.terminate();
 		}
-		this.wss?.close();
-		this.wss = null;
+		this._wss?.close();
+		this._wss = null;
 	}
 
 	private bindWire(socket:HubSocket):void {
@@ -188,7 +188,7 @@ export class SessionHub implements HubHandle {
 	}
 
 	private claim(requested:string, socket:HubSocket, instance:string):string {
-		const prev = this.games.get(requested);
+		const prev = this._games.get(requested);
 		if (!prev || prev.socket === socket) {
 			return requested;
 		}
@@ -202,7 +202,7 @@ export class SessionHub implements HubHandle {
 		let n = 2;
 		for (;;) {
 			const id = `${base}-${n}`;
-			if (!this.games.has(id)) {
+			if (!this._games.has(id)) {
 				return id;
 			}
 			n += 1;
@@ -210,15 +210,15 @@ export class SessionHub implements HubHandle {
 	}
 
 	private waitReconnect(session:string, timeoutMs:number, previous:HubSocket):Promise<void> {
-		const live = this.games.get(session)?.socket;
+		const live = this._games.get(session)?.socket;
 		if (live && live !== previous) {
 			return Promise.resolve();
 		}
 		return new Promise((resolve, reject) => {
 			const timer = setTimeout(() => {
-				const waiters = this.reconnectWait.get(session);
+				const waiters = this._reconnectWait.get(session);
 				if (waiters) {
-					this.reconnectWait.set(session, waiters.filter((w) => w !== onHello));
+					this._reconnectWait.set(session, waiters.filter((w) => w !== onHello));
 				}
 				reject(new Error('timed out waiting for the client to reconnect'));
 			}, timeoutMs);
@@ -226,55 +226,55 @@ export class SessionHub implements HubHandle {
 				clearTimeout(timer);
 				resolve();
 			};
-			const list = this.reconnectWait.get(session) ?? [];
+			const list = this._reconnectWait.get(session) ?? [];
 			list.push(onHello);
-			this.reconnectWait.set(session, list);
+			this._reconnectWait.set(session, list);
 		});
 	}
 }
 
 class HubPeer implements HubHandle {
-	private readonly takeID = idCounter();
-	private readonly pending:Pending = new Map();
+	private readonly _takeID = idCounter();
+	private readonly _pending:Pending = new Map();
 
-	constructor(private readonly socket:HubSocket, onLost:()=>void) {
-		socket.onMessage((raw) => {
+	public constructor(private readonly _socket:HubSocket, onLost:()=>void) {
+		_socket.onMessage((raw) => {
 			const msg = parseHubMsg(raw);
 			if (msg?.kind === 'rpcResult') {
-				settle(this.pending, msg);
+				settle(this._pending, msg);
 			}
 		});
-		socket.onClose(() => {
-			rejectAll(this.pending, 'hub disconnected');
+		_socket.onClose(() => {
+			rejectAll(this._pending, 'hub disconnected');
 			onLost();
 		});
 	}
 
-	async sessions():Promise<string[]> {
-		const result = await this.rpc({ kind: 'rpc', id: this.takeID(), method: 'list' }, LIST_TIMEOUT_MS);
+	public async sessions():Promise<string[]> {
+		const result = await this.rpc({ kind: 'rpc', id: this._takeID(), method: 'list' }, LIST_TIMEOUT_MS);
 		if (!Array.isArray(result)) {
 			return [];
 		}
 		return result.filter((id):id is string => typeof id === 'string');
 	}
 
-	call(session:string, command:Command, timeoutMs = COMMAND_TIMEOUT_MS):Promise<unknown> {
+	public call(session:string, command:Command, timeoutMs = COMMAND_TIMEOUT_MS):Promise<unknown> {
 		return this.rpc({
 			kind: 'rpc',
-			id: this.takeID(),
+			id: this._takeID(),
 			method: 'call',
 			session,
 			command,
 		}, timeoutMs);
 	}
 
-	close():void {
-		this.socket.close();
+	public close():void {
+		this._socket.close();
 	}
 
 	private rpc(msg:RpcMsg, timeoutMs:number):Promise<unknown> {
-		return waitReply(this.pending, msg.id, () => {
-			this.socket.send(encode(msg));
+		return waitReply(this._pending, msg.id, () => {
+			this._socket.send(encode(msg));
 		}, timeoutMs);
 	}
 }
@@ -284,30 +284,30 @@ class HubPeer implements HubHandle {
  * When the host goes away, each peer tries to host again, else rejoins, so no process is left orphaned.
  */
 class HubLink implements HubHandle {
-	private live:Promise<HubHandle>;
-	private closed = false;
+	private _live:Promise<HubHandle>;
+	private _closed = false;
 
-	constructor(private readonly port:number) {
-		this.live = this.open();
+	public constructor(private readonly _port:number) {
+		this._live = this.open();
 	}
 
-	async sessions():Promise<string[]> {
+	public async sessions():Promise<string[]> {
 		return (await this.handle()).sessions();
 	}
 
-	async call(session:string, command:Command, timeoutMs?:number):Promise<unknown> {
+	public async call(session:string, command:Command, timeoutMs?:number):Promise<unknown> {
 		return (await this.handle()).call(session, command, timeoutMs);
 	}
 
-	close():void {
-		this.closed = true;
-		this.live.then((hub) => {
+	public close():void {
+		this._closed = true;
+		this._live.then((hub) => {
 			hub.close();
 		}, () => undefined);
 	}
 
 	private open():Promise<HubHandle> {
-		const live = hostOrJoin(this.port, () => {
+		const live = hostOrJoin(this._port, () => {
 			this.reopen(live);
 		});
 		live.catch(() => {
@@ -319,19 +319,19 @@ class HubLink implements HubHandle {
 	}
 
 	private reopen(stale:Promise<HubHandle>):void {
-		if (!this.closed && this.live === stale) {
-			this.live = this.open();
+		if (!this._closed && this._live === stale) {
+			this._live = this.open();
 		}
 	}
 
 	private async handle():Promise<HubHandle> {
-		const live = this.live;
+		const live = this._live;
 		try {
 			return await live;
 		}
 		catch {
 			this.reopen(live);
-			return this.live;
+			return this._live;
 		}
 	}
 }

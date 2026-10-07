@@ -64,41 +64,41 @@ export type ArcRunnerJSON = {
  * runner without one is driven by the host.
  */
 export abstract class ArcRunner<TCtx = unknown> {
-	readonly id:string;
-	readonly verbs:VerbRegistry;
-	readonly context:()=>TCtx | undefined;
-	readonly execute?:(step:Step, ctx:TCtx | undefined)=>Promise<ArcResult>;
-	readonly abortArc?:(id:string)=>void;
-	cooldown:number;
-	laws:Law[] = [];
-	maxLaws:number;
+	public readonly id:string;
+	public readonly verbs:VerbRegistry;
+	public readonly context:()=>TCtx | undefined;
+	public readonly execute?:(step:Step, ctx:TCtx | undefined)=>Promise<ArcResult>;
+	public readonly abortArc?:(id:string)=>void;
+	public cooldown:number;
+	public laws:Law[] = [];
+	public maxLaws:number;
 	protected defaultLawWho:string;
-	arcSession:ArcSession | null = null;
-	talk:TalkNet | undefined;
-	catalog?:(ctx:TCtx)=>Catalog;
+	public arcSession:ArcSession | null = null;
+	public talk:TalkNet | undefined;
+	public catalog?:(ctx:TCtx)=>Catalog;
 	/** Object or callback. Assign a new one any time. Fetched every tick. */
-	kit:KitSource<TCtx>;
+	public kit:KitSource<TCtx>;
 	/** The kit as of the last refresh. */
-	currentKit:Kit = NO_KIT;
-	lastResult:ArcResult | undefined;
+	public currentKit:Kit = NO_KIT;
+	public lastResult:ArcResult | undefined;
 	/** The arc running now, or parked on its `when`s. */
-	arc:Arc | null = null;
+	public arc:Arc | null = null;
 	/** The verb of the step running now; `''` between steps. */
-	verb = '';
+	public verb = '';
 	/** Index of the step currently running inside `enact` (0-based). */
-	verbIndex = 0;
+	public verbIndex = 0;
 	/** Self as `prev.me` sees it: at its mind's last think, else as first sampled. */
-	prevMe:ExprEntity | undefined;
-	liveArc = false;
+	public prevMe:ExprEntity | undefined;
+	public liveArc = false;
 	protected now = 0;
 
 	/** The mind that thinks for this runner, or null when the host drives it. */
-	abstract get mind():Mind<TCtx> | null;
+	public abstract get mind():Mind<TCtx> | null;
 
 	/** The runner that acts for this one: a character itself, or a collective's commander. */
-	abstract get voice():ArcRunner<TCtx>;
+	public abstract get voice():ArcRunner<TCtx>;
 
-	constructor(opts:RunnerOptions<TCtx>) {
+	public constructor(opts:RunnerOptions<TCtx>) {
 		this.id = opts.id;
 		this.verbs = opts.verbs;
 		this.context = opts.context;
@@ -116,12 +116,12 @@ export abstract class ArcRunner<TCtx = unknown> {
 	}
 
 	/** Whether this runner speaks and acts for its mind: the arcs that mind writes run here. */
-	get isVoice():boolean {
+	public get isVoice():boolean {
 		return this.mind?.voice === this;
 	}
 
 	/** Running an arc, or parked with a handler that may still fire. */
-	get busy():boolean {
+	public get busy():boolean {
 		if (this.liveArc) {
 			return true;
 		}
@@ -130,7 +130,7 @@ export abstract class ArcRunner<TCtx = unknown> {
 	}
 
 	/** Resolve `kit` (object, getters, or callback). Director calls this each tick. A callback without a context grants nothing. */
-	refreshKit():Kit {
+	public refreshKit():Kit {
 		const src = this.kit;
 		if (typeof src !== 'function') {
 			this.currentKit = src;
@@ -147,7 +147,7 @@ export abstract class ArcRunner<TCtx = unknown> {
 	}
 
 	/** Catalog filtered by the current kit, less `withheldVerbs`. */
-	activeVerbs():VerbRegistry {
+	public activeVerbs():VerbRegistry {
 		const off = this.withheldVerbs();
 		const view = this.verbs.view(this.refreshKit().verbs.filter((name) => !off.includes(name)));
 		if (this.lawsTakeWho() || !view.has('law')) {
@@ -169,11 +169,11 @@ export abstract class ArcRunner<TCtx = unknown> {
 	}
 
 	/** Whether `law` takes a `who`: only a collective's laws pick whom they reach. */
-	lawsTakeWho():boolean {
+	public lawsTakeWho():boolean {
 		return false;
 	}
 
-	addLaw(spec:LawSpec, pinned = false):Law | undefined {
+	public addLaw(spec:LawSpec, pinned = false):Law | undefined {
 		const law = lawFromSpec(
 			{ ...spec, pinned: pinned || spec.pinned },
 			this.verbs,
@@ -188,10 +188,10 @@ export abstract class ArcRunner<TCtx = unknown> {
 	}
 
 	/**
-	 * @internal Keep `law` itself, not a copy, so an arc it started still counts as its own after a transfer.
+	 * Keep `law` itself, not a copy, so an arc it started still counts as its own after a transfer.
 	 * False when its name does not fit here or its group is full.
 	 */
-	keepLaw(law:Law):boolean {
+	protected keepLaw(law:Law):boolean {
 		if (!this.lawNameOK(law.name)) {
 			return false;
 		}
@@ -204,11 +204,11 @@ export abstract class ArcRunner<TCtx = unknown> {
 		return !name.includes('.');
 	}
 
-	removeLaw(name:string):void {
+	public removeLaw(name:string):void {
 		this.laws = dropLaw(this.laws, name);
 	}
 
-	lawHandlers(matches?:(law:Law)=>boolean):ArcHandler[] {
+	public lawHandlers(matches?:(law:Law)=>boolean):ArcHandler[] {
 		const out:ArcHandler[] = [];
 		this.laws.forEach((law, i) => {
 			if (matches && !matches(law)) {
@@ -224,7 +224,7 @@ export abstract class ArcRunner<TCtx = unknown> {
 		return out;
 	}
 
-	beginLaw(handler:ArcHandler, sessionOpts?:ArcSessionOpts):void {
+	public beginLaw(handler:ArcHandler, sessionOpts?:ArcSessionOpts):void {
 		if (this.arcSession && (this.liveArc || this.arcSession.parked)) {
 			this.arcSession.pending = { kind: 'preempt', handler };
 			this.arcSession.token += 1;
@@ -234,12 +234,12 @@ export abstract class ArcRunner<TCtx = unknown> {
 		void this.enact(handler.arc, handler, sessionOpts);
 	}
 
-	stamp(now:number):void {
+	public stamp(now:number):void {
 		this.now = now;
 	}
 
 	/** Run an arc (world verbs via `execute`). A new arc replaces the one running. */
-	async enact(
+	public async enact(
 		arc:Arc,
 		handler?:ArcHandler,
 		sessionOpts?:ArcSessionOpts,
@@ -298,7 +298,7 @@ export abstract class ArcRunner<TCtx = unknown> {
 	}
 
 	/** Stop the running arc, if any, and the host's part of it. */
-	replaceProgram():void {
+	public replaceProgram():void {
 		if (this.arcSession) {
 			this.arcSession.token += 1;
 			this.arcSession.pending = { kind: 'abort' };
@@ -313,11 +313,11 @@ export abstract class ArcRunner<TCtx = unknown> {
 	}
 
 	/** One step outside an arc, for hosts that run arcs themselves. */
-	async perform(step:Step, ctx:TCtx | undefined = this.context()):Promise<ArcResult> {
+	public async perform(step:Step, ctx:TCtx | undefined = this.context()):Promise<ArcResult> {
 		return this.runStep(step, ctx);
 	}
 
-	toJSON():ArcRunnerJSON {
+	public toJSON():ArcRunnerJSON {
 		return {
 			id: this.id,
 			lastResult: this.lastResult ? { ...this.lastResult } : undefined,
@@ -363,7 +363,7 @@ export abstract class ArcRunner<TCtx = unknown> {
 	}
 
 	/** `say` through talk. Only call with talk attached. */
-	speak(step:Step):SayResult {
+	public speak(step:Step):SayResult {
 		return this.talk!.say(this.id, String(step.args.text ?? ''), sayToOf(step.args), this.now);
 	}
 

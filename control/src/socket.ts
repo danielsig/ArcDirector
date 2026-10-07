@@ -15,13 +15,13 @@ export function pairSockets():[HubSocket, HubSocket] {
 }
 
 class MemorySocket implements HubSocket {
-	peer:MemorySocket | null = null;
-	private closed = false;
-	private readonly messages:Array<(data:string)=>void> = [];
-	private readonly closes:Array<()=>void> = [];
+	public peer:MemorySocket | null = null;
+	private _closed = false;
+	private readonly _messages:Array<(data:string)=>void> = [];
+	private readonly _closes:Array<()=>void> = [];
 
-	send(data:string):void {
-		if (this.closed) {
+	public send(data:string):void {
+		if (this._closed) {
 			throw new Error('hub socket closed');
 		}
 		queueMicrotask(() => {
@@ -29,32 +29,32 @@ class MemorySocket implements HubSocket {
 		});
 	}
 
-	close():void {
-		if (this.closed) {
+	public close():void {
+		if (this._closed) {
 			return;
 		}
-		this.closed = true;
+		this._closed = true;
 		const peer = this.peer;
 		this.peer = null;
-		for (const fn of this.closes) {
+		for (const fn of this._closes) {
 			fn();
 		}
 		peer?.close();
 	}
 
-	onMessage(fn:(data:string)=>void):void {
-		this.messages.push(fn);
+	public onMessage(fn:(data:string)=>void):void {
+		this._messages.push(fn);
 	}
 
-	onClose(fn:()=>void):void {
-		this.closes.push(fn);
+	public onClose(fn:()=>void):void {
+		this._closes.push(fn);
 	}
 
 	private emitMessage(data:string):void {
-		if (this.closed) {
+		if (this._closed) {
 			return;
 		}
-		for (const fn of this.messages) {
+		for (const fn of this._messages) {
 			fn(data);
 		}
 	}

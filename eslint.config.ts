@@ -4,11 +4,13 @@ import js from '@eslint/js';
 import ts from 'typescript-eslint';
 import stylistic from '@stylistic/eslint-plugin';
 
-// Defaults skip class fields and method names. Turn those on so `private _foo` is rejected.
+// Plain JS (.mjs) has no `private`: no underscores there at all, class fields and methods included.
 const noUnderscoreDangle = ["error", {
 	"enforceInClassFields": true,
 	"enforceInMethodNames": true,
 }] as const;
+
+const CLASS_MEMBERS = ['classProperty', 'classMethod', 'classicAccessor', 'autoAccessor', 'parameterProperty'];
 
 const commonRules = {
 	// JavaScript
@@ -91,8 +93,19 @@ const commonRules = {
 			selector: "Identifier[name='UTC']",
 			message: "Whole name: use utc. Suffix stays UTC (toUTC, savedUTC).",
 		},
+		{
+			selector: "PropertyDefinition[accessibility='private'] > Identifier.key[name=/^[^_]/]",
+			message: "A private field starts with _ (arrow-function fields too): private _mind.",
+		},
+		{
+			selector: "TSParameterProperty[accessibility='private'] Identifier.parameter[name=/^[^_]/]",
+			message: "A private field starts with _: private readonly _socket.",
+		},
+		{
+			selector: "MethodDefinition[accessibility='private'] > Identifier.key[name=/^_/]",
+			message: "A private method or accessor takes no underscore.",
+		},
 	],
-	"no-underscore-dangle": noUnderscoreDangle,
 	"space-before-blocks": ["error", "always"],
 	"no-whitespace-before-property": "error",
 	"no-unexpected-multiline": "off",
@@ -128,6 +141,16 @@ const commonRules = {
 	// TypeScript
 	"@typescript-eslint/no-unused-vars": "off",
 	"@typescript-eslint/no-explicit-any": ["error", { "fixToUnknown": true }],
+	// Every class member says who may use it, constructors included.
+	"@typescript-eslint/explicit-member-accessibility": ["error", { "accessibility": "explicit" }],
+	// Only a private field starts with `_` (`private _mind` behind `get mind()`). Which private members need it is
+	// checked in no-restricted-syntax below: this rule counts arrow-function fields as methods.
+	"@typescript-eslint/naming-convention": ["error",
+		{ "selector": CLASS_MEMBERS, "modifiers": ["private"], "format": null, "leadingUnderscore": "allow", "trailingUnderscore": "forbid" },
+		{ "selector": "default", "format": null, "leadingUnderscore": "forbid", "trailingUnderscore": "forbid" },
+		// An unused parameter may say so: `(_a, b) => b`.
+		{ "selector": "parameter", "format": null, "leadingUnderscore": "allow", "trailingUnderscore": "forbid" },
+	],
 
 	// Stylistic
 	"@stylistic/brace-style": ["warn", "stroustrup", { "allowSingleLine": true }],

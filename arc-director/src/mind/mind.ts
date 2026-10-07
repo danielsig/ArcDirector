@@ -182,6 +182,22 @@ function clauseAbout(scene:string, name:string):string {
 	return (hit ?? scene).replace(/\s+/g, ' ').trim().slice(0, 220);
 }
 
+/** What a mind's constructor hands the director that attaches it: the director's only way into its private fields. */
+export type MindFields<TCtx> = {
+	/** Wire it to the owner it thinks for. */
+	attach(owner:MindOwner<TCtx>, deps:MindDeps<TCtx>):void;
+	/** Let go of it: it thinks for no one, and may think for someone else later. */
+	detach():void;
+};
+
+/** Every mind's fields. `index.ts` does not export `mindFields`, so only the library reaches them. */
+const allFields = new WeakMap<object, unknown>();
+
+/** The fields `mind`'s constructor handed over. */
+export function mindFields<TCtx>(mind:Mind<TCtx>):MindFields<TCtx> {
+	return allFields.get(mind) as MindFields<TCtx>;
+}
+
 /**
  * Writes arcs: it thinks with the model about its owner's persona and what the owner's voice senses, and hands
  * each arc to that voice. It holds no story of its own, only its settings and thinking state, so it can be
@@ -202,84 +218,90 @@ function clauseAbout(scene:string, name:string):string {
  *     another embedding model needs either one embedding model for the whole director or a re-embed.
  */
 export class Mind<TCtx = unknown> {
-	skipHeartbeat:boolean;
-	skipMajor:boolean;
-	rank:number;
-	heartbeat:number;
-	strategicInterval:number;
-	private ownerRef:MindOwner<TCtx> | undefined;
+	public skipHeartbeat:boolean;
+	public skipMajor:boolean;
+	public rank:number;
+	public heartbeat:number;
+	public strategicInterval:number;
+	private _owner:MindOwner<TCtx> | undefined;
 	/** The owner's id, kept after a detach so a think still finishing can clean up after itself. */
-	private ownerID = '';
-	senses:Record<string, Sense<TCtx>> = {};
-	tools:Record<string, ToolSpec<TCtx>> = {};
-	talk:TalkNet | undefined;
-	provider!:InferenceProvider;
-	autoEnact = true;
-	queue:MindQueue | undefined;
-	stalled?:(result:ArcResult)=>boolean;
-	model = '';
-	embedModel:string | undefined;
-	toolRoundCap = DEFAULT_TOOL_ROUNDS;
-	wayBlocked:((id:string)=>string | undefined) | undefined;
-	arcRetryCap = 0;
+	private _id = '';
+	public senses:Record<string, Sense<TCtx>> = {};
+	public tools:Record<string, ToolSpec<TCtx>> = {};
+	public talk:TalkNet | undefined;
+	public provider!:InferenceProvider;
+	public autoEnact = true;
+	public queue:MindQueue | undefined;
+	public stalled?:(result:ArcResult)=>boolean;
+	public model = '';
+	public embedModel:string | undefined;
+	public toolRoundCap = DEFAULT_TOOL_ROUNDS;
+	public wayBlocked:((id:string)=>string | undefined) | undefined;
+	public arcRetryCap = 0;
 	/** Mutable so the Testing toggle can flip live minds. */
-	arcText = false;
-	repairTemperature = 0.4;
-	thinkInstructions:ThinkInstructions | undefined;
-	thinking:()=>boolean = () => true;
-	verbInstructions:string | undefined;
-	arcExample:string | undefined;
-	seenAs:((target:NameTarget)=>string) | undefined;
-	intrusionThreshold = 0.55;
-	intrusionCooldown = 45;
-	recallK = 5;
-	hideObserve = false;
-	map:MapSense | undefined;
-	encyclopedia:EncyclopediaSource<TCtx> | undefined;
-	vision:boolean | undefined;
+	public arcText = false;
+	public repairTemperature = 0.4;
+	public thinkInstructions:ThinkInstructions | undefined;
+	public thinking:()=>boolean = () => true;
+	public verbInstructions:string | undefined;
+	public arcExample:string | undefined;
+	public seenAs:((target:NameTarget)=>string) | undefined;
+	public intrusionThreshold = 0.55;
+	public intrusionCooldown = 45;
+	public recallK = 5;
+	public hideObserve = false;
+	public map:MapSense | undefined;
+	public encyclopedia:EncyclopediaSource<TCtx> | undefined;
+	public vision:boolean | undefined;
 	/** The last arc or think's result, as the next prompt shows it. */
-	lastResult:ArcResult | undefined;
-	lastArc:Arc | undefined;
-	lastTacticalTimestamp = Number.NEGATIVE_INFINITY;
-	lastStrategicTimestamp = 0;
-	lastIntrusionTimestamp = Number.NEGATIVE_INFINITY;
-	private now = 0;
-	private readonly pendingEvents:MindEvent[] = [];
-	private recent:string[] = [];
-	private recentSummary = '';
-	private recentAbsorbed = 0;
-	private pendingSeeMapImage:string | undefined;
-	private lastMap:MapPrev & { legend:string } | undefined;
-	private pendingAbout:string | undefined;
-	private lastVerb:string | undefined;
+	public lastResult:ArcResult | undefined;
+	public lastArc:Arc | undefined;
+	public lastTacticalTimestamp = Number.NEGATIVE_INFINITY;
+	public lastStrategicTimestamp = 0;
+	public lastIntrusionTimestamp = Number.NEGATIVE_INFINITY;
+	private _now = 0;
+	private readonly _pendingEvents:MindEvent[] = [];
+	private _recent:string[] = [];
+	private _recentSummary = '';
+	private _recentAbsorbed = 0;
+	private _pendingSeeMapImage:string | undefined;
+	private _lastMap:MapPrev & { legend:string } | undefined;
+	private _pendingAbout:string | undefined;
+	private _lastVerb:string | undefined;
 	/** Last accepted model reply, trimmed. A repeat of this is warned, not enacted. */
-	private lastEmit = '';
-	private emitStreak = 0;
+	private _lastEmit = '';
+	private _emitStreak = 0;
 	/** Accepted arcs in a row that only talked or waited. */
-	private talkStreak = 0;
+	private _talkStreak = 0;
 	/** Recent lines this mind's voice said, with who heard each clearly. */
-	private said:{ gist:Set<string>; text:string; heard:Set<string> }[] = [];
-	private mentionCap = DEFAULT_MENTION_CAP;
-	private thinks = 0;
+	private _said:{ gist:Set<string>; text:string; heard:Set<string> }[] = [];
+	private _mentionCap = DEFAULT_MENTION_CAP;
+	private _thinks = 0;
 	/** Article name → the think it was last shown on for being mentioned. */
-	private readonly mentionedOn = new Map<string, number>();
+	private readonly _mentionedOn = new Map<string, number>();
 	/** Tool call (name and args) → the think it was last made on. */
-	private readonly calledOn = new Map<string, number>();
+	private readonly _calledOn = new Map<string, number>();
 	/** `verb id` pairs whose move found no way; `blockedAgain` refuses them until the way opens. */
-	private readonly noWay = new Set<string>();
+	private readonly _noWay = new Set<string>();
 
-	constructor(settings:MindSettings = {}) {
+	public constructor(settings:MindSettings = {}) {
 		this.skipHeartbeat = settings.skipHeartbeat ?? false;
 		this.skipMajor = settings.skipMajor ?? false;
 		this.rank = settings.rank ?? 0;
 		this.heartbeat = settings.heartbeat ?? 0;
 		this.strategicInterval = settings.strategicInterval ?? 180;
+		const fields:MindFields<TCtx> = {
+			attach: (owner, deps) => this.attach(owner, deps),
+			detach: () => {
+				this._owner = undefined;
+			},
+		};
+		allFields.set(this, fields);
 	}
 
-	/** @internal The director wires a mind to the owner it thinks for when it attaches it. */
-	attach(owner:MindOwner<TCtx>, deps:MindDeps<TCtx>):void {
-		this.ownerRef = owner;
-		this.ownerID = owner.id;
+	private attach(owner:MindOwner<TCtx>, deps:MindDeps<TCtx>):void {
+		this._owner = owner;
+		this._id = owner.id;
 		this.provider = deps.provider;
 		this.senses = deps.senses ?? {};
 		this.tools = deps.tools ?? {};
@@ -305,44 +327,39 @@ export class Mind<TCtx = unknown> {
 		this.hideObserve = deps.hideObserve ?? false;
 		this.map = deps.map;
 		this.encyclopedia = deps.encyclopedia;
-		this.mentionCap = deps.mentionCap ?? DEFAULT_MENTION_CAP;
+		this._mentionCap = deps.mentionCap ?? DEFAULT_MENTION_CAP;
 		this.vision = deps.vision;
 	}
 
-	/** @internal The director let go of this mind: its think is aborted, and it may think for someone else later. */
-	detach():void {
-		this.ownerRef = undefined;
-	}
-
 	/** The character or collective this mind thinks for. */
-	get owner():MindOwner<TCtx> {
-		if (!this.ownerRef) {
+	public get owner():MindOwner<TCtx> {
+		if (!this._owner) {
 			throw new Error('ArcDirector: this mind thinks for no one yet');
 		}
-		return this.ownerRef;
+		return this._owner;
 	}
 
 	/** Whether this mind is attached to an owner. */
-	get attached():boolean {
-		return this.ownerRef !== undefined;
+	public get attached():boolean {
+		return this._owner !== undefined;
 	}
 
 	/** The owner's id. The think queue, chat thread and logs know a mind by it. */
-	get id():string {
-		return this.ownerID;
+	public get id():string {
+		return this._id;
 	}
 
-	get persona():Persona {
+	public get persona():Persona {
 		return this.owner.persona;
 	}
 
 	/** The runner that enacts this mind's arcs: the character itself, or a collective's commander. */
-	get voice():ArcRunner<TCtx> {
+	public get voice():ArcRunner<TCtx> {
 		return this.owner.voice;
 	}
 
 	/** These settings, to give a character a fresh mind like this one later. */
-	settings():MindSettings {
+	public settings():MindSettings {
 		return {
 			skipHeartbeat: this.skipHeartbeat,
 			skipMajor: this.skipMajor,
@@ -353,8 +370,8 @@ export class Mind<TCtx = unknown> {
 	}
 
 	/** Game time, for the events and memories this mind stamps. The director stamps every tick. */
-	stamp(now:number):void {
-		this.now = now;
+	public stamp(now:number):void {
+		this._now = now;
 	}
 
 	private senseAllowed(name:string):boolean {
@@ -390,23 +407,23 @@ export class Mind<TCtx = unknown> {
 	}
 
 	/** This mind's name for a character it is sampling now. Assigns one on first sight. */
-	seen(target:NameTarget):string {
+	public seen(target:NameTarget):string {
 		return this.seenAs ? this.persona.names.name(target.id, this.seenAs(target)) : target.id;
 	}
 
 	/** This mind's name for `id`. A character it never sampled gets the policy's answer for a bare id, unrecorded. */
-	nameOf(id:string):string {
+	public nameOf(id:string):string {
 		return this.persona.names.peek(id) ?? this.seenAs?.({ id }) ?? id;
 	}
 
 	/** Queue an event for the next think. It is kept in ids and read in this mind's names when that think starts. */
-	pushEvent(event:MindEvent):void {
-		this.pendingEvents.push({ ...event, timestamp: event.timestamp ?? this.now });
+	public pushEvent(event:MindEvent):void {
+		this._pendingEvents.push({ ...event, timestamp: event.timestamp ?? this._now });
 	}
 
 	/** The events waiting for the next think, as this mind reads them now. */
-	events():MindEvent[] {
-		return this.pendingEvents.map((e) => this.render(e));
+	public events():MindEvent[] {
+		return this._pendingEvents.map((e) => this.render(e));
 	}
 
 	/**
@@ -434,8 +451,8 @@ export class Mind<TCtx = unknown> {
 	}
 
 	/** Unabsorbed speech meant for this mind: to it, naming it, or to everyone. Overheard talk does not count. */
-	hasHeard():boolean {
-		return this.pendingEvents.some((e) => e.kind === 'HeardSpeech' && e.major);
+	public hasHeard():boolean {
+		return this._pendingEvents.some((e) => e.kind === 'HeardSpeech' && e.major);
 	}
 
 	private capturePrevMe():void {
@@ -448,17 +465,17 @@ export class Mind<TCtx = unknown> {
 	}
 
 	/** Hosts that run world verbs on the voice themselves should call this so think() cooldown sees them. */
-	noteVerb(verb:string):void {
+	public noteVerb(verb:string):void {
 		if (verb) {
-			this.lastVerb = verb;
+			this._lastVerb = verb;
 		}
 	}
 
 	/** The result of the arc this mind gave its voice, or of a failed think. The next prompt shows it. */
-	ingestResult(result:ArcResult):void {
+	public ingestResult(result:ArcResult):void {
 		this.lastResult = result;
 		if (result.unreachable && result.verb) {
-			this.noWay.add(`${result.verb} ${result.unreachable}`);
+			this._noWay.add(`${result.verb} ${result.unreachable}`);
 		}
 		if (result.interrupted) {
 			this.pushEvent({
@@ -478,12 +495,12 @@ export class Mind<TCtx = unknown> {
 	}
 
 	/** The voice began an arc. */
-	arcStarted(arc:Arc):void {
+	public arcStarted(arc:Arc):void {
 		this.queue?.beginArc(this.id, arc);
 	}
 
 	/** The voice's arc stopped or parked. */
-	arcEnded():void {
+	public arcEnded():void {
 		this.queue?.endArc(this.id);
 	}
 
@@ -491,14 +508,14 @@ export class Mind<TCtx = unknown> {
 	 * An arc that ends on a say someone could answer gives the answer time to come before the next think.
 	 * A say mid-arc does not wait: the rest of the arc (`say(...) && use(...)`) is what was decided.
 	 */
-	async afterArc(result:ArcResult, voice:ArcRunner<TCtx>):Promise<void> {
+	public async afterArc(result:ArcResult, voice:ArcRunner<TCtx>):Promise<void> {
 		const due = result.ok && result.verb === 'say' && 'answerable' in result && result.answerable === true;
 		if (due && voice.execute) {
 			await voice.execute({ verb: 'wait', args: { seconds: 20 } }, voice.context());
 		}
 	}
 
-	async remember(text:string, tags:string[] = [], timestamp = this.now):Promise<MemoryRecord> {
+	public async remember(text:string, tags:string[] = [], timestamp = this._now):Promise<MemoryRecord> {
 		let embedding:number[] | undefined;
 		if (this.provider.embed) {
 			try {
@@ -519,12 +536,12 @@ export class Mind<TCtx = unknown> {
 	}
 
 	/** The voice's id: the character that acts and speaks for this mind, or the collective's own id while it has no commander. */
-	thinkThread():string {
-		return this.ownerRef?.voice.id ?? this.ownerID;
+	public thinkThread():string {
+		return this._owner?.voice.id ?? this._id;
 	}
 
 	/** Cancel this mind's in-flight think. */
-	abortThink():void {
+	public abortThink():void {
 		this.queue?.abortThink(this.id);
 	}
 
@@ -532,22 +549,22 @@ export class Mind<TCtx = unknown> {
 	 * One tactical think, ignoring heartbeat. Occupies the think slot so a
 	 * queued tick cannot start another. `enact` defaults to `autoEnact`. `now` is game time.
 	 */
-	async thinkNow(opts:{ now?:number; about?:string; enact?:boolean } = {}):Promise<Arc | null> {
+	public async thinkNow(opts:{ now?:number; about?:string; enact?:boolean } = {}):Promise<Arc | null> {
 		if (opts.now !== undefined) {
-			this.now = opts.now;
+			this._now = opts.now;
 		}
 		this.owner.refreshKit();
 		this.absorbPending();
 		if (opts.about !== undefined) {
 			const about = opts.about.replace(/\s+/g, ' ').trim();
-			this.pendingAbout = about.length > 0 ? about : undefined;
+			this._pendingAbout = about.length > 0 ? about : undefined;
 		}
 		this.abortThink();
 		return this.withThinkSlot(opts.enact ?? this.autoEnact, () => this.tactical());
 	}
 
-	async tick(gameTime:number):Promise<Arc | null> {
-		this.now = gameTime;
+	public async tick(gameTime:number):Promise<Arc | null> {
+		this._now = gameTime;
 		this.owner.refreshKit();
 		this.absorbPending();
 		const strategic = this.strategicDue(gameTime);
@@ -581,19 +598,19 @@ export class Mind<TCtx = unknown> {
 			if (signal?.aborted || !arc) {
 				return null;
 			}
-			this.pendingAbout = undefined;
+			this._pendingAbout = undefined;
 			this.lastArc = arc;
-			this.lastTacticalTimestamp = this.now;
+			this.lastTacticalTimestamp = this._now;
 			this.capturePrevMe();
 			// Only what this think read. Events that came in while the model answered (a gift, a reply) wait for the next one.
-			this.pendingEvents.splice(0, this.recentAbsorbed);
-			this.recentAbsorbed = 0;
+			this._pendingEvents.splice(0, this._recentAbsorbed);
+			this._recentAbsorbed = 0;
 		}
 		catch (err) {
 			if (signal?.aborted) {
 				return null;
 			}
-			this.lastTacticalTimestamp = this.now;
+			this.lastTacticalTimestamp = this._now;
 			this.capturePrevMe();
 			throw err;
 		}
@@ -609,36 +626,36 @@ export class Mind<TCtx = unknown> {
 		return arc;
 	}
 
-	toJSON():MindJSON {
+	public toJSON():MindJSON {
 		return {
 			settings: this.settings(),
-			events: this.pendingEvents.map((e) => ({ ...e, tags: e.tags ? [...e.tags] : undefined })),
+			events: this._pendingEvents.map((e) => ({ ...e, tags: e.tags ? [...e.tags] : undefined })),
 			lastArc: this.lastArc,
 			lastResult: this.lastResult ? { ...this.lastResult } : undefined,
 			lastTacticalTimestamp: Number.isFinite(this.lastTacticalTimestamp) ? this.lastTacticalTimestamp : undefined,
 			lastStrategicTimestamp: Number.isFinite(this.lastStrategicTimestamp) ? this.lastStrategicTimestamp : undefined,
 			lastIntrusionTimestamp: Number.isFinite(this.lastIntrusionTimestamp) ? this.lastIntrusionTimestamp : undefined,
-			recent: [...this.recent],
-			recentSummary: this.recentSummary || undefined,
-			thinkAbout: this.pendingAbout,
-			lastVerb: this.lastVerb,
+			recent: [...this._recent],
+			recentSummary: this._recentSummary || undefined,
+			thinkAbout: this._pendingAbout,
+			lastVerb: this._lastVerb,
 		};
 	}
 
 	/** A saved mind, not yet attached to anyone. */
-	static fromJSON<TCtx>(json:MindJSON):Mind<TCtx> {
+	public static fromJSON<TCtx>(json:MindJSON):Mind<TCtx> {
 		const mind = new Mind<TCtx>(json.settings);
 		mind.lastArc = json.lastArc;
 		mind.lastResult = json.lastResult;
 		mind.lastTacticalTimestamp = json.lastTacticalTimestamp ?? Number.NEGATIVE_INFINITY;
 		mind.lastStrategicTimestamp = json.lastStrategicTimestamp ?? 0;
 		mind.lastIntrusionTimestamp = json.lastIntrusionTimestamp ?? Number.NEGATIVE_INFINITY;
-		mind.pendingEvents.push(...json.events ?? []);
-		mind.recent = json.recent ? [...json.recent] : [];
-		mind.recentSummary = json.recentSummary ?? '';
-		mind.recentAbsorbed = mind.pendingEvents.length;
-		mind.pendingAbout = json.thinkAbout;
-		mind.lastVerb = json.lastVerb;
+		mind._pendingEvents.push(...json.events ?? []);
+		mind._recent = json.recent ? [...json.recent] : [];
+		mind._recentSummary = json.recentSummary ?? '';
+		mind._recentAbsorbed = mind._pendingEvents.length;
+		mind._pendingAbout = json.thinkAbout;
+		mind._lastVerb = json.lastVerb;
 		return mind;
 	}
 
@@ -649,7 +666,7 @@ export class Mind<TCtx = unknown> {
 		if (this.lastResult?.interrupted) {
 			return true;
 		}
-		if (this.pendingEvents.some((e) => e.major)) {
+		if (this._pendingEvents.some((e) => e.major)) {
 			return true;
 		}
 		if (this.heartbeat <= 0) {
@@ -659,7 +676,7 @@ export class Mind<TCtx = unknown> {
 	}
 
 	private strategicDue(gameTime:number):boolean {
-		if (this.pendingEvents.some((e) => e.major)) {
+		if (this._pendingEvents.some((e) => e.major)) {
 			return true;
 		}
 		if (this.strategicInterval <= 0) {
@@ -683,8 +700,8 @@ export class Mind<TCtx = unknown> {
 			goals: this.persona.goals,
 			pinned: this.persona.memory.pinned(),
 			recalled: this.recallForPrompt(),
-			recent: this.recent,
-			recentSummary: this.recentSummary,
+			recent: this._recent,
+			recentSummary: this._recentSummary,
 		})}\n\n`
 			+ 'Revise goals if what you just learned changes what you must do. '
 			+ 'Harm, theft, and threats outrank standing work — put that first in goals. '
@@ -710,7 +727,7 @@ export class Mind<TCtx = unknown> {
 				return;
 			}
 			if (raw.identity !== undefined) {
-				this.persona.applyIdentityPatch(raw.identity, this.id, this.now);
+				this.persona.applyIdentityPatch(raw.identity, this.id, this._now);
 			}
 			if (Array.isArray(raw.goals)) {
 				this.persona.applyGoalList(raw.goals);
@@ -731,18 +748,18 @@ export class Mind<TCtx = unknown> {
 	}
 
 	/** A stored expression in this mind's names. */
-	named(expr:string):string {
+	public named(expr:string):string {
 		return mapExpr(expr, namesOf(this.persona.names));
 	}
 
 	/** A stored arc in this mind's names, as text. */
-	namedArc(arc:Arc):string {
+	public namedArc(arc:Arc):string {
 		const verbs = this.owner.verbs.nested();
 		return formatArc(mapArc(arc, verbs, namesOf(this.persona.names)), verbs);
 	}
 
 	/** The owner's laws in list order, as this mind's model reads them. */
-	lawsSection():string {
+	public lawsSection():string {
 		const laws = this.owner.laws;
 		if (laws.length === 0) {
 			return '';
@@ -779,7 +796,7 @@ export class Mind<TCtx = unknown> {
 			return undefined;
 		}
 		const meantFor = [sayToOf(args) ?? this.talk.nearby(this.thinkThread())].flat();
-		return this.said.find((line) => {
+		return this._said.find((line) => {
 			const shared = [...gist].filter((w) => line.gist.has(w)).length;
 			return shared / gist.size >= REPEAT_OVERLAP
 				&& meantFor.length > 0 && meantFor.every((id) => line.heard.has(id));
@@ -793,20 +810,20 @@ export class Mind<TCtx = unknown> {
 	 */
 	private mentionedText():string {
 		const voice = this.voice;
-		const ctx = this.encyclopedia && this.mentionCap > 0 && this.recent.length > 0 ? voice.context() : undefined;
+		const ctx = this.encyclopedia && this._mentionCap > 0 && this._recent.length > 0 ? voice.context() : undefined;
 		if (!this.encyclopedia || ctx === undefined) {
 			return '';
 		}
 		const bag = voice.catalog ? bagOf(voice.catalog(ctx).me) : undefined;
 		const lines:string[] = [];
-		for (const entry of mentionedArticles(encyclopediaPages(this.encyclopedia, ctx), this.recent.join('\n'), Infinity)) {
-			if (lines.length >= this.mentionCap) {
+		for (const entry of mentionedArticles(encyclopediaPages(this.encyclopedia, ctx), this._recent.join('\n'), Infinity)) {
+			if (lines.length >= this._mentionCap) {
 				break;
 			}
 			const name = entry.name.trim();
 			const carried = entry.item && bag ? ` (${isAboutItem(entry, bag) ? 'you carry one' : 'you carry none'})` : '';
-			if (this.thinks - (this.mentionedOn.get(name) ?? -Infinity) > MENTION_REPEAT) {
-				this.mentionedOn.set(name, this.thinks);
+			if (this._thinks - (this._mentionedOn.get(name) ?? -Infinity) > MENTION_REPEAT) {
+				this._mentionedOn.set(name, this._thinks);
 				lines.push(`- ${name}${carried}: ${entry.text.trim()}`);
 			}
 			else if (carried) {
@@ -871,10 +888,10 @@ export class Mind<TCtx = unknown> {
 			pinnedSightFocus: this.persona.pinnedSightFocus.map((e) => this.named(e)),
 			sightFocus: this.persona.sightFocus.map((e) => this.named(e)),
 			sightFocusWritable: this.owner.activeVerbs().has('focus'),
-			recent: this.recent,
-			recentSummary: this.recentSummary,
+			recent: this._recent,
+			recentSummary: this._recentSummary,
 			mentioned: this.mentionedText(),
-			thinkAbout: this.pendingAbout,
+			thinkAbout: this._pendingAbout,
 		}), this.extraVolatile()].filter(Boolean).join('\n\n');
 	}
 
@@ -916,14 +933,14 @@ export class Mind<TCtx = unknown> {
 		sendTools:boolean,
 		tools:ToolDef[],
 	):Promise<Arc> {
-		if (!liveVerbAtThink || !this.voice.liveArc || this.lastVerb === liveVerbAtThink) {
+		if (!liveVerbAtThink || !this.voice.liveArc || this._lastVerb === liveVerbAtThink) {
 			return arc;
 		}
 		this.absorbPending();
 		const sensed = this.gatherSensed();
 		const emitText = this.emitText(verbs);
 		const form = emitText ? 'Arc text' : 'Arc JSON';
-		const hint = `While you thought, the live verb changed from ${liveVerbAtThink} to ${this.lastVerb}. `
+		const hint = `While you thought, the live verb changed from ${liveVerbAtThink} to ${this._lastVerb}. `
 			+ `Do not think again. Emit a new ${form} if that changes your choices, or confirm the arc you already wrote.`;
 		messages.push({ role: 'assistant', content: firstContent });
 		messages.push({ role: 'user', content: this.volatileUser(sensed, hint) });
@@ -953,10 +970,10 @@ export class Mind<TCtx = unknown> {
 	}
 
 	private async tactical():Promise<Arc> {
-		this.thinks += 1;
+		this._thinks += 1;
 		const ctx = this.voice.context();
 		this.owner.refreshKit();
-		const liveVerbAtThink = this.voice.liveArc ? this.lastVerb : undefined;
+		const liveVerbAtThink = this.voice.liveArc ? this._lastVerb : undefined;
 		// A repeat after new input (speech, an interruption, a nudge) can be right; without any, the model is stuck.
 		const freshInput = this.hasFreshInput();
 		const sensed = this.gatherSensed();
@@ -982,9 +999,9 @@ export class Mind<TCtx = unknown> {
 		// Talking in circles: the first turn must call a lookup, so the missing fact gets looked up instead of asked for again.
 		// Only lookups are offered, or the model answers with a check (earshot) that leads back to talk.
 		const lookups = tools.filter((t) => LOOKUP_TOOLS.includes(t.name));
-		const lookupFirst = lookups.length > 0 && this.talkStreak >= TALK_STREAK_LOOKUP;
+		const lookupFirst = lookups.length > 0 && this._talkStreak >= TALK_STREAK_LOOKUP;
 		const user = this.volatileUser(sensed, lookupFirst
-			? `You have only talked or waited for ${this.talkStreak} thinks. Look up what you lack before you act.`
+			? `You have only talked or waited for ${this._talkStreak} thinks. Look up what you lack before you act.`
 			: undefined);
 		const messages:ChatMessage[] = [
 			{ role: 'system', content: system },
@@ -1008,7 +1025,7 @@ export class Mind<TCtx = unknown> {
 				responseFormat: allowTools || emitText
 					? undefined
 					: { name: 'arc', schema: arcSchema(verbs), strict: false },
-				temperature: this.arcRetryCap - repairsLeft > 1 || this.emitStreak >= 2
+				temperature: this.arcRetryCap - repairsLeft > 1 || this._emitStreak >= 2
 					? this.repairTemperature
 					: 0,
 			});
@@ -1031,24 +1048,24 @@ export class Mind<TCtx = unknown> {
 					// A repeat did not help, so it is refused: any call within this think, a lookup within the last few.
 					// Other tools (see_map, observe) may answer differently once the character has moved.
 					const window = LOOKUP_TOOLS.includes(call.name) ? LOOKUP_REPEAT : 0;
-					const result = this.thinks - (this.calledOn.get(key) ?? -Infinity) <= window
+					const result = this._thinks - (this._calledOn.get(key) ?? -Infinity) <= window
 						? { error: 'Duplicate call. You made it this think or lately. Change the query, call another tool, or emit the arc.' }
 						: await this.runTool(call.name, call.arguments, ctx);
-					this.calledOn.set(key, this.thinks);
+					this._calledOn.set(key, this._thinks);
 					messages.push({
 						role: 'tool',
 						content: typeof result === 'string' ? result : JSON.stringify(result),
 						toolCallID: call.id,
 					});
-					if (this.pendingSeeMapImage) {
+					if (this._pendingSeeMapImage) {
 						messages.push({
 							role: 'user',
 							content: [
 								{ type: 'text', text: 'The map. Legend is in the tool result; names only, no coordinates.' },
-								{ type: 'image_url', image_url: { url: this.pendingSeeMapImage } },
+								{ type: 'image_url', image_url: { url: this._pendingSeeMapImage } },
 							],
 						});
-						this.pendingSeeMapImage = undefined;
+						this._pendingSeeMapImage = undefined;
 					}
 				}
 				toolsLeft -= 1;
@@ -1082,9 +1099,9 @@ export class Mind<TCtx = unknown> {
 				}
 				if (!warnedRepeat && this.isRepeat(res.content)) {
 					warnedRepeat = true;
-					this.emitStreak += 1;
+					this._emitStreak += 1;
 					messages.push({ role: 'assistant', content: res.content });
-					messages.push({ role: 'user', content: repeatOutputHint(this.emitStreak, emitText) });
+					messages.push({ role: 'user', content: repeatOutputHint(this._emitStreak, emitText) });
 					continue;
 				}
 				const blocked = this.unreachableSay(arc);
@@ -1103,7 +1120,7 @@ export class Mind<TCtx = unknown> {
 					this.applyMind(raw);
 				}
 				this.acceptEmit(res.content);
-				this.talkStreak = arcSteps(arc).every((step) => TALK_VERBS.has(step.verb)) ? this.talkStreak + 1 : 0;
+				this._talkStreak = arcSteps(arc).every((step) => TALK_VERBS.has(step.verb)) ? this._talkStreak + 1 : 0;
 				return this.settleLiveArc(
 					arc,
 					res.content,
@@ -1129,20 +1146,20 @@ export class Mind<TCtx = unknown> {
 
 	private isRepeat(text:string):boolean {
 		const t = text.trim();
-		return t !== '' && t === this.lastEmit;
+		return t !== '' && t === this._lastEmit;
 	}
 
 	private acceptEmit(text:string):void {
 		if (this.isRepeat(text)) {
 			return;
 		}
-		this.lastEmit = text.trim();
-		this.emitStreak = this.lastEmit ? 1 : 0;
+		this._lastEmit = text.trim();
+		this._emitStreak = this._lastEmit ? 1 : 0;
 	}
 
 	/** Anything since the last accepted think besides this mind's own arc result. */
 	private hasFreshInput():boolean {
-		return this.pendingAbout !== undefined || this.pendingEvents.some((e) => e.kind !== 'arc_result');
+		return this._pendingAbout !== undefined || this._pendingEvents.some((e) => e.kind !== 'arc_result');
 	}
 
 	private pushRepair(
@@ -1172,8 +1189,8 @@ export class Mind<TCtx = unknown> {
 
 
 	private absorbPending():void {
-		for (let i = this.recentAbsorbed; i < this.pendingEvents.length; i++) {
-			const e = this.render(this.pendingEvents[i]);
+		for (let i = this._recentAbsorbed; i < this._pendingEvents.length; i++) {
+			const e = this.render(this._pendingEvents[i]);
 			const text = e.text.trim();
 			if (!text) {
 				continue;
@@ -1195,25 +1212,25 @@ export class Mind<TCtx = unknown> {
 						category: 'episodic',
 						text,
 						tags: mergeTags(e.tags, nameTags(text)),
-						timestamp: e.timestamp ?? this.now,
-					}, e.timestamp ?? this.now);
+						timestamp: e.timestamp ?? this._now,
+					}, e.timestamp ?? this._now);
 				}
 			}
 		}
-		this.recentAbsorbed = this.pendingEvents.length;
+		this._recentAbsorbed = this._pendingEvents.length;
 	}
 
 	private noteRecent(line:string):void {
 		const text = line.trim();
-		if (!text || this.recent[this.recent.length - 1] === text) {
+		if (!text || this._recent[this._recent.length - 1] === text) {
 			return;
 		}
-		this.recent.push(text);
-		if (this.recent.length <= RECENT_CAP) {
+		this._recent.push(text);
+		if (this._recent.length <= RECENT_CAP) {
 			return;
 		}
-		const overflow = this.recent.splice(0, this.recent.length - RECENT_CAP);
-		this.recentSummary = foldRecent(this.recentSummary, overflow);
+		const overflow = this._recent.splice(0, this._recent.length - RECENT_CAP);
+		this._recentSummary = foldRecent(this._recentSummary, overflow);
 	}
 
 	private keepFact(text:string, tags:string[]):void {
@@ -1229,8 +1246,8 @@ export class Mind<TCtx = unknown> {
 			category: 'semantic',
 			text: line,
 			tags,
-			timestamp: this.now,
-		}, this.now);
+			timestamp: this._now,
+		}, this._now);
 	}
 
 	private noteSeen(scene:string):void {
@@ -1252,7 +1269,7 @@ export class Mind<TCtx = unknown> {
 			if (existing) {
 				if (existing.text !== line) {
 					existing.text = line;
-					existing.lastAccessed = this.now;
+					existing.lastAccessed = this._now;
 				}
 				continue;
 			}
@@ -1260,27 +1277,27 @@ export class Mind<TCtx = unknown> {
 				category: 'semantic',
 				text: line,
 				tags: mergeTags([tag, name, 'seen'], nameTags(snippet)),
-				timestamp: this.now,
-			}, this.now);
+				timestamp: this._now,
+			}, this._now);
 		}
 	}
 
 	private recallForPrompt(scene = ''):MemoryRecord[] {
 		const query = [
 			...this.persona.goals.map((g) => g.text),
-			this.pendingAbout ?? '',
-			...this.recent,
-			this.recentSummary,
+			this._pendingAbout ?? '',
+			...this._recent,
+			this._recentSummary,
 		].filter((s) => s.trim().length > 0).join(' ');
 		if (!query.trim()) {
 			return [];
 		}
 		const pinnedIds = new Set(this.persona.memory.pinned().map((r) => r.id));
-		const recentSet = new Set(this.recent);
+		const recentSet = new Set(this._recent);
 		return this.persona.memory.recall({
 			query,
 			k: this.recallK,
-			now: this.now,
+			now: this._now,
 			skip: (r) => {
 				if (r.pinned || pinnedIds.has(r.id) || recentSet.has(r.text)) {
 					return true;
@@ -1297,7 +1314,7 @@ export class Mind<TCtx = unknown> {
 			return;
 		}
 		if (raw.identity !== undefined) {
-			this.persona.applyIdentityPatch(raw.identity, this.id, this.now);
+			this.persona.applyIdentityPatch(raw.identity, this.id, this._now);
 		}
 		if (raw.goals !== undefined) {
 			this.persona.applyGoalList(raw.goals);
@@ -1308,20 +1325,20 @@ export class Mind<TCtx = unknown> {
 
 
 	private maybeIntrude(perceptionText:string):string | undefined {
-		if (this.now - this.lastIntrusionTimestamp < this.intrusionCooldown) {
+		if (this._now - this.lastIntrusionTimestamp < this.intrusionCooldown) {
 			return undefined;
 		}
-		const tags = this.pendingEvents.flatMap((e) => this.render(e).tags ?? []);
+		const tags = this._pendingEvents.flatMap((e) => this.render(e).tags ?? []);
 		const hit = this.persona.memory.intrusion({
 			query: perceptionText,
-			now: this.now,
+			now: this._now,
 			tags,
 			threshold: this.intrusionThreshold,
 		});
 		if (!hit || hit.tags.includes('seen')) {
 			return undefined;
 		}
-		this.lastIntrusionTimestamp = this.now;
+		this.lastIntrusionTimestamp = this._now;
 		return hit.text;
 	}
 
@@ -1438,7 +1455,7 @@ export class Mind<TCtx = unknown> {
 		if (!this.map) {
 			return { ok: false, zoom, reason: 'no map' };
 		}
-		const prev = this.lastMap;
+		const prev = this._lastMap;
 		let snap;
 		try {
 			snap = await this.map.snapshot(this.thinkThread(), zoom, prev);
@@ -1450,7 +1467,7 @@ export class Mind<TCtx = unknown> {
 			return { ok: false, zoom, reason: 'no map' };
 		}
 		if (prev && snap.image === prev.image) {
-			this.pendingSeeMapImage = undefined;
+			this._pendingSeeMapImage = undefined;
 			return {
 				ok: true,
 				zoom,
@@ -1463,9 +1480,9 @@ export class Mind<TCtx = unknown> {
 			return { ok: false, zoom, reason: 'no map' };
 		}
 		const stamped = await stampMap(snap, (id) => this.nameOf(id));
-		this.pendingSeeMapImage = stamped.image;
-		this.lastMap = {
-			timestamp: this.now,
+		this._pendingSeeMapImage = stamped.image;
+		this._lastMap = {
+			timestamp: this._now,
 			zoom,
 			legend: stamped.legend,
 			image: stamped.image,
@@ -1501,12 +1518,12 @@ export class Mind<TCtx = unknown> {
 		for (const arg of Object.values(head?.args ?? {})) {
 			const id = typeof arg === 'string' ? arg : '';
 			const key = `${head?.verb} ${id}`;
-			if (!this.noWay.has(key)) {
+			if (!this._noWay.has(key)) {
 				continue;
 			}
 			const why = this.wayBlocked?.(id);
 			if (why === undefined) {
-				this.noWay.delete(key);
+				this._noWay.delete(key);
 				continue;
 			}
 			return noWayTo(this.nameOf(id), why);
@@ -1578,7 +1595,7 @@ export class Mind<TCtx = unknown> {
 			}
 		}
 		return [
-			...this.recent.slice(-k).map((text) => ({
+			...this._recent.slice(-k).map((text) => ({
 				id: 'recent',
 				text,
 				tags: ['recent'],
@@ -1587,7 +1604,7 @@ export class Mind<TCtx = unknown> {
 			...this.persona.memory.recall({
 				query,
 				k,
-				now: this.now,
+				now: this._now,
 				embedding,
 			}).map((m) => ({
 				id: m.id,
@@ -1624,7 +1641,7 @@ export class Mind<TCtx = unknown> {
 	}
 
 	private runThink(step:Step, voice:boolean):ArcResult {
-		if (voice && this.lastVerb === 'think') {
+		if (voice && this._lastVerb === 'think') {
 			return {
 				ok: false,
 				verb: 'think',
@@ -1635,9 +1652,9 @@ export class Mind<TCtx = unknown> {
 		if (about.length > THINK_ABOUT_CAP) {
 			about = about.slice(0, THINK_ABOUT_CAP).trim();
 		}
-		this.pendingAbout = about.length > 0 ? about : undefined;
+		this._pendingAbout = about.length > 0 ? about : undefined;
 		if (voice) {
-			this.lastVerb = 'think';
+			this._lastVerb = 'think';
 		}
 		return { ok: true, verb: 'think' };
 	}
@@ -1687,7 +1704,7 @@ export class Mind<TCtx = unknown> {
 	 * A mind verb that `by` runs: its voice, or another of a collective's characters, whose memories and goals
 	 * are marked as theirs. `say` keeps the voice from repeating itself. Undefined for a step the character runs itself.
 	 */
-	async perform(step:Step, by:ArcRunner<TCtx>):Promise<ArcResult | undefined> {
+	public async perform(step:Step, by:ArcRunner<TCtx>):Promise<ArcResult | undefined> {
 		const voice = by === this.voice;
 		if (step.verb === 'think') {
 			return this.runThink(step, voice);
@@ -1704,7 +1721,7 @@ export class Mind<TCtx = unknown> {
 		if (step.verb === 'remember') {
 			const content = String(step.args.content ?? '');
 			const tags = asStringArray(step.args.tags);
-			await this.remember(content, voice ? tags : [...tags, `unit:${by.id}`], this.now);
+			await this.remember(content, voice ? tags : [...tags, `unit:${by.id}`], this._now);
 			return { ok: true, verb: 'remember' };
 		}
 		if (step.verb === 'set_goal') {
@@ -1725,7 +1742,7 @@ export class Mind<TCtx = unknown> {
 			return { ok: true, verb: 'drop_goal' };
 		}
 		if (step.verb === 'set_identity') {
-			const changed = this.persona.applyIdentityPatch(step.args, this.id, this.now);
+			const changed = this.persona.applyIdentityPatch(step.args, this.id, this._now);
 			return { ok: changed, verb: 'set_identity', reason: changed ? undefined : 'nothing to change' };
 		}
 		if (!voice) {
@@ -1739,7 +1756,7 @@ export class Mind<TCtx = unknown> {
 			}
 			const result = by.speak(step);
 			if (result.ok && text) {
-				this.said = [...this.said, { gist: gistOf(text), text, heard: new Set(result.heard ?? []) }].slice(-SAID_CAP);
+				this._said = [...this._said, { gist: gistOf(text), text, heard: new Set(result.heard ?? []) }].slice(-SAID_CAP);
 				const who = [sayToOf(step.args) ?? []].flat().map((id) => this.nameOf(id)).join(', ');
 				this.noteRecent(who ? `You said to ${who}: "${text}"` : `You said: "${text}"`);
 			}

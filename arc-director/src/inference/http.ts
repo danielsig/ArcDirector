@@ -103,6 +103,14 @@ function readLoadedInstances(models:unknown[]):LoadedInstance[] {
 	return out;
 }
 
+
+
+export type RequestInfo = {
+	req:ChatRequest;
+	body:Record<string, unknown>;
+	path:string;
+};
+
 export type HttpProviderConfig = {
 	baseURL?:string;
 	apiKey?:string;
@@ -129,11 +137,7 @@ export type HttpProviderConfig = {
 	 */
 	applyPromptTemplate?:ApplyPromptTemplate;
 	/** Fired with the exact JSON body after prepare, immediately before the HTTP send. */
-	onRequest?:(info:{
-		req:ChatRequest;
-		body:Record<string, unknown>;
-		path:string;
-	})=>void;
+	onRequest?:(info:RequestInfo)=>void;
 };
 
 function withNoThink(messages:ChatMessage[]):ChatMessage[] {
@@ -1072,69 +1076,65 @@ function assistantFromResponse(res:ChatResponse):ChatMessage {
 }
 
 export class HttpProvider implements InferenceProvider {
-	readonly baseURL:string;
-	readonly rootURL:string;
-	private readonly apiKey:string | undefined;
-	private readonly fetchImpl:typeof fetch;
-	private readonly timeoutMs:number;
-	private readonly maxTokens:number | undefined;
-	private enableThinking:boolean;
-	private reasoningEffort:ReasoningEffort | undefined;
-	private readonly loadOpts:HttpLoadConfig;
-	private readonly applyPromptTemplateFn:ApplyPromptTemplate | undefined;
-	private readonly onRequest?:(info:{
-		req:ChatRequest;
-		body:Record<string, unknown>;
-		path:string;
-	})=>void;
-	private responses:boolean | undefined;
-	private loadEndpoint = false;
-	private probed = false;
-	private instances:LoadedInstance[] = [];
-	private readonly reasoningByModel = new Map<string, ReasoningOption[]>();
-	private readonly threads = new Map<string, ThreadSnapshot[]>();
-	private readyChain:Promise<void> = Promise.resolve();
-	private jitFirst:Promise<ChatResponse> | null = null;
-	private jitModel = '';
+	public readonly baseURL:string;
+	public readonly rootURL:string;
+	private readonly _apiKey:string | undefined;
+	private readonly _fetchImpl:typeof fetch;
+	private readonly _timeoutMs:number;
+	private readonly _maxTokens:number | undefined;
+	private readonly _loadOpts:HttpLoadConfig;
+	private readonly _applyPromptTemplateFn:ApplyPromptTemplate | undefined;
+	private readonly _onRequest?:(info:RequestInfo)=>void;
+	private readonly _reasoningByModel = new Map<string, ReasoningOption[]>();
+	private readonly _threads = new Map<string, ThreadSnapshot[]>();
+	private _enableThinking:boolean;
+	private _reasoningEffort:ReasoningEffort | undefined;
+	private _responses:boolean | undefined;
+	private _loadEndpoint = false;
+	private _probed = false;
+	private _instances:LoadedInstance[] = [];
+	private _readyChain:Promise<void> = Promise.resolve();
+	private _jitFirst:Promise<ChatResponse> | null = null;
+	private _jitModel = '';
 
-	constructor(config:HttpProviderConfig = {}) {
+	public constructor(config:HttpProviderConfig = {}) {
 		this.baseURL = (config.baseURL ?? defaultBaseURL()).replace(/\/+$/, '');
 		this.rootURL = serverRoot(this.baseURL);
-		this.apiKey = config.apiKey ?? envGet('ARC_DIRECTOR_API_KEY') ?? envGet('OPENAI_API_KEY');
-		this.fetchImpl = asFetch(config.fetch ?? fetch);
-		this.timeoutMs = config.timeoutMs ?? 180_000;
-		this.maxTokens = config.maxTokens;
-		this.enableThinking = config.enableThinking ?? false;
-		this.reasoningEffort = config.reasoningEffort;
-		this.loadOpts = {
+		this._apiKey = config.apiKey ?? envGet('ARC_DIRECTOR_API_KEY') ?? envGet('OPENAI_API_KEY');
+		this._fetchImpl = asFetch(config.fetch ?? fetch);
+		this._timeoutMs = config.timeoutMs ?? 180_000;
+		this._maxTokens = config.maxTokens;
+		this._enableThinking = config.enableThinking ?? false;
+		this._reasoningEffort = config.reasoningEffort;
+		this._loadOpts = {
 			flashAttention: config.load?.flashAttention ?? true,
 			offloadKvCacheToGpu: config.load?.offloadKvCacheToGpu ?? true,
 			evalBatchSize: config.load?.evalBatchSize ?? 512,
 			parallel: config.load?.parallel,
 			contextLength: config.load?.contextLength,
 		};
-		this.applyPromptTemplateFn = config.applyPromptTemplate;
-		this.onRequest = config.onRequest;
+		this._applyPromptTemplateFn = config.applyPromptTemplate;
+		this._onRequest = config.onRequest;
 	}
 
-	setThinking(enableThinking:boolean):void {
-		this.enableThinking = enableThinking;
+	public setThinking(enableThinking:boolean):void {
+		this._enableThinking = enableThinking;
 	}
 
-	setContextLength(n:number):void {
-		this.loadOpts.contextLength = n;
+	public setContextLength(n:number):void {
+		this._loadOpts.contextLength = n;
 	}
 
-	liveContextLength():number | undefined {
-		return this.loadOpts.contextLength;
+	public liveContextLength():number | undefined {
+		return this._loadOpts.contextLength;
 	}
 
 	/** Unload and load so a new `context_length` takes effect. */
-	async reload(model:string):Promise<void> {
-		if (!this.probed) {
+	public async reload(model:string):Promise<void> {
+		if (!this._probed) {
 			await this.probe();
 		}
-		if (!this.loadEndpoint) {
+		if (!this._loadEndpoint) {
 			return;
 		}
 		try {
@@ -1143,30 +1143,30 @@ export class HttpProvider implements InferenceProvider {
 		catch {
 			// keep remembered instances
 		}
-		for (const inst of this.instances.filter((row) => this.instanceMatches(row, model))) {
+		for (const inst of this._instances.filter((row) => this.instanceMatches(row, model))) {
 			await this.unloadInstance(inst.id);
 		}
 		await this.loadModel(model);
 	}
 
 	/** Load one copy of `model` (and eject extras). Safe to call from setModel. */
-	async ensureLoaded(model:string):Promise<void> {
-		if (this.jitModel !== model) {
-			this.jitFirst = null;
-			this.jitModel = model;
+	public async ensureLoaded(model:string):Promise<void> {
+		if (this._jitModel !== model) {
+			this._jitFirst = null;
+			this._jitModel = model;
 		}
 		await this.ensureReady(model);
 	}
 
-	async chat(req:ChatRequest):Promise<ChatResponse> {
+	public async chat(req:ChatRequest):Promise<ChatResponse> {
 		await this.ensureReady(req.model);
-		if (!this.loadEndpoint) {
+		if (!this._loadEndpoint) {
 			return this.chatJit(req);
 		}
 		return this.dispatchChat(req);
 	}
 
-	async embed(texts:string[], model?:string):Promise<number[][]> {
+	public async embed(texts:string[], model?:string):Promise<number[][]> {
 		const name = model;
 		if (!name) {
 			throw new Error('embed: no model id (refusing to load a second embedding model)');
@@ -1194,7 +1194,7 @@ export class HttpProvider implements InferenceProvider {
 	}
 
 	private thinkingOn(req:ChatRequest):boolean {
-		return this.enableThinking && req.enableThinking !== false;
+		return this._enableThinking && req.enableThinking !== false;
 	}
 
 	private async thinkOffPrefill(model:string, thinkingOn:boolean):Promise<string | null> {
@@ -1204,8 +1204,8 @@ export class HttpProvider implements InferenceProvider {
 		if (!isThinkingModel(model) && !thinkOffMode(model)) {
 			return null;
 		}
-		if (this.applyPromptTemplateFn) {
-			const derived = await resolveAssistantPrefill(this.applyPromptTemplateFn, model);
+		if (this._applyPromptTemplateFn) {
+			const derived = await resolveAssistantPrefill(this._applyPromptTemplateFn, model);
 			if (derived) {
 				return derived;
 			}
@@ -1214,8 +1214,8 @@ export class HttpProvider implements InferenceProvider {
 	}
 
 	private async thoughtDonePrefill(model:string):Promise<string> {
-		if (this.applyPromptTemplateFn) {
-			return resolveThoughtPrefill(this.applyPromptTemplateFn, model);
+		if (this._applyPromptTemplateFn) {
+			return resolveThoughtPrefill(this._applyPromptTemplateFn, model);
 		}
 		return fallbackThoughtPrefill();
 	}
@@ -1242,7 +1242,7 @@ export class HttpProvider implements InferenceProvider {
 	}
 
 	private emitRequest(req:ChatRequest, body:Record<string, unknown>, path:string):void {
-		this.onRequest?.({ req, body, path });
+		this._onRequest?.({ req, body, path });
 	}
 
 	private async chatCompletions(req:ChatRequest, messages:ChatMessage[]):Promise<ChatResponse> {
@@ -1267,7 +1267,7 @@ export class HttpProvider implements InferenceProvider {
 
 	private async chatResponses(req:ChatRequest, messages:ChatMessage[]):Promise<ChatResponse> {
 		const key = req.thread?.trim() || '';
-		const stored = key ? (this.threads.get(key) ?? []) : [];
+		const stored = key ? (this._threads.get(key) ?? []) : [];
 		const hit = key ? pickBestThread(stored, messages) : undefined;
 		const suffix = hit ? messages.slice(hit.prefixLen) : messages;
 		const body:Record<string, unknown> = {
@@ -1295,12 +1295,12 @@ export class HttpProvider implements InferenceProvider {
 		catch (err) {
 			const msg = err instanceof Error ? err.message : String(err);
 			if (/ 404:| 405:/.test(msg)) {
-				this.responses = false;
+				this._responses = false;
 				throw err;
 			}
 			throw err;
 		}
-		this.responses = true;
+		this._responses = true;
 		const parsed = parseResponsesOutput(got.json);
 		const split = mergeClientTimings(
 			{ promptMs: parsed.promptMs, generateMs: parsed.generateMs },
@@ -1317,7 +1317,7 @@ export class HttpProvider implements InferenceProvider {
 			generateMs: split.generateMs,
 		};
 		if (key && parsed.id) {
-			this.threads.set(key, rememberThread(stored, {
+			this._threads.set(key, rememberThread(stored, {
 				id: parsed.id,
 				messages: [...messages, assistantFromResponse(res)],
 			}));
@@ -1356,7 +1356,7 @@ export class HttpProvider implements InferenceProvider {
 		const option = pickReasoningOption(
 			this.allowedReasoning(req.model),
 			thinkingOn,
-			thinkingOn ? preferReasoning(this.reasoningEffort) : undefined,
+			thinkingOn ? preferReasoning(this._reasoningEffort) : undefined,
 		);
 		if (option) {
 			setReasoningOption(body, option, responses);
@@ -1375,13 +1375,13 @@ export class HttpProvider implements InferenceProvider {
 	}
 
 	private slotContext(model:string):number | undefined {
-		const inst = this.instances.find((row) => this.instanceMatches(row, model));
+		const inst = this._instances.find((row) => this.instanceMatches(row, model));
 		return inst ? instanceContextLength(inst.config) : undefined;
 	}
 
 	private applyOutputCap(req:ChatRequest, body:Record<string, unknown>, responses:boolean):void {
 		const thinkingOn = this.thinkingOn(req);
-		const want = req.maxTokens ?? this.maxTokens ?? (thinkingOn ? THINK_OUT : undefined);
+		const want = req.maxTokens ?? this._maxTokens ?? (thinkingOn ? THINK_OUT : undefined);
 		const slot = this.slotContext(req.model);
 		if (want === undefined && slot === undefined) {
 			return;
@@ -1400,7 +1400,7 @@ export class HttpProvider implements InferenceProvider {
 	}
 
 	private allowedReasoning(model:string):ReasoningOption[] | undefined {
-		for (const [id, allowed] of this.reasoningByModel) {
+		for (const [id, allowed] of this._reasoningByModel) {
 			if (modelIDsMatch(id, model)) {
 				return allowed;
 			}
@@ -1409,29 +1409,29 @@ export class HttpProvider implements InferenceProvider {
 	}
 
 	private rememberReasoning(models:unknown[]):void {
-		this.reasoningByModel.clear();
+		this._reasoningByModel.clear();
 		for (const row of asModelList({ models })) {
 			if (row.reasoning && row.reasoning.allowed.length > 0) {
-				this.reasoningByModel.set(row.id, row.reasoning.allowed);
+				this._reasoningByModel.set(row.id, row.reasoning.allowed);
 			}
 		}
 	}
 
 	private async dispatchChat(req:ChatRequest):Promise<ChatResponse> {
 		const messages = await this.prepareMessages(req);
-		if (this.responses === true || (this.responses !== false && this.loadEndpoint)) {
+		if (this._responses === true || (this._responses !== false && this._loadEndpoint)) {
 			try {
 				return await this.chatResponses(req, messages);
 			}
 			catch (err) {
-				if (this.responses === true) {
+				if (this._responses === true) {
 					const msg = err instanceof Error ? err.message : String(err);
 					if (/stream ended without a response/.test(msg)) {
 						return this.chatCompletions(req, messages);
 					}
 					throw err;
 				}
-				this.responses = false;
+				this._responses = false;
 			}
 		}
 		return this.chatCompletions(req, messages);
@@ -1442,17 +1442,17 @@ export class HttpProvider implements InferenceProvider {
 	 * Hold the second wave until the first completion has started an instance.
 	 */
 	private async chatJit(req:ChatRequest):Promise<ChatResponse> {
-		if (this.jitModel !== req.model) {
-			this.jitFirst = null;
-			this.jitModel = req.model;
+		if (this._jitModel !== req.model) {
+			this._jitFirst = null;
+			this._jitModel = req.model;
 		}
 		if (this.hasReusable(req.model)) {
 			return this.dispatchChat(req);
 		}
-		if (!this.jitFirst) {
-			this.jitFirst = this.dispatchChat(req).then((res) => {
-				if (!this.instances.some((inst) => this.instanceMatches(inst, req.model))) {
-					this.instances.push({
+		if (!this._jitFirst) {
+			this._jitFirst = this.dispatchChat(req).then((res) => {
+				if (!this._instances.some((inst) => this.instanceMatches(inst, req.model))) {
+					this._instances.push({
 						id: req.model,
 						key: req.model,
 						type: 'llm',
@@ -1461,26 +1461,26 @@ export class HttpProvider implements InferenceProvider {
 				}
 				return res;
 			}, (err:unknown) => {
-				this.jitFirst = null;
+				this._jitFirst = null;
 				throw err;
 			});
-			return this.jitFirst;
+			return this._jitFirst;
 		}
-		await this.jitFirst;
+		await this._jitFirst;
 		return this.dispatchChat(req);
 	}
 
 	private async ensureReady(model:string):Promise<void> {
-		const run = this.readyChain.then(() => this.ensureReadyLocked(model));
-		this.readyChain = run.then(() => undefined, () => undefined);
+		const run = this._readyChain.then(() => this.ensureReadyLocked(model));
+		this._readyChain = run.then(() => undefined, () => undefined);
 		await run;
 	}
 
 	private async ensureReadyLocked(model:string):Promise<void> {
-		if (!this.probed) {
+		if (!this._probed) {
 			await this.probe();
 		}
-		if (!this.loadEndpoint) {
+		if (!this._loadEndpoint) {
 			return;
 		}
 		if (this.hasReusable(model)) {
@@ -1491,7 +1491,7 @@ export class HttpProvider implements InferenceProvider {
 	}
 
 	private hasReusable(model:string):boolean {
-		return this.instances.some((inst) => this.instanceMatches(inst, model) && loadConfigFits(inst.config, this.loadOpts));
+		return this._instances.some((inst) => this.instanceMatches(inst, model) && loadConfigFits(inst.config, this._loadOpts));
 	}
 
 	private instanceMatches(inst:LoadedInstance, model:string):boolean {
@@ -1499,21 +1499,21 @@ export class HttpProvider implements InferenceProvider {
 	}
 
 	private async probe():Promise<void> {
-		this.probed = true;
+		this._probed = true;
 		try {
 			await this.refreshInstances();
-			this.loadEndpoint = true;
+			this._loadEndpoint = true;
 		}
 		catch {
-			this.loadEndpoint = false;
+			this._loadEndpoint = false;
 		}
 	}
 
 	private async refreshInstances():Promise<void> {
-		const res = await this.fetchImpl(joinURL(this.rootURL, 'api/v1/models'), {
+		const res = await this._fetchImpl(joinURL(this.rootURL, 'api/v1/models'), {
 			method: 'GET',
 			headers: this.headers(),
-			signal: AbortSignal.timeout(Math.min(4000, this.timeoutMs)),
+			signal: AbortSignal.timeout(Math.min(4000, this._timeoutMs)),
 		});
 		if (!res.ok) {
 			throw new Error(`inference models ${res.status}`);
@@ -1522,7 +1522,7 @@ export class HttpProvider implements InferenceProvider {
 		if (!isRecord(json) || !Array.isArray(json.models)) {
 			throw new Error('inference models: no catalog');
 		}
-		this.instances = readLoadedInstances(json.models);
+		this._instances = readLoadedInstances(json.models);
 		this.rememberReasoning(json.models);
 	}
 
@@ -1537,7 +1537,7 @@ export class HttpProvider implements InferenceProvider {
 			await this.keepOneInstance(model);
 			return;
 		}
-		const stale = this.instances.filter((inst) => this.instanceMatches(inst, model) && !loadConfigFits(inst.config, this.loadOpts));
+		const stale = this._instances.filter((inst) => this.instanceMatches(inst, model) && !loadConfigFits(inst.config, this._loadOpts));
 		for (const inst of stale) {
 			await this.unloadInstance(inst.id);
 		}
@@ -1553,12 +1553,12 @@ export class HttpProvider implements InferenceProvider {
 			catch (err) {
 				lastErr = err;
 				const msg = err instanceof Error ? err.message : String(err);
-				if (round === 0 && this.loadOpts.parallel !== undefined && / 400:/.test(msg)) {
+				if (round === 0 && this._loadOpts.parallel !== undefined && / 400:/.test(msg)) {
 					delete body.parallel;
 					continue;
 				}
 				if (/ 404:| 405:/.test(msg)) {
-					this.loadEndpoint = false;
+					this._loadEndpoint = false;
 					return;
 				}
 				try {
@@ -1579,16 +1579,16 @@ export class HttpProvider implements InferenceProvider {
 	private loadBody(model:string):Record<string, unknown> {
 		const body:Record<string, unknown> = {
 			model,
-			flash_attention: this.loadOpts.flashAttention !== false,
-			offload_kv_cache_to_gpu: this.loadOpts.offloadKvCacheToGpu !== false,
-			eval_batch_size: this.loadOpts.evalBatchSize ?? 512,
+			flash_attention: this._loadOpts.flashAttention !== false,
+			offload_kv_cache_to_gpu: this._loadOpts.offloadKvCacheToGpu !== false,
+			eval_batch_size: this._loadOpts.evalBatchSize ?? 512,
 			echo_load_config: true,
 		};
-		if (this.loadOpts.parallel !== undefined) {
-			body.parallel = this.loadOpts.parallel;
+		if (this._loadOpts.parallel !== undefined) {
+			body.parallel = this._loadOpts.parallel;
 		}
-		if (this.loadOpts.contextLength !== undefined) {
-			body.context_length = this.loadOpts.contextLength;
+		if (this._loadOpts.contextLength !== undefined) {
+			body.context_length = this._loadOpts.contextLength;
 		}
 		return body;
 	}
@@ -1598,7 +1598,7 @@ export class HttpProvider implements InferenceProvider {
 		const id = typeof json['instance_id'] === 'string' ? json['instance_id'] : model;
 		const config = isRecord(json['load_config']) ? json['load_config'] : {};
 		this.forgetInstance(id);
-		this.instances.push({
+		this._instances.push({
 			id,
 			key: model,
 			type: typeof json.type === 'string' ? json.type : 'llm',
@@ -1607,7 +1607,7 @@ export class HttpProvider implements InferenceProvider {
 	}
 
 	private async freeVram(keep:string):Promise<boolean> {
-		const victims = this.instances.filter((inst) => !this.instanceMatches(inst, keep));
+		const victims = this._instances.filter((inst) => !this.instanceMatches(inst, keep));
 		if (victims.length === 0) {
 			return false;
 		}
@@ -1618,22 +1618,22 @@ export class HttpProvider implements InferenceProvider {
 	}
 
 	private async keepOneInstance(model:string):Promise<void> {
-		const remembered = this.instances.filter((inst) => this.instanceMatches(inst, model));
+		const remembered = this._instances.filter((inst) => this.instanceMatches(inst, model));
 		try {
 			await this.refreshInstances();
 		}
 		catch {
 			// keep remembered
 		}
-		const seen = new Set(this.instances.map((inst) => inst.id));
+		const seen = new Set(this._instances.map((inst) => inst.id));
 		for (const inst of remembered) {
 			if (!seen.has(inst.id)) {
-				this.instances.push(inst);
+				this._instances.push(inst);
 				seen.add(inst.id);
 			}
 		}
-		const same = this.instances.filter((inst) => this.instanceMatches(inst, model));
-		const keep = same.find((inst) => loadConfigFits(inst.config, this.loadOpts)) ?? same[0];
+		const same = this._instances.filter((inst) => this.instanceMatches(inst, model));
+		const keep = same.find((inst) => loadConfigFits(inst.config, this._loadOpts)) ?? same[0];
 		if (!keep) {
 			return;
 		}
@@ -1655,15 +1655,15 @@ export class HttpProvider implements InferenceProvider {
 	}
 
 	private forgetInstance(instanceID:string):void {
-		this.instances = this.instances.filter((inst) => inst.id !== instanceID);
+		this._instances = this._instances.filter((inst) => inst.id !== instanceID);
 	}
 
 	private headers():Record<string, string> {
 		const headers:Record<string, string> = {
 			'content-type': 'application/json',
 		};
-		if (this.apiKey) {
-			headers.authorization = `Bearer ${this.apiKey}`;
+		if (this._apiKey) {
+			headers.authorization = `Bearer ${this._apiKey}`;
 		}
 		return headers;
 	}
@@ -1689,11 +1689,11 @@ export class HttpProvider implements InferenceProvider {
 			}
 			this.emitRequest(req, payload, url);
 			const t0 = nowMs();
-			const res = await this.fetchImpl(url, {
+			const res = await this._fetchImpl(url, {
 				method: 'POST',
 				headers: this.headers(),
 				body: JSON.stringify(payload),
-				signal: req.signal ?? AbortSignal.timeout(this.timeoutMs),
+				signal: req.signal ?? AbortSignal.timeout(this._timeoutMs),
 			});
 			if (!res.ok) {
 				const text = await res.text();
@@ -1748,11 +1748,11 @@ export class HttpProvider implements InferenceProvider {
 			if (attempt > 0) {
 				await sleep(350 * attempt);
 			}
-			const res = await this.fetchImpl(url, {
+			const res = await this._fetchImpl(url, {
 				method: 'POST',
 				headers: this.headers(),
 				body: JSON.stringify(body),
-				signal: AbortSignal.timeout(this.timeoutMs),
+				signal: AbortSignal.timeout(this._timeoutMs),
 			});
 			const text = await res.text();
 			let parsed:unknown;

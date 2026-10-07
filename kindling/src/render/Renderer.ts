@@ -52,21 +52,22 @@ function textureBytes(tex:THREE.Texture):number {
 }
 
 export class Renderer {
-	readonly gl:THREE.WebGLRenderer;
-	readonly canvas:HTMLCanvasElement;
-	/** Normal and metalness maps. Off disposes them from the GPU. */
-	detailMaps = true;
+	public readonly gl:THREE.WebGLRenderer;
+	public readonly canvas:HTMLCanvasElement;
+	public detailMaps = true;
 	/** Realtime shadow maps. Off disposes light shadow targets. */
-	shadows = true;
-	private readonly world:World;
-	private readonly hemi:THREE.HemisphereLight;
-	private readonly fill:THREE.AmbientLight;
-	private sun:THREE.DirectionalLight | null = null;
-	private disposed = false;
-	private readonly stripped = new Set<THREE.Texture>();
-	private readonly ro:ResizeObserver | null;
+	public shadows = true;
 
-	constructor(world:World) {
+	/** Normal and metalness maps. Off disposes them from the GPU. */
+	private readonly _scene:World;
+	private readonly _hemi:THREE.HemisphereLight;
+	private readonly _fill:THREE.AmbientLight;
+	private readonly _stripped = new Set<THREE.Texture>();
+	private readonly _ro:ResizeObserver | null;
+	private _sun:THREE.DirectionalLight | null = null;
+	private _disposed = false;
+
+	public constructor(world:World) {
 		const canvas = document.createElement('canvas');
 		canvas.tabIndex = 0;
 		canvas.style.display = 'block';
@@ -74,7 +75,7 @@ export class Renderer {
 		canvas.style.height = '100%';
 		canvas.style.outline = 'none';
 		this.canvas = canvas;
-		this.world = world;
+		this._scene = world;
 		this.gl = new THREE.WebGLRenderer({
 			canvas,
 			antialias: true,
@@ -90,71 +91,71 @@ export class Renderer {
 		world.native.background = new THREE.Color(CLEAR_COLOR);
 		world.native.fog = new THREE.Fog(CLEAR_COLOR, 18, 42);
 
-		this.hemi = new THREE.HemisphereLight(0x6a7d98, 0x1a1410, 0.55);
-		world.native.add(this.hemi);
-		this.fill = new THREE.AmbientLight(0x243044, 0.18);
-		world.native.add(this.fill);
+		this._hemi = new THREE.HemisphereLight(0x6a7d98, 0x1a1410, 0.55);
+		world.native.add(this._hemi);
+		this._fill = new THREE.AmbientLight(0x243044, 0.18);
+		world.native.add(this._fill);
 
-		this.ro = typeof ResizeObserver === 'undefined'
+		this._ro = typeof ResizeObserver === 'undefined'
 			? null
 			: new ResizeObserver(() => {
 				this.resize();
 			});
-		this.ro?.observe(canvas);
+		this._ro?.observe(canvas);
 		this.resize();
 	}
 
-	get scene():THREE.Scene {
-		return this.world.native;
+	public get scene():THREE.Scene {
+		return this._scene.native;
 	}
 
-	applyLook(look:RendererLook):void {
+	public applyLook(look:RendererLook):void {
 		this.gl.setClearColor(look.background);
-		this.world.native.background = new THREE.Color(look.background);
-		this.world.native.fog = new THREE.Fog(look.background, look.fogNear, look.fogFar);
+		this._scene.native.background = new THREE.Color(look.background);
+		this._scene.native.fog = new THREE.Fog(look.background, look.fogNear, look.fogFar);
 		this.gl.toneMappingExposure = look.exposure;
-		this.hemi.color.setHex(look.hemiSky);
-		this.hemi.groundColor.setHex(look.hemiGround);
-		this.hemi.intensity = look.hemiIntensity;
-		this.fill.color.setHex(look.fillColor);
-		this.fill.intensity = look.fillIntensity;
+		this._hemi.color.setHex(look.hemiSky);
+		this._hemi.groundColor.setHex(look.hemiGround);
+		this._hemi.intensity = look.hemiIntensity;
+		this._fill.color.setHex(look.fillColor);
+		this._fill.intensity = look.fillIntensity;
 		if (!look.sun) {
-			if (this.sun) {
-				this.sun.visible = false;
+			if (this._sun) {
+				this._sun.visible = false;
 			}
 			return;
 		}
-		if (!this.sun) {
-			this.sun = new THREE.DirectionalLight(look.sun.color, look.sun.intensity);
-			this.sun.castShadow = true;
-			this.sun.shadow.mapSize.set(2048, 2048);
-			this.sun.shadow.bias = -0.0008;
-			this.sun.shadow.normalBias = 0.04;
-			this.sun.shadow.camera.near = 2;
-			this.sun.shadow.camera.far = 70;
-			this.sun.shadow.camera.left = -22;
-			this.sun.shadow.camera.right = 22;
-			this.sun.shadow.camera.top = 22;
-			this.sun.shadow.camera.bottom = -22;
-			this.sun.shadow.camera.updateProjectionMatrix();
-			this.world.native.add(this.sun);
-			this.world.native.add(this.sun.target);
+		if (!this._sun) {
+			this._sun = new THREE.DirectionalLight(look.sun.color, look.sun.intensity);
+			this._sun.castShadow = true;
+			this._sun.shadow.mapSize.set(2048, 2048);
+			this._sun.shadow.bias = -0.0008;
+			this._sun.shadow.normalBias = 0.04;
+			this._sun.shadow.camera.near = 2;
+			this._sun.shadow.camera.far = 70;
+			this._sun.shadow.camera.left = -22;
+			this._sun.shadow.camera.right = 22;
+			this._sun.shadow.camera.top = 22;
+			this._sun.shadow.camera.bottom = -22;
+			this._sun.shadow.camera.updateProjectionMatrix();
+			this._scene.native.add(this._sun);
+			this._scene.native.add(this._sun.target);
 		}
-		this.sun.color.setHex(look.sun.color);
-		this.sun.intensity = look.sun.intensity;
-		this.sun.visible = true;
+		this._sun.color.setHex(look.sun.color);
+		this._sun.intensity = look.sun.intensity;
+		this._sun.visible = true;
 	}
 
-	aimSun(x:number, z:number):void {
-		if (!this.sun?.visible) {
+	public aimSun(x:number, z:number):void {
+		if (!this._sun?.visible) {
 			return;
 		}
-		this.sun.target.position.set(x, 0, z);
-		this.sun.position.set(x + 12, 24, z + 8);
-		this.sun.target.updateMatrixWorld();
+		this._sun.target.position.set(x, 0, z);
+		this._sun.position.set(x + 12, 24, z + 8);
+		this._sun.target.updateMatrixWorld();
 	}
 
-	projectToCanvas(x:number, y:number, z:number):{ x:number; y:number; visible:boolean } {
+	public projectToCanvas(x:number, y:number, z:number):{ x:number; y:number; visible:boolean } {
 		const cam = this.findCamera();
 		if (!cam) {
 			return { x: 0, y: 0, visible: false };
@@ -171,7 +172,7 @@ export class Renderer {
 		};
 	}
 
-	pickGround(ndcX:number, ndcY:number, planeY:number):{ x:number; z:number } | null {
+	public pickGround(ndcX:number, ndcY:number, planeY:number):{ x:number; z:number } | null {
 		const cam = this.findCamera();
 		if (!cam) {
 			return null;
@@ -183,7 +184,7 @@ export class Renderer {
 		return point ? { x: point.x, z: point.z } : null;
 	}
 
-	resize():void {
+	public resize():void {
 		const w = Math.max(1, this.canvas.clientWidth);
 		const h = Math.max(1, this.canvas.clientHeight);
 		this.gl.setSize(w, h, false);
@@ -194,8 +195,8 @@ export class Renderer {
 		}
 	}
 
-	render():void {
-		if (this.disposed) {
+	public render():void {
+		if (this._disposed) {
 			return;
 		}
 		this.resize();
@@ -204,11 +205,11 @@ export class Renderer {
 			return;
 		}
 		this.applyQuality();
-		this.gl.render(this.world.native, cam.native);
+		this.gl.render(this._scene.native, cam.native);
 	}
 
 	/** Estimated GPU bytes: framebuffer, shadow maps, and textures on scene materials. */
-	graphicsMemory():number {
+	public graphicsMemory():number {
 		this.applyQuality();
 		const ctx = this.gl.getContext();
 		const w = ctx.drawingBufferWidth;
@@ -235,7 +236,7 @@ export class Renderer {
 				bytes += layer;
 			}
 		};
-		this.world.native.traverse((obj) => {
+		this._scene.native.traverse((obj) => {
 			if ((obj as THREE.Light).isLight) {
 				addTarget((obj as LightWithShadow).shadow?.map ?? null);
 			}
@@ -264,14 +265,14 @@ export class Renderer {
 		if (shadowsChanged) {
 			this.gl.shadowMap.needsUpdate = true;
 		}
-		if (this.detailMaps && this.stripped.size > 0) {
-			for (const tex of this.stripped) {
+		if (this.detailMaps && this._stripped.size > 0) {
+			for (const tex of this._stripped) {
 				tex.needsUpdate = true;
 			}
-			this.stripped.clear();
+			this._stripped.clear();
 		}
 		const seen = new Set<THREE.Material>();
-		this.world.native.traverse((obj) => {
+		this._scene.native.traverse((obj) => {
 			const shadow = (obj as THREE.Light).isLight ? (obj as LightWithShadow).shadow : undefined;
 			if (shadow?.map && !this.shadows) {
 				shadow.map.dispose();
@@ -346,28 +347,28 @@ export class Renderer {
 	}
 
 	private stripTexture(tex:THREE.Texture):void {
-		if (this.stripped.has(tex)) {
+		if (this._stripped.has(tex)) {
 			return;
 		}
-		this.stripped.add(tex);
+		this._stripped.add(tex);
 		tex.dispose();
 	}
 
-	dispose():void {
-		this.disposed = true;
-		this.ro?.disconnect();
-		if (this.sun) {
-			this.world.native.remove(this.sun);
-			this.world.native.remove(this.sun.target);
-			this.sun.dispose();
-			this.sun = null;
+	public dispose():void {
+		this._disposed = true;
+		this._ro?.disconnect();
+		if (this._sun) {
+			this._scene.native.remove(this._sun);
+			this._scene.native.remove(this._sun.target);
+			this._sun.dispose();
+			this._sun = null;
 		}
 		this.gl.dispose();
 		this.canvas.remove();
 	}
 
-	findCamera():Camera | undefined {
-		for (const go of this.world.objects) {
+	public findCamera():Camera | undefined {
+		for (const go of this._scene.objects) {
 			const cam = go.getComponent(Camera);
 			if (cam?.enabled) {
 				return cam;

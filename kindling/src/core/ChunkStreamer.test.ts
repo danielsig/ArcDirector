@@ -12,7 +12,7 @@ function scene():{ world:World; streamer:ChunkStreamer<Chunk<number>>; anchor:Ga
 	world.chunkSize = 4;
 	const spawns:string[] = [];
 	class Streamer extends ChunkStreamer<Chunk<number>> {
-		override spawn(chunk:Chunk<number>):void {
+		public override spawn(chunk:Chunk<number>):void {
 			spawns.push(chunk.id);
 			const crate = new GameObject(`crate_${chunk.id}`);
 			crate.addComponent(ChunkBound).chunkID = chunk.id;

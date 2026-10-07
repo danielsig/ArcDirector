@@ -8,14 +8,14 @@ type PlayExtra = Pick<SfxOpts, 'gain' | 'freq' | 'freqTo' | 'dur' | 'hear' | 'fa
 
 /** Posed SFX / loop on this GameObject. Position follows `transform`. */
 export class AudioSource extends Component {
-	hear = 22;
-	gain = 1;
-	falloff = 0.16;
-	private readonly loopID = `as:${++next}`;
-	private looping:LoopSrc | null = null;
+	public hear = 22;
+	public gain = 1;
+	public falloff = 0.16;
+	private readonly _loopID = `as:${++next}`;
+	private _loop:LoopSrc | null = null;
 
 	/** One-shot at this transform. */
-	play(patch:SfxPatch, extra?:PlayExtra):void {
+	public play(patch:SfxPatch, extra?:PlayExtra):void {
 		const audio = this.gameObject.world?.audio;
 		if (!audio) {
 			return;
@@ -24,12 +24,12 @@ export class AudioSource extends Component {
 	}
 
 	/** Looping patch or score. Follows the transform until set to `null`. */
-	get loop():LoopSrc | null {
-		return this.looping;
+	public get loop():LoopSrc | null {
+		return this._loop;
 	}
 
-	set loop(src:LoopSrc | null) {
-		this.looping = src;
+	public set loop(src:LoopSrc | null) {
+		this._loop = src;
 		if (!src) {
 			this.halt();
 			return;
@@ -37,23 +37,23 @@ export class AudioSource extends Component {
 		this.syncLoop();
 	}
 
-	override onEnable():void {
-		if (this.looping) {
+	public override onEnable():void {
+		if (this._loop) {
 			this.syncLoop();
 		}
 	}
 
-	override lateUpdate(dt:number):void {
-		if (this.looping) {
+	public override lateUpdate(dt:number):void {
+		if (this._loop) {
 			this.syncLoop();
 		}
 	}
 
-	override onDisable():void {
+	public override onDisable():void {
 		this.halt();
 	}
 
-	override onDestroy():void {
+	public override onDestroy():void {
 		this.halt();
 	}
 
@@ -63,15 +63,15 @@ export class AudioSource extends Component {
 	}
 
 	private syncLoop():void {
-		const src = this.looping;
+		const src = this._loop;
 		const audio = this.gameObject.world?.audio;
 		if (!src || !audio) {
 			return;
 		}
-		audio.playLoop(this.loopID, src, { ...this.pose(), hear: this.hear, gain: this.gain, falloff: this.falloff });
+		audio.playLoop(this._loopID, src, { ...this.pose(), hear: this.hear, gain: this.gain, falloff: this.falloff });
 	}
 
 	private halt():void {
-		this.gameObject.world?.audio.stopLoop(this.loopID);
+		this.gameObject.world?.audio.stopLoop(this._loopID);
 	}
 }

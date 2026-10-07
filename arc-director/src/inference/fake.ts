@@ -11,13 +11,13 @@ function abortError():Error {
 }
 
 export class FakeProvider implements InferenceProvider {
-	constructor(
-		private readonly chatFn:FakeChatFn,
-		private readonly embedFn?:FakeEmbedFn,
+	public constructor(
+		private readonly _chatFn:FakeChatFn,
+		private readonly _embedFn?:FakeEmbedFn,
 	) {}
 
-	chat(req:ChatRequest):Promise<ChatResponse> {
-		const run = Promise.resolve(this.chatFn(req));
+	public chat(req:ChatRequest):Promise<ChatResponse> {
+		const run = Promise.resolve(this._chatFn(req));
 		const signal = req.signal;
 		if (!signal) {
 			return run;
@@ -33,11 +33,11 @@ export class FakeProvider implements InferenceProvider {
 		]);
 	}
 
-	embed(texts:string[], model?:string):Promise<number[][]> {
-		if (!this.embedFn) {
+	public embed(texts:string[], model?:string):Promise<number[][]> {
+		if (!this._embedFn) {
 			return Promise.reject(new Error('FakeProvider has no embeddings'));
 		}
-		return Promise.resolve(this.embedFn(texts, model));
+		return Promise.resolve(this._embedFn(texts, model));
 	}
 }
 

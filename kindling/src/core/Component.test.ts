@@ -6,45 +6,45 @@ import { GameObject, resetAllocID } from './GameObject.js';
 import { resetTime, Time } from './Time.js';
 
 class Probe extends Component {
-	static log:string[] = [];
+	public static log:string[] = [];
 
-	override awake():void {
+	public override awake():void {
 		Probe.log.push('awake');
 	}
 
-	override onEnable():void {
+	public override onEnable():void {
 		Probe.log.push('onEnable');
 	}
 
-	override onDisable():void {
+	public override onDisable():void {
 		Probe.log.push('onDisable');
 	}
 
-	override start():void {
+	public override start():void {
 		Probe.log.push('start');
 	}
 
-	override fixedUpdate(dt:number):void {
+	public override fixedUpdate(dt:number):void {
 		Probe.log.push('fixed');
 	}
 
-	override update(dt:number):void {
+	public override update(dt:number):void {
 		Probe.log.push('update');
 	}
 
-	override onDestroy():void {
+	public override onDestroy():void {
 		Probe.log.push('onDestroy');
 	}
 }
 
 class Batch extends Component {
-	static log:string[] = [];
+	public static log:string[] = [];
 
-	static update(dt:number, list:Batch[]):void {
+	public static update(dt:number, list:Batch[]):void {
 		Batch.log.push(`static:${list.length}`);
 	}
 
-	override update(dt:number):void {
+	public override update(dt:number):void {
 		Batch.log.push('instance');
 	}
 }
@@ -140,11 +140,11 @@ describe('component loop', () => {
 
 	it('runs lateUpdate after update', () => {
 		class Late extends Component {
-			log:string[] = [];
-			override update(dt:number):void {
+			public log:string[] = [];
+			public override update(dt:number):void {
 				this.log.push('update');
 			}
-			override lateUpdate(dt:number):void {
+			public override lateUpdate(dt:number):void {
 				this.log.push('late');
 			}
 		}
@@ -159,14 +159,14 @@ describe('component loop', () => {
 	it('sorts update groups by static order', () => {
 		const log:string[] = [];
 		class High extends Component {
-			static override order = 20;
-			override update(dt:number):void {
+			public static override order = 20;
+			public override update(dt:number):void {
 				log.push('high');
 			}
 		}
 		class Low extends Component {
-			static override order = 5;
-			override update(dt:number):void {
+			public static override order = 5;
+			public override update(dt:number):void {
 				log.push('low');
 			}
 		}
@@ -183,9 +183,9 @@ describe('component loop', () => {
 
 	it('sets init fields before awake', () => {
 		class Seen extends Component {
-			label = '';
-			atAwake = '';
-			override awake():void {
+			public label = '';
+			public atAwake = '';
+			public override awake():void {
 				this.atAwake = this.label;
 			}
 		}
@@ -228,8 +228,8 @@ describe('component loop', () => {
 
 	it('skips update on a component removed earlier in the same frame', () => {
 		class Remover extends Component {
-			static override order = -1;
-			override update(dt:number):void {
+			public static override order = -1;
+			public override update(dt:number):void {
 				this.gameObject.removeComponent(Probe);
 			}
 		}

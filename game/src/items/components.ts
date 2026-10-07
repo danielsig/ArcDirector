@@ -2,48 +2,48 @@ import { Component } from '../engine/Component';
 import type { ItemInstance } from './instance';
 
 export class Item extends Component {
-	static override saved = ['count'];
-	defID = '';
-	count = 1;
-	stackable = false;
-	maxStack = 1;
+	public static override saved = ['count'];
+	public defID = '';
+	public count = 1;
+	public stackable = false;
+	public maxStack = 1;
 }
 
 export class Pickupable extends Component {}
 
 export class Equipable extends Component {
-	slots:string[] = [];
-	hands:0 | 1 | 2 = 0;
+	public slots:string[] = [];
+	public hands:0 | 1 | 2 = 0;
 }
 
 export class Container extends Component {
-	static override saved = ['size', 'contents'];
-	size = 2;
-	contents:ItemInstance[] = [];
+	public static override saved = ['size', 'contents'];
+	public size = 2;
+	public contents:ItemInstance[] = [];
 }
 
 export class Weapon extends Component {
-	damage = 1;
-	range = 1.6;
+	public damage = 1;
+	public range = 1.6;
 }
 
 export class Blade extends Component {}
 
 export class Armor extends Component {
-	defense = 0;
-	covers:string[] = [];
+	public defense = 0;
+	public covers:string[] = [];
 }
 
 export class Consumable extends Component {
-	effect = 'heal';
-	amount = 1;
-	consumeOnUse = true;
+	public effect = 'heal';
+	public amount = 1;
+	public consumeOnUse = true;
 }
 
 export class Key extends Component {
-	keyID = '';
+	public keyID = '';
 }
 
 export class Harvest extends Component {
-	harvester = 'Herbalist';
+	public harvester = 'Herbalist';
 }

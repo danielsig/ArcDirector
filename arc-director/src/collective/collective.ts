@@ -22,10 +22,27 @@ export type CollectiveJSON = ArcRunnerJSON & {
 	commander?:string;
 };
 
-/** @internal What a collective asks of the director that runs it. */
+/**
+ * How a collective and its director reach each other, one for each collective. The director gives `addCharacter`
+ * and `removeCharacter`. The collective's constructor fills in `fields`: the director's only way into its private
+ * fields.
+ */
 export type CollectiveHost<TCtx> = {
 	addCharacter(spec:CharacterSpec<TCtx>, into:Collective<TCtx>):Character<TCtx>;
 	removeCharacter(id:string):void;
+	fields?:CollectiveFields<TCtx>;
+};
+
+/** What a collective's constructor hands its director through its {@link CollectiveHost}. */
+export type CollectiveFields<TCtx> = {
+	/** Its characters, in order. */
+	setCharacters(characters:Character<TCtx>[]):void;
+	/** The commander left: drop the post, stop the think it was the voice for, and tell the host. */
+	vacate(character:Character<TCtx>):void;
+	/** A saved collective's runner part. Its persona, mind and characters are rebuilt by the director. */
+	load(json:CollectiveJSON):void;
+	/** Keep `law` itself, not a copy, so an arc it started still counts as its own after a transfer. */
+	keepLaw(law:Law):boolean;
 };
 
 export type CollectiveOptions<TCtx = unknown> = RunnerOptions<TCtx> & {
@@ -42,77 +59,84 @@ export type CollectiveOptions<TCtx = unknown> = RunnerOptions<TCtx> & {
  * `Tom.flee` and reaches only Tom.
  */
 export class Collective<TCtx = unknown> extends ArcRunner<TCtx> {
-	readonly persona:Persona;
-	readonly mind:Mind<TCtx>;
-	onCommanderVacant?:(character:Character<TCtx>)=>void;
-	/** @internal Its characters, in order. Only the director changes it. */
-	members:Character<TCtx>[] = [];
-	private chief:Character<TCtx> | null = null;
-	private readonly host:CollectiveHost<TCtx>;
+	public readonly persona:Persona;
+	public readonly mind:Mind<TCtx>;
+	public onCommanderVacant?:(character:Character<TCtx>)=>void;
+	private _characters:Character<TCtx>[] = [];
+	private _commander:Character<TCtx> | null = null;
+	private readonly _host:CollectiveHost<TCtx>;
 
-	constructor(opts:CollectiveOptions<TCtx>) {
+	public constructor(opts:CollectiveOptions<TCtx>) {
 		super({ ...opts, defaultLawWho: opts.defaultLawWho ?? 'units' });
 		this.persona = opts.persona ?? new Persona();
 		this.mind = opts.mind ?? new Mind<TCtx>();
-		this.host = opts.host;
+		this._host = opts.host;
 		this.onCommanderVacant = opts.onCommanderVacant;
+		this._host.fields = {
+			setCharacters: (characters) => {
+				this._characters = characters;
+			},
+			vacate: (character) => this.vacate(character),
+			load: (json) => this.loadJSON(json),
+			keepLaw: (law) => this.keepLaw(law),
+		};
 	}
 
-	get characters():readonly Character<TCtx>[] {
-		return this.members;
+	public get characters():readonly Character<TCtx>[] {
+		return this._characters;
 	}
 
-	character(id:string):Character<TCtx> | undefined {
-		return this.members.find((c) => c.id === id);
+	public character(id:string):Character<TCtx> | undefined {
+		return this._characters.find((c) => c.id === id);
 	}
 
 	/** The character the mind acts through, or null when it has none. */
-	get commander():Character<TCtx> | null {
-		return this.chief;
+	public get commander():Character<TCtx> | null {
+		return this._commander;
 	}
 
-	set commander(character:Character<TCtx> | null) {
+	public set commander(character:Character<TCtx> | null) {
 		if (character === null) {
-			if (this.chief) {
-				this.vacate(this.chief);
+			if (this._commander) {
+				this.vacate(this._commander);
 			}
 			return;
 		}
-		if (!this.members.includes(character)) {
+		if (!this._characters.includes(character)) {
 			throw new Error(`ArcDirector: '${character.id}' is not in '${this.id}'`);
 		}
-		this.chief = character;
+		this._commander = character;
 	}
 
 	/** The commander, or the collective itself while it has none. */
-	get voice():ArcRunner<TCtx> {
-		return this.chief ?? this;
+	public get voice():ArcRunner<TCtx> {
+		return this._commander ?? this;
 	}
 
 	/** A new character, in this collective. Its kit is its spec's, or the director's default. */
-	addCharacter(spec:CharacterSpec<TCtx>):Character<TCtx> {
-		return this.host.addCharacter(spec, this);
+	public addCharacter(spec:CharacterSpec<TCtx>):Character<TCtx> {
+		return this._host.addCharacter(spec, this);
 	}
 
 	/** Remove one of its characters for good, as `ArcDirector.removeCharacter` does. */
-	removeCharacter(id:string):void {
+	public removeCharacter(id:string):void {
 		if (!this.character(id)) {
 			throw new Error(`ArcDirector: no '${id}' in '${this.id}'`);
 		}
-		this.host.removeCharacter(id);
+		this._host.removeCharacter(id);
 	}
 
-	/** @internal The commander left: drop the post, stop the think it was the voice for, and tell the host. */
-	vacate(character:Character<TCtx>):void {
-		if (this.chief !== character) {
+	/** The commander left: drop the post, stop the think it was the voice for, and tell the host. */
+	private vacate(character:Character<TCtx>):void {
+		if (this._commander !== character) {
 			return;
 		}
-		this.chief = null;
+		this._commander = null;
 		this.mind.abortThink();
 		this.onCommanderVacant?.(character);
 	}
 
-	override lawsTakeWho():boolean {
+	public override lawsTakeWho():boolean {
 		return true;
 	}
 
@@ -126,7 +150,7 @@ export class Collective<TCtx = unknown> extends ArcRunner<TCtx> {
 	 * The laws that may reach `member`: the collective's own (when `matches` says their `who` names it), then its
 	 * own `member.name` laws. Ranks follow that order, so the collective's own laws outrank a member's.
 	 */
-	lawHandlersFor(member:Character<TCtx>, matches:(law:Law)=>boolean):ArcHandler[] {
+	public lawHandlersFor(member:Character<TCtx>, matches:(law:Law)=>boolean):ArcHandler[] {
 		const out:ArcHandler[] = [];
 		this.laws
 			.filter((law) => [ '', member.id ].includes(lawGroup(law.name)))
@@ -138,7 +162,7 @@ export class Collective<TCtx = unknown> extends ArcRunner<TCtx> {
 		return out;
 	}
 
-	tagCharacters(characters:readonly Character<TCtx>[], short:string):void {
+	public tagCharacters(characters:readonly Character<TCtx>[], short:string):void {
 		const stored = squadTag(this.id, short);
 		for (const character of characters) {
 			if (!character.tags.includes(stored)) {
@@ -147,39 +171,39 @@ export class Collective<TCtx = unknown> extends ArcRunner<TCtx> {
 		}
 	}
 
-	untagCharacters(characters:readonly Character<TCtx>[], short:string):void {
+	public untagCharacters(characters:readonly Character<TCtx>[], short:string):void {
 		const stored = squadTag(this.id, short);
 		for (const character of characters) {
 			character.tags = character.tags.filter((t) => t !== stored);
 		}
 	}
 
-	ownsTag(stored:string):boolean {
+	public ownsTag(stored:string):boolean {
 		return isSquadTag(this.id, stored);
 	}
 
-	shortOf(stored:string):string {
+	public shortOf(stored:string):string {
 		return shortTag(this.id, stored);
 	}
 
 	/** Give each of `characters` but the commander `arc` as its program, replacing what it ran. */
-	issue(characters:readonly Character<TCtx>[], arc:Arc):void {
+	public issue(characters:readonly Character<TCtx>[], arc:Arc):void {
 		for (const character of characters) {
-			if (character !== this.chief) {
+			if (character !== this._commander) {
 				void character.enact(arc);
 			}
 		}
 	}
 
 	/** The roster, the laws, and the programs the characters run, for the mind's prompt. */
-	promptSection(mind:Mind<TCtx>):string {
+	public promptSection(mind:Mind<TCtx>):string {
 		const parts:string[] = [];
-		if (this.members.length > 0) {
-			const lines = this.members.map((character) => {
+		if (this._characters.length > 0) {
+			const lines = this._characters.map((character) => {
 				const tags = character.tags.map((t) => this.shortOf(t)).filter((t) => t.length > 0);
 				const lacks = this.lacking(character);
 				const notes = [
-					character === this.chief ? 'you' : '',
+					character === this._commander ? 'you' : '',
 					lacks.length > 0 ? `cannot ${lacks.join(', ')}` : '',
 				].filter(Boolean);
 				const name = mind.nameOf(character.id);
@@ -193,8 +217,8 @@ export class Collective<TCtx = unknown> extends ArcRunner<TCtx> {
 			parts.push(laws);
 		}
 		const groups = new Map<string, string[]>();
-		for (const character of this.members) {
-			if (character === this.chief || !character.busy || !character.arc) {
+		for (const character of this._characters) {
+			if (character === this._commander || !character.busy || !character.arc) {
 				continue;
 			}
 			const key = mind.namedArc(character.arc);
@@ -213,18 +237,13 @@ export class Collective<TCtx = unknown> extends ArcRunner<TCtx> {
 		return this.refreshKit().verbs.filter((verb) => !VOICE_VERBS.has(verb) && !own.has(verb));
 	}
 
-	override toJSON():CollectiveJSON {
+	public override toJSON():CollectiveJSON {
 		return {
 			...super.toJSON(),
 			persona: this.persona.toJSON(),
 			mind: this.mind.toJSON(),
-			characters: this.members.map((c) => c.id),
-			commander: this.chief?.id,
+			characters: this._characters.map((c) => c.id),
+			commander: this._commander?.id,
 		};
-	}
-
-	/** @internal A saved collective's runner part. Its persona, mind and characters are rebuilt by the director. */
-	load(json:CollectiveJSON):void {
-		this.loadJSON(json);
 	}
 }

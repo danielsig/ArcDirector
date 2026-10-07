@@ -29,26 +29,26 @@ export type ChunkEntity = {
 };
 
 export class Chunk extends KindlingChunk<Tile> {
-	readonly entities:ChunkEntity[];
+	public readonly entities:ChunkEntity[];
 	/** Cell-filling prop defs by cell. Filled on first query; decode pushes entities after `new Chunk`. */
-	private props:(string | undefined)[] | null = null;
+	private _props:(string | undefined)[] | null = null;
 
-	constructor(id:string, origin:{ cx:number; cz:number }, tiles:Tile[], entities:ChunkEntity[]) {
+	public constructor(id:string, origin:{ cx:number; cz:number }, tiles:Tile[], entities:ChunkEntity[]) {
 		super(id, origin, CHUNK_SIZE, CELL_SIZE, tiles);
 		this.entities = entities;
 	}
 
 	/** The `CELL_PROPS` prop standing on the cell at a world point, by def. */
-	propAtWorld(x:number, z:number):string | undefined {
-		if (!this.props) {
-			this.props = [];
+	public propAtWorld(x:number, z:number):string | undefined {
+		if (!this._props) {
+			this._props = [];
 			for (const ent of this.entities) {
 				if (CELL_PROPS.has(ent.def)) {
-					this.props[ent.localZ * CHUNK_SIZE + ent.localX] = ent.def;
+					this._props[ent.localZ * CHUNK_SIZE + ent.localX] = ent.def;
 				}
 			}
 		}
 		const { localX, localZ } = this.worldToLocal(x, z);
-		return this.tile(localX, localZ) ? this.props[localZ * CHUNK_SIZE + localX] : undefined;
+		return this.tile(localX, localZ) ? this._props[localZ * CHUNK_SIZE + localX] : undefined;
 	}
 }

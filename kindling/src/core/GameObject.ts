@@ -19,35 +19,35 @@ export function resetAllocID(next = 1):void {
 }
 
 export class GameObject {
-	id:string;
-	name:string;
-	transform:Transform;
-	parent:GameObject | null = null;
-	children:GameObject[] = [];
-	world:World | null = null;
+	public id:string;
+	public name:string;
+	public transform:Transform;
+	public parent:GameObject | null = null;
+	public children:GameObject[] = [];
+	public world:World | null = null;
 	/** How the host rebuilds this object when a save has it and a fresh scene does not. JSON data only. */
-	recipe:unknown;
+	public recipe:unknown;
 
-	private readonly comps:Component[] = [];
+	private readonly _comps:Component[] = [];
 
-	constructor(id?:string, name?:string) {
+	public constructor(id?:string, name?:string) {
 		this.id = id ?? allocID();
 		this.name = name ?? this.id;
 		this.transform = new Transform();
 		this.transform.gameObject = this;
 		this.transform.object3D.name = this.name;
-		this.comps.push(this.transform);
+		this._comps.push(this.transform);
 	}
 
 	/** Attach a new `ctor()`. `init` fields are set before `awake` / `onEnable` (which run now if this is in a world). */
-	addComponent<T extends Component>(ctor:new ()=>T, init?:ComponentInit<T>):T {
+	public addComponent<T extends Component>(ctor:new ()=>T, init?:ComponentInit<T>):T {
 		if (ctor.prototype === Transform.prototype || ctor.prototype instanceof Transform) {
 			throw new Error('Transform cannot be added; it is already on the GameObject');
 		}
 		const c = new ctor();
 		Object.assign(c, init);
 		c.gameObject = this;
-		this.comps.push(c);
+		this._comps.push(c);
 		if (this.world) {
 			c.awoken = true;
 			c.awake();
@@ -59,15 +59,15 @@ export class GameObject {
 	}
 
 	/** Detach now: `onDisable` (if enabled) then `onDestroy`, once awoken. A class removes every instance of it; `Transform` is never removed. */
-	removeComponent(target:Component | Constructor<Component>):void {
+	public removeComponent(target:Component | Constructor<Component>):void {
 		if (target === this.transform) {
 			throw new Error('Transform cannot be removed');
 		}
-		const doomed = this.comps.filter((c) => {
+		const doomed = this._comps.filter((c) => {
 			return c !== this.transform && (target instanceof Component ? c === target : c instanceof target);
 		});
 		for (const c of doomed) {
-			this.comps.splice(this.comps.indexOf(c), 1);
+			this._comps.splice(this._comps.indexOf(c), 1);
 			c.enabled = false;
 			if (c.awoken) {
 				c.onDestroy();
@@ -75,8 +75,8 @@ export class GameObject {
 		}
 	}
 
-	getComponent<T>(ctor:Constructor<T>):T | undefined {
-		for (const c of this.comps) {
+	public getComponent<T>(ctor:Constructor<T>):T | undefined {
+		for (const c of this._comps) {
 			if (c instanceof ctor) {
 				return c;
 			}
@@ -85,14 +85,14 @@ export class GameObject {
 	}
 
 	/** `getComponent`, else a new `ctor()` added now. */
-	getOrAddComponent<T extends Component>(ctor:new ()=>T):T {
+	public getOrAddComponent<T extends Component>(ctor:new ()=>T):T {
 		return this.getComponent(ctor) ?? this.addComponent(ctor);
 	}
 
-	getComponentsInChildren<T>(ctor:Constructor<T>):T[] {
+	public getComponentsInChildren<T>(ctor:Constructor<T>):T[] {
 		const out:T[] = [];
 		const walk = (go:GameObject) => {
-			for (const c of go.comps) {
+			for (const c of go._comps) {
 				if (c instanceof ctor) {
 					out.push(c);
 				}
@@ -105,11 +105,11 @@ export class GameObject {
 		return out;
 	}
 
-	components():readonly Component[] {
-		return this.comps;
+	public components():readonly Component[] {
+		return this._comps;
 	}
 
-	setParent(parent:GameObject | null, worldPositionStays = true):void {
+	public setParent(parent:GameObject | null, worldPositionStays = true):void {
 		const px = this.transform.position.x;
 		const py = this.transform.position.y;
 		const pz = this.transform.position.z;
@@ -141,8 +141,8 @@ export class GameObject {
 		}
 	}
 
-	awakeAll():void {
-		for (const c of this.comps) {
+	public awakeAll():void {
+		for (const c of this._comps) {
 			if (c.awoken) {
 				continue;
 			}

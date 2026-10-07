@@ -16,26 +16,26 @@ function isTypingTarget(target:EventTarget | null):boolean {
 }
 
 export class InputState {
-	readonly keys = new Set<string>();
-	mouseNdcX = 0;
-	mouseNdcY = 0;
-	groundHit:{ x:number; z:number } | null = null;
-	pointerLocked = false;
+	public readonly keys = new Set<string>();
+	public mouseNdcX = 0;
+	public mouseNdcY = 0;
+	public groundHit:{ x:number; z:number } | null = null;
+	public pointerLocked = false;
 	/** Accumulated this frame; consumed in endFrame(). */
-	lookDeltaX = 0;
-	lookDeltaY = 0;
-	wheelDelta = 0;
-	justClick = false;
-	private readonly justDown = new Set<string>();
+	public lookDeltaX = 0;
+	public lookDeltaY = 0;
+	public wheelDelta = 0;
+	public justClick = false;
+	private readonly _justDown = new Set<string>();
 
-	private canvas:HTMLCanvasElement | null = null;
+	private _canvas:HTMLCanvasElement | null = null;
 
-	readonly onKeyDown = (e:KeyboardEvent):void => {
+	public readonly onKeyDown = (e:KeyboardEvent):void => {
 		if (isTypingTarget(e.target)) {
 			return;
 		}
 		if (!e.repeat) {
-			this.justDown.add(e.code);
+			this._justDown.add(e.code);
 		}
 		this.keys.add(e.code);
 		if (
@@ -63,17 +63,17 @@ export class InputState {
 		}
 	};
 
-	readonly onKeyUp = (e:KeyboardEvent):void => {
+	public readonly onKeyUp = (e:KeyboardEvent):void => {
 		this.keys.delete(e.code);
 	};
 
-	readonly onMouseMove = (e:MouseEvent):void => {
+	public readonly onMouseMove = (e:MouseEvent):void => {
 		if (this.pointerLocked) {
 			this.lookDeltaX += e.movementX;
 			this.lookDeltaY += e.movementY;
 			return;
 		}
-		const canvas = this.canvas;
+		const canvas = this._canvas;
 		if (!canvas) {
 			return;
 		}
@@ -84,54 +84,54 @@ export class InputState {
 		this.mouseNdcY = -((e.clientY - rect.top) / h) * 2 + 1;
 	};
 
-	readonly onWheel = (e:WheelEvent):void => {
+	public readonly onWheel = (e:WheelEvent):void => {
 		e.preventDefault();
 		this.wheelDelta += e.deltaY;
 	};
 
-	readonly onMouseDown = (e:MouseEvent):void => {
-		if (e.button !== 0 || !this.pointerLocked || document.activeElement !== this.canvas) {
+	public readonly onMouseDown = (e:MouseEvent):void => {
+		if (e.button !== 0 || !this.pointerLocked || document.activeElement !== this._canvas) {
 			return;
 		}
 		this.justClick = true;
 		e.preventDefault();
 	};
 
-	readonly onPointerLockChange = ():void => {
-		this.pointerLocked = document.pointerLockElement === this.canvas;
+	public readonly onPointerLockChange = ():void => {
+		this.pointerLocked = document.pointerLockElement === this._canvas;
 		if (!this.pointerLocked) {
 			this.lookDeltaX = 0;
 			this.lookDeltaY = 0;
 		}
 	};
 
-	readonly onBlur = ():void => {
+	public readonly onBlur = ():void => {
 		this.keys.clear();
 	};
 
-	key(code:string):boolean {
+	public key(code:string):boolean {
 		return this.keys.has(code);
 	}
 
-	pressed(code:string):boolean {
-		return this.justDown.has(code);
+	public pressed(code:string):boolean {
+		return this._justDown.has(code);
 	}
 
-	requestLock():void {
-		void this.canvas?.requestPointerLock();
+	public requestLock():void {
+		void this._canvas?.requestPointerLock();
 	}
 
-	endFrame():void {
+	public endFrame():void {
 		this.lookDeltaX = 0;
 		this.lookDeltaY = 0;
 		this.wheelDelta = 0;
 		this.justClick = false;
-		this.justDown.clear();
+		this._justDown.clear();
 	}
 
-	attach(canvas:HTMLCanvasElement):void {
+	public attach(canvas:HTMLCanvasElement):void {
 		this.detach();
-		this.canvas = canvas;
+		this._canvas = canvas;
 		window.addEventListener('keydown', this.onKeyDown);
 		window.addEventListener('keyup', this.onKeyUp);
 		window.addEventListener('mousemove', this.onMouseMove);
@@ -141,8 +141,8 @@ export class InputState {
 		canvas.addEventListener('wheel', this.onWheel, { passive: false });
 	}
 
-	detach():void {
-		const canvas = this.canvas;
+	public detach():void {
+		const canvas = this._canvas;
 		window.removeEventListener('keydown', this.onKeyDown);
 		window.removeEventListener('keyup', this.onKeyUp);
 		window.removeEventListener('mousemove', this.onMouseMove);
@@ -153,7 +153,7 @@ export class InputState {
 		if (document.pointerLockElement === canvas) {
 			document.exitPointerLock();
 		}
-		this.canvas = null;
+		this._canvas = null;
 		this.pointerLocked = false;
 		this.keys.clear();
 		this.endFrame();
