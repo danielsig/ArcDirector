@@ -40,7 +40,7 @@ export type HttpLoadConfig = {
 	offloadKvCacheToGpu?:boolean;
 	evalBatchSize?:number;
 	parallel?:number;
-	/** LM Studio `context_length` (`n_ctx`). Reload the instance when this changes. */
+	/** LM Studio `context_length` (`n_ctx`). An idle instance with any other length is reloaded. */
 	contextLength?:number;
 };
 
@@ -199,19 +199,19 @@ function preferReasoning(effort:ReasoningEffort | undefined):ReasoningOption {
 	return effort ?? 'low';
 }
 
-/** The responses API takes `reasoning: { effort }` in OpenAI's words and rejects a bare option with a 400. */
-const RESPONSES_EFFORT:Record<ReasoningOption, string> = { off: 'none', on: 'medium', low: 'low', medium: 'medium', high: 'high' };
+/**
+ * Both endpoints take an effort in OpenAI's words: the responses API as `reasoning: { effort }` (a bare option is a
+ * 400), chat completions as `reasoning_effort` (a bare `reasoning` is ignored, so only this turns reasoning off).
+ */
+const REASONING_EFFORT:Record<ReasoningOption, string> = { off: 'none', on: 'medium', low: 'low', medium: 'medium', high: 'high' };
 
 function setReasoningOption(body:Record<string, unknown>, option:ReasoningOption, responses:boolean):void {
 	if (responses) {
-		body.reasoning = { effort: RESPONSES_EFFORT[option] };
+		body.reasoning = { effort: REASONING_EFFORT[option] };
 		return;
 	}
-	body.reasoning = option;
-	if (!responses && (option === 'low' || option === 'medium' || option === 'high')) {
-		body['reasoning_effort'] = option;
-	}
-	if (!responses && option === 'low') {
+	body['reasoning_effort'] = REASONING_EFFORT[option];
+	if (option === 'low') {
 		setTemplateKwargs(body, { reasoning_strength: 'low' });
 	}
 }
@@ -284,10 +284,13 @@ function isContextOverflow(msg:string):boolean {
 }
 
 const THINK_OUT = 4096;
-const OVERFLOW_OUT = 256;
+const OVERFLOW_OUT = 512;
 
-function estimateTokens(value:unknown):number {
-	return Math.max(1, Math.ceil(JSON.stringify(value).length / 4));
+/** A request body's prompt tokens, roughly. `response_format` is grammar the server compiles, not prompt. */
+function promptTokens(body:Record<string, unknown>):number {
+	const prompt = { ...body };
+	delete prompt['response_format'];
+	return Math.max(1, Math.ceil(JSON.stringify(prompt).length / 4));
 }
 
 function configNumber(config:Record<string, unknown>, ...keys:string[]):number | undefined {
@@ -307,13 +310,12 @@ function instanceContextLength(config:Record<string, unknown>):number | undefine
 function shrinkForOverflow(body:Record<string, unknown>):boolean {
 	let changed = false;
 	// The responses API takes `{ effort }` and rejects a bare option with a 400.
-	if (isRecord(body.reasoning) && body.reasoning.effort !== RESPONSES_EFFORT.off) {
-		body.reasoning = { effort: RESPONSES_EFFORT.off };
+	if (isRecord(body.reasoning) && body.reasoning.effort !== REASONING_EFFORT.off) {
+		body.reasoning = { effort: REASONING_EFFORT.off };
 		changed = true;
 	}
-	else if (body.reasoning !== undefined && !isRecord(body.reasoning) && body.reasoning !== 'off') {
-		body.reasoning = 'off';
-		delete body['reasoning_effort'];
+	else if (body['reasoning_effort'] !== undefined && body['reasoning_effort'] !== REASONING_EFFORT.off) {
+		body['reasoning_effort'] = REASONING_EFFORT.off;
 		changed = true;
 	}
 	if (body['enable_thinking'] === true) {
@@ -1160,6 +1162,8 @@ export class HttpProvider implements InferenceProvider {
 	private _loadEndpoint = false;
 	private _probed = false;
 	private _instances:LoadedInstance[] = [];
+	/** In-flight chats and embeds per model. The catalog does not say which instance is generating, so none of that model is unloaded until these finish. */
+	private readonly _inFlight = new Map<string, number>();
 	private _readyChain:Promise<void> = Promise.resolve();
 	private _jitFirst:Promise<ChatResponse> | null = null;
 	private _jitModel = '';
@@ -1208,10 +1212,16 @@ export class HttpProvider implements InferenceProvider {
 
 	public async chat(req:ChatRequest):Promise<ChatResponse> {
 		await this.ensureReady(req.model);
-		if (!this._loadEndpoint) {
-			return this.chatJit(req);
+		this.hold(req.model);
+		try {
+			if (!this._loadEndpoint) {
+				return await this.chatJit(req);
+			}
+			return await this.dispatchChat(req);
 		}
-		return this.dispatchChat(req);
+		finally {
+			this.release(req.model);
+		}
 	}
 
 	public async embed(texts:string[], model?:string):Promise<number[][]> {
@@ -1220,6 +1230,16 @@ export class HttpProvider implements InferenceProvider {
 			throw new Error('embed: no model id (refusing to load a second embedding model)');
 		}
 		await this.ensureReady(name);
+		this.hold(name);
+		try {
+			return await this.embedReady(texts, name);
+		}
+		finally {
+			this.release(name);
+		}
+	}
+
+	private async embedReady(texts:string[], name:string):Promise<number[][]> {
 		const json = await this.post(joinURL(this.baseURL, 'embeddings'), {
 			model: name,
 			input: texts,
@@ -1458,7 +1478,7 @@ export class HttpProvider implements InferenceProvider {
 		if (want === undefined && slot === undefined) {
 			return;
 		}
-		const prompt = estimateTokens(body);
+		const prompt = promptTokens(body);
 		let cap = want ?? THINK_OUT;
 		if (slot !== undefined) {
 			cap = Math.min(cap, Math.max(1, slot - prompt - 32));
@@ -1614,7 +1634,11 @@ export class HttpProvider implements InferenceProvider {
 			await this.keepOneInstance(model);
 			return;
 		}
-		const stale = this._instances.filter((inst) => this.instanceMatches(inst, model) && !loadConfigFits(inst.config, this.loadOf(model)));
+		const same = this._instances.filter((inst) => this.instanceMatches(inst, model));
+		if (same.length > 0 && this.isBusy(model)) {
+			return;
+		}
+		const stale = same.filter((inst) => !loadConfigFits(inst.config, this.loadOf(model)));
 		for (const inst of stale) {
 			await this.unloadInstance(inst.id);
 		}
@@ -1688,7 +1712,8 @@ export class HttpProvider implements InferenceProvider {
 	private async freeVram(keep:string):Promise<boolean> {
 		const configured = [...this._models.keys()];
 		const victims = this._instances.filter((inst) => !this.instanceMatches(inst, keep)
-			&& !configured.some((model) => this.instanceMatches(inst, model)));
+			&& !configured.some((model) => this.instanceMatches(inst, model))
+			&& !this.isBusy(inst.key) && !this.isBusy(inst.id));
 		if (victims.length === 0) {
 			return false;
 		}
@@ -1714,8 +1739,11 @@ export class HttpProvider implements InferenceProvider {
 			}
 		}
 		const same = this._instances.filter((inst) => this.instanceMatches(inst, model));
-		const keep = same.find((inst) => loadConfigFits(inst.config, this.loadOf(model))) ?? same[0];
-		if (!keep) {
+		const want = this.loadOf(model);
+		const fitting = same.filter((inst) => loadConfigFits(inst.config, want));
+		const exact = want.contextLength === undefined ? undefined : fitting.find((inst) => instanceContextLength(inst.config) === want.contextLength);
+		const keep = exact ?? fitting[0];
+		if (!keep || this.isBusy(model)) {
 			return;
 		}
 		for (const extra of same) {
@@ -1723,6 +1751,30 @@ export class HttpProvider implements InferenceProvider {
 				await this.unloadInstance(extra.id);
 			}
 		}
+	}
+
+	private hold(model:string):void {
+		this._inFlight.set(model, (this._inFlight.get(model) ?? 0) + 1);
+	}
+
+	private release(model:string):void {
+		const left = (this._inFlight.get(model) ?? 1) - 1;
+		if (left <= 0) {
+			this._inFlight.delete(model);
+		}
+		else {
+			this._inFlight.set(model, left);
+		}
+	}
+
+	/** A chat or embed on `model` has passed `ensureReady` and not finished. */
+	private isBusy(model:string):boolean {
+		for (const [id, n] of this._inFlight) {
+			if (n > 0 && modelIDsMatch(id, model)) {
+				return true;
+			}
+		}
+		return false;
 	}
 
 	private async unloadInstance(instanceID:string):Promise<void> {

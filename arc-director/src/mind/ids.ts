@@ -1,6 +1,5 @@
-import type { Arc, Step } from '../arc/types.js';
-import { argBase, type VerbRegistry } from '../arc/stock-verbs.js';
-import { isArc } from '../arc/validate.js';
+import { mapArgs, type Arc } from '../arc/types.js';
+import type { VerbRegistry } from '../arc/stock-verbs.js';
 import { lex } from '../expr/lex.js';
 import { lawGroup } from '../arc/laws.js';
 import type { NameBook } from '../character/names.js';
@@ -58,28 +57,7 @@ export function mapExpr(expr:string, map:WordMap):string {
 
 /** `arc` with every character it names rewritten by `map`, read by each verb's arg kinds. Prose is never touched. */
 export function mapArc(arc:Arc, verbs:VerbRegistry, map:WordMap):Arc {
-	return {
-		...arc,
-		head: mapStep(arc.head, verbs, map),
-		...(arc.group ? { group: mapArc(arc.group, verbs, map) } : {}),
-		...(arc.then ? { then: { join: arc.then.join, arc: mapArc(arc.then.arc, verbs, map) } } : {}),
-	};
-}
-
-function mapStep(step:Step, verbs:VerbRegistry, map:WordMap):Step {
-	const kinds = verbs.get(step.verb)?.args ?? {};
-	const args = { ...step.args };
-	for (const [key, value] of Object.entries(args)) {
-		const kind = argBase(kinds[key]);
-		// Any arc value, so `choose`'s named choices count too.
-		if (isArc(value)) {
-			args[key] = mapArc(value, verbs.nested(), map);
-		}
-		else if (typeof value === 'string') {
-			args[key] = mapArg(kind, value, map);
-		}
-	}
-	return { ...step, args };
+	return mapArgs(arc, verbs, (text, kind) => mapArg(kind, text, map));
 }
 
 function mapArg(kind:string, value:string, map:WordMap):string {

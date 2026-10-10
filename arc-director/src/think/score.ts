@@ -1,4 +1,4 @@
-import type { Arc, Step } from '../arc/types.js';
+import { arcSteps, type Arc, type Step } from '../arc/types.js';
 import { clampTrueScore } from '../expr/score.js';
 import { DEFAULT_TRUE_SCORE } from '../expr/types.js';
 
@@ -68,14 +68,7 @@ export function arcScore(
 	ok = true,
 	extra?:Record<string, number>,
 ):number {
-	const steps:Step[] = [];
-	let cur:Arc | undefined = arc;
-	while (cur) {
-		if (cur.head) {
-			steps.push(cur.head);
-		}
-		cur = cur.then?.arc;
-	}
+	const steps = arcSteps(arc);
 	let start = 0;
 	for (let i = 0; i < steps.length; i++) {
 		if (waitUntilOf(steps[i])) {
@@ -114,13 +107,5 @@ export function thinkRecencyScale(
 }
 
 export function arcVerbs(arc:Arc):string[] {
-	const verbs:string[] = [];
-	let cur:Arc | undefined = arc;
-	while (cur) {
-		if (cur.head) {
-			verbs.push(cur.head.verb);
-		}
-		cur = cur.then?.arc;
-	}
-	return verbs;
+	return arcSteps(arc).map((step) => step.verb);
 }

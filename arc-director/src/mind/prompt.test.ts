@@ -1,9 +1,10 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { parseArc } from '../arc/parse.js';
+import { parseArc } from '../arc/wire.js';
 import { VerbRegistry, registerStockVerbs } from '../arc/stock-verbs.js';
 import { registerStockCollectiveVerbs } from '../collective/verbs.js';
 import { stablePrefix, volatileBlock, conversationBlock, CONVERSATION_HEADER, seeMapHint, arcRepairHint } from './prompt.js';
+import { docsFor } from '../arc/schema.js';
 
 describe('prompt split', () => {
 	const verbs = registerStockVerbs(new VerbRegistry());
@@ -53,13 +54,14 @@ describe('prompt split', () => {
 		assert.equal(system.includes('Never invent a go_to name'), false);
 		assert.equal(system.includes("that place's go_to name"), false);
 		assert.match(system, /not go_to or follow the speaker/);
-		assert.match(system, /Call see_map, ask the speaker where it is, or wander\(until\)/);
+		assert.match(system, /Call see_map, or wander\(until\)/);
+		assert.match(system, /Never ask where something is until see_map cannot find it/);
 		assert.equal(system.includes('recall also searches'), false);
 		assert.match(system, /when\(watch, arc\) is this job's interrupt/);
 		assert.match(system, /instead of waiting to think/);
 		assert.match(system, /law\(watch, arc, name\?\) is a standing reaction/);
 		assert.match(system, /outlives the program and needs no think/);
-		assert.match(system, /then always continues/);
+		assert.match(system, /"then" ends a step: "if_ok" \(the default: the next step only if this one succeeded\), "always" \(the next step whatever happened\) or "if_failed" \(the rest are its fallback\)/);
 		assert.match(system, /"verb":"pick_up"/);
 		assert.match(system, /pick_up\(item\) — goes to it first/);
 		assert.match(system, /use\(item=TheItem, target=TheThing\)/);
@@ -73,22 +75,23 @@ describe('prompt split', () => {
 		assert.match(system, /❌ = you/);
 		assert.equal(system.includes('Goals (highest first)'), false);
 		assert.equal(system.includes('Pinned memories'), false);
-		assert.ok(system.length < 5000, `standing prefix ${system.length} chars`);
-		const wanderJson = system.match(/\{"head":\{"verb":"wander","args":\{"until":"(?:\\.|[^"\\])*"\}\}\}/);
+		assert.ok(system.length < 5300, `standing prefix ${system.length} chars`);
+		const wanderJson = system.match(/\{"steps":\[\{"verb":"wander","until":"[^"]*"\}\]\}/);
 		assert.ok(wanderJson);
-		assert.equal(parseArc(wanderJson[0], verbs).head.verb, 'wander');
+		assert.equal(parseArc(wanderJson[0], verbs)[0].verb, 'wander');
 		assert.equal(
-			parseArc(wanderJson[0], verbs).head.args.until,
-			'some(items.filter("Lantern").nearby())',
+			parseArc(wanderJson[0], verbs)[0].args.until,
+			"some(items.filter('Lantern').nearby())",
+			'an expression reads its string literals in single quotes, so the JSON around it needs no escapes',
 		);
 		assert.match(system, /Close every brace\. No prose/);
-		const chainAt = system.indexOf('{"head":{"verb":"pick_up"');
+		assert.match(system, /the Arc JSON, \{"steps":\[…\]\}/);
+		const chainAt = system.indexOf('{"steps":[{"verb":"pick_up"');
 		assert.ok(chainAt >= 0);
 		const chained = parseArc(system.slice(chainAt), verbs);
-		assert.equal(chained.head.verb, 'pick_up');
-		assert.equal(chained.then?.join, 'then_if_ok');
-		assert.equal(chained.then?.arc.head.verb, 'give');
-		assert.equal(chained.then?.arc.head.args.to, 'Player');
+		assert.deepEqual(chained.map((step) => step.verb), ['pick_up', 'give']);
+		assert.equal(chained[0].then, undefined);
+		assert.equal(chained[1].args.to, 'Player');
 	});
 
 	it('replaces the think and verb lines when the host sets them', () => {
@@ -106,8 +109,8 @@ describe('prompt split', () => {
 		assert.equal(cleared.includes('Be brief'), false);
 	});
 
-	it('asks for Arc text when arcText is on', () => {
-		const system = stablePrefix('Guard', identity, verbs, { arcText: true });
+	it('asks for Arc text when arcFormat is text', () => {
+		const system = stablePrefix('Guard', identity, verbs, { arcFormat: 'text' });
 		assert.match(system, /Answer immediately with only the Arc text/);
 		assert.match(system, /pick_up\(Lantern\) && give\(item=Lantern, to=Player\)/);
 		assert.match(system, /wander\(until=/);
@@ -127,26 +130,25 @@ describe('prompt split', () => {
 		assert.equal(system.includes('JSON shape'), false);
 		const wanderText = system.match(/wander\(until=some\(items\.filter\("Lantern"\)\.nearby\(\)\)\)/);
 		assert.ok(wanderText);
-		assert.equal(parseArc(wanderText[0], verbs).head.verb, 'wander');
+		assert.equal(parseArc(wanderText[0], verbs)[0].verb, 'wander');
 		const chainText = system.match(/pick_up\(Lantern\) && give\(item=Lantern, to=Player\)/);
 		assert.ok(chainText);
 		const chained = parseArc(chainText[0], verbs);
-		assert.equal(chained.head.verb, 'pick_up');
-		assert.equal(chained.then?.join, 'then_if_ok');
-		assert.equal(chained.then?.arc.head.verb, 'give');
+		assert.deepEqual(chained.map((step) => step.verb), ['pick_up', 'give']);
+		assert.equal(chained[0].then, undefined);
 	});
 
 	it('sends a mind with a map to the map before it wanders', () => {
-		const system = stablePrefix('Forager', identity, verbs, { canSeeMap: true, arcText: true, tools: ['see_map'] });
-		assert.match(system, /Looking for someone, a thing, or a place you do not see\? Call see_map first and go_to the name it shows\. wander\(until\) only for what the map does not name/);
-		assert.match(system, /otherwise see_map, ask, or wander\(until\)/);
+		const system = stablePrefix('Forager', identity, verbs, { canSeeMap: true, arcFormat: 'text', tools: ['see_map'] });
+		assert.match(system, /Looking for someone, a thing, or a place you do not see\? Call see_map first and go_to the name it shows\. Never ask where something is until see_map cannot find it\. wander\(until\) only for what the map does not name/);
+		assert.match(system, /otherwise see_map, or wander\(until\)\. Ask only if see_map cannot find it/);
 		assert.equal(system.includes('Looking for a thing or place? wander'), false);
 	});
 
 	it('lists tools as tools, never as Arc verbs', () => {
 		const system = stablePrefix('Guard', identity, verbs, {
 			canSeeMap: true,
-			arcText: true,
+			arcFormat: 'text',
 			tools: ['see_map', 'observe'],
 		});
 		assert.match(system, /Tools this think, not verbs: see_map, observe/);
@@ -154,8 +156,10 @@ describe('prompt split', () => {
 		assert.match(system, /Never guess a fact a tool can check/);
 		assert.match(system, /never repeat a call/);
 		assert.equal(system.includes('with "Bread"'), false);
-		const lookup = stablePrefix('Guard', identity, verbs, { arcText: true, tools: ['observe', 'recall'] });
+		const lookup = stablePrefix('Guard', identity, verbs, { arcFormat: 'text', tools: ['observe', 'recall'] });
 		assert.match(lookup, /Call recall with "Bread"/);
+		assert.match(lookup, /Never ask anyone until recall cannot find it/);
+		assert.match(lookup, /Then try different words/);
 		assert.match(lookup, /Available verbs: [^\n]*\. observe and recall are tools, not verbs: call them as tools, never in the Arc\./, 'right after the verbs');
 		assert.match(lookup, /think\("what to work out"\) last/);
 		assert.match(system, /Once you know enough, emit only the Arc text/);
@@ -166,16 +170,20 @@ describe('prompt split', () => {
 	});
 
 	it('repairs a tool written as an arc verb', () => {
-		const hint = arcRepairHint("unknown verb 'see_map'", true, ['see_map']);
+		const hint = arcRepairHint("unknown verb 'see_map'", 'text', ['see_map']);
 		assert.match(hint, /see_map is a tool, not a verb/);
 		assert.match(hint, /Never write see_map\(\.\.\.\) in the Arc/);
 		assert.equal(hint.includes('unknown verb'), false);
 	});
 
 	it('discards verb-less prose on repair', () => {
-		const hint = arcRepairHint('expected verb', true, ['see_map']);
+		const hint = arcRepairHint('expected verb', 'text', ['see_map'], registerStockVerbs(new VerbRegistry()));
 		assert.match(hint, /That prose is discarded/);
 		assert.match(hint, /Do the spoken job, not go_to or follow the speaker/);
+		const bare = arcRepairHint('expected verb', 'text', ['see_map'], registerStockVerbs(new VerbRegistry(), 'say', 'wait'));
+		assert.match(bare, /Do the spoken job\./);
+		assert.equal(bare.includes('go_to'), false);
+		assert.equal(bare.includes('follow'), false);
 	});
 
 	it('omits Arc emit rules when revising goals', () => {
@@ -300,13 +308,17 @@ describe('prompt split', () => {
 			canRecallKnowledge: true,
 		});
 		assert.match(system, /recall also searches what you know of the world/);
-		assert.match(system, /Call recall, see_map/);
+		assert.match(system, /Call recall, then see_map/);
+		assert.match(system, /recall answers any question/);
+		assert.match(system, /Never ask anyone until recall cannot find it/);
+		assert.match(system, /Then try different words/);
 		assert.equal(system.includes('There is no Forest'), false);
 		assert.equal(system.includes('Being surrounded'), false);
 		assert.equal(system.includes('filter("Tree"), never filter("trees")'), false);
 		assert.ok(system.length < 5000, `standing prefix ${system.length} chars`);
 		const knowledgeOnly = stablePrefix('Guard', identity, verbs, { canRecallKnowledge: true });
-		assert.match(knowledgeOnly, /Call recall, ask the speaker/);
+		assert.match(knowledgeOnly, /Call recall, or wander\(until\)/);
+		assert.match(knowledgeOnly, /Never ask anyone until recall cannot find it/);
 		assert.equal(knowledgeOnly.includes('see_map is a tool'), false);
 	});
 
@@ -314,12 +326,13 @@ describe('prompt split', () => {
 		const catalog = registerStockCollectiveVerbs(registerStockVerbs(new VerbRegistry()));
 		catalog.add('shoot', { args: { target: 'id' }, help: 'needs a clear line of sight' });
 		const verbs = catalog.view(['issue', 'when', 'law', 'unlaw', 'loop', 'smite']);
-		const stock = stablePrefix('Guard', identity, verbs);
+		const stock = stablePrefix('Guard', identity, verbs, { arcFormat: 'text' });
 		assert.match(stock, /Issue looping programs with a bunch of when/);
 		assert.match(stock, /shoot\(target\) — needs a clear line of sight/);
 		assert.match(stock, /unlaw\(name\) — drops that law/);
 		assert.match(stock, /Example:\nissue\(\n\twho=units\.filter\("Guard"\),/, 'laid out as blocks, like the rule asks');
 		const system = stablePrefix('Guard', identity, verbs, {
+			arcFormat: 'text',
 			verbInstructions: 'Hold the line.',
 			arcExample: 'issue(who=units.filter("Archer"), arc=loop(shoot(others.filter("enemy").minBy(u => u.hp))))',
 		});
@@ -332,14 +345,40 @@ describe('prompt split', () => {
 		assert.equal(system.includes('Arc JSON'), false);
 		const example = system.match(/Example: (.+)$/);
 		assert.ok(example);
-		assert.equal(parseArc(example[1], verbs).head.args.who, 'units.filter("Archer")');
+		assert.equal(parseArc(example[1], verbs)[0].args.who, 'units.filter("Archer")');
+	});
+
+	it('shows a collective the same examples as JSON when it writes JSON, and each parses back', () => {
+		const catalog = registerStockCollectiveVerbs(registerStockVerbs(new VerbRegistry()));
+		catalog.add('shoot', { args: { target: 'id' }, help: 'needs a clear line of sight' });
+		const verbs = catalog.view(['issue', 'when', 'law', 'unlaw', 'loop', 'choose', 'smite']);
+		for (const arcFormat of ['json', 'schema'] as const) {
+			const stock = stablePrefix('Guard', identity, verbs, { arcFormat });
+			assert.match(stock, /Answer immediately with only the Arc JSON, \{"steps":\[…\]\}/);
+			assert.equal(stock.includes('No JSON, no prose'), false);
+			assert.match(stock, /Give each issue as a step of its own\./);
+			assert.equal(stock.includes('Join several issue with ;'), false);
+			assert.equal(stock.includes('\twho='), false, 'no block layout in JSON');
+			const example = stock.match(/Example: (\{"steps":\[\{"verb":"issue".*\]\})$/);
+			assert.ok(example, 'the stock issue example is Arc JSON');
+			const arc = parseArc(example[1], verbs);
+			assert.deepEqual(arc.map((step) => step.verb), ['issue', 'issue']);
+			assert.equal(arc[0].args.who, "units.filter('Guard')");
+			const choose = stock.match(/choose takes a goal and its choices, each a list of steps under its name, as in:\n(\{"steps".*\})\n/);
+			assert.ok(choose, 'the choose example is Arc JSON');
+			assert.equal(parseArc(choose[1], verbs)[0].verb, 'issue');
+			const host = stablePrefix('Guard', identity, verbs, { arcFormat, arcExample: 'issue(who=units.filter("Archer"), arc=loop(shoot(others.filter("enemy").minBy(u => u.hp))))' });
+			const hosted = host.match(/Example: (\{"steps".*\})$/);
+			assert.ok(hosted, 'the host example is shown as Arc JSON too');
+			assert.equal(parseArc(hosted[1], verbs)[0].args.who, "units.filter('Archer')");
+		}
 	});
 
 	it('issue and law rules appear when the kit has crowd verbs', () => {
 		const catalog = registerStockCollectiveVerbs(registerStockVerbs(new VerbRegistry()));
 		catalog.add('slash', { args: { target: 'id' } });
 		const verbs = catalog.view(['issue', 'when', 'law', 'unlaw', 'loop', 'smite']);
-		const system = stablePrefix('Guard', identity, verbs);
+		const system = stablePrefix('Guard', identity, verbs, { arcFormat: 'text' });
 		assert.match(system, /issue\(who, arc\) assigns a sticky program/);
 		assert.match(system, /who is YOUR roster/);
 		assert.match(system, /units\.filter\("Witch"\)/);
@@ -380,7 +419,8 @@ describe('prompt split', () => {
 		assert.equal(system.includes('use('), false);
 		assert.equal(system.includes('give('), false);
 		assert.equal(system.includes('examine'), false);
-		assert.match(system, /ask the speaker where it is\./);
+		assert.match(system, /Call recall, then see_map\. A second look/);
+		assert.match(system, /Never ask where something is until see_map cannot find it/);
 		assert.equal(system.includes('or wander(until)'), false);
 	});
 
@@ -404,30 +444,49 @@ describe('choose in prompts', () => {
 	const all = registerStockVerbs(new VerbRegistry());
 
 	it('teaches choose to a character that has it', () => {
-		const text = stablePrefix('Guard', {}, all, { arcText: true });
+		const text = stablePrefix('Guard', {}, all, { arcFormat: 'text' });
 		assert.match(text, /choose\(goal, name=arc, …\) — a fast model picks one by name/);
 		assert.match(text, /as in:\nloop\(\n\tchoose\(\n\t\t"why you choose",\n\t\twander=wander\(\),\n\t\twait=wait\(\),\n\t\),\n\)\n/, 'a block, every choice named');
 		const json = stablePrefix('Guard', {}, all);
-		assert.match(json, /choose takes a goal and its choices as named arc args/);
+		assert.match(json, /choose takes a goal and its choices, each a list of steps under its name, as in:\n\{"steps":\[\{"verb":"loop","arc":\[\{"verb":"choose","goal":"why you choose","choices":\{"wander":\[\{"verb":"wander"\}\],"wait":\[\{"verb":"wait"\}\]\}\}\]\}\]\}\nA fast model runs the one that fits right now/);
+		const example = json.match(/as in:\n(\{"steps".*\})\n/);
+		assert.ok(example);
+		assert.equal(parseArc(example[1], all)[0].verb, 'loop');
 	});
 
 	it('says nothing of choose when it is withheld', () => {
 		const kit = all.view(all.list().map((spec) => spec.name).filter((name) => name !== 'choose'));
-		assert.equal(stablePrefix('Guard', {}, kit, { arcText: true }).includes('choose'), false);
+		assert.equal(stablePrefix('Guard', {}, kit, { arcFormat: 'text' }).includes('choose'), false);
 	});
 
 	it('teaches a collective whose kit grants choose to issue it in a loop', () => {
 		const catalog = registerStockCollectiveVerbs(registerStockVerbs(new VerbRegistry()));
 		catalog.add('attack', { args: { target: 'id?' } });
-		const text = stablePrefix('Dawn', {}, catalog.view(['issue', 'loop', 'choose', 'attack']), { arcText: true });
+		const text = stablePrefix('Dawn', {}, catalog.view(['issue', 'loop', 'choose', 'attack']), { arcFormat: 'text' });
 		assert.match(text, /as in:\nissue\(\n\twho=units,\n\tarc=loop\(\n\t\tchoose\(\n\t\t\t"why you choose",\n\t\t\tattack=attack\(\),\n/);
 	});
 
 	it('never offers choose to a collective whose kit lacks it, even among nested arc verbs', () => {
 		const catalog = registerStockCollectiveVerbs(registerStockVerbs(new VerbRegistry()));
 		const kit = catalog.view(['issue', 'when', 'loop', 'law', 'unlaw']);
-		const text = stablePrefix('Dawn', {}, kit, { arcText: true });
+		const text = stablePrefix('Dawn', {}, kit, { arcFormat: 'text' });
 		assert.match(text, /Nested arc verbs/);
 		assert.equal(text.includes('choose'), false);
+	});
+
+	it('does not mention loop or unlaw unless the kit grants them', () => {
+		const catalog = registerStockVerbs(new VerbRegistry());
+		const choose = stablePrefix('Guard', {}, catalog.view(['choose', 'wait', 'wander']), { arcFormat: 'text' });
+		assert.match(choose, /a fast model picks one by name/);
+		assert.equal(choose.includes('loop'), false);
+		const law = stablePrefix('Guard', {}, catalog.view(['law', 'wait']));
+		assert.equal(law.includes('unlaw'), false);
+		const watches = stablePrefix('Guard', {}, catalog.view(['say', 'wait']), { includeWatches: true });
+		assert.equal(watches.includes('go_to'), false);
+		assert.equal(watches.includes('doing(u'), false);
+		const earshot = 'Who is in range right now. Who you can say(to) is this list. Pass to to check one name before you arc a say. Out of range: error, no speech; get closer first.';
+		const names = ['say', 'wander', 'go_to', 'earshot'];
+		assert.equal(docsFor(earshot, 'earshot', new Set(['wait', 'earshot']), names).includes('say'), false);
+		assert.match(docsFor(earshot, 'earshot', new Set(['say', 'earshot']), names), /say\(to\)/);
 	});
 });

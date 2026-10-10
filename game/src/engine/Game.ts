@@ -140,6 +140,7 @@ export class Game extends KindlingGame<World> {
 		if (this.canvas) {
 			this.world.audio.connectUnlock(this.canvas);
 		}
+		this.syncAudio();
 		startSceneMusic(this.world.audio, this._scene.id);
 		void this.world.audio.resume();
 		void this.loadArt();

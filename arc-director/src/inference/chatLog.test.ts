@@ -21,4 +21,19 @@ describe('chatLog', () => {
 		assert.equal(message.includes('aaaa'), false);
 		assert.equal(image, 'data:image/png;base64,aaaa');
 	});
+
+	it('shows a response-format schema by name only', () => {
+		const wire = formatChatLog({
+			model: 'muse',
+			response_format: { type: 'json_schema', json_schema: { name: 'reply', schema: { type: 'object', properties: { zzz: {} } }, strict: true } },
+		}).message;
+		assert.match(wire, /"response_format":"reply"/);
+		assert.equal(wire.includes('zzz'), false);
+		const raw = formatChatLog({
+			model: 'muse',
+			responseFormat: { name: 'reply', schema: { type: 'object', properties: { zzz: {} } } },
+		}).message;
+		assert.match(raw, /"responseFormat":"reply"/);
+		assert.equal(raw.includes('zzz'), false);
+	});
 });

@@ -12,11 +12,12 @@ import { FakeProvider } from '../inference/fake.js';
 import type { ChatRequest, ChatResponse } from '../inference/provider.js';
 import { formatSight } from '../perception/sight.js';
 import { formatInventory } from '../perception/formatInventory.js';
-import { parseArc } from '../arc/parse.js';
+import { parseArc } from '../arc/wire.js';
 import { ArcDirector } from './director.js';
 import type { CharacterSpec, StandingChoice, VerbCall } from './types.js';
 import type { SystemOne } from '../inference/systemone.js';
 import { OPEN_WORLD } from '../testing/world.js';
+import type { ArcFormat } from '../mind/types.js';
 
 type Ctx = { paragraph:string; id:string };
 
@@ -44,7 +45,7 @@ const KIT = { verbs: STOCK_VERBS };
 
 
 const WAIT_REPLY = {
-	content: JSON.stringify({ head: { verb: 'wait', args: {} } }),
+	content: JSON.stringify({ steps: [{ verb: 'wait' }] }),
 	toolCalls: [] as [],
 };
 
@@ -131,6 +132,77 @@ function directorOf(calls?:VerbCall<Ctx>[]):ArcDirector<Ctx> {
 }
 
 describe('ArcDirector', () => {
+	it('ends a reply wait when the other character runs a non-movement verb', async () => {
+		const director = await directorOf()
+			.withTalk({ inRange: () => true, others: () => ['Forager', 'BridgeKeeper'] })
+			.addCharacter({ id: 'Forager', mind: { skipHeartbeat: true }, identity: { role: 'forager' } })
+			.addCharacter({ id: 'BridgeKeeper', mind: { skipHeartbeat: true }, identity: { role: 'keeper' } })
+			.start();
+		const keeper = director.character('BridgeKeeper')!;
+		const forager = director.character('Forager')!;
+		let released = false;
+		const running = keeper.enact(parseArcText('give(item=FireMushroom, to=Forager)', registerStockVerbs(new VerbRegistry()))).then(() => {
+			released = true;
+		});
+		await Promise.resolve();
+		assert.equal(released, false);
+		await forager.perform({ verb: 'go_to', args: { target: 'BridgeKeeper' } });
+		director.tick(0.1, 1);
+		assert.equal(released, false);
+		await forager.perform({ verb: 'examine', args: { target: 'BridgeKeeper' } });
+		director.tick(0.1, 1.2);
+		await running;
+		assert.equal(released, true);
+		director.dispose();
+	});
+
+	it('keeps one Arc format, defaulting to json, and moves live minds when it changes', async () => {
+		const build = (format?:ArcFormat):Promise<ArcDirector<Ctx>> => {
+			const director = directorOf().addCharacter({ id: 'Guard', mind: {}, identity: { role: 'guard' } });
+			return (format ? director.withArcFormat(format) : director).start();
+		};
+		const plain = await build();
+		assert.equal(plain.arcFormat, 'json');
+		plain.dispose();
+		const director = await build('schema');
+		assert.equal(director.arcFormat, 'schema');
+		assert.deepEqual(director.minds().map((mind) => mind.arcFormat), ['schema']);
+		director.setArcFormat('text');
+		assert.equal(director.arcFormat, 'text');
+		assert.deepEqual(director.minds().map((mind) => mind.arcFormat), ['text']);
+		director.dispose();
+	});
+
+	it('sends every mind the same reply schema, whatever its kit, with the host tools in it', async () => {
+		const sent:string[] = [];
+		const director = await new ArcDirector<Ctx>()
+			.withPriorityQueue({ processInterval: 0, watchInterval: 100, heartbeatStart: 100, heartbeatMin: 100 })
+			.addModel('fake', { maxParallel: 2 })
+			.addFakeInference((req) => {
+				sent.push(JSON.stringify(req.responseFormat));
+				return { content: JSON.stringify({ steps: [{ verb: 'wait' }] }), toolCalls: [] };
+			})
+			.withArcFormat('schema')
+			.addStockVerbs()
+			.addTool('sniff', { description: 'Smell the air.', parameters: { type: 'object', properties: { what: { type: 'string' } } }, handler: () => 'smoke' })
+			.onVerb((call) => ({ ok: true, verb: call.verb }))
+			.addSense('scene', { description: 'see', gather: (ctx) => ctx.paragraph })
+			.withContext((id) => ({ paragraph: scene(), id }))
+			.addCharacter({ id: 'Able', mind: { skipHeartbeat: true }, kit: { verbs: ['wait', 'go_to'] }, identity: { role: 'Waits.' } })
+			.addCharacter({ id: 'Baker', mind: { skipHeartbeat: true }, kit: { verbs: [...STOCK_VERBS], tools: ['recall'] }, identity: { role: 'Bakes.' } })
+			.start();
+		director.mindQueue()!.enqueueMajor('Able');
+		director.mindQueue()!.enqueueMajor('Baker');
+		director.tick(1, 1);
+		await waitFor(() => sent.length >= 2);
+		assert.equal(new Set(sent).size, 1);
+		const format = JSON.parse(sent[0]) as { name:string; schema:{ anyOf:{ properties:{ tool?:{ const:string } } }[] } };
+		assert.equal(format.name, 'reply');
+		assert.deepEqual(format.schema.anyOf.slice(0, -1).map((branch) => branch.properties.tool?.const), ['recall', 'observe', 'earshot', 'see_map', 'sniff']);
+		assert.ok(sent[0].length < 20_000);
+		director.dispose();
+	});
+
 	it('a host-driven character runs given arcs but never calls the model', async () => {
 		let chats = 0;
 		const calls:VerbCall<Ctx>[] = [];
@@ -146,7 +218,7 @@ describe('ArcDirector', () => {
 				chats += 1;
 				return { content: 'wait()', toolCalls: [] };
 			})
-			.withArcText(true)
+			.withArcFormat('text')
 			.addStockVerbs()
 			.withDefaultKit({ verbs: [...STOCK_VERBS] })
 			.onVerb((call) => {
@@ -195,7 +267,7 @@ describe('ArcDirector', () => {
 					chats += 1;
 					return { content: line, toolCalls: [] };
 				})
-				.withArcText(true)
+				.withArcFormat('text')
 				.addStockVerbs()
 				.withDefaultKit({ verbs: [...STOCK_VERBS, 'sell'] })
 				.onVerb((call) => ({ ok: true, verb: call.verb }))
@@ -230,7 +302,7 @@ describe('ArcDirector', () => {
 				users.push(user);
 				return { content: user.includes('not a valid Arc: ') ? 'wait()' : 'say(text=Hi) to Guard', toolCalls: [] };
 			})
-			.withArcText(true)
+			.withArcFormat('text')
 			.addStockVerbs()
 			.withDefaultKit({ verbs: [...STOCK_VERBS] })
 			.onVerb((call) => ({ ok: true, verb: call.verb }))
@@ -259,7 +331,7 @@ describe('ArcDirector', () => {
 				thinks += req.messages.length === 2 ? 1 : 0;
 				return { content: 'say(text=Hi) to Guard', toolCalls: [] };
 			})
-			.withArcText(true)
+			.withArcFormat('text')
 			.addStockVerbs()
 			.withDefaultKit({ verbs: [...STOCK_VERBS] })
 			.onVerb((call) => ({ ok: true, verb: call.verb }))
@@ -290,8 +362,8 @@ describe('ArcDirector', () => {
 		director.tick(1, 1);
 		await waitFor(() => !!director.character('Watcher')?.mind!.lastArc);
 		const arc = director.character('Watcher')!.mind!.lastArc!;
-		assert.equal(arc.head.verb, 'go_to');
-		assert.equal(arc.head.args.target, 'EastGate');
+		assert.equal(arc[0].verb, 'go_to');
+		assert.equal(arc[0].args.target, 'EastGate');
 		await waitFor(() => calls.length > 0);
 		assert.equal(calls[0].verb, 'go_to');
 		assert.equal(calls[0].character.id, 'Watcher');
@@ -301,7 +373,7 @@ describe('ArcDirector', () => {
 
 	it('logs reasoning alongside the arc', async () => {
 		const logs:string[] = [];
-		const arc = JSON.stringify({ head: { verb: 'wait', args: {} } });
+		const arc = JSON.stringify({ steps: [{ verb: 'wait' }] });
 		const director = await new ArcDirector<Ctx>()
 			.withPriorityQueue({
 				processInterval: 0,
@@ -392,7 +464,7 @@ describe('ArcDirector', () => {
 		assert.ok(director.character('Guard'));
 		director.tick(1, 1);
 		await waitFor(() => !!director.character('Guard')?.mind!.lastArc);
-		assert.equal(director.character('Guard')!.mind!.lastArc!.head.verb, 'go_to');
+		assert.equal(director.character('Guard')!.mind!.lastArc![0].verb, 'go_to');
 		director.removeCharacter('Guard');
 		assert.equal(director.character('Guard'), undefined);
 		director.dispose();
@@ -407,9 +479,9 @@ describe('ArcDirector', () => {
 				const give = /give/.test(text) === false;
 				return {
 					content: JSON.stringify({
-						head: give
-							? { verb: 'give', args: { item: 'Key', to: 'Player' } }
-							: { verb: 'go_to', args: { target: 'EastGate' } },
+						steps: [give
+							? { verb: 'give', item: 'Key', to: 'Player' }
+							: { verb: 'go_to', target: 'EastGate' }],
 					}),
 					toolCalls: [],
 				};
@@ -498,13 +570,7 @@ describe('ArcDirector', () => {
 		const seen:number[] = [];
 		const director = await new ArcDirector<Ctx>()
 			.addFakeInference(() => ({
-				content: JSON.stringify({
-					head: { verb: 'go_to', args: { target: 'EastGate' } },
-					then: {
-						join: 'then',
-						arc: { head: { verb: 'examine', args: { target: 'EastGate' } } },
-					},
-				}),
+				content: JSON.stringify({ steps: [{ verb: 'go_to', target: 'EastGate', then: 'always' }, { verb: 'examine', target: 'EastGate' }] }),
 				toolCalls: [],
 			}))
 			.withPriorityQueue({
@@ -991,7 +1057,7 @@ describe('ArcDirector', () => {
 		const seen:string[] = [];
 		const director = await new ArcDirector<Ctx>()
 			.addFakeInference(() => ({
-				content: JSON.stringify({ head: { verb: 'wait', args: {} } }),
+				content: JSON.stringify({ steps: [{ verb: 'wait' }] }),
 				toolCalls: [],
 			}))
 			.withPriorityQueue({
@@ -1086,7 +1152,7 @@ describe('withNames', () => {
 		const director = await new ArcDirector<Ctx>()
 			.withPriorityQueue({ processInterval: 0, watchInterval: 0, heartbeatStart: 0.01, heartbeatMin: 0.01 })
 			.addFakeInference(() => ({ content: 'go_to(Stranger2)', toolCalls: [] }))
-			.withArcText(true)
+			.withArcFormat('text')
 			.addStockVerbs()
 			.onVerb((call) => {
 				calls.push(call);
@@ -1130,7 +1196,7 @@ describe('withNames', () => {
 				prompts.push(String(req.messages.at(-1)?.content ?? ''));
 				return { content: prompts.length === 1 ? law : 'wait(seconds=5)', toolCalls: [] };
 			})
-			.withArcText(true)
+			.withArcFormat('text')
 			.addStockVerbs()
 			.withKernels((ctx) => ({
 				me: dummyEntity(ctx.id, { tags: ['agent'] }),
@@ -1178,7 +1244,7 @@ describe('withNames', () => {
 					: user.includes('nope() is not a watch function') ? 'law(watch=not(1 > 2), arc=examine(Ash), name=always)' : 'wait(seconds=5)';
 				return { content, toolCalls: [] };
 			})
-			.withArcText(true)
+			.withArcFormat('text')
 			.addStockVerbs()
 			.withKernels((ctx) => ({ me: dummyEntity(ctx.id), others: [dummyEntity('Ash')], items: [] }))
 			.onVerb((call) => {
@@ -1212,7 +1278,7 @@ describe('host verbs', () => {
 				content: 'go_to(others.filter("enemy")) ; wait(seconds=2) ; examine(Brune)',
 				toolCalls: [],
 			}))
-			.withArcText(true)
+			.withArcFormat('text')
 			.addStockVerbs()
 			.withKernels((ctx) => ({
 				me: dummyEntity(ctx.id, { tags: ['agent'] }),
@@ -1248,7 +1314,7 @@ describe('host verbs', () => {
 			.withPriorityQueue({ processInterval: 0, watchInterval: 0, heartbeatStart: 100, heartbeatMin: 100 })
 			.addModel('fake', { maxParallel: 1 })
 			.addFakeInference(() => ({ content: 'wander(until=some(others.filter("Mushroom")))', toolCalls: [] }))
-			.withArcText(true)
+			.withArcFormat('text')
 			.addStockVerbs()
 			.withKernels((ctx, point) => ({
 				me: dummyEntity(ctx.id, { tags: ['agent'] }),
@@ -1420,7 +1486,7 @@ describe('choose', () => {
 		assert.match(choiceState({ id: 'Guard', verb: '', catalog, names }), /Nearest: Wim, 1 away, ahead\./);
 		assert.doesNotMatch(choiceState({ id: 'Guard', verb: '', catalog, names: ['Wim'] }), /Nearest/, 'a choice already names it');
 		const aimed = withTargets(parseArcText('go_to(others.minBy(u => distance(me, u)))', verbs), verbs, catalog);
-		assert.equal(aimed?.head.args.target, 'Wim');
+		assert.equal(aimed?.[0].args.target, 'Wim');
 		assert.equal(withTargets(parseArcText('go_to(others.filter("dragon").minBy(u => u.hp))', verbs), verbs, catalog), undefined, 'picks no one: cannot run now');
 	});
 

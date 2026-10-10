@@ -31,8 +31,9 @@ export function extractJson(text:string):unknown {
 
 type Frame = '{' | '[';
 
+/** The object in `body`, or the list when `body` opens with one; closed where the model cut it off. */
 function parseLooseObject(body:string):unknown {
-	const start = body.indexOf('{');
+	const start = body.startsWith('[') ? 0 : body.indexOf('{');
 	if (start < 0) {
 		throw new Error('no JSON object in model output');
 	}
@@ -72,12 +73,7 @@ function parseLooseObject(body:string):unknown {
 				break;
 			}
 			if (stack.length === 0) {
-				const first = body.slice(start, i + 1);
-				const rest = body.slice(i + 1);
-				if (/^\s*,\s*"then"/.test(rest)) {
-					return parseLooseObject(first.slice(0, -1) + rest);
-				}
-				return JSON.parse(first);
+				return JSON.parse(body.slice(start, i + 1));
 			}
 		}
 	}

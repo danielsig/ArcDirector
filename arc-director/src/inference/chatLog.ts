@@ -85,11 +85,28 @@ function fence(text:string):string {
 	return `${marks}\n${text}\n${marks}`;
 }
 
-/** Wire/request dump: JSON minus message bodies, bodies in fences, last data-URL as `image`. */
+/** A response-format schema is kilobytes of grammar, so the log shows its name: wire `response_format` or raw `responseFormat`. */
+function schemaNamed(payload:unknown):unknown {
+	if (!isRecord(payload)) {
+		return payload;
+	}
+	const out:Record<string, unknown> = { ...payload };
+	const wire = out['response_format'];
+	if (isRecord(wire) && isRecord(wire['json_schema']) && typeof wire['json_schema'].name === 'string') {
+		out['response_format'] = wire['json_schema'].name;
+	}
+	const raw = out['responseFormat'];
+	if (isRecord(raw) && typeof raw.name === 'string') {
+		out['responseFormat'] = raw.name;
+	}
+	return out;
+}
+
+/** Wire/request dump: JSON minus message bodies, bodies in fences, schemas by name, last data-URL as `image`. */
 export function formatChatLog(payload:unknown):{ message:string; image?:string } {
 	const blocks:string[] = [];
 	const image = findImage(payload);
-	const json = JSON.stringify(stripContents(payload, blocks));
+	const json = JSON.stringify(stripContents(schemaNamed(payload), blocks));
 	const message = blocks.length > 0 ? `${json}\n${blocks.map(fence).join('\n')}` : json;
 	return image ? { message, image } : { message };
 }

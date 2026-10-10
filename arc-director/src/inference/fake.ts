@@ -1,4 +1,3 @@
-import { extractJson, isRecord } from '../json.js';
 import { chatContentText, type ChatRequest, type ChatResponse, type InferenceProvider } from './provider.js';
 
 export type FakeChatFn = (req:ChatRequest)=>ChatResponse | Promise<ChatResponse>;
@@ -49,16 +48,10 @@ export function goToNamedInteractable():FakeChatFn {
 		const names = text.match(/\b[A-Z][A-Za-z0-9]+(?:[A-Z][A-Za-z0-9]+)+\b/g) ?? [];
 		const name = names.find((n) => n !== 'Arc') ?? 'EastGate';
 		return {
-			content: JSON.stringify({
-				head: { verb: 'go_to', args: { target: name } },
-			}),
+			content: JSON.stringify({ steps: [{ verb: 'go_to', target: name }] }),
 			toolCalls: [],
 		};
 	};
-}
-
-export function parseFakeArc(content:string):unknown {
-	return extractJson(content);
 }
 
 export function hashEmbed(text:string, dims = 8):number[] {
@@ -72,8 +65,4 @@ export function hashEmbed(text:string, dims = 8):number[] {
 	}
 	const s = Math.sqrt(n) || 1;
 	return vec.map((v) => v / s);
-}
-
-export function isRecordUnknown(v:unknown):v is Record<string, unknown> {
-	return isRecord(v);
 }

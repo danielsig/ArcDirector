@@ -3,6 +3,7 @@ import {
 	HttpProvider,
 	STOCK_VERBS,
 	VerbRegistry,
+	arcSteps,
 	formatArc,
 	goToNamedInteractable,
 	registerStockVerbs,
@@ -30,33 +31,10 @@ function perception():{ senses:Record<string, Sense<FixtureCtx>>; tools:Record<s
 	};
 }
 
-function eachArc(arc:Arc, visit:(p:Arc)=>void):void {
-	visit(arc);
-	if (arc.group) {
-		eachArc(arc.group, visit);
-	}
-	if (arc.then) {
-		eachArc(arc.then.arc, visit);
-	}
-}
-
 function isValidGoTo(arc:Arc):boolean {
-	let ok = false;
-	eachArc(arc, (p) => {
-		const head = p.head;
-		if (!head) {
-			return;
-		}
-		if (head.verb === 'go_to' && typeof head.args.target === 'string' && NAMES.has(head.args.target)) {
-			ok = true;
-		}
-		for (const key of Object.keys(head.args)) {
-			if (key === 'x' || key === 'z' || key === 'y') {
-				ok = false;
-			}
-		}
-	});
-	return ok;
+	const steps = arcSteps(arc);
+	const coordinates = steps.some((step) => Object.keys(step.args).some((key) => key === 'x' || key === 'z' || key === 'y'));
+	return !coordinates && steps.some((step) => step.verb === 'go_to' && typeof step.args.target === 'string' && NAMES.has(step.args.target));
 }
 
 async function makeProvider():Promise<{ provider:InferenceProvider; mock:boolean; baseURL:string }> {

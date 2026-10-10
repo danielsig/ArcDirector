@@ -1,6 +1,9 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { parseArc, parseArcText, formatArc } from '../arc/parse.js';
+import { parseArcText, formatArc } from '../arc/parse.js';
+import { chatContentText } from '../inference/provider.js';
+import { parseArc } from '../arc/wire.js';
+import { isArc, type Arc } from '../arc/types.js';
 import { VerbRegistry, registerStockVerbs, STOCK_VERBS } from '../arc/stock-verbs.js';
 import { dummyEntity } from '../expr/natives.js';
 import {
@@ -137,7 +140,7 @@ async function hangingDawn():Promise<{
 		release = resolve;
 	});
 	const director = await new ArcDirector<Ctx>()
-		.withArcText(true)
+		.withArcFormat('text')
 		.addFakeInference(async () => {
 			await hang;
 			return { content: 'go_to(Keep)', toolCalls: [] };
@@ -297,19 +300,13 @@ describe('issue(who)', () => {
 			+ '; issue(who=units.filter("Guard"), arc=go_to(Tomas) && give(item=Loaf, to=Tomas))',
 			registry,
 		);
-		assert.equal(arc.head?.verb, 'issue');
-		assert.equal(arc.head?.args.who, 'units.filter("Loaf").filter(u => !u.busy)');
-		assert.equal(typeof arc.head?.args.arc, 'object');
-		assert.ok(arc.head?.args.arc && typeof arc.head.args.arc === 'object' && 'head' in arc.head.args.arc);
-		const inner = arc.head.args.arc as { head:{ verb:string }; then?:{ arc:{ head:{ verb:string } } } };
-		assert.equal(inner.head.verb, 'go_to');
-		assert.equal(arc.then?.arc.head?.verb, 'issue');
-		const second = arc.then!.arc.head!.args.arc as {
-			head:{ verb:string };
-			then?:{ arc:{ head:{ verb:string; args:Record<string, unknown> } } };
-		};
-		assert.equal(second.head.verb, 'go_to');
-		assert.equal(second.then?.arc.head.verb, 'give');
+		assert.equal(arc[0].verb, 'issue');
+		assert.equal(arc[0].args.who, 'units.filter("Loaf").filter(u => !u.busy)');
+		assert.equal(isArc(arc[0].args.arc), true);
+		assert.deepEqual((arc[0].args.arc as Arc).map((step) => step.verb), ['go_to']);
+		assert.equal(arc[1].verb, 'issue');
+		assert.equal(arc[0].then, 'always');
+		assert.deepEqual((arc[1].args.arc as Arc).map((step) => step.verb), ['go_to', 'give']);
 		assert.match(formatArc(arc), /issue\(/);
 	});
 
@@ -914,7 +911,7 @@ describe('transfers', () => {
 		});
 		const director = await new ArcDirector<Ctx>()
 			.addFakeInference(() => ({ content: 'wait()', toolCalls: [] }))
-			.withArcText(true)
+			.withArcFormat('text')
 			.addStockVerbs()
 			.addStockCollectiveVerbs()
 			.withDefaultKit(COLLECTIVE_KIT)
@@ -1247,7 +1244,7 @@ describe('a collective with no commander', () => {
 		assert.equal(offered.has('say'), false);
 		assert.ok(offered.has('wait') && offered.has('issue'));
 		const arc = parseArc('issue(who=units, arc=go_to(Keep))', offered);
-		assert.equal(arc.head.verb, 'issue');
+		assert.equal(arc[0].verb, 'issue');
 		hive.commander = hive.character('Mira')!;
 		assert.ok(hive.activeVerbs().has('go_to'));
 		director.dispose();
@@ -1259,6 +1256,46 @@ describe('a collective with no commander', () => {
 		await hive.enact(parseArc('tag(who=units.filter("Mira"), name=Guard)', hive.verbs));
 		const mira = hive.promptSection(hive.mind).split('\n').find((line) => line.startsWith('- Mira'));
 		assert.equal(mira?.match(/Guard/g)?.length, 1);
+		director.dispose();
+	});
+});
+
+describe('a collective under arcFormat schema', () => {
+	it('sends the same reply schema string as a character, and issues JSON', async () => {
+		const sent:Record<string, string> = {};
+		const prompts:string[] = [];
+		const director = await new ArcDirector<Ctx>()
+			.withArcFormat('schema')
+			.addFakeInference((req) => {
+				sent[req.thread ?? '?'] = JSON.stringify(req.responseFormat);
+				prompts.push(chatContentText(req.messages[0].content));
+				return { content: JSON.stringify({ steps: [{ verb: 'wait' }] }), toolCalls: [] };
+			})
+			.addStockVerbs()
+			.addStockCollectiveVerbs()
+			.withDefaultKit(COLLECTIVE_KIT)
+			.withKernels(kernels())
+			.onVerb((call) => ({ ok: true, verb: call.verb }))
+			.withContext((id) => ({ id }))
+			.addCollective({
+				id: 'DawnParty',
+				mind: { skipHeartbeat: true },
+				kit: COLLECTIVE_KIT,
+				commander: 'Dawn',
+				identity: { role: 'Leads.' },
+				characters: [{ id: 'Dawn' }, { id: 'Wisp' }],
+			})
+			.addCharacter({ id: 'Tom', mind: { skipHeartbeat: true }, kit: { verbs: ['wait', 'go_to'] }, identity: { role: 'Walks.' } })
+			.start();
+		await Promise.all([director.collective('DawnParty')!.mind.thinkNow({ enact: false }), director.character('Tom')!.mind!.thinkNow({ enact: false })]);
+		assert.deepEqual(Object.keys(sent).sort(), ['DawnParty', 'Tom']);
+		assert.equal(sent.DawnParty, sent.Tom);
+		assert.match(sent.DawnParty, /^\{"name":"reply","schema":/);
+		const party = prompts.find((text) => text.includes('issue(who, arc)'));
+		assert.ok(party);
+		assert.match(party, /Once you know enough, emit only the Arc JSON, \{"steps":\[…\]\}/);
+		assert.match(party, /recall and observe are tools, not verbs: reply with the tool call, never in the steps\./);
+		assert.match(party, /Give each issue as a step of its own/);
 		director.dispose();
 	});
 });

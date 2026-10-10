@@ -1,9 +1,8 @@
 import { evaluate } from '../expr/eval.js';
 import { entityName, type Catalog, type ExprEntity } from '../expr/types.js';
 import { argBase, type VerbRegistry } from '../arc/stock-verbs.js';
-import { isArc } from '../arc/validate.js';
 import { formatArc } from '../arc/parse.js';
-import type { Arc } from '../arc/types.js';
+import { eachStep, isArc, verbsInside, type Arc, type Step } from '../arc/types.js';
 import type { LastChoice } from '../arc/run.js';
 
 /** What a System One model reads before it picks: who is choosing, what it is doing, and who is nearest. */
@@ -103,11 +102,23 @@ export function targetNotes(arcs:Arc[], verbs:VerbRegistry, catalog:Catalog):str
  * when its first step's expression picks no one: that choice cannot run now. A later step's stays as written.
  */
 export function withTargets(arc:Arc, verbs:VerbRegistry, catalog:Catalog, first = true):Arc | undefined {
-	const kinds = verbs.get(arc.head.verb)?.args ?? {};
-	const args = { ...arc.head.args };
+	const aimed:Arc = [];
+	for (const [i, step] of arc.entries()) {
+		const next = aimStep(step, verbs, catalog, first && i === 0);
+		if (!next) {
+			return undefined;
+		}
+		aimed.push(next);
+	}
+	return aimed;
+}
+
+function aimStep(step:Step, verbs:VerbRegistry, catalog:Catalog, first:boolean):Step | undefined {
+	const kinds = verbs.get(step.verb)?.args ?? {};
+	const args = { ...step.args };
 	for (const [key, value] of Object.entries(args)) {
 		if (isArc(value)) {
-			const inner = withTargets(value, verbs.nested(), catalog, first);
+			const inner = withTargets(value, verbsInside(step, verbs), catalog, first);
 			if (!inner) {
 				return undefined;
 			}
@@ -121,40 +132,21 @@ export function withTargets(arc:Arc, verbs:VerbRegistry, catalog:Catalog, first 
 			args[key] = target ? entityName(target) : value;
 		}
 	}
-	const group = arc.group && withTargets(arc.group, verbs, catalog, first);
-	if (arc.group && !group) {
-		return undefined;
-	}
-	return {
-		...arc,
-		head: { ...arc.head, args },
-		...(group ? { group } : {}),
-		...(arc.then ? { then: { join: arc.then.join, arc: withTargets(arc.then.arc, verbs, catalog, false)! } } : {}),
-	};
+	return { ...step, args };
 }
 
 /** Every `id` arg in `arcs`, nested arcs too, in the order written. */
 export function namesIn(arcs:Arc[], verbs:VerbRegistry):string[] {
 	const out = new Set<string>();
-	const walk = (arc:Arc, catalog:VerbRegistry):void => {
-		if (arc.group) {
-			walk(arc.group, catalog);
-		}
-		const kinds = catalog.get(arc.head.verb)?.args ?? {};
-		for (const [key, value] of Object.entries(arc.head.args)) {
-			if (isArc(value)) {
-				walk(value, catalog.nested());
-			}
-			else if (argBase(kinds[key]) === 'id' && typeof value === 'string' && /^[A-Za-z_]\w*$/.test(value)) {
-				out.add(value);
-			}
-		}
-		if (arc.then) {
-			walk(arc.then.arc, catalog);
-		}
-	};
 	for (const arc of arcs) {
-		walk(arc, verbs);
+		eachStep(arc, verbs, (step, registry) => {
+			const kinds = registry.get(step.verb)?.args ?? {};
+			for (const [key, value] of Object.entries(step.args)) {
+				if (argBase(kinds[key]) === 'id' && typeof value === 'string' && /^[A-Za-z_]\w*$/.test(value)) {
+					out.add(value);
+				}
+			}
+		});
 	}
 	return [...out];
 }

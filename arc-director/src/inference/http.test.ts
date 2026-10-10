@@ -79,7 +79,7 @@ describe('HttpProvider thinking', () => {
 			model,
 			catalogWithReasoning(model, ['off', 'on']),
 		);
-		assert.equal(body.reasoning, 'on');
+		assert.equal(body['reasoning_effort'], 'medium');
 		assert.equal(body['max_tokens'], 4096);
 	});
 
@@ -114,10 +114,10 @@ describe('HttpProvider thinking', () => {
 			messages: [{ role: 'user', content: 'hi' }],
 		});
 		assert.equal(res.content, '{"ok":true}');
-		assert.equal(bodies[0]?.reasoning, 'on');
+		assert.equal(bodies[0]?.['reasoning_effort'], 'medium');
 		assert.equal(bodies[0]?.['max_tokens'], 4096);
-		assert.equal(bodies[1]?.reasoning, 'off');
-		assert.equal(bodies[1]?.['max_tokens'], 256);
+		assert.equal(bodies[1]?.['reasoning_effort'], 'none', 'the retry still sends an effort, off, rather than dropping it');
+		assert.equal(bodies[1]?.['max_tokens'], 512);
 	});
 
 	it('think-off no_think prefixes /no_think and prefills', async () => {
@@ -220,7 +220,7 @@ describe('HttpProvider thinking', () => {
 			enableThinking: true,
 			maxTokens: 384,
 		}, model);
-		assert.equal(body.reasoning, undefined);
+		assert.equal(body['reasoning_effort'], undefined);
 	});
 
 	it('sends reasoning low when the listed model allows low', async () => {
@@ -229,8 +229,8 @@ describe('HttpProvider thinking', () => {
 			enableThinking: true,
 			maxTokens: 384,
 		}, model, catalogWithReasoning(model, ['off', 'on', 'low', 'medium', 'high']));
-		assert.equal(body.reasoning, 'low');
 		assert.equal(body['reasoning_effort'], 'low');
+		assert.equal(body.reasoning, undefined, 'chat completions ignores a bare reasoning option');
 		assert.equal(body['enable_thinking'], undefined);
 		assert.deepEqual(body['chat_template_kwargs'], { reasoning_strength: 'low' });
 	});
@@ -240,7 +240,7 @@ describe('HttpProvider thinking', () => {
 		const body = await captureBody({
 			maxTokens: 384,
 		}, model, catalogWithReasoning(model, ['off', 'on', 'low', 'medium', 'high']));
-		assert.equal(body.reasoning, 'off');
+		assert.equal(body['reasoning_effort'], 'none');
 		const messages = body.messages as Array<{ role?:string; content?:string }>;
 		assert.equal(messages.at(-1)?.role, 'assistant');
 		assert.equal(messages.at(-1)?.content, EMPTY_THINK_PREFILL);
@@ -263,7 +263,7 @@ describe('HttpProvider thinking', () => {
 			enableThinking: true,
 			maxTokens: 384,
 		}, model, catalogWithReasoning(model, ['off', 'on', 'low', 'medium', 'high']), { fakeThought: true });
-		assert.equal(body.reasoning, 'low');
+		assert.equal(body['reasoning_effort'], 'low');
 		const messages = body.messages as Array<{ role?:string; content?:string }>;
 		assert.equal(messages.at(-1)?.role, 'assistant');
 		assert.equal(messages.at(-1)?.content, `<redacted_thinking>\n${DONE_THOUGHT}\n</redacted_thinking>`);
@@ -275,7 +275,7 @@ describe('HttpProvider thinking', () => {
 			enableThinking: true,
 			maxTokens: 384,
 		}, model, catalogWithReasoning(model, ['off', 'on', 'low', 'medium', 'high']), { enableThinking: false });
-		assert.equal(body.reasoning, 'off');
+		assert.equal(body['reasoning_effort'], 'none');
 		const messages = body.messages as Array<{ role?:string; content?:string }>;
 		assert.equal(messages.at(-1)?.role, 'assistant');
 		assert.equal(messages.at(-1)?.content, EMPTY_THINK_PREFILL);
@@ -311,7 +311,7 @@ describe('HttpProvider thinking', () => {
 			},
 		}, model, catalogWithReasoning(model, ['off', 'on', 'low', 'medium', 'high']), { fakeThought: true });
 		const messages = body.messages as Array<{ role?:string; content?:string }>;
-		assert.equal(body.reasoning, 'low');
+		assert.equal(body['reasoning_effort'], 'low');
 		assert.equal(messages.at(-1)?.role, 'assistant');
 		assert.equal(messages.at(-1)?.content, `<think>\n${DONE_THOUGHT}\n</think>${header}`);
 		clearAssistantThinkCache();
@@ -323,7 +323,7 @@ describe('HttpProvider thinking', () => {
 			enableThinking: true,
 			maxTokens: 384,
 		}, model, catalogWithReasoning(model, ['off', 'on']));
-		assert.equal(body.reasoning, 'on');
+		assert.equal(body['reasoning_effort'], 'medium');
 	});
 
 	it('does not send reasoning off when the model only allows on', async () => {
@@ -331,7 +331,7 @@ describe('HttpProvider thinking', () => {
 		const body = await captureBody({
 			maxTokens: 384,
 		}, model, catalogWithReasoning(model, ['on']));
-		assert.equal(body.reasoning, undefined);
+		assert.equal(body['reasoning_effort'], undefined);
 	});
 
 	it('sends reasoning low on the responses API as an effort object when the catalog allows it', async () => {
@@ -1236,11 +1236,16 @@ describe('loadConfigFits', () => {
 		}, { parallel: 2 }), false);
 	});
 
-	it('rejects a different echoed context length', () => {
+	it('accepts only the configured context length', () => {
 		assert.equal(loadConfigFits({
 			flash_attention: true,
 			offload_kv_cache_to_gpu: true,
 			context_length: 4096,
+		}, { contextLength: 8192 }), false);
+		assert.equal(loadConfigFits({
+			flash_attention: true,
+			offload_kv_cache_to_gpu: true,
+			context_length: 16384,
 		}, { contextLength: 8192 }), false);
 		assert.equal(loadConfigFits({
 			flash_attention: true,
@@ -1347,6 +1352,13 @@ describe('response format', () => {
 		await provider.chat({ model: 'm', messages: [{ role: 'user', content: 'pong' }], responseFormat: format });
 		assert.deepEqual(urls.filter((url) => /responses|completions/.test(url)), ['http://127.0.0.1:9/v1/chat/completions']);
 		assert.deepEqual(body?.response_format, { type: 'json_schema', json_schema: format });
+	});
+
+	it('does not count the schema as prompt when clamping max_tokens to the slot', async () => {
+		const catalog = { models: [{ key: 'm', loaded_instances: [{ id: 'm', config: { context_length: 4096 } }] }] };
+		const maxTokens = (responseFormat:typeof format) => captureBody({}, 'm', catalog, { maxTokens: 4096, responseFormat });
+		const big = { ...format, schema: { type: 'object', description: 'x'.repeat(10_000) } };
+		assert.equal((await maxTokens(big))['max_tokens'], (await maxTokens(format))['max_tokens']);
 	});
 });
 
@@ -1518,6 +1530,116 @@ describe('configured models', () => {
 		provider.configureModel('laya', {});
 		await provider.ensureLoaded('laya');
 		assert.deepEqual(posts.map((p) => p.path), ['unload', 'load']);
+	});
+
+	it('reloads an idle instance onto the configured context', async () => {
+		const posts:{ path:string; context?:number }[] = [];
+		let context = 16384;
+		const provider = new HttpProvider({
+			baseURL: 'http://127.0.0.1:9/v1',
+			fetch: async (input, init) => {
+				const url = String(input);
+				if (url.endsWith('/api/v1/models') && init?.method !== 'POST') {
+					const models = [{ key: 'npc', max_context_length: 131072, loaded_instances: context ? [{ id: 'npc', config: { context_length: context } }] : [] }];
+					return new Response(JSON.stringify({ models }), { status: 200 });
+				}
+				const body = JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>;
+				const path = url.replace(/^.*\/api\/v1\/models\//, '');
+				posts.push(typeof body.context_length === 'number' ? { path, context: body.context_length } : { path });
+				if (path === 'unload') {
+					context = 0;
+				}
+				if (path === 'load') {
+					context = Number(body.context_length);
+					return new Response(JSON.stringify({ instance_id: 'npc', load_config: { context_length: context } }), { status: 200 });
+				}
+				return new Response('{}', { status: 200 });
+			},
+		});
+		provider.configureModel('npc', { contextLength: 8192 });
+		await provider.ensureLoaded('npc');
+		assert.deepEqual(posts, [{ path: 'unload' }, { path: 'load', context: 8192 }]);
+	});
+
+	it('keeps the configured context and unloads a larger idle copy', async () => {
+		const unloaded:string[] = [];
+		const provider = new HttpProvider({
+			baseURL: 'http://127.0.0.1:9/v1',
+			fetch: async (input, init) => {
+				const url = String(input);
+				if (url.endsWith('/api/v1/models') && init?.method !== 'POST') {
+					return new Response(JSON.stringify({
+						models: [{
+							key: 'npc',
+							loaded_instances: [
+								{ id: 'npc', config: { context_length: 8192, flash_attention: true } },
+								{ id: 'npc:2', config: { context_length: 65536, flash_attention: true } },
+							],
+						}],
+					}), { status: 200 });
+				}
+				if (url.includes('/models/unload')) {
+					unloaded.push(String(JSON.parse(String(init?.body)).instance_id));
+					return new Response(JSON.stringify({ instance_id: unloaded.at(-1) }), { status: 200 });
+				}
+				return new Response('should not load', { status: 500 });
+			},
+		});
+		provider.configureModel('npc', { contextLength: 8192 });
+		await provider.ensureLoaded('npc');
+		assert.deepEqual(unloaded, ['npc:2']);
+	});
+
+	it('does not unload a different context while a chat is in flight', async () => {
+		let context = 8192;
+		let chats = 0;
+		let release:()=>void = () => undefined;
+		const gate = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		const unloaded:string[] = [];
+		const provider = new HttpProvider({
+			baseURL: 'http://127.0.0.1:9/v1',
+			fetch: async (input, init) => {
+				const url = String(input);
+				if (url.endsWith('/api/v1/models') && init?.method !== 'POST') {
+					return new Response(JSON.stringify({
+						models: [{
+							key: 'npc',
+							max_context_length: 131072,
+							loaded_instances: [{ id: 'npc', config: { context_length: context, flash_attention: true, offload_kv_cache_to_gpu: true, eval_batch_size: 512 } }],
+						}],
+					}), { status: 200 });
+				}
+				if (url.includes('/models/unload')) {
+					unloaded.push(String(JSON.parse(String(init?.body)).instance_id));
+					context = 0;
+					return new Response(JSON.stringify({ instance_id: 'npc' }), { status: 200 });
+				}
+				if (url.includes('/models/load')) {
+					context = Number(JSON.parse(String(init?.body)).context_length);
+					return new Response(JSON.stringify({ instance_id: 'npc', load_config: { context_length: context } }), { status: 200 });
+				}
+				chats += 1;
+				await gate;
+				return new Response(JSON.stringify({ choices: [{ message: { content: 'ok' } }] }), { status: 200 });
+			},
+		});
+		provider.configureModel('npc', { contextLength: 8192 });
+		const first = provider.chat({ model: 'npc', messages: [{ role: 'user', content: 'hi' }] });
+		while (chats < 1) {
+			await new Promise((resolve) => setTimeout(resolve, 5));
+		}
+		provider.configureModel('npc', { contextLength: 65536 });
+		const second = provider.chat({ model: 'npc', messages: [{ role: 'user', content: 'next' }] });
+		while (chats < 2) {
+			await new Promise((resolve) => setTimeout(resolve, 5));
+		}
+		assert.deepEqual(unloaded, []);
+		release();
+		await Promise.all([first, second]);
+		await provider.ensureLoaded('npc');
+		assert.deepEqual(unloaded, ['npc']);
 	});
 
 	it('keeps a model loaded at the most context it takes when more is asked for', async () => {

@@ -1,5 +1,5 @@
 import type { Arc } from './types.js';
-import { arcArg } from './parse.js';
+import { arcArg } from './wire.js';
 import type { VerbRegistry } from './stock-verbs.js';
 
 /** A standing reaction: while `watch` holds, the runner drops what it is doing and runs `arc`. */

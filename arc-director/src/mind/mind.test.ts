@@ -2,11 +2,11 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { STOCK_VERBS, VerbRegistry, registerStockVerbs } from '../arc/stock-verbs.js';
 import { FakeProvider, goToNamedInteractable, hashEmbed } from '../inference/fake.js';
-import { chatContentText } from '../inference/provider.js';
+import { chatContentText, type ChatRequest } from '../inference/provider.js';
 import { formatSight, formatSightClauses } from '../perception/sight.js';
 import type { SeenObject } from '../perception/types.js';
 import { soloCharacter, type SoloOptions } from '../testing/solo.js';
-import { conversationCapFor, mindFields } from './mind.js';
+import { mindFields } from './mind.js';
 import { CONVERSATION_HEADER } from './prompt.js';
 import type { Character, CharacterJSON } from '../character/character.js';
 
@@ -117,8 +117,8 @@ describe('Agent', () => {
 		});
 		const arc = await agent.mind!.tick(1);
 		assert.ok(arc);
-		assert.equal(arc.head.verb, 'go_to');
-		assert.equal(arc.head.args.target, 'EastGate');
+		assert.equal(arc[0].verb, 'go_to');
+		assert.equal(arc[0].args.target, 'EastGate');
 
 		const json = agent.toJSON();
 		const restored = restore(json, {
@@ -194,8 +194,8 @@ describe('Agent', () => {
 		await agent.mind!.remember('EastGate is the door in the east wall', ['gate', 'EastGate'], 0);
 		const arc = await agent.mind!.tick(1);
 		assert.equal(sawRecall, true);
-		assert.equal(arc?.head.verb, 'go_to');
-		assert.equal(arc?.head.args.target, 'EastGate');
+		assert.equal(arc?.[0].verb, 'go_to');
+		assert.equal(arc?.[0].args.target, 'EastGate');
 	});
 
 	it('recalls a speech line only after it leaves the conversation', async () => {
@@ -203,7 +203,7 @@ describe('Agent', () => {
 		const provider = new FakeProvider((req) => {
 			users.push(String(req.messages[req.messages.length - 1]?.content ?? ''));
 			return {
-				content: JSON.stringify({ head: { verb: 'wait', args: { seconds: 1 } } }),
+				content: JSON.stringify({ steps: [{ verb: 'wait', seconds: 1 }] }),
 				toolCalls: [],
 			};
 		});
@@ -220,7 +220,7 @@ describe('Agent', () => {
 			toolRoundCap: 0,
 			arcRetryCap: 0,
 			strategicInterval: 0,
-			conversationCap: 10,
+			conversationCap: 160,
 		});
 		agent.mind!.pushEvent(heard('BridgeKeeper', 'The bridge fee is FireMushroom.', ['Forager']));
 		await agent.mind!.tick(1);
@@ -246,7 +246,7 @@ describe('Agent', () => {
 		const provider = new FakeProvider((req) => {
 			users.push(String(req.messages[req.messages.length - 1]?.content ?? ''));
 			return {
-				content: JSON.stringify({ head: { verb: 'wait', args: { seconds: 1 } } }),
+				content: JSON.stringify({ steps: [{ verb: 'wait', seconds: 1 }] }),
 				toolCalls: [],
 			};
 		});
@@ -296,7 +296,7 @@ describe('Agent', () => {
 			assert.equal(req.messages.some((m) => m.role === 'assistant' && String(m.content).includes('"nope"')), true);
 			assert.equal(req.messages.some((m) => m.role === 'user' && String(m.content).includes('EastGate')), true);
 			return {
-				content: JSON.stringify({ head: { verb: 'go_to', args: { target: 'EastGate' } } }),
+				content: JSON.stringify({ steps: [{ verb: 'go_to', target: 'EastGate' }] }),
 				toolCalls: [],
 			};
 		});
@@ -314,8 +314,8 @@ describe('Agent', () => {
 		});
 		const arc = await agent.mind!.tick(1);
 		assert.equal(calls, 2);
-		assert.equal(arc?.head.verb, 'go_to');
-		assert.equal(arc?.head.args.target, 'EastGate');
+		assert.equal(arc?.[0].verb, 'go_to');
+		assert.equal(arc?.[0].args.target, 'EastGate');
 	});
 
 	it('does not keep verb-less prose on the repair thread', async () => {
@@ -341,12 +341,12 @@ describe('Agent', () => {
 			model: 'fake',
 			toolRoundCap: 0,
 			arcRetryCap: 2,
-			arcText: true,
+			arcFormat: 'text',
 		});
 		const arc = await agent.mind!.tick(1);
 		assert.equal(calls, 2);
-		assert.equal(arc?.head.verb, 'go_to');
-		assert.equal(arc?.head.args.target, 'EastGate');
+		assert.equal(arc?.[0].verb, 'go_to');
+		assert.equal(arc?.[0].args.target, 'EastGate');
 	});
 
 	it('runs a tool written as text where the Arc goes, and keeps an Arc written beside one', async () => {
@@ -367,12 +367,12 @@ describe('Agent', () => {
 			model: 'fake',
 			toolRoundCap: 2,
 			arcRetryCap: 0,
-			arcText: true,
+			arcFormat: 'text',
 		});
 		const arc = await agent.mind!.tick(1);
 		assert.match(lasts[1] ?? '', /Those were tools written as text; they ran anyway:\nrecall: /);
 		assert.equal(lasts.length, 2, 'the Arc beside a written tool is taken without another turn');
-		assert.deepEqual(arc?.head, { verb: 'go_to', args: { target: 'EastGate' } });
+		assert.deepEqual(arc?.[0], { verb: 'go_to', args: { target: 'EastGate' } });
 	});
 
 	it('warns when the same output comes back twice in a row, and again after that', async () => {
@@ -400,14 +400,14 @@ describe('Agent', () => {
 			heartbeat: 0,
 			toolRoundCap: 0,
 			arcRetryCap: 0,
-			arcText: true,
+			arcFormat: 'text',
 		});
 		const first = await agent.mind!.tick(1);
-		assert.equal(first?.head.args.target, 'EastGate');
+		assert.equal(first?.[0].args.target, 'EastGate');
 		const insisted = await agent.mind!.tick(2);
-		assert.equal(insisted?.head.args.target, 'EastGate');
+		assert.equal(insisted?.[0].args.target, 'EastGate');
 		const third = await agent.mind!.tick(3);
-		assert.equal(third?.head.args.target, 'Well');
+		assert.equal(third?.[0].args.target, 'Well');
 		assert.match(warnings[0] ?? '', /twice in a row/);
 		assert.match(warnings[1] ?? '', /3 times in a row/);
 	});
@@ -430,12 +430,12 @@ describe('Agent', () => {
 			heartbeat: 0,
 			toolRoundCap: 0,
 			arcRetryCap: 0,
-			arcText: true,
+			arcFormat: 'text',
 		});
 		await agent.mind!.tick(1);
 		agent.mind!.pushEvent({ kind: 'HeardSpeech', text: 'Mira: the gate is open' });
 		const again = await agent.mind!.tick(2);
-		assert.equal(again?.head.args.target, 'EastGate');
+		assert.equal(again?.[0].args.target, 'EastGate');
 		assert.equal(warned, false);
 	});
 
@@ -456,7 +456,7 @@ describe('Agent', () => {
 			toolRoundCap: 0,
 			arcRetryCap: 0,
 		});
-		await assert.rejects(() => agent.mind!.tick(1), /step is not an object|arc is not an object/);
+		await assert.rejects(() => agent.mind!.tick(1), /arc is not \{"steps"/);
 		assert.equal(calls, 1);
 	});
 
@@ -491,7 +491,7 @@ describe('Agent', () => {
 		});
 		const arc = await agent.mind!.tick(1);
 		assert.equal(sawToolError, true);
-		assert.equal(arc?.head.verb, 'go_to');
+		assert.equal(arc?.[0].verb, 'go_to');
 	});
 
 	it('refuses the same lookup again in a later think', async () => {
@@ -513,7 +513,7 @@ describe('Agent', () => {
 			context: () => ({ paragraph: paragraph() }),
 			model: 'fake',
 			heartbeat: 0,
-			arcText: true,
+			arcFormat: 'text',
 			toolRoundCap: 2,
 			arcRetryCap: 0,
 			strategicInterval: 0,
@@ -542,7 +542,7 @@ describe('Agent', () => {
 			context: () => ({ paragraph: paragraph() }),
 			model: 'fake',
 			heartbeat: 0,
-			arcText: true,
+			arcFormat: 'text',
 			toolRoundCap: 0,
 			arcRetryCap: 0,
 			strategicInterval: 0,
@@ -569,7 +569,7 @@ describe('Agent', () => {
 			context: () => ({ paragraph: paragraph() }),
 			model: 'fake',
 			heartbeat: 0,
-			arcText: true,
+			arcFormat: 'text',
 			toolRoundCap: 0,
 			arcRetryCap: 0,
 			strategicInterval: 0,
@@ -602,7 +602,7 @@ describe('Agent', () => {
 			context: () => ({ paragraph: paragraph() }),
 			model: 'fake',
 			heartbeat: 0,
-			arcText: true,
+			arcFormat: 'text',
 			toolRoundCap: 2,
 			arcRetryCap: 0,
 			strategicInterval: 0,
@@ -656,7 +656,7 @@ describe('Agent', () => {
 		});
 		const arc = await agent.mind!.tick(1);
 		assert.equal(runs, 1);
-		assert.equal(arc?.head.verb, 'go_to');
+		assert.equal(arc?.[0].verb, 'go_to');
 	});
 
 	it('turns a thrown tool handler into an error result on the thread', async () => {
@@ -698,7 +698,7 @@ describe('Agent', () => {
 			arcRetryCap: 0,
 		});
 		const arc = await agent.mind!.tick(1);
-		assert.equal(arc?.head.verb, 'go_to');
+		assert.equal(arc?.[0].verb, 'go_to');
 		assert.equal(calls, 2);
 	});
 
@@ -715,9 +715,7 @@ describe('Agent', () => {
 			calls += 1;
 			if (calls === 1) {
 				return {
-					content: JSON.stringify({
-						head: { verb: 'say', args: { text: 'Open the gate.', to: 'Guard' } },
-					}),
+					content: JSON.stringify({ steps: [{ verb: 'say', text: 'Open the gate.', to: 'Guard' }] }),
 					toolCalls: [],
 				};
 			}
@@ -727,7 +725,7 @@ describe('Agent', () => {
 			assert.match(String(last?.content), /did not happen/);
 			assert.match(String(last?.content), /Get closer to them first/);
 			return {
-				content: JSON.stringify({ head: { verb: 'go_to', args: { target: 'Guard' } } }),
+				content: JSON.stringify({ steps: [{ verb: 'go_to', target: 'Guard' }] }),
 				toolCalls: [],
 			};
 		});
@@ -746,8 +744,8 @@ describe('Agent', () => {
 		});
 		const arc = await agent.mind!.tick(1);
 		assert.equal(calls, 2);
-		assert.equal(arc?.head.verb, 'go_to');
-		assert.equal(arc?.head.args.target, 'Guard');
+		assert.equal(arc?.[0].verb, 'go_to');
+		assert.equal(arc?.[0].args.target, 'Guard');
 		assert.equal(spoke.length, 0);
 	});
 
@@ -774,6 +772,50 @@ describe('Agent', () => {
 		]);
 	});
 
+	it('keeps a two-character event in the conversation of a mind that controls one of them, then in memory', async () => {
+		const users:string[] = [];
+		const provider = new FakeProvider((req) => {
+			users.push(String(req.messages[req.messages.length - 1]?.content ?? ''));
+			return { content: JSON.stringify({ steps: [{ verb: 'wait', seconds: 1 }] }), toolCalls: [] };
+		});
+		const agentOf = (id:string) => soloCharacter<Ctx>({
+			id,
+			identity: { role: id },
+			goals: [{ text: 'FireMushroom changes hands', priority: 1 }],
+			provider,
+			...stockVerbs(),
+			...perception(),
+			context: () => ({ paragraph: paragraph() }),
+			model: 'fake',
+			heartbeat: 0,
+			toolRoundCap: 0,
+			arcRetryCap: 0,
+			strategicInterval: 0,
+		});
+		const given = { kind: 'Given', text: '{0} gave FireMushroom to {1}', who: ['Forager', 'BridgeKeeper'], tags: ['give'] };
+		const forager = agentOf('Forager');
+		const angler = agentOf('Angler');
+		forager.mind!.pushEvent(given);
+		angler.mind!.pushEvent(given);
+		await forager.mind!.thinkNow({ enact: false });
+		await angler.mind!.thinkNow({ enact: false });
+		const foragerPrompt = users[0] ?? '';
+		const anglerPrompt = users[1] ?? '';
+		assert.match(foragerPrompt, /Current Conversation[\s\S]*You gave FireMushroom to BridgeKeeper/);
+		assert.equal(foragerPrompt.includes('- You gave FireMushroom'), false);
+		assert.match(anglerPrompt, /- Forager gave FireMushroom to BridgeKeeper/);
+		assert.equal(anglerPrompt.includes('Current Conversation'), false);
+		assert.equal(forager.persona.memory.all().some((row) => row.text === 'You gave FireMushroom to BridgeKeeper'), true);
+		assert.doesNotMatch(foragerPrompt, /You remember:[\s\S]*gave FireMushroom/);
+		forager.mind!.conversationCap = 20;
+		forager.mind!.pushEvent({ kind: 'Note', text: 'z'.repeat(30), turn: { speakerID: 'Baker', text: 'z'.repeat(30) } });
+		users.length = 0;
+		await forager.mind!.thinkNow({ enact: false });
+		const later = users[0] ?? '';
+		assert.equal(later.split('You remember:')[0]?.includes('You gave FireMushroom'), false);
+		assert.match(later, /You remember:[\s\S]*You gave FireMushroom to BridgeKeeper/);
+	});
+
 	it('puts what it carries next to an item that was talked about', async () => {
 		const users:string[] = [];
 		let carried:ReturnType<typeof dummyEntity>[] = [];
@@ -790,7 +832,7 @@ describe('Agent', () => {
 			catalog: () => buildCatalog({ me: dummyEntity('me'), others: [], items: [], cache: new SampleCache(), inventory: (who) => (who.id === 'me' ? carried : []) }),
 			model: 'fake',
 			heartbeat: 0,
-			arcText: true,
+			arcFormat: 'text',
 			toolRoundCap: 0,
 			arcRetryCap: 0,
 			strategicInterval: 0,
@@ -806,10 +848,23 @@ describe('Agent', () => {
 		assert.equal((users[1] ?? '').includes('- Bridge'), false);
 	});
 
-	it('waits for an answer only after an arc that ends on a say', async () => {
-		const talk = new TalkNet({ inRange: () => true, others: () => ['Forager'] });
-		const arcs = ['say(text=Very well, the mushroom covers the fee.) && remember(content=Paid)', 'say(text=The bridge is down now.)'];
-		const waits:number[] = [];
+	it('waits at the end of an arc when a reply verb\'s target is still nearby', async () => {
+		let close = true;
+		const talk = new TalkNet({ inRange: () => close, others: () => ['Forager'] });
+		const verbs = registerStockVerbs(new VerbRegistry());
+		verbs.add('heal', { args: { target: 'id' } });
+		verbs.add('attack', { args: { target: 'id' } });
+		const arcs = [
+			'say(text=Very well, the mushroom covers the fee.) && remember(content=Paid)',
+			'say(text=The bridge is down now.)',
+			'say(text=The bridge is down now., to=Forager)',
+			'give(item=FireMushroom, to=Forager)',
+			'give(item=FireMushroom, to=Forager) && say(text=Here sir. This mushroom should cover the fee.)',
+			'heal(target=Forager)',
+			'attack(target=Forager)',
+			'give(item=FireMushroom, to=Forager)',
+		];
+		const waits:string[] = [];
 		let n = 0;
 		const agent = soloCharacter<Ctx>({
 			id: 'BridgeKeeper',
@@ -817,24 +872,29 @@ describe('Agent', () => {
 			provider: new FakeProvider(() => ({ content: arcs[n++], toolCalls: [] })),
 			execute: async (step) => {
 				if (step.verb === 'wait') {
-					waits.push(n);
+					waits.push(arcs[n - 1] ?? '');
 				}
 				return { ok: true, verb: step.verb };
 			},
-			...stockVerbs(),
+			verbs,
+			kit: { verbs: [...STOCK_VERBS, 'heal', 'attack'] },
 			...perception(),
 			context: () => ({ paragraph: paragraph() }),
 			model: 'fake',
 			heartbeat: 0,
-			arcText: true,
+			arcFormat: 'text',
 			talk,
 			toolRoundCap: 0,
 			arcRetryCap: 0,
 			strategicInterval: 0,
 		});
-		await agent.mind!.tick(10);
-		await agent.mind!.tick(20);
-		assert.deepEqual(waits, [2]);
+		for (let t = 1; t <= arcs.length; t++) {
+			if (t === arcs.length) {
+				close = false;
+			}
+			await agent.mind!.tick(t * 10);
+		}
+		assert.deepEqual(waits, [arcs[2], arcs[3], arcs[4]]);
 	});
 
 	it('refuses a say that everyone it is for already heard, and lets it reach someone new', async () => {
@@ -857,7 +917,7 @@ describe('Agent', () => {
 			context: () => ({ paragraph: paragraph() }),
 			model: 'fake',
 			heartbeat: 0,
-			arcText: true,
+			arcFormat: 'text',
 			talk,
 			toolRoundCap: 0,
 			arcRetryCap: 0,
@@ -901,7 +961,7 @@ describe('Agent', () => {
 			context: () => ({ paragraph: paragraph() }),
 			model: 'fake',
 			heartbeat: 0,
-			arcText: true,
+			arcFormat: 'text',
 			wayBlocked: () => blocked,
 			toolRoundCap: 0,
 			arcRetryCap: 0,
@@ -925,9 +985,7 @@ describe('Agent', () => {
 		const provider = new FakeProvider(() => {
 			calls += 1;
 			return {
-				content: JSON.stringify({
-					head: { verb: 'say', args: { text: 'Hello.', to: 'Guard' } },
-				}),
+				content: JSON.stringify({ steps: [{ verb: 'say', text: 'Hello.', to: 'Guard' }] }),
 				toolCalls: [],
 			};
 		});
@@ -945,8 +1003,8 @@ describe('Agent', () => {
 		});
 		const arc = await agent.mind!.tick(1);
 		assert.equal(calls, 1);
-		assert.equal(arc?.head.verb, 'say');
-		assert.equal(arc?.head.args.to, 'Guard');
+		assert.equal(arc?.[0].verb, 'say');
+		assert.equal(arc?.[0].args.to, 'Guard');
 	});
 
 	it('marks who is in earshot but out of reach, and why', async () => {
@@ -957,7 +1015,7 @@ describe('Agent', () => {
 		let user = '';
 		const provider = new FakeProvider((req) => {
 			user = String(req.messages.find((m) => m.role === 'user')?.content);
-			return { content: JSON.stringify({ head: { verb: 'wait', args: {} } }), toolCalls: [] };
+			return { content: JSON.stringify({ steps: [{ verb: 'wait' }] }), toolCalls: [] };
 		});
 		await soloCharacter<Ctx>({
 			id: 'Forager',
@@ -999,7 +1057,7 @@ describe('Agent', () => {
 			assert.match(String(tool?.content), /not in earshot/);
 			sawError = true;
 			return {
-				content: JSON.stringify({ head: { verb: 'go_to', args: { target: 'Guard' } } }),
+				content: JSON.stringify({ steps: [{ verb: 'go_to', target: 'Guard' }] }),
 				toolCalls: [],
 			};
 		});
@@ -1017,7 +1075,7 @@ describe('Agent', () => {
 		});
 		const arc = await agent.mind!.tick(1);
 		assert.equal(sawError, true);
-		assert.equal(arc?.head.verb, 'go_to');
+		assert.equal(arc?.[0].verb, 'go_to');
 		assert.equal(calls, 2);
 	});
 
@@ -1027,7 +1085,7 @@ describe('Agent', () => {
 			const last = req.messages[req.messages.length - 1];
 			users.push(String(last?.content ?? ''));
 			return {
-				content: JSON.stringify({ head: { verb: 'wait', args: { seconds: 1 } } }),
+				content: JSON.stringify({ steps: [{ verb: 'wait', seconds: 1 }] }),
 				toolCalls: [],
 			};
 		});
@@ -1054,12 +1112,12 @@ describe('Agent', () => {
 		assert.deepEqual(conversationOf(users[0]), ['Player (to you): Stay inside the cottage.']);
 	});
 
-	it('shows the last lines the host set, oldest first', async () => {
+	it('shows whole messages that fit the letter cap, oldest first', async () => {
 		const users:string[] = [];
 		const provider = new FakeProvider((req) => {
 			users.push(String(req.messages[req.messages.length - 1]?.content ?? ''));
 			return {
-				content: JSON.stringify({ head: { verb: 'wait', args: { seconds: 1 } } }),
+				content: JSON.stringify({ steps: [{ verb: 'wait', seconds: 1 }] }),
 				toolCalls: [],
 			};
 		});
@@ -1075,57 +1133,18 @@ describe('Agent', () => {
 			toolRoundCap: 0,
 			arcRetryCap: 0,
 			strategicInterval: 0,
-			conversationCap: 10,
+			conversationCap: 900,
 		});
-		for (let i = 0; i < 12; i++) {
-			agent.mind!.pushEvent(heard('Player', `Order ${i}.`));
+		for (let i = 0; i < 4; i++) {
+			agent.mind!.pushEvent(heard('Player', `${i}${'x'.repeat(291)}`));
 		}
 		agent.mind!.contextTokens = 1024;
 		await agent.mind!.tick(1);
-		assert.deepEqual(conversationOf(users[0]), Array.from({ length: 10 }, (_, n) => `Player: Order ${n + 2}.`));
-		assert.equal(agent.mind!.settings().conversationCap, 10);
-		assert.equal(agent.persona.memory.all().filter((row) => row.text.includes('Order')).length, 12);
-	});
-
-	it('shows 2 conversation lines per 1K tokens of context, at most 64', async () => {
-		assert.equal(conversationCapFor(1024), 2);
-		assert.equal(conversationCapFor(8192), 16);
-		assert.equal(conversationCapFor(32768), 64);
-		assert.equal(conversationCapFor(131072), 64);
-		assert.equal(conversationCapFor(0), 0);
-		assert.equal(conversationCapFor(undefined), 64);
-		const users:string[] = [];
-		const provider = new FakeProvider((req) => {
-			users.push(String(req.messages[req.messages.length - 1]?.content ?? ''));
-			return {
-				content: JSON.stringify({ head: { verb: 'wait', args: { seconds: 1 } } }),
-				toolCalls: [],
-			};
-		});
-		const agent = soloCharacter<Ctx>({
-			id: 'Guard',
-			identity: { role: 'Watch.' },
-			provider,
-			...stockVerbs(),
-			...perception(),
-			context: () => ({ paragraph: paragraph() }),
-			model: 'fake',
-			heartbeat: 0,
-			toolRoundCap: 0,
-			arcRetryCap: 0,
-			strategicInterval: 0,
-		});
-		agent.mind!.contextTokens = 2048;
-		for (let i = 0; i < 6; i++) {
-			agent.mind!.pushEvent(heard('Player', `Tok ${i}.`));
-		}
-		await agent.mind!.tick(1);
-		assert.deepEqual(conversationOf(users[0]), ['Player: Tok 2.', 'Player: Tok 3.', 'Player: Tok 4.', 'Player: Tok 5.']);
-		agent.mind!.contextTokens = 8192;
-		users.length = 0;
-		await agent.mind!.tick(2);
-		assert.equal(conversationOf(users[0]).length, 6);
-		assert.equal(agent.mind!.settings().conversationCap, undefined);
+		const shown = conversationOf(users[0]);
+		assert.equal(shown.length, 3);
+		assert.equal(shown.reduce((n, line) => n + line.length, 0), 900);
+		assert.equal(agent.mind!.settings().conversationCap, 900);
+		assert.equal(agent.persona.memory.all().filter((row) => row.text.includes('xxx')).length, 4);
 	});
 
 	it('names its own lines Me, the listener you, and others as it knows them', async () => {
@@ -1144,12 +1163,12 @@ describe('Agent', () => {
 				said.push(String(req.messages[req.messages.length - 1]?.content ?? ''));
 				if (keeperCalls === 1) {
 					return {
-						content: JSON.stringify({ head: { verb: 'say', args: { text: 'That costs 10 gold.', to: 'Forager' } } }),
+						content: JSON.stringify({ steps: [{ verb: 'say', text: 'That costs 10 gold.', to: 'Forager' }] }),
 						toolCalls: [],
 					};
 				}
 				return {
-					content: JSON.stringify({ head: { verb: 'wait', args: { seconds: 1 } } }),
+					content: JSON.stringify({ steps: [{ verb: 'wait', seconds: 1 }] }),
 					toolCalls: [],
 				};
 			}),
@@ -1170,7 +1189,7 @@ describe('Agent', () => {
 			provider: new FakeProvider((req) => {
 				prompts.push(String(req.messages[req.messages.length - 1]?.content ?? ''));
 				return {
-					content: JSON.stringify({ head: { verb: 'wait', args: { seconds: 1 } } }),
+					content: JSON.stringify({ steps: [{ verb: 'wait', seconds: 1 }] }),
 					toolCalls: [],
 				};
 			}),
@@ -1191,12 +1210,12 @@ describe('Agent', () => {
 		assert.deepEqual(conversationOf(said.at(-1)), ['Me (to Forager): That costs 10 gold.']);
 	});
 
-	it('applies identity and goals from the arc JSON', async () => {
+	it('takes no identity or goals from the arc reply: set_identity and set_goal are verbs', async () => {
 		const provider = new FakeProvider(() => ({
 			content: JSON.stringify({
+				steps: [{ verb: 'wait', seconds: 8 }],
 				identity: { role: 'Night watch of EastGate.' },
 				goals: [{ text: 'Hold EastGate.', priority: 3 }],
-				head: { verb: 'wait', args: { seconds: 8 } },
 			}),
 			toolCalls: [],
 		}));
@@ -1215,20 +1234,14 @@ describe('Agent', () => {
 			strategicInterval: 0,
 		});
 		const arc = await agent.mind!.tick(1);
-		assert.equal(arc?.head.verb, 'wait');
-		assert.equal(agent.persona.identity.role, 'Night watch of EastGate.');
-		assert.equal(agent.persona.goals[0]?.text, 'Hold EastGate.');
-		assert.ok(agent.persona.memory.pinned().some((m) => m.text.includes('Night watch of EastGate')));
+		assert.equal(arc?.[0].verb, 'wait');
+		assert.equal(agent.persona.identity.role, 'You assist Player.');
+		assert.equal(agent.persona.goals[0]?.text, 'Follow Player');
 	});
 
 	it('runs set_identity as a verb', async () => {
 		const provider = new FakeProvider(() => ({
-			content: JSON.stringify({
-				head: {
-					verb: 'set_identity',
-					args: { role: 'Night watch of EastGate.', traits: ['stern'] },
-				},
-			}),
+			content: JSON.stringify({ steps: [{ verb: 'set_identity', role: 'Night watch of EastGate.', traits: ['stern'] }] }),
 			toolCalls: [],
 		}));
 		const agent = soloCharacter<Ctx>({
@@ -1246,19 +1259,14 @@ describe('Agent', () => {
 			strategicInterval: 0,
 		});
 		const arc = await agent.mind!.tick(1);
-		assert.equal(arc?.head.verb, 'set_identity');
+		assert.equal(arc?.[0].verb, 'set_identity');
 		assert.equal(agent.persona.identity.role, 'Night watch of EastGate.');
 		assert.deepEqual(agent.persona.identity.traits, ['stern']);
 	});
 
 	it('perform applies set_identity when the host runs the arc', async () => {
 		const provider = new FakeProvider(() => ({
-			content: JSON.stringify({
-				head: {
-					verb: 'set_identity',
-					args: { role: 'Watch', traits: ['stern', 'watchful'] },
-				},
-			}),
+			content: JSON.stringify({ steps: [{ verb: 'set_identity', role: 'Watch', traits: ['stern', 'watchful'] }] }),
 			toolCalls: [],
 		}));
 		const agent = soloCharacter<Ctx>({
@@ -1275,9 +1283,9 @@ describe('Agent', () => {
 			strategicInterval: 0,
 		});
 		const arc = await agent.mind!.tick(1);
-		assert.equal(arc?.head.verb, 'set_identity');
+		assert.equal(arc?.[0].verb, 'set_identity');
 		assert.equal(agent.persona.identity.role, 'You assist Player.');
-		const result = await agent.perform(arc!.head);
+		const result = await agent.perform(arc![0]);
 		assert.equal(result.ok, true);
 		assert.equal(result.verb, 'set_identity');
 		assert.equal(agent.persona.identity.role, 'Watch');
@@ -1289,7 +1297,7 @@ describe('Agent', () => {
 			id: 'Fern',
 			identity: { role: 'Herbalist' },
 			provider: new FakeProvider(() => ({
-				content: JSON.stringify({ head: { verb: 'wait', args: { seconds: 1 } } }),
+				content: JSON.stringify({ steps: [{ verb: 'wait', seconds: 1 }] }),
 				toolCalls: [],
 			})),
 			...stockVerbs(),
@@ -1311,31 +1319,6 @@ describe('Agent', () => {
 		assert.ok(agent.persona.memory.pinned().some((m) => m.text === 'I am Fern. Role: Watchman.'));
 	});
 
-	it('applies a new role from arc JSON', async () => {
-		const provider = new FakeProvider(() => ({
-			content: JSON.stringify({
-				identity: { role: 'Watchman' },
-				head: { verb: 'wait', args: { seconds: 1 } },
-			}),
-			toolCalls: [],
-		}));
-		const agent = soloCharacter<Ctx>({
-			id: 'Fern',
-			identity: { role: 'Herbalist' },
-			provider,
-			...stockVerbs(),
-			...perception(),
-			context: () => ({ paragraph: paragraph() }),
-			model: 'fake',
-			heartbeat: 0,
-			toolRoundCap: 0,
-			arcRetryCap: 0,
-			strategicInterval: 0,
-		});
-		await agent.mind!.tick(1);
-		assert.equal(agent.persona.identity.role, 'Watchman');
-	});
-
 	it('revises identity on a major event even when strategicInterval is 0', async () => {
 		let calls = 0;
 		const provider = new FakeProvider(() => {
@@ -1350,7 +1333,7 @@ describe('Agent', () => {
 				};
 			}
 			return {
-				content: JSON.stringify({ head: { verb: 'wait', args: { seconds: 1 } } }),
+				content: JSON.stringify({ steps: [{ verb: 'wait', seconds: 1 }] }),
 				toolCalls: [],
 			};
 		});
@@ -1380,17 +1363,42 @@ describe('Agent', () => {
 		assert.equal(agent.persona.goals[0]?.text, 'Hold EastGate.');
 	});
 
-	it('skips JSON goal revision when arcText is on', async () => {
+	it('does not revise goals when skipStrategic is set, even after a major event', async () => {
 		let calls = 0;
-		const provider = new FakeProvider(() => {
-			calls += 1;
-			return { content: 'wait(seconds=1)', toolCalls: [] };
-		});
 		const agent = soloCharacter<Ctx>({
+			id: 'Angler',
+			identity: { role: 'angler' },
+			goals: [{ text: 'Buy FireMushroom, unless you already have one.', priority: 2 }],
+			provider: new FakeProvider(() => {
+				calls += 1;
+				return { content: JSON.stringify({ steps: [{ verb: 'wait', seconds: 1 }] }), toolCalls: [] };
+			}),
+			...stockVerbs(),
+			...perception(),
+			context: () => ({ paragraph: paragraph() }),
+			model: 'fake',
+			heartbeat: 0,
+			toolRoundCap: 0,
+			arcRetryCap: 0,
+			skipStrategic: true,
+			autoEnact: false,
+		});
+		agent.mind!.pushEvent({ kind: 'HeardSpeech', text: 'Forager says to you: "Do you sell SilverTrout?"', major: true });
+		await agent.mind!.tick(200);
+		assert.equal(calls, 1);
+		assert.equal(agent.persona.goals[0]?.text, 'Buy FireMushroom, unless you already have one.');
+	});
+
+	/** An assistant whose first reply (the goal pass) is `goalReply` and whose next is a wait arc, in `arcFormat`; `seen` takes every request. */
+	function goalPass(arcFormat:'text' | 'json' | 'schema', goalReply:string, seen:ChatRequest[]):Character<Ctx> {
+		return soloCharacter<Ctx>({
 			id: 'Assistant',
 			identity: { role: 'You assist Player.' },
 			goals: [{ text: 'Follow Player', priority: 2 }],
-			provider,
+			provider: new FakeProvider((req) => {
+				seen.push(req);
+				return { content: seen.length === 1 ? goalReply : arcFormat === 'text' ? 'wait(seconds=1)' : JSON.stringify({ steps: [{ verb: 'wait', seconds: 1 }] }), toolCalls: [] };
+			}),
 			...stockVerbs(),
 			...perception(),
 			context: () => ({ paragraph: paragraph() }),
@@ -1399,17 +1407,72 @@ describe('Agent', () => {
 			toolRoundCap: 0,
 			arcRetryCap: 0,
 			strategicInterval: 0,
-			arcText: true,
+			autoEnact: false,
+			arcFormat,
 		});
-		agent.mind!.pushEvent({
-			kind: 'HeardSpeech',
-			text: 'Player says to you: "Go to the waterfall."',
-			tags: ['speech', 'Player'],
-			major: true,
-		});
+	}
+
+	const speech:MindEvent = {
+		kind: 'HeardSpeech',
+		text: 'Player says to you: "Go to the waterfall."',
+		tags: ['speech', 'Player'],
+		major: true,
+	};
+
+	it('revises goals in Arc text when arcFormat is text: set_goal, drop_goal and set_identity', async () => {
+		const seen:ChatRequest[] = [];
+		const agent = goalPass('text', 'set_goal(goal=Go to the waterfall, priority=3)\ndrop_goal(goal=Follow Player)\nset_identity(role=Waterfall scout)', seen);
+		agent.mind!.pushEvent(speech);
 		await agent.mind!.tick(1);
-		assert.equal(calls, 1);
-		assert.equal(agent.persona.goals[0]?.text, 'Follow Player');
+		assert.equal(seen.length, 2, 'the goal pass, then the arc');
+		assert.equal(seen[0].responseFormat, undefined);
+		assert.match(chatContentText(seen[0].messages[1].content), /Reply with only Arc text, one verb per line: set_goal\(goal, priority\?\) adds a goal/);
+		assert.match(chatContentText(seen[0].messages[1].content), /Name every argument, as in set_goal\(goal=Hold the bridge, priority=2\)/);
+		assert.equal(chatContentText(seen[0].messages[1].content).includes('Emit JSON'), false);
+		assert.deepEqual(agent.persona.goals.map((goal) => goal.text), ['Go to the waterfall']);
+		assert.equal(agent.persona.goals[0].priority, 3);
+		assert.equal(agent.persona.identity.role, 'Waterfall scout');
+		assert.equal(agent.toJSON().mind!.lastVerb, undefined, 'a goal pass is not a verb the mind ran, so it never changes what it was last doing');
+	});
+
+	it('changes nothing for a goal pass that is empty, not Arc text, or holds any other verb', async () => {
+		for (const reply of ['', 'I keep following the Player.', 'go_to(Waterfall)', 'set_goal(goal=Swim) ; go_to(Waterfall)', 'set_goal(']) {
+			const seen:ChatRequest[] = [];
+			const agent = goalPass('text', reply, seen);
+			agent.mind!.pushEvent(speech);
+			await agent.mind!.tick(1);
+			assert.deepEqual(agent.persona.goals.map((goal) => goal.text), ['Follow Player'], JSON.stringify(reply));
+			assert.equal(agent.persona.identity.role, 'You assist Player.');
+		}
+	});
+
+	it('revises goals in JSON when arcFormat is json', async () => {
+		const seen:ChatRequest[] = [];
+		const agent = goalPass('json', JSON.stringify({ goals: [{ text: 'Go to the waterfall', priority: 3 }], identity: { role: 'Waterfall scout' } }), seen);
+		agent.mind!.pushEvent(speech);
+		await agent.mind!.tick(1);
+		assert.equal(seen[0].responseFormat, undefined);
+		assert.match(chatContentText(seen[0].messages[1].content), /Emit JSON \{"goals":/);
+		assert.deepEqual(agent.persona.goals.map((goal) => goal.text), ['Go to the waterfall']);
+		assert.equal(agent.persona.identity.role, 'Waterfall scout');
+	});
+
+	it('revises goals under the fixed goals schema when arcFormat is schema', async () => {
+		const seen:ChatRequest[] = [];
+		const agent = goalPass('schema', JSON.stringify({ goals: [{ text: 'Go to the waterfall' }] }), seen);
+		agent.mind!.pushEvent(speech);
+		await agent.mind!.tick(1);
+		assert.equal(seen[0].responseFormat?.name, 'goals');
+		assert.equal(seen[0].responseFormat?.strict, true);
+		assert.deepEqual((seen[0].responseFormat?.schema as { required:string[] }).required, ['goals']);
+		assert.match(chatContentText(seen[0].messages[1].content), /Reply \{"goals":\[\{"text":"...","priority":0\}\]\}, the whole list, or \[\] to keep yours/);
+		assert.equal(seen[1].responseFormat?.name, 'reply');
+		assert.deepEqual(agent.persona.goals.map((goal) => goal.text), ['Go to the waterfall']);
+		const kept:ChatRequest[] = [];
+		const same = goalPass('schema', '{"goals":[]}', kept);
+		same.mind!.pushEvent(speech);
+		await same.mind!.tick(1);
+		assert.deepEqual(same.persona.goals.map((goal) => goal.text), ['Follow Player']);
 	});
 
 	it('recalls world knowledge beside memory for leftover English, with no lookup tool of its own', async () => {
@@ -1497,6 +1560,68 @@ describe('Agent', () => {
 		assert.equal(names[1]?.length ?? 0, 0);
 	});
 
+	it('omits other verbs from a tool description when the kit does not grant them', async () => {
+		let description = '';
+		const provider = new FakeProvider((req) => {
+			description = req.tools?.find((tool) => tool.name === 'see_map')?.description ?? '';
+			return { content: '{"steps":[{"verb":"wait"}]}', toolCalls: [] };
+		});
+		const verbs = registerStockVerbs(new VerbRegistry());
+		await soloCharacter<Ctx>({
+			id: 'Guard',
+			identity: { role: 'guard' },
+			goals: [{ text: 'Look around' }],
+			provider,
+			verbs,
+			kit: { verbs: ['wait'] },
+			...perception(),
+			context: () => ({ paragraph: paragraph() }),
+			model: 'fake',
+			toolRoundCap: 1,
+			arcRetryCap: 0,
+			vision: true,
+			map: {
+				snapshot: () => ({
+					image: 'data:image/png;base64,xx',
+					width: 4,
+					height: 4,
+					toPixel: () => ({ u: 0, v: 0 }),
+					marks: [],
+				}),
+			},
+		}).mind!.tick(1);
+		assert.match(description, /Look here before you ask where something is/);
+		assert.equal(description.includes('wander'), false);
+		const withWander = new FakeProvider((req) => {
+			description = req.tools?.find((tool) => tool.name === 'see_map')?.description ?? '';
+			return { content: '{"steps":[{"verb":"wait"}]}', toolCalls: [] };
+		});
+		await soloCharacter<Ctx>({
+			id: 'Guard',
+			identity: { role: 'guard' },
+			goals: [{ text: 'Look around' }],
+			provider: withWander,
+			verbs,
+			kit: { verbs: ['wait', 'wander'] },
+			...perception(),
+			context: () => ({ paragraph: paragraph() }),
+			model: 'fake',
+			toolRoundCap: 1,
+			arcRetryCap: 0,
+			vision: true,
+			map: {
+				snapshot: () => ({
+					image: 'data:image/png;base64,xx',
+					width: 4,
+					height: 4,
+					toPixel: () => ({ u: 0, v: 0 }),
+					marks: [],
+				}),
+			},
+		}).mind!.tick(1);
+		assert.match(description, /Look here before you wander/);
+	});
+
 	it('runs see_map and injects the image on the next user turn', async () => {
 		let calls = 0;
 		const provider = new FakeProvider((req) => {
@@ -1559,7 +1684,7 @@ describe('Agent', () => {
 		});
 		const arc = await agent.mind!.tick(1);
 		assert.equal(calls, 2);
-		assert.equal(arc?.head.verb, 'go_to');
+		assert.equal(arc?.[0].verb, 'go_to');
 	});
 
 	it('runs see_map written as arc text as the tool call it meant, picture and all', async () => {
@@ -1587,7 +1712,7 @@ describe('Agent', () => {
 			model: 'fake',
 			toolRoundCap: 1,
 			arcRetryCap: 1,
-			arcText: true,
+			arcFormat: 'text',
 			vision: true,
 			map: {
 				snapshot: () => {
@@ -1605,7 +1730,7 @@ describe('Agent', () => {
 		const arc = await agent.mind!.tick(1);
 		assert.equal(calls, 2);
 		assert.equal(snaps, 1);
-		assert.equal(arc?.head.verb, 'wait');
+		assert.equal(arc?.[0].verb, 'wait');
 	});
 
 	it('puts map.you in the standing see_map hint', async () => {
@@ -1730,7 +1855,7 @@ describe('Agent', () => {
 				seen.push(user.content);
 			}
 			return {
-				content: JSON.stringify({ head: { verb: 'wait', args: { seconds: 1 } } }),
+				content: JSON.stringify({ steps: [{ verb: 'wait', seconds: 1 }] }),
 				toolCalls: [],
 			};
 		});
@@ -1776,13 +1901,7 @@ describe('Agent', () => {
 
 	it('allows think after a world verb in the same arc', async () => {
 		const provider = new FakeProvider(() => ({
-			content: JSON.stringify({
-				head: { verb: 'go_to', args: { target: 'EastGate' } },
-				then: {
-					join: 'then_if_ok',
-					arc: { head: { verb: 'think', args: { about: 'how to open it' } } },
-				},
-			}),
+			content: JSON.stringify({ steps: [{ verb: 'go_to', target: 'EastGate' }, { verb: 'think', about: 'how to open it' }] }),
 			toolCalls: [],
 		}));
 		const agent = soloCharacter<Ctx>({
@@ -1799,26 +1918,14 @@ describe('Agent', () => {
 			arcRetryCap: 0,
 		});
 		const arc = await agent.mind!.tick(1);
-		assert.equal(arc?.head.verb, 'go_to');
+		assert.equal(arc?.[0].verb, 'go_to');
 		assert.equal(agent.toJSON().mind!.thinkAbout, 'how to open it');
 		assert.equal(agent.toJSON().mind!.lastVerb, 'think');
 	});
 
 	it('moves think to the end and concatenates abouts', async () => {
 		const provider = new FakeProvider(() => ({
-			content: JSON.stringify({
-				head: { verb: 'think', args: { about: 'the lock' } },
-				then: {
-					join: 'then_if_ok',
-					arc: {
-						head: { verb: 'go_to', args: { target: 'EastGate' } },
-						then: {
-							join: 'then',
-							arc: { head: { verb: 'think', args: { about: 'which key' } } },
-						},
-					},
-				},
-			}),
+			content: JSON.stringify({ steps: [{ verb: 'think', about: 'the lock' }, { verb: 'go_to', target: 'EastGate', then: 'always' }, { verb: 'think', about: 'which key' }] }),
 			toolCalls: [],
 		}));
 		const agent = soloCharacter<Ctx>({
@@ -1835,10 +1942,10 @@ describe('Agent', () => {
 			arcRetryCap: 0,
 		});
 		const arc = await agent.mind!.tick(1);
-		assert.equal(arc?.head.verb, 'go_to');
-		assert.equal(arc?.then?.join, 'then');
-		assert.equal(arc?.then?.arc.head.verb, 'think');
-		assert.equal(arc?.then?.arc.head.args.about, 'the lock which key');
+		assert.equal(arc?.[0].verb, 'go_to');
+		assert.equal(arc?.[0].then, 'always');
+		assert.equal(arc?.[1].verb, 'think');
+		assert.equal(arc?.[1].args.about, 'the lock which key');
 		assert.equal(agent.toJSON().mind!.thinkAbout, 'the lock which key');
 		assert.equal(agent.toJSON().mind!.lastVerb, 'think');
 	});
@@ -1847,13 +1954,7 @@ describe('Agent', () => {
 		const think = withPriorityQueue({ watchInterval: 100, processInterval: 0 });
 		const q = think.queue;
 		const provider = new FakeProvider(() => ({
-			content: JSON.stringify({
-				head: { verb: 'go_to', args: { target: 'EastGate' } },
-				then: {
-					join: 'then',
-					arc: { head: { verb: 'wait', args: { until: 'hasHeard' } } },
-				},
-			}),
+			content: JSON.stringify({ steps: [{ verb: 'go_to', target: 'EastGate', then: 'always' }, { verb: 'wait', until: 'hasHeard' }] }),
 			toolCalls: [],
 		}));
 		const agent = soloCharacter<Ctx>({
@@ -1873,7 +1974,7 @@ describe('Agent', () => {
 		q.ensure('Guard', { skipHeartbeat: true });
 		const arc = await agent.mind!.tick(1);
 		assert.equal(q.inFlight, 0);
-		assert.equal(arc?.head.verb, 'go_to');
+		assert.equal(arc?.[0].verb, 'go_to');
 		await agent.enact(arc!);
 		assert.equal(q.arcOf('Guard'), null);
 		const me = dummyEntity('me');
@@ -1898,7 +1999,7 @@ describe('Agent', () => {
 			id: 'Guard',
 			identity: { role: 'guard' },
 			provider: new FakeProvider(() => ({
-				content: JSON.stringify({ head: { verb: 'wait', args: {} } }),
+				content: JSON.stringify({ steps: [{ verb: 'wait' }] }),
 				toolCalls: [],
 			})),
 			...stockVerbs(),
@@ -1915,11 +2016,11 @@ describe('Agent', () => {
 		q.ensure('Guard', { skipHeartbeat: true });
 		agent.stamp(1);
 		const first = await agent.mind!.tick(1);
-		assert.equal(first?.head.verb, 'wait');
+		assert.equal(first?.[0].verb, 'wait');
 		const skipped = await agent.mind!.tick(2);
 		assert.equal(skipped, null);
 		const forced = await agent.mind!.thinkNow({ about: 'the gate', enact: false });
-		assert.equal(forced?.head.verb, 'wait');
+		assert.equal(forced?.[0].verb, 'wait');
 		assert.equal(q.inFlight, 0);
 		assert.equal(q.isThinking('Guard'), false);
 	});
@@ -1929,8 +2030,8 @@ describe('Agent', () => {
 		let releaseGoTo:(()=>void) | undefined;
 		const chats:Array<{ enableThinking?:boolean; fakeThought?:boolean; user:string }> = [];
 		const replies = [
-			JSON.stringify({ head: { verb: 'go_to', args: { target: 'EastGate' } } }),
-			JSON.stringify({ head: { verb: 'wait', args: {} } }),
+			JSON.stringify({ steps: [{ verb: 'go_to', target: 'EastGate' }] }),
+			JSON.stringify({ steps: [{ verb: 'wait' }] }),
 		];
 		const provider = new FakeProvider((req) => {
 			const lastUser = [...req.messages].reverse().find((m) => m.role === 'user');
@@ -1969,8 +2070,8 @@ describe('Agent', () => {
 		void agent.mind!.tick(1);
 		await waitUntil(() => agent.toJSON().mind!.lastVerb === 'go_to');
 		const next = await agent.mind!.tick(2);
-		assert.equal(next?.head.verb, 'wait');
-		assert.equal(agent.mind!.lastArc?.head.verb, 'wait');
+		assert.equal(next?.[0].verb, 'wait');
+		assert.equal(agent.mind!.lastArc?.[0].verb, 'wait');
 		assert.equal(chats.length, 2);
 		assert.equal(chats[1]?.enableThinking, true, 'a fresh think asks for the mind\'s own thinking');
 		assert.equal(chats[1]?.fakeThought, undefined);
@@ -1991,10 +2092,7 @@ describe('Agent', () => {
 			});
 			if (chats.length === 1) {
 				return {
-					content: JSON.stringify({
-						head: { verb: 'go_to', args: { target: 'EastGate' } },
-						then: { join: 'then', arc: { head: { verb: 'pick_up', args: { item: 'Lantern' } } } },
-					}),
+					content: JSON.stringify({ steps: [{ verb: 'go_to', target: 'EastGate', then: 'always' }, { verb: 'pick_up', item: 'Lantern' }] }),
 					toolCalls: [],
 				};
 			}
@@ -2039,12 +2137,12 @@ describe('Agent', () => {
 		gates.get('go_to')!({ ok: true, verb: 'go_to' });
 		await waitUntil(() => agent.toJSON().mind!.lastVerb === 'pick_up');
 		hangThink!({
-			content: JSON.stringify({ head: { verb: 'wander', args: {} } }),
+			content: JSON.stringify({ steps: [{ verb: 'wander' }] }),
 			toolCalls: [],
 		});
 		const arc = await second;
-		assert.equal(arc?.head.verb, 'wander');
-		assert.equal(agent.mind!.lastArc?.head.verb, 'wander');
+		assert.equal(arc?.[0].verb, 'wander');
+		assert.equal(agent.mind!.lastArc?.[0].verb, 'wander');
 		assert.equal(chats.length, 3);
 		assert.equal(chats[2]?.enableThinking, undefined);
 		assert.equal(chats[2]?.fakeThought, true);
@@ -2061,10 +2159,7 @@ describe('Agent', () => {
 			chats.push({ fakeThought: req.fakeThought });
 			if (chats.length === 1) {
 				return {
-					content: JSON.stringify({
-						head: { verb: 'go_to', args: { target: 'EastGate' } },
-						then: { join: 'then', arc: { head: { verb: 'pick_up', args: { item: 'Lantern' } } } },
-					}),
+					content: JSON.stringify({ steps: [{ verb: 'go_to', target: 'EastGate', then: 'always' }, { verb: 'pick_up', item: 'Lantern' }] }),
 					toolCalls: [],
 				};
 			}
@@ -2074,7 +2169,7 @@ describe('Agent', () => {
 				});
 			}
 			return {
-				content: JSON.stringify({ head: { verb: 'wait', args: {} } }),
+				content: JSON.stringify({ steps: [{ verb: 'wait' }] }),
 				toolCalls: [],
 			};
 		});
@@ -2112,11 +2207,11 @@ describe('Agent', () => {
 		gates.get('go_to')!({ ok: true, verb: 'go_to' });
 		await waitUntil(() => agent.toJSON().mind!.lastVerb === 'pick_up');
 		hangThink!({
-			content: JSON.stringify({ head: { verb: 'wander', args: {} } }),
+			content: JSON.stringify({ steps: [{ verb: 'wander' }] }),
 			toolCalls: [],
 		});
 		const arc = await second;
-		assert.equal(arc?.head.verb, 'wait');
+		assert.equal(arc?.[0].verb, 'wait');
 		assert.equal(chats.length, 3);
 		assert.equal(chats[2]?.fakeThought, true);
 	});
@@ -2134,7 +2229,7 @@ describe('repairs, mind verbs, and names', () => {
 			model: 'fake',
 			toolRoundCap: 0,
 			arcRetryCap: 3,
-			arcText: true,
+			arcFormat: 'text',
 			...extra,
 		});
 	}
@@ -2156,7 +2251,7 @@ describe('repairs, mind verbs, and names', () => {
 			return { content: 'go_to(EastGate)', toolCalls: [] };
 		});
 		const arc = await agentOf(provider, { repairTemperature: 0.7 }).mind!.tick(1);
-		assert.equal(arc?.head.args.target, 'EastGate');
+		assert.equal(arc?.[0].args.target, 'EastGate');
 		assert.deepEqual(temps, [0, 0, 0.7]);
 		assert.deepEqual(thinking, [true, false, false]);
 	});
@@ -2205,5 +2300,157 @@ describe('repairs, mind verbs, and names', () => {
 		assert.equal(restored.persona.names.resolve('EnemyKnight2'), 'Stone');
 		assert.equal(restored.mind!.nameOf('Helms'), 'EnemyKnight');
 		assert.equal(restored.mind!.events()[0]?.text, 'Brune cleaved EnemyKnight');
+	});
+});
+
+describe('arcFormat schema', () => {
+	const steps = JSON.stringify({ steps: [{ verb: 'go_to', target: 'EastGate' }] });
+	const recall = (query:string):string => JSON.stringify({ tool: 'recall', query });
+
+	/** A guard whose model says `replies` in turn (the last one again after that); `seen` takes every request. */
+	function schemaGuard(replies:string[], seen:ChatRequest[], extra:Partial<SoloOptions<Ctx>> = {}):Character<Ctx> {
+		let n = 0;
+		return soloCharacter<Ctx>({
+			id: 'Guard',
+			identity: { role: 'guard' },
+			goals: [{ text: 'Go to EastGate' }],
+			provider: new FakeProvider((req) => {
+				seen.push(req);
+				return { content: replies[Math.min(n++, replies.length - 1)], toolCalls: [] };
+			}),
+			...stockVerbs(),
+			...perception(),
+			context: () => ({ paragraph: paragraph() }),
+			model: 'fake',
+			heartbeat: 0,
+			strategicInterval: 0,
+			arcRetryCap: 0,
+			arcFormat: 'schema',
+			...extra,
+		});
+	}
+
+	it('asks for the reply schema, and offers tools as replies, never as native tools', async () => {
+		const seen:ChatRequest[] = [];
+		const arc = await schemaGuard([steps], seen).mind!.tick(1);
+		assert.equal(arc?.[0].args.target, 'EastGate');
+		assert.equal(seen[0].responseFormat?.name, 'reply');
+		assert.equal(seen[0].tools, undefined);
+		assert.equal(seen[0].toolChoice, undefined);
+		const system = chatContentText(seen[0].messages[0].content);
+		assert.match(system, /Tools this think, not verbs: recall, observe\. Call one by replying \{"tool":"name","argument":"value"\}/);
+		assert.match(system, /Reply \{"tool":"recall","query":"Bread"\}/);
+		const schema = seen[0].responseFormat!.schema as { anyOf:{ properties:{ tool?:{ const:string } } }[] };
+		assert.deepEqual(schema.anyOf.slice(0, -1).map((branch) => branch.properties.tool?.const), ['recall', 'observe', 'earshot', 'see_map']);
+	});
+
+	it('looks a tool up from its reply, then answers with the steps', async () => {
+		const seen:ChatRequest[] = [];
+		const guard = schemaGuard([recall('gate'), steps], seen);
+		await guard.mind!.remember('EastGate is the door in the east wall', ['gate', 'EastGate'], 0);
+		const arc = await guard.mind!.tick(1);
+		assert.equal(arc?.[0].verb, 'go_to');
+		assert.equal(seen.length, 2);
+		assert.equal(seen.every((req) => req.responseFormat?.name === 'reply' && req.tools === undefined), true, 'every request carries the schema, or it would go to the responses API without one');
+		const [call, answer] = seen[1].messages.slice(-2);
+		assert.equal(call.role, 'assistant');
+		assert.equal(chatContentText(call.content), recall('gate'));
+		assert.equal(answer.role, 'user');
+		assert.match(chatContentText(answer.content), /^recall: .*EastGate is the door.*\nLook up something else, or reply with the steps\. Names only/s);
+	});
+
+	it('tells the model when a lookup was its last', async () => {
+		const seen:ChatRequest[] = [];
+		await schemaGuard([recall('gate'), steps], seen, { toolRoundCap: 1 }).mind!.tick(1);
+		assert.match(chatContentText(seen[1].messages.at(-1)?.content), /That was your last lookup; reply with the steps now\./);
+	});
+
+	it('repairs a tool this mind lacks, and one called past the cap', async () => {
+		const lacking = schemaGuard([JSON.stringify({ tool: 'observe', expr: 'isNear(me, EastGate)' }), steps], [], { hideObserve: true });
+		await assert.rejects(lacking.mind!.tick(1), /observe is not a tool you have/);
+		const over = schemaGuard([recall('gate'), recall('door'), steps], [], { toolRoundCap: 1 });
+		await assert.rejects(over.mind!.tick(1), /no lookups left/);
+		const seen:ChatRequest[] = [];
+		const repaired = schemaGuard([JSON.stringify({ tool: 'observe', expr: 'x' }), steps], seen, { hideObserve: true, arcRetryCap: 1 });
+		assert.equal((await repaired.mind!.tick(1))?.[0].verb, 'go_to');
+		assert.match(chatContentText(seen[1].messages.at(-1)?.content), /observe is not a tool you have/);
+		assert.equal(seen[1].enableThinking, false, 'a repair does not reason again');
+	});
+
+	it('reads a verb the schema allows but this kit does not as a repair', async () => {
+		const seen:ChatRequest[] = [];
+		const guard = schemaGuard([JSON.stringify({ steps: [{ verb: 'use', item: 'Lever' }] })], seen, { kit: { verbs: ['go_to', 'wait'] } });
+		await assert.rejects(guard.mind!.tick(1), /unknown verb 'use'/);
+		assert.match(JSON.stringify(seen[0].responseFormat?.schema), /"const":"use"/, 'the schema holds the whole catalog, not the kit');
+	});
+
+	it('asks for the steps again, without a canned thought, when the live verb changed, and a tool reply keeps the first arc', async () => {
+		const think = withPriorityQueue({ watchInterval: 100, processInterval: 0 });
+		const gates = new Map<string, (result:{ ok:boolean; interrupted?:boolean; verb:string })=>void>();
+		let hangThink:((res:{ content:string; toolCalls:[] })=>void) | undefined;
+		const chats:ChatRequest[] = [];
+		const provider = new FakeProvider((req) => {
+			chats.push(req);
+			if (chats.length === 1) {
+				return { content: JSON.stringify({ steps: [{ verb: 'go_to', target: 'EastGate', then: 'always' }, { verb: 'pick_up', item: 'Lantern' }] }), toolCalls: [] };
+			}
+			if (chats.length === 2) {
+				return new Promise((resolve) => {
+					hangThink = resolve;
+				});
+			}
+			return { content: recall('lantern'), toolCalls: [] };
+		});
+		const agent = soloCharacter<Ctx>({
+			id: 'Guard',
+			identity: { role: 'guard' },
+			provider,
+			...stockVerbs(),
+			...perception(),
+			context: () => ({ paragraph: paragraph() }),
+			execute: (step) => {
+				if (step.verb === 'go_to' || step.verb === 'pick_up') {
+					return new Promise((resolve) => {
+						gates.set(step.verb, resolve);
+					});
+				}
+				return Promise.resolve({ ok: true, verb: step.verb });
+			},
+			abortArc: () => {
+				for (const [verb, resolve] of gates) {
+					resolve({ ok: false, interrupted: true, verb });
+				}
+				gates.clear();
+			},
+			...think,
+			heartbeat: 0,
+			model: 'fake',
+			toolRoundCap: 0,
+			arcRetryCap: 0,
+			arcFormat: 'schema',
+		});
+		void agent.mind!.tick(1);
+		await waitUntil(() => gates.has('go_to'));
+		const second = agent.mind!.tick(2);
+		await waitUntil(() => hangThink !== undefined);
+		gates.get('go_to')!({ ok: true, verb: 'go_to' });
+		await waitUntil(() => agent.toJSON().mind!.lastVerb === 'pick_up');
+		hangThink!({ content: JSON.stringify({ steps: [{ verb: 'wander' }] }), toolCalls: [] });
+		const arc = await second;
+		assert.equal(arc?.[0].verb, 'wander', 'the tool reply is not steps, so the first arc stands');
+		assert.equal(chats.length, 3);
+		assert.equal(chats[2].enableThinking, false);
+		assert.equal(chats[2].fakeThought, undefined);
+		assert.equal(chats[2].responseFormat?.name, 'reply');
+		assert.match(chatContentText(chats[2].messages.at(-1)?.content), /live verb changed from go_to to pick_up[^]*repeat the steps you already wrote to keep them/);
+	});
+
+	it('is one schema for every mind, whatever its kit or tools', async () => {
+		const seen:ChatRequest[] = [];
+		await schemaGuard([steps], seen, { kit: { verbs: ['go_to', 'wait'] } }).mind!.tick(1);
+		await schemaGuard([steps], seen, { toolRoundCap: 0 }).mind!.tick(1);
+		await schemaGuard([steps], seen, { hideObserve: true }).mind!.tick(1);
+		const bytes = seen.map((req) => JSON.stringify(req.responseFormat));
+		assert.equal(new Set(bytes).size, 1);
 	});
 });

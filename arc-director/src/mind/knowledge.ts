@@ -126,7 +126,7 @@ export function knowledgeFor(entries:readonly KnowledgeEntry[], query:string, ca
 		.sort((a, b) => b.score - a.score || a.entry.name.localeCompare(b.entry.name))
 		.slice(0, cap);
 	if (hits.length === 0) {
-		return [`Nothing you know is called "${q}". A plain word is not a name: try another word, see_map, ask, or wander(until).`];
+		return [`Nothing you know is called "${q}". A plain word is not a name: call recall again with different words.`];
 	}
 	return hits.map((row) => formatEntry(row.entry));
 }
@@ -199,7 +199,6 @@ export function crowdKnowledge(spec:CrowdKnowledgeSpec):KnowledgeEntry {
 			`Sight leftover "${leftover}" is not a binding — watches use ${name} (${name}.nearby(), never ${leftover}.nearby()).`,
 			`Being surrounded by a bunch of ${name} is being inside ${yPhrase}.`,
 			`One is surrounded by ${name} when ${name} is in all directions, like leftover: ${around}`,
-			'Cannot be reached with go_to.',
 		].join(' '),
 	};
 }

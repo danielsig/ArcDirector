@@ -1,8 +1,9 @@
-import { isArc } from './validate.js';
 import { argBase, CHOOSE_VERB, type VerbRegistry } from './stock-verbs.js';
 import { choicesOf } from './choose.js';
 import {
 	firstStep,
+	groupArc,
+	isArc,
 	isHoistedWhen,
 	type Arc,
 	type ArcResult,
@@ -188,161 +189,78 @@ export function firstStartable(session:ArcSession):ArcHandler | undefined {
 	return undefined;
 }
 
-type Row = {
-	kind:'step' | 'group';
-	step?:Step;
-	group?:Arc;
-	join:Join | undefined;
-};
-
-export function arcSteps(arc:Arc):Step[] {
-	const steps:Step[] = [];
-	let cur:Arc | undefined = arc;
-	while (cur) {
-		if (cur.head) {
-			steps.push(cur.head);
-		}
-		else {
-			const inner = cur.group ? firstStep(cur.group) : undefined;
-			if (inner) {
-				steps.push(inner);
-			}
-		}
-		cur = cur.then?.arc;
-	}
-	return steps;
-}
-
-function flatten(arc:Arc):Row[] {
-	const rows:Row[] = [];
-	let cur:Arc | undefined = arc;
-	while (cur) {
-		if (cur.group) {
-			rows.push({ kind: 'group', group: cur.group, join: cur.then?.join });
-		}
-		else if (cur.head.verb !== 'group') {
-			rows.push({ kind: 'step', step: cur.head, join: cur.then?.join });
-		}
-		cur = cur.then?.arc;
-	}
-	return rows;
-}
-
-function unflatten(rows:Row[]):Arc {
-	if (rows.length === 0) {
-		return { head: { verb: 'think', args: {} } };
-	}
-	const last = rows[rows.length - 1];
-	let arc:Arc = last.kind === 'group' && last.group
-		? { head: { verb: 'group', args: {} }, group: last.group }
-		: { head: last.step ?? { verb: 'think', args: {} } };
-	for (let i = rows.length - 2; i >= 0; i--) {
-		const row = rows[i];
-		const node:Arc = row.kind === 'group' && row.group
-			? { head: { verb: 'group', args: {} }, group: row.group }
-			: { head: row.step ?? { verb: 'think', args: {} } };
-		node.then = { join: row.join ?? 'then', arc };
-		arc = node;
-	}
-	return arc;
-}
-
 function thinkAbout(step:Step):string {
 	return typeof step.args.about === 'string' ? step.args.about.replace(/\s+/g, ' ').trim() : '';
-}
-
-function splitTrailingThink(arc:Arc):{ body:Arc | undefined; think:Step | undefined } {
-	const rows = flatten(arc);
-	const last = rows[rows.length - 1];
-	if (!last || last.kind !== 'step' || last.step?.verb !== 'think') {
-		return { body: arc, think: undefined };
-	}
-	const bodyRows = rows.slice(0, -1);
-	if (bodyRows.length === 0) {
-		return { body: undefined, think: last.step };
-	}
-	bodyRows[bodyRows.length - 1] = { ...bodyRows[bodyRows.length - 1], join: undefined };
-	return { body: unflatten(bodyRows), think: last.step };
 }
 
 function withVerb(result:ArcResult, step:Step):ArcResult {
 	return { ...result, verb: result.verb ?? step.verb };
 }
 
-/** Pull every think() out, concat abouts, append one think at the end. */
+/**
+ * Pull every think() out of the arc (and out of each group in it), concat abouts, append one think at the end. The
+ * same array comes back when nothing moves; only a group that changes, and the step before the appended think,
+ * are copied.
+ */
 export function deferThinks(arc:Arc):Arc {
-	if (arc.group) {
-		return {
-			head: { verb: 'group', args: {} },
-			group: deferThinks(arc.group),
-			then: arc.then
-				? { join: arc.then.join, arc: deferThinks(arc.then.arc) }
-				: undefined,
-		};
-	}
-	const rows = flatten(arc);
 	const abouts:string[] = [];
-	const body:Row[] = [];
-	let had = false;
-	for (const row of rows) {
-		if (row.kind === 'step' && row.step?.verb === 'think') {
-			had = true;
-			const about = thinkAbout(row.step);
+	const body:Step[] = [];
+	let thought = false;
+	let moved = false;
+	for (const step of arc) {
+		if (step.verb === 'think') {
+			thought = true;
+			const about = thinkAbout(step);
 			if (about) {
 				abouts.push(about);
 			}
 			continue;
 		}
-		if (row.kind === 'group' && row.group) {
-			body.push({ ...row, group: deferThinks(row.group) });
+		const inner = groupArc(step);
+		const deferred = inner && deferThinks(inner);
+		if (deferred && deferred !== inner) {
+			moved = true;
+			body.push({ ...step, args: { ...step.args, arc: deferred } });
 			continue;
 		}
-		body.push(row);
+		body.push(step);
 	}
-	if (!had) {
+	if (!thought && !moved) {
 		return arc;
+	}
+	if (!thought) {
+		return body;
 	}
 	let about = abouts.join(' ');
 	if (about.length > THINK_ABOUT_CAP) {
 		about = about.slice(0, THINK_ABOUT_CAP).trim();
 	}
-	const thinkStep:Step = { verb: 'think', args: about ? { about } : {} };
+	const think:Step = { verb: 'think', args: about ? { about } : {} };
 	if (body.length === 0) {
-		return { head: thinkStep };
+		return [think];
 	}
-	body[body.length - 1] = { ...body[body.length - 1], join: 'then' };
-	body.push({ kind: 'step', step: thinkStep, join: undefined });
-	return unflatten(body);
+	body[body.length - 1] = { ...body[body.length - 1], then: 'always' };
+	return [...body, think];
 }
 
-function hoistWhen(arc:Arc, depth:number):{ handlers:ArcHandler[]; body:Arc | undefined } {
+/** The `when` steps of `arc` as handlers, and the arc without them. A step before a `when` keeps its own join. */
+function hoistWhen(arc:Arc):{ handlers:ArcHandler[]; body:Arc | undefined } {
 	const handlers:ArcHandler[] = [];
-	const kept:Row[] = [];
-	let i = 0;
-	let cur:Arc | undefined = arc;
-	while (cur) {
-		if (cur.head && isHoistedWhen(cur.head) && isArc(cur.head.args.arc)) {
+	const body:Arc = [];
+	for (const step of arc) {
+		if (isHoistedWhen(step) && isArc(step.args.arc)) {
 			handlers.push({
-				source: cur.head,
-				watch: String(cur.head.args.watch).trim(),
-				arc: cur.head.args.arc,
-				rank: 100 + i,
+				source: step,
+				watch: String(step.args.watch).trim(),
+				arc: step.args.arc,
+				rank: 100 + handlers.length,
 			});
-			i += 1;
 		}
-		else if (cur.group) {
-			kept.push({ kind: 'group', group: cur.group, join: cur.then?.join });
+		else {
+			body.push(step);
 		}
-		else if (cur.head.verb !== 'group') {
-			kept.push({ kind: 'step', step: cur.head, join: cur.then?.join });
-		}
-		cur = cur.then?.arc;
 	}
-	if (kept.length === 0) {
-		return { handlers, body: undefined };
-	}
-	kept[kept.length - 1] = { ...kept[kept.length - 1], join: undefined };
-	return { handlers, body: unflatten(kept) };
+	return { handlers, body: body.length > 0 ? body : undefined };
 }
 
 function rootedAtBinding(ast:Ast, session:ArcSession):boolean {
@@ -627,50 +545,42 @@ function shouldContinue(result:ArcResult, join:Join):boolean {
 	if (result.preempted && !result.ok) {
 		return false;
 	}
-	if (join === 'then_if_ok') {
+	if (join === 'if_ok') {
 		return result.ok || !!result.preempted;
 	}
-	if (join === 'then_if_err') {
+	if (join === 'if_failed') {
 		return !result.ok && !result.preempted;
 	}
 	return true;
 }
 
+/** Run `arc` step by step: each step's join says, from how it went, whether the next one runs. */
 async function runChain(
 	arc:Arc,
 	execute:(step:Step)=>Promise<ArcResult>,
 	session:ArcSession,
 	depth:number,
 ):Promise<ArcResult> {
-	let result:ArcResult;
-	if (arc.group) {
-		result = await runFrame(arc.group, execute, session, depth + 1);
-	}
-	else {
-		result = await execStep(arc.head, execute, session, depth);
-	}
-	if (!arc.then || result.interrupted) {
-		return result;
-	}
-	if (result.preempted && !result.ok) {
-		return result;
-	}
-	if (!shouldContinue(result, arc.then.join)) {
-		return result;
-	}
-	if (arc.then.join === 'then_if_err') {
-		session.fail = {
-			verb: result.verb ?? firstStep(arc)?.verb ?? '',
-			reason: result.reason ?? '',
-		};
-		try {
-			return await runFrame(arc.then.arc, execute, session, depth + 1);
+	for (let i = 0; ; i++) {
+		const step = arc[i];
+		const inner = groupArc(step);
+		const result = inner
+			? await runFrame(inner, execute, session, depth + 1)
+			: await execStep(step, execute, session, depth);
+		const join = step.then ?? 'if_ok';
+		if (i === arc.length - 1 || !shouldContinue(result, join)) {
+			return result;
 		}
-		finally {
-			session.fail = undefined;
+		if (join === 'if_failed') {
+			session.fail = { verb: result.verb ?? firstStep([step])?.verb ?? '', reason: result.reason ?? '' };
+			try {
+				return await runFrame(arc.slice(i + 1), execute, session, depth + 1);
+			}
+			finally {
+				session.fail = undefined;
+			}
 		}
 	}
-	return runChain(arc.then.arc, execute, session, depth);
 }
 
 async function runFrame(
@@ -679,7 +589,7 @@ async function runFrame(
 	session:ArcSession,
 	depth:number,
 ):Promise<ArcResult> {
-	const { handlers, body } = hoistWhen(arc, depth);
+	const { handlers, body } = hoistWhen(arc);
 	session.frames.push({ handlers });
 	try {
 		const stolen = await pumpHandlers(session, execute, depth);
@@ -722,9 +632,10 @@ export async function runArc(
 		return execute(step);
 	};
 	const ordered = deferThinks(arc);
-	const { body, think } = splitTrailingThink(ordered);
-	const work = body ?? (think ? { head: think } : { head: { verb: 'think', args: {} } });
-	const trail = body ? think : undefined;
+	const last = ordered.at(-1);
+	// A trailing think runs after the rest, unless nothing else is left to run.
+	const trail = ordered.length > 1 && last?.verb === 'think' ? last : undefined;
+	const work = trail ? ordered.slice(0, -1) : ordered.length > 0 ? ordered : [{ verb: 'think', args: {} }];
 	if (opts.asHandler) {
 		session.running.push(opts.asHandler);
 	}

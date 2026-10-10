@@ -121,7 +121,7 @@ async function run(grid:Grid, reply:string, opts:{ kit:string[]; seconds?:number
 			sent = true;
 			return { content, toolCalls: [] };
 		})
-		.withArcText(true)
+		.withArcFormat('text')
 		.addStockVerbs()
 		.addStockCollectiveVerbs()
 		.withWorld(grid.world)
@@ -335,7 +335,7 @@ describe('stock world verbs', () => {
 		const { director } = await run(grid, 'flee(Bo)', { kit: ['flee', 'wait'], seconds: 2, nearRadius: 4 });
 		const ann = director.character('Ann')!;
 		assert.ok(distance(grid.point.get('Ann')!, [2, 0]) >= 4, 'out of nearby');
-		assert.equal(ann.arc?.head.verb, 'flee', 'not safe for long enough yet');
+		assert.equal(ann.arc?.[0].verb, 'flee', 'not safe for long enough yet');
 		const at = grid.point.get('Ann')!;
 		grid.place('Bo', [at[0] + 1, at[1]]);
 		const tick = async (seconds:number, from:number):Promise<void> => {
@@ -347,7 +347,7 @@ describe('stock world verbs', () => {
 		};
 		await tick(2, 20);
 		assert.ok(distance(grid.point.get('Ann')!, grid.point.get('Bo')!) >= 4, 'ran again');
-		assert.equal(ann.arc?.head.verb, 'flee', 'the clock restarted when they closed in');
+		assert.equal(ann.arc?.[0].verb, 'flee', 'the clock restarted when they closed in');
 		await tick(3, 22);
 		assert.deepEqual(ann.lastResult && { ok: ann.lastResult.ok, reason: ann.lastResult.reason }, { ok: true, reason: 'got away from Bo' });
 		director.dispose();

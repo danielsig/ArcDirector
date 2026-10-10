@@ -63,22 +63,6 @@ describe('TalkNet', () => {
 		assert.deepEqual(spoke[0].heardBy, ['Guard']);
 	});
 
-	it('is answerable only when someone, or the addressee, heard it clearly', () => {
-		const muffledFor = new Set<string>();
-		const talk = new TalkNet({
-			inRange: (a, b) => a !== b,
-			others: (speaker) => ['Guard', 'Baker', 'Acolyte'].filter((id) => id !== speaker),
-			clearHear: (speaker, listener) => !muffledFor.has(listener),
-		});
-		assert.equal(talk.say('Acolyte', 'Hello all.').answerable, true);
-		assert.equal(talk.say('Acolyte', 'Hello, Guard.', 'Guard').answerable, true);
-		muffledFor.add('Guard');
-		assert.equal(talk.say('Acolyte', 'Guard, can you hear me?', 'Guard').answerable, false);
-		assert.equal(talk.say('Acolyte', 'Anyone?').answerable, true);
-		muffledFor.add('Baker');
-		assert.equal(talk.say('Acolyte', 'Anyone at all?').answerable, false);
-	});
-
 	it('tells the speaker who was too far to make out the words', () => {
 		const talk = new TalkNet({
 			inRange: (a, b) => a !== b,

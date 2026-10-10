@@ -1,5 +1,5 @@
-import { CHOOSE_VERB, FOCUS_EDIT_VERBS, MIND_ONLY_VERBS, WATCH_EDIT_VERBS, type VerbRegistry } from '../arc/stock-verbs.js';
-import type { Arc, ArcResult, Step } from '../arc/types.js';
+import { CHOOSE_VERB, FOCUS_EDIT_VERBS, MIND_ONLY_VERBS, STOCK_MOVE_VERBS, WATCH_EDIT_VERBS, type VerbRegistry } from '../arc/stock-verbs.js';
+import { isArc, type Arc, type ArcResult, type Step } from '../arc/types.js';
 import type { Catalog, ExprEntity } from '../expr/types.js';
 import { cloneEntity, prevMeFromJSON } from '../expr/prev.js';
 import {
@@ -93,6 +93,10 @@ export abstract class ArcRunner<TCtx = unknown> {
 	public arc:Arc | null = null;
 	/** The verb of the step running now; `''` between steps. */
 	public verb = '';
+	/** The step `runStep` last ran. The mind reads it when the arc ends. */
+	public lastStep:Step | undefined;
+	/** Non-movement verbs this runner has finished. A reply wait ends when this changes. */
+	public replies = 0;
 	/** Index of the step currently running inside `enact` (0-based). */
 	public verbIndex = 0;
 	/** Self as `prev.me` sees it: at its mind's last think, else as first sampled. */
@@ -360,12 +364,13 @@ export abstract class ArcRunner<TCtx = unknown> {
 		}
 		this.prevMe = prevMeFromJSON(json.prevMe);
 		if (json.laws) {
-			this.laws = json.laws.map((s) => ({ ...s }));
+			this.laws = json.laws.filter((law) => isArc(law.arc)).map((law) => ({ ...law }));
 		}
 	}
 
 	/** One step of a running arc: mind verbs through the mind, `say` through talk, the rest through the host. */
 	protected async runStep(step:Step, ctx:TCtx | undefined):Promise<ArcResult> {
+		this.lastStep = step;
 		if (!this.activeVerbs().has(step.verb)) {
 			// Its kit grants it, but it has no body to run it with.
 			return !this.embodied && this.currentKit.verbs.includes(step.verb)
@@ -373,16 +378,19 @@ export abstract class ArcRunner<TCtx = unknown> {
 				: { ok: false, verb: step.verb, reason: `verb '${step.verb}' is not available` };
 		}
 		const done = await this.mind?.perform(step, this);
-		if (done) {
-			return done;
+		const out = done
+			?? (step.verb === 'say' && this.talk
+				? this.speak(step)
+				: this.execute
+					? await this.execute(step, ctx)
+					: { ok: false, verb: step.verb, reason: `host has no executor for ${step.verb}` });
+		if (!(STOCK_MOVE_VERBS as readonly string[]).includes(step.verb)) {
+			this.replies += 1;
 		}
-		if (step.verb === 'say' && this.talk) {
-			return this.speak(step);
+		if (out.ok && this.isVoice) {
+			this.mind!.noteReply(step, out, this);
 		}
-		if (!this.execute) {
-			return { ok: false, verb: step.verb, reason: `host has no executor for ${step.verb}` };
-		}
-		return this.execute(step, ctx);
+		return out;
 	}
 
 	/** `say` through talk. Only call with talk attached. */

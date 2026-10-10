@@ -3,29 +3,52 @@ import { computed, nextTick, ref, watch } from 'vue';
 import { prefs, setPrefs } from '../prefs';
 import type { HudModel } from './hudModel';
 
+const ERRORS = 'Errors';
+
 const props = defineProps<{
 	hud:HudModel;
 }>();
 
 const logEl = ref<HTMLElement | null>(null);
 const source = ref(prefs().aiLogSource);
+const query = ref('');
+const opened = new Set<number>();
 
 const sources = computed(() => {
 	const names = new Set(props.hud.aiLog.map((entry) => entry.name));
-	if (source.value) {
+	names.delete(ERRORS);
+	if (source.value && source.value !== ERRORS) {
 		names.add(source.value);
 	}
 	return [...names].sort();
 });
 
-const rows = computed(() => (
-	source.value
-		? props.hud.aiLog.filter((entry) => entry.name === source.value)
-		: props.hud.aiLog
-));
+const rows = computed(() => {
+	const q = query.value.trim().toLowerCase();
+	return props.hud.aiLog.filter((entry) => {
+		if (source.value === ERRORS) {
+			if (!entry.error) {
+				return false;
+			}
+		}
+		else if (source.value && entry.name !== source.value) {
+			return false;
+		}
+		return !q || entry.name.toLowerCase().includes(q) || entry.message.toLowerCase().includes(q);
+	});
+});
 
 function pickSource():void {
 	setPrefs({ aiLogSource: source.value });
+}
+
+function onToggle(seq:number, e:Event):void {
+	if ((e.currentTarget as HTMLDetailsElement).open) {
+		opened.add(seq);
+	}
+	else {
+		opened.delete(seq);
+	}
 }
 
 function preview(message:string):string {
@@ -36,12 +59,34 @@ function preview(message:string):string {
 	return `${line.slice(0, 140)}…`;
 }
 
+function hits(text:string):{ t:string; on?:true }[] {
+	const needle = query.value.trim();
+	if (!needle) {
+		return [{ t: text }];
+	}
+	const out:{ t:string; on?:true }[] = [];
+	const low = text.toLowerCase();
+	const n = needle.toLowerCase();
+	let i = 0;
+	for (let j = low.indexOf(n); j >= 0; j = low.indexOf(n, i)) {
+		if (j > i) {
+			out.push({ t: text.slice(i, j) });
+		}
+		out.push({ t: text.slice(j, j + n.length), on: true });
+		i = j + n.length;
+	}
+	if (i < text.length) {
+		out.push({ t: text.slice(i) });
+	}
+	return out;
+}
+
 function atBottom(el:HTMLElement):boolean {
 	return el.scrollHeight - el.scrollTop - el.clientHeight < 8;
 }
 
 watch(
-	() => [rows.value.length, props.hud.aiLogOpen, source.value] as const,
+	() => [rows.value.length, props.hud.aiLogOpen, source.value, query.value] as const,
 	async (curr, prev) => {
 		if (!curr[1]) {
 			return;
@@ -72,6 +117,7 @@ watch(
 					@change.stop="pickSource"
 				>
 					<option value="">All</option>
+					<option :value="ERRORS">Errors</option>
 					<option
 						v-for="name in sources"
 						:key="name"
@@ -80,21 +126,41 @@ watch(
 						{{ name }}
 					</option>
 				</select>
+				<label class="search">
+					<input
+						v-model="query"
+						type="text"
+						aria-label="Search"
+						placeholder="Search"
+						autocomplete="off"
+						spellcheck="false"
+					>
+					<button
+						v-if="query"
+						type="button"
+						aria-label="Clear search"
+						@click="query = ''"
+					>×</button>
+				</label>
 				<span class="hint">~ to close</span>
 			</div>
 			<div ref="logEl" class="rows">
-				<div v-if="rows.length === 0" class="empty">No AI entries yet.</div>
+				<div v-if="rows.length === 0" class="empty">
+					{{ hud.aiLog.length === 0 ? 'No AI entries yet.' : 'No matching entries.' }}
+				</div>
 				<details
 					v-for="entry in rows"
 					:key="entry.seq"
 					class="row"
-					:open="!!entry.image"
+					:class="{ err: entry.error }"
+					:open="!!entry.image || opened.has(entry.seq)"
+					@toggle="onToggle(entry.seq, $event)"
 				>
 					<summary>
 						<span class="name">{{ entry.name }}</span>
 						<span class="msg">{{ preview(entry.message) }}</span>
 					</summary>
-					<pre class="full">{{ entry.message }}</pre>
+					<pre class="full"><template v-for="(part, i) in hits(entry.message)" :key="i"><mark v-if="part.on">{{ part.t }}</mark><template v-else>{{ part.t }}</template></template></pre>
 					<img
 						v-if="entry.image"
 						class="map"
@@ -138,7 +204,8 @@ watch(
 	text-shadow: 0 1px 0 #1a1208;
 }
 
-.head select {
+.head select,
+.search input {
 	font: inherit;
 	font-size: 11px;
 	letter-spacing: 0.04em;
@@ -147,7 +214,43 @@ watch(
 	background: rgba(8, 6, 4, 0.55);
 	border: 1px solid rgba(58, 42, 34, 0.85);
 	padding: 2px 6px;
+}
+
+.head select {
 	cursor: pointer;
+}
+
+.search {
+	position: relative;
+	flex: 0 1 12em;
+	width: 12em;
+}
+
+.search input {
+	box-sizing: border-box;
+	width: 100%;
+	padding-right: 22px;
+	outline: none;
+}
+
+.search input::placeholder {
+	color: #8a7a62;
+}
+
+.search button {
+	position: absolute;
+	right: 0;
+	top: 0;
+	bottom: 0;
+	width: 22px;
+	border: 0;
+	background: transparent;
+	color: #d4c4a0;
+	cursor: pointer;
+	font: inherit;
+	font-size: 14px;
+	line-height: 1;
+	padding: 0;
 }
 
 .hint {
@@ -211,6 +314,10 @@ watch(
 	color: #c4a574;
 }
 
+.row.err .name {
+	color: #e08070;
+}
+
 .msg {
 	flex: 1 1 auto;
 	font-size: 12px;
@@ -231,6 +338,12 @@ watch(
 	white-space: pre-wrap;
 	word-break: break-word;
 	color: #f0e6c8;
+}
+
+.full mark {
+	background: #c4a574;
+	color: #1a1208;
+	padding: 0;
 }
 
 .map {

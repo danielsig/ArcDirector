@@ -137,8 +137,7 @@ export class GameHost {
 					return true;
 				},
 			})
-			.withArcText(prefs().arcText)
-			.withForceSchema(prefs().forceSchema)
+			.withArcFormat(prefs().arcFormat)
 			.addStockVerbs()
 			.addStockCollectiveVerbs()
 			.withWorld(gameWorld(this))

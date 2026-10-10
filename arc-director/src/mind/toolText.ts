@@ -1,3 +1,4 @@
+import { extractJson, isRecord } from '../json.js';
 import type { ToolDef } from '../inference/provider.js';
 
 /** A tool call a model wrote as text where the Arc goes, instead of calling the tool. */
@@ -34,6 +35,29 @@ export function writtenToolCalls(text:string, firstArgs:ReadonlyMap<string, stri
 	}
 	rest += src.slice(at);
 	return { calls, rest: calls.length > 0 ? tidyJoins(rest) : text };
+}
+
+/**
+ * A tool called in Arc JSON: `{"tool":"recall","query":"Bread"}`, the other keys being its args. Not a reply that also
+ * holds steps, and not one that is cut off before it is a call.
+ */
+export function jsonToolCall(text:string):WrittenToolCall | undefined {
+	const trimmed = text.trim();
+	if (!/^[{`]/.test(trimmed)) {
+		return undefined;
+	}
+	let raw:unknown;
+	try {
+		raw = extractJson(trimmed);
+	}
+	catch {
+		return undefined;
+	}
+	if (!isRecord(raw) || typeof raw.tool !== 'string' || 'steps' in raw) {
+		return undefined;
+	}
+	const { tool, ...args } = raw;
+	return { name: tool, args };
 }
 
 /** Index of the bracket that closes the one at `open`, outside quotes; -1 when it never closes. */

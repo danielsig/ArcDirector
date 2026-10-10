@@ -8,16 +8,22 @@ const props = defineProps<{
 
 const logEl = ref<HTMLElement | null>(null);
 
+function atBottom(el:HTMLElement):boolean {
+	return el.scrollHeight - el.scrollTop - el.clientHeight < 8;
+}
+
 watch(
 	() => [props.hud.chat.length, props.hud.chatOpen] as const,
-	async () => {
-		if (!props.hud.chatOpen) {
+	async (curr, prev) => {
+		if (!curr[1]) {
 			return;
 		}
-		await nextTick();
 		const el = logEl.value;
-		if (el) {
-			el.scrollTop = el.scrollHeight;
+		const stick = !prev?.[1] || (el != null && atBottom(el));
+		await nextTick();
+		const box = logEl.value;
+		if (stick && box) {
+			box.scrollTop = box.scrollHeight;
 		}
 	},
 );

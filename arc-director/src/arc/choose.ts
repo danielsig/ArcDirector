@@ -1,4 +1,4 @@
-import { firstStep, type Arc, type Step } from './types.js';
+import { firstStep, isArc, type Arc, type Step } from './types.js';
 
 /**
  * `choose(goal, name=arc, …)`: a System One model picks one arc by name. Every arg but `goal` is a choice;
@@ -21,7 +21,7 @@ export function isChoiceName(name:string):boolean {
 export function choicesOf(step:Step):Record<string, Arc> {
 	const out:Record<string, Arc> = {};
 	for (const [key, value] of Object.entries(step.args)) {
-		if (!CHOICE_RESERVED.includes(key) && typeof value === 'object' && !Array.isArray(value)) {
+		if (!CHOICE_RESERVED.includes(key) && isArc(value)) {
 			out[key] = value;
 		}
 	}

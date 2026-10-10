@@ -1,17 +1,18 @@
-import { formatArc, parseArc } from '../arc/parse.js';
+import { formatArc, parseArcText } from '../arc/parse.js';
+import { parseArc } from '../arc/wire.js';
 import { exprArgs } from '../arc/validate.js';
-import { arcSchema } from '../arc/schema.js';
-import { FOCUS_EDIT_VERBS, WATCH_EDIT_VERBS, type VerbRegistry } from '../arc/stock-verbs.js';
+import { docsFor, replySchema } from '../arc/schema.js';
+import { FOCUS_EDIT_VERBS, VerbRegistry, WATCH_EDIT_VERBS, argBase, registerStockVerbs } from '../arc/stock-verbs.js';
 import type { Arc, ArcResult, Step } from '../arc/types.js';
 import { ArcError } from '../arc/types.js';
 import { evaluate, unboundCalls } from '../expr/eval.js';
 import { observeExpr } from '../expr/stringify.js';
 import { bagOf, cloneEntity } from '../expr/prev.js';
 import { isVisionModel } from '../inference/models.js';
-import type { ChatMessage, InferenceProvider, JsonSchemaResponseFormat, ToolDef } from '../inference/provider.js';
-import { extractJson, isRecord } from '../json.js';
+import type { ChatContent, ChatContentPart, ChatMessage, InferenceProvider, JsonSchemaResponseFormat, ToolDef } from '../inference/provider.js';
+import { extractJson, isRecord, type JsonSchema } from '../json.js';
 import { mergeTags, nameTags, type MemoryRecord } from '../memory/store.js';
-import type { ConversationTurn, MindEvent, Sense, ToolSpec } from './types.js';
+import type { ArcFormat, ConversationTurn, MindEvent, Sense, ToolSpec } from './types.js';
 import { parseMapZoom, stampMap, isMapSnapshot, DEFAULT_YOU_SYMBOL, type MapPrev, type MapSense } from './map.js';
 import {
 	articlesNamedIn,
@@ -22,8 +23,8 @@ import {
 	receivedArticles,
 	type KnowledgeSource,
 } from './knowledge.js';
-import { toolFirstArgs, writtenToolCalls } from './toolText.js';
-import { arcRepairHint, writtenToolsHint, blockedAgainHint, repeatOutputHint, sayRangeHint, shouldEmitArcText, stablePrefix, volatileBlock, type ThinkInstructions } from './prompt.js';
+import { jsonToolCall, toolFirstArgs, writtenToolCalls } from './toolText.js';
+import { arcRepairHint, writtenToolsHint, toolResultHint, blockedAgainHint, repeatOutputHint, reviseGoalsAsk, sayRangeHint, stablePrefix, volatileBlock, type ThinkInstructions } from './prompt.js';
 import type { TalkNet } from './talk.js';
 import type { SightClause } from '../perception/types.js';
 import { idsOf, mapArc, mapExpr, mapLawName, namesOf } from './ids.js';
@@ -32,8 +33,8 @@ import type { Persona } from '../character/persona.js';
 import type { Watches } from '../character/types.js';
 import { sayToOf, type ArcRunner } from '../character/arc-runner.js';
 import type { Law } from '../arc/laws.js';
-import { arcSteps, deferThinks, THINK_ABOUT_CAP } from '../arc/run.js';
-import { firstStep } from '../arc/types.js';
+import { deferThinks, THINK_ABOUT_CAP } from '../arc/run.js';
+import { arcSteps, firstStep, isArc } from '../arc/types.js';
 import { noWayTo } from '../world/route.js';
 import { waitUntilOf, type MindQueue } from '../think/queue.js';
 import { hasWatch, watchCount } from '../character/watch.js';
@@ -47,6 +48,8 @@ export type MindSettings = {
 	skipMajor?:boolean;
 	/** No think when it joins: it waits for something to happen. Default: it thinks once to start. */
 	skipStart?:boolean;
+	/** No goal or identity revision, on the timer or after a major event. */
+	skipStrategic?:boolean;
 	/** Tie-break after watch `rankScore`. Higher goes first. Default 0. */
 	rank?:number;
 	/** Fewest game seconds between tactical thinks. Default 0 under a director, whose queue paces thinks. */
@@ -56,8 +59,8 @@ export type MindSettings = {
 	/** The model it thinks with, by its name on the director (`addModel`). Omit for the director's default. */
 	model?:string;
 	/**
-	 * Clear lines kept in Current Conversation, oldest first.
-	 * Omit to use {@link conversationCapFor} on the model's context window. 0 shows none.
+	 * How much of Current Conversation to show, in letters, whole messages only, newest kept.
+	 * Omit for one quarter of the model's context window ({@link conversationCapFor}). 0 shows none.
 	 */
 	conversationCap?:number;
 };
@@ -109,10 +112,8 @@ export type MindDeps<TCtx = unknown> = {
 	wayBlocked?:(id:string)=>string | undefined;
 	/** Extra chat turns after a bad arc or a tool call with tools closed. Host sets this; 0 means fail on the first bad reply. */
 	arcRetryCap?:number;
-	/** Ask for `go_to() && wait()` text instead of Arc JSON. Testing toggle. Skips the JSON goals pass. */
-	arcText?:boolean;
-	/** Arc JSON turns send the arc schema for the server to enforce, and offer no tools. Ignored with `arcText`. */
-	forceSchema?:boolean;
+	/** How the model writes an Arc: `text` (`go_to() && wait()`), `json`, or `schema` (JSON the server enforces). Default `json`. */
+	arcFormat?:ArcFormat;
 	/** Sampling temperature from the second repair turn on, so a model stuck on one bad reply moves. Default 0.4. */
 	repairTemperature?:number;
 	thinkInstructions?:ThinkInstructions;
@@ -151,6 +152,76 @@ function asStringArray(v:unknown):string[] {
 	return v.filter((x):x is string => typeof x === 'string');
 }
 
+/**
+ * What each built-in tool takes. Fixed, in this order, so the reply schema built from them (then the host's tools) is
+ * the same bytes for every mind, whatever tools it is offered.
+ */
+const BUILTIN_TOOL_PARAMETERS:Record<string, JsonSchema> = {
+	recall: {
+		type: 'object',
+		additionalProperties: false,
+		required: ['query'],
+		properties: {
+			query: { type: 'string' },
+			k: { type: 'number' },
+		},
+	},
+	observe: {
+		type: 'object',
+		additionalProperties: false,
+		required: ['expr'],
+		properties: {
+			expr: { type: 'string' },
+		},
+	},
+	earshot: {
+		type: 'object',
+		additionalProperties: false,
+		properties: {
+			to: { type: 'string' },
+		},
+	},
+	see_map: {
+		type: 'object',
+		additionalProperties: false,
+		properties: {
+			zoom: { type: 'number', minimum: 0, maximum: 1 },
+		},
+	},
+};
+
+/** What a goal pass may write in `text`: only the verbs that edit goals and identity. */
+const GOAL_VERBS = registerStockVerbs(new VerbRegistry(), 'set_goal', 'drop_goal', 'set_identity');
+
+/** What a goal pass replies under `schema`: the whole goal list (empty to keep it), and an identity patch if one is due. */
+const GOALS_SCHEMA:JsonSchema = {
+	type: 'object',
+	additionalProperties: false,
+	required: ['goals'],
+	properties: {
+		goals: {
+			type: 'array',
+			items: {
+				type: 'object',
+				additionalProperties: false,
+				required: ['text'],
+				properties: {
+					text: { type: 'string' },
+					priority: { type: 'number' },
+				},
+			},
+		},
+		identity: {
+			type: 'object',
+			additionalProperties: false,
+			properties: {
+				role: { type: 'string' },
+				traits: { type: 'array', items: { type: 'string' } },
+			},
+		},
+	},
+};
+
 /** Tool calls a think may make before it must emit the Arc. Small models need several lookups in a row. */
 export const DEFAULT_TOOL_ROUNDS = 6;
 /** Thinks in a row that only talk or wait before the next one is told to stop talking and act. */
@@ -181,10 +252,6 @@ const MENTION_REPEAT = 5;
 /** Thinks before the same tool call may be made again. */
 const LOOKUP_REPEAT = 5;
 const RECENT_CAP = 8;
-/** Most lines the computed conversation default will keep. */
-export const MAX_CONVERSATION_CAP = 64;
-/** Tokens of context per pair of conversation lines. */
-const CONVERSATION_TOKENS = 1024;
 const RECENT_SUMMARY_MAX = 600;
 const RECENT_SEPARATOR = '; ';
 const BARE_RESULT = new Set(['ok', 'failed', 'interrupted']);
@@ -201,15 +268,18 @@ function foldRecent(prev:string, overflow:string[]):string {
 	return (cut < 0 ? tail : tail.slice(cut + RECENT_SEPARATOR.length)).trim();
 }
 
-/** 2 lines per 1K tokens of context, at most {@link MAX_CONVERSATION_CAP}. An unknown context gets the most. */
+/**
+ * One quarter of the context window, in letters. English runs about 4 letters a token, so this is
+ * `contextTokens / 4 * 4`. An unknown window is unlimited. 0 shows none.
+ */
 export function conversationCapFor(contextTokens:number | undefined):number {
 	if (contextTokens === undefined || !Number.isFinite(contextTokens)) {
-		return MAX_CONVERSATION_CAP;
+		return Number.POSITIVE_INFINITY;
 	}
 	if (contextTokens <= 0) {
 		return 0;
 	}
-	return Math.min(MAX_CONVERSATION_CAP, Math.floor(contextTokens / CONVERSATION_TOKENS) * 2);
+	return Math.floor(contextTokens / 4 * 4);
 }
 
 function isBareResult(text:string):boolean {
@@ -251,6 +321,7 @@ export class Mind<TCtx = unknown> {
 	public skipHeartbeat:boolean;
 	public skipMajor:boolean;
 	public skipStart:boolean;
+	public skipStrategic:boolean;
 	public rank:number;
 	public heartbeat:number;
 	public strategicInterval:number;
@@ -274,8 +345,7 @@ export class Mind<TCtx = unknown> {
 	public wayBlocked:((id:string)=>string | undefined) | undefined;
 	public arcRetryCap = 0;
 	/** Mutable so the Testing toggle can flip live minds. */
-	public arcText = false;
-	public forceSchema = false;
+	public arcFormat:ArcFormat = 'json';
 	public repairTemperature = 0.4;
 	public thinkInstructions:ThinkInstructions | undefined;
 	public thinking:()=>boolean = () => true;
@@ -292,7 +362,7 @@ export class Mind<TCtx = unknown> {
 	public vision:boolean | undefined;
 	/** The context window of the model it thinks with, kept current by the director; `undefined` when unknown. */
 	public contextTokens:number | undefined;
-	/** Lines shown in Current Conversation; `undefined` follows {@link conversationCapFor} on `contextTokens`. */
+	/** Letters shown in Current Conversation; `undefined` is one quarter of `contextTokens`. */
 	public conversationCap:number | undefined;
 	/** The last arc or think's result, as the next prompt shows it. */
 	public lastResult:ArcResult | undefined;
@@ -315,6 +385,8 @@ export class Mind<TCtx = unknown> {
 	private _emitStreak = 0;
 	/** Accepted arcs in a row that only talked or waited. */
 	private _talkStreak = 0;
+	/** Characters a `reply` verb in the running arc asked something of. */
+	private _replyTo:string[] = [];
 	/** Recent lines this mind's voice said, with who heard each clearly. */
 	private _said:{ gist:Set<string>; text:string; heard:Set<string> }[] = [];
 	private _mentionCap = DEFAULT_MENTION_CAP;
@@ -332,6 +404,7 @@ export class Mind<TCtx = unknown> {
 		this.skipHeartbeat = settings.skipHeartbeat ?? false;
 		this.skipMajor = settings.skipMajor ?? false;
 		this.skipStart = settings.skipStart ?? false;
+		this.skipStrategic = settings.skipStrategic ?? false;
 		this.rank = settings.rank ?? 0;
 		this.heartbeat = settings.heartbeat ?? 0;
 		this.strategicInterval = settings.strategicInterval ?? 180;
@@ -365,8 +438,7 @@ export class Mind<TCtx = unknown> {
 		this.toolRoundCap = deps.toolRoundCap ?? DEFAULT_TOOL_ROUNDS;
 		this.wayBlocked = deps.wayBlocked;
 		this.arcRetryCap = deps.arcRetryCap ?? 0;
-		this.arcText = deps.arcText === true;
-		this.forceSchema = deps.forceSchema === true;
+		this.arcFormat = deps.arcFormat ?? 'json';
 		this.repairTemperature = deps.repairTemperature ?? 0.4;
 		this.thinkInstructions = deps.thinkInstructions;
 		this.thinking = deps.thinking ?? (() => true);
@@ -417,6 +489,7 @@ export class Mind<TCtx = unknown> {
 			skipHeartbeat: this.skipHeartbeat,
 			skipMajor: this.skipMajor,
 			skipStart: this.skipStart,
+			skipStrategic: this.skipStrategic,
 			rank: this.rank,
 			heartbeat: this.heartbeat,
 			strategicInterval: this.strategicInterval,
@@ -506,6 +579,15 @@ export class Mind<TCtx = unknown> {
 		return id === this.id || id === this.thinkThread();
 	}
 
+	/** Whether this mind acts for `id`: itself, its voice, or one of a collective's characters. */
+	private controls(id:string):boolean {
+		if (this.isSelf(id)) {
+			return true;
+		}
+		const roster = this._owner as { characters?:readonly { id:string }[] } | undefined;
+		return roster?.characters?.some((c) => c.id === id) ?? false;
+	}
+
 	/** Unabsorbed speech meant for this mind: to it, naming it, or to everyone. Overheard talk does not count. */
 	public hasHeard():boolean {
 		return this._pendingEvents.some((e) => e.kind === 'HeardSpeech' && e.major);
@@ -552,6 +634,7 @@ export class Mind<TCtx = unknown> {
 
 	/** The voice began an arc. */
 	public arcStarted(arc:Arc):void {
+		this._replyTo = [];
 		this.queue?.beginArc(this.id, arc);
 	}
 
@@ -561,14 +644,36 @@ export class Mind<TCtx = unknown> {
 	}
 
 	/**
-	 * An arc that ends on a say someone could answer gives the answer time to come before the next think.
-	 * A say mid-arc does not wait: the rest of the arc (`say(...) && use(...)`) is what was decided.
+	 * After the arc, wait for anyone a `reply` step named, when they are still nearby.
+	 * The wait is at the end, so `give(...) && say(...)` still runs the say. A step that names no character waits for no one.
 	 */
 	public async afterArc(result:ArcResult, voice:ArcRunner<TCtx>):Promise<void> {
-		const due = result.ok && result.verb === 'say' && 'answerable' in result && result.answerable === true;
-		if (due && voice.execute) {
-			await voice.execute({ verb: 'wait', args: { seconds: 20 } }, voice.context());
+		const who = result.interrupted ? [] : this.nearbyReply(voice);
+		this._replyTo = [];
+		if (who.length > 0 && voice.execute) {
+			await voice.execute({ verb: 'wait', args: { seconds: 20, reply: who.length === 1 ? who[0] : who } }, voice.context());
 		}
+	}
+
+	/** A finished `reply` step. Remember the characters it named; the wait happens when the arc ends. */
+	public noteReply(step:Step, result:ArcResult, voice:ArcRunner<TCtx>):void {
+		if (!result.ok || !voice.verbs.get(step.verb)?.reply) {
+			return;
+		}
+		for (const id of idTargets(step, voice)) {
+			if (!this._replyTo.includes(id)) {
+				this._replyTo.push(id);
+			}
+		}
+	}
+
+	/** Reply targets from this arc who are still close enough to answer. */
+	private nearbyReply(voice:ArcRunner<TCtx>):string[] {
+		if (this._replyTo.length === 0) {
+			return [];
+		}
+		const near = voice.talk ? new Set(voice.talk.nearby(voice.id)) : otherCharacters(voice);
+		return this._replyTo.filter((id) => near.has(id));
 	}
 
 	public async remember(text:string, tags:string[] = [], timestamp = this._now):Promise<MemoryRecord> {
@@ -703,7 +808,7 @@ export class Mind<TCtx = unknown> {
 	/** A saved mind, not yet attached to anyone. */
 	public static fromJSON<TCtx>(json:MindJSON):Mind<TCtx> {
 		const mind = new Mind<TCtx>(json.settings);
-		mind.lastArc = json.lastArc;
+		mind.lastArc = isArc(json.lastArc) ? json.lastArc : undefined;
 		mind.lastResult = json.lastResult;
 		mind.lastTacticalTimestamp = json.lastTacticalTimestamp ?? Number.NEGATIVE_INFINITY;
 		mind.lastStrategicTimestamp = json.lastStrategicTimestamp ?? 0;
@@ -735,6 +840,9 @@ export class Mind<TCtx = unknown> {
 	}
 
 	private strategicDue(gameTime:number):boolean {
+		if (this.skipStrategic) {
+			return false;
+		}
 		if (this._pendingEvents.some((e) => e.major)) {
 			return true;
 		}
@@ -747,10 +855,9 @@ export class Mind<TCtx = unknown> {
 		return gameTime - this.lastStrategicTimestamp >= this.strategicInterval;
 	}
 
+	/** One strategic pass: the model revises goals and identity, in the form this mind writes (`arcFormat`). A reply that does not read changes nothing. */
 	private async reviseGoals():Promise<void> {
-		if (this.arcText) {
-			return;
-		}
+		const format = this.arcFormat;
 		const system = stablePrefix(this.id, this.persona.identity, this.owner.activeVerbs(), {
 			includeWatches: true,
 			omitArc: true,
@@ -762,13 +869,7 @@ export class Mind<TCtx = unknown> {
 			recent: this._recent,
 			recentSummary: this._recentSummary,
 			conversation: this.conversationLines(),
-		})}\n\n`
-			+ 'Revise goals if what you just learned changes what you must do. '
-			+ 'Harm, theft, and threats outrank standing work — put that first in goals. '
-			+ 'Do not change identity unless who you are has actually changed for good. '
-			+ 'Omit identity otherwise. Do not rewrite the role to summarize this moment. '
-			+ 'Emit JSON {"goals":[{"text":"...","priority":0}]} and only if needed "identity":{"role":"...","traits":["..."]}. '
-			+ `Keep at most ${this.persona.maxGoals} goals. Do not emit movement.`;
+		})}\n\n${reviseGoalsAsk(format, this.persona.maxGoals)}`;
 		const res = await this.provider.chat({
 			model: this.modelID,
 			thread: this.id,
@@ -776,12 +877,19 @@ export class Mind<TCtx = unknown> {
 				{ role: 'system', content: system },
 				{ role: 'user', content: user },
 			],
+			responseFormat: format === 'schema' ? { name: 'goals', schema: GOALS_SCHEMA, strict: true } : undefined,
 			temperature: 0,
 		});
 		if (!res.content) {
 			return;
 		}
 		try {
+			if (format === 'text') {
+				for (const step of arcSteps(parseArcText(res.content, GOAL_VERBS))) {
+					this.editPersona(step, this.voice);
+				}
+				return;
+			}
 			const raw = extractJson(res.content);
 			if (!isRecord(raw) || (!Array.isArray(raw.goals) && raw.identity === undefined)) {
 				return;
@@ -966,10 +1074,9 @@ export class Mind<TCtx = unknown> {
 		return Object.fromEntries(Object.entries(watches).map(([name, expr]) => [name, this.named(expr)]));
 	}
 
-	/** The model's reply as an arc in ids. */
 	/** The reply as an arc in ids. Throws on a watch that calls a function the watch language does not have: it could never hold. */
-	private readArc(raw:unknown, verbs:VerbRegistry):Arc {
-		const arc = mapArc(deferThinks(parseArc(raw, verbs)), verbs, idsOf(this.persona.names));
+	private readArc(content:string, verbs:VerbRegistry):Arc {
+		const arc = mapArc(deferThinks(parseArc(content, verbs)), verbs, idsOf(this.persona.names));
 		const catalog = this.voice.catalog?.();
 		const unbound = catalog ? exprArgs(arc, verbs).flatMap((expr) => unboundCalls(expr, catalog)) : [];
 		if (unbound.length > 0) {
@@ -978,20 +1085,11 @@ export class Mind<TCtx = unknown> {
 		return arc;
 	}
 
-	private parseArcContent(content:string, verbs:VerbRegistry):{ arc:Arc; raw:unknown } | null {
+	/** The reply as an arc, or null when it is empty or does not read. */
+	private parseArcContent(content:string, verbs:VerbRegistry):Arc | null {
 		try {
-			const trimmed = content.trim();
-			if (!trimmed) {
-				return null;
-			}
-			const raw = (trimmed.startsWith('{') || trimmed.startsWith('```'))
-				? extractJson(trimmed)
-				: trimmed;
-			const arc = this.readArc(raw, verbs);
-			if (!firstStep(arc)?.verb) {
-				return null;
-			}
-			return { arc, raw };
+			const arc = content.trim() ? this.readArc(content, verbs) : undefined;
+			return arc && firstStep(arc)?.verb ? arc : null;
 		}
 		catch {
 			return null;
@@ -1012,10 +1110,13 @@ export class Mind<TCtx = unknown> {
 		}
 		this.absorbPending();
 		const sensed = this.gatherSensed();
-		const emitText = this.emitText(verbs);
-		const form = emitText ? 'Arc text' : 'Arc JSON';
+		const format = this.arcFormat;
+		const schema = format === 'schema';
+		const form = format === 'text' ? 'Arc text' : 'Arc JSON';
 		const hint = `While you thought, the live verb changed from ${liveVerbAtThink} to ${this._lastVerb}. `
-			+ `Do not think again. Emit a new ${form} if that changes your choices, or confirm the arc you already wrote.`;
+			+ (schema
+				? 'Do not think again. Reply with new steps if that changes your choices, or repeat the steps you already wrote to keep them.'
+				: `Do not think again. Emit a new ${form} if that changes your choices, or confirm the arc you already wrote.`);
 		messages.push({ role: 'assistant', content: firstContent });
 		messages.push({ role: 'user', content: this.volatileUser(sensed, hint) });
 		const res = await this.provider.chat({
@@ -1024,21 +1125,16 @@ export class Mind<TCtx = unknown> {
 			messages,
 			tools: sendTools ? tools : undefined,
 			toolChoice: sendTools ? 'none' : undefined,
-			responseFormat: this.arcFormat(verbs, emitText),
+			responseFormat: this.replyFormat(verbs, format),
 			temperature: 0,
-			fakeThought: true,
+			// "Confirm" cannot be written under a schema, so a reply there asks for the steps again, with no thought to fake.
+			...(schema ? { enableThinking: false } : { fakeThought: true }),
 		});
+		// A tool call here, or no steps, keeps the arc already written.
 		if (res.toolCalls.length > 0 || !res.content) {
 			return arc;
 		}
-		const parsed = this.parseArcContent(res.content, verbs);
-		if (!parsed) {
-			return arc;
-		}
-		if (typeof parsed.raw !== 'string') {
-			this.applyMind(parsed.raw);
-		}
-		return parsed.arc;
+		return this.parseArcContent(res.content, verbs) ?? arc;
 	}
 
 	private async tactical():Promise<Arc> {
@@ -1050,10 +1146,13 @@ export class Mind<TCtx = unknown> {
 		const freshInput = this.hasFreshInput();
 		const sensed = this.gatherSensed();
 		const verbs = this.owner.activeVerbs();
-		const emitText = this.emitText(verbs);
-		const tools = this.toolRoundCap > 0 && !this.arcFormat(verbs, emitText) ? this.toolDefs() : [];
+		const format = this.arcFormat;
+		const reply = this.replyFormat(verbs, format);
+		// What a think may look up; under a schema the model calls it in its reply, so none are sent as native tools.
+		const offered = this.toolRoundCap > 0 ? this.toolDefs() : [];
+		const tools = reply ? [] : offered;
 		const sendTools = tools.length > 0;
-		const toolNames = tools.map((t) => t.name);
+		const toolNames = offered.map((t) => t.name);
 		const system = stablePrefix(this.id, this.persona.identity, verbs, {
 			includeWatches: this.persona.watchesWritable || watchCount(this.persona.watchList()) > 0,
 			watchesWritable: verbs.has('watch'),
@@ -1061,7 +1160,7 @@ export class Mind<TCtx = unknown> {
 			canSeeMap: toolNames.includes('see_map'),
 			canRecallKnowledge: toolNames.includes('recall') && this.knowledge !== undefined,
 			youSymbol: this.youSymbol(),
-			arcText: emitText,
+			arcFormat: this.arcFormat,
 			thinkInstructions: this.thinkInstructions,
 			thinking: this.thinking(),
 			verbInstructions: this.verbInstructions,
@@ -1076,7 +1175,7 @@ export class Mind<TCtx = unknown> {
 			{ role: 'system', content: system },
 			{ role: 'user', content: user },
 		];
-		let toolsLeft = sendTools ? this.toolRoundCap : 0;
+		let toolsLeft = offered.length > 0 ? this.toolRoundCap : 0;
 		let repairsLeft = this.arcRetryCap;
 		let warnedRepeat = freshInput;
 		let checksLeft = Math.max(1, this.arcRetryCap);
@@ -1091,7 +1190,7 @@ export class Mind<TCtx = unknown> {
 				messages,
 				tools: sendTools ? tools : undefined,
 				toolChoice: sendTools ? (allowTools ? 'auto' : 'none') : undefined,
-				responseFormat: this.arcFormat(verbs, emitText),
+				responseFormat: reply,
 				temperature: this.arcRetryCap - repairsLeft > 1 || this._emitStreak >= 2
 					? this.repairTemperature
 					: 0,
@@ -1100,7 +1199,7 @@ export class Mind<TCtx = unknown> {
 			});
 			if (res.truncated) {
 				lastErr = new ArcError('reply was cut off at the token limit; answer shorter');
-				if (!this.pushRepair(messages, { content: null, toolCalls: [] }, lastErr, repairsLeft, toolNames, emitText)) {
+				if (!this.pushRepair(messages, { content: null, toolCalls: [] }, lastErr, repairsLeft, toolNames, format)) {
 					throw lastErr;
 				}
 				repairsLeft -= 1;
@@ -1120,7 +1219,7 @@ export class Mind<TCtx = unknown> {
 				continue;
 			}
 			// A tool written where the Arc goes is the call the model meant: run it, or drop it from an Arc beside it.
-			const written = emitText && res.content ? writtenToolCalls(res.content, toolFirstArgs(tools)) : undefined;
+			const written = format === 'text' && res.content ? writtenToolCalls(res.content, toolFirstArgs(tools)) : undefined;
 			if (written && written.calls.length > 0 && !written.rest && allowTools) {
 				messages.push({ role: 'assistant', content: res.content });
 				const results:string[] = [];
@@ -1128,14 +1227,31 @@ export class Mind<TCtx = unknown> {
 					results.push(`${call.name}: ${await this.lookUp(call.name, JSON.stringify(call.args), ctx)}`);
 				}
 				this.pushMapImage(messages);
-				messages.push({ role: 'user', content: writtenToolsHint(results, emitText) });
+				messages.push({ role: 'user', content: writtenToolsHint(results, format) });
 				toolsLeft -= 1;
+				continue;
+			}
+			// A tool called in the reply's own JSON: look it up and answer with what it says. A tool this mind lacks, or one past the cap, is a repair.
+			const called = format === 'text' || !res.content ? undefined : jsonToolCall(res.content);
+			if (called) {
+				if (!toolNames.includes(called.name) || toolsLeft <= 0) {
+					lastErr = new ArcError(toolNames.includes(called.name) ? `no lookups left: ${called.name} was your last` : `${called.name} is not a tool you have`);
+					if (!this.pushRepair(messages, res, lastErr, repairsLeft, toolNames, format)) {
+						throw lastErr;
+					}
+					repairsLeft -= 1;
+					continue;
+				}
+				messages.push({ role: 'assistant', content: res.content });
+				const result = await this.lookUp(called.name, JSON.stringify(called.args), ctx);
+				toolsLeft -= 1;
+				messages.push({ role: 'user', content: this.withMapImage(toolResultHint(called.name, result, toolsLeft <= 0)) });
 				continue;
 			}
 			const content = written?.rest || res.content;
 			if (res.toolCalls.length > 0) {
 				lastErr = new ArcError('model called a tool when it must emit an Arc');
-				if (!this.pushRepair(messages, res, lastErr, repairsLeft, toolNames, emitText)) {
+				if (!this.pushRepair(messages, res, lastErr, repairsLeft, toolNames, format)) {
 					throw lastErr;
 				}
 				repairsLeft -= 1;
@@ -1143,17 +1259,12 @@ export class Mind<TCtx = unknown> {
 			}
 			if (content) {
 				let arc:Arc;
-				let raw:unknown;
 				try {
-					const trimmed = content.trim();
-					raw = (trimmed.startsWith('{') || trimmed.startsWith('```'))
-						? extractJson(trimmed)
-						: trimmed;
-					arc = this.readArc(raw, verbs);
+					arc = this.readArc(content, verbs);
 				}
 				catch (err) {
 					lastErr = err instanceof Error ? err : new ArcError(String(err));
-					if (!this.pushRepair(messages, res, lastErr, repairsLeft, toolNames, emitText)) {
+					if (!this.pushRepair(messages, res, lastErr, repairsLeft, toolNames, format)) {
 						throw lastErr;
 					}
 					repairsLeft -= 1;
@@ -1163,7 +1274,7 @@ export class Mind<TCtx = unknown> {
 					warnedRepeat = true;
 					this._emitStreak += 1;
 					messages.push({ role: 'assistant', content });
-					messages.push({ role: 'user', content: repeatOutputHint(this._emitStreak, emitText) });
+					messages.push({ role: 'user', content: repeatOutputHint(this._emitStreak, format) });
 					continue;
 				}
 				const blocked = this.unreachableSay(arc);
@@ -1175,11 +1286,8 @@ export class Mind<TCtx = unknown> {
 					}
 					checksLeft -= 1;
 					messages.push({ role: 'assistant', content });
-					messages.push({ role: 'user', content: blocked ? sayRangeHint(blocked.reason, blocked.nearby, emitText) : blockedAgainHint(again!, emitText) });
+					messages.push({ role: 'user', content: blocked ? sayRangeHint(blocked.reason, blocked.nearby, format) : blockedAgainHint(again!, format) });
 					continue;
-				}
-				if (typeof raw !== 'string') {
-					this.applyMind(raw);
 				}
 				this.acceptEmit(content);
 				this._talkStreak = arcSteps(arc).every((step) => TALK_VERBS.has(step.verb)) ? this._talkStreak + 1 : 0;
@@ -1194,7 +1302,7 @@ export class Mind<TCtx = unknown> {
 				);
 			}
 			lastErr = new ArcError('model returned no arc');
-			if (!this.pushRepair(messages, res, lastErr, repairsLeft, toolNames, emitText)) {
+			if (!this.pushRepair(messages, res, lastErr, repairsLeft, toolNames, format)) {
 				throw lastErr;
 			}
 			repairsLeft -= 1;
@@ -1202,13 +1310,9 @@ export class Mind<TCtx = unknown> {
 		throw lastErr ?? new ArcError('failed to obtain Arc');
 	}
 
-	/** The arc schema the server must follow under {@link forceSchema}; otherwise none, and the reply is parsed as written. */
-	private arcFormat(verbs:VerbRegistry, emitText:boolean):JsonSchemaResponseFormat | undefined {
-		return this.forceSchema && !emitText ? { name: 'arc', schema: arcSchema(verbs), strict: true } : undefined;
-	}
-
-	private emitText(verbs:VerbRegistry):boolean {
-		return shouldEmitArcText(verbs, this.arcText);
+	/** The schema the server must follow under `schema`; otherwise none, and the reply is parsed as written. */
+	private replyFormat(verbs:VerbRegistry, format:ArcFormat):JsonSchemaResponseFormat | undefined {
+		return format === 'schema' ? { name: 'reply', schema: replySchema(verbs.nested(), this.replyTools()), strict: true } : undefined;
 	}
 
 	private isRepeat(text:string):boolean {
@@ -1235,7 +1339,7 @@ export class Mind<TCtx = unknown> {
 		err:Error,
 		repairsLeft:number,
 		toolNames:string[],
-		emitText:boolean,
+		format:ArcFormat,
 	):boolean {
 		if (repairsLeft <= 0) {
 			return false;
@@ -1245,7 +1349,7 @@ export class Mind<TCtx = unknown> {
 			?? (called.length > 0 ? `(tool call: ${called.join(', ')})` : '');
 		const dropProse = !/^\s*[{`]/.test(shown) && !shown.includes('(');
 		messages.push({ role: 'assistant', content: dropProse ? null : (shown || null) });
-		messages.push({ role: 'user', content: arcRepairHint(err.message, emitText, toolNames) });
+		messages.push({ role: 'user', content: arcRepairHint(err.message, format, toolNames, this.owner.activeVerbs()) });
 		return true;
 	}
 
@@ -1272,20 +1376,26 @@ export class Mind<TCtx = unknown> {
 				}
 				continue;
 			}
-			if (e.turn) {
+			const who = this._pendingEvents[i].who ?? [];
+			const betweenUs = !e.turn && who.length >= 2 && who.some((id) => this.controls(id));
+			if (betweenUs) {
+				this.noteConversation({ speakerID: '', text });
+			}
+			else if (e.turn) {
 				this.noteConversation(e.turn);
 			}
 			else {
 				this.noteRecent(text);
 			}
-			if (e.remember) {
+			if (e.remember || betweenUs) {
+				const tags = betweenUs ? mergeTags(e.tags, ['act'], nameTags(text)) : mergeTags(e.tags, nameTags(text));
 				const rows = this.persona.memory.all();
 				const last = rows[rows.length - 1];
 				if (last?.text !== text) {
 					this.persona.memory.add({
 						category: 'episodic',
 						text,
-						tags: mergeTags(e.tags, nameTags(text)),
+						tags,
 						timestamp: e.timestamp ?? this._now,
 					}, e.timestamp ?? this._now);
 				}
@@ -1294,7 +1404,7 @@ export class Mind<TCtx = unknown> {
 		this._recentAbsorbed = this._pendingEvents.length;
 	}
 
-	/** Keeps at least {@link MAX_CONVERSATION_CAP} lines, so a larger context later shows more. */
+	/** Drops oldest messages past the letter budget. A cap of 0 still keeps the window's quarter, so raising it shows them. */
 	private noteConversation(turn:ConversationTurn):void {
 		const text = turn.text.trim().replace(/\s+/g, ' ');
 		const last = this._conversation[this._conversation.length - 1];
@@ -1302,23 +1412,50 @@ export class Mind<TCtx = unknown> {
 			return;
 		}
 		this._conversation.push({ ...turn, text });
-		const kept = Math.max(MAX_CONVERSATION_CAP, this.conversationCap ?? 0);
-		this._conversation.splice(0, Math.max(0, this._conversation.length - kept));
+		const budget = this.conversationCap !== undefined && this.conversationCap > 0
+			? this.conversationCap
+			: conversationCapFor(this.contextTokens);
+		const kept = this.turnsWithin(this._conversation, budget);
+		const start = kept.length > 0 ? this._conversation.length - kept.length : this._conversation.length - 1;
+		this._conversation.splice(0, Math.max(0, start));
+	}
+
+	/** The newest whole messages whose rendered lines fit in `cap` letters. */
+	private turnsWithin(turns:readonly ConversationTurn[], cap:number):ConversationTurn[] {
+		if (cap <= 0) {
+			return [];
+		}
+		let used = 0;
+		let start = turns.length;
+		for (let i = turns.length - 1; i >= 0; i--) {
+			const n = this.conversationLine(turns[i]).length;
+			if (used + n > cap) {
+				break;
+			}
+			used += n;
+			start = i;
+		}
+		return turns.slice(start);
 	}
 
 	/** The turns Current Conversation shows, oldest first. */
 	private shownTurns():ConversationTurn[] {
 		const cap = this.conversationCap ?? conversationCapFor(this.contextTokens);
-		return cap > 0 ? this._conversation.slice(-cap) : [];
+		return this.turnsWithin(this._conversation, cap);
 	}
 
 	/** `Me (to Forager): …`, `Forager (to you): …`, `Guard: …` to everyone. Each id is named as this mind knows it now. */
+	private conversationLine(turn:ConversationTurn):string {
+		if (!turn.speakerID) {
+			return turn.text;
+		}
+		const speaker = this.isSelf(turn.speakerID) ? 'Me' : this.nameOf(turn.speakerID);
+		const to = (turn.to ?? []).map((id) => this.isSelf(id) ? 'you' : this.nameOf(id));
+		return `${speaker}${to.length > 0 ? ` (to ${to.join(', ')})` : ''}: ${turn.text}`;
+	}
+
 	private conversationLines():string[] {
-		return this.shownTurns().map((turn) => {
-			const speaker = this.isSelf(turn.speakerID) ? 'Me' : this.nameOf(turn.speakerID);
-			const to = (turn.to ?? []).map((id) => this.isSelf(id) ? 'you' : this.nameOf(id));
-			return `${speaker}${to.length > 0 ? ` (to ${to.join(', ')})` : ''}: ${turn.text}`;
-		});
+		return this.shownTurns().map((turn) => this.conversationLine(turn));
 	}
 
 	private noteRecent(line:string):void {
@@ -1391,14 +1528,17 @@ export class Mind<TCtx = unknown> {
 		}
 		const pinnedIds = new Set(this.persona.memory.pinned().map((r) => r.id));
 		const recentSet = new Set(this._recent);
-		// Speech still in Current Conversation is already on screen.
-		const quoting = this.shownTurns().map((turn) => `"${turn.text}"`);
+		// Speech and acts still in Current Conversation are already on screen.
+		const shown = this.shownTurns();
+		const quoting = shown.map((turn) => `"${turn.text}"`);
+		const lines = new Set(shown.map((turn) => this.conversationLine(turn)));
 		return this.persona.memory.recall({
 			query,
 			k: this.recallK,
 			now: this._now,
 			skip: (r) => {
-				const onScreen = r.tags.includes('speech') && quoting.some((quote) => r.text.endsWith(quote));
+				const onScreen = (r.tags.includes('speech') && quoting.some((quote) => r.text.endsWith(quote)))
+					|| (r.tags.includes('act') && lines.has(r.text));
 				if (r.pinned || pinnedIds.has(r.id) || recentSet.has(r.text) || onScreen) {
 					return true;
 				}
@@ -1407,21 +1547,6 @@ export class Mind<TCtx = unknown> {
 			},
 		});
 	}
-
-
-	private applyMind(raw:unknown):void {
-		if (!isRecord(raw)) {
-			return;
-		}
-		if (raw.identity !== undefined) {
-			this.persona.applyIdentityPatch(raw.identity, this.id, this._now);
-		}
-		if (raw.goals !== undefined) {
-			this.persona.applyGoalList(raw.goals);
-		}
-	}
-
-
 
 
 	private maybeIntrude(perceptionText:string):string | undefined {
@@ -1443,15 +1568,28 @@ export class Mind<TCtx = unknown> {
 	}
 
 	private toolDefs():ToolDef[] {
+		const tools = this.mergedTools();
+		const verbs = this.owner.activeVerbs();
+		const catalog = [...verbs.nested().list().map((spec) => spec.name), ...Object.keys(tools)];
+		const allowed = new Set([...verbs.list().map((spec) => spec.name), ...Object.keys(tools)]);
 		const out:ToolDef[] = [];
-		for (const [name, spec] of Object.entries(this.mergedTools())) {
+		for (const [name, spec] of Object.entries(tools)) {
 			out.push({
 				name,
-				description: spec.description,
+				description: docsFor(spec.description, name, allowed, catalog),
 				parameters: spec.parameters,
 			});
 		}
 		return out;
+	}
+
+	/** Every tool's parameters, the host's after the built-ins: what `replySchema` lets a reply call, whatever this mind is offered. */
+	private replyTools():Record<string, JsonSchema> {
+		const tools = { ...BUILTIN_TOOL_PARAMETERS };
+		for (const [name, spec] of Object.entries(this.tools)) {
+			tools[name] = spec.parameters;
+		}
+		return tools;
 	}
 
 	private mergedTools():Record<string, ToolSpec<TCtx>> {
@@ -1459,57 +1597,30 @@ export class Mind<TCtx = unknown> {
 		if (!tools.recall) {
 			tools.recall = {
 				description: this.knowledge
-					? 'Search what you remember (what you were told, saw, or did) and what you know of the world (places, items, people, who sells or makes what, how things work). Query a name or keyword your goal needs (Bread, Gate), or a plain word (trees, house) to learn its Capitalized name. Empty query lists the topics you know.'
-					: 'Search your own memory: what you know, were told, saw, or did. Query the names or keywords your goal needs (Bread, Gate).',
-				parameters: {
-					type: 'object',
-					additionalProperties: false,
-					required: ['query'],
-					properties: {
-						query: { type: 'string' },
-						k: { type: 'number' },
-					},
-				},
+					? 'Search what you remember (what you were told, saw, or did) and what you know of the world (places, items, people, who sells or makes what, how things work). Query a name or keyword your goal needs (Bread, Gate), or a plain word (trees, house) to learn its Capitalized name. Empty query lists the topics you know. It answers any question. Never ask anyone until this cannot find it. Then try different words.'
+					: 'Search your own memory: what you know, were told, saw, or did. Query the names or keywords your goal needs (Bread, Gate). Never ask anyone until this cannot find it. Then try different words.',
+				parameters: BUILTIN_TOOL_PARAMETERS.recall,
 				handler: (ctx, args) => this.handleRecall(ctx, args),
 			};
 		}
 		if (!this.hideObserve && !tools.observe) {
 			tools.observe = {
 				description: 'Evaluate a watch expression against the current world. Standing conditions belong in watches; one-shot questions this think use observe. Names only, no coordinates.',
-				parameters: {
-					type: 'object',
-					additionalProperties: false,
-					required: ['expr'],
-					properties: {
-						expr: { type: 'string' },
-					},
-				},
+				parameters: BUILTIN_TOOL_PARAMETERS.observe,
 				handler: (ctx, args) => this.handleObserve(args),
 			};
 		}
 		if (this.talk && this.voice.embodied && !tools.earshot) {
 			tools.earshot = {
-				description: 'Who you can say(to) right now. Pass to to check one name before you arc a say. Out of range: error, no speech; get closer first. Omit to to list everyone in range.',
-				parameters: {
-					type: 'object',
-					additionalProperties: false,
-					properties: {
-						to: { type: 'string' },
-					},
-				},
+				description: 'Who is in range right now. Who you can say(to) is this list. Pass to to check one name before you arc a say. Out of range: error, no speech; get closer first. Omit to to list everyone in range.',
+				parameters: BUILTIN_TOOL_PARAMETERS.earshot,
 				handler: (ctx, args) => this.handleEarshot(args),
 			};
 		}
 		if (this.seeMapOn() && !tools.see_map) {
 			tools.see_map = {
-				description: 'Map of the land: every named person, place, and thing on it, and where. Look here before you wander or ask where something is. zoom 1 is close around you, 0 the whole land. A second look soon, without moving, is the same legend and no new picture.',
-				parameters: {
-					type: 'object',
-					additionalProperties: false,
-					properties: {
-						zoom: { type: 'number', minimum: 0, maximum: 1 },
-					},
-				},
+				description: 'Map of the land: every named person, place, and thing on it, and where. Look here before you ask where something is. Look here before you wander. Never ask where something is until this cannot find it. zoom 1 is close around you, 0 the whole land. A second look soon, without moving, is the same legend and no new picture.',
+				parameters: BUILTIN_TOOL_PARAMETERS.see_map,
 				handler: (ctx, args) => this.handleSeeMap(args),
 			};
 		}
@@ -1711,17 +1822,27 @@ export class Mind<TCtx = unknown> {
 
 	/** The picture a `see_map` call just painted, if any, as the next message. */
 	private pushMapImage(messages:ChatMessage[]):void {
-		if (!this._pendingSeeMapImage) {
-			return;
+		const map = this.takeMapImage();
+		if (map) {
+			messages.push({ role: 'user', content: map });
 		}
-		messages.push({
-			role: 'user',
-			content: [
-				{ type: 'text', text: 'The map. Legend is in the tool result; names only, no coordinates.' },
-				{ type: 'image_url', image_url: { url: this._pendingSeeMapImage } },
-			],
-		});
+	}
+
+	/** `text` as a message body, with the picture a `see_map` call just painted beside it. */
+	private withMapImage(text:string):ChatContent {
+		const map = this.takeMapImage();
+		return map ? [{ type: 'text', text }, ...map] : text;
+	}
+
+	private takeMapImage():ChatContentPart[] | undefined {
+		const url = this._pendingSeeMapImage;
 		this._pendingSeeMapImage = undefined;
+		return url
+			? [
+				{ type: 'text', text: 'The map. Legend is in the tool result; names only, no coordinates.' },
+				{ type: 'image_url', image_url: { url } },
+			]
+			: undefined;
 	}
 
 	private async runTool(name:string, rawArgs:string, ctx:TCtx | undefined):Promise<unknown> {
@@ -1809,6 +1930,33 @@ export class Mind<TCtx = unknown> {
 		}
 	}
 
+	/** `set_goal`, `drop_goal` or `set_identity` as `by` runs it, which is how the model edits who this mind is. Undefined for any other step. */
+	private editPersona(step:Step, by:ArcRunner<TCtx>):ArcResult | undefined {
+		const voice = by === this.voice;
+		if (step.verb === 'set_goal') {
+			const goal = String(step.args.goal ?? '');
+			const priority = typeof step.args.priority === 'number' ? step.args.priority : 0;
+			this.persona.goals.push({ text: voice ? goal : `[${by.id}] ${goal}`, priority });
+			this.persona.trimGoals();
+			return { ok: true, verb: 'set_goal' };
+		}
+		if (step.verb === 'drop_goal') {
+			const goal = typeof step.args.goal === 'string' ? step.args.goal : undefined;
+			if (!goal) {
+				this.persona.goals.pop();
+			}
+			else {
+				this.persona.goals = this.persona.goals.filter((g) => g.text !== goal);
+			}
+			return { ok: true, verb: 'drop_goal' };
+		}
+		if (step.verb === 'set_identity') {
+			const changed = this.persona.applyIdentityPatch(step.args, this.id, this._now);
+			return { ok: changed, verb: 'set_identity', reason: changed ? undefined : 'nothing to change' };
+		}
+		return undefined;
+	}
+
 	/**
 	 * A mind verb that `by` runs: its voice, or another of a collective's characters, whose memories and goals
 	 * are marked as theirs. `say` keeps the voice from repeating itself. Undefined for a step the character runs itself.
@@ -1833,26 +1981,9 @@ export class Mind<TCtx = unknown> {
 			await this.remember(content, voice ? tags : [...tags, `unit:${by.id}`], this._now);
 			return { ok: true, verb: 'remember' };
 		}
-		if (step.verb === 'set_goal') {
-			const goal = String(step.args.goal ?? '');
-			const priority = typeof step.args.priority === 'number' ? step.args.priority : 0;
-			this.persona.goals.push({ text: voice ? goal : `[${by.id}] ${goal}`, priority });
-			this.persona.trimGoals();
-			return { ok: true, verb: 'set_goal' };
-		}
-		if (step.verb === 'drop_goal') {
-			const goal = typeof step.args.goal === 'string' ? step.args.goal : undefined;
-			if (!goal) {
-				this.persona.goals.pop();
-			}
-			else {
-				this.persona.goals = this.persona.goals.filter((g) => g.text !== goal);
-			}
-			return { ok: true, verb: 'drop_goal' };
-		}
-		if (step.verb === 'set_identity') {
-			const changed = this.persona.applyIdentityPatch(step.args, this.id, this._now);
-			return { ok: changed, verb: 'set_identity', reason: changed ? undefined : 'nothing to change' };
+		const edited = this.editPersona(step, by);
+		if (edited) {
+			return edited;
 		}
 		if (!voice) {
 			return undefined;
@@ -1877,4 +2008,42 @@ export class Mind<TCtx = unknown> {
 		return undefined;
 	}
 
+}
+
+/** Other characters named by a `reply` verb's id args. */
+function idTargets<TCtx>(step:Step, voice:ArcRunner<TCtx>):string[] {
+	const people = otherCharacters(voice);
+	const kinds = voice.verbs.get(step.verb)?.args ?? {};
+	const ids:string[] = [];
+	for (const [key, kind] of Object.entries(kinds)) {
+		if (argBase(kind) !== 'id') {
+			continue;
+		}
+		const value = step.args[key];
+		for (const id of Array.isArray(value) ? value : [value]) {
+			if (typeof id === 'string' && id !== voice.id && people.has(id) && !ids.includes(id)) {
+				ids.push(id);
+			}
+		}
+	}
+	return ids;
+}
+
+/** Living characters besides the one acting: the catalog's `others`, and anyone talk can address. */
+function otherCharacters<TCtx>(voice:ArcRunner<TCtx>):Set<string> {
+	const ids = new Set<string>();
+	const listed = voice.catalog?.()?.names.get('others');
+	if (listed?.kind === 'list') {
+		for (const row of listed.value) {
+			if (row.kind === 'entity' && row.value.id !== voice.id) {
+				ids.add(row.value.id);
+			}
+		}
+	}
+	for (const id of voice.talk?.sense.others(voice.id) ?? []) {
+		if (id && id !== voice.id) {
+			ids.add(id);
+		}
+	}
+	return ids;
 }

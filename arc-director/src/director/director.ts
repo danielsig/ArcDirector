@@ -1,5 +1,6 @@
 import { argBase, CHOOSE_VERB, registerStockVerbs, VerbRegistry, type StockVerb, type VerbArgMap } from '../arc/stock-verbs.js';
-import { arcArg, formatArc, parseArcText } from '../arc/parse.js';
+import { formatArc, parseArcText } from '../arc/parse.js';
+import { arcArg } from '../arc/wire.js';
 import type { Arc, ArcResult, Step, StepArg } from '../arc/types.js';
 import { validateArc } from '../arc/validate.js';
 import { choicePrompt } from '../character/choice.js';
@@ -13,7 +14,7 @@ import type { Kit, KitSource } from '../character/types.js';
 import type { NameTarget } from '../character/names.js';
 import { Collective, type CollectiveFields, type CollectiveHost, type CollectiveJSON } from '../collective/collective.js';
 import { Mind, mindFields, type MindDeps, type MindSettings } from '../mind/mind.js';
-import type { MindEvent, Sense, ToolSpec } from '../mind/types.js';
+import type { ArcFormat, MindEvent, Sense, ToolSpec } from '../mind/types.js';
 import type { ThinkInstructions } from '../mind/prompt.js';
 import { TalkNet, type SpeechUtterance, type TalkConfig, type TalkMind, type TalkSense } from '../mind/talk.js';
 import type { MapSense } from '../mind/map.js';
@@ -96,6 +97,17 @@ const STARTED = 'ArcDirector already started';
 
 /** A wait in progress (stock `wait`, or a handler's `call.wait`), settled by `tick`. */
 type Wait = { runnerID:string; verb:string; end:number; seconds:number; met?:()=>boolean; done:(result:ArcResult)=>void };
+
+/** Character ids a reply wait is watching. One id, or several. */
+function replyTargets(raw:unknown):string[] {
+	if (typeof raw === 'string' && raw.trim()) {
+		return [raw];
+	}
+	if (!Array.isArray(raw)) {
+		return [];
+	}
+	return raw.filter((id):id is string => typeof id === 'string' && id.trim() !== '');
+}
 
 /** Watch value as a 0–1 fit. A non-empty list or an entity counts as true. */
 function fit(value:ExprVal):number {
@@ -231,8 +243,7 @@ export class ArcDirector<TCtx = unknown> {
 	private _logFn:((entry:DirectorLog)=>void) | undefined;
 	private _stepFn:((call:VerbCall<TCtx>, result:ArcResult)=>void) | undefined;
 	private _ignoreMissing = false;
-	private _arcText = false;
-	private _forceSchema = false;
+	private _arcFormat:ArcFormat = 'json';
 	/** System One models by name. A runner is assigned one; one without an assignment uses the default. */
 	private readonly _systemOnes = new Map<string, SystemOne>();
 	/** When each System One that failed may be asked again (`performance.now()`). */
@@ -469,16 +480,10 @@ ${dump.message}`, image: dump.image });
 		return this;
 	}
 
-	public withArcText(on:boolean):this {
+	/** How minds write an Arc: `text`, `json` (default), or `schema` (JSON the server must follow). Live: `setArcFormat`. */
+	public withArcFormat(format:ArcFormat):this {
 		this.assertBuilder();
-		this._arcText = on;
-		return this;
-	}
-
-	/** Arc JSON thinks send the arc schema for the server to enforce, and offer no tools. No effect with arc text. */
-	public withForceSchema(on:boolean):this {
-		this.assertBuilder();
-		this._forceSchema = on;
+		this._arcFormat = format;
 		return this;
 	}
 
@@ -666,9 +671,9 @@ ${dump.message}`, image: dump.image });
 	 * verb list. The handler's `args` are typed from `args`; a stock verb takes only a handler, typed from
 	 * its stock args. Same name again binds or replaces the handler.
 	 */
-	public addVerb<TVerb extends StockVerbName>(name:TVerb, verb:{ help?:string; handler:VerbHandler<TCtx, VerbArgs<StockVerbArgs<TVerb>>> }):this;
-	public addVerb<const TArgMap extends VerbArgMap = Record<never, never>>(name:string, verb?:{ args?:TArgMap; help?:string; handler?:VerbHandler<TCtx, VerbArgs<TArgMap>> }):this;
-	public addVerb(name:string, { handler, ...def }:{ args?:VerbArgMap; help?:string; handler?:VerbHandler<TCtx, never> } = {}):this {
+	public addVerb<TVerb extends StockVerbName>(name:TVerb, verb:{ help?:string; reply?:boolean; handler:VerbHandler<TCtx, VerbArgs<StockVerbArgs<TVerb>>> }):this;
+	public addVerb<const TArgMap extends VerbArgMap = Record<never, never>>(name:string, verb?:{ args?:TArgMap; help?:string; reply?:boolean; handler?:VerbHandler<TCtx, VerbArgs<TArgMap>> }):this;
+	public addVerb(name:string, { handler, ...def }:{ args?:VerbArgMap; help?:string; reply?:boolean; handler?:VerbHandler<TCtx, never> } = {}):this {
 		if (!this._verbs.has(name)) {
 			this._verbs.add(name, def);
 		}
@@ -851,22 +856,15 @@ ${dump.message}`, image: dump.image });
 		return this.thinkBatchPolicy().batchThinks;
 	}
 
-	public setArcText(on:boolean):void {
-		this._arcText = on;
+	public setArcFormat(format:ArcFormat):void {
+		this._arcFormat = format;
 		for (const mind of this.minds()) {
-			mind.arcText = on;
+			mind.arcFormat = format;
 		}
 	}
 
-	public liveArcText():boolean {
-		return this._arcText;
-	}
-
-	public setForceSchema(on:boolean):void {
-		this._forceSchema = on;
-		for (const mind of this.minds()) {
-			mind.forceSchema = on;
-		}
+	public get arcFormat():ArcFormat {
+		return this._arcFormat;
 	}
 
 	/** Minds re-read their model: assigned, added again, removed, or a new default. */
@@ -1178,8 +1176,7 @@ ${dump.message}`, image: dump.image });
 			knowledge: this._knowledge,
 			mentionCap: this._mentionCap,
 			vision: this._models.live(mind.model)?.vision,
-			arcText: this._arcText,
-			forceSchema: this._forceSchema,
+			arcFormat: this._arcFormat,
 			thinkInstructions: this._thinkInstructions,
 			thinking: () => this._models.live(mind.model)?.thinking ?? false,
 			verbInstructions: this._verbInstructions,
@@ -1453,11 +1450,17 @@ ${dump.message}`, image: dump.image });
 	/** Stock `wait` for a character. A host `wait` handler replaces it. */
 	private readonly _waitVerb:VerbHandler<TCtx> = (call) => this.stockWait(call.character.id, call.args, () => call.holds('until'));
 
-	/** Game time passes for runner `id` until `seconds`, or until `until` holds when the `until` arg is set. */
+	/**
+	 * Game time passes for runner `id` until `seconds`, until `until` holds, or until someone named by `reply`
+	 * finishes a non-movement verb. `reply` is how a mind waits out an answer; it is not a model arg.
+	 */
 	private stockWait(id:string, args:Record<string, unknown>, until:()=>boolean):Promise<ArcResult> {
 		const watching = typeof args.until === 'string' && args.until.trim() !== '';
-		const seconds = typeof args.seconds === 'number' ? args.seconds : watching ? 20 : 1;
-		return this.waitFor(id, seconds, 'wait', watching ? until : undefined);
+		const replyTo = replyTargets(args.reply);
+		const seen = new Map(replyTo.map((who) => [who, this.character(who)?.replies ?? 0]));
+		const seconds = typeof args.seconds === 'number' ? args.seconds : watching || replyTo.length > 0 ? 20 : 1;
+		const met = ():boolean => (watching && until()) || replyTo.some((who) => (this.character(who)?.replies ?? 0) !== seen.get(who));
+		return this.waitFor(id, seconds, 'wait', watching || replyTo.length > 0 ? met : undefined);
 	}
 
 	private tickWaits():void {
@@ -2358,7 +2361,7 @@ ${dump.message}`, image: dump.image });
 					args[name] = parseArcText(text, this._verbs);
 				}
 			}
-			const arc:Arc = { head: { verb: 'loop', args: { arc: { head: { verb: CHOOSE_VERB, args } }, ...(until ? { until } : {}) } } };
+			const arc:Arc = [{ verb: 'loop', args: { arc: [{ verb: CHOOSE_VERB, args }], ...(until ? { until } : {}) } }];
 			validateArc(arc, this._verbs);
 			if (until) {
 				parse(until);

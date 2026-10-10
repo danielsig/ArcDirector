@@ -1,5 +1,3 @@
-import type { JsonSchema } from '../json.js';
-
 /**
  * `id` is a character, thing or place; the host always receives a real id, even when the model wrote its own name for it
  * or an expression that picks one. `text` is prose: unquoted, it runs to the closing `)` or the next `, key=`.
@@ -16,17 +14,27 @@ export function argBase(kind:string | undefined):string {
 
 export type VerbArgMap = Record<string, VerbArgKind>;
 
+/** A group, `( … )`, is the step `{ verb: 'group', args: { arc } }`. It is not a registered verb. */
+export const GROUP_VERB = 'group';
+
+/** In an Arc's JSON a step is `{ verb, …args, then }`, so no arg may be called either. */
+const RESERVED_ARGS:readonly string[] = ['verb', 'then'];
+
 export type VerbSpec = {
 	name:string;
 	args:VerbArgMap;
 	/** One line shown after the verb in the prompt's verb list. */
 	help?:string;
+	/** This verb expects an answer from the character it names. After the arc, the actor waits for them if they are still nearby. Default: do not wait. */
+	reply?:boolean;
 };
 
 /** What `addVerb` and `VerbRegistry.add` take. */
 export type VerbDef = {
 	args?:VerbArgMap;
 	help?:string;
+	/** This verb expects an answer from the character it names. After the arc, the actor waits for them if they are still nearby. Default: do not wait. */
+	reply?:boolean;
 };
 
 export class VerbRegistry {
@@ -35,16 +43,22 @@ export class VerbRegistry {
 	/** Catalog used to parse nested `arc=` args. Kit views point at the unfiltered registry. */
 	private _nestedSource:VerbRegistry | null = null;
 
-	public add(name:string, { args = {}, help }:VerbDef = {}):this {
+	public add(name:string, { args = {}, help, reply }:VerbDef = {}):this {
 		if (this._verbs.has(name)) {
 			throw new Error(`verb already registered: ${name}`);
+		}
+		if (name === GROUP_VERB) {
+			throw new Error(`verb ${name}: '${GROUP_VERB}' is how an Arc writes ( … ), not a verb`);
 		}
 		for (const key of Object.keys(args)) {
 			if (key === 'x' || key === 'z' || key === 'y') {
 				throw new Error(`verb ${name}: coordinate arg '${key}' is not allowed`);
 			}
+			if (RESERVED_ARGS.includes(key)) {
+				throw new Error(`verb ${name}: arg '${key}' is reserved`);
+			}
 		}
-		this._verbs.set(name, { name, args, help });
+		this._verbs.set(name, { name, args, help, ...(reply ? { reply } : {}) });
 		return this;
 	}
 
@@ -103,40 +117,6 @@ export class VerbRegistry {
 	public list():VerbSpec[] {
 		return [...this._verbs.values()];
 	}
-
-	public argNames():string[] {
-		const names = new Set<string>();
-		for (const spec of this._verbs.values()) {
-			for (const key of Object.keys(spec.args)) {
-				names.add(key);
-			}
-		}
-		return [...names].sort();
-	}
-
-	public argSchema(kind:VerbArgKind):JsonSchema {
-		const base = argBase(kind);
-		if (base === 'number') {
-			return { type: 'number' };
-		}
-		if (base === 'string[]') {
-			return { type: 'array', items: { type: 'string' } };
-		}
-		if (base === 'arc') {
-			return { type: 'object' };
-		}
-		return { type: 'string' };
-	}
-
-	public requiredArgs(spec:VerbSpec):string[] {
-		return Object.entries(spec.args)
-			.filter(([, kind]) => !kind.endsWith('?'))
-			.map(([key]) => key);
-	}
-
-	public firstRequiredArg(spec:VerbSpec):string | undefined {
-		return this.requiredArgs(spec)[0] ?? Object.keys(spec.args)[0];
-	}
 }
 
 export const STOCK_MOVE_VERBS = ['go_to', 'follow', 'flee', 'wander'] as const;
@@ -168,11 +148,11 @@ export const STOCK_VERB_DEFS = {
 	use: { args: { item: 'id', target: 'id?' }, help: 'goes to the target first' },
 	pick_up: { args: { item: 'id' }, help: 'goes to it first; never from what others carry' },
 	drop: { args: { item: 'id' } },
-	give: { args: { item: 'id', to: 'id' }, help: 'goes to them first; how you pay or hand anything over, saying so does not' },
+	give: { args: { item: 'id', to: 'id' }, help: 'goes to them first; how you pay or hand anything over, saying so does not', reply: true },
 	examine: { args: { target: 'id' } },
-	buy: { args: { item: 'id', from: 'id', offer: 'number?', quantity: 'number?' }, help: 'goes to the seller first; offer is for all of them' },
-	sell: { args: { item: 'id', to: 'id', ask: 'number?', quantity: 'number?' }, help: 'goes to the buyer first; ask is for all of them' },
-	say: { args: { text: 'text', to: 'id?' }, help: 'one short sentence' },
+	buy: { args: { item: 'id', from: 'id', offer: 'number?', quantity: 'number?' }, help: 'goes to the seller first; offer is for all of them', reply: true },
+	sell: { args: { item: 'id', to: 'id', ask: 'number?', quantity: 'number?' }, help: 'goes to the buyer first; ask is for all of them', reply: true },
+	say: { args: { text: 'text', to: 'id?' }, help: 'one short sentence', reply: true },
 	wait: { args: { seconds: 'number?', until: 'watch?' } },
 	remember: { args: { content: 'text', tags: 'string[]?' } },
 	think: { args: { about: 'text?' } },

@@ -29,7 +29,7 @@ async function stage(reply:(req:ChatRequest)=>string = () => '{}') {
 			calls.push(req);
 			return { content: reply(req), toolCalls: [] };
 		})
-		.withArcText(true)
+		.withArcFormat('text')
 		.addStockVerbs()
 		.addStockCollectiveVerbs()
 		.withDefaultKit(KIT)

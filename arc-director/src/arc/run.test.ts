@@ -1,120 +1,109 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import type { Arc, ArcResult, Step } from './types.js';
+import { arcSteps, type Arc, type ArcResult, type Join, type Step } from './types.js';
 import { parseArcText } from './parse.js';
 import { VerbRegistry, registerStockVerbs } from './stock-verbs.js';
 import { dummyEntity, buildCatalog } from '../expr/natives.js';
 import { SampleCache } from '../expr/types.js';
-import { createArcSession, deferThinks, arcSteps, firstStartable, pollArcSession, runArc, THINK_ABOUT_CAP, type ArcHandler, type LastChoice } from './run.js';
+import { createArcSession, deferThinks, firstStartable, pollArcSession, runArc, THINK_ABOUT_CAP, type ArcHandler, type LastChoice } from './run.js';
 import { upsertLaw, type Law } from './laws.js';
 
-function go(name:string):Step {
-	return { verb: 'go_to', args: { name } };
+function go(name:string, then?:Join):Step {
+	return { verb: 'go_to', args: { name }, ...(then ? { then } : {}) };
 }
 
-function think(about?:string):Step {
-	return { verb: 'think', args: about ? { about } : {} };
+function think(about?:string, then?:Join):Step {
+	return { verb: 'think', args: about ? { about } : {}, ...(then ? { then } : {}) };
+}
+
+function wait(seconds = 1, then?:Join):Step {
+	return { verb: 'wait', args: { seconds }, ...(then ? { then } : {}) };
+}
+
+function pickUp(item:string, then?:Join):Step {
+	return { verb: 'pick_up', args: { item }, ...(then ? { then } : {}) };
+}
+
+/** Runs `arc` where each verb in `failing` fails, and says which verbs ran. */
+async function ran(arc:Arc, failing:string[] = []):Promise<{ verbs:string[]; result:ArcResult }> {
+	const verbs:string[] = [];
+	const result = await runArc(arc, async (step) => {
+		verbs.push(step.verb);
+		return { ok: !failing.includes(step.verb), verb: step.verb, reason: failing.includes(step.verb) ? 'no' : undefined };
+	});
+	return { verbs, result };
 }
 
 describe('deferThinks', () => {
 	it('leaves an arc without think unchanged', () => {
-		const arc:Arc = {
-			head: go('EastGate'),
-			then: { join: 'then_if_ok', arc: { head: { verb: 'wait', args: { seconds: 1 } } } },
-		};
+		const arc:Arc = [go('EastGate'), wait()];
 		assert.equal(deferThinks(arc), arc);
 	});
 
 	it('moves think to the end even when the LLM put it first', () => {
-		const arc:Arc = {
-			head: think('the lock'),
-			then: { join: 'then_if_ok', arc: { head: go('EastGate') } },
-		};
-		const ordered = deferThinks(arc);
-		assert.equal(ordered.head.verb, 'go_to');
-		assert.equal(ordered.then?.join, 'then');
-		assert.equal(ordered.then?.arc.head.verb, 'think');
-		assert.equal(ordered.then?.arc.head.args.about, 'the lock');
+		const ordered = deferThinks([think('the lock'), go('EastGate')]);
+		assert.deepEqual(ordered.map((step) => step.verb), ['go_to', 'think']);
+		assert.equal(ordered[0].then, 'always');
+		assert.equal(ordered[1].args.about, 'the lock');
 	});
 
 	it('concatenates several abouts into one trailing think', () => {
-		const arc:Arc = {
-			head: think('the lock'),
-			then: {
-				join: 'then',
-				arc: {
-					head: go('EastGate'),
-					then: { join: 'then_if_ok', arc: { head: think('which key') } },
-				},
-			},
-		};
-		const ordered = deferThinks(arc);
+		const ordered = deferThinks([think('the lock', 'always'), go('EastGate'), think('which key')]);
 		const steps = arcSteps(ordered);
 		assert.deepEqual(steps.map((s) => s.verb), ['go_to', 'think']);
 		assert.equal(steps[1].args.about, 'the lock which key');
 	});
 
 	it('keeps a bare think when no about is set', () => {
-		const ordered = deferThinks({
-			head: { verb: 'wait', args: {} },
-			then: { join: 'then', arc: { head: think() } },
-		});
-		assert.equal(ordered.then?.arc.head.verb, 'think');
-		assert.deepEqual(ordered.then?.arc.head.args, {});
+		const ordered = deferThinks([wait(1), think()]);
+		assert.equal(ordered[1].verb, 'think');
+		assert.deepEqual(ordered[1].args, {});
 	});
 
 	it('caps concatenated abouts', () => {
 		const a = 'a'.repeat(120);
 		const b = 'b'.repeat(120);
-		const ordered = deferThinks({
-			head: think(a),
-			then: { join: 'then', arc: { head: think(b) } },
-		});
-		const about = String(ordered.head.args.about ?? '');
+		const ordered = deferThinks([think(a), think(b)]);
+		const about = String(ordered[0].args.about ?? '');
 		assert.equal(about.length, THINK_ABOUT_CAP);
 		assert.equal(about.startsWith('a'), true);
+	});
+
+	it('copies only the step before the appended think, and keeps every other step', () => {
+		const first = go('EastGate', 'if_failed');
+		const second = wait(1);
+		const arc:Arc = [first, think('x'), second];
+		const ordered = deferThinks(arc);
+		assert.equal(ordered[0], first, 'the step before a removed think keeps its own join');
+		assert.notEqual(ordered[1], second, 'the step before the appended think is a copy that joins it');
+		assert.equal(ordered[1].then, 'always');
+		assert.equal(second.then, undefined, 'the original is not touched');
+		assert.equal(arc.length, 3);
+	});
+
+	it('defers a think inside a later group too', () => {
+		const inner:Arc = [think('inside'), go('Keep')];
+		const group:Step = { verb: 'group', args: { arc: inner } };
+		const arc:Arc = [wait(1), group];
+		const ordered = deferThinks(arc);
+		assert.notEqual(ordered, arc);
+		assert.equal(ordered[0], arc[0]);
+		const moved = ordered[1].args.arc as Arc;
+		assert.deepEqual(moved.map((step) => step.verb), ['go_to', 'think']);
+		assert.equal(group.args.arc, inner, 'the original group is not touched');
+		const plain:Arc = [wait(1), { verb: 'group', args: { arc: [go('Keep')] } }];
+		assert.equal(deferThinks(plain), plain);
 	});
 });
 
 describe('runArc', () => {
 	it('runs think last after the rest of the arc', async () => {
-		const verbs:string[] = [];
-		const arc:Arc = {
-			head: think('later'),
-			then: {
-				join: 'then_if_ok',
-				arc: {
-					head: go('EastGate'),
-					then: { join: 'then_if_ok', arc: { head: { verb: 'pick_up', args: { item: 'Key' } } } },
-				},
-			},
-		};
-		await runArc(arc, async (step) => {
-			verbs.push(step.verb);
-			return { ok: true, verb: step.verb };
-		});
+		const { verbs } = await ran([think('later'), go('EastGate'), pickUp('Key')]);
 		assert.deepEqual(verbs, ['go_to', 'pick_up', 'think']);
 	});
 
-	it('still runs think when an earlier then_if_ok fails', async () => {
-		const verbs:string[] = [];
-		const arc:Arc = {
-			head: think('anyway'),
-			then: {
-				join: 'then_if_ok',
-				arc: {
-					head: go('EastGate'),
-					then: { join: 'then_if_ok', arc: { head: { verb: 'pick_up', args: { item: 'Key' } } } },
-				},
-			},
-		};
-		const result = await runArc(arc, async (step) => {
-			verbs.push(step.verb);
-			if (step.verb === 'go_to') {
-				return { ok: false, verb: 'go_to', reason: 'locked' };
-			}
-			return { ok: true, verb: step.verb };
-		});
+	it('still runs think when an earlier && fails', async () => {
+		const { verbs, result } = await ran([think('anyway'), go('EastGate'), pickUp('Key')], ['go_to']);
 		assert.deepEqual(verbs, ['go_to', 'think']);
 		assert.equal(result.verb, 'think');
 		assert.equal(result.ok, true);
@@ -122,16 +111,64 @@ describe('runArc', () => {
 
 	it('skips think when the body is interrupted', async () => {
 		const verbs:string[] = [];
-		const arc:Arc = {
-			head: go('EastGate'),
-			then: { join: 'then', arc: { head: think('nope') } },
-		};
-		const result = await runArc(arc, async (step) => {
+		const result = await runArc([go('EastGate', 'always'), think('nope')], async (step) => {
 			verbs.push(step.verb);
 			return { ok: false, interrupted: true, verb: step.verb, reason: 'hurt' };
 		});
 		assert.deepEqual(verbs, ['go_to']);
 		assert.equal(result.interrupted, true);
+	});
+
+	it('a missing then is if_ok, and the last step then is ignored', async () => {
+		assert.deepEqual((await ran([go('A'), wait(), pickUp('Key')], ['go_to'])).verbs, ['go_to']);
+		assert.deepEqual((await ran([go('A'), wait(), pickUp('Key', 'if_failed')])).verbs, ['go_to', 'wait', 'pick_up']);
+	});
+
+	it('a && b || c with a failing runs only a', async () => {
+		const arc = parseArcText('go_to(A) && wait() || say(Hi)', registerStockVerbs(new VerbRegistry()));
+		assert.deepEqual((await ran(arc, ['go_to'])).verbs, ['go_to'], 'a failed, so && ends the chain: c is a fallback for b, not for a');
+		assert.deepEqual((await ran(arc, ['wait'])).verbs, ['go_to', 'wait', 'say'], 'b failed, so c runs');
+	});
+
+	it('a || b ; c with a succeeding runs only a', async () => {
+		const arc = parseArcText('go_to(A) || wait() ; say(Hi)', registerStockVerbs(new VerbRegistry()));
+		assert.deepEqual((await ran(arc)).verbs, ['go_to']);
+		assert.deepEqual((await ran(arc, ['go_to'])).verbs, ['go_to', 'wait', 'say'], 'the fallback is everything after ||');
+	});
+
+	it('a || b && c with a failing runs b and c with fail set, then cleared', async () => {
+		const verbs = registerStockVerbs(new VerbRegistry());
+		const arc = parseArcText('go_to(A) || say(fail.reason) && wait()', verbs);
+		const session = createArcSession({ verbs });
+		const seen:string[] = [];
+		const result = await runArc(arc, async (step) => {
+			seen.push(`${step.verb}:${String(step.args.text ?? '')}`);
+			return step.verb === 'go_to' ? { ok: false, verb: 'go_to', reason: 'locked' } : { ok: true, verb: step.verb };
+		}, { session });
+		assert.deepEqual(seen, ['go_to:', 'say:locked', 'wait:']);
+		assert.equal(result.ok, true);
+		assert.equal(session.fail, undefined);
+	});
+
+	it('nested || hands the latest reason on', async () => {
+		const verbs = registerStockVerbs(new VerbRegistry());
+		const arc = parseArcText('go_to(A) || (wait() || say(fail.reason))', verbs);
+		const seen:string[] = [];
+		await runArc(arc, async (step) => {
+			seen.push(`${step.verb}:${String(step.args.text ?? '')}`);
+			return step.verb === 'say' ? { ok: true, verb: 'say' } : { ok: false, verb: step.verb, reason: `${step.verb} failed` };
+		}, { session: createArcSession({ verbs }) });
+		assert.deepEqual(seen, ['go_to:', 'wait:', 'say:wait failed']);
+	});
+
+	it('(a ; b) && c and (a || b) && c', async () => {
+		const verbs = registerStockVerbs(new VerbRegistry());
+		const seq = parseArcText('(go_to(A) ; wait()) && say(Hi)', verbs);
+		assert.deepEqual((await ran(seq, ['go_to'])).verbs, ['go_to', 'wait', 'say'], 'the group ran to its end and succeeded');
+		assert.deepEqual((await ran(seq, ['wait'])).verbs, ['go_to', 'wait'], 'the group failed, so && stops');
+		const either = parseArcText('(go_to(A) || wait()) && say(Hi)', verbs);
+		assert.deepEqual((await ran(either, ['go_to'])).verbs, ['go_to', 'wait', 'say']);
+		assert.deepEqual((await ran(either)).verbs, ['go_to', 'say']);
 	});
 });
 
@@ -355,6 +392,50 @@ describe('handlers by reference', () => {
 			return { ok: true, verb: step.verb };
 		}, { session });
 		assert.deepEqual(seen, ['say', 'wait', 'wait']);
+	});
+
+	it('keeps the same handler for a when step on every pass of a loop', async () => {
+		const session = createArcSession({ catalog: flagCatalog({ danger: false }) });
+		const when:Step = { verb: 'when', args: { watch: 'danger', arc: [{ verb: 'say', args: { text: 'hi' } }] } };
+		const body:Arc = [when, { verb: 'wait', args: {} }];
+		const sources:unknown[] = [];
+		await runArc([{ verb: 'loop', args: { times: 2, arc: body } }], async (step) => {
+			sources.push(...session.frames.flatMap((frame) => frame.handlers.map((handler) => handler.source)));
+			return { ok: true, verb: step.verb };
+		}, { session });
+		assert.deepEqual(sources, [when, when]);
+	});
+
+	it('hoists a when out of the arc, and the step before it keeps its own join', async () => {
+		const session = createArcSession({ catalog: flagCatalog({ danger: false }) });
+		const when:Step = { verb: 'when', args: { watch: 'danger', arc: [{ verb: 'say', args: { text: 'hi' } }] } };
+		const { verbs: failed } = await ran([go('A', 'if_failed'), when, wait()], ['go_to']);
+		assert.deepEqual(failed, ['go_to', 'wait'], 'a failed, so its || runs what is left after the hoisted when');
+		const seen:string[] = [];
+		await runArc([go('A', 'if_failed'), when, wait()], async (step) => {
+			seen.push(step.verb);
+			return { ok: true, verb: step.verb };
+		}, { session });
+		assert.deepEqual(seen, ['go_to'], 'a succeeded, so its || skips the rest');
+	});
+
+	it('never mutates an arc, so one issued to two troops is safe to share', async () => {
+		const freeze = <T>(value:T):T => {
+			if (value && typeof value === 'object') {
+				Object.values(value).forEach(freeze);
+				Object.freeze(value);
+			}
+			return value;
+		};
+		const shared = freeze<Arc>([
+			think('later', 'always'),
+			go('A', 'if_failed'),
+			{ verb: 'group', args: { arc: [think('inside'), wait(1), go('B', 'always')] } },
+			pickUp('Key'),
+		]);
+		const both = await Promise.all([ran(shared, ['go_to']), ran(shared)]);
+		assert.deepEqual(both[0].verbs, ['go_to', 'wait', 'go_to', 'think', 'pick_up', 'think'], 'a failed: the fallback runs the group (its own think last), pick_up, then the deferred think');
+		assert.deepEqual(both[1].verbs, ['go_to', 'think']);
 	});
 });
 

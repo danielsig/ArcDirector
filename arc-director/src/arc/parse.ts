@@ -1,8 +1,6 @@
-import { extractJson, isRecord } from '../json.js';
-import { asArc, isArc, validateArc } from './validate.js';
-import { ArcError, JOIN_SYMBOL, SYMBOL_JOIN, firstStep, type Arc, type Join, type Step } from './types.js';
-import { argBase, CHOOSE_VERB, type VerbRegistry, type VerbSpec } from './stock-verbs.js';
-import type { StepArg } from './validate.js';
+import { validateArc } from './validate.js';
+import { ArcError, JOIN_SYMBOL, SYMBOL_JOIN, groupArc, isArc, type Arc, type Join, type Step, type StepArg } from './types.js';
+import { argBase, CHOOSE_VERB, GROUP_VERB, type VerbRegistry, type VerbSpec } from './stock-verbs.js';
 import { choicesOf, deriveChoiceName, freeChoiceName } from './choose.js';
 
 /** Arg kinds whose value is an expression. */
@@ -15,11 +13,11 @@ function isCallExpr(s:string):boolean {
 
 /** `kind` is the arg's kind from the verb's spec: a `watch` or `expr` is written as it reads, never quoted. */
 function formatArg(v:StepArg, verbs:VerbRegistry | undefined, depth:Depth, kind?:string):string {
-	if (Array.isArray(v)) {
-		return v.join(',');
-	}
 	if (isArc(v)) {
 		return formatAt(v, verbs?.nested(), depth);
+	}
+	if (Array.isArray(v)) {
+		return v.join(',');
 	}
 	if (typeof v === 'string') {
 		if (isCallExpr(v) || (kind !== undefined && EXPR_KINDS.has(argBase(kind)))) {
@@ -44,6 +42,10 @@ function isBareArg(formatted:string):boolean {
  * first arg, which is where the parser puts a positional value; without `verbs` every arg keeps its key.
  */
 export function formatStep(step:Step, verbs?:VerbRegistry, depth?:number):string {
+	const inner = groupArc(step);
+	if (inner) {
+		return `(${formatAt(inner, verbs, depth)})`;
+	}
 	if (step.verb === CHOOSE_VERB) {
 		return formatChoose(step, verbs, depth);
 	}
@@ -86,16 +88,6 @@ function call(verb:string, parts:string[], depth:Depth):string {
 	return `${verb}(\n${parts.map((part) => `${pad}\t${part},\n`).join('')}${pad})`;
 }
 
-function formatNode(arc:Arc, verbs:VerbRegistry | undefined, depth:Depth):string {
-	if (arc.group) {
-		return `(${formatAt(arc.group, verbs, depth)})`;
-	}
-	if (arc.head) {
-		return formatStep(arc.head, verbs, depth);
-	}
-	return 'think()';
-}
-
 export function formatArc(arc:Arc, verbs?:VerbRegistry):string {
 	return formatAt(arc, verbs, undefined);
 }
@@ -113,14 +105,14 @@ export function formatArcBlocks(arc:Arc, verbs?:VerbRegistry):string {
 type Depth = number | undefined;
 
 function formatAt(arc:Arc, verbs:VerbRegistry | undefined, depth:Depth):string {
-	let out = formatNode(arc, verbs, depth);
-	let cur:Arc | undefined = arc;
-	while (cur.then) {
-		const join = depth === 0 && cur.then.join === 'then' ? '\n' : ` ${JOIN_SYMBOL[cur.then.join]} `;
-		out += `${join}${formatNode(cur.then.arc, verbs, depth)}`;
-		cur = cur.then.arc;
-	}
-	return out;
+	return arc.map((step, i) => {
+		const text = formatStep(step, verbs, depth);
+		if (i === arc.length - 1) {
+			return text;
+		}
+		const join = step.then ?? 'if_ok';
+		return `${text}${depth === 0 && join === 'always' ? '\n' : ` ${JOIN_SYMBOL[join]} `}`;
+	}).join('');
 }
 
 function skipWs(s:string, i:number):number {
@@ -270,22 +262,28 @@ function parseValue(s:string, i:number):{ value:StepArg; next:number } {
 }
 
 
-function parseArcAtom(s:string, i:number, registry:VerbRegistry):{ value:Arc; next:number } {
+/** One step of a chain: a group `( … )` or a verb call. */
+function parseStepAtom(s:string, i:number, registry:VerbRegistry):{ step:Step; next:number } {
 	i = skipWs(s, i);
 	if (s[i] === '(') {
 		const inner = parseNestedArc(s, i + 1, registry);
 		const next = closeAt(s, skipWs(s, inner.next), 'missing ) for grouped arc');
-		return { value: { head: { verb: 'group', args: {} }, group: inner.value }, next };
+		return { step: { verb: GROUP_VERB, args: { arc: inner.value } }, next };
 	}
-	const step = parseStepText(s, i, registry);
-	return { value: { head: step.step }, next: step.next };
+	return parseStepText(s, i, registry);
+}
+
+/** Say how `step` joins the one after it. `&&` is the default and is not written down. */
+function joinTo(step:Step, join:Join):void {
+	if (join !== 'if_ok') {
+		step.then = join;
+	}
 }
 
 function parseNestedArc(s:string, i:number, registry:VerbRegistry):{ value:Arc; next:number } {
-	const first = parseArcAtom(s, i, registry);
-	const arc:Arc = first.value;
+	const first = parseStepAtom(s, i, registry);
+	const arc:Arc = [first.step];
 	let pos = first.next;
-	let tail = arc;
 	while (true) {
 		const j = skipWs(s, pos);
 		if (j >= s.length || s[j] === ',' || s[j] === ')') {
@@ -295,9 +293,9 @@ function parseNestedArc(s:string, i:number, registry:VerbRegistry):{ value:Arc; 
 		if (!join) {
 			break;
 		}
-		const nxt = parseArcAtom(s, join.next, registry);
-		tail.then = { join: join.join, arc: nxt.value };
-		tail = tail.then.arc;
+		const nxt = parseStepAtom(s, join.next, registry);
+		joinTo(arc[arc.length - 1], join.join);
+		arc.push(nxt.step);
 		pos = nxt.next;
 	}
 	return { value: arc, next: pos };
@@ -518,14 +516,6 @@ function nextPositionalKey(
 	return undefined;
 }
 
-function lastArc(arc:Arc):Arc {
-	let cur = arc;
-	while (cur.then) {
-		cur = cur.then.arc;
-	}
-	return cur;
-}
-
 /** Gemma copies the Example including a trailing period, and adds `)` or `,` between issue(). */
 function fixTrail(s:string, i:number):number {
 	i = skipWs(s, i);
@@ -539,7 +529,6 @@ export function parseArcText(text:string, registry:VerbRegistry):Arc {
 	const parsed = parseNestedArc(text, 0, registry);
 	const arc = parsed.value;
 	let i = fixTrail(text, parsed.next);
-	let tail = lastArc(arc);
 	while (i < text.length) {
 		const join = joinAt(text, i);
 		if (!join) {
@@ -549,106 +538,10 @@ export function parseArcText(text:string, registry:VerbRegistry):Arc {
 			throw new ArcError(`unexpected trailing text: ${text.slice(i)}`);
 		}
 		const nxt = parseNestedArc(text, join.next, registry);
-		tail.then = { join: join.join, arc: nxt.value };
-		tail = lastArc(nxt.value);
+		joinTo(arc[arc.length - 1], join.join);
+		arc.push(...nxt.value);
 		i = fixTrail(text, nxt.next);
 	}
 	validateArc(arc, registry);
 	return arc;
 }
-
-export function parseArc(input:string | unknown, registry:VerbRegistry):Arc {
-	if (typeof input !== 'string') {
-		return parseArcValue(input, registry);
-	}
-	const trimmed = input.trim();
-	const json = lastHeadJson(trimmed);
-	if (json !== undefined) {
-		return parseArcValue(extractJson(json), registry);
-	}
-	if (trimmed.startsWith('{') || trimmed.startsWith('```')) {
-		return parseArcValue(extractJson(trimmed), registry);
-	}
-	return parseArcText(trimmed, registry);
-}
-
-/** An `arc` argument as an `Arc`: already parsed, or text to parse. Undefined when it does not parse. */
-export function arcArg(raw:unknown, registry:VerbRegistry):Arc | undefined {
-	if (isArc(raw)) {
-		return raw;
-	}
-	if (typeof raw !== 'string' || !raw.trim()) {
-		return undefined;
-	}
-	try {
-		return parseArc(raw, registry);
-	}
-	catch {
-		return undefined;
-	}
-}
-
-function parseArcValue(raw:unknown, registry:VerbRegistry):Arc {
-	const bag = joinArcTextParts(raw);
-	if (bag) {
-		return parseArcText(bag, registry);
-	}
-	return asArc(raw, registry);
-}
-
-/** `{issue:"issue(...)", when:"when(...)"}` or `{commands:["issue(...)"]}`. */
-function joinArcTextParts(raw:unknown):string | undefined {
-	if (!isRecord(raw)) {
-		return undefined;
-	}
-	if (isRecord(raw.head) || raw.group !== undefined || isRecord(raw.arc)) {
-		return undefined;
-	}
-	const parts:string[] = [];
-	const take = (v:unknown):void => {
-		if (typeof v === 'string') {
-			const s = v.trim();
-			if (/^[A-Za-z_][\w]*\s*\(/.test(s)) {
-				parts.push(s.replace(/[;\s]+$/, ''));
-			}
-			return;
-		}
-		if (Array.isArray(v)) {
-			for (const item of v) {
-				take(item);
-			}
-		}
-	};
-	take(raw.arc);
-	if (parts.length === 0) {
-		for (const [key, value] of Object.entries(raw)) {
-			if (MIND_KEYS.has(key)) {
-				continue;
-			}
-			take(value);
-		}
-	}
-	if (parts.length === 0) {
-		return undefined;
-	}
-	return parts.join(' ; ');
-}
-
-const MIND_KEYS = new Set(['goals', 'identity']);
-
-/** Last root `{"head"` / `{"group"` in CoT. Nested `then.arc.head` is skipped. */
-function lastHeadJson(text:string):string | undefined {
-	let at = -1;
-	const re = /\{\s*"(?:head|group)"/g;
-	let m:RegExpExecArray | null;
-	while ((m = re.exec(text))) {
-		const before = text.slice(Math.max(0, m.index - 16), m.index);
-		if (/"arc"\s*:\s*$/.test(before)) {
-			continue;
-		}
-		at = m.index;
-	}
-	return at >= 0 ? text.slice(at) : undefined;
-}
-
-export { firstStep };

@@ -1,4 +1,4 @@
-import { prefs, type SystemOneKind } from '../prefs';
+import { prefs, type ArcFormatPref, type SystemOneKind } from '../prefs';
 import { characterOptions, resolvePlayerKind } from '../render/artCache';
 import type { BenchRow } from '../director/decisionBench';
 
@@ -134,10 +134,8 @@ export type HudModel = {
 	batchThinks:boolean;
 	/** CoT on. Menu + localStorage. */
 	thinkingBudget:boolean;
-	/** Ask for Arc text instead of JSON. Menu + localStorage. Testing. */
-	arcText:boolean;
-	/** Arc JSON thinks send the arc schema and no tools. Menu + localStorage. Testing. */
-	forceSchema:boolean;
+	/** How NPCs write an Arc: text, JSON, or JSON the server must follow. Menu + localStorage. Testing. */
+	arcFormat:ArcFormatPref;
 	/** The System One behind `choose`. Menu + localStorage. */
 	systemOne:SystemOneKind;
 	/** The local System One's model; empty is the main model. Menu + localStorage. */
@@ -231,8 +229,7 @@ export function emptyHud():HudModel {
 		prefsDetached: false,
 		batchThinks: p.batchThinks,
 		thinkingBudget: p.thinkingBudget,
-		arcText: p.arcText,
-		forceSchema: p.forceSchema,
+		arcFormat: p.arcFormat,
 		systemOne: p.systemOne,
 		decisionModel: p.decisionModel,
 		benchOpen: false,

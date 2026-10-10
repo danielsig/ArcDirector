@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { writtenToolCalls } from './toolText.js';
+import { jsonToolCall, writtenToolCalls } from './toolText.js';
 
 const TOOLS = new Map<string, string | undefined>([['recall', 'query'], ['observe', 'expr'], ['earshot', 'to'], ['see_map', 'zoom']]);
 const read = (text:string) => writtenToolCalls(text, TOOLS);
@@ -31,5 +31,23 @@ describe('writtenToolCalls', () => {
 		const text = 'think(about=whether to observe(Bridge) first) && say(text=Use recall(Bread), to=Mira)';
 		assert.deepEqual(read(text), { calls: [], rest: text });
 		assert.deepEqual(read('go_to(Bridge)').calls, []);
+	});
+});
+
+describe('jsonToolCall', () => {
+	it('reads a tool called in JSON, its other keys being the args', () => {
+		assert.deepEqual(jsonToolCall('{"tool":"recall","query":"Bread"}'), { name: 'recall', args: { query: 'Bread' } });
+		assert.deepEqual(jsonToolCall('{ "tool": "see_map", "zoom": 0.5 }'), { name: 'see_map', args: { zoom: 0.5 } });
+		assert.deepEqual(jsonToolCall('```json\n{"tool":"earshot"}\n```'), { name: 'earshot', args: {} });
+		assert.deepEqual(jsonToolCall('{"tool":"recall","query":"Bre'), { name: 'recall', args: { query: 'Bre' } });
+	});
+
+	it('is not fooled by steps, prose or a tool name that is no string', () => {
+		assert.equal(jsonToolCall('{"steps":[{"verb":"wait"}]}'), undefined);
+		assert.equal(jsonToolCall('{"steps":[{"verb":"wait"}],"tool":"recall"}'), undefined);
+		assert.equal(jsonToolCall('recall(Bread)'), undefined);
+		assert.equal(jsonToolCall('I will call {"tool":"recall","query":"Bread"}'), undefined);
+		assert.equal(jsonToolCall('{"tool":3}'), undefined);
+		assert.equal(jsonToolCall(''), undefined);
 	});
 });

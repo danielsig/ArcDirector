@@ -144,6 +144,7 @@ function checkBargain(host:GameHost):void {
 export function createDirector(host:GameHost):ArcDirector<CharacterCtx> {
 	host.hooks = { checkBargain, goalDone };
 	return addStatusVerbs(host.configure(new ArcDirector<CharacterCtx>()), host)
+		.withMindDefaults({ skipHeartbeat: true, skipStrategic: true })
 		.withDefaultKit(host.kit = { verbs: [...GAME_VERBS, 'set_status', 'rest'] })
 		.withVerbInstructions(BUILDING_VERB_INSTRUCTIONS)
 		.withNames({ seen: (observer, target) => host.characterOf(target.id)?.persona.identity.role ?? target.id })

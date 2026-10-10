@@ -149,7 +149,7 @@ describe('agent watches', () => {
 	it('does not replace extras when the model omits watch ops', async () => {
 		const { cat } = hostAt(3);
 		const provider = new FakeProvider(() => ({
-			content: JSON.stringify({ head: { verb: 'wait', args: { seconds: 1 } } }),
+			content: JSON.stringify({ steps: [{ verb: 'wait', seconds: 1 }] }),
 			toolCalls: [],
 		}));
 		const a = agentOf({
@@ -221,7 +221,7 @@ describe('agent watches', () => {
 	it('loads legacy string watches as watch_N and still merges host pins', () => {
 		const { cat } = hostAt(3);
 		const provider = new FakeProvider(() => ({
-			content: JSON.stringify({ head: { verb: 'wait', args: { seconds: 1 } } }),
+			content: JSON.stringify({ steps: [{ verb: 'wait', seconds: 1 }] }),
 			toolCalls: [],
 		}));
 		const restored = restore({
@@ -330,7 +330,7 @@ describe('agent watches', () => {
 				};
 			}
 			return {
-				content: JSON.stringify({ head: { verb: 'wait', args: { seconds: 1 } } }),
+				content: JSON.stringify({ steps: [{ verb: 'wait', seconds: 1 }] }),
 				toolCalls: [],
 			};
 		});

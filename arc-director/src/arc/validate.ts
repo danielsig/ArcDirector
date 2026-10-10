@@ -1,67 +1,31 @@
-import { isRecord } from '../json.js';
 import {
 	ArcError,
 	JOINS,
+	eachStep,
+	groupArc,
+	isArc,
 	type Arc,
-	type Join,
 	type Step,
-	type StepArg,
 } from './types.js';
-import { argBase, CHOOSE_VERB, type VerbRegistry } from './stock-verbs.js';
+import { argBase, CHOOSE_VERB, GROUP_VERB, type VerbRegistry } from './stock-verbs.js';
 import { isChoiceName, MAX_CHOICES } from './choose.js';
 
 const COORD_KEYS = new Set(['x', 'z', 'y', 'xz', 'xy', 'pos', 'position']);
 
-export type { StepArg };
-
-export function isArc(v:unknown):v is Arc {
-	if (!isRecord(v)) {
-		return false;
-	}
-	if (isRecord(v.head)) {
-		return true;
-	}
-	if (v.group !== undefined) {
-		return isArc(v.group);
-	}
-	return false;
-}
-
 /** Every `watch` and `expr` arg in `arc`, nested arcs and choices too, in the order written. */
 export function exprArgs(arc:Arc, verbs:VerbRegistry):string[] {
 	const out:string[] = [];
-	const walk = (at:Arc, registry:VerbRegistry):void => {
-		if (at.group) {
-			walk(at.group, registry);
-		}
-		const kinds = registry.get(at.head.verb)?.args ?? {};
-		for (const [key, value] of Object.entries(at.head.args)) {
+	eachStep(arc, verbs, (step, registry) => {
+		const kinds = registry.get(step.verb)?.args ?? {};
+		for (const [key, value] of Object.entries(step.args)) {
 			const kind = argBase(kinds[key]);
-			if (isArc(value)) {
-				walk(value, registry.nested());
-			}
-			else if ((kind === 'watch' || kind === 'expr') && typeof value === 'string' && value.trim()) {
+			if ((kind === 'watch' || kind === 'expr') && typeof value === 'string' && value.trim()) {
 				out.push(value);
 			}
 		}
-		if (at.then) {
-			walk(at.then.arc, registry);
-		}
-	};
-	walk(arc, verbs);
+	});
 	return out;
 }
-
-function isStepArg(v:unknown):v is StepArg {
-	if (typeof v === 'string' || typeof v === 'number' || typeof v === 'boolean') {
-		return true;
-	}
-	if (Array.isArray(v) && v.every((x) => typeof x === 'string')) {
-		return true;
-	}
-	return isArc(v);
-}
-
 
 function rejectMigrationArgs(verb:string, args:Record<string, unknown>):void {
 	const who = typeof args.who === 'string' ? args.who.trim() : '';
@@ -75,6 +39,14 @@ function rejectMigrationArgs(verb:string, args:Record<string, unknown>):void {
 }
 
 export function validateStep(step:Step, registry:VerbRegistry, inIssue = false):void {
+	if (step.verb === GROUP_VERB) {
+		const inner = groupArc(step);
+		if (!inner) {
+			throw new ArcError('a group needs an arc');
+		}
+		validateArc(inner, registry, inIssue);
+		return;
+	}
 	const spec = registry.get(step.verb);
 	if (!spec) {
 		throw new ArcError(`unknown verb '${step.verb}'`);
@@ -151,103 +123,13 @@ function validateChoose(step:Step, registry:VerbRegistry, inIssue:boolean):void 
 }
 
 export function validateArc(arc:Arc, registry:VerbRegistry, inIssue = false):void {
-	if (arc.group) {
-		validateArc(arc.group, registry, inIssue);
+	if (arc.length === 0) {
+		throw new ArcError('an arc needs at least one step');
 	}
-	else {
-		validateStep(arc.head, registry, inIssue);
-	}
-	if (arc.then) {
-		if (!JOINS.includes(arc.then.join)) {
-			throw new ArcError(`unknown join '${String(arc.then.join)}'`);
+	for (const step of arc) {
+		if (step.then !== undefined && !JOINS.includes(step.then)) {
+			throw new ArcError(`unknown join '${String(step.then)}'`);
 		}
-		validateArc(arc.then.arc, registry, inIssue);
+		validateStep(step, registry, inIssue);
 	}
-}
-
-export function asStep(raw:unknown, registry:VerbRegistry):Step {
-	if (!isRecord(raw)) {
-		throw new ArcError('step is not an object');
-	}
-	if (typeof raw.verb !== 'string') {
-		throw new ArcError('step.verb must be a string');
-	}
-	const spec = registry.get(raw.verb);
-	const argsRaw = raw.args;
-	const args:Record<string, StepArg> = {};
-	if (argsRaw !== undefined) {
-		if (!isRecord(argsRaw)) {
-			throw new ArcError('step.args must be an object');
-		}
-		for (const [k, v] of Object.entries(argsRaw)) {
-			if (k === 'then' || v === undefined || v === null) {
-				continue;
-			}
-			const base = raw.verb === CHOOSE_VERB && k !== 'goal' ? 'arc' : argBase(spec?.args[k]);
-			if (base === 'arc') {
-				args[k] = asArc(v, registry.nested());
-				continue;
-			}
-			if (!isStepArg(v)) {
-				throw new ArcError(`arg '${k}' has an unsupported type`);
-			}
-			args[k] = v;
-		}
-	}
-	const step:Step = { verb: raw.verb, args };
-	validateStep(step, registry);
-	return step;
-}
-
-function thenRow(raw:unknown):unknown {
-	if (isRecord(raw) && raw.then !== undefined && raw.then !== null) {
-		return raw.then;
-	}
-	if (!isRecord(raw) || !isRecord(raw.head)) {
-		return undefined;
-	}
-	if (raw.head.then !== undefined && raw.head.then !== null) {
-		return raw.head.then;
-	}
-	if (isRecord(raw.head.args) && raw.head.args.then !== undefined && raw.head.args.then !== null) {
-		return raw.head.args.then;
-	}
-	return undefined;
-}
-
-export function asArc(raw:unknown, registry:VerbRegistry):Arc {
-	if (!isRecord(raw)) {
-		throw new ArcError('arc is not an object');
-	}
-	if (raw.head === undefined && raw.group === undefined) {
-		const nested = raw.arc;
-		if (nested !== undefined) {
-			return asArc(nested, registry);
-		}
-	}
-	const thenRaw = thenRow(raw);
-	let arc:Arc;
-	if (raw.group !== undefined) {
-		arc = { head: { verb: 'group', args: {} }, group: asArc(raw.group, registry) };
-	}
-	else if (raw.head !== undefined) {
-		arc = { head: asStep(raw.head, registry) };
-	}
-	else {
-		throw new ArcError('arc is not an object');
-	}
-	if (thenRaw !== undefined) {
-		if (!isRecord(thenRaw)) {
-			throw new ArcError('then is not an object');
-		}
-		if (typeof thenRaw.join !== 'string') {
-			throw new ArcError('then.join must be a string');
-		}
-		arc.then = {
-			join: thenRaw.join as Join,
-			arc: asArc(thenRaw.arc, registry),
-		};
-	}
-	validateArc(arc, registry);
-	return arc;
 }

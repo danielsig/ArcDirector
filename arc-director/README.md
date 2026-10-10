@@ -165,7 +165,7 @@ How chat happens. A director talks to any number of chat **servers** and any num
 | `setDefaultModel(name)`                     | The model of every mind without an assignment. Default: the first added                                                                                                                                                                                                                                                                                                                                                                                                          |
 | `modelID(name?)`                            | The server's id for that model, or the default's; `''` until its server answered                                                                                                                                                                                                                                                                                                                                                                                                 |
 | `withEmbeddings({ inference?, id })`        | The one model every memory and recall query is embedded with, so memories stay comparable whatever a mind thinks with. Without it, recall matches text                                                                                                                                                                                                                                                                                                                           |
-| `withForceSchema(on)`                       | Arc JSON thinks send the arc schema as `response_format` (strict) and offer no tools. No effect with `withArcText(true)`. Live: `setForceSchema`                                                                                                                                                                                                                                                                                                                                 |
+| `withArcFormat(format)`                     | How minds write an Arc: `'text'` (`go_to(Keep) && wait()`, read forgivingly), `'json'` (the default: `{"steps":[…]}`) or `'schema'` (that JSON, but the server must follow a fixed reply schema; a think goes to `/v1/chat/completions` and its tools are replies, `{"tool":"recall","query":"Bread"}`, not native calls). Collectives follow it. Live: `setArcFormat(format)`, `arcFormat`                                                                                      |
 
 
 **System One** models are fast models that pick one of a `choose`'s arcs by name; they never write arcs. The director holds them by name, a spec's `systemOne` assigns one, and a runner without an assignment uses the default. A runner left with none never sees `choose`.
@@ -188,7 +188,7 @@ Do not wrap HTTP in a second in-flight queue. The mind queue’s `inFlight` is t
 
 Live: `infer` (timings). Change a model's settings by adding it again under the same name; a mind never changes them.
 
-Server opts: `baseURL`, `apiKey`, `enableThinking`, `reasoningEffort`, `load` (the last three are defaults a model's own settings override). If you omit `apiKey`, `ARC_DIRECTOR_API_KEY` or `OPENAI_API_KEY` is used. Thinking/CoT is off unless `enableThinking` is true. When it is off, the last message is an assistant prefill that skips the reasoning channel: an empty `<redacted_thinking>` block, or the model's Harmony `to=user` header when `applyPromptTemplate` is set (same method as LM Studio's imageVision plugin). `reasoning` / `reasoning_effort` are sent only when `/api/v1/models` lists that option for the model (`low` when thinking is on and allowed; `on`/`off` for binary models; omitted when the catalog has no reasoning config). A model's first request loads it (LM Studio), with its own `contextLength`; a loaded copy that no longer fits its settings is reloaded. Native LM Studio load reuses a matching instance and unloads extra copies of it. Parallel thinkers are a per-model cap, not load copies. Models configured on one server stay loaded together; anything else loaded is unloaded to make VRAM room, and a failed load unloads any remaining residents and retries. `onLog` gets the outbound JSON **before** each model call (message bodies in fences below it; images as images, not base64), then the reply.
+Server opts: `baseURL`, `apiKey`, `enableThinking`, `reasoningEffort`, `load` (the last three are defaults a model's own settings override). If you omit `apiKey`, `ARC_DIRECTOR_API_KEY` or `OPENAI_API_KEY` is used. Thinking/CoT is off unless `enableThinking` is true. When it is off, the last message is an assistant prefill that skips the reasoning channel: an empty `<redacted_thinking>` block, or the model's Harmony `to=user` header when `applyPromptTemplate` is set (same method as LM Studio's imageVision plugin). The effort goes as `reasoning_effort` on chat completions (`off` is `"none"`, the only value that turns Gemma's reasoning off there) and as `reasoning: { effort }` on the responses API, and only when `/api/v1/models` lists that option for the model (`low` when thinking is on and allowed; `on`/`off` for binary models; omitted when the catalog has no reasoning config). A context overflow retries with the effort at `"none"` and a 512-token answer. A `schema` request (see `withArcFormat`) is LM Studio / llama.cpp specific: its grammar uses a root `anyOf`, `$ref` recursion and optional properties, none of which is OpenAI-strict; its schema is not counted as prompt when the answer is capped to the slot, and the logs show it by name. A model's first request loads it (LM Studio), with its own `contextLength`; a loaded copy that no longer fits its settings is reloaded. Native LM Studio load reuses a matching instance and unloads extra copies of it. Parallel thinkers are a per-model cap, not load copies. Models configured on one server stay loaded together; anything else loaded is unloaded to make VRAM room, and a failed load unloads any remaining residents and retries. `onLog` gets the outbound JSON **before** each model call (message bodies in fences below it; images as images, not base64), then the reply.
 
 ### Mind queue
 
@@ -338,7 +338,7 @@ director.pushEvent({ kind: 'Hurt', text: '{0} cleaved {1}', who: ['Brune', 'Helm
 
 ### Talk and map
 
-- `withTalk(sense, onSpoke?, config?)`**:** range and routing, per character. Library routes `say()`. A mind hears through every character it thinks for: a collective through each of its characters, once per line, from whichever heard it best. That includes its characters talking to each other; only its own voice's lines are not heard back. A line said to, or naming, any of its characters is meant for it and wakes it, whichever character heard it; only a line to its voice reads `says to you`. A collective never speaks for itself; its commander does, or it issues `say` to one of its characters. Line of sight is `withLineOfSight`. When an arc ends on a `say`, the speaker waits up to 20 s for an answer before its next think (a watch can end it sooner; a `say` mid-arc never pauses the rest), but only when someone who could answer heard it clearly: the addressee when `to` is set, anyone otherwise. Unheard or muffled speech goes straight on. The say result names who it was for but could not make out the words (`heard by Baker; too far for Guard to make out the words: get closer`), and earshot marks them `too far to make out your words`. A `say` whose content words (stemmed) mostly repeat a line everyone it is for already heard clearly is refused before anyone hears it: "they already heard you say that". `hasHeard` is true only for speech meant for this mind.
+- `withTalk(sense, onSpoke?, config?)`**:** range and routing, per character. Library routes `say()`. A mind hears through every character it thinks for: a collective through each of its characters, once per line, from whichever heard it best. That includes its characters talking to each other; only its own voice's lines are not heard back. A line said to, or naming, any of its characters is meant for it and wakes it, whichever character heard it; only a line to its voice reads `says to you`. A collective never speaks for itself; its commander does, or it issues `say` to one of its characters. Line of sight is `withLineOfSight`. When an arc's `reply` verb names another character (`say` with `to`, `give`, `buy`, `sell`), the actor waits up to 20 s at the end of the arc if that character is still nearby. The wait ends when they finish a non-movement verb. A step that names no one, such as `say` without `to`, does not wait, and the rest of the arc still runs first. The say result names who it was for but could not make out the words (`heard by Baker; too far for Guard to make out the words: get closer`), and earshot marks them `too far to make out your words`. A `say` whose content words (stemmed) mostly repeat a line everyone it is for already heard clearly is refused before anyone hears it: "they already heard you say that". `hasHeard` is true only for speech meant for this mind.
 - `withMap(sense)`**:** host paints `see_map` pictures and marks characters, things and places by `id`; library stamps a legend in the mind's own names (no coordinates). Omitted unless vision is on.
 - `withKnowledge(pages)`**:** host type docs; minds `recall(query)` them beside memory instead of stuffing every type into the standing prefix.
 
@@ -379,7 +379,7 @@ type MindSettings = {
 	heartbeat?: number;
 	strategicInterval?: number;
 	model?: string; // the configured model it thinks with, by its addModel name; omit for the default
-	conversationCap?: number; // clear lines shown in Current Conversation; omit for 2 per 1K tokens of the model's context (64 when unknown), at most 64; 0 shows none
+	conversationCap?: number; // letters of Current Conversation, whole messages only; omit for one quarter of the model's context (4 letters per token); 0 shows none
 };
 ```
 
@@ -437,7 +437,7 @@ hive.addCharacter({ id: 'Tomas', tags: ['Shopper'] }); // a new character, in th
 hive.removeCharacter('Tomas'); // gone for good, as director.removeCharacter
 ```
 
-`issue(who, arc)` **is instantaneous.** It assigns sticky programs and returns `ok` without waiting for characters to move, talk, or finish. Join several `issue` with `;` so later ones still run. `&&` `;` `||` *inside* `arc=` sequence that character. `then_if_ok` after `issue` means orders assigned, not characters finished. To wait on them from the thinker: `wait(until=...)` over the roster.
+`issue(who, arc)` **is instantaneous.** It assigns sticky programs and returns `ok` without waiting for characters to move, talk, or finish. Join several `issue` with `;` (`"then":"always"` in JSON) so later ones still run. `&&` `;` `||` *inside* `arc=` sequence that character. `&&` after an `issue` means orders assigned, not characters finished. To wait on them from the thinker: `wait(until=...)` over the roster.
 
 `who=` is an expr on `units` (the roster less the commander; `allUnits` is everyone), not `others`. Issue by tag. A character's spec tags travel with it; a tag the mind adds with `tag` is stored ``${collective.id}:${short}`` and dropped when the character leaves. Exprs and prompts use the short name. Formations (`spread` / `circle` / `hold_line`) are steps like any other, anywhere in a character's arc: each character of the squad it was issued with works out the same slots and walks to its own, and the step ends when it gets there. They need them in each character's kit. Inner `me` in `arc=` / law `watch=` is that character. Each character runs what it is issued with its own kit; the roster tells the mind which of the collective's verbs it cannot run.
 
@@ -470,7 +470,7 @@ The standing lines are yours to replace:
 | ---------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `withThinkInstructions({ on?, off? })`   | The think line, by reasoning state. The prompt follows the mind's model's `thinking`. `on` defaults to "Think in 5 sentences, then emit the arc."; `off` defaults to nothing, since the prompt already asks for the Arc alone.                               |
 | `withVerbInstructions(text)`             | The verb-chain line. For a collective the default also asks for looping programs; this replaces both. A host's standing doctrine goes here.                                                                                                                  |
-| `withArcExample(arc)`                    | The Example that closes the prompt. Small models copy it, so make it valid and paren-balanced.                                                                                                                                                               |
+| `withArcExample(arc)`                    | The Example that closes the prompt, written as Arc text; the JSON formats show it as Arc JSON. Small models copy it, so make it valid and paren-balanced.                                                                                                    |
 | `withRepair({ retries?, temperature? })` | Repair turns after a bad arc (default 0) and the temperature from the second repair on (default 0.4; the first stays at 0). Repair turns never reason: the conversation they carry already ran long. A failed think is short-term memory only, never a fact. |
 | `withToolRounds(n)`                      | Tool rounds a think may spend before it must emit the Arc (default 6, `DEFAULT_TOOL_ROUNDS`; small models need several lookups in a row). `0` offers no tools. The same tool with the same arguments twice in one think is refused, not rerun.               |
 | `withStalled(fn)`                        | Whether a finished arc stalled, which stretches that mind's heartbeat (default: failed or interrupted).                                                                                                                                                      |
@@ -534,7 +534,7 @@ const director = await new ArcDirector<CharacterCtx>()
 
 `soloCharacter({...})` builds a character with a mind of its own and no director, for unit tests and scripts. Getting started does not use it.
 
-`Mind<TCtx>` writes arcs for its owner, a character or a collective. `tick(gameTime)` may revise goals (strategic) and emit one `Arc` (tactical), which its voice enacts when that voice has an executor and `autoEnact` is on. `thinkNow({ about?, enact? })` thinks once now. `arcText` skips the JSON goals pass so the only chat is the text arc. The voice's `verbIndex` is the 0-based step currently running inside `enact`.
+`Mind<TCtx>` writes arcs for its owner, a character or a collective. `tick(gameTime)` may revise goals (strategic) and emit one `Arc` (tactical), which its voice enacts when that voice has an executor and `autoEnact` is on. `thinkNow({ about?, enact? })` thinks once now. A strategic pass revises goals first, in the form the mind writes: Arc text (`set_goal`, `drop_goal`, `set_identity`, or nothing) under `text`, JSON `{"goals":[…],"identity"?:{…}}` under `json`, and the same under a fixed `goals` schema under `schema`. The voice's `verbIndex` is the 0-based step currently running inside `enact`.
 
 ### When tactical runs
 
@@ -550,7 +550,7 @@ const director = await new ArcDirector<CharacterCtx>()
 
 Defaults: `heartbeat` 0 under a director (its queue paces thinks; 30 in `soloCharacter`), `strategicInterval` 180. `strategicInterval <= 0` disables the periodic pass.
 
-Tactical: assemble senses → optional memory intrusion → tools (`recall`, `observe`, `earshot`, `see_map` when the host maps and the model can see, plus host tools; `recall` also searches knowledge when `withKnowledge` is set) up to `toolRoundCap` → `Arc` (JSON, or `go_to() && wait()` text when `arcText` is on). System vs user split is under [Prompt prefix](#prompt-prefix).
+Tactical: assemble senses → optional memory intrusion → tools (`recall`, `observe`, `earshot`, `see_map` when the host maps and the model can see, plus host tools; `recall` also searches knowledge when `withKnowledge` is set) up to `toolRoundCap` → `Arc` (`{"steps":[…]}` JSON, or `go_to() && wait()` text under `arcFormat: 'text'`; under `schema` a tool is called in the reply itself). System vs user split is under [Prompt prefix](#prompt-prefix).
 
 ### Options
 
@@ -673,11 +673,28 @@ Space enters expressions only through these callbacks. Under `ArcDirector` they 
 
 ## Arcs
 
+An `Arc` is a list of steps. A step says which verb, its args, and how it joins the step after it:
+
 ```ts
-{ head: { verb: 'go_to', args: { target: 'Keep' } }, then?: { join, arc } }
+type Step = { verb:string; args:Record<string, StepArg>; then?:'if_ok' | 'always' | 'if_failed' };
+type Arc = Step[];
 ```
 
-Joins: `then_if_ok` (`&&`), `then` (`;`), `then_if_err` (`||`). Chain as far as the next verbs are known. A think is expensive — emit that whole chain this think, not one verb and not only the first step of a spoken then-order. `then` still runs after a failed `pick_up` (already holding). `think()` is always moved to the end. `wait(seconds?, until?)` parks; `until` is a one-shot watch.
+`then` is judged from how this step went: `if_ok` (`&&`) runs the next step only if this one succeeded, `always` (`;` or a new line) runs it whatever happened, and `if_failed` (`||`) runs the rest of the steps, as a fallback, only if this one failed. A missing `then` is `if_ok`, and the last step's is ignored, so `a && b || c` with `a` failing runs only `a`: `c` is the fallback for `b`. Text and JSON differ in one default: a bare new line between steps in text is `always`, while a step with no `then` in JSON is `if_ok`. A group, `( … )`, is the step `{ verb: 'group', args: { arc } }`; its result joins like any step's. `group` is not a verb you register, and no verb may have an arg called `verb` or `then`.
+
+In text, `go_to(Keep) && use(item=Lever) || say("It's stuck.")`. In JSON, which the `json` and `schema` formats write, args sit beside `verb` and `then` comes last; a nested arc is a bare list of steps, and `choose` keeps its choices under `choices`:
+
+```json
+{"steps":[
+  {"verb":"go_to","target":"Keep"},
+  {"verb":"use","item":"Lever","then":"if_failed"},
+  {"verb":"say","text":"It's stuck.","to":"Forager"}
+]}
+```
+
+`parseArc(reply, verbs)` reads either (JSON also as a bare list or one step, fenced or after some reasoning; a string where an arc goes is Arc text), `arcToJSON` / `arcFromJSON` / `arcJSONText` are its JSON halves, and `replySchema(catalog, tools)` is the fixed schema of a reply: a call to one tool, or `{"steps":[…]}`, with one branch per verb of the whole catalog (never of one mind's kit, so every mind gets the same bytes; the kit is checked once the reply is read).
+
+Chain as far as the next verbs are known. A think is expensive — emit that whole chain this think, not one verb and not only the first step of a spoken then-order. `always` still runs after a failed `pick_up` (already holding). `think()` is always moved to the end, out of groups too. `wait(seconds?, until?)` parks; `until` is a one-shot watch.
 
 Arc text is read forgivingly, because small models slip: extra `)`, `.` or `,` after a step are dropped; closers missing at the very end are supplied; two steps with no join between them are joined with `;`. A reply that stopped at the token cap (`ChatResponse.truncated`) is never parsed; it goes to a repair turn. An `issue` that swallowed the next `issue` (a closer missing mid-line) is rejected.
 
@@ -685,7 +702,7 @@ Arc text is read forgivingly, because small models slip: extra `)`, `.` or `,` a
 
 ### Follow-up think
 
-After an arc, `enqueueArc` uses the **highest** score among steps **after** the last `wait(until)`. Failure is at least 0.3. Stock verbs have the scores below; give your own verbs theirs with `verbScores` (`{ steal: 0.95 }`), which also overrides. 0 means no follow-up on success.
+After an arc, `enqueueArc` uses the **highest** score among steps **after** the last `wait(until)`. Failure is at least 0.3. Stock verbs have the scores below; give your own verbs theirs with `verbScores` (`{ steal: 0.95 }`), which also overrides. 0 means no follow-up on success. Steps inside a group count too; arcs held in args (`loop`, `when`, a choice) do not.
 
 
 | Verb                                | Score |
@@ -773,7 +790,7 @@ src/
   collective/        Collective, its verbs, who, tags, memory handover
   think/             MindQueue: ThinkQueue, SimpleQueue
   expr/              watch language, catalog, stringify
-  arc/               verbs, parse, validate, runArc, laws
+  arc/               verbs, parse, wire (JSON), validate, runArc, laws
   world/             HostWorld, routes, moving characters, stock world verbs, watch geometry
   memory/            MemoryStore
   perception/        optional scene English

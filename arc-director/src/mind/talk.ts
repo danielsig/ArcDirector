@@ -66,11 +66,8 @@ export type SpeechUtterance = {
 	timestamp:number;
 };
 
-/**
- * A `say` result. `heard`: who heard it clearly. `answerable`: someone who could answer heard it clearly
- * (a target, when there is one).
- */
-export type SayResult = ArcResult & { heard?:string[]; answerable?:boolean };
+/** A `say` result. `heard`: who heard it clearly. */
+export type SayResult = ArcResult & { heard?:string[] };
 
 type Muffled = { speakerID:string; spoken:string; targets:string[]; until:number };
 
@@ -350,13 +347,12 @@ export class TalkNet {
 				this._muffled.set(id, list);
 			}
 		}
-		const answerable = clearly.some((id) => targets.length === 0 || targets.includes(id));
 		const names = (ids:string[]):string => ids.map((t) => this.label(speakerID, t)).join(', ');
-		// Who it was for and could not make out the words: the speaker must know, or it waits on an answer that cannot come.
+		// Who it was for and could not make out the words, so the speaker knows the line did not land.
 		const muffled = (targets.length > 0 ? targets : heardBy).filter((id) => id !== speakerID && heardBy.includes(id) && !clearly.includes(id));
 		const said = targets.length > 0 ? `to ${names(targets)}` : clearly.length > 0 ? `heard by ${names(clearly)}` : 'no one made out the words';
 		const far = muffled.length > 0 ? `; too far for ${names(muffled)} to make out the words: get closer` : '';
-		return { ok: true, verb: 'say', reason: `${said}${far}`, heard: clearly, answerable };
+		return { ok: true, verb: 'say', reason: `${said}${far}`, heard: clearly };
 	}
 
 	/** Deliver muffled lines in full to listeners who came close enough. Call once per frame. */

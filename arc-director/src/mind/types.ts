@@ -1,5 +1,11 @@
 import type { JsonSchema } from '../json.js';
 
+/**
+ * How a model writes the Arc it thinks up. `text`: Arc text (`go_to() && wait()`), parsed forgivingly. `json`: Arc
+ * JSON, parsed as written. `schema`: Arc JSON the server must follow, enforced by a response schema.
+ */
+export type ArcFormat = 'text' | 'json' | 'schema';
+
 export type MindEvent = {
 	kind:string;
 	text:string;

@@ -445,8 +445,7 @@ export class Session extends Component {
 		hud.contextLength = next.contextLength;
 		hud.batchThinks = next.batchThinks;
 		hud.thinkingBudget = next.thinkingBudget;
-		hud.arcText = next.arcText;
-		hud.forceSchema = next.forceSchema;
+		hud.arcFormat = next.arcFormat;
 		hud.systemOne = next.systemOne;
 		hud.decisionModel = next.decisionModel;
 		hud.prefsDetached = prefsDetached();
@@ -462,11 +461,8 @@ export class Session extends Component {
 		if (changed('batchThinks')) {
 			arc?.setBatchThinks(next.batchThinks);
 		}
-		if (changed('arcText')) {
-			arc?.setArcText(next.arcText);
-		}
-		if (changed('forceSchema')) {
-			arc?.setForceSchema(next.forceSchema);
+		if (changed('arcFormat')) {
+			arc?.setArcFormat(next.arcFormat);
 		}
 		if (arc && changed('systemOne')) {
 			arc.setDefaultSystemOne(systemOneName(next.systemOne));

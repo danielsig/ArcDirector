@@ -116,12 +116,8 @@ function toggleThinking():void {
 	setPrefs({ thinkingBudget: !props.hud.thinkingBudget });
 }
 
-function toggleArcText():void {
-	setPrefs({ arcText: !props.hud.arcText });
-}
-
-function toggleForceSchema():void {
-	setPrefs({ forceSchema: !props.hud.forceSchema });
+function pickArcFormat():void {
+	setPrefs({ arcFormat: props.hud.arcFormat });
 }
 
 function pickSystemOne():void {
@@ -493,32 +489,18 @@ function pct(n:number):string {
 									{{ hud.thinkingBudget ? 'On' : 'Off' }}
 								</button>
 							</div>
-							<div class="set">
-								<span class="name">Arc text</span>
-								<button
-									type="button"
-									class="switch"
-									:class="{ on: hud.arcText }"
-									:aria-pressed="hud.arcText"
-									@click.stop="toggleArcText"
+							<label class="set">
+								<span class="name">Arc format</span>
+								<select
+									v-model="hud.arcFormat"
+									title="How NPCs write their Arc: text, JSON, or JSON the server must follow (schema)"
+									@change.stop="pickArcFormat"
 								>
-									{{ hud.arcText ? 'On' : 'Off' }}
-								</button>
-							</div>
-							<div class="set">
-								<span class="name">Force schema</span>
-								<button
-									type="button"
-									class="switch"
-									:class="{ on: hud.forceSchema && !hud.arcText }"
-									:aria-pressed="hud.forceSchema"
-									:disabled="hud.arcText"
-									title="Arc JSON only: sends the arc schema and no tools"
-									@click.stop="toggleForceSchema"
-								>
-									{{ hud.forceSchema ? 'On' : 'Off' }}
-								</button>
-							</div>
+									<option value="text">Text</option>
+									<option value="json">JSON</option>
+									<option value="schema">Schema</option>
+								</select>
+							</label>
 							<label class="set">
 								<span class="name">System One</span>
 								<select

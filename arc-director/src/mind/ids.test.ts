@@ -30,7 +30,7 @@ describe('mind ids', () => {
 		assert.equal(firstStep(law.args.arc as never)?.args.target, 'Nyx');
 		assert.equal(law.args.name, 'Nyx.flee');
 		assert.equal(law.args.who, 'units.filter("Archer")');
-		const say = stored.then!.arc.head;
+		const say = stored[1];
 		assert.equal(say.args.text, 'EnemyWitch2 is near');
 		assert.equal(say.args.to, 'Ash');
 		assert.deepEqual(mapArc(stored, verbs, namesOf(names)), reply);
@@ -54,7 +54,7 @@ describe('mind ids', () => {
 	});
 
 	it('leaves remember tags and prose alone', () => {
-		const reply:Arc = { head: { verb: 'remember', args: { content: 'EnemyWitch2 hides by the well', tags: ['EnemyWitch2'] } } };
+		const reply:Arc = [{ verb: 'remember', args: { content: 'EnemyWitch2 hides by the well', tags: ['EnemyWitch2'] } }];
 		assert.deepEqual(mapArc(reply, verbs, idsOf(book())), reply);
 	});
 });

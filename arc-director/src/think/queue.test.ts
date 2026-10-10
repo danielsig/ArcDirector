@@ -94,7 +94,7 @@ describe('ThinkQueue', () => {
 		q.enqueueMajor('C');
 		assert.deepEqual(q.tick(1, new Map()).map((row) => row.mindID).sort(), ['B', 'C']);
 		q.endThink('A');
-		q.beginArc('A', { head: { verb: 'go_to', args: { target: 'Gate' } } });
+		q.beginArc('A', [{ verb: 'go_to', args: { target: 'Gate' } }]);
 		q.enqueueMajor('B');
 		q.enqueueMajor('C');
 		assert.deepEqual(q.tick(1, new Map()).map((row) => row.mindID).sort(), ['A', 'B', 'C']);
@@ -176,7 +176,7 @@ describe('ThinkQueue', () => {
 		assert.ok(verbThinkScore('think') > verbThinkScore('wander'));
 		assert.ok(verbThinkScore('wander') > verbThinkScore('wait'));
 		// An arc that only learns something must lead to a think that uses it.
-		assert.ok(arcScore({ head: { verb: 'examine', args: { target: 'BridgeLever' } } }) >= verbThinkScore('use'));
+		assert.ok(arcScore([{ verb: 'examine', args: { target: 'BridgeLever' } }]) >= verbThinkScore('use'));
 		assert.equal(verbThinkScore('wait'), 0);
 		assert.ok(verbThinkScore('wait', false) > 0);
 		assert.equal(verbThinkScore('follow'), 0);
@@ -238,29 +238,14 @@ describe('ThinkQueue', () => {
 	it('arcScore is the max warrant; think(about) is 0.55', () => {
 		assert.equal(THINK_BARE_SCORE, 0.35);
 		assert.equal(THINK_ABOUT_SCORE, 0.55);
-		assert.equal(arcScore({
-			head: { verb: 'wait', args: {} },
-			then: { join: 'then', arc: { head: { verb: 'think', args: {} } } },
-		}), THINK_BARE_SCORE);
-		assert.equal(arcScore({
-			head: { verb: 'wait', args: {} },
-			then: { join: 'then', arc: { head: { verb: 'think', args: { about: 'the lock' } } } },
-		}), THINK_ABOUT_SCORE);
-		assert.equal(arcScore({
-			head: { verb: 'go_to', args: { target: 'EastGate' } },
-			then: { join: 'then', arc: { head: { verb: 'think', args: { about: 'the lock' } } } },
-		}), VERB_THINK_SCORES.go_to);
-		assert.equal(arcScore({
-			head: { verb: 'go_to', args: { target: 'EastGate' } },
-			then: { join: 'then', arc: { head: { verb: 'think', args: {} } } },
-		}), VERB_THINK_SCORES.go_to);
+		assert.equal(arcScore([{ verb: 'wait', args: {}, then: 'always' }, { verb: 'think', args: {} }]), THINK_BARE_SCORE);
+		assert.equal(arcScore([{ verb: 'wait', args: {}, then: 'always' }, { verb: 'think', args: { about: 'the lock' } }]), THINK_ABOUT_SCORE);
+		assert.equal(arcScore([{ verb: 'go_to', args: { target: 'EastGate' }, then: 'always' }, { verb: 'think', args: { about: 'the lock' } }]), VERB_THINK_SCORES.go_to);
+		assert.equal(arcScore([{ verb: 'go_to', args: { target: 'EastGate' }, then: 'always' }, { verb: 'think', args: {} }]), VERB_THINK_SCORES.go_to);
 
 		const q = new ThinkQueue({ watchInterval: 100, processInterval: 0 });
 		q.ensure('A', { skipHeartbeat: true });
-		q.enqueueArc('A', {
-			head: { verb: 'wait', args: {} },
-			then: { join: 'then', arc: { head: { verb: 'think', args: { about: 'the lock' } } } },
-		});
+		q.enqueueArc('A', [{ verb: 'wait', args: {}, then: 'always' }, { verb: 'think', args: { about: 'the lock' } }]);
 		const rows = q.tick(1, new Map());
 		assert.equal(rows.length, 1);
 		assert.equal(rows[0].score, THINK_ABOUT_SCORE);
@@ -268,29 +253,15 @@ describe('ThinkQueue', () => {
 	});
 
 	it('wait(until) drops warrants before it; wait without until does not', () => {
-		const giveThenGo:Arc = {
-			head: { verb: 'give', args: { item: 'Loaf', to: 'Baker' } },
-			then: {
-				join: 'then',
-				arc: {
-					head: { verb: 'wait', args: { until: 'some(others.approaching())' } },
-					then: { join: 'then', arc: { head: { verb: 'go_to', args: { target: 'EastGate' } } } },
-				},
-			},
-		};
+		const giveThenGo:Arc = [
+			{ verb: 'give', args: { item: 'Loaf', to: 'Baker' }, then: 'always' },
+			{ verb: 'wait', args: { until: 'some(others.approaching())' }, then: 'always' },
+			{ verb: 'go_to', args: { target: 'EastGate' } },
+		];
 		assert.equal(arcScore(giveThenGo), VERB_THINK_SCORES.go_to);
-		assert.equal(arcScore({
-			head: { verb: 'give', args: { item: 'Loaf', to: 'Baker' } },
-			then: { join: 'then', arc: { head: { verb: 'wait', args: { until: 'hasHeard' } } } },
-		}), 0);
-		assert.equal(arcScore({
-			head: { verb: 'give', args: { item: 'Loaf', to: 'Baker' } },
-			then: { join: 'then', arc: { head: { verb: 'wait', args: { seconds: 8 } } } },
-		}), VERB_THINK_SCORES.give);
-		assert.equal(arcScore({
-			head: { verb: 'give', args: { item: 'Loaf', to: 'Baker' } },
-			then: { join: 'then', arc: { head: { verb: 'wait', args: { until: 'hasHeard' } } } },
-		}, false), 0.3);
+		assert.equal(arcScore([{ verb: 'give', args: { item: 'Loaf', to: 'Baker' }, then: 'always' }, { verb: 'wait', args: { until: 'hasHeard' } }]), 0);
+		assert.equal(arcScore([{ verb: 'give', args: { item: 'Loaf', to: 'Baker' }, then: 'always' }, { verb: 'wait', args: { seconds: 8 } }]), VERB_THINK_SCORES.give);
+		assert.equal(arcScore([{ verb: 'give', args: { item: 'Loaf', to: 'Baker' }, then: 'always' }, { verb: 'wait', args: { until: 'hasHeard' } }], false), 0.3);
 	});
 
 	it('armOnce is sampled like a watch and clearOnce drops it', () => {
@@ -323,15 +294,12 @@ describe('ThinkQueue', () => {
 	it('default mayThink allows while an arc is live; callback can block it', () => {
 		const q = new ThinkQueue({ watchInterval: 100, processInterval: 0 });
 		q.ensure('A', { skipHeartbeat: true });
-		q.beginArc('A', {
-			head: { verb: 'go_to', args: { target: 'Gate' } },
-			then: { join: 'then', arc: { head: { verb: 'steal', args: { item: 'Loaf', from: 'Baker' } } } },
-		});
+		q.beginArc('A', [{ verb: 'go_to', args: { target: 'Gate' }, then: 'always' }, { verb: 'steal', args: { item: 'Loaf', from: 'Baker' } }]);
 		q.enqueueMajor('A');
 		assert.equal(q.tick(1, new Map()).length, 1);
 		q.mayThink = (ctx) => {
 			assert.deepEqual(ctx.verbs, ['go_to', 'steal']);
-			assert.equal(ctx.arc?.head.verb, 'go_to');
+			assert.equal(ctx.arc?.[0].verb, 'go_to');
 			return false;
 		};
 		q.enqueueMajor('A');

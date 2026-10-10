@@ -16,6 +16,10 @@ export const MAX_CONTEXT_LENGTH = CONTEXT_LENGTHS[CONTEXT_LENGTHS.length - 1];
 export const SYSTEM_ONE_KINDS = ['off', 'jev', 'local'] as const;
 export type SystemOneKind = (typeof SYSTEM_ONE_KINDS)[number];
 
+/** How NPC minds write an Arc (the library's `ArcFormat`): Arc text, Arc JSON, or JSON the server must follow. */
+export const ARC_FORMATS = ['text', 'json', 'schema'] as const;
+export type ArcFormatPref = (typeof ARC_FORMATS)[number];
+
 /** The director's default System One for a menu choice: its name there, or none. */
 export function systemOneName(kind:SystemOneKind):string | null {
 	return kind === 'off' ? null : kind;
@@ -37,8 +41,7 @@ const DEFAULT = {
 	contextLength: 8192,
 	batchThinks: true,
 	thinkingBudget: true,
-	arcText: false,
-	forceSchema: false,
+	arcFormat: 'json' as ArcFormatPref,
 	systemOne: 'off' as SystemOneKind,
 	/** The local System One's model id: a chat model scored, or a decision model. Empty: the main model. */
 	decisionModel: '',
@@ -66,8 +69,7 @@ const FIELDS:{ [K in keyof Prefs]:(v:unknown, fallback:Prefs[K])=>Prefs[K] } = {
 	contextLength: (v, fallback) => (Number.isFinite(Number(v)) ? clampContextLength(v) : fallback),
 	batchThinks: bool,
 	thinkingBudget: bool,
-	arcText: bool,
-	forceSchema: bool,
+	arcFormat: (v, fallback) => ARC_FORMATS.find((format) => format === v) ?? fallback,
 	systemOne: (v, fallback) => SYSTEM_ONE_KINDS.find((kind) => kind === v) ?? fallback,
 	decisionModel: str,
 	aiLogSource: str,

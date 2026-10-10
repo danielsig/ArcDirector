@@ -1,6 +1,7 @@
 import { verbHelp } from '../arc/schema.js';
 import { MIND_ONLY_VERBS, STOCK_ARC_VERBS, type VerbRegistry } from '../arc/stock-verbs.js';
 import { formatArcBlocks, parseArcText } from '../arc/parse.js';
+import { arcJSONText } from '../arc/wire.js';
 
 const STOCK_ARC_VERBS_SET = new Set<string>(STOCK_ARC_VERBS);
 import type { ArcResult } from '../arc/types.js';
@@ -8,6 +9,7 @@ import type { MemoryRecord } from '../memory/store.js';
 import { DEFAULT_YOU_SYMBOL } from './map.js';
 import type { Identity, Goal, Watches } from '../character/types.js';
 import { extrasWithoutPins, formatWatches, watchCount, watchNames } from '../character/watch.js';
+import type { ArcFormat } from './types.js';
 
 /** Standing think line per reasoning state. `on` defaults to {@link DEFAULT_THINK_INSTRUCTIONS}, `off` to nothing. */
 export type ThinkInstructions = { on?:string; off?:string };
@@ -23,8 +25,8 @@ export type StablePrefixOpts = {
 	youSymbol?:string;
 	/** `recall` searches world knowledge this think, not only memory. */
 	canRecallKnowledge?:boolean;
-	/** Ask for `pick_up(Lantern) ; go_to(Player) && give(...)` instead of Arc JSON. */
-	arcText?:boolean;
+	/** `text` asks for `pick_up(Lantern) ; go_to(Player) && give(...)` instead of Arc JSON. Default `json`. */
+	arcFormat?:ArcFormat;
 	thinkInstructions?:ThinkInstructions;
 	/** Whether the model reasons before it answers. Picks the think line. Default true. */
 	thinking?:boolean;
@@ -58,7 +60,7 @@ export function stablePrefix(
 		lines.push(`Traits: ${identity.traits.join(', ')}.`);
 	}
 	if (opts.includeWatches) {
-		lines.push(watchCheatSheet(opts.watchesWritable === true, opts.canObserve === true));
+		lines.push(watchCheatSheet(opts.watchesWritable === true, opts.canObserve === true, verbs.has('go_to')));
 	}
 	if (opts.canRecallKnowledge) {
 		lines.push(knowledgeHint(opts.canSeeMap !== true, verbs.has('wander')));
@@ -67,7 +69,7 @@ export function stablePrefix(
 		lines.push(seeMapHint(opts.youSymbol, opts.canRecallKnowledge === true, verbs.has('wander')));
 	}
 	if (!opts.omitArc) {
-		lines.push(arcInstructions(verbs, shouldEmitArcText(verbs, opts.arcText === true), opts.tools ?? [], {
+		lines.push(arcInstructions(verbs, opts.arcFormat ?? 'json', opts.tools ?? [], {
 			think: opts.thinking === false
 				? opts.thinkInstructions?.off ?? ''
 				: opts.thinkInstructions?.on ?? DEFAULT_THINK_INSTRUCTIONS,
@@ -78,29 +80,31 @@ export function stablePrefix(
 	return lines.join('\n');
 }
 
-/** `edit` names the standing-watch verbs. `observe` names the tool, only when it is offered. */
-export function watchCheatSheet(edit:boolean, observe:boolean):string {
+/** `edit` names the standing-watch verbs. `observe` names the tool, only when it is offered. `goTo` names that verb in the crowd example. */
+export function watchCheatSheet(edit:boolean, observe:boolean, goTo = false):string {
 	return [
 		'Watch language (not JS). Bindings: me, others, items, units (your roster, not others), landmarks, events, prev (last think: prev.me, prev.secondsAgo, prev.verbs).',
 		edit && 'Standing: watch(name, expr) / unwatch(name).',
 		observe && 'One-shot this think: the observe tool.',
 		WATCH_RELATIONS,
+		goTo && 'Crowd: doing(u, "go_to").',
 	].filter(Boolean).join(' ');
 }
 
 const WATCH_RELATIONS = [
 	'Relations: distance(me, Player), isNear(me, Player, 16), hasSightline, isFacing, manhattan(me, Player), isReachable(me, Cottage); wrap list watches in some.',
-	'i is "Lantern". filter/count/find/some/all/minBy/maxBy. others.nearby(16), isLeft, isRight, events.filter("theft"). &&/|| numbers=min/max, bools=and/or. Crowd: doing(u, "go_to"). isCarrying / wasCarrying / hasJustReceived / hasJustLost when you carry.',
+	'i is "Lantern". filter/count/find/some/all/minBy/maxBy. others.nearby(16), isLeft, isRight, events.filter("theft"). &&/|| numbers=min/max, bools=and/or. isCarrying / wasCarrying / hasJustReceived / hasJustLost when you carry.',
 ].join(' ');
 
 export function knowledgeHint(includeUnnamed = false, canWander = true):string {
 	const lines = [
 		'recall also searches what you know of the world: places, items, people, and how things work. Query a name, or a plain word or spoken place to learn its Capitalized name. Empty query lists the topics you know.',
+		'recall answers any question. Never ask anyone until recall cannot find it. Then try different words.',
 	];
 	if (includeUnnamed) {
 		const wander = canWander ? ', or wander(until)' : '';
 		lines.push(
-			`A spoken place that is not a Capitalized or *starred* name: Call recall, ask the speaker where it is${wander}.`,
+			`A spoken place that is not a Capitalized or *starred* name: Call recall${wander}.`,
 		);
 	}
 	return lines.join(' ');
@@ -110,11 +114,12 @@ export function seeMapHint(youSymbol = DEFAULT_YOU_SYMBOL, knowledge = false, ca
 	const you = youSymbol.trim() || DEFAULT_YOU_SYMBOL;
 	const wander = canWander ? ', or wander(until)' : '';
 	const unnamed = knowledge
-		? `A spoken place that is not a Capitalized or *starred* name: Call recall, see_map, ask the speaker where it is${wander}. A second look soon, without moving, returns the same legend and no new picture.`
-		: `A spoken place that is not a Capitalized or *starred* name: Call see_map, ask the speaker where it is${wander}. A second look soon, without moving, returns the same legend and no new picture.`;
+		? `A spoken place that is not a Capitalized or *starred* name: Call recall, then see_map${wander}. A second look soon, without moving, returns the same legend and no new picture.`
+		: `A spoken place that is not a Capitalized or *starred* name: Call see_map${wander}. A second look soon, without moving, returns the same legend and no new picture.`;
 	return [
 		`see_map is a tool this think, not a verb. Never write it in the Arc. zoom 1 close, 0 whole land. Match the legend (${you} = you).`,
 		unnamed,
+		'Never ask where something is until see_map cannot find it.',
 	].join(' ');
 }
 
@@ -130,13 +135,12 @@ export const DEFAULT_VERB_INSTRUCTIONS = 'A think is expensive. Chain every next
 export const DEFAULT_COLLECTIVE_INSTRUCTIONS = 'Issue looping programs with a bunch of when(watch, arc) reactions so they keep working without another think. A later think only edits — replace one program or add a law, do not rewrite the whole roster.';
 
 function defaultVerbInstructions(verbs:VerbRegistry):string {
-	const issues = verbs.has('issue') && (verbs.has('loop') || verbs.has('when'));
-	return issues ? `${DEFAULT_VERB_INSTRUCTIONS} ${DEFAULT_COLLECTIVE_INSTRUCTIONS}` : DEFAULT_VERB_INSTRUCTIONS;
-}
-
-/** A collective's `issue` examples are Arc text (`issue(...) ; issue(...)`). Ask for that, not JSON. */
-export function shouldEmitArcText(verbs:VerbRegistry, arcText = false):boolean {
-	return arcText || verbs.has('issue');
+	if (!verbs.has('issue') || (!verbs.has('loop') && !verbs.has('when'))) {
+		return DEFAULT_VERB_INSTRUCTIONS;
+	}
+	const via = verbs.has('when') ? 'a bunch of when(watch, arc) reactions' : 'loop(arc)';
+	const law = verbs.has('law') ? ' or add a law' : '';
+	return `${DEFAULT_VERB_INSTRUCTIONS} Issue looping programs with ${via} so they keep working without another think. A later think only edits — replace one program${law}, do not rewrite the whole roster.`;
 }
 
 function joinSentences(parts:Array<string | false>):string {
@@ -148,77 +152,83 @@ function joinSentences(parts:Array<string | false>):string {
 
 function arcInstructions(
 	verbs:VerbRegistry,
-	arcText:boolean,
+	format:ArcFormat,
 	toolNames:string[] = [],
 	lines:{ think:string; verbs:string; example?:string },
 ):string {
 	const has = (name:string):boolean => verbs.has(name);
 	const chain = has('pick_up') && has('give');
+	const arcText = format === 'text';
 	return joinSentences([
 		'Goals are standing wants, not the next verb.',
 		has('set_identity') && 'Do not emit identity or set_identity unless who you are changed for good.',
 		has('remember') && 'remember(content, tags?) keeps a lasting fact.',
 		has('think') && 'think("what to work out") last; several merge. Do not think() twice in a row — act first.',
 		lines.think,
-		toolInstructions(toolNames),
+		toolInstructions(toolNames, format),
 		has('wait') && 'wait(until) is a one-shot watch, dropped next think.',
 		has('wait') && 'Steps run back to back and never wait for others on their own. A step that needs someone else to act first (pay, give, answer) goes after wait(until) on that act, or in a later think.',
 		lookFor(verbs, toolNames.includes('see_map')),
-		has('wander') && wanderExample(arcText),
+		has('wander') && `Example: ${showArc('wander(until=some(items.filter("Lantern").nearby()))', verbs, format)}`,
 		unnamedPlace(verbs),
 		afterWander(verbs),
 		has('wander') && 'wander(until) is one step, not the rest of the think.',
-		has('choose') && !has('issue') && chooseSentence(verbs, arcText, ''),
+		has('choose') && !has('issue') && chooseSentence(verbs, format, ''),
 		'If the order says then, after, or and then, put those steps in one chain this think.',
 		spokenGo(verbs, toolNames.includes('see_map')),
-		collectiveInstructions(verbs),
+		collectiveInstructions(verbs, format),
 		has('use') && 'use(item=TheItem, target=TheThing) on the name it operates.',
 		lines.verbs,
 		arcText
 			? '&& continues only on success; ; always continues; || is the failure fallback.'
-			: 'then_if_ok continues only on success; then always continues; then_if_err is the failure fallback.',
-		emitSentence(arcText, toolNames.length > 0),
-		`Names only, no coordinates. Available verbs: ${verbHelp(verbs)}.`,
-		toolsNotVerbs(toolNames),
-		lines.example ? `Example: ${lines.example}` : arcExample(arcText, chain, has('issue')),
+			: '"then" ends a step: "if_ok" (the default: the next step only if this one succeeded), "always" (the next step whatever happened) or "if_failed" (the rest are its fallback).',
+		emitSentence(format, toolNames.length > 0),
+		`Names only, no coordinates. Available verbs: ${verbHelp(verbs, toolNames)}.`,
+		toolsNotVerbs(toolNames, format),
+		lines.example ? `Example: ${format === 'text' ? lines.example : showArc(lines.example, verbs, format)}` : arcExample(verbs, format, chain),
 	]);
 }
 
 /** Said beside the verb list, where a small model writes the Arc and is tempted to write a tool into it. */
-function toolsNotVerbs(toolNames:string[]):string {
+function toolsNotVerbs(toolNames:string[], format:ArcFormat):string {
 	if (toolNames.length === 0) {
 		return '';
 	}
 	const names = toolNames.length > 1 ? `${toolNames.slice(0, -1).join(', ')} and ${toolNames.at(-1)}` : toolNames[0];
-	return `${names} ${toolNames.length > 1 ? 'are tools' : 'is a tool'}, not verbs: call ${toolNames.length > 1 ? 'them' : 'it'} as tools, never in the Arc.`;
-}
-
-function wanderExample(arcText:boolean):string {
-	return arcText
-		? 'Example: wander(until=some(items.filter("Lantern").nearby()))'
-		: 'Example: {"head":{"verb":"wander","args":{"until":"some(items.filter(\\"Lantern\\").nearby())"}}}';
+	const subject = `${names} ${toolNames.length > 1 ? 'are tools' : 'is a tool'}, not verbs`;
+	return format === 'schema'
+		? `${subject}: reply with the tool call, never in the steps.`
+		: `${subject}: call ${toolNames.length > 1 ? 'them' : 'it'} as tools, never in the Arc.`;
 }
 
 /**
  * A one-call-per-turn lookup loop. Small models skip tools unless told what they are for,
  * and one worked lookup does more than a page of rules.
  */
-function toolInstructions(toolNames:string[]):string {
+function toolInstructions(toolNames:string[], format:ArcFormat):string {
 	if (toolNames.length === 0) {
 		return '';
 	}
+	// A schema reply has no native tool calls: the reply is the call, `{"tool":"recall","query":"Bread"}`.
+	const schema = format === 'schema';
 	return joinSentences([
-		`Tools this think, not verbs: ${toolNames.join(', ')}. Never write a tool name in the Arc.`,
+		schema
+			? `Tools this think, not verbs: ${toolNames.join(', ')}. Call one by replying {"tool":"name","argument":"value"}. Never write a tool name in the steps.`
+			: `Tools this think, not verbs: ${toolNames.join(', ')}. Never write a tool name in the Arc.`,
 		'Never guess a fact a tool can check. When a goal needs something this prompt does not say (who has it, where it is, what is in the way), call one tool, read its result, then call the next tool or act.',
 		'After an error or an empty result, change the query or the tool; never repeat a call.',
-		toolNames.includes('recall') && `Example: your goal is to buy Bread and you do not know who sells it. Call recall with "Bread"; it says Baker sells Bread at Bakery. Now emit the arc that goes there and buys it.`,
+		toolNames.includes('recall') && (schema
+			? `Example: your goal is to buy Bread and you do not know who sells it. Reply {"tool":"recall","query":"Bread"}; it says Baker sells Bread at Bakery. Now emit the steps that go there and buy it.`
+			: `Example: your goal is to buy Bread and you do not know who sells it. Call recall with "Bread"; it says Baker sells Bread at Bakery. Now emit the arc that goes there and buys it.`),
+		toolNames.includes('recall') && 'Never ask anyone until recall cannot find it. Then try different words.',
 	]);
 }
 
-function emitSentence(arcText:boolean, tools:boolean):string {
+function emitSentence(format:ArcFormat, tools:boolean):string {
 	const lead = tools ? 'Once you know enough, emit only' : 'Answer immediately with only';
-	const kind = arcText ? 'the Arc text' : 'the Arc JSON';
-	const ban = arcText ? `No JSON, no prose. ${BLOCK_LAYOUT}` : 'Close every brace. No prose.';
+	const text = format === 'text';
+	const kind = text ? 'the Arc text' : 'the Arc JSON, {"steps":[…]}';
+	const ban = text ? `No JSON, no prose. ${BLOCK_LAYOUT}` : 'Arguments sit beside verb. Close every brace. No prose.';
 	return `${lead} ${kind}. ${ban}`;
 }
 
@@ -229,16 +239,42 @@ function emitSentence(arcText:boolean, tools:boolean):string {
 const BLOCK_LAYOUT = 'A call that holds an arc or choices opens on its own line, its args go one per line a tab deeper, each ending in a comma, and its ) stands alone at the opener\'s depth. A call with no arc inside stays on one line.';
 
 /** Last in the prefix so a copied Example is valid Arc, with no trailing sentence. */
-function arcExample(arcText:boolean, chain:boolean, issues:boolean):string | false {
-	if (issues && arcText) {
-		return 'Example:\nissue(\n\twho=units.filter("Guard"),\n\tarc=go_to(Keep),\n)\nissue(\n\twho=units.filter("Scout"),\n\tarc=go_to(EastGate) && wait(seconds=5),\n)';
+function arcExample(verbs:VerbRegistry, format:ArcFormat, chain:boolean):string | false {
+	if (verbs.has('issue')) {
+		const nested = verbs.nested();
+		const go = nested.has('go_to');
+		const wait = nested.has('wait');
+		if (go && wait) {
+			return example(showArc('issue(who=units.filter("Guard"), arc=go_to(Keep)) ; issue(who=units.filter("Scout"), arc=go_to(EastGate) && wait(seconds=5))', verbs, format));
+		}
+		if (go) {
+			return example(showArc('issue(who=units.filter("Guard"), arc=go_to(Keep))', verbs, format));
+		}
+		return false;
 	}
 	if (chain) {
-		return arcText
-			? 'Example: pick_up(Lantern) && give(item=Lantern, to=Player)'
-			: 'Example: {"head":{"verb":"pick_up","args":{"item":"Lantern"}},"then":{"join":"then_if_ok","arc":{"head":{"verb":"give","args":{"item":"Lantern","to":"Player"}}}}}';
+		return example(showArc('pick_up(Lantern) && give(item=Lantern, to=Player)', verbs, format));
 	}
 	return false;
+}
+
+/** `Example: ` and the arc; a layout of several lines starts under it. */
+function example(shown:string):string {
+	return shown.includes('\n') ? `Example:\n${shown}` : `Example: ${shown}`;
+}
+
+/**
+ * Arc `text` as the prompt shows an example in `format`: block layout for text, one line of Arc JSON otherwise. Every
+ * example is written once, as Arc text. Shown as written where it does not parse (a placeholder).
+ */
+function showArc(text:string, verbs:VerbRegistry, format:ArcFormat):string {
+	try {
+		const arc = parseArcText(text, verbs);
+		return format === 'text' ? formatArcBlocks(arc, verbs) : arcJSONText(arc, verbs);
+	}
+	catch {
+		return text;
+	}
 }
 
 function unnamedPlace(verbs:VerbRegistry):string {
@@ -267,7 +303,7 @@ function lookFor(verbs:VerbRegistry, map:boolean):string | false {
 	const wander = verbs.has('wander');
 	if (map) {
 		const go = verbs.has('go_to') ? ' and go_to the name it shows' : '';
-		return `Looking for someone, a thing, or a place you do not see? Call see_map first${go}.${wander ? ' wander(until) only for what the map does not name, with args.until a watch expr.' : ''}`;
+		return `Looking for someone, a thing, or a place you do not see? Call see_map first${go}. Never ask where something is until see_map cannot find it.${wander ? ' wander(until) only for what the map does not name, with args.until a watch expr.' : ''}`;
 	}
 	return wander && 'Looking for a thing or place? wander(until) with args.until a watch expr.';
 }
@@ -281,8 +317,9 @@ function spokenGo(verbs:VerbRegistry, map = false):string {
 	}
 	const parts:string[] = [];
 	if (goTo) {
-		const look = map ? 'see_map, ' : '';
-		const otherwise = wander ? `otherwise ${look}ask, or wander(until)` : `otherwise ${look}ask where it is`;
+		const otherwise = map
+			? `otherwise see_map${wander ? ', or wander(until)' : ''}. Ask only if see_map cannot find it`
+			: wander ? 'otherwise ask, or wander(until)' : 'otherwise ask where it is';
 		parts.push(`A spoken go is that proper name only if you already see it; ${otherwise}.`);
 	}
 	else if (wander) {
@@ -299,7 +336,7 @@ function spokenGo(verbs:VerbRegistry, map = false):string {
  * How to write `choose`, with an example made of verbs the kit really grants (then the catalog's), so a model that
  * copies it still writes a valid arc. `wrap` opens what the loop goes in (`issue(who=units, arc=`), closed after it.
  */
-function chooseSentence(verbs:VerbRegistry, arcText:boolean, wrap:string):string {
+function chooseSentence(verbs:VerbRegistry, format:ArcFormat, wrap:string):string {
 	const pool = [...verbs.list(), ...verbs.nested().list().filter((spec) => !verbs.has(spec.name))];
 	const bare = pool
 		.filter((spec) => spec.name !== 'choose' && !STOCK_ARC_VERBS_SET.has(spec.name) && !MIND_ONLY_VERBS.includes(spec.name)
@@ -307,25 +344,22 @@ function chooseSentence(verbs:VerbRegistry, arcText:boolean, wrap:string):string
 		.slice(0, 2)
 		.map((spec) => `${spec.name}=${spec.name}()`);
 	const choices = bare.length === 2 ? bare.join(', ') : 'first=<arc>, second=<arc>';
-	const example = asBlocks(`${wrap}loop(choose("why you choose", ${choices}))${wrap ? ')' : ''}`, verbs);
-	if (!arcText) {
-		return 'choose takes a goal and its choices as named arc args; a fast model runs the one that fits right now, and loop keeps it choosing.';
+	const looped = verbs.has('loop');
+	const choose = `choose("why you choose", ${choices})`;
+	const text = looped ? `${wrap}loop(${choose})${wrap ? ')' : ''}` : `${wrap}${choose}${wrap ? ')' : ''}`;
+	const example = showArc(text, verbs, format);
+	if (format !== 'text') {
+		// An example that does not parse (a placeholder, or no loop in the kit) is Arc text: not one to show beside JSON.
+		const shown = example === text ? ' ' : `, as in:\n${example}\n`;
+		const keeps = looped ? ', and loop keeps it choosing' : '';
+		return `choose takes a goal and its choices, each a list of steps under its name${shown}A fast model runs the one that fits right now${keeps}.`;
 	}
 	// Small models otherwise write `"label", arc` pairs, and turn the goal into the first label.
-	return `Each choice is name=arc after a goal in quotes, as in:\n${example}\nThe goal is choose's only quoted string: never a quoted label before a choice. A fast model runs the one that fits right now, again on each loop, with no think.`;
+	const again = looped ? ', again on each loop,' : '';
+	return `Each choice is name=arc after a goal in quotes, as in:\n${example}\nThe goal is choose's only quoted string: never a quoted label before a choice. A fast model runs the one that fits right now${again} with no think.`;
 }
 
-/** Arc `text` in block layout, or as written where it does not parse (a placeholder). */
-function asBlocks(text:string, verbs:VerbRegistry):string {
-	try {
-		return formatArcBlocks(parseArcText(text, verbs), verbs);
-	}
-	catch {
-		return text;
-	}
-}
-
-function collectiveInstructions(verbs:VerbRegistry):string {
+function collectiveInstructions(verbs:VerbRegistry, format:ArcFormat):string {
 	const parts:string[] = [];
 	if (verbs.has('when')) {
 		parts.push(
@@ -335,7 +369,7 @@ function collectiveInstructions(verbs:VerbRegistry):string {
 	if (verbs.has('issue')) {
 		parts.push(
 			`issue(who, arc) assigns a sticky program to matching units (never you). who is YOUR roster (units.filter("Witch")), never an enemy. `
-			+ `allUnits is one identical program for every troop. Join several issue with ; or a new line. Each issue arc is that unit's full chain. `
+			+ `allUnits is one identical program for every troop. ${format === 'text' ? 'Join several issue with ; or a new line.' : 'Give each issue as a step of its own.'} Each issue arc is that unit's full chain. `
 			+ `One who per issue: a program for several roles is one issue per role, or one who that matches them all (units.filter(u => u is "Archer" || u is "Witch")). `,
 		);
 	}
@@ -343,13 +377,18 @@ function collectiveInstructions(verbs:VerbRegistry):string {
 		parts.push('loop(arc) repeats until fail. through= / until= / times=. ');
 	}
 	if (verbs.has('issue') && verbs.has('choose')) {
-		parts.push(`${chooseSentence(verbs, true, 'issue(who=units, arc=')} `);
+		parts.push(`${chooseSentence(verbs, format, 'issue(who=units, arc=')} `);
 	}
-	if (verbs.has('law') || verbs.has('unlaw')) {
+	if (verbs.has('law')) {
+		const until = verbs.has('unlaw') ? ' until unlaw(name)' : '';
+		const when = verbs.has('when') ? '; when is one job' : '';
 		const who = verbs.has('issue')
-			? `law(who?, watch, arc, name?) is a standing reaction until unlaw(name) — it outlives the program and needs no think. Omitted who = units (troops). Prefer law for any reaction that should apply to more than one unit; when is one job. `
-			: `law(watch, arc, name?) is a standing reaction until unlaw(name) — it outlives the program and needs no think. `;
+			? `law(who?, watch, arc, name?) is a standing reaction${until} — it outlives the program and needs no think. Omitted who = units (troops). Prefer law for any reaction that should apply to more than one unit${when}. `
+			: `law(watch, arc, name?) is a standing reaction${until} — it outlives the program and needs no think. `;
 		parts.push(who);
+	}
+	else if (verbs.has('unlaw')) {
+		parts.push('unlaw(name) drops that law. ');
 	}
 	return parts.join('');
 }
@@ -500,57 +539,89 @@ export function conversationBlock(lines:readonly string[]):string {
 	return `${CONVERSATION_HEADER}\n${turns.join('\n')}`;
 }
 
+/**
+ * The strategic ask: revise goals (and, rarely, identity) in the form this mind writes. Text names the verbs that
+ * edit them; json and schema reply with the whole list.
+ */
+export function reviseGoalsAsk(format:ArcFormat, maxGoals:number):string {
+	const lead = 'Revise goals if what you just learned changes what you must do. '
+		+ 'Harm, theft, and threats outrank standing work — put that first in goals. '
+		+ 'Do not change identity unless who you are has actually changed for good. ';
+	const tail = `Keep at most ${maxGoals} goals. Do not emit movement.`;
+	if (format === 'text') {
+		return `${lead}Leave set_identity out otherwise. Do not rewrite the role to summarize this moment. `
+			+ 'Reply with only Arc text, one verb per line: set_goal(goal, priority?) adds a goal, drop_goal(goal?) drops one (the last if none is named), '
+			+ `set_identity(role?, traits?) changes who you are. Name every argument, as in set_goal(goal=Hold the bridge, priority=2). Reply with nothing if nothing changes. ${tail}`;
+	}
+	const reply = format === 'schema'
+		? 'Reply {"goals":[{"text":"...","priority":0}]}, the whole list, or [] to keep yours, and only if needed "identity":{"role":"...","traits":["..."]}. '
+		: 'Emit JSON {"goals":[{"text":"...","priority":0}]} and only if needed "identity":{"role":"...","traits":["..."]}. ';
+	return `${lead}Omit identity otherwise. Do not rewrite the role to summarize this moment. ${reply}${tail}`;
+}
+
 /** Follow-up when this reply is the same text as the last one accepted, twice in a row or more. */
-export function repeatOutputHint(times:number, arcText = false):string {
+export function repeatOutputHint(times:number, format:ArcFormat = 'json'):string {
 	const n = times === 2 ? 'twice' : `${times} times`;
-	const emit = arcText
+	const emit = format === 'text'
 		? 'Emit a different Arc text now — no JSON, no prose. Names only, no coordinates.'
 		: 'Emit a different Arc JSON now — no prose. Names only, no coordinates. Close every brace.';
 	return `Same output again. You returned this exact output ${n} in a row. Stop. Do not return it again. ${emit}`;
 }
 
 /** Follow-up user turn after a bad arc or a tool call when tools are closed. Keeps the thread. */
-export function arcRepairHint(reason:string, arcText = false, tools:string[] = []):string {
+export function arcRepairHint(reason:string, format:ArcFormat = 'json', tools:string[] = [], verbs?:VerbRegistry):string {
 	const asVerb = reason.match(/unknown verb '([^']+)'/);
 	const name = asVerb?.[1];
-	const emit = arcText
+	const schema = format === 'schema';
+	const emit = format === 'text'
 		? `Emit only one valid Arc text now — no JSON, no prose. Names only, no coordinates.`
 		: `Emit only one valid Arc JSON now — no prose. Names only, no coordinates. Close every brace.`;
 	if (name && tools.includes(name)) {
-		return `${name} is a tool, not a verb. Call the tool. Never write ${name}(...) in the Arc. Keep this conversation. ${thenEmit(arcText)}`;
+		return schema
+			? `${name} is a tool, not a verb. Reply {"tool":"${name}", …its arguments} to use it. Never put it in the steps. Keep this conversation. ${thenEmit(format)}`
+			: `${name} is a tool, not a verb. Call the tool. Never write ${name}(...) in the Arc. Keep this conversation. ${thenEmit(format)}`;
 	}
 	const toolNote = tools.length > 0
-		? ` Tools (${tools.join(', ')}) are not verbs — call them, then emit the arc.`
+		? ` Tools (${tools.join(', ')}) are not verbs — ${schema ? 'reply with the tool call' : 'call them'}, then emit the ${schema ? 'steps' : 'arc'}.`
 		: '';
 	if (reason === 'expected verb' || reason === 'model returned no arc') {
+		const ban = [verbs?.has('go_to') ? 'go_to' : '', verbs?.has('follow') ? 'follow' : ''].filter(Boolean);
+		const job = ban.length > 0 ? `Do the spoken job, not ${ban.join(' or ')} the speaker.` : 'Do the spoken job.';
 		return `That was not a valid Arc (${reason}). That prose is discarded. `
-			+ `Do the spoken job, not go_to or follow the speaker. Keep this conversation. ${emit}${toolNote}`;
+			+ `${job} Keep this conversation. ${emit}${toolNote}`;
 	}
 	return `That was not a valid Arc (${reason}). Keep this conversation. ${emit}${toolNote}`;
 }
 
 /** After tools the model wrote as text where the Arc goes: they ran anyway; here is what they said. */
-export function writtenToolsHint(results:string[], arcText = false):string {
-	return `Those were tools written as text; they ran anyway:\n${results.join('\n')}\nCall tools as tools, never in the Arc. ${thenEmit(arcText)}`;
+export function writtenToolsHint(results:string[], format:ArcFormat = 'json'):string {
+	const how = format === 'schema' ? 'Call a tool by replying {"tool":"name", …its arguments}, never in the steps.' : 'Call tools as tools, never in the Arc.';
+	return `Those were tools written as text; they ran anyway:\n${results.join('\n')}\n${how} ${thenEmit(format)}`;
+}
+
+/** After a tool the model called in its reply: what it said, and what is left to do. */
+export function toolResultHint(name:string, result:string, last:boolean):string {
+	const next = last ? 'That was your last lookup; reply with the steps now.' : 'Look up something else, or reply with the steps.';
+	return `${name}: ${result}\n${next} Names only, no coordinates.`;
 }
 
 /** Follow-up after a say arc whose audience is out of range. Speech did not happen. */
-export function sayRangeHint(reason:string, nearby:string[], arcText = false):string {
+export function sayRangeHint(reason:string, nearby:string[], format:ArcFormat = 'json'):string {
 	const range = nearby.length > 0
 		? `In talking range: ${nearby.join(', ')}.`
 		: 'No one is in talking range.';
 	return `${reason}. That say did not happen. ${range} `
-		+ `Keep this conversation. Get closer to them first, or say to someone already in range. ${thenEmit(arcText)}`;
+		+ `Keep this conversation. Get closer to them first, or say to someone already in range. ${thenEmit(format)}`;
 }
 
 /** Follow-up after an arc that opens with a move that already found no way, while there still is none. */
-export function blockedAgainHint(reason:string, arcText = false):string {
+export function blockedAgainHint(reason:string, format:ArcFormat = 'json'):string {
 	return `${reason}. That already failed and still would, so it did not run. `
-		+ `Deal with what is in the way first, or do something else. Keep this conversation. ${thenEmit(arcText)}`;
+		+ `Deal with what is in the way first, or do something else. Keep this conversation. ${thenEmit(format)}`;
 }
 
-function thenEmit(arcText:boolean):string {
-	return arcText
+function thenEmit(format:ArcFormat):string {
+	return format === 'text'
 		? 'Then emit only one valid Arc text — no JSON, no prose. Names only, no coordinates.'
 		: 'Then emit only one valid Arc JSON — no prose. Names only, no coordinates. Close every brace.';
 }
