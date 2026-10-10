@@ -306,7 +306,12 @@ function instanceContextLength(config:Record<string, unknown>):number | undefine
 
 function shrinkForOverflow(body:Record<string, unknown>):boolean {
 	let changed = false;
-	if (body.reasoning !== undefined && body.reasoning !== 'off') {
+	// The responses API takes `{ effort }` and rejects a bare option with a 400.
+	if (isRecord(body.reasoning) && body.reasoning.effort !== RESPONSES_EFFORT.off) {
+		body.reasoning = { effort: RESPONSES_EFFORT.off };
+		changed = true;
+	}
+	else if (body.reasoning !== undefined && !isRecord(body.reasoning) && body.reasoning !== 'off') {
 		body.reasoning = 'off';
 		delete body['reasoning_effort'];
 		changed = true;

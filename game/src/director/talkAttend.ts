@@ -45,7 +45,7 @@ export function talkCanSee(world:World, aID:string, bID:string):boolean {
 	);
 }
 
-/** Close enough to catch every word: within 2 m, or within 8 m with line of sight. */
+/** Close enough to catch every word: within 2 m, or within 8 m with nothing solid between. People in the way do not stop a voice. */
 export function canHearClearly(world:World, speakerID:string, listenerID:string):boolean {
 	const speaker = findObject(world, speakerID);
 	const listener = findObject(world, listenerID);
@@ -65,6 +65,7 @@ export function canHearClearly(world:World, speakerID:string, listenerID:string)
 		speaker.transform.position.z,
 		listener.transform.position.x,
 		listener.transform.position.z,
+		true,
 	);
 }
 

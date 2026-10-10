@@ -303,6 +303,17 @@ function parseNestedArc(s:string, i:number, registry:VerbRegistry):{ value:Arc; 
 	return { value: arc, next: pos };
 }
 
+/** A lone name at `i` that is not a verb, with nothing after it but a join or the end: `BridgeKeeper` in `go_to BridgeKeeper`. */
+function bareArgAt(s:string, i:number, registry:VerbRegistry):{ value:string; next:number } | undefined {
+	const m = /^[A-Za-z_]\w*/.exec(s.slice(i, i + 128));
+	if (!m || registry.has(m[0])) {
+		return undefined;
+	}
+	const next = i + m[0].length;
+	const after = skipWs(s, next);
+	return after >= s.length || s[after] === ')' || joinAt(s, next) ? { value: m[0], next } : undefined;
+}
+
 /** Index past a stuttered `key=` the model repeated after `key=`, as in `say(text=text="Hi")`. */
 function skipRepeatedKey(s:string, i:number, key:string):number {
 	const m = new RegExp(`^\\s*${key}\\s*=(?!=)`).exec(s.slice(i, i + key.length + 16));
@@ -330,6 +341,12 @@ function parseStepText(s:string, i:number, registry:VerbRegistry):{ step:Step; n
 	}
 	if (verb === CHOOSE_VERB) {
 		return parseChoose(s, i, registry);
+	}
+	const bare = bareArgAt(s, i, registry);
+	const firstKey = nextPositionalKey(spec, {}, 0);
+	if (bare && firstKey) {
+		// `go_to BridgeKeeper`: one name with no parentheses is the verb's first arg.
+		return { step: { verb, args: { [firstKey]: bare.value } }, next: bare.next };
 	}
 	const args:Record<string, StepArg> = {};
 	const read = (key:string, at:number):{ value:StepArg; next:number } => {

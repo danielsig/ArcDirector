@@ -225,6 +225,14 @@ describe('kit views and issue(who)', () => {
 		assert.throws(() => parseArcText('say("Hi") to BridgeKeeper', verbs), /to is outside the parentheses/);
 	});
 
+	it('reads a verb and one bare name with no parentheses as its first arg', () => {
+		const verbs = registerStockVerbs(new VerbRegistry());
+		assert.deepEqual(parseArcText('go_to BridgeKeeper', verbs).head, { verb: 'go_to', args: { target: 'BridgeKeeper' } });
+		const chain = parseArcText('go_to BridgeKeeper && say(Hi, to=BridgeKeeper)', verbs);
+		assert.equal(chain.then?.arc.head.verb, 'say');
+		assert.deepEqual(parseArcText('wander', verbs).head, { verb: 'wander', args: {} });
+	});
+
 	it('drops a stuttered key= the model repeated inside its own value', () => {
 		const verbs = registerStockVerbs(new VerbRegistry());
 		const arc = parseArcText('say(text=text="How much?", to=BridgeKeeper)', verbs);

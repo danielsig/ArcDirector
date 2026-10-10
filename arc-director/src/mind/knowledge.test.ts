@@ -1,22 +1,23 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import {
-	crowdEncyclopedia,
-	encyclopediaPages,
-	grepEncyclopedia,
+	crowdKnowledge,
+	knowledgePages,
+	knowledgeFor,
+	KNOW_CAP,
 	articlesNamedIn,
 	mentionedArticles,
 	receivedArticles,
-	type EncyclopediaEntry,
-} from './encyclopedia.js';
+	type KnowledgeEntry,
+} from './knowledge.js';
 
-const TREE = crowdEncyclopedia({
+const TREE = crowdKnowledge({
 	name: 'Tree',
 	tag: 'tree',
 	inside: ['forest', 'woods', 'grove'],
 });
 
-const PAGES:EncyclopediaEntry[] = [
+const PAGES:KnowledgeEntry[] = [
 	TREE,
 	{
 		name: 'Cottage',
@@ -25,7 +26,7 @@ const PAGES:EncyclopediaEntry[] = [
 	},
 ];
 
-describe('crowdEncyclopedia', () => {
+describe('crowdKnowledge', () => {
 	it('stringifies a bunch of Tree into leftover trees in all directions', () => {
 		assert.equal(TREE.name, 'Tree');
 		assert.deepEqual(TREE.aliases, ['trees', 'forest', 'woods', 'grove']);
@@ -43,39 +44,46 @@ describe('crowdEncyclopedia', () => {
 	});
 });
 
-describe('grepEncyclopedia', () => {
-	it('lists names on an empty query', () => {
-		assert.match(grepEncyclopedia(PAGES, ''), /Names: Tree, Cottage/);
-		assert.match(grepEncyclopedia(PAGES, '*'), /Query one for the article/);
+describe('knowledgeFor', () => {
+	const know = (query:string):string => knowledgeFor(PAGES, query).join('\n\n');
+
+	it('lists topics on an empty query', () => {
+		assert.match(know(''), /Topics: Tree, Cottage/);
+		assert.match(know('*'), /Recall one for more/);
+		assert.deepEqual(knowledgeFor([], ''), [], 'nothing to know, nothing said');
 	});
 
 	it('maps leftover trees and a spoken forest to surrounded-by-Tree', () => {
-		assert.match(grepEncyclopedia(PAGES, 'trees'), /^Tree \(trees, forest, woods, grove\)/);
-		assert.match(grepEncyclopedia(PAGES, 'forest'), /surrounded/);
-		assert.match(grepEncyclopedia(PAGES, 'forest'), /all directions/);
-		assert.equal(/wander\(until/.test(grepEncyclopedia(PAGES, 'forest')), false);
-		assert.match(grepEncyclopedia(PAGES, 'dungeon'), /No encyclopedia match/);
+		assert.match(know('trees'), /^Tree \(trees, forest, woods, grove\)/);
+		assert.match(know('forest'), /surrounded/);
+		assert.match(know('forest'), /all directions/);
+		assert.equal(/wander\(until/.test(know('forest')), false);
 	});
 
 	it('maps house to Cottage', () => {
-		assert.match(grepEncyclopedia(PAGES, 'the house'), /Cottage/);
-		assert.match(grepEncyclopedia(PAGES, 'Cottage'), /CottageDoor/);
+		assert.match(know('the house'), /Cottage/);
+		assert.match(know('Cottage'), /CottageDoor/);
 	});
 
 	it('says so when nothing matches', () => {
-		assert.match(grepEncyclopedia(PAGES, 'dungeon'), /No encyclopedia match for "dungeon"/);
-		assert.match(grepEncyclopedia(PAGES, 'dungeon'), /Leftover English is not a name/);
+		assert.match(know('dungeon'), /Nothing you know is called "dungeon"/);
+		assert.match(know('dungeon'), /A plain word is not a name/);
+	});
+
+	it('returns at most KNOW_CAP articles', () => {
+		const many = Array.from({ length: 5 }, (_, i) => ({ name: `Stall${i}`, text: 'sells bread' }));
+		assert.equal(knowledgeFor(many, 'bread').length, KNOW_CAP);
 	});
 });
 
 describe('receivedArticles', () => {
-	it('returns the text when a name or alias matches an id or tag', () => {
-		const pages:EncyclopediaEntry[] = [
+	it('names each article whose name or alias matches an id or tag, so a small model can tell what it is about', () => {
+		const pages:KnowledgeEntry[] = [
 			{ name: 'FireMushroom', aliases: ['mushroom'], text: 'Worth 10 gold.' },
 			{ name: 'Tree', text: 'A tree.' },
 		];
-		assert.equal(receivedArticles(pages, [{ id: 'FireMushroom', tags: ['item'] }]), 'Worth 10 gold.');
-		assert.equal(receivedArticles(pages, [{ id: 'Stick', tags: ['item', 'mushroom'] }]), 'Worth 10 gold.');
+		assert.equal(receivedArticles(pages, [{ id: 'FireMushroom', tags: ['item'] }]), '- FireMushroom: Worth 10 gold.');
+		assert.equal(receivedArticles(pages, [{ id: 'Stick', tags: ['item', 'mushroom'] }]), '- FireMushroom: Worth 10 gold.');
 		assert.equal(receivedArticles(pages, [{ id: 'Stick', tags: ['item'] }]), '');
 		assert.equal(receivedArticles([], [{ id: 'FireMushroom', tags: [] }]), '');
 	});
@@ -83,7 +91,7 @@ describe('receivedArticles', () => {
 
 describe('articlesNamedIn', () => {
 	it('brings the article of every name the text mentions, never an alias', () => {
-		const pages:EncyclopediaEntry[] = [
+		const pages:KnowledgeEntry[] = [
 			{ name: 'Bridge', aliases: ['raised'], text: 'BridgeKeeper lowers it.' },
 			{ name: 'BridgeLever', text: 'Works the bridge.' },
 			{ name: 'Angler', text: 'Sells fish.' },
@@ -98,7 +106,7 @@ describe('articlesNamedIn', () => {
 
 describe('mentionedArticles', () => {
 	it('matches names and alias phrases as whole words, most mentions first, up to the cap', () => {
-		const pages:EncyclopediaEntry[] = [
+		const pages:KnowledgeEntry[] = [
 			{ name: 'SilverTrout', aliases: ['fish', '5 gold'], text: 'Worth 5 gold.' },
 			{ name: 'FireMushroom', aliases: ['mushrooms', '10 gold'], text: 'Worth 10 gold.' },
 			{ name: 'Bridge', text: 'BridgeKeeper lowers it.' },
@@ -110,12 +118,12 @@ describe('mentionedArticles', () => {
 	});
 });
 
-describe('encyclopediaPages', () => {
+describe('knowledgePages', () => {
 	it('resolves a callback with ctx', () => {
 		assert.deepEqual(
-			encyclopediaPages((ctx:{ n:string }) => [{ name: ctx.n, text: 'x' }], { n: 'Tree' }),
+			knowledgePages((ctx:{ n:string }) => [{ name: ctx.n, text: 'x' }], { n: 'Tree' }),
 			[{ name: 'Tree', text: 'x' }],
 		);
-		assert.deepEqual(encyclopediaPages(() => PAGES, undefined), []);
+		assert.deepEqual(knowledgePages(() => PAGES, undefined), []);
 	});
 });

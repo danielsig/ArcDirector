@@ -30,6 +30,15 @@ function attachPhrase(ground:string, figure:string, mode:SeenObject['attachMode'
 	}
 }
 
+/** `A`, `A and B`, `A, B and C`. */
+function listed(names:string[]):string {
+	return names.length > 1 ? `${names.slice(0, -1).join(', ')} and ${names.at(-1)}` : names[0] ?? '';
+}
+
+/**
+ * Everything attached to one ground the same way, as one phrase: `Forager and Angler on Bridge`, `Bread and Key in
+ * Chest`, `Guard wearing Helmet and Cloak`. The ground is the one with the nearest figure; its note stays on it.
+ */
 export const attachmentStringifier:RelationshipStringifier = {
 	id: 'attachment',
 	tier: 90,
@@ -56,17 +65,12 @@ export const attachmentStringifier:RelationshipStringifier = {
 		if (!bestFigure || !bestGround) {
 			return null;
 		}
-		const text = attachPhrase(
-			ctx.noun(bestGround),
-			ctx.noun(bestFigure),
-			bestFigure.attachMode,
-		);
-		const unused = objects.filter((o) => o !== bestFigure && o !== bestGround);
-		const reduceTo:SeenObject = {
-			...bestGround,
-			label: text,
-		};
-		return { text, unused, mode: 'reduce', reduceTo };
+		const ground = bestGround;
+		const mode = bestFigure.attachMode;
+		const figures = objects.filter((o) => o.attachedTo === ground.id && o.attachMode === mode);
+		const text = attachPhrase(ctx.noun(ground), listed(figures.map((o) => ctx.noun(o))), mode);
+		const unused = objects.filter((o) => o !== ground && !figures.includes(o));
+		return { text, unused, mode: 'reduce', reduceTo: { ...ground, label: text } };
 	},
 };
 

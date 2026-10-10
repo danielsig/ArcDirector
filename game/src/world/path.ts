@@ -31,12 +31,18 @@ function characterIn(world:World, tx:number, tz:number, except?:GameObject):Game
 	return world.objectsInTile(tx, tz).find((go) => go !== except && go.getComponent(HumanBody)?.enabled);
 }
 
-/** Walls, deep water, cell-filling props, and closed doors stop both steps and sight. */
+/** Walls, deep water, cell-filling props, and closed doors stop steps. */
 function blocked(world:World, tx:number, tz:number):boolean {
 	const { x, z } = world.tileCenter(tx, tz);
 	return world.sampleTerrain(x, z)?.blocked !== false
 		|| CELL_PROPS.has(world.chunkAtWorld(x, z)!.propAtWorld(x, z) ?? '')
 		|| !!closedDoorIn(world, tx, tz);
+}
+
+/** What stops sight and sound: anything that stops steps but water, which one sees and hears across. */
+function opaque(world:World, tx:number, tz:number):boolean {
+	const { x, z } = world.tileCenter(tx, tz);
+	return blocked(world, tx, tz) && world.chunkAtWorld(x, z)?.tileAtWorld(x, z)?.def !== 'water';
 }
 
 /** Why a closed door stops `body`. A locked door says whether `body` carries its key. */
@@ -91,7 +97,7 @@ export function lineClear(
 	z1:number,
 	ignoreCharacters = false,
 ):boolean {
-	const solid = (tx:number, tz:number) => blocked(world, tx, tz) || (!ignoreCharacters && !!characterIn(world, tx, tz));
+	const solid = (tx:number, tz:number) => opaque(world, tx, tz) || (!ignoreCharacters && !!characterIn(world, tx, tz));
 	const a = world.tileCoordAt(x0, z0);
 	const b = world.tileCoordAt(x1, z1);
 	if (a.tx === b.tx && a.tz === b.tz) {

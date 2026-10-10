@@ -153,7 +153,7 @@ export class WorldPresent {
 				const span = go.getComponent(Bridge);
 				const hinge = obj.userData.hinge as THREE.Object3D | undefined;
 				if (hinge && span) {
-					hinge.rotation.x = span.open ? 0 : -Math.PI / 2;
+					hinge.rotation.x = -Math.PI / 2 * span.lift;
 				}
 			}
 			else if (kind === 'cottage') {

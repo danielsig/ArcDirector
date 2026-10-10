@@ -55,7 +55,7 @@ const BRIDGE_KEEPER:CharacterSpec = {
 	goals: [{ text: 'Get gold by charging people a fee for lowering the bridge for them. Never lower it unpaid.', priority: 2 }],
 	memories: [
 		{
-			text: 'I operate the Bridge near the cottage. I accept 10 gold or items of equal value as payment for lowering the bridge. I do not lower Bridge unpaid.',
+			text: 'I operate the Bridge near the cottage. I accept 10 gold or items of equal value as payment for lowering the bridge: one FireMushroom is worth 10 gold, so it pays the whole fee. Once I hold the payment, I lower the bridge for whoever paid. I do not lower Bridge unpaid.',
 			tags: ['backstory', 'Bridge', 'gold'],
 			pinned: true,
 		},

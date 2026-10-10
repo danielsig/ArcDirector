@@ -5,7 +5,6 @@ import { formatArcBlocks, parseArcText } from '../arc/parse.js';
 const STOCK_ARC_VERBS_SET = new Set<string>(STOCK_ARC_VERBS);
 import type { ArcResult } from '../arc/types.js';
 import type { MemoryRecord } from '../memory/store.js';
-import { GREP_WORLD_ENCYCLOPEDIA } from './encyclopedia.js';
 import { DEFAULT_YOU_SYMBOL } from './map.js';
 import type { Identity, Goal, Watches } from '../character/types.js';
 import { extrasWithoutPins, formatWatches, watchCount, watchNames } from '../character/watch.js';
@@ -22,8 +21,8 @@ export type StablePrefixOpts = {
 	canSeeMap?:boolean;
 	/** Pictogram for the mind's own location. Used in the see_map hint. */
 	youSymbol?:string;
-	/** Offer `grep_world_encyclopedia` this think. */
-	canGrepEncyclopedia?:boolean;
+	/** `recall` searches world knowledge this think, not only memory. */
+	canRecallKnowledge?:boolean;
 	/** Ask for `pick_up(Lantern) ; go_to(Player) && give(...)` instead of Arc JSON. */
 	arcText?:boolean;
 	thinkInstructions?:ThinkInstructions;
@@ -61,11 +60,11 @@ export function stablePrefix(
 	if (opts.includeWatches) {
 		lines.push(watchCheatSheet(opts.watchesWritable === true, opts.canObserve === true));
 	}
-	if (opts.canGrepEncyclopedia) {
-		lines.push(encyclopediaHint(opts.canSeeMap !== true, verbs.has('wander')));
+	if (opts.canRecallKnowledge) {
+		lines.push(knowledgeHint(opts.canSeeMap !== true, verbs.has('wander')));
 	}
 	if (opts.canSeeMap) {
-		lines.push(seeMapHint(opts.youSymbol, opts.canGrepEncyclopedia === true, verbs.has('wander')));
+		lines.push(seeMapHint(opts.youSymbol, opts.canRecallKnowledge === true, verbs.has('wander')));
 	}
 	if (!opts.omitArc) {
 		lines.push(arcInstructions(verbs, shouldEmitArcText(verbs, opts.arcText === true), opts.tools ?? [], {
@@ -94,24 +93,24 @@ const WATCH_RELATIONS = [
 	'i is "Lantern". filter/count/find/some/all/minBy/maxBy. others.nearby(16), isLeft, isRight, events.filter("theft"). &&/|| numbers=min/max, bools=and/or. Crowd: doing(u, "go_to"). isCarrying / wasCarrying / hasJustReceived / hasJustLost when you carry.',
 ].join(' ');
 
-export function encyclopediaHint(includeUnnamed = false, canWander = true):string {
+export function knowledgeHint(includeUnnamed = false, canWander = true):string {
 	const lines = [
-		`${GREP_WORLD_ENCYCLOPEDIA} is a tool this think, not a verb: the world's facts about places, items, people, and how things work. Query a name, or a plain word or spoken place to learn its Capitalized name. Never write it in the Arc. Empty query lists every article.`,
+		'recall also searches what you know of the world: places, items, people, and how things work. Query a name, or a plain word or spoken place to learn its Capitalized name. Empty query lists the topics you know.',
 	];
 	if (includeUnnamed) {
 		const wander = canWander ? ', or wander(until)' : '';
 		lines.push(
-			`A spoken place that is not a Capitalized or *starred* name: Call grep_world_encyclopedia, ask the speaker where it is${wander}.`,
+			`A spoken place that is not a Capitalized or *starred* name: Call recall, ask the speaker where it is${wander}.`,
 		);
 	}
 	return lines.join(' ');
 }
 
-export function seeMapHint(youSymbol = DEFAULT_YOU_SYMBOL, encyclopedia = false, canWander = true):string {
+export function seeMapHint(youSymbol = DEFAULT_YOU_SYMBOL, knowledge = false, canWander = true):string {
 	const you = youSymbol.trim() || DEFAULT_YOU_SYMBOL;
 	const wander = canWander ? ', or wander(until)' : '';
-	const unnamed = encyclopedia
-		? `A spoken place that is not a Capitalized or *starred* name: Call grep_world_encyclopedia, see_map, ask the speaker where it is${wander}. A second look soon, without moving, returns the same legend and no new picture.`
+	const unnamed = knowledge
+		? `A spoken place that is not a Capitalized or *starred* name: Call recall, see_map, ask the speaker where it is${wander}. A second look soon, without moving, returns the same legend and no new picture.`
 		: `A spoken place that is not a Capitalized or *starred* name: Call see_map, ask the speaker where it is${wander}. A second look soon, without moving, returns the same legend and no new picture.`;
 	return [
 		`see_map is a tool this think, not a verb. Never write it in the Arc. zoom 1 close, 0 whole land. Match the legend (${you} = you).`,
@@ -159,7 +158,7 @@ function arcInstructions(
 		'Goals are standing wants, not the next verb.',
 		has('set_identity') && 'Do not emit identity or set_identity unless who you are changed for good.',
 		has('remember') && 'remember(content, tags?) keeps a lasting fact.',
-		has('think') && 'think(about?) last; several merge. Do not think() twice in a row — act first.',
+		has('think') && 'think("what to work out") last; several merge. Do not think() twice in a row — act first.',
 		lines.think,
 		toolInstructions(toolNames),
 		has('wait') && 'wait(until) is a one-shot watch, dropped next think.',
@@ -180,8 +179,18 @@ function arcInstructions(
 			: 'then_if_ok continues only on success; then always continues; then_if_err is the failure fallback.',
 		emitSentence(arcText, toolNames.length > 0),
 		`Names only, no coordinates. Available verbs: ${verbHelp(verbs)}.`,
+		toolsNotVerbs(toolNames),
 		lines.example ? `Example: ${lines.example}` : arcExample(arcText, chain, has('issue')),
 	]);
+}
+
+/** Said beside the verb list, where a small model writes the Arc and is tempted to write a tool into it. */
+function toolsNotVerbs(toolNames:string[]):string {
+	if (toolNames.length === 0) {
+		return '';
+	}
+	const names = toolNames.length > 1 ? `${toolNames.slice(0, -1).join(', ')} and ${toolNames.at(-1)}` : toolNames[0];
+	return `${names} ${toolNames.length > 1 ? 'are tools' : 'is a tool'}, not verbs: call ${toolNames.length > 1 ? 'them' : 'it'} as tools, never in the Arc.`;
 }
 
 function wanderExample(arcText:boolean):string {
@@ -189,9 +198,6 @@ function wanderExample(arcText:boolean):string {
 		? 'Example: wander(until=some(items.filter("Lantern").nearby()))'
 		: 'Example: {"head":{"verb":"wander","args":{"until":"some(items.filter(\\"Lantern\\").nearby())"}}}';
 }
-
-/** Tools that answer what the mind does not know, as opposed to checking what it already sees. */
-export const LOOKUP_TOOLS:readonly string[] = ['recall', GREP_WORLD_ENCYCLOPEDIA];
 
 /**
  * A one-call-per-turn lookup loop. Small models skip tools unless told what they are for,
@@ -201,12 +207,11 @@ function toolInstructions(toolNames:string[]):string {
 	if (toolNames.length === 0) {
 		return '';
 	}
-	const lookup = LOOKUP_TOOLS.find((name) => toolNames.includes(name));
 	return joinSentences([
 		`Tools this think, not verbs: ${toolNames.join(', ')}. Never write a tool name in the Arc.`,
 		'Never guess a fact a tool can check. When a goal needs something this prompt does not say (who has it, where it is, what is in the way), call one tool, read its result, then call the next tool or act.',
 		'After an error or an empty result, change the query or the tool; never repeat a call.',
-		lookup !== undefined && `Example: your goal is to buy Bread and you do not know who sells it. Call ${lookup} with "Bread"; it says Baker sells Bread at Bakery. Now emit the arc that goes there and buys it.`,
+		toolNames.includes('recall') && `Example: your goal is to buy Bread and you do not know who sells it. Call recall with "Bread"; it says Baker sells Bread at Bakery. Now emit the arc that goes there and buys it.`,
 	]);
 }
 
@@ -393,7 +398,7 @@ export function volatileBlock(opts:{
 		parts.push(conversation);
 	}
 	if (opts.mentioned?.trim()) {
-		parts.push(`Encyclopedia on what was said:\n${opts.mentioned.trim()}`);
+		parts.push(`What you know about what was said:\n${opts.mentioned.trim()}`);
 	}
 	if (opts.goals && opts.goals.length > 0) {
 		const sorted = [...opts.goals].sort((a, b) => (b.priority ?? 0) - (a.priority ?? 0));
@@ -522,6 +527,11 @@ export function arcRepairHint(reason:string, arcText = false, tools:string[] = [
 			+ `Do the spoken job, not go_to or follow the speaker. Keep this conversation. ${emit}${toolNote}`;
 	}
 	return `That was not a valid Arc (${reason}). Keep this conversation. ${emit}${toolNote}`;
+}
+
+/** After tools the model wrote as text where the Arc goes: they ran anyway; here is what they said. */
+export function writtenToolsHint(results:string[], arcText = false):string {
+	return `Those were tools written as text; they ran anyway:\n${results.join('\n')}\nCall tools as tools, never in the Arc. ${thenEmit(arcText)}`;
 }
 
 /** Follow-up after a say arc whose audience is out of range. Speech did not happen. */

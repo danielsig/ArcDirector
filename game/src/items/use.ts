@@ -7,6 +7,7 @@ import { getDef } from './defs';
 import { keyNameFor, lockedReason } from './pickup';
 import { cueAt } from '../audio/cue';
 import { applyHit } from '../director/hitFeel';
+import { idOf } from '../director/names';
 
 export type UseResult = {
 	ok:boolean;
@@ -142,10 +143,14 @@ export function useItem(character:GameObject, item:ItemInstance, target:GameObje
 				return fail('no Bridge');
 			}
 			const span = bridge.getComponent(Bridge);
-			if (span) {
-				span.open = !span.open;
-				span.syncCollision();
+			if (span?.moving) {
+				return fail(`${idOf(bridge)} is still moving`);
 			}
+			const on = span?.open ? span.occupants().map(idOf) : [];
+			if (on.length > 0) {
+				return fail(`${on.join(' and ')} ${on.length > 1 ? 'are' : 'is'} on ${idOf(bridge)}; raising it now would drop them in the river`);
+			}
+			span?.toggle();
 			const lock = bridge.getComponent(Lock);
 			if (lock) {
 				lock.locked = span ? !span.open : false;

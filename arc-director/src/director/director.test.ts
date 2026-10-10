@@ -692,10 +692,10 @@ describe('ArcDirector', () => {
 		director.dispose();
 	});
 
-	it('start throws when a kit names grep_world_encyclopedia without pages', async () => {
+	it('start throws when a kit names a tool nobody registered', async () => {
 		const director = directorOf()
-			.withDefaultKit({ verbs: ['go_to'], tools: ['grep_world_encyclopedia'] });
-		await assert.rejects(() => director.start(), /tool 'grep_world_encyclopedia' is not registered/);
+			.withDefaultKit({ verbs: ['go_to'], tools: ['look_up'] });
+		await assert.rejects(() => director.start(), /tool 'look_up' is not registered/);
 		director.dispose();
 	});
 
@@ -743,10 +743,10 @@ describe('ArcDirector', () => {
 		director.dispose();
 	});
 
-	it('start accepts grep_world_encyclopedia when pages are set', async () => {
+	it('start accepts knowledge with recall as the only lookup tool', async () => {
 		const director = await directorOf()
-			.withEncyclopedia([{ name: 'Tree', aliases: ['trees'], text: 'Landmark type.' }])
-			.withDefaultKit({ verbs: ['go_to'], tools: ['grep_world_encyclopedia'] })
+			.withKnowledge([{ name: 'Tree', aliases: ['trees'], text: 'Landmark type.' }])
+			.withDefaultKit({ verbs: ['go_to'], tools: ['recall'] })
 			.addCharacter({
 				id: 'Guard',
 				mind: {},

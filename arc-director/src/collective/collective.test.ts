@@ -1212,7 +1212,7 @@ describe('a collective with no commander', () => {
 				return {
 					content: '',
 					toolCalls: [
-						{ id: 'a', name: 'grep_world_encyclopedia', arguments: '{"query":"Keep"}' },
+						{ id: 'a', name: 'recall', arguments: '{"query":"Keep"}' },
 						{ id: 'b', name: 'observe', arguments: '{"expr":"units"}' },
 					],
 				};
@@ -1221,7 +1221,7 @@ describe('a collective with no commander', () => {
 			.addStockCollectiveVerbs()
 			.withDefaultKit(COLLECTIVE_KIT)
 			.withKernels(kernels())
-			.withEncyclopedia((ctx:Ctx) => [{ name: 'Keep', text: `A stone keep, as ${ctx.id} knows it.` }])
+			.withKnowledge((ctx:Ctx) => [{ name: 'Keep', text: `A stone keep, as ${ctx.id} knows it.` }])
 			.withContext((id) => (id === 'Hive' ? undefined : { id }))
 			.onVerb(({ verb }) => ({ ok: true, verb }))
 			.addCollective({ id: 'Hive', mind: { skipHeartbeat: true }, kit: COLLECTIVE_KIT, characters: [{ id: 'Mira' }, { id: 'Tomas' }] })

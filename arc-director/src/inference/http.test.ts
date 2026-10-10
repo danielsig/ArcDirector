@@ -373,6 +373,41 @@ describe('HttpProvider thinking', () => {
 		assert.deepEqual(body.reasoning, { effort: 'low' }, 'the responses API wants an effort object; a bare string is a 400');
 	});
 
+	it('turns reasoning off as an effort object when a responses request overflows the context', async () => {
+		const bodies:Record<string, unknown>[] = [];
+		const provider = new HttpProvider({
+			enableThinking: true,
+			baseURL: 'http://127.0.0.1:9/v1',
+			fetch: async (input, init) => {
+				const url = String(input);
+				if (url.endsWith('/api/v1/models') && init?.method !== 'POST') {
+					return new Response(JSON.stringify({
+						models: [{
+							key: 'google/gemma-4-e4b',
+							loaded_instances: [{ id: 'google/gemma-4-e4b' }],
+							capabilities: { reasoning: { allowed_options: ['off', 'on', 'low', 'medium', 'high'] } },
+						}],
+					}), { status: 200 });
+				}
+				if (url.includes('/responses')) {
+					bodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+					if (bodies.length === 1) {
+						return new Response(JSON.stringify({ error: { message: 'The number of tokens to keep exceeds the context' } }), { status: 400 });
+					}
+					return new Response(JSON.stringify({
+						id: 'resp_1',
+						output: [{ type: 'message', content: [{ type: 'output_text', text: 'wait()' }] }],
+					}), { status: 200 });
+				}
+				return new Response('nope', { status: 404 });
+			},
+		});
+		const res = await provider.chat({ model: 'google/gemma-4-e4b', messages: [{ role: 'user', content: 'pong' }] });
+		assert.equal(res.content, 'wait()');
+		assert.equal(bodies.length, 2);
+		assert.deepEqual(bodies[1].reasoning, { effort: 'none' }, 'a bare "off" is a 400 on the responses API');
+	});
+
 	it('puts /no_think on the system message, not image user parts', async () => {
 		let body:Record<string, unknown> | undefined;
 		const provider = new HttpProvider({

@@ -54,7 +54,7 @@ describe('prompt split', () => {
 		assert.equal(system.includes("that place's go_to name"), false);
 		assert.match(system, /not go_to or follow the speaker/);
 		assert.match(system, /Call see_map, ask the speaker where it is, or wander\(until\)/);
-		assert.equal(system.includes('grep_world_encyclopedia'), false);
+		assert.equal(system.includes('recall also searches'), false);
 		assert.match(system, /when\(watch, arc\) is this job's interrupt/);
 		assert.match(system, /instead of waiting to think/);
 		assert.match(system, /law\(watch, arc, name\?\) is a standing reaction/);
@@ -156,6 +156,8 @@ describe('prompt split', () => {
 		assert.equal(system.includes('with "Bread"'), false);
 		const lookup = stablePrefix('Guard', identity, verbs, { arcText: true, tools: ['observe', 'recall'] });
 		assert.match(lookup, /Call recall with "Bread"/);
+		assert.match(lookup, /Available verbs: [^\n]*\. observe and recall are tools, not verbs: call them as tools, never in the Arc\./, 'right after the verbs');
+		assert.match(lookup, /think\("what to work out"\) last/);
 		assert.match(system, /Once you know enough, emit only the Arc text/);
 		assert.match(system, /see_map is a tool this think, not a verb/);
 		assert.equal(system.includes('see_map({'), false);
@@ -292,20 +294,20 @@ describe('prompt split', () => {
 		assert.match(seeMapHint('🎯'), /🎯 = you/);
 	});
 
-	it('teaches grep_world_encyclopedia without stuffing articles into the prefix', () => {
+	it('teaches recall for world knowledge without stuffing articles into the prefix', () => {
 		const system = stablePrefix('Guard', identity, verbs, {
 			canSeeMap: true,
-			canGrepEncyclopedia: true,
+			canRecallKnowledge: true,
 		});
-		assert.match(system, /grep_world_encyclopedia is a tool this think, not a verb/);
-		assert.match(system, /Call grep_world_encyclopedia, see_map/);
+		assert.match(system, /recall also searches what you know of the world/);
+		assert.match(system, /Call recall, see_map/);
 		assert.equal(system.includes('There is no Forest'), false);
 		assert.equal(system.includes('Being surrounded'), false);
 		assert.equal(system.includes('filter("Tree"), never filter("trees")'), false);
 		assert.ok(system.length < 5000, `standing prefix ${system.length} chars`);
-		const encyclopediaOnly = stablePrefix('Guard', identity, verbs, { canGrepEncyclopedia: true });
-		assert.match(encyclopediaOnly, /Call grep_world_encyclopedia, ask the speaker/);
-		assert.equal(encyclopediaOnly.includes('see_map is a tool'), false);
+		const knowledgeOnly = stablePrefix('Guard', identity, verbs, { canRecallKnowledge: true });
+		assert.match(knowledgeOnly, /Call recall, ask the speaker/);
+		assert.equal(knowledgeOnly.includes('see_map is a tool'), false);
 	});
 
 	it('a host example and verb line replace the stock crowd ones', () => {
@@ -365,7 +367,7 @@ describe('prompt split', () => {
 
 	it('omits verb instructions the kit does not grant', () => {
 		const verbs = registerStockVerbs(new VerbRegistry(), 'say', 'wait');
-		const system = stablePrefix('Guard', identity, verbs, { canSeeMap: true, canGrepEncyclopedia: true });
+		const system = stablePrefix('Guard', identity, verbs, { canSeeMap: true, canRecallKnowledge: true });
 		assert.match(system, /wait\(until\)/);
 		assert.match(system, /Available verbs: say\(text, to\?\) — one short sentence, wait\(seconds\?, until\?\)/);
 		assert.equal(system.includes('wander'), false);

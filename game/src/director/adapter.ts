@@ -28,7 +28,7 @@ import { publishAiLog, resetAiLogSink, pushLog, logLook } from './aiLogSink';
 import { talkFace, canHearClearly, SPEECH_LIFE } from './talkAttend';
 import { YOU_SYMBOL } from './mapMarks';
 import { snapshotMap } from './mapView';
-import { WORLD_ENCYCLOPEDIAS } from './encyclopedias';
+import { WORLD_KNOWLEDGE } from './knowledge';
 import type { CharacterCtx, SceneHooks } from './types';
 import { idOf, findObject, isLiving } from './names';
 import { kernelsOf, scanWorld } from './kernels';
@@ -156,7 +156,7 @@ export class GameHost {
 			.withKernels(this.kernels)
 			.withTalk(this.talk)
 			.withMap(this._mapSense)
-			.withEncyclopedia((ctx) => WORLD_ENCYCLOPEDIAS[ctx.scene] ?? [])
+			.withKnowledge((ctx) => WORLD_KNOWLEDGE[ctx.scene] ?? [])
 			.onAbortArc(this.abortArc)
 			.onLog((entry) => pushLog(this, entry.name, entry.message, entry))
 			.onStep((call, result) => noteAct(this, call, result))

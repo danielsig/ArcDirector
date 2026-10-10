@@ -349,6 +349,32 @@ describe('Agent', () => {
 		assert.equal(arc?.head.args.target, 'EastGate');
 	});
 
+	it('runs a tool written as text where the Arc goes, and keeps an Arc written beside one', async () => {
+		const lasts:string[] = [];
+		const provider = new FakeProvider((req) => {
+			lasts.push(String(req.messages.at(-1)?.content ?? ''));
+			const content = lasts.length === 1 ? 'call:recall{query:<|"|>EastGate<|"|>}' : 'observe(hasSightline) && go_to(EastGate)';
+			return { content, toolCalls: [] };
+		});
+		const agent = soloCharacter<Ctx>({
+			id: 'Guard',
+			identity: { role: 'guard' },
+			goals: [{ text: 'Go to EastGate' }],
+			provider,
+			...stockVerbs(),
+			...perception(),
+			context: () => ({ paragraph: paragraph() }),
+			model: 'fake',
+			toolRoundCap: 2,
+			arcRetryCap: 0,
+			arcText: true,
+		});
+		const arc = await agent.mind!.tick(1);
+		assert.match(lasts[1] ?? '', /Those were tools written as text; they ran anyway:\nrecall: /);
+		assert.equal(lasts.length, 2, 'the Arc beside a written tool is taken without another turn');
+		assert.deepEqual(arc?.head, { verb: 'go_to', args: { target: 'EastGate' } });
+	});
+
 	it('warns when the same output comes back twice in a row, and again after that', async () => {
 		const same = 'go_to(EastGate)';
 		const warnings:string[] = [];
@@ -547,13 +573,13 @@ describe('Agent', () => {
 			toolRoundCap: 0,
 			arcRetryCap: 0,
 			strategicInterval: 0,
-			encyclopedia: [{ name: 'FireMushroom', aliases: ['10 gold'], text: 'Worth 10 gold.' }],
+			knowledge: [{ name: 'FireMushroom', aliases: ['10 gold'], text: 'Worth 10 gold.' }],
 		});
 		agent.mind!.pushEvent({ kind: 'HeardSpeech', remember: true, text: 'BridgeKeeper says: "10 gold or items of equal value."', tags: ['speech'] });
 		await agent.mind!.tick(10);
 		await agent.mind!.tick(20);
-		assert.match(users[0] ?? '', /Encyclopedia on what was said:\n- FireMushroom: Worth 10 gold\./);
-		assert.equal((users[1] ?? '').includes('Encyclopedia on what was said'), false);
+		assert.match(users[0] ?? '', /What you know about what was said:\n- FireMushroom: Worth 10 gold\./);
+		assert.equal((users[1] ?? '').includes('What you know about what was said'), false);
 	});
 
 	it('tells the think after three talk-only arcs to stop talking and act, with every tool still offered', async () => {
@@ -768,7 +794,7 @@ describe('Agent', () => {
 			toolRoundCap: 0,
 			arcRetryCap: 0,
 			strategicInterval: 0,
-			encyclopedia: [{ name: 'FireMushroom', text: 'Worth 10 gold.', item: true }, { name: 'Bridge', text: 'Raised unless lowered.' }],
+			knowledge: [{ name: 'FireMushroom', text: 'Worth 10 gold.', item: true }, { name: 'Bridge', text: 'Raised unless lowered.' }],
 		});
 		agent.mind!.pushEvent({ kind: 'HeardSpeech', remember: true, text: 'Forager says to you: "Here, take this FireMushroom for the Bridge."', tags: ['speech'] });
 		await agent.mind!.tick(10);
@@ -1386,17 +1412,19 @@ describe('Agent', () => {
 		assert.equal(agent.persona.goals[0]?.text, 'Follow Player');
 	});
 
-	it('greps the world encyclopedia for leftover English', async () => {
+	it('recalls world knowledge beside memory for leftover English, with no lookup tool of its own', async () => {
 		let grepped = '';
 		const provider = new FakeProvider((req) => {
 			const hasTool = req.messages.some((m) => m.role === 'tool');
-			if (!hasTool && req.tools?.some((t) => t.name === 'grep_world_encyclopedia')) {
-				assert.match(String(req.messages.find((m) => m.role === 'system')?.content), /grep_world_encyclopedia is a tool this think/);
+			if (!hasTool && req.tools?.some((t) => t.name === 'recall')) {
+				const system = String(req.messages.find((m) => m.role === 'system')?.content);
+				assert.match(system, /recall also searches what you know of the world/);
+				assert.deepEqual(req.tools?.map((t) => t.name).filter((name) => name !== 'recall' && name !== 'earshot'), []);
 				return {
 					content: null,
 					toolCalls: [{
 						id: 'g1',
-						name: 'grep_world_encyclopedia',
+						name: 'recall',
 						arguments: JSON.stringify({ query: 'trees' }),
 					}],
 				};
@@ -1418,15 +1446,17 @@ describe('Agent', () => {
 			toolRoundCap: 1,
 			arcRetryCap: 0,
 			strategicInterval: 0,
-			encyclopedia: [{
+			knowledge: [{
 				name: 'Tree',
 				aliases: ['trees'],
 				text: 'Landmark type. Many; not reachable with go_to.',
 			}],
 		});
 		await agent.mind!.tick(1);
-		assert.match(grepped, /^Tree \(trees\)/);
-		assert.match(grepped, /not reachable with go_to/);
+		const { remember, know } = JSON.parse(grepped) as { remember:unknown[]; know:string[] };
+		assert.ok(Array.isArray(remember));
+		assert.match(know[0] ?? '', /^Tree \(trees\)/);
+		assert.match(know[0] ?? '', /not reachable with go_to/);
 	});
 
 	it('omits see_map when the host has no map or the model cannot see', async () => {
@@ -1532,7 +1562,7 @@ describe('Agent', () => {
 		assert.equal(arc?.head.verb, 'go_to');
 	});
 
-	it('does not treat see_map arc text as a tool call', async () => {
+	it('runs see_map written as arc text as the tool call it meant, picture and all', async () => {
 		let calls = 0;
 		let snaps = 0;
 		const provider = new FakeProvider((req) => {
@@ -1542,8 +1572,8 @@ describe('Agent', () => {
 			}
 			const last = req.messages[req.messages.length - 1];
 			assert.equal(last?.role, 'user');
-			assert.match(String(last?.content), /see_map is a tool, not a verb/);
-			assert.equal(req.messages.some((m) => m.role === 'tool'), false);
+			assert.match(String(last?.content), /Those were tools written as text; they ran anyway:\nsee_map: /);
+			assert.ok(req.messages.some((m) => Array.isArray(m.content)), 'the map picture came along');
 			return { content: 'wait(seconds=1)', toolCalls: [] };
 		});
 		const agent = soloCharacter<Ctx>({
@@ -1574,7 +1604,7 @@ describe('Agent', () => {
 		});
 		const arc = await agent.mind!.tick(1);
 		assert.equal(calls, 2);
-		assert.equal(snaps, 0);
+		assert.equal(snaps, 1);
 		assert.equal(arc?.head.verb, 'wait');
 	});
 

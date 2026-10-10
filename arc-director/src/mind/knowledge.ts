@@ -1,12 +1,10 @@
-/** Host-authored world types. Leftover sight English is not a name. */
+/** What a mind knows about the world: host-authored articles, which `recall` searches beside memory. Leftover sight English is not a name. */
 
 import { DEFAULT_SIGHT, formatSight } from '../perception/sight.js';
 import { basicPluralize } from '../perception/stringifiers.js';
 import type { SeenObject } from '../perception/types.js';
 
-export const GREP_WORLD_ENCYCLOPEDIA = 'grep_world_encyclopedia';
-
-export type EncyclopediaEntry = {
+export type KnowledgeEntry = {
 	/** Capitalized name used in arcs (`Tree`, `Cottage`). */
 	name:string;
 	/** Leftover or spoken English (`trees`, `house`, `forest`). */
@@ -20,35 +18,36 @@ export type EncyclopediaEntry = {
 };
 
 /** Leftover crowd type plus spoken names for being inside that crowd. */
-export type CrowdEncyclopediaSpec = {
+export type CrowdKnowledgeSpec = {
 	name:string;
 	tag:string;
 	inside:string[];
 	unitName?:string;
 };
 
-export type EncyclopediaSource<TCtx = unknown> =
-	| readonly EncyclopediaEntry[]
-	| ((ctx:TCtx)=>readonly EncyclopediaEntry[]);
+export type KnowledgeSource<TCtx = unknown> =
+	| readonly KnowledgeEntry[]
+	| ((ctx:TCtx)=>readonly KnowledgeEntry[]);
 
-const HIT_CAP = 8;
+/** Articles one `recall` returns, so they do not crowd out memories. */
+export const KNOW_CAP = 2;
 const INDEX_CAP = 48;
 const MIN_TOKEN = 3;
 
 type ItemLike = { id:string; tags?:readonly string[] };
 
 /** Whether one of `items` is what `entry` is about: its id or a tag equals the name or an alias. */
-export function isAboutItem(entry:EncyclopediaEntry, items:readonly ItemLike[]):boolean {
+export function isAboutItem(entry:KnowledgeEntry, items:readonly ItemLike[]):boolean {
 	const keys = new Set([entry.name, ...(entry.aliases ?? [])].map((key) => key.trim().toLowerCase()));
 	return items.some((item) => [item.id, ...(item.tags ?? [])].some((key) => keys.has(key.toLowerCase())));
 }
 
-/** Articles whose name or alias equals an item id or tag. Empty when nothing matches. */
-export function receivedArticles(entries:readonly EncyclopediaEntry[], items:readonly ItemLike[]):string {
+/** `- Name: article` for each article whose name or alias equals an item id or tag. Empty when nothing matches. */
+export function receivedArticles(entries:readonly KnowledgeEntry[], items:readonly ItemLike[]):string {
 	return entries
 		.filter((entry) => entry.text.trim() !== '' && isAboutItem(entry, items))
-		.map((entry) => entry.text.trim())
-		.join('\n\n');
+		.map((entry) => `- ${entry.name.trim()}: ${entry.text.trim()}`)
+		.join('\n');
 }
 
 /**
@@ -56,7 +55,7 @@ export function receivedArticles(entries:readonly EncyclopediaEntry[], items:rea
  * itself (`Bridge is raised` brings the Bridge article). Names only: aliases are plain English and
  * would match ordinary words. Empty when nothing matches.
  */
-export function articlesNamedIn(entries:readonly EncyclopediaEntry[], text:string):string {
+export function articlesNamedIn(entries:readonly KnowledgeEntry[], text:string):string {
 	const words = new Set(text.split(/[^A-Za-z0-9_]+/));
 	return entries
 		.filter((entry) => words.has(entry.name.trim()) && entry.text.trim() !== '')
@@ -73,7 +72,7 @@ function phrase(text:string):string {
  * Articles whose name or alias `text` mentions as a whole word or phrase, most mentions first, at most `cap`.
  * How talk brings up the facts behind it: "10 gold or items of equal value" brings the article aliased `10 gold`.
  */
-export function mentionedArticles(entries:readonly EncyclopediaEntry[], text:string, cap:number):EncyclopediaEntry[] {
+export function mentionedArticles(entries:readonly KnowledgeEntry[], text:string, cap:number):KnowledgeEntry[] {
 	const said = ` ${phrase(text)} `;
 	return entries
 		.map((entry) => ({
@@ -86,10 +85,10 @@ export function mentionedArticles(entries:readonly EncyclopediaEntry[], text:str
 		.map((row) => row.entry);
 }
 
-export function encyclopediaPages<TCtx>(
-	src:EncyclopediaSource<TCtx> | undefined,
+export function knowledgePages<TCtx>(
+	src:KnowledgeSource<TCtx> | undefined,
 	ctx:TCtx | undefined,
-):EncyclopediaEntry[] {
+):KnowledgeEntry[] {
 	if (!src) {
 		return [];
 	}
@@ -102,30 +101,37 @@ export function encyclopediaPages<TCtx>(
 	return [...src];
 }
 
-export function grepEncyclopedia(entries:readonly EncyclopediaEntry[], query:string):string {
+/**
+ * What `recall` knows for `query`: the best `cap` articles by name, alias, or word, each `Name (aliases)` over its
+ * text. An empty query lists the topics instead, and one that matches nothing says a plain word is not a name.
+ * `[]` when there is nothing to know.
+ */
+export function knowledgeFor(entries:readonly KnowledgeEntry[], query:string, cap = KNOW_CAP):string[] {
 	const q = query.replace(/\s+/g, ' ').trim();
 	if (!q || q === '*' || /^list$/i.test(q)) {
 		const names = entries.map((e) => e.name.trim()).filter(Boolean);
 		if (names.length === 0) {
-			return 'Encyclopedia is empty.';
+			return [];
 		}
-		const shown = names.slice(0, INDEX_CAP);
 		const more = names.length > INDEX_CAP ? '…' : '';
-		return `Names: ${shown.join(', ')}${more}. Query one for the article.`;
+		return [`Topics: ${names.slice(0, INDEX_CAP).join(', ')}${more}. Recall one for more.`];
+	}
+	if (entries.length === 0) {
+		return [];
 	}
 	const tokens = tokenize(q);
-	const scored = entries
+	const hits = entries
 		.map((entry) => ({ entry, score: scoreEntry(entry, q, tokens) }))
 		.filter((row) => row.score > 0)
-		.sort((a, b) => b.score - a.score || a.entry.name.localeCompare(b.entry.name));
-	const hits = scored.slice(0, HIT_CAP);
+		.sort((a, b) => b.score - a.score || a.entry.name.localeCompare(b.entry.name))
+		.slice(0, cap);
 	if (hits.length === 0) {
-		return `No encyclopedia match for "${q}". Leftover English is not a name. Try another word, see_map, ask, or wander(until).`;
+		return [`Nothing you know is called "${q}". A plain word is not a name: try another word, see_map, ask, or wander(until).`];
 	}
-	return hits.map((row) => formatEntry(row.entry)).join('\n\n');
+	return hits.map((row) => formatEntry(row.entry));
 }
 
-function formatEntry(entry:EncyclopediaEntry):string {
+function formatEntry(entry:KnowledgeEntry):string {
 	const aka = (entry.aliases ?? []).map((a) => a.trim()).filter(Boolean);
 	const head = aka.length > 0 ? `${entry.name} (${aka.join(', ')})` : entry.name;
 	return `${head}\n${entry.text.trim()}`;
@@ -135,7 +141,7 @@ function tokenize(query:string):string[] {
 	return query.toLowerCase().split(/[^a-z0-9]+/i).filter((t) => t.length >= MIN_TOKEN);
 }
 
-function scoreEntry(entry:EncyclopediaEntry, query:string, tokens:string[]):number {
+function scoreEntry(entry:KnowledgeEntry, query:string, tokens:string[]):number {
 	const ql = query.toLowerCase();
 	const name = entry.name.toLowerCase();
 	const aliases = (entry.aliases ?? []).map((a) => a.toLowerCase());
@@ -172,7 +178,7 @@ const CARDINALS:[number, number][] = [
 ];
 
 /** Leftover crowd article from `formatSight` on a bunch around you. */
-export function crowdEncyclopedia(spec:CrowdEncyclopediaSpec):EncyclopediaEntry {
+export function crowdKnowledge(spec:CrowdKnowledgeSpec):KnowledgeEntry {
 	const name = spec.name.trim();
 	const tag = spec.tag.trim();
 	const inside = spec.inside.map((s) => s.trim()).filter(Boolean);

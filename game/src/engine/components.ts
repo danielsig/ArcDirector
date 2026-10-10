@@ -7,7 +7,9 @@ import {
 } from '@arc-director/kindling';
 import { Order } from './order';
 import { clamp, lerpAngle } from './math';
-import { TILE_HEIGHT } from '../world/constants';
+import { CELL_SIZE, TILE_HEIGHT } from '../world/constants';
+import { Pickupable } from '../items/components';
+import type { GameObject } from './GameObject';
 import { characterHeight, characterTakeFps } from '../render/artCache';
 
 export { BoxCollider };
@@ -163,23 +165,65 @@ export class Chest extends Component {
 }
 
 /** Drawbridge over water. When raised (`open` false), the river cannot be crossed. */
+/** Seconds the span takes to swing between raised and lowered. */
+export const BRIDGE_SWING_SECONDS = 1;
+
 export class Bridge extends Component {
 	public static override saved = ['open'];
+	/** Where the span is headed: lowered (open) or raised. */
 	public open = false;
 	public cells:{ x:number; z:number }[] = [];
+	/** Mid-swing lift; undefined when the span rests where `open` says. */
+	private _swing:number | undefined;
 
-	/** A lowered span is a trigger. A raised span blocks. */
+	/** How far up the span is: 0 lowered, 1 raised. */
+	public get lift():number {
+		return this._swing ?? this.target;
+	}
+
+	/** Swinging between raised and lowered. */
+	public get moving():boolean {
+		return this._swing !== undefined;
+	}
+
+	/** Work the lever: swing to the other state over {@link BRIDGE_SWING_SECONDS}. Setting `open` (a load) snaps instead. */
+	public toggle():void {
+		this._swing = this.lift;
+		this.open = !this.open;
+		this.syncCollision();
+	}
+
+	/** Bodies and loose things standing on the span. */
+	public occupants():GameObject[] {
+		const half = CELL_SIZE / 2;
+		return (this.gameObject.world?.objects ?? []).filter((go) => (
+			(go.getComponent(HumanBody) || go.getComponent(Pickupable))
+			&& this.cells.some((c) => Math.abs(go.transform.position.x - c.x) <= half && Math.abs(go.transform.position.z - c.z) <= half)
+		));
+	}
+
+	/** Walkable only once fully lowered; anything else blocks. */
 	public syncCollision():void {
 		const col = this.gameObject.getComponent(BoxCollider);
 		if (!col) {
 			return;
 		}
-		col.solid = !this.open;
-		col.isTrigger = this.open;
+		const down = this.open && this.lift === 0;
+		col.solid = !down;
+		col.isTrigger = down;
 	}
 
 	public override update(dt:number):void {
+		if (this._swing !== undefined) {
+			const step = dt / BRIDGE_SWING_SECONDS;
+			const lift = this._swing < this.target ? Math.min(this.target, this._swing + step) : Math.max(this.target, this._swing - step);
+			this._swing = lift === this.target ? undefined : lift;
+		}
 		this.syncCollision();
+	}
+
+	private get target():number {
+		return this.open ? 0 : 1;
 	}
 }
 

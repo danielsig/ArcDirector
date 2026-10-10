@@ -15,15 +15,15 @@ import type { ConversationTurn, MindEvent, Sense, ToolSpec } from './types.js';
 import { parseMapZoom, stampMap, isMapSnapshot, DEFAULT_YOU_SYMBOL, type MapPrev, type MapSense } from './map.js';
 import {
 	articlesNamedIn,
-	encyclopediaPages,
+	knowledgeFor,
+	knowledgePages,
 	mentionedArticles,
-	grepEncyclopedia,
 	isAboutItem,
 	receivedArticles,
-	GREP_WORLD_ENCYCLOPEDIA,
-	type EncyclopediaSource,
-} from './encyclopedia.js';
-import { LOOKUP_TOOLS, arcRepairHint, blockedAgainHint, repeatOutputHint, sayRangeHint, shouldEmitArcText, stablePrefix, volatileBlock, type ThinkInstructions } from './prompt.js';
+	type KnowledgeSource,
+} from './knowledge.js';
+import { toolFirstArgs, writtenToolCalls } from './toolText.js';
+import { arcRepairHint, writtenToolsHint, blockedAgainHint, repeatOutputHint, sayRangeHint, shouldEmitArcText, stablePrefix, volatileBlock, type ThinkInstructions } from './prompt.js';
 import type { TalkNet } from './talk.js';
 import type { SightClause } from '../perception/types.js';
 import { idsOf, mapArc, mapExpr, mapLawName, namesOf } from './ids.js';
@@ -94,6 +94,8 @@ export type MindDeps<TCtx = unknown> = {
 	talk?:TalkNet;
 	/** When the voice has an executor, `tick` runs the arc unless this is false. */
 	autoEnact?:boolean;
+	/** Each arc the moment a think chooses it, before it runs. */
+	onChoose?:(arc:Arc)=>void;
 	queue?:MindQueue;
 	/** Heartbeat stretch after an arc. Default: failed or interrupted. */
 	stalled?:(result:ArcResult)=>boolean;
@@ -130,8 +132,8 @@ export type MindDeps<TCtx = unknown> = {
 	worldContext?:()=>TCtx | undefined;
 	/** Host top-down snapshots. `see_map` is omitted unless this and vision are both set. */
 	map?:MapSense;
-	/** Host world-type articles. `grep_world_encyclopedia` is omitted unless this is set. */
-	encyclopedia?:EncyclopediaSource<TCtx>;
+	/** What it knows about the world: host articles `recall` searches beside memory. */
+	knowledge?:KnowledgeSource<TCtx>;
 	/** Most articles shown per think for names said or heard. Default {@link DEFAULT_MENTION_CAP}; 0 shows none. */
 	mentionCap?:number;
 	/**
@@ -260,6 +262,7 @@ export class Mind<TCtx = unknown> {
 	public talk:TalkNet | undefined;
 	public provider!:InferenceProvider;
 	public autoEnact = true;
+	public onChoose:((arc:Arc)=>void) | undefined;
 	public queue:MindQueue | undefined;
 	public stalled?:(result:ArcResult)=>boolean;
 	/** The model it is assigned, by its name on the director; `undefined` thinks with the default. */
@@ -285,7 +288,7 @@ export class Mind<TCtx = unknown> {
 	public recallK = 5;
 	public hideObserve = false;
 	public map:MapSense | undefined;
-	public encyclopedia:EncyclopediaSource<TCtx> | undefined;
+	public knowledge:KnowledgeSource<TCtx> | undefined;
 	public vision:boolean | undefined;
 	/** The context window of the model it thinks with, kept current by the director; `undefined` when unknown. */
 	public contextTokens:number | undefined;
@@ -354,6 +357,7 @@ export class Mind<TCtx = unknown> {
 		this.tools = deps.tools ?? {};
 		this.talk = deps.talk;
 		this.autoEnact = deps.autoEnact ?? true;
+		this.onChoose = deps.onChoose;
 		this.queue = deps.queue;
 		this.stalled = deps.stalled;
 		this.modelID = deps.modelID ?? '';
@@ -375,7 +379,7 @@ export class Mind<TCtx = unknown> {
 		this.recallK = deps.recallK ?? 5;
 		this.hideObserve = deps.hideObserve ?? false;
 		this.map = deps.map;
-		this.encyclopedia = deps.encyclopedia;
+		this.knowledge = deps.knowledge;
 		this._mentionCap = deps.mentionCap ?? DEFAULT_MENTION_CAP;
 		this.vision = deps.vision;
 	}
@@ -652,6 +656,7 @@ export class Mind<TCtx = unknown> {
 			}
 			this._pendingAbout = undefined;
 			this.lastArc = arc;
+			this.onChoose?.(arc);
 			this.lastTacticalTimestamp = this._now;
 			this.capturePrevMe();
 			// Only what this think read. Events that came in while the model answered (a gift, a reply) wait for the next one.
@@ -832,17 +837,18 @@ export class Mind<TCtx = unknown> {
 
 	private receivedSinceThink():string {
 		const voice = this.voice;
-		const me = this.encyclopedia && voice.prevMe ? voice.catalog?.()?.me : undefined;
+		const me = this.knowledge && voice.prevMe ? voice.catalog?.()?.me : undefined;
 		if (!me || !voice.prevMe) {
 			return '';
 		}
-		const pages = encyclopediaPages(this.encyclopedia, this.worldContext());
+		const pages = knowledgePages(this.knowledge, this.worldContext());
 		if (pages.length === 0) {
 			return '';
 		}
 		const prev = new Set(bagOf(voice.prevMe).map((item) => item.id));
 		const gained = bagOf(me).filter((item) => !prev.has(item.id));
-		return receivedArticles(pages, gained);
+		const articles = receivedArticles(pages, gained);
+		return articles ? `What you know about what you just received:\n${articles}` : '';
 	}
 
 	/**
@@ -869,14 +875,14 @@ export class Mind<TCtx = unknown> {
 	 */
 	private mentionedText():string {
 		const talked = [...this._recent, ...this.conversationLines()].join('\n');
-		const ctx = this.encyclopedia && this._mentionCap > 0 && talked.trim() ? this.worldContext() : undefined;
-		if (!this.encyclopedia || ctx === undefined) {
+		const ctx = this.knowledge && this._mentionCap > 0 && talked.trim() ? this.worldContext() : undefined;
+		if (!this.knowledge || ctx === undefined) {
 			return '';
 		}
 		const me = this.voice.catalog?.()?.me;
 		const bag = me ? bagOf(me) : undefined;
 		const lines:string[] = [];
-		for (const entry of mentionedArticles(encyclopediaPages(this.encyclopedia, ctx), talked, Infinity)) {
+		for (const entry of mentionedArticles(knowledgePages(this.knowledge, ctx), talked, Infinity)) {
 			if (lines.length >= this._mentionCap) {
 				break;
 			}
@@ -900,10 +906,10 @@ export class Mind<TCtx = unknown> {
 	private failureArticles():string {
 		const reason = this.lastResult && !this.lastResult.ok ? this.lastResult.reason : undefined;
 		const ctx = reason ? this.worldContext() : undefined;
-		if (!reason || !this.encyclopedia || ctx === undefined) {
+		if (!reason || !this.knowledge || ctx === undefined) {
 			return '';
 		}
-		return articlesNamedIn(encyclopediaPages(this.encyclopedia, ctx), reason);
+		return articlesNamedIn(knowledgePages(this.knowledge, ctx), reason);
 	}
 
 
@@ -1053,7 +1059,7 @@ export class Mind<TCtx = unknown> {
 			watchesWritable: verbs.has('watch'),
 			canObserve: toolNames.includes('observe'),
 			canSeeMap: toolNames.includes('see_map'),
-			canGrepEncyclopedia: toolNames.includes(GREP_WORLD_ENCYCLOPEDIA),
+			canRecallKnowledge: toolNames.includes('recall') && this.knowledge !== undefined,
 			youSymbol: this.youSymbol(),
 			arcText: emitText,
 			thinkInstructions: this.thinkInstructions,
@@ -1107,33 +1113,26 @@ export class Mind<TCtx = unknown> {
 					toolCalls: res.toolCalls,
 				});
 				for (const call of res.toolCalls) {
-					const key = `${call.name} ${call.arguments.replace(/\s+/g, '')}`;
-					// A repeat did not help, so it is refused: any call within this think, a lookup within the last few.
-					// Other tools (see_map, observe) may answer differently once the character has moved.
-					const window = LOOKUP_TOOLS.includes(call.name) ? LOOKUP_REPEAT : 0;
-					const result = this._thinks - (this._calledOn.get(key) ?? -Infinity) <= window
-						? { error: 'Duplicate call. You made it this think or lately. Change the query, call another tool, or emit the arc.' }
-						: await this.runTool(call.name, call.arguments, ctx);
-					this._calledOn.set(key, this._thinks);
-					messages.push({
-						role: 'tool',
-						content: typeof result === 'string' ? result : JSON.stringify(result),
-						toolCallID: call.id,
-					});
-					if (this._pendingSeeMapImage) {
-						messages.push({
-							role: 'user',
-							content: [
-								{ type: 'text', text: 'The map. Legend is in the tool result; names only, no coordinates.' },
-								{ type: 'image_url', image_url: { url: this._pendingSeeMapImage } },
-							],
-						});
-						this._pendingSeeMapImage = undefined;
-					}
+					messages.push({ role: 'tool', content: await this.lookUp(call.name, call.arguments, ctx), toolCallID: call.id });
+					this.pushMapImage(messages);
 				}
 				toolsLeft -= 1;
 				continue;
 			}
+			// A tool written where the Arc goes is the call the model meant: run it, or drop it from an Arc beside it.
+			const written = emitText && res.content ? writtenToolCalls(res.content, toolFirstArgs(tools)) : undefined;
+			if (written && written.calls.length > 0 && !written.rest && allowTools) {
+				messages.push({ role: 'assistant', content: res.content });
+				const results:string[] = [];
+				for (const call of written.calls) {
+					results.push(`${call.name}: ${await this.lookUp(call.name, JSON.stringify(call.args), ctx)}`);
+				}
+				this.pushMapImage(messages);
+				messages.push({ role: 'user', content: writtenToolsHint(results, emitText) });
+				toolsLeft -= 1;
+				continue;
+			}
+			const content = written?.rest || res.content;
 			if (res.toolCalls.length > 0) {
 				lastErr = new ArcError('model called a tool when it must emit an Arc');
 				if (!this.pushRepair(messages, res, lastErr, repairsLeft, toolNames, emitText)) {
@@ -1142,11 +1141,11 @@ export class Mind<TCtx = unknown> {
 				repairsLeft -= 1;
 				continue;
 			}
-			if (res.content) {
+			if (content) {
 				let arc:Arc;
 				let raw:unknown;
 				try {
-					const trimmed = res.content.trim();
+					const trimmed = content.trim();
 					raw = (trimmed.startsWith('{') || trimmed.startsWith('```'))
 						? extractJson(trimmed)
 						: trimmed;
@@ -1160,10 +1159,10 @@ export class Mind<TCtx = unknown> {
 					repairsLeft -= 1;
 					continue;
 				}
-				if (!warnedRepeat && this.isRepeat(res.content)) {
+				if (!warnedRepeat && this.isRepeat(content)) {
 					warnedRepeat = true;
 					this._emitStreak += 1;
-					messages.push({ role: 'assistant', content: res.content });
+					messages.push({ role: 'assistant', content });
 					messages.push({ role: 'user', content: repeatOutputHint(this._emitStreak, emitText) });
 					continue;
 				}
@@ -1175,18 +1174,18 @@ export class Mind<TCtx = unknown> {
 						throw lastErr;
 					}
 					checksLeft -= 1;
-					messages.push({ role: 'assistant', content: res.content });
+					messages.push({ role: 'assistant', content });
 					messages.push({ role: 'user', content: blocked ? sayRangeHint(blocked.reason, blocked.nearby, emitText) : blockedAgainHint(again!, emitText) });
 					continue;
 				}
 				if (typeof raw !== 'string') {
 					this.applyMind(raw);
 				}
-				this.acceptEmit(res.content);
+				this.acceptEmit(content);
 				this._talkStreak = arcSteps(arc).every((step) => TALK_VERBS.has(step.verb)) ? this._talkStreak + 1 : 0;
 				return this.settleLiveArc(
 					arc,
-					res.content,
+					content,
 					messages,
 					verbs,
 					liveVerbAtThink,
@@ -1459,7 +1458,9 @@ export class Mind<TCtx = unknown> {
 		const tools:{ [k:string]:ToolSpec<TCtx> } = { ...this.tools };
 		if (!tools.recall) {
 			tools.recall = {
-				description: 'Search your own memory: what you know, were told, saw, or did. Query the names or keywords your goal needs (Bread, Gate).',
+				description: this.knowledge
+					? 'Search what you remember (what you were told, saw, or did) and what you know of the world (places, items, people, who sells or makes what, how things work). Query a name or keyword your goal needs (Bread, Gate), or a plain word (trees, house) to learn its Capitalized name. Empty query lists the topics you know.'
+					: 'Search your own memory: what you know, were told, saw, or did. Query the names or keywords your goal needs (Bread, Gate).',
 				parameters: {
 					type: 'object',
 					additionalProperties: false,
@@ -1469,7 +1470,7 @@ export class Mind<TCtx = unknown> {
 						k: { type: 'number' },
 					},
 				},
-				handler: (ctx, args) => this.handleRecall(args),
+				handler: (ctx, args) => this.handleRecall(ctx, args),
 			};
 		}
 		if (!this.hideObserve && !tools.observe) {
@@ -1512,28 +1513,11 @@ export class Mind<TCtx = unknown> {
 				handler: (ctx, args) => this.handleSeeMap(args),
 			};
 		}
-		if (this.encyclopediaOn() && !tools[GREP_WORLD_ENCYCLOPEDIA]) {
-			tools[GREP_WORLD_ENCYCLOPEDIA] = {
-				description: 'Look up world facts: places, items, people, who sells or makes what, how things work. Query a name or a plain word (trees, house) to learn its Capitalized name. Empty query lists every article.',
-				parameters: {
-					type: 'object',
-					additionalProperties: false,
-					properties: {
-						query: { type: 'string' },
-					},
-				},
-				handler: (ctx, args) => this.handleGrepEncyclopedia(ctx, args),
-			};
-		}
 		return this.filterTools(tools);
 	}
 
 	private seeMapOn():boolean {
 		return !!this.map && this.visionCapable();
-	}
-
-	private encyclopediaOn():boolean {
-		return this.encyclopedia !== undefined;
 	}
 
 	private youSymbol():string {
@@ -1674,14 +1658,8 @@ export class Mind<TCtx = unknown> {
 		return observeExpr(expr, catalog, evaluate);
 	}
 
-	private handleGrepEncyclopedia(ctx:TCtx | undefined, args:unknown):unknown {
-		const row = isRecord(args) ? args : {};
-		const query = typeof row.query === 'string' ? row.query : '';
-		const pages = encyclopediaPages(this.encyclopedia, ctx);
-		return grepEncyclopedia(pages, query);
-	}
-
-	private async handleRecall(args:unknown):Promise<unknown> {
+	/** Memories for the query, and with knowledge, `{ remember, know }`: the articles it matches too. */
+	private async handleRecall(ctx:TCtx | undefined, args:unknown):Promise<unknown> {
 		const row = isRecord(args) ? args : {};
 		const query = typeof row.query === 'string' ? row.query : '';
 		const k = typeof row.k === 'number' ? row.k : this.recallK;
@@ -1695,7 +1673,7 @@ export class Mind<TCtx = unknown> {
 				embedding = undefined;
 			}
 		}
-		return [
+		const remember = [
 			...this._recent.slice(-k).map((text) => ({
 				id: 'recent',
 				text,
@@ -1714,6 +1692,36 @@ export class Mind<TCtx = unknown> {
 				category: m.category,
 			})),
 		].slice(0, k);
+		return this.knowledge ? { remember, know: knowledgeFor(knowledgePages(this.knowledge, ctx), query) } : remember;
+	}
+
+	/**
+	 * A tool's answer as text. A repeat did not help, so it is refused: any call within this think, a lookup within the
+	 * last few. Other tools (see_map, observe) may answer differently once the character has moved.
+	 */
+	private async lookUp(name:string, rawArgs:string, ctx:TCtx | undefined):Promise<string> {
+		const key = `${name} ${rawArgs.replace(/\s+/g, '')}`;
+		const window = name === 'recall' ? LOOKUP_REPEAT : 0;
+		const result = this._thinks - (this._calledOn.get(key) ?? -Infinity) <= window
+			? { error: 'Duplicate call. You made it this think or lately. Change the query, call another tool, or emit the arc.' }
+			: await this.runTool(name, rawArgs, ctx);
+		this._calledOn.set(key, this._thinks);
+		return typeof result === 'string' ? result : JSON.stringify(result);
+	}
+
+	/** The picture a `see_map` call just painted, if any, as the next message. */
+	private pushMapImage(messages:ChatMessage[]):void {
+		if (!this._pendingSeeMapImage) {
+			return;
+		}
+		messages.push({
+			role: 'user',
+			content: [
+				{ type: 'text', text: 'The map. Legend is in the tool result; names only, no coordinates.' },
+				{ type: 'image_url', image_url: { url: this._pendingSeeMapImage } },
+			],
+		});
+		this._pendingSeeMapImage = undefined;
 	}
 
 	private async runTool(name:string, rawArgs:string, ctx:TCtx | undefined):Promise<unknown> {

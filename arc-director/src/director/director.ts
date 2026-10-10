@@ -17,10 +17,7 @@ import type { MindEvent, Sense, ToolSpec } from '../mind/types.js';
 import type { ThinkInstructions } from '../mind/prompt.js';
 import { TalkNet, type SpeechUtterance, type TalkConfig, type TalkMind, type TalkSense } from '../mind/talk.js';
 import type { MapSense } from '../mind/map.js';
-import {
-	GREP_WORLD_ENCYCLOPEDIA,
-	type EncyclopediaSource,
-} from '../mind/encyclopedia.js';
+import type { KnowledgeSource } from '../mind/knowledge.js';
 import { buildCatalog, dummyEntity, type HostKernels } from '../expr/natives.js';
 import { freezeMe, type MeFreezeHost } from '../expr/prev.js';
 import { catalogEntities, evaluate, unboundCalls } from '../expr/eval.js';
@@ -227,7 +224,7 @@ export class ArcDirector<TCtx = unknown> {
 	private _talkConfig:Partial<TalkConfig> | undefined;
 	public talk:TalkNet | undefined;
 	private _map:MapSense | undefined;
-	private _encyclopedia:EncyclopediaSource<TCtx> | undefined;
+	private _knowledge:KnowledgeSource<TCtx> | undefined;
 	private _mentionCap:number | undefined;
 	private _abortArcFn:((id:string)=>void) | undefined;
 	private _commanderVacantFn:((collective:Collective<TCtx>, character:Character<TCtx>)=>void) | undefined;
@@ -635,10 +632,13 @@ ${dump.message}`, image: dump.image });
 		return this;
 	}
 
-	/** `mentions`: most articles shown per think for names said or heard (default `DEFAULT_MENTION_CAP`; 0 shows none). */
-	public withEncyclopedia(pages:EncyclopediaSource<TCtx>, { mentions }:{ mentions?:number } = {}):this {
+	/**
+	 * What minds know of the world: articles `recall` searches beside memory, and brings up unasked when a name is said
+	 * or heard. `mentions`: most articles shown per think that way (default `DEFAULT_MENTION_CAP`; 0 shows none).
+	 */
+	public withKnowledge(pages:KnowledgeSource<TCtx>, { mentions }:{ mentions?:number } = {}):this {
 		this.assertBuilder();
-		this._encyclopedia = pages;
+		this._knowledge = pages;
 		this._mentionCap = mentions;
 		return this;
 	}
@@ -1170,11 +1170,12 @@ ${dump.message}`, image: dump.image });
 			arcRetryCap: this._arcRetries,
 			stalled: this._stalledFn,
 			autoEnact: true,
+			onChoose: (arc) => this.emitLog({ name: mind.thinkThread(), message: formatArc(arc, this._verbs) }),
 			queue: this._queue,
 			modelID: this._models.live(mind.model)?.id ?? '',
 			embed: this._models.embedder(),
 			map: this._map,
-			encyclopedia: this._encyclopedia,
+			knowledge: this._knowledge,
 			mentionCap: this._mentionCap,
 			vision: this._models.live(mind.model)?.vision,
 			arcText: this._arcText,
@@ -1648,9 +1649,6 @@ ${dump.message}`, image: dump.image });
 			return true;
 		}
 		if (name === 'see_map' && this._map && this._models.all().some((model) => model.vision)) {
-			return true;
-		}
-		if (name === GREP_WORLD_ENCYCLOPEDIA && this._encyclopedia) {
 			return true;
 		}
 		return false;
@@ -2694,9 +2692,7 @@ ${dump.message}`, image: dump.image });
 				this._queue?.setWatches(mind.id, mind.persona.effectiveWatches());
 				if (!arc) {
 					this._queue?.noteResult(mind.id, true);
-					return;
 				}
-				this.emitLog({ name: mind.thinkThread(), message: formatArc(arc, this._verbs) });
 			})
 			.catch((err:unknown) => {
 				if (!mind.attached) {

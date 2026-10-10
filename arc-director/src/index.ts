@@ -138,19 +138,19 @@ export {
 	type StampedMap,
 } from './mind/map.js';
 export {
-	GREP_WORLD_ENCYCLOPEDIA,
-	encyclopediaPages,
-	grepEncyclopedia,
-	crowdEncyclopedia,
-	type EncyclopediaEntry,
-	type EncyclopediaSource,
-	type CrowdEncyclopediaSpec,
-} from './mind/encyclopedia.js';
+	KNOW_CAP,
+	knowledgePages,
+	knowledgeFor,
+	crowdKnowledge,
+	type KnowledgeEntry,
+	type KnowledgeSource,
+	type CrowdKnowledgeSpec,
+} from './mind/knowledge.js';
 export { runArc, deferThinks, arcSteps, THINK_ABOUT_CAP, type ArcPick, type LastChoice } from './arc/run.js';
 export { CHOICE_RESERVED, MAX_CHOICES } from './arc/choose.js';
 export { ChatSystemOne, JevSystemOne, ModelSystemOne, type DecidingModel, type JevOpts, type SystemOne } from './inference/systemone.js';
 export { benchSystemOne, DECISION_BENCH, type BenchScore, type DecisionCase, type DecisionLevel, type DecisionSpot, type SkillScore } from './character/bench.js';
-export { arcRepairHint, repeatOutputHint, sayRangeHint, shortTermBlock, stablePrefix, volatileBlock, watchCheatSheet, DEFAULT_THINK_INSTRUCTIONS, DEFAULT_VERB_INSTRUCTIONS, DEFAULT_COLLECTIVE_INSTRUCTIONS, type ThinkInstructions, SEE_MAP_HINT, seeMapHint, encyclopediaHint } from './mind/prompt.js';
+export { arcRepairHint, repeatOutputHint, sayRangeHint, shortTermBlock, stablePrefix, volatileBlock, watchCheatSheet, DEFAULT_THINK_INSTRUCTIONS, DEFAULT_VERB_INSTRUCTIONS, DEFAULT_COLLECTIVE_INSTRUCTIONS, type ThinkInstructions, SEE_MAP_HINT, seeMapHint, knowledgeHint } from './mind/prompt.js';
 export {
 	TalkNet,
 	DEFAULT_TALK_CONFIG,

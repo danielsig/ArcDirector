@@ -380,6 +380,20 @@ describe('formatSight', () => {
 		assert.equal(paragraph.includes('sheeps'), false);
 		assert.equal(paragraph.includes('cluster of'), false);
 	});
+
+	it('names everyone on one ground in one clause, keeping the ground\'s note', () => {
+		const on = { attachedTo: 'Bridge', attachMode: 'on' as const };
+		const paragraph = formatSight({
+			self: { id: 'BridgeKeeper', point: [0, 0], facing: [0, -1] },
+			objects: [
+				seen('Bridge', [0, -5], { tags: ['bridge', 'landmark'], note: 'it is lowered', movable: false }),
+				{ ...person('Forager', [0, -5.2]), ...on },
+				{ ...person('Angler', [0.4, -4.8]), ...on },
+			],
+		});
+		assert.match(paragraph, /Forager and Angler on \*Bridge\*, it is lowered 5 paces in front of you/);
+		assert.equal(paragraph.match(/Forager/g)?.length, 1, 'not again on their own');
+	});
 });
 
 function hypot(a:number[], b:number[]):number {

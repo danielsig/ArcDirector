@@ -160,7 +160,7 @@ function seenOf(go:GameObject, observer?:GameObject, host?:GameHost):SeenObject 
 	}
 	const span = go.getComponent(Bridge);
 	if (span && !row.note) {
-		row.note = span.open ? 'it is lowered' : 'it is raised';
+		row.note = `it is ${span.moving ? 'being ' : ''}${span.open ? 'lowered' : 'raised'}`;
 		row.always = true;
 	}
 	if (
@@ -189,6 +189,13 @@ export function lookWorld(character:GameObject, ambient:string, host?:GameHost):
 	}
 	const ax = character.transform.position.x;
 	const az = character.transform.position.z;
+	// Whoever stands on a span reads as on it: `Forager and Angler on Bridge, it is lowered`.
+	const onSpan = new Map<GameObject, string>();
+	world.forEachComponent(Bridge, (span, go) => {
+		for (const occupant of span.occupants()) {
+			onSpan.set(occupant, idOf(go));
+		}
+	});
 	for (const go of world.objects) {
 		if (go === character || go.id === 'MainCamera') {
 			continue;
@@ -208,6 +215,11 @@ export function lookWorld(character:GameObject, ambient:string, host?:GameHost):
 		const row = seenOf(go, character, host);
 		if (row.tags.includes('tree') || row.tags.includes('boulder')) {
 			continue;
+		}
+		const span = onSpan.get(go);
+		if (span) {
+			row.attachedTo = span;
+			row.attachMode = 'on';
 		}
 		objects.push(row);
 		const chest = go.getComponent(Chest);

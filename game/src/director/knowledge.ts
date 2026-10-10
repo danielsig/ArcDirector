@@ -1,36 +1,36 @@
-import { crowdEncyclopedia, type EncyclopediaEntry } from 'arc-director';
+import { crowdKnowledge, type KnowledgeEntry } from 'arc-director';
 
-const TREE = crowdEncyclopedia({
+const TREE = crowdKnowledge({
 	name: 'Tree',
 	tag: 'tree',
 	inside: ['forest', 'woods', 'grove'],
 	unitName: 'm',
 });
 
-const BOULDER:EncyclopediaEntry = {
+const BOULDER:KnowledgeEntry = {
 	name: 'Boulder',
 	aliases: ['rock', 'rocks'],
 	text: 'Landmark type. filter("Boulder"). Not BridgeStone.',
 };
 
-const RIVER:EncyclopediaEntry = {
+const RIVER:KnowledgeEntry = {
 	name: 'River',
 	aliases: ['water', 'stream', 'canal'],
 	text: 'Water, not reachable with go_to. Stay on land unless the scene names a bridge or gate.',
 };
 
-const BUY:EncyclopediaEntry = {
+const BUY:KnowledgeEntry = {
 	name: 'Buy',
 	aliases: ['buying', 'purchase', 'sell', 'selling'],
 	text: 'Buying is done like this: `buy(item=What, from=Seller)`. Selling is `sell(item=What, to=Buyer)`.',
 };
 
 /** A good one stall sells. */
-function ware(name:string, aliases:string[], seller:string, stall:string, ask:number):EncyclopediaEntry {
+function ware(name:string, aliases:string[], seller:string, stall:string, ask:number):KnowledgeEntry {
 	return { name, aliases, text: `Item. ${seller} sells it at ${stall}, asking ${ask} gold. buy(item=${name}, from=${seller}).`, item: true };
 }
 
-const GLEN:EncyclopediaEntry[] = [
+const GLEN:KnowledgeEntry[] = [
 	TREE,
 	{
 		name: 'Waterfall',
@@ -52,7 +52,7 @@ const GLEN:EncyclopediaEntry[] = [
 	{
 		name: 'Bridge',
 		aliases: ['sluice'],
-		text: 'Bridge over the river. Raised, no one can cross; lowered, they can. Only BridgeKeeper raises or lowers it, with BridgeCrank on BridgeLever. Handing over the fee does not move it. Sight says whether it is raised or lowered. He does not lower it unpaid: the fee is 10 gold or an item worth that. go_to(Bridge) when the scene shows it.',
+		text: 'Bridge over the river. Raised, no one can cross; lowered, they can. Only BridgeKeeper raises or lowers it, with BridgeCrank on BridgeLever. Handing over the fee does not move it. Sight says whether it is raised or lowered, and who is on it. It cannot be raised while anyone is on it. He does not lower it unpaid: the fee is 10 gold or an item worth that. go_to(Bridge) when the scene shows it.',
 	},
 	{
 		name: 'BridgeLever',
@@ -85,12 +85,12 @@ const GLEN:EncyclopediaEntry[] = [
 	},
 ];
 
-const RUINS:EncyclopediaEntry[] = [
+const RUINS:KnowledgeEntry[] = [
 	TREE,
 	BOULDER,
 ];
 
-const MARKETPLACE:EncyclopediaEntry[] = [
+const MARKETPLACE:KnowledgeEntry[] = [
 	RIVER,
 	{
 		name: 'EastGate',
@@ -136,7 +136,7 @@ const MARKETPLACE:EncyclopediaEntry[] = [
 	BUY,
 ];
 
-const DUNGEON_VAULT:EncyclopediaEntry[] = [
+const DUNGEON_VAULT:KnowledgeEntry[] = [
 	{
 		name: 'EastGate',
 		aliases: ['east gate', 'gate', 'door'],
@@ -199,7 +199,7 @@ const DUNGEON_VAULT:EncyclopediaEntry[] = [
 	},
 ];
 
-export const WORLD_ENCYCLOPEDIAS:Record<string, readonly EncyclopediaEntry[]> = {
+export const WORLD_KNOWLEDGE:Record<string, readonly KnowledgeEntry[]> = {
 	glen: GLEN,
 	ruins: RUINS,
 	marketplace: MARKETPLACE,

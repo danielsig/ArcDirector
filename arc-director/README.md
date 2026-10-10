@@ -21,10 +21,10 @@ You bring the world: a Three.js scene, a Babylon level, an ECS, or a grid of til
 - **Perception:** Stringifiers compact your game world into a single paragraph for the LLM.
 - **Map:** LLMs can look at a map of the game world (if vision capable).
 - **Inventory:** LLMs can view the inventory of the character.
-- **Encyclopedia:** LLMs can look up information provided by the game.
+- **Knowledge:** LLMs can recall what the game tells them about the world, alongside their own memories.
 - **Memory:** Long term memories form on the fly and can be recalled later.
 - **Recovery:** The LLM recovers from failures by correcting its `Arc`s.
-- **Feedback:** Relevant encyclopedia entries and memories are automatically injected.
+- **Feedback:** Relevant knowledge and memories are automatically injected based on context.
 - **Watches:** NPCs can use Expressions as conditions that trigger thinking.
 - **Laws:** NPCs can use `Laws` to react instantly to specific conditions.
 - **Verbs:** `Arc`s are composed of `Verb`s that are executed in sequence.
@@ -234,9 +234,9 @@ director.addCharacter({ id: 'Baker', mind: {}, kit: vendorKit }); // same object
 director.addCharacter({ id: 'Cook', mind: {}, kit: (ctx) => kitFor(ctx) }); // callback
 ```
 
-Every character and collective needs a kit, its own or the default one, and a fixed kit must name some `verbs`; `start()` throws otherwise. A collective's kit is what its mind may write; each of its characters runs steps with its own kit, and the roster tells the mind what one cannot do. `senses` / `tools` omitted = all registered senses / tools; `[]` = none. `start()` also throws if a kit grants a stock world verb whose `withWorld` part is missing (and no host handler or `onVerb` covers it), or names a verb, sense, or tool that is not registered (`recall` / `observe` always; `earshot` with talk; `see_map` with map and vision; `grep_world_encyclopedia` with `withEncyclopedia`).
+Every character and collective needs a kit, its own or the default one, and a fixed kit must name some `verbs`; `start()` throws otherwise. A collective's kit is what its mind may write; each of its characters runs steps with its own kit, and the roster tells the mind what one cannot do. `senses` / `tools` omitted = all registered senses / tools; `[]` = none. `start()` also throws if a kit grants a stock world verb whose `withWorld` part is missing (and no host handler or `onVerb` covers it), or names a verb, sense, or tool that is not registered (`recall` / `observe` always; `earshot` with talk; `see_map` with map and vision).
 
-**Senses** are English always in the user block (`scene`, inventory, events). **Tools** are on-demand (`recall`, `observe`, `see_map`, `grep_world_encyclopedia`). Kit `senses` / `tools` lists are allowlists over what you registered, not extra gatherers.
+**Senses** are English always in the user block (`scene`, inventory, events). **Tools** are on-demand (`recall`, `observe`, `see_map`). Kit `senses` / `tools` lists are allowlists over what you registered, not extra gatherers.
 
 Prompt, JSON schema, and parse use the kit of the mind's owner. A step whose verb is not available fails closed. `character.verbs` is the catalog; `character.activeVerbs()` is this tick. Assign `character.kit` when the grant actually changes, not every frame.
 
@@ -260,7 +260,7 @@ Senses every think in the user block; tools on demand. `addSense` / `addTool` re
 | ---------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `withSight({ look, limit, unitName })`   | Stock sense `sight`. `look` returns a `Sight` of `SeenObject[]` (`point` vectors). `limit` is the default max **irreducible sight clauses** after `sightFocus` order. A spec's `sightLimit` overrides. `unitName` is the leftover distance unit (`m`, `pace`, `foot`); omit for `pace`. Omit `look` to set only the cap; omit `limit` for no cap.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
 | `withInventory(look)`                    | Stock sense `carrying`. callback returns an `Inventory` bag. The list ends by saying nothing else is carried, so a role that often has something does not imply it has it now.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
-| `withEncyclopedia(pages, { mentions? })` | Stock tool `grep_world_encyclopedia`. `pages` is `{ name, aliases?, text }[]` or `(ctx) => pages`. Articles also come to a mind unasked: a name or alias said or heard lately brings its article under short-term memory (at most `mentions` per think, default 2, 0 for none; not again for 5 thinks). Mark things a character carries with `item: true`: their mention also says whether this mind carries one ("FireMushroom (you carry none)"), every time, so a claim in talk sits next to the truth for speaker and listener, and a name in a failed verb's reason brings its article under that result. `crowdEncyclopedia({ name, tag, inside })` builds a leftover-crowd article from `formatSight` (a bunch around you). Query leftover English (`trees`, `house`) or a spoken place (`forest`) for the Capitalized type. Empty query lists names. Articles stay out of the standing prefix. |
+| `withKnowledge(pages, { mentions? })` | What minds know of the world: `recall` searches these articles beside memory and returns `{ remember, know }` (at most 2 articles, `KNOW_CAP`), so a mind knows the world the way it remembers it. `pages` is `{ name, aliases?, text }[]` or `(ctx) => pages`. Articles also come to a mind unasked: a name or alias said or heard lately brings its article under short-term memory (at most `mentions` per think, default 2, 0 for none; not again for 5 thinks). Mark things a character carries with `item: true`: their mention also says whether this mind carries one ("FireMushroom (you carry none)"), every time, so a claim in talk sits next to the truth for speaker and listener, and a name in a failed verb's reason brings its article under that result. `crowdKnowledge({ name, tag, inside })` builds a leftover-crowd article from `formatSight` (a bunch around you). Query leftover English (`trees`, `house`) or a spoken place (`forest`) for the Capitalized type. Empty query lists the topics known. Articles stay out of the standing prefix. |
 | `withLineOfSight((aID, bID) => boolean)` | One occlusion callback for sight, talk `canSee`, and watch `hasSightline`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
 | `addSense(name, spec)`                   | Host-only sense. `spec` is `{ description, gather }`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
 | `addTool(name, spec)`                    | `spec` is `{ description, parameters, handler }`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
@@ -268,7 +268,7 @@ Senses every think in the user block; tools on demand. `addSense` / `addTool` re
 | `removeTool(...names)`                   | Same.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
 
 
-`Sight.self.id` is the name. Noun is `id`. Omit `withLineOfSight` and everything in `look()` is seen. Omit `addTool` and the host adds no tools. Built-in `recall` / `observe` / `see_map` / `grep_world_encyclopedia` still appear when those subsystems are on.
+`Sight.self.id` is the name. Noun is `id`. Omit `withLineOfSight` and everything in `look()` is seen. Omit `addTool` and the host adds no tools. Built-in `recall` / `observe` / `see_map` still appear when those subsystems are on.
 
 ### Context and kernels
 
@@ -340,7 +340,7 @@ director.pushEvent({ kind: 'Hurt', text: '{0} cleaved {1}', who: ['Brune', 'Helm
 
 - `withTalk(sense, onSpoke?, config?)`**:** range and routing, per character. Library routes `say()`. A mind hears through every character it thinks for: a collective through each of its characters, once per line, from whichever heard it best. That includes its characters talking to each other; only its own voice's lines are not heard back. A line said to, or naming, any of its characters is meant for it and wakes it, whichever character heard it; only a line to its voice reads `says to you`. A collective never speaks for itself; its commander does, or it issues `say` to one of its characters. Line of sight is `withLineOfSight`. When an arc ends on a `say`, the speaker waits up to 20 s for an answer before its next think (a watch can end it sooner; a `say` mid-arc never pauses the rest), but only when someone who could answer heard it clearly: the addressee when `to` is set, anyone otherwise. Unheard or muffled speech goes straight on. The say result names who it was for but could not make out the words (`heard by Baker; too far for Guard to make out the words: get closer`), and earshot marks them `too far to make out your words`. A `say` whose content words (stemmed) mostly repeat a line everyone it is for already heard clearly is refused before anyone hears it: "they already heard you say that". `hasHeard` is true only for speech meant for this mind.
 - `withMap(sense)`**:** host paints `see_map` pictures and marks characters, things and places by `id`; library stamps a legend in the mind's own names (no coordinates). Omitted unless vision is on.
-- `withEncyclopedia(pages)`**:** host type docs; minds `grep_world_encyclopedia(query)` instead of stuffing every type into the standing prefix.
+- `withKnowledge(pages)`**:** host type docs; minds `recall(query)` them beside memory instead of stuffing every type into the standing prefix.
 
 
 
@@ -476,7 +476,7 @@ The standing lines are yours to replace:
 | `withStalled(fn)`                        | Whether a finished arc stalled, which stretches that mind's heartbeat (default: failed or interrupted).                                                                                                                                                      |
 
 
-Tool hints (`see_map`, `grep_world_encyclopedia`, `observe`) appear only on thinks where that tool is actually offered.
+Tool hints (`see_map`, `recall` for knowledge, `observe`) appear only on thinks where that tool is actually offered.
 
 Keep the system side still across thinks:
 
@@ -550,7 +550,7 @@ const director = await new ArcDirector<CharacterCtx>()
 
 Defaults: `heartbeat` 0 under a director (its queue paces thinks; 30 in `soloCharacter`), `strategicInterval` 180. `strategicInterval <= 0` disables the periodic pass.
 
-Tactical: assemble senses → optional memory intrusion → tools (`recall`, `observe`, `earshot`, `see_map` when the host maps and the model can see, `grep_world_encyclopedia` when `withEncyclopedia` is set, plus host tools) up to `toolRoundCap` → `Arc` (JSON, or `go_to() && wait()` text when `arcText` is on). System vs user split is under [Prompt prefix](#prompt-prefix).
+Tactical: assemble senses → optional memory intrusion → tools (`recall`, `observe`, `earshot`, `see_map` when the host maps and the model can see, plus host tools; `recall` also searches knowledge when `withKnowledge` is set) up to `toolRoundCap` → `Arc` (JSON, or `go_to() && wait()` text when `arcText` is on). System vs user split is under [Prompt prefix](#prompt-prefix).
 
 ### Options
 
@@ -564,7 +564,7 @@ Tactical: assemble senses → optional memory intrusion → tools (`recall`, `ob
 | `recallK`                                  | 5                      | Default `recall` hit count                                  |
 | `hideObserve`                              | false                  | Omit the built-in `observe` tool                            |
 | `map`                                      | none                   | Host snapshots for `see_map`                                |
-| `encyclopedia`                             | none                   | Host type articles for `grep_world_encyclopedia`            |
+| `knowledge`                                | none                   | Host type articles `recall` searches beside memory          |
 | `vision`                                   | heuristic              | `true` / `false` for image input                            |
 
 
@@ -732,7 +732,7 @@ Each think, the prompt lists who is in talking range. `say(to)` is only valid fo
 
 If `toolRoundCap` is 0, no tools are offered, see_map included.
 
-`grep_world_encyclopedia` is the same kind of tool for **types**. Host pages are `{ name, aliases?, text }`, or `crowdEncyclopedia({ name, tag, inside })` which stringifies a bunch of that tag and distills leftover English plus surround-sense (being inside a spoken place). Query leftover English (`trees`, `house`) or a spoken place (`forest`); empty query lists names. Articles are not in the standing prefix. Never write `grep_world_encyclopedia(...)` in the arc.
+`recall` also answers for **types** when `withKnowledge` is set. Host pages are `{ name, aliases?, text }`, or `crowdKnowledge({ name, tag, inside })` which stringifies a bunch of that tag and distills leftover English plus surround-sense (being inside a spoken place). Query leftover English (`trees`, `house`) or a spoken place (`forest`); empty query lists the topics known. Articles are not in the standing prefix.
 
 ---
 
@@ -741,7 +741,7 @@ If `toolRoundCap` is 0, no tools are offered, see_map included.
 ## Perception helpers
 
 - `formatSight(sight: Sight)` writes what character is seeing.
-- `crowdEncyclopedia({ name, tag, inside })` stringifies a bunch of `tag` around you and writes the leftover-crowd article.
+- `crowdKnowledge({ name, tag, inside })` stringifies a bunch of `tag` around you and writes the leftover-crowd article.
 - `formatInventory(bag)` writes what character is carrying.
 
 > [!NOTE]
@@ -769,7 +769,7 @@ src/
   index.ts           public API
   director/          ArcDirector facade, CharacterSpec, CollectiveSpec, VerbCall
   character/         ArcRunner, Character, Persona, NameBook, watches, sight focus
-  mind/              Mind, prompts, name/id translation, TalkNet, map, encyclopedia
+  mind/              Mind, prompts, name/id translation, TalkNet, map, knowledge
   collective/        Collective, its verbs, who, tags, memory handover
   think/             MindQueue: ThinkQueue, SimpleQueue
   expr/              watch language, catalog, stringify
