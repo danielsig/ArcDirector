@@ -1,9 +1,12 @@
 import { fileURLToPath } from 'node:url';
 import { searchForWorkspaceRoot } from 'vite';
-import { defineConfig } from 'vite';
+import { defineConfig, loadEnv } from 'vite';
 import vue from '@vitejs/plugin-vue';
 import { aiLogPlugin } from './viteAiLog.ts';
 import { artCachePlugin } from './viteArtCache.ts';
+
+/** The TypeSafe key, from the repo-root `.env`. It stays on this dev server; the page posts to `/systemone` without it. */
+const TYPE_SAFE_KEY = loadEnv('development', fileURLToPath(new URL('..', import.meta.url)), '').TYPE_SAFE_KEY;
 
 export default defineConfig({
 	plugins: [vue(), aiLogPlugin(), artCachePlugin()],
@@ -33,6 +36,21 @@ export default defineConfig({
 				target: 'http://127.0.0.1:1234',
 				changeOrigin: true,
 				rewrite: (path) => path.replace(/^\/inference/, ''),
+			},
+			'/systemone': {
+				target: 'https://api.typesafe.ai',
+				changeOrigin: true,
+				rewrite: () => '/v1/systemone',
+				headers: TYPE_SAFE_KEY ? { Authorization: `Bearer ${TYPE_SAFE_KEY}` } : undefined,
+				// No key: answer 503 here, so nothing goes out unauthenticated and chat NPCs keep working.
+				bypass: (_req, res) => {
+					if (TYPE_SAFE_KEY || !res) {
+						return undefined;
+					}
+					res.statusCode = 503;
+					res.end('TYPE_SAFE_KEY is not set in the repo-root .env');
+					return false;
+				},
 			},
 		},
 	},

@@ -1,5 +1,8 @@
 import { verbHelp } from '../arc/schema.js';
-import type { VerbRegistry } from '../arc/stock-verbs.js';
+import { MIND_ONLY_VERBS, STOCK_ARC_VERBS, type VerbRegistry } from '../arc/stock-verbs.js';
+import { formatArcBlocks, parseArcText } from '../arc/parse.js';
+
+const STOCK_ARC_VERBS_SET = new Set<string>(STOCK_ARC_VERBS);
 import type { ArcResult } from '../arc/types.js';
 import type { MemoryRecord } from '../memory/store.js';
 import { GREP_WORLD_ENCYCLOPEDIA } from './encyclopedia.js';
@@ -166,6 +169,7 @@ function arcInstructions(
 		unnamedPlace(verbs),
 		afterWander(verbs),
 		has('wander') && 'wander(until) is one step, not the rest of the think.',
+		has('choose') && !has('issue') && chooseSentence(verbs, arcText, ''),
 		'If the order says then, after, or and then, put those steps in one chain this think.',
 		spokenGo(verbs, toolNames.includes('see_map')),
 		collectiveInstructions(verbs),
@@ -209,14 +213,20 @@ function toolInstructions(toolNames:string[]):string {
 function emitSentence(arcText:boolean, tools:boolean):string {
 	const lead = tools ? 'Once you know enough, emit only' : 'Answer immediately with only';
 	const kind = arcText ? 'the Arc text' : 'the Arc JSON';
-	const ban = arcText ? 'No JSON, no prose.' : 'Close every brace. No prose.';
+	const ban = arcText ? `No JSON, no prose. ${BLOCK_LAYOUT}` : 'Close every brace. No prose.';
 	return `${lead} ${kind}. ${ban}`;
 }
+
+/**
+ * Arc text layout. Indentation counts the parens: on one line a small model miscounts a run of `)))))`, nests the
+ * next issue inside the last, or ends the run with a Python-style `:`.
+ */
+const BLOCK_LAYOUT = 'A call that holds an arc or choices opens on its own line, its args go one per line a tab deeper, each ending in a comma, and its ) stands alone at the opener\'s depth. A call with no arc inside stays on one line.';
 
 /** Last in the prefix so a copied Example is valid Arc, with no trailing sentence. */
 function arcExample(arcText:boolean, chain:boolean, issues:boolean):string | false {
 	if (issues && arcText) {
-		return 'Example: issue(who=units.filter("Guard"), arc=go_to(Keep)) ; issue(who=units.filter("Scout"), arc=go_to(EastGate))';
+		return 'Example:\nissue(\n\twho=units.filter("Guard"),\n\tarc=go_to(Keep),\n)\nissue(\n\twho=units.filter("Scout"),\n\tarc=go_to(EastGate) && wait(seconds=5),\n)';
 	}
 	if (chain) {
 		return arcText
@@ -280,6 +290,36 @@ function spokenGo(verbs:VerbRegistry, map = false):string {
 	return `${parts.join(' ')} `;
 }
 
+/**
+ * How to write `choose`, with an example made of verbs the kit really grants (then the catalog's), so a model that
+ * copies it still writes a valid arc. `wrap` opens what the loop goes in (`issue(who=units, arc=`), closed after it.
+ */
+function chooseSentence(verbs:VerbRegistry, arcText:boolean, wrap:string):string {
+	const pool = [...verbs.list(), ...verbs.nested().list().filter((spec) => !verbs.has(spec.name))];
+	const bare = pool
+		.filter((spec) => spec.name !== 'choose' && !STOCK_ARC_VERBS_SET.has(spec.name) && !MIND_ONLY_VERBS.includes(spec.name)
+			&& Object.values(spec.args).every((kind) => kind.endsWith('?')))
+		.slice(0, 2)
+		.map((spec) => `${spec.name}=${spec.name}()`);
+	const choices = bare.length === 2 ? bare.join(', ') : 'first=<arc>, second=<arc>';
+	const example = asBlocks(`${wrap}loop(choose("why you choose", ${choices}))${wrap ? ')' : ''}`, verbs);
+	if (!arcText) {
+		return 'choose takes a goal and its choices as named arc args; a fast model runs the one that fits right now, and loop keeps it choosing.';
+	}
+	// Small models otherwise write `"label", arc` pairs, and turn the goal into the first label.
+	return `Each choice is name=arc after a goal in quotes, as in:\n${example}\nThe goal is choose's only quoted string: never a quoted label before a choice. A fast model runs the one that fits right now, again on each loop, with no think.`;
+}
+
+/** Arc `text` in block layout, or as written where it does not parse (a placeholder). */
+function asBlocks(text:string, verbs:VerbRegistry):string {
+	try {
+		return formatArcBlocks(parseArcText(text, verbs), verbs);
+	}
+	catch {
+		return text;
+	}
+}
+
 function collectiveInstructions(verbs:VerbRegistry):string {
 	const parts:string[] = [];
 	if (verbs.has('when')) {
@@ -290,11 +330,15 @@ function collectiveInstructions(verbs:VerbRegistry):string {
 	if (verbs.has('issue')) {
 		parts.push(
 			`issue(who, arc) assigns a sticky program to matching units (never you). who is YOUR roster (units.filter("Witch")), never an enemy. `
-			+ `allUnits is one identical program for every troop. Join several issue with ;. Each issue arc is that unit's full chain. `,
+			+ `allUnits is one identical program for every troop. Join several issue with ; or a new line. Each issue arc is that unit's full chain. `
+			+ `One who per issue: a program for several roles is one issue per role, or one who that matches them all (units.filter(u => u is "Archer" || u is "Witch")). `,
 		);
 	}
 	if (verbs.has('loop')) {
 		parts.push('loop(arc) repeats until fail. through= / until= / times=. ');
+	}
+	if (verbs.has('issue') && verbs.has('choose')) {
+		parts.push(`${chooseSentence(verbs, true, 'issue(who=units, arc=')} `);
 	}
 	if (verbs.has('law') || verbs.has('unlaw')) {
 		const who = verbs.has('issue')
@@ -335,12 +379,18 @@ export function volatileBlock(opts:{
 	/** `Name: article` lines for what was said and heard, shown under short-term memory. */
 	mentioned?:string;
 	recent?:string[];
+	/** Last few utterances, oldest first: `Me: …`, `Forager: …`. */
+	conversation?:string[];
 	thinkAbout?:string;
 }):string {
 	const parts:string[] = [];
 	const recent = shortTermBlock(opts.recentSummary ?? '', opts.recent ?? []);
 	if (recent) {
 		parts.push(recent);
+	}
+	const conversation = conversationBlock(opts.conversation ?? []);
+	if (conversation) {
+		parts.push(conversation);
 	}
 	if (opts.mentioned?.trim()) {
 		parts.push(`Encyclopedia on what was said:\n${opts.mentioned.trim()}`);
@@ -418,8 +468,7 @@ export function shortTermBlock(summary:string, recent:string[]):string {
 		return '';
 	}
 	const lines = [
-		// Heard claims are not facts: unchecked, minds adopt and repeat each other's inventions until they all agree on one.
-		'Short-term memory (later line wins. Honor orders even if older role text disagrees. What others say is their claim, not a fact: check it before you act on it or repeat it. Never say again what you already said):',
+		'Short-term memory (later line wins. Sight is what is true now: check it before you act on what you half heard):',
 	];
 	if (earlier) {
 		lines.push(`Earlier: ${earlier}`);
@@ -431,6 +480,19 @@ export function shortTermBlock(summary:string, recent:string[]):string {
 		}
 	}
 	return lines.join('\n');
+}
+
+// Heard claims are not facts: unchecked, minds adopt and repeat each other's inventions until they all agree on one.
+export const CONVERSATION_HEADER = 'Current Conversation (oldest first; Me is you. Honor orders even if older role text disagrees. '
+	+ 'What anyone says, you too, is a claim, not the world: check sight before you act on it or repeat it. Never say again what you already said):';
+
+/** What was clearly said lately, oldest first. Empty when no one has spoken. */
+export function conversationBlock(lines:readonly string[]):string {
+	const turns = lines.map((line) => line.trim()).filter((line) => line.length > 0);
+	if (turns.length === 0) {
+		return '';
+	}
+	return `${CONVERSATION_HEADER}\n${turns.join('\n')}`;
 }
 
 /** Follow-up when this reply is the same text as the last one accepted, twice in a row or more. */

@@ -7,7 +7,8 @@ import {
 	type Step,
 	type StepArg,
 } from './types.js';
-import { argBase, type VerbRegistry } from './stock-verbs.js';
+import { argBase, CHOOSE_VERB, type VerbRegistry } from './stock-verbs.js';
+import { isChoiceName, MAX_CHOICES } from './choose.js';
 
 const COORD_KEYS = new Set(['x', 'z', 'y', 'xz', 'xy', 'pos', 'position']);
 
@@ -24,6 +25,31 @@ export function isArc(v:unknown):v is Arc {
 		return isArc(v.group);
 	}
 	return false;
+}
+
+/** Every `watch` and `expr` arg in `arc`, nested arcs and choices too, in the order written. */
+export function exprArgs(arc:Arc, verbs:VerbRegistry):string[] {
+	const out:string[] = [];
+	const walk = (at:Arc, registry:VerbRegistry):void => {
+		if (at.group) {
+			walk(at.group, registry);
+		}
+		const kinds = registry.get(at.head.verb)?.args ?? {};
+		for (const [key, value] of Object.entries(at.head.args)) {
+			const kind = argBase(kinds[key]);
+			if (isArc(value)) {
+				walk(value, registry.nested());
+			}
+			else if ((kind === 'watch' || kind === 'expr') && typeof value === 'string' && value.trim()) {
+				out.push(value);
+			}
+		}
+		if (at.then) {
+			walk(at.then.arc, registry);
+		}
+	};
+	walk(arc, verbs);
+	return out;
 }
 
 function isStepArg(v:unknown):v is StepArg {
@@ -57,6 +83,10 @@ export function validateStep(step:Step, registry:VerbRegistry, inIssue = false):
 		throw new ArcError('issue inside an issue arc; close each issue(...) before the next');
 	}
 	rejectMigrationArgs(step.verb, step.args);
+	if (step.verb === CHOOSE_VERB) {
+		validateChoose(step, registry, inIssue);
+		return;
+	}
 	for (const key of Object.keys(step.args)) {
 		if (COORD_KEYS.has(key.toLowerCase())) {
 			throw new ArcError(`coordinate arg '${key}' is not allowed`);
@@ -95,6 +125,31 @@ export function validateStep(step:Step, registry:VerbRegistry, inIssue = false):
 	}
 }
 
+/** A text `goal`, and 1 to {@link MAX_CHOICES} choices, each an arc under a name that is not reserved. */
+function validateChoose(step:Step, registry:VerbRegistry, inIssue:boolean):void {
+	const goal = step.args.goal;
+	if (typeof goal !== 'string' || !goal.trim()) {
+		throw new ArcError('choose needs a goal: choose("hold the gate", name=arc, …)');
+	}
+	const names = Object.keys(step.args).filter((key) => key !== 'goal');
+	if (names.length === 0) {
+		throw new ArcError('choose needs at least one name=arc choice');
+	}
+	if (names.length > MAX_CHOICES) {
+		throw new ArcError(`choose takes at most ${MAX_CHOICES} choices`);
+	}
+	for (const name of names) {
+		const value = step.args[name];
+		if (!isChoiceName(name)) {
+			throw new ArcError(`'${name}' cannot name a choice`);
+		}
+		if (!isArc(value)) {
+			throw new ArcError(`choice '${name}' must be an arc`);
+		}
+		validateArc(value, registry.nested(), inIssue);
+	}
+}
+
 export function validateArc(arc:Arc, registry:VerbRegistry, inIssue = false):void {
 	if (arc.group) {
 		validateArc(arc.group, registry, inIssue);
@@ -128,8 +183,7 @@ export function asStep(raw:unknown, registry:VerbRegistry):Step {
 			if (k === 'then' || v === undefined || v === null) {
 				continue;
 			}
-			const kind = spec?.args[k];
-			const base = argBase(kind);
+			const base = raw.verb === CHOOSE_VERB && k !== 'goal' ? 'arc' : argBase(spec?.args[k]);
 			if (base === 'arc') {
 				args[k] = asArc(v, registry.nested());
 				continue;

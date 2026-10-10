@@ -71,7 +71,8 @@ function mapStep(step:Step, verbs:VerbRegistry, map:WordMap):Step {
 	const args = { ...step.args };
 	for (const [key, value] of Object.entries(args)) {
 		const kind = argBase(kinds[key]);
-		if (kind === 'arc' && isArc(value)) {
+		// Any arc value, so `choose`'s named choices count too.
+		if (isArc(value)) {
 			args[key] = mapArc(value, verbs.nested(), map);
 		}
 		else if (typeof value === 'string') {

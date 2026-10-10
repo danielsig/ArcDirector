@@ -11,7 +11,7 @@
 		"build": "vue-tsc --noEmit && vite build",
 		"preview": "vite preview",
 		"typecheck": "vue-tsc --noEmit",
-		"test": "node --experimental-strip-types --test src/prefs.test.ts",
+		"test": "node --experimental-strip-types --test src/prefs.test.ts src/ui/bindings.test.ts",
 		"normals": "node scripts/depth_to_normal.mjs",
 		"art-cache": "node scripts/artCachePack.mjs",
 		"pack-sheets": "node scripts/pack_character_sheets.mjs",

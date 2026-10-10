@@ -78,6 +78,18 @@ describe('setPrefs', () => {
 		assert.equal('bogus' in stored(), false);
 	});
 
+	it('defaults System One off and Force schema off, and keeps only known System One kinds', () => {
+		assert.equal(prefs().systemOne, 'off');
+		assert.equal(prefs().forceSchema, false);
+		setPrefs({ systemOne: 'jev', forceSchema: true });
+		assert.equal(stored().systemOne, 'jev');
+		assert.equal(stored().forceSchema, true);
+		const next = setPrefs(coercePrefsPatch({ systemOne: 'gpt', forceSchema: 'yes' }));
+		assert.equal(next.systemOne, 'jev');
+		assert.equal(next.forceSchema, true);
+		assert.equal(setPrefs(coercePrefsPatch({ systemOne: 'local' })).systemOne, 'local');
+	});
+
 	it('tells watchers what changed', () => {
 		const seen:[boolean, boolean][] = [];
 		const stop = watchPrefs((next, prev) => {

@@ -21,8 +21,8 @@ function sleep(ms:number):Promise<void> {
 async function stage(reply:(req:ChatRequest)=>string = () => '{}') {
 	const calls:ChatRequest[] = [];
 	const director = await new ArcDirector<Ctx>()
-		.withPriorityQueue({ processInterval: 0, watchInterval: 0, heartbeatStart: 100, heartbeatMin: 100, maxParallel: 2 })
-		.withFakeInference((req) => {
+		.withPriorityQueue({ processInterval: 0, watchInterval: 0, heartbeatStart: 100, heartbeatMin: 100 })
+		.addFakeInference((req) => {
 			if (req.thread !== HANDOVER_THREAD) {
 				return { content: 'wait()', toolCalls: [] };
 			}

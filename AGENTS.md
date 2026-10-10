@@ -102,7 +102,7 @@ The game is served at `http://localhost:5173/` (Vite default). There is no path 
 
 | Param | Kind | Meaning |
 |-------|------|---------|
-| `scene` | play | Scene id. `abbey_vault`, `glen`, `marketplace`, or `ruins`. Omit (or unknown id) → scene picker. |
+| `scene` | play | Scene id. `dungeon_vault`, `glen`, `marketplace`, or `ruins`. Omit (or unknown id) → scene picker. |
 | `observer` | test | `1` = player is inperceivable by NPCs (observer). `0` = NPCs can see, hear, and walk to the player. Also `true`/`false`. |
 | `ai` | test | `1` = ArcDirector runs (NPCs think and move). `0` = paused (no inference, NPC motors frozen). Also `true`/`false`. |
 | `view` | agent | Full camera shot: `x,y,z,yaw`. All four numbers or the param is ignored (no partial pose). X/Z are meters on the ground; Y is height; yaw is radians. `0` yaw looks toward −Z (north); `1.5708` (π/2) toward −X (west); `3.1416` (π) toward +Z (south). Yaw also faces the player. Camera follows the player. |
@@ -125,7 +125,7 @@ http://localhost:5173/
 Play (autosave pose, default flags):
 
 ```
-http://localhost:5173/?scene=abbey_vault
+http://localhost:5173/?scene=dungeon_vault
 ```
 
 Agent forced test view (prefer this when checking a specific place):

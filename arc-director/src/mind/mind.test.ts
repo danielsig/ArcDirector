@@ -6,7 +6,8 @@ import { chatContentText } from '../inference/provider.js';
 import { formatSight, formatSightClauses } from '../perception/sight.js';
 import type { SeenObject } from '../perception/types.js';
 import { soloCharacter, type SoloOptions } from '../testing/solo.js';
-import { mindFields } from './mind.js';
+import { conversationCapFor, mindFields } from './mind.js';
+import { CONVERSATION_HEADER } from './prompt.js';
 import type { Character, CharacterJSON } from '../character/character.js';
 
 /** A saved character, restored on its own. */
@@ -15,7 +16,7 @@ function restore<TCtx>(json:CharacterJSON, deps:Omit<SoloOptions<TCtx>, 'id'>) {
 }
 import { DEFAULT_YOU_SYMBOL } from './map.js';
 import { TalkNet } from './talk.js';
-import type { Sense, ToolSpec } from './types.js';
+import type { MindEvent, Sense, ToolSpec } from './types.js';
 import { withPriorityQueue } from '../think/queue.js';
 import { buildCatalog, dummyEntity, SampleCache } from '../expr/index.js';
 
@@ -25,6 +26,23 @@ function stockVerbs():{ verbs:VerbRegistry; kit:{ verbs:readonly string[] } } {
 }
 
 type Ctx = { paragraph:string };
+
+/** A line `speakerID` said clearly, as TalkNet delivers it. */
+function heard(speakerID:string, text:string, to:string[] = []):MindEvent {
+	return {
+		kind: 'HeardSpeech',
+		remember: true,
+		text: `${speakerID} says${to.length > 0 ? ` to ${to.join(', ')}` : ''}: "${text}"`,
+		tags: ['speech'],
+		turn: { speakerID, to, text },
+	};
+}
+
+/** The Current Conversation lines in a prompt. */
+function conversationOf(prompt:string | undefined):string[] {
+	const block = (prompt ?? '').split(`${CONVERSATION_HEADER}\n`)[1];
+	return block ? block.split('\n\n')[0].split('\n') : [];
+}
 
 function named(id:string, extra:Partial<SeenObject> & { x?:number; z?:number } = {}):SeenObject {
 	const { x, z, ...rest } = extra;
@@ -180,7 +198,7 @@ describe('Agent', () => {
 		assert.equal(arc?.head.args.target, 'EastGate');
 	});
 
-	it('surfaces unpinned speech in the next think without a recall tool', async () => {
+	it('recalls a speech line only after it leaves the conversation', async () => {
 		const users:string[] = [];
 		const provider = new FakeProvider((req) => {
 			users.push(String(req.messages[req.messages.length - 1]?.content ?? ''));
@@ -202,26 +220,20 @@ describe('Agent', () => {
 			toolRoundCap: 0,
 			arcRetryCap: 0,
 			strategicInterval: 0,
+			conversationCap: 10,
 		});
-		agent.mind!.pushEvent({
-			kind: 'HeardSpeech',
-			remember: true,
-			text: 'BridgeKeeper says to Forager: "The bridge fee is FireMushroom."',
-			tags: ['speech'],
-		});
+		agent.mind!.pushEvent(heard('BridgeKeeper', 'The bridge fee is FireMushroom.', ['Forager']));
 		await agent.mind!.tick(1);
-		for (let i = 0; i < 8; i++) {
-			agent.mind!.pushEvent({
-				kind: 'HeardSpeech',
-				remember: true,
-				text: `Player says: "Noise ${i}."`,
-				tags: ['speech'],
-			});
+		assert.deepEqual(conversationOf(users[0]), ['BridgeKeeper (to you): The bridge fee is FireMushroom.']);
+		assert.doesNotMatch(users[0] ?? '', /You remember:[^]*bridge fee/);
+		assert.ok(agent.persona.memory.all().some((row) => row.text.includes('bridge fee')));
+		for (let i = 0; i < 10; i++) {
+			agent.mind!.pushEvent(heard('Player', `Noise ${i}.`));
 		}
 		users.length = 0;
 		await agent.mind!.tick(2);
-		assert.match(users[0] ?? '', /You remember:/);
-		assert.match(users[0] ?? '', /bridge fee is FireMushroom/);
+		assert.equal(conversationOf(users[0]).some((line) => line.startsWith('BridgeKeeper')), false);
+		assert.match(users[0] ?? '', /You remember:[^]*bridge fee is FireMushroom/);
 	});
 
 	it('keeps last-seen of a name after it leaves sight, and nothing for names it only heard of', async () => {
@@ -544,7 +556,7 @@ describe('Agent', () => {
 		assert.equal((users[1] ?? '').includes('Encyclopedia on what was said'), false);
 	});
 
-	it('makes the think after three talk-only arcs look something up first', async () => {
+	it('tells the think after three talk-only arcs to stop talking and act, with every tool still offered', async () => {
 		const firstTurns:{ choice?:string; user:string; tools:string[] }[] = [];
 		let n = 0;
 		const provider = new FakeProvider((req) => {
@@ -572,11 +584,10 @@ describe('Agent', () => {
 		for (let t = 1; t <= 4; t++) {
 			await agent.mind!.tick(t * 10);
 		}
-		assert.deepEqual(firstTurns.map((turn) => turn.choice), ['auto', 'auto', 'auto', 'required']);
-		assert.match(firstTurns[3].user, /only talked or waited for 3 thinks\. Look up what you lack/);
-		assert.equal(firstTurns[2].user.includes('Look up what you lack'), false);
-		assert.ok(firstTurns[2].tools.includes('observe'));
-		assert.deepEqual(firstTurns[3].tools, ['recall']);
+		assert.deepEqual(firstTurns.map((turn) => turn.choice), ['auto', 'auto', 'auto', 'auto']);
+		assert.match(firstTurns[3].user, /only talked or waited for 3 thinks\. Stop talking: take the next step toward your goal/);
+		assert.equal(firstTurns[2].user.includes('Stop talking'), false);
+		assert.deepEqual(firstTurns[3].tools, firstTurns[2].tools, 'no lookup is forced: it may act at once');
 	});
 
 	it('refuses a repeated tool call in one think instead of rerunning it', async () => {
@@ -984,7 +995,7 @@ describe('Agent', () => {
 		assert.equal(calls, 2);
 	});
 
-	it('keeps heard speech in short-term memory on later thinks', async () => {
+	it('keeps heard speech in the conversation on later thinks', async () => {
 		const users:string[] = [];
 		const provider = new FakeProvider((req) => {
 			const last = req.messages[req.messages.length - 1];
@@ -994,9 +1005,7 @@ describe('Agent', () => {
 				toolCalls: [],
 			};
 		});
-		const agent = soloCharacter<Ctx>({
-			id: 'Assistant',
-			identity: { role: 'You assist Player.' },
+		const deps = {
 			provider,
 			...stockVerbs(),
 			...perception(),
@@ -1006,41 +1015,62 @@ describe('Agent', () => {
 			toolRoundCap: 0,
 			arcRetryCap: 0,
 			strategicInterval: 0,
-		});
-		agent.mind!.pushEvent({
-			kind: 'HeardSpeech',
-			text: 'Player says to you: "Stay inside the cottage."',
-			tags: ['speech', 'Player'],
-			major: true,
-		});
+		};
+		const agent = soloCharacter<Ctx>({ id: 'Assistant', identity: { role: 'You assist Player.' }, ...deps });
+		agent.mind!.pushEvent({ ...heard('Player', 'Stay inside the cottage.', ['Assistant']), major: true });
 		await agent.mind!.tick(1);
-		assert.match(users[0] ?? '', /Stay inside the cottage/);
+		assert.deepEqual(conversationOf(users[0]), ['Player (to you): Stay inside the cottage.']);
 		await agent.mind!.tick(2);
-		assert.match(users[1] ?? '', /Short-term memory/);
-		assert.match(users[1] ?? '', /Stay inside the cottage/);
-		const saved = agent.toJSON();
-		assert.ok((saved.mind!.recent ?? []).some((line) => line.includes('Stay inside the cottage')));
-		const restored = restore(saved, {
-			provider,
-			...stockVerbs(),
-			...perception(),
-			context: () => ({ paragraph: paragraph() }),
-			model: 'fake',
-			heartbeat: 0,
-			toolRoundCap: 0,
-			arcRetryCap: 0,
-			strategicInterval: 0,
-		});
+		assert.deepEqual(conversationOf(users[1]), ['Player (to you): Stay inside the cottage.']);
+		const restored = restore(agent.toJSON(), deps);
 		users.length = 0;
 		await restored.mind!.tick(3);
-		assert.match(users[0] ?? '', /Stay inside the cottage/);
+		assert.deepEqual(conversationOf(users[0]), ['Player (to you): Stay inside the cottage.']);
 	});
 
-	it('folds overflow short-term lines into an Earlier summary', async () => {
+	it('shows the last lines the host set, oldest first', async () => {
 		const users:string[] = [];
 		const provider = new FakeProvider((req) => {
-			const last = req.messages[req.messages.length - 1];
-			users.push(String(last?.content ?? ''));
+			users.push(String(req.messages[req.messages.length - 1]?.content ?? ''));
+			return {
+				content: JSON.stringify({ head: { verb: 'wait', args: { seconds: 1 } } }),
+				toolCalls: [],
+			};
+		});
+		const agent = soloCharacter<Ctx>({
+			id: 'Guard',
+			identity: { role: 'Watch.' },
+			provider,
+			...stockVerbs(),
+			...perception(),
+			context: () => ({ paragraph: paragraph() }),
+			model: 'fake',
+			heartbeat: 0,
+			toolRoundCap: 0,
+			arcRetryCap: 0,
+			strategicInterval: 0,
+			conversationCap: 10,
+		});
+		for (let i = 0; i < 12; i++) {
+			agent.mind!.pushEvent(heard('Player', `Order ${i}.`));
+		}
+		agent.mind!.contextTokens = 1024;
+		await agent.mind!.tick(1);
+		assert.deepEqual(conversationOf(users[0]), Array.from({ length: 10 }, (_, n) => `Player: Order ${n + 2}.`));
+		assert.equal(agent.mind!.settings().conversationCap, 10);
+		assert.equal(agent.persona.memory.all().filter((row) => row.text.includes('Order')).length, 12);
+	});
+
+	it('shows 2 conversation lines per 1K tokens of context, at most 64', async () => {
+		assert.equal(conversationCapFor(1024), 2);
+		assert.equal(conversationCapFor(8192), 16);
+		assert.equal(conversationCapFor(32768), 64);
+		assert.equal(conversationCapFor(131072), 64);
+		assert.equal(conversationCapFor(0), 0);
+		assert.equal(conversationCapFor(undefined), 64);
+		const users:string[] = [];
+		const provider = new FakeProvider((req) => {
+			users.push(String(req.messages[req.messages.length - 1]?.content ?? ''));
 			return {
 				content: JSON.stringify({ head: { verb: 'wait', args: { seconds: 1 } } }),
 				toolCalls: [],
@@ -1059,21 +1089,80 @@ describe('Agent', () => {
 			arcRetryCap: 0,
 			strategicInterval: 0,
 		});
-		for (let i = 0; i < 10; i++) {
-			agent.mind!.pushEvent({
-				kind: 'HeardSpeech',
-				text: `Player says to you: "Order ${i}."`,
-				tags: ['speech', 'Player'],
-				major: true,
-			});
+		agent.mind!.contextTokens = 2048;
+		for (let i = 0; i < 6; i++) {
+			agent.mind!.pushEvent(heard('Player', `Tok ${i}.`));
 		}
 		await agent.mind!.tick(1);
-		const text = users.find((u) => u.includes('environment:')) ?? users.at(-1) ?? '';
-		const stm = text.split(/\n\nYou remember:/)[0] ?? text;
-		assert.match(stm, /Earlier:/);
-		assert.match(stm, /Earlier: .*"Order 0\."; Player says to you: "Order 1\."/);
-		assert.match(stm, /Order 9/);
-		assert.doesNotMatch(stm, /^- Player says to you: "Order 0\."$/m);
+		assert.deepEqual(conversationOf(users[0]), ['Player: Tok 2.', 'Player: Tok 3.', 'Player: Tok 4.', 'Player: Tok 5.']);
+		agent.mind!.contextTokens = 8192;
+		users.length = 0;
+		await agent.mind!.tick(2);
+		assert.equal(conversationOf(users[0]).length, 6);
+		assert.equal(agent.mind!.settings().conversationCap, undefined);
+	});
+
+	it('names its own lines Me, the listener you, and others as it knows them', async () => {
+		const talk = new TalkNet({
+			inRange: () => true,
+			others: (id) => id === 'BridgeKeeper' ? ['Forager'] : ['BridgeKeeper'],
+		});
+		const prompts:string[] = [];
+		const said:string[] = [];
+		let keeperCalls = 0;
+		const keeper = soloCharacter<Ctx>({
+			id: 'BridgeKeeper',
+			identity: { role: 'Keeper.' },
+			provider: new FakeProvider((req) => {
+				keeperCalls += 1;
+				said.push(String(req.messages[req.messages.length - 1]?.content ?? ''));
+				if (keeperCalls === 1) {
+					return {
+						content: JSON.stringify({ head: { verb: 'say', args: { text: 'That costs 10 gold.', to: 'Forager' } } }),
+						toolCalls: [],
+					};
+				}
+				return {
+					content: JSON.stringify({ head: { verb: 'wait', args: { seconds: 1 } } }),
+					toolCalls: [],
+				};
+			}),
+			execute: async (step) => ({ ok: true, verb: step.verb }),
+			...stockVerbs(),
+			...perception(),
+			context: () => ({ paragraph: paragraph() }),
+			model: 'fake',
+			talk,
+			heartbeat: 0,
+			toolRoundCap: 0,
+			arcRetryCap: 0,
+			strategicInterval: 0,
+		});
+		const forager = soloCharacter<Ctx>({
+			id: 'Forager',
+			identity: { role: 'Forager.' },
+			provider: new FakeProvider((req) => {
+				prompts.push(String(req.messages[req.messages.length - 1]?.content ?? ''));
+				return {
+					content: JSON.stringify({ head: { verb: 'wait', args: { seconds: 1 } } }),
+					toolCalls: [],
+				};
+			}),
+			...stockVerbs(),
+			...perception(),
+			context: () => ({ paragraph: paragraph() }),
+			model: 'fake',
+			talk,
+			heartbeat: 0,
+			toolRoundCap: 0,
+			arcRetryCap: 0,
+			strategicInterval: 0,
+		});
+		await keeper.mind!.tick(1);
+		await forager.mind!.tick(1);
+		await keeper.mind!.tick(2);
+		assert.deepEqual(conversationOf(prompts[0]), ['BridgeKeeper (to you): That costs 10 gold.']);
+		assert.deepEqual(conversationOf(said.at(-1)), ['Me (to Forager): That costs 10 gold.']);
 	});
 
 	it('applies identity and goals from the arc JSON', async () => {
@@ -1725,7 +1814,7 @@ describe('Agent', () => {
 	});
 
 	it('tick occupies a think slot; enact arms wait(until) and notes the queue', async () => {
-		const think = withPriorityQueue({ watchInterval: 100, processInterval: 0, maxParallel: 2 });
+		const think = withPriorityQueue({ watchInterval: 100, processInterval: 0 });
 		const q = think.queue;
 		const provider = new FakeProvider(() => ({
 			content: JSON.stringify({
@@ -1773,7 +1862,7 @@ describe('Agent', () => {
 	});
 
 	it('thinkNow skips heartbeat and occupies the think slot', async () => {
-		const think = withPriorityQueue({ watchInterval: 100, processInterval: 0, maxParallel: 2 });
+		const think = withPriorityQueue({ watchInterval: 100, processInterval: 0 });
 		const q = think.queue;
 		const agent = soloCharacter<Ctx>({
 			id: 'Guard',
@@ -1806,7 +1895,7 @@ describe('Agent', () => {
 	});
 
 	it('replaces a live arc when the current verb did not change during think', async () => {
-		const think = withPriorityQueue({ watchInterval: 100, processInterval: 0, maxParallel: 2 });
+		const think = withPriorityQueue({ watchInterval: 100, processInterval: 0 });
 		let releaseGoTo:(()=>void) | undefined;
 		const chats:Array<{ enableThinking?:boolean; fakeThought?:boolean; user:string }> = [];
 		const replies = [
@@ -1853,13 +1942,13 @@ describe('Agent', () => {
 		assert.equal(next?.head.verb, 'wait');
 		assert.equal(agent.mind!.lastArc?.head.verb, 'wait');
 		assert.equal(chats.length, 2);
-		assert.equal(chats[1]?.enableThinking, undefined);
+		assert.equal(chats[1]?.enableThinking, true, 'a fresh think asks for the mind\'s own thinking');
 		assert.equal(chats[1]?.fakeThought, undefined);
 		assert.equal(chats[1]?.user.includes('live verb changed'), false);
 	});
 
 	it('asks again with a canned thought when the live verb changed, and confirm keeps the first arc', async () => {
-		const think = withPriorityQueue({ watchInterval: 100, processInterval: 0, maxParallel: 2 });
+		const think = withPriorityQueue({ watchInterval: 100, processInterval: 0 });
 		const gates = new Map<string, (result:{ ok:boolean; interrupted?:boolean; verb:string })=>void>();
 		let hangThink:((res:{ content:string; toolCalls:[] })=>void) | undefined;
 		const chats:Array<{ enableThinking?:boolean; fakeThought?:boolean; user:string }> = [];
@@ -1934,7 +2023,7 @@ describe('Agent', () => {
 	});
 
 	it('uses a new verb list from the canned-thought follow-up when the live verb changed', async () => {
-		const think = withPriorityQueue({ watchInterval: 100, processInterval: 0, maxParallel: 2 });
+		const think = withPriorityQueue({ watchInterval: 100, processInterval: 0 });
 		const gates = new Map<string, (result:{ ok:boolean; interrupted?:boolean; verb:string })=>void>();
 		let hangThink:((res:{ content:string; toolCalls:[] })=>void) | undefined;
 		const chats:Array<{ fakeThought?:boolean }> = [];
@@ -2039,7 +2128,7 @@ describe('repairs, mind verbs, and names', () => {
 		const arc = await agentOf(provider, { repairTemperature: 0.7 }).mind!.tick(1);
 		assert.equal(arc?.head.args.target, 'EastGate');
 		assert.deepEqual(temps, [0, 0, 0.7]);
-		assert.deepEqual(thinking, [undefined, false, false]);
+		assert.deepEqual(thinking, [true, false, false]);
 	});
 
 	it('watch, unwatch, focus, and unfocus edit the extras and leave pins alone', async () => {

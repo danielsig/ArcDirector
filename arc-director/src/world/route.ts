@@ -23,11 +23,11 @@ export function blockedReason(blocked:Blocked):string {
 /** Points a search may settle along open ways, and again along blocked ones, before it gives up. */
 export const SEARCH_CAP = 4096;
 
-/** Key of the destination itself, which need not be a point of the graph. */
-const GOAL = 'goal';
+/** Key of the goal's own point, which need not be a point of the graph. */
+const END = 'end';
 
 /** `via` is the first blocked step on the way here; open ways have none and always come first. */
-type Node = { point:Vec; cost:number; rank:number; prev?:Node; via?:string; goal?:boolean };
+type Node = { point:Vec; cost:number; rank:number; prev?:Node; via?:string; end?:boolean };
 
 function keyOf(point:Vec):string {
 	return point.map((v) => Math.round(v * 1000)).join(',');
@@ -92,40 +92,77 @@ function stepCost(from:Vec, step:PathStep):number {
 	return Math.max(step.cost ?? 0, distance(from, step.point));
 }
 
+/** Where a search ends. */
+export type RouteGoal = {
+	/** True once `point` counts as arrived. */
+	reached(point:Vec):boolean;
+	/** Never more than the cost left from `point`, or the route found may not be the cheapest. */
+	estimate(point:Vec):number;
+	/** Extra cost, at least 0, of a step of cost `length` onto `point`. */
+	toll?(point:Vec, length:number):number;
+	/** A point off the graph the route may end on, arriving through the steps out of it taken backwards. */
+	at?:Vec;
+};
+
+/** Within `near` of `to`. */
+export function pointGoal(to:Vec, near = 0):RouteGoal {
+	return {
+		at: to,
+		reached: (point) => distance(point, to) <= near,
+		// Never more than the cost left while step costs are at least their length.
+		estimate: (point) => Math.max(0, distance(point, to) - near),
+	};
+}
+
+/** A step's toll never passes this many times its length, however close to the threat it lands. */
+const AWAY_TOLL_CAP = 10;
+
 /**
- * Cheapest open route from `from` to within `near` of `to`. Neither end has to be a point of the graph: the
- * route leaves through the steps out of `from` and arrives through the steps out of `to`, taken backwards,
+ * At least `keep` from `threat`. A step costs `keep` over its distance from `threat` times its length on top, so
+ * the cheapest way out keeps wide of them instead of running past. The estimate is how far is left to go, which a
+ * step can close by no more than its length.
+ */
+export function awayGoal(threat:Vec, keep:number):RouteGoal {
+	return {
+		reached: (point) => distance(point, threat) >= keep,
+		estimate: (point) => Math.max(0, keep - distance(point, threat)),
+		toll: (point, length) => (length * keep) / Math.max(distance(point, threat), keep / AWAY_TOLL_CAP),
+	};
+}
+
+/**
+ * Cheapest open route from `from` to `goal`. Neither end has to be a point of the graph: the route leaves through
+ * the steps out of `from` and, for a goal with its own point, arrives through the steps out of it, taken backwards,
  * so a sparse waypoint network works as well as a grid.
  *
  * One search: open ways settle first, so an open route comes back exactly as if blocked steps did not exist.
  * Without one, the search goes on through blocked steps, once per first blocker, and lists every blocker
  * that leads there. A blocked way that rejoins an open one is dropped: the blocker after it is the one to name.
  */
-export function findRoute(graph:(point:Vec)=>PathStep[], from:Vec, to:Vec, near = 0, cap = SEARCH_CAP):Route | Blocked | undefined {
-	const exits = new Map(graph(to).map((step) => [keyOf(step.point), step]));
-	// Never more than the cost left while step costs are at least their length.
-	const estimate = (point:Vec):number => Math.max(0, distance(point, to) - near);
+export function findRoute(graph:(point:Vec)=>PathStep[], from:Vec, goal:RouteGoal, cap = SEARCH_CAP):Route | Blocked | undefined {
+	const exits = new Map(goal.at ? graph(goal.at).map((step) => [keyOf(step.point), step]) : []);
 	const stateOf = (key:string, via?:string):string => (via === undefined ? key : `${key}|${via}`);
 	const best = new Map<string, number>([[keyOf(from), 0]]);
 	const openlyReached = new Set<string>();
 	const blockers = new Map<string, number>();
 	const open = new Frontier();
-	const relax = (node:Node, point:Vec, step:PathStep, key:string, goal?:boolean):void => {
+	const relax = (node:Node, point:Vec, step:PathStep, key:string, end?:boolean):void => {
 		const via = node.via ?? step.blocked;
-		const cost = node.cost + stepCost(goal ? to : node.point, step);
+		const length = stepCost(end ? goal.at! : node.point, step);
+		const cost = node.cost + length + (goal.toll?.(point, length) ?? 0);
 		const state = stateOf(key, via);
 		if (cost < (best.get(state) ?? Infinity)) {
 			best.set(state, cost);
-			open.push({ point, cost, rank: cost + estimate(point), prev: node, via, goal });
+			open.push({ point, cost, rank: cost + goal.estimate(point), prev: node, via, end });
 		}
 	};
 	// Open and blocked ways each get `cap` points, so a wide open area cannot use up the search for a way in.
 	let openLeft = cap;
 	let blockedLeft = cap;
-	open.push({ point: from, cost: 0, rank: estimate(from) });
+	open.push({ point: from, cost: 0, rank: goal.estimate(from) });
 	while (open.size > 0 && blockedLeft > 0) {
 		const node = open.pop();
-		const key = node.goal ? GOAL : keyOf(node.point);
+		const key = node.end ? END : keyOf(node.point);
 		if (node.cost > (best.get(stateOf(key, node.via)) ?? Infinity)) {
 			continue;
 		}
@@ -135,7 +172,7 @@ export function findRoute(graph:(point:Vec)=>PathStep[], from:Vec, to:Vec, near 
 		if ((node.via === undefined ? openLeft-- : blockedLeft--) <= 0) {
 			continue;
 		}
-		if (node.goal || distance(node.point, to) <= near) {
+		if (node.end || goal.reached(node.point)) {
 			if (node.via === undefined) {
 				return routeTo(node);
 			}
@@ -147,7 +184,7 @@ export function findRoute(graph:(point:Vec)=>PathStep[], from:Vec, to:Vec, near 
 		}
 		const exit = exits.get(key);
 		if (exit) {
-			relax(node, to, exit, GOAL, true);
+			relax(node, goal.at!, exit, END, true);
 		}
 		for (const step of graph(node.point)) {
 			relax(node, step.point, step, keyOf(step.point));

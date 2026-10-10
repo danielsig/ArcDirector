@@ -1,5 +1,6 @@
 import { isArc } from './validate.js';
-import { argBase, type VerbRegistry } from './stock-verbs.js';
+import { argBase, CHOOSE_VERB, type VerbRegistry } from './stock-verbs.js';
+import { choicesOf } from './choose.js';
 import {
 	firstStep,
 	isHoistedWhen,
@@ -49,7 +50,18 @@ export type ArcSession = {
 	parked?:boolean;
 	/** The arg kinds, so a bound body fills a `text` arg with its name and every other arg with its id. */
 	verbs?:VerbRegistry;
+	/** Asks a System One model which choice a `choose` runs. None: every `choose` fails. */
+	pick?:ArcPick;
+	/** The last choice this session ran and how it went, so a looped `choose` can see it. */
+	lastChoice?:LastChoice;
+	/** Game time of the last pick. A `choose` never picks twice at one time. */
+	lastPickAt?:number;
 };
+
+export type LastChoice = { name:string; result:ArcResult };
+
+/** The name of the choice to run, given the goal, the choices by name, and the last choice. */
+export type ArcPick = (goal:string, choices:Record<string, Arc>, last:LastChoice | undefined)=>Promise<string>;
 
 export type ArcSessionOpts = {
 	verbs?:VerbRegistry;
@@ -57,6 +69,7 @@ export type ArcSessionOpts = {
 	now?:()=>number;
 	abortHost?:()=>void;
 	extraHandlers?:()=>ArcHandler[];
+	pick?:ArcPick;
 };
 
 export function createArcSession(opts:ArcSessionOpts = {}):ArcSession {
@@ -71,6 +84,7 @@ export function createArcSession(opts:ArcSessionOpts = {}):ArcSession {
 		extraHandlers: opts.extraHandlers,
 		parked: false,
 		verbs: opts.verbs,
+		pick: opts.pick,
 	};
 }
 
@@ -431,22 +445,81 @@ async function execStep(
 	if (step.verb === 'loop') {
 		return runLoop(step, execute, session, depth);
 	}
+	if (step.verb === CHOOSE_VERB) {
+		return runChoose(step, execute, session, depth);
+	}
 	const live = interpolateStep(step, session);
 	const token = session.token;
 	const result = withVerb(await execute(live), live);
 	if (result.interrupted && session.token === token && !session.pending) {
 		return result;
 	}
-	if (session.token !== token || session.pending) {
-		const drained = await drainPending(session, execute, depth);
-		if (drained?.interrupted) {
-			return drained;
-		}
-		if (drained?.preempted && !drained.ok) {
-			return { ok: false, preempted: true, verb: live.verb, reason: result.reason };
-		}
-		return { ok: true, preempted: true, verb: live.verb, reason: result.reason };
+	return await afterSteal(session, execute, depth, token, live.verb, result.reason) ?? result;
+}
+
+/**
+ * What a step returns when, while it ran, its program was replaced or a handler came due; `undefined` when neither
+ * happened. A handler that came due runs first.
+ */
+async function afterSteal(
+	session:ArcSession,
+	execute:(step:Step)=>Promise<ArcResult>,
+	depth:number,
+	token:number,
+	verb:string,
+	reason?:string,
+):Promise<ArcResult | undefined> {
+	if (session.token === token && !session.pending) {
+		return undefined;
 	}
+	const drained = await drainPending(session, execute, depth);
+	if (drained?.interrupted) {
+		return drained;
+	}
+	return { ok: !(drained?.preempted && !drained.ok), preempted: true, verb, reason };
+}
+
+/** Ask `session.pick` for a name, then run the choice under it. A choice gone stale while asking does not run. */
+async function runChoose(
+	step:Step,
+	execute:(step:Step)=>Promise<ArcResult>,
+	session:ArcSession,
+	depth:number,
+):Promise<ArcResult> {
+	const fail = (reason:string):ArcResult => ({ ok: false, verb: CHOOSE_VERB, reason });
+	if (!session.pick) {
+		return fail('no System One model');
+	}
+	const token = session.token;
+	// A loop of instant choices waits for game time to move instead of asking again at once.
+	while (session.now() === session.lastPickAt) {
+		await new Promise<void>((resolve) => {
+			setTimeout(resolve, 10);
+		});
+		const stolen = await afterSteal(session, execute, depth, token, CHOOSE_VERB);
+		if (stolen) {
+			return stolen;
+		}
+	}
+	session.lastPickAt = session.now();
+	const choices = choicesOf(step);
+	let name:string;
+	try {
+		name = await session.pick(typeof step.args.goal === 'string' ? step.args.goal : '', choices, session.lastChoice);
+	}
+	catch (err) {
+		return await afterSteal(session, execute, depth, token, CHOOSE_VERB)
+			?? fail(`System One: ${err instanceof Error ? err.message : String(err)}`);
+	}
+	const stolen = await afterSteal(session, execute, depth, token, CHOOSE_VERB);
+	if (stolen) {
+		return stolen;
+	}
+	if (!Object.hasOwn(choices, name)) {
+		return fail(`unknown choice '${name}'`);
+	}
+	const result = await runFrame(choices[name], execute, session, depth + 1);
+	session.lastChoice = { name, result };
 	return result;
 }
 

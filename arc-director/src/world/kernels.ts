@@ -1,6 +1,6 @@
 import type { HostKernels } from '../expr/natives.js';
 import type { ExprEntity } from '../expr/types.js';
-import { blockedReason, findRoute } from './route.js';
+import { blockedReason, findRoute, pointGoal } from './route.js';
 import { poseOf } from './lookup.js';
 import type { HostWorld, Pose, Vec } from './types.js';
 import { cosToward, distance } from './vec.js';
@@ -46,7 +46,7 @@ export function geometryKernels(
 				}
 				const target = world.find(b.id);
 				const near = target === undefined ? 1 : world.getReach?.(character, target) ?? 1;
-				const route = findRoute(graph(), p[0].point, p[1].point, near);
+				const route = findRoute(graph(), p[0].point, pointGoal(p[1].point, near));
 				return route && 'points' in route ? routeLength(p[0].point, route.points) : undefined;
 			}
 			: undefined,
@@ -65,7 +65,7 @@ export function wayBlocked(world:HostWorld<unknown>, characterID:string, targetI
 	if (!world.getPathGraph || character === undefined || target === undefined || !from || !to) {
 		return undefined;
 	}
-	const route = findRoute(world.getPathGraph(character), from, to, world.getReach?.(character, target) ?? 1);
+	const route = findRoute(world.getPathGraph(character), from, pointGoal(to, world.getReach?.(character, target) ?? 1));
 	if (!route) {
 		return '';
 	}

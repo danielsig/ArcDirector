@@ -1,9 +1,15 @@
 import type { JsonSchema } from '../json.js';
-import { argBase, type VerbRegistry, type VerbSpec } from './stock-verbs.js';
+import { argBase, CHOOSE_VERB, type VerbRegistry, type VerbSpec } from './stock-verbs.js';
 
-const THEN_DEPTH = 8;
+/** `$defs` names: the thinker's own verbs, and the full catalog its nested arc args may use. */
+type Defs = { arc:string; step:string };
 
-function stepSchema(registry:VerbRegistry, depth:number):JsonSchema {
+function ref(name:string):JsonSchema {
+	return { $ref: `#/$defs/${name}` };
+}
+
+/** One step. Arc args, and `choose`'s named choices, point at the nested arc. */
+function stepSchema(registry:VerbRegistry, nested:Defs):JsonSchema {
 	const properties:Record<string, JsonSchema> = {};
 	for (const name of registry.argNames()) {
 		const spec = registry.list().find((v) => name in v.args);
@@ -11,9 +17,7 @@ function stepSchema(registry:VerbRegistry, depth:number):JsonSchema {
 			continue;
 		}
 		const kind = spec.args[name];
-		properties[name] = argBase(kind) === 'arc'
-			? (depth <= 0 ? { type: 'object', additionalProperties: true } : arcSchemaAt(registry.nested(), depth - 1))
-			: registry.argSchema(kind);
+		properties[name] = argBase(kind) === 'arc' ? ref(nested.arc) : registry.argSchema(kind);
 	}
 	return {
 		type: 'object',
@@ -26,44 +30,53 @@ function stepSchema(registry:VerbRegistry, depth:number):JsonSchema {
 			},
 			args: {
 				type: 'object',
-				additionalProperties: false,
+				additionalProperties: registry.has(CHOOSE_VERB) ? ref(nested.arc) : false,
 				properties,
 			},
 		},
 	};
 }
 
-function arcSchemaAt(registry:VerbRegistry, depth:number):JsonSchema {
-	const step = stepSchema(registry, depth);
-	const thenJoin:JsonSchema = {
-		type: 'object',
-		additionalProperties: false,
-		required: ['join', 'arc'],
-		properties: {
-			join: { type: 'string', enum: ['then_if_ok', 'then', 'then_if_err'] },
-			arc: depth <= 0
-				? { type: 'object', additionalProperties: true }
-				: arcSchemaAt(registry, depth - 1),
-		},
-	};
+function arcNode(own:Defs):JsonSchema {
 	return {
 		type: 'object',
 		additionalProperties: false,
 		properties: {
-			head: step,
-			group: depth <= 0
-				? { type: 'object', additionalProperties: true }
-				: arcSchemaAt(registry, depth - 1),
-			then: thenJoin,
+			head: ref(own.step),
+			group: ref(own.arc),
+			then: {
+				type: 'object',
+				additionalProperties: false,
+				required: ['join', 'arc'],
+				properties: {
+					join: { type: 'string', enum: ['then_if_ok', 'then', 'then_if_err'] },
+					arc: ref(own.arc),
+				},
+			},
 		},
 	};
 }
 
+/** Recursive through `$defs`, so any depth of joins, groups and nested arcs costs the same few kilobytes. */
 export function arcSchema(registry:VerbRegistry):JsonSchema {
-	return { title: 'Arc', ...arcSchemaAt(registry, THEN_DEPTH) };
+	const own:Defs = { arc: 'arc', step: 'step' };
+	const catalog = registry.nested();
+	const nested:Defs = catalog === registry ? own : { arc: 'nestedArc', step: 'nestedStep' };
+	const $defs:Record<string, JsonSchema> = {
+		[own.arc]: arcNode(own),
+		[own.step]: stepSchema(registry, nested),
+	};
+	if (nested !== own) {
+		$defs[nested.arc] = arcNode(nested);
+		$defs[nested.step] = stepSchema(catalog, nested);
+	}
+	return { title: 'Arc', ...arcNode(own), $defs };
 }
 
 function formatVerbHelp(spec:VerbSpec):string {
+	if (spec.name === CHOOSE_VERB) {
+		return `${spec.name}(goal, name=arc, …) — ${spec.help}`;
+	}
 	const parts = Object.entries(spec.args).map(([k, kind]) => {
 		return kind.endsWith('?') ? `${k}?` : k;
 	});
@@ -81,7 +94,10 @@ export function verbHelp(registry:VerbRegistry):string {
 	if (nested === registry) {
 		return kit;
 	}
-	const extras = nested.list().filter((spec) => !registry.has(spec.name)).map(formatVerbHelp);
+	// `choose` reaches a collective's characters only when its own kit grants it, so it is never a nested extra.
+	const extras = nested.list()
+		.filter((spec) => !registry.has(spec.name) && spec.name !== CHOOSE_VERB)
+		.map(formatVerbHelp);
 	if (extras.length === 0) {
 		return kit;
 	}

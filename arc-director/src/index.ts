@@ -16,7 +16,7 @@ export type {
 	ToolDef,
 } from './inference/provider.js';
 export { chatContentText } from './inference/provider.js';
-export { HttpProvider, parseChatTimings, mergeClientTimings, loadConfigFits, type HttpProviderConfig, type HttpLoadConfig, type ReasoningEffort, REASONING_EFFORTS, serverRoot } from './inference/http.js';
+export { HttpProvider, parseChatTimings, mergeClientTimings, loadConfigFits, type HttpProviderConfig, type HttpLoadConfig, type ModelSettings, type ReasoningEffort, REASONING_EFFORTS, serverRoot } from './inference/http.js';
 export {
 	type ApplyPromptTemplate,
 	type PromptTemplateMessage,
@@ -33,6 +33,9 @@ export {
 	thinkOffMode,
 	pickReasoningOption,
 	modelGrade,
+	isDecisionModel,
+	isEncoderModel,
+	findModel,
 	pickSingleChatModel,
 	modelIDsMatch,
 	type ModelInfo,
@@ -43,14 +46,12 @@ export {
 } from './inference/models.js';
 export {
 	fakeInference,
-	connectHttpInference,
 	lmStudioConfig,
 	ollamaConfig,
 	LM_STUDIO_URL,
 	OLLAMA_URL,
 	LM_STUDIO_LOAD,
 	type HttpInferenceOpts,
-	type ConnectedHttp,
 } from './inference/presets.js';
 export {
 	FakeProvider,
@@ -63,10 +64,10 @@ export {
 export type { Arc, ArcResult, Join, Step } from './arc/types.js';
 export { firstStep, isHoistedWhen, isIssue } from './arc/types.js';
 export { ArcError, JOIN_SYMBOL, JOINS, SYMBOL_JOIN } from './arc/types.js';
-export { VerbRegistry, registerStockVerbs, STOCK_VERBS, STOCK_MOVE_VERBS, STOCK_ITEM_VERBS, STOCK_TRADE_VERBS, STOCK_MIND_VERBS, STOCK_ARC_VERBS, STOCK_VERB_DEFS, MIND_ONLY_VERBS, type StockVerb, type VerbArgKind, type VerbArgMap, type VerbDef, type VerbSpec } from './arc/stock-verbs.js';
+export { VerbRegistry, registerStockVerbs, STOCK_VERBS, STOCK_MOVE_VERBS, STOCK_ITEM_VERBS, STOCK_TRADE_VERBS, STOCK_MIND_VERBS, STOCK_ARC_VERBS, CHOOSE_VERB, STOCK_VERB_DEFS, MIND_ONLY_VERBS, type StockVerb, type VerbArgKind, type VerbArgMap, type VerbDef, type VerbSpec } from './arc/stock-verbs.js';
 export { arcSchema, verbHelp } from './arc/schema.js';
 export { asArc, asStep, validateArc, validateStep, isArc } from './arc/validate.js';
-export { arcArg, formatArc, formatStep, parseArc, parseArcText } from './arc/parse.js';
+export { arcArg, formatArc, formatArcBlocks, formatStep, parseArc, parseArcText } from './arc/parse.js';
 
 export {
 	MemoryStore,
@@ -104,13 +105,13 @@ export {
 export { formatSight, formatSightClauses, joinSightClauses, orderSightClauses, mergeHiveClauses, dedupIntersectingClauses, clauseScore, quantizeDistance, hypotAt, bearingOf, DEFAULT_SIGHT } from './perception/sight.js';
 export { formatInventory } from './perception/formatInventory.js';
 
-export type { MindEvent, Sense, ToolSpec } from './mind/types.js';
+export type { ConversationTurn, MindEvent, Sense, ToolSpec } from './mind/types.js';
 export type { Identity, Goal, Kit, KitSource, WatchInput, Watches } from './character/types.js';
 export { NameBook, type NameBookJSON, type NameTarget } from './character/names.js';
 export { Persona, type PersonaJSON, type PersonaSpec } from './character/persona.js';
 export { ArcRunner, sayToOf, type ArcRunnerJSON, type RunnerDeps, type RunnerOptions } from './character/arc-runner.js';
 export { Character, type CharacterJSON, type CharacterOptions } from './character/character.js';
-export { Mind, DEFAULT_MENTION_CAP, DEFAULT_TOOL_ROUNDS, type MindDeps, type MindJSON, type MindOwner, type MindSettings } from './mind/mind.js';
+export { Mind, MAX_CONVERSATION_CAP, conversationCapFor, DEFAULT_MENTION_CAP, DEFAULT_TOOL_ROUNDS, type MindDeps, type MindJSON, type MindOwner, type MindSettings } from './mind/mind.js';
 export { idsOf, namesOf, mapArc, mapExpr, mapLawName, type WordMap } from './mind/ids.js';
 export { soloCharacter, type SoloOptions } from './testing/solo.js';
 export {
@@ -145,7 +146,10 @@ export {
 	type EncyclopediaSource,
 	type CrowdEncyclopediaSpec,
 } from './mind/encyclopedia.js';
-export { runArc, deferThinks, arcSteps, THINK_ABOUT_CAP } from './arc/run.js';
+export { runArc, deferThinks, arcSteps, THINK_ABOUT_CAP, type ArcPick, type LastChoice } from './arc/run.js';
+export { CHOICE_RESERVED, MAX_CHOICES } from './arc/choose.js';
+export { ChatSystemOne, JevSystemOne, ModelSystemOne, type DecidingModel, type JevOpts, type SystemOne } from './inference/systemone.js';
+export { benchSystemOne, DECISION_BENCH, type BenchScore, type DecisionCase, type DecisionLevel, type DecisionSpot, type SkillScore } from './character/bench.js';
 export { arcRepairHint, repeatOutputHint, sayRangeHint, shortTermBlock, stablePrefix, volatileBlock, watchCheatSheet, DEFAULT_THINK_INSTRUCTIONS, DEFAULT_VERB_INSTRUCTIONS, DEFAULT_COLLECTIVE_INSTRUCTIONS, type ThinkInstructions, SEE_MAP_HINT, seeMapHint, encyclopediaHint } from './mind/prompt.js';
 export {
 	TalkNet,
@@ -232,6 +236,7 @@ export {
 } from './collective/index.js';
 export { DEFAULT_MAX_LAWS, lawGroup, type Law, type LawSpec } from './arc/laws.js';
 export { ArcDirector, type CastJSON } from './director/director.js';
+export { DEFAULT_MAX_PARALLEL, type EmbeddingSpec, type InferenceSource, type ModelSpec } from './director/models.js';
 export type {
 	CharacterSpec,
 	CollectiveSpec,
@@ -244,9 +249,10 @@ export type {
 	StockVerbName,
 	VerbArgs,
 	VerbGate,
+	StandingChoice,
 	StartOpts,
 	VerbCall,
 	VerbHandler,
 } from './director/types.js';
 export type { Deal, HostWorld, ItemMove, Outcome, PathStep, Pose, Vec } from './world/types.js';
-export { findRoute, reachablePoints, type Blocked, type Route } from './world/route.js';
+export { awayGoal, findRoute, pointGoal, reachablePoints, type Blocked, type Route, type RouteGoal } from './world/route.js';

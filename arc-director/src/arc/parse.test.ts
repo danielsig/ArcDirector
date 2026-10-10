@@ -5,6 +5,8 @@ import { VerbRegistry, registerStockVerbs, STOCK_MOVE_VERBS, STOCK_TRADE_VERBS, 
 import { registerStockCollectiveVerbs } from '../collective/verbs.js';
 import { ArcError } from './types.js';
 import { asArc } from './validate.js';
+import { arcSchema } from './schema.js';
+import type { Arc } from './types.js';
 
 function verbs():VerbRegistry {
 	return registerStockVerbs(new VerbRegistry());
@@ -154,7 +156,7 @@ describe('registerStockVerbs', () => {
 		registerStockVerbs(verbs, 'go_to', 'say');
 		assert.deepEqual(
 			verbs.list().map((v) => v.name),
-			['go_to', 'follow', 'wander', 'say'],
+			['go_to', 'follow', 'flee', 'wander', 'say'],
 		);
 	});
 
@@ -187,7 +189,7 @@ describe('VerbRegistry view and remove', () => {
 		const verbs = registerStockVerbs(new VerbRegistry(), ...STOCK_MOVE_VERBS);
 		assert.deepEqual(verbs.view(['go_to', 'missing']).list().map((v) => v.name), ['go_to']);
 		assert.equal(verbs.view(null), verbs);
-		verbs.remove('follow', 'wander');
+		verbs.remove('follow', 'flee', 'wander');
 		assert.deepEqual(verbs.list().map((v) => v.name), ['go_to']);
 		verbs.remove();
 		assert.ok(verbs.has('go_to'));
@@ -364,6 +366,21 @@ describe('kit views and issue(who)', () => {
 });
 
 describe('small-model slips from the AI logs', () => {
+	it('reads block layout: args one per line, each ending in a comma, and ) alone', () => {
+		const arc = parseArcText('loop(\n\tchoose(\n\t\t"Hold the gate",\n\t\tgo_to(Keep),\n\t\tgate=go_to(EastGate),\n\t),\n)\nwander(\n\tuntil=done,\n)', verbs());
+		assert.equal(arc.head.verb, 'loop');
+		assert.deepEqual(Object.keys(arc.head.args.arc as object), ['head']);
+		assert.equal(arc.then?.join, 'then', 'a new line joins like ;');
+		assert.equal(arc.then?.arc.head.args.until, 'done');
+	});
+
+	it('reads a C-style ; between args as a comma, and refuses an arg given twice', () => {
+		const arc = parseArcText('wander(\n\tuntil=done;\n\tseconds=5;\n)', verbs());
+		assert.equal(arc.head.args.until, 'done');
+		assert.equal(arc.head.args.seconds, 5);
+		assert.throws(() => parseArcText('wander(until=done; until=ready)', verbs()), /got until= twice/);
+	});
+
 	it('reads prose with commas and apostrophes as one text arg', () => {
 		const arc = parseArcText(
 			"think(I have the FireMushroom from the Forager. According to my rules, I must use BridgeKeeper's crank.)use(item=BridgeCrank, target=BridgeLever)",
@@ -435,5 +452,87 @@ describe('small-model slips from the AI logs', () => {
 			crowd,
 		);
 		assert.equal(arc.then?.arc.head.args.who, 'units.filter("Witch")');
+	});
+});
+
+describe('choose', () => {
+	it('reads named choices, each an arc, in order', () => {
+		const arc = parseArcText(
+			'choose(goal="hold the gate", hold=go_to(EastGate) && wait(), chase=follow(Raider), stand=wait())',
+			verbs(),
+		);
+		const args = arc.head.args;
+		assert.equal(arc.head.verb, 'choose');
+		assert.equal(args.goal, 'hold the gate');
+		assert.deepEqual(Object.keys(args), ['goal', 'hold', 'chase', 'stand']);
+		const hold = args.hold as Arc;
+		assert.equal(hold.head.verb, 'go_to');
+		assert.equal(hold.then?.join, 'then_if_ok');
+		assert.equal(hold.then?.arc.head.verb, 'wait');
+	});
+
+	it('names a bare choice after its verb and first id, numbering repeats', () => {
+		const arc = parseArcText('choose("hold", go_to(EastGate), wait(), wait())', verbs());
+		assert.equal(arc.head.args.goal, 'hold');
+		assert.deepEqual(Object.keys(arc.head.args), ['goal', 'go_to_EastGate', 'wait', 'wait_2']);
+	});
+
+	it('keeps ; inside one choice as then', () => {
+		const arc = parseArcText('choose(goal=greet them, hi=wait() ; say("hi"), no=wait())', verbs());
+		assert.equal(arc.head.args.goal, 'greet them');
+		assert.equal((arc.head.args.hi as Arc).then?.join, 'then');
+		assert.deepEqual(Object.keys(arc.head.args), ['goal', 'hi', 'no']);
+	});
+
+	it('round-trips through formatArc', () => {
+		const text = 'choose("hold the gate", hold=go_to(EastGate) && wait(), follow(Raider), wait_2=wait())';
+		const arc = parseArcText(text, verbs());
+		assert.equal(formatArc(arc, verbs()), text);
+		assert.deepEqual(parseArcText(formatArc(arc, verbs()), verbs()), arc);
+	});
+
+	it('nests in loop with until', () => {
+		const arc = parseArcText('loop(choose("hold", a=wait(), b=go_to(EastGate)), until=isHurt(me))', verbs());
+		assert.equal(arc.head.verb, 'loop');
+		assert.equal((arc.head.args.arc as Arc).head.verb, 'choose');
+		assert.equal(arc.head.args.until, 'isHurt(me)');
+	});
+
+	it('reads the JSON form', () => {
+		const arc = parseArc({
+			head: { verb: 'choose', args: { goal: 'hold', stand: { head: { verb: 'wait', args: {} } } } },
+		}, verbs());
+		assert.equal((arc.head.args.stand as Arc).head.verb, 'wait');
+	});
+
+	it('rejects a choose without goal, without choices, or with a reserved or repeated name', () => {
+		assert.throws(() => parseArcText('choose(a=wait())', verbs()), ArcError);
+		assert.throws(() => parseArcText('choose("hold")', verbs()), ArcError);
+		assert.throws(() => parseArcText('choose("hold", until=wait())', verbs()), ArcError);
+		assert.throws(() => parseArcText('choose("hold", a=wait(), a=go_to(EastGate))', verbs()), ArcError);
+		assert.throws(() => parseArcText('choose("hold", a=hold the gate)', verbs()), ArcError);
+		const many = Array.from({ length: 256 }, (_, n) => `c${n}=wait()`).join(', ');
+		assert.throws(() => parseArcText(`choose("hold", ${many})`, verbs()), ArcError);
+	});
+
+	it('leaves every other verb closed to unknown keys', () => {
+		assert.throws(() => parseArcText('wait(hold=wait())', verbs()), ArcError);
+		assert.throws(() => parseArc({ head: { verb: 'wait', args: { hold: { head: { verb: 'wait', args: {} } } } } }, verbs()), ArcError);
+	});
+
+	it('lets the JSON schema carry named choices only when choose is registered', () => {
+		const args = (registry:VerbRegistry):unknown => {
+			const schema = arcSchema(registry) as { $defs:{ step:{ properties:{ args:{ additionalProperties:unknown } } } } };
+			return schema.$defs.step.properties.args.additionalProperties;
+		};
+		assert.equal(args(registerStockVerbs(new VerbRegistry(), 'wait')), false);
+		assert.deepEqual(args(verbs()), { $ref: '#/$defs/arc' });
+	});
+
+	it('keeps the arc schema small by recursing through $defs', () => {
+		assert.ok(JSON.stringify(arcSchema(verbs())).length < 20_000);
+		const kit = registerStockCollectiveVerbs(registerStockVerbs(new VerbRegistry())).view(['issue', 'wait']);
+		const schema = arcSchema(kit);
+		assert.deepEqual(Object.keys(schema.$defs ?? {}), ['arc', 'step', 'nestedArc', 'nestedStep']);
 	});
 });

@@ -162,11 +162,25 @@ export class Chest extends Component {
 	public open = false;
 }
 
-/** Drawbridge over water. When closed, the river cannot be crossed. */
+/** Drawbridge over water. When raised (`open` false), the river cannot be crossed. */
 export class Bridge extends Component {
 	public static override saved = ['open'];
 	public open = false;
 	public cells:{ x:number; z:number }[] = [];
+
+	/** A lowered span is a trigger. A raised span blocks. */
+	public syncCollision():void {
+		const col = this.gameObject.getComponent(BoxCollider);
+		if (!col) {
+			return;
+		}
+		col.solid = !this.open;
+		col.isTrigger = this.open;
+	}
+
+	public override update(dt:number):void {
+		this.syncCollision();
+	}
 }
 
 export class BridgeLever extends Component {}

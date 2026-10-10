@@ -1,5 +1,5 @@
 import type { ArcResult } from '../arc/types.js';
-import type { MindEvent } from './types.js';
+import type { ConversationTurn, MindEvent } from './types.js';
 
 /** A mind that can receive speech. The library never sees coordinates. */
 export type TalkMind = {
@@ -335,7 +335,15 @@ export class TalkNet {
 			const speaker = this.label(id, speakerID);
 			const heard = heardLine(speaker, spoken, isNamed(targets, names.you), heardTo.join(', '), clear, mentioned);
 			// Said to any of its characters, it is meant for this mind, though only its voice is "you".
-			this.hear(mind, speaker, heardTo, heard.text, heard.major || isNamed(targets, names.ours), timestamp);
+			this.hear(
+				mind,
+				speaker,
+				heardTo,
+				heard.text,
+				heard.major || isNamed(targets, names.ours),
+				timestamp,
+				clear ? { speakerID, to: targets, text: spoken } : undefined,
+			);
 			if (!clear && this.config.rehear > 0) {
 				const list = this._muffled.get(id) ?? [];
 				list.push({ speakerID, spoken, targets, until: timestamp + this.config.rehear });
@@ -370,7 +378,15 @@ export class TalkNet {
 				const heardTo = row.targets.map((t) => this.label(id, t));
 				const speaker = this.label(id, row.speakerID);
 				const meant = isNamed(row.targets, names.ours) || row.targets.length === 0 || speechMentionsName(row.spoken, names.ours);
-				this.hear(mind, speaker, heardTo, saysLine(speaker, row.spoken, addressed, heardTo.join(', '), ', now clear'), meant, now);
+				this.hear(
+					mind,
+					speaker,
+					heardTo,
+					saysLine(speaker, row.spoken, addressed, heardTo.join(', '), ', now clear'),
+					meant,
+					now,
+					{ speakerID: row.speakerID, to: row.targets, text: row.spoken },
+				);
 				return false;
 			});
 			if (keep.length > 0) {
@@ -389,7 +405,15 @@ export class TalkNet {
 		return { ours: named([mind.id, ...listening]), you: named([mind.voice?.() ?? mind.id, mind.id]) };
 	}
 
-	private hear(mind:TalkMind, speaker:string, heardTo:string[], text:string, major:boolean, timestamp:number):void {
+	private hear(
+		mind:TalkMind,
+		speaker:string,
+		heardTo:string[],
+		text:string,
+		major:boolean,
+		timestamp:number,
+		turn?:ConversationTurn,
+	):void {
 		mind.pushEvent({
 			kind: 'HeardSpeech',
 			text,
@@ -397,6 +421,7 @@ export class TalkNet {
 			major,
 			timestamp,
 			remember: true,
+			turn,
 		});
 	}
 

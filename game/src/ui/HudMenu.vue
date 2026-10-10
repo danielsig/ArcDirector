@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { inject, watch } from 'vue';
-import { type HudModel, type MenuPage } from './hudModel';
+import { modelLabel, type HudModel, type MenuPage } from './hudModel';
 import { sessionKey } from './sessionKey';
+import HudBench from './HudBench.vue';
 import {
 	MAX_CONTEXT_LENGTH,
 	MAX_PARALLEL_THINKERS,
@@ -117,6 +118,18 @@ function toggleThinking():void {
 
 function toggleArcText():void {
 	setPrefs({ arcText: !props.hud.arcText });
+}
+
+function toggleForceSchema():void {
+	setPrefs({ forceSchema: !props.hud.forceSchema });
+}
+
+function pickSystemOne():void {
+	setPrefs({ systemOne: props.hud.systemOne });
+}
+
+function pickDecisionModel():void {
+	setPrefs({ decisionModel: props.hud.decisionModel });
 }
 
 function dumpNPCMaps():void {
@@ -408,11 +421,11 @@ function pct(n:number):string {
 										{{ hud.model }}
 									</option>
 									<option
-										v-for="m in hud.models"
+										v-for="m in hud.models.filter((m) => !m.decision)"
 										:key="m.id"
 										:value="m.id"
 									>
-										{{ m.loaded ? `${m.id} · loaded` : m.id }}
+										{{ modelLabel(m) }}
 									</option>
 								</select>
 							</label>
@@ -492,6 +505,57 @@ function pct(n:number):string {
 									{{ hud.arcText ? 'On' : 'Off' }}
 								</button>
 							</div>
+							<div class="set">
+								<span class="name">Force schema</span>
+								<button
+									type="button"
+									class="switch"
+									:class="{ on: hud.forceSchema && !hud.arcText }"
+									:aria-pressed="hud.forceSchema"
+									:disabled="hud.arcText"
+									title="Arc JSON only: sends the arc schema and no tools"
+									@click.stop="toggleForceSchema"
+								>
+									{{ hud.forceSchema ? 'On' : 'Off' }}
+								</button>
+							</div>
+							<label class="set">
+								<span class="name">System One</span>
+								<select
+									v-model="hud.systemOne"
+									@change.stop="pickSystemOne"
+								>
+									<option value="off">Off</option>
+									<option value="jev">Jev</option>
+									<option value="local">Local</option>
+								</select>
+							</label>
+							<label class="set">
+								<span class="name">Decision model</span>
+								<select
+									v-model="hud.decisionModel"
+									title="The Local System One: a chat model scored, or a decision model"
+									@mousedown="session?.refreshHudModels()"
+									@change.stop="pickDecisionModel"
+								>
+									<option value="">Main model</option>
+									<option
+										v-if="hud.decisionModel && !hud.models.some((m) => m.id === hud.decisionModel)"
+										:value="hud.decisionModel"
+									>
+										{{ hud.decisionModel }}
+									</option>
+									<option v-for="m in hud.models" :key="m.id" :value="m.id">
+										{{ modelLabel(m) }}
+									</option>
+								</select>
+							</label>
+							<div class="set">
+								<span class="name">Decision bench</span>
+								<button type="button" class="act" @click.stop="hud.benchOpen = true">
+									Open
+								</button>
+							</div>
 							<h3>Stats</h3>
 							<table class="stats">
 								<thead>
@@ -551,6 +615,7 @@ function pct(n:number):string {
 				</div>
 				<p v-if="hud.menuNotice" class="notice">{{ hud.menuNotice }}</p>
 			</div>
+			<HudBench v-if="hud.benchOpen" :hud="hud" />
 		</div>
 	</div>
 </template>

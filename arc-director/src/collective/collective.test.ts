@@ -47,6 +47,8 @@ function kernels(hurt:Set<string> = new Set()) {
 		me: dummyEntity(ctx.id, { tags: ['agent'] }),
 		others: [],
 		items: [],
+		nearRadius: 8,
+		distance: () => 4,
 		hp: (who:{ id:string }) => (
 			hurt.has(who.id) ? { hp: 1, maxHP: 5 } : { hp: 5, maxHP: 5 }
 		),
@@ -76,9 +78,8 @@ async function hiveOf(opts:{
 			watchInterval: 0,
 			heartbeatStart: 100,
 			heartbeatMin: 100,
-			maxParallel: 2,
 		})
-		.withFakeInference()
+		.addFakeInference()
 		.addStockVerbs()
 		.addStockCollectiveVerbs()
 		.withDefaultKit(COLLECTIVE_KIT)
@@ -137,7 +138,7 @@ async function hangingDawn():Promise<{
 	});
 	const director = await new ArcDirector<Ctx>()
 		.withArcText(true)
-		.withFakeInference(async () => {
+		.addFakeInference(async () => {
 			await hang;
 			return { content: 'go_to(Keep)', toolCalls: [] };
 		})
@@ -170,7 +171,7 @@ type Hang = Awaited<ReturnType<typeof hangingDawn>>;
 describe('Collective chain', () => {
 	it('addStockCollectiveVerbs registers; kit must still grant when', async () => {
 		const director = await new ArcDirector<Ctx>()
-			.withFakeInference()
+			.addFakeInference()
 			.addStockVerbs()
 			.addStockCollectiveVerbs()
 			.withDefaultKit({ verbs: ['wait'] })
@@ -233,7 +234,7 @@ describe('Collective chain', () => {
 			characters: [{ id: 'Dawn' }, { id: 'Wisp' }],
 		};
 		const build = ():Promise<ArcDirector<Ctx>> => new ArcDirector<Ctx>()
-			.withFakeInference()
+			.addFakeInference()
 			.addStockVerbs()
 			.addStockCollectiveVerbs()
 			.withDefaultKit({ verbs: ['wait'] })
@@ -250,7 +251,7 @@ describe('Collective chain', () => {
 
 	it('a character keeps its own kit in a collective; the roster says what it cannot do', async () => {
 		const director = await new ArcDirector<Ctx>()
-			.withFakeInference()
+			.addFakeInference()
 			.addStockVerbs()
 			.addStockCollectiveVerbs()
 			.withDefaultKit(COLLECTIVE_KIT)
@@ -439,7 +440,7 @@ describe('laws and tags', () => {
 	it('tags are namespaced per conductor', async () => {
 		const calls:VerbCall<Ctx>[] = [];
 		const director = await new ArcDirector<Ctx>()
-			.withFakeInference()
+			.addFakeInference()
 			.addStockVerbs()
 			.addStockCollectiveVerbs()
 			.withDefaultKit(COLLECTIVE_KIT)
@@ -483,7 +484,7 @@ describe('commander and sightFocus', () => {
 	it('commander mixes own go_to with when(who)', async () => {
 		const calls:VerbCall<Ctx>[] = [];
 		const director = await new ArcDirector<Ctx>()
-			.withFakeInference()
+			.addFakeInference()
 			.addStockVerbs()
 			.addStockCollectiveVerbs()
 			.withDefaultKit(COLLECTIVE_KIT)
@@ -628,7 +629,7 @@ describe('characters, laws, dummy me', () => {
 		let hiveCarry = 0;
 		const director = await new ArcDirector<Ctx>()
 			.withWorld(OPEN_WORLD)
-			.withFakeInference()
+			.addFakeInference()
 			.addStockVerbs()
 			.addStockCollectiveVerbs()
 			.withDefaultKit(COLLECTIVE_KIT)
@@ -676,7 +677,7 @@ describe('characters, laws, dummy me', () => {
 describe('commander pointer and sticky issue', () => {
 	it('thinkThread and identity follow the living commander', async () => {
 		const director = await new ArcDirector<Ctx>()
-			.withFakeInference()
+			.addFakeInference()
 			.addStockVerbs()
 			.addStockCollectiveVerbs()
 			.withDefaultKit(COLLECTIVE_KIT)
@@ -722,7 +723,7 @@ describe('commander pointer and sticky issue', () => {
 	it('issue(me) fails; allUnits skips the commander', async () => {
 		const calls:VerbCall<Ctx>[] = [];
 		const director = await new ArcDirector<Ctx>()
-			.withFakeInference()
+			.addFakeInference()
 			.addStockVerbs()
 			.addStockCollectiveVerbs()
 			.withDefaultKit(COLLECTIVE_KIT)
@@ -769,6 +770,25 @@ describe('commander pointer and sticky issue', () => {
 		director.dispose();
 	});
 
+	it('shows how each unit program is going, failures with why and choose picks', async () => {
+		const director = await hiveOf({ slow: true });
+		const hive = director.collective('Hive')!;
+		await hive.enact(parseArc('issue(who=units.filter("Guard"), arc=go_to(Keep))', hive.verbs));
+		await waitFor(() => hive.character('Mira')?.busy === true);
+		const mira = hive.character('Mira')!;
+		mira.record.note({ ok: true, verb: 'shoot' });
+		for (let i = 0; i < 3; i++) {
+			mira.record.note({ ok: false, verb: 'shoot', reason: 'no line of sight' });
+		}
+		mira.record.picked('nearest');
+		mira.record.picked('finish');
+		mira.record.picked('nearest');
+		assert.match(hive.promptSection(hive.mind), /- Mira: shoot 1 ok, 3 failed \(no line of sight ×3\), picked nearest ×2, finish/);
+		await mira.enact(parseArc('go_to(Home)', mira.verbs));
+		assert.equal(String(mira.record), 'go_to 1 ok', 'a new program starts a new record');
+		director.dispose();
+	});
+
 	it('lists idle roster tags in the prompt section', async () => {
 		const director = await hiveOf();
 		const hive = director.collective('Hive')!;
@@ -788,7 +808,7 @@ describe('commander pointer and sticky issue', () => {
 				heartbeatStart: 100,
 				heartbeatMin: 100,
 			})
-			.withFakeInference()
+			.addFakeInference()
 			.addStockVerbs()
 			.addStockCollectiveVerbs()
 			.withDefaultKit(COLLECTIVE_KIT)
@@ -825,7 +845,7 @@ describe('commander pointer and sticky issue', () => {
 	it('vacates the commander on commander = null', async () => {
 		const vacant:{ collective:string; character:string }[] = [];
 		const director = await new ArcDirector<Ctx>()
-			.withFakeInference()
+			.addFakeInference()
 			.addStockVerbs()
 			.addStockCollectiveVerbs()
 			.withDefaultKit(COLLECTIVE_KIT)
@@ -853,7 +873,7 @@ describe('commander pointer and sticky issue', () => {
 describe('solo law', () => {
 	it('survives think and omits who from the kit', async () => {
 		const director = await new ArcDirector<Ctx>()
-			.withFakeInference()
+			.addFakeInference()
 			.addStockVerbs()
 			.withKernels(kernels())
 			.onVerb(() => ({ ok: true, verb: 'go_to' }))
@@ -893,7 +913,7 @@ describe('transfers', () => {
 			release = resolve;
 		});
 		const director = await new ArcDirector<Ctx>()
-			.withFakeInference(() => ({ content: 'wait()', toolCalls: [] }))
+			.addFakeInference(() => ({ content: 'wait()', toolCalls: [] }))
 			.withArcText(true)
 			.addStockVerbs()
 			.addStockCollectiveVerbs()
@@ -1107,7 +1127,7 @@ describe('hearing', () => {
 			others: (speaker) => Object.keys(at).filter((id) => id !== speaker),
 		});
 		const director = await new ArcDirector<Ctx>()
-			.withFakeInference(() => ({ content: 'wait()', toolCalls: [] }))
+			.addFakeInference(() => ({ content: 'wait()', toolCalls: [] }))
 			.addStockVerbs()
 			.addStockCollectiveVerbs()
 			.withDefaultKit(COLLECTIVE_KIT)
@@ -1182,8 +1202,8 @@ describe('a collective with no commander', () => {
 	it('looks things up from its characters, and waits on the director\'s clock', async () => {
 		const toolResults:string[] = [];
 		const director = await new ArcDirector<Ctx>()
-			.withPriorityQueue({ processInterval: 0, watchInterval: 0, heartbeatStart: 100, heartbeatMin: 100, maxParallel: 2 })
-			.withFakeInference((req) => {
+			.withPriorityQueue({ processInterval: 0, watchInterval: 0, heartbeatStart: 100, heartbeatMin: 100 })
+			.addFakeInference((req) => {
 				const results = req.messages.filter((m) => m.role === 'tool').map((m) => String(m.content));
 				if (results.length > 0) {
 					toolResults.push(...results);

@@ -68,8 +68,8 @@ export type ChatRequest = {
 	temperature?:number;
 	maxTokens?:number;
 	/**
-	 * When false, this turn skips chain-of-thought even if the provider has thinking on.
-	 * Omit to follow the provider setting.
+	 * Whether this turn reasons first, whatever the model or provider setting: models sharing one server id can differ.
+	 * Omit to follow the model's setting, else the provider's.
 	 */
 	enableThinking?:boolean;
 	/**
@@ -77,6 +77,8 @@ export type ChatRequest = {
 	 * Thinking stays on; only the canned thought is injected.
 	 */
 	fakeThought?:boolean;
+	/** Ask for the first answer token's top `topLogprobs` candidates: {@link ChatResponse.logprobs}. */
+	topLogprobs?:number;
 	/** Mind id (or similar) so the HTTP layer can pick a cached response thread. */
 	thread?:string;
 	/** Abort in-flight chat. */
@@ -96,6 +98,8 @@ export type ChatResponse = {
 	reasoning?:string;
 	/** The reply stopped at the output-token cap, so `content` is cut off. */
 	truncated?:boolean;
+	/** With `topLogprobs`: the first answer token's candidates, each token (trimmed) to its log probability. */
+	logprobs?:Record<string, number>;
 };
 
 export type InferenceProvider = {

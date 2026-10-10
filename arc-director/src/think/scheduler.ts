@@ -9,7 +9,11 @@ import {
 } from '../expr/types.js';
 import { arcVerbs } from './score.js';
 
-export type ThinkReason = 'watch' | 'major' | 'verb' | 'heartbeat';
+/** How a mind joins the queue. `skipStart` only counts when it is new. */
+export type EnsureOpts = { skipHeartbeat?:boolean; skipMajor?:boolean; skipStart?:boolean };
+
+/** Why a mind is queued to think. `start`: once, when it joins, so it acts before anything happens to it. */
+export type ThinkReason = 'start' | 'watch' | 'major' | 'verb' | 'heartbeat';
 
 export type ThinkRow = {
 	mindID:string;
@@ -42,7 +46,7 @@ export const DEFAULT_BATCH_WAIT = 20;
  */
 export type ThinkBatchOpts = {
 	/**
-	 * Buffer starts until the model is idle (or `batchWait`), then launch up to `maxParallel`.
+	 * Buffer starts until the model is idle (or `batchWait`), then launch up to its `maxParallel`.
 	 * `false` fills a free slot as soon as one opens. Default true.
 	 */
 	batchThinks?:boolean;
@@ -58,7 +62,6 @@ export type MindQueueOpts = ThinkBatchOpts & {
 	epsilon?:number;
 	watchInterval?:number;
 	processInterval?:number;
-	maxParallel?:number;
 	heartbeatStart?:number;
 	heartbeatMin?:number;
 	heartbeatMax?:number;
@@ -70,9 +73,8 @@ export type MindQueueOpts = ThinkBatchOpts & {
 	mayThink?:(ctx:MayThink)=>boolean;
 };
 
-/** Interchangeable scheduler: the director keeps one, keyed by mind id. */
+/** Interchangeable scheduler: the director keeps one, keyed by mind id. Each model's `maxParallel` caps its thinks. */
 export type MindQueue = {
-	maxParallel:number;
 	batchThinks:boolean | undefined;
 	batchWait:number | undefined;
 	mayThink:((ctx:MayThink)=>boolean) | undefined;
@@ -80,6 +82,8 @@ export type MindQueue = {
 	isThinking(mindID:string):boolean;
 	/** A follow-up, watch, or heartbeat is waiting to start. */
 	hasPending(mindID:string):boolean;
+	/** It finished a think since it joined: its opening one, or any after. */
+	hasThought(mindID:string):boolean;
 	arcOf(mindID:string):Arc | null;
 	beginThink(mindID:string):AbortSignal;
 	endThink(mindID:string, signal?:AbortSignal):void;
@@ -88,7 +92,7 @@ export type MindQueue = {
 	beginArc(mindID:string, arc:Arc):void;
 	endArc(mindID:string):void;
 	allowThink(row:ThinkRow):boolean;
-	ensure(mindID:string, opts?:{ skipHeartbeat?:boolean; skipMajor?:boolean }):void;
+	ensure(mindID:string, opts?:EnsureOpts):void;
 	setWatches(mindID:string, watches:string[]):void;
 	armOnce(mindID:string, expr:string):void;
 	clearOnce(mindID:string):void;
@@ -128,13 +132,14 @@ export type MindState = {
 
 const HEARTBEAT_SCORE = 0.001;
 const MAJOR_SCORE = 1;
+/** Below a major event, so a scene's opening thinks queue behind anything that already happened. */
+const START_SCORE = 0.5;
 
 export abstract class MindScheduler implements MindQueue {
 	public readonly trueScore:number;
 	public readonly epsilon:number;
 	public readonly watchInterval:number;
 	public readonly processInterval:number;
-	public maxParallel:number;
 	public batchThinks:boolean | undefined;
 	public batchWait:number | undefined;
 	public readonly heartbeatStart:number;
@@ -155,7 +160,6 @@ export abstract class MindScheduler implements MindQueue {
 		this.epsilon = opts.epsilon ?? DEFAULT_EPSILON;
 		this.watchInterval = opts.watchInterval ?? 0.25;
 		this.processInterval = opts.processInterval ?? 1;
-		this.maxParallel = opts.maxParallel ?? 2;
 		this.batchThinks = opts.batchThinks;
 		this.batchWait = opts.batchWait;
 		this.heartbeatStart = opts.heartbeatStart ?? 3;
@@ -175,6 +179,10 @@ export abstract class MindScheduler implements MindQueue {
 
 	public hasPending(mindID:string):boolean {
 		return this.rows.some((row) => row.mindID === mindID);
+	}
+
+	public hasThought(mindID:string):boolean {
+		return this.minds.get(mindID)?.thoughtOnce === true;
 	}
 
 	public arcOf(mindID:string):Arc | null {
@@ -231,7 +239,7 @@ export abstract class MindScheduler implements MindQueue {
 		return true;
 	}
 
-	public ensure(mindID:string, opts?:{ skipHeartbeat?:boolean; skipMajor?:boolean }):MindState {
+	public ensure(mindID:string, opts?:EnsureOpts):MindState {
 		let m = this.minds.get(mindID);
 		if (!m) {
 			m = {
@@ -247,8 +255,9 @@ export abstract class MindScheduler implements MindQueue {
 				seq: 0,
 			};
 			this.minds.set(mindID, m);
-			if (!m.skipHeartbeat) {
-				this.insert({ mindID, score: HEARTBEAT_SCORE, reason: 'heartbeat' });
+			// Heartbeat or not, a new mind thinks once: one that waits for events would otherwise idle until one.
+			if (!opts?.skipStart) {
+				this.insert({ mindID, score: START_SCORE, reason: 'start' });
 			}
 		}
 		if (opts?.skipHeartbeat !== undefined) {
@@ -417,16 +426,12 @@ export abstract class MindScheduler implements MindQueue {
 			return [];
 		}
 		this.processClock = 0;
-		const slots = Math.max(0, this.maxParallel - this.inflight.size);
-		if (slots === 0) {
-			return [];
-		}
 		this.prune();
 		this.order();
 		const picked:ThinkRow[] = [];
 		const leftover:ThinkRow[] = [];
 		for (const row of this.rows) {
-			if (picked.length >= slots || this.inflight.has(row.mindID) || !this.allowThink(row)) {
+			if (this.inflight.has(row.mindID) || !this.allowThink(row)) {
 				leftover.push(row);
 				continue;
 			}

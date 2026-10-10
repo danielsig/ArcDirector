@@ -3,6 +3,7 @@ import type { AiLogQuery, CastRows, Command, ReconnectResult } from '@arc-direct
 import type { Session } from '../engine/Session';
 import { coercePrefsPatch, prefs, setPrefs } from '../prefs';
 import { PlayerPilot } from '../characters/PlayerPilot';
+import { findObject } from '../director/names';
 
 export async function dispatchControl(session:Session, command:Command):Promise<unknown> {
 	switch (command.op) {
@@ -45,11 +46,17 @@ function listCharacters(session:Session):CastRows {
 		characters: (arc?.characters() ?? []).map((character) => {
 			const collective = character.collective;
 			const tags = character.tags.map((t) => collective?.shortOf(t) ?? t).filter((t) => t.length > 0);
+			const last = character.lastResult;
+			const pos = findObject(session.director.world, character.id)?.transform.position;
 			return {
 				id: character.id,
 				mind: collective ? 'collective' : character.mind ? 'own' : 'none',
 				collective: collective?.id,
 				tags: tags.length > 0 ? tags : undefined,
+				arc: character.arc ? formatArc(character.arc) : undefined,
+				verb: character.verb || undefined,
+				last: last ? `${last.verb ?? ''} ${last.ok ? 'ok' : 'failed'}${last.reason ? `: ${last.reason}` : ''}` : undefined,
+				at: pos ? [Math.round(pos.x * 10) / 10, Math.round(pos.z * 10) / 10] : undefined,
 			};
 		}),
 		collectives: (arc?.collectives() ?? []).map((collective) => ({

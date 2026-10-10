@@ -105,6 +105,13 @@ function readLoadedInstances(models:unknown[]):LoadedInstance[] {
 
 
 
+/** What one model on a server runs with. Unset fields fall back to the provider's own config. */
+export type ModelSettings = {
+	contextLength?:number;
+	enableThinking?:boolean;
+	reasoningEffort?:ReasoningEffort;
+};
+
 export type RequestInfo = {
 	req:ChatRequest;
 	body:Record<string, unknown>;
@@ -192,7 +199,14 @@ function preferReasoning(effort:ReasoningEffort | undefined):ReasoningOption {
 	return effort ?? 'low';
 }
 
+/** The responses API takes `reasoning: { effort }` in OpenAI's words and rejects a bare option with a 400. */
+const RESPONSES_EFFORT:Record<ReasoningOption, string> = { off: 'none', on: 'medium', low: 'low', medium: 'medium', high: 'high' };
+
 function setReasoningOption(body:Record<string, unknown>, option:ReasoningOption, responses:boolean):void {
+	if (responses) {
+		body.reasoning = { effort: RESPONSES_EFFORT[option] };
+		return;
+	}
 	body.reasoning = option;
 	if (!responses && (option === 'low' || option === 'medium' || option === 'high')) {
 		body['reasoning_effort'] = option;
@@ -208,6 +222,50 @@ function defaultBaseURL():string {
 
 function joinURL(base:string, path:string):string {
 	return `${base.replace(/\/+$/, '')}/${path.replace(/^\/+/, '')}`;
+}
+
+/** `req.responseFormat` as a JSON schema the server must follow. Chat completions only: see `dispatchChat`. */
+function applyResponseFormat(req:ChatRequest, body:Record<string, unknown>):void {
+	const format = req.responseFormat;
+	if (format) {
+		body['response_format'] = { type: 'json_schema', json_schema: { name: format.name, schema: format.schema, strict: format.strict ?? false } };
+	}
+}
+
+/** `req.topLogprobs` in the shape each endpoint asks for it. */
+function applyLogprobs(req:ChatRequest, body:Record<string, unknown>, responses:boolean):void {
+	if (!req.topLogprobs) {
+		return;
+	}
+	body['top_logprobs'] = req.topLogprobs;
+	if (responses) {
+		body['include'] = ['message.output_text.logprobs'];
+	}
+	else {
+		body['logprobs'] = true;
+	}
+}
+
+/** The first answer token's top candidates from a responses or chat completions reply, or undefined without them. */
+function firstLogprobs(json:Record<string, unknown>):Record<string, number> | undefined {
+	const choice = Array.isArray(json.choices) && isRecord(json.choices[0]) ? json.choices[0] : undefined;
+	const tokens = choice
+		? (isRecord(choice.logprobs) ? choice.logprobs.content : undefined)
+		: (Array.isArray(json.output) ? json.output : [])
+			.flatMap((item) => (isRecord(item) && item.type === 'message' && Array.isArray(item.content) ? item.content : []))
+			.flatMap((part) => (isRecord(part) && Array.isArray(part.logprobs) ? part.logprobs : []));
+	const first = Array.isArray(tokens) && isRecord(tokens[0]) ? tokens[0] : undefined;
+	if (!first || !Array.isArray(first['top_logprobs'])) {
+		return undefined;
+	}
+	const out:Record<string, number> = {};
+	for (const top of first['top_logprobs']) {
+		if (isRecord(top) && typeof top.token === 'string' && typeof top.logprob === 'number') {
+			const token = top.token.trim();
+			out[token] = Math.max(out[token] ?? -Infinity, top.logprob);
+		}
+	}
+	return out;
 }
 
 /** Native `fetch` throws if invoked as a method (`this.fetchImpl()`). */
@@ -1086,6 +1144,10 @@ export class HttpProvider implements InferenceProvider {
 	private readonly _applyPromptTemplateFn:ApplyPromptTemplate | undefined;
 	private readonly _onRequest?:(info:RequestInfo)=>void;
 	private readonly _reasoningByModel = new Map<string, ReasoningOption[]>();
+	/** Each catalog model's most context. A load asking for more gets less, and must still count as fitting. */
+	private readonly _maxContextByModel = new Map<string, number>();
+	/** Models the host configured on this server: each loads with its own settings, and none unloads another. */
+	private readonly _models = new Map<string, ModelSettings>();
 	private readonly _threads = new Map<string, ThreadSnapshot[]>();
 	private _enableThinking:boolean;
 	private _reasoningEffort:ReasoningEffort | undefined;
@@ -1117,39 +1179,20 @@ export class HttpProvider implements InferenceProvider {
 		this._onRequest = config.onRequest;
 	}
 
-	public setThinking(enableThinking:boolean):void {
-		this._enableThinking = enableThinking;
+	/**
+	 * Run `model` with `settings` from now on, and keep it loaded beside the other configured models. The next
+	 * `ensureLoaded` reloads it if a loaded copy no longer fits.
+	 */
+	public configureModel(model:string, settings:ModelSettings):void {
+		this._models.set(model, { ...settings });
 	}
 
-	public setContextLength(n:number):void {
-		this._loadOpts.contextLength = n;
+	/** `model` is no longer configured: it runs with the provider's config, and loading another may unload it. */
+	public forgetModel(model:string):void {
+		this._models.delete(model);
 	}
 
-	public liveContextLength():number | undefined {
-		return this._loadOpts.contextLength;
-	}
-
-	/** Unload and load so a new `context_length` takes effect. */
-	public async reload(model:string):Promise<void> {
-		if (!this._probed) {
-			await this.probe();
-		}
-		if (!this._loadEndpoint) {
-			return;
-		}
-		try {
-			await this.refreshInstances();
-		}
-		catch {
-			// keep remembered instances
-		}
-		for (const inst of this._instances.filter((row) => this.instanceMatches(row, model))) {
-			await this.unloadInstance(inst.id);
-		}
-		await this.loadModel(model);
-	}
-
-	/** Load one copy of `model` (and eject extras). Safe to call from setModel. */
+	/** Load one copy of `model` that fits its settings (and eject extras). */
 	public async ensureLoaded(model:string):Promise<void> {
 		if (this._jitModel !== model) {
 			this._jitFirst = null;
@@ -1193,8 +1236,27 @@ export class HttpProvider implements InferenceProvider {
 		return rows.map((r) => r.vec);
 	}
 
+	private settingsOf(model:string):ModelSettings {
+		for (const [id, settings] of this._models) {
+			if (modelIDsMatch(id, model)) {
+				return settings;
+			}
+		}
+		return {};
+	}
+
+	/**
+	 * The load config for `model`: the provider's, with that model's context length, capped at the most it takes.
+	 * Uncapped, a 4k model never fits a 16k ask, so every request would unload and reload it.
+	 */
+	private loadOf(model:string):HttpLoadConfig {
+		const want = this.settingsOf(model).contextLength ?? this._loadOpts.contextLength;
+		const max = [...this._maxContextByModel].find(([id]) => modelIDsMatch(id, model))?.[1];
+		return { ...this._loadOpts, contextLength: want !== undefined && max !== undefined ? Math.min(want, max) : want };
+	}
+
 	private thinkingOn(req:ChatRequest):boolean {
-		return this._enableThinking && req.enableThinking !== false;
+		return req.enableThinking ?? this.settingsOf(req.model).enableThinking ?? this._enableThinking;
 	}
 
 	private async thinkOffPrefill(model:string, thinkingOn:boolean):Promise<string | null> {
@@ -1262,6 +1324,7 @@ export class HttpProvider implements InferenceProvider {
 			cachedTokens: timings.cachedTokens,
 			promptMs: split.promptMs,
 			generateMs: split.generateMs,
+			logprobs: firstLogprobs(json),
 		};
 	}
 
@@ -1288,6 +1351,7 @@ export class HttpProvider implements InferenceProvider {
 			}
 		}
 		this.applyOutputCap(req, body, true);
+		applyLogprobs(req, body, true);
 		let got:{ json:Record<string, unknown>; firstMs?:number; wallMs:number };
 		try {
 			got = await this.postChat(joinURL(this.baseURL, 'responses'), body, false, req);
@@ -1315,6 +1379,7 @@ export class HttpProvider implements InferenceProvider {
 			cachedTokens: parsed.cachedTokens,
 			promptMs: split.promptMs,
 			generateMs: split.generateMs,
+			logprobs: firstLogprobs(got.json),
 		};
 		if (key && parsed.id) {
 			this._threads.set(key, rememberThread(stored, {
@@ -1332,6 +1397,8 @@ export class HttpProvider implements InferenceProvider {
 			temperature: req.temperature ?? 0,
 		};
 		this.applyThinkFields(req, body, false);
+		applyResponseFormat(req, body);
+		applyLogprobs(req, body, false);
 		if (req.tools && req.tools.length > 0) {
 			body.tools = req.tools.map((t) => ({
 				type: 'function',
@@ -1356,7 +1423,7 @@ export class HttpProvider implements InferenceProvider {
 		const option = pickReasoningOption(
 			this.allowedReasoning(req.model),
 			thinkingOn,
-			thinkingOn ? preferReasoning(this._reasoningEffort) : undefined,
+			thinkingOn ? preferReasoning(this.settingsOf(req.model).reasoningEffort ?? this._reasoningEffort) : undefined,
 		);
 		if (option) {
 			setReasoningOption(body, option, responses);
@@ -1410,16 +1477,21 @@ export class HttpProvider implements InferenceProvider {
 
 	private rememberReasoning(models:unknown[]):void {
 		this._reasoningByModel.clear();
+		this._maxContextByModel.clear();
 		for (const row of asModelList({ models })) {
 			if (row.reasoning && row.reasoning.allowed.length > 0) {
 				this._reasoningByModel.set(row.id, row.reasoning.allowed);
+			}
+			if (row.maxContextLength !== undefined) {
+				this._maxContextByModel.set(row.id, row.maxContextLength);
 			}
 		}
 	}
 
 	private async dispatchChat(req:ChatRequest):Promise<ChatResponse> {
 		const messages = await this.prepareMessages(req);
-		if (this._responses === true || (this._responses !== false && this._loadEndpoint)) {
+		// LM Studio's responses API ignores `text.format`, so a schema the answer must follow goes to chat completions.
+		if (!req.responseFormat && (this._responses === true || (this._responses !== false && this._loadEndpoint))) {
 			try {
 				return await this.chatResponses(req, messages);
 			}
@@ -1491,7 +1563,7 @@ export class HttpProvider implements InferenceProvider {
 	}
 
 	private hasReusable(model:string):boolean {
-		return this._instances.some((inst) => this.instanceMatches(inst, model) && loadConfigFits(inst.config, this._loadOpts));
+		return this._instances.some((inst) => this.instanceMatches(inst, model) && loadConfigFits(inst.config, this.loadOf(model)));
 	}
 
 	private instanceMatches(inst:LoadedInstance, model:string):boolean {
@@ -1537,7 +1609,7 @@ export class HttpProvider implements InferenceProvider {
 			await this.keepOneInstance(model);
 			return;
 		}
-		const stale = this._instances.filter((inst) => this.instanceMatches(inst, model) && !loadConfigFits(inst.config, this._loadOpts));
+		const stale = this._instances.filter((inst) => this.instanceMatches(inst, model) && !loadConfigFits(inst.config, this.loadOf(model)));
 		for (const inst of stale) {
 			await this.unloadInstance(inst.id);
 		}
@@ -1587,8 +1659,9 @@ export class HttpProvider implements InferenceProvider {
 		if (this._loadOpts.parallel !== undefined) {
 			body.parallel = this._loadOpts.parallel;
 		}
-		if (this._loadOpts.contextLength !== undefined) {
-			body.context_length = this._loadOpts.contextLength;
+		const contextLength = this.loadOf(model).contextLength;
+		if (contextLength !== undefined) {
+			body.context_length = contextLength;
 		}
 		return body;
 	}
@@ -1606,8 +1679,11 @@ export class HttpProvider implements InferenceProvider {
 		});
 	}
 
+	/** Unload what is in the way of `keep`: anything loaded that is neither it nor another configured model. */
 	private async freeVram(keep:string):Promise<boolean> {
-		const victims = this._instances.filter((inst) => !this.instanceMatches(inst, keep));
+		const configured = [...this._models.keys()];
+		const victims = this._instances.filter((inst) => !this.instanceMatches(inst, keep)
+			&& !configured.some((model) => this.instanceMatches(inst, model)));
 		if (victims.length === 0) {
 			return false;
 		}
@@ -1633,7 +1709,7 @@ export class HttpProvider implements InferenceProvider {
 			}
 		}
 		const same = this._instances.filter((inst) => this.instanceMatches(inst, model));
-		const keep = same.find((inst) => loadConfigFits(inst.config, this._loadOpts)) ?? same[0];
+		const keep = same.find((inst) => loadConfigFits(inst.config, this.loadOf(model))) ?? same[0];
 		if (!keep) {
 			return;
 		}
@@ -1675,7 +1751,8 @@ export class HttpProvider implements InferenceProvider {
 		req:ChatRequest,
 	):Promise<{ json:Record<string, unknown>; firstMs?:number; wallMs:number }> {
 		let lastErr:Error | null = null;
-		let stream = true;
+		// Streamed logprobs come in pieces; a scored answer is one token anyway.
+		let stream = !req.topLogprobs;
 		for (let attempt = 0; attempt < 4; attempt++) {
 			if (req.signal?.aborted) {
 				throw req.signal.reason instanceof Error ? req.signal.reason : new Error('aborted');

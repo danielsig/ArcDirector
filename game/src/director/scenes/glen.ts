@@ -20,7 +20,7 @@ const FORAGER:CharacterSpec = {
 			pinned: true,
 		},
 		{
-			text: 'BridgeKeeper can lower the bridge crossing the river.',
+			text: 'BridgeKeeper can lower and raise the bridge crossing the river.',
 			tags: ['BridgeKeeper', 'Bridge', 'river'],
 		},
 		{
@@ -52,7 +52,7 @@ const BRIDGE_KEEPER:CharacterSpec = {
 	id: 'BridgeKeeper',
 	mind: { rank: 0.5 },
 	identity: { traits: ['stubborn', 'fair', 'dutiful', 'greedy'] },
-	goals: [{ text: 'Get gold by charging people a fee for lowering the bridge for them.', priority: 2 }],
+	goals: [{ text: 'Get gold by charging people a fee for lowering the bridge for them. Never lower it unpaid.', priority: 2 }],
 	memories: [
 		{
 			text: 'I operate the Bridge near the cottage. I accept 10 gold or items of equal value as payment for lowering the bridge. I do not lower Bridge unpaid.',
@@ -60,7 +60,7 @@ const BRIDGE_KEEPER:CharacterSpec = {
 			pinned: true,
 		},
 		{
-			text: 'I lower the bridge by working BridgeLever with the BridgeCrank in my pack.',
+			text: 'I raise or lower the bridge only by working BridgeLever with the BridgeCrank in my pack. Taking gold or an item does not move it. Sight says whether Bridge is raised or lowered right now. I never lower it until I have been paid.',
 			tags: ['BridgeCrank', 'BridgeLever', 'Bridge'],
 			pinned: true,
 		},

@@ -10,6 +10,7 @@ import {
 	type KernelSource,
 	type MapSense,
 	type Mind,
+	type ModelSpec,
 } from 'arc-director';
 import { NPCInput } from '../characters/NPCInput';
 import { PlayerPilot } from '../characters/PlayerPilot';
@@ -22,7 +23,7 @@ import {
 import type { GameObject } from '../engine/GameObject';
 import type { World } from '../engine/World';
 import type { HudAiLogEntry, HudChatLine } from '../ui/hudModel';
-import { prefs, setPrefs } from '../prefs';
+import { prefs, setPrefs, systemOneName, type Prefs } from '../prefs';
 import { publishAiLog, resetAiLogSink, pushLog, logLook } from './aiLogSink';
 import { talkFace, canHearClearly, SPEECH_LIFE } from './talkAttend';
 import { YOU_SYMBOL } from './mapMarks';
@@ -47,6 +48,19 @@ export type { CharacterCtx, SceneHooks };
 
 const ARC_RETRY_CAP = 3;
 const STALL_VERBS = new Set(['wait', 'wander', 'say', 'set_status']);
+
+/**
+ * The menu's chat model three ways, one loaded model under them all: `main`, which every mind thinks with unless a
+ * scene assigns another; `quick`, without reasoning, for minds that must answer mid-fight; and `local`, the System
+ * One that scores `choose` picks with it, or with the menu's decision model.
+ */
+export function addModels(director:ArcDirector<CharacterCtx>, p:Prefs = prefs()):ArcDirector<CharacterCtx> {
+	const main:ModelSpec = { id: p.model || undefined, contextLength: p.contextLength, thinking: p.thinkingBudget, maxParallel: p.maxParallel };
+	return director
+		.addModel('main', main)
+		.addModel('quick', { ...main, thinking: false })
+		.addModel('local', { ...main, id: p.decisionModel || main.id, thinking: false, decision: true });
+}
 
 export class GameHost {
 	public readonly world:World;
@@ -96,10 +110,13 @@ export class GameHost {
 	}
 
 	public configure(director:ArcDirector<CharacterCtx>):ArcDirector<CharacterCtx> {
+		// Both System Ones, named as the menu names them; the menu picks the default, a scene may assign either.
+		addModels(director.addLMStudioInference({ baseURL: '/inference/v1', load: LM_STUDIO_LOAD }))
+			.addJevInference({ name: 'jev' })
+			.setDefaultSystemOne(systemOneName(prefs().systemOne));
 		return addBodyVerbs(director)
 			.withMindDefaults({ skipHeartbeat: true })
 			.withPriorityQueue({
-				maxParallel: prefs().maxParallel,
 				batchThinks: prefs().batchThinks,
 				batchWait: 5,
 				verbScores: { steal: 0.95, equip: 0.5, unequip: 0.5 },
@@ -120,13 +137,8 @@ export class GameHost {
 					return true;
 				},
 			})
-			.withLMStudioInference({
-				baseURL: '/inference/v1',
-				model: prefs().model,
-				enableThinking: prefs().thinkingBudget,
-				load: { ...LM_STUDIO_LOAD, contextLength: prefs().contextLength },
-			})
 			.withArcText(prefs().arcText)
+			.withForceSchema(prefs().forceSchema)
 			.addStockVerbs()
 			.addStockCollectiveVerbs()
 			.withWorld(gameWorld(this))
@@ -207,11 +219,7 @@ export class GameHost {
 		finally {
 			this._starting = false;
 		}
-		const pref = prefs().model;
-		if (pref !== this.arc.model) {
-			this.arc.setModel(pref);
-		}
-		setPrefs({ model: this.arc.model });
+		setPrefs({ model: this.arc.modelID() });
 		for (const mind of this.arc.minds()) {
 			this.wireVoice(mind);
 		}

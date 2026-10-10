@@ -47,6 +47,9 @@ function toggle():void {
 		return;
 	}
 	props.hud.briefOpen = !props.hud.briefOpen;
+	if (props.hud.briefOpen) {
+		props.hud.keysOpen = false;
+	}
 }
 
 function close():void {

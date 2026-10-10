@@ -35,6 +35,8 @@ export type SeenObject = {
 	maxHP?:number;
 	/** Extra clause after the name, e.g. `Blade 3m away`. */
 	note?:string;
+	/** Stay in sight past the radius. A bridge everyone can see. */
+	always?:boolean;
 };
 
 /** One irreducible phrase `formatSight` cannot union further. */

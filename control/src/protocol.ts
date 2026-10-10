@@ -36,6 +36,12 @@ export type CharacterRow = {
 	mind:'own' | 'collective' | 'none';
 	collective?:string;
 	tags?:string[];
+	/** The arc it runs now, the step it is on, and how its last step went. */
+	arc?:string;
+	verb?:string;
+	last?:string;
+	/** Its ground position, `[x, z]`, rounded. */
+	at?:[number, number];
 };
 
 /** Characters sharing one mind. Its `commander` acts for it; without one it is bodiless. */

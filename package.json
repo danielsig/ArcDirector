@@ -4,6 +4,7 @@
 	"type": "module",
 	"scripts": {
 		"lint": "eslint .",
+		"lint:md": "markdownlint-cli2",
 		"test": "pnpm --filter arc-director test && pnpm --filter @arc-director/control test && pnpm --filter @arc-director/game test",
 		"fixture": "pnpm --filter arc-director fixture"
 	},
@@ -14,6 +15,7 @@
 		"eslint": "^9.39.4",
 		"globals": "^16.4.0",
 		"jiti": "^2.6.1",
+		"markdownlint-cli2": "^0.23.3",
 		"typescript": "^6.0.3",
 		"typescript-eslint": "^8.62.1"
 	}

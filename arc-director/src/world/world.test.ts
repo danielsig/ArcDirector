@@ -8,7 +8,7 @@ import { evaluate } from '../expr/eval.js';
 import type { ArcResult } from '../arc/types.js';
 import { geometryKernels } from './kernels.js';
 import { Mover } from './mover.js';
-import { findRoute, reachablePoints, type Blocked, type Route } from './route.js';
+import { awayGoal, findRoute, pointGoal, reachablePoints, type Blocked, type Route } from './route.js';
 import type { HostWorld, PathStep, Vec } from './types.js';
 import { distance, groundAxes } from './vec.js';
 
@@ -111,11 +111,12 @@ function network(point:Vec):PathStep[] {
 	return ROADS.filter(([a, b]) => a === i || b === i).map(([a, b, cost]) => ({ point: WAYPOINTS[a === i ? b : a], cost }));
 }
 
-async function run(grid:Grid, reply:string, opts:{ kit:string[]; seconds?:number; units?:string[] }):Promise<{ director:ArcDirector<Ctx> }> {
+async function run(grid:Grid, reply:string, opts:{ kit:string[]; seconds?:number; units?:string[]; nearRadius?:number }):Promise<{ director:ArcDirector<Ctx> }> {
 	let sent = false;
 	const director = new ArcDirector<Ctx>()
-		.withPriorityQueue({ processInterval: 0, watchInterval: 0, heartbeatStart: 1000, heartbeatMin: 1000, maxParallel: 1 })
-		.withFakeInference(() => {
+		.withPriorityQueue({ processInterval: 0, watchInterval: 0, heartbeatStart: 1000, heartbeatMin: 1000 })
+		.addModel('fake', { maxParallel: 1 })
+		.addFakeInference(() => {
 			const content = sent ? 'wait(seconds=100)' : reply;
 			sent = true;
 			return { content, toolCalls: [] };
@@ -125,7 +126,7 @@ async function run(grid:Grid, reply:string, opts:{ kit:string[]; seconds?:number
 		.addStockCollectiveVerbs()
 		.withWorld(grid.world)
 		.withDefaultKit({ verbs: opts.kit })
-		.withKernels((ctx) => ({ me: dummyEntity(ctx.id, { tags: ['agent'] }), others: [], items: [] }))
+		.withKernels((ctx) => ({ me: dummyEntity(ctx.id, { tags: ['agent'] }), others: [], items: [], nearRadius: opts.nearRadius }))
 		.withContext((id) => (grid.point.has(id) ? { id } : undefined));
 	if (opts.units) {
 		director.addCollective({ id: 'Hive', kit: { verbs: opts.kit }, identity: { role: 'Leads.' }, characters: opts.units.map((id) => ({ id })) });
@@ -152,7 +153,7 @@ describe('findRoute', () => {
 	};
 
 	it('finds the cheapest route on a 1D line and stops in reach', () => {
-		const route = openRoute(findRoute(line, [0], [5], 1));
+		const route = openRoute(findRoute(line, [0], pointGoal([5], 1)));
 		assert.deepEqual(route.points, [[1], [2], [3], [4]]);
 		assert.equal(route.cost, 4);
 	});
@@ -161,15 +162,15 @@ describe('findRoute', () => {
 		const graph = (point:Vec):PathStep[] => [[1, 0, 0], [0, 1, 0], [0, 0, 1], [-1, 0, 0], [0, -1, 0], [0, 0, -1]]
 			.map((d) => ({ point: point.map((v, i) => v + d[i]) }))
 			.map((step) => (step.point[0] === 1 && step.point[1] === 0 && step.point[2] === 0 ? { ...step, cost: 50 } : step));
-		const route = openRoute(findRoute(graph, [0, 0, 0], [2, 0, 0]));
+		const route = openRoute(findRoute(graph, [0, 0, 0], pointGoal([2, 0, 0])));
 		assert.equal(route.cost, 4);
 		assert.equal(route.points.some((p) => p.join() === '1,0,0'), false);
 	});
 
 	it('names the blocker when a blocked step is the only way, and gives up past the cap', () => {
 		const gated = (point:Vec):PathStep[] => line(point).map((s) => (s.point[0] === 2 ? { ...s, blocked: 'Gate is shut' } : s));
-		assert.deepEqual(findRoute(gated, [0], [4]), { blockers: [{ reason: 'Gate is shut', cost: 4 }] });
-		assert.equal(findRoute(line, [0], [1e6], 0, 50), undefined);
+		assert.deepEqual(findRoute(gated, [0], pointGoal([4])), { blockers: [{ reason: 'Gate is shut', cost: 4 }] });
+		assert.equal(findRoute(line, [0], pointGoal([1e6]), 50), undefined);
 	});
 
 	it('names every locked way in, cheapest first, and only those that lead there', () => {
@@ -187,13 +188,23 @@ describe('findRoute', () => {
 				return reason ? { ...s, blocked: reason } : s;
 			});
 		};
-		const found = findRoute(gated, [1, 1], [11, 9]);
+		const found = findRoute(gated, [1, 1], pointGoal([11, 9]));
 		assert.ok(found && 'blockers' in found);
 		assert.deepEqual(found.blockers.map((b) => b.reason), ['EastGate is locked', 'WestGate is locked — you carry IronKey']);
 	});
 
 	it('crosses a sparse weighted network between two points off it', () => {
-		assert.deepEqual(openRoute(findRoute(network, [1, 1], [11, 9])).points, [[0, 0], [10, 0], [10, 10], [11, 9]]);
+		assert.deepEqual(openRoute(findRoute(network, [1, 1], pointGoal([11, 9]))).points, [[0, 0], [10, 0], [10, 10], [11, 9]]);
+	});
+
+	it('gets out of range the long way round rather than running past the threat', () => {
+		// Two ways out of 5 from a threat at [1, 0]: past it (about 6.1 long), or wide of it (8 long).
+		const roads:[Vec, Vec][] = [[[0, 0], [2, 0.5]], [[2, 0.5], [6, 0]], [[0, 0], [0, -3]], [[0, -3], [5, -3]]];
+		const graph = (point:Vec):PathStep[] => roads.flatMap(([a, b]) => (
+			distance(a, point) < 1e-9 ? [{ point: b }] : distance(b, point) < 1e-9 ? [{ point: a }] : []
+		));
+		assert.deepEqual(openRoute(findRoute(graph, [0, 0], awayGoal([1, 0], 5))).points, [[0, -3], [5, -3]]);
+		assert.equal(findRoute(graph, [0, 0], awayGoal([1, 0], 50)), undefined, 'cornered: no way that far');
 	});
 
 	it('lists reachable points without crossing a blocked step', () => {
@@ -319,6 +330,40 @@ describe('stock world verbs', () => {
 		director.dispose();
 	});
 
+	it('flees out of nearby, runs again when they close in, and ends once out of range a while', async () => {
+		const grid = new Grid().place('Ann', [0, 0]).place('Bo', [2, 0]);
+		const { director } = await run(grid, 'flee(Bo)', { kit: ['flee', 'wait'], seconds: 2, nearRadius: 4 });
+		const ann = director.character('Ann')!;
+		assert.ok(distance(grid.point.get('Ann')!, [2, 0]) >= 4, 'out of nearby');
+		assert.equal(ann.arc?.head.verb, 'flee', 'not safe for long enough yet');
+		const at = grid.point.get('Ann')!;
+		grid.place('Bo', [at[0] + 1, at[1]]);
+		const tick = async (seconds:number, from:number):Promise<void> => {
+			for (let t = 0; t < seconds * 10; t++) {
+				grid.step(0.1);
+				director.tick(0.1, from + t * 0.1);
+				await flush();
+			}
+		};
+		await tick(2, 20);
+		assert.ok(distance(grid.point.get('Ann')!, grid.point.get('Bo')!) >= 4, 'ran again');
+		assert.equal(ann.arc?.head.verb, 'flee', 'the clock restarted when they closed in');
+		await tick(3, 22);
+		assert.deepEqual(ann.lastResult && { ok: ann.lastResult.ok, reason: ann.lastResult.reason }, { ok: true, reason: 'got away from Bo' });
+		director.dispose();
+	});
+
+	it('flees as far as asked, and asks how far when the host has no nearby', async () => {
+		const grid = new Grid().place('Ann', [0, 0]).place('Bo', [1, 0]);
+		const { director } = await run(grid, 'flee(from=Bo, distance=7)', { kit: ['flee', 'wait'], seconds: 6 });
+		assert.ok(distance(grid.point.get('Ann')!, [1, 0]) >= 7);
+		director.dispose();
+		const still = new Grid().place('Ann', [0, 0]).place('Bo', [1, 0]);
+		const { director: asked } = await run(still, 'flee(Bo)', { kit: ['flee', 'wait'], seconds: 1 });
+		assert.equal(asked.character('Ann')!.lastResult?.reason, 'say how far: flee(from, distance)');
+		asked.dispose();
+	});
+
 	it('forms a line of units across the way to the foe', async () => {
 		const grid = new Grid().place('A', [0, 0]).place('B', [1, 3]).place('C', [2, -3]).place('Gate', [0, 8]);
 		const { director } = await run(grid, 'issue(who=units, arc=hold_line(at=A, facing=Gate, paces=2))', {
@@ -333,7 +378,7 @@ describe('stock world verbs', () => {
 
 	it('refuses to start a kit whose verbs the world cannot run', async () => {
 		const director = new ArcDirector<Ctx>()
-			.withFakeInference()
+			.addFakeInference()
 			.addStockVerbs()
 			.withWorld({ find: () => undefined, getPose: () => undefined })
 			.withContext((id) => ({ id }))

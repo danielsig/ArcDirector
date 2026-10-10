@@ -83,6 +83,12 @@ describe('isThinkingModel', () => {
 		assert.equal(isThinkingModel('plain-chat'), false);
 	});
 
+	it('takes hybrid Qwen3 as thinking, but not its Instruct or Thinking splits, which ignore /no_think', () => {
+		assert.equal(isThinkingModel('qwen/qwen3-32b'), true);
+		assert.equal(isThinkingModel('qwen3-4b-instruct-2507'), false, 'a /no_think prefill made it answer nothing');
+		assert.equal(isThinkingModel('qwen/qwen3-4b-thinking-2507'), false);
+	});
+
 	it('does not list qwen on the preferred roster', () => {
 		assert.equal(PREFERRED_MODELS.some((id) => /qwen/i.test(id)), false);
 		assert.equal(MODEL_TIERS.some((t) => /qwen/i.test(t.id)), false);
@@ -153,5 +159,16 @@ describe('pickReasoningOption', () => {
 	it('sends nothing when the catalog has no match', () => {
 		assert.equal(pickReasoningOption(undefined, true, 'low'), undefined);
 		assert.equal(pickReasoningOption(['on'], false), undefined);
+	});
+});
+
+describe('pickSingleChatModel', () => {
+	it('never picks an encoder', () => {
+		const models = asModelList({ models: [
+			{ key: 'google/gemma-4-e2b', type: 'llm', architecture: 'gemma4', size_bytes: 4.4e9, capabilities: { vision: true, trained_for_tool_use: true, reasoning: { allowed_options: ['off', 'on'] } } },
+			{ key: 'laya-finetuned-rlcd', type: 'llm', architecture: 'modern-bert', size_bytes: 3.6e8, capabilities: { vision: false, trained_for_tool_use: false } },
+			{ key: 'liquid/lfm2-1.2b', type: 'llm', architecture: 'lfm2', size_bytes: 1.2e9, capabilities: { vision: false, trained_for_tool_use: false } },
+		] });
+		assert.notEqual(pickSingleChatModel(models), 'laya-finetuned-rlcd');
 	});
 });

@@ -1,5 +1,6 @@
-import { prefs } from '../prefs';
+import { prefs, type SystemOneKind } from '../prefs';
 import { characterOptions, resolvePlayerKind } from '../render/artCache';
+import type { BenchRow } from '../director/decisionBench';
 
 export type MinimapCell = {
 	def:string;
@@ -55,7 +56,17 @@ export type HudAiLogEntry = {
 export type HudModelOption = {
 	id:string;
 	loaded:boolean;
+	/** A decision model: a System One only, never a chat model. */
+	decision:boolean;
+	/** How many linked devices list it. LM Studio names none, and routes a request to one of them itself. */
+	devices:number;
 };
+
+/** `id`, then what sets it apart: on several devices, a decision model, or loaded. */
+export function modelLabel(m:HudModelOption):string {
+	const devices = m.devices > 1 ? ` · ${m.devices} devices` : '';
+	return `${m.id}${devices}${m.decision ? ' · decision' : m.loaded ? ' · loaded' : ''}`;
+}
 
 export type HudHeartrate = {
 	id:string;
@@ -96,6 +107,8 @@ export type HudModel = {
 	menuOpen:boolean;
 	/** Scene brief. First visit opens it; later visits only the (?) button. */
 	briefOpen:boolean;
+	/** Keybindings help. */
+	keysOpen:boolean;
 	/** Last pause-menu page this session. Not persisted. */
 	menuPage:MenuPage;
 	menuNotice:string;
@@ -123,6 +136,19 @@ export type HudModel = {
 	thinkingBudget:boolean;
 	/** Ask for Arc text instead of JSON. Menu + localStorage. Testing. */
 	arcText:boolean;
+	/** Arc JSON thinks send the arc schema and no tools. Menu + localStorage. Testing. */
+	forceSchema:boolean;
+	/** The System One behind `choose`. Menu + localStorage. */
+	systemOne:SystemOneKind;
+	/** The local System One's model; empty is the main model. Menu + localStorage. */
+	decisionModel:string;
+	/** The decision bench window is open over the menu. */
+	benchOpen:boolean;
+	/** Candidates ticked in the bench. */
+	benchPick:string[];
+	/** The last bench, one row per candidate. */
+	benchRows:BenchRow[];
+	benchRunning:boolean;
 	/** Local server catalog (embeddings omitted). */
 	models:HudModelOption[];
 	/** Packed kind currently drawn on the player (`player` = witch). */
@@ -191,6 +217,7 @@ export function emptyHud():HudModel {
 		sayGoods: [],
 		menuOpen: false,
 		briefOpen: false,
+		keysOpen: false,
 		menuPage: 'testing',
 		menuNotice: '',
 		savedUTC: '',
@@ -205,6 +232,13 @@ export function emptyHud():HudModel {
 		batchThinks: p.batchThinks,
 		thinkingBudget: p.thinkingBudget,
 		arcText: p.arcText,
+		forceSchema: p.forceSchema,
+		systemOne: p.systemOne,
+		decisionModel: p.decisionModel,
+		benchOpen: false,
+		benchPick: [],
+		benchRows: [],
+		benchRunning: false,
 		models: [],
 		playerKind: resolvePlayerKind(p.playerKind),
 		playerKinds: characterOptions(),

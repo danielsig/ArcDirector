@@ -24,6 +24,12 @@ type RunnerSpec<TCtx> = PersonaSpec & {
 	maxLaws?:number;
 	/** Override director handler cooldown (game seconds). */
 	cooldown?:number;
+	/**
+	 * The System One it picks `choose` with, by its name on the director (`addJevInference`, …); `null` for none.
+	 * Omit for the director's default. A collective's also picks for every character in it. Its kit must still
+	 * grant `choose`.
+	 */
+	systemOne?:string | null;
 };
 
 /** Argument to `ArcDirector.addCharacter` and `Collective.addCharacter`. */
@@ -35,6 +41,20 @@ export type CharacterSpec<TCtx = unknown> = RunnerSpec<TCtx> & {
 	 * drives. In a collective it thinks with the collective's mind, and gets its own when it leaves.
 	 */
 	mind?:MindSettings;
+	/**
+	 * Act without a mind: a System One model keeps picking one of these arcs by name for `goal`. Every key but
+	 * `goal` and `until` names a choice; its value is that choice's arc text. `until` is a watch that ends the
+	 * picking while it holds. Runs whenever the character is idle and the director has a System One; in a
+	 * collective, that is whenever its commander has issued it nothing.
+	 */
+	choose?:StandingChoice;
+};
+
+/** A character spec's `choose`: `{ goal, until?, hold: 'go_to(EastGate) && wait()', … }`. */
+export type StandingChoice = {
+	goal:string;
+	until?:string;
+	[choice:string]:string | undefined;
 };
 
 /** Argument to `ArcDirector.addCollective`: characters sharing one mind. */

@@ -35,6 +35,14 @@ export type ModelInfo = {
 		allowed:ReasoningOption[];
 		default?:ReasoningOption;
 	};
+	/** File size, from the native catalog. */
+	sizeBytes?:number;
+	/** From `capabilities.trained_for_tool_use`. */
+	toolUse?:boolean;
+	/** The native catalog's `architecture` (`gemma4`, `modern-bert`). */
+	architecture?:string;
+	/** The most context the model takes, from the native catalog. */
+	maxContextLength?:number;
 };
 
 export function isVisionModel(model:ModelInfo | string):boolean {
@@ -84,7 +92,8 @@ export function thinkOffMode(id:string):ThinkOff | undefined {
 	if (row) {
 		return undefined;
 	}
-	if (/qwen3|qwq/i.test(id)) {
+	// Hybrid Qwen3 takes /no_think; its Instruct and Thinking splits (2507 on) never or always think, and ignore it.
+	if (/qwen3|qwq/i.test(id) && !/instruct|thinking/i.test(id)) {
 		return 'no_think';
 	}
 	return undefined;
@@ -210,6 +219,10 @@ function asNativeList(payload:unknown):ModelInfo[] {
 			loaded: instances.length > 0,
 			vision: typeof caps.vision === 'boolean' ? caps.vision : rowVision(row),
 			reasoning: rowReasoning(row),
+			sizeBytes: typeof row.size_bytes === 'number' ? row.size_bytes : undefined,
+			toolUse: typeof caps.trained_for_tool_use === 'boolean' ? caps.trained_for_tool_use : undefined,
+			architecture: typeof row.architecture === 'string' ? row.architecture : undefined,
+			maxContextLength: typeof row.max_context_length === 'number' ? row.max_context_length : undefined,
 		});
 	}
 	return out;
@@ -226,8 +239,19 @@ export function modelIDsMatch(id:string, name:string):boolean {
 	return id.endsWith(name) || name.endsWith(id) || id.includes(name) || name.includes(id);
 }
 
-function findNamed(pool:ModelInfo[], name:string):ModelInfo | undefined {
-	return pool.find((m) => matchesName(m, name));
+/** The catalog row `name` means: exactly that id, else a close spelling of it. */
+export function findModel(pool:ModelInfo[], name:string):ModelInfo | undefined {
+	return pool.find((m) => m.id === name) ?? pool.find((m) => matchesName(m, name));
+}
+
+/** A decision model (LM Studio's `decision` type): it answers through the server's System One endpoint, not chat. */
+export function isDecisionModel(model:ModelInfo):boolean {
+	return model.type === 'decision';
+}
+
+/** An encoder (BERT and kin) only scores or embeds; a chat server cannot make it answer. */
+export function isEncoderModel(model:ModelInfo):boolean {
+	return /bert|encoder/i.test(model.architecture ?? '');
 }
 
 /** Higher is a better default. Active params near 4B, then total size near `targetB` (20). */
@@ -249,11 +273,11 @@ export function pickSingleChatModel(
 	preferred:string[] = PREFERRED_MODELS,
 	requested?:string,
 ):string | undefined {
-	const chat = models.filter((m) => !isEmbeddingModel(m));
+	const chat = models.filter((m) => !isEmbeddingModel(m) && !isEncoderModel(m));
 	const loaded = chat.filter(isLoadedModel);
 	const pool = loaded.length > 0 ? loaded : chat;
 	if (requested) {
-		const hit = findNamed(chat, requested) ?? findNamed(pool, requested);
+		const hit = findModel(chat, requested) ?? findModel(pool, requested);
 		if (hit) {
 			return hit.id;
 		}
@@ -269,13 +293,14 @@ function catalogURLs(root:string):string[] {
 /** Native `/api/v0/models` includes `state`; `/v1/models` often does not. */
 export async function fetchModelCatalog(
 	root:string,
-	opts:{ timeoutMs?:number; headers?:Record<string, string> } = {},
+	opts:{ timeoutMs?:number; headers?:Record<string, string>; fetch?:typeof fetch } = {},
 ):Promise<ModelInfo[]> {
 	const timeoutMs = opts.timeoutMs ?? 4000;
+	const get = opts.fetch ?? fetch;
 	let fallback:ModelInfo[] = [];
 	for (const url of catalogURLs(root)) {
 		try {
-			const res = await fetch(url, {
+			const res = await get(url, {
 				headers: opts.headers,
 				signal: AbortSignal.timeout(timeoutMs),
 			});

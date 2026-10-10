@@ -24,7 +24,6 @@ describe('ThinkQueue', () => {
 			processInterval: 0,
 			trueScore: 0.51,
 			epsilon: 0.05,
-			maxParallel: 2,
 		});
 		const me = posed('me', { x: 0, z: 0 });
 		const Player = posed('Player', { x: 3, z: 0 });
@@ -52,7 +51,6 @@ describe('ThinkQueue', () => {
 		const q = new ThinkQueue({
 			watchInterval: 100,
 			processInterval: 0,
-			maxParallel: 2,
 			heartbeatStart: 0.01,
 			heartbeatMin: 0.01,
 		});
@@ -85,25 +83,40 @@ describe('ThinkQueue', () => {
 		assert.equal(offSig.aborted, true);
 	});
 
-	it('HTTP beginThink occupies a slot; a live arc does not', () => {
-		const q = new ThinkQueue({ watchInterval: 100, processInterval: 0, maxParallel: 2 });
+	it('never hands out a mind already thinking; a live arc does not hold it back', () => {
+		const q = new ThinkQueue({ watchInterval: 100, processInterval: 0 });
 		q.ensure('A', { skipHeartbeat: true });
 		q.ensure('B', { skipHeartbeat: true });
 		q.ensure('C', { skipHeartbeat: true });
 		q.beginThink('A');
+		q.enqueueMajor('A', true);
 		q.enqueueMajor('B');
 		q.enqueueMajor('C');
-		assert.equal(q.tick(1, new Map()).length, 1);
+		assert.deepEqual(q.tick(1, new Map()).map((row) => row.mindID).sort(), ['B', 'C']);
 		q.endThink('A');
 		q.beginArc('A', { head: { verb: 'go_to', args: { target: 'Gate' } } });
 		q.enqueueMajor('B');
 		q.enqueueMajor('C');
-		assert.equal(q.tick(1, new Map()).length, 2);
+		assert.deepEqual(q.tick(1, new Map()).map((row) => row.mindID).sort(), ['A', 'B', 'C']);
+	});
+
+	it('queues one opening think for a new mind, heartbeat or not, below a major event', () => {
+		const q = new ThinkQueue({ watchInterval: 100, processInterval: 0 });
+		q.ensure('Quiet', { skipHeartbeat: true });
+		q.ensure('Loud', { skipHeartbeat: true });
+		q.enqueueMajor('Loud');
+		const rows = q.tick(1, new Map());
+		assert.deepEqual(rows.map((row) => [row.mindID, row.reason]), [['Loud', 'major'], ['Quiet', 'start']]);
+		q.ensure('Quiet');
+		assert.equal(q.tick(1, new Map()).length, 0, 'once: ensuring it again queues nothing');
+		q.ensure('Waiter', { skipHeartbeat: true, skipStart: true });
+		assert.equal(q.tick(1, new Map()).length, 0, 'skipStart: it waits for something to happen');
 	});
 
 	it('skipMajor drops enqueue unless forced', () => {
-		const q = new ThinkQueue({ watchInterval: 100, processInterval: 0, maxParallel: 2 });
+		const q = new ThinkQueue({ watchInterval: 100, processInterval: 0 });
 		q.ensure('A', { skipMajor: true, skipHeartbeat: true });
+		q.drop('A');
 		q.enqueueMajor('A');
 		assert.equal(q.tick(1, new Map()).length, 0);
 		q.enqueueMajor('A', true);
@@ -111,12 +124,11 @@ describe('ThinkQueue', () => {
 	});
 
 	it('heartbeat is a low-priority pulse every 3s and does not stretch', () => {
-		const q = new ThinkQueue({ watchInterval: 100, processInterval: 0, maxParallel: 1 });
+		const q = new ThinkQueue({ watchInterval: 100, processInterval: 0 });
 		q.ensure('A');
 		const first = q.tick(0, new Map());
 		assert.equal(first.length, 1);
-		assert.equal(first[0].reason, 'heartbeat');
-		assert.equal(first[0].score, 0.001);
+		assert.equal(first[0].reason, 'start', 'the opening think, then the pulse');
 		q.noteResult('A', true);
 		assert.equal(q.heartbeatSeconds('A'), 3);
 		assert.equal(q.tick(2.9, new Map()).length, 0);
@@ -127,7 +139,7 @@ describe('ThinkQueue', () => {
 	});
 
 	it('drop rows when think starts', () => {
-		const q = new ThinkQueue({ watchInterval: 100, processInterval: 0, maxParallel: 2 });
+		const q = new ThinkQueue({ watchInterval: 100, processInterval: 0 });
 		q.enqueueMajor('A');
 		q.drop('A');
 		const rows = q.tick(1, new Map());
@@ -142,7 +154,6 @@ describe('ThinkQueue', () => {
 		const q = new ThinkQueue({
 			watchInterval: 100,
 			processInterval: 0,
-			maxParallel: 1,
 			heartbeatStart: 120,
 			heartbeatMin: 30,
 			heartbeatAdjust: false,
@@ -152,9 +163,7 @@ describe('ThinkQueue', () => {
 		q.noteResult('Hot', false);
 		q.enqueueMajor('Hot');
 		q.enqueueMajor('Cold');
-		const first = q.tick(1, new Map());
-		assert.equal(first.length, 1);
-		assert.equal(first[0].mindID, 'Cold');
+		assert.deepEqual(q.tick(1, new Map()).map((row) => row.mindID), ['Cold', 'Hot']);
 		q.enqueueMajor('Hot');
 		const later = q.tick(60, new Map());
 		assert.equal(later[0].mindID, 'Hot');
@@ -176,8 +185,9 @@ describe('ThinkQueue', () => {
 		assert.ok(verbThinkScore('give', false) >= 0.3);
 		assert.equal(VERB_THINK_SCORES.go_to, 0.8);
 
-		const q = new ThinkQueue({ watchInterval: 100, processInterval: 0, maxParallel: 2 });
+		const q = new ThinkQueue({ watchInterval: 100, processInterval: 0 });
 		q.ensure('A', { skipHeartbeat: true });
+		q.drop('A');
 		q.enqueueVerb('A', 'wait');
 		assert.equal(q.tick(1, new Map()).length, 0);
 		q.enqueueVerb('A', 'follow');
@@ -198,7 +208,7 @@ describe('ThinkQueue', () => {
 	});
 
 	it('prunes verb rows to the more serious verb; skipMajor does not drop them', () => {
-		const q = new ThinkQueue({ watchInterval: 100, processInterval: 0, maxParallel: 2 });
+		const q = new ThinkQueue({ watchInterval: 100, processInterval: 0 });
 		q.ensure('A', { skipHeartbeat: true, skipMajor: true });
 		q.enqueueMajor('A');
 		q.enqueueVerb('A', 'wander');
@@ -213,10 +223,10 @@ describe('ThinkQueue', () => {
 		const q = new ThinkQueue({
 			watchInterval: 100,
 			processInterval: 0,
-			maxParallel: 2,
 			verbScores: { wander: 0, inspect: 0.5 },
 		});
 		q.ensure('A', { skipHeartbeat: true });
+		q.drop('A');
 		q.enqueueVerb('A', 'wander');
 		assert.equal(q.tick(1, new Map()).length, 0);
 		q.enqueueVerb('A', 'inspect');
@@ -245,7 +255,7 @@ describe('ThinkQueue', () => {
 			then: { join: 'then', arc: { head: { verb: 'think', args: {} } } },
 		}), VERB_THINK_SCORES.go_to);
 
-		const q = new ThinkQueue({ watchInterval: 100, processInterval: 0, maxParallel: 2 });
+		const q = new ThinkQueue({ watchInterval: 100, processInterval: 0 });
 		q.ensure('A', { skipHeartbeat: true });
 		q.enqueueArc('A', {
 			head: { verb: 'wait', args: {} },
@@ -289,7 +299,6 @@ describe('ThinkQueue', () => {
 			processInterval: 0,
 			trueScore: 0.51,
 			epsilon: 0.05,
-			maxParallel: 2,
 		});
 		q.ensure('Guard', { skipHeartbeat: true });
 		q.armOnce('Guard', 'hasHeard');
@@ -312,7 +321,7 @@ describe('ThinkQueue', () => {
 	});
 
 	it('default mayThink allows while an arc is live; callback can block it', () => {
-		const q = new ThinkQueue({ watchInterval: 100, processInterval: 0, maxParallel: 2 });
+		const q = new ThinkQueue({ watchInterval: 100, processInterval: 0 });
 		q.ensure('A', { skipHeartbeat: true });
 		q.beginArc('A', {
 			head: { verb: 'go_to', args: { target: 'Gate' } },
@@ -333,7 +342,6 @@ describe('ThinkQueue', () => {
 		const think = withPriorityQueue({
 			watchInterval: 100,
 			processInterval: 0,
-			maxParallel: 2,
 			mayThink: ({ arc }) => !arc,
 		});
 		assert.equal(think.heartbeat, 0);
@@ -343,20 +351,18 @@ describe('ThinkQueue', () => {
 	});
 
 	it('simple queue is first come, first served', () => {
-		const q = new SimpleQueue({ watchInterval: 100, processInterval: 0, maxParallel: 1 });
+		const q = new SimpleQueue({ watchInterval: 100, processInterval: 0 });
 		q.ensure('Late', { skipHeartbeat: true });
 		q.ensure('Early', { skipHeartbeat: true });
+		q.drop('Late');
+		q.drop('Early');
 		q.enqueueMajor('Early');
 		q.enqueueMajor('Late');
-		const first = q.tick(1, new Map());
-		assert.equal(first.length, 1);
-		assert.equal(first[0].mindID, 'Early');
-		const second = q.tick(1, new Map());
-		assert.equal(second[0].mindID, 'Late');
+		assert.deepEqual(q.tick(1, new Map()).map((row) => row.mindID), ['Early', 'Late']);
 	});
 
 	it('simple queue does not let a later major jump the line', () => {
-		const q = new SimpleQueue({ watchInterval: 100, processInterval: 0, maxParallel: 1 });
+		const q = new SimpleQueue({ watchInterval: 100, processInterval: 0 });
 		q.ensure('Early', { skipHeartbeat: true });
 		q.ensure('Loud', { skipHeartbeat: true });
 		q.enqueueVerb('Early', 'wander');

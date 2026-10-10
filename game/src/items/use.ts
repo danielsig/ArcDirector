@@ -1,9 +1,10 @@
-import { BoxCollider, BrewHearth, Bridge, BridgeLever, Chest, Door, Flammable, HumanBody, Lock, Named, Sickbed, Vitals } from '../engine/components';
+import { BrewHearth, Bridge, BridgeLever, Chest, Door, Flammable, HumanBody, Lock, Named, Sickbed, Vitals } from '../engine/components';
 import type { GameObject } from '../engine/GameObject';
 import { equipItem, itemInHeldSlot } from './equip';
 import { characterIs, distXZ, findCarried, healCharacter, inBackpack, removeFromBags, tryInsert } from './inventory';
 import { instantiateDef, type ItemInstance } from './instance';
 import { getDef } from './defs';
+import { keyNameFor, lockedReason } from './pickup';
 import { cueAt } from '../audio/cue';
 import { applyHit } from '../director/hitFeel';
 
@@ -77,7 +78,7 @@ export function useItem(character:GameObject, item:ItemInstance, target:GameObje
 					removeFromBags(character, item);
 				}
 				if (lock.keyID !== item.Key.keyID) {
-					return fail('wrong key');
+					return fail(`wrong key — ${target.getComponent(Named)?.id ?? 'it'} needs ${keyNameFor(world, lock)}`);
 				}
 				lock.locked = false;
 				const door = target.getComponent(Door);
@@ -99,7 +100,7 @@ export function useItem(character:GameObject, item:ItemInstance, target:GameObje
 				return ok('unlocked');
 			}
 			if (lock.locked) {
-				return fail(lock.keyID ? `locked — needs a ${lock.keyID} key` : 'locked');
+				return fail(lockedReason(world, lock));
 			}
 		}
 		const flam = target.getComponent(Flammable);
@@ -142,18 +143,14 @@ export function useItem(character:GameObject, item:ItemInstance, target:GameObje
 			}
 			const span = bridge.getComponent(Bridge);
 			if (span) {
-				span.open = true;
+				span.open = !span.open;
+				span.syncCollision();
 			}
 			const lock = bridge.getComponent(Lock);
 			if (lock) {
-				lock.locked = false;
+				lock.locked = span ? !span.open : false;
 			}
-			const col = bridge.getComponent(BoxCollider);
-			if (col) {
-				col.solid = false;
-				col.isTrigger = true;
-			}
-			return ok('lowered Bridge');
+			return ok(span?.open === false ? 'raised Bridge' : 'lowered Bridge');
 		}
 	}
 

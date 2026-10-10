@@ -1,4 +1,4 @@
-import { FOCUS_EDIT_VERBS, MIND_ONLY_VERBS, WATCH_EDIT_VERBS, type VerbRegistry } from '../arc/stock-verbs.js';
+import { CHOOSE_VERB, FOCUS_EDIT_VERBS, MIND_ONLY_VERBS, WATCH_EDIT_VERBS, type VerbRegistry } from '../arc/stock-verbs.js';
 import type { Arc, ArcResult, Step } from '../arc/types.js';
 import type { Catalog, ExprEntity } from '../expr/types.js';
 import { cloneEntity, prevMeFromJSON } from '../expr/prev.js';
@@ -15,10 +15,12 @@ import {
 	createArcSession,
 	DEFAULT_COOLDOWN,
 	type ArcHandler,
+	type ArcPick,
 	type ArcSession,
 	type ArcSessionOpts,
 } from '../arc/run.js';
 import type { Mind } from '../mind/mind.js';
+import { ArcRecord } from './record.js';
 import type { SayResult, SayTo, TalkNet } from '../mind/talk.js';
 import type { Kit, KitSource } from './types.js';
 
@@ -39,6 +41,8 @@ export type RunnerDeps<TCtx = unknown> = {
 	catalog?:()=>Catalog | undefined;
 	/** What it may use. Object or callback, fetched every tick, so the host can mutate it in place. */
 	kit:KitSource<TCtx>;
+	/** Its System One pick now, or undefined while it has none; without one, `choose` is withheld. */
+	pick?:()=>ArcPick | undefined;
 };
 
 export type RunnerOptions<TCtx = unknown> = RunnerDeps<TCtx> & {
@@ -70,6 +74,7 @@ export abstract class ArcRunner<TCtx = unknown> {
 	public readonly context:()=>TCtx | undefined;
 	public readonly execute?:(step:Step, ctx:TCtx | undefined)=>Promise<ArcResult>;
 	public readonly abortArc?:(id:string)=>void;
+	public readonly pick?:()=>ArcPick | undefined;
 	public cooldown:number;
 	public laws:Law[] = [];
 	public maxLaws:number;
@@ -82,6 +87,8 @@ export abstract class ArcRunner<TCtx = unknown> {
 	/** The kit as of the last refresh. */
 	public currentKit:Kit = NO_KIT;
 	public lastResult:ArcResult | undefined;
+	/** How the current program is going, step by step and pick by pick. A new program clears it. */
+	public readonly record = new ArcRecord();
 	/** The arc running now, or parked on its `when`s. */
 	public arc:Arc | null = null;
 	/** The verb of the step running now; `''` between steps. */
@@ -105,6 +112,7 @@ export abstract class ArcRunner<TCtx = unknown> {
 		this.context = opts.context;
 		this.execute = opts.execute;
 		this.abortArc = opts.abortArc;
+		this.pick = opts.pick;
 		this.cooldown = opts.cooldown ?? DEFAULT_COOLDOWN;
 		this.maxLaws = opts.maxLaws ?? DEFAULT_MAX_LAWS;
 		this.defaultLawWho = opts.defaultLawWho ?? 'me';
@@ -160,15 +168,20 @@ export abstract class ArcRunner<TCtx = unknown> {
 		return view.withoutArg('law', 'who');
 	}
 
-	/** Verbs this runner never gets, whatever its kit says: every mind verb without a mind, and the edits its persona forbids. */
+	/**
+	 * Verbs this runner never gets, whatever its kit says: every mind verb without a mind, the edits its persona
+	 * forbids, and `choose` without a System One pick.
+	 */
 	protected withheldVerbs():readonly string[] {
+		const choose = this.pick?.() ? [] : [CHOOSE_VERB];
 		const persona = this.mind?.persona;
 		if (!persona) {
-			return MIND_ONLY_VERBS;
+			return [...MIND_ONLY_VERBS, ...choose];
 		}
 		return [
 			...(persona.watchesWritable ? [] : WATCH_EDIT_VERBS),
 			...(persona.sightFocusWritable ? [] : FOCUS_EDIT_VERBS),
+			...choose,
 		];
 	}
 
@@ -249,6 +262,7 @@ export abstract class ArcRunner<TCtx = unknown> {
 		sessionOpts?:ArcSessionOpts,
 	):Promise<ArcResult> {
 		this.replaceProgram();
+		this.record.clear();
 		this.liveArc = true;
 		this.arc = arc;
 		this.verbIndex = 0;
@@ -258,6 +272,7 @@ export abstract class ArcRunner<TCtx = unknown> {
 			now: () => this.now,
 			catalog: () => this.catalog?.(),
 			abortHost: () => this.abortArc?.(this.id),
+			pick: this.pick?.(),
 			...sessionOpts,
 		});
 		this.arcSession = session;
@@ -269,6 +284,10 @@ export abstract class ArcRunner<TCtx = unknown> {
 				i += 1;
 				const out = await this.runStep(step, this.context());
 				this.lastResult = out;
+				// A step of a program already replaced is not the new program's.
+				if (this.arcSession === session) {
+					this.record.note(out);
+				}
 				return out;
 			}, { session, asHandler: handler });
 			if (this.arcSession !== session) {

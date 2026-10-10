@@ -40,11 +40,11 @@ import {
 } from '../items/inventory';
 import type { ItemInstance } from '../items/instance';
 import { coinsOf, goodsAsk } from '../items/wallet';
-import { findChestHolding } from '../items/pickup';
+import { findChestHolding, keyNameFor } from '../items/pickup';
 import { yawToForward } from '../engine/math';
 import { whereabouts } from '../world/interior';
 import { talkCanSee } from './talkAttend';
-import { idOf, isLiving } from './names';
+import { findObject, idOf, isLiving } from './names';
 import type { CharacterCtx } from './types';
 import type { GameHost } from './adapter';
 import { fightExprTags, fightProximityNote, fightRole } from './fight';
@@ -96,6 +96,9 @@ export function tagsOf(go:GameObject):string[] {
 	}
 	if (go.getComponent(HumanBody)) {
 		tags.push('agent', 'person');
+	}
+	if (go.getComponent(Wanted)?.enabled) {
+		tags.push('thief');
 	}
 	if (go.getComponent(Torch) && !go.getComponent(Item)) {
 		tags.push('torch');
@@ -155,11 +158,16 @@ function seenOf(go:GameObject, observer?:GameObject, host?:GameHost):SeenObject 
 			row.note = note;
 		}
 	}
+	const span = go.getComponent(Bridge);
+	if (span && !row.note) {
+		row.note = span.open ? 'it is lowered' : 'it is raised';
+		row.always = true;
+	}
 	if (
 		go.getComponent(Door)
 		|| go.getComponent(Chest)
 		|| go.getComponent(Interior)
-		|| go.getComponent(Bridge)
+		|| span
 		|| go.getComponent(BridgeLever)
 	) {
 		row.movable = false;
@@ -194,7 +202,7 @@ export function lookWorld(character:GameObject, ambient:string, host?:GameHost):
 			continue;
 		}
 		const gp = go.transform.position;
-		if (Math.hypot(gp.x - ax, gp.z - az) > SIGHT) {
+		if (!go.getComponent(Bridge) && Math.hypot(gp.x - ax, gp.z - az) > SIGHT) {
 			continue;
 		}
 		const row = seenOf(go, character, host);
@@ -250,6 +258,9 @@ export function inventoryOf(character:GameObject):Inventory {
 }
 
 export function hostCanSee(world:World, aID:string, bID:string):boolean {
+	if (findObject(world, bID)?.getComponent(Bridge)) {
+		return true;
+	}
 	if (talkCanSee(world, aID, bID)) {
 		return true;
 	}
@@ -282,13 +293,13 @@ export function followedCarry(ctx:CharacterCtx):string {
 export function doExamine(world:World, character:GameObject, name:string):ArcResult {
 	const held = findCarried(character, (it) => itemMatchesName(it, name));
 	if (held) {
-		return { ok: true, verb: 'examine', reason: examineItem(held) };
+		return { ok: true, verb: 'examine', reason: examineItem(world, held) };
 	}
 	const go = world.findNamed(name);
 	if (!go) {
 		return { ok: false, verb: 'examine', reason: `unknown name ${name}` };
 	}
-	if (!hostCanSee(world, idOf(character), idOf(go)) || distXZ(character, go) > SIGHT) {
+	if (!go.getComponent(Bridge) && (!hostCanSee(world, idOf(character), idOf(go)) || distXZ(character, go) > SIGHT)) {
 		return { ok: false, verb: 'examine', reason: `${name} is not in sight` };
 	}
 	return { ok: true, verb: 'examine', reason: examineWorld(go) };
@@ -299,13 +310,20 @@ function listed(names:string[]):string {
 	return names.length === 0 ? 'nothing' : names.length === 1 ? names[0] : `${names.slice(0, -1).join(', ')} and ${names.at(-1)}`;
 }
 
+/** The named doors and chests a key with `keyID` opens. */
+function locksFor(world:World, keyID:string):string[] {
+	return world.objects
+		.filter((go) => go.getComponent(Lock)?.keyID === keyID && go.getComponent(Named))
+		.map((go) => go.getComponent(Named)?.id ?? go.id);
+}
+
 /** What `examine` tells about an item you carry, in sentences. */
-function examineItem(item:ItemInstance):string {
+function examineItem(world:World, item:ItemInstance):string {
 	const id = pascalCase(item.name) || pascalCase(item.defID);
 	const ask = item.defID === 'fire_mushroom' || item.defID === 'silver_trout' ? undefined : goodsAsk(item);
 	return [
 		item.count > 1 ? `You carry ${item.count} ${id}.` : `You carry ${id}.`,
-		item.Key && `It is the ${item.Key.keyID} key.`,
+		item.Key && `It opens ${listed(locksFor(world, item.Key.keyID))}.`,
 		item.Equipable && (item.Equipable.hands === 2 ? 'You can equip it, with both hands.' : 'You can equip it.'),
 		item.Container && `It holds ${item.Container.size}: ${listed(item.Container.contents.map(itemLabel))}.`,
 		item.Ingredient && `${item.Ingredient.brewer} brews ${item.Ingredient.yield} ${item.Ingredient.brew} from it, for ${item.Ingredient.fee}.`,
@@ -317,7 +335,7 @@ function examineItem(item:ItemInstance):string {
 function examineWorld(go:GameObject):string {
 	const name = go.getComponent(Named)?.id ?? go.id;
 	const lock = go.getComponent(Lock);
-	const locked = lock?.locked ? ` and locked${lock.keyID ? `; it needs the ${lock.keyID} key` : ''}` : '';
+	const locked = lock?.locked ? ` and locked${lock.keyID ? `; it needs ${keyNameFor(go.world, lock)}` : ''}` : '';
 	const door = go.getComponent(Door);
 	const bridge = go.getComponent(Bridge);
 	const chest = go.getComponent(Chest);
@@ -327,11 +345,11 @@ function examineWorld(go:GameObject):string {
 		lines.push(`${name} is a door, ${door.open ? 'open' : 'shut'}${locked}.`);
 	}
 	if (go.getComponent(BridgeLever)) {
-		lines.push(`${name} is the fixed lever that raises and lowers the bridge.`);
+		lines.push(`${name} is the fixed lever that raises and lowers the bridge. Working it again does the other.`);
 	}
 	if (bridge) {
 		lines.push(bridge.open
-			? `${name} is a bridge, lowered: you can cross.`
+			? `${name} is a bridge, lowered: you can cross. Working the sluice raises it.`
 			: `${name} is a bridge, raised: no one can cross until it is lowered.`);
 	}
 	if (item) {

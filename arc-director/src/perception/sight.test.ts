@@ -184,6 +184,19 @@ describe('formatSight', () => {
 		);
 	});
 
+	it('keeps an always object past the sight radius, with its note', () => {
+		const paragraph = formatSight({
+			self: { id: 'Forager', point: [0, 0], facing: [0, -1] },
+			ambient: 'A windy river glen.',
+			objects: [
+				seen('Bridge', [0, -40], { tags: ['bridge', 'landmark'], movable: false, note: 'raised', always: true }),
+				seen('Lantern', [0, -40], { tags: ['item'] }),
+			],
+		});
+		assert.match(paragraph, /\*Bridge\*, raised 40 paces in front of you/);
+		assert.equal(paragraph.includes('Lantern'), false);
+	});
+
 	it('sightLimit keeps people when trees would crowd the cap', () => {
 		const trees:SeenObject[] = [];
 		for (let i = 0; i < 12; i++) {

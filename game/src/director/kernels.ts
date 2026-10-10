@@ -155,14 +155,17 @@ export function kernelsOf(
 			}
 			others.push(entityOf(go, extraTags?.(go)));
 		}
-		if ((go.getComponent(Pickupable) || go.getComponent(Item)) && !go.getComponent(HumanBody)) {
+		const item = (go.getComponent(Pickupable) || go.getComponent(Item)) && !go.getComponent(HumanBody);
+		if (item) {
 			items.push(entityOf(go));
 		}
+		// Places a watch may name: openable things, and every named one (`BakerStall`, `WestGate`).
 		if (
 			go.getComponent(Door)
 			|| go.getComponent(Bridge)
 			|| go.getComponent(Chest)
 			|| go.getComponent(Interior)
+			|| (go.getComponent(Named) && !item && !go.getComponent(HumanBody))
 		) {
 			const name = idOf(go);
 			bindings[name] = { kind: 'entity', value: entityOf(go) };

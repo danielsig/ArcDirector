@@ -165,6 +165,7 @@ function pick(id:string):void {
 function leave():void {
 	hud.menuOpen = false;
 	hud.briefOpen = false;
+	hud.keysOpen = false;
 	hud.menuNotice = '';
 	hud.sayOpen = false;
 	hud.chatOpen = false;
@@ -195,7 +196,7 @@ function leave():void {
 			<button type="button" @click="pick('ruins')">5v5 Combat</button>
 			<button type="button" @click="pick('marketplace')">Marketplace</button>
 			<button type="button" @click="pick('glen')">River Glen</button>
-			<button type="button" @click="pick('abbey_vault')">Dungeon Vault</button>
+			<button type="button" @click="pick('dungeon_vault')">Dungeon Vault</button>
 		</div>
 		<label class="music-toggle">
 			<input

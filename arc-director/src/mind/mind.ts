@@ -1,16 +1,17 @@
 import { formatArc, parseArc } from '../arc/parse.js';
+import { exprArgs } from '../arc/validate.js';
 import { arcSchema } from '../arc/schema.js';
 import { FOCUS_EDIT_VERBS, WATCH_EDIT_VERBS, type VerbRegistry } from '../arc/stock-verbs.js';
 import type { Arc, ArcResult, Step } from '../arc/types.js';
 import { ArcError } from '../arc/types.js';
-import { evaluate } from '../expr/eval.js';
+import { evaluate, unboundCalls } from '../expr/eval.js';
 import { observeExpr } from '../expr/stringify.js';
 import { bagOf, cloneEntity } from '../expr/prev.js';
 import { isVisionModel } from '../inference/models.js';
-import type { ChatMessage, InferenceProvider, ToolDef } from '../inference/provider.js';
+import type { ChatMessage, InferenceProvider, JsonSchemaResponseFormat, ToolDef } from '../inference/provider.js';
 import { extractJson, isRecord } from '../json.js';
 import { mergeTags, nameTags, type MemoryRecord } from '../memory/store.js';
-import type { MindEvent, Sense, ToolSpec } from './types.js';
+import type { ConversationTurn, MindEvent, Sense, ToolSpec } from './types.js';
 import { parseMapZoom, stampMap, isMapSnapshot, DEFAULT_YOU_SYMBOL, type MapPrev, type MapSense } from './map.js';
 import {
 	articlesNamedIn,
@@ -44,12 +45,21 @@ export type MindSettings = {
 	skipHeartbeat?:boolean;
 	/** Major events do not wake it. */
 	skipMajor?:boolean;
+	/** No think when it joins: it waits for something to happen. Default: it thinks once to start. */
+	skipStart?:boolean;
 	/** Tie-break after watch `rankScore`. Higher goes first. Default 0. */
 	rank?:number;
 	/** Fewest game seconds between tactical thinks. Default 0 under a director, whose queue paces thinks. */
 	heartbeat?:number;
 	/** Game seconds between goal revisions; 0 never revises. Default 180. */
 	strategicInterval?:number;
+	/** The model it thinks with, by its name on the director (`addModel`). Omit for the director's default. */
+	model?:string;
+	/**
+	 * Clear lines kept in Current Conversation, oldest first.
+	 * Omit to use {@link conversationCapFor} on the model's context window. 0 shows none.
+	 */
+	conversationCap?:number;
 };
 
 /** A mind's thinking state. Its owner's persona is saved with the owner. */
@@ -63,6 +73,8 @@ export type MindJSON = {
 	lastIntrusionTimestamp?:number;
 	recent?:string[];
 	recentSummary?:string;
+	/** Last clear lines, oldest first. */
+	conversation?:ConversationTurn[];
 	thinkAbout?:string;
 	lastVerb?:string;
 };
@@ -85,8 +97,10 @@ export type MindDeps<TCtx = unknown> = {
 	queue?:MindQueue;
 	/** Heartbeat stretch after an arc. Default: failed or interrupted. */
 	stalled?:(result:ArcResult)=>boolean;
-	model?:string;
-	embedModel?:string;
+	/** The model id its requests name on the server. */
+	modelID?:string;
+	/** Vectors for memories and recall queries. Omit to recall by text alone. */
+	embed?:(texts:string[])=>Promise<number[][]>;
 	/** Tool rounds before the Arc must be emitted. Default {@link DEFAULT_TOOL_ROUNDS}; 0 offers no tools. */
 	toolRoundCap?:number;
 	/** Why there is no way for this character to `id` (`Bridge is raised`, or `''` unnamed), or undefined when there is. Marks unreachable names in earshot. */
@@ -95,10 +109,12 @@ export type MindDeps<TCtx = unknown> = {
 	arcRetryCap?:number;
 	/** Ask for `go_to() && wait()` text instead of Arc JSON. Testing toggle. Skips the JSON goals pass. */
 	arcText?:boolean;
+	/** Arc JSON turns send the arc schema for the server to enforce, and offer no tools. Ignored with `arcText`. */
+	forceSchema?:boolean;
 	/** Sampling temperature from the second repair turn on, so a model stuck on one bad reply moves. Default 0.4. */
 	repairTemperature?:number;
 	thinkInstructions?:ThinkInstructions;
-	/** Whether the model reasons before it answers. Picks the think line. Default: it does. */
+	/** Whether the model reasons before it answers. Picks the think line and asks the server for it. Default: it does. */
 	thinking?:()=>boolean;
 	/** Standing verb-chain line. Omit for {@link DEFAULT_VERB_INSTRUCTIONS}. */
 	verbInstructions?:string;
@@ -135,8 +151,8 @@ function asStringArray(v:unknown):string[] {
 
 /** Tool calls a think may make before it must emit the Arc. Small models need several lookups in a row. */
 export const DEFAULT_TOOL_ROUNDS = 6;
-/** Thinks in a row that only talk or wait before the next one must look something up first. */
-const TALK_STREAK_LOOKUP = 3;
+/** Thinks in a row that only talk or wait before the next one is told to stop talking and act. */
+const TALK_STREAK = 3;
 /** Verbs that change nothing in the world. An arc of only these is talk. */
 const TALK_VERBS = new Set(['say', 'wait', 'think', 'examine', 'remember']);
 /** Lines kept to tell a repeat from something new. */
@@ -163,6 +179,10 @@ const MENTION_REPEAT = 5;
 /** Thinks before the same tool call may be made again. */
 const LOOKUP_REPEAT = 5;
 const RECENT_CAP = 8;
+/** Most lines the computed conversation default will keep. */
+export const MAX_CONVERSATION_CAP = 64;
+/** Tokens of context per pair of conversation lines. */
+const CONVERSATION_TOKENS = 1024;
 const RECENT_SUMMARY_MAX = 600;
 const RECENT_SEPARATOR = '; ';
 const BARE_RESULT = new Set(['ok', 'failed', 'interrupted']);
@@ -177,6 +197,17 @@ function foldRecent(prev:string, overflow:string[]):string {
 	const tail = next.slice(next.length - RECENT_SUMMARY_MAX);
 	const cut = tail.indexOf(RECENT_SEPARATOR);
 	return (cut < 0 ? tail : tail.slice(cut + RECENT_SEPARATOR.length)).trim();
+}
+
+/** 2 lines per 1K tokens of context, at most {@link MAX_CONVERSATION_CAP}. An unknown context gets the most. */
+export function conversationCapFor(contextTokens:number | undefined):number {
+	if (contextTokens === undefined || !Number.isFinite(contextTokens)) {
+		return MAX_CONVERSATION_CAP;
+	}
+	if (contextTokens <= 0) {
+		return 0;
+	}
+	return Math.min(MAX_CONVERSATION_CAP, Math.floor(contextTokens / CONVERSATION_TOKENS) * 2);
 }
 
 function isBareResult(text:string):boolean {
@@ -208,22 +239,16 @@ export function mindFields<TCtx>(mind:Mind<TCtx>):MindFields<TCtx> {
  * swapped or dropped without losing who its owner is. A character owns at most one mind; a collective always
  * has one, shared by its characters.
  *
- * Planned, not built yet: a mind picks one of the director's model configurations instead of all minds
- * sharing the director's one model.
- * - The director gets `addModel` / `removeModel` in place of `setModel`. Each added model says which
- *   inference provider it comes from and carries its own settings, e.g. a Gemma model with one context
- *   window and a Qwen model with another. `addModel` may instead live inside the provider call.
- * - Providers become removable too, so `with*Inference` turns into `add*Inference`, with a matching remove.
- * - A mind never changes a model's settings. It is assigned one of the configured models, and a mind
- *   with no assignment uses the one marked as default.
- * - Open points:
- *   - Think slots per provider: today one shared queue assumes one server.
- *   - Memory embeddings: they live on the Persona but come from the mind's provider, so moving to
- *     another embedding model needs either one embedding model for the whole director or a re-embed.
+ * It thinks with one of its director's configured models (`addModel`), by the name in its settings' `model`, or
+ * with the default model when it names none or that one is removed. It never changes a model's settings; the
+ * director keeps its `modelID` and provider current. Each model caps its own parallel thinks, and every
+ * memory is embedded with the director's one embedding model, so a Persona's memories stay comparable whatever
+ * mind it moves to.
  */
 export class Mind<TCtx = unknown> {
 	public skipHeartbeat:boolean;
 	public skipMajor:boolean;
+	public skipStart:boolean;
 	public rank:number;
 	public heartbeat:number;
 	public strategicInterval:number;
@@ -237,13 +262,17 @@ export class Mind<TCtx = unknown> {
 	public autoEnact = true;
 	public queue:MindQueue | undefined;
 	public stalled?:(result:ArcResult)=>boolean;
-	public model = '';
-	public embedModel:string | undefined;
+	/** The model it is assigned, by its name on the director; `undefined` thinks with the default. */
+	public model:string | undefined;
+	/** The model id its requests name on the server, kept current by the director. */
+	public modelID = '';
+	public embed:((texts:string[])=>Promise<number[][]>) | undefined;
 	public toolRoundCap = DEFAULT_TOOL_ROUNDS;
 	public wayBlocked:((id:string)=>string | undefined) | undefined;
 	public arcRetryCap = 0;
 	/** Mutable so the Testing toggle can flip live minds. */
 	public arcText = false;
+	public forceSchema = false;
 	public repairTemperature = 0.4;
 	public thinkInstructions:ThinkInstructions | undefined;
 	public thinking:()=>boolean = () => true;
@@ -258,6 +287,10 @@ export class Mind<TCtx = unknown> {
 	public map:MapSense | undefined;
 	public encyclopedia:EncyclopediaSource<TCtx> | undefined;
 	public vision:boolean | undefined;
+	/** The context window of the model it thinks with, kept current by the director; `undefined` when unknown. */
+	public contextTokens:number | undefined;
+	/** Lines shown in Current Conversation; `undefined` follows {@link conversationCapFor} on `contextTokens`. */
+	public conversationCap:number | undefined;
 	/** The last arc or think's result, as the next prompt shows it. */
 	public lastResult:ArcResult | undefined;
 	public lastArc:Arc | undefined;
@@ -268,6 +301,7 @@ export class Mind<TCtx = unknown> {
 	private readonly _pendingEvents:MindEvent[] = [];
 	private _recent:string[] = [];
 	private _recentSummary = '';
+	private _conversation:ConversationTurn[] = [];
 	private _recentAbsorbed = 0;
 	private _pendingSeeMapImage:string | undefined;
 	private _lastMap:MapPrev & { legend:string } | undefined;
@@ -294,9 +328,12 @@ export class Mind<TCtx = unknown> {
 	constructor(settings:MindSettings = {}) {
 		this.skipHeartbeat = settings.skipHeartbeat ?? false;
 		this.skipMajor = settings.skipMajor ?? false;
+		this.skipStart = settings.skipStart ?? false;
 		this.rank = settings.rank ?? 0;
 		this.heartbeat = settings.heartbeat ?? 0;
 		this.strategicInterval = settings.strategicInterval ?? 180;
+		this.conversationCap = settings.conversationCap;
+		this.model = settings.model;
 		const fields:MindFields<TCtx> = {
 			attach: (owner, deps) => this.attach(owner, deps),
 			detach: () => {
@@ -319,12 +356,13 @@ export class Mind<TCtx = unknown> {
 		this.autoEnact = deps.autoEnact ?? true;
 		this.queue = deps.queue;
 		this.stalled = deps.stalled;
-		this.model = deps.model ?? '';
-		this.embedModel = deps.embedModel;
+		this.modelID = deps.modelID ?? '';
+		this.embed = deps.embed;
 		this.toolRoundCap = deps.toolRoundCap ?? DEFAULT_TOOL_ROUNDS;
 		this.wayBlocked = deps.wayBlocked;
 		this.arcRetryCap = deps.arcRetryCap ?? 0;
 		this.arcText = deps.arcText === true;
+		this.forceSchema = deps.forceSchema === true;
 		this.repairTemperature = deps.repairTemperature ?? 0.4;
 		this.thinkInstructions = deps.thinkInstructions;
 		this.thinking = deps.thinking ?? (() => true);
@@ -374,9 +412,12 @@ export class Mind<TCtx = unknown> {
 		return {
 			skipHeartbeat: this.skipHeartbeat,
 			skipMajor: this.skipMajor,
+			skipStart: this.skipStart,
 			rank: this.rank,
 			heartbeat: this.heartbeat,
 			strategicInterval: this.strategicInterval,
+			model: this.modelID,
+			conversationCap: this.conversationCap,
 		};
 	}
 
@@ -528,9 +569,9 @@ export class Mind<TCtx = unknown> {
 
 	public async remember(text:string, tags:string[] = [], timestamp = this._now):Promise<MemoryRecord> {
 		let embedding:number[] | undefined;
-		if (this.provider.embed) {
+		if (this.embed) {
 			try {
-				const [vec] = await this.provider.embed([text], this.embedModel);
+				const [vec] = await this.embed([text]);
 				embedding = vec;
 			}
 			catch {
@@ -648,6 +689,7 @@ export class Mind<TCtx = unknown> {
 			lastIntrusionTimestamp: Number.isFinite(this.lastIntrusionTimestamp) ? this.lastIntrusionTimestamp : undefined,
 			recent: [...this._recent],
 			recentSummary: this._recentSummary || undefined,
+			conversation: this._conversation.map((turn) => ({ ...turn })),
 			thinkAbout: this._pendingAbout,
 			lastVerb: this._lastVerb,
 		};
@@ -664,6 +706,7 @@ export class Mind<TCtx = unknown> {
 		mind._pendingEvents.push(...json.events ?? []);
 		mind._recent = json.recent ? [...json.recent] : [];
 		mind._recentSummary = json.recentSummary ?? '';
+		mind._conversation = (json.conversation ?? []).map((turn) => ({ ...turn }));
 		mind._recentAbsorbed = mind._pendingEvents.length;
 		mind._pendingAbout = json.thinkAbout;
 		mind._lastVerb = json.lastVerb;
@@ -713,6 +756,7 @@ export class Mind<TCtx = unknown> {
 			recalled: this.recallForPrompt(),
 			recent: this._recent,
 			recentSummary: this._recentSummary,
+			conversation: this.conversationLines(),
 		})}\n\n`
 			+ 'Revise goals if what you just learned changes what you must do. '
 			+ 'Harm, theft, and threats outrank standing work — put that first in goals. '
@@ -721,7 +765,7 @@ export class Mind<TCtx = unknown> {
 			+ 'Emit JSON {"goals":[{"text":"...","priority":0}]} and only if needed "identity":{"role":"...","traits":["..."]}. '
 			+ `Keep at most ${this.persona.maxGoals} goals. Do not emit movement.`;
 		const res = await this.provider.chat({
-			model: this.model,
+			model: this.modelID,
 			thread: this.id,
 			messages: [
 				{ role: 'system', content: system },
@@ -824,14 +868,15 @@ export class Mind<TCtx = unknown> {
 	 * The article text itself is not repeated within a few thinks.
 	 */
 	private mentionedText():string {
-		const ctx = this.encyclopedia && this._mentionCap > 0 && this._recent.length > 0 ? this.worldContext() : undefined;
+		const talked = [...this._recent, ...this.conversationLines()].join('\n');
+		const ctx = this.encyclopedia && this._mentionCap > 0 && talked.trim() ? this.worldContext() : undefined;
 		if (!this.encyclopedia || ctx === undefined) {
 			return '';
 		}
 		const me = this.voice.catalog?.()?.me;
 		const bag = me ? bagOf(me) : undefined;
 		const lines:string[] = [];
-		for (const entry of mentionedArticles(encyclopediaPages(this.encyclopedia, ctx), this._recent.join('\n'), Infinity)) {
+		for (const entry of mentionedArticles(encyclopediaPages(this.encyclopedia, ctx), talked, Infinity)) {
 			if (lines.length >= this._mentionCap) {
 				break;
 			}
@@ -905,6 +950,7 @@ export class Mind<TCtx = unknown> {
 			sightFocusWritable: this.owner.activeVerbs().has('focus'),
 			recent: this._recent,
 			recentSummary: this._recentSummary,
+			conversation: this.conversationLines(),
 			mentioned: this.mentionedText(),
 			thinkAbout: this._pendingAbout,
 		}), this.extraVolatile()].filter(Boolean).join('\n\n');
@@ -915,8 +961,15 @@ export class Mind<TCtx = unknown> {
 	}
 
 	/** The model's reply as an arc in ids. */
+	/** The reply as an arc in ids. Throws on a watch that calls a function the watch language does not have: it could never hold. */
 	private readArc(raw:unknown, verbs:VerbRegistry):Arc {
-		return mapArc(deferThinks(parseArc(raw, verbs)), verbs, idsOf(this.persona.names));
+		const arc = mapArc(deferThinks(parseArc(raw, verbs)), verbs, idsOf(this.persona.names));
+		const catalog = this.voice.catalog?.();
+		const unbound = catalog ? exprArgs(arc, verbs).flatMap((expr) => unboundCalls(expr, catalog)) : [];
+		if (unbound.length > 0) {
+			throw new ArcError(`${unbound.map((name) => `${name}()`).join(', ')} is not a watch function`);
+		}
+		return arc;
 	}
 
 	private parseArcContent(content:string, verbs:VerbRegistry):{ arc:Arc; raw:unknown } | null {
@@ -960,14 +1013,12 @@ export class Mind<TCtx = unknown> {
 		messages.push({ role: 'assistant', content: firstContent });
 		messages.push({ role: 'user', content: this.volatileUser(sensed, hint) });
 		const res = await this.provider.chat({
-			model: this.model,
+			model: this.modelID,
 			thread: this.id,
 			messages,
 			tools: sendTools ? tools : undefined,
 			toolChoice: sendTools ? 'none' : undefined,
-			responseFormat: emitText
-				? undefined
-				: { name: 'arc', schema: arcSchema(verbs), strict: false },
+			responseFormat: this.arcFormat(verbs, emitText),
 			temperature: 0,
 			fakeThought: true,
 		});
@@ -993,10 +1044,10 @@ export class Mind<TCtx = unknown> {
 		const freshInput = this.hasFreshInput();
 		const sensed = this.gatherSensed();
 		const verbs = this.owner.activeVerbs();
-		const tools = this.toolRoundCap > 0 ? this.toolDefs() : [];
+		const emitText = this.emitText(verbs);
+		const tools = this.toolRoundCap > 0 && !this.arcFormat(verbs, emitText) ? this.toolDefs() : [];
 		const sendTools = tools.length > 0;
 		const toolNames = tools.map((t) => t.name);
-		const emitText = this.emitText(verbs);
 		const system = stablePrefix(this.id, this.persona.identity, verbs, {
 			includeWatches: this.persona.watchesWritable || watchCount(this.persona.watchList()) > 0,
 			watchesWritable: verbs.has('watch'),
@@ -1011,12 +1062,9 @@ export class Mind<TCtx = unknown> {
 			arcExample: this.arcExample,
 			tools: toolNames,
 		});
-		// Talking in circles: the first turn must call a lookup, so the missing fact gets looked up instead of asked for again.
-		// Only lookups are offered, or the model answers with a check (earshot) that leads back to talk.
-		const lookups = tools.filter((t) => LOOKUP_TOOLS.includes(t.name));
-		const lookupFirst = lookups.length > 0 && this._talkStreak >= TALK_STREAK_LOOKUP;
-		const user = this.volatileUser(sensed, lookupFirst
-			? `You have only talked or waited for ${this._talkStreak} thinks. Look up what you lack before you act.`
+		// Talking in circles: characters who hear each other keep answering, so a streak of talk ends in a deed.
+		const user = this.volatileUser(sensed, this._talkStreak >= TALK_STREAK
+			? `You have only talked or waited for ${this._talkStreak} thinks. Stop talking: take the next step toward your goal with a verb that does something. Look up what you lack with a tool instead of asking again.`
 			: undefined);
 		const messages:ChatMessage[] = [
 			{ role: 'system', content: system },
@@ -1032,19 +1080,17 @@ export class Mind<TCtx = unknown> {
 		for (let turn = 0; turn < budget; turn++) {
 			const allowTools = toolsLeft > 0 && tools.length > 0;
 			const res = await this.provider.chat({
-				model: this.model,
+				model: this.modelID,
 				thread: this.id,
 				messages,
-				tools: !sendTools ? undefined : lookupFirst && turn === 0 ? lookups : tools,
-				toolChoice: sendTools ? (lookupFirst && turn === 0 ? 'required' : allowTools ? 'auto' : 'none') : undefined,
-				responseFormat: allowTools || emitText
-					? undefined
-					: { name: 'arc', schema: arcSchema(verbs), strict: false },
+				tools: sendTools ? tools : undefined,
+				toolChoice: sendTools ? (allowTools ? 'auto' : 'none') : undefined,
+				responseFormat: this.arcFormat(verbs, emitText),
 				temperature: this.arcRetryCap - repairsLeft > 1 || this._emitStreak >= 2
 					? this.repairTemperature
 					: 0,
 				// A repair keeps the whole conversation, so reasoning on top of it runs out of tokens again.
-				enableThinking: repairsLeft < this.arcRetryCap ? false : undefined,
+				enableThinking: repairsLeft < this.arcRetryCap ? false : this.thinking(),
 			});
 			if (res.truncated) {
 				lastErr = new ArcError('reply was cut off at the token limit; answer shorter');
@@ -1157,6 +1203,11 @@ export class Mind<TCtx = unknown> {
 		throw lastErr ?? new ArcError('failed to obtain Arc');
 	}
 
+	/** The arc schema the server must follow under {@link forceSchema}; otherwise none, and the reply is parsed as written. */
+	private arcFormat(verbs:VerbRegistry, emitText:boolean):JsonSchemaResponseFormat | undefined {
+		return this.forceSchema && !emitText ? { name: 'arc', schema: arcSchema(verbs), strict: true } : undefined;
+	}
+
 	private emitText(verbs:VerbRegistry):boolean {
 		return shouldEmitArcText(verbs, this.arcText);
 	}
@@ -1222,7 +1273,12 @@ export class Mind<TCtx = unknown> {
 				}
 				continue;
 			}
-			this.noteRecent(text);
+			if (e.turn) {
+				this.noteConversation(e.turn);
+			}
+			else {
+				this.noteRecent(text);
+			}
 			if (e.remember) {
 				const rows = this.persona.memory.all();
 				const last = rows[rows.length - 1];
@@ -1237,6 +1293,33 @@ export class Mind<TCtx = unknown> {
 			}
 		}
 		this._recentAbsorbed = this._pendingEvents.length;
+	}
+
+	/** Keeps at least {@link MAX_CONVERSATION_CAP} lines, so a larger context later shows more. */
+	private noteConversation(turn:ConversationTurn):void {
+		const text = turn.text.trim().replace(/\s+/g, ' ');
+		const last = this._conversation[this._conversation.length - 1];
+		if (!text || (last?.speakerID === turn.speakerID && last.text === text)) {
+			return;
+		}
+		this._conversation.push({ ...turn, text });
+		const kept = Math.max(MAX_CONVERSATION_CAP, this.conversationCap ?? 0);
+		this._conversation.splice(0, Math.max(0, this._conversation.length - kept));
+	}
+
+	/** The turns Current Conversation shows, oldest first. */
+	private shownTurns():ConversationTurn[] {
+		const cap = this.conversationCap ?? conversationCapFor(this.contextTokens);
+		return cap > 0 ? this._conversation.slice(-cap) : [];
+	}
+
+	/** `Me (to Forager): …`, `Forager (to you): …`, `Guard: …` to everyone. Each id is named as this mind knows it now. */
+	private conversationLines():string[] {
+		return this.shownTurns().map((turn) => {
+			const speaker = this.isSelf(turn.speakerID) ? 'Me' : this.nameOf(turn.speakerID);
+			const to = (turn.to ?? []).map((id) => this.isSelf(id) ? 'you' : this.nameOf(id));
+			return `${speaker}${to.length > 0 ? ` (to ${to.join(', ')})` : ''}: ${turn.text}`;
+		});
 	}
 
 	private noteRecent(line:string):void {
@@ -1302,18 +1385,22 @@ export class Mind<TCtx = unknown> {
 			this._pendingAbout ?? '',
 			...this._recent,
 			this._recentSummary,
+			...this.conversationLines(),
 		].filter((s) => s.trim().length > 0).join(' ');
 		if (!query.trim()) {
 			return [];
 		}
 		const pinnedIds = new Set(this.persona.memory.pinned().map((r) => r.id));
 		const recentSet = new Set(this._recent);
+		// Speech still in Current Conversation is already on screen.
+		const quoting = this.shownTurns().map((turn) => `"${turn.text}"`);
 		return this.persona.memory.recall({
 			query,
 			k: this.recallK,
 			now: this._now,
 			skip: (r) => {
-				if (r.pinned || pinnedIds.has(r.id) || recentSet.has(r.text)) {
+				const onScreen = r.tags.includes('speech') && quoting.some((quote) => r.text.endsWith(quote));
+				if (r.pinned || pinnedIds.has(r.id) || recentSet.has(r.text) || onScreen) {
 					return true;
 				}
 				const seen = r.tags.find((t) => t.startsWith('seen:') && t.length > 5);
@@ -1461,7 +1548,7 @@ export class Mind<TCtx = unknown> {
 		if (this.vision === true) {
 			return true;
 		}
-		return isVisionModel(this.model);
+		return isVisionModel(this.modelID);
 	}
 
 	private async handleSeeMap(args:unknown):Promise<unknown> {
@@ -1599,9 +1686,9 @@ export class Mind<TCtx = unknown> {
 		const query = typeof row.query === 'string' ? row.query : '';
 		const k = typeof row.k === 'number' ? row.k : this.recallK;
 		let embedding:number[] | undefined;
-		if (this.provider.embed && query) {
+		if (this.embed && query) {
 			try {
-				const [vec] = await this.provider.embed([query], this.embedModel);
+				const [vec] = await this.embed([query]);
 				embedding = vec;
 			}
 			catch {
@@ -1771,8 +1858,7 @@ export class Mind<TCtx = unknown> {
 			const result = by.speak(step);
 			if (result.ok && text) {
 				this._said = [...this._said, { gist: gistOf(text), text, heard: new Set(result.heard ?? []) }].slice(-SAID_CAP);
-				const who = [sayToOf(step.args) ?? []].flat().map((id) => this.nameOf(id)).join(', ');
-				this.noteRecent(who ? `You said to ${who}: "${text}"` : `You said: "${text}"`);
+				this.noteConversation({ speakerID: this.thinkThread(), to: [sayToOf(step.args) ?? []].flat(), text });
 			}
 			return result;
 		}

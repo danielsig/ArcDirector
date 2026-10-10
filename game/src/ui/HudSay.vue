@@ -96,6 +96,7 @@ function send():void {
 	const text = draft.value.trim();
 	draft.value = '';
 	props.hud.sayOpen = false;
+	props.hud.chatOpen = false;
 	if (text.length > 0) {
 		if (/^\/clear$/i.test(text)) {
 			lsDel(histKey);

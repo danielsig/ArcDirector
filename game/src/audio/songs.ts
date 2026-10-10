@@ -8,7 +8,7 @@ import { mf, mp, p } from '@arc-director/kindling/score';
 
 export { MENU_SONG_ORCH } from './mainMenuSong';
 
-function abbeyTheme():Score {
+function dungeonTheme():Score {
 	const bed = track(pad, { gain: 0.95, cutoff: 640, dynamic: mf });
 	const harp = track(pluck, { gain: 0.55, dynamic: p });
 	const low = track(bass, { gain: 0.9, cutoff: 210, dynamic: mf, transpose: -12 });
@@ -24,7 +24,7 @@ function abbeyTheme():Score {
 		melody(mel),
 		...(ding ? [bells(ding)] : []),
 	);
-	return piece({ bpm: 68, gain: 0.92, id: 'abbey_vault' }, [
+	return piece({ bpm: 68, gain: 0.92, id: 'dungeon_vault' }, [
 		row('D-', 'd4:3 e4:1 | f4:2 a4:2', 'a5:4'),
 		row('C', 'g4:3 e4:1 | f4:2 e4:1 d4:1'),
 		row('Bbmaj72', 'a4:2 g4:1 f4:1 | e4:4'),
@@ -65,7 +65,7 @@ function glenTheme():Score {
 }
 
 export const SONGS:Record<string, Score> = {
-	abbey_vault: abbeyTheme(),
+	dungeon_vault: dungeonTheme(),
 	glen: glenTheme(),
 };
 
@@ -79,5 +79,5 @@ export function startSceneMusic(audio:Audio, sceneID:string):void {
 		void audio.playRecording(TALE_TRACK, 1, 'heros_tale', { start: 24.6, end: 168 });
 		return;
 	}
-	void audio.playMusic(SONGS[sceneID] ?? SONGS.abbey_vault);
+	void audio.playMusic(SONGS[sceneID] ?? SONGS.dungeon_vault);
 }

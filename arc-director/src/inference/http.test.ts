@@ -2,6 +2,8 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { MODEL_TIERS, type ThinkOff } from './models.js';
 import { HttpProvider, loadConfigFits, parseChatTimings, stripTemplateTokens } from './http.js';
+import { ChatSystemOne, JevSystemOne, ModelSystemOne } from './systemone.js';
+import type { ChatRequest } from './provider.js';
 import {
 	EMPTY_THINK_PREFILL,
 	DONE_THOUGHT,
@@ -22,7 +24,7 @@ async function captureBody(
 	config:ConstructorParameters<typeof HttpProvider>[0],
 	model:string,
 	catalog?:{ models:unknown[] },
-	extra?:{ enableThinking?:boolean; fakeThought?:boolean },
+	extra?:Partial<ChatRequest>,
 ):Promise<Record<string, unknown>> {
 	let body:Record<string, unknown> | undefined;
 	const provider = new HttpProvider({
@@ -332,7 +334,7 @@ describe('HttpProvider thinking', () => {
 		assert.equal(body.reasoning, undefined);
 	});
 
-	it('sends reasoning low on the responses API when the catalog allows it', async () => {
+	it('sends reasoning low on the responses API as an effort object when the catalog allows it', async () => {
 		let body:Record<string, unknown> | undefined;
 		const provider = new HttpProvider({
 			enableThinking: true,
@@ -368,7 +370,7 @@ describe('HttpProvider thinking', () => {
 			messages: [{ role: 'user', content: 'pong' }],
 		});
 		assert.ok(body);
-		assert.equal(body.reasoning, 'low');
+		assert.deepEqual(body.reasoning, { effort: 'low' }, 'the responses API wants an effort object; a bare string is a 400');
 	});
 
 	it('puts /no_think on the system message, not image user parts', async () => {
@@ -1279,5 +1281,227 @@ describe('reply cleanup', () => {
 			choices: [{ message: { content: 'go_to(Keep)' }, finish_reason: 'stop' }],
 		}).chat({ model: 'guard', messages: [{ role: 'user', content: 'go' }] });
 		assert.equal(whole.truncated, false);
+	});
+});
+
+describe('response format', () => {
+	const format = { name: 'arc', schema: { type: 'object' }, strict: true };
+
+	it('sends the schema on chat completions only when asked', async () => {
+		const body = await captureBody({}, 'other-llm', undefined, { responseFormat: format });
+		assert.deepEqual(body.response_format, { type: 'json_schema', json_schema: format });
+		const plain = await captureBody({}, 'other-llm');
+		assert.equal('response_format' in plain, false);
+	});
+
+	it('sends a schema to chat completions even where the responses API is up, which ignores it', async () => {
+		const urls:string[] = [];
+		let body:Record<string, unknown> | undefined;
+		const provider = new HttpProvider({
+			baseURL: 'http://127.0.0.1:9/v1',
+			fetch: async (input, init) => {
+				const url = String(input);
+				if (url.endsWith('/api/v1/models') && init?.method !== 'POST') {
+					return new Response(JSON.stringify(catalogWithReasoning('m', [])), { status: 200 });
+				}
+				urls.push(url);
+				body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+				return new Response(JSON.stringify({ choices: [{ message: { content: '{}' } }] }), { status: 200 });
+			},
+		});
+		await provider.chat({ model: 'm', messages: [{ role: 'user', content: 'pong' }], responseFormat: format });
+		assert.deepEqual(urls.filter((url) => /responses|completions/.test(url)), ['http://127.0.0.1:9/v1/chat/completions']);
+		assert.deepEqual(body?.response_format, { type: 'json_schema', json_schema: format });
+	});
+});
+
+describe('System One', () => {
+	it('asks Jev one choice question and reads its answer', async () => {
+		let sent:{ url:string; body:unknown } | undefined;
+		const jev = new JevSystemOne({
+			baseURL: '/systemone',
+			model: 'jev-latest',
+			fetch: async (input, init) => {
+				sent = { url: String(input), body: JSON.parse(String(init?.body)) };
+				return new Response(JSON.stringify({
+					model: 'jev-1.13.0',
+					answers: { pick: { type: 'choice', choice: 'slash', probabilities: { hold: 0.2, slash: 0.8 }, confidence: 0.8 } },
+				}), { status: 200 });
+			},
+		});
+		const name = await jev.pick('Raider: 3 away', 'hold the gate', { hold: 'wait()', slash: 'slash(Raider)' });
+		assert.equal(name, 'slash');
+		assert.deepEqual(sent, {
+			url: '/systemone',
+			body: {
+				state: 'Raider: 3 away',
+				model: 'jev-latest',
+				questions: { pick: { type: 'choice', instructions: 'hold the gate', criteria: { hold: 'wait()', slash: 'slash(Raider)' } } },
+			},
+		});
+	});
+
+	it('asks in OpenAI\'s Decisions format where the endpoint is /decisions', async () => {
+		let body:unknown;
+		const decisions = new JevSystemOne({
+			baseURL: 'http://127.0.0.1:9/v1/decisions',
+			model: 'laya',
+			fetch: async (_input, init) => {
+				body = JSON.parse(String(init?.body));
+				return new Response(JSON.stringify({ answers: [{ type: 'choice', name: 'pick', choice: 'slash' }] }), { status: 200 });
+			},
+		});
+		assert.equal(await decisions.pick('Raider: 3 away', 'hold the gate', { hold: 'wait()', slash: 'slash(Raider)' }), 'slash');
+		assert.deepEqual(body, {
+			model: 'laya',
+			input: 'Raider: 3 away',
+			questions: [{
+				type: 'choice',
+				name: 'pick',
+				instructions: 'hold the gate',
+				choices: [{ value: 'hold', description: 'wait()' }, { value: 'slash', description: 'slash(Raider)' }],
+			}],
+		});
+	});
+
+	it('asks a decision model through its System One endpoint, and a chat model by scoring', async () => {
+		const chats:string[] = [];
+		const provider = { chat: async (req:ChatRequest) => {
+			chats.push(req.model);
+			return { content: 'B', toolCalls: [] };
+		} };
+		let model:{ provider:typeof provider; id:string; systemOneURL?:string } = { provider, id: 'gemma' };
+		const systemOne = new ModelSystemOne(() => model);
+		assert.equal(await systemOne.pick('s', 'g', { hold: 'wait()', slash: 'slash(Raider)' }), 'slash');
+		assert.deepEqual(chats, ['gemma']);
+		const realFetch = globalThis.fetch;
+		const urls:string[] = [];
+		globalThis.fetch = async (input) => {
+			urls.push(String(input));
+			return new Response(JSON.stringify({ answers: { pick: { choice: 'hold' } } }), { status: 200 });
+		};
+		try {
+			model = { provider, id: 'laya', systemOneURL: 'http://127.0.0.1:9/v1/systemone' };
+			assert.equal(await systemOne.pick('s', 'g', { hold: 'wait()', slash: 'slash(Raider)' }), 'hold');
+		}
+		finally {
+			globalThis.fetch = realFetch;
+		}
+		assert.deepEqual(urls, ['http://127.0.0.1:9/v1/systemone']);
+		assert.deepEqual(chats, ['gemma'], 'the decision model never chats');
+	});
+
+	it('throws when Jev fails', async () => {
+		const jev = new JevSystemOne({ baseURL: '/systemone', model: 'm', fetch: async () => new Response('no key', { status: 503 }) });
+		await assert.rejects(jev.pick('', 'g', { a: 'wait()' }), /503/);
+	});
+
+	it('asks a chat model for one lettered option and takes the best-scored declared letter', async () => {
+		const seen:ChatRequest[] = [];
+		const chat = new ChatSystemOne(() => ({
+			chat: async (req) => {
+				seen.push(req);
+				return { content: 'A', toolCalls: [], logprobs: { A: -1.2, B: -0.4, C: -0.1 } };
+			},
+		}), () => 'gemma');
+		assert.equal(await chat.pick('state', 'hold the gate', { hold: 'wait()', slash: 'slash(Raider)' }), 'slash', 'C is no option');
+		assert.equal(seen[0].model, 'gemma');
+		assert.match(String(seen[0].messages[1].content), /Options:\nA\. wait\(\)\nB\. slash\(Raider\)/);
+		assert.equal(seen[0].maxTokens, 1);
+		assert.equal(seen[0].enableThinking, false);
+		assert.ok(seen[0].topLogprobs);
+	});
+
+	it('reads the letter a chat model answered where the server returns no log probabilities', async () => {
+		const chat = new ChatSystemOne(() => ({ chat: async () => ({ content: ' B', toolCalls: [] }) }), () => 'm');
+		assert.equal(await chat.pick('state', 'hold the gate', { hold: 'wait()', slash: 'slash(Raider)' }), 'slash');
+	});
+
+	it('reads the first answer token\'s log probabilities from responses and from chat completions, unstreamed', async () => {
+		const top = [{ token: ' A', logprob: -2 }, { token: 'B', logprob: -0.1 }];
+		for (const responses of [true, false]) {
+			let body:Record<string, unknown> | undefined;
+			const provider = new HttpProvider({
+				baseURL: 'http://127.0.0.1:9/v1',
+				fetch: async (input, init) => {
+					const url = String(input);
+					if (url.endsWith('/api/v1/models') && init?.method !== 'POST') {
+						return new Response(JSON.stringify(catalogWithReasoning('m', [])), { status: responses ? 200 : 404 });
+					}
+					body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+					const tokens = [{ token: 'B', logprob: -0.1, top_logprobs: top }];
+					return new Response(JSON.stringify(url.endsWith('/responses')
+						? { output: [{ type: 'message', content: [{ type: 'output_text', text: 'B', logprobs: tokens }] }] }
+						: { choices: [{ message: { content: 'B' }, logprobs: { content: tokens } }] }), { status: 200 });
+				},
+			});
+			const res = await provider.chat({ model: 'm', messages: [{ role: 'user', content: 'pick' }], topLogprobs: 5 });
+			assert.deepEqual(res.logprobs, { A: -2, B: -0.1 });
+			assert.equal(body?.stream, false);
+			assert.equal(body?.top_logprobs, 5);
+			assert.deepEqual(responses ? body?.include : body?.logprobs, responses ? ['message.output_text.logprobs'] : true);
+		}
+	});
+});
+
+describe('configured models', () => {
+	/** A server with `gemma` loaded at 4096 and `laya` on disk; records every load and unload. */
+	function server():{ provider:HttpProvider; posts:{ path:string; body:Record<string, unknown> }[] } {
+		const posts:{ path:string; body:Record<string, unknown> }[] = [];
+		const loaded = [{ key: 'gemma', loaded_instances: [{ id: 'gemma', config: { context_length: 4096 } }] }, { key: 'laya', loaded_instances: [] as unknown[] }];
+		const provider = new HttpProvider({
+			baseURL: 'http://127.0.0.1:9/v1',
+			fetch: async (input, init) => {
+				const url = String(input);
+				if (url.endsWith('/api/v1/models') && init?.method !== 'POST') {
+					return new Response(JSON.stringify({ models: loaded }), { status: 200 });
+				}
+				const body = JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>;
+				posts.push({ path: url.replace(/^.*\/api\/v1\/models\//, ''), body });
+				if (url.endsWith('/load')) {
+					loaded[1].loaded_instances = [{ id: 'laya', config: { context_length: body.context_length } }];
+					return new Response(JSON.stringify({ instance_id: 'laya', load_config: { context_length: body.context_length } }), { status: 200 });
+				}
+				return new Response('{}', { status: 200 });
+			},
+		});
+		return { provider, posts };
+	}
+
+	it('loads a second configured model beside the first, each with its own context', async () => {
+		const { provider, posts } = server();
+		provider.configureModel('gemma', { contextLength: 4096 });
+		provider.configureModel('laya', { contextLength: 2048 });
+		await provider.ensureLoaded('laya');
+		assert.deepEqual(posts.map((p) => p.path), ['load']);
+		assert.equal(posts[0].body.model, 'laya');
+		assert.equal(posts[0].body.context_length, 2048);
+	});
+
+	it('unloads a model that is not configured to make room', async () => {
+		const { provider, posts } = server();
+		provider.configureModel('laya', {});
+		await provider.ensureLoaded('laya');
+		assert.deepEqual(posts.map((p) => p.path), ['unload', 'load']);
+	});
+
+	it('keeps a model loaded at the most context it takes when more is asked for', async () => {
+		const posts:string[] = [];
+		const provider = new HttpProvider({
+			baseURL: 'http://127.0.0.1:9/v1',
+			fetch: async (input, init) => {
+				const url = String(input);
+				if (url.endsWith('/api/v1/models') && init?.method !== 'POST') {
+					const models = [{ key: 'npc', max_context_length: 4096, loaded_instances: [{ id: 'npc', config: { context_length: 4096 } }] }];
+					return new Response(JSON.stringify({ models }), { status: 200 });
+				}
+				posts.push(url.replace(/^.*\/api\/v1\/models\//, ''));
+				return new Response('{}', { status: 200 });
+			},
+		});
+		provider.configureModel('npc', { contextLength: 16384 });
+		await provider.ensureLoaded('npc');
+		await provider.ensureLoaded('npc');
+		assert.deepEqual(posts, [], 'a 4k model never fits a 16k ask exactly: it must not reload on every request');
 	});
 });

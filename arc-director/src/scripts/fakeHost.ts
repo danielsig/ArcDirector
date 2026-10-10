@@ -22,11 +22,11 @@ async function main():Promise<void> {
 	const mock = process.env.ARC_DIRECTOR_MOCK === '1';
 	const director = new ArcDirector<FixtureCtx>()
 		.withPriorityQueue({
-			maxParallel: 1,
 			processInterval: 0,
 			heartbeatStart: 0.01,
 			heartbeatMin: 0.01,
 		})
+		.addModel('main', { maxParallel: 1 })
 		.addStockVerbs()
 		.withDefaultKit({ verbs: STOCK_VERBS })
 		.onVerb((call) => {
@@ -48,7 +48,7 @@ async function main():Promise<void> {
 		});
 
 	if (mock) {
-		director.withFakeInference(goToNamedInteractable());
+		director.addFakeInference(goToNamedInteractable());
 	}
 	else {
 		const baseURL = await resolveInferenceBaseURL();
@@ -58,7 +58,7 @@ async function main():Promise<void> {
 			process.exitCode = 1;
 			return;
 		}
-		director.withHttpInference({ baseURL, timeoutMs: 180_000 });
+		director.addHttpInference({ baseURL, timeoutMs: 180_000 });
 	}
 
 	try {
@@ -71,7 +71,7 @@ async function main():Promise<void> {
 	}
 
 	if (!mock) {
-		console.log(`model: ${director.model}`);
+		console.log(`model: ${director.modelID()}`);
 	}
 
 	director.tick(1, 1);

@@ -1,6 +1,9 @@
-import { argBase, registerStockVerbs, VerbRegistry, type StockVerb, type VerbArgMap } from '../arc/stock-verbs.js';
-import { arcArg, formatArc } from '../arc/parse.js';
-import type { ArcResult, Step } from '../arc/types.js';
+import { argBase, CHOOSE_VERB, registerStockVerbs, VerbRegistry, type StockVerb, type VerbArgMap } from '../arc/stock-verbs.js';
+import { arcArg, formatArc, parseArcText } from '../arc/parse.js';
+import type { Arc, ArcResult, Step, StepArg } from '../arc/types.js';
+import { validateArc } from '../arc/validate.js';
+import { choicePrompt } from '../character/choice.js';
+import { JevSystemOne, ModelSystemOne, type JevOpts, type SystemOne } from '../inference/systemone.js';
 import { ArcError } from '../arc/types.js';
 import { lawGroup, type Law, type LawSpec } from '../arc/laws.js';
 import { bodiless, type ArcRunner, type RunnerOptions } from '../character/arc-runner.js';
@@ -20,7 +23,7 @@ import {
 } from '../mind/encyclopedia.js';
 import { buildCatalog, dummyEntity, type HostKernels } from '../expr/natives.js';
 import { freezeMe, type MeFreezeHost } from '../expr/prev.js';
-import { catalogEntities, evaluate } from '../expr/eval.js';
+import { catalogEntities, evaluate, unboundCalls } from '../expr/eval.js';
 import { parse } from '../expr/parse.js';
 import { watchScore } from '../expr/score.js';
 import { SampleCache, leftoverFilterHint, type Catalog, type ExprEntity, type ExprVal } from '../expr/types.js';
@@ -48,21 +51,16 @@ import {
 	createArcSession,
 	firstStartable,
 	pollArcSession,
+	watchIsTrue,
 	type ArcHandler,
+	type ArcPick,
 	type ArcSession,
+	type LastChoice,
 } from '../arc/run.js';
 import type { ChatRequest, ChatResponse, InferenceProvider } from '../inference/provider.js';
 import type { FakeChatFn } from '../inference/fake.js';
-import { isVisionModel, type ModelInfo } from '../inference/models.js';
-import { HttpProvider } from '../inference/http.js';
 import { formatChatLog } from '../inference/chatLog.js';
-import {
-	connectHttpInference,
-	fakeInference,
-	lmStudioConfig,
-	ollamaConfig,
-	type HttpInferenceOpts,
-} from '../inference/presets.js';
+import { lmStudioConfig, ollamaConfig, type HttpInferenceOpts } from '../inference/presets.js';
 import {
 	DEFAULT_BATCH_THINKS,
 	DEFAULT_BATCH_WAIT,
@@ -89,6 +87,7 @@ import {
 	type VerbGate,
 	type VerbHandler,
 } from './types.js';
+import { ModelRegistry, type EmbeddingSpec, type InferenceSource, type LiveModel, type ModelSpec } from './models.js';
 import { geometryKernels, wayBlocked } from '../world/kernels.js';
 import { Mover } from '../world/mover.js';
 import { poseOf } from '../world/lookup.js';
@@ -115,13 +114,17 @@ function watchFit(expr:string, catalog:Catalog | undefined):number {
 	return r && !r.error ? fit(r.value) : 0;
 }
 
-/** Why a watch expression can never hold (bad syntax, leftover English), as opposed to false right now. */
+/** Why a watch expression can never hold (bad syntax, leftover English, a function there is none of), as opposed to false right now. */
 function watchProblem(expr:string, catalog:Catalog | undefined):string | undefined {
 	try {
 		parse(expr);
 	}
 	catch (err) {
 		return `${expr}: ${err instanceof Error ? err.message : String(err)}`;
+	}
+	const unbound = catalog ? unboundCalls(expr, catalog) : [];
+	if (unbound.length > 0) {
+		return `${expr}: ${unbound.map((name) => `${name}()`).join(', ')} is not a function`;
 	}
 	return catalog ? leftoverFilterHint(expr, catalogEntities(catalog)) : undefined;
 }
@@ -134,11 +137,18 @@ function pickedEntity(value:ExprVal):ExprEntity | undefined {
 	return value.kind === 'list' ? value.value.find((v) => v.kind === 'entity')?.value as ExprEntity | undefined : undefined;
 }
 
-type InferenceSlot =
-	| { kind:'unset' }
-	| { kind:'fake'; chat?:FakeChatFn }
-	| { kind:'http'; opts:HttpInferenceOpts }
-	| { kind:'custom'; provider:InferenceProvider; model?:string; vision?:boolean };
+/** A mind's provider while its model has not resolved: every call says so. */
+const NO_MODEL:InferenceProvider = {
+	chat: async () => {
+		throw new Error('ArcDirector: no chat model (addModel)');
+	},
+};
+
+/** How long a System One that failed is skipped, so each pick does not wait on it again. */
+const SYSTEM_ONE_REST_MS = 30_000;
+
+/** A character's standing `choose`: its loop, its `until`, and the game time a failed loop rests until. */
+type Standing = { arc:Arc; until?:string; restUntil:number };
 
 type QueueSlot =
 	| { kind:'default' }
@@ -188,10 +198,8 @@ export class ArcDirector<TCtx = unknown> {
 	/** `restoreCast` before `start()`; the cast is built from it when it is wired. */
 	private _stored:CastJSON | undefined;
 	private _disposed = false;
-	private _inference:InferenceSlot = { kind: 'unset' };
 	private _queueSlot:QueueSlot = { kind: 'default' };
 	private _queue:MindQueue | undefined;
-	private _http:HttpProvider | undefined;
 	private _verbs = new VerbRegistry();
 	private readonly _handlers = new Map<string, VerbHandler<TCtx>>();
 	private _catchAll:VerbHandler<TCtx> | undefined;
@@ -227,6 +235,15 @@ export class ArcDirector<TCtx = unknown> {
 	private _stepFn:((call:VerbCall<TCtx>, result:ArcResult)=>void) | undefined;
 	private _ignoreMissing = false;
 	private _arcText = false;
+	private _forceSchema = false;
+	/** System One models by name. A runner is assigned one; one without an assignment uses the default. */
+	private readonly _systemOnes = new Map<string, SystemOne>();
+	/** When each System One that failed may be asked again (`performance.now()`). */
+	private readonly _systemOneRest = new Map<string, number>();
+	private _defaultSystemOne:string | null = null;
+	/** One pick closure per character, so `withheldVerbs` asking for it every refresh stays cheap. */
+	private readonly _picks = new WeakMap<ArcRunner<TCtx>, ArcPick>();
+	private readonly _standing = new WeakMap<Character<TCtx>, Standing>();
 	private _thinkInstructions:ThinkInstructions | undefined;
 	private _verbInstructions:string | undefined;
 	private _arcExample:string | undefined;
@@ -254,13 +271,25 @@ export class ArcDirector<TCtx = unknown> {
 	/** Each mind owner's talk listener, shared by every character it hears through. */
 	private readonly _talkMinds = new WeakMap<ArcRunner<TCtx>, TalkMind>();
 	private readonly _readyThink:ThinkRow[] = [];
-	private _batchHeldTimestamp:number | null = null;
+	/** Per model: when its waiting thinks started waiting for it to go idle. */
+	private readonly _batchHeld = new Map<string, number>();
 	private _clock = 0;
 	private _loop:ReturnType<typeof setInterval> | undefined;
-	private _provider:InferenceProvider | undefined;
-	public model = '';
-	public vision = false;
-	public catalog:ModelInfo[] = [];
+	/** Chat servers and the models configured on them, by name. */
+	private readonly _models = new ModelRegistry({
+		wrap: (provider, http) => this.wrapProvider(provider, http),
+		onRequest: ({ req, body, path }) => {
+			// A System One's pick is logged once, whole, by `pick`.
+			if (isPick(req)) {
+				return;
+			}
+			const dump = formatChatLog(body);
+			this.emitLog({ name: whoFromMessages(req), message: `prompt ${path}
+${dump.message}`, image: dump.image });
+		},
+		changed: () => this.syncModels(),
+		log: (message, error) => this.emitLog({ name: 'ArcDirector', message, error }),
+	});
 	public infer:InferClock = emptyInferClock();
 
 	public get ready():boolean {
@@ -295,34 +324,109 @@ export class ArcDirector<TCtx = unknown> {
 		return this;
 	}
 
-	public withLMStudioInference(opts?:HttpInferenceOpts):this {
-		this.assertBuilder();
-		this._inference = { kind: 'http', opts: { ...lmStudioConfig(opts ?? {}), model: opts?.model } };
+	/** LM Studio as chat server `name` (default `lmstudio`), before or after `start()`. Default URL `http://127.0.0.1:1234/v1`. */
+	public addLMStudioInference({ name = 'lmstudio', ...opts }:HttpInferenceOpts & { name?:string } = {}):this {
+		return this.addInference(name, { kind: 'http', opts: lmStudioConfig(opts) });
+	}
+
+	/** Ollama as chat server `name` (default `ollama`). Default URL `http://127.0.0.1:11434/v1`. */
+	public addOllamaInference({ name = 'ollama', ...opts }:HttpInferenceOpts & { name?:string } = {}):this {
+		return this.addInference(name, { kind: 'http', opts: ollamaConfig(opts) });
+	}
+
+	/** Any OpenAI-compatible server, as chat server `name` (default `http`). */
+	public addHttpInference({ name = 'http', ...opts }:HttpInferenceOpts & { name?:string }):this {
+		return this.addInference(name, { kind: 'http', opts });
+	}
+
+	/** Canned replies for tests, as chat server `name` (default `fake`); its model id is `fake`. */
+	public addFakeInference(chat?:FakeChatFn, { name = 'fake' }:{ name?:string } = {}):this {
+		return this.addInference(name, { kind: 'fake', chat });
+	}
+
+	/**
+	 * A server under `name`, before or after `start()`; the same name again replaces it. A chat server is your own
+	 * `InferenceProvider` or a source. A System One (anything with `pick`) answers `choose`: a spec's `systemOne`
+	 * assigns one by name, a runner without one uses {@link setDefaultSystemOne}'s, and when a runner's own fails or
+	 * names no choice, the others are asked in the order added, then the runner's chat model.
+	 */
+	public addInference(name:string, source:InferenceProvider | InferenceSource | SystemOne, { vision }:{ vision?:boolean } = {}):this {
+		if ('pick' in source) {
+			this._systemOnes.set(name, source);
+		}
+		else {
+			this._models.addInference(name, 'kind' in source ? source : { kind: 'custom', provider: source, vision });
+		}
 		return this;
 	}
 
-	public withOllamaInference(opts?:HttpInferenceOpts):this {
-		this.assertBuilder();
-		this._inference = { kind: 'http', opts: { ...ollamaConfig(opts ?? {}), model: opts?.model } };
+	/**
+	 * Drops server `name`, whichever `add*Inference` added it, and every model on it. Runners assigned a System One
+	 * that went have none until it is added again; the default too.
+	 */
+	public removeInference(name:string):void {
+		this._models.removeInference(name);
+		for (const [other, systemOne] of this._systemOnes) {
+			if (systemOne instanceof ModelSystemOne ? !this._models.has(other) : other === name) {
+				this._systemOnes.delete(other);
+			}
+		}
+	}
+
+	/**
+	 * A chat model under `name`, before or after `start()`; the same name again replaces it. A mind thinks with the
+	 * one its settings' `model` names, else the default: the first added, unless `setDefaultModel` says otherwise.
+	 * With none added, `start()` adds the first server's own pick, named after that server. A `decision` model is
+	 * also System One `name`: it answers `choose` with one choice's name, never thinks aloud unless `thinking` says
+	 * so, and is never the minds' default.
+	 */
+	public addModel(name:string, spec:ModelSpec = {}):this {
+		this._models.addModel(name, spec);
+		if (spec.decision) {
+			this._systemOnes.set(name, this.modelSystemOne(name));
+		}
+		else {
+			this.removeModelSystemOne(name);
+		}
 		return this;
 	}
 
-	public withHttpInference(opts:HttpInferenceOpts):this {
+	/** Minds assigned `name` think with the default until it is added again; a decision model's System One goes too. */
+	public removeModel(name:string):void {
+		this._models.removeModel(name);
+		this.removeModelSystemOne(name);
+	}
+
+	public setDefaultModel(name:string):void {
+		this._models.setDefault(name);
+	}
+
+	/** The server's id for model `name`, or the default's; `''` until its server answered. */
+	public modelID(name?:string):string {
+		return this._models.live(name)?.id ?? '';
+	}
+
+	/** The one model every memory is embedded with, so recall compares like with like whatever a mind thinks with. */
+	public withEmbeddings(spec:EmbeddingSpec):this {
 		this.assertBuilder();
-		this._inference = { kind: 'http', opts };
+		this._models.setEmbeddings(spec);
 		return this;
 	}
 
-	public withFakeInference(chat?:FakeChatFn):this {
-		this.assertBuilder();
-		this._inference = { kind: 'fake', chat };
-		return this;
+	/** TypeSafe's Jev, as System One `name` (default `jev`). Default endpoint `/systemone`: a page proxy that adds the key. */
+	public addJevInference({ name = 'jev', ...opts }:Partial<JevOpts> & { name?:string } = {}):this {
+		return this.addInference(name, new JevSystemOne(opts));
 	}
 
-	public withInference(provider:InferenceProvider, opts?:{ model?:string; vision?:boolean }):this {
-		this.assertBuilder();
-		this._inference = { kind: 'custom', provider, model: opts?.model, vision: opts?.vision };
-		return this;
+	/**
+	 * The System One of every runner without one of its own, any time; `null` for none. Without one, `choose` is
+	 * withheld from every kit and standing `choose` characters stay idle.
+	 */
+	public setDefaultSystemOne(name:string | null):void {
+		if (name !== null && !this._systemOnes.has(name)) {
+			throw new Error(`ArcDirector: no System One '${name}' (addJevInference / addModel with decision / addInference)`);
+		}
+		this._defaultSystemOne = name;
 	}
 
 	public addSense(name:string, spec:Sense<TCtx>):this {
@@ -371,6 +475,13 @@ export class ArcDirector<TCtx = unknown> {
 	public withArcText(on:boolean):this {
 		this.assertBuilder();
 		this._arcText = on;
+		return this;
+	}
+
+	/** Arc JSON thinks send the arc schema for the server to enforce, and offer no tools. No effect with arc text. */
+	public withForceSchema(on:boolean):this {
+		this.assertBuilder();
+		this._forceSchema = on;
 		return this;
 	}
 
@@ -721,90 +832,23 @@ export class ArcDirector<TCtx = unknown> {
 		return this._queue;
 	}
 
-	public setMaxParallel(n:number):void {
-		if (!this._queue) {
-			if (this._queueSlot.kind === 'priority') {
-				this._queueSlot.opts = { ...this._queueSlot.opts, maxParallel: n };
-			}
-			else if (this._queueSlot.kind === 'simple') {
-				this._queueSlot.opts = { ...this._queueSlot.opts, maxParallel: n };
-			}
-			else if (this._queueSlot.kind === 'default') {
-				this._queueSlot = { kind: 'priority', opts: { maxParallel: n } };
-			}
-			return;
-		}
-		this._queue.maxParallel = n;
-	}
-
 	public setBatchThinks(on:boolean):void {
-		if (!this._queue) {
-			if (this._queueSlot.kind === 'priority') {
-				this._queueSlot.opts = { ...this._queueSlot.opts, batchThinks: on };
-			}
-			else if (this._queueSlot.kind === 'simple') {
-				this._queueSlot.opts = { ...this._queueSlot.opts, batchThinks: on };
-			}
-			else if (this._queueSlot.kind === 'default') {
-				this._queueSlot = { kind: 'priority', opts: { batchThinks: on } };
-			}
-			else {
-				this._queueSlot.queue.batchThinks = on;
-			}
-			if (this._inference.kind === 'http') {
-				this._inference.opts.batchThinks = on;
-			}
-			return;
+		if (this._queue) {
+			this._queue.batchThinks = on;
 		}
-		this._queue.batchThinks = on;
-		if (this._inference.kind === 'http') {
-			this._inference.opts.batchThinks = on;
+		else if (this._queueSlot.kind === 'instance') {
+			this._queueSlot.queue.batchThinks = on;
+		}
+		else if (this._queueSlot.kind === 'simple') {
+			this._queueSlot.opts = { ...this._queueSlot.opts, batchThinks: on };
+		}
+		else {
+			this._queueSlot = { kind: 'priority', opts: { ...(this._queueSlot.kind === 'priority' ? this._queueSlot.opts : {}), batchThinks: on } };
 		}
 	}
 
 	public liveBatchThinks():boolean {
 		return this.thinkBatchPolicy().batchThinks;
-	}
-
-	public setThinking(on:boolean):void {
-		this._http?.setThinking(on);
-		if (this._inference.kind === 'http') {
-			this._inference.opts.enableThinking = on;
-		}
-	}
-
-	public setContextLength(n:number):void {
-		const same = this.liveContextLength() === n;
-		if (this._inference.kind === 'http') {
-			this._inference.opts.load = { ...this._inference.opts.load, contextLength: n };
-		}
-		this._http?.setContextLength(n);
-		const model = this.model;
-		if (same || !model || !this._http) {
-			return;
-		}
-		this.emitLog({ name: 'ArcDirector', message: `context ${n}` });
-		void this._http.reload(model).catch((err:unknown) => {
-			const text = err instanceof Error ? err.message : String(err);
-			this.emitLog({ name: 'ArcDirector', message: text, error: true });
-		});
-	}
-
-	public liveContextLength():number | undefined {
-		if (this._http) {
-			return this._http.liveContextLength();
-		}
-		if (this._inference.kind === 'http') {
-			return this._inference.opts.load?.contextLength;
-		}
-		return undefined;
-	}
-
-	public liveThinking():boolean {
-		if (this._inference.kind === 'http') {
-			return this._inference.opts.enableThinking === true;
-		}
-		return false;
 	}
 
 	public setArcText(on:boolean):void {
@@ -818,47 +862,26 @@ export class ArcDirector<TCtx = unknown> {
 		return this._arcText;
 	}
 
-	public liveMaxParallel():number {
-		if (this._queue) {
-			return this._queue.maxParallel;
+	public setForceSchema(on:boolean):void {
+		this._forceSchema = on;
+		for (const mind of this.minds()) {
+			mind.forceSchema = on;
 		}
-		if (this._queueSlot.kind === 'priority') {
-			return this._queueSlot.opts?.maxParallel ?? 2;
-		}
-		if (this._queueSlot.kind === 'simple') {
-			return this._queueSlot.opts?.maxParallel ?? 2;
-		}
-		if (this._queueSlot.kind === 'instance') {
-			return this._queueSlot.queue.maxParallel;
-		}
-		return 2;
 	}
 
-	public setModel(id:string):void {
-		const name = id.trim();
-		if (!name || name === this.model) {
-			return;
-		}
-		this.model = name;
-		this.syncVision(name);
-		this.emitLog({ name: 'ArcDirector', message: `using ${name}${this.vision ? ' (vision)' : ''}` });
+	/** Minds re-read their model: assigned, added again, removed, or a new default. */
+	private syncModels():void {
 		for (const mind of this.minds()) {
-			mind.model = name;
-			mind.vision = this.vision;
+			this.syncModel(mind);
 		}
-		void this._http?.ensureLoaded(name).catch((err:unknown) => {
-			const text = err instanceof Error ? err.message : String(err);
-			this.emitLog({ name: 'ArcDirector', message: text, error: true });
-		});
 	}
 
-	private syncVision(modelID:string):void {
-		const row = this.catalog.find((m) => m.id === modelID)
-			?? this.catalog.find((m) => m.id.endsWith(modelID) || m.id.includes(modelID));
-		this.vision = isVisionModel(row ?? modelID);
-		for (const mind of this.minds()) {
-			mind.vision = this.vision;
-		}
+	private syncModel(mind:Mind<TCtx>):void {
+		const live = this._models.live(mind.model);
+		mind.provider = live?.provider ?? NO_MODEL;
+		mind.modelID = live?.id ?? '';
+		mind.vision = live?.vision;
+		mind.contextTokens = live?.contextLength;
 	}
 
 	public resetInferStats():void {
@@ -886,15 +909,20 @@ export class ArcDirector<TCtx = unknown> {
 		}
 	}
 
-	private wrapProvider(inner:InferenceProvider):InferenceProvider {
+	/** Timing and the AI log around a server. An HTTP one logs its own request bodies. */
+	private wrapProvider(inner:InferenceProvider, http:boolean):InferenceProvider {
 		const embed = inner.embed?.bind(inner);
 		return {
 			chat: async (req:ChatRequest):Promise<ChatResponse> => {
+				// A System One's pick is logged once, whole, by `pick`, and is not a think.
+				if (isPick(req)) {
+					return inner.chat(req);
+				}
 				const name = whoFromMessages(req);
 				const t0 = nowMs();
 				const signal = req.thread ? this._queue?.thinkSignal(req.thread) : undefined;
 				try {
-					if (!this._http) {
+					if (!http) {
 						const dump = formatChatLog(req);
 						this.emitLog({ name, message: `prompt\n${dump.message}`, image: dump.image });
 					}
@@ -956,48 +984,44 @@ export class ArcDirector<TCtx = unknown> {
 		return new ThinkQueue(opts);
 	}
 
+	/** A chat model, unless every character acts by a standing `choose` on a System One that needs no chat. */
+	private needsChat():boolean {
+		return this._systemOnes.size === 0
+			|| this._collectiveSpecs.length > 0
+			|| this._soloSpecs.some((spec) => spec.mind)
+			|| Object.values(this._stored?.characters ?? {}).some((json) => json.mind);
+	}
+
+	/** Chat model `name`, or the default, as its server answered it. Throws while there is none. */
+	private chatModel(name?:string):LiveModel {
+		const model = this._models.live(name);
+		if (!model) {
+			throw new Error(`ArcDirector: no chat model '${name ?? 'default'}' (addModel)`);
+		}
+		return model;
+	}
+
+	/** Chat model `name` (or the default) as a System One that names one choice. */
+	private modelSystemOne(name?:string):ModelSystemOne {
+		return new ModelSystemOne(() => this.chatModel(name));
+	}
+
+	/** Drops System One `name` when a decision model backed it, so it never falls back to the default chat model. */
+	private removeModelSystemOne(name:string):void {
+		if (this._systemOnes.get(name) instanceof ModelSystemOne) {
+			this._systemOnes.delete(name);
+		}
+	}
+
 	private async connectInference():Promise<void> {
-		if (this._inference.kind === 'unset') {
-			throw new Error('ArcDirector: no inference (withLMStudioInference / withOllamaInference / withFakeInference / withInference)');
+		if (!this._models.hasServers) {
+			if (!this.needsChat()) {
+				return;
+			}
+			throw new Error('ArcDirector: no inference (addLMStudioInference / addOllamaInference / addFakeInference / addInference)');
 		}
-		if (this._inference.kind === 'fake') {
-			this._http = undefined;
-			this._provider = this.wrapProvider(fakeInference(this._inference.chat));
-			this.model = 'fake';
-			this.vision = false;
-			this.catalog = [];
-			return;
-		}
-		if (this._inference.kind === 'custom') {
-			this._http = undefined;
-			this._provider = this.wrapProvider(this._inference.provider);
-			this.model = this._inference.model ?? this.model ?? 'custom';
-			this.vision = this._inference.vision ?? isVisionModel(this.model);
-			return;
-		}
-		const opts = this._inference.opts;
-		const load = opts.load ? { ...opts.load } : undefined;
 		try {
-			const connected = await connectHttpInference(
-				{
-					...opts,
-					load,
-					onRequest: ({ req, body, path }) => {
-						const dump = formatChatLog(body);
-						this.emitLog({
-							name: whoFromMessages(req),
-							message: `prompt ${path}\n${dump.message}`,
-							image: dump.image,
-						});
-					},
-				},
-				opts.model,
-			);
-			this.catalog = connected.catalog;
-			this.model = connected.model;
-			this.vision = connected.vision;
-			this._http = connected.provider;
-			this._provider = this.wrapProvider(connected.provider);
+			await this._models.start();
 		}
 		catch (err:unknown) {
 			const text = err instanceof Error ? err.message : String(err);
@@ -1022,24 +1046,13 @@ export class ArcDirector<TCtx = unknown> {
 				: this._talkSense;
 			this.talk = new TalkNet(sense, this._onSpoke, this._talkConfig);
 		}
-		this.emitLog({
-			name: 'ArcDirector',
-			message: `using ${this.model}${this.vision ? ' (vision)' : ''}`,
-		});
 		this._mover = new Mover(this._world, () => this._clock);
 		this.bindWorldVerbs();
 		this.reportMissingNames();
-		this._handover ??= chatHandover((req) => this._provider!.chat(req), () => this.model);
+		this._handover ??= chatHandover((req) => this.chatModel().provider.chat(req), () => this.chatModel().id);
 		this.wireCast(this._stored);
 		this._stored = undefined;
 		this._ready = true;
-		const ids = this.minds().map((mind) => mind.id);
-		if (ids.length > 0) {
-			this.emitLog({
-				name: 'ArcDirector',
-				message: `${ids.join(', ')} on ${this.model}${this.vision ? ' (vision)' : ''}`,
-			});
-		}
 		return this;
 	}
 
@@ -1052,6 +1065,7 @@ export class ArcDirector<TCtx = unknown> {
 			mover: this._mover,
 			now: () => this._clock,
 			seen: (call) => (this._sightLook ? this.filterSight(this._sightLook(call.ctx)).objects.map((o) => o.id) : []),
+			nearRadius: (call) => (this._kernelFn ? this.kernelsFor(call.character, call.ctx).nearRadius : undefined),
 		});
 		for (const [verb, handler] of Object.entries(handlers)) {
 			if (missingParts(verb, this._world).length === 0) {
@@ -1147,7 +1161,7 @@ export class ArcDirector<TCtx = unknown> {
 	/** What `mind` needs from this director to think for `owner`, wired when it attaches. */
 	private mindDeps(mind:Mind<TCtx>, owner:ArcRunner<TCtx>):MindDeps<TCtx> {
 		return {
-			provider: this._provider!,
+			provider: this._models.live(mind.model)?.provider ?? NO_MODEL,
 			senses: this.sensesFor(mind, owner),
 			tools: this._tools,
 			talk: this.talk,
@@ -1157,14 +1171,16 @@ export class ArcDirector<TCtx = unknown> {
 			stalled: this._stalledFn,
 			autoEnact: true,
 			queue: this._queue,
-			model: this.model,
+			modelID: this._models.live(mind.model)?.id ?? '',
+			embed: this._models.embedder(),
 			map: this._map,
 			encyclopedia: this._encyclopedia,
 			mentionCap: this._mentionCap,
-			vision: this.vision,
+			vision: this._models.live(mind.model)?.vision,
 			arcText: this._arcText,
+			forceSchema: this._forceSchema,
 			thinkInstructions: this._thinkInstructions,
-			thinking: () => this.liveThinking(),
+			thinking: () => this._models.live(mind.model)?.thinking ?? false,
 			verbInstructions: this._verbInstructions,
 			arcExample: this._arcExample,
 			repairTemperature: this._repairTemperature,
@@ -1631,7 +1647,7 @@ export class ArcDirector<TCtx = unknown> {
 		if (name === 'earshot' && (this.talk || this._talkSense)) {
 			return true;
 		}
-		if (name === 'see_map' && this._map && this.vision) {
+		if (name === 'see_map' && this._map && this._models.all().some((model) => model.vision)) {
 			return true;
 		}
 		if (name === GREP_WORLD_ENCYCLOPEDIA && this._encyclopedia) {
@@ -1765,6 +1781,8 @@ export class ArcDirector<TCtx = unknown> {
 
 	/** Wire a character: alone, or `into` a collective. `json` restores a save. */
 	private wireCharacter(spec:CharacterSpec<TCtx>, json?:CharacterJSON, into?:Collective<TCtx>):Character<TCtx> {
+		this.checkNames(spec);
+		const standing = this.standingChoice(spec);
 		const persona = json ? Persona.fromJSON(json.persona, spec) : new Persona(spec);
 		persona.sightLimit ??= this._sightLimitDefault;
 		const kit = this.kitFor(spec);
@@ -1774,6 +1792,7 @@ export class ArcDirector<TCtx = unknown> {
 		};
 		const character:Character<TCtx> = new Character<TCtx>({
 			...this.runnerDeps(spec, kit, () => character),
+			pick: () => this.pickFor(character),
 			persona,
 			tags: spec.tags,
 			mindSettings: spec.mind,
@@ -1781,6 +1800,9 @@ export class ArcDirector<TCtx = unknown> {
 		});
 		const fields = filled(wiring.fields);
 		this._characterFields.set(character, fields);
+		if (standing) {
+			this._standing.set(character, standing);
+		}
 		this._characterRows.set(spec.id, { spec, runner: character, cache: new SampleCache() });
 		if (json) {
 			fields.load(json);
@@ -1803,6 +1825,7 @@ export class ArcDirector<TCtx = unknown> {
 
 	/** Wire a collective, its characters, and its mind. `cast` restores a save. */
 	private wireCollective(spec:CollectiveSpec<TCtx>, cast?:CastJSON):Collective<TCtx> {
+		this.checkNames(spec);
 		const json = cast?.collectives[spec.id];
 		const persona = json ? Persona.fromJSON(json.persona, spec) : new Persona(spec);
 		persona.sightLimit ??= this._sightLimitDefault;
@@ -1820,6 +1843,7 @@ export class ArcDirector<TCtx = unknown> {
 		};
 		const collective:Collective<TCtx> = new Collective<TCtx>({
 			...this.runnerDeps(spec, this.kitFor(spec), () => collective),
+			pick: () => this.pickFor(collective),
 			defaultLawWho: 'units',
 			persona,
 			mind,
@@ -1927,7 +1951,8 @@ export class ArcDirector<TCtx = unknown> {
 		}
 		this._journeyTicks += 1;
 		const queue = this._queue;
-		const full = !!queue && queue.inFlight >= queue.maxParallel;
+		const model = this._models.live();
+		const full = !!queue && !!model && this.thinkingOn(model.name) >= model.maxParallel;
 		if (this._journeyTicks < this._handoverTicks || this._handoverBusy || full || !this._handover) {
 			return;
 		}
@@ -1978,7 +2003,7 @@ export class ArcDirector<TCtx = unknown> {
 
 	/** Embed a memory written outside a think, without waiting for it. */
 	private embedLater(record:MemoryRecord):void {
-		void this._provider?.embed?.([record.text])
+		void this._models.embedder()?.([record.text])
 			.then(([vec]) => {
 				record.embedding = vec;
 			})
@@ -2073,7 +2098,7 @@ export class ArcDirector<TCtx = unknown> {
 		}
 		mindFields(mind).attach(owner, this.mindDeps(mind, owner));
 		mind.stamp(this._clock);
-		this._queue?.ensure(mind.id, { skipHeartbeat: mind.skipHeartbeat, skipMajor: mind.skipMajor });
+		this._queue?.ensure(mind.id, { skipHeartbeat: mind.skipHeartbeat, skipMajor: mind.skipMajor, skipStart: mind.skipStart });
 		this._queue?.setWatches(mind.id, mind.persona.effectiveWatches());
 		this._queue?.setAiOn(mind.id, true);
 	}
@@ -2254,6 +2279,10 @@ export class ArcDirector<TCtx = unknown> {
 			row.runner.refreshKit();
 		}
 		const minds = this.minds();
+		// A host may reassign `mind.model` any time.
+		for (const mind of minds) {
+			this.syncModel(mind);
+		}
 		const catalogs = new Map<string, Catalog | Catalog[]>();
 		for (const mind of minds) {
 			mind.stamp(now);
@@ -2267,10 +2296,7 @@ export class ArcDirector<TCtx = unknown> {
 				continue;
 			}
 		}
-		const cap = this._queue.maxParallel;
-		this._queue.maxParallel = Math.max(cap, minds.length);
 		const ready = this._queue.tick(dt, catalogs);
-		this._queue.maxParallel = cap;
 		this._readyThink.push(...ready);
 		this.tickWaits();
 		this._mover.tick();
@@ -2282,6 +2308,7 @@ export class ArcDirector<TCtx = unknown> {
 			if (!row.runner.collective) {
 				this.tickLaws(row.runner);
 			}
+			this.tickStanding(row.runner);
 		}
 		for (const row of this._collectiveRows.values()) {
 			this.tickCollectiveLaws(row.runner);
@@ -2312,6 +2339,156 @@ export class ArcDirector<TCtx = unknown> {
 			}
 		}
 		return views.length > 0 ? views : thinker;
+	}
+
+	/**
+	 * `spec.choose` as `loop(choose(goal, …choices), until)`, checked now so a typo throws at `start()`, not
+	 * mid-game. Its choices may use any registered verb.
+	 */
+	private standingChoice(spec:CharacterSpec<TCtx>):Standing | undefined {
+		if (!spec.choose) {
+			return undefined;
+		}
+		if (spec.mind) {
+			throw new Error(`ArcDirector: '${spec.id}' has both choose and mind; give it one`);
+		}
+		const { goal, until, ...choices } = spec.choose;
+		try {
+			const args:Record<string, StepArg> = { goal };
+			for (const [name, text] of Object.entries(choices)) {
+				if (text !== undefined) {
+					args[name] = parseArcText(text, this._verbs);
+				}
+			}
+			const arc:Arc = { head: { verb: 'loop', args: { arc: { head: { verb: CHOOSE_VERB, args } }, ...(until ? { until } : {}) } } };
+			validateArc(arc, this._verbs);
+			if (until) {
+				parse(until);
+			}
+			return { arc, until, restUntil: 0 };
+		}
+		catch (err) {
+			throw new Error(`ArcDirector: '${spec.id}' choose: ${err instanceof Error ? err.message : String(err)}`);
+		}
+	}
+
+	/** Start a character's standing `choose` while it is idle, System One is on, and its `until` does not hold. */
+	private tickStanding(character:Character<TCtx>):void {
+		const standing = this._standing.get(character);
+		if (!standing || character.arcSession || this._clock < standing.restUntil || !this.pickFor(character)) {
+			return;
+		}
+		const catalog = standing.until ? character.catalog?.() : undefined;
+		if (standing.until && catalog && watchIsTrue(standing.until, catalog)) {
+			return;
+		}
+		void character.enact(standing.arc).then((result) => {
+			// A dead endpoint or a bad pick rests like a handler would, instead of asking again every tick.
+			if (!result.ok && !result.preempted) {
+				standing.restUntil = this._clock + character.cooldown;
+			}
+		}, (err:unknown) => {
+			standing.restUntil = this._clock + character.cooldown;
+			this.emitLog({ name: character.id, message: `choose: ${err instanceof Error ? err.message : String(err)}`, error: true });
+		});
+	}
+
+	/**
+	 * The name of a runner's System One: the one its spec names, else its collective's, else the default. A spec's
+	 * `null` means none there, whatever the default is.
+	 */
+	private systemOneOf(runner:ArcRunner<TCtx>):string | null {
+		const specs = [
+			(this._characterRows.get(runner.id) ?? this._collectiveRows.get(runner.id))?.spec,
+			runner instanceof Character && runner.collective ? this._collectiveRows.get(runner.collective.id)?.spec : undefined,
+		];
+		const assigned = specs.find((spec) => spec?.systemOne !== undefined)?.systemOne;
+		const name = assigned === undefined ? this._defaultSystemOne : assigned;
+		return name && this._systemOnes.has(name) ? name : null;
+	}
+
+	/** A spec naming a System One or a chat model this director lacks is a typo; caught when it is wired. */
+	private checkNames(spec:{ id:string; systemOne?:string | null; mind?:MindSettings }):void {
+		if (spec.systemOne && !this._systemOnes.has(spec.systemOne)) {
+			throw new Error(`ArcDirector: '${spec.id}' names System One '${spec.systemOne}', which was never added`);
+		}
+		if (spec.mind?.model !== undefined && !this._models.has(spec.mind.model)) {
+			throw new Error(`ArcDirector: '${spec.id}' names model '${spec.mind.model}', which was never added`);
+		}
+	}
+
+	/** This runner's pick while it has a System One. */
+	private pickFor(runner:ArcRunner<TCtx>):ArcPick | undefined {
+		if (!this.systemOneOf(runner)) {
+			return undefined;
+		}
+		let pick = this._picks.get(runner);
+		if (!pick) {
+			pick = (goal, choices, last) => this.pick(runner, goal, choices, last);
+			this._picks.set(runner, pick);
+		}
+		return pick;
+	}
+
+	/**
+	 * Ask which of `choices` serves `goal` now, worded by {@link choicePrompt}. A lone choice left is taken unasked;
+	 * with none left the pick fails unasked. The runner's own System One answers first; when it fails or names no
+	 * choice, every other System One in turn, then the runner's chat model. One that failed rests a while. Every pick
+	 * is logged with who answered.
+	 */
+	private async pick(runner:ArcRunner<TCtx>, goal:string, choices:Record<string, Arc>, last:LastChoice | undefined):Promise<string> {
+		const own = this.systemOneOf(runner);
+		if (!own) {
+			throw new Error('System One is off');
+		}
+		const prompt = choicePrompt({ id: runner.id, verb: runner.verb, last, catalog: runner.catalog?.(), choices, verbs: this._verbs });
+		if (!prompt) {
+			throw new Error('no choice can run now');
+		}
+		const { state, criteria } = prompt;
+		const shown = Object.keys(criteria);
+		const now = nowMs();
+		if (shown.length === 1) {
+			this.logPick(runner, goal, `${shown[0]}, the only one that can run`, now, [], state, criteria);
+			runner.record.picked(shown[0]);
+			return shown[0];
+		}
+		const asked = [own, ...[...this._systemOnes.keys()].filter((name) => name !== own && (this._systemOneRest.get(name) ?? 0) <= now)]
+			.map((name):[string, SystemOne] => [name, this._systemOnes.get(name)!]);
+		const chat = this._models.live(runner.mind?.model);
+		if (chat) {
+			asked.push([chat.name, this.modelSystemOne(chat.name)]);
+		}
+		const misses:string[] = [];
+		for (const [by, systemOne] of asked) {
+			try {
+				const name = await systemOne.pick(state, goal, criteria);
+				if (Object.hasOwn(criteria, name)) {
+					this.logPick(runner, goal, `${name} by ${by}`, now, misses, state, criteria);
+					runner.record.picked(name);
+					return name;
+				}
+				misses.push(`${by} named '${name}'`);
+			}
+			catch (err) {
+				misses.push(`${by}: ${err instanceof Error ? err.message : String(err)}`);
+				if (this._systemOnes.has(by)) {
+					this._systemOneRest.set(by, nowMs() + SYSTEM_ONE_REST_MS);
+				}
+			}
+		}
+		this.logPick(runner, goal, 'nothing', now, misses, state, criteria);
+		throw new Error(misses.join('; ') || 'no System One answered');
+	}
+
+	private logPick(runner:ArcRunner<TCtx>, goal:string, answer:string, started:number, misses:string[], state:string, criteria:Record<string, string>):void {
+		const lines = Object.entries(criteria).map(([key, arc]) => `  ${key}: ${arc}`).join('\n');
+		this.emitLog({
+			name: runner.id,
+			message: `choose ${JSON.stringify(goal)} → ${answer} in ${Math.round(nowMs() - started)}ms`
+				+ `${misses.length > 0 ? ` (${misses.join('; ')})` : ''}\n${state}\n${lines}`,
+			error: answer === 'nothing',
+		});
 	}
 
 	/** Laws and the live arc session of a character on its own. */
@@ -2357,14 +2534,23 @@ export class ArcDirector<TCtx = unknown> {
 		}
 	}
 
-	/** A think is in flight or already queued, so a law must not walk the character out from under it. */
+	/**
+	 * A think is in flight or already queued, so a law must not walk the character out from under it. Not before
+	 * the mind's first think ends: laws act from the start, not after the opening think.
+	 */
 	private thinkWaiting(mindID:string):boolean {
-		return !!this._queue?.isThinking(mindID)
-			|| !!this._queue?.hasPending(mindID)
+		if (!this._queue?.hasThought(mindID)) {
+			return false;
+		}
+		return this._queue.isThinking(mindID)
+			|| this._queue.hasPending(mindID)
 			|| this._readyThink.some((row) => row.mindID === mindID);
 	}
 
-	/** Poll `runner`'s live session, or start the first law that holds. A voice waits for its mind's think. */
+	/**
+	 * Poll `runner`'s live session, or start the first law that holds. A voice waits for its mind's think, except a
+	 * party's commander: that think is mostly orders for others, and its own laws (heal, keep back) cannot wait.
+	 */
 	private pollRunner(
 		runner:ArcRunner<TCtx>,
 		extras:()=>ArcHandler[],
@@ -2387,7 +2573,8 @@ export class ArcDirector<TCtx = unknown> {
 			extraHandlers: extras,
 		});
 		const first = firstStartable(probe);
-		const mind = runner.isVoice ? runner.mind : null;
+		const commander = runner instanceof Character && !!runner.collective;
+		const mind = runner.isVoice && !commander ? runner.mind : null;
 		if (first && !(mind && this.thinkWaiting(mind.id))) {
 			runner.beginLaw(first, {
 				catalog,
@@ -2403,6 +2590,19 @@ export class ArcDirector<TCtx = unknown> {
 		return ownMindOf(this._characterRows.get(id)?.runner) ?? this._collectiveRows.get(id)?.runner.mind ?? undefined;
 	}
 
+	/** The model a mind thinks with: its own, or the default. `''` before any resolved. */
+	private modelOf(mind:Mind<TCtx>):string {
+		return this._models.live(mind.model)?.name ?? '';
+	}
+
+	/** Thinks running on `model` now, the memory handover counting against the default. */
+	private thinkingOn(model:string):number {
+		const queue = this._queue;
+		const thinks = queue ? this.minds().filter((mind) => queue.isThinking(mind.id) && this.modelOf(mind) === model).length : 0;
+		return thinks + (this._handoverBusy && model === this._models.live()?.name ? 1 : 0);
+	}
+
+	/** Start ready thinks, best first, as far as each one's model has free slots. */
 	private drain(now:number):void {
 		const queue = this._queue;
 		if (!queue) {
@@ -2415,70 +2615,73 @@ export class ArcDirector<TCtx = unknown> {
 			}
 			return (this.mindByID(b.mindID)?.rank ?? 0) - (this.mindByID(a.mindID)?.rank ?? 0);
 		});
-		const slots = this.thinkSlots(queue, now);
-		if (slots <= 0) {
-			return;
-		}
+		const open = new Map<string, number>();
 		const held:ThinkRow[] = [];
-		let left = slots;
 		for (const row of this._readyThink) {
 			const mind = this.mindByID(row.mindID);
-			if (!mind || queue.isThinking(row.mindID) || left <= 0) {
-				if (mind) {
-					held.push(row);
-				}
+			if (!mind) {
 				continue;
 			}
-			if (!queue.allowThink(row)) {
+			const model = this.modelOf(mind);
+			const slots = open.get(model) ?? this.thinkSlots(model, now);
+			if (slots <= 0 || queue.isThinking(row.mindID) || !queue.allowThink(row)) {
+				open.set(model, slots);
 				held.push(row);
 				continue;
 			}
 			queue.drop(row.mindID);
 			this.fireThink(mind, now);
-			left -= 1;
+			open.set(model, slots - 1);
 		}
 		this._readyThink.length = 0;
 		this._readyThink.push(...held);
-		if (queue.inFlight > 0 && this._readyThink.length > 0 && this._batchHeldTimestamp === null) {
-			this._batchHeldTimestamp = now;
+		for (const row of held) {
+			const mind = this.mindByID(row.mindID);
+			const model = mind ? this.modelOf(mind) : '';
+			if (mind && this.thinkingOn(model) > 0 && !this._batchHeld.has(model)) {
+				this._batchHeld.set(model, now);
+			}
 		}
 	}
 
-	private thinkSlots(queue:MindQueue, now:number):number {
-		const inFlight = queue.inFlight;
-		if (inFlight === 0) {
-			this._batchHeldTimestamp = null;
+	/**
+	 * Free think slots on `model`. With `batchThinks`, new thinks wait while it is generating (a new prompt's
+	 * prefill stalls every slot already decoding), up to `batchWait`, then start as one wave.
+	 */
+	private thinkSlots(model:string, now:number):number {
+		const queue = this._queue;
+		const live = this._models.live(model);
+		if (!queue || !live) {
+			return 0;
 		}
-		const open = queue.maxParallel - inFlight - (this._handoverBusy ? 1 : 0);
+		const thinking = this.thinkingOn(model);
+		if (thinking === 0) {
+			this._batchHeld.delete(model);
+		}
+		const open = live.maxParallel - thinking;
 		if (open <= 0) {
 			return 0;
 		}
 		const { batchThinks, batchWait } = this.thinkBatchPolicy();
-		if (!batchThinks || inFlight === 0) {
+		if (!batchThinks || thinking === 0) {
 			return open;
-		}
-		const waiting = this._readyThink.some((row) => !!this.mindByID(row.mindID) && !queue.isThinking(row.mindID));
-		if (!waiting) {
-			return 0;
 		}
 		if (!Number.isFinite(batchWait) || batchWait <= 0) {
 			return 0;
 		}
-		if (this._batchHeldTimestamp === null) {
-			this._batchHeldTimestamp = now;
-		}
-		if (now - this._batchHeldTimestamp < batchWait) {
+		const since = this._batchHeld.get(model) ?? now;
+		this._batchHeld.set(model, since);
+		if (now - since < batchWait) {
 			return 0;
 		}
-		this._batchHeldTimestamp = now;
+		this._batchHeld.set(model, now);
 		return open;
 	}
 
 	private thinkBatchPolicy():{ batchThinks:boolean; batchWait:number } {
-		const http = this._inference.kind === 'http' ? this._inference.opts : undefined;
 		return {
-			batchThinks: this._queue?.batchThinks ?? http?.batchThinks ?? DEFAULT_BATCH_THINKS,
-			batchWait: this._queue?.batchWait ?? http?.batchWait ?? DEFAULT_BATCH_WAIT,
+			batchThinks: this._queue?.batchThinks ?? DEFAULT_BATCH_THINKS,
+			batchWait: this._queue?.batchWait ?? DEFAULT_BATCH_WAIT,
 		};
 	}
 
@@ -2551,6 +2754,11 @@ function hasIdentity<TCtx>(character:Character<TCtx>):boolean {
 }
 
 /** Remove the spec with `id` from `specs`, and return it. */
+/** A System One's pick: only a pick asks for the answer token's log probabilities. */
+function isPick(req:ChatRequest):boolean {
+	return req.topLogprobs !== undefined;
+}
+
 function remove<TSpec extends { id:string }>(specs:TSpec[], id:string):TSpec | undefined {
 	const i = specs.findIndex((spec) => spec.id === id);
 	return i < 0 ? undefined : specs.splice(i, 1)[0];

@@ -51,7 +51,7 @@ export function useOn(host:GameHost, character:GameObject, itemName:string, targ
 		host.doorOpen.set(targetName, true);
 	}
 	if (result.ok) {
-		// Everyone learns what changed, as with a give or a pick-up: "BridgeKeeper used BridgeCrank on BridgeLever: lowered Bridge".
+		// Everyone learns what changed, as with a give or a pick-up: "BridgeKeeper used BridgeCrank on BridgeLever: raised Bridge".
 		const label = pascalCase(item.name) || item.name;
 		host.arc?.pushEvent({
 			kind: 'Used',

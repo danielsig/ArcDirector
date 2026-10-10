@@ -2,9 +2,9 @@ import type { ArcResult } from '../arc/types.js';
 import type { StockVerbArgs, StockVerbName, VerbArgs, VerbCall, VerbHandler } from '../director/types.js';
 import type { Mover } from './mover.js';
 import { poseOf } from './lookup.js';
-import { reachablePoints } from './route.js';
+import { awayGoal, reachablePoints } from './route.js';
 import type { HostWorld, Vec } from './types.js';
-import { add, centroid, dot, groundAxes, sub, unit } from './vec.js';
+import { add, centroid, distance, dot, groundAxes, sub, unit } from './vec.js';
 
 /** What the stock world verbs need besides the call itself. */
 export type WorldVerbDeps<TCtx> = {
@@ -13,6 +13,8 @@ export type WorldVerbDeps<TCtx> = {
 	now:()=>number;
 	/** Ids the acting character sees right now. */
 	seen:(call:VerbCall<TCtx>)=>string[];
+	/** What counts as nearby for the acting character (its kernels' `nearRadius`), when the host says. */
+	nearRadius:(call:VerbCall<TCtx>)=>number | undefined;
 };
 
 type WorldPart = Exclude<keyof HostWorld<unknown>, 'find' | 'getPose' | 'getReach' | 'up'>;
@@ -23,6 +25,7 @@ const MOVING:WorldPart[] = ['getPathGraph', 'steerToward'];
 export const WORLD_VERB_PARTS:Readonly<Record<string, readonly WorldPart[]>> = {
 	go_to: MOVING,
 	follow: MOVING,
+	flee: MOVING,
 	wander: MOVING,
 	spread: MOVING,
 	circle: MOVING,
@@ -53,6 +56,12 @@ const WANDER_SPREAD = 600;
 const WANDER_SAMPLES = 24;
 const WANDER_MISSES = 3;
 const FORMATION_PACES = 2;
+/** Seconds between looks while far enough away. */
+const FLEE_LOOK = 0.5;
+/** Seconds out of range before a flee counts as escaped. */
+const FLEE_SAFE = 3;
+/** Run this much past the distance asked, so a step toward you does not start the next run at once. */
+const FLEE_MARGIN = 1.25;
 
 /** Stock handlers for every world verb `deps.world` has the parts for. */
 export function worldVerbs<TCtx>(deps:WorldVerbDeps<TCtx>):Handlers<TCtx> {
@@ -93,6 +102,14 @@ export function worldVerbs<TCtx>(deps:WorldVerbDeps<TCtx>):Handlers<TCtx> {
 		follow: (call:Call<TCtx, 'follow'>) => {
 			const found = resolve(call, call.args.target, 'person');
 			return failed(found) ? found : mover.go(call.character.id, { target: call.args.target }, 'follow', { sticky: true });
+		},
+		flee: async (call:Call<TCtx, 'flee'>) => {
+			const found = resolve(call, call.args.from, 'person');
+			if (failed(found)) {
+				return found;
+			}
+			const keep = call.args.distance ?? deps.nearRadius(call);
+			return keep === undefined ? fail('flee', 'say how far: flee(from, distance)') : flee(call, deps, keep);
 		},
 		wander: (call:Call<TCtx, 'wander'>) => wander(call, deps),
 		spread: formation,
@@ -156,6 +173,48 @@ export function worldVerbs<TCtx>(deps:WorldVerbDeps<TCtx>):Handlers<TCtx> {
 /** A whole number of items, at least 1. */
 function countOf(quantity:number | undefined):number {
 	return Math.max(1, Math.floor(quantity ?? 1));
+}
+
+/**
+ * Get and stay at least `keep` away from `call.args.from`: stand while far enough, else take the cheapest route out
+ * of their range ({@link awayGoal}), which keeps wide of them. Ends once out of range for {@link FLEE_SAFE} seconds
+ * in a row, or when they are gone; fails when cornered (no way out of range) or stuck.
+ */
+async function flee<TCtx>(call:Call<TCtx, 'flee'>, deps:WorldVerbDeps<TCtx>, keep:number):Promise<ArcResult> {
+	const { world, mover } = deps;
+	const { from } = call.args;
+	const name = call.character.mind?.nameOf(from) ?? from;
+	const threat = ():Vec | undefined => poseOf(world, from)?.point;
+	const dest = {
+		goal: () => {
+			const at = threat();
+			return at && awayGoal(at, keep * FLEE_MARGIN);
+		},
+		noWay: (why:string) => (why ? `cornered by ${name}, blocked on the way: ${why}` : `cornered by ${name}`),
+	};
+	let safeSince = deps.now();
+	for (;;) {
+		const me = poseOf(world, call.character.id)?.point;
+		const at = threat();
+		if (!me || !at) {
+			return me ? { ok: true, verb: 'flee', reason: `${name} is gone` } : { ok: false, verb: 'flee', reason: 'not in this scene' };
+		}
+		if (distance(me, at) >= keep) {
+			if (deps.now() - safeSince >= FLEE_SAFE) {
+				return { ok: true, verb: 'flee', reason: `got away from ${name}` };
+			}
+			const look = await call.wait(FLEE_LOOK);
+			if (!look.ok) {
+				return { ...look, verb: 'flee' };
+			}
+			continue;
+		}
+		const leg = await mover.go(call.character.id, dest, 'flee');
+		if (!leg.ok && threat()) {
+			return { ...leg, verb: 'flee' };
+		}
+		safeSince = deps.now();
+	}
 }
 
 /**

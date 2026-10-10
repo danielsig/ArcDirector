@@ -465,7 +465,7 @@ export function formatSightClauses(sight:Sight, opts:SightOpts = {}):SightClause
 	const bearingFn = (obj:SeenObject):Bearing => bearingOf(sight.self, obj);
 
 	const remaining = objects.filter((o) => (
-		o.id !== npcID && finite(distance(o, me)) <= radius
+		o.id !== npcID && (o.always || finite(distance(o, me)) <= radius)
 	));
 	const stringifyCtx:StringifyCtx = {
 		self: { id: npcID },
@@ -510,7 +510,7 @@ export function formatSightClauses(sight:Sight, opts:SightOpts = {}):SightClause
 			hits.push({
 				text: best.hit.text,
 				claimedIDs: uniqueIDs(best.claimed.flatMap(idsOf)),
-				prefer: best.claimed.some(isPerson),
+				prefer: best.claimed.some((o) => isPerson(o) || o.always === true),
 			});
 			pool = unusedFromPool;
 		}
@@ -531,7 +531,7 @@ export function formatSightClauses(sight:Sight, opts:SightOpts = {}):SightClause
 		.map((o) => ({
 			text: leftoverClause(o, me, distance, leftoverOpts, npcID, bearingFn, hasFacing),
 			claimedIDs: idsOf(o),
-			prefer: isPerson(o),
+			prefer: isPerson(o) || o.always === true,
 		}));
 
 	const clauses:SightClause[] = [];

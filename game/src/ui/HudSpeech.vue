@@ -14,8 +14,17 @@ const LINE = 1.35;
 const CHAR_EM = 0.6;
 const STACK_GAP = 6;
 
-function bubbleHeight(text:string):number {
-	const charsPerLine = Math.max(1, Math.floor((BUBBLE_W - PAD_X) / (FONT * CHAR_EM)));
+function bubbleWidth(text:string):number {
+	let longest = 1;
+	for (const part of text.split('\n')) {
+		longest = Math.max(longest, part.length);
+	}
+	const content = longest * FONT * CHAR_EM + PAD_X;
+	return Math.min(BUBBLE_W, Math.max(PAD_X + FONT, content));
+}
+
+function bubbleHeight(text:string, width:number):number {
+	const charsPerLine = Math.max(1, Math.floor((width - PAD_X) / (FONT * CHAR_EM)));
 	let lines = 0;
 	for (const part of text.split('\n')) {
 		lines += Math.ceil(Math.max(1, part.length) / charsPerLine);
@@ -46,11 +55,12 @@ const layout = computed(() => {
 	const lines = props.hud.speech.filter((s) => s.visible && s.text);
 	lines.sort((a, b) => b.timestamp - a.timestamp || (a.id < b.id ? -1 : 1));
 	for (const s of lines) {
-		const height = bubbleHeight(s.text);
-		const left = s.x - BUBBLE_W / 2;
+		const width = bubbleWidth(s.text);
+		const height = bubbleHeight(s.text, width);
+		const left = s.x - width / 2;
 		let top = s.y - belowBubble(s) - height;
 		for (const newer of boxes) {
-			const overlapsX = left < newer.right + STACK_GAP && left + BUBBLE_W > newer.left - STACK_GAP;
+			const overlapsX = left < newer.right + STACK_GAP && left + width > newer.left - STACK_GAP;
 			if (!overlapsX) {
 				continue;
 			}
@@ -59,7 +69,7 @@ const layout = computed(() => {
 				top = above;
 			}
 		}
-		boxes.push({ left, right: left + BUBBLE_W, top, bottom: top + height });
+		boxes.push({ left, right: left + width, top, bottom: top + height });
 		const naturalTop = s.y - belowBubble(s) - height;
 		out.set(s.id, { shift: top - naturalTop });
 	}
@@ -144,7 +154,8 @@ function fillColor(s:HudSpeech):string {
 
 .bubble {
 	box-sizing: border-box;
-	width: 220px;
+	width: fit-content;
+	max-width: 100%;
 	padding: 6px 10px;
 	border-radius: 6px;
 	background: rgba(18, 14, 10, 0.78);

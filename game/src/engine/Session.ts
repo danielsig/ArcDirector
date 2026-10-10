@@ -6,7 +6,7 @@ import { Order } from './order';
 import { PlayerInput } from '../characters/PlayerInput';
 import { PlayerPilot } from '../characters/PlayerPilot';
 import type { SceneDef } from '../data/scenes';
-import { GameHost } from '../director/adapter';
+import { GameHost, addModels } from '../director/adapter';
 import { playerSay, playerSayCatalog } from '../director/playerTalk';
 import { dumpLookMaps } from '../director/aiLogSink';
 import { patchInfer } from './patchHud';
@@ -17,11 +17,13 @@ import {
 	prefs,
 	prefsDetached,
 	setPrefs,
+	systemOneName,
 	watchPrefs,
 	type Prefs,
 } from '../prefs';
 import {
 	fetchModelCatalog,
+	isDecisionModel,
 	isEmbeddingModel,
 	isLoadedModel,
 } from 'arc-director';
@@ -151,17 +153,18 @@ export class Session extends Component {
 			this.patchSayCatalog();
 			world.sayOpen = true;
 		}
-		else if (!this.hud.briefOpen && (world.input.pressed('Enter') || world.input.pressed('NumpadEnter'))) {
+		else if (!this.modalOpen() && (world.input.pressed('Enter') || world.input.pressed('NumpadEnter'))) {
 			this.hud.sayOpen = true;
 			world.sayOpen = true;
 			this.patchSayCatalog();
 			world.input.keys.clear();
 			this.dropPointerLock();
+			this.hud.chatOpen = true;
 		}
 		else {
 			world.sayOpen = false;
 		}
-		if (this.hud.briefOpen) {
+		if (this.modalOpen()) {
 			world.sayOpen = true;
 			if (world.input.pointerLocked) {
 				this.dropPointerLock();
@@ -300,10 +303,8 @@ export class Session extends Component {
 			return;
 		}
 		const catalog = await fetchModelCatalog('/inference');
-		if (this.director.arc) {
-			this.director.arc.catalog = catalog;
-		}
-		const chat = catalog.filter((m) => !isEmbeddingModel(m));
+		// A model on this machine and on a linked one is listed once per machine, alike: one row, with its count.
+		const chat = catalog.filter((m, i) => !isEmbeddingModel(m) && catalog.findIndex((other) => other.id === m.id) === i);
 		chat.sort((a, b) => {
 			const la = isLoadedModel(a) ? 0 : 1;
 			const lb = isLoadedModel(b) ? 0 : 1;
@@ -315,13 +316,15 @@ export class Session extends Component {
 		const models:HudModelOption[] = chat.map((m) => ({
 			id: m.id,
 			loaded: isLoadedModel(m),
+			decision: isDecisionModel(m),
+			devices: catalog.filter((other) => other.id === m.id).length,
 		}));
-		const current = this.director.arc?.model || prefs().model;
+		const current = this.director.arc?.modelID() || prefs().model;
 		if (current && !models.some((m) => m.id === current)) {
-			models.unshift({ id: current, loaded: false });
+			models.unshift({ id: current, loaded: false, decision: false, devices: 1 });
 		}
 		if (this.hud.model && !models.some((m) => m.id === this.hud.model)) {
-			models.unshift({ id: this.hud.model, loaded: false });
+			models.unshift({ id: this.hud.model, loaded: false, decision: false, devices: 1 });
 		}
 		this.hud.models = models;
 		if (!this.hud.model) {
@@ -333,7 +336,7 @@ export class Session extends Component {
 		this.hud.menuNotice = '';
 		this.persistView();
 		this.dropPointerLock();
-		this.hud.model = this.director.arc?.model || prefs().model || this.hud.model;
+		this.hud.model = this.director.arc?.modelID() || prefs().model || this.hud.model;
 		this.hud.playerKinds = characterOptions();
 		const liveKind = this.gameObject.world?.findByID('Player')?.getComponent(HumanSprite)?.kind;
 		this.hud.playerKind = resolvePlayerKind(liveKind || this.hud.playerKind || prefs().playerKind);
@@ -443,26 +446,30 @@ export class Session extends Component {
 		hud.batchThinks = next.batchThinks;
 		hud.thinkingBudget = next.thinkingBudget;
 		hud.arcText = next.arcText;
+		hud.forceSchema = next.forceSchema;
+		hud.systemOne = next.systemOne;
+		hud.decisionModel = next.decisionModel;
 		hud.prefsDetached = prefsDetached();
 		const arc = this.director.arc;
 		if (next.model && changed('model')) {
 			hud.model = next.model;
-			arc?.setModel(next.model);
 		}
-		if (changed('maxParallel')) {
-			arc?.setMaxParallel(next.maxParallel);
-		}
-		if (changed('contextLength')) {
-			arc?.setContextLength(next.contextLength);
+		if (changed('model') || changed('maxParallel') || changed('contextLength') || changed('thinkingBudget') || changed('decisionModel')) {
+			if (arc) {
+				addModels(arc, next);
+			}
 		}
 		if (changed('batchThinks')) {
 			arc?.setBatchThinks(next.batchThinks);
 		}
-		if (changed('thinkingBudget')) {
-			arc?.setThinking(next.thinkingBudget);
-		}
 		if (changed('arcText')) {
 			arc?.setArcText(next.arcText);
+		}
+		if (changed('forceSchema')) {
+			arc?.setForceSchema(next.forceSchema);
+		}
+		if (arc && changed('systemOne')) {
+			arc.setDefaultSystemOne(systemOneName(next.systemOne));
 		}
 		if (next.playerKind && changed('playerKind')) {
 			this.applyPlayerKindToBody(next.playerKind);
@@ -489,22 +496,24 @@ export class Session extends Component {
 		this.hud.sayGoods = cat.goods;
 	}
 
+	private modalOpen():boolean {
+		return this.hud.briefOpen || this.hud.keysOpen;
+	}
+
 	private hudKeys():void {
 		const world = this.gameObject.world;
 		if (!world) {
 			return;
 		}
-		if (this.hud.briefOpen) {
+		if (this.modalOpen()) {
 			if (world.input.pressed('Escape')) {
 				this.hud.briefOpen = false;
+				this.hud.keysOpen = false;
 			}
 			return;
 		}
 		if (!this.hud.sayOpen && world.input.pressed('Tab')) {
-			this.hud.chatOpen = !this.hud.chatOpen;
-			if (this.hud.chatOpen) {
-				this.dropPointerLock();
-			}
+			this.toggleChat();
 		}
 		if (!this.hud.sayOpen && world.input.pressed('Backquote')) {
 			this.hud.aiLogOpen = !this.hud.aiLogOpen;
@@ -525,6 +534,13 @@ export class Session extends Component {
 		}
 	}
 
+	private toggleChat():void {
+		this.hud.chatOpen = !this.hud.chatOpen;
+		if (this.hud.chatOpen) {
+			this.dropPointerLock();
+		}
+	}
+
 	private dropPointerLock():void {
 		const canvas = this.getCanvas();
 		if (document.pointerLockElement === canvas) {
@@ -533,7 +549,7 @@ export class Session extends Component {
 	}
 
 	private readonly _onClick = ():void => {
-		if (this.hud.sayOpen || this.hud.menuOpen || this.hud.briefOpen) {
+		if (this.hud.sayOpen || this.hud.menuOpen || this.modalOpen()) {
 			return;
 		}
 		this.gameObject.world?.findByID('Player')?.getComponent(PlayerPilot)?.interrupt();

@@ -219,7 +219,8 @@ function dropDown(host:GameHost, who:GameObject):void {
 		text: '{0} is down',
 		who: [idOf(who)],
 		tags: ['down'],
-		major: false,
+		// A fall changes the fight: 5v5 commanders think on it instead of a heartbeat.
+		major: true,
 	});
 }
 

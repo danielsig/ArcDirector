@@ -52,12 +52,12 @@ const GLEN:EncyclopediaEntry[] = [
 	{
 		name: 'Bridge',
 		aliases: ['sluice'],
-		text: 'Bridge over the river, raised unless lowered. Only BridgeKeeper can lower it, for a fee. go_to(Bridge) when the scene shows it.',
+		text: 'Bridge over the river. Raised, no one can cross; lowered, they can. Only BridgeKeeper raises or lowers it, with BridgeCrank on BridgeLever. Handing over the fee does not move it. Sight says whether it is raised or lowered. He does not lower it unpaid: the fee is 10 gold or an item worth that. go_to(Bridge) when the scene shows it.',
 	},
 	{
 		name: 'BridgeLever',
 		aliases: ['lever'],
-		text: 'Sluice lever by Bridge. Only BridgeKeeper works it, with BridgeCrank.',
+		text: 'Sluice lever by Bridge. Only BridgeKeeper works it, with BridgeCrank. That raises a lowered bridge and lowers a raised one.',
 	},
 	{
 		name: 'BridgeStone',
@@ -80,7 +80,7 @@ const GLEN:EncyclopediaEntry[] = [
 	{
 		name: 'BridgeCrank',
 		aliases: ['crank'],
-		text: 'Item. Used on BridgeLever to work a sluice.',
+		text: 'Item. BridgeKeeper uses it on BridgeLever to raise or lower the bridge.',
 		item: true,
 	},
 ];
@@ -136,11 +136,66 @@ const MARKETPLACE:EncyclopediaEntry[] = [
 	BUY,
 ];
 
-const ABBEY_VAULT:EncyclopediaEntry[] = [
+const DUNGEON_VAULT:EncyclopediaEntry[] = [
 	{
 		name: 'EastGate',
-		aliases: ['east gate'],
-		text: 'The door on the east side of the dungeon vault. Walk to it with go_to(EastGate).',
+		aliases: ['east gate', 'gate', 'door'],
+		text: 'Door between the hall and Vault. Only BrassKey unlocks it: use(item=BrassKey, target=EastGate). It has no other mechanism.',
+	},
+	{
+		name: 'Vault',
+		aliases: ['vault', 'back room', 'sickroom'],
+		text: 'The room beyond EastGate. NollCot, LinaCot, BrewHearth and Bitterroot are in it. Vault is not a go_to name: go_to one of those.',
+	},
+	{
+		name: 'ArmoryChest',
+		aliases: ['chest', 'armory'],
+		text: 'Chest in the hall. Only ChestKey unlocks it: use(item=ChestKey, target=ArmoryChest). Then pick_up what it holds.',
+	},
+	{
+		name: 'ChestKey',
+		aliases: ['iron key'],
+		text: 'Item. Opens ArmoryChest, nothing else.',
+		item: true,
+	},
+	{
+		name: 'BrassKey',
+		aliases: ['brass key', 'gate key'],
+		text: 'Item. Opens EastGate.',
+		item: true,
+	},
+	{
+		name: 'Bitterroot',
+		aliases: ['herb', 'root', 'cure', 'medicine'],
+		text: 'Item. Grows in Vault. Only Herbalist can harvest it: pick_up(Bitterroot). It does nothing raw; Alchemist brews it into MagicPotion.',
+		item: true,
+	},
+	{
+		name: 'BrewHearth',
+		aliases: ['hearth', 'fireplace', 'brew', 'brewing'],
+		text: 'Alchemist\'s hearth in Vault. Only Alchemist brews, and only carrying GoldCoin as the fee: use(item=Bitterroot, target=BrewHearth) makes two MagicPotion.',
+	},
+	{
+		name: 'MagicPotion',
+		aliases: ['potion', 'vial', 'fever cure'],
+		text: 'Item. Cures fever. Herbalist gives it to Noll with use(item=MagicPotion, target=NollCot); Captain to Lina with use(item=MagicPotion, target=LinaCot).',
+		item: true,
+	},
+	{
+		name: 'GoldCoin',
+		aliases: ['gold', 'coin', 'fee', 'payment'],
+		text: 'Item. Alchemist\'s fee for brewing. Pay with give(item=GoldCoin, to=Alchemist).',
+		item: true,
+	},
+	{
+		name: 'NollCot',
+		aliases: ['Noll', 'bed', 'cot', 'sickbed'],
+		text: 'Sickbed in Vault where Noll lies fevered. Only Herbalist tends him.',
+	},
+	{
+		name: 'LinaCot',
+		aliases: ['Lina'],
+		text: 'Sickbed in Vault where Lina lies fevered. Only Captain tends her.',
 	},
 ];
 
@@ -148,5 +203,5 @@ export const WORLD_ENCYCLOPEDIAS:Record<string, readonly EncyclopediaEntry[]> = 
 	glen: GLEN,
 	ruins: RUINS,
 	marketplace: MARKETPLACE,
-	abbey_vault: ABBEY_VAULT,
+	dungeon_vault: DUNGEON_VAULT,
 };

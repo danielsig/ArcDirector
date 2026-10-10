@@ -33,15 +33,28 @@ export const MARKET_SEEDS:CharacterSpec[] = [
 	vendorSeed('Cutler', 'Knife', 7, 4, 'Bowl', ['gruff', 'honest', 'impatient']),
 ];
 
-export const HIVE_UNITS:{ id:string; tags:string[] }[] = [
+/** A guard's own program while the hive gives it none: hold its gate until a thief shows, then run them down. */
+function guard(id:string, gate:string):Pick<CharacterSpec, 'id' | 'tags' | 'choose'> {
+	return {
+		id,
+		tags: ['Guard', gate],
+		choose: {
+			goal: `Guard ${gate}. A thief is caught by walking up to them: chase one you see, else hold`,
+			hold: `go_to(${gate}) && wait(until=some(others.filter("thief")))`,
+			chase: 'go_to(others.filter("thief").minBy(u => distance(me, u)))',
+		},
+	};
+}
+
+export const HIVE_UNITS:Pick<CharacterSpec, 'id' | 'tags' | 'choose'>[] = [
 	{ id: 'Mira', tags: ['Shopper', 'Loaf', 'EastGate'] },
 	{ id: 'Tomas', tags: ['Shopper', 'Knife', 'Bowl', 'WestGate'] },
 	{ id: 'Nell', tags: ['Shopper', 'Scarf', 'WestGate'] },
 	{ id: 'Rook', tags: ['Shopper', 'Loaf', 'WestGate'] },
-	{ id: 'Holt', tags: ['Guard', 'WestGate'] },
-	{ id: 'Pike', tags: ['Guard', 'WestGate'] },
-	{ id: 'Brant', tags: ['Guard', 'EastGate'] },
-	{ id: 'Cass', tags: ['Guard', 'EastGate'] },
+	guard('Holt', 'WestGate'),
+	guard('Pike', 'WestGate'),
+	guard('Brant', 'EastGate'),
+	guard('Cass', 'EastGate'),
 ];
 
 const POOL_NAMES = ['Pip', 'Gwen', 'Cal', 'Ivo', 'Bess', 'Quin', 'Odo', 'Faye', 'Lars', 'Nia', 'Wim', 'Tess'];

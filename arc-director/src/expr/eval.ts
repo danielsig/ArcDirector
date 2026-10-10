@@ -171,6 +171,50 @@ function fieldOf(recv:ExprVal, name:string, ctx:EvalCtx):ExprVal {
 	return ABSENT;
 }
 
+/**
+ * Functions `src` calls by name that `catalog` does not have. A call to one throws whenever it is reached, so a watch
+ * holding one can never hold. Methods (`others.filter(...)`) are not names. `[]` when `src` does not parse.
+ */
+export function unboundCalls(src:string, catalog:Catalog):string[] {
+	const out = new Set<string>();
+	const walk = (ast:Ast):void => {
+		switch (ast.type) {
+			case 'call':
+				if (ast.callee.type === 'ident' && !catalog.fns.has(ast.callee.name)) {
+					out.add(ast.callee.name);
+				}
+				walk(ast.callee);
+				ast.args.forEach(walk);
+				return;
+			case 'array':
+				ast.items.forEach(walk);
+				return;
+			case 'unary':
+				walk(ast.expr);
+				return;
+			case 'binary':
+				walk(ast.left);
+				walk(ast.right);
+				return;
+			case 'ternary':
+				[ast.cond, ast.then, ast.else].forEach(walk);
+				return;
+			case 'member':
+				walk(ast.recv);
+				return;
+			case 'lambda':
+				walk(ast.body);
+		}
+	};
+	try {
+		walk(parse(src).ast);
+	}
+	catch {
+		return [];
+	}
+	return [...out];
+}
+
 function callFn(name:string, args:ExprVal[], ctx:EvalCtx):ExprVal {
 	const fn = ctx.catalog.fns.get(name);
 	if (!fn) {
@@ -377,6 +421,10 @@ function foldPred(list:ExprVal[], arg:ExprVal | undefined, all:boolean, ctx:Eval
 }
 
 export const builtins:Record<string, NativeFn> = {
+	/** `!x`, for models that write it as a word. */
+	not(args) {
+		return { kind: 'bool', value: !asBool(args[0] ?? ABSENT) };
+	},
 	clamp(args) {
 		const n = asNum(args[0]);
 		if (n === undefined) {

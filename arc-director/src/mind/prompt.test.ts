@@ -3,7 +3,7 @@ import { describe, it } from 'node:test';
 import { parseArc } from '../arc/parse.js';
 import { VerbRegistry, registerStockVerbs } from '../arc/stock-verbs.js';
 import { registerStockCollectiveVerbs } from '../collective/verbs.js';
-import { stablePrefix, volatileBlock, seeMapHint, arcRepairHint } from './prompt.js';
+import { stablePrefix, volatileBlock, conversationBlock, CONVERSATION_HEADER, seeMapHint, arcRepairHint } from './prompt.js';
 
 describe('prompt split', () => {
 	const verbs = registerStockVerbs(new VerbRegistry());
@@ -186,6 +186,17 @@ describe('prompt split', () => {
 		assert.equal(system.includes('JSON shape'), false);
 	});
 
+	it('lists the conversation oldest first', () => {
+		const block = conversationBlock([
+			'Me: That costs 10 gold.',
+			'Forager: Will FireMushroom do.',
+		]);
+		assert.equal(block, `${CONVERSATION_HEADER}\nMe: That costs 10 gold.\nForager: Will FireMushroom do.`);
+		const user = volatileBlock({ conversation: ['Me: Yes.', 'Forager: Ok.'] });
+		assert.ok(user.includes(`${CONVERSATION_HEADER}\nMe: Yes.\nForager: Ok.`));
+		assert.equal(conversationBlock([]), '');
+	});
+
 	it('puts goals and pinned memory in the user block', () => {
 		const user = volatileBlock({
 			senses: { environment: 'a damp hall' },
@@ -305,7 +316,7 @@ describe('prompt split', () => {
 		assert.match(stock, /Issue looping programs with a bunch of when/);
 		assert.match(stock, /shoot\(target\) — needs a clear line of sight/);
 		assert.match(stock, /unlaw\(name\) — drops that law/);
-		assert.match(stock, /Example: issue\(who=units\.filter\("Guard"\)/);
+		assert.match(stock, /Example:\nissue\(\n\twho=units\.filter\("Guard"\),/, 'laid out as blocks, like the rule asks');
 		const system = stablePrefix('Guard', identity, verbs, {
 			verbInstructions: 'Hold the line.',
 			arcExample: 'issue(who=units.filter("Archer"), arc=loop(shoot(others.filter("enemy").minBy(u => u.hp))))',
@@ -356,7 +367,7 @@ describe('prompt split', () => {
 		const verbs = registerStockVerbs(new VerbRegistry(), 'say', 'wait');
 		const system = stablePrefix('Guard', identity, verbs, { canSeeMap: true, canGrepEncyclopedia: true });
 		assert.match(system, /wait\(until\)/);
-		assert.match(system, /Available verbs: say\(text, to\?\), wait\(seconds\?, until\?\)/);
+		assert.match(system, /Available verbs: say\(text, to\?\) — one short sentence, wait\(seconds\?, until\?\)/);
 		assert.equal(system.includes('wander'), false);
 		assert.equal(system.includes('go_to'), false);
 		assert.equal(system.includes('pick_up'), false);
@@ -384,5 +395,37 @@ describe('prompt split', () => {
 		assert.match(user, /isNear\(it, Player\)/);
 		assert.match(user, /focus\(expr\) lists what matches first in sight/);
 		assert.equal(user.includes('"sightFocus"'), false);
+	});
+});
+
+describe('choose in prompts', () => {
+	const all = registerStockVerbs(new VerbRegistry());
+
+	it('teaches choose to a character that has it', () => {
+		const text = stablePrefix('Guard', {}, all, { arcText: true });
+		assert.match(text, /choose\(goal, name=arc, …\) — a fast model picks one by name/);
+		assert.match(text, /as in:\nloop\(\n\tchoose\(\n\t\t"why you choose",\n\t\twander=wander\(\),\n\t\twait=wait\(\),\n\t\),\n\)\n/, 'a block, every choice named');
+		const json = stablePrefix('Guard', {}, all);
+		assert.match(json, /choose takes a goal and its choices as named arc args/);
+	});
+
+	it('says nothing of choose when it is withheld', () => {
+		const kit = all.view(all.list().map((spec) => spec.name).filter((name) => name !== 'choose'));
+		assert.equal(stablePrefix('Guard', {}, kit, { arcText: true }).includes('choose'), false);
+	});
+
+	it('teaches a collective whose kit grants choose to issue it in a loop', () => {
+		const catalog = registerStockCollectiveVerbs(registerStockVerbs(new VerbRegistry()));
+		catalog.add('attack', { args: { target: 'id?' } });
+		const text = stablePrefix('Dawn', {}, catalog.view(['issue', 'loop', 'choose', 'attack']), { arcText: true });
+		assert.match(text, /as in:\nissue\(\n\twho=units,\n\tarc=loop\(\n\t\tchoose\(\n\t\t\t"why you choose",\n\t\t\tattack=attack\(\),\n/);
+	});
+
+	it('never offers choose to a collective whose kit lacks it, even among nested arc verbs', () => {
+		const catalog = registerStockCollectiveVerbs(registerStockVerbs(new VerbRegistry()));
+		const kit = catalog.view(['issue', 'when', 'loop', 'law', 'unlaw']);
+		const text = stablePrefix('Dawn', {}, kit, { arcText: true });
+		assert.match(text, /Nested arc verbs/);
+		assert.equal(text.includes('choose'), false);
 	});
 });

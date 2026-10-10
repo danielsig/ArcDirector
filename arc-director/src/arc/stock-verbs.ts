@@ -139,7 +139,7 @@ export class VerbRegistry {
 	}
 }
 
-export const STOCK_MOVE_VERBS = ['go_to', 'follow', 'wander'] as const;
+export const STOCK_MOVE_VERBS = ['go_to', 'follow', 'flee', 'wander'] as const;
 export const STOCK_ITEM_VERBS = ['use', 'pick_up', 'drop', 'give', 'examine'] as const;
 /** Registered with the rest; not in `STOCK_VERBS`, so a kit grants them only where there is trade. */
 export const STOCK_TRADE_VERBS = ['buy', 'sell'] as const;
@@ -155,12 +155,15 @@ export const MIND_ONLY_VERBS:readonly string[] = [
 	'think', 'remember', 'set_goal', 'drop_goal', 'set_identity', ...WATCH_EDIT_VERBS, ...FOCUS_EDIT_VERBS,
 ];
 export const STOCK_ARC_VERBS = ['when', 'loop', 'law', 'unlaw'] as const;
-export const STOCK_VERBS = [...STOCK_MOVE_VERBS, ...STOCK_ITEM_VERBS, ...STOCK_MIND_VERBS, ...STOCK_ARC_VERBS] as const;
+/** A System One model picks one of its arcs. Withheld from any runner without a System One, whatever its kit says. */
+export const CHOOSE_VERB = 'choose';
+export const STOCK_VERBS = [...STOCK_MOVE_VERBS, ...STOCK_ITEM_VERBS, ...STOCK_MIND_VERBS, ...STOCK_ARC_VERBS, CHOOSE_VERB] as const;
 export type StockVerb = (typeof STOCK_VERBS)[number] | (typeof STOCK_TRADE_VERBS)[number];
 
 export const STOCK_VERB_DEFS = {
 	go_to: { args: { target: 'id' } },
 	follow: { args: { target: 'id' }, help: 'keeps following until your next arc' },
+	flee: { args: { from: 'id', distance: 'number?' }, help: 'runs until clear of them for a few seconds; distance is how far counts as clear' },
 	wander: { args: { until: 'watch?', seconds: 'number?' } },
 	use: { args: { item: 'id', target: 'id?' }, help: 'goes to the target first' },
 	pick_up: { args: { item: 'id' }, help: 'goes to it first; never from what others carry' },
@@ -169,7 +172,7 @@ export const STOCK_VERB_DEFS = {
 	examine: { args: { target: 'id' } },
 	buy: { args: { item: 'id', from: 'id', offer: 'number?', quantity: 'number?' }, help: 'goes to the seller first; offer is for all of them' },
 	sell: { args: { item: 'id', to: 'id', ask: 'number?', quantity: 'number?' }, help: 'goes to the buyer first; ask is for all of them' },
-	say: { args: { text: 'text', to: 'id?' } },
+	say: { args: { text: 'text', to: 'id?' }, help: 'one short sentence' },
 	wait: { args: { seconds: 'number?', until: 'watch?' } },
 	remember: { args: { content: 'text', tags: 'string[]?' } },
 	think: { args: { about: 'text?' } },
@@ -184,6 +187,8 @@ export const STOCK_VERB_DEFS = {
 	loop: { args: { arc: 'arc', through: 'watch?', until: 'watch?', times: 'number?' }, help: 'repeats until fail' },
 	law: { args: { who: 'expr?', watch: 'watch', arc: 'arc', name: 'law?' }, help: 'standing reaction until unlaw; no extra think' },
 	unlaw: { args: { name: 'law' }, help: 'drops that law' },
+	// Its choices are named args of their own; `arc/choose.ts` reads them.
+	choose: { args: { goal: 'text' }, help: 'a fast model picks one by name each run; loop it to keep picking' },
 } as const satisfies Record<StockVerb, VerbDef>;
 
 /** Schema-only. Omit `verbs` to register the full stock set. Already-registered names are skipped. */

@@ -114,7 +114,7 @@ describe('agent watches', () => {
 		await a.perform({ verb: 'watch', args: { name: 'theft', expr: 'some(events.filter("theft").nearby(16))' } });
 		await a.perform({ verb: 'unwatch', args: { name: 'approaching' } });
 		assert.deepEqual(a.persona.watches, { theft: 'some(events.filter("theft").nearby(16))' });
-		const q = new ThinkQueue({ watchInterval: 0, processInterval: 0, maxParallel: 2 });
+		const q = new ThinkQueue({ watchInterval: 0, processInterval: 0 });
 		q.ensure('Forager', { skipHeartbeat: true });
 		q.setWatches('Forager', a.persona.effectiveWatches());
 		const far = hostAt(20);
@@ -252,25 +252,30 @@ describe('agent watches', () => {
 	});
 
 	it('isNear / nearby radius on/off enqueues; observe names only', () => {
-		const q = new ThinkQueue({ watchInterval: 0, processInterval: 0, maxParallel: 2 });
+		const q = new ThinkQueue({ watchInterval: 0, processInterval: 0 });
 		q.ensure('G', { skipHeartbeat: true });
+		q.drop('G');
 		q.setWatches('G', ['isNear(me, Player)']);
 		const at5 = hostAt(5);
 		let rows = q.tick(1, new Map([['G', at5.cat]]));
 		assert.ok(rows.length === 1);
 		q.ensure('G2', { skipHeartbeat: true });
+		q.drop('G2');
 		q.setWatches('G2', ['isNear(me, Player)']);
 		const at12 = hostAt(12);
 		rows = q.tick(1, new Map([['G2', at12.cat]]));
 		assert.equal(rows.some((r) => r.mindID === 'G2'), false);
 		q.ensure('G3', { skipHeartbeat: true });
+		q.drop('G3');
 		q.setWatches('G3', ['isNear(me, Player, 16)']);
 		rows = q.tick(1, new Map([['G3', at12.cat]]));
 		assert.ok(rows.some((r) => r.mindID === 'G3'));
 		q.ensure('G4', { skipHeartbeat: true });
+		q.drop('G4');
 		q.setWatches('G4', ['events.filter("theft").nearby(16)']);
 		assert.equal(q.scoreWatches('G4', at12.cat) > 0, false);
 		q.ensure('G5', { skipHeartbeat: true });
+		q.drop('G5');
 		q.setWatches('G5', ['some(events.filter("theft").nearby(16))']);
 		assert.ok(q.scoreWatches('G5', at12.cat) > 0.05);
 		const text = observeExpr('events.filter("theft").nearby(16)', at5.cat, evaluate);
@@ -286,7 +291,7 @@ describe('agent watches', () => {
 
 	it('approaching chain enqueues only when in range and closing', () => {
 		const cache = new SampleCache();
-		const q = new ThinkQueue({ watchInterval: 0, processInterval: 0, maxParallel: 2 });
+		const q = new ThinkQueue({ watchInterval: 0, processInterval: 0 });
 		q.ensure('G', { skipHeartbeat: true });
 		q.setWatches('G', ['some(events.filter("theft").nearby(16).approaching())']);
 		const first = hostAt(12, { cache });

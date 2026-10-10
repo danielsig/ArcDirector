@@ -1,0 +1,6 @@
+{
+	// Repo indent is tabs (editor.insertSpaces: false, tabSize 4). MD010 flags every hard tab.
+	"MD010": false,
+	// No line-length cap.
+	"MD013": false
+}

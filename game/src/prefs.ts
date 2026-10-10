@@ -12,6 +12,15 @@ export const CONTEXT_LENGTHS = [2048, 4096, 8192, 16384, 32768, 65536, 131072] a
 export const MIN_CONTEXT_LENGTH = CONTEXT_LENGTHS[0];
 export const MAX_CONTEXT_LENGTH = CONTEXT_LENGTHS[CONTEXT_LENGTHS.length - 1];
 
+/** The System One behind `choose`: none, TypeSafe's Jev, or the local chat model scoring the choices. */
+export const SYSTEM_ONE_KINDS = ['off', 'jev', 'local'] as const;
+export type SystemOneKind = (typeof SYSTEM_ONE_KINDS)[number];
+
+/** The director's default System One for a menu choice: its name there, or none. */
+export function systemOneName(kind:SystemOneKind):string | null {
+	return kind === 'off' ? null : kind;
+}
+
 const DEFAULT = {
 	observer: true,
 	ai: true,
@@ -29,6 +38,10 @@ const DEFAULT = {
 	batchThinks: true,
 	thinkingBudget: true,
 	arcText: false,
+	forceSchema: false,
+	systemOne: 'off' as SystemOneKind,
+	/** The local System One's model id: a chat model scored, or a decision model. Empty: the main model. */
+	decisionModel: '',
 	aiLogSource: '',
 };
 
@@ -54,6 +67,9 @@ const FIELDS:{ [K in keyof Prefs]:(v:unknown, fallback:Prefs[K])=>Prefs[K] } = {
 	batchThinks: bool,
 	thinkingBudget: bool,
 	arcText: bool,
+	forceSchema: bool,
+	systemOne: (v, fallback) => SYSTEM_ONE_KINDS.find((kind) => kind === v) ?? fallback,
+	decisionModel: str,
 	aiLogSource: str,
 };
 

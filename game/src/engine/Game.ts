@@ -127,10 +127,10 @@ export class Game extends KindlingGame<World> {
 		this._hud.loading = false;
 		this.session.applyShotFromURL();
 		stream.stream();
-		this.world.setMessage(this._scene.message, 10);
 		this._hud.menuOpen = false;
+		this._hud.keysOpen = false;
 		this._hud.minimap.follow = this._scene.minimapFollow !== false;
-		this._hud.model = host.arc?.model || prefs().model;
+		this._hud.model = host.arc?.modelID() || prefs().model;
 		this.session.persistView();
 		this.session.syncURLView();
 	}

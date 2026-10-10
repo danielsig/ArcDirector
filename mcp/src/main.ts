@@ -2,7 +2,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
 import { openHub, type HubHandle } from '@arc-director/control/hub';
-import { connectHttpInference, lmStudioConfig } from 'arc-director';
+import { HttpProvider, fetchModelCatalog, findModel, lmStudioConfig, pickSingleChatModel } from 'arc-director';
 import { projectEntries, type LogEntry } from './project.js';
 
 const sessionField = z.string().min(1).describe('Client session id from ?session=');
@@ -132,13 +132,15 @@ async function main():Promise<void> {
 			model: z.string().optional(),
 		},
 	}, async ({ messages, model }) => {
-		const connected = await connectHttpInference(lmStudioConfig(), model);
-		const res = await connected.provider.chat({
-			model: connected.model,
-			messages,
-		});
+		const provider = new HttpProvider(lmStudioConfig());
+		const catalog = await fetchModelCatalog(provider.rootURL);
+		const id = model ? findModel(catalog, model)?.id ?? model : pickSingleChatModel(catalog);
+		if (!id) {
+			throw new Error(`no model at ${provider.baseURL}`);
+		}
+		const res = await provider.chat({ model: id, messages });
 		return text({
-			model: connected.model,
+			model: id,
 			content: res.content,
 			reasoning: res.reasoning,
 		});

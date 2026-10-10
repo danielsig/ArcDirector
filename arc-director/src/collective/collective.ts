@@ -7,13 +7,17 @@ import { Persona, type PersonaJSON } from '../character/persona.js';
 import { Mind, type MindJSON } from '../mind/mind.js';
 import type { CharacterSpec } from '../director/types.js';
 import { squadTag, isSquadTag, shortTag, shortTags } from './tags.js';
-import { MIND_ONLY_VERBS, STOCK_ARC_VERBS } from '../arc/stock-verbs.js';
+import { CHOOSE_VERB, MIND_ONLY_VERBS, STOCK_ARC_VERBS } from '../arc/stock-verbs.js';
 import { isFormationVerb, STOCK_COLLECTIVE_VERBS } from './verbs.js';
 
-/** Verbs only a collective's voice runs: issuing, tagging, laws, and the mind's own. Formations are its characters'. */
+/**
+ * Verbs only a collective's voice runs: issuing, tagging, laws, and the mind's own. Formations are its characters'.
+ * Arc verbs (`loop`, `choose`, …) shape arcs, so no character needs them in its own kit.
+ */
 const VOICE_VERBS = new Set<string>([
 	...STOCK_COLLECTIVE_VERBS.filter((verb) => !isFormationVerb(verb)),
 	...STOCK_ARC_VERBS,
+	CHOOSE_VERB,
 	...MIND_ONLY_VERBS,
 ]);
 
@@ -244,16 +248,23 @@ export class Collective<TCtx = unknown> extends ArcRunner<TCtx> {
 			parts.push(laws);
 		}
 		const groups = new Map<string, string[]>();
+		const records:string[] = [];
 		for (const character of this._characters) {
 			if (character === this._commander || !character.busy || !character.arc) {
 				continue;
 			}
 			const key = mind.namedArc(character.arc);
 			groups.set(key, [...groups.get(key) ?? [], mind.nameOf(character.id)]);
+			if (!character.record.empty) {
+				records.push(`- ${mind.nameOf(character.id)}: ${character.record}`);
+			}
 		}
 		if (groups.size > 0) {
 			const lines = [...groups].map(([arc, names]) => `- ${names.join(', ')}: ${arc}`);
 			parts.push(`Unit programs:\n${lines.join('\n')}`);
+		}
+		if (records.length > 0) {
+			parts.push(`How each program is going (latest steps; failures say why; picked counts its choose picks). Reprogram what keeps failing, and keep what works:\n${records.join('\n')}`);
 		}
 		return parts.join('\n');
 	}

@@ -190,13 +190,15 @@ export function createDirector(host:GameHost):ArcDirector<CharacterCtx> {
 		.addCollective({
 			id: 'MarketHive',
 			kit: hiveKit,
+			// Guards' standing `choose` picks hold or chase with the local model, whatever the menu's default.
+			systemOne: 'local',
 			identity: { role: 'Hive', traits: ['busy', 'fair', 'watchful'] },
 			goals: [{
 				text: 'Keep the square moving: shoppers get what they came for and leave; guards hold the gates.',
 				priority: 2,
 			}],
 			memories: [{
-				text: 'I am the canal-market hive. I am not a character in this scene. The upper square is above the steps; the quay and canal sit below. Shoppers are tagged Shopper plus what they came for (Loaf, Scarf, Bowl, Knife) and their leave gate (EastGate or WestGate). Guards are tagged Guard. Baker Weaver Potter Cutler keep stalls BakerStall WeaverStall PotterStall CutlerStall. Send idle shoppers to the stall that sells what they tagged, buy, then go_to their leave gate. Guards hold_line at their gate facing the street. Use issue(who, arc). Names, never coordinates.',
+				text: 'I am the canal-market hive. I am not a character in this scene. The upper square is above the steps; the quay and canal sit below. Shoppers are tagged Shopper plus what they came for (Loaf, Scarf, Bowl, Knife) and their leave gate (EastGate or WestGate). Guards are tagged Guard. Baker Weaver Potter Cutler keep stalls BakerStall WeaverStall PotterStall CutlerStall. Send idle shoppers to the stall that sells what they tagged, buy, then go_to their leave gate. Guards guard their gate and chase thieves on their own; leave them be. Use issue(who, arc). Names, never coordinates.',
 				tags: ['backstory', 'market'],
 				pinned: true,
 			}],

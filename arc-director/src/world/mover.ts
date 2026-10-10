@@ -1,10 +1,13 @@
 import type { ArcResult } from '../arc/types.js';
-import { blockedReason, findRoute, noWayTo, type Route } from './route.js';
+import { blockedReason, findRoute, noWayTo, pointGoal, type Route, type RouteGoal } from './route.js';
 import type { HostWorld, Vec } from './types.js';
 import { distance } from './vec.js';
 
-/** Where a move heads: a character or thing (followed as it moves), or a fixed point. */
-export type MoveDest = { target:string } | { point:Vec };
+/**
+ * Where a move heads: a character or thing (followed as it moves), a fixed point, or any goal a route search can
+ * aim at (`awayGoal`), asked again on each replan so it follows what it is about. `noWay` words a failed search.
+ */
+export type MoveDest = { target:string } | { point:Vec } | { goal:()=>RouteGoal | undefined; noWay:(why:string)=>string };
 
 export type MoveOpts = {
 	/** Arrive this close. Default: `getReach` for a target; for a point, when `steerToward` says the character is there. */
@@ -21,7 +24,8 @@ type Errand = {
 	opts:MoveOpts;
 	route?:Route;
 	next:number;
-	goal?:Vec;
+	/** Where the target stood at the last plan. */
+	plannedTo?:Vec;
 	plannedAt:number;
 	/** No search before this: the last one found no way. */
 	retryAt:number;
@@ -111,12 +115,6 @@ export class Mover {
 			return { ok: false, verb: e.verb, reason: 'not in this scene' };
 		}
 		e.character = character;
-		const target = 'target' in e.dest ? e.dest.target : undefined;
-		const goal = target !== undefined ? world.find(target) : undefined;
-		const dest = target !== undefined ? (goal === undefined ? undefined : world.getPose(goal)?.point) : (e.dest as { point:Vec }).point;
-		if (!dest) {
-			return { ok: false, verb: e.verb, reason: `${target} is gone` };
-		}
 		const now = this._now();
 		if (e.opts.check && now - e.checkedAt >= CHECK_EVERY) {
 			e.checkedAt = now;
@@ -125,17 +123,22 @@ export class Mover {
 				return { ok: true, verb: e.verb, reason: met };
 			}
 		}
-		const within = e.opts.within ?? (target !== undefined ? world.getReach?.(character, goal) ?? 1 : 0);
-		if (distance(me, dest) <= within) {
+		const aim = this.aim(e, character);
+		if ('ok' in aim) {
+			return aim;
+		}
+		const { goal, dest, within } = aim;
+		if (goal.reached(me)) {
 			return this.arrive(e, character, now);
 		}
-		const moved = target !== undefined && e.goal && distance(dest, e.goal) > within;
-		const stale = target !== undefined && now - e.plannedAt >= REPLAN_EVERY;
+		const target = 'target' in e.dest ? e.dest.target : undefined;
+		const moved = target !== undefined && e.plannedTo && dest && distance(dest, e.plannedTo) > within;
+		const stale = !('point' in e.dest) && now - e.plannedAt >= REPLAN_EVERY;
 		if (!e.route && now < e.retryAt) {
 			return undefined;
 		}
 		if (!e.route || moved || stale || this.isStuck(e, now)) {
-			const failed = this.plan(e, character, me, dest, within, target);
+			const failed = this.plan(e, character, me, goal, dest);
 			if (failed) {
 				if (!e.opts.sticky) {
 					return failed;
@@ -150,6 +153,9 @@ export class Mover {
 		const route = e.route!;
 		for (;;) {
 			const waypoint = route.points[e.next] ?? dest;
+			if (!waypoint) {
+				return this.arrive(e, character, now);
+			}
 			if (!world.steerToward!(character, waypoint)) {
 				const gap = distance(me, waypoint);
 				if (gap < e.bestGap * PROGRESS) {
@@ -165,6 +171,26 @@ export class Mover {
 			e.bestGap = Infinity;
 			e.stuck = 0;
 		}
+	}
+
+	/** What this move aims at now: its goal, and the point it heads for past the route when it has one. */
+	private aim(e:Errand, character:unknown):{ goal:RouteGoal; dest?:Vec; within:number } | ArcResult {
+		const world = this._world!;
+		if ('goal' in e.dest) {
+			const goal = e.dest.goal();
+			return goal ? { goal, within: 0 } : { ok: false, verb: e.verb, reason: 'gone' };
+		}
+		if ('point' in e.dest) {
+			const within = e.opts.within ?? 0;
+			return { goal: pointGoal(e.dest.point, within), dest: e.dest.point, within };
+		}
+		const found = world.find(e.dest.target);
+		const dest = found === undefined ? undefined : world.getPose(found)?.point;
+		if (!dest) {
+			return { ok: false, verb: e.verb, reason: `${e.dest.target} is gone` };
+		}
+		const within = e.opts.within ?? world.getReach?.(character, found) ?? 1;
+		return { goal: pointGoal(dest, within), dest, within };
 	}
 
 	/** In reach: done, or for a sticky move, stand by until the target moves off. */
@@ -189,22 +215,21 @@ export class Mover {
 		return true;
 	}
 
-	/** New route toward `dest`. A result means there is none. */
-	private plan(e:Errand, character:unknown, me:Vec, dest:Vec, within:number, target?:string):ArcResult | undefined {
+	/** New route to `goal`. A result means there is none. */
+	private plan(e:Errand, character:unknown, me:Vec, goal:RouteGoal, dest:Vec | undefined):ArcResult | undefined {
 		if (e.stuck >= STUCK_TRIES) {
 			return { ok: false, verb: e.verb, reason: 'stuck' };
 		}
-		const route = findRoute(this._world!.getPathGraph!(character), me, dest, within);
+		const route = findRoute(this._world!.getPathGraph!(character), me, goal);
 		e.plannedAt = this._now();
-		e.goal = dest;
+		e.plannedTo = dest;
 		e.next = 0;
 		e.route = undefined;
-		if (!route) {
-			return { ok: false, verb: e.verb, reason: target !== undefined ? noWayTo(target, '') : 'no way there', unreachable: target };
-		}
-		if ('blockers' in route) {
-			const why = blockedReason(route);
-			return { ok: false, verb: e.verb, reason: target !== undefined ? noWayTo(target, why) : why, unreachable: target };
+		if (!route || 'blockers' in route) {
+			const why = route ? blockedReason(route) : '';
+			const target = 'target' in e.dest ? e.dest.target : undefined;
+			const reason = 'goal' in e.dest ? e.dest.noWay(why) : target !== undefined ? noWayTo(target, why) : why || 'no way there';
+			return { ok: false, verb: e.verb, reason, unreachable: target };
 		}
 		e.route = route;
 		return undefined;

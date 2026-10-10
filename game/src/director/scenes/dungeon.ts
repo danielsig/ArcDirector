@@ -5,70 +5,79 @@ import type { GameHost } from '../adapter';
 import { addStatusVerbs, BUILDING_VERB_INSTRUCTIONS, GAME_VERBS } from '../verbs';
 import { withReceived, type CharacterCtx } from '../types';
 
+const GATE_OPENED = 'hasJustOpened(EastGate)';
+
 const HERBALIST:CharacterSpec = {
 	id: 'Fern',
 	mind: {},
 	identity: { role: 'Herbalist', traits: ['plain', 'anxious', 'generous'] },
-	goals: [{
-		text: 'See Noll well again.',
-		priority: 2,
-	}],
+	goals: [{ text: 'Cure Noll: use MagicPotion on NollCot.', priority: 2 }],
 	memories: [
 		{
-			text: 'I am a forager. My boy Noll lies fevered on NollCot in the vault beyond EastGate. I harvest Bitterroot. Use names, never coordinates.',
-			tags: ['backstory', 'NollCot', 'Bitterroot'],
+			text: 'I am a herbalist. My boy Noll lies fevered on NollCot in Vault, beyond EastGate. I tend him.',
+			tags: ['backstory', 'Noll', 'NollCot', 'Vault'],
 			pinned: true,
 		},
 		{
-			text: 'Noll lies on NollCot in the vault. I tend him. I pick Bitterroot, and it grows past EastGate.',
-			tags: ['NollCot', 'Bitterroot', 'EastGate'],
+			text: 'Only MagicPotion cures fever. Alchemist brews it from Bitterroot, for a GoldCoin fee.',
+			tags: ['MagicPotion', 'Bitterroot', 'Alchemist', 'cure'],
 			pinned: true,
 		},
+		{
+			text: 'Bitterroot grows in Vault. Only I can harvest it.',
+			tags: ['Bitterroot', 'harvest', 'Vault'],
+		},
+		{
+			text: 'I have no gold of my own.',
+			tags: ['GoldCoin', 'gold'],
+		},
 	],
+	pinnedWatches: { gate: GATE_OPENED },
 };
 
 const ALCHEMIST:CharacterSpec = {
 	id: 'Sable',
 	mind: {},
 	identity: { role: 'Alchemist', traits: ['proud', 'hungry', 'exact'] },
-	goals: [{
-		text: 'Get paid, brew the cure, keep the coin.',
-		priority: 2,
-	}],
+	goals: [{ text: 'Get paid a GoldCoin, then brew MagicPotion at BrewHearth.', priority: 2 }],
 	memories: [
 		{
-			text: 'I am a vault alchemist. I am penniless and will not brew unpaid. I know a secret: BrassKey is inside locked ArmoryChest. Use names, never coordinates.',
-			tags: ['backstory', 'BrassKey', 'ArmoryChest'],
+			text: 'I am an alchemist. I brew at BrewHearth in Vault, beyond EastGate. I am penniless and never brew unpaid.',
+			tags: ['backstory', 'BrewHearth', 'Vault'],
 			pinned: true,
 		},
 		{
-			text: 'I brew at BrewHearth in the vault. Bitterroot and GoldCoin make two MagicPotion. I keep the coin. I give the vials away. BrassKey is inside ArmoryChest.',
-			tags: ['brew', 'BrewHearth', 'Bitterroot', 'GoldCoin', 'MagicPotion', 'ArmoryChest'],
+			text: 'One Bitterroot and a GoldCoin fee brew two MagicPotion. I keep the coin and give both potions away.',
+			tags: ['brew', 'Bitterroot', 'GoldCoin', 'MagicPotion'],
+			pinned: true,
+		},
+		{
+			text: 'A secret only I know: BrassKey, which unlocks EastGate, lies inside ArmoryChest.',
+			tags: ['BrassKey', 'ArmoryChest', 'EastGate', 'secret'],
 			pinned: true,
 		},
 	],
+	pinnedWatches: { gate: GATE_OPENED },
 };
 
 const CAPTAIN:CharacterSpec = {
 	id: 'Lys',
 	mind: {},
 	identity: { role: 'Captain', traits: ['brisk', 'fair', 'worried'] },
-	goals: [{
-		text: 'See Lina well again.',
-		priority: 2,
-	}],
+	goals: [{ text: 'Cure Lina: use MagicPotion on LinaCot.', priority: 2 }],
 	memories: [
 		{
-			text: 'I am pay-captain of the dungeon watch. My sister Lina lies fevered on LinaCot in the vault. Use names, never coordinates.',
-			tags: ['backstory', 'LinaCot'],
+			text: 'I am pay-captain of the dungeon watch. My sister Lina lies fevered on LinaCot in Vault, beyond EastGate. I tend her.',
+			tags: ['backstory', 'Lina', 'LinaCot', 'Vault'],
 			pinned: true,
 		},
 		{
-			text: 'ChestKey and GoldCoin are in my traveler pack. ChestKey opens ArmoryChest. I do not know what is inside. Lina lies on LinaCot in the vault. I tend her.',
-			tags: ['ChestKey', 'ArmoryChest', 'GoldCoin', 'LinaCot'],
+			text: 'My traveler pack holds ChestKey and GoldCoin. ChestKey unlocks ArmoryChest; I do not know what is inside.',
+			tags: ['ChestKey', 'ArmoryChest', 'GoldCoin'],
 			pinned: true,
 		},
 	],
+	pinnedWatches: { gate: GATE_OPENED },
 };
 
 function inVault(host:GameHost, id:string):boolean {

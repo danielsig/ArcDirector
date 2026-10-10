@@ -23,6 +23,7 @@ export const VERB_THINK_SCORES:Readonly<Record<string, number>> = {
 	say: 0.25,
 	drop_goal: 0.2,
 	follow: 0,
+	flee: 0.5,
 };
 
 /** Bare think() (no about). Same as VERB_THINK_SCORES.think. */

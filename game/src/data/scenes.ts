@@ -12,7 +12,7 @@ import { ruins_0_0 } from './chunks/ruins_0_0';
 import { ruins_1_0 } from './chunks/ruins_1_0';
 import { type MarketNPCKind, type HumanKind } from '../engine/components';
 import type { GameHost, CharacterCtx } from '../director/adapter';
-import { createDirector as createAbbeyDirector } from '../director/scenes/abbey';
+import { createDirector as createDungeonDirector } from '../director/scenes/dungeon';
 import { createDirector as createGlenDirector } from '../director/scenes/glen';
 import { createDirector as createMarketDirector } from '../director/scenes/market';
 import { createDirector as createRuinsDirector } from '../director/scenes/ruins';
@@ -37,6 +37,18 @@ export type NPCSpawnDef = {
 
 export type SceneLook = 'dungeon' | 'glen' | 'market';
 
+export type SceneKey = {
+	key:string;
+	action:string;
+};
+
+/** Shared by the current scenes. A scene can pass its own list. */
+const SCENE_KEYS:SceneKey[] = [
+	{ key: 'E', action: 'Pick Up or Unlock' },
+	{ key: 'F', action: 'Use' },
+	{ key: 'X', action: 'Swap Hands' },
+];
+
 export type SceneDef = {
 	id:string;
 	title:string;
@@ -44,7 +56,8 @@ export type SceneDef = {
 	chunks:ChunkFile[];
 	npcs:NPCSpawnDef[];
 	ambient:string;
-	message:string;
+	/** Player keys for this scene, besides the ones every scene shares. */
+	keys:SceneKey[];
 	/** One paragraph: what this scene is for, and how the characters usually get there. */
 	brief:string;
 	playerWallet?:number;
@@ -53,8 +66,8 @@ export type SceneDef = {
 	createDirector:(host:GameHost)=>ArcDirector<CharacterCtx>;
 };
 
-export const ABBEY_VAULT:SceneDef = {
-	id: 'abbey_vault',
+export const DUNGEON_VAULT:SceneDef = {
+	id: 'dungeon_vault',
 	title: 'Dungeon Vault',
 	look: 'dungeon',
 	minimapFollow: true,
@@ -76,14 +89,14 @@ export const ABBEY_VAULT:SceneDef = {
 			],
 		},
 	],
-	ambient: 'A damp stone hall of the dungeon.',
-	message: 'E pick up / unlock   F use   X swap hands   Enter talk   /give   Tab chat',
+	ambient: 'A damp stone hall of the dungeon. Vault, with the sickbeds, lies beyond EastGate.',
+	keys: SCENE_KEYS,
 	brief: `Three people in this dungeon each want one thing, and none of them can do it alone. Each one only knows their own goal. They have to talk and hand things to each other.
 
 Fern wants her son Noll to get well. Lys, captain of the watch, wants her sister Lina to get well. Both are lying sick in beds in a back room, behind a locked gate, and the herb they need grows in that room. Lys is carrying gold and the key to a locked chest. Sable is the alchemist. She brews at her fireplace only once she is paid: the herb and that gold coin become two potions. She keeps the coin and gives the potions away. Only she knows the chest holds the key to the gate.
 
 The usual way through is to open the chest, unlock the gate, pick the herb, pay Sable, brew, and give one potion to each patient.`,
-	createDirector: createAbbeyDirector,
+	createDirector: createDungeonDirector,
 };
 
 export const RIVER_GLEN:SceneDef = {
@@ -126,7 +139,7 @@ export const RIVER_GLEN:SceneDef = {
 		},
 	],
 	ambient: 'A windy river glen.',
-	message: 'E: pick up / unlock,   F: use,   X: swap hands,   Enter: talk,   /give: give item,   Tab: chat',
+	keys: SCENE_KEYS,
 	brief: `The forager, the bridge keeper, and the angler each need a different end to the same errand. The assistant only does what you ask.
 
 The angler is on the other side of the river, so the forager must cross the bridge to reach him. Lowering it costs 10 gold. The forager is carrying 5, enough for the trout and not the bridge. A mushroom in the west woods is worth 10, and the keeper accepts anything of equal value, so the forager pays with one, crosses, and spends their 5 on the trout.
@@ -280,7 +293,7 @@ export const MARKETPLACE:SceneDef = {
 		},
 	],
 	ambient: 'A canal-side market plaza under colored awnings.',
-	message: 'E pick up / unlock   F use   X swap hands   Enter talk   /give   Tab chat',
+	keys: SCENE_KEYS,
 	brief: `Four sellers think for themselves. Everyone else in the square is steered by one mind that has no character of its own.
 
 The baker, the weaver, the potter, and the knife-seller each stay at a stall, sell one thing, and want something from another stall. Shoppers show up wanting a specific item, buy it, and leave through a gate. New shoppers keep arriving. Guards stand at the gates and take back anything stolen.
@@ -310,7 +323,7 @@ export const RUINS:SceneDef = {
 		{ id: 'Flint', meshID: 'human_mannequin', chunkID: 'ruins_1_0', localX: 5, localZ: 10, yaw: Math.PI / 2, pack: true, packLoot: SWORD, hp: 20 },
 	],
 	ambient: 'Two parties fight to the death in a ruined forest colonnade. No quarter.',
-	message: 'E pick up / unlock   F use   X swap hands   Enter talk   /give   Tab chat',
+	keys: SCENE_KEYS,
 	brief: `Dawn and Dusk are the two captains. Each leads a squad of five: a knight, a swordsman, an archer, a witch, and the captain, who also heals. Both sides are trying to kill the other. Nobody has a scripted attack.
 
 A captain writes orders the squad keeps following, who to hit and who stays back, and changes those orders as the fight moves. The usual way a side wins is the knight and the swordsman hold the nearest enemies, the archer and the witch shoot from behind them, and the captain stays clear and heals. Hurt fighters walk back to their captain instead of standing in the melee.
@@ -320,16 +333,16 @@ If a captain dies, someone else in the squad takes over. It ends when one squad 
 };
 
 export const SCENES:Record<string, SceneDef> = {
-	abbey_vault: ABBEY_VAULT,
+	dungeon_vault: DUNGEON_VAULT,
 	glen: RIVER_GLEN,
 	marketplace: MARKETPLACE,
 	ruins: RUINS,
 };
 
-export const DEFAULT_SCENE_ID = 'abbey_vault';
+export const DEFAULT_SCENE_ID = 'dungeon_vault';
 
 export function sceneByID(id:string):SceneDef {
-	return SCENES[id] ?? ABBEY_VAULT;
+	return SCENES[id] ?? DUNGEON_VAULT;
 }
 
 export function humanKindsForScene(scene:SceneDef):HumanKind[] {

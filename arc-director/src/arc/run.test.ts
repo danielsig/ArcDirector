@@ -5,7 +5,7 @@ import { parseArcText } from './parse.js';
 import { VerbRegistry, registerStockVerbs } from './stock-verbs.js';
 import { dummyEntity, buildCatalog } from '../expr/natives.js';
 import { SampleCache } from '../expr/types.js';
-import { createArcSession, deferThinks, arcSteps, firstStartable, pollArcSession, runArc, THINK_ABOUT_CAP, type ArcHandler } from './run.js';
+import { createArcSession, deferThinks, arcSteps, firstStartable, pollArcSession, runArc, THINK_ABOUT_CAP, type ArcHandler, type LastChoice } from './run.js';
 import { upsertLaw, type Law } from './laws.js';
 
 function go(name:string):Step {
@@ -355,5 +355,103 @@ describe('handlers by reference', () => {
 			return { ok: true, verb: step.verb };
 		}, { session });
 		assert.deepEqual(seen, ['say', 'wait', 'wait']);
+	});
+});
+
+describe('choose', () => {
+	const verbs = registerStockVerbs(new VerbRegistry());
+	let clock = 0;
+	const ticking = ():number => {
+		clock += 1;
+		return clock;
+	};
+
+	it('runs the arc under the name the pick returns', async () => {
+		const asked:{ goal:string; names:string[] }[] = [];
+		const ran:string[] = [];
+		const session = createArcSession({
+			now: ticking,
+			pick: async (goal, choices) => {
+				asked.push({ goal, names: Object.keys(choices) });
+				return 'chase';
+			},
+		});
+		const result = await runArc(parseArcText('choose("hold", stand=wait(), chase=follow(Raider))', verbs), async (step) => {
+			ran.push(step.verb);
+			return { ok: true, verb: step.verb };
+		}, { session });
+		assert.deepEqual(asked, [{ goal: 'hold', names: ['stand', 'chase'] }]);
+		assert.deepEqual(ran, ['follow']);
+		assert.equal(result.ok, true);
+	});
+
+	it('fails on a name that is not among the choices', async () => {
+		const ran:string[] = [];
+		const session = createArcSession({ now: ticking, pick: async () => 'flee' });
+		const result = await runArc(parseArcText('choose("hold", stand=wait())', verbs), async (step) => {
+			ran.push(step.verb);
+			return { ok: true, verb: step.verb };
+		}, { session });
+		assert.equal(result.ok, false);
+		assert.match(result.reason ?? '', /unknown choice 'flee'/);
+		assert.deepEqual(ran, []);
+	});
+
+	it('fails without a System One model', async () => {
+		const result = await runArc(parseArcText('choose("hold", stand=wait())', verbs), async (step) => ({ ok: true, verb: step.verb }));
+		assert.equal(result.ok, false);
+		assert.match(result.reason ?? '', /no System One model/);
+	});
+
+	it('asks again on each loop pass and shows the last result', async () => {
+		const lasts:(LastChoice | undefined)[] = [];
+		const session = createArcSession({
+			now: ticking,
+			pick: async (_goal, _choices, last) => {
+				lasts.push(last);
+				return 'stand';
+			},
+		});
+		await runArc(parseArcText('loop(times=2, arc=choose("hold", stand=wait()))', verbs), async (step) => ({ ok: true, verb: step.verb, reason: 'done' }), { session });
+		assert.equal(lasts.length, 2);
+		assert.equal(lasts[0], undefined);
+		assert.deepEqual(lasts[1]?.name, 'stand');
+		assert.equal(lasts[1]?.result.ok, true);
+	});
+
+	it('waits for the game clock before picking twice at one time', async () => {
+		let now = 5;
+		let picks = 0;
+		const session = createArcSession({
+			now: () => now,
+			pick: async () => {
+				picks += 1;
+				return 'stand';
+			},
+		});
+		const run = runArc(parseArcText('loop(times=2, arc=choose("hold", stand=wait()))', verbs), async (step) => ({ ok: true, verb: step.verb }), { session });
+		await new Promise((resolve) => setTimeout(resolve, 20));
+		assert.equal(picks, 1);
+		now = 6;
+		await run;
+		assert.equal(picks, 2);
+	});
+
+	it('skips the chosen arc when the program was replaced during the pick', async () => {
+		const ran:string[] = [];
+		const session = createArcSession({
+			now: ticking,
+			pick: async () => {
+				session.token += 1;
+				session.pending = { kind: 'abort' };
+				return 'stand';
+			},
+		});
+		const result = await runArc(parseArcText('choose("hold", stand=wait())', verbs), async (step) => {
+			ran.push(step.verb);
+			return { ok: true, verb: step.verb };
+		}, { session });
+		assert.deepEqual(ran, []);
+		assert.equal(result.ok, false);
 	});
 });

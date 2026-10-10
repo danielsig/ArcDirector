@@ -12,6 +12,27 @@ import { cueAt } from '../audio/cue';
 export const PICKUP_RANGE = 1.7;
 export const USE_RANGE = 2.2;
 
+/** The name of the key that opens `lock`, wherever it lies, so a locked thing says `BrassKey` and not just "a brass key". */
+export function keyNameFor(world:World | null, lock:Lock):string {
+	const fits = (it:ItemInstance) => it.Key?.keyID === lock.keyID;
+	for (const go of world?.objects ?? []) {
+		const item = go.getComponent(Item);
+		if (item && getDef(item.defID).components.Key?.keyID === lock.keyID) {
+			return go.getComponent(Named)?.id ?? go.name;
+		}
+		const held = findCarried(go, fits);
+		if (held) {
+			return held.name;
+		}
+	}
+	return `a ${lock.keyID} key`;
+}
+
+/** `locked — needs BrassKey`, the one failure every locked door and chest gives. */
+export function lockedReason(world:World | null, lock:Lock):string {
+	return lock.keyID ? `locked — needs ${keyNameFor(world, lock)}` : 'locked';
+}
+
 export function nearestPickup(character:GameObject):GameObject | null {
 	const world = character.world;
 	if (!world) {
@@ -109,7 +130,7 @@ export function interactDoor(character:GameObject, doorGo:GameObject):string {
 			if (findCarried(character, (it) => it.Key?.keyID === lock.keyID)) {
 				return 'the key is in your pack';
 			}
-			return lock.keyID ? `locked — needs a ${lock.keyID} key` : 'locked';
+			return lockedReason(character.world, lock);
 		}
 		lock.locked = false;
 		door.open = true;
@@ -203,7 +224,7 @@ export function interactChest(character:GameObject, chestGo:GameObject):string {
 			if (findCarried(character, (it) => it.Key?.keyID === lock.keyID)) {
 				return 'the key is in your pack';
 			}
-			return lock.keyID ? `locked — needs a ${lock.keyID} key` : 'locked';
+			return lockedReason(character.world, lock);
 		}
 		lock.locked = false;
 		chest.open = true;
