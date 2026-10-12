@@ -33,7 +33,7 @@ Unity-shaped, not Unity. `@arc-director/kindling` owns the canvas, `Renderer`, R
 | `Component` | Host logic. `enabled`, `static order`. |
 | `Time` | `time`, `deltaTime`, `fixedDeltaTime` (0.02), `fixedTime`. Clamp `MAX_DT` = 0.05. |
 | `Rigidbody` | XZ `velocity`; optional `grounded` Y snap. |
-| `BoxCollider` | XZ AABB; `solid` / `isTrigger` / `pad` (shove). |
+| `BoxCollider` | XZ AABB, or an upright cylinder (`shape: 'cylinder'`, diameter `size.x`) for static round obstacles; `solid` / `isTrigger` / `pad` (shove). |
 | `Chunk` / `ChunkStreamer` | Square tile chunks on `World.chunks`. The streamer loads near `StreamingAnchor`s and parks far `ChunkBound` objects. |
 | `Camera` / `Light` / `MeshRenderer` | View. Renderer finds the first enabled `Camera`. |
 | `Renderer` | WebGL, fog/hemi/fill/sun look, resize. Null when headless. |
@@ -102,10 +102,11 @@ The game is served at `http://localhost:5173/` (Vite default). There is no path 
 
 | Param | Kind | Meaning |
 |-------|------|---------|
-| `scene` | play | Scene id. `dungeon_vault`, `glen`, `marketplace`, or `ruins`. Omit (or unknown id) → scene picker. |
+| `scene` | play | Scene id. `dungeon_vault` (the crypt crawl), `glen`, `marketplace`, or `ruins`. Omit (or unknown id) → scene picker. |
 | `observer` | test | `1` = player is inperceivable by NPCs (observer). `0` = NPCs can see, hear, and walk to the player. Also `true`/`false`. |
 | `ai` | test | `1` = ArcDirector runs (NPCs think and move). `0` = paused (no inference, NPC motors frozen). Also `true`/`false`. |
 | `view` | agent | Full camera shot: `x,y,z,yaw`. All four numbers or the param is ignored (no partial pose). X/Z are meters on the ground; Y is height; yaw is radians. `0` yaw looks toward −Z (north); `1.5708` (π/2) toward −X (west); `3.1416` (π) toward +Z (south). Yaw also faces the player. Camera follows the player. |
+| `stats` | test | `1` = render stats overlay (draw calls, triangles, geometries, textures, scene and screen memory, 30 s frame time). Also readable over the control hub with the `render_stats` MCP tool. Kept when returning to Scenes. |
 | `session` | test | Client id for the control MCP hub. The page installs `window.arcControl` always; it opens a WebSocket to the hub only when this is a non-empty value. A second live page with the same id is renamed (`alpha-2`, `alpha-3`, …) and the query is updated. Cursor: `.cursor/mcp.json`. Claude Code: `.mcp.json`. Both run `mcp/dist/main.js`, so build it first: `pnpm --filter @arc-director/mcp build`. |
 
 **Defaults** (when the param is omitted and nothing is stored): **`observer=1`**, **`ai=1`**. Menu **Testing** toggles write both to localStorage and the URL; they survive reloads. Query params override the stored values for the fields you set.
@@ -134,13 +135,19 @@ Agent forced test view (prefer this when checking a specific place):
 http://localhost:5173/?scene=glen&view=8,0,12,1.57
 ```
 
-Marketplace (canal plaza looking north):
+Marketplace (south bank by the main footbridge, looking north):
 
 ```
-http://localhost:5173/?scene=marketplace&view=20,0,8,0
+http://localhost:5173/?scene=marketplace&view=16,0,20,0
 ```
 
-5v5 Combat (clearing looking north):
+Dungeon crawl (the Gatehouse, looking north up the web passage):
+
+```
+http://localhost:5173/?scene=dungeon_vault&view=8,0,40,0
+```
+
+5v5 Combat (in the ruined sanctum, looking north):
 
 ```
 http://localhost:5173/?scene=ruins&view=16,0,11,0
@@ -173,7 +180,7 @@ http://localhost:5173/?scene=glen&view=8,0,12,1.57&observer=1&ai=0
 Example: marketplace with ArcDirector paused:
 
 ```
-http://localhost:5173/?scene=marketplace&view=20,0,8,0&observer=1&ai=0
+http://localhost:5173/?scene=marketplace&view=16,0,20,0&observer=1&ai=0
 ```
 
 Example: 5v5 Combat with ArcDirector paused:

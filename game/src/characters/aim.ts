@@ -1,4 +1,4 @@
-import { Door, HumanBody, Lock, Vitals } from '../engine/components';
+import { Door, Flammable, HumanBody, Lock, Vitals } from '../engine/components';
 import type { GameObject } from '../engine/GameObject';
 import type { World } from '../engine/World';
 import { Pickupable } from '../items/components';
@@ -13,7 +13,8 @@ export function aimTarget(world:World, character:GameObject):GameObject | null {
 		if (go === character) {
 			continue;
 		}
-		const door = go.getComponent(Door) || go.getComponent(Lock);
+		// Doors, chests and webs: things your hands or a held item act on, and they win close calls.
+		const door = go.getComponent(Door) || go.getComponent(Lock) || go.getComponent(Flammable);
 		const loot = go.getComponent(Pickupable);
 		const human = go.getComponent(HumanBody);
 		if (human && (go.getComponent(Vitals)?.hp ?? 1) <= 0) {

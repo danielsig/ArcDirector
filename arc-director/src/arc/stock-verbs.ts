@@ -3,9 +3,10 @@
  * or an expression that picks one. `text` is prose: unquoted, it runs to the closing `)` or the next `, key=`.
  * `watch` is a watch-language expression; the host reads it through `VerbCall.holds` / `score`.
  * `expr` is any other expression (`units.filter("Archer")`), and `law` a law's name.
- * A mind stores every `id`, `watch`, `expr`, `law` and `arc` arg in ids, and shows them to its model in its names.
+ * `bundle` is `{ [item: string]: number }` (how many of each thing).
+ * A mind stores every `id`, `watch`, `expr`, `law` and `arc` arg in ids, and shows them to its model in its names. Bundle keys are item ids.
  */
-export type VerbArgKind = 'id' | 'id?' | 'string' | 'string?' | 'text' | 'text?' | 'watch' | 'watch?' | 'expr' | 'expr?' | 'law' | 'law?' | 'number' | 'number?' | 'string[]' | 'string[]?' | 'arc' | 'arc?';
+export type VerbArgKind = 'id' | 'id?' | 'string' | 'string?' | 'text' | 'text?' | 'watch' | 'watch?' | 'expr' | 'expr?' | 'law' | 'law?' | 'number' | 'number?' | 'string[]' | 'string[]?' | 'bundle' | 'bundle?' | 'arc' | 'arc?';
 
 /** A kind without its optional mark: `id?` is `id`. */
 export function argBase(kind:string | undefined):string {
@@ -122,7 +123,7 @@ export class VerbRegistry {
 export const STOCK_MOVE_VERBS = ['go_to', 'follow', 'flee', 'wander'] as const;
 export const STOCK_ITEM_VERBS = ['use', 'pick_up', 'drop', 'give', 'examine'] as const;
 /** Registered with the rest; not in `STOCK_VERBS`, so a kit grants them only where there is trade. */
-export const STOCK_TRADE_VERBS = ['buy', 'sell'] as const;
+export const STOCK_TRADE_VERBS = ['offer'] as const;
 export const STOCK_MIND_VERBS = [
 	'say', 'wait', 'remember', 'think', 'set_goal', 'drop_goal', 'set_identity',
 	'watch', 'unwatch', 'focus', 'unfocus',
@@ -148,10 +149,9 @@ export const STOCK_VERB_DEFS = {
 	use: { args: { item: 'id', target: 'id?' }, help: 'goes to the target first' },
 	pick_up: { args: { item: 'id' }, help: 'goes to it first; never from what others carry' },
 	drop: { args: { item: 'id' } },
-	give: { args: { item: 'id', to: 'id' }, help: 'goes to them first; how you pay or hand anything over, saying so does not', reply: true },
+	give: { args: { item: 'id', to: 'id', quantity: 'number?' }, help: 'goes to them first; item=gold pays. saying so does not. to buy or sell, use offer', reply: true },
 	examine: { args: { target: 'id' } },
-	buy: { args: { item: 'id', from: 'id', offer: 'number?', quantity: 'number?' }, help: 'goes to the seller first; offer is for all of them', reply: true },
-	sell: { args: { item: 'id', to: 'id', ask: 'number?', quantity: 'number?' }, help: 'goes to the buyer first; ask is for all of them', reply: true },
+	offer: { args: { to: 'id?', give: 'bundle?', get: 'bundle?' }, help: 'each side as {"gold":5}. if they offer that or better, both move at once; else it waits for their answer. no to: offered to anyone', reply: true },
 	say: { args: { text: 'text', to: 'id?' }, help: 'one short sentence', reply: true },
 	wait: { args: { seconds: 'number?', until: 'watch?' } },
 	remember: { args: { content: 'text', tags: 'string[]?' } },

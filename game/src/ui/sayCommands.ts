@@ -1,10 +1,8 @@
 /** Player slash commands in the say box. Names only — no coordinates. */
 
 export const SAY_COMMANDS = [
-	{ verb: 'give', usage: '/give <item|gold> [to] <person>', hint: 'Gift an item, or gold from your purse' },
-	{ verb: 'pay', usage: '/pay <amount> [to] <person>', hint: 'Give gold from your purse' },
-	{ verb: 'buy', usage: '/buy <item> [from] <person> [offer]', hint: 'Pay gold and take a good' },
-	{ verb: 'sell', usage: '/sell <item> [to] <person> [ask]', hint: 'Take gold and give a good' },
+	{ verb: 'give', usage: '/give [amount] <item|gold> [to] <person>', hint: 'Hand over an item, or gold from your purse' },
+	{ verb: 'offer', usage: '/offer <person> <item|gold|nothing> for <item|gold|nothing>', hint: 'Trade; it happens once they offer the reverse' },
 	{ verb: 'help', usage: '/help', hint: 'List slash commands' },
 	{ verb: 'clear', usage: '/clear', hint: 'Clear say history' },
 ] as const;
@@ -16,7 +14,8 @@ export type SayCatalog = {
 	peers:string[];
 	items:string[];
 	gold:number;
-	goods:{ item:string; from:string }[];
+	/** What each person offers the player, by lowercase name: what they give, and what they want for it. */
+	offers:Record<string, { give:Record<string, number>; get:Record<string, number> }>;
 };
 
 export type SaySuggestion = {
@@ -25,12 +24,10 @@ export type SaySuggestion = {
 	hint:string;
 };
 
+/** A command the player's character runs as an arc, or help. */
 export type ParsedSlash =
 	| { ok:true; verb:'help' }
-	| { ok:true; verb:'give'; item:string; to:string }
-	| { ok:true; verb:'pay'; amount:number; to:string }
-	| { ok:true; verb:'buy'; item:string; from:string; offer?:number }
-	| { ok:true; verb:'sell'; item:string; to:string; ask?:number }
+	| { ok:true; verb:'give' | 'offer'; arc:string }
 	| { ok:false; reason:string };
 
 export const SLASH_HELP = SAY_COMMANDS.map((c) => c.usage).join('   ');
@@ -86,106 +83,85 @@ export function parseSlash(line:string):ParsedSlash | null {
 	if (verb === 'give') {
 		return parseGive(args);
 	}
-	if (verb === 'pay') {
-		return parsePay(args);
-	}
-	if (verb === 'buy') {
-		return parseBuy(args);
-	}
-	if (verb === 'sell') {
-		return parseSell(args);
+	if (verb === 'offer') {
+		return parseOffer(args);
 	}
 	return { ok: false, reason: `unknown /${verb} — try /help` };
 }
 
+/** `5 gold Baker`, `gold 5 Baker`, `2 Loaf Baker`, `Loaf Baker`: one good, then whom. */
 function parseGive(args:string[]):ParsedSlash {
-	if (args.length === 0) {
-		return { ok: false, reason: 'give what?  /give <item> <person>' };
-	}
-	const goldWord = compact(args[0]) === 'gold';
-	if (goldWord || isAmount(args[0])) {
-		let amount:number;
-		let rest:string[];
-		if (isAmount(args[0])) {
-			amount = Math.floor(Number(args[0]));
-			rest = args.slice(1);
-		}
-		else if (!isAmount(args[1] ?? '')) {
-			return { ok: false, reason: 'how much gold?  /give gold <amount> <person>' };
-		}
-		else {
-			amount = Math.floor(Number(args[1]));
-			rest = args.slice(2);
-		}
-		const to = rest[0] ?? '';
-		if (!to) {
-			return { ok: false, reason: 'give gold to whom?' };
-		}
-		return { ok: true, verb: 'pay', amount, to };
-	}
 	if (args.length < 2) {
-		return { ok: false, reason: 'give to whom?' };
+		return { ok: false, reason: 'give what to whom?  /give [amount] <item|gold> <person>' };
 	}
-	return { ok: true, verb: 'give', item: args[0], to: args[1] };
+	const bundle = phrase(args.slice(0, -1).join(' '));
+	if (typeof bundle === 'string') {
+		return { ok: false, reason: bundle };
+	}
+	const goods = Object.entries(bundle);
+	if (goods.length !== 1) {
+		return { ok: false, reason: 'give one thing at a time' };
+	}
+	const [[item, quantity]] = goods;
+	return { ok: true, verb: 'give', arc: `give(item=${item}, to=${args.at(-1)}, quantity=${quantity})` };
 }
 
-function parsePay(args:string[]):ParsedSlash {
-	if (!isAmount(args[0] ?? '')) {
-		return { ok: false, reason: 'how much?  /pay <amount> <person>' };
-	}
-	const to = args[1] ?? '';
-	if (!to) {
-		return { ok: false, reason: 'pay whom?' };
-	}
-	return { ok: true, verb: 'pay', amount: Math.floor(Number(args[0])), to };
-}
+const OFFER_USAGE = '/offer <person> <item|gold|nothing> for <item|gold|nothing>';
 
-function parseBuy(args:string[]):ParsedSlash {
-	if (args.length === 0) {
-		return { ok: false, reason: 'buy what?  /buy <item> <person>' };
+/** `5`, `5 gold`, `gold 5`, `12 Egg and Milk 3`, `Loaf`, or `nothing`. */
+function phrase(text:string):Record<string, number> | string {
+	const bundle:Record<string, number> = {};
+	if (/^nothing$/i.test(text.trim())) {
+		return bundle;
 	}
-	let offer:number | undefined;
-	const body = [...args];
-	const last = body[body.length - 1];
-	if (body.length >= 3 && isAmount(last)) {
-		offer = Math.floor(Number(last));
-		body.pop();
-	}
-	if (body.length < 2) {
-		return { ok: false, reason: 'buy from whom?' };
-	}
-	return { ok: true, verb: 'buy', item: body[0], from: body[1], offer };
-}
-
-function parseSell(args:string[]):ParsedSlash {
-	if (args.length === 0) {
-		return { ok: false, reason: 'sell what?  /sell <item> <person>' };
-	}
-	let ask:number | undefined;
-	const body = [...args];
-	const last = body[body.length - 1];
-	if (body.length >= 3 && isAmount(last)) {
-		ask = Math.floor(Number(last));
-		body.pop();
-	}
-	if (body.length < 2) {
-		return { ok: false, reason: 'sell to whom?' };
-	}
-	return { ok: true, verb: 'sell', item: body[0], to: body[1], ask };
-}
-
-function uniq(values:string[]):string[] {
-	const seen = new Set<string>();
-	const out:string[] = [];
-	for (const v of values) {
-		const key = compact(v);
-		if (!key || seen.has(key)) {
+	for (const bit of text.split(/\s+and\s+/i)) {
+		const part = bit.trim();
+		if (!part) {
 			continue;
 		}
-		seen.add(key);
-		out.push(v);
+		const gold = /^(?:(\d+)\s+gold|gold(?:\s+(\d+))?)$/i.exec(part);
+		if (gold || /^\d+$/.test(part)) {
+			const n = Math.floor(Number(gold ? (gold[1] || gold[2] || 0) : part));
+			if (n <= 0) {
+				return 'how much gold?';
+			}
+			bundle.gold = (bundle.gold ?? 0) + n;
+			continue;
+		}
+		const counted = /^(\d+)\s+([A-Za-z]\w*)$/.exec(part);
+		const after = /^([A-Za-z]\w*)\s+(\d+)$/.exec(part);
+		const [name, count] = counted ? [counted[2], counted[1]] : after ? [after[1], after[2]] : [];
+		if (name) {
+			bundle[name] = (bundle[name] ?? 0) + Math.floor(Number(count));
+			continue;
+		}
+		if (/^[A-Za-z][\w]*$/.test(part) && !/^gold$/i.test(part)) {
+			bundle[part] = (bundle[part] ?? 0) + 1;
+			continue;
+		}
+		return `cannot read "${part}"`;
 	}
-	return out;
+	return Object.keys(bundle).length > 0 ? bundle : 'what, or nothing?';
+}
+
+function parseOffer(args:string[]):ParsedSlash {
+	const person = args[0] ?? '';
+	if (!person) {
+		return { ok: false, reason: `offer to whom?  ${OFFER_USAGE}` };
+	}
+	const forAt = args.findIndex((word) => word.toLowerCase() === 'for');
+	if (forAt < 0) {
+		return { ok: false, reason: `for what?  ${OFFER_USAGE}` };
+	}
+	const give = phrase(args.slice(1, forAt).join(' '));
+	if (typeof give === 'string') {
+		return { ok: false, reason: give };
+	}
+	const get = phrase(args.slice(forAt + 1).join(' '));
+	if (typeof get === 'string') {
+		return { ok: false, reason: get };
+	}
+	return { ok: true, verb: 'offer', arc: `offer(to=${person}, give=${JSON.stringify(give)}, get=${JSON.stringify(get)})` };
 }
 
 function take(names:string[], partial:string, cap = SUGGEST_CAP):string[] {
@@ -280,98 +256,95 @@ export function suggestSay(draft:string, catalog:SayCatalog):SaySuggestion[] {
 	if (verb === 'give') {
 		return suggestGive(bits.head, bits.partial, afterVerb, catalog);
 	}
-	if (verb === 'pay') {
-		return suggestPay(bits.head, bits.partial, afterVerb, catalog);
-	}
-	if (verb === 'buy') {
-		return suggestBuy(bits.head, bits.partial, afterVerb, catalog);
-	}
-	if (verb === 'sell') {
-		return suggestSell(bits.head, bits.partial, afterVerb, catalog);
+	if (verb === 'offer') {
+		return suggestOffer(bits.head, bits.partial, afterVerb, catalog);
 	}
 	return [];
 }
 
+/** Goods to pick: `items`, then gold unless `purse` is null. With `amounts`, each is written with its amount (`4 gold`), else 1. */
+function goodsInserts(head:string, partial:string, items:string[], purse:number | null, amounts:Record<string, number> | null, hint:string):SaySuggestion[] {
+	const rows = [
+		...namedInserts(head, items, partial, true, hint),
+		...namedInserts(head, purse === null ? [] : ['gold'], partial, true, 'gold'),
+	];
+	if (!amounts) {
+		return rows;
+	}
+	const count = (name:string):number => Object.entries(amounts).find(([key]) => compact(key) === compact(name))?.[1] ?? 1;
+	return rows.map((row) => ({ ...row, insert: `${head}${count(row.label)} ${row.label} ` }));
+}
+
+/** One good, then whom. */
 function suggestGive(
 	head:string,
 	partial:string,
 	args:string[],
 	catalog:SayCatalog,
 ):SaySuggestion[] {
-	const goldChoices = catalog.gold > 0 ? ['gold'] : [];
+	const purse = catalog.gold > 0 ? catalog.gold : null;
 	if (args.length === 0) {
+		return goodsInserts(head, partial, catalog.items, purse, {}, 'item').slice(0, SUGGEST_CAP);
+	}
+	if (args.length === 1 && compact(args[0]) === 'gold') {
+		return namedInserts(head, purse ? [String(purse)] : [], partial, true, 'gold');
+	}
+	const goods = args.length === 1 && isAmount(args[0]) ? goodsInserts(head, partial, catalog.items, purse, null, 'item') : [];
+	const named = typeof phrase(args.join(' ')) !== 'string';
+	return [...goods, ...namedInserts(head, named ? catalog.peers : [], partial, false, 'person')].slice(0, SUGGEST_CAP);
+}
+
+function suggestOffer(
+	head:string,
+	partial:string,
+	args:string[],
+	catalog:SayCatalog,
+):SaySuggestion[] {
+	if (args.length === 0) {
+		return namedInserts(head, catalog.peers, partial, true, 'person');
+	}
+	const forAt = args.findIndex((word) => word.toLowerCase() === 'for');
+	// Their price and their goods are the amounts written by default.
+	const theirs = catalog.offers[args[0].toLowerCase()] ?? { give: {}, get: {} };
+	if (forAt < 0) {
+		return suggestSide(head, partial, args.slice(1), catalog.items, catalog.gold > 0 ? catalog.gold : null, theirs.get, false);
+	}
+	const goods = Object.keys(theirs.give).filter((name) => compact(name) !== 'gold');
+	return suggestSide(head, partial, args.slice(forAt + 1), goods, 0, theirs.give, true);
+}
+
+/** The next word of one side: `goods`, gold, nothing, and, or for. `wanted` is the side after `for`. */
+function suggestSide(
+	head:string,
+	partial:string,
+	side:string[],
+	goods:string[],
+	purse:number | null,
+	amounts:Record<string, number>,
+	wanted:boolean,
+):SaySuggestion[] {
+	const last = side.at(-1)?.toLowerCase();
+	const prev = side.at(-2);
+	const next = wanted ? ['and'] : ['for', 'and'];
+	const hint = wanted ? 'offered' : 'item';
+	if (side.length === 0 || last === 'and') {
 		return [
-			...namedInserts(head, catalog.items, partial, true, 'item'),
-			...namedInserts(head, goldChoices, partial, true, 'purse'),
+			...goodsInserts(head, partial, goods, purse, amounts, hint),
+			...namedInserts(head, side.length === 0 ? ['nothing'] : [], partial, !wanted, 'nothing'),
 		].slice(0, SUGGEST_CAP);
 	}
-	const goldPath = compact(args[0]) === 'gold' || isAmount(args[0]);
-	if (goldPath) {
-		if (compact(args[0]) === 'gold' && args.length === 1) {
-			const amounts = catalog.gold > 0 ? [String(catalog.gold)] : [];
-			return namedInserts(head, amounts, partial, true, 'gold');
-		}
-		if (args.length >= 2 && compact(args[0]) === 'gold') {
-			return namedInserts(head, catalog.peers, partial, false, 'person');
-		}
-		if (isAmount(args[0]) && args.length === 1) {
-			return namedInserts(head, catalog.peers, partial, false, 'person');
-		}
-		return [];
+	if (last === 'nothing') {
+		return wanted ? [] : namedInserts(head, ['for'], partial, true, 'in return');
 	}
-	if (args.length === 1) {
-		return namedInserts(head, catalog.peers, partial, false, 'person');
+	if (last === 'gold' && !(prev && isAmount(prev))) {
+		return namedInserts(head, purse ? [String(purse)] : [], partial, true, 'gold');
 	}
-	return [];
-}
-
-function suggestPay(
-	head:string,
-	partial:string,
-	args:string[],
-	catalog:SayCatalog,
-):SaySuggestion[] {
-	if (args.length === 0) {
-		const amounts = catalog.gold > 0 ? [String(catalog.gold)] : [];
-		return namedInserts(head, amounts, partial, true, 'gold');
+	if (last && isAmount(last)) {
+		return [
+			...namedInserts(head, next.slice(0, -1), partial, true, 'in return'),
+			...goodsInserts(head, partial, goods, purse, null, hint),
+			...namedInserts(head, ['and'], partial, true, 'also'),
+		].slice(0, SUGGEST_CAP);
 	}
-	if (args.length === 1) {
-		return namedInserts(head, catalog.peers, partial, false, 'person');
-	}
-	return [];
-}
-
-function suggestBuy(
-	head:string,
-	partial:string,
-	args:string[],
-	catalog:SayCatalog,
-):SaySuggestion[] {
-	const goods = uniq(catalog.goods.map((g) => g.item));
-	if (args.length === 0) {
-		return namedInserts(head, goods, partial, true, 'for sale');
-	}
-	if (args.length === 1) {
-		const sellers = uniq(
-			catalog.goods.filter((g) => compact(g.item) === compact(args[0])).map((g) => g.from),
-		);
-		const names = sellers.length > 0 ? sellers : catalog.peers;
-		return namedInserts(head, names, partial, false, 'seller');
-	}
-	return [];
-}
-
-function suggestSell(
-	head:string,
-	partial:string,
-	args:string[],
-	catalog:SayCatalog,
-):SaySuggestion[] {
-	if (args.length === 0) {
-		return namedInserts(head, catalog.items, partial, true, 'item');
-	}
-	if (args.length === 1) {
-		return namedInserts(head, catalog.peers, partial, false, 'person');
-	}
-	return [];
+	return namedInserts(head, next, partial, true, 'in return');
 }

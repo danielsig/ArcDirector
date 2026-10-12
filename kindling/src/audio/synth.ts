@@ -1,6 +1,6 @@
 import { instrumentOf, registerInstrument } from './instruments.js';
 import { midiHz } from './midi.js';
-import type { SfxLayer, SfxOpts, Voice } from './types.js';
+import type { SfxLayer, SfxOpts, SfxPatch, Voice } from './types.js';
 
 export function makeNoise(ctx:AudioContext, seconds = 1.5):AudioBuffer {
 	const n = Math.max(1, Math.floor(ctx.sampleRate * seconds));
@@ -458,6 +458,182 @@ function noiseBurst(
 	disconnectSoon([src, filter, out], t0, ctx, dur + 0.1);
 }
 
+const glottalWaves = new WeakMap<BaseAudioContext, PeriodicWave>();
+
+/**
+ * One period of a Rosenberg glottal pulse as an oscillator wave: the flow derivative of vocal
+ * folds that open slowly and close gently. A throat's buzz, rounder than a sawtooth: the
+ * voice of a `boo`. Only the first few harmonics, so it stays soft at a babble's high pitch.
+ */
+function glottalWave(ctx:BaseAudioContext):PeriodicWave {
+	const hit = glottalWaves.get(ctx);
+	if (hit) {
+		return hit;
+	}
+	const harmonics = 4;
+	const steps = 512;
+	const open = 0.2;
+	const close = 0.5;
+	const flow = (t:number):number => (t < open
+		? 0.5 * (1 - Math.cos(Math.PI * t / open))
+		: t < open + close ? Math.cos(Math.PI * (t - open) / (2 * close)) : 0);
+	const real = new Float32Array(harmonics + 1);
+	const imag = new Float32Array(harmonics + 1);
+	for (let i = 0; i < steps; i++) {
+		const slope = flow((i + 1) / steps) - flow(i / steps);
+		for (let k = 1; k <= harmonics; k++) {
+			const phase = 2 * Math.PI * k * i / steps;
+			real[k] = (real[k] ?? 0) + slope * Math.cos(phase);
+			imag[k] = (imag[k] ?? 0) + slope * Math.sin(phase);
+		}
+	}
+	const wave = ctx.createPeriodicWave(real, imag);
+	glottalWaves.set(ctx, wave);
+	return wave;
+}
+
+function filter(ctx:AudioContext, type:BiquadFilterType, hz:number, q:number):BiquadFilterNode {
+	const node = ctx.createBiquadFilter();
+	node.type = type;
+	node.frequency.value = hz;
+	node.Q.value = q;
+	return node;
+}
+
+function level(ctx:AudioContext, gain:number):GainNode {
+	const node = ctx.createGain();
+	node.gain.value = gain;
+	return node;
+}
+
+/** An oscillator gliding from `freq` to `freqTo` over `dur`, started and stopped. */
+function glide(osc:OscillatorNode, t:number, freq:number, freqTo:number, dur:number):OscillatorNode {
+	osc.frequency.setValueAtTime(freq, t);
+	osc.frequency.exponentialRampToValueAtTime(Math.max(40, freqTo), t + dur);
+	osc.start(t);
+	osc.stop(t + dur + 0.05);
+	return osc;
+}
+
+/** `nodes` wired one after another from `from`; returns the last. */
+function chain(from:AudioNode, nodes:AudioNode[]):AudioNode {
+	return nodes.reduce<AudioNode>((a, b) => a.connect(b), from);
+}
+
+/**
+ * The "b" of a `bee` or `boo`: the lips letting go, a click of air 2 ms long, mostly above
+ * 8 kHz. Longer and airier would make it a "p".
+ */
+function lipsClick(ctx:AudioContext, dest:AudioNode, noise:AudioBuffer, t:number, gain:number):void {
+	noiseBurst(ctx, dest, noise, t, 0.002, gain, 8000, 'highpass', 0.7);
+}
+
+/** Breath: noise with nothing below `hz` (three high-pass filters in a row), running from `t` for `dur`. */
+function breath(ctx:AudioContext, noise:AudioBuffer, t:number, dur:number, hz:number):{ out:AudioNode; nodes:AudioNode[] } {
+	const src = ctx.createBufferSource();
+	src.buffer = noise;
+	src.loop = true;
+	src.start(t, Math.random() * noise.duration);
+	src.stop(t + dur + 0.05);
+	const highs = [hz, hz, hz].map((cut) => filter(ctx, 'highpass', cut, 0));
+	return { out: chain(src, highs), nodes: [src, ...highs] };
+}
+
+/** Seconds a `bee`'s lips stay shut while its voice already hums behind them. */
+const BEE_SHUT = 0.01;
+
+/**
+ * "Bee", matched band by band to recordings of two voices saying it. Its low energy is one
+ * nearly pure tone (the first formant), then almost nothing from 500 Hz to 2.4 kHz, then a
+ * bright ring: a second formant at 2.4–2.6 kHz and a fourth around 4.6 kHz, over breath that
+ * fills 3 to 16 kHz about as loud as the tone. Its "b": the click of the lips, then 10 ms of
+ * the voice humming behind them, quiet and rising (3% to 15%); then they let go, and within
+ * 2 ms it is at full strength, the second formant ringing louder than the tone and settling
+ * about 10 dB lower over the next 15 ms. It holds, then fades out over its last 40%. The ring
+ * is a buzz at the same pitch, so it fuses with the tone.
+ */
+function bee(ctx:AudioContext, dest:AudioNode, noise:AudioBuffer, t:number, freq:number, freqTo:number, dur:number, gain:number):void {
+	const open = t + BEE_SHUT;
+	lipsClick(ctx, dest, noise, t, gain);
+	const out = ctx.createGain();
+	out.gain.setValueAtTime(gain * 0.03, t);
+	out.gain.exponentialRampToValueAtTime(gain * 0.15, open);
+	out.gain.exponentialRampToValueAtTime(gain, open + 0.002);
+	out.gain.setValueAtTime(gain, Math.max(open + 0.002, t + dur * 0.6));
+	out.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+	out.connect(dest);
+	const tone = glide(ctx.createOscillator(), t, freq, freqTo, dur);
+	const toneLevel = level(ctx, 0.25);
+	tone.connect(toneLevel).connect(out);
+	// A trace of the octave, so the tone is a voice and not a whistle.
+	const octave = glide(ctx.createOscillator(), t, freq * 2, freqTo * 2, dur);
+	const octaveLevel = level(ctx, 0.0125);
+	octave.connect(octaveLevel).connect(out);
+	const buzz = ctx.createOscillator();
+	buzz.type = 'sawtooth';
+	glide(buzz, t, freq, freqTo, dur);
+	// Three high-pass filters in a row empty the buzz below the ring, leaving the gap under it.
+	const highs = [2400, 2400, 2400].map((hz) => filter(ctx, 'highpass', hz, 0));
+	const bright = chain(buzz, highs);
+	const second = filter(ctx, 'bandpass', 2400, 8);
+	second.frequency.setValueAtTime(2400, open);
+	second.frequency.exponentialRampToValueAtTime(2600, Math.max(open + 0.01, t + dur * 0.4));
+	const secondLevel = ctx.createGain();
+	secondLevel.gain.setValueAtTime(2.1, t);
+	secondLevel.gain.setValueAtTime(7, open);
+	secondLevel.gain.setTargetAtTime(2.1, open + 0.003, 0.01);
+	const fourth = filter(ctx, 'bandpass', 4600, 3);
+	const fourthLevel = level(ctx, 0.375);
+	bright.connect(second).connect(secondLevel).connect(out);
+	bright.connect(fourth).connect(fourthLevel).connect(out);
+	const air = breath(ctx, noise, t, dur, 3000);
+	const airLevel = ctx.createGain();
+	airLevel.gain.setValueAtTime(0.4, t);
+	airLevel.gain.setValueAtTime(1.3, open);
+	air.out.connect(airLevel).connect(out);
+	disconnectSoon([tone, toneLevel, octave, octaveLevel, buzz, ...highs, second, secondLevel, fourth, fourthLevel, ...air.nodes, airLevel, out], t, ctx, dur + 0.12);
+}
+
+/**
+ * "Boo", matched band by band to recordings of two voices saying it: a throat's buzz with only
+ * its low harmonics, almost nothing from 1.5 to 4 kHz, and a steady breath above 4.5 kHz. Its
+ * "b": the click of the lips, then the breath and a murmur at 2% that swells steadily to full
+ * strength a third of the way through, holds to halfway, and fades. As the lips round, the
+ * mouth closes from 1.8 kHz to 800 Hz over the first 30 ms. The breath holds steady while the
+ * voice swells under it.
+ */
+function boo(ctx:AudioContext, dest:AudioNode, noise:AudioBuffer, t:number, freq:number, freqTo:number, dur:number, gain:number):void {
+	lipsClick(ctx, dest, noise, t, gain * 3);
+	const out = ctx.createGain();
+	out.gain.setValueAtTime(gain * 0.02, t);
+	out.gain.linearRampToValueAtTime(gain, t + dur * 0.35);
+	out.gain.setValueAtTime(gain, t + dur * 0.5);
+	out.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+	out.connect(dest);
+	const buzz = ctx.createOscillator();
+	buzz.setPeriodicWave(glottalWave(ctx));
+	glide(buzz, t, freq, freqTo, dur);
+	const mouth = [1800, 1800].map((hz) => {
+		const lowpass = filter(ctx, 'lowpass', hz, 0);
+		lowpass.frequency.setValueAtTime(hz, t);
+		lowpass.frequency.exponentialRampToValueAtTime(800, t + 0.03);
+		return lowpass;
+	});
+	chain(buzz, mouth).connect(out);
+	const air = breath(ctx, noise, t, dur, 4500);
+	const airLevel = ctx.createGain();
+	airLevel.gain.setValueAtTime(gain * 0.25, t);
+	airLevel.gain.setValueAtTime(gain * 0.25, t + dur * 0.5);
+	airLevel.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+	air.out.connect(airLevel).connect(dest);
+	disconnectSoon([buzz, ...mouth, out, ...air.nodes, airLevel], t, ctx, dur + 0.12);
+}
+
+/** How long a patch sounds: until its last layer ends, every layer lasting `dur` if given. */
+export function patchSeconds(patch:SfxPatch, dur?:number):number {
+	return patch.layers.reduce((end, layer) => Math.max(end, (layer.when ?? 0) + (dur ?? layer.dur)), 0);
+}
+
 export function playLayer(
 	ctx:AudioContext,
 	dest:AudioNode,
@@ -541,70 +717,15 @@ export function playLayer(
 			disconnectSoon([osc, out], t, ctx, dur + 0.12);
 			return;
 		}
-		case 'murmur': {
-			murmur(ctx, dest, t, freq, dur, gain, opts.freqTo ?? layer.freqTo);
+		case 'bee':
+			bee(ctx, dest, noise, t, freq, layer.freqTo ?? freq, dur, gain);
 			return;
-		}
+		case 'boo':
+			boo(ctx, dest, noise, t, freq, layer.freqTo ?? freq, dur, gain);
+			return;
 		default:
-			noiseBurst(
-				ctx,
-				dest,
-				noise,
-				t,
-				dur,
-				gain,
-				layer.cutoff ?? freq,
-				layer.freqTo ? 'bandpass' : 'lowpass',
-				layer.q ?? 1,
-			);
+			noiseBurst(ctx, dest, noise, t, dur, gain, layer.cutoff ?? freq, layer.filter ?? 'lowpass', layer.q ?? 1);
 	}
-}
-
-function murmur(ctx:AudioContext, dest:AudioNode, when:number, freq:number, dur:number, gain:number, freqTo?:number):void {
-	const osc = ctx.createOscillator();
-	osc.type = 'sawtooth';
-	const t0 = tAt(ctx, when);
-	osc.frequency.setValueAtTime(freq, t0);
-	if (freqTo && freqTo > freq) {
-		const rise = Math.min(0.28, Math.max(0.12, dur * 0.22));
-		const tRise = Math.max(t0 + 0.05, t0 + dur - rise);
-		osc.frequency.setValueAtTime(freq, tRise);
-		osc.frequency.exponentialRampToValueAtTime(Math.max(freq + 1, freqTo), t0 + dur);
-	}
-	const lfo = ctx.createOscillator();
-	lfo.frequency.value = 4.4 + (freq % 3);
-	const lfoGain = ctx.createGain();
-	lfoGain.gain.value = freq * 0.04;
-	lfo.connect(lfoGain);
-	lfoGain.connect(osc.frequency);
-	const mix = ctx.createGain();
-	mix.gain.value = 1;
-	const out = ctx.createGain();
-	env(out, t0, dur, gain * 0.18, 0.04, 0.16);
-	const trem = ctx.createOscillator();
-	trem.frequency.value = 7.5;
-	const tremG = ctx.createGain();
-	tremG.gain.value = gain * 0.05;
-	trem.connect(tremG);
-	tremG.connect(out.gain);
-	for (const f of [freq * 3.2, 1100, 2400]) {
-		const bp = ctx.createBiquadFilter();
-		bp.type = 'bandpass';
-		bp.frequency.value = f;
-		bp.Q.value = 4.5;
-		osc.connect(bp);
-		bp.connect(mix);
-		disconnectSoon([bp], t0, ctx, dur + 0.2);
-	}
-	mix.connect(out);
-	out.connect(dest);
-	osc.start(t0);
-	lfo.start(t0);
-	trem.start(t0);
-	osc.stop(t0 + dur + 0.05);
-	lfo.stop(t0 + dur + 0.05);
-	trem.stop(t0 + dur + 0.05);
-	disconnectSoon([osc, lfo, lfoGain, mix, out, trem, tremG], t0, ctx, dur + 0.2);
 }
 
 export type LoopNodes = {

@@ -235,28 +235,28 @@ export class Wallet extends Component {
 	public coins = 0;
 }
 
-/** Street vendor with a list price and a lowest they will take. */
+/** Goods this person sells. Taking one from them without a trade is theft. */
 export class Merchant extends Component {
-	public static override saved = ['deals'];
-	public specialty = '';
-	public ask = 0;
-	public floor = 0;
-	/** Buyer id → agreed coin price, if any. */
-	public deals:Record<string, number> = {};
+	public static override saved = ['goods'];
+	public goods:string[] = [];
 }
 
 export type MarketNPCKind = 'vendor' | 'customer' | 'guard';
 
 /** Flea-market role: vendors stay; customers leave through a gate when satisfied. */
 export class MarketNPC extends Component {
-	public static override saved = ['wants', 'leaveGate', 'leaving'];
+	public static override saved = ['wants', 'leaveGate', 'leaving', 'postX', 'postZ', 'post'];
 	public kind:MarketNPCKind = 'customer';
 	public wants:string[] = [];
 	public leaveGate = '';
 	public leaving = false;
+	/** Where a vendor stands. They are not sent off this post. */
+	public postX = 0;
+	public postZ = 0;
+	public post = '';
 }
 
-/** Walking into this door despawns a satisfied customer. */
+/** Walking into this doorway despawns a customer who is leaving through it. */
 export class MarketGate extends Component {}
 
 /** Marked for the market watch — stolen goods, unpaid take. */
@@ -264,6 +264,18 @@ export class Wanted extends Component {
 	public reason = '';
 	public items:string[] = [];
 	public fromID = '';
+}
+
+/** Someone cried a security word. Guards run here until `until` (game time) or one of them arrives. */
+export class Alarm extends Component {
+	public until = 0;
+	public word = '';
+}
+
+/** A cry the watch still answers: enabled, and not yet expired. */
+export function alarmActive(go:GameObject, now:number):boolean {
+	const alarm = go.getComponent(Alarm);
+	return !!alarm?.enabled && now < alarm.until;
 }
 
 /** Stays with a named body when idle. Always perceives that body, even in observer. */
@@ -289,10 +301,35 @@ export class Flame extends Component {
 	public canIgnite = true;
 }
 
+/** Set alight with a flame, it burns for `burnSeconds` and is gone, and whatever it blocked with it. */
 export class Flammable extends Component {
 	public static override saved = ['burning', 'spread'];
 	public burning = false;
 	public spread = false;
+	public burnSeconds = 1.6;
+	private _burnt = 0;
+
+	public override update(dt:number):void {
+		if (!this.burning) {
+			return;
+		}
+		this._burnt += dt;
+		if (this._burnt >= this.burnSeconds) {
+			this.gameObject.world?.destroy(this.gameObject);
+		}
+	}
+}
+
+/** Hurt `times` over by the attacks in `to` (a fight verb, such as hex), and `others` times by every other blow. */
+export class Weakness extends Component {
+	public to:string[] = [];
+	public times = 3;
+	public others = 0.5;
+}
+
+/** Words carved on it. Sight and `examine` read them out. */
+export class Inscription extends Component {
+	public text = '';
 }
 
 export const BODY_SLOTS = [

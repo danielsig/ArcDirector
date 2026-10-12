@@ -1,140 +1,178 @@
-import { ArcDirector, type CharacterSpec } from 'arc-director';
-import { Sickbed, Celebrating } from '../../engine/components';
-import { findCarried, itemMatchesName } from '../../items/inventory';
+import { ArcDirector, type CharacterSpec, type CollectiveSpec, type LawSpec, type MemoryDraft, type SpeechUtterance } from 'arc-director';
+import { Celebrating, Door, Lock } from '../../engine/components';
+import type { GameObject } from '../../engine/GameObject';
+import { cueAt } from '../../audio/cue';
+import { distXZ, findCarried, itemMatchesName } from '../../items/inventory';
 import type { GameHost } from '../adapter';
-import { addStatusVerbs, BUILDING_VERB_INSTRUCTIONS, GAME_VERBS } from '../verbs';
+import { ATTACKS } from '../fight';
+import { findObject, isLiving } from '../names';
+import { addFightVerbs, addStatusVerbs, BUILDING_VERB_INSTRUCTIONS, GAME_VERBS } from '../verbs';
 import { withReceived, type CharacterCtx } from '../types';
 
-const GATE_OPENED = 'hasJustOpened(EastGate)';
+const PRIZE = 'SunCrown';
+const BOSS = 'HollowKing';
+const COMPANY = ['Bram', 'Maren', 'Wren'];
 
-const HERBALIST:CharacterSpec = {
-	id: 'Fern',
-	mind: {},
-	identity: { role: 'Herbalist', traits: ['plain', 'anxious', 'generous'] },
-	goals: [{ text: 'Cure Noll: use MagicPotion on NollCot.', priority: 2 }],
-	memories: [
-		{
-			text: 'I am a herbalist. My boy Noll lies fevered on NollCot in Vault, beyond EastGate. I tend him.',
-			tags: ['backstory', 'Noll', 'NollCot', 'Vault'],
-			pinned: true,
-		},
-		{
-			text: 'Only MagicPotion cures fever. Alchemist brews it from Bitterroot, for a GoldCoin fee.',
-			tags: ['MagicPotion', 'Bitterroot', 'Alchemist', 'cure'],
-			pinned: true,
-		},
-		{
-			text: 'Bitterroot grows in Vault. Only I can harvest it.',
-			tags: ['Bitterroot', 'harvest', 'Vault'],
-		},
-		{
-			text: 'I have no gold of my own.',
-			tags: ['GoldCoin', 'gold'],
-		},
-	],
-	pinnedWatches: { gate: GATE_OPENED },
+/** The riddle's answer, as people say it. Spoken this close to SealedDoor, it opens. */
+const ANSWER = /\bfoot\s?(steps?|prints?)\b/i;
+const ANSWER_REACH = 6;
+
+const FOES_NEAR = 'some(others.filter("enemy").nearby(9))';
+
+/** A fighter of the company strikes back the moment a monster is in sight, whatever it was doing. */
+const STRIKE:LawSpec = { name: 'strike', who: 'me', watch: FOES_NEAR, arc: 'loop(attack())', pinned: true };
+
+/** The healer heals first, then fights. */
+const MEND:LawSpec = {
+	name: 'mend',
+	who: 'me',
+	watch: 'isHurt(me) || some(others.filter(u => !(u is "enemy") && isHurt(u)).nearby(8))',
+	arc: 'heal()',
+	pinned: true,
 };
 
-const ALCHEMIST:CharacterSpec = {
-	id: 'Sable',
+/** What the whole company knows going in. Derek may or may not be with them. */
+const QUEST_MEMORIES:MemoryDraft[] = [
+	{
+		text: 'We came down into the Sunken Crypt for the SunCrown in its Treasury. Its dead king, the HollowKing, guards it. His weakness is no secret: steel and arrows barely scratch him, but witchfire burns, so Wren\'s hex does triple damage. When he falls, HoardGate opens.',
+		tags: ['SunCrown', 'HollowKing', 'quest', 'weakness'],
+		pinned: true,
+	},
+	{
+		text: 'Derek is our archer, a good shot and a better friend. Derek promised to catch up; if Derek is with us, we fight as four. If not, we do not wait.',
+		tags: ['Derek', 'company'],
+		pinned: true,
+	},
+];
+
+const GOAL = { text: `Get the ${PRIZE} from HoardChest, deep in the crypt, with the company alive. Do the next step yourself; do not wait to be asked.`, priority: 2 };
+
+const KNIGHT:CharacterSpec = {
+	id: 'Bram',
 	mind: {},
-	identity: { role: 'Alchemist', traits: ['proud', 'hungry', 'exact'] },
-	goals: [{ text: 'Get paid a GoldCoin, then brew MagicPotion at BrewHearth.', priority: 2 }],
+	tags: ['Knight'],
+	identity: { role: 'Knight', traits: ['gruff', 'loyal to the bone', 'secretly soft-hearted', 'tells terrible jokes', 'terrified of spiders'] },
+	goals: [GOAL],
 	memories: [
 		{
-			text: 'I am an alchemist. I brew at BrewHearth in Vault, beyond EastGate. I am penniless and never brew unpaid.',
-			tags: ['backstory', 'BrewHearth', 'Vault'],
+			text: 'I am Bram, a knight twenty years past my prime. I swore to Wren\'s late mother I would keep the girl alive, and I will, though she makes it hard. I go first through every door and I stand between my friends and whatever comes. I hide my fear behind bad jokes. Spiders, though: I will not touch a web. Someone else can burn it.',
+			tags: ['backstory', 'Bram', 'Wren', 'spiders'],
 			pinned: true,
 		},
-		{
-			text: 'One Bitterroot and a GoldCoin fee brew two MagicPotion. I keep the coin and give both potions away.',
-			tags: ['brew', 'Bitterroot', 'GoldCoin', 'MagicPotion'],
-			pinned: true,
-		},
-		{
-			text: 'A secret only I know: BrassKey, which unlocks EastGate, lies inside ArmoryChest.',
-			tags: ['BrassKey', 'ArmoryChest', 'EastGate', 'secret'],
-			pinned: true,
-		},
+		...QUEST_MEMORIES,
 	],
-	pinnedWatches: { gate: GATE_OPENED },
+	laws: [STRIKE],
 };
 
-const CAPTAIN:CharacterSpec = {
-	id: 'Lys',
+const HEALER:CharacterSpec = {
+	id: 'Maren',
 	mind: {},
-	identity: { role: 'Captain', traits: ['brisk', 'fair', 'worried'] },
-	goals: [{ text: 'Cure Lina: use MagicPotion on LinaCot.', priority: 2 }],
+	tags: ['Healer'],
+	identity: { role: 'Healer', traits: ['warm', 'stern when it matters', 'keeps a tally of every wound she mends', 'hums hymns when afraid'] },
+	goals: [GOAL],
 	memories: [
 		{
-			text: 'I am pay-captain of the dungeon watch. My sister Lina lies fevered on LinaCot in Vault, beyond EastGate. I tend her.',
-			tags: ['backstory', 'Lina', 'LinaCot', 'Vault'],
+			text: 'I am Maren, a healer of the Dawn chapel. I have patched these fools up for six years and I keep a tally of every wound: Bram owes me forty-one. I scold them for taking risks because I love them. I stay behind Bram in a fight and heal whoever is hurt; I carry two HealthPotion for the worst of it.',
+			tags: ['backstory', 'Maren', 'HealthPotion'],
 			pinned: true,
 		},
-		{
-			text: 'My traveler pack holds ChestKey and GoldCoin. ChestKey unlocks ArmoryChest; I do not know what is inside.',
-			tags: ['ChestKey', 'ArmoryChest', 'GoldCoin'],
-			pinned: true,
-		},
+		...QUEST_MEMORIES,
 	],
-	pinnedWatches: { gate: GATE_OPENED },
+	laws: [MEND, STRIKE],
 };
 
-function inVault(host:GameHost, id:string):boolean {
-	const go = host.world.findByID(id);
-	if (!go) {
-		return false;
+const WITCH:CharacterSpec = {
+	id: 'Wren',
+	mind: {},
+	tags: ['Witch'],
+	identity: { role: 'Witch', traits: ['brilliant', 'cocky', 'sharp-tongued', 'loves riddles', 'braver than she feels'] },
+	goals: [GOAL],
+	memories: [
+		{
+			text: 'I am Wren, a fire witch, nineteen and the cleverest person in any room, as I like to remind Bram. My hex is witchfire. I adore riddles and solve them out loud. I tease Bram about spiders, but I would walk into fire for him and Maren. I keep my distance in a fight and burn things from behind Bram.',
+			tags: ['backstory', 'Wren', 'hex', 'riddle'],
+			pinned: true,
+		},
+		...QUEST_MEMORIES,
+	],
+	laws: [STRIKE],
+};
+
+/** Who lies in wait, room by room. They have no voice and never think: their one law wakes them. */
+const HORDE:CollectiveSpec<CharacterCtx> = {
+	id: 'Horde',
+	mind: { skipHeartbeat: true, skipMajor: true, skipStart: true, skipStrategic: true },
+	watchesWritable: false,
+	systemOne: null,
+	kit: { verbs: ['loop', 'attack'], tools: [] },
+	identity: { role: 'Horde', traits: ['undead', 'mindless'] },
+	goals: [{ text: 'Kill whoever comes in.', priority: 1 }],
+	characters: [
+		{ id: 'Ghoul1', tags: ['Knight'] },
+		{ id: 'Ghoul2', tags: ['Blade'] },
+		{ id: 'BoneArcher1', tags: ['Archer'] },
+		{ id: 'Skeleton1', tags: ['Blade'] },
+		{ id: 'Skeleton2', tags: ['Blade'] },
+		{ id: 'CultWitch', tags: ['Witch'] },
+		{ id: BOSS, tags: ['Knight'] },
+		{ id: 'BoneArcher2', tags: ['Archer'] },
+		{ id: 'Skeleton3', tags: ['Blade'] },
+		{ id: 'Ghoul3', tags: ['Knight'] },
+	],
+	laws: [{ name: 'wake', who: 'units', watch: 'some(others.filter("enemy").nearby(8))', arc: 'loop(attack())', pinned: true }],
+};
+
+function openDoor(host:GameHost, name:string, message:string):void {
+	const go = host.world.findNamed(name);
+	const door = go?.getComponent(Door);
+	const lock = go?.getComponent(Lock);
+	if (!go || !door || door.open) {
+		return;
 	}
-	const { cx, cz } = host.world.chunkCoordAt(go.transform.position.x, go.transform.position.z);
-	return cx === 1 && cz === 0;
+	if (lock) {
+		lock.locked = false;
+	}
+	door.open = true;
+	door.syncCollision();
+	cueAt(host.world, 'unlock', go);
+	cueAt(host.world, 'doorOpen', go);
+	host.world.setMessage(message);
+	host.arc?.pushEvent({ kind: 'Opened', text: message, who: [], tags: ['door', name], major: true });
 }
 
-function cotTended(host:GameHost, id:string):boolean {
-	const cot = host.world.findNamed(id);
-	return !!cot?.getComponent(Sickbed)?.tended;
+/** The company, the player among them while NPCs can see them. */
+function company(host:GameHost):GameObject[] {
+	const player = host.world.findByID('Player');
+	const ids = player && host.world.npcCanSee(player) ? [...COMPANY, 'Player'] : COMPANY;
+	return ids.map((id) => findObject(host.world, id)).filter(isLiving);
 }
 
-function goalDone(host:GameHost, id:string):boolean {
-	if (id === HERBALIST.id) {
-		return cotTended(host, 'NollCot');
-	}
-	if (id === CAPTAIN.id) {
-		return cotTended(host, 'LinaCot');
-	}
-	if (id === ALCHEMIST.id) {
-		const alchemist = host.world.findByID(ALCHEMIST.id);
-		return cotTended(host, 'NollCot')
-			&& cotTended(host, 'LinaCot')
-			&& !!alchemist
-			&& !!findCarried(alchemist, (it) => itemMatchesName(it, 'GoldCoin'));
-	}
-	return false;
+function prizeTaken(host:GameHost):boolean {
+	return company(host).some((go) => !!findCarried(go, (it) => itemMatchesName(it, PRIZE)));
 }
 
-function checkBargain(host:GameHost):void {
+function onSpoke(host:GameHost, utterance:SpeechUtterance):void {
+	const speaker = findObject(host.world, utterance.speakerID);
+	const door = host.world.findNamed('SealedDoor');
+	if (!speaker || !door || !ANSWER.test(utterance.text) || distXZ(speaker, door) > ANSWER_REACH) {
+		return;
+	}
+	openDoor(host, 'SealedDoor', 'The riddle is answered. SealedDoor grinds open');
+}
+
+function tickCrypt(host:GameHost):void {
 	if (host.bargainDone) {
 		return;
 	}
-	const herbalist = host.world.findByID(HERBALIST.id);
-	const alchemist = host.world.findByID(ALCHEMIST.id);
-	const captain = host.world.findByID(CAPTAIN.id);
-	if (!herbalist || !alchemist || !captain) {
-		return;
+	if (!isLiving(host.world.findByID(BOSS))) {
+		openDoor(host, 'HoardGate', `The ${BOSS} falls, and HoardGate swings open`);
 	}
-	const gold = !!findCarried(alchemist, (it) => itemMatchesName(it, 'GoldCoin'));
-	if (
-		!cotTended(host, 'NollCot')
-		|| !cotTended(host, 'LinaCot')
-		|| !gold
-		|| !inVault(host, HERBALIST.id)
-		|| !inVault(host, ALCHEMIST.id)
-		|| !inVault(host, CAPTAIN.id)
-	) {
+	if (!prizeTaken(host)) {
 		return;
 	}
 	host.bargainDone = true;
-	host.world.setMessage('The vault holds — Noll and Lina tend, the coin is paid');
-	for (const go of [herbalist, alchemist, captain]) {
+	host.world.setMessage(`The ${PRIZE} is won`);
+	for (const go of company(host)) {
 		const hop = go.getOrAddComponent(Celebrating);
 		hop.until = host.world.time + 48;
 		hop.enabled = true;
@@ -142,13 +180,16 @@ function checkBargain(host:GameHost):void {
 }
 
 export function createDirector(host:GameHost):ArcDirector<CharacterCtx> {
-	host.hooks = { checkBargain, goalDone };
-	return addStatusVerbs(host.configure(new ArcDirector<CharacterCtx>()), host)
+	host.hooks = { checkBargain: tickCrypt, onSpoke, goalDone: (h) => prizeTaken(h) };
+	host.kit = { verbs: [...GAME_VERBS, 'set_status', 'rest', 'attack', 'heal', 'protect', ...Object.keys(ATTACKS)] };
+	return addFightVerbs(addStatusVerbs(host.configure(new ArcDirector<CharacterCtx>()), host), host)
 		.withMindDefaults({ skipHeartbeat: true, skipStrategic: true })
-		.withDefaultKit(host.kit = { verbs: [...GAME_VERBS, 'set_status', 'rest'] })
+		.withDefaultKit(host.kit)
 		.withVerbInstructions(BUILDING_VERB_INSTRUCTIONS)
-		.withNames({ seen: (observer, target) => host.characterOf(target.id)?.persona.identity.role ?? target.id })
-		.addCharacter(withReceived(HERBALIST))
-		.addCharacter(withReceived(ALCHEMIST))
-		.addCharacter(withReceived(CAPTAIN));
+		// Monsters go by what they are; the player is Derek, the company's archer.
+		.withNames({ seen: (observer, target) => (target.id === 'Player' ? 'Derek' : target.id) })
+		.addCharacter(withReceived(KNIGHT))
+		.addCharacter(withReceived(HEALER))
+		.addCharacter(withReceived(WITCH))
+		.addCollective(HORDE);
 }

@@ -13,6 +13,7 @@ import HudMenu from './HudMenu.vue';
 import HudBrief from './HudBrief.vue';
 import HudKeys from './HudKeys.vue';
 import HudToast from './HudToast.vue';
+import HudStats from './HudStats.vue';
 
 defineProps<{
 	hud:HudModel;
@@ -39,6 +40,7 @@ const emit = defineEmits<{
 		<HudBrief :hud="hud" :sceneID="sceneID" />
 		<HudMenu :hud="hud" @scenes="emit('scenes')" />
 		<HudToast :hud="hud" />
+		<HudStats :hud="hud" />
 	</div>
 </template>
 

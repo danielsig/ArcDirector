@@ -1,7 +1,7 @@
 import type { HostWorld, Pose } from 'arc-director';
 import { CharacterMotor } from '../characters/CharacterMotor';
 import { NPCInput } from '../characters/NPCInput';
-import { HumanBody, Interior } from '../engine/components';
+import { HumanBody, Interior, MarketGate, MarketNPC } from '../engine/components';
 import type { GameObject } from '../engine/GameObject';
 import { yawToForward } from '../engine/math';
 import { listCarried, itemMatchesName } from '../items/inventory';
@@ -9,9 +9,9 @@ import { findChestHolding, USE_RANGE } from '../items/pickup';
 import { cellSteps } from '../world/path';
 import type { GameHost } from './adapter';
 import { thiefOf } from './kernels';
-import { findObject } from './names';
-import { doExamine } from './perception';
-import { dropCarried, settleBuy, settleGive, settleSell, takeItem, useOn } from './items';
+import { findObject, idOf } from './names';
+import { doExamine, hostCanSee } from './perception';
+import { dropCarried, settleExchange, settleGive, takeItem, useOn } from './items';
 
 /** How close a character comes to act on something, and to count as there. */
 const REACH = USE_RANGE * 0.55;
@@ -39,12 +39,20 @@ export function gameWorld(host:GameHost):HostWorld<GameObject> {
 		getPathGraph: (character) => cellSteps(host.world, character),
 		getReach: (character, target) => {
 			const room = target.getComponent(Interior);
-			return room ? Math.min(room.maxX - room.minX, room.maxZ - room.minZ) / 2 : REACH;
+			if (room) {
+				return Math.min(room.maxX - room.minX, room.maxZ - room.minZ) / 2;
+			}
+			// Shoppers have to step into the opening. Stopping short leaves them standing in the frame.
+			if (target.getComponent(MarketGate) && character.getComponent(MarketNPC)?.kind === 'customer') {
+				return 0.45;
+			}
+			return REACH;
 		},
 		getDescription: (character, target) => {
 			const seen = doExamine(host.world, character, target);
 			return seen.ok ? seen.reason : undefined;
 		},
+		hasLineOfSight: (from, to) => hostCanSee(host.world, idOf(from), idOf(to)),
 		steerToward: (character, point) => {
 			const npc = character.getComponent(NPCInput);
 			if (npc) {
@@ -54,15 +62,13 @@ export function gameWorld(host:GameHost):HostWorld<GameObject> {
 			const motor = character.getComponent(CharacterMotor);
 			return !!point && !!motor && Math.hypot(point[0] - p.x, point[1] - p.z) <= motor.arriveEpsilon;
 		},
-		moveItem: ({ character, item, to }) => {
+		moveItem: ({ character, item, to, quantity }) => {
 			if (to === undefined) {
 				return dropCarried(character, item);
 			}
-			return to === character ? takeItem(host, character, item) : settleGive(character, to, item, host);
+			return to === character ? takeItem(host, character, item) : settleGive(character, to, item, host, quantity);
 		},
 		useItem: (character, item, target) => useOn(host, character, item, target),
-		trade: ({ character, side, other, item, quantity, price }) => (side === 'buy'
-			? settleBuy(character, other, item, price ?? NaN, host, quantity)
-			: settleSell(character, other, item, price ?? NaN, host, quantity)),
+		exchange: ({ character, other, give, get }) => settleExchange(host, character, other, give, get),
 	};
 }

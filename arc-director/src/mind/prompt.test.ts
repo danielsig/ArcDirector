@@ -15,6 +15,14 @@ describe('prompt split', () => {
 		assert.match(stablePrefix('Forager', {}, verbs), /^You are Forager\.\n/);
 	});
 
+	it('puts a host system note in the prefix, after who the mind is', () => {
+		const system = stablePrefix('Baker', identity, verbs, { systemNote: 'Call recall to read the ledger.' });
+		const role = system.indexOf('Role: Watcher.');
+		const note = system.indexOf('Call recall to read the ledger.');
+		assert.ok(role >= 0 && note > role);
+		assert.equal(stablePrefix('Baker', identity, verbs).includes('ledger'), false);
+	});
+
 	it('puts standing instructions in the system prefix, not goals', () => {
 		const system = stablePrefix('Guard', identity, verbs, { includeWatches: true, canSeeMap: true });
 		assert.match(system, /You are Guard/);

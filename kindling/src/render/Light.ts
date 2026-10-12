@@ -9,6 +9,7 @@ export class Light extends Component {
 	public intensity = 48;
 	public range = 11;
 	public decay = 2;
+	/** Wants a shadow. A point light gets one only while it is among the renderer's nearest `maxPointShadows`. */
 	public castShadow = true;
 	/** Local offset. Z is along Kindling forward (−Z). */
 	public offsetX = 0;
@@ -57,7 +58,7 @@ export class Light extends Component {
 		else {
 			const p = new THREE.PointLight(this.color, this.intensity, this.range, this.decay);
 			p.name = 'castLight';
-			p.castShadow = this.castShadow;
+			p.castShadow = false;
 			p.shadow.mapSize.set(512, 512);
 			p.shadow.bias = -0.001;
 			p.shadow.normalBias = 0.01;
@@ -85,7 +86,12 @@ export class Light extends Component {
 		}
 		lamp.color.setHex(this.color);
 		lamp.intensity = this.intensity;
-		lamp.castShadow = this.castShadow;
+		if (lamp instanceof THREE.PointLight) {
+			lamp.userData.wantsShadow = this.castShadow;
+		}
+		else {
+			lamp.castShadow = this.castShadow;
+		}
 		lamp.visible = this.enabled;
 		lamp.position.set(this.offsetX, this.offsetY, -this.offsetZ);
 		if (lamp instanceof THREE.PointLight) {

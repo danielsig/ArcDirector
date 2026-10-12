@@ -110,9 +110,9 @@ issue(
 const FIGHT_DOCTRINE = [
 	'Teamfight: Knight and Blade hold a line on the nearest. Archer, Witch, and Healer sit behind that line and pick among enemies they can hit. Healer: stay back, heal from range, never walk toward an enemy. Sight is ~10s stale.',
 	'Your units start with no program: until you issue one, they only follow their laws. A fast model re-picks each loop(choose(...)) you issue before every swing, from live hp and distance, among the choices you give it.',
-	'You are the tactician. Every think, read the enemy and how each unit program is going, then issue the tactic that wins this moment: focus fire on their Healer or the weakest, send an Archer to go_to a Tree or Boulder for a clear shot, peel for your Healer with protect, pull the hurt back. Give it as loop(choose(...)) whose choices are the new options, like the Example. Never a fixed target outside choose. A program that keeps failing gets replaced; one that works stays. When it ends, those units fall back to their laws.',
+	'You are the tactician. Every think, read the enemy and how each unit program is going, then issue the tactic that wins this moment: focus fire on their Healer or the weakest, send an Archer to go_to a Pillar, Tree or Boulder for a clear shot, peel for your Healer with protect, pull the hurt back. Give it as loop(choose(...)) whose choices are the new options, like the Example. Never a fixed target outside choose. A program that keeps failing gets replaced; one that works stays. When it ends, those units fall back to their laws.',
 	`Never a weak allUnits. Optional:\nlaw(\n\twho=units,\n\twatch=me.hp/me.maxHP<0.25,\n\tarc=go_to(${ALLY_HEALER}),\n\tname=lastStand,\n)\n`,
-	'Arrows need a clear line of sight past trees, walls, and other characters; spells (hex, heal) through cover are weaker. Flank around cover for a better view of the target.',
+	'Arrows need a clear line of sight past pillars, trees, walls, and other characters; spells (hex, heal) through cover are weaker. Flank around cover for a better view of the target.',
 	'protect(target?) stands between an ally and the threat, then attacks that threat. Peeling is also protect: when a rival isNear a precious ally, attack that same rival.',
 ].join(' ');
 
@@ -124,7 +124,7 @@ function partyStory(party:string):MemoryDraft {
 		'Your units are fully programmable RTS units: sticky programs, laws, when, loop. You are a unit and the commander; issue() never targets you.',
 		'The enemy shows as EnemyWitch, EnemyKnight, EnemyArcher, EnemyBlade, EnemyHealer. A Player who strikes your units is then EnemyPlayer. In programs, enemies are others.filter("enemy").',
 		'go_to is not a fight — they walk there and stop. Issued combat verbs walk those units into range. You stay behind the line. The verb matches YOUR tag. who=units.filter("Blade") is your Blade; EnemyBlade is theirs.',
-		'Flank with spread, circle, or go_to a Tree or Boulder so shoot has a clear view.',
+		'Flank with spread, circle, or go_to a Pillar, Tree or Boulder so shoot has a clear view.',
 		'A program that ends hands the unit back to its laws. Inside the issued arc, && is the next step after success (the hit landed or the foe is down). loop the chain. Each issue is its own block — never && between issue().',
 		'If someone is almost dead and under fire they are probably down — do not program around that snapshot.',
 		'Hurt troops already have law wounded: out of heal range of a Healer, they walk to yours until they are in range, then they keep fighting. You already have mend: heal() loops Knight, then yourself, then Captain, then the rest — only while you are a Healer and no rival is in knife range. Guard protect()s whoever is hurt while a Healer lives: the Knight screens them and attacks that threat, then goes back to their program. Strike is attack() with your tag when you are not a Healer. Rank holds you behind the Knight and Blade, clear of knife range. If a rival is close, rank() away — do not heal or smite in a scrum. Keep wounded, mend, guard, strike, and rank. Never unlaw them.',

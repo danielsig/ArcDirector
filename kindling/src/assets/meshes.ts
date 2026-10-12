@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { ToonMaterial } from '../render/ToonMaterial.js';
 
 export type MeshFactory = ()=>THREE.Object3D | undefined;
 
@@ -16,23 +17,19 @@ export function create(meshID:string):THREE.Object3D | undefined {
 	return factories.get(meshID)?.();
 }
 
-function std(color:number):THREE.MeshStandardMaterial {
-	return new THREE.MeshStandardMaterial({
-		color,
-		roughness: 0.88,
-		metalness: 0.04,
-	});
+function toon(color:number):ToonMaterial {
+	return new ToonMaterial({ color });
 }
 
 export function proceduralBox(color = 0xc9b48a):THREE.Mesh {
-	const mesh = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1), std(color));
+	const mesh = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1), toon(color));
 	mesh.castShadow = true;
 	mesh.receiveShadow = true;
 	return mesh;
 }
 
 export function proceduralPlane(color = 0x3a414d, size = 24):THREE.Mesh {
-	const mesh = new THREE.Mesh(new THREE.PlaneGeometry(size, size), std(color));
+	const mesh = new THREE.Mesh(new THREE.PlaneGeometry(size, size), toon(color));
 	mesh.rotation.x = -Math.PI / 2;
 	mesh.receiveShadow = true;
 	return mesh;

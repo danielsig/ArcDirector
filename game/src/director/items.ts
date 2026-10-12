@@ -1,4 +1,4 @@
-import { pascalCase, type ArcResult, type Outcome } from 'arc-director';
+import { bundleText, pascalCase, type ArcResult, type Outcome } from 'arc-director';
 import {
 	BODY_SLOTS,
 	Bridge,
@@ -9,16 +9,13 @@ import {
 	HumanSprite,
 	Lock,
 	MarketNPC,
-	Merchant,
 	Named,
 } from '../engine/components';
 import type { GameObject } from '../engine/GameObject';
 import { Harvest, Pickupable } from '../items/components';
-import { getDef } from '../items/defs';
 import {
 	characterIs,
 	compactName,
-	distXZ,
 	findCarried,
 	itemMatchesName,
 	removeFromBags,
@@ -26,12 +23,24 @@ import {
 	tryInsert,
 } from '../items/inventory';
 import { cloneItem, type ItemInstance } from '../items/instance';
-import { coinsOf, findSaleItem, noteWant, priceFor, transferCoins } from '../items/wallet';
-import { dropItem, findChestHolding, pickup, takeFromChest, USE_RANGE } from '../items/pickup';
+import { coinsOf, noteWant, transferCoins } from '../items/wallet';
+import { dropItem, findChestHolding, pickup, takeFromChest } from '../items/pickup';
 import { cueAt } from '../audio/cue';
 import { useItem } from '../items/use';
 import type { GameHost } from './adapter';
+import { ledgerQty, noteLedger } from './ledger';
 import { idOf } from './names';
+
+/** The want is met, and the tag that would send them back for the same good comes off. */
+function dropBoughtTag(host:GameHost, buyer:GameObject, label:string):void {
+	noteWant(buyer, label);
+	const mind = host.arc?.character(idOf(buyer));
+	if (!mind) {
+		return;
+	}
+	const key = compactName(label);
+	mind.tags = mind.tags.filter((tag) => compactName(tag) !== key);
+}
 
 /** The game's item rules: what may change hands, how, and what everyone hears about it. NPCs reach them through `withWorld`, the player through slash commands. */
 
@@ -170,61 +179,37 @@ export function restoreSome(character:GameObject, taken:ItemInstance, original:I
 	original.count += taken.count;
 }
 
-/** "Bread" or "3 Bread". */
-function countedLabel(item:ItemInstance):string {
-	const label = pascalCase(item.name) || item.name;
-	return item.count > 1 ? `${item.count} ${label}` : label;
-}
-
-export function tooFar(character:GameObject, target:GameObject, name:string):string | null {
-	if (distXZ(character, target) > USE_RANGE) {
-		return `too far — go closer to ${name}`;
-	}
-	return null;
-}
-
-function purseGoldAmount():number {
-	return getDef('fire_mushroom').components.Goods?.ask ?? 3;
-}
-
-export function settleGive(from:GameObject, to:GameObject, itemName:string, host:GameHost):ArcResult {
+export function settleGive(from:GameObject, to:GameObject, itemName:string, host:GameHost, quantity = 1):ArcResult {
 	if (to === from) {
 		return { ok: false, verb: 'give', reason: 'cannot give to yourself' };
 	}
+	const count = Math.max(1, Math.floor(quantity) || 1);
 	if (compactName(itemName) === 'gold' && !findItem(from, itemName)) {
-		return settlePay(from, to, purseGoldAmount(), host);
+		return settlePay(from, to, count, host);
 	}
 	const item = findItem(from, itemName);
 	if (!item) {
 		return { ok: false, verb: 'give', reason: `not carrying ${itemName}` };
 	}
-	const gift = takeSome(from, item);
-	if (!tryInsert(to, gift)) {
-		const followedID = from.getComponent(Companion)?.targetID;
-		if (to.id === 'Player' || idOf(to) === followedID) {
-			dropItem(to, gift);
-			const label = pascalCase(gift.name) || gift.name;
-			const t = from.world?.time ?? 0;
-			from.getComponent(HumanSprite)?.playClip('give', t);
-			to.getComponent(HumanSprite)?.playClip('take', t);
-			cueAt(from.world, 'give', from);
-			host.arc?.pushEvent({ kind: 'Given', text: `{0} gave ${label} to {1}`, who: [idOf(from), idOf(to)], tags: ['give', label], major: false });
-			return {
-				ok: true,
-				verb: 'give',
-				reason: `gave ${label} to ${idOf(to)} (left at their feet — no room)`,
-			};
+	if (item.count < count) {
+		return { ok: false, verb: 'give', reason: `carrying only ${item.count} ${itemName}` };
+	}
+	const gift = takeSome(from, item, count);
+	const roomless = !tryInsert(to, gift);
+	if (roomless) {
+		// The player and whoever a companion follows get it at their feet; anyone else refuses.
+		if (to.id !== 'Player' && idOf(to) !== from.getComponent(Companion)?.targetID) {
+			restoreSome(from, gift, item);
+			return { ok: false, verb: 'give', reason: `${idOf(to)} has no room` };
 		}
-		restoreSome(from, gift, item);
-		return { ok: false, verb: 'give', reason: `${idOf(to)} has no room` };
+		dropItem(to, gift);
 	}
 	const label = pascalCase(gift.name) || gift.name;
-	const t = from.world?.time ?? 0;
-	from.getComponent(HumanSprite)?.playClip('give', t);
-	to.getComponent(HumanSprite)?.playClip('take', t);
-	cueAt(from.world, 'give', from);
-	host.arc?.pushEvent({ kind: 'Given', text: `{0} gave ${label} to {1}`, who: [idOf(from), idOf(to)], tags: ['give', label], major: false });
-	return { ok: true, verb: 'give', reason: `gave ${label} to ${idOf(to)}` };
+	playHandoff(from, to);
+	const fromID = idOf(from);
+	const toID = idOf(to);
+	noteLedger(host, `${fromID} gave ${ledgerQty(gift.count, label)} to ${toID}.`, [fromID, toID], ['give', label, fromID, toID]);
+	return { ok: true, verb: 'give', reason: `gave ${label} to ${toID}${roomless ? ' (left at their feet — no room)' : ''}` };
 }
 
 export function settlePay(from:GameObject, to:GameObject, amount:number, host:GameHost):ArcResult {
@@ -235,122 +220,85 @@ export function settlePay(from:GameObject, to:GameObject, amount:number, host:Ga
 	if (err) {
 		return { ok: false, verb: 'give', reason: err };
 	}
+	playHandoff(from, to);
+	const fromID = idOf(from);
+	const toID = idOf(to);
+	noteLedger(host, `${fromID} paid ${amount} gold to ${toID}.`, [fromID, toID], ['pay', 'gold', fromID, toID]);
+	return { ok: true, verb: 'give', reason: `gave ${amount} gold to ${toID}` };
+}
+
+function playHandoff(from:GameObject, to:GameObject):void {
 	const t = from.world?.time ?? 0;
 	from.getComponent(HumanSprite)?.playClip('give', t);
 	to.getComponent(HumanSprite)?.playClip('take', t);
 	cueAt(from.world, 'give', from);
-	host.arc?.pushEvent({ kind: 'Given', text: `{0} gave ${amount} gold to {1}`, who: [idOf(from), idOf(to)], tags: ['give', 'gold'], major: false });
-	return { ok: true, verb: 'give', reason: `gave ${amount} gold to ${idOf(to)}` };
 }
 
-export function settleBuy(
-	buyer:GameObject,
-	seller:GameObject,
-	itemName:string,
-	offer:number,
-	host:GameHost,
-	quantity = 1,
-):ArcResult {
-	const fromName = idOf(seller);
-	const stock = findSaleItem(seller, itemName);
-	if (!stock) {
-		return { ok: false, verb: 'buy', reason: `${fromName} has no ${itemName}` };
-	}
-	if (stock.count < quantity) {
-		return { ok: false, verb: 'buy', reason: `${fromName} has only ${stock.count} ${itemName}` };
-	}
-	const buyerID = idOf(buyer);
-	const quote = priceFor(seller, stock, buyerID);
-	if (!quote) {
-		return { ok: false, verb: 'buy', reason: `${itemName} is not for sale` };
-	}
-	const offered = Number.isFinite(offer);
-	let price = (quote.agreed ?? quote.ask) * quantity;
-	if (offered) {
-		const floor = quote.floor * quantity;
-		if (offer + 1e-6 < floor) {
-			return { ok: false, verb: 'buy', reason: `${fromName} will not go below ${floor} gold${quantity > 1 ? ` for ${quantity}` : ''}` };
+/** Move every entry of `bundle`, pushing how to put each back onto `undo`. `whose` names `from` in a refusal: `you have`, `Baker has`. */
+function moveBundle(from:GameObject, to:GameObject, bundle:Record<string, number>, whose:string, undo:Array<()=>void>):string | null {
+	for (const [name, count] of Object.entries(bundle)) {
+		if (count <= 0) {
+			continue;
 		}
-		price = Math.floor(offer);
+		if (compactName(name) === 'gold') {
+			const have = coinsOf(from);
+			if (have < count) {
+				return `${whose} only ${have} gold`;
+			}
+			transferCoins(from, to, count);
+			undo.push(() => {
+				transferCoins(to, from, count);
+			});
+			continue;
+		}
+		const stock = findItem(from, name);
+		if (!stock || stock.count < count) {
+			return stock ? `${whose} only ${stock.count} ${name}` : `${whose} no ${name}`;
+		}
+		const gift = takeSome(from, stock, count);
+		if (!tryInsert(to, gift)) {
+			restoreSome(from, gift, stock);
+			return `${idOf(to)} has no room`;
+		}
+		undo.push(() => {
+			const held = findItem(to, name);
+			if (held) {
+				const back = takeSome(to, held, Math.min(count, held.count));
+				if (!tryInsert(from, back)) {
+					dropItem(from, back);
+				}
+			}
+		});
 	}
-	const err = transferCoins(buyer, seller, price);
-	if (err) {
-		return { ok: false, verb: 'buy', reason: err };
-	}
-	const gift = takeSome(seller, stock, quantity);
-	if (!tryInsert(buyer, gift)) {
-		restoreSome(seller, gift, stock);
-		transferCoins(seller, buyer, price);
-		return { ok: false, verb: 'buy', reason: 'no room' };
-	}
-	const shop = seller.getComponent(Merchant);
-	if (shop) {
-		delete shop.deals[buyerID];
-	}
-	const label = pascalCase(gift.name) || gift.name;
-	const counted = countedLabel(gift);
-	const t = buyer.world?.time ?? 0;
-	buyer.getComponent(HumanSprite)?.playClip('take', t);
-	seller.getComponent(HumanSprite)?.playClip('give', t);
-	cueAt(seller.world, 'give', seller);
-	if (price > 0) {
-		host.arc?.pushEvent({ kind: 'Bought', text: `{0} bought ${counted} from {1} for ${price} gold`, who: [idOf(buyer), idOf(seller)], tags: ['buy', label], major: false });
-	}
-	noteWant(buyer, label);
-	return { ok: true, verb: 'buy', reason: `bought ${counted} from ${fromName} for ${price} gold` };
+	return null;
 }
 
-export function settleSell(
-	seller:GameObject,
-	buyer:GameObject,
-	itemName:string,
-	ask:number,
-	host:GameHost,
-	quantity = 1,
-):ArcResult {
-	const toName = idOf(buyer);
-	const stock = findSaleItem(seller, itemName) ?? findItem(seller, itemName);
-	if (!stock) {
-		return { ok: false, verb: 'sell', reason: `not carrying ${itemName}` };
-	}
-	if (stock.count < quantity) {
-		return { ok: false, verb: 'sell', reason: `carrying only ${stock.count} ${itemName}` };
-	}
-	const quote = priceFor(seller, stock, toName);
-	const unit = quote?.ask ?? quote?.floor;
-	const price = Number.isFinite(ask) ? Math.floor(ask) : unit === undefined ? undefined : unit * quantity;
-	if (price === undefined || price <= 0) {
-		return { ok: false, verb: 'sell', reason: `${itemName} has no price — name an ask` };
-	}
-	const npc = buyer.getComponent(MarketNPC);
-	if (npc && npc.wants.length > 0) {
-		const want = npc.wants.some((w) => compactName(w) === compactName(itemName));
-		if (!want && toName !== 'Player') {
-			return { ok: false, verb: 'sell', reason: `${toName} does not want ${itemName}` };
-		}
-	}
-	if (coinsOf(buyer) < price) {
-		return { ok: false, verb: 'sell', reason: `${toName} has only ${coinsOf(buyer)} gold` };
-	}
-	const err = transferCoins(buyer, seller, price);
+/** `character` took `other`'s offer: `give` and `get` change hands at once, or nothing moves. */
+export function settleExchange(host:GameHost, character:GameObject, other:GameObject, give:Record<string, number>, get:Record<string, number>):Outcome {
+	const undo:Array<()=>void> = [];
+	const otherID = idOf(other);
+	const err = moveBundle(character, other, give, 'you have', undo) ?? moveBundle(other, character, get, `${otherID} has`, undo);
 	if (err) {
-		return { ok: false, verb: 'sell', reason: err };
+		for (const step of undo.reverse()) {
+			step();
+		}
+		return { ok: false, reason: err };
 	}
-	const gift = takeSome(seller, stock, quantity);
-	if (!tryInsert(buyer, gift)) {
-		restoreSome(seller, gift, stock);
-		transferCoins(seller, buyer, price);
-		return { ok: false, verb: 'sell', reason: `${toName} has no room` };
+	playHandoff(character, other);
+	for (const name of Object.keys(get)) {
+		dropBoughtTag(host, character, name);
 	}
-	const label = pascalCase(gift.name) || gift.name;
-	const counted = countedLabel(gift);
-	const t = seller.world?.time ?? 0;
-	seller.getComponent(HumanSprite)?.playClip('give', t);
-	buyer.getComponent(HumanSprite)?.playClip('take', t);
-	cueAt(seller.world, 'give', seller);
-	if (price > 0) {
-		host.arc?.pushEvent({ kind: 'Bought', text: `{0} bought ${counted} from {1} for ${price} gold`, who: [idOf(buyer), idOf(seller)], tags: ['buy', label], major: false });
+	for (const name of Object.keys(give)) {
+		dropBoughtTag(host, other, name);
 	}
-	noteWant(buyer, label);
-	return { ok: true, verb: 'sell', reason: `sold ${counted} to ${toName} for ${price} gold` };
+	const characterID = idOf(character);
+	const goods = (bundle:Record<string, number>):string => Object.entries(bundle).map(([name, n]) => ledgerQty(n, name)).join(' and ');
+	const label = [...Object.keys(get), ...Object.keys(give)].find((name) => compactName(name) !== 'gold') ?? 'gold';
+	noteLedger(
+		host,
+		`${characterID} traded ${goods(give)} to ${otherID} for ${goods(get)}.`,
+		[characterID, otherID],
+		['trade', label, characterID, otherID],
+	);
+	return { ok: true, reason: `traded ${bundleText(give)} for ${bundleText(get)} with ${otherID}` };
 }

@@ -79,7 +79,7 @@ export class MeshRenderer extends Component {
 		}
 		const hex = this.color;
 		root.traverse((o) => {
-			if (!(o instanceof THREE.Mesh)) {
+			if (!(o instanceof THREE.Mesh) || o.userData.lockColor === true) {
 				return;
 			}
 			const mats = Array.isArray(o.material) ? o.material : [o.material];

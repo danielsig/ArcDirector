@@ -1,7 +1,7 @@
 import { createFilterChain, createReverbSend, filterProblems, openScoreFilters } from './filters.js';
 import { scoreProblems } from './midi.js';
-import { distanceGain, forceStereo, makePanner, placePanner, poseListener } from './spatial.js';
-import { makeNoise, playLayer, playVoiceNote, startLoopLayers, type LoopNodes } from './synth.js';
+import { distanceGain, forceStereo, heardAt, makePanner, placePanner, poseListener } from './spatial.js';
+import { makeNoise, patchSeconds, playLayer, playVoiceNote, startLoopLayers, type LoopNodes } from './synth.js';
 import type { ListenerPose, Score, SfxOpts, SfxPatch } from './types.js';
 
 function audioCtor():(new (opts?:AudioContextOptions)=>AudioContext) | undefined {
@@ -139,6 +139,8 @@ export class Audio {
 	private _musicHold = 0;
 	private _musicPaused = false;
 	private _listener:ListenerPose = { x: 0, y: 0, z: 0, yaw: 0 };
+	/** Where distance falloff is measured from; the listener unless `setListener` says otherwise. */
+	private _falloffFrom = { x: 0, y: 0, z: 0 };
 	private _unlocks:Array<()=>void> = [];
 	private _lastMix = '';
 	private _scheduled = new Set<string>();
@@ -462,17 +464,13 @@ export class Audio {
 		this._voiceDest = null;
 	}
 
-	private insertPatchFilters(ctx:AudioContext, dest:AudioNode, patch:SfxPatch, when:number):AudioNode {
+	private insertPatchFilters(ctx:AudioContext, dest:AudioNode, patch:SfxPatch, when:number, seconds:number):AudioNode {
 		if (!patch.filters || patch.filters.length === 0) {
 			return dest;
 		}
 		const chain = createFilterChain(ctx, patch.filters);
 		chain.output.connect(dest);
-		let hold = 0.2;
-		for (const layer of patch.layers) {
-			hold = Math.max(hold, (layer.when ?? 0) + layer.dur);
-		}
-		const due = when + hold + 1.6;
+		const due = when + Math.max(0.2, seconds) + 1.6;
 		const fire = ():void => {
 			if (ctx.state === 'closed') {
 				return;
@@ -660,11 +658,12 @@ export class Audio {
 		opts:SfxOpts,
 	):void {
 		const when = ctx.currentTime + 0.01;
-		const placed = this.spatialize(ctx, bus, opts, when);
+		const seconds = patchSeconds(patch, opts.dur);
+		const placed = this.spatialize(ctx, bus, opts, when, seconds);
 		if (!placed) {
 			return;
 		}
-		const dest = this.insertPatchFilters(ctx, placed, patch, when);
+		const dest = this.insertPatchFilters(ctx, placed, patch, when, seconds);
 		const g = (patch.gain ?? 1) * (opts.gain ?? 1);
 		for (const layer of patch.layers) {
 			playLayer(ctx, dest, noise, layer, when, { ...opts, gain: g });
@@ -719,8 +718,14 @@ export class Audio {
 		}
 	}
 
-	public setListener(x:number, y:number, z:number, yaw = 0):void {
+	/**
+	 * Where sounds are heard from: `x`, `y`, `z` facing `yaw` sets their direction (a camera, say).
+	 * Loudness falls off with distance from `falloffFrom` when given (the player the camera
+	 * follows), otherwise from the listener itself.
+	 */
+	public setListener(x:number, y:number, z:number, yaw = 0, falloffFrom?:{ x:number; y:number; z:number }):void {
 		this._listener = { x, y, z, yaw };
+		this._falloffFrom = falloffFrom ? { x: falloffFrom.x, y: falloffFrom.y, z: falloffFrom.z } : { x, y, z };
 	}
 
 	/** Schedule upcoming notes and spatialize loops. The mixer calls this itself in the browser; call it from tests / headless. */
@@ -763,7 +768,7 @@ export class Audio {
 		if (!ctx || !this._noise || ctx.state !== 'running') {
 			return;
 		}
-		const l = this._listener;
+		const ears = this._falloffFrom;
 		for (const loop of this._loops.values()) {
 			if (!isScore(loop.src) || !loop.local) {
 				continue;
@@ -774,7 +779,7 @@ export class Audio {
 				loop.pruneCycle = -1;
 				loop.clockDirty = false;
 			}
-			const dist = Math.hypot(loop.x - l.x, loop.y - l.y, loop.z - l.z);
+			const dist = Math.hypot(loop.x - ears.x, loop.y - ears.y, loop.z - ears.z);
 			const dest = dist > loop.hear ? null : loop.local;
 			loop.pruneCycle = this.pumpScoreNotes(
 				loop.src,
@@ -1239,13 +1244,14 @@ export class Audio {
 		const now = ctx.currentTime;
 		poseListener(ctx, this._listener, now);
 		for (const loop of this._loops.values()) {
-			const dx = loop.x - this._listener.x;
-			const dy = loop.y - this._listener.y;
-			const dz = loop.z - this._listener.z;
+			const dx = loop.x - this._falloffFrom.x;
+			const dy = loop.y - this._falloffFrom.y;
+			const dz = loop.z - this._falloffFrom.z;
 			const dist = Math.hypot(dx, dy, dz);
 			const extra = isScore(loop.src) ? (loop.src.gain ?? 1) : 1;
 			const gain = dist > loop.hear ? 0.0001 : loop.userGain * extra * distanceGain(dist, loop.falloff);
-			placePanner(loop.panner, loop.x, loop.y, loop.z, now, true);
+			const at = heardAt(this._listener, loop.x, loop.z);
+			placePanner(loop.panner, at.x, at.y, at.z, now, true);
 			loop.panner.maxDistance = Math.max(2, loop.hear);
 			loop.dist.gain.setTargetAtTime(Math.max(0.0001, gain), now, 0.08);
 		}
@@ -1256,27 +1262,31 @@ export class Audio {
 		bus:AudioNode,
 		opts:SfxOpts,
 		when:number,
+		seconds:number,
 	):AudioNode | null {
 		if (opts.x === undefined || opts.z === undefined) {
 			return bus;
 		}
 		const l = this._listener;
 		const hear = opts.hear ?? HEAR;
-		const dx = opts.x - l.x;
-		const dy = (opts.y ?? 0) - l.y;
-		const dz = opts.z - l.z;
+		const ears = this._falloffFrom;
+		const dx = opts.x - ears.x;
+		const dy = (opts.y ?? 0) - ears.y;
+		const dz = opts.z - ears.z;
 		const dist = Math.hypot(dx, dy, dz);
 		if (dist > hear) {
 			return null;
 		}
 		poseListener(ctx, this._listener, when);
 		const panner = makePanner(ctx, hear);
-		placePanner(panner, opts.x, opts.y ?? 0, opts.z, when, false);
+		const at = heardAt(l, opts.x, opts.z);
+		placePanner(panner, at.x, at.y, at.z, when, false);
 		const g = ctx.createGain();
 		g.gain.value = distanceGain(dist, opts.falloff ?? 0.16);
 		panner.connect(g);
 		g.connect(bus);
-		const hold = 2.8;
+		// Held as long as the sound plays (speech runs for seconds), with room for its release.
+		const hold = seconds + 1;
 		setTimeout(() => {
 			try {
 				panner.disconnect();

@@ -7,7 +7,14 @@ import { argBase, GROUP_VERB, type VerbRegistry } from './stock-verbs.js';
  */
 export type Join = 'if_ok' | 'always' | 'if_failed';
 
-export type StepArg = string | number | boolean | string[] | Arc;
+/** How many of each item. `gold` is purse gold. */
+export type CountMap = Record<string, number>;
+
+export function isCountMap(v:unknown):v is CountMap {
+	return isRecord(v) && Object.values(v).every((n) => typeof n === 'number' && Number.isFinite(n));
+}
+
+export type StepArg = string | number | boolean | string[] | CountMap | Arc;
 
 export type Step = {
 	verb:string;
@@ -94,7 +101,16 @@ export function eachStep(arc:Arc, verbs:VerbRegistry, visit:(step:Step, verbs:Ve
 	}
 }
 
-/** `arc` with each text arg rewritten by `map(text, kind)`, `kind` being the arg's kind without its `?`. Arcs inside are walked, never rewritten whole. */
+function mapCountMap(row:CountMap, map:(text:string, kind:string)=>string):CountMap {
+	const out:CountMap = {};
+	for (const [name, count] of Object.entries(row)) {
+		const id = map(name, 'id');
+		out[id] = (out[id] ?? 0) + count;
+	}
+	return out;
+}
+
+/** `arc` with each text arg rewritten by `map(text, kind)`, `kind` being the arg's kind without its `?`. Arcs inside are walked, never rewritten whole. Bundle keys are item ids. */
 export function mapArgs(arc:Arc, verbs:VerbRegistry, map:(text:string, kind:string)=>string):Arc {
 	return arc.map((step) => {
 		const kinds = verbs.get(step.verb)?.args ?? {};
@@ -106,6 +122,9 @@ export function mapArgs(arc:Arc, verbs:VerbRegistry, map:(text:string, kind:stri
 			}
 			else if (typeof value === 'string') {
 				args[key] = map(value, argBase(kinds[key]));
+			}
+			else if (isCountMap(value)) {
+				args[key] = mapCountMap(value, map);
 			}
 		}
 		return { ...step, args };

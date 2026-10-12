@@ -1,8 +1,7 @@
 import * as THREE from 'three';
 import type { World } from '../engine/World';
-import { applyWorldBrickUVs } from './rocksAtlas';
-import { getSheet, tileMaterial } from './spritesheet';
-import { getNature, grassLookMat, GRASS_UV_REP, GRASS_Y } from './nature';
+import { meadowMat } from './toon';
+import { GRASS_Y } from './nature';
 
 const OUTER = 96;
 /** Pull the outer lawn under the perimeter walls so the sky cannot show at the base. */
@@ -13,38 +12,9 @@ function mapBounds(world:World):{ minX:number; maxX:number; minZ:number; maxZ:nu
 	return { minX, maxX, minZ, maxZ, cx: (minX + maxX) * 0.5, cz: (minZ + maxZ) * 0.5 };
 }
 
-function stoneMat():THREE.MeshStandardMaterial {
-	const maps = getSheet().wallTiles[0];
-	const mat = tileMaterial(maps.map, {
-		normalMap: maps.nrm,
-		shadowSide: THREE.FrontSide,
-	});
-	applyWorldBrickUVs(mat);
-	return mat;
-}
-
-function lawnMat():THREE.Material {
-	try {
-		return grassLookMat(getNature().grass);
-	}
-	catch {
-		return stoneMat();
-	}
-}
-
-function applyWorldGrassUVs(geo:THREE.BufferGeometry, cx:number, cz:number):void {
-	const pos = geo.getAttribute('position');
-	const uv = geo.getAttribute('uv');
-	for (let i = 0; i < pos.count; i++) {
-		uv.setXY(i, (cx + pos.getX(i)) / GRASS_UV_REP, (cz + pos.getZ(i)) / GRASS_UV_REP);
-	}
-	uv.needsUpdate = true;
-}
-
 function groundStrip(mat:THREE.Material, x:number, z:number, w:number, d:number):THREE.Mesh {
 	const geo = new THREE.PlaneGeometry(Math.max(w, 0.01), Math.max(d, 0.01));
 	geo.rotateX(-Math.PI / 2);
-	applyWorldGrassUVs(geo, x, z);
 	const mesh = new THREE.Mesh(geo, mat);
 	mesh.position.set(x, GRASS_Y, z);
 	mesh.receiveShadow = true;
@@ -55,7 +25,7 @@ function groundStrip(mat:THREE.Material, x:number, z:number, w:number, d:number)
 
 /** Grass around the map (no blades). Tucks under the outer walls so the sky cannot leak through. */
 export function createGroundBox(world:World):THREE.Group {
-	const mat = lawnMat();
+	const mat = meadowMat();
 	const g = new THREE.Group();
 	g.name = 'groundBox';
 	const b = mapBounds(world);

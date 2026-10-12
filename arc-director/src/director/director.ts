@@ -88,6 +88,7 @@ import {
 import { ModelRegistry, type EmbeddingSpec, type InferenceSource, type LiveModel, type ModelSpec } from './models.js';
 import { geometryKernels, wayBlocked } from '../world/kernels.js';
 import { Mover } from '../world/mover.js';
+import { OfferBook, offerText, type Offer } from '../world/offers.js';
 import { poseOf } from '../world/lookup.js';
 import type { HostWorld, Pose, Vec } from '../world/types.js';
 import { centroid, distance } from '../world/vec.js';
@@ -176,6 +177,8 @@ type Row<TSpec, TRunner> = {
 export type CastJSON = {
 	characters:Record<string, CharacterJSON>;
 	collectives:Record<string, CollectiveJSON>;
+	/** Every open offer; none when no one offers anything. */
+	offers?:Offer[];
 };
 
 function nowMs():number {
@@ -215,6 +218,8 @@ export class ArcDirector<TCtx = unknown> {
 	private _verbGate:VerbGate<TCtx> | undefined;
 	private readonly _waits = new Set<Wait>();
 	private _world:HostWorld<unknown> | undefined;
+	/** Every open offer, standing ones and ones to someone. Saved with the cast. */
+	public readonly offers = new OfferBook();
 	/** Stock world verbs, bound at `start()` for the parts `withWorld` has. A host handler of the same name wins. */
 	private readonly _stockHandlers = new Map<string, VerbHandler<TCtx>>();
 	private _mover = new Mover(undefined, () => this._clock);
@@ -223,7 +228,6 @@ export class ArcDirector<TCtx = unknown> {
 	private _stalledFn:((result:ArcResult)=>boolean) | undefined;
 	private _senses:Record<string, Sense<TCtx>> = {};
 	private _tools:Record<string, ToolSpec<TCtx>> = {};
-	private _losFn:((aID:string, bID:string)=>boolean) | undefined;
 	private _sightLook:((ctx:TCtx)=>Sight) | undefined;
 	private _sightLimitDefault:number | undefined;
 	private _sightUnitName:string | undefined;
@@ -255,6 +259,7 @@ export class ArcDirector<TCtx = unknown> {
 	private _thinkInstructions:ThinkInstructions | undefined;
 	private _verbInstructions:string | undefined;
 	private _arcExample:string | undefined;
+	private _systemNote:string | undefined;
 	private _repairTemperature:number | undefined;
 	private _seenFn:SeenName<TCtx> | undefined;
 	private _mindDefaults:MindSettings = {};
@@ -511,6 +516,13 @@ ${dump.message}`, image: dump.image });
 		return this;
 	}
 
+	/** One sentence in every mind's system prefix, after who it is. */
+	public withSystemNote(text:string):this {
+		this.assertBuilder();
+		this._systemNote = text;
+		return this;
+	}
+
 	/**
 	 * Repair turns after a bad arc. `retries` is how many (default 0: a bad reply fails the think).
 	 * `temperature` applies from the second repair on, so a model stuck on one reply moves (default 0.4).
@@ -564,18 +576,12 @@ ${dump.message}`, image: dump.image });
 
 	/**
 	 * The game's world: where things are, how characters move, and how items, uses, looks, and trades work.
-	 * Runs the stock world verbs (`go_to`, `pick_up`, `buy`, …) and the watch geometry. `TEntity` is the
+	 * Runs the stock world verbs (`go_to`, `pick_up`, `offer`, …) and the watch geometry. `TEntity` is the
 	 * game's own type for things in its world; every part but `find` receives one. See `HostWorld`.
 	 */
 	public withWorld<TEntity>(world:HostWorld<TEntity>):this {
 		this.assertBuilder();
 		this._world = world;
-		return this;
-	}
-
-	public withLineOfSight(fn:(aID:string, bID:string)=>boolean):this {
-		this.assertBuilder();
-		this._losFn = fn;
 		return this;
 	}
 
@@ -1039,8 +1045,8 @@ ${dump.message}`, image: dump.image });
 		this._queue = this.resolveQueue();
 		await this.connectInference();
 		if (!this.talk && this._talkSense) {
-			const sense:TalkSense = this._losFn
-				? { ...this._talkSense, canSee: (a, b) => this._losFn!(a, b) }
+			const sense:TalkSense = this._world?.hasLineOfSight
+				? { ...this._talkSense, canSee: (a, b) => this.inLineOfSight(a, b) }
 				: this._talkSense;
 			this.talk = new TalkNet(sense, this._onSpoke, this._talkConfig);
 		}
@@ -1064,12 +1070,73 @@ ${dump.message}`, image: dump.image });
 			now: () => this._clock,
 			seen: (call) => (this._sightLook ? this.filterSight(this._sightLook(call.ctx)).objects.map((o) => o.id) : []),
 			nearRadius: (call) => (this._kernelFn ? this.kernelsFor(call.character, call.ctx).nearRadius : undefined),
+			offers: () => this.liveOffers(),
+			canOffer: (fromID, toID) => this.canOffer(fromID, toID),
+			tell: (id, event) => {
+				const character = this.character(id);
+				const owner = character?.collective ?? (character?.mind ? character : null);
+				if (owner) {
+					this.talkMindOf(owner).pushEvent(event);
+				}
+			},
 		});
 		for (const [verb, handler] of Object.entries(handlers)) {
 			if (missingParts(verb, this._world).length === 0) {
 				this._stockHandlers.set(verb, handler as VerbHandler<TCtx>);
 			}
 		}
+	}
+
+	/** Whether character `fromID` may make an offer to `toID`: the host's `canOffer`, else in its sight, else in its line of sight, else yes. */
+	private canOffer(fromID:string, toID:string):boolean {
+		const world = this._world;
+		if (world?.canOffer) {
+			const from = world.find(fromID);
+			const to = world.find(toID);
+			return from !== undefined && to !== undefined && world.canOffer(from, to);
+		}
+		const ctx = this._sightLook ? this.tryCtx(fromID) : undefined;
+		if (ctx !== undefined) {
+			return this.filterSight(this._sightLook!(ctx)).objects.some((o) => o.id === toID);
+		}
+		return this.inLineOfSight(fromID, toID);
+	}
+
+	/** Whether `fromID` can see `toID`. No `hasLineOfSight` means yes. A missing entity means no. */
+	private inLineOfSight(fromID:string, toID:string):boolean {
+		const world = this._world;
+		if (!world?.hasLineOfSight) {
+			return true;
+		}
+		const from = world.find(fromID);
+		const to = world.find(toID);
+		return from !== undefined && to !== undefined && world.hasLineOfSight(from, to);
+	}
+
+	/** The offer book, without offers to someone their maker may no longer make. */
+	private liveOffers():OfferBook {
+		this.offers.prune((offer) => offer.to === undefined || this.canOffer(offer.from, offer.to));
+		return this.offers;
+	}
+
+	/** Every standing offer, and each offer by or to a character `mind` thinks for: only for a mind whose kit trades. */
+	private offersSeenBy(mind:Mind<TCtx>):string {
+		const owner = mind.owner;
+		if (!owner.activeVerbs().has('offer')) {
+			return '';
+		}
+		const mine = new Set(owner instanceof Collective ? owner.characters.map((c) => c.id) : [owner.id]);
+		const voice = mind.voice.id;
+		const name = (id:string):string => (id === voice ? 'you' : mind.nameOf(id));
+		return this.liveOffers().all
+			.filter((offer) => offer.to === undefined || mine.has(offer.from) || mine.has(offer.to))
+			.map((offer) => {
+				const who = offer.from === voice ? 'You offer' : `${name(offer.from)} offers`;
+				return offer.to === undefined
+					? `- ${who} ${offerText(offer)} to anyone`
+					: `- ${who} ${name(offer.to)} ${offerText(offer)}`;
+			})
+			.join('\n');
 	}
 
 	/** `point`: measure as if the character stood there. */
@@ -1085,12 +1152,11 @@ ${dump.message}`, image: dump.image });
 		const ago = lastTimestamp !== undefined && Number.isFinite(lastTimestamp)
 			? Math.max(0, this._clock - lastTimestamp)
 			: undefined;
-		const los = this._losFn;
 		return {
 			...kernels,
 			...geometry,
 			cache,
-			...(los ? { canSee: (a, b) => los(a.id, b.id) } : {}),
+			...(this._world?.hasLineOfSight ? { canSee: (a, b) => this.inLineOfSight(a.id, b.id) } : {}),
 			hasHeard: mind?.hasHeard() ?? false,
 			prev: {
 				secondsAgo: ago,
@@ -1175,12 +1241,14 @@ ${dump.message}`, image: dump.image });
 			map: this._map,
 			knowledge: this._knowledge,
 			mentionCap: this._mentionCap,
+			offers: () => this.offersSeenBy(mind),
 			vision: this._models.live(mind.model)?.vision,
 			arcFormat: this._arcFormat,
 			thinkInstructions: this._thinkInstructions,
 			thinking: () => this._models.live(mind.model)?.thinking ?? false,
 			verbInstructions: this._verbInstructions,
 			arcExample: this._arcExample,
+			systemNote: this._systemNote,
 			repairTemperature: this._repairTemperature,
 			seenAs: this.seenAs(mind),
 			worldContext: () => this.tryCtx(owner.voice.id) ?? (owner instanceof Collective ? this.present(owner)?.ctx : undefined),
@@ -1226,11 +1294,10 @@ ${dump.message}`, image: dump.image });
 	}
 
 	private filterSight(snap:Sight):Sight {
-		const los = this._losFn;
-		if (!los) {
+		if (!this._world?.hasLineOfSight) {
 			return snap;
 		}
-		return { ...snap, objects: snap.objects.filter((o) => los(snap.self.id, o.id)) };
+		return { ...snap, objects: snap.objects.filter((o) => this.inLineOfSight(snap.self.id, o.id)) };
 	}
 
 	private sightFormatOpts():{ unitName?:string } {
@@ -1805,6 +1872,11 @@ ${dump.message}`, image: dump.image });
 			this._standing.set(character, standing);
 		}
 		this._characterRows.set(spec.id, { spec, runner: character, cache: new SampleCache() });
+		if (!json) {
+			for (const offer of spec.offers ?? []) {
+				this.offers.post({ ...offer, from: spec.id });
+			}
+		}
 		if (json) {
 			fields.load(json);
 			for (const law of spec.laws ?? []) {
@@ -2169,6 +2241,7 @@ ${dump.message}`, image: dump.image });
 		character.replaceProgram();
 		this._mover.stop(id);
 		this.talk?.detach(id);
+		this.offers.drop(id);
 		this.dropOwnMind(character);
 		if (character.collective) {
 			this.leave(character, character.collective);
@@ -2201,7 +2274,7 @@ ${dump.message}`, image: dump.image });
 		for (const row of this._collectiveRows.values()) {
 			collectives[row.runner.id] = row.runner.toJSON();
 		}
-		return { characters, collectives };
+		return { characters, collectives, offers: this.offers.toJSON() };
 	}
 
 	/**
@@ -2235,6 +2308,7 @@ ${dump.message}`, image: dump.image });
 		this._characterRows.clear();
 		this._collectiveRows.clear();
 		this._journeys.clear();
+		this.offers.clear();
 	}
 
 	/**
@@ -2242,6 +2316,9 @@ ${dump.message}`, image: dump.image });
 	 * says who belongs to which collective, and who is on their own.
 	 */
 	private wireCast(cast?:CastJSON):void {
+		if (cast) {
+			this.offers.load(cast.offers ?? []);
+		}
 		const members = new Set(Object.values(cast?.collectives ?? {}).flatMap((c) => c.characters));
 		const solo = new Set(this._soloSpecs.map((spec) => spec.id));
 		for (const id of Object.keys(cast?.characters ?? {})) {

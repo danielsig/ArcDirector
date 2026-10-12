@@ -2,9 +2,9 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { Audio, noteIsDue, placeRecording } from './Audio.js';
 import { AudioSource } from './AudioSource.js';
-import { overdriveSample } from './filters.js';
+import { overdriveSample, reverbTapTimes } from './filters.js';
 import { midiHz, scoreProblems } from './midi.js';
-import { distanceGain, forwardXZ } from './spatial.js';
+import { distanceGain, forwardXZ, heardAt } from './spatial.js';
 import type { Score } from './types.js';
 import { Game } from '../core/Game.js';
 import { GameObject } from '../core/GameObject.js';
@@ -41,16 +41,42 @@ describe('Audio', () => {
 		assert.ok(Math.abs(f.z) < 1e-9);
 	});
 
+	it('hears a sound at the listener\'s feet straight ahead at ear height', () => {
+		const ears = { x: 5, y: 1.35, z: 5, yaw: 0 };
+		for (const [x, z] of [[5.3, 5], [4.8, 5.2], [5, 5.4]] as const) {
+			const at = heardAt(ears, x, z);
+			assert.ok(Math.abs(at.x - 5) < 1e-9, `${x},${z} pans to x ${at.x}`);
+			assert.ok(at.z < 5);
+			assert.equal(at.y, 1.35);
+		}
+	});
+
+	it('gives a sound its true direction from three meters out, at ear height', () => {
+		const ears = { x: 0, y: 1.35, z: 0, yaw: 0 };
+		assert.deepEqual(heardAt(ears, 4, 1), { x: 4, y: 1.35, z: 1 });
+		const halfway = heardAt(ears, 2, 0);
+		assert.ok(halfway.x > 0 && halfway.z < 0);
+	});
+
 	it('noteIsDue rejects the past and the far future', () => {
 		assert.equal(noteIsDue(1, 1.02), false);
 		assert.equal(noteIsDue(1.05, 1.02), true);
 		assert.equal(noteIsDue(2, 1.02, 0.32), false);
 	});
 
-	it('distanceGain stays loud at 1m and drops by 8m', () => {
-		const k = 0.32;
-		assert.ok(distanceGain(1, k) > 0.88);
-		assert.ok(distanceGain(8, k) < 0.15);
+	it('distanceGain stays loud at 1m, falls sharp, then keeps a tail', () => {
+		const k = 0.16;
+		assert.ok(distanceGain(0, k) > 0.99);
+		assert.ok(distanceGain(1, k) > 0.9);
+		assert.ok(distanceGain(2, k) < 0.5);
+		assert.ok(distanceGain(2, k) > 0.25);
+		const mid = distanceGain(6, k);
+		const far = distanceGain(18, k);
+		assert.ok(mid < 0.2);
+		assert.ok(far > 0.04);
+		assert.ok(far > mid * 0.45);
+		assert.ok(distanceGain(1, 0.32) > 0.88);
+		assert.ok(distanceGain(8, 0.32) < 0.15);
 	});
 
 	it('plays an intro once, then loops a later span', () => {
@@ -99,6 +125,18 @@ describe('Audio', () => {
 		assert.ok(overdriveSample(-1, 0.9) >= -1);
 	});
 
+	it('adds reflections as the room grows', () => {
+		const tight = reverbTapTimes(0);
+		const stock = reverbTapTimes();
+		const hall = reverbTapTimes(1);
+		assert.equal(tight.length, 2);
+		assert.equal(stock.length, 4);
+		assert.equal(hall.length, 8);
+		assert.deepEqual(stock.map((t) => Math.round(t * 1000)), [29, 43, 71, 103]);
+		assert.ok(tight[tight.length - 1]! < stock[0]!);
+		assert.ok(hall[hall.length - 1]! > stock[3]!);
+	});
+
 	it('rejects a filter outside 0–1', () => {
 		const bad:Score = {
 			bpm: 80,
@@ -113,6 +151,10 @@ describe('Audio', () => {
 			layers: [{ kind: 'thump', dur: 0.1, freq: 80 }],
 			filters: [{ kind: 'reverb', mix: 1.4 }],
 		}));
+		assert.ok(scoreProblems({
+			...bad,
+			filters: [{ kind: 'reverb', size: 1.2 }],
+		}).some((p) => p.includes('size')));
 		audio.dispose();
 	});
 

@@ -172,7 +172,7 @@ export function findRoute(graph:(point:Vec)=>PathStep[], from:Vec, goal:RouteGoa
 		if ((node.via === undefined ? openLeft-- : blockedLeft--) <= 0) {
 			continue;
 		}
-		if (node.end || goal.reached(node.point)) {
+		if (arrived(node, key, goal, exits)) {
 			if (node.via === undefined) {
 				return routeTo(node);
 			}
@@ -191,6 +191,27 @@ export function findRoute(graph:(point:Vec)=>PathStep[], from:Vec, goal:RouteGoa
 		}
 	}
 	return blockers.size > 0 ? { blockers: [...blockers].map(([reason, cost]) => ({ reason, cost })) } : undefined;
+}
+
+/**
+ * In reach, and actually next to the goal on the graph. Euclidean range through a wall is not a stop:
+ * `at` has no open step here, so the search keeps going around.
+ */
+function arrived(node:Node, key:string, goal:RouteGoal, exits:Map<string, PathStep>):boolean {
+	if (node.end) {
+		return true;
+	}
+	if (!goal.reached(node.point)) {
+		return false;
+	}
+	if (!goal.at) {
+		return true;
+	}
+	if (keyOf(goal.at) === key) {
+		return true;
+	}
+	const exit = exits.get(key);
+	return !!exit && !exit.blocked;
 }
 
 function routeTo(end:Node):Route {

@@ -16,6 +16,7 @@ import {
 	SpeechBubble,
 	Vitals,
 	Wanted,
+	alarmActive,
 } from '../engine/components';
 import type { GameObject } from '../engine/GameObject';
 import type { World } from '../engine/World';
@@ -81,7 +82,7 @@ function itemEntity(item:ItemInstance):ExprEntity {
 	return dummyEntity(id, { tags });
 }
 
-const LANDMARK_KINDS = ['Tree', 'Waterfall', 'Boulder'];
+const LANDMARK_KINDS = ['Tree', 'Waterfall', 'Boulder', 'Pillar'];
 
 /** A landmark also carries its kind as a name-cased tag, so `landmarks.filter("Tree")` matches. */
 function landmarkEntity(go:GameObject):ExprEntity {
@@ -102,6 +103,7 @@ function nearbyLandmarks(world:World, character:GameObject, here?:{ x:number; z:
 			!tags.includes('tree')
 			&& !tags.includes('waterfall')
 			&& !tags.includes('boulder')
+			&& !tags.includes('pillar')
 			&& !go.getComponent(Interior)
 			&& !go.getComponent(Bridge)
 		) {
@@ -147,7 +149,7 @@ export function kernelsOf(
 			if (go === character) {
 				continue;
 			}
-			if (hidePlayer && go.id === 'Player') {
+			if (hidePlayer && go.id === 'Player' && !alarmActive(go, world.time)) {
 				continue;
 			}
 			if (!isLiving(go)) {

@@ -149,13 +149,13 @@ export class Mover {
 				return undefined;
 			}
 		}
-		// The game's motor says when the character is at a waypoint. Past the route, head straight for the destination.
+		// Follow the route only. A Euclidean "close enough" on the far side of a wall is not a step.
 		const route = e.route!;
 		for (;;) {
-			const waypoint = route.points[e.next] ?? dest;
-			if (!waypoint) {
+			if (e.next >= route.points.length) {
 				return this.arrive(e, character, now);
 			}
+			const waypoint = route.points[e.next];
 			if (!world.steerToward!(character, waypoint)) {
 				const gap = distance(me, waypoint);
 				if (gap < e.bestGap * PROGRESS) {
@@ -163,9 +163,6 @@ export class Mover {
 					e.bestAt = now;
 				}
 				return undefined;
-			}
-			if (e.next >= route.points.length) {
-				return this.arrive(e, character, now);
 			}
 			e.next += 1;
 			e.bestGap = Infinity;

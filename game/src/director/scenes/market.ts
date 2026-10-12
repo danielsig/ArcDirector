@@ -1,22 +1,43 @@
-import { pascalCase, STOCK_COLLECTIVE_VERBS, STOCK_FORMATION_VERBS, ArcDirector, type Kit } from 'arc-director';
+import { pascalCase, STOCK_COLLECTIVE_VERBS, ArcDirector, type Kit, type LawSpec } from 'arc-director';
 import { MarketNPC, MarketGate, Merchant, Wanted } from '../../engine/components';
 import type { GameObject } from '../../engine/GameObject';
 import { NPCInput } from '../../characters/NPCInput';
 import { compactName, distXZ, findCarried, itemMatchesName, tryInsert } from '../../items/inventory';
 import { dropItem, USE_RANGE } from '../../items/pickup';
 import type { GameHost, CharacterCtx } from '../adapter';
-import { customerCount, spawnRandomCustomer, MARKET_SEEDS, HIVE_UNITS } from '../market';
+import { customerCount, guardPost, spawnRandomCustomer, MARKET_SEEDS, HIVE_UNITS, GUARD_UNITS } from '../market';
+import { priceList, STALLS } from '../../items/wares';
 import { idOf, findObject } from '../names';
 import { takeSome } from '../items';
 import { reportTheft, addStealVerb, GAME_VERBS } from '../verbs';
 import { showSpeech } from '../playerTalk';
+import { answerCries, noteSecurityCry } from '../alarm';
+import { Alarm } from '../../engine/components';
 
 const nextMarketNPCTimestamp = new WeakMap<GameHost, number>();
+
+/** How close to the gate counts as having walked out. Wider than a shopper's arrival step (0.45). */
+const DOORWAY = 0.8;
+
+/**
+ * Every shopper who still wants this good walks to the stall and pays the vendor's standing price. The tag is the
+ * live want: a trade takes it off.
+ */
+function shopErrand(name:string, good:string, stall:string, vendor:string, ask:number):LawSpec[] {
+	const wanting = `units.filter("${good}")`;
+	return [{
+		name,
+		who: wanting,
+		watch: `not(some(me.inventory.filter("${good}")))`,
+		arc: `go_to(${stall}) && offer(to=${vendor}, give={"gold":${ask}}, get={"${good}":1}) && leave()`,
+		pinned: true,
+	}];
+}
 
 function stallOwner(host:GameHost, itemName:string):GameObject | undefined {
 	let owner:GameObject | undefined;
 	host.world.forEachComponent(Merchant, (shop, go) => {
-		if (compactName(shop.specialty) === compactName(itemName)) {
+		if (shop.goods.some((good) => compactName(good) === compactName(itemName))) {
 			owner = go;
 		}
 	});
@@ -75,6 +96,10 @@ function catchThief(host:GameHost, guard:GameObject, thief:GameObject):void {
 	mark.enabled = false;
 	mark.items = [];
 	mark.reason = '';
+	const alarm = thief.getComponent(Alarm);
+	if (alarm) {
+		alarm.enabled = false;
+	}
 	const who = idOf(thief);
 	const watch = idOf(guard);
 	const loot = seized.length > 0 ? seized.join(' and ') : 'the goods';
@@ -122,10 +147,11 @@ function wakeHive(host:GameHost):void {
 function tickMarketNPC(host:GameHost):void {
 	wakeHive(host);
 	seizeNearby(host);
+	answerCries(host);
 	const doomed:GameObject[] = [];
 	host.world.forEachComponent(MarketGate, (exit, gate) => {
 		host.world.forEachComponent(MarketNPC, (npc, go) => {
-			if (npc.kind !== 'customer' || npc.wants.length > 0) {
+			if (npc.kind !== 'customer') {
 				return;
 			}
 			if (go.getComponent(Wanted)?.enabled) {
@@ -134,7 +160,8 @@ function tickMarketNPC(host:GameHost):void {
 			if (npc.leaveGate && idOf(gate) !== npc.leaveGate) {
 				return;
 			}
-			if (distXZ(go, gate) <= USE_RANGE) {
+			// On the threshold, not merely near it: a new arrival stands two meters inside.
+			if (distXZ(go, gate) <= DOORWAY) {
 				doomed.push(go);
 			}
 		});
@@ -171,40 +198,73 @@ function tickMarketNPC(host:GameHost):void {
 }
 
 /** What anyone at the market may do. */
-const MARKET_VERBS = [...GAME_VERBS, 'buy', 'sell', 'steal'];
+const MARKET_VERBS = [...GAME_VERBS, 'offer', 'steal'];
 
-/** The hive's characters: the market's verbs, and the formations it lines them up in. */
-const HIVE_KIT:Kit = { verbs: [...MARKET_VERBS, ...STOCK_FORMATION_VERBS] };
+/** Shoppers walk, buy, and leave. No formations: a crowd verb is how a whole stall gets mobbed. */
+const HIVE_KIT:Kit = { verbs: [...MARKET_VERBS, 'leave'] };
+
+/** Guards walk, talk, and wait. They do not trade or steal. `stand` is their post beside the door. */
+const GUARD_KIT:Kit = { verbs: [...GAME_VERBS, 'stand'] };
+
+/** Every market mind. Recall is how it reads the trade ledger. */
+const LEDGER_NOTE = 'The ledger of who gave or traded what, from whom, to whom, in what quantity, and for what, is your memory. Whenever any of that is in doubt, call recall. That is how you read the ledger. Never guess a trade.';
 
 export function createDirector(host:GameHost):ArcDirector<CharacterCtx> {
 	host.hooks = {
 		allowTheft: true,
 		afterPickUp,
 		tickMarketNPC,
+		onSpoke: noteSecurityCry,
 	};
 	host.kit = { verbs: [...MARKET_VERBS] };
-	const hiveKit = { verbs: [...GAME_VERBS, ...STOCK_COLLECTIVE_VERBS, 'buy', 'steal'] };
+	const hiveKit = { verbs: [...GAME_VERBS, ...STOCK_COLLECTIVE_VERBS, 'offer', 'steal'] };
+	const guardVoice = { verbs: [...GAME_VERBS, ...STOCK_COLLECTIVE_VERBS] };
 	const d = addStealVerb(host.configure(new ArcDirector<CharacterCtx>()), host)
 		.withSight({ limit: 16 })
 		.withDefaultKit(host.kit)
+		.withSystemNote(LEDGER_NOTE)
+		.addVerb('leave', {
+			args: {},
+			help: 'a shopper walks out through their own gate once they have everything they came for',
+			handler: (call) => {
+				const npc = call.ctx.character.getComponent(MarketNPC);
+				if (npc?.kind !== 'customer' || !npc.leaveGate) {
+					return { ok: false, verb: 'leave', reason: 'nowhere to leave' };
+				}
+				if (npc.wants.length > 0) {
+					return { ok: true, verb: 'leave', reason: 'still shopping' };
+				}
+				return call.goTo(npc.leaveGate, 0.45);
+			},
+		})
+		.addVerb('stand', {
+			args: {},
+			help: 'a guard walks to their side of the gate, beside the doorway',
+			handler: (call) => {
+				const post = guardPost(call.ctx.world, call.ctx.character);
+				if (!post) {
+					return { ok: false, verb: 'stand', reason: 'no gate to hold' };
+				}
+				return call.goToPoint([post.x, post.z], 0.35);
+			},
+		})
 		.addCollective({
 			id: 'MarketHive',
 			kit: hiveKit,
-			// Guards' standing `choose` picks hold or chase with the local model, whatever the menu's default.
+			// An issued choose uses the local model, whatever the menu's default.
 			systemOne: 'local',
 			identity: { role: 'Hive', traits: ['busy', 'fair', 'watchful'] },
 			goals: [{
-				text: 'Keep the square moving: shoppers get what they came for and leave; guards hold the gates.',
+				text: 'Keep the square moving: shoppers get what they came for and leave.',
 				priority: 2,
 			}],
 			memories: [{
-				text: 'I am the canal-market hive. I am not a character in this scene. The upper square is above the steps; the quay and canal sit below. Shoppers are tagged Shopper plus what they came for (Loaf, Scarf, Bowl, Knife) and their leave gate (EastGate or WestGate). Guards are tagged Guard. Baker Weaver Potter Cutler keep stalls BakerStall WeaverStall PotterStall CutlerStall. Send idle shoppers to the stall that sells what they tagged, buy, then go_to their leave gate. Guards guard their gate and chase thieves on their own; leave them be. Use issue(who, arc). Names, never coordinates.',
+				text: `I am the canal-market hive. I am not a character in this scene. A canal runs east to west through the middle, crossed by three footbridges. BakerStall WeaverStall and WestGate are on the north square; PotterStall CutlerStall and EastGate are on the south square. ${priceList()}. Shoppers are tagged Shopper plus what they still want and their leave gate (EastGate or WestGate). Baker Weaver Potter Cutler never leave their stalls. Shoppers already walk to the stall that sells their tag as soon as they arrive, buy that good at the posted price, then leave by their own gate once they hold it. Never issue go_to, follow, or offer to a shopper, and never to a whole units.filter("Loaf") or any other group. Do not line shoppers up. Do not send the stall keepers anywhere. The Guards collective holds the gates; leave them be. Names, never coordinates. Trades live in memory: call recall to read who gave or traded what.`,
 				tags: ['backstory', 'market'],
 				pinned: true,
 			}],
 			pinnedSightFocus: ['isHurt(it)', 'isNear(it, Player)'],
 			pinnedWatches: {
-				idle: 'some(units.filter(u => !u.busy))',
 				theft: 'some(events.filter("theft"))',
 			},
 			characters: HIVE_UNITS.map((unit) => ({ ...unit, kit: HIVE_KIT })),
@@ -213,6 +273,39 @@ export function createDirector(host:GameHost):ArcDirector<CharacterCtx> {
 				who: 'units.filter("Shopper")',
 				watch: 'isHurt(me)',
 				arc: 'go_to(WestGate)',
+				pinned: true,
+			},
+			...STALLS.flatMap((stall) => stall.wares.flatMap((ware) => shopErrand(ware.defID, ware.name, stall.stall, stall.vendor, ware.ask))),
+			],
+		})
+		.addCollective({
+			id: 'Guards',
+			kit: guardVoice,
+			// Standing `choose` picks hold, chase, or answer with the local model, whatever the menu's default.
+			systemOne: 'local',
+			mind: { skipStart: true, skipMajor: true },
+			identity: { role: 'Watch', traits: ['stern', 'alert'] },
+			goals: [{
+				text: 'Hold the gates. Chase a thief. Run to anyone who cries a security word.',
+				priority: 2,
+			}],
+			memories: [{
+				text: 'I am the market watch, not a person in the square. Holt and Pike stand on either side of WestGate, never in the doorway. Brant and Cass stand on either side of EastGate the same way. A security word is theft, thief, thieves, stole, stolen, stealing, steal, robbed, robbery, robber, mugged, mugging, or help. Each guard already chases a thief and runs to a cry; I do not issue them a path for that. A thief outranks a cry. When a guard reaches the crier, they ask who stole, or what is needed if the word was help.',
+				tags: ['backstory', 'guard'],
+				pinned: true,
+			}],
+			characters: GUARD_UNITS.map((unit) => ({ ...unit, kit: GUARD_KIT })),
+			laws: [{
+				name: 'chase',
+				who: 'units',
+				watch: 'some(others.filter("thief"))',
+				arc: 'go_to(others.filter("thief").minBy(u => distance(me, u)))',
+				pinned: true,
+			}, {
+				name: 'answer',
+				who: 'units',
+				watch: 'some(others.filter("alarm"))',
+				arc: 'go_to(others.filter("alarm").minBy(u => distance(me, u)))',
 				pinned: true,
 			}],
 		});

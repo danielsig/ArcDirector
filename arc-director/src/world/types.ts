@@ -48,22 +48,20 @@ export interface ItemMove<TEntity> {
 	item:string;
 	/** The new holder. Leave out to put the item down where `character` is. */
 	to?:TEntity;
+	/** How many. Default 1. */
+	quantity?:number;
 }
 
-/** One sale, asked for by one side. Both sides are in reach. */
-export interface Deal<TEntity> {
-	/** The side that asked. */
+/** One offer taken. `character` is near `other`; both sides move at once, or neither does. */
+export interface Exchange<TEntity> {
+	/** The side that took the offer. */
 	character:TEntity;
-	/** What `character` does: pays and gets the items (`buy`), or gives them and gets paid (`sell`). */
-	side:'buy' | 'sell';
-	/** The other side. */
+	/** The side that made it. */
 	other:TEntity;
-	/** The item's id. */
-	item:string;
-	/** How many of `item` change hands, at least 1. */
-	quantity:number;
-	/** Total for all of them that `character` offers or asks, if it named one. Without it the game's own price stands. */
-	price?:number;
+	/** What `character` hands `other`. `gold` is purse gold. */
+	give:Record<string, number>;
+	/** What `other` hands `character`. */
+	get:Record<string, number>;
 }
 
 /**
@@ -82,7 +80,7 @@ export interface Deal<TEntity> {
  * | `moveItem` | `pick_up`, `drop`, `give` |
  * | `useItem` | `use` |
  * | `getDescription` | `examine` |
- * | `trade` | `buy`, `sell` |
+ * | `exchange` | `offer` |
  */
 export interface HostWorld<TEntity> {
 	// Queries
@@ -118,6 +116,16 @@ export interface HostWorld<TEntity> {
 	 * @returns `undefined` when it cannot be examined from here.
 	 */
 	getDescription?(character:TEntity, target:string):string | undefined;
+	/**
+	 * Whether `from` can see `to`. Omit it and nothing blocks sight: everything in a look is seen, talk has no
+	 * occlusion, and a watch's line of sight holds.
+	 */
+	hasLineOfSight?(from:TEntity, to:TEntity):boolean;
+	/**
+	 * Whether `character` may make an offer to `other`, and that offer still stands. Default: `other` is in its sight
+	 * (`withSight`), else in its line of sight (`hasLineOfSight`), else always.
+	 */
+	canOffer?(character:TEntity, other:TEntity):boolean;
 	/** World up, a unit direction, for formations in 3D. Default `[0, 1, 0]`. Unused in 1D and 2D. */
 	up?:Vec;
 
@@ -137,6 +145,6 @@ export interface HostWorld<TEntity> {
 	 * @param target Already in reach of `character`.
 	 */
 	useItem?(character:TEntity, item:string, target?:TEntity):Outcome;
-	/** Buy or sell. Say the price in the reason ("bought 2 Bread from Mira for 10 gold"). */
-	trade?(deal:Deal<TEntity>):Outcome;
+	/** Swap both sides of a taken offer at once. Refuse, moving nothing, with a reason the agent can act on ("Baker has no Loaf"). */
+	exchange?(swap:Exchange<TEntity>):Outcome;
 }

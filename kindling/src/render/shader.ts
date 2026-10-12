@@ -35,20 +35,46 @@ function insertInProgram(shader:{ vertexShader:string; fragmentShader:string }, 
 	}
 }
 
-/** Patch a built-in Three material. Inserts run only after documented `#include <chunk>` tokens. */
+type ShaderSource = THREE.WebGLProgramParametersWithUniforms;
+
+const patched = new WeakMap<THREE.Material, Set<string>>();
+
+/**
+ * Stack a shader edit on `material`: earlier patches run first, and `key` joins its program cache key.
+ * A `key` already on the material is skipped, so shared materials can be patched per use.
+ */
+export function patchShader(material:THREE.Material, key:string, patch:(shader:ShaderSource)=>void):void {
+	let keys = patched.get(material);
+	if (keys?.has(key)) {
+		return;
+	}
+	if (!keys) {
+		keys = new Set();
+		patched.set(material, keys);
+	}
+	keys.add(key);
+	const prev = material.onBeforeCompile;
+	const prevKey = material.customProgramCacheKey.bind(material);
+	material.onBeforeCompile = (shader, renderer) => {
+		prev.call(material, shader, renderer);
+		patch(shader);
+	};
+	material.customProgramCacheKey = () => `${prevKey()}|${key}`;
+	material.needsUpdate = true;
+}
+
+/** Patch a built-in Three material. Inserts run only after documented `#include <chunk>` tokens. Stacks like {@link patchShader}. */
 export function applyShaderFeatures(
 	material:THREE.Material,
 	inserts:ShaderInsert[],
 	uniforms?:ShaderUniforms,
 ):void {
-	const key = inserts.map((s) => s.id).join('|');
-	material.customProgramCacheKey = () => key;
-	material.onBeforeCompile = (shader) => {
+	patchShader(material, inserts.map((s) => s.id).join('|'), (shader) => {
 		for (const ins of inserts) {
 			insertInProgram(shader, ins.chunk, ins.glsl);
 		}
 		if (uniforms) {
 			Object.assign(shader.uniforms, uniforms);
 		}
-	};
+	});
 }

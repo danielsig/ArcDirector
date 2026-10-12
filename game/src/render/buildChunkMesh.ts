@@ -1,25 +1,15 @@
 import * as THREE from 'three';
 import { CELL_SIZE, CHUNK_SIZE, TILE_HEIGHT, WALL_HEIGHT } from '../world/constants';
-import type { Chunk } from '../world/Chunk';
-import {
-	applyWorldBrickUVs,
-	insetBoxTopUVs,
-	insetPlaneUVs,
-	rockFlip,
-	rockRunVariant,
-	rockVariant,
-} from './rocksAtlas';
-import { getSheet, tileMaterial } from './spritesheet';
-import type { SpriteMaps } from './spritesheet';
-import { getNature, grassLookMat, natureMat, toonWaterMat, GRASS_UV_REP, GRASS_Y, WATER_LOWER_Y, WATER_UPPER_Y } from './nature';
-import { boulderMat, rockGeometry } from './natureMeshes';
+import type { Chunk, Tile } from '../world/Chunk';
+import { getNature, toonWaterMat, GRASS_UV_REP, GRASS_Y, WATER_LOWER_Y, WATER_UPPER_Y } from './nature';
+import { rockGeometry } from './natureMeshes';
+import { meadowMat, PALETTE, plankMat, rockMat, stoneFloorMat, stoneStairMat, stoneWallMat } from './toon';
+import { dressingDraws, type DressingDraw } from './dressing';
 import { createWaterFlowField, type Flow } from './waterFlow';
 import { attachChunkAo } from './bakeAo';
+import { showsWater } from '../world/water';
 
-const FLOOR_SALT = 11;
-const WALL_SALT = 29;
-const STAIR_SALT = 47;
-export const CHUNK_MESH_REV = 67;
+export const CHUNK_MESH_REV = 72;
 
 function cellX(chunk:Chunk, lx:number):number {
 	return chunk.origin.cx * CHUNK_SIZE + lx;
@@ -27,14 +17,6 @@ function cellX(chunk:Chunk, lx:number):number {
 
 function cellZ(chunk:Chunk, lz:number):number {
 	return chunk.origin.cz * CHUNK_SIZE + lz;
-}
-
-function mapsToMat(maps:SpriteMaps, extras:THREE.MeshStandardMaterialParameters = {}):THREE.MeshStandardMaterial {
-	return tileMaterial(maps.map, {
-		normalMap: maps.nrm,
-		normalScale: new THREE.Vector2(1.85, 1.85),
-		...extras,
-	});
 }
 
 function stairUphill(chunk:Chunk, lx:number, lz:number):{ dx:number; dz:number } {
@@ -69,22 +51,56 @@ function stairUphill(chunk:Chunk, lx:number, lz:number):{ dx:number; dz:number }
 	return { dx: 0, dz: -1 };
 }
 
-function addStairs(group:THREE.Group, chunk:Chunk, wallMats:THREE.Material[]):void {
+type Cell = { lx:number; lz:number };
+
+const dummy = new THREE.Object3D();
+
+/** One instanced mesh drawing `geom` once per item; `place` poses `dummy` (reset to identity first). */
+function addInstanced<T>(
+	group:THREE.Group,
+	geom:THREE.BufferGeometry,
+	mat:THREE.Material | THREE.Material[],
+	items:T[],
+	castShadow:boolean,
+	place:(item:T)=>void,
+):void {
+	if (items.length === 0) {
+		return;
+	}
+	const mesh = new THREE.InstancedMesh(geom, mat, items.length);
+	mesh.castShadow = castShadow;
+	mesh.receiveShadow = true;
+	for (let i = 0; i < items.length; i++) {
+		dummy.position.set(0, 0, 0);
+		dummy.rotation.order = 'XYZ';
+		dummy.rotation.set(0, 0, 0);
+		dummy.scale.set(1, 1, 1);
+		place(items[i]!);
+		dummy.updateMatrix();
+		mesh.setMatrixAt(i, dummy.matrix);
+	}
+	mesh.instanceMatrix.needsUpdate = true;
+	mesh.computeBoundingSphere();
+	group.add(mesh);
+}
+
+function cellsWhere(chunk:Chunk, keep:(tile:NonNullable<ReturnType<Chunk['tile']>>)=>boolean):Cell[] {
+	const cells:Cell[] = [];
+	chunk.forEachTile((tile, lx, lz) => {
+		if (keep(tile)) {
+			cells.push({ lx, lz });
+		}
+	});
+	return cells;
+}
+
+function addStairs(group:THREE.Group, chunk:Chunk):void {
 	const ox = chunk.worldOriginX();
 	const oz = chunk.worldOriginZ();
 	const steps = 4;
 	const stepLen = CELL_SIZE / steps;
-	const geoms = new Map<string, THREE.BoxGeometry>();
-	const geomAt = (sx:number, sy:number, sz:number):THREE.BoxGeometry => {
-		const key = `${sx},${sy},${sz}`;
-		let geom = geoms.get(key);
-		if (!geom) {
-			geom = new THREE.BoxGeometry(sx, sy, sz);
-			geoms.set(key, geom);
-		}
-		return geom;
-	};
-
+	type Step = { x:number; z:number; h:number; alongZ:boolean; uphill:{ x:number; z:number } };
+	const bySize = new Map<string, Step[]>();
 	chunk.forEachTile((tile, lx, lz) => {
 		if (tile.def !== 'stairs') {
 			return;
@@ -92,248 +108,151 @@ function addStairs(group:THREE.Group, chunk:Chunk, wallMats:THREE.Material[]):vo
 		const uphill = stairUphill(chunk, lx, lz);
 		const top = tile.height * TILE_HEIGHT;
 		const alongZ = uphill.dx === 0;
-		const variant = rockRunVariant(cellX(chunk, lx), cellZ(chunk, lz), STAIR_SALT, wallMats.length);
-		const mat = wallMats[variant];
 		for (let i = 0; i < steps; i++) {
 			const h = ((i + 1) / steps) * top;
-			const sx = alongZ ? CELL_SIZE : stepLen;
-			const sz = alongZ ? stepLen : CELL_SIZE;
-			const mesh = new THREE.Mesh(geomAt(sx, h, sz), mat);
-			mesh.castShadow = true;
-			mesh.receiveShadow = true;
-			let x = ox + (lx + 0.5) * CELL_SIZE;
-			let z = oz + (lz + 0.5) * CELL_SIZE;
 			const along = uphill.dx + uphill.dz < 0
 				? CELL_SIZE - (i + 0.5) * stepLen
 				: (i + 0.5) * stepLen;
-			if (alongZ) {
-				z = oz + lz * CELL_SIZE + along;
+			const x = alongZ ? ox + (lx + 0.5) * CELL_SIZE : ox + lx * CELL_SIZE + along;
+			const z = alongZ ? oz + lz * CELL_SIZE + along : oz + (lz + 0.5) * CELL_SIZE;
+			const key = `${h},${uphill.dx},${uphill.dz}`;
+			let list = bySize.get(key);
+			if (!list) {
+				list = [];
+				bySize.set(key, list);
 			}
-			else {
-				x = ox + lx * CELL_SIZE + along;
-			}
-			mesh.position.set(x, h * 0.5, z);
-			group.add(mesh);
+			list.push({ x, z, h, alongZ, uphill: { x: uphill.dx, z: uphill.dz } });
 		}
 	});
-}
-
-function addFlatFloors(
-	group:THREE.Group,
-	chunk:Chunk,
-	mats:THREE.Material[],
-	geom:THREE.BufferGeometry,
-	geomFlip:THREE.BufferGeometry,
-):void {
-	const ox = chunk.worldOriginX();
-	const oz = chunk.worldOriginZ();
-	const n = mats.length;
-	const dummy = new THREE.Object3D();
-	type Cell = { lx:number; lz:number };
-	const buckets:Cell[][] = [];
-	for (let i = 0; i < n * 2; i++) {
-		buckets.push([]);
-	}
-	chunk.forEachTile((tile, lx, lz) => {
-		if (tile.blocked || tile.def === 'stairs' || tile.height > 0) {
-			return;
-		}
-		if (tile.def === 'grass' || tile.def === 'water') {
-			return;
-		}
-		const gx = cellX(chunk, lx);
-		const gz = cellZ(chunk, lz);
-		const v = rockVariant(gx, gz, FLOOR_SALT, n);
-		const flip = rockFlip(gx, gz, FLOOR_SALT) ? 1 : 0;
-		buckets[v * 2 + flip].push({ lx, lz });
-	});
-	for (let b = 0; b < buckets.length; b++) {
-		const cells = buckets[b];
-		if (cells.length === 0) {
-			continue;
-		}
-		const v = (b / 2) | 0;
-		const flipped = (b & 1) === 1;
-		const mesh = new THREE.InstancedMesh(flipped ? geomFlip : geom, mats[v], cells.length);
-		mesh.receiveShadow = true;
-		mesh.castShadow = false;
-		for (let i = 0; i < cells.length; i++) {
-			const { lx, lz } = cells[i];
-			dummy.position.set(
-				ox + (lx + 0.5) * CELL_SIZE,
-				0.002,
-				oz + (lz + 0.5) * CELL_SIZE,
-			);
-			dummy.rotation.set(-Math.PI / 2, 0, 0);
-			dummy.scale.set(1, 1, 1);
-			dummy.updateMatrix();
-			mesh.setMatrixAt(i, dummy.matrix);
-		}
-		mesh.instanceMatrix.needsUpdate = true;
-		group.add(mesh);
+	for (const list of bySize.values()) {
+		const { h, alongZ, uphill } = list[0]!;
+		const geom = new THREE.BoxGeometry(alongZ ? CELL_SIZE : stepLen, h, alongZ ? stepLen : CELL_SIZE);
+		addInstanced(group, geom, stoneStairMat(uphill), list, true, (step) => {
+			dummy.position.set(step.x, h * 0.5, step.z);
+		});
 	}
 }
 
-function addRaisedFloors(
-	group:THREE.Group,
-	chunk:Chunk,
-	floorMats:THREE.Material[],
-	wallMats:THREE.Material[],
-):void {
+function addFlatFloors(group:THREE.Group, chunk:Chunk):void {
 	const ox = chunk.worldOriginX();
 	const oz = chunk.worldOriginZ();
-	const geoms = new Map<number, THREE.BoxGeometry>();
+	const cells = cellsWhere(chunk, (tile) => !tile.blocked && tile.def !== 'stairs' && tile.height <= 0
+		&& tile.def !== 'grass' && !showsWater(tile.def) && tile.def !== 'plank');
+	addInstanced(group, new THREE.PlaneGeometry(CELL_SIZE, CELL_SIZE), stoneFloorMat(), cells, false, ({ lx, lz }) => {
+		dummy.position.set(ox + (lx + 0.5) * CELL_SIZE, 0.002, oz + (lz + 0.5) * CELL_SIZE);
+		dummy.rotation.set(-Math.PI / 2, 0, 0);
+	});
+}
+
+function addRaisedFloors(group:THREE.Group, chunk:Chunk):void {
+	const ox = chunk.worldOriginX();
+	const oz = chunk.worldOriginZ();
+	const byHeight = new Map<number, Cell[]>();
 	chunk.forEachTile((tile, lx, lz) => {
 		if (tile.blocked || tile.def === 'stairs' || tile.height <= 0) {
 			return;
 		}
 		const h = tile.height * TILE_HEIGHT;
-		let geom = geoms.get(h);
-		if (!geom) {
-			geom = new THREE.BoxGeometry(CELL_SIZE, h, CELL_SIZE);
-			insetBoxTopUVs(geom);
-			geoms.set(h, geom);
+		let cells = byHeight.get(h);
+		if (!cells) {
+			cells = [];
+			byHeight.set(h, cells);
 		}
-		const gx = cellX(chunk, lx);
-		const gz = cellZ(chunk, lz);
-		const floorMat = floorMats[rockVariant(gx, gz, FLOOR_SALT, floorMats.length)];
-		const wallMat = wallMats[rockRunVariant(gx, gz, WALL_SALT, wallMats.length)];
-		const mesh = new THREE.Mesh(geom, [
-			wallMat,
-			wallMat,
-			floorMat,
-			floorMat,
-			wallMat,
-			wallMat,
-		]);
-		mesh.receiveShadow = true;
-		mesh.castShadow = true;
-		mesh.position.set(
-			ox + (lx + 0.5) * CELL_SIZE,
-			h * 0.5,
-			oz + (lz + 0.5) * CELL_SIZE,
-		);
-		group.add(mesh);
+		cells.push({ lx, lz });
+	});
+	const wall = stoneWallMat();
+	const floor = stoneFloorMat();
+	for (const [h, cells] of byHeight) {
+		const geom = new THREE.BoxGeometry(CELL_SIZE, h, CELL_SIZE);
+		addInstanced(group, geom, [wall, wall, floor, floor, wall, wall], cells, true, ({ lx, lz }) => {
+			dummy.position.set(ox + (lx + 0.5) * CELL_SIZE, h * 0.5, oz + (lz + 0.5) * CELL_SIZE);
+		});
+	}
+}
+
+function addWalls(group:THREE.Group, chunk:Chunk):void {
+	const ox = chunk.worldOriginX();
+	const oz = chunk.worldOriginZ();
+	const cells = cellsWhere(chunk, (tile) => tile.blocked && tile.def !== 'water' && tile.def !== 'wood_wall');
+	addInstanced(group, new THREE.BoxGeometry(CELL_SIZE, WALL_HEIGHT, CELL_SIZE), stoneWallMat(), cells, true, ({ lx, lz }) => {
+		const h = wallHeight(chunk, lx, lz);
+		dummy.position.set(ox + (lx + 0.5) * CELL_SIZE, h * 0.5, oz + (lz + 0.5) * CELL_SIZE);
+		dummy.scale.set(1, h / WALL_HEIGHT, 1);
 	});
 }
 
-function addWalls(group:THREE.Group, chunk:Chunk, mats:THREE.Material[]):void {
-	const ox = chunk.worldOriginX();
-	const oz = chunk.worldOriginZ();
-	const n = mats.length;
-	const dummy = new THREE.Object3D();
-	const geom = new THREE.BoxGeometry(CELL_SIZE, WALL_HEIGHT, CELL_SIZE);
-	const buckets:{ lx:number; lz:number }[][] = [];
-	for (let i = 0; i < n; i++) {
-		buckets.push([]);
+/** A ruined wall stands as high as its tile, give or take a broken course; every other wall is full height. */
+function wallHeight(chunk:Chunk, lx:number, lz:number):number {
+	const tile = chunk.tile(lx, lz);
+	if (tile?.def !== 'ruin_wall') {
+		return WALL_HEIGHT;
 	}
-	chunk.forEachTile((tile, lx, lz) => {
-		if (!tile.blocked) {
-			return;
-		}
-		if (tile.def === 'water' || tile.def === 'wood_wall') {
-			return;
-		}
-		const v = rockRunVariant(cellX(chunk, lx), cellZ(chunk, lz), WALL_SALT, n);
-		buckets[v].push({ lx, lz });
-	});
-	for (let v = 0; v < n; v++) {
-		const cells = buckets[v];
-		if (cells.length === 0) {
-			continue;
-		}
-		const mesh = new THREE.InstancedMesh(geom, mats[v], cells.length);
-		mesh.receiveShadow = true;
-		mesh.castShadow = true;
-		for (let i = 0; i < cells.length; i++) {
-			const { lx, lz } = cells[i];
-			dummy.position.set(
-				ox + (lx + 0.5) * CELL_SIZE,
-				WALL_HEIGHT * 0.5,
-				oz + (lz + 0.5) * CELL_SIZE,
-			);
-			dummy.rotation.set(0, 0, 0);
-			dummy.scale.set(1, 1, 1);
-			dummy.updateMatrix();
-			mesh.setMatrixAt(i, dummy.matrix);
-		}
-		mesh.instanceMatrix.needsUpdate = true;
-		group.add(mesh);
-	}
+	const courses = Math.round(cellHash(chunk.worldOriginX() + lx, chunk.worldOriginZ() + lz, 5) * 2) - 1;
+	return Math.max(TILE_HEIGHT / 2, tile.height * TILE_HEIGHT + (courses * TILE_HEIGHT) / 4);
 }
 
 function addWoodWalls(group:THREE.Group, chunk:Chunk):void {
-	let nature;
-	try {
-		nature = getNature();
-	}
-	catch {
-		return;
-	}
 	const ox = chunk.worldOriginX();
 	const oz = chunk.worldOriginZ();
-	const mat = new THREE.MeshStandardMaterial({
-		map: nature.wood,
-		roughness: 0.92,
-		metalness: 0,
-		side: THREE.FrontSide,
-		shadowSide: THREE.DoubleSide,
-	});
+	const cells = cellsWhere(chunk, (tile) => tile.def === 'wood_wall');
 	const geom = new THREE.BoxGeometry(CELL_SIZE * 1.04, WALL_HEIGHT, CELL_SIZE * 1.04);
-	chunk.forEachTile((tile, lx, lz) => {
-		if (tile.def !== 'wood_wall') {
-			return;
-		}
-		const mesh = new THREE.Mesh(geom, mat);
-		mesh.position.set(
-			ox + (lx + 0.5) * CELL_SIZE,
-			WALL_HEIGHT * 0.5,
-			oz + (lz + 0.5) * CELL_SIZE,
-		);
-		mesh.castShadow = true;
-		mesh.receiveShadow = true;
-		group.add(mesh);
+	addInstanced(group, geom, plankMat(), cells, true, ({ lx, lz }) => {
+		dummy.position.set(ox + (lx + 0.5) * CELL_SIZE, WALL_HEIGHT * 0.5, oz + (lz + 0.5) * CELL_SIZE);
 	});
 }
 
 function addPlankFloors(group:THREE.Group, chunk:Chunk):void {
-	let nature;
-	try {
-		nature = getNature();
-	}
-	catch {
-		return;
-	}
 	const ox = chunk.worldOriginX();
 	const oz = chunk.worldOriginZ();
-	const mat = natureMat(nature.wood);
-	const geom = new THREE.PlaneGeometry(CELL_SIZE, CELL_SIZE);
-	const dummy = new THREE.Object3D();
-	const cells:{ lx:number; lz:number }[] = [];
-	chunk.forEachTile((tile, lx, lz) => {
-		if (tile.def === 'plank') {
-			cells.push({ lx, lz });
-		}
+	const cells = cellsWhere(chunk, (tile) => tile.def === 'plank');
+	addInstanced(group, new THREE.PlaneGeometry(CELL_SIZE, CELL_SIZE), plankMat(), cells, false, ({ lx, lz }) => {
+		dummy.position.set(ox + (lx + 0.5) * CELL_SIZE, 0.03, oz + (lz + 0.5) * CELL_SIZE);
+		dummy.rotation.set(-Math.PI / 2, 0, 0);
 	});
-	if (cells.length === 0) {
+}
+
+const DECK_TOP = 0.04;
+const RAIL_Y = 0.62;
+const POST = 0.09;
+
+/** Footbridge decks over water, with a rail along every edge that faces open water. */
+function addFootbridges(group:THREE.Group, chunk:Chunk):void {
+	const ox = chunk.worldOriginX();
+	const oz = chunk.worldOriginZ();
+	const decks = cellsWhere(chunk, (tile) => tile.def === 'bridge');
+	if (decks.length === 0) {
 		return;
 	}
-	const mesh = new THREE.InstancedMesh(geom, mat, cells.length);
-	mesh.receiveShadow = true;
-	for (let i = 0; i < cells.length; i++) {
-		const { lx, lz } = cells[i];
-		dummy.position.set(
-			ox + (lx + 0.5) * CELL_SIZE,
-			0.03,
-			oz + (lz + 0.5) * CELL_SIZE,
-		);
-		dummy.rotation.set(-Math.PI / 2, 0, 0);
-		dummy.scale.set(1, 1, 1);
-		dummy.updateMatrix();
-		mesh.setMatrixAt(i, dummy.matrix);
+	const wood = plankMat();
+	addInstanced(group, new THREE.BoxGeometry(CELL_SIZE, 0.12, CELL_SIZE), wood, decks, true, ({ lx, lz }) => {
+		dummy.position.set(ox + (lx + 0.5) * CELL_SIZE, DECK_TOP - 0.06, oz + (lz + 0.5) * CELL_SIZE);
+	});
+	type Edge = { x:number; z:number; alongX:boolean };
+	const edges:Edge[] = [];
+	for (const { lx, lz } of decks) {
+		for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]] as const) {
+			if (chunk.tile(lx + dx, lz + dz)?.def !== 'water') {
+				continue;
+			}
+			edges.push({
+				x: ox + (lx + 0.5 + dx * 0.45) * CELL_SIZE,
+				z: oz + (lz + 0.5 + dz * 0.45) * CELL_SIZE,
+				alongX: dz !== 0,
+			});
+		}
 	}
-	mesh.instanceMatrix.needsUpdate = true;
-	group.add(mesh);
+	const rail = plankMat(PALETTE.woodDark);
+	addInstanced(group, new THREE.BoxGeometry(CELL_SIZE, 0.08, 0.08), rail, edges, true, (e) => {
+		dummy.position.set(e.x, RAIL_Y, e.z);
+		dummy.rotation.y = e.alongX ? 0 : Math.PI / 2;
+	});
+	const posts = edges.flatMap((e) => [-0.42, 0.42].map((t) => ({
+		x: e.x + (e.alongX ? t : 0),
+		z: e.z + (e.alongX ? 0 : t),
+	})));
+	addInstanced(group, new THREE.BoxGeometry(POST, RAIL_Y + 0.08, POST), rail, posts, true, (p) => {
+		dummy.position.set(p.x, (RAIL_Y + 0.08) * 0.5, p.z);
+	});
 }
 
 function cellHash(x:number, z:number, salt:number):number {
@@ -436,21 +355,42 @@ function finishYMesh(buf:YBuf, mat:THREE.Material, shadows:boolean):THREE.Mesh {
 	return mesh;
 }
 
-function isWater(chunk:Chunk, lx:number, lz:number):boolean {
-	return chunk.tile(lx, lz)?.def === 'water';
+/** Tiles by world position across every chunk, so water and lawn edges meet across chunk borders. */
+export type Terrain = {
+	tileAtWorld(x:number, z:number):Tile | undefined;
+};
+
+function terrainOf(chunks:Iterable<Chunk>):Terrain {
+	const list = [...chunks];
+	return {
+		tileAtWorld(x, z) {
+			for (const chunk of list) {
+				const tile = chunk.tileAtWorld(x, z);
+				if (tile) {
+					return tile;
+				}
+			}
+			return undefined;
+		},
+	};
 }
 
-function isWaterWorld(chunk:Chunk, x:number, z:number):boolean {
-	return chunk.tileAtWorld(x, z)?.def === 'water';
+function isWater(terrain:Terrain, chunk:Chunk, lx:number, lz:number):boolean {
+	const c = chunk.worldCellCenter(lx, lz);
+	return showsWater(terrain.tileAtWorld(c.x, c.z)?.def);
 }
 
-function shoreAmt(chunk:Chunk, x:number, z:number):number {
+function isWaterWorld(terrain:Terrain, x:number, z:number):boolean {
+	return showsWater(terrain.tileAtWorld(x, z)?.def);
+}
+
+function shoreAmt(terrain:Terrain, x:number, z:number):number {
 	let land = 0;
 	let n = 0;
 	for (const dx of [-0.42, -0.18, 0, 0.18, 0.42]) {
 		for (const dz of [-0.42, -0.18, 0, 0.18, 0.42]) {
 			n += 1;
-			if (!isWaterWorld(chunk, x + dx, z + dz)) {
+			if (!isWaterWorld(terrain, x + dx, z + dz)) {
 				land += 1;
 			}
 		}
@@ -459,6 +399,7 @@ function shoreAmt(chunk:Chunk, x:number, z:number):number {
 }
 
 function grassOutline(
+	terrain:Terrain,
 	chunk:Chunk,
 	lx:number,
 	lz:number,
@@ -468,10 +409,10 @@ function grassOutline(
 	z1:number,
 ):{ x:number; z:number }[] {
 	const cut = CELL_SIZE * 0.52;
-	const n = isWater(chunk, lx, lz - 1);
-	const s = isWater(chunk, lx, lz + 1);
-	const e = isWater(chunk, lx + 1, lz);
-	const w = isWater(chunk, lx - 1, lz);
+	const n = isWater(terrain, chunk, lx, lz - 1);
+	const s = isWater(terrain, chunk, lx, lz + 1);
+	const e = isWater(terrain, chunk, lx + 1, lz);
+	const w = isWater(terrain, chunk, lx - 1, lz);
 	const pts:{ x:number; z:number }[] = [];
 	if (n && w) {
 		pts.push({ x: x0, z: z0 + cut }, { x: x0 + cut, z: z0 });
@@ -502,6 +443,7 @@ function grassOutline(
 
 function addGrassFloor(
 	group:THREE.Group,
+	terrain:Terrain,
 	chunk:Chunk,
 	cells:{ lx:number; lz:number }[],
 	mat:THREE.Material,
@@ -514,7 +456,7 @@ function addGrassFloor(
 	for (const { lx, lz } of cells) {
 		const x0 = ox + lx * CELL_SIZE;
 		const z0 = oz + lz * CELL_SIZE;
-		const pts = grassOutline(chunk, lx, lz, x0, z0, x0 + CELL_SIZE, z0 + CELL_SIZE);
+		const pts = grassOutline(terrain, chunk, lx, lz, x0, z0, x0 + CELL_SIZE, z0 + CELL_SIZE);
 		if (pts.length === 4) {
 			// Outline is NW,NE,SE,SW. CCW from +Y so Lambert/sun hit the top face.
 			pushYTri(buf, pts[0].x, pts[0].z, pts[2].x, pts[2].z, pts[1].x, pts[1].z, y, rep);
@@ -532,7 +474,7 @@ function addBankRocks(group:THREE.Group, chunk:Chunk, cells:{ lx:number; lz:numb
 	const oz = chunk.worldOriginZ();
 	const dummy = new THREE.Object3D();
 	const max = cells.length * 4;
-	const mesh = new THREE.InstancedMesh(rockGeometry(), boulderMat(nature.boulder), max);
+	const mesh = new THREE.InstancedMesh(rockGeometry(), rockMat(), max);
 	mesh.castShadow = true;
 	mesh.receiveShadow = true;
 	mesh.frustumCulled = false;
@@ -591,6 +533,7 @@ function addBankRocks(group:THREE.Group, chunk:Chunk, cells:{ lx:number; lz:numb
 
 function fillWaterSheet(
 	buf:YBuf,
+	terrain:Terrain,
 	chunk:Chunk,
 	cells:{ lx:number; lz:number }[],
 	y:number,
@@ -627,10 +570,10 @@ function fillWaterSheet(
 		const z0 = oz + lz * CELL_SIZE;
 		const x1 = x0 + CELL_SIZE;
 		const z1 = z0 + CELL_SIZE;
-		const n = isWater(chunk, lx, lz - 1);
-		const s = isWater(chunk, lx, lz + 1);
-		const e = isWater(chunk, lx + 1, lz);
-		const w = isWater(chunk, lx - 1, lz);
+		const n = isWater(terrain, chunk, lx, lz - 1);
+		const s = isWater(terrain, chunk, lx, lz + 1);
+		const e = isWater(terrain, chunk, lx + 1, lz);
+		const w = isWater(terrain, chunk, lx - 1, lz);
 		const nF = n ? flowAt(x0 + CELL_SIZE * 0.5, z0 - CELL_SIZE * 0.5) : undefined;
 		const sF = s ? flowAt(x0 + CELL_SIZE * 0.5, z1 + CELL_SIZE * 0.5) : undefined;
 		const eF = e ? flowAt(x1 + CELL_SIZE * 0.5, z0 + CELL_SIZE * 0.5) : undefined;
@@ -670,20 +613,20 @@ function fillWaterSheet(
 	});
 }
 
-function addWater(group:THREE.Group, chunk:Chunk, cells:{ lx:number; lz:number }[], nature:ReturnType<typeof getNature>):void {
-	const field = createWaterFlowField(chunk);
+function addWater(group:THREE.Group, terrain:Terrain, chunk:Chunk, cells:{ lx:number; lz:number }[], nature:ReturnType<typeof getNature>):void {
+	const field = createWaterFlowField(terrain);
 	const flowAt = (x:number, z:number):Flow => field.sample(x, z);
-	const shoreAt = (x:number, z:number):number => shoreAmt(chunk, x, z);
+	const shoreAt = (x:number, z:number):number => shoreAmt(terrain, x, z);
 	const lower = makeYBuf();
 	const upper = makeYBuf();
-	fillWaterSheet(lower, chunk, cells, WATER_LOWER_Y, flowAt, shoreAt);
-	fillWaterSheet(upper, chunk, cells, WATER_UPPER_Y, flowAt, shoreAt);
+	fillWaterSheet(lower, terrain, chunk, cells, WATER_LOWER_Y, flowAt, shoreAt);
+	fillWaterSheet(upper, terrain, chunk, cells, WATER_UPPER_Y, flowAt, shoreAt);
 	group.add(finishYMesh(lower, toonWaterMat(nature.water, 'lower'), true));
 	group.add(finishYMesh(upper, toonWaterMat(nature.water, 'upper'), true));
 	addBankRocks(group, chunk, cells, nature);
 }
 
-function addGrassAndWater(group:THREE.Group, chunk:Chunk):void {
+function addGrassAndWater(group:THREE.Group, terrain:Terrain, chunk:Chunk):void {
 	let nature;
 	try {
 		nature = getNature();
@@ -697,49 +640,54 @@ function addGrassAndWater(group:THREE.Group, chunk:Chunk):void {
 		if (tile.def === 'grass') {
 			grassCells.push({ lx, lz });
 		}
-		else if (tile.def === 'water') {
+		else if (showsWater(tile.def)) {
 			waterCells.push({ lx, lz });
 		}
 	});
 	if (grassCells.length > 0) {
-		addGrassFloor(group, chunk, grassCells, grassLookMat(nature.grass));
+		addGrassFloor(group, terrain, chunk, grassCells, meadowMat());
 	}
 	if (waterCells.length > 0) {
-		addWater(group, chunk, waterCells, nature);
+		addWater(group, terrain, chunk, waterCells, nature);
 	}
 }
 
-export function buildChunkMesh(chunk:Chunk):THREE.Group {
+function addDressing(group:THREE.Group, chunk:Chunk, chunks:Iterable<Chunk>):void {
+	const buckets = new Map<string, DressingDraw[]>();
+	for (const draw of dressingDraws(chunk, chunks)) {
+		const key = `${draw.geom.uuid}|${draw.mat.uuid}|${draw.cast ? 1 : 0}`;
+		let list = buckets.get(key);
+		if (!list) {
+			list = [];
+			buckets.set(key, list);
+		}
+		list.push(draw);
+	}
+	for (const list of buckets.values()) {
+		const first = list[0]!;
+		addInstanced(group, first.geom, first.mat, list, first.cast, (item) => {
+			// Part tilt first (X, Z), then the prop's yaw (Y): YXZ order.
+			dummy.rotation.set(item.rx, item.ry, item.rz, 'YXZ');
+			dummy.position.set(item.x, item.y, item.z);
+			dummy.scale.set(item.sx, item.sy, item.sz);
+		});
+	}
+}
+
+export function buildChunkMesh(chunk:Chunk, chunks:Iterable<Chunk> = [chunk]):THREE.Group {
+	// Callers may pass a one-shot iterator (`world.chunks.values()`); several steps below read it.
+	const all = [...chunks];
 	const group = new THREE.Group();
 	group.name = `chunk_${chunk.id}`;
-	const sheet = getSheet();
-	const floorMats = sheet.floorTiles.map((m) => mapsToMat(m, {
-		polygonOffset: true,
-		polygonOffsetFactor: 1,
-		polygonOffsetUnits: 1,
-	}));
-	const wallMats = sheet.wallTiles.map((m) => {
-		const mat = mapsToMat(m);
-		applyWorldBrickUVs(mat);
-		return mat;
-	});
-
-	const floorGeom = new THREE.PlaneGeometry(CELL_SIZE, CELL_SIZE);
-	insetPlaneUVs(floorGeom);
-	const floorGeomFlip = floorGeom.clone();
-	const uv = floorGeomFlip.getAttribute('uv');
-	for (let i = 0; i < uv.count; i++) {
-		uv.setX(i, 1 - uv.getX(i));
-	}
-	uv.needsUpdate = true;
-
-	addFlatFloors(group, chunk, floorMats, floorGeom, floorGeomFlip);
-	addRaisedFloors(group, chunk, floorMats, wallMats);
-	addWalls(group, chunk, wallMats);
+	addFlatFloors(group, chunk);
+	addRaisedFloors(group, chunk);
+	addWalls(group, chunk);
 	addWoodWalls(group, chunk);
 	addPlankFloors(group, chunk);
-	addStairs(group, chunk, wallMats);
-	addGrassAndWater(group, chunk);
+	addFootbridges(group, chunk);
+	addStairs(group, chunk);
+	addGrassAndWater(group, terrainOf(all), chunk);
+	addDressing(group, chunk, all);
 	attachChunkAo(group, chunk);
 
 	return group;

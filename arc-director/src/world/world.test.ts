@@ -29,6 +29,8 @@ class Grid {
 	public readonly carry = new Map<string, string>();
 	public readonly steering = new Map<string, Vec | null>();
 	public doorLocked = false;
+	public canOffer:(character:string, other:string)=>boolean = () => true;
+	public reach:(from:string, to:string)=>number = () => 1.2;
 	public speed = 4;
 
 	constructor(public readonly walls:Set<string> = new Set(), public readonly door?:string) {}
@@ -76,7 +78,7 @@ class Grid {
 			const point = this.point.get(character);
 			return !!(to && point && distance(point, to) < 0.05);
 		},
-		getReach: () => 1.2,
+		getReach: (character, target) => this.reach(character, target),
 		moveItem: ({ character, item, to }) => {
 			if (to === undefined) {
 				this.carry.delete(item);
@@ -86,13 +88,19 @@ class Grid {
 			this.carry.set(item, to);
 			return { ok: true };
 		},
-		trade: ({ character, side, other, item, quantity, price }) => {
-			const floor = 5 * quantity;
-			if ((price ?? floor) < floor) {
-				return { ok: false, reason: `not below ${floor} gold` };
+		canOffer: (character, other) => this.canOffer(character, other),
+		exchange: ({ character, other, give, get }) => {
+			const missing = Object.keys(get).find((item) => this.carry.get(item) !== other);
+			if (missing) {
+				return { ok: false, reason: `${other} has no ${missing}` };
 			}
-			this.carry.set(item, side === 'buy' ? character : other);
-			return { ok: true, reason: `bought ${quantity} ${item} for ${price ?? floor} gold` };
+			for (const item of Object.keys(give).filter((name) => name !== 'gold')) {
+				this.carry.set(item, other);
+			}
+			for (const item of Object.keys(get)) {
+				this.carry.set(item, character);
+			}
+			return { ok: true };
 		},
 	};
 }
@@ -111,7 +119,11 @@ function network(point:Vec):PathStep[] {
 	return ROADS.filter(([a, b]) => a === i || b === i).map(([a, b, cost]) => ({ point: WAYPOINTS[a === i ? b : a], cost }));
 }
 
-async function run(grid:Grid, reply:string, opts:{ kit:string[]; seconds?:number; units?:string[]; nearRadius?:number }):Promise<{ director:ArcDirector<Ctx> }> {
+async function run(
+	grid:Grid,
+	reply:string,
+	opts:{ kit:string[]; seconds?:number; units?:string[]; nearRadius?:number; before?:(director:ArcDirector<Ctx>)=>void },
+):Promise<{ director:ArcDirector<Ctx> }> {
 	let sent = false;
 	const director = new ArcDirector<Ctx>()
 		.withPriorityQueue({ processInterval: 0, watchInterval: 0, heartbeatStart: 1000, heartbeatMin: 1000 })
@@ -134,6 +146,7 @@ async function run(grid:Grid, reply:string, opts:{ kit:string[]; seconds?:number
 	else {
 		director.addCharacter({ id: 'Ann', mind: {}, kit: { verbs: opts.kit }, identity: { role: 'Fetches.' } });
 	}
+	opts.before?.(director);
 	await director.start();
 	director.mindQueue()!.enqueueMajor(opts.units ? 'Hive' : 'Ann');
 	const dt = 0.1;
@@ -207,6 +220,23 @@ describe('findRoute', () => {
 		assert.equal(findRoute(graph, [0, 0], awayGoal([1, 0], 50)), undefined, 'cornered: no way that far');
 	});
 
+	it('does not treat range through a wall as arrived; it goes around', () => {
+		const wall = new Set(['1,0']);
+		const grid = (point:Vec):PathStep[] => {
+			const cell = point.map(Math.round);
+			return [[1, 0], [-1, 0], [0, 1], [0, -1]].flatMap(([dx, dz]) => {
+				const next = [cell[0] + dx, cell[1] + dz];
+				if (wall.has(next.join(',')) || Math.abs(next[1]) > 4) {
+					return [];
+				}
+				return [{ point: next }];
+			});
+		};
+		const route = openRoute(findRoute(grid, [0, 0], pointGoal([2, 0], 2.5)));
+		assert.equal(route.points.some((p) => p[0] === 1 && p[1] === 0), false);
+		assert.ok(route.points.some((p) => Math.abs(p[1]) > 0), 'went around');
+	});
+
 	it('lists reachable points without crossing a blocked step', () => {
 		const gated = (point:Vec):PathStep[] => line(point).filter((s) => s.point[0] >= 0).map((s) => (s.point[0] === 3 ? { ...s, blocked: 'x' } : s));
 		assert.deepEqual(reachablePoints(gated, [0], 99).map((p) => p.point[0]), [0, 1, 2]);
@@ -245,6 +275,51 @@ describe('Mover', () => {
 		}
 		assert.deepEqual(result, { ok: true, verb: 'go_to' });
 		assert.ok(wentEast, 'went the cheap way, east');
+	});
+
+	it('goes around a wall instead of steering through it', async () => {
+		let me:Vec = [0, 5];
+		let to:Vec | null = null;
+		let now = 0;
+		const walls = new Set(['1,-2', '1,-1', '1,0', '1,1', '1,2']);
+		const world:HostWorld<string> = {
+			find: (id) => id,
+			getPose: (id) => ({ point: id === 'Ann' ? me : [2, 0] }),
+			getReach: () => 2.5,
+			getPathGraph: () => (point) => {
+				const cell = point.map(Math.round);
+				const out:PathStep[] = [];
+				for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+					const next = [cell[0] + dx, cell[1] + dz];
+					if (walls.has(next.join(',')) || Math.abs(next[0]) > 4 || Math.abs(next[1]) > 8) {
+						continue;
+					}
+					out.push({ point: next });
+				}
+				return out;
+			},
+			steerToward: (_character, point) => {
+				to = point;
+				return !!point && distance(me, point) <= 0.05;
+			},
+		};
+		const mover = new Mover(world, () => now);
+		let result:ArcResult | undefined;
+		void mover.go('Ann', { target: 'Bo' }, 'go_to').then((r) => {
+			result = r;
+		});
+		for (; now < 20 && !result; now += 0.1) {
+			mover.tick();
+			if (to && distance(me, to) > 0.05) {
+				const t = to;
+				const gap = distance(me, t);
+				me = me.map((v, i) => v + ((t[i] - v) / gap) * Math.min(gap, 0.5));
+			}
+			assert.equal(walls.has(me.map(Math.round).join(',')), false, `walked through the wall to ${me}`);
+			await flush();
+		}
+		assert.equal(result?.ok, true);
+		assert.equal(walls.has(me.map(Math.round).join(',')), false);
 	});
 });
 
@@ -296,16 +371,65 @@ describe('stock world verbs', () => {
 		director.dispose();
 	});
 
-	it('buys at the seller, a quantity for a total offer, and refuses a low offer', async () => {
+	it('takes a standing offer: walks over, and both sides move at once', async () => {
 		const grid = new Grid().place('Ann', [0, 0]).place('Mira', [4, 0]).place('Bread', [4, 0]);
 		grid.carry.set('Bread', 'Mira');
-		const low = await run(grid, 'buy(item=Bread, from=Mira, offer=12, quantity=3)', { kit: ['buy', 'wait'] });
-		assert.equal(low.director.character('Ann')!.lastResult?.reason, 'not below 15 gold');
-		low.director.dispose();
-		const { director } = await run(grid, 'buy(item=Bread, from=Mira)', { kit: ['buy', 'wait'] });
+		const { director } = await run(grid, 'offer(to=Mira, give={"gold":5}, get={"Bread":1})', {
+			kit: ['offer', 'wait'],
+			before: (d) => d.offers.post({ from: 'Mira', give: { Bread: 1 }, get: { gold: 5 } }),
+		});
 		assert.equal(grid.carry.get('Bread'), 'Ann');
-		assert.equal(director.character('Ann')!.lastResult?.reason, 'bought 1 Bread for 5 gold');
+		assert.ok(distance(grid.point.get('Ann')!, [4, 0]) <= 1.3);
+		assert.equal(director.character('Ann')!.lastResult?.reason, 'traded 5 gold for Bread with Mira');
+		assert.equal(director.offers.all.length, 1, 'a standing offer stays');
 		director.dispose();
+	});
+
+	it('does not trade across a wall while farther than reach, even when nearby', async () => {
+		const wall = new Set(Array.from({ length: 17 }, (element, i) => `1,${i - 8}`));
+		const grid = new Grid(wall).place('Ann', [0, 0]).place('Mira', [2, 0]).place('Bread', [2, 0]);
+		grid.carry.set('Bread', 'Mira');
+		const { director } = await run(grid, 'offer(to=Mira, give={"gold":5}, get={"Bread":1})', {
+			kit: ['offer', 'wait'],
+			nearRadius: 8,
+			before: (d) => d.offers.post({ from: 'Mira', give: { Bread: 1 }, get: { gold: 5 } }),
+		});
+		assert.equal(grid.carry.get('Bread'), 'Mira');
+		assert.deepEqual(grid.point.get('Ann'), [0, 0]);
+		assert.match(director.character('Ann')!.lastResult?.reason ?? '', /no way to Mira/);
+		director.dispose();
+	});
+
+	it('walks into the shorter reach before a trade, ignoring a longer one', async () => {
+		const grid = new Grid().place('Ann', [0, 0]).place('Mira', [4, 0]).place('Bread', [4, 0]);
+		grid.carry.set('Bread', 'Mira');
+		grid.reach = (from) => (from === 'Ann' ? 6 : 1.2);
+		const { director } = await run(grid, 'offer(to=Mira, give={"gold":5}, get={"Bread":1})', {
+			kit: ['offer', 'wait'],
+			nearRadius: 8,
+			before: (d) => d.offers.post({ from: 'Mira', give: { Bread: 1 }, get: { gold: 5 } }),
+		});
+		assert.equal(grid.carry.get('Bread'), 'Ann');
+		assert.ok(distance(grid.point.get('Ann')!, [4, 0]) <= 1.2);
+		director.dispose();
+	});
+
+	it('leaves a lowball waiting where it stands, and refuses one out of sight', async () => {
+		const grid = new Grid().place('Ann', [0, 0]).place('Mira', [4, 0]).place('Bread', [4, 0]);
+		grid.carry.set('Bread', 'Mira');
+		const reply = 'offer(to=Mira, give={"gold":4}, get={"Bread":1})';
+		const before = (d:ArcDirector<Ctx>):void => {
+			d.offers.post({ from: 'Mira', give: { Bread: 1 }, get: { gold: 5 } });
+		};
+		const low = await run(grid, reply, { kit: ['offer', 'wait'], before });
+		assert.equal(low.director.character('Ann')!.lastResult?.reason, 'offered 4 gold for Bread to Mira; waiting for their answer');
+		assert.deepEqual(grid.point.get('Ann'), [0, 0]);
+		assert.deepEqual(low.director.offers.all.find((offer) => offer.from === 'Ann'), { from: 'Ann', to: 'Mira', give: { gold: 4 }, get: { Bread: 1 } });
+		low.director.dispose();
+		grid.canOffer = () => false;
+		const hidden = await run(grid, reply, { kit: ['offer', 'wait'], before });
+		assert.equal(hidden.director.character('Ann')!.lastResult?.reason, 'Mira is out of sight');
+		hidden.director.dispose();
 	});
 
 	it('wanders toward where until holds and reports what it saw', async () => {

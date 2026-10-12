@@ -251,8 +251,8 @@ describe('ArcDirector', () => {
 		director.dispose();
 	});
 
-	it('thinks again on the next tick after go_to, wander, or sell', async () => {
-		const lines = ['go_to(EastGate)', 'wander()', 'sell(item=Loaf, to=Baker)'];
+	it('thinks again on the next tick after go_to, wander, or offer', async () => {
+		const lines = ['go_to(EastGate)', 'wander()', 'offer(to=Baker, give={"Loaf":1}, get={"gold":5})'];
 		for (const line of lines) {
 			let chats = 0;
 			const director = await new ArcDirector<Ctx>()
@@ -269,7 +269,7 @@ describe('ArcDirector', () => {
 				})
 				.withArcFormat('text')
 				.addStockVerbs()
-				.withDefaultKit({ verbs: [...STOCK_VERBS, 'sell'] })
+				.withDefaultKit({ verbs: [...STOCK_VERBS, 'offer'] })
 				.onVerb((call) => ({ ok: true, verb: call.verb }))
 				.addSense('scene', {
 					description: 'see',
@@ -279,7 +279,7 @@ describe('ArcDirector', () => {
 				.addCharacter({
 					id: 'Npc',
 					mind: { skipHeartbeat: true },
-					kit: { verbs: [...STOCK_VERBS, 'sell'] },
+					kit: { verbs: [...STOCK_VERBS, 'offer'] },
 					identity: { role: 'Moves.' },
 				})
 				.start();
@@ -494,7 +494,7 @@ describe('ArcDirector', () => {
 			.addModel('fake', { maxParallel: 1 })
 			.addStockVerbs()
 			.addVerb('give', {
-				args: { item: 'id', to: 'id' },
+				args: { item: 'id', to: 'id', quantity: 'number?' },
 				handler: ({ args }) => {
 					gave.push(String(args.item));
 					return { ok: true, verb: 'give' };
@@ -884,7 +884,7 @@ describe('ArcDirector', () => {
 		director.dispose();
 	});
 
-	it('withLineOfSight drops what is occluded from sight', async () => {
+	it('hasLineOfSight drops what is occluded from sight', async () => {
 		const sight = {
 			self: { id: 'Captain', point: [0, 0] },
 			ambient: 'A damp stone hall of the dungeon.',
@@ -894,13 +894,12 @@ describe('ArcDirector', () => {
 			],
 		};
 		const director = await new ArcDirector<Ctx>()
-			.withWorld(OPEN_WORLD)
+			.withWorld({ ...OPEN_WORLD, hasLineOfSight: (_from, to) => to !== 'HiddenLoot' })
 			.withPriorityQueue({ processInterval: 0, watchInterval: 0, heartbeatStart: 0.01, heartbeatMin: 0.01 })
 			.addFakeInference(goToNamedInteractable())
 			.addStockVerbs()
 			.withDefaultKit(KIT)
 			.withSight({ look: () => sight })
-			.withLineOfSight((a, b) => b !== 'HiddenLoot')
 			.withContext((id) => ({ paragraph: scene(), id }))
 			.addCharacter({
 				id: 'Captain',

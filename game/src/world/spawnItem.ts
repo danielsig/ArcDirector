@@ -140,6 +140,9 @@ export function spawnWorldItem(
 	if (inst.name === 'FireMushroom') {
 		named.aliases = ['Fire Mushroom', 'mushroom'];
 	}
+	if (inst.name === 'MoonMushroom') {
+		named.aliases = ['Moon Mushroom', 'blue mushroom'];
+	}
 	if (inst.name === 'SilverTrout') {
 		named.aliases = ['Silver Trout', 'trout', 'fish'];
 	}

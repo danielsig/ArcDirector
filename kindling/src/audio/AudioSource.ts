@@ -4,7 +4,7 @@ import type { SfxOpts, SfxPatch } from './types.js';
 
 let next = 0;
 
-type PlayExtra = Pick<SfxOpts, 'gain' | 'freq' | 'freqTo' | 'dur' | 'hear' | 'falloff'>;
+type PlayExtra = Pick<SfxOpts, 'gain' | 'freq' | 'dur' | 'hear' | 'falloff'>;
 
 /** Posed SFX / loop on this GameObject. Position follows `transform`. */
 export class AudioSource extends Component {

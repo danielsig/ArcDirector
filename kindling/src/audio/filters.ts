@@ -62,6 +62,9 @@ export function filterProblems(filters:readonly SoundFilter[] | undefined, label
 			if (f.decay !== undefined && !unit(f.decay)) {
 				out.push(`${tag} decay`);
 			}
+			if (f.size !== undefined && !unit(f.size)) {
+				out.push(`${tag} size`);
+			}
 			if (f.tone !== undefined && !(f.tone > 0 && Number.isFinite(f.tone))) {
 				out.push(`${tag} tone`);
 			}
@@ -86,21 +89,37 @@ export type FilterChain = {
 };
 
 /**
- * Parallel short delays. `wet` is the send gain (the music bus uses 0.28).
- * Dry is the caller's job.
+ * Early-reflection taps (seconds), shortest first. `size` 0.5 uses the first four as written.
+ * Larger rooms take more of the list, and space every tap further apart.
+ */
+const REVERB_TAPS = [0.029, 0.043, 0.071, 0.103, 0.137, 0.179, 0.223, 0.269];
+
+/** 2 taps at 0, the stock 4 at 0.5, 8 at 1. Times scale from 0.35 to 1.65 around that stock room. */
+export function reverbTapTimes(size = 0.5):number[] {
+	const s = clamp(size, 0, 1);
+	const count = s <= 0.5 ? Math.round(2 + s * 4) : Math.round(4 + (s - 0.5) * 8);
+	const scale = 1 + (s - 0.5) * 1.3;
+	return REVERB_TAPS.slice(0, count).map((tap) => tap * scale);
+}
+
+/**
+ * Parallel delays, one per reflection. `wet` is the send gain (the music bus uses 0.28).
+ * More taps would sum louder, so the send is scaled back to the stock four.
+ * Dry is the caller's job. `size` is 0–1 (default 0.5).
  */
 export function createReverbSend(
 	ctx:AudioContext,
-	opts?:{ decay?:number; tone?:number; wet?:number },
+	opts?:{ decay?:number; tone?:number; wet?:number; size?:number },
 ):{ in:GainNode; out:GainNode; nodes:AudioNode[] } {
 	const input = ctx.createGain();
 	const out = ctx.createGain();
-	out.gain.value = clamp(opts?.wet ?? 0.28, 0, 1);
 	const decay = clamp(opts?.decay ?? 0.38, 0, 0.85);
 	const tone = clamp(opts?.tone ?? 2400, 200, 12000);
+	const taps = reverbTapTimes(opts?.size ?? 0.5);
+	out.gain.value = clamp(opts?.wet ?? 0.28, 0, 1) * (4 / taps.length);
 	const nodes:AudioNode[] = [input, out];
-	for (const delayTime of [0.029, 0.043, 0.071, 0.103]) {
-		const delay = ctx.createDelay(0.2);
+	for (const delayTime of taps) {
+		const delay = ctx.createDelay(delayTime + 0.01);
 		delay.delayTime.value = delayTime;
 		const lp = ctx.createBiquadFilter();
 		lp.type = 'lowpass';
@@ -137,6 +156,7 @@ function stage(ctx:AudioContext, filter:SoundFilter):{ input:AudioNode; output:A
 		const send = createReverbSend(ctx, {
 			decay: filter.decay,
 			tone: filter.tone,
+			size: filter.size,
 			wet: filter.mix ?? 0.28,
 		});
 		input.connect(dry);

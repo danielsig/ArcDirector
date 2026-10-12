@@ -15,13 +15,14 @@ export function rendererLook(look:SceneLook):RendererLook {
 			fillColor: 0x8fb892,
 			fillIntensity: 0.48,
 			sun: { color: 0xfff6d8, intensity: 2.65 },
+			ink: 0x2b1d12,
 		};
 	}
 	if (look === 'market') {
 		return {
 			background: 0x8eb8d4,
-			fogNear: 24,
-			fogFar: 62,
+			fogNear: 48,
+			fogFar: 110,
 			exposure: 1.42,
 			hemiSky: 0xffe8c4,
 			hemiGround: 0x6b5a3a,
@@ -29,6 +30,7 @@ export function rendererLook(look:SceneLook):RendererLook {
 			fillColor: 0xc4a878,
 			fillIntensity: 0.4,
 			sun: { color: 0xffe2b0, intensity: 2.45 },
+			ink: 0x33200f,
 		};
 	}
 	return {
@@ -41,5 +43,6 @@ export function rendererLook(look:SceneLook):RendererLook {
 		hemiIntensity: 0.24,
 		fillColor: 0x243044,
 		fillIntensity: 0.12,
+		ink: 0x0b0a0e,
 	};
 }

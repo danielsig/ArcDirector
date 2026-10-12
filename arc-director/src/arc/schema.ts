@@ -18,6 +18,9 @@ function argSchema(kind:VerbArgKind):JsonSchema {
 	if (base === 'string[]') {
 		return { type: 'array', items: { type: 'string' } };
 	}
+	if (base === 'bundle') {
+		return { type: 'object', additionalProperties: { type: 'number' } };
+	}
 	return { type: 'string' };
 }
 

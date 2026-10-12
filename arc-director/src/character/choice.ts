@@ -2,7 +2,7 @@ import { evaluate } from '../expr/eval.js';
 import { entityName, type Catalog, type ExprEntity } from '../expr/types.js';
 import { argBase, type VerbRegistry } from '../arc/stock-verbs.js';
 import { formatArc } from '../arc/parse.js';
-import { eachStep, isArc, verbsInside, type Arc, type Step } from '../arc/types.js';
+import { eachStep, isArc, isCountMap, verbsInside, type Arc, type Step } from '../arc/types.js';
 import type { LastChoice } from '../arc/run.js';
 
 /** What a System One model reads before it picks: who is choosing, what it is doing, and who is nearest. */
@@ -144,6 +144,11 @@ export function namesIn(arcs:Arc[], verbs:VerbRegistry):string[] {
 			for (const [key, value] of Object.entries(step.args)) {
 				if (argBase(kinds[key]) === 'id' && typeof value === 'string' && /^[A-Za-z_]\w*$/.test(value)) {
 					out.add(value);
+				}
+				if (argBase(kinds[key]) === 'bundle' && isCountMap(value)) {
+					for (const name of Object.keys(value)) {
+						out.add(name);
+					}
 				}
 			}
 		});

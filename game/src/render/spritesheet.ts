@@ -31,15 +31,6 @@ import {
 	WALK_FWD,
 	type PxRect,
 } from './atlas';
-import {
-	FLOOR_STAMPS,
-	ROCKS_H,
-	ROCKS_W,
-	WALL_ROW_COUNT,
-	WALL_STAMPS,
-	type RockStamp,
-} from './rocksAtlas';
-import { rasterizeImage, warpQuad, type AtlasPixels } from './unproject';
 import { disposeNPCAnims } from './humanAnims';
 import { disposeSwordAnims } from './swordAnims';
 
@@ -83,8 +74,6 @@ export type SheetTextures = {
 	torchStickN:THREE.CanvasTexture;
 	torchStickM:THREE.CanvasTexture;
 	flame:THREE.CanvasTexture[];
-	floorTiles:SpriteMaps[];
-	wallTiles:SpriteMaps[];
 	chest:ChestFaces;
 	chestN:ChestFaces;
 	chestM:ChestFaces;
@@ -105,23 +94,6 @@ export function pixelArt(canvas:HTMLCanvasElement, wrap:THREE.Wrapping = THREE.C
 	tex.colorSpace = THREE.SRGBColorSpace;
 	tex.wrapS = wrap;
 	tex.wrapT = wrap;
-	tex.needsUpdate = true;
-	owned.push(tex);
-	return tex;
-}
-
-function rockTex(
-	canvas:HTMLCanvasElement,
-	opts:{ normal?:boolean; wrap?:THREE.Wrapping },
-):THREE.CanvasTexture {
-	const tex = new THREE.CanvasTexture(canvas);
-	tex.magFilter = THREE.LinearFilter;
-	tex.minFilter = opts.normal ? THREE.LinearFilter : THREE.LinearMipmapLinearFilter;
-	tex.generateMipmaps = !opts.normal;
-	tex.anisotropy = opts.normal ? 1 : 4;
-	tex.colorSpace = opts.normal ? THREE.NoColorSpace : THREE.SRGBColorSpace;
-	tex.wrapS = opts.wrap ?? THREE.ClampToEdgeWrapping;
-	tex.wrapT = opts.wrap ?? THREE.ClampToEdgeWrapping;
 	tex.needsUpdate = true;
 	owned.push(tex);
 	return tex;
@@ -342,89 +314,6 @@ function crop(
 	return canvas;
 }
 
-const ROCK_KEY = [110, 19, 54] as const;
-
-function isRockKey(px:Uint8ClampedArray, i:number):boolean {
-	return keyDist(px, i, ROCK_KEY) < 64;
-}
-
-/** Replace atlas-key fringe so LinearFilter / RepeatWrapping cannot bleed magenta. */
-function fillKeyBleed(canvas:HTMLCanvasElement):void {
-	const ctx = canvas.getContext('2d', { willReadFrequently: true });
-	if (!ctx) {
-		return;
-	}
-	const w = canvas.width;
-	const h = canvas.height;
-	const img = ctx.getImageData(0, 0, w, h);
-	const d = img.data;
-	let fr = 0;
-	let fg = 0;
-	let fb = 0;
-	let fn = 0;
-	for (let i = 0; i < d.length; i += 4) {
-		if (!isRockKey(d, i)) {
-			fr += d[i];
-			fg += d[i + 1];
-			fb += d[i + 2];
-			fn += 1;
-		}
-	}
-	if (fn === 0) {
-		return;
-	}
-	fr = (fr / fn) | 0;
-	fg = (fg / fn) | 0;
-	fb = (fb / fn) | 0;
-	const src = new Uint8ClampedArray(d);
-	for (let pass = 0; pass < 4; pass++) {
-		src.set(d);
-		for (let y = 0; y < h; y++) {
-			for (let x = 0; x < w; x++) {
-				const i = (y * w + x) * 4;
-				if (!isRockKey(src, i)) {
-					continue;
-				}
-				let sr = 0;
-				let sg = 0;
-				let sb = 0;
-				let c = 0;
-				for (let oy = -1; oy <= 1; oy++) {
-					for (let ox = -1; ox <= 1; ox++) {
-						if (ox === 0 && oy === 0) {
-							continue;
-						}
-						const xx = x + ox;
-						const yy = y + oy;
-						if (xx < 0 || yy < 0 || xx >= w || yy >= h) {
-							continue;
-						}
-						const j = (yy * w + xx) * 4;
-						if (isRockKey(src, j)) {
-							continue;
-						}
-						sr += src[j];
-						sg += src[j + 1];
-						sb += src[j + 2];
-						c += 1;
-					}
-				}
-				if (c > 0) {
-					d[i] = (sr / c) | 0;
-					d[i + 1] = (sg / c) | 0;
-					d[i + 2] = (sb / c) | 0;
-				}
-				else if (pass === 3) {
-					d[i] = fr;
-					d[i + 1] = fg;
-					d[i + 2] = fb;
-				}
-			}
-		}
-	}
-	ctx.putImageData(img, 0, 0);
-}
-
 function medianField(src:Float32Array, w:number, h:number, radius:number):Float32Array {
 	const out = new Float32Array(src.length);
 	const win = new Float32Array((2 * radius + 1) ** 2);
@@ -504,79 +393,6 @@ function keepLongRuns(src:Float32Array, w:number, h:number, minRun:number):Float
 	return keep;
 }
 
-function rockMaps(
-	albedo:AtlasPixels,
-	nrm:AtlasPixels,
-	met:THREE.CanvasTexture,
-	stamp:RockStamp,
-	wrap:THREE.Wrapping,
-):SpriteMaps {
-	const mapCanvas = warpQuad(albedo, stamp.quad, stamp.outW, stamp.outH, ROCKS_W, ROCKS_H);
-	fillKeyBleed(mapCanvas);
-	const nrmCanvas = warpQuad(nrm, stamp.quad, stamp.outW, stamp.outH, ROCKS_W, ROCKS_H);
-	return {
-		map: rockTex(mapCanvas, { wrap }),
-		nrm: rockTex(nrmCanvas, { normal: true, wrap }),
-		met,
-	};
-}
-
-const WALL_STACK_ORDERS = [
-	[0, 1, 2],
-	[1, 2, 0],
-	[2, 0, 1],
-];
-
-function stackWallMaps(
-	albedo:AtlasPixels,
-	nrm:AtlasPixels,
-	met:THREE.CanvasTexture,
-	order:number[],
-	wrap:THREE.Wrapping,
-):SpriteMaps {
-	const stampH = WALL_STAMPS[0].outH;
-	const stampW = WALL_STAMPS[0].outW;
-	const mapCanvas = document.createElement('canvas');
-	mapCanvas.width = stampW;
-	mapCanvas.height = stampH * WALL_ROW_COUNT;
-	const mapCtx = mapCanvas.getContext('2d', { willReadFrequently: true });
-	if (!mapCtx) {
-		throw new Error('2d context');
-	}
-	const nrmCanvas = document.createElement('canvas');
-	nrmCanvas.width = stampW;
-	nrmCanvas.height = stampH * WALL_ROW_COUNT;
-	const nrmCtx = nrmCanvas.getContext('2d', { willReadFrequently: true });
-	if (!nrmCtx) {
-		throw new Error('2d context');
-	}
-	for (let i = 0; i < order.length; i++) {
-		const stamp = WALL_STAMPS[order[i]];
-		const mapPiece = warpQuad(albedo, stamp.quad, stamp.outW, stamp.outH, ROCKS_W, ROCKS_H);
-		fillKeyBleed(mapPiece);
-		mapCtx.drawImage(mapPiece, 0, i * stampH);
-		nrmCtx.drawImage(warpQuad(nrm, stamp.quad, stamp.outW, stamp.outH, ROCKS_W, ROCKS_H), 0, i * stampH);
-	}
-	return {
-		map: rockTex(mapCanvas, { wrap }),
-		nrm: rockTex(nrmCanvas, { normal: true, wrap }),
-		met,
-	};
-}
-
-function darkMet(wrap:THREE.Wrapping):THREE.CanvasTexture {
-	const canvas = document.createElement('canvas');
-	canvas.width = 4;
-	canvas.height = 4;
-	const ctx = canvas.getContext('2d');
-	if (!ctx) {
-		throw new Error('2d context');
-	}
-	ctx.fillStyle = '#141414';
-	ctx.fillRect(0, 0, 4, 4);
-	return rockTex(canvas, { normal: true, wrap });
-}
-
 function chestOpaque(img:HTMLImageElement, rect:PxRect):THREE.CanvasTexture {
 	return pixelArt(crop(img, rect, 'opaque'));
 }
@@ -607,8 +423,6 @@ function build(
 	mainM:HTMLImageElement,
 	chestsM:HTMLImageElement,
 	fwdM:HTMLImageElement,
-	rocks:HTMLImageElement,
-	rocksN:HTMLImageElement,
 ):SheetTextures {
 	const walkA = WALK.map((r) => crop(main, r, 'sprite'));
 	const walkFwdA = WALK_FWD.map((r) => crop(fwd, r, 'sprite', FWD_KEY_RGB, false, true));
@@ -629,12 +443,6 @@ function build(
 			met: mainAtlas(mainM, r, a),
 		};
 	};
-	const wallWrap = THREE.RepeatWrapping;
-	const rockMet = darkMet(wallWrap);
-	const rocksPx = rasterizeImage(rocks);
-	const rocksNPx = rasterizeImage(rocksN);
-	const wallTiles = WALL_STACK_ORDERS.map((order) => stackWallMaps(rocksPx, rocksNPx, rockMet, order, wallWrap));
-	const floorTiles = FLOOR_STAMPS.map((s) => rockMaps(rocksPx, rocksNPx, rockMet, s, THREE.ClampToEdgeWrapping));
 	return {
 		walk: walkA.map((c) => pixelArt(c)),
 		walkN: WALK.map((r, i) => mainAtlas(mainN, r, walkA[i])),
@@ -658,8 +466,6 @@ function build(
 		torchStickN: mainAtlas(mainN, TORCH_STICK, torchStickA),
 		torchStickM: mainAtlas(mainM, TORCH_STICK, torchStickA),
 		flame: FLAME.map((r) => pixelArt(crop(main, r, 'flame', KEY_RGB, true, true))),
-		floorTiles,
-		wallTiles,
 		chest: {
 			front: chestOpaque(chests, CHEST_FRONT),
 			back: chestOpaque(chests, CHEST_BACK),
@@ -811,10 +617,8 @@ export function loadSpritesheet():Promise<SheetTextures> {
 		loadImage(`${base}spritesheet_metallic.jpg`),
 		loadImage(`${base}chests_metallic.jpg`),
 		loadImage(`${base}spritesheet_forward_walk_metallic.jpg`),
-		loadImage(`${base}rocks.jpg`),
-		loadImage(`${base}rocks_normal.png`),
-	]).then(([main, chests, fwd, mainN, chestsN, fwdN, mainM, chestsM, fwdM, rocks, rocksN]) => {
-		textures = build(main, chests, fwd, mainN, chestsN, fwdN, mainM, chestsM, fwdM, rocks, rocksN);
+	]).then(([main, chests, fwd, mainN, chestsN, fwdN, mainM, chestsM, fwdM]) => {
+		textures = build(main, chests, fwd, mainN, chestsN, fwdN, mainM, chestsM, fwdM);
 		return textures;
 	}).catch((err:unknown) => {
 		pending = null;
@@ -923,30 +727,6 @@ export function chestMaterial(
 		alphaTest: opts.alpha === true ? 0.22 : 0,
 		side: opts.alpha === true ? THREE.DoubleSide : THREE.FrontSide,
 	});
-	mats.push(mat);
-	return mat;
-}
-
-export function tileMaterial(
-	map:THREE.Texture,
-	extras:THREE.MeshStandardMaterialParameters = {},
-):THREE.MeshStandardMaterial {
-	const nrm = extras.normalMap as THREE.Texture | null | undefined;
-	const key = `tile:${map.uuid}:${nrm?.uuid ?? ''}:${extras.polygonOffset ? 1 : 0}:${String(extras.polygonOffsetFactor ?? '')}:${String(extras.metalness ?? '')}`;
-	const hit = matByKey.get(key);
-	if (hit) {
-		return hit as THREE.MeshStandardMaterial;
-	}
-	const mat = new THREE.MeshStandardMaterial({
-		map,
-		roughness: 0.93,
-		metalness: extras.metalnessMap ? 1 : 0.03,
-		shadowSide: THREE.FrontSide,
-		normalScale: extras.normalMap ? new THREE.Vector2(1.85, 1.85) : undefined,
-		...extras,
-	});
-	mat.userData.shared = true;
-	matByKey.set(key, mat);
 	mats.push(mat);
 	return mat;
 }

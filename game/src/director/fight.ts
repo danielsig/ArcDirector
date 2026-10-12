@@ -1,7 +1,8 @@
 import { shortTag, type Collective, type SeenName } from 'arc-director';
 import type { GameObject } from '../engine/GameObject';
 import type { GameHost, CharacterCtx } from './adapter';
-import { idOf, findObject, isLiving } from './names';
+import { HumanBody, Vitals, Weakness } from '../engine/components';
+import { idOf, isLiving } from './names';
 
 export type FightRole = 'Witch' | 'Knight' | 'Archer' | 'Blade' | 'Healer';
 
@@ -56,6 +57,16 @@ export const ATTACKS:Record<string, AttackKind> = {
 	cleave: { roles: ['Knight'], range: 2.2, damage: 4, word: 'cleaved', castTime: 0.8, cooldown: 1.6, accuracy: 0.74, knock: 2.2 },
 	shoot: { roles: ['Archer'], range: 12, damage: 5, cover: 'block', word: 'shot', castTime: 1.5, cooldown: 3.5, accuracy: 0.78, falloff: 0.28 },
 };
+
+/** Damage after the target's weakness, if it has one, and whether the blow found it. Never below 1. */
+export function weaknessDamage(target:GameObject, verb:string | undefined, damage:number):{ damage:number; weak:boolean } {
+	const weakness = target.getComponent(Weakness);
+	if (!weakness) {
+		return { damage, weak: false };
+	}
+	const weak = !!verb && weakness.to.includes(verb);
+	return { damage: Math.max(1, Math.round(damage * (weak ? weakness.times : weakness.others))), weak };
+}
 
 /** Combat verb for this fight role. Healer smites; heal is separate. */
 export function attackVerbFor(role:FightRole):string | undefined {
@@ -115,21 +126,40 @@ export function agilityOf(host:GameHost, character:GameObject):number {
 	return role ? ROLE_AGILITY[role] : 0.1;
 }
 
+/** Fighters outside every collective who still have a fight role fight together, as the company. */
+const COMPANY = 'company';
+
+/** Who a living fighter stands with: its collective's id, or the company. None for a non-fighter. */
+function sideOf(host:GameHost, character:GameObject):string | undefined {
+	const party = fightParty(host, character);
+	if (party) {
+		return party.id;
+	}
+	return fightTags(host, character).some((tag) => (FIGHT_ROLES as readonly string[]).includes(tag)) ? COMPANY : undefined;
+}
+
+/** Every living body that can fight or be fought. */
+function fighters(host:GameHost):GameObject[] {
+	return host.world.objects.filter((go) => !!go.getComponent(Vitals) && !!go.getComponent(HumanBody) && isLiving(go));
+}
+
 export function isRival(host:GameHost, character:GameObject, target:GameObject):boolean {
-	const mine = fightParty(host, character);
-	const theirs = fightParty(host, target);
-	if (mine && theirs && mine !== theirs) {
-		return true;
+	const mine = sideOf(host, character);
+	const theirs = sideOf(host, target);
+	if (mine && theirs) {
+		return mine !== theirs;
 	}
 	if (!mine || target.id !== 'Player') {
 		return false;
 	}
-	for (const unit of mine.characters) {
-		if (host.world.playerHits.has(unit.id)) {
-			return true;
-		}
-	}
-	return false;
+	// A player outside the fight turns rival by striking someone on this side.
+	return allies(host, character).some((go) => host.world.playerHits.has(idOf(go)));
+}
+
+/** The living fighters on the same side as `character`, itself included. */
+export function allies(host:GameHost, character:GameObject):GameObject[] {
+	const side = sideOf(host, character);
+	return side ? fighters(host).filter((go) => sideOf(host, go) === side) : [];
 }
 
 /** Naming policy: a rival is `Enemy<Role>`, never its given name. Reads only the tags from {@link fightExprTags}. */
@@ -151,12 +181,16 @@ export function seenName(host:GameHost, observer:GameObject, target:GameObject):
 		: id;
 }
 
-/** A character's tags as its party reads them. A commander with no role tag fights as a Healer captain. */
+/**
+ * A character's tags as its party reads them. A commander with no role tag fights as a Healer captain. Outside a
+ * collective, its own tags; the player's only while NPCs can see the player.
+ */
 export function fightTags(host:GameHost, character:GameObject):string[] {
 	const party = fightParty(host, character);
 	const member = party?.character(idOf(character));
 	if (!party || !member) {
-		return [];
+		const own = isLiving(character) && host.world.npcCanSee(character) ? host.arc?.character(idOf(character)) : undefined;
+		return own && !own.collective ? [...own.tags] : [];
 	}
 	const tags = member.tags.map((t) => shortTag(party.id, t));
 	if (member === party.commander && !FIGHT_ROLES.some((role) => tags.includes(role))) {
@@ -192,21 +226,6 @@ function nearestWhere(
 	return best;
 }
 
-function partyOf(host:GameHost, character:GameObject):GameObject[] {
-	const mine = fightParty(host, character);
-	if (!mine) {
-		return [];
-	}
-	const out:GameObject[] = [];
-	for (const unit of mine.characters) {
-		const go = findObject(host.world, unit.id);
-		if (go) {
-			out.push(go);
-		}
-	}
-	return out;
-}
-
 /** Knight and Blade hold this line. Archer, Witch, and Healer sit behind it. */
 export const FRONT_ROLES:readonly FightRole[] = ['Knight', 'Blade'];
 export const BACK_ROLES:readonly FightRole[] = ['Archer', 'Witch', 'Healer'];
@@ -228,7 +247,7 @@ export function isBackRole(role:FightRole | undefined):boolean {
 
 function livingOfRoles(host:GameHost, character:GameObject, roles:readonly FightRole[]):GameObject[] {
 	const out:GameObject[] = [];
-	for (const go of partyOf(host, character)) {
+	for (const go of allies(host, character)) {
 		if (!isLiving(go)) {
 			continue;
 		}
@@ -399,7 +418,7 @@ export function fightProximityNote(host:GameHost, observer:GameObject, go:GameOb
 	}
 	const here = go.transform.position;
 	const pool = isRival(host, observer, go)
-		? partyOf(host, observer)
+		? allies(host, observer)
 		: rivalsOf(host, observer);
 	let best:{ name:string; dist:number } | undefined;
 	for (const other of pool) {
@@ -422,27 +441,7 @@ export function fightProximityNote(host:GameHost, observer:GameObject, go:GameOb
 }
 
 function rivalsOf(host:GameHost, character:GameObject):GameObject[] {
-	const mine = fightParty(host, character);
-	if (!mine) {
-		return [];
-	}
-	const out:GameObject[] = [];
-	for (const party of host.arc?.collectives() ?? []) {
-		if (party === mine) {
-			continue;
-		}
-		for (const unit of party.characters) {
-			const go = findObject(host.world, unit.id);
-			if (go) {
-				out.push(go);
-			}
-		}
-	}
-	const player = host.world.findByID('Player');
-	if (player && isRival(host, character, player)) {
-		out.push(player);
-	}
-	return out;
+	return fighters(host).filter((go) => go !== character && isRival(host, character, go));
 }
 
 function nearestRivalWhere(
@@ -459,5 +458,5 @@ export function nearestAlly(
 	from:GameObject,
 	ok:(go:GameObject)=>boolean = () => true,
 ):GameObject | undefined {
-	return nearestWhere(from, partyOf(host, from), ok);
+	return nearestWhere(from, allies(host, from), ok);
 }

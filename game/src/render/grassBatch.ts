@@ -1,181 +1,122 @@
 import * as THREE from 'three';
+import { ToonMaterial } from '@arc-director/kindling';
 import type { World } from '../engine/World';
-import { CELL_SIZE, CHUNK_SIZE, TILE_HEIGHT } from '../world/constants';
-import { getNature, grassLookMat, natureDepthMat, WIND_GRASS, GRASS_CLIP_MAX_Y, type NatureMaps } from './nature';
+import { CELL_SIZE, CHUNK_SIZE } from '../world/constants';
+import { windSway } from './nature';
+import { grassCleared } from '../world/dressingPlan';
 
-const PER_CELL = 7;
-const BLADE_W = 2.15;
-const BLADE_H = 0.55;
+/**
+ * Grass blades over every lawn tile: one instanced mesh of painted tufts for the whole world.
+ * Tapered, curved blades shade from the lawn's dark green at the root to sunlit tips, with
+ * upward normals so they light like the ground they grow from. No ink, no shadows cast.
+ */
+
+const TUFTS_PER_CELL = 5;
+const BLADES = 7;
+const ROOT = new THREE.Color(0x2b5d22);
+const TIP = new THREE.Color(0x7fa845);
 
 let host:THREE.Scene | null = null;
 let batch:THREE.InstancedMesh | null = null;
-let mask:THREE.DataTexture | null = null;
-let bladeGeo:THREE.PlaneGeometry | null = null;
+let tuftGeo:THREE.BufferGeometry | null = null;
+let bladeMat:ToonMaterial | null = null;
 let stamp = '';
-let capacity = 0;
 
 function cellHash(x:number, z:number, salt:number):number {
 	const n = Math.sin(x * 127.1 + z * 311.7 + salt * 74.7) * 43758.5453;
 	return n - Math.floor(n);
 }
 
-function contentUV(map:THREE.Texture):{ u0:number; v0:number; u1:number; v1:number } {
-	const uv = map.userData.contentUV as { u0:number; v0:number; u1:number; v1:number } | undefined;
-	if (uv) {
-		return uv;
+/** One clump of blades leaning out from its root, each in two curved segments to a point. */
+function tuftGeometry():THREE.BufferGeometry {
+	const pos:number[] = [];
+	const nrm:number[] = [];
+	const col:number[] = [];
+	const color = new THREE.Color();
+	for (let b = 0; b < BLADES; b++) {
+		const a = (b / BLADES) * Math.PI * 2 + cellHash(b, 1, 2) * 0.8;
+		const dx = Math.cos(a);
+		const dz = Math.sin(a);
+		const root = 0.02 + cellHash(b, 3, 4) * 0.06;
+		const h = 0.26 + cellHash(b, 5, 6) * 0.18;
+		const lean = 0.08 + cellHash(b, 7, 8) * 0.1;
+		const w = 0.05;
+		const tint = (cellHash(b, 9, 10) - 0.5) * 0.15;
+		// Across the blade, perpendicular to its lean.
+		const sx = -dz * w * 0.5;
+		const sz = dx * w * 0.5;
+		const at = (t:number, side:number, taper:number):[number, number, number] => [
+			dx * (root + lean * t * t) + sx * side * taper,
+			h * t,
+			dz * (root + lean * t * t) + sz * side * taper,
+		];
+		const b0 = at(0, -1, 1);
+		const b1 = at(0, 1, 1);
+		const m0 = at(0.55, -1, 0.65);
+		const m1 = at(0.55, 1, 0.65);
+		const tip = at(1, 0, 0);
+		const shade = [0, 0, 0.55, 0.55, 1];
+		const verts = [b0, b1, m1, b0, m1, m0, m0, m1, tip];
+		const shades = [shade[0], shade[1], shade[3], shade[0], shade[3], shade[2], shade[2], shade[3], shade[4]];
+		verts.forEach((v, i) => {
+			pos.push(v[0], v[1], v[2]);
+			nrm.push(dx * 0.15, 1, dz * 0.15);
+			color.copy(ROOT).lerp(TIP, THREE.MathUtils.clamp(shades[i]! + tint, 0, 1));
+			col.push(color.r, color.g, color.b);
+		});
 	}
-	return { u0: 0, v0: 0, u1: 1, v1: 1 };
-}
-
-function bladeGeometry(map:THREE.Texture):THREE.PlaneGeometry {
-	if (bladeGeo) {
-		return bladeGeo;
-	}
-	const geo = new THREE.PlaneGeometry(BLADE_W, BLADE_H);
-	geo.translate(0, BLADE_H * 0.5 - 0.04, 0);
-	const { u0, v0, u1, v1 } = contentUV(map);
-	const uv = geo.getAttribute('uv');
-	for (let i = 0; i < uv.count; i++) {
-		uv.setXY(i, u0 + uv.getX(i) * (u1 - u0), v0 + uv.getY(i) * (v1 - v0));
-	}
-	uv.needsUpdate = true;
-	geo.userData.shared = true;
-	bladeGeo = geo;
+	const geo = new THREE.BufferGeometry();
+	geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+	geo.setAttribute('normal', new THREE.Float32BufferAttribute(nrm, 3));
+	geo.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
+	geo.computeBoundingSphere();
 	return geo;
 }
 
 function chunkStamp(world:World):string {
 	let s = '';
 	for (const chunk of world.chunks.values()) {
-		s += chunk.id;
-		s += ';';
+		s += `${chunk.id};`;
 	}
 	return s;
 }
 
-function worldClipMask(world:World):{
-	tex:THREE.DataTexture;
-	originX:number;
-	originZ:number;
-	sizeX:number;
-	sizeZ:number;
-} | null {
-	const b = world.chunkBounds();
-	if (!b) {
-		return null;
-	}
-	const tilesX = (b.maxX - b.minX) / CELL_SIZE;
-	const tilesZ = (b.maxZ - b.minZ) / CELL_SIZE;
-	const data = new Uint8Array(tilesX * tilesZ * 4);
-	for (const chunk of world.chunks.values()) {
-		const ox = (chunk.worldOriginX() - b.minX) / CELL_SIZE;
-		const oz = (chunk.worldOriginZ() - b.minZ) / CELL_SIZE;
-		chunk.forEachTile((tile, lx, lz) => {
-			const grass = tile.def === 'grass';
-			const keep = grass ? 255 : 0;
-			let top = 0;
-			if (!grass) {
-				const h = (tile.height ?? 0) * TILE_HEIGHT;
-				top = h > 0.05
-					? Math.max(1, Math.min(255, Math.round((h / GRASS_CLIP_MAX_Y) * 255)))
-					: 255;
-			}
-			const i = ((oz + lz) * tilesX + (ox + lx)) * 4;
-			data[i] = keep;
-			data[i + 1] = top;
-			data[i + 2] = keep;
-			data[i + 3] = 255;
-		});
-	}
-	const tex = new THREE.DataTexture(data, tilesX, tilesZ);
-	tex.minFilter = THREE.NearestFilter;
-	tex.magFilter = THREE.NearestFilter;
-	tex.wrapS = THREE.ClampToEdgeWrapping;
-	tex.wrapT = THREE.ClampToEdgeWrapping;
-	tex.flipY = false;
-	tex.needsUpdate = true;
-	return {
-		tex,
-		originX: b.minX,
-		originZ: b.minZ,
-		sizeX: tilesX * CELL_SIZE,
-		sizeZ: tilesZ * CELL_SIZE,
-	};
-}
-
-function bindClip(
-	mesh:THREE.InstancedMesh,
-	tex:THREE.DataTexture,
-	originX:number,
-	originZ:number,
-	sizeX:number,
-	sizeZ:number,
-):void {
-	mesh.userData.clipMask = tex;
-	const bind = (mat:THREE.Material | THREE.Material[] | undefined):void => {
-		if (!mat) {
-			return;
-		}
-		const list = Array.isArray(mat) ? mat : [mat];
-		for (const m of list) {
-			if (!m.userData.uGrassClip) {
-				continue;
-			}
-			(m.userData.uGrassClip as { value:THREE.Texture }).value = tex;
-			(m.userData.uClipOrigin as { value:THREE.Vector2 }).value.set(originX, originZ);
-			(m.userData.uClipSize as { value:THREE.Vector2 }).value.set(sizeX, sizeZ);
-			if (m.userData.uClipMaxY) {
-				(m.userData.uClipMaxY as { value:number }).value = GRASS_CLIP_MAX_Y;
-			}
-		}
-	};
-	bind(mesh.material);
-	bind(mesh.customDepthMaterial);
-}
-
-function countBlades(world:World):number {
-	let n = 0;
-	for (const chunk of world.chunks.values()) {
-		for (const tile of chunk.tiles) {
-			if (tile.def === 'grass') {
-				n += PER_CELL;
-			}
-		}
-	}
-	return n;
-}
-
-function fillInstances(mesh:THREE.InstancedMesh, world:World):number {
+/** Tuft transforms: a few per lawn tile, kept off paths and the ground props stand on. */
+function tuftMatrices(world:World):THREE.Matrix4[] {
 	const dummy = new THREE.Object3D();
-	let n = 0;
-	for (const chunk of world.chunks.values()) {
+	const out:THREE.Matrix4[] = [];
+	const chunks = [...world.chunks.values()];
+	for (const chunk of chunks) {
 		const ox = chunk.worldOriginX();
 		const oz = chunk.worldOriginZ();
 		chunk.forEachTile((tile, lx, lz) => {
 			if (tile.def !== 'grass') {
 				return;
 			}
+			const center = chunk.worldCellCenter(lx, lz);
+			if (grassCleared(chunks, center.x, center.z)) {
+				return;
+			}
 			const gx = chunk.origin.cx * CHUNK_SIZE + lx;
 			const gz = chunk.origin.cz * CHUNK_SIZE + lz;
-			for (let t = 0; t < PER_CELL; t++) {
+			for (let t = 0; t < TUFTS_PER_CELL; t++) {
 				const hx = cellHash(gx, gz, t * 3 + 1);
 				const hz = cellHash(gx, gz, t * 3 + 2);
 				const hs = cellHash(gx, gz, t * 3 + 3);
 				dummy.position.set(
-					ox + (lx + 0.08 + hx * 0.84) * CELL_SIZE,
+					ox + (lx + 0.1 + hx * 0.8) * CELL_SIZE,
 					0,
-					oz + (lz + 0.08 + hz * 0.84) * CELL_SIZE,
+					oz + (lz + 0.1 + hz * 0.8) * CELL_SIZE,
 				);
 				dummy.rotation.set(0, hs * Math.PI * 2, 0);
-				const scl = 1.12 + hx * 0.38;
-				dummy.scale.set(scl, 1.15 + hz * 0.3, scl);
+				const s = 0.8 + hs * 0.45;
+				dummy.scale.set(s, s * (0.85 + hx * 0.3), s);
 				dummy.updateMatrix();
-				mesh.setMatrixAt(n, dummy.matrix);
-				n += 1;
+				out.push(dummy.matrix.clone());
 			}
 		});
 	}
-	return n;
+	return out;
 }
 
 function dropBatch():void {
@@ -184,78 +125,45 @@ function dropBatch():void {
 	}
 	batch?.dispose();
 	batch = null;
-	mask?.dispose();
-	mask = null;
-	capacity = 0;
 }
 
 export function syncGrassBatch(scene:THREE.Scene, world:World):void {
-	let nature:NatureMaps;
-	try {
-		nature = getNature();
-	}
-	catch {
-		return;
-	}
 	const next = chunkStamp(world);
 	if (next === stamp && batch) {
 		return;
 	}
 	stamp = next;
 	host = scene;
-	const total = countBlades(world);
-	if (total === 0) {
-		dropBatch();
+	dropBatch();
+	const matrices = tuftMatrices(world);
+	if (matrices.length === 0) {
 		return;
 	}
-	const clip = worldClipMask(world);
-	if (!clip) {
-		dropBatch();
-		return;
-	}
-	if (!batch || capacity < total) {
-		dropBatch();
-		mask = clip.tex;
-		const mat = grassLookMat(nature.blade, {
-			alpha: true,
-			wind: true,
-			windAmount: WIND_GRASS,
-			clipWater: true,
+	tuftGeo ??= tuftGeometry();
+	if (!bladeMat) {
+		bladeMat = new ToonMaterial({
+			vertexColors: true,
+			side: THREE.DoubleSide,
+			outline: false,
 		});
-		const depth = natureDepthMat(nature.blade, {
-			wind: true,
-			windAmount: WIND_GRASS,
-			clipWater: true,
-		});
-		batch = new THREE.InstancedMesh(bladeGeometry(nature.blade), mat, total);
-		batch.name = 'grassBlades';
-		batch.castShadow = false;
-		batch.receiveShadow = true;
-		batch.customDepthMaterial = depth;
-		batch.frustumCulled = false;
-		capacity = total;
-		host = scene;
+		windSway(bladeMat, 0.35);
 	}
-	else {
-		mask?.dispose();
-		mask = clip.tex;
-	}
-	if (!batch) {
-		return;
-	}
-	const n = fillInstances(batch, world);
-	batch.count = n;
+	batch = new THREE.InstancedMesh(tuftGeo, bladeMat, matrices.length);
+	batch.name = 'grassBlades';
+	batch.castShadow = false;
+	batch.receiveShadow = true;
+	matrices.forEach((m, i) => batch!.setMatrixAt(i, m));
 	batch.instanceMatrix.needsUpdate = true;
-	bindClip(batch, clip.tex, clip.originX, clip.originZ, clip.sizeX, clip.sizeZ);
-	if (!batch.parent) {
-		scene.add(batch);
-	}
+	batch.computeBoundingSphere();
+	scene.add(batch);
 }
 
 export function disposeGrassBatch():void {
 	dropBatch();
-	bladeGeo?.dispose();
-	bladeGeo = null;
+	tuftGeo?.dispose();
+	tuftGeo = null;
+	bladeMat?.dispose();
+	bladeMat = null;
 	stamp = '';
 	host = null;
 }

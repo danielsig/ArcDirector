@@ -1,32 +1,9 @@
 import * as THREE from 'three';
+import { mergeParts, type PosedPart } from '@arc-director/kindling';
 import { WALL_HEIGHT } from '../world/constants';
-import {
-	getNature,
-	natureDepthMat,
-	natureMat,
-	waterfallFoamMat,
-	waterfallSheetMat,
-	waterfallSplashMat,
-} from './nature';
+import { claimFallSlot, fallFoamMat, fallMistMat, fallSheetMat, markFallLanding } from './nature';
+import { PALETTE, plankMat, rockMat, thatchMat, toon } from './toon';
 
-function std(color:number):THREE.MeshStandardMaterial {
-	return new THREE.MeshStandardMaterial({
-		color,
-		roughness: 0.9,
-		metalness: 0.04,
-	});
-}
-
-function shadeMat(map:THREE.Texture, extras:THREE.MeshStandardMaterialParameters = {}):THREE.MeshStandardMaterial {
-	return new THREE.MeshStandardMaterial({
-		map,
-		roughness: 0.92,
-		metalness: 0,
-		side: THREE.DoubleSide,
-		shadowSide: THREE.DoubleSide,
-		...extras,
-	});
-}
 
 function planarUV(pts:THREE.Vector3[], uScale:number, vScale:number):number[] {
 	const origin = pts[0];
@@ -105,13 +82,9 @@ export function occupyRoof(mesh:THREE.Mesh):THREE.Mesh {
 
 /** Roof, ceiling, chimney, and windows. Walls/door are tiles; this sits on a 6×5 footprint. */
 export function createCottageMesh():THREE.Group {
-	const n = getNature();
-	const wood = shadeMat(n.wood);
-	const thatchMap = n.thatch.clone();
-	thatchMap.wrapS = THREE.RepeatWrapping;
-	thatchMap.wrapT = THREE.RepeatWrapping;
-	thatchMap.needsUpdate = true;
-	const thatch = shadeMat(thatchMap);
+	// Own copies: the roof fades when the player walks under it.
+	const wood = plankMat().clone();
+	const thatch = thatchMat().clone();
 	const g = new THREE.Group();
 	g.userData.kind = 'cottage';
 	const halfW = 3;
@@ -143,15 +116,15 @@ export function createCottageMesh():THREE.Group {
 	g.userData.roof = roof;
 	g.userData.roofHalfW = halfW;
 	g.userData.roofHalfD = halfD;
-	const chimney = new THREE.Mesh(new THREE.BoxGeometry(0.42, 1.05, 0.42), std(0x5a534c));
+	const chimney = new THREE.Mesh(new THREE.BoxGeometry(0.42, 1.05, 0.42), toon(0x5a534c));
 	chimney.position.set(1.35, (ridgeY + eaveY) * 0.5 + 0.45, -1.05);
 	g.add(occupyRoof(chimney));
-	const cap = new THREE.Mesh(new THREE.BoxGeometry(0.52, 0.1, 0.52), std(0x3e3a36));
+	const cap = new THREE.Mesh(new THREE.BoxGeometry(0.52, 0.1, 0.52), toon(0x3e3a36));
 	cap.position.copy(chimney.position);
 	cap.position.y += 0.55;
 	g.add(occupyRoof(cap));
-	const glass = std(0x1a2430);
-	const shutter = std(0x4a301c);
+	const glass = toon(0x1a2430);
+	const shutter = toon(0x4a301c);
 	const winY = 1.22;
 	const east = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.58, 0.78), glass);
 	east.position.set(halfW + 0.02, winY, 0);
@@ -178,51 +151,11 @@ export function createCottageMesh():THREE.Group {
 	return g;
 }
 
-function contentUV(map:THREE.Texture):{ u0:number; v0:number; u1:number; v1:number } {
-	const uv = map.userData.contentUV as { u0:number; v0:number; u1:number; v1:number } | undefined;
-	if (uv) {
-		return uv;
-	}
-	return { u0: 0, v0: 0, u1: 1, v1: 1 };
-}
-
-function cutoutBillboard(map:THREE.Texture, height:number):THREE.PlaneGeometry {
-	const { u0, v0, u1, v1 } = contentUV(map);
-	const img = map.image as { width:number; height:number } | undefined;
-	const srcW = img?.width ?? 1;
-	const srcH = img?.height ?? 1;
-	const aspect = ((u1 - u0) * srcW) / Math.max((v1 - v0) * srcH, 1e-6);
-	const geo = new THREE.PlaneGeometry(height * aspect, height);
-	const uv = geo.getAttribute('uv');
-	for (let i = 0; i < uv.count; i++) {
-		uv.setXY(i, u0 + uv.getX(i) * (u1 - u0), v0 + uv.getY(i) * (v1 - v0));
-	}
-	uv.needsUpdate = true;
-	return geo;
-}
-
+/** Collider anchor only. The canopy is an instanced toon mesh on the chunk. */
 export function createTreeMesh(kind:'oak' | 'pine'):THREE.Group {
-	const n = getNature();
-	const map = kind === 'pine' ? n.pine : n.oak;
-	const mat = natureMat(map, { alpha: true, wind: true });
-	const depth = natureDepthMat(map, { wind: true });
-	const height = kind === 'pine' ? 3.6 : 3.1;
-	const base = cutoutBillboard(map, height);
-	const y = height * 0.5 - 0.06;
 	const g = new THREE.Group();
 	g.userData.kind = 'tree';
-	const sides = 4;
-	for (let i = 0; i < sides; i++) {
-		const geo = i === 0 ? base : base.clone();
-		if (i > 0) {
-			geo.rotateY((i * Math.PI) / sides);
-		}
-		const mesh = new THREE.Mesh(geo, mat);
-		mesh.position.y = y;
-		mesh.castShadow = true;
-		mesh.customDepthMaterial = depth;
-		g.add(mesh);
-	}
+	g.userData.tree = kind;
 	return g;
 }
 
@@ -256,8 +189,6 @@ function weldIndexed(src:THREE.BufferGeometry, quant = 1e3):THREE.BufferGeometry
 }
 
 let rockGeo:THREE.BufferGeometry | null = null;
-let boulderShared:THREE.MeshStandardMaterial | null = null;
-let boulderSharedSrc:THREE.Texture | null = null;
 
 export function rockGeometry():THREE.BufferGeometry {
 	if (rockGeo) {
@@ -342,177 +273,252 @@ export function rockGeometry():THREE.BufferGeometry {
 	return flat;
 }
 
-export function boulderMat(src:THREE.Texture):THREE.MeshStandardMaterial {
-	if (boulderShared && boulderSharedSrc === src) {
-		return boulderShared;
-	}
-	const map = src.clone();
-	map.wrapS = THREE.ClampToEdgeWrapping;
-	map.wrapT = THREE.ClampToEdgeWrapping;
-	const uv = src.userData.contentUV as { u0:number; v0:number; u1:number; v1:number } | undefined;
-	const u0 = uv?.u0 ?? 0;
-	const v0 = uv?.v0 ?? 0;
-	const u1 = uv?.u1 ?? 1;
-	const v1 = uv?.v1 ?? 1;
-	const du = u1 - u0;
-	const dv = v1 - v0;
-	map.offset.set(u0 + du * 0.22, v0 + dv * 0.22);
-	map.repeat.set(du * 0.56, dv * 0.56);
-	map.needsUpdate = true;
-	const mat = new THREE.MeshStandardMaterial({
-		map,
-		roughness: 0.92,
-		metalness: 0,
-		side: THREE.FrontSide,
-	});
-	mat.userData.shared = true;
-	boulderShared = mat;
-	boulderSharedSrc = src;
-	return mat;
-}
-
-export function disposeSharedNatureMeshes():void {
-	rockGeo?.dispose();
-	rockGeo = null;
-	if (boulderShared) {
-		boulderShared.map?.dispose();
-		boulderShared.dispose();
-		boulderShared = null;
-		boulderSharedSrc = null;
-	}
-}
-
 export function createBoulderMesh():THREE.Group {
-	const n = getNature();
 	const g = new THREE.Group();
 	g.userData.kind = 'boulder';
-	const mesh = new THREE.Mesh(rockGeometry(), boulderMat(n.boulder));
+	const mesh = new THREE.Mesh(rockGeometry(), rockMat());
 	mesh.castShadow = true;
 	mesh.receiveShadow = true;
 	g.add(mesh);
 	return g;
 }
 
+function solidMesh(geo:THREE.BufferGeometry, mat:THREE.Material, cast = true):THREE.Mesh {
+	const mesh = new THREE.Mesh(geo, mat);
+	mesh.castShadow = cast;
+	mesh.receiveShadow = true;
+	return mesh;
+}
+
+const BRIDGE_LEN = 3.28;
+const BRIDGE_W = 1.72;
+/** Taller than the deck, so a raised deck rests in front of it with the chains pulling down to its tip. */
+const GANTRY_H = 3.7;
+
+/**
+ * Drawbridge across a three-tile river. The deck hinges on the near (-Z) bank; chains run from a
+ * timber gantry over the hinge to the deck's far corners. `userData.setLift(0..1)` lowers or raises it.
+ */
 export function createBridgeMesh():THREE.Group {
-	const n = getNature();
-	const wood = natureMat(n.wood, { color: 0xc4a06a, roughness: 0.82 });
-	const dark = natureMat(n.wood, { color: 0x6a4a2a, roughness: 0.9 });
-	const iron = std(0x3a3a42);
+	const deckWood = toon(PALETTE.woodLight);
+	const dark = toon(PALETTE.woodDark);
+	const iron = toon(PALETTE.iron, { rim: 0.35 });
+	const stone = toon(PALETTE.wall, { pattern: 'stone', patternScale: 0.18, patternInk: 0.5 });
 	const g = new THREE.Group();
 	g.userData.kind = 'bridge';
-	const deckLen = 3.28;
-	const deckW = 1.72;
+	const half = BRIDGE_LEN * 0.5;
+
+	// Deck: planks across, slightly uneven, on two stringers; cross-braced rails on both sides.
 	const hinge = new THREE.Group();
 	hinge.name = 'hinge';
-	hinge.position.set(0, 0.04, -deckLen * 0.5);
-	const plankN = 8;
-	const plankPitch = deckLen / plankN;
-	for (let i = 0; i < plankN; i++) {
-		const plank = new THREE.Mesh(new THREE.BoxGeometry(deckW - 0.1, 0.09, plankPitch - 0.035), wood);
-		plank.position.set((i % 2 === 0 ? -0.012 : 0.012), 0.1, (i + 0.5) * plankPitch);
-		plank.castShadow = true;
-		plank.receiveShadow = true;
-		hinge.add(plank);
-	}
-	for (const x of [-deckW * 0.5 + 0.06, deckW * 0.5 - 0.06]) {
-		const beam = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.14, deckLen + 0.04), dark);
-		beam.position.set(x, 0.05, deckLen * 0.5);
-		beam.castShadow = true;
-		hinge.add(beam);
-		const rail = new THREE.Mesh(new THREE.BoxGeometry(0.07, 0.42, deckLen - 0.08), wood);
-		rail.position.set(x, 0.36, deckLen * 0.5);
-		rail.castShadow = true;
-		hinge.add(rail);
-		for (let p = 0; p < 4; p++) {
-			const post = new THREE.Mesh(new THREE.BoxGeometry(0.09, 0.5, 0.09), dark);
-			post.position.set(x, 0.32, 0.28 + p * ((deckLen - 0.5) / 3));
-			hinge.add(post);
-		}
-	}
-	for (let i = 1; i < plankN; i += 2) {
-		const tie = new THREE.Mesh(new THREE.BoxGeometry(deckW - 0.02, 0.07, 0.1), dark);
-		tie.position.set(0, 0.03, i * plankPitch);
-		hinge.add(tie);
-	}
-	g.add(hinge);
-	g.userData.hinge = hinge;
+	hinge.position.set(0, 0.06, -half);
+	const plankN = 11;
+	const pitch = BRIDGE_LEN / plankN;
+	const plank = new THREE.BoxGeometry(BRIDGE_W, 0.07, pitch - 0.03);
+	hinge.add(solidMesh(mergeParts(Array.from({ length: plankN }, (_, i) => ({
+		geo: plank,
+		x: ((i * 37) % 5 - 2) * 0.012,
+		y: 0.1 + ((i * 53) % 3) * 0.006,
+		z: (i + 0.5) * pitch,
+		ry: ((i * 29) % 5 - 2) * 0.012,
+	}))), deckWood));
+	const stringer = new THREE.BoxGeometry(0.12, 0.12, BRIDGE_LEN);
+	const post = new THREE.BoxGeometry(0.08, 0.62, 0.08);
+	const rail = new THREE.BoxGeometry(0.07, 0.07, BRIDGE_LEN - 0.04);
+	const bay = (BRIDGE_LEN - 0.1) / 3;
+	const brace = new THREE.BoxGeometry(0.05, Math.hypot(bay, 0.42), 0.05);
+	const frame:PosedPart[] = [];
 	for (const side of [-1, 1]) {
-		const z = side * (deckLen * 0.5 + 0.18);
-		const sill = new THREE.Mesh(new THREE.BoxGeometry(deckW + 0.22, 0.22, 0.28), dark);
-		sill.position.set(0, 0.08, z);
-		sill.castShadow = true;
-		sill.receiveShadow = true;
-		g.add(sill);
-		for (const x of [-deckW * 0.48, deckW * 0.48]) {
-			const post = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.85, 0.16), wood);
-			post.position.set(x, 0.42, z);
-			post.castShadow = true;
-			g.add(post);
-			const band = new THREE.Mesh(new THREE.BoxGeometry(0.18, 0.06, 0.18), iron);
-			band.position.set(x, 0.72, z);
-			g.add(band);
+		const x = side * (BRIDGE_W * 0.5 - 0.05);
+		frame.push({ geo: stringer, x, y: 0.0, z: half });
+		frame.push({ geo: rail, x, y: 0.72, z: half });
+		for (let p = 0; p <= 3; p++) {
+			frame.push({ geo: post, x, y: 0.44, z: 0.05 + p * bay });
+		}
+		for (let b = 0; b < 3; b++) {
+			const tilt = Math.atan2(bay, 0.42) * (b % 2 === 0 ? 1 : -1);
+			frame.push({ geo: brace, x, y: 0.44, z: 0.05 + (b + 0.5) * bay, rx: tilt });
 		}
 	}
+	hinge.add(solidMesh(mergeParts(frame), dark));
+	const eye = new THREE.TorusGeometry(0.05, 0.015, 4, 8);
+	eye.rotateY(Math.PI / 2);
+	hinge.add(solidMesh(mergeParts([-1, 1].map((side) => ({ geo: eye, x: side * (BRIDGE_W * 0.5 - 0.05), y: 0.78, z: BRIDGE_LEN - 0.1 }))), iron, false));
+	g.add(hinge);
+
+	// Stone abutments where the deck lands, at both banks.
+	const pier = new THREE.BoxGeometry(BRIDGE_W + 0.36, 0.6, 0.42);
+	g.add(solidMesh(mergeParts([-1, 1].map((side) => ({ geo: pier, x: 0, y: -0.24, z: side * (half + 0.12) }))), stone));
+
+	// Gantry over the hinge: two posts, a beam, a winch drum and pulleys for the chains.
+	const gz = -half - 0.32;
+	const gPost = new THREE.BoxGeometry(0.16, GANTRY_H, 0.16);
+	const gBeam = new THREE.BoxGeometry(BRIDGE_W + 0.6, 0.16, 0.18);
+	const gStrut = new THREE.BoxGeometry(0.08, 0.9, 0.08);
+	const gx = BRIDGE_W * 0.5 + 0.14;
+	g.add(solidMesh(mergeParts([
+		{ geo: gPost, x: -gx, y: GANTRY_H * 0.5, z: gz },
+		{ geo: gPost, x: gx, y: GANTRY_H * 0.5, z: gz },
+		{ geo: gBeam, x: 0, y: GANTRY_H, z: gz },
+		{ geo: gStrut, x: -gx + 0.24, y: GANTRY_H - 0.32, z: gz, rz: -0.6 },
+		{ geo: gStrut, x: gx - 0.24, y: GANTRY_H - 0.32, z: gz, rz: 0.6 },
+	]), dark));
+	const drum = new THREE.CylinderGeometry(0.11, 0.11, BRIDGE_W - 0.1, 10);
+	drum.rotateZ(Math.PI / 2);
+	const pulley = new THREE.CylinderGeometry(0.09, 0.09, 0.06, 10);
+	pulley.rotateZ(Math.PI / 2);
+	const chainX = BRIDGE_W * 0.5 - 0.05;
+	g.add(solidMesh(mergeParts([
+		// High under the beam, clear of the walkway; the chains wind onto it over the pulleys.
+		{ geo: drum, x: 0, y: GANTRY_H - 0.5, z: gz },
+		{ geo: pulley, x: -chainX, y: GANTRY_H - 0.14, z: gz + 0.12 },
+		{ geo: pulley, x: chainX, y: GANTRY_H - 0.14, z: gz + 0.12 },
+	]), iron));
+
+	// Chains: one unit-long bar each, re-aimed from pulley to deck tip whenever the lift changes.
+	const link = new THREE.BoxGeometry(0.035, 0.035, 1);
+	link.translate(0, 0, 0.5);
+	const chains = [-1, 1].map((side) => {
+		const chain = solidMesh(link, iron);
+		chain.userData.from = new THREE.Vector3(side * chainX, GANTRY_H - 0.14, gz + 0.12);
+		chain.userData.tip = new THREE.Vector3(side * chainX, 0.78, BRIDGE_LEN - 0.1);
+		g.add(chain);
+		return chain;
+	});
+	const tip = new THREE.Vector3();
+	const dir = new THREE.Vector3();
+	const forward = new THREE.Vector3(0, 0, 1);
+	g.userData.setLift = (lift:number):void => {
+		hinge.rotation.x = -Math.PI / 2 * lift;
+		hinge.updateMatrix();
+		for (const chain of chains) {
+			tip.copy(chain.userData.tip as THREE.Vector3).applyMatrix4(hinge.matrix);
+			const from = chain.userData.from as THREE.Vector3;
+			chain.position.copy(from);
+			dir.subVectors(tip, from);
+			chain.scale.set(1, 1, Math.max(0.01, dir.length()));
+			chain.quaternion.setFromUnitVectors(forward, dir.normalize());
+		}
+	};
+	g.userData.setLift(1);
 	return g;
 }
 
-function fallCurtain(width:number, height:number):THREE.BufferGeometry {
-	const geo = new THREE.PlaneGeometry(width, height, 8, 24);
-	const pos = geo.getAttribute('position');
-	const v = new THREE.Vector3();
-	for (let i = 0; i < pos.count; i++) {
-		v.fromBufferAttribute(pos, i);
-		const t = (v.y + height * 0.5) / height;
-		const fall = 1 - t;
-		v.z += fall * fall * 0.48;
-		v.x *= 0.72 + fall * 0.38;
-		pos.setXYZ(i, v.x, v.y, v.z);
+const FALL_W = 1.9;
+/** Water surface over the wall top: 3 cm above the stone. */
+const FALL_H = WALL_HEIGHT + 0.03;
+/** The wall's face in this prop's frame (spawn puts the origin just in front of it). */
+const WALL_FACE_Z = -0.04;
+/** How far back over the wall top the water starts. */
+const FALL_BACK = 0.36;
+/** Outward throw: z grows with the square root of the drop, so the sheet leaves the edge level and clears the stone. */
+const FALL_THROW = 0.36;
+
+/**
+ * One continuous sheet: level on the wall top, over the edge on a thrown-stream curve, then
+ * nearly straight down, widening a little. Normals follow the curve (up on top, out on the face).
+ * `uv.y` runs 1 (back of the wall top) to 0 (pool) by length along it.
+ */
+function fallSheet():THREE.BufferGeometry {
+	const profile:{ z:number; y:number }[] = [];
+	for (let i = 0; i <= 4; i++) {
+		profile.push({ z: WALL_FACE_Z - FALL_BACK * (1 - i / 4), y: FALL_H });
 	}
-	geo.computeVertexNormals();
+	const drops = 30;
+	for (let i = 1; i <= drops; i++) {
+		const d = (i / drops) ** 1.6;
+		profile.push({ z: WALL_FACE_Z + FALL_THROW * Math.sqrt(d), y: FALL_H * (1 - d) });
+	}
+	const along = [0];
+	for (let k = 1; k < profile.length; k++) {
+		along.push(along[k - 1]! + Math.hypot(profile[k]!.z - profile[k - 1]!.z, profile[k]!.y - profile[k - 1]!.y));
+	}
+	const total = along[along.length - 1]!;
+	const cols = 10;
+	const pos:number[] = [];
+	const nrm:number[] = [];
+	const uv:number[] = [];
+	profile.forEach((p, k) => {
+		const prev = profile[Math.max(0, k - 1)]!;
+		const next = profile[Math.min(profile.length - 1, k + 1)]!;
+		const tz = next.z - prev.z;
+		const ty = next.y - prev.y;
+		const tl = Math.hypot(tz, ty) || 1;
+		const width = FALL_W * (1 + 0.15 * Math.max(0, 1 - p.y / FALL_H));
+		for (let i = 0; i <= cols; i++) {
+			const u = i / cols;
+			pos.push((u - 0.5) * width, p.y, p.z);
+			nrm.push(0, tz / tl, -ty / tl);
+			uv.push(u, 1 - along[k]! / total);
+		}
+	});
+	const idx:number[] = [];
+	const row = cols + 1;
+	for (let k = 0; k < profile.length - 1; k++) {
+		for (let i = 0; i < cols; i++) {
+			const a = k * row + i;
+			idx.push(a, a + row, a + 1, a + 1, a + row, a + row + 1);
+		}
+	}
+	const geo = new THREE.BufferGeometry();
+	geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+	geo.setAttribute('normal', new THREE.Float32BufferAttribute(nrm, 3));
+	geo.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
+	geo.setIndex(idx);
+	geo.computeBoundingSphere();
 	return geo;
 }
 
 export function createWaterfallMesh():THREE.Group {
-	const n = getNature();
 	const g = new THREE.Group();
 	g.userData.kind = 'waterfall';
-	const height = 2.48;
-	const sheets:[number, number, number, { speed:number; shift:number; mist?:boolean }][] = [
-		[2.05, 0.04, height, { speed: 1.15, shift: 0 }],
-		[1.72, 0.16, height * 0.96, { speed: 1.85, shift: 1.7 }],
-		[1.38, 0.28, height * 0.9, { speed: 2.35, shift: 3.1, mist: true }],
-	];
-	for (const [w, z, h, opts] of sheets) {
-		const mesh = new THREE.Mesh(fallCurtain(w, h), waterfallSheetMat(opts));
-		mesh.position.set(0, h * 0.5 - 0.06, z);
-		mesh.castShadow = false;
-		mesh.frustumCulled = false;
-		g.add(mesh);
-	}
-	const crest = new THREE.Mesh(new THREE.PlaneGeometry(1.85, 0.42, 4, 2), waterfallSheetMat({ speed: 0.85, shift: 0.4 }));
-	crest.rotation.x = -0.72;
-	crest.position.set(0, height - 0.12, -0.06);
-	crest.castShadow = false;
-	g.add(crest);
-	const foam = new THREE.Mesh(new THREE.CircleGeometry(1.05, 28), waterfallFoamMat());
-	foam.rotation.x = -Math.PI / 2;
-	foam.position.set(0.05, 0.06, 0.72);
-	g.add(foam);
-	const splash = new THREE.InstancedMesh(new THREE.PlaneGeometry(0.18, 0.22), waterfallSplashMat(), 22);
-	splash.frustumCulled = false;
+	const sheet = new THREE.Mesh(fallSheet(), fallSheetMat());
+	sheet.castShadow = false;
+	sheet.receiveShadow = true;
+	g.add(sheet);
+	const landZ = WALL_FACE_Z + FALL_THROW;
+	// Foam puffs in a half ring where the sheet lands.
+	const puffs = 15;
+	const foam = new THREE.InstancedMesh(new THREE.IcosahedronGeometry(0.2, 1), fallFoamMat(), puffs);
+	foam.castShadow = false;
 	const dummy = new THREE.Object3D();
-	for (let i = 0; i < 22; i++) {
-		const a = (i / 22) * Math.PI * 2;
-		const r = 0.22 + (i % 5) * 0.12;
-		dummy.position.set(Math.cos(a) * r * 0.85, 0.04, 0.55 + Math.sin(a) * r * 0.45);
-		dummy.rotation.set(0, a * 0.3, 0);
-		dummy.scale.setScalar(0.55 + (i % 4) * 0.2);
+	for (let i = 0; i < puffs; i++) {
+		const t = i / (puffs - 1);
+		const a = Math.PI * (0.05 + 0.9 * t);
+		const r = 0.62 + ((i * 37) % 7) * 0.05;
+		dummy.position.set(Math.cos(a) * r * 1.35, 0.06 + ((i * 13) % 3) * 0.04, landZ + Math.sin(a) * r * 0.5);
+		dummy.scale.setScalar(0.65 + ((i * 29) % 5) * 0.14);
 		dummy.updateMatrix();
-		splash.setMatrixAt(i, dummy.matrix);
+		foam.setMatrixAt(i, dummy.matrix);
 	}
-	splash.instanceMatrix.needsUpdate = true;
-	g.add(splash);
-	const rock = boulderMat(n.boulder);
+	foam.instanceMatrix.needsUpdate = true;
+	foam.computeBoundingSphere();
+	g.add(foam);
+	// Tell the river where this fall lands every frame (never culled, so rings keep going off-screen).
+	foam.frustumCulled = false;
+	const slot = claimFallSlot();
+	const landing = new THREE.Vector3();
+	foam.onBeforeRender = () => {
+		g.localToWorld(landing.set(0, 0, landZ + 0.15));
+		markFallLanding(slot, landing.x, landing.z);
+	};
+	// Spray mist rising from the landing, drawn after the water so it veils the foot of the fall.
+	const mists = 12;
+	const mist = new THREE.InstancedMesh(new THREE.IcosahedronGeometry(0.3, 1), fallMistMat(), mists);
+	mist.castShadow = false;
+	mist.renderOrder = 2;
+	// Puffs rise past their resting bounds in the shader.
+	mist.frustumCulled = false;
+	for (let i = 0; i < mists; i++) {
+		dummy.position.set(((i * 41) % 11 - 5) * 0.17, 0.12, landZ + ((i * 23) % 5 - 1) * 0.12);
+		dummy.scale.setScalar(0.8 + ((i * 17) % 4) * 0.15);
+		dummy.updateMatrix();
+		mist.setMatrixAt(i, dummy.matrix);
+	}
+	mist.instanceMatrix.needsUpdate = true;
+	mist.computeBoundingSphere();
+	g.add(mist);
+	const rock = rockMat();
 	for (const [x, z, s] of [[-0.95, 0.28, 0.44], [0.98, 0.18, 0.38], [0.5, 0.7, 0.3], [-0.52, 0.82, 0.34]]) {
 		const m = new THREE.Mesh(rockGeometry(), rock);
 		m.position.set(x, 0, z);
@@ -525,15 +531,14 @@ export function createWaterfallMesh():THREE.Group {
 }
 
 export function createLeverMesh():THREE.Group {
-	const n = getNature();
-	const wood = natureMat(n.wood);
+	const wood = plankMat();
 	const g = new THREE.Group();
 	g.userData.kind = 'lever';
 	const post = new THREE.Mesh(new THREE.BoxGeometry(0.14, 1.05, 0.14), wood);
 	post.position.y = 0.52;
 	post.castShadow = true;
 	g.add(post);
-	const arm = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.08, 0.7), std(0x6a3a22));
+	const arm = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.08, 0.7), toon(0x6a3a22));
 	arm.name = 'arm';
 	arm.position.set(0, 0.92, 0.2);
 	g.add(arm);

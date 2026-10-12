@@ -71,10 +71,11 @@ const ANGLER:CharacterSpec = {
 	id: 'Angler',
 	mind: { rank: 0.5 },
 	identity: { traits: ['wet', 'impatient', 'hungry'] },
-	goals: [{ text: 'Buy FireMushroom, unless you already have one.', priority: 2 }],
+	goals: [{ text: 'Get a FireMushroom by trade, unless you already have one.', priority: 2 }],
+	offers: [{ give: { SilverTrout: 1 }, get: { gold: 5 } }],
 	memories: [
 		{
-			text: 'I am an angler. I sell fish for a living. My favorite food is FireMushroom. I respond quickly eagerly when people want to buy my fish.',
+			text: 'I am an angler. I sell SilverTrout for 5 gold. That offer stands, so whoever pays it gets a fish at once. My favorite food is FireMushroom.',
 			tags: ['backstory', 'angler', 'river', 'fish', 'SilverTrout', 'FireMushroom'],
 			pinned: true,
 		},
@@ -196,7 +197,7 @@ function checkBargain(host:GameHost):void {
 
 export function createDirector(host:GameHost):ArcDirector<CharacterCtx> {
 	host.hooks = { checkBargain, goalDone };
-	host.kit = { verbs: [...GAME_VERBS, 'buy', 'sell'] };
+	host.kit = { verbs: [...GAME_VERBS, 'offer'] };
 	return host.configure(new ArcDirector<CharacterCtx>())
 		.withMindDefaults({ skipHeartbeat: true, skipStrategic: true })
 		.withDefaultKit(host.kit)

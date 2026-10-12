@@ -92,7 +92,7 @@ export class WorldPresent {
 		for (const chunk of world.chunks.values()) {
 			this._liveChunks.add(chunk.id);
 			if (!this._chunkMeshes.has(chunk.id)) {
-				const mesh = buildChunkMesh(chunk);
+				const mesh = buildChunkMesh(chunk, world.chunks.values());
 				world.native.add(mesh);
 				this._chunkMeshes.set(chunk.id, mesh);
 			}
@@ -151,9 +151,9 @@ export class WorldPresent {
 			else if (kind === 'bridge') {
 				obj.rotation.y = 0;
 				const span = go.getComponent(Bridge);
-				const hinge = obj.userData.hinge as THREE.Object3D | undefined;
-				if (hinge && span) {
-					hinge.rotation.x = -Math.PI / 2 * span.lift;
+				const setLift = obj.userData.setLift as ((lift:number)=>void) | undefined;
+				if (setLift && span) {
+					setLift(span.lift);
 				}
 			}
 			else if (kind === 'cottage') {
@@ -250,7 +250,7 @@ export class WorldPresent {
 				return;
 			}
 			const mat = child.material;
-			if (Array.isArray(mat) || !(mat instanceof THREE.MeshStandardMaterial)) {
+			if (Array.isArray(mat)) {
 				return;
 			}
 			if (child.name === 'ceiling') {
@@ -648,6 +648,27 @@ export class WorldPresent {
 	}
 
 	private syncItem(obj:THREE.Object3D, go:GameObject, highlighted:boolean, t:number):void {
+		const body = obj.userData.body as THREE.Object3D | undefined;
+		if (body) {
+			const pulse = highlighted ? 1.04 + Math.sin(t * 3.4) * 0.03 : 1;
+			body.scale.setScalar(pulse);
+			const shine = obj.userData.shine as THREE.Material[] | undefined;
+			for (const mat of shine ?? []) {
+				if (!('emissive' in mat) || !('emissiveIntensity' in mat)) {
+					continue;
+				}
+				const lit = mat as THREE.MeshToonMaterial;
+				if (highlighted) {
+					lit.emissive.setHex(0xd4b45c);
+					lit.emissiveIntensity = 0.55 + (0.5 + 0.5 * Math.sin(t * 3.4)) * 0.7;
+				}
+				else {
+					lit.emissive.setHex(0x000000);
+					lit.emissiveIntensity = 0;
+				}
+			}
+			return;
+		}
 		const sprite = obj.userData.sprite as THREE.Mesh | undefined;
 		if (!sprite) {
 			return;

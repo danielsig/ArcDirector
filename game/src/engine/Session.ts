@@ -440,6 +440,7 @@ export class Session extends Component {
 		hud.shadows = next.shadows;
 		hud.musicVolume = next.music;
 		hud.sfxVolume = next.sfx;
+		hud.voices = next.voices;
 		hud.audioMuted = next.muted;
 		hud.maxParallel = next.maxParallel;
 		hud.contextLength = next.contextLength;
@@ -485,11 +486,11 @@ export class Session extends Component {
 		if (!world) {
 			return;
 		}
-		const cat = playerSayCatalog(world);
+		const cat = playerSayCatalog(this.director);
 		this.hud.sayTo = cat.peers.join(', ');
 		this.hud.sayPeers = cat.peers;
 		this.hud.sayItems = cat.items;
-		this.hud.sayGoods = cat.goods;
+		this.hud.sayOffers = cat.offers;
 	}
 
 	private modalOpen():boolean {

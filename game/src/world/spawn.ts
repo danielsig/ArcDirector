@@ -2,7 +2,7 @@ import { CharacterMotor } from '../characters/CharacterMotor';
 import { NPCInput } from '../characters/NPCInput';
 import { PlayerInput } from '../characters/PlayerInput';
 import { PlayerPilot } from '../characters/PlayerPilot';
-import { ChunkBound, Camera as RenderCamera, StreamingAnchor } from '@arc-director/kindling';
+import { ChunkBound, Camera as RenderCamera, StreamingAnchor, Speaker, voiceFor, type SpeechVoice } from '@arc-director/kindling';
 import {
 	BoxCollider,
 	Bridge,
@@ -17,6 +17,9 @@ import {
 	Lock,
 	BrewHearth,
 	Sickbed,
+	Flammable,
+	Inscription,
+	Weakness,
 	Named,
 	Interior,
 	RigidBody,
@@ -36,14 +39,17 @@ import { GameObject } from '../engine/GameObject';
 import type { World } from '../engine/World';
 import { Container, Harvest } from '../items/components';
 import { getDef } from '../items/defs';
-import { instantiateDef } from '../items/instance';
+import { instantiateDef, type ItemInstance } from '../items/instance';
 import { spawnDefAt } from '../items/pickup';
 import { animIDFromMeshID } from '../render/humanAnims';
-import { characterHeight, resolvePlayerKind } from '../render/artCache';
+import { characterHeight, characterLabel, resolvePlayerKind } from '../render/artCache';
+import { STALL_COUNTER } from '../render/meshRegistry';
 import { prefs } from '../prefs';
 import { CELL_SIZE, CHUNK_SIZE, TILE_HEIGHT } from './constants';
 import { innerWallAABB } from './interior';
+import { stallYaw } from './dressingPlan';
 import type { Chunk, ChunkEntity } from './Chunk';
+import type { LootSpec } from './decodeGlyphChunk';
 
 function wallOffset(chunk:Chunk, localX:number, localZ:number):{ x:number; z:number; yaw:number } {
 	const dirs = [
@@ -96,6 +102,14 @@ function spawnTorch(world:World, chunk:Chunk, ent:ChunkEntity):void {
 	world.add(go);
 }
 
+/** A fresh item from a loot line, called by its given name. */
+function makeLoot(loot:LootSpec):ItemInstance {
+	const inst = instantiateDef(getDef(loot.defID), loot.count ?? 1);
+	inst.name = loot.name;
+	inst.id = loot.name;
+	return inst;
+}
+
 function spawnChest(world:World, chunk:Chunk, ent:ChunkEntity):void {
 	const center = chunk.worldCellCenter(ent.localX, ent.localZ);
 	const tile = chunk.tile(ent.localX, ent.localZ);
@@ -103,15 +117,12 @@ function spawnChest(world:World, chunk:Chunk, ent:ChunkEntity):void {
 	go.transform.position.x = center.x;
 	go.transform.position.y = (tile?.height ?? 0) * TILE_HEIGHT;
 	go.transform.position.z = center.z;
-	go.transform.yaw = Math.PI;
+	go.transform.yaw = ent.yaw ?? Math.PI;
 	go.addComponent(MeshRenderer, { meshID: 'chest' });
 	go.addComponent(Chest);
 	const bag = go.addComponent(Container, { size: 8 });
-	go.addComponent(Lock, { keyID: 'iron', locked: true });
-	const doorKey = instantiateDef(getDef('brass_key'));
-	doorKey.name = 'BrassKey';
-	doorKey.id = 'BrassKey';
-	bag.contents.push(doorKey);
+	go.addComponent(Lock, { keyID: ent.keyID ?? 'iron', locked: ent.locked ?? true });
+	bag.contents.push(...(ent.contents ?? []).map(makeLoot));
 	go.addComponent(BoxCollider, { size: { x: 0.7, y: 0.5, z: 0.48 } });
 	if (ent.name) {
 		go.addComponent(Named, { id: ent.name });
@@ -165,6 +176,7 @@ const ITEM_DEFS_SPAWN = new Set([
 	'gold_coin',
 	'bitterroot',
 	'fire_mushroom',
+	'moon_mushroom',
 	'bridge_crank',
 	'silver_trout',
 	'bomb',
@@ -174,9 +186,18 @@ const ITEM_DEFS_SPAWN = new Set([
 	'wooden_shield',
 	'leather_glove',
 	'loaf',
+	'bun',
+	'pie',
+	'cake',
 	'scarf',
+	'hood',
+	'ribbon',
 	'bowl',
+	'jug',
 	'kitchen_knife',
+	'cleaver',
+	'shears',
+	'hook',
 	'apple',
 	'candle',
 ]);
@@ -198,6 +219,17 @@ export function spawnChunkEntities(world:World, chunk:Chunk):void {
 		}
 		else if (ent.def === 'tree') {
 			spawnProp(world, chunk, ent, (ent.localX + ent.localZ) % 2 === 0 ? 'tree_oak' : 'tree_pine', 0.35);
+		}
+		else if (ent.def === 'pillar' || ent.def === 'pillar_broken') {
+			spawnProp(world, chunk, ent, ent.def, 0.6);
+		}
+		else if (ent.def === 'cobweb') {
+			// Wall to wall across its cell, until a flame burns it away.
+			spawnProp(world, chunk, ent, 'cobweb', 1, ent.yaw ?? 0).addComponent(Flammable);
+		}
+		else if (ent.def === 'inscription') {
+			spawnProp(world, chunk, ent, 'stone_tablet', 0.5, ent.yaw ?? wallOffset(chunk, ent.localX, ent.localZ).yaw + Math.PI)
+				.addComponent(Inscription, { text: ent.text ?? '' });
 		}
 		else if (ent.def === 'boulder') {
 			spawnProp(world, chunk, ent, 'boulder', 0.4);
@@ -223,8 +255,8 @@ export function spawnChunkEntities(world:World, chunk:Chunk):void {
 			const y = (tile?.height ?? 0) * TILE_HEIGHT + 0.12;
 			const count = ent.def === 'health_potion' || ent.def === 'bomb' ? 2 : 1;
 			const go = spawnDefAt(world, ent.def, center.x, y, center.z, chunk.id, count, ent.name);
-			if (ent.def === 'bitterroot' || ent.def === 'fire_mushroom') {
-				go.addComponent(Harvest, { harvester: ent.def === 'fire_mushroom' ? 'Forager' : 'Herbalist' });
+			if (ent.def === 'bitterroot' || ent.def === 'fire_mushroom' || ent.def === 'moon_mushroom') {
+				go.addComponent(Harvest, { harvester: ent.def === 'bitterroot' ? 'Herbalist' : 'Forager' });
 			}
 		}
 	}
@@ -286,7 +318,7 @@ function spawnProp(
 	meshID:string,
 	radius:number,
 	yaw?:number,
-):void {
+):GameObject {
 	const center = chunk.worldCellCenter(ent.localX, ent.localZ);
 	const tile = chunk.tile(ent.localX, ent.localZ);
 	const go = new GameObject(ent.name ?? `${meshID}_${chunk.id}_${ent.localX}_${ent.localZ}`, 'Prop');
@@ -296,7 +328,7 @@ function spawnProp(
 	if (yaw !== undefined) {
 		go.transform.yaw = yaw;
 	}
-	else if (meshID === 'tree_oak' || meshID === 'tree_pine' || meshID === 'boulder') {
+	else if (meshID === 'tree_oak' || meshID === 'tree_pine' || meshID === 'boulder' || meshID.startsWith('pillar')) {
 		const n = Math.sin(center.x * 127.1 + center.z * 311.7) * 43758.5453;
 		go.transform.yaw = (n - Math.floor(n)) * Math.PI * 2;
 	}
@@ -318,6 +350,7 @@ function spawnProp(
 	}
 	bindChunk(go, chunk.id);
 	world.add(go);
+	return go;
 }
 
 function spawnLever(world:World, chunk:Chunk, ent:ChunkEntity):void {
@@ -405,10 +438,10 @@ function spawnBridge(world:World, chunk:Chunk, spans:ChunkEntity[]):void {
 }
 
 const STALL_MESH:Record<string, string> = {
-	BakerStall: 'stall',
-	WeaverStall: 'stall_pink',
-	PotterStall: 'stall_yellow',
-	CutlerStall: 'stall_blue',
+	BakerStall: 'stall_baker',
+	WeaverStall: 'stall_weaver',
+	PotterStall: 'stall_potter',
+	CutlerStall: 'stall_cutler',
 	SpiceStall: 'stall_green',
 	CandleStall: 'stall_yellow',
 	FruitStall: 'stall_green',
@@ -426,9 +459,12 @@ function spawnStall(world:World, chunk:Chunk, ent:ChunkEntity):void {
 	go.transform.position.x = center.x;
 	go.transform.position.y = (tile?.height ?? 0) * TILE_HEIGHT;
 	go.transform.position.z = center.z;
-	go.transform.yaw = ent.localZ < 8 ? Math.PI : 0;
+	go.transform.yaw = stallYaw(ent.localZ);
 	go.addComponent(MeshRenderer, { meshID: stallMeshFor(ent.name) });
-	go.addComponent(BoxCollider, { size: { x: 0.55, y: 0.9, z: 0.4 } });
+	const counter = new GameObject(`${go.id} counter`, 'Stall');
+	counter.parent = go;
+	counter.transform.localPosition = { x: 0, y: STALL_COUNTER.h * 0.5, z: STALL_COUNTER.z };
+	counter.addComponent(BoxCollider, { size: { x: STALL_COUNTER.w, y: STALL_COUNTER.h, z: STALL_COUNTER.d } });
 	if (ent.name) {
 		go.addComponent(Named, { id: ent.name });
 	}
@@ -446,14 +482,30 @@ export type NPCSpawnOpts = {
 	yaw?:number;
 	pack?:boolean;
 	packKey?:boolean;
-	packLoot?:{ defID:string; name:string; count?:number }[];
+	packLoot?:LootSpec[];
 	wallet?:number;
 	hp?:number;
-	merchant?:{ specialty:string; ask:number; floor:number };
-	marketNPC?:{ kind:MarketNPCKind; wants:string[]; leaveGate?:string };
+	merchant?:{ goods:string[] };
+	marketNPC?:{ kind:MarketNPCKind; wants:string[]; leaveGate?:string; post?:string };
 	companion?:boolean;
 	hearOnly?:string[];
+	streams?:boolean;
+	/** The fight verbs that hurt it most, and how much; every other blow by `others`. */
+	weakness?:{ to:string[]; times:number; others:number };
+	/** How it sounds when it talks. Fields left out vary by id. */
+	voice?:SpeechVoice;
 };
+
+/** Art folders drawn as women. Their voices sit higher, with a smaller throat. */
+const FEMININE_ART = new Set(['princess', 'scout', 'sorceress', 'witch']);
+
+/** The voice `id` gets by default: varied by id, high or low by how its art is drawn. */
+function voiceOf(id:string, kind:string):SpeechVoice {
+	return voiceFor(id, FEMININE_ART.has(characterLabel(kind)) ? [300, 420] : [170, 240]);
+}
+
+/** How far a streaming NPC keeps chunks loaded: its room and the next, not the whole map. */
+const NPC_STREAM_RADIUS = 10;
 
 export function spawnNPC(world:World, chunk:Chunk, opts:NPCSpawnOpts):GameObject {
 	const pos = chunk.worldCellCenter(opts.localX, opts.localZ);
@@ -489,37 +541,40 @@ export function spawnNPC(world:World, chunk:Chunk, opts:NPCSpawnOpts):GameObject
 			key.name = 'BrassKey';
 			pack.Container?.contents.push(key);
 		}
-		for (const loot of opts.packLoot ?? []) {
-			const inst = instantiateDef(getDef(loot.defID), loot.count ?? 1);
-			inst.name = loot.name;
-			inst.id = loot.name;
-			pack.Container?.contents.push(inst);
-		}
+		pack.Container?.contents.push(...(opts.packLoot ?? []).map(makeLoot));
 		body.slots.back = pack;
 	}
 	const hp = opts.hp && opts.hp > 0 ? Math.round(opts.hp) : 5;
 	go.addComponent(Vitals, { hp, maxHP: hp });
 	go.addComponent(Named, { id: opts.id });
+	go.addComponent(Speaker, { voice: { ...voiceOf(opts.id, kind), ...opts.voice } });
 	go.addComponent(Wallet, { coins: opts.wallet ?? 0 });
 	if (opts.merchant) {
-		go.addComponent(Merchant, {
-			specialty: opts.merchant.specialty,
-			ask: opts.merchant.ask,
-			floor: opts.merchant.floor,
-		});
+		go.addComponent(Merchant, { goods: [...opts.merchant.goods] });
 	}
 	if (opts.marketNPC) {
-		go.addComponent(MarketNPC, {
+		const npc = go.addComponent(MarketNPC, {
 			kind: opts.marketNPC.kind,
 			wants: [...opts.marketNPC.wants],
 			leaveGate: opts.marketNPC.leaveGate ?? '',
+			post: opts.marketNPC.post ?? '',
 		});
+		if (opts.marketNPC.kind === 'vendor') {
+			npc.postX = go.transform.position.x;
+			npc.postZ = go.transform.position.z;
+		}
 	}
 	if (opts.companion) {
 		go.addComponent(Companion);
 	}
 	if (opts.hearOnly) {
 		go.addComponent(HearOnly, { from: [...opts.hearOnly] });
+	}
+	if (opts.weakness) {
+		go.addComponent(Weakness, { ...opts.weakness, to: [...opts.weakness.to] });
+	}
+	if (opts.streams) {
+		go.addComponent(StreamingAnchor, { viewRadius: NPC_STREAM_RADIUS });
 	}
 	world.add(go);
 	return go;
@@ -553,6 +608,7 @@ export function spawnPlayer(
 	go.addComponent(Vitals, { hp: 20, maxHP: 20 });
 	go.addComponent(StreamingAnchor);
 	go.addComponent(Named, { id: 'Player' });
+	go.addComponent(Speaker, { voice: voiceOf('Player', kind) });
 	go.addComponent(Wallet);
 	go.addComponent(Light, { enabled: false, castShadow: true, range: 9, intensity: 32 });
 	go.addComponent(HeldTorchLight);

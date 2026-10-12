@@ -1,6 +1,8 @@
-import type { ArcResult } from '../arc/types.js';
+import type { ArcResult, CountMap } from '../arc/types.js';
 import type { StockVerbArgs, StockVerbName, VerbArgs, VerbCall, VerbHandler } from '../director/types.js';
+import type { MindEvent } from '../mind/types.js';
 import type { Mover } from './mover.js';
+import { bundleText, isEmpty, offerText, type OfferBook } from './offers.js';
 import { poseOf } from './lookup.js';
 import { awayGoal, reachablePoints } from './route.js';
 import type { HostWorld, Vec } from './types.js';
@@ -15,9 +17,15 @@ export type WorldVerbDeps<TCtx> = {
 	seen:(call:VerbCall<TCtx>)=>string[];
 	/** What counts as nearby for the acting character (its kernels' `nearRadius`), when the host says. */
 	nearRadius:(call:VerbCall<TCtx>)=>number | undefined;
+	/** Every open offer that still stands. */
+	offers:()=>OfferBook;
+	/** Whether character `fromID` may make an offer to `toID`. */
+	canOffer:(fromID:string, toID:string)=>boolean;
+	/** Tell the mind that thinks for character `id`. A major event wakes it. */
+	tell:(id:string, event:MindEvent)=>void;
 };
 
-type WorldPart = Exclude<keyof HostWorld<unknown>, 'find' | 'getPose' | 'getReach' | 'up'>;
+type WorldPart = Exclude<keyof HostWorld<unknown>, 'find' | 'getPose' | 'getReach' | 'canOffer' | 'up'>;
 
 const MOVING:WorldPart[] = ['getPathGraph', 'steerToward'];
 
@@ -35,8 +43,7 @@ export const WORLD_VERB_PARTS:Readonly<Record<string, readonly WorldPart[]>> = {
 	give: ['moveItem'],
 	use: ['useItem'],
 	examine: ['getDescription'],
-	buy: ['trade'],
-	sell: ['trade'],
+	offer: ['exchange'],
 };
 
 /** Parts of `world` that `verb` needs and does not have. */
@@ -47,6 +54,15 @@ export function missingParts(verb:string, world:HostWorld<unknown> | undefined):
 
 /** The acting character and the thing a verb is about. */
 type Found = { character:unknown; target:unknown };
+
+/** How close `a` and `b` must be before each is in the other's reach. Default 1. */
+function reachOf(world:HostWorld<unknown>, a:string, b:string):number {
+	const from = world.find(a);
+	const to = world.find(b);
+	const mine = from !== undefined && to !== undefined ? world.getReach?.(from, to) ?? 1 : 1;
+	const theirs = from !== undefined && to !== undefined ? world.getReach?.(to, from) ?? 1 : 1;
+	return Math.min(mine, theirs);
+}
 
 type Call<TCtx, TVerb extends StockVerbName> = VerbCall<TCtx, VerbArgs<StockVerbArgs<TVerb>>>;
 type Handlers<TCtx> = { [TVerb in StockVerbName]?:VerbHandler<TCtx, VerbArgs<StockVerbArgs<TVerb>>> };
@@ -83,16 +99,67 @@ export function worldVerbs<TCtx>(deps:WorldVerbDeps<TCtx>):Handlers<TCtx> {
 		return { character, target };
 	};
 	const failed = (found:Found | ArcResult):found is ArcResult => 'ok' in found;
-	const trade = async (call:VerbCall<TCtx>, side:'buy' | 'sell', other:string, item:string, quantity?:number, price?:number):Promise<ArcResult> => {
-		const found = resolve(call, other, 'person');
+	const offer = async (call:Call<TCtx, 'offer'>):Promise<ArcResult> => {
+		const me = call.character.id;
+		const { to, give = {}, get = {} } = call.args;
+		const withdraw = isEmpty(give) && isEmpty(get);
+		if (!to) {
+			deps.offers().post({ from: me, give, get });
+			return { ok: true, verb: 'offer', reason: withdraw ? 'withdrew your standing offers' : `offering ${offerText({ give, get })} to anyone` };
+		}
+		const found = resolve(call, to, 'person');
 		if (failed(found)) {
 			return found;
 		}
-		const near = await call.goTo(other);
-		if (!near.ok) {
-			return near;
+		const name = nameOf(call, to);
+		if (found.target === found.character) {
+			return fail('offer', 'cannot trade with yourself');
 		}
-		return outcome(side, world.trade!({ character: found.character, side, other: found.target, item, quantity: countOf(quantity), price }));
+		if (withdraw) {
+			deps.offers().post({ from: me, to, give, get });
+			return { ok: true, verb: 'offer', reason: `withdrew your offer to ${name}` };
+		}
+		if (deps.offers().match(me, to, give, get)) {
+			// Close enough to trade: each is within the other's reach, and an offer to them is allowed. Nearby is not enough.
+			const within = reachOf(world, me, to);
+			const together = ():string | undefined => {
+				const a = poseOf(world, me)?.point;
+				const b = poseOf(world, to)?.point;
+				return a && b && distance(a, b) <= within && deps.canOffer(me, to) ? 'near' : undefined;
+			};
+			if (!together()) {
+				const near = await (mover.canMove ? mover.go(me, { target: to }, 'offer', { within, check: together }) : call.goTo(to, within));
+				if (!near.ok) {
+					return { ...near, verb: 'offer' };
+				}
+			}
+			if (!together()) {
+				return fail('offer', deps.canOffer(me, to) ? `${name} is out of reach` : `${name} is out of sight`);
+			}
+			// Their offer may have changed on the way.
+			const match = deps.offers().match(me, to, give, get);
+			if (match) {
+				const done = world.exchange!({ character: found.character, other: found.target, give: match.pay, get: match.receive });
+				if (!done.ok) {
+					return outcome('offer', done);
+				}
+				deps.offers().settle(me, match);
+				deps.tell(to, { kind: 'Traded', text: `{0} took your offer: you gave ${bundleText(match.receive)} for ${bundleText(match.pay)}`, who: [me], tags: ['trade'] });
+				return { ok: true, verb: 'offer', reason: done.reason ?? `traded ${bundleText(match.pay)} for ${bundleText(match.receive)} with ${name}` };
+			}
+		}
+		if (!deps.canOffer(me, to)) {
+			return fail('offer', `${name} is out of sight`);
+		}
+		deps.offers().post({ from: me, to, give, get });
+		deps.tell(to, {
+			kind: 'Offer',
+			text: `{0} offers you ${offerText({ give, get })}. To accept: offer(to={0}, give=${terms(get)}, get=${terms(give)})`,
+			who: [me],
+			tags: ['offer'],
+			major: true,
+		});
+		return { ok: true, verb: 'offer', reason: `offered ${offerText({ give, get })} to ${name}; waiting for their answer` };
 	};
 	return {
 		go_to: (call:Call<TCtx, 'go_to'>) => {
@@ -138,7 +205,7 @@ export function worldVerbs<TCtx>(deps:WorldVerbDeps<TCtx>):Handlers<TCtx> {
 			if (!near.ok) {
 				return near;
 			}
-			const done = world.moveItem!({ character: found.character, item, to: found.target });
+			const done = world.moveItem!({ character: found.character, item, to: found.target, quantity: call.args.quantity });
 			return outcome('give', done.ok ? { ok: true, reason: done.reason ?? `gave ${item} to ${nameOf(call, to)}` } : done);
 		},
 		use: async (call:Call<TCtx, 'use'>) => {
@@ -165,14 +232,13 @@ export function worldVerbs<TCtx>(deps:WorldVerbDeps<TCtx>):Handlers<TCtx> {
 				? fail('examine', `${nameOf(call, call.args.target)} cannot be examined from here`)
 				: { ok: true, verb: 'examine', reason: text };
 		},
-		buy: (call:Call<TCtx, 'buy'>) => trade(call, 'buy', call.args.from, call.args.item, call.args.quantity, call.args.offer),
-		sell: (call:Call<TCtx, 'sell'>) => trade(call, 'sell', call.args.to, call.args.item, call.args.quantity, call.args.ask),
+		offer,
 	};
 }
 
-/** A whole number of items, at least 1. */
-function countOf(quantity:number | undefined):number {
-	return Math.max(1, Math.floor(quantity ?? 1));
+/** A bundle as an arc writes it: `{"gold":5}`. */
+function terms(bundle:CountMap):string {
+	return JSON.stringify(Object.fromEntries(Object.entries(bundle).filter(([, count]) => count > 0)));
 }
 
 /**

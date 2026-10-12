@@ -108,6 +108,14 @@ async function main():Promise<void> {
 		return text({ entries: projectEntries(result.entries, each) });
 	});
 
+	server.registerTool('render_stats', {
+		description: 'Read GPU cost in a connected client: last frame draw calls and triangles, live geometries and textures, '
+			+ 'estimated sceneMemory (shadow maps, geometry, textures) and framebufferMemory (window-size dependent) in bytes, and frameMS averaged over the last 30 s. Wait 30 s after loading a scene for a fair frameMS.',
+		inputSchema: { session: sessionField },
+	}, async ({ session }) => {
+		return text(await hub.call(session, { op: 'renderStats' }));
+	});
+
 	server.registerTool('save_game', {
 		description: 'Write the current scene save.',
 		inputSchema: { session: sessionField },

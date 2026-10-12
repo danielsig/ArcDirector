@@ -1,7 +1,9 @@
 import * as THREE from 'three';
+import { patchShader } from '@arc-director/kindling';
 import { CELL_SIZE, CHUNK_SIZE } from '../world/constants';
 import type { Chunk } from '../world/Chunk';
 import { trackNature } from './nature';
+import { showsWater } from '../world/water';
 
 const RES = CHUNK_SIZE * 4;
 const AO_MIN = 0.42;
@@ -34,12 +36,12 @@ function sample(chunk:Chunk, wx:number, wz:number):number {
 			ao -= 0.08;
 		}
 	}
-	if (self?.def === 'water') {
+	if (showsWater(self?.def)) {
 		ao -= 0.18;
 	}
 	else {
 		for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]] as const) {
-			if (chunk.tile(lx + dx, lz + dz)?.def === 'water') {
+			if (showsWater(chunk.tile(lx + dx, lz + dz)?.def)) {
 				ao -= 0.06;
 				break;
 			}
@@ -120,9 +122,7 @@ export function injectAo(
 	const uAoMap = { value: tex };
 	const uAoOrigin = { value: new THREE.Vector2(originX, originZ) };
 	const uAoSize = { value: size };
-	const prev = mat.onBeforeCompile;
-	mat.onBeforeCompile = (shader, renderer) => {
-		prev(shader, renderer);
+	patchShader(mat, 'ao', (shader) => {
 		shader.uniforms.uAoMap = uAoMap;
 		shader.uniforms.uAoOrigin = uAoOrigin;
 		shader.uniforms.uAoSize = uAoSize;
@@ -157,10 +157,7 @@ export function injectAo(
 			/vec3 outgoingLight = ([^;]+);/,
 			'vec3 outgoingLight = ($1) * aoMul();',
 		);
-	};
-	const prevKey = mat.customProgramCacheKey.bind(mat);
-	mat.customProgramCacheKey = () => `${prevKey()}|ao`;
-	mat.needsUpdate = true;
+	});
 }
 
 export function attachChunkAo(group:THREE.Group, chunk:Chunk):void {

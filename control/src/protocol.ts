@@ -27,6 +27,8 @@ export type Command =
 	/** Move `character` into `collective`, or out of any with `null`. */
 	| { op:'setCollective'; character:string; collective:string | null }
 	| ({ op:'readAiLog' } & AiLogQuery)
+	/** The renderer's `RenderStats` and the scene id. */
+	| { op:'renderStats' }
 	| { op:'saveGame' }
 	| { op:'loadGame' };
 

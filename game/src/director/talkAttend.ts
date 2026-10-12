@@ -11,6 +11,8 @@ import { findObject } from './names';
 export const CONVERSE_RANGE = 2;
 /** Clear-with-LOS cutoff (meters). Closer than CONVERSE_RANGE is always clear. */
 export const CLEAR_RANGE = 8;
+/** How far a line carries at all (meters). */
+export const HEAR_RANGE = 16;
 /** Speech bubble and glance toward a speaker last this long. */
 export const SPEECH_LIFE = 4.8;
 
@@ -42,6 +44,8 @@ export function talkCanSee(world:World, aID:string, bID:string):boolean {
 		a.transform.position.z,
 		b.transform.position.x,
 		b.transform.position.z,
+		false,
+		true,
 	);
 }
 

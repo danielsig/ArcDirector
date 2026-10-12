@@ -21,6 +21,8 @@ export async function dispatchControl(session:Session, command:Command):Promise<
 			return setCollective(session, command.character, command.collective);
 		case 'readAiLog':
 			return { entries: logEntries(session, command) };
+		case 'renderStats':
+			return { scene: session.scene.id, ...session.hudView.getRenderer()?.stats() };
 		case 'saveGame': {
 			const save = session.save();
 			if (!save) {

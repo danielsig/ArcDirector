@@ -2,7 +2,7 @@ import { Game as KindlingGame, captureWorld, resetAllocID, resetTime, Time } fro
 import { resetHudPatch } from './patchHud';
 import { World } from './World';
 import { GameObject } from './GameObject';
-import { Wallet, Camera } from './components';
+import { Wallet, Named } from './components';
 import { GameHost } from '../director/adapter';
 import { rendererLook } from '../render/look';
 import { loadNPCAnims } from '../render/humanAnims';
@@ -16,7 +16,7 @@ import { getDef } from '../items/defs';
 import { equipItem } from '../items/equip';
 import { instantiateDef } from '../items/instance';
 import { spawnCamera, spawnNPC, spawnPlayer } from '../world/spawn';
-import { DEFAULT_SCENE_ID, sceneByID, type SceneDef } from '../data/scenes';
+import { DEFAULT_SCENE_ID, sceneByID, type PlayerDef, type SceneDef } from '../data/scenes';
 import { packedKinds } from '../render/artCache';
 import { DirectorPulse, GroundPick, Hud, WorldStream, WorldView } from './systems';
 import { Session } from './Session';
@@ -25,6 +25,25 @@ import { loadViewPose } from './viewPersist';
 import { readURLFlags } from './urlView';
 import { startSceneMusic } from '../audio/songs';
 import { syncWaterAudio } from '../audio/water';
+
+/** The scene's purse, gear and name for the player. */
+function dressPlayer(world:World, def:PlayerDef | undefined):void {
+	const player = world.findByID('Player');
+	if (!player || !def) {
+		return;
+	}
+	const purse = player.getComponent(Wallet);
+	if (purse && def.wallet !== undefined) {
+		purse.coins = def.wallet;
+	}
+	for (const defID of def.equip ?? []) {
+		equipItem(player, instantiateDef(getDef(defID)), world);
+	}
+	const named = player.getComponent(Named);
+	if (named && def.name) {
+		named.aliases = [...(named.aliases ?? []), def.name];
+	}
+}
 
 export class Game extends KindlingGame<World> {
 	public readonly session:Session;
@@ -53,37 +72,16 @@ export class Game extends KindlingGame<World> {
 			throw new Error(`scene ${this._scene.id} has no chunks`);
 		}
 		spawnPlayer(this.world, startDecoded.playerStart, startDecoded.chunk);
-		const player = this.world.findByID('Player');
-		const purse = player?.getComponent(Wallet);
-		if (purse && this._scene.playerWallet !== undefined) {
-			purse.coins = this._scene.playerWallet;
-		}
-		if (player && this._scene.id === 'ruins') {
-			equipItem(player, instantiateDef(getDef('iron_sword')), this.world);
-		}
+		dressPlayer(this.world, this._scene.player);
 		const decodedByID = new Map(decoded.map((d) => [d.chunk.id, d]));
 		for (const npc of this._scene.npcs) {
-			const home = decodedByID.get(npc.chunkID) ?? startDecoded;
-			spawnNPC(this.world, home.chunk, {
-				id: npc.id,
-				meshID: npc.meshID,
-				localX: npc.localX,
-				localZ: npc.localZ,
-				yaw: npc.yaw,
-				pack: npc.pack,
-				packLoot: npc.packLoot,
-				wallet: npc.wallet,
-				hp: npc.hp,
-				merchant: npc.merchant,
-				marketNPC: npc.marketNPC,
-				companion: npc.companion,
-				hearOnly: npc.hearOnly,
-			});
+			spawnNPC(this.world, (decodedByID.get(npc.chunkID) ?? startDecoded).chunk, npc);
 		}
 		spawnCamera(this.world);
 		const host = new GameHost(this.world, hud.chat, hud.aiLog, {
 			ambient: this._scene.ambient,
 			scene: this._scene.id,
+			playerTags: this._scene.player?.tags,
 		});
 		const director = this._scene.createDirector(host);
 		host.bind(director);
@@ -200,9 +198,12 @@ export class Game extends KindlingGame<World> {
 		if (!player) {
 			return;
 		}
+		// Sounds come from where the camera looks; they fade with distance from the player.
 		const p = player.transform.position;
-		const cam = this.world.findByID('MainCamera')?.getComponent(Camera);
-		this.world.audio.setListener(p.x, p.y + 1.35, p.z, cam?.yaw ?? player.transform.yaw);
+		const ears = { x: p.x, y: p.y + 1.35, z: p.z };
+		const cam = this.world.findByID('MainCamera');
+		const eye = cam?.transform.position ?? ears;
+		this.world.audio.setListener(eye.x, eye.y, eye.z, cam?.transform.yaw ?? player.transform.yaw, ears);
 		syncWaterAudio(this.world, p.x, p.z);
 	}
 }

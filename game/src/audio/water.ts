@@ -1,6 +1,7 @@
 import { MeshRenderer } from '../engine/MeshRenderer';
 import type { World } from '../engine/World';
 import { SFX } from './sfx';
+import { showsWater } from '../world/water';
 
 const RIVER_HEAR = 7;
 const FALLS_HEAR = 12;
@@ -57,7 +58,7 @@ function nearestRiver(
 	let bestScore = RIVER_HEAR;
 	for (const chunk of world.chunks.values()) {
 		chunk.forEachTile((tile, lx, lz) => {
-			if (tile.def !== 'water') {
+			if (!showsWater(tile.def)) {
 				return;
 			}
 			const c = chunk.worldCellCenter(lx, lz);

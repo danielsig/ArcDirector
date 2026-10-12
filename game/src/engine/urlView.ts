@@ -1,4 +1,4 @@
-/** Testing-only URL flags (`observer` `ai`) and optional agent `view` shot. */
+/** Testing-only URL flags (`observer` `ai` `stats`) and optional agent `view` shot. */
 import type { Prefs } from '../prefs';
 import type { ViewPose } from './viewPersist';
 
@@ -81,6 +81,12 @@ export function readURLFlags(search = window.location.search):URLFlags {
 /** Testing-only client id for the control hub. Empty or omitted → no socket. */
 export function readURLSession(search = window.location.search):string {
 	return (new URLSearchParams(search).get('session') ?? '').trim();
+}
+
+/** Testing-only `stats=1`: the render stats overlay. */
+export function readURLStats(search = window.location.search):boolean {
+	const q = new URLSearchParams(search);
+	return parseURLBool(q.has('stats') ? (q.get('stats') ?? '') : null) ?? false;
 }
 
 export function writeURLSession(session:string):void {

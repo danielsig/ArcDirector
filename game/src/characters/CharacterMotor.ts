@@ -109,10 +109,7 @@ export class CharacterMotor extends Component {
 		}
 		this._stepPhase %= 1.55;
 		const p = this.gameObject.transform.position;
-		cueAt(world, stepKind(world.tileAtWorld(p.x, p.z)?.def), this.gameObject, {
-			gain: 0.52 + Math.random() * 0.22,
-			freq: 72 + Math.random() * 36,
-		});
+		cueAt(world, stepKind(world, p.x, p.z), this.gameObject, 0.52 + Math.random() * 0.22);
 	}
 
 	private turnTowardWish(moveX:number, moveZ:number, dt:number):void {

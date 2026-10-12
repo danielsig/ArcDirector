@@ -1,5 +1,5 @@
 import { extractJson, isRecord } from '../json.js';
-import { ArcError, JOINS, SYMBOL_JOIN, isArc, type Arc, type Join, type Step, type StepArg } from './types.js';
+import { ArcError, JOINS, SYMBOL_JOIN, isArc, isCountMap, type Arc, type Join, type Step, type StepArg } from './types.js';
 import { argBase, CHOOSE_VERB, GROUP_VERB, type VerbRegistry } from './stock-verbs.js';
 import { choicesOf } from './choose.js';
 import { parseArcText } from './parse.js';
@@ -53,7 +53,8 @@ export function arcJSONText(arc:Arc, verbs:VerbRegistry):string {
 }
 
 function isStepArg(v:unknown):v is StepArg {
-	return typeof v === 'string' || typeof v === 'number' || typeof v === 'boolean' || (Array.isArray(v) && v.every((x) => typeof x === 'string'));
+	return typeof v === 'string' || typeof v === 'number' || typeof v === 'boolean' || isCountMap(v)
+		|| (Array.isArray(v) && v.every((x) => typeof x === 'string'));
 }
 
 function readJoin(raw:unknown):Join | undefined {

@@ -100,6 +100,18 @@ export function dropItem(character:GameObject, item:import('./instance').ItemIns
 	cueAt(world, 'drop', character);
 }
 
+/** First spawn keeps `name`. Later ones of that name get `name2`, `name3`, so each object id stays unique. */
+function freeWorldID(world:World, name:string):string {
+	if (!world.findByID(name)) {
+		return name;
+	}
+	let n = 2;
+	while (world.findByID(`${name}${n}`)) {
+		n++;
+	}
+	return `${name}${n}`;
+}
+
 export function spawnDefAt(
 	world:World,
 	defID:string,
@@ -113,7 +125,7 @@ export function spawnDefAt(
 	const inst = instantiateDef(getDef(defID), count);
 	if (name) {
 		inst.name = name;
-		inst.id = name;
+		inst.id = freeWorldID(world, name);
 	}
 	return spawnWorldItem(world, inst, x, y, z, chunkID);
 }

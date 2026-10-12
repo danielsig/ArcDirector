@@ -8,6 +8,7 @@ import { WorldPresent } from '../render/present';
 import type { HudModel } from '../ui/hudModel';
 import type { Chunk } from '../world/Chunk';
 import { spawnChunkEntities } from '../world/spawn';
+import { syncDressingColliders } from '../world/dressingColliders';
 import type { World } from './World';
 
 export class DirectorPulse extends Component {
@@ -27,7 +28,10 @@ export class WorldStream extends ChunkStreamer<Chunk> {
 	public static override order = Order.streaming;
 
 	public override spawn(chunk:Chunk):void {
-		spawnChunkEntities(this.gameObject.world as World, chunk);
+		const world = this.gameObject.world as World;
+		spawnChunkEntities(world, chunk);
+		// Props are planned over every loaded chunk, so their colliders follow each load.
+		syncDressingColliders(world);
 	}
 }
 

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { inject, watch } from 'vue';
-import { modelLabel, type HudModel, type MenuPage } from './hudModel';
+import { fmtMem, modelLabel, type HudModel, type MenuPage } from './hudModel';
 import { sessionKey } from './sessionKey';
 import HudBench from './HudBench.vue';
 import {
@@ -134,17 +134,6 @@ function dumpNPCMaps():void {
 
 function resetInferStats():void {
 	session?.value?.resetInferStats();
-}
-
-function fmtMem(bytes:number):string {
-	if (!Number.isFinite(bytes) || bytes <= 0) {
-		return '—';
-	}
-	if (bytes < 1024 * 1024) {
-		return `${Math.max(1, Math.round(bytes / 1024))} KB`;
-	}
-	const mb = bytes / (1024 * 1024);
-	return mb < 10 ? `${mb.toFixed(1)} MB` : `${Math.round(mb)} MB`;
 }
 
 function fmtMs(ms:number | null):string {
@@ -360,6 +349,18 @@ function pct(n:number):string {
 									@input="setPrefs({ sfx: onRange($event) })"
 								>
 							</label>
+							<div class="set" :class="{ dim: hud.audioMuted }">
+								<span class="name">Voices</span>
+								<button
+									type="button"
+									class="switch"
+									:class="{ on: hud.voices }"
+									:aria-pressed="hud.voices"
+									@click.stop="setPrefs({ voices: !hud.voices })"
+								>
+									{{ hud.voices ? 'On' : 'Off' }}
+								</button>
+							</div>
 						</template>
 						<template v-else>
 							<p v-if="hud.prefsDetached" class="readout">Prefs not saved (MCP)</p>
@@ -570,7 +571,7 @@ function pct(n:number):string {
 								</tbody>
 							</table>
 							<div class="stats-foot">
-								<span>Graphics memory {{ fmtMem(hud.graphicsMemory) }}</span>
+								<span>Graphics memory {{ fmtMem(hud.renderStats.framebufferMemory + hud.renderStats.sceneMemory) }}</span>
 								<span>{{ hud.inferCalls }} call{{ hud.inferCalls === 1 ? '' : 's' }}</span>
 								<button type="button" class="act" @click.stop="resetInferStats">Reset</button>
 							</div>

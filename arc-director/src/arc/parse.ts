@@ -1,5 +1,5 @@
 import { validateArc } from './validate.js';
-import { ArcError, JOIN_SYMBOL, SYMBOL_JOIN, groupArc, isArc, type Arc, type Join, type Step, type StepArg } from './types.js';
+import { ArcError, JOIN_SYMBOL, SYMBOL_JOIN, groupArc, isArc, isCountMap, type Arc, type Join, type Step, type StepArg } from './types.js';
 import { argBase, CHOOSE_VERB, GROUP_VERB, type VerbRegistry, type VerbSpec } from './stock-verbs.js';
 import { choicesOf, deriveChoiceName, freeChoiceName } from './choose.js';
 
@@ -16,8 +16,11 @@ function formatArg(v:StepArg, verbs:VerbRegistry | undefined, depth:Depth, kind?
 	if (isArc(v)) {
 		return formatAt(v, verbs?.nested(), depth);
 	}
+	if (isCountMap(v)) {
+		return JSON.stringify(v);
+	}
 	if (Array.isArray(v)) {
-		return v.join(',');
+		return kind !== undefined && argBase(kind) === 'string[]' ? JSON.stringify(v) : v.join(',');
 	}
 	if (typeof v === 'string') {
 		if (isCallExpr(v) || (kind !== undefined && EXPR_KINDS.has(argBase(kind)))) {
@@ -318,6 +321,55 @@ function skipRepeatedKey(s:string, i:number, key:string):number {
 	return m ? i + m[0].length : i;
 }
 
+/** `{"gold":5}`. */
+function asBundle(value:StepArg, key:string):StepArg {
+	const parsed = typeof value === 'string' ? readJson(value) : value;
+	if (isCountMap(parsed)) {
+		return parsed;
+	}
+	throw new ArcError(`${key} is {"gold":5} or {"Egg":12, "Milk":3}`);
+}
+
+function readJson(raw:string):unknown {
+	try {
+		return JSON.parse(raw);
+	}
+	catch {
+		throw new ArcError(`cannot read ${raw}`);
+	}
+}
+
+/** `["5 gold", "Loaf"]`, or one bare line such as `5 gold`. */
+function asStringArray(value:StepArg):string[] {
+	if (Array.isArray(value) && value.every((item):item is string => typeof item === 'string')) {
+		return value;
+	}
+	if (Array.isArray(value)) {
+		throw new ArcError('a list arg is strings, as ["5 gold", "Loaf"]');
+	}
+	if (typeof value !== 'string') {
+		throw new ArcError('a list arg is strings, as ["5 gold", "Loaf"]');
+	}
+	const raw = value.trim();
+	if (!raw) {
+		return [];
+	}
+	if (raw.startsWith('[')) {
+		let parsed:unknown;
+		try {
+			parsed = JSON.parse(raw);
+		}
+		catch {
+			throw new ArcError(`cannot read list ${raw}`);
+		}
+		if (!Array.isArray(parsed) || !parsed.every((item) => typeof item === 'string')) {
+			throw new ArcError('a list arg is strings, as ["5 gold", "Loaf"]');
+		}
+		return parsed;
+	}
+	return [raw];
+}
+
 function parseStepText(s:string, i:number, registry:VerbRegistry):{ step:Step; next:number } {
 	i = skipWs(s, i);
 	const start = i;
@@ -354,6 +406,14 @@ function parseStepText(s:string, i:number, registry:VerbRegistry):{ step:Step; n
 		}
 		if (base === 'text') {
 			return parseText(s, at, Object.keys(spec.args).filter((k) => k !== key));
+		}
+		if (base === 'string[]') {
+			const parsed = parseValue(s, at);
+			return { value: asStringArray(parsed.value), next: parsed.next };
+		}
+		if (base === 'bundle') {
+			const parsed = parseValue(s, at);
+			return { value: asBundle(parsed.value, key), next: parsed.next };
 		}
 		return parseValue(s, at);
 	};

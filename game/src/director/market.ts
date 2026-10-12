@@ -1,56 +1,89 @@
 import type { CharacterSpec } from 'arc-director';
-import { MarketNPC, Named } from '../engine/components';
+import { Door, MarketNPC, Named } from '../engine/components';
 import type { GameObject } from '../engine/GameObject';
 import type { World } from '../engine/World';
+import { idOf } from './names';
 import { spawnNPC, type NPCSpawnOpts } from '../world/spawn';
 import type { Chunk } from '../world/Chunk';
+import { STALLS, type Stall } from '../items/wares';
 
-/** Each vendor's stall, by what it sells. */
-const STALL_OF:Record<string, string> = { Loaf: 'BakerStall', Scarf: 'WeaverStall', Bowl: 'PotterStall', Knife: 'CutlerStall' };
-
-function vendorSeed(id:string, good:string, ask:number, floor:number, want:string, traits:string[]):CharacterSpec {
-	const stall = STALL_OF[good];
+function vendorSeed(stall:Stall):CharacterSpec {
+	const prices = stall.wares.map((ware) => `${ware.name} for ${ware.ask} gold, never under ${ware.floor}`).join('; ');
 	return {
-		id,
+		id: stall.vendor,
 		mind: {},
-		identity: { role: 'Vendor', traits },
+		identity: { role: 'Vendor', traits: stall.traits },
 		goals: [
-			{ text: `Sell ${good} at ${stall}.`, priority: 2 },
-			{ text: `Buy ${want} for yourself at ${STALL_OF[want]}, then go back to ${stall}.`, priority: 1 },
+			{ text: `Stay at ${stall.stall}. Never leave it.`, priority: 2 },
+			{ text: `Sell ${prices}.`, priority: 2 },
 		],
+		offers: stall.wares.map((ware) => ({ give: { [ware.name]: 1 }, get: { gold: ware.ask } })),
 		memories: [{
-			text: `I am a street vendor at ${stall}. I sell ${good} for ${ask} gold and never take less than ${floor}. I want ${want} for myself.`,
-			tags: ['backstory', good, stall],
+			text: `I am a street vendor. My place is ${stall.stall} and I never leave it, not to shop and not to chase anyone. I sell ${prices}. Each offer stands, so whoever pays it gets one at once. Someone who offers less waits for my answer: I accept with the reverse offer, or counter. I do not walk off to get ${stall.want}.`,
+			tags: ['backstory', stall.stall, ...stall.wares.map((ware) => ware.name)],
 			pinned: true,
 		}],
 	};
 }
 
-export const MARKET_SEEDS:CharacterSpec[] = [
-	vendorSeed('Baker', 'Loaf', 5, 3, 'Knife', ['warm', 'busy', 'fair']),
-	vendorSeed('Weaver', 'Scarf', 6, 4, 'Loaf', ['sharp', 'proud', 'thrifty']),
-	vendorSeed('Potter', 'Bowl', 4, 2, 'Scarf', ['quiet', 'kind', 'dusty']),
-	vendorSeed('Cutler', 'Knife', 7, 4, 'Bowl', ['gruff', 'honest', 'impatient']),
-];
+export const MARKET_SEEDS:CharacterSpec[] = STALLS.map(vendorSeed);
 
-/** A guard's own program while the hive gives it none: hold its gate until a thief shows, then run them down. */
+/**
+ * Where a guard stands: one meter inside the gate and one meter off the opening, so the pair flanks the
+ * door. The opening itself stays clear for people walking out.
+ */
+export function guardPost(world:World, guard:GameObject):{ x:number; z:number } | undefined {
+	const npc = guard.getComponent(MarketNPC);
+	if (npc?.kind !== 'guard' || !npc.leaveGate) {
+		return undefined;
+	}
+	const gate = world.findNamed(npc.leaveGate);
+	if (!gate) {
+		return undefined;
+	}
+	const mates:GameObject[] = [];
+	world.forEachComponent(MarketNPC, (other, go) => {
+		if (other.kind === 'guard' && other.leaveGate === npc.leaveGate) {
+			mates.push(go);
+		}
+	});
+	mates.sort((a, b) => idOf(a).localeCompare(idOf(b)));
+	const index = Math.max(0, mates.indexOf(guard));
+	const side = index % 2 === 0 ? -1 : 1;
+	const span = 1 + Math.floor(index / 2);
+	const p = gate.transform.position;
+	const passageX = gate.getComponent(Door)?.axis === 'z' ? 0 : 1;
+	const passageZ = passageX === 0 ? 1 : 0;
+	const clear = (sign:number) => world.sampleTerrain(p.x + passageX * sign, p.z + passageZ * sign)?.blocked === false;
+	const inward = clear(1) ? 1 : -1;
+	return {
+		x: p.x + passageX * inward + passageZ * side * span,
+		z: p.z + passageZ * inward + passageX * side * span,
+	};
+}
+
+/** Hold the gate until a thief or a security cry shows. A law on the Guards collective outranks this and runs first. */
 function guard(id:string, gate:string):Pick<CharacterSpec, 'id' | 'tags' | 'choose'> {
 	return {
 		id,
 		tags: ['Guard', gate],
 		choose: {
-			goal: `Guard ${gate}. A thief is caught by walking up to them: chase one you see, else hold`,
-			hold: `go_to(${gate}) && wait(until=some(others.filter("thief")))`,
+			goal: `Guard ${gate} from beside the doorway, never in it. A thief outranks a cry. Chase a thief you see, else run to whoever cried a security word, else hold`,
+			hold: 'stand() && wait(until=some(others.filter("thief")) || some(others.filter("alarm")))',
 			chase: 'go_to(others.filter("thief").minBy(u => distance(me, u)))',
+			answer: 'go_to(others.filter("alarm").minBy(u => distance(me, u)))',
 		},
 	};
 }
 
-export const HIVE_UNITS:Pick<CharacterSpec, 'id' | 'tags' | 'choose'>[] = [
+export const HIVE_UNITS:Pick<CharacterSpec, 'id' | 'tags'>[] = [
 	{ id: 'Mira', tags: ['Shopper', 'Loaf', 'EastGate'] },
 	{ id: 'Tomas', tags: ['Shopper', 'Knife', 'Bowl', 'WestGate'] },
 	{ id: 'Nell', tags: ['Shopper', 'Scarf', 'WestGate'] },
 	{ id: 'Rook', tags: ['Shopper', 'Loaf', 'WestGate'] },
+];
+
+export const GUARD_UNITS:Pick<CharacterSpec, 'id' | 'tags' | 'choose'>[] = [
 	guard('Holt', 'WestGate'),
 	guard('Pike', 'WestGate'),
 	guard('Brant', 'EastGate'),
@@ -68,11 +101,19 @@ type CustomerTemplate = {
 };
 
 const TEMPLATES:CustomerTemplate[] = [
-	{ wants: ['Loaf'], wallet: [3, 4] },
-	{ wants: ['Scarf'], wallet: [8, 12] },
-	{ wants: ['Bowl', 'Loaf'], wallet: [8, 11] },
-	{ wants: ['Knife'], wallet: [4, 6] },
-	{ wants: ['Bowl'], wallet: [5, 8] },
+	{ wants: ['Loaf'], wallet: [3, 6] },
+	{ wants: ['Bun'], wallet: [1, 4] },
+	{ wants: ['Pie'], wallet: [6, 12] },
+	{ wants: ['Cake', 'Bun'], wallet: [8, 16] },
+	{ wants: ['Scarf'], wallet: [4, 10] },
+	{ wants: ['Hood'], wallet: [6, 12] },
+	{ wants: ['Ribbon'], wallet: [2, 5] },
+	{ wants: ['Bowl', 'Loaf'], wallet: [6, 12] },
+	{ wants: ['Jug'], wallet: [4, 10] },
+	{ wants: ['Knife'], wallet: [4, 9] },
+	{ wants: ['Cleaver'], wallet: [8, 14] },
+	{ wants: ['Shears'], wallet: [3, 8] },
+	{ wants: ['Hook'], wallet: [4, 8] },
 	{ wants: ['Scarf'], wallet: [2, 4], loot: { defID: 'candle', name: 'Candle', count: 2 } },
 	{ wants: ['Knife'], wallet: [3, 5], loot: { defID: 'apple', name: 'Apple', count: 2 } },
 ];
@@ -124,7 +165,8 @@ export function spawnRandomCustomer(world:World):{ go:GameObject; id:string; tag
 		return null;
 	}
 	const local = chunk.worldToLocal(spawnGate.transform.position.x, spawnGate.transform.position.z);
-	const inward = spawnGate.getComponent(Named)?.id === 'WestGate' ? 2 : -2;
+	// Past the jamb and the guards. The opening is a passage, not a lobby.
+	const inward = spawnGate.getComponent(Named)?.id === 'WestGate' ? 4 : -4;
 	const tmpl = TEMPLATES[Math.floor(Math.random() * TEMPLATES.length)];
 	const wallet = tmpl.wallet[0] + Math.floor(Math.random() * (tmpl.wallet[1] - tmpl.wallet[0] + 1));
 	const opts:NPCSpawnOpts = {

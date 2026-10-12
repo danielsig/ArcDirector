@@ -1,52 +1,45 @@
+import type { SfxPatch } from '@arc-director/kindling';
 import type { GameObject } from '../engine/GameObject';
 import type { World } from '../engine/World';
+import { CELL_SIZE } from '../world/constants';
+import { findDoor, roadCells } from '../world/dressingPlan';
 import { SFX, type SfxName } from './sfx';
 
-type CueExtra = { gain?:number; freq?:number; freqTo?:number; dur?:number };
-
-export function cue(world:World, name:SfxName, point?:{ x:number; y?:number; z:number }, extra?:CueExtra):void {
-	world.audio.playSfx(SFX[name], {
-		x: point?.x,
-		y: point?.y,
-		z: point?.z,
-		gain: extra?.gain,
-		freq: extra?.freq,
-		freqTo: extra?.freqTo,
-		dur: extra?.dur,
-	});
-}
-
-export function cueAt(world:World | null | undefined, name:SfxName, go:GameObject, extra?:CueExtra):void {
+/** Play a sound effect at `go` (a random take, if it has several), optionally louder or softer. */
+export function cueAt(world:World | null | undefined, name:SfxName, go:GameObject, gain?:number):void {
 	if (!world) {
 		return;
 	}
+	const sound:SfxPatch | readonly SfxPatch[] = SFX[name];
+	const patch = 'layers' in sound ? sound : sound[Math.floor(Math.random() * sound.length)]!;
 	const p = go.transform.position;
-	cue(world, name, { x: p.x, y: p.y, z: p.z }, extra);
+	world.audio.playSfx(patch, { x: p.x, y: p.y, z: p.z, gain });
 }
 
-export function talkHz(id:string):number {
-	let h = 2166136261;
-	for (let i = 0; i < id.length; i++) {
-		h ^= id.charCodeAt(i);
-		h = Math.imul(h, 16777619);
+const roads = new WeakMap<World, { x:number; z:number }[]>();
+
+/** Whether `x`, `z` is on the cobbled road from the cottage door: dressing drawn over grass, planned in `dressingPlan`. */
+function onRoad(world:World, x:number, z:number):boolean {
+	let cells = roads.get(world);
+	if (!cells) {
+		const chunks = [...world.chunks.values()];
+		const door = findDoor(chunks);
+		cells = door ? roadCells(chunks, door) : [];
+		roads.set(world, cells);
 	}
-	return 130 + (h >>> 0) % 90;
+	return cells.some((c) => Math.abs(c.x - x) <= CELL_SIZE / 2 && Math.abs(c.z - z) <= CELL_SIZE / 2);
 }
 
-export function talkDur(text:string):number {
-	const words = text.trim().split(/\s+/).filter(Boolean).length;
-	return Math.min(2.2, 0.32 + words * 0.16);
-}
-
-export function talkAsks(text:string):boolean {
-	return /\?[?!]*\s*$/.test(text.trim());
-}
-
-export function stepKind(def:string | undefined):'stepStone' | 'stepDirt' | 'stepWood' {
+/** The footstep at `x`, `z`. The cobbled road is stone; walkable water is a bridge span, so it sounds like wood. */
+export function stepKind(world:World, x:number, z:number):'stepStone' | 'stepGrass' | 'stepWood' {
+	if (onRoad(world, x, z)) {
+		return 'stepStone';
+	}
+	const def = world.tileAtWorld(x, z)?.def;
 	if (def === 'grass' || def === 'dirt' || def === 'path' || def === 'sand') {
-		return 'stepDirt';
+		return 'stepGrass';
 	}
-	if (def === 'plank' || def === 'wood' || def === 'wood_wall' || def === 'bridge') {
+	if (def === 'plank' || def === 'wood' || def === 'wood_wall' || def === 'bridge' || def === 'water') {
 		return 'stepWood';
 	}
 	return 'stepStone';

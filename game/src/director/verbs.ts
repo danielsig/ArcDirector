@@ -12,11 +12,13 @@ import {
 	BoxCollider,
 	HumanBody,
 	HumanSprite,
+	MarketGate,
 	MarketNPC,
 	Wanted,
 	Vitals,
 	Celebrating,
 	HurtFlash,
+	Weakness,
 	type BodySlot,
 } from '../engine/components';
 import type { GameObject } from '../engine/GameObject';
@@ -30,7 +32,6 @@ import {
 	compactName,
 	healCharacter,
 } from '../items/inventory';
-import { findSaleItem } from '../items/wallet';
 import { equipItem, unequipSlot } from '../items/equip';
 import { NPCInput } from '../characters/NPCInput';
 import type { GameHost } from './adapter';
@@ -39,6 +40,7 @@ import { idOf, findObject, isLiving } from './names';
 import { applyHit } from './hitFeel';
 import {
 	agilityOf,
+	allies,
 	ATTACKS,
 	attackVerbFor,
 	COVER_SOFTEN,
@@ -53,8 +55,10 @@ import {
 	nearestAlly,
 	nearestRival,
 	rankSlot,
+	weaknessDamage,
 	type AttackKind,
 } from './fight';
+import { STALL_LEASH } from '../world/constants';
 import { lineClear } from '../world/path';
 import type { CharacterCtx } from './types';
 
@@ -91,8 +95,45 @@ export function verbGate(host:GameHost):VerbGate<CharacterCtx> {
 		if (foe && isRival(host, ctx.character, foe)) {
 			return { ok: false, verb, reason: `${seenName(host, ctx.character, foe)} is an enemy; go_to does not attack` };
 		}
+		const stall = stallBound(ctx, verb, args);
+		if (stall) {
+			return stall;
+		}
+		if (verb === 'go_to' && ctx.character.getComponent(MarketNPC)?.kind === 'guard') {
+			const raw = args.target;
+			const dest = typeof raw === 'string' && raw ? findObject(ctx.world, raw) : undefined;
+			if (dest?.getComponent(MarketGate)) {
+				return { ok: false, verb, reason: `stand beside ${idOf(dest)}` };
+			}
+		}
 		return undefined;
 	};
+}
+
+/** A vendor stays at the stall they spawned on. */
+function stallBound(ctx:CharacterCtx, verb:string, args:Record<string, unknown>):ArcResult | undefined {
+	const npc = ctx.character.getComponent(MarketNPC);
+	if (npc?.kind !== 'vendor' || !npc.post) {
+		return undefined;
+	}
+	const roaming = verb === 'follow' || verb === 'wander' || verb === 'flee';
+	const stepping = verb === 'go_to' || verb === 'offer';
+	if (!roaming && !stepping) {
+		return undefined;
+	}
+	if (roaming) {
+		return { ok: false, verb, reason: `stay at ${npc.post}` };
+	}
+	const raw = verb === 'offer' ? args.to : args.target;
+	const dest = typeof raw === 'string' && raw ? findObject(ctx.world, raw) : undefined;
+	if (!dest) {
+		return undefined;
+	}
+	const place = dest.transform.position;
+	if (Math.hypot(place.x - npc.postX, place.z - npc.postZ) > STALL_LEASH) {
+		return { ok: false, verb, reason: `stay at ${npc.post}` };
+	}
+	return undefined;
 }
 
 /** What this game's characters wear and hold. ArcDirector runs the stock world verbs through `withWorld`. */
@@ -404,13 +445,15 @@ async function doAttack(host:GameHost, call:Call, verb:string, name:string, lock
 	if (covered) {
 		dmg = Math.max(1, Math.round(dmg * COVER_SOFTEN));
 	}
-	vitals.hp = Math.max(0, vitals.hp - dmg);
+	const struck = weaknessDamage(target, attack.name, dmg);
+	vitals.hp = Math.max(0, vitals.hp - struck.damage);
 	applyHit(ctx.world, ctx.character, target, attack.spec.knock ?? 1);
+	const how = struck.weak ? ' — its weakness, it burns' : target.getComponent(Weakness) ? ', barely a scratch' : '';
 	host.arc?.pushEvent({
 		kind: 'Hurt',
-		text: covered ? `{0} ${attack.spec.word} {1} through cover` : `{0} ${attack.spec.word} {1}`,
+		text: `{0} ${attack.spec.word} {1}${covered ? ' through cover' : ''}${how}`,
 		who,
-		tags: ['hurt', attack.name, ...(covered ? ['cover'] : [])],
+		tags: ['hurt', attack.name, ...(covered ? ['cover'] : []), ...(struck.weak ? ['weakness'] : [])],
 		major: false,
 	});
 	if (vitals.hp <= 0) {
@@ -501,24 +544,8 @@ function isHurt(go:GameObject):boolean {
 }
 
 function partyLiving(host:GameHost, character:GameObject):GameObject[] {
-	const party = fightParty(host, character);
-	if (!party) {
-		return isLiving(character) ? [character] : [];
-	}
-	const out:GameObject[] = [];
-	const seen = new Set<string>();
-	for (const unit of party.characters) {
-		const go = findObject(host.world, unit.id);
-		if (!isLiving(go) || seen.has(go.id)) {
-			continue;
-		}
-		seen.add(go.id);
-		out.push(go);
-	}
-	if (isLiving(character) && !seen.has(character.id)) {
-		out.push(character);
-	}
-	return out;
+	const side = allies(host, character);
+	return side.length > 0 ? side : isLiving(character) ? [character] : [];
 }
 
 function hasHealTag(host:GameHost, go:GameObject, tag:string):boolean {
@@ -674,7 +701,7 @@ async function doSteal(host:GameHost, call:Call, itemName:string, fromName:strin
 	if (!walk.ok) {
 		return { ...walk, verb: 'steal' };
 	}
-	const stock = findSaleItem(victim, itemName) ?? findItem(victim, itemName);
+	const stock = findItem(victim, itemName);
 	if (!stock) {
 		return { ok: false, verb: 'steal', reason: `${fromName} has no ${itemName}` };
 	}

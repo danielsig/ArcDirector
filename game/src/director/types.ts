@@ -1,4 +1,4 @@
-import type { CharacterSpec } from 'arc-director';
+import type { CharacterSpec, SpeechUtterance } from 'arc-director';
 import type { NPCInput } from '../characters/NPCInput';
 import type { GameObject } from '../engine/GameObject';
 import type { World } from '../engine/World';
@@ -15,6 +15,7 @@ export type CharacterCtx = {
 export type SceneHooks<H> = {
 	afterPickUp?:(host:H, character:GameObject, name:string)=>void;
 	tickMarketNPC?:(host:H)=>void;
+	onSpoke?:(host:H, utterance:SpeechUtterance)=>void;
 	checkBargain?:(host:H)=>void;
 	goalDone?:(host:H, id:string)=>boolean;
 	allowTheft?:boolean;

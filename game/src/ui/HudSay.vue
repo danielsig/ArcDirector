@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, inject, nextTick, ref, watch } from 'vue';
+import { computed, inject, nextTick, onMounted, onUnmounted, ref, watch } from 'vue';
 import type { HudModel } from './hudModel';
 import { parseSlash, slashComplete, suggestSay, type SaySuggestion } from './sayCommands';
 import { lsDel, lsGet, lsSet } from '../prefs';
@@ -17,6 +17,138 @@ const histKey = 'arc-director.sayHistory';
 const hist = ref<string[]>([]);
 const histAt = ref(-1);
 const histLive = ref('');
+/** Character index under the mouse, and the caret's while the field has focus; -1 for none. */
+const hoverAt = ref(-1);
+const caret = ref(-1);
+const chipHover = ref(false);
+/** A good just picked keeps its chip until the caret moves or the field is clicked. `at` is where the caret was left. */
+const pinned = ref<{ start:number; at:number } | null>(null);
+
+type Amount = { start:number; end:number; digits:number; name:string };
+
+/** Every `6 gold` / `2 Bowl` in a slash command. Plain speech has none. */
+const amounts = computed(():Amount[] => [...(draft.value.startsWith('/') ? draft.value : '').matchAll(/\b(\d+) +([A-Za-z]\w*)/g)].map((m) => ({
+	start: m.index,
+	end: m.index + m[0].length,
+	digits: m[1].length,
+	name: m[2],
+})));
+
+/** Which amount has the chip: the one the mouse, a pin, or the caret is on. Kept while the mouse is on the chip. */
+const chipAt = ref(-1);
+const chip = computed(():Amount | null => amounts.value[chipAt.value] ?? null);
+watch([amounts, hoverAt, caret, chipHover, pinned], () => {
+	if (chipHover.value) {
+		return;
+	}
+	const on = (at:number):number => amounts.value.findIndex((a) => at >= a.start && at <= a.end);
+	const hovered = on(hoverAt.value);
+	const next = hovered >= 0 ? hovered : on(pinned.value?.start ?? caret.value);
+	if (next === chipAt.value) {
+		return;
+	}
+	// Room for the chip between amount and name while it shows.
+	gap(chipAt.value, 1);
+	gap(next, 3);
+	chipAt.value = next;
+});
+
+/** Put `spaces` between the amount and the name of amount `i`, keeping the caret where it was in the text. */
+function gap(i:number, spaces:number):void {
+	const a = amounts.value[i];
+	if (!a) {
+		return;
+	}
+	const from = a.start + a.digits;
+	const old = a.end - a.name.length - from;
+	splice(from, old, ' '.repeat(spaces));
+}
+
+/** Replace `length` characters at `from` with `text`; a caret or pin past them moves with them. */
+function splice(from:number, length:number, text:string):void {
+	const shift = text.length - length;
+	if (shift === 0 && draft.value.slice(from, from + length) === text) {
+		return;
+	}
+	// A keystroke reaches the field before selectionchange reaches us; once the field shows the draft, it knows the caret.
+	const el = field.value;
+	if (el && document.activeElement === el && el.value === draft.value) {
+		caret.value = el.selectionStart ?? caret.value;
+	}
+	draft.value = draft.value.slice(0, from) + text + draft.value.slice(from + length);
+	const moved = (at:number):number => (at > from ? at + shift : at);
+	if (pinned.value) {
+		pinned.value = { start: moved(pinned.value.start), at: moved(pinned.value.at) };
+	}
+	if (caret.value >= 0) {
+		placeCaret(moved(caret.value));
+	}
+}
+
+/** Put the caret at `at` once the field shows the new draft. `caret` leads, so the last call wins. */
+function placeCaret(at:number):void {
+	caret.value = at;
+	void nextTick(() => {
+		const el = field.value;
+		if (el && caret.value >= 0) {
+			el.focus();
+			el.setSelectionRange(caret.value, caret.value);
+		}
+	});
+}
+
+/** The field's monospace character width and left padding, for mapping pixels to characters. */
+function metrics():{ char:number; pad:number } {
+	const el = field.value!;
+	const style = getComputedStyle(el);
+	const ctx = document.createElement('canvas').getContext('2d')!;
+	ctx.font = style.font;
+	return { char: ctx.measureText('0').width, pad: parseFloat(style.paddingLeft) };
+}
+
+/** The middle of the gap between the chip's amount and name. */
+const chipLeft = computed(() => {
+	const el = field.value;
+	const a = chip.value;
+	if (!a || !el) {
+		return 0;
+	}
+	const { char, pad } = metrics();
+	const mid = a.start + a.digits + (a.end - a.name.length - a.start - a.digits) / 2;
+	return pad + mid * char - el.scrollLeft;
+});
+
+function onHover(e:MouseEvent):void {
+	const { char, pad } = metrics();
+	hoverAt.value = Math.floor((e.offsetX - pad + field.value!.scrollLeft) / char);
+}
+
+/** Follow every caret move in the field: typing, arrows, clicks. Moving off a pin drops it. */
+function syncCaret():void {
+	const el = field.value;
+	if (!el || document.activeElement !== el) {
+		return;
+	}
+	caret.value = el.selectionStart ?? -1;
+	if (pinned.value && caret.value !== pinned.value.at) {
+		pinned.value = null;
+	}
+}
+
+onMounted(() => document.addEventListener('selectionchange', syncCaret));
+onUnmounted(() => document.removeEventListener('selectionchange', syncCaret));
+
+/** Step the chip's amount by `delta`, never below 1, and gold you give never past your purse. */
+function step(delta:number):void {
+	const a = chip.value;
+	if (!a) {
+		return;
+	}
+	const giving = !/\bfor\b/i.test(draft.value.slice(0, a.start));
+	const most = a.name.toLowerCase() === 'gold' && giving && props.hud.gold > 0 ? props.hud.gold : Infinity;
+	const n = Math.min(most, Math.max(1, Number(draft.value.slice(a.start, a.start + a.digits)) + delta));
+	splice(a.start, a.digits, String(n));
+}
 
 function readHist():string[] {
 	try {
@@ -46,10 +178,13 @@ const catalog = computed(() => ({
 	peers: props.hud.sayPeers,
 	items: props.hud.sayItems,
 	gold: props.hud.gold,
-	goods: props.hud.sayGoods,
+	offers: props.hud.sayOffers,
 }));
 
-const suggestions = computed(():SaySuggestion[] => suggestSay(draft.value, catalog.value));
+/** Completions for the end of the draft: only while the caret is there. */
+const suggestions = computed(():SaySuggestion[] => (
+	caret.value >= 0 && caret.value < draft.value.length ? [] : suggestSay(draft.value, catalog.value)
+));
 
 watch(
 	() => props.hud.sayOpen,
@@ -81,18 +216,13 @@ watch(suggestions, (rows) => {
 function apply(row:SaySuggestion):void {
 	draft.value = row.insert;
 	pick.value = 0;
-	void nextTick(() => {
-		const el = field.value;
-		if (!el) {
-			return;
-		}
-		el.focus();
-		const n = draft.value.length;
-		el.setSelectionRange(n, n);
-	});
+	const picked = amounts.value.find((a) => a.end === row.insert.trimEnd().length);
+	pinned.value = picked ? { start: picked.start, at: row.insert.length } : null;
+	placeCaret(row.insert.length);
 }
 
 function send():void {
+	gap(chipAt.value, 1);
 	const text = draft.value.trim();
 	draft.value = '';
 	props.hud.sayOpen = false;
@@ -125,6 +255,12 @@ function keepFocus():void {
 
 function onFieldKey(e:KeyboardEvent):void {
 	const rows = suggestions.value;
+	if ((e.code === 'ArrowUp' || e.code === 'ArrowDown') && chip.value) {
+		e.preventDefault();
+		e.stopPropagation();
+		step(e.code === 'ArrowUp' ? 1 : -1);
+		return;
+	}
 	if (e.code === 'ArrowUp' && rows.length === 0) {
 		e.preventDefault();
 		e.stopPropagation();
@@ -219,17 +355,33 @@ function onPick(row:SaySuggestion, e:MouseEvent):void {
 				<span class="meta">{{ row.hint }}</span>
 			</li>
 		</ul>
-		<input
-			id="hud-say-input"
-			ref="field"
-			v-model="draft"
-			type="text"
-			autocomplete="off"
-			spellcheck="false"
-			placeholder="Say something… or /give"
-			@keydown="onFieldKey"
-			@blur="keepFocus"
-		>
+		<div class="field">
+			<div
+				v-if="chip"
+				class="chip"
+				:style="{ left: `${chipLeft}px` }"
+				@mouseenter="chipHover = true"
+				@mouseleave="chipHover = false"
+			>
+				<button type="button" aria-label="more" @mousedown.prevent="step(1)">▲</button>
+				<button type="button" aria-label="fewer" @mousedown.prevent="step(-1)">▼</button>
+			</div>
+			<input
+				id="hud-say-input"
+				ref="field"
+				v-model="draft"
+				type="text"
+				autocomplete="off"
+				spellcheck="false"
+				placeholder="Say something… or /give"
+				@keydown="onFieldKey"
+				@keyup="syncCaret"
+				@click="syncCaret"
+				@mousemove="onHover"
+				@mouseleave="hoverAt = -1"
+				@blur="caret = -1; keepFocus()"
+			>
+		</div>
 	</div>
 </template>
 
@@ -308,6 +460,35 @@ input {
 	border: 0;
 	box-shadow: 0 0 0 2px #1a1208, 0 8px 24px rgba(0, 0, 0, 0.45);
 	outline: none;
+}
+
+.field {
+	position: relative;
+}
+
+.chip {
+	position: absolute;
+	top: 50%;
+	z-index: 1;
+	transform: translate(-50%, -50%);
+	display: flex;
+	flex-direction: column;
+	background: rgba(18, 14, 10, 0.94);
+	box-shadow: 0 0 0 2px #1a1208;
+}
+
+.chip button {
+	padding: 0 4px;
+	font-size: 10px;
+	line-height: 14px;
+	color: #f0e6c8;
+	background: none;
+	border: 0;
+	cursor: pointer;
+}
+
+.chip button:hover {
+	background: rgba(80, 58, 32, 0.55);
 }
 
 input::placeholder {

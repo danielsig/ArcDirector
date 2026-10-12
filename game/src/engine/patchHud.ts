@@ -194,7 +194,7 @@ function patchOverhead(
 		}
 	}
 	if (healthBars) world.forEachComponent(Vitals, (vitals, go) => {
-		if (go.id === 'Player' || !go.getComponent(HumanBody)) {
+		if (go.id === 'Player' || vitals.hp <= 0 || !go.getComponent(HumanBody)) {
 			return;
 		}
 		const barY = overheadY(go, pitch, vitals.hp <= 0);
@@ -349,7 +349,9 @@ export function patchHud(
 	hud.gold = player?.getComponent(Wallet)?.coins ?? 0;
 	hud.showGold = sceneHasGold(world);
 	hud.message = world.time - world.hudMessageTimestamp < world.hudMessageLife ? world.hudMessage : '';
-	hud.graphicsMemory = view.graphicsMemory();
+	if (hud.statsOverlay || (hud.menuOpen && hud.menuPage === 'testing')) {
+		hud.renderStats = view.stats();
+	}
 	const input = player?.getComponent(PlayerInput);
 	hud.cursorName = input?.cursorName ?? '';
 	const loot = player ? nearestPickup(player) : null;

@@ -1,10 +1,12 @@
 import * as THREE from 'three';
 import type { World } from '../core/World.js';
 import { Camera } from './Camera.js';
+import { OutlinePass } from './OutlinePass.js';
 
 const CLEAR_COLOR = 0x000000;
 const hit = new THREE.Vector3();
 const ndc = new THREE.Vector2();
+const bufferSize = new THREE.Vector2();
 const ray = new THREE.Raycaster();
 const plane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
 
@@ -22,7 +24,27 @@ export type RendererLook = {
 		color:number;
 		intensity:number;
 	};
+	/** Outline ink. Omitted keeps the current one. */
+	ink?:number;
 };
+
+/** What the last frame cost the GPU, plus the average frame time. */
+export type RenderStats = {
+	/** Draw calls in the last frame. */
+	calls:number;
+	triangles:number;
+	/** Geometries and textures alive on the GPU. */
+	geometries:number;
+	textures:number;
+	/** Estimated GPU bytes of the drawing buffers, which scale with window size. */
+	framebufferMemory:number;
+	/** Estimated GPU bytes of shadow maps, mesh geometry, and material textures. */
+	sceneMemory:number;
+	/** Average ms between rendered frames over the last {@link FRAME_WINDOW_MS}. */
+	frameMS:number;
+};
+
+const FRAME_WINDOW_MS = 30_000;
 
 const DETAIL_STASH = 'kindlingDetailMaps';
 
@@ -54,11 +76,18 @@ function textureBytes(tex:THREE.Texture):number {
 export class Renderer {
 	public readonly gl:THREE.WebGLRenderer;
 	public readonly canvas:HTMLCanvasElement;
+	/** Normal and metalness maps. Off disposes them from the GPU. */
 	public detailMaps = true;
 	/** Realtime shadow maps. Off disposes light shadow targets. */
 	public shadows = true;
+	/**
+	 * Most point lights casting shadows at once, nearest the camera first. Each one costs a texture unit in every
+	 * lit shader, and too many fail to compile (everything renders black).
+	 */
+	public maxPointShadows = 8;
+	/** Ink outlines. Disabled renders straight to the canvas. */
+	public readonly outline = new OutlinePass();
 
-	/** Normal and metalness maps. Off disposes them from the GPU. */
 	private readonly _scene:World;
 	private readonly _hemi:THREE.HemisphereLight;
 	private readonly _fill:THREE.AmbientLight;
@@ -66,6 +95,9 @@ export class Renderer {
 	private readonly _ro:ResizeObserver | null;
 	private _sun:THREE.DirectionalLight | null = null;
 	private _disposed = false;
+	/** Render timestamps inside the frame window, oldest first from `_frameHead`. */
+	private readonly _frames:number[] = [];
+	private _frameHead = 0;
 
 	constructor(world:World) {
 		const canvas = document.createElement('canvas');
@@ -78,8 +110,9 @@ export class Renderer {
 		this._scene = world;
 		this.gl = new THREE.WebGLRenderer({
 			canvas,
-			antialias: true,
+			antialias: false,
 		});
+		this.gl.info.autoReset = false;
 		this.gl.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 		this.gl.setClearColor(CLEAR_COLOR);
 		this.gl.outputColorSpace = THREE.SRGBColorSpace;
@@ -119,6 +152,9 @@ export class Renderer {
 		this._hemi.intensity = look.hemiIntensity;
 		this._fill.color.setHex(look.fillColor);
 		this._fill.intensity = look.fillIntensity;
+		if (look.ink !== undefined) {
+			this.outline.color.setHex(look.ink);
+		}
 		if (!look.sun) {
 			if (this._sun) {
 				this._sun.visible = false;
@@ -188,6 +224,8 @@ export class Renderer {
 		const w = Math.max(1, this.canvas.clientWidth);
 		const h = Math.max(1, this.canvas.clientHeight);
 		this.gl.setSize(w, h, false);
+		const buffer = this.gl.getDrawingBufferSize(bufferSize);
+		this.outline.setSize(buffer.x, buffer.y);
 		const cam = this.findCamera();
 		if (cam) {
 			cam.native.aspect = w / h;
@@ -205,17 +243,62 @@ export class Renderer {
 			return;
 		}
 		this.applyQuality();
-		this.gl.render(this._scene.native, cam.native);
+		this.pickPointShadows(cam.native);
+		this.gl.info.reset();
+		this.outline.render(this.gl, this._scene.native, cam.native);
+		this.markFrame(performance.now());
 	}
 
-	/** Estimated GPU bytes: framebuffer, shadow maps, and textures on scene materials. */
+	/** Shadows for the nearest point lights that want one; the rest light without. */
+	private pickPointShadows(eye:THREE.Camera):void {
+		const wanting:{ lamp:THREE.PointLight; d:number }[] = [];
+		const at = new THREE.Vector3();
+		eye.getWorldPosition(at);
+		this._scene.native.traverseVisible((o) => {
+			if (o instanceof THREE.PointLight) {
+				o.castShadow = false;
+				if (o.userData.wantsShadow) {
+					wanting.push({ lamp: o, d: o.getWorldPosition(new THREE.Vector3()).distanceToSquared(at) });
+				}
+			}
+		});
+		wanting.sort((a, b) => a.d - b.d);
+		for (const { lamp } of wanting.slice(0, this.maxPointShadows)) {
+			lamp.castShadow = true;
+		}
+	}
+
+	public stats():RenderStats {
+		const info = this.gl.info;
+		return {
+			calls: info.render.calls,
+			triangles: info.render.triangles,
+			geometries: info.memory.geometries,
+			textures: info.memory.textures,
+			framebufferMemory: this.framebufferMemory(),
+			sceneMemory: this.sceneMemory(),
+			frameMS: this.frameMS(),
+		};
+	}
+
+	/** Estimated GPU bytes in use: {@link framebufferMemory} plus {@link sceneMemory}. */
 	public graphicsMemory():number {
-		this.applyQuality();
+		return this.framebufferMemory() + this.sceneMemory();
+	}
+
+	/** Estimated GPU bytes of the drawing buffers (color, multisample, depth). */
+	public framebufferMemory():number {
 		const ctx = this.gl.getContext();
 		const w = ctx.drawingBufferWidth;
 		const h = ctx.drawingBufferHeight;
 		const msaa = ctx.getContextAttributes()?.antialias ? 4 : 1;
-		let bytes = w * h * 4 * (msaa + 1) + w * h * 4 * msaa;
+		return w * h * 4 * (msaa + 1) + w * h * 4 * msaa + this.outline.memory;
+	}
+
+	/** Estimated GPU bytes of shadow maps, mesh geometry, and textures on scene materials. */
+	public sceneMemory():number {
+		this.applyQuality();
+		let bytes = 0;
 		const seen = new Set<object>();
 		const addTex = (tex:THREE.Texture | null | undefined):void => {
 			if (!tex || seen.has(tex)) {
@@ -236,6 +319,24 @@ export class Renderer {
 				bytes += layer;
 			}
 		};
+		const addAttribute = (attr:THREE.BufferAttribute | THREE.InterleavedBufferAttribute | null | undefined):void => {
+			const array = attr && ('data' in attr ? attr.data : attr);
+			if (!array || seen.has(array)) {
+				return;
+			}
+			seen.add(array);
+			bytes += array.array.byteLength;
+		};
+		const addGeometry = (geo:THREE.BufferGeometry):void => {
+			if (seen.has(geo)) {
+				return;
+			}
+			seen.add(geo);
+			addAttribute(geo.index);
+			for (const attr of Object.values(geo.attributes)) {
+				addAttribute(attr);
+			}
+		};
 		this._scene.native.traverse((obj) => {
 			if ((obj as THREE.Light).isLight) {
 				addTarget((obj as LightWithShadow).shadow?.map ?? null);
@@ -243,7 +344,13 @@ export class Renderer {
 			if (!(obj as THREE.Mesh).isMesh) {
 				return;
 			}
-			const mats = (obj as THREE.Mesh).material;
+			const mesh = obj as THREE.Mesh;
+			addGeometry(mesh.geometry);
+			if ((mesh as THREE.InstancedMesh).isInstancedMesh) {
+				addAttribute((mesh as THREE.InstancedMesh).instanceMatrix);
+				addAttribute((mesh as THREE.InstancedMesh).instanceColor);
+			}
+			const mats = mesh.material;
 			for (const mat of (Array.isArray(mats) ? mats : [mats])) {
 				const std = mat as THREE.MeshStandardMaterial;
 				addTex(std.map);
@@ -257,6 +364,26 @@ export class Renderer {
 			}
 		});
 		return bytes;
+	}
+
+	private markFrame(now:number):void {
+		const frames = this._frames;
+		frames.push(now);
+		while (frames[this._frameHead]! < now - FRAME_WINDOW_MS) {
+			this._frameHead++;
+		}
+		if (this._frameHead > 1024) {
+			frames.splice(0, this._frameHead);
+			this._frameHead = 0;
+		}
+	}
+
+	private frameMS():number {
+		const count = this._frames.length - this._frameHead - 1;
+		if (count < 1) {
+			return 0;
+		}
+		return (this._frames[this._frames.length - 1]! - this._frames[this._frameHead]!) / count;
 	}
 
 	private applyQuality():void {
@@ -363,6 +490,7 @@ export class Renderer {
 			this._sun.dispose();
 			this._sun = null;
 		}
+		this.outline.dispose();
 		this.gl.dispose();
 		this.canvas.remove();
 	}

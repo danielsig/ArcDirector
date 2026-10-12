@@ -8,6 +8,7 @@ import { keyNameFor, lockedReason } from './pickup';
 import { cueAt } from '../audio/cue';
 import { applyHit } from '../director/hitFeel';
 import { idOf } from '../director/names';
+import { weaknessDamage } from '../director/fight';
 
 export type UseResult = {
 	ok:boolean;
@@ -197,7 +198,7 @@ export function useItem(character:GameObject, item:ItemInstance, target:GameObje
 		}
 		const hp = target.getComponent(Vitals);
 		if (hp) {
-			const dealt = Math.min(hp.hp, item.Weapon.damage);
+			const dealt = Math.min(hp.hp, weaknessDamage(target, undefined, item.Weapon.damage).damage);
 			hp.hp -= dealt;
 			if (dealt > 0) {
 				if (character.id === 'Player') {

@@ -4,6 +4,7 @@ import {
 	eachStep,
 	groupArc,
 	isArc,
+	isCountMap,
 	type Arc,
 	type Step,
 } from './types.js';
@@ -81,6 +82,9 @@ export function validateStep(step:Step, registry:VerbRegistry, inIssue = false):
 		}
 		if (base === 'string[]' && !(Array.isArray(value) && value.every((x) => typeof x === 'string'))) {
 			throw new ArcError(`verb '${step.verb}' arg '${key}' must be string[]`);
+		}
+		if (base === 'bundle' && !isCountMap(value)) {
+			throw new ArcError(`verb '${step.verb}' arg '${key}' must be { [item: string]: number }`);
 		}
 		if (['id', 'string', 'text', 'watch', 'expr', 'law'].includes(base) && typeof value !== 'string') {
 			throw new ArcError(`verb '${step.verb}' arg '${key}' must be a string`);

@@ -213,6 +213,7 @@ RAF:
 2. **Collide.** Enabled, solid, non-trigger `BoxCollider` on an object that also has a `Rigidbody`:
    - tile AABB vs `World.sampleTerrain` when `tileSize > 0` (`blocked` cells)
    - other solid boxes (minimum translation on X or Z)
+   - static round obstacles: `shape: 'cylinder'` (diameter `size.x`) pushes the box out away from the axis, so bodies slide around barrels and wells instead of snapping to an axis
    - **shove**: both colliders `pad > 0` → shove along walk velocity (`SHOVE_YIELD`), not a hard block
    - cliffs: `sampleTerrain` height / `climbable`; revert to previous XZ if the step is illegal
 3. **Ground.** `Rigidbody.grounded`: lerp Y toward `sampleTerrain.worldY` (skip if the rise exceeds `stepHeight`).
@@ -274,7 +275,7 @@ restoreWorld(rebuilt, save, (recipe) => spawn(rebuilt, recipe));
 
 ## Rendering
 
-`Renderer` creates the WebGL canvas, hemisphere + ambient fill, optional directional sun, fog, and shadows. It renders with the first **enabled** `Camera` in `world.objects`. `detailMaps` (default on) samples normal and metalness maps; off disposes them from the GPU. `shadows` (default on) is realtime shadow maps. `graphicsMemory()` estimates GPU bytes in use.
+`Renderer` creates the WebGL canvas, hemisphere + ambient fill, optional directional sun, fog, and shadows. It renders with the first **enabled** `Camera` in `world.objects`. `detailMaps` (default on) samples normal and metalness maps; off disposes them from the GPU. `shadows` (default on) is realtime shadow maps. `graphicsMemory()` estimates GPU bytes in use: `framebufferMemory()` (drawing buffers, scales with window size) plus `sceneMemory()` (shadow maps, geometry, textures). `stats()` returns the last frame's draw calls and triangles, live geometry and texture counts, both memory parts, and `frameMS` (average over the last 30 s).
 
 | | |
 |--|--|
@@ -287,7 +288,9 @@ restoreWorld(rebuilt, save, (recipe) => spawn(rebuilt, recipe));
 
 `MeshRenderer` waits until `meshReady(meshID)`. Changing `meshID` rebuilds the mesh.
 
-Shader patches: `insertAfterChunk` / `applyShaderFeatures` insert GLSL after a documented Three.js `#include <chunk>` (see playground pulse cube).
+Shader patches: `insertAfterChunk` / `applyShaderFeatures` insert GLSL after a documented Three.js `#include <chunk>` (see playground pulse cube). `patchShader(material, key, edit)` stacks a raw edit on top of earlier ones (a key already on the material is skipped), so patches compose instead of replacing `onBeforeCompile`.
+
+Toon look: `ToonMaterial` is `MeshToonMaterial` with a hard-stepped ramp (`bands`), a tint on the unlit side (`shade`), a back-light `rim`, and drawn `pattern`s (`brick`, `plank`, `thatch`, `stone`, `meadow`) computed from world position, so no textures or UVs. `patternScale` is meters per course on sides, `topScale` on upward faces, `brickLength` in meters, and `topAxis` (the way rows count on flat tops; stairs point it uphill), so courses and joints can match step heights and tread depths. `outline: false` keeps a surface (grass, water) out of the ink pass: opaque surfaces write alpha 0 as the mask, transparent ones keep their alpha for blending and leave the mask beneath untouched (set `transparent` before `outline`). Mesh kit (`lathe`, `bevelBox`, `tube`, `blob`, `ribbon`) builds prop geometry in meters, Y up; the host supplies materials and instancing. `Renderer.outline` (`OutlinePass`) draws ink from scene depth in one fullscreen pass: no per-object draw calls. Set its `color` per scene with `RendererLook.ink` and its `width` in pixels at 1080p; `enabled = false` renders straight to the canvas.
 
 ---
 
@@ -336,7 +339,7 @@ export const violin = registerInstrument('violin', 'sustaining', (ctx, dest, noi
 
 `percussive` locks loudness when the note starts. `sustaining` lets a dim/cres turn the volume on a note that is already playing (pad, bass, lead, air, violin, brass, flute). Override a track with `track(piano, { envelope: 'sustaining' })`.
 
-Sound filters are inserts: `reverb({ mix, decay, tone })` adds a short room on top of the dry signal, `overdrive({ drive, tone })` is a waveshaper plus a tone lowpass. Put them on a track (`track(lead, { filters: [overdrive()] })`), the whole piece (`piece({ filters: [reverb()] })` or `score.filters`), or an SFX patch (`patch.filters`). Series, first to last. Voice filters run, then the score filters, then the music-bus room (that room is always there for `playMusic`). A posed score or SFX does not use the music-bus room, so add `reverb()` on it when it should bloom.
+Sound filters are inserts: `reverb({ mix, decay, tone, size })` adds a short room on top of the dry signal (`size` 0–1 adds reflections and spaces them; 0.5 is four stock taps), `overdrive({ drive, tone })` is a waveshaper plus a tone lowpass. Put them on a track (`track(lead, { filters: [overdrive()] })`), the whole piece (`piece({ filters: [reverb()] })` or `score.filters`), or an SFX patch (`patch.filters`). Series, first to last. Voice filters run, then the score filters, then the music-bus room (that room is always there for `playMusic`). A posed score or SFX does not use the music-bus room, so add `reverb()` on it when it should bloom.
 
 ### Score (`@arc-director/kindling/score`)
 
@@ -364,7 +367,7 @@ Dynamics: `p`, `mp`, `mf`, `f`, `ff`. Marks follow the notes they apply to. `cre
 
 `slot()` stores a phrase for replay / `.with` / `.without`. `start()` / `end()` trim while listening. `callback(fn)` fires when playback reaches that point.
 
-SFX layers: `noise`, `thump`, `click`, `creak`, `pluck`, `fm`, `chirp`, `murmur`. Posed SFX use HRTF. `opts.dur` / `opts.freq` apply to **every** layer. Music is centered. Distance is `1 / (1 + (dist * falloff)²)`; mute past `hear`.
+SFX layers: `noise`, `thump`, `click`, `creak`, `pluck`, `fm`, `chirp`, `bee`, `boo` (speech syllables modeled on recordings, each opening with a "b"). `speech(text, voice, seconds?)` builds an Animal Crossing–style babble patch from a spoken line: one `bee` or `boo` per syllable on a pentatonic scale, a "boo" for rounded vowels and a "bee" for the rest as ten English spelling rules read them (silent e, vowel teams, r-colored vowels, …), with sentence intonation, fitted to exactly `seconds` when given. A `SpeechVoice` sets `pitch`, `rate` and `range` (intonation); `voiceFor(seed, [lowHz, highHz])` makes a varied one. The `Speaker` component builds a line in its voice with `line(text, seconds?)` and plays it at its transform with `say(line)`, filling unset `voice` fields from `voiceFor(id)`. Posed SFX use HRTF. `opts.dur` / `opts.freq` apply to **every** layer. Music is centered. Distance stays full through 1m, drops steeply, then keeps a shallow tail; mute past `hear`. `falloff` scales both slopes.
 
 ---
 
@@ -377,6 +380,8 @@ await registerGltf('tri', '/triangle.gltf');
 ```
 
 `create(id)` / `meshReady(id)` are what `MeshRenderer` uses. `registerGltf` is async; the renderer retries until the factory exists.
+
+Rigged toon characters: `registerToonModel(id, url, { brightness, bands })` loads a rigged GLB (VRM 0.x orientation) whose scene `extras.toon` holds `ToonModelData` (humanoid bones, expressions, springs). Each `MeshRenderer` instance is a skinned clone with `ToonMaterial`s; drive it with `setExpression(mesh, 'joy', 1)` and `humanBone(mesh, 'head')`. `scripts/shoot.mjs <url> <out.png>` screenshots a page in headless Chrome once its title is `ready` (the playground's `character.html?shot=turnaround|faces` does this).
 
 ---
 
@@ -401,5 +406,5 @@ src/
   render/            Renderer, Camera, Light, MeshRenderer, shader inserts
   assets/            mesh registry, glTF
   audio/             procedural mixer, scores, SFX
-playground/          Vite cube / parent / glTF / light demo
+playground/          Vite cube / parent / glTF / light demo; character.html sheet
 ```

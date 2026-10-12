@@ -1,6 +1,9 @@
 import { prefs, type ArcFormatPref, type SystemOneKind } from '../prefs';
 import { characterOptions, resolvePlayerKind } from '../render/artCache';
+import type { RenderStats } from '@arc-director/kindling';
+import { readURLStats } from '../engine/urlView';
 import type { BenchRow } from '../director/decisionBench';
+import type { SayCatalog } from './sayCommands';
 
 export type MinimapCell = {
 	def:string;
@@ -62,6 +65,18 @@ export type HudModelOption = {
 	devices:number;
 };
 
+/** Bytes as KB or MB; `—` for none. */
+export function fmtMem(bytes:number):string {
+	if (!Number.isFinite(bytes) || bytes <= 0) {
+		return '—';
+	}
+	if (bytes < 1024 * 1024) {
+		return `${Math.max(1, Math.round(bytes / 1024))} KB`;
+	}
+	const mb = bytes / (1024 * 1024);
+	return mb < 10 ? `${mb.toFixed(1)} MB` : `${Math.round(mb)} MB`;
+}
+
 /** `id`, then what sets it apart: on several devices, a decision model, or loaded. */
 export function modelLabel(m:HudModelOption):string {
 	const devices = m.devices > 1 ? ` · ${m.devices} devices` : '';
@@ -103,7 +118,8 @@ export type HudModel = {
 	sayTo:string;
 	sayPeers:string[];
 	sayItems:string[];
-	sayGoods:{ item:string; from:string }[];
+	/** What each person offers the player, by lowercase name. */
+	sayOffers:SayCatalog['offers'];
 	menuOpen:boolean;
 	/** Scene brief. First visit opens it; later visits only the (?) button. */
 	briefOpen:boolean;
@@ -153,7 +169,10 @@ export type HudModel = {
 	playerKind:string;
 	/** Packed kinds for the Character dropdown. */
 	playerKinds:{ id:string; label:string }[];
-	graphicsMemory:number;
+	/** Testing-only overlay (`stats=1`). */
+	statsOverlay:boolean;
+	/** Updated only while the overlay or the Testing page shows it (reading it walks the scene). */
+	renderStats:RenderStats;
 	detailMaps:boolean;
 	shadows:boolean;
 	inferCalls:number;
@@ -167,6 +186,7 @@ export type HudModel = {
 	heartrates:HudHeartrate[];
 	musicVolume:number;
 	sfxVolume:number;
+	voices:boolean;
 	audioMuted:boolean;
 	minimap:{
 		originX:number;
@@ -212,7 +232,7 @@ export function emptyHud():HudModel {
 		sayTo: '',
 		sayPeers: [],
 		sayItems: [],
-		sayGoods: [],
+		sayOffers: {},
 		menuOpen: false,
 		briefOpen: false,
 		keysOpen: false,
@@ -239,7 +259,8 @@ export function emptyHud():HudModel {
 		models: [],
 		playerKind: resolvePlayerKind(p.playerKind),
 		playerKinds: characterOptions(),
-		graphicsMemory: 0,
+		statsOverlay: readURLStats(),
+		renderStats: { calls: 0, triangles: 0, geometries: 0, textures: 0, framebufferMemory: 0, sceneMemory: 0, frameMS: 0 },
 		detailMaps: p.detailMaps,
 		shadows: p.shadows,
 		inferCalls: 0,
@@ -253,6 +274,7 @@ export function emptyHud():HudModel {
 		heartrates: [],
 		musicVolume: p.music,
 		sfxVolume: p.sfx,
+		voices: p.voices,
 		audioMuted: p.muted,
 		minimap: {
 			originX: 0,

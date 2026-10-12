@@ -11,13 +11,15 @@ export type Note = {
 	velRampAt?:number;
 };
 
-/** Wet room added on top of the dry signal. `mix` and `decay` are 0–1. `tone` is a lowpass Hz. */
+/** Wet room added on top of the dry signal. `mix`, `decay`, and `size` are 0–1. `tone` is a lowpass Hz. */
 export type ReverbFilter = {
 	kind:'reverb';
 	/** Wet level. Default 0.28. */
 	mix?:number;
 	/** Delay feedback. Default 0.38. */
 	decay?:number;
+	/** How many early reflections, and how far apart. 0 is a tight booth, 1 a long hall. Default 0.5. */
+	size?:number;
 	/** Damping lowpass Hz. Default 2400. */
 	tone?:number;
 };
@@ -62,19 +64,27 @@ export type Score = {
 	filters?:SoundFilter[];
 };
 
-export type SfxKind = 'noise' | 'thump' | 'click' | 'creak' | 'pluck' | 'fm' | 'chirp' | 'murmur';
+/** `bee` and `boo` are the two syllables `speech` babbles in, each opening with a "b"; they glide from `freq` to `freqTo`. */
+export type SfxKind = 'noise' | 'thump' | 'click' | 'creak' | 'pluck' | 'fm' | 'chirp' | 'bee' | 'boo';
 
 export type SfxLayer = {
+	/** Type of sound. */
 	kind:SfxKind;
+	/** Playback duration in seconds. */
 	dur:number;
+	/** PLayback delay in seconds. */
 	when?:number;
+	/** Pitch of a sound in Hz. */
 	freq?:number;
+	/** End pitch the sound glides to in Hz. */
 	freqTo?:number;
+	/** Bandwidth for bandpass/lowpass filters. Default 0.6. */
 	q?:number;
+	/** Initial volume before applying any filters, cutoff, etc. Default 1. */
 	gain?:number;
 	/** Bandpass/lowpass Hz for noise layers. */
 	cutoff?:number;
-	/** Filter for looping noise beds. Default `lowpass`. */
+	/** Filter for noise layers. Default `lowpass`. */
 	filter?:BiquadFilterType;
 };
 
@@ -94,11 +104,9 @@ export type SfxOpts = {
 	dur?:number;
 	/** Override frequency on every layer. */
 	freq?:number;
-	/** Murmur/chirp end pitch. Talk questions rise here. */
-	freqTo?:number;
 	/** Mute the source past this distance (meters). Default 22. */
 	hear?:number;
-	/** Inverse-square coefficient: gain is `1 / (1 + (dist * falloff)²)`. Default 0.16. */
+	/** How local the sound is. Higher falls off sooner. Default 0.16. See `distanceGain`. */
 	falloff?:number;
 };
 

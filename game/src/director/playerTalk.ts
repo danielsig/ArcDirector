@@ -1,20 +1,17 @@
-import { pascalCase, type ArcResult, type SpeechUtterance, type VerbCall } from 'arc-director';
-import { HumanBody, Named, SpeechBubble } from '../engine/components';
+import { type ArcResult, type SpeechUtterance, type VerbCall } from 'arc-director';
+import { HumanBody, Named } from '../engine/components';
 import type { GameObject } from '../engine/GameObject';
 import type { World } from '../engine/World';
-import { compactName, distXZ, listCarried } from '../items/inventory';
-import { coinsOf, goodsAsk } from '../items/wallet';
+import { distXZ } from '../items/inventory';
+import { coinsOf } from '../items/wallet';
 import { parseSlash, SLASH_HELP, type ParsedSlash, type SayCatalog } from '../ui/sayCommands';
 import type { GameHost } from './adapter';
 import { idOf, findObject, isLiving } from './names';
 import type { CharacterCtx } from './types';
 import { carriedLabels } from './perception';
-import { talkNotices, CLEAR_RANGE, SPEECH_LIFE } from './talkAttend';
-import { settleBuy, settleGive, settlePay, settleSell, tooFar } from './items';
-import { cueAt, talkAsks, talkDur, talkHz } from '../audio/cue';
+import { talkNotices, CLEAR_RANGE, HEAR_RANGE } from './talkAttend';
 
 const TALK_RANGE = CLEAR_RANGE;
-const HEAR_RANGE = 16;
 const CHAT_CAP = 80;
 
 function chatTo(to?:string | string[]):string | undefined {
@@ -59,32 +56,21 @@ export function nearestTalkPeer(world:World, speakerID:string):string | undefine
 	return nearbyTalkPeers(world, speakerID)[0];
 }
 
-export function playerSayCatalog(world:World):SayCatalog {
-	const player = world.findByID('Player');
-	const peers = nearbyTalkPeers(world, 'Player');
+export function playerSayCatalog(host:GameHost):SayCatalog {
+	const player = host.world.findByID('Player');
+	const peers = nearbyTalkPeers(host.world, 'Player');
 	const items = player ? carriedLabels(player) : [];
 	const gold = player ? coinsOf(player) : 0;
-	const goods:{ item:string; from:string }[] = [];
-	const seen = new Set<string>();
-	for (const name of peers) {
-		const go = findObject(world, name);
-		if (!go) {
-			continue;
-		}
-		for (const it of listCarried(go)) {
-			if (goodsAsk(it) === undefined) {
-				continue;
-			}
-			const label = pascalCase(it.name) || it.name;
-			const key = `${compactName(label)}:${compactName(name)}`;
-			if (seen.has(key)) {
-				continue;
-			}
-			seen.add(key);
-			goods.push({ item: label, from: name });
+	const offers:SayCatalog['offers'] = {};
+	for (const offer of host.arc?.offers.all ?? []) {
+		if (offer.to === undefined || offer.to === 'Player') {
+			// The first offer of each good wins.
+			const theirs = offers[offer.from.toLowerCase()] ??= { give: {}, get: {} };
+			theirs.give = { ...offer.give, ...theirs.give };
+			theirs.get = { ...offer.get, ...theirs.get };
 		}
 	}
-	return { peers, items, gold, goods };
+	return { peers, items, gold, offers };
 }
 
 export function parseDirectedLine(spoken:string, peers:string[] = []):{ to:string; text:string } | undefined {
@@ -166,67 +152,11 @@ export function playerSlash(host:GameHost, slash:ParsedSlash):void {
 		pushChat(host, 'Help', SLASH_HELP);
 		return;
 	}
-	const player = host.world.findByID('Player');
-	if (!player) {
-		host.world.setMessage('no player');
-		return;
-	}
-	const result = runPlayerSlash(host, player, slash);
-	host.world.setMessage(result.reason ?? '');
-}
-
-export function runPlayerSlash(
-	host:GameHost,
-	player:GameObject,
-	slash:Exclude<ParsedSlash, { ok:false } | { ok:true; verb:'help' }>,
-):ArcResult {
-	if (slash.verb === 'give') {
-		const target = playerReach(host, player, slash.to, 'give');
-		if (!target.ok) {
-			return target;
-		}
-		return settleGive(player, target.who, slash.item, host);
-	}
-	if (slash.verb === 'pay') {
-		const target = playerReach(host, player, slash.to, 'give');
-		if (!target.ok) {
-			return target;
-		}
-		return settlePay(player, target.who, slash.amount, host);
-	}
-	if (slash.verb === 'buy') {
-		const target = playerReach(host, player, slash.from, 'buy');
-		if (!target.ok) {
-			return target;
-		}
-		return settleBuy(player, target.who, slash.item, slash.offer ?? NaN, host);
-	}
-	if (slash.verb === 'sell') {
-		const target = playerReach(host, player, slash.to, 'sell');
-		if (!target.ok) {
-			return target;
-		}
-		return settleSell(player, target.who, slash.item, slash.ask ?? NaN, host);
-	}
-	const unseen:never = slash;
-	return { ok: false, verb: 'buy', reason: String(unseen) };
-}
-
-export function playerReach(
-	host:GameHost,
-	player:GameObject,
-	name:string,
-	verb:string,
-):{ ok:true; who:GameObject } | { ok:false; verb:string; reason:string } {
-	const who = findObject(host.world, name);
-	if (!who) {
-		return { ok: false, verb, reason: `no such person ${name}` };
-	}
-	const far = tooFar(player, who, name);
-	if (far) {
-		return { ok: false, verb, reason: far };
-	}
-	return { ok: true, who };
+	// The player's character runs it like any other arc: it walks over first, as an NPC would.
+	host.enactPlayer(slash.arc).then(
+		(result) => host.world.setMessage(result.reason ?? ''),
+		(err:unknown) => host.world.setMessage(err instanceof Error ? err.message : String(err)),
+	);
 }
 
 export function talkNames(host:GameHost, id:string):string[] {
@@ -258,9 +188,9 @@ export function pushChat(host:GameHost, speaker:string, text:string, to?:string,
 	}
 }
 
-/** A successful verb aimed at another living character. `say` is already logged by talk. */
+/** A successful verb aimed at another living character. `say` is already logged by talk. A walk is not chat. */
 export function noteAct(host:GameHost, call:VerbCall<CharacterCtx>, result:ArcResult):void {
-	if (!result.ok || result.verb === 'say') {
+	if (!result.ok || result.verb === 'say' || (result.verb ?? call.verb) === 'go_to') {
 		return;
 	}
 	const self = call.ctx.character;
@@ -283,31 +213,24 @@ export function noteAct(host:GameHost, call:VerbCall<CharacterCtx>, result:ArcRe
 
 function actText(verb:string, args:Record<string, unknown>, reason?:string):string {
 	const title = verb.split('_').map((word) => word.charAt(0).toUpperCase() + word.slice(1)).join(' ');
+	if (verb === 'offer') {
+		return reason ?? title;
+	}
 	const item = typeof args.item === 'string' ? args.item : '';
 	if (!item) {
 		return title;
 	}
 	const qty = Math.max(1, Math.floor(Number(args.quantity) || 1));
-	const thing = `${qty}×${item}`;
-	const gold = verb === 'buy' || verb === 'sell' ? reason?.match(/for (\d+) gold/)?.[1] : undefined;
-	return gold && gold !== '0' ? `${title}: ${thing} for ${gold} gold` : `${title}: ${thing}`;
+	return `${title}: ${qty}×${item}`;
 }
 
-export function showSpeech(host:GameHost, character:GameObject, text:string, to?:string, life = SPEECH_LIFE):void {
+/** The chat log gets the line now; bubble and voice take their turn in `host.speech`. */
+export function showSpeech(host:GameHost, character:GameObject, text:string, to?:string):void {
 	const spoken = text.trim();
 	if (!spoken) {
 		return;
 	}
-	const bubble = character.getOrAddComponent(SpeechBubble);
-	bubble.text = spoken;
-	bubble.until = host.world.time + life;
-	bubble.timestamp = host.world.time;
-	const hz = talkHz(character.id);
-	cueAt(host.world, 'talk', character, {
-		freq: hz,
-		dur: talkDur(spoken),
-		freqTo: talkAsks(spoken) ? hz * 1.35 : undefined,
-	});
+	host.speech.enqueue(character, spoken);
 	pushChat(host, idOf(character), spoken, to);
 }
 
@@ -316,4 +239,5 @@ export function onSpoke(host:GameHost, utterance:SpeechUtterance):void {
 	if (character) {
 		showSpeech(host, character, utterance.text, chatTo(utterance.to));
 	}
+	host.hooks.onSpoke?.(host, utterance);
 }

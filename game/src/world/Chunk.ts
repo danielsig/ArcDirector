@@ -1,8 +1,9 @@
 import { Chunk as KindlingChunk } from '@arc-director/kindling';
 import { CELL_SIZE, CHUNK_SIZE } from './constants';
+import type { LootSpec } from './decodeGlyphChunk';
 
 /** Props whose collider is thinner than the cell. Physics blocks the whole cell. */
-export const SOLID_PROPS = new Set<string>(['tree', 'boulder']);
+export const SOLID_PROPS = new Set<string>(['tree', 'boulder', 'pillar', 'pillar_broken']);
 
 /** Props that fill their cell for routes and sight lines. */
 export const CELL_PROPS = new Set<string>([...SOLID_PROPS, 'stall']);
@@ -26,6 +27,9 @@ export type ChunkEntity = {
 	locked:boolean | undefined;
 	open:boolean | undefined;
 	exit:boolean | undefined;
+	yaw:number | undefined;
+	text:string | undefined;
+	contents:LootSpec[] | undefined;
 };
 
 export class Chunk extends KindlingChunk<Tile> {

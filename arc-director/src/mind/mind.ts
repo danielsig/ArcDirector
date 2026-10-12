@@ -123,6 +123,8 @@ export type MindDeps<TCtx = unknown> = {
 	verbInstructions?:string;
 	/** Arc that replaces the closing Example in the prompt. */
 	arcExample?:string;
+	/** Standing sentence in the system prefix. */
+	systemNote?:string;
 	/** Host naming policy seen from this mind: the base name for a character. Omit to use ids. */
 	seenAs?:(target:NameTarget)=>string;
 	intrusionThreshold?:number;
@@ -137,6 +139,8 @@ export type MindDeps<TCtx = unknown> = {
 	knowledge?:KnowledgeSource<TCtx>;
 	/** Most articles shown per think for names said or heard. Default {@link DEFAULT_MENTION_CAP}; 0 shows none. */
 	mentionCap?:number;
+	/** The open offers it may take or answer, one per line, shown in every prompt. Omit, or `''`, for none. */
+	offers?:()=>string;
 	/**
 	 * Whether the current model accepts image parts.
 	 * `false` never offers `see_map`. `true` offers it when `map` is set.
@@ -351,6 +355,7 @@ export class Mind<TCtx = unknown> {
 	public thinking:()=>boolean = () => true;
 	public verbInstructions:string | undefined;
 	public arcExample:string | undefined;
+	public systemNote:string | undefined;
 	public seenAs:((target:NameTarget)=>string) | undefined;
 	public worldContext:()=>TCtx | undefined = () => undefined;
 	public intrusionThreshold = 0.55;
@@ -359,6 +364,7 @@ export class Mind<TCtx = unknown> {
 	public hideObserve = false;
 	public map:MapSense | undefined;
 	public knowledge:KnowledgeSource<TCtx> | undefined;
+	public offers:(()=>string) | undefined;
 	public vision:boolean | undefined;
 	/** The context window of the model it thinks with, kept current by the director; `undefined` when unknown. */
 	public contextTokens:number | undefined;
@@ -444,6 +450,7 @@ export class Mind<TCtx = unknown> {
 		this.thinking = deps.thinking ?? (() => true);
 		this.verbInstructions = deps.verbInstructions;
 		this.arcExample = deps.arcExample;
+		this.systemNote = deps.systemNote;
 		this.seenAs = deps.seenAs;
 		this.worldContext = deps.worldContext ?? (() => this.voice.context());
 		this.intrusionThreshold = deps.intrusionThreshold ?? 0.55;
@@ -452,6 +459,7 @@ export class Mind<TCtx = unknown> {
 		this.hideObserve = deps.hideObserve ?? false;
 		this.map = deps.map;
 		this.knowledge = deps.knowledge;
+		this.offers = deps.offers;
 		this._mentionCap = deps.mentionCap ?? DEFAULT_MENTION_CAP;
 		this.vision = deps.vision;
 	}
@@ -613,19 +621,21 @@ export class Mind<TCtx = unknown> {
 		if (result.unreachable && result.verb) {
 			this._noWay.add(`${result.verb} ${result.unreachable}`);
 		}
+		const walk = result.verb === 'go_to' ? ['go_to'] : [];
 		if (result.interrupted) {
 			this.pushEvent({
 				kind: 'Interrupted',
 				text: result.reason ?? 'interrupted',
-				tags: ['interrupted'],
+				tags: ['interrupted', ...walk],
 			});
 		}
 		else {
 			// What happened in the world is worth keeping; how its own think went (a bad reply) is not.
+			// A walk stays off the recent lines: the next prompt still has this result once, as Last verb result.
 			this.pushEvent({
 				kind: 'arc_result',
 				text: result.reason ?? (result.ok ? 'ok' : 'failed'),
-				tags: [result.ok ? 'ok' : 'fail'],
+				tags: [result.ok ? 'ok' : 'fail', ...walk],
 				remember: result.verb !== 'think',
 			});
 		}
@@ -861,6 +871,7 @@ export class Mind<TCtx = unknown> {
 		const system = stablePrefix(this.id, this.persona.identity, this.owner.activeVerbs(), {
 			includeWatches: true,
 			omitArc: true,
+			systemNote: this.systemNote,
 		});
 		const user = `${volatileBlock({
 			goals: this.persona.goals,
@@ -1066,6 +1077,7 @@ export class Mind<TCtx = unknown> {
 			recentSummary: this._recentSummary,
 			conversation: this.conversationLines(),
 			mentioned: this.mentionedText(),
+			offers: this.offers?.(),
 			thinkAbout: this._pendingAbout,
 		}), this.extraVolatile()].filter(Boolean).join('\n\n');
 	}
@@ -1165,6 +1177,7 @@ export class Mind<TCtx = unknown> {
 			thinking: this.thinking(),
 			verbInstructions: this.verbInstructions,
 			arcExample: this.arcExample,
+			systemNote: this.systemNote,
 			tools: toolNames,
 		});
 		// Talking in circles: characters who hear each other keep answering, so a streak of talk ends in a deed.
@@ -1366,11 +1379,15 @@ export class Mind<TCtx = unknown> {
 			if (!text) {
 				continue;
 			}
+			// go_to is a walk. It is not a line of chat, and it does not fill short-term or Current Conversation.
+			const walk = e.tags?.includes('go_to') === true;
 			if (e.kind === 'arc_result') {
 				if (isBareResult(text)) {
 					continue;
 				}
-				this.noteRecent(text);
+				if (!walk) {
+					this.noteRecent(text);
+				}
 				if (e.remember) {
 					this.keepFact(text, mergeTags(['result'], e.tags, nameTags(text)));
 				}
@@ -1378,16 +1395,19 @@ export class Mind<TCtx = unknown> {
 			}
 			const who = this._pendingEvents[i].who ?? [];
 			const betweenUs = !e.turn && who.length >= 2 && who.some((id) => this.controls(id));
-			if (betweenUs) {
-				this.noteConversation({ speakerID: '', text });
+			// A walk with no spoken turn is not chat. Speech still is, even beside a walk tag.
+			if (!(walk && !e.turn)) {
+				if (betweenUs) {
+					this.noteConversation({ speakerID: '', text });
+				}
+				else if (e.turn) {
+					this.noteConversation(e.turn);
+				}
+				else {
+					this.noteRecent(text);
+				}
 			}
-			else if (e.turn) {
-				this.noteConversation(e.turn);
-			}
-			else {
-				this.noteRecent(text);
-			}
-			if (e.remember || betweenUs) {
+			if (e.remember || (betweenUs && !walk)) {
 				const tags = betweenUs ? mergeTags(e.tags, ['act'], nameTags(text)) : mergeTags(e.tags, nameTags(text));
 				const rows = this.persona.memory.all();
 				const last = rows[rows.length - 1];

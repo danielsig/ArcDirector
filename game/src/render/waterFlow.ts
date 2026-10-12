@@ -1,4 +1,5 @@
-import type { Chunk, Tile } from '../world/Chunk';
+import type { Tile } from '../world/Chunk';
+import { showsWater } from '../world/water';
 
 export type Flow = { x:number; z:number };
 
@@ -14,19 +15,16 @@ function norm(f:Flow):Flow {
 
 /** This tile's glyph only. Still water stays still; current does not leak into the pond. */
 function tileFlow(tile:Tile | undefined):Flow {
-	return tile?.def === 'water' && tile.flow ? norm(tile.flow) : ZERO;
+	return showsWater(tile?.def) && tile?.flow ? norm(tile.flow) : ZERO;
 }
 
 export type WaterFlowField = {
 	sample(x:number, z:number):Flow;
 };
 
-export function createWaterFlowField(chunk:Chunk):WaterFlowField {
-	const cells = chunk.tiles.map(tileFlow);
+/** Flow by world position, read across chunk borders so the current does not stop at a seam. */
+export function createWaterFlowField(terrain:{ tileAtWorld(x:number, z:number):Tile | undefined }):WaterFlowField {
 	return {
-		sample(x, z) {
-			const { localX, localZ } = chunk.worldToLocal(x, z);
-			return chunk.tile(localX, localZ) ? cells[localZ * chunk.size + localX] : ZERO;
-		},
+		sample: (x, z) => tileFlow(terrain.tileAtWorld(x, z)),
 	};
 }

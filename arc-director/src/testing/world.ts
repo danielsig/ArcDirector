@@ -9,5 +9,5 @@ export const OPEN_WORLD:HostWorld<string> = {
 	moveItem: () => ({ ok: true }),
 	useItem: () => ({ ok: true }),
 	getDescription: (character, target) => target,
-	trade: () => ({ ok: true }),
+	exchange: () => ({ ok: true }),
 };

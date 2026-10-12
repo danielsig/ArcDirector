@@ -32,6 +32,8 @@ const DEFAULT = {
 	shadows: true,
 	music: 0,
 	sfx: 0.78,
+	/** Characters babble when they speak. */
+	voices: true,
 	muted: false,
 	menuMusicMuted: false,
 	musicPlayerOpen: false,
@@ -60,6 +62,7 @@ const FIELDS:{ [K in keyof Prefs]:(v:unknown, fallback:Prefs[K])=>Prefs[K] } = {
 	shadows: bool,
 	music: clamp01,
 	sfx: clamp01,
+	voices: bool,
 	muted: bool,
 	menuMusicMuted: bool,
 	musicPlayerOpen: bool,

@@ -4,7 +4,7 @@ import { BoxCollider } from './BoxCollider.js';
 import { GameObject, resetAllocID } from './GameObject.js';
 import { Rigidbody } from './Rigidbody.js';
 import { World, type TerrainSample } from './World.js';
-import { resolveBody, stepPhysics } from './physics.js';
+import { canOccupy, resolveBody, stepPhysics } from './physics.js';
 
 describe('stepPhysics', () => {
 	it('integrates velocity on XZ', () => {
@@ -20,6 +20,27 @@ describe('stepPhysics', () => {
 		assert.equal(go.transform.position.z, -0.5);
 		assert.equal(rb.prevX, 0);
 		assert.equal(rb.prevZ, 0);
+	});
+
+	it('slides a body out of a cylinder along the line from its axis', () => {
+		resetAllocID();
+		const world = new World();
+		const post = new GameObject('post');
+		const pc = post.addComponent(BoxCollider);
+		pc.size = { x: 1, y: 1, z: 1 };
+		pc.shape = 'cylinder';
+		const body = new GameObject('body');
+		body.transform.position.x = 0.35;
+		body.transform.position.z = 0.35;
+		body.addComponent(Rigidbody);
+		body.addComponent(BoxCollider).size = { x: 0.2, y: 1, z: 0.2 };
+		world.add(post);
+		world.add(body);
+		stepPhysics(world, 0);
+		const p = body.transform.position;
+		// Nearest box corner sits on the circle, and the push is diagonal (no axis snap like a box).
+		assert.ok(Math.abs(Math.hypot(p.x - 0.1, p.z - 0.1) - 0.5) < 1e-6);
+		assert.ok(Math.abs(p.x - p.z) < 1e-9);
 	});
 
 	it('separates overlapping solid colliders', () => {
@@ -157,6 +178,18 @@ describe('stepPhysics', () => {
 		resolveBody(world, go);
 		const gap = wall.transform.position.x - go.transform.position.x;
 		assert.ok(gap >= (1 + 0.45) * 0.5 - 1e-6, `inside wall gap ${gap}`);
+	});
+
+	it('canOccupy climbs one stair and refuses a raised floor', () => {
+		const ground = { height: 0, worldY: 0, blocked: false, climbable: false };
+		const stair = { height: 1, worldY: 0.7, blocked: false, climbable: true };
+		const dais = { height: 1, worldY: 0.7, blocked: false, climbable: false };
+		const wall = { height: 1, worldY: 0.7, blocked: true, climbable: false };
+		assert.equal(canOccupy(ground, stair), true);
+		assert.equal(canOccupy(stair, dais), true);
+		assert.equal(canOccupy(ground, dais), false);
+		assert.equal(canOccupy(ground, wall), false);
+		assert.equal(canOccupy(dais, ground), true);
 	});
 
 	it('finds a wide collider whose centre is tiles away', () => {

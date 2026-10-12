@@ -10,6 +10,7 @@ import type { LawSpec } from '../arc/laws.js';
 import type { MindSettings } from '../mind/mind.js';
 import type { HostKernels } from '../expr/natives.js';
 import type { SampleCache } from '../expr/types.js';
+import type { Offer } from '../world/offers.js';
 import type { Vec } from '../world/types.js';
 
 /** What both a character and a collective spec hold: an id, a kit, laws, and the persona fields. */
@@ -48,6 +49,8 @@ export type CharacterSpec<TCtx = unknown> = RunnerSpec<TCtx> & {
 	 * collective, that is whenever its commander has issued it nothing.
 	 */
 	choose?:StandingChoice;
+	/** Standing offers it makes from the start, to anyone: `{ give: { Loaf: 1 }, get: { gold: 5 } }`. A save keeps its own. */
+	offers?:Pick<Offer, 'give' | 'get'>[];
 };
 
 /** A character spec's `choose`: `{ goal, until?, hold: 'go_to(EastGate) && wait()', … }`. */
@@ -68,9 +71,10 @@ export type CollectiveSpec<TCtx = unknown> = RunnerSpec<TCtx> & {
 };
 
 type ArgValue<TKind> = TKind extends `number${'' | '?'}` ? number
-	: TKind extends `string[]${'' | '?'}` ? string[]
-		: TKind extends `arc${'' | '?'}` ? Arc
-			: string;
+	: TKind extends `bundle${'' | '?'}` ? Record<string, number>
+		: TKind extends `string[]${'' | '?'}` ? string[]
+			: TKind extends `arc${'' | '?'}` ? Arc
+				: string;
 
 /** The `args` a handler receives for an arg map: `{ item: 'id', offer: 'number?' }` is `{ item: string; offer?: number }`. */
 export type VerbArgs<TArgMap> = {

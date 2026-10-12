@@ -18,11 +18,14 @@ import {
 	Torch,
 	Bridge,
 	BridgeLever,
+	Flammable,
+	Inscription,
 	Wallet,
 	Merchant,
 	MarketNPC,
 	Companion,
 	Wanted,
+	alarmActive,
 	Interior,
 } from '../engine/components';
 import type { GameObject } from '../engine/GameObject';
@@ -39,7 +42,7 @@ import {
 	compactName,
 } from '../items/inventory';
 import type { ItemInstance } from '../items/instance';
-import { coinsOf, goodsAsk } from '../items/wallet';
+import { coinsOf } from '../items/wallet';
 import { findChestHolding, keyNameFor } from '../items/pickup';
 import { yawToForward } from '../engine/math';
 import { whereabouts } from '../world/interior';
@@ -88,6 +91,12 @@ export function tagsOf(go:GameObject):string[] {
 	if (go.getComponent(Chest)) {
 		tags.push('chest', 'furniture');
 	}
+	if (go.getComponent(Inscription)) {
+		tags.push('inscription', 'landmark');
+	}
+	if (go.getComponent(Flammable)) {
+		tags.push('flammable', 'obstacle');
+	}
 	if (go.getComponent(BrewHearth) || go.getComponent(Sickbed)) {
 		tags.push('furniture', 'landmark');
 	}
@@ -100,12 +109,18 @@ export function tagsOf(go:GameObject):string[] {
 	if (go.getComponent(Wanted)?.enabled) {
 		tags.push('thief');
 	}
+	if (alarmActive(go, go.world?.time ?? 0)) {
+		tags.push('alarm');
+	}
 	if (go.getComponent(Torch) && !go.getComponent(Item)) {
 		tags.push('torch');
 	}
 	const mesh = go.getComponent(MeshRenderer)?.meshID ?? '';
 	if (mesh === 'tree_oak' || mesh === 'tree_pine') {
 		tags.push('tree');
+	}
+	if (mesh.startsWith('pillar')) {
+		tags.push('pillar');
 	}
 	if (mesh === 'boulder') {
 		tags.push('boulder', 'rock');
@@ -131,6 +146,8 @@ function seenOf(go:GameObject, observer?:GameObject, host?:GameHost):SeenObject 
 		|| !!go.getComponent(Pickupable)
 		|| !!go.getComponent(BrewHearth)
 		|| !!go.getComponent(Sickbed)
+		|| !!go.getComponent(Inscription)
+		|| !!go.getComponent(Flammable)
 		|| go.id === 'BridgeLever'
 		|| go.id === 'Bridge'
 		|| !!go.getComponent(MarketNPC)
@@ -158,6 +175,15 @@ function seenOf(go:GameObject, observer?:GameObject, host?:GameHost):SeenObject 
 			row.note = note;
 		}
 	}
+	const carved = go.getComponent(Inscription);
+	if (carved?.text && !row.note) {
+		row.note = `carved: "${carved.text}"`;
+		row.always = true;
+	}
+	const fuel = go.getComponent(Flammable);
+	if (fuel && !row.note) {
+		row.note = fuel.burning ? 'burning away' : 'it blocks the way; a flame burns it';
+	}
 	const span = go.getComponent(Bridge);
 	if (span && !row.note) {
 		row.note = `it is ${span.moving ? 'being ' : ''}${span.open ? 'lowered' : 'raised'}`;
@@ -169,6 +195,8 @@ function seenOf(go:GameObject, observer?:GameObject, host?:GameHost):SeenObject 
 		|| go.getComponent(Interior)
 		|| span
 		|| go.getComponent(BridgeLever)
+		|| carved
+		|| fuel
 	) {
 		row.movable = false;
 	}
@@ -213,7 +241,7 @@ export function lookWorld(character:GameObject, ambient:string, host?:GameHost):
 			continue;
 		}
 		const row = seenOf(go, character, host);
-		if (row.tags.includes('tree') || row.tags.includes('boulder')) {
+		if (row.tags.includes('tree') || row.tags.includes('boulder') || row.tags.includes('pillar')) {
 			continue;
 		}
 		const span = onSpan.get(go);
@@ -332,15 +360,17 @@ function locksFor(world:World, keyID:string):string[] {
 /** What `examine` tells about an item you carry, in sentences. */
 function examineItem(world:World, item:ItemInstance):string {
 	const id = pascalCase(item.name) || pascalCase(item.defID);
-	const ask = item.defID === 'fire_mushroom' || item.defID === 'silver_trout' ? undefined : goodsAsk(item);
 	return [
 		item.count > 1 ? `You carry ${item.count} ${id}.` : `You carry ${id}.`,
 		item.Key && `It opens ${listed(locksFor(world, item.Key.keyID))}.`,
 		item.Equipable && (item.Equipable.hands === 2 ? 'You can equip it, with both hands.' : 'You can equip it.'),
 		item.Container && `It holds ${item.Container.size}: ${listed(item.Container.contents.map(itemLabel))}.`,
 		item.Ingredient && `${item.Ingredient.brewer} brews ${item.Ingredient.yield} ${item.Ingredient.brew} from it, for ${item.Ingredient.fee}.`,
-		ask !== undefined && `It sells for about ${ask} gold.`,
 	].filter(Boolean).join(' ');
+}
+
+function saleLine(name:string, shop:Merchant):string | false {
+	return shop.goods.length > 0 ? `${name} trades in ${listed(shop.goods)}.` : false;
 }
 
 /** What `examine` tells about something in sight, in sentences. */
@@ -355,6 +385,13 @@ function examineWorld(go:GameObject):string {
 	const lines:(string | false | undefined)[] = [];
 	if (door) {
 		lines.push(`${name} is a door, ${door.open ? 'open' : 'shut'}${locked}.`);
+	}
+	const carved = go.getComponent(Inscription);
+	if (carved) {
+		lines.push(`Carved on ${name}: "${carved.text}"`);
+	}
+	if (go.getComponent(Flammable)) {
+		lines.push(`${name} blocks the way. Use a flame on it, such as a WoodenTorch, and it burns away.`);
 	}
 	if (go.getComponent(BridgeLever)) {
 		lines.push(`${name} is the fixed lever that raises and lowers the bridge. Working it again does the other.`);
@@ -378,7 +415,7 @@ function examineWorld(go:GameObject):string {
 		const mark = go.getComponent(Wanted);
 		lines.push(
 			npc && `${name} is a ${npc.kind}${npc.wants.length > 0 ? ` who wants ${listed(npc.wants)}` : ''}.`,
-			shop && `${name} sells ${shop.specialty} for ${shop.ask} gold, and no lower than ${shop.floor}.`,
+			shop && saleLine(name, shop),
 			`${name} carries ${listed(carriedLabels(go))} and ${coinsOf(go)} gold.`,
 			mark?.enabled && `${name} is wanted for ${mark.reason || 'theft'}${mark.items.length > 0 ? `: ${listed(mark.items)}` : ''}.`,
 		);

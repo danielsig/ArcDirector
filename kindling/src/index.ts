@@ -9,26 +9,32 @@ export { Game } from './core/Game.js';
 export { Time, resetTime, MAX_DT } from './core/Time.js';
 export { Rigidbody } from './core/Rigidbody.js';
 export { BoxCollider } from './core/BoxCollider.js';
-export { SHOVE_YIELD, stepPhysics, resolveBody } from './core/physics.js';
+export { SHOVE_YIELD, stepPhysics, resolveBody, canOccupy } from './core/physics.js';
 export type { TerrainSample } from './core/World.js';
 export type { Constructor, ComponentClass, ComponentInit } from './core/types.js';
 
 export { Camera } from './render/Camera.js';
 export { Light, type LightKind } from './render/Light.js';
 export { MeshRenderer } from './render/MeshRenderer.js';
-export { Renderer, type RendererLook } from './render/Renderer.js';
+export { Renderer, type RendererLook, type RenderStats } from './render/Renderer.js';
+export { OutlinePass } from './render/OutlinePass.js';
+export { ToonMaterial, toonRamp, type ToonMaterialParameters, type ToonPattern } from './render/ToonMaterial.js';
+export { bevelBox, blob, lathe, mergeParts, ribbon, tube, type PathPoint, type PosedPart, type ProfilePoint } from './render/meshKit.js';
 export {
 	insertAfterChunk,
 	applyShaderFeatures,
+	patchShader,
 	type ShaderInsert,
 	type ShaderUniforms,
 } from './render/shader.js';
 
 export { Audio, type LoopSrc } from './audio/Audio.js';
 export { AudioSource } from './audio/AudioSource.js';
+export { Speaker } from './audio/Speaker.js';
 export { overdrive, reverb } from './audio/filters.js';
 export { midiHz, scoreProblems } from './audio/midi.js';
 export { registerInstrument, type InstrumentEnvelope, type InstrumentPlay } from './audio/instruments.js';
+export { speech, voiceFor, type SpeechVoice } from './audio/speech.js';
 export type {
 	ListenerPose,
 	Note,
@@ -52,3 +58,13 @@ export {
 	type MeshFactory,
 } from './assets/meshes.js';
 export { registerGltf } from './assets/gltf.js';
+export {
+	registerToonModel,
+	toonModelData,
+	humanBone,
+	setExpression,
+	type ToonModelData,
+	type ToonExpressionTarget,
+	type ToonSpring,
+	type ToonModelOptions,
+} from './assets/toonModel.js';

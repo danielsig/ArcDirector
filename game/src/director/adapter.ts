@@ -1,3 +1,4 @@
+import { SpeechQueue } from './speechQueue';
 import {
 	ArcDirector,
 	TalkNet,
@@ -65,6 +66,8 @@ export function addModels(director:ArcDirector<CharacterCtx>, p:Prefs = prefs())
 export class GameHost {
 	public readonly world:World;
 	public readonly talk:TalkNet;
+	/** Bubbles and voices, one speaker at a time. */
+	public readonly speech:SpeechQueue;
 	public ambient:string;
 	public bargainDone = false;
 	public readonly scene:string;
@@ -78,6 +81,8 @@ export class GameHost {
 	public logSeq = 0;
 	public readonly chat:HudChatLine[];
 	public readonly log:HudAiLogEntry[];
+	/** Tags of the player's character, from the scene (a fight role). */
+	private readonly _playerTags:string[];
 	private _disposed = false;
 	private _starting = false;
 	private _nextTryTimestamp = 0;
@@ -89,12 +94,15 @@ export class GameHost {
 		opts:{
 			ambient?:string;
 			scene?:string;
+			playerTags?:string[];
 		} = {},
 	) {
 		this.world = world;
 		this.chat = chat;
+		this.speech = new SpeechQueue(world);
 		this.log = log;
 		this.scene = opts.scene ?? '';
+		this._playerTags = opts.playerTags ?? [];
 		this.ambient = opts.ambient ?? 'A damp stone hall of the dungeon.';
 		this.talk = new TalkNet({
 			inRange: (speakerID, listenerID) => inTalkRange(world, speakerID, listenerID),
@@ -146,7 +154,6 @@ export class GameHost {
 			.withStalled((result) => !result.ok || !!result.interrupted || STALL_VERBS.has(result.verb ?? ''))
 			.withSight({ look: (ctx) => lookWorld(ctx.character, this.ambient, this), unitName: 'm' })
 			.withInventory((ctx) => inventoryOf(ctx.character))
-			.withLineOfSight((a, b) => hostCanSee(this.world, a, b))
 			.addSense('followed', {
 				description: 'What the person you follow is carrying.',
 				gather: followedCarry,
@@ -160,7 +167,7 @@ export class GameHost {
 			.onLog((entry) => pushLog(this, entry.name, entry.message, entry))
 			.onStep((call, result) => noteAct(this, call, result))
 			// The player's character, for `enactPlayer`. No mind: it never calls the model.
-			.addCharacter({ id: 'Player' });
+			.addCharacter({ id: 'Player', tags: this._playerTags });
 	}
 
 	public bind(director:ArcDirector<CharacterCtx>):void {
@@ -258,6 +265,7 @@ export class GameHost {
 	}
 
 	public observe(dt = 0):void {
+		this.speech.update();
 		scanWorld(this);
 		this.hooks.checkBargain?.(this);
 		this.hooks.tickMarketNPC?.(this);

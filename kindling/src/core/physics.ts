@@ -231,6 +231,28 @@ function resolveShove(world:World, dt:number):void {
 	}
 }
 
+/** Push box `a` (centered on `pos`) out of an upright cylinder, away from its axis, so bodies slide around it. */
+function pushOutOfCylinder(pos:{ x:number; z:number }, a:AABB, center:{ x:number; z:number }, radius:number):void {
+	const dx = Math.min(Math.max(center.x, a.minX), a.maxX) - center.x;
+	const dz = Math.min(Math.max(center.z, a.minZ), a.maxZ) - center.z;
+	const d = Math.hypot(dx, dz);
+	if (d >= radius) {
+		return;
+	}
+	if (d > 1e-6) {
+		pos.x += (dx / d) * (radius - d);
+		pos.z += (dz / d) * (radius - d);
+		return;
+	}
+	// The axis is inside the box: leave along the line from the axis to the box center.
+	const ox = pos.x - center.x || 1;
+	const oz = pos.z - center.z;
+	const len = Math.hypot(ox, oz);
+	const reach = radius + Math.max(a.maxX - a.minX, a.maxZ - a.minZ) * 0.5;
+	pos.x = center.x + (ox / len) * reach;
+	pos.z = center.z + (oz / len) * reach;
+}
+
 function resolveAgainstOthers(world:World, go:GameObject, col:BoxCollider):void {
 	const pos = go.transform.position;
 	const a = actorAABB(go, col);
@@ -243,13 +265,17 @@ function resolveAgainstOthers(world:World, go:GameObject, col:BoxCollider):void 
 		if (col.pad > 0 && otherCol.pad > 0 && other.getComponent(Rigidbody)) {
 			return;
 		}
-		const pad = col.pad > 0 && otherCol.pad > 0 ? col.pad : 0;
-		const b = actorAABB(other, otherCol, pad);
-		if (!overlaps(a, b)) {
-			return;
+		if (otherCol.shape === 'cylinder') {
+			pushOutOfCylinder(pos, a, other.transform.position, otherCol.size.x * 0.5);
 		}
-		const hit = mtvOf(a, b, go.id, other.id);
-		applyMtv(pos, hit, false);
+		else {
+			const pad = col.pad > 0 && otherCol.pad > 0 ? col.pad : 0;
+			const b = actorAABB(other, otherCol, pad);
+			if (!overlaps(a, b)) {
+				return;
+			}
+			applyMtv(pos, mtvOf(a, b, go.id, other.id), false);
+		}
 		a.minX = pos.x - col.size.x * 0.5;
 		a.maxX = pos.x + col.size.x * 0.5;
 		a.minZ = pos.z - col.size.z * 0.5;
@@ -257,7 +283,8 @@ function resolveAgainstOthers(world:World, go:GameObject, col:BoxCollider):void 
 	});
 }
 
-function canOccupy(from:TerrainSample | undefined, to:TerrainSample | undefined):boolean {
+/** Same rule as walking: up only on climbable steps of 1, down at most 1, never onto blocked. */
+export function canOccupy(from:TerrainSample | undefined, to:TerrainSample | undefined):boolean {
 	if (!to || to.blocked) {
 		return false;
 	}
