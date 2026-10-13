@@ -12,34 +12,6 @@ export const SHEET_H = 1008;
 /** Magenta key sampled from (0,0). */
 export const KEY_RGB = [119, 20, 64] as const;
 
-export const WALK:PxRect[] = [
-	{ x: 378, y: 39, w: 83, h: 134 },
-	{ x: 482, y: 41, w: 78, h: 132 },
-	{ x: 577, y: 42, w: 77, h: 131 },
-	{ x: 680, y: 42, w: 81, h: 131 },
-	{ x: 783, y: 48, w: 84, h: 126 },
-	{ x: 894, y: 49, w: 84, h: 124 },
-	{ x: 1010, y: 45, w: 78, h: 128 },
-];
-
-export const IDLE_FRONT:PxRect = { x: 48, y: 200, w: 84, h: 130 };
-export const IDLE_SIDE:PxRect = { x: 161, y: 200, w: 95, h: 130 };
-export const WALK_BACK:PxRect = { x: 1124, y: 45, w: 107, h: 128 };
-
-/** Pixel rects on `public/spritesheet_forward_walk.jpg` (641×239). */
-export const FWD_SHEET_W = 641;
-export const FWD_SHEET_H = 239;
-export const FWD_KEY_RGB = [103, 17, 52] as const;
-
-export const WALK_FWD:PxRect[] = [
-	{ x: 28, y: 47, w: 121, h: 152 },
-	{ x: 184, y: 47, w: 122, h: 154 },
-	{ x: 337, y: 47, w: 120, h: 155 },
-	{ x: 493, y: 47, w: 123, h: 154 },
-];
-/** Planted-feet pose (second frame). */
-export const IDLE_FWD:PxRect = WALK_FWD[1];
-
 export const TORCH_STICK:PxRect = { x: 1508, y: 568, w: 38, h: 56 };
 
 /** Floor-item pickups on `spritesheet.jpg`. */

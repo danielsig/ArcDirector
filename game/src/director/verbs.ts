@@ -1,3 +1,4 @@
+import { CharacterAnimation } from '../characters/CharacterAnimation';
 import {
 	pascalCase,
 	DEFAULT_VERB_INSTRUCTIONS,
@@ -11,7 +12,7 @@ import {
 	BODY_SLOTS,
 	BoxCollider,
 	HumanBody,
-	HumanSprite,
+	Appearance,
 	MarketGate,
 	MarketNPC,
 	Wanted,
@@ -336,6 +337,7 @@ async function holdReady(
 	now:number,
 	readyTimestamp:number,
 	castTime:number,
+	onCast?:()=>void,
 ):Promise<ArcResult> {
 	const cool = readyTimestamp - now;
 	if (cool > 0.02) {
@@ -344,6 +346,7 @@ async function holdReady(
 			return { ok: false, interrupted: waited.interrupted, reason: waited.reason, verb: 'wait' };
 		}
 	}
+	onCast?.();
 	if (castTime > 0.02) {
 		const cast = await call.wait(castTime);
 		if (!cast.ok || cast.interrupted) {
@@ -396,7 +399,9 @@ async function doAttack(host:GameHost, call:Call, verb:string, name:string, lock
 		return { ...walk, verb: attack.name };
 	}
 	npc.faceToward(dest);
-	const held = await holdReady(call, ctx.world.time, npc.attackReadyTimestamp, attack.spec.castTime);
+	const held = await holdReady(call, ctx.world.time, npc.attackReadyTimestamp, attack.spec.castTime, () => {
+		ctx.character.getComponent(CharacterAnimation)?.strike(attack.name, attack.spec.castTime, target);
+	});
 	if (!held.ok) {
 		return { ...held, verb: attack.name };
 	}
@@ -711,7 +716,7 @@ async function doSteal(host:GameHost, call:Call, itemName:string, fromName:strin
 		return { ok: false, verb: 'steal', reason: 'no room' };
 	}
 	const label = pascalCase(gift.name) || gift.name;
-	ctx.character.getComponent(HumanSprite)?.playClip('take', ctx.world.time);
+	ctx.character.getComponent(Appearance)?.playClip('take', ctx.world.time);
 	reportTheft(host, ctx.character, label, fromName, 'stole without paying');
 	return { ok: true, verb: 'steal', reason: `stole ${label} from ${fromName}` };
 }

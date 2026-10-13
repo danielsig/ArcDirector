@@ -3,13 +3,12 @@ import { searchForWorkspaceRoot } from 'vite';
 import { defineConfig, loadEnv } from 'vite';
 import vue from '@vitejs/plugin-vue';
 import { aiLogPlugin } from './viteAiLog.ts';
-import { artCachePlugin } from './viteArtCache.ts';
 
 /** The TypeSafe key, from the repo-root `.env`. It stays on this dev server; the page posts to `/systemone` without it. */
 const TYPE_SAFE_KEY = loadEnv('development', fileURLToPath(new URL('..', import.meta.url)), '').TYPE_SAFE_KEY;
 
 export default defineConfig({
-	plugins: [vue(), aiLogPlugin(), artCachePlugin()],
+	plugins: [vue(), aiLogPlugin()],
 	/** Saves key components by class name (`captureWorld`); keep names through minify. */
 	esbuild: { keepNames: true },
 	resolve: {
@@ -25,9 +24,6 @@ export default defineConfig({
 		include: ['three', 'three/addons/loaders/GLTFLoader.js'],
 	},
 	server: {
-		watch: {
-			ignored: ['**/cache/**'],
-		},
 		fs: {
 			allow: [searchForWorkspaceRoot(process.cwd())],
 		},

@@ -113,6 +113,34 @@ export const ITEM_DEFS:Record<string, ItemDef> = {
 			Blade: {},
 		},
 	},
+	bone_bow: {
+		id: 'bone_bow',
+		name: 'Bone bow',
+		meshID: 'item_bow',
+		color: 0xd8cfb8,
+		components: {
+			Equipable: { slots: HELD, hands: 2 },
+			Weapon: { damage: 4, range: 12 },
+		},
+	},
+	oak_staff: {
+		id: 'oak_staff',
+		name: 'Oak staff',
+		meshID: 'Staff',
+		color: 0x8a5a32,
+		components: {
+			Equipable: { slots: HELD, hands: 1 },
+		},
+	},
+	shaman_staff: {
+		id: 'shaman_staff',
+		name: 'Shaman staff',
+		meshID: 'ShamanStaff',
+		color: 0x8a5a32,
+		components: {
+			Equipable: { slots: HELD, hands: 1 },
+		},
+	},
 	short_bow: {
 		id: 'short_bow',
 		name: 'Short bow',

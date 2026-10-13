@@ -1,7 +1,8 @@
 {
 	"name": "@arc-director/game",
+	"author": "Daniel Sigurdsson",
 	"private": true,
-	"version": "0.0.0",
+	"version": "0.1.0",
 	"type": "module",
 	"scripts": {
 		"dev": "vite",
@@ -11,21 +12,16 @@
 		"build": "vue-tsc --noEmit && vite build",
 		"preview": "vite preview",
 		"typecheck": "vue-tsc --noEmit",
-		"test": "node --experimental-strip-types --test src/prefs.test.ts src/ui/bindings.test.ts && node scripts/viteTest.mjs src/world/dressing.test.ts",
-		"normals": "node scripts/depth_to_normal.mjs",
-		"art-cache": "node scripts/artCachePack.mjs",
-		"pack-sheets": "node scripts/pack_character_sheets.mjs",
-		"unpack-depths": "node scripts/unpack_sheet_depth.mjs"
+		"test": "node --experimental-strip-types --test src/prefs.test.ts src/ui/bindings.test.ts && node scripts/viteTest.mjs src/world/dressing.test.ts"
 	},
 	"dependencies": {
-		"@arc-director/kindling": "workspace:*",
 		"@arc-director/control": "workspace:*",
+		"@arc-director/kindling": "workspace:*",
 		"arc-director": "workspace:*",
 		"three": "^0.185.1",
 		"vue": "^3.5.41"
 	},
 	"devDependencies": {
-		"@techstark/opencv-js": "5.0.0-release.1",
 		"@types/three": "^0.185.4",
 		"@vitejs/plugin-vue": "^6.0.8",
 		"pngjs": "^7.0.0",

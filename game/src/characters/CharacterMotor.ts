@@ -1,4 +1,4 @@
-import { RigidBody, HumanSprite } from '../engine/components';
+import { RigidBody, Appearance } from '../engine/components';
 import { Component } from '../engine/Component';
 import { Order } from '../engine/order';
 import { lerpAngle, yawToward } from '../engine/math';
@@ -15,7 +15,7 @@ export class CharacterMotor extends Component {
 	public destinationPoint:{ x:number; z:number } | null = null;
 	public arriveEpsilon = 0.35;
 	public stepHeight = TILE_HEIGHT + 0.05;
-	public maxSpeed = 4.2;
+	public maxSpeed = 3.4;
 	private _stepPhase = 0.4;
 	/** Seconds to ease body yaw toward WASD. Staggers A+S release so we keep ~8, not 6 or 9. */
 	private static readonly _faceTurn = 0.09;
@@ -35,7 +35,7 @@ export class CharacterMotor extends Component {
 			return;
 		}
 
-		const appearance = this.gameObject.getComponent(HumanSprite);
+		const appearance = this.gameObject.getComponent(Appearance);
 		const pocket = appearance?.clip === 'take' || appearance?.clip === 'give';
 		const player = this.gameObject.getComponent(PlayerInput);
 		const piloted = this.gameObject.getComponent(PlayerPilot)?.claimed === true;

@@ -60,11 +60,15 @@ export {
 export { registerGltf } from './assets/gltf.js';
 export {
 	registerToonModel,
+	registerToonClips,
+	toonClip,
 	toonModelData,
 	humanBone,
+	restTurn,
 	setExpression,
 	type ToonModelData,
 	type ToonExpressionTarget,
-	type ToonSpring,
 	type ToonModelOptions,
 } from './assets/toonModel.js';
+export { holdInHand, lookAt, reach, drawBow, type Hand, type Grip } from './assets/toonPose.js';
+export { Animator } from './render/Animator.js';

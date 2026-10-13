@@ -10,7 +10,6 @@ import { market_1_0 } from './chunks/market_1_0';
 import { market_0_1 } from './chunks/market_0_1';
 import { market_1_1 } from './chunks/market_1_1';
 import { RUINS_CHUNKS } from './chunks/ruins';
-import type { HumanKind } from '../engine/components';
 import type { NPCSpawnOpts } from '../world/spawn';
 import { goodsOf, packOf } from '../items/wares';
 import type { GameHost, CharacterCtx } from '../director/adapter';
@@ -59,10 +58,18 @@ export type SceneDef = {
 	/** One paragraph: what this scene is for, and how the characters usually get there. */
 	brief:string;
 	player?:PlayerDef;
+	/** Ravens on the ground at the start, at world `x`, `z`. */
+	ravens?:{ x:number; z:number; yaw?:number }[];
 	/** Player stays centered and the chunk-sized map scrolls. `false` = current chunk, moving arrow. */
 	minimapFollow?:boolean;
 	createDirector:(host:GameHost)=>ArcDirector<CharacterCtx>;
 };
+
+/** What fighters carry in hand. */
+const SWORD = ['iron_sword'];
+const STAFF = ['oak_staff'];
+const BONE_BOW = ['bone_bow'];
+const BOW = ['short_bow'];
 
 /** Someone in the crypt at map cell `x`, `z`. */
 function delver(id:string, meshID:string, x:number, z:number, hp:number, extra:Partial<NPCSpawnDef> = {}):NPCSpawnDef {
@@ -79,27 +86,28 @@ export const DUNGEON_VAULT:SceneDef = {
 	chunks: DUNGEON_CHUNKS,
 	npcs: [
 		// The company, in the Gatehouse.
-		delver('Bram', 'human_guard', 8, 40, 28, { yaw: 0, streams: true }),
-		delver('Maren', 'human_robe', 6, 40, 14, { yaw: 0, streams: true, packLoot: [{ defID: 'health_potion', name: 'HealthPotion', count: 2 }] }),
-		delver('Wren', 'human_witch', 7, 39, 14, { yaw: 0, streams: true }),
+		delver('Bram', 'KnightMale', 8, 40, 28, { yaw: 0, streams: true, equip: SWORD }),
+		delver('Maren', 'Shaman', 6, 40, 14, { yaw: 0, streams: true, equip: ['shaman_staff'], packLoot: [{ defID: 'health_potion', name: 'HealthPotion', count: 2 }] }),
+		delver('Wren', 'Witch', 7, 39, 14, { yaw: 0, streams: true, equip: STAFF }),
 		// Pillared Hall.
-		delver('Ghoul1', 'human_mannequin', 10, 17, 16),
-		delver('Ghoul2', 'human_mannequin', 13, 21, 10),
-		delver('BoneArcher1', 'human_scout', 16, 13, 8),
+		delver('Ghoul1', 'Ghoul', 10, 17, 16),
+		delver('Ghoul2', 'Ghoul', 13, 21, 10),
+		delver('BoneArcher1', 'SkeletonArcher', 16, 13, 8, { equip: BONE_BOW }),
 		// Ossuary.
-		delver('Skeleton1', 'human_mannequin', 31, 19, 8),
-		delver('Skeleton2', 'human_mannequin', 37, 19, 8),
-		delver('CultWitch', 'human_sorceress', 34, 15, 8),
+		delver('Skeleton1', 'SkeletonWarrior', 31, 19, 8, { equip: SWORD }),
+		delver('Skeleton2', 'SkeletonWarrior', 37, 19, 8, { equip: SWORD }),
+		delver('CultWitch', 'Sorceress', 34, 15, 8, { equip: STAFF }),
 		// Throne Crypt.
-		delver('HollowKing', 'human_guard', 54, 11, 36, {
+		delver('HollowKing', 'SkeletonKing', 54, 11, 36, {
 			yaw: Math.PI,
+			equip: SWORD,
 			weakness: { to: ['hex'], times: 3, others: 0.5 },
 			// A dead king: the lowest voice here, slow and flat.
 			voice: { pitch: 140, rate: 3.8, range: 0.4 },
 		}),
-		delver('BoneArcher2', 'human_scout', 56, 11, 8, { yaw: Math.PI }),
-		delver('Skeleton3', 'human_mannequin', 50, 20, 8),
-		delver('Ghoul3', 'human_mannequin', 59, 20, 14),
+		delver('BoneArcher2', 'SkeletonArcher', 56, 11, 8, { yaw: Math.PI, equip: BONE_BOW }),
+		delver('Skeleton3', 'SkeletonWarrior', 50, 20, 8, { equip: SWORD }),
+		delver('Ghoul3', 'Ghoul', 59, 20, 14),
 	],
 	ambient: 'The Sunken Crypt: black stone halls under the hills, lit by old torches.',
 	keys: SCENE_KEYS,
@@ -120,7 +128,7 @@ export const RIVER_GLEN:SceneDef = {
 	npcs: [
 		{
 			id: 'Forager',
-			meshID: 'human_scout',
+			meshID: 'Scout',
 			chunkID: 'glen_1_1',
 			localX: 9,
 			localZ: 3,
@@ -131,7 +139,7 @@ export const RIVER_GLEN:SceneDef = {
 		},
 		{
 			id: 'BridgeKeeper',
-			meshID: 'human_robe',
+			meshID: 'Robe',
 			chunkID: 'glen_1_0',
 			localX: 8,
 			localZ: 9,
@@ -143,7 +151,7 @@ export const RIVER_GLEN:SceneDef = {
 		},
 		{
 			id: 'Angler',
-			meshID: 'human_merchant',
+			meshID: 'VillagerMale',
 			chunkID: 'glen_1_1',
 			localX: 8,
 			localZ: 10,
@@ -157,7 +165,7 @@ export const RIVER_GLEN:SceneDef = {
 		},
 		{
 			id: 'Assistant',
-			meshID: 'human_sorceress',
+			meshID: 'Sorceress',
 			chunkID: 'glen_1_0',
 			localX: 5,
 			localZ: 11,
@@ -168,6 +176,7 @@ export const RIVER_GLEN:SceneDef = {
 			voice: { pitch: 390, rate: 6 },
 		},
 	],
+	ravens: [{ x: 8.5, z: 12.5, yaw: 1 }, { x: 9.3, z: 13.4, yaw: -2 }, { x: 15.5, z: 26.5 }],
 	ambient: 'A windy river glen.',
 	keys: SCENE_KEYS,
 	brief: `The forager, the bridge keeper, and the angler each need a different end to the same errand. The assistant only does what you ask.
@@ -190,7 +199,7 @@ export const MARKETPLACE:SceneDef = {
 	npcs: [
 		{
 			id: 'Baker',
-			meshID: 'human_robe',
+			meshID: 'VillagerMale',
 			chunkID: 'market_0_0',
 			localX: 5,
 			localZ: 3,
@@ -203,7 +212,7 @@ export const MARKETPLACE:SceneDef = {
 		},
 		{
 			id: 'Weaver',
-			meshID: 'human_princess',
+			meshID: 'Shaman',
 			chunkID: 'market_0_0',
 			localX: 12,
 			localZ: 3,
@@ -216,7 +225,7 @@ export const MARKETPLACE:SceneDef = {
 		},
 		{
 			id: 'Potter',
-			meshID: 'human_sorceress',
+			meshID: 'Sorceress',
 			chunkID: 'market_0_1',
 			localX: 6,
 			localZ: 11,
@@ -228,7 +237,7 @@ export const MARKETPLACE:SceneDef = {
 		},
 		{
 			id: 'Cutler',
-			meshID: 'human_guard',
+			meshID: 'Blacksmith',
 			chunkID: 'market_0_1',
 			localX: 13,
 			localZ: 11,
@@ -240,7 +249,7 @@ export const MARKETPLACE:SceneDef = {
 		},
 		{
 			id: 'Mira',
-			meshID: 'human_mannequin',
+			meshID: 'Scout',
 			chunkID: 'market_0_0',
 			localX: 9,
 			localZ: 13,
@@ -250,7 +259,7 @@ export const MARKETPLACE:SceneDef = {
 		},
 		{
 			id: 'Tomas',
-			meshID: 'human_merchant',
+			meshID: 'Merchant',
 			chunkID: 'market_1_0',
 			localX: 6,
 			localZ: 12,
@@ -261,7 +270,7 @@ export const MARKETPLACE:SceneDef = {
 		},
 		{
 			id: 'Nell',
-			meshID: 'human_princess',
+			meshID: 'VillagerFemale',
 			chunkID: 'market_0_1',
 			localX: 9,
 			localZ: 4,
@@ -273,7 +282,7 @@ export const MARKETPLACE:SceneDef = {
 		},
 		{
 			id: 'Rook',
-			meshID: 'human_mannequin',
+			meshID: 'Rogue',
 			chunkID: 'market_1_1',
 			localX: 8,
 			localZ: 4,
@@ -283,43 +292,47 @@ export const MARKETPLACE:SceneDef = {
 		},
 		{
 			id: 'Holt',
-			meshID: 'human_guard',
+			meshID: 'KnightMale',
 			chunkID: 'market_0_0',
 			localX: 1,
 			localZ: 8,
 			yaw: -Math.PI / 2,
 			pack: true,
 			marketNPC: { kind: 'guard', wants: [], leaveGate: 'WestGate' },
+			equip: SWORD,
 		},
 		{
 			id: 'Pike',
-			meshID: 'human_guard',
+			meshID: 'KnightMale',
 			chunkID: 'market_0_0',
 			localX: 1,
 			localZ: 10,
 			yaw: -Math.PI / 2,
 			pack: true,
 			marketNPC: { kind: 'guard', wants: [], leaveGate: 'WestGate' },
+			equip: SWORD,
 		},
 		{
 			id: 'Brant',
-			meshID: 'human_guard',
+			meshID: 'KnightMale',
 			chunkID: 'market_1_1',
 			localX: 14,
 			localZ: 6,
 			yaw: Math.PI / 2,
 			pack: true,
 			marketNPC: { kind: 'guard', wants: [], leaveGate: 'EastGate' },
+			equip: SWORD,
 		},
 		{
 			id: 'Cass',
-			meshID: 'human_guard',
+			meshID: 'KnightFemale',
 			chunkID: 'market_1_1',
 			localX: 14,
 			localZ: 8,
 			yaw: Math.PI / 2,
 			pack: true,
 			marketNPC: { kind: 'guard', wants: [], leaveGate: 'EastGate' },
+			equip: SWORD,
 		},
 	],
 	ambient: 'An open-air market split by a canal, crossed by three footbridges.',
@@ -332,11 +345,9 @@ That mind sends each shopper to the stall that sells what they tagged, then to t
 	createDirector: createMarketDirector,
 };
 
-const SWORD = [{ defID: 'iron_sword', name: 'IronSword' }];
-
-/** A fighter in the ruins at map cell `x`, `z`. */
-function fighter(id:string, meshID:string, x:number, z:number, hp:number, sword = false):NPCSpawnDef {
-	return { id, meshID, ...mapCell('ruins', x, z), yaw: x < 16 ? -Math.PI / 2 : Math.PI / 2, pack: true, packLoot: sword ? SWORD : undefined, hp };
+/** A fighter in the ruins at map cell `x`, `z`, with `equip` in hand. */
+function fighter(id:string, meshID:string, x:number, z:number, hp:number, equip:string[]):NPCSpawnDef {
+	return { id, meshID, ...mapCell('ruins', x, z), yaw: x < 16 ? -Math.PI / 2 : Math.PI / 2, pack: true, equip, hp };
 }
 
 export const RUINS:SceneDef = {
@@ -348,17 +359,18 @@ export const RUINS:SceneDef = {
 	chunks: RUINS_CHUNKS,
 	// Dawn holds the west colonnade, Dusk the east; the sanctum and its dais lie between them.
 	npcs: [
-		fighter('Dawn', 'human_robe', 5, 15, 12),
-		fighter('Cinder', 'human_witch', 6, 18, 12),
-		fighter('Brune', 'human_guard', 9, 14, 28, true),
-		fighter('Wisp', 'human_scout', 6, 12, 12),
-		fighter('Cade', 'human_mannequin', 9, 17, 20, true),
-		fighter('Dusk', 'human_sorceress', 26, 15, 12),
-		fighter('Nyx', 'human_witch', 25, 18, 12),
-		fighter('Helms', 'human_guard', 22, 14, 28, true),
-		fighter('Ash', 'human_scout', 25, 12, 12),
-		fighter('Flint', 'human_mannequin', 22, 17, 20, true),
+		fighter('Dawn', 'Robe', 5, 15, 12, ['shaman_staff']),
+		fighter('Cinder', 'Witch', 6, 18, 12, STAFF),
+		fighter('Brune', 'KnightMale', 9, 14, 28, SWORD),
+		fighter('Wisp', 'Scout', 6, 12, 12, BOW),
+		fighter('Cade', 'Blacksmith', 9, 17, 20, SWORD),
+		fighter('Dusk', 'Shaman', 26, 15, 12, ['shaman_staff']),
+		fighter('Nyx', 'Sorceress', 25, 18, 12, STAFF),
+		fighter('Helms', 'KnightFemale', 22, 14, 28, SWORD),
+		fighter('Ash', 'Rogue', 25, 12, 12, BOW),
+		fighter('Flint', 'Hero', 22, 17, 20, SWORD),
 	],
+	ravens: [{ x: 15.5, z: 3.5, yaw: 2.4 }, { x: 16.4, z: 4.1 }],
 	ambient: 'Two parties fight to the death in a ruined forest temple. No quarter.',
 	keys: SCENE_KEYS,
 	brief: `Dawn and Dusk are the two captains. Each leads a squad of five: a knight, a swordsman, an archer, a witch, and the captain, who also heals. Both sides are trying to kill the other. Nobody has a scripted attack.
@@ -380,17 +392,4 @@ export const DEFAULT_SCENE_ID = 'dungeon_vault';
 
 export function sceneByID(id:string):SceneDef {
 	return SCENES[id] ?? DUNGEON_VAULT;
-}
-
-export function humanKindsForScene(scene:SceneDef):HumanKind[] {
-	const set = new Set<HumanKind>(['player']);
-	for (const npc of scene.npcs) {
-		if (npc.meshID === 'human') {
-			throw new Error(`${scene.id} NPC ${npc.id} meshID 'human' is the player; use human_<kind>`);
-		}
-		if (npc.meshID.startsWith('human_')) {
-			set.add(npc.meshID.slice('human_'.length));
-		}
-	}
-	return [...set];
 }

@@ -5,19 +5,17 @@ import { GameObject } from './GameObject';
 import { Wallet, Named } from './components';
 import { GameHost } from '../director/adapter';
 import { rendererLook } from '../render/look';
-import { loadNPCAnims } from '../render/humanAnims';
 import { loadNature } from '../render/nature';
 import { loadSpritesheet } from '../render/spritesheet';
-import { loadSwordAnims } from '../render/swordAnims';
 import type { HudModel } from '../ui/hudModel';
 import { flagsFromURL, prefs, setPrefs } from '../prefs';
 import { decodeGlyphChunk } from '../world/decodeGlyphChunk';
 import { getDef } from '../items/defs';
 import { equipItem } from '../items/equip';
 import { instantiateDef } from '../items/instance';
-import { spawnCamera, spawnNPC, spawnPlayer } from '../world/spawn';
+import { spawnCamera, spawnRaven, spawnNPC, spawnPlayer } from '../world/spawn';
 import { DEFAULT_SCENE_ID, sceneByID, type PlayerDef, type SceneDef } from '../data/scenes';
-import { packedKinds } from '../render/artCache';
+import { loadCharacterModels } from '../render/characterModels';
 import { DirectorPulse, GroundPick, Hud, WorldStream, WorldView } from './systems';
 import { Session } from './Session';
 import { readSave } from './save';
@@ -58,6 +56,7 @@ export class Game extends KindlingGame<World> {
 		}
 		this._hud = hud;
 		this._scene = sceneByID(sceneID);
+		(window as unknown as { DBGWORLD:unknown; DBGGAME:unknown }).DBGWORLD = this.world; (window as unknown as { DBGGAME:unknown }).DBGGAME = this; // DBG
 		resetTime();
 		resetAllocID();
 		if (this.renderer) {
@@ -77,6 +76,7 @@ export class Game extends KindlingGame<World> {
 		for (const npc of this._scene.npcs) {
 			spawnNPC(this.world, (decodedByID.get(npc.chunkID) ?? startDecoded).chunk, npc);
 		}
+		this._scene.ravens?.forEach((r, i) => spawnRaven(this.world, `Raven${i + 1}`, r.x, r.z, r.yaw));
 		spawnCamera(this.world);
 		const host = new GameHost(this.world, hud.chat, hud.aiLog, {
 			ambient: this._scene.ambient,
@@ -147,8 +147,7 @@ export class Game extends KindlingGame<World> {
 	private async loadArt():Promise<void> {
 		const jobs:Promise<unknown>[] = [
 			loadSpritesheet(),
-			loadNPCAnims(packedKinds()),
-			loadSwordAnims(),
+			loadCharacterModels(),
 		];
 		if (this._scene.look === 'glen' || this._scene.look === 'market') {
 			jobs.push(loadNature());

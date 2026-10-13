@@ -8,6 +8,7 @@ defineProps<{
 
 <template>
 	<div v-if="hud.statsOverlay" class="hud-stats">
+		<div>{{ hud.renderStats.frameMSNow.toFixed(1) }} ms (1 s)</div>
 		<div>{{ hud.renderStats.frameMS.toFixed(1) }} ms (30 s)</div>
 		<div>{{ hud.renderStats.calls }} calls</div>
 		<div>{{ hud.renderStats.triangles.toLocaleString() }} tris</div>

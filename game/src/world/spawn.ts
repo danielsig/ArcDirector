@@ -1,8 +1,12 @@
+import { CharacterAnimation } from '../characters/CharacterAnimation';
+import { CharacterPose } from '../characters/CharacterPose';
+import { HeldProps } from '../characters/HeldProps';
+import { Raven } from '../characters/Raven';
 import { CharacterMotor } from '../characters/CharacterMotor';
 import { NPCInput } from '../characters/NPCInput';
 import { PlayerInput } from '../characters/PlayerInput';
 import { PlayerPilot } from '../characters/PlayerPilot';
-import { ChunkBound, Camera as RenderCamera, StreamingAnchor, Speaker, voiceFor, type SpeechVoice } from '@arc-director/kindling';
+import { Animator, ChunkBound, Camera as RenderCamera, StreamingAnchor, Speaker, voiceFor, type SpeechVoice } from '@arc-director/kindling';
 import {
 	BoxCollider,
 	Bridge,
@@ -11,7 +15,7 @@ import {
 	Chest,
 	Door,
 	HumanBody,
-	HumanSprite,
+	Appearance,
 	HurtFlash,
 	Light,
 	Lock,
@@ -39,10 +43,10 @@ import { GameObject } from '../engine/GameObject';
 import type { World } from '../engine/World';
 import { Container, Harvest } from '../items/components';
 import { getDef } from '../items/defs';
+import { equipItem } from '../items/equip';
 import { instantiateDef, type ItemInstance } from '../items/instance';
 import { spawnDefAt } from '../items/pickup';
-import { animIDFromMeshID } from '../render/humanAnims';
-import { characterHeight, characterLabel, resolvePlayerKind } from '../render/artCache';
+import { characterModel, resolvePlayerKind } from '../render/characterModels';
 import { STALL_COUNTER } from '../render/meshRegistry';
 import { prefs } from '../prefs';
 import { CELL_SIZE, CHUNK_SIZE, TILE_HEIGHT } from './constants';
@@ -494,14 +498,27 @@ export type NPCSpawnOpts = {
 	weakness?:{ to:string[]; times:number; others:number };
 	/** How it sounds when it talks. Fields left out vary by id. */
 	voice?:SpeechVoice;
+	/** Item defs put in its hands (a knight's sword, an archer's bow). */
+	equip?:string[];
 };
 
-/** Art folders drawn as women. Their voices sit higher, with a smaller throat. */
-const FEMININE_ART = new Set(['princess', 'scout', 'sorceress', 'witch']);
+/** The voice `id` gets by default: varied by id, higher for characters drawn as women. */
+function voiceOf(id:string, meshID:string):SpeechVoice {
+	return voiceFor(id, characterModel(meshID)?.feminine ? [300, 420] : [170, 240]);
+}
 
-/** The voice `id` gets by default: varied by id, high or low by how its art is drawn. */
-function voiceOf(id:string, kind:string):SpeechVoice {
-	return voiceFor(id, FEMININE_ART.has(characterLabel(kind)) ? [300, 420] : [170, 240]);
+/** A character's model, its height, and the clips picked from what it does. */
+function addAppearance(go:GameObject, meshID:string):void {
+	const model = characterModel(meshID);
+	if (!model) {
+		throw new Error(`${go.id}: no character model ${meshID}`);
+	}
+	go.addComponent(MeshRenderer, { meshID });
+	go.addComponent(Appearance, { height: model.height });
+	go.addComponent(Animator);
+	go.addComponent(CharacterAnimation);
+	go.addComponent(HeldProps);
+	go.addComponent(CharacterPose);
 }
 
 /** How far a streaming NPC keeps chunks loaded: its room and the next, not the whole map. */
@@ -521,9 +538,7 @@ export function spawnNPC(world:World, chunk:Chunk, opts:NPCSpawnOpts):GameObject
 	if (opts.meshID === 'human') {
 		throw new Error(`NPC ${opts.id} meshID 'human' is the player; use human_<kind>`);
 	}
-	go.addComponent(MeshRenderer, { meshID: opts.meshID });
-	const kind = animIDFromMeshID(opts.meshID);
-	go.addComponent(HumanSprite, { kind, height: characterHeight(kind) });
+	addAppearance(go, opts.meshID);
 	go.addComponent(HurtFlash, { enabled: false });
 	go.addComponent(NPCInput);
 	const motor = go.addComponent(CharacterMotor);
@@ -544,10 +559,13 @@ export function spawnNPC(world:World, chunk:Chunk, opts:NPCSpawnOpts):GameObject
 		pack.Container?.contents.push(...(opts.packLoot ?? []).map(makeLoot));
 		body.slots.back = pack;
 	}
+	for (const defID of opts.equip ?? []) {
+		equipItem(go, instantiateDef(getDef(defID)), world);
+	}
 	const hp = opts.hp && opts.hp > 0 ? Math.round(opts.hp) : 5;
 	go.addComponent(Vitals, { hp, maxHP: hp });
 	go.addComponent(Named, { id: opts.id });
-	go.addComponent(Speaker, { voice: { ...voiceOf(opts.id, kind), ...opts.voice } });
+	go.addComponent(Speaker, { voice: { ...voiceOf(opts.id, opts.meshID), ...opts.voice } });
 	go.addComponent(Wallet, { coins: opts.wallet ?? 0 });
 	if (opts.merchant) {
 		go.addComponent(Merchant, { goods: [...opts.merchant.goods] });
@@ -594,9 +612,8 @@ export function spawnPlayer(
 	go.transform.position.x = pos.x;
 	go.transform.position.y = (tile?.height ?? 0) * TILE_HEIGHT;
 	go.transform.position.z = pos.z;
-	go.addComponent(MeshRenderer, { meshID: 'human' });
-	const kind = resolvePlayerKind(prefs().playerKind);
-	go.addComponent(HumanSprite, { kind, height: characterHeight(kind) });
+	const meshID = resolvePlayerKind(prefs().playerKind);
+	addAppearance(go, meshID);
 	go.addComponent(HurtFlash, { enabled: false });
 	go.addComponent(PlayerInput);
 	go.addComponent(PlayerPilot);
@@ -608,10 +625,22 @@ export function spawnPlayer(
 	go.addComponent(Vitals, { hp: 20, maxHP: 20 });
 	go.addComponent(StreamingAnchor);
 	go.addComponent(Named, { id: 'Player' });
-	go.addComponent(Speaker, { voice: voiceOf('Player', kind) });
+	go.addComponent(Speaker, { voice: voiceOf('Player', meshID) });
 	go.addComponent(Wallet);
 	go.addComponent(Light, { enabled: false, castShadow: true, range: 9, intensity: 32 });
 	go.addComponent(HeldTorchLight);
+	world.add(go);
+}
+
+/** A raven on the ground at world `x`, `z`, facing `yaw`. Scenery: nobody perceives it. */
+export function spawnRaven(world:World, id:string, x:number, z:number, yaw = 0):void {
+	const go = new GameObject(id, 'Raven');
+	go.transform.position.x = x;
+	go.transform.position.y = world.sampleTerrain(x, z)?.worldY ?? 0;
+	go.transform.position.z = z;
+	go.transform.yaw = yaw;
+	go.addComponent(MeshRenderer, { meshID: 'Raven' });
+	go.addComponent(Raven);
 	world.add(go);
 }
 

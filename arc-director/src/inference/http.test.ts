@@ -1334,6 +1334,15 @@ describe('response format', () => {
 		assert.equal('response_format' in plain, false);
 	});
 
+	it('skips the think prefill when a schema grammar would have to accept it', async () => {
+		const model = idWithThinkOff('no_think');
+		const body = await captureBody({}, model, undefined, { responseFormat: format });
+		const messages = body.messages as Array<{ role?:string; content?:string }>;
+		assert.equal(messages.at(-1)?.role, 'user');
+		assert.equal(messages.some((message) => message.content?.includes('<')), false);
+		assert.match(String(messages.find((message) => message.role === 'system')?.content), /\/no_think/);
+	});
+
 	it('sends a schema to chat completions even where the responses API is up, which ignores it', async () => {
 		const urls:string[] = [];
 		let body:Record<string, unknown> | undefined;

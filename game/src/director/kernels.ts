@@ -10,7 +10,6 @@ import {
 	Celebrating,
 	Chest,
 	Door,
-	HumanBody,
 	Interior,
 	Named,
 	SpeechBubble,
@@ -20,7 +19,7 @@ import {
 } from '../engine/components';
 import type { GameObject } from '../engine/GameObject';
 import type { World } from '../engine/World';
-import { Item, Pickupable } from '../items/components';
+import { Pickupable } from '../items/components';
 import { listCarried } from '../items/inventory';
 import type { ItemInstance } from '../items/instance';
 import { coinsOf } from '../items/wallet';
@@ -95,18 +94,11 @@ function nearbyLandmarks(world:World, character:GameObject, here?:{ x:number; z:
 	const p = here ?? character.transform.position;
 	const ranked:{ go:GameObject; dist:number }[] = [];
 	for (const go of world.objects) {
-		if (go === character || go.getComponent(HumanBody) || go.getComponent(Pickupable)) {
+		const tags = tagsOf(go);
+		if (go === character || tags.includes('person') || (tags.includes('item') && go.getComponent(Pickupable))) {
 			continue;
 		}
-		const tags = tagsOf(go);
-		if (
-			!tags.includes('tree')
-			&& !tags.includes('waterfall')
-			&& !tags.includes('boulder')
-			&& !tags.includes('pillar')
-			&& !go.getComponent(Interior)
-			&& !go.getComponent(Bridge)
-		) {
+		if (!['tree', 'waterfall', 'boulder', 'pillar', 'building', 'bridge'].some((t) => tags.includes(t))) {
 			continue;
 		}
 		const gp = go.transform.position;
@@ -145,7 +137,9 @@ export function kernelsOf(
 	const items:ExprEntity[] = [];
 	const bindings:Record<string, ExprVal> = {};
 	for (const go of world.objects) {
-		if (go.getComponent(HumanBody)) {
+		const tags = tagsOf(go);
+		const person = tags.includes('person');
+		if (person) {
 			if (go === character) {
 				continue;
 			}
@@ -157,17 +151,14 @@ export function kernelsOf(
 			}
 			others.push(entityOf(go, extraTags?.(go)));
 		}
-		const item = (go.getComponent(Pickupable) || go.getComponent(Item)) && !go.getComponent(HumanBody);
+		const item = tags.includes('item') && !person;
 		if (item) {
 			items.push(entityOf(go));
 		}
 		// Places a watch may name: openable things, and every named one (`BakerStall`, `WestGate`).
 		if (
-			go.getComponent(Door)
-			|| go.getComponent(Bridge)
-			|| go.getComponent(Chest)
-			|| go.getComponent(Interior)
-			|| (go.getComponent(Named) && !item && !go.getComponent(HumanBody))
+			['door', 'bridge', 'chest', 'building'].some((t) => tags.includes(t))
+			|| (!item && !person && go.getComponent(Named))
 		) {
 			const name = idOf(go);
 			bindings[name] = { kind: 'entity', value: entityOf(go) };

@@ -4,7 +4,7 @@ export const Order = {
 	playerInput: 0,
 	director: 10,
 	npcInput: 20,
-	humanSprite: 30,
+	appearance: 30,
 	motor: 40,
 	hurt: 45,
 	door: 50,

@@ -42,9 +42,14 @@ export type RenderStats = {
 	sceneMemory:number;
 	/** Average ms between rendered frames over the last {@link FRAME_WINDOW_MS}. */
 	frameMS:number;
+	/** Average ms between rendered frames over the last second: steady cost, without old stalls. */
+	frameMSNow:number;
 };
 
 const FRAME_WINDOW_MS = 30_000;
+
+/** Frames between re-renders of a still-scene point shadow map, staggered across lights. */
+const SHADOW_RESTALE = 30;
 
 const DETAIL_STASH = 'kindlingDetailMaps';
 
@@ -55,6 +60,28 @@ type DetailStash = {
 };
 
 type LightWithShadow = THREE.Light & { shadow?:THREE.LightShadow };
+
+const _moverAt = new THREE.Vector3();
+
+/** Where a camera looks: its view ray on the ground plane (y = 0), else the camera itself. */
+function focusOf(eye:THREE.Camera):THREE.Vector3 {
+	const at = eye.getWorldPosition(new THREE.Vector3());
+	const dir = eye.getWorldDirection(new THREE.Vector3());
+	return dir.y < -1e-3 ? at.addScaledVector(dir, -at.y / dir.y) : at;
+}
+
+/** Skinned, or held by a skinned model's bone: a character, its gear, a bird. */
+function isMoving(o:THREE.Object3D):boolean {
+	if ((o as THREE.SkinnedMesh).isSkinnedMesh) {
+		return true;
+	}
+	for (let p = o.parent; p; p = p.parent) {
+		if ((p as THREE.Bone).isBone) {
+			return true;
+		}
+	}
+	return false;
+}
 
 function textureBytes(tex:THREE.Texture):number {
 	const img = tex.image as { width?:number; height?:number; naturalWidth?:number; naturalHeight?:number } | undefined;
@@ -85,8 +112,20 @@ export class Renderer {
 	 * lit shader, and too many fail to compile (everything renders black).
 	 */
 	public maxPointShadows = 8;
+	/**
+	 * Point lights whose shadows include moving things (characters and what they hold), nearest where
+	 * the camera looks first among those with one in range; they re-render every frame. Every other point
+	 * shadow holds the still scene only, rendered once and again when its light moves, when it stops
+	 * being one of these, and every {@link SHADOW_RESTALE} frames (a door opened).
+	 */
+	public maxMovingShadows = 2;
 	/** Ink outlines. Disabled renders straight to the canvas. */
 	public readonly outline = new OutlinePass();
+
+	private _shadowFrame = 0;
+	/** Point lights whose still-scene shadow renders this frame, and the moving things it leaves out. */
+	private _stillShadows:THREE.PointLight[] = [];
+	private _movers:THREE.Object3D[] = [];
 
 	private readonly _scene:World;
 	private readonly _hemi:THREE.HemisphereLight;
@@ -120,6 +159,26 @@ export class Renderer {
 		this.gl.toneMappingExposure = 1.15;
 		this.gl.shadowMap.enabled = true;
 		this.gl.shadowMap.type = THREE.PCFShadowMap;
+		// Still-scene point shadows render first, without moving things (three only renders shadows
+		// inside `render`, where its light state exists).
+		const shadowPass = this.gl.shadowMap.render.bind(this.gl.shadowMap);
+		this.gl.shadowMap.render = (lights, scene, camera):void => {
+			const still = this._stillShadows;
+			if (still.length > 0) {
+				this._stillShadows = [];
+				for (const m of this._movers) {
+					m.castShadow = false;
+				}
+				for (const lamp of still) {
+					lamp.shadow.needsUpdate = true;
+				}
+				shadowPass(still, scene, camera);
+				for (const m of this._movers) {
+					m.castShadow = true;
+				}
+			}
+			shadowPass(lights, scene, camera);
+		};
 
 		world.native.background = new THREE.Color(CLEAR_COLOR);
 		world.native.fog = new THREE.Fog(CLEAR_COLOR, 18, 42);
@@ -164,7 +223,7 @@ export class Renderer {
 		if (!this._sun) {
 			this._sun = new THREE.DirectionalLight(look.sun.color, look.sun.intensity);
 			this._sun.castShadow = true;
-			this._sun.shadow.mapSize.set(2048, 2048);
+			this._sun.shadow.mapSize.set(1024, 1024);
 			this._sun.shadow.bias = -0.0008;
 			this._sun.shadow.normalBias = 0.04;
 			this._sun.shadow.camera.near = 2;
@@ -249,23 +308,56 @@ export class Renderer {
 		this.markFrame(performance.now());
 	}
 
-	/** Shadows for the nearest point lights that want one; the rest light without. */
+	/**
+	 * Shadows for the nearest point lights that want one (the rest light without): moving things in
+	 * the nearest busy ones only, the still scene in all (see {@link maxMovingShadows}).
+	 */
 	private pickPointShadows(eye:THREE.Camera):void {
-		const wanting:{ lamp:THREE.PointLight; d:number }[] = [];
-		const at = new THREE.Vector3();
-		eye.getWorldPosition(at);
-		this._scene.native.traverseVisible((o) => {
+		const frame = ++this._shadowFrame;
+		const scene = this._scene.native;
+		const wanting:{ lamp:THREE.PointLight; at:THREE.Vector3; d:number }[] = [];
+		const movers:THREE.Object3D[] = [];
+		const eyeAt = focusOf(eye);
+		scene.traverseVisible((o) => {
 			if (o instanceof THREE.PointLight) {
+				o.userData.shadowWas = o.castShadow;
 				o.castShadow = false;
 				if (o.userData.wantsShadow) {
-					wanting.push({ lamp: o, d: o.getWorldPosition(new THREE.Vector3()).distanceToSquared(at) });
+					const at = o.getWorldPosition(new THREE.Vector3());
+					wanting.push({ lamp: o, at, d: at.distanceToSquared(eyeAt) });
 				}
 			}
+			else if (o.castShadow && (o as THREE.Mesh).isMesh && isMoving(o)) {
+				movers.push(o);
+			}
 		});
-		wanting.sort((a, b) => a.d - b.d);
-		for (const { lamp } of wanting.slice(0, this.maxPointShadows)) {
+		wanting.sort((x, y) => x.d - y.d);
+		const casting = wanting.slice(0, this.maxPointShadows);
+		const near = (at:THREE.Vector3, lamp:THREE.PointLight):boolean => {
+			const reach = (lamp.distance || 10) + 1;
+			return movers.some((m) => m.getWorldPosition(_moverAt).distanceToSquared(at) < reach * reach);
+		};
+		const moving = new Set(casting.filter(({ lamp, at }) => near(at, lamp)).slice(0, this.maxMovingShadows).map((c) => c.lamp));
+		const still:THREE.PointLight[] = [];
+		casting.forEach(({ lamp, at }, i) => {
 			lamp.castShadow = true;
-		}
+			lamp.shadow.autoUpdate = false;
+			if (moving.has(lamp)) {
+				// Rendered with everything in the main pass.
+				lamp.shadow.needsUpdate = true;
+				lamp.userData.shadowMoving = true;
+				return;
+			}
+			const last = lamp.userData.shadowAt as THREE.Vector3 | undefined;
+			if (!lamp.userData.shadowWas || lamp.userData.shadowMoving || !last || last.distanceToSquared(at) > 1e-6
+				|| (frame + i) % SHADOW_RESTALE === 0) {
+				still.push(lamp);
+				lamp.userData.shadowAt = at;
+			}
+			lamp.userData.shadowMoving = false;
+		});
+		this._stillShadows = still;
+		this._movers = movers;
 	}
 
 	public stats():RenderStats {
@@ -278,6 +370,7 @@ export class Renderer {
 			framebufferMemory: this.framebufferMemory(),
 			sceneMemory: this.sceneMemory(),
 			frameMS: this.frameMS(),
+			frameMSNow: this.frameMS(1000),
 		};
 	}
 
@@ -378,12 +471,19 @@ export class Renderer {
 		}
 	}
 
-	private frameMS():number {
-		const count = this._frames.length - this._frameHead - 1;
-		if (count < 1) {
+	/** Average ms between rendered frames over the last `windowMS` (at most {@link FRAME_WINDOW_MS}). */
+	private frameMS(windowMS = FRAME_WINDOW_MS):number {
+		const frames = this._frames;
+		const last = frames[frames.length - 1];
+		if (last === undefined) {
 			return 0;
 		}
-		return (this._frames[this._frames.length - 1]! - this._frames[this._frameHead]!) / count;
+		let first = frames.length - 1;
+		while (first > this._frameHead && frames[first - 1]! >= last - windowMS) {
+			first--;
+		}
+		const count = frames.length - 1 - first;
+		return count < 1 ? 0 : (last - frames[first]!) / count;
 	}
 
 	private applyQuality():void {

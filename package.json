@@ -1,5 +1,6 @@
 {
 	"name": "ArcDirector",
+	"author": "Daniel Sigurdsson",
 	"private": true,
 	"type": "module",
 	"scripts": {

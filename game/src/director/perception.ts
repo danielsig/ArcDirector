@@ -74,7 +74,21 @@ export function carriedLabels(character:GameObject):string[] {
 	return out;
 }
 
+/** Each object's tags for the frame they were worked out in: the director asks for every object, for every character, every frame. */
+const frameTags = new WeakMap<GameObject, { time:number; tags:string[] }>();
+
+/** What kind of thing `go` is, as tags (`person`, `item`, `door`, `tree`, …). A fresh array the caller may change. */
 export function tagsOf(go:GameObject):string[] {
+	const time = go.world?.time ?? 0;
+	let known = frameTags.get(go);
+	if (!known || known.time !== time) {
+		known = { time, tags: tagsNow(go) };
+		frameTags.set(go, known);
+	}
+	return [...known.tags];
+}
+
+function tagsNow(go:GameObject):string[] {
 	const tags:string[] = [];
 	if (go.getComponent(Interior)) {
 		tags.push('building', 'house', 'landmark');

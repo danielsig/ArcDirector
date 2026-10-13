@@ -10,7 +10,6 @@ import { clamp, lerpAngle } from './math';
 import { CELL_SIZE, TILE_HEIGHT } from '../world/constants';
 import { Pickupable } from '../items/components';
 import type { GameObject } from './GameObject';
-import { characterHeight, characterTakeFps } from '../render/artCache';
 
 export { BoxCollider };
 
@@ -352,34 +351,25 @@ export type OccupiedRef = {
 
 export type SlotFill = import('../items/instance').ItemInstance | OccupiedRef | null;
 
-export type HumanKind = string;
-export type HumanClip = 'auto' | 'idle' | 'walk' | 'take' | 'give';
-/** 0 = body yaw vs camera. 8 octants; 2/4/8/10 = 1:30/4:30/7:30/10:30 (45° diagonals). */
-export type HumanHour = 0 | 1 | 2 | 3 | 4 | 5 | 6 | 8 | 9 | 10 | 12;
-export const POCKET_FRAMES = 8;
-/** Fallback when `character.json` omits walkFps. Witch sets 16; pixel kinds stay at 8. */
-export const PLAYER_WALK_FPS = 16;
+/** A pose the character holds for a moment instead of standing or walking. */
+export type PoseClip = 'auto' | 'walk' | 'take' | 'give';
+/** Seconds a take or give lasts. */
+export const POCKET_SECONDS = 1.6;
 
-/** Which character art to show and which clip to play. Complements HumanBody (slots), not a renderer. */
-export class HumanSprite extends Component {
-	public static override order = Order.humanSprite;
-	public kind:HumanKind = 'player';
-	/** Meters. `0` uses the character folder's `character.json` height. */
-	public height = 0;
-	public clip:HumanClip = 'auto';
-	/** Cells/sec. `0` uses `character.json` walkFps (per hour when set). */
-	public walkFps = 0;
-	/** Cells/sec. `0` uses `character.json` takeFps. */
-	public takeFps = 0;
-	public hour:HumanHour = 0;
-	/** 0 = FlipX from camera. 1 / -1 lock. */
-	public flip:-1 | 0 | 1 = 0;
-	public animOffset = 0;
+/** How tall the character's model stands, and a held pose (take, give) its animation plays. */
+export class Appearance extends Component {
+	public static override order = Order.appearance;
+	/** Meters, hat included. */
+	public height = 1.7;
+	public clip:PoseClip = 'auto';
 	public clipT0 = 0;
+	/** Who or what a give or take reaches toward: the other person, or the thing picked up. */
+	public clipToward:GameObject | null = null;
 
-	public playClip(clip:'take' | 'give', t:number):void {
+	public playClip(clip:'take' | 'give', t:number, toward:GameObject | null = null):void {
 		this.clip = clip;
 		this.clipT0 = t;
+		this.clipToward = toward;
 	}
 
 	public override update(dt:number):void {
@@ -387,9 +377,9 @@ export class HumanSprite extends Component {
 			return;
 		}
 		const t = this.gameObject.world?.time ?? 0;
-		const fps = this.takeFps > 0 ? this.takeFps : characterTakeFps(this.kind);
-		if (t - this.clipT0 >= POCKET_FRAMES / fps) {
+		if (t - this.clipT0 >= POCKET_SECONDS) {
 			this.clip = 'auto';
+			this.clipToward = null;
 		}
 	}
 }
@@ -604,10 +594,8 @@ export class Camera extends Component {
 			1 - Math.exp(-this.easeBehind * dt),
 		);
 		const t = target.transform.position;
-		const body = target.getComponent(HumanSprite);
-		const lookAt = body
-			? (body.height > 0 ? body.height : characterHeight(body.kind)) * 0.82
-			: this.lookHeight;
+		const body = target.getComponent(Appearance);
+		const lookAt = body ? body.height * 0.82 : this.lookHeight;
 		this.gameObject.transform.position.x = t.x + Math.sin(this.yaw) * this.behind;
 		this.gameObject.transform.position.y = t.y + lookAt + this.height;
 		this.gameObject.transform.position.z = t.z + Math.cos(this.yaw) * this.behind;

@@ -1311,7 +1311,10 @@ export class HttpProvider implements InferenceProvider {
 		const thinkingOn = this.thinkingOn(req);
 		const thinkingModel = isThinkingModel(req.model);
 		let messages = req.messages;
-		if (req.fakeThought && thinkingOn && (thinkingModel || thinkOffMode(req.model))) {
+		// llama.cpp feeds a trailing assistant message to the JSON-schema grammar.
+		// A think-tag or Harmony prefill starts with `<`, which empties that stack.
+		const grammar = req.responseFormat !== undefined;
+		if (req.fakeThought && thinkingOn && !grammar && (thinkingModel || thinkOffMode(req.model))) {
 			return withAssistantPrefill(messages, await this.thoughtDonePrefill(req.model));
 		}
 		if (thinkingOn && thinkingModel) {
@@ -1320,6 +1323,9 @@ export class HttpProvider implements InferenceProvider {
 		const off = thinkOffMode(req.model);
 		if (off === 'no_think') {
 			messages = withNoThink(messages);
+		}
+		if (grammar) {
+			return messages;
 		}
 		const prefill = await this.thinkOffPrefill(req.model, thinkingOn);
 		if (prefill) {

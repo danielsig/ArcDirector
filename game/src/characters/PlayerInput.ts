@@ -1,4 +1,4 @@
-import { Camera, Chest, Door, HumanBody, HumanSprite, Named, type BodySlot } from '../engine/components';
+import { Camera, Chest, Door, HumanBody, Appearance, Named, type BodySlot } from '../engine/components';
 import { Component } from '../engine/Component';
 import { Order } from '../engine/order';
 import { yawToForward } from '../engine/math';
@@ -87,7 +87,7 @@ export class PlayerInput extends Component {
 				const msg = pickup(this.gameObject, loot);
 				world.setMessage(msg);
 				if (msg.startsWith('picked up') || msg.startsWith('equipped')) {
-					this.gameObject.getComponent(HumanSprite)?.playClip('take', world.time);
+					this.gameObject.getComponent(Appearance)?.playClip('take', world.time, loot);
 					world.pickedUp(this.gameObject, lootName);
 				}
 			}
@@ -95,7 +95,7 @@ export class PlayerInput extends Component {
 				const msg = interactChest(this.gameObject, aimed);
 				world.setMessage(msg);
 				if (msg.startsWith('took ')) {
-					this.gameObject.getComponent(HumanSprite)?.playClip('take', world.time);
+					this.gameObject.getComponent(Appearance)?.playClip('take', world.time, aimed);
 				}
 			}
 			else if (aimed?.getComponent(Door)) {
@@ -119,10 +119,10 @@ export class PlayerInput extends Component {
 		}
 
 		if (input.pressed('KeyT')) {
-			this.gameObject.getComponent(HumanSprite)?.playClip('take', world.time);
+			this.gameObject.getComponent(Appearance)?.playClip('take', world.time);
 		}
 		if (input.pressed('KeyY')) {
-			this.gameObject.getComponent(HumanSprite)?.playClip('give', world.time);
+			this.gameObject.getComponent(Appearance)?.playClip('give', world.time);
 		}
 
 		if (input.pressed('KeyX')) {

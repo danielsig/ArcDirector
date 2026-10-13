@@ -1,5 +1,5 @@
 import { prefs, type ArcFormatPref, type SystemOneKind } from '../prefs';
-import { characterOptions, resolvePlayerKind } from '../render/artCache';
+import { characterOptions, resolvePlayerKind } from '../render/characterModels';
 import type { RenderStats } from '@arc-director/kindling';
 import { readURLStats } from '../engine/urlView';
 import type { BenchRow } from '../director/decisionBench';
@@ -260,7 +260,7 @@ export function emptyHud():HudModel {
 		playerKind: resolvePlayerKind(p.playerKind),
 		playerKinds: characterOptions(),
 		statsOverlay: readURLStats(),
-		renderStats: { calls: 0, triangles: 0, geometries: 0, textures: 0, framebufferMemory: 0, sceneMemory: 0, frameMS: 0 },
+		renderStats: { calls: 0, triangles: 0, geometries: 0, textures: 0, framebufferMemory: 0, sceneMemory: 0, frameMS: 0, frameMSNow: 0 },
 		detailMaps: p.detailMaps,
 		shadows: p.shadows,
 		inferCalls: 0,

@@ -1,6 +1,6 @@
 import { markRaw } from 'vue';
 import { PlayerInput } from '../characters/PlayerInput';
-import { HumanBody, HumanSprite, Named, SpeechBubble, Vitals, Wallet } from './components';
+import { HumanBody, Appearance, Named, SpeechBubble, Vitals, Wallet } from './components';
 import type { GameObject } from './GameObject';
 import type { World } from './World';
 import type { Renderer } from '@arc-director/kindling';
@@ -9,7 +9,6 @@ import { Container, Item } from '../items/components';
 import { allEquipped, slotItem } from '../items/inventory';
 import type { ItemInstance } from '../items/instance';
 import { nearestPickup, pickupLabel } from '../items/pickup';
-import { characterHeight } from '../render/artCache';
 import type { HudModel, MinimapCell } from '../ui/hudModel';
 import type { GameHost } from '../director/adapter';
 import { idOf, findObject, isLiving } from '../director/names';
@@ -94,28 +93,19 @@ function rebuildMinimap(world:World, hud:HudModel, x:number, z:number):void {
 	m.tileRev += 1;
 }
 
-/** Same XZ lead as the character billboard in `present.ts`. */
-const SPRITE_LEAD = 0.11;
-/** Extra meters above the unflattened sprite crown. */
+/** Extra meters above the head. */
 const HEAD_PAD = 0.28;
-/** Above the flat corpse in present.ts (0.36) so the name clears the body. */
+/** Above a fallen body, so the name clears it. */
 const DOWNED_Y = 0.48;
 
-function cameraPitch(view:Renderer):number {
-	return view.findCamera()?.gameObject.transform.pitch ?? 0;
+
+/** Top of the head in meters above the feet. */
+function crownY(go:GameObject):number {
+	return go.getComponent(Appearance)?.height ?? 1.7;
 }
 
-/** Visual crown in meters above feet. Matches `present.ts` unflatten. */
-function spriteCrownY(go:GameObject, pitch:number):number {
-	const sprite = go.getComponent(HumanSprite);
-	const heightM = sprite && sprite.height > 0
-		? sprite.height
-		: characterHeight(sprite?.kind ?? 'player');
-	return (1 / Math.max(Math.cos(Math.abs(pitch)), 0.45)) * heightM - 0.02;
-}
-
-function overheadY(go:GameObject, pitch:number, downed:boolean):number {
-	return downed ? DOWNED_Y : spriteCrownY(go, pitch) + HEAD_PAD;
+function overheadY(go:GameObject, downed:boolean):number {
+	return downed ? DOWNED_Y : crownY(go) + HEAD_PAD;
 }
 
 function projectOverhead(
@@ -124,18 +114,7 @@ function projectOverhead(
 	view:Renderer,
 ):{ x:number; y:number; visible:boolean } {
 	const p = go.transform.position;
-	const cam = view.findCamera()?.gameObject.transform.position;
-	if (!cam) {
-		return view.projectToCanvas(p.x, p.y + height, p.z);
-	}
-	const dx = cam.x - p.x;
-	const dz = cam.z - p.z;
-	const len = Math.hypot(dx, dz) || 1;
-	return view.projectToCanvas(
-		p.x + (dx / len) * SPRITE_LEAD,
-		p.y + height,
-		p.z + (dz / len) * SPRITE_LEAD,
-	);
+	return view.projectToCanvas(p.x, p.y + height, p.z);
 }
 
 function patchOverhead(
@@ -145,7 +124,6 @@ function patchOverhead(
 	npcNotes:{ id:string; text:string }[],
 	healthBars:boolean,
 ):void {
-	const pitch = cameraPitch(view);
 	const byID = new Map<string, {
 		go:GameObject;
 		text:string;
@@ -163,7 +141,7 @@ function patchOverhead(
 			go,
 			text: bubble.text,
 			status: '',
-			height: overheadY(go, pitch, false),
+			height: overheadY(go, false),
 			hp: 0,
 			maxHP: 0,
 			timestamp: bubble.timestamp,
@@ -186,7 +164,7 @@ function patchOverhead(
 				go,
 				text: '',
 				status: note.text,
-				height: overheadY(go, pitch, false),
+				height: overheadY(go, false),
 				hp: 0,
 				maxHP: 0,
 				timestamp: 0,
@@ -197,7 +175,7 @@ function patchOverhead(
 		if (go.id === 'Player' || vitals.hp <= 0 || !go.getComponent(HumanBody)) {
 			return;
 		}
-		const barY = overheadY(go, pitch, vitals.hp <= 0);
+		const barY = overheadY(go, vitals.hp <= 0);
 		const row = byID.get(go.id);
 		if (row) {
 			row.hp = vitals.hp;

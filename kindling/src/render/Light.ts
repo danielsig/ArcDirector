@@ -59,7 +59,7 @@ export class Light extends Component {
 			const p = new THREE.PointLight(this.color, this.intensity, this.range, this.decay);
 			p.name = 'castLight';
 			p.castShadow = false;
-			p.shadow.mapSize.set(512, 512);
+			p.shadow.mapSize.set(256, 256);
 			p.shadow.bias = -0.001;
 			p.shadow.normalBias = 0.01;
 			p.shadow.camera.near = 0.01;

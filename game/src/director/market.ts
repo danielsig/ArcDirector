@@ -1,5 +1,6 @@
 import type { CharacterSpec } from 'arc-director';
 import { Door, MarketNPC, Named } from '../engine/components';
+import { MeshRenderer } from '../engine/MeshRenderer';
 import type { GameObject } from '../engine/GameObject';
 import type { World } from '../engine/World';
 import { idOf } from './names';
@@ -91,7 +92,21 @@ export const GUARD_UNITS:Pick<CharacterSpec, 'id' | 'tags' | 'choose'>[] = [
 ];
 
 const POOL_NAMES = ['Pip', 'Gwen', 'Cal', 'Ivo', 'Bess', 'Quin', 'Odo', 'Faye', 'Lars', 'Nia', 'Wim', 'Tess'];
-const POOL_MESH = ['human_mannequin', 'human_merchant', 'human_robe', 'human_princess', 'human_sorceress'];
+/** Who can walk in to shop. Picked least-used first, so the square stays varied. */
+const POOL_MESH = ['VillagerMale', 'VillagerFemale', 'Merchant', 'Blacksmith', 'Robe', 'Shaman', 'Scout', 'Rogue', 'Sorceress', 'KnightFemale'];
+
+function pickMesh(world:World):string {
+	const uses = new Map(POOL_MESH.map((m) => [m, 0]));
+	world.forEachComponent(MeshRenderer, (r) => {
+		const n = uses.get(r.meshID);
+		if (n !== undefined) {
+			uses.set(r.meshID, n + 1);
+		}
+	});
+	const fewest = Math.min(...uses.values());
+	const least = POOL_MESH.filter((m) => uses.get(m) === fewest);
+	return least[Math.floor(Math.random() * least.length)]!;
+}
 
 type CustomerTemplate = {
 	/** Only what a stall sells: a want nobody sells keeps the shopper in the square for good. */
@@ -171,7 +186,7 @@ export function spawnRandomCustomer(world:World):{ go:GameObject; id:string; tag
 	const wallet = tmpl.wallet[0] + Math.floor(Math.random() * (tmpl.wallet[1] - tmpl.wallet[0] + 1));
 	const opts:NPCSpawnOpts = {
 		id,
-		meshID: POOL_MESH[Math.floor(Math.random() * POOL_MESH.length)],
+		meshID: pickMesh(world),
 		localX: local.localX + inward,
 		localZ: local.localZ,
 		yaw: inward > 0 ? Math.PI / 2 : -Math.PI / 2,

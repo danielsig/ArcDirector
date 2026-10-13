@@ -1,5 +1,5 @@
 import { Camera } from '@arc-director/kindling';
-import { Camera as FollowCamera, HumanSprite, RigidBody } from './components';
+import { Camera as FollowCamera, Appearance, RigidBody } from './components';
 import { Component } from './Component';
 import { MeshRenderer } from './MeshRenderer';
 import { Order } from './order';
@@ -40,14 +40,8 @@ import {
 	writeURLView,
 } from './urlView';
 import type { Hud, WorldStream, WorldView } from './systems';
-import {
-	characterHeight,
-	characterLabel,
-	characterOptions,
-	resolvePlayerKind,
-} from '../render/artCache';
+import { characterLabel, characterModel, characterOptions, resolvePlayerKind } from '../render/characterModels';
 import { bindArcControl } from '../control/bind';
-import { hasHumanAnims, loadNPCAnims } from '../render/humanAnims';
 
 /** Host session: Vue calls say / save / load; Kindling runs keys, flags, persist. */
 export class Session extends Component {
@@ -338,7 +332,7 @@ export class Session extends Component {
 		this.dropPointerLock();
 		this.hud.model = this.director.arc?.modelID() || prefs().model || this.hud.model;
 		this.hud.playerKinds = characterOptions();
-		const liveKind = this.gameObject.world?.findByID('Player')?.getComponent(HumanSprite)?.kind;
+		const liveKind = this.gameObject.world?.findByID('Player')?.getComponent(MeshRenderer)?.meshID;
 		this.hud.playerKind = resolvePlayerKind(liveKind || this.hud.playerKind || prefs().playerKind);
 		void this.refreshHudModels();
 	}
@@ -558,13 +552,14 @@ export class Session extends Component {
 	private applyPlayerKindToBody(kind:string):void {
 		const resolved = resolvePlayerKind(kind);
 		this.hud.playerKind = resolved;
-		const sprite = this.gameObject.world?.findByID('Player')?.getComponent(HumanSprite);
-		if (sprite) {
-			sprite.kind = resolved;
-			sprite.height = characterHeight(resolved);
+		const player = this.gameObject.world?.findByID('Player');
+		const mesh = player?.getComponent(MeshRenderer);
+		if (mesh) {
+			mesh.meshID = resolved;
 		}
-		if (!hasHumanAnims(resolved)) {
-			void loadNPCAnims([resolved]);
+		const look = player?.getComponent(Appearance);
+		if (look) {
+			look.height = characterModel(resolved)?.height ?? look.height;
 		}
 	}
 }

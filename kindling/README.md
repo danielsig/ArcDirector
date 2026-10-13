@@ -381,7 +381,7 @@ await registerGltf('tri', '/triangle.gltf');
 
 `create(id)` / `meshReady(id)` are what `MeshRenderer` uses. `registerGltf` is async; the renderer retries until the factory exists.
 
-Rigged toon characters: `registerToonModel(id, url, { brightness, bands })` loads a rigged GLB (VRM 0.x orientation) whose scene `extras.toon` holds `ToonModelData` (humanoid bones, expressions, springs). Each `MeshRenderer` instance is a skinned clone with `ToonMaterial`s; drive it with `setExpression(mesh, 'joy', 1)` and `humanBone(mesh, 'head')`. `scripts/shoot.mjs <url> <out.png>` screenshots a page in headless Chrome once its title is `ready` (the playground's `character.html?shot=turnaround|faces` does this).
+Toon models: `scripts/buildModels.mjs` turns a folder of Tripo GLBs into slim game GLBs plus one shared clip library (`clips.glb`); it also rigs bows and birds that come unrigged. `registerToonModel(id, url, { height, brightness, bands })` loads one (characters and props alike) and `registerToonClips(url)` the library; each `MeshRenderer` instance is a skinned clone with `ToonMaterial`s, facing −Z. `Animator` plays clips on it (`toonClip` fits library clips to each body). On top of the clip, every frame after it: `holdInHand(mesh, 'right', prop, grip)` puts a prop in a hand, `lookAt(mesh, point, weight)` turns the head, `reach(mesh, 'right', point, weight)` bends an arm to a point (two-bone IK), and `drawBow(bow, nock)` draws a rigged bow's string. `humanBone(mesh, 'head')` and `restTurn(mesh, bone)` give the bones. `scripts/shoot.mjs <url> <out.png>` screenshots a page in headless Chrome once its title is `ready` (the playground's `character.html?shot=turnaround|faces` does this).
 
 ---
 

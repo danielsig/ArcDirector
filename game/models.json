@@ -1,0 +1,101 @@
+{
+	"textureSize": 512,
+	"models": {
+		"KnightMale": {
+			"cloth": [
+				"Skirt"
+			]
+		},
+		"Raven": {
+			"bird": true,
+			"textureSize": 256
+		},
+		"Robe": {
+			"innerShell": true
+		},
+		"ShamanArrow": {
+			"textureSize": 256
+		},
+		"ShamanBow": {
+			"bow": true,
+			"textureSize": 256
+		},
+		"ShamanStaff": {
+			"textureSize": 256
+		},
+		"SkeletalArrow": {
+			"textureSize": 256
+		},
+		"SkeletalBow": {
+			"bow": true,
+			"textureSize": 256
+		},
+		"SkeletonArcher": {
+			"rigid": {
+				"tripo_part_50": "Spine2"
+			}
+		},
+		"Staff": {
+			"textureSize": 256
+		},
+		"Sword": {
+			"textureSize": 256
+		},
+		"Witch": {
+			"humanoid": {
+				"hips": "Hip",
+				"spine": "Waist",
+				"chest": "Spine01",
+				"upperChest": "Spine02",
+				"neck": "NeckTwist01",
+				"head": "Head",
+				"leftShoulder": "L_Clavicle",
+				"leftUpperArm": "L_Upperarm",
+				"leftLowerArm": "L_Forearm",
+				"leftHand": "L_Hand",
+				"leftUpperLeg": "L_Thigh",
+				"leftLowerLeg": "L_Calf",
+				"leftFoot": "L_Foot",
+				"leftToes": "L_ToeBase",
+				"leftThumbProximal": "L_Thumb1",
+				"leftThumbIntermediate": "L_Thumb2",
+				"leftThumbDistal": "L_Thumb3",
+				"leftIndexProximal": "L_Index1",
+				"leftIndexIntermediate": "L_Index2",
+				"leftIndexDistal": "L_Index3",
+				"leftMiddleProximal": "L_Mid1",
+				"leftMiddleIntermediate": "L_Mid2",
+				"leftMiddleDistal": "L_Mid3",
+				"leftRingProximal": "L_Ring1",
+				"leftRingIntermediate": "L_Ring2",
+				"leftRingDistal": "L_Ring3",
+				"leftLittleProximal": "L_Pinky1",
+				"leftLittleIntermediate": "L_Pinky2",
+				"leftLittleDistal": "L_Pinky3",
+				"rightShoulder": "R_Clavicle",
+				"rightUpperArm": "R_Upperarm",
+				"rightLowerArm": "R_Forearm",
+				"rightHand": "R_Hand",
+				"rightUpperLeg": "R_Thigh",
+				"rightLowerLeg": "R_Calf",
+				"rightFoot": "R_Foot",
+				"rightToes": "R_ToeBase",
+				"rightThumbProximal": "R_Thumb1",
+				"rightThumbIntermediate": "R_Thumb2",
+				"rightThumbDistal": "R_Thumb3",
+				"rightIndexProximal": "R_Index1",
+				"rightIndexIntermediate": "R_Index2",
+				"rightIndexDistal": "R_Index3",
+				"rightMiddleProximal": "R_Mid1",
+				"rightMiddleIntermediate": "R_Mid2",
+				"rightMiddleDistal": "R_Mid3",
+				"rightRingProximal": "R_Ring1",
+				"rightRingIntermediate": "R_Ring2",
+				"rightRingDistal": "R_Ring3",
+				"rightLittleProximal": "R_Pinky1",
+				"rightLittleIntermediate": "R_Pinky2",
+				"rightLittleDistal": "R_Pinky3"
+			}
+		}
+	}
+}

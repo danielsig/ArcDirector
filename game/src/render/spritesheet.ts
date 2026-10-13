@@ -10,12 +10,6 @@ import {
 	CHEST_LID_END_R,
 	CHEST_RIGHT,
 	FLAME,
-	FWD_KEY_RGB,
-	FWD_SHEET_H,
-	FWD_SHEET_W,
-	IDLE_FRONT,
-	IDLE_FWD,
-	IDLE_SIDE,
 	ITEM_BOMB,
 	ITEM_GLOVE,
 	ITEM_KEY,
@@ -26,13 +20,8 @@ import {
 	SHEET_H,
 	SHEET_W,
 	TORCH_STICK,
-	WALK,
-	WALK_BACK,
-	WALK_FWD,
 	type PxRect,
 } from './atlas';
-import { disposeNPCAnims } from './humanAnims';
-import { disposeSwordAnims } from './swordAnims';
 
 export type ChestFaces = {
 	front:THREE.CanvasTexture;
@@ -52,24 +41,6 @@ export type SpriteMaps = {
 };
 
 export type SheetTextures = {
-	walk:THREE.CanvasTexture[];
-	walkN:THREE.CanvasTexture[];
-	walkM:THREE.CanvasTexture[];
-	walkFwd:THREE.CanvasTexture[];
-	walkFwdN:THREE.CanvasTexture[];
-	walkFwdM:THREE.CanvasTexture[];
-	idleFront:THREE.CanvasTexture;
-	idleFrontN:THREE.CanvasTexture;
-	idleFrontM:THREE.CanvasTexture;
-	idleFwd:THREE.CanvasTexture;
-	idleFwdN:THREE.CanvasTexture;
-	idleFwdM:THREE.CanvasTexture;
-	idleSide:THREE.CanvasTexture;
-	idleSideN:THREE.CanvasTexture;
-	idleSideM:THREE.CanvasTexture;
-	walkBack:THREE.CanvasTexture;
-	walkBackN:THREE.CanvasTexture;
-	walkBackM:THREE.CanvasTexture;
 	torchStick:THREE.CanvasTexture;
 	torchStickN:THREE.CanvasTexture;
 	torchStickM:THREE.CanvasTexture;
@@ -103,20 +74,6 @@ export function pixelArtData(canvas:HTMLCanvasElement, wrap:THREE.Wrapping = THR
 	const tex = new THREE.CanvasTexture(canvas);
 	tex.magFilter = THREE.NearestFilter;
 	tex.minFilter = THREE.NearestFilter;
-	tex.generateMipmaps = false;
-	tex.colorSpace = THREE.NoColorSpace;
-	tex.wrapS = wrap;
-	tex.wrapT = wrap;
-	tex.needsUpdate = true;
-	owned.push(tex);
-	return tex;
-}
-
-/** Character normals: linear so a hat reads as a dome, not 102 sparkles. */
-export function smoothNormalTex(canvas:HTMLCanvasElement, wrap:THREE.Wrapping = THREE.ClampToEdgeWrapping):THREE.CanvasTexture {
-	const tex = new THREE.CanvasTexture(canvas);
-	tex.magFilter = THREE.LinearFilter;
-	tex.minFilter = THREE.LinearFilter;
 	tex.generateMipmaps = false;
 	tex.colorSpace = THREE.NoColorSpace;
 	tex.wrapS = wrap;
@@ -416,25 +373,14 @@ function chestNormal(
 function build(
 	main:HTMLImageElement,
 	chests:HTMLImageElement,
-	fwd:HTMLImageElement,
 	mainN:HTMLImageElement,
 	chestsN:HTMLImageElement,
-	fwdN:HTMLImageElement,
 	mainM:HTMLImageElement,
 	chestsM:HTMLImageElement,
-	fwdM:HTMLImageElement,
 ):SheetTextures {
-	const walkA = WALK.map((r) => crop(main, r, 'sprite'));
-	const walkFwdA = WALK_FWD.map((r) => crop(fwd, r, 'sprite', FWD_KEY_RGB, false, true));
-	const idleFrontA = crop(main, IDLE_FRONT, 'sprite');
-	const idleFwdA = crop(fwd, IDLE_FWD, 'sprite', FWD_KEY_RGB, false, true);
-	const idleSideA = crop(main, IDLE_SIDE, 'sprite');
-	const walkBackA = crop(main, WALK_BACK, 'sprite');
 	const torchStickA = crop(main, TORCH_STICK, 'sprite');
 	const mainAtlas = (img:HTMLImageElement, r:PxRect, a:HTMLCanvasElement | null, w:THREE.Wrapping = THREE.ClampToEdgeWrapping) =>
 		cropNormal(img, r, a, w, SHEET_W, SHEET_H);
-	const fwdAtlas = (img:HTMLImageElement, r:PxRect, a:HTMLCanvasElement | null) =>
-		cropNormal(img, r, a, THREE.ClampToEdgeWrapping, FWD_SHEET_W, FWD_SHEET_H);
 	const itemMaps = (r:PxRect):SpriteMaps => {
 		const a = crop(main, r, 'sprite');
 		return {
@@ -444,24 +390,6 @@ function build(
 		};
 	};
 	return {
-		walk: walkA.map((c) => pixelArt(c)),
-		walkN: WALK.map((r, i) => mainAtlas(mainN, r, walkA[i])),
-		walkM: WALK.map((r, i) => mainAtlas(mainM, r, walkA[i])),
-		walkFwd: walkFwdA.map((c) => pixelArt(c)),
-		walkFwdN: WALK_FWD.map((r, i) => fwdAtlas(fwdN, r, walkFwdA[i])),
-		walkFwdM: WALK_FWD.map((r, i) => fwdAtlas(fwdM, r, walkFwdA[i])),
-		idleFront: pixelArt(idleFrontA),
-		idleFrontN: mainAtlas(mainN, IDLE_FRONT, idleFrontA),
-		idleFrontM: mainAtlas(mainM, IDLE_FRONT, idleFrontA),
-		idleFwd: pixelArt(idleFwdA),
-		idleFwdN: fwdAtlas(fwdN, IDLE_FWD, idleFwdA),
-		idleFwdM: fwdAtlas(fwdM, IDLE_FWD, idleFwdA),
-		idleSide: pixelArt(idleSideA),
-		idleSideN: mainAtlas(mainN, IDLE_SIDE, idleSideA),
-		idleSideM: mainAtlas(mainM, IDLE_SIDE, idleSideA),
-		walkBack: pixelArt(walkBackA),
-		walkBackN: mainAtlas(mainN, WALK_BACK, walkBackA),
-		walkBackM: mainAtlas(mainM, WALK_BACK, walkBackA),
 		torchStick: pixelArt(torchStickA),
 		torchStickN: mainAtlas(mainN, TORCH_STICK, torchStickA),
 		torchStickM: mainAtlas(mainM, TORCH_STICK, torchStickA),
@@ -526,75 +454,6 @@ export function loadImage(src:string):Promise<HTMLImageElement> {
 	});
 }
 
-export async function loadBitmap(src:string, srgb:boolean):Promise<ImageBitmap> {
-	const res = await fetch(src);
-	if (!res.ok) {
-		throw new Error(`failed to load ${src}`);
-	}
-	const blob = await res.blob();
-	// ImageBitmap skips UNPACK_FLIP_Y; pre-flip so it matches CanvasTexture.
-	return createImageBitmap(blob, {
-		colorSpaceConversion: srgb ? 'default' : 'none',
-		premultiplyAlpha: 'none',
-		imageOrientation: 'flipY',
-	});
-}
-
-/** Crop a flipped atlas using PNG/top-left rects from the packer. */
-export function cropBitmap(src:ImageBitmap, x:number, y:number, w:number, h:number):Promise<ImageBitmap> {
-	const sx = x;
-	const sy = src.height - y - h;
-	// Firefox WebGL ignores ImageBitmap crop rects (bug 1797567) and can share
-	// the 4096² atlas backing store — one cell upload becomes the whole sheet.
-	const canvas = document.createElement('canvas');
-	canvas.width = w;
-	canvas.height = h;
-	const ctx = canvas.getContext('2d');
-	if (!ctx) {
-		return createImageBitmap(src, sx, sy, w, h);
-	}
-	ctx.drawImage(src, sx, sy, w, h, 0, 0, w, h);
-	return createImageBitmap(canvas, { premultiplyAlpha: 'none' });
-}
-
-export function pixelArtImage(
-	image:ImageBitmap | HTMLImageElement,
-	srgb:boolean,
-	wrap:THREE.Wrapping = THREE.ClampToEdgeWrapping,
-):THREE.Texture {
-	const tex = new THREE.Texture(image);
-	tex.magFilter = THREE.NearestFilter;
-	tex.minFilter = THREE.NearestFilter;
-	tex.generateMipmaps = false;
-	tex.colorSpace = srgb ? THREE.SRGBColorSpace : THREE.NoColorSpace;
-	tex.wrapS = wrap;
-	tex.wrapT = wrap;
-	tex.flipY = false;
-	tex.needsUpdate = true;
-	owned.push(tex);
-	return tex;
-}
-
-/** Cel clocks: nearest like grass / pixel NPCs. Linear turns a close-up into mush. */
-export function celArtImage(
-	image:ImageBitmap | HTMLImageElement,
-	srgb:boolean,
-	wrap:THREE.Wrapping = THREE.ClampToEdgeWrapping,
-):THREE.Texture {
-	const tex = new THREE.Texture(image);
-	tex.magFilter = THREE.NearestFilter;
-	tex.minFilter = THREE.NearestFilter;
-	tex.generateMipmaps = false;
-	tex.colorSpace = srgb ? THREE.SRGBColorSpace : THREE.NoColorSpace;
-	tex.wrapS = wrap;
-	tex.wrapT = wrap;
-	tex.flipY = false;
-	tex.userData.cel = true;
-	tex.needsUpdate = true;
-	owned.push(tex);
-	return tex;
-}
-
 export function sheetReady():boolean {
 	return textures !== null;
 }
@@ -610,15 +469,12 @@ export function loadSpritesheet():Promise<SheetTextures> {
 	pending = Promise.all([
 		loadImage(`${base}spritesheet.jpg`),
 		loadImage(`${base}chests.jpg`),
-		loadImage(`${base}spritesheet_forward_walk.jpg`),
 		loadImage(`${base}spritesheet_normal.png`),
 		loadImage(`${base}chests_normal.png`),
-		loadImage(`${base}spritesheet_forward_walk_normal.png`),
 		loadImage(`${base}spritesheet_metallic.jpg`),
 		loadImage(`${base}chests_metallic.jpg`),
-		loadImage(`${base}spritesheet_forward_walk_metallic.jpg`),
-	]).then(([main, chests, fwd, mainN, chestsN, fwdN, mainM, chestsM, fwdM]) => {
-		textures = build(main, chests, fwd, mainN, chestsN, fwdN, mainM, chestsM, fwdM);
+	]).then(([main, chests, mainN, chestsN, mainM, chestsM]) => {
+		textures = build(main, chests, mainN, chestsN, mainM, chestsM);
 		return textures;
 	}).catch((err:unknown) => {
 		pending = null;
@@ -743,6 +599,4 @@ export function disposeSpritesheet():void {
 	matByKey.clear();
 	textures = null;
 	pending = null;
-	disposeNPCAnims();
-	disposeSwordAnims();
 }

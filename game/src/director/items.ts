@@ -6,7 +6,7 @@ import {
 	Companion,
 	Door,
 	HumanBody,
-	HumanSprite,
+	Appearance,
 	Lock,
 	MarketNPC,
 	Named,
@@ -84,7 +84,7 @@ export function takeItem(host:GameHost, character:GameObject, name:string):Outco
 		const reason = pickup(character, loot);
 		const ok = reason !== 'no room' && reason !== 'no world';
 		if (ok) {
-			character.getComponent(HumanSprite)?.playClip('take', host.world.time);
+			character.getComponent(Appearance)?.playClip('take', host.world.time, loot);
 			host.arc?.pushEvent({ kind: 'PickedUp', text: `{0} picked up ${name}`, who: [idOf(character)], tags: ['item', name], major: false });
 			host.hooks.afterPickUp?.(host, character, name);
 		}
@@ -100,7 +100,7 @@ export function takeItem(host:GameHost, character:GameObject, name:string):Outco
 		const reason = takeFromChest(character, held);
 		const ok = reason.startsWith('took ');
 		if (ok) {
-			character.getComponent(HumanSprite)?.playClip('take', host.world.time);
+			character.getComponent(Appearance)?.playClip('take', host.world.time, held.chest);
 			host.arc?.pushEvent({ kind: 'PickedUp', text: `{0} picked up ${name}`, who: [idOf(character)], tags: ['item', name], major: false });
 			host.hooks.afterPickUp?.(host, character, name);
 		}
@@ -229,8 +229,8 @@ export function settlePay(from:GameObject, to:GameObject, amount:number, host:Ga
 
 function playHandoff(from:GameObject, to:GameObject):void {
 	const t = from.world?.time ?? 0;
-	from.getComponent(HumanSprite)?.playClip('give', t);
-	to.getComponent(HumanSprite)?.playClip('take', t);
+	from.getComponent(Appearance)?.playClip('give', t, to);
+	to.getComponent(Appearance)?.playClip('take', t, from);
 	cueAt(from.world, 'give', from);
 }
 

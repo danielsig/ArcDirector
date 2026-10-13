@@ -1,7 +1,5 @@
 import * as THREE from 'three';
 import { chestMaterial, flameMaterial, getSheet, sheetReady, spriteMaterial, unlitSpriteMaterial } from './spritesheet';
-import { animIDFromMeshID, getHumanAnims, hasHumanAnims, pickClockMaps } from './humanAnims';
-import { getSwordMaps, swordsReady } from './swordAnims';
 import { natureReady } from './nature';
 import {
 	createBoulderMesh,
@@ -17,13 +15,6 @@ import { columnParts, type PropPart } from './props';
 import { goodsMesh, isGoodsMesh } from './goods';
 import { waresForMesh } from '../items/wares';
 
-
-export const HUMAN_PLANE_W = 0.78;
-export const HUMAN_PLANE_H = 1.22;
-/** Ground/other-sprite blob; do not shrink — sprites skip this caster in the shader instead. */
-export const HUMAN_SHADOW_RADIUS_TOP = 0.18;
-export const HUMAN_SHADOW_RADIUS_BOT = 0.22;
-export const HUMAN_SHADOW_HEIGHT = 1.05;
 
 function spritePlane(w:number, h:number):THREE.PlaneGeometry {
 	const geo = new THREE.PlaneGeometry(w, h);
@@ -49,9 +40,6 @@ function spritePlane(w:number, h:number):THREE.PlaneGeometry {
 }
 
 export function meshReady(meshID:string):boolean {
-	if (meshID === 'human' || meshID.startsWith('human_')) {
-		return hasHumanAnims(animIDFromMeshID(meshID));
-	}
 	if (
 		meshID === 'tree_oak' || meshID === 'tree_pine' || meshID === 'boulder'
 		|| meshID === 'bridge' || meshID === 'waterfall' || meshID === 'bridge_lever'
@@ -63,95 +51,12 @@ export function meshReady(meshID:string):boolean {
 		return true;
 	}
 	if (
-		meshID === 'torch' || meshID === 'chest'
+		meshID === 'torch' || meshID === 'chest' || meshID === 'held_torch'
 		|| meshID.startsWith('item_')
 	) {
 		return sheetReady();
 	}
 	return true;
-}
-
-export function createHumanMesh(animID = 'player'):THREE.Group {
-	const anims = getHumanAnims(animID);
-	const g = new THREE.Group();
-	g.userData.kind = 'human';
-	g.userData.animID = animID;
-
-	const caster = new THREE.Mesh(
-		new THREE.CylinderGeometry(HUMAN_SHADOW_RADIUS_TOP, HUMAN_SHADOW_RADIUS_BOT, HUMAN_SHADOW_HEIGHT, 8),
-		toon(0x000000, { colorWrite: false, depthWrite: false }),
-	);
-	caster.name = 'shadowCaster';
-	caster.position.y = HUMAN_SHADOW_HEIGHT * 0.5;
-	caster.castShadow = true;
-	caster.receiveShadow = false;
-	caster.frustumCulled = false;
-	g.add(caster);
-
-	const start = pickClockMaps(anims.clock, 6, false, 0, 8);
-	const sprite = new THREE.Mesh(
-		spritePlane(HUMAN_PLANE_W, HUMAN_PLANE_H),
-		spriteMaterial(start.map, start.nrm),
-	);
-	sprite.name = 'sprite';
-	sprite.position.y = 0.61;
-	sprite.castShadow = false;
-	sprite.receiveShadow = true;
-	g.add(sprite);
-	g.userData.sprite = sprite;
-	addHeldSprite(sprite, 'heldLeft');
-	addHeldSprite(sprite, 'heldRight');
-	return g;
-}
-
-function addHeldSprite(sprite:THREE.Mesh, name:string):void {
-	const maps = getSwordMaps(6) ?? (sheetReady() ? getSheet().items['item_torch'] : undefined);
-	if (!maps) {
-		return;
-	}
-	const held = new THREE.Mesh(
-		spritePlane(1, 1),
-		spriteMaterial(maps.map, maps.nrm),
-	);
-	held.name = name;
-	held.visible = false;
-	held.castShadow = false;
-	held.receiveShadow = false;
-	// Draw after the body so alpha-tested holes reveal a behind item (negative z).
-	held.renderOrder = 1;
-	const heldMat = held.material as THREE.MeshLambertMaterial;
-	heldMat.depthTest = true;
-	heldMat.depthWrite = false;
-	held.userData.heldLambert = heldMat;
-	sprite.add(held);
-}
-
-export function ensureHeldFlame(held:THREE.Mesh):THREE.Mesh {
-	let flame = held.getObjectByName('heldFlame') as THREE.Mesh | undefined;
-	if (flame) {
-		return flame;
-	}
-	const sheet = getSheet();
-	flame = new THREE.Mesh(spritePlane(1, 1), flameMaterial(sheet.flame[0]));
-	flame.name = 'heldFlame';
-	flame.castShadow = false;
-	flame.receiveShadow = false;
-	flame.renderOrder = 2;
-	flame.position.set(0, 0.62, 0.02);
-	flame.scale.set(1.2, 0.85, 1);
-	held.add(flame);
-	return flame;
-}
-
-export function ensureHeldSprites(sprite:THREE.Mesh):void {
-	if (sprite.getObjectByName('heldLeft')) {
-		return;
-	}
-	if (!swordsReady() && !sheetReady()) {
-		return;
-	}
-	addHeldSprite(sprite, 'heldLeft');
-	addHeldSprite(sprite, 'heldRight');
 }
 
 function addTorchHolster(g:THREE.Group):void {
@@ -353,6 +258,34 @@ function itemTorchProp(h:number):THREE.Group {
 	g.userData.sprite = stick;
 	g.userData.flame = flame;
 	g.userData.itemH = stickH;
+	return g;
+}
+
+/**
+ * A torch to carry, standing up its +Y (for `holdInHand`): stick, pitch-soaked wrap, and two
+ * crossed flame cards (`userData.flame`, hidden until lit), so it reads from any side without
+ * turning to the camera.
+ */
+function heldTorchMesh():THREE.Group {
+	const g = new THREE.Group();
+	const stick = new THREE.Mesh(new THREE.CylinderGeometry(0.018, 0.024, 0.5, 6).translate(0, 0.25, 0), toon(0x7a4e2a));
+	const wrap = new THREE.Mesh(new THREE.CylinderGeometry(0.036, 0.03, 0.1, 7).translate(0, 0.49, 0), toon(0x3a2a1e));
+	stick.castShadow = true;
+	wrap.castShadow = true;
+	g.add(stick, wrap);
+	const mat = flameMaterial(getSheet().flame[0]!);
+	const flame = new THREE.Group();
+	for (const turn of [0, Math.PI / 2]) {
+		const card = new THREE.Mesh(new THREE.PlaneGeometry(0.22, 0.3), mat);
+		card.rotation.y = turn;
+		card.renderOrder = 2;
+		flame.add(card);
+	}
+	flame.position.y = 0.66;
+	flame.visible = false;
+	g.add(flame);
+	g.userData.flame = flame;
+	g.userData.flameMaterial = mat;
 	return g;
 }
 
@@ -832,9 +765,6 @@ function cloneProp(meshID:string, build:()=>THREE.Object3D):THREE.Object3D {
 }
 
 export function createMesh(meshID:string, color?:number, items?:readonly string[]):THREE.Object3D {
-	if (meshID === 'human' || meshID.startsWith('human_')) {
-		return createHumanMesh(animIDFromMeshID(meshID));
-	}
 	if (items !== undefined && isStallMesh(meshID)) {
 		return createStallMesh(meshID, items);
 	}
@@ -873,6 +803,8 @@ function buildMesh(meshID:string, color?:number):THREE.Object3D {
 			return createHearthMesh();
 		case 'cot':
 			return createCotMesh();
+		case 'held_torch':
+			return heldTorchMesh();
 		case 'cobweb':
 			return createCobwebMesh();
 		case 'stone_tablet':

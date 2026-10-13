@@ -69,22 +69,9 @@ Ground is **XZ**. **Y** is height (tile height underfoot). Yaw is around Y, in r
 
 WASD is camera-relative on XZ. NPCs never see these numbers; verbs and prompts use names only. URL `observer`/`ai` (and agent-only `view`) are **testing-only** (see below).
 
-## Sprite clock
+## Characters
 
-Human idle/walk art is an 8-way clock. **6** is face-on, **12** is the back. Stems **2 / 4 / 8 / 10 are 45° diagonals**, not analog 2:00 / 4:00 (`2` means 1:30). Runtime: `game/src/render/humanAnims.ts` (`hourFromViewDeg`). Art: `.cursor/skills/anime-clock-character/`.
-
-| Stem | Means | From 12 (back, clockwise) | From 6 (camera; + = screen-right) |
-|------|--------|---------------------------|-------------------------------------|
-| 12 | 12:00 | 0° | ±180° |
-| 2 | 1:30 | 45° | +135° |
-| 3 | 3:00 | 90° | +90° |
-| 4 | 4:30 | 135° | +45° |
-| 6 | 6:00 | 180° | 0° |
-| 8 | 7:30 | 225° | −45° |
-| 9 | 9:00 | 270° | −90° |
-| 10 | 10:30 | 315° | −135° |
-
-8 / 9 / 10 FlipX from 4 / 3 / 2 when that art is missing. `idle_01` / `idle_05` are not facing hours.
+Every character is a 3D model generated in Tripo3D (GLB, Mixamo skeleton) by Daniel into `brainstorming/3Dmodels/` (gitignored), then built for the game with `node kindling/scripts/buildModels.mjs brainstorming/3Dmodels game/public/models game/models.json` (needs Kindling built). Mesh IDs are the file names (`Hero`, `KnightMale`, …), listed in `game/src/render/characterModels.ts` with the props (`Sword`, bows, staffs, arrows, `Raven`); clips are shared from `clips.glb`. Per-model build fixes live in `game/models.json`. What a held item looks like in the hand is `HELD` in `game/src/characters/HeldProps.ts`; NPCs get gear through `equip` in their scene entry. `CharacterAnimation` picks clips; `CharacterPose` adds look-at, give/take reach and the bow shot. Lineup: `pnpm --filter @arc-director/kindling dev` → `http://localhost:5174/character.html` (`?right=Sword&left=ShamanBow&look=1`, more in `character.ts`).
 
 ## Dev server
 
@@ -158,7 +145,7 @@ http://localhost:5173/?scene=ruins&view=16,0,11,0
 When the work is visual or location-specific, **agents must pass `view`**. Do not treat a default spawn / last-autosave glance as enough.
 
 1. Open a `scene` + `view` URL (include `observer`/`ai` as needed). After moving, copy the bar. `view` stays in sync only if it was already present.
-2. Wait until the canvas has rendered (spritesheet load).
+2. Wait until the canvas has rendered (models load).
 3. Take a screenshot. Open the pause menu only with the top-right **Menu** button. Esc does not toggle it.
 
 Need a distant chunk: put that X/Z in `view` so the streaming anchor (the player) loads it.

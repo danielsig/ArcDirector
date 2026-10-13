@@ -13,6 +13,17 @@ function nameQuery(name:string):{ want:string; compact:string } {
 	return { want: s, compact: s.replace(/[^a-z0-9]/g, '') };
 }
 
+type NameIndex = {
+	time:number;
+	objects:GameObject[];
+	/** Exact id, name or alias → first object's place. */
+	exact:Map<string, number>;
+	/** Lowercase alias → first object's place. */
+	alias:Map<string, number>;
+	/** Every name, lowercase and as bare letters and digits, in world order. */
+	loose:{ go:GameObject; lower:string; key:string }[];
+};
+
 export class World extends KindlingWorld {
 	public declare readonly objects:GameObject[];
 	public readonly input = new InputState();
@@ -79,38 +90,67 @@ export class World extends KindlingWorld {
 		this.hudMessageLife = life;
 	}
 
+	/**
+	 * The object called `name`: an exact id, name or alias first (aliases also in any case), else
+	 * the first whose name loosely matches (same letters and digits, or a long one inside the query).
+	 * Earlier objects win. Looked up in {@link nameIndex}, not by scanning the world.
+	 */
 	public findNamed(name:string):GameObject | undefined {
-		const raw = nameQuery(name);
-		const want = raw.want;
-		const compact = raw.compact;
-		let loose:GameObject | undefined;
-		for (const go of this.objects) {
-			const named = go.getComponent(Named);
-			if (named?.id === name || go.id === name || go.name === name) {
-				return go;
-			}
-			if (named?.aliases?.includes(name) || named?.aliases?.some((a) => a.toLowerCase() === want)) {
-				return go;
-			}
-			const ids = [named?.id, go.id, go.name, ...(named?.aliases ?? [])];
-			if (
-				!loose
-				&& ids.some((id) => {
-					if (!id) {
-						return false;
-					}
-					const lower = id.toLowerCase();
-					const key = lower.replace(/[^a-z0-9]/g, '');
-					if (lower === want || key === compact) {
-						return true;
-					}
-					return key.length >= 5 && compact.includes(key);
-				})
-			) {
-				loose = go;
+		const found = this.lookUpName(name);
+		if (found && found.world !== this) {
+			// Swapped out since the index was built (as many removed as added this frame).
+			this._names = null;
+			return this.lookUpName(name);
+		}
+		return found;
+	}
+
+	private lookUpName(name:string):GameObject | undefined {
+		const { want, compact } = nameQuery(name);
+		const index = this.nameIndex();
+		const hit = Math.min(index.exact.get(name) ?? Infinity, index.alias.get(want) ?? Infinity);
+		if (hit < Infinity) {
+			return index.objects[hit];
+		}
+		for (const entry of index.loose) {
+			if (entry.lower === want || entry.key === compact || (entry.key.length >= 5 && compact.includes(entry.key))) {
+				return entry.go;
 			}
 		}
-		return loose;
+		return undefined;
+	}
+
+	/** Every name each object answers to, by its place in the world; built once a frame and again when objects come or go. */
+	private _names:NameIndex | null = null;
+
+	private nameIndex():NameIndex {
+		const old = this._names;
+		if (old && old.time === this.time && old.objects.length === this.objects.length) {
+			return old;
+		}
+		const index:NameIndex = { time: this.time, objects: [...this.objects], exact: new Map(), alias: new Map(), loose: [] };
+		index.objects.forEach((go, i) => {
+			const named = go.getComponent(Named);
+			const aliases = named?.aliases ?? [];
+			for (const id of [named?.id, go.id, go.name, ...aliases]) {
+				if (!id) {
+					continue;
+				}
+				if (!index.exact.has(id)) {
+					index.exact.set(id, i);
+				}
+				const lower = id.toLowerCase();
+				index.loose.push({ go, lower, key: lower.replace(/[^a-z0-9]/g, '') });
+			}
+			for (const alias of aliases) {
+				const lower = alias.toLowerCase();
+				if (!index.alias.has(lower)) {
+					index.alias.set(lower, i);
+				}
+			}
+		});
+		this._names = index;
+		return index;
 	}
 
 	public override chunkAtWorld(x:number, z:number):Chunk | undefined {

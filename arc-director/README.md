@@ -30,14 +30,15 @@ You bring the world: a Three.js scene, a Babylon level, an ECS, or a grid of til
 - **Verbs:** `Arc`s are composed of `Verb`s that are executed in sequence.
 - **Kit:** NPCs can be assigned a "Kit", a set of senses, verbs, and tools they can use.
 - **Stock Verbs:** Each game has its own verbs but ArcDirector has these built in:
-  - Movement: `go_to`, `follow`, `flee`, `wander` (come with built-in A* pathfinding)
+  - Movement: `go_to`, `follow`, `flee`, `wander` (uses built-in A* pathfinding)
   - Item: `use`, `pick_up`, `drop`, `give`, `examine`.
   - Mind: `say`, `wait`, `remember`, `think`, `set_goal`, `drop_goal`, `set_identity`, `watch`, `unwatch`, `focus`, `unfocus`.
   - Arc: `law`, `unlaw`, `when`, `loop`.
-  - System One: `choose`.
-  - Trade: `offer`.
+  - System One: `choose` (see below).
+  - Trade: `offer` (both buying and selling uses this verb).
   - Collective: `issue`, `tag`, `untag`, `spread`, `circle`, `hold_line`.
 - System One
+  - Works with the `choose` verb to make decisions.
   - Jev or any local System One model can be used to make ~50ms decisions.
   - LLMs can be used as System One fallbacks at ~100-200ms per decision.
   - LLMs can program NPCs to be controlled by System One models.
@@ -188,7 +189,7 @@ Do not wrap HTTP in a second in-flight queue. The mind queue’s `inFlight` is t
 
 Live: `infer` (timings). Change a model's settings by adding it again under the same name; a mind never changes them.
 
-Server opts: `baseURL`, `apiKey`, `enableThinking`, `reasoningEffort`, `load` (the last three are defaults a model's own settings override). If you omit `apiKey`, `ARC_DIRECTOR_API_KEY` or `OPENAI_API_KEY` is used. Thinking/CoT is off unless `enableThinking` is true. When it is off, the last message is an assistant prefill that skips the reasoning channel: an empty `<redacted_thinking>` block, or the model's Harmony `to=user` header when `applyPromptTemplate` is set (same method as LM Studio's imageVision plugin). The effort goes as `reasoning_effort` on chat completions (`off` is `"none"`, the only value that turns Gemma's reasoning off there) and as `reasoning: { effort }` on the responses API, and only when `/api/v1/models` lists that option for the model (`low` when thinking is on and allowed; `on`/`off` for binary models; omitted when the catalog has no reasoning config). A context overflow retries with the effort at `"none"` and a 512-token answer. A `schema` request (see `withArcFormat`) is LM Studio / llama.cpp specific: its grammar uses a root `anyOf`, `$ref` recursion and optional properties, none of which is OpenAI-strict; its schema is not counted as prompt when the answer is capped to the slot, and the logs show it by name. A model's first request loads it (LM Studio), with its own `contextLength`; a loaded copy that no longer fits its settings is reloaded. Native LM Studio load reuses a matching instance and unloads extra copies of it. Parallel thinkers are a per-model cap, not load copies. Models configured on one server stay loaded together; anything else loaded is unloaded to make VRAM room, and a failed load unloads any remaining residents and retries. `onLog` gets the outbound JSON **before** each model call (message bodies in fences below it; images as images, not base64), then the reply.
+Server opts: `baseURL`, `apiKey`, `enableThinking`, `reasoningEffort`, `load` (the last three are defaults a model's own settings override). If you omit `apiKey`, `ARC_DIRECTOR_API_KEY` or `OPENAI_API_KEY` is used. Thinking/CoT is off unless `enableThinking` is true. When it is off, the last message is an assistant prefill that skips the reasoning channel: an empty `<redacted_thinking>` block, or the model's Harmony `to=user` header when `applyPromptTemplate` is set (same method as LM Studio's imageVision plugin). A schema request skips that prefill: llama.cpp feeds the assistant message to the JSON grammar, and `<` empties the stack. The effort goes as `reasoning_effort` on chat completions (`off` is `"none"`, the only value that turns Gemma's reasoning off there) and as `reasoning: { effort }` on the responses API, and only when `/api/v1/models` lists that option for the model (`low` when thinking is on and allowed; `on`/`off` for binary models; omitted when the catalog has no reasoning config). A context overflow retries with the effort at `"none"` and a 512-token answer. A `schema` request (see `withArcFormat`) is LM Studio / llama.cpp specific: its grammar uses a root `anyOf`, `$ref` recursion and optional properties, none of which is OpenAI-strict; its schema is not counted as prompt when the answer is capped to the slot, and the logs show it by name. A model's first request loads it (LM Studio), with its own `contextLength`; a loaded copy that no longer fits its settings is reloaded. Native LM Studio load reuses a matching instance and unloads extra copies of it. Parallel thinkers are a per-model cap, not load copies. Models configured on one server stay loaded together; anything else loaded is unloaded to make VRAM room, and a failed load unloads any remaining residents and retries. `onLog` gets the outbound JSON **before** each model call (message bodies in fences below it; images as images, not base64), then the reply.
 
 ### Mind queue
 
