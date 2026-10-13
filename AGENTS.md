@@ -67,7 +67,7 @@ Ground is **XZ**. **Y** is height (tile height underfoot). Yaw is around Y, in r
 | **−Z** | north (top of a glyph map; yaw `0` faces this way) |
 | **+Z** | south |
 
-WASD is camera-relative on XZ. NPCs never see these numbers; verbs and prompts use names only. URL `observer`/`ai` (and agent-only `view`) are **testing-only** (see below).
+WASD is camera-relative on XZ. NPCs never see these numbers; verbs and prompts use names only. URL `player`/`ai` (and agent-only `view`) are **testing-only** (see below).
 
 ## Characters
 
@@ -85,22 +85,24 @@ The game is served at `http://localhost:5173/` (Vite default). There is no path 
 
 ## URL query schema
 
-`scene` is the real deep link. **`observer` / `ai` are testing flags** kept in the address bar (and localStorage). **`view` is agent-only:** never add it when playing as a user. Player pose (position + camera yaw) autosaves to localStorage; `view` overrides that pose when present.
+`scene` is the real deep link. **`player` / `ai` are testing flags** kept in the address bar (and localStorage). **`view` is agent-only:** never add it when playing as a user. Player pose (position + camera yaw) autosaves to localStorage; `view` overrides that pose when present.
 
 | Param | Kind | Meaning |
 |-------|------|---------|
 | `scene` | play | Scene id. `dungeon_vault` (the crypt crawl), `glen`, `marketplace`, or `ruins`. Omit (or unknown id) → scene picker. |
-| `observer` | test | `1` = player is inperceivable by NPCs (observer). `0` = NPCs can see, hear, and walk to the player. Also `true`/`false`. |
+| `player` | test | `participant` = NPCs can see, hear, and walk to the player. `observer` = the player is inperceivable by NPCs. `camera` = an observer with no body: not rendered, no collider (screenshots without the player character). |
 | `ai` | test | `1` = ArcDirector runs (NPCs think and move). `0` = paused (no inference, NPC motors frozen). Also `true`/`false`. |
 | `view` | agent | Full camera shot: `x,y,z,yaw`. All four numbers or the param is ignored (no partial pose). X/Z are meters on the ground; Y is height; yaw is radians. `0` yaw looks toward −Z (north); `1.5708` (π/2) toward −X (west); `3.1416` (π) toward +Z (south). Yaw also faces the player. Camera follows the player. |
+| `focus` | agent | Watch expression (ArcDirector syntax) the camera follows: the player, as the camera's rig, glides to the middle of whom it picks, asked every 0.5 s as the player sees them. `others.filter(u => doing(u, "cleave"))`, `others.filter("Knight")`, `others.filter("Forager")`. Pair with `player=camera`. Also the `set_camera` MCP tool. |
+| `zoom` | agent | Camera distance in meters (3–24, default about 13). Also `set_camera`. |
 | `stats` | test | `1` = render stats overlay (draw calls, triangles, geometries, textures, scene and screen memory, 30 s frame time). Also readable over the control hub with the `render_stats` MCP tool. Kept when returning to Scenes. |
 | `session` | test | Client id for the control MCP hub. The page installs `window.arcControl` always; it opens a WebSocket to the hub only when this is a non-empty value. A second live page with the same id is renamed (`alpha-2`, `alpha-3`, …) and the query is updated. Cursor: `.cursor/mcp.json`. Claude Code: `.mcp.json`. Both run `mcp/dist/main.js`, so build it first: `pnpm --filter @arc-director/mcp build`. |
 
-**Defaults** (when the param is omitted and nothing is stored): **`observer=1`**, **`ai=1`**. Menu **Testing** toggles write both to localStorage and the URL; they survive reloads. Query params override the stored values for the fields you set.
+**Defaults** (when the param is omitted and nothing is stored): **`player=observer`**, **`ai=1`**. Menu **Testing** settings write both to localStorage and the URL; they survive reloads. Query params override the stored values for the fields you set.
 
 Pose comes from the last saved pose for that scene. **`view` overrides that pose as a whole.** World and the cast start fresh unless you press **Load** (Menu → Save): one save per scene in localStorage, a Kindling diff of the world plus `exportCast`. Every chunk loads at boot so the fresh scene is the same each time; far chunks park their objects instead of dropping them.
 
-While a scene is running, the game `replaceState`s `observer` and `ai`. It never injects `view` or `session` for a normal play session. If `view` or `session` is already in the query, it is kept. Returning to Scenes strips `view` / `observer` / `ai` and leaves `session`.
+While a scene is running, the game `replaceState`s `player` and `ai`. It never injects `view` or `session` for a normal play session. If `view` or `session` is already in the query, it is kept. Returning to Scenes strips `view` / `player` / `ai` and leaves `session`.
 
 ### Examples
 
@@ -144,7 +146,7 @@ http://localhost:5173/?scene=ruins&view=16,0,11,0
 
 When the work is visual or location-specific, **agents must pass `view`**. Do not treat a default spawn / last-autosave glance as enough.
 
-1. Open a `scene` + `view` URL (include `observer`/`ai` as needed). After moving, copy the bar. `view` stays in sync only if it was already present.
+1. Open a `scene` + `view` URL (include `player`/`ai` as needed). After moving, copy the bar. `view` stays in sync only if it was already present.
 2. Wait until the canvas has rendered (models load).
 3. Take a screenshot. Open the pause menu only with the top-right **Menu** button. Esc does not toggle it.
 
@@ -154,24 +156,25 @@ Recommended flag values:
 
 | What you are testing | Flags |
 |----------------------|--------|
-| World, meshes, lighting, HUD, streaming (no NPC motion or inference) | `observer=1&ai=0` |
-| Watch NPCs act without them noticing you (default) | `observer=1&ai=1` |
-| Talk, give, or otherwise interact as a visible player | `observer=0&ai=1` |
+| World, meshes, lighting, HUD, streaming (no NPC motion or inference) | `player=observer&ai=0` |
+| Watch NPCs act without them noticing you (default) | `player=observer&ai=1` |
+| Talk, give, or otherwise interact as a visible player | `player=participant&ai=1` |
+| Screenshots without the player character in them | `player=camera&ai=1` (add `focus` to follow the action) |
 
 Example: glen screenshot with ArcDirector paused:
 
 ```
-http://localhost:5173/?scene=glen&view=8,0,12,1.57&observer=1&ai=0
+http://localhost:5173/?scene=glen&view=8,0,12,1.57&player=observer&ai=0
 ```
 
 Example: marketplace with ArcDirector paused:
 
 ```
-http://localhost:5173/?scene=marketplace&view=16,0,20,0&observer=1&ai=0
+http://localhost:5173/?scene=marketplace&view=16,0,20,0&player=observer&ai=0
 ```
 
 Example: 5v5 Combat with ArcDirector paused:
 
 ```
-http://localhost:5173/?scene=ruins&view=16,0,11,0&observer=1&ai=0
+http://localhost:5173/?scene=ruins&view=16,0,11,0&player=observer&ai=0
 ```

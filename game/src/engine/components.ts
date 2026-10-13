@@ -277,7 +277,7 @@ export function alarmActive(go:GameObject, now:number):boolean {
 	return !!alarm?.enabled && now < alarm.until;
 }
 
-/** Stays with a named body when idle. Always perceives that body, even in observer. */
+/** Stays with a named body when idle. Always perceives that body, even when other NPCs cannot notice the player. */
 /** Serves `targetID`: always notices them, and hands them what will not fit in their bags. Following is the mind's program, not this component. */
 export class Companion extends Component {
 	public targetID = 'Player';

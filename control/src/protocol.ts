@@ -30,7 +30,9 @@ export type Command =
 	/** The renderer's `RenderStats` and the scene id. */
 	| { op:'renderStats' }
 	| { op:'saveGame' }
-	| { op:'loadGame' };
+	| { op:'loadGame' }
+	/** Camera follows whom `focus` (watch syntax, as the player sees them) picks; `''` stops. `zoom` is the distance in meters. */
+	| { op:'setCamera'; focus?:string; zoom?:number };
 
 /** Who thinks for a character: its own mind, its collective's, or none when the host drives it (the Player). */
 export type CharacterRow = {

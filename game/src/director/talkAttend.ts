@@ -16,7 +16,7 @@ export const HEAR_RANGE = 16;
 /** Speech bubble and glance toward a speaker last this long. */
 export const SPEECH_LIFE = 4.8;
 
-/** Observer hide, plus companion exception for the character they follow. */
+/** Hidden from NPCs unless a participant, except to the companion following them. */
 export function talkNotices(viewer:GameObject, go:GameObject):boolean {
 	const world = viewer.world;
 	if (!world) {

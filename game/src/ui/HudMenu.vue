@@ -29,7 +29,6 @@ const PAGES:{ id:MenuPage; label:string }[] = [
 	{ id: 'game', label: 'Game' },
 	{ id: 'display', label: 'Display' },
 	{ id: 'audio', label: 'Audio' },
-	{ id: 'save', label: 'Save' },
 ];
 
 watch(
@@ -68,8 +67,8 @@ function load():void {
 	session?.value?.load();
 }
 
-function toggleObserver():void {
-	setPrefs({ observer: !props.hud.observer });
+function pickPlayer():void {
+	setPrefs({ player: props.hud.player });
 }
 
 function toggleArcDirector():void {
@@ -84,8 +83,12 @@ function toggleDetailMaps():void {
 	setPrefs({ detailMaps: !props.hud.detailMaps });
 }
 
-function toggleShadows():void {
-	setPrefs({ shadows: !props.hud.shadows });
+function toggleFPSCounter():void {
+	setPrefs({ fpsCounter: !props.hud.fpsCounter });
+}
+
+function pickShadows():void {
+	setPrefs({ shadows: props.hud.shadows });
 }
 
 function pickModel():void {
@@ -250,8 +253,26 @@ function pct(n:number):string {
 									</option>
 								</select>
 							</label>
+							<label class="set">
+								<span class="name">Player</span>
+								<select
+									v-model="hud.player"
+									title="Participant: NPCs notice you. Observer: they never do. Camera: no body at all, for screenshots"
+									@change.stop="pickPlayer"
+								>
+									<option value="participant">Participant</option>
+									<option value="observer">Observer</option>
+									<option value="camera">Camera</option>
+								</select>
+							</label>
 							<div class="page-actions">
 								<button type="button" @click.stop="reset">Reset location</button>
+							</div>
+							<h3>Save</h3>
+							<p class="readout">{{ hud.savedUTC ? `Saved ${new Date(hud.savedUTC).toLocaleString()}` : 'No save yet' }}</p>
+							<div class="page-actions">
+								<button type="button" @click.stop="save">Save</button>
+								<button type="button" :disabled="!hud.savedUTC" @click.stop="load">Load</button>
 							</div>
 						</template>
 						<template v-else-if="hud.menuPage === 'display'">
@@ -267,16 +288,30 @@ function pct(n:number):string {
 									{{ hud.detailMaps ? 'On' : 'Off' }}
 								</button>
 							</div>
-							<div class="set">
+							<label class="set">
 								<span class="name">Shadows</span>
+								<select
+									v-model="hud.shadows"
+									title="Auto: the best this machine runs at 50 fps (never Off). Simple: baked scene shadows, soft capsules for characters. Low and High: realtime."
+									@change.stop="pickShadows"
+								>
+									<option value="auto">Auto</option>
+									<option value="off">Off</option>
+									<option value="simple">Simple</option>
+									<option value="low">Low quality</option>
+									<option value="high">High quality</option>
+								</select>
+							</label>
+							<div class="set">
+								<span class="name">FPS counter</span>
 								<button
 									type="button"
 									class="switch"
-									:class="{ on: hud.shadows }"
-									:aria-pressed="hud.shadows"
-									@click.stop="toggleShadows"
+									:class="{ on: hud.fpsCounter }"
+									:aria-pressed="hud.fpsCounter"
+									@click.stop="toggleFPSCounter"
 								>
-									{{ hud.shadows ? 'On' : 'Off' }}
+									{{ hud.fpsCounter ? 'On' : 'Off' }}
 								</button>
 							</div>
 							<div class="set">
@@ -301,13 +336,6 @@ function pct(n:number):string {
 								</div>
 							</div>
 						</template>
-						<template v-else-if="hud.menuPage === 'save'">
-							<p class="readout">{{ hud.savedUTC ? `Saved ${new Date(hud.savedUTC).toLocaleString()}` : 'No save yet' }}</p>
-							<div class="page-actions">
-								<button type="button" @click.stop="save">Save</button>
-								<button type="button" :disabled="!hud.savedUTC" @click.stop="load">Load</button>
-							</div>
-						</template>
 						<template v-else-if="hud.menuPage === 'audio'">
 							<div class="set">
 								<span class="name">Mute</span>
@@ -321,9 +349,21 @@ function pct(n:number):string {
 									{{ hud.audioMuted ? 'On' : 'Off' }}
 								</button>
 							</div>
-							<label class="set stack" :class="{ dim: hud.audioMuted }">
+							<div class="set" :class="{ dim: hud.audioMuted }">
+								<span class="name">Music</span>
+								<button
+									type="button"
+									class="switch"
+									:class="{ on: !hud.musicMuted }"
+									:aria-pressed="!hud.musicMuted"
+									@click.stop="setPrefs({ musicMuted: !hud.musicMuted })"
+								>
+									{{ hud.musicMuted ? 'Off' : 'On' }}
+								</button>
+							</div>
+							<label class="set stack" :class="{ dim: hud.audioMuted || hud.musicMuted }">
 								<span class="name">
-									Music
+									Music volume
 									<span class="readout">{{ pct(hud.musicVolume) }}%</span>
 								</span>
 								<input
@@ -375,18 +415,6 @@ function pct(n:number):string {
 									@click.stop="toggleArcDirector"
 								>
 									{{ hud.arcDirectorOn ? 'On' : 'Off' }}
-								</button>
-							</div>
-							<div class="set">
-								<span class="name">Observer</span>
-								<button
-									type="button"
-									class="switch"
-									:class="{ on: hud.observer }"
-									:aria-pressed="hud.observer"
-									@click.stop="toggleObserver"
-								>
-									{{ hud.observer ? 'On' : 'Off' }}
 								</button>
 							</div>
 							<div class="set">

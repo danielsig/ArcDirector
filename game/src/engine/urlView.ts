@@ -1,5 +1,5 @@
-/** Testing-only URL flags (`observer` `ai` `stats`) and optional agent `view` shot. */
-import type { Prefs } from '../prefs';
+/** Testing-only URL flags (`player` `ai` `stats`) and the agent camera: a `view` shot, a `focus` expression, a `zoom`. */
+import { PLAYER_MODES, type PlayerMode, type Prefs } from '../prefs';
 import type { ViewPose } from './viewPersist';
 
 export type URLView = {
@@ -10,11 +10,11 @@ export type URLView = {
 };
 
 export type URLFlags = {
-	observer?:boolean;
+	player?:PlayerMode;
 	ai?:boolean;
 };
 
-const VIEW_KEYS = ['view', 'x', 'y', 'z', 'yaw'] as const;
+const VIEW_KEYS = ['view', 'x', 'y', 'z', 'yaw', 'focus', 'zoom'] as const;
 
 function finiteNum(raw:string):number | undefined {
 	if (raw === '') {
@@ -73,7 +73,7 @@ export function readURLView(search = window.location.search):URLView | null {
 export function readURLFlags(search = window.location.search):URLFlags {
 	const q = new URLSearchParams(search);
 	return {
-		observer: parseURLBool(q.has('observer') ? (q.get('observer') ?? '') : null),
+		player: PLAYER_MODES.find((mode) => mode === q.get('player')),
 		ai: parseURLBool(q.has('ai') ? (q.get('ai') ?? '') : null),
 	};
 }
@@ -81,6 +81,12 @@ export function readURLFlags(search = window.location.search):URLFlags {
 /** Testing-only client id for the control hub. Empty or omitted → no socket. */
 export function readURLSession(search = window.location.search):string {
 	return (new URLSearchParams(search).get('session') ?? '').trim();
+}
+
+/** Agent-only camera: `focus` follows whom a watch expression picks, `zoom` is the camera distance in meters. */
+export function readURLCamera(search = window.location.search):{ focus:string; zoom?:number } {
+	const q = new URLSearchParams(search);
+	return { focus: (q.get('focus') ?? '').trim(), zoom: finiteNum(q.get('zoom') ?? '') };
 }
 
 /** Testing-only `stats=1`: the render stats overlay. */
@@ -114,10 +120,10 @@ export function applyURLView(pose:ViewPose, view:URLView):ViewPose {
 }
 
 /**
- * Keep `?scene=` plus `observer`/`ai` in the bar (no history entries).
+ * Keep `?scene=` plus `player`/`ai` in the bar (no history entries).
  * `view` is agent-only: never add it; if already present, keep it in sync.
  */
-export function writeURLView(pose:ViewPose, flags:Pick<Prefs, 'observer' | 'ai'>):void {
+export function writeURLView(pose:ViewPose, flags:Pick<Prefs, 'player' | 'ai'>):void {
 	if (!window.location.search.includes('scene=')) {
 		return;
 	}
@@ -128,14 +134,14 @@ export function writeURLView(pose:ViewPose, flags:Pick<Prefs, 'observer' | 'ai'>
 		if (url.searchParams.has('view')) {
 			url.searchParams.set('view', packURLView(pose));
 		}
-		url.searchParams.set('observer', flags.observer ? '1' : '0');
+		url.searchParams.set('player', flags.player);
 		url.searchParams.set('ai', flags.ai ? '1' : '0');
 	});
 }
 
 export function clearURLView():void {
 	replaceURL((url) => {
-		for (const key of [...VIEW_KEYS, 'observer', 'ai']) {
+		for (const key of [...VIEW_KEYS, 'player', 'ai']) {
 			url.searchParams.delete(key);
 		}
 	});

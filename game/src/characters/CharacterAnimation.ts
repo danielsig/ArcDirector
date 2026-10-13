@@ -1,14 +1,27 @@
-import { Animator, Component, MeshRenderer, Time } from '@arc-director/kindling';
+import { Animator, Component, MeshRenderer, Time, toonClip } from '@arc-director/kindling';
 import * as THREE from 'three';
 import { Appearance, HurtFlash, RigidBody, SpeechBubble, Vitals } from '../engine/components';
 import type { GameObject } from '../engine/GameObject';
 import { Order } from '../engine/order';
+import { characterModel } from '../render/characterModels';
 import { CharacterPose } from './CharacterPose';
 
-/** Speed (m/s) at which `walk` plays at normal rate; faster movement plays it faster. */
-const WALK_PACE = 1.2;
+/**
+ * Speed (m/s) at which `walk` plays at rate 1. Playback rate is `speed / WALK_PACE`, so a smaller
+ * pace plays the walk faster. Footsteps use the same number: see {@link WALK_STRIDE}.
+ */
+export const WALK_PACE = 1.2;
+/**
+ * Meters between foot plants. `walk` is 7/3 s and plants four times, so one plant every 7/12 s at
+ * rate 1; the gap is that time times {@link WALK_PACE}. The first plant of a fresh clip is halfway.
+ */
+export const WALK_STRIDE = (7 / 12) * WALK_PACE;
 /** Below this the character stands. */
 const MOVING = 0.35;
+/** Standing clips: each plays through once, then another, picked at random, fades in. Hands stay free of the body, so held gear does not clip. */
+const IDLES = ['standing_relax', 'look_around', 'idle'];
+/** Feminine models also stand hands on hips. */
+const FEMININE_IDLES = [...IDLES, 'wait'];
 
 /** Blinks per second while hurt, and the two reds it blinks between: [color, glow]. */
 const HURT_BLINK = 14;
@@ -59,8 +72,9 @@ const GESTURES = {
 };
 
 /**
- * Picks the 3D character's clip from what it is doing: down, hurt, moving, or standing. Moving
- * plays `walk` at a rate that follows speed (about 2.8× at full speed); a new line of speech adds a
+ * Picks the 3D character's clip from what it is doing: down, hurt, moving, or standing (one of
+ * {@link IDLES} after another). Moving plays `walk` at a rate that follows speed (about 2.8× at
+ * full speed); a new line of speech adds a
  * gesture, an attack its move. Giving, taking and looking are {@link CharacterPose}'s.
  */
 export class CharacterAnimation extends Component {
@@ -70,6 +84,9 @@ export class CharacterAnimation extends Component {
 	private _painted = false;
 	/** When the line last gestured at began (`SpeechBubble.timestamp`). */
 	private _gestured = 0;
+	/** The standing clip, and when (`Time.time`) it has played through; 0 while not standing. */
+	private _idle = '';
+	private _idleUntil = 0;
 
 	/**
 	 * Starts the move for attack `verb` so its blow lands `windUp` seconds from now: a clip, or for
@@ -102,7 +119,7 @@ export class CharacterAnimation extends Component {
 			paintHurt(root, hurt ? Math.floor(Time.time * HURT_BLINK) : -1);
 			this._painted = hurt;
 		}
-		let clip = 'idle';
+		let clip = '';
 		let loop = true;
 		let rate = 1;
 		if ((this.gameObject.getComponent(Vitals)?.hp ?? 1) <= 0) {
@@ -117,10 +134,25 @@ export class CharacterAnimation extends Component {
 			clip = 'walk';
 			rate = Math.max(speed, 1) / WALK_PACE;
 		}
+		const standing = !clip;
 		animator.loop = loop;
-		animator.clip = clip;
+		animator.clip = standing ? this.idle(root) : clip;
 		animator.speed = rate;
-		this.gesture(animator, clip === 'idle');
+		if (!standing) {
+			this._idleUntil = 0;
+		}
+		this.gesture(animator, standing);
+	}
+
+	/** The standing clip: a fresh pick from {@link IDLES} on standing still, and each time the last one has played through. */
+	private idle(root:THREE.Object3D | null | undefined):string {
+		if (Time.time >= this._idleUntil) {
+			const feminine = characterModel(root?.userData.meshID as string)?.feminine;
+			const others = (feminine ? FEMININE_IDLES : IDLES).filter((c) => c !== this._idle);
+			this._idle = others[Math.floor(Math.random() * others.length)]!;
+			this._idleUntil = Time.time + ((root && toonClip(root, this._idle)?.duration) || 10);
+		}
+		return this._idle;
 	}
 
 	/** Once per new line, while standing: a wave or a hand held out. */

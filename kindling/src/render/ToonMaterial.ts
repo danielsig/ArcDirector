@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { patchCapsuleShadows } from './capsuleShadows.js';
 import { patchShader } from './shader.js';
 
 /**
@@ -286,6 +287,7 @@ export class ToonMaterial extends THREE.MeshToonMaterial {
 				.replace('#include <lights_fragment_end>', `#include <lights_fragment_end>\n${TOON_LIGHTS}`)
 				.replace('#include <dithering_fragment>', `#include <dithering_fragment>\n${TOON_NO_OUTLINE}`);
 		});
+		patchCapsuleShadows(this);
 	}
 
 	public override copy(source:ToonMaterial):this {

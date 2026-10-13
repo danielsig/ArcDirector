@@ -9,7 +9,7 @@ export class Light extends Component {
 	public intensity = 48;
 	public range = 11;
 	public decay = 2;
-	/** Wants a shadow. A point light gets one only while it is among the renderer's nearest `maxPointShadows`. */
+	/** Wants a shadow, sized by the renderer's `pointShadowMapSize` or `directionalShadowMapSize`. A point light gets one only while it is among the renderer's nearest `maxPointShadows`. */
 	public castShadow = true;
 	/** Local offset. Z is along Kindling forward (−Z). */
 	public offsetX = 0;
@@ -59,7 +59,6 @@ export class Light extends Component {
 			const p = new THREE.PointLight(this.color, this.intensity, this.range, this.decay);
 			p.name = 'castLight';
 			p.castShadow = false;
-			p.shadow.mapSize.set(256, 256);
 			p.shadow.bias = -0.001;
 			p.shadow.normalBias = 0.01;
 			p.shadow.camera.near = 0.01;

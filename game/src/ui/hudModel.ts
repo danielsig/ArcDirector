@@ -1,4 +1,4 @@
-import { prefs, type ArcFormatPref, type SystemOneKind } from '../prefs';
+import { prefs, type ArcFormatPref, type PlayerMode, type ShadowQuality, type SystemOneKind } from '../prefs';
 import { characterOptions, resolvePlayerKind } from '../render/characterModels';
 import type { RenderStats } from '@arc-director/kindling';
 import { readURLStats } from '../engine/urlView';
@@ -94,7 +94,7 @@ export type HudHeartrate = {
 	thinkMs:number;
 };
 
-export type MenuPage = 'game' | 'display' | 'audio' | 'save' | 'testing';
+export type MenuPage = 'game' | 'display' | 'audio' | 'testing';
 
 export type HudModel = {
 	hp:number;
@@ -134,8 +134,8 @@ export type HudModel = {
 	loading:boolean;
 	/** Bump to boot a new Game (load). */
 	boots:number;
-	/** Player hidden from NPC perception (observer). Default on. */
-	observer:boolean;
+	/** Who the player is: participant, observer (unnoticed by NPCs) or camera (no body). Default observer. */
+	player:PlayerMode;
 	/** ArcDirector ticks and NPC motors. Default on. */
 	arcDirectorOn:boolean;
 	/** Chat model id currently in use / selected in the menu. */
@@ -174,7 +174,10 @@ export type HudModel = {
 	/** Updated only while the overlay or the Testing page shows it (reading it walks the scene). */
 	renderStats:RenderStats;
 	detailMaps:boolean;
-	shadows:boolean;
+	shadows:ShadowQuality;
+	fpsCounter:boolean;
+	/** Frames per second over the last second. Updated only while {@link fpsCounter} is on. */
+	fps:number;
 	inferCalls:number;
 	inferContextMs:number;
 	inferGenerateMs:number;
@@ -188,6 +191,8 @@ export type HudModel = {
 	sfxVolume:number;
 	voices:boolean;
 	audioMuted:boolean;
+	/** Music off; its volume is kept. */
+	musicMuted:boolean;
 	minimap:{
 		originX:number;
 		originZ:number;
@@ -241,7 +246,7 @@ export function emptyHud():HudModel {
 		savedUTC: '',
 		loading: false,
 		boots: 0,
-		observer: p.observer,
+		player: p.player,
 		arcDirectorOn: p.ai,
 		model: p.model,
 		maxParallel: p.maxParallel,
@@ -263,6 +268,8 @@ export function emptyHud():HudModel {
 		renderStats: { calls: 0, triangles: 0, geometries: 0, textures: 0, framebufferMemory: 0, sceneMemory: 0, frameMS: 0, frameMSNow: 0 },
 		detailMaps: p.detailMaps,
 		shadows: p.shadows,
+		fpsCounter: p.fpsCounter,
+		fps: 0,
 		inferCalls: 0,
 		inferContextMs: 0,
 		inferGenerateMs: 0,
@@ -276,6 +283,7 @@ export function emptyHud():HudModel {
 		sfxVolume: p.sfx,
 		voices: p.voices,
 		audioMuted: p.muted,
+		musicMuted: p.musicMuted,
 		minimap: {
 			originX: 0,
 			originZ: 0,

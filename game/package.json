@@ -2,7 +2,6 @@
 	"name": "@arc-director/game",
 	"author": "Daniel Sigurdsson",
 	"private": true,
-	"version": "0.1.0",
 	"type": "module",
 	"scripts": {
 		"dev": "vite",
@@ -12,7 +11,7 @@
 		"build": "vue-tsc --noEmit && vite build",
 		"preview": "vite preview",
 		"typecheck": "vue-tsc --noEmit",
-		"test": "node --experimental-strip-types --test src/prefs.test.ts src/ui/bindings.test.ts && node scripts/viteTest.mjs src/world/dressing.test.ts"
+		"test": "node --experimental-strip-types --test src/prefs.test.ts src/ui/bindings.test.ts && node scripts/viteTest.mjs src/world/dressing.test.ts src/engine/autoShadows.test.ts"
 	},
 	"dependencies": {
 		"@arc-director/control": "workspace:*",

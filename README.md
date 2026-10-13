@@ -15,10 +15,10 @@ Every screenshot below is a live session: no scripted moves, nothing staged. Eac
 
 | Scene | | |
 | ----- | - | - |
-| **Dungeon Crawl** | ![The company plans in the Gatehouse](branding/screenshots/dungeon-1.jpg) | ![Bram, Maren and Wren think about the way north](branding/screenshots/dungeon-2.jpg) |
-| **River Glen** | ![The bridge is down over the river](branding/screenshots/glen-1.jpg) | ![The forager meets the angler at the bridge](branding/screenshots/glen-2.jpg) |
-| **Marketplace** | ![The baker turns down the weaver](branding/screenshots/market-1.jpg) | ![The weaver offers a scarf for 6 gold](branding/screenshots/market-2.jpg) |
-| **5v5 Combat** | ![Both squads converge on the dais](branding/screenshots/ruins-1.jpg) | ![Melee on the dais](branding/screenshots/ruins-2.jpg) |
+| **5v5 Combat** | ![Two squads at either end of a ruined temple](branding/screenshots/ruins-1.jpg) | ![A knight cleaves in the middle of the melee](branding/screenshots/ruins-2.jpg) |
+| **Marketplace** | ![Sellers at their stalls as the first shoppers arrive](branding/screenshots/market-1.jpg) | ![A shopper buys from the baker](branding/screenshots/market-2.jpg) |
+| **River Glen** | ![The glen with the bridge raised](branding/screenshots/glen-1.jpg) | ![The bridge is down and the forager crosses](branding/screenshots/glen-2.jpg) |
+| **Dungeon Crawl** | ![The company in the Gatehouse](branding/screenshots/dungeon-1.jpg) | ![The company presses into the crypt](branding/screenshots/dungeon-2.jpg) |
 
 ## What a plan looks like
 
@@ -72,14 +72,14 @@ You need [Node.js](https://nodejs.org/) 20+, [pnpm](https://pnpm.io/) and [LM St
 
 3. Open <http://localhost:5173/>, pick a scene, and watch.
 
-Each scene opens with a short brief of what the cast is trying to do. By default you are an invisible observer. Open **Menu → Testing** and turn **Observer** off to step in yourself: talk to the NPCs, trade with them, or get in their way.
+Each scene opens with a short brief of what the cast is trying to do. By default you are an observer the NPCs never notice. Open **Menu → Testing** and set **Player** to **Participant** to step in yourself: talk to the NPCs, trade with them, or get in their way. **Camera** removes your character entirely, for clean screenshots.
 
 | Scene | What happens |
 | ----- | ------------ |
-| **Dungeon Crawl** | A knight, a healer and a witch fight their way through a crypt of riddles, locked gates and a skeleton king to reach the crown. |
-| **River Glen** | Three villagers each need something the others have, and the only bridge costs more than anyone can pay. |
-| **Marketplace** | Four sellers mind their stalls while a single mind runs the whole crowd of shoppers and guards. |
 | **5v5 Combat** | Two captains command a squad each, adapt their orders as the fight turns, and heal the wounded. |
+| **Marketplace** | Four sellers mind their stalls while a single mind runs the whole crowd of shoppers and guards. |
+| **River Glen** | Three villagers each need something the others have, and the only bridge costs more than anyone can pay. |
+| **Dungeon Crawl** | A knight, a healer and a witch fight their way through a crypt of riddles, locked gates and a skeleton king to reach the crown. |
 
 ## Use it in your own game
 

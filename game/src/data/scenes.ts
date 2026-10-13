@@ -81,7 +81,7 @@ export const DUNGEON_VAULT:SceneDef = {
 	title: 'Dungeon Crawl',
 	look: 'dungeon',
 	minimapFollow: true,
-	// Turn Observer off and the company's archer, Derek, is you.
+	// Play as Participant and the company's archer, Derek, is you.
 	player: { name: 'Derek', tags: ['Archer'], equip: ['short_bow'] },
 	chunks: DUNGEON_CHUNKS,
 	npcs: [
@@ -111,7 +111,7 @@ export const DUNGEON_VAULT:SceneDef = {
 	],
 	ambient: 'The Sunken Crypt: black stone halls under the hills, lit by old torches.',
 	keys: SCENE_KEYS,
-	brief: `A company of three, Bram the knight, Maren the healer and Wren the witch, goes down into the Sunken Crypt for the SunCrown in its treasury. Derek, their archer, is you: turn Observer off to join them, or leave it on and watch.
+	brief: `A company of three, Bram the knight, Maren the healer and Wren the witch, goes down into the Sunken Crypt for the SunCrown in its treasury. Derek, their archer, is you: set Player to Participant to join them, or stay an Observer and watch.
 
 Five rooms lie between them and the crown, joined by winding passages with dead ends. A Cobweb chokes the way north out of the Gatehouse; a flame burns it, and a WoodenTorch lies in the Gatehouse. In the Pillared Hall, SealedDoor opens to whoever speaks the answer to the riddle on RiddleStone (footsteps). The Ossuary keeps CryptKey in OssuaryChest, and CryptKey opens CryptGate. Beyond it the HollowKing guards the Throne Crypt. Everyone knows his weakness: steel and arrows barely scratch him, but witchfire burns, so Wren's hex does triple damage. When he falls, HoardGate opens on the Treasury, and the SunCrown waits in HoardChest.
 

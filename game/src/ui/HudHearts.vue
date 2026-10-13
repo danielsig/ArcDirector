@@ -37,7 +37,8 @@ const fills = computed(() => {
 .hud-hearts {
 	position: absolute;
 	top: 16px;
-	left: 16px;
+	/* Clear of the back button in the corner. */
+	left: 60px;
 	display: flex;
 	gap: 4px;
 	pointer-events: none;

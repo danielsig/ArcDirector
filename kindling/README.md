@@ -275,7 +275,7 @@ restoreWorld(rebuilt, save, (recipe) => spawn(rebuilt, recipe));
 
 ## Rendering
 
-`Renderer` creates the WebGL canvas, hemisphere + ambient fill, optional directional sun, fog, and shadows. It renders with the first **enabled** `Camera` in `world.objects`. `detailMaps` (default on) samples normal and metalness maps; off disposes them from the GPU. `shadows` (default on) is realtime shadow maps. `graphicsMemory()` estimates GPU bytes in use: `framebufferMemory()` (drawing buffers, scales with window size) plus `sceneMemory()` (shadow maps, geometry, textures). `stats()` returns the last frame's draw calls and triangles, live geometry and texture counts, both memory parts, and `frameMS` (average over the last 30 s).
+`Renderer` creates the WebGL canvas, hemisphere + ambient fill, optional directional sun, fog, and shadows. It renders with the first **enabled** `Camera` in `world.objects`. `detailMaps` (default on) samples normal and metalness maps; off disposes them from the GPU. `shadows` is a `ShadowMode` run by `ShadowCache` (mixed cached shadow maps): every shadowed light keeps a still map of casters that hold still, rebaked only when one in its reach appears, moves, or goes, or when the light moves. Skinned meshes, what their bones hold, and anything in motion are moving casters until they settle. `off` disposes the maps; `static` samples the still maps, and skinned models cast soft capsule shadows instead (one upright capsule each from the bind pose, the 16 nearest the camera, blocking every point and directional light on `ToonMaterial` surfaces); `dynamic` (default) copies them into live maps each frame and draws only the moving casters on top, in the sun and the nearest `maxMovingShadows` busy point lights. The look-sun frames every still caster from a fixed direction. `pointShadowMapSize` (default 256) and `directionalShadowMapSize` (default 1024) are the map sides, clamped to the GPU's max texture size. `graphicsMemory()` estimates GPU bytes in use: `framebufferMemory()` (drawing buffers, scales with window size) plus `sceneMemory()` (shadow maps, geometry, textures). `stats()` returns the last frame's draw calls and triangles, live geometry and texture counts, both memory parts, and `frameMS` (average over the last 30 s). `frameMS(windowMS)` alone is cheap (no scene walk), for an FPS readout.
 
 | | |
 |--|--|
@@ -283,7 +283,6 @@ restoreWorld(rebuilt, save, (recipe) => spawn(rebuilt, recipe));
 | `Light` | `point` or `directional`. Local `offsetX/Y/Z` (Z along Kindling forward). |
 | `MeshRenderer` | Instantiates `meshID` from the registry; optional `color`, `shaderInserts`, `shaderUniforms`. |
 | `applyLook(look)` | Background, fog, exposure, hemi, fill, optional sun. |
-| `aimSun(x, z)` | Positions the look-sun over a ground point. |
 | `projectToCanvas` / `pickGround` | Screen projection and ground-plane picking. |
 
 `MeshRenderer` waits until `meshReady(meshID)`. Changing `meshID` rebuilds the mesh.

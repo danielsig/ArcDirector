@@ -80,10 +80,6 @@ export class WorldView extends Component {
 		this.present.detailMaps = renderer.detailMaps;
 		this.present.syncChunks(world);
 		this.present.mountGroundBox(world);
-		const player = world.findByID('Player');
-		if (player) {
-			renderer.aimSun(player.transform.position.x, player.transform.position.z);
-		}
 		const cam = renderer.findCamera();
 		if (cam) {
 			this.present.sync(world, cam.native);

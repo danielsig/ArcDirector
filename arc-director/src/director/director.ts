@@ -21,10 +21,10 @@ import type { MapSense } from '../mind/map.js';
 import type { KnowledgeSource } from '../mind/knowledge.js';
 import { buildCatalog, dummyEntity, type HostKernels } from '../expr/natives.js';
 import { freezeMe, type MeFreezeHost } from '../expr/prev.js';
-import { catalogEntities, evaluate, unboundCalls } from '../expr/eval.js';
+import { catalogEntities, evaluate, unboundCalls, type EvalResult } from '../expr/eval.js';
 import { parse } from '../expr/parse.js';
 import { watchScore } from '../expr/score.js';
-import { SampleCache, leftoverFilterHint, type Catalog, type ExprEntity, type ExprVal } from '../expr/types.js';
+import { ABSENT, ExprError, SampleCache, leftoverFilterHint, type Catalog, type ExprEntity, type ExprVal } from '../expr/types.js';
 import {
 	formatSight,
 	formatSightClauses,
@@ -41,7 +41,7 @@ import {
 	isFormationVerb,
 	type StockCollectiveVerb,
 } from '../collective/verbs.js';
-import { buildCollectiveCatalog, evaluateWho, lawMatches, usesCollective } from '../collective/who.js';
+import { buildCollectiveCatalog, evaluateWho, lawMatches, memberEntity, usesCollective } from '../collective/who.js';
 import { chatHandover, HANDOVER_THREAD, type Handover, type Journey, type MemoryEdit } from '../collective/handover.js';
 import { nameTags, type MemoryRecord } from '../memory/store.js';
 import {
@@ -563,6 +563,24 @@ ${dump.message}`, image: dump.image });
 	/** What the mind of character or collective `observerID` calls a character, for host-built text such as a sight `note`. */
 	public seen(observerID:string, target:NameTarget):string {
 		return (this.character(observerID) ?? this.collective(observerID))?.mind?.seen(target) ?? target.id;
+	}
+
+	/**
+	 * `expr` (watch syntax) as character `id` sees the world now, for host tools such as a camera that follows
+	 * `others.filter(u => doing(u, "cleave"))`. Every character in `others` carries its `busy` and `verb`.
+	 */
+	public evaluate(id:string, expr:string):EvalResult {
+		const runner = this.character(id);
+		const ctx = runner?.context();
+		if (!runner || ctx === undefined || !this._kernelFn) {
+			return { value: ABSENT, error: new ExprError(`${id} has no view of the world`) };
+		}
+		const kernels = this.kernelsFor(runner, ctx);
+		const others = kernels.others.map((e) => {
+			const other = this.character(e.id);
+			return other ? { ...e, fields: { ...e.fields, ...memberEntity(other, '').fields } } : e;
+		});
+		return evaluate(expr, buildCatalog({ ...kernels, others }));
 	}
 
 	public withInventory(look:(ctx:TCtx)=>Inventory):this {

@@ -182,7 +182,7 @@ const bloom = keep(new THREE.IcosahedronGeometry(0.045, 0));
 function flowerbed():PropPart[] {
 	const parts = [
 		at('planter', planter, wood),
-		at('planter-soil', box(0.64, 0.02, 0.28), soil, 0, 0.18, 0, 0, 0, 0, false),
+		at('planter-soil', box(0.64, 0.02, 0.28), soil, 0, 0.2, 0, 0, 0, 0, false),
 	];
 	const mounds = [[-0.22, 0.02], [-0.06, -0.06], [0.1, 0.05], [0.24, -0.03]] as const;
 	mounds.forEach(([x, z], i) => parts.push(at(`flower-leaf${i}`, leafMound, leaf, x, 0.22, z, 0, i, 0)));

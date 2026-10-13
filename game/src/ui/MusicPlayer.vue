@@ -24,7 +24,7 @@ const TITLES:Record<string, string> = {
 	menu_orch: 'Menu',
 	heros_path: "Hero's Path",
 	menu: 'Hymn',
-	dungeon_vault: 'Dungeon Vault',
+	dungeon_vault: 'Dungeon Crawl',
 	glen: 'River Glen',
 	marketplace: 'Marketplace',
 	heros_tale: "Hero's Tale",

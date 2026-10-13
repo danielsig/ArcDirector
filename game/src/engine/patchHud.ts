@@ -330,6 +330,10 @@ export function patchHud(
 	if (hud.statsOverlay || (hud.menuOpen && hud.menuPage === 'testing')) {
 		hud.renderStats = view.stats();
 	}
+	if (hud.fpsCounter) {
+		const ms = view.frameMS(1000);
+		hud.fps = ms > 0 ? Math.round(1000 / ms) : 0;
+	}
 	const input = player?.getComponent(PlayerInput);
 	hud.cursorName = input?.cursorName ?? '';
 	const loot = player ? nearestPickup(player) : null;

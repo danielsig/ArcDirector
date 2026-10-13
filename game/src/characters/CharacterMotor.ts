@@ -5,6 +5,7 @@ import { lerpAngle, yawToward } from '../engine/math';
 import { facePeer } from '../director/talkAttend';
 import { TILE_HEIGHT } from '../world/constants';
 import { cueAt, stepKind } from '../audio/cue';
+import { WALK_STRIDE } from './CharacterAnimation';
 import { NPCInput } from './NPCInput';
 import { PlayerInput } from './PlayerInput';
 import { PlayerPilot } from './PlayerPilot';
@@ -16,7 +17,8 @@ export class CharacterMotor extends Component {
 	public arriveEpsilon = 0.35;
 	public stepHeight = TILE_HEIGHT + 0.05;
 	public maxSpeed = 3.4;
-	private _stepPhase = 0.4;
+	/** Distance accumulated toward the next plant. Rests halfway, where a fresh `walk` clip plants. */
+	private _stepPhase = WALK_STRIDE / 2;
 	/** Seconds to ease body yaw toward WASD. Staggers A+S release so we keep ~8, not 6 or 9. */
 	private static readonly _faceTurn = 0.09;
 
@@ -100,14 +102,14 @@ export class CharacterMotor extends Component {
 		}
 		const speed = Math.hypot(rb.velocity.x, rb.velocity.z);
 		if (speed < 0.55) {
-			this._stepPhase = 0.35;
+			this._stepPhase = WALK_STRIDE / 2;
 			return;
 		}
 		this._stepPhase += speed * dt;
-		if (this._stepPhase < 1.55) {
+		if (this._stepPhase < WALK_STRIDE) {
 			return;
 		}
-		this._stepPhase %= 1.55;
+		this._stepPhase %= WALK_STRIDE;
 		const p = this.gameObject.transform.position;
 		cueAt(world, stepKind(world, p.x, p.z), this.gameObject, 0.52 + Math.random() * 0.22);
 	}

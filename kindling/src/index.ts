@@ -17,6 +17,7 @@ export { Camera } from './render/Camera.js';
 export { Light, type LightKind } from './render/Light.js';
 export { MeshRenderer } from './render/MeshRenderer.js';
 export { Renderer, type RendererLook, type RenderStats } from './render/Renderer.js';
+export { ShadowCache, type ShadowMode, type ShadowSettings } from './render/ShadowCache.js';
 export { OutlinePass } from './render/OutlinePass.js';
 export { ToonMaterial, toonRamp, type ToonMaterialParameters, type ToonPattern } from './render/ToonMaterial.js';
 export { bevelBox, blob, lathe, mergeParts, ribbon, tube, type PathPoint, type PosedPart, type ProfilePoint } from './render/meshKit.js';

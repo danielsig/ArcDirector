@@ -4,6 +4,7 @@ import type { Session } from '../engine/Session';
 import { coercePrefsPatch, prefs, setPrefs } from '../prefs';
 import { PlayerPilot } from '../characters/PlayerPilot';
 import { findObject } from '../director/names';
+import { CameraFocus } from '../engine/CameraFocus';
 
 export async function dispatchControl(session:Session, command:Command):Promise<unknown> {
 	switch (command.op) {
@@ -37,9 +38,26 @@ export async function dispatchControl(session:Session, command:Command):Promise<
 			const reconnect:ReconnectResult = { reconnect: true };
 			return reconnect;
 		}
+		case 'setCamera':
+			return setCamera(session, command.focus, command.zoom);
 		default:
 			throw new Error('unknown command');
 	}
+}
+
+/** Sets what the camera follows and how far back it sits; answers whom the focus picks now. */
+function setCamera(session:Session, focus?:string, zoom?:number):{ focus:string; picks:string[] | { error:string } } {
+	const camera = session.gameObject.getComponent(CameraFocus);
+	if (!camera) {
+		throw new Error('no camera focus in this scene');
+	}
+	if (focus !== undefined) {
+		camera.expr = focus.trim();
+	}
+	if (zoom !== undefined) {
+		camera.zoom = zoom;
+	}
+	return { focus: camera.expr, picks: camera.expr ? camera.picks() : [] };
 }
 
 function listCharacters(session:Session):CastRows {

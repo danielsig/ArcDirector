@@ -23,7 +23,7 @@ function waitFrame():Promise<void> {
 export function startMenuAudio(target:HTMLElement):MenuAudioHandle {
 	const audio = new Audio();
 	audio.musicVolume = 0;
-	audio.muted = prefs().menuMusicMuted;
+	audio.muted = prefs().musicMuted;
 	let begun = false;
 	let dead = false;
 	let arming:Promise<void> | null = null;

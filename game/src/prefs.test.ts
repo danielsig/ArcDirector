@@ -48,26 +48,26 @@ beforeEach(() => {
 
 describe('setPrefs', () => {
 	it('persist true writes storage', () => {
-		setPrefs({ observer: false });
-		assert.equal(stored().observer, false);
+		setPrefs({ player: 'participant' });
+		assert.equal(stored().player, 'participant');
 	});
 
 	it('persist false detaches the page: later changes stay in memory too', () => {
 		setPrefs({ model: 'probe' }, false);
-		setPrefs({ observer: false });
+		setPrefs({ player: 'participant' });
 		assert.equal(prefsDetached(), true);
 		assert.equal(prefs().model, 'probe');
-		assert.equal(prefs().observer, false);
+		assert.equal(prefs().player, 'participant');
 		assert.equal(store.has(KEY), false);
 	});
 
 	it('reload clears the detached mode and the memory-only values', () => {
-		setPrefs({ observer: false });
+		setPrefs({ player: 'participant' });
 		setPrefs({ model: 'probe' }, false);
 		reloadPrefs();
 		assert.equal(prefsDetached(), false);
 		assert.equal(prefs().model, '');
-		assert.equal(prefs().observer, false);
+		assert.equal(prefs().player, 'participant');
 	});
 
 	it('keeps the current value for an unusable field and drops unknown keys', () => {
@@ -91,6 +91,20 @@ describe('setPrefs', () => {
 		assert.equal(prefs().arcFormat, 'text');
 	});
 
+	it('defaults shadows to auto and keeps only known qualities', () => {
+		assert.equal(prefs().shadows, 'auto');
+		setPrefs({ shadows: 'high' });
+		assert.equal(stored().shadows, 'high');
+		assert.equal(setPrefs(coercePrefsPatch({ shadows: true })).shadows, 'high');
+		assert.equal(setPrefs(coercePrefsPatch({ shadows: 'off' })).shadows, 'off');
+	});
+
+	it('defaults the player to observer and keeps only known modes', () => {
+		assert.equal(prefs().player, 'observer');
+		setPrefs({ player: 'camera' });
+		assert.equal(setPrefs(coercePrefsPatch({ player: 'ghost' })).player, 'camera');
+	});
+
 	it('drops the old arcText and forceSchema prefs from storage', () => {
 		store.set(KEY, JSON.stringify({ arcText: true, forceSchema: true, music: 0.3 }));
 		reloadPrefs();
@@ -100,14 +114,14 @@ describe('setPrefs', () => {
 	});
 
 	it('tells watchers what changed', () => {
-		const seen:[boolean, boolean][] = [];
+		const seen:[string, string][] = [];
 		const stop = watchPrefs((next, prev) => {
-			seen.push([prev.observer, next.observer]);
+			seen.push([prev.player, next.player]);
 		});
-		setPrefs({ observer: false });
+		setPrefs({ player: 'participant' });
 		stop();
-		setPrefs({ observer: true });
-		assert.deepEqual(seen, [[true, false]]);
+		setPrefs({ player: 'observer' });
+		assert.deepEqual(seen, [['observer', 'participant']]);
 	});
 
 	it('snaps contextLength to a power-of-two step', () => {

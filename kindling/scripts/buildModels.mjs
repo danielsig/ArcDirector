@@ -25,14 +25,15 @@
 // textures packed into one atlas (up to twice the texture size), so it costs one draw call per pass. Rigged models get
 // `extras.toon.humanoid` (VRM bone name → node name) on the scene, so `humanBone` works.
 // All Mixamo-rigged models share one skeleton, so their clips go once into `<outDir>/clips.glb`
-// (rotations for every bone, position for the hips only, so clips fit any body). Models on another
+// (rotations for every bone, position for the hips only, so clips fit any body; the hips sway over
+// the planted foot, as Tripo exports pin them and slide the feet instead). Models on another
 // skeleton keep their own clips.
 import { mkdir, readFile, readdir, stat } from 'node:fs/promises';
 import { basename, join } from 'node:path';
 import { NodeIO } from '@gltf-transform/core';
 import { dedup, joinPrimitives, prune, resample, textureCompress } from '@gltf-transform/functions';
 import sharp from 'sharp';
-import { poseRetargeter } from '../dist/assets/retarget.js';
+import { poseRetargeter, qinv, qmul } from '../dist/assets/retarget.js';
 
 const [srcDir, outDir, configPath] = process.argv.slice(2);
 if (!srcDir || !outDir) {
@@ -42,6 +43,10 @@ if (!srcDir || !outDir) {
 const config = configPath ? JSON.parse(await readFile(configPath, 'utf8')) : {};
 const maxSize = config.textureSize ?? 1024;
 const MIXAMO = 'mixamorig:';
+/** Meters above a clip's lowest ankle within which a foot is on the ground (see `plantFeet`). */
+const GROUNDED = 0.04;
+/** Meters lower the other foot must get before the weight moves onto it. */
+const SHIFT = 0.01;
 
 /** VRM humanoid bone → Mixamo bone. */
 const HUMANOID = {
@@ -707,16 +712,60 @@ function inPlace(times, xyz) {
 	}
 }
 
-/** A rotation track's value at time `t` (normalized lerp between keys). */
-function sampleRotation(times, keys, t) {
+/**
+ * Tripo pins the hips on the ground (x, z), so a weight shift slides the feet under a still body.
+ * Moves the hips (`xyz`, one per key) so the foot bearing the weight (the lower one, while on the
+ * ground) stays put. `feet` holds both ankles' positions at each key.
+ */
+function plantFeet(xyz, feet) {
+	const ground = Math.min(...feet.flat().map((p) => p[1])) + GROUNDED;
+	let support = feet[0][0][1] < feet[0][1][1] ? 0 : 1;
+	let dx = 0;
+	let dz = 0;
+	for (let f = 1; f < feet.length; f++) {
+		if (feet[f][1 - support][1] < feet[f][support][1] - SHIFT) {
+			support = 1 - support;
+		}
+		const [before, now] = [feet[f - 1][support], feet[f][support]];
+		if (now[1] < ground) {
+			dx += before[0] - now[0];
+			dz += before[2] - now[2];
+		}
+		xyz[f * 3] += dx;
+		xyz[f * 3 + 2] += dz;
+	}
+}
+
+/** `node`'s position in the scene for one pose: `local` gives each node's rotation, the hips stand at `hips`. */
+function positionOf(node, local, hips) {
+	const chain = [];
+	for (let n = node; n; n = n.getParentNode()) {
+		chain.unshift(n);
+	}
+	let turn = [0, 0, 0, 1];
+	let at = [0, 0, 0];
+	for (const n of chain) {
+		const offset = n.getName() === `${MIXAMO}Hips` ? hips : n.getTranslation();
+		const moved = qmul(qmul(turn, [...offset, 0]), qinv(turn));
+		at = at.map((v, k) => v + moved[k]);
+		turn = qmul(turn, local(n));
+	}
+	return at;
+}
+
+/** A track's value at time `t`: a lerp between keys of `size` numbers; rotations (4) take the short way, normalized. */
+function sampleTrack(times, keys, t, size) {
 	let i = 0;
 	while (i < times.length - 1 && times[i + 1] <= t) {
 		i++;
 	}
 	const j = Math.min(i + 1, times.length - 1);
 	const u = j === i ? 0 : Math.min(1, Math.max(0, (t - times[i]) / (times[j] - times[i])));
-	const a = [keys[i * 4], keys[i * 4 + 1], keys[i * 4 + 2], keys[i * 4 + 3]];
-	const b = [keys[j * 4], keys[j * 4 + 1], keys[j * 4 + 2], keys[j * 4 + 3]];
+	const a = Array.from(keys.subarray(i * size, i * size + size));
+	const b = Array.from(keys.subarray(j * size, j * size + size));
+	if (size !== 4) {
+		return a.map((v, k) => v + (b[k] - v) * u);
+	}
 	const sign = a[0] * b[0] + a[1] * b[1] + a[2] * b[2] + a[3] * b[3] < 0 ? -1 : 1;
 	const q = a.map((v, k) => v + (sign * b[k] - v) * u);
 	const len = Math.hypot(...q) || 1;
@@ -745,19 +794,17 @@ function hipsHeight(doc) {
 
 /**
  * Copies `src`'s clips that `lib` lacks onto `lib`'s rig, retargeted; hips keep position (scaled to
- * `lib`'s hip height), other bones rotation only.
+ * `lib`'s hip height, moved over the planted foot, see {@link plantFeet}), other bones rotation only.
  */
 function addClips(lib, src) {
 	const libRoot = lib.getRoot();
 	const have = new Set(libRoot.listAnimations().map((a) => a.getName()));
 	const byName = new Map(libRoot.listNodes().map((n) => [n.getName(), n]));
+	const hips = byName.get(`${MIXAMO}Hips`);
+	const ankles = [byName.get(`${MIXAMO}LeftFoot`), byName.get(`${MIXAMO}RightFoot`)];
 	const buffer = libRoot.listBuffers()[0] ?? lib.createBuffer();
 	const retarget = poseRetargeter(rigOf(src), rigOf(lib));
 	const hipsScale = hipsHeight(lib) / hipsHeight(src);
-	const copy = (acc) => lib.createAccessor()
-		.setType(acc.getType())
-		.setArray(acc.getArray().slice())
-		.setBuffer(buffer);
 	for (const anim of src.getRoot().listAnimations()) {
 		const name = clipName(anim.getName());
 		if (have.has(name)) {
@@ -772,35 +819,36 @@ function addClips(lib, src) {
 			.map((c) => [c.getTargetNode().getName(), c.getSampler()]));
 		const times = [...tracks.values()].reduce((best, t) => (t.getInput().getCount() > best.length ? t.getInput().getArray() : best), []);
 		const retargeted = new Map([...tracks.keys()].map((bone) => [bone, new Float32Array(times.length * 4)]));
+		const hipsTrack = anim.listChannels()
+			.find((c) => c.getTargetPath() === 'translation' && c.getTargetNode().getName() === hips.getName())
+			?.getSampler();
+		const hipsKeys = new Float32Array(times.length * 3);
+		const feet = [];
 		times.forEach((t, f) => {
 			const pose = retarget((bone) => {
 				const sampler = tracks.get(bone);
-				return sampler && sampleRotation(sampler.getInput().getArray(), sampler.getOutput().getArray(), t);
+				return sampler && sampleTrack(sampler.getInput().getArray(), sampler.getOutput().getArray(), t, 4);
 			});
 			for (const [bone, keys] of retargeted) {
 				keys.set(pose.get(bone) ?? [0, 0, 0, 1], f * 4);
 			}
+			const at = hipsTrack
+				? sampleTrack(hipsTrack.getInput().getArray(), hipsTrack.getOutput().getArray(), t, 3).map((v) => v * hipsScale)
+				: hips.getTranslation();
+			hipsKeys.set(at, f * 3);
+			const local = (n) => (tracks.has(n.getName()) ? pose.get(n.getName()) : n.getRotation());
+			feet.push(ankles.map((ankle) => positionOf(ankle, local, at)));
 		});
-		for (const channel of anim.listChannels()) {
-			const node = byName.get(channel.getTargetNode()?.getName());
-			const path = channel.getTargetPath();
-			const keep = path === 'rotation' || (path === 'translation' && node?.getName() === `${MIXAMO}Hips`);
-			if (!node || !keep) {
+		plantFeet(hipsKeys, feet);
+		inPlace(times, hipsKeys);
+		const input = lib.createAccessor().setType('SCALAR').setArray(Float32Array.from(times)).setBuffer(buffer);
+		const keyed = [...retargeted].map(([bone, keys]) => [byName.get(bone), 'rotation', keys]);
+		for (const [node, path, keys] of [...keyed, [hips, 'translation', hipsKeys]]) {
+			if (!node) {
 				continue;
 			}
-			const s = channel.getSampler();
-			const output = copy(s.getOutput());
-			if (path === 'translation') {
-				output.setArray(output.getArray().map((v) => v * hipsScale));
-				inPlace(s.getInput().getArray(), output.getArray());
-			} else {
-				output.setArray(retargeted.get(node.getName()));
-			}
-			const input = path === 'rotation' ? lib.createAccessor().setType('SCALAR').setArray(Float32Array.from(times)).setBuffer(buffer) : copy(s.getInput());
-			const sampler = lib.createAnimationSampler()
-				.setInput(input)
-				.setOutput(output)
-				.setInterpolation(s.getInterpolation());
+			const output = lib.createAccessor().setType(path === 'rotation' ? 'VEC4' : 'VEC3').setArray(keys).setBuffer(buffer);
+			const sampler = lib.createAnimationSampler().setInput(input).setOutput(output).setInterpolation('LINEAR');
 			clip.addSampler(sampler).addChannel(lib.createAnimationChannel().setTargetNode(node).setTargetPath(path).setSampler(sampler));
 		}
 	}

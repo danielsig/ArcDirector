@@ -181,6 +181,7 @@ export {
 	FACING_COS,
 	type Catalog,
 	type ExprEntity,
+	type EvalResult,
 	type ExprVal,
 	type HostKernels,
 	type StringifierKind,

@@ -68,7 +68,6 @@ game.renderer?.applyLook({
 	sun: { color: 0xfff6d8, intensity: 2.65 },
 	ink: 0x2b1d12,
 });
-game.renderer?.aimSun(0, 0);
 
 const held = (['left', 'right'] as const).flatMap((hand) => {
 	const prop = params.get(hand);

@@ -1,4 +1,4 @@
-export { evaluate, builtins } from './eval.js';
+export { evaluate, builtins, type EvalResult } from './eval.js';
 export { parse } from './parse.js';
 export { lex } from './lex.js';
 export { buildCatalog, dummyEntity, type HostKernels } from './natives.js';

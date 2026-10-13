@@ -1,5 +1,5 @@
 import { Camera } from '@arc-director/kindling';
-import { Camera as FollowCamera, Appearance, RigidBody } from './components';
+import { Camera as FollowCamera, Appearance, BoxCollider, RigidBody } from './components';
 import { Component } from './Component';
 import { MeshRenderer } from './MeshRenderer';
 import { Order } from './order';
@@ -19,6 +19,7 @@ import {
 	setPrefs,
 	systemOneName,
 	watchPrefs,
+	type PlayerMode,
 	type Prefs,
 } from '../prefs';
 import {
@@ -36,8 +37,8 @@ import {
 } from './viewPersist';
 import {
 	applyURLView,
-	readURLView,
 	writeURLView,
+	type URLView,
 } from './urlView';
 import type { Hud, WorldStream, WorldView } from './systems';
 import { characterLabel, characterModel, characterOptions, resolvePlayerKind } from '../render/characterModels';
@@ -187,7 +188,7 @@ export class Session extends Component {
 		const slash = parseSlash(spoken.trim());
 		const help = !!slash?.ok && slash.verb === 'help';
 		if (spoken.trim() && !help) {
-			setPrefs({ observer: false });
+			setPrefs({ player: 'participant' });
 		}
 		playerSay(this.director, spoken);
 	}
@@ -342,8 +343,7 @@ export class Session extends Component {
 		this.gameObject.world?.input.requestLock();
 	}
 
-	public applyShotFromURL():void {
-		const shot = readURLView();
+	public applyShot(shot:URLView | null):void {
 		if (!shot) {
 			return;
 		}
@@ -428,14 +428,16 @@ export class Session extends Component {
 	private applyPrefs(next:Prefs, prev?:Prefs):void {
 		const changed = (key:keyof Prefs):boolean => !prev || prev[key] !== next[key];
 		const hud = this.hud;
-		hud.observer = next.observer;
+		hud.player = next.player;
 		hud.arcDirectorOn = next.ai;
 		hud.detailMaps = next.detailMaps;
 		hud.shadows = next.shadows;
+		hud.fpsCounter = next.fpsCounter;
 		hud.musicVolume = next.music;
 		hud.sfxVolume = next.sfx;
 		hud.voices = next.voices;
 		hud.audioMuted = next.muted;
+		hud.musicMuted = next.musicMuted;
 		hud.maxParallel = next.maxParallel;
 		hud.contextLength = next.contextLength;
 		hud.batchThinks = next.batchThinks;
@@ -467,11 +469,13 @@ export class Session extends Component {
 		}
 		const world = this.gameObject.world;
 		if (world) {
-			world.playerInperceivable = next.observer;
+			world.playerInperceivable = next.player !== 'participant';
 			world.arcDirectorOn = next.ai;
 		}
-		// Boot syncs the URL itself, after the `view` shot is applied.
-		if (prev && (changed('observer') || changed('ai'))) {
+		if (changed('player')) {
+			this.applyPlayerModeToBody(next.player);
+		}
+		if (changed('player') || changed('ai')) {
 			this.syncURLView();
 		}
 	}
@@ -561,6 +565,19 @@ export class Session extends Component {
 		const look = player?.getComponent(Appearance);
 		if (look) {
 			look.height = characterModel(resolved)?.height ?? look.height;
+		}
+	}
+
+	/** A camera player has no body: nothing to render, nothing to bump into. */
+	private applyPlayerModeToBody(mode:PlayerMode):void {
+		const player = this.gameObject.world?.findByID('Player');
+		if (!player) {
+			return;
+		}
+		player.transform.object3D.visible = mode !== 'camera';
+		const collider = player.getComponent(BoxCollider);
+		if (collider) {
+			collider.enabled = mode !== 'camera';
 		}
 	}
 }

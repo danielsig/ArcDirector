@@ -13,7 +13,7 @@ import { SCENES } from './data/scenes';
 import { clearURLView } from './engine/urlView';
 import { preloadArt } from './render/preloadArt';
 import { startMenuAudio, type MenuAudioHandle } from './audio/menu';
-import { prefs, setMenuMusicMuted, watchPrefs } from './prefs';
+import { prefs, setPrefs, watchPrefs } from './prefs';
 
 preloadArt();
 
@@ -27,7 +27,7 @@ const sceneID = ref<string | null>(
 );
 const picker = ref<HTMLElement | null>(null);
 const menuEl = ref<HTMLElement | null>(null);
-const menuMusicMuted = ref(prefs().menuMusicMuted);
+const musicMuted = ref(prefs().musicMuted);
 const menuHandle = shallowRef<MenuAudioHandle | null>(null);
 
 /** `public/main_menu_background.jpg` — 2560×1440. */
@@ -112,7 +112,7 @@ watch(picker, (el) => {
 	pickerObserver?.disconnect();
 	pickerObserver = null;
 	if (el) {
-		menuMusicMuted.value = prefs().menuMusicMuted;
+		musicMuted.value = prefs().musicMuted;
 		pickerObserver = new ResizeObserver(() => layoutPicker());
 		pickerObserver.observe(el);
 		layoutPicker();
@@ -121,7 +121,7 @@ watch(picker, (el) => {
 onMounted(() => {
 	layoutPicker();
 	stopPrefs = watchPrefs((p) => {
-		menuMusicMuted.value = p.menuMusicMuted;
+		musicMuted.value = p.musicMuted;
 		if (!sceneID.value) {
 			hud.musicVolume = p.music;
 		}
@@ -152,7 +152,7 @@ function kickLive():void {
 
 function onMenuMusicCheck(ev:Event):void {
 	const on = (ev.target as HTMLInputElement).checked;
-	menuHandle.value?.setMuted(setMenuMusicMuted(!on).menuMusicMuted);
+	menuHandle.value?.setMuted(setPrefs({ musicMuted: !on }).musicMuted);
 }
 
 function pick(id:string):void {
@@ -196,12 +196,12 @@ function leave():void {
 			<button type="button" @click="pick('ruins')">5v5 Combat</button>
 			<button type="button" @click="pick('marketplace')">Marketplace</button>
 			<button type="button" @click="pick('glen')">River Glen</button>
-			<button type="button" @click="pick('dungeon_vault')">Dungeon Vault</button>
+			<button type="button" @click="pick('dungeon_vault')">Dungeon Crawl</button>
 		</div>
 		<label class="music-toggle">
 			<input
 				type="checkbox"
-				:checked="!menuMusicMuted"
+				:checked="!musicMuted"
 				@change="onMenuMusicCheck"
 			>
 			<svg class="vol" viewBox="0 0 24 24" aria-hidden="true">

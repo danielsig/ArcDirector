@@ -10,10 +10,12 @@ import HudChat from './HudChat.vue';
 import HudAiLog from './HudAiLog.vue';
 import HudSay from './HudSay.vue';
 import HudMenu from './HudMenu.vue';
+import HudQuick from './HudQuick.vue';
 import HudBrief from './HudBrief.vue';
 import HudKeys from './HudKeys.vue';
 import HudToast from './HudToast.vue';
 import HudStats from './HudStats.vue';
+import HudFPS from './HudFPS.vue';
 
 defineProps<{
 	hud:HudModel;
@@ -38,9 +40,11 @@ const emit = defineEmits<{
 		<HudMinimap :hud="hud" />
 		<HudKeys :hud="hud" :sceneID="sceneID" />
 		<HudBrief :hud="hud" :sceneID="sceneID" />
+		<HudQuick :hud="hud" @scenes="emit('scenes')" />
 		<HudMenu :hud="hud" @scenes="emit('scenes')" />
 		<HudToast :hud="hud" />
 		<HudStats :hud="hud" />
+		<HudFPS :hud="hud" />
 	</div>
 </template>
 

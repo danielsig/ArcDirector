@@ -1267,6 +1267,34 @@ describe('withNames', () => {
 	});
 });
 
+describe('evaluate', () => {
+	it('evaluates an expression as a character sees the world, with what every other character is doing', async () => {
+		const director = await new ArcDirector<Ctx>()
+			.addFakeInference()
+			.addStockVerbs()
+			.withDefaultKit({ verbs: ['wait'] })
+			.withKernels((ctx) => ({
+				me: dummyEntity(ctx.id),
+				others: ['Ash', 'Nyx', 'Bo'].filter((id) => id !== ctx.id).map((id) => dummyEntity(id)),
+				items: [],
+			}))
+			.withContext((id) => ({ paragraph: scene(), id }))
+			.addCharacter({ id: 'Ash' })
+			.addCharacter({ id: 'Nyx' })
+			.addCharacter({ id: 'Bo' })
+			.start();
+		const ash = director.character('Ash')!;
+		void ash.enact(parseArc('wait(seconds=30)', ash.activeVerbs()));
+		await sleep(10);
+		const r = director.evaluate('Bo', 'others.filter(u => doing(u, "wait"))');
+		assert.equal(r.error, undefined);
+		assert.deepEqual(r.value.kind === 'list' ? r.value.value.map((v) => v.kind === 'entity' && v.value.id) : r.value, ['Ash']);
+		assert.match(director.evaluate('Nobody', 'others').error?.message ?? '', /Nobody/);
+		director.abortArc('Ash');
+		director.dispose();
+	});
+});
+
 describe('host verbs', () => {
 	it('hands handlers real ids from expressions, gates steps, and runs wait itself', async () => {
 		const went:unknown[] = [];

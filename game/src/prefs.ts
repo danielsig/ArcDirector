@@ -12,9 +12,22 @@ export const CONTEXT_LENGTHS = [2048, 4096, 8192, 16384, 32768, 65536, 131072] a
 export const MIN_CONTEXT_LENGTH = CONTEXT_LENGTHS[0];
 export const MAX_CONTEXT_LENGTH = CONTEXT_LENGTHS[CONTEXT_LENGTHS.length - 1];
 
+/** Who the player is: a character NPCs notice, one they never notice, or only a camera (no body to see or bump into). */
+export const PLAYER_MODES = ['participant', 'observer', 'camera'] as const;
+export type PlayerMode = (typeof PLAYER_MODES)[number];
+
 /** The System One behind `choose`: none, TypeSafe's Jev, or the local chat model scoring the choices. */
 export const SYSTEM_ONE_KINDS = ['off', 'jev', 'local'] as const;
 export type SystemOneKind = (typeof SYSTEM_ONE_KINDS)[number];
+
+/**
+ * Shadows: picked for this machine's speed (never Off), none, still-scene maps with soft capsule shadows standing in
+ * for characters, or realtime at 256 or 512 per side.
+ */
+export const SHADOW_QUALITIES = ['auto', 'off', 'simple', 'low', 'high'] as const;
+export type ShadowQuality = (typeof SHADOW_QUALITIES)[number];
+/** A quality the renderer runs: anything but `auto`. */
+export type ShadowTier = Exclude<ShadowQuality, 'auto'>;
 
 /** How NPC minds write an Arc (the library's `ArcFormat`): Arc text, Arc JSON, or JSON the server must follow. */
 export const ARC_FORMATS = ['text', 'json', 'schema'] as const;
@@ -26,16 +39,19 @@ export function systemOneName(kind:SystemOneKind):string | null {
 }
 
 const DEFAULT = {
-	observer: true,
+	player: 'observer' as PlayerMode,
 	ai: true,
 	detailMaps: true,
-	shadows: true,
+	shadows: 'auto' as ShadowQuality,
+	/** Frames per second in the top-right corner. */
+	fpsCounter: false,
 	music: 0,
 	sfx: 0.78,
 	/** Characters babble when they speak. */
 	voices: true,
 	muted: false,
-	menuMusicMuted: false,
+	/** Music off in the scene picker and in scenes alike; its volume is kept. */
+	musicMuted: false,
 	musicPlayerOpen: false,
 	model: '',
 	playerKind: '',
@@ -56,15 +72,16 @@ type PrefsWatch = (next:Prefs, prev:Prefs)=>void;
 
 /** How each field is read from untrusted input. `fallback` is the value kept when `v` is unusable. */
 const FIELDS:{ [K in keyof Prefs]:(v:unknown, fallback:Prefs[K])=>Prefs[K] } = {
-	observer: bool,
+	player: (v, fallback) => PLAYER_MODES.find((mode) => mode === v) ?? fallback,
 	ai: bool,
 	detailMaps: bool,
-	shadows: bool,
+	shadows: (v, fallback) => SHADOW_QUALITIES.find((q) => q === v) ?? fallback,
+	fpsCounter: bool,
 	music: clamp01,
 	sfx: clamp01,
 	voices: bool,
 	muted: bool,
-	menuMusicMuted: bool,
+	musicMuted: bool,
 	musicPlayerOpen: bool,
 	model: str,
 	playerKind: str,
@@ -155,25 +172,18 @@ export function setPrefs(patch:Partial<Prefs>, persist = true):Prefs {
 	return { ...next };
 }
 
-/** URL query wins when present; otherwise stored observer/ai (both default on). */
-export function flagsFromURL(url:{ observer?:boolean; ai?:boolean }):Pick<Prefs, 'observer' | 'ai'> {
+/** URL query wins when present; otherwise the stored player mode (default observer) and ai (default on). */
+export function flagsFromURL(url:{ player?:PlayerMode; ai?:boolean }):Pick<Prefs, 'player' | 'ai'> {
 	const p = prefs();
 	return {
-		observer: url.observer ?? p.observer,
+		player: url.player ?? p.player,
 		ai: url.ai ?? p.ai,
 	};
 }
 
-export function setMenuMusicMuted(muted:boolean):Prefs {
-	return setPrefs({
-		menuMusicMuted: muted,
-		music: muted ? 0 : prefs().music,
-	});
-}
-
-/** Turning music up also unmutes the scene-picker music. */
+/** Turning music up also unmutes it. */
 export function setMusicVolume(music:number):Prefs {
-	return setPrefs(music > 0 ? { music, menuMusicMuted: false } : { music });
+	return setPrefs(music > 0 ? { music, musicMuted: false } : { music });
 }
 
 export function contextLabel(n:number):string {
