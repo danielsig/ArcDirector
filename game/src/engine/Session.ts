@@ -470,7 +470,8 @@ export class Session extends Component {
 			world.playerInperceivable = next.observer;
 			world.arcDirectorOn = next.ai;
 		}
-		if (changed('observer') || changed('ai')) {
+		// Boot syncs the URL itself, after the `view` shot is applied.
+		if (prev && (changed('observer') || changed('ai'))) {
 			this.syncURLView();
 		}
 	}
