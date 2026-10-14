@@ -668,13 +668,17 @@ export function spawnRaven(world:World, id:string, x:number, z:number, yaw = 0):
 	world.add(go);
 }
 
-export function spawnCamera(world:World):void {
+/** The main camera behind the player, `distance` meters back (the camera's default when unset). */
+export function spawnCamera(world:World, distance?:number):void {
 	if (world.findByID('MainCamera')) {
 		return;
 	}
 	const player = world.findByID('Player');
 	const go = new GameObject('MainCamera', 'Camera');
 	const cam = go.addComponent(Camera, { targetID: 'Player' });
+	if (distance !== undefined) {
+		cam.distance = distance;
+	}
 	if (player) {
 		cam.yaw = player.transform.yaw;
 		cam.orbitYaw = player.getComponent(PlayerInput)?.lookYaw ?? player.transform.yaw;

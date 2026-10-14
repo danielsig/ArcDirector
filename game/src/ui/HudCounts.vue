@@ -17,7 +17,7 @@ defineProps<{
 .hud-counts {
 	position: absolute;
 	top: 62px;
-	left: 62px;
+	left: 110px;
 	font-family: var(--font);
 	font-size: 20px;
 	font-weight: 700;

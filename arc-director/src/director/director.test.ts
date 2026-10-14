@@ -3,7 +3,8 @@ import { describe, it } from 'node:test';
 import { STOCK_MOVE_VERBS, STOCK_VERBS } from '../arc/stock-verbs.js';
 import { goToNamedInteractable } from '../inference/fake.js';
 import { buildCatalog, dummyEntity } from '../expr/natives.js';
-import { choiceState, namesIn, targetNotes, withTargets } from '../character/choice.js';
+import { evaluate } from '../expr/eval.js';
+import { choicePrompt, choiceState, namesIn, targetNotes, withTargets } from '../character/choice.js';
 import { benchSystemOne, type DecisionCase } from '../character/bench.js';
 import { parseArcText } from '../arc/parse.js';
 import { VerbRegistry, registerStockVerbs } from '../arc/stock-verbs.js';
@@ -1538,6 +1539,24 @@ describe('choose', () => {
 		const aimed = withTargets(parseArcText('go_to(others.minBy(u => distance(me, u)))', verbs), verbs, catalog);
 		assert.equal(aimed?.[0].args.target, 'Wim');
 		assert.equal(withTargets(parseArcText('go_to(others.filter("dragon").minBy(u => u.hp))', verbs), verbs, catalog), undefined, 'picks no one: cannot run now');
+	});
+
+	it('leaves out a choice whose first verb is cooling down, and reads isReady in expressions', () => {
+		const catalog = buildCatalog({
+			me: dummyEntity('Guard'),
+			others: [],
+			items: [],
+			cache: new SampleCache(),
+			isReady: (_who, verb) => (verb === 'wait' ? false : undefined),
+		});
+		const verbs = registerStockVerbs(new VerbRegistry());
+		const choices = { rest: parseArcText('wait()', verbs), walk: parseArcText('go_to(Keep)', verbs) };
+		assert.deepEqual(Object.keys(choicePrompt({ id: 'Guard', verb: '', catalog, choices, verbs })!.criteria), ['walk']);
+		assert.equal(choicePrompt({ id: 'Guard', verb: '', catalog, choices: { rest: choices.rest }, verbs }), undefined, 'none ready: none can run');
+		assert.deepEqual(evaluate('[isReady(me, "wait"), isReady("go_to")]', catalog).value, {
+			kind: 'list',
+			value: [{ kind: 'bool', value: false }, { kind: 'bool', value: true }],
+		});
 	});
 
 	it('benches a System One per skill, each case in both orders, so a slot favorite scores half', async () => {

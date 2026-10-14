@@ -73,7 +73,7 @@ export function spawnScene(world:World, scene:SceneDef):ReturnType<typeof decode
 		spawnNPC(world, (decodedByID.get(npc.chunkID) ?? startDecoded).chunk, npc);
 	}
 	scene.ravens?.forEach((r, i) => spawnRaven(world, `Raven${i + 1}`, r.x, r.z, r.yaw));
-	spawnCamera(world);
+	spawnCamera(world, scene.zoom);
 	return decoded;
 }
 
@@ -153,16 +153,16 @@ export class Game extends KindlingGame<World> {
 		this.session.homePose = this.session.readPose() ?? this.session.homePose;
 		const save = readSave(this._scene.id);
 		this._hud.savedUTC = save?.savedUTC ?? '';
-		if (save && this._hud.loading) {
+		if (save && this._hud.bootFrom === 'save') {
 			this.session.restore(save);
 		}
-		else {
+		else if (this._hud.bootFrom === 'pose') {
 			const pose = loadViewPose(this._scene.id);
 			if (pose) {
 				this.session.applyPose(pose);
 			}
 		}
-		this._hud.loading = false;
+		this._hud.bootFrom = 'pose';
 		this.session.applyShot(shot);
 		if (camera.zoom !== undefined) {
 			focus.zoom = camera.zoom;

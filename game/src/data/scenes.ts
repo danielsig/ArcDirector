@@ -70,6 +70,8 @@ export type SceneDef = {
 	ravens?:{ x:number; z:number; yaw?:number }[];
 	/** World `x`, `z` the main-menu backdrop's camera circles (`Showcase`); the player's start when unset. */
 	orbit?:{ x:number; z:number };
+	/** Camera distance from the player at the start, in meters; the camera's default when unset. */
+	zoom?:number;
 	/** Player stays centered and the chunk-sized map scrolls. `false` = current chunk, moving arrow. */
 	minimapFollow?:boolean;
 	createDirector:(host:GameHost)=>ArcDirector<CharacterCtx>;
@@ -388,6 +390,8 @@ export const RUINS:SceneDef = {
 	ravens: [{ x: 15.5, z: 3.5, yaw: 2.4 }, { x: 16.4, z: 4.1 }],
 	// The middle of the 2×2 map: the sanctum and its dais.
 	orbit: { x: 16, z: 16 },
+	// Back far enough to see both parties from the start, south of the dais.
+	zoom: 15.5,
 	ambient: 'Two parties fight to the death in a ruined forest temple. No quarter.',
 	keys: [...SCENE_KEYS, ...SWORD_KEYS],
 	brief: `Dawn and Dusk are the two captains. Each leads a squad of five: a knight, a swordsman, an archer, a witch, and the captain, who also heals. Both sides are trying to kill the other. Nobody has a scripted attack.

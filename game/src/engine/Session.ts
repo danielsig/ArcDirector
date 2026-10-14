@@ -220,9 +220,15 @@ export class Session extends Component {
 			this.hud.menuNotice = 'No save';
 			return false;
 		}
-		this.hud.loading = true;
+		this.hud.bootFrom = 'save';
 		this.hud.boots += 1;
 		return true;
+	}
+
+	/** Boot a fresh Game with the player at the scene's spawn. */
+	public restart():void {
+		this.hud.bootFrom = 'spawn';
+		this.hud.boots += 1;
 	}
 
 	/** Apply `save` to the scene just built. Minds restore when ArcDirector starts. */

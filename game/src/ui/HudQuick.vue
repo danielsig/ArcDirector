@@ -1,6 +1,7 @@
 <script setup lang="ts">
-import { computed } from 'vue';
+import { computed, inject } from 'vue';
 import type { HudModel } from './hudModel';
+import { sessionKey } from './sessionKey';
 import { setPrefs } from '../prefs';
 
 const props = defineProps<{
@@ -10,6 +11,8 @@ const props = defineProps<{
 const emit = defineEmits<{
 	scenes: [];
 }>();
+
+const session = inject(sessionKey);
 
 /** What the sound button shows: everything on, music muted, or everything muted. */
 const sound = computed(() => (props.hud.audioMuted ? 'muted' : props.hud.musicMuted ? 'music-muted' : 'on'));
@@ -47,6 +50,21 @@ function cycleSound():void {
 		>
 			<svg viewBox="0 0 24 24" aria-hidden="true">
 				<path fill="currentColor" d="M20 11H7.8l5.6-5.6L12 4l-8 8 8 8 1.4-1.4L7.8 13H20z" />
+			</svg>
+		</button>
+		<button
+			type="button"
+			class="quick-btn back restart"
+			:class="{ away: hud.menuOpen }"
+			aria-label="Restart scene"
+			title="Restart scene"
+			@click.stop="session?.restart()"
+		>
+			<svg viewBox="0 0 24 24" aria-hidden="true">
+				<path
+					fill="currentColor"
+					d="M12 5V1L7 6l5 5V7a5 5 0 1 1-5 5H5a7 7 0 1 0 7-7z"
+				/>
 			</svg>
 		</button>
 		<button
@@ -105,10 +123,15 @@ function cycleSound():void {
 }
 
 .back {
-	left: 14px;
+	top: 10px;
+	left: 10px;
 	right: auto;
 	width: 40px;
 	height: 40px;
+}
+
+.restart {
+	left: 58px;
 }
 
 .quick-btn svg {

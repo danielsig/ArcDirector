@@ -134,9 +134,9 @@ export type HudModel = {
 	menuNotice:string;
 	/** When this scene was last saved (ISO). Empty when there is no save. */
 	savedUTC:string;
-	/** The next Game loads this scene's save. */
-	loading:boolean;
-	/** Bump to boot a new Game (load). */
+	/** Where the next Game starts: the autosaved pose, this scene's save (load), or the scene's spawn (restart). */
+	bootFrom:'pose' | 'save' | 'spawn';
+	/** Bump to boot a new Game (load, restart). */
 	boots:number;
 	/** Who the player is: participant, observer (unnoticed by NPCs) or camera (no body). Default observer. */
 	player:PlayerMode;
@@ -248,7 +248,7 @@ export function emptyHud():HudModel {
 		menuPage: 'testing',
 		menuNotice: '',
 		savedUTC: '',
-		loading: false,
+		bootFrom: 'pose',
 		boots: 0,
 		player: p.player,
 		arcDirectorOn: p.ai,

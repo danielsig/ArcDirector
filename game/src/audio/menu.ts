@@ -43,11 +43,10 @@ export function startMenuAudio(target:HTMLElement):MenuAudioHandle {
 		if (dead) {
 			return;
 		}
-		if (begun) {
-			void audio.resume();
-			return;
-		}
-		if (arming) {
+		// Every gesture resumes: a context made before the first gesture stays suspended, and the arming below
+		// waits on its resume until one of these does.
+		void audio.resume();
+		if (begun || arming) {
 			return;
 		}
 		arming = (async () => {

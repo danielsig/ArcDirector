@@ -4,7 +4,7 @@ import { CharacterMotor } from '../../characters/CharacterMotor';
 import { Celebrating } from '../../engine/components';
 import type { GameHost, CharacterCtx } from '../adapter';
 import { addFightVerbs } from '../verbs';
-import { ATTACKS, BACK_STANDOFF, FIGHT_WALK, SPELL_RANGE, attackVerbFor, formatFightRules, seenInFight } from '../fight';
+import { ATTACKS, BACK_STANDOFF, BLOCK, FIGHT_WALK, SPELL_RANGE, attackVerbFor, formatFightRules, seenInFight } from '../fight';
 import { idOf, findObject, isLiving } from '../names';
 
 /** What a party's mind may write. */
@@ -15,14 +15,6 @@ const FIGHT:Kit = {
 
 /** Nearest living Healer of the unit's own party. A bare `Healer` is a tag, not a name anyone sees. */
 const ALLY_HEALER = 'others.filter(u => u is "Healer" && !(u is "enemy")).minBy(u => distance(me, u))';
-
-const WOUNDED_LAW = {
-	name: 'wounded',
-	who: 'units',
-	watch: `isHurt(me) && some(allUnits.filter("Healer")) && !isNear(me, allUnits.filter("Healer"), ${SPELL_RANGE})`,
-	arc: `go_to(${ALLY_HEALER})`,
-	pinned: true,
-};
 
 const MEND_LAW = {
 	name: 'mend',
@@ -56,12 +48,14 @@ const RANK_LAW = {
 	pinned: true,
 };
 
-const PARTY_LAWS = [WOUNDED_LAW, MEND_LAW, GUARD_LAW, STRIKE_LAW, RANK_LAW];
+const PARTY_LAWS = [MEND_LAW, GUARD_LAW, STRIKE_LAW, RANK_LAW];
 
 /** Only while reasoning is off. With it on, the library's own think line stands. */
 const NO_THINK = 'IMPORTANT! DO NOT THINK! RESPOND IMMEDIATELY! Thinking is dangerous. The enemy is very likely already killing your units while you think. Do not wait for another think.';
 
 const NEAREST = 'others.filter("enemy").minBy(u => distance(me, u))';
+/** The nearest enemy close enough to block, or no one: a `block` choice only exists while it pays. */
+const CLOSE_ENEMY = `others.filter(u => u is "enemy" && distance(me, u) < ${BLOCK.near}).minBy(u => distance(me, u))`;
 /** The most hurt ally, or no one: `guard` only exists while someone needs it. */
 const HURT_ALLY = 'others.filter(u => !(u is "enemy") && isHurt(u)).minBy(u => u.hp)';
 
@@ -77,10 +71,11 @@ function lowestInReach(verb:string):string {
  */
 function roleChoice(role:'Knight' | 'Blade' | 'Archer' | 'Witch'):StandingChoice {
 	if (role === 'Knight') {
-		return { goal: 'Hold the line: hit the nearest; guard a hurt ally', nearest: `cleave(${NEAREST})`, guard: `protect(${HURT_ALLY})` };
+		return { goal: 'Hold the line: hit the nearest; guard a hurt ally; block one up close', nearest: `cleave(${NEAREST})`, guard: `protect(${HURT_ALLY})`, block: `block(${CLOSE_ENEMY})` };
 	}
 	const verb = attackVerbFor(role)!;
-	return { goal: 'Kill fast: finish the lowest hp in reach', finish: `${verb}(${lowestInReach(verb)})`, nearest: `${verb}(${NEAREST})` };
+	const block = role === 'Blade' ? { block: `block(${CLOSE_ENEMY})` } : {};
+	return { goal: 'Kill fast: finish the lowest hp in reach', finish: `${verb}(${lowestInReach(verb)})`, nearest: `${verb}(${NEAREST})`, ...block };
 }
 
 /** A change of tactics in the units' own idiom, laid out as blocks. Gemma copies this; keep it short. */
@@ -94,16 +89,6 @@ issue(
 			finish=shoot(${lowestInReach('shoot')}),
 		),
 	),
-)
-issue(
-	who=units.filter("Knight"),
-	arc=loop(
-		choose(
-			"Peel for our Healer",
-			peel=protect(${ALLY_HEALER}),
-			nearest=cleave(${NEAREST}),
-		),
-	),
 )`;
 
 /** Standing 5v5 doctrine. Every name here is one the commander really sees. */
@@ -114,6 +99,7 @@ const FIGHT_DOCTRINE = [
 	`Never a weak allUnits. Optional:\nlaw(\n\twho=units,\n\twatch=me.hp/me.maxHP<0.25,\n\tarc=go_to(${ALLY_HEALER}),\n\tname=lastStand,\n)\n`,
 	'Arrows need a clear line of sight past pillars, trees, walls, and other characters; spells (hex, heal) through cover are weaker. Flank around cover for a better view of the target.',
 	'protect(target?) stands between an ally and the threat, then attacks that threat. Peeling is also protect: when a rival isNear a precious ally, attack that same rival.',
+	`Knight and Blade block when protecting: give them a block choice beside protect, for an enemy up close or attacking, like guard=block(${CLOSE_ENEMY}). Block has a cooldown; never loop it alone.`,
 ].join(' ');
 
 /** Scene facts only: stats, what each pinned law does, and what the enemy looks like. Doctrine is {@link FIGHT_DOCTRINE}. */
@@ -127,7 +113,7 @@ function partyStory(party:string):MemoryDraft {
 		'Flank with spread, circle, or go_to a Pillar, Tree or Boulder so shoot has a clear view.',
 		'A program that ends hands the unit back to its laws. Inside the issued arc, && is the next step after success (the hit landed or the foe is down). loop the chain. Each issue is its own block — never && between issue().',
 		'If someone is almost dead and under fire they are probably down — do not program around that snapshot.',
-		'Hurt troops already have law wounded: out of heal range of a Healer, they walk to yours until they are in range, then they keep fighting. You already have mend: heal() loops Knight, then yourself, then Captain, then the rest — only while you are a Healer and no rival is in knife range. Guard protect()s whoever is hurt while a Healer lives: the Knight screens them and attacks that threat, then goes back to their program. Strike is attack() with your tag when you are not a Healer. Rank holds you behind the Knight and Blade, clear of knife range. If a rival is close, rank() away — do not heal or smite in a scrum. Keep wounded, mend, guard, strike, and rank. Never unlaw them.',
+		'You already have mend: heal() walks you into range of the hurt and loops Knight, then yourself, then Captain, then the rest — only while you are a Healer and no rival is in knife range. Guard protect()s whoever is hurt while a Healer lives: the Knight screens them and attacks that threat, then goes back to their program. Strike is attack() with your tag when you are not a Healer. Rank holds you behind the Knight and Blade, clear of knife range. If a rival is close, rank() away — do not heal or smite in a scrum. Keep mend, guard, strike, and rank. Never unlaw them.',
 		`smite, heal, attack(), and rank() are yours as commander. smite reaches ${ATTACKS.smite!.range}m — never walk in for it while a Knight or Blade lives. heal from ${SPELL_RANGE}m like hex. Never go_to an enemy. Never issue heal, attack, or rank. Issue smite only to a Witch: slow and heavy, for a foe already within ${ATTACKS.smite!.range}m.`,
 	].join(' ');
 	return { text, tags: ['backstory', party], pinned: true };

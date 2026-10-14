@@ -59,8 +59,8 @@ const DEFAULT = {
 	contextLength: 16384,
 	batchThinks: true,
 	thinkingBudget: true,
-	arcFormat: 'json' as ArcFormatPref,
-	systemOne: 'off' as SystemOneKind,
+	arcFormat: 'schema' as ArcFormatPref,
+	systemOne: 'local' as SystemOneKind,
 	/** The local System One's model id: a chat model scored, or a decision model. Empty: the main model. */
 	decisionModel: '',
 	aiLogSource: '',

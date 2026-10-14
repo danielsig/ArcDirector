@@ -219,7 +219,7 @@ export function addFightVerbs(director:Director, host:GameHost):Director {
 		})
 		.addVerb('block', {
 			args: { target: 'id?' },
-			help: 'guard up against them (or the nearest enemy) for a moment',
+			help: `guard up ${BLOCK.seconds}s against them (or the nearest enemy), then ${BLOCK.cooldown}s to ready again; only when an enemy is within ${BLOCK.near}m or attacking you or whom you protect`,
 			handler: (call) => doBlock(host, call, call.args.target ?? ''),
 		})
 		.addVerb('heal', {
@@ -406,6 +406,9 @@ async function doAttack(host:GameHost, call:Call, verb:string, name:string, lock
 			reason: name.trim() ? `no such person ${name}` : 'no one to attack',
 		};
 	}
+	if (!isRival(host, ctx.character, target)) {
+		return { ok: false, verb: attack.name, reason: `${idOf(target)} is not an enemy` };
+	}
 	const dest = idOf(target);
 	const weapon = heldWeapon(ctx.character);
 	const melee = !attack.spec.cover;
@@ -544,12 +547,19 @@ function strikeHome(host:GameHost, ctx:CharacterCtx, attack:{ name:string; spec:
 	};
 }
 
-/** Guard up against `name` (or the nearest rival) for {@link BLOCK}'s seconds, facing them. */
+/**
+ * Guard up against `name` (or the nearest rival) for {@link BLOCK}'s seconds, facing them. A guard just lowered
+ * refuses at once instead of waiting out its cooldown, so the program moves on to its next choice.
+ */
 async function doBlock(host:GameHost, call:Call, name:string):Promise<ArcResult> {
 	const { ctx } = call;
 	const role = fightRole(host, ctx.character);
 	if (role && !BLOCK.roles.includes(role)) {
 		return { ok: false, verb: 'block', reason: `only a ${BLOCK.roles.join(' or ')} can block` };
+	}
+	const cool = ctx.npc.blockReadyTimestamp - Time.time;
+	if (cool > 0) {
+		return { ok: false, verb: 'block', reason: `guard ready in ${Math.ceil(cool)}s` };
 	}
 	const threat = name.trim() ? otherCharacter(ctx, name) : nearestRival(host, ctx.character);
 	if (name.trim() && !threat) {
@@ -564,6 +574,7 @@ async function doBlock(host:GameHost, call:Call, name:string):Promise<ArcResult>
 	const held = await call.wait(BLOCK.seconds);
 	guard.lower();
 	ctx.character.getComponent(CharacterPose)?.guard(0);
+	ctx.npc.blockReadyTimestamp = Time.time + BLOCK.cooldown;
 	if (!held.ok) {
 		return { ...held, verb: 'block' };
 	}

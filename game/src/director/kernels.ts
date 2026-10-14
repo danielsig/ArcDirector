@@ -19,6 +19,7 @@ import {
 	alarmActive,
 } from '../engine/components';
 import type { World } from '../engine/World';
+import { NPCInput } from '../characters/NPCInput';
 import { Pickupable } from '../items/components';
 import { listCarried } from '../items/inventory';
 import type { ItemInstance } from '../items/instance';
@@ -225,6 +226,7 @@ export function kernelsOf(
 			}
 			return undefined;
 		},
+		isReady: (who:ExprEntity, verb:string) => lookupGo(world, who.id)?.getComponent(NPCInput)?.isReady(verb),
 		stringifiers: EXPR_STRINGIFIERS,
 		hostFns: {
 			isInside: (args:ExprVal[], kctx:{ catalog:{ me:ExprEntity } }) => {

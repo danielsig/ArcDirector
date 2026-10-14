@@ -78,15 +78,15 @@ describe('setPrefs', () => {
 		assert.equal('bogus' in stored(), false);
 	});
 
-	it('defaults System One off and the Arc format to json, and keeps only known kinds and formats', () => {
-		assert.equal(prefs().systemOne, 'off');
-		assert.equal(prefs().arcFormat, 'json');
-		setPrefs({ systemOne: 'jev', arcFormat: 'schema' });
+	it('defaults System One to local and the Arc format to schema, and keeps only known kinds and formats', () => {
+		assert.equal(prefs().systemOne, 'local');
+		assert.equal(prefs().arcFormat, 'schema');
+		setPrefs({ systemOne: 'jev', arcFormat: 'json' });
 		assert.equal(stored().systemOne, 'jev');
-		assert.equal(stored().arcFormat, 'schema');
+		assert.equal(stored().arcFormat, 'json');
 		const next = setPrefs(coercePrefsPatch({ systemOne: 'gpt', arcFormat: 'yaml' }));
 		assert.equal(next.systemOne, 'jev');
-		assert.equal(next.arcFormat, 'schema');
+		assert.equal(next.arcFormat, 'json');
 		assert.equal(setPrefs(coercePrefsPatch({ systemOne: 'local', arcFormat: 'text' })).systemOne, 'local');
 		assert.equal(prefs().arcFormat, 'text');
 	});
@@ -108,7 +108,7 @@ describe('setPrefs', () => {
 	it('drops the old arcText and forceSchema prefs from storage', () => {
 		store.set(KEY, JSON.stringify({ arcText: true, forceSchema: true, music: 0.3 }));
 		reloadPrefs();
-		assert.equal(prefs().arcFormat, 'json');
+		assert.equal(prefs().arcFormat, 'schema');
 		assert.equal(prefs().music, 0.3);
 		assert.equal('arcText' in prefs(), false);
 	});

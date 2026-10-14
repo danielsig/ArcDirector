@@ -37,6 +37,8 @@ export type HostKernels = {
 	inventory?:(who:ExprEntity)=>ExprEntity[];
 	hp?:(who:ExprEntity)=>{ hp:number; maxHP:number } | undefined;
 	isOpen?:(who:ExprEntity)=>boolean | undefined;
+	/** Whether `who` may `verb` now, its cooldown over; undefined (ready) for a verb with none. A `choose` leaves out a choice whose first verb is not ready. */
+	isReady?:(who:ExprEntity, verb:string)=>boolean | undefined;
 	/** Director fills from unabsorbed `HeardSpeech`. Standalone `buildCatalog` may set it. */
 	hasHeard?:boolean;
 	/** Last-think freeze. Director injects; standalone may omit (then `prev.me` is this catalog's `me`). */
@@ -217,6 +219,9 @@ export function buildCatalog(host:HostKernels):Catalog {
 	}
 	if (host.isOpen) {
 		bindOpen(host, fns);
+	}
+	if (host.isReady) {
+		bindReady(host, fns);
 	}
 	bindBusy(fns);
 	for (const [k, fn] of Object.entries(host.hostFns ?? {})) {
@@ -583,6 +588,19 @@ function bindOpen(host:HostKernels, fns:Map<string, NativeFn>):void {
 		const v = !!read(who);
 		const prev = host.cache.rememberOpen(who.id, v);
 		return { kind: 'bool', value: v && prev === false };
+	});
+}
+
+/** `isReady(me, "block")`, or `isReady("block")` for `me`: the verb's cooldown is over. */
+function bindReady(host:HostKernels, fns:Map<string, NativeFn>):void {
+	const read = host.isReady!;
+	fns.set('isReady', (args) => {
+		const who = args[0]?.kind === 'entity' ? args[0].value : host.me;
+		const verb = args.at(-1);
+		if (verb?.kind !== 'string') {
+			throw new ExprError('isReady needs a verb, as isReady(me, "block")');
+		}
+		return { kind: 'bool', value: read(who, verb.value) ?? true };
 	});
 }
 

@@ -2,7 +2,7 @@ import { evaluate } from '../expr/eval.js';
 import { entityName, type Catalog, type ExprEntity } from '../expr/types.js';
 import { argBase, type VerbRegistry } from '../arc/stock-verbs.js';
 import { formatArc } from '../arc/parse.js';
-import { eachStep, isArc, isCountMap, verbsInside, type Arc, type Step } from '../arc/types.js';
+import { eachStep, firstStep, isArc, isCountMap, verbsInside, type Arc, type Step } from '../arc/types.js';
 import type { LastChoice } from '../arc/run.js';
 
 /** What a System One model reads before it picks: who is choosing, what it is doing, and who is nearest. */
@@ -27,14 +27,14 @@ export type ChoicePrompt = { state:string; criteria:Record<string, string> };
 /**
  * The System One question for `choices`, exactly as the director asks it. Each choice reads as whom it is about now
  * ({@link withTargets}), with their health and distance beside it ({@link targetNotes}). A choice whose target
- * expression picks no one is left out, and one that would do the same as an earlier choice is folded into it.
+ * expression picks no one, or whose first verb is cooling down ({@link isReady}), is left out, and one that would do the same as an earlier choice is folded into it.
  * Undefined when no choice can run now.
  */
 export function choicePrompt({ choices, verbs, ...input }:ChoicePromptInput):ChoicePrompt | undefined {
 	const { catalog } = input;
 	const all = Object.entries(choices);
 	const able = all.flatMap(([name, arc]):[string, Arc][] => {
-		const aimed = catalog ? withTargets(arc, verbs, catalog) : arc;
+		const aimed = catalog ? isReady(arc, catalog) && withTargets(arc, verbs, catalog) : arc;
 		return aimed ? [[name, aimed]] : [];
 	});
 	if (catalog && able.length === 0) {
@@ -133,6 +133,16 @@ function aimStep(step:Step, verbs:VerbRegistry, catalog:Catalog, first:boolean):
 		}
 	}
 	return { ...step, args };
+}
+
+/** Whether `arc`'s first verb is off cooldown by the host's `isReady`; ready when the host tracks none. */
+function isReady(arc:Arc, catalog:Catalog):boolean {
+	const verb = firstStep(arc)?.verb;
+	if (!verb || !catalog.fns.has('isReady')) {
+		return true;
+	}
+	const r = evaluate(`isReady(me, ${JSON.stringify(verb)})`, catalog);
+	return r.error !== undefined || r.value.kind !== 'bool' || r.value.value;
 }
 
 /** Every `id` arg in `arcs`, nested arcs too, in the order written. */

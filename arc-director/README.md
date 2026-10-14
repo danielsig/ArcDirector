@@ -619,7 +619,7 @@ i is "marked"
 | List filters | `others.nearby()`, `.nearby(16)`, `others.reachable()`, `.approaching()`, `.departing()`                                                                    |
 | Lists        | `filter` / `find` / `some` / `all`, `map`, `sortBy`, `count`, `includes`, `first`, `max` / `min`, `sum`, `avg`, `reduce`                                    |
 | Logic        | `&&` / `||`, `*`, ternary, `??` (absent only), `!` / `!!`                                                                                                   |
-| Host extras  | `hp` / `maxHP`, `isHurt`, `isHPFalling`; `isCarrying` / `wasCarrying` / `hasJustReceived` / `hasJustLost` (only if `inventory`); `isOpen` / `hasJustOpened` |
+| Host extras  | `hp` / `maxHP`, `isHurt`, `isHPFalling`; `isCarrying` / `wasCarrying` / `hasJustReceived` / `hasJustLost` (only if `inventory`); `isOpen` / `hasJustOpened`; `isReady(me, "verb")` (a `choose` leaves out a choice whose first verb is not ready) |
 
 
 Identifiers: leading acronyms are lowercase (`id`, `hp`, `npc`); later in a name they stay caps (`maxHP`, `npcID`).
@@ -652,6 +652,7 @@ type HostKernels = {
 	inventory?: (who) => ExprEntity[];
 	hp?: (who) => { hp: number; maxHP: number } | undefined;
 	isOpen?: (who) => boolean | undefined;
+	isReady?: (who, verb) => boolean | undefined;      // cooldown over; undefined = no cooldown
 	hasHeard?: boolean;           // director injects
 	prev?: {                      // director injects (last think; spawn freeze if never)
 		secondsAgo?: number;

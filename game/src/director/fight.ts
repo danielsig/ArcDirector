@@ -74,10 +74,11 @@ export function attackFor(verb:string, role:FightRole | undefined):AttackKind {
 }
 
 /**
- * Raising a sword to guard: it stays up `seconds`, and melee blows and arrows from within `arc`
- * radians of where the guard faces do nothing. Spells pass.
+ * Raising a sword to guard: it stays up `seconds`, and melee blows and arrows from within `arc` radians of where the
+ * guard faces do nothing. Spells pass. The short `cooldown` before it goes up again only keeps a guard from being
+ * held for good against a stream of fast blows. Worth raising only when an enemy is within `near` meters or attacking.
  */
-export const BLOCK = { roles: ['Knight', 'Blade'] as FightRole[], seconds: 1.6, arc: 1.3 };
+export const BLOCK = { roles: ['Knight', 'Blade'] as FightRole[], seconds: 1.6, cooldown: 1.5, arc: 1.3, near: 3 };
 
 /** Whether `target`'s raised guard stops a blow from `attacker`, who stands in front of it; counts the block. */
 export function guardStops(target:GameObject, attacker:GameObject):boolean {
@@ -140,7 +141,7 @@ export function formatFightRules():string {
 		`Walk ${FIGHT_WALK} m/s.`,
 		`${roleLine('Blade')}.`,
 		`${roleLine('Knight')}.`,
-		`${BLOCK.roles.join(' and ')} can block: guard up ${BLOCK.seconds}s; melee and arrows from the front do nothing, spells pass.`,
+		`${BLOCK.roles.join(' and ')} can block: guard up ${BLOCK.seconds}s, then ${BLOCK.cooldown}s before it can again; melee and arrows from the front do nothing, spells pass.`,
 		`${roleLine('Archer')}; arrows need a clear shot.`,
 		`${roleLine('Witch')}; hex ${cover}% through cover.`,
 		`${roleLine('Healer')}; heal ${HEAL.hp} hp at once and ${HEAL.hp} more over ${HEAL.regen}s, ${HEAL.range}m, every ${healEvery}s, ${cover}% through cover. Stay ${BACK_STANDOFF}m from enemies; heal from ${HEAL.range}m, never walk in for smite.`,
