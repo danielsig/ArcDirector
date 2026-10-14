@@ -1,6 +1,6 @@
+import { Time, type GameObject } from '@arc-director/kindling';
 import { ArcDirector, type CharacterSpec, type CollectiveSpec, type LawSpec, type MemoryDraft, type SpeechUtterance } from 'arc-director';
 import { Celebrating, Door, Lock } from '../../engine/components';
-import type { GameObject } from '../../engine/GameObject';
 import { cueAt } from '../../audio/cue';
 import { distXZ, findCarried, itemMatchesName } from '../../items/inventory';
 import type { GameHost } from '../adapter';
@@ -174,14 +174,14 @@ function tickCrypt(host:GameHost):void {
 	host.world.setMessage(`The ${PRIZE} is won`);
 	for (const go of company(host)) {
 		const hop = go.getOrAddComponent(Celebrating);
-		hop.until = host.world.time + 48;
+		hop.until = Time.time + 48;
 		hop.enabled = true;
 	}
 }
 
 export function createDirector(host:GameHost):ArcDirector<CharacterCtx> {
 	host.hooks = { checkBargain: tickCrypt, onSpoke, goalDone: (h) => prizeTaken(h) };
-	host.kit = { verbs: [...GAME_VERBS, 'set_status', 'rest', 'attack', 'heal', 'protect', ...Object.keys(ATTACKS)] };
+	host.kit = { verbs: [...GAME_VERBS, 'set_status', 'rest', 'attack', 'block', 'heal', 'protect', ...Object.keys(ATTACKS)] };
 	return addFightVerbs(addStatusVerbs(host.configure(new ArcDirector<CharacterCtx>()), host), host)
 		.withMindDefaults({ skipHeartbeat: true, skipStrategic: true })
 		.withDefaultKit(host.kit)

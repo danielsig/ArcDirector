@@ -1,5 +1,5 @@
+import { type GameObject } from '@arc-director/kindling';
 import { Named, Vitals } from '../engine/components';
-import type { GameObject } from '../engine/GameObject';
 import type { World } from '../engine/World';
 
 export function idOf(go:GameObject):string {

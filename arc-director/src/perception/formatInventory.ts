@@ -4,8 +4,11 @@ export type { Inventory };
 
 const ALL = 'Nothing else: what is not listed, you do not have.';
 
-/** Ends by saying the list is all there is, so a mind does not carry what its role says it often has. */
-export function formatInventory(bag:Inventory = {}):string {
+/**
+ * Ends by saying the list is all there is, so a mind does not carry what its role says it often has.
+ * `currency` (the director's `withCurrency`) counts the purse.
+ */
+export function formatInventory(bag:Inventory = {}, currency?:string):string {
 	const lines:string[] = [];
 	if (bag.worn) {
 		for (const [slot, label] of Object.entries(bag.worn)) {
@@ -15,7 +18,7 @@ export function formatInventory(bag:Inventory = {}):string {
 		}
 	}
 	if (bag.purse !== undefined) {
-		lines.push(`Purse: ${bag.purse} gold`);
+		lines.push(currency ? `Purse: ${bag.purse} ${currency}` : `Purse: ${bag.purse}`);
 	}
 	if (bag.pockets && bag.pockets.length > 0) {
 		lines.push(`Pockets: ${bag.pockets.join(', ')}`);

@@ -66,7 +66,7 @@ export function startMenuAudio(target:HTMLElement):MenuAudioHandle {
 					return;
 				}
 				audio.musicVolume = 0;
-				await audio.playRecording(MENU_TRACK, 1, 'heros_path', { start: 7.6, end: 178.3 });
+				await audio.playRecording(MENU_TRACK, 1, 'heros_path', { start: 7.25, end: 178 });
 				if (dead) {
 					return;
 				}

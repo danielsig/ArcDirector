@@ -13,10 +13,29 @@ const scene = computed(() => SCENES[props.sceneID]);
 const consoleKey = ref('~');
 const rows = computed(() => universalKeys(consoleKey.value));
 
-onMounted(() => {
+/** Reads what the AI log's key is printed with on the keyboard layout in use now. */
+function readConsoleKey():void {
 	void readBackquoteGlyph().then((glyph) => {
 		consoleKey.value = glyph;
 	});
+}
+
+// The layout can change at any time (a language switch), so read it each time the window opens,
+// and again on any key press while it is open.
+watch(() => props.hud.keysOpen, (open) => {
+	if (open) {
+		readConsoleKey();
+	}
+}, { immediate: true });
+
+function onAnyKey():void {
+	if (props.hud.keysOpen) {
+		readConsoleKey();
+	}
+}
+
+onMounted(() => {
+	window.addEventListener('keydown', onAnyKey);
 });
 
 watch(
@@ -29,6 +48,7 @@ watch(
 );
 
 onUnmounted(() => {
+	window.removeEventListener('keydown', onAnyKey);
 	props.hud.keysOpen = false;
 });
 
@@ -133,8 +153,6 @@ function fly(el:Element, done:()=>void, open:boolean):void {
 
 <style scoped>
 .keys-root {
-	--ink: #1a1208;
-	--parchment: #d4c4a0;
 	--cream: #f0e6c8;
 	--highlight: #fff6dc;
 	--rule: #c4b490;
@@ -145,13 +163,12 @@ function fly(el:Element, done:()=>void, open:boolean):void {
 
 .keys-btn {
 	position: absolute;
-	top: 16px;
-	right: 136px;
-	width: 32px;
-	height: 32px;
+	top: 14px;
+	/* Left of Menu (14 + 112 + 12). */
+	right: 138px;
+	width: var(--btn);
+	height: var(--btn);
 	padding: 0;
-	border: 0;
-	border-radius: 50%;
 	pointer-events: auto;
 	z-index: 3;
 	display: flex;
@@ -159,13 +176,15 @@ function fly(el:Element, done:()=>void, open:boolean):void {
 	justify-content: center;
 	color: var(--ink);
 	background: var(--parchment);
+	border: var(--line) solid var(--ink);
+	border-radius: 50%;
+	box-shadow: var(--shadow);
 	cursor: pointer;
-	box-shadow: 0 2px 0 var(--ink), 0 4px 12px rgba(0, 0, 0, 0.35);
 }
 
 .keys-btn svg {
-	width: 22px;
-	height: 22px;
+	width: 30px;
+	height: 30px;
 	display: block;
 }
 

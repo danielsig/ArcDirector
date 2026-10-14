@@ -46,6 +46,14 @@ const SCENE_KEYS:SceneKey[] = [
 	{ key: 'X', action: 'Swap Hands' },
 ];
 
+/** With a sword in hand: the moves a click makes, and the guard. */
+const SWORD_KEYS:SceneKey[] = [
+	{ key: 'Click', action: 'Slice' },
+	{ key: 'Move + Click', action: 'Stab' },
+	{ key: 'Shift + Click', action: 'Cleave' },
+	{ key: 'Hold Shift', action: 'Block' },
+];
+
 export type SceneDef = {
 	id:string;
 	title:string;
@@ -60,6 +68,8 @@ export type SceneDef = {
 	player?:PlayerDef;
 	/** Ravens on the ground at the start, at world `x`, `z`. */
 	ravens?:{ x:number; z:number; yaw?:number }[];
+	/** World `x`, `z` the main-menu backdrop's camera circles (`Showcase`); the player's start when unset. */
+	orbit?:{ x:number; z:number };
 	/** Player stays centered and the chunk-sized map scrolls. `false` = current chunk, moving arrow. */
 	minimapFollow?:boolean;
 	createDirector:(host:GameHost)=>ArcDirector<CharacterCtx>;
@@ -345,9 +355,14 @@ That mind sends each shopper to the stall that sells what they tagged, then to t
 	createDirector: createMarketDirector,
 };
 
-/** A fighter in the ruins at map cell `x`, `z`, with `equip` in hand. */
+/** The ruins parties' colors: Dawn gold and crimson, Dusk teal and indigo. */
+const DAWN_COLORS = { band: 0xf2c14e, rim: 0xb3262e };
+const DUSK_COLORS = { band: 0x2bb3a6, rim: 0x3b2a8c };
+
+/** A fighter in the ruins at map cell `x`, `z`, with `equip` in hand: Dawn's on the west half, Dusk's on the east. */
 function fighter(id:string, meshID:string, x:number, z:number, hp:number, equip:string[]):NPCSpawnDef {
-	return { id, meshID, ...mapCell('ruins', x, z), yaw: x < 16 ? -Math.PI / 2 : Math.PI / 2, pack: true, equip, hp };
+	const dawn = x < 16;
+	return { id, meshID, ...mapCell('ruins', x, z), yaw: dawn ? -Math.PI / 2 : Math.PI / 2, pack: true, equip, hp, team: dawn ? DAWN_COLORS : DUSK_COLORS };
 }
 
 export const RUINS:SceneDef = {
@@ -359,20 +374,22 @@ export const RUINS:SceneDef = {
 	chunks: RUINS_CHUNKS,
 	// Dawn holds the west colonnade, Dusk the east; the sanctum and its dais lie between them.
 	npcs: [
-		fighter('Dawn', 'Robe', 5, 15, 12, ['shaman_staff']),
+		fighter('Dawn', 'Shaman', 5, 15, 12, ['shaman_staff']),
 		fighter('Cinder', 'Witch', 6, 18, 12, STAFF),
 		fighter('Brune', 'KnightMale', 9, 14, 28, SWORD),
 		fighter('Wisp', 'Scout', 6, 12, 12, BOW),
 		fighter('Cade', 'Blacksmith', 9, 17, 20, SWORD),
-		fighter('Dusk', 'Shaman', 26, 15, 12, ['shaman_staff']),
+		fighter('Dusk', 'Robe', 26, 15, 12, ['shaman_staff']),
 		fighter('Nyx', 'Sorceress', 25, 18, 12, STAFF),
 		fighter('Helms', 'KnightFemale', 22, 14, 28, SWORD),
 		fighter('Ash', 'Rogue', 25, 12, 12, BOW),
-		fighter('Flint', 'Hero', 22, 17, 20, SWORD),
+		fighter('Flint', 'VillagerMale', 22, 17, 20, SWORD),
 	],
 	ravens: [{ x: 15.5, z: 3.5, yaw: 2.4 }, { x: 16.4, z: 4.1 }],
+	// The middle of the 2×2 map: the sanctum and its dais.
+	orbit: { x: 16, z: 16 },
 	ambient: 'Two parties fight to the death in a ruined forest temple. No quarter.',
-	keys: SCENE_KEYS,
+	keys: [...SCENE_KEYS, ...SWORD_KEYS],
 	brief: `Dawn and Dusk are the two captains. Each leads a squad of five: a knight, a swordsman, an archer, a witch, and the captain, who also heals. Both sides are trying to kill the other. Nobody has a scripted attack.
 
 A captain writes orders the squad keeps following, who to hit and who stays back, and changes those orders as the fight moves. The usual way a side wins is the knight and the swordsman hold the nearest enemies, the archer and the witch shoot from behind them, and the captain stays clear and heals. Hurt fighters walk back to their captain instead of standing in the melee.

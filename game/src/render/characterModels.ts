@@ -63,7 +63,7 @@ export function loadCharacterModels():Promise<void> {
 	return pending;
 }
 
-/** Who the player is when no choice is saved. */
+/** Who the player is when no choice is saved. The player's alone: no NPC wears it. */
 export const PLAYER_MODEL = 'Hero';
 
 /** `KnightFemale` → `Knight Female`. */

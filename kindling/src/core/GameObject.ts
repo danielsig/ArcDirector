@@ -1,7 +1,7 @@
 import { Transform } from './Transform.js';
 import { Component } from './Component.js';
-import type { ComponentInit, Constructor } from './types.js';
-import type { World } from './World.js';
+import { Time } from './Time.js';
+import type { ComponentInit, Constructor, WorldType } from './types.js';
 
 let nextSerial = 1;
 
@@ -22,10 +22,17 @@ export class GameObject {
 	public id:string;
 	public name:string;
 	public transform:Transform;
-	public world:World | null = null;
+	public world:WorldType | null = null;
 	/** How the host rebuilds this object when a save has it and a fresh scene does not. JSON data only. */
 	public recipe:unknown;
+	/**
+	 * How fast time runs for this object: 1 as usual, 0 stopped. Its components' `update`,
+	 * `fixedUpdate` and `lateUpdate` get their `dt` scaled by {@link timeRate}, and its `Rigidbody`
+	 * moves at that rate. Game time (`Time`, `World.after`) runs on regardless.
+	 */
+	public timeScale = 1;
 
+	private _stopUntil = 0;
 	private _parent:GameObject | null = null;
 	private readonly _children:GameObject[] = [];
 	private readonly _comps:Component[] = [];
@@ -82,6 +89,16 @@ export class GameObject {
 			}
 		}
 		return undefined;
+	}
+
+	/** The rate this object's time runs at now: {@link timeScale}, or 0 while a {@link hitstop} holds. */
+	public get timeRate():number {
+		return Time.time < this._stopUntil ? 0 : this.timeScale;
+	}
+
+	/** Stops this object's time for `seconds` of game time (a hit landing); overlapping stops last until the latest ends. */
+	public hitstop(seconds:number):void {
+		this._stopUntil = Math.max(this._stopUntil, Time.time + seconds);
 	}
 
 	/** `getComponent`, else a new `ctor()` added now. */

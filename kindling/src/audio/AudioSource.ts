@@ -1,12 +1,12 @@
 import { Component } from '../core/Component.js';
 import type { LoopSrc } from './Audio.js';
-import type { SfxOpts, SfxPatch } from './types.js';
+import type { SfxHandle, SfxOpts, SfxPatch } from './types.js';
 
 let next = 0;
 
-type PlayExtra = Pick<SfxOpts, 'gain' | 'freq' | 'dur' | 'hear' | 'falloff'>;
+type PlayExtra = Pick<SfxOpts, 'gain' | 'freq' | 'pitch' | 'tract' | 'dur' | 'hear' | 'falloff'>;
 
-/** Posed SFX / loop on this GameObject. Position follows `transform`. */
+/** Posed SFX / loop on this GameObject. Position follows `transform`. Disabled, it is silent. */
 export class AudioSource extends Component {
 	public hear = 22;
 	public gain = 1;
@@ -14,13 +14,19 @@ export class AudioSource extends Component {
 	private readonly _loopID = `as:${++next}`;
 	private _loop:LoopSrc | null = null;
 
-	/** One-shot at this transform. */
-	public play(patch:SfxPatch, extra?:PlayExtra):void {
+	/** One-shot at this transform. `extra.gain` scales this source's `gain`. Returns a handle to stop it early (see `Audio.playSfx`). */
+	public play(patch:SfxPatch, extra?:PlayExtra):SfxHandle | null {
 		const audio = this.gameObject.world?.audio;
-		if (!audio) {
-			return;
+		if (!audio || !this.enabled) {
+			return null;
 		}
-		audio.playSfx(patch, { ...this.pose(), hear: this.hear, gain: this.gain, falloff: this.falloff, ...extra });
+		return audio.playSfx(patch, {
+			...this.pose(),
+			hear: this.hear,
+			falloff: this.falloff,
+			...extra,
+			gain: this.gain * (extra?.gain ?? 1),
+		});
 	}
 
 	/** Looping patch or score. Follows the transform until set to `null`. */

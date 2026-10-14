@@ -1,7 +1,7 @@
+import { Time, type GameObject } from '@arc-director/kindling';
 import { ArcDirector, DEFAULT_VERB_INSTRUCTIONS, type Character, type Collective, type CollectiveSpec, type Kit, type MemoryDraft, type StandingChoice } from 'arc-director';
 import { CharacterMotor } from '../../characters/CharacterMotor';
 import { Celebrating } from '../../engine/components';
-import type { GameObject } from '../../engine/GameObject';
 import type { GameHost, CharacterCtx } from '../adapter';
 import { addFightVerbs } from '../verbs';
 import { ATTACKS, BACK_STANDOFF, FIGHT_WALK, SPELL_RANGE, attackVerbFor, formatFightRules, seenInFight } from '../fight';
@@ -128,7 +128,7 @@ function partyStory(party:string):MemoryDraft {
 		'A program that ends hands the unit back to its laws. Inside the issued arc, && is the next step after success (the hit landed or the foe is down). loop the chain. Each issue is its own block — never && between issue().',
 		'If someone is almost dead and under fire they are probably down — do not program around that snapshot.',
 		'Hurt troops already have law wounded: out of heal range of a Healer, they walk to yours until they are in range, then they keep fighting. You already have mend: heal() loops Knight, then yourself, then Captain, then the rest — only while you are a Healer and no rival is in knife range. Guard protect()s whoever is hurt while a Healer lives: the Knight screens them and attacks that threat, then goes back to their program. Strike is attack() with your tag when you are not a Healer. Rank holds you behind the Knight and Blade, clear of knife range. If a rival is close, rank() away — do not heal or smite in a scrum. Keep wounded, mend, guard, strike, and rank. Never unlaw them.',
-		`smite, heal, attack(), and rank() are yours as commander. smite is arm's reach — never walk in for it while a Knight or Blade lives. heal from ${SPELL_RANGE}m like hex. Never go_to an enemy. Never issue smite, heal, attack, or rank. Units cannot smite.`,
+		`smite, heal, attack(), and rank() are yours as commander. smite reaches ${ATTACKS.smite!.range}m — never walk in for it while a Knight or Blade lives. heal from ${SPELL_RANGE}m like hex. Never go_to an enemy. Never issue heal, attack, or rank. Issue smite only to a Witch: slow and heavy, for a foe already within ${ATTACKS.smite!.range}m.`,
 	].join(' ');
 	return { text, tags: ['backstory', party], pinned: true };
 }
@@ -270,7 +270,7 @@ function hopWin(host:GameHost, winners:GameObject[], spec:CollectiveSpec<Charact
 	for (const go of winners) {
 		host.arc?.abortArc(idOf(go));
 		const hop = go.getOrAddComponent(Celebrating);
-		hop.until = host.world.time + 48;
+		hop.until = Time.time + 48;
 		hop.enabled = true;
 	}
 	const queue = host.arc?.mindQueue();
@@ -322,7 +322,7 @@ function tickFight(host:GameHost):void {
 export function createDirector(host:GameHost):ArcDirector<CharacterCtx> {
 	host.hooks = { checkBargain: tickFight };
 	// Characters run what the party laws and the issued programs do: their role's attack among them.
-	host.kit = { verbs: [...FIGHT.verbs, 'go_to', 'protect', ...Object.keys(ATTACKS)], tools: [] };
+	host.kit = { verbs: [...FIGHT.verbs, 'go_to', 'protect', 'block', ...Object.keys(ATTACKS)], tools: [] };
 	return addFightVerbs(host.configure(new ArcDirector<CharacterCtx>()), host)
 		.onCommanderVacant((party) => succeedCommand(host, party))
 		.withSight({ limit: 16 })

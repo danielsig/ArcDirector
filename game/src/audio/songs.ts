@@ -1,12 +1,9 @@
 import type { Audio, Score } from '@arc-director/kindling';
 import type { Dyn } from '@arc-director/kindling/score';
-import { cello, choir, flute, guitar, koto, twelveString } from './hostInstruments';
 import MIGHT_TRACK from './herosMight.mp3';
 import TALE_TRACK from './herosTale.mp3';
-import { bar, piece, reverb, stack, track } from '@arc-director/kindling/score';
+import { bar, cello, choir, flute, guitar, koto, piece, reverb, stack, track, twelveString } from '@arc-director/kindling/score';
 import { f, mf, mp, p, pp } from '@arc-director/kindling/score';
-
-export { MENU_SONG_ORCH } from './mainMenuSong';
 
 /** Bass, tenor, alto, soprano. */
 type Voicing = [string, string, string, string];

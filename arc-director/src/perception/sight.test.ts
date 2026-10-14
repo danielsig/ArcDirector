@@ -420,7 +420,7 @@ describe('formatInventory', () => {
 				purse: 22,
 				pockets: ['CottageKey'],
 				pack: { name: "Traveler'sPack", items: ['GoldCoin', 'ChestKey'] },
-			}),
+			}, 'gold'),
 			[
 				'head: Helmet',
 				'torso: Tunic',
@@ -433,6 +433,11 @@ describe('formatInventory', () => {
 				'Nothing else: what is not listed, you do not have.',
 			].join('\n'),
 		);
+	});
+
+	it('counts the purse in the currency, or bare without one', () => {
+		assert.equal(formatInventory({ purse: 3 }, 'shells').split('\n')[0], 'Purse: 3 shells');
+		assert.equal(formatInventory({ purse: 3 }).split('\n')[0], 'Purse: 3');
 	});
 
 	it('empty bag carries nothing', () => {

@@ -256,6 +256,7 @@ export class Renderer {
 		// `static` maps leave moving things out; capsules stand in for them, blocking every light that reaches them.
 		updateCapsuleShadows(this.shadows === 'static' ? this._shadowCache.moving : [], cam.native);
 		this.gl.info.reset();
+		this.outline.impact = cam.impactFrame;
 		this.outline.render(this.gl, this._scene.native, cam.native);
 		this.markFrame(performance.now());
 	}

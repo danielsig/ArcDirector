@@ -8,6 +8,14 @@ export function pascalCase(name:string):string {
 		.join('');
 }
 
+/** What sight and talk put before a name: the far-off hedge, then an article. */
+const DECORATION = /^(?:what seems to be\s+)?(?:(?:a|an|the)\s+)?/i;
+
+/** `name` as the world knows it, without the words sight wraps it in (`what seems to be a Lantern` is `Lantern`). */
+export function bareName(name:string):string {
+	return name.trim().replace(DECORATION, '');
+}
+
 export function builtinLodLayers():LodLayer[] {
 	return [
 		{

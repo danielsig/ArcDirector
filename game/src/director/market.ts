@@ -1,7 +1,7 @@
+import { type GameObject } from '@arc-director/kindling';
 import type { CharacterSpec } from 'arc-director';
 import { Door, MarketNPC, Named } from '../engine/components';
 import { MeshRenderer } from '../engine/MeshRenderer';
-import type { GameObject } from '../engine/GameObject';
 import type { World } from '../engine/World';
 import { idOf } from './names';
 import { spawnNPC, type NPCSpawnOpts } from '../world/spawn';
@@ -195,7 +195,7 @@ export function spawnRandomCustomer(world:World):{ go:GameObject; id:string; tag
 		wallet,
 		marketNPC: { kind: 'customer', wants: [...tmpl.wants], leaveGate },
 	};
-	const go = spawnNPC(world, chunk as Chunk, opts);
+	const go = spawnNPC(world, chunk, opts);
 	return {
 		go,
 		id,

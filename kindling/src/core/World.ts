@@ -1,10 +1,12 @@
+import { Input } from './Input.js';
+import { Time } from './Time.js';
 import { Audio } from '../audio/Audio.js';
 import * as THREE from 'three';
 import { BoxCollider } from './BoxCollider.js';
-import type { Chunk } from './Chunk.js';
+import { Rigidbody } from './Rigidbody.js';
 import type { Component } from './Component.js';
 import type { GameObject } from './GameObject.js';
-import type { Constructor } from './types.js';
+import type { ChunkType, Constructor, TileType } from './types.js';
 
 export type TerrainSample = {
 	/** Discrete tile height (stairs / cliffs). */
@@ -16,6 +18,8 @@ export type TerrainSample = {
 };
 
 const NONE:readonly GameObject[] = [];
+/** Sample points per tile side for `solidCover`. */
+const COVER_SAMPLES = 8;
 const pos = new THREE.Vector3();
 
 /** One number per tile; exact while |tz| < 2^25. */
@@ -28,13 +32,17 @@ export class World {
 	public readonly native = new THREE.Scene();
 	/** Procedural mixer. Silent when AudioContext is missing. */
 	public readonly audio = new Audio();
+	/** Keyboard and mouse on the canvas. `Game` attaches it. */
+	public readonly input = new Input();
 	/** 0 = no tile collision. Hosts set this to their cell size. */
 	public tileSize = 0;
 	/** Tiles per chunk side. 0 = no chunks. Hosts set this with `tileSize` when they use `Chunk`s. */
 	public chunkSize = 0;
 	/** Loaded chunks. Look one up with `chunkAt` / `chunkAtWorld`. */
-	public readonly chunks = new Map<number, Chunk>();
+	public readonly chunks:Map<number, ChunkType> = new Map();
 	private readonly _doomed:GameObject[] = [];
+	/** Calls waiting on game time, soonest first. */
+	private _timers:{ at:number; fn:()=>void }[] = [];
 	/** Spatial hash: objects by the tile under their position, as of the last `reindex`. */
 	private _tiles = new Map<number, GameObject[]>();
 	/** Widest collider half-extent plus pad, so `forEachNear` finds boxes centred outside its area. */
@@ -62,11 +70,11 @@ export class World {
 		return { cx: Math.floor(x / span), cz: Math.floor(z / span) };
 	}
 
-	public chunkAt(cx:number, cz:number):Chunk | undefined {
+	public chunkAt(cx:number, cz:number):ChunkType | undefined {
 		return this.chunks.get(tileKey(cx, cz));
 	}
 
-	public chunkAtWorld(x:number, z:number):Chunk | undefined {
+	public chunkAtWorld(x:number, z:number):ChunkType | undefined {
 		if (this.chunkSize === 0) {
 			return undefined;
 		}
@@ -91,19 +99,19 @@ export class World {
 	}
 
 	/** The tile under a world XZ point, if its chunk is loaded. */
-	public tileAtWorld(x:number, z:number):unknown {
-		return this.chunkAtWorld(x, z)?.tileAtWorld(x, z);
+	public tileAtWorld(x:number, z:number):TileType | undefined {
+		return this.chunkAtWorld(x, z)?.tileAtWorld(x, z) as TileType | undefined;
 	}
 
 	/** Load a chunk. Its `size` and `cellSize` must match `chunkSize` and `tileSize`. */
-	public addChunk(chunk:Chunk):void {
+	public addChunk(chunk:ChunkType):void {
 		if (chunk.size !== this.chunkSize || chunk.cellSize !== (this.tileSize || 1)) {
 			throw new Error(`chunk ${chunk.id} is ${chunk.size}×${chunk.cellSize}m; world is ${this.chunkSize}×${this.tileSize || 1}m`);
 		}
 		this.chunks.set(tileKey(chunk.origin.cx, chunk.origin.cz), chunk);
 	}
 
-	public removeChunk(chunk:Chunk):void {
+	public removeChunk(chunk:ChunkType):void {
 		const key = tileKey(chunk.origin.cx, chunk.origin.cz);
 		if (this.chunks.get(key) === chunk) {
 			this.chunks.delete(key);
@@ -150,6 +158,20 @@ export class World {
 		go.world = null;
 	}
 
+	/** Calls `fn` once `seconds` of game time from now (paused time does not count), before that frame's `update`. */
+	public after(seconds:number, fn:()=>void):void {
+		const at = Time.time + seconds;
+		const i = this._timers.findIndex((t) => t.at > at);
+		this._timers.splice(i < 0 ? this._timers.length : i, 0, { at, fn });
+	}
+
+	/** Runs the `after` calls that are due. `Game.simulate` calls it each frame. */
+	public runTimers():void {
+		while (this._timers.length > 0 && this._timers[0]!.at <= Time.time) {
+			this._timers.shift()!.fn();
+		}
+	}
+
 	public flushDestroy():void {
 		const pending = this._doomed.splice(0);
 		for (const go of pending) {
@@ -194,6 +216,35 @@ export class World {
 				}
 			}
 		}
+	}
+
+	/**
+	 * Fraction (0–1) of tile `(tx, tz)` under solid colliders that never move (no `Rigidbody`), as of the
+	 * last `reindex`. Sampled on a grid, so overlapping colliders count once and round ones count round.
+	 */
+	public solidCover(tx:number, tz:number):number {
+		const size = this.tileSize || 1;
+		const solids:BoxCollider[] = [];
+		this.forEachNear(tx * size, tz * size, (tx + 1) * size, (tz + 1) * size, (go) => {
+			const col = go.getComponent(BoxCollider);
+			if (col?.enabled && col.solid && !col.isTrigger && !go.getComponent(Rigidbody)) {
+				solids.push(col);
+			}
+		});
+		if (solids.length === 0) {
+			return 0;
+		}
+		let covered = 0;
+		for (let i = 0; i < COVER_SAMPLES; i++) {
+			for (let j = 0; j < COVER_SAMPLES; j++) {
+				const x = (tx + (i + 0.5) / COVER_SAMPLES) * size;
+				const z = (tz + (j + 0.5) / COVER_SAMPLES) * size;
+				if (solids.some((col) => col.contains(x, z))) {
+					covered++;
+				}
+			}
+		}
+		return covered / (COVER_SAMPLES * COVER_SAMPLES);
 	}
 
 	/** Updates the spatial hash. Physics calls this after moving bodies and resolving collisions.

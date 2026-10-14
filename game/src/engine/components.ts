@@ -1,20 +1,35 @@
 import * as THREE from 'three';
-import { Component } from './Component';
 import {
 	BoxCollider,
+	clamp,
+	lerpAngle,
 	Light as KindlingLight,
 	Rigidbody,
+	Time,
+	Component,
+	type GameObject,
 } from '@arc-director/kindling';
 import { Order } from './order';
-import { clamp, lerpAngle } from './math';
 import { CELL_SIZE, TILE_HEIGHT } from '../world/constants';
 import { Pickupable } from '../items/components';
-import type { GameObject } from './GameObject';
 
 export { BoxCollider };
 
+/** Ground speed (m/s) below which a character stands. */
+const WALKING_SPEED = 0.35;
+
 export class RigidBody extends Rigidbody {
 	public useGravity = false;
+
+	/** Ground speed in m/s. */
+	public get speed():number {
+		return Math.hypot(this.velocity.x, this.velocity.z);
+	}
+
+	/** Moving fast enough to walk rather than stand. */
+	public get walking():boolean {
+		return this.speed > WALKING_SPEED;
+	}
 }
 
 export class Light extends KindlingLight {
@@ -163,10 +178,13 @@ export class Chest extends Component {
 	public open = false;
 }
 
-/** Drawbridge over water. When raised (`open` false), the river cannot be crossed. */
 /** Seconds the span takes to swing between raised and lowered. */
 export const BRIDGE_SWING_SECONDS = 1;
 
+/** World height of the lowered span's planks, where whoever crosses stands. Matches `createBridgeMesh`. */
+export const BRIDGE_DECK_Y = 0.22;
+
+/** Drawbridge over water. When raised (`open` false), the river cannot be crossed. */
 export class Bridge extends Component {
 	public static override saved = ['open'];
 	/** Where the span is headed: lowered (open) or raised. */
@@ -353,8 +371,10 @@ export type SlotFill = import('../items/instance').ItemInstance | OccupiedRef | 
 
 /** A pose the character holds for a moment instead of standing or walking. */
 export type PoseClip = 'auto' | 'walk' | 'take' | 'give';
-/** Seconds a take or give lasts. */
-export const POCKET_SECONDS = 1.6;
+/** Seconds a take or a give lasts. */
+export const POSE_SECONDS:Record<'take' | 'give', number> = { take: 0.8, give: 1.6 };
+/** Seconds into a take when the hand reaches the thing: it leaves the ground (or the chest) then, with its sound. */
+export const TAKE_REACHED = 0.2;
 
 /** How tall the character's model stands, and a held pose (take, give) its animation plays. */
 export class Appearance extends Component {
@@ -376,8 +396,8 @@ export class Appearance extends Component {
 		if (this.clip !== 'take' && this.clip !== 'give') {
 			return;
 		}
-		const t = this.gameObject.world?.time ?? 0;
-		if (t - this.clipT0 >= POCKET_SECONDS) {
+		const t = Time.time;
+		if (t - this.clipT0 >= POSE_SECONDS[this.clip]) {
 			this.clip = 'auto';
 			this.clipToward = null;
 		}
@@ -406,6 +426,27 @@ export class Vitals extends Component {
 	public maxHP = 5;
 }
 
+/** A raised guard (the `block` verb): until `until`, blows from in front of where the character faces do nothing. */
+export class Guard extends Component {
+	public until = 0;
+	/** Blows stopped since it last went up. */
+	public blocked = 0;
+
+	public get up():boolean {
+		return this.enabled && Time.time < this.until;
+	}
+
+	public raise(seconds:number):void {
+		this.until = Time.time + seconds;
+		this.blocked = 0;
+		this.enabled = true;
+	}
+
+	public lower():void {
+		this.until = 0;
+	}
+}
+
 const HURT_LIFE = 0.42;
 
 /** Knockback + blink after a hit. Runs after the motor so the shove wins that frame. */
@@ -416,7 +457,7 @@ export class HurtFlash extends Component {
 	public vz = 0;
 
 	public get active():boolean {
-		const now = this.gameObject.world?.time ?? 0;
+		const now = Time.time;
 		return this.enabled && now < this.until;
 	}
 
@@ -430,7 +471,7 @@ export class HurtFlash extends Component {
 	public override update(dt:number):void {
 		const world = this.gameObject.world;
 		const rb = this.gameObject.getComponent(RigidBody);
-		if (!world || !rb || world.time >= this.until) {
+		if (!world || !rb || Time.time >= this.until) {
 			this.enabled = false;
 			if ((this.gameObject.getComponent(Vitals)?.hp ?? 1) <= 0) {
 				if (rb) {
@@ -444,7 +485,7 @@ export class HurtFlash extends Component {
 			}
 			return;
 		}
-		const u = Math.max(0, (this.until - world.time) / HURT_LIFE);
+		const u = Math.max(0, (this.until - Time.time) / HURT_LIFE);
 		rb.velocity.x = this.vx * u;
 		rb.velocity.z = this.vz * u;
 	}
@@ -458,58 +499,56 @@ export class SpeechBubble extends Component {
 	public height = 2.2;
 }
 
-/** One up-and-down hop. `abs(sin(ω t))` lands when `ω t = π`. */
-const HOP_OMEGA = 12;
-const HOP_PERIOD = Math.PI / HOP_OMEGA;
+/** How a character celebrates: jumping for joy (the `jump` clip, whose hips leave the ground) or cheering. */
+export type CelebrationStyle = 'jump' | 'cheer';
 
-/** Hop in place after a win — applied after ground snap so it stays visible. */
+/** Seconds per hop of the `jump` clip (five in its 2.2 s), and how long a counted cheer lasts. */
+const JUMP_PERIOD = 0.44;
+const CHEER_SECONDS = 3;
+
+/**
+ * Celebrating until `until` (world time): `CharacterAnimation` plays the style's clip. Each time it
+ * starts it picks jumping or cheering at random. Starting to walk ends it early.
+ */
 export class Celebrating extends Component {
-	public until = 0;
-	/** Counted hops from rest. 0 = until-only, phase locked to world time. */
-	public hops = 0;
-	public timestamp = 0;
-
 	public static override order = Order.celebrating;
+	public until = 0;
+	public style:CelebrationStyle = 'jump';
+	private _wasWalking = false;
 
+	/** Celebrates about `count` jumps long (a cheer lasts a few seconds instead). */
 	public beginHops(time:number, count:number):void {
-		this.hops = count;
-		this.timestamp = time;
-		this.until = time + count * HOP_PERIOD + 0.02;
 		this.enabled = true;
+		this.until = time + (this.style === 'jump' ? count * JUMP_PERIOD : CHEER_SECONDS);
 	}
 
-	public override lateUpdate(dt:number):void {
-		const world = this.gameObject.world;
-		const p = this.gameObject.transform.position;
-		const tile = world?.tileAtWorld(p.x, p.z);
-		const base = (tile?.height ?? 0) * TILE_HEIGHT;
-		if (!world) {
-			p.y = base;
+	public override onEnable():void {
+		this.style = Math.random() < 0.5 ? 'jump' : 'cheer';
+		this._wasWalking = this.walking();
+	}
+
+	public override update():void {
+		if (Time.time >= this.until) {
 			this.enabled = false;
-			return;
 		}
-		if (this.hops > 0) {
-			const elapsed = world.time - this.timestamp;
-			if (elapsed >= this.hops * HOP_PERIOD) {
-				p.y = base;
-				this.enabled = false;
-				return;
-			}
-			p.y = base + Math.abs(Math.sin(elapsed * HOP_OMEGA)) * 0.38;
-			return;
+	}
+
+	/** After physics, so the step that set off a walk ends the celebration before the next frame's animation. */
+	public override lateUpdate():void {
+		const walking = this.walking();
+		if (walking && !this._wasWalking) {
+			this.stop();
 		}
-		if (world.time >= this.until) {
-			p.y = base;
-			this.enabled = false;
-			return;
-		}
-		p.y = base + Math.abs(Math.sin(world.time * HOP_OMEGA)) * 0.38;
+		this._wasWalking = walking;
+	}
+
+	private walking():boolean {
+		return this.gameObject.getComponent(RigidBody)?.walking === true;
 	}
 
 	public stop():void {
 		this.until = 0;
-		this.hops = 0;
-		this.lateUpdate(0);
+		this.enabled = false;
 	}
 }
 

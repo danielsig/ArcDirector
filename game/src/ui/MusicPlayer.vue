@@ -220,74 +220,144 @@ onUnmounted(() => {
 </template>
 
 <style scoped>
+/* The song player: a parchment strip up from the bottom edge, round outlined buttons, the pause menu's slider. */
 .music-player {
 	position: absolute;
-	left: 0;
-	right: 0;
+	left: 14px;
+	right: 14px;
 	bottom: 0;
 	z-index: 20;
 	display: flex;
 	align-items: center;
 	gap: 8px;
-	padding: 8px 12px 10px;
+	padding: 10px 14px 12px;
 	pointer-events: auto;
-	background: rgba(12, 10, 8, 0.86);
-	box-shadow: 0 -8px 28px rgba(0, 0, 0, 0.4);
-	color: #f0e6c8;
-	font-family: ui-monospace, "Cascadia Code", monospace;
+	color: var(--ink);
+	font-family: var(--font);
+	background: var(--parchment);
+	border: var(--line) solid var(--ink);
+	border-bottom: 0;
+	border-radius: var(--radius) var(--radius) 0 0;
+	box-shadow: var(--shadow-panel);
 }
+
 .icon {
 	flex: none;
-	width: 32px;
-	height: 32px;
+	width: 36px;
+	height: 36px;
 	padding: 0;
-	border: 0;
-	background: transparent;
-	color: inherit;
+	display: grid;
+	place-items: center;
+	color: var(--ink);
 	font: inherit;
 	font-size: 14px;
+	background: var(--parchment);
+	border: var(--line-thin) solid var(--ink);
+	border-radius: 50%;
+	box-shadow: var(--shadow);
 	cursor: pointer;
-	opacity: 0.88;
+	transition: transform var(--quick) var(--ease-out);
 }
+
 .icon:hover {
-	opacity: 1;
+	background: var(--parchment-deep);
 }
+
+.icon:active {
+	transform: translateY(2px);
+	box-shadow: none;
+}
+
+/* Play stands out: bigger, and gold. */
 .play {
-	width: 36px;
+	width: 44px;
+	height: 44px;
 	font-size: 16px;
+	background: var(--gold);
 }
+
+.play:hover {
+	background: var(--gold);
+	filter: brightness(1.05);
+}
+
 .close {
-	opacity: 0.55;
+	margin-left: 4px;
+	border-color: transparent;
+	box-shadow: none;
+	background: none;
+	opacity: 0.6;
 }
+
 .meta {
 	flex: 0 0 auto;
-	min-width: 140px;
+	min-width: 150px;
+	margin-left: 6px;
 }
+
 .title {
-	font-size: 13px;
-	letter-spacing: 0.06em;
-	text-transform: uppercase;
-	color: #d4c4a0;
+	font-size: 16px;
+	font-weight: 700;
 }
+
 .clock {
-	font-size: 11px;
+	font-size: 12px;
+	font-variant-numeric: tabular-nums;
 	opacity: 0.85;
 }
+
 .dim {
-	opacity: 0.55;
+	opacity: 0.6;
 }
+
+/* Slider: a thin ink track, a gold thumb outlined in ink. */
 .seek {
 	flex: 1 1 auto;
 	min-width: 80px;
 	height: 6px;
-	margin: 0 4px;
-	accent-color: #d4c4a0;
+	margin: 0 6px;
+	padding: 0;
+	cursor: pointer;
+	background: var(--ink);
+	border-radius: 3px;
+	-webkit-appearance: none;
+	appearance: none;
+}
+
+.seek::-webkit-slider-thumb {
+	-webkit-appearance: none;
+	width: 16px;
+	height: 26px;
+	background: var(--gold);
+	border: var(--line-thin) solid var(--ink);
+	border-radius: 6px;
 	cursor: pointer;
 }
+
+.seek::-moz-range-thumb {
+	width: 12px;
+	height: 22px;
+	background: var(--gold);
+	border: var(--line-thin) solid var(--ink);
+	border-radius: 6px;
+	cursor: pointer;
+}
+
+.seek:disabled {
+	opacity: 0.4;
+	cursor: default;
+}
+
 .hint {
 	flex: none;
-	font-size: 11px;
-	letter-spacing: 0.08em;
-	opacity: 0.45;
+	font-size: 12px;
+	font-weight: 700;
+	opacity: 0.5;
+}
+
+button:focus-visible,
+.seek:focus-visible {
+	outline: var(--line-thin) solid var(--gold-deep);
+	outline-offset: 2px;
 }
 </style>

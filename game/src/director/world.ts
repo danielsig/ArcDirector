@@ -1,9 +1,8 @@
+import { yawToForward, type GameObject } from '@arc-director/kindling';
 import type { HostWorld, Pose } from 'arc-director';
 import { CharacterMotor } from '../characters/CharacterMotor';
 import { NPCInput } from '../characters/NPCInput';
 import { HumanBody, Interior, MarketGate, MarketNPC } from '../engine/components';
-import type { GameObject } from '../engine/GameObject';
-import { yawToForward } from '../engine/math';
 import { listCarried, itemMatchesName } from '../items/inventory';
 import { findChestHolding, USE_RANGE } from '../items/pickup';
 import { cellSteps } from '../world/path';
@@ -66,7 +65,7 @@ export function gameWorld(host:GameHost):HostWorld<GameObject> {
 			if (to === undefined) {
 				return dropCarried(character, item);
 			}
-			return to === character ? takeItem(host, character, item) : settleGive(character, to, item, host, quantity);
+			return to === character ? takeItem(host, character, item) : settleGive(character, to, item, quantity);
 		},
 		useItem: (character, item, target) => useOn(host, character, item, target),
 		exchange: ({ character, other, give, get }) => settleExchange(host, character, other, give, get),

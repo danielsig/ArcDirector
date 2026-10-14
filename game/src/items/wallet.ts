@@ -1,5 +1,5 @@
+import { type GameObject } from '@arc-director/kindling';
 import { MarketNPC, Wallet } from '../engine/components';
-import type { GameObject } from '../engine/GameObject';
 import { compactName } from './inventory';
 
 export function coinsOf(go:GameObject):number {

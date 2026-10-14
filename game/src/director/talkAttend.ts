@@ -1,8 +1,7 @@
+import { Time, clamp, lerpAngle, yawToward, type GameObject } from '@arc-director/kindling';
 import { NPCInput } from '../characters/NPCInput';
 import { PlayerInput } from '../characters/PlayerInput';
 import { Companion, Named } from '../engine/components';
-import { clamp, lerpAngle, yawToward } from '../engine/math';
-import type { GameObject } from '../engine/GameObject';
 import type { World } from '../engine/World';
 import { distXZ } from '../items/inventory';
 import { lineClear } from '../world/path';
@@ -85,7 +84,7 @@ export function talkFace(world:World, who:string, toward:string):void {
 		return;
 	}
 	character.transform.yaw = yawToward(dx, dz);
-	character.getComponent(NPCInput)?.faceToward(toward, world.time + SPEECH_LIFE);
+	character.getComponent(NPCInput)?.faceToward(toward, Time.time + SPEECH_LIFE);
 }
 
 export function facePeer(character:GameObject, dt:number):void {
@@ -94,7 +93,7 @@ export function facePeer(character:GameObject, dt:number):void {
 	if (!world || !npc?.faceName) {
 		return;
 	}
-	if (Number.isFinite(npc.faceUntil) && world.time >= npc.faceUntil) {
+	if (Number.isFinite(npc.faceUntil) && Time.time >= npc.faceUntil) {
 		npc.faceName = null;
 		npc.faceUntil = 0;
 		return;

@@ -1,8 +1,8 @@
 import * as THREE from 'three';
-import { mergeParts, type PosedPart } from '@arc-director/kindling';
+import { mergeParts, type PosedPart, hash } from '@arc-director/kindling';
 import { WALL_HEIGHT } from '../world/constants';
 import { claimFallSlot, fallFoamMat, fallMistMat, fallSheetMat, markFallLanding } from './nature';
-import { PALETTE, plankMat, rockMat, thatchMat, toon } from './toon';
+import { PALETTE, plankMat, rockMat, thatchMat, toon, WET_SHADE } from './toon';
 
 
 function planarUV(pts:THREE.Vector3[], uScale:number, vScale:number):number[] {
@@ -159,11 +159,6 @@ export function createTreeMesh(kind:'oak' | 'pine'):THREE.Group {
 	return g;
 }
 
-function hash01(x:number, y:number, z:number):number {
-	const n = Math.sin(x * 127.1 + y * 311.7 + z * 74.7) * 43758.5453;
-	return n - Math.floor(n);
-}
-
 function weldIndexed(src:THREE.BufferGeometry, quant = 1e3):THREE.BufferGeometry {
 	const pos = src.getAttribute('position');
 	const keyTo = new Map<string, number>();
@@ -207,8 +202,8 @@ export function rockGeometry():THREE.BufferGeometry {
 		nrm.z = Math.round(nrm.z * 256) / 256;
 		nrm.normalize();
 		let mag = 0.5;
-		mag += (hash01(nrm.x, nrm.y, nrm.z) - 0.5) * 0.22;
-		mag += (hash01(nrm.x * 2.3, nrm.y * 2.3, nrm.z * 2.3) - 0.5) * 0.1;
+		mag += (hash(nrm.x, nrm.y, nrm.z) - 0.5) * 0.22;
+		mag += (hash(nrm.x * 2.3, nrm.y * 2.3, nrm.z * 2.3) - 0.5) * 0.1;
 		if (nrm.y < -0.2) {
 			mag *= 0.45 + (nrm.y + 1) * 0.4;
 		}
@@ -273,6 +268,27 @@ export function rockGeometry():THREE.BufferGeometry {
 	return flat;
 }
 
+let wetRockGeo:THREE.BufferGeometry | null = null;
+
+/** The rock with its lower half wet: faces centred below half its height take {@link WET_SHADE}, for {@link wetRockMat}. */
+export function wetRockGeometry():THREE.BufferGeometry {
+	if (wetRockGeo) {
+		return wetRockGeo;
+	}
+	const geo = rockGeometry().clone();
+	const pos = geo.getAttribute('position');
+	const waterline = (geo.boundingBox?.max.y ?? 0) / 2;
+	const color = new Float32Array(pos.count * 3);
+	for (let i = 0; i < pos.count; i += 3) {
+		const mid = (pos.getY(i) + pos.getY(i + 1) + pos.getY(i + 2)) / 3;
+		color.fill(mid < waterline ? WET_SHADE : 1, i * 3, i * 3 + 9);
+	}
+	geo.setAttribute('color', new THREE.Float32BufferAttribute(color, 3));
+	geo.userData.shared = true;
+	wetRockGeo = geo;
+	return geo;
+}
+
 export function createBoulderMesh():THREE.Group {
 	const g = new THREE.Group();
 	g.userData.kind = 'boulder';
@@ -309,6 +325,7 @@ export function createBridgeMesh():THREE.Group {
 	const half = BRIDGE_LEN * 0.5;
 
 	// Deck: planks across, slightly uneven, on two stringers; cross-braced rails on both sides.
+	// Lowered, the plank tops sit at `BRIDGE_DECK_Y`, where walkers stand.
 	const hinge = new THREE.Group();
 	hinge.name = 'hinge';
 	hinge.position.set(0, 0.06, -half);
@@ -346,9 +363,9 @@ export function createBridgeMesh():THREE.Group {
 	hinge.add(solidMesh(mergeParts([-1, 1].map((side) => ({ geo: eye, x: side * (BRIDGE_W * 0.5 - 0.05), y: 0.78, z: BRIDGE_LEN - 0.1 }))), iron, false));
 	g.add(hinge);
 
-	// Stone abutments where the deck lands, at both banks.
+	// Stone abutments where the deck lands, at both banks: tops just over the grass, under the stringers.
 	const pier = new THREE.BoxGeometry(BRIDGE_W + 0.36, 0.6, 0.42);
-	g.add(solidMesh(mergeParts([-1, 1].map((side) => ({ geo: pier, x: 0, y: -0.24, z: side * (half + 0.12) }))), stone));
+	g.add(solidMesh(mergeParts([-1, 1].map((side) => ({ geo: pier, x: 0, y: -0.29, z: side * (half + 0.12) }))), stone));
 
 	// Gantry over the hinge: two posts, a beam, a winch drum and pulleys for the chains.
 	const gz = -half - 0.32;

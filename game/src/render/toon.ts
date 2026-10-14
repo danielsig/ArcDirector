@@ -101,6 +101,14 @@ export function rockMat():ToonMaterial {
 	return remember('rock', { color: PALETTE.rock, rim: 0.12 });
 }
 
+/** How dark wet rock is: its color times this, about the grey of the riverbank sand. */
+export const WET_SHADE = 0.35;
+
+/** Rock tinted by its geometry's vertex colors: 1 where dry, {@link WET_SHADE} where the river wets it. */
+export function wetRockMat():ToonMaterial {
+	return remember('wetRock', { color: PALETTE.rock, rim: 0.12, vertexColors: true });
+}
+
 /** Cobbled path. Sits just above the lawn, with no outline of its own. */
 export function dirtMat():ToonMaterial {
 	return remember('dirt', {
@@ -113,6 +121,15 @@ export function dirtMat():ToonMaterial {
 		polygonOffset: true,
 		polygonOffsetFactor: -1,
 		polygonOffsetUnits: -4,
+		outline: false,
+	});
+}
+
+/** Riverbank wet sand and pebbles along the water's edge, painted in `map`. No ink, like the lawn. */
+export function sandMat(map:THREE.Texture):ToonMaterial {
+	return remember(`sand:${map.uuid}`, {
+		map,
+		shadowSide: THREE.FrontSide,
 		outline: false,
 	});
 }

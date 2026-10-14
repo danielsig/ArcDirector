@@ -1,3 +1,4 @@
+import { Time, type GameObject } from '@arc-director/kindling';
 import {
 	dummyEntity,
 	pascalCase,
@@ -17,7 +18,6 @@ import {
 	Wanted,
 	alarmActive,
 } from '../engine/components';
-import type { GameObject } from '../engine/GameObject';
 import type { World } from '../engine/World';
 import { Pickupable } from '../items/components';
 import { listCarried } from '../items/inventory';
@@ -143,7 +143,7 @@ export function kernelsOf(
 			if (go === character) {
 				continue;
 			}
-			if (hidePlayer && go.id === 'Player' && !alarmActive(go, world.time)) {
+			if (hidePlayer && go.id === 'Player' && !alarmActive(go, Time.time)) {
 				continue;
 			}
 			if (!isLiving(go)) {
@@ -306,7 +306,7 @@ export function scanWorld(host:GameHost):void {
 		if (go.getComponent(Celebrating)) {
 			return;
 		}
-		if (bubble.text && host.world.time >= bubble.until) {
+		if (bubble.text && Time.time >= bubble.until) {
 			bubble.text = '';
 		}
 	});

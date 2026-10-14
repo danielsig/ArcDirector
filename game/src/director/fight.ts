@@ -1,8 +1,9 @@
+import { type GameObject } from '@arc-director/kindling';
 import { shortTag, type Collective, type SeenName } from 'arc-director';
-import type { GameObject } from '../engine/GameObject';
 import type { GameHost, CharacterCtx } from './adapter';
-import { HumanBody, Vitals, Weakness } from '../engine/components';
+import { Guard, HumanBody, Vitals, Weakness } from '../engine/components';
 import { idOf, isLiving } from './names';
+import { standableNear } from '../world/path';
 
 export type FightRole = 'Witch' | 'Knight' | 'Archer' | 'Blade' | 'Healer';
 
@@ -42,21 +43,58 @@ export type AttackKind = {
 	castTime:number;
 	cooldown:number;
 	accuracy:number;
-	falloff?:number;
-	/** Hit shove multiplier. 1 is slash/hex; cleave is heavier. */
+	/** Hit shove multiplier. 1 is stab/hex; slice and cleave are heavier. */
 	knock?:number;
+	/** What differs for these roles: a Knight's slower stab, a Witch's slow, heavy smite. */
+	by?:Partial<Record<FightRole, Partial<Pick<AttackKind, 'damage' | 'castTime' | 'cooldown'>>>>;
 };
+
+/** Share of its accuracy a ranged attack (shot or spell) keeps at the edge of its range; closer, more. */
+export const RANGE_FALLOFF = 0.8;
 
 /** Damage and accuracy multiplier when a `soften` attack has no clear shot. */
 export const COVER_SOFTEN = 0.4;
 
 export const ATTACKS:Record<string, AttackKind> = {
-	slash: { roles: ['Blade'], range: 1.7, damage: 1, word: 'slashed', castTime: 0.28, cooldown: 0.72, accuracy: 0.9 },
-	smite: { roles: ['Healer'], range: 2.2, damage: 2, word: 'smote', castTime: 0.4, cooldown: 1.2, accuracy: 0.86 },
-	hex: { roles: ['Witch'], range: SPELL_RANGE, damage: 3, cover: 'soften', word: 'hexed', castTime: 1.8, cooldown: 1.4, accuracy: 0.84, falloff: 0.5 },
+	stab: { roles: ['Blade', 'Knight'], range: 1.6, damage: 1, word: 'stabbed', castTime: 0.2, cooldown: 0.55, accuracy: 0.92, by: { Knight: { castTime: 0.36, cooldown: 1 } } },
+	slice: { roles: ['Blade'], range: 1.9, damage: 2, word: 'sliced', castTime: 0.4, cooldown: 0.95, accuracy: 0.84, knock: 1.4 },
+	smite: { roles: ['Healer', 'Witch'], range: 4, damage: 2, word: 'smote', castTime: 0.4, cooldown: 1.2, accuracy: 0.86, by: { Witch: { damage: 9, castTime: 2.4, cooldown: 14 } } },
+	hex: { roles: ['Witch'], range: SPELL_RANGE, damage: 3, cover: 'soften', word: 'hexed', castTime: 1.8, cooldown: 1.4, accuracy: 0.84 },
 	cleave: { roles: ['Knight'], range: 2.2, damage: 4, word: 'cleaved', castTime: 0.8, cooldown: 1.6, accuracy: 0.74, knock: 2.2 },
-	shoot: { roles: ['Archer'], range: 12, damage: 5, cover: 'block', word: 'shot', castTime: 1.5, cooldown: 3.5, accuracy: 0.78, falloff: 0.28 },
+	shoot: { roles: ['Archer'], range: 12, damage: 4, cover: 'block', word: 'shot', castTime: 1.5, cooldown: 0.4, accuracy: 0.9 },
 };
+
+/** Each role's own attack, what `attack()` and `protect` swing. */
+const ROLE_ATTACK:Record<FightRole, string> = { Blade: 'stab', Knight: 'cleave', Archer: 'shoot', Witch: 'hex', Healer: 'smite' };
+
+/** `verb` as `role` makes it, with what differs for that role. */
+export function attackFor(verb:string, role:FightRole | undefined):AttackKind {
+	const spec = ATTACKS[verb]!;
+	return { ...spec, ...(role && spec.by?.[role]) };
+}
+
+/**
+ * Raising a sword to guard: it stays up `seconds`, and melee blows and arrows from within `arc`
+ * radians of where the guard faces do nothing. Spells pass.
+ */
+export const BLOCK = { roles: ['Knight', 'Blade'] as FightRole[], seconds: 1.6, arc: 1.3 };
+
+/** Whether `target`'s raised guard stops a blow from `attacker`, who stands in front of it; counts the block. */
+export function guardStops(target:GameObject, attacker:GameObject):boolean {
+	const guard = target.getComponent(Guard);
+	if (!guard?.up) {
+		return false;
+	}
+	const yaw = target.transform.yaw;
+	const dx = attacker.transform.position.x - target.transform.position.x;
+	const dz = attacker.transform.position.z - target.transform.position.z;
+	const len = Math.hypot(dx, dz);
+	if (len > 1e-3 && (-Math.sin(yaw) * dx - Math.cos(yaw) * dz) / len < Math.cos(BLOCK.arc)) {
+		return false;
+	}
+	guard.blocked++;
+	return true;
+}
 
 /** Damage after the target's weakness, if it has one, and whether the blow found it. Never below 1. */
 export function weaknessDamage(target:GameObject, verb:string | undefined, damage:number):{ damage:number; weak:boolean } {
@@ -69,44 +107,43 @@ export function weaknessDamage(target:GameObject, verb:string | undefined, damag
 }
 
 /** Combat verb for this fight role. Healer smites; heal is separate. */
-export function attackVerbFor(role:FightRole):string | undefined {
-	for (const [verb, spec] of Object.entries(ATTACKS)) {
-		if (spec.roles.includes(role)) {
-			return verb;
-		}
-	}
-	return undefined;
+export function attackVerbFor(role:FightRole):string {
+	return ROLE_ATTACK[role];
 }
 
-export const HEAL = { castTime: 5, cooldown: 24, hp: 4, range: SPELL_RANGE };
+/** A heal gives `hp` at once as its cast ends, then the same again trickling back over `regen` s (`Regen`). */
+export const HEAL = { castTime: 5, cooldown: 24, hp: 4, regen: 8, range: SPELL_RANGE };
 
 function hitCycle(castTime:number, cooldown:number):number {
 	return castTime + cooldown;
 }
 
-function dpsOf(spec:AttackKind):string {
-	return (spec.damage / hitCycle(spec.castTime, spec.cooldown)).toFixed(1);
+/** One attack as `role` swings it: damage, reach, how often, and damage per second. */
+function attackNote(verb:string, role:FightRole):string {
+	const spec = attackFor(verb, role);
+	const every = hitCycle(spec.castTime, spec.cooldown);
+	return `${verb} ${spec.damage} dmg, ${spec.range}m, every ${every.toFixed(1)}s (~${(spec.damage / every).toFixed(1)} dps)`;
 }
 
-function attackLine(verb:string, role:FightRole):string {
-	const spec = ATTACKS[verb];
-	const every = hitCycle(spec.castTime, spec.cooldown).toFixed(1);
-	return `${role} ${FIGHT_HP[role]} hp, ${verb} ${spec.damage} dmg, ${spec.range}m, every ${every}s (~${dpsOf(spec)} dps)`;
+/** A role's hp and its attacks, its own first. */
+function roleLine(role:FightRole):string {
+	const verbs = Object.keys(ATTACKS).filter((verb) => ATTACKS[verb]!.roles.includes(role))
+		.sort((a, b) => Number(b === ROLE_ATTACK[role]) - Number(a === ROLE_ATTACK[role]));
+	return `${role} ${FIGHT_HP[role]} hp, ${verbs.map((verb) => attackNote(verb, role)).join('; ')}`;
 }
 
 /** Standing rules sheet for the parties' minds. Numbers match ATTACKS / HEAL / FIGHT_WALK. */
 export function formatFightRules():string {
 	const healEvery = hitCycle(HEAL.castTime, HEAL.cooldown).toFixed(0);
 	const cover = Math.round(COVER_SOFTEN * 100);
-	const smite = ATTACKS.smite;
-	const smiteEvery = hitCycle(smite.castTime, smite.cooldown).toFixed(1);
 	return [
 		`Walk ${FIGHT_WALK} m/s.`,
-		`${attackLine('slash', 'Blade')}.`,
-		`${attackLine('cleave', 'Knight')}.`,
-		`${attackLine('shoot', 'Archer')}; arrows need a clear shot.`,
-		`${attackLine('hex', 'Witch')}; ${cover}% through cover.`,
-		`Healer ${FIGHT_HP.Healer} hp, smite ${smite.damage} dmg, ${smite.range}m, every ${smiteEvery}s (~${dpsOf(smite)} dps); heal ${HEAL.hp} hp, ${HEAL.range}m, every ${healEvery}s, ${cover}% through cover. Stay ${BACK_STANDOFF}m from enemies; heal from ${HEAL.range}m, never walk in for smite.`,
+		`${roleLine('Blade')}.`,
+		`${roleLine('Knight')}.`,
+		`${BLOCK.roles.join(' and ')} can block: guard up ${BLOCK.seconds}s; melee and arrows from the front do nothing, spells pass.`,
+		`${roleLine('Archer')}; arrows need a clear shot.`,
+		`${roleLine('Witch')}; hex ${cover}% through cover.`,
+		`${roleLine('Healer')}; heal ${HEAL.hp} hp at once and ${HEAL.hp} more over ${HEAL.regen}s, ${HEAL.range}m, every ${healEvery}s, ${cover}% through cover. Stay ${BACK_STANDOFF}m from enemies; heal from ${HEAL.range}m, never walk in for smite.`,
 		'Blade is hardest to hit, Knight easiest. shoot and hex lose accuracy at range.',
 	].join(' ');
 }
@@ -199,9 +236,9 @@ export function fightTags(host:GameHost, character:GameObject):string[] {
 	return tags;
 }
 
-/** Closest living rival to `from`. */
-export function nearestRival(host:GameHost, from:GameObject):GameObject | undefined {
-	return nearestRivalWhere(host, from);
+/** Closest living rival to `from` (that passes `ok`). */
+export function nearestRival(host:GameHost, from:GameObject, ok?:(go:GameObject)=>boolean):GameObject | undefined {
+	return nearestRivalWhere(host, from, ok);
 }
 
 function nearestWhere(
@@ -338,8 +375,14 @@ function keepClearOfRival(
 	return awayFrom(from, foe, BACK_STANDOFF, here);
 }
 
-/** Rank slot for this character: melee line on the rival, backline behind that line. */
+/** Rank slot for this character: melee line on the rival, backline behind that line, on ground it can stand on. */
 export function rankSlot(host:GameHost, character:GameObject):{ x:number; z:number } | undefined {
+	const slot = lineSlot(host, character);
+	return slot && standableNear(host.world, character, slot);
+}
+
+/** Where the rank line puts this character, wherever that falls: a wall, a pillar. */
+function lineSlot(host:GameHost, character:GameObject):{ x:number; z:number } | undefined {
 	const role = fightRole(host, character);
 	if (!role) {
 		return undefined;

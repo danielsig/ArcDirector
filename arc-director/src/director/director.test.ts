@@ -251,6 +251,29 @@ describe('ArcDirector', () => {
 		director.dispose();
 	});
 
+	it('hands verbs a name without the words sight wrapped it in', async () => {
+		const targets:unknown[] = [];
+		const director = await new ArcDirector<Ctx>()
+			.addModel('fake', { maxParallel: 1 })
+			.addFakeInference(() => ({ content: 'wait()', toolCalls: [] }))
+			.withArcFormat('text')
+			.addStockVerbs()
+			.withDefaultKit({ verbs: [...STOCK_VERBS] })
+			.onVerb((call) => {
+				targets.push(call.args.target);
+				return { ok: true, verb: call.verb };
+			})
+			.withContext((id) => ({ paragraph: scene(), id }))
+			.addCharacter({ id: 'Player' })
+			.start();
+		const player = director.character('Player')!;
+		for (const said of ['what seems to be a Lantern', 'the Lantern', 'an Lantern', 'Lantern']) {
+			await player.enact(parseArc(`go_to(target="${said}")`, player.activeVerbs()));
+		}
+		assert.deepEqual(targets, ['Lantern', 'Lantern', 'Lantern', 'Lantern']);
+		director.dispose();
+	});
+
 	it('thinks again on the next tick after go_to, wander, or offer', async () => {
 		const lines = ['go_to(EastGate)', 'wander()', 'offer(to=Baker, give={"Loaf":1}, get={"gold":5})'];
 		for (const line of lines) {

@@ -1,4 +1,4 @@
-import { Component } from '../engine/Component';
+import { Component } from '@arc-director/kindling';
 import type { ItemInstance } from './instance';
 
 export class Item extends Component {

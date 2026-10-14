@@ -174,20 +174,24 @@ watch(
 </template>
 
 <style scoped>
+/* The AI log: a parchment drawer up from the bottom edge. Entries stay monospace (they are prompts and JSON). */
 .hud-ai-log {
 	position: absolute;
-	left: 0;
-	right: 0;
+	left: 14px;
+	right: 14px;
 	bottom: 0;
 	z-index: 2;
 	max-height: min(52vh, 520px);
 	display: flex;
 	flex-direction: column;
-	background: rgba(12, 10, 8, 0.78);
-	box-shadow: 0 -8px 28px rgba(0, 0, 0, 0.4);
 	pointer-events: auto;
-	color: #f0e6c8;
-	font-family: ui-monospace, "Cascadia Code", monospace;
+	color: var(--ink);
+	font-family: var(--font);
+	background: var(--parchment);
+	border: var(--line) solid var(--ink);
+	border-bottom: 0;
+	border-radius: var(--radius) var(--radius) 0 0;
+	box-shadow: var(--shadow-panel);
 }
 
 .head {
@@ -195,25 +199,22 @@ watch(
 	display: flex;
 	align-items: center;
 	gap: 10px;
-	padding: 8px 14px 6px;
-	font-size: 12px;
-	letter-spacing: 0.14em;
-	text-transform: uppercase;
-	color: #d4c4a0;
-	border-bottom: 1px solid rgba(58, 42, 34, 0.85);
-	text-shadow: 0 1px 0 #1a1208;
+	padding: 10px 14px 8px;
+	font-size: 18px;
+	font-weight: 700;
+	border-bottom: var(--line-thin) solid var(--ink-soft);
 }
 
 .head select,
 .search input {
 	font: inherit;
-	font-size: 11px;
-	letter-spacing: 0.04em;
-	text-transform: none;
-	color: #f0e6c8;
-	background: rgba(8, 6, 4, 0.55);
-	border: 1px solid rgba(58, 42, 34, 0.85);
-	padding: 2px 6px;
+	font-size: 13px;
+	font-weight: 400;
+	color: var(--ink);
+	background: var(--parchment);
+	border: var(--line-thin) solid var(--ink);
+	border-radius: var(--radius-small);
+	padding: 3px 8px;
 }
 
 .head select {
@@ -222,43 +223,47 @@ watch(
 
 .search {
 	position: relative;
-	flex: 0 1 12em;
-	width: 12em;
+	flex: 0 1 13em;
+	width: 13em;
 }
 
 .search input {
-	box-sizing: border-box;
 	width: 100%;
-	padding-right: 22px;
+	padding-right: 24px;
 	outline: none;
 }
 
+.search input:focus-visible,
+.head select:focus-visible {
+	border-color: var(--gold-deep);
+}
+
 .search input::placeholder {
-	color: #8a7a62;
+	color: var(--ink);
+	opacity: 0.45;
 }
 
 .search button {
 	position: absolute;
-	right: 0;
+	right: 2px;
 	top: 0;
 	bottom: 0;
 	width: 22px;
+	padding: 0;
 	border: 0;
 	background: transparent;
-	color: #d4c4a0;
+	color: var(--ink);
 	cursor: pointer;
 	font: inherit;
-	font-size: 14px;
+	font-size: 16px;
 	line-height: 1;
-	padding: 0;
 }
 
 .hint {
 	margin-left: auto;
-	letter-spacing: 0.04em;
-	text-transform: none;
-	opacity: 0.55;
-	font-size: 11px;
+	font-size: 12px;
+	font-weight: 400;
+	opacity: 0.6;
 }
 
 .rows {
@@ -269,13 +274,13 @@ watch(
 }
 
 .empty {
-	opacity: 0.5;
-	font-size: 13px;
+	opacity: 0.6;
+	font-size: 14px;
 	padding: 10px 6px;
 }
 
 .row {
-	border-bottom: 1px solid rgba(58, 42, 34, 0.55);
+	border-bottom: 1px solid var(--ink-soft);
 }
 
 .row:last-child {
@@ -289,6 +294,11 @@ watch(
 	align-items: baseline;
 	padding: 7px 6px;
 	cursor: pointer;
+	border-radius: var(--radius-small);
+}
+
+.row summary:hover {
+	background: var(--parchment-deep);
 }
 
 .row summary::-webkit-details-marker {
@@ -298,7 +308,7 @@ watch(
 .row summary::before {
 	content: "▸";
 	flex: 0 0 auto;
-	opacity: 0.45;
+	opacity: 0.5;
 	font-size: 11px;
 }
 
@@ -309,20 +319,20 @@ watch(
 .name {
 	flex: 0 0 auto;
 	min-width: 7.5em;
-	font-size: 11px;
-	letter-spacing: 0.06em;
-	color: #c4a574;
+	font-size: 13px;
+	font-weight: 700;
+	color: var(--gold-deep);
 }
 
 .row.err .name {
-	color: #e08070;
+	color: var(--health);
 }
 
 .msg {
 	flex: 1 1 auto;
+	font-family: var(--font-mono);
 	font-size: 12px;
 	line-height: 1.35;
-	opacity: 0.92;
 	white-space: nowrap;
 	overflow: hidden;
 	text-overflow: ellipsis;
@@ -331,18 +341,19 @@ watch(
 .full {
 	margin: 0 6px 10px 22px;
 	padding: 8px 10px;
-	background: rgba(8, 6, 4, 0.45);
-	font: inherit;
+	font-family: var(--font-mono);
 	font-size: 12px;
 	line-height: 1.4;
 	white-space: pre-wrap;
 	word-break: break-word;
-	color: #f0e6c8;
+	color: var(--ink);
+	background: var(--parchment-deep);
+	border-radius: var(--radius-small);
 }
 
 .full mark {
-	background: #c4a574;
-	color: #1a1208;
+	background: var(--gold);
+	color: var(--ink);
 	padding: 0;
 }
 
@@ -352,13 +363,13 @@ watch(
 	max-width: min(256px, calc(100% - 28px));
 	height: auto;
 	image-rendering: pixelated;
-	border: 2px solid #1a1208;
-	background: #141018;
+	border: var(--line-thin) solid var(--ink);
+	border-radius: var(--radius-small);
 }
 
 .ai-log-enter-active,
 .ai-log-leave-active {
-	transition: transform 0.22s ease;
+	transition: transform var(--slow) var(--ease-out);
 }
 
 .ai-log-enter-from,

@@ -1,3 +1,4 @@
+import { Time, type GameObject } from '@arc-director/kindling';
 import type { MapMark, MapPrev, MapSnapshot } from 'arc-director';
 import {
 	Bridge,
@@ -7,7 +8,6 @@ import {
 	HumanBody,
 	Named,
 } from '../engine/components';
-import type { GameObject } from '../engine/GameObject';
 import type { World } from '../engine/World';
 import { CELL_SIZE } from '../world/constants';
 import { tileFill } from '../world/tileFill';
@@ -61,7 +61,7 @@ export function snapshotMap(
 ):MapSnapshot | { image:string } | null {
 	const go = world.findByID(npcID);
 	const p = origin ?? go?.transform.position;
-	if (prev && p && holdLastPicture(world.time, prev, zoom, p.x, p.z)) {
+	if (prev && p && holdLastPicture(Time.time, prev, zoom, p.x, p.z)) {
 		return { image: prev.image };
 	}
 	const bounds = viewBounds(world, npcID, zoom, origin);

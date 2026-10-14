@@ -9,7 +9,7 @@ import {
 	Pickupable,
 	Weapon,
 } from '../items/components';
-import { ChunkBound } from '@arc-director/kindling';
+import { ChunkBound, GameObject } from '@arc-director/kindling';
 import {
 	BoxCollider,
 	Flame,
@@ -19,7 +19,6 @@ import {
 	Torch,
 } from '../engine/components';
 import { MeshRenderer } from '../engine/MeshRenderer';
-import { GameObject } from '../engine/GameObject';
 import type { World } from '../engine/World';
 import type { ItemInstance } from '../items/instance';
 import { getDef } from '../items/defs';

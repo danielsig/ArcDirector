@@ -1,15 +1,20 @@
-import { World as KindlingWorld, type Component, type Constructor, type TerrainSample } from '@arc-director/kindling';
-import type { GameObject } from './GameObject';
-import { InputState } from './InputState';
-import { Named } from './components';
-import { SOLID_PROPS, type Chunk, type Tile } from '../world/Chunk';
+import { World as KindlingWorld, Time, type Component, type Constructor, type GameObject, type TerrainSample } from '@arc-director/kindling';
+import { BRIDGE_DECK_Y, Named } from './components';
+import { SOLID_PROPS, type Chunk } from '../world/Chunk';
 import { CELL_SIZE, CHUNK_SIZE, TILE_HEIGHT } from '../world/constants';
-import { waterOpenAt } from '../world/water';
+import { onLoweredBridge } from '../world/water';
 
+/** Kindling hands back this game's World and Chunk (`go.world`, `world.chunks`, `tileAtWorld`). */
+declare module '@arc-director/kindling' {
+	interface KindlingTypes {
+		world:World;
+		chunk:Chunk;
+	}
+}
+
+/** ArcDirector hands verbs bare names (`bareName`), so only case and spacing are left to forgive. */
 function nameQuery(name:string):{ want:string; compact:string } {
-	let s = name.trim().toLowerCase();
-	s = s.replace(/^(what seems to be|what looks like|the|a|an)\s+/g, '');
-	s = s.replace(/^(what seems to be|what looks like|the|a|an)\s+/g, '');
+	const s = name.trim().toLowerCase();
 	return { want: s, compact: s.replace(/[^a-z0-9]/g, '') };
 }
 
@@ -25,10 +30,8 @@ type NameIndex = {
 };
 
 export class World extends KindlingWorld {
-	public declare readonly objects:GameObject[];
-	public readonly input = new InputState();
-	public declare readonly chunks:Map<number, Chunk>;
-	public time = 0;
+	/** Where the mouse points on the ground (the crosshair while the pointer is locked). Set by `GroundPick`. */
+	public groundHit:{ x:number; z:number } | null = null;
 	public hudMessage = '';
 	public hudMessageTimestamp = 0;
 	public hudMessageLife = 3.2;
@@ -47,29 +50,17 @@ export class World extends KindlingWorld {
 		if (!chunk || !tile) {
 			return undefined;
 		}
-		const water = tile.def === 'water' && waterOpenAt(this, x, z);
+		const deck = tile.def === 'water' && onLoweredBridge(this, x, z);
 		return {
 			height: tile.height,
-			worldY: tile.height * TILE_HEIGHT,
-			blocked: (!!tile.blocked && !water) || SOLID_PROPS.has(chunk.propAtWorld(x, z) ?? ''),
+			worldY: deck ? BRIDGE_DECK_Y : tile.height * TILE_HEIGHT,
+			blocked: (!!tile.blocked && !deck) || SOLID_PROPS.has(chunk.propAtWorld(x, z) ?? ''),
 			climbable: tile.def === 'stairs',
 		};
 	}
 
 	public npcCanSee(go:GameObject):boolean {
 		return !(this.playerInperceivable && go.id === 'Player' && this.playerHits.size === 0);
-	}
-
-	public override add(go:GameObject):GameObject {
-		return super.add(go) as GameObject;
-	}
-
-	public override findByID(id:string):GameObject | undefined {
-		return super.findByID(id) as GameObject | undefined;
-	}
-
-	public override objectsInTile(tx:number, tz:number):readonly GameObject[] {
-		return super.objectsInTile(tx, tz) as readonly GameObject[];
 	}
 
 	public override forEachComponent<T extends Component>(
@@ -86,7 +77,7 @@ export class World extends KindlingWorld {
 
 	public setMessage(text:string, life = 3.2):void {
 		this.hudMessage = text;
-		this.hudMessageTimestamp = this.time;
+		this.hudMessageTimestamp = Time.time;
 		this.hudMessageLife = life;
 	}
 
@@ -125,10 +116,10 @@ export class World extends KindlingWorld {
 
 	private nameIndex():NameIndex {
 		const old = this._names;
-		if (old && old.time === this.time && old.objects.length === this.objects.length) {
+		if (old && old.time === Time.time && old.objects.length === this.objects.length) {
 			return old;
 		}
-		const index:NameIndex = { time: this.time, objects: [...this.objects], exact: new Map(), alias: new Map(), loose: [] };
+		const index:NameIndex = { time: Time.time, objects: [...this.objects], exact: new Map(), alias: new Map(), loose: [] };
 		index.objects.forEach((go, i) => {
 			const named = go.getComponent(Named);
 			const aliases = named?.aliases ?? [];
@@ -151,13 +142,5 @@ export class World extends KindlingWorld {
 		});
 		this._names = index;
 		return index;
-	}
-
-	public override chunkAtWorld(x:number, z:number):Chunk | undefined {
-		return super.chunkAtWorld(x, z) as Chunk | undefined;
-	}
-
-	public override tileAtWorld(x:number, z:number):Tile | undefined {
-		return super.tileAtWorld(x, z) as Tile | undefined;
 	}
 }

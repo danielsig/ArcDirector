@@ -1,7 +1,7 @@
+import { Time, type GameObject } from '@arc-director/kindling';
 import { markRaw } from 'vue';
 import { PlayerInput } from '../characters/PlayerInput';
 import { HumanBody, Appearance, Named, SpeechBubble, Vitals, Wallet } from './components';
-import type { GameObject } from './GameObject';
 import type { World } from './World';
 import type { Renderer } from '@arc-director/kindling';
 import { CELL_SIZE, CHUNK_SIZE } from '../world/constants';
@@ -117,30 +117,35 @@ function projectOverhead(
 	return view.projectToCanvas(p.x, p.y + height, p.z);
 }
 
+/** A line under someone's bubble (what they are doing), or `thinking` while their mind is. */
+export type OverheadNote = { id:string; text:string; thinking?:boolean };
+
 function patchOverhead(
 	world:World,
 	hud:HudModel,
 	view:Renderer,
-	npcNotes:{ id:string; text:string }[],
+	npcNotes:OverheadNote[],
 	healthBars:boolean,
 ):void {
 	const byID = new Map<string, {
 		go:GameObject;
 		text:string;
 		status:string;
+		thinking:boolean;
 		height:number;
 		hp:number;
 		maxHP:number;
 		timestamp:number;
 	}>();
 	world.forEachComponent(SpeechBubble, (bubble, go) => {
-		if (!bubble.text || world.time >= bubble.until) {
+		if (!bubble.text || Time.time >= bubble.until) {
 			return;
 		}
 		byID.set(go.id, {
 			go,
 			text: bubble.text,
 			status: '',
+			thinking: false,
 			height: overheadY(go, false),
 			hp: 0,
 			maxHP: 0,
@@ -148,7 +153,7 @@ function patchOverhead(
 		});
 	});
 	for (const note of npcNotes) {
-		if (!note.text) {
+		if (!note.text && !note.thinking) {
 			continue;
 		}
 		const go = findObject(world, note.id);
@@ -158,12 +163,14 @@ function patchOverhead(
 		const row = byID.get(go.id);
 		if (row) {
 			row.status = note.text;
+			row.thinking = note.thinking ?? false;
 		}
 		else {
 			byID.set(go.id, {
 				go,
 				text: '',
 				status: note.text,
+				thinking: note.thinking ?? false,
 				height: overheadY(go, false),
 				hp: 0,
 				maxHP: 0,
@@ -187,6 +194,7 @@ function patchOverhead(
 				go,
 				text: '',
 				status: '',
+				thinking: false,
 				height: barY,
 				hp: vitals.hp,
 				maxHP: vitals.maxHP,
@@ -202,8 +210,10 @@ function patchOverhead(
 		if (n < speech.length) {
 			const slot = speech[n];
 			slot.id = id;
+			slot.name = idOf(row.go);
 			slot.text = row.text;
 			slot.status = row.status;
+			slot.thinking = row.thinking;
 			slot.hp = row.hp;
 			slot.maxHP = row.maxHP;
 			slot.x = screen.x;
@@ -214,8 +224,10 @@ function patchOverhead(
 		else {
 			speech.push({
 				id,
+				name: idOf(row.go),
 				text: row.text,
 				status: row.status,
+				thinking: row.thinking,
 				hp: row.hp,
 				maxHP: row.maxHP,
 				x: screen.x,
@@ -317,7 +329,7 @@ export function patchHud(
 	world:World,
 	hud:HudModel,
 	view:Renderer,
-	npcNotes:{ id:string; text:string }[] = [],
+	npcNotes:OverheadNote[] = [],
 	healthBars = false,
 ):void {
 	const player = world.findByID('Player');
@@ -326,7 +338,7 @@ export function patchHud(
 	hud.maxHP = vitals?.maxHP ?? 5;
 	hud.gold = player?.getComponent(Wallet)?.coins ?? 0;
 	hud.showGold = sceneHasGold(world);
-	hud.message = world.time - world.hudMessageTimestamp < world.hudMessageLife ? world.hudMessage : '';
+	hud.message = Time.time - world.hudMessageTimestamp < world.hudMessageLife ? world.hudMessage : '';
 	if (hud.statsOverlay || (hud.menuOpen && hud.menuPage === 'testing')) {
 		hud.renderStats = view.stats();
 	}
@@ -387,9 +399,9 @@ function overheadID(host:GameHost, mind:{ thinkThread():string }):string | undef
 	return idOf(body);
 }
 
-export function statusLabels(host:GameHost):{ id:string; text:string }[] {
-	const now = host.world.time;
-	const out:{ id:string; text:string }[] = [];
+export function statusLabels(host:GameHost):OverheadNote[] {
+	const now = Time.time;
+	const out:OverheadNote[] = [];
 	const queue = host.arc?.mindQueue();
 	for (const mind of host.arc?.minds() ?? []) {
 		const id = overheadID(host, mind);
@@ -397,7 +409,7 @@ export function statusLabels(host:GameHost):{ id:string; text:string }[] {
 			continue;
 		}
 		if (queue?.isThinking(mind.id)) {
-			out.push({ id, text: 'thinking...' });
+			out.push({ id, text: '', thinking: true });
 			continue;
 		}
 		const row = host.labels.get(id);
@@ -411,7 +423,7 @@ export function statusLabels(host:GameHost):{ id:string; text:string }[] {
 export function patchInfer(host:GameHost, hud:HudModel):void {
 	const infer = host.arc?.infer;
 	const queue = host.arc?.mindQueue();
-	const now = host.world.time;
+	const now = Time.time;
 	const rows = host.arc?.minds() ?? [];
 	const next = rows.map((mind) => {
 		const last = mind.lastTacticalTimestamp;

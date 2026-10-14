@@ -1,6 +1,6 @@
+import { type GameObject } from '@arc-director/kindling';
 import type { CharacterSpec, SpeechUtterance } from 'arc-director';
 import type { NPCInput } from '../characters/NPCInput';
-import type { GameObject } from '../engine/GameObject';
 import type { World } from '../engine/World';
 
 export type CharacterCtx = {

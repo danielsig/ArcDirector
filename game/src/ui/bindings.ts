@@ -42,6 +42,7 @@ export function universalKeys(consoleKey:string):SceneKey[] {
 		{ key: 'Enter', action: 'Toggle Prompt' },
 		{ key: 'Tab', action: 'Toggle Chat' },
 		{ key: consoleKey, action: 'Toggle AI Log' },
+		{ key: 'P', action: 'Toggle Music Player' },
 		{ key: '1-8', action: 'Select Item' },
 		{ key: 'G', action: 'Drop Item' },
 		{ key: 'Esc', action: 'Close' },

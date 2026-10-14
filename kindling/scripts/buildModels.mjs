@@ -10,7 +10,8 @@
 //   (for skirts and coat tails that were skinned to the wrong bones).
 // - `humanoid`: VRM bone → node name, for a humanoid rigged off Mixamo; it then plays the shared clips.
 // - `rigid`: mesh node → bone that carries all of it (a quiver Tripo smeared over the arm and head).
-// - `innerShell`: a pitch-black inside for hollow garments (a robe with no legs reads as shadow).
+// - `innerShell`: a pitch-black inside for hollow garments (a robe with no legs reads as shadow), its
+//   open edges (hem, front slit) closed with black triangles sinking inward.
 // - `bow`: rig an unrigged bow (long axis +Y, string on −X) with five bones: `Grip`, `LimbUpper` and
 //   `LimbLower` (weights fading out toward the grip), and `StringUpper` / `StringLower` from each tip
 //   to the nock (the string's own vertices, all on one of them). The game draws it from code.
@@ -646,28 +647,95 @@ async function atlas(doc, materials, prims) {
 		.setRoughnessFactor(1).setMetallicFactor(0);
 }
 
-/** Single-sided materials plus a pitch-black copy of every surface facing inward. */
+/**
+ * Single-sided materials plus a pitch-black copy of every surface facing inward, and black triangles
+ * closing each open edge loop (a robe's hem and the slit up its front) into a crevice that sinks to
+ * a point inside the loop, so nothing shows through the gap.
+ */
 function addInnerShell(doc) {
 	const black = doc.createMaterial('inner_shell').setBaseColorFactor([0, 0, 0, 1]).setRoughnessFactor(1).setMetallicFactor(0);
 	for (const material of doc.getRoot().listMaterials()) {
 		material.setDoubleSided(false);
 	}
-	for (const mesh of doc.getRoot().listMeshes()) {
+	for (const node of doc.getRoot().listNodes().filter((n) => n.getMesh())) {
+		const mesh = node.getMesh();
+		const hips = node.getSkin()?.listJoints().findIndex((j) => j.getName() === `${MIXAMO}Hips`) ?? -1;
 		for (const prim of mesh.listPrimitives()) {
-			const inner = doc.createPrimitive().setMaterial(black).setMode(prim.getMode());
-			for (const semantic of prim.listSemantics()) {
-				inner.setAttribute(semantic, prim.getAttribute(semantic));
-			}
 			const idx = prim.getIndices().getArray();
 			const flipped = idx.slice();
 			for (let i = 0; i < flipped.length; i += 3) {
 				flipped[i + 1] = idx[i + 2];
 				flipped[i + 2] = idx[i + 1];
 			}
-			inner.setIndices(doc.createAccessor().setType('SCALAR').setArray(flipped).setBuffer(prim.getIndices().getBuffer()));
+			const loops = openLoops(prim);
+			const count = prim.getAttribute('POSITION').getCount();
+			const inner = doc.createPrimitive().setMaterial(black).setMode(prim.getMode());
+			for (const semantic of prim.listSemantics()) {
+				// One more vertex per loop, its middle: on the hips if skinned (the hem swings round it).
+				const source = prim.getAttribute(semantic);
+				const size = source.getElementSize();
+				const array = new (source.getArray().constructor)((count + loops.length) * size);
+				array.set(source.getArray());
+				loops.forEach((loop, k) => {
+					const fill = { POSITION: loop.middle, JOINTS_0: [Math.max(hips, 0), 0, 0, 0], WEIGHTS_0: [1, 0, 0, 0], NORMAL: [0, -1, 0] }[semantic];
+					array.set(fill ?? [], (count + k) * size);
+				});
+				source.setArray(array);
+				inner.setAttribute(semantic, source);
+			}
+			const caps = loops.flatMap((loop, k) => loop.edges.flatMap(([from, to]) => [to, from, count + k]));
+			const all = new (count + loops.length > 65535 ? Uint32Array : idx.constructor)([...flipped, ...caps]);
+			inner.setIndices(doc.createAccessor().setType('SCALAR').setArray(all).setBuffer(prim.getIndices().getBuffer()));
 			mesh.addPrimitive(inner);
 		}
 	}
+}
+
+/**
+ * A primitive's open edge loops (edges only one triangle has, welded by position), each with its
+ * edges (vertex indices, in their triangle's order) and the middle of its vertices.
+ */
+function openLoops(prim) {
+	const pos = prim.getAttribute('POSITION');
+	const idx = prim.getIndices().getArray();
+	const at = (v) => pos.getElement(v, []);
+	const weld = new Map();
+	const welded = Array.from({ length: pos.getCount() }, (_, v) => {
+		const key = at(v).map((c) => Math.round(c * 1e4)).join();
+		return weld.get(key) ?? (weld.set(key, v), v);
+	});
+	const uses = new Map();
+	for (let t = 0; t < idx.length; t += 3) {
+		for (let e = 0; e < 3; e++) {
+			const [from, to] = [idx[t + e], idx[t + ((e + 1) % 3)]];
+			const key = [welded[from], welded[to]].sort((x, y) => x - y).join();
+			uses.set(key, [...(uses.get(key) ?? []), [from, to]]);
+		}
+	}
+	const open = [...uses.values()].filter((u) => u.length === 1).map(([edge]) => edge);
+	// Loops: edges joined through shared (welded) vertices.
+	const loops = [];
+	const left = new Set(open);
+	while (left.size) {
+		const loop = [left.values().next().value];
+		left.delete(loop[0]);
+		const ends = new Set(loop[0].map((v) => welded[v]));
+		for (let grew = true; grew;) {
+			grew = false;
+			for (const edge of left) {
+				if (edge.some((v) => ends.has(welded[v]))) {
+					loop.push(edge);
+					left.delete(edge);
+					edge.forEach((v) => ends.add(welded[v]));
+					grew = true;
+				}
+			}
+		}
+		const points = [...ends].map(at);
+		const middle = [0, 1, 2].map((k) => points.reduce((sum, q) => sum + q[k], 0) / points.length);
+		loops.push({ edges: loop, middle });
+	}
+	return loops;
 }
 
 /** Disposes a clip with its samplers, so `prune` can drop the keyframe data. */

@@ -23,6 +23,13 @@ describe('prompt split', () => {
 		assert.equal(stablePrefix('Baker', identity, verbs).includes('ledger'), false);
 	});
 
+	it('shows give and offer moving the host currency, and says nothing about money without one', () => {
+		const system = stablePrefix('Baker', identity, verbs, { arcFormat: 'text', currency: 'shells' });
+		assert.ok(system.includes('give(item=shells, to=Player, quantity=5) pays 5 shells; saying so does not.'));
+		assert.ok(system.includes('In an offer, shells counts like any item: {"shells":5}.'));
+		assert.equal(/pays|shells/.test(stablePrefix('Baker', identity, verbs, { arcFormat: 'text' })), false);
+	});
+
 	it('puts standing instructions in the system prefix, not goals', () => {
 		const system = stablePrefix('Guard', identity, verbs, { includeWatches: true, canSeeMap: true });
 		assert.match(system, /You are Guard/);

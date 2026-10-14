@@ -1,10 +1,14 @@
 import { instrumentOf, type InstrumentEnvelope } from '../audio/instruments.js';
 import { scoreProblems } from '../audio/midi.js';
 import type { Note, Score, SoundFilter, Voice } from '../audio/types.js';
-import '../audio/synth.js';
 
-export { registerInstrument, type InstrumentEnvelope, type InstrumentPlay } from '../audio/instruments.js';
-export { pad, pluck, lead, bass, bell, drum, air, piano } from '../audio/synth.js';
+export {
+	registerInstrument,
+	pad, pluck, lead, bass, bell, drum, air, piano,
+	violin, cello, brass, flute, guitar, twelveString, koto, choir,
+	type InstrumentEnvelope,
+	type InstrumentPlay,
+} from '../audio/instruments.js';
 export { overdrive, reverb } from '../audio/filters.js';
 export type { OverdriveFilter, ReverbFilter, SoundFilter } from '../audio/types.js';
 

@@ -2,14 +2,6 @@ import { filterProblems } from './filters.js';
 import { instrumentOf } from './instruments.js';
 import type { SoundFilter } from './types.js';
 
-export function midiHz(midi:number):number {
-	return 440 * 2 ** ((midi - 69) / 12);
-}
-
-export function clamp(n:number, lo:number, hi:number):number {
-	return Math.max(lo, Math.min(hi, n));
-}
-
 /** Empty list means the score is playable. */
 export function scoreProblems(score:ScoreLike):string[] {
 	const out:string[] = [];

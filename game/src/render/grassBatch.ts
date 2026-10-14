@@ -1,9 +1,10 @@
 import * as THREE from 'three';
-import { ToonMaterial } from '@arc-director/kindling';
+import { ToonMaterial, hash } from '@arc-director/kindling';
 import type { World } from '../engine/World';
 import { CELL_SIZE, CHUNK_SIZE } from '../world/constants';
 import { windSway } from './nature';
 import { grassCleared } from '../world/dressingPlan';
+import { sandAt } from '../world/water';
 
 /**
  * Grass blades over every lawn tile: one instanced mesh of painted tufts for the whole world.
@@ -22,11 +23,6 @@ let tuftGeo:THREE.BufferGeometry | null = null;
 let bladeMat:ToonMaterial | null = null;
 let stamp = '';
 
-function cellHash(x:number, z:number, salt:number):number {
-	const n = Math.sin(x * 127.1 + z * 311.7 + salt * 74.7) * 43758.5453;
-	return n - Math.floor(n);
-}
-
 /** One clump of blades leaning out from its root, each in two curved segments to a point. */
 function tuftGeometry():THREE.BufferGeometry {
 	const pos:number[] = [];
@@ -34,14 +30,14 @@ function tuftGeometry():THREE.BufferGeometry {
 	const col:number[] = [];
 	const color = new THREE.Color();
 	for (let b = 0; b < BLADES; b++) {
-		const a = (b / BLADES) * Math.PI * 2 + cellHash(b, 1, 2) * 0.8;
+		const a = (b / BLADES) * Math.PI * 2 + hash(b, 1, 2) * 0.8;
 		const dx = Math.cos(a);
 		const dz = Math.sin(a);
-		const root = 0.02 + cellHash(b, 3, 4) * 0.06;
-		const h = 0.26 + cellHash(b, 5, 6) * 0.18;
-		const lean = 0.08 + cellHash(b, 7, 8) * 0.1;
+		const root = 0.02 + hash(b, 3, 4) * 0.06;
+		const h = 0.26 + hash(b, 5, 6) * 0.18;
+		const lean = 0.08 + hash(b, 7, 8) * 0.1;
 		const w = 0.05;
-		const tint = (cellHash(b, 9, 10) - 0.5) * 0.15;
+		const tint = (hash(b, 9, 10) - 0.5) * 0.15;
 		// Across the blade, perpendicular to its lean.
 		const sx = -dz * w * 0.5;
 		const sz = dx * w * 0.5;
@@ -81,11 +77,12 @@ function chunkStamp(world:World):string {
 	return s;
 }
 
-/** Tuft transforms: a few per lawn tile, kept off paths and the ground props stand on. */
+/** Tuft transforms: a few per lawn tile, kept off paths, riverbank sand and the ground props stand on. */
 function tuftMatrices(world:World):THREE.Matrix4[] {
 	const dummy = new THREE.Object3D();
 	const out:THREE.Matrix4[] = [];
 	const chunks = [...world.chunks.values()];
+	const defAt = (x:number, z:number):string | undefined => world.tileAtWorld(x, z)?.def;
 	for (const chunk of chunks) {
 		const ox = chunk.worldOriginX();
 		const oz = chunk.worldOriginZ();
@@ -100,14 +97,15 @@ function tuftMatrices(world:World):THREE.Matrix4[] {
 			const gx = chunk.origin.cx * CHUNK_SIZE + lx;
 			const gz = chunk.origin.cz * CHUNK_SIZE + lz;
 			for (let t = 0; t < TUFTS_PER_CELL; t++) {
-				const hx = cellHash(gx, gz, t * 3 + 1);
-				const hz = cellHash(gx, gz, t * 3 + 2);
-				const hs = cellHash(gx, gz, t * 3 + 3);
-				dummy.position.set(
-					ox + (lx + 0.1 + hx * 0.8) * CELL_SIZE,
-					0,
-					oz + (lz + 0.1 + hz * 0.8) * CELL_SIZE,
-				);
+				const hx = hash(gx, gz, t * 3 + 1);
+				const hz = hash(gx, gz, t * 3 + 2);
+				const hs = hash(gx, gz, t * 3 + 3);
+				const x = ox + (lx + 0.1 + hx * 0.8) * CELL_SIZE;
+				const z = oz + (lz + 0.1 + hz * 0.8) * CELL_SIZE;
+				if (sandAt(defAt, x, z)) {
+					continue;
+				}
+				dummy.position.set(x, 0, z);
 				dummy.rotation.set(0, hs * Math.PI * 2, 0);
 				const s = 0.8 + hs * 0.45;
 				dummy.scale.set(s, s * (0.85 + hx * 0.3), s);

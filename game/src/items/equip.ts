@@ -1,9 +1,9 @@
+import { type GameObject } from '@arc-director/kindling';
 import {
 	BODY_SLOTS,
 	HumanBody,
 	type BodySlot,
 } from '../engine/components';
-import type { GameObject } from '../engine/GameObject';
 import type { World } from '../engine/World';
 import { spawnWorldItem } from '../world/spawnItem';
 import { isItemFill, isOccupied, slotItem, tryInsert } from './inventory';

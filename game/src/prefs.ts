@@ -56,7 +56,7 @@ const DEFAULT = {
 	model: '',
 	playerKind: '',
 	maxParallel: 2,
-	contextLength: 8192,
+	contextLength: 16384,
 	batchThinks: true,
 	thinkingBudget: true,
 	arcFormat: 'json' as ArcFormatPref,

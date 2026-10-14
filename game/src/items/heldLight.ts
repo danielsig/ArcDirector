@@ -1,5 +1,5 @@
+import { type GameObject } from '@arc-director/kindling';
 import { HumanBody, Light, Torch } from '../engine/components';
-import type { GameObject } from '../engine/GameObject';
 import { slotItem } from './inventory';
 
 export function syncHeldTorchLight(character:GameObject, dt:number):void {

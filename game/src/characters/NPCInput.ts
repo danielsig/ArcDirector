@@ -1,4 +1,4 @@
-import { Component } from '../engine/Component';
+import { Time, Component } from '@arc-director/kindling';
 import { Order } from '../engine/order';
 
 /** What ArcDirector asks of an NPC body: where to head, whom to face, and its cooldowns. The motor does the moving. */
@@ -9,9 +9,9 @@ export class NPCInput extends Component {
 	public faceName:string | null = null;
 	public faceUntil = 0;
 	public aiOn = true;
-	/** Next time `world.time` this body may start a cast. */
+	/** Next time `Time.time` this body may start a cast. */
 	public attackReadyTimestamp = 0;
-	/** Next time `world.time` this body may start a heal. */
+	/** Next time `Time.time` this body may start a heal. */
 	public healReadyTimestamp = 0;
 
 	public faceToward(name:string, until = Number.POSITIVE_INFINITY):void {

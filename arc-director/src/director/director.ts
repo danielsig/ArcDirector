@@ -34,6 +34,7 @@ import {
 } from '../perception/sight.js';
 import { formatInventory } from '../perception/formatInventory.js';
 import type { Inventory } from '../perception/inventory.js';
+import { bareName } from '../perception/lod.js';
 import type { SeenObject, Sight, SightClause } from '../perception/types.js';
 import {
 	registerStockCollectiveVerbs,
@@ -260,6 +261,7 @@ export class ArcDirector<TCtx = unknown> {
 	private _verbInstructions:string | undefined;
 	private _arcExample:string | undefined;
 	private _systemNote:string | undefined;
+	private _currency:string | undefined;
 	private _repairTemperature:number | undefined;
 	private _seenFn:SeenName<TCtx> | undefined;
 	private _mindDefaults:MindSettings = {};
@@ -524,6 +526,16 @@ ${dump.message}`, image: dump.image });
 	}
 
 	/**
+	 * The item id the world pays with (`gold`). Minds are told how `give` and `offer` move it, the purse is counted in it,
+	 * and handing it over is remembered as paying. Without one, nothing is said about money.
+	 */
+	public withCurrency(name:string):this {
+		this.assertBuilder();
+		this._currency = name;
+		return this;
+	}
+
+	/**
 	 * Repair turns after a bad arc. `retries` is how many (default 0: a bad reply fails the think).
 	 * `temperature` applies from the second repair on, so a model stuck on one reply moves (default 0.4).
 	 */
@@ -587,7 +599,7 @@ ${dump.message}`, image: dump.image });
 		this.assertBuilder();
 		this._senses.carrying = {
 			description: 'What you wear and carry.',
-			gather: (ctx) => formatInventory(look(ctx)),
+			gather: (ctx) => formatInventory(look(ctx), this._currency),
 		};
 		return this;
 	}
@@ -1097,6 +1109,8 @@ ${dump.message}`, image: dump.image });
 					this.talkMindOf(owner).pushEvent(event);
 				}
 			},
+			tellAll: (event) => this.pushEvent(event),
+			currency: this._currency,
 		});
 		for (const [verb, handler] of Object.entries(handlers)) {
 			if (missingParts(verb, this._world).length === 0) {
@@ -1267,6 +1281,7 @@ ${dump.message}`, image: dump.image });
 			verbInstructions: this._verbInstructions,
 			arcExample: this._arcExample,
 			systemNote: this._systemNote,
+			currency: this._currency,
 			repairTemperature: this._repairTemperature,
 			seenAs: this.seenAs(mind),
 			worldContext: () => this.tryCtx(owner.voice.id) ?? (owner instanceof Collective ? this.present(owner)?.ctx : undefined),
@@ -1468,6 +1483,8 @@ ${dump.message}`, image: dump.image });
 				continue;
 			}
 			if (kind === 'id') {
+				// The model may echo the name as sight wrote it: `go_to(what seems to be a Lantern)`.
+				args[key] = bareName(value);
 				const catalog = /[(.]|=>/.test(value) ? catalogAt() : undefined;
 				if (!catalog) {
 					continue;

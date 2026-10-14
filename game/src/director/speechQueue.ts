@@ -1,6 +1,5 @@
-import { Speaker } from '@arc-director/kindling';
+import { Speaker, Time, type GameObject } from '@arc-director/kindling';
 import { SpeechBubble } from '../engine/components';
-import type { GameObject } from '../engine/GameObject';
 import type { World } from '../engine/World';
 import { distXZ } from '../items/inventory';
 import { prefs } from '../prefs';
@@ -33,7 +32,7 @@ export class SpeechQueue {
 	/** Queue a line. The player never waits: their line starts now, and people in earshot wait for it. */
 	public enqueue(go:GameObject, text:string):void {
 		if (go.id === 'Player') {
-			this.start({ go, text }, this._world.time);
+			this.start({ go, text }, Time.time);
 			return;
 		}
 		this._waiting.push({ go, text });
@@ -42,7 +41,7 @@ export class SpeechQueue {
 
 	/** Start every waiting line that nobody in earshot is in the way of. Call every frame. */
 	public update():void {
-		const now = this._world.time;
+		const now = Time.time;
 		this._speaking = this._speaking.filter((s) => now < s.until + TURN_GAP && s.go.world === this._world);
 		const held:Line[] = [];
 		for (const line of this._waiting.splice(0)) {

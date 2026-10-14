@@ -38,8 +38,8 @@ const CHARACTERS = [
 /** Hand-held props: height (m) and how the hand holds each. */
 const PROPS:Record<string, { height:number; grip:Grip }> = {
 	Sword: { height: 1, grip: { at: 0.87, tilt: Math.PI + 0.4 } },
-	Staff: { height: 1.7, grip: { at: 0.62, tilt: 1.4 } },
-	ShamanStaff: { height: 1.6, grip: { at: 0.6, tilt: 1.2 } },
+	Staff: { height: 1.7, grip: { at: 0.62 } },
+	ShamanStaff: { height: 1.6, grip: { at: 0.6 } },
 	ShamanBow: { height: 1.2, grip: { tilt: 1 } },
 	SkeletalBow: { height: 1.2, grip: { tilt: 1 } },
 };
@@ -91,7 +91,7 @@ class Pose extends Component {
 		this._props ??= held.flatMap(({ hand, prop }) => {
 			const obj = makeMesh(prop);
 			const g = { ...PROPS[prop]?.grip };
-			if (hand === 'right' && params.has('tilt')) {
+			if (params.has('tilt')) {
 				g.tilt = Number(params.get('tilt'));
 				g.roll = Number(params.get('roll') ?? 0);
 			}

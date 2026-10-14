@@ -1,10 +1,10 @@
+import { Time, type GameObject } from '@arc-director/kindling';
 import { type ArcResult, type SpeechUtterance, type VerbCall } from 'arc-director';
 import { HumanBody, Named } from '../engine/components';
-import type { GameObject } from '../engine/GameObject';
 import type { World } from '../engine/World';
 import { distXZ } from '../items/inventory';
 import { coinsOf } from '../items/wallet';
-import { parseSlash, SLASH_HELP, type ParsedSlash, type SayCatalog } from '../ui/sayCommands';
+import { parseSlash, type ParsedSlash, type SayCatalog } from '../ui/sayCommands';
 import type { GameHost } from './adapter';
 import { idOf, findObject, isLiving } from './names';
 import type { CharacterCtx } from './types';
@@ -136,7 +136,7 @@ export function playerSay(host:GameHost, text:string):void {
 	const directed = parseDirectedLine(spoken, talkOthers(host.world, 'Player'));
 	const line = directed?.text ?? spoken;
 	const to = directed?.to ?? (peers.length <= 1 ? peers[0] : peers);
-	const result = host.talk.say('Player', line, to, host.world.time);
+	const result = host.talk.say('Player', line, to, Time.time);
 	if (!result.ok) {
 		host.world.setMessage(result.reason ?? 'no one heard');
 	}
@@ -145,11 +145,6 @@ export function playerSay(host:GameHost, text:string):void {
 export function playerSlash(host:GameHost, slash:ParsedSlash):void {
 	if (!slash.ok) {
 		host.world.setMessage(slash.reason);
-		return;
-	}
-	if (slash.verb === 'help') {
-		host.world.setMessage(SLASH_HELP);
-		pushChat(host, 'Help', SLASH_HELP);
 		return;
 	}
 	// The player's character runs it like any other arc: it walks over first, as an NPC would.
@@ -182,7 +177,7 @@ export function talkNames(host:GameHost, id:string):string[] {
 }
 
 export function pushChat(host:GameHost, speaker:string, text:string, to?:string, act = false):void {
-	host.chat.push({ speaker, text, to, timestamp: host.world.time, act: act || undefined });
+	host.chat.push({ speaker, text, to, timestamp: Time.time, act: act || undefined });
 	if (host.chat.length > CHAT_CAP) {
 		host.chat.splice(0, host.chat.length - CHAT_CAP);
 	}

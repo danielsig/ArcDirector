@@ -1,6 +1,5 @@
-import { MeshRenderer, Time } from '@arc-director/kindling';
+import { MeshRenderer, Time, yawToward, Component } from '@arc-director/kindling';
 import * as THREE from 'three';
-import { Component } from '../engine/Component';
 import { HumanBody } from '../engine/components';
 import { Order } from '../engine/order';
 
@@ -90,7 +89,7 @@ export class Raven extends Component {
 		const dx = f.to.x - f.from.x;
 		const dz = f.to.z - f.from.z;
 		if (Math.hypot(dx, dz) > 0.1) {
-			this.gameObject.transform.yaw = Math.atan2(-dx, -dz);
+			this.gameObject.transform.yaw = yawToward(dx, dz);
 		}
 		if (u >= 1) {
 			this._flight = null;

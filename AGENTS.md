@@ -16,11 +16,11 @@ pnpm workspace at the repo root (`package.json`, `pnpm-workspace.yaml`).
 - **Language:** TypeScript (strict), pnpm workspaces, not a single root `src/`. 2–3 letter acronyms `ID` / `HP` / `NPC` / `URL` / `UTC` (`NPCDirector`, `npcID`; never `Id`, `Hp`, `Npc`, `Url`, `Utc`). Not units (`Mb` ≠ `MB`, `Ms` ≠ `MS`).
 - **`arc-director`:** pure TS library. Local models over HTTP (LM Studio / Ollama).
 - **`kindling`:** Unity-shaped runtime. Owns canvas, `Renderer`, frame loop, `GameObject` / `Transform` / physics. Three.js is the scene graph.
-- **`game`:** Vue 3 (Composition API, one SFC per file) + Vite. Subclasses Kindling `Game` / `World` / `GameObject` / `Component`. Simulation is not Vue state; HUD is DOM over the canvas.
+- **`game`:** Vue 3 (Composition API, one SFC per file) + Vite. Subclasses Kindling `Game` / `World` / `Component`, and registers its `World` / `Chunk` in `KindlingTypes` (`game/src/engine/World.ts`). Simulation is not Vue state; HUD is DOM over the canvas.
 
 ## Kindling (rough)
 
-Unity-shaped, not Unity. `@arc-director/kindling` owns the canvas, `Renderer`, RAF loop, and scene (`world.native`). Hosts **subclass** `Game` / `World` / `GameObject` / `Component`; they do not own this package. Identity on a GameObject is `id`. Deeper API: `kindling/README.md`. Playground: `pnpm --filter @arc-director/kindling dev` → `http://localhost:5174/`.
+Unity-shaped, not Unity. `@arc-director/kindling` owns the canvas, `Renderer`, RAF loop, and scene (`world.native`). Hosts **subclass** `Game` / `World` / `Component` and fill in `KindlingTypes` so `go.world` and chunks come back as their own types; they do not own this package. Identity on a GameObject is `id`. Deeper API: `kindling/README.md`. Playground: `pnpm --filter @arc-director/kindling dev` → `http://localhost:5174/`.
 
 ### Types
 
@@ -32,6 +32,7 @@ Unity-shaped, not Unity. `@arc-director/kindling` owns the canvas, `Renderer`, R
 | `Transform` | Always present. Wraps `Object3D`. `position` / `yaw` / `pitch` / `roll` are world. |
 | `Component` | Host logic. `enabled`, `static order`. |
 | `Time` | `time`, `deltaTime`, `fixedDeltaTime` (0.02), `fixedTime`. Clamp `MAX_DT` = 0.05. |
+| `Input` | Keyboard, mouse and pointer lock on `world.input`. `Game` attaches it and clears per-frame presses after each frame. |
 | `Rigidbody` | XZ `velocity`; optional `grounded` Y snap. |
 | `BoxCollider` | XZ AABB, or an upright cylinder (`shape: 'cylinder'`, diameter `size.x`) for static round obstacles; `solid` / `isTrigger` / `pad` (shove). |
 | `Chunk` / `ChunkStreamer` | Square tile chunks on `World.chunks`. The streamer loads near `StreamingAnchor`s and parks far `ChunkBound` objects. |
@@ -52,7 +53,7 @@ Per type: `static order` (lower first). Optional `static update` / `fixedUpdate`
 
 ### Frame
 
-`simulate(dt)`: drain `fixedUpdate` → `start` → `update` → `stepPhysics` → `lateUpdate` → `flushDestroy`. Hosts that own pause override `tick` and **do not** call `super.tick` (that would advance `Time` twice). Set `Time.deltaTime` / `Time.time`, then `this.simulate(dt)`.
+`simulate(dt)`: drain `fixedUpdate` → `start` → `update` → `stepPhysics` → `lateUpdate` → `flushDestroy`. Pause with `Game.paused`: frames still tick and draw, `Time` stands still. Hosts that do extra frame work override `tick` and call `super.tick(dt)`. `Time.time` is the one game clock (`resetTime(t)` restarts it at a loaded save's time).
 
 ## Axes (Y-up, right-handed, Three.js)
 
@@ -71,7 +72,7 @@ WASD is camera-relative on XZ. NPCs never see these numbers; verbs and prompts u
 
 ## Characters
 
-Every character is a 3D model generated in Tripo3D (GLB, Mixamo skeleton) by Daniel into `brainstorming/3Dmodels/` (gitignored), then built for the game with `node kindling/scripts/buildModels.mjs brainstorming/3Dmodels game/public/models game/models.json` (needs Kindling built). Mesh IDs are the file names (`Hero`, `KnightMale`, …), listed in `game/src/render/characterModels.ts` with the props (`Sword`, bows, staffs, arrows, `Raven`); clips are shared from `clips.glb`. Per-model build fixes live in `game/models.json`. What a held item looks like in the hand is `HELD` in `game/src/characters/HeldProps.ts`; NPCs get gear through `equip` in their scene entry. `CharacterAnimation` picks clips; `CharacterPose` adds look-at, give/take reach and the bow shot. Lineup: `pnpm --filter @arc-director/kindling dev` → `http://localhost:5174/character.html` (`?right=Sword&left=ShamanBow&look=1`, more in `character.ts`).
+Every character is a 3D model generated in Tripo3D (GLB, Mixamo skeleton) by Daniel into `brainstorming/3Dmodels/` (gitignored), then built for the game with `node kindling/scripts/buildModels.mjs brainstorming/3Dmodels game/public/models game/models.json` (needs Kindling built). Mesh IDs are the file names (`Hero`, `KnightMale`, …), listed in `game/src/render/characterModels.ts` with the props (`Sword`, bows, staffs, arrows, `Raven`); clips are shared from `clips.glb`. Per-model build fixes live in `game/models.json`. What a held item looks like in the hand is `HELD` in `game/src/characters/HeldProps.ts`; NPCs get gear through `equip` in their scene entry. `CharacterAnimation` picks clips; `CharacterPose` adds look-at, give/take reach, the bow shot, the sword moves (stab, slice, guard) with their white trails (`render/swordFx.ts`), and spells cast from the staff's head (hex, smite, heal; `render/spellFx.ts`, pictures in `game/public/textures/vfx.png` and `fireball.png`, packed from `brainstorming/vfx-sprite-sheet.png` and `fireball-animation.png`). Blows land through `director/hitFeel.ts`: hitstop, a starburst and dust, a shockwave and view shake for heavy blows, and the black-and-white impact frame for one that downs (`render/fightFx.ts`). A blow that misses is dodged as it arrives (`CharacterPose.dodge`: a sidestep and lean away, a ghost where the body stood, a whoosh). All effects are built from Kindling's (`kindling/src/render/effects.ts`); sword moves time on Kindling `move()`. Lineup: `pnpm --filter @arc-director/kindling dev` → `http://localhost:5174/character.html` (`?right=Sword&left=ShamanBow&look=1`, more in `character.ts`).
 
 ## Dev server
 

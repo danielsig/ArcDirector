@@ -6,13 +6,13 @@ import { GameObject } from './GameObject.js';
 import { World } from './World.js';
 
 /** Four 4×4 chunks of 1 m tiles in a row along +X; each spawns one bound crate. */
-function scene():{ world:World; streamer:ChunkStreamer<Chunk<number>>; anchor:GameObject; spawns:string[] } {
+function scene():{ world:World; streamer:ChunkStreamer; anchor:GameObject; spawns:string[] } {
 	const world = new World();
 	world.tileSize = 1;
 	world.chunkSize = 4;
 	const spawns:string[] = [];
-	class Streamer extends ChunkStreamer<Chunk<number>> {
-		public override spawn(chunk:Chunk<number>):void {
+	class Streamer extends ChunkStreamer {
+		public override spawn(chunk:Chunk):void {
 			spawns.push(chunk.id);
 			const crate = new GameObject(`crate_${chunk.id}`);
 			crate.addComponent(ChunkBound).chunkID = chunk.id;

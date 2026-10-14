@@ -1,3 +1,4 @@
+import { type GameObject } from '@arc-director/kindling';
 import {
 	BODY_SLOTS,
 	HumanBody,
@@ -7,7 +8,6 @@ import {
 	type SlotFill,
 	Vitals,
 } from '../engine/components';
-import type { GameObject } from '../engine/GameObject';
 import { Container } from './components';
 import { isBackpack, type ItemInstance } from './instance';
 

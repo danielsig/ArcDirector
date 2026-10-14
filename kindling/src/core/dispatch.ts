@@ -52,7 +52,7 @@ export function dispatch(
 		}
 		for (const c of list) {
 			if (c.enabled && overridden(c, hook)) {
-				c[hook](dt);
+				c[hook](dt * c.gameObject.timeRate);
 			}
 		}
 	}

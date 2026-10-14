@@ -98,14 +98,15 @@ function totalCell(row:BenchRow):string {
 </template>
 
 <style scoped>
+/* The decision bench: a parchment panel over the pause menu, as the pause panel itself. */
 .bench-dim {
 	position: absolute;
 	inset: 0;
+	z-index: 4;
 	display: flex;
 	align-items: center;
 	justify-content: center;
-	background: rgba(8, 6, 4, 0.5);
-	z-index: 4;
+	background: var(--backdrop);
 }
 
 .bench {
@@ -113,10 +114,20 @@ function totalCell(row:BenchRow):string {
 	max-height: min(560px, 86vh);
 	display: flex;
 	flex-direction: column;
-	background: var(--parchment);
 	color: var(--ink);
-	font-family: ui-monospace, "Cascadia Code", monospace;
-	box-shadow: 0 2px 0 var(--ink), 0 16px 40px rgba(0, 0, 0, 0.45);
+	font-family: var(--font);
+	background: var(--parchment);
+	border: var(--line) solid var(--ink);
+	border-radius: var(--radius-panel);
+	box-shadow: var(--shadow-panel);
+	animation: rise var(--slow) var(--ease-pop);
+}
+
+@keyframes rise {
+	from {
+		opacity: 0;
+		transform: translateY(12px) scale(0.97);
+	}
 }
 
 .head {
@@ -124,26 +135,24 @@ function totalCell(row:BenchRow):string {
 	align-items: center;
 	justify-content: space-between;
 	gap: 12px;
-	padding: 12px 16px;
-	border-bottom: 1px solid var(--rule);
+	padding: 18px 24px 10px 28px;
+	border-bottom: var(--line-thin) solid var(--ink-soft);
 }
 
 h2 {
 	margin: 0;
-	font-size: 15px;
+	font-size: 26px;
 	font-weight: 700;
-	letter-spacing: 0.18em;
-	text-transform: uppercase;
 }
 
 .body {
 	overflow: auto;
-	padding: 10px 16px 16px;
+	padding: 12px 28px 22px;
 }
 
 .hint {
-	margin: 0 0 10px;
-	font-size: 12px;
+	margin: 0 0 12px;
+	font-size: 14px;
 	opacity: 0.8;
 }
 
@@ -156,30 +165,37 @@ h2 {
 .pick select {
 	flex: 1 1 auto;
 	min-width: 0;
-	font: inherit;
-	font-size: 12px;
-	color: var(--ink);
-	background: var(--cream);
-	border: 0;
 	padding: 4px;
-	box-shadow: inset 0 0 0 2px var(--ink);
+	font: inherit;
+	font-size: 14px;
+	color: var(--ink);
+	background: var(--parchment);
+	border: var(--line-thin) solid var(--ink);
+	border-radius: var(--radius-small);
 }
 
+.pick select option:checked {
+	background: var(--gold);
+}
+
+/* Outlined buttons, as the pause menu's Resume. */
 .close,
 .act {
+	padding: 6px 18px;
 	font: inherit;
-	font-size: 13px;
+	font-size: 16px;
+	font-weight: 700;
 	color: var(--ink);
-	background: var(--cream);
-	border: 0;
-	padding: 6px 14px;
+	background: var(--parchment);
+	border: var(--line-thin) solid var(--ink);
+	border-radius: var(--radius-small);
+	box-shadow: var(--shadow);
 	cursor: pointer;
-	box-shadow: 0 2px 0 var(--ink);
 }
 
 .close:hover,
 .act:hover:not(:disabled) {
-	background: var(--highlight);
+	background: var(--parchment-deep);
 }
 
 .act:disabled {
@@ -187,18 +203,24 @@ h2 {
 	cursor: default;
 }
 
+button:focus-visible,
+select:focus-visible {
+	outline: var(--line-thin) solid var(--gold-deep);
+	outline-offset: 2px;
+}
+
 .stats {
 	width: 100%;
-	margin-top: 14px;
+	margin-top: 16px;
 	border-collapse: collapse;
-	font-size: 12px;
+	font-size: 14px;
 }
 
 .stats th,
 .stats td {
 	text-align: left;
-	padding: 4px 6px 4px 0;
-	border-bottom: 1px solid var(--rule);
+	padding: 5px 8px 5px 0;
+	border-bottom: 1px solid var(--ink-soft);
 	white-space: nowrap;
 }
 
@@ -213,15 +235,15 @@ h2 {
 	font-variant-numeric: tabular-nums;
 }
 
+/* The difficulty columns, shaded apart from the skills. */
 .stats .level {
-	background: rgba(0, 0, 0, 0.05);
+	background: var(--parchment-deep);
 }
 
 .stats th {
-	font-size: 11px;
-	opacity: 0.7;
-	font-weight: 500;
+	font-size: 12px;
+	font-weight: 700;
+	opacity: 0.65;
 	text-transform: capitalize;
 }
-
 </style>

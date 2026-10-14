@@ -1,6 +1,6 @@
+import { Time, type GameObject } from '@arc-director/kindling';
 import type { SpeechUtterance } from 'arc-director';
 import { Alarm, MarketNPC, Wanted } from '../engine/components';
-import type { GameObject } from '../engine/GameObject';
 import { distXZ } from '../items/inventory';
 import { USE_RANGE } from '../items/pickup';
 import type { GameHost } from './adapter';
@@ -36,7 +36,7 @@ export function noteSecurityCry(host:GameHost, utterance:SpeechUtterance):void {
 	}
 	const alarm = speaker.getOrAddComponent(Alarm);
 	alarm.enabled = true;
-	alarm.until = host.world.time + ALARM_LIFE;
+	alarm.until = Time.time + ALARM_LIFE;
 	alarm.word = word;
 	const who = idOf(speaker);
 	host.arc?.pushEvent({
@@ -51,7 +51,7 @@ export function noteSecurityCry(host:GameHost, utterance:SpeechUtterance):void {
 
 /** The first guard in reach speaks and the cry ends, so the rest go back to their gates. */
 export function answerCries(host:GameHost):void {
-	const now = host.world.time;
+	const now = Time.time;
 	const guards:GameObject[] = [];
 	host.world.forEachComponent(MarketNPC, (npc, go) => {
 		if (npc.kind === 'guard') {

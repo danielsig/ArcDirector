@@ -1,3 +1,4 @@
+import { Time, type GameObject } from '@arc-director/kindling';
 import { bundleText, pascalCase, type ArcResult, type Outcome } from 'arc-director';
 import {
 	BODY_SLOTS,
@@ -11,7 +12,6 @@ import {
 	MarketNPC,
 	Named,
 } from '../engine/components';
-import type { GameObject } from '../engine/GameObject';
 import { Harvest, Pickupable } from '../items/components';
 import {
 	characterIs,
@@ -28,7 +28,6 @@ import { dropItem, findChestHolding, pickup, takeFromChest } from '../items/pick
 import { cueAt } from '../audio/cue';
 import { useItem } from '../items/use';
 import type { GameHost } from './adapter';
-import { ledgerQty, noteLedger } from './ledger';
 import { idOf } from './names';
 
 /** The want is met, and the tag that would send them back for the same good comes off. */
@@ -84,7 +83,7 @@ export function takeItem(host:GameHost, character:GameObject, name:string):Outco
 		const reason = pickup(character, loot);
 		const ok = reason !== 'no room' && reason !== 'no world';
 		if (ok) {
-			character.getComponent(Appearance)?.playClip('take', host.world.time, loot);
+			character.getComponent(Appearance)?.playClip('take', Time.time, loot);
 			host.arc?.pushEvent({ kind: 'PickedUp', text: `{0} picked up ${name}`, who: [idOf(character)], tags: ['item', name], major: false });
 			host.hooks.afterPickUp?.(host, character, name);
 		}
@@ -100,7 +99,7 @@ export function takeItem(host:GameHost, character:GameObject, name:string):Outco
 		const reason = takeFromChest(character, held);
 		const ok = reason.startsWith('took ');
 		if (ok) {
-			character.getComponent(Appearance)?.playClip('take', host.world.time, held.chest);
+			character.getComponent(Appearance)?.playClip('take', Time.time, held.chest);
 			host.arc?.pushEvent({ kind: 'PickedUp', text: `{0} picked up ${name}`, who: [idOf(character)], tags: ['item', name], major: false });
 			host.hooks.afterPickUp?.(host, character, name);
 		}
@@ -179,13 +178,13 @@ export function restoreSome(character:GameObject, taken:ItemInstance, original:I
 	original.count += taken.count;
 }
 
-export function settleGive(from:GameObject, to:GameObject, itemName:string, host:GameHost, quantity = 1):ArcResult {
+export function settleGive(from:GameObject, to:GameObject, itemName:string, quantity = 1):ArcResult {
 	if (to === from) {
 		return { ok: false, verb: 'give', reason: 'cannot give to yourself' };
 	}
 	const count = Math.max(1, Math.floor(quantity) || 1);
 	if (compactName(itemName) === 'gold' && !findItem(from, itemName)) {
-		return settlePay(from, to, count, host);
+		return settlePay(from, to, count);
 	}
 	const item = findItem(from, itemName);
 	if (!item) {
@@ -206,13 +205,10 @@ export function settleGive(from:GameObject, to:GameObject, itemName:string, host
 	}
 	const label = pascalCase(gift.name) || gift.name;
 	playHandoff(from, to);
-	const fromID = idOf(from);
-	const toID = idOf(to);
-	noteLedger(host, `${fromID} gave ${ledgerQty(gift.count, label)} to ${toID}.`, [fromID, toID], ['give', label, fromID, toID]);
-	return { ok: true, verb: 'give', reason: `gave ${label} to ${toID}${roomless ? ' (left at their feet — no room)' : ''}` };
+	return { ok: true, verb: 'give', reason: `gave ${label} to ${idOf(to)}${roomless ? ' (left at their feet — no room)' : ''}` };
 }
 
-export function settlePay(from:GameObject, to:GameObject, amount:number, host:GameHost):ArcResult {
+export function settlePay(from:GameObject, to:GameObject, amount:number):ArcResult {
 	if (to === from) {
 		return { ok: false, verb: 'give', reason: 'cannot give to yourself' };
 	}
@@ -221,14 +217,11 @@ export function settlePay(from:GameObject, to:GameObject, amount:number, host:Ga
 		return { ok: false, verb: 'give', reason: err };
 	}
 	playHandoff(from, to);
-	const fromID = idOf(from);
-	const toID = idOf(to);
-	noteLedger(host, `${fromID} paid ${amount} gold to ${toID}.`, [fromID, toID], ['pay', 'gold', fromID, toID]);
-	return { ok: true, verb: 'give', reason: `gave ${amount} gold to ${toID}` };
+	return { ok: true, verb: 'give', reason: `gave ${amount} gold to ${idOf(to)}` };
 }
 
 function playHandoff(from:GameObject, to:GameObject):void {
-	const t = from.world?.time ?? 0;
+	const t = Time.time;
 	from.getComponent(Appearance)?.playClip('give', t, to);
 	to.getComponent(Appearance)?.playClip('take', t, from);
 	cueAt(from.world, 'give', from);
@@ -291,14 +284,5 @@ export function settleExchange(host:GameHost, character:GameObject, other:GameOb
 	for (const name of Object.keys(give)) {
 		dropBoughtTag(host, other, name);
 	}
-	const characterID = idOf(character);
-	const goods = (bundle:Record<string, number>):string => Object.entries(bundle).map(([name, n]) => ledgerQty(n, name)).join(' and ');
-	const label = [...Object.keys(get), ...Object.keys(give)].find((name) => compactName(name) !== 'gold') ?? 'gold';
-	noteLedger(
-		host,
-		`${characterID} traded ${goods(give)} to ${otherID} for ${goods(get)}.`,
-		[characterID, otherID],
-		['trade', label, characterID, otherID],
-	);
 	return { ok: true, reason: `traded ${bundleText(give)} for ${bundleText(get)} with ${otherID}` };
 }

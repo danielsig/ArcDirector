@@ -1,12 +1,12 @@
+import { type GameObject } from '@arc-director/kindling';
 import { Door, Flammable, HumanBody, Lock, Vitals } from '../engine/components';
-import type { GameObject } from '../engine/GameObject';
 import type { World } from '../engine/World';
 import { Pickupable } from '../items/components';
 import { distXZ } from '../items/inventory';
 import { USE_RANGE } from '../items/pickup';
 
 export function aimTarget(world:World, character:GameObject):GameObject | null {
-	const hit = world.input.groundHit;
+	const hit = world.groundHit;
 	let best:GameObject | null = null;
 	let bestScore = Infinity;
 	for (const go of world.objects) {

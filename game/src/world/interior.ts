@@ -1,5 +1,5 @@
+import { type GameObject } from '@arc-director/kindling';
 import { Door, Interior, Lock, Named } from '../engine/components';
-import type { GameObject } from '../engine/GameObject';
 import type { World } from '../engine/World';
 import { CELL_SIZE } from './constants';
 import type { Chunk } from './Chunk';

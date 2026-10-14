@@ -97,13 +97,13 @@ function placeCaret(at:number):void {
 	});
 }
 
-/** The field's monospace character width and left padding, for mapping pixels to characters. */
-function metrics():{ char:number; pad:number } {
+/** The field's monospace character width, left padding and left border, for mapping pixels to characters. */
+function metrics():{ char:number; pad:number; border:number } {
 	const el = field.value!;
 	const style = getComputedStyle(el);
 	const ctx = document.createElement('canvas').getContext('2d')!;
 	ctx.font = style.font;
-	return { char: ctx.measureText('0').width, pad: parseFloat(style.paddingLeft) };
+	return { char: ctx.measureText('0').width, pad: parseFloat(style.paddingLeft), border: parseFloat(style.borderLeftWidth) };
 }
 
 /** The middle of the gap between the chip's amount and name. */
@@ -113,9 +113,10 @@ const chipLeft = computed(() => {
 	if (!a || !el) {
 		return 0;
 	}
-	const { char, pad } = metrics();
+	// Placed in the field's box, so past its border too.
+	const { char, pad, border } = metrics();
 	const mid = a.start + a.digits + (a.end - a.name.length - a.start - a.digits) / 2;
-	return pad + mid * char - el.scrollLeft;
+	return border + pad + mid * char - el.scrollLeft;
 });
 
 function onHover(e:MouseEvent):void {
@@ -386,6 +387,10 @@ function onPick(row:SaySuggestion, e:MouseEvent):void {
 </template>
 
 <style scoped>
+/*
+ * The say box: who hears it on the world above, suggestions in a parchment list, and the line itself in
+ * a parchment field. What is typed stays monospace: the caret chip is placed by character width.
+ */
 .hud-say {
 	position: absolute;
 	left: 50%;
@@ -396,70 +401,78 @@ function onPick(row:SaySuggestion, e:MouseEvent):void {
 	flex-direction: column;
 	gap: 6px;
 	pointer-events: auto;
-	font-family: ui-monospace, "Cascadia Code", monospace;
-	color: #f0e6c8;
+	font-family: var(--font);
+	color: var(--ink);
 }
 
 .who {
-	font-size: 12px;
-	letter-spacing: 0.06em;
-	color: #d4c4a0;
-	text-shadow: 0 1px 0 #1a1208;
+	font-size: 14px;
+	font-weight: 700;
+	color: var(--on-world);
+	text-shadow: var(--on-world-edge);
 	white-space: normal;
 }
 
 .hint {
 	float: right;
-	opacity: 0.55;
-	letter-spacing: 0.04em;
+	margin-top: 2px;
+	font-size: 12px;
+	font-weight: 400;
+	opacity: 0.8;
 }
 
 .suggest {
 	margin: 0;
-	padding: 4px 0;
+	padding: 4px;
 	list-style: none;
-	background: rgba(18, 14, 10, 0.94);
-	box-shadow: 0 0 0 2px #1a1208, 0 8px 24px rgba(0, 0, 0, 0.45);
 	max-height: 220px;
 	overflow-y: auto;
+	background: var(--parchment);
+	border: var(--line) solid var(--ink);
+	border-radius: var(--radius);
+	box-shadow: var(--shadow-panel);
 }
 
 .opt {
 	display: flex;
 	justify-content: space-between;
 	gap: 12px;
-	padding: 6px 12px;
-	font-size: 13px;
+	padding: 6px 10px;
+	font-size: 14px;
+	border-radius: var(--radius-small);
 	cursor: pointer;
 }
 
+/* The picked suggestion is a gold pad, as the pause menu's open tab. */
 .opt.on,
 .opt:hover {
-	background: rgba(80, 58, 32, 0.55);
-	color: #fff6d8;
+	background: var(--gold);
 }
 
 .lab {
-	letter-spacing: 0.03em;
+	font-weight: 700;
 }
 
 .meta {
-	opacity: 0.5;
-	font-size: 11px;
-	letter-spacing: 0.04em;
+	opacity: 0.65;
+	font-size: 12px;
 }
 
 input {
 	width: 100%;
-	box-sizing: border-box;
-	padding: 10px 12px;
-	font: inherit;
+	padding: 10px 14px;
+	font-family: var(--font-mono);
 	font-size: 15px;
-	color: #f0e6c8;
-	background: rgba(18, 14, 10, 0.92);
-	border: 0;
-	box-shadow: 0 0 0 2px #1a1208, 0 8px 24px rgba(0, 0, 0, 0.45);
+	color: var(--ink);
+	background: var(--parchment);
+	border: var(--line) solid var(--ink);
+	border-radius: var(--radius);
+	box-shadow: var(--shadow-panel);
 	outline: none;
+}
+
+input:focus-visible {
+	border-color: var(--gold-deep);
 }
 
 .field {
@@ -473,25 +486,28 @@ input {
 	transform: translate(-50%, -50%);
 	display: flex;
 	flex-direction: column;
-	background: rgba(18, 14, 10, 0.94);
-	box-shadow: 0 0 0 2px #1a1208;
+	overflow: hidden;
+	background: var(--parchment);
+	border: var(--line-thin) solid var(--ink);
+	border-radius: 6px;
 }
 
 .chip button {
 	padding: 0 4px;
 	font-size: 10px;
 	line-height: 14px;
-	color: #f0e6c8;
+	color: var(--ink);
 	background: none;
 	border: 0;
 	cursor: pointer;
 }
 
 .chip button:hover {
-	background: rgba(80, 58, 32, 0.55);
+	background: var(--gold);
 }
 
 input::placeholder {
-	color: #8a7a62;
+	color: var(--ink);
+	opacity: 0.45;
 }
 </style>

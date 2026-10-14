@@ -1,10 +1,10 @@
-import { Animator, Component, MeshRenderer, Time, toonClip } from '@arc-director/kindling';
+import { Animator, Component, MeshRenderer, Time, toonClip, type GameObject } from '@arc-director/kindling';
 import * as THREE from 'three';
-import { Appearance, HurtFlash, RigidBody, SpeechBubble, Vitals } from '../engine/components';
-import type { GameObject } from '../engine/GameObject';
+import { Appearance, Celebrating, HurtFlash, RigidBody, SpeechBubble, Vitals } from '../engine/components';
 import { Order } from '../engine/order';
 import { characterModel } from '../render/characterModels';
 import { CharacterPose } from './CharacterPose';
+import { HeldProps } from './HeldProps';
 
 /**
  * Speed (m/s) at which `walk` plays at rate 1. Playback rate is `speed / WALK_PACE`, so a smaller
@@ -16,12 +16,14 @@ export const WALK_PACE = 1.2;
  * rate 1; the gap is that time times {@link WALK_PACE}. The first plant of a fresh clip is halfway.
  */
 export const WALK_STRIDE = (7 / 12) * WALK_PACE;
-/** Below this the character stands. */
-const MOVING = 0.35;
 /** Standing clips: each plays through once, then another, picked at random, fades in. Hands stay free of the body, so held gear does not clip. */
-const IDLES = ['standing_relax', 'look_around', 'idle'];
-/** Feminine models also stand hands on hips. */
-const FEMININE_IDLES = [...IDLES, 'wait'];
+const IDLES = ['standing_relax', 'look_around'];
+/** Feminine models also stand legs together (`idle`) and, with nothing in hand, hands on hips. */
+const HANDS_ON_HIPS = 'wait';
+const FEMININE_IDLES = [...IDLES, 'idle', HANDS_ON_HIPS];
+
+/** Ways to drop dead, one picked at random per death; each ends lying down and holds there. */
+const DEATHS = ['fall', 'defeat_03'];
 
 /** Blinks per second while hurt, and the two reds it blinks between: [color, glow]. */
 const HURT_BLINK = 14;
@@ -72,7 +74,7 @@ const GESTURES = {
 };
 
 /**
- * Picks the 3D character's clip from what it is doing: down, hurt, moving, or standing (one of
+ * Picks the 3D character's clip from what it is doing: down (one of {@link DEATHS}), hurt, moving, or standing (one of
  * {@link IDLES} after another). Moving plays `walk` at a rate that follows speed (about 2.8× at
  * full speed); a new line of speech adds a
  * gesture, an attack its move. Giving, taking and looking are {@link CharacterPose}'s.
@@ -87,14 +89,21 @@ export class CharacterAnimation extends Component {
 	/** The standing clip, and when (`Time.time`) it has played through; 0 while not standing. */
 	private _idle = '';
 	private _idleUntil = 0;
+	/** How this character fell, while dead; '' while alive. */
+	private _death = '';
 
 	/**
-	 * Starts the move for attack `verb` so its blow lands `windUp` seconds from now: a clip, or for
-	 * `shoot` a bow drawn at `target`. Verbs without one do nothing.
+	 * Starts the move for fight `verb` so it lands `windUp` seconds from now: a clip, a bow drawn at
+	 * `target` for `shoot`, a sword move (stab, slice), or a spell cast at `target` (hex, smite,
+	 * heal). Verbs without one do nothing.
 	 */
 	public strike(verb:string, windUp:number, target?:GameObject):void {
+		const pose = this.gameObject.getComponent(CharacterPose);
 		if (verb === 'shoot' && target) {
-			this.gameObject.getComponent(CharacterPose)?.shoot(target, windUp);
+			pose?.shoot(target, windUp);
+			return;
+		}
+		if (pose?.swing(verb, windUp, target ?? null) || (target && pose?.cast(verb, windUp, target))) {
 			return;
 		}
 		const move = STRIKES[verb];
@@ -103,6 +112,7 @@ export class CharacterAnimation extends Component {
 		}
 		const rate = (move.hit - move.from) / Math.max(windUp, 0.1);
 		this.gameObject.getComponent(Animator)?.playOnce(move.clip, { from: move.from, to: move.to, rate });
+		pose?.clipStrike(verb, windUp, (move.to - move.from) / rate);
 	}
 
 	public override update(dt:number):void {
@@ -111,7 +121,7 @@ export class CharacterAnimation extends Component {
 			return;
 		}
 		const rb = this.gameObject.getComponent(RigidBody);
-		const speed = rb ? Math.hypot(rb.velocity.x, rb.velocity.z) : 0;
+		const speed = rb?.speed ?? 0;
 		const pose = this.gameObject.getComponent(Appearance)?.clip ?? 'auto';
 		const hurt = this.gameObject.getComponent(HurtFlash)?.active === true;
 		const root = this.gameObject.getComponent(MeshRenderer)?.mesh;
@@ -122,15 +132,20 @@ export class CharacterAnimation extends Component {
 		let clip = '';
 		let loop = true;
 		let rate = 1;
-		if ((this.gameObject.getComponent(Vitals)?.hp ?? 1) <= 0) {
-			clip = 'fall';
+		const dead = (this.gameObject.getComponent(Vitals)?.hp ?? 1) <= 0;
+		this._death = dead ? this._death || DEATHS[Math.floor(Math.random() * DEATHS.length)]! : '';
+		if (dead) {
+			clip = this._death;
 			loop = false;
 		}
 		else if (hurt) {
 			clip = 'hit_to_body_01';
 			loop = false;
 		}
-		else if (speed > MOVING || pose === 'walk') {
+		else if (this.gameObject.getComponent(Celebrating)?.enabled) {
+			clip = this.gameObject.getComponent(Celebrating)!.style;
+		}
+		else if (rb?.walking || pose === 'walk') {
 			clip = 'walk';
 			rate = Math.max(speed, 1) / WALK_PACE;
 		}
@@ -144,11 +159,16 @@ export class CharacterAnimation extends Component {
 		this.gesture(animator, standing);
 	}
 
-	/** The standing clip: a fresh pick from {@link IDLES} on standing still, and each time the last one has played through. */
+	/**
+	 * The standing clip: a fresh pick from {@link IDLES} on standing still, and each time the last one
+	 * has played through (or at once when hands on hips would put them through something held).
+	 */
 	private idle(root:THREE.Object3D | null | undefined):string {
-		if (Time.time >= this._idleUntil) {
+		const held = this.gameObject.getComponent(HeldProps);
+		const holding = !!(held?.prop('left') ?? held?.prop('right'));
+		if (Time.time >= this._idleUntil || (holding && this._idle === HANDS_ON_HIPS)) {
 			const feminine = characterModel(root?.userData.meshID as string)?.feminine;
-			const others = (feminine ? FEMININE_IDLES : IDLES).filter((c) => c !== this._idle);
+			const others = (feminine ? FEMININE_IDLES : IDLES).filter((c) => c !== this._idle && !(holding && c === HANDS_ON_HIPS));
 			this._idle = others[Math.floor(Math.random() * others.length)]!;
 			this._idleUntil = Time.time + ((root && toonClip(root, this._idle)?.duration) || 10);
 		}

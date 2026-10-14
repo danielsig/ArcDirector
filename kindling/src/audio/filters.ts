@@ -1,8 +1,5 @@
+import { clamp } from '../core/math.js';
 import type { OverdriveFilter, ReverbFilter, Score, SoundFilter } from './types.js';
-
-function clamp(n:number, lo:number, hi:number):number {
-	return Math.max(lo, Math.min(hi, n));
-}
 
 function unit(n:number):boolean {
 	return Number.isFinite(n) && n >= 0 && n <= 1;
@@ -75,6 +72,9 @@ export function filterProblems(filters:readonly SoundFilter[] | undefined, label
 			}
 			if (f.tone !== undefined && !(f.tone > 0 && Number.isFinite(f.tone))) {
 				out.push(`${tag} tone`);
+			}
+			if (f.level !== undefined && !(f.level >= 0 && Number.isFinite(f.level))) {
+				out.push(`${tag} level`);
 			}
 		}
 	}
@@ -176,7 +176,7 @@ function stage(ctx:AudioContext, filter:SoundFilter):{ input:AudioNode; output:A
 	tone.frequency.value = clamp(filter.tone ?? 2800, 200, 12000);
 	tone.Q.value = 0.7;
 	const output = ctx.createGain();
-	output.gain.value = 1 / (1 + drive * 2.4);
+	output.gain.value = (filter.level ?? 1) / (1 + drive * 2.4);
 	input.connect(shaper);
 	shaper.connect(tone);
 	tone.connect(output);

@@ -7,7 +7,7 @@ import { argBase, GROUP_VERB, type VerbRegistry } from './stock-verbs.js';
  */
 export type Join = 'if_ok' | 'always' | 'if_failed';
 
-/** How many of each item. `gold` is purse gold. */
+/** How many of each item. The currency (`withCurrency`) is an item like any other. */
 export type CountMap = Record<string, number>;
 
 export function isCountMap(v:unknown):v is CountMap {

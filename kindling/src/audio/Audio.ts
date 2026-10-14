@@ -1,8 +1,9 @@
 import { createFilterChain, createReverbSend, filterProblems, openScoreFilters } from './filters.js';
 import { scoreProblems } from './midi.js';
 import { distanceGain, forceStereo, heardAt, makePanner, placePanner, poseListener } from './spatial.js';
-import { makeNoise, patchSeconds, playLayer, playVoiceNote, startLoopLayers, type LoopNodes } from './synth.js';
-import type { ListenerPose, Score, SfxOpts, SfxPatch } from './types.js';
+import { playVoiceNote } from './instruments.js';
+import { disconnectSoon, makeNoise, patchSeconds, pitched, playLayer, startLoopLayers, varied, type LoopNodes } from './synth.js';
+import type { ListenerPose, Score, SfxHandle, SfxOpts, SfxPatch } from './types.js';
 
 function audioCtor():(new (opts?:AudioContextOptions)=>AudioContext) | undefined {
 	const g = globalThis as typeof globalThis & {
@@ -622,7 +623,8 @@ export class Audio {
 		}
 	}
 
-	public playSfx(patch:SfxPatch, opts:SfxOpts = {}):void {
+	/** Plays `patch` once; returns a handle to stop it early, or null when it is not playing (out of earshot, or queued before the context runs). */
+	public playSfx(patch:SfxPatch, opts:SfxOpts = {}):SfxHandle | null {
 		const bad = filterProblems(patch.filters, 'sfx filter');
 		if (bad.length) {
 			throw new Error(`sfx: ${bad.join(', ')}`);
@@ -633,12 +635,12 @@ export class Audio {
 		if (!ctx || !bus || !noise || ctx.state !== 'running') {
 			if (!this._pendingSfx) {
 				this._pendingSfx = { patch, opts: { ...opts } };
-				return;
+				return null;
 			}
 			this.drop('sfx before resume');
-			return;
+			return null;
 		}
-		this.emitSfx(ctx, bus, noise, patch, opts);
+		return this.emitSfx(ctx, bus, noise, patch, opts);
 	}
 
 	private flushPendingSfx():void {
@@ -654,20 +656,26 @@ export class Audio {
 		ctx:AudioContext,
 		bus:GainNode,
 		noise:AudioBuffer,
-		patch:SfxPatch,
+		sound:SfxPatch,
 		opts:SfxOpts,
-	):void {
+	):SfxHandle | null {
+		const patch = pitched(varied(sound), opts.pitch ?? 1, opts.tract ?? 1);
 		const when = ctx.currentTime + 0.01;
 		const seconds = patchSeconds(patch, opts.dur);
 		const placed = this.spatialize(ctx, bus, opts, when, seconds);
 		if (!placed) {
-			return;
+			return null;
 		}
-		const dest = this.insertPatchFilters(ctx, placed, patch, when, seconds);
+		// One gain over the whole sound, for stopping it early.
+		const fade = ctx.createGain();
+		fade.connect(placed);
+		disconnectSoon([fade], when, ctx, seconds + 1);
+		const dest = this.insertPatchFilters(ctx, fade, patch, when, seconds);
 		const g = (patch.gain ?? 1) * (opts.gain ?? 1);
 		for (const layer of patch.layers) {
 			playLayer(ctx, dest, noise, layer, when, { ...opts, gain: g });
 		}
+		return { stop: (seconds = 0.1) => fade.gain.setTargetAtTime(0, ctx.currentTime, Math.max(0.005, seconds / 3)) };
 	}
 
 	/**

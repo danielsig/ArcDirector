@@ -6,6 +6,7 @@ import HudPickup from './ui/HudPickup.vue';
 import HudLayer from './ui/HudLayer.vue';
 import CursorLayer from './ui/CursorLayer.vue';
 import MusicPlayer from './ui/MusicPlayer.vue';
+import SceneBackdrop from './ui/SceneBackdrop.vue';
 import { emptyHud } from './ui/hudModel';
 import { sessionKey } from './ui/sessionKey';
 import type { Session } from './engine/Session';
@@ -26,100 +27,50 @@ const sceneID = ref<string | null>(
 	fromURL && SCENES[fromURL] ? fromURL : null,
 );
 const picker = ref<HTMLElement | null>(null);
-const menuEl = ref<HTMLElement | null>(null);
 const musicMuted = ref(prefs().musicMuted);
 const menuHandle = shallowRef<MenuAudioHandle | null>(null);
 
-/** `public/main_menu_background.jpg` — 2560×1440. */
-const MENU_BG_W = 2560;
-const MENU_BG_H = 1440;
-/** Raven tail, plus a sliver of sky, as a fraction of image width. */
-const RAVEN_RIGHT = 2140 / MENU_BG_W;
-/** Middle of the knight and the witch. */
-const ADVENTURER_X = 1680 / MENU_BG_W;
-/** Visible width of this 16:9 plate inside a 9:16 viewport. */
-const PORTRAIT_VIS = (9 / 16) / (MENU_BG_W / MENU_BG_H);
+/** The demos on the main menu, in order, with a line on each. Screenshots are `public/menu/<id>.jpg`. */
+const CARDS:{ id:string; blurb:string }[] = [
+	{ id: 'ruins', blurb: 'Two squads of five. Each captain thinks; the rest follow orders.' },
+	{ id: 'marketplace', blurb: 'Four sellers with minds of their own, and shoppers who keep coming.' },
+	{ id: 'glen', blurb: 'Three strangers, one errand, and a bridge that costs gold.' },
+	{ id: 'dungeon_vault', blurb: 'A company of three works its way through a five-room crypt.' },
+];
+/** Seconds a card must stay hovered before its scene goes live behind the menu (each one boots a scene). */
+const BACKDROP_DELAY = 0.35;
 
-const frame = ref(menuBackgroundFrame(window.innerWidth, window.innerHeight));
-const menuLeft = ref(menuAnchorX(window.innerWidth, Math.min(220, window.innerWidth - 48)));
+/** The card hovered or focused: its details show at once. */
+const hovered = ref<string | null>(null);
+const hoveredCard = computed(() => CARDS.find((c) => c.id === hovered.value));
+/** The scene live behind the menu, a moment after its card is hovered; null shows the painted background. */
+const backdrop = ref<string | null>(null);
+let backdropTimer = 0;
 
-/** Cover the viewport. Taller than 16:9 crops in from the right, holding the left
- *  edge, until the raven would leave; narrower than that eases onto the adventurers. */
-function menuBackgroundFrame(viewW:number, viewH:number):{ width:number, height:number, x:number, y:number } {
-	const scale = Math.max(viewW / MENU_BG_W, viewH / MENU_BG_H);
-	const width = MENU_BG_W * scale;
-	const height = MENU_BG_H * scale;
-	const visX = width > 0 ? viewW / width : 1;
-	const visY = height > 0 ? viewH / height : 1;
-	let focusX:number;
-	if (visX >= RAVEN_RIGHT) {
-		focusX = visX / 2;
-	} else {
-		const span = RAVEN_RIGHT - PORTRAIT_VIS;
-		const t = span <= 0 ? 1 : Math.min(1, (RAVEN_RIGHT - visX) / span);
-		const from = RAVEN_RIGHT / 2;
-		focusX = from + (ADVENTURER_X - from) * t;
-	}
-	let left = focusX - visX / 2;
-	left = Math.min(Math.max(left, 0), Math.max(0, 1 - visX));
-	let top = 0.5 - visY / 2;
-	top = Math.min(Math.max(top, 0), Math.max(0, 1 - visY));
-	return { width, height, x: -left * width, y: -top * height };
+function preview(id:string):void {
+	hovered.value = id;
+	window.clearTimeout(backdropTimer);
+	backdropTimer = window.setTimeout(() => {
+		backdrop.value = id;
+	}, BACKDROP_DELAY * 1000);
 }
 
-/** Center of the left half. Once that would clip the column, ease toward the screen center. */
-function menuAnchorX(viewW:number, menuW:number):number {
-	const pad = 24;
-	const ideal = viewW * 0.25;
-	const screen = viewW / 2;
-	const minCenter = menuW / 2 + pad;
-	if (minCenter <= ideal) {
-		return ideal;
-	}
-	const fitsAt = minCenter * 4;
-	const centeredAt = Math.max(menuW * 2, 1);
-	const span = fitsAt - centeredAt;
-	const t = span <= 0 ? 1 : Math.min(1, Math.max(0, (fitsAt - viewW) / span));
-	const center = ideal + (screen - ideal) * t;
-	const maxCenter = viewW - minCenter;
-	if (maxCenter < minCenter) {
-		return screen;
-	}
-	return Math.min(maxCenter, Math.max(minCenter, center));
+function unpreview():void {
+	window.clearTimeout(backdropTimer);
+	hovered.value = null;
+	backdrop.value = null;
 }
 
-function layoutPicker():void {
-	const root = picker.value;
-	if (!root) {
-		return;
-	}
-	const viewW = root.clientWidth;
-	const viewH = root.clientHeight;
-	if (viewW <= 0 || viewH <= 0) {
-		return;
-	}
-	frame.value = menuBackgroundFrame(viewW, viewH);
-	const menuW = menuEl.value?.offsetWidth ?? Math.min(220, viewW - 48);
-	menuLeft.value = menuAnchorX(viewW, menuW);
-}
-
-let pickerObserver:ResizeObserver | null = null;
 let stopPrefs:(()=>void) | null = null;
 
 watch(picker, (el) => {
 	menuHandle.value?.stop();
 	menuHandle.value = el ? startMenuAudio(el) : null;
-	pickerObserver?.disconnect();
-	pickerObserver = null;
 	if (el) {
 		musicMuted.value = prefs().musicMuted;
-		pickerObserver = new ResizeObserver(() => layoutPicker());
-		pickerObserver.observe(el);
-		layoutPicker();
 	}
 });
 onMounted(() => {
-	layoutPicker();
 	stopPrefs = watchPrefs((p) => {
 		musicMuted.value = p.musicMuted;
 		if (!sceneID.value) {
@@ -129,8 +80,7 @@ onMounted(() => {
 });
 onUnmounted(() => {
 	stopPrefs?.();
-	pickerObserver?.disconnect();
-	pickerObserver = null;
+	window.clearTimeout(backdropTimer);
 	menuHandle.value?.stop();
 	menuHandle.value = null;
 });
@@ -150,12 +100,12 @@ function kickLive():void {
 	void session.value?.gameObject.world?.audio.resume();
 }
 
-function onMenuMusicCheck(ev:Event):void {
-	const on = (ev.target as HTMLInputElement).checked;
-	menuHandle.value?.setMuted(setPrefs({ musicMuted: !on }).musicMuted);
+function toggleMenuMusic():void {
+	menuHandle.value?.setMuted(setPrefs({ musicMuted: !musicMuted.value }).musicMuted);
 }
 
 function pick(id:string):void {
+	window.clearTimeout(backdropTimer);
 	sceneID.value = id;
 	const url = new URL(window.location.href);
 	url.searchParams.set('scene', id);
@@ -180,38 +130,53 @@ function leave():void {
 
 <template>
 	<div v-if="!sceneID" ref="picker" class="picker">
-		<img
-			class="bg"
-			src="/main_menu_background.jpg"
-			alt=""
-			:style="{
-				width: `${frame.width}px`,
-				height: `${frame.height}px`,
-				transform: `translate(${frame.x}px, ${frame.y}px)`,
-			}"
-		/>
-		<div ref="menuEl" class="menu" :style="{ left: `${menuLeft}px` }">
-			<img class="text-logo" src="/text-logo.png" alt="Arc Director" />
-			<h1>Demos</h1>
-			<button type="button" @click="pick('ruins')">5v5 Combat</button>
-			<button type="button" @click="pick('marketplace')">Marketplace</button>
-			<button type="button" @click="pick('glen')">River Glen</button>
-			<button type="button" @click="pick('dungeon_vault')">Dungeon Crawl</button>
+		<img class="bg" src="/main_menu_background.jpg" alt="">
+		<SceneBackdrop v-if="backdrop" :key="backdrop" :sceneID="backdrop" />
+		<div class="column">
+			<div class="title">
+				<img class="logo" src="/text-logo.png" alt="Arc Director">
+				<p class="slogan">Where NPCs write their own destiny.</p>
+			</div>
+			<div class="cards" @mouseleave="unpreview">
+				<button
+					v-for="card in CARDS"
+					:key="card.id"
+					type="button"
+					class="card"
+					:aria-label="SCENES[card.id]?.title"
+					@mouseenter="preview(card.id)"
+					@focus="preview(card.id)"
+					@blur="unpreview"
+					@click="pick(card.id)"
+				>
+					<img :src="`/menu/${card.id}.jpg`" alt="">
+				</button>
+			</div>
+			<div class="details" :class="{ shown: hoveredCard }" aria-live="polite">
+				<template v-if="hoveredCard">
+					<b>{{ SCENES[hoveredCard.id]?.title }}</b>
+					<span>{{ hoveredCard.blurb }}</span>
+				</template>
+			</div>
 		</div>
-		<label class="music-toggle">
-			<input
-				type="checkbox"
-				:checked="!musicMuted"
-				@change="onMenuMusicCheck"
-			>
-			<svg class="vol" viewBox="0 0 24 24" aria-hidden="true">
+		<button
+			type="button"
+			class="music"
+			:aria-label="musicMuted ? 'Music off (click to play)' : 'Music on (click to mute)'"
+			:title="musicMuted ? 'Music off' : 'Music on'"
+			:aria-pressed="!musicMuted"
+			@click="toggleMenuMusic"
+		>
+			<svg viewBox="0 0 24 24" aria-hidden="true">
+				<path fill="currentColor" d="M4 9v6h4l5 4V5L8 9H4z" />
 				<path
+					v-if="!musicMuted"
 					fill="currentColor"
-					d="M4 9v6h4l5 4V5L8 9H4zm11.5 3c0-1.8-1-3.3-2.5-4.1v8.2c1.5-.8 2.5-2.3 2.5-4.1zM14 3.2v2.1c2.9.9 5 3.5 5 6.7s-2.1 5.8-5 6.7v2.1c4-.9 7-4.5 7-8.8S18 4.1 14 3.2z"
+					d="M15.5 12c0-1.8-1-3.3-2.5-4.1v8.2c1.5-.8 2.5-2.3 2.5-4.1zM14 3.2v2.1c2.9.9 5 3.5 5 6.7s-2.1 5.8-5 6.7v2.1c4-.9 7-4.5 7-8.8S18 4.1 14 3.2z"
 				/>
+				<path v-else d="M16 9l5 6m0-6l-5 6" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
 			</svg>
-			music
-		</label>
+		</button>
 	</div>
 	<template v-else>
 		<KindlingView :key="hud.boots" :hud="hud" :sceneID="sceneID" />
@@ -223,86 +188,192 @@ function leave():void {
 </template>
 
 <style scoped>
+/*
+ * The main menu: the painted background, or a hovered demo's scene live over it; the logo, a grid of
+ * frameless screenshots, and a parchment box with the hovered one's name and a line about it.
+ */
 .picker {
 	position: absolute;
 	inset: 0;
 	overflow: hidden;
-	background: #0e1410;
-	color: #e8dfc8;
-	font-family: ui-monospace, "Cascadia Code", monospace;
+	background: var(--health-track);
+	font-family: var(--font);
+	color: var(--ink);
 }
+
+/* Covers the screen; narrower than 16:9 keeps the knight and the witch in view. */
 .bg {
 	position: absolute;
-	left: 0;
-	top: 0;
-	max-width: none;
-	transform-origin: top left;
+	inset: 0;
+	width: 100%;
+	height: 100%;
+	object-fit: cover;
+	object-position: 66% 50%;
 	pointer-events: none;
 	user-select: none;
 }
-.menu {
+
+/* Darkens the left a little so the column reads over the picture or the scene. */
+.picker::before {
+	content: "";
 	position: absolute;
-	top: 50%;
+	inset: 0;
 	z-index: 1;
+	pointer-events: none;
+	background: linear-gradient(90deg, var(--backdrop), transparent 55%);
+}
+
+.column {
+	position: absolute;
+	z-index: 2;
+	left: 56px;
+	top: 40px;
+	bottom: 40px;
+	width: min(520px, calc(100% - 32px));
+	display: flex;
+	flex-direction: column;
+	justify-content: center;
+	gap: 22px;
+}
+
+/* The logo with the slogan under it, centered over the previews. */
+.title {
 	display: flex;
 	flex-direction: column;
 	align-items: center;
-	gap: 12px;
-	width: max-content;
-	max-width: calc(100% - 48px);
-	transform: translate(-50%, -50%);
+	gap: 2px;
 }
-.text-logo {
-	width: 520px;
-	max-width: 80dvw;
-	margin-bottom: 8dvh;
-	filter: drop-shadow(#EB99 0px 0px 16px);
+
+.logo {
+	width: min(440px, 100%);
+	filter: drop-shadow(var(--shadow)) drop-shadow(0 0 18px rgba(255, 240, 200, 0.5));
 }
-.picker h1 {
+
+.slogan {
 	margin: 0;
-	font-size: 28px;
-	letter-spacing: 0.08em;
-	text-shadow: 0 1px 2px rgba(14, 20, 16, 0.85), 0 0 12px rgba(14, 20, 16, 0.55);
+	font-size: 20px;
+	font-weight: 700;
+	font-style: italic;
+	letter-spacing: 0.03em;
+	color: var(--on-world);
+	text-shadow: var(--on-world-edge);
 }
-.picker button {
-	width: min(220px, calc(100vw - 48px));
-	padding: 10px 18px;
-	font: inherit;
-	color: #1a1208;
-	background: #d4c4a0;
+
+.cards {
+	display: grid;
+	grid-template-columns: 1fr 1fr;
+	gap: 14px;
+}
+
+/* Just the screenshot; hovered or focused, it lifts and grows a little. */
+.card {
+	padding: 0;
 	border: 0;
+	background: none;
+	border-radius: var(--radius-small);
+	overflow: hidden;
+	box-shadow: var(--shadow-panel);
 	cursor: pointer;
+	transition: transform var(--quick) var(--ease-out);
 }
-.picker button:hover {
-	background: #f0e6c8;
+
+.card:hover,
+.card:focus-visible {
+	outline: none;
+	transform: translateY(-4px) scale(1.04);
 }
-.music-toggle {
-	position: absolute;
-	left: 16px;
-	top: 16px;
+
+.card:active {
+	transform: scale(1.01);
+}
+
+.card img {
+	display: block;
+	width: 100%;
+	aspect-ratio: 16 / 10;
+	object-fit: cover;
+}
+
+/* The hovered demo's name and line; keeps its room when empty, so the grid does not jump. */
+.details {
+	min-height: 76px;
 	display: flex;
-	align-items: center;
-	gap: 8px;
-	margin: 0;
-	font-size: 14px;
-	letter-spacing: 0.04em;
-	color: #e8dfc8;
-	text-shadow: 0 1px 2px rgba(8, 6, 4, 0.9);
-	cursor: pointer;
-	user-select: none;
-	z-index: 1;
+	flex-direction: column;
+	gap: 4px;
+	padding: 12px 18px;
+	background: var(--parchment);
+	border: var(--line) solid var(--ink);
+	border-radius: var(--radius);
+	box-shadow: var(--shadow);
+	opacity: 0;
+	transform: translateY(6px);
+	transition: opacity var(--quick) var(--ease-out), transform var(--quick) var(--ease-out);
 }
-.music-toggle input {
-	width: 14px;
-	height: 14px;
-	margin: 0;
-	accent-color: #d4c4a0;
+
+.details.shown {
+	opacity: 1;
+	transform: none;
+}
+
+.details b {
+	font-size: 22px;
+}
+
+.details span {
+	font-size: 15px;
+	line-height: 1.3;
+}
+
+/* Music on or off: a round button in the corner, as the HUD's. */
+.music {
+	position: absolute;
+	z-index: 2;
+	top: 14px;
+	right: 14px;
+	width: var(--btn);
+	height: var(--btn);
+	padding: 0;
+	display: grid;
+	place-items: center;
+	color: var(--ink);
+	background: var(--parchment);
+	border: var(--line) solid var(--ink);
+	border-radius: 50%;
+	box-shadow: var(--shadow);
 	cursor: pointer;
 }
-.music-toggle .vol {
-	width: 16px;
-	height: 16px;
-	flex: none;
-	opacity: 0.9;
+
+.music svg {
+	width: 26px;
+	height: 26px;
+}
+
+.music:focus-visible {
+	outline: var(--line-thin) solid var(--gold-deep);
+	outline-offset: 2px;
+}
+
+@media (max-width: 700px) {
+	.column {
+		left: 16px;
+		right: 16px;
+		top: 16px;
+		bottom: 16px;
+		width: auto;
+		justify-content: flex-start;
+		gap: 12px;
+	}
+
+	.logo {
+		width: min(320px, 70%);
+	}
+
+	.slogan {
+		font-size: 16px;
+	}
+
+	.cards {
+		gap: 10px;
+	}
 }
 </style>

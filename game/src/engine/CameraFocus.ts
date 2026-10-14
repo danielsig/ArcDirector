@@ -1,6 +1,6 @@
+import { Component } from '@arc-director/kindling';
 import type { ExprVal } from 'arc-director';
 import { Camera } from './components';
-import { Component } from './Component';
 import { Order } from './order';
 import type { GameHost } from '../director/adapter';
 

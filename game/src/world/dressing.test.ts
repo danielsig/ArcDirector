@@ -1,8 +1,8 @@
+import { GameObject } from '@arc-director/kindling';
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { formatSight } from 'arc-director';
 import { Named } from '../engine/components';
-import { GameObject } from '../engine/GameObject';
 import { World } from '../engine/World';
 import { lookWorld } from '../director/perception';
 import { glen_0_0 } from '../data/chunks/glen_0_0';
@@ -18,7 +18,7 @@ import { DUNGEON_CHUNKS } from '../data/chunks/dungeon';
 import { decodeGlyphChunk, type ChunkFile } from './decodeGlyphChunk';
 import { spawnChunkEntities } from './spawn';
 import { syncDressingColliders } from './dressingColliders';
-import { DRESSING_SIGHT_WORDS, grassCleared, planProps, PROP_IDS } from './dressingPlan';
+import { DRESSING_SIGHT_WORDS, planProps, PROP_IDS } from './dressingPlan';
 import { cellSteps } from './path';
 
 import type { Chunk } from './Chunk';
@@ -45,12 +45,8 @@ test('dressing stands on open ground, and every prop is used somewhere', () => {
 	assert.deepEqual(PROP_IDS.filter((id) => !placed.has(id)), [], 'props no scene places');
 });
 
-test('in the glen, dressing clears paths, blocks walking when solid, and never reaches sight', () => {
+test('in the glen, dressing blocks walking when solid, and never reaches sight', () => {
 	const chunks = decode(SCENE_MAPS.glen!);
-	const span = chunks.flatMap((chunk) => chunk.entities.filter((e) => e.def === 'bridge_span').map((e) => chunk.worldCellCenter(e.localX, e.localZ)))
-		.sort((a, b) => a.z - b.z)[0];
-	assert.ok(span && grassCleared(chunks, span.x, span.z - 1), 'the cottage path reaches the bridge');
-
 	const world = new World();
 	for (const chunk of chunks) {
 		spawnChunkEntities(world, chunk);
@@ -82,4 +78,33 @@ test('in the glen, dressing clears paths, blocks walking when solid, and never r
 	};
 	assert.equal(stepsOnto('weaponRack'), false, 'the path graph steps onto the weapon rack');
 	assert.equal(stepsOnto('bucket'), true, 'the path graph skips the bucket tile');
+});
+
+test('in the ruins, no route steps onto a cell a fallen column lies across', () => {
+	const chunks = decode(SCENE_MAPS.ruins!);
+	const world = new World();
+	for (const chunk of chunks) {
+		spawnChunkEntities(world, chunk);
+		world.addChunk(chunk);
+	}
+	syncDressingColliders(world);
+	world.reindex();
+	const walker = new GameObject('Walker', 'Person');
+	const columns = planProps(chunks).filter((spot) => spot.prop === 'fallenColumn');
+	assert.ok(columns.length > 0, 'the ruins have no fallen columns');
+	for (const column of columns) {
+		const along = Math.abs(Math.sin(column.yaw)) > 0.5 ? { x: 0, z: 1 } : { x: 1, z: 0 };
+		const tile = world.tileCoordAt(column.x, column.z);
+		for (const reach of [-1, 0, 1]) {
+			const under = { tx: tile.tx + along.x * reach, tz: tile.tz + along.z * reach };
+			for (const [dx, dz] of [[along.z, along.x], [-along.z, -along.x]]) {
+				const beside = world.tileCenter(under.tx + dx!, under.tz + dz!);
+				const onto = cellSteps(world, walker)([beside.x, beside.z]).some((step) => {
+					const at = world.tileCoordAt(step.point[0], step.point[1]);
+					return at.tx === under.tx && at.tz === under.tz;
+				});
+				assert.equal(onto, false, `a step lands on the fallen column at ${column.x}, ${column.z} (cell ${under.tx}, ${under.tz})`);
+			}
+		}
+	}
 });

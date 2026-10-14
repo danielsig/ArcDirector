@@ -1,8 +1,8 @@
+import { Time, type GameObject } from '@arc-director/kindling';
 import * as THREE from 'three';
 import { Chest, Door, Torch, Bridge } from '../engine/components';
 import { MeshRenderer } from '../engine/MeshRenderer';
 import type { World } from '../engine/World';
-import type { GameObject } from '../engine/GameObject';
 import { buildChunkMesh, CHUNK_MESH_REV } from './buildChunkMesh';
 import { getSheet, sheetReady } from './spritesheet';
 import { natureReady, tickNature, untrackNature } from './nature';
@@ -106,7 +106,7 @@ export class WorldPresent {
 			}
 			else if (kind === 'item') {
 				obj.rotation.y = -yaw;
-				this.syncItem(obj, go, go === focus, world.time);
+				this.syncItem(obj, go, go === focus, Time.time);
 			}
 			else if (kind === 'door') {
 				obj.rotation.y = 0;
@@ -147,7 +147,7 @@ export class WorldPresent {
 				focusObj = obj;
 			}
 		}
-		this.syncPickupGlow(focusObj, world.time);
+		this.syncPickupGlow(focusObj, Time.time);
 	}
 
 	public tickNature(time:number):void {
@@ -276,7 +276,7 @@ export class WorldPresent {
 		}
 		const sheet = getSheet();
 		const n = sheet.flame.length;
-		const t = go.world?.time ?? 0;
+		const t = Time.time;
 		const rate = torch?.flickerRate ?? 10;
 		const offset = torch?.animOffset ?? 0;
 		const frame = Math.floor(t * rate + offset * n) % n;

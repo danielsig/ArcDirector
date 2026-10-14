@@ -632,58 +632,95 @@ function pct(n:number):string {
 </template>
 
 <style scoped>
+/*
+ * One parchment panel, plain text tabs, gold for the page you are on (NOTES.md › Pause menu,
+ * mockup-calm-menu.jpg). Switches are knobs, choices are outlined segments, sliders have a gold thumb.
+ */
 .hud-menu-root {
-	--ink: #1a1208;
-	--parchment: #d4c4a0;
-	--cream: #f0e6c8;
-	--highlight: #fff6dc;
-	--rule: #c4b490;
 	position: absolute;
 	inset: 0;
 	pointer-events: none;
+	font-family: var(--font);
+	color: var(--ink);
 }
 
+button,
+select {
+	font: inherit;
+	color: inherit;
+	cursor: pointer;
+}
+
+button:disabled,
+select:disabled {
+	opacity: 0.5;
+	cursor: default;
+}
+
+button:focus-visible,
+select:focus-visible,
+input:focus-visible {
+	outline: var(--line-thin) solid var(--gold-deep);
+	outline-offset: 2px;
+}
+
+/* The top-right Menu button: the same fill and outline as the hotbar slots. */
 .hud-menu-btn {
 	position: absolute;
-	top: 16px;
-	right: 16px;
-	pointer-events: auto;
-	font-family: ui-monospace, "Cascadia Code", monospace;
-	font-size: 14px;
-	letter-spacing: 0.1em;
-	color: var(--ink);
-	background: var(--parchment);
-	border: 0;
-	padding: 6px 12px;
-	cursor: pointer;
-	box-shadow: 0 2px 0 var(--ink), 0 4px 12px rgba(0, 0, 0, 0.35);
+	top: 14px;
+	right: 14px;
 	z-index: 3;
+	/* Fixed, so the buttons left of it (HudKeys, HudBrief, HudQuick) can line up beside it. */
+	width: 112px;
+	height: var(--btn);
+	padding: 0;
+	pointer-events: auto;
+	font-size: 24px;
+	font-weight: 700;
+	background: var(--parchment);
+	border: var(--line) solid var(--ink);
+	border-radius: var(--radius);
+	box-shadow: var(--shadow);
+	transition: transform var(--quick) var(--ease-out);
 }
 
 .hud-menu-btn:hover {
-	background: var(--cream);
+	transform: translateY(-1px);
+}
+
+.hud-menu-btn:active {
+	transform: translateY(2px);
+	box-shadow: none;
 }
 
 .hud-menu-dim {
 	position: absolute;
 	inset: 0;
 	pointer-events: auto;
-	background: rgba(8, 6, 4, 0.62);
 	cursor: default;
 	display: flex;
 	align-items: center;
 	justify-content: center;
+	background: var(--backdrop);
 }
 
 .hud-menu-panel {
-	width: min(720px, 92vw);
-	height: min(520px, 80vh);
+	width: min(760px, 92vw);
+	height: min(540px, 82vh);
 	display: flex;
 	flex-direction: column;
 	background: var(--parchment);
-	color: var(--ink);
-	font-family: ui-monospace, "Cascadia Code", monospace;
-	box-shadow: 0 2px 0 var(--ink), 0 16px 40px rgba(0, 0, 0, 0.45);
+	border: var(--line) solid var(--ink);
+	border-radius: var(--radius-panel);
+	box-shadow: var(--shadow-panel);
+	animation: rise var(--slow) var(--ease-pop);
+}
+
+@keyframes rise {
+	from {
+		opacity: 0;
+		transform: translateY(12px) scale(0.97);
+	}
 }
 
 .head {
@@ -692,93 +729,103 @@ function pct(n:number):string {
 	align-items: center;
 	justify-content: space-between;
 	gap: 12px;
-	padding: 12px 16px;
-	border-bottom: 1px solid var(--rule);
+	padding: 22px 28px 10px 36px;
 }
 
 h2 {
 	margin: 0;
-	font-size: 15px;
+	font-size: 30px;
 	font-weight: 700;
-	letter-spacing: 0.18em;
-	text-transform: uppercase;
 }
 
+/* Outlined buttons: Resume, Main Menu, and the actions inside pages. */
 .resume,
+.rail .scenes,
 .page-actions button,
-.act,
-.rail button {
-	font: inherit;
-	color: var(--ink);
-	background: var(--cream);
-	border: 0;
-	cursor: pointer;
-	box-shadow: 0 2px 0 var(--ink);
+.act {
+	padding: 6px 18px;
+	font-size: 16px;
+	font-weight: 700;
+	background: var(--parchment);
+	border: var(--line-thin) solid var(--ink);
+	border-radius: var(--radius-small);
+	box-shadow: var(--shadow);
 }
 
-.resume {
-	font-size: 13px;
-	padding: 6px 12px;
+.resume:hover:not(:disabled),
+.rail .scenes:hover,
+.page-actions button:hover:not(:disabled),
+.act:hover {
+	background: var(--parchment-deep);
 }
 
-.resume:hover,
-.page-actions button:hover,
-.act:hover,
-.rail button:hover:not(.on) {
-	background: var(--highlight);
+.act {
+	padding: 4px 14px;
+	font-size: 14px;
 }
 
 .body {
 	flex: 1 1 auto;
 	min-height: 0;
 	display: flex;
+	padding: 0 24px 20px;
 }
 
 .rail {
-	flex: 0 0 168px;
-	width: 168px;
+	flex: 0 0 200px;
 	display: flex;
 	flex-direction: column;
 	gap: 4px;
-	padding: 10px 8px;
-	border-right: 1px solid var(--rule);
+	padding: 8px 16px 4px 0;
 }
 
-.rail button {
+/* Plain text tabs; the open page is a gold pad. */
+.rail button:not(.scenes) {
 	text-align: left;
-	font-size: 12px;
-	letter-spacing: 0.1em;
-	text-transform: uppercase;
-	padding: 9px 12px;
+	padding: 8px 12px;
+	font-size: 21px;
+	font-weight: 700;
+	background: none;
+	border: 0;
+	border-radius: var(--radius-small);
+	transition: background var(--quick) var(--ease-out);
 }
 
-.rail button.on {
-	background: var(--highlight);
-	box-shadow: inset 0 0 0 2px var(--ink), 0 2px 0 var(--ink);
+.rail button:not(.scenes):hover {
+	background: var(--ink-soft);
+}
+
+.rail button.on,
+.rail button.on:hover {
+	background: var(--gold);
 }
 
 .rail .scenes {
 	margin-top: auto;
+	align-self: flex-start;
 }
 
 .page {
 	flex: 1 1 auto;
 	min-width: 0;
 	overflow: auto;
-	padding: 8px 18px 16px;
+	padding: 4px 22px 12px;
+	border-left: var(--line-thin) solid var(--ink-soft);
+	border-top: var(--line-thin) solid var(--ink-soft);
+	border-top-left-radius: var(--radius);
 }
 
 h3 {
-	margin: 14px 0 4px;
-	font-size: 11px;
-	letter-spacing: 0.12em;
-	text-transform: uppercase;
-	opacity: 0.7;
+	margin: 18px 0 2px;
+	font-size: 13px;
 	font-weight: 700;
+	letter-spacing: 0.08em;
+	text-transform: uppercase;
+	opacity: 0.65;
 }
 
 h3:first-child {
-	margin-top: 8px;
+	margin-top: 10px;
 }
 
 .set {
@@ -786,9 +833,9 @@ h3:first-child {
 	align-items: center;
 	justify-content: space-between;
 	gap: 16px;
-	min-height: 44px;
+	min-height: 52px;
 	padding: 6px 0;
-	border-bottom: 1px solid var(--rule);
+	border-bottom: 1px solid var(--ink-soft);
 }
 
 .set.stack {
@@ -803,8 +850,8 @@ h3:first-child {
 }
 
 .name {
-	font-size: 13px;
-	letter-spacing: 0.06em;
+	font-size: 17px;
+	font-weight: 700;
 	display: flex;
 	align-items: baseline;
 	justify-content: space-between;
@@ -813,20 +860,18 @@ h3:first-child {
 
 .readout {
 	opacity: 0.7;
-	font-size: 12px;
+	font-size: 14px;
+	font-weight: 400;
 	font-variant-numeric: tabular-nums;
-	letter-spacing: 0.04em;
 }
 
 .set select {
-	font: inherit;
-	font-size: 13px;
-	color: var(--ink);
-	background: var(--cream);
-	border: 0;
-	padding: 6px 10px;
 	max-width: min(280px, 58%);
-	box-shadow: inset 0 0 0 2px var(--ink);
+	padding: 6px 10px;
+	font-size: 15px;
+	background: var(--parchment);
+	border: var(--line-thin) solid var(--ink);
+	border-radius: var(--radius-small);
 }
 
 .set.stack select {
@@ -834,124 +879,136 @@ h3:first-child {
 	width: 100%;
 }
 
-.set select {
-	cursor: pointer;
-}
-
-.set select:disabled {
-	opacity: 0.7;
-	cursor: default;
-}
-
+/* Slider: a thin ink track, a gold thumb outlined in ink. */
 .set input[type="range"] {
 	width: 100%;
-	height: 8px;
-	margin: 2px 0 4px;
+	height: 6px;
+	margin: 6px 0;
 	padding: 0;
 	cursor: pointer;
-	accent-color: var(--ink);
-	background: var(--rule);
-	box-shadow: inset 0 0 0 1px var(--ink);
+	background: var(--ink);
+	border-radius: 3px;
 	-webkit-appearance: none;
 	appearance: none;
 }
 
 .set input[type="range"]::-webkit-slider-thumb {
 	-webkit-appearance: none;
-	width: 14px;
-	height: 18px;
-	background: var(--ink);
-	border: 0;
+	width: 16px;
+	height: 26px;
+	background: var(--gold);
+	border: var(--line-thin) solid var(--ink);
+	border-radius: 6px;
 	cursor: pointer;
 }
 
 .set input[type="range"]::-moz-range-thumb {
-	width: 14px;
-	height: 18px;
-	background: var(--ink);
-	border: 0;
-	border-radius: 0;
+	width: 12px;
+	height: 22px;
+	background: var(--gold);
+	border: var(--line-thin) solid var(--ink);
+	border-radius: 6px;
 	cursor: pointer;
 }
 
+/* Switch: a knob that slides right over an ink track when on. Its On/Off text stays for screen readers. */
 .switch {
-	flex: 0 0 56px;
-	width: 56px;
-	height: 22px;
+	position: relative;
+	flex: 0 0 64px;
+	width: 64px;
+	height: 34px;
 	padding: 0;
-	font: inherit;
-	font-size: 10px;
-	letter-spacing: 0.08em;
-	text-transform: uppercase;
-	color: var(--ink);
-	background: var(--rule);
-	border: 0;
-	cursor: pointer;
-	box-shadow: inset 0 0 0 2px var(--ink);
+	font-size: 0;
+	background: var(--parchment-deep);
+	border: var(--line-thin) solid var(--ink);
+	border-radius: 17px;
+	transition: background var(--quick) var(--ease-out);
+}
+
+.switch::after {
+	content: "";
+	position: absolute;
+	top: 3px;
+	left: 3px;
+	width: 24px;
+	height: 24px;
+	box-sizing: border-box;
+	border-radius: 50%;
+	background: var(--parchment);
+	border: var(--line-thin) solid var(--ink);
+	transition: transform var(--slow) var(--ease-pop);
 }
 
 .switch.on {
-	color: var(--cream);
 	background: var(--ink);
 }
 
+.switch.on::after {
+	transform: translateX(30px);
+	background: var(--parchment);
+	border-color: var(--parchment);
+}
+
+/* Segments and steppers: one outlined strip; the picked segment is gold. */
 .seg,
 .stepper {
 	display: flex;
 	align-items: stretch;
+	border: var(--line-thin) solid var(--ink);
+	border-radius: var(--radius-small);
+	overflow: hidden;
 }
 
 .seg button,
-.stepper button,
-.act {
-	font: inherit;
-	font-size: 12px;
-	color: var(--ink);
-	background: var(--cream);
+.stepper button {
+	min-width: 40px;
+	padding: 5px 14px;
+	font-size: 15px;
+	font-weight: 700;
+	background: var(--parchment);
 	border: 0;
-	padding: 5px 10px;
-	cursor: pointer;
-	box-shadow: inset 0 0 0 2px var(--ink);
+}
+
+.seg button + button,
+.stepper span + button {
+	border-left: var(--line-thin) solid var(--ink);
+}
+
+.stepper button:first-child {
+	border-right: var(--line-thin) solid var(--ink);
 }
 
 .seg button.on {
-	background: var(--ink);
-	color: var(--cream);
+	background: var(--gold);
+}
+
+.seg button:hover:not(.on):not(:disabled),
+.stepper button:hover:not(:disabled) {
+	background: var(--parchment-deep);
 }
 
 .stepper span {
-	min-width: 3.2em;
+	min-width: 3.4em;
 	display: flex;
 	align-items: center;
 	justify-content: center;
-	font-size: 13px;
+	font-size: 15px;
+	font-weight: 700;
 	font-variant-numeric: tabular-nums;
-	background: var(--cream);
-	box-shadow: inset 0 0 0 2px var(--ink);
-}
-
-.stepper button:disabled {
-	opacity: 0.45;
-	cursor: default;
 }
 
 .page-actions {
 	display: flex;
 	flex-wrap: wrap;
-	gap: 8px;
+	gap: 10px;
 	margin-top: 14px;
-}
-
-.page-actions button {
-	font-size: 13px;
-	padding: 6px 12px;
 }
 
 .stats {
 	width: 100%;
 	margin: 8px 0 10px;
 	border-collapse: collapse;
-	font-size: 12px;
+	font-size: 14px;
 }
 
 .stats th,
@@ -967,9 +1024,9 @@ h3:first-child {
 }
 
 .stats th {
-	font-size: 11px;
-	opacity: 0.7;
-	font-weight: 500;
+	font-size: 12px;
+	font-weight: 700;
+	opacity: 0.65;
 }
 
 .stats-foot {
@@ -978,39 +1035,52 @@ h3:first-child {
 	align-items: center;
 	justify-content: space-between;
 	gap: 8px;
-	font-size: 12px;
-	opacity: 0.85;
+	font-size: 14px;
 }
 
 .notice {
 	flex: 0 0 auto;
 	margin: 0;
-	padding: 8px 16px 12px;
-	font-size: 12px;
-	border-top: 1px solid var(--rule);
+	padding: 8px 36px 14px;
+	font-size: 14px;
+	border-top: 1px solid var(--ink-soft);
 }
 
 @media (max-width: 560px) {
 	.hud-menu-panel {
-		height: min(80vh, 640px);
+		height: min(84vh, 640px);
+	}
+
+	.head {
+		padding: 16px 16px 8px 20px;
 	}
 
 	.body {
 		flex-direction: column;
+		padding: 0 12px 12px;
 	}
 
 	.rail {
 		flex: 0 0 auto;
-		width: 100%;
 		flex-direction: row;
 		flex-wrap: wrap;
-		border-right: 0;
-		border-bottom: 1px solid var(--rule);
+		padding: 0 0 8px;
+	}
+
+	.rail button:not(.scenes) {
+		font-size: 16px;
+		padding: 6px 10px;
 	}
 
 	.rail .scenes {
-		margin-top: 0;
-		margin-left: auto;
+		margin: 0 0 0 auto;
+		align-self: center;
+	}
+
+	.page {
+		border-left: 0;
+		border-top-left-radius: 0;
+		padding: 4px 4px 12px;
 	}
 
 	.set select {

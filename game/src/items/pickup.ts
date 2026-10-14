@@ -1,5 +1,5 @@
-import { Chest, Door, Lock, Named } from '../engine/components';
-import type { GameObject } from '../engine/GameObject';
+import { type GameObject } from '@arc-director/kindling';
+import { Chest, Door, Lock, Named, TAKE_REACHED } from '../engine/components';
 import type { World } from '../engine/World';
 import { Container, Harvest, Item, Pickupable } from './components';
 import { getDef } from './defs';
@@ -77,16 +77,23 @@ export function pickup(character:GameObject, loot:GameObject):string {
 		if (err) {
 			return err;
 		}
-		world.remove(loot);
-		cueAt(world, 'take', character);
+		takeAway(world, character, loot);
 		return `equipped ${inst.name}`;
 	}
 	if (!tryInsert(character, inst)) {
 		return 'no room';
 	}
-	world.remove(loot);
-	cueAt(world, 'take', character);
+	takeAway(world, character, loot);
 	return `picked up ${inst.name}`;
+}
+
+/** The taken `loot` cannot be picked up again; it leaves the ground, with its sound, when the hand reaches it. */
+function takeAway(world:World, character:GameObject, loot:GameObject):void {
+	loot.removeComponent(Pickupable);
+	world.after(TAKE_REACHED, () => {
+		world.remove(loot);
+		cueAt(world, 'take', character);
+	});
 }
 
 export function dropItem(character:GameObject, item:import('./instance').ItemInstance):void {
@@ -219,7 +226,7 @@ export function takeFromChest(character:GameObject, held:ChestHold):string {
 	if (i >= 0) {
 		held.bag.contents.splice(i, 1);
 	}
-	cueAt(character.world, 'take', character);
+	character.world?.after(TAKE_REACHED, () => cueAt(character.world, 'take', character));
 	return `took ${held.item.name} from ${chestName}`;
 }
 

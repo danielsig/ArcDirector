@@ -125,6 +125,8 @@ export type MindDeps<TCtx = unknown> = {
 	arcExample?:string;
 	/** Standing sentence in the system prefix. */
 	systemNote?:string;
+	/** The item id the world pays with. The prompt shows `give` and `offer` moving it. */
+	currency?:string;
 	/** Host naming policy seen from this mind: the base name for a character. Omit to use ids. */
 	seenAs?:(target:NameTarget)=>string;
 	intrusionThreshold?:number;
@@ -356,6 +358,7 @@ export class Mind<TCtx = unknown> {
 	public verbInstructions:string | undefined;
 	public arcExample:string | undefined;
 	public systemNote:string | undefined;
+	public currency:string | undefined;
 	public seenAs:((target:NameTarget)=>string) | undefined;
 	public worldContext:()=>TCtx | undefined = () => undefined;
 	public intrusionThreshold = 0.55;
@@ -451,6 +454,7 @@ export class Mind<TCtx = unknown> {
 		this.verbInstructions = deps.verbInstructions;
 		this.arcExample = deps.arcExample;
 		this.systemNote = deps.systemNote;
+		this.currency = deps.currency;
 		this.seenAs = deps.seenAs;
 		this.worldContext = deps.worldContext ?? (() => this.voice.context());
 		this.intrusionThreshold = deps.intrusionThreshold ?? 0.55;
@@ -1178,6 +1182,7 @@ export class Mind<TCtx = unknown> {
 			verbInstructions: this.verbInstructions,
 			arcExample: this.arcExample,
 			systemNote: this.systemNote,
+			currency: this.currency,
 			tools: toolNames,
 		});
 		// Talking in circles: characters who hear each other keep answering, so a streak of talk ends in a deed.

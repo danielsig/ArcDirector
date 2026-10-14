@@ -1,3 +1,4 @@
+import { Regen } from '../engine/Regen';
 import { CharacterAnimation } from '../characters/CharacterAnimation';
 import { CharacterPose } from '../characters/CharacterPose';
 import { HeldProps } from '../characters/HeldProps';
@@ -6,7 +7,9 @@ import { CharacterMotor } from '../characters/CharacterMotor';
 import { NPCInput } from '../characters/NPCInput';
 import { PlayerInput } from '../characters/PlayerInput';
 import { PlayerPilot } from '../characters/PlayerPilot';
-import { Animator, ChunkBound, Camera as RenderCamera, StreamingAnchor, Speaker, voiceFor, type SpeechVoice } from '@arc-director/kindling';
+import { Fire } from '../engine/Fire';
+import { TeamRing, type TeamColors } from '../engine/TeamRing';
+import { Animator, ChunkBound, Camera as RenderCamera, StreamingAnchor, Speaker, voiceFor, type SpeechVoice, hash, GameObject } from '@arc-director/kindling';
 import {
 	BoxCollider,
 	Bridge,
@@ -39,7 +42,6 @@ import {
 } from '../engine/components';
 import { MeshRenderer } from '../engine/MeshRenderer';
 import { HeldTorchLight } from '../engine/systems';
-import { GameObject } from '../engine/GameObject';
 import type { World } from '../engine/World';
 import { Container, Harvest } from '../items/components';
 import { getDef } from '../items/defs';
@@ -102,6 +104,19 @@ function spawnTorch(world:World, chunk:Chunk, ent:ChunkEntity):void {
 	if (ent.name) {
 		go.addComponent(Named, { id: ent.name });
 	}
+	bindChunk(go, chunk.id);
+	world.add(go);
+}
+
+/** The fire in a brazier (its bowl and coals are chunk dressing): flames only, which no one sees as a thing. */
+function spawnFire(world:World, chunk:Chunk, ent:ChunkEntity):void {
+	const center = chunk.worldCellCenter(ent.localX, ent.localZ);
+	const tile = chunk.tile(ent.localX, ent.localZ);
+	const go = new GameObject(`fire_${chunk.id}_${ent.localX}_${ent.localZ}`, 'Fire');
+	go.transform.position.x = center.x;
+	go.transform.position.y = (tile?.height ?? 0) * TILE_HEIGHT;
+	go.transform.position.z = center.z;
+	go.addComponent(Fire);
 	bindChunk(go, chunk.id);
 	world.add(go);
 }
@@ -227,6 +242,9 @@ export function spawnChunkEntities(world:World, chunk:Chunk):void {
 		else if (ent.def === 'pillar' || ent.def === 'pillar_broken') {
 			spawnProp(world, chunk, ent, ent.def, 0.6);
 		}
+		else if (ent.def === 'brazier') {
+			spawnFire(world, chunk, ent);
+		}
 		else if (ent.def === 'cobweb') {
 			// Wall to wall across its cell, until a flame burns it away.
 			spawnProp(world, chunk, ent, 'cobweb', 1, ent.yaw ?? 0).addComponent(Flammable);
@@ -333,8 +351,7 @@ function spawnProp(
 		go.transform.yaw = yaw;
 	}
 	else if (meshID === 'tree_oak' || meshID === 'tree_pine' || meshID === 'boulder' || meshID.startsWith('pillar')) {
-		const n = Math.sin(center.x * 127.1 + center.z * 311.7) * 43758.5453;
-		go.transform.yaw = (n - Math.floor(n)) * Math.PI * 2;
+		go.transform.yaw = hash(center.x, center.z) * Math.PI * 2;
 	}
 	if (meshID === 'waterfall') {
 		go.transform.position.x -= 0.46;
@@ -500,6 +517,8 @@ export type NPCSpawnOpts = {
 	voice?:SpeechVoice;
 	/** Item defs put in its hands (a knight's sword, an archer's bow). */
 	equip?:string[];
+	/** Its team's colors, shown in a ring on the ground under it. */
+	team?:TeamColors;
 };
 
 /** The voice `id` gets by default: varied by id, higher for characters drawn as women. */
@@ -564,6 +583,10 @@ export function spawnNPC(world:World, chunk:Chunk, opts:NPCSpawnOpts):GameObject
 	}
 	const hp = opts.hp && opts.hp > 0 ? Math.round(opts.hp) : 5;
 	go.addComponent(Vitals, { hp, maxHP: hp });
+	go.addComponent(Regen);
+	if (opts.team) {
+		go.addComponent(TeamRing, { colors: opts.team });
+	}
 	go.addComponent(Named, { id: opts.id });
 	go.addComponent(Speaker, { voice: { ...voiceOf(opts.id, opts.meshID), ...opts.voice } });
 	go.addComponent(Wallet, { coins: opts.wallet ?? 0 });
@@ -623,6 +646,7 @@ export function spawnPlayer(
 	go.addComponent(BoxCollider, { size: { x: 0.45, y: 1.1, z: 0.45 }, pad: 0.36 });
 	go.addComponent(HumanBody, { pockets: go.addComponent(Container, { size: 2 }) });
 	go.addComponent(Vitals, { hp: 20, maxHP: 20 });
+	go.addComponent(Regen);
 	go.addComponent(StreamingAnchor);
 	go.addComponent(Named, { id: 'Player' });
 	go.addComponent(Speaker, { voice: voiceOf('Player', meshID) });

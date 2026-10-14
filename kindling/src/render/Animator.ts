@@ -6,7 +6,9 @@ import { MeshRenderer } from './MeshRenderer.js';
 /**
  * Plays clips on this object's toon model (`MeshRenderer` with a {@link registerToonModel} mesh).
  * Set `clip` to cross-fade to another one; unknown names keep the current clip. {@link playOnce}
- * plays a move (a sword chop) over it once, then fades back.
+ * plays a move (a sword chop) over it once, then fades back. Every frame starts from the clip's
+ * pose, so code that turns bones after it (in `lateUpdate`) adds to that pose instead of piling up,
+ * even on a held last frame (three's mixer skips bones whose clip value did not change).
  */
 export class Animator extends Component {
 	public static override order = 10;
@@ -27,6 +29,9 @@ export class Animator extends Component {
 	/** A move playing over `clip` until its `to` time. */
 	private _once:{ action:THREE.AnimationAction; to:number } | null = null;
 	private _pendingOnce:{ name:string; from:number; to:number | undefined; rate:number } | null = null;
+	/** The model's bones, and their pose as the mixer left it last frame (rotation, then position, per bone). */
+	private _bones:THREE.Bone[] = [];
+	private _pose:Float32Array | null = null;
 
 	/**
 	 * Plays `name` once over the current clip: from `from` to `to` seconds of it (default: all of
@@ -45,9 +50,24 @@ export class Animator extends Component {
 			this._action = null;
 			this._playing = null;
 			this._once = null;
+			this._bones = [];
+			root?.traverse((obj) => {
+				if ((obj as THREE.Bone).isBone) {
+					this._bones.push(obj as THREE.Bone);
+				}
+			});
+			this._pose = null;
 		}
 		if (!this._mixer || !this._root) {
 			return;
+		}
+		// Undo last frame's posing by code: the mixer only rewrites bones whose value changed.
+		const pose = this._pose;
+		if (pose) {
+			this._bones.forEach((bone, i) => {
+				bone.quaternion.fromArray(pose, i * 7);
+				bone.position.fromArray(pose, i * 7 + 4);
+			});
 		}
 		if (this._playing !== this.clip) {
 			this._playing = this.clip;
@@ -66,6 +86,11 @@ export class Animator extends Component {
 		this.updateOnce(this._root, this._mixer);
 		this._mixer.timeScale = this.speed;
 		this._mixer.update(dt);
+		this._pose ??= new Float32Array(this._bones.length * 7);
+		this._bones.forEach((bone, i) => {
+			bone.quaternion.toArray(this._pose!, i * 7);
+			bone.position.toArray(this._pose!, i * 7 + 4);
+		});
 	}
 
 	private updateOnce(root:THREE.Object3D, mixer:THREE.AnimationMixer):void {

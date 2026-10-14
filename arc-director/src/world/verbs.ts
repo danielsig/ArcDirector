@@ -23,6 +23,10 @@ export type WorldVerbDeps<TCtx> = {
 	canOffer:(fromID:string, toID:string)=>boolean;
 	/** Tell the mind that thinks for character `id`. A major event wakes it. */
 	tell:(id:string, event:MindEvent)=>void;
+	/** Tell every mind: what the whole world comes to know, such as a trade or a gift. */
+	tellAll:(event:MindEvent)=>void;
+	/** The item id the world pays with (`withCurrency`). Giving it is remembered as paying. */
+	currency?:string;
 };
 
 type WorldPart = Exclude<keyof HostWorld<unknown>, 'find' | 'getPose' | 'getReach' | 'canOffer' | 'up'>;
@@ -99,6 +103,10 @@ export function worldVerbs<TCtx>(deps:WorldVerbDeps<TCtx>):Handlers<TCtx> {
 		return { character, target };
 	};
 	const failed = (found:Found | ArcResult):found is ArcResult => 'ok' in found;
+	/** One trade, gift or payment, remembered by every mind. Recall is how they read this ledger. */
+	const ledger = (text:string, who:string[], tags:string[]):void => {
+		deps.tellAll({ kind: 'Ledger', text, who, tags: ['ledger', ...tags], remember: true });
+	};
 	const offer = async (call:Call<TCtx, 'offer'>):Promise<ArcResult> => {
 		const me = call.character.id;
 		const { to, give = {}, get = {} } = call.args;
@@ -144,6 +152,7 @@ export function worldVerbs<TCtx>(deps:WorldVerbDeps<TCtx>):Handlers<TCtx> {
 					return outcome('offer', done);
 				}
 				deps.offers().settle(me, match);
+				ledger(`{0} traded ${bundleText(match.pay)} to {1} for ${bundleText(match.receive)}.`, [me, to], ['trade', tradeLabel(deps.currency, match.receive, match.pay)]);
 				deps.tell(to, { kind: 'Traded', text: `{0} took your offer: you gave ${bundleText(match.receive)} for ${bundleText(match.pay)}`, who: [me], tags: ['trade'] });
 				return { ok: true, verb: 'offer', reason: done.reason ?? `traded ${bundleText(match.pay)} for ${bundleText(match.receive)} with ${name}` };
 			}
@@ -206,7 +215,12 @@ export function worldVerbs<TCtx>(deps:WorldVerbDeps<TCtx>):Handlers<TCtx> {
 				return near;
 			}
 			const done = world.moveItem!({ character: found.character, item, to: found.target, quantity: call.args.quantity });
-			return outcome('give', done.ok ? { ok: true, reason: done.reason ?? `gave ${item} to ${nameOf(call, to)}` } : done);
+			if (!done.ok) {
+				return outcome('give', done);
+			}
+			const pays = isCurrency(item, deps.currency);
+			ledger(`{0} ${pays ? 'paid' : 'gave'} ${bundleText({ [item]: call.args.quantity ?? 1 })} to {1}.`, [call.character.id, to], [pays ? 'pay' : 'give', item]);
+			return outcome('give', { ok: true, reason: done.reason ?? `gave ${item} to ${nameOf(call, to)}` });
 		},
 		use: async (call:Call<TCtx, 'use'>) => {
 			const { item, target } = call.args;
@@ -234,6 +248,17 @@ export function worldVerbs<TCtx>(deps:WorldVerbDeps<TCtx>):Handlers<TCtx> {
 		},
 		offer,
 	};
+}
+
+/** Whether `name` is the host's currency, in any case. */
+function isCurrency(name:string, currency:string | undefined):boolean {
+	return currency !== undefined && name.toLowerCase() === currency.toLowerCase();
+}
+
+/** What a trade is remembered by: its first goods that are not money. */
+function tradeLabel(currency:string | undefined, ...bundles:CountMap[]):string {
+	const names = bundles.flatMap((b) => Object.keys(b));
+	return names.find((n) => !isCurrency(n, currency)) ?? names[0] ?? '';
 }
 
 /** A bundle as an arc writes it: `{"gold":5}`. */

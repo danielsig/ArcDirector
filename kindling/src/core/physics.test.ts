@@ -207,3 +207,28 @@ describe('stepPhysics', () => {
 		assert.ok(go.transform.position.x - 0.45 * 0.5 >= 4 - 1e-6, `inside bridge at ${go.transform.position.x}`);
 	});
 });
+
+describe('World.solidCover', () => {
+	it('measures how much of a tile lies under colliders that never move', () => {
+		resetAllocID();
+		const world = new World();
+		world.tileSize = 1;
+		// A log 2.5 m long, 0.5 m deep, lying east–west across three tiles.
+		const log = new GameObject('log');
+		log.transform.position.x = 1.5;
+		log.transform.position.z = 0.5;
+		log.addComponent(BoxCollider).size = { x: 2.5, y: 1, z: 0.5 };
+		const body = new GameObject('body');
+		body.transform.position.x = 4.5;
+		body.transform.position.z = 0.5;
+		body.addComponent(Rigidbody);
+		body.addComponent(BoxCollider).size = { x: 1, y: 1, z: 1 };
+		world.add(log);
+		world.add(body);
+		world.reindex();
+		assert.equal(world.solidCover(1, 0), 0.5);
+		assert.equal(world.solidCover(0, 0), 0.375);
+		assert.equal(world.solidCover(1, 1), 0);
+		assert.equal(world.solidCover(4, 0), 0, 'a body is not cover');
+	});
+});

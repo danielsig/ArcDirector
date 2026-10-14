@@ -1,3 +1,4 @@
+import { Time, yawToForward, type GameObject } from '@arc-director/kindling';
 import {
 	pascalCase,
 	type ArcResult,
@@ -28,7 +29,6 @@ import {
 	alarmActive,
 	Interior,
 } from '../engine/components';
-import type { GameObject } from '../engine/GameObject';
 import type { World } from '../engine/World';
 import { MeshRenderer } from '../engine/MeshRenderer';
 import { Container, Item, Pickupable } from '../items/components';
@@ -44,7 +44,6 @@ import {
 import type { ItemInstance } from '../items/instance';
 import { coinsOf } from '../items/wallet';
 import { findChestHolding, keyNameFor } from '../items/pickup';
-import { yawToForward } from '../engine/math';
 import { whereabouts } from '../world/interior';
 import { talkCanSee } from './talkAttend';
 import { findObject, idOf, isLiving } from './names';
@@ -79,7 +78,7 @@ const frameTags = new WeakMap<GameObject, { time:number; tags:string[] }>();
 
 /** What kind of thing `go` is, as tags (`person`, `item`, `door`, `tree`, …). A fresh array the caller may change. */
 export function tagsOf(go:GameObject):string[] {
-	const time = go.world?.time ?? 0;
+	const time = Time.time;
 	let known = frameTags.get(go);
 	if (!known || known.time !== time) {
 		known = { time, tags: tagsNow(go) };
@@ -123,7 +122,7 @@ function tagsNow(go:GameObject):string[] {
 	if (go.getComponent(Wanted)?.enabled) {
 		tags.push('thief');
 	}
-	if (alarmActive(go, go.world?.time ?? 0)) {
+	if (alarmActive(go, Time.time)) {
 		tags.push('alarm');
 	}
 	if (go.getComponent(Torch) && !go.getComponent(Item)) {

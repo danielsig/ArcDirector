@@ -3,7 +3,9 @@ import { describe, it } from 'node:test';
 import { Audio, noteIsDue, placeRecording } from './Audio.js';
 import { AudioSource } from './AudioSource.js';
 import { overdriveSample, reverbTapTimes } from './filters.js';
-import { midiHz, scoreProblems } from './midi.js';
+import { Speaker } from './Speaker.js';
+import { scoreProblems } from './midi.js';
+import { midiHz, pitched, varied } from './synth.js';
 import { distanceGain, forwardXZ, heardAt } from './spatial.js';
 import type { Score } from './types.js';
 import { Game } from '../core/Game.js';
@@ -25,6 +27,23 @@ const sample:Score = {
 };
 
 describe('Audio', () => {
+	it('varies a patch by at most its vary, keeping a still one as is', () => {
+		const still = { layers: [{ kind: 'thump' as const, dur: 0.1, freq: 100 }] };
+		assert.equal(varied(still), still);
+		for (let i = 0; i < 50; i++) {
+			const take = varied({ ...still, vary: 0.5, gain: 1 });
+			const f = take.layers[0]!.freq!;
+			assert.ok(f >= 100 * 2 ** (-2 / 12) - 1e-9 && f <= 100 * 2 ** (2 / 12) + 1e-9, `pitch ${f}`);
+			assert.ok(take.gain! >= 0.85 - 1e-9 && take.gain! <= 1.15 + 1e-9);
+		}
+	});
+
+	it('pitches a patch’s tones and leaves its filters', () => {
+		const voice = { layers: [{ kind: 'formant' as const, dur: 0.3, freq: 360, freqTo: 240 }, { kind: 'noise' as const, dur: 0.3, cutoff: 1100 }] };
+		assert.deepEqual(pitched(voice, 0.5).layers.map((l) => [l.freq, l.freqTo, l.cutoff]), [[180, 120, undefined], [undefined, undefined, 1100]]);
+		assert.deepEqual(pitched(voice, 0.5, 0.8).layers.map((l) => l.cutoff), [undefined, 880]);
+	});
+
 	it('midiHz(A4) is 440', () => {
 		assert.equal(Math.round(midiHz(69)), 440);
 	});
@@ -274,6 +293,25 @@ describe('AudioSource', () => {
 		game.destroy(go);
 		game.tick(0.02);
 		assert.equal(game.world.audio.loopIDs().length, 0);
+		game.dispose();
+	});
+
+	it('scales one-shot gain by its own and is silent disabled, Speaker too', () => {
+		const game = new Game();
+		const gains:(number | undefined)[] = [];
+		game.world.audio.playSfx = (_patch, opts) => {
+			gains.push(opts?.gain);
+			return null;
+		};
+		const go = new GameObject('bard');
+		const src = go.addComponent(Speaker, { gain: 0.5 });
+		game.world.add(go);
+		src.play(thump, { gain: 0.5 });
+		src.say('hi');
+		src.enabled = false;
+		src.play(thump);
+		src.say('hi');
+		assert.deepEqual(gains, [0.25, 0.5]);
 		game.dispose();
 	});
 });

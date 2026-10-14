@@ -6,6 +6,7 @@ import { SampleCache } from '../expr/types.js';
 import { buildCatalog } from '../expr/natives.js';
 import { evaluate } from '../expr/eval.js';
 import type { ArcResult } from '../arc/types.js';
+import type { MindEvent } from '../mind/types.js';
 import { geometryKernels } from './kernels.js';
 import { Mover } from './mover.js';
 import { awayGoal, findRoute, pointGoal, reachablePoints, type Blocked, type Route } from './route.js';
@@ -117,6 +118,15 @@ function network(point:Vec):PathStep[] {
 		return WAYPOINTS.filter((p) => distance(p, point) <= 6).map((p) => ({ point: p }));
 	}
 	return ROADS.filter(([a, b]) => a === i || b === i).map(([a, b, cost]) => ({ point: WAYPOINTS[a === i ? b : a], cost }));
+}
+
+/** Collect what `director` tells every mind. */
+function spyTellAll(director:ArcDirector<Ctx>, told:MindEvent[]):void {
+	const pushEvent = director.pushEvent.bind(director);
+	director.pushEvent = (event) => {
+		told.push(event);
+		pushEvent(event);
+	};
 }
 
 async function run(
@@ -237,6 +247,19 @@ describe('findRoute', () => {
 		assert.ok(route.points.some((p) => Math.abs(p[1]) > 0), 'went around');
 	});
 
+	it('ends only through the steps into the goal: a ledge dropped off is no way up, a wall no way in', () => {
+		// Cells 0 to 3 on a line. Cell 2 is a ledge: one drops off it to either side, but never climbs on.
+		const ledge = 2;
+		const grid = (point:Vec, into?:boolean):PathStep[] => {
+			const at = Math.round(point[0]);
+			return [at - 1, at + 1]
+				.filter((next) => next >= 0 && next <= 3 && (into ? at : next) !== ledge)
+				.map((next) => ({ point: [next] }));
+		};
+		assert.equal(findRoute(grid, [0], pointGoal([2.2])), undefined, 'climbed the ledge on the last step');
+		assert.deepEqual(openRoute(findRoute(grid, [2], pointGoal([0.2]))).points, [[1], [0.2]]);
+	});
+
 	it('lists reachable points without crossing a blocked step', () => {
 		const gated = (point:Vec):PathStep[] => line(point).filter((s) => s.point[0] >= 0).map((s) => (s.point[0] === 3 ? { ...s, blocked: 'x' } : s));
 		assert.deepEqual(reachablePoints(gated, [0], 99).map((p) => p.point[0]), [0, 1, 2]);
@@ -354,10 +377,26 @@ describe('geometryKernels', () => {
 describe('stock world verbs', () => {
 	it('fetches: goes to the item, picks it up, takes it to someone, and gives it', async () => {
 		const grid = new Grid().place('Ann', [0, 0]).place('Lantern', [6, 0]).place('Smith', [0, 6]);
-		const { director } = await run(grid, 'pick_up(Lantern) ; give(item=Lantern, to=Smith)', { kit: ['pick_up', 'give', 'wait'] });
+		const told:MindEvent[] = [];
+		const { director } = await run(grid, 'pick_up(Lantern) ; give(item=Lantern, to=Smith)', { kit: ['pick_up', 'give', 'wait'], before: (d) => spyTellAll(d, told) });
 		assert.equal(grid.carry.get('Lantern'), 'Smith');
+		assert.deepEqual(told, [{ kind: 'Ledger', text: '{0} gave 1 Lantern to {1}.', who: ['Ann', 'Smith'], tags: ['ledger', 'give', 'Lantern'], remember: true }]);
 		assert.ok(distance(grid.point.get('Ann')!, [0, 6]) <= 1.3);
 		assert.equal(director.character('Ann')!.lastResult?.reason, 'gave Lantern to Smith');
+		director.dispose();
+	});
+
+	it('remembers handing over the currency as paying', async () => {
+		const grid = new Grid().place('Ann', [0, 0]).place('Smith', [0, 2]);
+		const told:MindEvent[] = [];
+		const { director } = await run(grid, 'give(item=gold, to=Smith, quantity=5)', {
+			kit: ['give', 'wait'],
+			before: (d) => {
+				d.withCurrency('gold');
+				spyTellAll(d, told);
+			},
+		});
+		assert.deepEqual(told.map((e) => [e.text, e.tags]), [['{0} paid 5 gold to {1}.', ['ledger', 'pay', 'gold']]]);
 		director.dispose();
 	});
 
@@ -374,13 +413,18 @@ describe('stock world verbs', () => {
 	it('takes a standing offer: walks over, and both sides move at once', async () => {
 		const grid = new Grid().place('Ann', [0, 0]).place('Mira', [4, 0]).place('Bread', [4, 0]);
 		grid.carry.set('Bread', 'Mira');
+		const told:MindEvent[] = [];
 		const { director } = await run(grid, 'offer(to=Mira, give={"gold":5}, get={"Bread":1})', {
 			kit: ['offer', 'wait'],
-			before: (d) => d.offers.post({ from: 'Mira', give: { Bread: 1 }, get: { gold: 5 } }),
+			before: (d) => {
+				d.offers.post({ from: 'Mira', give: { Bread: 1 }, get: { gold: 5 } });
+				spyTellAll(d, told);
+			},
 		});
 		assert.equal(grid.carry.get('Bread'), 'Ann');
+		assert.deepEqual(told.map((e) => [e.text, e.who, e.tags]), [['{0} traded 5 gold to {1} for 1 Bread.', ['Ann', 'Mira'], ['ledger', 'trade', 'Bread']]]);
 		assert.ok(distance(grid.point.get('Ann')!, [4, 0]) <= 1.3);
-		assert.equal(director.character('Ann')!.lastResult?.reason, 'traded 5 gold for Bread with Mira');
+		assert.equal(director.character('Ann')!.lastResult?.reason, 'traded 5 gold for 1 Bread with Mira');
 		assert.equal(director.offers.all.length, 1, 'a standing offer stays');
 		director.dispose();
 	});
@@ -422,7 +466,7 @@ describe('stock world verbs', () => {
 			d.offers.post({ from: 'Mira', give: { Bread: 1 }, get: { gold: 5 } });
 		};
 		const low = await run(grid, reply, { kit: ['offer', 'wait'], before });
-		assert.equal(low.director.character('Ann')!.lastResult?.reason, 'offered 4 gold for Bread to Mira; waiting for their answer');
+		assert.equal(low.director.character('Ann')!.lastResult?.reason, 'offered 4 gold for 1 Bread to Mira; waiting for their answer');
 		assert.deepEqual(grid.point.get('Ann'), [0, 0]);
 		assert.deepEqual(low.director.offers.all.find((offer) => offer.from === 'Ann'), { from: 'Ann', to: 'Mira', give: { gold: 4 }, get: { Bread: 1 } });
 		low.director.dispose();

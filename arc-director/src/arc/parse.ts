@@ -321,13 +321,13 @@ function skipRepeatedKey(s:string, i:number, key:string):number {
 	return m ? i + m[0].length : i;
 }
 
-/** `{"gold":5}`. */
+/** `{"Egg":12, "Milk":3}`. */
 function asBundle(value:StepArg, key:string):StepArg {
 	const parsed = typeof value === 'string' ? readJson(value) : value;
 	if (isCountMap(parsed)) {
 		return parsed;
 	}
-	throw new ArcError(`${key} is {"gold":5} or {"Egg":12, "Milk":3}`);
+	throw new ArcError(`${key} is {"Egg":12, "Milk":3}`);
 }
 
 function readJson(raw:string):unknown {
@@ -339,16 +339,16 @@ function readJson(raw:string):unknown {
 	}
 }
 
-/** `["5 gold", "Loaf"]`, or one bare line such as `5 gold`. */
+/** `["5 Egg", "Loaf"]`, or one bare line such as `5 Egg`. */
 function asStringArray(value:StepArg):string[] {
 	if (Array.isArray(value) && value.every((item):item is string => typeof item === 'string')) {
 		return value;
 	}
 	if (Array.isArray(value)) {
-		throw new ArcError('a list arg is strings, as ["5 gold", "Loaf"]');
+		throw new ArcError('a list arg is strings, as ["5 Egg", "Loaf"]');
 	}
 	if (typeof value !== 'string') {
-		throw new ArcError('a list arg is strings, as ["5 gold", "Loaf"]');
+		throw new ArcError('a list arg is strings, as ["5 Egg", "Loaf"]');
 	}
 	const raw = value.trim();
 	if (!raw) {
@@ -363,7 +363,7 @@ function asStringArray(value:StepArg):string[] {
 			throw new ArcError(`cannot read list ${raw}`);
 		}
 		if (!Array.isArray(parsed) || !parsed.every((item) => typeof item === 'string')) {
-			throw new ArcError('a list arg is strings, as ["5 gold", "Loaf"]');
+			throw new ArcError('a list arg is strings, as ["5 Egg", "Loaf"]');
 		}
 		return parsed;
 	}

@@ -36,6 +36,8 @@ export type StablePrefixOpts = {
 	arcExample?:string;
 	/** One standing sentence in the system prefix, after who the mind is. */
 	systemNote?:string;
+	/** The item id the world pays with. Omit and the prompt says nothing about money. */
+	currency?:string;
 	/** Goals revision: identity only, no Arc emit rules. */
 	omitArc?:boolean;
 	/** Tool names offered this think. Never listed as Arc verbs. */
@@ -80,6 +82,7 @@ export function stablePrefix(
 				: opts.thinkInstructions?.on ?? DEFAULT_THINK_INSTRUCTIONS,
 			verbs: opts.verbInstructions ?? defaultVerbInstructions(verbs),
 			example: opts.arcExample,
+			currency: opts.currency,
 		}));
 	}
 	return lines.join('\n');
@@ -159,7 +162,7 @@ function arcInstructions(
 	verbs:VerbRegistry,
 	format:ArcFormat,
 	toolNames:string[] = [],
-	lines:{ think:string; verbs:string; example?:string },
+	lines:{ think:string; verbs:string; example?:string; currency?:string },
 ):string {
 	const has = (name:string):boolean => verbs.has(name);
 	const chain = has('pick_up') && has('give');
@@ -183,6 +186,7 @@ function arcInstructions(
 		spokenGo(verbs, toolNames.includes('see_map')),
 		collectiveInstructions(verbs, format),
 		has('use') && 'use(item=TheItem, target=TheThing) on the name it operates.',
+		moneySentence(verbs, format, lines.currency),
 		lines.verbs,
 		arcText
 			? '&& continues only on success; ; always continues; || is the failure fallback.'
@@ -191,6 +195,17 @@ function arcInstructions(
 		`Names only, no coordinates. Available verbs: ${verbHelp(verbs, toolNames)}.`,
 		toolsNotVerbs(toolNames, format),
 		lines.example ? `Example: ${format === 'text' ? lines.example : showArc(lines.example, verbs, format)}` : arcExample(verbs, format, chain),
+	]);
+}
+
+/** How `give` and `offer` move the world's money, in its own word. Nothing without a currency or those verbs. */
+function moneySentence(verbs:VerbRegistry, format:ArcFormat, currency:string | undefined):string {
+	if (!currency) {
+		return '';
+	}
+	return joinSentences([
+		verbs.has('give') && `${showArc(`give(item=${currency}, to=Player, quantity=5)`, verbs, format)} pays 5 ${currency}; saying so does not.`,
+		verbs.has('offer') && `In an offer, ${currency} counts like any item: {"${currency}":5}.`,
 	]);
 }
 

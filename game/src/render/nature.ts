@@ -1,9 +1,14 @@
 import * as THREE from 'three';
-import { patchShader, ToonMaterial } from '@arc-director/kindling';
+import { patchShader, ToonMaterial, hash } from '@arc-director/kindling';
 
 export type NatureMaps = {
 	water:THREE.Texture;
+	/** Riverbank wet sand and pebbles, tiled in world space. */
+	sand:THREE.Texture;
 };
+
+/** Meters one tile of the riverbank sand painting covers: its biggest pebbles come out about 7 cm. */
+const SAND_TILE = 1;
 
 export const GRASS_Y = 0.012;
 export const WATER_UPPER_Y = GRASS_Y;
@@ -98,11 +103,6 @@ if (import.meta.hot) {
 	});
 }
 
-function hash2(x:number, y:number):number {
-	const n = Math.sin(x * 127.1 + y * 311.7) * 43758.5453;
-	return n - Math.floor(n);
-}
-
 function wrapI(i:number, size:number):number {
 	return ((i % size) + size) % size;
 }
@@ -125,7 +125,7 @@ function tileValue(x:number, y:number, size:number, cell:number):number {
 	const ty = gy - y0;
 	const sx = tx * tx * (3 - 2 * tx);
 	const sy = ty * ty * (3 - 2 * ty);
-	const at = (ix:number, iy:number):number => hash2(((ix % n) + n) % n, ((iy % n) + n) % n);
+	const at = (ix:number, iy:number):number => hash(((ix % n) + n) % n, ((iy % n) + n) % n);
 	return lerp(lerp(at(x0, y0), at(x0 + 1, y0), sx), lerp(at(x0, y0 + 1), at(x0 + 1, y0 + 1), sx), sy);
 }
 
@@ -160,8 +160,8 @@ function scatterFoam(size:number, cells:number, salt:number):{ x:number; y:numbe
 		for (let gx = 0; gx < cells; gx++) {
 			const hex = (gy % 2) * 0.28;
 			pts.push({
-				x: (gx + 0.1 + hex + hash2(gx + salt, gy) * 0.52) * cell,
-				y: (gy + 0.1 + hash2(gx, gy + salt + 9) * 0.52) * cell,
+				x: (gx + 0.1 + hex + hash(gx + salt, gy) * 0.52) * cell,
+				y: (gy + 0.1 + hash(gx, gy + salt + 9) * 0.52) * cell,
 			});
 		}
 	}
@@ -300,15 +300,21 @@ export function loadNature():Promise<NatureMaps> {
 	if (pending) {
 		return pending;
 	}
-	// Painted once in code; Promise-shaped so callers can await it like other art.
-	pending = Promise.resolve().then(() => {
+	// Water is painted in code; the riverbank sand is a picture in public/textures.
+	pending = new THREE.TextureLoader().loadAsync(`${import.meta.env.BASE_URL}textures/riverbank-wet-sand.jpg`).then((sand) => {
 		const water = texFromCanvas(paintToonWater(), true);
 		water.colorSpace = THREE.NoColorSpace;
 		water.generateMipmaps = false;
 		water.minFilter = THREE.LinearFilter;
 		water.magFilter = THREE.LinearFilter;
 		water.needsUpdate = true;
-		maps = { water };
+		sand.colorSpace = THREE.SRGBColorSpace;
+		sand.wrapS = THREE.RepeatWrapping;
+		sand.wrapT = THREE.RepeatWrapping;
+		sand.anisotropy = 4;
+		// Ground UVs are meters over GRASS_UV_REP; this makes one tile of the painting cover SAND_TILE meters.
+		sand.repeat.setScalar(GRASS_UV_REP / SAND_TILE);
+		maps = { water, sand };
 		return maps;
 	});
 	return pending;

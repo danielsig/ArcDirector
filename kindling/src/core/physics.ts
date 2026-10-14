@@ -328,8 +328,8 @@ function integrate(world:World, dt:number):void {
 		const p = go.transform.position;
 		rb.prevX = p.x;
 		rb.prevZ = p.z;
-		p.x += rb.velocity.x * dt;
-		p.z += rb.velocity.z * dt;
+		p.x += rb.velocity.x * dt * go.timeRate;
+		p.z += rb.velocity.z * dt * go.timeRate;
 	});
 }
 

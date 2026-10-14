@@ -1,3 +1,4 @@
+import { Time } from '@arc-director/kindling';
 import { ArcDirector, Character, type CharacterSpec } from 'arc-director';
 import { Bridge, Celebrating } from '../../engine/components';
 import type { GameHost } from '../adapter';
@@ -160,7 +161,7 @@ function cheerOnce(host:GameHost, id:string):void {
 	}
 	ids.add(id);
 	const hop = go.getOrAddComponent(Celebrating);
-	hop.beginHops(host.world.time, 3);
+	hop.beginHops(Time.time, 3);
 }
 
 function checkBargain(host:GameHost):void {

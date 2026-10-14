@@ -1,5 +1,5 @@
+import { type GameObject } from '@arc-director/kindling';
 import { BrewHearth, Bridge, BridgeLever, Chest, Door, Flammable, HumanBody, Lock, Named, Sickbed, Vitals } from '../engine/components';
-import type { GameObject } from '../engine/GameObject';
 import { equipItem, itemInHeldSlot } from './equip';
 import { characterIs, distXZ, findCarried, healCharacter, inBackpack, removeFromBags, tryInsert } from './inventory';
 import { instantiateDef, type ItemInstance } from './instance';
@@ -8,7 +8,7 @@ import { keyNameFor, lockedReason } from './pickup';
 import { cueAt } from '../audio/cue';
 import { applyHit } from '../director/hitFeel';
 import { idOf } from '../director/names';
-import { weaknessDamage } from '../director/fight';
+import { ATTACKS, guardStops, weaknessDamage } from '../director/fight';
 
 export type UseResult = {
 	ok:boolean;
@@ -60,6 +60,36 @@ function brewAtHearth(character:GameObject, item:ItemInstance):UseResult {
 	}
 	consume(character, item);
 	return ok(`brewed ${brew.yield} MagicPotion`);
+}
+
+/**
+ * One blow of weapon `item` at `target`, now: `verb`'s damage and reach where they beat the
+ * weapon's own (a stab, a slice, a cleave). Says how it went: hit, blocked (a raised guard facing
+ * the blow), too far, or missed.
+ */
+export function strikeWith(character:GameObject, item:ItemInstance, target:GameObject | null, verb?:string):string {
+	const world = character.world;
+	const hp = target?.getComponent(Vitals);
+	if (!world || !target || !hp || !item.Weapon || hp.hp <= 0) {
+		return 'missed';
+	}
+	const spec = verb ? ATTACKS[verb] : undefined;
+	if (distXZ(character, target) > Math.max(item.Weapon.range, spec?.range ?? 0)) {
+		return 'too far';
+	}
+	if (guardStops(target, character)) {
+		cueAt(world, 'clash', target);
+		return 'blocked';
+	}
+	const dealt = Math.min(hp.hp, weaknessDamage(target, verb, Math.max(item.Weapon.damage, spec?.damage ?? 0)).damage);
+	hp.hp -= dealt;
+	if (dealt > 0) {
+		if (character.id === 'Player') {
+			world.playerHits.add(target.getComponent(Named)?.id ?? target.id);
+		}
+		applyHit(world, character, target, spec?.knock ?? 1);
+	}
+	return 'hit';
 }
 
 export function useItem(character:GameObject, item:ItemInstance, target:GameObject | null):UseResult {
@@ -193,21 +223,8 @@ export function useItem(character:GameObject, item:ItemInstance, target:GameObje
 	}
 
 	if (target && item.Weapon && (target.getComponent(Vitals) || target.getComponent(HumanBody))) {
-		if (distXZ(character, target) > item.Weapon.range) {
-			return fail('too far');
-		}
-		const hp = target.getComponent(Vitals);
-		if (hp) {
-			const dealt = Math.min(hp.hp, weaknessDamage(target, undefined, item.Weapon.damage).damage);
-			hp.hp -= dealt;
-			if (dealt > 0) {
-				if (character.id === 'Player') {
-					world.playerHits.add(target.getComponent(Named)?.id ?? target.id);
-				}
-				applyHit(world, character, target);
-			}
-		}
-		return ok('hit');
+		const result = strikeWith(character, item, target);
+		return result === 'too far' ? fail(result) : ok(result);
 	}
 
 	if (target && item.Blade) {

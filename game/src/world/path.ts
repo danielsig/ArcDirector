@@ -1,7 +1,6 @@
-import { pascalCase, type PathStep } from 'arc-director';
-import { canOccupy } from '@arc-director/kindling';
+import { pascalCase, type PathGraph, type PathStep } from 'arc-director';
+import { canOccupy, type GameObject } from '@arc-director/kindling';
 import { BoxCollider, Bridge, Door, Flammable, HumanBody, Lock, Named } from '../engine/components';
-import type { GameObject } from '../engine/GameObject';
 import type { World } from '../engine/World';
 import { CELL_PROPS } from './Chunk';
 import { DRESSING_NAME } from './dressingColliders';
@@ -10,8 +9,10 @@ import { findCarried } from '../items/inventory';
 
 /** Step cost onto a cell another body occupies. Empty floor is 1. */
 const OCCUPANT_COST = 8;
-/** Step cost onto a cell holding a solid prop: passable, but paths go around when they can. */
+/** Step cost onto a cell partly under a solid prop: passable, but paths go around when they can. */
 const PROP_COST = 4;
+/** A cell this much under solid props (a fallen column, a table) is not a step. */
+const BLOCKING_COVER = 0.3;
 
 /** The eight steps to the cells around one, clockwise from east. */
 const NEIGHBOURS = [[1, 0], [1, 1], [0, 1], [-1, 1], [-1, 0], [-1, -1], [0, -1], [1, -1]];
@@ -26,7 +27,7 @@ function raisedBridgeAt(world:World, x:number, z:number):GameObject | undefined 
 	let found:GameObject | undefined;
 	world.forEachComponent(Bridge, (span, go) => {
 		if (!span.open && span.cells.some((c) => Math.abs(c.x - x) < 0.55 && Math.abs(c.z - z) < 0.55)) {
-			found = go as GameObject;
+			found = go;
 		}
 	});
 	return found;
@@ -36,32 +37,20 @@ function characterIn(world:World, tx:number, tz:number, except?:GameObject):Game
 	return world.objectsInTile(tx, tz).find((go) => go !== except && go.getComponent(HumanBody)?.enabled);
 }
 
-function propIn(world:World, tx:number, tz:number):boolean {
-	return world.objectsInTile(tx, tz).some((go) => go.name === DRESSING_NAME);
-}
-
-/** The weapon rack stands on this tile. Routes leave the tile out; the collider stays its own size. */
+/**
+ * The weapon rack stands on this tile. Routes leave the tile out; the collider stays its own size.
+ * It is too thin to reach `BLOCKING_COVER`, yet a box a walker snags on rather than slides around.
+ */
 function weaponRackIn(world:World, tx:number, tz:number):boolean {
 	return world.objectsInTile(tx, tz).some((go) => go.name === DRESSING_NAME && go.id.startsWith('dressing_weaponRack_'));
 }
 
-/** A solid that is not a body: pillar, tree, dressing, a closed door's leaf. */
-function obstacleIn(world:World, tx:number, tz:number):boolean {
-	return world.objectsInTile(tx, tz).some((go) => {
-		if (go.getComponent(HumanBody)) {
-			return false;
-		}
-		const col = go.getComponent(BoxCollider);
-		return !!col?.enabled && col.solid && !col.isTrigger;
-	});
-}
-
-/** Walls, deep water, cell-filling props, pillars, and closed doors stop steps. */
+/** Walls, deep water, cell-filling props, cells mostly under solid props, and closed doors stop steps. */
 function blocked(world:World, tx:number, tz:number):boolean {
 	const { x, z } = world.tileCenter(tx, tz);
 	return world.sampleTerrain(x, z)?.blocked !== false
 		|| CELL_PROPS.has(world.chunkAtWorld(x, z)!.propAtWorld(x, z) ?? '')
-		|| obstacleIn(world, tx, tz)
+		|| world.solidCover(tx, tz) >= BLOCKING_COVER
 		|| !!barrierIn(world, tx, tz);
 }
 
@@ -117,44 +106,86 @@ function sampleCell(world:World, tx:number, tz:number) {
 }
 
 /**
- * The open neighbours of the cell holding a point, for one route search by `body`. Walls, water, and props
- * are not steps, and no diagonal squeezes past a blocked corner; a closed door or a raised bridge is a
+ * The step by `body` from cell `tx`, `tz` to the neighbour `dx`, `dz` over, if there is one. Walls, water, and props
+ * are not steps (nor a cell `BLOCKING_COVER` under solid props), and no diagonal squeezes past a blocked corner; a closed door or a raised bridge is a
  * blocked step that tells `body` why; a cell another body stands on costs more, so routes go around people when they can.
  * Height matches physics: a raised floor is not a step unless it is climbable (stairs).
  */
-export function cellSteps(world:World, body:GameObject):(point:number[])=>PathStep[] {
-	return (from) => {
-		const { tx, tz } = world.tileCoordAt(from[0], from[1]);
-		const here = sampleCell(world, tx, tz);
-		const open = (dx:number, dz:number) => !blocked(world, tx + dx, tz + dz);
+function cellStep(world:World, body:GameObject, tx:number, tz:number, dx:number, dz:number):PathStep | undefined {
+	const { x, z } = world.tileCenter(tx + dx, tz + dz);
+	if (dx && dz && (blocked(world, tx + dx, tz) || blocked(world, tx, tz + dz))) {
+		return undefined;
+	}
+	const door = barrierIn(world, tx + dx, tz + dz);
+	if (door) {
+		return { point: [x, z], blocked: barrierReason(door, body) };
+	}
+	const bridge = raisedBridgeAt(world, x, z);
+	if (bridge) {
+		const name = bridge.getComponent(Named)?.id ?? bridge.id;
+		return { point: [x, z], blocked: `${name} is raised — it must be lowered first` };
+	}
+	if (!canOccupy(sampleCell(world, tx, tz), sampleCell(world, tx + dx, tz + dz))) {
+		return undefined;
+	}
+	// A stall fills its cell. Stopping on it is how a shopper walks into the counter.
+	if (CELL_PROPS.has(world.chunkAtWorld(x, z)?.propAtWorld(x, z) ?? '')) {
+		return undefined;
+	}
+	const cover = world.solidCover(tx + dx, tz + dz);
+	if (cover >= BLOCKING_COVER || weaponRackIn(world, tx + dx, tz + dz)) {
+		return undefined;
+	}
+	const crowded = characterIn(world, tx + dx, tz + dz, body) ? OCCUPANT_COST : cover > 0 ? PROP_COST : 1;
+	return { point: [x, z], cost: Math.hypot(dx, dz) * CELL_SIZE * crowded };
+}
+
+/**
+ * Steps between the cell holding a point and its neighbours, for one route search by `body` (see `cellStep`).
+ * With `into`, the steps from each neighbour into that cell, so a route never ends in a wall or up a ledge.
+ */
+export function cellSteps(world:World, body:GameObject):PathGraph {
+	return (point, into) => {
+		const { tx, tz } = world.tileCoordAt(point[0], point[1]);
 		return NEIGHBOURS.flatMap(([dx, dz]):PathStep[] => {
+			const step = into ? cellStep(world, body, tx + dx, tz + dz, -dx, -dz) : cellStep(world, body, tx, tz, dx, dz);
+			// Either way the step's `point` is the neighbour: where it lands, or where it leaves from.
 			const { x, z } = world.tileCenter(tx + dx, tz + dz);
-			const door = barrierIn(world, tx + dx, tz + dz);
-			if (dx && dz && !(open(dx, 0) && open(0, dz))) {
-				return [];
-			}
-			if (door) {
-				return [{ point: [x, z], blocked: barrierReason(door, body) }];
-			}
-			const bridge = raisedBridgeAt(world, x, z);
-			if (bridge) {
-				const name = bridge.getComponent(Named)?.id ?? bridge.id;
-				return [{ point: [x, z], blocked: `${name} is raised — it must be lowered first` }];
-			}
-			if (!canOccupy(here, sampleCell(world, tx + dx, tz + dz))) {
-				return [];
-			}
-			// A stall fills its cell. Stopping on it is how a shopper walks into the counter.
-			if (CELL_PROPS.has(world.chunkAtWorld(x, z)?.propAtWorld(x, z) ?? '')) {
-				return [];
-			}
-			if (weaponRackIn(world, tx + dx, tz + dz)) {
-				return [];
-			}
-			const crowded = characterIn(world, tx + dx, tz + dz, body) ? OCCUPANT_COST : propIn(world, tx + dx, tz + dz) ? PROP_COST : 1;
-			return [{ point: [x, z], cost: Math.hypot(dx, dz) * CELL_SIZE * crowded }];
+			return step ? [{ ...step, point: [x, z] }] : [];
 		});
 	};
+}
+
+/** How many rings of cells around a point `standableNear` searches. */
+const STANDABLE_RINGS = 2;
+
+/**
+ * `point`, or, when `body` has no open step onto it (a wall, a pillar), the nearest cell centre around it that it has.
+ * For spots worked out by geometry (a rank line, a guard's screen), which may fall in a wall. `point` when none is near.
+ */
+export function standableNear(world:World, body:GameObject, point:{ x:number; z:number }):{ x:number; z:number } {
+	const graph = cellSteps(world, body);
+	const standable = (x:number, z:number) => graph([x, z], true).some((step) => !step.blocked);
+	if (standable(point.x, point.z)) {
+		return point;
+	}
+	const { tx, tz } = world.tileCoordAt(point.x, point.z);
+	for (let ring = 1; ring <= STANDABLE_RINGS; ring++) {
+		let best:{ x:number; z:number } | undefined;
+		for (let dz = -ring; dz <= ring; dz++) {
+			for (let dx = -ring; dx <= ring; dx++) {
+				const c = world.tileCenter(tx + dx, tz + dz);
+				const closer = !best || Math.hypot(c.x - point.x, c.z - point.z) < Math.hypot(best.x - point.x, best.z - point.z);
+				if (Math.max(Math.abs(dx), Math.abs(dz)) === ring && closer && standable(c.x, c.z)) {
+					best = c;
+				}
+			}
+		}
+		if (best) {
+			return best;
+		}
+	}
+	return point;
 }
 
 /** Grid DDA. Start and end cells are open so occupants do not occlude themselves. */

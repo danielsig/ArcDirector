@@ -9,4 +9,13 @@ export class BoxCollider extends Component {
 	public solid = true;
 	/** Extra XZ pad vs other padded colliders. Those pairs use a shove instead of hard-blocking. */
 	public pad = 0;
+
+	/** Whether the world XZ point lies inside this collider's footprint (pad not included). */
+	public contains(x:number, z:number):boolean {
+		const p = this.gameObject.transform.position;
+		if (this.shape === 'cylinder') {
+			return Math.hypot(x - p.x, z - p.z) < this.size.x * 0.5;
+		}
+		return Math.abs(x - p.x) < this.size.x * 0.5 && Math.abs(z - p.z) < this.size.z * 0.5;
+	}
 }

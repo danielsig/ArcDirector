@@ -32,6 +32,14 @@ export interface PathStep {
 	blocked?:string;
 }
 
+/**
+ * The steps out of any `point`: grid neighbors, navmesh neighbors, or the waypoints of a network in sight of it.
+ * `point` need not be one a step named. With `into`, the steps that arrive at `point` instead, each `point` being
+ * where that step leaves from: a route ends through them, so a wall or a ledge one may only drop off is no way in.
+ * A graph whose every step goes both ways may ignore `into`.
+ */
+export type PathGraph = (point:Vec, into?:boolean)=>PathStep[];
+
 /** What the world says to a command. */
 export interface Outcome {
 	/** Done, or refused. */
@@ -58,7 +66,7 @@ export interface Exchange<TEntity> {
 	character:TEntity;
 	/** The side that made it. */
 	other:TEntity;
-	/** What `character` hands `other`. `gold` is purse gold. */
+	/** What `character` hands `other`. */
 	give:Record<string, number>;
 	/** What `other` hands `character`. */
 	get:Record<string, number>;
@@ -100,11 +108,9 @@ export interface HostWorld<TEntity> {
 	/**
 	 * The steps `character` can take, for one search. Called once per search, so it can gather what it needs
 	 * (blocked cells, crowded ones) before the search asks. Characters differ: a child fits a gap a knight does not.
-	 * @returns Steps from any `point`: grid neighbors, navmesh neighbors, or the waypoints of a network in
-	 * sight of it, as many as there are. `point` need not be one a step named: a route starts where the character
-	 * stands and ends through the steps out of the destination, taken backwards.
+	 * @returns The graph: a route starts where the character stands and ends through the steps into the destination.
 	 */
-	getPathGraph?(character:TEntity):(point:Vec)=>PathStep[];
+	getPathGraph?(character:TEntity):PathGraph;
 	/**
 	 * How close `character` must be to `target` to act on it, and to count as there.
 	 * @returns A distance. Default 1.

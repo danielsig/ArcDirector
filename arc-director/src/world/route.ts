@@ -1,4 +1,4 @@
-import type { PathStep, Vec } from './types.js';
+import type { PathGraph, PathStep, Vec } from './types.js';
 import { distance } from './vec.js';
 
 /** Points to pass through after the start, and the total cost. */
@@ -100,7 +100,7 @@ export type RouteGoal = {
 	estimate(point:Vec):number;
 	/** Extra cost, at least 0, of a step of cost `length` onto `point`. */
 	toll?(point:Vec, length:number):number;
-	/** A point off the graph the route may end on, arriving through the steps out of it taken backwards. */
+	/** A point off the graph the route may end on, arriving through the steps into it. */
 	at?:Vec;
 };
 
@@ -132,15 +132,17 @@ export function awayGoal(threat:Vec, keep:number):RouteGoal {
 
 /**
  * Cheapest open route from `from` to `goal`. Neither end has to be a point of the graph: the route leaves through
- * the steps out of `from` and, for a goal with its own point, arrives through the steps out of it, taken backwards,
- * so a sparse waypoint network works as well as a grid.
+ * the steps out of `from` and, for a goal with its own point, ends on it only through a step into it, so a
+ * sparse waypoint network works as well as a grid, and a goal inside a wall is no place to walk to.
  *
  * One search: open ways settle first, so an open route comes back exactly as if blocked steps did not exist.
  * Without one, the search goes on through blocked steps, once per first blocker, and lists every blocker
  * that leads there. A blocked way that rejoins an open one is dropped: the blocker after it is the one to name.
  */
-export function findRoute(graph:(point:Vec)=>PathStep[], from:Vec, goal:RouteGoal, cap = SEARCH_CAP):Route | Blocked | undefined {
-	const exits = new Map(goal.at ? graph(goal.at).map((step) => [keyOf(step.point), step]) : []);
+export function findRoute(graph:PathGraph, from:Vec, goal:RouteGoal, cap = SEARCH_CAP):Route | Blocked | undefined {
+	const entries = new Map(goal.at ? graph(goal.at, true).map((step) => [keyOf(step.point), step]) : []);
+	// An open step either way: a goal no one stands on (a tree, a stall) is still reached from beside it.
+	const beside = new Set(goal.at ? [...graph(goal.at), ...entries.values()].filter((step) => !step.blocked).map((step) => keyOf(step.point)) : []);
 	const stateOf = (key:string, via?:string):string => (via === undefined ? key : `${key}|${via}`);
 	const best = new Map<string, number>([[keyOf(from), 0]]);
 	const openlyReached = new Set<string>();
@@ -172,7 +174,7 @@ export function findRoute(graph:(point:Vec)=>PathStep[], from:Vec, goal:RouteGoa
 		if ((node.via === undefined ? openLeft-- : blockedLeft--) <= 0) {
 			continue;
 		}
-		if (arrived(node, key, goal, exits)) {
+		if (arrived(node, key, goal, beside)) {
 			if (node.via === undefined) {
 				return routeTo(node);
 			}
@@ -182,9 +184,9 @@ export function findRoute(graph:(point:Vec)=>PathStep[], from:Vec, goal:RouteGoa
 		if (node.via === undefined) {
 			openlyReached.add(key);
 		}
-		const exit = exits.get(key);
-		if (exit) {
-			relax(node, goal.at!, exit, END, true);
+		const entry = entries.get(key);
+		if (entry) {
+			relax(node, goal.at!, entry, END, true);
 		}
 		for (const step of graph(node.point)) {
 			relax(node, step.point, step, keyOf(step.point));
@@ -195,9 +197,9 @@ export function findRoute(graph:(point:Vec)=>PathStep[], from:Vec, goal:RouteGoa
 
 /**
  * In reach, and actually next to the goal on the graph. Euclidean range through a wall is not a stop:
- * `at` has no open step here, so the search keeps going around.
+ * no open step joins here and `at`, so the search keeps going around.
  */
-function arrived(node:Node, key:string, goal:RouteGoal, exits:Map<string, PathStep>):boolean {
+function arrived(node:Node, key:string, goal:RouteGoal, beside:Set<string>):boolean {
 	if (node.end) {
 		return true;
 	}
@@ -210,8 +212,7 @@ function arrived(node:Node, key:string, goal:RouteGoal, exits:Map<string, PathSt
 	if (keyOf(goal.at) === key) {
 		return true;
 	}
-	const exit = exits.get(key);
-	return !!exit && !exit.blocked;
+	return beside.has(key);
 }
 
 function routeTo(end:Node):Route {
@@ -224,7 +225,7 @@ function routeTo(end:Node):Route {
 }
 
 /** Points reachable from `from` without a blocked step, cheapest first, up to `cap` of them. */
-export function reachablePoints(graph:(point:Vec)=>PathStep[], from:Vec, cap:number):{ point:Vec; cost:number }[] {
+export function reachablePoints(graph:PathGraph, from:Vec, cap:number):{ point:Vec; cost:number }[] {
 	const best = new Map<string, number>([[keyOf(from), 0]]);
 	const open = new Frontier();
 	const out:{ point:Vec; cost:number }[] = [];

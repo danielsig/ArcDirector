@@ -1,5 +1,4 @@
-import { Component } from './Component';
-import { ChunkStreamer, type Renderer } from '@arc-director/kindling';
+import { ChunkStreamer, type Renderer, Time, Component } from '@arc-director/kindling';
 import { Order } from './order';
 import { patchHud, patchInfer, statusLabels } from './patchHud';
 import { syncHeldTorchLight } from '../items/heldLight';
@@ -24,11 +23,11 @@ export class DirectorPulse extends Component {
 	}
 }
 
-export class WorldStream extends ChunkStreamer<Chunk> {
+export class WorldStream extends ChunkStreamer {
 	public static override order = Order.streaming;
 
 	public override spawn(chunk:Chunk):void {
-		const world = this.gameObject.world as World;
+		const world = this.gameObject.world!;
 		spawnChunkEntities(world, chunk);
 		// Props are planned over every loaded chunk, so their colliders follow each load.
 		syncDressingColliders(world);
@@ -48,13 +47,13 @@ export class GroundPick extends Component {
 		const renderer = this.getRenderer();
 		if (!world || !renderer) {
 			if (world) {
-				world.input.groundHit = null;
+				world.groundHit = null;
 			}
 			return;
 		}
 		const y = world.findByID('Player')?.transform.position.y ?? 0;
 		const locked = world.input.pointerLocked;
-		world.input.groundHit = renderer.pickGround(
+		world.groundHit = renderer.pickGround(
 			locked ? 0 : world.input.mouseNdcX,
 			locked ? 0 : world.input.mouseNdcY,
 			y,
@@ -84,7 +83,7 @@ export class WorldView extends Component {
 		if (cam) {
 			this.present.sync(world, cam.native);
 		}
-		this.present.tickNature(world.time);
+		this.present.tickNature(Time.time);
 	}
 }
 

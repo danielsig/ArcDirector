@@ -1,6 +1,6 @@
-import type { Chunk } from './Chunk.js';
 import { Component } from './Component.js';
 import type { GameObject } from './GameObject.js';
+import type { ChunkType } from './types.js';
 
 /** Keeps the chunks around its object loaded. */
 export class StreamingAnchor extends Component {
@@ -20,13 +20,13 @@ export class ChunkBound extends Component {
  * With no anchors, nothing changes. Unloading parks the chunk's `ChunkBound` objects
  * (`World.remove`); loading adds them back as they were. Override `spawn` to populate a chunk the first time it loads.
  */
-export class ChunkStreamer<C extends Chunk = Chunk> extends Component {
+export class ChunkStreamer extends Component {
 	/** Every chunk of the scene, loaded or not. */
-	public chunks:C[] = [];
-	private readonly _parked = new Map<C, GameObject[]>();
+	public chunks:ChunkType[] = [];
+	private readonly _parked = new Map<ChunkType, GameObject[]>();
 
 	/** The first time `chunk` loads, right after `World.addChunk`. */
-	public spawn(chunk:C):void {}
+	public spawn(chunk:ChunkType):void {}
 
 	/** Load every chunk, so the whole scene is in the world (e.g. before a save). The next `stream` unloads far ones again. */
 	public loadAll():void {
@@ -71,11 +71,11 @@ export class ChunkStreamer<C extends Chunk = Chunk> extends Component {
 		}
 	}
 
-	private loaded(chunk:C):boolean {
+	private loaded(chunk:ChunkType):boolean {
 		return this.gameObject.world?.chunkAt(chunk.origin.cx, chunk.origin.cz) === chunk;
 	}
 
-	private load(chunk:C):void {
+	private load(chunk:ChunkType):void {
 		const world = this.gameObject.world!;
 		world.addChunk(chunk);
 		const parked = this._parked.get(chunk);
@@ -89,7 +89,7 @@ export class ChunkStreamer<C extends Chunk = Chunk> extends Component {
 		}
 	}
 
-	private unload(chunk:C):void {
+	private unload(chunk:ChunkType):void {
 		const world = this.gameObject.world!;
 		const parked = world.objects.filter((go) => go.getComponent(ChunkBound)?.chunkID === chunk.id);
 		for (const go of parked) {

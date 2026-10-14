@@ -19,8 +19,12 @@ export type HudItem = {
 
 export type HudSpeech = {
 	id:string;
+	/** Shown over the health bar, as a nameplate. */
+	name:string;
 	text:string;
 	status:string;
+	/** The mind is thinking: dots over the head instead of a status line. */
+	thinking:boolean;
 	hp:number;
 	maxHP:number;
 	x:number;

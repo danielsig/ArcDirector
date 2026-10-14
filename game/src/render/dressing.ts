@@ -1,9 +1,9 @@
+import { hash } from '@arc-director/kindling';
 import * as THREE from 'three';
 import { CELL_SIZE, CHUNK_SIZE } from '../world/constants';
 import type { Chunk } from '../world/Chunk';
-import { dirtMat } from './toon';
 import { propParts } from './props';
-import { findDoor, planProps, roadCells } from '../world/dressingPlan';
+import { planProps } from '../world/dressingPlan';
 import { treeParts } from './trees';
 
 export type DressingDraw = {
@@ -21,14 +21,6 @@ export type DressingDraw = {
 	sz:number;
 };
 
-
-const roadGeo = new THREE.PlaneGeometry(0.92, CELL_SIZE + 0.04);
-roadGeo.userData.shared = true;
-
-function hash01(x:number, z:number, salt:number):number {
-	const n = Math.sin(x * 127.1 + z * 311.7 + salt * 74.7) * 43758.5453;
-	return n - Math.floor(n);
-}
 
 function inChunk(chunk:Chunk, x:number, z:number):boolean {
 	const ox = chunk.worldOriginX();
@@ -54,7 +46,7 @@ function drawOf(
 	return { geom, mat, cast, x, y, z, rx, ry, rz, sx, sy, sz };
 }
 
-/** Instanced draws for this chunk: props, the dirt path, and trees. Grass blades are `grassBatch`. */
+/** Instanced draws for this chunk: props and trees. The road is part of the ground mesh; grass blades are `grassBatch`. */
 export function dressingDraws(chunk:Chunk, chunks:Iterable<Chunk>):DressingDraw[] {
 	const list = [...chunks];
 	const draws:DressingDraw[] = [];
@@ -84,31 +76,17 @@ export function dressingDraws(chunk:Chunk, chunks:Iterable<Chunk>):DressingDraw[
 			));
 		}
 	}
-	const door = findDoor(list);
-	const road = door ? roadCells(list, door) : [];
-	const roadHere = road.filter((cell) => inChunk(chunk, cell.x, cell.z));
-	const dirt = dirtMat();
-	for (const cell of roadHere) {
-		// Lay each tile along its run; a corner fills the whole cell.
-		const i = road.indexOf(cell);
-		const prev = road[i - 1] ?? (door ? { x: door.x, z: door.z } : cell);
-		const next = road[i + 1] ?? cell;
-		const inX = prev.x !== cell.x || (next.x !== cell.x && prev.z === cell.z);
-		const corner = (prev.x !== cell.x) !== (next.x !== cell.x) && road[i + 1] !== undefined;
-		const width = corner ? (CELL_SIZE + 0.04) / 0.92 : 1;
-		draws.push(drawOf(roadGeo, dirt, cell.x, 0.03, cell.z, -Math.PI / 2, inX ? Math.PI / 2 : 0, 0, width, 1, 1, false));
-	}
 	for (const ent of chunk.entities) {
 		if (ent.def !== 'tree') {
 			continue;
 		}
 		const center = chunk.worldCellCenter(ent.localX, ent.localZ);
 		const kind = (ent.localX + ent.localZ) % 2 === 0 ? 'oak' : 'pine';
-		const variant = Math.floor(hash01(center.x, center.z, 13) * 8);
-		const s = 0.88 + hash01(center.x, center.z, 9) * 0.28;
-		const x = center.x + (hash01(center.x, center.z, 11) - 0.5) * 0.2;
-		const z = center.z + (hash01(center.x, center.z, 12) - 0.5) * 0.2;
-		const yaw = hash01(center.x, center.z, 14) * Math.PI * 2;
+		const variant = Math.floor(hash(center.x, center.z, 13) * 8);
+		const s = 0.88 + hash(center.x, center.z, 9) * 0.28;
+		const x = center.x + (hash(center.x, center.z, 11) - 0.5) * 0.2;
+		const z = center.z + (hash(center.x, center.z, 12) - 0.5) * 0.2;
+		const yaw = hash(center.x, center.z, 14) * Math.PI * 2;
 		for (const part of treeParts(kind, variant)) {
 			draws.push(drawOf(part.geom, part.mat, x, 0, z, 0, yaw, 0, s, s, s));
 		}

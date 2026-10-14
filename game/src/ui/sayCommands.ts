@@ -3,7 +3,6 @@
 export const SAY_COMMANDS = [
 	{ verb: 'give', usage: '/give [amount] <item|gold> [to] <person>', hint: 'Hand over an item, or gold from your purse' },
 	{ verb: 'offer', usage: '/offer <person> <item|gold|nothing> for <item|gold|nothing>', hint: 'Trade; it happens once they offer the reverse' },
-	{ verb: 'help', usage: '/help', hint: 'List slash commands' },
 	{ verb: 'clear', usage: '/clear', hint: 'Clear say history' },
 ] as const;
 
@@ -24,13 +23,10 @@ export type SaySuggestion = {
 	hint:string;
 };
 
-/** A command the player's character runs as an arc, or help. */
+/** A command the player's character runs as an arc. */
 export type ParsedSlash =
-	| { ok:true; verb:'help' }
 	| { ok:true; verb:'give' | 'offer'; arc:string }
 	| { ok:false; reason:string };
-
-export const SLASH_HELP = SAY_COMMANDS.map((c) => c.usage).join('   ');
 
 function compact(s:string):string {
 	return s.toLowerCase().replace(/[^a-z0-9]/g, '');
@@ -73,20 +69,17 @@ export function parseSlash(line:string):ParsedSlash | null {
 	}
 	const words = splitLine(raw.slice(1));
 	if (words.length === 0) {
-		return { ok: false, reason: 'try /help' };
+		return { ok: false, reason: 'which command?' };
 	}
 	const verb = words[0].toLowerCase();
 	const args = skipOptional(words.slice(1), false);
-	if (verb === 'help') {
-		return { ok: true, verb: 'help' };
-	}
 	if (verb === 'give') {
 		return parseGive(args);
 	}
 	if (verb === 'offer') {
 		return parseOffer(args);
 	}
-	return { ok: false, reason: `unknown /${verb} — try /help` };
+	return { ok: false, reason: `unknown /${verb}` };
 }
 
 /** `5 gold Baker`, `gold 5 Baker`, `2 Loaf Baker`, `Loaf Baker`: one good, then whom. */
@@ -175,7 +168,7 @@ function finish(head:string, value:string, more:boolean):string {
 function commandInserts(partial:string):SaySuggestion[] {
 	const hits = SAY_COMMANDS.filter((c) => c.verb.startsWith(partial.toLowerCase()));
 	return hits.slice(0, SUGGEST_CAP).map((c) => ({
-		insert: finish('/', c.verb, c.verb !== 'help' && c.verb !== 'clear'),
+		insert: finish('/', c.verb, c.usage.includes(' ')),
 		label: `/${c.verb}`,
 		hint: c.hint,
 	}));
@@ -248,11 +241,6 @@ export function suggestSay(draft:string, catalog:SayCatalog):SaySuggestion[] {
 	}
 
 	const afterVerb = skipOptional(rawWords.slice(1), false);
-
-	if (verb === 'help') {
-		return [];
-	}
-
 	if (verb === 'give') {
 		return suggestGive(bits.head, bits.partial, afterVerb, catalog);
 	}

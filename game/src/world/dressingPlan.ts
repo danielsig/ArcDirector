@@ -1,3 +1,4 @@
+import { yawToward } from '@arc-director/kindling';
 import { CELL_SIZE, CHUNK_SIZE, TILE_HEIGHT } from './constants';
 import type { Chunk } from './Chunk';
 import { showsWater } from './water';
@@ -244,6 +245,66 @@ export function roadCells(chunks:Chunk[], door:DoorAnchor):Cell[] {
 	return cells;
 }
 
+/** A straight stretch of road centre line, from `a` to `b` (the same point for a lone cell). */
+export type RoadLine = { a:Cell; b:Cell };
+
+/**
+ * The road as straight centre lines: each road cell joins its road neighbours, the first cell runs on to its
+ * door and any cell beside a bridge span on to the span, and every straight run is one line. Turns,
+ * T-junctions, crossings and dead ends all follow from the lines; the edge of the cell is where a door or
+ * span link stops.
+ */
+export function roadLines(chunks:Iterable<Chunk>):RoadLine[] {
+	const list = [...chunks];
+	const door = findDoor(list);
+	const cells = door ? roadCells(list, door) : [];
+	const key = (x:number, z:number):string => `${Math.round(x * 2)},${Math.round(z * 2)}`;
+	const road = new Set(cells.map((c) => key(c.x, c.z)));
+	const spans = new Set(list.flatMap((chunk) => chunk.entities
+		.filter((e) => e.def === 'bridge_span')
+		.map((e) => chunk.worldCellCenter(e.localX, e.localZ))
+		.map((c) => key(c.x, c.z))));
+	/** How far the road runs from cell `c` toward `d`: a whole cell to another road cell, half to a door or span, else none. */
+	const reach = (c:Cell, [dx, dz]:readonly [number, number]):number => {
+		const x = c.x + dx * CELL_SIZE;
+		const z = c.z + dz * CELL_SIZE;
+		if (road.has(key(x, z))) {
+			return CELL_SIZE;
+		}
+		const toDoor = door && c === cells[0] && dx === -door.dx && dz === -door.dz;
+		return toDoor || spans.has(key(x, z)) ? CELL_SIZE / 2 : 0;
+	};
+	const lines:RoadLine[] = [];
+	for (const c of cells) {
+		let alone = true;
+		for (const u of [[1, 0], [0, 1]] as const) {
+			const back = [-u[0], -u[1]] as const;
+			if (reach(c, u) === 0 && reach(c, back) === 0) {
+				continue;
+			}
+			alone = false;
+			if (reach(c, back) === CELL_SIZE) {
+				// Not where this run starts.
+				continue;
+			}
+			let end = c;
+			while (reach(end, u) === CELL_SIZE) {
+				end = cells.find((o) => key(o.x, o.z) === key(end.x + u[0] * CELL_SIZE, end.z + u[1] * CELL_SIZE))!;
+			}
+			const from = reach(c, back);
+			const to = reach(end, u);
+			lines.push({
+				a: { x: c.x - u[0] * from, z: c.z - u[1] * from },
+				b: { x: end.x + u[0] * to, z: end.z + u[1] * to },
+			});
+		}
+		if (alone) {
+			lines.push({ a: c, b: c });
+		}
+	}
+	return lines;
+}
+
 function place(prop:PropID, x:number, y:number, z:number, yaw = 0):DressingProp {
 	return { prop, x, y, z, yaw };
 }
@@ -405,7 +466,7 @@ function glyphProps(list:Chunk[]):DressingProp[] {
 function glyphYaw(chunk:Chunk, lx:number, lz:number):number {
 	for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]] as const) {
 		if (chunk.tile(lx + dx, lz + dz)?.blocked) {
-			return Math.atan2(-dx, -dz);
+			return yawToward(dx, dz);
 		}
 	}
 	const n = Math.sin(chunk.origin.cx * 913.1 + chunk.origin.cz * 271.3 + lx * 127.1 + lz * 311.7) * 43758.5453;
@@ -427,7 +488,7 @@ function onWall(chunks:Chunk[], props:PropID[], p:{ x:number; z:number }, depth:
 				if (!best || d < best.d) {
 					// The wall face sits where the march entered the blocked tile.
 					const face = d - step * 0.5;
-					best = { x: p.x + dx * (face - depth * 0.5), z: p.z + dz * (face - depth * 0.5), yaw: Math.atan2(-dx, -dz), d };
+					best = { x: p.x + dx * (face - depth * 0.5), z: p.z + dz * (face - depth * 0.5), yaw: yawToward(dx, dz), d };
 				}
 				break;
 			}

@@ -1,3 +1,4 @@
+import { Time } from '@arc-director/kindling';
 import { formatArc, parseArc, type ArcResult } from 'arc-director';
 import type { AiLogQuery, CastRows, Command, ReconnectResult } from '@arc-director/control';
 import type { Session } from '../engine/Session';
@@ -143,7 +144,7 @@ async function think(
 	if (!mind) {
 		throw new Error(`${id} has no mind to think with`);
 	}
-	const out = await mind.thinkNow({ now: session.gameObject.world?.time, about, enact });
+	const out = await mind.thinkNow({ now: Time.time, about, enact });
 	return {
 		mind: mind.id,
 		arc: out ? formatArc(out, mind.owner.verbs) : null,

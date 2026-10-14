@@ -1,10 +1,10 @@
+import { type GameObject } from '@arc-director/kindling';
 import type { WorldSave } from '@arc-director/kindling';
 import type { CastJSON } from 'arc-director';
 import type { ItemInstance } from '../items/instance';
 import { lsGet, lsSet } from '../prefs';
 import { spawnNPC, type NPCSpawnOpts } from '../world/spawn';
 import { spawnWorldItem } from '../world/spawnItem';
-import type { GameObject } from './GameObject';
 import type { ViewPose } from './viewPersist';
 import type { World } from './World';
 

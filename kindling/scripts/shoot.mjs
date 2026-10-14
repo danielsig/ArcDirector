@@ -4,6 +4,7 @@
 //
 // WAIT=<seconds> shoots after that long instead of waiting for the "ready" title.
 // EVAL=<js> prints that expression's value from the page before the screenshot (for debugging).
+// FRAMES=<n> EVERY=<seconds> takes n screenshots that far apart instead of one, to <out>-0.png, <out>-1.png, …
 // PROFILE=<seconds> records a CPU profile that long (after WAIT/EVAL) and prints the functions with the most self time.
 // Set CHROME to the browser binary when it is not in the usual Windows, macOS or Linux place.
 import { spawn } from 'node:child_process';
@@ -117,9 +118,16 @@ try {
 			console.log(`  ${v.toFixed(0).padStart(6)} ms  ${k}`);
 		}
 	}
-	const { data } = await send('Page.captureScreenshot', { format: 'png' }, sessionId);
-	await writeFile(out, Buffer.from(data, 'base64'));
-	console.log(out);
+	const frames = Number(process.env.FRAMES ?? 0);
+	for (let i = 0; i < Math.max(1, frames); i++) {
+		if (i > 0) {
+			await new Promise((r) => setTimeout(r, Number(process.env.EVERY ?? 0.5) * 1000));
+		}
+		const { data } = await send('Page.captureScreenshot', { format: 'png' }, sessionId);
+		const file = frames ? out.replace(/(\.png)?$/, `-${i}.png`) : out;
+		await writeFile(file, Buffer.from(data, 'base64'));
+		console.log(file);
+	}
 } finally {
 	browser.close();
 	proc.kill();

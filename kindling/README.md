@@ -2,7 +2,7 @@
 
 Unity-shaped runtime on Three.js. Same nouns (`Game`, `World`, `GameObject`, `Transform`, `Component`) and a similar lifecycle, but it is not Unity.
 
-Kindling **owns** the canvas, `Renderer`, requestAnimationFrame loop, and the Three.js scene (`world.native`). You **subclass** `Game` / `World` / `GameObject` / `Component`. The playground (or your UI) only mounts that canvas. Simulation is not UI state. Identity on a GameObject is `id`.
+Kindling **owns** the canvas, `Renderer`, requestAnimationFrame loop, and the Three.js scene (`world.native`). You **subclass** `Game` / `World` / `Component`, and type Kindling with your own `World` and `Chunk` through `KindlingTypes` (see Subclassing). The playground (or your UI) only mounts that canvas. Simulation is not UI state. Identity on a GameObject is `id`.
 
 ```
 pnpm dev     # playground http://localhost:5174/
@@ -66,14 +66,14 @@ Creates a `World` (or takes one), and a `Renderer` when `document` exists.
 | `mount(parent)` | Appends the canvas, resizes. |
 | `start()` | `onStart()`, then RAF. |
 | `stop()` | Cancels RAF. |
-| `tick(dt)` | Clamps dt, advances `Time`, calls `simulate`. |
+| `tick(dt)` | Clamps dt, advances `Time`, calls `simulate`. Does nothing while `paused`. |
 | `simulate(dt)` | Component loop (protected). |
 | `destroy(go)` | Queues `world.destroy`. |
 | `dispose()` | Stop + renderer dispose. |
 
 `unfocusedHz` (default `3`) caps canvas draws while the document is unfocused. Hosts set it on the `Game` instance.
 
-If you own pause, override `tick` and **do not** call `super.tick` (that advances `Time` again). Set `Time.deltaTime` / `Time.time`, then `this.simulate(dt)`.
+Set `paused` to freeze the simulation: frames still tick and draw, but `Time` stands still and no component runs. For extra frame work, override `tick` and call `super.tick(dt)`. `resetTime(t)` restarts the clock at `t` (a loaded save's time) with no fixed steps owed.
 
 Override `onStart` for one-shot setup when the loop begins.
 
@@ -95,6 +95,7 @@ Override `onStart` for one-shot setup when the loop begins.
 | `tileCoordAt(x, z)` / `tileCenter(tx, tz)` | World XZ ↔ tile coordinate (`tileSize`, or 1 when 0). |
 | `objectsInTile(tx, tz)` | Spatial hash: objects whose position is in that tile (`tileSize`, or 1 when 0). |
 | `forEachNear(minX, minZ, maxX, maxZ, fn)` | Broadphase: every object whose `BoxCollider` may overlap the XZ box. Check exactly. |
+| `solidCover(tx, tz)` | Fraction (0–1) of a tile under solid colliders with no `Rigidbody`. Hosts' path graphs block tiles above a threshold. |
 | `reindex()` | Rebuild the hash. Physics does this once per step, after integrating, so queries see positions (and adds / removes) as of that step. |
 
 A GameObject may belong to only one World.
@@ -116,6 +117,8 @@ Always has `transform`. `addComponent` rejects a second `Transform`; `removeComp
 | `getComponentsInChildren(ctor)` | This object then descendants. |
 | `parent` | Assigning reparents Kindling + Three.js and keeps world position and rotation. `null` unparents. If the new parent is in a world and this is not, `world.add(this)`. |
 | `children` | Readonly direct children, in parenting order. |
+| `timeScale` | How fast time runs for this object (1 as usual, 0 stopped). Its components' instance `update` / `fixedUpdate` / `lateUpdate` get `dt` scaled by `timeRate`, and its `Rigidbody` moves at that rate. `Time` and `world.after` run on regardless. |
+| `hitstop(seconds)` | Stops this object's time for that much game time (a blow landing); overlapping stops last until the latest ends. `timeRate` is `timeScale`, or 0 while one holds. |
 
 `allocID(prefix?)` / `resetAllocID()` are for tests and unnamed objects.
 
@@ -194,14 +197,16 @@ RAF:
       while (fixed accumulator)
         fixedUpdate(fixedDeltaTime)
       start() on not-yet-started enabled components
+      world.runTimers()   // due world.after(seconds, fn) calls
       update(dt)
       stepPhysics(world, dt)
       lateUpdate(dt)
+      updateEffects()     // effects from addEffect move on
       world.flushDestroy()
   renderer.render()
 ```
 
-`Time.fixedDeltaTime` defaults to `0.02`. `resetTime()` restores the defaults (tests / new sessions).
+Instance hooks get `dt` times their object's `timeRate` (see `GameObject.timeScale`); type-level hooks get it unscaled. `world.after(seconds, fn)` calls `fn` once that much game time has passed (paused time does not count). `Time.fixedDeltaTime` defaults to `0.02`. `resetTime()` restores the defaults (tests / new sessions).
 
 ---
 
@@ -279,7 +284,7 @@ restoreWorld(rebuilt, save, (recipe) => spawn(rebuilt, recipe));
 
 | | |
 |--|--|
-| `Camera` | Perspective; `native` is parented to the GameObject’s `Object3D`. Syncs fov/near/far each `update`. |
+| `Camera` | Perspective; `native` is parented to the GameObject’s `Object3D`. Syncs fov/near/far each `update`. What blows do to the view, in game time: `shake(m, s)`, `punch(m, s)` (in toward where it looks, springing back), and `impact(at, s)`, a black-and-white impact frame: whatever stands off the ground within about 2 m of `at` (the middle of the body struck) a white silhouette inked black, the rest black with speed lines bursting out from it, inverted for its second half. The `Renderer` hands `impactFrame` to the `OutlinePass`. |
 | `Light` | `point` or `directional`. Local `offsetX/Y/Z` (Z along Kindling forward). |
 | `MeshRenderer` | Instantiates `meshID` from the registry; optional `color`, `shaderInserts`, `shaderUniforms`. |
 | `applyLook(look)` | Background, fog, exposure, hemi, fill, optional sun. |
@@ -289,7 +294,9 @@ restoreWorld(rebuilt, save, (recipe) => spawn(rebuilt, recipe));
 
 Shader patches: `insertAfterChunk` / `applyShaderFeatures` insert GLSL after a documented Three.js `#include <chunk>` (see playground pulse cube). `patchShader(material, key, edit)` stacks a raw edit on top of earlier ones (a key already on the material is skipped), so patches compose instead of replacing `onBeforeCompile`.
 
-Toon look: `ToonMaterial` is `MeshToonMaterial` with a hard-stepped ramp (`bands`), a tint on the unlit side (`shade`), a back-light `rim`, and drawn `pattern`s (`brick`, `plank`, `thatch`, `stone`, `meadow`) computed from world position, so no textures or UVs. `patternScale` is meters per course on sides, `topScale` on upward faces, `brickLength` in meters, and `topAxis` (the way rows count on flat tops; stairs point it uphill), so courses and joints can match step heights and tread depths. `outline: false` keeps a surface (grass, water) out of the ink pass: opaque surfaces write alpha 0 as the mask, transparent ones keep their alpha for blending and leave the mask beneath untouched (set `transparent` before `outline`). Mesh kit (`lathe`, `bevelBox`, `tube`, `blob`, `ribbon`) builds prop geometry in meters, Y up; the host supplies materials and instancing. `Renderer.outline` (`OutlinePass`) draws ink from scene depth in one fullscreen pass: no per-object draw calls. Set its `color` per scene with `RendererLook.ink` and its `width` in pixels at 1080p; `enabled = false` renders straight to the canvas.
+Toon look: `ToonMaterial` is `MeshToonMaterial` with a hard-stepped ramp (`bands`), a tint on the unlit side (`shade`), a back-light `rim`, and drawn `pattern`s (`brick`, `plank`, `thatch`, `stone`, `meadow`) computed from world position, so no textures or UVs. `patternScale` is meters per course on sides, `topScale` on upward faces, `brickLength` in meters, and `topAxis` (the way rows count on flat tops; stairs point it uphill), so courses and joints can match step heights and tread depths. `outline: false` keeps a surface (grass, water) out of the ink pass: opaque surfaces write alpha 0 as the mask, transparent ones keep their alpha for blending and leave the mask beneath untouched (set `transparent` before `outline`). Mesh kit (`lathe`, `bevelBox`, `tube`, `blob`, `ribbon`) builds prop geometry in meters, Y up; the host supplies materials and instancing. `Renderer.outline` (`OutlinePass`) draws ink from scene depth in one fullscreen pass: no per-object draw calls. Set its `color` per scene with `RendererLook.ink` and its `width` in pixels at 1080p; `enabled = false` renders straight to the canvas. The ink comes after everything, see-through things too; `overInk(material)` makes an effect (a flame, a glow, a trail) wipe the ink beneath it as much as it covers it.
+
+Effects (`render/effects.ts`): `addEffect(scene, object, update, dispose)` adds a short-lived effect, drawn over the ink, casting no shadow; `update(age)` runs once a frame in game time and returns false when it is done (`addMeshEffect` for a mesh that owns its geometry and material, `effectMaterial` for an unlit see-through shader). Primitives, each taking its look as data: `streaks` (needles of light shooting from roots), `sweep` (a crescent ribbon between two edges of a motion, a blade's swing), `starburst` (inked spikes where a blow lands), `puff` (a dust or smoke cloud billowing out, with `puffPicture(colors)`), `shockwave` (a ring racing out across the ground), `afterimage` (a fading flat ghost of a posed model). Moves (`assets/move.ts`): `move(timing, windUp, t)` samples a slow–fast–slow move (anticipate with a sink, strike in `snap`, hold the impact, carry through, settle) as its `phase`, `u` from the ready pose to the strike pose and `weight` over the clip under it; `ease` has the easings.
 
 ---
 
@@ -320,7 +327,7 @@ world.audio.stopMusic();
 
 Invalid `Score` throws from `playMusic` / `playLoop` (same checks as `piece()`). The first SFX before `resume` is queued and played on unlock; later ones before resume are dropped and warned. Pass a **stable** object into `playLoop` (not a fresh patch or `piece()` every frame) or the source restarts. A posed `Score` is HRTF like a river bed: SFX volume, no music reverb / pause / duck. `playMusic` can run at the same time.
 
-`AudioSource` on a GameObject poses SFX/loops at `transform.position` (world x/y/z). Other components play by ref:
+`AudioSource` on a GameObject poses SFX/loops at `transform.position` (world x/y/z). A one-shot's `gain` scales the source's. Disabled, it is silent. Other components play by ref:
 
 ```ts
 const speaker = go.addComponent(AudioSource, { hear: 12 });
@@ -329,16 +336,16 @@ speaker.loop = radio;    // patch or score; follows the object
 speaker.loop = null;     // stop
 ```
 
-Built-in voice instruments: `pad`, `pluck` (guitar / harp), `lead`, `bass`, `bell`, `drum` (MIDI `<40` dum, `<45` tek, else tap), `air`, `piano`. Anything else is `registerInstrument` before `piece` / `playMusic`.
+Built-in instruments (from `@arc-director/kindling/score`, all in `src/audio/instruments.ts`): `pad`, `pluck` (guitar / harp), `lead`, `bass`, `bell`, `drum` (MIDI `<40` dum, `<45` tek, else tap), `air`, `piano`, `violin`, `cello`, `brass`, `flute`, `guitar`, `twelveString`, `koto`, `choir` (a wordless oo-to-ah). Anything else is `registerInstrument` before `piece` / `playMusic`.
 
 ```ts
 import { registerInstrument } from '@arc-director/kindling';
-export const violin = registerInstrument('violin', 'sustaining', (ctx, dest, noise, when, midi, dur, gain) => { /* oscillators */ });
+export const sitar = registerInstrument('sitar', 'percussive', (ctx, dest, noise, when, midi, dur, gain) => { /* oscillators */ });
 ```
 
-`percussive` locks loudness when the note starts. `sustaining` lets a dim/cres turn the volume on a note that is already playing (pad, bass, lead, air, violin, brass, flute). Override a track with `track(piano, { envelope: 'sustaining' })`.
+`percussive` locks loudness when the note starts. `sustaining` lets a dim/cres turn the volume on a note that is already playing (pad, bass, lead, air, violin, cello, brass, flute, choir). Override a track with `track(piano, { envelope: 'sustaining' })`.
 
-Sound filters are inserts: `reverb({ mix, decay, tone, size })` adds a short room on top of the dry signal (`size` 0–1 adds reflections and spaces them; 0.5 is four stock taps), `overdrive({ drive, tone })` is a waveshaper plus a tone lowpass. Put them on a track (`track(lead, { filters: [overdrive()] })`), the whole piece (`piece({ filters: [reverb()] })` or `score.filters`), or an SFX patch (`patch.filters`). Series, first to last. Voice filters run, then the score filters, then the music-bus room (that room is always there for `playMusic`). A posed score or SFX does not use the music-bus room, so add `reverb()` on it when it should bloom.
+Sound filters are inserts: `reverb({ mix, decay, tone, size })` adds a short room on top of the dry signal (`size` 0–1 adds reflections and spaces them; 0.5 is four stock taps), `overdrive({ drive, tone, level })` is a waveshaper plus a tone lowpass; a clipped sound comes out loud whatever goes in, so `level` turns it back down. Put them on a track (`track(lead, { filters: [overdrive()] })`), the whole piece (`piece({ filters: [reverb()] })` or `score.filters`), or an SFX patch (`patch.filters`). Series, first to last. Voice filters run, then the score filters, then the music-bus room (that room is always there for `playMusic`). A posed score or SFX does not use the music-bus room, so add `reverb()` on it when it should bloom.
 
 ### Score (`@arc-director/kindling/score`)
 
@@ -366,7 +373,7 @@ Dynamics: `p`, `mp`, `mf`, `f`, `ff`. Marks follow the notes they apply to. `cre
 
 `slot()` stores a phrase for replay / `.with` / `.without`. `start()` / `end()` trim while listening. `callback(fn)` fires when playback reaches that point.
 
-SFX layers: `noise`, `thump`, `click`, `creak`, `pluck`, `fm`, `chirp`, `bee`, `boo` (speech syllables modeled on recordings, each opening with a "b"). `speech(text, voice, seconds?)` builds an Animal Crossing–style babble patch from a spoken line: one `bee` or `boo` per syllable on a pentatonic scale, a "boo" for rounded vowels and a "bee" for the rest as ten English spelling rules read them (silent e, vowel teams, r-colored vowels, …), with sentence intonation, fitted to exactly `seconds` when given. A `SpeechVoice` sets `pitch`, `rate` and `range` (intonation); `voiceFor(seed, [lowHz, highHz])` makes a varied one. The `Speaker` component builds a line in its voice with `line(text, seconds?)` and plays it at its transform with `say(line)`, filling unset `voice` fields from `voiceFor(id)`. Posed SFX use HRTF. `opts.dur` / `opts.freq` apply to **every** layer. Music is centered. Distance stays full through 1m, drops steeply, then keeps a shallow tail; mute past `hear`. `falloff` scales both slopes.
+SFX layers: `noise`, `thump`, `click`, `creak`, `pluck`, `fm`, `chirp`, `bee`, `boo` (speech syllables modeled on recordings, each opening with a "b"), `crackle` (random pops, `rate` a second, through a bandpass: fire, sparks, grit; loops too), `metal` (a struck bar's inharmonic partials: clash, clang), `formant` (a throat's buzz shaped into a `vowel`: grunts, shouts, cries) and `rumble` (low rolling noise over a sub tone: thunder's tail, a ground crack). Noise, `crackle` and `rumble` layers take `attack` (swell in, hold, die away) and `cutoffTo` (a filter sweep). A patch's `vary` (0–1) moves each play's pitch (up to ±4 semitones × `vary`) and loudness, so repeats never sound the same. `speech(text, voice, seconds?)` builds an Animal Crossing–style babble patch from a spoken line: one `bee` or `boo` per syllable on a pentatonic scale, a "boo" for rounded vowels and a "bee" for the rest as ten English spelling rules read them (silent e, vowel teams, r-colored vowels, …), with sentence intonation, fitted to exactly `seconds` when given. A `SpeechVoice` sets `pitch`, `rate` and `range` (intonation); `voiceFor(seed, [lowHz, highHz])` makes a varied one. The `Speaker` component (an `AudioSource`) builds a line in its voice with `line(text, seconds?)` and plays it at its transform with `say(line)`, filling unset `voice` fields from `voiceFor(id)`. Posed SFX use HRTF. `opts.dur` / `opts.freq` apply to **every** layer. Music is centered. Distance stays full through 1m, drops steeply, then keeps a shallow tail; mute past `hear`. `falloff` scales both slopes.
 
 ---
 
@@ -380,7 +387,7 @@ await registerGltf('tri', '/triangle.gltf');
 
 `create(id)` / `meshReady(id)` are what `MeshRenderer` uses. `registerGltf` is async; the renderer retries until the factory exists.
 
-Toon models: `scripts/buildModels.mjs` turns a folder of Tripo GLBs into slim game GLBs plus one shared clip library (`clips.glb`); it also rigs bows and birds that come unrigged. `registerToonModel(id, url, { height, brightness, bands })` loads one (characters and props alike) and `registerToonClips(url)` the library; each `MeshRenderer` instance is a skinned clone with `ToonMaterial`s, facing −Z. `Animator` plays clips on it (`toonClip` fits library clips to each body). On top of the clip, every frame after it: `holdInHand(mesh, 'right', prop, grip)` puts a prop in a hand, `lookAt(mesh, point, weight)` turns the head, `reach(mesh, 'right', point, weight)` bends an arm to a point (two-bone IK), and `drawBow(bow, nock)` draws a rigged bow's string. `humanBone(mesh, 'head')` and `restTurn(mesh, bone)` give the bones. `scripts/shoot.mjs <url> <out.png>` screenshots a page in headless Chrome once its title is `ready` (the playground's `character.html?shot=turnaround|faces` does this).
+Toon models: `scripts/buildModels.mjs` turns a folder of Tripo GLBs into slim game GLBs plus one shared clip library (`clips.glb`); it also rigs bows and birds that come unrigged. `registerToonModel(id, url, { height, brightness, bands })` loads one (characters and props alike) and `registerToonClips(url)` the library; each `MeshRenderer` instance is a skinned clone with `ToonMaterial`s, facing −Z. `Animator` plays clips on it (`toonClip` fits library clips to each body); each frame starts from the clip's pose, so posing bones after it never piles up. On top of the clip, every frame after it: `holdInHand(mesh, 'right', prop, grip)` puts a prop in a hand, `lookAt(mesh, point, weight)` turns the head, `reach(mesh, 'right', point, weight)` bends an arm to a point (two-bone IK), `aimHeld(mesh, 'right', prop, axis, side, point, facing, weight)` turns the hand so a held prop points where it should (a sword's tip and flat), and `drawBow(bow, nock)` draws a rigged bow's string. `humanBone(mesh, 'head')` and `restTurn(mesh, bone)` give the bones. `scripts/shoot.mjs <url> <out.png>` screenshots a page in headless Chrome once its title is `ready` (the playground's `character.html?shot=turnaround|faces` does this).
 
 ---
 
@@ -388,9 +395,20 @@ Toon models: `scripts/buildModels.mjs` turns a folder of Tripo GLBs into slim ga
 
 Typical host:
 
-- `class MyGame extends Game<MyWorld>`: inject a custom `World`, override `tick` if you own pause or extra frame work.
+- `class MyGame extends Game<MyWorld>`: inject a custom `World`, set `paused` to pause, override `tick` (calling `super.tick`) for extra frame work.
 - `class MyWorld extends World`: set `tileSize`, override `sampleTerrain`, add queries.
-- Optionally subclass `GameObject` / `Component` so `world` / `gameObject` are your types.
+- Fill in `KindlingTypes` once, and `go.world`, `world.chunks`, `chunkAtWorld` and `tileAtWorld` are your types everywhere. `GameObject` and `Component` need no subclass for that:
+
+```ts
+declare module '@arc-director/kindling' {
+	interface KindlingTypes {
+		world:MyWorld;
+		chunk:MyChunk;
+	}
+}
+```
+
+Input: `world.input` (`Input`) is the keyboard, mouse and pointer lock on the canvas. `Game` attaches it and clears its per-frame fields (`pressed`, `justClick`, look and wheel deltas) after each frame. Keys are `KeyboardEvent.code`; set `input.captures` to the keys whose browser default (scrolling, focus moves) the game takes over.
 
 Kindling has no UI framework, no scene format, and no gameplay systems beyond the types above.
 
@@ -402,7 +420,7 @@ Kindling has no UI framework, no scene format, and no gameplay systems beyond th
 src/
   index.ts           public API
   core/              Game, World, GameObject, Transform, Time, physics
-  render/            Renderer, Camera, Light, MeshRenderer, shader inserts
+  render/            Renderer, Camera, Light, MeshRenderer, shader inserts, effects
   assets/            mesh registry, glTF
   audio/             procedural mixer, scores, SFX
 playground/          Vite cube / parent / glTF / light demo; character.html sheet

@@ -115,8 +115,6 @@ function fly(el:Element, done:()=>void, open:boolean):void {
 
 <style scoped>
 .brief-root {
-	--ink: #1a1208;
-	--parchment: #d4c4a0;
 	--cream: #f0e6c8;
 	--highlight: #fff6dc;
 	--rule: #c4b490;
@@ -127,22 +125,26 @@ function fly(el:Element, done:()=>void, open:boolean):void {
 
 .brief-btn {
 	position: absolute;
-	top: 16px;
-	right: 96px;
-	width: 32px;
-	height: 32px;
+	top: 14px;
+	/* Left of the keyboard button. */
+	right: 210px;
+	width: var(--btn);
+	height: var(--btn);
 	padding: 0;
-	border: 0;
-	border-radius: 50%;
 	pointer-events: auto;
 	z-index: 3;
-	font-family: ui-monospace, "Cascadia Code", monospace;
-	font-size: 18px;
-	line-height: 32px;
+	display: flex;
+	align-items: center;
+	justify-content: center;
 	color: var(--ink);
 	background: var(--parchment);
+	border: var(--line) solid var(--ink);
+	border-radius: 50%;
+	box-shadow: var(--shadow);
 	cursor: pointer;
-	box-shadow: 0 2px 0 var(--ink), 0 4px 12px rgba(0, 0, 0, 0.35);
+	font-family: var(--font);
+	font-size: 26px;
+	font-weight: 700;
 }
 
 .brief-btn:hover,

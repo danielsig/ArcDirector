@@ -1,17 +1,8 @@
-export type Vec3 = {
-	x:number;
-	y:number;
-	z:number;
-};
-
-export function vec3(x = 0, y = 0, z = 0):Vec3 {
-	return { x, y, z };
-}
-
 export function clamp(v:number, lo:number, hi:number):number {
 	return Math.max(lo, Math.min(hi, v));
 }
 
+/** From angle `a` toward `b` (radians) by `t` (0..1), the short way round. */
 export function lerpAngle(a:number, b:number, t:number):number {
 	let d = b - a;
 	while (d > Math.PI) {
@@ -23,7 +14,7 @@ export function lerpAngle(a:number, b:number, t:number):number {
 	return a + d * clamp(t, 0, 1);
 }
 
-/** Yaw 0 faces -Z (Three.js default). */
+/** Unit ground direction a yaw faces. Yaw 0 faces -Z. */
 export function yawToForward(yaw:number):{ x:number; z:number } {
 	return {
 		x: -Math.sin(yaw),
@@ -31,6 +22,13 @@ export function yawToForward(yaw:number):{ x:number; z:number } {
 	};
 }
 
+/** The yaw that faces ground direction (`dx`, `dz`). */
 export function yawToward(dx:number, dz:number):number {
 	return Math.atan2(-dx, -dz);
+}
+
+/** Steady pseudo-random 0..1 for a grid spot and a salt: the same spot always scatters the same way. */
+export function hash(x:number, z:number, salt = 0):number {
+	const n = Math.sin(x * 127.1 + z * 311.7 + salt * 74.7) * 43758.5453;
+	return n - Math.floor(n);
 }

@@ -1,6 +1,5 @@
-import { Camera } from '@arc-director/kindling';
+import { AudioSource, Camera, Component } from '@arc-director/kindling';
 import { Camera as FollowCamera, Appearance, BoxCollider, RigidBody } from './components';
-import { Component } from './Component';
 import { MeshRenderer } from './MeshRenderer';
 import { Order } from './order';
 import { PlayerInput } from '../characters/PlayerInput';
@@ -10,7 +9,6 @@ import { GameHost, addModels } from '../director/adapter';
 import { playerSay, playerSayCatalog } from '../director/playerTalk';
 import { dumpLookMaps } from '../director/aiLogSink';
 import { patchInfer } from './patchHud';
-import { parseSlash } from '../ui/sayCommands';
 import type { HudModel, HudModelOption } from '../ui/hudModel';
 import {
 	contextLabel,
@@ -28,7 +26,7 @@ import {
 	isEmbeddingModel,
 	isLoadedModel,
 } from 'arc-director';
-import { captureWorld, diffWorld, restoreWorld, type WorldState } from '@arc-director/kindling';
+import { captureWorld, diffWorld, resetTime, restoreWorld, Time, type WorldState } from '@arc-director/kindling';
 import { readSave, respawn, writeSave, type GameSave } from './save';
 import {
 	packViewPose,
@@ -185,9 +183,7 @@ export class Session extends Component {
 
 	public say(spoken:string):void {
 		this.hud.sayOpen = false;
-		const slash = parseSlash(spoken.trim());
-		const help = !!slash?.ok && slash.verb === 'help';
-		if (spoken.trim() && !help) {
+		if (spoken.trim()) {
 			setPrefs({ player: 'participant' });
 		}
 		playerSay(this.director, spoken);
@@ -203,7 +199,7 @@ export class Session extends Component {
 		this.stream.loadAll();
 		const save:GameSave = {
 			savedUTC: new Date().toISOString(),
-			time: world.time,
+			time: Time.time,
 			bargainDone: this.director.bargainDone,
 			pose,
 			world: diffWorld(this.fresh, captureWorld(world)),
@@ -236,7 +232,7 @@ export class Session extends Component {
 			return;
 		}
 		restoreWorld(world, save.world, (recipe) => respawn(world, recipe));
-		world.time = save.time;
+		resetTime(save.time);
 		this.director.bargainDone = save.bargainDone;
 		this.director.arc?.restoreCast(save.cast);
 		this.applyPose(save.pose);
@@ -568,16 +564,18 @@ export class Session extends Component {
 		}
 	}
 
-	/** A camera player has no body: nothing to render, nothing to bump into. */
+	/** A camera player has no body: nothing to render, nothing to bump into, nothing to hear. */
 	private applyPlayerModeToBody(mode:PlayerMode):void {
 		const player = this.gameObject.world?.findByID('Player');
 		if (!player) {
 			return;
 		}
-		player.transform.object3D.visible = mode !== 'camera';
-		const collider = player.getComponent(BoxCollider);
-		if (collider) {
-			collider.enabled = mode !== 'camera';
+		const embodied = mode !== 'camera';
+		player.transform.object3D.visible = embodied;
+		for (const part of [player.getComponent(BoxCollider), player.getComponent(AudioSource)]) {
+			if (part) {
+				part.enabled = embodied;
+			}
 		}
 	}
 }

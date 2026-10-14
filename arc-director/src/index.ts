@@ -95,7 +95,7 @@ export type {
 } from './perception/types.js';
 export type { Inventory } from './perception/inventory.js';
 export { defaultLandmarkTier, groundAndFigure } from './perception/ground.js';
-export { builtinLodLayers, pascalCase } from './perception/lod.js';
+export { bareName, builtinLodLayers, pascalCase } from './perception/lod.js';
 export {
 	attachmentStringifier,
 	basicPluralize,
@@ -256,6 +256,6 @@ export type {
 	VerbCall,
 	VerbHandler,
 } from './director/types.js';
-export type { Exchange, HostWorld, ItemMove, Outcome, PathStep, Pose, Vec } from './world/types.js';
+export type { Exchange, HostWorld, ItemMove, Outcome, PathGraph, PathStep, Pose, Vec } from './world/types.js';
 export { OfferBook, bundleText, countOf, covers, isEmpty, offerText, type Offer, type OfferMatch } from './world/offers.js';
 export { awayGoal, findRoute, pointGoal, reachablePoints, type Blocked, type Route, type RouteGoal } from './world/route.js';

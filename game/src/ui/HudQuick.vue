@@ -77,8 +77,6 @@ function cycleSound():void {
 
 <style scoped>
 .quick-root {
-	--ink: #1a1208;
-	--parchment: #d4c4a0;
 	--cream: #f0e6c8;
 	position: absolute;
 	inset: 0;
@@ -87,12 +85,12 @@ function cycleSound():void {
 
 .quick-btn {
 	position: absolute;
-	top: 16px;
-	width: 32px;
-	height: 32px;
+	top: 14px;
+	/* Sound sits left of ?; the back button overrides this. */
+	right: 282px;
+	width: var(--btn);
+	height: var(--btn);
 	padding: 0;
-	border: 0;
-	border-radius: 50%;
 	pointer-events: auto;
 	z-index: 3;
 	display: flex;
@@ -100,22 +98,22 @@ function cycleSound():void {
 	justify-content: center;
 	color: var(--ink);
 	background: var(--parchment);
+	border: var(--line) solid var(--ink);
+	border-radius: 50%;
+	box-shadow: var(--shadow);
 	cursor: pointer;
-	box-shadow: 0 2px 0 var(--ink), 0 4px 12px rgba(0, 0, 0, 0.35);
 }
 
 .back {
-	left: 16px;
-	top: 12px;
-}
-
-.sound {
-	right: 176px;
+	left: 14px;
+	right: auto;
+	width: 40px;
+	height: 40px;
 }
 
 .quick-btn svg {
-	width: 20px;
-	height: 20px;
+	width: 26px;
+	height: 26px;
 	display: block;
 }
 

@@ -45,50 +45,51 @@ watch(
 </template>
 
 <style scoped>
+/* The chat history: a parchment panel under the hearts and gold, as the pause menu's. */
 .hud-chat {
 	position: absolute;
-	top: 88px;
-	left: 16px;
+	top: 98px;
+	left: 14px;
 	width: min(360px, 42vw);
 	max-height: min(52vh, 420px);
 	display: flex;
 	flex-direction: column;
-	background: rgba(18, 14, 10, 0.88);
-	box-shadow: 0 0 0 2px #1a1208, 0 8px 24px rgba(0, 0, 0, 0.45);
 	pointer-events: auto;
-	color: #f0e6c8;
-	font-family: ui-monospace, "Cascadia Code", monospace;
+	color: var(--ink);
+	font-family: var(--font);
+	background: var(--parchment);
+	border: var(--line) solid var(--ink);
+	border-radius: var(--radius);
+	box-shadow: var(--shadow-panel);
+	overflow: hidden;
 }
 
 .head {
 	flex: 0 0 auto;
-	padding: 8px 12px 6px;
-	font-size: 12px;
-	letter-spacing: 0.14em;
-	text-transform: uppercase;
-	color: #d4c4a0;
-	border-bottom: 1px solid #3a2a22;
-	text-shadow: 0 1px 0 #1a1208;
+	padding: 10px 14px 8px;
+	font-size: 18px;
+	font-weight: 700;
+	border-bottom: var(--line-thin) solid var(--ink-soft);
 }
 
 .hint {
 	float: right;
-	letter-spacing: 0.04em;
-	text-transform: none;
-	opacity: 0.55;
-	font-size: 11px;
+	margin-top: 3px;
+	font-size: 12px;
+	font-weight: 400;
+	opacity: 0.6;
 }
 
 .log {
 	flex: 1 1 auto;
 	overflow-y: auto;
-	padding: 8px 12px 12px;
+	padding: 10px 14px 12px;
 	min-height: 80px;
 }
 
 .empty {
-	opacity: 0.5;
-	font-size: 13px;
+	opacity: 0.6;
+	font-size: 14px;
 }
 
 .line {
@@ -100,24 +101,22 @@ watch(
 }
 
 .who {
-	font-size: 11px;
-	letter-spacing: 0.06em;
-	color: #c4a574;
-	margin-bottom: 2px;
+	margin-bottom: 1px;
+	font-size: 13px;
+	font-weight: 700;
+	color: var(--gold-deep);
 }
 
 .said {
-	font-size: 13px;
+	font-size: 14px;
 	line-height: 1.4;
 	white-space: pre-wrap;
-	text-shadow: 0 1px 0 #1a1208;
 }
 
-.act .who {
-	color: #8eb8a4;
-}
-
+/* Something done, not said: in italics, a little fainter. */
+.act .who,
 .act .said {
-	color: #c5ddd2;
+	font-style: italic;
+	opacity: 0.75;
 }
 </style>

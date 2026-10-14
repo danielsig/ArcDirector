@@ -1,4 +1,4 @@
-import { allocID } from '../engine/GameObject';
+import { allocID } from '@arc-director/kindling';
 import type { ItemDef } from './defs';
 
 export type ItemInstance = {

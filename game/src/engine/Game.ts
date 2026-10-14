@@ -1,7 +1,6 @@
-import { Game as KindlingGame, captureWorld, resetAllocID, resetTime, Time, type ShadowMode } from '@arc-director/kindling';
+import { Game as KindlingGame, captureWorld, resetAllocID, resetTime, type ShadowMode, GameObject } from '@arc-director/kindling';
 import { resetHudPatch } from './patchHud';
 import { World } from './World';
-import { GameObject } from './GameObject';
 import { Wallet, Named } from './components';
 import { GameHost } from '../director/adapter';
 import { rendererLook } from '../render/look';
@@ -26,8 +25,15 @@ import { startSceneMusic } from '../audio/songs';
 import { syncWaterAudio } from '../audio/water';
 import { AutoShadows } from './autoShadows';
 
+/** Keys the game uses, so the browser does not also scroll, move focus or open Quick Find. */
+const GAME_KEYS = new Set([
+	'KeyW', 'KeyA', 'KeyS', 'KeyD', 'KeyE', 'KeyF', 'KeyG', 'KeyX',
+	'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight',
+	'Space', 'Tab', 'Backquote', 'Enter', 'NumpadEnter', 'Escape',
+]);
+
 /** What each shadow tier asks of the renderer. */
-const SHADOWS:Record<ShadowTier, { mode:ShadowMode; point:number; sun:number }> = {
+export const SHADOWS:Record<ShadowTier, { mode:ShadowMode; point:number; sun:number }> = {
 	off: { mode: 'off', point: 256, sun: 2048 },
 	simple: { mode: 'static', point: 256, sun: 2048 },
 	low: { mode: 'dynamic', point: 256, sun: 2048 },
@@ -53,6 +59,41 @@ function dressPlayer(world:World, def:PlayerDef | undefined):void {
 	}
 }
 
+/** The scene's chunks, player, cast, ravens and camera into `world`; returns its decoded chunks. */
+export function spawnScene(world:World, scene:SceneDef):ReturnType<typeof decodeGlyphChunk>[] {
+	const decoded = scene.chunks.map(decodeGlyphChunk);
+	const startDecoded = decoded.find((d) => d.playerStart) ?? decoded[0];
+	if (!startDecoded) {
+		throw new Error(`scene ${scene.id} has no chunks`);
+	}
+	spawnPlayer(world, startDecoded.playerStart, startDecoded.chunk);
+	dressPlayer(world, scene.player);
+	const decodedByID = new Map(decoded.map((d) => [d.chunk.id, d]));
+	for (const npc of scene.npcs) {
+		spawnNPC(world, (decodedByID.get(npc.chunkID) ?? startDecoded).chunk, npc);
+	}
+	scene.ravens?.forEach((r, i) => spawnRaven(world, `Raven${i + 1}`, r.x, r.z, r.yaw));
+	spawnCamera(world);
+	return decoded;
+}
+
+/** Models and art a scene draws with; cached, so a second scene loads at once. */
+export async function loadSceneArt(scene:SceneDef):Promise<void> {
+	const jobs:Promise<unknown>[] = [
+		loadSpritesheet(),
+		loadCharacterModels(),
+	];
+	if (scene.look === 'glen' || scene.look === 'market') {
+		jobs.push(loadNature());
+	}
+	try {
+		await Promise.all(jobs);
+	}
+	catch (err) {
+		console.error(err);
+	}
+}
+
 export class Game extends KindlingGame<World> {
 	public readonly session:Session;
 	private readonly _hud:HudModel;
@@ -67,25 +108,12 @@ export class Game extends KindlingGame<World> {
 		}
 		this._hud = hud;
 		this._scene = sceneByID(sceneID);
-		(window as unknown as { DBGWORLD:unknown; DBGGAME:unknown }).DBGWORLD = this.world; (window as unknown as { DBGGAME:unknown }).DBGGAME = this; // DBG
 		resetTime();
 		resetAllocID();
 		this.syncDisplay();
 		this.renderer?.applyLook(rendererLook(this._scene.look));
-		this.world.input.attach(canvas);
-		const decoded = this._scene.chunks.map(decodeGlyphChunk);
-		const startDecoded = decoded.find((d) => d.playerStart) ?? decoded[0];
-		if (!startDecoded) {
-			throw new Error(`scene ${this._scene.id} has no chunks`);
-		}
-		spawnPlayer(this.world, startDecoded.playerStart, startDecoded.chunk);
-		dressPlayer(this.world, this._scene.player);
-		const decodedByID = new Map(decoded.map((d) => [d.chunk.id, d]));
-		for (const npc of this._scene.npcs) {
-			spawnNPC(this.world, (decodedByID.get(npc.chunkID) ?? startDecoded).chunk, npc);
-		}
-		this._scene.ravens?.forEach((r, i) => spawnRaven(this.world, `Raven${i + 1}`, r.x, r.z, r.yaw));
-		spawnCamera(this.world);
+		this.world.input.captures = (code) => GAME_KEYS.has(code) || code.startsWith('Digit');
+		const decoded = spawnScene(this.world, this._scene);
 		const host = new GameHost(this.world, hud.chat, hud.aiLog, {
 			ambient: this._scene.ambient,
 			scene: this._scene.id,
@@ -156,28 +184,11 @@ export class Game extends KindlingGame<World> {
 		this.syncAudio();
 		startSceneMusic(this.world.audio, this._scene.id);
 		void this.world.audio.resume();
-		void this.loadArt();
-	}
-
-	private async loadArt():Promise<void> {
-		const jobs:Promise<unknown>[] = [
-			loadSpritesheet(),
-			loadCharacterModels(),
-		];
-		if (this._scene.look === 'glen' || this._scene.look === 'market') {
-			jobs.push(loadNature());
-		}
-		try {
-			await Promise.all(jobs);
-		}
-		catch (err) {
-			console.error(err);
-		}
+		void loadSceneArt(this._scene);
 	}
 
 	public override dispose():void {
 		this.session.persistView();
-		this.world.input.detach();
 		this.session.view.present.dispose();
 		resetHudPatch();
 		this.session.onDestroy();
@@ -190,17 +201,12 @@ export class Game extends KindlingGame<World> {
 			this._autoShadows.tick(dt, this.renderer.frameMS(1000));
 		}
 		this.syncDisplay();
-		if (!this._hud.menuOpen) {
-			this.world.time += dt;
-			Time.deltaTime = dt;
-			Time.time = this.world.time;
-			this.simulate(dt);
-		}
-		else {
+		this.paused = this._hud.menuOpen;
+		super.tick(dt);
+		if (this.paused) {
 			this.session.pausePresent();
 		}
 		this.syncAudio();
-		this.world.input.endFrame();
 	}
 
 	/** Menu display settings onto the renderer. */

@@ -1,3 +1,4 @@
+import { Time, type GameObject } from '@arc-director/kindling';
 import { SpeechQueue } from './speechQueue';
 import {
 	ArcDirector,
@@ -21,7 +22,6 @@ import {
 	Companion,
 	HearOnly,
 } from '../engine/components';
-import type { GameObject } from '../engine/GameObject';
 import type { World } from '../engine/World';
 import type { HudAiLogEntry, HudChatLine } from '../ui/hudModel';
 import { prefs, setPrefs, systemOneName, type Prefs } from '../prefs';
@@ -123,6 +123,7 @@ export class GameHost {
 			.addJevInference({ name: 'jev' })
 			.setDefaultSystemOne(systemOneName(prefs().systemOne));
 		return addBodyVerbs(director)
+			.withCurrency('gold')
 			.withMindDefaults({ skipHeartbeat: true })
 			.withPriorityQueue({
 				batchThinks: prefs().batchThinks,
@@ -218,7 +219,7 @@ export class GameHost {
 			await this.arc.start();
 		}
 		catch {
-			this._nextTryTimestamp = this.world.time + 3;
+			this._nextTryTimestamp = Time.time + 3;
 			this.world.setMessage('NPCs idle — start LM Studio on port 1234');
 			return;
 		}
@@ -270,7 +271,7 @@ export class GameHost {
 		this.hooks.checkBargain?.(this);
 		this.hooks.tickMarketNPC?.(this);
 		publishAiLog(this.log);
-		if (!this.arc?.ready && this.world.time >= this._nextTryTimestamp) {
+		if (!this.arc?.ready && Time.time >= this._nextTryTimestamp) {
 			void this.start();
 		}
 	}
@@ -282,7 +283,7 @@ export class GameHost {
 		if (!this.arc?.ready) {
 			return;
 		}
-		this.arc.tick(dt, this.world.time);
+		this.arc.tick(dt, Time.time);
 	}
 
 	/** Run one arc on the player character. Mind verbs are rejected; a canvas click aborts it. */

@@ -1,6 +1,6 @@
+import { Time, type GameObject } from '@arc-director/kindling';
 import { pascalCase, STOCK_COLLECTIVE_VERBS, ArcDirector, type Kit, type LawSpec } from 'arc-director';
 import { MarketNPC, MarketGate, Merchant, Wanted } from '../../engine/components';
-import type { GameObject } from '../../engine/GameObject';
 import { NPCInput } from '../../characters/NPCInput';
 import { compactName, distXZ, findCarried, itemMatchesName, tryInsert } from '../../items/inventory';
 import { dropItem, USE_RANGE } from '../../items/pickup';
@@ -170,10 +170,10 @@ function tickMarketNPC(host:GameHost):void {
 		despawn(host, go);
 	}
 	const due = nextMarketNPCTimestamp.get(host) ?? 12;
-	if (host.world.time < due) {
+	if (Time.time < due) {
 		return;
 	}
-	nextMarketNPCTimestamp.set(host, host.world.time + 10 + Math.random() * 12);
+	nextMarketNPCTimestamp.set(host, Time.time + 10 + Math.random() * 12);
 	if (customerCount(host.world) >= 10) {
 		return;
 	}
