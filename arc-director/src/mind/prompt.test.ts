@@ -11,8 +11,16 @@ describe('prompt split', () => {
 	const identity = { role: 'Watcher', traits: ['alert'] };
 
 	it('names the agent by its id, with its role when it has one', () => {
-		assert.match(stablePrefix('Fern', identity, verbs), /^You are Fern\. Role: Watcher\.\n/);
-		assert.match(stablePrefix('Forager', {}, verbs), /^You are Forager\.\n/);
+		assert.match(stablePrefix('Fern', identity, verbs), /\nYou are Fern\. Role: Watcher\.\n/);
+		assert.match(stablePrefix('Forager', {}, verbs), /\nYou are Forager\.$/);
+	});
+
+	it('tells every mind with one kit the same thing first, so a server caches one prompt for all of them', () => {
+		const fern = stablePrefix('Fern', identity, verbs, { includeWatches: true, canRecallKnowledge: true });
+		const forager = stablePrefix('Forager', {}, verbs, { includeWatches: true, canRecallKnowledge: true });
+		const shared = fern.slice(0, fern.indexOf('You are Fern'));
+		assert.ok(forager.startsWith(shared));
+		assert.ok(shared.length > fern.length * 0.9, 'all but who it is');
 	});
 
 	it('puts a host system note in the prefix, after who the mind is', () => {
@@ -353,12 +361,12 @@ describe('prompt split', () => {
 		});
 		assert.match(system, /Hold the line\./);
 		assert.equal(system.includes('Issue looping programs'), false);
-		assert.ok(system.endsWith('Example: issue(who=units.filter("Archer"), arc=loop(shoot(others.filter("enemy").minBy(u => u.hp))))'));
+		assert.ok(system.includes('Example: issue(who=units.filter("Archer"), arc=loop(shoot(others.filter("enemy").minBy(u => u.hp))))\nYou are Guard'), 'the example ends the rules; who it is comes after');
 		assert.match(system, /Prefer law for any reaction that should apply to more than one unit/);
 		assert.match(system, /Answer immediately with only the Arc text/);
 		assert.match(system, /No JSON, no prose/);
 		assert.equal(system.includes('Arc JSON'), false);
-		const example = system.match(/Example: (.+)$/);
+		const example = system.match(/Example: (.+)\nYou are /);
 		assert.ok(example);
 		assert.equal(parseArc(example[1], verbs)[0].args.who, 'units.filter("Archer")');
 	});
@@ -374,7 +382,7 @@ describe('prompt split', () => {
 			assert.match(stock, /Give each issue as a step of its own\./);
 			assert.equal(stock.includes('Join several issue with ;'), false);
 			assert.equal(stock.includes('\twho='), false, 'no block layout in JSON');
-			const example = stock.match(/Example: (\{"steps":\[\{"verb":"issue".*\]\})$/);
+			const example = stock.match(/Example: (\{"steps":\[\{"verb":"issue".*\]\})\nYou are /);
 			assert.ok(example, 'the stock issue example is Arc JSON');
 			const arc = parseArc(example[1], verbs);
 			assert.deepEqual(arc.map((step) => step.verb), ['issue', 'issue']);
@@ -383,7 +391,7 @@ describe('prompt split', () => {
 			assert.ok(choose, 'the choose example is Arc JSON');
 			assert.equal(parseArc(choose[1], verbs)[0].verb, 'issue');
 			const host = stablePrefix('Guard', identity, verbs, { arcFormat, arcExample: 'issue(who=units.filter("Archer"), arc=loop(shoot(others.filter("enemy").minBy(u => u.hp))))' });
-			const hosted = host.match(/Example: (\{"steps".*\})$/);
+			const hosted = host.match(/Example: (\{"steps".*\})\nYou are /);
 			assert.ok(hosted, 'the host example is shown as Arc JSON too');
 			assert.equal(parseArc(hosted[1], verbs)[0].args.who, "units.filter('Archer')");
 		}

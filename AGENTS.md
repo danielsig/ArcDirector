@@ -90,7 +90,7 @@ The game is served at `http://localhost:5173/` (Vite default). There is no path 
 
 | Param | Kind | Meaning |
 |-------|------|---------|
-| `scene` | play | Scene id. `dungeon_vault` (the crypt crawl), `glen`, `marketplace`, or `ruins`. Omit (or unknown id) → the init screen (where NPCs think: LM Studio, or Gemma 4 E4B in the browser through transformers.js), then the scene picker. A `scene` link skips the init screen. |
+| `scene` | play | Scene id. `dungeon_vault` (the crypt crawl), `glen`, `marketplace`, or `ruins`. Omit (or unknown id) → the init screen (where NPCs think: LM Studio, or Gemma 4 in the browser through wllama), then the scene picker. A `scene` link skips the init screen. |
 | `player` | test | `participant` = NPCs can see, hear, and walk to the player. `observer` = the player is inperceivable by NPCs. `camera` = an observer with no body: not rendered, no collider (screenshots without the player character). |
 | `ai` | test | `1` = ArcDirector runs (NPCs think and move). `0` = paused (no inference, NPC motors frozen). Also `true`/`false`. |
 | `view` | agent | Full camera shot: `x,y,z,yaw`. All four numbers or the param is ignored (no partial pose). X/Z are meters on the ground; Y is height; yaw is radians. `0` yaw looks toward −Z (north); `1.5708` (π/2) toward −X (west); `3.1416` (π) toward +Z (south). Yaw also faces the player. Camera follows the player. |

@@ -1,92 +1,94 @@
-import { stripTemplateTokens, type ModelSettings } from './http.js';
+import { HttpProvider, type ModelSettings } from './http.js';
 import { ModelDownload, type DownloadProgress } from './download.js';
-import { SchemaGrammar, type SchemaConstraint, type TokenizerJSON } from './grammar.js';
-import { chatContentText, samplingOf, type ChatMessage, type ChatRequest, type ChatResponse, type InferenceProvider } from './provider.js';
+import type { ChatRequest, ChatResponse, InferenceProvider } from './provider.js';
 
-/** Gemma 4 E4B: the best Arcs of any model small enough to run in a browser. */
-export const DEFAULT_BROWSER_MODEL = 'onnx-community/gemma-4-E4B-it-ONNX';
+/** Gemma 4 E4B (Q4_K_M), split into files a browser can hold: the best Arcs of any model small enough to run there. */
+export const DEFAULT_BROWSER_MODEL = 'https://huggingface.co/888rok/gemma-4-E4B-it-Q4_K_M-wllama-split/resolve/1394d405e4d8e0dd06dae64f506461f15e0a970b/gemma-4-E4B-it-Q4_K_M-00001-of-00004.gguf';
+
+/** Tokens each think may fill when the model's spec names no `contextLength`. */
+const DEFAULT_CONTEXT = 8192;
 
 /**
- * What this provider uses of transformers.js. Hosts without it installed must not need its types, and the
- * declarations the library emits never name it.
+ * What this provider uses of wllama (`@wllama/wllama`, an optional peer dependency imported on first use): llama.cpp's
+ * own server, compiled to run in the page. Hosts without it installed must not need its types.
  */
-type Transformers = {
-	AutoTokenizer:{ from_pretrained(repo:string, opts:LoadOpts):Promise<Tokenizer> };
-	AutoConfig:{ from_pretrained(repo:string, opts:{ revision:string }):Promise<Record<string, unknown>> };
-	AutoModelForCausalLM:{ from_pretrained(repo:string, opts:LoadOpts & { device:string; dtype:Dtype }):Promise<Model> };
-	ModelRegistry:{
-		is_cached_files(repo:string, opts:{ revision:string; dtype:Dtype }):Promise<{ files:{ file:string; cached:boolean }[] }>;
-		clear_cache(repo:string, opts:{ revision:string; dtype:Dtype }):Promise<unknown>;
-	};
-	InterruptableStoppingCriteria:new ()=>{ interrupt():void };
+type WllamaModule = { Wllama:new (paths:{ default:string }, config?:{ logger?:WllamaLogger })=>Wllama };
+
+type WllamaLogger = Pick<Console, 'debug' | 'log' | 'warn' | 'error'>;
+
+/** The parts of a `Wllama` this provider calls. */
+export type Wllama = {
+	modelManager:{ getModels():Promise<{ url:string; validate():string; remove():Promise<void> }[]> };
+	// eslint-disable-next-line no-restricted-syntax -- wllama's own name
+	loadModelFromUrl(url:string, params:LoadParams & { progressCallback?:(p:{ loaded:number; total:number })=>void }):Promise<void>;
+	createChatCompletion(params:Record<string, unknown>):Promise<unknown>;
+	exit():Promise<void>;
 };
 
-/** The precision weights load in: one for every file, or one per file (`embed_tokens`, `decoder_model_merged`, …). */
-type Dtype = string | Record<string, string>;
-
-type LoadOpts = {
-	revision:string;
-	progress_callback:(info:{ status:string; progress?:number; loaded?:number; total?:number })=>void;
+type LoadParams = {
+	n_ctx:number;
+	n_parallel:number;
+	kv_unified:boolean;
+	n_batch:number;
+	n_ubatch:number;
+	swa_full:boolean;
+	n_cache_reuse:number;
+	reasoning_format:'deepseek';
+	reasoning_budget_tokens:number;
 };
 
-export type Tensor = {
-	type:string;
-	dims:number[];
-	data:ArrayLike<number>;
-	to(type:'float32'):Tensor;
-	tolist():unknown[];
+/** Prompt tokens the GPU takes in one pass. Bigger passes read a cold prompt faster, at a bigger working buffer. */
+const PROMPT_CHUNK = 1024;
+/** Smallest piece of a cached prompt worth moving into place when it no longer sits at the same spot. */
+const CACHE_REUSE_CHUNK = 256;
+/** The engine's last lines a crash report carries, and how long it may get: the stack traces alone run long. */
+const CRASH_LINES = 12;
+const CRASH_CHARS = 4000;
+
+export type BrowserProviderOptions = {
+	/**
+	 * Where the host serves `wllama.wasm`, from the installed `@wllama/wllama` so the two match. With Vite:
+	 * `import wasm from '@wllama/wllama/esm/wasm/wllama.wasm?url'`.
+	 */
+	wasm:string;
 };
-
-export type LogitsProcessor = (ids:bigint[][], logits:Tensor)=>Tensor;
-
-export type Tokenizer = {
-	apply_chat_template(messages:{ role:string; content:string }[], opts:Record<string, unknown>):{ input_ids:Tensor; attention_mask:Tensor };
-	encode(text:string, opts:{ add_special_tokens:boolean }):number[];
-	decode(ids:number[], opts:{ skip_special_tokens:boolean }):string;
-	all_special_tokens:string[];
-};
-
-type Model = {
-	config:{ vocab_size?:number; text_config?:{ vocab_size?:number } };
-	generation_config?:{ eos_token_id?:number | number[] | null };
-	generate(opts:Record<string, unknown>):Promise<Tensor>;
-	dispose():Promise<unknown>;
-};
-
-type Loaded = {
-	model:string;
-	id:ModelID;
-	tokenizer:Tokenizer;
-	engine:Model;
-	/** Made on the first reply with a schema. */
-	grammar?:Promise<SchemaGrammar>;
-};
-
-/** A model's Hugging Face repo and the revision it loads at. */
-export type ModelID = { repo:string; revision:string };
-
-/** Output tokens when a request names no cap: room to think, then answer. */
-const DEFAULT_MAX_TOKENS = 2048;
 
 /**
- * Models that run in the page on the GPU (WebGPU), through transformers.js: `@huggingface/transformers`, an optional
- * peer dependency imported on first use, with xgrammar (`@mlc-ai/web-xgrammar`, {@link SchemaGrammar}) holding replies
- * to their schema. A model is a Hugging Face repo of ONNX weights ({@link modelID}), {@link DEFAULT_BROWSER_MODEL}
- * unless told otherwise; set transformers.js's `env.remoteHost` to load them from elsewhere. It holds one model at a
- * time, so loading another unloads it, and the browser keeps every download, so a second load reads from disk.
- * {@link shared} is the page's one, so a loaded model outlives each director.
+ * Models that run in the page, on the GPU through WebGPU, with wllama: llama.cpp's server compiled to WebAssembly,
+ * answering several thinks at once. A model is the URL of a GGUF, or of its first part when split
+ * (`…-00001-of-00004.gguf`); a browser holds no file over 2 GB, so bigger models must be split
+ * (`llama-gguf-split --split-max-size 1G`). Requests go through {@link HttpProvider}, as to any OpenAI-style server,
+ * so the schema, sampling, thinking and its budget work as they do with LM Studio. It holds one model at a time, so
+ * loading another unloads it, and the browser keeps every download, so a second load reads from disk. {@link shared}
+ * is the page's one, so a loaded model outlives each director; the host sets it once, saying where it serves the
+ * engine: `BrowserProvider.shared = new BrowserProvider({ wasm })`.
  */
 export class BrowserProvider implements InferenceProvider {
 	private static _shared:BrowserProvider | undefined;
 	private readonly _settings = new Map<string, ModelSettings>();
 	private readonly _downloads = new Map<string, ModelDownload>();
-	/** Loads, chats and deletes, one at a time: the GPU runs one model, one request at a time. */
-	private _queue:Promise<unknown> = Promise.resolve();
-	private _loaded:Loaded | null = null;
+	private readonly _http:HttpProvider;
+	private readonly _wasm:string;
+	private _wllama:Promise<Wllama> | undefined;
+	/**
+	 * The engine's last lines: it only tells its logger why it crashed, and llama.cpp prints the reason (a GPU error,
+	 * a failed check) as a plain line, a few before the stack traces.
+	 */
+	private _lines:string[] = [];
+	/** The model loading or loaded now, and the settings it loaded with. */
+	private _current:{ model:string; key:string; ready:Promise<Wllama> } | undefined;
+	private _loaded:string | null = null;
 
-	/** The page's provider: `ArcDirector.addBrowserModel` uses it unless given another. */
+	constructor(opts:BrowserProviderOptions) {
+		this._wasm = opts.wasm;
+		this._http = new HttpProvider({ baseURL: 'http://browser.invalid/v1', fetch: inPageFetch(() => this._current?.ready) });
+	}
+
+	/** The page's provider: `ArcDirector.addBrowserModel` uses it unless given another. The host sets it first. */
 	public static get shared():BrowserProvider {
-		BrowserProvider._shared ??= new BrowserProvider();
+		if (!BrowserProvider._shared) {
+			throw new Error('Set BrowserProvider.shared = new BrowserProvider({ wasm }) first: wasm is where you serve wllama.wasm');
+		}
 		return BrowserProvider._shared;
 	}
 
@@ -95,7 +97,7 @@ export class BrowserProvider implements InferenceProvider {
 	}
 
 	/**
-	 * Why models cannot run in this browser, or null when they can: it has no WebGPU, or WebGPU gives it no GPU
+	 * Why models cannot run well in this browser, or null when they can: it has no WebGPU, or WebGPU gives it no GPU
 	 * (hardware acceleration off, or a blocked driver). Ask before offering a download.
 	 */
 	public static async unsupported():Promise<string | null> {
@@ -107,15 +109,13 @@ export class BrowserProvider implements InferenceProvider {
 
 	/** The model on the GPU now, as it was named, or null. */
 	public get loadedModel():string | null {
-		return this._loaded?.model ?? null;
+		return this._loaded;
 	}
 
 	/** Whether `model` is downloaded already, so loading it needs no network. */
 	public async isCached(model:string):Promise<boolean> {
-		const id = modelID(model);
-		const { files } = await (await importTransformers()).ModelRegistry.is_cached_files(id.repo, { revision: id.revision, dtype: await dtypeOf(id) });
-		const needed = files.filter((f) => !UNUSED_FILES.test(f.file));
-		return needed.length > 0 && needed.every((f) => f.cached);
+		const models = await (await this.wllama()).modelManager.getModels();
+		return models.some((m) => m.url === model && m.validate() === 'valid');
 	}
 
 	/**
@@ -124,321 +124,198 @@ export class BrowserProvider implements InferenceProvider {
 	 */
 	public download(model:string = DEFAULT_BROWSER_MODEL):ModelDownload {
 		const known = this._downloads.get(model);
-		if (known && (known.state === 'pending' || (known.state === 'done' && this._loaded?.model === model))) {
+		if (known && (known.state === 'pending' || (known.state === 'done' && this._loaded === model))) {
 			return known;
 		}
 		const download = new ModelDownload(async (report) => {
-			await this.run(() => this.load(model, report));
+			await this.load(model, report);
 		});
 		this._downloads.set(model, download);
 		return download;
 	}
 
 	/** Deletes `model`'s download from the browser, unloading it first if it is on the GPU. */
-	public delete(model:string):Promise<void> {
-		return this.run(async () => {
-			if (this._loaded?.model === model) {
-				await this.unload();
-			}
-			this._downloads.delete(model);
-			const id = modelID(model);
-			await (await importTransformers()).ModelRegistry.clear_cache(id.repo, { revision: id.revision, dtype: await dtypeOf(id) });
-		});
+	public async delete(model:string):Promise<void> {
+		if (this._current?.model === model) {
+			const ready = this._current.ready;
+			this._current = undefined;
+			this._loaded = null;
+			await ready.then((w) => w.exit(), () => undefined);
+		}
+		this._downloads.delete(model);
+		const models = await (await this.wllama()).modelManager.getModels();
+		await Promise.all(models.filter((m) => m.url === model).map((m) => m.remove()));
 	}
 
 	public configureModel(model:string, settings:ModelSettings):void {
 		this._settings.set(model, { ...settings });
+		// The engine ends a thought at its budget and answers in the same request, so the client never cuts one.
+		this._http.configureModel(model, { ...settings, thinkingBudget: undefined });
 	}
 
 	public forgetModel(model:string):void {
 		this._settings.delete(model);
+		this._http.forgetModel(model);
 	}
 
-	public chat(req:ChatRequest):Promise<ChatResponse> {
-		return this.run(async () => {
-			req.signal?.throwIfAborted();
-			// Another model may have loaded since this one's download.
-			const loaded = await this.load(req.model);
-			const { tokenizer, engine } = loaded;
-			const transformers = await importTransformers();
-			const settings = this._settings.get(req.model);
-			const thinking = req.enableThinking ?? settings?.enableThinking ?? false;
-			const inputs = tokenizer.apply_chat_template(textMessages(req.messages), {
-				add_generation_prompt: true,
-				return_dict: true,
-				enable_thinking: thinking,
+	/**
+	 * Loads `req.model` first: a download can take longer than a request may wait. An engine that crashed is dropped,
+	 * so the next think starts a new one and loads the model again, from disk.
+	 */
+	public async chat(req:ChatRequest):Promise<ChatResponse> {
+		await this.load(req.model);
+		const engine = this._wllama;
+		try {
+			return await this._http.chat(req);
+		}
+		catch (err) {
+			if (!isCrash(err)) {
+				throw err;
+			}
+			const why = [err instanceof Error ? err.message : String(err), ...this._lines].join(' | ').slice(0, CRASH_CHARS);
+			// Several thinks die with one engine; only the first drops it, not the one that replaced it.
+			if (this._wllama === engine) {
+				this.discard();
+			}
+			throw new Error(`the model in the page crashed${why ? `: ${why}` : ''}. It loads again on the next think`);
+		}
+	}
+
+	/** Forgets the engine and its model, as after a crash: the next request makes both anew. */
+	private discard():void {
+		const engine = this._wllama;
+		this._wllama = undefined;
+		this._current = undefined;
+		this._loaded = null;
+		this._downloads.clear();
+		void engine?.then((w) => w.exit()).catch(() => undefined);
+	}
+
+	/**
+	 * `model` on the GPU, as its settings say, loading it in place of the last one unless it is there already. Each
+	 * of its parallel thinks gets the whole `contextLength`.
+	 */
+	private load(model:string, report?:(progress:DownloadProgress)=>void):Promise<Wllama> {
+		const settings = this._settings.get(model);
+		const parallel = Math.max(1, settings?.maxParallel ?? 1);
+		const params:LoadParams = {
+			n_ctx: (settings?.contextLength ?? DEFAULT_CONTEXT) * parallel,
+			n_parallel: parallel,
+			kv_unified: false,
+			n_batch: 2 * PROMPT_CHUNK,
+			n_ubatch: PROMPT_CHUNK,
+			// Sliding-window layers (Gemma's) keep only their last few hundred tokens, so a cached prompt could not be
+			// taken up again once a reply ran past them: every think read its whole prompt anew. Keeping them whole lets
+			// each think reuse what an earlier one read, at more cache memory.
+			swa_full: true,
+			n_cache_reuse: CACHE_REUSE_CHUNK,
+			// The thought comes back apart from the answer, as `reasoning_content`.
+			reasoning_format: 'deepseek',
+			reasoning_budget_tokens: settings?.thinkingBudget ?? -1,
+		};
+		const key = JSON.stringify(params);
+		if (this._current?.model === model && this._current.key === key) {
+			return this._current.ready;
+		}
+		const previous = this._current?.ready;
+		const ready = (async () => {
+			await previous?.then((w) => w.exit(), () => undefined);
+			this._loaded = null;
+			const wllama = await this.wllama();
+			// eslint-disable-next-line no-restricted-syntax -- wllama's own name
+			await wllama.loadModelFromUrl(model, {
+				...params,
+				progressCallback: ({ loaded, total }) => report?.({
+					progress: total > 0 ? loaded / total : 0,
+					text: loaded < total ? `Downloading ${gb(loaded)} of ${gb(total)} GB` : 'Loading on the GPU',
+				}),
 			});
-			const prompt = inputs.input_ids.dims[1];
-			// A template may open the thought itself, so the reply holds only its close.
-			const tail = tokenizer.decode((inputs.input_ids.tolist()[0] as bigint[]).slice(-8).map(Number), { skip_special_tokens: false }).trimEnd();
-			const opened = thinking ? THOUGHTS.find(({ open }) => tail.endsWith(open))?.open : undefined;
-			// A 16-bit model scores in 16 bits; the schema forbids a token by setting its score to -Infinity, which needs 32.
-			const processors:LogitsProcessor[] = [(_ids, logits) => (logits.type === 'float32' ? logits : logits.to('float32'))];
-			let constraint:SchemaConstraint | undefined;
-			if (req.responseFormat) {
-				loaded.grammar ??= grammarFor(tokenizer, engine);
-				// Fed only the answer's tokens, so it starts at 0 whether or not a thought came first.
-				constraint = await (await loaded.grammar).constrain(req.responseFormat.schema, 0);
-				processors.push(thinking ? afterThought(constraint, tokenizer, prompt, opened) : (ids, logits) => constraint!.process([ids[0].slice(prompt)], logits));
-			}
-			const n = req.topLogprobs;
-			let logprobs:Record<string, number> | undefined;
-			if (n) {
-				processors.push((_ids, logits) => {
-					logprobs ??= topLogprobs(logits, n, tokenizer);
-					return logits;
-				});
-			}
-			const stop = new transformers.InterruptableStoppingCriteria();
-			const interrupt = ():void => stop.interrupt();
-			const budget = thinking ? settings?.thinkingBudget : undefined;
-			let cut = false;
-			if (budget !== undefined) {
-				processors.push((ids, logits) => {
-					const made = ids[0].length - prompt;
-					if (!cut && made > budget && made % 8 === 0 && inThought(tokenizer.decode(ids[0].slice(prompt).map(Number), { skip_special_tokens: false }), opened)) {
-						cut = true;
-						stop.interrupt();
-					}
-					return logits;
-				});
-			}
-			req.signal?.addEventListener('abort', interrupt);
-			const maxTokens = req.maxTokens ?? DEFAULT_MAX_TOKENS;
-			try {
-				const { temperature = 0, topP, topK } = samplingOf(settings?.sampling, req.sampling);
-				const out = await engine.generate({
-					...inputs,
-					max_new_tokens: maxTokens,
-					do_sample: temperature > 0,
-					...temperature > 0 ? { temperature, top_p: topP, top_k: topK } : {},
-					logits_processor: processors,
-					stopping_criteria: [stop],
-				});
-				req.signal?.throwIfAborted();
-				const ids = (out.tolist()[0] as bigint[]).slice(prompt).map(Number);
-				// Decoded whole, so a thought's markers still show where it ends; the answer then loses its own.
-				const { content, reasoning } = splitThought(tokenizer.decode(ids, { skip_special_tokens: false }));
-				return {
-					content: content && (withoutTokens(content, tokenizer.all_special_tokens).trim() || null),
-					reasoning,
-					toolCalls: [],
-					truncated: cut || ids.length >= maxTokens,
-					logprobs,
-				};
-			}
-			finally {
-				req.signal?.removeEventListener('abort', interrupt);
-				constraint?.dispose();
+			this._loaded = model;
+			return wllama;
+		})();
+		const current = { model, key, ready };
+		this._current = current;
+		// A failed load is tried again next time.
+		ready.catch(() => {
+			if (this._current === current) {
+				this._current = undefined;
 			}
 		});
+		return ready;
 	}
 
-	private run<T>(job:()=>Promise<T>):Promise<T> {
-		const next = this._queue.then(job, job);
-		this._queue = next.catch(() => undefined);
-		return next;
+	private wllama():Promise<Wllama> {
+		this._wllama ??= (async () => {
+			const { Wllama } = await importWllama();
+			this._lines = [];
+			const remember = (print:(...args:unknown[])=>void) => (...args:unknown[]):void => {
+				this._lines = [...this._lines, args.map(describe).join(' ')].slice(-CRASH_LINES);
+				print(...args);
+			};
+			const logger = { debug: () => undefined, log: remember(console.log), warn: remember(console.warn), error: remember(console.error) };
+			return new Wllama({ default: this._wasm }, { logger });
+		})();
+		return this._wllama;
 	}
+}
 
-	/** `model` on the GPU, loading it in place of the last one unless it is there already. */
-	private async load(model:string, report?:(progress:DownloadProgress)=>void):Promise<Loaded> {
-		if (this._loaded?.model === model) {
-			return this._loaded;
+/**
+ * A `fetch` that answers chat completions from the model in the page, as an OpenAI-style server would: JSON, or a
+ * stream of server-sent events, whose cancel stops the model. Anything else is not found, as on a server without it.
+ */
+export function inPageFetch(engine:()=>Promise<Wllama> | undefined):typeof fetch {
+	return async (input, init) => {
+		const ready = engine();
+		if (!String(input instanceof Request ? input.url : input).endsWith('/chat/completions') || init?.method !== 'POST' || !ready) {
+			return new Response('not found', { status: 404 });
 		}
-		await this.unload();
-		const id = modelID(model);
-		const transformers = await importTransformers();
-		const opts:LoadOpts = {
-			revision: id.revision,
-			progress_callback: (info) => {
-				if (info.status === 'progress_total' && info.progress !== undefined) {
-					report?.({ progress: info.progress / 100, text: info.progress < 100 ? `Downloading ${gb(info.loaded)} of ${gb(info.total)} GB` : 'Loading on the GPU' });
+		const body = JSON.parse(String(init.body)) as Record<string, unknown>;
+		const stop = new AbortController();
+		init.signal?.addEventListener('abort', () => stop.abort(init.signal?.reason));
+		const wllama = await ready;
+		const params = { ...body, abortSignal: stop.signal };
+		if (!body['stream']) {
+			return json(await wllama.createChatCompletion({ ...params, stream: false }));
+		}
+		const chunks = (await wllama.createChatCompletion({ ...params, stream: true }) as AsyncIterable<unknown>)[Symbol.asyncIterator]();
+		const encoder = new TextEncoder();
+		return new Response(new ReadableStream<Uint8Array>({
+			async pull(controller) {
+				const next = await chunks.next();
+				if (next.done) {
+					controller.enqueue(encoder.encode('data: [DONE]\n\n'));
+					controller.close();
+					return;
 				}
+				controller.enqueue(encoder.encode(`data: ${JSON.stringify(next.value)}\n\n`));
 			},
-		};
-		const tokenizer = await transformers.AutoTokenizer.from_pretrained(id.repo, opts);
-		const engine = await transformers.AutoModelForCausalLM.from_pretrained(id.repo, { ...opts, device: 'webgpu', dtype: await dtypeOf(id) });
-		this._loaded = { model, id, tokenizer, engine };
-		return this._loaded;
-	}
-
-	private async unload():Promise<void> {
-		const loaded = this._loaded;
-		this._loaded = null;
-		(await loaded?.grammar?.catch(() => undefined))?.dispose();
-		await loaded?.engine.dispose();
-	}
-}
-
-/** The grammar a model's replies with a schema are held to: its vocabulary, every token it scores, and where it stops. */
-function grammarFor(tokenizer:Tokenizer, engine:Model):Promise<SchemaGrammar> {
-	const vocabSize = engine.config.vocab_size ?? engine.config.text_config?.vocab_size;
-	const eos = engine.generation_config?.eos_token_id;
-	if (vocabSize === undefined) {
-		throw new Error('This model has no vocab_size in its config, so its replies cannot be held to a schema');
-	}
-	// The tokenizer.json transformers.js keeps on each tokenizer; its own structured output reads it the same way.
-	const json = (tokenizer as Tokenizer & Record<string, unknown>)['_tokenizerJSON'] as TokenizerJSON;
-	return SchemaGrammar.create(json, vocabSize, eos === null || eos === undefined ? [] : [eos].flat());
-}
-
-/**
- * Files a text-only load never fetches: a multimodal model's encoders and image or audio processing. transformers.js
- * lists them for its repo all the same.
- */
-const UNUSED_FILES = /(^|\/)(vision_encoder|audio_encoder|embed_vision|embed_audio)[^/]*$|(^|\/)(preprocessor|processor|video_preprocessor)_config\.json$/;
-
-/**
- * `model` as a Hugging Face repo and revision: `org/repo`, `org/repo@<commit>` (so that commit is what loads),
- * `hf://org/repo`, or the repo's page (`…/tree/<commit>`, `…/resolve/<commit>`).
- */
-export function modelID(model:string):ModelID {
-	const match = /^(?:hf:\/\/|https:\/\/(?:huggingface\.co|hf\.co)\/)?([\w.-]+\/[\w.-]+)(?:@([\w.-]+)|\/(?:tree|resolve|blob)\/([^/]+))?\/*$/.exec(model);
-	if (!match) {
-		throw new Error(`'${model}' is not a Hugging Face repo (org/repo)`);
-	}
-	return { repo: match[1], revision: match[2] ?? match[3] ?? 'main' };
-}
-
-/**
- * `messages` as a chat template takes them: text only, one system message and only first, no tool turns. Minds that
- * read tool results as written text never send tool turns to a model without native tools anyway.
- */
-export function textMessages(messages:ChatMessage[]):{ role:string; content:string }[] {
-	return messages.map((m, i) => {
-		const content = chatContentText(m.content);
-		if (m.role === 'system' && i === 0) {
-			return { role: 'system', content };
-		}
-		if (m.role === 'assistant') {
-			return { role: 'assistant', content };
-		}
-		return { role: 'user', content };
-	});
-}
-
-/** Each way a model marks its thought: Gemma 4's thought channel, and the `<think>` tags of most others. */
-const THOUGHTS = [
-	{ open: '<|channel>thought', close: '<channel|>' },
-	{ open: '<think>', close: '</think>' },
-];
-
-/**
- * A reply as the model wrote it, its thought split off and its template tokens gone. A template may open the thought
- * itself, so a close alone ends one; a thought cut off before its close is all thought.
- */
-export function splitThought(text:string):{ content:string | null; reasoning?:string } {
-	for (const { open, close } of THOUGHTS) {
-		const start = text.indexOf(open);
-		const end = text.indexOf(close);
-		if (start < 0 && end < 0) {
-			continue;
-		}
-		const from = start >= 0 && (end < 0 || start < end) ? start + open.length : 0;
-		const thought = (end < 0 ? text.slice(from) : text.slice(from, end)).trim();
-		const answer = end < 0 ? null : stripTemplateTokens(text.slice(end + close.length));
-		return thought ? { content: answer, reasoning: thought } : { content: answer };
-	}
-	return { content: stripTemplateTokens(text) };
-}
-
-/**
- * Whether `text`, a reply so far, is still inside its thought: one it opened, or the template did (`opened`, that
- * open marker), and has not yet closed.
- */
-export function inThought(text:string, opened?:string):boolean {
-	return THOUGHTS.some(({ open, close }) => (opened === open || text.includes(open)) && !text.includes(close));
-}
-
-/**
- * `constraint` on the answer after a thought, as servers hold reasoning models to a schema. A reply opened by the
- * template (`opened`) is thought until it closes. Otherwise its first token may start the answer or a thought's open
- * marker, whose rest is then forced. Once the thought closes, the grammar holds every later token.
- */
-export function afterThought(constraint:SchemaConstraint, tokenizer:Tokenizer, prompt:number, opened:string | undefined):LogitsProcessor {
-	const openers = opened ? [] : THOUGHTS.map(({ open }) => tokenizer.encode(open, { add_special_tokens: false })).filter((ids) => ids.length > 0);
-	const closes = THOUGHTS.map(({ close }) => close);
-	/** Where the answer starts in the reply; undefined while thinking or not yet known. */
-	let from:number | undefined;
-	return (ids, logits) => {
-		const reply = ids[0].slice(prompt);
-		if (from === undefined && !opened) {
-			const opener = openers.find((o) => reply.every((id, i) => i >= o.length || Number(id) === o[i]));
-			if (!opener) {
-				from = 0;
-			}
-			else if (reply.length === 0) {
-				// The answer's first tokens, or a thought's.
-				const scores = logits.data as Float32Array;
-				const base = scores.length - logits.dims[logits.dims.length - 1];
-				const kept = openers.map((o) => scores[base + o[0]]);
-				constraint.process([reply], logits);
-				openers.forEach((o, i) => scores[base + o[0]] = kept[i]);
-				return logits;
-			}
-			else if (reply.length < opener.length) {
-				return onlyToken(logits, opener[reply.length]);
-			}
-		}
-		if (from === undefined) {
-			const recent = tokenizer.decode(reply.slice(-8).map(Number), { skip_special_tokens: false });
-			if (!closes.some((close) => recent.includes(close))) {
-				return logits;
-			}
-			from = reply.length;
-		}
-		return constraint.process([reply.slice(from)], logits);
+			cancel() {
+				stop.abort();
+			},
+		}), { status: 200, headers: { 'content-type': 'text/event-stream' } });
 	};
 }
 
-/** `logits` with every token but `id` refused. */
-function onlyToken(logits:Tensor, id:number):Tensor {
-	const scores = logits.data as Float32Array;
-	const vocab = logits.dims[logits.dims.length - 1];
-	const base = scores.length - vocab;
-	const keep = scores[base + id];
-	scores.fill(-Infinity, base);
-	scores[base + id] = keep;
-	return logits;
+/** A logged value as text: an `Error`, or an `ErrorEvent` (a worker that died), by its message, not `[object …]`. */
+function describe(value:unknown):string {
+	if (typeof value === 'object' && value !== null && 'message' in value) {
+		const { message, filename, lineno } = value as { message:unknown; filename?:unknown; lineno?:unknown };
+		return filename ? `${String(message)} (${String(filename)}:${String(lineno)})` : String(message);
+	}
+	return String(value);
 }
 
-/** `text` without any of `tokens`: a model's end-of-turn and other special tokens. */
-export function withoutTokens(text:string, tokens:readonly string[]):string {
-	return tokens.reduce((rest, token) => rest.split(token).join(''), text);
+/** Whether `err` says the engine itself died, not just this request. */
+function isCrash(err:unknown):boolean {
+	return err instanceof Error && (err.name === 'RuntimeError' || /has crashed|\(ABORT\)/.test(err.message));
 }
 
-/** The `n` likeliest first tokens, each (trimmed) to its log probability. */
-function topLogprobs(logits:Tensor, n:number, tokenizer:Tokenizer):Record<string, number> {
-	const scores = logits.to('float32').data;
-	const vocab = logits.dims[logits.dims.length - 1];
-	const offset = scores.length - vocab;
-	let max = -Infinity;
-	for (let i = 0; i < vocab; i++) {
-		max = Math.max(max, scores[offset + i]);
-	}
-	let sum = 0;
-	for (let i = 0; i < vocab; i++) {
-		sum += Math.exp(scores[offset + i] - max);
-	}
-	const norm = max + Math.log(sum);
-	const best:number[] = [];
-	for (let i = 0; i < vocab; i++) {
-		if (best.length < n || scores[offset + i] > scores[offset + best[best.length - 1]]) {
-			best.push(i);
-			best.sort((a, b) => scores[offset + b] - scores[offset + a]);
-			best.length = Math.min(best.length, n);
-		}
-	}
-	const out:Record<string, number> = {};
-	for (const i of best) {
-		const token = tokenizer.decode([i], { skip_special_tokens: false }).trim();
-		out[token] = Math.max(out[token] ?? -Infinity, scores[offset + i] - norm);
-	}
-	return out;
+function json(value:unknown):Response {
+	return new Response(JSON.stringify(value), { status: 200, headers: { 'content-type': 'application/json' } });
 }
 
-function gb(bytes:number | undefined):string {
-	return ((bytes ?? 0) / 1e9).toFixed(1);
+function gb(bytes:number):string {
+	return (bytes / 1e9).toFixed(1);
 }
 
 type GPUAdapter = { features:{ has(name:string):boolean } };
@@ -453,19 +330,9 @@ function gpuAdapter():Promise<GPUAdapter | null> {
 	return adapter;
 }
 
-/**
- * The weights to load: those the repo names for transformers.js (a build may hold only some precisions, file by
- * file), else 4-bit with 16-bit math where the GPU runs 16-bit shaders, or 4-bit alone. Without a GPU to ask, the
- * 16-bit ones, the build most likely downloaded, so it can still be found and deleted.
- */
-async function dtypeOf(id:ModelID):Promise<Dtype> {
-	const config = await (await importTransformers()).AutoConfig.from_pretrained(id.repo, { revision: id.revision }).catch(() => undefined);
-	const named = (config?.['transformers.js_config'] as { dtype?:Dtype } | undefined)?.dtype;
-	return named ?? ((await gpuAdapter())?.features.has('shader-f16') ?? true ? 'q4f16' : 'q4');
-}
-
-function importTransformers():Promise<Transformers> {
-	return (import('@huggingface/transformers') as Promise<unknown> as Promise<Transformers>).catch(() => {
-		throw new Error('BrowserProvider needs @huggingface/transformers installed');
+function importWllama():Promise<WllamaModule> {
+	// Its package names no entry point that exists, so the built module is named outright.
+	return (import('@wllama/wllama/esm/index.js' as string) as Promise<WllamaModule>).catch(() => {
+		throw new Error('BrowserProvider needs @wllama/wllama installed');
 	});
 }

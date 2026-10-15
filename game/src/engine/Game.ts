@@ -1,4 +1,5 @@
 import { Game as KindlingGame, captureWorld, resetAllocID, resetTime, type ShadowMode, GameObject } from '@arc-director/kindling';
+import { gpuMemory } from 'arc-director';
 import { resetHudPatch } from './patchHud';
 import { World } from './World';
 import { Wallet, Named } from './components';
@@ -23,7 +24,7 @@ import { readURLCamera, readURLFlags, readURLView } from './urlView';
 import { CameraFocus } from './CameraFocus';
 import { startSceneMusic } from '../audio/songs';
 import { syncWaterAudio } from '../audio/water';
-import { AutoShadows } from './autoShadows';
+import { autoShadowTier } from './autoShadows';
 
 /** Keys the game uses, so the browser does not also scroll, move focus or open Quick Find. */
 const GAME_KEYS = new Set([
@@ -100,7 +101,8 @@ export class Game extends KindlingGame<World> {
 	public readonly session:Session;
 	private readonly _hud:HudModel;
 	private readonly _scene:SceneDef;
-	private readonly _autoShadows = new AutoShadows();
+	/** What `auto` shadows run as on this GPU. */
+	private readonly _autoShadows = autoShadowTier(gpuMemory());
 
 	constructor(hud:HudModel, sceneID = DEFAULT_SCENE_ID) {
 		super(new World());
@@ -204,9 +206,6 @@ export class Game extends KindlingGame<World> {
 
 	public override tick(dt:number):void {
 		this.session.poll();
-		if (this._hud.shadows === 'auto' && this.renderer) {
-			this._autoShadows.tick(dt, this.renderer.frameMS(1000));
-		}
 		this.syncDisplay();
 		this.paused = this._hud.menuOpen;
 		super.tick(dt);
@@ -221,7 +220,7 @@ export class Game extends KindlingGame<World> {
 		if (!this.renderer) {
 			return;
 		}
-		const shadows = SHADOWS[this._hud.shadows === 'auto' ? this._autoShadows.tier : this._hud.shadows];
+		const shadows = SHADOWS[this._hud.shadows === 'auto' ? this._autoShadows : this._hud.shadows];
 		this.renderer.detailMaps = this._hud.detailMaps;
 		this.renderer.shadows = shadows.mode;
 		this.renderer.pointShadowMapSize = shadows.point;

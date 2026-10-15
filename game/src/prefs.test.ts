@@ -93,6 +93,14 @@ describe('setPrefs', () => {
 		assert.equal(prefs().arcFormat, 'text');
 	});
 
+	it('stores the temperature, kept between 0 and 2', () => {
+		assert.equal(prefs().temperature, 1);
+		setPrefs({ temperature: 0.7 });
+		assert.equal(stored().temperature, 0.7);
+		assert.equal(setPrefs(coercePrefsPatch({ temperature: 3 })).temperature, 2);
+		assert.equal(setPrefs(coercePrefsPatch({ temperature: 'hot' })).temperature, 2);
+	});
+
 	it('defaults shadows to auto and keeps only known qualities', () => {
 		assert.equal(prefs().shadows, 'auto');
 		setPrefs({ shadows: 'high' });

@@ -408,8 +408,8 @@ ${dump.message}`, image: dump.image });
 	}
 
 	/**
-	 * Model `name`, run in the page on the GPU through transformers.js (`@huggingface/transformers`), before or after
-	 * `start()`; the same name again replaces it. `model` is a Hugging Face repo ({@link BrowserModelSpec.model}) or
+	 * Model `name`, run in the page on the GPU through wllama (`@wllama/wllama`, llama.cpp in WebAssembly), before or
+	 * after `start()`; the same name again replaces it. `model` is a GGUF's URL ({@link BrowserModelSpec.model}) or
 	 * the whole spec; without one, Gemma 4 E4B ({@link DEFAULT_BROWSER_MODEL}). It starts downloading now unless the
 	 * browser has it, then loads. Returns that download, an Observable of its progress; or pass `observer`. Models
 	 * named alike share one download.
@@ -420,7 +420,7 @@ ${dump.message}`, image: dump.image });
 			this.addInference(inference, provider);
 		}
 		// The registry configures it too once it resolves, but the download loads it now.
-		provider.configureModel(ref, { contextLength: spec.contextLength, enableThinking: spec.thinking, thinkingBudget: spec.thinkingBudget, sampling: spec.sampling });
+		provider.configureModel(ref, { contextLength: spec.contextLength, enableThinking: spec.thinking, thinkingBudget: spec.thinkingBudget, sampling: spec.sampling, maxParallel: spec.maxParallel });
 		this.addModel(name, { ...spec, inference, id: ref });
 		const download = provider.download(ref);
 		if (observer) {
@@ -990,6 +990,9 @@ ${dump.message}`, image: dump.image });
 					}
 					if (res.generateMs !== undefined) {
 						parts.push(`gen ${Math.round(res.generateMs)}ms`);
+						if (res.outputTokens && res.generateMs > 0) {
+							parts.push(`${res.outputTokens} tok ${(res.outputTokens / (res.generateMs / 1000)).toFixed(1)}/s`);
+						}
 					}
 					if (res.cachedTokens) {
 						parts.push(`cache ${res.cachedTokens}`);

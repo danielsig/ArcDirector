@@ -1301,10 +1301,15 @@ describe('parseChatTimings', () => {
 
 	it('reads llama.cpp timings in milliseconds', () => {
 		const t = parseChatTimings({
-			timings: { prompt_ms: 90, predicted_ms: 210 },
+			timings: { prompt_ms: 90, predicted_ms: 210, predicted_n: 42 },
 		});
 		assert.equal(t.promptMs, 90);
 		assert.equal(t.generateMs, 210);
+		assert.equal(t.outputTokens, 42);
+	});
+
+	it('counts what was generated from the usage when there are no timings', () => {
+		assert.equal(parseChatTimings({ usage: { completion_tokens: 17 } }).outputTokens, 17);
 	});
 });
 

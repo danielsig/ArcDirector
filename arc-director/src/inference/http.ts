@@ -119,6 +119,8 @@ export type ModelSettings = {
 	thinkingBudget?:number;
 	/** How it picks each token. Default {@link DEFAULT_SAMPLING}. */
 	sampling?:Sampling;
+	/** Thinks it answers at once. A server that loads models itself runs that many side by side. */
+	maxParallel?:number;
 };
 
 /** A reply as it came over the wire, or the thought so far when the thinking budget cut it off. */
@@ -629,6 +631,7 @@ export function parseChatTimings(json:Record<string, unknown>):{
 	cachedTokens:number | undefined;
 	promptMs:number | undefined;
 	generateMs:number | undefined;
+	outputTokens:number | undefined;
 } {
 	const usage = isRecord(json.usage) ? json.usage : {};
 	const stats = isRecord(json.stats) ? json.stats : {};
@@ -647,10 +650,12 @@ export function parseChatTimings(json:Record<string, unknown>):{
 	if (generateMs === undefined && promptMs !== undefined && totalMs !== undefined) {
 		generateMs = Math.max(0, totalMs - promptMs);
 	}
+	const count = [timings.predicted_n, usage.completion_tokens, usage.output_tokens].find((n) => typeof n === 'number' && n > 0);
 	return {
 		cachedTokens: cachedFromUsage(usage),
 		promptMs,
 		generateMs,
+		outputTokens: count as number | undefined,
 	};
 }
 
@@ -1403,6 +1408,7 @@ export class HttpProvider implements InferenceProvider {
 			cachedTokens: timings.cachedTokens,
 			promptMs: split.promptMs,
 			generateMs: split.generateMs,
+			outputTokens: timings.outputTokens,
 		};
 	}
 

@@ -154,6 +154,8 @@ export type HudModel = {
 	batchThinks:boolean;
 	/** CoT on. Menu + localStorage. */
 	thinkingBudget:number;
+	/** Sampling temperature, 0 to 2. Menu + localStorage. */
+	temperature:number;
 	/** How NPCs write an Arc: text, JSON, or JSON the server must follow. Menu + localStorage. Testing. */
 	arcFormat:ArcFormatPref;
 	/** The System One behind `choose`. Menu + localStorage. */
@@ -261,6 +263,7 @@ export function emptyHud():HudModel {
 		prefsDetached: false,
 		batchThinks: p.batchThinks,
 		thinkingBudget: p.thinkingBudget,
+		temperature: p.temperature,
 		arcFormat: p.arcFormat,
 		systemOne: p.systemOne,
 		decisionModel: p.decisionModel,

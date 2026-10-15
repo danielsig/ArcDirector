@@ -115,6 +115,8 @@ export type ChatResponse = {
 	promptMs?:number;
 	/** Token generation time in milliseconds. */
 	generateMs?:number;
+	/** Tokens generated, thought included, when the server reports them. */
+	outputTokens?:number;
 	/** Chain-of-thought text when the server splits it from `content`. */
 	reasoning?:string;
 	/** The reply stopped at the output-token cap, so `content` is cut off. */

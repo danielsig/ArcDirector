@@ -1,11 +1,11 @@
 <script setup lang="ts">
-import { inject, ref, watch } from 'vue';
+import { computed, inject, ref, watch } from 'vue';
 import { fmtMem, modelLabel, type HudModel, type MenuPage } from './hudModel';
 import { sessionKey } from './sessionKey';
 import HudBench from './HudBench.vue';
 import HudDialog from './HudDialog.vue';
 import InferencePicker from './InferencePicker.vue';
-import { inferenceSetup, thinksWith } from '../director/inference';
+import { inferenceSetup, mainModelName, thinksWith } from '../director/inference';
 import {
 	MAX_CONTEXT_LENGTH,
 	MAX_PARALLEL_THINKERS,
@@ -19,6 +19,7 @@ import {
 	setMusicMuted,
 	setMusicVolume,
 	setPrefs,
+	type SystemOneKind,
 } from '../prefs';
 
 const props = defineProps<{
@@ -33,6 +34,8 @@ const session = inject(sessionKey);
 
 /** Where NPCs think, picked over the menu at the init screen's size. */
 const pickerOpen = ref(false);
+/** The temperature while its slider is held: it applies on release, since a change re-adds the models. */
+const temperatureDraft = ref<number | null>(null);
 
 const PAGES:{ id:MenuPage; label:string }[] = [
 	{ id: 'testing', label: 'Arc Director' },
@@ -142,12 +145,23 @@ function pickArcFormat():void {
 	setPrefs({ arcFormat: props.hud.arcFormat });
 }
 
-function pickSystemOne():void {
-	setPrefs({ systemOne: props.hud.systemOne });
-}
+/**
+ * What scores `choose` picks, as one choice: `off`, `jev`, or `model:` and the id of an LM Studio model, empty for
+ * the one NPCs think with. In the browser that one is the only model there is.
+ */
+const decision = computed(() => {
+	if (props.hud.systemOne !== 'local') {
+		return props.hud.systemOne;
+	}
+	const own = inferenceSetup.inference === 'lmstudio' && props.hud.decisionModel !== props.hud.activeModel ? props.hud.decisionModel : '';
+	return `model:${own}`;
+});
 
-function pickDecisionModel():void {
-	setPrefs({ decisionModel: props.hud.decisionModel });
+function pickDecision(ev:Event):void {
+	const choice = (ev.target as HTMLSelectElement).value;
+	setPrefs(choice.startsWith('model:')
+		? { systemOne: 'local', decisionModel: choice.slice('model:'.length) }
+		: { systemOne: choice as SystemOneKind });
 }
 
 function dumpNPCMaps():void {
@@ -311,7 +325,7 @@ function pct(n:number):string {
 								<span class="name">Shadows</span>
 								<select
 									v-model="hud.shadows"
-									title="Auto: the best this machine runs at 50 fps (never Off). Simple: baked scene shadows, soft capsules for characters. Low and High: realtime."
+									title="Auto: picked from your graphics card, as the model suggestion is (never Off). Simple: baked scene shadows, soft capsules for characters. Low and High: realtime."
 									@change.stop="pickShadows"
 								>
 									<option value="auto">Auto</option>
@@ -438,16 +452,16 @@ function pct(n:number):string {
 									{{ hud.arcDirectorOn ? 'On' : 'Off' }}
 								</button>
 							</div>
-							<h3>Inference</h3>
+							<h3>Thinking</h3>
 							<div class="set">
-								<span class="name">Thinks with</span>
+								<span class="name">Model</span>
 								<span class="thinks-with">
 									<span class="readout">{{ thinksWith(hud.activeModel) }}</span>
 									<button type="button" class="act" @click.stop="pickerOpen = true">Change</button>
 								</span>
 							</div>
 							<label v-if="inferenceSetup.inference === 'lmstudio'" class="set">
-								<span class="name">Model</span>
+								<span class="name">LM Studio model</span>
 								<select
 									v-model="hud.model"
 									:disabled="hud.models.length === 0 && !hud.model"
@@ -477,32 +491,6 @@ function pct(n:number):string {
 								</select>
 							</label>
 							<div class="set">
-								<span class="name">Arc Bench</span>
-								<button type="button" class="act" @click.stop="hud.bench = 'arc'">
-									Open
-								</button>
-							</div>
-							<div v-if="inferenceSetup.inference === 'lmstudio'" class="set">
-								<span class="name">Parallel thinkers</span>
-								<div class="stepper">
-									<button
-										type="button"
-										:disabled="hud.maxParallel <= MIN_PARALLEL_THINKERS"
-										@click.stop="nudgeParallel(-1)"
-									>
-										−
-									</button>
-									<span>{{ hud.maxParallel }}</span>
-									<button
-										type="button"
-										:disabled="hud.maxParallel >= MAX_PARALLEL_THINKERS"
-										@click.stop="nudgeParallel(1)"
-									>
-										+
-									</button>
-								</div>
-							</div>
-							<div class="set">
 								<span class="name">Context window</span>
 								<div class="stepper">
 									<button
@@ -522,18 +510,21 @@ function pct(n:number):string {
 									</button>
 								</div>
 							</div>
-							<div class="set">
-								<span class="name">Wait for idle</span>
-								<button
-									type="button"
-									class="switch"
-									:class="{ on: hud.batchThinks }"
-									:aria-pressed="hud.batchThinks"
-									@click.stop="toggleBatchThinks"
+							<label class="set stack">
+								<span class="name" title="How freely NPCs pick each word. 0 always takes the likeliest, which can repeat a thought forever. Gemma is made for 1 and Qwen for 0.6; past 1, replies get wild.">
+									Temperature
+									<span class="readout">{{ (temperatureDraft ?? hud.temperature).toFixed(2) }}</span>
+								</span>
+								<input
+									:value="temperatureDraft ?? hud.temperature"
+									type="range"
+									min="0"
+									max="2"
+									step="0.05"
+									@input="temperatureDraft = onRange($event)"
+									@change="setPrefs({ temperature: onRange($event) }); temperatureDraft = null"
 								>
-									{{ hud.batchThinks ? 'On' : 'Off' }}
-								</button>
-							</div>
+							</label>
 							<div class="set">
 								<span class="name" title="How many tokens an NPC may think before it must answer from what it thought">Thinking budget</span>
 								<div class="stepper">
@@ -569,39 +560,79 @@ function pct(n:number):string {
 									<option value="schema">Schema</option>
 								</select>
 							</label>
+							<p v-if="hud.arcFormat !== 'schema'" class="tip">
+								&ldquo;Schema&rdquo; is the recommended Arc format. It keeps NPCs from writing plans the game can't read, so they don't waste time correcting their mistakes.
+							</p>
+							<h3>Scheduling</h3>
+							<div class="set">
+								<span class="name">Parallel thinkers</span>
+								<div class="stepper">
+									<button
+										type="button"
+										:disabled="hud.maxParallel <= MIN_PARALLEL_THINKERS"
+										@click.stop="nudgeParallel(-1)"
+									>
+										−
+									</button>
+									<span>{{ hud.maxParallel }}</span>
+									<button
+										type="button"
+										:disabled="hud.maxParallel >= MAX_PARALLEL_THINKERS"
+										@click.stop="nudgeParallel(1)"
+									>
+										+
+									</button>
+								</div>
+							</div>
+							<div class="set" :class="{ dim: hud.maxParallel <= 1 }">
+								<span class="name" :title="hud.maxParallel <= 1 ? 'Only matters with more than one parallel thinker' : 'Start NPCs’ thinks together once the model is free'">Wait for idle</span>
+								<button
+									type="button"
+									class="switch"
+									:class="{ on: hud.batchThinks }"
+									:aria-pressed="hud.batchThinks"
+									:disabled="hud.maxParallel <= 1"
+									@click.stop="toggleBatchThinks"
+								>
+									{{ hud.batchThinks ? 'On' : 'Off' }}
+								</button>
+							</div>
+							<p v-if="!hud.batchThinks && hud.maxParallel > 1" class="tip">
+								We recommend keeping this on. When it's off, NPCs pause their thinking every time a new NPC starts thinking.
+							</p>
+							<h3>System One</h3>
 							<label class="set">
-								<span class="name">System One</span>
+								<span class="name" title="The System One: what scores the choices of a choose, a hosted decision model or a model you run. Off keeps choose from NPCs.">Model</span>
 								<select
-									v-model="hud.systemOne"
-									@change.stop="pickSystemOne"
+									:value="decision"
+									@mousedown="inferenceSetup.inference === 'lmstudio' && session?.refreshHudModels()"
+									@change.stop="pickDecision"
 								>
 									<option value="off">Off</option>
-									<option value="jev">Jev</option>
-									<option value="local">Local</option>
+									<option value="jev">Jev (hosted)</option>
+									<option value="model:">{{ mainModelName(hud.activeModel) || 'Main model' }}</option>
+									<template v-if="inferenceSetup.inference === 'lmstudio'">
+										<option
+											v-if="decision !== 'model:' && decision.startsWith('model:') && !hud.models.some((m) => `model:${m.id}` === decision)"
+											:value="decision"
+										>
+											{{ hud.decisionModel }}
+										</option>
+										<option v-for="m in hud.models.filter((m) => m.id !== hud.activeModel)" :key="m.id" :value="`model:${m.id}`">
+											{{ modelLabel(m) }}
+										</option>
+									</template>
 								</select>
 							</label>
-							<label v-if="inferenceSetup.inference === 'lmstudio'" class="set">
-								<span class="name">Decision model</span>
-								<select
-									v-model="hud.decisionModel"
-									title="The Local System One: a chat model scored, or a decision model"
-									@mousedown="session?.refreshHudModels()"
-									@change.stop="pickDecisionModel"
-								>
-									<option value="">Main model</option>
-									<option
-										v-if="hud.decisionModel && !hud.models.some((m) => m.id === hud.decisionModel)"
-										:value="hud.decisionModel"
-									>
-										{{ hud.decisionModel }}
-									</option>
-									<option v-for="m in hud.models" :key="m.id" :value="m.id">
-										{{ modelLabel(m) }}
-									</option>
-								</select>
-							</label>
+							<h3>Benchmarks</h3>
 							<div class="set">
-								<span class="name">Arc Decision Bench</span>
+								<span class="name">ArcDirector Bench</span>
+								<button type="button" class="act" @click.stop="hud.bench = 'arc'">
+									Open
+								</button>
+							</div>
+							<div class="set">
+								<span class="name">ArcSelector Bench</span>
 								<button type="button" class="act" @click.stop="hud.bench = 'decision'">
 									Open
 								</button>
@@ -660,6 +691,7 @@ function pct(n:number):string {
 									</tr>
 								</tbody>
 							</table>
+							<h3>Debug</h3>
 							<div class="set">
 								<span class="name">NPC maps</span>
 								<button type="button" class="act" @click.stop="dumpNPCMaps">

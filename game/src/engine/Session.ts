@@ -444,6 +444,7 @@ export class Session extends Component {
 		hud.contextLength = next.contextLength;
 		hud.batchThinks = next.batchThinks;
 		hud.thinkingBudget = next.thinkingBudget;
+		hud.temperature = next.temperature;
 		hud.arcFormat = next.arcFormat;
 		hud.systemOne = next.systemOne;
 		hud.decisionModel = next.decisionModel;
@@ -452,7 +453,7 @@ export class Session extends Component {
 		if (next.model && changed('model')) {
 			hud.model = next.model;
 		}
-		if ((['inference', 'model', 'browserModel', 'maxParallel', 'contextLength', 'thinkingBudget', 'decisionModel'] as const).some((key) => changed(key))) {
+		if ((['inference', 'model', 'browserModel', 'maxParallel', 'contextLength', 'thinkingBudget', 'temperature', 'decisionModel'] as const).some((key) => changed(key))) {
 			if (arc) {
 				addModels(arc, next);
 			}

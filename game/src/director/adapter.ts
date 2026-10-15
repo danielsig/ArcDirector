@@ -36,7 +36,7 @@ import { kernelsOf, scanWorld } from './kernels';
 import { hostCanSee, lookWorld, inventoryOf, followedCarry } from './perception';
 import { addBodyVerbs, GAME_VERBS, verbGate } from './verbs';
 import { gameWorld } from './world';
-import { showDownload } from './inference';
+import { menuModel, showDownload } from './inference';
 import { fightExprTags } from './fight';
 import {
 	inTalkRange,
@@ -49,26 +49,24 @@ import {
 export type { CharacterCtx, SceneHooks };
 
 const ARC_RETRY_CAP = 3;
-/** Google's recommended sampling for Gemma, which every model the game offers is. */
-const GEMMA_SAMPLING = { temperature: 1, topK: 64, topP: 0.95 };
 const STALL_VERBS = new Set(['wait', 'wander', 'say', 'set_status']);
 
 /**
  * The menu's chat model three ways, one loaded model under them all: `main`, which every mind thinks with unless a
  * scene assigns another; `quick`, without reasoning, for minds that must answer mid-fight; and `local`, the System
  * One that scores `choose` picks with it, or with the menu's decision model. In the browser, the one model on the
- * GPU answers one think at a time, and adding it starts its download.
+ * GPU answers as many thinks at once as parallel thinkers allows, and adding it starts its download.
  */
 export function addModels<TCtx>(director:ArcDirector<TCtx>, p:Prefs = prefs()):ArcDirector<TCtx> {
 	if (p.inference === 'browser' && p.browserModel) {
 		// One download for all three; the picker shows it.
-		const main = { model: p.browserModel, contextLength: p.contextLength, ...thinkingOf(p), sampling: GEMMA_SAMPLING, maxParallel: 1 };
+		const main = { model: p.browserModel, ...menuModel(p) };
 		showDownload(p.browserModel, director.addBrowserModel('main', main));
 		director.addBrowserModel('quick', { ...main, thinking: false });
 		director.addBrowserModel('local', { ...main, thinking: false, decision: true });
 		return director;
 	}
-	const main:ModelSpec = { inference: 'lmstudio', id: p.model || undefined, contextLength: p.contextLength, ...thinkingOf(p), sampling: GEMMA_SAMPLING, maxParallel: p.maxParallel };
+	const main:ModelSpec = { inference: 'lmstudio', id: p.model || undefined, ...menuModel(p) };
 	return director
 		.addModel('main', main)
 		.addModel('quick', { ...main, thinking: false })
@@ -80,11 +78,6 @@ export function addThinking<TCtx>(director:ArcDirector<TCtx>, p:Prefs = prefs())
 	return addModels(director.addLMStudioInference({ baseURL: '/inference/v1', load: LM_STUDIO_LOAD }), p)
 		.withArcFormat(p.arcFormat)
 		.withRepair({ retries: ARC_RETRY_CAP });
-}
-
-/** The menu's thinking budget as a model spec's: off at 0, unbounded below it. */
-function thinkingOf(p:Prefs):Pick<ModelSpec, 'thinking' | 'thinkingBudget'> {
-	return { thinking: p.thinkingBudget !== 0, thinkingBudget: p.thinkingBudget > 0 ? p.thinkingBudget : undefined };
 }
 
 export class GameHost {

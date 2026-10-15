@@ -16,7 +16,7 @@ export type {
 	ToolDef,
 } from './inference/provider.js';
 export { chatContentText, DEFAULT_SAMPLING, type Sampling } from './inference/provider.js';
-export { BrowserProvider, DEFAULT_BROWSER_MODEL, modelID, type ModelID } from './inference/browser.js';
+export { BrowserProvider, DEFAULT_BROWSER_MODEL, inPageFetch, type BrowserProviderOptions } from './inference/browser.js';
 export { fittingModel, gpuMemory, memoryOf, type GPUMemory } from './inference/device.js';
 export { ModelDownload, type DownloadObserver, type DownloadProgress, type DownloadSubscription } from './inference/download.js';
 export { HttpProvider, parseChatTimings, mergeClientTimings, loadConfigFits, type HttpProviderConfig, type HttpLoadConfig, type ModelSettings, type ReasoningEffort, REASONING_EFFORTS, serverRoot } from './inference/http.js';

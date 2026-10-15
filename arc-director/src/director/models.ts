@@ -37,7 +37,7 @@ export type ModelSpec = {
 
 /** Argument to `ArcDirector.addBrowserModel`: a model that runs in the page, and what it runs with. */
 export type BrowserModelSpec = Omit<ModelSpec, 'id' | 'inference'> & {
-	/** A Hugging Face repo of ONNX weights (`org/repo`, `org/repo@<commit>`, or its URL). Default {@link DEFAULT_BROWSER_MODEL}. */
+	/** A GGUF's URL, or its first part's when split (`…-00001-of-00004.gguf`). Default {@link DEFAULT_BROWSER_MODEL}. */
 	model?:string;
 	/** Default {@link BrowserProvider.shared}. */
 	provider?:BrowserProvider;
@@ -272,7 +272,7 @@ export class ModelRegistry {
 		// A decision model answers through the System One endpoint, which loads it itself.
 		const systemOneURL = info && isDecisionModel(info) && server.http ? `${server.http.baseURL.replace(/\/+$/, '')}/systemone` : undefined;
 		if (!systemOneURL) {
-			server.inner.configureModel?.(id, { contextLength: spec.contextLength, enableThinking: spec.thinking, reasoningEffort: spec.reasoningEffort, thinkingBudget: spec.thinkingBudget, sampling: spec.sampling });
+			server.inner.configureModel?.(id, { contextLength: spec.contextLength, enableThinking: spec.thinking, reasoningEffort: spec.reasoningEffort, thinkingBudget: spec.thinkingBudget, sampling: spec.sampling, maxParallel: spec.maxParallel });
 		}
 		const contextLength = spec.contextLength
 			?? (source.kind === 'http' ? source.opts.load?.contextLength : undefined);

@@ -13,14 +13,14 @@ const props = defineProps<{
 /** What each bench asks, and of whom. */
 const BENCHES = {
 	decision: {
-		title: 'Arc Decision Bench',
+		title: 'ArcSelector Bench',
 		version: DECISION_BENCH_VERSION,
 		cases: DECISION_BENCH,
 		hint: `How well each model picks the best option in ${DECISION_BENCH.length} game situations. Options are asked in both orders, so always picking the first scores half. No menu settings change the result.`,
 		run: (ids:string[], rows:BenchRow[]) => benchDecisions(ids, props.hud.models, rows),
 	},
 	arc: {
-		title: 'Arc Bench',
+		title: 'ArcDirector Bench',
 		version: ARC_BENCH_VERSION,
 		cases: ARC_BENCH,
 		hint: `How well each model gets NPCs to their goals in ${ARC_BENCH.length} game situations, each played out like the game. Uses the Arc format, Thinking and Context window settings from the Arc Director menu. Lookup cases need the map or the NPC's knowledge.`,

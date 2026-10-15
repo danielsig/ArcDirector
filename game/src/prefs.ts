@@ -70,6 +70,8 @@ const DEFAULT = {
 	contextLength: 16384,
 	batchThinks: true,
 	thinkingBudget: 512 as number,
+	/** How freely NPCs pick each word: 0 always the likeliest, 2 wild. */
+	temperature: 1 as number,
 	arcFormat: 'schema' as ArcFormatPref,
 	systemOne: 'local' as SystemOneKind,
 	/** The local System One's model id: a chat model scored, or a decision model. Empty: the main model. */
@@ -96,12 +98,14 @@ const FIELDS:{ [K in keyof Prefs]:(v:unknown, fallback:Prefs[K])=>Prefs[K] } = {
 	musicPlayerOpen: bool,
 	inference: (v, fallback) => INFERENCE_KINDS.find((kind) => kind === v) ?? fallback,
 	model: str,
-	browserModel: str,
+	// A GGUF's URL; anything else is a model the game no longer runs.
+	browserModel: (v, fallback) => (typeof v === 'string' && /\.gguf$/.test(v) ? v : fallback),
 	playerKind: str,
 	maxParallel: (v, fallback) => clampInt(v, MIN_PARALLEL_THINKERS, MAX_PARALLEL_THINKERS, fallback),
 	contextLength: (v, fallback) => (Number.isFinite(Number(v)) ? clampContextLength(v) : fallback),
 	batchThinks: bool,
 	thinkingBudget: (v, fallback) => THINKING_BUDGETS.find((budget) => budget === v) ?? fallback,
+	temperature: (v, fallback) => (Number.isFinite(Number(v)) ? Math.min(2, Math.max(0, Math.round(Number(v) * 20) / 20)) : fallback),
 	arcFormat: (v, fallback) => ARC_FORMATS.find((format) => format === v) ?? fallback,
 	systemOne: (v, fallback) => SYSTEM_ONE_KINDS.find((kind) => kind === v) ?? fallback,
 	decisionModel: str,

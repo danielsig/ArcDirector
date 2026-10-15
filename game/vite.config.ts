@@ -7,6 +7,15 @@ import { aiLogPlugin } from './viteAiLog.ts';
 /** The TypeSafe key, from the repo-root `.env`. It stays on this dev server; the page posts to `/systemone` without it. */
 const TYPE_SAFE_KEY = loadEnv('development', fileURLToPath(new URL('..', import.meta.url)), '').TYPE_SAFE_KEY;
 
+/**
+ * Cross-origin isolation: the page may share memory between threads, so wllama runs llama.cpp on several CPU
+ * threads beside the GPU. `credentialless` still lets the page fetch models from other origins.
+ */
+const ISOLATED = {
+	'Cross-Origin-Opener-Policy': 'same-origin',
+	'Cross-Origin-Embedder-Policy': 'credentialless',
+};
+
 export default defineConfig({
 	plugins: [vue(), aiLogPlugin()],
 	/** Saves key components by class name (`captureWorld`); keep names through minify. */
@@ -23,7 +32,9 @@ export default defineConfig({
 		exclude: ['arc-director', '@arc-director/kindling', '@arc-director/control'],
 		include: ['three', 'three/addons/loaders/GLTFLoader.js'],
 	},
+	preview: { headers: ISOLATED },
 	server: {
+		headers: ISOLATED,
 		fs: {
 			allow: [searchForWorkspaceRoot(process.cwd())],
 		},
