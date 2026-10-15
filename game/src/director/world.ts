@@ -10,7 +10,7 @@ import type { GameHost } from './adapter';
 import { thiefOf } from './kernels';
 import { findObject, idOf } from './names';
 import { doExamine, hostCanSee } from './perception';
-import { dropCarried, settleExchange, settleGive, takeItem, useOn } from './items';
+import { doTransfer, transferRefusal, useOn } from './items';
 
 /** How close a character comes to act on something, and to count as there. */
 const REACH = USE_RANGE * 0.55;
@@ -61,13 +61,8 @@ export function gameWorld(host:GameHost):HostWorld<GameObject> {
 			const motor = character.getComponent(CharacterMotor);
 			return !!point && !!motor && Math.hypot(point[0] - p.x, point[1] - p.z) <= motor.arriveEpsilon;
 		},
-		moveItem: ({ character, item, to, quantity }) => {
-			if (to === undefined) {
-				return dropCarried(character, item);
-			}
-			return to === character ? takeItem(host, character, item) : settleGive(character, to, item, quantity);
-		},
 		useItem: (character, item, target) => useOn(host, character, item, target),
-		exchange: ({ character, other, give, get }) => settleExchange(host, character, other, give, get),
+		validateTransfer: (move, deal) => transferRefusal(host, move, deal),
+		transfer: (move) => doTransfer(host, move),
 	};
 }

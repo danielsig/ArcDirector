@@ -23,6 +23,7 @@ import type { Mind } from '../mind/mind.js';
 import { ArcRecord } from './record.js';
 import type { SayResult, SayTo, TalkNet } from '../mind/talk.js';
 import type { Kit, KitSource } from './types.js';
+import type { MoveOpts } from '../world/mover.js';
 
 /** What a runner has while its kit cannot be read: a callback kit with no context. */
 const NO_KIT:Kit = Object.freeze({ verbs: [] });
@@ -37,6 +38,8 @@ export type RunnerDeps<TCtx = unknown> = {
 	/** Host cooldown in game seconds after a handler pops or aborts. Default 8. */
 	cooldown?:number;
 	talk?:TalkNet;
+	/** Walk this runner up to `target`, as `VerbCall.goTo` does. */
+	goTo?:(target:string, opts?:MoveOpts)=>Promise<ArcResult>;
 	/** The watch-language view of the world from this runner now, or undefined when it has none. */
 	catalog?:()=>Catalog | undefined;
 	/** What it may use. Object or callback, fetched every tick, so the host can mutate it in place. */
@@ -81,6 +84,7 @@ export abstract class ArcRunner<TCtx = unknown> {
 	protected defaultLawWho:string;
 	public arcSession:ArcSession | null = null;
 	public talk:TalkNet | undefined;
+	private readonly _goTo:RunnerDeps['goTo'];
 	public catalog?:()=>Catalog | undefined;
 	/** Object or callback. Assign a new one any time. Fetched every tick. */
 	public kit:KitSource<TCtx>;
@@ -121,6 +125,7 @@ export abstract class ArcRunner<TCtx = unknown> {
 		this.maxLaws = opts.maxLaws ?? DEFAULT_MAX_LAWS;
 		this.defaultLawWho = opts.defaultLawWho ?? 'me';
 		this.talk = opts.talk;
+		this._goTo = opts.goTo;
 		this.catalog = opts.catalog;
 		this.kit = opts.kit;
 		for (const spec of opts.laws ?? []) {
@@ -380,7 +385,7 @@ export abstract class ArcRunner<TCtx = unknown> {
 		const done = await this.mind?.perform(step, this);
 		const out = done
 			?? (step.verb === 'say' && this.talk
-				? this.speak(step)
+				? await this.speak(step)
 				: this.execute
 					? await this.execute(step, ctx)
 					: { ok: false, verb: step.verb, reason: `host has no executor for ${step.verb}` });
@@ -393,9 +398,18 @@ export abstract class ArcRunner<TCtx = unknown> {
 		return out;
 	}
 
-	/** `say` through talk. Only call with talk attached. */
-	public speak(step:Step):SayResult {
-		return this.talk!.say(this.id, String(step.args.text ?? ''), sayToOf(step.args), this.now);
+	/** `say` through talk, walking up to whoever it is said to first. Only call with talk attached. */
+	public async speak(step:Step):Promise<SayResult> {
+		const to = sayToOf(step.args);
+		const talk = this.talk!;
+		// Close enough to talk is where they make out every word, wherever that is for the host.
+		for (const id of [to ?? []].flat()) {
+			const near = await this._goTo?.(id, { check: () => (talk.canSay(this.id, id).ok && talk.clear(this.id, id) ? 'in earshot' : undefined) });
+			if (near && !near.ok) {
+				return { ...near, verb: 'say' };
+			}
+		}
+		return this.talk!.say(this.id, String(step.args.text ?? ''), to, this.now);
 	}
 
 	/** An arc began. A voice tells its mind. */

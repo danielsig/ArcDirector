@@ -10,7 +10,8 @@ import type { MindEvent } from '../mind/types.js';
 import { geometryKernels } from './kernels.js';
 import { Mover } from './mover.js';
 import { awayGoal, findRoute, pointGoal, reachablePoints, type Blocked, type Route } from './route.js';
-import type { HostWorld, PathStep, Vec } from './types.js';
+import type { Deal } from './deal.js';
+import type { HostWorld, PathStep, Transfer, Vec } from './types.js';
 import { distance, groundAxes } from './vec.js';
 
 type Ctx = { id:string };
@@ -32,6 +33,8 @@ class Grid {
 	public doorLocked = false;
 	public canOffer:(character:string, other:string)=>boolean = () => true;
 	public reach:(from:string, to:string)=>number = () => 1.2;
+	/** The game's own rules, checked before the grid's. */
+	public refuse:(move:Transfer<string>, deal:Deal<string>)=>string | undefined = () => undefined;
 	public speed = 4;
 
 	constructor(public readonly walls:Set<string> = new Set(), public readonly door?:string) {}
@@ -80,29 +83,41 @@ class Grid {
 			return !!(to && point && distance(point, to) < 0.05);
 		},
 		getReach: (character, target) => this.reach(character, target),
-		moveItem: ({ character, item, to }) => {
-			if (to === undefined) {
-				this.carry.delete(item);
-				this.point.set(item, this.point.get(character)!);
-				return { ok: true, reason: `dropped ${item}` };
+		validateTransfer: (move, deal) => {
+			const { verb, thing, from } = move;
+			const refused = this.refuse(move, deal);
+			if (refused) {
+				return refused;
 			}
-			this.carry.set(item, to);
-			return { ok: true };
+			if (verb !== 'pick_up' && thing !== 'gold' && this.carry.get(thing) !== from) {
+				return `${from} has no ${thing}`;
+			}
+			return undefined;
+		},
+		transfer: ({ thing, from, to }) => {
+			const before = { holder: this.carry.get(thing), point: this.point.get(thing) };
+			if (thing !== 'gold') {
+				if (to === undefined) {
+					this.carry.delete(thing);
+					this.point.set(thing, this.point.get(from)!);
+				}
+				else {
+					this.carry.set(thing, to);
+				}
+			}
+			return () => {
+				if (before.holder === undefined) {
+					this.carry.delete(thing);
+				}
+				else {
+					this.carry.set(thing, before.holder);
+				}
+				if (before.point) {
+					this.point.set(thing, before.point);
+				}
+			};
 		},
 		canOffer: (character, other) => this.canOffer(character, other),
-		exchange: ({ character, other, give, get }) => {
-			const missing = Object.keys(get).find((item) => this.carry.get(item) !== other);
-			if (missing) {
-				return { ok: false, reason: `${other} has no ${missing}` };
-			}
-			for (const item of Object.keys(give).filter((name) => name !== 'gold')) {
-				this.carry.set(item, other);
-			}
-			for (const item of Object.keys(get)) {
-				this.carry.set(item, character);
-			}
-			return { ok: true };
-		},
 	};
 }
 
@@ -148,7 +163,7 @@ async function run(
 		.addStockCollectiveVerbs()
 		.withWorld(grid.world)
 		.withDefaultKit({ verbs: opts.kit })
-		.withKernels((ctx) => ({ me: dummyEntity(ctx.id, { tags: ['agent'] }), others: [], items: [], nearRadius: opts.nearRadius }))
+		.withKernels((ctx) => ({ me: dummyEntity(ctx.id, { tags: ['character'] }), others: [], items: [], nearRadius: opts.nearRadius }))
 		.withContext((id) => (grid.point.has(id) ? { id } : undefined));
 	if (opts.units) {
 		director.addCollective({ id: 'Hive', kit: { verbs: opts.kit }, identity: { role: 'Leads.' }, characters: opts.units.map((id) => ({ id })) });
@@ -410,6 +425,33 @@ describe('stock world verbs', () => {
 		director.dispose();
 	});
 
+	describe('say walks up to whoever it is said to', () => {
+		const talkOn = (grid:Grid, spoken:string[]) => (d:ArcDirector<Ctx>):void => {
+			const gap = (a:string, b:string):number => distance(grid.point.get(a)!, grid.point.get(b)!);
+			d.withTalk({ inRange: (a, b) => gap(a, b) <= 20, clearHear: (a, b) => gap(a, b) <= 3, others: () => ['Ann', 'Bo'] }, (u) => spoken.push(u.text));
+		};
+
+		it('until they make out every word, then says it', async () => {
+			const grid = new Grid().place('Ann', [0, 0]).place('Bo', [10, 0]);
+			const spoken:string[] = [];
+			const { director } = await run(grid, 'say(text=Hello, to=Bo)', { kit: ['say', 'wait'], before: talkOn(grid, spoken) });
+			assert.deepEqual(spoken, ['Hello']);
+			assert.ok(distance(grid.point.get('Ann')!, [10, 0]) <= 3, 'close enough to be heard clearly');
+			assert.ok(distance(grid.point.get('Ann')!, [10, 0]) > 1.3, 'and no closer: talking needs no reach');
+			director.dispose();
+		});
+
+		it('and is refused only when there is no way to them', async () => {
+			const walls = new Set(Array.from({ length: 41 }, (element, i) => `5,${i - 20}`));
+			const grid = new Grid(walls).place('Ann', [0, 0]).place('Bo', [10, 0]);
+			const spoken:string[] = [];
+			const { director } = await run(grid, 'say(text=Hello, to=Bo)', { kit: ['say', 'wait'], before: talkOn(grid, spoken) });
+			assert.deepEqual(spoken, []);
+			assert.deepEqual(grid.point.get('Ann'), [0, 0]);
+			director.dispose();
+		});
+	});
+
 	it('takes a standing offer: walks over, and both sides move at once', async () => {
 		const grid = new Grid().place('Ann', [0, 0]).place('Mira', [4, 0]).place('Bread', [4, 0]);
 		grid.carry.set('Bread', 'Mira');
@@ -474,6 +516,30 @@ describe('stock world verbs', () => {
 		const hidden = await run(grid, reply, { kit: ['offer', 'wait'], before });
 		assert.equal(hidden.director.character('Ann')!.lastResult?.reason, 'Mira is out of sight');
 		hidden.director.dispose();
+	});
+
+	it('refuses terms the game rules out when they are offered, before anyone hears them', async () => {
+		const grid = new Grid().place('Ann', [0, 0]).place('Mira', [4, 0]).place('Bridge', [2, 2]);
+		grid.refuse = (move) => (move.thing === 'Bridge' ? 'Mira does not own Bridge' : undefined);
+		const { director } = await run(grid, 'offer(to=Mira, give={"gold":10}, get={"Bridge":1})', { kit: ['offer', 'wait'] });
+		assert.equal(director.character('Ann')!.lastResult?.reason, 'Mira does not own Bridge');
+		assert.equal(director.offers.all.length, 0);
+		director.dispose();
+	});
+
+	it('takes back what moved when a later move in the trade is refused', async () => {
+		const grid = new Grid().place('Ann', [0, 0]).place('Mira', [4, 0]).place('Apple', [0, 0]).place('Bread', [4, 0]);
+		grid.carry.set('Apple', 'Ann');
+		grid.carry.set('Bread', 'Mira');
+		grid.refuse = (move, deal) => (!deal.dryRun && move.thing === 'Bread' ? "Ann's pack is full" : undefined);
+		const { director } = await run(grid, 'offer(to=Mira, give={"Apple":1}, get={"Bread":1})', {
+			kit: ['offer', 'wait'],
+			before: (d) => d.offers.post({ from: 'Mira', give: { Bread: 1 }, get: { Apple: 1 } }),
+		});
+		assert.equal(director.character('Ann')!.lastResult?.reason, "Ann's pack is full");
+		assert.equal(grid.carry.get('Apple'), 'Ann', 'the apple came back');
+		assert.equal(grid.carry.get('Bread'), 'Mira');
+		director.dispose();
 	});
 
 	it('wanders toward where until holds and reports what it saw', async () => {

@@ -42,7 +42,6 @@ export function chatHandover<TCtx>(chat:(req:ChatRequest)=>Promise<ChatResponse>
 		const res = await chat({
 			model: model(),
 			thread: HANDOVER_THREAD,
-			temperature: 0,
 			messages: [
 				{ role: 'system', content: HANDOVER_SYSTEM },
 				{ role: 'user', content: handoverPrompt(journeys, owners) },

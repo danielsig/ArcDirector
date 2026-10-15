@@ -1,3 +1,5 @@
+import type { Deal } from './deal.js';
+
 /**
  * A position or a direction in world space, as many numbers as the game has dimensions (1D, 2D, 3D); the
  * game uses the same count everywhere. Units are the game's own; ArcDirector only compares and adds them.
@@ -48,29 +50,35 @@ export interface Outcome {
 	reason?:string;
 }
 
-/** One item changing hands, or put down. */
-export interface ItemMove<TEntity> {
-	/** The character doing it. */
-	character:TEntity;
-	/** The item's id. Items stay ids: which one is meant depends on whose pack it is in, and that is the game's call. */
-	item:string;
-	/** The new holder. Leave out to put the item down where `character` is. */
+/**
+ * One thing changing hands: picked up, put down, given, paid, traded or stolen. A thing is whatever the game lets
+ * move: an item, gold, a house deed, a promise of work. What each name means is the game's call.
+ */
+export interface Transfer<TEntity> {
+	/** The verb that moves it, which says who acts: `pick_up`, `drop`, `give`, `offer`, or the game's own, such as `steal`. */
+	verb:string;
+	/** The thing's id, as the model wrote it. Which one is meant depends on where it is, and that is the game's call. */
+	thing:string;
+	/** What holds it now, as `find(thing)` gives it: a character, a chest, or the thing itself where it lies. */
+	from:TEntity;
+	/** Who holds it after. Left out, it is put down where `from` is. */
 	to?:TEntity;
 	/** How many. Default 1. */
 	quantity?:number;
 }
 
-/** One offer taken. `character` is near `other`; both sides move at once, or neither does. */
-export interface Exchange<TEntity> {
-	/** The side that took the offer. */
-	character:TEntity;
-	/** The side that made it. */
-	other:TEntity;
-	/** What `character` hands `other`. */
-	give:Record<string, number>;
-	/** What `other` hands `character`. */
-	get:Record<string, number>;
-}
+/**
+ * Tags that mean the same to every part of the library, in every sight row. A host adds any others it likes; these it
+ * should not use for anything else.
+ */
+export const RESERVED_TAGS = {
+	/** Carried and picked up. */
+	item: 'item',
+	/** Fixed in place: what other things are placed relative to. */
+	landmark: 'landmark',
+	/** Someone who acts: listed first in sight, and never what other things are placed relative to. */
+	character: 'character',
+} as const;
 
 /**
  * The game's world, as the stock verbs need it. `TEntity` is whatever the game uses for things in its world
@@ -85,10 +93,9 @@ export interface Exchange<TEntity> {
  * |--|--|
  * | `find`, `getPose` | watch geometry: `distance`, `nearby`, `isFacing`, `isLeft` / `isRight`, `manhattan`, … |
  * | `getPathGraph`, `steerToward` | `go_to`, `follow`, `wander`, crowd formations, `pathDistance` / `isReachable`, `call.goTo` |
- * | `moveItem` | `pick_up`, `drop`, `give` |
+ * | `transfer` (and `validateTransfer`, for the game's rules) | `pick_up`, `drop`, `give`, `offer` |
  * | `useItem` | `use` |
  * | `getDescription` | `examine` |
- * | `exchange` | `offer` |
  */
 export interface HostWorld<TEntity> {
 	// Queries
@@ -128,6 +135,14 @@ export interface HostWorld<TEntity> {
 	 */
 	hasLineOfSight?(from:TEntity, to:TEntity):boolean;
 	/**
+	 * Why `move` cannot happen, or nothing when it can: the game's rules for what may change hands, such as who owns
+	 * a house, a locked chest, or a full pack. Every move is checked just before it is made, so the world already
+	 * holds the moves before it in its `deal`. An offer is checked when it is posted too, as a dry run.
+	 * @returns The reason, in words the agent can act on: "Mira's pack is full", "Realtor does not own Bridge".
+	 * Default: every move may happen.
+	 */
+	validateTransfer?(move:Transfer<TEntity>, deal:Deal<TEntity>):string | undefined;
+	/**
 	 * Whether `character` may make an offer to `other`, and that offer still stands. Default: `other` is in its sight
 	 * (`withSight`), else in its line of sight (`hasLineOfSight`), else always.
 	 */
@@ -144,13 +159,15 @@ export interface HostWorld<TEntity> {
 	 * @returns Whether the character is at `point` by the motor's own measure; that sends it on to the next waypoint.
 	 */
 	steerToward?(character:TEntity, point:Vec | null):boolean;
-	/** Hand an item over, or put it down. Refuse with a reason the agent can act on. */
-	moveItem?(move:ItemMove<TEntity>):Outcome;
+	/**
+	 * Make `move`, which `validateTransfer` allowed. Throw only on a real error: the rules are already checked.
+	 * @returns How to take it back. The library calls it only when a later move in the same deal fails, so the
+	 * deal moves whole or not at all.
+	 */
+	transfer?(move:Transfer<TEntity>):()=>void;
 	/**
 	 * Use a carried `item`, on `target` if given.
 	 * @param target Already in reach of `character`.
 	 */
 	useItem?(character:TEntity, item:string, target?:TEntity):Outcome;
-	/** Swap both sides of a taken offer at once. Refuse, moving nothing, with a reason the agent can act on ("Baker has no Loaf"). */
-	exchange?(swap:Exchange<TEntity>):Outcome;
 }

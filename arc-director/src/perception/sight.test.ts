@@ -21,7 +21,7 @@ function seen(
 
 function person(id:string, point:number[]):SeenObject {
 	return seen(id, point, {
-		tags: ['agent', 'person'],
+		tags: ['character'],
 		interactable: true,
 		interesting: 1,
 		movable: true,
@@ -226,7 +226,7 @@ describe('formatSight', () => {
 			self: { id: 'Dawn', point: [0, 0], facing: [0, -1] },
 			objects: [
 				seen('Healer', [0, -3], {
-					tags: ['agent', 'person'],
+					tags: ['character'],
 					interactable: true,
 					interesting: 1,
 					movable: true,
@@ -309,7 +309,7 @@ describe('formatSight', () => {
 					movable: false,
 				}),
 				seen('Cat', [2, 0.1], {
-					tags: ['agent'],
+					tags: ['character'],
 					movable: true,
 					attachedTo: 'WoodenTable',
 					attachMode: 'on',
@@ -341,7 +341,7 @@ describe('formatSight', () => {
 			movable: false,
 		});
 		const merchant = seen('Merchant', [0, -4], {
-			tags: ['agent'],
+			tags: ['character'],
 			movable: true,
 		});
 		const { ground, figure } = groundAndFigure(oak, merchant, (o) => hypot(o.point, [0, 0]));

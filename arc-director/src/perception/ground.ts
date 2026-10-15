@@ -1,10 +1,11 @@
+import { RESERVED_TAGS } from '../world/types.js';
 import type { SeenObject } from './types.js';
 
 export function defaultLandmarkTier(obj:{ tags:string[]; movable?:boolean }):number {
-	if (obj.movable === false || obj.tags.includes('landmark')) {
+	if (obj.movable === false || obj.tags.includes(RESERVED_TAGS.landmark)) {
 		return 80;
 	}
-	if (obj.tags.includes('agent') || obj.tags.includes('npc') || obj.tags.includes('person')) {
+	if (obj.tags.includes(RESERVED_TAGS.character)) {
 		return 10;
 	}
 	return 20;

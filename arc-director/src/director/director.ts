@@ -5,7 +5,7 @@ import type { Arc, ArcResult, Step, StepArg } from '../arc/types.js';
 import { validateArc } from '../arc/validate.js';
 import { choicePrompt } from '../character/choice.js';
 import { JevSystemOne, ModelSystemOne, type JevOpts, type SystemOne } from '../inference/systemone.js';
-import { ArcError } from '../arc/types.js';
+import { ArcError, BlockedArcError } from '../arc/types.js';
 import { lawGroup, type Law, type LawSpec } from '../arc/laws.js';
 import { bodiless, type ArcRunner, type RunnerOptions } from '../character/arc-runner.js';
 import { Character, type CharacterFields, type CharacterJSON, type Wiring } from '../character/character.js';
@@ -90,10 +90,10 @@ import { ModelRegistry, type BrowserModelSpec, type EmbeddingSpec, type Inferenc
 import { BrowserProvider, DEFAULT_BROWSER_MODEL } from '../inference/browser.js';
 import type { DownloadObserver, ModelDownload } from '../inference/download.js';
 import { geometryKernels, wayBlocked } from '../world/kernels.js';
-import { Mover } from '../world/mover.js';
+import { Mover, type MoveOpts } from '../world/mover.js';
 import { OfferBook, offerText, type Offer } from '../world/offers.js';
 import { poseOf } from '../world/lookup.js';
-import type { HostWorld, Pose, Vec } from '../world/types.js';
+import { RESERVED_TAGS, type HostWorld, type Pose, type Vec } from '../world/types.js';
 import { centroid, distance } from '../world/vec.js';
 import { missingParts, worldVerbs } from '../world/verbs.js';
 
@@ -264,7 +264,6 @@ export class ArcDirector<TCtx = unknown> {
 	private _arcExample:string | undefined;
 	private _systemNote:string | undefined;
 	private _currency:string | undefined;
-	private _repairTemperature:number | undefined;
 	private _seenFn:SeenName<TCtx> | undefined;
 	private _mindDefaults:MindSettings = {};
 	/** `undefined` until `start()` picks the default; `false` when the host turned it off. */
@@ -421,7 +420,7 @@ ${dump.message}`, image: dump.image });
 			this.addInference(inference, provider);
 		}
 		// The registry configures it too once it resolves, but the download loads it now.
-		provider.configureModel(ref, { contextLength: spec.contextLength, enableThinking: spec.thinking, thinkingBudget: spec.thinkingBudget });
+		provider.configureModel(ref, { contextLength: spec.contextLength, enableThinking: spec.thinking, thinkingBudget: spec.thinkingBudget, sampling: spec.sampling });
 		this.addModel(name, { ...spec, inference, id: ref });
 		const download = provider.download(ref);
 		if (observer) {
@@ -560,13 +559,12 @@ ${dump.message}`, image: dump.image });
 	}
 
 	/**
-	 * Repair turns after a bad arc. `retries` is how many (default 0: a bad reply fails the think).
-	 * `temperature` applies from the second repair on, so a model stuck on one reply moves (default 0.4).
+	 * Repair turns after a bad arc. `retries` is how many (default 0: a bad reply fails the think). Each retry samples
+	 * as the model does, so a model that wrote one bad reply does not write it again word for word.
 	 */
-	public withRepair({ retries, temperature }:{ retries?:number; temperature?:number }):this {
+	public withRepair({ retries }:{ retries?:number }):this {
 		this.assertBuilder();
 		this._arcRetries = retries;
-		this._repairTemperature = temperature;
 		return this;
 	}
 
@@ -1305,7 +1303,6 @@ ${dump.message}`, image: dump.image });
 			arcExample: this._arcExample,
 			systemNote: this._systemNote,
 			currency: this._currency,
-			repairTemperature: this._repairTemperature,
 			seenAs: this.seenAs(mind),
 			worldContext: () => this.tryCtx(owner.voice.id) ?? (owner instanceof Collective ? this.present(owner)?.ctx : undefined),
 		};
@@ -1535,17 +1532,25 @@ ${dump.message}`, image: dump.image });
 			ctx,
 			score,
 			holds: (arg, point) => score(arg, point) > 0,
-			goTo: (target, within) => this.goTo(character.id, step.verb, { target }, within),
-			goToPoint: (point, within) => this.goTo(character.id, step.verb, { point }, within),
+			goTo: (target, opts) => this.goTo(character.id, step.verb, { target }, opts),
+			goToPoint: (point, opts) => this.goTo(character.id, step.verb, { point }, opts),
 			wait: (seconds) => this.waitFor(character.id, seconds, step.verb),
 		};
 	}
 
-	/** Move `characterID`, or, in a world where characters do not move, succeed only when already in reach. */
-	private goTo(characterID:string, verb:string, dest:{ target:string } | { point:Vec }, within?:number):Promise<ArcResult> {
-		if (this._mover.canMove) {
-			return this._mover.go(characterID, dest, verb, { within });
+	/**
+	 * Move `characterID`, or, in a world where characters do not move, succeed only when already in reach. Already
+	 * close enough by `opts.check`, it does not take a step.
+	 */
+	private goTo(characterID:string, verb:string, dest:{ target:string } | { point:Vec }, opts:MoveOpts = {}):Promise<ArcResult> {
+		const met = opts.check?.();
+		if (met !== undefined) {
+			return Promise.resolve({ ok: true, verb, reason: met });
 		}
+		if (this._mover.canMove) {
+			return this._mover.go(characterID, dest, verb, opts);
+		}
+		const { within } = opts;
 		const world = this._world;
 		const character = world?.find(characterID);
 		const target = 'target' in dest ? world?.find(dest.target) : undefined;
@@ -1727,7 +1732,7 @@ ${dump.message}`, image: dump.image });
 		return {
 			...sample,
 			...(this._world ? geometryKernels(this._world, first.character.id, poses) : {}),
-			me: dummyEntity(collective.id, { tags: ['agent'] }),
+			me: dummyEntity(collective.id, { tags: [RESERVED_TAGS.character] }),
 			inventory: undefined,
 		};
 	}
@@ -1898,6 +1903,7 @@ ${dump.message}`, image: dump.image });
 			abortArc: (id) => this.abortArc(id),
 			cooldown: spec.cooldown ?? this._cooldownDefault,
 			talk: this.talk,
+			goTo: (target, opts) => this.goTo(runner().id, 'go_to', { target }, opts),
 			catalog: this._kernelFn ? () => this.runnerCatalog(runner()) : undefined,
 			kit,
 			laws: spec.laws,
@@ -2843,7 +2849,8 @@ ${dump.message}`, image: dump.image });
 				// Aborts and inference errors are not the mind's doing.
 				if (err instanceof ArcError) {
 					const again = mind.lastResult?.verb !== 'think' || mind.lastResult.ok;
-					mind.ingestResult({ ok: false, verb: 'think', reason: `your reply was not a valid Arc: ${text}` });
+					const why = err instanceof BlockedArcError ? 'your plan cannot run' : 'your reply was not a valid Arc';
+					mind.ingestResult({ ok: false, verb: 'think', reason: `${why}: ${text}` });
 					if (again) {
 						this._queue?.enqueueVerb(mind.id, 'think', false);
 					}

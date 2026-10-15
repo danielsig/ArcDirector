@@ -2,7 +2,7 @@ import { HttpProvider, type ReasoningEffort } from '../inference/http.js';
 import { fakeInference, type HttpInferenceOpts } from '../inference/presets.js';
 import { fetchModelCatalog, findModel, isDecisionModel, isVisionModel, pickSingleChatModel, PREFERRED_MODELS, type ModelInfo } from '../inference/models.js';
 import type { FakeChatFn } from '../inference/fake.js';
-import type { InferenceProvider } from '../inference/provider.js';
+import type { InferenceProvider, Sampling } from '../inference/provider.js';
 import type { BrowserProvider, DEFAULT_BROWSER_MODEL } from '../inference/browser.js';
 
 /** How to reach a chat server: `add*Inference`. */
@@ -28,6 +28,8 @@ export type ModelSpec = {
 	 * without thinking again. Default: no limit.
 	 */
 	thinkingBudget?:number;
+	/** How it picks each token, such as the model maker's recommended settings. Default {@link DEFAULT_SAMPLING}. */
+	sampling?:Sampling;
 	reasoningEffort?:ReasoningEffort;
 	/** Thinks on this model at once. Default {@link DEFAULT_MAX_PARALLEL}. */
 	maxParallel?:number;
@@ -270,7 +272,7 @@ export class ModelRegistry {
 		// A decision model answers through the System One endpoint, which loads it itself.
 		const systemOneURL = info && isDecisionModel(info) && server.http ? `${server.http.baseURL.replace(/\/+$/, '')}/systemone` : undefined;
 		if (!systemOneURL) {
-			server.inner.configureModel?.(id, { contextLength: spec.contextLength, enableThinking: spec.thinking, reasoningEffort: spec.reasoningEffort, thinkingBudget: spec.thinkingBudget });
+			server.inner.configureModel?.(id, { contextLength: spec.contextLength, enableThinking: spec.thinking, reasoningEffort: spec.reasoningEffort, thinkingBudget: spec.thinkingBudget, sampling: spec.sampling });
 		}
 		const contextLength = spec.contextLength
 			?? (source.kind === 'http' ? source.opts.load?.contextLength : undefined);

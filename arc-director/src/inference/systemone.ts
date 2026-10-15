@@ -127,7 +127,7 @@ export class ChatSystemOne implements SystemOne {
 				{ role: 'system', content: 'Pick the option that best serves the goal. Answer with its letter only.' },
 				{ role: 'user', content: `${state}\n\nGoal: ${goal}\nOptions:\n${options}` },
 			],
-			temperature: 0,
+			sampling: { temperature: 0 },
 			maxTokens: 1,
 			enableThinking: false,
 			// xAI allows at most 8; a letter outside the top 8 would not win anyway.

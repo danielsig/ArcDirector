@@ -59,6 +59,25 @@ export type JsonSchemaResponseFormat = {
 /** `required`: the reply must be a tool call. */
 export type ToolChoice = 'auto' | 'none' | 'required';
 
+/** How a model picks each token. Unset fields are left to the server. */
+export type Sampling = {
+	temperature?:number;
+	topP?:number;
+	/** Not every server takes it; it is only sent when set. */
+	topK?:number;
+};
+
+/**
+ * What a model samples with unless its spec says otherwise: settings every OpenAI-style server takes, and that keep
+ * a thinking model from repeating one thought, as greedy decoding does.
+ */
+export const DEFAULT_SAMPLING:Sampling = { temperature: 1, topP: 0.95 };
+
+/** `model`'s sampling for one request: the default, then the model's own, then the request's. */
+export function samplingOf(model:Sampling | undefined, req:Sampling | undefined):Sampling {
+	return { ...DEFAULT_SAMPLING, ...model, ...req };
+}
+
 export type ChatRequest = {
 	model:string;
 	messages:ChatMessage[];
@@ -66,7 +85,8 @@ export type ChatRequest = {
 	/** Keep `tools` listed with `none` on arc turns so the KV prefix stays identical. */
 	toolChoice?:ToolChoice;
 	responseFormat?:JsonSchemaResponseFormat;
-	temperature?:number;
+	/** Overrides the model's sampling for this request, as a classifier does with `{ temperature: 0 }`. */
+	sampling?:Sampling;
 	maxTokens?:number;
 	/**
 	 * Whether this turn reasons first, whatever the model or provider setting: models sharing one server id can differ.

@@ -2,6 +2,7 @@ import { Time, type GameObject } from '@arc-director/kindling';
 import {
 	dummyEntity,
 	pascalCase,
+	RESERVED_TAGS,
 	type ExprEntity,
 	type ExprVal,
 	type Stringifiers,
@@ -96,7 +97,7 @@ function nearbyLandmarks(world:World, character:GameObject, here?:{ x:number; z:
 	const ranked:{ go:GameObject; dist:number }[] = [];
 	for (const go of world.objects) {
 		const tags = tagsOf(go);
-		if (go === character || tags.includes('person') || (tags.includes('item') && go.getComponent(Pickupable))) {
+		if (go === character || tags.includes(RESERVED_TAGS.character) || (tags.includes('item') && go.getComponent(Pickupable))) {
 			continue;
 		}
 		if (!['tree', 'waterfall', 'boulder', 'pillar', 'building', 'room', 'bridge'].some((t) => tags.includes(t))) {
@@ -139,8 +140,8 @@ export function kernelsOf(
 	const bindings:Record<string, ExprVal> = {};
 	for (const go of world.objects) {
 		const tags = tagsOf(go);
-		const person = tags.includes('person');
-		if (person) {
+		const isCharacter = tags.includes(RESERVED_TAGS.character);
+		if (isCharacter) {
 			if (go === character) {
 				continue;
 			}
@@ -152,14 +153,14 @@ export function kernelsOf(
 			}
 			others.push(entityOf(go, extraTags?.(go)));
 		}
-		const item = tags.includes('item') && !person;
+		const item = tags.includes(RESERVED_TAGS.item) && !isCharacter;
 		if (item) {
 			items.push(entityOf(go));
 		}
 		// Places a watch may name: openable things, and every named one (`BakerStall`, `WestGate`).
 		if (
 			['door', 'bridge', 'chest', 'building'].some((t) => tags.includes(t))
-			|| (!item && !person && go.getComponent(Named))
+			|| (!item && !isCharacter && go.getComponent(Named))
 		) {
 			const name = idOf(go);
 			bindings[name] = { kind: 'entity', value: entityOf(go) };

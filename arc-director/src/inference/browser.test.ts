@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { inThought, modelID, splitThought, textMessages, withoutTokens } from './browser.js';
+import { afterThought, inThought, modelID, splitThought, textMessages, withoutTokens, type Tensor, type Tokenizer } from './browser.js';
+import type { SchemaConstraint } from './grammar.js';
 
 describe('browser', () => {
 	it('sends text only, one system message first, and no tool turns', () => {
@@ -53,6 +54,62 @@ describe('browser', () => {
 describe('browser tokens', () => {
 	it("drops a model's special tokens from its answer", () => {
 		assert.equal(withoutTokens('Halt, traveler.<end_of_turn>', ['<eos>', '<end_of_turn>']), 'Halt, traveler.');
+	});
+});
+
+describe('browser schema after a thought', () => {
+	// Gemma 4's markers as single tokens; `{` (7) is the only token the schema takes first.
+	const spelled:Record<number, string> = { 1: '<|channel>', 2: 'thought', 3: '<channel|>', 5: 'Go.', 7: '{' };
+	const tokenizer = {
+		encode: (text:string) => (text === '<|channel>thought' ? [1, 2] : []),
+		decode: (ids:number[]) => ids.map((id) => spelled[id] ?? '').join(''),
+	} as unknown as Tokenizer;
+	const VOCAB = 8;
+	const logits = ():Tensor => ({ type: 'float32', dims: [1, VOCAB], data: new Float32Array(VOCAB), to: () => logits(), tolist: () => [] });
+	const allowed = (t:Tensor):number[] => [...(t.data as Float32Array)].flatMap((s, id) => (s === -Infinity ? [] : [id]));
+	const PROMPT = 3;
+	const ids = (...reply:number[]):bigint[][] => [[9n, 9n, 9n, ...reply.map(BigInt)]];
+	const schema = ():{ constraint:SchemaConstraint; fed:number[][] } => {
+		const fed:number[][] = [];
+		return {
+			fed,
+			constraint: {
+				process: (seen, l) => {
+					fed.push(seen[0].map(Number));
+					(l.data as Float32Array).fill(-Infinity);
+					l.data[7] = 0;
+					return l;
+				},
+				dispose: () => undefined,
+			},
+		};
+	};
+
+	it('lets the first token start the answer or the thought', () => {
+		const { constraint, fed } = schema();
+		const gate = afterThought(constraint, tokenizer, PROMPT, undefined);
+		assert.deepEqual(allowed(gate(ids(), logits())), [1, 7]);
+		gate(ids(7), logits());
+		assert.deepEqual(fed, [[], [7]]);
+	});
+
+	it('forces the rest of the open marker, thinks freely, then holds the answer to the schema', () => {
+		const { constraint, fed } = schema();
+		const gate = afterThought(constraint, tokenizer, PROMPT, undefined);
+		gate(ids(), logits());
+		assert.deepEqual(allowed(gate(ids(1), logits())), [2]);
+		assert.equal(allowed(gate(ids(1, 2, 5), logits())).length, VOCAB);
+		assert.deepEqual(allowed(gate(ids(1, 2, 5, 3), logits())), [7]);
+		gate(ids(1, 2, 5, 3, 7), logits());
+		assert.deepEqual(fed, [[], [], [7]]);
+	});
+
+	it('thinks from the first token when the template opened the thought', () => {
+		const { constraint, fed } = schema();
+		const gate = afterThought(constraint, tokenizer, PROMPT, '<|channel>thought');
+		assert.equal(allowed(gate(ids(), logits())).length, VOCAB);
+		assert.deepEqual(allowed(gate(ids(5, 3), logits())), [7]);
+		assert.deepEqual(fed, [[]]);
 	});
 });
 

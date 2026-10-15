@@ -1,9 +1,10 @@
 import { Time, type GameObject } from '@arc-director/kindling';
-import { bundleText, pascalCase, type ArcResult, type Outcome } from 'arc-director';
+import { pascalCase, type Deal, type Outcome, type Transfer } from 'arc-director';
 import {
 	BODY_SLOTS,
 	Bridge,
 	BridgeLever,
+	Chest,
 	Companion,
 	Door,
 	HumanBody,
@@ -17,16 +18,18 @@ import {
 	characterIs,
 	compactName,
 	findCarried,
+	hasRoom,
 	itemMatchesName,
 	removeFromBags,
 	slotItem,
 	tryInsert,
 } from '../items/inventory';
-import { cloneItem, type ItemInstance } from '../items/instance';
+import { cloneItem, isBackpack, type ItemInstance } from '../items/instance';
 import { coinsOf, noteWant, transferCoins } from '../items/wallet';
 import { dropItem, findChestHolding, pickup, takeFromChest } from '../items/pickup';
 import { cueAt } from '../audio/cue';
 import { useItem } from '../items/use';
+import { captureItem } from '../world/spawnItem';
 import type { GameHost } from './adapter';
 import { idOf } from './names';
 
@@ -72,83 +75,6 @@ export function useOn(host:GameHost, character:GameObject, itemName:string, targ
 	return { ok: result.ok, reason: result.reason };
 }
 
-/** `character` takes `name` off the ground or out of a chest. ArcDirector already brought it in reach. */
-export function takeItem(host:GameHost, character:GameObject, name:string):Outcome {
-	const loot = host.world.findNamed(name);
-	if (loot?.getComponent(Pickupable)) {
-		const crop = loot.getComponent(Harvest);
-		if (crop && !characterIs(character, crop.harvester)) {
-			return { ok: false, reason: `only ${crop.harvester} can harvest that` };
-		}
-		const reason = pickup(character, loot);
-		const ok = reason !== 'no room' && reason !== 'no world';
-		if (ok) {
-			character.getComponent(Appearance)?.playClip('take', Time.time, loot);
-			host.arc?.pushEvent({ kind: 'PickedUp', text: `{0} picked up ${name}`, who: [idOf(character)], tags: ['item', name], major: false });
-			host.hooks.afterPickUp?.(host, character, name);
-		}
-		return { ok, reason };
-	}
-	const held = findChestHolding(host.world, name);
-	if (held) {
-		const chestName = held.chest.getComponent(Named)?.id ?? held.chest.id;
-		const lock = held.chest.getComponent(Lock);
-		if (lock?.locked) {
-			return { ok: false, reason: `${chestName} is locked — unlock it first` };
-		}
-		const reason = takeFromChest(character, held);
-		const ok = reason.startsWith('took ');
-		if (ok) {
-			character.getComponent(Appearance)?.playClip('take', Time.time, held.chest);
-			host.arc?.pushEvent({ kind: 'PickedUp', text: `{0} picked up ${name}`, who: [idOf(character)], tags: ['item', name], major: false });
-			host.hooks.afterPickUp?.(host, character, name);
-		}
-		return { ok, reason };
-	}
-	const named = host.world.findNamed(name);
-	if (named?.getComponent(BridgeLever)) {
-		return { ok: false, reason: `${name} is a sluice, not loot. Only BridgeKeeper uses BridgeCrank on BridgeLever` };
-	}
-	if (named?.getComponent(HumanBody) || named?.getComponent(MarketNPC)) {
-		return { ok: false, reason: `cannot pick up ${name}` };
-	}
-	if (named) {
-		const kind = named.getComponent(Door)
-			? 'a door'
-			: named.getComponent(Bridge)
-				? 'a bridge'
-				: 'not loot';
-		return { ok: false, reason: `${name} is ${kind}` };
-	}
-	// Someone has it: it is theirs to hand over, and saying where it is beats "no such item".
-	const holder = host.world.objects.find((go) => go !== character && !!go.getComponent(HumanBody)
-		&& !!findCarried(go, (it) => itemMatchesName(it, name)));
-	if (holder) {
-		const who = idOf(holder);
-		return { ok: false, reason: `${who} carries ${name}. You cannot take it; ${who} must give it to you` };
-	}
-	return { ok: false, reason: `no such item ${name}` };
-}
-
-/** `character` puts a carried item down where it stands. */
-export function dropCarried(character:GameObject, name:string):Outcome {
-	const item = findItem(character, name);
-	if (!item) {
-		return { ok: false, reason: `not carrying ${name}` };
-	}
-	removeFromBags(character, item);
-	const human = character.getComponent(HumanBody);
-	if (human) {
-		for (const slot of BODY_SLOTS) {
-			if (slotItem(human, slot) === item) {
-				human.slots[slot] = null;
-			}
-		}
-	}
-	dropItem(character, item);
-	return { ok: true, reason: `dropped ${item.name}` };
-}
-
 /** Take `count` off the stack `item` that `character` carries: a split-off stack, or `item` itself when that is all of it. */
 export function takeSome(character:GameObject, item:ItemInstance, count = 1):ItemInstance {
 	const gift = item.count > count ? cloneItem(item, count) : item;
@@ -169,57 +95,6 @@ export function takeSome(character:GameObject, item:ItemInstance, count = 1):Ite
 	return gift;
 }
 
-/** Undo `takeSome`: put `taken` back onto `original`. */
-export function restoreSome(character:GameObject, taken:ItemInstance, original:ItemInstance):void {
-	if (taken === original) {
-		tryInsert(character, taken);
-		return;
-	}
-	original.count += taken.count;
-}
-
-export function settleGive(from:GameObject, to:GameObject, itemName:string, quantity = 1):ArcResult {
-	if (to === from) {
-		return { ok: false, verb: 'give', reason: 'cannot give to yourself' };
-	}
-	const count = Math.max(1, Math.floor(quantity) || 1);
-	if (compactName(itemName) === 'gold' && !findItem(from, itemName)) {
-		return settlePay(from, to, count);
-	}
-	const item = findItem(from, itemName);
-	if (!item) {
-		return { ok: false, verb: 'give', reason: `not carrying ${itemName}` };
-	}
-	if (item.count < count) {
-		return { ok: false, verb: 'give', reason: `carrying only ${item.count} ${itemName}` };
-	}
-	const gift = takeSome(from, item, count);
-	const roomless = !tryInsert(to, gift);
-	if (roomless) {
-		// The player and whoever a companion follows get it at their feet; anyone else refuses.
-		if (to.id !== 'Player' && idOf(to) !== from.getComponent(Companion)?.targetID) {
-			restoreSome(from, gift, item);
-			return { ok: false, verb: 'give', reason: `${idOf(to)} has no room` };
-		}
-		dropItem(to, gift);
-	}
-	const label = pascalCase(gift.name) || gift.name;
-	playHandoff(from, to);
-	return { ok: true, verb: 'give', reason: `gave ${label} to ${idOf(to)}${roomless ? ' (left at their feet — no room)' : ''}` };
-}
-
-export function settlePay(from:GameObject, to:GameObject, amount:number):ArcResult {
-	if (to === from) {
-		return { ok: false, verb: 'give', reason: 'cannot give to yourself' };
-	}
-	const err = transferCoins(from, to, amount);
-	if (err) {
-		return { ok: false, verb: 'give', reason: err };
-	}
-	playHandoff(from, to);
-	return { ok: true, verb: 'give', reason: `gave ${amount} gold to ${idOf(to)}` };
-}
-
 function playHandoff(from:GameObject, to:GameObject):void {
 	const t = Time.time;
 	from.getComponent(Appearance)?.playClip('give', t, to);
@@ -227,62 +102,147 @@ function playHandoff(from:GameObject, to:GameObject):void {
 	cueAt(from.world, 'give', from);
 }
 
-/** Move every entry of `bundle`, pushing how to put each back onto `undo`. `whose` names `from` in a refusal: `you have`, `Baker has`. */
-function moveBundle(from:GameObject, to:GameObject, bundle:Record<string, number>, whose:string, undo:Array<()=>void>):string | null {
-	for (const [name, count] of Object.entries(bundle)) {
-		if (count <= 0) {
-			continue;
-		}
-		if (compactName(name) === 'gold') {
-			const have = coinsOf(from);
-			if (have < count) {
-				return `${whose} only ${have} gold`;
-			}
-			transferCoins(from, to, count);
-			undo.push(() => {
-				transferCoins(to, from, count);
-			});
-			continue;
-		}
-		const stock = findItem(from, name);
-		if (!stock || stock.count < count) {
-			return stock ? `${whose} only ${stock.count} ${name}` : `${whose} no ${name}`;
-		}
-		const gift = takeSome(from, stock, count);
-		if (!tryInsert(to, gift)) {
-			restoreSome(from, gift, stock);
-			return `${idOf(to)} has no room`;
-		}
-		undo.push(() => {
-			const held = findItem(to, name);
-			if (held) {
-				const back = takeSome(to, held, Math.min(count, held.count));
-				if (!tryInsert(from, back)) {
-					dropItem(from, back);
-				}
-			}
-		});
+/** A thief just takes it; anything else is handed over. */
+function handOver(verb:string, from:GameObject, to:GameObject):void {
+	if (verb === 'steal') {
+		to.getComponent(Appearance)?.playClip('take', Time.time);
 	}
-	return null;
+	else {
+		playHandoff(from, to);
+	}
 }
 
-/** `character` took `other`'s offer: `give` and `get` change hands at once, or nothing moves. */
-export function settleExchange(host:GameHost, character:GameObject, other:GameObject, give:Record<string, number>, get:Record<string, number>):Outcome {
-	const undo:Array<()=>void> = [];
-	const otherID = idOf(other);
-	const err = moveBundle(character, other, give, 'you have', undo) ?? moveBundle(other, character, get, `${otherID} has`, undo);
-	if (err) {
-		for (const step of undo.reverse()) {
-			step();
+const isGold = (name:string):boolean => compactName(name) === 'gold';
+
+/** Whether `to` keeps what it has no room for at its feet: the player, and whoever a companion follows, never refuse a gift. */
+function keepsAtFeet(from:GameObject, to:GameObject):boolean {
+	return to.id === 'Player' || idOf(to) === from.getComponent(Companion)?.targetID;
+}
+
+/**
+ * Why `move` cannot happen, or nothing: the game's item rules, for ArcDirector's verbs (`validateTransfer`) and the
+ * steal verb alike. `deal` is what else changes hands with it: an item leaving `to` in the same trade frees a slot.
+ */
+export function transferRefusal(host:GameHost, move:Transfer<GameObject>, deal?:Deal<GameObject>):string | undefined {
+	const { verb, thing, from, to } = move;
+	if (verb === 'pick_up') {
+		return takeRefusal(host, to!, thing);
+	}
+	if (to === from) {
+		return 'cannot give to yourself';
+	}
+	const count = countOf(move);
+	if (isGold(thing) && !findItem(from, thing)) {
+		const have = coinsOf(from);
+		return have < count ? `${idOf(from)} has only ${have} gold` : undefined;
+	}
+	const stock = findItem(from, thing);
+	if (!stock || stock.count < count) {
+		return stock ? `${idOf(from)} has only ${stock.count} ${thing}` : `${idOf(from)} has no ${thing}`;
+	}
+	// A whole stack leaving `to` in the same trade frees its slot first.
+	const room = !to || hasRoom(to, stock, count) || keepsAtFeet(from, to) || !!deal?.leaving(to).some((m) => !isGold(m.thing));
+	return room ? undefined : `${idOf(to)} has no room`;
+}
+
+/** Why `character` cannot take `name` off the ground or out of a chest, or nothing. */
+function takeRefusal(host:GameHost, character:GameObject, name:string):string | undefined {
+	const loot = host.world.findNamed(name);
+	if (loot?.getComponent(Pickupable)) {
+		const crop = loot.getComponent(Harvest);
+		if (crop && !characterIs(character, crop.harvester)) {
+			return `only ${crop.harvester} can harvest that`;
 		}
-		return { ok: false, reason: err };
+		const inst = captureItem(loot);
+		if (isBackpack(inst)) {
+			return character.getComponent(HumanBody) ? undefined : 'cannot equip that';
+		}
+		return hasRoom(character, inst, inst.count) ? undefined : 'no room';
 	}
-	playHandoff(character, other);
-	for (const name of Object.keys(get)) {
-		dropBoughtTag(host, character, name);
+	const held = findChestHolding(host.world, name);
+	if (held) {
+		const chestName = held.chest.getComponent(Named)?.id ?? held.chest.id;
+		if (held.chest.getComponent(Lock)?.locked) {
+			return `${chestName} is locked — unlock it first`;
+		}
+		if (held.chest.getComponent(Chest)?.open === false) {
+			return `${chestName} is closed`;
+		}
+		return hasRoom(character, held.item, held.item.count) ? undefined : 'no room';
 	}
-	for (const name of Object.keys(give)) {
-		dropBoughtTag(host, other, name);
+	const named = host.world.findNamed(name);
+	if (named?.getComponent(BridgeLever)) {
+		return `${name} is a sluice, not loot. Only BridgeKeeper uses BridgeCrank on BridgeLever`;
 	}
-	return { ok: true, reason: `traded ${bundleText(give)} for ${bundleText(get)} with ${otherID}` };
+	if (named?.getComponent(HumanBody) || named?.getComponent(MarketNPC)) {
+		return `cannot pick up ${name}`;
+	}
+	if (named) {
+		return `${name} is ${named.getComponent(Door) ? 'a door' : named.getComponent(Bridge) ? 'a bridge' : 'not loot'}`;
+	}
+	// Someone has it: it is theirs to hand over, and saying where it is beats "no such item".
+	const holder = host.world.objects.find((go) => go !== character && !!go.getComponent(HumanBody)
+		&& !!findCarried(go, (it) => itemMatchesName(it, name)));
+	if (holder) {
+		const who = idOf(holder);
+		return `${who} carries ${name}. You cannot take it; ${who} must give it to you`;
+	}
+	return `no such item ${name}`;
+}
+
+/**
+ * Makes `move`, which `transferRefusal` allowed: with its animation and what everyone hears of it. Returns how to
+ * take it back. A pick-up or a drop is alone in its deal, so nothing after it can fail and its undo never runs.
+ */
+export function doTransfer(host:GameHost, move:Transfer<GameObject>):()=>void {
+	const { verb, thing, from, to } = move;
+	if (verb === 'pick_up') {
+		takeLoot(host, to!, thing);
+		return () => undefined;
+	}
+	if (!to) {
+		const item = findItem(from, thing)!;
+		takeSome(from, item, item.count);
+		dropItem(from, item);
+		return () => undefined;
+	}
+	const count = countOf(move);
+	if (isGold(thing) && !findItem(from, thing)) {
+		transferCoins(from, to, count);
+		handOver(verb, from, to);
+		return () => void transferCoins(to, from, count);
+	}
+	const stock = findItem(from, thing)!;
+	const gift = takeSome(from, stock, count);
+	if (!tryInsert(to, gift)) {
+		dropItem(to, gift);
+	}
+	handOver(verb, from, to);
+	dropBoughtTag(host, to, thing);
+	return () => {
+		const held = findItem(to, thing);
+		if (held) {
+			const back = takeSome(to, held, Math.min(count, held.count));
+			if (!tryInsert(from, back)) {
+				dropItem(from, back);
+			}
+		}
+	};
+}
+
+/** `character` takes `name` off the ground or out of a chest, and everyone hears of it. ArcDirector already brought it in reach. */
+function takeLoot(host:GameHost, character:GameObject, name:string):void {
+	const loot = host.world.findNamed(name);
+	const held = loot?.getComponent(Pickupable) ? null : findChestHolding(host.world, name);
+	const reason = held ? takeFromChest(character, held) : pickup(character, loot!);
+	if (!/^(picked up|equipped|took) /.test(reason)) {
+		throw new Error(`taking ${name} failed after its rules allowed it: ${reason}`);
+	}
+	character.getComponent(Appearance)?.playClip('take', Time.time, held?.chest ?? loot);
+	host.arc?.pushEvent({ kind: 'PickedUp', text: `{0} picked up ${name}`, who: [idOf(character)], tags: ['item', name], major: false });
+	host.hooks.afterPickUp?.(host, character, name);
+}
+
+function countOf(move:Transfer<GameObject>):number {
+	return Math.max(1, Math.floor(move.quantity ?? 1) || 1);
 }

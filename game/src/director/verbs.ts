@@ -39,7 +39,7 @@ import {
 import { equipItem, unequipSlot } from '../items/equip';
 import { NPCInput } from '../characters/NPCInput';
 import type { GameHost } from './adapter';
-import { findItem, restoreSome, takeSome } from './items';
+import { doTransfer, findItem, transferRefusal } from './items';
 import { idOf, findObject, isLiving } from './names';
 import { applyHit } from './hitFeel';
 import { cueAt } from '../audio/cue';
@@ -313,7 +313,7 @@ async function closeTo(host:GameHost, call:Call, target:GameObject, range:number
 	}
 	const close = Math.max(0.9, range - 0.6);
 	if (distXZ(character, target) > close) {
-		const walk = await call.goTo(idOf(target), close);
+		const walk = await call.goTo(idOf(target), { within: close });
 		if (!walk.ok) {
 			return walk;
 		}
@@ -615,7 +615,7 @@ async function doProtect(host:GameHost, call:Call, name:string):Promise<ArcResul
 	}
 	const threat = nearestRival(host, ward);
 	if (!threat) {
-		const walk = await call.goTo(idOf(ward), 1.4);
+		const walk = await call.goTo(idOf(ward), { within: 1.4 });
 		if (!walk.ok) {
 			return { ...walk, verb: 'protect' };
 		}
@@ -822,17 +822,14 @@ async function doSteal(host:GameHost, call:Call, itemName:string, fromName:strin
 	if (!walk.ok) {
 		return { ...walk, verb: 'steal' };
 	}
+	const move = { verb: 'steal', thing: itemName, from: victim, to: ctx.character };
+	const refused = transferRefusal(host, move);
+	if (refused) {
+		return { ok: false, verb: 'steal', reason: refused };
+	}
 	const stock = findItem(victim, itemName);
-	if (!stock) {
-		return { ok: false, verb: 'steal', reason: `${fromName} has no ${itemName}` };
-	}
-	const gift = takeSome(victim, stock);
-	if (!tryInsert(ctx.character, gift)) {
-		restoreSome(victim, gift, stock);
-		return { ok: false, verb: 'steal', reason: 'no room' };
-	}
-	const label = pascalCase(gift.name) || gift.name;
-	ctx.character.getComponent(Appearance)?.playClip('take', Time.time);
+	const label = pascalCase(stock?.name ?? itemName) || itemName;
+	doTransfer(host, move);
 	reportTheft(host, ctx.character, label, fromName, 'stole without paying');
 	return { ok: true, verb: 'steal', reason: `stole ${label} from ${fromName}` };
 }

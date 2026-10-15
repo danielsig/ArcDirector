@@ -8,7 +8,7 @@ import type { SpeechUtterance } from '../mind/talk.js';
 import type { Inventory } from '../perception/inventory.js';
 import type { Sight } from '../perception/types.js';
 import { geometryKernels } from '../world/kernels.js';
-import type { Exchange, HostWorld, ItemMove, Outcome, PathGraph, Pose, Vec } from '../world/types.js';
+import { RESERVED_TAGS, type HostWorld, type Outcome, type PathGraph, type Pose, type Transfer, type Vec } from '../world/types.js';
 import { distance } from '../world/vec.js';
 
 /** Where someone or something is, seen from the one the scene is about, and what a character there has. */
@@ -192,29 +192,42 @@ export class SceneWorld implements HostWorld<string> {
 		return step >= gap;
 	}
 
-	public moveItem({ character, item, to, quantity = 1 }:ItemMove<string>):Outcome {
-		if (to === character) {
-			if (!this._points.has(item) || this._characters.includes(item)) {
-				return { ok: false, reason: this.find(item) ? `${this.find(item)} has ${item}` : `there is no ${item}` };
+	public validateTransfer({ verb, thing, from, to, quantity = 1 }:Transfer<string>):string | undefined {
+		if (verb === 'pick_up') {
+			if (from !== thing || this._characters.includes(thing)) {
+				return `${from} has ${thing}`;
 			}
-			if (!this.hasLineOfSight(character, item)) {
-				return { ok: false, reason: `too dark to see ${item}` };
-			}
-			this._points.delete(item);
-			this.add(character, item, 1);
-			return { ok: true };
+			return this.hasLineOfSight(to!, thing) ? undefined : `too dark to see ${thing}`;
 		}
-		if (this.count(character, item) < quantity) {
-			return { ok: false, reason: `you do not have ${quantity} ${item}` };
+		if (this.count(from, thing) < quantity) {
+			return verb === 'offer' ? `not enough ${thing}` : `you do not have ${quantity} ${thing}`;
 		}
-		this.add(character, item, -quantity);
+		return undefined;
+	}
+
+	public transfer({ verb, thing, from, to, quantity = 1 }:Transfer<string>):()=>void {
+		if (verb === 'pick_up') {
+			const at = this._points.get(thing)!;
+			this._points.delete(thing);
+			this.add(to!, thing, 1);
+			return () => {
+				this.add(to!, thing, -1);
+				this._points.set(thing, at);
+			};
+		}
+		this.add(from, thing, -quantity);
 		if (to) {
-			this.add(to, item, quantity);
+			this.add(to, thing, quantity);
+			return () => {
+				this.add(to, thing, -quantity);
+				this.add(from, thing, quantity);
+			};
 		}
-		else {
-			this._points.set(item, [...this._points.get(character)!]);
-		}
-		return { ok: true };
+		this._points.set(thing, [...this._points.get(from)!]);
+		return () => {
+			this._points.delete(thing);
+			this.add(from, thing, quantity);
+		};
 	}
 
 	public useItem(character:string, item:string, target?:string):Outcome {
@@ -225,23 +238,6 @@ export class SceneWorld implements HostWorld<string> {
 		return use ? { ok: true, reason: use(this) } : { ok: false, reason: 'nothing happens' };
 	}
 
-	public exchange({ character, other, give, get }:Exchange<string>):Outcome {
-		const short = (who:string, bundle:CountMap) => Object.entries(bundle).find(([item, n]) => this.count(who, item) < n)?.[0];
-		const lacking = short(character, give) ?? short(other, get);
-		if (lacking) {
-			return { ok: false, reason: `not enough ${lacking}` };
-		}
-		for (const [item, n] of Object.entries(give)) {
-			this.add(character, item, -n);
-			this.add(other, item, n);
-		}
-		for (const [item, n] of Object.entries(get)) {
-			this.add(other, item, -n);
-			this.add(character, item, n);
-		}
-		return { ok: true };
-	}
-
 	/** One of {@link FIGHT_VERBS}: close in to its range, then the target falls, if it can be seen. A foe that hits back may fell the attacker first. */
 	public async attack<TCtx>(call:VerbCall<TCtx>):Promise<ArcResult> {
 		const me = call.character.id;
@@ -250,7 +246,7 @@ export class SceneWorld implements HostWorld<string> {
 		if (!this.find(target)) {
 			return fail(`no one called ${target}`);
 		}
-		const near = await call.goTo(target, RANGES[call.verb] ?? REACH);
+		const near = await call.goTo(target, { within: RANGES[call.verb] ?? REACH });
 		if (!near.ok) {
 			return near;
 		}
@@ -373,7 +369,7 @@ export class SceneWorld implements HostWorld<string> {
 			objects: [
 				...others.map((other) => {
 					const hp = this._hp.get(other);
-					return { id: other, point: this._points.get(other)!, tags: ['person'], ...(hp ? { hp: hp[0], maxHP: hp[1] } : {}) };
+					return { id: other, point: this._points.get(other)!, tags: [RESERVED_TAGS.character], ...(hp ? { hp: hp[0], maxHP: hp[1] } : {}) };
 				}),
 				...Object.keys(this.scene.things ?? {}).filter((thing) => this._points.has(thing))
 					.map((thing) => ({ id: thing, point: this._points.get(thing)!, tags: [], interactable: true })),

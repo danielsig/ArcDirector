@@ -234,7 +234,7 @@ export function createDirector(host:GameHost):ArcDirector<CharacterCtx> {
 				if (npc.wants.length > 0) {
 					return { ok: true, verb: 'leave', reason: 'still shopping' };
 				}
-				return call.goTo(npc.leaveGate, 0.45);
+				return call.goTo(npc.leaveGate, { within: 0.45 });
 			},
 		})
 		.addVerb('stand', {
@@ -245,7 +245,7 @@ export function createDirector(host:GameHost):ArcDirector<CharacterCtx> {
 				if (!post) {
 					return { ok: false, verb: 'stand', reason: 'no gate to hold' };
 				}
-				return call.goToPoint([post.x, post.z], 0.35);
+				return call.goToPoint([post.x, post.z], { within: 0.35 });
 			},
 		})
 		.addCollective({

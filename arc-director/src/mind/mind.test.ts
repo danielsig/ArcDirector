@@ -239,7 +239,7 @@ describe('Agent', () => {
 	it('keeps last-seen of a name after it leaves sight, and nothing for names it only heard of', async () => {
 		const sight = {
 			self: { id: 'Angler', point: [0, 0] },
-			objects: [named('Forager', { tags: ['person'], x: 3, z: 0 })],
+			objects: [named('Forager', { tags: ['character'], x: 3, z: 0 })],
 		};
 		let scene = `${formatSight(sight)} Carrying: Purse, Knife.`;
 		const users:string[] = [];
@@ -2234,25 +2234,22 @@ describe('repairs, mind verbs, and names', () => {
 		});
 	}
 
-	it('repairs a truncated reply without parsing it or reasoning, and warms up from the second repair', async () => {
-		const temps:Array<number | undefined> = [];
+	it('repairs a truncated reply without parsing it or reasoning', async () => {
 		const thinking:Array<boolean | undefined> = [];
 		const provider = new FakeProvider((req) => {
-			temps.push(req.temperature);
 			thinking.push(req.enableThinking);
-			if (temps.length === 1) {
+			if (thinking.length === 1) {
 				return { content: 'go_to(Kee', toolCalls: [], truncated: true };
 			}
-			if (temps.length === 2) {
+			if (thinking.length === 2) {
 				assert.match(String(req.messages.at(-1)?.content), /cut off at the token limit/);
 				assert.equal(req.messages.some((m) => String(m.content).includes('go_to(Kee')), false);
 				return { content: 'nonsense(', toolCalls: [] };
 			}
 			return { content: 'go_to(EastGate)', toolCalls: [] };
 		});
-		const arc = await agentOf(provider, { repairTemperature: 0.7 }).mind!.tick(1);
+		const arc = await agentOf(provider).mind!.tick(1);
 		assert.equal(arc?.[0].args.target, 'EastGate');
-		assert.deepEqual(temps, [0, 0, 0.7]);
 		assert.deepEqual(thinking, [true, false, false]);
 	});
 

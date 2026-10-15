@@ -4,6 +4,7 @@ import { mapArc, mapExpr } from '../mind/ids.js';
 import { evaluate } from '../expr/eval.js';
 import { buildCatalog, dummyEntity, type HostKernels } from '../expr/natives.js';
 import type { Catalog, ExprEntity, ExprVal } from '../expr/types.js';
+import { RESERVED_TAGS } from '../world/types.js';
 import type { Character } from '../character/character.js';
 import type { Collective } from './collective.js';
 import { shortTags } from './tags.js';
@@ -33,7 +34,7 @@ export function collectiveKernels<TCtx>(base:HostKernels, collective:Collective<
 	const troops = commander ? all.filter((c) => c !== commander) : all;
 	const me = commander
 		? memberEntity(commander, collective.id)
-		: (base.me ?? dummyEntity(collective.id, { tags: ['agent'] }));
+		: (base.me ?? dummyEntity(collective.id, { tags: [RESERVED_TAGS.character] }));
 	return {
 		...base,
 		me,

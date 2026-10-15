@@ -27,10 +27,10 @@ function xz(a:ExprEntity, b:ExprEntity):number {
 }
 
 function world(extra:Partial<HostKernels> = {}):HostKernels {
-	const me = posed('Guard', { x: 0, z: 0, tags: ['agent'] });
-	const A = posed('A', { x: 5, z: 0, tags: ['agent'] });
-	const B = posed('B', { x: 12, z: 0, tags: ['agent'] });
-	const Player = posed('Player', { x: 5, z: 0, tags: ['agent'] });
+	const me = posed('Guard', { x: 0, z: 0, tags: ['character'] });
+	const A = posed('A', { x: 5, z: 0, tags: ['character'] });
+	const B = posed('B', { x: 12, z: 0, tags: ['character'] });
+	const Player = posed('Player', { x: 5, z: 0, tags: ['character'] });
 	const lantern = posed('Lantern', { x: 3, z: 0, tags: ['item', 'key'] });
 	const door = posed('CottageDoor', { x: 1, z: 0, tags: ['door'] });
 	const theft = posed('Theft', { x: 5, z: 0, tags: ['theft'] });
@@ -436,7 +436,7 @@ describe('evaluate', () => {
 	});
 
 	it('prev.me is a freeze; hasJustReceived is the bag edge', () => {
-		const empty = dummyEntity('Guard', { tags: ['agent'] });
+		const empty = dummyEntity('Guard', { tags: ['character'] });
 		empty.fields = { inventory: { kind: 'list', value: [] } };
 		const host = world({ prev: { secondsAgo: 2, me: empty } });
 		assert.equal(bool('isCarrying("Lantern")', host), true);
@@ -458,7 +458,7 @@ describe('evaluate', () => {
 
 	it('isHurt is false at 0 hp', () => {
 		const it = dummyEntity('Witch', {
-			tags: ['agent'],
+			tags: ['character'],
 			fields: {
 				hp: { kind: 'number', value: 0 },
 				maxHP: { kind: 'number', value: 12 },
@@ -474,7 +474,7 @@ describe('evaluate', () => {
 
 	it('isHurt reads snapshot hp on it when lookup finds nothing', () => {
 		const it = dummyEntity('Witch', {
-			tags: ['agent'],
+			tags: ['character'],
 			fields: {
 				hp: { kind: 'number', value: 2 },
 				maxHP: { kind: 'number', value: 12 },
@@ -505,8 +505,8 @@ describe('evaluate', () => {
 
 	it('approaching / departing list filters', () => {
 		const cache = new SampleCache();
-		const me = posed('Guard', { x: 0, z: 0, tags: ['agent'] });
-		const A = posed('A', { x: 10, z: 0, tags: ['agent'] });
+		const me = posed('Guard', { x: 0, z: 0, tags: ['character'] });
+		const A = posed('A', { x: 10, z: 0, tags: ['character'] });
 		const theft = posed('Theft', { x: 10, z: 0, tags: ['theft'] });
 		const host = world({
 			cache,
@@ -586,7 +586,7 @@ describe('stringify', () => {
 
 	it('isBusy / doing read entity fields; listCap lifts selector cap', () => {
 		const mira = dummyEntity('Mira', {
-			tags: ['agent'],
+			tags: ['character'],
 			fields: {
 				busy: { kind: 'bool', value: true },
 				verb: { kind: 'string', value: 'go_to' },
@@ -601,7 +601,7 @@ describe('stringify', () => {
 		assert.equal(bool('isBusy(Mira)', host), true);
 		assert.equal(bool('doing(Mira, "go_to")', host), true);
 		assert.equal(bool('doing(Mira, "wait")', host), false);
-		const rows = Array.from({ length: 40 }, (element, i) => dummyEntity(`U${i}`, { tags: ['agent'] }));
+		const rows = Array.from({ length: 40 }, (element, i) => dummyEntity(`U${i}`, { tags: ['character'] }));
 		const cat = buildCatalog({
 			...world(),
 			listCap: 40,

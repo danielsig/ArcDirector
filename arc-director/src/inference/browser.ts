@@ -1,7 +1,7 @@
 import { stripTemplateTokens, type ModelSettings } from './http.js';
 import { ModelDownload, type DownloadProgress } from './download.js';
 import { SchemaGrammar, type SchemaConstraint, type TokenizerJSON } from './grammar.js';
-import { chatContentText, type ChatMessage, type ChatRequest, type ChatResponse, type InferenceProvider } from './provider.js';
+import { chatContentText, samplingOf, type ChatMessage, type ChatRequest, type ChatResponse, type InferenceProvider } from './provider.js';
 
 /** Gemma 4 E4B: the best Arcs of any model small enough to run in a browser. */
 export const DEFAULT_BROWSER_MODEL = 'onnx-community/gemma-4-E4B-it-ONNX';
@@ -29,7 +29,7 @@ type LoadOpts = {
 	progress_callback:(info:{ status:string; progress?:number; loaded?:number; total?:number })=>void;
 };
 
-type Tensor = {
+export type Tensor = {
 	type:string;
 	dims:number[];
 	data:ArrayLike<number>;
@@ -37,10 +37,11 @@ type Tensor = {
 	tolist():unknown[];
 };
 
-type LogitsProcessor = (ids:bigint[][], logits:Tensor)=>Tensor;
+export type LogitsProcessor = (ids:bigint[][], logits:Tensor)=>Tensor;
 
-type Tokenizer = {
+export type Tokenizer = {
 	apply_chat_template(messages:{ role:string; content:string }[], opts:Record<string, unknown>):{ input_ids:Tensor; attention_mask:Tensor };
+	encode(text:string, opts:{ add_special_tokens:boolean }):number[];
 	decode(ids:number[], opts:{ skip_special_tokens:boolean }):string;
 	all_special_tokens:string[];
 };
@@ -161,21 +162,24 @@ export class BrowserProvider implements InferenceProvider {
 			const { tokenizer, engine } = loaded;
 			const transformers = await importTransformers();
 			const settings = this._settings.get(req.model);
-			// A schema's grammar holds from the first token, so a thought cannot come first.
-			const thinking = !req.responseFormat && (req.enableThinking ?? settings?.enableThinking ?? false);
+			const thinking = req.enableThinking ?? settings?.enableThinking ?? false;
 			const inputs = tokenizer.apply_chat_template(textMessages(req.messages), {
 				add_generation_prompt: true,
 				return_dict: true,
 				enable_thinking: thinking,
 			});
 			const prompt = inputs.input_ids.dims[1];
+			// A template may open the thought itself, so the reply holds only its close.
+			const tail = tokenizer.decode((inputs.input_ids.tolist()[0] as bigint[]).slice(-8).map(Number), { skip_special_tokens: false }).trimEnd();
+			const opened = thinking ? THOUGHTS.find(({ open }) => tail.endsWith(open))?.open : undefined;
 			// A 16-bit model scores in 16 bits; the schema forbids a token by setting its score to -Infinity, which needs 32.
 			const processors:LogitsProcessor[] = [(_ids, logits) => (logits.type === 'float32' ? logits : logits.to('float32'))];
 			let constraint:SchemaConstraint | undefined;
 			if (req.responseFormat) {
 				loaded.grammar ??= grammarFor(tokenizer, engine);
-				constraint = await (await loaded.grammar).constrain(req.responseFormat.schema, prompt);
-				processors.push(constraint.process);
+				// Fed only the answer's tokens, so it starts at 0 whether or not a thought came first.
+				constraint = await (await loaded.grammar).constrain(req.responseFormat.schema, 0);
+				processors.push(thinking ? afterThought(constraint, tokenizer, prompt, opened) : (ids, logits) => constraint!.process([ids[0].slice(prompt)], logits));
 			}
 			const n = req.topLogprobs;
 			let logprobs:Record<string, number> | undefined;
@@ -190,9 +194,6 @@ export class BrowserProvider implements InferenceProvider {
 			const budget = thinking ? settings?.thinkingBudget : undefined;
 			let cut = false;
 			if (budget !== undefined) {
-				// A template may open the thought itself, so the reply holds only its close.
-				const tail = tokenizer.decode((inputs.input_ids.tolist()[0] as bigint[]).slice(-8).map(Number), { skip_special_tokens: false }).trimEnd();
-				const opened = THOUGHTS.find(({ open }) => tail.endsWith(open))?.open;
 				processors.push((ids, logits) => {
 					const made = ids[0].length - prompt;
 					if (!cut && made > budget && made % 8 === 0 && inThought(tokenizer.decode(ids[0].slice(prompt).map(Number), { skip_special_tokens: false }), opened)) {
@@ -205,12 +206,12 @@ export class BrowserProvider implements InferenceProvider {
 			req.signal?.addEventListener('abort', interrupt);
 			const maxTokens = req.maxTokens ?? DEFAULT_MAX_TOKENS;
 			try {
-				const temperature = req.temperature ?? 0;
+				const { temperature = 0, topP, topK } = samplingOf(settings?.sampling, req.sampling);
 				const out = await engine.generate({
 					...inputs,
 					max_new_tokens: maxTokens,
 					do_sample: temperature > 0,
-					...temperature > 0 ? { temperature } : {},
+					...temperature > 0 ? { temperature, top_p: topP, top_k: topK } : {},
 					logits_processor: processors,
 					stopping_criteria: [stop],
 				});
@@ -347,6 +348,58 @@ export function splitThought(text:string):{ content:string | null; reasoning?:st
  */
 export function inThought(text:string, opened?:string):boolean {
 	return THOUGHTS.some(({ open, close }) => (opened === open || text.includes(open)) && !text.includes(close));
+}
+
+/**
+ * `constraint` on the answer after a thought, as servers hold reasoning models to a schema. A reply opened by the
+ * template (`opened`) is thought until it closes. Otherwise its first token may start the answer or a thought's open
+ * marker, whose rest is then forced. Once the thought closes, the grammar holds every later token.
+ */
+export function afterThought(constraint:SchemaConstraint, tokenizer:Tokenizer, prompt:number, opened:string | undefined):LogitsProcessor {
+	const openers = opened ? [] : THOUGHTS.map(({ open }) => tokenizer.encode(open, { add_special_tokens: false })).filter((ids) => ids.length > 0);
+	const closes = THOUGHTS.map(({ close }) => close);
+	/** Where the answer starts in the reply; undefined while thinking or not yet known. */
+	let from:number | undefined;
+	return (ids, logits) => {
+		const reply = ids[0].slice(prompt);
+		if (from === undefined && !opened) {
+			const opener = openers.find((o) => reply.every((id, i) => i >= o.length || Number(id) === o[i]));
+			if (!opener) {
+				from = 0;
+			}
+			else if (reply.length === 0) {
+				// The answer's first tokens, or a thought's.
+				const scores = logits.data as Float32Array;
+				const base = scores.length - logits.dims[logits.dims.length - 1];
+				const kept = openers.map((o) => scores[base + o[0]]);
+				constraint.process([reply], logits);
+				openers.forEach((o, i) => scores[base + o[0]] = kept[i]);
+				return logits;
+			}
+			else if (reply.length < opener.length) {
+				return onlyToken(logits, opener[reply.length]);
+			}
+		}
+		if (from === undefined) {
+			const recent = tokenizer.decode(reply.slice(-8).map(Number), { skip_special_tokens: false });
+			if (!closes.some((close) => recent.includes(close))) {
+				return logits;
+			}
+			from = reply.length;
+		}
+		return constraint.process([reply.slice(from)], logits);
+	};
+}
+
+/** `logits` with every token but `id` refused. */
+function onlyToken(logits:Tensor, id:number):Tensor {
+	const scores = logits.data as Float32Array;
+	const vocab = logits.dims[logits.dims.length - 1];
+	const base = scores.length - vocab;
+	const keep = scores[base + id];
+	scores.fill(-Infinity, base);
+	scores[base + id] = keep;
+	return logits;
 }
 
 /** `text` without any of `tokens`: a model's end-of-turn and other special tokens. */

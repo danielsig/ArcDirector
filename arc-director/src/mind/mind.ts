@@ -4,7 +4,7 @@ import { exprArgs } from '../arc/validate.js';
 import { docsFor, replySchema } from '../arc/schema.js';
 import { FOCUS_EDIT_VERBS, VerbRegistry, WATCH_EDIT_VERBS, argBase, registerStockVerbs } from '../arc/stock-verbs.js';
 import type { Arc, ArcResult, Step } from '../arc/types.js';
-import { ArcError } from '../arc/types.js';
+import { ArcError, BlockedArcError } from '../arc/types.js';
 import { evaluate, unboundCalls } from '../expr/eval.js';
 import { observeExpr } from '../expr/stringify.js';
 import { bagOf, cloneEntity } from '../expr/prev.js';
@@ -114,8 +114,6 @@ export type MindDeps<TCtx = unknown> = {
 	arcRetryCap?:number;
 	/** How the model writes an Arc: `text` (`go_to() && wait()`), `json`, or `schema` (JSON the server enforces). Default `json`. */
 	arcFormat?:ArcFormat;
-	/** Sampling temperature from the second repair turn on, so a model stuck on one bad reply moves. Default 0.4. */
-	repairTemperature?:number;
 	thinkInstructions?:ThinkInstructions;
 	/** Whether the model reasons before it answers. Picks the think line and asks the server for it. Default: it does. */
 	thinking?:()=>boolean;
@@ -352,7 +350,6 @@ export class Mind<TCtx = unknown> {
 	public arcRetryCap = 0;
 	/** Mutable so the Testing toggle can flip live minds. */
 	public arcFormat:ArcFormat = 'json';
-	public repairTemperature = 0.4;
 	public thinkInstructions:ThinkInstructions | undefined;
 	public thinking:()=>boolean = () => true;
 	public verbInstructions:string | undefined;
@@ -448,7 +445,6 @@ export class Mind<TCtx = unknown> {
 		this.wayBlocked = deps.wayBlocked;
 		this.arcRetryCap = deps.arcRetryCap ?? 0;
 		this.arcFormat = deps.arcFormat ?? 'json';
-		this.repairTemperature = deps.repairTemperature ?? 0.4;
 		this.thinkInstructions = deps.thinkInstructions;
 		this.thinking = deps.thinking ?? (() => true);
 		this.verbInstructions = deps.verbInstructions;
@@ -890,7 +886,6 @@ export class Mind<TCtx = unknown> {
 			thread: this.id,
 			messages,
 			responseFormat: format === 'schema' ? { name: 'goals', schema: GOALS_SCHEMA, strict: true } : undefined,
-			temperature: 0,
 			enableThinking: thinking,
 		});
 		const asked:ChatMessage[] = [
@@ -1149,7 +1144,6 @@ export class Mind<TCtx = unknown> {
 			tools: sendTools ? tools : undefined,
 			toolChoice: sendTools ? 'none' : undefined,
 			responseFormat: this.replyFormat(verbs, format),
-			temperature: 0,
 			// "Confirm" cannot be written under a schema, so a reply there asks for the steps again, with no thought to fake.
 			...(schema ? { enableThinking: false } : { fakeThought: true }),
 		});
@@ -1216,9 +1210,6 @@ export class Mind<TCtx = unknown> {
 				tools: sendTools ? tools : undefined,
 				toolChoice: sendTools ? (allowTools ? 'auto' : 'none') : undefined,
 				responseFormat: reply,
-				temperature: this.arcRetryCap - repairsLeft > 1 || this._emitStreak >= 2
-					? this.repairTemperature
-					: 0,
 				// A repair keeps the whole conversation, so reasoning on top of it runs out of tokens again.
 				enableThinking: repairsLeft < this.arcRetryCap ? false : this.thinking(),
 			});
@@ -1312,7 +1303,7 @@ export class Mind<TCtx = unknown> {
 				const blocked = this.unreachableSay(arc);
 				const again = blocked ? undefined : this.blockedAgain(arc);
 				if (blocked || again) {
-					lastErr = new ArcError(blocked?.reason ?? again!);
+					lastErr = new BlockedArcError(blocked?.reason ?? again!);
 					if (checksLeft <= 0) {
 						throw lastErr;
 					}
@@ -1738,10 +1729,14 @@ export class Mind<TCtx = unknown> {
 			].filter(Boolean);
 			return marks.length > 0 ? `${this.nameOf(id)} (${marks.join('; ')})` : this.nameOf(id);
 		});
+		// Where the world can tell whether there is a way, say(to) walks up to them first.
+		const walks = this.wayBlocked !== undefined;
 		if (names.length === 0) {
-			return 'No one in talking range. say(to) will fail until you are closer.';
+			return walks ? 'No one in talking range. say(to) walks up to them first.' : 'No one in talking range. say(to) will fail until you are closer.';
 		}
-		return `In talking range: ${names.join(', ')}. say(to) only those names; get closer to anyone else first. Far-off speech is muffled.`;
+		return walks
+			? `In talking range: ${names.join(', ')}. say(to) walks up to them first. Far-off speech is muffled.`
+			: `In talking range: ${names.join(', ')}. say(to) only those names; get closer to anyone else first. Far-off speech is muffled.`;
 	}
 
 	/**
@@ -1771,11 +1766,23 @@ export class Mind<TCtx = unknown> {
 		if (!this.talk || head?.verb !== 'say') {
 			return undefined;
 		}
-		const check = this.talk.canSay(this.thinkThread(), sayToOf(head.args));
+		const to = sayToOf(head.args);
+		const check = this.talk.canSay(this.thinkThread(), to);
 		if (check.ok) {
 			return undefined;
 		}
-		return { reason: check.reason ?? 'not in earshot', nearby: check.nearby.map((id) => this.nameOf(id)) };
+		const nearby = check.nearby.map((id) => this.nameOf(id));
+		// Out of earshot is only a walk away, unless there is no way to them.
+		if (to !== undefined && this.wayBlocked && ![to].flat().includes(this.thinkThread())) {
+			for (const id of [to].flat()) {
+				const why = this.wayBlocked(id);
+				if (why !== undefined) {
+					return { reason: noWayTo(this.nameOf(id), why), nearby };
+				}
+			}
+			return undefined;
+		}
+		return { reason: check.reason ?? 'not in earshot', nearby };
 	}
 
 	private handleEarshot(args:unknown):unknown {
@@ -1975,7 +1982,10 @@ export class Mind<TCtx = unknown> {
 		if (step.verb === 'set_goal') {
 			const goal = String(step.args.goal ?? '');
 			const priority = typeof step.args.priority === 'number' ? step.args.priority : 0;
-			this.persona.goals.push({ text: voice ? goal : `[${by.id}] ${goal}`, priority });
+			const text = voice ? goal : `[${by.id}] ${goal}`;
+			// The same goal again only changes its priority.
+			this.persona.goals = this.persona.goals.filter((g) => g.text !== text);
+			this.persona.goals.push({ text, priority });
 			this.persona.trimGoals();
 			return { ok: true, verb: 'set_goal' };
 		}
@@ -2033,7 +2043,7 @@ export class Mind<TCtx = unknown> {
 			if (echo) {
 				return { ok: false, verb: 'say', reason: `they already heard you say that ("${echo}"). Saying it again changes nothing: act on it, or say something new` };
 			}
-			const result = by.speak(step);
+			const result = await by.speak(step);
 			if (result.ok && text) {
 				this._said = [...this._said, { gist: gistOf(text), text, heard: new Set(result.heard ?? []) }].slice(-SAID_CAP);
 				this.noteConversation({ speakerID: this.thinkThread(), to: [sayToOf(step.args) ?? []].flat(), text });

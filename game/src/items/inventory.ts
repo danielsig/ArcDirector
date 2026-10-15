@@ -126,6 +126,27 @@ export function tryInsert(character:GameObject, item:ItemInstance):boolean {
 	return item.count <= 0;
 }
 
+/** Whether `count` of `item` would fit in `character`'s bags, as `tryInsert` would put them: topping up stacks, else a free slot. */
+export function hasRoom(character:GameObject, item:ItemInstance, count:number):boolean {
+	if (isBackpack(item)) {
+		return false;
+	}
+	let left = count;
+	for (const bag of carryBags(character)) {
+		if (bag.contents.length < bag.size) {
+			return true;
+		}
+		if (item.stackable) {
+			for (const existing of bag.contents) {
+				if (existing.defID === item.defID) {
+					left -= Math.max(0, existing.maxStack - existing.count);
+				}
+			}
+		}
+	}
+	return left <= 0;
+}
+
 export function removeFromBags(character:GameObject, item:ItemInstance):boolean {
 	for (const bag of carryBags(character)) {
 		const i = bag.contents.indexOf(item);

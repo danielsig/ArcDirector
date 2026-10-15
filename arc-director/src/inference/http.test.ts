@@ -120,6 +120,27 @@ describe('HttpProvider thinking', () => {
 		assert.equal(bodies[1]?.['max_tokens'], 512);
 	});
 
+	it("samples as the model says, else by the default, and a request may override it", async () => {
+		const bodies:Record<string, unknown>[] = [];
+		const provider = new HttpProvider({
+			baseURL: 'http://127.0.0.1:9/v1',
+			fetch: async (input, init) => {
+				if (String(input).includes('/models') || String(input).includes('/responses')) {
+					return new Response('nope', { status: 404 });
+				}
+				bodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+				return new Response(JSON.stringify({ choices: [{ message: { content: 'ok' } }] }), { status: 200 });
+			},
+		});
+		provider.configureModel('gemma', { sampling: { temperature: 1, topK: 64, topP: 0.95 } });
+		const ask = (model:string, req?:Partial<ChatRequest>) => provider.chat({ model, messages: [{ role: 'user', content: 'hi' }], ...req });
+		await ask('other');
+		await ask('gemma');
+		await ask('gemma', { sampling: { temperature: 0 } });
+		const sampled = bodies.map((b) => [b['temperature'], b['top_p'], b['top_k']]);
+		assert.deepEqual(sampled, [[1, 0.95, undefined], [1, 0.95, 64], [0, 0.95, 64]]);
+	});
+
 	it('think-off no_think prefixes /no_think and prefills', async () => {
 		const model = idWithThinkOff('no_think');
 		const body = await captureBody({ maxTokens: 384 }, model);

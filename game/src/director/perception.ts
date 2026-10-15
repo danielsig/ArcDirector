@@ -1,6 +1,7 @@
 import { Time, yawToForward, type GameObject } from '@arc-director/kindling';
 import {
 	pascalCase,
+	RESERVED_TAGS,
 	type ArcResult,
 	type Inventory,
 	type SeenObject,
@@ -118,7 +119,7 @@ function tagsNow(go:GameObject):string[] {
 		tags.push('item');
 	}
 	if (go.getComponent(HumanBody)) {
-		tags.push('agent', 'person');
+		tags.push(RESERVED_TAGS.character);
 	}
 	if (go.getComponent(Wanted)?.enabled) {
 		tags.push('thief');
@@ -153,8 +154,8 @@ function poseXZ(go:GameObject):{ point:number[]; facing:number[] } {
 
 function seenOf(go:GameObject, observer?:GameObject, host?:GameHost):SeenObject {
 	const tags = host && observer ? [...tagsOf(go), ...fightExprTags(host, observer, go)] : tagsOf(go);
-	const agent = tags.includes('agent') || tags.includes('person');
-	const interactable = agent
+	const isCharacter = tags.includes(RESERVED_TAGS.character);
+	const interactable = isCharacter
 		|| !!go.getComponent(Door)
 		|| !!go.getComponent(Chest)
 		|| !!go.getComponent(Pickupable)
@@ -178,7 +179,7 @@ function seenOf(go:GameObject, observer?:GameObject, host?:GameHost):SeenObject 
 		row.interactable = true;
 		row.interesting = 1;
 	}
-	if (host && observer && agent) {
+	if (host && observer && isCharacter) {
 		const vitals = go.getComponent(Vitals);
 		if (vitals && fightRole(host, go)) {
 			row.hp = vitals.hp;

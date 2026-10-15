@@ -5,7 +5,8 @@ import type { Mover } from './mover.js';
 import { bundleText, isEmpty, offerText, type OfferBook } from './offers.js';
 import { poseOf } from './lookup.js';
 import { awayGoal, reachablePoints } from './route.js';
-import type { HostWorld, Vec } from './types.js';
+import { checkDeal, settleDeal } from './deal.js';
+import type { HostWorld, Transfer, Vec } from './types.js';
 import { add, centroid, distance, dot, groundAxes, sub, unit } from './vec.js';
 
 /** What the stock world verbs need besides the call itself. */
@@ -42,12 +43,12 @@ export const WORLD_VERB_PARTS:Readonly<Record<string, readonly WorldPart[]>> = {
 	spread: MOVING,
 	circle: MOVING,
 	hold_line: MOVING,
-	pick_up: ['moveItem'],
-	drop: ['moveItem'],
-	give: ['moveItem'],
+	pick_up: ['transfer'],
+	drop: ['transfer'],
+	give: ['transfer'],
 	use: ['useItem'],
 	examine: ['getDescription'],
-	offer: ['exchange'],
+	offer: ['transfer'],
 };
 
 /** Parts of `world` that `verb` needs and does not have. */
@@ -107,6 +108,10 @@ export function worldVerbs<TCtx>(deps:WorldVerbDeps<TCtx>):Handlers<TCtx> {
 	const ledger = (text:string, who:string[], tags:string[]):void => {
 		deps.tellAll({ kind: 'Ledger', text, who, tags: ['ledger', ...tags], remember: true });
 	};
+	/** `bundle` handed from `from` to `to` in a trade, one move per thing. */
+	const handOver = (from:unknown, to:unknown, bundle:CountMap):Transfer<unknown>[] => Object.entries(bundle)
+		.filter(([, quantity]) => quantity > 0)
+		.map(([thing, quantity]) => ({ verb: 'offer', thing, from, to, quantity }));
 	const offer = async (call:Call<TCtx, 'offer'>):Promise<ArcResult> => {
 		const me = call.character.id;
 		const { to, give = {}, get = {} } = call.args;
@@ -127,6 +132,11 @@ export function worldVerbs<TCtx>(deps:WorldVerbDeps<TCtx>):Handlers<TCtx> {
 			deps.offers().post({ from: me, to, give, get });
 			return { ok: true, verb: 'offer', reason: `withdrew your offer to ${name}` };
 		}
+		// Terms the game rules out are refused now, before anyone hears them.
+		const refused = checkDeal(world, [...handOver(found.character, found.target, give), ...handOver(found.target, found.character, get)]);
+		if (refused) {
+			return fail('offer', refused);
+		}
 		if (deps.offers().match(me, to, give, get)) {
 			// Close enough to trade: each is within the other's reach, and an offer to them is allowed. Nearby is not enough.
 			const within = reachOf(world, me, to);
@@ -136,7 +146,7 @@ export function worldVerbs<TCtx>(deps:WorldVerbDeps<TCtx>):Handlers<TCtx> {
 				return a && b && distance(a, b) <= within && deps.canOffer(me, to) ? 'near' : undefined;
 			};
 			if (!together()) {
-				const near = await (mover.canMove ? mover.go(me, { target: to }, 'offer', { within, check: together }) : call.goTo(to, within));
+				const near = await call.goTo(to, { within, check: together });
 				if (!near.ok) {
 					return { ...near, verb: 'offer' };
 				}
@@ -147,14 +157,14 @@ export function worldVerbs<TCtx>(deps:WorldVerbDeps<TCtx>):Handlers<TCtx> {
 			// Their offer may have changed on the way.
 			const match = deps.offers().match(me, to, give, get);
 			if (match) {
-				const done = world.exchange!({ character: found.character, other: found.target, give: match.pay, get: match.receive });
+				const done = settleDeal(world, [...handOver(found.character, found.target, match.pay), ...handOver(found.target, found.character, match.receive)]);
 				if (!done.ok) {
 					return outcome('offer', done);
 				}
 				deps.offers().settle(me, match);
 				ledger(`{0} traded ${bundleText(match.pay)} to {1} for ${bundleText(match.receive)}.`, [me, to], ['trade', tradeLabel(deps.currency, match.receive, match.pay)]);
 				deps.tell(to, { kind: 'Traded', text: `{0} took your offer: you gave ${bundleText(match.receive)} for ${bundleText(match.pay)}`, who: [me], tags: ['trade'] });
-				return { ok: true, verb: 'offer', reason: done.reason ?? `traded ${bundleText(match.pay)} for ${bundleText(match.receive)} with ${name}` };
+				return { ok: true, verb: 'offer', reason: `traded ${bundleText(match.pay)} for ${bundleText(match.receive)} with ${name}` };
 			}
 		}
 		if (!deps.canOffer(me, to)) {
@@ -197,12 +207,25 @@ export function worldVerbs<TCtx>(deps:WorldVerbDeps<TCtx>):Handlers<TCtx> {
 			if (failed(found)) {
 				return found;
 			}
+			const take = [{ verb: 'pick_up', thing: item, from: found.target, to: found.character }];
+			const refused = checkDeal(world, take);
+			if (refused) {
+				return fail('pick_up', refused);
+			}
 			const near = await call.goTo(item);
-			return near.ok ? outcome('pick_up', world.moveItem!({ character: found.character, item, to: found.character })) : near;
+			if (!near.ok) {
+				return near;
+			}
+			const done = settleDeal(world, take);
+			return outcome('pick_up', done.ok ? { ok: true, reason: `picked up ${item}` } : done);
 		},
 		drop: (call:Call<TCtx, 'drop'>) => {
 			const found = resolve(call);
-			return failed(found) ? found : outcome('drop', world.moveItem!({ character: found.character, item: call.args.item }));
+			if (failed(found)) {
+				return found;
+			}
+			const done = settleDeal(world, [{ verb: 'drop', thing: call.args.item, from: found.character }]);
+			return outcome('drop', done.ok ? { ok: true, reason: `dropped ${call.args.item}` } : done);
 		},
 		give: async (call:Call<TCtx, 'give'>) => {
 			const { item, to } = call.args;
@@ -210,17 +233,22 @@ export function worldVerbs<TCtx>(deps:WorldVerbDeps<TCtx>):Handlers<TCtx> {
 			if (failed(found)) {
 				return found;
 			}
+			const hand = [{ verb: 'give', thing: item, from: found.character, to: found.target, quantity: call.args.quantity }];
+			const refused = checkDeal(world, hand);
+			if (refused) {
+				return fail('give', refused);
+			}
 			const near = await call.goTo(to);
 			if (!near.ok) {
 				return near;
 			}
-			const done = world.moveItem!({ character: found.character, item, to: found.target, quantity: call.args.quantity });
+			const done = settleDeal(world, hand);
 			if (!done.ok) {
 				return outcome('give', done);
 			}
 			const pays = isCurrency(item, deps.currency);
 			ledger(`{0} ${pays ? 'paid' : 'gave'} ${bundleText({ [item]: call.args.quantity ?? 1 })} to {1}.`, [call.character.id, to], [pays ? 'pay' : 'give', item]);
-			return outcome('give', { ok: true, reason: done.reason ?? `gave ${item} to ${nameOf(call, to)}` });
+			return outcome('give', { ok: true, reason: `${pays ? 'paid' : 'gave'} ${call.args.quantity ? bundleText({ [item]: call.args.quantity }) : item} to ${nameOf(call, to)}` });
 		},
 		use: async (call:Call<TCtx, 'use'>) => {
 			const { item, target } = call.args;

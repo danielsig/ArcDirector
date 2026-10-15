@@ -10,6 +10,7 @@ import type { LawSpec } from '../arc/laws.js';
 import type { MindSettings } from '../mind/mind.js';
 import type { HostKernels } from '../expr/natives.js';
 import type { SampleCache } from '../expr/types.js';
+import type { MoveOpts } from '../world/mover.js';
 import type { Offer } from '../world/offers.js';
 import type { Vec } from '../world/types.js';
 
@@ -102,10 +103,13 @@ export type VerbCall<TCtx = unknown, TArgs = Record<string, unknown>> = {
 	score(arg:keyof TArgs & string, point?:Vec):number;
 	/** `score(arg, point) > 0`. */
 	holds(arg:keyof TArgs & string, point?:Vec):boolean;
-	/** Move this character until in reach of `target` (`within`, default `withWorld` `getReach`), following it as it moves. */
-	goTo(target:string, within?:number):Promise<ArcResult>;
+	/**
+	 * Move this character until in reach of `target` (`within`, default `withWorld` `getReach`), following it as it
+	 * moves, or sooner once `check` gives a reason. Fails only when there is no way there.
+	 */
+	goTo(target:string, opts?:MoveOpts):Promise<ArcResult>;
 	/** Move this character to a point. */
-	goToPoint(point:Vec, within?:number):Promise<ArcResult>;
+	goToPoint(point:Vec, opts?:MoveOpts):Promise<ArcResult>;
 	/** Let game time pass. Ends early, interrupted, when the step is aborted. */
 	wait(seconds:number):Promise<ArcResult>;
 };

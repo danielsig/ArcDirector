@@ -15,7 +15,7 @@ export type {
 	ToolChoice,
 	ToolDef,
 } from './inference/provider.js';
-export { chatContentText } from './inference/provider.js';
+export { chatContentText, DEFAULT_SAMPLING, type Sampling } from './inference/provider.js';
 export { BrowserProvider, DEFAULT_BROWSER_MODEL, modelID, type ModelID } from './inference/browser.js';
 export { fittingModel, gpuMemory, memoryOf, type GPUMemory } from './inference/device.js';
 export { ModelDownload, type DownloadObserver, type DownloadProgress, type DownloadSubscription } from './inference/download.js';
@@ -66,7 +66,7 @@ export {
 
 export type { Arc, ArcResult, Join, Step } from './arc/types.js';
 export { arcSteps, firstStep, isArc, isHoistedWhen, isIssue } from './arc/types.js';
-export { ArcError, JOIN_SYMBOL, JOINS, SYMBOL_JOIN } from './arc/types.js';
+export { ArcError, BlockedArcError, JOIN_SYMBOL, JOINS, SYMBOL_JOIN } from './arc/types.js';
 export { VerbRegistry, registerStockVerbs, STOCK_VERBS, STOCK_MOVE_VERBS, STOCK_ITEM_VERBS, STOCK_TRADE_VERBS, STOCK_MIND_VERBS, STOCK_ARC_VERBS, CHOOSE_VERB, GROUP_VERB, STOCK_VERB_DEFS, MIND_ONLY_VERBS, type StockVerb, type VerbArgKind, type VerbArgMap, type VerbDef, type VerbSpec } from './arc/stock-verbs.js';
 export { replySchema, verbHelp } from './arc/schema.js';
 export { validateArc, validateStep } from './arc/validate.js';
@@ -262,6 +262,9 @@ export type {
 	VerbCall,
 	VerbHandler,
 } from './director/types.js';
-export type { Exchange, HostWorld, ItemMove, Outcome, PathGraph, PathStep, Pose, Vec } from './world/types.js';
+export { RESERVED_TAGS } from './world/types.js';
+export type { HostWorld, Outcome, PathGraph, PathStep, Pose, Transfer, Vec } from './world/types.js';
+export { Deal } from './world/deal.js';
+export type { MoveOpts } from './world/mover.js';
 export { OfferBook, bundleText, countOf, covers, isEmpty, offerText, type Offer, type OfferMatch } from './world/offers.js';
 export { awayGoal, findRoute, pointGoal, reachablePoints, type Blocked, type Route, type RouteGoal } from './world/route.js';

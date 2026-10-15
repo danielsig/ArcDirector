@@ -852,7 +852,7 @@ describe('ArcDirector', () => {
 			self: { id: 'Captain', point: [11.5, 10.5], facing: [0, -1] as number[] },
 			ambient: 'A damp stone hall of the dungeon.',
 			objects: [
-				{ id: 'Alchemist', point: [11.5, 7.5], tags: ['agent', 'person'], interactable: true, interesting: 1 },
+				{ id: 'Alchemist', point: [11.5, 7.5], tags: ['character'], interactable: true, interesting: 1 },
 				{ id: 'Bitterroot', point: [11.5, -5], tags: ['item'], interactable: true, interesting: 1 },
 				{ id: 'HiddenLoot', point: [12, 10], tags: ['item'] },
 			],
@@ -881,7 +881,7 @@ describe('ArcDirector', () => {
 		const sight = {
 			self: { id: 'Captain', point: [0, 0], facing: [0, -1] as number[] },
 			objects: [
-				{ id: 'Alchemist', point: [-4, 0], tags: ['agent', 'person'], interactable: true },
+				{ id: 'Alchemist', point: [-4, 0], tags: ['character'], interactable: true },
 			],
 		};
 		const director = await new ArcDirector<Ctx>()
@@ -913,7 +913,7 @@ describe('ArcDirector', () => {
 			self: { id: 'Captain', point: [0, 0] },
 			ambient: 'A damp stone hall of the dungeon.',
 			objects: [
-				{ id: 'Alchemist', point: [0, 3], tags: ['agent', 'person'], interactable: true },
+				{ id: 'Alchemist', point: [0, 3], tags: ['character'], interactable: true },
 				{ id: 'HiddenLoot', point: [1, 0], tags: ['item'] },
 			],
 		};
@@ -1193,9 +1193,9 @@ describe('withNames', () => {
 		const sight = {
 			self: { id: 'Captain', point: [0, 0] },
 			objects: [
-				{ id: 'Nyx', point: [0, 3], tags: ['agent', 'person', 'enemy'], interactable: true },
-				{ id: 'Ash', point: [0, 5], tags: ['agent', 'person', 'enemy'], interactable: true },
-				{ id: 'Brune', point: [2, 0], tags: ['agent', 'person'], interactable: true },
+				{ id: 'Nyx', point: [0, 3], tags: ['character', 'enemy'], interactable: true },
+				{ id: 'Ash', point: [0, 5], tags: ['character', 'enemy'], interactable: true },
+				{ id: 'Brune', point: [2, 0], tags: ['character'], interactable: true },
 			],
 		};
 		const director = await new ArcDirector<Ctx>()
@@ -1248,7 +1248,7 @@ describe('withNames', () => {
 			.withArcFormat('text')
 			.addStockVerbs()
 			.withKernels((ctx) => ({
-				me: dummyEntity(ctx.id, { tags: ['agent'] }),
+				me: dummyEntity(ctx.id, { tags: ['character'] }),
 				others: [dummyEntity('Ash', { tags: ['enemy'] }), dummyEntity('Nyx', { tags: ['enemy'] })],
 				items: [],
 			}))
@@ -1358,7 +1358,7 @@ describe('host verbs', () => {
 			.withArcFormat('text')
 			.addStockVerbs()
 			.withKernels((ctx) => ({
-				me: dummyEntity(ctx.id, { tags: ['agent'] }),
+				me: dummyEntity(ctx.id, { tags: ['character'] }),
 				others: [dummyEntity('Nyx', { tags: ['enemy'] }), dummyEntity('Brune', { tags: [] })],
 				items: [],
 			}))
@@ -1394,7 +1394,7 @@ describe('host verbs', () => {
 			.withArcFormat('text')
 			.addStockVerbs()
 			.withKernels((ctx, point) => ({
-				me: dummyEntity(ctx.id, { tags: ['agent'] }),
+				me: dummyEntity(ctx.id, { tags: ['character'] }),
 				others: point ? [dummyEntity('Shroom', { tags: ['Mushroom'] })] : [],
 				items: [],
 			}))

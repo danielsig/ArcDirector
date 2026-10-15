@@ -43,8 +43,8 @@ function xz(a:ExprEntity, b:ExprEntity):number {
 }
 
 function hostAt(dist:number, extra:Partial<HostKernels> = {}):{ host:HostKernels; cat:Catalog } {
-	const me = posed('Forager', { x: 0, z: 0, tags: ['agent'] });
-	const Player = posed('Player', { x: dist, z: 0, tags: ['agent'] });
+	const me = posed('Forager', { x: 0, z: 0, tags: ['character'] });
+	const Player = posed('Player', { x: dist, z: 0, tags: ['character'] });
 	const theft = posed('Theft', { x: dist, z: 0, tags: ['theft'] });
 	const cache = extra.cache ?? new SampleCache();
 	const host:HostKernels = {
@@ -299,7 +299,7 @@ describe('agent watches', () => {
 		evaluate('distance(me, events.find("theft"))', first.cat);
 		cache.commit();
 		const closer = posed('Theft', { x: 6, z: 0, tags: ['theft'] });
-		const me = posed('Forager', { x: 0, z: 0, tags: ['agent'] });
+		const me = posed('Forager', { x: 0, z: 0, tags: ['character'] });
 		const host:HostKernels = {
 			me,
 			others: [],
@@ -345,7 +345,7 @@ describe('agent watches', () => {
 	});
 
 	it('isCarrying(Player) when mounted; extra args error', () => {
-		const Player = dummyEntity('Player', { tags: ['agent'] });
+		const Player = dummyEntity('Player', { tags: ['character'] });
 		const { cat } = hostAt(5, { inventory: () => [Player] });
 		assert.equal(evaluate('isCarrying(Player)', cat).value.kind, 'bool');
 		assert.equal(evaluate('isCarrying(Player)', cat).value.kind === 'bool'

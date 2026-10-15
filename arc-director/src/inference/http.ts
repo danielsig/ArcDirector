@@ -8,15 +8,17 @@ import {
 	thinkOffMode,
 	type ReasoningOption,
 } from './models.js';
-import type {
-	ChatContent,
-	ChatContentPart,
-	ChatMessage,
-	ChatRequest,
-	ChatResponse,
-	InferenceProvider,
-	ToolCall,
-	ToolDef,
+import {
+	samplingOf,
+	type ChatContent,
+	type ChatContentPart,
+	type ChatMessage,
+	type ChatRequest,
+	type ChatResponse,
+	type InferenceProvider,
+	type Sampling,
+	type ToolCall,
+	type ToolDef,
 } from './provider.js';
 import {
 	EMPTY_THINK_PREFILL,
@@ -115,6 +117,8 @@ export type ModelSettings = {
 	 * the thought so far as its `reasoning`, for the caller to answer from. Default: no limit.
 	 */
 	thinkingBudget?:number;
+	/** How it picks each token. Default {@link DEFAULT_SAMPLING}. */
+	sampling?:Sampling;
 };
 
 /** A reply as it came over the wire, or the thought so far when the thinking budget cut it off. */
@@ -1299,6 +1303,16 @@ export class HttpProvider implements InferenceProvider {
 		return rows.map((r) => r.vec);
 	}
 
+	/** The request's sampling as body fields: `top_k` only when set, since not every server takes it. */
+	private samplingBody(req:ChatRequest):Record<string, number> {
+		const { temperature, topP, topK } = samplingOf(this.settingsOf(req.model).sampling, req.sampling);
+		return {
+			...temperature === undefined ? {} : { temperature },
+			...topP === undefined ? {} : { top_p: topP },
+			...topK === undefined ? {} : { top_k: topK },
+		};
+	}
+
 	private settingsOf(model:string):ModelSettings {
 		for (const [id, settings] of this._models) {
 			if (modelIDsMatch(id, model)) {
@@ -1401,7 +1415,7 @@ export class HttpProvider implements InferenceProvider {
 			model: req.model,
 			input: messagesToInput(suffix),
 			store: true,
-			temperature: req.temperature ?? 0,
+			...this.samplingBody(req),
 		};
 		if (hit) {
 			body['previous_response_id'] = hit.id;
@@ -1461,7 +1475,7 @@ export class HttpProvider implements InferenceProvider {
 		const body:Record<string, unknown> = {
 			model: req.model,
 			messages: toChatMessages(messages),
-			temperature: req.temperature ?? 0,
+			...this.samplingBody(req),
 		};
 		this.applyThinkFields(req, body, false);
 		applyResponseFormat(req, body);

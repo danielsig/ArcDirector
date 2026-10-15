@@ -1,3 +1,4 @@
+import { RESERVED_TAGS } from '../world/types.js';
 import type { SeenObject, RelationshipHit, RelationshipStringifier, StringifyCtx } from './types.js';
 
 function isBareToken(text:string):boolean {
@@ -105,7 +106,7 @@ export function basicPluralize(word:string):string {
 export const tagCrowdStringifier:RelationshipStringifier = {
 	id: 'tagCrowd',
 	tier: 40,
-	excludeTags: ['agent', 'person', 'npc', 'item', 'landmark'],
+	excludeTags: Object.values(RESERVED_TAGS),
 	stringify(objects, ctx) {
 		const counts = new Map<string, SeenObject[]>();
 		for (const obj of objects) {

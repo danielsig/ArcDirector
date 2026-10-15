@@ -151,7 +151,7 @@ export const STOCK_VERB_DEFS = {
 	drop: { args: { item: 'id' } },
 	give: { args: { item: 'id', to: 'id', quantity: 'number?' }, help: 'goes to them first. to buy or sell, use offer', reply: true },
 	examine: { args: { target: 'id' } },
-	offer: { args: { to: 'id?', give: 'bundle?', get: 'bundle?' }, help: 'each side as {"Egg":12, "Milk":3}. if they offer that or better, both move at once; else it waits for their answer. no to: offered to anyone', reply: true },
+	offer: { args: { to: 'id?', give: 'bundle?', get: 'bundle?' }, help: 'each side as {"Egg":12, "Milk":3}, items and gold only. if they offer that or better, both move at once; else it waits for their answer. no to: offered to anyone', reply: true },
 	say: { args: { text: 'text', to: 'id?' }, help: 'one short sentence', reply: true },
 	wait: { args: { seconds: 'number?', until: 'watch?' } },
 	remember: { args: { content: 'text', tags: 'string[]?' } },

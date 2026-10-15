@@ -47,7 +47,7 @@ const COLLECTIVE_KIT = { verbs: [...STOCK_VERBS, ...STOCK_COLLECTIVE_VERBS] };
 
 function kernels(hurt:Set<string> = new Set()) {
 	return (ctx:Ctx) => ({
-		me: dummyEntity(ctx.id, { tags: ['agent'] }),
+		me: dummyEntity(ctx.id, { tags: ['character'] }),
 		others: [],
 		items: [],
 		nearRadius: 8,

@@ -1,3 +1,4 @@
+import { RESERVED_TAGS } from '../world/types.js';
 import { defaultLandmarkTier, groundAndFigure } from './ground.js';
 import { claimedOf, basicPluralize, builtinStringifiers } from './stringifiers.js';
 import { builtinLodLayers } from './lod.js';
@@ -154,18 +155,18 @@ function trimPeriod(s:string):string {
 	return s.replace(/[.\s]+$/, '');
 }
 
-function isPerson(obj:SeenObject):boolean {
-	return obj.tags.includes('agent') || obj.tags.includes('person');
+function isCharacter(obj:SeenObject):boolean {
+	return obj.tags.includes(RESERVED_TAGS.character);
 }
 
 function leftoverRank(obj:SeenObject):number {
-	if (isPerson(obj)) {
+	if (isCharacter(obj)) {
 		const hurt = obj.hp !== undefined && obj.maxHP !== undefined && obj.hp < obj.maxHP
 			? 50 + (1 - obj.hp / Math.max(obj.maxHP, 1)) * 40
 			: 0;
 		return 300 + (obj.interesting ?? 0) + hurt;
 	}
-	if (obj.movable === false || obj.tags.includes('landmark')) {
+	if (obj.movable === false || obj.tags.includes(RESERVED_TAGS.landmark)) {
 		return 200 + (obj.landmarkTier ?? 0);
 	}
 	return 100 + (obj.interesting ?? 0);
@@ -510,7 +511,7 @@ export function formatSightClauses(sight:Sight, opts:SightOpts = {}):SightClause
 			hits.push({
 				text: best.hit.text,
 				claimedIDs: uniqueIDs(best.claimed.flatMap(idsOf)),
-				prefer: best.claimed.some((o) => isPerson(o) || o.always === true),
+				prefer: best.claimed.some((o) => isCharacter(o) || o.always === true),
 			});
 			pool = unusedFromPool;
 		}
@@ -531,7 +532,7 @@ export function formatSightClauses(sight:Sight, opts:SightOpts = {}):SightClause
 		.map((o) => ({
 			text: leftoverClause(o, me, distance, leftoverOpts, npcID, bearingFn, hasFacing),
 			claimedIDs: idsOf(o),
-			prefer: isPerson(o) || o.always === true,
+			prefer: isCharacter(o) || o.always === true,
 		}));
 
 	const clauses:SightClause[] = [];

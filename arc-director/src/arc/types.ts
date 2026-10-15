@@ -44,6 +44,14 @@ export class ArcError extends Error {
 	}
 }
 
+/** A well-formed arc the world rules out: a step that already failed and still would, or speech no one is near enough to hear. */
+export class BlockedArcError extends ArcError {
+	constructor(message:string) {
+		super(message);
+		this.name = 'BlockedArcError';
+	}
+}
+
 export const JOINS:readonly Join[] = ['if_ok', 'always', 'if_failed'];
 
 export const JOIN_SYMBOL:Record<Join, string> = {

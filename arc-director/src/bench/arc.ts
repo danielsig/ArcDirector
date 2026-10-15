@@ -3,6 +3,7 @@ import type { ArcResult } from '../arc/types.js';
 import { ArcDirector } from '../director/director.js';
 import type { MemoryDraft } from '../memory/store.js';
 import type { KnowledgeEntry } from '../mind/knowledge.js';
+import { settleDeal } from '../world/deal.js';
 import type { Offer } from '../world/offers.js';
 import { FIGHT_VERBS, SceneWorld, type BenchScene, type SceneRules } from './scene.js';
 import { runBench, type BenchLevel, type BenchScore, type Timer } from './score.js';
@@ -46,7 +47,11 @@ export const ARC_BENCH_VERSION = 1;
 /** `maker` takes the first offer made to them, near enough to trade, that `fair` approves. */
 function accept(w:SceneWorld, director:ArcDirector<SceneCtx>, maker:string, fair:(offer:Offer)=>boolean):void {
 	const offer = director.offers.all.find((o) => o.to === maker && w.near(maker, o.from, 4) && fair(o));
-	if (offer && w.exchange({ character: maker, other: offer.from, give: offer.get, get: offer.give }).ok) {
+	const moves = offer && [
+		...Object.entries(offer.get).map(([thing, quantity]) => ({ verb: 'offer', thing, from: maker, to: offer.from, quantity })),
+		...Object.entries(offer.give).map(([thing, quantity]) => ({ verb: 'offer', thing, from: offer.from, to: maker, quantity })),
+	];
+	if (offer && moves && settleDeal(w, moves).ok) {
 		director.offers.prune((o) => o !== offer);
 	}
 }
