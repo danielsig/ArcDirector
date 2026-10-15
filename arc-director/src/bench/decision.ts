@@ -1,55 +1,29 @@
 import { parseArcText } from '../arc/parse.js';
 import { VerbRegistry, registerStockVerbs } from '../arc/stock-verbs.js';
 import type { LastChoice } from '../arc/run.js';
-import { buildCatalog, dummyEntity } from '../expr/natives.js';
-import { SampleCache, type ExprEntity } from '../expr/types.js';
 import type { SystemOne } from '../inference/systemone.js';
-import { choicePrompt, type ChoicePrompt } from './choice.js';
-
-/** How hard a case is: 1 the goal's words point at it, 2 a fact in the state decides it, 3 two facts beat a tempting name. */
-export type DecisionLevel = 1 | 2 | 3;
-
-/** Where someone or something is, seen from the one choosing. */
-export type DecisionSpot = { away:number; side:'ahead' | 'behind' | 'left' | 'right'; hp?:[number, number] };
+import { choicePrompt, type ChoicePrompt } from '../character/choice.js';
+import { FIGHT_VERBS, sceneCatalog, type BenchScene } from './scene.js';
+import { runBench, type BenchLevel, type BenchScore } from './score.js';
 
 /**
  * One decision with a known best choice, as a scene. The bench asks it through {@link choicePrompt}, so a System
- * One reads exactly what the director would write for that scene.
+ * One reads exactly what the director would write for that scene. Its level: 1 the goal's words point at the answer,
+ * 2 a fact in the state decides it, 3 two facts beat a tempting name.
  */
-export type DecisionCase = {
+export type DecisionCase = BenchScene & {
 	skill:string;
-	level:DecisionLevel;
-	/** Who chooses. */
-	me:{ id:string; hp:[number, number] };
+	level:BenchLevel;
 	/** The verb running before this `choose`. */
 	doing:string;
 	last?:LastChoice;
-	/** Characters around, by name. */
-	others?:Record<string, DecisionSpot>;
-	/** Things and places around, by name. */
-	things?:Record<string, DecisionSpot>;
-	/** What the one choosing carries. */
-	carrying?:string[];
-	goal:string;
 	/** Choice name to its arc, as an author writes it. */
 	choices:Record<string, string>;
 	answer:string;
 };
 
-export type SkillScore = { right:number; total:number };
-
-export type BenchScore = {
-	/** Right answers per skill, each case asked in both choice orders. */
-	skills:Record<string, SkillScore>;
-	/** Right answers per {@link DecisionLevel}. */
-	levels:Record<DecisionLevel, SkillScore>;
-	/** Mean wall time of one pick. */
-	msPerPick:number;
-	/** Picks that threw or named no choice. */
-	failed:number;
-	/** The last pick's error, when one threw. */
-	error?:string;
-};
+/** {@link DECISION_BENCH}'s version. Raised whenever a case or how cases are asked changes, so only scores of one version compare. */
+export const DECISION_BENCH_VERSION = 1;
 
 /**
  * Decisions as the 5v5 fight and the marketplace really ask them, from easy to hard. Choice names are the kind an
@@ -213,32 +187,12 @@ export const DECISION_BENCH:DecisionCase[] = [
 ];
 
 /** The stock verbs and the 5v5 fight's attacks, which the cases' choices use. */
-const VERBS = ['shoot', 'cleave', 'hex', 'protect'].reduce(
-	(verbs, verb) => verbs.add(verb, { args: { target: 'id' } }),
-	registerStockVerbs(new VerbRegistry()),
-);
-
-/** [facing, side] of each {@link DecisionSpot} side, as the catalog's geometry kernels read them. */
-const SIDES = { ahead: [1, 0], behind: [-1, 0], left: [0, -1], right: [0, 1] } as const;
+const VERBS = Object.entries(FIGHT_VERBS).reduce((verbs, [name, def]) => verbs.add(name, def), registerStockVerbs(new VerbRegistry()));
 
 /** What a System One reads for `c`: its scene in a catalog, worded by {@link choicePrompt}. */
 function decisionPrompt(c:DecisionCase):ChoicePrompt {
-	const spots = new Map(Object.entries({ ...c.others, ...c.things }));
-	const entity = (id:string, hp?:[number, number]):ExprEntity => dummyEntity(id, hp ? {
-		fields: { hp: { kind: 'number', value: hp[0] }, maxHP: { kind: 'number', value: hp[1] } },
-	} : {});
-	const catalog = buildCatalog({
-		me: entity(c.me.id, c.me.hp),
-		others: Object.entries(c.others ?? {}).map(([id, spot]) => entity(id, spot.hp)),
-		items: Object.keys(c.things ?? {}).map((id) => entity(id)),
-		cache: new SampleCache(),
-		inventory: (who) => (who.id === c.me.id ? (c.carrying ?? []).map((id) => entity(id)) : []),
-		distance: (_me, b) => spots.get(b.id)?.away,
-		facing: (_me, b) => SIDES[spots.get(b.id)?.side ?? 'ahead'][0],
-		side: (_me, b) => SIDES[spots.get(b.id)?.side ?? 'ahead'][1],
-	});
 	const choices = Object.fromEntries(Object.entries(c.choices).map(([name, arc]) => [name, parseArcText(arc, VERBS)]));
-	const prompt = choicePrompt({ id: c.me.id, verb: c.doing, last: c.last, catalog, choices, verbs: VERBS });
+	const prompt = choicePrompt({ id: c.me.id, verb: c.doing, last: c.last, catalog: sceneCatalog(c), choices, verbs: VERBS });
 	if (!prompt) {
 		throw new Error(`decision case for ${c.me.id}: no choice can run`);
 	}
@@ -246,49 +200,26 @@ function decisionPrompt(c:DecisionCase):ChoicePrompt {
 }
 
 /**
- * How well `systemOne` decides: every case in both choice orders, so a model that favors a slot scores half.
- * One untimed pick goes first, so a model that must load first is timed like one already loaded. `onPick` reports
- * `(0, total)` once that warm-up is over, then progress after each scored pick.
+ * How well `systemOne` decides: every case in both choice orders, so a model that favors a slot scores half. A pick
+ * that names no choice fails. `onPick` reports progress as {@link runBench} does.
  */
-export async function benchSystemOne(
+export function benchSystemOne(
 	systemOne:SystemOne,
 	cases:DecisionCase[] = DECISION_BENCH,
 	onPick?:(done:number, total:number)=>void,
 ):Promise<BenchScore> {
-	const skills:Record<string, SkillScore> = {};
-	const levels:Record<DecisionLevel, SkillScore> = { 1: { right: 0, total: 0 }, 2: { right: 0, total: 0 }, 3: { right: 0, total: 0 } };
-	const asked = cases.map((c) => ({ ...c, ...decisionPrompt(c) }));
-	const total = asked.length * 2;
-	let done = 0;
-	let failed = 0;
-	let error:string | undefined;
-	let ms = 0;
-	if (asked[0]) {
-		await systemOne.pick(asked[0].state, asked[0].goal, asked[0].criteria).catch(() => undefined);
-	}
-	onPick?.(0, total);
-	for (const { skill, level, state, goal, criteria, answer } of asked) {
-		for (const order of [Object.entries(criteria), Object.entries(criteria).reverse()]) {
-			const score = skills[skill] ??= { right: 0, total: 0 };
-			const t0 = performance.now();
-			let right = 0;
-			try {
-				const picked = await systemOne.pick(state, goal, Object.fromEntries(order));
-				right = picked === answer ? 1 : 0;
-				failed += Object.hasOwn(criteria, picked) ? 0 : 1;
-			}
-			catch (err) {
-				failed += 1;
-				error = err instanceof Error ? err.message : String(err);
-			}
-			ms += performance.now() - t0;
-			for (const tally of [score, levels[level]]) {
-				tally.right += right;
-				tally.total += 1;
-			}
-			done += 1;
-			onPick?.(done, total);
-		}
-	}
-	return { skills, levels, msPerPick: ms / total, failed, ...(error ? { error } : {}) };
+	return runBench(cases.flatMap((c) => {
+		const { state, criteria } = decisionPrompt(c);
+		return [Object.entries(criteria), Object.entries(criteria).reverse()].map((order) => ({
+			skill: c.skill,
+			level: c.level,
+			run: async (time) => {
+				const picked = await time(systemOne.pick(state, c.goal, Object.fromEntries(order)));
+				if (!Object.hasOwn(criteria, picked)) {
+					throw new Error(`picked ${picked || 'nothing'}, not a choice`);
+				}
+				return picked === c.answer;
+			},
+		}));
+	}), onPick);
 }

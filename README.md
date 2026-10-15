@@ -58,7 +58,7 @@ The full feature list, API and integration guide live in **[arc-director/README.
 
 ## Try it in five minutes
 
-You need [Node.js](https://nodejs.org/) 20+, [pnpm](https://pnpm.io/) and [LM Studio](https://lmstudio.ai/) with a chat model downloaded (Gemma 4 or Qwen 3 class models work well).
+You need [Node.js](https://nodejs.org/) 20+, [pnpm](https://pnpm.io/) and [LM Studio](https://lmstudio.ai/) with a chat model downloaded (Gemma 4 or Qwen 3 class models work well). No LM Studio? The game's first screen can download a model to run right in the browser instead (Chrome or Edge with WebGPU).
 
 1. Start LM Studio's local server on its default port (`1234`).
 2. Clone and run the example game:
@@ -83,7 +83,7 @@ Each scene opens with a short brief of what the cast is trying to do. By default
 
 ## Use it in your own game
 
-ArcDirector is not on npm yet, so add [`arc-director/`](arc-director/) to your workspace (or depend on it by path). Then follow **[arc-director/README.md](arc-director/README.md)**: connect a model, describe your world with a handful of callbacks, add characters, and call `tick` from your game loop. The example game in [`game/`](game/) is a complete integration to borrow from.
+Add [`arc-director/`](arc-director/) to your workspace (or depend on it by path). Then follow **[arc-director/README.md](arc-director/README.md)**: connect a model, describe your world with a handful of callbacks, add characters, and call `tick` from your game loop. The example game in [`game/`](game/) is a complete integration to borrow from.
 
 ## What's in the repo
 
@@ -94,9 +94,9 @@ ArcDirector is not on npm yet, so add [`arc-director/`](arc-director/) to your w
 | [`kindling/`](kindling/) | The small Unity-style runtime the example game is built on. See [kindling/README.md](kindling/README.md). |
 | [`mcp/`](mcp/), [`control/`](control/) | Tools for driving a live game from an AI agent while developing. |
 
-## Status
+## Contributing
 
-ArcDirector is experimental and not yet released, so the API still changes freely. That also makes it the best time to try it and shape where it goes: issues, ideas and pull requests are very welcome.
+Issues, ideas and pull requests are very welcome.
 
 ## License
 

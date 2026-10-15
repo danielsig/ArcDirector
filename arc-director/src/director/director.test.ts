@@ -5,7 +5,6 @@ import { goToNamedInteractable } from '../inference/fake.js';
 import { buildCatalog, dummyEntity } from '../expr/natives.js';
 import { evaluate } from '../expr/eval.js';
 import { choicePrompt, choiceState, namesIn, targetNotes, withTargets } from '../character/choice.js';
-import { benchSystemOne, type DecisionCase } from '../character/bench.js';
 import { parseArcText } from '../arc/parse.js';
 import { VerbRegistry, registerStockVerbs } from '../arc/stock-verbs.js';
 import { SampleCache } from '../expr/types.js';
@@ -73,6 +72,7 @@ async function gatedTrio(opts:{
 			chats.push(req.thread ?? '?');
 			gates.push(() => resolve(WAIT_REPLY));
 		}))
+		.addModel('fake', { maxParallel: 2 })
 		.addStockVerbs()
 		.withDefaultKit(KIT)
 		.onVerb(() => ({ ok: true, verb: 'wait' }))
@@ -973,6 +973,32 @@ describe('ArcDirector', () => {
 		director.dispose();
 	});
 
+	it('a world event does not wake a mind that skips major events', async () => {
+		const chats:string[] = [];
+		const director = await new ArcDirector<Ctx>()
+			.withWorld(OPEN_WORLD)
+			.withPriorityQueue({ processInterval: 0, watchInterval: 0, heartbeatStart: 0.01, heartbeatMin: 0.01 })
+			.addFakeInference((req) => {
+				chats.push(req.thread ?? '?');
+				return Promise.resolve(WAIT_REPLY);
+			})
+			.addStockVerbs()
+			.withDefaultKit(KIT)
+			.withContext((id) => ({ paragraph: scene(), id }))
+			.addCharacter({
+				id: 'Guard',
+				mind: { skipHeartbeat: true, skipMajor: true, skipStart: true },
+				kit: KIT,
+				identity: { role: 'Waits.' },
+			})
+			.start();
+		director.pushEvent({ kind: 'Opened', text: 'A door opens', tags: ['door'], major: true, timestamp: 1 });
+		director.tick(1, 1);
+		await sleep(20);
+		assert.deepEqual(chats, []);
+		director.dispose();
+	});
+
 	it('injects hasHeard from pending HeardSpeech, not host kernels', async () => {
 		const director = await new ArcDirector<Ctx>()
 			.withWorld(OPEN_WORLD)
@@ -1557,30 +1583,6 @@ describe('choose', () => {
 			kind: 'list',
 			value: [{ kind: 'bool', value: false }, { kind: 'bool', value: true }],
 		});
-	});
-
-	it('benches a System One per skill, each case in both orders, so a slot favorite scores half', async () => {
-		const asked:[string, Record<string, string>][] = [];
-		const first:SystemOne = { pick: async (state, _g, criteria) => {
-			asked.push([state, criteria]);
-			return Object.keys(criteria)[0];
-		} };
-		const scene = { me: { id: 'Ash', hp: [12, 12] as [number, number] }, doing: 'go_to', goal: 'g', things: { Keep: { away: 3, side: 'ahead' as const } } };
-		const cases:DecisionCase[] = [
-			{ ...scene, skill: 'tactics', level: 1, choices: { a: 'go_to(Keep)', b: 'wait()' }, answer: 'a' },
-			{ ...scene, skill: 'social', level: 3, choices: { a: 'go_to(Keep)', b: 'wait()' }, answer: 'b' },
-		];
-		const progress:number[] = [];
-		const score = await benchSystemOne(first, cases, (done) => progress.push(done));
-		assert.deepEqual(asked[0], ['You are Ash, 12/12 hp.\nDoing: go_to.', { a: 'go_to(Keep) — Keep 3 away, ahead', b: 'wait()' }], 'worded as the director words it');
-		assert.deepEqual(score.skills, { tactics: { right: 1, total: 2 }, social: { right: 1, total: 2 } });
-		assert.deepEqual(score.levels, { 1: { right: 1, total: 2 }, 2: { right: 0, total: 0 }, 3: { right: 1, total: 2 } });
-		assert.deepEqual(progress, [0, 1, 2, 3, 4], '0 once the warm-up (a model load) is over');
-		assert.equal(asked.length, 5, 'one untimed warm-up pick first, so loading the model is not timed');
-		assert.equal(score.failed, 0);
-		const broken = await benchSystemOne({ pick: async () => { throw new Error('down'); } }, cases);
-		assert.equal(broken.failed, 4);
-		assert.equal(broken.error, 'down');
 	});
 
 	it('gives each party its own System One, for its kit and its characters', async () => {

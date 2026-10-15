@@ -1,4 +1,4 @@
-import { GameObject } from '@arc-director/kindling';
+import { BoxCollider, GameObject, Rigidbody } from '@arc-director/kindling';
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { formatSight } from 'arc-director';
@@ -56,6 +56,8 @@ test('in the glen, dressing blocks walking when solid, and never reaches sight',
 	world.reindex();
 	const npc = new GameObject('Mara', 'Person');
 	npc.addComponent(Named, { id: 'Mara' });
+	npc.addComponent(Rigidbody);
+	npc.addComponent(BoxCollider, { size: { x: 0.45, y: 1.1, z: 0.45 }, pad: 0.36 });
 	npc.transform.localPosition = { x: 24.5, y: 0, z: 5.5 };
 	world.add(npc);
 
@@ -106,5 +108,9 @@ test('in the ruins, no route steps onto a cell a fallen column lies across', () 
 				assert.equal(onto, false, `a step lands on the fallen column at ${column.x}, ${column.z} (cell ${under.tx}, ${under.tz})`);
 			}
 		}
+	}
+	for (const brazier of planProps(chunks).filter((spot) => spot.prop === 'brazier')) {
+		const { x, z } = world.tileCenter(world.tileCoordAt(brazier.x, brazier.z).tx, world.tileCoordAt(brazier.x, brazier.z).tz);
+		assert.equal(cellSteps(world, walker)([x, z], true).length, 0, `a step lands in the brazier at ${brazier.x}, ${brazier.z}`);
 	}
 });

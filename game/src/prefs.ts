@@ -12,9 +12,16 @@ export const CONTEXT_LENGTHS = [2048, 4096, 8192, 16384, 32768, 65536, 131072] a
 export const MIN_CONTEXT_LENGTH = CONTEXT_LENGTHS[0];
 export const MAX_CONTEXT_LENGTH = CONTEXT_LENGTHS[CONTEXT_LENGTHS.length - 1];
 
+/** How many tokens NPCs may think before they answer: not at all, up to a budget, or as long as they like (-1). */
+export const THINKING_BUDGETS = [0, 256, 512, 1024, 2048, -1] as const;
+
 /** Who the player is: a character NPCs notice, one they never notice, or only a camera (no body to see or bump into). */
 export const PLAYER_MODES = ['participant', 'observer', 'camera'] as const;
 export type PlayerMode = (typeof PLAYER_MODES)[number];
+
+/** Where NPC minds think: LM Studio (on this machine or another), or a model WebLLM runs in the page. */
+export const INFERENCE_KINDS = ['lmstudio', 'browser'] as const;
+export type InferenceKind = (typeof INFERENCE_KINDS)[number];
 
 /** The System One behind `choose`: none, TypeSafe's Jev, or the local chat model scoring the choices. */
 export const SYSTEM_ONE_KINDS = ['off', 'jev', 'local'] as const;
@@ -53,12 +60,16 @@ const DEFAULT = {
 	/** Music off in the scene picker and in scenes alike; its volume is kept. */
 	musicMuted: false,
 	musicPlayerOpen: false,
+	inference: 'lmstudio' as InferenceKind,
+	/** LM Studio's model id. Empty: the server's pick. */
 	model: '',
+	/** The WebLLM model id when `inference` is `browser`. */
+	browserModel: '',
 	playerKind: '',
-	maxParallel: 2,
+	maxParallel: 4,
 	contextLength: 16384,
 	batchThinks: true,
-	thinkingBudget: true,
+	thinkingBudget: 512 as number,
 	arcFormat: 'schema' as ArcFormatPref,
 	systemOne: 'local' as SystemOneKind,
 	/** The local System One's model id: a chat model scored, or a decision model. Empty: the main model. */
@@ -83,12 +94,14 @@ const FIELDS:{ [K in keyof Prefs]:(v:unknown, fallback:Prefs[K])=>Prefs[K] } = {
 	muted: bool,
 	musicMuted: bool,
 	musicPlayerOpen: bool,
+	inference: (v, fallback) => INFERENCE_KINDS.find((kind) => kind === v) ?? fallback,
 	model: str,
+	browserModel: str,
 	playerKind: str,
 	maxParallel: (v, fallback) => clampInt(v, MIN_PARALLEL_THINKERS, MAX_PARALLEL_THINKERS, fallback),
 	contextLength: (v, fallback) => (Number.isFinite(Number(v)) ? clampContextLength(v) : fallback),
 	batchThinks: bool,
-	thinkingBudget: bool,
+	thinkingBudget: (v, fallback) => THINKING_BUDGETS.find((budget) => budget === v) ?? fallback,
 	arcFormat: (v, fallback) => ARC_FORMATS.find((format) => format === v) ?? fallback,
 	systemOne: (v, fallback) => SYSTEM_ONE_KINDS.find((kind) => kind === v) ?? fallback,
 	decisionModel: str,
@@ -181,9 +194,21 @@ export function flagsFromURL(url:{ player?:PlayerMode; ai?:boolean }):Pick<Prefs
 	};
 }
 
-/** Turning music up also unmutes it. */
-export function setMusicVolume(music:number):Prefs {
-	return setPrefs(music > 0 ? { music, musicMuted: false } : { music });
+/** Music turned on at zero volume comes back at this. */
+const MUSIC_ON_VOLUME = 0.5;
+
+/**
+ * Music at zero volume is music off. Turning it up turns it on; turning it to zero turns it off and keeps `restore`
+ * (the volume before the slider went down) for turning it back on.
+ */
+export function setMusicVolume(music:number, restore:number):Prefs {
+	return setPrefs(music > 0 ? { music, musicMuted: false } : { music: restore, musicMuted: true });
+}
+
+/** Music on or off, with `patch`. Turned on at zero volume, it comes back at half. */
+export function setMusicMuted(musicMuted:boolean, patch:Partial<Prefs> = {}):Prefs {
+	const silent = !musicMuted && prefs().music === 0;
+	return setPrefs({ ...patch, musicMuted, ...(silent ? { music: MUSIC_ON_VOLUME } : {}) });
 }
 
 export function contextLabel(n:number):string {
@@ -237,6 +262,16 @@ export function clampContextLength(n:unknown):number {
 		}
 	}
 	return best;
+}
+
+export function thinkingLabel(budget:number):string {
+	return budget === 0 ? 'Off' : budget < 0 ? 'No limit' : budget >= 1024 ? `${budget / 1024}k` : String(budget);
+}
+
+/** The thinking budget `delta` steps along from `current`: Off, then longer, then no limit. */
+export function nudgeThinkingBudget(current:number, delta:number):number {
+	const i = Math.max(0, THINKING_BUDGETS.findIndex((budget) => budget === current));
+	return THINKING_BUDGETS[Math.max(0, Math.min(THINKING_BUDGETS.length - 1, i + delta))];
 }
 
 export function nudgeContextLength(current:number, delta:number):number {

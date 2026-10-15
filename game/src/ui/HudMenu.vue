@@ -1,8 +1,11 @@
 <script setup lang="ts">
-import { inject, watch } from 'vue';
+import { inject, ref, watch } from 'vue';
 import { fmtMem, modelLabel, type HudModel, type MenuPage } from './hudModel';
 import { sessionKey } from './sessionKey';
 import HudBench from './HudBench.vue';
+import HudDialog from './HudDialog.vue';
+import InferencePicker from './InferencePicker.vue';
+import { inferenceSetup, thinksWith } from '../director/inference';
 import {
 	MAX_CONTEXT_LENGTH,
 	MAX_PARALLEL_THINKERS,
@@ -10,6 +13,10 @@ import {
 	MIN_PARALLEL_THINKERS,
 	contextLabel,
 	nudgeContextLength,
+	nudgeThinkingBudget,
+	thinkingLabel,
+	THINKING_BUDGETS,
+	setMusicMuted,
 	setMusicVolume,
 	setPrefs,
 } from '../prefs';
@@ -23,6 +30,9 @@ const emit = defineEmits<{
 }>();
 
 const session = inject(sessionKey);
+
+/** Where NPCs think, picked over the menu at the init screen's size. */
+const pickerOpen = ref(false);
 
 const PAGES:{ id:MenuPage; label:string }[] = [
 	{ id: 'testing', label: 'Arc Director' },
@@ -111,12 +121,21 @@ function onRange(ev:Event):number {
 	return Number((ev.target as HTMLInputElement).value);
 }
 
+/** Music volume as the slider gesture began: what music comes back at after the slider turns it off at zero. */
+let musicBefore = 0;
+
+function holdMusicVolume():void {
+	if (!props.hud.musicMuted) {
+		musicBefore = props.hud.musicVolume;
+	}
+}
+
 function toggleBatchThinks():void {
 	setPrefs({ batchThinks: !props.hud.batchThinks });
 }
 
-function toggleThinking():void {
-	setPrefs({ thinkingBudget: !props.hud.thinkingBudget });
+function nudgeThinking(delta:number):void {
+	setPrefs({ thinkingBudget: nudgeThinkingBudget(props.hud.thinkingBudget, delta) });
 }
 
 function pickArcFormat():void {
@@ -356,7 +375,7 @@ function pct(n:number):string {
 									class="switch"
 									:class="{ on: !hud.musicMuted }"
 									:aria-pressed="!hud.musicMuted"
-									@click.stop="setPrefs({ musicMuted: !hud.musicMuted })"
+									@click.stop="setMusicMuted(!hud.musicMuted)"
 								>
 									{{ hud.musicMuted ? 'Off' : 'On' }}
 								</button>
@@ -364,15 +383,17 @@ function pct(n:number):string {
 							<label class="set stack" :class="{ dim: hud.audioMuted || hud.musicMuted }">
 								<span class="name">
 									Music volume
-									<span class="readout">{{ pct(hud.musicVolume) }}%</span>
+									<span class="readout">{{ pct(hud.musicMuted ? 0 : hud.musicVolume) }}%</span>
 								</span>
 								<input
-									:value="hud.musicVolume"
+									:value="hud.musicMuted ? 0 : hud.musicVolume"
 									type="range"
 									min="0"
 									max="1"
 									step="0.01"
-									@input="setMusicVolume(onRange($event))"
+									@pointerdown="holdMusicVolume"
+									@focus="holdMusicVolume"
+									@input="setMusicVolume(onRange($event), musicBefore)"
 								>
 							</label>
 							<label class="set stack" :class="{ dim: hud.audioMuted }">
@@ -417,14 +438,15 @@ function pct(n:number):string {
 									{{ hud.arcDirectorOn ? 'On' : 'Off' }}
 								</button>
 							</div>
-							<div class="set">
-								<span class="name">NPC maps</span>
-								<button type="button" class="act" @click.stop="dumpNPCMaps">
-									Dump
-								</button>
-							</div>
 							<h3>Inference</h3>
-							<label class="set">
+							<div class="set">
+								<span class="name">Thinks with</span>
+								<span class="thinks-with">
+									<span class="readout">{{ thinksWith(hud.activeModel) }}</span>
+									<button type="button" class="act" @click.stop="pickerOpen = true">Change</button>
+								</span>
+							</div>
+							<label v-if="inferenceSetup.inference === 'lmstudio'" class="set">
 								<span class="name">Model</span>
 								<select
 									v-model="hud.model"
@@ -455,6 +477,12 @@ function pct(n:number):string {
 								</select>
 							</label>
 							<div class="set">
+								<span class="name">Arc Bench</span>
+								<button type="button" class="act" @click.stop="hud.bench = 'arc'">
+									Open
+								</button>
+							</div>
+							<div v-if="inferenceSetup.inference === 'lmstudio'" class="set">
 								<span class="name">Parallel thinkers</span>
 								<div class="stepper">
 									<button
@@ -507,17 +535,28 @@ function pct(n:number):string {
 								</button>
 							</div>
 							<div class="set">
-								<span class="name">Thinking</span>
-								<button
-									type="button"
-									class="switch"
-									:class="{ on: hud.thinkingBudget }"
-									:aria-pressed="hud.thinkingBudget"
-									@click.stop="toggleThinking"
-								>
-									{{ hud.thinkingBudget ? 'On' : 'Off' }}
-								</button>
+								<span class="name" title="How many tokens an NPC may think before it must answer from what it thought">Thinking budget</span>
+								<div class="stepper">
+									<button
+										type="button"
+										:disabled="hud.thinkingBudget === THINKING_BUDGETS[0]"
+										@click.stop="nudgeThinking(-1)"
+									>
+										−
+									</button>
+									<span>{{ thinkingLabel(hud.thinkingBudget) }}</span>
+									<button
+										type="button"
+										:disabled="hud.thinkingBudget === THINKING_BUDGETS[THINKING_BUDGETS.length - 1]"
+										@click.stop="nudgeThinking(1)"
+									>
+										+
+									</button>
+								</div>
 							</div>
+							<p v-if="inferenceSetup.inference === 'lmstudio' && hud.thinkingBudget !== 0" class="tip">
+								Set LM Studio's own <i>Reasoning Budget</i> too (the model's settings, <i>Inference</i>), so thoughts end on their own instead of being cut off.
+							</p>
 							<label class="set">
 								<span class="name">Arc format</span>
 								<select
@@ -541,7 +580,7 @@ function pct(n:number):string {
 									<option value="local">Local</option>
 								</select>
 							</label>
-							<label class="set">
+							<label v-if="inferenceSetup.inference === 'lmstudio'" class="set">
 								<span class="name">Decision model</span>
 								<select
 									v-model="hud.decisionModel"
@@ -562,8 +601,8 @@ function pct(n:number):string {
 								</select>
 							</label>
 							<div class="set">
-								<span class="name">Decision bench</span>
-								<button type="button" class="act" @click.stop="hud.benchOpen = true">
+								<span class="name">Arc Decision Bench</span>
+								<button type="button" class="act" @click.stop="hud.bench = 'decision'">
 									Open
 								</button>
 							</div>
@@ -621,12 +660,21 @@ function pct(n:number):string {
 									</tr>
 								</tbody>
 							</table>
+							<div class="set">
+								<span class="name">NPC maps</span>
+								<button type="button" class="act" @click.stop="dumpNPCMaps">
+									Dump
+								</button>
+							</div>
 						</template>
 					</div>
 				</div>
 				<p v-if="hud.menuNotice" class="notice">{{ hud.menuNotice }}</p>
 			</div>
-			<HudBench v-if="hud.benchOpen" :hud="hud" />
+			<HudBench v-if="hud.bench" :hud="hud" :kind="hud.bench" />
+			<HudDialog :open="pickerOpen" title="Where should NPCs think?" close-label="Done" @close="pickerOpen = false">
+				<InferencePicker @chosen="pickerOpen = false" />
+			</HudDialog>
 		</div>
 	</div>
 </template>
@@ -995,6 +1043,33 @@ h3:first-child {
 	font-size: 15px;
 	font-weight: 700;
 	font-variant-numeric: tabular-nums;
+}
+
+.set:has(+ .tip) {
+	border-bottom: 0;
+}
+
+/* Advice under a row: small, and part of it. */
+.tip {
+	margin: -2px 0 0;
+	padding: 0 0 10px;
+	font-size: 13px;
+	line-height: 1.35;
+	opacity: 0.75;
+	border-bottom: 1px solid var(--ink-soft);
+}
+
+.thinks-with {
+	display: flex;
+	align-items: center;
+	gap: 12px;
+	min-width: 0;
+}
+
+.thinks-with .readout {
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
 }
 
 .page-actions {

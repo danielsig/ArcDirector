@@ -346,9 +346,11 @@ export function patchHud(
 		const ms = view.frameMS(1000);
 		hud.fps = ms > 0 ? Math.round(1000 / ms) : 0;
 	}
-	const input = player?.getComponent(PlayerInput);
+	// A camera player has no hands: no cursor, loot hint or inventory.
+	const pilot = player?.getComponent(PlayerInput);
+	const input = pilot?.embodied ? pilot : undefined;
 	hud.cursorName = input?.cursorName ?? '';
-	const loot = player ? nearestPickup(player) : null;
+	const loot = player && input ? nearestPickup(player) : null;
 	const hint = hud.pickupHint;
 	if (loot) {
 		const p = loot.transform.position;
@@ -369,7 +371,7 @@ export function patchHud(
 	const bar = input?.hotbar() ?? [];
 	const sel = input?.selected ?? 0;
 	patchHotbar(hud, bar, sel);
-	const body = player?.getComponent(HumanBody);
+	const body = input && player?.getComponent(HumanBody);
 	hud.heldLeft = body ? slotItem(body, 'hands.left.held')?.name ?? '' : '';
 	hud.heldRight = body ? slotItem(body, 'hands.right.held')?.name ?? '' : '';
 	hud.back = body ? slotItem(body, 'back')?.name ?? '' : '';
@@ -437,6 +439,7 @@ export function patchInfer(host:GameHost, hud:HudModel):void {
 	});
 	next.sort((a, b) => a.id.localeCompare(b.id));
 	hud.heartrates = next;
+	hud.activeModel = host.arc?.modelID() ?? '';
 
 	if (!infer) return;
 	hud.inferCalls = infer.calls;

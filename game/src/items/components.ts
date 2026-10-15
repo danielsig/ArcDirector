@@ -29,6 +29,8 @@ export class Weapon extends Component {
 
 export class Blade extends Component {}
 
+export class Bow extends Component {}
+
 export class Armor extends Component {
 	public defense = 0;
 	public covers:string[] = [];

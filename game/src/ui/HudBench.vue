@@ -1,33 +1,61 @@
 <script setup lang="ts">
 import { computed } from 'vue';
-import { DECISION_BENCH } from 'arc-director';
+import { ARC_BENCH, ARC_BENCH_VERSION, DECISION_BENCH, DECISION_BENCH_VERSION } from 'arc-director';
 import { modelLabel, type HudModel } from './hudModel';
-import { benchDecisions, JEV_CANDIDATE, type BenchRow } from '../director/decisionBench';
+import HudDialog from './HudDialog.vue';
+import { benchArcWriting, benchDecisions, JEV_CANDIDATE, type BenchKind, type BenchRow } from '../director/bench';
 
 const props = defineProps<{
 	hud:HudModel;
+	kind:BenchKind;
 }>();
 
-const SKILLS = [...new Set(DECISION_BENCH.map((c) => c.skill))];
+/** What each bench asks, and of whom. */
+const BENCHES = {
+	decision: {
+		title: 'Arc Decision Bench',
+		version: DECISION_BENCH_VERSION,
+		cases: DECISION_BENCH,
+		hint: `How well each model picks the best option in ${DECISION_BENCH.length} game situations. Options are asked in both orders, so always picking the first scores half. No menu settings change the result.`,
+		run: (ids:string[], rows:BenchRow[]) => benchDecisions(ids, props.hud.models, rows),
+	},
+	arc: {
+		title: 'Arc Bench',
+		version: ARC_BENCH_VERSION,
+		cases: ARC_BENCH,
+		hint: `How well each model gets NPCs to their goals in ${ARC_BENCH.length} game situations, each played out like the game. Uses the Arc format, Thinking and Context window settings from the Arc Director menu. Lookup cases need the map or the NPC's knowledge.`,
+		run: benchArcWriting,
+	},
+};
+
 const LEVELS = [{ level: 1, label: 'Easy' }, { level: 2, label: 'Medium' }, { level: 3, label: 'Hard' }] as const;
 
+const bench = computed(() => BENCHES[props.kind]);
+const skills = computed(() => [...new Set(bench.value.cases.map((c) => c.skill))]);
+const rows = computed(() => props.hud.benchRows[props.kind]);
+
+/** Jev and every server model pick; only chat models write arcs. */
 const candidates = computed(() => [
-	{ id: JEV_CANDIDATE, label: JEV_CANDIDATE },
-	...props.hud.models.map((m) => ({ id: m.id, label: modelLabel(m) })),
+	...(props.kind === 'decision' ? [{ id: JEV_CANDIDATE, label: JEV_CANDIDATE }] : []),
+	...props.hud.models.filter((m) => props.kind === 'decision' || !m.decision).map((m) => ({ id: m.id, label: modelLabel(m) })),
 ]);
 
 function close():void {
-	props.hud.benchOpen = false;
+	props.hud.bench = null;
 }
 
 async function run():Promise<void> {
 	props.hud.benchRunning = true;
 	try {
-		await benchDecisions([...props.hud.benchPick], props.hud.models, props.hud.benchRows);
+		await bench.value.run([...props.hud.benchPick[props.kind]], rows.value);
 	}
 	finally {
 		props.hud.benchRunning = false;
 	}
+}
+
+function speed(ms:number):string {
+	return ms < 1000 ? `${Math.round(ms)} ms` : `${(ms / 1000).toFixed(1)} s`;
 }
 
 function cell(score:{ right:number; total:number } | undefined):string {
@@ -46,108 +74,53 @@ function totalCell(row:BenchRow):string {
 </script>
 
 <template>
-	<div class="bench-dim" @click.stop="close">
-		<div class="bench" role="dialog" aria-label="Decision bench" @click.stop>
-			<header class="head">
-				<h2>Decision bench</h2>
-				<button type="button" class="close" @click.stop="close">Close</button>
-			</header>
-			<div class="body">
-				<p class="hint">
-					{{ DECISION_BENCH.length * 2 }} decisions per model ({{ SKILLS.join(', ') }}), easy to hard, each asked in
-					both choice orders. Decision making only, not arcs. Hold Ctrl to pick several.
-				</p>
-				<div class="pick">
-					<select v-model="hud.benchPick" multiple size="7" :disabled="hud.benchRunning">
-						<option v-for="c in candidates" :key="c.id" :value="c.id">{{ c.label }}</option>
-					</select>
-					<button
-						type="button"
-						class="act"
-						:disabled="hud.benchRunning || hud.benchPick.length === 0"
-						@click.stop="run"
-					>
-						{{ hud.benchRunning ? 'Testing…' : 'Test' }}
-					</button>
-				</div>
-				<table v-if="hud.benchRows.length > 0" class="stats">
-					<thead>
-						<tr>
-							<th>Model</th>
-							<th>Speed</th>
-							<th v-for="skill in SKILLS" :key="skill">{{ skill }}</th>
-							<th v-for="l in LEVELS" :key="l.level" class="level">{{ l.label }}</th>
-							<th>Fails</th>
-							<th>Total</th>
-						</tr>
-					</thead>
-					<tbody>
-						<tr v-for="row in hud.benchRows" :key="row.id">
-							<td :title="row.score?.error">{{ row.id }}</td>
-							<td>{{ row.score ? `${Math.round(row.score.msPerPick)} ms` : '' }}</td>
-							<td v-for="skill in SKILLS" :key="skill">{{ cell(row.score?.skills[skill]) }}</td>
-							<td v-for="l in LEVELS" :key="l.level" class="level">{{ cell(row.score?.levels[l.level]) }}</td>
-							<td :title="row.score?.error">{{ row.score?.failed || '' }}</td>
-							<td>{{ totalCell(row) }}</td>
-						</tr>
-					</tbody>
-				</table>
-			</div>
+	<HudDialog open :title="bench.title" :width="880" @close="close">
+		<template #title>{{ bench.title }} <span class="version">v{{ bench.version }}</span></template>
+		<p class="hint">
+			{{ bench.hint }} Ctrl-click to test several models.
+		</p>
+		<div class="pick">
+			<select v-model="hud.benchPick[kind]" multiple :disabled="hud.benchRunning">
+				<option v-for="c in candidates" :key="c.id" :value="c.id">{{ c.label }}</option>
+			</select>
+			<button
+				type="button"
+				class="act"
+				:disabled="hud.benchRunning || hud.benchPick[kind].length === 0"
+				@click.stop="run"
+			>
+				{{ hud.benchRunning ? 'Testing…' : 'Test' }}
+			</button>
 		</div>
-	</div>
+		<table v-if="rows.length > 0" class="stats">
+			<thead>
+				<tr>
+					<th>Model</th>
+					<th>Speed</th>
+					<th v-for="skill in skills" :key="skill">{{ skill }}</th>
+					<th v-for="l in LEVELS" :key="l.level" class="level">{{ l.label }}</th>
+					<th>Fails</th>
+					<th>Total</th>
+				</tr>
+			</thead>
+			<tbody>
+				<tr v-for="row in rows" :key="row.id">
+					<td :title="row.score?.error">{{ row.id }}</td>
+					<td>{{ row.score ? speed(row.score.msPerTrial) : '' }}</td>
+					<td v-for="skill in skills" :key="skill">{{ cell(row.score?.skills[skill]) }}</td>
+					<td v-for="l in LEVELS" :key="l.level" class="level">{{ cell(row.score?.levels[l.level]) }}</td>
+					<td :title="row.score?.error">{{ row.score?.failed || '' }}</td>
+					<td>{{ totalCell(row) }}</td>
+				</tr>
+			</tbody>
+		</table>
+	</HudDialog>
 </template>
 
 <style scoped>
-/* The decision bench: a parchment panel over the pause menu, as the pause panel itself. */
-.bench-dim {
-	position: absolute;
-	inset: 0;
-	z-index: 4;
-	display: flex;
-	align-items: center;
-	justify-content: center;
-	background: var(--backdrop);
-}
-
-.bench {
-	width: min(880px, 96vw);
-	max-height: min(560px, 86vh);
-	display: flex;
-	flex-direction: column;
-	color: var(--ink);
-	font-family: var(--font);
-	background: var(--parchment);
-	border: var(--line) solid var(--ink);
-	border-radius: var(--radius-panel);
-	box-shadow: var(--shadow-panel);
-	animation: rise var(--slow) var(--ease-pop);
-}
-
-@keyframes rise {
-	from {
-		opacity: 0;
-		transform: translateY(12px) scale(0.97);
-	}
-}
-
-.head {
-	display: flex;
-	align-items: center;
-	justify-content: space-between;
-	gap: 12px;
-	padding: 18px 24px 10px 28px;
-	border-bottom: var(--line-thin) solid var(--ink-soft);
-}
-
-h2 {
-	margin: 0;
-	font-size: 26px;
-	font-weight: 700;
-}
-
-.body {
-	overflow: auto;
-	padding: 12px 28px 22px;
+.version {
+	font-size: 16px;
+	opacity: 0.6;
 }
 
 .hint {
@@ -162,9 +135,11 @@ h2 {
 	gap: 12px;
 }
 
+/* Seven models on a short screen, more as the screen allows. */
 .pick select {
 	flex: 1 1 auto;
 	min-width: 0;
+	height: clamp(170px, 45vh, 520px);
 	padding: 4px;
 	font: inherit;
 	font-size: 14px;
@@ -178,8 +153,7 @@ h2 {
 	background: var(--gold);
 }
 
-/* Outlined buttons, as the pause menu's Resume. */
-.close,
+/* Outlined, as the dialog's Close. */
 .act {
 	padding: 6px 18px;
 	font: inherit;
@@ -193,7 +167,6 @@ h2 {
 	cursor: pointer;
 }
 
-.close:hover,
 .act:hover:not(:disabled) {
 	background: var(--parchment-deep);
 }

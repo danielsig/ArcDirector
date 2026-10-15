@@ -1671,3 +1671,69 @@ describe('configured models', () => {
 		assert.deepEqual(posts, [], 'a 4k model never fits a 16k ask exactly: it must not reload on every request');
 	});
 });
+
+describe('HttpProvider thinking budget', () => {
+	/** A streamed chat completion: these thought pieces, then these answer pieces. Reports whether the reader stopped it. */
+	function streamOf(thought:string[], answer:string[]):{ res:()=>Response; cancelled:()=>boolean } {
+		let cancelled = false;
+		const events = [
+			...thought.map((piece) => ({ choices: [{ delta: { reasoning_content: piece } }] })),
+			...answer.map((piece) => ({ choices: [{ delta: { content: piece } }] })),
+			{ choices: [{ delta: {}, finish_reason: 'stop' }] },
+		];
+		return {
+			res: () => new Response(new ReadableStream<Uint8Array>({
+				pull(controller) {
+					const ev = events.shift();
+					if (ev) {
+						controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify(ev)}\n\n`));
+					}
+					else {
+						controller.enqueue(new TextEncoder().encode('data: [DONE]\n\n'));
+						controller.close();
+					}
+				},
+				cancel() {
+					cancelled = true;
+				},
+			}), { status: 200, headers: { 'content-type': 'text/event-stream' } }),
+			cancelled: () => cancelled,
+		};
+	}
+
+	function providerFor(stream:ReturnType<typeof streamOf>, budget:number):HttpProvider {
+		const provider = new HttpProvider({
+			baseURL: 'http://127.0.0.1:9/v1',
+			enableThinking: true,
+			fetch: async (input) => {
+				const url = String(input);
+				if (url.endsWith('/models')) {
+					return new Response(JSON.stringify({ data: [] }), { status: 200 });
+				}
+				if (url.includes('/responses')) {
+					return new Response('nope', { status: 404 });
+				}
+				return stream.res();
+			},
+		});
+		provider.configureModel('thinker', { thinkingBudget: budget });
+		return provider;
+	}
+
+	it('stops a thought at its budget and hands it back for an answer', async () => {
+		const stream = streamOf(['The ', 'guard ', 'should ', 'go ', 'to ', 'the ', 'Keep ', 'and '], ['{"steps":[]}']);
+		const res = await providerFor(stream, 3).chat({ model: 'thinker', messages: [{ role: 'user', content: 'hi' }] });
+		assert.equal(res.truncated, true);
+		assert.equal(res.content, null);
+		assert.match(res.reasoning ?? '', /^The guard should go/);
+		assert.equal(stream.cancelled(), true, 'the server stops generating');
+	});
+
+	it('leaves a thought that ends within its budget alone', async () => {
+		const stream = streamOf(['Go ', 'to ', 'the Keep.'], ['{"steps"', ':[]}']);
+		const res = await providerFor(stream, 8).chat({ model: 'thinker', messages: [{ role: 'user', content: 'hi' }] });
+		assert.equal(res.content, '{"steps":[]}');
+		assert.equal(res.truncated, false);
+		assert.equal(stream.cancelled(), false);
+	});
+});

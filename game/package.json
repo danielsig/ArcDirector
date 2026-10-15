@@ -16,6 +16,8 @@
 	"dependencies": {
 		"@arc-director/control": "workspace:*",
 		"@arc-director/kindling": "workspace:*",
+		"@huggingface/transformers": "^4.3.1",
+		"@mlc-ai/web-xgrammar": "^0.1.27",
 		"arc-director": "workspace:*",
 		"three": "^0.185.1",
 		"vue": "^3.5.41"

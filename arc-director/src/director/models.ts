@@ -3,6 +3,7 @@ import { fakeInference, type HttpInferenceOpts } from '../inference/presets.js';
 import { fetchModelCatalog, findModel, isDecisionModel, isVisionModel, pickSingleChatModel, PREFERRED_MODELS, type ModelInfo } from '../inference/models.js';
 import type { FakeChatFn } from '../inference/fake.js';
 import type { InferenceProvider } from '../inference/provider.js';
+import type { BrowserProvider, DEFAULT_BROWSER_MODEL } from '../inference/browser.js';
 
 /** How to reach a chat server: `add*Inference`. */
 export type InferenceSource =
@@ -22,9 +23,24 @@ export type ModelSpec = {
 	contextLength?:number;
 	/** Reason before answering. Default: the server's `enableThinking`. */
 	thinking?:boolean;
+	/**
+	 * Most tokens a thought may run. Past it the thought is cut off, and the mind answers from what it thought so far
+	 * without thinking again. Default: no limit.
+	 */
+	thinkingBudget?:number;
 	reasoningEffort?:ReasoningEffort;
 	/** Thinks on this model at once. Default {@link DEFAULT_MAX_PARALLEL}. */
 	maxParallel?:number;
+};
+
+/** Argument to `ArcDirector.addBrowserModel`: a model that runs in the page, and what it runs with. */
+export type BrowserModelSpec = Omit<ModelSpec, 'id' | 'inference'> & {
+	/** A Hugging Face repo of ONNX weights (`org/repo`, `org/repo@<commit>`, or its URL). Default {@link DEFAULT_BROWSER_MODEL}. */
+	model?:string;
+	/** Default {@link BrowserProvider.shared}. */
+	provider?:BrowserProvider;
+	/** The server it is added under. Default `browser`. */
+	inference?:string;
 };
 
 /** Argument to `ArcDirector.withEmbeddings`: the one model every memory is embedded with. */
@@ -34,7 +50,7 @@ export type EmbeddingSpec = {
 	id:string;
 };
 
-export const DEFAULT_MAX_PARALLEL = 2;
+export const DEFAULT_MAX_PARALLEL = 4;
 
 /** A configured model once its server answered: what a mind thinking with it needs. */
 export type LiveModel = {
@@ -52,7 +68,9 @@ export type LiveModel = {
 
 type Server = {
 	source:InferenceSource;
+	/** `inner`, logged and timed by the director: what minds call. */
 	provider:InferenceProvider;
+	inner:InferenceProvider;
 	http?:HttpProvider;
 };
 
@@ -90,6 +108,11 @@ export class ModelRegistry {
 		return this._default;
 	}
 
+	/** Server `name`'s own provider, without the director's logging, or undefined. */
+	public providerOf(name:string):InferenceProvider | undefined {
+		return this._servers.get(name)?.inner;
+	}
+
 	public get hasServers():boolean {
 		return this._servers.size > 0;
 	}
@@ -97,7 +120,7 @@ export class ModelRegistry {
 	public addInference(name:string, source:InferenceSource):void {
 		const http = source.kind === 'http' ? new HttpProvider({ ...source.opts, onRequest: this._hooks.onRequest }) : undefined;
 		const inner = source.kind === 'fake' ? fakeInference(source.chat) : source.kind === 'custom' ? source.provider : http!;
-		this._servers.set(name, { source, http, provider: this._hooks.wrap(inner, !!http) });
+		this._servers.set(name, { source, http, inner, provider: this._hooks.wrap(inner, !!http) });
 		this.resolveOn(name);
 	}
 
@@ -127,7 +150,7 @@ export class ModelRegistry {
 		this._specs.delete(name);
 		this._live.delete(name);
 		if (live && ![...this._live.values()].some((other) => other.id === live.id)) {
-			this.serverOf(name)?.http?.forgetModel(live.id);
+			this.serverOf(name)?.inner.forgetModel?.(live.id);
 		}
 		if (this._default === name) {
 			this._default = [...this._specs].find(([, other]) => !other.decision)?.[0] ?? null;
@@ -247,7 +270,7 @@ export class ModelRegistry {
 		// A decision model answers through the System One endpoint, which loads it itself.
 		const systemOneURL = info && isDecisionModel(info) && server.http ? `${server.http.baseURL.replace(/\/+$/, '')}/systemone` : undefined;
 		if (!systemOneURL) {
-			server.http?.configureModel(id, { contextLength: spec.contextLength, enableThinking: spec.thinking, reasoningEffort: spec.reasoningEffort });
+			server.inner.configureModel?.(id, { contextLength: spec.contextLength, enableThinking: spec.thinking, reasoningEffort: spec.reasoningEffort, thinkingBudget: spec.thinkingBudget });
 		}
 		const contextLength = spec.contextLength
 			?? (source.kind === 'http' ? source.opts.load?.contextLength : undefined);

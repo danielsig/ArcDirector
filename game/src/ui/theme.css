@@ -42,3 +42,42 @@
 	--ease-out: cubic-bezier(0.2, 0.8, 0.2, 1);
 	--ease-pop: cubic-bezier(0.3, 1.6, 0.5, 1);
 }
+
+/*
+ * Scrollbars, everywhere: a gold thumb outlined in ink on a faint ink track, like the menu's sliders. Chrome and
+ * Safari draw the ::-webkit-scrollbar parts. Firefox has none of those, so it takes the standard colors; they stay
+ * Firefox-only, because Chrome ignores ::-webkit-scrollbar wherever the standard ones are set.
+ */
+@supports not selector(::-webkit-scrollbar) {
+	* {
+		scrollbar-width: thin;
+		scrollbar-color: var(--gold) var(--ink-soft);
+	}
+}
+
+::-webkit-scrollbar {
+	width: 14px;
+	height: 14px;
+}
+
+::-webkit-scrollbar-track {
+	background: var(--ink-soft);
+	border-radius: 7px;
+}
+
+::-webkit-scrollbar-thumb {
+	min-height: 40px;
+	background: var(--gold);
+	border: var(--line-thin) solid var(--ink);
+	border-radius: 7px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+	background: var(--gold-deep);
+}
+
+::-webkit-scrollbar-button,
+::-webkit-scrollbar-corner {
+	display: none;
+	background: transparent;
+}

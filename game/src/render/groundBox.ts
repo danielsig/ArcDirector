@@ -1,14 +1,18 @@
 import * as THREE from 'three';
-import type { World } from '../engine/World';
-import { meadowMat } from './toon';
+import type { ChunkBounds } from '@arc-director/kindling';
+import { meadowMat, stoneFloorMat } from './toon';
 import { GRASS_Y } from './nature';
 
+/** Tiles a scene can have around its map, out to the horizon. */
+const GROUND = { grass: meadowMat, floor: stoneFloorMat };
+export type GroundTile = keyof typeof GROUND;
+
 const OUTER = 96;
-/** Pull the outer lawn under the perimeter walls so the sky cannot show at the base. */
+/** Pull the outer ground under the perimeter walls so the sky cannot show at the base. */
 const TUCK = 0.72;
 
-function mapBounds(world:World):{ minX:number; maxX:number; minZ:number; maxZ:number; cx:number; cz:number } {
-	const { minX, maxX, minZ, maxZ } = world.chunkBounds() ?? { minX: 0, maxX: 32, minZ: 0, maxZ: 32 };
+function mapBounds(scene:ChunkBounds | undefined):ChunkBounds & { cx:number; cz:number } {
+	const { minX, maxX, minZ, maxZ } = scene ?? { minX: 0, maxX: 32, minZ: 0, maxZ: 32 };
 	return { minX, maxX, minZ, maxZ, cx: (minX + maxX) * 0.5, cz: (minZ + maxZ) * 0.5 };
 }
 
@@ -23,12 +27,15 @@ function groundStrip(mat:THREE.Material, x:number, z:number, w:number, d:number)
 	return mesh;
 }
 
-/** Grass around the map (no blades). Tucks under the outer walls so the sky cannot leak through. */
-export function createGroundBox(world:World):THREE.Group {
-	const mat = meadowMat();
+/**
+ * `ground` around the map (grass without blades). Tucks under the outer walls so the sky cannot leak through. `scene`
+ * is every chunk of the scene, loaded or not: a hole the size of the loaded chunks covers the rest once they stream in.
+ */
+export function createGroundBox(scene:ChunkBounds | undefined, ground:GroundTile = 'grass'):THREE.Group {
+	const mat = GROUND[ground]();
 	const g = new THREE.Group();
 	g.name = 'groundBox';
-	const b = mapBounds(world);
+	const b = mapBounds(scene);
 	const x0 = b.cx - OUTER;
 	const x1 = b.cx + OUTER;
 	const z0 = b.cz - OUTER;

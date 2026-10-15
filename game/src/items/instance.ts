@@ -15,6 +15,7 @@ export type ItemInstance = {
 	Container?:{ size:number; contents:ItemInstance[] };
 	Weapon?:{ damage:number; range:number };
 	Blade?:Record<string, never>;
+	Bow?:Record<string, never>;
 	Armor?:{ defense:number; covers:string[] };
 	Consumable?:{ effect:string; amount:number; consumeOnUse:boolean };
 	Torch?:{ lit:boolean };
@@ -67,6 +68,9 @@ export function instantiateDef(def:ItemDef, count?:number):ItemInstance {
 	}
 	if (c.Blade) {
 		inst.Blade = {};
+	}
+	if (c.Bow) {
+		inst.Bow = {};
 	}
 	if (c.Armor) {
 		inst.Armor = { defense: c.Armor.defense, covers: [...c.Armor.covers] };

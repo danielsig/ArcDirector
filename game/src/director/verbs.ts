@@ -62,7 +62,6 @@ import {
 	isRival,
 	nearestAlly,
 	nearestRival,
-	RANGE_FALLOFF,
 	rankSlot,
 	weaknessDamage,
 	type AttackKind,
@@ -372,16 +371,16 @@ async function holdReady(
 }
 
 function rangeAccuracy(spec:AttackKind, dist:number):number {
-	if (!spec.cover) {
+	if (spec.falloff === undefined) {
 		return spec.accuracy;
 	}
 	const span = Math.max(spec.range, 0.01);
 	const t = Math.min(1, Math.max(0, dist / span));
-	return spec.accuracy * (1 - t * (1 - RANGE_FALLOFF));
+	return spec.accuracy * (1 - t * (1 - spec.falloff));
 }
 
 function hitChance(spec:AttackKind, dist:number, agility:number):number {
-	return Math.min(0.97, Math.max(0.05, rangeAccuracy(spec, dist) - agility));
+	return Math.min(0.97, Math.max(0.05, rangeAccuracy(spec, dist) - agility * (spec.dodge ?? 1)));
 }
 
 async function doAttack(host:GameHost, call:Call, verb:string, name:string, locked?:GameObject):Promise<ArcResult> {

@@ -1,16 +1,16 @@
-import { Time, yawToForward, Component, type GameObject } from '@arc-director/kindling';
+import { MOUSE_LEFT, Time, yawToForward, yawToward, Component, type GameObject } from '@arc-director/kindling';
+import * as THREE from 'three';
 import { Camera, Chest, Door, Guard, HumanBody, Appearance, Named, Vitals, type BodySlot } from '../engine/components';
 import { attackFor } from '../director/fight';
-import { strikeWith } from '../items/use';
+import { inReach, strikeWith, useItem } from '../items/use';
 import { CharacterAnimation } from './CharacterAnimation';
 import { CharacterPose } from './CharacterPose';
 import { Order } from '../engine/order';
-import { aimTarget } from './aim';
+import { aimAlong, aimTarget } from './aim';
 import { carryBags, slotItem } from '../items/inventory';
 import type { ItemInstance } from '../items/instance';
 import { swapHeldHands } from '../items/equip';
 import { dropItem, interactChest, interactDoor, nearestPickup, pickup } from '../items/pickup';
-import { useItem } from '../items/use';
 import { PlayerPilot } from './PlayerPilot';
 
 const YAW_SENS = 0.0024;
@@ -25,9 +25,13 @@ export class PlayerInput extends Component {
 	public lookYaw = 0;
 	public selected = 0;
 	public cursorName = '';
+	/** False for a camera player: it walks and looks, nothing else. */
+	public embodied = true;
 	/** When the next swing may start. */
 	private _readyAt = 0;
 	private _guarding = false;
+	/** The shot being drawn: when the draw began, and whether the trigger is let go (it looses once fully drawn). */
+	private _draw:{ t0:number; released:boolean } | null = null;
 
 	public override update(dt:number):void {
 		const world = this.gameObject.world;
@@ -40,6 +44,7 @@ export class PlayerInput extends Component {
 		if (world.sayOpen) {
 			this.moveX = 0;
 			this.moveZ = 0;
+			this.lowerArms();
 			if (cam) {
 				cam.orbitYaw = this.lookYaw;
 			}
@@ -83,7 +88,11 @@ export class PlayerInput extends Component {
 		if ((this.gameObject.getComponent(Vitals)?.hp ?? 1) <= 0) {
 			this.moveX = 0;
 			this.moveZ = 0;
-			this.holdGuard(false);
+			this.lowerArms();
+			return;
+		}
+		if (!this.embodied) {
+			this.lowerArms();
 			return;
 		}
 
@@ -120,13 +129,20 @@ export class PlayerInput extends Component {
 		}
 
 		const yielded = this.gameObject.getComponent(PlayerPilot)?.consumeYield() === true;
-		const clicked = input.pressed('KeyF') || (input.justClick && !yielded);
+		const clicked = input.pressed('KeyF') || (input.pressed(MOUSE_LEFT) && !yielded);
 		// A sword in hand: Shift holds the guard up; a click stabs on the move, slices standing, cleaves with Shift.
-		const sword = this.heldWeapon();
+		const weapon = this.heldWeapon();
+		const sword = weapon?.Blade ? weapon : null;
 		const shift = input.key('ShiftLeft') || input.key('ShiftRight');
 		this.holdGuard(!!sword && shift && !clicked && Time.time >= this._readyAt);
-		if (sword && clicked) {
-			this.swing(sword, shift ? 'cleave' : len > 1e-6 ? 'stab' : 'slice', aimed);
+		if (!weapon?.Bow) {
+			this.cutShot();
+		}
+		if (weapon?.Bow) {
+			this.drawBow(weapon, clicked, input.key('KeyF') || input.key(MOUSE_LEFT), len > 1e-6, fwd);
+		}
+		else if (sword && clicked) {
+			this.attack(sword, shift ? 'cleave' : len > 1e-6 ? 'stab' : 'slice', aimed);
 		}
 		else if (clicked) {
 			const item = this.activeItem();
@@ -171,20 +187,96 @@ export class PlayerInput extends Component {
 		return item?.Weapon && inHand ? item : null;
 	}
 
-	/** Swings `weapon` with `verb`'s move; the blow lands at `target` once the wind-up is done. */
-	private swing(weapon:ItemInstance, verb:string, target:GameObject | null):void {
+	/** Faces `target` and plays `verb`'s move with `weapon` at them; the blow lands once the wind-up is done. */
+	private attack(weapon:ItemInstance, verb:string, target:GameObject | null):void {
 		const world = this.gameObject.world;
 		if (!world || Time.time < this._readyAt) {
 			return;
 		}
 		const { castTime, cooldown } = attackFor(verb, undefined);
 		this._readyAt = Time.time + castTime + cooldown;
+		if (target) {
+			this.face(target);
+		}
 		this.gameObject.getComponent(CharacterAnimation)?.strike(verb, castTime, target ?? undefined);
-		world.after(castTime, () => {
-			if (target) {
-				world.setMessage(strikeWith(this.gameObject, weapon, target, verb));
-			}
-		});
+		world.after(castTime, () => this.land(weapon, verb, target));
+	}
+
+	/**
+	 * A bow in hand: a click starts the draw (standing still), and letting go looses it once fully
+	 * drawn; moving lowers it. All the while it turns on whoever stands nearest the line straight
+	 * ahead of the camera, or along that line when no one does.
+	 */
+	private drawBow(bow:ItemInstance, clicked:boolean, held:boolean, moving:boolean, forward:{ x:number; z:number }):void {
+		const world = this.gameObject.world;
+		if (moving) {
+			this.cutShot();
+		}
+		if (!world || moving || (!this._draw && (!clicked || Time.time < this._readyAt))) {
+			return;
+		}
+		const { castTime, cooldown } = attackFor('shoot', undefined);
+		const range = bow.Weapon!.range;
+		const target = aimAlong(world, this.gameObject, forward, range) ?? this.groundAhead(forward, range);
+		const pose = this.gameObject.getComponent(CharacterPose);
+		this.face(target);
+		if (!this._draw) {
+			this._draw = { t0: Time.time, released: false };
+			pose?.shoot(target, castTime, true);
+			return;
+		}
+		pose?.aimShot(target);
+		this._draw.released ||= !held;
+		if (this._draw.released && Time.time >= this._draw.t0 + castTime) {
+			this._draw = null;
+			this._readyAt = Time.time + cooldown;
+			this.land(bow, 'shoot', target);
+		}
+	}
+
+	/** Lowers the bow being drawn, its arrow unloosed. */
+	private cutShot():void {
+		if (this._draw) {
+			this._draw = null;
+			this.gameObject.getComponent(CharacterPose)?.resolve('cut');
+		}
+	}
+
+	/** Lowers the guard and the bow: the dead, the bodiless and the talking fight no more. */
+	private lowerArms():void {
+		this.holdGuard(false);
+		this.cutShot();
+	}
+
+	/**
+	 * The blow of `verb` with `weapon` lands on `target`: now, or for a shot once its arrow gets
+	 * there (wide of them when out of reach, into the ground at a spot).
+	 */
+	private land(weapon:ItemInstance, verb:string, target:GameObject | THREE.Vector3 | null):void {
+		const world = this.gameObject.world;
+		const pose = this.gameObject.getComponent(CharacterPose);
+		if (!world || !target || target instanceof THREE.Vector3) {
+			pose?.resolve('miss');
+			return;
+		}
+		const flight = pose?.flightTime() ?? 0;
+		pose?.resolve(inReach(this.gameObject, weapon, target, verb) ? 'hit' : 'miss');
+		world.after(flight, () => world.setMessage(strikeWith(this.gameObject, weapon, target, verb)));
+	}
+
+	/** Turns the body to face `target` now. */
+	private face(target:GameObject | THREE.Vector3):void {
+		const to = target instanceof THREE.Vector3 ? target : target.transform.position;
+		const p = this.gameObject.transform.position;
+		this.gameObject.transform.yaw = yawToward(to.x - p.x, to.z - p.z);
+	}
+
+	/** The ground `range` m off along `forward`: where a shot at no one lands. */
+	private groundAhead(forward:{ x:number; z:number }, range:number):THREE.Vector3 {
+		const p = this.gameObject.transform.position;
+		const x = p.x + forward.x * range;
+		const z = p.z + forward.z * range;
+		return new THREE.Vector3(x, this.gameObject.world?.sampleTerrain(x, z)?.worldY ?? p.y, z);
 	}
 
 	/** Keeps the guard up while `up`, and lowers it when not. */

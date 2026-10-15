@@ -86,7 +86,9 @@ import {
 	type VerbGate,
 	type VerbHandler,
 } from './types.js';
-import { ModelRegistry, type EmbeddingSpec, type InferenceSource, type LiveModel, type ModelSpec } from './models.js';
+import { ModelRegistry, type BrowserModelSpec, type EmbeddingSpec, type InferenceSource, type LiveModel, type ModelSpec } from './models.js';
+import { BrowserProvider, DEFAULT_BROWSER_MODEL } from '../inference/browser.js';
+import type { DownloadObserver, ModelDownload } from '../inference/download.js';
 import { geometryKernels, wayBlocked } from '../world/kernels.js';
 import { Mover } from '../world/mover.js';
 import { OfferBook, offerText, type Offer } from '../world/offers.js';
@@ -404,6 +406,28 @@ ${dump.message}`, image: dump.image });
 			this.removeModelSystemOne(name);
 		}
 		return this;
+	}
+
+	/**
+	 * Model `name`, run in the page on the GPU through transformers.js (`@huggingface/transformers`), before or after
+	 * `start()`; the same name again replaces it. `model` is a Hugging Face repo ({@link BrowserModelSpec.model}) or
+	 * the whole spec; without one, Gemma 4 E4B ({@link DEFAULT_BROWSER_MODEL}). It starts downloading now unless the
+	 * browser has it, then loads. Returns that download, an Observable of its progress; or pass `observer`. Models
+	 * named alike share one download.
+	 */
+	public addBrowserModel(name:string, model:string | BrowserModelSpec = {}, observer?:DownloadObserver):ModelDownload {
+		const { model: ref = DEFAULT_BROWSER_MODEL, provider = BrowserProvider.shared, inference = 'browser', ...spec } = typeof model === 'string' ? { model } : model;
+		if (this._models.providerOf(inference) !== provider) {
+			this.addInference(inference, provider);
+		}
+		// The registry configures it too once it resolves, but the download loads it now.
+		provider.configureModel(ref, { contextLength: spec.contextLength, enableThinking: spec.thinking, thinkingBudget: spec.thinkingBudget });
+		this.addModel(name, { ...spec, inference, id: ref });
+		const download = provider.download(ref);
+		if (observer) {
+			download.subscribe(observer);
+		}
+		return download;
 	}
 
 	/** Minds assigned `name` think with the default until it is added again; a decision model's System One goes too. */
@@ -761,7 +785,6 @@ ${dump.message}`, image: dump.image });
 		this._stepFn = fn;
 		return this;
 	}
-
 	/**
 	 * After characters change collectives, one model call fixes the memories of everyone involved: what went
 	 * stale in a collective left, and what a character or a collective joined should now remember. Moves
@@ -2240,7 +2263,7 @@ ${dump.message}`, image: dump.image });
 					}
 					mind.pushEvent(event);
 					if (event.major) {
-						this._queue?.enqueueMajor(mind.id, true);
+						this._queue?.enqueueMajor(mind.id);
 					}
 				},
 			};
@@ -2376,7 +2399,7 @@ ${dump.message}`, image: dump.image });
 		for (const mind of this.minds()) {
 			mind.pushEvent(event);
 			if (event.major) {
-				this._queue?.enqueueMajor(mind.id, true);
+				this._queue?.enqueueMajor(mind.id);
 			}
 		}
 	}

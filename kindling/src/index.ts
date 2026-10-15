@@ -7,12 +7,12 @@ export { Chunk } from './core/Chunk.js';
 export { ChunkBound, ChunkStreamer, StreamingAnchor } from './core/ChunkStreamer.js';
 export { Game } from './core/Game.js';
 export { Time, resetTime, MAX_DT } from './core/Time.js';
-export { Input } from './core/Input.js';
+export { Input, MOUSE_LEFT } from './core/Input.js';
 export { Rigidbody } from './core/Rigidbody.js';
 export { BoxCollider } from './core/BoxCollider.js';
 export { SHOVE_YIELD, stepPhysics, resolveBody, canOccupy } from './core/physics.js';
 export { clamp, hash, lerpAngle, yawToForward, yawToward } from './core/math.js';
-export type { TerrainSample } from './core/World.js';
+export type { ChunkBounds, TerrainSample } from './core/World.js';
 export type { Constructor, ComponentClass, ComponentInit, KindlingTypes } from './core/types.js';
 
 export { Camera, type ImpactFrame } from './render/Camera.js';

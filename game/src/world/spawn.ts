@@ -77,16 +77,21 @@ function bindChunk(go:GameObject, chunkID:string):void {
 	go.addComponent(ChunkBound, { chunkID });
 }
 
+/** A lit torch: on the wall beside its cell (`wall_torch`), or on a pole in the middle of it (`standing_torch`). */
 function spawnTorch(world:World, chunk:Chunk, ent:ChunkEntity):void {
+	const standing = ent.def === 'standing_torch';
 	const center = chunk.worldCellCenter(ent.localX, ent.localZ);
-	const off = wallOffset(chunk, ent.localX, ent.localZ);
+	const off = standing ? { x: 0, z: 0, yaw: 0 } : wallOffset(chunk, ent.localX, ent.localZ);
 	const tile = chunk.tile(ent.localX, ent.localZ);
 	const go = new GameObject(ent.name ?? `torch_${chunk.id}_${ent.localX}_${ent.localZ}`, 'Torch');
 	go.transform.position.x = center.x + off.x;
-	go.transform.position.y = (tile?.height ?? 0) * TILE_HEIGHT + 1.15;
+	go.transform.position.y = (tile?.height ?? 0) * TILE_HEIGHT + (standing ? 0 : 1.15);
 	go.transform.position.z = center.z + off.z;
 	go.transform.yaw = off.yaw;
-	go.addComponent(MeshRenderer, { meshID: 'torch' });
+	go.addComponent(MeshRenderer, { meshID: standing ? 'torch_stand' : 'torch' });
+	if (standing) {
+		go.addComponent(BoxCollider, { size: { x: 0.4, y: 1, z: 0.4 }, shape: 'cylinder' });
+	}
 	const torch = go.addComponent(Torch, { lit: true });
 	go.addComponent(Light, {
 		color: 0xff9a4a,
@@ -94,8 +99,8 @@ function spawnTorch(world:World, chunk:Chunk, ent:ChunkEntity):void {
 		decay: torch.baseDecay * Torch.decayScale,
 		range: 11,
 		castShadow: true,
-		offsetY: 0.35,
-		offsetZ: 0.18,
+		offsetY: standing ? 1.62 : 0.35,
+		offsetZ: standing ? 0 : 0.18,
 		intensityFlicker: 0.75,
 		intensityFlickerSpeed: 0.5,
 		positionalFlicker: 0.012,
@@ -224,7 +229,7 @@ const ITEM_DEFS_SPAWN = new Set([
 export function spawnChunkEntities(world:World, chunk:Chunk):void {
 	const bridgeSpans:ChunkEntity[] = [];
 	for (const ent of chunk.entities) {
-		if (ent.def === 'wall_torch') {
+		if (ent.def === 'wall_torch' || ent.def === 'standing_torch') {
 			spawnTorch(world, chunk, ent);
 		}
 		else if (ent.def === 'chest') {
@@ -665,6 +670,26 @@ export function spawnRaven(world:World, id:string, x:number, z:number, yaw = 0):
 	go.transform.yaw = yaw;
 	go.addComponent(MeshRenderer, { meshID: 'Raven' });
 	go.addComponent(Raven);
+	world.add(go);
+}
+
+/** A named room of a scene's map, corner cell to corner cell (inclusive). */
+export type RoomDef = { name:string; from:[number, number]; to:[number, number] };
+
+/**
+ * A room: somewhere to go to and to be in, with nothing to draw. Not bound to a chunk, so it can be found from
+ * anywhere in the scene.
+ */
+export function spawnRoom(world:World, room:RoomDef):void {
+	const minX = Math.min(room.from[0], room.to[0]) * CELL_SIZE;
+	const maxX = (Math.max(room.from[0], room.to[0]) + 1) * CELL_SIZE;
+	const minZ = Math.min(room.from[1], room.to[1]) * CELL_SIZE;
+	const maxZ = (Math.max(room.from[1], room.to[1]) + 1) * CELL_SIZE;
+	const go = new GameObject(room.name, room.name);
+	go.transform.position.x = (minX + maxX) / 2;
+	go.transform.position.z = (minZ + maxZ) / 2;
+	go.addComponent(Named, { id: room.name });
+	go.addComponent(Interior, { minX, maxX, minZ, maxZ, room: true });
 	world.add(go);
 }
 

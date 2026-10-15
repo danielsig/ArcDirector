@@ -7,6 +7,7 @@ import HudLayer from './ui/HudLayer.vue';
 import CursorLayer from './ui/CursorLayer.vue';
 import MusicPlayer from './ui/MusicPlayer.vue';
 import SceneBackdrop from './ui/SceneBackdrop.vue';
+import InferencePicker from './ui/InferencePicker.vue';
 import { emptyHud } from './ui/hudModel';
 import { sessionKey } from './ui/sessionKey';
 import type { Session } from './engine/Session';
@@ -14,7 +15,7 @@ import { SCENES } from './data/scenes';
 import { clearURLView } from './engine/urlView';
 import { preloadArt } from './render/preloadArt';
 import { startMenuAudio, type MenuAudioHandle } from './audio/menu';
-import { prefs, setPrefs, watchPrefs } from './prefs';
+import { prefs, setMusicMuted, watchPrefs } from './prefs';
 
 preloadArt();
 
@@ -26,6 +27,8 @@ provide(sessionKey, session);
 const sceneID = ref<string | null>(
 	fromURL && SCENES[fromURL] ? fromURL : null,
 );
+/** Where NPCs think is picked: the init screen gives way to the scene cards. A scene deep link skips it. */
+const setupDone = ref(sceneID.value !== null);
 const picker = ref<HTMLElement | null>(null);
 const musicMuted = ref(prefs().musicMuted);
 const menuHandle = shallowRef<MenuAudioHandle | null>(null);
@@ -101,7 +104,7 @@ function kickLive():void {
 }
 
 function toggleMenuMusic():void {
-	menuHandle.value?.setMuted(setPrefs({ musicMuted: !musicMuted.value }).musicMuted);
+	menuHandle.value?.setMuted(setMusicMuted(!musicMuted.value).musicMuted);
 }
 
 function pick(id:string):void {
@@ -132,32 +135,39 @@ function leave():void {
 	<div v-if="!sceneID" ref="picker" class="picker">
 		<img class="bg" src="/main_menu_background.jpg" alt="">
 		<SceneBackdrop v-if="backdrop" :key="backdrop" :sceneID="backdrop" />
-		<div class="column">
+		<div class="column" :class="{ wide: !setupDone }">
 			<div class="title">
 				<img class="logo" src="/text-logo.png" alt="Arc Director">
 				<p class="slogan">Where NPCs write their own destiny.</p>
 			</div>
-			<div class="cards" @mouseleave="unpreview">
-				<button
-					v-for="card in CARDS"
-					:key="card.id"
-					type="button"
-					class="card"
-					:aria-label="SCENES[card.id]?.title"
-					@mouseenter="preview(card.id)"
-					@focus="preview(card.id)"
-					@blur="unpreview"
-					@click="pick(card.id)"
-				>
-					<img :src="`/menu/${card.id}.jpg`" alt="">
-				</button>
-			</div>
-			<div class="details" :class="{ shown: hoveredCard }" aria-live="polite">
-				<template v-if="hoveredCard">
-					<b>{{ SCENES[hoveredCard.id]?.title }}</b>
-					<span>{{ hoveredCard.blurb }}</span>
-				</template>
-			</div>
+			<section v-if="!setupDone" class="setup" aria-labelledby="setup-title">
+				<h2 id="setup-title">Where should NPCs think?</h2>
+				<p>In LM Studio, or right here in your browser.</p>
+				<InferencePicker @chosen="setupDone = true" />
+			</section>
+			<template v-else>
+				<div class="cards" @mouseleave="unpreview">
+					<button
+						v-for="card in CARDS"
+						:key="card.id"
+						type="button"
+						class="card"
+						:aria-label="SCENES[card.id]?.title"
+						@mouseenter="preview(card.id)"
+						@focus="preview(card.id)"
+						@blur="unpreview"
+						@click="pick(card.id)"
+					>
+						<img :src="`/menu/${card.id}.jpg`" alt="">
+					</button>
+				</div>
+				<div class="details" :class="{ shown: hoveredCard }" aria-live="polite">
+					<template v-if="hoveredCard">
+						<b>{{ SCENES[hoveredCard.id]?.title }}</b>
+						<span>{{ hoveredCard.blurb }}</span>
+					</template>
+				</div>
+			</template>
 		</div>
 		<button
 			type="button"
@@ -234,6 +244,32 @@ function leave():void {
 	flex-direction: column;
 	justify-content: center;
 	gap: 22px;
+}
+
+/* The init screen needs room for LM Studio beside the two browser models, and scrolls when its steps run long. */
+.column.wide {
+	width: min(640px, calc(100% - 32px));
+	justify-content: safe center;
+	overflow-y: auto;
+}
+
+/* The init screen: a parchment box asking where NPCs think. */
+.setup {
+	padding: 18px 22px 22px;
+	background: var(--parchment);
+	border: var(--line) solid var(--ink);
+	border-radius: var(--radius-panel);
+	box-shadow: var(--shadow-panel);
+}
+
+.setup h2 {
+	margin: 0;
+	font-size: 24px;
+}
+
+.setup p {
+	margin: 2px 0 14px;
+	font-size: 15px;
 }
 
 /* The logo with the slogan under it, centered over the previews. */
@@ -354,7 +390,8 @@ function leave():void {
 }
 
 @media (max-width: 700px) {
-	.column {
+	.column,
+	.column.wide {
 		left: 16px;
 		right: 16px;
 		top: 16px;

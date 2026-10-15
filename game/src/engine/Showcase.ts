@@ -58,7 +58,7 @@ export class Showcase extends KindlingGame<World> {
 			cam.distance = ORBIT_DISTANCE;
 		}
 		const systems = new GameObject('Systems', 'Systems');
-		this._view = systems.addComponent(WorldView, { getRenderer: () => this.renderer });
+		this._view = systems.addComponent(WorldView, { getRenderer: () => this.renderer, ground: this._scene.ground });
 		const stream = systems.addComponent(WorldStream, { chunks: decoded.map((d) => d.chunk) });
 		systems.addComponent(Orbit);
 		this.world.add(systems);

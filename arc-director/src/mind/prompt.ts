@@ -645,6 +645,15 @@ export function blockedAgainHint(reason:string, format:ArcFormat = 'json'):strin
 		+ `Deal with what is in the way first, or do something else. Keep this conversation. ${thenEmit(format)}`;
 }
 
+/**
+ * After the thinking budget cut a thought short, given back as the model's own turn: decide from it now, and reply
+ * with an Arc, or with goals when it was revising them.
+ */
+export function thoughtCutHint(format:ArcFormat, reply:'arc' | 'goals' = 'arc'):string {
+	const then = reply === 'goals' ? 'Then reply with your goals, as asked.' : thenEmit(format);
+	return `Your time to think is up. Do not think again: decide from what you thought so far. ${then}`;
+}
+
 function thenEmit(format:ArcFormat):string {
 	return format === 'text'
 		? 'Then emit only one valid Arc text — no JSON, no prose. Names only, no coordinates.'

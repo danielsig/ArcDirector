@@ -4,6 +4,7 @@ import HudHearts from './HudHearts.vue';
 import HudCounts from './HudCounts.vue';
 import HudMinimap from './HudMinimap.vue';
 import HudMessage from './HudMessage.vue';
+import HudModelName from './HudModelName.vue';
 import HudInventory from './HudInventory.vue';
 import HudSpeech from './HudSpeech.vue';
 import HudChat from './HudChat.vue';
@@ -34,6 +35,7 @@ const emit = defineEmits<{
 		<HudCounts :hud="hud" />
 		<HudInventory :hud="hud" />
 		<HudMessage :hud="hud" />
+		<HudModelName :hud="hud" />
 		<HudChat :hud="hud" />
 		<HudAiLog :hud="hud" />
 		<HudSay :hud="hud" />

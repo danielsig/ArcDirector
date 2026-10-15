@@ -99,7 +99,7 @@ function nearbyLandmarks(world:World, character:GameObject, here?:{ x:number; z:
 		if (go === character || tags.includes('person') || (tags.includes('item') && go.getComponent(Pickupable))) {
 			continue;
 		}
-		if (!['tree', 'waterfall', 'boulder', 'pillar', 'building', 'bridge'].some((t) => tags.includes(t))) {
+		if (!['tree', 'waterfall', 'boulder', 'pillar', 'building', 'room', 'bridge'].some((t) => tags.includes(t))) {
 			continue;
 		}
 		const gp = go.transform.position;

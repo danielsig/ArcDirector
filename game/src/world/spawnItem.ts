@@ -1,6 +1,7 @@
 import {
 	Armor,
 	Blade,
+	Bow,
 	Consumable,
 	Container,
 	Equipable,
@@ -51,6 +52,7 @@ export function captureItem(go:GameObject):ItemInstance {
 		Container: pack ? { size: pack.size, contents: pack.contents.slice() } : undefined,
 		Weapon: wpn ? { damage: wpn.damage, range: wpn.range } : undefined,
 		Blade: go.getComponent(Blade) ? {} : undefined,
+		Bow: go.getComponent(Bow) ? {} : undefined,
 		Armor: arm ? { defense: arm.defense, covers: [...arm.covers] } : undefined,
 		Consumable: con
 			? { effect: con.effect, amount: con.amount, consumeOnUse: con.consumeOnUse }
@@ -82,6 +84,9 @@ export function applyInstance(go:GameObject, inst:ItemInstance):void {
 	}
 	if (inst.Blade) {
 		go.addComponent(Blade);
+	}
+	if (inst.Bow) {
+		go.addComponent(Bow);
 	}
 	if (inst.Armor) {
 		go.addComponent(Armor, { defense: inst.Armor.defense, covers: [...inst.Armor.covers] });

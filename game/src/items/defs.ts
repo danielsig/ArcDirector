@@ -11,6 +11,7 @@ export type ItemDef = {
 		Container?:{ size:number };
 		Weapon?:{ damage:number; range:number };
 		Blade?:Record<string, never>;
+		Bow?:Record<string, never>;
 		Armor?:{ defense:number; covers:string[] };
 		Consumable?:{ effect:string; amount:number; consumeOnUse:boolean };
 		Torch?:{ lit:boolean };
@@ -121,6 +122,7 @@ export const ITEM_DEFS:Record<string, ItemDef> = {
 		components: {
 			Equipable: { slots: HELD, hands: 2 },
 			Weapon: { damage: 4, range: 12 },
+			Bow: {},
 		},
 	},
 	oak_staff: {
@@ -149,6 +151,7 @@ export const ITEM_DEFS:Record<string, ItemDef> = {
 		components: {
 			Equipable: { slots: HELD, hands: 2 },
 			Weapon: { damage: 4, range: 12 },
+			Bow: {},
 		},
 	},
 	sun_crown: {

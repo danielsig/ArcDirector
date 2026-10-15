@@ -7,6 +7,8 @@ import {
 	prefs,
 	prefsDetached,
 	reloadPrefs,
+	setMusicMuted,
+	setMusicVolume,
 	setPrefs,
 	watchPrefs,
 } from './prefs.ts';
@@ -111,6 +113,22 @@ describe('setPrefs', () => {
 		assert.equal(prefs().arcFormat, 'schema');
 		assert.equal(prefs().music, 0.3);
 		assert.equal('arcText' in prefs(), false);
+	});
+
+	it('turns music off at zero volume and back on at the volume before', () => {
+		setMusicVolume(0.6, 0);
+		const off = setMusicVolume(0, 0.6);
+		assert.equal(off.musicMuted, true);
+		assert.equal(off.music, 0.6);
+		assert.equal(setMusicMuted(false).music, 0.6);
+		assert.equal(setMusicVolume(0.2, 0.6).musicMuted, false);
+	});
+
+	it('turns music on at half volume when it was at zero', () => {
+		setPrefs({ music: 0, musicMuted: true });
+		const on = setMusicMuted(false, { muted: false });
+		assert.equal(on.music, 0.5);
+		assert.equal(on.musicMuted, false);
 	});
 
 	it('tells watchers what changed', () => {

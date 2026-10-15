@@ -10,7 +10,8 @@ import { market_1_0 } from './chunks/market_1_0';
 import { market_0_1 } from './chunks/market_0_1';
 import { market_1_1 } from './chunks/market_1_1';
 import { RUINS_CHUNKS } from './chunks/ruins';
-import type { NPCSpawnOpts } from '../world/spawn';
+import type { NPCSpawnOpts, RoomDef } from '../world/spawn';
+import type { GroundTile } from '../render/groundBox';
 import { goodsOf, packOf } from '../items/wares';
 import type { GameHost, CharacterCtx } from '../director/adapter';
 import { createDirector as createDungeonDirector } from '../director/scenes/dungeon';
@@ -58,6 +59,10 @@ export type SceneDef = {
 	id:string;
 	title:string;
 	look:SceneLook;
+	/** Tile drawn around the map, out to the horizon. Grass when unset. */
+	ground?:GroundTile;
+	/** Health bars over the characters, for scenes that fight. */
+	healthBars?:boolean;
 	chunks:ChunkFile[];
 	npcs:NPCSpawnDef[];
 	ambient:string;
@@ -66,6 +71,8 @@ export type SceneDef = {
 	/** One paragraph: what this scene is for, and how the characters usually get there. */
 	brief:string;
 	player?:PlayerDef;
+	/** Named rooms, by the cells of the scene's map: places to go to and to be in. */
+	rooms?:RoomDef[];
 	/** Ravens on the ground at the start, at world `x`, `z`. */
 	ravens?:{ x:number; z:number; yaw?:number }[];
 	/** World `x`, `z` the main-menu backdrop's camera circles (`Showcase`); the player's start when unset. */
@@ -92,10 +99,19 @@ export const DUNGEON_VAULT:SceneDef = {
 	id: 'dungeon_vault',
 	title: 'Dungeon Crawl',
 	look: 'dungeon',
+	ground: 'floor',
+	healthBars: true,
 	minimapFollow: true,
 	// Play as Participant and the company's archer, Derek, is you.
 	player: { name: 'Derek', tags: ['Archer'], equip: ['short_bow'] },
 	chunks: DUNGEON_CHUNKS,
+	rooms: [
+		{ name: 'Gatehouse', from: [3, 37], to: [12, 44] },
+		{ name: 'PillaredHall', from: [2, 12], to: [19, 26] },
+		{ name: 'Ossuary', from: [29, 13], to: [40, 24] },
+		{ name: 'ThroneCrypt', from: [46, 9], to: [62, 31] },
+		{ name: 'Treasury', from: [51, 33], to: [58, 40] },
+	],
 	npcs: [
 		// The company, in the Gatehouse.
 		delver('Bram', 'KnightMale', 8, 40, 28, { yaw: 0, streams: true, equip: SWORD }),
@@ -371,6 +387,7 @@ export const RUINS:SceneDef = {
 	id: 'ruins',
 	title: '5v5 Combat',
 	look: 'glen',
+	healthBars: true,
 	minimapFollow: true,
 	player: { equip: ['iron_sword'] },
 	chunks: RUINS_CHUNKS,

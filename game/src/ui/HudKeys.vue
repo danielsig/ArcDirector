@@ -1,8 +1,9 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
+import { computed, onMounted, onUnmounted, ref, useTemplateRef, watch } from 'vue';
 import { SCENES } from '../data/scenes';
 import type { HudModel } from './hudModel';
 import { readBackquoteGlyph, universalKeys } from './bindings';
+import HudDialog from './HudDialog.vue';
 
 const props = defineProps<{
 	hud:HudModel;
@@ -10,6 +11,7 @@ const props = defineProps<{
 }>();
 
 const scene = computed(() => SCENES[props.sceneID]);
+const btn = useTemplateRef('btn');
 const consoleKey = ref('~');
 const rows = computed(() => universalKeys(consoleKey.value));
 
@@ -65,32 +67,12 @@ function toggle():void {
 function close():void {
 	props.hud.keysOpen = false;
 }
-
-function fly(el:Element, done:()=>void, open:boolean):void {
-	const panel = el.querySelector('.panel') as HTMLElement;
-	el.getAnimations().forEach((a) => a.cancel());
-	panel.getAnimations().forEach((a) => a.cancel());
-	const btn = el.parentElement!.querySelector('.keys-btn')!.getBoundingClientRect();
-	const box = panel.getBoundingClientRect();
-	const dx = btn.left + btn.width / 2 - box.left - box.width / 2;
-	const dy = btn.top + btn.height / 2 - box.top - box.height / 2;
-	const opts:KeyframeAnimationOptions = {
-		duration: 200,
-		easing: 'cubic-bezier(.2,.8,.2,1)',
-		fill: 'both',
-		direction: open ? 'normal' : 'reverse',
-	};
-	el.animate([{ opacity: 0 }, { opacity: 1 }], opts);
-	panel.animate(
-		[{ transform: `translate(${dx}px, ${dy}px) scale(0.05)` }, { transform: 'none' }],
-		opts,
-	).finished.then(() => done(), () => undefined);
-}
 </script>
 
 <template>
 	<div class="keys-root">
 		<button
+			ref="btn"
 			type="button"
 			class="keys-btn"
 			:class="{ on: hud.keysOpen, away: hud.menuOpen }"
@@ -112,50 +94,28 @@ function fly(el:Element, done:()=>void, open:boolean):void {
 				<rect x="6.2" y="14.2" width="11.6" height="2.4" rx="0.4" fill="currentColor" />
 			</svg>
 		</button>
-		<Transition :css="false" @enter="(el, done) => fly(el, done, true)" @leave="(el, done) => fly(el, done, false)">
-		<div
-			v-if="hud.keysOpen && scene"
-			class="dim"
-			@click.stop="close"
-		>
-			<div
-				class="panel"
-				role="dialog"
-				aria-labelledby="keys-title"
-				@click.stop
-			>
-				<header class="head">
-					<h2 id="keys-title">Keys</h2>
-					<button type="button" class="close" @click.stop="close">Close</button>
-				</header>
-				<div class="body">
-					<dl>
-						<div v-for="row in rows" :key="row.action" class="row">
-							<dt>{{ row.action }}</dt>
-							<dd>{{ row.key }}</dd>
-						</div>
-					</dl>
-					<section v-if="scene.keys.length > 0">
-						<h3>{{ scene.title }}</h3>
-						<dl>
-							<div v-for="row in scene.keys" :key="row.action" class="row">
-								<dt>{{ row.action }}</dt>
-								<dd>{{ row.key }}</dd>
-							</div>
-						</dl>
-					</section>
+		<HudDialog :open="hud.keysOpen && !!scene" title="Keys" :width="480" :from="btn" @close="close">
+			<dl>
+				<div v-for="row in rows" :key="row.action" class="row">
+					<dt>{{ row.action }}</dt>
+					<dd>{{ row.key }}</dd>
 				</div>
-			</div>
-		</div>
-		</Transition>
+			</dl>
+			<section v-if="scene && scene.keys.length > 0">
+				<h3>{{ scene.title }}</h3>
+				<dl>
+					<div v-for="row in scene.keys" :key="row.action" class="row">
+						<dt>{{ row.action }}</dt>
+						<dd>{{ row.key }}</dd>
+					</div>
+				</dl>
+			</section>
+		</HudDialog>
 	</div>
 </template>
 
 <style scoped>
 .keys-root {
-	--cream: #f0e6c8;
-	--highlight: #fff6dc;
-	--rule: #c4b490;
 	position: absolute;
 	inset: 0;
 	pointer-events: none;
@@ -199,81 +159,20 @@ function fly(el:Element, done:()=>void, open:boolean):void {
 
 .keys-btn:hover,
 .keys-btn.on {
-	background: var(--cream);
+	background: var(--parchment-deep);
 }
 
 .keys-btn.away {
 	visibility: hidden;
 }
 
-.dim {
-	position: absolute;
-	inset: 0;
-	pointer-events: auto;
-	background: rgba(8, 6, 4, 0.62);
-	display: flex;
-	align-items: center;
-	justify-content: center;
-}
-
-.panel {
-	width: min(480px, 92vw);
-	max-height: min(90vh, 720px);
-	display: flex;
-	flex-direction: column;
-	background: var(--parchment);
-	color: var(--ink);
-	font-family: ui-monospace, "Cascadia Code", monospace;
-	box-shadow: 0 2px 0 var(--ink), 0 16px 40px rgba(0, 0, 0, 0.45);
-}
-
-.head {
-	flex: 0 0 auto;
-	display: flex;
-	align-items: center;
-	justify-content: space-between;
-	gap: 12px;
-	padding: 12px 16px;
-	border-bottom: 1px solid var(--rule);
-}
-
-h2 {
-	margin: 0;
-	font-size: 15px;
-	font-weight: 700;
-	letter-spacing: 0.18em;
-	text-transform: uppercase;
-}
-
 h3 {
-	margin: 0 0 8px;
-	font-size: 12px;
+	margin: 0 0 6px;
+	font-size: 14px;
 	font-weight: 700;
-	letter-spacing: 0.14em;
+	letter-spacing: 0.08em;
 	text-transform: uppercase;
-}
-
-.close {
-	font: inherit;
-	font-size: 13px;
-	padding: 6px 12px;
-	color: var(--ink);
-	background: var(--cream);
-	border: 0;
-	cursor: pointer;
-	box-shadow: 0 2px 0 var(--ink);
-}
-
-.close:hover {
-	background: var(--highlight);
-}
-
-.body {
-	margin: 0;
-	padding: 16px 28px 20px;
-	overflow: auto;
-	font-size: 15px;
-	line-height: 1.4;
+	opacity: 0.7;
 }
 
 section {
@@ -290,7 +189,7 @@ dl {
 	gap: 16px;
 	align-items: baseline;
 	padding: 5px 0;
-	border-bottom: 1px solid var(--rule);
+	border-bottom: 1px solid var(--ink-soft);
 }
 
 dt {

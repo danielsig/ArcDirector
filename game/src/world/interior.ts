@@ -88,10 +88,11 @@ export function nearestDoorway(world:World, x:number, z:number, range = DOORWAY)
 	return best;
 }
 
-function hasInterior(world:World):boolean {
+/** Whether the world has any interior, or with `buildingsOnly`, any building (rooms aside). */
+function hasInterior(world:World, buildingsOnly = false):boolean {
 	let any = false;
-	world.forEachComponent(Interior, () => {
-		any = true;
+	world.forEachComponent(Interior, (box) => {
+		any ||= !buildingsOnly || !box.room;
 	});
 	return any;
 }
@@ -115,7 +116,7 @@ function doorStatus(doorGo:GameObject):string {
 	return 'the doorway';
 }
 
-/** English line for the think prompt. Empty when the scene has no interiors. */
+/** English line for the think prompt. Empty when the scene has no interiors, and between rooms. */
 export function whereabouts(character:GameObject):string {
 	const world = character.world;
 	if (!world || !hasInterior(world)) {
@@ -125,6 +126,9 @@ export function whereabouts(character:GameObject):string {
 	const inside = enclosureAt(world, p.x, p.z);
 	if (inside) {
 		const name = namedOf(inside);
+		if (inside.getComponent(Interior)?.room) {
+			return `You are in ${name}.`;
+		}
 		const door = doorOfBuilding(world, name);
 		const way = door ? namedOf(door) : 'the door';
 		return `You are inside ${name}. You are not outdoors. Do not walk through ${way} unless you mean to leave.`;
@@ -139,9 +143,16 @@ export function whereabouts(character:GameObject):string {
 		}
 		return `You are in the ${dname} doorway. ${dname} is ${status}.`;
 	}
+	// Between rooms is not outdoors.
+	if (!hasInterior(world, true)) {
+		return '';
+	}
 	let near:GameObject | undefined;
 	let nearD = 14;
 	world.forEachComponent(Interior, (box, go) => {
+		if (box.room) {
+			return;
+		}
 		const cx = (box.minX + box.maxX) * 0.5;
 		const cz = (box.minZ + box.maxZ) * 0.5;
 		const d = Math.hypot(cx - p.x, cz - p.z);

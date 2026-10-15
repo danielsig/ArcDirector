@@ -1,0 +1,714 @@
+<script setup lang="ts">
+import { computed, ref } from 'vue';
+import { fetchModelCatalog, modelIDsMatch } from 'arc-director';
+import {
+	BROWSER_MODELS,
+	LM_STUDIO_MODEL,
+	browserModelBusy,
+	deleteBrowserModel,
+	inferenceSetup,
+	useBrowserModel,
+	type BrowserModel,
+} from '../director/inference';
+import { setPrefs } from '../prefs';
+
+const emit = defineEmits<{
+	/** NPCs think with what was picked from now on. */
+	chosen: [];
+}>();
+
+/** The model that fits this device, while no browser model is downloaded: after that, the advice has done its job. */
+const recommended = computed(() => (Object.values(inferenceSetup.models).some((m) => m.cached) ? null : inferenceSetup.recommended));
+
+/** The browser model whose bin was clicked once: a second click deletes it. */
+const armed = ref<string | null>(null);
+
+/** Asking LM Studio's server whether it is there, before picking it or showing its steps. */
+const connecting = ref(false);
+
+/** The LM Studio steps show in place of the buttons. */
+const steps = ref(false);
+/** LM Studio's model ids as its server answered; empty when it is off, null while asking. */
+const served = ref<string[] | null>(null);
+const serving = computed(() => !!served.value?.length);
+const hasModel = computed(() => !!served.value?.some((id) => modelIDsMatch(id, LM_STUDIO_MODEL.id)));
+
+/** LM Studio answering already: it is picked. Otherwise the steps to set it up show. */
+async function pickLMStudio():Promise<void> {
+	connecting.value = true;
+	try {
+		await check();
+	}
+	finally {
+		connecting.value = false;
+	}
+	if (serving.value) {
+		useLMStudio();
+	}
+	else {
+		steps.value = true;
+	}
+}
+
+async function check():Promise<void> {
+	served.value = null;
+	served.value = (await fetchModelCatalog('/inference')).map((m) => m.id);
+}
+
+function useLMStudio():void {
+	setPrefs({ inference: 'lmstudio' });
+	steps.value = false;
+	emit('chosen');
+}
+
+async function pickBrowser(id:string):Promise<void> {
+	if (await useBrowserModel(id)) {
+		emit('chosen');
+	}
+}
+
+async function remove(model:string):Promise<void> {
+	if (armed.value !== model) {
+		armed.value = model;
+		return;
+	}
+	armed.value = null;
+	await deleteBrowserModel(model);
+}
+
+function inUse(id:string):boolean {
+	return inferenceSetup.inference === 'browser' && inferenceSetup.browserModel === id;
+}
+
+function status(m:BrowserModel):string {
+	const state = inferenceSetup.models[m.model];
+	if (state.progress !== null) {
+		return `${state.cached ? 'Loading' : 'Downloading'} ${Math.round(state.progress * 100)}%`;
+	}
+	if (state.error) {
+		// WebLLM's run long: the first sentence here, all of it in the tooltip.
+		return state.error.split(/(?<=\.)\s/)[0];
+	}
+	if (inferenceSetup.unsupported) {
+		return inferenceSetup.unsupported;
+	}
+	if (inUse(m.model)) {
+		return 'In use';
+	}
+	return state.cached ? 'Downloaded' : `Download ${m.downloadGB} GB`;
+}
+</script>
+
+<template>
+	<div class="inference-picker">
+		<div v-if="!steps" class="choices">
+			<button
+				type="button"
+				class="lmstudio"
+				:class="{ on: inferenceSetup.inference === 'lmstudio' }"
+				:disabled="connecting"
+				:aria-busy="connecting"
+				@click="pickLMStudio"
+			>
+				<img src="/lmstudio/logo.png" alt="">
+				<span class="text">
+					<b>LM Studio</b>
+					<span>{{ connecting ? 'Connecting…' : inferenceSetup.inference === 'lmstudio' ? 'In use' : 'Your own model server' }}</span>
+				</span>
+			</button>
+			<div class="or" aria-hidden="true">
+				<span>or</span>
+			</div>
+			<div class="browser">
+				<div v-for="m in BROWSER_MODELS" :key="m.model" class="model-row" :class="{ recommended: recommended === m.model }">
+					<button
+						type="button"
+						class="model"
+						:class="{ on: inUse(m.model), downloaded: inferenceSetup.models[m.model].cached, failed: inferenceSetup.models[m.model].error }"
+						:disabled="!!inferenceSetup.unsupported || (browserModelBusy() && inferenceSetup.models[m.model].progress === null)"
+						:aria-busy="inferenceSetup.models[m.model].progress !== null"
+						:title="inferenceSetup.models[m.model].error || undefined"
+						@click="pickBrowser(m.model)"
+					>
+						<svg v-if="inferenceSetup.models[m.model].cached" class="mark" viewBox="0 0 24 24" aria-hidden="true">
+							<circle cx="12" cy="12" r="10" />
+							<path d="M7.5 12.5l3 3 6-6.5" />
+						</svg>
+						<svg v-else class="mark" viewBox="0 0 24 24" aria-hidden="true">
+							<path d="M12 4v11m-5-5 5 5 5-5M5 20h14" />
+						</svg>
+						<span class="label">
+							<span v-if="recommended === m.model" class="fit" title="Fits this device's graphics memory with room left for the game">
+								<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2.5l2.9 6 6.6.8-4.9 4.6 1.3 6.6L12 17.3l-5.9 3.2 1.3-6.6L2.5 9.3l6.6-.8z" /></svg>
+								Recommended for this device
+							</span>
+							<b>{{ m.label }}</b>
+							<span class="status">{{ status(m) }}</span>
+						</span>
+						<span
+							v-if="inferenceSetup.models[m.model].progress !== null"
+							class="bar"
+							role="progressbar"
+							:aria-valuenow="Math.round(inferenceSetup.models[m.model].progress! * 100)"
+							aria-valuemin="0"
+							aria-valuemax="100"
+							:style="{ width: `${inferenceSetup.models[m.model].progress! * 100}%` }"
+						/>
+					</button>
+					<button
+						v-if="inferenceSetup.models[m.model].progress === null && (inferenceSetup.models[m.model].cached || inferenceSetup.models[m.model].error)"
+						type="button"
+						class="delete"
+						:class="{ armed: armed === m.model }"
+						:aria-label="armed === m.model ? `Confirm deleting ${m.label}` : `Delete ${m.label}`"
+						:title="`Delete ${m.label} (${m.downloadGB} GB) from this browser`"
+						@click="remove(m.model)"
+						@blur="armed = null"
+					>
+						<template v-if="armed === m.model">Delete?</template>
+						<svg v-else viewBox="0 0 24 24" aria-hidden="true">
+							<path fill="currentColor" d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z" />
+						</svg>
+					</button>
+				</div>
+			</div>
+		</div>
+		<div v-else class="steps">
+			<ol>
+				<li :class="{ done: serving }">
+					<b>Download LM Studio</b>
+					<span>From <a href="https://lmstudio.ai/download" target="_blank" rel="noopener">lmstudio.ai/download</a>, then install and open it.</span>
+				</li>
+				<li :class="{ done: hasModel }">
+					<b>Download {{ LM_STUDIO_MODEL.label }}</b>
+					<span>
+						In <i>Model Search</i>, pick <a :href="`https://lmstudio.ai/models/${LM_STUDIO_MODEL.id}`" target="_blank" rel="noopener">{{ LM_STUDIO_MODEL.label }}</a>
+						and press <i>Download</i>, or run <code>lms get {{ LM_STUDIO_MODEL.id }}</code>.
+					</span>
+					<div class="shots">
+						<a v-for="shot in ['model-search', 'download']" :key="shot" :href="`/lmstudio/${shot}.webp`" target="_blank" :class="shot">
+							<img :src="`/lmstudio/${shot}.webp`" alt="">
+						</a>
+					</div>
+				</li>
+				<li :class="{ done: serving }">
+					<b>Start the server with CORS on</b>
+					<span>
+						In <i>Model Server</i>, switch <i>Status</i> to Running, then open <i>Server Settings</i> and turn on
+						<i>Enable CORS</i>, or run <code>lms server start --cors</code>.
+					</span>
+					<div class="shots">
+						<a href="/lmstudio/server.webp" target="_blank"><img src="/lmstudio/server.webp" alt=""></a>
+					</div>
+				</li>
+				<li>
+					<b>Keep their thoughts short <span class="optional">(optional)</span></b>
+					<span>
+						NPCs that think long act late. Open the model's settings in LM Studio's <i>Library</i>, then under <i>Inference</i>
+						tick <i>Reasoning Budget</i> and set it to 512.
+					</span>
+					<div class="shots narrow">
+						<a href="/lmstudio/budget.webp" target="_blank"><img src="/lmstudio/budget.webp" alt=""></a>
+					</div>
+				</li>
+			</ol>
+			<p class="check" aria-live="polite">
+				<template v-if="served === null">Looking for LM Studio…</template>
+				<template v-else-if="serving">LM Studio is answering with {{ served.length }} model{{ served.length === 1 ? '' : 's' }}.</template>
+				<template v-else>LM Studio isn't answering on port 1234 yet.</template>
+				<button type="button" class="link" :disabled="served === null" @click="check">Check again</button>
+			</p>
+			<div class="actions">
+				<button type="button" @click="steps = false">Back</button>
+				<button type="button" class="primary" @click="useLMStudio">Use LM Studio</button>
+			</div>
+		</div>
+	</div>
+</template>
+
+<style scoped>
+/*
+ * Where NPCs think. LM Studio (its blue) on the left, the browser models stacked on the right; narrow, as in the
+ * pause menu, they wrap into one column. A download fills a gold bar along its button's foot.
+ */
+.inference-picker {
+	container-type: inline-size;
+	font-family: var(--font);
+	color: var(--ink);
+}
+
+button {
+	font: inherit;
+	color: inherit;
+	cursor: pointer;
+}
+
+button:disabled {
+	opacity: 0.5;
+	cursor: default;
+}
+
+button:focus-visible,
+a:focus-visible {
+	outline: var(--line-thin) solid var(--gold-deep);
+	outline-offset: 2px;
+}
+
+.choices {
+	display: flex;
+	gap: 12px;
+}
+
+.lmstudio,
+.browser {
+	flex: 1 1 0;
+}
+
+/* Between LM Studio and the browser models: a rule with "or" in the middle, upright beside them, flat between rows. */
+.or {
+	flex: 0 0 auto;
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	gap: 6px;
+}
+
+.or::before,
+.or::after {
+	content: "";
+	flex: 1 1 auto;
+	width: var(--line-thin);
+	background: var(--ink-soft);
+	border-radius: 1px;
+}
+
+.or span {
+	font-size: 14px;
+	font-weight: 700;
+	letter-spacing: 0.08em;
+	text-transform: uppercase;
+	opacity: 0.65;
+}
+
+.lmstudio,
+.model {
+	position: relative;
+	overflow: hidden;
+	border: var(--line) solid var(--ink);
+	border-radius: var(--radius);
+	box-shadow: var(--shadow);
+}
+
+/* A browser model lifts as a row, so its bin rises with it. */
+.lmstudio,
+.model-row {
+	transition: transform var(--quick) var(--ease-out);
+}
+
+.lmstudio:hover:not(:disabled),
+.model-row:hover:has(> .model:not(:disabled)) {
+	transform: translateY(-2px);
+}
+
+.lmstudio:active:not(:disabled),
+.model-row:has(> .model:active:not(:disabled)) {
+	transform: translateY(2px);
+}
+
+.lmstudio:active:not(:disabled),
+.model:active:not(:disabled) {
+	box-shadow: none;
+}
+
+/* What NPCs think with now: a gold ring. */
+.lmstudio.on,
+.model.on {
+	box-shadow: 0 0 0 var(--line) var(--gold), var(--shadow);
+}
+
+/* LM Studio's own blue, from its logo. */
+.lmstudio {
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	justify-content: center;
+	gap: 10px;
+	min-height: 160px;
+	padding: 16px;
+	color: #fff;
+	background: linear-gradient(135deg, #6b74ed, #5018c0);
+}
+
+.lmstudio img {
+	width: 64px;
+	height: 64px;
+	border-radius: 14px;
+	box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.5);
+}
+
+.text {
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	gap: 2px;
+}
+
+.text b {
+	font-size: 22px;
+}
+
+.text span {
+	font-size: 14px;
+	opacity: 0.85;
+}
+
+.browser {
+	display: flex;
+	flex-direction: column;
+	gap: 12px;
+}
+
+.model-row {
+	position: relative;
+	flex: 1 1 auto;
+	display: flex;
+}
+
+.model {
+	flex: 1 1 auto;
+	display: flex;
+	align-items: center;
+	gap: 12px;
+	min-height: 74px;
+	padding: 10px 16px 14px;
+	text-align: left;
+	background: var(--parchment);
+}
+
+.model:hover:not(:disabled) {
+	background: var(--parchment-deep);
+}
+
+/*
+ * Not downloaded yet: flat, a dashed outline and a download arrow. Downloaded: raised and solid, with a gold
+ * tick, and room on the right for its bin.
+ */
+.model:not(.downloaded) {
+	border-style: dashed;
+	box-shadow: none;
+	background: transparent;
+}
+
+.model.downloaded {
+	padding-right: 70px;
+}
+
+.mark {
+	flex: 0 0 auto;
+	width: 30px;
+	height: 30px;
+	fill: none;
+	stroke: var(--ink);
+	stroke-width: 2.4;
+	stroke-linecap: round;
+	stroke-linejoin: round;
+}
+
+.model:not(.downloaded) .mark {
+	opacity: 0.6;
+}
+
+.model.downloaded .mark circle {
+	fill: var(--gold);
+	stroke-width: 2;
+}
+
+.label {
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+	min-width: 0;
+}
+
+.model b {
+	font-size: 18px;
+}
+
+/* Keeps a message's line breaks, and still wraps a line too long for the button. */
+/* What fits this device: the card's first line, behind a gold star, over a gold tint. */
+.model .fit {
+	display: flex;
+	align-items: center;
+	gap: 5px;
+	font-size: 13px;
+	font-weight: 700;
+	white-space: nowrap;
+}
+
+.fit svg {
+	flex: 0 0 auto;
+	width: 15px;
+	height: 15px;
+	fill: var(--gold-deep);
+	stroke: var(--ink);
+	stroke-width: 1.5;
+	stroke-linejoin: round;
+}
+
+.model-row.recommended .model {
+	background: color-mix(in srgb, var(--gold) 22%, var(--parchment));
+}
+
+.model-row.recommended .model:hover:not(:disabled) {
+	background: color-mix(in srgb, var(--gold) 38%, var(--parchment));
+}
+
+.model .status {
+	font-size: 14px;
+	opacity: 0.8;
+	white-space: pre-line;
+	display: -webkit-box;
+	-webkit-line-clamp: 2;
+	-webkit-box-orient: vertical;
+	overflow: hidden;
+}
+
+.model.failed .status {
+	color: var(--health);
+	opacity: 1;
+}
+
+/* A downloaded model's bin, inside its button on the right. Once clicked, it asks again in red. */
+.delete {
+	position: absolute;
+	top: 50%;
+	right: 14px;
+	min-width: 44px;
+	height: 44px;
+	padding: 0 10px;
+	display: grid;
+	place-items: center;
+	font-size: 15px;
+	font-weight: 700;
+	color: var(--health);
+	background: none;
+	border: 0;
+	border-radius: var(--radius-small);
+	transform: translateY(-50%);
+}
+
+.delete svg {
+	width: 28px;
+	height: 28px;
+}
+
+.delete:hover {
+	background: var(--ink-soft);
+}
+
+.delete.armed {
+	color: var(--parchment);
+	background: var(--health);
+	border: var(--line-thin) solid var(--ink);
+}
+
+.model .bar {
+	position: absolute;
+	left: 0;
+	bottom: 0;
+	height: 6px;
+	background: var(--gold-deep);
+	opacity: 1;
+	transition: width var(--slow) linear;
+}
+
+/* One column: LM Studio becomes a row like the others. */
+@container (max-width: 500px) {
+	.choices {
+		flex-direction: column;
+	}
+
+	.lmstudio,
+	.browser {
+		flex: 0 0 auto;
+	}
+
+	.or {
+		flex-direction: row;
+	}
+
+	.or::before,
+	.or::after {
+		width: auto;
+		height: var(--line-thin);
+	}
+
+	.lmstudio {
+		flex-direction: row;
+		justify-content: flex-start;
+		min-height: 74px;
+		padding: 10px 16px;
+	}
+
+	.lmstudio img {
+		width: 44px;
+		height: 44px;
+		border-radius: 10px;
+	}
+
+	.text {
+		align-items: flex-start;
+	}
+
+	.text b {
+		font-size: 18px;
+	}
+}
+
+.steps ol {
+	margin: 0;
+	padding: 0;
+	list-style: none;
+	counter-reset: step;
+	display: flex;
+	flex-direction: column;
+	gap: 14px;
+}
+
+/* A gold number, or a tick once LM Studio shows the step is done. */
+.steps li {
+	counter-increment: step;
+	position: relative;
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+	padding-left: 46px;
+	font-size: 15px;
+	line-height: 1.35;
+}
+
+.steps li::before {
+	content: counter(step);
+	position: absolute;
+	left: 0;
+	top: 0;
+	width: 32px;
+	height: 32px;
+	display: grid;
+	place-items: center;
+	font-weight: 700;
+	background: var(--gold);
+	border: var(--line-thin) solid var(--ink);
+	border-radius: 50%;
+}
+
+.steps li.done::before {
+	content: "✓";
+}
+
+.steps li b {
+	font-size: 17px;
+}
+
+.steps a {
+	color: var(--gold-deep);
+	font-weight: 700;
+}
+
+/* Where to click in LM Studio, ringed and numbered; side by side at one height. Each opens full size. */
+.shots {
+	display: flex;
+	gap: 8px;
+	margin-top: 6px;
+}
+
+.shots a {
+	flex: 1 1 0;
+	min-width: 0;
+	border: var(--line-thin) solid var(--ink);
+	border-radius: var(--radius-small);
+	overflow: hidden;
+	box-shadow: var(--shadow);
+}
+
+/* Grown by aspect ratio, so the two share a height. */
+.shots .model-search {
+	flex-grow: 1.29;
+}
+
+.shots .download {
+	flex-grow: 3.49;
+}
+
+/* A tall, narrow picture stays small; it opens full size. */
+.shots.narrow a {
+	flex: 0 0 150px;
+}
+
+.optional {
+	font-size: 14px;
+	font-weight: 400;
+	opacity: 0.7;
+}
+
+.shots img {
+	display: block;
+	width: 100%;
+}
+
+code {
+	font-family: var(--font-mono);
+	font-size: 0.9em;
+	white-space: nowrap;
+	padding: 0 4px;
+	background: var(--parchment-deep);
+	border-radius: 4px;
+}
+
+.check {
+	margin: 16px 0 0;
+	font-size: 14px;
+	display: flex;
+	flex-wrap: wrap;
+	align-items: baseline;
+	gap: 4px 10px;
+}
+
+.link {
+	padding: 0;
+	background: none;
+	border: 0;
+	font-weight: 700;
+	text-decoration: underline;
+}
+
+.actions {
+	display: flex;
+	justify-content: flex-end;
+	gap: 10px;
+	margin-top: 16px;
+}
+
+.actions button {
+	padding: 6px 18px;
+	font-size: 16px;
+	font-weight: 700;
+	background: var(--parchment);
+	border: var(--line-thin) solid var(--ink);
+	border-radius: var(--radius-small);
+	box-shadow: var(--shadow);
+}
+
+.actions button:hover {
+	background: var(--parchment-deep);
+}
+
+.actions .primary {
+	color: #fff;
+	background: linear-gradient(135deg, #6b74ed, #5018c0);
+}
+
+.actions .primary:hover {
+	background: linear-gradient(135deg, #5d66e0, #4413a8);
+}
+</style>

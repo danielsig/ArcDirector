@@ -159,12 +159,14 @@ export class Door extends Component {
 	}
 }
 
-/** Walkable AABB of a named building (world XZ, walls excluded). */
+/** Walkable AABB of a named building, or of a `room` (world XZ, walls excluded). */
 export class Interior extends Component {
 	public minX = 0;
 	public maxX = 0;
 	public minZ = 0;
 	public maxZ = 0;
+	/** A room of a larger place (a crypt hall), not a building with an outdoors around it. */
+	public room = false;
 }
 
 export class Lock extends Component {

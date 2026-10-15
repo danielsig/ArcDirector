@@ -2256,6 +2256,23 @@ describe('repairs, mind verbs, and names', () => {
 		assert.deepEqual(thinking, [true, false, false]);
 	});
 
+	it('answers from a thought the thinking budget cut short, without thinking again', async () => {
+		const thinking:(boolean | undefined)[] = [];
+		const provider = new FakeProvider((req) => {
+			thinking.push(req.enableThinking);
+			if (thinking.length === 1) {
+				return { content: null, reasoning: 'The bridge is closed, so the EastGate is the way out', toolCalls: [], truncated: true };
+			}
+			assert.equal(req.messages.at(-2)?.role, 'assistant');
+			assert.equal(req.messages.at(-2)?.content, 'The bridge is closed, so the EastGate is the way out');
+			assert.match(String(req.messages.at(-1)?.content), /time to think is up/);
+			return { content: 'go_to(EastGate)', toolCalls: [] };
+		});
+		const arc = await agentOf(provider).mind!.tick(1);
+		assert.equal(arc?.[0].args.target, 'EastGate');
+		assert.deepEqual(thinking, [true, false]);
+	});
+
 	it('watch, unwatch, focus, and unfocus edit the extras and leave pins alone', async () => {
 		const agent = agentOf(new FakeProvider(() => ({ content: 'wait()', toolCalls: [] })), {
 			pinnedWatches: { hurt: 'isHurt(me)' },

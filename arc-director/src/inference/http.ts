@@ -110,7 +110,15 @@ export type ModelSettings = {
 	contextLength?:number;
 	enableThinking?:boolean;
 	reasoningEffort?:ReasoningEffort;
+	/**
+	 * Most tokens a thought may run before it is cut off. The reply then comes back `truncated`, with no content and
+	 * the thought so far as its `reasoning`, for the caller to answer from. Default: no limit.
+	 */
+	thinkingBudget?:number;
 };
+
+/** A reply as it came over the wire, or the thought so far when the thinking budget cut it off. */
+type Got = { json:Record<string, unknown>; firstMs?:number; wallMs:number; cutThought?:string };
 
 export type RequestInfo = {
 	req:ChatRequest;
@@ -420,6 +428,25 @@ function messageText(message:Record<string, unknown>):string | null {
 	catch {
 		return null;
 	}
+}
+
+/** A reply the thinking budget cut off: no answer yet, only the thought so far. */
+function cutThoughtReply(got:Got):ChatResponse {
+	return { content: null, reasoning: got.cutThought?.trim() || undefined, toolCalls: [], truncated: true, generateMs: got.wallMs };
+}
+
+/** A chat completions reply's answer, without timings: those depend on how it was sent. */
+export function parseChatCompletion(json:Record<string, unknown>):ChatResponse {
+	const choices = Array.isArray(json.choices) ? json.choices : [];
+	const first = isRecord(choices[0]) ? choices[0] : {};
+	const message = isRecord(first.message) ? first.message : isRecord(first.delta) ? first.delta : {};
+	return {
+		content: messageText(message),
+		reasoning: messageReasoning(message),
+		toolCalls: parseToolCalls(message['tool_calls'] ?? message['toolCalls']),
+		truncated: first['finish_reason'] === 'length',
+		logprobs: firstLogprobs(json),
+	};
 }
 
 function mergeArgFragments(prev:string, next:string):string {
@@ -861,7 +888,8 @@ async function readInferenceResponse(
 	res:Response,
 	url:string,
 	t0:number,
-):Promise<{ json:Record<string, unknown>; firstMs?:number; wallMs:number }> {
+	thinkingBudget?:number,
+):Promise<Got> {
 	const reader = res.body?.getReader();
 	if (!reader) {
 		const text = await res.text();
@@ -885,6 +913,8 @@ async function readInferenceResponse(
 	let finishReason:unknown = undefined;
 	let assembledText = '';
 	let responsesReasoning = '';
+	/** Streamed thought pieces so far: a server sends one per token. */
+	let thoughtTokens = 0;
 	const doneItems:Record<string, unknown>[] = [];
 	const funcs = new Map<string, { id:string; name:string; arguments:string }>();
 	const ingest = (raw:Record<string, unknown> | 'done'):void => {
@@ -951,6 +981,7 @@ async function readInferenceResponse(
 			&& typeof ev.delta === 'string'
 		) {
 			responsesReasoning += ev.delta;
+			thoughtTokens += 1;
 		}
 		const choices = Array.isArray(ev.choices) ? ev.choices : [];
 		const choice = isRecord(choices[0]) ? choices[0] : {};
@@ -973,6 +1004,7 @@ async function readInferenceResponse(
 		}
 		if (typeof delta['reasoning_content'] === 'string') {
 			assembledReasoning += delta['reasoning_content'];
+			thoughtTokens += 1;
 		}
 		if (delta['tool_calls'] !== undefined) {
 			assembledTools = mergeToolCallDeltas(assembledTools, delta['tool_calls']);
@@ -1000,6 +1032,12 @@ async function readInferenceResponse(
 			buf = split.rest;
 			for (const ev of split.events) {
 				ingest(ev);
+			}
+			// Still thinking past the budget: stop generating, and hand back the thought for an answer without one.
+			const answering = assembledContent || assembledText || assembledTools !== undefined || funcs.size > 0;
+			if (thinkingBudget !== undefined && thoughtTokens > thinkingBudget && !answering) {
+				await reader.cancel().catch(() => undefined);
+				return { json: {}, firstMs, wallMs: nowMs() - t0, cutThought: assembledReasoning || responsesReasoning };
 			}
 		}
 		if (done) {
@@ -1341,21 +1379,16 @@ export class HttpProvider implements InferenceProvider {
 	private async chatCompletions(req:ChatRequest, messages:ChatMessage[]):Promise<ChatResponse> {
 		const body = this.completionBody(req, messages);
 		const got = await this.postChat(joinURL(this.baseURL, 'chat/completions'), body, true, req);
-		const json = got.json;
-		const choices = Array.isArray(json.choices) ? json.choices : [];
-		const first = isRecord(choices[0]) ? choices[0] : {};
-		const message = isRecord(first.message) ? first.message : isRecord(first.delta) ? first.delta : {};
-		const timings = parseChatTimings(json);
+		if (got.cutThought !== undefined) {
+			return cutThoughtReply(got);
+		}
+		const timings = parseChatTimings(got.json);
 		const split = mergeClientTimings(timings, got.firstMs, got.wallMs);
 		return {
-			content: messageText(message),
-			reasoning: messageReasoning(message),
-			toolCalls: parseToolCalls(message['tool_calls'] ?? message['toolCalls']),
-			truncated: first['finish_reason'] === 'length',
+			...parseChatCompletion(got.json),
 			cachedTokens: timings.cachedTokens,
 			promptMs: split.promptMs,
 			generateMs: split.generateMs,
-			logprobs: firstLogprobs(json),
 		};
 	}
 
@@ -1383,7 +1416,7 @@ export class HttpProvider implements InferenceProvider {
 		}
 		this.applyOutputCap(req, body, true);
 		applyLogprobs(req, body, true);
-		let got:{ json:Record<string, unknown>; firstMs?:number; wallMs:number };
+		let got:Got;
 		try {
 			got = await this.postChat(joinURL(this.baseURL, 'responses'), body, false, req);
 		}
@@ -1396,6 +1429,9 @@ export class HttpProvider implements InferenceProvider {
 			throw err;
 		}
 		this._responses = true;
+		if (got.cutThought !== undefined) {
+			return cutThoughtReply(got);
+		}
 		const parsed = parseResponsesOutput(got.json);
 		const split = mergeClientTimings(
 			{ promptMs: parsed.promptMs, generateMs: parsed.generateMs },
@@ -1812,8 +1848,9 @@ export class HttpProvider implements InferenceProvider {
 		body:Record<string, unknown>,
 		completions:boolean,
 		req:ChatRequest,
-	):Promise<{ json:Record<string, unknown>; firstMs?:number; wallMs:number }> {
+	):Promise<Got> {
 		let lastErr:Error | null = null;
+		const thinkingBudget = this.thinkingOn(req) ? this.settingsOf(req.model).thinkingBudget : undefined;
 		// Streamed logprobs come in pieces; a scored answer is one token anyway.
 		let stream = !req.topLogprobs;
 		for (let attempt = 0; attempt < 4; attempt++) {
@@ -1862,7 +1899,7 @@ export class HttpProvider implements InferenceProvider {
 				throw lastErr;
 			}
 			try {
-				return await readInferenceResponse(res, url, t0);
+				return await readInferenceResponse(res, url, t0, thinkingBudget);
 			}
 			catch (err) {
 				lastErr = err instanceof Error ? err : new Error(String(err));

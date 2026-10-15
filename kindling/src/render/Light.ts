@@ -11,6 +11,8 @@ export class Light extends Component {
 	public decay = 2;
 	/** Wants a shadow, sized by the renderer's `pointShadowMapSize` or `directionalShadowMapSize`. A point light gets one only while it is among the renderer's nearest `maxPointShadows`. */
 	public castShadow = true;
+	/** A point light's shadow skips what is nearer than this (m): its own lamp or bowl would shade everything around it. */
+	public shadowNear = 0.1;
 	/** Local offset. Z is along Kindling forward (−Z). */
 	public offsetX = 0;
 	public offsetY = 0;
@@ -61,7 +63,6 @@ export class Light extends Component {
 			p.castShadow = false;
 			p.shadow.bias = -0.001;
 			p.shadow.normalBias = 0.01;
-			p.shadow.camera.near = 0.01;
 			this.gameObject.transform.object3D.add(p);
 			this.native = p;
 		}
@@ -96,8 +97,12 @@ export class Light extends Component {
 		if (lamp instanceof THREE.PointLight) {
 			lamp.distance = this.range;
 			lamp.decay = this.decay;
-			lamp.shadow.camera.near = 0.1;
-			lamp.shadow.camera.far = this.range + 0.1;
+			const cam = lamp.shadow.camera;
+			if (cam.near !== this.shadowNear) {
+				cam.near = this.shadowNear;
+				cam.updateProjectionMatrix();
+			}
+			cam.far = this.range + 0.1;
 		}
 		if (lamp instanceof THREE.DirectionalLight) {
 			const xf = this.gameObject.transform;

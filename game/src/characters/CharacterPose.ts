@@ -196,14 +196,31 @@ function stanceOf(go:GameObject):Stance {
 	return { feet: pointOn(go, 0), height: go.getComponent(Appearance)?.height ?? 1.7 };
 }
 
-/** Where on a character to look at or hand things to: a height fraction of `Appearance`. */
-function pointOn(go:GameObject, fraction:number):THREE.Vector3 {
-	const p = go.transform.position;
-	return new THREE.Vector3(p.x, p.y + (go.getComponent(Appearance)?.height ?? 1.7) * fraction, p.z);
+/**
+ * Where on a character to look at or hand things to: a height fraction of `Appearance`. A spot on
+ * the ground stands in for someone of the usual height standing there.
+ */
+function pointOn(at:GameObject | THREE.Vector3, fraction:number):THREE.Vector3 {
+	const p = at instanceof THREE.Vector3 ? at : at.transform.position;
+	const height = at instanceof THREE.Vector3 ? 1.7 : at.getComponent(Appearance)?.height ?? 1.7;
+	return new THREE.Vector3(p.x, p.y + height * fraction, p.z);
 }
 
-/** A shot under way; `outcome` is how it turned out, once the attack says (see {@link CharacterPose.resolve}). */
-type Shot = { t0:number; windUp:number; target:GameObject; arrow:THREE.Object3D | null; loosed:boolean; outcome?:Outcome };
+/**
+ * A shot under way, at a character or at a spot on the ground (where its arrow lands); `outcome`
+ * is how it turned out, once the attack says (see {@link CharacterPose.resolve}), and `firedAt`
+ * when (seconds into the shot). A `held` shot stays drawn past its wind-up until told.
+ */
+type Shot = {
+	t0:number;
+	windUp:number;
+	target:GameObject | THREE.Vector3;
+	held:boolean;
+	arrow:THREE.Object3D | null;
+	loosed:boolean;
+	outcome?:Outcome;
+	firedAt?:number;
+};
 type Swing = { move:SwordMove; t0:number; windUp:number; hold:number; target:GameObject | null; trailed:boolean; ghosted?:boolean };
 /** A spell under way; `gathering` is its gathering sound, playing until it is settled. */
 type Casting = { spell:(typeof SPELLS)[string]; t0:number; windUp:number; target:GameObject; outcome?:Outcome; gathering?:SfxHandle | null };
@@ -256,12 +273,23 @@ export class CharacterPose extends Component {
 		this._dodge = { t0: this._now + Math.max(0, delay - windUp), windUp, aside, away, ghosted: false };
 	}
 
-	/** Draws the held bow at `target`, loosing the arrow `windUp` seconds from now. Without a bow it does nothing. */
-	public shoot(target:GameObject, windUp:number):void {
+	/**
+	 * Draws the held bow at `target` (a character, or a spot on the ground), loosing the arrow
+	 * `windUp` seconds from now. A `held` draw stays drawn after that until {@link resolve}d.
+	 * Without a bow it does nothing.
+	 */
+	public shoot(target:GameObject | THREE.Vector3, windUp:number, held = false):void {
 		this.endShot();
-		this._shot = { t0: this._now, windUp, target, arrow: null, loosed: false };
+		this._shot = { t0: this._now, windUp, target, held, arrow: null, loosed: false };
 		if (this.gameObject.getComponent(HeldProps)?.prop('left')) {
 			cueAt(this.gameObject.world, 'bowDraw', this.gameObject);
+		}
+	}
+
+	/** Turns the shot being drawn on `target` instead; once loosed it is too late. */
+	public aimShot(target:GameObject | THREE.Vector3):void {
+		if (this._shot && !this._shot.loosed && this._shot.outcome === undefined) {
+			this._shot.target = target;
 		}
 	}
 
@@ -348,6 +376,7 @@ export class CharacterPose extends Component {
 		if (shot && !shot.loosed && shot.outcome === undefined) {
 			this.cueShot(shot.target, outcome);
 			shot.outcome = outcome;
+			shot.firedAt = this._now - shot.t0;
 		}
 		const cast = this._cast;
 		if (cast && cast.outcome === undefined) {
@@ -364,7 +393,7 @@ export class CharacterPose extends Component {
 	}
 
 	/** A shot loosed (or not): the bow's twang now, then the arrow striking `target` or the ground by them once it gets there. */
-	private cueShot(target:GameObject, outcome:Outcome):void {
+	private cueShot(target:GameObject | THREE.Vector3, outcome:Outcome):void {
 		const world = this.gameObject.world;
 		if (!world || outcome === 'cut') {
 			return;
@@ -584,10 +613,11 @@ export class CharacterPose extends Component {
 			return;
 		}
 		const t = this._now - shot.t0;
-		// Cut short (or never told), the bow lowers with the arrow unloosed.
-		const cut = !shot.loosed && (shot.outcome === 'cut' || (shot.outcome === undefined && t >= shot.windUp + RELEASE_GRACE));
+		// Cut short (or never told, unless held), the bow lowers with the arrow unloosed.
+		const cut = !shot.loosed && (shot.outcome === 'cut' || (shot.outcome === undefined && !shot.held && t >= shot.windUp + RELEASE_GRACE));
 		const loosed = shot.loosed || shot.outcome === 'hit' || shot.outcome === 'miss';
-		const up = alive && !cut && (!loosed || t < shot.windUp + SHOT_FOLLOW);
+		const fired = shot.firedAt ?? shot.windUp;
+		const up = alive && !cut && (!loosed || t < fired + SHOT_FOLLOW);
 		this._raised = up
 			? Math.min(1, this._raised + dt / Math.min(SHOT_DRAW, shot.windUp / 2))
 			: Math.max(0, this._raised - dt / SHOT_RECOVER);
@@ -613,7 +643,7 @@ export class CharacterPose extends Component {
 		const anchor = head.getWorldPosition(new THREE.Vector3()).addScaledVector(right, 0.035 * height).addScaledVector(flat, 0.02 * height);
 		const aim = toward.clone().sub(anchor).normalize();
 		const grip = anchor.clone().addScaledVector(aim, SHOT_DRAW_LENGTH * height);
-		const follow = loosed ? THREE.MathUtils.smoothstep(t, shot.windUp, shot.windUp + SHOT_FOLLOW) : 0;
+		const follow = loosed ? THREE.MathUtils.smoothstep(t, fired, fired + SHOT_FOLLOW) : 0;
 		const hand = anchor.clone().addScaledVector(aim, -SHOT_FOLLOW_BACK * height * follow);
 
 		// Bow arm straight along the line, elbow turned down, the fist closed upright round the handle
@@ -955,7 +985,7 @@ export class CharacterPose extends Component {
 		}
 	}
 
-	/** Lets the nocked arrow fly from the bow to the target. */
+	/** Lets the nocked arrow fly from the bow to the target (wide of them on a miss), or into the ground at the spot. */
 	private loose(shot:Shot, bow:THREE.Object3D):void {
 		const arrow = shot.arrow;
 		shot.arrow = null;
@@ -965,8 +995,9 @@ export class CharacterPose extends Component {
 			return;
 		}
 		const from = grip.getWorldPosition(new THREE.Vector3());
-		const hit = shot.outcome === 'hit';
-		const to = hit ? pointOn(shot.target, 0.6) : missPoint(from, pointOn(shot.target, 0));
+		const spot = shot.target instanceof THREE.Vector3 ? shot.target : null;
+		const hit = !spot && shot.outcome === 'hit';
+		const to = spot?.clone() ?? (hit ? pointOn(shot.target, 0.6) : missPoint(from, pointOn(shot.target, 0)));
 		arrow.visible = true;
 		this._flying.push({ arrow, from, to, t0: Time.time, seconds: Math.max(0.05, from.distanceTo(to) / ARROW_SPEED), hit });
 	}

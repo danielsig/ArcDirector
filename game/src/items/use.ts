@@ -62,10 +62,16 @@ function brewAtHearth(character:GameObject, item:ItemInstance):UseResult {
 	return ok(`brewed ${brew.yield} MagicPotion`);
 }
 
+/** Whether `target` is within reach of weapon `item` swung (or shot) with `verb`: the longer of the two. */
+export function inReach(character:GameObject, item:ItemInstance, target:GameObject, verb?:string):boolean {
+	const spec = verb ? ATTACKS[verb] : undefined;
+	return distXZ(character, target) <= Math.max(item.Weapon?.range ?? 0, spec?.range ?? 0);
+}
+
 /**
  * One blow of weapon `item` at `target`, now: `verb`'s damage and reach where they beat the
- * weapon's own (a stab, a slice, a cleave). Says how it went: hit, blocked (a raised guard facing
- * the blow), too far, or missed.
+ * weapon's own (a stab, a slice, a cleave, a shot). Says how it went: hit, blocked (a raised guard
+ * facing the blow), too far, or missed.
  */
 export function strikeWith(character:GameObject, item:ItemInstance, target:GameObject | null, verb?:string):string {
 	const world = character.world;
@@ -74,7 +80,7 @@ export function strikeWith(character:GameObject, item:ItemInstance, target:GameO
 		return 'missed';
 	}
 	const spec = verb ? ATTACKS[verb] : undefined;
-	if (distXZ(character, target) > Math.max(item.Weapon.range, spec?.range ?? 0)) {
+	if (!inReach(character, item, target, verb)) {
 		return 'too far';
 	}
 	if (guardStops(target, character)) {

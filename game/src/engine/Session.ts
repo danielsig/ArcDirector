@@ -296,7 +296,7 @@ export class Session extends Component {
 	}
 
 	public async refreshHudModels():Promise<void> {
-		if (!this.hud.arcDirectorOn) {
+		if (!this.hud.arcDirectorOn || prefs().inference !== 'lmstudio') {
 			return;
 		}
 		const catalog = await fetchModelCatalog('/inference');
@@ -452,7 +452,7 @@ export class Session extends Component {
 		if (next.model && changed('model')) {
 			hud.model = next.model;
 		}
-		if (changed('model') || changed('maxParallel') || changed('contextLength') || changed('thinkingBudget') || changed('decisionModel')) {
+		if ((['inference', 'model', 'browserModel', 'maxParallel', 'contextLength', 'thinkingBudget', 'decisionModel'] as const).some((key) => changed(key))) {
 			if (arc) {
 				addModels(arc, next);
 			}
@@ -570,7 +570,7 @@ export class Session extends Component {
 		}
 	}
 
-	/** A camera player has no body: nothing to render, nothing to bump into, nothing to hear. */
+	/** A camera player has no body: nothing to render, nothing to bump into, nothing to hear, no hands. */
 	private applyPlayerModeToBody(mode:PlayerMode):void {
 		const player = this.gameObject.world?.findByID('Player');
 		if (!player) {
@@ -578,6 +578,10 @@ export class Session extends Component {
 		}
 		const embodied = mode !== 'camera';
 		player.transform.object3D.visible = embodied;
+		const input = player.getComponent(PlayerInput);
+		if (input) {
+			input.embodied = embodied;
+		}
 		for (const part of [player.getComponent(BoxCollider), player.getComponent(AudioSource)]) {
 			if (part) {
 				part.enabled = embodied;

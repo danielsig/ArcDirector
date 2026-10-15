@@ -89,8 +89,9 @@ export function tagsOf(go:GameObject):string[] {
 
 function tagsNow(go:GameObject):string[] {
 	const tags:string[] = [];
-	if (go.getComponent(Interior)) {
-		tags.push('building', 'house', 'landmark');
+	const interior = go.getComponent(Interior);
+	if (interior) {
+		tags.push(...(interior.room ? ['room'] : ['building', 'house']), 'landmark');
 	}
 	if (go.getComponent(Door)) {
 		tags.push('door', 'landmark');

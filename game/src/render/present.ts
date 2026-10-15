@@ -1,4 +1,4 @@
-import { Time, type GameObject } from '@arc-director/kindling';
+import { Time, type ChunkBounds, type GameObject } from '@arc-director/kindling';
 import * as THREE from 'three';
 import { Chest, Door, Torch, Bridge } from '../engine/components';
 import { MeshRenderer } from '../engine/MeshRenderer';
@@ -6,7 +6,7 @@ import type { World } from '../engine/World';
 import { buildChunkMesh, CHUNK_MESH_REV } from './buildChunkMesh';
 import { getSheet, sheetReady } from './spritesheet';
 import { natureReady, tickNature, untrackNature } from './nature';
-import { createGroundBox } from './groundBox';
+import { createGroundBox, type GroundTile } from './groundBox';
 import { disposeGrassBatch, syncGrassBatch } from './grassBatch';
 import { nearestPickup } from '../items/pickup';
 
@@ -28,7 +28,8 @@ export class WorldPresent {
 	private _pickupGlowMap:THREE.CanvasTexture | null = null;
 	private _camPitch = 0;
 
-	public mountGroundBox(world:World):void {
+	/** The `ground` around the map, once; `scene` is every chunk of the scene, loaded or not. */
+	public mountGroundBox(world:World, scene:ChunkBounds | undefined, ground?:GroundTile):void {
 		if (!sheetReady()) {
 			return;
 		}
@@ -41,7 +42,7 @@ export class WorldPresent {
 			this._groundBox = null;
 		}
 		try {
-			this._groundBox = createGroundBox(world);
+			this._groundBox = createGroundBox(scene, ground);
 			this._groundHadGrass = grass;
 			world.native.add(this._groundBox);
 		}

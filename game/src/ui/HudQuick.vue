@@ -2,7 +2,7 @@
 import { computed, inject } from 'vue';
 import type { HudModel } from './hudModel';
 import { sessionKey } from './sessionKey';
-import { setPrefs } from '../prefs';
+import { setMusicMuted, setPrefs } from '../prefs';
 
 const props = defineProps<{
 	hud:HudModel;
@@ -26,14 +26,13 @@ const SOUND_LABEL = {
 /** On, then music muted, then all muted, then on again. */
 function cycleSound():void {
 	if (sound.value === 'on') {
-		setPrefs({ musicMuted: true });
+		setMusicMuted(true);
 	}
 	else if (sound.value === 'music-muted') {
 		setPrefs({ muted: true });
 	}
 	else {
-		// Music at zero would leave "on" silent.
-		setPrefs({ muted: false, musicMuted: false, ...(props.hud.musicVolume > 0 ? {} : { music: 0.5 }) });
+		setMusicMuted(false, { muted: false });
 	}
 }
 </script>

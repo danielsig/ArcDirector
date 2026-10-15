@@ -22,6 +22,25 @@ const NONE:readonly GameObject[] = [];
 const COVER_SAMPLES = 8;
 const pos = new THREE.Vector3();
 
+/** World XZ box, in meters. */
+export type ChunkBounds = { minX:number; minZ:number; maxX:number; maxZ:number };
+
+/** World XZ box around `chunks`, or `undefined` when there are none. */
+export function chunkBounds(chunks:Iterable<ChunkType>):ChunkBounds | undefined {
+	let bounds:ChunkBounds | undefined;
+	for (const chunk of chunks) {
+		const x = chunk.worldOriginX();
+		const z = chunk.worldOriginZ();
+		const span = chunk.size * chunk.cellSize;
+		bounds ??= { minX: x, minZ: z, maxX: x + span, maxZ: z + span };
+		bounds.minX = Math.min(bounds.minX, x);
+		bounds.minZ = Math.min(bounds.minZ, z);
+		bounds.maxX = Math.max(bounds.maxX, x + span);
+		bounds.maxZ = Math.max(bounds.maxZ, z + span);
+	}
+	return bounds;
+}
+
 /** One number per tile; exact while |tz| < 2^25. */
 function tileKey(tx:number, tz:number):number {
 	return tx * 0x4000000 + tz;
@@ -82,20 +101,9 @@ export class World {
 		return this.chunkAt(cx, cz);
 	}
 
-	/** World XZ box around every loaded chunk, or `undefined` when none is. */
-	public chunkBounds():{ minX:number; minZ:number; maxX:number; maxZ:number } | undefined {
-		let bounds:{ minX:number; minZ:number; maxX:number; maxZ:number } | undefined;
-		for (const chunk of this.chunks.values()) {
-			const x = chunk.worldOriginX();
-			const z = chunk.worldOriginZ();
-			const span = chunk.size * chunk.cellSize;
-			bounds ??= { minX: x, minZ: z, maxX: x + span, maxZ: z + span };
-			bounds.minX = Math.min(bounds.minX, x);
-			bounds.minZ = Math.min(bounds.minZ, z);
-			bounds.maxX = Math.max(bounds.maxX, x + span);
-			bounds.maxZ = Math.max(bounds.maxZ, z + span);
-		}
-		return bounds;
+	/** World XZ box around every loaded chunk, or `undefined` when none is. The whole scene: `ChunkStreamer.bounds`. */
+	public chunkBounds():ChunkBounds | undefined {
+		return chunkBounds(this.chunks.values());
 	}
 
 	/** The tile under a world XZ point, if its chunk is loaded. */

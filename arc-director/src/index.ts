@@ -16,6 +16,9 @@ export type {
 	ToolDef,
 } from './inference/provider.js';
 export { chatContentText } from './inference/provider.js';
+export { BrowserProvider, DEFAULT_BROWSER_MODEL, modelID, type ModelID } from './inference/browser.js';
+export { fittingModel, gpuMemory, memoryOf, type GPUMemory } from './inference/device.js';
+export { ModelDownload, type DownloadObserver, type DownloadProgress, type DownloadSubscription } from './inference/download.js';
 export { HttpProvider, parseChatTimings, mergeClientTimings, loadConfigFits, type HttpProviderConfig, type HttpLoadConfig, type ModelSettings, type ReasoningEffort, REASONING_EFFORTS, serverRoot } from './inference/http.js';
 export {
 	type ApplyPromptTemplate,
@@ -150,7 +153,10 @@ export {
 export { runArc, deferThinks, THINK_ABOUT_CAP, type ArcPick, type LastChoice } from './arc/run.js';
 export { CHOICE_RESERVED, MAX_CHOICES } from './arc/choose.js';
 export { ChatSystemOne, JevSystemOne, ModelSystemOne, type DecidingModel, type JevOpts, type SystemOne } from './inference/systemone.js';
-export { benchSystemOne, DECISION_BENCH, type BenchScore, type DecisionCase, type DecisionLevel, type DecisionSpot, type SkillScore } from './character/bench.js';
+export { runBench, type BenchLevel, type BenchScore, type BenchTrial, type SkillScore, type Timer } from './bench/score.js';
+export { SceneWorld, type BenchScene, type SceneRules, type SceneSpot } from './bench/scene.js';
+export { benchSystemOne, DECISION_BENCH, DECISION_BENCH_VERSION, type DecisionCase } from './bench/decision.js';
+export { benchArcs, ARC_BENCH, ARC_BENCH_VERSION, type ArcCase, type SceneCtx } from './bench/arc.js';
 export { arcRepairHint, repeatOutputHint, sayRangeHint, shortTermBlock, stablePrefix, volatileBlock, watchCheatSheet, DEFAULT_THINK_INSTRUCTIONS, DEFAULT_VERB_INSTRUCTIONS, DEFAULT_COLLECTIVE_INSTRUCTIONS, type ThinkInstructions, SEE_MAP_HINT, seeMapHint, knowledgeHint } from './mind/prompt.js';
 export {
 	TalkNet,
@@ -238,7 +244,7 @@ export {
 } from './collective/index.js';
 export { DEFAULT_MAX_LAWS, lawGroup, type Law, type LawSpec } from './arc/laws.js';
 export { ArcDirector, type CastJSON } from './director/director.js';
-export { DEFAULT_MAX_PARALLEL, type EmbeddingSpec, type InferenceSource, type ModelSpec } from './director/models.js';
+export { DEFAULT_MAX_PARALLEL, type BrowserModelSpec, type EmbeddingSpec, type InferenceSource, type ModelSpec } from './director/models.js';
 export type {
 	CharacterSpec,
 	CollectiveSpec,

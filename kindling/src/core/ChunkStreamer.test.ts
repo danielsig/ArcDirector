@@ -91,6 +91,8 @@ describe('ChunkStreamer', () => {
 		const { world, streamer, anchor, spawns } = scene();
 		streamer.stream();
 		assert.deepEqual(loaded(world), ['c0', 'c1']);
+		assert.deepEqual(world.chunkBounds(), { minX: 0, minZ: 0, maxX: 8, maxZ: 4 });
+		assert.deepEqual(streamer.bounds(), { minX: 0, minZ: 0, maxX: 16, maxZ: 4 }, 'the whole scene, loaded or not');
 		const crate = world.findByID('crate_c0')!;
 
 		anchor.transform.position.x = 12;

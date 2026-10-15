@@ -39,6 +39,8 @@ export class World extends KindlingWorld {
 	/** Body ids this player has damaged. A party that owns one treats the player as a rival. */
 	public playerHits = new Set<string>();
 	public arcDirectorOn = true;
+	/** The scene is sunlit: fires light nothing. Set from its look before its chunks spawn. */
+	public daylight = false;
 	public sayOpen = false;
 	public pickedUp:(character:GameObject, name:string)=>void = () => undefined;
 	public override tileSize = CELL_SIZE;

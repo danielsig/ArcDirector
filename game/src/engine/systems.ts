@@ -4,6 +4,7 @@ import { patchHud, patchInfer, statusLabels } from './patchHud';
 import { syncHeldTorchLight } from '../items/heldLight';
 import type { GameHost } from '../director/adapter';
 import { WorldPresent } from '../render/present';
+import type { GroundTile } from '../render/groundBox';
 import type { HudModel } from '../ui/hudModel';
 import type { Chunk } from '../world/Chunk';
 import { spawnChunkEntities } from '../world/spawn';
@@ -65,6 +66,8 @@ export class WorldView extends Component {
 	public static override order = Order.present;
 	public present = new WorldPresent();
 	public getRenderer:()=>Renderer | null = () => null;
+	/** The scene's ground around the map (`SceneDef.ground`). */
+	public ground?:GroundTile;
 
 	public override lateUpdate(dt:number):void {
 		this.sync();
@@ -78,7 +81,7 @@ export class WorldView extends Component {
 		}
 		this.present.detailMaps = renderer.detailMaps;
 		this.present.syncChunks(world);
-		this.present.mountGroundBox(world);
+		this.present.mountGroundBox(world, this.gameObject.getComponent(WorldStream)?.bounds(), this.ground);
 		const cam = renderer.findCamera();
 		if (cam) {
 			this.present.sync(world, cam.native);
@@ -93,6 +96,8 @@ export class Hud extends Component {
 	public model!:HudModel;
 	public director!:GameHost;
 	public getRenderer:()=>Renderer | null = () => null;
+	/** Health bars over the characters (`SceneDef.healthBars`). */
+	public healthBars = false;
 
 	public override lateUpdate(dt:number):void {
 		this.sync();
@@ -104,7 +109,7 @@ export class Hud extends Component {
 		if (!world || !renderer) {
 			return;
 		}
-		patchHud(world, this.model, renderer, statusLabels(this.director), this.director.scene === 'ruins');
+		patchHud(world, this.model, renderer, statusLabels(this.director), this.healthBars);
 		patchInfer(this.director, this.model);
 	}
 }

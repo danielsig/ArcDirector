@@ -36,6 +36,7 @@ import { kernelsOf, scanWorld } from './kernels';
 import { hostCanSee, lookWorld, inventoryOf, followedCarry } from './perception';
 import { addBodyVerbs, GAME_VERBS, verbGate } from './verbs';
 import { gameWorld } from './world';
+import { showDownload } from './inference';
 import { fightExprTags } from './fight';
 import {
 	inTalkRange,
@@ -53,14 +54,35 @@ const STALL_VERBS = new Set(['wait', 'wander', 'say', 'set_status']);
 /**
  * The menu's chat model three ways, one loaded model under them all: `main`, which every mind thinks with unless a
  * scene assigns another; `quick`, without reasoning, for minds that must answer mid-fight; and `local`, the System
- * One that scores `choose` picks with it, or with the menu's decision model.
+ * One that scores `choose` picks with it, or with the menu's decision model. In the browser, the one model on the
+ * GPU answers one think at a time, and adding it starts its download.
  */
-export function addModels(director:ArcDirector<CharacterCtx>, p:Prefs = prefs()):ArcDirector<CharacterCtx> {
-	const main:ModelSpec = { id: p.model || undefined, contextLength: p.contextLength, thinking: p.thinkingBudget, maxParallel: p.maxParallel };
+export function addModels<TCtx>(director:ArcDirector<TCtx>, p:Prefs = prefs()):ArcDirector<TCtx> {
+	if (p.inference === 'browser' && p.browserModel) {
+		// One download for all three; the picker shows it.
+		const main = { model: p.browserModel, contextLength: p.contextLength, ...thinkingOf(p), maxParallel: 1 };
+		showDownload(p.browserModel, director.addBrowserModel('main', main));
+		director.addBrowserModel('quick', { ...main, thinking: false });
+		director.addBrowserModel('local', { ...main, thinking: false, decision: true });
+		return director;
+	}
+	const main:ModelSpec = { inference: 'lmstudio', id: p.model || undefined, contextLength: p.contextLength, ...thinkingOf(p), maxParallel: p.maxParallel };
 	return director
 		.addModel('main', main)
 		.addModel('quick', { ...main, thinking: false })
 		.addModel('local', { ...main, id: p.decisionModel || main.id, thinking: false, decision: true });
+}
+
+/** How the game's minds think, whatever world they are in: the menu's models (LM Studio's or the browser's), its arc format, and repairs. Play and the arc bench share it. */
+export function addThinking<TCtx>(director:ArcDirector<TCtx>, p:Prefs = prefs()):ArcDirector<TCtx> {
+	return addModels(director.addLMStudioInference({ baseURL: '/inference/v1', load: LM_STUDIO_LOAD }), p)
+		.withArcFormat(p.arcFormat)
+		.withRepair({ retries: ARC_RETRY_CAP });
+}
+
+/** The menu's thinking budget as a model spec's: off at 0, unbounded below it. */
+function thinkingOf(p:Prefs):Pick<ModelSpec, 'thinking' | 'thinkingBudget'> {
+	return { thinking: p.thinkingBudget !== 0, thinkingBudget: p.thinkingBudget > 0 ? p.thinkingBudget : undefined };
 }
 
 export class GameHost {
@@ -119,7 +141,7 @@ export class GameHost {
 
 	public configure(director:ArcDirector<CharacterCtx>):ArcDirector<CharacterCtx> {
 		// Both System Ones, named as the menu names them; the menu picks the default, a scene may assign either.
-		addModels(director.addLMStudioInference({ baseURL: '/inference/v1', load: LM_STUDIO_LOAD }))
+		addThinking(director)
 			.addJevInference({ name: 'jev' })
 			.setDefaultSystemOne(systemOneName(prefs().systemOne));
 		return addBodyVerbs(director)
@@ -146,12 +168,10 @@ export class GameHost {
 					return true;
 				},
 			})
-			.withArcFormat(prefs().arcFormat)
 			.addStockVerbs()
 			.addStockCollectiveVerbs()
 			.withWorld(gameWorld(this))
 			.withVerbGate(verbGate(this))
-			.withRepair({ retries: ARC_RETRY_CAP })
 			.withStalled((result) => !result.ok || !!result.interrupted || STALL_VERBS.has(result.verb ?? ''))
 			.withSight({ look: (ctx) => lookWorld(ctx.character, this.ambient, this), unitName: 'm' })
 			.withInventory((ctx) => inventoryOf(ctx.character))

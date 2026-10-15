@@ -4,3 +4,8 @@ packages:
   - kindling
   - control
   - mcp
+
+# Install scripts the browser never needs: transformers.js also pulls in its Node runtime.
+allowBuilds:
+  onnxruntime-node: false
+  protobufjs: false

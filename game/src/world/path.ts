@@ -1,9 +1,8 @@
 import { pascalCase, type PathGraph, type PathStep } from 'arc-director';
-import { canOccupy, type GameObject } from '@arc-director/kindling';
+import { canOccupy, Rigidbody, type GameObject } from '@arc-director/kindling';
 import { BoxCollider, Bridge, Door, Flammable, HumanBody, Lock, Named } from '../engine/components';
 import type { World } from '../engine/World';
 import { CELL_PROPS } from './Chunk';
-import { DRESSING_NAME } from './dressingColliders';
 import { CELL_SIZE } from './constants';
 import { findCarried } from '../items/inventory';
 
@@ -38,11 +37,24 @@ function characterIn(world:World, tx:number, tz:number, except?:GameObject):Game
 }
 
 /**
- * The weapon rack stands on this tile. Routes leave the tile out; the collider stays its own size.
- * It is too thin to reach `BLOCKING_COVER`, yet a box a walker snags on rather than slides around.
+ * The cell's centre, where routes run, is inside a solid that never moves (a brazier), however little of the cell it
+ * covers. A box (a weapon rack) also counts within `body`'s half-width of it: walkers snag on boxes, and slide around cylinders.
  */
-function weaponRackIn(world:World, tx:number, tz:number):boolean {
-	return world.objectsInTile(tx, tz).some((go) => go.name === DRESSING_NAME && go.id.startsWith('dressing_weaponRack_'));
+function centreBlocked(world:World, body:GameObject, tx:number, tz:number):boolean {
+	const { x, z } = world.tileCenter(tx, tz);
+	const r = (body.getComponent(BoxCollider)?.size.x ?? 0) / 2;
+	let hit = false;
+	world.forEachNear(x - r, z - r, x + r, z + r, (go) => {
+		const col = go.getComponent(BoxCollider);
+		if (hit || !col?.enabled || !col.solid || col.isTrigger || go.getComponent(Rigidbody)) {
+			return;
+		}
+		const p = go.transform.position;
+		hit = col.shape === 'cylinder'
+			? col.contains(x, z)
+			: Math.abs(x - p.x) < col.size.x / 2 + r && Math.abs(z - p.z) < col.size.z / 2 + r;
+	});
+	return hit;
 }
 
 /** Walls, deep water, cell-filling props, cells mostly under solid props, and closed doors stop steps. */
@@ -133,7 +145,7 @@ function cellStep(world:World, body:GameObject, tx:number, tz:number, dx:number,
 		return undefined;
 	}
 	const cover = world.solidCover(tx + dx, tz + dz);
-	if (cover >= BLOCKING_COVER || weaponRackIn(world, tx + dx, tz + dz)) {
+	if (cover >= BLOCKING_COVER || centreBlocked(world, body, tx + dx, tz + dz)) {
 		return undefined;
 	}
 	const crowded = characterIn(world, tx + dx, tz + dz, body) ? OCCUPANT_COST : cover > 0 ? PROP_COST : 1;

@@ -12,7 +12,7 @@ import { decodeGlyphChunk } from '../world/decodeGlyphChunk';
 import { getDef } from '../items/defs';
 import { equipItem } from '../items/equip';
 import { instantiateDef } from '../items/instance';
-import { spawnCamera, spawnRaven, spawnNPC, spawnPlayer } from '../world/spawn';
+import { spawnCamera, spawnRaven, spawnNPC, spawnPlayer, spawnRoom } from '../world/spawn';
 import { DEFAULT_SCENE_ID, sceneByID, type PlayerDef, type SceneDef } from '../data/scenes';
 import { loadCharacterModels } from '../render/characterModels';
 import { DirectorPulse, GroundPick, Hud, WorldStream, WorldView } from './systems';
@@ -59,8 +59,9 @@ function dressPlayer(world:World, def:PlayerDef | undefined):void {
 	}
 }
 
-/** The scene's chunks, player, cast, ravens and camera into `world`; returns its decoded chunks. */
+/** The scene's chunks, player, cast, rooms, ravens and camera into `world`; returns its decoded chunks. */
 export function spawnScene(world:World, scene:SceneDef):ReturnType<typeof decodeGlyphChunk>[] {
+	world.daylight = rendererLook(scene.look).sun !== undefined;
 	const decoded = scene.chunks.map(decodeGlyphChunk);
 	const startDecoded = decoded.find((d) => d.playerStart) ?? decoded[0];
 	if (!startDecoded) {
@@ -72,6 +73,7 @@ export function spawnScene(world:World, scene:SceneDef):ReturnType<typeof decode
 	for (const npc of scene.npcs) {
 		spawnNPC(world, (decodedByID.get(npc.chunkID) ?? startDecoded).chunk, npc);
 	}
+	scene.rooms?.forEach((room) => spawnRoom(world, room));
 	scene.ravens?.forEach((r, i) => spawnRaven(world, `Raven${i + 1}`, r.x, r.z, r.yaw));
 	spawnCamera(world, scene.zoom);
 	return decoded;
@@ -126,9 +128,14 @@ export class Game extends KindlingGame<World> {
 		};
 		const systems = new GameObject('Systems', 'Systems');
 		const getRenderer = () => this.renderer;
-		const view = systems.addComponent(WorldView, { getRenderer });
+		const view = systems.addComponent(WorldView, { getRenderer, ground: this._scene.ground });
 		systems.addComponent(GroundPick, { getRenderer });
-		const hudView = systems.addComponent(Hud, { model: this._hud, director: host, getRenderer });
+		const hudView = systems.addComponent(Hud, {
+			model: this._hud,
+			director: host,
+			getRenderer,
+			healthBars: this._scene.healthBars ?? false,
+		});
 		const stream = systems.addComponent(WorldStream, { chunks: decoded.map((d) => d.chunk) });
 		systems.addComponent(DirectorPulse, { director: host });
 		const camera = readURLCamera();

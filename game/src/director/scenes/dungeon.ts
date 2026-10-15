@@ -18,9 +18,38 @@ const ANSWER = /\bfoot\s?(steps?|prints?)\b/i;
 const ANSWER_REACH = 6;
 
 const FOES_NEAR = 'some(others.filter("enemy").nearby(9))';
+const HEALER_UP = 'some(others.filter("Healer"))';
+const FOES_ON_HEALER = 'some(others.filter("enemy").filter(u => some(others.filter("Healer").filter(h => isNear(u, h, 6)))))';
 
 /** A fighter of the company strikes back the moment a monster is in sight, whatever it was doing. */
 const STRIKE:LawSpec = { name: 'strike', who: 'me', watch: FOES_NEAR, arc: 'loop(attack())', pinned: true };
+
+/** Near death, a fighter runs to the healer (Maren). */
+const RALLY:LawSpec = {
+	name: 'rally',
+	who: 'me',
+	watch: `me.hp * 4 <= me.maxHP && ${HEALER_UP} && !some(others.filter("Healer").nearby(3))`,
+	arc: 'go_to(Maren)',
+	pinned: true,
+};
+
+/** While the healer lives, a fighter fights from her side, first at whoever is closest to her. */
+const GUARD:LawSpec = {
+	name: 'guard',
+	who: 'me',
+	watch: `(${FOES_NEAR} && ${HEALER_UP}) || ${FOES_ON_HEALER}`,
+	arc: 'loop(protect(Maren))',
+	pinned: true,
+};
+
+/** The healer backs away from a monster at her side, while anyone else is left to hold it. */
+const FLEE:LawSpec = {
+	name: 'flee',
+	who: 'me',
+	watch: 'some(others.filter("enemy").nearby(3)) && some(others.filter(u => !(u is "enemy")))',
+	arc: 'loop(through=e in others.filter("enemy").nearby(3).sortBy(u => distance(me, u)), arc=flee(e, distance=6), times=1)',
+	pinned: true,
+};
 
 /** The healer heals first, then fights. */
 const MEND:LawSpec = {
@@ -61,7 +90,7 @@ const KNIGHT:CharacterSpec = {
 		},
 		...QUEST_MEMORIES,
 	],
-	laws: [STRIKE],
+	laws: [RALLY, GUARD, STRIKE],
 };
 
 const HEALER:CharacterSpec = {
@@ -78,7 +107,7 @@ const HEALER:CharacterSpec = {
 		},
 		...QUEST_MEMORIES,
 	],
-	laws: [MEND, STRIKE],
+	laws: [FLEE, MEND, STRIKE],
 };
 
 const WITCH:CharacterSpec = {
@@ -95,7 +124,7 @@ const WITCH:CharacterSpec = {
 		},
 		...QUEST_MEMORIES,
 	],
-	laws: [STRIKE],
+	laws: [RALLY, GUARD, STRIKE],
 };
 
 /** Who lies in wait, room by room. They have no voice and never think: their one law wakes them. */

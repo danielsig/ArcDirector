@@ -9,7 +9,7 @@ import { idOf, findObject, isLiving } from '../names';
 
 /** What a party's mind may write. */
 const FIGHT:Kit = {
-	verbs: ['issue', 'when', 'law', 'unlaw', 'loop', 'choose', 'smite', 'heal', 'attack', 'rank'],
+	verbs: ['issue', 'when', 'law', 'unlaw', 'loop', 'choose', 'smite', 'heal', 'attack', 'rank', 'say'],
 	tools: [],
 };
 
@@ -119,6 +119,12 @@ function partyStory(party:string):MemoryDraft {
 	return { text, tags: ['backstory', party], pinned: true };
 }
 
+/** A party fights, but answers whoever speaks to it. */
+const PARTY_GOALS = [
+	{ text: 'Win.', priority: 3 },
+	{ text: 'When someone speaks to you, answer them with say, then fight on. Never talk otherwise: issue() commands your units.', priority: 2 },
+];
+
 
 const DAWN:CollectiveSpec<CharacterCtx> = {
 	id: 'DawnParty',
@@ -132,10 +138,7 @@ const DAWN:CollectiveSpec<CharacterCtx> = {
 	commander: 'Dawn',
 	identity: { role: 'Commander', traits: ['resolute', 'grim', 'captain'] },
 	memories: [partyStory('DawnParty')],
-	goals: [{
-		text: 'Win.',
-		priority: 3,
-	}],
+	goals: PARTY_GOALS,
 	characters: [
 		{ id: 'Dawn', tags: ['Captain', 'Healer'] },
 		{ id: 'Cinder', tags: ['Witch'] /* , choose: roleChoice('Witch') */ },
@@ -158,10 +161,7 @@ const DUSK:CollectiveSpec<CharacterCtx> = {
 	commander: 'Dusk',
 	identity: { role: 'Commander', traits: ['cold', 'ruthless', 'captain'] },
 	memories: [partyStory('DuskParty')],
-	goals: [{
-		text: 'Win.',
-		priority: 3,
-	}],
+	goals: PARTY_GOALS,
 	characters: [
 		{ id: 'Dusk', tags: ['Captain', 'Healer'] },
 		{ id: 'Nyx', tags: ['Witch'] /* , choose: roleChoice('Witch') */ },
@@ -272,8 +272,6 @@ function hopWin(host:GameHost, winners:GameObject[], spec:CollectiveSpec<Charact
 	}
 	winner.replaceProgram();
 	winner.persona.goals = [{ text: 'You won. Stay. Speak when someone approaches or gives you something.', priority: 2 }];
-	winner.kit = { verbs: [...FIGHT.verbs, 'say'], tools: [] };
-	host.kit.verbs = [...host.kit.verbs, 'say'];
 	for (const character of winner.characters) {
 		character.replaceProgram();
 	}

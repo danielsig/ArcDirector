@@ -2,7 +2,7 @@ import { prefs, type ArcFormatPref, type PlayerMode, type ShadowQuality, type Sy
 import { characterOptions, resolvePlayerKind } from '../render/characterModels';
 import type { RenderStats } from '@arc-director/kindling';
 import { readURLStats } from '../engine/urlView';
-import type { BenchRow } from '../director/decisionBench';
+import type { BenchKind, BenchRow } from '../director/bench';
 import type { SayCatalog } from './sayCommands';
 
 export type MinimapCell = {
@@ -153,19 +153,20 @@ export type HudModel = {
 	/** Hold new NPC thinks until the model is idle (or batchWait), then start a wave. Menu + localStorage. */
 	batchThinks:boolean;
 	/** CoT on. Menu + localStorage. */
-	thinkingBudget:boolean;
+	thinkingBudget:number;
 	/** How NPCs write an Arc: text, JSON, or JSON the server must follow. Menu + localStorage. Testing. */
 	arcFormat:ArcFormatPref;
 	/** The System One behind `choose`. Menu + localStorage. */
 	systemOne:SystemOneKind;
 	/** The local System One's model; empty is the main model. Menu + localStorage. */
 	decisionModel:string;
-	/** The decision bench window is open over the menu. */
-	benchOpen:boolean;
-	/** Candidates ticked in the bench. */
-	benchPick:string[];
-	/** The last bench, one row per candidate. */
-	benchRows:BenchRow[];
+	/** The bench whose window is open over the menu, or null. */
+	bench:BenchKind | null;
+	/** Candidates ticked, per bench. */
+	benchPick:Record<BenchKind, string[]>;
+	/** Each bench's last run, one row per candidate. */
+	benchRows:Record<BenchKind, BenchRow[]>;
+	/** A bench is running; one at a time, as they share the server. */
 	benchRunning:boolean;
 	/** Local server catalog (embeddings omitted). */
 	models:HudModelOption[];
@@ -182,6 +183,8 @@ export type HudModel = {
 	fpsCounter:boolean;
 	/** Frames per second over the last second. Updated only while {@link fpsCounter} is on. */
 	fps:number;
+	/** The model NPCs think with, as the director resolved it; empty until it has. */
+	activeModel:string;
 	inferCalls:number;
 	inferContextMs:number;
 	inferGenerateMs:number;
@@ -261,9 +264,9 @@ export function emptyHud():HudModel {
 		arcFormat: p.arcFormat,
 		systemOne: p.systemOne,
 		decisionModel: p.decisionModel,
-		benchOpen: false,
-		benchPick: [],
-		benchRows: [],
+		bench: null,
+		benchPick: { decision: [], arc: [] },
+		benchRows: { decision: [], arc: [] },
 		benchRunning: false,
 		models: [],
 		playerKind: resolvePlayerKind(p.playerKind),
@@ -274,6 +277,7 @@ export function emptyHud():HudModel {
 		shadows: p.shadows,
 		fpsCounter: p.fpsCounter,
 		fps: 0,
+		activeModel: '',
 		inferCalls: 0,
 		inferContextMs: 0,
 		inferGenerateMs: 0,

@@ -51,7 +51,7 @@ export function meshReady(meshID:string):boolean {
 		return true;
 	}
 	if (
-		meshID === 'torch' || meshID === 'chest' || meshID === 'held_torch'
+		meshID === 'torch' || meshID === 'torch_stand' || meshID === 'chest' || meshID === 'held_torch'
 		|| meshID.startsWith('item_')
 	) {
 		return sheetReady();
@@ -134,6 +134,29 @@ export function createTorchMesh():THREE.Group {
 	g.add(flame);
 	g.userData.flame = flame;
 	addTorchHolster(g);
+	return g;
+}
+
+/**
+ * A torch on a pole, standing on the floor: iron foot, wooden pole, iron cup, and the wall torch's flame. Unlit, like
+ * the wall torch's stick: its own light burns a hand over the cup and would wash it white. Casts no shadow either, or
+ * the cup would shade the floor around it.
+ */
+function createStandingTorchMesh():THREE.Group {
+	const g = new THREE.Group();
+	g.userData.kind = 'torch';
+	const iron = new THREE.MeshBasicMaterial({ color: 0x2e2620 });
+	const foot = new THREE.Mesh(new THREE.CylinderGeometry(0.14, 0.2, 0.08, 8).translate(0, 0.04, 0), iron);
+	const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.035, 0.045, 1.34, 7).translate(0, 0.75, 0), new THREE.MeshBasicMaterial({ color: 0x4a2e18 }));
+	const cup = new THREE.Mesh(new THREE.CylinderGeometry(0.11, 0.06, 0.12, 8).translate(0, 1.48, 0), iron);
+	g.add(foot, pole, cup);
+
+	const flame = new THREE.Mesh(new THREE.PlaneGeometry(0.28, 0.38), flameMaterial(getSheet().flame[0]));
+	flame.name = 'flame';
+	flame.position.y = 1.7;
+	flame.renderOrder = 2;
+	g.add(flame);
+	g.userData.flame = flame;
 	return g;
 }
 
@@ -781,6 +804,8 @@ function buildMesh(meshID:string, color?:number):THREE.Object3D {
 	switch (meshID) {
 		case 'torch':
 			return createTorchMesh();
+		case 'torch_stand':
+			return createStandingTorchMesh();
 		case 'chest':
 			return createChestMesh();
 		case 'door':

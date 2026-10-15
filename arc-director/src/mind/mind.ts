@@ -9,7 +9,7 @@ import { evaluate, unboundCalls } from '../expr/eval.js';
 import { observeExpr } from '../expr/stringify.js';
 import { bagOf, cloneEntity } from '../expr/prev.js';
 import { isVisionModel } from '../inference/models.js';
-import type { ChatContent, ChatContentPart, ChatMessage, InferenceProvider, JsonSchemaResponseFormat, ToolDef } from '../inference/provider.js';
+import type { ChatContent, ChatContentPart, ChatMessage, ChatResponse, InferenceProvider, JsonSchemaResponseFormat, ToolDef } from '../inference/provider.js';
 import { extractJson, isRecord, type JsonSchema } from '../json.js';
 import { mergeTags, nameTags, type MemoryRecord } from '../memory/store.js';
 import type { ArcFormat, ConversationTurn, MindEvent, Sense, ToolSpec } from './types.js';
@@ -24,7 +24,7 @@ import {
 	type KnowledgeSource,
 } from './knowledge.js';
 import { jsonToolCall, toolFirstArgs, writtenToolCalls } from './toolText.js';
-import { arcRepairHint, writtenToolsHint, toolResultHint, blockedAgainHint, repeatOutputHint, reviseGoalsAsk, sayRangeHint, stablePrefix, volatileBlock, type ThinkInstructions } from './prompt.js';
+import { arcRepairHint, thoughtCutHint, writtenToolsHint, toolResultHint, blockedAgainHint, repeatOutputHint, reviseGoalsAsk, sayRangeHint, stablePrefix, volatileBlock, type ThinkInstructions } from './prompt.js';
 import type { TalkNet } from './talk.js';
 import type { SightClause } from '../perception/types.js';
 import { idsOf, mapArc, mapExpr, mapLawName, namesOf } from './ids.js';
@@ -885,16 +885,23 @@ export class Mind<TCtx = unknown> {
 			recentSummary: this._recentSummary,
 			conversation: this.conversationLines(),
 		})}\n\n${reviseGoalsAsk(format, this.persona.maxGoals)}`;
-		const res = await this.provider.chat({
+		const ask = (messages:ChatMessage[], thinking?:boolean):Promise<ChatResponse> => this.provider.chat({
 			model: this.modelID,
 			thread: this.id,
-			messages: [
-				{ role: 'system', content: system },
-				{ role: 'user', content: user },
-			],
+			messages,
 			responseFormat: format === 'schema' ? { name: 'goals', schema: GOALS_SCHEMA, strict: true } : undefined,
 			temperature: 0,
+			enableThinking: thinking,
 		});
+		const asked:ChatMessage[] = [
+			{ role: 'system', content: system },
+			{ role: 'user', content: user },
+		];
+		let res = await ask(asked);
+		// The thinking budget cut the thought short: answer from it, without thinking again.
+		if (res.truncated && !res.content && res.reasoning) {
+			res = await ask([...asked, { role: 'assistant', content: res.reasoning }, { role: 'user', content: thoughtCutHint(format, 'goals') }], false);
+		}
 		if (!res.content) {
 			return;
 		}
@@ -1215,6 +1222,13 @@ export class Mind<TCtx = unknown> {
 				// A repair keeps the whole conversation, so reasoning on top of it runs out of tokens again.
 				enableThinking: repairsLeft < this.arcRetryCap ? false : this.thinking(),
 			});
+			// The thinking budget cut the thought short: answer from it, without thinking again.
+			if (res.truncated && !res.content && res.reasoning && repairsLeft > 0) {
+				messages.push({ role: 'assistant', content: res.reasoning });
+				messages.push({ role: 'user', content: thoughtCutHint(format) });
+				repairsLeft -= 1;
+				continue;
+			}
 			if (res.truncated) {
 				lastErr = new ArcError('reply was cut off at the token limit; answer shorter');
 				if (!this.pushRepair(messages, { content: null, toolCalls: [] }, lastErr, repairsLeft, toolNames, format)) {
