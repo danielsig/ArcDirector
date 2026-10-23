@@ -1,9 +1,37 @@
 import { HttpProvider, type ModelSettings } from './http.js';
 import { ModelDownload, type DownloadProgress } from './download.js';
-import type { ChatRequest, ChatResponse, InferenceProvider } from './provider.js';
+import { ggufMetadata } from './gguf.js';
+import type { ChatRequest, ChatResponse, InferenceProvider, SystemOneEndpoint } from './provider.js';
 
-/** Gemma 4 E4B (Q4_K_M), split into files a browser can hold: the best Arcs of any model small enough to run there. */
-export const DEFAULT_BROWSER_MODEL = 'https://huggingface.co/888rok/gemma-4-E4B-it-Q4_K_M-wllama-split/resolve/1394d405e4d8e0dd06dae64f506461f15e0a970b/gemma-4-E4B-it-Q4_K_M-00001-of-00004.gguf';
+/**
+ * ArcDirector's own models, trained on its prompts: `addBrowserModel('main', Skaldic.Gemma4E4B)` runs one.
+ * - `Gemma4E4B`: Skaldic Gemma 4 E4B, the best Arcs of any model small enough to run in a browser.
+ * - `Laya`: Skaldic Laya (0.45 GB), a decision model: a System One that picks `choose` choices in one pass, in well
+ *   under a tenth of a second.
+ */
+// Each value is the model's own name, as LM Studio and its files call it: never one an original model could share.
+export const Skaldic = { Gemma4E4B: 'skaldic-gemma-4-e4b', Laya: 'skaldic-laya' } as const;
+export type Skaldic = (typeof Skaldic)[keyof typeof Skaldic];
+
+/** Each Skaldic model's browser build (Q4_K_M split into files a browser can hold; Laya's Q8_0), pinned to its `v1` release. */
+export const SKALDIC_BROWSER_MODELS:Readonly<Record<Skaldic, string>> = {
+	[Skaldic.Gemma4E4B]: 'https://huggingface.co/arc-director/Skaldic-Gemma-4-E4B/resolve/v1/browser/skaldic-gemma-4-e4b-Q4_K_M-00001-of-00009.gguf',
+	[Skaldic.Laya]: 'https://huggingface.co/arc-director/Skaldic-Laya/resolve/v1/skaldic-laya-Q8_0.gguf',
+};
+
+/**
+ * The browser models the library knows to be decision models (a decision head, no chat): `addBrowserModel` makes
+ * them a System One on their own engine ({@link BrowserProvider.decisions}).
+ */
+export const BROWSER_DECISION_MODELS:readonly string[] = [SKALDIC_BROWSER_MODELS[Skaldic.Laya]];
+
+/** A browser model as given (a {@link Skaldic} model, or a GGUF's URL) as the URL it downloads. */
+export function browserModelURL(model:Skaldic | string):string {
+	return SKALDIC_BROWSER_MODELS[model as Skaldic] ?? model;
+}
+
+/** What `addBrowserModel` runs when given no model: Skaldic Gemma 4 E4B. */
+export const DEFAULT_BROWSER_MODEL = SKALDIC_BROWSER_MODELS[Skaldic.Gemma4E4B];
 
 /** Tokens each think may fill when the model's spec names no `contextLength`. */
 const DEFAULT_CONTEXT = 8192;
@@ -16,12 +44,27 @@ type WllamaModule = { Wllama:new (paths:{ default:string }, config?:{ logger?:Wl
 
 type WllamaLogger = Pick<Console, 'debug' | 'log' | 'warn' | 'error'>;
 
+/**
+ * A file in wllama's store: a whole part of a model once its metadata names the URL it came from, a download under
+ * way before then.
+ */
+export type StoredFile = { name:string; size:number; metadata:{ originalURL:string; originalSize:number } };
+
 /** The parts of a `Wllama` this provider calls. */
 export type Wllama = {
-	modelManager:{ getModels():Promise<{ url:string; validate():string; remove():Promise<void> }[]> };
+	modelManager:{
+		cacheManager:{
+			list():Promise<StoredFile[]>;
+			open(name:string):Promise<Blob | null>;
+			deleteMany(which:(file:StoredFile)=>boolean):Promise<void>;
+		};
+	};
+	loadModel(parts:Blob[], params:LoadParams):Promise<void>;
 	// eslint-disable-next-line no-restricted-syntax -- wllama's own name
-	loadModelFromUrl(url:string, params:LoadParams & { progressCallback?:(p:{ loaded:number; total:number })=>void }):Promise<void>;
+	loadModelFromUrl(url:string, params:LoadParams & { useCache?:boolean; progressCallback?:(p:{ loaded:number; total:number })=>void; signal?:AbortSignal }):Promise<void>;
 	createChatCompletion(params:Record<string, unknown>):Promise<unknown>;
+	createSystemOne(params:Record<string, unknown>):Promise<unknown>;
+	getModelMetadata():{ meta:Record<string, string> };
 	exit():Promise<void>;
 };
 
@@ -37,13 +80,23 @@ type LoadParams = {
 	reasoning_budget_tokens:number;
 };
 
+/** Where requests to the model in the page go: {@link inPageFetch} answers them, nothing leaves the page. */
+const IN_PAGE_URL = 'http://browser.invalid/v1';
+
 /** Prompt tokens the GPU takes in one pass. Bigger passes read a cold prompt faster, at a bigger working buffer. */
 const PROMPT_CHUNK = 1024;
 /** Smallest piece of a cached prompt worth moving into place when it no longer sits at the same spot. */
 const CACHE_REUSE_CHUNK = 256;
+/** WebGPU's most workgroups in one dispatch dimension, and the threads in each of ggml-webgpu's. */
+const MAX_WORKGROUPS = 65535;
+const WORKGROUP = 256;
 /** The engine's last lines a crash report carries, and how long it may get: the stack traces alone run long. */
 const CRASH_LINES = 12;
 const CRASH_CHARS = 4000;
+/** The engine's lines that say where a model went as it loaded (its GPU, or why none) and why a load failed. */
+const LOAD_LINE = /ggml_webgpu|offload|fitting|fail|insufficient memory/;
+/** llama.cpp's count of the layers it put on the GPU. */
+const OFFLOADED = /offloaded (\d+)\/\d+ layers to GPU/;
 
 export type BrowserProviderOptions = {
 	/**
@@ -65,6 +118,7 @@ export type BrowserProviderOptions = {
  */
 export class BrowserProvider implements InferenceProvider {
 	private static _shared:BrowserProvider | undefined;
+	private static _decisions:BrowserProvider | undefined;
 	private readonly _settings = new Map<string, ModelSettings>();
 	private readonly _downloads = new Map<string, ModelDownload>();
 	private readonly _http:HttpProvider;
@@ -75,13 +129,23 @@ export class BrowserProvider implements InferenceProvider {
 	 * a failed check) as a plain line, a few before the stack traces.
 	 */
 	private _lines:string[] = [];
+	/** The {@link LOAD_LINE}s of the last load, kept apart: a crash's stack traces push them out of {@link _lines}. */
+	private _loadLines:string[] = [];
+	/** A model that cannot load as its settings say, by model: tried again only once they change, or on `download`. */
+	private readonly _failed = new Map<string, { key:string; error:Error }>();
+	/** Each model's {@link contextCap}, once read from its stored header: null when the header does not say. */
+	private readonly _caps = new Map<string, number | null>();
 	/** The model loading or loaded now, and the settings it loaded with. */
 	private _current:{ model:string; key:string; ready:Promise<Wllama> } | undefined;
 	private _loaded:string | null = null;
+	private readonly _fetch:typeof fetch;
+	/** Whether each model loaded so far has a decision head, read from its GGUF. */
+	private readonly _decides = new Map<string, boolean>();
 
 	constructor(opts:BrowserProviderOptions) {
 		this._wasm = opts.wasm;
-		this._http = new HttpProvider({ baseURL: 'http://browser.invalid/v1', fetch: inPageFetch(() => this._current?.ready) });
+		this._fetch = inPageFetch(() => this._current?.ready);
+		this._http = new HttpProvider({ baseURL: IN_PAGE_URL, fetch: this._fetch });
 	}
 
 	/** The page's provider: `ArcDirector.addBrowserModel` uses it unless given another. The host sets it first. */
@@ -94,6 +158,15 @@ export class BrowserProvider implements InferenceProvider {
 
 	public static set shared(provider:BrowserProvider) {
 		BrowserProvider._shared = provider;
+	}
+
+	/**
+	 * The page's engine for decision models, apart from {@link shared}'s, so a System One decides beside the chat
+	 * model instead of unloading it. Made on first use, from where {@link shared} serves the engine.
+	 */
+	public static get decisions():BrowserProvider {
+		BrowserProvider._decisions ??= new BrowserProvider({ wasm: BrowserProvider.shared._wasm });
+		return BrowserProvider._decisions;
 	}
 
 	/**
@@ -114,8 +187,12 @@ export class BrowserProvider implements InferenceProvider {
 
 	/** Whether `model` is downloaded already, so loading it needs no network. */
 	public async isCached(model:string):Promise<boolean> {
-		const models = await (await this.wllama()).modelManager.getModels();
-		return models.some((m) => m.url === model && m.validate() === 'valid');
+		return (await this.stored()).get(model)?.complete ?? false;
+	}
+
+	/** The browser's store, by model: one store for every engine in the page. */
+	private async stored():Promise<Map<string, StoredModel>> {
+		return storedModels(await (await this.wllama()).modelManager.cacheManager.list());
 	}
 
 	/**
@@ -127,8 +204,9 @@ export class BrowserProvider implements InferenceProvider {
 		if (known && (known.state === 'pending' || (known.state === 'done' && this._loaded === model))) {
 			return known;
 		}
-		const download = new ModelDownload(async (report) => {
-			await this.load(model, report);
+		this._failed.delete(model);
+		const download = new ModelDownload(async (report, signal) => {
+			await this.load(model, report, signal);
 		});
 		this._downloads.set(model, download);
 		return download;
@@ -143,8 +221,39 @@ export class BrowserProvider implements InferenceProvider {
 			await ready.then((w) => w.exit(), () => undefined);
 		}
 		this._downloads.delete(model);
-		const models = await (await this.wllama()).modelManager.getModels();
-		await Promise.all(models.filter((m) => m.url === model).map((m) => m.remove()));
+		const files = new Set((await this.stored()).get(model)?.files.map((f) => f.name));
+		await (await this.wllama()).modelManager.cacheManager.deleteMany((f) => files.has(f.name));
+	}
+
+	/**
+	 * Deletes every downloaded model but `keep`, parts of half-done downloads too, unloading it first if it is on the
+	 * GPU: models a host no longer offers hold browser storage it can never use, and a full store fails the next
+	 * download.
+	 */
+	public async keepOnly(keep:readonly string[]):Promise<void> {
+		const stale = [...(await this.stored()).keys()].filter((url) => !keep.includes(url));
+		for (const model of stale) {
+			await this.delete(model);
+		}
+	}
+
+	/**
+	 * For a decision model (a GGUF whose metadata names a decision head, such as Laya's): the System One endpoint the
+	 * page answers it on. Loads it first, in place of the last model, so a decision model gets a provider of its own
+	 * (`new BrowserProvider({ wasm })`) beside the chat model's. Undefined for a chat model.
+	 */
+	public async systemOneEndpoint(model:string):Promise<SystemOneEndpoint | undefined> {
+		let decides = this._decides.get(model);
+		if (decides === undefined) {
+			const meta = (await this.load(model)).getModelMetadata().meta;
+			decides = Object.keys(meta).some((key) => key.endsWith('.decision.type'));
+			this._decides.set(model, decides);
+		}
+		if (!decides) {
+			return undefined;
+		}
+		await this.load(model);
+		return { url: `${IN_PAGE_URL}/systemone`, fetch: this._fetch };
 	}
 
 	public configureModel(model:string, settings:ModelSettings):void {
@@ -172,7 +281,7 @@ export class BrowserProvider implements InferenceProvider {
 			if (!isCrash(err)) {
 				throw err;
 			}
-			const why = [err instanceof Error ? err.message : String(err), ...this._lines].join(' | ').slice(0, CRASH_CHARS);
+			const why = [err instanceof Error ? err.message : String(err), ...new Set([...this._loadLines, ...this._lines])].join(' | ').slice(0, CRASH_CHARS);
 			// Several thinks die with one engine; only the first drops it, not the one that replaced it.
 			if (this._wllama === engine) {
 				this.discard();
@@ -193,13 +302,59 @@ export class BrowserProvider implements InferenceProvider {
 
 	/**
 	 * `model` on the GPU, as its settings say, loading it in place of the last one unless it is there already. Each
-	 * of its parallel thinks gets the whole `contextLength`.
+	 * of its parallel thinks gets the whole `contextLength`, up to its {@link contextCap}.
 	 */
-	private load(model:string, report?:(progress:DownloadProgress)=>void):Promise<Wllama> {
+	private load(model:string, report?:(progress:DownloadProgress)=>void, signal?:AbortSignal):Promise<Wllama> {
+		const key = JSON.stringify(this.params(model));
+		if (this._current?.model === model && this._current.key === key) {
+			return this._current.ready;
+		}
+		const failed = this._failed.get(model);
+		if (failed?.key === key) {
+			return Promise.reject(failed.error);
+		}
+		const previous = this._current?.ready;
+		// Started a step later, so the load can rename `current` as the cap it learns changes its params.
+		const ready = Promise.resolve().then(async () => {
+			await previous?.then((w) => w.exit(), () => undefined);
+			this._loaded = null;
+			const wllama = await this.wllama();
+			// A stored model's cap is known before it loads; a downloading one's only once the store holds it whole,
+			// so it loads again if the cap cuts its context.
+			await this.readCap(model);
+			const downloading = !this._caps.has(model);
+			current.key = JSON.stringify(this.params(model));
+			await this.start(wllama, model, report, signal);
+			if (downloading) {
+				await this.readCap(model);
+				if (JSON.stringify(this.params(model)) !== current.key) {
+					await wllama.exit();
+					current.key = JSON.stringify(this.params(model));
+					await this.start(wllama, model, report);
+				}
+			}
+			this._loaded = model;
+			return wllama;
+		});
+		const current = { model, key, ready };
+		this._current = current;
+		// A failed load is tried again next time, unless it cannot load as its settings say ({@link _failed}).
+		ready.catch(() => {
+			if (this._current === current) {
+				this._current = undefined;
+			}
+		});
+		return ready;
+	}
+
+	/** What `model` loads with, as its settings and its {@link contextCap} say. */
+	private params(model:string):LoadParams {
 		const settings = this._settings.get(model);
-		const parallel = Math.max(1, settings?.maxParallel ?? 1);
-		const params:LoadParams = {
-			n_ctx: (settings?.contextLength ?? DEFAULT_CONTEXT) * parallel,
+		// llama.cpp's `LLAMA_MAX_SEQ`: the engine fails to load with more.
+		const parallel = Math.min(256, Math.max(1, settings?.maxParallel ?? 1));
+		const context = Math.min(settings?.contextLength ?? DEFAULT_CONTEXT, this._caps.get(model) ?? Infinity);
+		return {
+			n_ctx: context * parallel,
 			n_parallel: parallel,
 			kv_unified: false,
 			n_batch: 2 * PROMPT_CHUNK,
@@ -213,35 +368,57 @@ export class BrowserProvider implements InferenceProvider {
 			reasoning_format: 'deepseek',
 			reasoning_budget_tokens: settings?.thinkingBudget ?? -1,
 		};
-		const key = JSON.stringify(params);
-		if (this._current?.model === model && this._current.key === key) {
-			return this._current.ready;
-		}
-		const previous = this._current?.ready;
-		const ready = (async () => {
-			await previous?.then((w) => w.exit(), () => undefined);
-			this._loaded = null;
-			const wllama = await this.wllama();
-			// eslint-disable-next-line no-restricted-syntax -- wllama's own name
-			await wllama.loadModelFromUrl(model, {
-				...params,
-				progressCallback: ({ loaded, total }) => report?.({
-					progress: total > 0 ? loaded / total : 0,
-					text: loaded < total ? `Downloading ${gb(loaded)} of ${gb(total)} GB` : 'Loading on the GPU',
-				}),
-			});
-			this._loaded = model;
-			return wllama;
-		})();
-		const current = { model, key, ready };
-		this._current = current;
-		// A failed load is tried again next time.
-		ready.catch(() => {
-			if (this._current === current) {
-				this._current = undefined;
+	}
+
+	/** Loads `model` as {@link params} says, from the store or the network, failing a load that left no model. */
+	private async start(wllama:Wllama, model:string, report?:(progress:DownloadProgress)=>void, signal?:AbortSignal):Promise<void> {
+		const params = this.params(model);
+		const stored = (await this.stored()).get(model);
+		this._loadLines = [];
+		try {
+			if (stored?.complete) {
+				report?.({ progress: 1, text: 'Loading on the GPU' });
+				await wllama.loadModel(await openParts(wllama, stored), params);
 			}
-		});
-		return ready;
+			else {
+				// Not `useCache`: wllama's lookup throws while any split model in the store is half downloaded (one
+				// engine's download beside another's load). Without it, the parts already stored are kept, and only the
+				// rest download.
+				// eslint-disable-next-line no-restricted-syntax -- wllama's own name
+				await wllama.loadModelFromUrl(model, {
+					...params,
+					useCache: false,
+					// A cancelled download stops fetching; the load fails, and the next asks again.
+					signal,
+					progressCallback: ({ loaded, total }) => report?.({
+						progress: total > 0 ? loaded / total : 0,
+						text: loaded < total ? `Downloading ${gb(loaded)} of ${gb(total)} GB` : 'Loading on the GPU',
+					}),
+				});
+			}
+			const failure = loadFailure(this._loadLines);
+			if (failure) {
+				throw new ModelLoadError(failure);
+			}
+		}
+		catch (err) {
+			// A failed load leaves the engine started, and a started engine loads nothing more.
+			await wllama.exit().catch(() => undefined);
+			if (err instanceof ModelLoadError) {
+				this._failed.set(model, { key: JSON.stringify(params), error: err });
+			}
+			throw err;
+		}
+	}
+
+	/** Learns `model`'s {@link contextCap} from the header of its first part, once the store holds it whole. */
+	private async readCap(model:string):Promise<void> {
+		const stored = (await this.stored()).get(model);
+		const first = !this._caps.has(model) && stored?.complete ? stored.files.find((f) => f.metadata.originalURL === stored.parts[0]) : undefined;
+		const blob = first && await (await this.wllama()).modelManager.cacheManager.open(first.name);
+		if (blob) {
+			this._caps.set(model, contextCap(await ggufMetadata(blob)));
+		}
 	}
 
 	private wllama():Promise<Wllama> {
@@ -249,7 +426,11 @@ export class BrowserProvider implements InferenceProvider {
 			const { Wllama } = await importWllama();
 			this._lines = [];
 			const remember = (print:(...args:unknown[])=>void) => (...args:unknown[]):void => {
-				this._lines = [...this._lines, args.map(describe).join(' ')].slice(-CRASH_LINES);
+				const line = args.map(describe).join(' ');
+				this._lines = [...this._lines, line].slice(-CRASH_LINES);
+				if (LOAD_LINE.test(line)) {
+					this._loadLines = [...this._loadLines, line].slice(-CRASH_LINES);
+				}
 				print(...args);
 			};
 			const logger = { debug: () => undefined, log: remember(console.log), warn: remember(console.warn), error: remember(console.error) };
@@ -260,16 +441,22 @@ export class BrowserProvider implements InferenceProvider {
 }
 
 /**
- * A `fetch` that answers chat completions from the model in the page, as an OpenAI-style server would: JSON, or a
- * stream of server-sent events, whose cancel stops the model. Anything else is not found, as on a server without it.
+ * A `fetch` that answers from the model in the page, as an OpenAI-style server would: chat completions as JSON, or a
+ * stream of server-sent events whose cancel stops the model, and a decision model's System One answers
+ * (`/systemone`). Anything else is not found, as on a server without it.
  */
 export function inPageFetch(engine:()=>Promise<Wllama> | undefined):typeof fetch {
 	return async (input, init) => {
 		const ready = engine();
-		if (!String(input instanceof Request ? input.url : input).endsWith('/chat/completions') || init?.method !== 'POST' || !ready) {
+		const url = String(input instanceof Request ? input.url : input);
+		const route = url.endsWith('/chat/completions') ? 'chat' : url.endsWith('/systemone') ? 'systemone' : undefined;
+		if (!route || init?.method !== 'POST' || !ready) {
 			return new Response('not found', { status: 404 });
 		}
 		const body = JSON.parse(String(init.body)) as Record<string, unknown>;
+		if (route === 'systemone') {
+			return json(await (await ready).createSystemOne({ state: body['state'], questions: body['questions'] }));
+		}
 		const stop = new AbortController();
 		init.signal?.addEventListener('abort', () => stop.abort(init.signal?.reason));
 		const wllama = await ready;
@@ -305,9 +492,93 @@ function describe(value:unknown):string {
 	return String(value);
 }
 
+/**
+ * Why a load left no model to answer with, from the engine's {@link LOAD_LINE}s, or null when it loaded: wllama
+ * resolves a load that llama.cpp failed, and the first request then aborts the engine. A model with no layer on the
+ * GPU fails too: on the CPU it is far too slow to think with, and too big for the page's memory besides.
+ */
+export function loadFailure(lines:readonly string[]):string | null {
+	const why = lines.join(' | ');
+	if (lines.some((line) => OFFLOADED.exec(line)?.[1] === '0')) {
+		return `the model in the page got no GPU, and on the CPU it is far too slow: ${why}`;
+	}
+	return lines.some((line) => line.includes('failed to load model')) ? `the model in the page could not load: ${why}` : null;
+}
+
+/**
+ * The most tokens one think's cache may hold, from a model's GGUF metadata, or null when it does not say: past it,
+ * moving a reused cached chunk re-ropes the cache in one ggml-webgpu dispatch of more workgroups than WebGPU allows
+ * (`Dispatch workgroup count X (65536) exceeds max compute workgroups per dimension (65535)`), which kills the engine.
+ * ggml-webgpu does not split that dispatch (wllama 3.8.1). A whole number of reuse chunks: 16 128 for Gemma 4 E4B.
+ */
+export function contextCap(meta:ReadonlyMap<string, string | number>):number | null {
+	const arch = meta.get('general.architecture');
+	const num = (key:string):number => {
+		const value = meta.get(`${String(arch)}.${key}`);
+		return typeof value === 'number' ? value : 0;
+	};
+	const heads = num('attention.head_count_kv') || num('attention.head_count');
+	const width = Math.max(num('attention.key_length'), num('attention.value_length')) || num('embedding_length') / (num('attention.head_count') || 1);
+	if (!heads || !width) {
+		return null;
+	}
+	return Math.floor(MAX_WORKGROUPS * WORKGROUP / (heads * width) / CACHE_REUSE_CHUNK) * CACHE_REUSE_CHUNK;
+}
+
+/** A model that cannot load as its settings say: loading it again the same way fails the same way. */
+class ModelLoadError extends Error {}
+
 /** Whether `err` says the engine itself died, not just this request. */
 function isCrash(err:unknown):boolean {
 	return err instanceof Error && (err.name === 'RuntimeError' || /has crashed|\(ABORT\)/.test(err.message));
+}
+
+/** A model in the browser's store: its files, and whether every part is there whole. */
+export type StoredModel = { parts:string[]; files:StoredFile[]; complete:boolean };
+
+/** A model's part URLs: the model itself, or every `-0000i-of-0000n.gguf` of a split one, first to last. */
+function modelParts(model:string):string[] {
+	const split = /-(\d{5})-of-(\d{5})\.gguf$/.exec(model);
+	if (!split) {
+		return [model];
+	}
+	const count = Number(split[2]);
+	return Array.from({ length: count }, (_, i) => model.replace(split[0], `-${String(i + 1).padStart(5, '0')}-of-${split[2]}.gguf`));
+}
+
+/**
+ * The store's files as models, by URL (a split model's first part), each whole only when all of its parts are. A file
+ * still downloading names no URL yet, so it belongs to none. wllama's own list throws on a split model with a part
+ * missing instead, so one model half downloaded would hide every other.
+ */
+export function storedModels(files:readonly StoredFile[]):Map<string, StoredModel> {
+	const models = new Map<string, StoredModel>();
+	for (const file of files) {
+		const url = file.metadata.originalURL;
+		if (!url) {
+			continue;
+		}
+		const model = modelParts(url)[0]!;
+		const entry = models.get(model) ?? { parts: modelParts(model), files: [], complete: false };
+		entry.files.push(file);
+		models.set(model, entry);
+	}
+	for (const entry of models.values()) {
+		entry.complete = entry.parts.every((part) => entry.files.some((f) => f.metadata.originalURL === part && f.size === f.metadata.originalSize));
+	}
+	return models;
+}
+
+/** A whole stored model's parts, in order, to load. */
+async function openParts(wllama:Wllama, model:StoredModel):Promise<Blob[]> {
+	return Promise.all(model.parts.map(async (part) => {
+		const file = model.files.find((f) => f.metadata.originalURL === part);
+		const blob = file && await wllama.modelManager.cacheManager.open(file.name);
+		if (!blob) {
+			throw new Error(`a part of the model is missing from the browser's storage: ${part}`);
+		}
+		return blob;
+	}));
 }
 
 function json(value:unknown):Response {

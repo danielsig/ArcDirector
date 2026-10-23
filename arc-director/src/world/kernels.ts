@@ -1,6 +1,6 @@
 import type { HostKernels } from '../expr/natives.js';
 import type { ExprEntity } from '../expr/types.js';
-import { blockedReason, findRoute, pointGoal } from './route.js';
+import { blockedReason, findRoute, hasRoutes, memoWorld, pointGoal } from './route.js';
 import { poseOf } from './lookup.js';
 import type { HostWorld, Pose, Vec } from './types.js';
 import { cosToward, distance } from './vec.js';
@@ -23,7 +23,7 @@ export function geometryKernels(
 		return pa && pb ? [pa, pb] : undefined;
 	};
 	const character = characterID === undefined ? undefined : world.find(characterID);
-	const graph = world.getPathGraph && character !== undefined ? world.getPathGraph.bind(world, character) : undefined;
+	const routes = character !== undefined && hasRoutes(world) ? world : undefined;
 	return {
 		point: (who) => whereIs(who)?.point,
 		distance: (a, b) => {
@@ -38,7 +38,7 @@ export function geometryKernels(
 			const p = pair(a, b);
 			return p?.[0].right ? cosToward(p[0].right, p[0].point, p[1].point) : 0;
 		},
-		pathDistance: graph
+		pathDistance: routes
 			? (a, b) => {
 				const p = pair(a, b);
 				if (!p) {
@@ -46,7 +46,7 @@ export function geometryKernels(
 				}
 				const target = world.find(b.id);
 				const near = target === undefined ? 1 : world.getReach?.(character, target) ?? 1;
-				const route = findRoute(graph(), p[0].point, pointGoal(p[1].point, near));
+				const route = findRoute(routes, character, p[0].point, pointGoal(p[1].point, near));
 				return route && 'points' in route ? routeLength(p[0].point, route.points) : undefined;
 			}
 			: undefined,
@@ -54,22 +54,26 @@ export function geometryKernels(
 }
 
 /**
- * Why there is no way for `characterID` into reach of `targetID`: the blockers on the way, or `''` when nothing
- * names one. Undefined when there is a way, or when the world has no routes to ask.
+ * Why there is no way for `characterID` into reach of each of `targetIDs`: the blockers on the way, or `''` when
+ * nothing names one. Undefined where there is a way, or when the world has no routes to ask. One look at the world:
+ * its searches share what it said.
  */
-export function wayBlocked(world:HostWorld<unknown>, characterID:string, targetID:string):string | undefined {
+export function wayBlocked(world:HostWorld<unknown>, characterID:string, targetIDs:readonly string[]):(string | undefined)[] {
 	const character = world.find(characterID);
-	const target = world.find(targetID);
 	const from = poseOf(world, characterID)?.point;
-	const to = poseOf(world, targetID)?.point;
-	if (!world.getPathGraph || character === undefined || target === undefined || !from || !to) {
-		return undefined;
-	}
-	const route = findRoute(world.getPathGraph(character), from, pointGoal(to, world.getReach?.(character, target) ?? 1));
-	if (!route) {
-		return '';
-	}
-	return 'blockers' in route ? blockedReason(route) : undefined;
+	const routes = hasRoutes(world) ? memoWorld(world) : undefined;
+	return targetIDs.map((targetID) => {
+		const target = world.find(targetID);
+		const to = poseOf(world, targetID)?.point;
+		if (!routes || character === undefined || target === undefined || !from || !to) {
+			return undefined;
+		}
+		const route = findRoute(routes, character, from, pointGoal(to, world.getReach?.(character, target) ?? 1));
+		if (!route) {
+			return '';
+		}
+		return 'blockers' in route ? blockedReason(route) : undefined;
+	});
 }
 
 function routeLength(from:Vec, points:Vec[]):number {

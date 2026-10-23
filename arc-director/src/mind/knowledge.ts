@@ -36,10 +36,15 @@ const MIN_TOKEN = 3;
 
 type ItemLike = { id:string; tags?:readonly string[] };
 
-/** Whether one of `items` is what `entry` is about: its id or a tag equals the name or an alias. */
+/**
+ * Whether one of `items` is what `entry` is about: its id equals the name or an alias, or a tag equals the name. A tag
+ * is a kind many items share (`mushroom`), so it only matches an article named for that kind, never another item's
+ * alias: a MoonMushroom tagged `mushroom` is not the FireMushroom whose alias is `mushroom`.
+ */
 export function isAboutItem(entry:KnowledgeEntry, items:readonly ItemLike[]):boolean {
-	const keys = new Set([entry.name, ...(entry.aliases ?? [])].map((key) => key.trim().toLowerCase()));
-	return items.some((item) => [item.id, ...(item.tags ?? [])].some((key) => keys.has(key.toLowerCase())));
+	const name = entry.name.trim().toLowerCase();
+	const keys = new Set([name, ...(entry.aliases ?? []).map((alias) => alias.trim().toLowerCase())]);
+	return items.some((item) => keys.has(item.id.toLowerCase()) || (item.tags ?? []).some((tag) => tag.toLowerCase() === name));
 }
 
 /** `- Name: article` for each article whose name or alias equals an item id or tag. Empty when nothing matches. */

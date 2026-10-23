@@ -214,7 +214,7 @@ export const ITEM_DEFS:Record<string, ItemDef> = {
 		maxStack: 9,
 		meshID: 'item_mushroom',
 		color: 0x3a6ad8,
-		components: { Goods: { ask: 10 } },
+		components: { Goods: { ask: 1 } },
 	},
 	silver_trout: {
 		id: 'silver_trout',
@@ -358,8 +358,98 @@ export const ITEM_DEFS:Record<string, ItemDef> = {
 		name: 'Apple',
 		stackable: true,
 		maxStack: 9,
-		meshID: 'item_potion',
+		meshID: 'item_apple',
 		color: 0xc23b3a,
+		components: { Goods: { ask: 3 } },
+	},
+	pear: {
+		id: 'pear',
+		name: 'Pear',
+		stackable: true,
+		maxStack: 9,
+		meshID: 'item_pear',
+		color: 0xb8c44a,
+		components: { Goods: { ask: 4 } },
+	},
+	plum: {
+		id: 'plum',
+		name: 'Plum',
+		stackable: true,
+		maxStack: 9,
+		meshID: 'item_plum',
+		color: 0x5a2a6a,
+		components: { Goods: { ask: 2 } },
+	},
+	tonic: {
+		id: 'tonic',
+		name: 'Tonic',
+		stackable: true,
+		maxStack: 9,
+		meshID: 'item_tonic',
+		color: 0x4ac27a,
+		components: { Goods: { ask: 6 } },
+	},
+	salve: {
+		id: 'salve',
+		name: 'Salve',
+		stackable: true,
+		maxStack: 9,
+		meshID: 'item_salve',
+		color: 0xb8a060,
+		components: { Goods: { ask: 4 } },
+	},
+	lavender: {
+		id: 'lavender',
+		name: 'Lavender',
+		stackable: true,
+		maxStack: 9,
+		meshID: 'item_lavender',
+		color: 0x8a6ac8,
+		components: { Goods: { ask: 3 } },
+	},
+	soap: {
+		id: 'soap',
+		name: 'Soap',
+		stackable: true,
+		maxStack: 9,
+		meshID: 'item_soap',
+		color: 0xe8d8b8,
+		components: { Goods: { ask: 2 } },
+	},
+	wooden_horse: {
+		id: 'wooden_horse',
+		name: 'WoodenHorse',
+		stackable: true,
+		maxStack: 9,
+		meshID: 'item_wooden_horse',
+		color: 0xa86a38,
+		components: { Goods: { ask: 8 } },
+	},
+	doll: {
+		id: 'doll',
+		name: 'Doll',
+		stackable: true,
+		maxStack: 9,
+		meshID: 'item_doll',
+		color: 0xd89a7a,
+		components: { Goods: { ask: 6 } },
+	},
+	whistle: {
+		id: 'whistle',
+		name: 'Whistle',
+		stackable: true,
+		maxStack: 9,
+		meshID: 'item_whistle',
+		color: 0xc8a050,
+		components: { Goods: { ask: 2 } },
+	},
+	spinning_top: {
+		id: 'spinning_top',
+		name: 'SpinningTop',
+		stackable: true,
+		maxStack: 9,
+		meshID: 'item_spinning_top',
+		color: 0xc84a3a,
 		components: { Goods: { ask: 3 } },
 	},
 	candle: {
@@ -372,6 +462,11 @@ export const ITEM_DEFS:Record<string, ItemDef> = {
 		components: { Goods: { ask: 2 } },
 	},
 };
+
+/** What one of an item is worth in gold, if it is goods: what it sells for. */
+export function worthOf(defID:string):number | undefined {
+	return ITEM_DEFS[defID]?.components.Goods?.ask;
+}
 
 export function getDef(defID:string):ItemDef {
 	const def = ITEM_DEFS[defID];

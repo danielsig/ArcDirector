@@ -8,7 +8,7 @@ import {
 	type Arc,
 	type Step,
 } from './types.js';
-import { argBase, CHOOSE_VERB, GROUP_VERB, type VerbRegistry } from './stock-verbs.js';
+import { argBase, CHOOSE_VERB, GROUP_VERB, TEXT_ARG_KINDS, type VerbRegistry } from './stock-verbs.js';
 import { isChoiceName, MAX_CHOICES } from './choose.js';
 
 const COORD_KEYS = new Set(['x', 'z', 'y', 'xz', 'xy', 'pos', 'position']);
@@ -86,7 +86,7 @@ export function validateStep(step:Step, registry:VerbRegistry, inIssue = false):
 		if (base === 'bundle' && !isCountMap(value)) {
 			throw new ArcError(`verb '${step.verb}' arg '${key}' must be { [item: string]: number }`);
 		}
-		if (['id', 'string', 'text', 'watch', 'expr', 'law'].includes(base) && typeof value !== 'string') {
+		if (TEXT_ARG_KINDS.includes(base) && typeof value !== 'string') {
 			throw new ArcError(`verb '${step.verb}' arg '${key}' must be a string`);
 		}
 		if (base === 'arc') {

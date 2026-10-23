@@ -13,7 +13,7 @@ test('two walkers meeting head-on each step to their right and pass', () => {
 	for (const file of RUINS_CHUNKS) {
 		world.addChunk(decodeGlyphChunk(file).chunk);
 	}
-	// Glyph row 7 of the ruins, open floor from column 8 to 23, with room to either side where they meet.
+	// Glyph row 7 of the ruins, open floor from column 24 to 39, with room to either side where they meet.
 	const walker = (id:string, x:number, toX:number) => {
 		const go = new GameObject(id, 'NPC');
 		go.transform.localPosition = { x, y: 0, z: 7.5 };
@@ -24,8 +24,8 @@ test('two walkers meeting head-on each step to their right and pass', () => {
 		world.add(go);
 		return { go, motor, swerve: 0 };
 	};
-	const east = walker('East', 9.5, 21.5);
-	const west = walker('West', 21.5, 9.5);
+	const east = walker('East', 25.5, 37.5);
+	const west = walker('West', 37.5, 25.5);
 	const dt = 1 / 60;
 	for (let t = 0; t < 10; t += dt) {
 		for (const w of [east, west]) {
@@ -37,7 +37,7 @@ test('two walkers meeting head-on each step to their right and pass', () => {
 		east.swerve = Math.max(east.swerve, east.go.transform.position.z - 7.5);
 		west.swerve = Math.max(west.swerve, 7.5 - west.go.transform.position.z);
 	}
-	assert.ok(east.go.transform.position.x > 21, `East stuck at x ${east.go.transform.position.x.toFixed(2)}`);
-	assert.ok(west.go.transform.position.x < 10, `West stuck at x ${west.go.transform.position.x.toFixed(2)}`);
+	assert.ok(east.go.transform.position.x > 37, `East stuck at x ${east.go.transform.position.x.toFixed(2)}`);
+	assert.ok(west.go.transform.position.x < 26, `West stuck at x ${west.go.transform.position.x.toFixed(2)}`);
 	assert.ok(east.swerve > 0.3 && west.swerve > 0.3, `did not both step right: ${east.swerve.toFixed(2)}, ${west.swerve.toFixed(2)}`);
 });

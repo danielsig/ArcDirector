@@ -3,7 +3,7 @@ import { Time } from './Time.js';
 import { Audio } from '../audio/Audio.js';
 import * as THREE from 'three';
 import { BoxCollider } from './BoxCollider.js';
-import { Rigidbody } from './Rigidbody.js';
+import { blockerAt, type BlockerOpts } from './physics.js';
 import type { Component } from './Component.js';
 import type { GameObject } from './GameObject.js';
 import type { ChunkType, Constructor, TileType } from './types.js';
@@ -15,11 +15,15 @@ export type TerrainSample = {
 	worldY:number;
 	blocked:boolean;
 	climbable:boolean;
+	/**
+	 * Where a blocked tile is solid to bodies, as world XZ boxes, when that is less than the whole tile (a thin
+	 * wall through it). Bodies collide with these and may stand in the rest of the tile; routes and sight still
+	 * go by `blocked`.
+	 */
+	solids?:readonly ChunkBounds[];
 };
 
 const NONE:readonly GameObject[] = [];
-/** Sample points per tile side for `solidCover`. */
-const COVER_SAMPLES = 8;
 const pos = new THREE.Vector3();
 
 /** World XZ box, in meters. */
@@ -53,6 +57,8 @@ export class World {
 	public readonly audio = new Audio();
 	/** Keyboard and mouse on the canvas. `Game` attaches it. */
 	public readonly input = new Input();
+	/** How bright every light is but the sun. 1 leaves them as authored. Set before `Renderer.applyLook`. */
+	public lightLevel = 1;
 	/** 0 = no tile collision. Hosts set this to their cell size. */
 	public tileSize = 0;
 	/** Tiles per chunk side. 0 = no chunks. Hosts set this with `tileSize` when they use `Chunk`s. */
@@ -227,32 +233,14 @@ export class World {
 	}
 
 	/**
-	 * Fraction (0–1) of tile `(tx, tz)` under solid colliders that never move (no `Rigidbody`), as of the
-	 * last `reindex`. Sampled on a grid, so overlapping colliders count once and round ones count round.
+	 * What `body` would run into standing at `x`, `z`: a solid collider that never moves (no `Rigidbody`), else
+	 * `'terrain'` (a blocked tile's solids, or ground it cannot step to `from` where it is), else nothing. The same
+	 * tests physics pushes bodies out with, so routes planned with it are ones bodies can walk; bodies slide around a
+	 * cylinder, so it stops one only over its middle. With no `body`, what stands at the point itself; `above` keeps
+	 * to colliders taller than that, for what one sees or hears past. Objects are where the last `reindex` found them.
 	 */
-	public solidCover(tx:number, tz:number):number {
-		const size = this.tileSize || 1;
-		const solids:BoxCollider[] = [];
-		this.forEachNear(tx * size, tz * size, (tx + 1) * size, (tz + 1) * size, (go) => {
-			const col = go.getComponent(BoxCollider);
-			if (col?.enabled && col.solid && !col.isTrigger && !go.getComponent(Rigidbody)) {
-				solids.push(col);
-			}
-		});
-		if (solids.length === 0) {
-			return 0;
-		}
-		let covered = 0;
-		for (let i = 0; i < COVER_SAMPLES; i++) {
-			for (let j = 0; j < COVER_SAMPLES; j++) {
-				const x = (tx + (i + 0.5) / COVER_SAMPLES) * size;
-				const z = (tz + (j + 0.5) / COVER_SAMPLES) * size;
-				if (solids.some((col) => col.contains(x, z))) {
-					covered++;
-				}
-			}
-		}
-		return covered / (COVER_SAMPLES * COVER_SAMPLES);
+	public blocker(body:GameObject | null, x:number, z:number, opts?:BlockerOpts):GameObject | 'terrain' | undefined {
+		return blockerAt(this, body, x, z, opts);
 	}
 
 	/** Updates the spatial hash. Physics calls this after moving bodies and resolving collisions.

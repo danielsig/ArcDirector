@@ -11,6 +11,13 @@ import type { Identity, Goal, Watches } from '../character/types.js';
 import { extrasWithoutPins, formatWatches, watchCount, watchNames } from '../character/watch.js';
 import type { ArcFormat } from './types.js';
 
+/**
+ * How much of the standing rules a prompt spells out. `full` tells every rule; `compact` leaves out the rules and hints
+ * that are the same in every game (the watch language, how to look things up, how steps join, the stock verbs' help)
+ * for a model trained on ArcDirector's prompts, which knows them, and keeps all a game or a character makes its own.
+ */
+export type PromptStyle = 'full' | 'compact';
+
 /** Standing think line per reasoning state. `on` defaults to {@link DEFAULT_THINK_INSTRUCTIONS}, `off` to nothing. */
 export type ThinkInstructions = { on?:string; off?:string };
 
@@ -42,6 +49,8 @@ export type StablePrefixOpts = {
 	omitArc?:boolean;
 	/** Tool names offered this think. Never listed as Arc verbs. */
 	tools?:string[];
+	/** Default `full`. */
+	style?:PromptStyle;
 };
 
 /**
@@ -55,6 +64,9 @@ export function stablePrefix(
 	verbs:VerbRegistry,
 	opts:StablePrefixOpts = {},
 ):string {
+	if (opts.style === 'compact') {
+		return [...compactArcInstructions(verbs, opts), ...whoYouAre(id, identity, opts)].join('\n');
+	}
 	// What every mind with this kit is told comes first, and who this one is last: then their prompts start alike, and
 	// a server that caches prompts reuses one for all of them.
 	const lines = [
@@ -65,7 +77,7 @@ export function stablePrefix(
 		lines.push(watchCheatSheet(opts.watchesWritable === true, opts.canObserve === true, verbs.has('go_to')));
 	}
 	if (opts.canRecallKnowledge) {
-		lines.push(knowledgeHint(opts.canSeeMap !== true, verbs.has('wander')));
+		lines.push(knowledgeHint(opts.canSeeMap !== true, verbs.has('wander'), opts.canObserve === true));
 	}
 	if (opts.canSeeMap) {
 		lines.push(seeMapHint(opts.youSymbol, opts.canRecallKnowledge === true, verbs.has('wander')));
@@ -80,14 +92,37 @@ export function stablePrefix(
 			currency: opts.currency,
 		}));
 	}
-	lines.push(identity.role ? `You are ${id}. Role: ${identity.role}.` : `You are ${id}.`);
-	if (opts.systemNote?.trim()) {
-		lines.push(opts.systemNote.trim());
+	return [...lines, ...whoYouAre(id, identity, opts)].join('\n');
+}
+
+/** Who the mind is, and the host's own standing note: the last lines of either style. */
+function whoYouAre(id:string, identity:Identity, opts:StablePrefixOpts):string[] {
+	return [
+		identity.role ? `You are ${id}. Role: ${identity.role}.` : `You are ${id}.`,
+		opts.systemNote?.trim() ?? '',
+		identity.traits && identity.traits.length > 0 ? `Traits: ${identity.traits.join(', ')}.` : '',
+	].filter(Boolean);
+}
+
+/**
+ * The compact style's standing lines: what this game says (its own think and verb lines, its money, its example), how
+ * to reply, and the verbs with only the help this game gave them, then the tools. Nothing when the Arc is left out.
+ */
+function compactArcInstructions(verbs:VerbRegistry, opts:StablePrefixOpts):string[] {
+	if (opts.omitArc) {
+		return [];
 	}
-	if (identity.traits && identity.traits.length > 0) {
-		lines.push(`Traits: ${identity.traits.join(', ')}.`);
-	}
-	return lines.join('\n');
+	const format = opts.arcFormat ?? 'json';
+	const tools = opts.tools ?? [];
+	return [joinSentences([
+		opts.thinking === false ? opts.thinkInstructions?.off ?? '' : opts.thinkInstructions?.on ?? '',
+		opts.verbInstructions ?? '',
+		moneySentence(verbs, format, opts.currency),
+		emitSentence(format, tools.length > 0),
+		`Available verbs: ${verbHelp(verbs, tools, { stockHelp: false })}.`,
+		tools.length > 0 && `Tools: ${tools.join(', ')}.`,
+		opts.arcExample ? `Example: ${format === 'text' ? opts.arcExample : showArc(opts.arcExample, verbs, format)}` : '',
+	])];
 }
 
 /** `edit` names the standing-watch verbs. `observe` names the tool, only when it is offered. `goTo` names that verb in the crowd example. */
@@ -95,7 +130,7 @@ export function watchCheatSheet(edit:boolean, observe:boolean, goTo = false):str
 	return [
 		'Watch language (not JS). Bindings: me, others, items, units (your roster, not others), landmarks, events, prev (last think: prev.me, prev.secondsAgo, prev.verbs).',
 		edit && 'Standing: watch(name, expr) / unwatch(name).',
-		observe && 'One-shot this think: the observe tool.',
+		observe && 'One-shot this think: the observe tool evaluates any expr on the world now, even past sight (distance(me, Cottage), count(others.filter(u => isNear(u, Cottage, 5))), isNear(Player, Cottage, 4)).',
 		WATCH_RELATIONS,
 		goTo && 'Crowd: doing(u, "go_to").',
 	].filter(Boolean).join(' ');
@@ -106,10 +141,12 @@ const WATCH_RELATIONS = [
 	'i is "Lantern". filter/count/find/some/all/minBy/maxBy. others.nearby(16), isLeft, isRight, events.filter("theft"). &&/|| numbers=min/max, bools=and/or. isCarrying / wasCarrying / hasJustReceived / hasJustLost when you carry.',
 ].join(' ');
 
-export function knowledgeHint(includeUnnamed = false, canWander = true):string {
+export function knowledgeHint(includeUnnamed = false, canWander = true, canObserve = false):string {
 	const lines = [
 		'recall also searches what you know of the world: places, items, people, and how things work. Query a name, or a plain word or spoken place to learn its Capitalized name. Empty query lists the topics you know.',
-		'recall answers any question. Never ask anyone until recall cannot find it. Then try different words.',
+		canObserve
+			? 'recall answers what you know; observe answers what is true in the world now. Never ask anyone until neither can find it. Then try different words.'
+			: 'recall answers any question. Never ask anyone until recall cannot find it. Then try different words.',
 	];
 	if (includeUnnamed) {
 		const wander = canWander ? ', or wander(until)' : '';
@@ -392,7 +429,8 @@ function collectiveInstructions(verbs:VerbRegistry, format:ArcFormat):string {
 		parts.push(
 			`issue(who, arc) assigns a sticky program to matching units (never you). who is YOUR roster (units.filter("Witch")), never an enemy. `
 			+ `allUnits is one identical program for every troop. ${format === 'text' ? 'Join several issue with ; or a new line.' : 'Give each issue as a step of its own.'} Each issue arc is that unit's full chain. `
-			+ `One who per issue: a program for several roles is one issue per role, or one who that matches them all (units.filter(u => u is "Archer" || u is "Witch")). `,
+			+ `One who per issue: a program for several roles is one issue per role, or one who that matches them all (units.filter(u => u is "Archer" || u is "Witch")). `
+			+ `Ordering two or more, name them with group=Name; units.filter("Name") picks that group later. `,
 		);
 	}
 	if (verbs.has('loop')) {
@@ -432,7 +470,7 @@ export function volatileBlock(opts:{
 	/** Articles for the names in a failed last result, shown under it. */
 	lastResultArticles?:string;
 	goals?:Goal[];
-	pinned?:MemoryRecord[];
+	pinned?:(Partial<MemoryRecord> & { text:string })[];
 	recalled?:MemoryRecord[];
 	watches?:Watches;
 	pinnedWatches?:Watches;
@@ -450,13 +488,15 @@ export function volatileBlock(opts:{
 	/** Open offers, one per line. */
 	offers?:string;
 	thinkAbout?:string;
+	/** Leave out the standing hints a model trained on these prompts knows: see {@link PromptStyle}. */
+	compact?:boolean;
 }):string {
 	const parts:string[] = [];
-	const recent = shortTermBlock(opts.recentSummary ?? '', opts.recent ?? []);
+	const recent = shortTermBlock(opts.recentSummary ?? '', opts.recent ?? [], opts.compact);
 	if (recent) {
 		parts.push(recent);
 	}
-	const conversation = conversationBlock(opts.conversation ?? []);
+	const conversation = conversationBlock(opts.conversation ?? [], opts.compact);
 	if (conversation) {
 		parts.push(conversation);
 	}
@@ -510,7 +550,7 @@ export function volatileBlock(opts:{
 			parts.push(`Current watches:\n${formatWatches(extra)}`);
 		}
 	}
-	if (opts.watchesWritable) {
+	if (opts.watchesWritable && !opts.compact) {
 		const pinNames = watchNames(opts.pinnedWatches ?? {}).join(', ');
 		const pinNote = pinNames
 			? ` Required watches (${pinNames}) stay. Do not reuse those names.`
@@ -523,7 +563,7 @@ export function volatileBlock(opts:{
 	if (opts.sightFocus && opts.sightFocus.length > 0) {
 		parts.push(`Current sightFocus:\n${opts.sightFocus.map((e) => `- ${e}`).join('\n')}`);
 	}
-	if (opts.sightFocusWritable) {
+	if (opts.sightFocusWritable && !opts.compact) {
 		parts.push('focus(expr) lists what matches first in sight, as focus(isHurt(it)); unfocus(expr) drops it. Required stay.');
 	}
 	if (opts.scold) {
@@ -533,13 +573,13 @@ export function volatileBlock(opts:{
 }
 
 /** Rolling what-just-happened. Always in the prompt; older lines fold into `Earlier:`. */
-export function shortTermBlock(summary:string, recent:string[]):string {
+export function shortTermBlock(summary:string, recent:string[], compact = false):string {
 	const earlier = summary.trim();
 	if (!earlier && recent.length === 0) {
 		return '';
 	}
 	const lines = [
-		'Short-term memory (later line wins. Sight is what is true now: check it before you act on what you half heard):',
+		compact ? 'Short-term memory:' : 'Short-term memory (later line wins. Sight is what is true now: check it before you act on what you half heard):',
 	];
 	if (earlier) {
 		lines.push(`Earlier: ${earlier}`);
@@ -558,12 +598,12 @@ export const CONVERSATION_HEADER = 'Current Conversation (oldest first; Me is yo
 	+ 'What anyone says, you too, is a claim, not the world: check sight before you act on it or repeat it. Never say again what you already said):';
 
 /** What was clearly said lately, oldest first. Empty when no one has spoken. */
-export function conversationBlock(lines:readonly string[]):string {
+export function conversationBlock(lines:readonly string[], compact = false):string {
 	const turns = lines.map((line) => line.trim()).filter((line) => line.length > 0);
 	if (turns.length === 0) {
 		return '';
 	}
-	return `${CONVERSATION_HEADER}\n${turns.join('\n')}`;
+	return `${compact ? 'Current Conversation:' : CONVERSATION_HEADER}\n${turns.join('\n')}`;
 }
 
 /**
@@ -608,6 +648,9 @@ export function arcRepairHint(reason:string, format:ArcFormat = 'json', tools:st
 			? `${name} is a tool, not a verb. Reply {"tool":"${name}", …its arguments} to use it. Never put it in the steps. Keep this conversation. ${thenEmit(format)}`
 			: `${name} is a tool, not a verb. Call the tool. Never write ${name}(...) in the Arc. Keep this conversation. ${thenEmit(format)}`;
 	}
+	if (name && verbs?.has('issue') && !verbs.has(name) && verbs.nested().has(name)) {
+		return `You have no body of your own: ${name} is for your units, run through issue(who, arc=${name}(…)). Keep this conversation. ${emit}`;
+	}
 	const toolNote = tools.length > 0
 		? ` Tools (${tools.join(', ')}) are not verbs — ${schema ? 'reply with the tool call' : 'call them'}, then emit the ${schema ? 'steps' : 'arc'}.`
 		: '';
@@ -627,7 +670,10 @@ export function writtenToolsHint(results:string[], format:ArcFormat = 'json'):st
 }
 
 /** After a tool the model called in its reply: what it said, and what is left to do. */
-export function toolResultHint(name:string, result:string, last:boolean):string {
+export function toolResultHint(name:string, result:string, last:boolean, compact = false):string {
+	if (compact) {
+		return last ? `${name}: ${result}\nThat was your last lookup; reply with the steps now.` : `${name}: ${result}`;
+	}
 	const next = last ? 'That was your last lookup; reply with the steps now.' : 'Look up something else, or reply with the steps.';
 	return `${name}: ${result}\n${next} Names only, no coordinates.`;
 }

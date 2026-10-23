@@ -174,18 +174,18 @@ export type ChestHold = {
 	bag:Container;
 };
 
+/** `name` in `chest`, or nothing. */
+export function chestHolding(chest:GameObject, name:string):ChestHold | null {
+	const bag = chest.getComponent(Chest) ? chest.getComponent(Container) : undefined;
+	const item = bag?.contents.find((it) => itemMatchesName(it, name));
+	return bag && item ? { chest, item, bag } : null;
+}
+
 export function findChestHolding(world:World, name:string):ChestHold | null {
 	for (const go of world.objects) {
-		if (!go.getComponent(Chest)) {
-			continue;
-		}
-		const bag = go.getComponent(Container);
-		if (!bag) {
-			continue;
-		}
-		const item = bag.contents.find((it) => itemMatchesName(it, name));
-		if (item) {
-			return { chest: go, item, bag };
+		const held = chestHolding(go, name);
+		if (held) {
+			return held;
 		}
 	}
 	return null;
@@ -216,11 +216,13 @@ export function takeFromChest(character:GameObject, held:ChestHold):string {
 	if (lock?.locked) {
 		return `${chestName} is locked`;
 	}
-	if (chest && !chest.open) {
-		return `${chestName} is closed`;
-	}
 	if (!tryInsert(character, held.item)) {
 		return 'no room';
+	}
+	// A shut chest's lid is lifted to take from it.
+	if (chest && !chest.open) {
+		chest.open = true;
+		cueAt(character.world, 'chestOpen', held.chest);
 	}
 	const i = held.bag.contents.indexOf(held.item);
 	if (i >= 0) {

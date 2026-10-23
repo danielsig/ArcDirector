@@ -9,15 +9,19 @@ Most "AI NPCs" are chatbots wearing a costume: you type, they talk, nothing in t
 
 No behavior trees. No dialogue scripts. No cloud bill. Just a local model, a few callbacks into your world, and characters that surprise you.
 
-## See it running
+## See it running: **[▶ Play the demo](https://arcdirector.com)**
+
+No install, no account, no server. The NPCs think inside your browser, on your own GPU. Drop into a 5v5 battle, a busy marketplace or a dungeon crawl, and watch a cast of characters make their own plans.
+
+### Four scenes to prove it
 
 Every screenshot below is a live session: no scripted moves, nothing staged. Each NPC is steered by a local LLM through ArcDirector, inside the example game that ships in this repo.
 
 | Scene | | |
 | ----- | - | - |
-| **5v5 Combat** | ![Two squads at either end of a ruined temple](branding/screenshots/ruins-1.jpg) | ![A knight cleaves in the middle of the melee](branding/screenshots/ruins-2.jpg) |
-| **Marketplace** | ![Sellers at their stalls as the first shoppers arrive](branding/screenshots/market-1.jpg) | ![A shopper buys from the baker](branding/screenshots/market-2.jpg) |
-| **River Glen** | ![The glen with the bridge raised](branding/screenshots/glen-1.jpg) | ![The bridge is down and the forager crosses](branding/screenshots/glen-2.jpg) |
+| **5v5 Combat** | ![Two squads at either end of a ruined temple](branding/screenshots/ruins-1.png) | ![A knight cleaves in the middle of the melee](branding/screenshots/ruins-2.png) |
+| **Marketplace** | ![Sellers at their stalls as the first shoppers arrive](branding/screenshots/market-1.png) | ![A shopper buys from the baker](branding/screenshots/market-2.png) |
+| **River Glen** | ![The glen with the bridge raised](branding/screenshots/glen-1.png) | ![The bridge is down and the forager crosses](branding/screenshots/glen-2.png) |
 | **Dungeon Crawl** | ![The company in the Gatehouse](branding/screenshots/dungeon-1.jpg) | ![The company presses into the crypt](branding/screenshots/dungeon-2.jpg) |
 
 ## What a plan looks like
@@ -77,7 +81,7 @@ Each scene opens with a short brief of what the cast is trying to do. By default
 | Scene | What happens |
 | ----- | ------------ |
 | **5v5 Combat** | Two captains command a squad each, adapt their orders as the fight turns, and heal the wounded. |
-| **Marketplace** | Four sellers mind their stalls while a single mind runs the whole crowd of shoppers and guards. |
+| **Marketplace** | Seven sellers mind their stalls and shops while a single mind runs the whole crowd of shoppers and guards. |
 | **River Glen** | Three villagers each need something the others have, and the only bridge costs more than anyone can pay. |
 | **Dungeon Crawl** | A knight, a healer and a witch fight their way through a crypt of riddles, locked gates and a skeleton king to reach the crown. |
 

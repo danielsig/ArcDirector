@@ -26,12 +26,12 @@ import {
 } from '../items/inventory';
 import { cloneItem, isBackpack, type ItemInstance } from '../items/instance';
 import { coinsOf, noteWant, transferCoins } from '../items/wallet';
-import { dropItem, findChestHolding, pickup, takeFromChest } from '../items/pickup';
+import { chestHolding, dropItem, pickup, takeFromChest } from '../items/pickup';
 import { cueAt } from '../audio/cue';
 import { useItem } from '../items/use';
 import { captureItem } from '../world/spawnItem';
 import type { GameHost } from './adapter';
-import { idOf } from './names';
+import { findObject, idOf } from './names';
 
 /** The want is met, and the tag that would send them back for the same good comes off. */
 function dropBoughtTag(host:GameHost, buyer:GameObject, label:string):void {
@@ -41,7 +41,8 @@ function dropBoughtTag(host:GameHost, buyer:GameObject, label:string):void {
 		return;
 	}
 	const key = compactName(label);
-	mind.tags = mind.tags.filter((tag) => compactName(tag) !== key);
+	const stillLooking = (buyer.getComponent(MarketNPC)?.wants.length ?? 0) > 0;
+	mind.tags = mind.tags.filter((tag) => compactName(tag) !== key && (stillLooking || tag !== 'wanting'));
 }
 
 /** The game's item rules: what may change hands, how, and what everyone hears about it. NPCs reach them through `withWorld`, the player through slash commands. */
@@ -51,10 +52,15 @@ export function findItem(character:GameObject, name:string):ItemInstance | null 
 }
 
 /** `character` uses a carried item, on `target` if given. ArcDirector already brought it in reach. */
-export function useOn(host:GameHost, character:GameObject, itemName:string, target?:GameObject):Outcome {
+export function useOn(host:GameHost, character:GameObject, itemName:string, targetID?:string):Outcome {
 	const item = findItem(character, itemName);
 	if (!item) {
 		return { ok: false, reason: `not carrying ${itemName}` };
+	}
+	const target = targetID ? findObject(host.world, targetID) : undefined;
+	// Carried things are not in the world; no item here works on another.
+	if (targetID && !target) {
+		return { ok: false, reason: 'nothing happens' };
 	}
 	const result = useItem(character, item, target ?? null);
 	const targetName = target ? target.getComponent(Named)?.id ?? target.id : undefined;
@@ -123,13 +129,23 @@ function keepsAtFeet(from:GameObject, to:GameObject):boolean {
  * Why `move` cannot happen, or nothing: the game's item rules, for ArcDirector's verbs (`validateTransfer`) and the
  * steal verb alike. `deal` is what else changes hands with it: an item leaving `to` in the same trade frees a slot.
  */
-export function transferRefusal(host:GameHost, move:Transfer<GameObject>, deal?:Deal<GameObject>):string | undefined {
+export function transferRefusal(move:Transfer<GameObject>, deal?:Deal<GameObject>):string | undefined {
 	const { verb, thing, from, to } = move;
 	if (verb === 'pick_up') {
-		return takeRefusal(host, to!, thing);
+		return takeRefusal(to!, thing, from);
 	}
 	if (to === from) {
 		return 'cannot give to yourself';
+	}
+	if (verb === 'drop') {
+		// Coins have no body to put down or put away; only a hand takes them.
+		if (isGold(thing) && !findItem(from, thing)) {
+			return 'gold stays in your purse; give or offer it';
+		}
+		const shut = to && (to.getComponent(Chest) ? chestRefusal(to) : `${idOf(to)} cannot hold things`);
+		if (shut) {
+			return shut;
+		}
 	}
 	const count = countOf(move);
 	if (isGold(thing) && !findItem(from, thing)) {
@@ -145,49 +161,53 @@ export function transferRefusal(host:GameHost, move:Transfer<GameObject>, deal?:
 	return room ? undefined : `${idOf(to)} has no room`;
 }
 
-/** Why `character` cannot take `name` off the ground or out of a chest, or nothing. */
-function takeRefusal(host:GameHost, character:GameObject, name:string):string | undefined {
-	const loot = host.world.findNamed(name);
-	if (loot?.getComponent(Pickupable)) {
-		const crop = loot.getComponent(Harvest);
+/** Why nothing goes into or out of `chest` now, or nothing. */
+function chestRefusal(chest:GameObject):string | undefined {
+	if (chest.getComponent(Lock)?.locked) {
+		return `${idOf(chest)} is locked — unlock it first`;
+	}
+	return chest.getComponent(Chest)?.open === false ? `${idOf(chest)} is closed` : undefined;
+}
+
+/** Why `character` cannot take `name` from `from` (the loot itself on the ground, or the chest it is in), or nothing. */
+function takeRefusal(character:GameObject, name:string, from:GameObject):string | undefined {
+	if (from.getComponent(Chest)) {
+		const held = chestHolding(from, name);
+		if (!held) {
+			return `${idOf(from)} holds no ${name}`;
+		}
+		// Shut is no bar: the lid is lifted to take it. Locked is.
+		if (from.getComponent(Lock)?.locked) {
+			return `${idOf(from)} is locked — unlock it first`;
+		}
+		return hasRoom(character, held.item, held.item.count) ? undefined : 'no room';
+	}
+	if (from.getComponent(Pickupable)) {
+		const inst = captureItem(from);
+		if (idOf(from) !== name && !itemMatchesName(inst, name)) {
+			return `${idOf(from)} is not ${name}`;
+		}
+		const crop = from.getComponent(Harvest);
 		if (crop && !characterIs(character, crop.harvester)) {
 			return `only ${crop.harvester} can harvest that`;
 		}
-		const inst = captureItem(loot);
 		if (isBackpack(inst)) {
 			return character.getComponent(HumanBody) ? undefined : 'cannot equip that';
 		}
 		return hasRoom(character, inst, inst.count) ? undefined : 'no room';
 	}
-	const held = findChestHolding(host.world, name);
-	if (held) {
-		const chestName = held.chest.getComponent(Named)?.id ?? held.chest.id;
-		if (held.chest.getComponent(Lock)?.locked) {
-			return `${chestName} is locked — unlock it first`;
-		}
-		if (held.chest.getComponent(Chest)?.open === false) {
-			return `${chestName} is closed`;
-		}
-		return hasRoom(character, held.item, held.item.count) ? undefined : 'no room';
-	}
-	const named = host.world.findNamed(name);
-	if (named?.getComponent(BridgeLever)) {
+	if (from.getComponent(BridgeLever)) {
 		return `${name} is a sluice, not loot. Only BridgeKeeper uses BridgeCrank on BridgeLever`;
 	}
-	if (named?.getComponent(HumanBody) || named?.getComponent(MarketNPC)) {
-		return `cannot pick up ${name}`;
+	if (from === character) {
+		return `you already carry ${name}`;
 	}
-	if (named) {
-		return `${name} is ${named.getComponent(Door) ? 'a door' : named.getComponent(Bridge) ? 'a bridge' : 'not loot'}`;
+	if (from.getComponent(HumanBody) || from.getComponent(MarketNPC)) {
+		// Someone has it: it is theirs to hand over, and saying where it is beats "no such item".
+		const who = idOf(from);
+		return findCarried(from, (it) => itemMatchesName(it, name)) ? `${who} carries ${name}. You cannot take it; ${who} must give it to you` : `cannot pick up ${who}`;
 	}
-	// Someone has it: it is theirs to hand over, and saying where it is beats "no such item".
-	const holder = host.world.objects.find((go) => go !== character && !!go.getComponent(HumanBody)
-		&& !!findCarried(go, (it) => itemMatchesName(it, name)));
-	if (holder) {
-		const who = idOf(holder);
-		return `${who} carries ${name}. You cannot take it; ${who} must give it to you`;
-	}
-	return `no such item ${name}`;
+	return `${idOf(from)} is ${from.getComponent(Door) ? 'a door' : from.getComponent(Bridge) ? 'a bridge' : 'not loot'}`;
 }
 
 /**
@@ -197,7 +217,7 @@ function takeRefusal(host:GameHost, character:GameObject, name:string):string | 
 export function doTransfer(host:GameHost, move:Transfer<GameObject>):()=>void {
 	const { verb, thing, from, to } = move;
 	if (verb === 'pick_up') {
-		takeLoot(host, to!, thing);
+		takeLoot(host, to!, thing, from);
 		return () => undefined;
 	}
 	if (!to) {
@@ -218,7 +238,10 @@ export function doTransfer(host:GameHost, move:Transfer<GameObject>):()=>void {
 		dropItem(to, gift);
 	}
 	handOver(verb, from, to);
-	dropBoughtTag(host, to, thing);
+	// Put in a chest, it is stored, not bought.
+	if (verb !== 'drop') {
+		dropBoughtTag(host, to, thing);
+	}
 	return () => {
 		const held = findItem(to, thing);
 		if (held) {
@@ -230,15 +253,17 @@ export function doTransfer(host:GameHost, move:Transfer<GameObject>):()=>void {
 	};
 }
 
-/** `character` takes `name` off the ground or out of a chest, and everyone hears of it. ArcDirector already brought it in reach. */
-function takeLoot(host:GameHost, character:GameObject, name:string):void {
-	const loot = host.world.findNamed(name);
-	const held = loot?.getComponent(Pickupable) ? null : findChestHolding(host.world, name);
-	const reason = held ? takeFromChest(character, held) : pickup(character, loot!);
+/**
+ * `character` takes `name` from `from` (the loot itself on the ground, or the chest it is in), and everyone hears of it.
+ * ArcDirector already brought it in reach.
+ */
+function takeLoot(host:GameHost, character:GameObject, name:string, from:GameObject):void {
+	const held = chestHolding(from, name);
+	const reason = held ? takeFromChest(character, held) : pickup(character, from);
 	if (!/^(picked up|equipped|took) /.test(reason)) {
 		throw new Error(`taking ${name} failed after its rules allowed it: ${reason}`);
 	}
-	character.getComponent(Appearance)?.playClip('take', Time.time, held?.chest ?? loot);
+	character.getComponent(Appearance)?.playClip('take', Time.time, from);
 	host.arc?.pushEvent({ kind: 'PickedUp', text: `{0} picked up ${name}`, who: [idOf(character)], tags: ['item', name], major: false });
 	host.hooks.afterPickUp?.(host, character, name);
 }

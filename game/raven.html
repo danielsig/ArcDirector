@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+<html lang="en">
+	<head>
+		<meta charset="UTF-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+		<title>Raven</title>
+		<style>
+			html, body { margin: 0; height: 100%; overflow: hidden; background: #f3eee4; font: 14px system-ui, sans-serif; }
+			#bar { position: fixed; top: 12px; left: 12px; display: flex; flex-wrap: wrap; gap: 6px; max-width: calc(100% - 24px); }
+			#bar button { padding: 6px 12px; border: 2px solid #2b1d12; border-radius: 8px; background: #fbf6ec; color: #2b1d12; cursor: pointer; font: inherit; }
+			#bar button.on { background: #2b1d12; color: #fbf6ec; }
+			#hint { position: fixed; bottom: 12px; left: 12px; color: #6b5a48; }
+			#fold { position: fixed; top: 64px; right: 12px; display: flex; flex-direction: column; gap: 6px; padding: 10px 12px; border: 2px solid #2b1d12; border-radius: 8px; background: #fbf6ec; color: #2b1d12; }
+			#fold label { display: grid; grid-template-columns: 9em 160px 3em; align-items: center; gap: 8px; }
+			#fold code { user-select: all; font-size: 12px; }
+		</style>
+	</head>
+	<body>
+		<div id="bar"></div>
+		<div id="fold"></div>
+		<div id="hint">Drag to orbit, wheel to zoom.</div>
+		<script type="module" src="./src/preview/raven.ts"></script>
+	</body>
+</html>

@@ -69,7 +69,8 @@ export const attachmentStringifier:RelationshipStringifier = {
 		const ground = bestGround;
 		const mode = bestFigure.attachMode;
 		const figures = objects.filter((o) => o.attachedTo === ground.id && o.attachMode === mode);
-		const text = attachPhrase(ctx.noun(ground), listed(figures.map((o) => ctx.noun(o))), mode);
+		// The ground's own details stay on it, as the clause it is reduced to.
+		const text = attachPhrase(ctx.noun(ground), listed(figures.map((o) => ctx.noun(o) + ctx.details(o))), mode);
 		const unused = objects.filter((o) => o !== ground && !figures.includes(o));
 		return { text, unused, mode: 'reduce', reduceTo: { ...ground, label: text } };
 	},
@@ -154,10 +155,13 @@ function uniqueByID(list:SeenObject[]):SeenObject[] {
 	return out;
 }
 
-function pairPhrase(figure:string, ground:string):string {
-	const fig = isBareToken(figure) ? figure : indefinite(figure);
-	const grd = isBareToken(ground) ? ground : indefinite(ground);
-	return `${fig} next to ${grd}`;
+/** `Rosa (16/28 hp, ally Knight) next to a crate`: each named as alone, details and all. */
+function pairPhrase(figure:SeenObject, ground:SeenObject, ctx:StringifyCtx):string {
+	const named = (obj:SeenObject):string => {
+		const noun = ctx.noun(obj);
+		return (isBareToken(noun) ? noun : indefinite(noun)) + ctx.details(obj);
+	};
+	return `${named(figure)} next to ${named(ground)}`;
 }
 
 export const proximityPairStringifier:RelationshipStringifier = {
@@ -189,7 +193,7 @@ export const proximityPairStringifier:RelationshipStringifier = {
 			return null;
 		}
 		const { ground, figure } = ctx.groundAndFigure(bestA, bestB);
-		const text = pairPhrase(ctx.noun(figure), ctx.noun(ground));
+		const text = pairPhrase(figure, ground, ctx);
 		const unused = objects.filter((o) => o !== bestA && o !== bestB);
 		return { text, unused, mode: 'utter' };
 	},

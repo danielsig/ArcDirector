@@ -1,170 +1,166 @@
-import { pascalCase, type PathGraph, type PathStep } from 'arc-director';
-import { canOccupy, Rigidbody, type GameObject } from '@arc-director/kindling';
-import { BoxCollider, Bridge, Door, Flammable, HumanBody, Lock, Named } from '../engine/components';
+import type { PathStep, RouteWorld, Vec } from 'arc-director';
+import type { GameObject } from '@arc-director/kindling';
+import { Barrier, HumanBody } from '../engine/components';
 import type { World } from '../engine/World';
-import { CELL_PROPS } from './Chunk';
 import { CELL_SIZE } from './constants';
-import { findCarried } from '../items/inventory';
+import { stairUphill } from './stairs';
 
-/** Step cost onto a cell another body occupies. Empty floor is 1. */
+/** A step onto a cell another body stands on costs this many times its length, so routes go around people when they can. */
 const OCCUPANT_COST = 8;
-/** Step cost onto a cell partly under a solid prop: passable, but paths go around when they can. */
-const PROP_COST = 4;
-/** A cell this much under solid props (a fallen column, a table) is not a step. */
-const BLOCKING_COVER = 0.3;
+/** Light and sound go over what stands lower than this, in meters: a counter, a chest, a fallen column. */
+const EYE_HEIGHT = 1.5;
 
 /** The eight steps to the cells around one, clockwise from east. */
 const NEIGHBOURS = [[1, 0], [1, 1], [0, 1], [-1, 1], [-1, 0], [-1, -1], [0, -1], [1, -1]];
-
-/** A closed door, or something not yet burnt away, standing in the cell. */
-function barrierIn(world:World, tx:number, tz:number):GameObject | undefined {
-	return world.objectsInTile(tx, tz).find((go) => go.getComponent(Door)?.open === false || !!go.getComponent(Flammable));
-}
-
-/** A raised bridge spanning the cell at `x`, `z`: water now, a way across once lowered. */
-function raisedBridgeAt(world:World, x:number, z:number):GameObject | undefined {
-	let found:GameObject | undefined;
-	world.forEachComponent(Bridge, (span, go) => {
-		if (!span.open && span.cells.some((c) => Math.abs(c.x - x) < 0.55 && Math.abs(c.z - z) < 0.55)) {
-			found = go;
-		}
-	});
-	return found;
-}
 
 function characterIn(world:World, tx:number, tz:number, except?:GameObject):GameObject | undefined {
 	return world.objectsInTile(tx, tz).find((go) => go !== except && go.getComponent(HumanBody)?.enabled);
 }
 
-/**
- * The cell's centre, where routes run, is inside a solid that never moves (a brazier), however little of the cell it
- * covers. A box (a weapon rack) also counts within `body`'s half-width of it: walkers snag on boxes, and slide around cylinders.
- */
-function centreBlocked(world:World, body:GameObject, tx:number, tz:number):boolean {
+/** Whether `body` would run into anything standing in the middle of cell `tx`, `tz`. */
+function blockedCell(world:World, body:GameObject, tx:number, tz:number):boolean {
 	const { x, z } = world.tileCenter(tx, tz);
-	const r = (body.getComponent(BoxCollider)?.size.x ?? 0) / 2;
-	let hit = false;
-	world.forEachNear(x - r, z - r, x + r, z + r, (go) => {
-		const col = go.getComponent(BoxCollider);
-		if (hit || !col?.enabled || !col.solid || col.isTrigger || go.getComponent(Rigidbody)) {
-			return;
+	return world.blocker(body, x, z) !== undefined;
+}
+
+/**
+ * A stair is a step only along its climb. The sides are solid, so a route that aims at them leaves a body stuck
+ * against the face.
+ */
+function alongClimb(world:World, a:Vec, b:Vec):boolean {
+	const from = world.tileCoordAt(a[0], a[1]);
+	const to = world.tileCoordAt(b[0], b[1]);
+	const dx = to.tx - from.tx;
+	const dz = to.tz - from.tz;
+	const along = (tx:number, tz:number):boolean => {
+		const { x, z } = world.tileCenter(tx, tz);
+		const chunk = world.chunkAtWorld(x, z);
+		const tile = chunk?.tileAtWorld(x, z);
+		if (!chunk || tile?.def !== 'stairs' || tile.blocked) {
+			return true;
 		}
-		const p = go.transform.position;
-		hit = col.shape === 'cylinder'
-			? col.contains(x, z)
-			: Math.abs(x - p.x) < col.size.x / 2 + r && Math.abs(z - p.z) < col.size.z / 2 + r;
-	});
-	return hit;
-}
-
-/** Walls, deep water, cell-filling props, cells mostly under solid props, and closed doors stop steps. */
-function blocked(world:World, tx:number, tz:number):boolean {
-	const { x, z } = world.tileCenter(tx, tz);
-	return world.sampleTerrain(x, z)?.blocked !== false
-		|| CELL_PROPS.has(world.chunkAtWorld(x, z)!.propAtWorld(x, z) ?? '')
-		|| world.solidCover(tx, tz) >= BLOCKING_COVER
-		|| !!barrierIn(world, tx, tz);
-}
-
-function isStall(go:GameObject):boolean {
-	return go.name === 'Stall' || go.parent?.name === 'Stall';
+		const { localX, localZ } = chunk.worldToLocal(x, z);
+		const up = stairUphill(chunk, localX, localZ);
+		return (dx === up.dx && dz === up.dz) || (dx === -up.dx && dz === -up.dz);
+	};
+	return along(from.tx, from.tz) && along(to.tx, to.tz);
 }
 
 /**
- * What stops sight and sound: anything that stops steps but water, which one sees and hears across.
- * `throughStalls` keeps a market stall from hiding whoever stands at it.
+ * The step `body` takes from `a` into the next cell, to `b`: none where it would run into something standing there,
+ * or squeeze past a corner it would run into. What stops it there and can be cleared (a `Barrier`) says how.
  */
-function opaque(world:World, tx:number, tz:number, throughStalls = false):boolean {
+function walk(world:World, body:GameObject, a:Vec, b:Vec):PathStep | undefined {
+	if (!alongClimb(world, a, b)) {
+		return undefined;
+	}
+	const from = world.tileCoordAt(a[0], a[1]);
+	const to = world.tileCoordAt(b[0], b[1]);
+	if (to.tx !== from.tx && to.tz !== from.tz && (blockedCell(world, body, to.tx, from.tz) || blockedCell(world, body, from.tx, to.tz))) {
+		return undefined;
+	}
+	const hit = world.blocker(body, b[0], b[1], { from: { x: a[0], z: a[1] } });
+	if (hit) {
+		const barrier = hit === 'terrain' ? undefined : hit.getComponent(Barrier);
+		return barrier && { blocked: barrier.whyBlocked(body) };
+	}
+	return characterIn(world, to.tx, to.tz, body) ? { cost: OCCUPANT_COST * Math.hypot(b[0] - a[0], b[1] - a[1]) } : {};
+}
+
+/** Whether cell `tx`, `tz` stops `what`: solid ground but water, whatever stands there taller than the eyes, and, for light, a body. */
+function stops(world:World, what:'light' | 'sound', tx:number, tz:number):boolean {
 	const { x, z } = world.tileCenter(tx, tz);
-	const tile = world.chunkAtWorld(x, z)?.tileAtWorld(x, z);
-	if (tile?.def === 'water') {
-		return false;
-	}
-	if (!throughStalls || tile?.blocked || world.chunkAtWorld(x, z)?.propAtWorld(x, z) !== 'stall') {
-		return blocked(world, tx, tz);
-	}
-	if (barrierIn(world, tx, tz)) {
-		return true;
-	}
-	return world.objectsInTile(tx, tz).some((go) => {
-		if (go.getComponent(HumanBody) || isStall(go)) {
+	const hit = world.blocker(null, x, z, { above: EYE_HEIGHT });
+	return (hit === 'terrain' ? world.tileAtWorld(x, z)?.def !== 'water' : !!hit) || (what === 'light' && !!characterIn(world, tx, tz));
+}
+
+type Cell = { tx:number; tz:number };
+
+/**
+ * Grid DDA from `a` to `b`: each step from one cell to the next, to `pass`, with the corner cells of a diagonal step,
+ * until one does not pass.
+ */
+function alongLine(world:World, a:{ x:number; z:number }, b:{ x:number; z:number }, pass:(from:Cell, to:Cell, corners:Cell[])=>boolean):boolean {
+	const start = world.tileCoordAt(a.x, a.z);
+	const end = world.tileCoordAt(b.x, b.z);
+	const dx = b.x - a.x;
+	const dz = b.z - a.z;
+	const stepX = dx > 0 ? 1 : dx < 0 ? -1 : 0;
+	const stepZ = dz > 0 ? 1 : dz < 0 ? -1 : 0;
+	const tDeltaX = stepX === 0 ? Infinity : Math.abs(CELL_SIZE / dx);
+	const tDeltaZ = stepZ === 0 ? Infinity : Math.abs(CELL_SIZE / dz);
+	let tMaxX = stepX === 0
+		? Infinity
+		: ((stepX > 0 ? start.tx + 1 : start.tx) * CELL_SIZE - a.x) / dx;
+	let tMaxZ = stepZ === 0
+		? Infinity
+		: ((stepZ > 0 ? start.tz + 1 : start.tz) * CELL_SIZE - a.z) / dz;
+	let from:Cell = { tx: start.tx, tz: start.tz };
+	while (from.tx !== end.tx || from.tz !== end.tz) {
+		let to:Cell;
+		let corners:Cell[] = [];
+		if (tMaxX < tMaxZ) {
+			to = { tx: from.tx + stepX, tz: from.tz };
+			tMaxX += tDeltaX;
+		}
+		else if (tMaxZ < tMaxX) {
+			to = { tx: from.tx, tz: from.tz + stepZ };
+			tMaxZ += tDeltaZ;
+		}
+		else {
+			to = { tx: from.tx + stepX, tz: from.tz + stepZ };
+			corners = [{ tx: from.tx + stepX, tz: from.tz }, { tx: from.tx, tz: from.tz + stepZ }];
+			tMaxX += tDeltaX;
+			tMaxZ += tDeltaZ;
+		}
+		if (!pass(from, to, corners)) {
 			return false;
 		}
-		const col = go.getComponent(BoxCollider);
-		return !!col?.enabled && col.solid && !col.isTrigger;
+		from = to;
+	}
+	return true;
+}
+
+/** Whether `what` goes straight from `a` to `b`. Their own cells never stop it, so no one hides themselves or the one looking. */
+export function lineClear(world:World, what:'light' | 'sound', a:{ x:number; z:number }, b:{ x:number; z:number }):boolean {
+	const end = world.tileCoordAt(b.x, b.z);
+	const solid = ({ tx, tz }:Cell) => stops(world, what, tx, tz);
+	return alongLine(world, a, b, (_, to, corners) => !corners.some(solid) && ((to.tx === end.tx && to.tz === end.tz) || !solid(to)));
+}
+
+/** Whether `body` could walk straight from `a` to `b`, every step open: no wall, no web, no shut door on the line. */
+export function walkClear(world:World, body:GameObject, a:{ x:number; z:number }, b:{ x:number; z:number }):boolean {
+	const centre = ({ tx, tz }:Cell):Vec => {
+		const { x, z } = world.tileCenter(tx, tz);
+		return [x, z];
+	};
+	return alongLine(world, a, b, (from, to) => {
+		const step = walk(world, body, centre(from), centre(to));
+		return !!step && !step.blocked;
 	});
 }
 
-/** Why a barrier stops `body`. A locked door says whether `body` carries its key. */
-function barrierReason(door:GameObject, body:GameObject):string {
-	const name = door.getComponent(Named)?.id ?? door.id;
-	if (door.getComponent(Flammable)) {
-		return `${name} blocks the way — burn it with a flame first`;
-	}
-	const lock = door.getComponent(Lock);
-	if (!lock?.locked) {
-		return `${name} is closed — open it first`;
-	}
-	const key = findCarried(body, (it) => it.Key?.keyID === lock.keyID);
-	if (key) {
-		return `${name} is locked — you carry ${pascalCase(key.name) || pascalCase(key.defID)}, use it on ${name}`;
-	}
-	return lock.keyID ? `${name} is locked — needs the ${lock.keyID} key` : `${name} is locked`;
-}
-
-function sampleCell(world:World, tx:number, tz:number) {
-	const { x, z } = world.tileCenter(tx, tz);
-	return world.sampleTerrain(x, z);
-}
-
 /**
- * The step by `body` from cell `tx`, `tz` to the neighbour `dx`, `dz` over, if there is one. Walls, water, and props
- * are not steps (nor a cell `BLOCKING_COVER` under solid props), and no diagonal squeezes past a blocked corner; a closed door or a raised bridge is a
- * blocked step that tells `body` why; a cell another body stands on costs more, so routes go around people when they can.
- * Height matches physics: a raised floor is not a step unless it is climbable (stairs).
+ * The game's grid as ArcDirector walks and looks across it: a cell's eight neighbours, and what gets from one point
+ * to another. A stair is a neighbour only along its climb, not off the sides. A body steps where it would run into
+ * nothing; light and sound go straight over what stands lower than the eyes, and light stops at bodies.
  */
-function cellStep(world:World, body:GameObject, tx:number, tz:number, dx:number, dz:number):PathStep | undefined {
-	const { x, z } = world.tileCenter(tx + dx, tz + dz);
-	if (dx && dz && (blocked(world, tx + dx, tz) || blocked(world, tx, tz + dz))) {
-		return undefined;
-	}
-	const door = barrierIn(world, tx + dx, tz + dz);
-	if (door) {
-		return { point: [x, z], blocked: barrierReason(door, body) };
-	}
-	const bridge = raisedBridgeAt(world, x, z);
-	if (bridge) {
-		const name = bridge.getComponent(Named)?.id ?? bridge.id;
-		return { point: [x, z], blocked: `${name} is raised — it must be lowered first` };
-	}
-	if (!canOccupy(sampleCell(world, tx, tz), sampleCell(world, tx + dx, tz + dz))) {
-		return undefined;
-	}
-	// A stall fills its cell. Stopping on it is how a shopper walks into the counter.
-	if (CELL_PROPS.has(world.chunkAtWorld(x, z)?.propAtWorld(x, z) ?? '')) {
-		return undefined;
-	}
-	const cover = world.solidCover(tx + dx, tz + dz);
-	if (cover >= BLOCKING_COVER || centreBlocked(world, body, tx + dx, tz + dz)) {
-		return undefined;
-	}
-	const crowded = characterIn(world, tx + dx, tz + dz, body) ? OCCUPANT_COST : cover > 0 ? PROP_COST : 1;
-	return { point: [x, z], cost: Math.hypot(dx, dz) * CELL_SIZE * crowded };
-}
-
-/**
- * Steps between the cell holding a point and its neighbours, for one route search by `body` (see `cellStep`).
- * With `into`, the steps from each neighbour into that cell, so a route never ends in a wall or up a ledge.
- */
-export function cellSteps(world:World, body:GameObject):PathGraph {
-	return (point, into) => {
-		const { tx, tz } = world.tileCoordAt(point[0], point[1]);
-		return NEIGHBOURS.flatMap(([dx, dz]):PathStep[] => {
-			const step = into ? cellStep(world, body, tx + dx, tz + dz, -dx, -dz) : cellStep(world, body, tx, tz, dx, dz);
-			// Either way the step's `point` is the neighbour: where it lands, or where it leaves from.
-			const { x, z } = world.tileCenter(tx + dx, tz + dz);
-			return step ? [{ ...step, point: [x, z] }] : [];
-		});
+export function cellWays(world:World):RouteWorld<GameObject> {
+	return {
+		getNeighbors: (point) => {
+			const { tx, tz } = world.tileCoordAt(point[0], point[1]);
+			return NEIGHBOURS.flatMap(([dx, dz]) => {
+				const { x, z } = world.tileCenter(tx + dx, tz + dz);
+				const next:Vec = [x, z];
+				return alongClimb(world, point, next) ? [next] : [];
+			});
+		},
+		canPass: (what, a, b) => {
+			if (what === 'light' || what === 'sound') {
+				return lineClear(world, what, { x: a[0], z: a[1] }, { x: b[0], z: b[1] }) ? {} : undefined;
+			}
+			return walk(world, what, a, b);
+		},
 	};
 }
 
@@ -172,12 +168,16 @@ export function cellSteps(world:World, body:GameObject):PathGraph {
 const STANDABLE_RINGS = 2;
 
 /**
- * `point`, or, when `body` has no open step onto it (a wall, a pillar), the nearest cell centre around it that it has.
- * For spots worked out by geometry (a rank line, a guard's screen), which may fall in a wall. `point` when none is near.
+ * `point`, or, when `body` has no open step onto it (a wall, a pillar, a ledge), the nearest cell centre around it
+ * that it has. For spots worked out by geometry (a rank line, a guard's screen), which may fall in a wall.
+ * `point` when none is near.
  */
 export function standableNear(world:World, body:GameObject, point:{ x:number; z:number }):{ x:number; z:number } {
-	const graph = cellSteps(world, body);
-	const standable = (x:number, z:number) => graph([x, z], true).some((step) => !step.blocked);
+	const ways = cellWays(world);
+	const standable = (x:number, z:number) => ways.getNeighbors([x, z]).some((from) => {
+		const step = ways.canPass(body, from, [x, z]);
+		return !!step && !step.blocked;
+	});
 	if (standable(point.x, point.z)) {
 		return point;
 	}
@@ -198,62 +198,4 @@ export function standableNear(world:World, body:GameObject, point:{ x:number; z:
 		}
 	}
 	return point;
-}
-
-/** Grid DDA. Start and end cells are open so occupants do not occlude themselves. */
-export function lineClear(
-	world:World,
-	x0:number,
-	z0:number,
-	x1:number,
-	z1:number,
-	ignoreCharacters = false,
-	throughStalls = false,
-):boolean {
-	const solid = (tx:number, tz:number) => opaque(world, tx, tz, throughStalls) || (!ignoreCharacters && !!characterIn(world, tx, tz));
-	const a = world.tileCoordAt(x0, z0);
-	const b = world.tileCoordAt(x1, z1);
-	if (a.tx === b.tx && a.tz === b.tz) {
-		return true;
-	}
-	const dx = x1 - x0;
-	const dz = z1 - z0;
-	const stepX = dx > 0 ? 1 : dx < 0 ? -1 : 0;
-	const stepZ = dz > 0 ? 1 : dz < 0 ? -1 : 0;
-	const tDeltaX = stepX === 0 ? Infinity : Math.abs(CELL_SIZE / dx);
-	const tDeltaZ = stepZ === 0 ? Infinity : Math.abs(CELL_SIZE / dz);
-	let tMaxX = stepX === 0
-		? Infinity
-		: ((stepX > 0 ? a.tx + 1 : a.tx) * CELL_SIZE - x0) / dx;
-	let tMaxZ = stepZ === 0
-		? Infinity
-		: ((stepZ > 0 ? a.tz + 1 : a.tz) * CELL_SIZE - z0) / dz;
-	let tx = a.tx;
-	let tz = a.tz;
-	while (tx !== b.tx || tz !== b.tz) {
-		if (tMaxX < tMaxZ) {
-			tx += stepX;
-			tMaxX += tDeltaX;
-		}
-		else if (tMaxZ < tMaxX) {
-			tz += stepZ;
-			tMaxZ += tDeltaZ;
-		}
-		else {
-			if (
-				solid(tx + stepX, tz)
-				|| solid(tx, tz + stepZ)
-			) {
-				return false;
-			}
-			tx += stepX;
-			tz += stepZ;
-			tMaxX += tDeltaX;
-			tMaxZ += tDeltaZ;
-		}
-		if ((tx !== b.tx || tz !== b.tz) && solid(tx, tz)) {
-			return false;
-		}
-	}
-	return true;
 }

@@ -2,25 +2,53 @@
 	"name": "arc-director",
 	"author": "Daniel Sigurdsson",
 	"private": false,
-	"version": "0.4.0",
+	"version": "0.5.0",
+	"license": "MIT",
+	"description": "Library that lets NPCs think, plan, and act in games, powered by local LLMs.",
+	"repository": {
+		"type": "git",
+		"url": "https://github.com/danielsig/ArcDirector.git",
+		"directory": "arc-director"
+	},
+	"keywords": [
+		"game",
+		"ai",
+		"npc",
+		"thinking",
+		"planning",
+		"acting",
+		"llm",
+		"system one",
+		"local"
+	],
 	"type": "module",
 	"exports": {
 		".": {
 			"types": "./dist/index.d.ts",
 			"import": "./dist/index.js"
+		},
+		"./bench": {
+			"types": "./dist/bench/index.d.ts",
+			"import": "./dist/bench/index.js"
 		}
 	},
 	"main": "./dist/index.js",
 	"types": "./dist/index.d.ts",
 	"files": [
-		"dist"
+		"dist",
+		"!dist/**/*.test.*",
+		"!dist/scripts",
+		"README.md",
+		"LICENSE"
 	],
 	"scripts": {
 		"build": "tsc -p tsconfig.json",
 		"typecheck": "tsc -p tsconfig.json --noEmit",
-		"test": "tsc -p tsconfig.json && node --test --test-reporter spec dist/json.test.js dist/arc/parse.test.js dist/arc/wire.test.js dist/memory/store.test.js dist/perception/sight.test.js dist/mind/mind.test.js dist/mind/talk.test.js dist/character/watches.test.js dist/mind/map.test.js dist/mind/prompt.test.js dist/mind/knowledge.test.js dist/mind/toolText.test.js dist/arc/run.test.js dist/mind/ids.test.js dist/inference/models.test.js dist/inference/http.test.js dist/inference/assistantThink.test.js dist/inference/browser.test.js dist/inference/device.test.js dist/inference/download.test.js dist/inference/chatLog.test.js dist/inference/threadCache.test.js dist/expr/expr.test.js dist/think/queue.test.js dist/director/director.test.js dist/collective/collective.test.js dist/collective/handover.test.js dist/world/world.test.js dist/world/offers.test.js dist/bench/bench.test.js",
+		"test": "tsc -p tsconfig.json && node --test --test-reporter spec dist/json.test.js dist/arc/parse.test.js dist/arc/wire.test.js dist/memory/store.test.js dist/perception/sight.test.js dist/perception/hearing.test.js dist/mind/mind.test.js dist/mind/talk.test.js dist/character/watches.test.js dist/mind/map.test.js dist/mind/prompt.test.js dist/mind/knowledge.test.js dist/mind/toolText.test.js dist/arc/run.test.js dist/mind/ids.test.js dist/inference/models.test.js dist/inference/http.test.js dist/inference/assistantThink.test.js dist/inference/browser.test.js dist/inference/device.test.js dist/inference/download.test.js dist/inference/chatLog.test.js dist/inference/threadCache.test.js dist/expr/expr.test.js dist/think/queue.test.js dist/director/director.test.js dist/search/search.test.js dist/rts/rts.test.js dist/genre/genre.test.js dist/collective/collective.test.js dist/collective/handover.test.js dist/world/world.test.js dist/world/offers.test.js dist/scenario/scenario.test.js dist/bench/bench.test.js",
+		"bench": "tsc -p tsconfig.json && node dist/bench/cli.js",
 		"demo": "tsc -p tsconfig.json && node dist/scripts/fakeHost.js",
-		"fixture": "tsc -p tsconfig.json && node dist/scripts/fixtureGoTo.js"
+		"fixture": "tsc -p tsconfig.json && node dist/scripts/fixtureGoTo.js",
+		"prepublishOnly": "pnpm build"
 	},
 	"peerDependencies": {
 		"@wllama/wllama": "^3.8.1"
@@ -34,5 +62,12 @@
 		"@types/node": "^20.19.43",
 		"@wllama/wllama": "3.8.1",
 		"typescript": "^6.0.3"
+	},
+	"homepage": "https://arcdirector.com",
+	"bugs": {
+		"url": "https://github.com/danielsig/ArcDirector/issues"
+	},
+	"publishConfig": {
+		"access": "public"
 	}
 }

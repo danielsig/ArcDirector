@@ -91,7 +91,7 @@ Override `onStart` for one-off setup when the loop begins.
 | `tileSize` | The side of one tile. `0` means no tile collision. If you use a grid, set it to your cell size. |
 | `sampleTerrain(x, z)` | Override it to supply the height, and whether the ground is blocked or climbable, at a point. Returns `undefined` by default. |
 | `chunkSize` / `chunks` | The number of tiles along a chunk's side (`0` means no chunks), and the loaded `Chunk`s. See [Chunks](#chunks). |
-| `addChunk` / `removeChunk` / `chunkAt(cx, cz)` / `chunkAtWorld(x, z)` / `chunkCoordAt(x, z)` / `tileAtWorld(x, z)` / `chunkBounds()` | The chunk registry and its lookups. `chunkBounds` is the XZ box around every loaded chunk. |
+| `addChunk` / `removeChunk` / `chunkAt(cx, cz)` / `chunkAtWorld(x, z)` / `chunkCoordAt(x, z)` / `tileAtWorld(x, z)` / `chunkBounds()` | The chunk registry and its lookups. `chunkBounds` is the XZ box around every loaded chunk; the exported `chunkBounds(chunks)` boxes any list (a whole scene, loaded or not). |
 | `add(go)` | Registers the whole tree, parents its root to the scene and runs `awakeAll`. |
 | `remove(go)` | Unregisters **this** object right away. `onDestroy` is not called, and its children stay. |
 | `destroy(go)` | Queues the object to be destroyed at the end of `simulate`. Its children go with it. |
@@ -100,7 +100,7 @@ Override `onStart` for one-off setup when the loop begins.
 | `tileCoordAt(x, z)` / `tileCenter(tx, tz)` | Converts between world XZ and tile coordinates (using `tileSize`, or 1 when it is 0). |
 | `objectsInTile(tx, tz)` | Spatial hash lookup: the objects whose position falls in that tile (using `tileSize`, or 1 when it is 0). |
 | `forEachNear(minX, minZ, maxX, maxZ, fn)` | Broad phase: every object whose `BoxCollider` may overlap the XZ box. Check the exact overlap yourself. |
-| `solidCover(tx, tz)` | How much of a tile (0–1) is covered by solid colliders that have no `Rigidbody`. Host path graphs block tiles above some threshold. |
+| `blocker(body, x, z, { from?, above? })` | What `body` would run into standing at that point, by the same tests physics pushes bodies out with: a solid collider with no `Rigidbody`, else `'terrain'` (a blocked tile's solids, or ground it cannot step to `from` where it is), else nothing. Plan routes with it and they are walkable. Bodies slide around a cylinder, so it stops one only over the body's middle. With `body` null, what stands at the point itself; `above` keeps to colliders taller than that (what one sees past). |
 | `reindex()` | Rebuilds the spatial hash. Physics does this once per step, after moving things, so queries see positions (and added or removed objects) as they were at that step. |
 
 A GameObject can belong to only one World.
@@ -221,14 +221,14 @@ Instance hooks get `dt` multiplied by their object's `timeRate` (see `GameObject
 
 1. **Move.** Every enabled `Rigidbody` moves by `velocity * dt` on XZ, keeping its previous position in `prevX` / `prevZ`. Then `World.reindex()` runs, so collision pairs come from the spatial hash instead of testing every pair of objects.
 2. **Collide.** Every enabled, solid, non-trigger `BoxCollider` on an object that also has a `Rigidbody` is checked against:
-   - the tile grid, through `World.sampleTerrain`, when `tileSize > 0` (it cannot enter `blocked` cells);
+   - the tile grid, through `World.sampleTerrain`, when `tileSize > 0`: it is pushed out of `blocked` cells back the way it came in (along Z out of a cell it walked into head-on, never sideways along a wall), or only out of the cell's `solids` when it lists them;
    - other solid boxes (it is pushed out along X or Z);
    - static round obstacles: a `shape: 'cylinder'` collider (diameter `size.x`) pushes the box straight out from its axis, so bodies slide around barrels and wells instead of snapping to one side;
    - other padded bodies: when both colliders have `pad > 0`, they **shove** each other along the walking direction (`SHOVE_YIELD`) instead of blocking;
    - cliffs: `sampleTerrain`'s `height` and `climbable` decide whether the step was allowed, and if not, the body goes back to its previous XZ position.
-3. **Ground.** A `Rigidbody` with `grounded` set eases its Y toward `sampleTerrain`'s `worldY`, unless the rise is taller than `stepHeight`.
+3. **Ground.** A `Rigidbody` with `grounded` enabled always snaps its Y to `sampleTerrain`'s `worldY`.
 
-`World.sampleTerrain` returns `{ height, worldY, blocked, climbable }` or `undefined`. Override it if you have a heightfield or a grid; by default there is no terrain.
+`World.sampleTerrain` returns `{ height, worldY, blocked, climbable, solids? }` or `undefined`. Override it if you have a heightfield or a grid; by default there is no terrain. `solids` (world XZ boxes) makes a blocked tile only partly solid, as for a wall one board thick down its middle: bodies collide with the boxes and stand in the rest of the cell, while routes and sight that go by `blocked` still treat the cell as a wall.
 
 `Rigidbody` has `kinematic` and `mass`, but `stepPhysics` does not use them yet.
 
@@ -295,12 +295,17 @@ restoreWorld(rebuilt, save, (recipe) => spawn(rebuilt, recipe));
 
 The look's sun frames every still caster from a fixed direction. `pointShadowMapSize` (default 256) and `directionalShadowMapSize` (default 1024) set the size of the maps, clamped to the GPU's largest texture size.
 
+The sun's shadow can come in two parts (every directional light is shadowed by every directional shadow map together, and outside its own area a map reads as unshadowed):
+
+- `sunArea`: the XZ box the sun's still map covers (the playable map, say), so it is not spread over scenery far off.
+- `sunFocus` / `sunMoverSize` (`dynamic` only): the square where moving things cast, drawn every frame into a map of their own; the sun's map then holds still casters only and is never copied per frame. Keep the focus set while the mode lasts: adding or removing its light recompiles every lit shader. It takes a texture unit a point shadow would have used, so `maxPointShadows` shrinks by one.
+
 **Stats.** `graphicsMemory()` estimates how many bytes of GPU memory are in use: `framebufferMemory()` (the drawing buffers, which grow with the window) plus `sceneMemory()` (shadow maps, geometry and textures). `stats()` returns the last frame's draw calls and triangles, the live geometry and texture counts, both memory figures, and `frameMS` (the average frame time over the last 30 s). `frameMS(windowMS)` on its own is cheap, since it does not walk the scene, so it suits an FPS readout.
 
 | | |
 |--|--|
 | `Camera` | A perspective camera. Its `native` is parented to the GameObject's `Object3D`, and it syncs fov, near and far on each `update`. It also has effects for blows, timed in game time: `shake(m, s)`; `punch(m, s)`, a push toward where the camera looks that springs back; and `impact(at, s)`, a black-and-white impact frame. In an impact frame, anything standing off the ground within about 2 m of `at` (the middle of the body that was struck) becomes a white silhouette inked in black, and everything else turns black, with speed lines bursting out from the target. The colors invert for the second half. The `Renderer` passes `impactFrame` on to the `OutlinePass`. |
-| `Light` | A `point` or `directional` light. `offsetX/Y/Z` is a local offset (Z runs along Kindling's forward). |
+| `Light` | A `point`, `directional` or `spot` light. `offsetX/Y/Z` is a local offset (Z runs along Kindling's forward). A `spot` shines along the object's forward in a cone (`angle`, `penumbra`) and casts a shadow like a lamp's; a `cookie` texture cast across it lights only what it covers, from `shadowNear` on. `spotThrough(from, corners)` aims a spot to light only through an opening (`polygonCookie`), so one set far off shines through what stands between, its rays near parallel. |
 | `MeshRenderer` | Instantiates `meshID` from the registry, with an optional `color`, `shaderInserts` and `shaderUniforms`. |
 | `applyLook(look)` | Sets the background, fog, exposure, hemisphere light, fill and optional sun. |
 | `projectToCanvas` / `pickGround` | Projects a point onto the screen, and picks a point on the ground plane. |

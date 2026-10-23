@@ -18,10 +18,8 @@ export interface Pose {
 	right?:Vec;
 }
 
-/** One step a character can take. */
+/** What `canPass` says of a way it lets through, or of one something stops for now. */
 export interface PathStep {
-	/** Where the step lands. */
-	point:Vec;
 	/**
 	 * What the step costs. Default: its length. Never less than its length, so the search stays exact;
 	 * raise it to route around crowds or rough ground.
@@ -32,15 +30,9 @@ export interface PathStep {
 	 * avoids it; with no open way, the move fails naming each blocker that leads there, cheapest first.
 	 */
 	blocked?:string;
+	/** The character or thing that blocks it, when one does (a foe's wall): a failed move lists it in `blockedBy`. */
+	by?:string;
 }
-
-/**
- * The steps out of any `point`: grid neighbors, navmesh neighbors, or the waypoints of a network in sight of it.
- * `point` need not be one a step named. With `into`, the steps that arrive at `point` instead, each `point` being
- * where that step leaves from: a route ends through them, so a wall or a ledge one may only drop off is no way in.
- * A graph whose every step goes both ways may ignore `into`.
- */
-export type PathGraph = (point:Vec, into?:boolean)=>PathStep[];
 
 /** What the world says to a command. */
 export interface Outcome {
@@ -59,9 +51,12 @@ export interface Transfer<TEntity> {
 	verb:string;
 	/** The thing's id, as the model wrote it. Which one is meant depends on where it is, and that is the game's call. */
 	thing:string;
-	/** What holds it now, as `find(thing)` gives it: a character, a chest, or the thing itself where it lies. */
+	/**
+	 * What holds it now: a character, a chest, or the thing itself where it lies. For `pick_up`, the holder the model
+	 * named, else the one the character sees it in, else `find(thing)`.
+	 */
 	from:TEntity;
-	/** Who holds it after. Left out, it is put down where `from` is. */
+	/** Who or what holds it after: a character, or a chest it is put in. Left out, it is put down where `from` is. */
 	to?:TEntity;
 	/** How many. Default 1. */
 	quantity?:number;
@@ -92,7 +87,8 @@ export const RESERVED_TAGS = {
  * | Part | Unlocks |
  * |--|--|
  * | `find`, `getPose` | watch geometry: `distance`, `nearby`, `isFacing`, `isLeft` / `isRight`, `manhattan`, … |
- * | `getPathGraph`, `steerToward` | `go_to`, `follow`, `wander`, crowd formations, `pathDistance` / `isReachable`, `call.goTo` |
+ * | `getNeighbors`, `canPass`, `steerToward` | `go_to`, `follow`, `wander`, crowd formations, `pathDistance` / `isReachable`, `call.goTo` |
+ * | `canPass` | what sight sees and what sounds are muffled; the watch function `hasSightline` |
  * | `transfer` (and `validateTransfer`, for the game's rules) | `pick_up`, `drop`, `give`, `offer` |
  * | `useItem` | `use` |
  * | `getDescription` | `examine` |
@@ -108,16 +104,34 @@ export interface HostWorld<TEntity> {
 	 */
 	find(id:string):TEntity | undefined;
 	/**
-	 * Where `entity` is now.
+	 * Where `entity` is now. `from`: who is going there, so a thing spread over many cells (a forest, a wall) can answer
+	 * with its part nearest them; ignore it for a thing in one place.
 	 * @returns `undefined` when it has no place right now.
 	 */
-	getPose(entity:TEntity):Pose | undefined;
+	getPose(entity:TEntity, from?:TEntity):Pose | undefined;
 	/**
-	 * The steps `character` can take, for one search. Called once per search, so it can gather what it needs
-	 * (blocked cells, crowded ones) before the search asks. Characters differ: a child fits a gap a knight does not.
-	 * @returns The graph: a route starts where the character stands and ends through the steps into the destination.
+	 * Whether the character `id` names is down: dead, knocked out or destroyed. A collective's `units` and roster leave
+	 * it out (its prompt lists it under "Down:"), and a verb aimed at it fails with "… is down", not "… is gone".
+	 * Default: no one is ever down, and only `find` says who is gone.
 	 */
-	getPathGraph?(character:TEntity):PathGraph;
+	isDown?(id:string):boolean;
+	/**
+	 * The points one step from `point`: a grid's cells around it, a navmesh's adjacent polygons, a waypoint network's
+	 * links. Only the shape of the world, the same whoever asks and whatever stands open: `canPass` says which steps
+	 * are open, and to whom. `point` need not be one it named, since a route starts wherever a character stands.
+	 */
+	getNeighbors?(point:Vec):Vec[];
+	/**
+	 * Whether `what` gets straight from `a` to `b` now: a character walking (the character itself, so its size and
+	 * what it carries count), or `light` (sight) or `sound` (hearing). The one place the game decides what stops
+	 * what. A walk asks it of each step to a neighbor, the way it is walked, so a ledge one may drop off but not climb
+	 * answers each way differently; sight and sound ask it across a room. Nothing standing at `a` stops it, and for
+	 * light and sound nothing standing at `b` either: no one hides themselves, or the one looking.
+	 * @returns `{ cost }` when open (more than its length for a crowd or rough ground), `{ blocked, by }` when
+	 * something stops it for now and says how to get past, `undefined` when it never gets through. Without it, nothing
+	 * stops sight or sound, and no one walks.
+	 */
+	canPass?(what:'light' | 'sound' | TEntity, a:Vec, b:Vec):PathStep | undefined;
 	/**
 	 * How close `character` must be to `target` to act on it, and to count as there.
 	 * @returns A distance. Default 1.
@@ -130,11 +144,6 @@ export interface HostWorld<TEntity> {
 	 */
 	getDescription?(character:TEntity, target:string):string | undefined;
 	/**
-	 * Whether `from` can see `to`. Omit it and nothing blocks sight: everything in a look is seen, talk has no
-	 * occlusion, and a watch's line of sight holds.
-	 */
-	hasLineOfSight?(from:TEntity, to:TEntity):boolean;
-	/**
 	 * Why `move` cannot happen, or nothing when it can: the game's rules for what may change hands, such as who owns
 	 * a house, a locked chest, or a full pack. Every move is checked just before it is made, so the world already
 	 * holds the moves before it in its `deal`. An offer is checked when it is posted too, as a dry run.
@@ -144,9 +153,16 @@ export interface HostWorld<TEntity> {
 	validateTransfer?(move:Transfer<TEntity>, deal:Deal<TEntity>):string | undefined;
 	/**
 	 * Whether `character` may make an offer to `other`, and that offer still stands. Default: `other` is in its sight
-	 * (`withSight`), else in its line of sight (`hasLineOfSight`), else always.
+	 * (`withSight`), else light passes between them (`canPass`).
 	 */
 	canOffer?(character:TEntity, other:TEntity):boolean;
+	/**
+	 * Whether `character` may go and pick up `item` from `from`: the item where it lies, or what holds it. Default:
+	 * `item` is in its sight there (`withSight`), else light passes between it and `from` (`canPass`).
+	 * Return true to let characters fetch what they cannot see (what is in a shut chest), and undefined to leave it to
+	 * the default.
+	 */
+	canPickUp?(character:TEntity, item:string, from:TEntity):boolean | undefined;
 	/** World up, a unit direction, for formations in 3D. Default `[0, 1, 0]`. Unused in 1D and 2D. */
 	up?:Vec;
 
@@ -166,8 +182,9 @@ export interface HostWorld<TEntity> {
 	 */
 	transfer?(move:Transfer<TEntity>):()=>void;
 	/**
-	 * Use a carried `item`, on `target` if given.
+	 * Use a carried `item`, on `target` if given. Both are ids as the model wrote them, so a target in someone's hands
+	 * is still that thing, not its holder (`find` gives the holder): the world tells what is meant, as for `item`.
 	 * @param target Already in reach of `character`.
 	 */
-	useItem?(character:TEntity, item:string, target?:TEntity):Outcome;
+	useItem?(character:TEntity, item:string, target?:string):Outcome;
 }

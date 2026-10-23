@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { parseArcText, formatArc } from './parse.js';
+import { parseArc } from './wire.js';
 import { VerbRegistry, registerStockVerbs, STOCK_MOVE_VERBS, STOCK_TRADE_VERBS, STOCK_VERBS } from './stock-verbs.js';
 import { registerStockCollectiveVerbs } from '../collective/verbs.js';
 import { ArcError, isArc, type Arc } from './types.js';
@@ -93,6 +94,14 @@ describe('Arc parse', () => {
 			parseArcText('wander(until=\'some(items.filter("FireMushroom").nearby())\')', registry)[0].args.until,
 			'some(items.filter("FireMushroom").nearby())',
 		);
+	});
+});
+
+describe('Arc args written as numbers', () => {
+	it('keeps a number written for a text arg as its text, in Arc text and in JSON', () => {
+		const registry = verbs().add('dial', { args: { code: 'string' } });
+		assert.deepEqual(parseArcText('dial(code=007) ; say(text=42)', registry).map((step) => step.args), [{ code: '007' }, { text: '42' }]);
+		assert.deepEqual(parseArc('{"steps":[{"verb":"dial","code":417},{"verb":"wait","seconds":2}]}', registry).map((step) => step.args), [{ code: '417' }, { seconds: 2 }]);
 	});
 });
 

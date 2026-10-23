@@ -19,6 +19,9 @@ defineProps<{
 	left: 50%;
 	bottom: 28px;
 	transform: translateX(-50%);
+	/* Long reads (an inscription) wrap instead of running off screen. */
+	width: max-content;
+	max-width: min(640px, calc(100vw - 32px));
 	font-family: ui-monospace, "Cascadia Code", monospace;
 	color: #f0e6c8;
 	text-shadow: 0 2px 0 #1a1208;

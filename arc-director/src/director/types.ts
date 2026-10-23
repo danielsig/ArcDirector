@@ -1,6 +1,6 @@
 import type { ArcResult } from '../arc/types.js';
 import type { STOCK_VERB_DEFS, VerbArgMap } from '../arc/stock-verbs.js';
-import type { Arc } from '../arc/types.js';
+import type { Arc, StepArg } from '../arc/types.js';
 import type { STOCK_COLLECTIVE_VERB_DEFS } from '../collective/verbs.js';
 import type { Character } from '../character/character.js';
 import type { NameTarget } from '../character/names.js';
@@ -10,7 +10,7 @@ import type { LawSpec } from '../arc/laws.js';
 import type { MindSettings } from '../mind/mind.js';
 import type { HostKernels } from '../expr/natives.js';
 import type { SampleCache } from '../expr/types.js';
-import type { MoveOpts } from '../world/mover.js';
+import type { Crowd, MoveOpts } from '../world/mover.js';
 import type { Offer } from '../world/offers.js';
 import type { Vec } from '../world/types.js';
 
@@ -52,6 +52,8 @@ export type CharacterSpec<TCtx = unknown> = RunnerSpec<TCtx> & {
 	choose?:StandingChoice;
 	/** Standing offers it makes from the start, to anyone: `{ give: { Loaf: 1 }, get: { gold: 5 } }`. A save keeps its own. */
 	offers?:Pick<Offer, 'give' | 'get'>[];
+	/** How others coming to it share it, whatever the director's `withCrowd` says for their verb: `line` for a vendor. A move's own `crowd` still wins. */
+	crowd?:Crowd;
 };
 
 /** A character spec's `choose`: `{ goal, until?, hold: 'go_to(EastGate) && wait()', … }`. */
@@ -69,6 +71,8 @@ export type CollectiveSpec<TCtx = unknown> = RunnerSpec<TCtx> & {
 	characters?:CharacterSpec<TCtx>[];
 	/** The character the mind acts through. Omit for a collective without one, like a market hive. */
 	commander?:string;
+	/** Most units one `issue` may address at once. Unset to allow issue to address all units. */
+	maxUnitsPerIssue?:number;
 };
 
 type ArgValue<TKind> = TKind extends `number${'' | '?'}` ? number
@@ -113,6 +117,15 @@ export type VerbCall<TCtx = unknown, TArgs = Record<string, unknown>> = {
 	/** Let game time pass. Ends early, interrupted, when the step is aborted. */
 	wait(seconds:number):Promise<ArcResult>;
 };
+
+/** An alias verb's arc, watch or who: a template with `{arg}` holes, or made from its args. */
+export type AliasPart = string | ((args:Readonly<Record<string, StepArg>>)=>string);
+
+/**
+ * A verb that is a named arc (`keep_distance(keep=3)` runs `flee(…)`). As a law's whole arc it brings its own `watch`
+ * and `who` when the law gives none.
+ */
+export type VerbAlias = { arc:AliasPart; watch?:AliasPart; who?:AliasPart };
 
 export type VerbHandler<TCtx = unknown, TArgs = Record<string, unknown>> = (
 	call:VerbCall<TCtx, TArgs>,

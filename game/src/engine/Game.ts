@@ -20,7 +20,7 @@ import { DirectorPulse, GroundPick, Hud, WorldStream, WorldView } from './system
 import { Session } from './Session';
 import { readSave } from './save';
 import { loadViewPose } from './viewPersist';
-import { readURLCamera, readURLFlags, readURLView } from './urlView';
+import { readURLCamera, readURLFlags, readURLMinFps, readURLView } from './urlView';
 import { CameraFocus } from './CameraFocus';
 import { startSceneMusic } from '../audio/songs';
 import { syncWaterAudio } from '../audio/water';
@@ -34,11 +34,12 @@ const GAME_KEYS = new Set([
 ]);
 
 /** What each shadow tier asks of the renderer. */
-export const SHADOWS:Record<ShadowTier, { mode:ShadowMode; point:number; sun:number }> = {
-	off: { mode: 'off', point: 256, sun: 2048 },
-	simple: { mode: 'static', point: 256, sun: 2048 },
-	low: { mode: 'dynamic', point: 256, sun: 2048 },
-	high: { mode: 'dynamic', point: 512, sun: 4096 },
+/** Each tier's shadows (map sides in texels): `point` lights, the `sun`'s still map, and the `mover` map moving things cast into round the player (`dynamic` only). */
+export const SHADOWS:Record<ShadowTier, { mode:ShadowMode; point:number; sun:number; mover:number }> = {
+	off: { mode: 'off', point: 256, sun: 2048, mover: 1024 },
+	simple: { mode: 'static', point: 256, sun: 2048, mover: 1024 },
+	low: { mode: 'dynamic', point: 256, sun: 2048, mover: 1024 },
+	high: { mode: 'dynamic', point: 512, sun: 4096, mover: 2048 },
 };
 
 /** The scene's purse, gear and name for the player. */
@@ -63,6 +64,7 @@ function dressPlayer(world:World, def:PlayerDef | undefined):void {
 /** The scene's chunks, player, cast, rooms, ravens and camera into `world`; returns its decoded chunks. */
 export function spawnScene(world:World, scene:SceneDef):ReturnType<typeof decodeGlyphChunk>[] {
 	world.daylight = rendererLook(scene.look).sun !== undefined;
+	world.lightLevel = scene.lightLevel ?? 1;
 	const decoded = scene.chunks.map(decodeGlyphChunk);
 	const startDecoded = decoded.find((d) => d.playerStart) ?? decoded[0];
 	if (!startDecoded) {
@@ -76,7 +78,7 @@ export function spawnScene(world:World, scene:SceneDef):ReturnType<typeof decode
 	}
 	scene.rooms?.forEach((room) => spawnRoom(world, room));
 	scene.ravens?.forEach((r, i) => spawnRaven(world, `Raven${i + 1}`, r.x, r.z, r.yaw));
-	spawnCamera(world, scene.zoom);
+	spawnCamera(world, scene.camera);
 	return decoded;
 }
 
@@ -110,18 +112,23 @@ export class Game extends KindlingGame<World> {
 		if (!canvas) {
 			throw new Error('Kindling Game needs a document to create a canvas');
 		}
+		const minFps = readURLMinFps();
+		if (minFps !== undefined) {
+			this.unfocusedHz = minFps;
+		}
 		this._hud = hud;
 		this._scene = sceneByID(sceneID);
 		resetTime();
 		resetAllocID();
 		this.syncDisplay();
-		this.renderer?.applyLook(rendererLook(this._scene.look));
 		this.world.input.captures = (code) => GAME_KEYS.has(code) || code.startsWith('Digit');
 		const decoded = spawnScene(this.world, this._scene);
+		this.renderer?.applyLook(rendererLook(this._scene.look));
 		const host = new GameHost(this.world, hud.chat, hud.aiLog, {
 			ambient: this._scene.ambient,
 			scene: this._scene.id,
 			playerTags: this._scene.player?.tags,
+			rooms: this._scene.rooms,
 		});
 		const director = this._scene.createDirector(host);
 		host.bind(director);
@@ -130,13 +137,13 @@ export class Game extends KindlingGame<World> {
 		};
 		const systems = new GameObject('Systems', 'Systems');
 		const getRenderer = () => this.renderer;
-		const view = systems.addComponent(WorldView, { getRenderer, ground: this._scene.ground });
+		const view = systems.addComponent(WorldView, { getRenderer, ground: this._scene.ground, outskirts: this._scene.outskirts });
 		systems.addComponent(GroundPick, { getRenderer });
 		const hudView = systems.addComponent(Hud, {
 			model: this._hud,
 			director: host,
 			getRenderer,
-			healthBars: this._scene.healthBars ?? false,
+			overheads: { healthBars: this._scene.healthBars ?? false, carried: this._scene.carried, inspect: this._scene.inspect },
 		});
 		const stream = systems.addComponent(WorldStream, { chunks: decoded.map((d) => d.chunk) });
 		systems.addComponent(DirectorPulse, { director: host });
@@ -225,6 +232,7 @@ export class Game extends KindlingGame<World> {
 		this.renderer.shadows = shadows.mode;
 		this.renderer.pointShadowMapSize = shadows.point;
 		this.renderer.directionalShadowMapSize = shadows.sun;
+		this.renderer.sunMoverSize = shadows.mover;
 	}
 
 	private syncAudio():void {

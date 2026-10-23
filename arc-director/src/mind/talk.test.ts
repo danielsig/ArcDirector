@@ -26,6 +26,45 @@ function net(
 }
 
 describe('TalkNet', () => {
+	it('refuses a line said again and again in a row, or echoed word for word right after another said it', () => {
+		const range = new Set(['Ann:Bo']);
+		const talk = net(range, ['Ann', 'Bo']);
+		assert.equal(talk.say('Ann', 'The way is clear, Bo.').ok, true);
+		const again = talk.say('Ann', 'the way is clear Bo!');
+		assert.equal(again.ok, false);
+		assert.match(again.reason ?? '', /you already said this, and it was heard/);
+		assert.equal(talk.say('Ann', 'The way is clear, Bo.').ok, false);
+		const echo = talk.say('Bo', 'The way is clear, Bo.');
+		assert.equal(echo.ok, false);
+		assert.match(echo.reason ?? '', /Ann just said this, and it was heard/);
+		assert.equal(talk.say('Bo', 'Then lead on.').ok, true);
+		assert.equal(talk.say('Ann', 'Stay close.').ok, true);
+		assert.equal(talk.say('Ann', 'The way is clear, Bo.').ok, true);
+	});
+
+	it('lets a game decide each repeat: allow it, refuse it, or refuse it in its own words', () => {
+		const asked:string[] = [];
+		const talk = new TalkNet({ inRange: () => true, others: (speaker) => ['Ann', 'Bo'].filter((id) => id !== speaker) }, undefined, {
+			repeats: (who, text) => {
+				asked.push(`${who}: ${text}`);
+				return text === 'Hail!' || (who === 'Bo' ? 'Find your own words.' : false);
+			},
+		});
+		assert.equal(talk.say('Ann', 'Hail!').ok, true);
+		assert.equal(talk.say('Ann', 'Hail!').ok, true);
+		assert.equal(talk.say('Ann', 'Onward.').ok, true);
+		assert.match(talk.say('Ann', 'Onward.').reason ?? '', /not a parrot/);
+		assert.equal(talk.say('Bo', 'Onward.').reason, 'Find your own words.');
+		assert.deepEqual(asked, ['Ann: Hail!', 'Ann: Onward.', 'Bo: Onward.']);
+	});
+
+	it('lets a game allow repeats', () => {
+		const talk = new TalkNet({ inRange: () => true, others: (speaker) => ['Ann', 'Bo'].filter((id) => id !== speaker) }, undefined, { repeats: true });
+		assert.equal(talk.say('Ann', 'Onward.').ok, true);
+		assert.equal(talk.say('Ann', 'Onward.').ok, true);
+		assert.equal(talk.say('Bo', 'Onward.').ok, true);
+	});
+
 	it('wakes a listener only for speech meant for them, never for talk between others', () => {
 		const guard = mind('Guard');
 		const baker = mind('Baker');
@@ -167,25 +206,6 @@ describe('TalkNet', () => {
 		});
 		const ok = talk.say('Acolyte', 'Open the gate.', 'Guard');
 		assert.equal(ok.ok, true);
-		assert.deepEqual(faces, [['Acolyte', 'Guard'], ['Guard', 'Acolyte']]);
-		assert.deepEqual(steps, [['Acolyte', 'Guard'], ['Guard', 'Acolyte']]);
-	});
-
-	it('faces even without line of sight and still approaches', () => {
-		const faces:[string, string][] = [];
-		const steps:[string, string][] = [];
-		const talk = new TalkNet({
-			inRange: () => true,
-			others: () => ['Guard'],
-			canSee: () => false,
-			face: (who, toward) => {
-				faces.push([who, toward]);
-			},
-			approach: (who, toward) => {
-				steps.push([who, toward]);
-			},
-		});
-		talk.say('Acolyte', 'This way.', 'Guard');
 		assert.deepEqual(faces, [['Acolyte', 'Guard'], ['Guard', 'Acolyte']]);
 		assert.deepEqual(steps, [['Acolyte', 'Guard'], ['Guard', 'Acolyte']]);
 	});

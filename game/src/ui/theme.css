@@ -15,6 +15,9 @@
 	/* Ink: outlines, text on parchment, and the faint rules between rows */
 	--ink: #5a3a20;
 	--ink-soft: rgba(90, 58, 32, 0.28);
+	/* Ink for good and bad counts (bench scores) */
+	--ink-good: #3d7a26;
+	--ink-bad: #b3361f;
 	/* Text drawn straight on the world (gold count, names), with its dark edge */
 	--on-world: #fff8e6;
 	--on-world-edge: 0 1px 0 #2a1a0c, 0 0 4px rgba(20, 12, 6, 0.85);

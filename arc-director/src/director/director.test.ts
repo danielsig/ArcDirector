@@ -14,6 +14,8 @@ import { formatSight } from '../perception/sight.js';
 import { formatInventory } from '../perception/formatInventory.js';
 import { parseArc } from '../arc/wire.js';
 import { ArcDirector } from './director.js';
+import { BrowserProvider, Skaldic, SKALDIC_BROWSER_MODELS } from '../inference/browser.js';
+import { ModelDownload } from '../inference/download.js';
 import type { CharacterSpec, StandingChoice, VerbCall } from './types.js';
 import type { SystemOne } from '../inference/systemone.js';
 import { OPEN_WORLD } from '../testing/world.js';
@@ -157,13 +159,31 @@ describe('ArcDirector', () => {
 		director.dispose();
 	});
 
-	it('keeps one Arc format, defaulting to json, and moves live minds when it changes', async () => {
+	it('asks a repeats rule with the speaker\'s context', async () => {
+		const asked:string[] = [];
+		const director = await directorOf()
+			.withTalk({ inRange: () => true, others: () => ['Forager', 'BridgeKeeper'] }, undefined, {
+				repeats: (ctx, text) => {
+					asked.push(`${ctx.id}: ${text}`);
+					return 'Say it another way.';
+				},
+			})
+			.addCharacter({ id: 'Forager', mind: { skipHeartbeat: true }, identity: { role: 'forager' } })
+			.addCharacter({ id: 'BridgeKeeper', mind: { skipHeartbeat: true }, identity: { role: 'keeper' } })
+			.start();
+		assert.equal(director.talk!.say('Forager', 'Lower the bridge.').ok, true);
+		assert.equal(director.talk!.say('Forager', 'Lower the bridge.').reason, 'Say it another way.');
+		assert.deepEqual(asked, ['Forager: Lower the bridge.']);
+		director.dispose();
+	});
+
+	it('keeps one Arc format, defaulting to schema, and moves live minds when it changes', async () => {
 		const build = (format?:ArcFormat):Promise<ArcDirector<Ctx>> => {
 			const director = directorOf().addCharacter({ id: 'Guard', mind: {}, identity: { role: 'guard' } });
 			return (format ? director.withArcFormat(format) : director).start();
 		};
 		const plain = await build();
-		assert.equal(plain.arcFormat, 'json');
+		assert.equal(plain.arcFormat, 'schema');
 		plain.dispose();
 		const director = await build('schema');
 		assert.equal(director.arcFormat, 'schema');
@@ -171,6 +191,40 @@ describe('ArcDirector', () => {
 		director.setArcFormat('text');
 		assert.equal(director.arcFormat, 'text');
 		assert.deepEqual(director.minds().map((mind) => mind.arcFormat), ['text']);
+		director.dispose();
+	});
+
+	it('runs Skaldic Laya as a System One on its own engine, beside the chat model', () => {
+		BrowserProvider.shared = new BrowserProvider({ wasm: 'wllama.wasm' });
+		const downloads:string[] = [];
+		// Nothing is fetched: each engine only says what it was asked to load.
+		for (const [engine, name] of [[BrowserProvider.shared, 'chat'], [BrowserProvider.decisions, 'decisions']] as const) {
+			engine.download = (model = '') => {
+				downloads.push(`${name} ${model}`);
+				return new ModelDownload(async () => undefined);
+			};
+		}
+		const director = new ArcDirector<Ctx>();
+		director.addBrowserModel('main', Skaldic.Gemma4E4B);
+		director.addBrowserModel('local', Skaldic.Laya);
+		assert.notEqual(BrowserProvider.decisions, BrowserProvider.shared);
+		assert.deepEqual(downloads, [`chat ${SKALDIC_BROWSER_MODELS[Skaldic.Gemma4E4B]}`, `decisions ${SKALDIC_BROWSER_MODELS[Skaldic.Laya]}`]);
+		// It is a System One without being told: setting it as the default would throw otherwise.
+		director.setDefaultSystemOne('local');
+		director.dispose();
+	});
+
+	it('gives a model trained on its prompts (Skaldic) the compact prompt and JSON Arcs, whatever the host asks', async () => {
+		const director = await directorOf()
+			.addModel('main', { id: 'skaldic-gemma-4-e4b-v9', prompt: 'full' })
+			.withArcFormat('text')
+			.addCharacter({ id: 'Guard', mind: {}, identity: { role: 'guard' } })
+			.start();
+		const [mind] = director.minds();
+		assert.equal(mind.promptStyle(), 'compact');
+		assert.equal(mind.arcFormat, 'schema');
+		director.setArcFormat('json');
+		assert.equal(mind.arcFormat, 'json', 'JSON as asked: it writes that too');
 		director.dispose();
 	});
 
@@ -201,6 +255,87 @@ describe('ArcDirector', () => {
 		assert.equal(format.name, 'reply');
 		assert.deepEqual(format.schema.anyOf.slice(0, -1).map((branch) => branch.properties.tool?.const), ['recall', 'observe', 'earshot', 'see_map', 'sniff']);
 		assert.ok(sent[0].length < 20_000);
+		director.dispose();
+	});
+
+	it('fails a wait whose until never came true, so the steps after it do not run', async () => {
+		const calls:VerbCall<Ctx>[] = [];
+		const director = await new ArcDirector<Ctx>()
+			.addFakeInference()
+			.addStockVerbs()
+			.withDefaultKit({ verbs: [...STOCK_VERBS] })
+			.onVerb((call) => {
+				calls.push(call);
+				return { ok: true, verb: call.verb };
+			})
+			.withContext((id) => ({ paragraph: scene(), id }))
+			.addCharacter({ id: 'Player' })
+			.start();
+		const player = director.character('Player')!;
+		const running = player.enact(parseArc('wait(seconds=2, until=1 > 2) && go_to(EastGate)', player.activeVerbs()));
+		for (let t = 1; t <= 4; t++) {
+			director.tick(1, t);
+			await sleep(5);
+		}
+		const result = await running;
+		assert.equal(result.ok, false);
+		assert.match(result.reason ?? '', /until not met after 2s/);
+		assert.equal(calls.some((c) => c.verb === 'go_to'), false);
+		director.dispose();
+	});
+
+	it('a think arc starting with the verb running now lets it end and goes on from its second step', async () => {
+		const calls:VerbCall<Ctx>[] = [];
+		const director = await new ArcDirector<Ctx>()
+			.addFakeInference()
+			.addStockVerbs()
+			.withDefaultKit({ verbs: [...STOCK_VERBS] })
+			.onVerb((call) => {
+				calls.push(call);
+				return { ok: true, verb: call.verb };
+			})
+			.withContext((id) => ({ paragraph: scene(), id }))
+			.addCharacter({ id: 'Player' })
+			.start();
+		const player = director.character('Player')!;
+		const first = player.enact(parseArc('wait(seconds=2) && go_to(Keep)', player.activeVerbs()));
+		director.tick(1, 1);
+		await sleep(5);
+		const thought = player.enact(parseArc('wait(seconds=2) && go_to(EastGate)', player.activeVerbs()));
+		for (let t = 2; t <= 5; t++) {
+			director.tick(1, t);
+			await sleep(5);
+		}
+		await Promise.all([first, thought]);
+		// The running wait was not restarted and the old arc's go_to(Keep) never ran.
+		assert.deepEqual(calls.map((c) => [c.verb, String(c.args.target)]), [['go_to', 'EastGate']]);
+		director.dispose();
+	});
+
+	it('a think arc whose first step differs in args replaces the running step at once', async () => {
+		const calls:VerbCall<Ctx>[] = [];
+		const director = await new ArcDirector<Ctx>()
+			.addFakeInference()
+			.addStockVerbs()
+			.withDefaultKit({ verbs: [...STOCK_VERBS] })
+			.onVerb((call) => {
+				calls.push(call);
+				return { ok: true, verb: call.verb };
+			})
+			.withContext((id) => ({ paragraph: scene(), id }))
+			.addCharacter({ id: 'Player' })
+			.start();
+		const player = director.character('Player')!;
+		void player.enact(parseArc('wait(seconds=30) && go_to(Keep)', player.activeVerbs()));
+		director.tick(1, 1);
+		await sleep(5);
+		const thought = player.enact(parseArc('wait(seconds=2) && go_to(EastGate)', player.activeVerbs()));
+		for (let t = 2; t <= 5; t++) {
+			director.tick(1, t);
+			await sleep(5);
+		}
+		await thought;
+		assert.deepEqual(calls.map((c) => [c.verb, String(c.args.target)]), [['go_to', 'EastGate']]);
 		director.dispose();
 	});
 
@@ -908,17 +1043,18 @@ describe('ArcDirector', () => {
 		director.dispose();
 	});
 
-	it('hasLineOfSight drops what is occluded from sight', async () => {
+	it('canPass drops from sight what light does not reach, but what everyone sees', async () => {
 		const sight = {
 			self: { id: 'Captain', point: [0, 0] },
 			ambient: 'A damp stone hall of the dungeon.',
 			objects: [
 				{ id: 'Alchemist', point: [0, 3], tags: ['character'], interactable: true },
 				{ id: 'HiddenLoot', point: [1, 0], tags: ['item'] },
+				{ id: 'Bridge', point: [1, 0], tags: ['bridge'], always: true },
 			],
 		};
 		const director = await new ArcDirector<Ctx>()
-			.withWorld({ ...OPEN_WORLD, hasLineOfSight: (_from, to) => to !== 'HiddenLoot' })
+			.withWorld({ ...OPEN_WORLD, canPass: (what, _from, to) => (what === 'light' && to[0] === 1 ? undefined : {}) })
 			.withPriorityQueue({ processInterval: 0, watchInterval: 0, heartbeatStart: 0.01, heartbeatMin: 0.01 })
 			.addFakeInference(goToNamedInteractable())
 			.addStockVerbs()
@@ -935,6 +1071,7 @@ describe('ArcDirector', () => {
 		const text = director.character('Captain')!.mind!.senses.sight.gather({ paragraph: scene(), id: 'Captain' }) as string;
 		assert.equal(text.includes('Alchemist'), true);
 		assert.equal(text.includes('HiddenLoot'), false);
+		assert.equal(text.includes('Bridge'), true);
 		director.dispose();
 	});
 
@@ -1149,6 +1286,51 @@ describe('ArcDirector', () => {
 		await waitFor(() => seen.includes('go_to'));
 		director.dispose();
 	});
+
+	it('runs laws while its model is still loading, and tries the server again when started again', async () => {
+		const seen:string[] = [];
+		let asked = 0;
+		let open!:()=>void;
+		let gate = new Promise<void>((resolve) => {
+			open = resolve;
+		});
+		const director = new ArcDirector<Ctx>()
+			.addLMStudioInference({
+				baseURL: 'http://127.0.0.1:9/v1',
+				fetch: async () => {
+					asked += 1;
+					await gate;
+					return new Response('down', { status: 500 });
+				},
+			})
+			.addStockVerbs()
+			.withDefaultKit(KIT)
+			.withKernels(() => ({ me: dummyEntity('BridgeKeeper'), others: [], items: [], cache: new SampleCache() }))
+			.onVerb((call) => {
+				seen.push(call.verb);
+				return { ok: true, verb: call.verb };
+			})
+			.withContext((id) => ({ paragraph: scene(), id }))
+			.addCharacter({
+				id: 'BridgeKeeper',
+				mind: { skipHeartbeat: true },
+				kit: KIT,
+				identity: { role: 'Works the sluice.' },
+				laws: [{ name: 'sluice', watch: '1 > 0', arc: 'go_to(EastGate)' }],
+			});
+		const starting = director.start();
+		await waitFor(() => asked > 0);
+		assert.equal(director.ready, true, 'ready before the server answers');
+		director.tick(1, 1);
+		await waitFor(() => seen.includes('go_to'));
+		open();
+		await assert.rejects(starting);
+		const before = asked;
+		gate = Promise.resolve();
+		await assert.rejects(director.start());
+		assert.ok(asked > before, 'started again, it asks the server again');
+		director.dispose();
+	});
 });
 
 describe('restoreCast', () => {
@@ -1183,6 +1365,211 @@ describe('restoreCast', () => {
 		assert.deepEqual(agent.persona.goals, [{ text: 'Rest. The bridge is down.', priority: 1 }]);
 		assert.ok(agent.persona.memory.all().some((m) => m.text === 'Forager paid the bridge fee.'));
 		assert.deepEqual(agent.laws.map((l) => l.name), ['sluice']);
+		next.dispose();
+	});
+});
+
+describe('regions', () => {
+	const at:Record<string, number[]> = {};
+	const director = () => new ArcDirector<Ctx>()
+		.withWorld({ ...OPEN_WORLD, getPose: (id) => ({ point: at[id] }) })
+		.addFakeInference(() => WAIT_REPLY)
+		.addStockVerbs()
+		.withContext((id) => ({ paragraph: scene(), id }))
+		.addCharacter({ id: 'Keeper', mind: { skipHeartbeat: true }, kit: KIT })
+		.addCollective({ id: 'Hive', mind: { skipHeartbeat: true }, kit: KIT, characters: [{ id: 'Tom', kit: KIT }] });
+	const pinned = (d:ArcDirector<Ctx>, id:string) => (d.character(id) ?? d.collective(id))!.persona.memory.pinned()
+		.filter((m) => m.tags.includes('region')).map((m) => m.text);
+
+	it('pins its memory while a character is inside, and runs enter, stay and exit', async () => {
+		at.Keeper = [0, 0];
+		at.Tom = [9, 9];
+		const calls:string[] = [];
+		const d = await director().start();
+		d.addRegion('Crypt', {
+			from: [-1, -1],
+			to: [1, 1],
+			memory: 'This room smells putrid.',
+			onEnter: ({ id }) => calls.push(`enter ${id}`),
+			onStay: ({ id }, stayed, dt) => calls.push(`stay ${id} ${stayed} ${dt}`),
+			onExit: ({ id }, stayed) => calls.push(`exit ${id} after ${stayed}`),
+		});
+		d.tick(0.1, 1);
+		d.tick(0.1, 2);
+		assert.deepEqual(pinned(d, 'Keeper'), ['This room smells putrid.']);
+		at.Keeper = [5, 0];
+		at.Tom = [0.5, 0];
+		d.tick(0.1, 3);
+		assert.deepEqual(pinned(d, 'Keeper'), []);
+		assert.deepEqual(pinned(d, 'Hive'), ['Tom: This room smells putrid.']);
+		assert.deepEqual(calls, ['enter Keeper', 'stay Keeper 1 0.1', 'exit Keeper after 2', 'enter Tom']);
+		d.removeRegion('Crypt');
+		assert.deepEqual(pinned(d, 'Hive'), []);
+		assert.deepEqual(calls.at(-1), 'exit Tom after 0');
+		d.dispose();
+	});
+
+	it('a ball holds what is within its radius', async () => {
+		at.Keeper = [3, 4];
+		at.Tom = [3, 4.1];
+		const d = await director().start();
+		d.addRegion('Pool', { center: [0, 0], radius: 5, memory: 'Cold water laps at your boots.' });
+		d.tick(0.1, 1);
+		assert.deepEqual(pinned(d, 'Keeper'), ['Cold water laps at your boots.']);
+		assert.deepEqual(pinned(d, 'Hive'), []);
+		d.dispose();
+	});
+
+	it('who keeps everyone else out, and one it stops holding for leaves', async () => {
+		at.Keeper = [0, 0];
+		at.Tom = [0, 0];
+		const calls:string[] = [];
+		let cursed = new Set(['Keeper']);
+		const d = await director().start();
+		d.addRegion('Crypt', {
+			from: [-1, -1],
+			to: [1, 1],
+			memory: 'This is our lair.',
+			who: (ctx) => cursed.has(ctx.id),
+			onEnter: ({ id }) => calls.push(`enter ${id}`),
+			onExit: ({ id }) => calls.push(`exit ${id}`),
+		});
+		d.tick(0.1, 1);
+		assert.deepEqual(pinned(d, 'Keeper'), ['This is our lair.']);
+		assert.deepEqual(pinned(d, 'Hive'), []);
+		cursed = new Set(['Tom']);
+		d.tick(0.1, 2);
+		assert.deepEqual(pinned(d, 'Keeper'), []);
+		assert.deepEqual(pinned(d, 'Hive'), ['Tom: This is our lair.']);
+		assert.deepEqual(calls, ['enter Keeper', 'exit Keeper', 'enter Tom']);
+		d.dispose();
+	});
+
+	it('a memory getter is read once per tick, and its line follows it while they stay', async () => {
+		at.Keeper = [0, 0];
+		at.Tom = [9, 9];
+		let reads = 0;
+		let torches = 'The torches burn bright.';
+		const d = await director().start();
+		d.addRegion('Hall', {
+			from: [-1, -1],
+			to: [1, 1],
+			get memory() {
+				reads++;
+				return torches;
+			},
+		});
+		d.tick(0.1, 1);
+		assert.equal(reads, 1);
+		assert.deepEqual(pinned(d, 'Keeper'), ['The torches burn bright.']);
+		torches = 'The torches are burning low.';
+		d.tick(0.1, 2);
+		assert.equal(reads, 2);
+		assert.deepEqual(pinned(d, 'Keeper'), ['The torches are burning low.']);
+		torches = '';
+		d.tick(0.1, 3);
+		assert.deepEqual(pinned(d, 'Keeper'), []);
+		torches = 'Dark.';
+		d.tick(0.1, 4);
+		assert.deepEqual(pinned(d, 'Keeper'), ['Dark.']);
+		d.dispose();
+	});
+
+	it('a memory function is called with the character id', async () => {
+		at.Keeper = [0, 0];
+		at.Tom = [0, 0];
+		const d = await director().start();
+		d.addRegion('Hall', { from: [-1, -1], to: [1, 1], memory: ({ id }) => (id === 'Tom' ? 'My old cell.' : undefined) });
+		d.tick(0.1, 1);
+		assert.deepEqual(pinned(d, 'Keeper'), []);
+		assert.deepEqual(pinned(d, 'Hive'), ['Tom: My old cell.']);
+		d.dispose();
+	});
+
+	it('until removes the region once it holds, and everyone in it leaves', async () => {
+		at.Keeper = [0, 0];
+		at.Tom = [9, 9];
+		const calls:string[] = [];
+		let kingDead = false;
+		const d = await director().start();
+		d.addRegion('Throne', {
+			from: [-1, -1],
+			to: [1, 1],
+			memory: 'The king watches from his throne.',
+			until: () => kingDead,
+			onExit: ({ id }) => calls.push(`exit ${id}`),
+		});
+		d.tick(0.1, 1);
+		assert.deepEqual(pinned(d, 'Keeper'), ['The king watches from his throne.']);
+		kingDead = true;
+		d.tick(0.1, 2);
+		assert.deepEqual(pinned(d, 'Keeper'), []);
+		assert.deepEqual(calls, ['exit Keeper']);
+		kingDead = false;
+		d.tick(0.1, 3);
+		assert.deepEqual(pinned(d, 'Keeper'), [], 'gone for good');
+		d.dispose();
+	});
+
+	it('who as a watch holds as each character sees the world', async () => {
+		at.Keeper = [0, 0];
+		at.Tom = [0, 0];
+		const d = await director()
+			.withKernels((ctx) => ({ me: dummyEntity(ctx.id, { tags: ctx.id === 'Tom' ? ['Undead'] : [] }), others: [], items: [] }))
+			.start();
+		d.addRegion('Crypt', { from: [-1, -1], to: [1, 1], memory: 'This is our lair.', who: 'me is "Undead"' });
+		d.tick(0.1, 1);
+		assert.deepEqual(pinned(d, 'Keeper'), []);
+		assert.deepEqual(pinned(d, 'Hive'), ['Tom: This is our lair.']);
+		d.dispose();
+	});
+
+	it('many regions sweep for who to test, and still see who enters and leaves', async () => {
+		at.Keeper = [12, 2];
+		at.Tom = [100, 0];
+		const calls:string[] = [];
+		const d = await director().start();
+		// Enough regions × characters that the check sweeps.
+		for (let i = 0; i < 1000; i++) {
+			d.addRegion(`Room${i}`, {
+				from: [i * 10, 0],
+				to: [i * 10 + 5, 5],
+				memory: `In Room${i}.`,
+				onEnter: ({ id }) => calls.push(`enter ${id} Room${i}`),
+				onExit: ({ id }) => calls.push(`exit ${id} Room${i}`),
+			});
+		}
+		d.addRegion('Pool', { center: [52, 9], radius: 1, memory: 'In the Pool.' });
+		d.tick(0.1, 1);
+		assert.deepEqual(pinned(d, 'Keeper'), ['In Room1.']);
+		assert.deepEqual(pinned(d, 'Hive'), ['Tom: In Room10.']);
+		at.Keeper = [52, 9];
+		at.Tom = [2, 2];
+		d.tick(0.1, 2);
+		assert.deepEqual(pinned(d, 'Keeper'), ['In the Pool.']);
+		assert.deepEqual(pinned(d, 'Hive'), ['Tom: In Room0.']);
+		assert.deepEqual(calls, ['enter Keeper Room1', 'enter Tom Room10', 'enter Tom Room0', 'exit Keeper Room1', 'exit Tom Room10']);
+		d.dispose();
+	});
+
+	it('a save neither doubles a region memory nor keeps one for a character now outside', async () => {
+		at.Keeper = [0, 0];
+		at.Tom = [0, 0];
+		const region = { from: [-1, -1], to: [1, 1], memory: 'This room smells putrid.' };
+		const first = await director().start();
+		first.addRegion('Crypt', region);
+		first.tick(0.1, 1);
+		const saved = JSON.parse(JSON.stringify(first.exportCast()));
+		first.dispose();
+
+		at.Tom = [5, 5];
+		const next = director().addRegion('Crypt', region);
+		next.restoreCast(saved);
+		await next.start();
+		assert.deepEqual(pinned(next, 'Hive'), ['Tom: This room smells putrid.']);
+		next.tick(0.1, 2);
+		assert.deepEqual(pinned(next, 'Keeper'), ['This room smells putrid.']);
+		assert.deepEqual(pinned(next, 'Hive'), []);
 		next.dispose();
 	});
 });
@@ -1527,6 +1914,19 @@ describe('choose', () => {
 		director.dispose();
 	});
 
+	it('says what a runner\'s System One would be asked, as choose asks it', async () => {
+		const { director } = await guard(async () => 'hold');
+		const asked = director.choiceQuestion('Guard', { hold: 'go_to(EastGate)', flee: 'go_to(Keep)' }, {
+			doing: 'wait',
+			last: { name: 'hold', result: { ok: false, verb: 'go_to', reason: 'no way there' } },
+		});
+		assert.deepEqual(Object.keys(asked!.criteria), ['hold', 'flee']);
+		assert.match(asked!.criteria.hold, /^go_to\(EastGate\)/);
+		assert.match(asked!.state, /You are Guard\.\nDoing: wait\.\nLast choice: hold, failed \(no way there\)\./);
+		assert.throws(() => director.choiceQuestion('Nobody', { hold: 'wait()' }), /no character or collective Nobody/);
+		director.dispose();
+	});
+
 	it('falls back to the chat model when the System One names no choice', async () => {
 		const { director, ran } = await guard(async () => 'charge', {}, { chat: 'B' });
 		await ticks(director, 1, 2);
@@ -1775,5 +2175,32 @@ describe('decision models', () => {
 		assert.equal(director.modelID('local'), 'google/gemma-4-e2b', 'loaded already, and it scores choices well');
 		assert.equal(director.modelID(), 'google/gemma-4-e2b');
 		director.dispose();
+	});
+});
+
+describe('shared inference', () => {
+	it('thinks on another director\'s servers and models without looking them up again', async () => {
+		const catalog = { models: [{ key: 'google/gemma-4-e2b', type: 'llm', size_bytes: 4.4e9, loaded_instances: [{ id: 'google/gemma-4-e2b' }], capabilities: {} }] };
+		let asked = 0;
+		const fetch = async (input:string | URL | Request) => {
+			asked += 1;
+			return new Response(String(input).endsWith('/api/v1/models') ? JSON.stringify(catalog) : '{}', { status: String(input).endsWith('/api/v1/models') ? 200 : 404 });
+		};
+		const source = await new ArcDirector<Ctx>().addLMStudioInference({ fetch }).addModel('main', { maxParallel: 3 }).start();
+		const before = asked;
+		const director = await new ArcDirector<Ctx>()
+			.addLMStudioInference({ fetch })
+			.addModel('main')
+			.shareInference(source)
+			.addStockVerbs()
+			.withDefaultKit(KIT)
+			.onVerb(() => ({ ok: true }))
+			.addCharacter({ id: 'Able', mind: {} })
+			.start();
+		assert.equal(asked, before, 'no second lookup');
+		assert.equal(director.modelID(), 'google/gemma-4-e2b');
+		assert.equal(director.modelParallel(), 3, 'the source\'s spec, not its own');
+		director.dispose();
+		source.dispose();
 	});
 });

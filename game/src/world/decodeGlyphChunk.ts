@@ -17,13 +17,32 @@ export type EntityLegend = {
 	locked?:boolean;
 	open?:boolean;
 	exit?:boolean;
-	/** Radians. Turns a prop glyph; otherwise it faces off a wall it stands against. */
+	/** A door's house: what its roof is made of. Thatch when unset. */
+	roof?:RoofStyle;
+	/** A door's house: `false` for no chimney. Houses 5 m wide or more have one when unset. */
+	chimney?:boolean;
+	/** Radians. Turns a prop glyph or a stall; otherwise it faces off a wall it stands against. */
 	yaw?:number;
+	/** Meters (world X, Z) a prop glyph stands off its cell's centre: a chair drawn up to a table, oars on a wall. */
+	offset?:{ x:number; z:number, y?:number };
+	/** A rock in water: how its ripples trail. Omitted, the current draws them, or in still water they spread all round. */
+	wake?:Wake;
+	/** Props set on top of a prop glyph (a plate on a table), at its `PROP_TOP` height. */
+	on?:string[];
 	/** What reading or examining it says (an inscription). */
 	text?:string;
 	/** What a chest holds. */
 	contents?:LootSpec[];
 };
+
+/**
+ * Ripples trailing off a rock: the way (world X, Z), as far as the vector is long (1 is as far as the current draws
+ * them), and how wide they `spread` (1, the default, is as narrow as the current draws them).
+ */
+export type Wake = { x:number; z:number; spread?:number };
+
+/** What a house's roof is made of. */
+export type RoofStyle = 'thatch' | 'slate';
 
 /** Items made fresh into a chest or a pack: the def, the name everyone calls it by, and how many. */
 export type LootSpec = { defID:string; name:string; count?:number };
@@ -103,7 +122,12 @@ export function decodeGlyphChunk(file:ChunkFile):DecodedChunk {
 						locked: spec.locked,
 						open: spec.open,
 						exit: spec.exit,
+						roof: spec.roof,
+						chimney: spec.chimney,
 						yaw: spec.yaw,
+						offset: spec.offset,
+						wake: spec.wake,
+						on: spec.on,
 						text: spec.text,
 						contents: spec.contents,
 					});

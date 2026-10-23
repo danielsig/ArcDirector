@@ -2,18 +2,22 @@ import { Regen } from '../engine/Regen';
 import { Time, type GameObject } from '@arc-director/kindling';
 import { CharacterAnimation } from '../characters/CharacterAnimation';
 import { CharacterPose } from '../characters/CharacterPose';
+import { FIREBALL_SPEED } from '../render/spellFx';
 import {
 	pascalCase,
 	DEFAULT_VERB_INSTRUCTIONS,
 	STOCK_VERBS,
-	type ArcDirector,
 	type ArcResult,
+	type MOBAHost,
+	type RPGHost,
+	type Sight,
 	type VerbCall,
 	type VerbGate,
 } from 'arc-director';
 import {
 	BODY_SLOTS,
 	BoxCollider,
+	Flammable,
 	HumanBody,
 	Appearance,
 	MarketGate,
@@ -24,6 +28,7 @@ import {
 	Guard,
 	HurtFlash,
 	Weakness,
+	Moves,
 	type BodySlot,
 } from '../engine/components';
 import type { World } from '../engine/World';
@@ -71,7 +76,6 @@ import { STALL_LEASH } from '../world/constants';
 import { lineClear, standableNear } from '../world/path';
 import type { CharacterCtx } from './types';
 
-type Director = ArcDirector<CharacterCtx>;
 type Call = VerbCall<CharacterCtx>;
 
 /** Every verb this game's NPCs may use, before a scene adds its own. */
@@ -90,10 +94,13 @@ function asSlot(raw:string):BodySlot | undefined {
 	return (BODY_SLOTS as readonly string[]).includes(raw) ? raw as BodySlot : undefined;
 }
 
-/** Steps this character may not take right now: its party already won, it is celebrating, or it would walk into a foe. */
+/** What a fighter does to fight: once the scene is won, none of it. Walking and talking go on. */
+const FIGHTING = new Set(['attack', 'block', 'protect', ...Object.keys(ATTACKS)]);
+
+/** Steps this character may not take right now: a fight after its party won, any while it celebrates, or walking into a foe. */
 export function verbGate(host:GameHost):VerbGate<CharacterCtx> {
 	return ({ verb, ctx, args }) => {
-		if (host.bargainDone && fightRole(host, ctx.character)) {
+		if (host.bargainDone && FIGHTING.has(verb) && fightRole(host, ctx.character)) {
 			return { ok: false, interrupted: true, verb, reason: 'won' };
 		}
 		const hop = ctx.character.getComponent(Celebrating);
@@ -145,50 +152,15 @@ function stallBound(ctx:CharacterCtx, verb:string, args:Record<string, unknown>)
 	return undefined;
 }
 
-/** What this game's characters wear and hold. ArcDirector runs the stock world verbs through `withWorld`. */
-export function addBodyVerbs(director:Director):Director {
-	return director
-		.addVerb('equip', {
-			args: { item: 'id', slot: 'string?' },
-			handler: ({ ctx, args }) => doEquip(ctx, args.item, args.slot),
-		})
-		.addVerb('unequip', {
-			args: { slot: 'string' },
-			handler: ({ ctx, args }) => doUnequip(ctx, args.slot),
-		});
-}
+/** What this game's characters wear and hold, for `withRPG`. ArcDirector runs the stock world verbs through `withWorld`. */
+export const BODY_VERBS:RPGHost<CharacterCtx> = {
+	equip: ({ ctx, args }) => doEquip(ctx, args.item, args.slot),
+	unequip: ({ ctx, args }) => doUnequip(ctx, args.slot),
+};
 
-/** Taking without paying. Register it; a scene's kit grants it where theft is possible. */
-export function addStealVerb(director:Director, host:GameHost):Director {
-	return director.addVerb('steal', {
-		args: { item: 'id', from: 'id' },
-		help: 'goes to them first',
-		handler: (call) => doSteal(host, call, call.args.item, call.args.from),
-	});
-}
-
-/** Dungeon: an overhead status line, and rest once the scene's goal is met. */
-export function addStatusVerbs(director:Director, host:GameHost):Director {
-	return director
-		.addVerb('set_status', {
-			args: { text: 'text', seconds: 'number?' },
-			handler: ({ ctx, args }) => {
-				const label = args.text.trim().slice(0, 72);
-				if (!label) {
-					return { ok: false, verb: 'set_status', reason: 'nothing to show' };
-				}
-				const life = Math.min(60, Math.max(1, args.seconds ?? 6));
-				host.labels.set(idOf(ctx.character), { text: label, until: Time.time + life });
-				return { ok: true, verb: 'set_status', reason: `${life}s` };
-			},
-		})
-		.addVerb('rest', {
-			handler: ({ ctx }) => ({
-				ok: true,
-				verb: 'rest',
-				reason: host.hooks.goalDone?.(host, idOf(ctx.character)) ? 'done — still listening' : 'goal still open',
-			}),
-		});
+/** Taking without paying, for `withRPG` in a scene where theft is possible. */
+export function stealVerb(host:GameHost):RPGHost<CharacterCtx>['steal'] {
+	return (call) => doSteal(host, call, call.args.item, call.args.from);
 }
 
 const COVER_HELP:Record<NonNullable<AttackKind['cover']>, string> = {
@@ -196,42 +168,30 @@ const COVER_HELP:Record<NonNullable<AttackKind['cover']>, string> = {
 	soften: 'weaker through cover; flank for a full hit',
 };
 
-/** Ruins combat: one verb per attack, plus attack (your role's), block, heal, protect, and rank. */
-export function addFightVerbs(director:Director, host:GameHost):Director {
-	for (const [verb, spec] of Object.entries(ATTACKS)) {
-		director.addVerb(verb, {
-			args: { target: 'id' },
-			help: spec.cover && COVER_HELP[spec.cover],
-			handler: (call) => doAttack(host, call, verb, call.args.target),
-		});
-	}
-	return director
-		.addVerb('attack', {
-			args: { target: 'id?' },
-			handler: (call) => {
-				const role = fightRole(host, call.ctx.character);
-				const verb = role ? attackVerbFor(role) : undefined;
-				return verb
-					? doAttack(host, call, verb, call.args.target ?? '')
-					: { ok: false, verb: 'attack', reason: 'no attack' };
-			},
-		})
-		.addVerb('block', {
-			args: { target: 'id?' },
+/** How this game fights, for `withRPG` and `withMOBA`: attack (your role's), block, heal, protect, and one ability per attack. */
+export function fightVerbs(host:GameHost):MOBAHost<CharacterCtx> {
+	return {
+		attack: (call) => {
+			const role = fightRole(host, call.ctx.character);
+			const verb = role ? attackVerbFor(role) : undefined;
+			return verb
+				? doAttack(host, call, verb, call.args.target ?? '', undefined, true)
+				: { ok: false, verb: 'attack', reason: 'no attack' };
+		},
+		block: {
 			help: `guard up ${BLOCK.seconds}s against them (or the nearest enemy), then ${BLOCK.cooldown}s to ready again; only when an enemy is within ${BLOCK.near}m or attacking you or whom you protect`,
 			handler: (call) => doBlock(host, call, call.args.target ?? ''),
-		})
-		.addVerb('heal', {
-			args: { target: 'id?' },
+		},
+		heal: {
 			help: 'weaker through cover; flank for a full heal',
 			handler: (call) => doHeal(host, call, call.args.target ?? ''),
-		})
-		.addVerb('protect', {
-			args: { target: 'id?' },
-			help: 'stand between an ally and the threat, then attack that threat',
-			handler: (call) => doProtect(host, call, call.args.target ?? ''),
-		})
-		.addVerb('rank', { handler: (call) => doRank(host, call) });
+		},
+		protect: (call) => doProtect(host, call, call.args.target ?? ''),
+		abilities: Object.fromEntries(Object.entries(ATTACKS).map(([verb, spec]) => [verb, {
+			help: spec.cover && COVER_HELP[spec.cover],
+			handler: (call:VerbCall<CharacterCtx, { target:string }>) => doAttack(host, call, verb, call.args.target),
+		}])),
+	};
 }
 
 function heldWeapon(character:GameObject):{ damage:number; range:number } | undefined {
@@ -279,14 +239,35 @@ function dropDown(host:GameHost, who:GameObject):void {
 	});
 }
 
+/** `sight` as `viewer` sees it, each rival marked in reach or not of its role's own attack: range, and a clear shot where it needs one. */
+export function markReach(host:GameHost, viewer:GameObject, sight:Sight):Sight {
+	const role = fightRole(host, viewer);
+	const attack = role && attackFor(attackVerbFor(role), role);
+	if (!attack) {
+		return sight;
+	}
+	return {
+		...sight,
+		objects: sight.objects.map((o) => {
+			const other = findObject(host.world, o.id);
+			if (!isLiving(other)) {
+				return o;
+			}
+			// One of its own side: marked, so a captain never takes its own Blade for a foe.
+			if (!isRival(host, viewer, other)) {
+				return other !== viewer && fightRole(host, other) ? { ...o, note: o.note ? `yours; ${o.note}` : 'yours' } : o;
+			}
+			return { ...o, inReach: distXZ(viewer, other) <= attack.range && (attack.cover !== 'block' || combatSight(host.world, viewer, other)) };
+		}),
+	};
+}
+
+/**
+ * A clear shot from `a` to `b`: nothing solid between, a wall, a shut door, a pillar. Bodies are no cover: a spell or
+ * an arrow goes past a friend's shoulder. The line sound takes, which is light's without the bodies.
+ */
 function combatSight(world:World, a:GameObject, b:GameObject):boolean {
-	return lineClear(
-		world,
-		a.transform.position.x,
-		a.transform.position.z,
-		b.transform.position.x,
-		b.transform.position.z,
-	);
+	return lineClear(world, 'sound', a.transform.position, b.transform.position);
 }
 
 const RANK_ARRIVE = 1.2;
@@ -324,7 +305,8 @@ async function closeTo(host:GameHost, call:Call, target:GameObject, range:number
 	return { ok: true };
 }
 
-async function doRank(host:GameHost, call:Call):Promise<ArcResult> {
+/** Ruins: walks to this character's place in its party's line. */
+export async function doRank(host:GameHost, call:Call):Promise<ArcResult> {
 	const slot = rankSlot(host, call.ctx.character);
 	if (!slot) {
 		return { ok: false, verb: 'rank', reason: 'no line' };
@@ -346,12 +328,20 @@ function attackOf(verb:string, role:FightRole | undefined):{ name:string; spec:A
 	return ATTACKS[verb] ? { name: verb, spec: attackFor(verb, role) } : undefined;
 }
 
+/** How often a cast that can be broken off checks that it may go on, game seconds. */
+const CAST_CHECK = 0.2;
+
+/**
+ * Waits out the cooldown, then the cast. `stop`, asked through the cast, ends it early with its reason (the one healed
+ * walked out of reach).
+ */
 async function holdReady(
 	call:Call,
 	now:number,
 	readyTimestamp:number,
 	castTime:number,
 	onCast?:()=>void,
+	stop?:()=>string | undefined,
 ):Promise<ArcResult> {
 	const cool = readyTimestamp - now;
 	if (cool > 0.02) {
@@ -361,10 +351,17 @@ async function holdReady(
 		}
 	}
 	onCast?.();
-	if (castTime > 0.02) {
-		const cast = await call.wait(castTime);
+	for (let left = castTime; left > 0.02; left -= CAST_CHECK) {
+		const cast = await call.wait(stop ? Math.min(CAST_CHECK, left) : left);
 		if (!cast.ok || cast.interrupted) {
 			return { ok: false, interrupted: cast.interrupted, reason: cast.reason ?? 'cast', verb: 'wait' };
+		}
+		const why = stop?.();
+		if (why) {
+			return { ok: false, reason: why, verb: 'wait' };
+		}
+		if (!stop) {
+			break;
 		}
 	}
 	return { ok: true };
@@ -383,15 +380,49 @@ function hitChance(spec:AttackKind, dist:number, agility:number):number {
 	return Math.min(0.97, Math.max(0.05, rangeAccuracy(spec, dist) - agility * (spec.dodge ?? 1)));
 }
 
-async function doAttack(host:GameHost, call:Call, verb:string, name:string, locked?:GameObject):Promise<ArcResult> {
+/** Share of its max health at or below which a foe is low, and worth finishing quickly. */
+const LOW_HEALTH = 0.35;
+
+/** What one blow of `verb` by `attacker` does to `target`: its weapon's damage in close, then the target's weakness. */
+function blowDamage(host:GameHost, attacker:GameObject, verb:string, target:GameObject):number {
+	const spec = attackFor(verb, fightRole(host, attacker));
+	const damage = spec.cover ? spec.damage : Math.max(spec.damage, heldWeapon(attacker)?.damage ?? 0);
+	return weaknessDamage(target, verb, damage).damage;
+}
+
+/**
+ * The move a fighter's own `attack()` (and `protect`) swings at `target`, among the close-in moves it has (its role's,
+ * and its extra `Moves`): any of them at random; at a foe low on health, the quickest that kills it in one blow, else
+ * the quickest. A fighter whose own attack is a shot or a spell keeps it.
+ */
+function pickMove(host:GameHost, attacker:GameObject, own:string, target:GameObject):string {
+	const role = fightRole(host, attacker);
+	if (!role || ATTACKS[own]?.cover) {
+		return own;
+	}
+	const extra = attacker.getComponent(Moves)?.extra ?? [];
+	const moves = Object.keys(ATTACKS).filter((verb) => !ATTACKS[verb]!.cover && (ATTACKS[verb]!.roles.includes(role) || extra.includes(verb)));
+	const vitals = target.getComponent(Vitals);
+	if (moves.length === 0) {
+		return own;
+	}
+	if (!vitals || vitals.hp > vitals.maxHP * LOW_HEALTH) {
+		return moves[Math.floor(Math.random() * moves.length)]!;
+	}
+	const quickest = (list:string[]):string | undefined => [...list].sort((a, b) => attackFor(a, role).castTime - attackFor(b, role).castTime)[0];
+	return quickest(moves.filter((verb) => blowDamage(host, attacker, verb, target) >= vitals.hp)) ?? quickest(moves)!;
+}
+
+/** An attack by `verb` on `name` (or `locked`). With `pick`, `verb` is only the fighter's own: {@link pickMove} picks the move. */
+async function doAttack(host:GameHost, call:Call, verb:string, name:string, locked?:GameObject, pick = false):Promise<ArcResult> {
 	const { ctx } = call;
 	const npc = ctx.npc;
 	const role = fightRole(host, ctx.character);
-	const attack = attackOf(verb, role);
+	let attack = attackOf(verb, role);
 	if (!attack) {
 		return { ok: false, verb, reason: `unhandled attack ${verb}` };
 	}
-	if (role && !attack.spec.roles.includes(role)) {
+	if (role && !attack.spec.roles.includes(role) && !ctx.character.getComponent(Moves)?.extra.includes(attack.name)) {
 		const need = attack.spec.roles.join(' or ');
 		return { ok: false, verb, reason: `only a ${need} can ${attack.name}` };
 	}
@@ -405,8 +436,15 @@ async function doAttack(host:GameHost, call:Call, verb:string, name:string, lock
 			reason: name.trim() ? `no such person ${name}` : 'no one to attack',
 		};
 	}
+	const fuel = attack.spec.burns ? target.getComponent(Flammable) : undefined;
+	if (fuel && !fuel.burning) {
+		return burnWith(host, call, attack, target, fuel);
+	}
 	if (!isRival(host, ctx.character, target)) {
 		return { ok: false, verb: attack.name, reason: `${idOf(target)} is not an enemy` };
+	}
+	if (pick) {
+		attack = attackOf(pickMove(host, ctx.character, attack.name, target), role) ?? attack;
 	}
 	const dest = idOf(target);
 	const weapon = heldWeapon(ctx.character);
@@ -441,6 +479,30 @@ async function doAttack(host:GameHost, call:Call, verb:string, name:string, lock
 		await new Promise<void>((arrived) => ctx.world.after(flight, arrived));
 	}
 	return blow.lands();
+}
+
+/** A fire spell cast at something that burns: walk into range, cast, and it goes up in flames. */
+async function burnWith(host:GameHost, call:Call, attack:{ name:string; spec:AttackKind }, target:GameObject, fuel:Flammable):Promise<ArcResult> {
+	const { ctx } = call;
+	const walk = await closeTo(host, call, target, attack.spec.range, false);
+	if (!walk.ok) {
+		return { ...walk, verb: attack.name };
+	}
+	ctx.npc.faceToward(idOf(target));
+	const held = await holdReady(call, Time.time, ctx.npc.attackReadyTimestamp, attack.spec.castTime, () => {
+		ctx.character.getComponent(CharacterAnimation)?.strike(attack.name, attack.spec.castTime, target);
+	});
+	const pose = ctx.character.getComponent(CharacterPose);
+	if (!held.ok) {
+		pose?.resolve('cut');
+		return { ...held, verb: attack.name };
+	}
+	ctx.npc.attackReadyTimestamp = Time.time + attack.spec.cooldown;
+	pose?.resolve('hit');
+	// It catches once the fireball lands: as long as one takes to fly the spell's whole reach, so never before.
+	await new Promise<void>((landed) => ctx.world.after(attack.spec.range / FIREBALL_SPEED, landed));
+	fuel.burning = true;
+	return { ok: true, verb: attack.name, reason: 'ignited' };
 }
 
 /**
@@ -492,8 +554,9 @@ function rollBlow(
 	}
 	const dist = distXZ(ctx.character, target);
 	const covered = attack.spec.cover === 'soften' && !clear;
-	let chance = hitChance(attack.spec, dist, agilityOf(host, target));
-	if (covered) {
+	let chance = vitals.evasive ? hitChance(attack.spec, dist, agilityOf(host, target)) : 1;
+	// Cover makes a spell easier to dodge, so it only weakens one cast at whoever cannot dodge.
+	if (covered && vitals.evasive) {
 		chance = Math.min(0.97, Math.max(0.05, chance * COVER_SOFTEN));
 	}
 	npc.faceToward(idOf(target));
@@ -581,8 +644,16 @@ async function doBlock(host:GameHost, call:Call, name:string):Promise<ArcResult>
 }
 
 const PROTECT_COVER = 1.2;
+/** Meters off the line between ward and threat that still screens it. */
+const SCREEN_SLACK = 0.8;
+/** Meters from the ward within which another foe pulls a protector off the one it is fighting. */
+const WARD_DANGER = 3;
 
-function interceptPoint(ward:GameObject, threat:GameObject):{ x:number; z:number } {
+/**
+ * Where to stand to screen `ward` from `threat`: anywhere on the line between them will do, at least a step out
+ * from the ward. Standing on it already, where it stands; else the nearest point on it.
+ */
+function screenPoint(ward:GameObject, threat:GameObject, from:{ x:number; z:number }):{ x:number; z:number } {
 	const a = ward.transform.position;
 	const t = threat.transform.position;
 	const dx = t.x - a.x;
@@ -591,9 +662,13 @@ function interceptPoint(ward:GameObject, threat:GameObject):{ x:number; z:number
 	if (len < 0.15) {
 		return { x: a.x, z: a.z };
 	}
-	const cover = Math.min(PROTECT_COVER, len * 0.45);
-	return { x: a.x + (dx / len) * cover, z: a.z + (dz / len) * cover };
+	const along = Math.min(len, Math.max(Math.min(PROTECT_COVER, len * 0.45), ((from.x - a.x) * dx + (from.z - a.z) * dz) / len));
+	const on = { x: a.x + (dx / len) * along, z: a.z + (dz / len) * along };
+	return Math.hypot(from.x - on.x, from.z - on.z) <= SCREEN_SLACK ? { x: from.x, z: from.z } : on;
 }
+
+/** The foe each protector is fighting, so it keeps at it rather than walking back to screen between swings. */
+const engaged = new WeakMap<GameObject, GameObject>();
 
 function protectWard(host:GameHost, ctx:CharacterCtx, name:string):GameObject | undefined {
 	if (!name.trim()) {
@@ -613,7 +688,15 @@ async function doProtect(host:GameHost, call:Call, name:string):Promise<ArcResul
 			reason: name.trim() ? `no such person ${name}` : 'no one to protect',
 		};
 	}
-	const threat = nearestRival(host, ward);
+	const nearest = nearestRival(host, ward);
+	const swing = fightRole(host, ctx.character);
+	const verb = swing ? attackVerbFor(swing) : undefined;
+	// Still on the foe it engaged, in reach, and no other foe at the ward: keep swinging there.
+	const fighting = engaged.get(ctx.character);
+	const reach = verb ? Math.max(ATTACKS[verb].range, heldWeapon(ctx.character)?.range ?? 0) + 0.5 : 0;
+	const stay = verb && fighting && isLiving(fighting) && distXZ(ctx.character, fighting) <= reach
+		&& !(nearest && nearest !== fighting && distXZ(ward, nearest) <= WARD_DANGER);
+	const threat = stay ? fighting : nearest;
 	if (!threat) {
 		const walk = await call.goTo(idOf(ward), { within: 1.4 });
 		if (!walk.ok) {
@@ -625,8 +708,8 @@ async function doProtect(host:GameHost, call:Call, name:string):Promise<ArcResul
 		}
 		return { ok: true, verb: 'protect', reason: `guard ${idOf(ward)}` };
 	}
-	const screen = standableNear(host.world, ctx.character, interceptPoint(ward, threat));
 	const here = ctx.character.transform.position;
+	const screen = stay ? here : standableNear(host.world, ctx.character, screenPoint(ward, threat, here));
 	if (Math.hypot(screen.x - here.x, screen.z - here.z) > 0.55) {
 		const walk = await call.goToPoint([screen.x, screen.z]);
 		if (!walk.ok) {
@@ -634,10 +717,9 @@ async function doProtect(host:GameHost, call:Call, name:string):Promise<ArcResul
 		}
 	}
 	ctx.npc.faceToward(idOf(threat));
-	const swing = fightRole(host, ctx.character);
-	const verb = swing ? attackVerbFor(swing) : undefined;
 	if (verb) {
-		const hit = await doAttack(host, call, verb, '', threat);
+		engaged.set(ctx.character, threat);
+		const hit = await doAttack(host, call, verb, '', threat, true);
 		return { ...hit, verb: 'protect', reason: hit.reason ?? `peel ${idOf(threat)}` };
 	}
 	const hold = await call.wait(0.35);
@@ -727,9 +809,11 @@ async function doHeal(host:GameHost, call:Call, name:string):Promise<ArcResult> 
 		npc.faceToward(id);
 	}
 	const healed = target;
+	// Walked out of reach while it is cast, the heal is broken off then, not wasted at the end.
+	const outOfRange = ():string | undefined => (healed !== ctx.character && distXZ(ctx.character, healed) > HEAL.range + 0.5 ? 'out of range' : undefined);
 	const held = await holdReady(call, Time.time, npc.healReadyTimestamp, HEAL.castTime, () => {
 		ctx.character.getComponent(CharacterAnimation)?.strike('heal', HEAL.castTime, healed);
-	});
+	}, outOfRange);
 	const result = held.ok ? landHeal(host, ctx, id, healed) : { ...held, verb: 'heal' };
 	// Its light blooms on the healed, or goes out.
 	ctx.character.getComponent(CharacterPose)?.resolve(result.ok ? 'hit' : held.ok ? 'miss' : 'cut');
@@ -813,7 +897,7 @@ async function doSteal(host:GameHost, call:Call, itemName:string, fromName:strin
 	}
 	const victim = findObject(ctx.world, fromName);
 	if (!victim) {
-		return { ok: false, verb: 'steal', reason: `no such person ${fromName}` };
+		return { ok: false, verb: 'steal', reason: `no such character ${fromName}` };
 	}
 	if (victim === ctx.character) {
 		return { ok: false, verb: 'steal', reason: 'cannot steal from yourself' };
@@ -823,7 +907,7 @@ async function doSteal(host:GameHost, call:Call, itemName:string, fromName:strin
 		return { ...walk, verb: 'steal' };
 	}
 	const move = { verb: 'steal', thing: itemName, from: victim, to: ctx.character };
-	const refused = transferRefusal(host, move);
+	const refused = transferRefusal(move);
 	if (refused) {
 		return { ok: false, verb: 'steal', reason: refused };
 	}

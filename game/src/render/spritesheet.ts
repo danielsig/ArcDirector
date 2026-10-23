@@ -17,8 +17,6 @@ import {
 	ITEM_SWORD,
 	ITEM_TORCH,
 	KEY_RGB,
-	SHEET_H,
-	SHEET_W,
 	TORCH_STICK,
 	type PxRect,
 } from './atlas';
@@ -107,13 +105,7 @@ function cropNormal(
 	rect:PxRect,
 	alpha:HTMLCanvasElement | null,
 	wrap:THREE.Wrapping = THREE.ClampToEdgeWrapping,
-	atlasW?:number,
-	atlasH?:number,
 ):THREE.CanvasTexture {
-	const aw = atlasW ?? img.naturalWidth;
-	const ah = atlasH ?? img.naturalHeight;
-	const sx = img.naturalWidth / aw;
-	const sy = img.naturalHeight / ah;
 	const canvas = document.createElement('canvas');
 	canvas.width = rect.w;
 	canvas.height = rect.h;
@@ -121,17 +113,7 @@ function cropNormal(
 	if (!ctx) {
 		throw new Error('2d context');
 	}
-	ctx.drawImage(
-		img,
-		rect.x * sx,
-		rect.y * sy,
-		rect.w * sx,
-		rect.h * sy,
-		0,
-		0,
-		rect.w,
-		rect.h,
-	);
+	ctx.drawImage(img, rect.x, rect.y, rect.w, rect.h, 0, 0, rect.w, rect.h);
 	if (alpha) {
 		copyAlpha(alpha, canvas);
 	}
@@ -367,7 +349,7 @@ function chestNormal(
 	const alpha = keyed
 		? crop(albedo, rect, 'sprite', CHEST_KEY_RGB, false)
 		: crop(albedo, rect, 'opaque');
-	return cropNormal(nrm, rect, alpha, THREE.ClampToEdgeWrapping, SHEET_W, SHEET_H);
+	return cropNormal(nrm, rect, alpha, THREE.ClampToEdgeWrapping);
 }
 
 function build(
@@ -380,7 +362,7 @@ function build(
 ):SheetTextures {
 	const torchStickA = crop(main, TORCH_STICK, 'sprite');
 	const mainAtlas = (img:HTMLImageElement, r:PxRect, a:HTMLCanvasElement | null, w:THREE.Wrapping = THREE.ClampToEdgeWrapping) =>
-		cropNormal(img, r, a, w, SHEET_W, SHEET_H);
+		cropNormal(img, r, a, w);
 	const itemMaps = (r:PxRect):SpriteMaps => {
 		const a = crop(main, r, 'sprite');
 		return {
@@ -467,12 +449,12 @@ export function loadSpritesheet():Promise<SheetTextures> {
 	}
 	const base = import.meta.env.BASE_URL;
 	pending = Promise.all([
-		loadImage(`${base}spritesheet.jpg`),
-		loadImage(`${base}chests.jpg`),
-		loadImage(`${base}spritesheet_normal.png`),
-		loadImage(`${base}chests_normal.png`),
-		loadImage(`${base}spritesheet_metallic.jpg`),
-		loadImage(`${base}chests_metallic.jpg`),
+		loadImage(`${base}sprites.jpg`),
+		loadImage(`${base}chest.jpg`),
+		loadImage(`${base}sprites_normal.png`),
+		loadImage(`${base}chest_normal.png`),
+		loadImage(`${base}sprites_metallic.jpg`),
+		loadImage(`${base}chest_metallic.jpg`),
 	]).then(([main, chests, mainN, chestsN, mainM, chestsM]) => {
 		textures = build(main, chests, mainN, chestsN, mainM, chestsM);
 		return textures;

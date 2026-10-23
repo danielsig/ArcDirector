@@ -1,16 +1,22 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue';
-import { fetchModelCatalog, modelIDsMatch } from 'arc-director';
+import { computed, onMounted, onUnmounted, ref } from 'vue';
+import { fetchModelCatalog, modelIDsMatch, trainedOnArcDirector } from 'arc-director';
 import {
 	BROWSER_MODELS,
 	LM_STUDIO_MODEL,
+	SKALDIC_LAYA,
 	browserModelBusy,
+	cancelDownload,
+	decisionModelOf,
+	deleteBrowserLaya,
 	deleteBrowserModel,
 	inferenceSetup,
+	useBrowserLaya,
 	useBrowserModel,
 	type BrowserModel,
 } from '../director/inference';
-import { setPrefs } from '../prefs';
+import { prefs, setPrefs, watchPrefs } from '../prefs';
+import HudSwitch from './HudSwitch.vue';
 
 const emit = defineEmits<{
 	/** NPCs think with what was picked from now on. */
@@ -73,11 +79,70 @@ async function remove(model:string):Promise<void> {
 		return;
 	}
 	armed.value = null;
-	await deleteBrowserModel(model);
+	await (model === SKALDIC_LAYA.model ? deleteBrowserLaya() : deleteBrowserModel(model));
 }
 
 function inUse(id:string):boolean {
 	return inferenceSetup.inference === 'browser' && inferenceSetup.browserModel === id;
+}
+
+/** The System One the menu picked, kept in step with the menu. */
+const systemOne = ref(prefs().systemOne);
+const decisionModel = ref(prefs().decisionModel);
+onUnmounted(watchPrefs((next) => {
+	systemOne.value = next.systemOne;
+	decisionModel.value = next.decisionModel;
+}));
+
+/** LM Studio's Skaldic Laya, when it serves one. */
+const laya = ref<string | null>(null);
+onMounted(async () => {
+	const ids = await fetchModelCatalog('/inference').then((models) => models.map((m) => m.id), () => []);
+	laya.value = ids.find((id) => SKALDIC_LAYA.match.test(id)) ?? null;
+});
+
+const inBrowser = computed(() => inferenceSetup.inference === 'browser');
+/** Skaldic Laya makes the quick decisions now, where NPCs think. */
+const layaOn = computed(() => SKALDIC_LAYA.match.test(decisionModelOf({ inference: inferenceSetup.inference, systemOne: systemOne.value, decisionModel: decisionModel.value })));
+const layaDownloading = computed(() => inferenceSetup.laya.progress !== null);
+/** It can be added: in the browser, which downloads it; with LM Studio, once it serves one. */
+const layaReady = computed(() => (inBrowser.value ? !inferenceSetup.unsupported && !layaDownloading.value : !!laya.value));
+
+const layaNote = computed(() => {
+	const state = inferenceSetup.laya;
+	if (layaOn.value && state.progress === null) {
+		// In the browser it is on the GPU only once loaded; LM Studio loads it on the first pick.
+		return inBrowser.value && !state.loaded ? 'On: ready for every quick decision.' : 'On: it makes every quick decision.';
+	}
+	if (inBrowser.value) {
+		if (state.progress !== null) {
+			return `Downloading ${Math.round(state.progress * 100)}%`;
+		}
+		if (state.error) {
+			return state.error.split(/(?<=.)s/)[0];
+		}
+		if (inferenceSetup.unsupported) {
+			return 'Needs a browser that can use the graphics card.';
+		}
+		return state.cached ? 'Downloaded. Runs beside the main model.' : `Download ${SKALDIC_LAYA.sizeGB} GB. Runs beside the main model.`;
+	}
+	if (layaOn.value) {
+		return 'On: it makes every quick decision.';
+	}
+	return laya.value ? 'Ready in LM Studio.' : 'Load it in LM Studio to add it.';
+});
+
+/** Skaldic Laya on as the System One (downloaded first in the browser), or off back to the main model scoring its own choices. */
+async function toggleLaya():Promise<void> {
+	if (layaOn.value) {
+		setPrefs({ decisionModel: '' });
+	}
+	else if (inBrowser.value) {
+		await useBrowserLaya();
+	}
+	else {
+		setPrefs({ systemOne: 'local', decisionModel: laya.value! });
+	}
 }
 
 function status(m:BrowserModel):string {
@@ -93,7 +158,7 @@ function status(m:BrowserModel):string {
 		return inferenceSetup.unsupported;
 	}
 	if (inUse(m.model)) {
-		return 'In use';
+		return state.loaded ? 'In use' : 'Ready';
 	}
 	return state.cached ? 'Downloaded' : `Download ${m.downloadGB} GB`;
 }
@@ -124,7 +189,7 @@ function status(m:BrowserModel):string {
 					<button
 						type="button"
 						class="model"
-						:class="{ on: inUse(m.model), downloaded: inferenceSetup.models[m.model].cached, failed: inferenceSetup.models[m.model].error }"
+						:class="{ on: inUse(m.model), downloaded: inferenceSetup.models[m.model].cached, failed: inferenceSetup.models[m.model].error, skaldic: trainedOnArcDirector(m.model) }"
 						:disabled="!!inferenceSetup.unsupported || (browserModelBusy() && inferenceSetup.models[m.model].progress === null)"
 						:aria-busy="inferenceSetup.models[m.model].progress !== null"
 						:title="inferenceSetup.models[m.model].error || undefined"
@@ -142,6 +207,7 @@ function status(m:BrowserModel):string {
 								<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2.5l2.9 6 6.6.8-4.9 4.6 1.3 6.6L12 17.3l-5.9 3.2 1.3-6.6L2.5 9.3l6.6-.8z" /></svg>
 								Recommended for this device
 							</span>
+							<span v-if="trainedOnArcDirector(m.model)" class="eyebrow">Trained for ArcDirector</span>
 							<b>{{ m.label }}</b>
 							<span class="status">{{ status(m) }}</span>
 						</span>
@@ -154,6 +220,15 @@ function status(m:BrowserModel):string {
 							aria-valuemax="100"
 							:style="{ width: `${inferenceSetup.models[m.model].progress! * 100}%` }"
 						/>
+					</button>
+					<button
+						v-if="inferenceSetup.models[m.model].progress !== null"
+						type="button"
+						class="cancel"
+						:title="`Stop downloading ${m.label}`"
+						@click="cancelDownload(m.model)"
+					>
+						Cancel
 					</button>
 					<button
 						v-if="inferenceSetup.models[m.model].progress === null && (inferenceSetup.models[m.model].cached || inferenceSetup.models[m.model].error)"
@@ -223,6 +298,36 @@ function status(m:BrowserModel):string {
 				<button type="button" class="primary" @click="useLMStudio">Use LM Studio</button>
 			</div>
 		</div>
+		<aside v-if="!steps" class="addon skaldic" :class="{ on: layaOn }">
+			<span class="pitch">
+				<span class="eyebrow"><span class="badge">Add-on</span> Trained for ArcDirector</span>
+				<span class="title">
+					<b>{{ SKALDIC_LAYA.label }}</b>
+					<span class="size">{{ SKALDIC_LAYA.sizeGB }} GB</span>
+					<span class="note">{{ layaNote }}</span>
+				</span>
+				<span class="line">Sharper reflexes: fight or flee, heal or strike, decided in under a tenth of a second.</span>
+			</span>
+			<HudSwitch :on="layaOn" :disabled="!layaOn && !layaReady" @toggle="toggleLaya" />
+			<button v-if="layaDownloading" type="button" class="cancel" :title="`Stop downloading ${SKALDIC_LAYA.label}`" @click="cancelDownload(SKALDIC_LAYA.model)">
+				Cancel
+			</button>
+			<button
+				v-if="inBrowser && inferenceSetup.laya.cached && !layaDownloading && !layaOn"
+				type="button"
+				class="delete"
+				:class="{ armed: armed === SKALDIC_LAYA.model }"
+				:aria-label="armed === SKALDIC_LAYA.model ? `Confirm deleting ${SKALDIC_LAYA.label}` : `Delete ${SKALDIC_LAYA.label}`"
+				:title="`Delete ${SKALDIC_LAYA.label} (${SKALDIC_LAYA.sizeGB} GB) from this browser`"
+				@click="remove(SKALDIC_LAYA.model)"
+				@blur="armed = null"
+			>
+				<template v-if="armed === SKALDIC_LAYA.model">Delete?</template>
+				<svg v-else viewBox="0 0 24 24" aria-hidden="true">
+					<path fill="currentColor" d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z" />
+				</svg>
+			</button>
+		</aside>
 	</div>
 </template>
 
@@ -232,6 +337,9 @@ function status(m:BrowserModel):string {
  * pause menu, they wrap into one column. A download fills a gold bar along its button's foot.
  */
 .inference-picker {
+	/* Skaldic models' cards under their gold: midnight blue for the main model, crimson for Laya. */
+	--skaldic-bg: linear-gradient(135deg, #24345a, #0f1626);
+	--laya-bg: linear-gradient(135deg, #5c1d26, #24090e);
 	container-type: inline-size;
 	font-family: var(--font);
 	color: var(--ink);
@@ -254,14 +362,11 @@ a:focus-visible {
 	outline-offset: 2px;
 }
 
+/* LM Studio and the browser models side by side, the same width; wide enough that every model name stays on one line. */
 .choices {
-	display: flex;
+	display: grid;
+	grid-template-columns: 1fr auto 1fr;
 	gap: 12px;
-}
-
-.lmstudio,
-.browser {
-	flex: 1 1 0;
 }
 
 /* Between LM Studio and the browser models: a rule with "or" in the middle, upright beside them, flat between rows. */
@@ -432,6 +537,7 @@ a:focus-visible {
 
 .model b {
 	font-size: 18px;
+	white-space: nowrap;
 }
 
 /* Keeps a message's line breaks, and still wraps a line too long for the button. */
@@ -497,6 +603,34 @@ a:focus-visible {
 	transform: translateY(-50%);
 }
 
+/* Stops a download under way: where the bin sits once it is done, with room kept for it. */
+.cancel {
+	position: absolute;
+	top: 50%;
+	right: 14px;
+	padding: 6px 12px;
+	font-size: 14px;
+	font-weight: 700;
+	color: var(--ink);
+	background: var(--parchment);
+	border: var(--line-thin) solid var(--ink);
+	border-radius: var(--radius-small);
+	transform: translateY(-50%);
+}
+
+.cancel:hover {
+	background: var(--parchment-deep);
+}
+
+.model-row:has(> .cancel) .model {
+	padding-right: 100px;
+}
+
+.addon .cancel {
+	position: static;
+	transform: none;
+}
+
 .delete svg {
 	width: 28px;
 	height: 28px;
@@ -522,10 +656,193 @@ a:focus-visible {
 	transition: width var(--slow) linear;
 }
 
+/* Skaldic Laya, under the choices: an add-on to the main model, not one of them, kept to three short lines. */
+.addon {
+	position: relative;
+	display: flex;
+	align-items: center;
+	gap: 16px;
+	margin-top: 12px;
+	padding: 12px 18px;
+	border: var(--line-thin) dashed var(--ink);
+	border-radius: var(--radius);
+}
+
+.addon.on {
+	border-style: solid;
+	background: color-mix(in srgb, var(--gold) 22%, var(--parchment));
+	box-shadow: 0 0 0 var(--line) var(--gold), var(--shadow);
+}
+
+.addon .eyebrow {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+}
+
+.addon .badge {
+	padding: 1px 7px;
+	font-size: 10px;
+	font-weight: 700;
+	letter-spacing: 0.08em;
+	text-transform: uppercase;
+	color: var(--parchment);
+	background: var(--ink);
+	border-radius: 999px;
+}
+
+.addon .pitch {
+	flex: 1 1 auto;
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
+	min-width: 0;
+	font-size: 14px;
+}
+
+.addon .title {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: baseline;
+	column-gap: 10px;
+}
+
+.addon .title b {
+	font-size: 17px;
+	white-space: nowrap;
+}
+
+.addon .size {
+	font-size: 13px;
+	opacity: 0.7;
+}
+
+/* The status after the size, set apart by a dot. */
+.addon .note {
+	font-size: 13px;
+	font-weight: 700;
+	opacity: 0.85;
+}
+
+.addon .note::before {
+	content: "·";
+	margin-right: 10px;
+	font-weight: 400;
+}
+
+.addon .line {
+	font-size: 13px;
+	line-height: 1.35;
+	opacity: 0.9;
+}
+
+/*
+ * Skaldic models, trained for ArcDirector: dark and gilded, with a sheen crossing them when hovered, so they stand
+ * out from the general models as what this game is made for.
+ */
+.skaldic {
+	position: relative;
+	overflow: hidden;
+	color: var(--parchment);
+	background: var(--skaldic-bg);
+	border-color: var(--gold);
+	box-shadow: var(--shadow), inset 0 0 18px rgba(255, 200, 90, 0.12);
+}
+
+.skaldic::after {
+	content: "";
+	position: absolute;
+	inset: 0;
+	background: linear-gradient(100deg, transparent 30%, rgba(255, 225, 150, 0.25) 50%, transparent 70%);
+	transform: translateX(-120%);
+	pointer-events: none;
+}
+
+.skaldic:hover::after,
+.skaldic:focus-within::after {
+	transform: translateX(120%);
+	transition: transform 0.9s var(--ease-out);
+}
+
+.model.skaldic:not(.downloaded),
+.model.skaldic:hover:not(:disabled),
+.model-row.recommended .model.skaldic {
+	background: var(--skaldic-bg);
+}
+
+.model.skaldic:hover:not(:disabled),
+.addon.skaldic:hover {
+	box-shadow: var(--shadow), 0 0 20px rgba(255, 196, 80, 0.45), inset 0 0 18px rgba(255, 200, 90, 0.2);
+}
+
+.model.skaldic .mark {
+	stroke: var(--gold);
+	opacity: 1;
+	filter: drop-shadow(0 0 5px rgba(255, 200, 90, 0.6));
+}
+
+.skaldic .eyebrow {
+	font-size: 11px;
+	font-weight: 700;
+	letter-spacing: 0.12em;
+	text-transform: uppercase;
+	color: var(--gold);
+}
+
+.skaldic .status,
+.skaldic .note,
+.skaldic .size {
+	color: var(--gold);
+	opacity: 0.85;
+}
+
+.addon.skaldic,
+.addon.skaldic.on {
+	border-color: var(--gold);
+	background: var(--laya-bg);
+}
+
+.addon.skaldic .badge {
+	color: var(--ink);
+	background: var(--gold);
+}
+
+/* On the dark card, the switch's track is gold when on: the menu's ink would vanish into it. */
+.addon.skaldic .switch {
+	border-color: var(--gold);
+}
+
+.addon.skaldic .switch.on {
+	background: var(--gold);
+}
+
+.addon.skaldic .switch.on::after {
+	background: var(--parchment);
+	border-color: var(--ink);
+}
+
+/* Its bin sits beside its switch, not over the card's corner as a model's does. */
+.addon .delete {
+	position: static;
+	transform: none;
+}
+
+.addon.skaldic.on {
+	border-style: solid;
+	box-shadow: 0 0 0 var(--line) var(--gold), 0 0 22px rgba(255, 196, 80, 0.5), inset 0 0 18px rgba(255, 200, 90, 0.2);
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.skaldic:hover::after,
+	.skaldic:focus-within::after {
+		transition: none;
+	}
+}
+
 /* One column: LM Studio becomes a row like the others. */
 @container (max-width: 500px) {
 	.choices {
-		flex-direction: column;
+		grid-template-columns: 1fr;
 	}
 
 	.lmstudio,
@@ -710,5 +1027,4 @@ code {
 
 .actions .primary:hover {
 	background: linear-gradient(135deg, #5d66e0, #4413a8);
-}
-</style>
+}</style>

@@ -1,8 +1,9 @@
 import { HttpProvider, type ReasoningEffort } from '../inference/http.js';
 import { fakeInference, type HttpInferenceOpts } from '../inference/presets.js';
-import { fetchModelCatalog, findModel, isDecisionModel, isVisionModel, pickSingleChatModel, PREFERRED_MODELS, type ModelInfo } from '../inference/models.js';
+import { fetchModelCatalog, findModel, isDecisionModel, isVisionModel, pickSingleChatModel, PREFERRED_MODELS, recommendedSampling, trainedOnArcDirector, type ModelInfo } from '../inference/models.js';
 import type { FakeChatFn } from '../inference/fake.js';
-import type { InferenceProvider, Sampling } from '../inference/provider.js';
+import { samplingOf, type InferenceProvider, type Sampling } from '../inference/provider.js';
+import type { PromptStyle } from '../mind/prompt.js';
 import type { BrowserProvider, DEFAULT_BROWSER_MODEL } from '../inference/browser.js';
 
 /** How to reach a chat server: `add*Inference`. */
@@ -28,16 +29,28 @@ export type ModelSpec = {
 	 * without thinking again. Default: no limit.
 	 */
 	thinkingBudget?:number;
-	/** How it picks each token, such as the model maker's recommended settings. Default {@link DEFAULT_SAMPLING}. */
+	/**
+	 * How it picks each token, over what its makers recommend ({@link recommendedSampling}) setting by setting, as a
+	 * menu sets only the temperature. What neither sets is {@link DEFAULT_SAMPLING}'s.
+	 */
 	sampling?:Sampling;
 	reasoningEffort?:ReasoningEffort;
 	/** Thinks on this model at once. Default {@link DEFAULT_MAX_PARALLEL}. */
 	maxParallel?:number;
+	/**
+	 * How much of the standing rules its minds are told. `compact` only for a model trained on ArcDirector's prompts,
+	 * which knows the rest: its prompts run far shorter, so each think reads faster. Default `full`; always `compact`
+	 * for a model trained on them ({@link trainedOnArcDirector}).
+	 */
+	prompt?:PromptStyle;
 };
 
 /** Argument to `ArcDirector.addBrowserModel`: a model that runs in the page, and what it runs with. */
 export type BrowserModelSpec = Omit<ModelSpec, 'id' | 'inference'> & {
-	/** A GGUF's URL, or its first part's when split (`…-00001-of-00004.gguf`). Default {@link DEFAULT_BROWSER_MODEL}. */
+	/**
+	 * One of ArcDirector's own models (`Skaldic.Gemma4E4B`, `Skaldic.Laya`), or a GGUF's URL, its first part's when
+	 * split (`…-00001-of-00004.gguf`). Default {@link DEFAULT_BROWSER_MODEL}.
+	 */
 	model?:string;
 	/** Default {@link BrowserProvider.shared}. */
 	provider?:BrowserProvider;
@@ -62,6 +75,9 @@ export type LiveModel = {
 	vision:boolean;
 	thinking:boolean;
 	maxParallel:number;
+	prompt:PromptStyle;
+	/** How it picks each token, every setting filled in: its spec's, else its makers', else the default. */
+	sampling:Sampling;
 	/** Context window it loads with, when the host or the server set one. */
 	contextLength?:number;
 	/** A decision model's System One endpoint on its server; absent for a chat model. */
@@ -202,7 +218,31 @@ export class ModelRegistry {
 		};
 	}
 
-	/** Resolve every model; with none added, add the first server's own pick. Rejects when one cannot resolve. */
+	/**
+	 * `other`'s servers and models in place of this registry's own: the same connections, and its models as they
+	 * resolved, so `start` looks none of them up again. Requests sent through them are logged by `other`'s director.
+	 */
+	public adopt(other:ModelRegistry):void {
+		this._servers.clear();
+		this._specs.clear();
+		this._live.clear();
+		for (const [name, server] of other._servers) {
+			this._servers.set(name, { ...server, provider: this._hooks.wrap(server.inner, !!server.http) });
+		}
+		for (const [name, spec] of other._specs) {
+			this._specs.set(name, { ...spec });
+			const live = other._live.get(name);
+			const server = this.serverOf(name);
+			if (live && server) {
+				this._live.set(name, { ...live, provider: server.provider });
+			}
+		}
+		this._default = other._default;
+		this._embeddings = other._embeddings;
+		this._hooks.changed();
+	}
+
+	/** Resolve every model not resolved yet; with none added, add the first server's own pick. Rejects when one cannot resolve. */
 	public async start():Promise<void> {
 		this._started = true;
 		const first = this._servers.keys().next().value;
@@ -210,7 +250,7 @@ export class ModelRegistry {
 			this._specs.set(first, {});
 			this._default = first;
 		}
-		await Promise.all([...this._specs.keys()].map((name) => this.resolve(name)));
+		await Promise.all([...this._specs.keys()].filter((name) => !this._live.has(name)).map((name) => this.resolve(name)));
 	}
 
 	private serverName(spec:ModelSpec):string | undefined {
@@ -271,8 +311,9 @@ export class ModelRegistry {
 		const thinking = spec.thinking ?? (source.kind === 'http' && source.opts.enableThinking === true);
 		// A decision model answers through the System One endpoint, which loads it itself.
 		const systemOneURL = info && isDecisionModel(info) && server.http ? `${server.http.baseURL.replace(/\/+$/, '')}/systemone` : undefined;
+		const sampling = { ...recommendedSampling(id, thinking), ...spec.sampling };
 		if (!systemOneURL) {
-			server.inner.configureModel?.(id, { contextLength: spec.contextLength, enableThinking: spec.thinking, reasoningEffort: spec.reasoningEffort, thinkingBudget: spec.thinkingBudget, sampling: spec.sampling, maxParallel: spec.maxParallel });
+			server.inner.configureModel?.(id, { contextLength: spec.contextLength, enableThinking: spec.thinking, reasoningEffort: spec.reasoningEffort, thinkingBudget: spec.thinkingBudget, sampling, maxParallel: spec.maxParallel });
 		}
 		const contextLength = spec.contextLength
 			?? (source.kind === 'http' ? source.opts.load?.contextLength : undefined);
@@ -283,6 +324,8 @@ export class ModelRegistry {
 			vision,
 			thinking,
 			maxParallel: spec.maxParallel ?? DEFAULT_MAX_PARALLEL,
+			prompt: trainedOnArcDirector(id) ? 'compact' : spec.prompt ?? 'full',
+			sampling: samplingOf(sampling, undefined),
 			contextLength,
 			systemOneURL,
 		});

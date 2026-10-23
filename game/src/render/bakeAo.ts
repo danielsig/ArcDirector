@@ -3,6 +3,7 @@ import { patchShader } from '@arc-director/kindling';
 import { CELL_SIZE, CHUNK_SIZE } from '../world/constants';
 import type { Chunk } from '../world/Chunk';
 import { trackNature } from './nature';
+import { LANDFORMS } from '../world/land';
 import { showsWater } from '../world/water';
 
 const RES = CHUNK_SIZE * 4;
@@ -19,6 +20,10 @@ function sample(chunk:Chunk, wx:number, wz:number):number {
 	const lx = Math.floor((wx - ox) / CELL_SIZE);
 	const lz = Math.floor((wz - oz) / CELL_SIZE);
 	const self = chunk.tile(lx, lz);
+	// The top of a landform (forest floor, a trail, a clifftop) is open ground, as the outskirts past it are.
+	if (self && LANDFORMS.has(self.def)) {
+		return 1;
+	}
 	const h = self?.height ?? 0;
 	let ao = 1;
 	const n = wallAt(chunk, lx, lz - 1);

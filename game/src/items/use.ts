@@ -146,6 +146,10 @@ export function useItem(character:GameObject, item:ItemInstance, target:GameObje
 			flam.burning = true;
 			return ok('ignited');
 		}
+		// Anything else only tangles in it: a hint that it takes something else, never what.
+		if (flam && !flam.burning) {
+			return fail('nothing happens; it only tangles in the sticky strands');
+		}
 		if (target.getComponent(BrewHearth) && item.Ingredient) {
 			return brewAtHearth(character, item);
 		}
@@ -182,6 +186,9 @@ export function useItem(character:GameObject, item:ItemInstance, target:GameObje
 			const span = bridge.getComponent(Bridge);
 			if (span?.moving) {
 				return fail(`${idOf(bridge)} is still moving`);
+			}
+			if (span?.open && span.paidDown()) {
+				return fail(`${idOf(bridge)} is lowered and paid for, so it stays down: leave it`);
 			}
 			const on = span?.open ? span.occupants().map(idOf) : [];
 			if (on.length > 0) {
@@ -231,10 +238,6 @@ export function useItem(character:GameObject, item:ItemInstance, target:GameObje
 	if (target && item.Weapon && (target.getComponent(Vitals) || target.getComponent(HumanBody))) {
 		const result = strikeWith(character, item, target);
 		return result === 'too far' ? fail(result) : ok(result);
-	}
-
-	if (target && item.Blade) {
-		return ok('cut');
 	}
 
 	if (item.Key && !target) {

@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed } from 'vue';
+import { ITEM_DEFS } from '../items/defs';
 import type { HudModel, HudSpeech } from './hudModel';
 
 const props = defineProps<{
@@ -46,10 +47,27 @@ function belowBubble(s:HudSpeech):number {
 		const lines = Math.min(3, Math.max(1, Math.ceil(s.status.length / 28)));
 		h += 4 + lines * 12 * 1.3;
 	}
+	if (carries(s)) {
+		h += 4 + CARRY_H - (s.maxHP > 0 ? 0 : CARRY_TUCK);
+	}
 	if (s.maxHP > 0) {
 		h += 4 + 16 + 2 + 8;
 	}
 	return h;
+}
+
+/** Height of the carried-things row; matches `.carry`. */
+const CARRY_H = 12;
+/** How far the carried-things row drops toward the head when nothing is under it; matches `.carry:last-child`. */
+const CARRY_TUCK = 18;
+
+function carries(s:HudSpeech):boolean {
+	return s.gold > 0 || s.items.length > 0;
+}
+
+/** An item's own colour, as its mesh is tinted. */
+function tint(defID:string):string {
+	return `#${(ITEM_DEFS[defID]?.color ?? 0xffffff).toString(16).padStart(6, '0')}`;
 }
 
 type Laid = {
@@ -101,26 +119,79 @@ function fillPct(s:HudSpeech):number {
 
 <template>
 	<div class="speech-layer">
-		<div
-			v-for="s in hud.speech"
-			v-show="s.visible"
-			:key="s.id"
-			class="overhead"
-			:style="{ left: `${s.x}px`, top: `${s.y}px`, zIndex: s.text ? s.timestamp : 0 }"
-		>
+		<!-- Thought clouds and nameplates. A hidden bubble keeps their place under the spoken line. -->
+		<div class="plates">
 			<div
-				v-if="s.text"
-				class="bubble"
-				:style="{ translate: shiftOf(s) }"
-			>{{ s.text }}</div>
-			<div v-if="s.thinking" class="thinking" role="img" aria-label="Thinking">
-				<span class="dot" /><span class="dot" /><span class="dot" />
+				v-for="s in hud.speech"
+				v-show="s.visible"
+				:key="s.id"
+				class="overhead"
+				:style="{ left: `${s.x}px`, top: `${s.y}px`, zIndex: s.text ? s.timestamp : 0 }"
+			>
+				<div
+					v-if="s.text"
+					class="bubble spacer"
+					:style="{ translate: shiftOf(s) }"
+				>{{ s.text }}</div>
+				<div v-if="s.thinking" class="thinking" role="img" aria-label="Thinking">
+					<span class="dot" /><span class="dot" /><span class="dot" />
+				</div>
+				<div v-if="s.status" class="status">{{ s.status }}</div>
+				<div v-if="carries(s)" class="carry">
+					<span v-if="s.gold > 0" class="gold"><span class="coin" />{{ s.gold }}</span>
+					<svg
+						v-for="(defID, i) in s.items"
+						:key="i"
+						class="icon"
+						viewBox="0 0 12 12"
+						:style="{ color: tint(defID) }"
+						role="img"
+						:aria-label="ITEM_DEFS[defID]?.name ?? defID"
+					>
+						<template v-if="defID === 'silver_trout'">
+							<path d="M1 6c2-3 6-3 8 0-2 3-6 3-8 0z" fill="currentColor" />
+							<path d="M8.5 6 11.5 3.5v5z" fill="currentColor" />
+							<circle cx="3.2" cy="5.6" r="0.7" fill="#1a1208" />
+						</template>
+						<template v-else>
+							<path d="M4.6 6.5h2.8l.5 4.5H4.1z" fill="#efe2c4" />
+							<path d="M1 7c0-3 2.2-5 5-5s5 2 5 5z" fill="currentColor" />
+							<circle cx="4.2" cy="4.4" r="0.8" fill="#fff6d8" />
+							<circle cx="7.6" cy="5.2" r="0.6" fill="#fff6d8" />
+						</template>
+					</svg>
+				</div>
+				<div v-if="s.maxHP > 0" class="plate">
+					<div class="name">{{ s.name }}</div>
+					<div class="hp-track">
+						<div class="hp-fill" :style="{ width: `${fillPct(s)}%` }" />
+					</div>
+				</div>
 			</div>
-			<div v-if="s.status" class="status">{{ s.status }}</div>
-			<div v-if="s.maxHP > 0" class="plate">
-				<div class="name">{{ s.name }}</div>
-				<div class="hp-track">
-					<div class="hp-fill" :style="{ width: `${fillPct(s)}%` }" />
+		</div>
+		<!-- Spoken lines, always above every thought cloud and health bar. -->
+		<div class="bubbles">
+			<div
+				v-for="s in hud.speech"
+				v-show="s.visible && s.text"
+				:key="s.id"
+				class="overhead"
+				:style="{ left: `${s.x}px`, top: `${s.y}px`, zIndex: s.timestamp }"
+			>
+				<div
+					class="bubble"
+					:style="{ translate: shiftOf(s) }"
+				>{{ s.text }}</div>
+				<div v-if="s.thinking" class="thinking spacer" aria-hidden="true">
+					<span class="dot" /><span class="dot" /><span class="dot" />
+				</div>
+				<div v-if="s.status" class="status spacer">{{ s.status }}</div>
+				<div v-if="carries(s)" class="carry spacer" />
+				<div v-if="s.maxHP > 0" class="plate spacer">
+					<div class="name">{{ s.name }}</div>
+					<div class="hp-track">
+						<div class="hp-fill" :style="{ width: `${fillPct(s)}%` }" />
+					</div>
 				</div>
 			</div>
 		</div>
@@ -138,6 +209,26 @@ function fillPct(s:HudSpeech):number {
 	pointer-events: none;
 	overflow: hidden;
 	font-family: var(--font);
+}
+
+/* Plates stay under every speech bubble, even when a newer speaker's bar would otherwise cover it. */
+.plates,
+.bubbles {
+	position: absolute;
+	inset: 0;
+}
+
+.plates {
+	z-index: 0;
+}
+
+.bubbles {
+	z-index: 1;
+}
+
+.spacer {
+	visibility: hidden;
+	animation: none;
 }
 
 .overhead {
@@ -279,6 +370,48 @@ function fillPct(s:HudSpeech):number {
 	-webkit-box-orient: vertical;
 	-webkit-line-clamp: 3;
 	overflow: hidden;
+}
+
+/* What they carry: a gold dot and the coin count, then a tiny icon for each mushroom or trout. */
+.carry {
+	display: flex;
+	flex-wrap: nowrap;
+	align-items: center;
+	justify-content: center;
+	gap: 1px;
+	height: 12px;
+	max-width: 100%;
+	filter: drop-shadow(0 1px 0 var(--ink));
+}
+
+/* With no nameplate under it, down onto the head rather than at nameplate height. */
+.carry:last-child {
+	margin-bottom: -18px;
+}
+
+.gold {
+	display: inline-flex;
+	align-items: center;
+	gap: 2px;
+	margin-right: 3px;
+	color: var(--gold);
+	font-size: 11px;
+	font-weight: 700;
+	line-height: 12px;
+}
+
+.coin {
+	width: 7px;
+	height: 7px;
+	border-radius: 50%;
+	background: var(--gold);
+	box-shadow: inset 0 0 0 1px var(--gold-deep);
+}
+
+.icon {
+	width: 11px;
+	height: 11px;
+	flex: none;
 }
 
 .plate {

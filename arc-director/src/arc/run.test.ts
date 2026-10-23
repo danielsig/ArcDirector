@@ -269,6 +269,100 @@ describe('groups, fail, loop, when(watch)', () => {
 		assert.ok(verbs.includes('wander'));
 	});
 
+	it('keeps a handler with a hold running through its watch turning false, until the hold is up', async () => {
+		let heard = true;
+		let now = 0;
+		const catalog = ():ReturnType<typeof buildCatalog> => buildCatalog({
+			me: dummyEntity('Mira'),
+			others: [],
+			items: [],
+			cache: new SampleCache(),
+			hasHeard: heard,
+		});
+		const session = createArcSession({ catalog, now: () => now });
+		const law:ArcHandler = { source: { verb: 'law', args: {} }, watch: 'hasHeard', arc: [], rank: 0, hold: 2 };
+		const pending:(string | undefined)[] = [];
+		await runArc(parseArcText('wander()', registerStockVerbs(new VerbRegistry())), async (step) => {
+			heard = false;
+			now = 1;
+			pollArcSession(session);
+			pending.push(session.pending?.kind);
+			now = 3;
+			pollArcSession(session);
+			pending.push(session.pending?.kind);
+			return { ok: true, verb: step.verb };
+		}, { session, asHandler: law });
+		assert.deepEqual(pending, [undefined, 'abort']);
+	});
+
+	it('ends a hold early when its holdBreak watch holds', async () => {
+		let heard = true;
+		let struck = false;
+		const catalog = ():ReturnType<typeof buildCatalog> => buildCatalog({
+			me: dummyEntity('Mira'),
+			others: [],
+			items: [],
+			cache: new SampleCache(),
+			hasHeard: heard,
+			bindings: { struck: { kind: 'bool', value: struck } },
+		});
+		const session = createArcSession({ catalog, now: () => 1 });
+		const law:ArcHandler = { source: { verb: 'law', args: {} }, watch: 'hasHeard', arc: [], rank: 0, hold: 2, holdBreak: 'struck' };
+		const pending:(string | undefined)[] = [];
+		await runArc(parseArcText('wander()', registerStockVerbs(new VerbRegistry())), async (step) => {
+			heard = false;
+			pollArcSession(session);
+			pending.push(session.pending?.kind);
+			struck = true;
+			pollArcSession(session);
+			pending.push(session.pending?.kind);
+			return { ok: true, verb: step.verb };
+		}, { session, asHandler: law });
+		assert.deepEqual(pending, [undefined, 'abort']);
+	});
+
+	it('runs a step a reaction cut short again once the reaction is done, and only then the next', async () => {
+		let danger = false;
+		const catalog = ():ReturnType<typeof buildCatalog> => buildCatalog({
+			me: dummyEntity('Mira'),
+			others: [],
+			items: [],
+			cache: new SampleCache(),
+			bindings: { danger: { kind: 'bool', value: danger } },
+		});
+		const session = createArcSession({ catalog, now: () => 0 });
+		const seen:string[] = [];
+		const arc = parseArcText('when(watch=danger, arc=go_to(Hut)) ; pick_up(Morel1) && pick_up(Morel2)', registerStockVerbs(new VerbRegistry()));
+		const result = await runArc(arc, async (step) => {
+			seen.push(String(step.args.item ?? step.args.target));
+			if (seen.length === 1) {
+				// The Bear comes while the first Morel is being picked.
+				danger = true;
+				pollArcSession(session);
+				return { ok: false, interrupted: true, verb: step.verb };
+			}
+			if (step.verb === 'go_to') {
+				danger = false;
+			}
+			return { ok: true, verb: step.verb };
+		}, { session });
+		assert.equal(result.ok, true);
+		assert.deepEqual(seen, ['Morel1', 'Hut', 'Morel1', 'Morel2']);
+	});
+
+	it('does not run a step again when its program was replaced instead', async () => {
+		const session = createArcSession({ now: () => 0 });
+		const seen:string[] = [];
+		const result = await runArc(parseArcText('pick_up(Morel1) && pick_up(Morel2)', registerStockVerbs(new VerbRegistry())), async (step) => {
+			seen.push(String(step.args.item));
+			session.pending = { kind: 'abort' };
+			session.token += 1;
+			return { ok: false, interrupted: true, verb: step.verb };
+		}, { session });
+		assert.equal(result.ok, false);
+		assert.deepEqual(seen, ['Morel1']);
+	});
+
 	it('earlier when(watch) runs before later; later waits while earlier watch is true', async () => {
 		const seen:string[] = [];
 		let first = true;
@@ -463,6 +557,25 @@ describe('choose', () => {
 		}, { session });
 		assert.deepEqual(asked, [{ goal: 'hold', names: ['stand', 'chase'] }]);
 		assert.deepEqual(ran, ['follow']);
+		assert.equal(result.ok, true);
+	});
+
+	it('offers a half-second wait beside a lone choice', async () => {
+		const asked:string[][] = [];
+		const ran:Step[] = [];
+		const session = createArcSession({
+			now: ticking,
+			pick: async (_goal, choices) => {
+				asked.push(Object.keys(choices));
+				return 'wait';
+			},
+		});
+		const result = await runArc(parseArcText('choose("hold", stand=go_to(Keep))', verbs), async (step) => {
+			ran.push(step);
+			return { ok: true, verb: step.verb };
+		}, { session });
+		assert.deepEqual(asked, [['stand', 'wait']]);
+		assert.deepEqual(ran, [{ verb: 'wait', args: { seconds: 0.5 }, granted: true }]);
 		assert.equal(result.ok, true);
 	});
 

@@ -1,4 +1,5 @@
 import { readID } from '../json.js';
+import { namesWord } from '../text.js';
 
 export type MemoryCategory = 'episodic' | 'semantic' | 'identity';
 
@@ -138,6 +139,21 @@ function recencyBonus(timestamp:number, now:number):number {
 	return 1 / (1 + age);
 }
 
+/** The most a name's salience adds to a memory about it: more than a tag hit, so what stands before you comes to mind. */
+export const SALIENCE_BOOST = 0.6;
+
+/** How strongly `salience`'s names bring `record` to mind: the most salient one it is tagged with or names. */
+function salienceOf(record:MemoryRecord, salience:ReadonlyMap<string, number> | undefined):number {
+	let best = 0;
+	for (const [name, weight] of salience ?? []) {
+		const lower = name.toLowerCase();
+		if (weight > best && (record.tags.some((t) => t.toLowerCase() === lower) || namesWord(record.text, name))) {
+			best = weight;
+		}
+	}
+	return best;
+}
+
 function tagHits(record:MemoryRecord, tags:string[], query:string):number {
 	const q = query.toLowerCase();
 	let hits = 0;
@@ -191,6 +207,11 @@ export class MemoryStore {
 		category?:MemoryCategory;
 		/** Records the caller already shows; skipped before the top `k`, so they do not take its places. */
 		skip?:(record:MemoryRecord)=>boolean;
+		/**
+		 * Names now before the mind, each with how much it should bring its memories to mind (0–1): what it sees close
+		 * in front, what it carries. A memory tagged with one, or naming it, scores up to {@link SALIENCE_BOOST} more.
+		 */
+		salience?:ReadonlyMap<string, number>;
 	}):MemoryRecord[] {
 		const now = opts.now ?? 0;
 		const k = opts.k ?? 5;
@@ -212,7 +233,7 @@ export class MemoryStore {
 						tagHits: hits,
 						record,
 						now,
-					}) + 0.7 * lex,
+					}) + 0.7 * lex + SALIENCE_BOOST * salienceOf(record, opts.salience),
 				};
 			})
 			.filter((s) => s.value > 0)
@@ -235,6 +256,10 @@ export class MemoryStore {
 		let best:MemoryRecord | null = null;
 		let bestScore = threshold;
 		for (const record of this._records) {
+			// A pinned memory is in every prompt already.
+			if (record.pinned) {
+				continue;
+			}
 			const lex = lexicalOverlap(opts.query, record.text);
 			const hits = tagHits(record, opts.tags ?? [], opts.query);
 			if (!record.emotional && record.tags.length === 0 && lex < 0.15) {

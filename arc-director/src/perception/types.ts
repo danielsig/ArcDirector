@@ -35,7 +35,14 @@ export type SeenObject = {
 	maxHP?:number;
 	/** Extra clause after the name, e.g. `Blade 3m away`. */
 	note?:string;
-	/** Stay in sight past the radius. A bridge everyone can see. */
+	/**
+	 * What it is doing now, in a few words: `firing`, `reviving Bo`. Left out, a character in the cast shows the verb it
+	 * runs, in that verb's own words (`going to Cottage`). So a sound it makes, being seen, is not told again.
+	 */
+	doing?:string;
+	/** Whether the one looking can strike it from where it stands, where the game says: its reach, its line of fire. */
+	inReach?:boolean;
+	/** Seen from anywhere: past the radius, and whatever stands between (`canPass`). A bridge everyone can see. */
 	always?:boolean;
 };
 
@@ -96,6 +103,8 @@ export type StringifyCtx = {
 		figure:SeenObject;
 	};
 	noun:(obj:SeenObject)=>string;
+	/** What follows a character's name wherever it is named: ` (4/12 hp, foe Blade)`, or nothing. */
+	details:(obj:SeenObject)=>string;
 	distance:(a:SeenObject, b:SeenObject)=>number;
 	pluralize:(word:string)=>string;
 };

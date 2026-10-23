@@ -2,14 +2,16 @@ import { yawToForward, type GameObject } from '@arc-director/kindling';
 import type { HostWorld, Pose } from 'arc-director';
 import { CharacterMotor } from '../characters/CharacterMotor';
 import { NPCInput } from '../characters/NPCInput';
-import { HumanBody, Interior, MarketGate, MarketNPC } from '../engine/components';
+import { Chest, HumanBody, Interior, Lock, MarketGate, MarketNPC } from '../engine/components';
 import { listCarried, itemMatchesName } from '../items/inventory';
-import { findChestHolding, USE_RANGE } from '../items/pickup';
-import { cellSteps } from '../world/path';
+import { chestHolding, findChestHolding, USE_RANGE } from '../items/pickup';
+import { cellWays } from '../world/path';
+import { STALL_COUNTER } from '../render/meshRegistry';
 import type { GameHost } from './adapter';
 import { thiefOf } from './kernels';
-import { findObject, idOf } from './names';
-import { doExamine, hostCanSee } from './perception';
+import { findObject, idOf, isLiving } from './names';
+import { canHearClearly } from './talkAttend';
+import { doExamine } from './perception';
 import { doTransfer, transferRefusal, useOn } from './items';
 
 /** How close a character comes to act on something, and to count as there. */
@@ -20,6 +22,17 @@ function poseOf(go:GameObject):Pose {
 	const p = go.transform.position;
 	const f = yawToForward(go.transform.yaw);
 	return { point: [p.x, p.z], facing: [f.x, f.z], right: [-f.z, f.x] };
+}
+
+/** A vendor at their stall serves across the counter: from their post to past its front, and a reach beyond. */
+function counterReach(host:GameHost, go:GameObject):number | undefined {
+	const npc = go.getComponent(MarketNPC);
+	const stall = npc?.kind === 'vendor' && npc.post ? findObject(host.world, npc.post) : undefined;
+	if (!npc || !stall) {
+		return undefined;
+	}
+	const s = stall.transform.position;
+	return Math.hypot(s.x - npc.postX, s.z - npc.postZ) + STALL_COUNTER.z + STALL_COUNTER.d / 2 + REACH;
 }
 
 /** Whoever carries an item named `name`. */
@@ -35,7 +48,11 @@ export function gameWorld(host:GameHost):HostWorld<GameObject> {
 			?? holderOf(host, id)
 			?? thiefOf(host.world, id),
 		getPose: poseOf,
-		getPathGraph: (character) => cellSteps(host.world, character),
+		isDown: (id) => {
+			const go = findObject(host.world, id);
+			return !!go && !isLiving(go);
+		},
+		...cellWays(host.world),
 		getReach: (character, target) => {
 			const room = target.getComponent(Interior);
 			if (room) {
@@ -45,13 +62,14 @@ export function gameWorld(host:GameHost):HostWorld<GameObject> {
 			if (target.getComponent(MarketGate) && character.getComponent(MarketNPC)?.kind === 'customer') {
 				return 0.45;
 			}
-			return REACH;
+			return counterReach(host, target) ?? counterReach(host, character) ?? REACH;
 		},
+		// A deal is spoken: struck in earshot, whoever stands between, not only with the other in the sight list.
+		canOffer: (from, to) => canHearClearly(host.world, idOf(from), idOf(to)),
 		getDescription: (character, target) => {
 			const seen = doExamine(host.world, character, target);
 			return seen.ok ? seen.reason : undefined;
 		},
-		hasLineOfSight: (from, to) => hostCanSee(host.world, idOf(from), idOf(to)),
 		steerToward: (character, point) => {
 			const npc = character.getComponent(NPCInput);
 			if (npc) {
@@ -61,8 +79,10 @@ export function gameWorld(host:GameHost):HostWorld<GameObject> {
 			const motor = character.getComponent(CharacterMotor);
 			return !!point && !!motor && Math.hypot(point[0] - p.x, point[1] - p.z) <= motor.arriveEpsilon;
 		},
+		// What is in a shut chest is out of sight, but whoever comes to an unlocked one lifts the lid and takes it.
+		canPickUp: (_, item, from) => (from.getComponent(Chest) ? !!chestHolding(from, item) && !from.getComponent(Lock)?.locked : undefined),
 		useItem: (character, item, target) => useOn(host, character, item, target),
-		validateTransfer: (move, deal) => transferRefusal(host, move, deal),
+		validateTransfer: (move, deal) => transferRefusal(move, deal),
 		transfer: (move) => doTransfer(host, move),
 	};
 }

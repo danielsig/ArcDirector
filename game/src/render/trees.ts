@@ -63,7 +63,7 @@ function bare(geo:THREE.BufferGeometry):THREE.BufferGeometry {
 type Clump = { x:number; y:number; z:number; r:number };
 
 /** Leaf clumps around `center`, lit as one crown, shaded from `dark` (under) to `light` (top). */
-function canopy(clumps:Clump[], center:THREE.Vector3, dark:THREE.Color, light:THREE.Color, seed:number):THREE.BufferGeometry {
+function canopy(clumps:Clump[], center:THREE.Vector3, dark:THREE.Color, light:THREE.Color, seed:number, detail = 2):THREE.BufferGeometry {
 	const rnd = rand(seed);
 	const parts:THREE.BufferGeometry[] = [];
 	let minY = Infinity;
@@ -77,7 +77,7 @@ function canopy(clumps:Clump[], center:THREE.Vector3, dark:THREE.Color, light:TH
 	const crown = new THREE.Vector3();
 	const color = new THREE.Color();
 	clumps.forEach((c, ci) => {
-		const geo = bare(new THREE.IcosahedronGeometry(c.r, 2));
+		const geo = bare(new THREE.IcosahedronGeometry(c.r, detail));
 		const pos = geo.getAttribute('position');
 		const nrm = geo.getAttribute('normal');
 		const col = new Float32Array(pos.count * 3);
@@ -115,7 +115,8 @@ function canopy(clumps:Clump[], center:THREE.Vector3, dark:THREE.Color, light:TH
 	return merged;
 }
 
-function oakCanopy(seed:number):THREE.BufferGeometry {
+/** An oak's crown; `detail` 1 is a quarter of the triangles, for crowns only ever seen far off. */
+function oakCanopy(seed:number, detail = 2):THREE.BufferGeometry {
 	const rnd = rand(seed + 7);
 	const clumps:Clump[] = [{ x: 0, y: 2.45, z: 0, r: 0.72 }];
 	const ring = 5 + (seed % 2);
@@ -126,7 +127,7 @@ function oakCanopy(seed:number):THREE.BufferGeometry {
 		clumps.push({ x: Math.cos(a) * d, y: 1.95 + rnd() * 0.3, z: Math.sin(a) * d, r: 0.48 + rnd() * 0.14 });
 	}
 	clumps.push({ x: (rnd() - 0.5) * 0.4, y: 1.6, z: (rnd() - 0.5) * 0.4, r: 0.42 });
-	return canopy(clumps, new THREE.Vector3(0, 2.05, 0), OAK_DARK, OAK_LIGHT, seed);
+	return canopy(clumps, new THREE.Vector3(0, 2.05, 0), OAK_DARK, OAK_LIGHT, seed, detail);
 }
 
 function oakTrunk(seed:number):THREE.BufferGeometry {
@@ -224,9 +225,9 @@ function pineTrunk():THREE.BufferGeometry {
 	], 6));
 }
 
-let built:{ oak:TreePart[][]; pine:TreePart[][] } | null = null;
+let built:{ oak:TreePart[][]; pine:TreePart[][]; farCrowns:TreePart[] } | null = null;
 
-function build():{ oak:TreePart[][]; pine:TreePart[][] } {
+function build():{ oak:TreePart[][]; pine:TreePart[][]; farCrowns:TreePart[] } {
 	const bark = new ToonMaterial({ color: BARK, rim: 0.1 });
 	windSway(bark, 0.01);
 	const leaves = new ToonMaterial({
@@ -242,12 +243,19 @@ function build():{ oak:TreePart[][]; pine:TreePart[][] } {
 		oak.push([{ geom: oakTrunk(v + 1), mat: bark }, { geom: oakCanopy(v + 1), mat: leaves }]);
 		pine.push([{ geom: v === 0 ? pineTrunk() : pine[0]![0]!.geom, mat: bark }, { geom: pineCanopy(v + 1), mat: leaves }]);
 	}
-	return { oak, pine };
+	return { oak, pine, farCrowns: oak.map((_, v) => ({ geom: oakCanopy(v + 1, 1), mat: leaves })) };
 }
 
 /** Parts of one tree. Shared geometry and materials: instance them, never tint or dispose. */
 export function treeParts(kind:TreeKind, variant:number):TreePart[] {
 	built ??= build();
 	const set = built[kind];
+	return set[((variant % set.length) + set.length) % set.length]!;
+}
+
+/** An oak crown at a quarter of the triangles, for packed woods seen only from afar. Shared, like `treeParts`. */
+export function farCrown(variant:number):TreePart {
+	built ??= build();
+	const set = built.farCrowns;
 	return set[((variant % set.length) + set.length) % set.length]!;
 }

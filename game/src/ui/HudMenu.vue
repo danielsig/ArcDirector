@@ -4,8 +4,10 @@ import { fmtMem, modelLabel, type HudModel, type MenuPage } from './hudModel';
 import { sessionKey } from './sessionKey';
 import HudBench from './HudBench.vue';
 import HudDialog from './HudDialog.vue';
+import HudSwitch from './HudSwitch.vue';
 import InferencePicker from './InferencePicker.vue';
-import { inferenceSetup, mainModelName, thinksWith } from '../director/inference';
+import { HOSTED } from '../director/hosted';
+import { SKALDIC_LAYA, decisionModelOf, inferenceSetup, mainModelName, thinksWith, useBrowserLaya } from '../director/inference';
 import {
 	MAX_CONTEXT_LENGTH,
 	MAX_PARALLEL_THINKERS,
@@ -146,22 +148,26 @@ function pickArcFormat():void {
 }
 
 /**
- * What scores `choose` picks, as one choice: `off`, `jev`, or `model:` and the id of an LM Studio model, empty for
- * the one NPCs think with. In the browser that one is the only model there is.
+ * What scores `choose` picks, as one choice: `off`, `jev`, or `model:` and a decision model (an LM Studio model's
+ * id, or Skaldic Laya's download in the browser), empty for the one NPCs think with.
  */
 const decision = computed(() => {
 	if (props.hud.systemOne !== 'local') {
 		return props.hud.systemOne;
 	}
-	const own = inferenceSetup.inference === 'lmstudio' && props.hud.decisionModel !== props.hud.activeModel ? props.hud.decisionModel : '';
-	return `model:${own}`;
+	const own = decisionModelOf({ inference: inferenceSetup.inference, systemOne: props.hud.systemOne, decisionModel: props.hud.decisionModel });
+	return `model:${own === props.hud.activeModel ? '' : own}`;
 });
 
 function pickDecision(ev:Event):void {
 	const choice = (ev.target as HTMLSelectElement).value;
-	setPrefs(choice.startsWith('model:')
-		? { systemOne: 'local', decisionModel: choice.slice('model:'.length) }
-		: { systemOne: choice as SystemOneKind });
+	const model = choice.startsWith('model:') ? choice.slice('model:'.length) : undefined;
+	if (model === SKALDIC_LAYA.model) {
+		// Downloaded first; the System One changes once it is there.
+		void useBrowserLaya();
+		return;
+	}
+	setPrefs(model !== undefined ? { systemOne: 'local', decisionModel: model } : { systemOne: choice as SystemOneKind });
 }
 
 function dumpNPCMaps():void {
@@ -311,15 +317,7 @@ function pct(n:number):string {
 						<template v-else-if="hud.menuPage === 'display'">
 							<div class="set">
 								<span class="name">Maps</span>
-								<button
-									type="button"
-									class="switch"
-									:class="{ on: hud.detailMaps }"
-									:aria-pressed="hud.detailMaps"
-									@click.stop="toggleDetailMaps"
-								>
-									{{ hud.detailMaps ? 'On' : 'Off' }}
-								</button>
+								<HudSwitch :on="hud.detailMaps" @toggle="toggleDetailMaps" />
 							</div>
 							<label class="set">
 								<span class="name">Shadows</span>
@@ -337,15 +335,7 @@ function pct(n:number):string {
 							</label>
 							<div class="set">
 								<span class="name">FPS counter</span>
-								<button
-									type="button"
-									class="switch"
-									:class="{ on: hud.fpsCounter }"
-									:aria-pressed="hud.fpsCounter"
-									@click.stop="toggleFPSCounter"
-								>
-									{{ hud.fpsCounter ? 'On' : 'Off' }}
-								</button>
+								<HudSwitch :on="hud.fpsCounter" @toggle="toggleFPSCounter" />
 							</div>
 							<div class="set">
 								<span class="name">Minimap</span>
@@ -372,27 +362,11 @@ function pct(n:number):string {
 						<template v-else-if="hud.menuPage === 'audio'">
 							<div class="set">
 								<span class="name">Mute</span>
-								<button
-									type="button"
-									class="switch"
-									:class="{ on: hud.audioMuted }"
-									:aria-pressed="hud.audioMuted"
-									@click.stop="setPrefs({ muted: !hud.audioMuted })"
-								>
-									{{ hud.audioMuted ? 'On' : 'Off' }}
-								</button>
+								<HudSwitch :on="hud.audioMuted" @toggle="setPrefs({ muted: !hud.audioMuted })" />
 							</div>
 							<div class="set" :class="{ dim: hud.audioMuted }">
 								<span class="name">Music</span>
-								<button
-									type="button"
-									class="switch"
-									:class="{ on: !hud.musicMuted }"
-									:aria-pressed="!hud.musicMuted"
-									@click.stop="setMusicMuted(!hud.musicMuted)"
-								>
-									{{ hud.musicMuted ? 'Off' : 'On' }}
-								</button>
+								<HudSwitch :on="!hud.musicMuted" @toggle="setMusicMuted(!hud.musicMuted)" />
 							</div>
 							<label class="set stack" :class="{ dim: hud.audioMuted || hud.musicMuted }">
 								<span class="name">
@@ -426,15 +400,7 @@ function pct(n:number):string {
 							</label>
 							<div class="set" :class="{ dim: hud.audioMuted }">
 								<span class="name">Voices</span>
-								<button
-									type="button"
-									class="switch"
-									:class="{ on: hud.voices }"
-									:aria-pressed="hud.voices"
-									@click.stop="setPrefs({ voices: !hud.voices })"
-								>
-									{{ hud.voices ? 'On' : 'Off' }}
-								</button>
+								<HudSwitch :on="hud.voices" @toggle="setPrefs({ voices: !hud.voices })" />
 							</div>
 						</template>
 						<template v-else>
@@ -442,15 +408,7 @@ function pct(n:number):string {
 							<h3>World</h3>
 							<div class="set">
 								<span class="name">Arc Director</span>
-								<button
-									type="button"
-									class="switch"
-									:class="{ on: hud.arcDirectorOn }"
-									:aria-pressed="hud.arcDirectorOn"
-									@click.stop="toggleArcDirector"
-								>
-									{{ hud.arcDirectorOn ? 'On' : 'Off' }}
-								</button>
+								<HudSwitch :on="hud.arcDirectorOn" @toggle="toggleArcDirector" />
 							</div>
 							<h3>Thinking</h3>
 							<div class="set">
@@ -464,7 +422,6 @@ function pct(n:number):string {
 								<span class="name">LM Studio model</span>
 								<select
 									v-model="hud.model"
-									:disabled="hud.models.length === 0 && !hud.model"
 									@mousedown="session?.refreshHudModels()"
 									@change.stop="pickModel"
 								>
@@ -577,7 +534,7 @@ function pct(n:number):string {
 									<span>{{ hud.maxParallel }}</span>
 									<button
 										type="button"
-										:disabled="hud.maxParallel >= MAX_PARALLEL_THINKERS"
+										:disabled="hud.maxParallel >= MAX_PARALLEL_THINKERS[inferenceSetup.inference]"
 										@click.stop="nudgeParallel(1)"
 									>
 										+
@@ -586,16 +543,7 @@ function pct(n:number):string {
 							</div>
 							<div class="set" :class="{ dim: hud.maxParallel <= 1 }">
 								<span class="name" :title="hud.maxParallel <= 1 ? 'Only matters with more than one parallel thinker' : 'Start NPCs’ thinks together once the model is free'">Wait for idle</span>
-								<button
-									type="button"
-									class="switch"
-									:class="{ on: hud.batchThinks }"
-									:aria-pressed="hud.batchThinks"
-									:disabled="hud.maxParallel <= 1"
-									@click.stop="toggleBatchThinks"
-								>
-									{{ hud.batchThinks ? 'On' : 'Off' }}
-								</button>
+								<HudSwitch :on="hud.batchThinks" :disabled="hud.maxParallel <= 1" @toggle="toggleBatchThinks" />
 							</div>
 							<p v-if="!hud.batchThinks && hud.maxParallel > 1" class="tip">
 								We recommend keeping this on. When it's off, NPCs pause their thinking every time a new NPC starts thinking.
@@ -609,8 +557,11 @@ function pct(n:number):string {
 									@change.stop="pickDecision"
 								>
 									<option value="off">Off</option>
-									<option value="jev">Jev (hosted)</option>
+									<option v-if="HOSTED.jev" value="jev">Jev (hosted)</option>
 									<option value="model:">{{ mainModelName(hud.activeModel) || 'Main model' }}</option>
+									<option v-if="inferenceSetup.inference === 'browser'" :value="`model:${SKALDIC_LAYA.model}`">
+										{{ SKALDIC_LAYA.label }}{{ inferenceSetup.laya.cached ? '' : ` (download ${SKALDIC_LAYA.sizeGB} GB)` }}
+									</option>
 									<template v-if="inferenceSetup.inference === 'lmstudio'">
 										<option
 											v-if="decision !== 'model:' && decision.startsWith('model:') && !hud.models.some((m) => `model:${m.id}` === decision)"
@@ -992,43 +943,6 @@ h3:first-child {
 }
 
 /* Switch: a knob that slides right over an ink track when on. Its On/Off text stays for screen readers. */
-.switch {
-	position: relative;
-	flex: 0 0 64px;
-	width: 64px;
-	height: 34px;
-	padding: 0;
-	font-size: 0;
-	background: var(--parchment-deep);
-	border: var(--line-thin) solid var(--ink);
-	border-radius: 17px;
-	transition: background var(--quick) var(--ease-out);
-}
-
-.switch::after {
-	content: "";
-	position: absolute;
-	top: 3px;
-	left: 3px;
-	width: 24px;
-	height: 24px;
-	box-sizing: border-box;
-	border-radius: 50%;
-	background: var(--parchment);
-	border: var(--line-thin) solid var(--ink);
-	transition: transform var(--slow) var(--ease-pop);
-}
-
-.switch.on {
-	background: var(--ink);
-}
-
-.switch.on::after {
-	transform: translateX(30px);
-	background: var(--parchment);
-	border-color: var(--parchment);
-}
-
 /* Segments and steppers: one outlined strip; the picked segment is gold. */
 .seg,
 .stepper {

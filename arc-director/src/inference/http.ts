@@ -1,6 +1,7 @@
 import { envGet } from '../env.js';
 import { extractJson, isRecord } from '../json.js';
 import {
+	alwaysThinks,
 	asModelList,
 	isThinkingModel,
 	modelIDsMatch,
@@ -21,6 +22,7 @@ import {
 	type ToolDef,
 } from './provider.js';
 import {
+	ALWAYS_THINKS_PREFILL,
 	EMPTY_THINK_PREFILL,
 	fallbackThoughtPrefill,
 	resolveAssistantPrefill,
@@ -1029,7 +1031,8 @@ async function readInferenceResponse(
 		}
 		if (mode === 'unknown') {
 			const start = buf.trimStart();
-			if (start.startsWith('data:') || start.startsWith('event:')) {
+			// A server that thinks long may open with comments (`: keepalive`) before its first event (xAI).
+			if (start.startsWith('data:') || start.startsWith('event:') || start.startsWith(':')) {
 				mode = 'sse';
 			}
 			else if (start.startsWith('{') || start.startsWith('[')) {
@@ -1200,6 +1203,8 @@ export class HttpProvider implements InferenceProvider {
 	private readonly _reasoningByModel = new Map<string, ReasoningOption[]>();
 	/** Each catalog model's most context. A load asking for more gets less, and must still count as fitting. */
 	private readonly _maxContextByModel = new Map<string, number>();
+	/** Slots a model got when it was loaded with fewer than asked: the most the server gives it, so it is not loaded again for more. */
+	private readonly _maxParallelByModel = new Map<string, number>();
 	/** Models the host configured on this server: each loads with its own settings, and none unloads another. */
 	private readonly _models = new Map<string, ModelSettings>();
 	private readonly _threads = new Map<string, ThreadSnapshot[]>();
@@ -1328,13 +1333,22 @@ export class HttpProvider implements InferenceProvider {
 	}
 
 	/**
-	 * The load config for `model`: the provider's, with that model's context length, capped at the most it takes.
-	 * Uncapped, a 4k model never fits a 16k ask, so every request would unload and reload it.
+	 * The load config for `model`: the provider's, with that model's context length, capped at the most it takes, and
+	 * as many slots as it thinks at once. Uncapped, a 4k model never fits a 16k ask, so every request would unload and
+	 * reload it. With fewer slots than its thinks, a copy loaded earlier (by hand, or by another setup) would queue
+	 * them, so it is loaded again.
 	 */
 	private loadOf(model:string):HttpLoadConfig {
-		const want = this.settingsOf(model).contextLength ?? this._loadOpts.contextLength;
+		const settings = this.settingsOf(model);
+		const want = settings.contextLength ?? this._loadOpts.contextLength;
 		const max = [...this._maxContextByModel].find(([id]) => modelIDsMatch(id, model))?.[1];
-		return { ...this._loadOpts, contextLength: want !== undefined && max !== undefined ? Math.min(want, max) : want };
+		const slots = settings.maxParallel ?? this._loadOpts.parallel;
+		const maxSlots = this._maxParallelByModel.get(model);
+		return {
+			...this._loadOpts,
+			parallel: slots !== undefined && maxSlots !== undefined ? Math.min(slots, maxSlots) : slots,
+			contextLength: want !== undefined && max !== undefined ? Math.min(want, max) : want,
+		};
 	}
 
 	private thinkingOn(req:ChatRequest):boolean {
@@ -1345,7 +1359,7 @@ export class HttpProvider implements InferenceProvider {
 		if (thinkingOn) {
 			return null;
 		}
-		if (!isThinkingModel(model) && !thinkOffMode(model)) {
+		if (!isThinkingModel(model) && !thinkOffMode(model) && !alwaysThinks(model)) {
 			return null;
 		}
 		if (this._applyPromptTemplateFn) {
@@ -1354,7 +1368,7 @@ export class HttpProvider implements InferenceProvider {
 				return derived;
 			}
 		}
-		return EMPTY_THINK_PREFILL;
+		return alwaysThinks(model) ? ALWAYS_THINKS_PREFILL : EMPTY_THINK_PREFILL;
 	}
 
 	private async thoughtDonePrefill(model:string):Promise<string> {
@@ -1716,7 +1730,7 @@ export class HttpProvider implements InferenceProvider {
 			catch (err) {
 				lastErr = err;
 				const msg = err instanceof Error ? err.message : String(err);
-				if (round === 0 && this._loadOpts.parallel !== undefined && / 400:/.test(msg)) {
+				if (round === 0 && body.parallel !== undefined && / 400:/.test(msg)) {
 					delete body.parallel;
 					continue;
 				}
@@ -1740,6 +1754,7 @@ export class HttpProvider implements InferenceProvider {
 	}
 
 	private loadBody(model:string):Record<string, unknown> {
+		const load = this.loadOf(model);
 		const body:Record<string, unknown> = {
 			model,
 			flash_attention: this._loadOpts.flashAttention !== false,
@@ -1747,12 +1762,11 @@ export class HttpProvider implements InferenceProvider {
 			eval_batch_size: this._loadOpts.evalBatchSize ?? 512,
 			echo_load_config: true,
 		};
-		if (this._loadOpts.parallel !== undefined) {
-			body.parallel = this._loadOpts.parallel;
+		if (load.parallel !== undefined) {
+			body.parallel = load.parallel;
 		}
-		const contextLength = this.loadOf(model).contextLength;
-		if (contextLength !== undefined) {
-			body.context_length = contextLength;
+		if (load.contextLength !== undefined) {
+			body.context_length = load.contextLength;
 		}
 		return body;
 	}
@@ -1761,6 +1775,9 @@ export class HttpProvider implements InferenceProvider {
 		const json = await this.post(joinURL(this.rootURL, 'api/v1/models/load'), body);
 		const id = typeof json['instance_id'] === 'string' ? json['instance_id'] : model;
 		const config = isRecord(json['load_config']) ? json['load_config'] : {};
+		if (typeof config['parallel'] === 'number' && typeof body.parallel === 'number' && config['parallel'] < body.parallel) {
+			this._maxParallelByModel.set(model, config['parallel']);
+		}
 		this.forgetInstance(id);
 		this._instances.push({
 			id,
@@ -1890,7 +1907,8 @@ export class HttpProvider implements InferenceProvider {
 				method: 'POST',
 				headers: this.headers(),
 				body: JSON.stringify(payload),
-				signal: req.signal ?? AbortSignal.timeout(this._timeoutMs),
+				// The caller's cancel and the timeout both end it: a think that never answers would hold its mind forever.
+				signal: req.signal ? AbortSignal.any([req.signal, AbortSignal.timeout(this._timeoutMs)]) : AbortSignal.timeout(this._timeoutMs),
 			});
 			if (!res.ok) {
 				const text = await res.text();

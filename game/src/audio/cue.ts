@@ -1,7 +1,7 @@
 import { AudioSource, Speaker, type SfxHandle, type SfxPatch, type GameObject } from '@arc-director/kindling';
 import type { World } from '../engine/World';
 import { CELL_SIZE } from '../world/constants';
-import { findDoor, roadCells } from '../world/dressingPlan';
+import { allRoadCells } from '../world/dressingPlan';
 import { SFX, type SfxName } from './sfx';
 
 /** One take of `name` (a random one, if it has several). */
@@ -53,13 +53,11 @@ export function cueAtPoint(world:World | null | undefined, name:SfxName, at:{ x:
 
 const roads = new WeakMap<World, { x:number; z:number }[]>();
 
-/** Whether `x`, `z` is on the cobbled road from the cottage door: dressing drawn over grass, planned in `dressingPlan`. */
+/** Whether `x`, `z` is on a cobbled road from a house door: dressing drawn over grass, planned in `dressingPlan`. */
 function onRoad(world:World, x:number, z:number):boolean {
 	let cells = roads.get(world);
 	if (!cells) {
-		const chunks = [...world.chunks.values()];
-		const door = findDoor(chunks);
-		cells = door ? roadCells(chunks, door) : [];
+		cells = allRoadCells(world.chunks.values());
 		roads.set(world, cells);
 	}
 	return cells.some((c) => Math.abs(c.x - x) <= CELL_SIZE / 2 && Math.abs(c.z - z) <= CELL_SIZE / 2);

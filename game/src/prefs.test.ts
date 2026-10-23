@@ -74,9 +74,9 @@ describe('setPrefs', () => {
 
 	it('keeps the current value for an unusable field and drops unknown keys', () => {
 		setPrefs({ music: 0.4, maxParallel: 3 });
-		const next = setPrefs(coercePrefsPatch({ music: 'loud', maxParallel: 99, bogus: 1 }));
+		const next = setPrefs(coercePrefsPatch({ music: 'loud', maxParallel: 9999, bogus: 1 }));
 		assert.equal(next.music, 0.4);
-		assert.equal(next.maxParallel, 10);
+		assert.equal(next.maxParallel, 1023);
 		assert.equal('bogus' in stored(), false);
 	});
 
@@ -130,6 +130,18 @@ describe('setPrefs', () => {
 		assert.equal(off.music, 0.6);
 		assert.equal(setMusicMuted(false).music, 0.6);
 		assert.equal(setMusicVolume(0.2, 0.6).musicMuted, false);
+	});
+
+	it('starts music on at half volume, and brings a stored zero volume with music on up to half', () => {
+		assert.equal(prefs().music, 0.5);
+		assert.equal(prefs().musicMuted, false);
+		store.set(KEY, JSON.stringify({ music: 0, musicMuted: false }));
+		reloadPrefs();
+		assert.equal(prefs().music, 0.5);
+		store.set(KEY, JSON.stringify({ music: 0, musicMuted: true }));
+		reloadPrefs();
+		assert.equal(prefs().music, 0);
+		assert.equal(prefs().musicMuted, true);
 	});
 
 	it('turns music on at half volume when it was at zero', () => {

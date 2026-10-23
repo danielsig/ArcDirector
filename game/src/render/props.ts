@@ -1,7 +1,8 @@
 import * as THREE from 'three';
-import { bevelBox, lathe, tube, type ProfilePoint } from '@arc-director/kindling';
+import { bevelBox, create, lathe, meshReady, tube, type ProfilePoint } from '@arc-director/kindling';
 import { PALETTE, thatchMat, toon } from './toon';
 import { BROOM_LEAN, type PropID } from '../world/dressingPlan';
+import { WINDOW } from '../world/thinWall';
 
 /** One instanced piece of a prop, posed in the prop's frame (meters, Y up, +Z its front). */
 export type PropPart = {
@@ -449,7 +450,26 @@ function jars():PropPart[] {
 const rackPost = box(0.07, 1.1, 0.07);
 const rackFoot = box(0.08, 0.06, 0.34);
 const rackBar = box(0.78, 0.05, 0.05);
-const swordBlade = box(0.04, 0.68, 0.012);
+/** A flat blade whose lower end narrows to an edge. */
+function swordBladeGeom():THREE.BufferGeometry {
+	const height = 0.68;
+	const tip = 0.16;
+	const geo = new THREE.BoxGeometry(0.04, height, 0.012, 1, 6, 1);
+	geo.translate(0, height * 0.5, 0);
+	const pos = geo.getAttribute('position');
+	for (let i = 0; i < pos.count; i++) {
+		const y = pos.getY(i);
+		if (y < tip) {
+			const u = y / tip;
+			pos.setX(i, pos.getX(i) * (0.2 + 0.8 * u));
+			pos.setZ(i, pos.getZ(i) * u);
+		}
+	}
+	geo.computeVertexNormals();
+	return keep(geo);
+}
+
+const swordBlade = swordBladeGeom();
 const swordGuard = box(0.16, 0.025, 0.03);
 const swordGrip = box(0.025, 0.12, 0.025);
 const spear = keep(tube([{ x: 0, y: 0, z: 0 }, { x: 0, y: 1.25, z: 0 }], 0.016, 5));
@@ -457,10 +477,55 @@ const spearHead = keep(lathe([{ r: 0.035, y: 0 }, { r: 0.001, y: 0.16 }], 4));
 
 function sword(x:number):PropPart[] {
 	return [
-		at('sword-blade', swordBlade, iron, x, 0.06, 0.05, -0.08),
-		at('sword-guard', swordGuard, brass, x, 0.74, 0.0),
-		at('sword-grip', swordGrip, woodDark, x, 0.765, -0.005),
+		at('sword-blade', swordBlade, iron, x, 0.06, 0.09, -0.08),
+		at('sword-guard', swordGuard, brass, x, 0.74, 0.04),
+		at('sword-grip', swordGrip, woodDark, x, 0.765, 0.035),
 	];
+}
+
+/** The left sword, once `Sword.glb` is loaded: hung from the top bar, flat toward the rack's front. */
+let rackSword:PropPart[] | null | undefined;
+
+function rackSwordParts():PropPart[] | null {
+	if (rackSword !== undefined) {
+		return rackSword;
+	}
+	if (!meshReady('Sword')) {
+		return null;
+	}
+	const prop = create('Sword');
+	if (!prop) {
+		rackSword = null;
+		return null;
+	}
+	prop.updateMatrixWorld(true);
+	const box = new THREE.Box3().setFromObject(prop);
+	const gripY = THREE.MathUtils.lerp(box.min.y, box.max.y, 0.87);
+	const midX = (box.min.x + box.max.x) / 2;
+	const midZ = (box.min.z + box.max.z) / 2;
+	// Hand at the origin, then shortened so the tip meets the rack the way the plain swords do.
+	const hand = gripY - box.min.y;
+	const s = 0.78 / Math.max(hand, 1e-4);
+	const fit = new THREE.Matrix4().makeScale(s, s, s);
+	const shift = new THREE.Matrix4().makeTranslation(-midX, -gripY, -midZ);
+	const parts:PropPart[] = [];
+	prop.traverse((node) => {
+		const mesh = node as THREE.Mesh;
+		if (!mesh.isMesh) {
+			return;
+		}
+		const geom = mesh.geometry.clone();
+		geom.applyMatrix4(mesh.matrixWorld);
+		geom.applyMatrix4(shift);
+		geom.applyMatrix4(fit);
+		geom.userData.shared = true;
+		const mat = mesh.material as THREE.Material;
+		mat.userData.shared = true;
+		// Guard against the top bar's front, blade against the lower bar's front.
+		parts.push(at('sword-model', geom, mat, -0.18, 0.92, 0.045, -0.04));
+	});
+	rackSword = parts.length > 0 ? parts : null;
+	return rackSword;
 }
 
 function weaponRack():PropPart[] {
@@ -473,12 +538,12 @@ function weaponRack():PropPart[] {
 		at('rack-bar', rackBar, wood, 0, 0.3, 0.04),
 		...sword(-0.18),
 		...sword(0.02),
-		at('spear', spear, woodDark, 0.22, 0, 0.06, -0.06),
-		at('spear-head', spearHead, iron, 0.22, 1.25, -0.015, -0.06),
+		at('spear', spear, woodDark, 0.22, 0, 0.1, -0.06),
+		at('spear-head', spearHead, iron, 0.22, 1.25, 0.025, -0.06),
 	];
 }
 
-// Bed and chest.
+// Bed and trunk. A trunk, not a chest: `chest` is a map entity, and a glyph whose def is a prop id is dressed as that prop.
 
 const bedPost = box(0.07, 0.62, 0.07);
 const bedBoard = box(0.72, 0.3, 0.04);
@@ -505,7 +570,7 @@ const chestLid = (():THREE.BufferGeometry => {
 })();
 const chestStrap = box(0.04, 0.3, 0.355);
 
-function chest():PropPart[] {
+function trunk():PropPart[] {
 	return [
 		at('chest-body', keep(bevelBox(0.52, 0.28, 0.34, 0.02)), wood, 0, 0, 0),
 		at('chest-lid', chestLid, woodDark, 0, 0.28, 0),
@@ -560,13 +625,15 @@ const basketBail = (():THREE.BufferGeometry => {
 })();
 const fruit = keep(new THREE.IcosahedronGeometry(0.065, 1));
 const fruits = [paint(0xc23b3a), paint(0xe08a2e), paint(0x9cb84a)];
+/** Fruit left to rot: bruised brown, mouldy olive, gone black. */
+const rotten = [paint(0x5c3d22), paint(0x6b6230), paint(0x2e2a1c)];
 
-function basket():PropPart[] {
+function basket(colors = fruits):PropPart[] {
 	const heap = [[-0.08, -0.05], [0.07, -0.06], [0, 0.07], [-0.1, 0.08], [0.1, 0.06], [0, -0.01]] as const;
 	return [
 		at('basket', basketBody, wicker),
 		at('basket-bail', basketBail, wicker, 0, 0, 0, 0, 0.4),
-		...heap.map(([x, z], i) => at(`basket-fruit${i}`, fruit, fruits[i % fruits.length]!, x, 0.21 + (i === 5 ? 0.06 : 0), z, i, i)),
+		...heap.map(([x, z], i) => at(`basket-fruit${i}`, fruit, colors[i % colors.length]!, x, 0.21 + (i === 5 ? 0.06 : 0), z, i, i)),
 	];
 }
 
@@ -693,6 +760,171 @@ function brazier():PropPart[] {
 	];
 }
 
+// Curtains: two folded panels on a rod over a window, drawn back to either side so the middle of the glass shows.
+
+const cloth = paint(0xa8473a, { side: THREE.DoubleSide, shadowSide: THREE.DoubleSide });
+const CURTAIN_ROD = WINDOW.width + 0.32;
+const CURTAIN_PANEL = 0.33;
+const CURTAIN_DROP = WINDOW.top - WINDOW.sill + 0.2;
+
+/** A hanging cloth `w` wide and `h` long from its top edge down, in soft vertical folds, centered on X. */
+function drape(w:number, h:number, folds:number):THREE.BufferGeometry {
+	const geo = new THREE.PlaneGeometry(w, h, folds * 4, 1);
+	geo.translate(0, -h / 2, 0);
+	const pos = geo.getAttribute('position');
+	for (let i = 0; i < pos.count; i++) {
+		pos.setZ(i, 0.025 * Math.sin((pos.getX(i) / w + 0.5) * Math.PI * 2 * folds));
+	}
+	geo.computeVertexNormals();
+	return keep(geo);
+}
+
+const curtainPanel = drape(CURTAIN_PANEL, CURTAIN_DROP, 4);
+
+function curtains():PropPart[] {
+	const top = WINDOW.top + 0.12;
+	const edge = CURTAIN_ROD / 2 - CURTAIN_PANEL / 2;
+	return [
+		at('curtain-rod', rod(CURTAIN_ROD, 0.012), woodDark, 0, top + 0.02, 0.05),
+		at('curtain-rod-end', box(0.035, 0.035, 0.07), woodDark, -CURTAIN_ROD / 2, top, 0.02),
+		at('curtain-rod-end', box(0.035, 0.035, 0.07), woodDark, CURTAIN_ROD / 2, top, 0.02),
+		at('curtain', curtainPanel, cloth, -edge, top, 0.05),
+		at('curtain', curtainPanel, cloth, edge, top, 0.05),
+	];
+}
+
+// A big shelf at table height, fixed to the wall behind it (-Z) on two brackets: somewhere to eat by the bed.
+
+const bigShelfBoard = keep(bevelBox(0.8, 0.045, 0.38, 0.015));
+const bigShelfBracket = (():THREE.BufferGeometry => {
+	// A right-angled knee: up the wall and out under the board, braced across the corner.
+	const geo = new THREE.BufferGeometry();
+	const shape = new THREE.Shape([new THREE.Vector2(0, 0), new THREE.Vector2(0.3, 0), new THREE.Vector2(0.3, -0.05), new THREE.Vector2(0.05, -0.3), new THREE.Vector2(0, -0.3)]);
+	geo.copy(new THREE.ExtrudeGeometry(shape, { depth: 0.04, bevelEnabled: false }));
+	geo.rotateY(-Math.PI / 2);
+	geo.translate(0.02, 0, -0.19);
+	return keep(geo);
+})();
+
+function wallShelf():PropPart[] {
+	return [
+		at('big-shelf-board', bigShelfBoard, wood, 0, 0.6, 0),
+		at('big-shelf-bracket', bigShelfBracket, woodDark, -0.3, 0.6, 0),
+		at('big-shelf-bracket', bigShelfBracket, woodDark, 0.3, 0.6, 0),
+	];
+}
+
+// A dinner plate eaten off and left: smears of gravy, a picked fish spine, crumbs.
+
+const plateDish = solid([{ r: 0.09, y: 0 }, { r: 0.125, y: 0.015 }, { r: 0.13, y: 0.022 }], 16);
+const plateSmear = keep(new THREE.CylinderGeometry(0.045, 0.05, 0.004, 10).translate(0, 0.002, 0));
+const fishSpine = rod(0.13, 0.005, 5);
+const fishRib = rod(0.035, 0.003, 4);
+const crumb = box(0.012, 0.008, 0.01);
+const gravy = paint(0x6b3e1c, { outline: false });
+const bone = paint(0xeee4cc);
+
+function plate():PropPart[] {
+	return [
+		at('plate-dish', plateDish, paint(0xe6e0d2), 0, 0, 0),
+		at('plate-smear', plateSmear, gravy, 0.03, 0.012, 0.02, 0, 0.4),
+		at('plate-smear', plateSmear, gravy, -0.045, 0.012, -0.025, 0, 1.3),
+		at('plate-spine', fishSpine, bone, -0.005, 0.02, 0.005, 0, 0.35),
+		...[-0.04, -0.015, 0.01, 0.035].map((t, i) => at('plate-rib', fishRib, bone, t * Math.cos(0.35), 0.02, -t * Math.sin(0.35), 0, 0.35 + Math.PI / 2 + (i % 2 ? 0.2 : -0.2))),
+		...[[0.06, -0.05], [0.07, 0.03], [-0.07, 0.05]].map(([x, z]) => at('plate-crumb', crumb, gravy, x!, 0.016, z!, 0, x! * 20)),
+	];
+}
+
+// Fish hung to dry from a pole between two posts.
+
+const dryingPost = box(0.07, 1.35, 0.07);
+const rackPole = rod(1.36, 0.025);
+const fishBody = (():THREE.BufferGeometry => {
+	const geo = lathe([{ r: 0, y: 0 }, { r: 0.028, y: 0.04 }, { r: 0.045, y: 0.12 }, { r: 0.03, y: 0.2 }, { r: 0.006, y: 0.24 }, { r: 0, y: 0.245 }], 8);
+	geo.scale(1, 1, 0.45);
+	return keep(geo);
+})();
+const fishTail = box(0.07, 0.06, 0.01);
+const twine = box(0.006, 0.07, 0.006);
+const silver = paint(0x9fb3bd, { rim: 0.35 });
+
+function fishRack():PropPart[] {
+	const fish = [-0.42, -0.18, 0.08, 0.34].flatMap((x, i) => {
+		const hang = 1.25 - 0.07 - (i % 2) * 0.04;
+		return [
+			at('rack-twine', twine, burlap, x, hang, 0),
+			at('rack-fish', fishBody, silver, x, hang - 0.245, 0, 0, i * 0.4),
+			at('rack-tail', fishTail, silver, x, hang - 0.3, 0, 0, i * 0.4),
+		];
+	});
+	return [
+		at('drying-post', dryingPost, woodDark, -0.62, 0, 0),
+		at('drying-post', dryingPost, woodDark, 0.62, 0, 0),
+		at('rack-pole', rackPole, wood, 0, 1.27, 0),
+		...fish,
+	];
+}
+
+// A creel: a wicker fish basket with a lid and a shoulder strap.
+
+const creelBody = solid([{ r: 0.15, y: 0 }, { r: 0.18, y: 0.12 }, { r: 0.17, y: 0.28 }], 12);
+const creelLid = solid([{ r: 0.175, y: 0 }, { r: 0.17, y: 0.03 }, { r: 0.1, y: 0.05 }], 12);
+const creelStrap = keep(tube([{ x: -0.16, y: 0.25, z: 0 }, { x: -0.12, y: 0.45, z: 0.02 }, { x: 0.12, y: 0.45, z: 0.02 }, { x: 0.16, y: 0.25, z: 0 }], 0.012, 5));
+
+function creel():PropPart[] {
+	return [
+		at('creel', creelBody, wicker),
+		at('creel-band', band(0.181, 0.1, 0.03), burlap),
+		at('creel-lid', creelLid, wicker, 0, 0.28, 0),
+		at('creel-strap', creelStrap, burlap),
+	];
+}
+
+// A pair of oars leaning back (-Z) on a wall behind them.
+
+const OAR_LEAN = 0.22;
+const oarShaft = keep(tube([{ x: 0, y: 0.32, z: 0 }, { x: 0, y: 2.1, z: 0 }], 0.022, 6));
+const oarBlade = keep(bevelBox(0.15, 0.42, 0.025, 0.01));
+
+function oars():PropPart[] {
+	return [-0.14, 0.14].flatMap((x, i) => [
+		at('oar-shaft', oarShaft, wood, x, 0, i * 0.04, -OAR_LEAN, 0, (i ? 1 : -1) * 0.05),
+		at('oar-blade', oarBlade, woodLight, x, 0, i * 0.04, -OAR_LEAN, 0, (i ? 1 : -1) * 0.05),
+	]);
+}
+
+// A net hung over a sawhorse to dry, corks along its hem.
+
+const horseLeg = box(0.05, 0.86, 0.05);
+const horseBar = rod(1.1, 0.03);
+const netHalf = (():THREE.BufferGeometry => {
+	const geo = new THREE.PlaneGeometry(1.0, 0.7, 12, 4);
+	const pos = geo.getAttribute('position');
+	for (let i = 0; i < pos.count; i++) {
+		const x = pos.getX(i);
+		const y = pos.getY(i);
+		// Hangs from the bar, sagging between the legs and folding as it falls.
+		const t = (0.35 - y) / 0.7;
+		pos.setXYZ(i, x, -t * 0.66 - 0.06 * Math.cos(x * Math.PI), t * 0.18 + 0.03 * Math.sin(x * 9 + y * 4));
+	}
+	geo.computeVertexNormals();
+	return keep(geo);
+})();
+const cork = keep(new THREE.CylinderGeometry(0.025, 0.025, 0.05, 6).rotateZ(Math.PI / 2));
+const netting = paint(0x5c6b4c, { side: THREE.DoubleSide, shadowSide: THREE.DoubleSide, pattern: 'brick', patternScale: 0.04, brickLength: 0.04, patternInk: 0.7 });
+const corkMat = paint(0xd2a868);
+
+function net():PropPart[] {
+	const legs = [-0.5, 0.5].flatMap((x) => [-1, 1].map((s) => at('horse-leg', horseLeg, woodDark, x, 0, s * 0.12, s * 0.15)));
+	return [
+		...legs,
+		at('horse-bar', horseBar, wood, 0, 0.86, 0),
+		at('net', netHalf, netting, 0, 0.88, 0),
+		at('net', netHalf, netting, 0, 0.88, 0, 0, Math.PI),
+		...[-0.4, -0.13, 0.13, 0.4].flatMap((x) => [-1, 1].map((s) => at('net-cork', cork, corkMat, x, 0.88 - 0.66 + 0.02, s * 0.2))),
+	];
+}
+
 const catalog:Record<PropID, PropPart[]> = {
 	broom: broom(),
 	bucket: bucket(),
@@ -716,17 +948,33 @@ const catalog:Record<PropID, PropPart[]> = {
 	jars: jars(),
 	weaponRack: weaponRack(),
 	bed: bed(),
-	chest: chest(),
+	trunk: trunk(),
 	pots: pots(),
 	urn: urn(),
 	basket: basket(),
+	rottenBasket: basket(rotten),
 	drums: drums(),
 	fallenColumn: fallenColumn(),
 	rubble: rubble(),
 	bones: bones(),
 	brazier: brazier(),
+	curtains: curtains(),
+	wallShelf: wallShelf(),
+	plate: plate(),
+	fishRack: fishRack(),
+	creel: creel(),
+	oars: oars(),
+	net: net(),
 };
 
 export function propParts(id:PropID):PropPart[] {
-	return catalog[id];
+	const parts = catalog[id];
+	if (id !== 'weaponRack') {
+		return parts;
+	}
+	const model = rackSwordParts();
+	if (!model) {
+		return parts;
+	}
+	return [...parts.filter((part) => !(part.key.startsWith('sword-') && part.x < -0.1)), ...model];
 }

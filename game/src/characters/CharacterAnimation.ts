@@ -66,10 +66,13 @@ const STRIKES:Record<string, { clip:string; from:number; hit:number; to:number }
 	cleave: { clip: 'chop', from: 0.7, hit: 2.05, to: 3.4 },
 };
 
-/** A hand gesture over the clip when a line starts: a wave for greetings, else a hand held out. */
+/**
+ * A hand gesture over the clip when a line starts: a wave for greetings, from the waist up with the talking gesture's
+ * legs under it, else a hand held out.
+ */
 const GREETING = /^\W*(hello|hi|hey|greetings|well met|good (morning|day|evening)|welcome)\b/i;
 const GESTURES = {
-	greet: { clip: 'greet_01', from: 0, to: 2 },
+	greet: { clip: 'greet_01', from: 0, to: 2, only: 'Spine', rest: 'agree' },
 	talk: { clip: 'agree', from: 0, to: 2.4 },
 };
 
@@ -183,8 +186,8 @@ export class CharacterAnimation extends Component {
 		}
 		this._gestured = bubble.timestamp;
 		if (standing && bubble.text) {
-			const move = GREETING.test(bubble.text) ? GESTURES.greet : GESTURES.talk;
-			animator.playOnce(move.clip, { from: move.from, to: move.to });
+			const { clip, ...move } = GREETING.test(bubble.text) ? GESTURES.greet : GESTURES.talk;
+			animator.playOnce(clip, move);
 		}
 	}
 }

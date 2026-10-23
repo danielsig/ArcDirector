@@ -59,38 +59,28 @@ function hpFromFields(who:ExprEntity):{ hp:number; maxHP:number } | undefined {
 	return { hp: hp.value, maxHP: maxHP.value };
 }
 
+/** The people or things `v` names: itself, or a list's. A bare name is a list, of everyone so called. */
+function entitiesOf(v:ExprVal | undefined):ExprEntity[] {
+	const items = v?.kind === 'list' ? v.value : v ? [v] : [];
+	return items.flatMap((item) => (item.kind === 'entity' ? [item.value] : []));
+}
+
+/** The two people or things the first two args name, one each: `me` and `Player`, a bare name being a list of one. */
 function twoEnt(args:ExprVal[]):[ExprEntity, ExprEntity] | undefined {
-	const a = args[0]?.kind === 'entity' ? args[0].value : undefined;
-	const b = args[1]?.kind === 'entity' ? args[1].value : undefined;
-	if (!a || !b) {
-		return undefined;
-	}
-	return [a, b];
+	const a = entitiesOf(args[0]);
+	const b = entitiesOf(args[1]);
+	return a.length === 1 && b.length === 1 ? [a[0], b[0]] : undefined;
+}
+
+/** Every pair of what the first two args name; lists expand. */
+function pairsOf(args:ExprVal[]):[ExprEntity, ExprEntity][] {
+	const right = entitiesOf(args[1]);
+	return entitiesOf(args[0]).flatMap((x) => right.map((y):[ExprEntity, ExprEntity] => [x, y]));
 }
 
 /** True if pred holds for any entity pair; lists expand. */
 function anyPair(args:ExprVal[], pred:(a:ExprEntity, b:ExprEntity)=>boolean):boolean {
-	const a = args[0];
-	const b = args[1];
-	if (!a || !b) {
-		return false;
-	}
-	const left = a.kind === 'list' ? a.value : [a];
-	const right = b.kind === 'list' ? b.value : [b];
-	for (const x of left) {
-		if (x.kind !== 'entity') {
-			continue;
-		}
-		for (const y of right) {
-			if (y.kind !== 'entity') {
-				continue;
-			}
-			if (pred(x.value, y.value)) {
-				return true;
-			}
-		}
-	}
-	return false;
+	return pairsOf(args).some(([a, b]) => pred(a, b));
 }
 
 function distOf(host:HostKernels, a:ExprEntity, b:ExprEntity):number | undefined {
@@ -180,23 +170,18 @@ export function buildCatalog(host:HostKernels):Catalog {
 			attach(o);
 		}
 		names.set('me', asEntityVal(host.me));
-		fns.set('isHurt', (args) => {
-			const who = args[0]?.kind === 'entity' ? args[0].value : host.me;
+		// Of whoever the arg names (a bare name or a list: any of them), else of `me`.
+		const whoOf = (args:ExprVal[]):ExprEntity[] => (args[0] ? entitiesOf(args[0]) : [host.me]);
+		fns.set('isHurt', (args) => ({ kind: 'bool', value: whoOf(args).some((who) => {
 			const v = read(who) ?? hpFromFields(who);
-			if (!v) {
-				return { kind: 'bool', value: false };
-			}
-			return { kind: 'bool', value: v.hp > 0 && v.hp < v.maxHP };
-		});
-		fns.set('isHPFalling', (args) => {
-			const who = args[0]?.kind === 'entity' ? args[0].value : host.me;
+			return !!v && v.hp > 0 && v.hp < v.maxHP;
+		}) }));
+		// Each one's health is remembered, so none is checked against an old reading next time.
+		fns.set('isHPFalling', (args) => ({ kind: 'bool', value: whoOf(args).map((who) => {
 			const v = read(who);
-			if (!v) {
-				return { kind: 'bool', value: false };
-			}
-			const prev = host.cache.rememberHP(who.id, v.hp);
-			return { kind: 'bool', value: prev !== undefined && v.hp < prev - 0.0001 };
-		});
+			const prev = v && host.cache.rememberHP(who.id, v.hp);
+			return !!v && prev !== undefined && v.hp < prev - 0.0001;
+		}).some(Boolean) }));
 	}
 
 	if (host.distance) {
@@ -239,17 +224,24 @@ export function buildCatalog(host:HostKernels):Catalog {
 }
 
 function bindDistance(host:HostKernels, fns:Map<string, NativeFn>):void {
+	// Between lists, how far the closest two are: distance(me, others.filter(o => o.foe)) is the nearest foe's.
 	fns.set('distance', (args) => {
-		const pair = twoEnt(args);
-		if (!pair) {
+		const pairs = pairsOf(args);
+		if (pairs.length === 0) {
 			throw new ExprError('distance needs two people or things');
 		}
-		const d = distOf(host, pair[0], pair[1]);
-		if (d === undefined) {
+		let best:number | undefined;
+		for (const [a, b] of pairs) {
+			const d = distOf(host, a, b);
+			if (d !== undefined) {
+				host.cache.rememberDist(a.id, b.id, d);
+				best = Math.min(best ?? d, d);
+			}
+		}
+		if (best === undefined) {
 			throw new ExprError('distance missing');
 		}
-		host.cache.rememberDist(pair[0].id, pair[1].id, d);
-		return { kind: 'number', value: d };
+		return { kind: 'number', value: best };
 	});
 	fns.set('isApproaching', (args) => {
 		const pair = twoEnt(args);
@@ -556,7 +548,9 @@ function bindBusy(fns:Map<string, NativeFn>):void {
 		if (!who || !verb) {
 			return { kind: 'bool', value: false };
 		}
-		return { kind: 'bool', value: verbOf(who) === verb };
+		// Its verb (`gather`), or what it is at as the roster words it (`gathering Wood`).
+		const work = who.fields?.doing;
+		return { kind: 'bool', value: verbOf(who) === verb || (work?.kind === 'string' && work.value === verb) };
 	});
 }
 

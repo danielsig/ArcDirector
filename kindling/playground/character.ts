@@ -50,6 +50,7 @@ const clip = params.get('clip') ?? 'idle';
 const spin = params.get('spin') === '1';
 const yaw = Number(params.get('yaw') ?? 0);
 const waitFrames = Number(params.get('frames') ?? 10);
+// eslint-disable-next-line @typescript-eslint/naming-convention
 declare const __GAME_MODELS__:string;
 const base = params.get('base') ?? __GAME_MODELS__;
 

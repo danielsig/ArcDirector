@@ -234,12 +234,12 @@ function inflectUnit(d:number, unitName:string):string {
 	return basicPluralize(unitName);
 }
 
-function formatMeasure(d:number, unitName:string):string {
+export function formatMeasure(d:number, unitName:string):string {
 	const unit = inflectUnit(d, unitName);
 	return `${d}${unit.length > 1 ? ` ${unit}` : unit}`;
 }
 
-function bearingPhrase(bearing:Bearing):string {
+export function bearingPhrase(bearing:Bearing):string {
 	switch (bearing) {
 		case 'ahead':
 			return 'in front of you';
@@ -262,16 +262,14 @@ function bearingPhrase(bearing:Bearing):string {
 	}
 }
 
-function vitalsBit(obj:SeenObject):string {
-	if (obj.hp === undefined || obj.maxHP === undefined) {
-		return '';
-	}
-	return ` ${obj.hp}/${obj.maxHP} hp`;
-}
-
-function noteBit(obj:SeenObject):string {
-	const note = obj.note?.trim();
-	return note ? `, ${note}` : '';
+/** ` (4/12 hp, foe Blade, firing)`: health, the host's note and what it is doing, set apart so the name before them stays the only name. */
+function detailsBit(obj:SeenObject):string {
+	const details = [
+		obj.hp !== undefined && obj.maxHP !== undefined ? `${obj.hp}/${obj.maxHP} hp` : '',
+		obj.note?.trim() ?? '',
+		obj.doing?.trim() ?? '',
+	].filter(Boolean);
+	return details.length > 0 ? ` (${details.join(', ')})` : '';
 }
 
 function leftoverHead(
@@ -306,7 +304,7 @@ function leftoverClause(
 		obj,
 		lodNoun(obj, opts, me, distance, npcID, bearingFn),
 		opts.pluralize,
-	) + vitalsBit(obj) + noteBit(obj);
+	) + detailsBit(obj);
 	const measure = formatMeasure(
 		quantizeDistance(finite(distance(obj, me)), opts.closeness),
 		opts.unitName,
@@ -474,6 +472,7 @@ export function formatSightClauses(sight:Sight, opts:SightOpts = {}):SightClause
 		clusterFactor,
 		groundAndFigure: (a, b) => groundAndFigure(a, b, (o) => finite(distance(o, me))),
 		noun: (obj) => lodNoun(obj, { farDistance, lodLayers }, me, distance, npcID, bearingFn),
+		details: detailsBit,
 		distance,
 		pluralize,
 	};

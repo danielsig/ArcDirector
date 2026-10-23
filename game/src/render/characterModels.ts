@@ -3,7 +3,7 @@ import { registerToonClips, registerToonModel } from '@arc-director/kindling';
 /** Built from `brainstorming/3Dmodels` by `kindling/scripts/buildModels.mjs` (config: `game/models.json`). */
 const MODELS_URL = '/models/';
 
-/** A 3D character model: how tall it stands (hat included), and whether its voice sits high and it may stand hands on hips. */
+/** A 3D character model: how tall it stands (hat included), and whether its voice sits high and it may stand hands on hips and jump for joy. */
 export type CharacterModelDef = { height:number; feminine?:boolean };
 
 /** Every 3D character, by mesh ID (the GLB's name). */

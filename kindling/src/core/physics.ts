@@ -68,65 +68,71 @@ function applyMtv(pos:{ x:number; z:number }, hit:Mtv, invert:boolean):void {
 	shift(pos, hit.axis, (invert ? -hit.dir : hit.dir) * hit.depth);
 }
 
-function separateAxis(
-	pos:{ x:number; z:number },
-	half:number,
-	tileMin:number,
-	tileMax:number,
-	axis:'x' | 'z',
-):void {
-	const min = (axis === 'x' ? pos.x : pos.z) - half;
-	const max = (axis === 'x' ? pos.x : pos.z) + half;
-	if (max <= tileMin || min >= tileMax) {
-		return;
+/**
+ * The solid boxes under `a`. A tile that names `solids` (a thin wall, the sides of a stair) is those boxes.
+ * Anything else blocked, or ground `stand` cannot step up onto, is the whole tile, so a body stops at a face
+ * instead of walking into it.
+ */
+function tileSolids(world:World, a:AABB, stand?:TerrainSample):AABB[] {
+	const size = world.tileSize;
+	const boxes:AABB[] = [];
+	for (let tz = Math.floor(a.minZ / size); tz <= Math.floor((a.maxZ - 1e-6) / size); tz++) {
+		for (let tx = Math.floor(a.minX / size); tx <= Math.floor((a.maxX - 1e-6) / size); tx++) {
+			const hit = world.sampleTerrain((tx + 0.5) * size, (tz + 0.5) * size);
+			const cell = { minX: tx * size, maxX: (tx + 1) * size, minZ: tz * size, maxZ: (tz + 1) * size };
+			// On the flight, or up on its landing, the side strips would block the way on and off.
+			const onFlight = !!hit?.climbable && !!stand && (stand.climbable || stand.height >= hit.height);
+			if (hit?.solids && !onFlight) {
+				boxes.push(...hit.solids);
+			}
+			else if (!hit?.solids && (hit?.blocked || (hit && stand && !canOccupy(stand, hit)))) {
+				boxes.push(cell);
+			}
+		}
 	}
-	const pushNeg = max - tileMin;
-	const pushPos = tileMax - min;
-	const delta = pushNeg < pushPos ? -pushNeg : pushPos;
-	if (axis === 'x') {
-		pos.x += delta;
-	}
-	else {
-		pos.z += delta;
-	}
+	return boxes;
 }
 
-function resolveAgainstTiles(go:GameObject, col:BoxCollider, world:World):void {
-	const size = world.tileSize;
-	if (size <= 0) {
+/**
+ * Push the body out of each solid tile box it overlaps, back the way it came in: along Z for a box it already
+ * overlapped on X before this step, and the other way round. A box it came at corner-first, or with no step
+ * to go by, takes the shallower way out. Boxes it came at side-on go first, so the seam between two boxes
+ * of one wall never catches it.
+ */
+function resolveAgainstTiles(go:GameObject, col:BoxCollider, world:World, rb?:Rigidbody):void {
+	if (world.tileSize <= 0) {
 		return;
 	}
 	const pos = go.transform.position;
 	const hx = col.size.x * 0.5;
 	const hz = col.size.z * 0.5;
-
-	for (let pass = 0; pass < 2; pass++) {
-		const axis:'x' | 'z' = pass === 0 ? 'x' : 'z';
-		const aabb = actorAABB(go, col);
-		const minTX = Math.floor(aabb.minX / size);
-		const maxTX = Math.floor((aabb.maxX - 1e-6) / size);
-		const minTZ = Math.floor(aabb.minZ / size);
-		const maxTZ = Math.floor((aabb.maxZ - 1e-6) / size);
-
-		for (let tz = minTZ; tz <= maxTZ; tz++) {
-			for (let tx = minTX; tx <= maxTX; tx++) {
-				const cx = (tx + 0.5) * size;
-				const cz = (tz + 0.5) * size;
-				const hit = world.sampleTerrain(cx, cz);
-				if (!hit?.blocked) {
-					continue;
-				}
-				const tileMinX = tx * size;
-				const tileMinZ = tz * size;
-				if (axis === 'x') {
-					separateAxis(pos, hx, tileMinX, tileMinX + size, 'x');
-				}
-				else {
-					separateAxis(pos, hz, tileMinZ, tileMinZ + size, 'z');
-				}
-			}
+	const prevX = rb?.enabled ? rb.prevX : pos.x;
+	const prevZ = rb?.enabled ? rb.prevZ : pos.z;
+	const axisOf = (b:AABB):'x' | 'z' | undefined => {
+		const wasX = prevX + hx > b.minX && prevX - hx < b.maxX;
+		const wasZ = prevZ + hz > b.minZ && prevZ - hz < b.maxZ;
+		return wasX === wasZ ? undefined : wasX ? 'z' : 'x';
+	};
+	const boxes = tileSolids(world, actorAABB(go, col), groundAt(world, pos.x, pos.z));
+	boxes.sort((a, b) => (axisOf(a) ? 0 : 1) - (axisOf(b) ? 0 : 1));
+	for (const b of boxes) {
+		const a = actorAABB(go, col);
+		if (!overlaps(a, b)) {
+			continue;
 		}
+		const pushX = pos.x < (b.minX + b.maxX) * 0.5 ? b.minX - a.maxX : b.maxX - a.minX;
+		const pushZ = pos.z < (b.minZ + b.maxZ) * 0.5 ? b.minZ - a.maxZ : b.maxZ - a.minZ;
+		const axis = axisOf(b) ?? (Math.abs(pushX) < Math.abs(pushZ) ? 'x' : 'z');
+		shift(pos, axis, axis === 'x' ? pushX : pushZ);
 	}
+}
+
+/** The ground at a point for a body standing there: a tile with `solids` is blocked only inside them. */
+function groundAt(world:World, x:number, z:number):TerrainSample | undefined {
+	const s = world.sampleTerrain(x, z);
+	return s?.solids && !s.solids.some((b) => x >= b.minX && x < b.maxX && z >= b.minZ && z < b.maxZ)
+		? { ...s, blocked: false }
+		: s;
 }
 
 function shoveAlong(
@@ -145,7 +151,7 @@ function shoveAlong(
 }
 
 function settleMover(world:World, go:GameObject, col:BoxCollider, rb:Rigidbody):void {
-	resolveAgainstTiles(go, col, world);
+	resolveAgainstTiles(go, col, world, rb);
 	blockCliffs(go, rb, world);
 }
 
@@ -283,6 +289,45 @@ function resolveAgainstOthers(world:World, go:GameObject, col:BoxCollider):void 
 	});
 }
 
+export type BlockerOpts = {
+	/** Where `body` steps from: ground too high or too low to step to from there is `'terrain'`. */
+	from?:{ x:number; z:number };
+	/** Only colliders standing taller than this, in meters: what one sees or hears past. */
+	above?:number;
+};
+
+/**
+ * What `body` would run into standing at `x`, `z`, by the tests physics pushes bodies out with: a solid collider
+ * that never moves (one with no `Rigidbody`), else `'terrain'` (a blocked tile's solids, or ground it cannot step to
+ * `from` where it is), else nothing. So a route planned with it is one bodies can walk. A box stops the body where
+ * the two would overlap; bodies slide around a cylinder, so it stops one only over the body's middle. With no
+ * `body`, what stands at the point itself.
+ */
+export function blockerAt(world:World, body:GameObject | null, x:number, z:number, opts:BlockerOpts = {}):GameObject | 'terrain' | undefined {
+	const col = body?.getComponent(BoxCollider);
+	const hx = (col?.size.x ?? 0) * 0.5;
+	const hz = (col?.size.z ?? 0) * 0.5;
+	const a:AABB = { minX: x - hx, maxX: x + hx, minZ: z - hz, maxZ: z + hz };
+	let hit:GameObject | undefined;
+	world.forEachNear(a.minX, a.minZ, a.maxX, a.maxZ, (go) => {
+		const other = go.getComponent(BoxCollider);
+		if (hit || go === body || !other?.enabled || !other.solid || other.isTrigger || go.getComponent(Rigidbody) || other.size.y <= (opts.above ?? -Infinity)) {
+			return;
+		}
+		if (other.shape === 'cylinder' ? other.contains(x, z) : overlaps(a, actorAABB(go, other))) {
+			hit = go;
+		}
+	});
+	if (hit) {
+		return hit;
+	}
+	const stand = groundAt(world, opts.from?.x ?? x, opts.from?.z ?? z);
+	if (world.tileSize > 0 && tileSolids(world, a, stand).some((b) => overlaps(a, b))) {
+		return 'terrain';
+	}
+	return opts.from && !canOccupy(groundAt(world, opts.from.x, opts.from.z), groundAt(world, x, z)) ? 'terrain' : undefined;
+}
+
 /** Same rule as walking: up only on climbable steps of 1, down at most 1, never onto blocked. */
 export function canOccupy(from:TerrainSample | undefined, to:TerrainSample | undefined):boolean {
 	if (!to || to.blocked) {
@@ -301,17 +346,17 @@ function blockCliffs(go:GameObject, rb:Rigidbody, world:World):void {
 		return;
 	}
 	const pos = go.transform.position;
-	const prev = world.sampleTerrain(rb.prevX, rb.prevZ);
-	const next = world.sampleTerrain(pos.x, pos.z);
+	const prev = groundAt(world, rb.prevX, rb.prevZ);
+	const next = groundAt(world, pos.x, pos.z);
 	if (canOccupy(prev, next)) {
 		return;
 	}
-	const alongX = world.sampleTerrain(pos.x, rb.prevZ);
+	const alongX = groundAt(world, pos.x, rb.prevZ);
 	if (canOccupy(prev, alongX)) {
 		pos.z = rb.prevZ;
 		return;
 	}
-	const alongZ = world.sampleTerrain(rb.prevX, pos.z);
+	const alongZ = groundAt(world, rb.prevX, pos.z);
 	if (canOccupy(prev, alongZ)) {
 		pos.x = rb.prevX;
 		return;
@@ -343,7 +388,7 @@ function resolveCollisions(world:World, dt:number):void {
 			return;
 		}
 		blockCliffs(go, rb, world);
-		resolveAgainstTiles(go, col, world);
+		resolveAgainstTiles(go, col, world, rb);
 		resolveAgainstOthers(world, go, col);
 	});
 	resolveShove(world, dt);
@@ -365,19 +410,7 @@ function snapGround(world:World, dt:number):void {
 			return;
 		}
 		const p = go.transform.position;
-		const tile = world.sampleTerrain(p.x, p.z);
-		const targetY = tile?.worldY ?? 0;
-		const dy = targetY - p.y;
-		if (dy > rb.stepHeight + 0.02) {
-			return;
-		}
-		const speed = 10;
-		if (Math.abs(dy) <= speed * dt) {
-			p.y = targetY;
-		}
-		else {
-			p.y += Math.sign(dy) * speed * dt;
-		}
+		p.y = groundAt(world, p.x, p.z)?.worldY ?? 0;
 	});
 }
 
@@ -391,7 +424,7 @@ export function resolveBody(world:World, go:GameObject):void {
 	if (rb?.enabled) {
 		blockCliffs(go, rb, world);
 	}
-	resolveAgainstTiles(go, col, world);
+	resolveAgainstTiles(go, col, world, rb);
 	resolveAgainstOthers(world, go, col);
 	if (rb?.enabled) {
 		blockCliffs(go, rb, world);

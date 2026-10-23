@@ -1,6 +1,8 @@
 import type { JsonSchema } from '../json.js';
+import { namesWord } from '../text.js';
 import { JOINS } from './types.js';
-import { argBase, CHOOSE_VERB, GROUP_VERB, type VerbArgKind, type VerbRegistry, type VerbSpec } from './stock-verbs.js';
+import { STOCK_COLLECTIVE_VERB_DEFS } from '../collective/verbs.js';
+import { argBase, CHOOSE_VERB, GROUP_VERB, STOCK_VERB_DEFS, type VerbArgKind, type VerbDef, type VerbRegistry, type VerbSpec } from './stock-verbs.js';
 
 function ref(name:string):JsonSchema {
 	return { $ref: `#/$defs/${name}` };
@@ -99,18 +101,13 @@ export function replySchema(catalog:VerbRegistry, tools:Record<string, JsonSchem
 /** Built-in tools a help line might name. A line may name one only when this think offers it. */
 const DOC_TOOLS = ['recall', 'observe', 'earshot', 'see_map'];
 
-function escapeRegExp(name:string):string {
-	return name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-}
-
 /** Whether `piece` names a verb or tool other than `self` that `allowed` does not grant. */
 function mentionsUnavailable(piece:string, self:string, allowed:ReadonlySet<string>, names:readonly string[]):boolean {
 	for (const name of names) {
 		if (name === self || allowed.has(name)) {
 			continue;
 		}
-		const re = new RegExp(`(?<![A-Za-z0-9_])${escapeRegExp(name)}(?![A-Za-z0-9_])`);
-		if (re.test(piece)) {
+		if (namesWord(piece, name)) {
 			return true;
 		}
 	}
@@ -128,8 +125,8 @@ export function docsFor(text:string, self:string, allowed:ReadonlySet<string>, c
 	return kept.join(' ').replace(/\s+/g, ' ').trim();
 }
 
-function formatVerbHelp(spec:VerbSpec, allowed:ReadonlySet<string>, catalog:readonly string[]):string {
-	const help = spec.help ? docsFor(spec.help, spec.name, allowed, catalog) : '';
+function formatVerbHelp(spec:VerbSpec, allowed:ReadonlySet<string>, catalog:readonly string[], stockHelp = true):string {
+	const help = spec.help && (stockHelp || !isStockHelp(spec)) ? docsFor(spec.help, spec.name, allowed, catalog) : '';
 	if (spec.name === CHOOSE_VERB) {
 		return help ? `${spec.name}(goal, name=arc, …) — ${help}` : `${spec.name}(goal, name=arc, …)`;
 	}
@@ -140,10 +137,20 @@ function formatVerbHelp(spec:VerbSpec, allowed:ReadonlySet<string>, catalog:read
 	return help ? `${base} — ${help}` : base;
 }
 
-export function verbHelp(registry:VerbRegistry, tools:readonly string[] = []):string {
+/** Whether `spec`'s help is the library's own for that verb, which a model trained on ArcDirector's prompts knows. */
+function isStockHelp(spec:VerbSpec):boolean {
+	const stock:Record<string, VerbDef> = { ...STOCK_VERB_DEFS, ...STOCK_COLLECTIVE_VERB_DEFS };
+	return spec.help === stock[spec.name]?.help;
+}
+
+/**
+ * Every verb of `registry` with its args and help, and in a collective the verbs its nested arcs may use. Without
+ * `stockHelp`, a stock verb's own help is left out: a compact prompt keeps only what this game says.
+ */
+export function verbHelp(registry:VerbRegistry, tools:readonly string[] = [], { stockHelp = true }:{ stockHelp?:boolean } = {}):string {
 	const catalog = [...registry.nested().list().map((spec) => spec.name), ...tools];
 	const own = new Set([...registry.list().map((spec) => spec.name), ...tools]);
-	const kit = registry.list().map((spec) => formatVerbHelp(spec, own, catalog)).join(', ');
+	const kit = registry.list().map((spec) => formatVerbHelp(spec, own, catalog, stockHelp)).join(', ');
 	if (!registry.has('issue')) {
 		return kit;
 	}
@@ -156,7 +163,7 @@ export function verbHelp(registry:VerbRegistry, tools:readonly string[] = []):st
 	// `choose` reaches a collective's characters only when its own kit grants it, so it is never a nested extra.
 	const extras = nested.list()
 		.filter((spec) => !registry.has(spec.name) && spec.name !== CHOOSE_VERB)
-		.map((spec) => formatVerbHelp(spec, nestedAllowed, catalog));
+		.map((spec) => formatVerbHelp(spec, nestedAllowed, catalog, stockHelp));
 	if (extras.length === 0) {
 		return kit;
 	}

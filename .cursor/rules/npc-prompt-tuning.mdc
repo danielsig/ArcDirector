@@ -1,0 +1,22 @@
+---
+description: How to fix NPC behaviour. Read the AI log first; fix facts, laws, and verbs before prompt wording.
+alwaysApply: true
+---
+
+# NPC prompt tuning
+
+Learned tuning the dungeon crawl on small models. When NPC behaviour looks wrong, read `game/.ai-log.txt` first (thinks, `Last verb result`, sight, short-term memory). The cause is usually there.
+
+- Diagnose in the log before touching prompts. Most "stupid" behaviour was a bug feeding the model a wrong fact: a blade on a web returned `cut` while nothing happened, a widened web was hidden from all sight, a refused `say` read like a wrong answer, a solved riddle stayed in sight. Fix the fact, not the wording.
+- Laws outrank thinks. In a fight, behaviour comes from pinned laws and the verbs they call (`attack()`, `protect`), not from what a think writes. Fix the law or the verb (move choice, screening, regroup watch), not the prompt.
+- Goal order is sequence. A goal below another reads as "after it". Put the current step first. One quest line on top, for the leader only.
+- Cap open-ended "set laws / learn from mistakes" goals. They cause long silent thinks (600+ tokens, numbered lists). One new law per think at most, none for what a law already covers. A wound in a fight is no mistake.
+- A goal that names something the model cannot see sends it searching (`recall` / `see_map` / `think` loops). Tell it the goal below is always the way on.
+- Never give walkthroughs or verb syntax for puzzles. Give a rule cue ("dry as tinder") and keep the answer as a stall fallback. The user wants natural problem solving.
+- Numbers are read literally. "Lowest health" made 50/50 look hurt next to 90/90. Give the counter-example ("full health like 50/50").
+- Location-specific facts belong in regions (`addRegion` memory, per character with `who`), not goals or pinned memories. They appear only where they matter and vanish after.
+- Refusal wording must say why, not imply the line was wrong ("it was heard; saying it again changes nothing, it was not wrong").
+- Traits and talk goals make them chat. Add "never repeat a line already said, never claim what you have not seen". The library's no-parrot rule backs it.
+- Things in sight act as invitations (a riddle carving, a torch). Show solved or used state.
+- Never fix a bad NPC decision by refusing the act. Find why it looked allowed and fix that. Example: the keeper lowered the bridge for a MoonMushroom because a knowledge note falsely said "FireMushroom (you carry one)" — a tag matched another item's alias.
+- Keep each prompt line to one plain sentence. Avoid hacks, order spam from the leader, characters idle while friends fight, and walkthrough hints.

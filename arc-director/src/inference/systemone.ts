@@ -76,8 +76,9 @@ export type DecidingModel = {
 };
 
 /**
- * A model on a server as a System One: a decision model through its server's System One endpoint, any other scored
- * as a {@link ChatSystemOne}. A getter, so it follows the model as it changes.
+ * A model on a server as a System One: a decision model through its System One endpoint (its server's, or the one
+ * its provider serves it on, as a browser does), any other scored as a {@link ChatSystemOne}. A getter, so it follows
+ * the model as it changes.
  */
 export class ModelSystemOne implements SystemOne {
 	private readonly _model:()=>DecidingModel;
@@ -88,10 +89,11 @@ export class ModelSystemOne implements SystemOne {
 		this._chat = new ChatSystemOne(() => model().provider, () => model().id);
 	}
 
-	public pick(state:string, goal:string, criteria:Record<string, string>):Promise<string> {
-		const { id, systemOneURL } = this._model();
-		return systemOneURL
-			? new JevSystemOne({ baseURL: systemOneURL, model: id }).pick(state, goal, criteria)
+	public async pick(state:string, goal:string, criteria:Record<string, string>):Promise<string> {
+		const { provider, id, systemOneURL } = this._model();
+		const endpoint = systemOneURL ? { url: systemOneURL } : await provider.systemOneEndpoint?.(id);
+		return endpoint
+			? new JevSystemOne({ baseURL: endpoint.url, model: id, fetch: endpoint.fetch }).pick(state, goal, criteria)
 			: this._chat.pick(state, goal, criteria);
 	}
 }

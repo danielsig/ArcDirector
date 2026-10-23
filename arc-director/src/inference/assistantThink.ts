@@ -9,6 +9,16 @@ import type { ChatMessage } from './provider.js';
  */
 const thinkingTag = 'redacted_thinking';
 export const EMPTY_THINK_PREFILL = `<${thinkingTag}></${thinkingTag}>`;
+/**
+ * A closed, empty think block, as a template writes one when thinking is off (Qwen's `<think>\n\n</think>\n\n`): the
+ * answer's first token comes next, which a one-token pick reads.
+ */
+function emptyThought({ open, close }:{ open:string; close:string }):string {
+	return `${open}\n\n${close}\n\n`;
+}
+
+/** A closed, empty think block in `<think>` tags: for a template that opens one on every reply (`alwaysThinks`). */
+export const ALWAYS_THINKS_PREFILL = emptyThought({ open: '<think>', close: '</think>' });
 export const DONE_THOUGHT = 'I have to respond either with "ok" or a new Arc adapted to the circumstances but only if I must.\n\nI\'m ready to respond.';
 const THINK_TAG_RE = /<\/?(?:redacted_)?think(?:ing)?>/i;
 const THINK_OPEN_RE = /<(redacted_thinking|think(?:ing)?)>/i;
@@ -79,7 +89,7 @@ export function prefillFromTemplates(generation:string, withAssistant:string):st
 	}
 	if (THINK_TAG_RE.test(genTail)) {
 		const { open, close } = thinkTagsFrom(genTail);
-		return `${open}${close}`;
+		return emptyThought({ open, close });
 	}
 	if (asstHeader && asstHeader !== genTail) {
 		return asstHeader;

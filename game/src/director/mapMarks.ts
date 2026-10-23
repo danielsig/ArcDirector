@@ -16,16 +16,19 @@ const NAMED:Record<string, string> = {
 	Lys: '🛡️',
 	Baker: '🍞',
 	Weaver: '🧵',
+	Apothecary: '🧪',
 	Potter: '🏺',
 	Cutler: '🔪',
+	Grocer: '🍏',
+	Toymaker: '🪀',
 	Mira: '🎀',
 	Tomas: '🧢',
 	Nell: '🍎',
 	Rook: '🐦',
+	Ferris: '🧉',
+	Lisa: '🎠',
 	Holt: '⚔️',
-	Pike: '🪖',
 	Brant: '🪵',
-	Cass: '🕯️',
 };
 
 const KIND:[RegExp, string][] = [

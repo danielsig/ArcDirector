@@ -1,4 +1,5 @@
 import { isRecord } from '../json.js';
+import type { Sampling } from './provider.js';
 
 export type ThinkOff = 'no_think' | 'strength';
 
@@ -97,6 +98,51 @@ export function thinkOffMode(id:string):ThinkOff | undefined {
 		return 'no_think';
 	}
 	return undefined;
+}
+
+/**
+ * Whether `id`'s template opens a think block on every reply, whatever `enable_thinking` says: Qwen3's Thinking split
+ * (2507 on) and QwQ. With thinking off, only a closed think block before its answer keeps it from thinking.
+ */
+export function alwaysThinks(id:string):boolean {
+	return /qwq|qwen3.*thinking/i.test(id);
+}
+
+/**
+ * What each family's makers say to sample it with, first match wins. Qwen3 splits by reasoning: its thinking mode
+ * runs cooler and wider than its instruct mode. Fine-tunes keep their base's settings.
+ */
+const RECOMMENDED_SAMPLING:{ match:RegExp; thinking?:boolean; sampling:Sampling }[] = [
+	{ match: /gemma/i, sampling: { temperature: 1, topP: 0.95, topK: 64 } },
+	{ match: /qwq/i, sampling: { temperature: 0.6, topP: 0.95, topK: 40 } },
+	{ match: /qwen3.*instruct/i, sampling: { temperature: 0.7, topP: 0.8, topK: 20 } },
+	{ match: /qwen3/i, thinking: false, sampling: { temperature: 0.7, topP: 0.8, topK: 20 } },
+	{ match: /qwen3/i, sampling: { temperature: 0.6, topP: 0.95, topK: 20 } },
+	{ match: /qwen2\.5/i, sampling: { temperature: 0.7, topP: 0.8, topK: 20 } },
+	{ match: /gpt-oss/i, sampling: { temperature: 1, topP: 1 } },
+	{ match: /deepseek-r1/i, sampling: { temperature: 0.6, topP: 0.95 } },
+	{ match: /magistral/i, sampling: { temperature: 0.7, topP: 0.95 } },
+	{ match: /mistral-small|devstral/i, sampling: { temperature: 0.15 } },
+	{ match: /llama-?3/i, sampling: { temperature: 0.6, topP: 0.9 } },
+	{ match: /phi-?4.*reasoning/i, sampling: { temperature: 0.8, topP: 0.95, topK: 50 } },
+];
+
+/**
+ * The sampling `id`'s makers recommend, reasoning or not (Qwen3 differs by mode); `undefined` for a family this
+ * library does not know. What a model spec without `sampling` runs with.
+ */
+/**
+ * Whether `id` was trained on ArcDirector's own prompts (a Skaldic model). Such a model only ever read the compact
+ * prompt and wrote JSON Arcs, so its minds get just those, whatever the host asks.
+ */
+export function trainedOnArcDirector(id:string):boolean {
+	return /skaldic/i.test(id);
+}
+
+export function recommendedSampling(id:string, thinking?:boolean):Sampling | undefined {
+	const reasons = alwaysThinks(id) || thinking === true;
+	const row = RECOMMENDED_SAMPLING.find((r) => r.match.test(id) && (r.thinking === undefined || r.thinking === reasons));
+	return row && { ...row.sampling };
 }
 
 export function isLoadedModel(model:ModelInfo):boolean {

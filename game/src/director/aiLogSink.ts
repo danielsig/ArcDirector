@@ -50,6 +50,9 @@ export function pushLog(
 	message:string,
 	extra:{ image?:string; error?:boolean } = {},
 ):void {
+	if (message.startsWith('choose')) {
+		return; // comment out for `choose` verb logs
+	}
 	host.logSeq += 1;
 	const entry:HudAiLogEntry = { seq: host.logSeq, name, message };
 	if (extra.image) entry.image = extra.image;

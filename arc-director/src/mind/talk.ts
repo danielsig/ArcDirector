@@ -12,15 +12,13 @@ export type TalkMind = {
 };
 
 /**
- * Host-owned range, sight, and pose. The library asks by name; the game
- * measures distance, LOS, and movement however it wants.
+ * Host-owned range, hearing, and pose. The library asks by name; the game
+ * measures distance, what a voice carries past, and movement however it wants.
  */
 export type TalkSense = {
 	inRange:(speakerID:string, listenerID:string)=>boolean;
 	/** Named beings this speaker might address. Host lists ids, never coordinates. */
 	others:(speakerID:string)=>string[];
-	/** Clear view. If omitted, TalkNet treats everyone in range as visible. */
-	canSee?:(aID:string, bID:string)=>boolean;
 	/**
 	 * Close enough to catch every word. If omitted, every in-range listener
 	 * hears clearly. If false, TalkNet muffles the line and tells them to
@@ -40,20 +38,38 @@ export type TalkSense = {
 	approach?:(who:string, toward:string)=>void;
 };
 
-export type TalkConfig = {
+/**
+ * Whether a line flagged as a repeat may be said: `true` lets it through, `false` refuses it. A function decides each
+ * one, given who says it (`TWho`: its id here; its context through the director's `withTalk`) and the line: `true`
+ * lets it through, `false` refuses it, a string refuses it with that string as the reason.
+ */
+export type Repeats<TWho = string> = boolean | ((who:TWho, text:string)=>boolean | string);
+
+export type TalkConfig<TWho = string> = {
 	/** Seconds a muffled line stays catchable: come close enough in that time and it arrives in full. 0 = never. Default 8. */
 	rehear:number;
 	/** Face the person you speak to or hear, when you can see them. Default true. */
 	face:boolean;
 	/** Move closer and seek a clear view of them. Default true. */
 	approach:boolean;
+	/**
+	 * Let a character say the line it said last again, or echo word for word the line it last heard. Default false:
+	 * either is refused, so nobody parrots itself or anyone else. See {@link Repeats}.
+	 */
+	repeats:Repeats<TWho>;
 };
 
 export const DEFAULT_TALK_CONFIG:TalkConfig = {
 	rehear: 8,
 	face: true,
 	approach: true,
+	repeats: false,
 };
+
+/** A line as `repeats` compares it: case, spacing and punctuation aside. */
+function wordsOf(spoken:string):string {
+	return spoken.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
+}
 
 /** One addressee, or several when speaking to a group. */
 export type SayTo = string | string[];
@@ -191,6 +207,10 @@ function saidBy(mind:TalkMind, speakerID:string):boolean {
 export class TalkNet {
 	private readonly _minds = new Map<string, TalkMind>();
 	private readonly _muffled = new Map<string, Muffled[]>();
+	/** Each speaker's last line, by {@link wordsOf}. */
+	private readonly _lastSaid = new Map<string, string>();
+	/** The last line each character made out, by {@link wordsOf}, and who said it. */
+	private readonly _lastHeard = new Map<string, { speakerID:string; words:string }>();
 	public readonly config:TalkConfig;
 
 	constructor(
@@ -296,6 +316,10 @@ export class TalkNet {
 		if (!check.ok) {
 			return { ok: false, verb: 'say', reason: check.reason };
 		}
+		const parrot = this.parrot(speakerID, spoken);
+		if (parrot) {
+			return { ok: false, verb: 'say', reason: parrot };
+		}
 		const targets = addressees(to);
 		const heardBy = this.hearers(speakerID, targets);
 		const addressedTo:SayTo | undefined = targets.length === 0
@@ -347,6 +371,11 @@ export class TalkNet {
 				this._muffled.set(id, list);
 			}
 		}
+		const words = wordsOf(spoken);
+		this._lastSaid.set(speakerID, words);
+		for (const id of clearly) {
+			this._lastHeard.set(id, { speakerID, words });
+		}
 		const names = (ids:string[]):string => ids.map((t) => this.label(speakerID, t)).join(', ');
 		// Who it was for and could not make out the words, so the speaker knows the line did not land.
 		const muffled = (targets.length > 0 ? targets : heardBy).filter((id) => id !== speakerID && heardBy.includes(id) && !clearly.includes(id));
@@ -374,6 +403,7 @@ export class TalkNet {
 				const heardTo = row.targets.map((t) => this.label(id, t));
 				const speaker = this.label(id, row.speakerID);
 				const meant = isNamed(row.targets, names.ours) || row.targets.length === 0 || speechMentionsName(row.spoken, names.ours);
+				this._lastHeard.set(id, { speakerID: row.speakerID, words: wordsOf(row.spoken) });
 				this.hear(
 					mind,
 					speaker,
@@ -392,6 +422,25 @@ export class TalkNet {
 				this._muffled.delete(id);
 			}
 		}
+	}
+
+	/** Why `spoken` would only parrot: `speakerID`'s own last line again, or the last line it heard. None while `repeats`. */
+	private parrot(speakerID:string, spoken:string):string | undefined {
+		const rule = this.config.repeats;
+		if (rule === true) {
+			return undefined;
+		}
+		const words = wordsOf(spoken);
+		const heard = this._lastHeard.get(speakerID);
+		const flagged = !words
+			? undefined
+			: this._lastSaid.get(speakerID) === words
+				? 'you already said this, and it was heard: saying it again changes nothing, it was not wrong. You are not a parrot: say something new, or nothing. Remember, actions speak louder than words.'
+				: heard?.words === words && heard.speakerID !== speakerID
+					? `${this.label(speakerID, heard.speakerID)} just said this, and it was heard: saying it again changes nothing, it was not wrong. You are not a parrot: say something of your own, or nothing. Remember, actions speak louder than words.`
+					: undefined;
+		const verdict = flagged && typeof rule === 'function' ? rule(speakerID, spoken) : false;
+		return verdict === true ? undefined : typeof verdict === 'string' ? verdict : flagged;
 	}
 
 	/** The names a line uses when it is for `mind`: any character it listens through (`ours`), or its voice (`you`). */

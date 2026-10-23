@@ -189,6 +189,8 @@ describe('Agent', () => {
 			...stockVerbs(),
 			...perception(),
 			context: () => ({ paragraph: scene }),
+			// Native tool calls, as a model asked for plain JSON makes them.
+			arcFormat: 'json',
 			model: 'fake',
 		});
 		await agent.mind!.remember('EastGate is the door in the east wall', ['gate', 'EastGate'], 0);
@@ -485,6 +487,8 @@ describe('Agent', () => {
 			...stockVerbs(),
 			...perception(),
 			context: () => ({ paragraph: paragraph() }),
+			// Native tool calls, as a model asked for plain JSON makes them.
+			arcFormat: 'json',
 			model: 'fake',
 			toolRoundCap: 1,
 			arcRetryCap: 0,
@@ -650,6 +654,8 @@ describe('Agent', () => {
 				},
 			},
 			context: () => ({ paragraph: paragraph() }),
+			// Native tool calls, as a model asked for plain JSON makes them.
+			arcFormat: 'json',
 			model: 'fake',
 			toolRoundCap: 3,
 			arcRetryCap: 0,
@@ -693,6 +699,8 @@ describe('Agent', () => {
 			...stockVerbs(),
 			...perceptionWithBoom,
 			context: () => ({ paragraph: paragraph() }),
+			// Native tool calls, as a model asked for plain JSON makes them.
+			arcFormat: 'json',
 			model: 'fake',
 			toolRoundCap: 1,
 			arcRetryCap: 0,
@@ -792,7 +800,7 @@ describe('Agent', () => {
 			arcRetryCap: 0,
 			strategicInterval: 0,
 		});
-		const given = { kind: 'Given', text: '{0} gave FireMushroom to {1}', who: ['Forager', 'BridgeKeeper'], tags: ['give'] };
+		const given = { kind: 'Given', text: '{0} gave FireMushroom to {1}', who: ['Forager', 'BridgeKeeper'], tags: ['give'], remember: true };
 		const forager = agentOf('Forager');
 		const angler = agentOf('Angler');
 		forager.mind!.pushEvent(given);
@@ -807,6 +815,13 @@ describe('Agent', () => {
 		assert.equal(anglerPrompt.includes('Current Conversation'), false);
 		assert.equal(forager.persona.memory.all().some((row) => row.text === 'You gave FireMushroom to BridgeKeeper'), true);
 		assert.doesNotMatch(foragerPrompt, /You remember:[\s\S]*gave FireMushroom/);
+		// A passing deed, a blow in a fight, is short-term memory, not conversation.
+		const cade = agentOf('Cade');
+		cade.mind!.pushEvent({ kind: 'Hurt', text: '{0} cleaved {1}', who: ['Cade', 'BridgeKeeper'] });
+		users.length = 0;
+		await cade.mind!.thinkNow({ enact: false });
+		assert.match(users[0] ?? '', /- You cleaved BridgeKeeper/);
+		assert.equal((users[0] ?? '').includes('Current Conversation'), false);
 		forager.mind!.conversationCap = 20;
 		forager.mind!.pushEvent({ kind: 'Note', text: 'z'.repeat(30), turn: { speakerID: 'Baker', text: 'z'.repeat(30) } });
 		users.length = 0;
@@ -857,7 +872,7 @@ describe('Agent', () => {
 		const arcs = [
 			'say(text=Very well, the mushroom covers the fee.) && remember(content=Paid)',
 			'say(text=The bridge is down now.)',
-			'say(text=The bridge is down now., to=Forager)',
+			'say(text=You may cross now., to=Forager)',
 			'give(item=FireMushroom, to=Forager)',
 			'give(item=FireMushroom, to=Forager) && say(text=Here sir. This mushroom should cover the fee.)',
 			'heal(target=Forager)',
@@ -962,7 +977,7 @@ describe('Agent', () => {
 			model: 'fake',
 			heartbeat: 0,
 			arcFormat: 'text',
-			wayBlocked: () => blocked,
+			wayBlocked: (ids) => ids.map(() => blocked),
 			toolRoundCap: 0,
 			arcRetryCap: 0,
 			strategicInterval: 0,
@@ -1007,6 +1022,29 @@ describe('Agent', () => {
 		assert.equal(arc?.[0].args.to, 'Guard');
 	});
 
+	it('keeps who heard a line out of memory: the line is in the conversation', async () => {
+		const agent = soloCharacter<Ctx>({
+			id: 'Acolyte',
+			identity: { role: 'acolyte' },
+			provider: new FakeProvider(() => ({ content: 'wait(1)', toolCalls: [] })),
+			...stockVerbs(),
+			...perception(),
+			context: () => ({ paragraph: paragraph() }),
+			model: 'fake',
+			arcFormat: 'text',
+			heartbeat: 0,
+			toolRoundCap: 0,
+			arcRetryCap: 0,
+			strategicInterval: 0,
+		});
+		agent.mind!.ingestResult({ ok: true, verb: 'say', reason: 'heard by Guard; too far for Baker to make out the words: get closer' });
+		agent.mind!.ingestResult({ ok: true, verb: 'examine', reason: 'Gate is shut' });
+		await agent.mind!.tick(10);
+		const kept = agent.persona.memory.all().map((r) => r.text);
+		assert.ok(!kept.some((text) => text.startsWith('heard by Guard')), 'a say result was kept as a memory');
+		assert.ok(kept.includes('Gate is shut'), 'an examine result was not kept');
+	});
+
 	it('marks who is in earshot but out of reach, and why', async () => {
 		const talk = new TalkNet({
 			inRange: () => true,
@@ -1026,7 +1064,7 @@ describe('Agent', () => {
 			context: () => ({ paragraph: paragraph() }),
 			model: 'fake',
 			talk,
-			wayBlocked: (id) => (id === 'Angler' ? 'Bridge is raised' : undefined),
+			wayBlocked: (ids) => ids.map((id) => (id === 'Angler' ? 'Bridge is raised' : undefined)),
 			toolRoundCap: 0,
 			arcRetryCap: 0,
 		}).mind!.tick(1);
@@ -1068,6 +1106,8 @@ describe('Agent', () => {
 			...stockVerbs(),
 			...perception(),
 			context: () => ({ paragraph: paragraph() }),
+			// Native tool calls, as a model asked for plain JSON makes them.
+			arcFormat: 'json',
 			model: 'fake',
 			talk,
 			toolRoundCap: 1,
@@ -1504,6 +1544,8 @@ describe('Agent', () => {
 			...stockVerbs(),
 			...perception(),
 			context: () => ({ paragraph: paragraph() }),
+			// Native tool calls, as a model asked for plain JSON makes them.
+			arcFormat: 'json',
 			model: 'fake',
 			hideObserve: true,
 			toolRoundCap: 1,
@@ -1576,6 +1618,8 @@ describe('Agent', () => {
 			kit: { verbs: ['wait'] },
 			...perception(),
 			context: () => ({ paragraph: paragraph() }),
+			// Native tool calls, as a model asked for plain JSON makes them.
+			arcFormat: 'json',
 			model: 'fake',
 			toolRoundCap: 1,
 			arcRetryCap: 0,
@@ -1605,6 +1649,7 @@ describe('Agent', () => {
 			kit: { verbs: ['wait', 'wander'] },
 			...perception(),
 			context: () => ({ paragraph: paragraph() }),
+			arcFormat: 'json',
 			model: 'fake',
 			toolRoundCap: 1,
 			arcRetryCap: 0,
@@ -1662,6 +1707,8 @@ describe('Agent', () => {
 			...stockVerbs(),
 			...perception(),
 			context: () => ({ paragraph: paragraph() }),
+			// Native tool calls, as a model asked for plain JSON makes them.
+			arcFormat: 'json',
 			model: 'fake',
 			toolRoundCap: 1,
 			arcRetryCap: 0,
@@ -1825,6 +1872,8 @@ describe('Agent', () => {
 			...stockVerbs(),
 			...perception(),
 			context: () => ({ paragraph: paragraph() }),
+			// Native tool calls, as a model asked for plain JSON makes them.
+			arcFormat: 'json',
 			model: 'fake',
 			heartbeat: 0,
 			toolRoundCap: 1,
@@ -2126,6 +2175,8 @@ describe('Agent', () => {
 			},
 			...think,
 			heartbeat: 0,
+			// Native tool calls, as a model asked for plain JSON makes them.
+			arcFormat: 'json',
 			model: 'fake',
 			toolRoundCap: 0,
 			arcRetryCap: 0,
@@ -2196,6 +2247,8 @@ describe('Agent', () => {
 			},
 			...think,
 			heartbeat: 0,
+			// Native tool calls, as a model asked for plain JSON makes them.
+			arcFormat: 'json',
 			model: 'fake',
 			toolRoundCap: 0,
 			arcRetryCap: 0,

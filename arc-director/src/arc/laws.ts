@@ -9,6 +9,14 @@ export type Law = {
 	watch:string;
 	arc:Arc;
 	pinned?:boolean;
+	/**
+	 * Game seconds it runs once started before anything but its own end stops it: its watch turning false, another
+	 * law's turning true, or a new program from a think (which waits until then). Keeps a watch that sits on an edge from
+	 * switching laws every frame, and lets a slow act finish (a cast). None: the director's `withLawHold`.
+	 */
+	hold?:number;
+	/** A watch that ends its `hold` early the moment it is true, so a game decides what may cut it short: a blow. */
+	holdBreak?:string;
 };
 
 export type LawSpec = {
@@ -17,6 +25,10 @@ export type LawSpec = {
 	watch:string;
 	arc:Arc | string;
 	pinned?:boolean;
+	/** See {@link Law.hold}. */
+	hold?:number;
+	/** See {@link Law.holdBreak}. */
+	holdBreak?:string;
 };
 
 /** Most laws per group: a collective's own laws, and each member's. */
@@ -44,7 +56,15 @@ export function lawFromSpec(
 	if (!name) {
 		return undefined;
 	}
-	return { name, who, watch, arc, pinned: spec.pinned };
+	return {
+		name,
+		who,
+		watch,
+		arc,
+		pinned: spec.pinned,
+		...spec.hold === undefined ? {} : { hold: spec.hold },
+		...spec.holdBreak?.trim() ? { holdBreak: spec.holdBreak.trim() } : {},
+	};
 }
 
 /**

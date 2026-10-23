@@ -12,6 +12,7 @@ import type { ItemInstance } from '../items/instance';
 import { swapHeldHands } from '../items/equip';
 import { dropItem, interactChest, interactDoor, nearestPickup, pickup } from '../items/pickup';
 import { PlayerPilot } from './PlayerPilot';
+import { examineWorld } from '../director/perception';
 
 const YAW_SENS = 0.0024;
 /** A held guard: renewed this far ahead each frame Shift is down; the pose holds it up this long at most. */
@@ -125,6 +126,11 @@ export class PlayerInput extends Component {
 			}
 			else if (aimed?.getComponent(Door)) {
 				world.setMessage(interactDoor(this.gameObject, aimed));
+			}
+			else if (aimed) {
+				// Anything else aimed at is looked over, as an NPC's `examine` would; long reads stay up longer.
+				const seen = examineWorld(aimed);
+				world.setMessage(seen, Math.max(3.2, seen.length / 15));
 			}
 		}
 

@@ -125,9 +125,17 @@ export type ChatResponse = {
 	logprobs?:Record<string, number>;
 };
 
+/** Where a decision model answers as a System One (`POST …/systemone`), and the `fetch` that reaches it. */
+export type SystemOneEndpoint = { url:string; fetch?:typeof fetch };
+
 export type InferenceProvider = {
 	chat(req:ChatRequest):Promise<ChatResponse>;
 	embed?(texts:string[], model?:string):Promise<number[][]>;
+	/**
+	 * Where `model` answers as a System One, when this provider serves it as a decision model (a GGUF with a decision
+	 * head, such as Laya, in the page); undefined for a chat model, which is scored instead.
+	 */
+	systemOneEndpoint?(model:string):Promise<SystemOneEndpoint | undefined>;
 	/** Run `model` with `settings` from now on. A director calls it for each chat model it resolves on this server. */
 	configureModel?(model:string, settings:ModelSettings):void;
 	/** `model` is no longer configured: no model the director holds uses it. */

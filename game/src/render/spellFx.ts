@@ -6,7 +6,7 @@ import * as THREE from 'three';
  * `textures/fireball.png` (both see-through where they were black): lightning that crackles on a
  * staff and leaps at the target, a fireball that swells on a staff and flies, the glint that charges
  * on a drawn arrow's head, and the light that rises from the ground under a healer and whoever they
- * heal, with a circle of runes turning on the ground under whoever casts lightning or fire. Built
+ * heal, with a magic circle turning on the ground under whoever casts lightning or fire. Built
  * on Kindling's effects.
  */
 
@@ -100,8 +100,8 @@ const FIREBALL_TRAIL = 0.03;
 const FIRE_GLOW = 0xff6a20;
 
 /**
- * The circle of runes under a caster while lightning or fire gathers: how wide (m), how long it
- * takes to open and to go once the spell is loosed or cut (s), how fast its rings and its star turn
+ * The magic circle under a caster while lightning or fire gathers: how wide (m), how long it
+ * takes to open and to go once the spell is loosed or cut (s), how fast its outer and inner rings turn
  * (radians/s), and its color per spell.
  */
 const RUNE_SIZE = 2.2;
@@ -210,7 +210,8 @@ void main() {
 `;
 
 // A magic circle flat on the ground (r 0 at the middle, 1 at the rim): a double rim with a band of
-// rune marks turning between its rings, an inner ring, and a six-pointed star turning the other way.
+// plain dashes turning between its rings, an inner ring, and inside it two broken rings and a
+// few orbiting dots turning the other way. Pure geometry: no stars, letters or symbols of any faith.
 const RUNE_FRAGMENT = `
 uniform float uTurn;
 uniform float uStarTurn;
@@ -220,27 +221,23 @@ varying vec2 vUv;
 float ring(float r, float at, float w) {
 	return 1.0 - smoothstep(0.0, w, abs(r - at));
 }
-float segment(vec2 p, vec2 a, vec2 b, float w) {
-	vec2 pa = p - a;
-	vec2 ba = b - a;
-	float h = clamp(dot(pa, ba) / dot(ba, ba), 0.0, 1.0);
-	return 1.0 - smoothstep(0.0, w, length(pa - ba * h));
+float turns(float a) {
+	return a / 6.28318;
 }
 void main() {
 	vec2 p = (vUv - 0.5) * 2.0;
 	float r = length(p);
 	if (r > 1.0) discard;
+	float a = atan(p.y, p.x);
 	float lines = ring(r, 0.96, 0.03) + ring(r, 0.8, 0.02) + ring(r, 0.46, 0.02);
-	float cell = fract((atan(p.y, p.x) + uTurn) * 20.0 / 6.28318);
+	float cell = fract(turns(a + uTurn) * 20.0);
 	float runes = step(0.84, r) * step(r, 0.92) * (step(0.2, cell) * step(cell, 0.45) + step(0.6, cell) * step(cell, 0.7));
-	float star = 0.0;
-	for (int i = 0; i < 6; i++) {
-		float a0 = uStarTurn + float(i / 3) * 1.0472 + float(i - (i / 3) * 3) * 2.0944;
-		vec2 a = 0.8 * vec2(cos(a0), sin(a0));
-		vec2 b = 0.8 * vec2(cos(a0 + 2.0944), sin(a0 + 2.0944));
-		star = max(star, segment(p, a, b, 0.025));
-	}
-	float alpha = clamp(lines + runes + star, 0.0, 1.0) + 0.08 * (1.0 - r);
+	float broken = ring(r, 0.68, 0.022) * step(0.2, fract(turns(a + uStarTurn) * 3.0))
+		+ ring(r, 0.58, 0.015) * step(0.4, fract(turns(a - uStarTurn * 1.6) * 5.0));
+	float k = floor(turns(a - uStarTurn * 2.0) * 4.0 + 0.5);
+	float at = uStarTurn * 2.0 + k * 1.5708;
+	float dots = 1.0 - smoothstep(0.035, 0.055, length(p - 0.3 * vec2(cos(at), sin(at))));
+	float alpha = clamp(lines + runes + broken + dots, 0.0, 1.0) + 0.08 * (1.0 - r);
 	gl_FragColor = vec4(uColor, alpha * uOpacity);
 	#include <colorspace_fragment>
 }
@@ -460,7 +457,7 @@ export function lightning(scene:THREE.Object3D, cast:Cast):void {
 }
 
 /**
- * A circle of runes, `color`, turning on the ground under `body` while a spell gathers: it opens
+ * A magic circle, `color`, turning on the ground under `body` while a spell gathers: it opens
  * out, and goes once the spell is `settled` (loosed or cut), or at once if the body is gone.
  */
 function runeCircle(scene:THREE.Object3D, body:()=>Stance | null, settled:(age:number)=>Settled | null, color:number):void {

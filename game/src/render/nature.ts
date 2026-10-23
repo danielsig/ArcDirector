@@ -1,19 +1,96 @@
 import * as THREE from 'three';
 import { patchShader, ToonMaterial, hash } from '@arc-director/kindling';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { TILE_HEIGHT } from '../world/constants';
+import type { Wake } from '../world/decodeGlyphChunk';
 
 export type NatureMaps = {
 	water:THREE.Texture;
-	/** Riverbank wet sand and pebbles, tiled in world space. */
+	/** Riverbank sand and pebbles, laid across the bank: dry at the top, wet at the bottom (`bankUV`). */
 	sand:THREE.Texture;
+	/** Where the sand fades into the lawn, in the same layout: white lawn, black sand. */
+	sandLawn:THREE.Texture;
+	/** Cliff rock in ledges, mossy at the foot: one picture is {@link CLIFF_TILE} high. */
+	cliff:THREE.Texture;
+	/** A cliff tile (`models/Cliff.glb`): a rock slope 1 m up and 1 m back, its foot along +Z, its lip at -Z. */
+	cliffTile:ModelTile;
+	/** Small rocks (`models/Rocks.glb`), biggest across first; they share one picture. */
+	rocks:ModelTile[];
+	/** Boulders (`models/Boulders.glb`), biggest across first; they share one picture. */
+	boulders:ModelTile[];
 };
 
-/** Meters one tile of the riverbank sand painting covers: its biggest pebbles come out about 7 cm. */
-const SAND_TILE = 1;
+/** A model's mesh, as geometry to instance, the picture painted on it, and its meters across (the wider way on the ground). */
+export type ModelTile = { geom:THREE.BufferGeometry; map:THREE.Texture; across:number };
+
+function tileOf(geom:THREE.BufferGeometry, mesh:THREE.Mesh):ModelTile {
+	geom.userData.shared = true;
+	geom.computeBoundingBox();
+	const size = geom.boundingBox!.getSize(new THREE.Vector3());
+	const map = (mesh.material as THREE.MeshStandardMaterial).map!;
+	map.anisotropy = 4;
+	return { geom, map, across: Math.max(size.x, size.z) };
+}
+
+/** The first mesh of a GLB, its node's transform applied. */
+async function loadTile(url:string):Promise<ModelTile> {
+	const gltf = await new GLTFLoader().loadAsync(url);
+	let tile:ModelTile | undefined;
+	gltf.scene.updateMatrixWorld(true);
+	gltf.scene.traverse((node) => {
+		const mesh = node as THREE.Mesh;
+		if (tile || !mesh.isMesh) {
+			return;
+		}
+		tile = tileOf(mesh.geometry.clone().applyMatrix4(mesh.matrixWorld), mesh);
+	});
+	if (!tile) {
+		throw new Error(`${url}: no mesh`);
+	}
+	return tile;
+}
+
+/** One of `pieces`, picked by where it stands, so the same spot always shows the same one. */
+export function pieceAt(pieces:ModelTile[], x:number, z:number):ModelTile {
+	return pieces[Math.floor(hash(x, z, 61) * pieces.length) % pieces.length]!;
+}
+
+/** Every mesh of a sheet of props split by `buildModels` (`split`), in file order, each in its own frame: origin at its foot. */
+async function loadPieces(url:string):Promise<ModelTile[]> {
+	const gltf = await new GLTFLoader().loadAsync(url);
+	const pieces:ModelTile[] = [];
+	gltf.scene.traverse((node) => {
+		const mesh = node as THREE.Mesh;
+		if (mesh.isMesh) {
+			pieces.push(tileOf(mesh.geometry, mesh));
+		}
+	});
+	if (pieces.length === 0) {
+		throw new Error(`${url}: no mesh`);
+	}
+	return pieces;
+}
+
+/** Meters of cliff one copy of the cliff picture covers, up and (by its shape) across. */
+export const CLIFF_TILE = { up: 2.45, across: 2.45 * 576 / 988 };
+
+/**
+ * Meters along a bank one copy of the riverbank sand painting covers (`bankUV`). Its height spans the bank, dry top to
+ * wet foot, about as wide, so its pebbles come out round, the biggest about 5 cm.
+ */
+export const SAND_TILE = 0.5;
 
 export const GRASS_Y = 0.012;
-export const WATER_UPPER_Y = GRASS_Y;
-export const WATER_LOWER_Y = GRASS_Y - 0.14;
+/** A river's surface: its current lines, foam and ripples. */
+export const WATER_UPPER_Y = GRASS_Y - 0.12;
+/** A river's bed: just under its surface, so ripples lie on the water and no bank shows through it. */
+export const WATER_LOWER_Y = WATER_UPPER_Y - 0.01;
 export const GRASS_UV_REP = 4;
+/**
+ * A river's surface draws after the see-through things under it, so they still show through, and before a waterfall's
+ * mist (2), which veils it.
+ */
+export const SURFACE_ORDER = 1;
 
 const windMats = new Set<THREE.Material>();
 const matCache = new Map<string, THREE.Material>();
@@ -300,8 +377,16 @@ export function loadNature():Promise<NatureMaps> {
 	if (pending) {
 		return pending;
 	}
-	// Water is painted in code; the riverbank sand is a picture in public/textures.
-	pending = new THREE.TextureLoader().loadAsync(`${import.meta.env.BASE_URL}textures/riverbank-wet-sand.jpg`).then((sand) => {
+	// Water is painted in code; the riverbank sand and the cliff rock are pictures in public/textures.
+	const loader = new THREE.TextureLoader();
+	pending = Promise.all([
+		loader.loadAsync(`${import.meta.env.BASE_URL}textures/riverbank-sand.jpg`),
+		loader.loadAsync(`${import.meta.env.BASE_URL}textures/riverbank-sand-lawn.png`),
+		loader.loadAsync(`${import.meta.env.BASE_URL}textures/cliff-rock.jpg`),
+		loadTile(`${import.meta.env.BASE_URL}models/Cliff.glb`),
+		loadPieces(`${import.meta.env.BASE_URL}models/Rocks.glb`),
+		loadPieces(`${import.meta.env.BASE_URL}models/Boulders.glb`),
+	]).then(([sand, sandLawn, cliff, cliffTile, rocks, boulders]) => {
 		const water = texFromCanvas(paintToonWater(), true);
 		water.colorSpace = THREE.NoColorSpace;
 		water.generateMipmaps = false;
@@ -309,12 +394,19 @@ export function loadNature():Promise<NatureMaps> {
 		water.magFilter = THREE.LinearFilter;
 		water.needsUpdate = true;
 		sand.colorSpace = THREE.SRGBColorSpace;
+		// Repeats along the bank; across it runs once, dry to wet.
 		sand.wrapS = THREE.RepeatWrapping;
-		sand.wrapT = THREE.RepeatWrapping;
+		sand.wrapT = THREE.ClampToEdgeWrapping;
 		sand.anisotropy = 4;
-		// Ground UVs are meters over GRASS_UV_REP; this makes one tile of the painting cover SAND_TILE meters.
-		sand.repeat.setScalar(GRASS_UV_REP / SAND_TILE);
-		maps = { water, sand };
+		sandLawn.colorSpace = THREE.NoColorSpace;
+		sandLawn.wrapS = THREE.RepeatWrapping;
+		sandLawn.wrapT = THREE.ClampToEdgeWrapping;
+		cliff.colorSpace = THREE.SRGBColorSpace;
+		// Mirrored across, so its sides always meet; up, the mossy foot starts each face.
+		cliff.wrapS = THREE.MirroredRepeatWrapping;
+		cliff.wrapT = THREE.RepeatWrapping;
+		cliff.anisotropy = 4;
+		maps = { water, sand, sandLawn, cliff, cliffTile, rocks, boulders };
 		return maps;
 	});
 	return pending;
@@ -349,10 +441,32 @@ float waterNoise(vec2 p) {
 
 export type WaterLayer = 'lower' | 'upper';
 
-/** Two sheets: a bed tinted by depth, and over it thin current lines, a bank edge line, and rings spreading from waterfalls. */
+/**
+ * Two sheets: a bed tinted by depth, and over it thin current lines, a bank edge line, and rings spreading from
+ * waterfalls over the water they land in (not the river they pour from).
+ */
 export function toonWaterMat(map:THREE.Texture, layer:WaterLayer):ToonMaterial {
-	return remember(`water:${layer}:38:${map.uuid}`, () => makeToonWaterMat(map, layer));
+	return remember(`water:${layer}:52:${map.uuid}`, () => makeToonWaterMat(map, layer));
 }
+
+/**
+ * The river's blue (`toon`): deep in the middle, lighter toward the banks, with a slow drifting wobble. One crisp
+ * step (the earthen bank marks the edge, so no shallow band hugs it).
+ */
+const WATER_BLUE = `float wob = waterNoise(vec2(q.x * 0.6 - uTime * 0.36 * moving, q.y * 1.4) + 4.0);
+			float s = clamp(vShore * 1.6 + (wob - 0.5) * 0.3, 0.0, 1.0);
+			// A crisp anime depth band, edged by a thin lighter line.
+			float aa = fwidth(s) + 0.01;
+			float b1 = smoothstep(0.24 - aa, 0.24 + aa, s);
+			vec3 toon = mix(vec3(0.03, 0.19, 0.38), vec3(0.06, 0.34, 0.58), b1);
+			float rim = 1.0 - smoothstep(0.0, 0.035, abs(s - 0.24));
+			toon = mix(toon, vec3(0.45, 0.75, 0.85), rim * 0.45);
+			// Light and shade drifting downstream, in two crisp steps.
+			float drift = waterNoise(vec2(q.x * 0.7 - uTime * 0.45 * moving, q.y * 2.4 + 5.0));
+			toon *= mix(1.0, 0.88 + 0.24 * step(0.55, drift), moving);`;
+
+/** How much the surface's blue hides what is under it, between its foam. */
+const SURFACE_OPACITY = 0.8;
 
 function makeToonWaterMat(map:THREE.Texture, layer:WaterLayer):ToonMaterial {
 	const upper = layer === 'upper';
@@ -361,22 +475,28 @@ function makeToonWaterMat(map:THREE.Texture, layer:WaterLayer):ToonMaterial {
 		color: 0xffffff,
 		transparent: upper,
 		opacity: 1,
-		depthWrite: !upper,
+		// Writes depth, as window glass does: the ink pass sees a flat surface and inks nothing through it.
+		depthWrite: true,
 		side: THREE.DoubleSide,
 		shadowSide: THREE.FrontSide,
 		outline: false,
+		// The bed is hidden for now.
+		visible: upper,
 	});
 	const bob = upper
 		? '(sin(position.x * 1.15 + uTime) + sin(position.z * 1.9 + uTime * 0.7)) * 0.003'
 		: '(sin(position.x * 0.85 + uTime * 0.55 + 2.1) + sin(position.z * 1.25 + uTime * 0.4 + 1.3)) * 0.002';
-	patchShader(mat, `wwRiver38:${layer}`, (shader) => {
+	patchShader(mat, `wwRiver54:${layer}`, (shader) => {
 		bindTime(mat, shader);
 		shader.uniforms.uFalls = fallLandings;
+		shader.uniforms.uRocks = rockSpots;
+		shader.uniforms.uRockWays = rockWays;
 		shader.vertexShader = `uniform float uTime;
 attribute vec2 flow;
 attribute float shore;
 varying vec2 vFlow;
 varying float vShore;
+varying float vWaterY;
 ${shader.vertexShader}`;
 		shader.vertexShader = shader.vertexShader.replace(
 			'#include <uv_vertex>',
@@ -387,60 +507,85 @@ ${shader.vertexShader}`;
 		shader.vertexShader = shader.vertexShader.replace(
 			'#include <begin_vertex>',
 			`#include <begin_vertex>
-			transformed.y += ${bob};`,
+			transformed.y += ${bob};
+			vWaterY = (modelMatrix * vec4(transformed, 1.0)).y;`,
 		);
 		shader.fragmentShader = `uniform float uTime;
-uniform vec3 uFalls[${FALLS}];
+uniform vec4 uFalls[${FALLS}];
+uniform vec4 uRocks[${ROCKS}];
+uniform vec3 uRockWays[${ROCKS}];
 varying vec2 vFlow;
 varying float vShore;
+varying float vWaterY;
 ${WATER_NOISE}
 ${shader.fragmentShader}`;
 		const tint = upper
-			// Over the bed: thin current lines riding downstream, a thin edge line at the banks, and big rings
-			// spreading from where waterfalls land. Nothing else rings, clumps or glitters.
+			// Over the bed: thin current lines riding downstream, big rings spreading from where waterfalls land,
+			// and small ones trailing off rocks. Nothing else rings, clumps or glitters.
 			? `// Current lines across the whole width: thin ridges of noise stretched along the flow, sliding downstream.
 			float lane = waterNoise(vec2(q.x * 0.35 - uTime * 0.495 * moving, q.y * 5.0 + 1.7));
 			float lanes = moving * (1.0 - smoothstep(0.0, 0.05, abs(lane - 0.5)))
 				* smoothstep(0.35, 0.65, waterNoise(vec2(q.x * 0.6 - uTime * 0.495 * moving, q.y * 1.3 + 8.0)));
-			// A thin wavering line where water meets the bank.
-			float edge = vShore + (waterNoise(vec2(q.x * 2.2 - uTime * 0.36 * moving, q.y * 2.2)) - 0.5) * 0.12;
-			float foam = smoothstep(0.44, 0.47, edge) * (1.0 - smoothstep(0.52, 0.56, edge));
 			// Faint dashes trailing downstream just off the bank.
 			float trail = smoothstep(0.22, 0.3, vShore) * (1.0 - smoothstep(0.34, 0.4, vShore))
 				* smoothstep(0.6, 0.66, waterNoise(vec2(q.x * 1.6 - uTime * 0.54 * moving, q.y * 9.0)));
-			// Waterfall rings: wide, slowly spreading, wobbling a little, fading with distance.
+			// Waterfall rings: wide, slowly spreading, wobbling a little, fading with distance. On the river a fall pours
+			// from (up on the cliff, a level or more above where it lands) there are none: it whitens toward the lip instead.
 			float fallRing = 0.0;
 			for (int i = 0; i < ${FALLS}; i++) {
-				if (uTime - uFalls[i].z > 0.5) {
+				if (uTime - uFalls[i].w > 0.5) {
 					continue;
 				}
-				vec2 off = wp - uFalls[i].xy;
+				float above = step(${(TILE_HEIGHT / 2).toFixed(3)}, abs(vWaterY - uFalls[i].y));
+				vec2 off = wp - uFalls[i].xz;
 				float d = length(off) + 0.12 * sin(atan(off.y, off.x) * 5.0 + uTime * 0.9);
 				// Foam where it lands, its edge churning, turning into rings: thick bands that thin as they
 				// spread and are gone by about 6 m. A ring is where the phase is near a whole number.
 				float churn = waterNoise(vec2(atan(off.y, off.x) * 2.0, uTime * 0.8)) * 0.35;
 				float foamPool = 1.0 - smoothstep(0.75, 0.95, d - churn);
+				// Up on the cliff: one long fade up the river, white at the lip (half a meter upstream of the landing).
+				float upstream = -dot(off, down);
+				float whiten = (1.0 - smoothstep(0.5, 3.5, upstream)) * step(0.0, upstream);
+				foamPool = mix(foamPool, whiten, above);
 				float ringHalf = mix(0.3, 0.485, smoothstep(0.9, 4.0, d));
 				float band = abs(fract(d * 0.45 - uTime * 0.3) - 0.5);
 				float line = smoothstep(ringHalf, ringHalf + 0.015, band);
-				fallRing = max(fallRing, max(foamPool, line * smoothstep(0.7, 1.1, d) * (1.0 - smoothstep(2.5, 6.0, d))));
+				fallRing = max(fallRing, max(foamPool, (1.0 - above) * line * smoothstep(0.7, 1.1, d) * (1.0 - smoothstep(2.5, 6.0, d))));
 			}
-			float alpha = clamp(max(max(lanes * 0.5, foam * 0.75), max(trail * 0.35, fallRing * 0.85)), 0.0, 1.0);
-			diffuseColor = vec4(vec3(0.86, 0.96, 1.0), alpha);`
-			// The bed: deep in the middle, shallow and light toward the banks, with a slow drifting wobble.
-			: `float wob = waterNoise(vec2(q.x * 0.6 - uTime * 0.36 * moving, q.y * 1.4) + 4.0);
-			float s = clamp(vShore * 1.6 + (wob - 0.5) * 0.3, 0.0, 1.0);
-			// Crisp anime depth bands, each edged by a thin lighter line.
-			float aa = fwidth(s) + 0.01;
-			float b1 = smoothstep(0.24 - aa, 0.24 + aa, s);
-			float b2 = smoothstep(0.62 - aa, 0.62 + aa, s);
-			vec3 toon = mix(vec3(0.03, 0.19, 0.38), vec3(0.06, 0.34, 0.58), b1);
-			toon = mix(toon, vec3(0.2, 0.54, 0.66), b2);
-			float rim = (1.0 - smoothstep(0.0, 0.035, abs(s - 0.24))) + (1.0 - smoothstep(0.0, 0.035, abs(s - 0.62)));
-			toon = mix(toon, vec3(0.45, 0.75, 0.85), clamp(rim, 0.0, 1.0) * 0.45);
-			// Light and shade drifting downstream through the deep middle, in two crisp steps.
-			float drift = waterNoise(vec2(q.x * 0.7 - uTime * 0.45 * moving, q.y * 2.4 + 5.0));
-			toon *= mix(1.0, 0.88 + 0.24 * step(0.55, drift), moving * (1.0 - b2));
+			// Rock ripples: the waterfall's rings made small, a foam collar where the rock breaks the surface and rings
+			// spreading from it, trailing off downstream with the current only. In still water they trail the
+			// rock's own way (all round if it has none).
+			float rockRing = 0.0;
+			for (int i = 0; i < ${ROCKS}; i++) {
+				if (uTime - uRocks[i].w > 0.5) {
+					continue;
+				}
+				vec2 off = wp - uRocks[i].xy;
+				// Which way and how far the ripples trail: the rock's own wake if it has one, else as far as the current
+				// draws them (1), else nowhere: round (any way will do, unstretched), and reaching about half as far.
+				float own = length(uRockWays[i].xy);
+				float wake = step(0.01, own);
+				float reach = mix(moving, own, wake);
+				float flowing = step(0.01, reach);
+				vec2 way = wake > 0.5 ? uRockWays[i].xy / own : moving > 0.5 ? down : vec2(1.0, 0.0);
+				float along = dot(off, way);
+				// A narrow wake: drawn far out downstream, barely past the rock's sides (wider by its spread).
+				float stretch = 1.0 + reach;
+				float squeeze = mix(1.0, 1.6 / uRockWays[i].z, flowing);
+				float d = (length(vec2(along / stretch, dot(off, vec2(-way.y, way.x)) * squeeze)) - uRocks[i].z) * mix(1.79, 1.0, flowing);
+				// The collar hugs the rock all round; only the rings trail off downstream.
+				float collar = 1.0 - smoothstep(0.03, 0.07, length(off) - uRocks[i].z);
+				float band = abs(fract(d * 4.0 - uTime * 0.7) - 0.5);
+				float rings = smoothstep(0.4, 0.415, band) * smoothstep(0.06, 0.12, d) * (1.0 - smoothstep(0.25, 0.6, d))
+					* mix(1.0, smoothstep(0.0, 0.3, along), flowing);
+				rockRing = max(rockRing, max(collar, rings));
+			}
+			float alpha = clamp(max(max(lanes * 0.5, trail * 0.35), max(fallRing * 0.85, rockRing * 0.8)), 0.0, 1.0);
+			// The foam over the river's blue, see-through.
+			${WATER_BLUE}
+			diffuseColor = vec4(mix(toon, vec3(0.86, 0.96, 1.0), alpha), max(alpha, ${SURFACE_OPACITY.toFixed(2)}));`
+			// The bed: the river's blue.
+			: `${WATER_BLUE}
 			diffuseColor = vec4(toon, 1.0);`;
 		shader.fragmentShader = shader.fragmentShader.replace(
 			'#include <map_fragment>',
@@ -462,8 +607,8 @@ export function waterBedMat():ToonMaterial {
 
 /** Most waterfalls whose rings the river draws at once. */
 const FALLS = 4;
-/** Each slot: landing x, landing z, and the wind-clock time it was last marked (stale slots go dark). */
-const fallLandings = { value: Array.from({ length: FALLS }, () => new THREE.Vector3(0, 0, -1e9)) };
+/** Each slot: where the fall lands (x, y, z) and the wind-clock time it was last marked (stale slots go dark). */
+const fallLandings = { value: Array.from({ length: FALLS }, () => new THREE.Vector4(0, 0, 0, -1e9)) };
 let natureTime = 0;
 let nextFallSlot = 0;
 
@@ -472,9 +617,31 @@ export function claimFallSlot():number {
 	return nextFallSlot++ % FALLS;
 }
 
-/** Where a waterfall lands this frame, in world XZ. The river draws its rings from here until marks stop. */
-export function markFallLanding(slot:number, x:number, z:number):void {
-	fallLandings.value[slot]?.set(x, z, natureTime);
+/** Where a waterfall lands this frame, in world space. The water at that height draws its rings from here until marks stop. */
+export function markFallLanding(slot:number, at:THREE.Vector3):void {
+	fallLandings.value[slot]?.set(at.x, at.y, at.z, natureTime);
+}
+
+/** Most rocks standing in water whose ripples the river draws at once. */
+const ROCKS = 8;
+/** Each slot: where a rock stands in the water (x, z), its radius at the waterline, and the wind-clock time it was last marked. */
+const rockSpots = { value: Array.from({ length: ROCKS }, () => new THREE.Vector4(0, 0, 0, -1e9)) };
+/** Each slot: the way a rock's ripples trail (world XZ, as far as it is long; zero for the current's, or all round in still water), and how wide they spread (1 as the current draws them). */
+const rockWays = { value: Array.from({ length: ROCKS }, () => new THREE.Vector3(0, 0, 1)) };
+let nextRockSlot = 0;
+
+/** A slot for one rock standing in water. */
+export function claimRockSlot():number {
+	return nextRockSlot++ % ROCKS;
+}
+
+/**
+ * Where a rock stands in the water this frame, in world XZ, its radius at the waterline, and its `wake` (see
+ * `EntityLegend.wake`): the river ripples round it until marks stop.
+ */
+export function markRock(slot:number, x:number, z:number, radius:number, wake:Wake):void {
+	rockSpots.value[slot]?.set(x, z, radius, natureTime);
+	rockWays.value[slot]?.set(wake.x, wake.z, wake.spread ?? 1);
 }
 
 export function tickNature(time:number):void {

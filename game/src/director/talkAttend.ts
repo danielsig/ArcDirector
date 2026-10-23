@@ -1,7 +1,7 @@
 import { Time, clamp, lerpAngle, yawToward, type GameObject } from '@arc-director/kindling';
 import { NPCInput } from '../characters/NPCInput';
 import { PlayerInput } from '../characters/PlayerInput';
-import { Companion, Named } from '../engine/components';
+import { Companion, HumanBody, Named } from '../engine/components';
 import type { World } from '../engine/World';
 import { distXZ } from '../items/inventory';
 import { lineClear } from '../world/path';
@@ -28,27 +28,7 @@ export function talkNotices(viewer:GameObject, go:GameObject):boolean {
 	return !!bond && (go.id === bond.targetID || go.getComponent(Named)?.id === bond.targetID);
 }
 
-export function talkCanSee(world:World, aID:string, bID:string):boolean {
-	const a = findObject(world, aID);
-	const b = findObject(world, bID);
-	if (!a || !b || a === b) {
-		return false;
-	}
-	if (!talkNotices(a, b)) {
-		return false;
-	}
-	return lineClear(
-		world,
-		a.transform.position.x,
-		a.transform.position.z,
-		b.transform.position.x,
-		b.transform.position.z,
-		false,
-		true,
-	);
-}
-
-/** Close enough to catch every word: within 2 m, or within 8 m with nothing solid between. People in the way do not stop a voice. */
+/** Close enough to catch every word: within 2 m, or within 8 m where sound passes. People in the way do not stop a voice. */
 export function canHearClearly(world:World, speakerID:string, listenerID:string):boolean {
 	const speaker = findObject(world, speakerID);
 	const listener = findObject(world, listenerID);
@@ -62,20 +42,14 @@ export function canHearClearly(world:World, speakerID:string, listenerID:string)
 	if (dist > CLEAR_RANGE) {
 		return false;
 	}
-	return lineClear(
-		world,
-		speaker.transform.position.x,
-		speaker.transform.position.z,
-		listener.transform.position.x,
-		listener.transform.position.z,
-		true,
-	);
+	return lineClear(world, 'sound', speaker.transform.position, listener.transform.position);
 }
 
 export function talkFace(world:World, who:string, toward:string):void {
 	const character = findObject(world, who);
 	const peer = findObject(world, toward);
-	if (!character || !peer || character.getComponent(PlayerInput)) {
+	// Only someone with a body turns to whoever speaks; a stone spoken to stays as it stands.
+	if (!character || !peer || character.getComponent(PlayerInput) || !character.getComponent(HumanBody)) {
 		return;
 	}
 	const dx = peer.transform.position.x - character.transform.position.x;

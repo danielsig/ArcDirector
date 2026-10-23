@@ -1,8 +1,9 @@
 import * as THREE from 'three';
-import { mergeParts, type PosedPart, hash } from '@arc-director/kindling';
-import { WALL_HEIGHT } from '../world/constants';
-import { claimFallSlot, fallFoamMat, fallMistMat, fallSheetMat, markFallLanding } from './nature';
-import { PALETTE, plankMat, rockMat, thatchMat, toon, WET_SHADE } from './toon';
+import { mergeParts, type PosedPart } from '@arc-director/kindling';
+import { BOULDER_SIZE, WALL_HEIGHT } from '../world/constants';
+import type { RoofStyle, Wake } from '../world/decodeGlyphChunk';
+import { claimFallSlot, claimRockSlot, getNature, markRock, fallFoamMat, fallMistMat, fallSheetMat, markFallLanding, WATER_UPPER_Y } from './nature';
+import { PALETTE, plankMat, riverRockMat, slateMat, thatchMat, tileMat, toon } from './toon';
 
 
 function planarUV(pts:THREE.Vector3[], uScale:number, vScale:number):number[] {
@@ -80,74 +81,53 @@ export function occupyRoof(mesh:THREE.Mesh):THREE.Mesh {
 	return mesh;
 }
 
-/** Roof, ceiling, chimney, and windows. Walls/door are tiles; this sits on a 6×5 footprint. */
-export function createCottageMesh():THREE.Group {
+/**
+ * A house's roof and ceiling over a wall line `halfW` × `halfD` meters from its middle (walls, window and door are
+ * tiles): gables stand on the line, the roof overhangs it, thatched or in slate. With `chimney`, a house 5 m wide or
+ * more has one.
+ */
+export function createRoofMesh(halfW:number, halfD:number, style:RoofStyle = 'thatch', chimney = true):THREE.Group {
 	// Own copies: the roof fades when the player walks under it.
 	const wood = plankMat().clone();
-	const thatch = thatchMat().clone();
+	const thatch = style === 'slate' ? slateMat().clone() : thatchMat().clone();
 	const g = new THREE.Group();
-	g.userData.kind = 'cottage';
-	const halfW = 3;
-	const halfD = 2.5;
-	const over = 0.18;
-	const hw = halfW + over;
-	const hd = halfD + over;
-	const eaveY = WALL_HEIGHT - 0.06;
-	const ridgeY = eaveY + 1.01;
-	const nw = new THREE.Vector3(-hw, eaveY, -hd);
-	const ne = new THREE.Vector3(hw, eaveY, -hd);
-	const sw = new THREE.Vector3(-hw, eaveY, hd);
-	const se = new THREE.Vector3(hw, eaveY, hd);
-	const rw = new THREE.Vector3(-hw, ridgeY, 0);
-	const re = new THREE.Vector3(hw, ridgeY, 0);
+	g.userData.kind = 'house';
+	const hw = halfW + 0.3;
+	const hd = halfD + 0.45;
+	const eaveY = WALL_HEIGHT;
+	// The same pitch on any house.
+	const ridgeY = eaveY + halfD * 0.5;
+	const eave = (x:number, z:number):THREE.Vector3 => new THREE.Vector3(x, eaveY, z);
+	const ridge = (x:number):THREE.Vector3 => new THREE.Vector3(x, ridgeY, 0);
+
 	const roof = new THREE.Group();
 	roof.name = 'roof';
-	roof.add(quadMesh(sw, se, re, rw, thatch, 2, 1.45));
-	roof.add(quadMesh(ne, nw, rw, re, thatch, 2, 1.45));
-	roof.add(triMesh(nw, sw, rw, wood, 1.1, 1.1));
-	roof.add(triMesh(se, ne, re, wood, 1.1, 1.1));
-	const ceiling = new THREE.Mesh(new THREE.BoxGeometry(5.15, 0.28, 4.15), wood);
-	ceiling.name = 'ceiling';
-	ceiling.position.y = WALL_HEIGHT - 0.08;
-	ceiling.castShadow = true;
-	ceiling.receiveShadow = true;
-	roof.add(ceiling);
+	// roof top
+	roof.add(quadMesh(eave(-hw, hd), eave(hw, hd), ridge(hw), ridge(-hw), thatch, 2, 1.45));
+	roof.add(quadMesh(eave(hw, -hd), eave(-hw, -hd), ridge(-hw), ridge(hw), thatch, 2, 1.45));
+	// roof sides
+	roof.add(triMesh(eave(-halfW, -hd), eave(-halfW, hd), ridge(-halfW), wood, 1, 1));
+	roof.add(triMesh(eave(halfW, hd), eave(halfW, -hd), ridge(halfW), wood, 1, 1));
+
 	g.add(roof);
+
+
 	g.userData.roof = roof;
 	g.userData.roofHalfW = halfW;
 	g.userData.roofHalfD = halfD;
-	const chimney = new THREE.Mesh(new THREE.BoxGeometry(0.42, 1.05, 0.42), toon(0x5a534c));
-	chimney.position.set(1.35, (ridgeY + eaveY) * 0.5 + 0.45, -1.05);
-	g.add(occupyRoof(chimney));
+	if (!chimney || halfW < 2.5) {
+		return g;
+	}
+
+	// chimney
+	const stack = new THREE.Mesh(new THREE.BoxGeometry(0.42, 1.05, 0.42), toon(0x5a534c));
+	stack.position.set(1.35, (ridgeY + eaveY) * 0.5 + 0.45, -1.05);
+	g.add(occupyRoof(stack));
 	const cap = new THREE.Mesh(new THREE.BoxGeometry(0.52, 0.1, 0.52), toon(0x3e3a36));
-	cap.position.copy(chimney.position);
+	cap.position.copy(stack.position);
 	cap.position.y += 0.55;
 	g.add(occupyRoof(cap));
-	const glass = toon(0x1a2430);
-	const shutter = toon(0x4a301c);
-	const winY = 1.22;
-	const east = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.58, 0.78), glass);
-	east.position.set(halfW + 0.02, winY, 0);
-	g.add(east);
-	const west = east.clone();
-	west.position.x = -halfW - 0.02;
-	g.add(west);
-	const north = new THREE.Mesh(new THREE.BoxGeometry(0.78, 0.58, 0.08), glass);
-	north.position.set(-1.05, winY, -halfD - 0.02);
-	g.add(north);
-	const north2 = north.clone();
-	north2.position.x = 1.05;
-	g.add(north2);
-	for (const pane of [east, west]) {
-		const frame = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.68, 0.88), shutter);
-		frame.position.copy(pane.position);
-		g.add(frame);
-	}
-	for (const pane of [north, north2]) {
-		const frame = new THREE.Mesh(new THREE.BoxGeometry(0.88, 0.68, 0.1), shutter);
-		frame.position.copy(pane.position);
-		g.add(frame);
-	}
+
 	return g;
 }
 
@@ -159,140 +139,41 @@ export function createTreeMesh(kind:'oak' | 'pine'):THREE.Group {
 	return g;
 }
 
-function weldIndexed(src:THREE.BufferGeometry, quant = 1e3):THREE.BufferGeometry {
-	const pos = src.getAttribute('position');
-	const keyTo = new Map<string, number>();
-	const unique:number[] = [];
-	const index:number[] = [];
-	for (let i = 0; i < pos.count; i++) {
-		const x = pos.getX(i);
-		const y = pos.getY(i);
-		const z = pos.getZ(i);
-		const key = `${Math.round(x * quant)},${Math.round(y * quant)},${Math.round(z * quant)}`;
-		let id = keyTo.get(key);
-		if (id === undefined) {
-			id = unique.length / 3;
-			keyTo.set(key, id);
-			unique.push(x, y, z);
-		}
-		index.push(id);
-	}
-	const geo = new THREE.BufferGeometry();
-	geo.setAttribute('position', new THREE.Float32BufferAttribute(unique, 3));
-	geo.setIndex(index);
-	return geo;
-}
+/** Meters across a boulder of size 1: a map's `o` boulder, or one out in the land past the map. */
+export const BOULDER_ACROSS = 1.15;
 
-let rockGeo:THREE.BufferGeometry | null = null;
+let boulders = 0;
 
-export function rockGeometry():THREE.BufferGeometry {
-	if (rockGeo) {
-		return rockGeo;
-	}
-	const src = new THREE.IcosahedronGeometry(0.52, 2);
-	const geo = weldIndexed(src);
-	src.dispose();
-	const pos = geo.getAttribute('position');
-	const v = new THREE.Vector3();
-	for (let i = 0; i < pos.count; i++) {
-		v.fromBufferAttribute(pos, i);
-		const nrm = v.clone().normalize();
-		nrm.x = Math.round(nrm.x * 256) / 256;
-		nrm.y = Math.round(nrm.y * 256) / 256;
-		nrm.z = Math.round(nrm.z * 256) / 256;
-		nrm.normalize();
-		let mag = 0.5;
-		mag += (hash(nrm.x, nrm.y, nrm.z) - 0.5) * 0.22;
-		mag += (hash(nrm.x * 2.3, nrm.y * 2.3, nrm.z * 2.3) - 0.5) * 0.1;
-		if (nrm.y < -0.2) {
-			mag *= 0.45 + (nrm.y + 1) * 0.4;
-		}
-		v.copy(nrm).multiplyScalar(mag);
-		v.x *= 1.22;
-		v.y *= 0.78;
-		v.z *= 1.04;
-		if (v.y < 0) {
-			v.y *= 0.15;
-		}
-		pos.setXYZ(i, v.x, v.y, v.z);
-	}
-	let minY = Infinity;
-	for (let i = 0; i < pos.count; i++) {
-		minY = Math.min(minY, pos.getY(i));
-	}
-	for (let i = 0; i < pos.count; i++) {
-		const y = pos.getY(i) - minY;
-		pos.setY(i, y < 0.04 ? 0 : y);
-	}
-	const flat = geo.toNonIndexed();
-	flat.computeVertexNormals();
-	flat.computeBoundingBox();
-	const box = flat.boundingBox;
-	const outPos = flat.getAttribute('position');
-	const nrm = flat.getAttribute('normal');
-	const uv = new Float32Array(outPos.count * 2);
-	const p = new THREE.Vector3();
-	const n = new THREE.Vector3();
-	const size = new THREE.Vector3();
-	box?.getSize(size);
-	const sx = Math.max(size.x, 0.2);
-	const sy = Math.max(size.y, 0.2);
-	const sz = Math.max(size.z, 0.2);
-	for (let i = 0; i < outPos.count; i++) {
-		p.fromBufferAttribute(outPos, i);
-		n.fromBufferAttribute(nrm, i);
-		const ax = Math.abs(n.x);
-		const ay = Math.abs(n.y);
-		const az = Math.abs(n.z);
-		let u = 0;
-		let vv = 0;
-		if (ay >= ax && ay >= az) {
-			u = p.x / sx;
-			vv = p.z / sz;
-		}
-		else if (ax >= az) {
-			u = p.z / sz;
-			vv = p.y / sy;
-		}
-		else {
-			u = p.x / sx;
-			vv = p.y / sy;
-		}
-		uv[i * 2] = u + 0.5;
-		uv[i * 2 + 1] = vv + 0.5;
-	}
-	flat.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
-	geo.dispose();
-	flat.userData.shared = true;
-	rockGeo = flat;
-	return flat;
-}
-
-let wetRockGeo:THREE.BufferGeometry | null = null;
-
-/** The rock with its lower half wet: faces centred below half its height take {@link WET_SHADE}, for {@link wetRockMat}. */
-export function wetRockGeometry():THREE.BufferGeometry {
-	if (wetRockGeo) {
-		return wetRockGeo;
-	}
-	const geo = rockGeometry().clone();
-	const pos = geo.getAttribute('position');
-	const waterline = (geo.boundingBox?.max.y ?? 0) / 2;
-	const color = new Float32Array(pos.count * 3);
-	for (let i = 0; i < pos.count; i += 3) {
-		const mid = (pos.getY(i) + pos.getY(i + 1) + pos.getY(i + 2)) / 3;
-		color.fill(mid < waterline ? WET_SHADE : 1, i * 3, i * 3 + 9);
-	}
-	geo.setAttribute('color', new THREE.Float32BufferAttribute(color, 3));
-	geo.userData.shared = true;
-	wetRockGeo = geo;
-	return geo;
-}
-
-export function createBoulderMesh():THREE.Group {
+/**
+ * A boulder: the boulder models in turn, each {@link BOULDER_ACROSS} across. One with a `wake` stands in water: on
+ * the riverbed, a little bigger so as much shows, wet where the water laps it, and rippling the water round it
+ * (see `EntityLegend.wake`).
+ */
+export function createBoulderMesh(wake?:Wake):THREE.Group {
+	const inWater = wake !== undefined;
 	const g = new THREE.Group();
 	g.userData.kind = 'boulder';
-	const mesh = new THREE.Mesh(rockGeometry(), rockMat());
+	const all = getNature().boulders;
+	const piece = all[boulders++ % all.length]!;
+	const mesh = new THREE.Mesh(piece.geom, inWater ? riverRockMat(piece.map) : tileMat(piece.map));
+	mesh.scale.setScalar((inWater ? 1.2 : 1) * BOULDER_ACROSS / piece.across);
+	if (inWater) {
+		// Sunk 17 cm under the surface at the smallest size a map gives it (`BOULDER_SIZE`); bigger ones settle deeper.
+		mesh.position.y = (WATER_UPPER_Y - 0.17) / BOULDER_SIZE.min;
+		// Tell the river where it stands every frame, so it ripples round it (never culled, so ripples near
+		// the edge of view keep going).
+		mesh.frustumCulled = false;
+		const slot = claimRockSlot();
+		const at = new THREE.Vector3();
+		const size = new THREE.Vector3();
+		mesh.onBeforeRender = () => {
+			g.getWorldPosition(at);
+			g.getWorldScale(size);
+			const radius = 0.34 * mesh.scale.x * piece.across * size.x;
+			// About the waterline's width: a dome is a little narrower there than at its foot.
+			markRock(slot, at.x, at.z, radius, wake);
+		};
+	}
 	mesh.castShadow = true;
 	mesh.receiveShadow = true;
 	g.add(mesh);
@@ -422,8 +303,8 @@ export function createBridgeMesh():THREE.Group {
 }
 
 const FALL_W = 1.9;
-/** Water surface over the wall top: 3 cm above the stone. */
-const FALL_H = WALL_HEIGHT + 0.03;
+/** Where the sheet starts: on the surface of the river up on the cliff (a cliff is a wall high), just over its current lines. */
+const FALL_H = WALL_HEIGHT + WATER_UPPER_Y + 0.01;
 /** The wall's face in this prop's frame (spawn puts the origin just in front of it). */
 const WALL_FACE_Z = -0.04;
 /** How far back over the wall top the water starts. */
@@ -516,8 +397,7 @@ export function createWaterfallMesh():THREE.Group {
 	const slot = claimFallSlot();
 	const landing = new THREE.Vector3();
 	foam.onBeforeRender = () => {
-		g.localToWorld(landing.set(0, 0, landZ + 0.15));
-		markFallLanding(slot, landing.x, landing.z);
+		markFallLanding(slot, g.localToWorld(landing.set(0, 0, landZ + 0.15)));
 	};
 	// Spray mist rising from the landing, drawn after the water so it veils the foot of the fall.
 	const mists = 12;
@@ -535,15 +415,17 @@ export function createWaterfallMesh():THREE.Group {
 	mist.instanceMatrix.needsUpdate = true;
 	mist.computeBoundingSphere();
 	g.add(mist);
-	const rock = rockMat();
-	for (const [x, z, s] of [[-0.95, 0.28, 0.44], [0.98, 0.18, 0.38], [0.5, 0.7, 0.3], [-0.52, 0.82, 0.34]]) {
-		const m = new THREE.Mesh(rockGeometry(), rock);
-		m.position.set(x, 0, z);
-		m.scale.setScalar(s);
+	// Rocks at its foot, meters across, wet where the water stands.
+	[[-0.95, 0.28, 0.55], [0.98, 0.18, 0.48], [0.5, 0.7, 0.38], [-0.52, 0.82, 0.42]].forEach(([x, z, across], i) => {
+		const rocks = getNature().rocks;
+		const piece = rocks[i % rocks.length]!;
+		const m = new THREE.Mesh(piece.geom, riverRockMat(piece.map));
+		m.position.set(x!, 0, z!);
+		m.scale.setScalar(across! / piece.across);
 		m.castShadow = true;
 		m.receiveShadow = true;
 		g.add(m);
-	}
+	});
 	return g;
 }
 

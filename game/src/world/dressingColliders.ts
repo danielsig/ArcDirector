@@ -1,7 +1,7 @@
 import { BoxCollider, GameObject } from '@arc-director/kindling';
+import { Flies } from '../engine/Flies';
 import type { World } from '../engine/World';
-import { BANK_ROCK_WIDTH, planBankRocks } from './bankRocks';
-import { planProps, PROP_FOOTPRINT } from './dressingPlan';
+import { planProps, PROP_FOOTPRINT, PROP_HEIGHT } from './dressingPlan';
 
 /** Name of the invisible obstacle objects, so paths can tell them apart. */
 export const DRESSING_NAME = 'Dressing';
@@ -11,7 +11,7 @@ const ON_THE_GROUND = 0.3;
 
 /**
  * Solid footprints for the big dressing props: a cylinder for round ones, a box (widened to stay
- * axis-aligned when turned) for the rest, and a cylinder for each riverbank rock. Rebuilt from the
+ * axis-aligned when turned) for the rest. Rebuilt from the
  * whole plan, so call it whenever chunks load. Unnamed for sight: NPCs never see them, they only
  * walk around them.
  */
@@ -35,12 +35,29 @@ export function syncDressingColliders(world:World):void {
 			: { size: { x: foot.w * cos + foot.d * sin, y: 1, z: foot.w * sin + foot.d * cos } });
 		world.add(go);
 	});
-	[...world.chunks.values()].flatMap(planBankRocks).forEach((rock, i) => {
-		const go = new GameObject(`dressing_rock_${i}`, DRESSING_NAME);
-		go.transform.position.x = rock.x;
-		go.transform.position.z = rock.z;
-		const width = BANK_ROCK_WIDTH * rock.scale;
-		go.addComponent(BoxCollider, { size: { x: width, y: 1, z: width }, shape: 'cylinder' });
+}
+
+/** Props flies hover over. */
+const FLY_BAIT = new Set(['rottenBasket']);
+
+/**
+ * Flies over each rotten thing in the plan, once each: they are looks only, so a spot that already has them keeps
+ * them. Call it with `syncDressingColliders`.
+ */
+export function syncDressingFlies(world:World):void {
+	for (const spot of planProps(world.chunks.values())) {
+		if (!FLY_BAIT.has(spot.prop)) {
+			continue;
+		}
+		const name = `flies_${spot.x.toFixed(2)}_${spot.z.toFixed(2)}`;
+		if (world.objects.some((o) => o.name === name)) {
+			continue;
+		}
+		const go = new GameObject(name, 'Flies');
+		go.transform.position.x = spot.x;
+		go.transform.position.y = spot.y + (PROP_HEIGHT[spot.prop] ?? 0);
+		go.transform.position.z = spot.z;
+		go.addComponent(Flies);
 		world.add(go);
-	});
+	}
 }

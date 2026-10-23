@@ -26,11 +26,11 @@ export function rendererLook(look:SceneLook):RendererLook {
 			exposure: 1.42,
 			hemiSky: 0xffe8c4,
 			hemiGround: 0x6b5a3a,
-			hemiIntensity: 1.2,
+			hemiIntensity: 5,
 			fillColor: 0xc4a878,
 			fillIntensity: 0.4,
 			sun: { color: 0xffe2b0, intensity: 2.45 },
-			ink: 0x33200f,
+			ink: 0x1A1008,
 		};
 	}
 	return {

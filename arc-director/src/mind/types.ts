@@ -6,37 +6,54 @@ import type { JsonSchema } from '../json.js';
  */
 export type ArcFormat = 'text' | 'json' | 'schema';
 
-export type MindEvent = {
+export interface MindEvent {
+	/** The event's kind. */
 	kind:string;
+	/** The event's text. */
 	text:string;
+	/** Tags of the event, for filtering and grouping. */
 	tags?:string[];
+	/** Whether the event is a major event which forces the mind to think. */
 	major?:boolean;
-	/** Game time. Default: when the mind receives it. */
+	/** Game time in seconds when the event happened. Default: when the mind receives it. */
 	timestamp?:number;
 	/** Also keep it as an episodic memory, not only in short-term memory. */
 	remember?:boolean;
-	/** Real ids for `{0}`, `{1}`, … in `text`. Each listener reads its own name for them, and gets those names as tags. */
+	/** Real IDs for `{0}`, `{1}`, … in `text`. Each listener reads its own name for them, and gets those names as tags. */
 	who?:string[];
 	/** Clear speech, for Current Conversation. Without it, the event is only in short-term memory. */
 	turn?:ConversationTurn;
+	/** Replaces a waiting event with the same key: a sound heard again, louder. */
+	key?:string;
+	/** At most this many events of its {@link kind} wait for the next think; past that, the one of least {@link weight} is dropped. */
+	cap?:number;
+	/** How much it matters next to others of its {@link kind}, e.g. a sound's loudness. Affects what is dropped when {@link cap} is reached. Default: 0. */
+	weight?:number;
 };
 
 /** One clearly heard line. Ids are real; each mind names them its own way when it shows the line. */
-export type ConversationTurn = {
+export interface ConversationTurn {
+	/** The id of the character who spoke. */
 	speakerID:string;
-	/** Who it was said to. Empty or absent: to everyone. */
+	/** IDs of the characters who heard it. Empty or omitted: to everyone. */
 	to?:string[];
 	text:string;
 };
 
 /** Named English that is always in the user block this think. */
-export type Sense<TCtx = unknown> = {
+export interface Sense<TCtx = unknown> {
+	/** The sense's description. */
 	description:string;
+	/** The function that will be called to gather the sense. */
 	gather:(ctx:TCtx)=>unknown;
-};
+}
 
-export type ToolSpec<TCtx = unknown> = {
+export interface ToolSpec<TCtx = unknown> {
+
+	/** The tool's description. */
 	description:string;
+	/** The tool's arguments' JSON schema. */
 	parameters:JsonSchema;
-	handler:(ctx:TCtx, args:unknown)=>unknown;
-};
+	/** The function that will be called when the tool is called. Returns a promise or a value. */
+	handler:(ctx:TCtx, args:unknown)=>unknown | Promise<unknown>;
+}

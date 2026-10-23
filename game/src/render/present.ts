@@ -1,4 +1,4 @@
-import { Time, type ChunkBounds, type GameObject } from '@arc-director/kindling';
+import { Time, type GameObject } from '@arc-director/kindling';
 import * as THREE from 'three';
 import { Chest, Door, Torch, Bridge } from '../engine/components';
 import { MeshRenderer } from '../engine/MeshRenderer';
@@ -6,9 +6,12 @@ import type { World } from '../engine/World';
 import { buildChunkMesh, CHUNK_MESH_REV } from './buildChunkMesh';
 import { getSheet, sheetReady } from './spritesheet';
 import { natureReady, tickNature, untrackNature } from './nature';
-import { createGroundBox, type GroundTile } from './groundBox';
+import { createOutskirts } from './land';
+import { LANDFORMS, planOutskirts, type OutskirtHeights, type Surface } from '../world/land';
+import type { Chunk } from '../world/Chunk';
 import { disposeGrassBatch, syncGrassBatch } from './grassBatch';
 import { nearestPickup } from '../items/pickup';
+import { THIN_WALLS } from '../world/thinWall';
 
 const worldPos = new THREE.Vector3();
 const camPos = new THREE.Vector3();
@@ -22,33 +25,30 @@ export class WorldPresent {
 	private readonly _chunkMeshes = new Map<string, THREE.Group>();
 	private readonly _liveChunks = new Set<string>();
 	private _chunkMeshRev = CHUNK_MESH_REV;
-	private _groundHadGrass = false;
-	private _groundBox:THREE.Group | null = null;
+	private _outskirtsHadNature = false;
+	private _outskirts:THREE.Group | null = null;
 	private _pickupGlow:THREE.Mesh | null = null;
 	private _pickupGlowMap:THREE.CanvasTexture | null = null;
 	private _camPitch = 0;
 
-	/** The `ground` around the map, once; `scene` is every chunk of the scene, loaded or not. */
-	public mountGroundBox(world:World, scene:ChunkBounds | undefined, ground?:GroundTile):void {
-		if (!sheetReady()) {
+	/** The land past the map's edge, once (again when the river art arrives); `chunks` is every chunk of the scene, loaded or not. */
+	public mountOutskirts(world:World, chunks:Chunk[], ground:Surface = 'meadow', heights?:OutskirtHeights):void {
+		if (!sheetReady() || chunks.length === 0) {
 			return;
 		}
-		const grass = natureReady();
-		if (this._groundBox && this._groundHadGrass === grass) {
+		const nature = natureReady();
+		if (this._outskirts && this._outskirtsHadNature === nature) {
 			return;
 		}
-		if (this._groundBox) {
-			this.releaseObject(this._groundBox);
-			this._groundBox = null;
+		if (this._outskirts) {
+			this.releaseObject(this._outskirts);
+			this._outskirts = null;
 		}
-		try {
-			this._groundBox = createGroundBox(scene, ground);
-			this._groundHadGrass = grass;
-			world.native.add(this._groundBox);
-		}
-		catch {
-			this._groundBox = null;
-		}
+		// Out as far as the fog lets anyone see.
+		const fog = world.native.fog as THREE.Fog | null;
+		this._outskirts = createOutskirts(planOutskirts(chunks, ground, heights, fog?.far));
+		this._outskirtsHadNature = nature;
+		world.native.add(this._outskirts);
 	}
 
 	public syncChunks(world:World):void {
@@ -116,6 +116,11 @@ export class WorldPresent {
 				if (hinge && door) {
 					hinge.rotation.y = door.open ? door.openYaw : door.closedYaw;
 				}
+				// A gate's second leaf swings the other way on its own pier.
+				const hinge2 = obj.userData.hinge2 as THREE.Object3D | undefined;
+				if (hinge2 && door) {
+					hinge2.rotation.y = -(door.open ? door.openYaw : door.closedYaw);
+				}
 				const occ = obj.getObjectByName('doorOccluder');
 				if (occ && door) {
 					occ.visible = !door.open;
@@ -129,16 +134,17 @@ export class WorldPresent {
 					setLift(span.lift);
 				}
 			}
-			else if (kind === 'cottage') {
+			else if (kind === 'house') {
 				obj.rotation.y = 0;
-				this.syncCottageRoof(obj, go, world);
+				this.syncRoof(obj, go, world);
 			}
 			else if (kind === 'chest') {
 				obj.rotation.y = 0;
 				const chest = go.getComponent(Chest);
+				// Open, the lid swings up and back on its hinge, a little past upright.
 				const lid = obj.getObjectByName('lid');
 				if (lid && chest) {
-					lid.rotation.x = chest.open ? -1.15 : 0;
+					lid.rotation.x = chest.open ? 1.9 : 0;
 				}
 			}
 			else {
@@ -160,9 +166,9 @@ export class WorldPresent {
 			this.releaseObject(mesh);
 		}
 		this._chunkMeshes.clear();
-		if (this._groundBox) {
-			this.releaseObject(this._groundBox);
-			this._groundBox = null;
+		if (this._outskirts) {
+			this.releaseObject(this._outskirts);
+			this._outskirts = null;
 		}
 		disposeGrassBatch();
 		if (this._pickupGlow) {
@@ -205,19 +211,19 @@ export class WorldPresent {
 		});
 	}
 
-	private syncCottageRoof(obj:THREE.Object3D, go:GameObject, world:World):void {
+	private syncRoof(obj:THREE.Object3D, go:GameObject, world:World):void {
 		const roof = obj.userData.roof as THREE.Object3D | undefined;
 		if (!roof) {
 			return;
 		}
 		const player = world.findByID('Player');
-		const hw = (obj.userData.roofHalfW as number | undefined) ?? 3;
-		const hd = (obj.userData.roofHalfD as number | undefined) ?? 2.5;
+		const hw = (obj.userData.roofHalfW as number | undefined) ?? 2.5;
+		const hd = (obj.userData.roofHalfD as number | undefined) ?? 2;
 		const p = go.transform.position;
 		const under = !!player
 			&& Math.abs(player.transform.position.x - p.x) <= hw
 			&& Math.abs(player.transform.position.z - p.z) <= hd;
-		const opacity = under ? 0.2 : 1;
+		const opacity = under ? 0.08 : 1;
 		roof.traverse((child) => {
 			if (!(child instanceof THREE.Mesh)) {
 				return;
@@ -387,7 +393,8 @@ function worldNeedsNature(world:World):boolean {
 			if (
 				tile.def === 'grass'
 				|| tile.def === 'water'
-				|| tile.def === 'wood_wall'
+				|| THIN_WALLS.has(tile.def)
+				|| LANDFORMS.has(tile.def)
 				|| tile.def === 'plank'
 			) {
 				return true;

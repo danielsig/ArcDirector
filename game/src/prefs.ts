@@ -6,7 +6,8 @@
  */
 
 export const MIN_PARALLEL_THINKERS = 1;
-export const MAX_PARALLEL_THINKERS = 10;
+/** Most thinks at once each runs: LM Studio's Max Concurrent Predictions, and llama.cpp's `LLAMA_MAX_SEQ` in the browser. */
+export const MAX_PARALLEL_THINKERS:Record<InferenceKind, number> = { lmstudio: 1023, browser: 256 };
 
 export const CONTEXT_LENGTHS = [2048, 4096, 8192, 16384, 32768, 65536, 131072] as const;
 export const MIN_CONTEXT_LENGTH = CONTEXT_LENGTHS[0];
@@ -45,6 +46,9 @@ export function systemOneName(kind:SystemOneKind):string | null {
 	return kind === 'off' ? null : kind;
 }
 
+/** Music turned on at zero volume comes back at this; also where it starts. */
+const MUSIC_ON_VOLUME = 0.5;
+
 const DEFAULT = {
 	player: 'observer' as PlayerMode,
 	ai: true,
@@ -52,7 +56,7 @@ const DEFAULT = {
 	shadows: 'auto' as ShadowQuality,
 	/** Frames per second in the top-right corner. */
 	fpsCounter: false,
-	music: 0,
+	music: MUSIC_ON_VOLUME,
 	sfx: 0.78,
 	/** Characters babble when they speak. */
 	voices: true,
@@ -101,7 +105,7 @@ const FIELDS:{ [K in keyof Prefs]:(v:unknown, fallback:Prefs[K])=>Prefs[K] } = {
 	// A GGUF's URL; anything else is a model the game no longer runs.
 	browserModel: (v, fallback) => (typeof v === 'string' && /\.gguf$/.test(v) ? v : fallback),
 	playerKind: str,
-	maxParallel: (v, fallback) => clampInt(v, MIN_PARALLEL_THINKERS, MAX_PARALLEL_THINKERS, fallback),
+	maxParallel: (v, fallback) => clampInt(v, MIN_PARALLEL_THINKERS, Math.max(...Object.values(MAX_PARALLEL_THINKERS)), fallback),
 	contextLength: (v, fallback) => (Number.isFinite(Number(v)) ? clampContextLength(v) : fallback),
 	batchThinks: bool,
 	thinkingBudget: (v, fallback) => THINKING_BUDGETS.find((budget) => budget === v) ?? fallback,
@@ -141,7 +145,9 @@ function loadStored():Prefs {
 		return { ...DEFAULT };
 	}
 	try {
-		return { ...DEFAULT, ...coercePrefsPatch(JSON.parse(raw), DEFAULT) };
+		const stored = { ...DEFAULT, ...coercePrefsPatch(JSON.parse(raw), DEFAULT) };
+		// Music on at zero volume is a state older saves left behind: it showed music on and played nothing.
+		return stored.music === 0 && !stored.musicMuted ? { ...stored, music: MUSIC_ON_VOLUME } : stored;
 	}
 	catch {
 		return { ...DEFAULT };
@@ -197,9 +203,6 @@ export function flagsFromURL(url:{ player?:PlayerMode; ai?:boolean }):Pick<Prefs
 		ai: url.ai ?? p.ai,
 	};
 }
-
-/** Music turned on at zero volume comes back at this. */
-const MUSIC_ON_VOLUME = 0.5;
 
 /**
  * Music at zero volume is music off. Turning it up turns it on; turning it to zero turns it off and keeps `restore`

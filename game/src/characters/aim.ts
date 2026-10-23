@@ -1,5 +1,5 @@
 import { type GameObject } from '@arc-director/kindling';
-import { Door, Flammable, HumanBody, Lock, Vitals } from '../engine/components';
+import { Door, Flammable, HumanBody, Inscription, Lock, Vitals } from '../engine/components';
 import type { World } from '../engine/World';
 import { Pickupable } from '../items/components';
 import { distXZ } from '../items/inventory';
@@ -46,7 +46,7 @@ export function aimTarget(world:World, character:GameObject):GameObject | null {
 		if (human && (go.getComponent(Vitals)?.hp ?? 1) <= 0) {
 			continue;
 		}
-		if (!door && !loot && !human) {
+		if (!door && !loot && !human && !go.getComponent(Inscription)) {
 			continue;
 		}
 		if (distXZ(character, go) > USE_RANGE) {

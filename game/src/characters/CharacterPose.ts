@@ -1,4 +1,4 @@
-import { MeshRenderer, Time, aimHeld, ease, move, type MoveTiming, type SfxHandle, closeHand, create, crouch, drawBow, humanBone, lookAt, orientHand, placeFoot, reach, type Hand, Component, type GameObject } from '@arc-director/kindling';
+import { MeshRenderer, Time, aimHeld, ease, move, type MoveTiming, type SfxHandle, closeHand, create, crouch, palmOf, drawBow, humanBone, lookAt, orientHand, placeFoot, reach, type Hand, Component, type GameObject } from '@arc-director/kindling';
 import * as THREE from 'three';
 import { Appearance, POSE_SECONDS, SpeechBubble, Vitals } from '../engine/components';
 import { Order } from '../engine/order';
@@ -1041,17 +1041,6 @@ function raiseBow(bow:THREE.Object3D, ahead:THREE.Vector3 | null, weight:number)
 	turnAboutGrip(bow, bow.getWorldQuaternion(new THREE.Quaternion()).slerp(upright, weight));
 }
 
-/** The middle of `hand`'s palm (halfway from the wrist to the middle knuckle, where a grip runs), world; null without the bones. */
-function palmOf(root:THREE.Object3D, hand:Hand):THREE.Vector3 | null {
-	const wrist = humanBone(root, `${hand}Hand`);
-	const knuckle = humanBone(root, `${hand}MiddleProximal`);
-	return wrist && knuckle ? wrist.getWorldPosition(new THREE.Vector3()).lerp(knuckle.getWorldPosition(new THREE.Vector3()), 0.5) : null;
-}
-
-/**
- * How far (m) the shoulder must move along `toward` (flat) for `hand` to reach `target`, from the
- * pose `root` is in now; 0 when it already can.
- */
 function shortfall(root:THREE.Object3D, hand:Hand, target:THREE.Vector3, toward:THREE.Vector3):number {
 	const [shoulder, elbow, wrist, knuckle] = ['UpperArm', 'LowerArm', 'Hand', 'MiddleProximal'].map((b) => humanBone(root, `${hand}${b}`));
 	if (!shoulder || !elbow || !wrist) {

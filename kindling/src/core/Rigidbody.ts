@@ -8,5 +8,4 @@ export class Rigidbody extends Component {
 	public prevZ = 0;
 	/** Snap Y to `World.sampleTerrain` worldY. */
 	public grounded = false;
-	public stepHeight = 1;
 }

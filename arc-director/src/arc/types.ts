@@ -21,6 +21,8 @@ export type Step = {
 	args:Record<string, StepArg>;
 	/** How this step's result gates the next one. Missing: `if_ok`. Ignored on the last step. */
 	then?:Join;
+	/** Run this step even when the kit does not list its verb. */
+	granted?:boolean;
 };
 
 /** Steps in order. A group is the step `{ verb: 'group', args: { arc } }`, written `( … )`. */
@@ -35,6 +37,8 @@ export type ArcResult = {
 	verb?:string;
 	/** The character, thing or place this step found no way to reach. */
 	unreachable?:string;
+	/** What stood in its way, by id, cheapest to get past first: the things a host named as blocking (`PathStep.by`). */
+	blockedBy?:string[];
 };
 
 export class ArcError extends Error {

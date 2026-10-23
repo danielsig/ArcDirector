@@ -81,6 +81,20 @@ function bool(expr:string, host?:HostKernels):boolean {
 }
 
 describe('parse', () => {
+	it('reads a field of a name that picks one entity, as that entity', () => {
+		const ann = dummyEntity('Ann', { fields: { hp: { kind: 'number', value: 3 } } });
+		const one = world({ bindings: { Ann: { kind: 'list', value: [{ kind: 'entity', value: ann }] } } });
+		assert.equal(num('Ann.hp', one), 3);
+		assert.equal(bool('Ann.hp <= 8', one), true);
+	});
+
+	it('reads its own name as me, with every field it has, alone or in a squad', () => {
+		const me = dummyEntity('Guard', { tags: ['character'], fields: { shield: { kind: 'number', value: 7 } } });
+		assert.equal(num('Guard.shield', world({ me })), 7, 'alone: nowhere but me');
+		const units = { kind: 'list' as const, value: [{ kind: 'entity' as const, value: dummyEntity('Guard', { tags: ['character'] }) }] };
+		assert.equal(num('Guard.shield', world({ me, bindings: { units } })), 7, 'in a squad: me, not its bare line in units');
+	});
+
 	it('parses literals, arrays, infix is, ternary, ??', () => {
 		assert.ok(parse('1 + 2'));
 		assert.ok(parse('["key", "door"]'));
@@ -148,6 +162,13 @@ describe('evaluate', () => {
 		assert.equal(bool('isNear(items.find("nope"), me)'), false);
 		assert.equal(bool('isReachable(items.find("nope"), me)', world({ pathDistance: xz })), false);
 		assert.ok(val('distance(items.find("nope"), me)').error);
+	});
+
+	it('measures to a list as to its nearest, so a bare name (a list of everyone so called) works', () => {
+		assert.equal(num('distance(me, others.filter(o => o == B))'), 12);
+		assert.equal(num('distance(me, others)'), 5);
+		assert.equal(num('distance(others, me)'), 5);
+		assert.ok(val('distance(me, others.filter(o => o == "nobody"))').error);
 	});
 
 	it('collection folds', () => {
@@ -454,6 +475,23 @@ describe('evaluate', () => {
 		const id = val('me.id');
 		assert.equal(id.value.kind, 'string');
 		assert.equal(id.value.kind === 'string' ? id.value.value : '', 'Guard');
+	});
+
+	it('min, max, sum and avg take a function over a list, and pick the lowest share of health, oneself included', () => {
+		const shares = { Guard: { hp: 3, maxHP: 5 }, A: { hp: 1, maxHP: 5 }, B: { hp: 5, maxHP: 5 }, Player: { hp: 4, maxHP: 5 } };
+		const host = world({ hp: (who) => shares[who.id as keyof typeof shares] });
+		assert.equal(num('others.min(u => u.hp / u.maxHP)', host), 0.2);
+		assert.equal(num('others.max(u => u.hp)', host), 5);
+		assert.equal(num('others.sum(u => u.hp)', host), 10);
+		const nobody = val('others.filter("nobody").min(u => u.hp)', host);
+		assert.equal(nobody.error, undefined, nobody.error?.message);
+		assert.equal(nobody.value.kind, 'absent');
+		const lowest = 'me.hp / me.maxHP <= others.min(u => u.hp / u.maxHP) ? me : others.minBy(u => u.hp / u.maxHP)';
+		const pick = val(lowest, host);
+		assert.equal(pick.value.kind === 'entity' ? pick.value.value.id : pick.error?.message, 'A');
+		const hurtMe = world({ hp: (who) => (who.id === 'Guard' ? { hp: 1, maxHP: 5 } : { hp: 4, maxHP: 5 }) });
+		const self = val(lowest, hurtMe);
+		assert.equal(self.value.kind === 'entity' ? self.value.value.id : self.error?.message, 'Guard');
 	});
 
 	it('isHurt is false at 0 hp', () => {

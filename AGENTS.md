@@ -27,7 +27,7 @@ Unity-shaped, not Unity. `@arc-director/kindling` owns the canvas, `Renderer`, R
 | Type | Role |
 |------|------|
 | `Game` | Canvas, renderer, `start`/`stop`, `tick` → `simulate`. Generic over `World`. |
-| `World` | Object list, Three.js `Scene`, `add` / `remove` / `destroy`, `sampleTerrain`. |
+| `World` | Object list, Three.js `Scene`, `add` / `remove` / `destroy`, `sampleTerrain`, `blocker` (what a body would run into standing somewhere, by physics' own tests). |
 | `GameObject` | `id`, `name`, `parent`/`children`, component list. |
 | `Transform` | Always present. Wraps `Object3D`. `position` / `yaw` / `pitch` / `roll` are world. |
 | `Component` | Host logic. `enabled`, `static order`. |
@@ -70,9 +70,13 @@ Ground is **XZ**. **Y** is height (tile height underfoot). Yaw is around Y, in r
 
 WASD is camera-relative on XZ. NPCs never see these numbers; verbs and prompts use names only. URL `player`/`ai` (and agent-only `view`) are **testing-only** (see below).
 
+## Maps
+
+Scene maps are glyph tiles (`game/src/data/chunks`). **Thin walls** (`wood_wall`, `window`; `game/src/world/thinWall.ts`) are a board down the middle of the cell that runs out to every walled or doorway neighbour (one glyph, all 16 shapes): the cell stays `blocked` for routes and sight, bodies collide only with the boards (`TerrainSample.solids`), and the floor either side continues the neighbours. **Houses** (`game/src/world/buildings.ts`) are any door set in thin walls: named after the door (`HutDoor` makes `Hut`), roofed to their wall line, each with a road to the nearest bridge. A side can be a stone wall the house stands against (leave that side's thin walls out); the door legend's `chimney: false` drops the chimney. A row of one named counter glyph is one shop counter, reaching any wall at its ends. **Landforms** (`cliff`, `cliff_water`, `forest`, `trail`; `game/src/world/land.ts`) are drawn as land, with rock faces (the `cliff-rock.jpg` picture) wherever neighbouring land is at another height; a `trail` edge tile is a dark road into the woods that a road on the map runs up to. **No map ends in nothing:** past each edge tile the land goes on to the horizon as that tile does (a cliff as its meadow top, water as its river, forest as more forest, a wall as the scene's `ground`); `SceneDef.outskirts` sets the height beyond each edge tile per side.
+
 ## Characters
 
-Every character is a 3D model generated in Tripo3D (GLB, Mixamo skeleton) by Daniel into `brainstorming/3Dmodels/` (gitignored), then built for the game with `node kindling/scripts/buildModels.mjs brainstorming/3Dmodels game/public/models game/models.json` (needs Kindling built). Mesh IDs are the file names (`Hero`, `KnightMale`, …), listed in `game/src/render/characterModels.ts` with the props (`Sword`, bows, staffs, arrows, `Raven`); clips are shared from `clips.glb`. Per-model build fixes live in `game/models.json`. What a held item looks like in the hand is `HELD` in `game/src/characters/HeldProps.ts`; NPCs get gear through `equip` in their scene entry. `CharacterAnimation` picks clips; `CharacterPose` adds look-at, give/take reach, the bow shot, the sword moves (stab, slice, guard) with their white trails (`render/swordFx.ts`), and spells cast from the staff's head (hex, smite, heal; `render/spellFx.ts`, pictures in `game/public/textures/vfx.png` and `fireball.png`, packed from `brainstorming/vfx-sprite-sheet.png` and `fireball-animation.png`). Blows land through `director/hitFeel.ts`: hitstop, a starburst and dust, a shockwave and view shake for heavy blows, and the black-and-white impact frame for one that downs (`render/fightFx.ts`). A blow that misses is dodged as it arrives (`CharacterPose.dodge`: a sidestep and lean away, a ghost where the body stood, a whoosh). All effects are built from Kindling's (`kindling/src/render/effects.ts`); sword moves time on Kindling `move()`. Lineup: `pnpm --filter @arc-director/kindling dev` → `http://localhost:5174/character.html` (`?right=Sword&left=ShamanBow&look=1`, more in `character.ts`).
+Every character is a 3D model generated in Tripo3D (GLB, Mixamo skeleton) by Daniel into `brainstorming/3Dmodels/` (gitignored), then built for the game with `node kindling/scripts/buildModels.mjs brainstorming/3Dmodels game/public/models game/models.json` (needs Kindling built). Mesh IDs are the file names (`Hero`, `KnightMale`, …), listed in `game/src/render/characterModels.ts` with the props (`Sword`, bows, staffs, arrows, `Raven`); clips are shared from `clips.glb`. Per-model build fixes live in `game/models.json`. What a held item looks like in the hand is `HELD` in `game/src/characters/HeldProps.ts`; NPCs get gear through `equip` in their scene entry. `CharacterAnimation` picks clips; `CharacterPose` adds look-at, give/take reach, the bow shot, the sword moves (stab, slice, guard) with their white trails (`render/swordFx.ts`), and spells cast from the staff's head (hex, smite, heal; `render/spellFx.ts`, pictures in `game/public/textures/vfx.png` and `fireball.png`, packed from `brainstorming/vfx-sprite-sheet.png` and `fireball-animation.png`). Blows land through `director/hitFeel.ts`: hitstop, a starburst and dust, a shockwave and view shake for heavy blows, and the black-and-white impact frame for one that downs (`render/fightFx.ts`). A blow that misses is dodged as it arrives (`CharacterPose.dodge`: a sidestep and lean away, a ghost where the body stood, a whoosh). All effects are built from Kindling's (`kindling/src/render/effects.ts`); sword moves time on Kindling `move()`. Lineup: `pnpm --filter @arc-director/kindling dev` → `http://localhost:5174/character.html` (`?right=Sword&left=ShamanBow&look=1`, more in `character.ts`). The raven (rigged by `buildModels.mjs` `bird`, posed by `characters/ravenPose.ts`): `http://localhost:5173/raven.html`, a button per pose and move, and sliders that tune the folded wings and tail live.
 
 ## Dev server
 
@@ -96,6 +100,7 @@ The game is served at `http://localhost:5173/` (Vite default). There is no path 
 | `view` | agent | Full camera shot: `x,y,z,yaw`. All four numbers or the param is ignored (no partial pose). X/Z are meters on the ground; Y is height; yaw is radians. `0` yaw looks toward −Z (north); `1.5708` (π/2) toward −X (west); `3.1416` (π) toward +Z (south). Yaw also faces the player. Camera follows the player. |
 | `focus` | agent | Watch expression (ArcDirector syntax) the camera follows: the player, as the camera's rig, glides to the middle of whom it picks, asked every 0.5 s as the player sees them. `others.filter(u => doing(u, "cleave"))`, `others.filter("Knight")`, `others.filter("Forager")`. Pair with `player=camera`. Also the `set_camera` MCP tool. |
 | `zoom` | agent | Camera distance in meters (3–24, default about 13). Also `set_camera`. |
+| `min-fps` | agent | Draws per second while the window is not focused. Focused play is unchanged. Omitted stays at 3, so a background view does not burn the GPU. `0` draws every frame. A positive number is that rate. Kept when returning to Scenes. |
 | `stats` | test | `1` = render stats overlay (draw calls, triangles, geometries, textures, scene and screen memory, 30 s frame time). Also readable over the control hub with the `render_stats` MCP tool. Kept when returning to Scenes. |
 | `session` | test | Client id for the control MCP hub. The page installs `window.arcControl` always; it opens a WebSocket to the hub only when this is a non-empty value. A second live page with the same id is renamed (`alpha-2`, `alpha-3`, …) and the query is updated. Cursor: `.cursor/mcp.json`. Claude Code: `.mcp.json`. Both run `mcp/dist/main.js`, so build it first: `pnpm --filter @arc-director/mcp build`. |
 
@@ -140,7 +145,7 @@ http://localhost:5173/?scene=dungeon_vault&view=8,0,40,0
 5v5 Combat (in the ruined sanctum, looking north):
 
 ```
-http://localhost:5173/?scene=ruins&view=16,0,11,0
+http://localhost:5173/?scene=ruins&view=32,0,11,0
 ```
 
 ### Testing / screenshots
@@ -177,5 +182,5 @@ http://localhost:5173/?scene=marketplace&view=16,0,20,0&player=observer&ai=0
 Example: 5v5 Combat with ArcDirector paused:
 
 ```
-http://localhost:5173/?scene=ruins&view=16,0,11,0&player=observer&ai=0
+http://localhost:5173/?scene=ruins&view=32,0,11,0&player=observer&ai=0
 ```

@@ -27,12 +27,19 @@ export type HudSpeech = {
 	thinking:boolean;
 	hp:number;
 	maxHP:number;
+	/** Coins carried, shown over the head as a gold dot and number. 0 shows none. */
+	gold:number;
+	/** One {@link CARRY_ICONS} def id per unit carried, shown over the head as tiny icons. */
+	items:string[];
 	x:number;
 	y:number;
 	visible:boolean;
 	/** World time the line was shown. 0 when this row has no bubble text. */
 	timestamp:number;
 };
+
+/** Item defs drawn as tiny icons over the heads of whoever carries them (`SceneDef.carried`). */
+export const CARRY_ICONS = ['fire_mushroom', 'moon_mushroom', 'silver_trout'] as const;
 
 export type HudPickup = {
 	name:string;
@@ -98,6 +105,50 @@ export type HudHeartrate = {
 	thinkMs:number;
 };
 
+export type HudGoal = {
+	name:string;
+	/** 0 to 1; reached at 1. Shown on the line leading into its orb. */
+	progress:number;
+};
+
+export type GoalColor = 'gold' | 'blue' | 'red';
+
+/** One side's goals, in the order reached, and the colour its orbs glow. Two sides of a track differ in colour. */
+export type HudGoalSide = {
+	color:GoalColor;
+	goals:HudGoal[];
+};
+
+/**
+ * Goal orbs on one line at the top of the screen, each reached in order. `left` fills from the left end inward, `right`
+ * from the right end inward (a race between two sides); a one-way track leaves `right` empty.
+ */
+export type HudGoals = {
+	left:HudGoalSide;
+	right:HudGoalSide;
+};
+
+export function noGoals():HudGoals {
+	return { left: { color: 'gold', goals: [] }, right: { color: 'gold', goals: [] } };
+}
+
+/** The card beside a character the player points at or stands close to (`SceneDef.inspect`). */
+export type HudInspect = {
+	id:string;
+	name:string;
+	role:string;
+	traits:string[];
+	/** Their most pressing goal. */
+	goal:string;
+	gold:number;
+	items:{ name:string; count:number }[];
+	/** Screen point beside the character, px: the card's left edge, or its right edge on the `left` side. */
+	x:number;
+	y:number;
+	/** Which side of the character the card stands: away from the middle of the screen, so it stays on screen. */
+	side:'left' | 'right';
+};
+
 export type MenuPage = 'game' | 'display' | 'audio' | 'testing';
 
 export type HudModel = {
@@ -106,6 +157,9 @@ export type HudModel = {
 	gold:number;
 	/** Shown when any purse or coin exists in the scene, not only on the player. */
 	showGold:boolean;
+	/** Empty on both sides hides the track. */
+	goals:HudGoals;
+	inspect:HudInspect | null;
 	message:string;
 	cursorName:string;
 	pickupHint:HudPickup;
@@ -225,6 +279,8 @@ export function emptyHud():HudModel {
 		maxHP: 5,
 		gold: 0,
 		showGold: false,
+		goals: noGoals(),
+		inspect: null,
 		message: '',
 		cursorName: '',
 		pickupHint: {

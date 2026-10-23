@@ -1,7 +1,10 @@
 import { yawToward } from '@arc-director/kindling';
 import { CELL_SIZE, CHUNK_SIZE, TILE_HEIGHT } from './constants';
 import type { Chunk } from './Chunk';
+import { findBuildings, type DoorAnchor } from './buildings';
+import { solidAt, straightRun, WALL_THICKNESS } from './thinWall';
 import { showsWater } from './water';
+import type { World } from '../engine/World';
 
 /**
  * Where scene dressing goes: the props around a wooden house, the path from its door to the
@@ -28,15 +31,23 @@ export const PROP_IDS = [
 	'jars',
 	'weaponRack',
 	'bed',
-	'chest',
+	'trunk',
 	'pots',
 	'urn',
 	'basket',
+	'rottenBasket',
 	'drums',
 	'fallenColumn',
 	'rubble',
 	'bones',
 	'brazier',
+	'curtains',
+	'wallShelf',
+	'plate',
+	'fishRack',
+	'creel',
+	'oars',
+	'net',
 ] as const;
 
 export type PropID = (typeof PROP_IDS)[number];
@@ -68,11 +79,19 @@ export const DRESSING_SIGHT_WORDS = [
 	'Pots',
 	'Urn',
 	'Basket',
+	'RottenBasket',
 	'Drums',
 	'FallenColumn',
 	'Rubble',
 	'Bones',
 	'Brazier',
+	'Curtains',
+	'WallShelf',
+	'Plate',
+	'FishRack',
+	'Creel',
+	'Oars',
+	'Net',
 ] as const;
 
 /** Backward tilt, in radians. Lifts the handle top back toward a wall behind the broom. */
@@ -99,15 +118,44 @@ export const PROP_FOOTPRINT:Record<PropID, { w:number; d:number; round?:boolean 
 	jars: null,
 	weaponRack: { w: 0.9, d: 0.34 },
 	bed: { w: 0.8, d: 1.4 },
-	chest: { w: 0.52, d: 0.34 },
+	trunk: { w: 0.52, d: 0.34 },
 	pots: { w: 0.7, d: 0.6 },
 	urn: { w: 0.4, d: 0.4, round: true },
 	basket: { w: 0.44, d: 0.44, round: true },
+	rottenBasket: { w: 0.44, d: 0.44, round: true },
 	drums: { w: 0.9, d: 0.6 },
 	fallenColumn: { w: 2.9, d: 0.6 },
 	rubble: { w: 0.8, d: 0.7 },
 	bones: null,
 	brazier: { w: 0.56, d: 0.56, round: true },
+	curtains: null,
+	wallShelf: null,
+	plate: null,
+	fishRack: { w: 1.3, d: 0.3 },
+	creel: { w: 0.4, d: 0.4, round: true },
+	oars: null,
+	net: { w: 1.1, d: 0.5 },
+};
+
+/** Props fixed to a wall, by depth: a map glyph puts its back flat on the nearest wall (`onWall`), facing out. */
+const WALL_MOUNTED:Partial<Record<PropID, number>> = {
+	shelf: 0.2,
+	wallShelf: 0.38,
+};
+
+/** Height of the top of props that something hovers over, such as flies over rotten fruit. */
+export const PROP_HEIGHT:Partial<Record<PropID, number>> = {
+	rottenBasket: 0.27,
+};
+
+/** Height of the top of props other props can rest on (`on` in a map legend). */
+export const PROP_TOP:Partial<Record<PropID, number>> = {
+	chair: 0.47,
+	table: 0.63,
+	shelf: 1.32,
+	wallShelf: 0.645,
+	crate: 0.42,
+	barrel: 0.62,
 };
 
 export type DressingProp = {
@@ -118,57 +166,10 @@ export type DressingProp = {
 	yaw:number;
 };
 
-export type DoorAnchor = {
-	x:number;
-	z:number;
-	dx:number;
-	dz:number;
-};
-
 function chunkAt(chunks:Chunk[], x:number, z:number):Chunk | undefined {
 	for (const chunk of chunks) {
 		if (chunk.tileAtWorld(x, z)) {
 			return chunk;
-		}
-	}
-	return undefined;
-}
-
-function insideTile(def:string | undefined):boolean {
-	return def === 'plank' || def === 'wood_wall';
-}
-
-/** Wood building with a door. Outside is the grass side of that door. */
-export function findDoor(chunks:Chunk[]):DoorAnchor | undefined {
-	for (const chunk of chunks) {
-		let wooden = false;
-		chunk.forEachTile((tile) => {
-			if (tile.def === 'wood_wall') {
-				wooden = true;
-			}
-		});
-		if (!wooden) {
-			continue;
-		}
-		for (const ent of chunk.entities) {
-			if (ent.def !== 'door') {
-				continue;
-			}
-			const north = insideTile(chunk.tile(ent.localX, ent.localZ - 1)?.def);
-			const south = insideTile(chunk.tile(ent.localX, ent.localZ + 1)?.def);
-			const west = insideTile(chunk.tile(ent.localX - 1, ent.localZ)?.def);
-			let dx = 0;
-			let dz = 1;
-			if (north || south || ent.axis === 'z') {
-				dx = 0;
-				dz = north ? 1 : -1;
-			}
-			else {
-				dx = west ? 1 : -1;
-				dz = 0;
-			}
-			const center = chunk.worldCellCenter(ent.localX, ent.localZ);
-			return { x: center.x, z: center.z, dx, dz };
 		}
 	}
 	return undefined;
@@ -249,17 +250,58 @@ export function roadCells(chunks:Chunk[], door:DoorAnchor):Cell[] {
 export type RoadLine = { a:Cell; b:Cell };
 
 /**
- * The road as straight centre lines: each road cell joins its road neighbours, the first cell runs on to its
- * door and any cell beside a bridge span on to the span, and every straight run is one line. Turns,
- * T-junctions, crossings and dead ends all follow from the lines; the edge of the cell is where a door or
- * span link stops.
+ * Each house's door and its road (`roadCells`), then each trailhead (a `trail` tile, `out` toward the open lawn) and
+ * its road: straight out across the lawn until it meets another road.
+ */
+function roadsOf(chunks:Chunk[]):{ door:DoorAnchor; cells:Cell[] }[] {
+	const roads = findBuildings(chunks).map(({ out }) => ({ door: out, cells: roadCells(chunks, out) }));
+	const key = (c:Cell):string => `${Math.round(c.x)},${Math.round(c.z)}`;
+	for (const head of trailheads(chunks)) {
+		const taken = new Set(roads.flatMap((r) => r.cells).map(key));
+		const cells:Cell[] = [];
+		for (let c = { x: head.x + head.dx * CELL_SIZE, z: head.z + head.dz * CELL_SIZE }; lawnAt(chunks, c.x, c.z) && !taken.has(key(c)); c = { x: c.x + head.dx * CELL_SIZE, z: c.z + head.dz * CELL_SIZE }) {
+			cells.push(c);
+		}
+		roads.push({ door: head, cells });
+	}
+	return roads;
+}
+
+/** Where each `trail` tile leads in: its cell, and the way to the open ground beside it. */
+function trailheads(chunks:Chunk[]):DoorAnchor[] {
+	const out:DoorAnchor[] = [];
+	for (const chunk of chunks) {
+		chunk.forEachTile((tile, lx, lz) => {
+			if (tile.def !== 'trail') {
+				return;
+			}
+			const c = chunk.worldCellCenter(lx, lz);
+			const open = ([[1, 0], [-1, 0], [0, 1], [0, -1]] as const).find(([dx, dz]) => lawnAt(chunks, c.x + dx * CELL_SIZE, c.z + dz * CELL_SIZE));
+			if (open) {
+				out.push({ x: c.x, z: c.z, dx: open[0], dz: open[1] });
+			}
+		});
+	}
+	return out;
+}
+
+/** Every road cell, from every door. */
+export function allRoadCells(chunks:Iterable<Chunk>):Cell[] {
+	return roadsOf([...chunks]).flatMap((road) => road.cells);
+}
+
+/**
+ * The roads as straight centre lines: each road cell joins its road neighbours, a road's first cell runs on to
+ * its door and any cell beside a bridge span on to the span, and every straight run is one line. Turns,
+ * T-junctions (where roads meet), crossings and dead ends all follow from the lines; the edge of the cell is
+ * where a door or span link stops.
  */
 export function roadLines(chunks:Iterable<Chunk>):RoadLine[] {
 	const list = [...chunks];
-	const door = findDoor(list);
-	const cells = door ? roadCells(list, door) : [];
+	const roads = roadsOf(list);
 	const key = (x:number, z:number):string => `${Math.round(x * 2)},${Math.round(z * 2)}`;
-	const road = new Set(cells.map((c) => key(c.x, c.z)));
+	const byKey = new Map(roads.flatMap((r) => r.cells).map((c) => [key(c.x, c.z), c] as const));
+	const cells = [...byKey.values()];
 	const spans = new Set(list.flatMap((chunk) => chunk.entities
 		.filter((e) => e.def === 'bridge_span')
 		.map((e) => chunk.worldCellCenter(e.localX, e.localZ))
@@ -268,10 +310,10 @@ export function roadLines(chunks:Iterable<Chunk>):RoadLine[] {
 	const reach = (c:Cell, [dx, dz]:readonly [number, number]):number => {
 		const x = c.x + dx * CELL_SIZE;
 		const z = c.z + dz * CELL_SIZE;
-		if (road.has(key(x, z))) {
+		if (byKey.has(key(x, z))) {
 			return CELL_SIZE;
 		}
-		const toDoor = door && c === cells[0] && dx === -door.dx && dz === -door.dz;
+		const toDoor = roads.some(({ door, cells: own }) => own[0] && key(own[0].x, own[0].z) === key(c.x, c.z) && dx === -door.dx && dz === -door.dz);
 		return toDoor || spans.has(key(x, z)) ? CELL_SIZE / 2 : 0;
 	};
 	const lines:RoadLine[] = [];
@@ -289,7 +331,7 @@ export function roadLines(chunks:Iterable<Chunk>):RoadLine[] {
 			}
 			let end = c;
 			while (reach(end, u) === CELL_SIZE) {
-				end = cells.find((o) => key(o.x, o.z) === key(end.x + u[0] * CELL_SIZE, end.z + u[1] * CELL_SIZE))!;
+				end = byKey.get(key(end.x + u[0] * CELL_SIZE, end.z + u[1] * CELL_SIZE))!;
 			}
 			const from = reach(c, back);
 			const to = reach(end, u);
@@ -305,6 +347,59 @@ export function roadLines(chunks:Iterable<Chunk>):RoadLine[] {
 	return lines;
 }
 
+/** Road height: a clear step above the lawn. The mesh and the feet use this. */
+export const ROAD_Y = 0.04;
+/** Half the road's width, in meters. */
+export const ROAD_HALF_WIDTH = 0.46;
+/** How round the road's inside corners are. */
+export const ROAD_FILLET = 0.35;
+
+function smoothMin(a:number, b:number, k:number):number {
+	const h = Math.max(k - Math.abs(a - b), 0) / k;
+	return Math.min(a, b) - (h * h * k) / 4;
+}
+
+export function segmentDistance(p:{ x:number; z:number }, a:{ x:number; z:number }, b:{ x:number; z:number }):number {
+	const dx = b.x - a.x;
+	const dz = b.z - a.z;
+	const len2 = dx * dx + dz * dz;
+	const t = len2 > 0 ? Math.min(1, Math.max(0, ((p.x - a.x) * dx + (p.z - a.z) * dz) / len2)) : 0;
+	return Math.hypot(p.x - a.x - dx * t, p.z - a.z - dz * t);
+}
+
+/** Signed meters inside the cobbled road: positive on the stones, the same test the mesh is clipped with. */
+export function roadInside(lines:RoadLine[], x:number, z:number):number {
+	return ROAD_HALF_WIDTH - lines.reduce((d, l) => smoothMin(d, segmentDistance({ x, z }, l.a, l.b), ROAD_FILLET), Infinity);
+}
+
+const roadSteps = Symbol.for('arc.roadStep');
+
+/** The cobbled road as one step. Replanned over every loaded chunk, same as the other dressing. */
+export function syncRoadStep(world:World):void {
+	const lines = roadLines(world.chunks.values());
+	if (lines.length === 0) {
+		return;
+	}
+	const xs = lines.flatMap((l) => [l.a.x, l.b.x]);
+	const zs = lines.flatMap((l) => [l.a.z, l.b.z]);
+	const pad = ROAD_HALF_WIDTH + ROAD_FILLET;
+	const step = {
+		a: { x: Math.min(...xs) - pad, z: Math.min(...zs) - pad },
+		b: { x: Math.max(...xs) + pad, z: Math.max(...zs) + pad },
+		sample: (x:number, z:number) => world.tileAtWorld(x, z)?.def === 'grass' && roadInside(lines, x, z) >= 0 ? ROAD_Y : undefined,
+	};
+	const host = world as World & { [roadSteps]?:{ a:{ x:number; z:number }; b:{ x:number; z:number }; sample:(x:number, z:number)=>number | undefined } };
+	const prev = host[roadSteps];
+	if (prev) {
+		prev.a = step.a;
+		prev.b = step.b;
+		prev.sample = step.sample;
+		return;
+	}
+	host[roadSteps] = step;
+	world.addStepOn(step);
+}
+
 function place(prop:PropID, x:number, y:number, z:number, yaw = 0):DressingProp {
 	return { prop, x, y, z, yaw };
 }
@@ -315,15 +410,16 @@ function place(prop:PropID, x:number, y:number, z:number, yaw = 0):DressingProp 
  */
 export function planProps(chunks:Iterable<Chunk>):DressingProp[] {
 	const list = [...chunks];
-	return [...cottageProps(list), ...stallProps(list), ...glyphProps(list)];
+	return [...cottageProps(list), ...stallProps(list), ...glyphProps(list), ...windowProps(list)];
 }
 
 /**
- * One cluster at the cottage door, one in the room, one where the path meets the water.
- * Offsets are meters from the door, in the door's outside frame (forward, right).
+ * The farmyard of the first house on the map whose door opens onto lawn (shops on a paved square, and smaller
+ * houses, furnish themselves with prop glyphs): one cluster at its door, one in the room, one where the path meets
+ * the water. Offsets are meters from the door, in the door's outside frame (forward, right).
  */
 function cottageProps(list:Chunk[]):DressingProp[] {
-	const door = findDoor(list);
+	const door = findBuildings(list).map((b) => b.out).find((out) => lawnAt(list, out.x + out.dx * CELL_SIZE, out.z + out.dz * CELL_SIZE));
 	if (!door) {
 		return [];
 	}
@@ -342,12 +438,14 @@ function cottageProps(list:Chunk[]):DressingProp[] {
 		place('barrel', at(0.8, 2.35).x, 0, at(0.8, 2.35).z),
 	];
 	const room = [
-		place('table', at(-2.15, -0.35).x, 0, at(-2.15, -0.35).z),
+		// Long side to the chair.
+		place('table', at(-2.15, -0.35).x, 0, at(-2.15, -0.35).z, Math.PI / 2),
 		place('chair', at(-2.15, -0.95).x, 0, at(-2.15, -0.95).z, Math.atan2(rightX, rightZ)),
 		place('lantern', at(-2.35, -0.15).x, 0.64, at(-2.35, -0.15).z),
 		...onWall(list, ['shelf', 'jars'], at(-3.15, 0.7), 0.2, [0, 1.32]),
-		place('bed', at(-2.3, 1.7).x, 0, at(-2.3, 1.7).z),
-		place('chest', at(-1.15, 1.75).x, 0, at(-1.15, 1.75).z, 0.4),
+		// Head to the wall: a bed's origin is its middle, so its back is half its length behind it.
+		...onWall(list, ['bed'], at(-2.3, 1.7), PROP_FOOTPRINT.bed!.d),
+		place('trunk', at(-1.15, 1.75).x, 0, at(-1.15, 1.75).z, 0.4),
 		...onWall(list, ['broom'], at(-1.05, -1.15), BROOM_REACH * 2),
 	];
 	const road = roadCells(list, door);
@@ -370,9 +468,31 @@ function cottageProps(list:Chunk[]):DressingProp[] {
 	return [...yard, ...room, ...roadside];
 }
 
+/** Curtains on the inside of every window: the side whose floor is a room's boards. */
+function windowProps(list:Chunk[]):DressingProp[] {
+	const out:DressingProp[] = [];
+	for (const chunk of list) {
+		chunk.forEachTile((tile, lx, lz) => {
+			const run = tile.def === 'window' ? straightRun(chunk, lx, lz) : undefined;
+			if (!run) {
+				return;
+			}
+			const [ax, az] = run === 'x' ? [0, 1] : [1, 0];
+			const inward = [1, -1].find((s) => chunk.tile(lx + ax * s, lz + az * s)?.def === 'plank');
+			if (inward === undefined) {
+				return;
+			}
+			const c = chunk.worldCellCenter(lx, lz);
+			const off = WALL_THICKNESS / 2 + 0.02;
+			out.push(place('curtains', c.x + ax * inward * off, 0, c.z + az * inward * off, yawToward(-ax * inward, -az * inward)));
+		});
+	}
+	return out;
+}
+
 /** A stall faces the middle of its chunk: stalls in the north half turn round to face south. */
 export function stallYaw(localZ:number):number {
-	return localZ < CHUNK_SIZE / 2 ? Math.PI : 0;
+	return localZ > CHUNK_SIZE / 2 ? Math.PI : 0;
 }
 
 /** One prop beside a stall: `right` and `forward` in meters in the stall's frame (+Z its customer side). */
@@ -400,24 +520,11 @@ const STALL_GOODS:Record<string, StallSpot[]> = {
 		{ prop: 'crate', right: -1.3, forward: -0.05 },
 		{ prop: 'bucket', right: -1.25, forward: 0.5 },
 	],
-	SpiceStall: [
-		{ prop: 'sacks', right: -1.35, forward: 0, yaw: -0.4 },
-		{ prop: 'crate', right: 1.3, forward: 0 },
-		{ prop: 'jars', right: 1.3, forward: 0, y: 0.42 },
-	],
-	CandleStall: [
-		{ prop: 'crate', right: 1.3, forward: 0, yaw: 0.25 },
-		{ prop: 'lantern', right: 1.3, forward: 0, y: 0.42 },
-		{ prop: 'barrel', right: -1.25, forward: -0.1 },
-	],
 	FruitStall: [
 		{ prop: 'basket', right: -1.25, forward: 0.25 },
 		{ prop: 'crate', right: -1.3, forward: -0.45, yaw: 0.3 },
 		{ prop: 'basket', right: 1.3, forward: -0.05 },
-	],
-	RibbonStall: [
-		{ prop: 'basket', right: 1.25, forward: 0.1 },
-		{ prop: 'barrel', right: -1.3, forward: -0.1 },
+		{ prop: 'wheelbarrow', right: 1.9, forward: -0.9, yaw: 0.9 },
 	],
 };
 
@@ -445,8 +552,20 @@ function stallProps(list:Chunk[]):DressingProp[] {
 }
 
 /**
+ * How far from a wall a prop stands with its back flat on it, twice over (as `onWall` takes it): a box its depth, the
+ * broom where its handle rests on the wall. Round props and loose small things stand where their cell puts them.
+ */
+function standDepth(def:PropID):number | undefined {
+	if (def === 'broom') {
+		return BROOM_REACH * 2;
+	}
+	const foot = PROP_FOOTPRINT[def];
+	return foot && !foot.round ? foot.d : undefined;
+}
+
+/**
  * Props a chunk map places with a glyph whose entity `def` is a prop id. A legend `yaw` turns it; without
- * one it faces away from a wall it stands against, else turns by a hash of its cell.
+ * one it faces away from a wall it stands against, flush on it, else turns by a hash of its cell.
  */
 function glyphProps(list:Chunk[]):DressingProp[] {
 	const out:DressingProp[] = [];
@@ -456,11 +575,30 @@ function glyphProps(list:Chunk[]):DressingProp[] {
 				continue;
 			}
 			const center = chunk.worldCellCenter(ent.localX, ent.localZ);
-			const height = chunk.tile(ent.localX, ent.localZ)?.height ?? 0;
-			out.push(place(ent.def, center.x, height * TILE_HEIGHT, center.z, ent.yaw ?? glyphYaw(chunk, ent.localX, ent.localZ)));
+			const x = center.x + (ent.offset?.x ?? 0);
+			const z = center.z + (ent.offset?.z ?? 0);
+			const y = (chunk.tile(ent.localX, ent.localZ)?.height ?? 0) * TILE_HEIGHT + (ent.offset?.y ?? 0);
+			const def = ent.def;
+			const on = (ent.on ?? []).filter(isPropID);
+			const beside = ent.yaw === undefined && wallBeside(chunk, ent.localX, ent.localZ);
+			const depth = WALL_MOUNTED[def] ?? (beside ? standDepth(def) : undefined);
+			if (depth !== undefined) {
+				out.push(...onWall(list, [def, ...on], { x, z }, depth, [y, ...on.map(() => y + (PROP_TOP[def] ?? 0))]));
+				continue;
+			}
+			const yaw = ent.yaw ?? glyphYaw(chunk, ent.localX, ent.localZ);
+			out.push(place(ent.def, x, y, z, yaw));
+			for (const top of on) {
+				out.push(place(top, x, y + (PROP_TOP[ent.def] ?? 0), z, yaw));
+			}
 		}
 	}
 	return out;
+}
+
+/** Whether a wall stands on one of the cell's four sides. */
+function wallBeside(chunk:Chunk, lx:number, lz:number):boolean {
+	return ([[1, 0], [-1, 0], [0, 1], [0, -1]] as const).some(([dx, dz]) => !!chunk.tile(lx + dx, lz + dz)?.blocked);
 }
 
 function glyphYaw(chunk:Chunk, lx:number, lz:number):number {
@@ -483,8 +621,10 @@ function onWall(chunks:Chunk[], props:PropID[], p:{ x:number; z:number }, depth:
 	let best:{ x:number; z:number; yaw:number; d:number } | undefined;
 	for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]] as const) {
 		for (let d = 0; d <= 1.5; d += step) {
-			const tile = chunkAt(chunks, p.x + dx * d, p.z + dz * d)?.tileAtWorld(p.x + dx * d, p.z + dz * d);
-			if (tile?.blocked) {
+			const x = p.x + dx * d;
+			const z = p.z + dz * d;
+			const chunk = chunkAt(chunks, x, z);
+			if (chunk && solidAt(chunk, x, z)) {
 				if (!best || d < best.d) {
 					// The wall face sits where the march entered the blocked tile.
 					const face = d - step * 0.5;
@@ -534,11 +674,8 @@ export function grassCleared(chunks:Iterable<Chunk>, x:number, z:number):boolean
 	if (key !== clearedKey) {
 		clearedKey = key;
 		clearedCells = new Set();
-		const door = findDoor(list);
-		if (door) {
-			for (const cell of roadCells(list, door)) {
-				clearedCells.add(cellKey(cell.x, cell.z));
-			}
+		for (const cell of allRoadCells(list)) {
+			clearedCells.add(cellKey(cell.x, cell.z));
 		}
 		for (const spot of planProps(list)) {
 			for (let dz = -1; dz <= 1; dz++) {

@@ -196,6 +196,7 @@ function bowl():THREE.Group {
 
 function jug():THREE.Group {
 	const clay = toon(0xc47a4a);
+	const hole = toon(0x000000, { outline: false });
 	const body = part(lathe([
 		{ r: 0.02, y: 0 },
 		{ r: 0.08, y: 0.012 },
@@ -205,13 +206,17 @@ function jug():THREE.Group {
 		{ r: 0.048, y: 0.24 },
 		{ r: 0.02, y: 0.25 },
 	], 12), clay);
+	// The lip's closing cone faces inward, so culling shows the world through the mouth.
+	const mouth = part(new THREE.CircleGeometry(0.044, 12).rotateX(-Math.PI / 2), hole);
+	mouth.position.y = 0.242;
+	mouth.castShadow = false;
 	const handle = part(tube([
 		{ x: 0.06, y: 0.08, z: 0 },
 		{ x: 0.13, y: 0.13, z: 0 },
 		{ x: 0.11, y: 0.2, z: 0 },
 		{ x: 0.035, y: 0.2, z: 0 },
 	], 0.012, 5), clay);
-	return group([body, handle], [clay]);
+	return group([body, handle, mouth], [clay]);
 }
 
 function knife():THREE.Group {
@@ -271,7 +276,228 @@ function hook():THREE.Group {
 	return rest(group([handle, curve], [wood, iron]), 'x');
 }
 
+// Fruit: an apple, a pear and a plum, each with its stem, and a leaf on the apple.
+
+function apple():THREE.Group {
+	const skin = toon(0xc23b3a);
+	const stem = toon(0x5a3a1e);
+	const leafMat = toon(0x4a8a3a, { side: THREE.DoubleSide });
+	const body = part(lathe([
+		{ r: 0.03, y: 0.015 },
+		{ r: 0.075, y: 0.03 },
+		{ r: 0.085, y: 0.08 },
+		{ r: 0.06, y: 0.13 },
+		{ r: 0.025, y: 0.145 },
+	], 12), skin);
+	const stalk = part(tube([{ x: 0, y: 0.12, z: 0 }, { x: 0.01, y: 0.175, z: 0.01 }], 0.006, 5), stem);
+	const leaf = part(strip([{ x: 0.012, y: 0.16, z: 0.01 }, { x: 0.045, y: 0.175, z: 0.025 }, { x: 0.07, y: 0.165, z: 0.03 }], 0.03), leafMat);
+	return group([body, stalk, leaf], [skin, stem, leafMat]);
+}
+
+function pear():THREE.Group {
+	const skin = toon(0xb8c44a);
+	const stem = toon(0x5a3a1e);
+	const body = part(lathe([
+		{ r: 0.03, y: 0 },
+		{ r: 0.07, y: 0.02 },
+		{ r: 0.078, y: 0.06 },
+		{ r: 0.05, y: 0.12 },
+		{ r: 0.035, y: 0.16 },
+		{ r: 0.015, y: 0.19 },
+	], 12), skin);
+	const stalk = part(tube([{ x: 0, y: 0.18, z: 0 }, { x: 0.015, y: 0.23, z: 0 }], 0.005, 5), stem);
+	return group([body, stalk], [skin, stem]);
+}
+
+function plum():THREE.Group {
+	const skin = toon(0x5a2a6a);
+	const bloom = toon(0x8a5a9a, { outline: false });
+	const body = part(blob(0.055, 0.06, 0.055, 10, 8), skin);
+	body.position.y = 0.06;
+	const crease = part(new THREE.BoxGeometry(0.004, 0.09, 0.04), bloom);
+	crease.position.set(0.05, 0.06, 0);
+	return group([body, crease], [skin, bloom]);
+}
+
+// The apothecary's shelf: a corked vial, a round tin, a tied bundle of lavender and a bar of soap.
+
+function tonic():THREE.Group {
+	const glass = toon(0x4ac27a, { rim: 0.5 });
+	const cork = toon(0xc4a06a);
+	const label = toon(0xf0e6d0, { outline: false });
+	const vial = part(lathe([
+		{ r: 0.03, y: 0 },
+		{ r: 0.045, y: 0.01 },
+		{ r: 0.045, y: 0.1 },
+		{ r: 0.018, y: 0.14 },
+		{ r: 0.018, y: 0.18 },
+		{ r: 0.024, y: 0.19 },
+	], 10), glass);
+	const stopper = part(new THREE.CylinderGeometry(0.016, 0.014, 0.035, 8), cork);
+	stopper.position.y = 0.2;
+	const tag = part(new THREE.BoxGeometry(0.05, 0.035, 0.004), label);
+	tag.position.set(0, 0.06, 0.046);
+	return group([vial, stopper, tag], [glass, cork, label]);
+}
+
+function salve():THREE.Group {
+	const tin = toon(0xb8a060, { rim: 0.4 });
+	const lid = toon(0x8a7a48, { rim: 0.4 });
+	const body = part(new THREE.CylinderGeometry(0.055, 0.055, 0.04, 14), tin);
+	body.position.y = 0.02;
+	const top = part(new THREE.CylinderGeometry(0.058, 0.058, 0.014, 14), lid);
+	top.position.y = 0.047;
+	const knob = part(new THREE.SphereGeometry(0.01, 6, 5), lid);
+	knob.position.y = 0.06;
+	return group([body, top, knob], [tin, lid]);
+}
+
+function lavender():THREE.Group {
+	const stemMat = toon(0x6a8a4a);
+	const flower = toon(0x8a6ac8);
+	const twine = toon(0xd2a868);
+	const stems:THREE.Object3D[] = [];
+	const heads:THREE.Object3D[] = [];
+	for (let i = 0; i < 5; i++) {
+		const a = (i / 5) * Math.PI * 2;
+		const x = Math.cos(a) * 0.012;
+		const z = Math.sin(a) * 0.012;
+		const lean = 0.05 + (i % 2) * 0.02;
+		stems.push(part(tube([{ x, y: 0.005, z }, { x: x * 4 + lean * Math.cos(a), y: 0.15, z: z * 4 + lean * Math.sin(a) }], 0.004, 4), stemMat));
+		const head = part(blob(0.012, 0.03, 0.012, 6, 5), flower);
+		head.position.set(x * 4 + lean * Math.cos(a), 0.165, z * 4 + lean * Math.sin(a));
+		heads.push(head);
+	}
+	const tie = part(new THREE.TorusGeometry(0.02, 0.005, 5, 10), twine);
+	tie.rotation.x = Math.PI / 2;
+	tie.position.y = 0.05;
+	return group([...stems, ...heads, tie], [stemMat, flower, twine]);
+}
+
+function soap():THREE.Group {
+	const bar = toon(0xe8d8b8);
+	const stamp = toon(0xc4a070, { outline: false });
+	const body = part(bevelBox(0.09, 0.035, 0.06, 0.01), bar);
+	body.position.y = 0.0175;
+	const mark = part(new THREE.CylinderGeometry(0.018, 0.018, 0.003, 10), stamp);
+	mark.position.y = 0.036;
+	return group([body, mark], [bar, stamp]);
+}
+
+// The toymaker's counter: a horse on wheels, a rag doll, a whistle and a top.
+
+function woodenHorse():THREE.Group {
+	const wood = toon(0xa86a38, { pattern: 'plank', patternScale: 0.04, patternInk: 0.3 });
+	const dark = toon(0x4a2e18);
+	const red = toon(0xc84a3a);
+	const body = part(blob(0.09, 0.045, 0.04, 10, 7), wood);
+	body.position.y = 0.11;
+	const neck = part(new THREE.BoxGeometry(0.035, 0.09, 0.03), wood);
+	neck.position.set(0.075, 0.165, 0);
+	neck.rotation.z = -0.4;
+	const head = part(blob(0.045, 0.028, 0.028, 8, 6), wood);
+	head.position.set(0.115, 0.205, 0);
+	const mane = part(new THREE.BoxGeometry(0.05, 0.07, 0.01), dark);
+	mane.position.set(0.065, 0.175, 0);
+	mane.rotation.z = -0.4;
+	const legs = [[-0.05, -0.02], [-0.05, 0.02], [0.05, -0.02], [0.05, 0.02]].map(([x, z]) => {
+		const leg = part(new THREE.BoxGeometry(0.02, 0.07, 0.016), wood);
+		leg.position.set(x!, 0.06, z!);
+		return leg;
+	});
+	const axle = part(new THREE.CylinderGeometry(0.004, 0.004, 0.08, 5).rotateX(Math.PI / 2), dark);
+	axle.position.set(0, 0.02, 0);
+	const wheels = [[-0.05, -0.04], [-0.05, 0.04], [0.05, -0.04], [0.05, 0.04]].map(([x, z]) => {
+		const wheel = part(new THREE.CylinderGeometry(0.02, 0.02, 0.008, 10).rotateX(Math.PI / 2), red);
+		wheel.position.set(x!, 0.02, z!);
+		return wheel;
+	});
+	const tail = part(tube([{ x: -0.085, y: 0.12, z: 0 }, { x: -0.11, y: 0.09, z: 0.005 }], 0.008, 4), dark);
+	return group([body, neck, head, mane, ...legs, axle, ...wheels, tail], [wood, dark, red]);
+}
+
+function doll():THREE.Group {
+	const cloth = toon(0xd89a7a);
+	const dress = toon(0x3a6ac8);
+	const hair = toon(0xc8a050);
+	const face = toon(0x3a2a1e, { outline: false });
+	const skirt = part(lathe([
+		{ r: 0.02, y: 0.06 },
+		{ r: 0.05, y: 0 },
+		{ r: 0.05, y: 0.008 },
+		{ r: 0.028, y: 0.075 },
+	], 10), dress);
+	const torso = part(new THREE.CylinderGeometry(0.022, 0.028, 0.045, 8), dress);
+	torso.position.y = 0.095;
+	const head = part(new THREE.SphereGeometry(0.03, 10, 8), cloth);
+	head.position.y = 0.145;
+	const locks = part(lathe([{ r: 0.026, y: 0.135 }, { r: 0.034, y: 0.15 }, { r: 0.02, y: 0.178 }, { r: 0.002, y: 0.18 }], 10), hair);
+	const arms = [-1, 1].map((s) => {
+		const arm = part(new THREE.CylinderGeometry(0.008, 0.008, 0.05, 6), cloth);
+		arm.position.set(s * 0.03, 0.1, 0.005);
+		arm.rotation.z = s * 0.9;
+		return arm;
+	});
+	const eyes = [-1, 1].map((s) => {
+		const eye = part(new THREE.SphereGeometry(0.004, 5, 4), face);
+		eye.position.set(s * 0.01, 0.15, 0.027);
+		return eye;
+	});
+	return group([skirt, torso, head, locks, ...arms, ...eyes], [cloth, dress, hair, face]);
+}
+
+function whistle():THREE.Group {
+	const wood = toon(0xc8a050);
+	const dark = toon(0x5a3a1e, { outline: false });
+	const body = part(new THREE.CylinderGeometry(0.014, 0.012, 0.11, 8), wood);
+	const holes = [-0.03, -0.01, 0.01, 0.03].map((x) => {
+		const hole = part(new THREE.CylinderGeometry(0.004, 0.004, 0.004, 6), dark);
+		hole.position.set(x, 0.015, 0);
+		return hole;
+	});
+	const mouth = part(new THREE.BoxGeometry(0.03, 0.012, 0.02), wood);
+	mouth.position.set(0.065, 0, 0);
+	const g = group([body, ...holes, mouth], [wood, dark]);
+	// Lying along X on the counter: the cylinder stands up its Y.
+	body.rotation.z = Math.PI / 2;
+	for (const piece of [body, mouth, ...holes]) {
+		piece.position.y += 0.014;
+	}
+	return g;
+}
+
+function spinningTop():THREE.Group {
+	const paint = toon(0xc84a3a);
+	const stripe = toon(0xf0e0a8);
+	const wood = toon(0x8a5a32);
+	const cone = part(lathe([
+		{ r: 0.002, y: 0 },
+		{ r: 0.03, y: 0.03 },
+		{ r: 0.05, y: 0.055 },
+		{ r: 0.045, y: 0.075 },
+		{ r: 0.02, y: 0.09 },
+		{ r: 0.012, y: 0.1 },
+	], 12), paint);
+	const ring = part(new THREE.TorusGeometry(0.047, 0.006, 5, 14), stripe);
+	ring.rotation.x = Math.PI / 2;
+	ring.position.y = 0.06;
+	const handle = part(new THREE.CylinderGeometry(0.008, 0.01, 0.04, 7), wood);
+	handle.position.y = 0.115;
+	return group([cone, ring, handle], [paint, stripe, wood]);
+}
+
 const GOODS:Record<string, ()=>THREE.Group> = {
+	item_apple: apple,
+	item_pear: pear,
+	item_plum: plum,
+	item_tonic: tonic,
+	item_salve: salve,
+	item_lavender: lavender,
+	item_soap: soap,
+	item_wooden_horse: woodenHorse,
+	item_doll: doll,
+	item_whistle: whistle,
+	item_spinning_top: spinningTop,
 	item_loaf: loaf,
 	item_bun: bun,
 	item_pie: pie,

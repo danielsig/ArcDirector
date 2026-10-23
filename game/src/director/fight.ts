@@ -1,7 +1,8 @@
 import { type GameObject } from '@arc-director/kindling';
 import { shortTag, type Collective, type SeenName } from 'arc-director';
 import type { GameHost, CharacterCtx } from './adapter';
-import { Guard, HumanBody, Vitals, Weakness } from '../engine/components';
+import { Guard, HumanBody, Interior, Vitals, Weakness } from '../engine/components';
+import { enclosureAt } from '../world/interior';
 import { idOf, isLiving } from './names';
 import { standableNear } from '../world/path';
 
@@ -49,6 +50,8 @@ export type AttackKind = {
 	falloff?:number;
 	/** Hit shove multiplier. 1 is stab/hex; slice and cleave are heavier. */
 	knock?:number;
+	/** Fire: cast at something that burns (a web), it sets it alight instead of failing on a thing that is no foe. */
+	burns?:boolean;
 	/** What differs for these roles: a Knight's slower stab, a Witch's slow, heavy smite. */
 	by?:Partial<Record<FightRole, Partial<Pick<AttackKind, 'damage' | 'castTime' | 'cooldown'>>>>;
 };
@@ -60,7 +63,7 @@ export const ATTACKS:Record<string, AttackKind> = {
 	stab: { roles: ['Blade', 'Knight'], range: 1.6, damage: 1, word: 'stabbed', castTime: 0.2, cooldown: 0.55, accuracy: 0.92, by: { Knight: { castTime: 0.36, cooldown: 1 } } },
 	slice: { roles: ['Blade'], range: 1.9, damage: 2, word: 'sliced', castTime: 0.4, cooldown: 0.95, accuracy: 0.84, dodge: 0.5, knock: 1.4 },
 	smite: { roles: ['Healer', 'Witch'], range: 4, damage: 2, cover: 'block', word: 'smote', castTime: 0.4, cooldown: 1.2, accuracy: 0.95, dodge: 0.15, by: { Witch: { damage: 9, castTime: 2.4, cooldown: 14 } } },
-	hex: { roles: ['Witch'], range: SPELL_RANGE, damage: 3, cover: 'soften', word: 'hexed', castTime: 1.8, cooldown: 1.4, accuracy: 0.84, dodge: 0.75, falloff: 0.8 },
+	hex: { roles: ['Witch'], range: SPELL_RANGE, damage: 3, cover: 'soften', word: 'hexed', castTime: 1.8, cooldown: 1.4, accuracy: 0.84, dodge: 0.75, falloff: 0.8, burns: true },
 	cleave: { roles: ['Knight'], range: 2.2, damage: 4, word: 'cleaved', castTime: 0.8, cooldown: 1.6, accuracy: 0.74, knock: 2.2 },
 	shoot: { roles: ['Archer'], range: 12, damage: 4, cover: 'block', word: 'shot', castTime: 1.5, cooldown: 0.4, accuracy: 0.9, dodge: 0.75, falloff: 0.8 },
 };
@@ -168,13 +171,12 @@ export function agilityOf(host:GameHost, character:GameObject):number {
 /** Fighters outside every collective who still have a fight role fight together, as the company. */
 const COMPANY = 'company';
 
-/** Who a living fighter stands with: its collective's id, or the company. None for a non-fighter. */
+
+/** Who a fighter stands with: its collective's id, or the company. None for non-fighters. */
 function sideOf(host:GameHost, character:GameObject):string | undefined {
-	const party = fightParty(host, character);
-	if (party) {
-		return party.id;
-	}
-	return fightTags(host, character).some((tag) => (FIGHT_ROLES as readonly string[]).includes(tag)) ? COMPANY : undefined;
+	return fightRole(host, character)
+		? fightParty(host, character)?.id ?? COMPANY
+		: undefined;
 }
 
 /** Every living body that can fight or be fought. */
@@ -441,7 +443,10 @@ function lineSlot(host:GameHost, character:GameObject):{ x:number; z:number } | 
 	return undefined;
 }
 
-/** Expr tags so `others.filter("enemy")` / `u is "Healer"` work on living fight characters. */
+/**
+ * Expr tags so `others.filter("enemy")` / `u is "Healer"` work on living fight characters, and `u is "sameRoom"` on
+ * anyone in the same room of a larger place (a crypt hall) as the observer.
+ */
 export function fightExprTags(host:GameHost, observer:GameObject, go:GameObject):string[] {
 	const tags:string[] = [];
 	const role = fightRole(host, go);
@@ -451,7 +456,18 @@ export function fightExprTags(host:GameHost, observer:GameObject, go:GameObject)
 	if (isRival(host, observer, go)) {
 		tags.push('enemy');
 	}
+	const room = roomOf(observer);
+	if (room && roomOf(go) === room) {
+		tags.push('sameRoom');
+	}
 	return tags;
+}
+
+/** The room `go` stands in, if any: a room of a larger place, not a building. */
+function roomOf(go:GameObject):GameObject | undefined {
+	const p = go.transform.position;
+	const hit = go.world && enclosureAt(go.world, p.x, p.z);
+	return hit?.getComponent(Interior)?.room ? hit : undefined;
 }
 
 const THREAT_NOTE_M = 8;

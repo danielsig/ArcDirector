@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import type { World } from '../core/World.js';
 import { Camera } from './Camera.js';
 import { OutlinePass } from './OutlinePass.js';
-import { ShadowCache, type ShadowMode } from './ShadowCache.js';
+import { ShadowCache, type ShadowMode, type ShadowSettings } from './ShadowCache.js';
 import { updateCapsuleShadows } from './capsuleShadows.js';
 
 const CLEAR_COLOR = 0x000000;
@@ -84,6 +84,11 @@ export class Renderer {
 	public detailMaps = true;
 	/** See {@link ShadowCache}: still casters are baked per light, moving ones drawn live (`dynamic`) or not at all (`static`). */
 	public shadows:ShadowMode = 'dynamic';
+	/** World XZ box the sun's shadow map covers (see `ShadowSettings.sunArea`); null frames every still caster. */
+	public sunArea:ShadowSettings['sunArea'] = null;
+	/** Where moving things cast the sun's shadow, into their own map `sunMoverSize` square (`ShadowSettings.sunFocus`). */
+	public sunFocus:ShadowSettings['sunFocus'] = null;
+	public sunMoverSize = 2048;
 	/** Shadow map side for point lights, and for directional lights (the sun covers far more ground). Clamped to what the GPU allows. */
 	public pointShadowMapSize = 256;
 	public directionalShadowMapSize = 1024;
@@ -96,7 +101,7 @@ export class Renderer {
 	 * Point lights whose shadows also show moving things (`dynamic` only), nearest where the camera looks first
 	 * among those with one in range. The sun always does.
 	 */
-	public maxMovingShadows = 2;
+	public maxMovingShadows = 8;
 	/** Ink outlines. Disabled renders straight to the canvas. */
 	public readonly outline = new OutlinePass();
 
@@ -163,9 +168,10 @@ export class Renderer {
 		this.gl.toneMappingExposure = look.exposure;
 		this._hemi.color.setHex(look.hemiSky);
 		this._hemi.groundColor.setHex(look.hemiGround);
-		this._hemi.intensity = look.hemiIntensity;
+		const level = this._scene.lightLevel;
+		this._hemi.intensity = look.hemiIntensity * level;
 		this._fill.color.setHex(look.fillColor);
-		this._fill.intensity = look.fillIntensity;
+		this._fill.intensity = look.fillIntensity * level;
 		if (look.ink !== undefined) {
 			this.outline.color.setHex(look.ink);
 		}
@@ -252,6 +258,9 @@ export class Renderer {
 			mode: this.shadows,
 			maxPointShadows: this.maxPointShadows,
 			maxMovingShadows: this.maxMovingShadows,
+			sunArea: this.sunArea,
+			sunFocus: this.sunFocus,
+			sunMoverSize: this.sunMoverSize,
 		}, this._sun);
 		// `static` maps leave moving things out; capsules stand in for them, blocking every light that reaches them.
 		updateCapsuleShadows(this.shadows === 'static' ? this._shadowCache.moving : [], cam.native);
@@ -406,7 +415,8 @@ export class Renderer {
 		const seen = new Set<THREE.Material>();
 		this._scene.native.traverse((obj) => {
 			const shadow = (obj as THREE.Light).isLight ? (obj as LightWithShadow).shadow : undefined;
-			if (shadow) {
+			// The shadow cache sizes the sun's parts itself.
+			if (shadow && !obj.userData.sunPart) {
 				const size = Math.min(this.gl.capabilities.maxTextureSize,
 					(obj as THREE.DirectionalLight).isDirectionalLight ? this.directionalShadowMapSize : this.pointShadowMapSize);
 				if (shadow.mapSize.x !== size || !on) {

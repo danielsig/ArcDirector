@@ -6,6 +6,8 @@ export const Order = {
 	npcInput: 20,
 	appearance: 30,
 	motor: 40,
+	/** After the motor sets a step, before physics takes it. */
+	leash: 42,
 	hurt: 45,
 	door: 50,
 	torch: 60,

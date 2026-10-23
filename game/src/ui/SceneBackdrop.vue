@@ -26,10 +26,11 @@ onMounted(async () => {
 	game = new Showcase(props.sceneID);
 	game.mount(host.value);
 	game.start();
-	// Fade in once a frame or two are drawn, not over a blank canvas.
-	requestAnimationFrame(() => requestAnimationFrame(() => {
+	// Fade in once its art is in and shadows and lighting have settled, not mid-load.
+	await game.ready;
+	if (!dead) {
 		shown.value = true;
-	}));
+	}
 });
 
 onUnmounted(() => {

@@ -16,10 +16,17 @@
 //   `LimbLower` (weights fading out toward the grip), and `StringUpper` / `StringLower` from each tip
 //   to the nock (the string's own vertices, all on one of them). The game draws it from code.
 // - `bird`: rig an unrigged bird (facing +Z, wings spread along X): `Body`, `Head`, `Tail`, and
-//   `WingL` / `WingTipL` / `WingR` / `WingTipR`. The game flaps, hops and pecks it from code.
+//   `WingL` / `WingTipL` / `WingR` / `WingTipR` under `Body`, and `Legs` as a root of its own. The game
+//   flaps, hops and pecks it from code.
 // - `textureSize`: this model's largest texture side, instead of the config's (small props need less).
 // - `keepMagenta`: skip the magenta cleanup (on by default: Tripo leaves hot-pink smears in
 //   textures, e.g. in hair, which get repainted from the colors around them).
+// - `up`: the direction that is up in the source, `[x, y, z]`; the model is turned so it points +Y
+//   (Tripo lays a sheet of props out on a tilted board).
+// - `split`: an unrigged sheet of props (rocks, …) becomes one mesh per loose piece, `<Model>_<i>`,
+//   biggest across first, each settled on its own flat underside (if it has one) with its origin at the
+//   middle of its foot; its node keeps it where it stood. They share the one material, so the game draws
+//   any of them with one texture.
 //
 // Per model: base color textures only, shrunk to JPEG; no animations. A model in several parts
 // becomes one skinned mesh per kind of material (opaque, see-through, the black inner shell), its
@@ -106,6 +113,12 @@ for (const file of (await readdir(srcDir)).filter((f) => f.toLowerCase().endsWit
 	}
 	if (fixes.bird) {
 		rigBird(doc);
+	}
+	if (fixes.up) {
+		standUp(doc, fixes.up);
+	}
+	if (fixes.split) {
+		splitPieces(doc, basename(file, '.glb'));
 	}
 
 	for (const material of root.listMaterials()) {
@@ -443,6 +456,136 @@ function islands(prim) {
 	return [...groups.values()];
 }
 
+/** A turn about the origin that points `up` (a direction) to +Y, for `[x, y, z]`; null if it already does. */
+function turnUp(up) {
+	const len = Math.hypot(...up);
+	const [ux, uy, uz] = up.map((v) => v / len);
+	// Rodrigues: the axis is up × +Y, the angle between them.
+	const s = Math.hypot(uz, ux);
+	const c = uy;
+	if (s < 1e-9) {
+		return c > 0 ? null : ([x, y, z]) => [x, -y, -z];
+	}
+	const [kx, kz] = [-uz / s, ux / s];
+	return ([x, y, z]) => {
+		const dot = kx * x + kz * z;
+		return [
+			x * c + (-kz * y) * s + kx * dot * (1 - c),
+			y * c + (kz * x - kx * z) * s,
+			z * c + (kx * y) * s + kz * dot * (1 - c),
+		];
+	};
+}
+
+/** Applies `turn` to a primitive's positions and normals. */
+function turnPrim(prim, turn) {
+	for (const semantic of ['POSITION', 'NORMAL']) {
+		const acc = prim.getAttribute(semantic);
+		for (let i = 0, v = []; acc && i < acc.getCount(); i++) {
+			acc.setElement(i, turn(acc.getElement(i, v)));
+		}
+	}
+}
+
+/** Turns every mesh about the origin so `up` points +Y. */
+function standUp(doc, up) {
+	const turn = turnUp(up);
+	for (const prim of turn ? doc.getRoot().listMeshes().flatMap((m) => m.listPrimitives()) : []) {
+		turnPrim(prim, turn);
+	}
+}
+
+/**
+ * The flat underside a piece rests on, as the (area-weighted) normal of its faces pointing within about 35°
+ * of straight down; undefined when they are under a tenth of it (an open-bottomed shell has none).
+ */
+function baseNormal(prim) {
+	const pos = prim.getAttribute('POSITION').getArray();
+	const idx = prim.getIndices().getArray();
+	const sum = [0, 0, 0];
+	let total = 0;
+	let base = 0;
+	for (let t = 0; t < idx.length; t += 3) {
+		const [a, b, c] = [idx[t] * 3, idx[t + 1] * 3, idx[t + 2] * 3];
+		const u = [0, 1, 2].map((k) => pos[b + k] - pos[a + k]);
+		const v = [0, 1, 2].map((k) => pos[c + k] - pos[a + k]);
+		const n = [u[1] * v[2] - u[2] * v[1], u[2] * v[0] - u[0] * v[2], u[0] * v[1] - u[1] * v[0]];
+		const area = Math.hypot(...n);
+		total += area;
+		if (area > 0 && n[1] / area < -0.82) {
+			base += area;
+			n.forEach((x, k) => {
+				sum[k] += x;
+			});
+		}
+	}
+	return base > total * 0.1 ? sum : undefined;
+}
+
+/**
+ * One mesh per loose piece of each unrigged mesh (see `split`), biggest across first: each settled on its own
+ * flat underside if it has one (sheets are never laid out quite level), then stood with its foot on the origin.
+ */
+function splitPieces(doc, name) {
+	const root = doc.getRoot();
+	const scene = root.listScenes()[0];
+	const buffer = root.listBuffers()[0];
+	const pieces = [];
+	for (const node of root.listNodes().filter((n) => n.getMesh() && !n.getSkin())) {
+		const mesh = node.getMesh();
+		for (const prim of mesh.listPrimitives()) {
+			const idx = prim.getIndices().getArray();
+			for (const verts of islands(prim)) {
+				const remap = new Map(verts.map((v, i) => [v, i]));
+				const piece = doc.createPrimitive().setMaterial(prim.getMaterial());
+				for (const semantic of prim.listSemantics()) {
+					const src = prim.getAttribute(semantic);
+					const size = src.getElementSize();
+					const out = new (src.getArray().constructor)(verts.length * size);
+					for (let i = 0, e = []; i < verts.length; i++) {
+						out.set(src.getElement(verts[i], e), i * size);
+					}
+					piece.setAttribute(semantic, doc.createAccessor().setType(src.getType()).setArray(out).setBuffer(buffer));
+				}
+				const tris = [];
+				for (let t = 0; t < idx.length; t += 3) {
+					if (remap.has(idx[t])) {
+						tris.push(remap.get(idx[t]), remap.get(idx[t + 1]), remap.get(idx[t + 2]));
+					}
+				}
+				piece.setIndices(doc.createAccessor().setType('SCALAR').setArray(new (verts.length > 65535 ? Uint32Array : Uint16Array)(tris)).setBuffer(buffer));
+				const base = baseNormal(piece);
+				const turn = base && turnUp(base.map((v) => -v));
+				if (turn) {
+					turnPrim(piece, turn);
+				}
+				// The foot's middle: centred on the ground, standing on its lowest point.
+				const pos = piece.getAttribute('POSITION');
+				const min = [Infinity, Infinity, Infinity];
+				const max = [-Infinity, -Infinity, -Infinity];
+				for (let i = 0, p = []; i < pos.getCount(); i++) {
+					pos.getElement(i, p).forEach((v, a) => {
+						min[a] = Math.min(min[a], v);
+						max[a] = Math.max(max[a], v);
+					});
+				}
+				const foot = [(min[0] + max[0]) / 2, min[1], (min[2] + max[2]) / 2];
+				for (let i = 0, p = []; i < pos.getCount(); i++) {
+					pos.setElement(i, pos.getElement(i, p).map((v, a) => v - foot[a]));
+				}
+				pieces.push({ piece, foot, across: Math.max(max[0] - min[0], max[2] - min[2]) });
+			}
+			prim.dispose();
+		}
+		node.dispose();
+		mesh.dispose();
+	}
+	pieces.sort((a, b) => b.across - a.across).forEach(({ piece, foot }, i) => {
+		const mesh = doc.createMesh(`${name}_${i}`).addPrimitive(piece);
+		scene.addChild(doc.createNode(`${name}_${i}`).setMesh(mesh).setTranslation(foot));
+	});
+}
+
 function rigBow(doc) {
 	const prim = doc.getRoot().listMeshes()[0].listPrimitives()[0];
 	const pos = prim.getAttribute('POSITION');
@@ -510,28 +653,47 @@ function rigBird(doc) {
 	const Y = (f) => min[1] + f * h;
 	const Z = (f) => f * d;
 	const shoulder = Y(0.75);
+	const hip = [0, Y(0.4), Z(0.15)];
+	// The wing's leading edge and how wide each painted feather is, front to back, and how much less
+	// each feather behind the leading one follows `WingTip`.
+	const lead = Z(0.335);
+	const featherWidth = Z(0.026);
+	const featherDrop = 0.05;
 	addSkin(doc, [
-		{ name: 'Body', at: [0, Y(0.55), 0] },
+		// Pivots at the hips, so leaning tips the bird over its feet.
+		{ name: 'Body', at: hip },
 		{ name: 'Head', parent: 0, at: [0, Y(0.8), Z(0.06)] },
 		{ name: 'Tail', parent: 0, at: [0, Y(0.42), Z(-0.12)] },
 		{ name: 'WingL', parent: 0, at: [X(0.07), shoulder, 0] },
-		{ name: 'WingTipL', parent: 3, at: [X(0.27), shoulder, 0] },
+		{ name: 'WingTipL', parent: 3, at: [X(0.12), shoulder, 0] },
 		{ name: 'WingR', parent: 0, at: [-X(0.07), shoulder, 0] },
-		{ name: 'WingTipR', parent: 5, at: [-X(0.27), shoulder, 0] },
+		{ name: 'WingTipR', parent: 5, at: [-X(0.12), shoulder, 0] },
+		// A root of its own, so the feet stay planted whatever the body does.
+		{ name: 'Legs', at: hip },
 	], ([x, y, z]) => {
 		const ax = Math.abs(x);
 		const left = x > 0;
-		const wing = smoothstep(X(0.06), X(0.12), ax) * smoothstep(Y(0.42), Y(0.52), y);
-		const tip = smoothstep(X(0.22), X(0.32), ax);
-		const rest = 1 - wing;
+		// Fades in from the spine across the wing's root, so folding the wing pulls the back with it;
+		// inside the body only the back (high, behind the shoulder) follows, not the chest.
+		const back = smoothstep(Y(0.6), Y(0.7), y) * (1 - smoothstep(Z(0.02), Z(0.1), z));
+		const inside = 1 - smoothstep(X(0.05), X(0.08), ax);
+		const wing = smoothstep(0, X(0.22), ax) * smoothstep(Y(0.42), Y(0.52), y) * (1 - inside * (1 - back));
+		// Rises all the way out to the feather tips, so turning the tip curls the wing gradually; each
+		// feather back from the leading one turns a little less, so folded they lie the same way.
+		const feather = Math.max(0, Math.floor((lead - z) / featherWidth));
+		const tip = smoothstep(X(0.12), X(0.45), ax) * Math.max(0, 1 - featherDrop * feather);
+		const legs = (1 - smoothstep(X(0.06), X(0.08), ax)) * (1 - smoothstep(Y(0.34), Y(0.4), y)) * smoothstep(Z(0.05), Z(0.1), z);
+		const rest = 1 - wing - legs;
 		const head = rest * smoothstep(Y(0.74), Y(0.84), y);
-		const tail = rest * (1 - smoothstep(Y(0.44), Y(0.58), y)) * smoothstep(Z(-0.1), Z(-0.25), z);
+		// Reaches forward under the rump and up the back, so the tail moves the body it grows from.
+		const tail = rest * (1 - smoothstep(Y(0.48), Y(0.62), y)) * smoothstep(Z(0.05), Z(-0.12), z);
 		return [
 			[0, Math.max(0, rest - head - tail)],
 			[1, head],
 			[2, tail],
 			[left ? 3 : 5, wing * (1 - tip)],
 			[left ? 4 : 6, wing * tip],
+			[7, legs],
 		];
 	});
 }

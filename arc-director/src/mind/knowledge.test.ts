@@ -77,13 +77,17 @@ describe('knowledgeFor', () => {
 });
 
 describe('receivedArticles', () => {
-	it('names each article whose name or alias matches an id or tag, so a small model can tell what it is about', () => {
+	it('names each article whose name or alias is an item id, or whose name is its kind (a tag), so a small model can tell what it is about', () => {
 		const pages:KnowledgeEntry[] = [
 			{ name: 'FireMushroom', aliases: ['mushroom'], text: 'Worth 10 gold.' },
+			{ name: 'Fruit', text: 'Food.' },
 			{ name: 'Tree', text: 'A tree.' },
 		];
 		assert.equal(receivedArticles(pages, [{ id: 'FireMushroom', tags: ['item'] }]), '- FireMushroom: Worth 10 gold.');
-		assert.equal(receivedArticles(pages, [{ id: 'Stick', tags: ['item', 'mushroom'] }]), '- FireMushroom: Worth 10 gold.');
+		assert.equal(receivedArticles(pages, [{ id: 'Mushroom', tags: ['item'] }]), '- FireMushroom: Worth 10 gold.');
+		// Another mushroom is not the FireMushroom just because both are mushrooms.
+		assert.equal(receivedArticles(pages, [{ id: 'MoonMushroom', tags: ['item', 'mushroom'] }]), '');
+		assert.equal(receivedArticles(pages, [{ id: 'Apple', tags: ['item', 'fruit'] }]), '- Fruit: Food.');
 		assert.equal(receivedArticles(pages, [{ id: 'Stick', tags: ['item'] }]), '');
 		assert.equal(receivedArticles([], [{ id: 'FireMushroom', tags: [] }]), '');
 	});

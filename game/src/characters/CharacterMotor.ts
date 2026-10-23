@@ -25,7 +25,6 @@ export class CharacterMotor extends Component {
 	public destinationName:string | null = null;
 	public destinationPoint:{ x:number; z:number } | null = null;
 	public arriveEpsilon = 0.35;
-	public stepHeight = TILE_HEIGHT + 0.05;
 	public maxSpeed = 3.4;
 	/** Distance accumulated toward the next plant. Rests halfway, where a fresh `walk` clip plants. */
 	private _stepPhase = WALK_STRIDE / 2;
@@ -48,7 +47,6 @@ export class CharacterMotor extends Component {
 			return;
 		}
 		rb.grounded = true;
-		rb.stepHeight = this.stepHeight;
 	}
 
 	public override update(dt:number):void {

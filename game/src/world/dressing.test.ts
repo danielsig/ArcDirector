@@ -19,7 +19,8 @@ import { decodeGlyphChunk, type ChunkFile } from './decodeGlyphChunk';
 import { spawnChunkEntities } from './spawn';
 import { syncDressingColliders } from './dressingColliders';
 import { DRESSING_SIGHT_WORDS, planProps, PROP_IDS } from './dressingPlan';
-import { cellSteps } from './path';
+import { cellWays } from './path';
+import { solidAt, THIN_WALLS } from './thinWall';
 
 import type { Chunk } from './Chunk';
 
@@ -38,8 +39,11 @@ test('dressing stands on open ground, and every prop is used somewhere', () => {
 		const chunks = decode(files);
 		for (const spot of planProps(chunks)) {
 			placed.add(spot.prop);
-			const tile = chunks.map((chunk) => chunk.tileAtWorld(spot.x, spot.z)).find(Boolean);
-			assert.ok(tile && !tile.blocked, `${scene}: ${spot.prop} sits on ${tile?.def ?? 'nothing'} at ${spot.x}, ${spot.z}`);
+			const chunk = chunks.find((c) => c.tileAtWorld(spot.x, spot.z));
+			const tile = chunk?.tileAtWorld(spot.x, spot.z);
+			// Against a thin wall a prop may stand in the open half of the wall's cell.
+			const open = !!tile && (!tile.blocked || (THIN_WALLS.has(tile.def) && !solidAt(chunk!, spot.x, spot.z)));
+			assert.ok(open, `${scene}: ${spot.prop} sits on ${tile?.def ?? 'nothing'} at ${spot.x}, ${spot.z}`);
 		}
 	}
 	assert.deepEqual(PROP_IDS.filter((id) => !placed.has(id)), [], 'props no scene places');
@@ -68,18 +72,16 @@ test('in the glen, dressing blocks walking when solid, and never reaches sight',
 		assert.doesNotMatch(text, new RegExp(`\b${word}\b`, 'i'));
 	}
 
-	/** Whether the path graph steps from the tile east of a prop onto it. */
+	/** Whether a route steps from the tile east of a prop onto it. */
 	const stepsOnto = (prop:string):boolean => {
 		const spot = planProps(chunks).find((s) => s.prop === prop)!;
 		const tile = world.tileCoordAt(spot.x, spot.z);
 		const beside = world.tileCenter(tile.tx + 1, tile.tz);
-		return cellSteps(world, npc)([beside.x, beside.z]).some((step) => {
-			const at = world.tileCoordAt(step.point[0], step.point[1]);
-			return at.tx === tile.tx && at.tz === tile.tz;
-		});
+		const onto = world.tileCenter(tile.tx, tile.tz);
+		return cellWays(world).canPass(npc, [beside.x, beside.z], [onto.x, onto.z]) !== undefined;
 	};
-	assert.equal(stepsOnto('weaponRack'), false, 'the path graph steps onto the weapon rack');
-	assert.equal(stepsOnto('bucket'), true, 'the path graph skips the bucket tile');
+	assert.equal(stepsOnto('weaponRack'), false, 'a route steps onto the weapon rack');
+	assert.equal(stepsOnto('bucket'), true, 'routes skip the bucket tile');
 });
 
 test('in the ruins, no route steps onto a cell a fallen column lies across', () => {
@@ -92,6 +94,7 @@ test('in the ruins, no route steps onto a cell a fallen column lies across', () 
 	syncDressingColliders(world);
 	world.reindex();
 	const walker = new GameObject('Walker', 'Person');
+	const ways = cellWays(world);
 	const columns = planProps(chunks).filter((spot) => spot.prop === 'fallenColumn');
 	assert.ok(columns.length > 0, 'the ruins have no fallen columns');
 	for (const column of columns) {
@@ -101,16 +104,15 @@ test('in the ruins, no route steps onto a cell a fallen column lies across', () 
 			const under = { tx: tile.tx + along.x * reach, tz: tile.tz + along.z * reach };
 			for (const [dx, dz] of [[along.z, along.x], [-along.z, -along.x]]) {
 				const beside = world.tileCenter(under.tx + dx!, under.tz + dz!);
-				const onto = cellSteps(world, walker)([beside.x, beside.z]).some((step) => {
-					const at = world.tileCoordAt(step.point[0], step.point[1]);
-					return at.tx === under.tx && at.tz === under.tz;
-				});
+				const middle = world.tileCenter(under.tx, under.tz);
+				const onto = ways.canPass(walker, [beside.x, beside.z], [middle.x, middle.z]) !== undefined;
 				assert.equal(onto, false, `a step lands on the fallen column at ${column.x}, ${column.z} (cell ${under.tx}, ${under.tz})`);
 			}
 		}
 	}
 	for (const brazier of planProps(chunks).filter((spot) => spot.prop === 'brazier')) {
 		const { x, z } = world.tileCenter(world.tileCoordAt(brazier.x, brazier.z).tx, world.tileCoordAt(brazier.x, brazier.z).tz);
-		assert.equal(cellSteps(world, walker)([x, z], true).length, 0, `a step lands in the brazier at ${brazier.x}, ${brazier.z}`);
+		const into = ways.getNeighbors([x, z]).filter((from) => ways.canPass(walker, from, [x, z]) !== undefined);
+		assert.deepEqual(into, [], `a step lands in the brazier at ${brazier.x}, ${brazier.z}`);
 	}
 });

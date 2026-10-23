@@ -4,6 +4,7 @@ import { clone as cloneSkinned } from 'three/addons/utils/SkeletonUtils.js';
 import { ToonMaterial } from '../render/ToonMaterial.js';
 import { register } from './meshes.js';
 import { poseRetargeter, type Quat, type RigRest } from './retarget.js';
+import { patchShader } from '../render/shader.js';
 
 /** One morph target an expression drives, at full expression weight. */
 export type ToonExpressionTarget = { target:string; weight:number };
@@ -178,6 +179,13 @@ export async function registerToonModel(meshID:string, url:string, options:ToonM
 		}
 		mesh.material = toon;
 		mesh.castShadow = !src.transparent;
+		mesh.receiveShadow = true;
+		patchShader(toon, 'othersShadow', (shader) => {
+			shader.fragmentShader = shader.fragmentShader.replace(
+				'sunShadow *= receiveShadow ? getShadow(',
+				'sunShadow *= (receiveShadow && dot(directionalLights[ i ].color, directionalLights[ i ].color) > 0.0) ? getShadow(',
+			);
+		});
 	});
 	// The scene, not the root: rest poses must match the clip library's, which has no turn above it.
 	models.set(meshID, { clips: gltf.animations, rest: restOf(scene), turn: scene.quaternion.clone() });

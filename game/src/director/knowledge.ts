@@ -1,5 +1,5 @@
 import { crowdKnowledge, type KnowledgeEntry } from 'arc-director';
-import { nameList, STALLS } from '../items/wares';
+import { nameList, placeOf, SELLERS } from '../items/wares';
 
 const TREE = crowdKnowledge({
 	name: 'Tree',
@@ -70,7 +70,7 @@ const GLEN:KnowledgeEntry[] = [
 	{
 		name: 'MoonMushroom',
 		aliases: ['moon mushroom', 'blue mushroom'],
-		text: 'Item. A blue mushroom. Grows among the trees west of Cottage, outdoors. Forager harvests it.',
+		text: 'Item. A blue mushroom, worth only 1 gold: not FireMushroom, and it does not pay the bridge fee. Grows among the trees west of Cottage, outdoors. Forager harvests it.',
 		item: true,
 	},
 	{
@@ -100,7 +100,7 @@ const RUINS:KnowledgeEntry[] = [
 	{
 		name: 'Sanctum',
 		aliases: ['dais', 'temple', 'ruins'],
-		text: 'The ruined temple: broken outer walls with breaches, colonnades of Pillars inside them, and a low-walled sanctum with a raised dais at its center. Walls block arrows and spells.',
+		text: 'The ruined temple in the wood: broken outer walls with breaches, colonnades of Pillars inside them, and a low-walled sanctum with a raised dais at its center, where WestBrazier and EastBrazier burn. An old paved road comes out of the wood on the west and on the east and forks to the two breaches on its side. Walls block arrows and spells.',
 	},
 ];
 
@@ -116,23 +116,31 @@ const MARKETPLACE:KnowledgeEntry[] = [
 		aliases: ['west gate'],
 		text: 'The west exit of the marketplace. Walk to it with go_to(WestGate).',
 	},
-	...STALLS.map((stall):KnowledgeEntry => ({
-		name: stall.stall,
-		aliases: stall.aliases,
-		text: `A stall where ${stall.vendor} sells ${nameList(stall.wares.map((ware) => ware.name))}. Walk to it with go_to(${stall.stall}).`,
+	{
+		name: 'ApothecaryShop',
+		aliases: ['apothecary', 'apothecary shop', 'herb shop'],
+		text: 'A shop on the north square, slate-roofed, bigger than the stalls beside it. go_to(ApothecaryShop) is still outside; ApothecaryCounter inside is where Apothecary sells.',
+	},
+	{
+		name: 'ToyShop',
+		aliases: ['toy shop', 'toymaker shop'],
+		text: 'A thatched shop on the south square, smaller than ApothecaryShop. go_to(ToyShop) is still outside; ToyCounter inside is where Toymaker sells.',
+	},
+	...SELLERS.map((seller):KnowledgeEntry => ({
+		name: seller.post,
+		aliases: seller.aliases,
+		text: `${seller.shop ? `The counter inside ${seller.shop}` : 'A stall'} where ${seller.vendor} sells ${nameList(seller.wares.map((ware) => ware.name))}. Walk to it with go_to(${seller.post}).`,
 	})),
-	...STALLS.flatMap((stall) => stall.wares.map((ware):KnowledgeEntry => ({
+	...SELLERS.flatMap((seller) => seller.wares.map((ware):KnowledgeEntry => ({
 		name: ware.name,
 		aliases: ware.aliases,
-		text: `Item. ${stall.vendor} sells it at ${stall.stall} for ${ware.ask} gold.`,
+		text: `Item. ${seller.vendor} sells it at ${placeOf(seller)} for ${ware.ask} gold.`,
 		item: true,
 	}))),
-	{ name: 'Apple', aliases: ['apples', 'fruit'], text: 'Item. Nobody sells it here; FruitStall is empty today.', item: true },
-	{ name: 'Candle', aliases: ['candles'], text: 'Item. Nobody sells it here; CandleStall is empty today.', item: true },
 	{
 		name: 'Guard',
 		aliases: ['guards', 'watch'],
-		text: 'The Guards collective. Holt and Pike stand on either side of WestGate, never in the doorway; Brant and Cass stand on either side of EastGate the same way. A guard who reaches a thief takes the stolen goods back. A cry of theft, thief, stole, stealing, robbed, robbery, mugged, or help sends them to the speaker.',
+		text: 'The Guards collective. Holt stands beside WestGate; Brant stands beside EastGate. A guard who reaches a thief takes the stolen goods back. A cry of theft, thief, stole, stealing, robbed, robbery, mugged, or help sends them to the speaker.',
 	},
 	TRADE,
 ];
@@ -142,23 +150,23 @@ const DUNGEON_VAULT:KnowledgeEntry[] = [
 	{
 		name: 'Crypt',
 		aliases: ['dungeon', 'map', 'rooms', 'way', 'route'],
-		text: 'The Sunken Crypt, room by room: the Gatehouse where you came in; a passage north choked by Cobweb; the Pillared Hall; SealedDoor on its east wall; the round Ossuary; a winding passage north, east and back south to CryptGate; the Throne Crypt of the HollowKing; HoardGate at its south end; the Treasury with HoardChest. Rooms are not go_to names: go_to the named thing in them. Dead-end side passages may hide potions.',
+		text: 'This crypt, which you are already inside, room by room: the Gatehouse where you came in; the Storeroom north of it, full of old junk; a passage north out of it choked by Cobweb; the Pillared Hall; SealedDoor on its east wall; the round Ossuary; a winding passage north, east and back south to CryptGate; the Throne Crypt of the HollowKing; HoardGate at its south end; the Treasury with HoardChest. Rooms are not go_to names: go_to the named thing in them. Dead-end side passages may hide potions.',
 	},
 	{
 		name: 'Cobweb',
 		aliases: ['web', 'webs', 'spider web'],
-		text: 'A thick web blocking the passage north of the Gatehouse. Fire burns it away: pick_up(WoodenTorch) && use(item=WoodenTorch, target=Cobweb).',
+		text: 'A thick web blocking the passage north out of the Storeroom, old and dry as tinder.',
 	},
 	{
 		name: 'WoodenTorch',
 		aliases: ['torch', 'flame', 'fire'],
-		text: 'Item lying in the Gatehouse. use it on Cobweb to burn the web away.',
+		text: 'Item. A lit torch, still burning.',
 		item: true,
 	},
 	{
 		name: 'SealedDoor',
 		aliases: ['sealed door', 'riddle door', 'door'],
-		text: 'Door on the east wall of the Pillared Hall, to the Ossuary. No key opens it. Whoever says the answer to the riddle on RiddleStone aloud, standing near it, opens it: go_to(SealedDoor) && say(text=answer).',
+		text: 'Door on the east wall of the Pillared Hall, to the Ossuary. No key opens it. Whoever says the answer to the riddle on RiddleStone aloud, standing near it, opens it: say aloud the one thing the riddle describes.',
 	},
 	{
 		name: 'RiddleStone',
@@ -168,12 +176,12 @@ const DUNGEON_VAULT:KnowledgeEntry[] = [
 	{
 		name: 'OssuaryChest',
 		aliases: ['chest', 'ossuary'],
-		text: 'Unlocked chest in the Ossuary. It holds CryptKey: pick_up(CryptKey).',
+		text: 'Unlocked chest in the Ossuary. It holds CryptKey.',
 	},
 	{
 		name: 'CryptKey',
 		aliases: ['key', 'iron key', 'crypt key'],
-		text: 'Item in OssuaryChest. Opens CryptGate: use(item=CryptKey, target=CryptGate).',
+		text: 'Item in OssuaryChest. It opens CryptGate.',
 		item: true,
 	},
 	{
@@ -199,13 +207,13 @@ const DUNGEON_VAULT:KnowledgeEntry[] = [
 	{
 		name: 'SunCrown',
 		aliases: ['crown', 'sun crown', 'prize'],
-		text: 'Item in HoardChest. What the company came for: pick_up(SunCrown) ends the quest.',
+		text: 'Item in HoardChest. What the company came for: taking it ends the quest.',
 		item: true,
 	},
 	{
 		name: 'Monsters',
 		aliases: ['ghoul', 'skeleton', 'monster', 'undead', 'enemy', 'enemies'],
-		text: 'Ghouls, Skeletons, BoneArchers and a CultWitch guard the rooms. They wake when they see you and fight to the death. Your fight laws strike back for you; in a fight, stay together and keep Maren behind Bram.',
+		text: 'Ghouls, Skeletons, BoneArchers and a CultWitch guard the rooms. They wake when they see you and fight to the death. Your fight laws strike back for you; in a fight, stay together and keep Seraphine behind Valerius.',
 	},
 	{
 		name: 'HealthPotion',

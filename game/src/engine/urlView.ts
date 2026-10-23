@@ -89,6 +89,22 @@ export function readURLCamera(search = window.location.search):{ focus:string; z
 	return { focus: (q.get('focus') ?? '').trim(), zoom: finiteNum(q.get('zoom') ?? '') };
 }
 
+/**
+ * Draws per second while the page is unfocused. Omitted leaves the engine default.
+ * `min-fps=0` draws every frame (`Infinity`); a positive number is that rate.
+ */
+export function readURLMinFps(search = window.location.search):number | undefined {
+	const raw = new URLSearchParams(search).get('min-fps');
+	if (raw === null) {
+		return undefined;
+	}
+	const n = finiteNum(raw.trim());
+	if (n === undefined || n < 0) {
+		return undefined;
+	}
+	return n === 0 ? Infinity : n;
+}
+
 /** Testing-only `stats=1`: the render stats overlay. */
 export function readURLStats(search = window.location.search):boolean {
 	const q = new URLSearchParams(search);

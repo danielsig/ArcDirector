@@ -1,10 +1,12 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
+import { doingOf } from '../arc/stock-verbs.js';
 import { formatSight, formatSightClauses, joinSightClauses, orderSightClauses } from './sight.js';
 import { groundAndFigure } from './ground.js';
 import { builtinStringifiers, basicPluralize } from './stringifiers.js';
 import type { SeenObject, Sight, RelationshipStringifier } from './types.js';
 import { formatInventory } from './formatInventory.js';
+import { sightSalience } from './salience.js';
 
 function seen(
 	id:string,
@@ -184,6 +186,19 @@ describe('formatSight', () => {
 		);
 	});
 
+	it('keeps health and notes on two characters named in one clause', () => {
+		const paragraph = formatSight({
+			self: { id: 'Cleric', point: [0, 0], facing: [0, -1] },
+			objects: [
+				seen('Rosa', [0, -5], { tags: ['character'], hp: 16, maxHP: 28, note: 'ally Knight, rooted' }),
+				seen('Calla', [0.5, -5.5], { tags: ['character'], hp: 40, maxHP: 40, note: 'foe Brute' }),
+			],
+		});
+		assert.match(paragraph, /next to/);
+		assert.match(paragraph, /Rosa \(16\/28 hp, ally Knight, rooted\)/);
+		assert.match(paragraph, /Calla \(40\/40 hp, foe Brute\)/);
+	});
+
 	it('keeps an always object past the sight radius, with its note', () => {
 		const paragraph = formatSight({
 			self: { id: 'Forager', point: [0, 0], facing: [0, -1] },
@@ -193,7 +208,7 @@ describe('formatSight', () => {
 				seen('Lantern', [0, -40], { tags: ['item'] }),
 			],
 		});
-		assert.match(paragraph, /\*Bridge\*, raised 40 paces in front of you/);
+		assert.match(paragraph, /\*Bridge\* \(raised\) 40 paces in front of you/);
 		assert.equal(paragraph.includes('Lantern'), false);
 	});
 
@@ -236,7 +251,7 @@ describe('formatSight', () => {
 				}),
 			],
 		}, { unitName: 'm', relationships: [] });
-		assert.equal(paragraph, 'Healer 4/12 hp, Blade 3m away 3m in front of you.');
+		assert.equal(paragraph, 'Healer (4/12 hp, Blade 3m away) 3m in front of you.');
 	});
 
 	it('sticks a 1-char unit to the number and keeps bearing as a heading', () => {
@@ -391,7 +406,7 @@ describe('formatSight', () => {
 				{ ...person('Angler', [0.4, -4.8]), ...on },
 			],
 		});
-		assert.match(paragraph, /Forager and Angler on \*Bridge\*, it is lowered 5 paces in front of you/);
+		assert.match(paragraph, /Forager and Angler on \*Bridge\* \(it is lowered\) 5 paces in front of you/);
 		assert.equal(paragraph.match(/Forager/g)?.length, 1, 'not again on their own');
 	});
 });
@@ -448,6 +463,32 @@ describe('formatInventory', () => {
 		assert.equal(
 			formatInventory({ pockets: ['Knife x2'] }),
 			'Pockets: Knife x2\nNothing else: what is not listed, you do not have.',
+		);
+	});
+});
+
+describe('sightSalience', () => {
+	it('makes what stands close and ahead most salient, and what is far or behind least', () => {
+		const salience = new Map<string, number>();
+		sightSalience({
+			self: { id: 'Ada', point: [0, 0], facing: [0, -1] },
+			objects: [
+				{ id: 'Near', point: [0, -1], tags: [] },
+				{ id: 'Far', point: [0, -30], tags: [] },
+				{ id: 'Behind', point: [0, 1], tags: [] },
+			],
+		}, salience);
+		const [near, far, behind] = ['Near', 'Far', 'Behind'].map((id) => salience.get(id) ?? 0);
+		assert.ok(near > behind && behind > 0, `${near} ahead, ${behind} behind`);
+		assert.ok(near > far && far > 0, `${near} near, ${far} far`);
+	});
+});
+
+describe('doingOf', () => {
+	it('words what one seen running a verb is doing, as English spells it', () => {
+		assert.deepEqual(
+			['fire', 'revive', 'stab', 'shoot', 'see', 'die', 'open', 'hex', 'go_to', 'pick_up'].map(doingOf),
+			['firing', 'reviving', 'stabbing', 'shooting', 'seeing', 'dying', 'opening', 'hexing', 'going to', 'picking up'],
 		);
 	});
 });

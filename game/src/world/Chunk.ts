@@ -1,12 +1,9 @@
 import { Chunk as KindlingChunk } from '@arc-director/kindling';
 import { CELL_SIZE, CHUNK_SIZE } from './constants';
-import type { LootSpec } from './decodeGlyphChunk';
+import type { LootSpec, RoofStyle, Wake } from './decodeGlyphChunk';
 
 /** Props whose collider is thinner than the cell. Physics blocks the whole cell. */
 export const SOLID_PROPS = new Set<string>(['tree', 'boulder', 'pillar', 'pillar_broken']);
-
-/** Props that fill their cell for routes and sight lines. */
-export const CELL_PROPS = new Set<string>([...SOLID_PROPS, 'stall']);
 
 export type Tile = {
 	def:string;
@@ -27,32 +24,30 @@ export type ChunkEntity = {
 	locked:boolean | undefined;
 	open:boolean | undefined;
 	exit:boolean | undefined;
+	roof:RoofStyle | undefined;
+	chimney:boolean | undefined;
 	yaw:number | undefined;
+	offset:{ x:number; z:number, y?:number } | undefined;
+	wake:Wake | undefined;
+	on:string[] | undefined;
 	text:string | undefined;
 	contents:LootSpec[] | undefined;
 };
 
 export class Chunk extends KindlingChunk<Tile> {
 	public readonly entities:ChunkEntity[];
-	/** Cell-filling prop defs by cell. Filled on first query; decode pushes entities after `new Chunk`. */
-	private _props:(string | undefined)[] | null = null;
+	/** Cells a `SOLID_PROPS` prop stands on. Filled on first query; decode pushes entities after `new Chunk`. */
+	private _props:Set<number> | null = null;
 
 	constructor(id:string, origin:{ cx:number; cz:number }, tiles:Tile[], entities:ChunkEntity[]) {
 		super(id, origin, CHUNK_SIZE, CELL_SIZE, tiles);
 		this.entities = entities;
 	}
 
-	/** The `CELL_PROPS` prop standing on the cell at a world point, by def. */
-	public propAtWorld(x:number, z:number):string | undefined {
-		if (!this._props) {
-			this._props = [];
-			for (const ent of this.entities) {
-				if (CELL_PROPS.has(ent.def)) {
-					this._props[ent.localZ * CHUNK_SIZE + ent.localX] = ent.def;
-				}
-			}
-		}
+	/** Whether a `SOLID_PROPS` prop stands on the cell at a world point. */
+	public solidPropAt(x:number, z:number):boolean {
+		this._props ??= new Set(this.entities.filter((ent) => SOLID_PROPS.has(ent.def)).map((ent) => ent.localZ * CHUNK_SIZE + ent.localX));
 		const { localX, localZ } = this.worldToLocal(x, z);
-		return this.tile(localX, localZ) ? this._props[localZ * CHUNK_SIZE + localX] : undefined;
+		return !!this.tile(localX, localZ) && this._props.has(localZ * CHUNK_SIZE + localX);
 	}
 }

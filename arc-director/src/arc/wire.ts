@@ -1,6 +1,6 @@
 import { extractJson, isRecord } from '../json.js';
 import { ArcError, JOINS, SYMBOL_JOIN, isArc, isCountMap, type Arc, type Join, type Step, type StepArg } from './types.js';
-import { argBase, CHOOSE_VERB, GROUP_VERB, type VerbRegistry } from './stock-verbs.js';
+import { argBase, CHOOSE_VERB, GROUP_VERB, TEXT_ARG_KINDS, type VerbRegistry } from './stock-verbs.js';
 import { choicesOf } from './choose.js';
 import { parseArcText } from './parse.js';
 import { validateArc } from './validate.js';
@@ -118,7 +118,8 @@ function readStep(raw:unknown, verbs:VerbRegistry):Step {
 				step.args[key] = readSteps(value, verbs.nested());
 			}
 			else if (isStepArg(value)) {
-				step.args[key] = value;
+				// A number or a yes written for a text arg is its text: `"code": 417`.
+				step.args[key] = TEXT_ARG_KINDS.includes(argBase(kinds[key])) && (typeof value === 'number' || typeof value === 'boolean') ? String(value) : value;
 			}
 			else {
 				throw new ArcError(`arg '${key}' has an unsupported type`);

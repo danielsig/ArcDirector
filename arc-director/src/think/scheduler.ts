@@ -13,6 +13,9 @@ import { arcVerbs } from './score.js';
 export type EnsureOpts = { skipHeartbeat?:boolean; skipMajor?:boolean; skipStart?:boolean };
 
 /** Why a mind is queued to think. `start`: once, when it joins, so it acts before anything happens to it. */
+/** Each mind's watch views by its id, built only for the minds whose watches are sampled (a `Map` will do). */
+export type WatchCatalogs = { get(mindID:string):Catalog | readonly Catalog[] | undefined };
+
 export type ThinkReason = 'start' | 'watch' | 'major' | 'verb' | 'heartbeat';
 
 export type ThinkRow = {
@@ -81,7 +84,8 @@ export type MindQueue = {
 	readonly inFlight:number;
 	isThinking(mindID:string):boolean;
 	/** A follow-up, watch, or heartbeat is waiting to start. */
-	hasPending(mindID:string):boolean;
+	/** A think queued for `mindID`; with `except`, one for any other reason. */
+	hasPending(mindID:string, except?:ThinkReason):boolean;
 	/** It finished a think since it joined: its opening one, or any after. */
 	hasThought(mindID:string):boolean;
 	arcOf(mindID:string):Arc | null;
@@ -106,7 +110,7 @@ export type MindQueue = {
 	enqueueVerb(mindID:string, verb:string, ok?:boolean):void;
 	enqueueArc(mindID:string, arc:Arc, ok?:boolean):void;
 	noteResult(mindID:string, stalled:boolean):void;
-	tick(dt:number, catalogs:Map<string, Catalog | readonly Catalog[]>):ThinkRow[];
+	tick(dt:number, catalogs:WatchCatalogs):ThinkRow[];
 	drop(mindID:string):void;
 };
 
@@ -177,8 +181,8 @@ export abstract class MindScheduler implements MindQueue {
 		return this.inflight.has(mindID);
 	}
 
-	public hasPending(mindID:string):boolean {
-		return this.rows.some((row) => row.mindID === mindID);
+	public hasPending(mindID:string, except?:ThinkReason):boolean {
+		return this.rows.some((row) => row.mindID === mindID && row.reason !== except);
 	}
 
 	public hasThought(mindID:string):boolean {
@@ -389,7 +393,7 @@ export abstract class MindScheduler implements MindQueue {
 		}
 	}
 
-	public tick(dt:number, catalogs:Map<string, Catalog | readonly Catalog[]>):ThinkRow[] {
+	public tick(dt:number, catalogs:WatchCatalogs):ThinkRow[] {
 		if (dt > 0) {
 			this.watchClock += dt;
 			this.processClock += dt;
@@ -414,6 +418,11 @@ export abstract class MindScheduler implements MindQueue {
 			this.watchClock = 0;
 			for (const [id, mind] of this.minds) {
 				if (!mind.aiOn) {
+					continue;
+				}
+				if (mind.watches.length === 0 && !mind.once) {
+					mind.lastMax = 0;
+					mind.scold = undefined;
 					continue;
 				}
 				const cat = catalogs.get(id);

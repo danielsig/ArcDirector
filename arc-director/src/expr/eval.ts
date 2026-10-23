@@ -76,6 +76,12 @@ function inferTypeList(name:string, ctx:EvalCtx):ExprVal | undefined {
 	const needles = lower === name ? [name] : [name, lower];
 	const out:ExprVal[] = [];
 	const seen = new Set<string>();
+	// Its own name is `me`, with every field it has, not its bare line in `units`.
+	const me = ctx.catalog.me;
+	if (me && needles.some((n) => needleMatch(me, n))) {
+		seen.add(me.id);
+		out.push({ kind: 'entity', value: me });
+	}
 	for (const key of ['landmarks', 'items', 'others', 'units'] as const) {
 		const bound = ctx.catalog.names.get(key);
 		if (bound?.kind !== 'list') {
@@ -139,9 +145,13 @@ function isNeedle(e:ExprEntity, v:ExprVal):boolean {
 	return false;
 }
 
+/** `recv.name`. A name picks a list, so a list of one entity reads as that entity: `Tom.hp` is Tom's hp. */
 function fieldOf(recv:ExprVal, name:string, ctx:EvalCtx):ExprVal {
 	if (recv.kind === 'absent') {
 		return ABSENT;
+	}
+	if (recv.kind === 'list' && recv.value.length === 1 && recv.value[0].kind === 'entity') {
+		return fieldOf(recv.value[0], name, ctx);
 	}
 	if (recv.kind === 'entity') {
 		const f = recv.value.fields?.[name];
@@ -491,6 +501,15 @@ export const builtins:Record<string, NativeFn> = {
 		}
 		return list[0] ?? ABSENT;
 	},
+	/** The first `n` of a list: `units.filter("Worker").take(5)`. */
+	take(args) {
+		const list = asList(args[0]);
+		const n = asNum(args[1]);
+		if (!list || n === undefined) {
+			throw new ExprError('take(list, n)');
+		}
+		return { kind: 'list', value: list.slice(0, Math.max(0, Math.floor(n))) };
+	},
 	sortBy(args, ctx) {
 		const list = asList(args[0]);
 		const fn = args[1];
@@ -501,11 +520,11 @@ export const builtins:Record<string, NativeFn> = {
 		keyed.sort((a, b) => a.k - b.k);
 		return capList(keyed.map((r) => r.x), listCapOf(ctx));
 	},
-	max(args) {
-		return extrema(args, true);
+	max(args, ctx) {
+		return extrema(keyed(args, ctx), true);
 	},
-	min(args) {
-		return extrema(args, false);
+	min(args, ctx) {
+		return extrema(keyed(args, ctx), false);
 	},
 	maxBy(args, ctx) {
 		return byExtrema(args, ctx, true);
@@ -513,12 +532,12 @@ export const builtins:Record<string, NativeFn> = {
 	minBy(args, ctx) {
 		return byExtrema(args, ctx, false);
 	},
-	sum(args) {
-		const nums = numsOf(args);
+	sum(args, ctx) {
+		const nums = numsOf(keyed(args, ctx));
 		return { kind: 'number', value: nums.reduce((a, b) => a + b, 0) };
 	},
-	avg(args) {
-		const nums = numsOf(args);
+	avg(args, ctx) {
+		const nums = numsOf(keyed(args, ctx));
 		if (nums.length === 0) {
 			throw new ExprError('avg of empty');
 		}
@@ -610,9 +629,25 @@ function numsOf(args:ExprVal[]):number[] {
 	});
 }
 
+/**
+ * `list.min(u => u.hp)` as the numbers it picks from: with a function, the list's items through it; else the args as
+ * they are. An empty list through a function is nothing, not an error: no one there has a lowest.
+ */
+function keyed(args:ExprVal[], ctx:EvalCtx):ExprVal[] {
+	const list = args.length === 2 && args[1].kind === 'lambda' ? asList(args[0]) : undefined;
+	if (!list) {
+		return args;
+	}
+	const fn = args[1];
+	return [{ kind: 'list', value: list.map((x) => applyLambda(fn as Extract<ExprVal, { kind:'lambda' }>, [x], ctx)) }];
+}
+
 function extrema(args:ExprVal[], hi:boolean):ExprVal {
 	const nums = numsOf(args);
 	if (nums.length === 0) {
+		if (args.length === 1 && args[0].kind === 'list') {
+			return ABSENT;
+		}
 		throw new ExprError('empty extrema');
 	}
 	return { kind: 'number', value: hi ? Math.max(...nums) : Math.min(...nums) };

@@ -4,6 +4,18 @@ import { hashEmbed } from '../inference/fake.js';
 import { MemoryStore } from './store.js';
 
 describe('MemoryStore', () => {
+	it('brings to mind memories of what is before you, most of what stands closest', () => {
+		const store = new MemoryStore();
+		store.add({ text: 'Hilde asked me for 2 Wool and 1 Thatch.', tags: ['Hilde', 'Wool'] });
+		store.add({ text: 'I gave Hilde the 2 Wool. She still needs the Thatch.', tags: ['Hilde'] });
+		store.add({ text: 'Mattis owes me a favor.', tags: ['Mattis'] });
+		store.add({ text: 'Godric said the roads are muddy.', tags: ['Godric'] });
+		const query = 'Finish the jobs people asked of you';
+		assert.deepEqual(store.recall({ query, k: 2 }).map((r) => r.text), ['Hilde asked me for 2 Wool and 1 Thatch.'], 'the goal alone finds only the request');
+		const before = store.recall({ query, k: 2, salience: new Map([['Hilde', 0.8], ['Mattis', 0.1]]) }).map((r) => r.text);
+		assert.deepEqual(before, ['Hilde asked me for 2 Wool and 1 Thatch.', 'I gave Hilde the 2 Wool. She still needs the Thatch.']);
+	});
+
 	it('recalls by tag overlap without embeddings', () => {
 		const store = new MemoryStore();
 		store.add({ text: 'a merchant in a red sash', tags: ['sash', 'red'], timestamp: 1 });
@@ -19,6 +31,14 @@ describe('MemoryStore', () => {
 		store.add({ text: 'Angler is across the bridge', tags: ['bridge'], timestamp: 1 });
 		const hit = store.recall({ query: 'Keeper says: the bridge costs 10 gold', now: 4, k: 1, skip: (r) => r.text.startsWith('Keeper') });
 		assert.deepEqual(hit.map((r) => r.text), ['Angler is across the bridge']);
+	});
+
+	it('never brings a pinned memory to mind unbidden: it is in every prompt already', () => {
+		const store = new MemoryStore();
+		store.add({ text: 'I am the canal-market hive', tags: ['market'], pinned: true, timestamp: 1 });
+		assert.equal(store.intrusion({ query: 'the canal market hive', now: 2, tags: ['market'], threshold: 0 }), null);
+		store.add({ text: 'A thief ran through the canal market', tags: ['market'], timestamp: 1 });
+		assert.equal(store.intrusion({ query: 'the canal market hive', now: 2, tags: ['market'], threshold: 0 })?.text, 'A thief ran through the canal market');
 	});
 
 	it('recalls by cosine when embeddings exist', () => {

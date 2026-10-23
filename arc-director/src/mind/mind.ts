@@ -24,7 +24,7 @@ import {
 	type KnowledgeSource,
 } from './knowledge.js';
 import { jsonToolCall, toolFirstArgs, writtenToolCalls } from './toolText.js';
-import { arcRepairHint, thoughtCutHint, writtenToolsHint, toolResultHint, blockedAgainHint, repeatOutputHint, reviseGoalsAsk, sayRangeHint, stablePrefix, volatileBlock, type ThinkInstructions } from './prompt.js';
+import { arcRepairHint, thoughtCutHint, writtenToolsHint, toolResultHint, blockedAgainHint, repeatOutputHint, reviseGoalsAsk, sayRangeHint, stablePrefix, volatileBlock, type PromptStyle, type ThinkInstructions } from './prompt.js';
 import type { TalkNet } from './talk.js';
 import type { SightClause } from '../perception/types.js';
 import { idsOf, mapArc, mapExpr, mapLawName, namesOf } from './ids.js';
@@ -63,6 +63,11 @@ export type MindSettings = {
 	 * Omit for one quarter of the model's context window ({@link conversationCapFor}). 0 shows none.
 	 */
 	conversationCap?:number;
+	/**
+	 * How many of its own laws' results since its last think its next prompt pins, newest kept. Every result is also
+	 * kept in long-term memory, where `recall` finds it; the pins drop once a think has read them. Default 5.
+	 */
+	lawResults?:number;
 };
 
 /** A mind's thinking state. Its owner's persona is saved with the owner. */
@@ -87,6 +92,10 @@ export type MindOwner<TCtx = unknown> = ArcRunner<TCtx> & {
 	readonly persona:Persona;
 	/** The owner's own block of the prompt, in place of the laws. A collective lists its roster here. */
 	promptSection?(mind:Mind<TCtx>):string;
+	/** The verbs its prompt lists, when fewer than it may parse: a collective's nested ones its characters can run. */
+	promptVerbs?():VerbRegistry;
+	/** Whether others it leads are at work (a collective's units running programs), so a think may only wait. */
+	working?():boolean;
 };
 
 /** What the director gives a mind when it is attached. */
@@ -108,15 +117,22 @@ export type MindDeps<TCtx = unknown> = {
 	embed?:(texts:string[])=>Promise<number[][]>;
 	/** Tool rounds before the Arc must be emitted. Default {@link DEFAULT_TOOL_ROUNDS}; 0 offers no tools. */
 	toolRoundCap?:number;
-	/** Why there is no way for this character to `id` (`Bridge is raised`, or `''` unnamed), or undefined when there is. Marks unreachable names in earshot. */
-	wayBlocked?:(id:string)=>string | undefined;
+	/**
+	 * Why there is no way for this character to each of `ids`, in order (`Bridge is raised`, or `''` unnamed), or
+	 * undefined where there is: one look at the world for all of them. Marks unreachable names in earshot.
+	 */
+	wayBlocked?:(ids:readonly string[])=>(string | undefined)[];
 	/** Extra chat turns after a bad arc or a tool call with tools closed. Host sets this; 0 means fail on the first bad reply. */
 	arcRetryCap?:number;
-	/** How the model writes an Arc: `text` (`go_to() && wait()`), `json`, or `schema` (JSON the server enforces). Default `json`. */
+	/** How the model writes an Arc: `text` (`go_to() && wait()`), `json`, or `schema` (JSON the server enforces). Default `schema`. */
 	arcFormat?:ArcFormat;
 	thinkInstructions?:ThinkInstructions;
 	/** Whether the model reasons before it answers. Picks the think line and asks the server for it. Default: it does. */
 	thinking?:()=>boolean;
+	/** How much of the standing rules the model is told: see {@link PromptStyle}. Default `full`. */
+	promptStyle?:()=>PromptStyle;
+	/** Whether the model writes only JSON Arcs, as one trained on them does: `text` is then asked as `schema`. Default: it does not. */
+	jsonOnly?:()=>boolean;
 	/** Standing verb-chain line. Omit for {@link DEFAULT_VERB_INSTRUCTIONS}. */
 	verbInstructions?:string;
 	/** Arc that replaces the closing Example in the prompt. */
@@ -297,8 +313,11 @@ export type MindFields<TCtx> = {
 	attach(owner:MindOwner<TCtx>, deps:MindDeps<TCtx>):void;
 	/** Let go of it: it thinks for no one, and may think for someone else later. */
 	detach():void;
-	/** What its sight showed this think, each clause with the names of what it saw: its sightings to remember. */
-	sighted(clauses:readonly SightClause[]):void;
+	/**
+	 * What its sight showed this think, each clause with the names of what it saw: its sightings to remember. With
+	 * `salience`, how much each name it sees or carries should bring its memories to mind (0–1).
+	 */
+	sighted(clauses:readonly SightClause[], salience?:ReadonlyMap<string, number>):void;
 };
 
 /** Every mind's fields. `index.ts` does not export `mindFields`, so only the library reaches them. */
@@ -346,12 +365,25 @@ export class Mind<TCtx = unknown> {
 	public modelID = '';
 	public embed:((texts:string[])=>Promise<number[][]>) | undefined;
 	public toolRoundCap = DEFAULT_TOOL_ROUNDS;
-	public wayBlocked:((id:string)=>string | undefined) | undefined;
+	public wayBlocked:((ids:readonly string[])=>(string | undefined)[]) | undefined;
 	public arcRetryCap = 0;
-	/** Mutable so the Testing toggle can flip live minds. */
-	public arcFormat:ArcFormat = 'json';
+	public jsonOnly:()=>boolean = () => false;
+	private _arcFormat:ArcFormat = 'schema';
 	public thinkInstructions:ThinkInstructions | undefined;
 	public thinking:()=>boolean = () => true;
+	public promptStyle:()=>PromptStyle = () => 'full';
+
+	/**
+	 * How this mind writes an Arc: what the host set (mutable, so the Testing toggle can flip live minds), but never
+	 * `text` for a model that writes only JSON ({@link MindDeps.jsonOnly}).
+	 */
+	public get arcFormat():ArcFormat {
+		return this._arcFormat === 'text' && this.jsonOnly() ? 'schema' : this._arcFormat;
+	}
+
+	public set arcFormat(format:ArcFormat) {
+		this._arcFormat = format;
+	}
 	public verbInstructions:string | undefined;
 	public arcExample:string | undefined;
 	public systemNote:string | undefined;
@@ -370,6 +402,9 @@ export class Mind<TCtx = unknown> {
 	public contextTokens:number | undefined;
 	/** Letters shown in Current Conversation; `undefined` is one quarter of `contextTokens`. */
 	public conversationCap:number | undefined;
+	public lawResults:number;
+	/** Its laws' results since the last think, oldest first. */
+	private _lawResults:string[] = [];
 	/** The last arc or think's result, as the next prompt shows it. */
 	public lastResult:ArcResult | undefined;
 	public lastArc:Arc | undefined;
@@ -405,6 +440,8 @@ export class Mind<TCtx = unknown> {
 	private readonly _noWay = new Set<string>();
 	/** What its sight showed since it last noted sightings. */
 	private _sighted:readonly SightClause[] = [];
+	/** What is before it this think, and how much each should bring its memories to mind. */
+	private _salience:ReadonlyMap<string, number> = new Map();
 
 	constructor(settings:MindSettings = {}) {
 		this.skipHeartbeat = settings.skipHeartbeat ?? false;
@@ -415,14 +452,16 @@ export class Mind<TCtx = unknown> {
 		this.heartbeat = settings.heartbeat ?? 0;
 		this.strategicInterval = settings.strategicInterval ?? 180;
 		this.conversationCap = settings.conversationCap;
+		this.lawResults = settings.lawResults ?? 5;
 		this.model = settings.model;
 		const fields:MindFields<TCtx> = {
 			attach: (owner, deps) => this.attach(owner, deps),
 			detach: () => {
 				this._owner = undefined;
 			},
-			sighted: (clauses) => {
+			sighted: (clauses, salience) => {
 				this._sighted = clauses;
+				this._salience = salience ?? new Map();
 			},
 		};
 		allFields.set(this, fields);
@@ -444,9 +483,11 @@ export class Mind<TCtx = unknown> {
 		this.toolRoundCap = deps.toolRoundCap ?? DEFAULT_TOOL_ROUNDS;
 		this.wayBlocked = deps.wayBlocked;
 		this.arcRetryCap = deps.arcRetryCap ?? 0;
-		this.arcFormat = deps.arcFormat ?? 'json';
+		this.arcFormat = deps.arcFormat ?? 'schema';
+		this.jsonOnly = deps.jsonOnly ?? (() => false);
 		this.thinkInstructions = deps.thinkInstructions;
 		this.thinking = deps.thinking ?? (() => true);
+		this.promptStyle = deps.promptStyle ?? (() => 'full');
 		this.verbInstructions = deps.verbInstructions;
 		this.arcExample = deps.arcExample;
 		this.systemNote = deps.systemNote;
@@ -503,6 +544,7 @@ export class Mind<TCtx = unknown> {
 			strategicInterval: this.strategicInterval,
 			model: this.modelID,
 			conversationCap: this.conversationCap,
+			...this.lawResults !== 5 ? { lawResults: this.lawResults } : {},
 		};
 	}
 
@@ -555,7 +597,17 @@ export class Mind<TCtx = unknown> {
 
 	/** Queue an event for the next think. It is kept in ids and read in this mind's names when that think starts. */
 	public pushEvent(event:MindEvent):void {
-		this._pendingEvents.push({ ...event, timestamp: event.timestamp ?? this._now });
+		const pending = this._pendingEvents;
+		const same = event.key === undefined ? -1 : pending.findIndex((e) => e.key === event.key);
+		if (same >= 0) {
+			pending.splice(same, 1);
+		}
+		pending.push({ ...event, timestamp: event.timestamp ?? this._now });
+		const kin = event.cap === undefined ? [] : pending.filter((e) => e.kind === event.kind);
+		if (kin.length > event.cap!) {
+			const least = kin.reduce((a, b) => ((b.weight ?? 0) < (a.weight ?? 0) ? b : a));
+			pending.splice(pending.indexOf(least), 1);
+		}
 	}
 
 	/** The events waiting for the next think, as this mind reads them now. */
@@ -630,16 +682,43 @@ export class Mind<TCtx = unknown> {
 			});
 		}
 		else {
-			// What happened in the world is worth keeping; how its own think went (a bad reply) is not.
-			// A walk stays off the recent lines: the next prompt still has this result once, as Last verb result.
+			// What happened in the world is worth keeping; how its own think went (a bad reply) is not, nor a way
+			// found blocked: that holds only until the way opens, and `_noWay` already asks the live world. Nor who
+			// heard a line: the line is in the conversation already.
+			// A walk or a line stays off the recent lines: the next prompt still has this result once, as Last verb result.
+			const said = result.verb === 'say' ? ['said'] : [];
 			this.pushEvent({
 				kind: 'arc_result',
 				text: result.reason ?? (result.ok ? 'ok' : 'failed'),
-				tags: [result.ok ? 'ok' : 'fail', ...walk],
-				remember: result.verb !== 'think',
+				tags: [result.ok ? 'ok' : 'fail', ...walk, ...said],
+				remember: result.verb !== 'think' && result.verb !== 'say' && !result.unreachable,
 			});
 		}
 		this.syncQueue(result);
+	}
+
+	/**
+	 * How one of its own laws went: a line its next think reads among its pinned memories, newest kept up to
+	 * `lawResults`, the same line again counted (`×3`). A line goes to long-term memory, where `recall` finds it, once
+	 * a think has read it or a newer one pushed it out. Not its own arc's result: that line and short-term memory are
+	 * for what it chose.
+	 */
+	public ingestLawResult(law:string, result:ArcResult):void {
+		const outcome = result.interrupted ? 'interrupted' : result.ok ? 'ran' : 'failed';
+		const text = `Law ${law} ${outcome}${result.reason ? `: ${result.reason}` : ''}`;
+		const i = this._lawResults.findIndex((line) => line.replace(/ ×\d+$/, '') === text);
+		const times = i < 0 ? 1 : Number(/ ×(\d+)$/.exec(this._lawResults[i])?.[1] ?? 1) + 1;
+		const lines = [...this._lawResults.filter((_, j) => j !== i), times > 1 ? `${text} ×${times}` : text];
+		const keep = Math.max(0, this.lawResults);
+		this.rememberLaws(lines.slice(0, Math.max(0, lines.length - keep)));
+		this._lawResults = lines.slice(lines.length - keep);
+	}
+
+	/** Law results no prompt pins any more, as long-term memories. */
+	private rememberLaws(lines:readonly string[]):void {
+		for (const text of lines) {
+			this.persona.memory.add({ category: 'episodic', text, tags: ['law'], timestamp: this._now }, this._now);
+		}
 	}
 
 	/** The voice began an arc. */
@@ -872,6 +951,7 @@ export class Mind<TCtx = unknown> {
 			includeWatches: true,
 			omitArc: true,
 			systemNote: this.systemNote,
+			style: this.promptStyle(),
 		});
 		const user = `${volatileBlock({
 			goals: this.persona.goals,
@@ -880,6 +960,7 @@ export class Mind<TCtx = unknown> {
 			recent: this._recent,
 			recentSummary: this._recentSummary,
 			conversation: this.conversationLines(),
+			compact: this.compact,
 		})}\n\n${reviseGoalsAsk(format, this.persona.maxGoals)}`;
 		const ask = (messages:ChatMessage[], thinking?:boolean):Promise<ChatResponse> => this.provider.chat({
 			model: this.modelID,
@@ -947,6 +1028,11 @@ export class Mind<TCtx = unknown> {
 	 * The owner's laws in list order, as this mind's model reads them: sentences, not arcs, so a small model does
 	 * not copy them back as its reply.
 	 */
+	/** Whether this mind's model is told only what its game makes its own: see {@link PromptStyle}. */
+	public get compact():boolean {
+		return this.promptStyle() === 'compact';
+	}
+
 	public lawsSection():string {
 		const laws = this.owner.laws;
 		if (laws.length === 0) {
@@ -956,7 +1042,7 @@ export class Mind<TCtx = unknown> {
 			const who = this.owner.lawsTakeWho() && law.who !== 'me' ? ` (for ${this.named(law.who)})` : '';
 			return `- ${mapLawName(law.name, namesOf(this.persona.names))}${who}: when ${this.named(law.watch)}, run ${this.namedArc(law.arc)}`;
 		};
-		const intro = 'Laws (emergencies that already run on their own, first listed first; do not repeat them in your reply; unlaw(name) drops one):';
+		const intro = this.compact ? 'Laws:' : 'Laws (emergencies that already run on their own, first listed first; do not repeat them in your reply; unlaw(name) drops one):';
 		return `${intro}\n${laws.map(line).join('\n')}`;
 	}
 
@@ -1071,7 +1157,7 @@ export class Mind<TCtx = unknown> {
 			lastResult: this.lastResult,
 			lastResultArticles: this.failureArticles(),
 			goals: this.persona.goals,
-			pinned: this.persona.memory.pinned(),
+			pinned: [...this.persona.memory.pinned(), ...this._lawResults.map((text) => ({ text }))],
 			recalled,
 			watches: this.namedWatches(this.persona.watches),
 			pinnedWatches: this.namedWatches(this.persona.pinnedWatches),
@@ -1085,6 +1171,7 @@ export class Mind<TCtx = unknown> {
 			mentioned: this.mentionedText(),
 			offers: this.offers?.(),
 			thinkAbout: this._pendingAbout,
+			compact: this.compact,
 		}), this.extraVolatile()].filter(Boolean).join('\n\n');
 	}
 
@@ -1170,7 +1257,7 @@ export class Mind<TCtx = unknown> {
 		const tools = reply ? [] : offered;
 		const sendTools = tools.length > 0;
 		const toolNames = offered.map((t) => t.name);
-		const system = stablePrefix(this.id, this.persona.identity, verbs, {
+		const system = stablePrefix(this.id, this.persona.identity, this.owner.promptVerbs?.() ?? verbs, {
 			includeWatches: this.persona.watchesWritable || watchCount(this.persona.watchList()) > 0,
 			watchesWritable: verbs.has('watch'),
 			canObserve: toolNames.includes('observe'),
@@ -1185,11 +1272,15 @@ export class Mind<TCtx = unknown> {
 			systemNote: this.systemNote,
 			currency: this.currency,
 			tools: toolNames,
+			style: this.promptStyle(),
 		});
 		// Talking in circles: characters who hear each other keep answering, so a streak of talk ends in a deed.
 		const user = this.volatileUser(sensed, this._talkStreak >= TALK_STREAK
 			? `You have only talked or waited for ${this._talkStreak} thinks. Stop talking: take the next step toward your goal with a verb that does something. Look up what you lack with a tool instead of asking again.`
 			: undefined);
+		// This think has read its laws' results: from now on they are only remembered.
+		this.rememberLaws(this._lawResults);
+		this._lawResults = [];
 		const messages:ChatMessage[] = [
 			{ role: 'system', content: system },
 			{ role: 'user', content: user },
@@ -1268,7 +1359,7 @@ export class Mind<TCtx = unknown> {
 				messages.push({ role: 'assistant', content: res.content });
 				const result = await this.lookUp(called.name, JSON.stringify(called.args), ctx);
 				toolsLeft -= 1;
-				messages.push({ role: 'user', content: this.withMapImage(toolResultHint(called.name, result, toolsLeft <= 0)) });
+				messages.push({ role: 'user', content: this.withMapImage(toolResultHint(called.name, result, toolsLeft <= 0, this.compact)) });
 				continue;
 			}
 			const content = written?.rest || res.content;
@@ -1293,7 +1384,7 @@ export class Mind<TCtx = unknown> {
 					repairsLeft -= 1;
 					continue;
 				}
-				if (!warnedRepeat && this.isRepeat(content)) {
+				if (!warnedRepeat && this.isRepeat(content) && !this.supervising(arc)) {
 					warnedRepeat = true;
 					this._emitStreak += 1;
 					messages.push({ role: 'assistant', content });
@@ -1313,7 +1404,7 @@ export class Mind<TCtx = unknown> {
 					continue;
 				}
 				this.acceptEmit(content);
-				this._talkStreak = arcSteps(arc).every((step) => TALK_VERBS.has(step.verb)) ? this._talkStreak + 1 : 0;
+				this._talkStreak = !this.supervising(arc) && arcSteps(arc).every((step) => TALK_VERBS.has(step.verb)) ? this._talkStreak + 1 : 0;
 				return this.settleLiveArc(
 					arc,
 					content,
@@ -1336,6 +1427,11 @@ export class Mind<TCtx = unknown> {
 	/** The schema the server must follow under `schema`; otherwise none, and the reply is parsed as written. */
 	private replyFormat(verbs:VerbRegistry, format:ArcFormat):JsonSchemaResponseFormat | undefined {
 		return format === 'schema' ? { name: 'reply', schema: replySchema(verbs.nested(), this.replyTools()), strict: true } : undefined;
+	}
+
+	/** Waiting while the units it leads work: supervising, neither talking in circles nor stuck. */
+	private supervising(arc:Arc):boolean {
+		return arcSteps(arc).every((step) => step.verb === 'wait') && (this.owner.working?.() ?? false);
 	}
 
 	private isRepeat(text:string):boolean {
@@ -1395,7 +1491,7 @@ export class Mind<TCtx = unknown> {
 				if (isBareResult(text)) {
 					continue;
 				}
-				if (!walk) {
+				if (!walk && !e.tags?.includes('said')) {
 					this.noteRecent(text);
 				}
 				if (e.remember) {
@@ -1404,7 +1500,9 @@ export class Mind<TCtx = unknown> {
 				continue;
 			}
 			const who = this._pendingEvents[i].who ?? [];
-			const betweenUs = !e.turn && who.length >= 2 && who.some((id) => this.controls(id));
+			// A deed between one of its own and another, worth keeping (a gift, a trade), reads as part of the
+			// conversation; a passing one (a blow in a fight) is only short-term memory.
+			const betweenUs = !e.turn && e.remember === true && who.length >= 2 && who.some((id) => this.controls(id));
 			// A walk with no spoken turn is not chat. Speech still is, even beside a walk tag.
 			if (!(walk && !e.turn)) {
 				if (betweenUs) {
@@ -1566,6 +1664,7 @@ export class Mind<TCtx = unknown> {
 			query,
 			k: this.recallK,
 			now: this._now,
+			salience: this._salience,
 			skip: (r) => {
 				const onScreen = (r.tags.includes('speech') && quoting.some((quote) => r.text.endsWith(quote)))
 					|| (r.tags.includes('act') && lines.has(r.text));
@@ -1721,8 +1820,10 @@ export class Mind<TCtx = unknown> {
 	private earshotText():string {
 		// In earshot is not in reach (across a river) or clear (a mumble); unmarked, the voice walks into the river or talks to no avail.
 		const voiceID = this.thinkThread();
-		const names = (this.talk?.nearby(voiceID) ?? []).map((id) => {
-			const blocked = this.wayBlocked?.(id);
+		const nearby = this.talk?.nearby(voiceID) ?? [];
+		const ways = this.wayBlocked?.(nearby);
+		const names = nearby.map((id, i) => {
+			const blocked = ways?.[i];
 			const marks = [
 				!this.talk!.clear(voiceID, id) && 'too far to make out your words',
 				blocked !== undefined && (blocked ? `unreachable, blocked on the way: ${blocked}` : 'unreachable'),
@@ -1731,6 +1832,11 @@ export class Mind<TCtx = unknown> {
 		});
 		// Where the world can tell whether there is a way, say(to) walks up to them first.
 		const walks = this.wayBlocked !== undefined;
+		if (this.compact) {
+			// Only what this host does differently: say(to) cannot walk up to anyone.
+			const range = names.length > 0 ? `In talking range: ${names.join(', ')}.` : 'No one in talking range.';
+			return walks ? range : `${range} say(to) only those names.`;
+		}
 		if (names.length === 0) {
 			return walks ? 'No one in talking range. say(to) walks up to them first.' : 'No one in talking range. say(to) will fail until you are closer.';
 		}
@@ -1751,7 +1857,7 @@ export class Mind<TCtx = unknown> {
 			if (!this._noWay.has(key)) {
 				continue;
 			}
-			const why = this.wayBlocked?.(id);
+			const [why] = this.wayBlocked?.([id]) ?? [];
 			if (why === undefined) {
 				this._noWay.delete(key);
 				continue;
@@ -1774,13 +1880,10 @@ export class Mind<TCtx = unknown> {
 		const nearby = check.nearby.map((id) => this.nameOf(id));
 		// Out of earshot is only a walk away, unless there is no way to them.
 		if (to !== undefined && this.wayBlocked && ![to].flat().includes(this.thinkThread())) {
-			for (const id of [to].flat()) {
-				const why = this.wayBlocked(id);
-				if (why !== undefined) {
-					return { reason: noWayTo(this.nameOf(id), why), nearby };
-				}
-			}
-			return undefined;
+			const ids = [to].flat();
+			const ways = this.wayBlocked(ids);
+			const i = ways.findIndex((why) => why !== undefined);
+			return i < 0 ? undefined : { reason: noWayTo(this.nameOf(ids[i]), ways[i]!), nearby };
 		}
 		return { reason: check.reason ?? 'not in earshot', nearby };
 	}

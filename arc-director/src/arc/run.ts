@@ -1,5 +1,5 @@
 import { argBase, CHOOSE_VERB, type VerbRegistry } from './stock-verbs.js';
-import { choicesOf } from './choose.js';
+import { choicesOf, withLoneWait } from './choose.js';
 import {
 	firstStep,
 	groupArc,
@@ -30,6 +30,10 @@ export type ArcHandler = {
 	watch:string;
 	arc:Arc;
 	rank:number;
+	/** Game seconds it runs once started before a dead watch or a higher handler stops it (`Law.hold`). */
+	hold?:number;
+	/** A watch that ends `hold` early when true (`Law.holdBreak`). */
+	holdBreak?:string;
 };
 
 export type ArcPending =
@@ -39,12 +43,16 @@ export type ArcPending =
 export type ArcSession = {
 	token:number;
 	running:ArcHandler[];
+	/** When each running handler started, by its source: what its `hold` counts from. */
+	timestamp:Map<ArcHandler['source'], number>;
 	frames:{ handlers:ArcHandler[] }[];
 	pending?:ArcPending;
 	fail?:{ verb:string; reason:string };
 	bindings:Map<string, ExprVal>;
 	catalog?:()=>Catalog | undefined;
 	now:()=>number;
+	/** Resolves once `now` moves on. Without it, a loop of instant iterations yields a turn of the event loop instead. */
+	nextTime?:()=>Promise<void>;
 	abortHost?:()=>void;
 	extraHandlers?:()=>ArcHandler[];
 	/** Body finished; hoisted `when` still poll until the program is replaced. */
@@ -68,6 +76,7 @@ export type ArcSessionOpts = {
 	verbs?:VerbRegistry;
 	catalog?:()=>Catalog | undefined;
 	now?:()=>number;
+	nextTime?:()=>Promise<void>;
 	abortHost?:()=>void;
 	extraHandlers?:()=>ArcHandler[];
 	pick?:ArcPick;
@@ -77,10 +86,12 @@ export function createArcSession(opts:ArcSessionOpts = {}):ArcSession {
 	return {
 		token: 0,
 		running: [],
+		timestamp: new Map(),
 		frames: [],
 		bindings: new Map(),
 		catalog: opts.catalog,
 		now: opts.now ?? (() => 0),
+		nextTime: opts.nextTime,
 		abortHost: opts.abortHost,
 		extraHandlers: opts.extraHandlers,
 		parked: false,
@@ -141,13 +152,44 @@ function isRunning(session:ArcSession, handler:ArcHandler):boolean {
 	return session.running.some((r) => r.source === handler.source);
 }
 
-/** Director tick: abort a dead watch, or preempt with a higher-rank true handler. */
+/** `handler` runs from now on: the start its `hold` counts from. */
+function startRunning(session:ArcSession, handler:ArcHandler):void {
+	session.running.push(handler);
+	session.timestamp.set(handler.source, session.now());
+}
+
+function stopRunning(session:ArcSession):void {
+	const handler = session.running.pop();
+	if (handler) {
+		session.timestamp.delete(handler.source);
+	}
+}
+
+/**
+ * Whether the running handler on top is still inside its `hold`: nothing but its own end stops it yet, unless its
+ * `holdBreak` holds now.
+ */
+export function holding(session:ArcSession):boolean {
+	const top = session.running.at(-1);
+	const since = top?.hold ? session.timestamp.get(top.source) : undefined;
+	if (since === undefined || session.now() - since >= top!.hold!) {
+		return false;
+	}
+	const catalog = top!.holdBreak ? liveCatalog(session) : undefined;
+	return !(catalog && watchIsTrue(top!.holdBreak!, catalog));
+}
+
+/** Director tick: abort a dead watch, or preempt with a higher-rank true handler, once the running one's hold is up. */
 export function pollArcSession(session:ArcSession):void {
+	const candidates = allHandlers(session);
+	// Nothing to watch: no view to build.
+	if ((candidates.length === 0 && session.running.length === 0) || holding(session)) {
+		return;
+	}
 	const catalog = liveCatalog(session);
 	if (!catalog) {
 		return;
 	}
-	const candidates = allHandlers(session);
 	for (const h of candidates) {
 		if (!watchIsTrue(h.watch, catalog)) {
 			continue;
@@ -173,11 +215,12 @@ export function pollArcSession(session:ArcSession):void {
 }
 
 export function firstStartable(session:ArcSession):ArcHandler | undefined {
-	const catalog = liveCatalog(session);
+	const candidates = allHandlers(session);
+	const catalog = candidates.length > 0 ? liveCatalog(session) : undefined;
 	if (!catalog) {
 		return undefined;
 	}
-	for (const h of allHandlers(session)) {
+	for (const h of candidates) {
 		if (!watchIsTrue(h.watch, catalog)) {
 			continue;
 		}
@@ -318,7 +361,7 @@ async function drainPending(
 		if (pending.kind === 'abort') {
 			return { ok: false, preempted: true, verb: session.running.at(-1)?.watch ?? 'when' };
 		}
-		session.running.push(pending.handler);
+		startRunning(session, pending.handler);
 		try {
 			const result = await runFrame(pending.handler.arc, execute, session, depth + 1);
 			if (result.interrupted) {
@@ -326,7 +369,7 @@ async function drainPending(
 			}
 		}
 		finally {
-			session.running.pop();
+			stopRunning(session);
 		}
 	}
 	return undefined;
@@ -366,13 +409,20 @@ async function execStep(
 	if (step.verb === CHOOSE_VERB) {
 		return runChoose(step, execute, session, depth);
 	}
-	const live = interpolateStep(step, session);
-	const token = session.token;
-	const result = withVerb(await execute(live), live);
-	if (result.interrupted && session.token === token && !session.pending) {
-		return result;
+	for (;;) {
+		const live = interpolateStep(step, session);
+		const token = session.token;
+		const result = withVerb(await execute(live), live);
+		if (result.interrupted && session.token === token && !session.pending) {
+			return result;
+		}
+		const stolen = await afterSteal(session, execute, depth, token, live.verb, result.reason);
+		// A reaction cut the step short and has run its course: the step is not done, so it runs again. A program
+		// replaced instead ends it (not ok).
+		if (!(stolen?.ok && result.interrupted)) {
+			return stolen ?? result;
+		}
 	}
-	return await afterSteal(session, execute, depth, token, live.verb, result.reason) ?? result;
 }
 
 /**
@@ -420,7 +470,7 @@ async function runChoose(
 		}
 	}
 	session.lastPickAt = session.now();
-	const choices = choicesOf(step);
+	const choices = withLoneWait(choicesOf(step));
 	let name:string;
 	try {
 		name = await session.pick(typeof step.args.goal === 'string' ? step.args.goal : '', choices, session.lastChoice);
@@ -531,9 +581,10 @@ async function runLoop(
 			return last;
 		}
 		if (session.now() === clock) {
-			await new Promise<void>((resolve) => {
+			// An iteration that took no game time: the next waits for game time to move.
+			await (session.nextTime?.() ?? new Promise<void>((resolve) => {
 				setTimeout(resolve, 0);
-			});
+			}));
 		}
 	}
 }
@@ -637,7 +688,7 @@ export async function runArc(
 	const trail = ordered.length > 1 && last?.verb === 'think' ? last : undefined;
 	const work = trail ? ordered.slice(0, -1) : ordered.length > 0 ? ordered : [{ verb: 'think', args: {} }];
 	if (opts.asHandler) {
-		session.running.push(opts.asHandler);
+		startRunning(session, opts.asHandler);
 	}
 	try {
 		const result = await runFrame(work, run, session, 0);
@@ -648,7 +699,7 @@ export async function runArc(
 	}
 	finally {
 		if (opts.asHandler) {
-			session.running.pop();
+			stopRunning(session);
 		}
 	}
 }

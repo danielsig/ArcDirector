@@ -50,7 +50,7 @@ export type Ast =
 export const RESERVED = new Set([
 	'me', 'others', 'items', 'units', 'it', 'fail', 'prev',
 	'clamp', 'softClamp', 'map', 'find', 'findLast', 'filter', 'includes',
-	'first', 'sortBy', 'max', 'min', 'maxBy', 'minBy', 'sum', 'avg', 'count',
+	'first', 'take', 'sortBy', 'max', 'min', 'maxBy', 'minBy', 'sum', 'avg', 'count',
 	'reduce', 'some', 'all', 'matches', 'search', 'nearby', 'reachable', 'approaching', 'departing',
 ]);
 

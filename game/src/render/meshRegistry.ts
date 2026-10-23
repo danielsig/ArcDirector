@@ -4,16 +4,18 @@ import { natureReady } from './nature';
 import {
 	createBoulderMesh,
 	createBridgeMesh,
-	createCottageMesh,
+	createRoofMesh,
 	createLeverMesh,
 	createTreeMesh,
 	createWaterfallMesh,
 } from './natureMeshes';
 import { bevelBox, lathe, mergeParts, tube, type PosedPart } from '@arc-director/kindling';
-import { PALETTE, toon } from './toon';
+import { moonlitStoneMat, PALETTE, plankMat, toon } from './toon';
+import { CELL_SIZE, MOON_BLUE, MOON_WINDOW } from '../world/constants';
 import { columnParts, type PropPart } from './props';
 import { goodsMesh, isGoodsMesh } from './goods';
 import { waresForMesh } from '../items/wares';
+import type { RoofStyle, Wake } from '../world/decodeGlyphChunk';
 
 
 function spritePlane(w:number, h:number):THREE.PlaneGeometry {
@@ -39,11 +41,38 @@ function spritePlane(w:number, h:number):THREE.PlaneGeometry {
 	return geo;
 }
 
+const ROOF = 'roof:';
+
+const RIVER_BOULDER = 'river_boulder:';
+
+/** The mesh of a boulder standing in water, its ripples trailing along `wake` (none: the current's, or all round). */
+export function riverBoulderMeshID(wake:Wake = { x: 0, z: 0 }):string {
+	return `${RIVER_BOULDER}${wake.x},${wake.z},${wake.spread ?? 1}`;
+}
+
+/** The mesh of a house's roof over a wall line `w` × `d` meters (X × Z), in `style`, with or without a chimney. */
+export function roofMeshID(w:number, d:number, style:RoofStyle = 'thatch', chimney = true):string {
+	return `${ROOF}${w}x${d}:${style}:${chimney ? 'chimney' : 'bare'}`;
+}
+
+/** A fishing rod 2.2 m long, butt at the origin, up +Y: a cork grip, a little reel, a cane tapering to the tip. */
+function fishingRodMesh():THREE.Object3D {
+	const g = new THREE.Group();
+	const cane = new THREE.Mesh(new THREE.CylinderGeometry(0.006, 0.016, 1.9, 6).translate(0, 1.25, 0), toon(0x6b4a2a));
+	const cork = new THREE.Mesh(new THREE.CylinderGeometry(0.02, 0.02, 0.32, 8).translate(0, 0.16, 0), toon(0xc49a62));
+	const reel = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.04, 0.03, 10).rotateZ(Math.PI / 2).translate(0.04, 0.36, 0), toon(0x3a3a42));
+	for (const part of [cane, cork, reel]) {
+		part.castShadow = true;
+		g.add(part);
+	}
+	return g;
+}
+
 export function meshReady(meshID:string):boolean {
 	if (
-		meshID === 'tree_oak' || meshID === 'tree_pine' || meshID === 'boulder'
+		meshID === 'tree_oak' || meshID === 'tree_pine' || meshID === 'boulder' || meshID.startsWith(RIVER_BOULDER)
 		|| meshID === 'bridge' || meshID === 'waterfall' || meshID === 'bridge_lever'
-		|| meshID === 'cottage'
+		|| meshID.startsWith(ROOF)
 	) {
 		return natureReady();
 	}
@@ -185,10 +214,44 @@ function barrelLidGeometry(radius:number, width:number, segs = 12):THREE.BufferG
 	return geo;
 }
 
+/**
+ * A half disc standing up in its XY plane, flat edge on y = 0: a barrel lid's end. Its texture spans it whole, the
+ * bottom of the picture along the flat edge and the top at the crown.
+ */
+function halfDiscGeometry(radius:number, segs = 12):THREE.BufferGeometry {
+	const pos:number[] = [0, 0, 0];
+	const uv:number[] = [0.5, 0];
+	const idx:number[] = [];
+	for (let i = 0; i <= segs; i++) {
+		const ang = Math.PI * (i / segs);
+		const x = Math.cos(ang) * radius;
+		const y = Math.sin(ang) * radius;
+		pos.push(x, y, 0);
+		uv.push((x / radius + 1) / 2, y / radius);
+		if (i > 0) {
+			idx.push(0, i, i + 1);
+		}
+	}
+	const geo = new THREE.BufferGeometry();
+	geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+	geo.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
+	geo.setIndex(idx);
+	geo.computeVertexNormals();
+	return geo;
+}
+
+/** The dark wood inside a chest, its rim, and nothing (the open top of its body). Shared by every chest. */
+let chestInside:{ wood:THREE.Material; rim:THREE.Material; none:THREE.Material } | null = null;
+
 export function createChestMesh():THREE.Group {
 	const faces = getSheet().chest;
 	const nrm = getSheet().chestN;
 	const met = getSheet().chestM;
+	chestInside ??= {
+		wood: toon(0x2a1a10, { side: THREE.BackSide }),
+		rim: toon(0x4a3b2c),
+		none: new THREE.MeshBasicMaterial({ visible: false }),
+	};
 	const g = new THREE.Group();
 	g.userData.kind = 'chest';
 
@@ -196,13 +259,16 @@ export function createChestMesh():THREE.Group {
 	const depth = 0.44;
 	const bodyH = 0.26;
 	const radius = depth * 0.5;
+	/** How thick its walls are, as seen down into it open. */
+	const wall = 0.035;
 
+	// The body: four sides and a bottom outside, no top, so an open chest shows its hollow.
 	const body = new THREE.Mesh(
 		new THREE.BoxGeometry(width, bodyH, depth),
 		[
 			chestMaterial(faces.right, { normalMap: nrm.right, metalnessMap: met.right }),
 			chestMaterial(faces.left, { normalMap: nrm.left, metalnessMap: met.left }),
-			chestMaterial(faces.bottom, { normalMap: nrm.bottom, metalnessMap: met.bottom }),
+			chestInside.none,
 			chestMaterial(faces.bottom, { normalMap: nrm.bottom, metalnessMap: met.bottom }),
 			chestMaterial(faces.back, { normalMap: nrm.back, metalnessMap: met.back }),
 			chestMaterial(faces.front, { normalMap: nrm.front, metalnessMap: met.front }),
@@ -213,22 +279,55 @@ export function createChestMesh():THREE.Group {
 	body.receiveShadow = false;
 	g.add(body);
 
-	const lid = new THREE.Mesh(barrelLidGeometry(radius, width), chestMaterial(faces.lid, { normalMap: nrm.lid, metalnessMap: met.lid }));
-	lid.name = 'lid';
-	lid.position.y = bodyH - 0.004;
+	// Inside: its walls and floor seen from within (the box's back faces), open at the top.
+	const innerH = bodyH - wall;
+	const inner = new THREE.Mesh(new THREE.BoxGeometry(width - wall * 2, innerH, depth - wall * 2), chestInside.wood);
+	inner.position.y = wall + innerH * 0.5;
+	g.add(inner);
+	// The rim: the tops of its walls, between the outside and the hollow.
+	const rimH = 0.01;
+	const rims:[number, number, number, number][] = [
+		[width, wall, 0, (depth - wall) * 0.5],
+		[width, wall, 0, -(depth - wall) * 0.5],
+		[wall, depth - wall * 2, (width - wall) * 0.5, 0],
+		[wall, depth - wall * 2, -(width - wall) * 0.5, 0],
+	];
+	for (const [w, d, x, z] of rims) {
+		const rim = new THREE.Mesh(new THREE.BoxGeometry(w, rimH, d), chestInside.rim);
+		rim.position.set(x, bodyH - rimH * 0.5, z);
+		g.add(rim);
+	}
+
+	// The lid and its two ends hang from a hinge along the back (+Z; the front is −Z), so opening swings them up as one.
+	const hinge = new THREE.Group();
+	hinge.name = 'lid';
+	hinge.position.set(0, bodyH, radius);
+	g.add(hinge);
+
+	const lidGeo = barrelLidGeometry(radius, width);
+	const lid = new THREE.Mesh(lidGeo, chestMaterial(faces.lid, { normalMap: nrm.lid, metalnessMap: met.lid }));
+	lid.position.z = -radius;
 	lid.castShadow = true;
 	lid.receiveShadow = false;
-	g.add(lid);
+	hinge.add(lid);
+	// Its underside, plain dark wood, for when it stands open.
+	const under = new THREE.Mesh(lidGeo, chestInside.wood);
+	under.position.z = -radius;
+	hinge.add(under);
 
-	const endGeo = new THREE.PlaneGeometry(depth, radius);
-	const endL = new THREE.Mesh(endGeo, chestMaterial(faces.lidEndL, { alpha: true, normalMap: nrm.lidEndL, metalnessMap: met.lidEndL }));
-	endL.position.set(-width * 0.5 + 0.001, bodyH + radius * 0.5 - 0.004, 0);
-	endL.rotation.y = -Math.PI / 2;
-	g.add(endL);
-	const endR = new THREE.Mesh(endGeo, chestMaterial(faces.lidEndR, { alpha: true, normalMap: nrm.lidEndR, metalnessMap: met.lidEndR }));
-	endR.position.set(width * 0.5 - 0.001, bodyH + radius * 0.5 - 0.004, 0);
-	endR.rotation.y = Math.PI / 2;
-	g.add(endR);
+	// Its ends: half discs that follow the lid's curve, the lid-end picture on each.
+	const endGeo = halfDiscGeometry(radius);
+	for (const [side, map, normalMap, metalnessMap] of [
+		[-1, faces.lidEndL, nrm.lidEndL, met.lidEndL],
+		[1, faces.lidEndR, nrm.lidEndR, met.lidEndR],
+	] as const) {
+		const end = new THREE.Mesh(endGeo, chestMaterial(map, { normalMap, metalnessMap }));
+		end.material.side = THREE.DoubleSide;
+		end.position.set(side * width * 0.5, 0, -radius);
+		end.rotation.y = side * Math.PI / 2;
+		end.castShadow = true;
+		hinge.add(end);
+	}
 
 	return g;
 }
@@ -237,50 +336,38 @@ const ITEM_HEIGHT:Record<string, number> = {
 	'item_key': 0.42,
 	'item_bomb': 0.36,
 	'item_sword': 0.52,
-	'item_torch': 0.5,
 	'item_potion': 0.28,
 	'item_glove': 0.34,
 	'item_shield': 0.38,
 	'item_pack': 0.36,
 };
 
-function itemTorchProp(h:number):THREE.Group {
-	const sheet = getSheet();
+/**
+ * A torch's wood, standing up its +Y: the stick, and the pitch-soaked wrap at its head, `girth` times as thick as a
+ * carried one. Fresh materials each.
+ */
+function torchWood(girth = 1):{ stick:THREE.Mesh; wrap:THREE.Mesh } {
+	const stick = new THREE.Mesh(new THREE.CylinderGeometry(0.018 * girth, 0.024 * girth, 0.5, 6).translate(0, 0.25, 0), toon(0x7a4e2a));
+	const wrap = new THREE.Mesh(new THREE.CylinderGeometry(0.036 * girth, 0.03 * girth, 0.1, 7).translate(0, 0.49, 0), toon(0x3a2a1e));
+	stick.castShadow = true;
+	wrap.castShadow = true;
+	return { stick, wrap };
+}
+
+/**
+ * A torch to pick up, standing on its foot: the carried torch's wood, twice as thick so it reads from up high.
+ * A 3D item (`userData.body`): pointed at, it pulses and glows like the others.
+ */
+function itemTorchProp():THREE.Group {
 	const g = new THREE.Group();
 	g.userData.kind = 'item';
-	const stickImg = sheet.torchStick.image as HTMLCanvasElement | undefined;
-	const aspect = stickImg && stickImg.height > 0 ? stickImg.width / stickImg.height : 0.68;
-	const stickH = h * 0.72;
-	const stick = new THREE.Mesh(
-		spritePlane(stickH * aspect, stickH),
-		unlitSpriteMaterial(sheet.torchStick),
-	);
-	stick.name = 'sprite';
-	stick.position.y = stickH * 0.5 + 0.02;
-	stick.castShadow = false;
-	g.add(stick);
-	const fh = stickH * 0.9;
-	const flame = new THREE.Mesh(
-		spritePlane(fh * 0.88, fh),
-		flameMaterial(sheet.flame[0]),
-	);
-	flame.name = 'flame';
-	flame.position.set(0, stickH * 0.52, 0.01);
-	flame.castShadow = false;
-	flame.renderOrder = 2;
-	flame.visible = false;
-	stick.add(flame);
-	const blob = new THREE.Mesh(
-		new THREE.CylinderGeometry(0.1, 0.12, 0.04, 8),
-		toon(0x000000, { colorWrite: false, depthWrite: false }),
-	);
-	blob.position.y = 0.02;
-	blob.castShadow = true;
-	blob.receiveShadow = false;
-	g.add(blob);
-	g.userData.sprite = stick;
-	g.userData.flame = flame;
-	g.userData.itemH = stickH;
+	const { stick, wrap } = torchWood(2);
+	const body = new THREE.Group();
+	body.name = 'body';
+	body.add(stick, wrap);
+	g.add(body);
+	g.userData.body = body;
+	g.userData.shine = [stick.material, wrap.material];
 	return g;
 }
 
@@ -291,10 +378,7 @@ function itemTorchProp(h:number):THREE.Group {
  */
 function heldTorchMesh():THREE.Group {
 	const g = new THREE.Group();
-	const stick = new THREE.Mesh(new THREE.CylinderGeometry(0.018, 0.024, 0.5, 6).translate(0, 0.25, 0), toon(0x7a4e2a));
-	const wrap = new THREE.Mesh(new THREE.CylinderGeometry(0.036, 0.03, 0.1, 7).translate(0, 0.49, 0), toon(0x3a2a1e));
-	stick.castShadow = true;
-	wrap.castShadow = true;
+	const { stick, wrap } = torchWood();
 	g.add(stick, wrap);
 	const mat = flameMaterial(getSheet().flame[0]!);
 	const flame = new THREE.Group();
@@ -374,7 +458,7 @@ function itemProp(meshID:string):THREE.Group {
 		return ware;
 	}
 	if (meshID === 'item_torch') {
-		return itemTorchProp(h);
+		return itemTorchProp();
 	}
 	const sheet = getSheet();
 	const g = new THREE.Group();
@@ -408,51 +492,127 @@ export const DOOR_LEAF_W = 0.86;
 export const DOOR_LEAF_T = 0.1;
 export const DOOR_LEAF_H = 2.12;
 
-export function createDoorMesh():THREE.Group {
+export function createDoorMesh(flipped = false):THREE.Group {
 	const g = new THREE.Group();
 	g.userData.kind = 'door';
 	const frameMat = toon(0x3a2416);
 	const leafMat = toon(0x6b3f22);
+	const lintelMat = plankMat();
 	const post = new THREE.BoxGeometry(0.12, 2.22, 0.12);
 	const left = new THREE.Mesh(post, frameMat);
-	left.position.set(0, 1.11, -0.47);
+	left.position.set(0, 1, -0.47);
 	left.castShadow = true;
 	left.receiveShadow = true;
 	g.add(left);
 	const right = new THREE.Mesh(post, frameMat);
-	right.position.set(0, 1.11, 0.47);
+	right.position.set(0, 1, 0.47);
 	right.castShadow = true;
 	right.receiveShadow = true;
 	g.add(right);
-	const lintel = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.12, 1), frameMat);
-	lintel.position.set(0, 2.16, 0);
+	const lintel = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.35, 1), lintelMat);
+	lintel.position.set(0, 2.28, 0);
 	lintel.castShadow = true;
 	lintel.receiveShadow = true;
 	g.add(lintel);
 
+	const sign = flipped ? 1 : -1;
 	const hinge = new THREE.Group();
 	hinge.name = 'hinge';
-	hinge.position.set(0, 0, -DOOR_LEAF_W * 0.5);
+	hinge.position.set(0, 0, DOOR_LEAF_W * 0.5 * sign);
 	const leaf = new THREE.Mesh(
 		new THREE.BoxGeometry(DOOR_LEAF_T, DOOR_LEAF_H, DOOR_LEAF_W),
 		leafMat,
 	);
-	leaf.position.set(-DOOR_LEAF_T * 0.5, DOOR_LEAF_H * 0.5, DOOR_LEAF_W * 0.5);
+	leaf.position.set(DOOR_LEAF_T * 0.5 * sign, DOOR_LEAF_H * 0.5, DOOR_LEAF_W * 0.5);
 	leaf.castShadow = true;
 	leaf.receiveShadow = true;
 	hinge.add(leaf);
 	g.add(hinge);
+	const occH = DOOR_LEAF_H - 0.06;
 	const occ = new THREE.Mesh(
-		new THREE.PlaneGeometry(0.98, DOOR_LEAF_H),
+		new THREE.PlaneGeometry(0.98, occH),
 		toon(0x000000, { colorWrite: false, side: THREE.DoubleSide }),
 	);
 	occ.name = 'doorOccluder';
-	occ.rotation.y = Math.PI / 2;
-	occ.position.y = DOOR_LEAF_H * 0.5;
+	occ.rotation.y = Math.PI / 2 * -sign;
+	// Above the floor, so the sheet does not slice the threshold.
+	occ.position.y = 0.06 + occH * 0.5;
 	occ.castShadow = true;
 	occ.receiveShadow = false;
 	g.add(occ);
 	g.userData.hinge = hinge;
+	return g;
+}
+
+/** How far a gate's leaves swing: each on its own pier, flat against the wall outside when open. */
+const GATE_LEAF_W = 0.44;
+const GATE_H = 2.1;
+
+/** One barred iron leaf of a gate, hung on a hinge at its own `z` edge: frame, bars, and spear tips along the top. */
+function gateLeaf(hingeZ:number, sign:number):THREE.Group {
+	const iron = toon(PALETTE.iron, { rim: 0.35 });
+	const hinge = new THREE.Group();
+	hinge.position.set(0, 0, hingeZ);
+	const bar = 0.022;
+	const z = (t:number):number => sign * t;
+	const parts:PosedPart[] = [
+		{ geo: box(0.04, GATE_H, 0.04), y: GATE_H * 0.5, z: z(0.02) },
+		{ geo: box(0.04, GATE_H, 0.04), y: GATE_H * 0.5, z: z(GATE_LEAF_W - 0.02) },
+		{ geo: box(0.035, 0.05, GATE_LEAF_W), y: 0.12, z: z(GATE_LEAF_W * 0.5) },
+		{ geo: box(0.035, 0.05, GATE_LEAF_W), y: GATE_H - 0.32, z: z(GATE_LEAF_W * 0.5) },
+		{ geo: box(0.035, 0.05, GATE_LEAF_W), y: 1.0, z: z(GATE_LEAF_W * 0.5) },
+	];
+	for (let i = 1; i <= 3; i++) {
+		const t = (GATE_LEAF_W * i) / 4;
+		parts.push({ geo: box(bar, GATE_H - 0.2, bar), y: (GATE_H - 0.2) * 0.5 + 0.1, z: z(t) });
+		parts.push({ geo: new THREE.ConeGeometry(0.03, 0.12, 4), y: GATE_H - 0.04, z: z(t) });
+	}
+	const leaf = new THREE.Mesh(mergeParts(parts), iron);
+	leaf.castShadow = true;
+	leaf.receiveShadow = true;
+	hinge.add(leaf);
+	return hinge;
+}
+
+/**
+ * A gate in a town wall, its passage along X: two stone piers with caps, an iron arch between them with a finial
+ * on top, and a pair of barred leaves (`hinge`, `hinge2`) that swing out to lie flat against the wall when open.
+ */
+function createGateMesh():THREE.Group {
+	const g = new THREE.Group();
+	g.userData.kind = 'door';
+	const stone = toon(PALETTE.wall, { pattern: 'stone', patternScale: 0.18, patternInk: 0.5 });
+	const iron = toon(PALETTE.iron, { rim: 0.35 });
+	const pierZ = 0.5 + 0.17;
+	const piers:PosedPart[] = [-1, 1].flatMap((s) => [
+		{ geo: box(0.44, 2.5, 0.34), y: 1.25, z: s * pierZ },
+		{ geo: bevelBox(0.56, 0.14, 0.46, 0.03), y: 2.57, z: s * pierZ },
+		{ geo: new THREE.ConeGeometry(0.2, 0.22, 4), y: 2.75, z: s * pierZ, ry: Math.PI / 4 },
+	]);
+	const masonry = new THREE.Mesh(mergeParts(piers), stone);
+	masonry.castShadow = true;
+	masonry.receiveShadow = true;
+	g.add(masonry);
+	// The arch: a half ring over the opening, between the pier caps, with a lantern hook at its crown.
+	const arch = Array.from({ length: 9 }, (_, i) => {
+		const a = (i / 8) * Math.PI;
+		return { x: 0, y: 2.3 + Math.sin(a) * 0.5, z: -Math.cos(a) * 0.52 };
+	});
+	const ironwork = new THREE.Mesh(mergeParts([
+		{ geo: tube(arch, 0.03, 6) },
+		{ geo: tube([{ x: 0, y: 2.8, z: 0 }, { x: 0, y: 3.02, z: 0 }], 0.02, 5) },
+		{ geo: new THREE.ConeGeometry(0.05, 0.14, 4), y: 3.08 },
+	]), iron);
+	ironwork.castShadow = true;
+	g.add(ironwork);
+	const left = gateLeaf(-0.5, 1);
+	left.name = 'hinge';
+	g.add(left);
+	const right = gateLeaf(0.5, -1);
+	right.name = 'hinge2';
+	g.add(right);
+	g.userData.hinge = left;
+	g.userData.hinge2 = right;
 	return g;
 }
 
@@ -492,7 +652,7 @@ function createCotMesh():THREE.Group {
 }
 
 /** Per-mesh stall look. `bench` adds a seat behind the counter (restaurant stalls). */
-type StallStyle = { canvas:number; stripe:number; bench?:boolean };
+export type StallStyle = { canvas:number; stripe:number; bench?:boolean; shelf?:boolean };
 
 const STALL_STYLES:Record<string, StallStyle> = {
 	stall: { canvas: 0xd45a3a, stripe: 0xf0e0a8 },
@@ -504,14 +664,24 @@ const STALL_STYLES:Record<string, StallStyle> = {
 	stall_blue: { canvas: 0x4a7ec8, stripe: 0xe8f0f8 },
 	stall_cutler: { canvas: 0x4a7ec8, stripe: 0xe8f0f8 },
 	stall_green: { canvas: 0x5aaa5a, stripe: 0xd8f0c8 },
+	stall_fruit: { canvas: 0x5aaa5a, stripe: 0xd8f0c8 },
 };
 
-function stallStyle(meshID:string):StallStyle {
-	return STALL_STYLES[meshID] ?? STALL_STYLES.stall;
+/** Per-mesh shop counter look: the boards, the front panels' paint, and what lines the front. */
+export type CounterStyle = { wood:number; shelf?:boolean; bench?:boolean };
+
+const COUNTER_STYLES:Record<string, CounterStyle> = {
+	counter_apothecary: { wood: 0x3e2a1e, shelf: true, bench: true },
+	counter_toys: { wood: 0xc49a5a, shelf: true },
+};
+
+export function getPostStyle(meshID:string):StallStyle | CounterStyle {
+	return STALL_STYLES[meshID] ?? COUNTER_STYLES[meshID] ?? STALL_STYLES.stall;
 }
 
-function isStallMesh(meshID:string):boolean {
-	return meshID === 'stall' || meshID.startsWith('stall_');
+/** A seller's post: a stall in the square, or a counter indoors. Both lay the seller's wares out. */
+function isPostMesh(meshID:string):boolean {
+	return meshID === 'stall' || meshID.startsWith('stall_') || meshID.startsWith('counter_');
 }
 
 /** Uniform scale on the whole stall mesh. */
@@ -528,10 +698,10 @@ export const STALL_COUNTER = {
 	d: (STALL_D + 0.12) * STALL_SCALE,
 	z: COUNTER_Z * STALL_SCALE,
 };
-const BACK_Z = -0.5;
-const FRONT_Z = 0.62;
-const BACK_H = 2.0;
-const FRONT_H = 1.62;
+const BACK_Z = -0.3;
+const FRONT_Z = 0.7;
+const BACK_H = 1.92;
+const FRONT_H = 2.3;
 /** How far the awning reaches past the posts on each side, over the merchant and the customer. */
 const EAVE = 0.6;
 const ROOF_BACK_Z = BACK_Z - EAVE;
@@ -624,7 +794,7 @@ function box(w:number, h:number, d:number):THREE.BoxGeometry {
 function createStallMesh(meshID = 'stall', items?:readonly string[]):THREE.Group {
 	const g = new THREE.Group();
 	g.userData.kind = 'stall';
-	const style = stallStyle(meshID);
+	const style = STALL_STYLES[meshID] ?? STALL_STYLES.stall;
 	const boards = toon(PALETTE.wood, { pattern: 'plank', patternScale: 0.1, patternInk: 0.4 });
 	const dark = toon(PALETTE.woodDark);
 	const canvas = toon(0xffffff, { vertexColors: true, side: THREE.DoubleSide, rim: 0.15 });
@@ -637,14 +807,16 @@ function createStallMesh(meshID = 'stall', items?:readonly string[]):THREE.Group
 	const hw = STALL_W * 0.5;
 	const cz = COUNTER_Z;
 	add(mergeParts([
-		{ geo: box(STALL_W, 0.8, 0.05), y: 0.4, z: cz + STALL_D * 0.5 },
+		{ geo: box(STALL_W, 0.8, 0.05), y: 0.4, z: cz - STALL_D * 0.5 },
 		{ geo: box(0.05, 0.8, STALL_D), x: -hw, y: 0.4, z: cz },
 		{ geo: box(0.05, 0.8, STALL_D), x: hw, y: 0.4, z: cz },
 		{ geo: box(STALL_W + 0.14, 0.06, STALL_D + 0.12), y: COUNTER_H - 0.03, z: cz },
-		// A bench seat on the merchant's side, or a closed panel like the customer's side.
-		style.bench
-			? { geo: box(STALL_W - 0.1, 0.04, 0.3), y: 0.55, z: BACK_Z + 0.2 }
-			: { geo: box(STALL_W, 0.8, 0.05), y: 0.4, z: cz - STALL_D * 0.5 },
+		style.bench // A bench for customers
+			? { geo: box(STALL_W + 0.05, 0.04, 0.35), y: 0.4, z: FRONT_Z - 0.15 }
+			: { geo: box(STALL_W, 0.8, 0.05), y: 0.4, z: cz + STALL_D * 0.5 },
+		...style.shelf // A shelf behind the counter
+			? [ { geo: box(STALL_W + 0.05, 0.04, 0.2), y: 0.6, z: cz - STALL_D * 0.5 - 0.1 } ]
+			: [],
 	]), boards);
 	const backPost = box(0.08, BACK_H, 0.08);
 	const frontPost = box(0.08, FRONT_H, 0.08);
@@ -673,6 +845,51 @@ function createStallMesh(meshID = 'stall', items?:readonly string[]):THREE.Group
 	]), dark);
 	add(stripedAwning(style), canvas);
 	placeWares(g, items ?? waresForMesh(meshID));
+	g.scale.setScalar(STALL_SCALE);
+	return g;
+}
+
+/** A shop counter's mesh (a `counter_*` look) `width` meters long. */
+export function counterMeshID(look:string, width:number):string {
+	return `${look}:${Math.round(width * 100) / 100}`;
+}
+
+/**
+ * A shop counter's mesh (a `counter_*` look) `width` meters long. `items` are mesh ids on the counter.
+ * Omit them and the counter shows its own stock.
+ */
+function createCounterMesh(meshID:string, items?:readonly string[]):THREE.Group {
+	const g = new THREE.Group();
+	g.userData.kind = 'stall';
+	const [look = meshID, length] = meshID.split(':');
+	const width = length ? Number(length) / STALL_SCALE : STALL_W;
+	const style = COUNTER_STYLES[look] ?? { wood: PALETTE.wood, panel: PALETTE.woodDark, trim: 0xb08a3a };
+	const boards = toon(style.wood, { pattern: 'plank', patternScale: 0.1, patternInk: 0.4 });
+	const add = (geo:THREE.BufferGeometry, mat:THREE.Material):void => {
+		const mesh = new THREE.Mesh(geo, mat);
+		mesh.castShadow = true;
+		mesh.receiveShadow = true;
+		g.add(mesh);
+	};
+	const cz = COUNTER_Z;
+	// The body: a closed box under a thick top that overhangs on the customer's side.
+	add(mergeParts([
+		{ geo: bevelBox(width + 0.16, 0.08, STALL_D + 0.16, 0.02), y: COUNTER_H - 0.04, z: cz + 0.02 },
+		...style.bench // A bench for customers
+			? [
+				// the counter
+				{ geo: box(width, 0.8, 0.05), y: 0.4, z: cz - STALL_D * 0.5 },
+				{ geo: box(0.05, 0.8, STALL_D), x: -width * 0.5, y: 0.4, z: cz },
+				{ geo: box(0.05, 0.8, STALL_D), x: width * 0.5, y: 0.4, z: cz },
+				// the bench
+				{ geo: box(width + 0.05, 0.4, 0.35), y: 0.2, z: FRONT_Z - 0.15 },
+			]
+			: [ { geo: box(width, COUNTER_H - 0.08, STALL_D), y: (COUNTER_H - 0.08) * 0.5, z: cz } ],
+		...style.shelf // A shelf behind the counter
+			? [ { geo: box(width, 0.04, 0.2), y: 0.6, z: cz - STALL_D * 0.5 - 0.1 } ]
+			: [],
+	]), boards);
+	placeWares(g, items ?? waresForMesh(look));
 	g.scale.setScalar(STALL_SCALE);
 	return g;
 }
@@ -720,6 +937,46 @@ function createCobwebMesh():THREE.Group {
 	const sheet = new THREE.Mesh(new THREE.PlaneGeometry(1, 2.3), sheetMat);
 	sheet.position.y = 1.15;
 	g.add(sheet);
+	return g;
+}
+
+/**
+ * A barred window cut through its wall (the chunk mesh cuts the opening), its face toward +Z: iron bars across the
+ * opening on the wall face, casting the moonlight's shadow, the opening's stone aglow with it, and a wall's thickness
+ * back, night sky. Bars and sky unlit: the moonlight behind the bars would leave their faces dark. Centred on the opening; it sits on the wall face.
+ */
+function createMoonWindowMesh():THREE.Group {
+	const g = new THREE.Group();
+	const { width, height } = MOON_WINDOW;
+	const sky = new THREE.Mesh(new THREE.PlaneGeometry(width, height), new THREE.MeshBasicMaterial({ color: MOON_BLUE }));
+	sky.position.z = 0.01 - CELL_SIZE;
+	g.add(sky);
+	// Lining the cut stone a hair in, so it glows where no light can be kept to: a lamp would light the wall round it.
+	const lining = moonlitStoneMat();
+	const inset = 0.004;
+	for (const [across, along, x, y, rx, ry] of [
+		[width, CELL_SIZE, 0, -height / 2 + inset, -Math.PI / 2, 0],
+		[width, CELL_SIZE, 0, height / 2 - inset, Math.PI / 2, 0],
+		[CELL_SIZE, height, -width / 2 + inset, 0, 0, Math.PI / 2],
+		[CELL_SIZE, height, width / 2 - inset, 0, 0, -Math.PI / 2],
+	] as const) {
+		const face = new THREE.Mesh(new THREE.PlaneGeometry(across, along), lining);
+		face.position.set(x, y, -CELL_SIZE / 2);
+		face.rotation.set(rx, ry, 0);
+		// The bars' shadows fall on it.
+		face.receiveShadow = true;
+		g.add(face);
+	}
+	// Set a little into the opening, their ends sunk in the stone above and below.
+	const bars = 5;
+	const end = height / 2 + 0.04;
+	const parts:PosedPart[] = Array.from({ length: bars }, (_, i) => {
+		const x = -width / 2 + ((i + 1) * width) / (bars + 1);
+		return { geo: tube([{ x, y: -end, z: -0.08 }, { x, y: end, z: -0.08 }], 0.018, 6) };
+	});
+	const iron = new THREE.Mesh(mergeParts(parts), new THREE.MeshBasicMaterial({ color: 0x2a2622 }));
+	iron.castShadow = true;
+	g.add(iron);
 	return g;
 }
 
@@ -787,19 +1044,24 @@ function cloneProp(meshID:string, build:()=>THREE.Object3D):THREE.Object3D {
 	return inst;
 }
 
+/** A seller's post with `items` on it: a counter indoors, else a stall. */
+function createPostMesh(meshID:string, items?:readonly string[]):THREE.Group {
+	return meshID.startsWith('counter_') ? createCounterMesh(meshID, items) : createStallMesh(meshID, items);
+}
+
 export function createMesh(meshID:string, color?:number, items?:readonly string[]):THREE.Object3D {
-	if (items !== undefined && isStallMesh(meshID)) {
-		return createStallMesh(meshID, items);
+	if (items !== undefined && isPostMesh(meshID)) {
+		return createPostMesh(meshID, items);
 	}
-	if (sharedProps.has(meshID) || isStallMesh(meshID)) {
+	if (sharedProps.has(meshID) || isPostMesh(meshID)) {
 		return cloneProp(meshID, () => buildMesh(meshID, color));
 	}
 	return buildMesh(meshID, color);
 }
 
 function buildMesh(meshID:string, color?:number):THREE.Object3D {
-	if (isStallMesh(meshID)) {
-		return createStallMesh(meshID);
+	if (isPostMesh(meshID)) {
+		return createPostMesh(meshID);
 	}
 	switch (meshID) {
 		case 'torch':
@@ -809,9 +1071,11 @@ function buildMesh(meshID:string, color?:number):THREE.Object3D {
 		case 'chest':
 			return createChestMesh();
 		case 'door':
-			return createDoorMesh();
-		case 'cottage':
-			return createCottageMesh();
+			return createDoorMesh(false);
+		case 'door_flipped':
+			return createDoorMesh(true);
+		case 'gate':
+			return createGateMesh();
 		case 'tree_oak':
 			return createTreeMesh('oak');
 		case 'tree_pine':
@@ -830,15 +1094,28 @@ function buildMesh(meshID:string, color?:number):THREE.Object3D {
 			return createCotMesh();
 		case 'held_torch':
 			return heldTorchMesh();
+		case 'fishing_rod':
+			return fishingRodMesh();
 		case 'cobweb':
 			return createCobwebMesh();
 		case 'stone_tablet':
 			return createTabletMesh();
+		case 'moon_window':
+			return createMoonWindowMesh();
 		case 'pillar':
 			return partsMesh(columnParts(false));
 		case 'pillar_broken':
 			return partsMesh(columnParts(true));
 		default: {
+			if (meshID.startsWith(ROOF)) {
+				const [size, style, chimney] = meshID.slice(ROOF.length).split(':');
+				const [w, d] = size!.split('x').map(Number);
+				return createRoofMesh(w! / 2, d! / 2, style as RoofStyle, chimney !== 'bare');
+			}
+			if (meshID.startsWith(RIVER_BOULDER)) {
+				const [x, z, spread] = meshID.slice(RIVER_BOULDER.length).split(',').map(Number);
+				return createBoulderMesh({ x: x!, z: z!, spread });
+			}
 			if (meshID.startsWith('item_')) {
 				return itemProp(meshID);
 			}

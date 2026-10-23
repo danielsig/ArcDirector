@@ -1,10 +1,11 @@
 import type { ArcResult, CountMap } from '../arc/types.js';
 import type { StockVerbArgs, StockVerbName, VerbArgs, VerbCall, VerbHandler } from '../director/types.js';
 import type { MindEvent } from '../mind/types.js';
+import type { SeenObject } from '../perception/types.js';
 import type { Mover } from './mover.js';
 import { bundleText, isEmpty, offerText, type OfferBook } from './offers.js';
 import { poseOf } from './lookup.js';
-import { awayGoal, reachablePoints } from './route.js';
+import { awayGoal, reachablePoints, type RouteWorld } from './route.js';
 import { checkDeal, settleDeal } from './deal.js';
 import type { HostWorld, Transfer, Vec } from './types.js';
 import { add, centroid, distance, dot, groundAxes, sub, unit } from './vec.js';
@@ -14,14 +15,18 @@ export type WorldVerbDeps<TCtx> = {
 	world:HostWorld<unknown>;
 	mover:Mover;
 	now:()=>number;
-	/** Ids the acting character sees right now. */
-	seen:(call:VerbCall<TCtx>)=>string[];
+	/** What the acting character sees right now. */
+	seen:(call:VerbCall<TCtx>)=>SeenObject[];
 	/** What counts as nearby for the acting character (its kernels' `nearRadius`), when the host says. */
 	nearRadius:(call:VerbCall<TCtx>)=>number | undefined;
 	/** Every open offer that still stands. */
 	offers:()=>OfferBook;
+	/** Whether `id` is a character in the cast: only a character takes a gift or a trade. */
+	isCharacter:(id:string)=>boolean;
 	/** Whether character `fromID` may make an offer to `toID`. */
 	canOffer:(fromID:string, toID:string)=>boolean;
+	/** Whether the acting character may pick up `item` from `fromID`: the item where it lies, or what holds it. */
+	canPickUp:(call:VerbCall<TCtx>, item:string, fromID:string)=>boolean;
 	/** Tell the mind that thinks for character `id`. A major event wakes it. */
 	tell:(id:string, event:MindEvent)=>void;
 	/** Tell every mind: what the whole world comes to know, such as a trade or a gift. */
@@ -30,9 +35,9 @@ export type WorldVerbDeps<TCtx> = {
 	currency?:string;
 };
 
-type WorldPart = Exclude<keyof HostWorld<unknown>, 'find' | 'getPose' | 'getReach' | 'canOffer' | 'up'>;
+type WorldPart = Exclude<keyof HostWorld<unknown>, 'find' | 'getPose' | 'getReach' | 'canOffer' | 'canPickUp' | 'up'>;
 
-const MOVING:WorldPart[] = ['getPathGraph', 'steerToward'];
+const MOVING:WorldPart[] = ['getNeighbors', 'canPass', 'steerToward'];
 
 /** The `withWorld` parts each stock world verb runs on. */
 export const WORLD_VERB_PARTS:Readonly<Record<string, readonly WorldPart[]>> = {
@@ -104,6 +109,11 @@ export function worldVerbs<TCtx>(deps:WorldVerbDeps<TCtx>):Handlers<TCtx> {
 		return { character, target };
 	};
 	const failed = (found:Found | ArcResult):found is ArcResult => 'ok' in found;
+	/** As `resolve`, for a character to give to or trade with: a thing or a place is refused. */
+	const resolveCharacter = (call:VerbCall<TCtx>, id:string):Found | ArcResult => {
+		const found = resolve(call, id, 'character');
+		return failed(found) || deps.isCharacter(id) ? found : fail(call.verb, `${nameOf(call, id)} is not a character`);
+	};
 	/** One trade, gift or payment, remembered by every mind. Recall is how they read this ledger. */
 	const ledger = (text:string, who:string[], tags:string[]):void => {
 		deps.tellAll({ kind: 'Ledger', text, who, tags: ['ledger', ...tags], remember: true });
@@ -117,10 +127,16 @@ export function worldVerbs<TCtx>(deps:WorldVerbDeps<TCtx>):Handlers<TCtx> {
 		const { to, give = {}, get = {} } = call.args;
 		const withdraw = isEmpty(give) && isEmpty(get);
 		if (!to) {
+			// No taker yet: only the offerer's half can be checked.
+			const character = withdraw ? undefined : world.find(me);
+			const refused = character === undefined ? undefined : checkDeal(world, handOver(character, undefined, give));
+			if (refused) {
+				return fail('offer', refused);
+			}
 			deps.offers().post({ from: me, give, get });
 			return { ok: true, verb: 'offer', reason: withdraw ? 'withdrew your standing offers' : `offering ${offerText({ give, get })} to anyone` };
 		}
-		const found = resolve(call, to, 'person');
+		const found = resolveCharacter(call, to);
 		if (failed(found)) {
 			return found;
 		}
@@ -183,14 +199,24 @@ export function worldVerbs<TCtx>(deps:WorldVerbDeps<TCtx>):Handlers<TCtx> {
 	return {
 		go_to: (call:Call<TCtx, 'go_to'>) => {
 			const found = resolve(call, call.args.target, 'place');
-			return failed(found) ? found : call.goTo(call.args.target);
+			if (failed(found)) {
+				return found;
+			}
+			// Stops on the way, successfully, once `until` holds.
+			const until = call.args.until?.trim() ? () => (call.holds('until') ? 'until' : undefined) : undefined;
+			return call.goTo(call.args.target, until && { check: until });
 		},
 		follow: (call:Call<TCtx, 'follow'>) => {
-			const found = resolve(call, call.args.target, 'person');
-			return failed(found) ? found : mover.go(call.character.id, { target: call.args.target }, 'follow', { sticky: true });
+			const found = resolve(call, call.args.target, 'character');
+			if (failed(found)) {
+				return found;
+			}
+			// How far behind to keep: it closes in again whenever they get farther than that.
+			const within = call.args.distance !== undefined && call.args.distance > 0 ? call.args.distance : undefined;
+			return mover.go(call.character.id, { target: call.args.target }, 'follow', { sticky: true, within });
 		},
 		flee: async (call:Call<TCtx, 'flee'>) => {
-			const found = resolve(call, call.args.from, 'person');
+			const found = resolve(call, call.args.from, 'character');
 			if (failed(found)) {
 				return found;
 			}
@@ -202,34 +228,58 @@ export function worldVerbs<TCtx>(deps:WorldVerbDeps<TCtx>):Handlers<TCtx> {
 		circle: formation,
 		hold_line: formation,
 		pick_up: async (call:Call<TCtx, 'pick_up'>) => {
-			const { item } = call.args;
-			const found = resolve(call, item, 'item');
+			const { item, from } = call.args;
+			if (from && deps.isCharacter(from)) {
+				return fail('pick_up', `${nameOf(call, from)} carries it; only they can give it to you`);
+			}
+			// Where it lies, or what holds it: as named, else as seen, loose before held.
+			const seen = deps.seen(call).filter((o) => o.id === item);
+			const source = from ?? (seen.some((o) => o.attachMode !== 'in') ? item : seen[0]?.attachedTo ?? item);
+			const found = resolve(call, source, from ? 'thing' : 'item');
 			if (failed(found)) {
 				return found;
+			}
+			if (!deps.canPickUp(call, item, source)) {
+				return fail('pick_up', from ? `you see no ${item} in ${nameOf(call, from)}` : `you see no ${item}; go where it is first`);
 			}
 			const take = [{ verb: 'pick_up', thing: item, from: found.target, to: found.character }];
 			const refused = checkDeal(world, take);
 			if (refused) {
 				return fail('pick_up', refused);
 			}
-			const near = await call.goTo(item);
+			const near = await call.goTo(source);
 			if (!near.ok) {
 				return near;
 			}
 			const done = settleDeal(world, take);
-			return outcome('pick_up', done.ok ? { ok: true, reason: `picked up ${item}` } : done);
+			return outcome('pick_up', done.ok ? { ok: true, reason: from ? `took ${item} from ${nameOf(call, from)}` : `picked up ${item}` } : done);
 		},
-		drop: (call:Call<TCtx, 'drop'>) => {
-			const found = resolve(call);
+		drop: async (call:Call<TCtx, 'drop'>) => {
+			const { item, to } = call.args;
+			if (to && deps.isCharacter(to)) {
+				return fail('drop', `to hand ${item} to ${nameOf(call, to)}, use give`);
+			}
+			const found = resolve(call, to);
 			if (failed(found)) {
 				return found;
 			}
-			const done = settleDeal(world, [{ verb: 'drop', thing: call.args.item, from: found.character }]);
-			return outcome('drop', done.ok ? { ok: true, reason: `dropped ${call.args.item}` } : done);
+			const put = [{ verb: 'drop', thing: item, from: found.character, to: found.target }];
+			if (to) {
+				const refused = checkDeal(world, put);
+				if (refused) {
+					return fail('drop', refused);
+				}
+				const near = await call.goTo(to);
+				if (!near.ok) {
+					return near;
+				}
+			}
+			const done = settleDeal(world, put);
+			return outcome('drop', done.ok ? { ok: true, reason: to ? `put ${item} in ${nameOf(call, to)}` : `dropped ${item}` } : done);
 		},
 		give: async (call:Call<TCtx, 'give'>) => {
 			const { item, to } = call.args;
-			const found = resolve(call, to, 'person');
+			const found = resolveCharacter(call, to);
 			if (failed(found)) {
 				return found;
 			}
@@ -256,13 +306,14 @@ export function worldVerbs<TCtx>(deps:WorldVerbDeps<TCtx>):Handlers<TCtx> {
 			if (failed(found)) {
 				return found;
 			}
-			if (target) {
+			// Used on yourself, it is already in reach.
+			if (target && target !== call.character.id) {
 				const near = await call.goTo(target);
 				if (!near.ok) {
 					return near;
 				}
 			}
-			return outcome('use', world.useItem!(found.character, item, found.target));
+			return outcome('use', world.useItem!(found.character, item, target));
 		},
 		examine: (call:Call<TCtx, 'examine'>) => {
 			const found = resolve(call, call.args.target);
@@ -316,7 +367,7 @@ async function flee<TCtx>(call:Call<TCtx, 'flee'>, deps:WorldVerbDeps<TCtx>, kee
 		const me = poseOf(world, call.character.id)?.point;
 		const at = threat();
 		if (!me || !at) {
-			return me ? { ok: true, verb: 'flee', reason: `${name} is gone` } : { ok: false, verb: 'flee', reason: 'not in this scene' };
+			return me ? { ok: true, verb: 'flee', reason: `${name} is ${world.isDown?.(from) ? 'down' : 'gone'}` } : { ok: false, verb: 'flee', reason: 'not in this scene' };
 		}
 		if (distance(me, at) >= keep) {
 			if (deps.now() - safeSince >= FLEE_SAFE) {
@@ -350,8 +401,8 @@ async function wander<TCtx>(call:Call<TCtx, 'wander'>, deps:WorldVerbDeps<TCtx>)
 		return { ok: true, verb: 'wander', reason: met ? (seen ? `until — ${seen}` : 'until') : seen || undefined };
 	};
 	const check = ():string | undefined => {
-		for (const id of deps.seen(call)) {
-			saw.add(id);
+		for (const seen of deps.seen(call)) {
+			saw.add(seen.id);
 		}
 		if (until && call.holds('until')) {
 			return 'until';
@@ -386,7 +437,7 @@ function wanderPoint<TCtx>(call:Call<TCtx, 'wander'>, world:HostWorld<unknown>, 
 	if (!me) {
 		return undefined;
 	}
-	const spots = reachablePoints(world.getPathGraph!(character), me, WANDER_SPREAD);
+	const spots = reachablePoints(world as RouteWorld<unknown>, character, me, WANDER_SPREAD);
 	const away = spots.slice(Math.floor(spots.length / 3));
 	if (away.length === 0) {
 		return undefined;

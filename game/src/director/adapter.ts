@@ -2,13 +2,14 @@ import { Time, type GameObject } from '@arc-director/kindling';
 import { SpeechQueue } from './speechQueue';
 import {
 	ArcDirector,
+	BrowserProvider,
+	HttpProvider,
 	TalkNet,
 	parseArc,
 	LM_STUDIO_LOAD,
 	type ArcResult,
 	type Character,
 	type Collective,
-	type Kit,
 	type KernelSource,
 	type MapSense,
 	type Mind,
@@ -24,7 +25,7 @@ import {
 } from '../engine/components';
 import type { World } from '../engine/World';
 import type { HudAiLogEntry, HudChatLine } from '../ui/hudModel';
-import { prefs, setPrefs, systemOneName, type Prefs } from '../prefs';
+import { prefs, setPrefs, type Prefs } from '../prefs';
 import { publishAiLog, resetAiLogSink, pushLog, logLook } from './aiLogSink';
 import { talkFace, canHearClearly, SPEECH_LIFE } from './talkAttend';
 import { YOU_SYMBOL } from './mapMarks';
@@ -33,10 +34,12 @@ import { WORLD_KNOWLEDGE } from './knowledge';
 import type { CharacterCtx, SceneHooks } from './types';
 import { idOf, findObject, isLiving } from './names';
 import { kernelsOf, scanWorld } from './kernels';
-import { hostCanSee, lookWorld, inventoryOf, followedCarry } from './perception';
-import { addBodyVerbs, GAME_VERBS, verbGate } from './verbs';
+import { lookWorld, inventoryOf, followedCarry } from './perception';
+import { roomBounds, type RoomDef } from '../world/spawn';
+import { verbGate } from './verbs';
 import { gameWorld } from './world';
-import { menuModel, showDownload } from './inference';
+import { decisionModelOf, menuModel, showDownload, type SamplingSource } from './inference';
+import { HOSTED, defaultSystemOne } from './hosted';
 import { fightExprTags } from './fight';
 import {
 	inTalkRange,
@@ -57,25 +60,50 @@ const STALL_VERBS = new Set(['wait', 'wander', 'say', 'set_status']);
  * One that scores `choose` picks with it, or with the menu's decision model. In the browser, the one model on the
  * GPU answers as many thinks at once as parallel thinkers allows, and adding it starts its download.
  */
-export function addModels<TCtx>(director:ArcDirector<TCtx>, p:Prefs = prefs()):ArcDirector<TCtx> {
+export function addModels<TCtx>(director:ArcDirector<TCtx>, p:Prefs = prefs(), sampling:SamplingSource = 'menu'):ArcDirector<TCtx> {
 	if (p.inference === 'browser' && p.browserModel) {
 		// One download for all three; the picker shows it.
-		const main = { model: p.browserModel, ...menuModel(p) };
-		showDownload(p.browserModel, director.addBrowserModel('main', main));
+		const main = { model: p.browserModel, ...menuModel(p, sampling) };
+		// A loading bar over the game while it downloads (with Cancel), as well as the picker's.
+		director.addBrowserModel('main', main);
+		showDownload(p.browserModel, BrowserProvider.shared.download(p.browserModel));
 		director.addBrowserModel('quick', { ...main, thinking: false });
-		director.addBrowserModel('local', { ...main, thinking: false, decision: true });
+		const decider = decisionModelOf(p);
+		// Skaldic Laya is a System One on its own engine (the library sees to it); without it the chat model scores.
+		director.addBrowserModel('local', decider || { ...main, thinking: false, decision: true });
 		return director;
 	}
-	const main:ModelSpec = { inference: 'lmstudio', id: p.model || undefined, ...menuModel(p) };
+	const main:ModelSpec = { inference: 'lmstudio', id: p.model || undefined, ...menuModel(p, sampling) };
 	return director
 		.addModel('main', main)
 		.addModel('quick', { ...main, thinking: false })
-		.addModel('local', { ...main, id: p.decisionModel || main.id, thinking: false, decision: true });
+		.addModel('local', { ...main, id: decisionModelOf(p) || main.id, thinking: false, decision: true });
 }
 
-/** How the game's minds think, whatever world they are in: the menu's models (LM Studio's or the browser's), its arc format, and repairs. Play and the arc bench share it. */
-export function addThinking<TCtx>(director:ArcDirector<TCtx>, p:Prefs = prefs()):ArcDirector<TCtx> {
-	return addModels(director.addLMStudioInference({ baseURL: '/inference/v1', load: LM_STUDIO_LOAD }), p)
+/**
+ * How the game's minds think, whatever world they are in: the menu's models (LM Studio's or the browser's), its arc
+ * format, and repairs. Play and the arc bench share it; a bench samples as each model's makers say.
+ */
+export function addThinking<TCtx>(director:ArcDirector<TCtx>, p:Prefs = prefs(), sampling:SamplingSource = 'menu'):ArcDirector<TCtx> {
+	return addModels(director.addLMStudioInference({ baseURL: '/inference/v1', load: LM_STUDIO_LOAD }), p, sampling)
+		.withArcFormat(p.arcFormat)
+		.withRepair({ retries: ARC_RETRY_CAP });
+}
+
+/**
+ * xAI's models, through the dev server's `/xai` proxy, which adds the key (`HOSTED.xai`). They reason before every
+ * answer, at length, so they get room for it.
+ */
+export const XAI = new HttpProvider({ baseURL: '/xai', timeoutMs: 600_000, maxTokens: 16384, enableThinking: true });
+
+/** As {@link addThinking}, with xAI's `id` as every model, as the benches set it beside the local ones. */
+export function addXAIThinking<TCtx>(director:ArcDirector<TCtx>, id:string, p:Prefs = prefs()):ArcDirector<TCtx> {
+	const main:ModelSpec = { inference: 'xai', id, thinking: true, maxParallel: p.maxParallel };
+	return director
+		.addInference('xai', XAI)
+		.addModel('main', main)
+		.addModel('quick', { ...main, thinking: false })
+		.addModel('local', { ...main, thinking: false, decision: true })
 		.withArcFormat(p.arcFormat)
 		.withRepair({ retries: ARC_RETRY_CAP });
 }
@@ -90,18 +118,20 @@ export class GameHost {
 	public readonly scene:string;
 	public hooks:SceneHooks<GameHost> = {};
 	public arc:ArcDirector<CharacterCtx> | null = null;
-	/** Shared kit for this scene. Mutate `verbs` / `tools`; fetched every tick. */
-	public kit:Kit = { verbs: [...GAME_VERBS] };
 	public readonly doorOpen = new Map<string, boolean>();
 	public readonly chestOpen = new Map<string, boolean>();
 	public readonly labels = new Map<string, { text:string; until:number }>();
 	public logSeq = 0;
 	public readonly chat:HudChatLine[];
 	public readonly log:HudAiLogEntry[];
+	/** The scene's rooms: each with a `memory` puts it on the mind of whoever stands in it. */
+	public readonly rooms:RoomDef[];
 	/** Tags of the player's character, from the scene (a fight role). */
 	private readonly _playerTags:string[];
 	private _disposed = false;
 	private _starting = false;
+	/** Its director's start has resolved: its servers and models answered. Laws and moves run from before then. */
+	private _started = false;
 	private _nextTryTimestamp = 0;
 
 	constructor(
@@ -112,6 +142,7 @@ export class GameHost {
 			ambient?:string;
 			scene?:string;
 			playerTags?:string[];
+			rooms?:RoomDef[];
 		} = {},
 	) {
 		this.world = world;
@@ -120,11 +151,11 @@ export class GameHost {
 		this.log = log;
 		this.scene = opts.scene ?? '';
 		this._playerTags = opts.playerTags ?? [];
+		this.rooms = opts.rooms ?? [];
 		this.ambient = opts.ambient ?? 'A damp stone hall of the dungeon.';
 		this.talk = new TalkNet({
 			inRange: (speakerID, listenerID) => inTalkRange(world, speakerID, listenerID),
 			others: (speakerID) => talkOthers(world, speakerID),
-			canSee: (a, b) => hostCanSee(world, a, b),
 			clearHear: (a, b) => canHearClearly(world, a, b),
 			hears: (speakerID, listenerID) => this.mayHear(speakerID, listenerID),
 			names: (id) => talkNames(this, id),
@@ -135,11 +166,24 @@ export class GameHost {
 	}
 
 	public configure(director:ArcDirector<CharacterCtx>):ArcDirector<CharacterCtx> {
-		// Both System Ones, named as the menu names them; the menu picks the default, a scene may assign either.
-		addThinking(director)
-			.addJevInference({ name: 'jev' })
-			.setDefaultSystemOne(systemOneName(prefs().systemOne));
-		return addBodyVerbs(director)
+		// Both System Ones, named as the menu names them; the menu picks the default, a scene may assign either. Jev
+		// only with its key on the dev server (`HOSTED`).
+		addThinking(director);
+		if (HOSTED.jev) {
+			director.addJevInference({ name: 'jev' });
+		}
+		director.setDefaultSystemOne(defaultSystemOne(prefs().systemOne));
+		for (const room of this.rooms) {
+			const { minX, maxX, minZ, maxZ } = roomBounds(room);
+			const box = { from: [minX, minZ], to: [maxX, maxZ] };
+			if (room.memory) {
+				director.addRegion(room.name, { ...box, memory: room.memory });
+			}
+			for (const [id, memory] of Object.entries(room.memories ?? {})) {
+				director.addRegion(`${room.name}:${id}`, { ...box, who: ({ character }) => idOf(character) === id, memory });
+			}
+		}
+		return director
 			.withCurrency('gold')
 			.withMindDefaults({ skipHeartbeat: true })
 			.withPriorityQueue({
@@ -149,6 +193,9 @@ export class GameHost {
 				heartbeatStart: 2,
 				heartbeatMin: 2,
 				mayThink: (ctx) => {
+					if (this.hooks.mayThink?.(this, ctx.mindID) === false) {
+						return false;
+					}
 					const collective = this.arc?.collective(ctx.mindID);
 					if (collective) {
 						return collective.characters.some((c) => isLiving(findObject(this.world, c.id)));
@@ -157,8 +204,10 @@ export class GameHost {
 					if (!isLiving(go)) {
 						return false;
 					}
+					// An idle mind waits for its watches to wake it; one with none has only its heartbeat.
 					if (ctx.reason === 'heartbeat') {
-						return !!ctx.arc;
+						const persona = this.arc?.character(ctx.mindID)?.persona;
+						return !!ctx.arc || (!!persona && Object.keys({ ...persona.watches, ...persona.pinnedWatches }).length === 0);
 					}
 					return true;
 				},
@@ -226,7 +275,7 @@ export class GameHost {
 	);
 
 	public async start():Promise<void> {
-		if (this._disposed || !this.arc || this._starting || this.arc.ready || !this.world.arcDirectorOn) {
+		if (this._disposed || !this.arc || this._starting || this._started || !this.world.arcDirectorOn) {
 			return;
 		}
 		this._starting = true;
@@ -241,6 +290,7 @@ export class GameHost {
 		finally {
 			this._starting = false;
 		}
+		this._started = true;
 		setPrefs({ model: this.arc.modelID() });
 		for (const mind of this.arc.minds()) {
 			this.wireVoice(mind);
@@ -286,7 +336,7 @@ export class GameHost {
 		this.hooks.checkBargain?.(this);
 		this.hooks.tickMarketNPC?.(this);
 		publishAiLog(this.log);
-		if (!this.arc?.ready && Time.time >= this._nextTryTimestamp) {
+		if (!this._started && Time.time >= this._nextTryTimestamp) {
 			void this.start();
 		}
 	}

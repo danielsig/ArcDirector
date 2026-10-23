@@ -4,6 +4,7 @@ packages:
   - kindling
   - control
   - mcp
+  - training
 
 # Install scripts the browser never needs: transformers.js also pulls in its Node runtime.
 allowBuilds:

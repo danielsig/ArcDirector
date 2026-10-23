@@ -143,6 +143,11 @@ watch(
 					>×</button>
 				</label>
 				<span class="hint">~ to close</span>
+				<button
+					type="button"
+					aria-label="Close"
+					@click="hud.aiLogOpen = false"
+				>×</button>
 			</div>
 			<div ref="logEl" class="rows">
 				<div v-if="rows.length === 0" class="empty">
@@ -264,6 +269,19 @@ watch(
 	font-size: 12px;
 	font-weight: 400;
 	opacity: 0.6;
+}
+
+.head > button {
+	width: 22px;
+	padding: 0;
+	border: 0;
+	background: transparent;
+	color: var(--ink);
+	cursor: pointer;
+	font: inherit;
+	font-size: 18px;
+	line-height: 1;
+	opacity: 0.7;
 }
 
 .rows {

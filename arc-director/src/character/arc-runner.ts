@@ -1,4 +1,5 @@
 import { CHOOSE_VERB, FOCUS_EDIT_VERBS, MIND_ONLY_VERBS, STOCK_MOVE_VERBS, WATCH_EDIT_VERBS, type VerbRegistry } from '../arc/stock-verbs.js';
+import { formatStep } from '../arc/parse.js';
 import { isArc, type Arc, type ArcResult, type Step } from '../arc/types.js';
 import type { Catalog, ExprEntity } from '../expr/types.js';
 import { cloneEntity, prevMeFromJSON } from '../expr/prev.js';
@@ -6,6 +7,7 @@ import {
 	DEFAULT_MAX_LAWS,
 	dropLaw,
 	lawFromSpec,
+	lawGroup,
 	upsertLaw,
 	type Law,
 	type LawSpec,
@@ -13,6 +15,7 @@ import {
 import {
 	runArc,
 	createArcSession,
+	holding,
 	DEFAULT_COOLDOWN,
 	type ArcHandler,
 	type ArcPick,
@@ -91,12 +94,16 @@ export abstract class ArcRunner<TCtx = unknown> {
 	/** The kit as of the last refresh. */
 	public currentKit:Kit = NO_KIT;
 	public lastResult:ArcResult | undefined;
+	/** The law whose arc runs now, by name; none for an arc its mind or host gave it. */
+	private _law:string | undefined;
 	/** How the current program is going, step by step and pick by pick. A new program clears it. */
 	public readonly record = new ArcRecord();
 	/** The arc running now, or parked on its `when`s. */
 	public arc:Arc | null = null;
 	/** The verb of the step running now; `''` between steps. */
 	public verb = '';
+	/** What it is at, in a kit's words (`gathering Wood`, `holding Ford`): empty when no kit says. `doing(u, …)` reads it. */
+	public work = '';
 	/** The step `runStep` last ran. The mind reads it when the arc ends. */
 	public lastStep:Step | undefined;
 	/** Non-movement verbs this runner has finished. A reply wait ends when this changes. */
@@ -107,6 +114,12 @@ export abstract class ArcRunner<TCtx = unknown> {
 	public prevMe:ExprEntity | undefined;
 	public liveArc = false;
 	protected now = 0;
+	/** Who waits for game time to move on, woken by the next `stamp` that moves it. */
+	private _timeWaiters:(()=>void)[] = [];
+	/** Set while a new program waits for the step running now to end: told how it went, or `undefined` if it did not end clean. */
+	private _handoff:((out:ArcResult | undefined)=>void) | undefined;
+	/** Counts programs begun, so one that waited on a handoff can tell a later one took over. */
+	private _programs = 0;
 
 	/** The mind that thinks for this runner, or null when the host drives it. */
 	public abstract get mind():Mind<TCtx> | null;
@@ -129,7 +142,10 @@ export abstract class ArcRunner<TCtx = unknown> {
 		this.catalog = opts.catalog;
 		this.kit = opts.kit;
 		for (const spec of opts.laws ?? []) {
-			this.addLaw(spec, spec.pinned);
+			const group = lawGroup(spec.name ?? '');
+			if (!this.addLaw(spec, spec.pinned) && this.laws.filter((law) => lawGroup(law.name) === group).length >= this.maxLaws) {
+				throw new Error(`${this.id}: law ${spec.name ?? spec.watch} is past its ${this.maxLaws} laws (maxLaws)`);
+			}
 		}
 	}
 
@@ -245,6 +261,8 @@ export abstract class ArcRunner<TCtx = unknown> {
 				watch: law.watch,
 				arc: law.arc,
 				rank: i,
+				hold: law.hold,
+				holdBreak: law.holdBreak,
 			});
 		});
 		return out;
@@ -252,6 +270,16 @@ export abstract class ArcRunner<TCtx = unknown> {
 
 	public beginLaw(handler:ArcHandler, sessionOpts?:ArcSessionOpts):void {
 		if (this.arcSession && (this.liveArc || this.arcSession.parked)) {
+			const finishing = this.finishStepOf(handler.arc);
+			if (finishing) {
+				void finishing.then((first) => {
+					const rest = handler.arc.slice(1);
+					if (first && rest.length > 0) {
+						void this.enact(rest, handler, sessionOpts);
+					}
+				});
+				return;
+			}
 			this.arcSession.pending = { kind: 'preempt', handler };
 			this.arcSession.token += 1;
 			this.abortArc?.(this.id);
@@ -261,24 +289,63 @@ export abstract class ArcRunner<TCtx = unknown> {
 	}
 
 	public stamp(now:number):void {
+		if (now === this.now) {
+			return;
+		}
 		this.now = now;
+		const waiters = this._timeWaiters;
+		this._timeWaiters = [];
+		for (const wake of waiters) {
+			wake();
+		}
 	}
 
-	/** Run an arc (world verbs via `execute`). A new arc replaces the one running. */
+	/**
+	 * Run an arc (world verbs via `execute`). A new arc replaces the one running; a program (no `handler`) first waits
+	 * out a law still inside its `hold`, since nothing but the law's own end stops it before then.
+	 * `forceReplace` false: when the step running now is the arc's first step (same verb, same args), it is
+	 * not restarted. It ends, and the arc goes on from its second step. A later program that takes over meanwhile wins.
+	 */
 	public async enact(
 		arc:Arc,
 		handler?:ArcHandler,
 		sessionOpts?:ArcSessionOpts,
+		forceReplace = false,
 	):Promise<ArcResult> {
+		const program = ++this._programs;
+		if (!forceReplace) {
+			const finishing = this.finishStepOf(arc);
+			if (finishing) {
+				const first = await finishing;
+				if (program !== this._programs) {
+					return { ok: false, preempted: true, verb: arc[0]?.verb ?? '' };
+				}
+				if (first) {
+					arc = arc.slice(1);
+				}
+			}
+		}
+		while (!handler && this.arcSession && holding(this.arcSession)) {
+			await new Promise<void>((resolve) => {
+				this._timeWaiters.push(resolve);
+			});
+		}
 		this.replaceProgram();
 		this.record.clear();
 		this.liveArc = true;
 		this.arc = arc;
+		// Busy is at its first step from the start, before that step runs: `doing(me, …)` never reads busy at nothing.
+		this.verb = arc[0]?.verb ?? '';
+		// A law's handler has a law as its source; a hoisted `when`'s is its step.
+		this._law = handler && !('verb' in handler.source) ? handler.source.name : undefined;
 		this.verbIndex = 0;
 		this.onArcStart(arc);
 		const session = createArcSession({
 			verbs: this.verbs,
 			now: () => this.now,
+			nextTime: () => new Promise((resolve) => {
+				this._timeWaiters.push(resolve);
+			}),
 			catalog: () => this.catalog?.(),
 			abortHost: () => this.abortArc?.(this.id),
 			pick: this.pick?.(),
@@ -296,6 +363,18 @@ export abstract class ArcRunner<TCtx = unknown> {
 				// A step of a program already replaced is not the new program's.
 				if (this.arcSession === session) {
 					this.record.note(out);
+				}
+				const handoff = this._handoff;
+				if (handoff) {
+					this._handoff = undefined;
+					// The step ended clean: the waiting program takes over now, before this one's next step starts.
+					if (this.arcSession === session && out.ok && !session.pending) {
+						this.replaceProgram();
+						handoff(out);
+					}
+					else {
+						handoff(undefined);
+					}
 				}
 				return out;
 			}, { session, asHandler: handler });
@@ -326,8 +405,27 @@ export abstract class ArcRunner<TCtx = unknown> {
 		}
 	}
 
+	/**
+	 * When the step running now is `arc`'s first: the result of that step once it ended and this program was stopped
+	 * there (`undefined` if it did not end clean, so `arc` runs whole). `undefined` when there is nothing to wait for.
+	 */
+	private finishStepOf(arc:Arc):Promise<ArcResult | undefined> | undefined {
+		const session = this.arcSession;
+		const running = this.verb ? this.lastStep : undefined;
+		if (!session || !this.liveArc || session.parked || !running || !arc[0] || formatStep(running) !== formatStep(arc[0])) {
+			return undefined;
+		}
+		this._handoff?.(undefined);
+		return new Promise((resolve) => {
+			this._handoff = resolve;
+		});
+	}
+
 	/** Stop the running arc, if any, and the host's part of it. */
 	public replaceProgram():void {
+		const handoff = this._handoff;
+		this._handoff = undefined;
+		handoff?.(undefined);
 		if (this.arcSession) {
 			this.arcSession.token += 1;
 			this.arcSession.pending = { kind: 'abort' };
@@ -341,9 +439,12 @@ export abstract class ArcRunner<TCtx = unknown> {
 		this.onArcEnd();
 	}
 
-	/** One step outside an arc, for hosts that run arcs themselves. */
-	public async perform(step:Step, ctx:TCtx | undefined = this.context()):Promise<ArcResult> {
-		return this.runStep(step, ctx);
+	/**
+	 * One step outside an arc, for hosts that run arcs themselves. `granted`: run it though the kit lacks it, as an
+	 * alias's own step does (granting the alias grants what it runs).
+	 */
+	public async perform(step:Step, ctx:TCtx | undefined = this.context(), granted = false):Promise<ArcResult> {
+		return this.runStep(step, ctx, granted);
 	}
 
 	public toJSON():ArcRunnerJSON {
@@ -374,9 +475,9 @@ export abstract class ArcRunner<TCtx = unknown> {
 	}
 
 	/** One step of a running arc: mind verbs through the mind, `say` through talk, the rest through the host. */
-	protected async runStep(step:Step, ctx:TCtx | undefined):Promise<ArcResult> {
+	protected async runStep(step:Step, ctx:TCtx | undefined, granted = false):Promise<ArcResult> {
 		this.lastStep = step;
-		if (!this.activeVerbs().has(step.verb)) {
+		if (!granted && !step.granted && !this.activeVerbs().has(step.verb)) {
 			// Its kit grants it, but it has no body to run it with.
 			return !this.embodied && this.currentKit.verbs.includes(step.verb)
 				? bodiless(step.verb)
@@ -433,11 +534,20 @@ export abstract class ArcRunner<TCtx = unknown> {
 		}
 	}
 
-	/** The arc finished. A voice's mind turns this into an event for its next think. */
+	/**
+	 * The arc finished. A voice's mind turns this into an event for its next think; an arc one of its laws started
+	 * goes to the mind as that law's result instead.
+	 */
 	protected onArcResult(result:ArcResult):void {
 		this.lastResult = result;
 		this.liveArc = false;
-		if (this.isVoice) {
+		if (!this.isVoice) {
+			return;
+		}
+		if (this._law) {
+			this.mind!.ingestLawResult(this._law, result);
+		}
+		else {
 			this.mind!.ingestResult(result);
 		}
 	}

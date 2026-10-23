@@ -22,6 +22,7 @@ function restore<TCtx>(json:CharacterJSON, deps:Omit<SoloOptions<TCtx>, 'id'>) {
 	return soloCharacter<TCtx>({ ...deps, id: json.id }, json);
 }
 import type { WatchInput } from './types.js';
+import type { ArcFormat } from '../mind/types.js';
 
 /** Every stock verb: registered, and in the kit. */
 function stockVerbs():{ verbs:VerbRegistry; kit:{ verbs:readonly string[] } } {
@@ -81,6 +82,7 @@ function agentOf(opts:{
 	pinnedWatches?:WatchInput;
 	watchesWritable?:boolean;
 	toolRoundCap?:number;
+	arcFormat?:ArcFormat;
 	provider:FakeProvider;
 	catalog:()=>Catalog;
 }):Character<Ctx> {
@@ -96,6 +98,7 @@ function agentOf(opts:{
 		pinnedWatches: opts.pinnedWatches,
 		watchesWritable: opts.watchesWritable,
 		toolRoundCap: opts.toolRoundCap ?? 0,
+		arcFormat: opts.arcFormat,
 		heartbeat: 0,
 		model: 'fake',
 	});
@@ -334,12 +337,13 @@ describe('agent watches', () => {
 				toolCalls: [],
 			};
 		});
-		const a = agentOf({ provider, catalog: () => cat, toolRoundCap: 1 });
+		// Native tool calls, as a model asked for plain JSON makes them.
+		const a = agentOf({ provider, catalog: () => cat, toolRoundCap: 1, arcFormat: 'json' });
 		const arc = await a.mind!.tick(1);
 		assert.ok(arc);
 		assert.equal(observed, true);
 		observed = false;
-		const b = agentOf({ provider, catalog: () => cat, toolRoundCap: 0 });
+		const b = agentOf({ provider, catalog: () => cat, toolRoundCap: 0, arcFormat: 'json' });
 		await b.mind!.tick(2);
 		assert.equal(observed, false);
 	});

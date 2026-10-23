@@ -86,7 +86,7 @@ describe('prompt split', () => {
 		assert.match(system, /outlives the program and needs no think/);
 		assert.match(system, /"then" ends a step: "if_ok" \(the default: the next step only if this one succeeded\), "always" \(the next step whatever happened\) or "if_failed" \(the rest are its fallback\)/);
 		assert.match(system, /"verb":"pick_up"/);
-		assert.match(system, /pick_up\(item\) — goes to it first/);
+		assert.match(system, /pick_up\(item, from\?\) — goes to it first/);
 		assert.match(system, /use\(item=TheItem, target=TheThing\)/);
 		assert.equal(system.includes('doorway'), false);
 		assert.equal(system.includes('CottageKey'), false);
@@ -98,7 +98,7 @@ describe('prompt split', () => {
 		assert.match(system, /❌ = you/);
 		assert.equal(system.includes('Goals (highest first)'), false);
 		assert.equal(system.includes('Pinned memories'), false);
-		assert.ok(system.length < 5300, `standing prefix ${system.length} chars`);
+		assert.ok(system.length < 5340, `standing prefix ${system.length} chars`);
 		const wanderJson = system.match(/\{"steps":\[\{"verb":"wander","until":"[^"]*"\}\]\}/);
 		assert.ok(wanderJson);
 		assert.equal(parseArc(wanderJson[0], verbs)[0].verb, 'wander');
@@ -197,6 +197,13 @@ describe('prompt split', () => {
 		assert.match(hint, /see_map is a tool, not a verb/);
 		assert.match(hint, /Never write see_map\(\.\.\.\) in the Arc/);
 		assert.equal(hint.includes('unknown verb'), false);
+	});
+
+	it('tells a bodiless mind that a verb of its units runs through issue', () => {
+		const hive = registerStockCollectiveVerbs(registerStockVerbs(new VerbRegistry()), 'issue').view(['issue', 'wait']);
+		const hint = arcRepairHint("unknown verb 'say'", 'json', [], hive);
+		assert.match(hint, /say is for your units, run through issue\(who, arc=say\(…\)\)/);
+		assert.match(arcRepairHint("unknown verb 'dance'", 'json', [], hive), /not a valid Arc/);
 	});
 
 	it('discards verb-less prose on repair', () => {
@@ -325,6 +332,12 @@ describe('prompt split', () => {
 		assert.match(seeMapHint('🎯'), /🎯 = you/);
 	});
 
+	it('tells recall from observe when observe is offered', () => {
+		const system = stablePrefix('Guard', identity, verbs, { canRecallKnowledge: true, canObserve: true, includeWatches: true });
+		assert.match(system, /recall answers what you know; observe answers what is true in the world now/);
+		assert.match(system, /observe tool evaluates any expr on the world now, even past sight/);
+	});
+
 	it('teaches recall for world knowledge without stuffing articles into the prefix', () => {
 		const system = stablePrefix('Guard', identity, verbs, {
 			canSeeMap: true,
@@ -338,7 +351,7 @@ describe('prompt split', () => {
 		assert.equal(system.includes('There is no Forest'), false);
 		assert.equal(system.includes('Being surrounded'), false);
 		assert.equal(system.includes('filter("Tree"), never filter("trees")'), false);
-		assert.ok(system.length < 5000, `standing prefix ${system.length} chars`);
+		assert.ok(system.length < 5100, `standing prefix ${system.length} chars`);
 		const knowledgeOnly = stablePrefix('Guard', identity, verbs, { canRecallKnowledge: true });
 		assert.match(knowledgeOnly, /Call recall, or wander\(until\)/);
 		assert.match(knowledgeOnly, /Never ask anyone until recall cannot find it/);
@@ -511,5 +524,31 @@ describe('choose in prompts', () => {
 		const names = ['say', 'wander', 'go_to', 'earshot'];
 		assert.equal(docsFor(earshot, 'earshot', new Set(['wait', 'earshot']), names).includes('say'), false);
 		assert.match(docsFor(earshot, 'earshot', new Set(['say', 'earshot']), names), /say\(to\)/);
+	});
+});
+
+describe('compact prompts', () => {
+	const verbs = registerStockVerbs(new VerbRegistry()).add('smite', { args: { target: 'id' }, help: '2 damage, 6 paces' });
+	const identity = { role: 'Watcher', traits: ['alert'] };
+	const opts = { includeWatches: true, watchesWritable: true, canObserve: true, canRecallKnowledge: true, tools: ['recall', 'observe'], systemNote: 'The north is at war.' };
+
+	it('leaves out the standing rules and the stock verbs\' help, and keeps what this game says', () => {
+		const full = stablePrefix('Fern', identity, verbs, opts);
+		const compact = stablePrefix('Fern', identity, verbs, { ...opts, style: 'compact' });
+		assert.ok(compact.length < full.length / 2, `${compact.length} of ${full.length}`);
+		for (const rule of ['Watch language', 'recall answers', 'Your name, role, and pinned memories', 'stays within distance until your next arc']) {
+			assert.match(full, new RegExp(rule));
+			assert.equal(compact.includes(rule), false, rule);
+		}
+		assert.match(compact, /smite\(target\) — 2 damage, 6 paces/);
+		assert.match(compact, /follow\(target, distance\?\)/);
+		assert.match(compact, /Tools: recall, observe\./);
+		assert.match(compact, /\nYou are Fern\. Role: Watcher\.\nThe north is at war\.\nTraits: alert\.$/);
+	});
+
+	it('shortens the volatile headers and drops their standing hints', () => {
+		const block = volatileBlock({ recent: ['saw Ash'], conversation: ['Ash: hi'], watchesWritable: true, sightFocusWritable: true, compact: true });
+		assert.match(block, /^Short-term memory:\n- saw Ash\n\nCurrent Conversation:\nAsh: hi$/);
+		assert.equal(conversationBlock(['Ash: hi']).startsWith(CONVERSATION_HEADER), true);
 	});
 });

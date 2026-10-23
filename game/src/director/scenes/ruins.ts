@@ -1,63 +1,64 @@
 import { Time, type GameObject } from '@arc-director/kindling';
-import { ArcDirector, DEFAULT_VERB_INSTRUCTIONS, type Character, type Collective, type CollectiveSpec, type Kit, type MemoryDraft, type StandingChoice } from 'arc-director';
+import { ArcDirector, DEFAULT_VERB_INSTRUCTIONS, type Character, type Collective, type CollectiveSpec, type Kit, type LawSpec, type MemoryDraft, type StandingChoice } from 'arc-director';
 import { CharacterMotor } from '../../characters/CharacterMotor';
-import { Celebrating } from '../../engine/components';
+import { Celebrating, Vitals } from '../../engine/components';
+import type { HudGoal } from '../../ui/hudModel';
+import type { SceneGoals } from '../types';
 import type { GameHost, CharacterCtx } from '../adapter';
-import { addFightVerbs } from '../verbs';
-import { ATTACKS, BACK_STANDOFF, BLOCK, FIGHT_WALK, SPELL_RANGE, attackVerbFor, formatFightRules, seenInFight } from '../fight';
+import { doRank, fightVerbs, markReach } from '../verbs';
+import { SIGHT, lookWorld } from '../perception';
+import { ATTACKS, BACK_STANDOFF, BLOCK, FIGHT_WALK, SPELL_RANGE, formatFightRules, seenInFight } from '../fight';
+import { HOSTED } from '../hosted';
 import { idOf, findObject, isLiving } from '../names';
+
+/** Whether its character sees an enemy: in sight range with nothing in the way. `others` alone is everyone on the map. */
+const ENEMY_IN_SIGHT = `some(others.filter("enemy").nearby(${SIGHT}))`;
+
+/**
+ * A captain's own two laws, on from the start, so its thinks are all orders: it heals the hurt while no enemy is
+ * within knife range, and else keeps behind its front line while it sees an enemy.
+ */
+const CAPTAIN_LAWS:LawSpec[] = [
+	{
+		name: 'mend',
+		watch: `(isHurt(me) || some(allUnits.filter(u => isHurt(u)))) && !isNear(me, others.filter("enemy"), ${BACK_STANDOFF})`,
+		arc: 'loop(heal())',
+		pinned: true,
+	},
+	{
+		name: 'keep_back',
+		watch: `${ENEMY_IN_SIGHT} && (some(allUnits.filter("Knight")) || some(allUnits.filter("Blade")) || isNear(me, others.filter("enemy"), ${BACK_STANDOFF}))`,
+		arc: 'loop(rank())',
+		pinned: true,
+	},
+];
 
 /** What a party's mind may write. */
 const FIGHT:Kit = {
-	verbs: ['issue', 'when', 'law', 'unlaw', 'loop', 'choose', 'smite', 'heal', 'attack', 'rank', 'say'],
+	verbs: ['issue', 'when', 'law', 'unlaw', 'loop', 'go_to', 'choose', 'smite', 'heal', 'attack', 'rank', 'say'],
 	tools: [],
 };
 
-/** Nearest living Healer of the unit's own party. A bare `Healer` is a tag, not a name anyone sees. */
-const ALLY_HEALER = 'others.filter(u => u is "Healer" && !(u is "enemy")).minBy(u => distance(me, u))';
+/**
+ * What each role fights with besides the party's own verbs (kept, so a unit that takes command can command): walking,
+ * its own attacks, and for the front line block and protect. The roster then says what each really does.
+ */
+function roleKit(...verbs:string[]):Kit {
+	return { verbs: [...FIGHT.verbs, ...verbs], tools: [] };
+}
 
-const MEND_LAW = {
-	name: 'mend',
-	who: 'me',
-	watch: `me is "Healer" && (isHurt(me) || some(allUnits.filter(u => isHurt(u)))) && !isNear(me, others.filter("enemy"), ${BACK_STANDOFF})`,
-	arc: 'loop(heal())',
-	pinned: true,
+const ROLE_KITS = {
+	Knight: roleKit('cleave', 'stab', 'block', 'protect'),
+	Blade: roleKit('stab', 'slice', 'block', 'protect'),
+	Archer: roleKit('shoot'),
+	Witch: roleKit('hex'),
 };
-
-const GUARD_LAW = {
-	name: 'guard',
-	who: 'units.filter("Knight")',
-	watch: 'some(allUnits.filter("Healer")) && some(allUnits.filter(u => isHurt(u)))',
-	arc: 'loop(protect())',
-	pinned: true,
-};
-
-const STRIKE_LAW = {
-	name: 'strike',
-	who: 'me',
-	watch: 'some(others.filter("enemy")) && !(me is "Healer")',
-	arc: 'loop(attack())',
-	pinned: true,
-};
-
-const RANK_LAW = {
-	name: 'rank',
-	who: 'me',
-	watch: `me is "Healer" && some(others.filter("enemy")) && (some(allUnits.filter("Knight")) || some(allUnits.filter("Blade")) || isNear(me, others.filter("enemy"), ${BACK_STANDOFF}))`,
-	arc: 'loop(rank())',
-	pinned: true,
-};
-
-const PARTY_LAWS = [MEND_LAW, GUARD_LAW, STRIKE_LAW, RANK_LAW];
 
 /** Only while reasoning is off. With it on, the library's own think line stands. */
-const NO_THINK = 'IMPORTANT! DO NOT THINK! RESPOND IMMEDIATELY! Thinking is dangerous. The enemy is very likely already killing your units while you think. Do not wait for another think.';
+const NO_THINK = 'Answer at once: the fight goes on while you think.';
 
-const NEAREST = 'others.filter("enemy").minBy(u => distance(me, u))';
 /** The nearest enemy close enough to block, or no one: a `block` choice only exists while it pays. */
 const CLOSE_ENEMY = `others.filter(u => u is "enemy" && distance(me, u) < ${BLOCK.near}).minBy(u => distance(me, u))`;
-/** The most hurt ally, or no one: `guard` only exists while someone needs it. */
-const HURT_ALLY = 'others.filter(u => !(u is "enemy") && isHurt(u)).minBy(u => u.hp)';
 
 /** The lowest-hp enemy within a step of `verb`'s reach, or no one: the choice that finishes kills without walking. */
 function lowestInReach(verb:string):string {
@@ -65,17 +66,16 @@ function lowestInReach(verb:string):string {
 }
 
 /**
- * A unit's own program whenever its commander has issued it nothing: its party's System One keeps picking whom to
- * hit from live hp and distance. `finish` and `guard` only exist while they have a target, so focus fire never
- * walks past someone in reach and a Knight never guards the unhurt.
+ * A unit's own program whenever its commander has issued it nothing: it defends, and never attacks or advances. A
+ * Knight or Blade raises its guard at an enemy already up close (`block` only exists while one is there), else stands
+ * where it is; an Archer or Witch keeps behind its front line, clear of the enemy (`rank`, which for them only ever
+ * pulls back). Moving on the enemy and attacking are its captain's to order.
  */
 function roleChoice(role:'Knight' | 'Blade' | 'Archer' | 'Witch'):StandingChoice {
-	if (role === 'Knight') {
-		return { goal: 'Hold the line: hit the nearest; guard a hurt ally; block one up close', nearest: `cleave(${NEAREST})`, guard: `protect(${HURT_ALLY})`, block: `block(${CLOSE_ENEMY})` };
+	if (role === 'Knight' || role === 'Blade') {
+		return { goal: 'Defend: block an enemy up close', block: `block(${CLOSE_ENEMY})` };
 	}
-	const verb = attackVerbFor(role)!;
-	const block = role === 'Blade' ? { block: `block(${CLOSE_ENEMY})` } : {};
-	return { goal: 'Kill fast: finish the lowest hp in reach', finish: `${verb}(${lowestInReach(verb)})`, nearest: `${verb}(${NEAREST})`, ...block };
+	return { goal: 'Stay alive: keep behind your line', back: 'rank()' };
 }
 
 /** A change of tactics in the units' own idiom, laid out as blocks. Gemma copies this; keep it short. */
@@ -84,37 +84,33 @@ issue(
 	who=units.filter("Archer"),
 	arc=loop(
 		choose(
-			"Kill their Healer first",
+			"Kill their Healer first or finish off the weakest enemy. There are {X} friends and {Y} enemies left. Healer is {Z} units away. Weakest enemy is {W} units away.",
 			healer=shoot(EnemyHealer),
 			finish=shoot(${lowestInReach('shoot')}),
 		),
 	),
 )`;
 
-/** Standing 5v5 doctrine. Every name here is one the commander really sees. */
+/** Standing 5v5 doctrine: how to command, once each. Every name here is one the commander really sees. */
 const FIGHT_DOCTRINE = [
-	'Teamfight: Knight and Blade hold a line on the nearest. Archer, Witch, and Healer sit behind that line and pick among enemies they can hit. Healer: stay back, heal from range, never walk toward an enemy. Sight is ~10s stale.',
-	'Your units start with no program: until you issue one, they only follow their laws. A fast model re-picks each loop(choose(...)) you issue before every swing, from live hp and distance, among the choices you give it.',
-	'You are the tactician. Every think, read the enemy and how each unit program is going, then issue the tactic that wins this moment: focus fire on their Healer or the weakest, send an Archer to go_to a Pillar, Tree or Boulder for a clear shot, peel for your Healer with protect, pull the hurt back. Give it as loop(choose(...)) whose choices are the new options, like the Example. Never a fixed target outside choose. A program that keeps failing gets replaced; one that works stays. When it ends, those units fall back to their laws.',
-	`Never a weak allUnits. Optional:\nlaw(\n\twho=units,\n\twatch=me.hp/me.maxHP<0.25,\n\tarc=go_to(${ALLY_HEALER}),\n\tname=lastStand,\n)\n`,
-	'Arrows need a clear line of sight past pillars, trees, walls, and other characters; spells (hex, heal) through cover are weaker. Flank around cover for a better view of the target.',
-	'protect(target?) stands between an ally and the threat, then attacks that threat. Peeling is also protect: when a rival isNear a precious ally, attack that same rival.',
-	`Knight and Blade block when protecting: give them a block choice beside protect, for an enemy up close or attacking, like guard=block(${CLOSE_ENEMY}). Block has a cooldown; never loop it alone.`,
+	'This fight is fast and to the death: every second you wait, your side bleeds. Never wait and never think twice about the same thing: decide and issue.',
+	'Your units never move on the enemy or attack unless you order it: on their own they only stand, block, and keep the back line back. Order every unit to attack at once, and keep them attacking: all on their Healer or their weakest, or a Knight to protect a hurt ally. You already heal and keep back by your own laws.',
+	'Each think, read the roster: re-issue a unit that is idle or keeps failing; leave one that works. Give a program as loop(choose(...)) like the Example, so it never ends; a fast model re-picks each swing from live hp and distance.',
+	'Inside an issued arc, me is that unit, never you. Units have only their attacks, block and protect (Knight and Blade), go_to, loop and choose: never issue wait or flee.',
+	'Arrows and smite need a clear shot; hex and heal are weaker through cover. A unit with no shot: go_to an ally who has one.',
+	`Knight and Blade block only as one choice beside others, for an enemy within ${BLOCK.near}m; block has a cooldown, so never loop it alone.`,
 ].join(' ');
 
-/** Scene facts only: stats, what each pinned law does, and what the enemy looks like. Doctrine is {@link FIGHT_DOCTRINE}. */
-function partyStory(party:string):MemoryDraft {
+/** Scene facts only: stats, who is whose, and what is yours to do. Doctrine is {@link FIGHT_DOCTRINE}. */
+function partyStory(party:string, units:{ id:string; tags?:string[] }[]):MemoryDraft {
+	const yours = units.filter((u) => !u.tags?.includes('Captain')).map((u) => `${u.id} (${u.tags?.[0]})`).join(', ');
 	const text = [
 		`You command ${party}. Win.`,
 		formatFightRules(),
-		'Your units are fully programmable RTS units: sticky programs, laws, when, loop. You are a unit and the commander; issue() never targets you.',
-		'The enemy shows as EnemyWitch, EnemyKnight, EnemyArcher, EnemyBlade, EnemyHealer. A Player who strikes your units is then EnemyPlayer. In programs, enemies are others.filter("enemy").',
-		'go_to is not a fight — they walk there and stop. Issued combat verbs walk those units into range. You stay behind the line. The verb matches YOUR tag. who=units.filter("Blade") is your Blade; EnemyBlade is theirs.',
-		'Flank with spread, circle, or go_to a Pillar, Tree or Boulder so shoot has a clear view.',
-		'A program that ends hands the unit back to its laws. Inside the issued arc, && is the next step after success (the hit landed or the foe is down). loop the chain. Each issue is its own block — never && between issue().',
-		'If someone is almost dead and under fire they are probably down — do not program around that snapshot.',
-		'You already have mend: heal() walks you into range of the hurt and loops Knight, then yourself, then Captain, then the rest — only while you are a Healer and no rival is in knife range. Guard protect()s whoever is hurt while a Healer lives: the Knight screens them and attacks that threat, then goes back to their program. Strike is attack() with your tag when you are not a Healer. Rank holds you behind the Knight and Blade, clear of knife range. If a rival is close, rank() away — do not heal or smite in a scrum. Keep mend, guard, strike, and rank. Never unlaw them.',
-		`smite, heal, attack(), and rank() are yours as commander. smite reaches ${ATTACKS.smite!.range}m — never walk in for it while a Knight or Blade lives. heal from ${SPELL_RANGE}m like hex. Never go_to an enemy. Never issue heal, attack, or rank. Issue smite only to a Witch: slow and heavy, for a foe already within ${ATTACKS.smite!.range}m.`,
+		`Your units: ${yours}. Never target them.`,
+		'Every enemy shows as Enemy and its kind: EnemyWitch, EnemyKnight, EnemyArcher, EnemyBlade, EnemyHealer, and a Player who strikes your units as EnemyPlayer; in programs, enemies are others.filter("enemy"). who=units.filter("Blade") is your Blade; EnemyBlade is theirs.',
+		`You are the Healer and the commander: issue() never reaches you. Your own laws heal from ${SPELL_RANGE}m and keep you back; smite yourself only a foe already within ${ATTACKS.smite!.range}m. Never issue heal, attack or rank; issue smite only to your Witch.`,
+		'go_to only walks there; an issued attack walks the unit into range itself. Inside an issued arc, && runs the next step after a hit lands or the foe is down. Each issue is its own step, never joined by &&.',
 	].join(' ');
 	return { text, tags: ['backstory', party], pinned: true };
 }
@@ -126,6 +122,25 @@ const PARTY_GOALS = [
 ];
 
 
+/**
+ * A party's fighters: its captain with its own laws, and four units that defend on their own (`roleChoice`) whenever
+ * their captain has issued them nothing: they hold their line and block, and attack only on its orders.
+ */
+function partyUnits(captain:string, units:Record<'Witch' | 'Knight' | 'Archer' | 'Blade', string>):NonNullable<CollectiveSpec<CharacterCtx>['characters']> {
+	return [
+		{ id: captain, tags: ['Captain', 'Healer'], laws: CAPTAIN_LAWS },
+		...(Object.entries(units) as [keyof typeof units, string][]).map(([role, id]) => ({
+			id,
+			tags: [role],
+			kit: ROLE_KITS[role],
+			choose: roleChoice(role),
+		})),
+	];
+}
+
+const DAWN_UNITS = partyUnits('Dawn', { Witch: 'Cinder', Knight: 'Brune', Archer: 'Wisp', Blade: 'Cade' });
+const DUSK_UNITS = partyUnits('Dusk', { Witch: 'Nyx', Knight: 'Helms', Archer: 'Ash', Blade: 'Flint' });
+
 const DAWN:CollectiveSpec<CharacterCtx> = {
 	id: 'DawnParty',
 	// Its commander plans the tactics on every heartbeat; its units' System One picks each swing.
@@ -133,20 +148,11 @@ const DAWN:CollectiveSpec<CharacterCtx> = {
 	watchesWritable: false,
 	pinnedSightFocus: ['isHurt(it)'],
 	kit: FIGHT,
-	// Its units pick `choose` with Jev, whatever the menu's default.
-	systemOne: 'jev',
 	commander: 'Dawn',
 	identity: { role: 'Commander', traits: ['resolute', 'grim', 'captain'] },
-	memories: [partyStory('DawnParty')],
+	memories: [partyStory('DawnParty', DAWN_UNITS)],
 	goals: PARTY_GOALS,
-	characters: [
-		{ id: 'Dawn', tags: ['Captain', 'Healer'] },
-		{ id: 'Cinder', tags: ['Witch'] /* , choose: roleChoice('Witch') */ },
-		{ id: 'Brune', tags: ['Knight'] /* , choose: roleChoice('Knight') */ },
-		{ id: 'Wisp', tags: ['Archer'] /* , choose: roleChoice('Archer') */ },
-		{ id: 'Cade', tags: ['Blade'] /* , choose: roleChoice('Blade') */ },
-	],
-	laws: PARTY_LAWS,
+	characters: DAWN_UNITS,
 };
 
 const DUSK:CollectiveSpec<CharacterCtx> = {
@@ -156,20 +162,11 @@ const DUSK:CollectiveSpec<CharacterCtx> = {
 	watchesWritable: false,
 	pinnedSightFocus: ['isHurt(it)'],
 	kit: FIGHT,
-	// Its units pick `choose` with the local model, whatever the menu's default.
-	systemOne: 'local',
 	commander: 'Dusk',
 	identity: { role: 'Commander', traits: ['cold', 'ruthless', 'captain'] },
-	memories: [partyStory('DuskParty')],
+	memories: [partyStory('DuskParty', DUSK_UNITS)],
 	goals: PARTY_GOALS,
-	characters: [
-		{ id: 'Dusk', tags: ['Captain', 'Healer'] },
-		{ id: 'Nyx', tags: ['Witch'] /* , choose: roleChoice('Witch') */ },
-		{ id: 'Helms', tags: ['Knight'] /* , choose: roleChoice('Knight') */ },
-		{ id: 'Ash', tags: ['Archer'] /* , choose: roleChoice('Archer') */ },
-		{ id: 'Flint', tags: ['Blade'] /* , choose: roleChoice('Blade') */ },
-	],
-	laws: PARTY_LAWS,
+	characters: DUSK_UNITS,
 };
 
 /** The scene's parties and the name the player sees for each. */
@@ -232,11 +229,6 @@ function paceRuins(host:GameHost):void {
 
 function hardenFight(host:GameHost):void {
 	paceRuins(host);
-	for (const { spec } of PARTIES) {
-		for (const character of host.arc?.collective(spec.id)?.characters ?? []) {
-			character.replaceProgram();
-		}
-	}
 }
 
 function livingOf(host:GameHost, spec:CollectiveSpec<CharacterCtx>):GameObject[] {
@@ -303,18 +295,44 @@ function tickFight(host:GameHost):void {
 	}
 }
 
+/**
+ * One orb per enemy downed, so the two sides race toward the middle: the downed fill theirs, and the next orb fills as
+ * the most hurt enemy still standing weakens.
+ */
+function downed(host:GameHost, foes:CollectiveSpec<CharacterCtx>):HudGoal[] {
+	const vitals = (foes.characters ?? []).map(({ id }) => findObject(host.world, id)?.getComponent(Vitals));
+	const down = vitals.filter((v) => !v || v.hp <= 0).length;
+	const next = Math.max(0, ...vitals.map((v) => (v && v.hp > 0 ? 1 - v.hp / v.maxHP : 0)));
+	return vitals.map((v, i) => ({
+		name: `Defeat ${i + 1} of ${vitals.length} ${PARTIES.find((p) => p.spec === foes)?.name} fighters`,
+		progress: i < down ? 1 : i === down ? next : 0,
+	}));
+}
+
+/** Each party's orbs fill as the other falls: Dawn's gold, Dusk's blue, each on the end its party stands on screen. */
+function goals(host:GameHost):SceneGoals {
+	const who = (party:CollectiveSpec<CharacterCtx>):string[] => (party.characters ?? []).map(({ id }) => id);
+	return {
+		left: { color: 'gold', goals: downed(host, DUSK), who: who(DAWN) },
+		right: { color: 'blue', goals: downed(host, DAWN), who: who(DUSK) },
+	};
+}
+
 export function createDirector(host:GameHost):ArcDirector<CharacterCtx> {
-	host.hooks = { checkBargain: tickFight };
-	// Characters run what the party laws and the issued programs do: their role's attack among them.
-	host.kit = { verbs: [...FIGHT.verbs, 'go_to', 'protect', 'block', ...Object.keys(ATTACKS)], tools: [] };
-	return addFightVerbs(host.configure(new ArcDirector<CharacterCtx>()), host)
+	host.hooks = { checkBargain: tickFight, goals };
+	return host.configure(new ArcDirector<CharacterCtx>())
+		.withMOBA(fightVerbs(host))
+		// The ruins' own line: Knight and Blade on the nearest enemy, the rest behind them.
+		.addVerb('rank', { handler: (call) => doRank(host, call) })
 		.onCommanderVacant((party) => succeedCommand(host, party))
-		.withSight({ limit: 16 })
+		// Each rival is marked in reach or not, so its commander's roster says who can hit whom.
+		.withSight({ limit: 16, look: (ctx) => markReach(host, ctx.character, lookWorld(ctx.character, host.ambient, host)) })
 		.withNames({ seen: seenInFight })
 		.withThinkInstructions({ off: NO_THINK })
 		.withVerbInstructions(`${DEFAULT_VERB_INSTRUCTIONS} ${FIGHT_DOCTRINE}`)
 		.withArcExample(FIGHT_EXAMPLE)
-		.withDefaultKit(host.kit)
+		// Characters run the programs their commander issues them: their role's attack among them.
+		.withDefaultKit({ verbs: [...FIGHT.verbs, 'protect', 'block', ...Object.keys(ATTACKS)], tools: [] })
 		.addCollective(DAWN)
 		.addCollective(DUSK);
 }

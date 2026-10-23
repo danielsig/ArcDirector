@@ -15,11 +15,11 @@ import {
 	prefs,
 	prefsDetached,
 	setPrefs,
-	systemOneName,
 	watchPrefs,
 	type PlayerMode,
 	type Prefs,
 } from '../prefs';
+import { defaultSystemOne } from '../director/hosted';
 import {
 	fetchModelCatalog,
 	isDecisionModel,
@@ -68,6 +68,8 @@ export class Session extends Component {
 	private _lastViewPacked = '';
 	private _unbindControl = ():void => undefined;
 	private _unwatchPrefs = ():void => undefined;
+	/** Whether a bench ran last frame: one sets the shared model up its own way, so play's settings come back after. */
+	private _benching = false;
 
 	public override awake():void {
 		this.getCanvas()?.addEventListener('click', this._onClick);
@@ -135,6 +137,12 @@ export class Session extends Component {
 			return;
 		}
 		world.sayOpen = this.hud.sayOpen;
+		// A bench holds the model while it runs, so NPCs stop thinking until it is done; the `ai` setting is untouched.
+		world.arcDirectorOn = this.hud.arcDirectorOn && !this.hud.benchRunning;
+		if (this._benching && !this.hud.benchRunning && this.director.arc) {
+			addModels(this.director.arc, prefs());
+		}
+		this._benching = this.hud.benchRunning;
 		if (this.hud.menuOpen && world.input.pointerLocked) {
 			this.dropPointerLock();
 		}
@@ -296,7 +304,8 @@ export class Session extends Component {
 	}
 
 	public async refreshHudModels():Promise<void> {
-		if (!this.hud.arcDirectorOn || prefs().inference !== 'lmstudio') {
+		// Listed whether or not ArcDirector runs, so a model can be picked before turning it on.
+		if (prefs().inference !== 'lmstudio') {
 			return;
 		}
 		const catalog = await fetchModelCatalog('/inference');
@@ -465,7 +474,7 @@ export class Session extends Component {
 			arc?.setArcFormat(next.arcFormat);
 		}
 		if (arc && changed('systemOne')) {
-			arc.setDefaultSystemOne(systemOneName(next.systemOne));
+			arc.setDefaultSystemOne(defaultSystemOne(next.systemOne));
 		}
 		if (next.playerKind && changed('playerKind')) {
 			this.applyPlayerKindToBody(next.playerKind);
@@ -473,7 +482,6 @@ export class Session extends Component {
 		const world = this.gameObject.world;
 		if (world) {
 			world.playerInperceivable = next.player !== 'participant';
-			world.arcDirectorOn = next.ai;
 		}
 		if (changed('player')) {
 			this.applyPlayerModeToBody(next.player);

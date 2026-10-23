@@ -1,7 +1,9 @@
 import assert from 'node:assert/strict';
+import { alwaysThinks } from './models.js';
 import { describe, it } from 'node:test';
 import {
 	DONE_THOUGHT,
+	ALWAYS_THINKS_PREFILL,
 	EMPTY_THINK_PREFILL,
 	PREFILL_MARKER,
 	clearAssistantThinkCache,
@@ -24,7 +26,7 @@ describe('assistantThink', () => {
 	it('closes an empty think block using the template think tags', () => {
 		const generation = '<|im_start|>user\ny<|im_end|>\n<|im_start|>assistant\n<think>';
 		const withAssistant = `<|im_start|>user\ny<|im_end|>\n<|im_start|>assistant\n${PREFILL_MARKER}`;
-		assert.equal(prefillFromTemplates(generation, withAssistant), '<think></think>');
+		assert.equal(prefillFromTemplates(generation, withAssistant), '<think>\n\n</think>\n\n');
 	});
 
 	it('uses the assistant header when it differs from the generation tail', () => {
@@ -76,11 +78,19 @@ describe('assistantThink', () => {
 		const first = await resolveAssistantPrefill(apply, 'muse');
 		const second = await resolveAssistantPrefill(apply, 'muse');
 		const done = await resolveThoughtPrefill(apply, 'muse');
-		assert.equal(first, '<think></think>');
-		assert.equal(second, '<think></think>');
+		assert.equal(first, '<think>\n\n</think>\n\n');
+		assert.equal(second, '<think>\n\n</think>\n\n');
 		assert.equal(done, `<think>\n${DONE_THOUGHT}\n</think>`);
 		assert.equal(n, 2);
 		clearAssistantThinkCache();
+	});
+
+	it('closes a think block for a model that always thinks', () => {
+		assert.equal(ALWAYS_THINKS_PREFILL, '<think>\n\n</think>\n\n');
+		assert.equal(alwaysThinks('qwen/qwen3-4b-thinking-2507'), true);
+		assert.equal(alwaysThinks('qwen3-4b-thinking-arcs'), true);
+		assert.equal(alwaysThinks('qwen/qwen3-4b-instruct-2507'), false);
+		assert.equal(alwaysThinks('google/gemma-4-e4b'), false);
 	});
 
 	it('appends a trailing assistant prefill', () => {

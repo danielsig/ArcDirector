@@ -9,6 +9,8 @@ import {
 	modelGrade,
 	pickSingleChatModel,
 	PREFERRED_MODELS,
+	recommendedSampling,
+	trainedOnArcDirector,
 	type ModelInfo,
 } from './models.js';
 
@@ -17,6 +19,25 @@ function model(id:string, extra:Partial<ModelInfo> = {}):ModelInfo {
 }
 
 const embed = 'embed-test';
+
+describe('trainedOnArcDirector', () => {
+	it('knows a Skaldic model by its id, wherever it is served from', () => {
+		assert.equal(trainedOnArcDirector('skaldic-gemma-4-e4b-v9'), true);
+		assert.equal(trainedOnArcDirector('http://localhost:8090/skaldic-qwen3-4b-thinking-v2-Q4_K_M-00001-of-00005.gguf'), true);
+		assert.equal(trainedOnArcDirector('google/gemma-4-e4b'), false);
+	});
+});
+
+describe('recommendedSampling', () => {
+	it("gives each family its makers' sampling, Qwen3 by whether it reasons, and nothing for one it does not know", () => {
+		assert.deepEqual(recommendedSampling('google/gemma-4-e4b'), { temperature: 1, topP: 0.95, topK: 64 });
+		assert.deepEqual(recommendedSampling('skaldic-gemma-4-e4b-v7'), { temperature: 1, topP: 0.95, topK: 64 }, "a fine-tune keeps its base's");
+		assert.deepEqual(recommendedSampling('qwen/qwen3-8b', true), { temperature: 0.6, topP: 0.95, topK: 20 });
+		assert.deepEqual(recommendedSampling('qwen/qwen3-8b', false), { temperature: 0.7, topP: 0.8, topK: 20 });
+		assert.deepEqual(recommendedSampling('Qwen3-4B-Thinking-2507', false), { temperature: 0.6, topP: 0.95, topK: 20 }, 'it reasons whatever it is told');
+		assert.equal(recommendedSampling('acme/unknown-7b'), undefined);
+	});
+});
 
 describe('modelGrade', () => {
 	it('favors active params near 4B, then total size near 20B', () => {

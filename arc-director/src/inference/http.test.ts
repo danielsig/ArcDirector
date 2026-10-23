@@ -626,6 +626,41 @@ describe('HttpProvider native server', () => {
 		assert.ok(urls.some((u) => u.includes('/models/load')));
 	});
 
+	it('loads a model with as many slots as it thinks at once, again when a copy loaded earlier has fewer', async () => {
+		const bodies:Record<string, unknown>[] = [];
+		const urls:string[] = [];
+		let loaded:Record<string, unknown> = { flash_attention: true, offload_kv_cache_to_gpu: true, eval_batch_size: 512, parallel: 1 };
+		const provider = new HttpProvider({
+			baseURL: 'http://127.0.0.1:9/v1',
+			fetch: async (input, init) => {
+				const url = String(input);
+				urls.push(url);
+				if (url.endsWith('/api/v1/models') && init?.method !== 'POST') {
+					return new Response(JSON.stringify({
+						models: [{ key: 'my-llm', type: 'llm', loaded_instances: [{ id: 'my-llm', config: loaded }] }],
+					}), { status: 200 });
+				}
+				if (url.includes('/api/v1/models/unload')) {
+					return new Response(JSON.stringify({ instance_id: 'my-llm' }), { status: 200 });
+				}
+				if (url.includes('/api/v1/models/load')) {
+					const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+					bodies.push(body);
+					// This server gives a model three slots at most.
+					loaded = { ...loaded, parallel: Math.min(Number(body.parallel), 3) };
+					return new Response(JSON.stringify({ status: 'loaded', instance_id: 'my-llm', load_config: loaded }), { status: 200 });
+				}
+				return new Response(JSON.stringify({ choices: [{ message: { content: 'ok' } }] }), { status: 200 });
+			},
+		});
+		provider.configureModel('my-llm', { maxParallel: 4 });
+		await provider.chat({ model: 'my-llm', messages: [{ role: 'user', content: 'hi' }] });
+		assert.ok(urls.some((u) => u.includes('/models/unload')), 'the copy with one slot goes');
+		assert.equal(bodies[0]?.parallel, 4);
+		await provider.chat({ model: 'my-llm', messages: [{ role: 'user', content: 'hi' }] });
+		assert.equal(bodies.length, 1, 'given fewer than it asked for, it keeps what it got rather than loading again');
+	});
+
 	it('ejects other loaded models before loading the preferred one', async () => {
 		let loads = 0;
 		const urls:string[] = [];
@@ -1039,6 +1074,26 @@ describe('HttpProvider native server', () => {
 			messages: [{ role: 'user', content: 'hi' }],
 		});
 		assert.match(String(res.content), /wait/);
+	});
+
+	it('reads a stream that opens with keepalive comments, as a server that thinks long sends', async () => {
+		const chunk = (delta:Record<string, unknown>, finish:string | null = null):string => `data: ${JSON.stringify({ object: 'chat.completion.chunk', choices: [{ index: 0, delta, finish_reason: finish }] })}
+
+`;
+		const provider = new HttpProvider({
+			baseURL: 'http://127.0.0.1:9/v1',
+			fetch: async (_input, init) => (init?.method === 'POST'
+				? new Response(`: keepalive
+
+: keepalive
+
+${chunk({ reasoning_content: 'Hurt.' })}${chunk({ content: '{"steps":[]}' })}${chunk({}, 'stop')}data: [DONE]
+
+`, { status: 200, headers: { 'content-type': 'text/event-stream' } })
+				: new Response('nope', { status: 404 })),
+		});
+		const res = await provider.chat({ model: 'grok', messages: [{ role: 'user', content: 'hi' }] });
+		assert.equal(res.content, '{"steps":[]}');
 	});
 
 	it('assembles Responses output from deltas when completed never arrives', async () => {

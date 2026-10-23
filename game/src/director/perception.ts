@@ -1,4 +1,4 @@
-import { Time, yawToForward, type GameObject } from '@arc-director/kindling';
+import { BoxCollider, Time, yawToForward, type GameObject } from '@arc-director/kindling';
 import {
 	pascalCase,
 	RESERVED_TAGS,
@@ -44,15 +44,20 @@ import {
 } from '../items/inventory';
 import type { ItemInstance } from '../items/instance';
 import { coinsOf } from '../items/wallet';
-import { findChestHolding, keyNameFor } from '../items/pickup';
+import { keyNameFor } from '../items/pickup';
+import { worthOf } from '../items/defs';
 import { whereabouts } from '../world/interior';
-import { talkCanSee } from './talkAttend';
-import { findObject, idOf, isLiving } from './names';
+import { passageDoors } from '../world/passages';
+import { lineClear } from '../world/path';
+import { CELL_SIZE } from '../world/constants';
+import { talkNotices } from './talkAttend';
+import { idOf, isLiving } from './names';
 import type { CharacterCtx } from './types';
 import type { GameHost } from './adapter';
 import { fightExprTags, fightProximityNote, fightRole } from './fight';
 
-const SIGHT = 24;
+/** How far a character sees, in meters, where nothing stands in the way. */
+export const SIGHT = 24;
 
 export function itemLabel(item:ItemInstance):string {
 	const id = pascalCase(item.name) || pascalCase(item.defID);
@@ -137,7 +142,7 @@ function tagsNow(go:GameObject):string[] {
 	if (mesh.startsWith('pillar')) {
 		tags.push('pillar');
 	}
-	if (mesh === 'boulder') {
+	if (mesh === 'boulder' || mesh.startsWith('river_boulder')) {
 		tags.push('boulder', 'rock');
 	}
 	if (mesh === 'waterfall') {
@@ -150,6 +155,33 @@ function poseXZ(go:GameObject):{ point:number[]; facing:number[] } {
 	const p = go.transform.position;
 	const f = yawToForward(go.transform.yaw);
 	return { point: [p.x, p.z], facing: [f.x, f.z] };
+}
+
+/** Meters in from a wide thing's ends, and out from its face, where it is seen from. */
+const SEEN_INSET = 0.25;
+const SEEN_OUTSET = 0.05;
+
+/**
+ * Where `observer` sees `go`: its middle, or for something wider than a cell (a web across a passage) its face toward
+ * the observer, a little in from its ends and just in front of it. A line to its middle would cross the rest of it and
+ * hide it from everywhere; one to an end would graze the walls it spans between.
+ */
+function seenPoint(go:GameObject, observer?:GameObject):number[] {
+	const p = go.transform.position;
+	const size = go.getComponent(BoxCollider)?.size;
+	if (!observer || !size || Math.max(size.x, size.z) <= CELL_SIZE) {
+		return [p.x, p.z];
+	}
+	// Turned a quarter, its width lies along Z.
+	const across = Math.abs(Math.sin(go.transform.yaw)) > 0.7;
+	const sizeX = across ? size.z : size.x;
+	const sizeZ = across ? size.x : size.z;
+	const o = observer.transform.position;
+	const along = (centre:number, half:number, at:number):number => Math.min(centre + half - SEEN_INSET, Math.max(centre - half + SEEN_INSET, at));
+	const face = (centre:number, half:number, at:number):number => centre + Math.sign(at - centre) * (half + SEEN_OUTSET);
+	return sizeX >= sizeZ
+		? [along(p.x, sizeX / 2, o.x), face(p.z, sizeZ / 2, o.z)]
+		: [face(p.x, sizeX / 2, o.x), along(p.z, sizeZ / 2, o.z)];
 }
 
 function seenOf(go:GameObject, observer?:GameObject, host?:GameHost):SeenObject {
@@ -171,7 +203,7 @@ function seenOf(go:GameObject, observer?:GameObject, host?:GameHost):SeenObject 
 	const pose = poseXZ(go);
 	const row:SeenObject = {
 		id: go.getComponent(Named)?.id || go.id,
-		point: pose.point,
+		point: seenPoint(go, observer),
 		facing: pose.facing,
 		tags,
 	};
@@ -192,12 +224,15 @@ function seenOf(go:GameObject, observer?:GameObject, host?:GameHost):SeenObject 
 	}
 	const carved = go.getComponent(Inscription);
 	if (carved?.text && !row.note) {
-		row.note = `carved: "${carved.text}"`;
-		row.always = true;
+		row.note = carved.answered || `carved: "${carved.text}"`;
+	}
+	const door = go.getComponent(Door);
+	if (door && !row.note) {
+		row.note = door.open ? 'open' : 'shut';
 	}
 	const fuel = go.getComponent(Flammable);
 	if (fuel && !row.note) {
-		row.note = fuel.burning ? 'burning away' : 'it blocks the way; a flame burns it';
+		row.note = fuel.burning ? 'burning away' : 'it blocks the way; dry as tinder';
 	}
 	const span = go.getComponent(Bridge);
 	if (span && !row.note) {
@@ -232,6 +267,8 @@ export function lookWorld(character:GameObject, ambient:string, host?:GameHost):
 	}
 	const ax = character.transform.position.x;
 	const az = character.transform.position.z;
+	// The doors of the passage it stands in, seen however the passage turns or whoever stands in the way.
+	const passageDoorSet = new Set(passageDoors(world, ax, az));
 	// Whoever stands on a span reads as on it: `Forager and Angler on Bridge, it is lowered`.
 	const onSpan = new Map<GameObject, string>();
 	world.forEachComponent(Bridge, (span, go) => {
@@ -240,7 +277,7 @@ export function lookWorld(character:GameObject, ambient:string, host?:GameHost):
 		}
 	});
 	for (const go of world.objects) {
-		if (go === character || go.id === 'MainCamera') {
+		if (go === character || go.id === 'MainCamera' || !talkNotices(character, go)) {
 			continue;
 		}
 		if (go.getComponent(HumanBody) && !isLiving(go)) {
@@ -252,10 +289,14 @@ export function lookWorld(character:GameObject, ambient:string, host?:GameHost):
 			continue;
 		}
 		const gp = go.transform.position;
-		if (!go.getComponent(Bridge) && Math.hypot(gp.x - ax, gp.z - az) > SIGHT) {
+		const ours = passageDoorSet.has(go);
+		if (!go.getComponent(Bridge) && !ours && Math.hypot(gp.x - ax, gp.z - az) > SIGHT) {
 			continue;
 		}
 		const row = seenOf(go, character, host);
+		if (ours) {
+			row.always = true;
+		}
 		if (row.tags.includes('tree') || row.tags.includes('boulder') || row.tags.includes('pillar')) {
 			continue;
 		}
@@ -286,6 +327,12 @@ export function lookWorld(character:GameObject, ambient:string, host?:GameHost):
 	return { self, ambient: place || undefined, objects };
 }
 
+/** A carried item, with what one is worth when it is goods: `MoonMushroom (worth 1 gold)`. Its owner knows. */
+function carriedLabel(item:ItemInstance):string {
+	const worth = worthOf(item.defID);
+	return worth === undefined ? itemLabel(item) : `${itemLabel(item)} (worth ${worth} gold${item.count > 1 ? ' each' : ''})`;
+}
+
 export function inventoryOf(character:GameObject):Inventory {
 	const worn:Record<string, string> = {};
 	const human = character.getComponent(HumanBody);
@@ -299,9 +346,9 @@ export function inventoryOf(character:GameObject):Inventory {
 		}
 	}
 	const purse = character.getComponent(Wallet);
-	const pocketItems = human?.pockets?.contents.map(itemLabel) ?? [];
+	const pocketItems = human?.pockets?.contents.map(carriedLabel) ?? [];
 	const packItem = human ? slotItem(human, 'back') : null;
-	const packItems = packItem?.Container?.contents.map(itemLabel) ?? [];
+	const packItems = packItem?.Container?.contents.map(carriedLabel) ?? [];
 	return {
 		worn: Object.keys(worn).length > 0 ? worn : undefined,
 		purse: purse ? purse.coins : undefined,
@@ -310,25 +357,6 @@ export function inventoryOf(character:GameObject):Inventory {
 			? { name: itemLabel(packItem), items: packItems }
 			: undefined,
 	};
-}
-
-export function hostCanSee(world:World, aID:string, bID:string):boolean {
-	if (findObject(world, bID)?.getComponent(Bridge)) {
-		return true;
-	}
-	if (talkCanSee(world, aID, bID)) {
-		return true;
-	}
-	const held = findChestHolding(world, bID);
-	if (!held) {
-		return false;
-	}
-	const lock = held.chest.getComponent(Lock);
-	const chest = held.chest.getComponent(Chest);
-	if (lock?.locked || (chest && !chest.open)) {
-		return false;
-	}
-	return talkCanSee(world, aID, idOf(held.chest));
 }
 
 export function followedCarry(ctx:CharacterCtx):string {
@@ -354,7 +382,10 @@ export function doExamine(world:World, character:GameObject, name:string):ArcRes
 	if (!go) {
 		return { ok: false, verb: 'examine', reason: `unknown name ${name}` };
 	}
-	if (!go.getComponent(Bridge) && (!hostCanSee(world, idOf(character), idOf(go)) || distXZ(character, go) > SIGHT)) {
+	// Everyone sees the bridge; anything else is seen where light reaches it from near enough.
+	const seen = !!go.getComponent(Bridge)
+		|| (talkNotices(character, go) && distXZ(character, go) <= SIGHT && lineClear(world, 'light', character.transform.position, go.transform.position));
+	if (!seen) {
 		return { ok: false, verb: 'examine', reason: `${name} is not in sight` };
 	}
 	return { ok: true, verb: 'examine', reason: examineWorld(go) };
@@ -388,8 +419,8 @@ function saleLine(name:string, shop:Merchant):string | false {
 	return shop.goods.length > 0 ? `${name} trades in ${listed(shop.goods)}.` : false;
 }
 
-/** What `examine` tells about something in sight, in sentences. */
-function examineWorld(go:GameObject):string {
+/** What `examine` tells about something in sight, in sentences. The player's E reads the same. */
+export function examineWorld(go:GameObject):string {
 	const name = go.getComponent(Named)?.id ?? go.id;
 	const lock = go.getComponent(Lock);
 	const locked = lock?.locked ? ` and locked${lock.keyID ? `; it needs ${keyNameFor(go.world, lock)}` : ''}` : '';
@@ -403,10 +434,10 @@ function examineWorld(go:GameObject):string {
 	}
 	const carved = go.getComponent(Inscription);
 	if (carved) {
-		lines.push(`Carved on ${name}: "${carved.text}"`);
+		lines.push(carved.answered ? `${name}: ${carved.answered}.` : `Carved on ${name}: "${carved.text}"`);
 	}
 	if (go.getComponent(Flammable)) {
-		lines.push(`${name} blocks the way. Use a flame on it, such as a WoodenTorch, and it burns away.`);
+		lines.push(`${name} blocks the way. It is old and dry as tinder.`);
 	}
 	if (go.getComponent(BridgeLever)) {
 		lines.push(`${name} is the fixed lever that raises and lowers the bridge. Working it again does the other.`);

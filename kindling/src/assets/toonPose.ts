@@ -130,6 +130,22 @@ export function placeFoot(root:THREE.Object3D, side:Hand, target:THREE.Vector3, 
 }
 
 /**
+ * Turns `root`'s `side` foot, `weight` of the way (0–1), back to how it sits at rest under the body (sole flat, toes
+ * ahead), whatever the leg is doing: for feet planted after `placeFoot`. The leg stays as it is.
+ */
+export function restFoot(root:THREE.Object3D, side:Hand, weight:number):void {
+	const bone = humanBone(root, `${side}Foot`);
+	const turn = bone && restTurn(root, bone.name);
+	if (!bone || !turn || weight <= 0) {
+		return;
+	}
+	root.updateMatrixWorld(true);
+	const want = root.getWorldQuaternion(new THREE.Quaternion()).multiply(turn);
+	const now = bone.getWorldQuaternion(new THREE.Quaternion());
+	turnBone(bone, now.clone().slerp(want, weight).multiply(now.invert()));
+}
+
+/**
  * Turns `root`'s hand, `weight` of the way (0–1), so its fingers point along `point` and its palm
  * faces `palm` (world directions; `palm` need not be square to `point`). The arm stays as it is.
  */
@@ -348,4 +364,11 @@ export function drawBow(bow:THREE.Object3D, nock:THREE.Vector3 | null):void {
 		bone.scale.set(1, to.length() / half, 1);
 	}
 	bow.updateMatrixWorld(true);
+}
+
+/** The middle of `root`'s `hand` palm (halfway from the wrist to the middle knuckle, where a grip runs), world; null without the bones. */
+export function palmOf(root:THREE.Object3D, hand:Hand):THREE.Vector3 | null {
+	const wrist = humanBone(root, `${hand}Hand`);
+	const knuckle = humanBone(root, `${hand}MiddleProximal`);
+	return wrist && knuckle ? wrist.getWorldPosition(new THREE.Vector3()).lerp(knuckle.getWorldPosition(new THREE.Vector3()), 0.5) : null;
 }

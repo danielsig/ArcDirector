@@ -1,6 +1,6 @@
 import { validateArc } from './validate.js';
 import { ArcError, JOIN_SYMBOL, SYMBOL_JOIN, groupArc, isArc, isCountMap, type Arc, type Join, type Step, type StepArg } from './types.js';
-import { argBase, CHOOSE_VERB, GROUP_VERB, type VerbRegistry, type VerbSpec } from './stock-verbs.js';
+import { argBase, CHOOSE_VERB, GROUP_VERB, TEXT_ARG_KINDS, type VerbRegistry, type VerbSpec } from './stock-verbs.js';
 import { choicesOf, deriveChoiceName, freeChoiceName } from './choose.js';
 
 /** Arg kinds whose value is an expression. */
@@ -248,13 +248,17 @@ function parseBalanced(s:string, i:number):{ value:string; next:number } {
 	return { value: s.slice(start, i).trim(), next: i };
 }
 
-function parseValue(s:string, i:number):{ value:StepArg; next:number } {
+/** One arg's value. `text`: it is text whatever it looks like, so `code=007` stays `007`. */
+function parseValue(s:string, i:number, text = false):{ value:StepArg; next:number } {
 	i = skipWs(s, i);
 	if (s[i] === '"' || s[i] === "'") {
 		return parseQuoted(s, i);
 	}
 	const parsed = parseBalanced(s, i);
 	const raw = parsed.value;
+	if (text) {
+		return parsed;
+	}
 	if (raw === 'true' || raw === 'false') {
 		return { value: raw === 'true', next: parsed.next };
 	}
@@ -415,7 +419,7 @@ function parseStepText(s:string, i:number, registry:VerbRegistry):{ step:Step; n
 			const parsed = parseValue(s, at);
 			return { value: asBundle(parsed.value, key), next: parsed.next };
 		}
-		return parseValue(s, at);
+		return parseValue(s, at, TEXT_ARG_KINDS.includes(base));
 	};
 	if (s[i] === '(') {
 		i += 1;

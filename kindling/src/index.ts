@@ -2,7 +2,7 @@ export { Component, type ComponentState } from './core/Component.js';
 export { GameObject, allocID, allocSerial, resetAllocID } from './core/GameObject.js';
 export { captureWorld, diffWorld, restoreWorld, type ObjectState, type WorldSave, type WorldState } from './core/save.js';
 export { Transform, type Vec3 } from './core/Transform.js';
-export { World } from './core/World.js';
+export { World, chunkBounds } from './core/World.js';
 export { Chunk } from './core/Chunk.js';
 export { ChunkBound, ChunkStreamer, StreamingAnchor } from './core/ChunkStreamer.js';
 export { Game } from './core/Game.js';
@@ -10,13 +10,13 @@ export { Time, resetTime, MAX_DT } from './core/Time.js';
 export { Input, MOUSE_LEFT } from './core/Input.js';
 export { Rigidbody } from './core/Rigidbody.js';
 export { BoxCollider } from './core/BoxCollider.js';
-export { SHOVE_YIELD, stepPhysics, resolveBody, canOccupy } from './core/physics.js';
+export { SHOVE_YIELD, stepPhysics, resolveBody, canOccupy, type BlockerOpts } from './core/physics.js';
 export { clamp, hash, lerpAngle, yawToForward, yawToward } from './core/math.js';
 export type { ChunkBounds, TerrainSample } from './core/World.js';
 export type { Constructor, ComponentClass, ComponentInit, KindlingTypes } from './core/types.js';
 
 export { Camera, type ImpactFrame } from './render/Camera.js';
-export { Light, type LightKind } from './render/Light.js';
+export { Light, polygonCookie, spotThrough, type LightKind } from './render/Light.js';
 export { MeshRenderer } from './render/MeshRenderer.js';
 export { Renderer, type RendererLook, type RenderStats } from './render/Renderer.js';
 export { ShadowCache, type ShadowMode, type ShadowSettings } from './render/ShadowCache.js';
@@ -94,6 +94,6 @@ export {
 	type ToonExpressionTarget,
 	type ToonModelOptions,
 } from './assets/toonModel.js';
-export { holdInHand, lookAt, reach, placeFoot, orientHand, aimHeld, closeHand, crouch, drawBow, type Hand, type Grip, type Bend } from './assets/toonPose.js';
+export { holdInHand, lookAt, reach, placeFoot, orientHand, aimHeld, closeHand, crouch, drawBow, palmOf, restFoot, type Hand, type Grip, type Bend } from './assets/toonPose.js';
 export { Animator } from './render/Animator.js';
 export { ease, move, type MovePhase, type MoveSample, type MoveTiming } from './assets/move.js';

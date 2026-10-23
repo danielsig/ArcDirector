@@ -8,10 +8,10 @@ import { evaluate } from '../expr/eval.js';
 import type { ArcResult } from '../arc/types.js';
 import type { MindEvent } from '../mind/types.js';
 import { geometryKernels } from './kernels.js';
-import { Mover } from './mover.js';
-import { awayGoal, findRoute, pointGoal, reachablePoints, type Blocked, type Route } from './route.js';
+import { Mover, type Crowd } from './mover.js';
+import { awayGoal, findRoute, memoWorld, pointGoal, reachablePoints, type Blocked, type Route, type RouteWorld } from './route.js';
 import type { Deal } from './deal.js';
-import type { HostWorld, PathStep, Transfer, Vec } from './types.js';
+import type { HostWorld, Transfer, Vec } from './types.js';
 import { distance, groundAxes } from './vec.js';
 
 type Ctx = { id:string };
@@ -64,18 +64,19 @@ class Grid {
 			const point = this.point.get(holder ?? id);
 			return point ? { point, facing: [0, 1], right: [1, 0] } : undefined;
 		},
-		getPathGraph: () => (point) => {
+		getNeighbors: (point) => {
 			const cell = point.map(Math.round);
-			const out:PathStep[] = [];
-			for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
-				const next = [cell[0] + dx, cell[1] + dz];
-				const key = next.join(',');
-				if (this.walls.has(key) || Math.abs(next[1]) > 8) {
-					continue;
-				}
-				out.push(key === this.door && this.doorLocked ? { point: next, blocked: 'Door is locked' } : { point: next });
+			return [[1, 0], [-1, 0], [0, 1], [0, -1]].map(([dx, dz]) => [cell[0] + dx, cell[1] + dz]);
+		},
+		canPass: (what, _from, to) => {
+			const key = to.join(',');
+			if (what === 'light' || what === 'sound') {
+				return {};
 			}
-			return out;
+			if (this.walls.has(key) || Math.abs(to[1]) > 8) {
+				return undefined;
+			}
+			return key === this.door && this.doorLocked ? { blocked: 'Door is locked' } : {};
 		},
 		steerToward: (character, to) => {
 			this.steering.set(character, to);
@@ -92,7 +93,9 @@ class Grid {
 			if (verb !== 'pick_up' && thing !== 'gold' && this.carry.get(thing) !== from) {
 				return `${from} has no ${thing}`;
 			}
-			return undefined;
+			// Held, it is taken from its holder.
+			const holder = this.carry.get(thing);
+			return verb === 'pick_up' && holder !== undefined && holder !== from ? `${thing} is in ${holder}` : undefined;
 		},
 		transfer: ({ thing, from, to }) => {
 			const before = { holder: this.carry.get(thing), point: this.point.get(thing) };
@@ -127,12 +130,25 @@ class Grid {
  */
 const WAYPOINTS:Vec[] = [[0, 0], [10, 0], [10, 10], [0, 10]];
 const ROADS:[number, number, number][] = [[0, 1, 10], [1, 2, 10], [0, 3, 30], [3, 2, 10]];
-function network(point:Vec):PathStep[] {
-	const i = WAYPOINTS.findIndex((p) => distance(p, point) < 1e-9);
-	if (i < 0) {
-		return WAYPOINTS.filter((p) => distance(p, point) <= 6).map((p) => ({ point: p }));
-	}
-	return ROADS.filter(([a, b]) => a === i || b === i).map(([a, b, cost]) => ({ point: WAYPOINTS[a === i ? b : a], cost }));
+const waypointAt = (point:Vec):number => WAYPOINTS.findIndex((p) => distance(p, point) < 1e-9);
+const NETWORK:RouteWorld<string> = {
+	getNeighbors: (point) => {
+		const i = waypointAt(point);
+		if (i < 0) {
+			return WAYPOINTS.filter((p) => distance(p, point) <= 6);
+		}
+		return ROADS.filter(([a, b]) => a === i || b === i).map(([a, b]) => WAYPOINTS[a === i ? b : a]);
+	},
+	canPass: (_what, from, to) => {
+		const ends = [waypointAt(from), waypointAt(to)].sort().join();
+		const road = ROADS.find(([a, b]) => [a, b].sort().join() === ends);
+		return road ? { cost: road[2] } : {};
+	},
+};
+
+/** Every step open, onto `getNeighbors`. */
+function openWays(getNeighbors:(point:Vec)=>Vec[]):RouteWorld<string> {
+	return { getNeighbors, canPass: () => ({}) };
 }
 
 /** Collect what `director` tells every mind. */
@@ -143,6 +159,8 @@ function spyTellAll(director:ArcDirector<Ctx>, told:MindEvent[]):void {
 		pushEvent(event);
 	};
 }
+
+const PEOPLE = ['Smith', 'Mira', 'Bo'];
 
 async function run(
 	grid:Grid,
@@ -171,6 +189,10 @@ async function run(
 	else {
 		director.addCharacter({ id: 'Ann', mind: {}, kit: { verbs: opts.kit }, identity: { role: 'Fetches.' } });
 	}
+	// The others on the grid are in the cast, without minds: only a character takes a gift or a trade.
+	for (const id of PEOPLE.filter((p) => grid.point.has(p))) {
+		director.addCharacter({ id });
+	}
 	opts.before?.(director);
 	await director.start();
 	director.mindQueue()!.enqueueMajor(opts.units ? 'Hive' : 'Ann');
@@ -184,80 +206,70 @@ async function run(
 }
 
 describe('findRoute', () => {
-	const line:(point:Vec)=>PathStep[] = (point) => [{ point: [point[0] + 1] }, { point: [point[0] - 1] }];
+	const lineNeighbors = ([x]:Vec):Vec[] => [[x + 1], [x - 1]];
+	const line = openWays(lineNeighbors);
 	const openRoute = (found:Route | Blocked | undefined):Route => {
 		assert.ok(found && 'points' in found, 'an open route');
 		return found;
 	};
 
 	it('finds the cheapest route on a 1D line and stops in reach', () => {
-		const route = openRoute(findRoute(line, [0], pointGoal([5], 1)));
+		const route = openRoute(findRoute(line, 'Ann', [0], pointGoal([5], 1)));
 		assert.deepEqual(route.points, [[1], [2], [3], [4]]);
 		assert.equal(route.cost, 4);
 	});
 
 	it('works in 3D and goes around a pricey step', () => {
-		const graph = (point:Vec):PathStep[] => [[1, 0, 0], [0, 1, 0], [0, 0, 1], [-1, 0, 0], [0, -1, 0], [0, 0, -1]]
-			.map((d) => ({ point: point.map((v, i) => v + d[i]) }))
-			.map((step) => (step.point[0] === 1 && step.point[1] === 0 && step.point[2] === 0 ? { ...step, cost: 50 } : step));
-		const route = openRoute(findRoute(graph, [0, 0, 0], pointGoal([2, 0, 0])));
+		const world:RouteWorld<string> = {
+			getNeighbors: (point) => [[1, 0, 0], [0, 1, 0], [0, 0, 1], [-1, 0, 0], [0, -1, 0], [0, 0, -1]].map((d) => point.map((v, i) => v + d[i])),
+			canPass: (_what, _from, to) => (to.join() === '1,0,0' ? { cost: 50 } : {}),
+		};
+		const route = openRoute(findRoute(world, 'Ann', [0, 0, 0], pointGoal([2, 0, 0])));
 		assert.equal(route.cost, 4);
 		assert.equal(route.points.some((p) => p.join() === '1,0,0'), false);
 	});
 
 	it('names the blocker when a blocked step is the only way, and gives up past the cap', () => {
-		const gated = (point:Vec):PathStep[] => line(point).map((s) => (s.point[0] === 2 ? { ...s, blocked: 'Gate is shut' } : s));
-		assert.deepEqual(findRoute(gated, [0], pointGoal([4])), { blockers: [{ reason: 'Gate is shut', cost: 4 }] });
-		assert.equal(findRoute(line, [0], pointGoal([1e6]), 50), undefined);
+		const gated:RouteWorld<string> = { getNeighbors: lineNeighbors, canPass: (_what, _from, to) => (to[0] === 2 ? { blocked: 'Gate is shut' } : {}) };
+		assert.deepEqual(findRoute(gated, 'Ann', [0], pointGoal([4])), { blockers: [{ reason: 'Gate is shut', cost: 4 }] });
+		assert.equal(findRoute(line, 'Ann', [0], pointGoal([1e6]), 50), undefined);
 	});
 
 	it('names every locked way in, cheapest first, and only those that lead there', () => {
 		const locks = new Map([['0,1', 'EastGate is locked'], ['0,3', 'WestGate is locked — you carry IronKey'], ['0,4', 'Closet is locked']]);
 		const shed:Vec = [-10, -10];
-		const gated = (point:Vec):PathStep[] => {
-			const steps = network(point);
-			const i = WAYPOINTS.findIndex((p) => distance(p, point) < 1e-9);
-			if (i === 0) {
-				steps.push({ point: shed });
-			}
-			return steps.map((s) => {
-				const j = s.point === shed ? 4 : WAYPOINTS.indexOf(s.point);
-				const reason = i >= 0 ? locks.get([i, j].sort().join()) : undefined;
-				return reason ? { ...s, blocked: reason } : s;
-			});
+		const gated:RouteWorld<string> = {
+			getNeighbors: (point) => [...NETWORK.getNeighbors(point), ...waypointAt(point) === 0 ? [shed] : []],
+			canPass: (what, from, to) => {
+				const i = waypointAt(from);
+				const reason = i >= 0 ? locks.get([i, to === shed ? 4 : waypointAt(to)].sort().join()) : undefined;
+				return { ...NETWORK.canPass(what, from, to), ...reason ? { blocked: reason } : {} };
+			},
 		};
-		const found = findRoute(gated, [1, 1], pointGoal([11, 9]));
+		const found = findRoute(gated, 'Ann', [1, 1], pointGoal([11, 9]));
 		assert.ok(found && 'blockers' in found);
 		assert.deepEqual(found.blockers.map((b) => b.reason), ['EastGate is locked', 'WestGate is locked — you carry IronKey']);
 	});
 
 	it('crosses a sparse weighted network between two points off it', () => {
-		assert.deepEqual(openRoute(findRoute(network, [1, 1], pointGoal([11, 9]))).points, [[0, 0], [10, 0], [10, 10], [11, 9]]);
+		assert.deepEqual(openRoute(findRoute(NETWORK, 'Ann', [1, 1], pointGoal([11, 9]))).points, [[0, 0], [10, 0], [10, 10], [11, 9]]);
 	});
 
 	it('gets out of range the long way round rather than running past the threat', () => {
 		// Two ways out of 5 from a threat at [1, 0]: past it (about 6.1 long), or wide of it (8 long).
 		const roads:[Vec, Vec][] = [[[0, 0], [2, 0.5]], [[2, 0.5], [6, 0]], [[0, 0], [0, -3]], [[0, -3], [5, -3]]];
-		const graph = (point:Vec):PathStep[] => roads.flatMap(([a, b]) => (
-			distance(a, point) < 1e-9 ? [{ point: b }] : distance(b, point) < 1e-9 ? [{ point: a }] : []
-		));
-		assert.deepEqual(openRoute(findRoute(graph, [0, 0], awayGoal([1, 0], 5))).points, [[0, -3], [5, -3]]);
-		assert.equal(findRoute(graph, [0, 0], awayGoal([1, 0], 50)), undefined, 'cornered: no way that far');
+		const world = openWays((point) => roads.flatMap(([a, b]) => (distance(a, point) < 1e-9 ? [b] : distance(b, point) < 1e-9 ? [a] : [])));
+		assert.deepEqual(openRoute(findRoute(world, 'Ann', [0, 0], awayGoal([1, 0], 5))).points, [[0, -3], [5, -3]]);
+		assert.equal(findRoute(world, 'Ann', [0, 0], awayGoal([1, 0], 50)), undefined, 'cornered: no way that far');
 	});
 
 	it('does not treat range through a wall as arrived; it goes around', () => {
 		const wall = new Set(['1,0']);
-		const grid = (point:Vec):PathStep[] => {
-			const cell = point.map(Math.round);
-			return [[1, 0], [-1, 0], [0, 1], [0, -1]].flatMap(([dx, dz]) => {
-				const next = [cell[0] + dx, cell[1] + dz];
-				if (wall.has(next.join(',')) || Math.abs(next[1]) > 4) {
-					return [];
-				}
-				return [{ point: next }];
-			});
+		const grid:RouteWorld<string> = {
+			getNeighbors: (point) => [[1, 0], [-1, 0], [0, 1], [0, -1]].map(([dx, dz]) => [Math.round(point[0]) + dx, Math.round(point[1]) + dz]),
+			canPass: (_what, _from, to) => (wall.has(to.join(',')) || Math.abs(to[1]) > 4 ? undefined : {}),
 		};
-		const route = openRoute(findRoute(grid, [0, 0], pointGoal([2, 0], 2.5)));
+		const route = openRoute(findRoute(grid, 'Ann', [0, 0], pointGoal([2, 0], 2.5)));
 		assert.equal(route.points.some((p) => p[0] === 1 && p[1] === 0), false);
 		assert.ok(route.points.some((p) => Math.abs(p[1]) > 0), 'went around');
 	});
@@ -265,19 +277,32 @@ describe('findRoute', () => {
 	it('ends only through the steps into the goal: a ledge dropped off is no way up, a wall no way in', () => {
 		// Cells 0 to 3 on a line. Cell 2 is a ledge: one drops off it to either side, but never climbs on.
 		const ledge = 2;
-		const grid = (point:Vec, into?:boolean):PathStep[] => {
-			const at = Math.round(point[0]);
-			return [at - 1, at + 1]
-				.filter((next) => next >= 0 && next <= 3 && (into ? at : next) !== ledge)
-				.map((next) => ({ point: [next] }));
+		const grid:RouteWorld<string> = {
+			getNeighbors: (point) => [Math.round(point[0]) - 1, Math.round(point[0]) + 1].filter((next) => next >= 0 && next <= 3).map((next) => [next]),
+			canPass: (_what, _from, to) => (Math.round(to[0]) === ledge ? undefined : {}),
 		};
-		assert.equal(findRoute(grid, [0], pointGoal([2.2])), undefined, 'climbed the ledge on the last step');
-		assert.deepEqual(openRoute(findRoute(grid, [2], pointGoal([0.2]))).points, [[1], [0.2]]);
+		assert.equal(findRoute(grid, 'Ann', [0], pointGoal([2.2])), undefined, 'climbed the ledge on the last step');
+		assert.deepEqual(openRoute(findRoute(grid, 'Ann', [2], pointGoal([0.2]))).points, [[1], [0.2]]);
 	});
 
 	it('lists reachable points without crossing a blocked step', () => {
-		const gated = (point:Vec):PathStep[] => line(point).filter((s) => s.point[0] >= 0).map((s) => (s.point[0] === 3 ? { ...s, blocked: 'x' } : s));
-		assert.deepEqual(reachablePoints(gated, [0], 99).map((p) => p.point[0]), [0, 1, 2]);
+		const gated:RouteWorld<string> = {
+			getNeighbors: lineNeighbors,
+			canPass: (_what, _from, to) => (to[0] < 0 ? undefined : to[0] === 3 ? { blocked: 'x' } : {}),
+		};
+		assert.deepEqual(reachablePoints(gated, 'Ann', [0], 99).map((p) => p.point[0]), [0, 1, 2]);
+	});
+
+	it('asks a shared world once per step, however many searches walk it', () => {
+		let asked = 0;
+		const counted = memoWorld<string>({ getNeighbors: lineNeighbors, canPass: () => {
+			asked += 1;
+			return {};
+		} });
+		findRoute(counted, 'Ann', [0], pointGoal([5]));
+		const once = asked;
+		findRoute(counted, 'Ann', [0], pointGoal([5]));
+		assert.equal(asked, once);
 	});
 });
 
@@ -290,7 +315,7 @@ describe('Mover', () => {
 		const world:HostWorld<string> = {
 			find: (id) => id,
 			getPose: (id) => ({ point: id === 'Ann' ? me : [11, 9] }),
-			getPathGraph: () => network,
+			...NETWORK,
 			steerToward: (character, point) => {
 				to = point;
 				return !!point && distance(me, point) <= 0.35;
@@ -324,18 +349,8 @@ describe('Mover', () => {
 			find: (id) => id,
 			getPose: (id) => ({ point: id === 'Ann' ? me : [2, 0] }),
 			getReach: () => 2.5,
-			getPathGraph: () => (point) => {
-				const cell = point.map(Math.round);
-				const out:PathStep[] = [];
-				for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
-					const next = [cell[0] + dx, cell[1] + dz];
-					if (walls.has(next.join(',')) || Math.abs(next[0]) > 4 || Math.abs(next[1]) > 8) {
-						continue;
-					}
-					out.push({ point: next });
-				}
-				return out;
-			},
+			getNeighbors: (point) => [[1, 0], [-1, 0], [0, 1], [0, -1]].map(([dx, dz]) => [Math.round(point[0]) + dx, Math.round(point[1]) + dz]),
+			canPass: (_what, _from, to) => (walls.has(to.join(',')) || Math.abs(to[0]) > 4 || Math.abs(to[1]) > 8 ? undefined : {}),
 			steerToward: (_character, point) => {
 				to = point;
 				return !!point && distance(me, point) <= 0.05;
@@ -358,6 +373,73 @@ describe('Mover', () => {
 		}
 		assert.equal(result?.ok, true);
 		assert.equal(walls.has(me.map(Math.round).join(',')), false);
+	});
+
+	/** Walkers on an open plane, each sent to `target` in turn; ticks until all are done. Who finished in what order, where everyone was each tick. */
+	async function crowdAt(target:Vec, walkers:Record<string, Vec>, crowd:Crowd, reach:number):Promise<{ order:string[]; ticks:Map<string, Vec>[]; points:Map<string, Vec> }> {
+		const points = new Map(Object.entries(walkers));
+		const steering = new Map<string, Vec | null>();
+		let now = 0;
+		const world:HostWorld<string> = {
+			find: (id) => id,
+			getPose: (id) => ({ point: points.get(id) ?? target, facing: [0, 1] }),
+			getReach: () => reach,
+			getNeighbors: (point) => [[1, 0], [-1, 0], [0, 1], [0, -1]].map(([dx, dz]) => [Math.round(point[0]) + dx, Math.round(point[1]) + dz]),
+			canPass: () => ({}),
+			steerToward: (id, point) => {
+				steering.set(id, point);
+				return !!point && distance(points.get(id)!, point) <= 0.05;
+			},
+		};
+		const mover = new Mover(world, () => now, () => crowd);
+		const order:string[] = [];
+		for (const id of points.keys()) {
+			void mover.go(id, { target: 'Target' }, 'go_to').then((r) => {
+				assert.equal(r.ok, true, `${id}: ${r.reason}`);
+				order.push(id);
+			});
+		}
+		const ticks:Map<string, Vec>[] = [];
+		for (; now < 60 && order.length < points.size; now += 0.1) {
+			mover.tick();
+			for (const [id, to] of steering) {
+				const me = points.get(id)!;
+				const gap = to ? distance(me, to) : 0;
+				if (to && gap > 0) {
+					points.set(id, me.map((v, i) => v + ((to[i] - v) / gap) * Math.min(gap, 0.3)));
+				}
+			}
+			ticks.push(new Map(points));
+			await flush();
+		}
+		return { order, ticks, points };
+	}
+
+	it('lines up behind the first, out the way the target faces, and lets them in one by one', async () => {
+		const { order, ticks } = await crowdAt([0, 0], { Ann: [14, 0], Bo: [-6, 1], Cy: [0, 9] }, 'line', 1.2);
+		assert.deepEqual(order, ['Ann', 'Bo', 'Cy']);
+		// Before Ann was served, Bo and Cy stood at the first and second place in line.
+		const waiting = ticks.find((at) => distance(at.get('Bo')!, [0, 2.2]) < 0.1 && distance(at.get('Cy')!, [0, 3.2]) < 0.1);
+		assert.ok(waiting, 'Bo and Cy queued behind Ann');
+		assert.ok(distance(waiting.get('Ann')!, [0, 0]) > 1.2, 'while Ann was still on the way');
+	});
+
+	it('spreads round the target in a ring, each in its own place', async () => {
+		const { points } = await crowdAt([0, 0], { Ann: [6, 0], Bo: [6, 0], Cy: [6, 0], Dee: [6, 0] }, 'ring', 2);
+		const ids = [...points.keys()];
+		for (const id of ids) {
+			assert.ok(distance(points.get(id)!, [0, 0]) <= 2, `${id} in reach`);
+		}
+		for (const [i, a] of ids.entries()) {
+			for (const b of ids.slice(i + 1)) {
+				assert.ok(distance(points.get(a)!, points.get(b)!) >= 0.9, `${a} and ${b} apart`);
+			}
+		}
+	});
+
+	it('goes straight in with none, so walkers from one spot end on one spot', async () => {
+		const { points } = await crowdAt([0, 0], { Ann: [6, 0], Bo: [6, 0] }, 'none', 2);
+		assert.ok(distance(points.get('Ann')!, points.get('Bo')!) < 0.1);
 	});
 });
 
@@ -398,6 +480,79 @@ describe('stock world verbs', () => {
 		assert.deepEqual(told, [{ kind: 'Ledger', text: '{0} gave 1 Lantern to {1}.', who: ['Ann', 'Smith'], tags: ['ledger', 'give', 'Lantern'], remember: true }]);
 		assert.ok(distance(grid.point.get('Ann')!, [0, 6]) <= 1.3);
 		assert.equal(director.character('Ann')!.lastResult?.reason, 'gave Lantern to Smith');
+		director.dispose();
+	});
+
+	it('puts an item in what it is dropped to, after going there', async () => {
+		const grid = new Grid().place('Ann', [0, 0]).place('Lantern', [0, 0]).place('Chest', [4, 0]);
+		grid.carry.set('Lantern', 'Ann');
+		const { director } = await run(grid, 'drop(item=Lantern, to=Chest)', { kit: ['drop', 'wait'] });
+		assert.equal(grid.carry.get('Lantern'), 'Chest');
+		assert.ok(distance(grid.point.get('Ann')!, [4, 0]) <= 1.3);
+		assert.equal(director.character('Ann')!.lastResult?.reason, 'put Lantern in Chest');
+		director.dispose();
+	});
+
+	it('takes an item from what it is picked up from', async () => {
+		const grid = new Grid().place('Ann', [0, 0]).place('Lantern', [4, 0]).place('Chest', [4, 0]);
+		grid.carry.set('Lantern', 'Chest');
+		const { director } = await run(grid, 'pick_up(item=Lantern, from=Chest)', { kit: ['pick_up', 'wait'] });
+		assert.equal(grid.carry.get('Lantern'), 'Ann');
+		assert.equal(director.character('Ann')!.lastResult?.reason, 'took Lantern from Chest');
+		director.dispose();
+	});
+
+	it('picks up from where it sees the item, when not told', async () => {
+		const grid = new Grid().place('Ann', [0, 0]).place('Lantern', [4, 0]).place('Chest', [4, 0]);
+		grid.carry.set('Lantern', 'Chest');
+		const sight = (d:ArcDirector<Ctx>):void => {
+			d.withSight({
+				look: () => ({
+					self: { id: 'Ann', point: grid.point.get('Ann')! },
+					objects: [{ id: 'Chest', point: [4, 0], tags: [] }, { id: 'Lantern', point: [4, 0], tags: ['item'], attachedTo: 'Chest', attachMode: 'in' }],
+				}),
+			});
+		};
+		const { director } = await run(grid, 'pick_up(Lantern)', { kit: ['pick_up', 'wait'], before: sight });
+		assert.equal(grid.carry.get('Lantern'), 'Ann');
+		director.dispose();
+	});
+
+	it('picks up only what it sees, unless the world lets it fetch anything', async () => {
+		const blind = (d:ArcDirector<Ctx>):void => {
+			d.withSight({ look: () => ({ self: { id: 'Ann', point: [0, 0] }, objects: [] }) });
+		};
+		const unseen = new Grid().place('Ann', [0, 0]).place('Lantern', [4, 0]);
+		const refused = await run(unseen, 'pick_up(Lantern)', { kit: ['pick_up', 'wait'], before: blind });
+		assert.equal(refused.director.character('Ann')!.lastResult?.reason, 'you see no Lantern; go where it is first');
+		assert.equal(unseen.carry.get('Lantern'), undefined);
+		refused.director.dispose();
+		const anywhere = new Grid().place('Ann', [0, 0]).place('Lantern', [4, 0]);
+		anywhere.world.canPickUp = () => true;
+		const fetched = await run(anywhere, 'pick_up(Lantern)', { kit: ['pick_up', 'wait'], before: blind });
+		assert.equal(anywhere.carry.get('Lantern'), 'Ann');
+		fetched.director.dispose();
+	});
+
+	it('neither takes from nor drops to a character', async () => {
+		const grid = new Grid().place('Ann', [0, 0]).place('Lantern', [0, 0]).place('Smith', [2, 0]);
+		grid.carry.set('Lantern', 'Ann');
+		const dropped = await run(grid, 'drop(item=Lantern, to=Smith)', { kit: ['drop', 'wait'] });
+		assert.equal(dropped.director.character('Ann')!.lastResult?.reason, 'to hand Lantern to Smith, use give');
+		dropped.director.dispose();
+		grid.carry.set('Lantern', 'Smith');
+		const taken = await run(grid, 'pick_up(item=Lantern, from=Smith)', { kit: ['pick_up', 'wait'] });
+		assert.equal(taken.director.character('Ann')!.lastResult?.reason, 'Smith carries it; only they can give it to you');
+		assert.equal(grid.carry.get('Lantern'), 'Smith');
+		taken.director.dispose();
+	});
+
+	it('gives only to a character, never to a thing', async () => {
+		const grid = new Grid().place('Ann', [0, 0]).place('Lantern', [0, 0]).place('Mushroom', [2, 0]);
+		grid.carry.set('Lantern', 'Ann');
+		const { director } = await run(grid, 'give(item=Lantern, to=Mushroom)', { kit: ['give', 'wait'] });
+		assert.equal(director.character('Ann')!.lastResult?.reason, 'Mushroom is not a character');
+		assert.equal(grid.carry.get('Lantern'), 'Ann');
 		director.dispose();
 	});
 
@@ -527,6 +682,14 @@ describe('stock world verbs', () => {
 		director.dispose();
 	});
 
+	it('refuses an offer to anyone of what the offerer does not have', async () => {
+		const grid = new Grid().place('Ann', [0, 0]);
+		const { director } = await run(grid, 'offer(give={"item":3, "quantity":1}, get={"gold":2})', { kit: ['offer', 'wait'] });
+		assert.equal(director.character('Ann')!.lastResult?.reason, 'Ann has no item');
+		assert.equal(director.offers.all.length, 0);
+		director.dispose();
+	});
+
 	it('takes back what moved when a later move in the trade is refused', async () => {
 		const grid = new Grid().place('Ann', [0, 0]).place('Mira', [4, 0]).place('Apple', [0, 0]).place('Bread', [4, 0]);
 		grid.carry.set('Apple', 'Ann');
@@ -547,6 +710,16 @@ describe('stock world verbs', () => {
 		const { director } = await run(grid, 'wander(until=1 > 2, seconds=3)', { kit: ['wander', 'wait'], seconds: 4 });
 		assert.ok(distance(grid.point.get('Ann')!, [0, 0]) > 1);
 		assert.equal(director.character('Ann')!.lastResult?.verb, 'wander');
+		director.dispose();
+	});
+
+	it('goes to a target but stops on the way once until holds', async () => {
+		const grid = new Grid().place('Ann', [0, 0]).place('Well', [20, 0]);
+		const { director } = await run(grid, 'go_to(target=Well, until=prev.secondsAgo > 1)', { kit: ['go_to', 'wait'], seconds: 6 });
+		const ann = director.character('Ann')!;
+		assert.deepEqual(ann.lastResult && { ok: ann.lastResult.ok, reason: ann.lastResult.reason }, { ok: true, reason: 'until' });
+		const went = distance(grid.point.get('Ann')!, [0, 0]);
+		assert.ok(went > 0.5 && went < 15, `walked ${went.toFixed(1)} of the 20 to the Well`);
 		director.dispose();
 	});
 
@@ -617,6 +790,6 @@ describe('stock world verbs', () => {
 			.withWorld({ find: () => undefined, getPose: () => undefined })
 			.withContext((id) => ({ id }))
 			.addCharacter({ id: 'Ann', mind: {}, kit: { verbs: ['go_to', 'examine'] }, identity: { role: 'Waits.' } });
-		await assert.rejects(director.start(), /go_to' needs withWorld getPathGraph and steerToward.*examine' needs withWorld getDescription/);
+		await assert.rejects(director.start(), /go_to' needs withWorld getNeighbors and canPass and steerToward.*examine' needs withWorld getDescription/);
 	});
 });

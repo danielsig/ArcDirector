@@ -1,11 +1,19 @@
-import type { PathGraph, PathStep, Vec } from './types.js';
+import type { HostWorld, PathStep, Vec } from './types.js';
 import { distance } from './vec.js';
+
+/** The parts of a world a route search walks on. */
+export type RouteWorld<TEntity> = Required<Pick<HostWorld<TEntity>, 'getNeighbors' | 'canPass'>>;
+
+/** Whether `world` has what a route search walks on. */
+export function hasRoutes<TEntity>(world:HostWorld<TEntity> | undefined):world is HostWorld<TEntity> & RouteWorld<TEntity> {
+	return !!world?.getNeighbors && !!world.canPass;
+}
 
 /** Points to pass through after the start, and the total cost. */
 export type Route = { points:Vec[]; cost:number };
 
 /** No open way. Each blocked step that leads there, with the cost of the cheapest route through it, cheapest first. */
-export type Blocked = { blockers:{ reason:string; cost:number }[] };
+export type Blocked = { blockers:{ reason:string; cost:number; by?:string }[] };
 
 /** Blocked ways named when there is no open way, cheapest first. */
 export const BLOCKERS_TOLD = 3;
@@ -23,7 +31,7 @@ export function blockedReason(blocked:Blocked):string {
 /** Points a search may settle along open ways, and again along blocked ones, before it gives up. */
 export const SEARCH_CAP = 4096;
 
-/** Key of the goal's own point, which need not be a point of the graph. */
+/** Key of the goal's own point, which need not be a neighbor the world names. */
 const END = 'end';
 
 /** `via` is the first blocked step on the way here; open ways have none and always come first. */
@@ -88,8 +96,47 @@ class Frontier {
 	}
 }
 
-function stepCost(from:Vec, step:PathStep):number {
-	return Math.max(step.cost ?? 0, distance(from, step.point));
+function isOpen(step:PathStep | undefined):boolean {
+	return !!step && !step.blocked;
+}
+
+function stepCost(from:Vec, to:Vec, step:PathStep):number {
+	return Math.max(step.cost ?? 0, distance(from, to));
+}
+
+/** Each neighbor of `point` `what` can step to, and what that step is. */
+function stepsFrom<TEntity>(world:RouteWorld<TEntity>, what:'light' | 'sound' | TEntity, point:Vec):[Vec, PathStep][] {
+	return world.getNeighbors(point).flatMap((next):[Vec, PathStep][] => {
+		const step = world.canPass(what, point, next);
+		return step ? [[next, step]] : [];
+	});
+}
+
+/**
+ * `world` asking each of its parts once per question: for several searches over a world that cannot change between
+ * them, such as one think's, which then share what the world said.
+ */
+export function memoWorld<TEntity>(world:RouteWorld<TEntity>):RouteWorld<TEntity> {
+	const neighbors = new Map<string, Vec[]>();
+	const passed = new Map<unknown, Map<string, PathStep | undefined>>();
+	return {
+		getNeighbors: (point) => {
+			const key = keyOf(point);
+			if (!neighbors.has(key)) {
+				neighbors.set(key, world.getNeighbors(point));
+			}
+			return neighbors.get(key)!;
+		},
+		canPass: (what, a, b) => {
+			const known = passed.get(what) ?? new Map<string, PathStep | undefined>();
+			passed.set(what, known);
+			const key = `${keyOf(a)}>${keyOf(b)}`;
+			if (!known.has(key)) {
+				known.set(key, world.canPass(what, a, b));
+			}
+			return known.get(key);
+		},
+	};
 }
 
 /** Where a search ends. */
@@ -100,7 +147,7 @@ export type RouteGoal = {
 	estimate(point:Vec):number;
 	/** Extra cost, at least 0, of a step of cost `length` onto `point`. */
 	toll?(point:Vec, length:number):number;
-	/** A point off the graph the route may end on, arriving through the steps into it. */
+	/** A point the route may end on, though no neighbor names it, arriving through the steps into it. */
 	at?:Vec;
 };
 
@@ -131,26 +178,49 @@ export function awayGoal(threat:Vec, keep:number):RouteGoal {
 }
 
 /**
- * Cheapest open route from `from` to `goal`. Neither end has to be a point of the graph: the route leaves through
- * the steps out of `from` and, for a goal with its own point, ends on it only through a step into it, so a
- * sparse waypoint network works as well as a grid, and a goal inside a wall is no place to walk to.
+ * Cheapest open route for `what` from `from` to `goal`, over `world`'s neighbors and what `canPass` says of each step.
+ * Neither end has to be a neighbor the world names: the route leaves through the steps out of `from` and, for a goal
+ * with its own point, ends on it only through a step into it, so a sparse waypoint network works as well as a grid,
+ * and a goal inside a wall is no place to walk to.
  *
  * One search: open ways settle first, so an open route comes back exactly as if blocked steps did not exist.
  * Without one, the search goes on through blocked steps, once per first blocker, and lists every blocker
  * that leads there. A blocked way that rejoins an open one is dropped: the blocker after it is the one to name.
  */
-export function findRoute(graph:PathGraph, from:Vec, goal:RouteGoal, cap = SEARCH_CAP):Route | Blocked | undefined {
-	const entries = new Map(goal.at ? graph(goal.at, true).map((step) => [keyOf(step.point), step]) : []);
+export function findRoute<TEntity>(
+	world:RouteWorld<TEntity>,
+	what:'light' | 'sound' | TEntity,
+	from:Vec,
+	goal:RouteGoal,
+	cap = SEARCH_CAP,
+):Route | Blocked | undefined {
+	const at = goal.at;
+	// The steps into the goal's own point, by where each leaves from: the only ways a route ends on it.
+	const entries = new Map<string, PathStep>();
 	// An open step either way: a goal no one stands on (a tree, a stall) is still reached from beside it.
-	const beside = new Set(goal.at ? [...graph(goal.at), ...entries.values()].filter((step) => !step.blocked).map((step) => keyOf(step.point)) : []);
+	const beside = new Set<string>();
+	for (const point of at ? world.getNeighbors(at) : []) {
+		const into = world.canPass(what, point, at!);
+		if (into) {
+			entries.set(keyOf(point), into);
+		}
+		if (isOpen(into) || isOpen(world.canPass(what, at!, point))) {
+			beside.add(keyOf(point));
+		}
+	}
 	const stateOf = (key:string, via?:string):string => (via === undefined ? key : `${key}|${via}`);
 	const best = new Map<string, number>([[keyOf(from), 0]]);
 	const openlyReached = new Set<string>();
 	const blockers = new Map<string, number>();
+	/** What blocks, by its reason, where `canPass` said. */
+	const blockedBy = new Map<string, string>();
 	const open = new Frontier();
 	const relax = (node:Node, point:Vec, step:PathStep, key:string, end?:boolean):void => {
 		const via = node.via ?? step.blocked;
-		const length = stepCost(end ? goal.at! : node.point, step);
+		if (step.blocked && step.by) {
+			blockedBy.set(step.blocked, step.by);
+		}
+		const length = stepCost(node.point, point, step);
 		const cost = node.cost + length + (goal.toll?.(point, length) ?? 0);
 		const state = stateOf(key, via);
 		if (cost < (best.get(state) ?? Infinity)) {
@@ -186,17 +256,17 @@ export function findRoute(graph:PathGraph, from:Vec, goal:RouteGoal, cap = SEARC
 		}
 		const entry = entries.get(key);
 		if (entry) {
-			relax(node, goal.at!, entry, END, true);
+			relax(node, at!, entry, END, true);
 		}
-		for (const step of graph(node.point)) {
-			relax(node, step.point, step, keyOf(step.point));
+		for (const [point, step] of stepsFrom(world, what, node.point)) {
+			relax(node, point, step, keyOf(point));
 		}
 	}
-	return blockers.size > 0 ? { blockers: [...blockers].map(([reason, cost]) => ({ reason, cost })) } : undefined;
+	return blockers.size > 0 ? { blockers: [...blockers].map(([reason, cost]) => ({ reason, cost, ...blockedBy.has(reason) ? { by: blockedBy.get(reason) } : {} })) } : undefined;
 }
 
 /**
- * In reach, and actually next to the goal on the graph. Euclidean range through a wall is not a stop:
+ * In reach, and actually a step from the goal. Euclidean range through a wall is not a stop:
  * no open step joins here and `at`, so the search keeps going around.
  */
 function arrived(node:Node, key:string, goal:RouteGoal, beside:Set<string>):boolean {
@@ -224,8 +294,8 @@ function routeTo(end:Node):Route {
 	return { points, cost: end.cost };
 }
 
-/** Points reachable from `from` without a blocked step, cheapest first, up to `cap` of them. */
-export function reachablePoints(graph:PathGraph, from:Vec, cap:number):{ point:Vec; cost:number }[] {
+/** Points `what` reaches from `from` without a blocked step, cheapest first, up to `cap` of them. */
+export function reachablePoints<TEntity>(world:RouteWorld<TEntity>, what:'light' | 'sound' | TEntity, from:Vec, cap:number):{ point:Vec; cost:number }[] {
 	const best = new Map<string, number>([[keyOf(from), 0]]);
 	const open = new Frontier();
 	const out:{ point:Vec; cost:number }[] = [];
@@ -236,15 +306,15 @@ export function reachablePoints(graph:PathGraph, from:Vec, cap:number):{ point:V
 			continue;
 		}
 		out.push({ point: node.point, cost: node.cost });
-		for (const step of graph(node.point)) {
+		for (const [point, step] of stepsFrom(world, what, node.point)) {
 			if (step.blocked) {
 				continue;
 			}
-			const cost = node.cost + stepCost(node.point, step);
-			const key = keyOf(step.point);
+			const cost = node.cost + stepCost(node.point, point, step);
+			const key = keyOf(point);
 			if (cost < (best.get(key) ?? Infinity)) {
 				best.set(key, cost);
-				open.push({ point: step.point, cost, rank: cost });
+				open.push({ point, cost, rank: cost });
 			}
 		}
 	}

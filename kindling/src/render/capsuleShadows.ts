@@ -75,7 +75,8 @@ float capsuleShadow(vec3 p, vec3 l, float far) {
 }
 `;
 
-const LIGHTS = THREE.ShaderChunk.lights_fragment_begin
+/** Three's light loop with the capsules blocking point and directional lights, read as it stands (other patches included). */
+const lights = ():string => THREE.ShaderChunk.lights_fragment_begin
 	.replace(
 		'getPointLightInfo( pointLight, geometryPosition, directLight );',
 		'$&\n\t\tif ( directLight.visible ) directLight.color *= capsuleShadow( geometryPosition, directLight.direction, distance( pointLight.position, geometryPosition ) );',
@@ -92,7 +93,7 @@ export function patchCapsuleShadows(material:THREE.Material):void {
 		shader.fragmentShader = shader.fragmentShader
 			// Three defines USE_SKINNING for the vertex shader only.
 			.replace('#include <common>', `#include <common>\n${shader.skinning ? '#define CAPSULE_SKINNED\n' : ''}${COMMON}`)
-			.replace('#include <lights_fragment_begin>', LIGHTS);
+			.replace('#include <lights_fragment_begin>', lights());
 	});
 }
 

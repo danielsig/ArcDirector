@@ -2,6 +2,7 @@ import { MeshRenderer, Time, yawToward, Component } from '@arc-director/kindling
 import * as THREE from 'three';
 import { HumanBody } from '../engine/components';
 import { Order } from '../engine/order';
+import { FOLDED, applyPose, flightPose, hopPose, lookPose, peckPose, type Pose } from './ravenPose';
 
 /** Someone this close (m) sends a raven up. */
 const SPOOK = 2.6;
@@ -10,18 +11,10 @@ const FLY_SPEED = 6;
 const ARC = 3;
 const FLY_MIN = 8;
 const FLY_MAX = 16;
-/** Wing beats per second in flight. */
-const FLAP_HZ = 5;
 
 /** What a raven on the ground does next, and for how long (s). */
 type Act = { kind:'peck' | 'hop' | 'look' | 'still'; t0:number; seconds:number; from:THREE.Vector3; to:THREE.Vector3; yaw:number };
 type Flight = { from:THREE.Vector3; to:THREE.Vector3; t0:number; seconds:number };
-
-/** Bone turns (radians, file frame: the bird faces +Z, its left wing along +X) for one pose. */
-type Pose = { body:number; head:[number, number]; tail:number; wing:[number, number, number]; tip:[number, number] };
-
-/** Wings folded back along the body. */
-const FOLDED:Pose = { body: 0, head: [0, 0], tail: 0, wing: [0, 1.35, -0.35], tip: [0.7, 0] };
 
 /**
  * A raven (`Raven` model, rigged by `buildModels.mjs` `bird`) on the ground: it hops, pecks and
@@ -95,17 +88,7 @@ export class Raven extends Component {
 			this._flight = null;
 			return FOLDED;
 		}
-		// Beats hard rising and landing, glides on the way.
-		const beat = 0.35 + 0.65 * Math.abs(Math.cos(Math.PI * u));
-		const ph = now * FLAP_HZ * Math.PI * 2;
-		const open = Math.min(1, u * 8, (1 - u) * 8);
-		return {
-			body: 0.35 * open,
-			head: [-0.25 * open, 0],
-			tail: -0.15 * open,
-			wing: [0, FOLDED.wing[1] * (1 - open), FOLDED.wing[2] * (1 - open) + Math.sin(ph) * 0.9 * beat * open],
-			tip: [FOLDED.tip[0] * (1 - open), Math.sin(ph - 0.7) * 0.5 * beat * open],
-		};
+		return flightPose(u, now);
 	}
 
 	/** On the ground: pecks, hops a little way, or looks about. */
@@ -115,27 +98,17 @@ export class Raven extends Component {
 			act = this._act = this.nextAct(now);
 		}
 		const u = Math.min(1, (now - act.t0) / act.seconds);
-		const bump = Math.sin(Math.PI * u);
-		const pose:Pose = { ...FOLDED, head: [0, 0] };
 		if (act.kind === 'peck') {
-			// Two quick jabs.
-			const jab = Math.max(0, Math.sin(Math.PI * 2 * u));
-			pose.body = 0.55 * jab;
-			pose.head = [0.6 * jab, 0];
-			pose.tail = -0.3 * jab;
+			return peckPose(u);
 		}
-		else if (act.kind === 'hop') {
+		if (act.kind === 'hop') {
 			const at = act.from.clone().lerp(act.to, u);
-			at.y += 0.07 * bump;
+			at.y += 0.07 * Math.sin(Math.PI * u);
 			this.place(at);
 			this.gameObject.transform.yaw = act.yaw;
-			pose.wing = [0, FOLDED.wing[1] - 0.25 * bump, FOLDED.wing[2] + 0.3 * bump];
-			pose.tail = 0.25 * bump;
+			return hopPose(u);
 		}
-		else if (act.kind === 'look') {
-			pose.head = [-0.15 * bump, act.yaw * bump];
-		}
-		return pose;
+		return act.kind === 'look' ? lookPose(u, act.yaw) : FOLDED;
 	}
 
 	private nextAct(now:number):Act {
@@ -166,18 +139,4 @@ export class Raven extends Component {
 		p.y = at.y;
 		p.z = at.z;
 	}
-}
-
-/** Sets the rig's bones; the right side mirrors the left. */
-function applyPose(root:THREE.Object3D, pose:Pose):void {
-	const set = (name:string, x:number, y:number, z:number):void => {
-		root.getObjectByName(name)?.rotation.set(x, y, z);
-	};
-	set('Body', pose.body, 0, 0);
-	set('Head', pose.head[0], pose.head[1], 0);
-	set('Tail', pose.tail, 0, 0);
-	set('WingL', pose.wing[0], pose.wing[1], pose.wing[2]);
-	set('WingR', pose.wing[0], -pose.wing[1], -pose.wing[2]);
-	set('WingTipL', 0, pose.tip[0], pose.tip[1]);
-	set('WingTipR', 0, -pose.tip[0], -pose.tip[1]);
 }

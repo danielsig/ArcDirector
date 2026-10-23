@@ -39,6 +39,22 @@ export function deriveChoiceName(arc:Arc):string {
 	return tail ? `${step.verb}_${tail}` : step.verb;
 }
 
+/** Seconds the extra choice waits when a `choose` was given only one. */
+const LONE_WAIT_SECONDS = 0.5;
+
+/**
+ * A `choose` with one choice also offers a short wait, so it can stand instead of failing when that choice
+ * cannot run. Two or more choices are left as written.
+ */
+export function withLoneWait(choices:Record<string, Arc>):Record<string, Arc> {
+	if (Object.keys(choices).length !== 1) {
+		return choices;
+	}
+	const name = freeChoiceName('wait', new Set(Object.keys(choices)));
+	const wait:Step = { verb: 'wait', args: { seconds: LONE_WAIT_SECONDS }, granted: true };
+	return { ...choices, [name]: [wait] };
+}
+
 /** `base`, or `base_2`, `base_3`, … when `taken` already holds it. */
 export function freeChoiceName(base:string, taken:ReadonlySet<string>):string {
 	let name = base;

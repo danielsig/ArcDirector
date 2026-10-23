@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import type { HudModel } from './hudModel';
 import HudHearts from './HudHearts.vue';
+import HudGoals from './HudGoals.vue';
+import HudInspect from './HudInspect.vue';
 import HudCounts from './HudCounts.vue';
 import HudMinimap from './HudMinimap.vue';
 import HudMessage from './HudMessage.vue';
@@ -31,8 +33,10 @@ const emit = defineEmits<{
 <template>
 	<div class="hud-layer">
 		<HudSpeech :hud="hud" />
-		<HudHearts :hud="hud" />
-		<HudCounts :hud="hud" />
+		<HudHearts v-if="hud.player === 'participant'" :hud="hud" />
+		<HudGoals :hud="hud" />
+		<HudInspect :hud="hud" />
+		<HudCounts v-if="hud.player === 'participant'" :hud="hud" />
 		<HudInventory :hud="hud" />
 		<HudMessage :hud="hud" />
 		<HudModelName :hud="hud" />

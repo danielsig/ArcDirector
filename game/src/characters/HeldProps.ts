@@ -18,7 +18,8 @@ const HELD:Record<string, { meshID:string; grip:Grip; hand?:Hand }> = {
 	bone_bow: { meshID: 'SkeletalBow', grip: {}, hand: 'left' },
 	oak_staff: { meshID: 'Staff', grip: { at: 0.62 }, hand: 'right' },
 	shaman_staff: { meshID: 'ShamanStaff', grip: { at: 0.6 }, hand: 'right' },
-	wooden_torch: { meshID: 'held_torch', grip: { at: 0.3, tilt: 1.4 } },
+	// Out ahead and up, away from the body: tipped toward the elbow it runs up the hanging arm, flame at the shoulder.
+	wooden_torch: { meshID: 'held_torch', grip: { at: 0.3, tilt: 0.7 } },
 };
 
 /** Torch flame frames per second. */

@@ -1,45 +1,62 @@
 import { reactive } from 'vue';
 import wllamaWasm from '@wllama/wllama/esm/wasm/wllama.wasm?url';
-import { BrowserProvider, DEFAULT_BROWSER_MODEL, fittingModel, gpuMemory, type ModelDownload, type ModelSpec, type Sampling } from 'arc-director';
+import { BrowserProvider, Skaldic, SKALDIC_BROWSER_MODELS, fittingModel, gpuMemory, recommendedSampling, type ModelDownload, type ModelSpec } from 'arc-director';
 import { prefs, setPrefs, watchPrefs, type InferenceKind, type Prefs } from '../prefs';
 
 /**
  * A model the game offers to run in the browser: its name as `addBrowserModel` takes it, what it costs to download,
- * roughly how much GPU memory it holds once loaded (weights, cache and working space), and how its makers say to
- * sample it (the menu sets the temperature).
+ * and roughly how much GPU memory it holds once loaded (weights, cache and working space).
  */
 export type BrowserModel = {
 	model:string;
 	label:string;
 	downloadGB:number;
 	memoryGB:number;
-	sampling:Omit<Sampling, 'temperature'>;
 };
 
-/** Google's recommended sampling for Gemma, which LM Studio runs too. */
-const GEMMA_SAMPLING = { topK: 64, topP: 0.95 };
-
 export const BROWSER_MODELS:BrowserModel[] = [
-	// unsloth's Q4_K_M, split by us, pinned to the commit uploaded. Its cache costs about 2.5 times Gemma E4B's per token of context.
-	{ model: 'https://huggingface.co/DanielSig/Qwen3-4B-Thinking-2507-Q4_K_M-wllama-split/resolve/8f5ccc2156aeebd729e267e7ac2a31dd21385c5a/Qwen3-4B-Thinking-2507-Q4_K_M-00001-of-00005.gguf', label: 'Qwen3 4B Thinking', downloadGB: 2.5, memoryGB: 5, sampling: { topK: 20, topP: 0.95 } },
-	{ model: DEFAULT_BROWSER_MODEL, label: 'Gemma 4 E4B', downloadGB: 5.0, memoryGB: 6, sampling: GEMMA_SAMPLING },
+	{ model: SKALDIC_BROWSER_MODELS[Skaldic.Gemma4E4B], label: 'Skaldic Gemma 4 E4B', downloadGB: 4.6, memoryGB: 6 },
 	// A community split of unsloth's Q4_K_M, pinned to the commit checked.
-	{ model: 'https://huggingface.co/888rok/gemma-4-12b-it-Q4_K_M-wllama-split/resolve/f53c74af7a1f7bde67e17d1fbede0c8eece29b35/gemma-4-12b-it-Q4_K_M-00001-of-00004.gguf', label: 'Gemma 4 12B', downloadGB: 7.1, memoryGB: 9, sampling: GEMMA_SAMPLING },
+	{ model: 'https://huggingface.co/888rok/gemma-4-12b-it-Q4_K_M-wllama-split/resolve/f53c74af7a1f7bde67e17d1fbede0c8eece29b35/gemma-4-12b-it-Q4_K_M-00001-of-00004.gguf', label: 'Gemma 4 12B', downloadGB: 7.1, memoryGB: 9 },
 ];
+
+/**
+ * Skaldic Laya: a decision model trained on the game's quick decisions, offered beside the main model as the System
+ * One. LM Studio's is found by its id; the browser's is the library's own (`Skaldic.Laya`), on its own engine.
+ */
+export const SKALDIC_LAYA = { match: /skaldic-laya/i, label: 'Skaldic Laya', sizeGB: 0.45, model: SKALDIC_BROWSER_MODELS[Skaldic.Laya] };
 
 // The engine runs from the game's own copy of wllama, not a CDN.
 BrowserProvider.shared = new BrowserProvider({ wasm: wllamaWasm });
 
 /**
- * How the menu runs its chat model, wherever it runs: context, thinking (off at a budget of 0, unbounded below it),
- * sampling, and thinks at once.
+ * The decision model the menu picked for where NPCs think, or `''` for the main model scoring its own choices:
+ * Skaldic Laya's download in the browser, an LM Studio model's id with LM Studio.
  */
-export function menuModel(p:Prefs):Pick<ModelSpec, 'contextLength' | 'thinking' | 'thinkingBudget' | 'sampling' | 'maxParallel'> {
+export function decisionModelOf(p:Pick<Prefs, 'inference' | 'systemOne' | 'decisionModel'>):string {
+	if (p.systemOne !== 'local') {
+		return '';
+	}
+	const inPage = p.decisionModel === SKALDIC_LAYA.model;
+	return p.inference === 'browser' ? (inPage ? p.decisionModel : '') : (inPage ? '' : p.decisionModel);
+}
+
+/**
+ * How a model picks its tokens: its makers' settings with the menu's temperature, as in play, or its makers' alone, as
+ * a bench runs every model so their scores compare.
+ */
+export type SamplingSource = 'menu' | 'makers';
+
+/**
+ * How the menu runs its chat model, wherever it runs: context, thinking (off at a budget of 0, unbounded below it),
+ * temperature, and thinks at once.
+ */
+export function menuModel(p:Prefs, sampling:SamplingSource = 'menu'):Pick<ModelSpec, 'contextLength' | 'thinking' | 'thinkingBudget' | 'sampling' | 'maxParallel'> {
 	return {
 		contextLength: p.contextLength,
 		thinking: p.thinkingBudget !== 0,
 		thinkingBudget: p.thinkingBudget > 0 ? p.thinkingBudget : undefined,
-		sampling: { ...(browserModel(p)?.sampling ?? GEMMA_SAMPLING), temperature: p.temperature },
+		sampling: sampling === 'menu' ? { temperature: p.temperature } : undefined,
 		maxParallel: p.maxParallel,
 	};
 }
@@ -50,6 +67,8 @@ export const LM_STUDIO_MODEL = { id: 'google/gemma-4-e4b', label: 'Gemma 4 E4B' 
 export type BrowserModelState = {
 	/** Downloaded already: a load reads it from disk. */
 	cached:boolean;
+	/** On the GPU now, ready to answer: picked alone it is only ready, and loads when a scene needs it. */
+	loaded:boolean;
 	/** 0 to 1 while it downloads and loads; null otherwise. */
 	progress:number | null;
 	error:string;
@@ -63,7 +82,9 @@ export const inferenceSetup = reactive({
 	unsupported: '',
 	/** The biggest model this device runs with a gigabyte left over for the game, or null when none fits or it cannot tell. */
 	recommended: fittingModel(BROWSER_MODELS, gpuMemory())?.model ?? null,
-	models: Object.fromEntries(BROWSER_MODELS.map((m) => [m.model, { cached: false, progress: null, error: '' }])) as Record<string, BrowserModelState>,
+	models: Object.fromEntries(BROWSER_MODELS.map((m) => [m.model, { cached: false, loaded: false, progress: null, error: '' }])) as Record<string, BrowserModelState>,
+	/** Skaldic Laya's download, apart from the models: it runs on its own engine, beside whichever one is picked. */
+	laya: { cached: false, loaded: false, progress: null, error: '' } as BrowserModelState,
 });
 
 watchPrefs((next) => {
@@ -73,14 +94,25 @@ watchPrefs((next) => {
 
 void (async () => {
 	inferenceSetup.unsupported = await BrowserProvider.unsupported() ?? '';
+	// Models the game no longer offers would fill the browser's storage for good, and a full store fails a download.
+	await BrowserProvider.shared.keepOnly([...BROWSER_MODELS.map((m) => m.model), SKALDIC_LAYA.model]).catch(() => undefined);
 	// Downloads stay deletable even when models cannot run here.
-	for (const m of BROWSER_MODELS) {
-		await checkCached(m.model);
+	for (const m of [...BROWSER_MODELS.map((b) => b.model), SKALDIC_LAYA.model]) {
+		await checkCached(m);
 	}
 })();
 
+/** The download state `model` shows: a browser model's, or Skaldic Laya's. */
+function stateOf(model:string):BrowserModelState | undefined {
+	return model === SKALDIC_LAYA.model ? inferenceSetup.laya : inferenceSetup.models[model];
+}
+
 async function checkCached(model:string):Promise<void> {
-	inferenceSetup.models[model].cached = await BrowserProvider.shared.isCached(model).catch(() => false);
+	const state = stateOf(model);
+	if (state) {
+		// The browser keeps every engine's downloads in one store.
+		state.cached = await BrowserProvider.shared.isCached(model).catch(() => false);
+	}
 }
 
 /**
@@ -114,23 +146,47 @@ export function browserModelBusy():boolean {
 }
 
 /** Shows `download` on `model`'s button, wherever it started. */
+/** The downloads under way, by model: what Cancel stops. */
+const underWay = new Map<string, ModelDownload>();
+
+/** Stops `model`'s download; a picked model goes back to the last one picked, as on any failed download. */
+export function cancelDownload(model:string):void {
+	underWay.get(model)?.cancel();
+}
+
 export function showDownload(model:string, download:ModelDownload):void {
-	const state = inferenceSetup.models[model];
+	const state = stateOf(model);
 	if (!state) {
 		return;
 	}
 	state.error = '';
+	underWay.set(model, download);
+	const ended = ():void => {
+		if (underWay.get(model) === download) {
+			underWay.delete(model);
+		}
+	};
 	download.subscribe({
 		next: (p) => {
 			state.progress = p.progress;
 		},
 		complete: () => {
+			ended();
 			state.progress = null;
 			state.cached = true;
+			// The main models share one engine: loading one unloads the last. Laya runs on its own.
+			if (state !== inferenceSetup.laya) {
+				for (const other of Object.values(inferenceSetup.models)) {
+					other.loaded = other === state;
+				}
+			}
+			state.loaded = true;
 		},
 		error: (err) => {
+			ended();
 			state.progress = null;
-			state.error = errorText(err);
+			// Cancelled is not a failure: nothing to show.
+			state.error = download.cancelled ? '' : errorText(err);
 			// It may have got far enough to leave files behind.
 			void checkCached(model);
 		},
@@ -146,7 +202,7 @@ export async function useBrowserModel(model:string):Promise<boolean> {
 	setPrefs({ inference: 'browser', browserModel: model });
 	// As a scene will run it, so starting one does not load it again.
 	const { thinking, ...settings } = menuModel(prefs());
-	BrowserProvider.shared.configureModel(model, { ...settings, enableThinking: thinking });
+	BrowserProvider.shared.configureModel(model, { ...settings, sampling: { ...recommendedSampling(model, thinking), ...settings.sampling }, enableThinking: thinking });
 	const download = BrowserProvider.shared.download(model);
 	showDownload(model, download);
 	try {
@@ -171,6 +227,41 @@ export async function deleteBrowserModel(model:string):Promise<void> {
 	try {
 		await BrowserProvider.shared.delete(model);
 		state.cached = false;
+		state.loaded = false;
+		state.error = '';
+	}
+	catch (err:unknown) {
+		state.error = errorText(err);
+	}
+}
+
+/**
+ * Downloads Skaldic Laya into the browser unless it is there, loads it on its own engine, and makes it the System
+ * One. A failed download leaves the System One as it was.
+ */
+export async function useBrowserLaya():Promise<boolean> {
+	const download = BrowserProvider.decisions.download(SKALDIC_LAYA.model);
+	showDownload(SKALDIC_LAYA.model, download);
+	try {
+		await download.done;
+	}
+	catch {
+		return false;
+	}
+	setPrefs({ systemOne: 'local', decisionModel: SKALDIC_LAYA.model });
+	return true;
+}
+
+/** Deletes Skaldic Laya's download from the browser (offered once it is off), turning it off first if it is on. */
+export async function deleteBrowserLaya():Promise<void> {
+	if (prefs().decisionModel === SKALDIC_LAYA.model) {
+		setPrefs({ decisionModel: '' });
+	}
+	const state = inferenceSetup.laya;
+	try {
+		await BrowserProvider.decisions.delete(SKALDIC_LAYA.model);
+		state.cached = false;
+		state.loaded = false;
 		state.error = '';
 	}
 	catch (err:unknown) {

@@ -28,6 +28,8 @@ export type ToonMaterialParameters = THREE.MeshToonMaterialParameters & {
 	topAxis?:{ x:number; z:number };
 	/** How dark pattern lines are, 0 (none) to 1 (black). */
 	patternInk?:number;
+	/** Darkens a face as its normal's Y approaches 0. 0 leaves it, 1 is black on a vertical face. */
+	sideDark?:number;
 	/** Drawn with ink outlines by the renderer. Off for grass, foliage and other noisy surfaces. */
 	outline?:boolean;
 };
@@ -82,6 +84,7 @@ uniform float uPatternTopScale;
 uniform float uBrickLength;
 uniform vec2 uTopAxis;
 uniform float uPatternInk;
+uniform float uSideDark;
 varying vec3 vToonWorld;
 varying vec3 vToonNormal;
 
@@ -222,6 +225,7 @@ vec3 toonPattern(vec3 diffuse) {
 const TOON_COLOR = `
 #if TOON_PATTERN > 0
 	diffuseColor.rgb = toonPattern(diffuseColor.rgb);
+	diffuseColor.rgb *= 1.0 - uSideDark * (1.0 - abs(normalize(vToonNormal).y));
 #endif
 `;
 
@@ -255,10 +259,11 @@ export class ToonMaterial extends THREE.MeshToonMaterial {
 		uBrickLength:THREE.IUniform<number>;
 		uTopAxis:THREE.IUniform<THREE.Vector2>;
 		uPatternInk:THREE.IUniform<number>;
+		uSideDark:THREE.IUniform<number>;
 	};
 
 	constructor(params:ToonMaterialParameters = {}) {
-		const { bands, shade, rim, pattern, patternScale, topScale, brickLength, topAxis, patternInk, outline, ...base } = params;
+		const { bands, shade, rim, pattern, patternScale, topScale, brickLength, topAxis, patternInk, sideDark, outline, ...base } = params;
 		super({ gradientMap: toonRamp(bands), ...base });
 		this.shade = new THREE.Color(shade ?? 0xffffff);
 		this._uniforms = {
@@ -269,6 +274,7 @@ export class ToonMaterial extends THREE.MeshToonMaterial {
 			uBrickLength: { value: brickLength ?? 2 * (patternScale ?? 0.25) },
 			uTopAxis: { value: new THREE.Vector2(topAxis?.x ?? 0, topAxis?.z ?? 1).normalize() },
 			uPatternInk: { value: patternInk ?? 0.45 },
+			uSideDark: { value: sideDark ?? 0 },
 		};
 		this.defines = {
 			...this.defines,
@@ -301,6 +307,7 @@ export class ToonMaterial extends THREE.MeshToonMaterial {
 		this.brickLength = source.brickLength;
 		this._uniforms.uTopAxis.value.copy(source._uniforms.uTopAxis.value);
 		this.patternInk = source.patternInk;
+		this.sideDark = source.sideDark;
 		return this;
 	}
 
@@ -342,6 +349,14 @@ export class ToonMaterial extends THREE.MeshToonMaterial {
 
 	public set patternInk(value:number) {
 		this._uniforms.uPatternInk.value = value;
+	}
+
+	public get sideDark():number {
+		return this._uniforms.uSideDark.value;
+	}
+
+	public set sideDark(value:number) {
+		this._uniforms.uSideDark.value = value;
 	}
 
 	public get outline():boolean {

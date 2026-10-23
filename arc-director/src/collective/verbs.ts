@@ -12,12 +12,12 @@ export const STOCK_COLLECTIVE_VERBS = [
 export type StockCollectiveVerb = (typeof STOCK_COLLECTIVE_VERBS)[number];
 
 export const STOCK_COLLECTIVE_VERB_DEFS = {
-	issue: { args: { who: 'expr', arc: 'arc' }, help: 'assigns a sticky program to matching units, never the commander' },
+	issue: { args: { who: 'expr', arc: 'arc', group: 'string?' }, help: 'assigns a sticky program to matching units, never the commander; two or more: name them, group=Name' },
 	tag: { args: { who: 'expr', name: 'string' }, help: 'assigns only' },
 	untag: { args: { who: 'expr', name: 'string' }, help: 'assigns only' },
 	spread: { args: { around: 'id?', paces: 'number?' } },
 	circle: { args: { around: 'id?', paces: 'number?' } },
-	hold_line: { args: { at: 'id?', facing: 'id?', paces: 'number?' } },
+	hold_line: { args: { at: 'id?', facing: 'id?', paces: 'number?' }, seen: 'holding the line' },
 } as const satisfies Record<StockCollectiveVerb, VerbDef>;
 
 export function isFormationVerb(name:string):boolean {

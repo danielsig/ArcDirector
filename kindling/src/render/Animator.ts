@@ -28,7 +28,7 @@ export class Animator extends Component {
 	private _playing:string | null = null;
 	/** A move playing over `clip` until its `to` time. */
 	private _once:{ action:THREE.AnimationAction; to:number } | null = null;
-	private _pendingOnce:{ name:string; from:number; to:number | undefined; rate:number } | null = null;
+	private _pendingOnce:{ name:string; from:number; to:number | undefined; rate:number; only?:string; rest?:string } | null = null;
 	/** The model's bones, and their pose as the mixer left it last frame (rotation, then position, per bone). */
 	private _bones:THREE.Bone[] = [];
 	private _pose:Float32Array | null = null;
@@ -36,9 +36,11 @@ export class Animator extends Component {
 	/**
 	 * Plays `name` once over the current clip: from `from` to `to` seconds of it (default: all of
 	 * it) at `rate`, then fades back. Starts on the next update; a new move replaces one playing.
+	 * With `only`, it plays on that bone and the ones below it (`'Spine'`: the upper body), and every other bone plays
+	 * `rest` meanwhile (default: the current `clip`), so a wave never moves the legs.
 	 */
-	public playOnce(name:string, options:{ from?:number; to?:number; rate?:number } = {}):void {
-		this._pendingOnce = { name, from: options.from ?? 0, to: options.to, rate: options.rate ?? 1 };
+	public playOnce(name:string, options:{ from?:number; to?:number; rate?:number; only?:string; rest?:string } = {}):void {
+		this._pendingOnce = { name, from: options.from ?? 0, to: options.to, rate: options.rate ?? 1, only: options.only, rest: options.rest };
 	}
 
 	public override update(dt:number):void {
@@ -97,7 +99,7 @@ export class Animator extends Component {
 		const pending = this._pendingOnce;
 		this._pendingOnce = null;
 		if (pending) {
-			const clip = toonClip(root, pending.name);
+			const clip = pending.only ? splicedClip(root, pending.name, pending.only, pending.rest ?? this.clip) : toonClip(root, pending.name);
 			if (clip) {
 				this._once?.action.fadeOut(this.fade);
 				const action = mixer.clipAction(clip).reset();
@@ -122,4 +124,47 @@ export class Animator extends Component {
 	public override onDestroy():void {
 		this._mixer?.stopAllAction();
 	}
+}
+
+/** Spliced clips per model instance, by move, chain and rest clip. */
+const spliced = new WeakMap<THREE.Object3D, Map<string, THREE.AnimationClip>>();
+
+/**
+ * `name` on the bone `only` names (the first whose name holds it, `Spine`) and everything below it, with `rest`
+ * playing every other bone: a wave from the waist up while the legs stand as `rest` does. `name` alone when `rest`
+ * is missing.
+ */
+function splicedClip(root:THREE.Object3D, name:string, only:string, rest:string):THREE.AnimationClip | undefined {
+	const move = toonClip(root, name);
+	const under = toonClip(root, rest);
+	if (!move || !under) {
+		return move;
+	}
+	const key = `${name}|${only}|${rest}`;
+	let cache = spliced.get(root);
+	const hit = cache?.get(key);
+	if (hit) {
+		return hit;
+	}
+	let top:THREE.Object3D | undefined;
+	root.traverse((obj) => {
+		if (!top && (obj as THREE.Bone).isBone && obj.name.includes(only)) {
+			top = obj;
+		}
+	});
+	const chain = new Set<string>();
+	top?.traverse((obj) => {
+		chain.add(obj.name);
+	});
+	const boneOf = (track:THREE.KeyframeTrack):string => track.name.split('.')[0] ?? '';
+	const clip = new THREE.AnimationClip(`${name}+${rest}`, move.duration, [
+		...move.tracks.filter((track) => chain.has(boneOf(track))),
+		...under.tracks.filter((track) => !chain.has(boneOf(track))),
+	]);
+	if (!cache) {
+		cache = new Map();
+		spliced.set(root, cache);
+	}
+	cache.set(key, clip);
+	return clip;
 }

@@ -2,6 +2,11 @@ import { CHUNK_SIZE } from '../../world/constants';
 import type { ChunkFile } from '../../world/decodeGlyphChunk';
 import { MARKET_LEGEND } from './marketLegend';
 
+/**
+ * The south-east quarter: FruitStall, staffed by Grocer, and ToyShop (thatched, smaller than ApothecaryShop) in the
+ * corner of the town walls, its door opening north onto the square. Its counter runs from the west wall most of the
+ * way across.
+ */
 export const market_1_1:ChunkFile = {
 	id: 'market_1_1',
 	origin: { cx: 1, cz: 1 },
@@ -15,19 +20,20 @@ export const market_1_1:ChunkFile = {
 		'"""...........t#',
 		'"*"............#',
 		'"""............I',
-		'...............#',
 		'..............t#',
-		'....g.....h....#',
 		'...............#',
-		'"""""""""""""""#',
-		'""""*""""""*"""#',
-		'"""""""""""""""#',
+		'....g....%%%T%%#',
+		'.........+PPPPP#',
+		'"""""""..%CCCCP#',
+		'""""*""..%PPPPP#',
+		'"""""""..%xPSPy#',
 		'################',
 	],
 	names: {
 		I: 'EastGate',
 		g: 'FruitStall',
-		h: 'RibbonStall',
+		T: 'ToyShopDoor',
+		C: 'ToyCounter',
 	},
 };
 

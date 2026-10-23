@@ -1,3 +1,5 @@
+import type { Step, StepArg } from './types.js';
+
 /**
  * `id` is a character, thing or place; the host always receives a real id, even when the model wrote its own name for it
  * or an expression that picks one. `text` is prose: unquoted, it runs to the closing `)` or the next `, key=`.
@@ -12,6 +14,37 @@ export type VerbArgKind = 'id' | 'id?' | 'string' | 'string?' | 'text' | 'text?'
 export function argBase(kind:string | undefined):string {
 	return kind?.endsWith('?') ? kind.slice(0, -1) : kind ?? '';
 }
+
+/**
+ * What one seen doing `verb` is doing, by default: `fire` firing, `stab` stabbing, `go_to` going to. A verb whose own
+ * words say more gives them (`VerbDef.seen`).
+ */
+export function doingOf(verb:string):string {
+	const [head, ...rest] = verb.split('_');
+	const ing = /ie$/.test(head) ? `${head.slice(0, -2)}ying`
+		: /[^aeiouy]e$/.test(head) && head.length > 2 ? `${head.slice(0, -1)}ing`
+			// One short syllable ending in a lone vowel and a consonant doubles it: stab, stabbing.
+			: /^[^aeiou]*[aeiou][^aeiouwxy]$/.test(head) ? `${head}${head.at(-1)}ing`
+				: `${head}ing`;
+	return [ing, ...rest].join(' ');
+}
+
+/** `text` with its `{arg}` holes filled from `args`, each shown by `show`; a hole with no such arg stays. */
+export function fillHoles(text:string, args:Readonly<Record<string, StepArg>>, show:(value:string | number)=>string = String):string {
+	return text.replace(/\{([A-Za-z_]\w*)\}/g, (hole, key:string) => {
+		const value = args[key];
+		return value === undefined ? hole : typeof value === 'string' || typeof value === 'number' ? show(value) : JSON.stringify(value);
+	});
+}
+
+/** What one running `step` is doing, in its verb's own words from `verbs` (`going to Cottage`), names shown by `show`. */
+export function stepDoing(step:Step, verbs:VerbRegistry, show:(id:string)=>string = String):string {
+	const seen = verbs.get(step.verb)?.seen;
+	return seen ? fillHoles(seen, step.args, (value) => (typeof value === 'string' ? show(value) : String(value))) : doingOf(step.verb);
+}
+
+/** Kinds whose value is text, as a base ({@link argBase}): what `code=417` stays when written for one. */
+export const TEXT_ARG_KINDS:readonly string[] = ['id', 'string', 'text', 'watch', 'expr', 'law'];
 
 export type VerbArgMap = Record<string, VerbArgKind>;
 
@@ -28,6 +61,8 @@ export type VerbSpec = {
 	help?:string;
 	/** This verb expects an answer from the character it names. After the arc, the actor waits for them if they are still nearby. Default: do not wait. */
 	reply?:boolean;
+	/** What one seen running it is doing, with `{arg}` holes: `going to {target}`. Default: the verb with `-ing` (`firing`). */
+	seen?:string;
 };
 
 /** What `addVerb` and `VerbRegistry.add` take. */
@@ -36,6 +71,8 @@ export type VerbDef = {
 	help?:string;
 	/** This verb expects an answer from the character it names. After the arc, the actor waits for them if they are still nearby. Default: do not wait. */
 	reply?:boolean;
+	/** What one seen running it is doing, with `{arg}` holes: `going to {target}`. Default: the verb with `-ing` (`firing`). */
+	seen?:string;
 };
 
 export class VerbRegistry {
@@ -44,7 +81,7 @@ export class VerbRegistry {
 	/** Catalog used to parse nested `arc=` args. Kit views point at the unfiltered registry. */
 	private _nestedSource:VerbRegistry | null = null;
 
-	public add(name:string, { args = {}, help, reply }:VerbDef = {}):this {
+	public add(name:string, { args = {}, help, reply, seen }:VerbDef = {}):this {
 		if (this._verbs.has(name)) {
 			throw new Error(`verb already registered: ${name}`);
 		}
@@ -59,13 +96,23 @@ export class VerbRegistry {
 				throw new Error(`verb ${name}: arg '${key}' is reserved`);
 			}
 		}
-		this._verbs.set(name, { name, args, help, ...(reply ? { reply } : {}) });
+		this._verbs.set(name, { name, args, help, ...(reply ? { reply } : {}), ...(seen ? { seen } : {}) });
 		return this;
 	}
 
 	/** Full catalog. Nested unit / loop / law arcs may name verbs this kit does not grant the thinker. */
 	public nested():VerbRegistry {
 		return this._nestedSource ?? this;
+	}
+
+	/**
+	 * This view, its nested arcs limited to `allow`: what a collective's units can run, so its prompt lists those and
+	 * its arcs name no verb none of them has.
+	 */
+	public nestedTo(allow:readonly string[]):VerbRegistry {
+		const next = this.view(this.list().map((spec) => spec.name));
+		next._nestedSource = this.nested().view(allow);
+		return next;
 	}
 
 	/** Copy with `key` dropped from `verb` (solo `law` has no `who`). */
@@ -82,6 +129,16 @@ export class VerbRegistry {
 			next.add(spec.name, { ...spec, args });
 		}
 		return next;
+	}
+
+	/** Change `name`'s definition where it stands in the list, so the prompt's verb order stays. */
+	public redefine(name:string, def:VerbDef):this {
+		if (!this._verbs.has(name)) {
+			throw new Error(`verb not registered: ${name}`);
+		}
+		// Checked as a new verb would be; a Map keeps a key it sets again where it was.
+		this._verbs.set(name, new VerbRegistry().add(name, def).get(name)!);
+		return this;
 	}
 
 	public remove(...names:string[]):this {
@@ -142,23 +199,23 @@ export const STOCK_VERBS = [...STOCK_MOVE_VERBS, ...STOCK_ITEM_VERBS, ...STOCK_M
 export type StockVerb = (typeof STOCK_VERBS)[number] | (typeof STOCK_TRADE_VERBS)[number];
 
 export const STOCK_VERB_DEFS = {
-	go_to: { args: { target: 'id' } },
-	follow: { args: { target: 'id' }, help: 'keeps following until your next arc' },
-	flee: { args: { from: 'id', distance: 'number?' }, help: 'runs until clear of them for a few seconds; distance is how far counts as clear' },
+	go_to: { args: { target: 'id', until: 'watch?' }, seen: 'going to {target}' },
+	follow: { args: { target: 'id', distance: 'number?' }, help: 'stays within distance until your next arc', seen: 'following {target}' },
+	flee: { args: { from: 'id', distance: 'number?' }, help: 'runs until clear of them for a few seconds; distance is how far counts as clear', seen: 'fleeing {from}' },
 	wander: { args: { until: 'watch?', seconds: 'number?' } },
 	use: { args: { item: 'id', target: 'id?' }, help: 'goes to the target first' },
-	pick_up: { args: { item: 'id' }, help: 'goes to it first; never from what others carry' },
-	drop: { args: { item: 'id' } },
-	give: { args: { item: 'id', to: 'id', quantity: 'number?' }, help: 'goes to them first. to buy or sell, use offer', reply: true },
+	pick_up: { args: { item: 'id', from: 'id?' }, help: 'goes to it first; from: its container', seen: 'picking up {item}' },
+	drop: { args: { item: 'id', to: 'id?' } },
+	give: { args: { item: 'id', to: 'id', quantity: 'number?' }, help: 'goes to them first. to buy or sell, use offer', reply: true, seen: 'giving {item} to {to}' },
 	examine: { args: { target: 'id' } },
 	offer: { args: { to: 'id?', give: 'bundle?', get: 'bundle?' }, help: 'each side as {"Egg":12, "Milk":3}, items and gold only. if they offer that or better, both move at once; else it waits for their answer. no to: offered to anyone', reply: true },
 	say: { args: { text: 'text', to: 'id?' }, help: 'one short sentence', reply: true },
-	wait: { args: { seconds: 'number?', until: 'watch?' } },
+	wait: { args: { seconds: 'number?', until: 'watch?' }, help: 'until fails if not met within seconds (default 20)' },
 	remember: { args: { content: 'text', tags: 'string[]?' } },
 	think: { args: { about: 'text?' } },
-	set_goal: { args: { goal: 'text', priority: 'number?' } },
-	drop_goal: { args: { goal: 'text?' } },
-	set_identity: { args: { role: 'string?', traits: 'string[]?' } },
+	set_goal: { args: { goal: 'text', priority: 'number?' }, seen: 'thinking' },
+	drop_goal: { args: { goal: 'text?' }, seen: 'thinking' },
+	set_identity: { args: { role: 'string?', traits: 'string[]?' }, seen: 'thinking' },
 	watch: { args: { name: 'string', expr: 'expr' } },
 	unwatch: { args: { name: 'string' } },
 	focus: { args: { expr: 'expr' } },

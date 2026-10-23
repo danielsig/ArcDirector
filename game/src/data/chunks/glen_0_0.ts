@@ -7,7 +7,7 @@ export const glen_0_0:ChunkFile = {
 	origin: { cx: 0, cz: 0 },
 	legend: GLEN_LEGEND,
 	tiles: [
-		'################',
+		'#FFFFFFFFFFFFFFF',
 		'#..*n.*.....*...',
 		'#.*....*..*.....',
 		'#...*.....*..*..',

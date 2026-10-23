@@ -13,7 +13,62 @@ export type ShadowSettings = {
 	maxPointShadows:number;
 	/** Point lights that also draw moving things (`dynamic` only), nearest first among those with one in range. */
 	maxMovingShadows:number;
+	/**
+	 * World XZ box the sun's map covers (the playable map, say), so its texels are not spread over scenery far off.
+	 * Unset: every still caster.
+	 */
+	sunArea?:Area | null;
+	/**
+	 * `dynamic` only: the square (centre and half its side) where moving things cast the sun's shadow, drawn every
+	 * frame into a map `sunMoverSize` square of their own, so the sun's map holds still casters only and is never
+	 * copied per frame. Unset: they draw over a live copy of the sun's whole map instead.
+	 */
+	sunFocus?:{ x:number; z:number; half:number } | null;
+	sunMoverSize?:number;
 };
+
+/** World XZ box, meters. */
+export type Area = { minX:number; maxX:number; minZ:number; maxZ:number };
+
+/**
+ * Every directional light is shadowed by every directional shadow map together. The sun keeps a map of its still
+ * casters, and a dark helper light the cache adds beside it (which casts but gives no light) keeps the moving
+ * casters' map; outside its own area a map reads as unshadowed, so together they shadow the sun as one map would.
+ */
+THREE.ShaderChunk.lights_fragment_begin = THREE.ShaderChunk.lights_fragment_begin
+	.replace('#if ( NUM_DIR_LIGHTS > 0 ) && defined( RE_Direct )', `#if defined( USE_SHADOWMAP ) && NUM_DIR_LIGHT_SHADOWS > 0
+	float sunShadow = 1.0;
+	DirectionalLightShadow sunPart;
+	#pragma unroll_loop_start
+	for ( int i = 0; i < NUM_DIR_LIGHT_SHADOWS; i ++ ) {
+		sunPart = directionalLightShadows[ i ];
+		sunShadow *= receiveShadow ? getShadow( directionalShadowMap[ i ], sunPart.shadowMapSize, sunPart.shadowIntensity, sunPart.shadowBias, sunPart.shadowRadius, vDirectionalShadowCoord[ i ] ) : 1.0;
+	}
+	#pragma unroll_loop_end
+#endif
+
+#if ( NUM_DIR_LIGHTS > 0 ) && defined( RE_Direct )`)
+	.replace(
+		'directLight.color *= ( directLight.visible && receiveShadow ) ? getShadow( directionalShadowMap[ i ], directionalLightShadow.shadowMapSize, directionalLightShadow.shadowIntensity, directionalLightShadow.shadowBias, directionalLightShadow.shadowRadius, vDirectionalShadowCoord[ i ] ) : 1.0;',
+		'directLight.color *= directLight.visible ? sunShadow : 1.0;',
+	);
+
+/** How far below and above the ground the mover map reaches, in meters. */
+const MOVER_DEPTH = { below: 3, above: 12 };
+
+function areaKey(area:Area | null | undefined):string {
+	return area ? `${area.minX},${area.maxX},${area.minZ},${area.maxZ}` : '';
+}
+
+/** A dark directional light that only casts: the moving part of the sun's shadow (`ShadowSettings.sunFocus`). */
+function sunPart(sun:THREE.DirectionalLight):THREE.DirectionalLight {
+	const light = new THREE.DirectionalLight(0x000000, 0);
+	light.castShadow = true;
+	light.shadow.bias = sun.shadow.bias;
+	light.shadow.normalBias = sun.shadow.normalBias;
+	light.userData.sunPart = true;
+	return light;
+}
 
 /** Frames a caster holds still before it is baked into the still maps. */
 const SETTLE_FRAMES = 12;
@@ -21,10 +76,14 @@ const SETTLE_FRAMES = 12;
 const MOVING_LAYER = 31;
 /** From the ground toward the sun. */
 const SUN_DIR = new THREE.Vector3(12, 24, 8).normalize();
+/** Meters nearer another lamp must be before it takes a casting lamp's place. */
+const LAMP_STAY = 3;
+/** Meters a lamp moves before its still map bakes again. */
+const LAMP_MOVED = 0.1;
 /** Meters of slack around the still scene in the sun's map. */
 const SUN_PAD = 1;
 
-type ShadowLight = THREE.PointLight | THREE.DirectionalLight;
+type ShadowLight = THREE.PointLight | THREE.SpotLight | THREE.DirectionalLight;
 
 /** A light's still map (static casters only) and live map (still plus moving casters, `dynamic` only). */
 type LightMaps = {
@@ -102,6 +161,20 @@ export class ShadowCache {
 	private _lights:ShadowLight[] = [];
 	private _moving:THREE.Object3D[] = [];
 	private _readFBO:WebGLFramebuffer | null = null;
+	/** The sun area the sun's map was last framed to, as a key. */
+	private _sunArea = '';
+	/**
+	 * Dark point lights far below the world, padding the scene's point lights (and shadowed ones) up to the most it
+	 * has had, so chunks streaming lamps in and out never change the counts shaders are compiled for.
+	 */
+	private readonly _spares:THREE.PointLight[] = [];
+	private _pointHigh = 0;
+	/** Point lights that cast, and that drew moving casters, last frame. */
+	private _casting = new Set<THREE.PointLight>();
+	private _busy = new Set<THREE.PointLight>();
+	private _shadowHigh = 0;
+	/** Helper light drawing moving casters round the focus, `dynamic` only. */
+	private _mover:THREE.DirectionalLight | null = null;
 	private _drawFBO:WebGLFramebuffer | null = null;
 
 	constructor(gl:THREE.WebGLRenderer) {
@@ -113,7 +186,7 @@ export class ShadowCache {
 				this._scene = null;
 				this.renderMaps(pass, scene, camera);
 			}
-			// Lights this cache does not keep (spot lights) render as three would.
+			// Lights this cache does not keep render as three would.
 			pass(lights, scene, camera);
 		};
 	}
@@ -128,20 +201,34 @@ export class ShadowCache {
 		const frame = ++this._frame;
 		const lamps:{ lamp:THREE.PointLight; at:THREE.Vector3; d:number }[] = [];
 		const suns:THREE.DirectionalLight[] = [];
+		const spots:THREE.SpotLight[] = [];
 		const moving:THREE.Mesh[] = [];
 		const changed:THREE.Sphere[] = [];
 		const eyeAt = focusOf(eye);
+		let points = 0;
 		scene.traverseVisible((o) => {
+			if (o instanceof THREE.PointLight && o.userData.spare) {
+				return;
+			}
 			if (o instanceof THREE.PointLight) {
+				points++;
 				o.castShadow = false;
 				if (o.userData.wantsShadow) {
 					const at = o.getWorldPosition(new THREE.Vector3());
-					lamps.push({ lamp: o, at, d: at.distanceToSquared(eyeAt) });
+					// A lamp that cast last frame keeps its place unless another is clearly nearer, so small steps of the
+					// camera never swap which lamps cast (and bake again).
+					lamps.push({ lamp: o, at, d: at.distanceTo(eyeAt) - (this._casting.has(o) ? LAMP_STAY : 0) });
 				}
 			}
 			else if (o instanceof THREE.DirectionalLight) {
-				if (o.castShadow) {
+				if (o.castShadow && !o.userData.sunPart) {
 					suns.push(o);
+				}
+			}
+			else if (o instanceof THREE.SpotLight) {
+				o.castShadow = !!o.userData.wantsShadow;
+				if (o.castShadow) {
+					spots.push(o);
 				}
 			}
 			else if ((o as THREE.Mesh).isMesh && o.castShadow && this.track(o as THREE.Mesh, frame, changed)) {
@@ -156,19 +243,26 @@ export class ShadowCache {
 				this._casters.delete(mesh);
 			}
 		}
-		lamps.sort((x, y) => x.d - y.d);
-		const casting = lamps.slice(0, settings.maxPointShadows);
 		const dynamic = settings.mode === 'dynamic';
+		this.syncParts(scene, sun, settings, dynamic);
+		lamps.sort((x, y) => x.d - y.d);
+		// The sun's mover map takes a texture unit a point shadow would have used.
+		const casting = lamps.slice(0, Math.max(0, settings.maxPointShadows - (this._mover ? 1 : 0)));
+		// Lamps that drew moving casters last frame go first, so a character's shadow does not hop between lamps.
 		const busy = new Set(!dynamic ? [] : casting
 			.filter(({ lamp, at }) => moving.some((m) => m.getWorldPosition(moverAt).distanceTo(at) < reachOf(lamp) + 1))
+			.sort((x, y) => (this._busy.has(y.lamp) ? 1 : 0) - (this._busy.has(x.lamp) ? 1 : 0))
 			.slice(0, settings.maxMovingShadows)
 			.map((c) => c.lamp));
+		this._casting = new Set(casting.map((c) => c.lamp));
+		this._busy = busy;
 		const bake:ShadowLight[] = [];
 		const live:ShadowLight[] = [];
 		for (const { lamp, at } of casting) {
 			lamp.castShadow = true;
 			const maps = this.mapsOf(lamp, frame);
-			if (!maps.still || maps.at.distanceToSquared(at) > 1e-6 || changed.some((s) => s.distanceToPoint(at) < reachOf(lamp))) {
+			// A flickering lamp jitters a centimetre or so; it bakes again only once it has truly moved.
+			if (!maps.still || maps.at.distanceTo(at) > LAMP_MOVED || changed.some((s) => s.distanceToPoint(at) < reachOf(lamp))) {
 				maps.at.copy(at);
 				bake.push(lamp);
 			}
@@ -176,17 +270,39 @@ export class ShadowCache {
 				live.push(lamp);
 			}
 		}
+		this.padLights(scene, points, casting.length, Math.max(0, settings.maxPointShadows - (this._mover ? 1 : 0)), frame, bake);
+		const area = settings.sunArea ?? null;
+		const areaMoved = areaKey(area) !== this._sunArea;
+		this._sunArea = areaKey(area);
 		for (const light of suns) {
 			const maps = this.mapsOf(light, frame);
-			if (!maps.still || changed.length > 0) {
+			if (!maps.still || changed.length > 0 || areaMoved) {
 				if (light === sun) {
-					this.fitSun(light);
+					this.fitSun(light, area);
 				}
 				bake.push(light);
 			}
-			if (dynamic && moving.length > 0) {
+			if (dynamic && moving.length > 0 && !this._mover) {
 				live.push(light);
 			}
+		}
+		// Spot lights are few and placed by hand: each always casts, baked like a lamp.
+		for (const spot of spots) {
+			const at = spot.getWorldPosition(new THREE.Vector3());
+			const maps = this.mapsOf(spot, frame);
+			if (!maps.still || maps.at.distanceTo(at) > LAMP_MOVED || changed.some((s) => s.distanceToPoint(at) < reachOf(spot))) {
+				maps.at.copy(at);
+				bake.push(spot);
+			}
+			if (dynamic && moving.some((m) => m.getWorldPosition(moverAt).distanceTo(at) < reachOf(spot) + 1)) {
+				live.push(spot);
+			}
+		}
+		if (this._mover && settings.sunFocus) {
+			const { x, z, half } = settings.sunFocus;
+			this.mapsOf(this._mover, frame);
+			this.fitBox(this._mover, new THREE.Box3(new THREE.Vector3(x - half, -MOVER_DEPTH.below, z - half), new THREE.Vector3(x + half, MOVER_DEPTH.above, z + half)));
+			live.push(this._mover);
 		}
 		for (const [light, maps] of this._maps) {
 			if (maps.frame !== frame) {
@@ -240,6 +356,14 @@ export class ShadowCache {
 	}
 
 	public dispose():void {
+		for (const spare of this._spares.splice(0)) {
+			spare.removeFromParent();
+			spare.dispose();
+		}
+		if (this._mover) {
+			this.removePart(this._mover);
+			this._mover = null;
+		}
 		this.dropAll();
 		const gl = this._gl.getContext();
 		gl.deleteFramebuffer(this._readFBO);
@@ -298,8 +422,68 @@ export class ShadowCache {
 		return !caster.baked;
 	}
 
-	/** Frames every baked caster in the sun's map, seen along {@link SUN_DIR}. */
-	private fitSun(sun:THREE.DirectionalLight):void {
+	/**
+	 * Adds the sun's mover map beside `sun` when `dynamic` with a focus, or takes it away. Adding or removing a light
+	 * recompiles every lit shader, so a host keeps the focus set for as long as the mode lasts.
+	 */
+	private syncParts(scene:THREE.Scene, sun:THREE.DirectionalLight | null, settings:ShadowSettings, dynamic:boolean):void {
+		const mover = !!sun && dynamic && !!settings.sunFocus;
+		if (!mover && this._mover) {
+			this.removePart(this._mover);
+			this._mover = null;
+		}
+		if (mover && !this._mover) {
+			this._mover = sunPart(sun!);
+			scene.add(this._mover, this._mover.target);
+		}
+		const side = Math.min(settings.sunMoverSize ?? 2048, this._gl.capabilities.maxTextureSize);
+		if (this._mover && this._mover.shadow.mapSize.x !== side) {
+			this._mover.shadow.mapSize.set(side, side);
+			this.drop(this._mover);
+		}
+	}
+
+	/**
+	 * Keeps the scene's point lights at the most it has had (`points` real ones now), and its shadowed point lights at
+	 * the most it has had up to `limit` (`casting` real ones now), with spare dark lights far below the world: three
+	 * compiles every lit shader for these counts, so a count that drops and rises again freezes the game while it
+	 * recompiles. A spare that casts bakes its empty map once.
+	 */
+	private padLights(scene:THREE.Scene, points:number, casting:number, limit:number, frame:number, bake:ShadowLight[]):void {
+		this._shadowHigh = Math.min(limit, Math.max(this._shadowHigh, casting));
+		const shadowPad = this._shadowHigh - casting;
+		this._pointHigh = Math.max(this._pointHigh, points + shadowPad);
+		const spares = this._pointHigh - points;
+		while (this._spares.length < spares) {
+			const spare = new THREE.PointLight(0x000000, 0, 1);
+			spare.position.set(0, -1000, 0);
+			spare.userData.spare = true;
+			scene.add(spare);
+			this._spares.push(spare);
+		}
+		while (this._spares.length > spares) {
+			const spare = this._spares.pop()!;
+			this.drop(spare);
+			spare.removeFromParent();
+			spare.dispose();
+		}
+		this._spares.forEach((spare, i) => {
+			spare.castShadow = i < shadowPad;
+			if (spare.castShadow && !this.mapsOf(spare, frame).still) {
+				bake.push(spare);
+			}
+		});
+	}
+
+	private removePart(light:THREE.DirectionalLight):void {
+		this.drop(light);
+		light.removeFromParent();
+		light.target.removeFromParent();
+		light.dispose();
+	}
+
+	/** The box round every baked caster, cut down to `area` on XZ when given. */
+	private casterBox(area:Area | null | undefined):THREE.Box3 {
 		const box = new THREE.Box3();
 		const part = new THREE.Box3();
 		for (const caster of this._casters.values()) {
@@ -307,6 +491,19 @@ export class ShadowCache {
 				box.union(caster.bounds.getBoundingBox(part));
 			}
 		}
+		if (area) {
+			box.intersect(new THREE.Box3(new THREE.Vector3(area.minX, -Infinity, area.minZ), new THREE.Vector3(area.maxX, Infinity, area.maxZ)));
+		}
+		return box;
+	}
+
+	/** Frames every baked caster in the sun's map, seen along {@link SUN_DIR}, cut down to `area` on XZ when given. */
+	private fitSun(sun:THREE.DirectionalLight, area:ShadowSettings['sunArea']):void {
+		this.fitBox(sun, this.casterBox(area));
+	}
+
+	/** Points `light` along {@link SUN_DIR} and frames `box` in its shadow camera. An empty box leaves it as it was. */
+	private fitBox(sun:THREE.DirectionalLight, box:THREE.Box3):void {
 		if (box.isEmpty()) {
 			return;
 		}
@@ -403,8 +600,8 @@ export class ShadowCache {
 	}
 }
 
-/** How far a point light's shadow reaches. */
-function reachOf(lamp:THREE.PointLight):number {
+/** How far a point or spot light's shadow reaches. */
+function reachOf(lamp:THREE.PointLight | THREE.SpotLight):number {
 	return lamp.distance || lamp.shadow.camera.far;
 }
 

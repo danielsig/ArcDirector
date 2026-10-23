@@ -23,6 +23,7 @@ You bring the world: a Three.js scene, a Babylon level, an ECS, or a grid of til
 - **Inventory:** LLMs can see what the character is carrying.
 - **Knowledge:** LLMs can recall what the game tells them about the world, alongside their own memories.
 - **Memory:** Long-term memories form on the fly and can be recalled later.
+- **Regions:** Places in the world that put a memory on the mind of whoever is in them, and tell the game who comes and goes.
 - **Recovery:** The LLM recovers from failures by correcting its `Arc`s.
 - **Feedback:** Relevant knowledge and memories are injected automatically, based on context.
 - **Watches:** NPCs can use expressions as conditions that trigger thinking.
@@ -37,9 +38,14 @@ You bring the world: a Three.js scene, a Babylon level, an ECS, or a grid of til
   - System One: `choose` (see below).
   - Trade: `offer` (used for both buying and selling).
   - Collective: `issue`, `tag`, `untag`, `spread`, `circle`, `hold_line`.
+  - RTS (`withRTS`): `gather`, `build`, `wall`, `bridge`, `repair`, `train`, `research`, `cancel`, `rally` for the economy; `attack`, `attack_move`, `hold`, `patrol`, `garrison`, `unload` for units; `tribute` between sides; `staff`, `haul`, `set_policy` for cities; and standing reactions `keep_training`, `supply_ahead`, `share_workers`, `keep_distance`, `pull_back`, `spread_out`.
+  - RPG (`withRPG`): `equip`, `unequip`, `steal`, `attack`, `block`, `heal`, `protect`, and the game's own attacks and spells.
+  - MOBA (`withMOBA`): `attack`, `block`, `heal`, `protect`, and the heroes' own abilities.
+- **Genres:** `withRTS`, `withRPG` and `withMOBA` start a game of that kind with its verbs (`build`, `equip`, `heal`, …).
 - **System One:**
   - Works with the `choose` verb to make quick decisions.
   - Jev, or any local System One model, can make a decision in about 50 ms.
+  - Skaldic Laya, ArcDirector's own decision model (0.45 GB), decides in well under a tenth of a second, even in the browser beside the main model: `addBrowserModel('local', Skaldic.Laya)`.
   - LLMs can stand in as System One at about 100–200 ms per decision.
   - LLMs can program NPCs to be controlled by System One models.
 
@@ -99,7 +105,7 @@ Five words to know:
 
 1. `new ArcDirector()` starts out empty.
 2. Chain `with…` calls (each sets one subsystem) and `add…` calls (each adds to a list), in any order.
-3. `await start()` is the only assembly step. It wires up characters and their minds, probes the model and checks the names in each kit.
+3. `await start()` is the only assembly step. It wires up characters and their minds, checks the names in each kit, and probes the model. Laws, programs and moves run from the first `tick` after it begins; only thinks wait for the model.
 4. Call `tick(dt, now)` every game frame. Do not call it while the AI is paused.
 
 ```ts
@@ -107,16 +113,23 @@ const director = await new ArcDirector<CharacterCtx>()
 	.addLMStudioInference()
 	.addStockVerbs()
 	.withDefaultKit({ verbs: STOCK_VERBS })
-	// Callbacks that unlock the stock verbs and sight
+	// Callbacks that unlock the stock verbs, sight, hearing, and regions
 	.withWorld<GameObject>({
-		// Queries
-		find: (id) => scene.byID(id),                                // the only place an id becomes an entity
-		getPose: (go) => go.pose(),                                  // { point: [x, z], facing?, right? }
-		getPathGraph: (go) => scene.steps(go),                       // (point, into?) => [{ point, cost?, blocked? }, …]
-		getDescription: (go, target) => scene.describe(go, target),
-		// Commands
-		steerToward: (go, point) => go.headToward(point),            // a position; true once there
-		transfer: (move) => scene.move(move),                        // returns how to undo it
+		// Entity lookup by ID
+		find: (id) => scene.byID(id),
+		// Gets entity's position + directions
+		getPose: (go) => go.pose(),
+		// Navigation mesh traversal for pathfinding
+		getNeighbors: (point) => scene.cellsAround(point),
+		// Computes line of sight and path traversal cost
+		canPass: (what, a, b) => scene.passage(what, a, b),
+		// Tells what characters see when they `examine` something
+		getDescription: (char, target) => scene.describe(char, target),
+		// Rotate entity towards position
+		steerToward: (go, point) => go.headToward(point),
+		// Move things between characters/containers
+		transfer: (move) => scene.move(move),
+		// Defines how the `use` verb works
 		useItem: (go, item, target) => scene.use(go, item, target),
 	})
 	.withSight({ limit: 16 })
@@ -125,7 +138,10 @@ const director = await new ArcDirector<CharacterCtx>()
 		id: 'Fern',
 		mind: {},
 		identity: { role: 'Watcher', traits: ['alert'] },
-		memories: [{ text: 'I keep watch over the gate.', tags: ['backstory'], pinned: true }],
+		memories: [{
+			text: 'I keep watch over the gate.',
+			tags: ['backstory'], pinned: true,
+		}],
 	})
 	.addCharacter({ id: 'Player' })
 	.start();
@@ -133,7 +149,7 @@ const director = await new ArcDirector<CharacterCtx>()
 director.tick(dt, now);
 ```
 
-`start()` returns `Promise<this>`, and every other chain method returns `this`. Once `start()` has succeeded, the `with*` methods throw `Error('ArcDirector already started')`. The lists stay open: `addCharacter` / `removeCharacter`, `addCollective` / `removeCollective`, `addStockVerbs` / `addVerb` / `removeVerbs`, and `addSense` / `addTool` / `removeSense` / `removeTool`. A start that failed (no model, or an unknown name in a kit) can be retried; calling `start()` again after it has succeeded does nothing.
+`start()` returns `Promise<this>`, and every other chain method returns `this`. Once `start()` has succeeded, the `with*` methods throw `Error('ArcDirector already started')`. The lists stay open: `addCharacter` / `removeCharacter`, `addCollective` / `removeCollective`, `addStockVerbs` / `addVerb` / `removeVerbs`, and `addSense` / `addTool` / `removeSense` / `removeTool`. `ready` turns true as soon as the cast is wired, before the servers answer: from then on `tick` runs laws, programs and moves, and thinks wait in the queue until the models are loaded and warm, when `start()` resolves. A start that failed (no model, or an unknown name in a kit) can be retried, and one whose servers did not answer tries them again; calling `start()` again after it has succeeded does nothing.
 
 `start({ ignoreMissing: true })` logs unknown names through `onLog` instead of throwing.
 
@@ -151,32 +167,41 @@ Each `with*` call sets or replaces one slot; leave out the ones you do not need.
 
 ### Inference
 
-This is how ArcDirector chats with models. A director can talk to any number of chat **servers**, and to any number of **models** on them, each by name. A mind thinks with the model its settings name (`mind: { model: 'qwen' }`), or else with the default model. `start()` rejects if a mind has no model (`onLog` can print why). Every `add*` and `remove*` method on ArcDirector works both before and after `start()`.
+This is how ArcDirector chats with models. A director can talk to any number of chat **servers**, and to any number of **models** on them, each by name. A mind thinks with the model its assigned to (`mind: { model: 'qwen' }`), or else with the default model. `start()` rejects if a mind has no model (`onLog` can print why). Every `add*` and `remove*` method on ArcDirector works both before and after calling `start()`.
 
 | | |
 | --- | --- |
+| `addBrowserModel(name, model?, observer?)` | Adds a model that runs in the page on WebGPU through wllama (`@wllama/wllama`, an optional peer dependency: llama.cpp's server compiled to WebAssembly), on server `browser`. `model` is one of ArcDirector's own, `Skaldic.Gemma4E4B` or `Skaldic.Laya`, or a GGUF's URL (see below); without one, Skaldic Gemma 4 E4B. The download starts right away; follow it with `{ next?, error?, complete? }` callbacks, or show it with `withLoadingBar`. Returns the director, to chain. |
+| `BrowserProvider.shared` | The page's browser models, which the host sets once with where it serves `wllama.wasm` ([see below](#browser-models-and-wllama)). It is kept across directors, so a loaded model outlives them. `download(model)`, `isCached(model)`, `delete(model)` and `keepOnly(models)` (deletes every other download, so models a game stopped offering free their storage) work without a director, for example on a settings screen, and `BrowserProvider.unsupported()` says why this browser can't run them, or null. |
 | `addLMStudioInference(opts?)` | Adds server `lmstudio` (or `name`). Defaults to `http://127.0.0.1:1234/v1` and loads models with flash attention. Pass `baseURL: '/inference/v1'` when a page proxies LM Studio. |
 | `addOllamaInference(opts?)` | Adds server `ollama` (or `name`). Defaults to `http://127.0.0.1:11434/v1`. |
 | `addHttpInference(opts)` | Adds server `http` (or `name`) at any OpenAI-compatible base URL. |
 | `addFakeInference(chat?, { name? })` | Adds server `fake`, for tests. Its model ID is `fake`. By default it replies with a canned `go_to` to a PascalCase name. |
 | `addInference(name, provider, { vision? })` | Your own `chat` / `embed`, or your own System One `pick` (see below). |
-| `addBrowserModel(name, model?, observer?)` | Adds a model that runs in the page on WebGPU through wllama (`@wllama/wllama`, an optional peer dependency: llama.cpp's server compiled to WebAssembly), on server `browser`. `model` is a GGUF's URL (see below); without one, Gemma 4 E4B. The download starts right away and is returned as an Observable `ModelDownload`; you can also pass `{ next?, error?, complete? }` callbacks. |
-| `BrowserProvider.shared` | The page's browser models, which the host sets once with where it serves `wllama.wasm` (see below). It is kept across directors, so a loaded model outlives them. `download(model)`, `isCached(model)` and `delete(model)` work without a director, for example on a settings screen, and `BrowserProvider.unsupported()` says why this browser can't run them, or null. |
 | `removeInference(name)` | Removes server `name` (chat or System One) and every model on it. Runners that were assigned a System One on that server have none until it is added again. |
-| `addModel(name, spec?)` | Adds a model: `{ inference?, id?, decision?, contextLength?, thinking?, thinkingBudget?, sampling?, reasoningEffort?, maxParallel? }`. `sampling` is how it picks each token, `{ temperature?, topP?, topK? }`, such as the model maker's recommended settings (Gemma: `{ temperature: 1, topK: 64, topP: 0.95 }`); the default is `DEFAULT_SAMPLING`, `{ temperature: 1, topP: 0.95 }`, which every OpenAI-style server takes, and `topK` is only sent when set. Greedy decoding is not the default, since it makes a thinking model repeat one thought until its budget runs out. System One always decodes greedily, as a request may (`ChatRequest.sampling`). `thinkingBudget` caps a thought in tokens: past it the server stops, and the mind answers from the thought so far without thinking again, for models (Gemma 4) that only switch reasoning on or off. `decision` makes it System One `name` instead (see below). `inference` defaults to the first server, and `id` to that server's pick (for LM Studio, the loaded chat model that `modelGrade` ranks highest). `maxParallel` (default 4) caps how many thinks run on this model at once. Adding the same name again replaces it. If no model was added, `start()` adds the first server's pick, named after the server. |
+| `withLoadingBar(opts?)` | A plain loading bar in the page for each browser model the director downloads: the model's name, a `<progress>` and what it is doing ("Downloading 1.2 of 4.6 GB", "Loading on the GPU"), gone once it is loaded, or the reason it failed. In a small panel in the bottom-left corner, or in `opts.parent`. Nothing outside a browser. For your own bar, pass `addBrowserModel` an observer. |
+| `addModel(name, spec?)` | Adds a model: `{ inference?, id?, decision?, contextLength?, thinking?, thinkingBudget?, sampling?, reasoningEffort?, maxParallel?, prompt? }`. `sampling` is how it picks each token, `{ temperature?, topP?, topK? }`, set by set over what the model's makers recommend: `recommendedSampling(id, thinking)` knows the main families (Gemma: `{ temperature: 1, topK: 64, topP: 0.95 }`; Qwen3 thinking: `{ temperature: 0.6, topP: 0.95, topK: 20 }`, …), so a menu may set only the temperature. What neither sets is `DEFAULT_SAMPLING`'s, `{ temperature: 1, topP: 0.95 }`, which every OpenAI-style server takes, and `topK` is only sent when set. `modelSampling(name?)` says what a model runs with, every setting filled in; `warmUp(name?)` loads it now with a request a token long. Greedy decoding is not the default, since it makes a thinking model repeat one thought until its budget runs out. System One always decodes greedily, as a request may (`ChatRequest.sampling`). `thinkingBudget` caps a thought in tokens: past it the server stops, and the mind answers from the thought so far without thinking again, for models (Gemma 4) that only switch reasoning on or off. `decision` makes it System One `name` instead (see below). `inference` defaults to the first server, and `id` to that server's pick (for LM Studio, the loaded chat model that `modelGrade` ranks highest). `maxParallel` (default 4) caps how many thinks run on this model at once. `prompt: 'compact'` (default `'full'`) is for a model trained on ArcDirector's prompts: its minds are not told the rules and hints that are the same in every game (the watch language, how to look things up and join steps, the stock verbs' help), only what this game and character make their own (its verbs' signatures and its own verbs' help, tools, notes, persona, laws, sight), so each prompt runs about a third as long. Adding the same name again replaces it. If no model was added, `start()` adds the first server's pick, named after the server. |
 | `removeModel(name)` | Removes a model. Minds that were assigned it think with the default. |
 | `setDefaultModel(name)` | Sets the model for every mind without an assignment. Defaults to the first model added. |
 | `modelID(name?)` | The server's ID for that model (or for the default model), or `''` until its server has answered. |
+| `modelParallel(name?)` | How many thinks that model (or the default) runs at once, its `maxParallel`; `0` until its server has answered. |
+| `shareInference(from)` | Before `start()`: think on another director's chat servers and models, over the same connections and as it resolved them, so `start()` looks nothing up again. For many short-lived directors on one setup, such as a bench's cases. Their requests are logged by `from`. |
 | `withEmbeddings({ inference?, id })` | The one model that every memory and recall query is embedded with, so memories stay comparable whichever model a mind thinks with. Without it, recall matches text. |
-| `withArcFormat(format)` | How minds write an Arc: `'text'` (`go_to(Keep) && wait()`, read forgivingly), `'json'` (the default: `{"steps":[…]}`) or `'schema'`. `'schema'` is the same JSON, but the server must follow a fixed reply schema: a think goes to `/v1/chat/completions`, and tool calls are replies such as `{"tool":"recall","query":"Bread"}` rather than native calls. Collectives follow the format too. Change it live with `setArcFormat(format)`, and read it with `arcFormat`. |
+| `withArcFormat(format)` | How minds write an Arc: `'text'` (`go_to(Keep) && wait()`, read forgivingly), `'json'` (`{"steps":[…]}`) or `'schema'` (the default). `'schema'` is the same JSON, but the server must follow a fixed reply schema: a think goes to `/v1/chat/completions`, and tool calls are replies such as `{"tool":"recall","query":"Bread"}` rather than native calls. Collectives follow the format too. Change it live with `setArcFormat(format)`, and read it with `arcFormat`. |
 
-A browser model is the URL of a GGUF, pinned by putting a commit in it (`https://huggingface.co/org/repo/resolve/<commit>/model.gguf`). A browser holds no file over 2 GB, so a bigger model is split (`llama-gguf-split --split-max-size 1G model.gguf model`) and named by its first part, `…-00001-of-00004.gguf`; the rest load with it. The default, `DEFAULT_BROWSER_MODEL`, is Gemma 4 E4B at Q4_K_M, split. The spec is `{ model?, provider?, inference?, ...addModel's }`. The model is llama.cpp's own server in the page, and requests reach it through `HttpProvider`, as any OpenAI-style server's do (`inPageFetch` is the `fetch` between them), so the schema, sampling, thinking and its budget work as with LM Studio. It answers `maxParallel` thinks at once, batched as `llama-server --parallel` does, each with the whole `contextLength`, so its context in memory is their product. A `thinkingBudget` is the engine's own: it ends the thought there and answers in the same request. Each think reuses what earlier ones read: every mind's system prompt is the same rules first and who it is last, so a free slot already holds most of any prompt, and sliding-window layers (Gemma's) keep their whole cache (`swa_full`), at more memory, so a cached prompt stays usable after a reply. Prompts are read 1024 tokens a pass. Serve the page cross-origin isolated (`Cross-Origin-Opener-Policy: same-origin`, `Cross-Origin-Embedder-Policy: credentialless`), or llama.cpp runs on one CPU thread beside the GPU, which slows every token. The host serves `wllama.wasm` from the installed package, so engine and code match, and says where once: `BrowserProvider.shared = new BrowserProvider({ wasm })` (with Vite, `import wasm from '@wllama/wllama/esm/wasm/wllama.wasm?url'`). The `ModelDownload` sends `{ progress, text }` to each subscriber (RxJS's `from()` accepts it), and `done` is a promise. Models with the same name share one download. To suggest a model a player's device can run, `gpuMemory()` estimates its GPU memory from the GPU's name and the system RAM (null when the browser hides them), and `fittingModel(models, memory, spareGB = 1)` picks the biggest of `{ memoryGB }` models that leaves that much over for rendering. Minds write their Arcs in any format with a browser model.
+#### Browser models and wllama
+
+A browser model is the URL of a GGUF, pinned by putting a commit in it (`https://huggingface.co/org/repo/resolve/<commit>/model.gguf`). A browser holds no file over 2 GB, so a bigger model is split (`llama-gguf-split --split-max-size 1G model.gguf model`) and named by its first part, `…-00001-of-00004.gguf`; the rest load with it. ArcDirector's own models, trained on its prompts, take one line: `addBrowserModel('main', Skaldic.Gemma4E4B)` (Skaldic Gemma 4 E4B, the default browser model) or `addBrowserModel('local', Skaldic.Laya)` (Skaldic Laya, a decision model: a System One on its own engine, `BrowserProvider.decisions`, so the chat model stays loaded beside it). Each is pinned to its release (`SKALDIC_BROWSER_MODELS`; `browserModelURL` gives the URL). The spec is `{ model?, provider?, inference?, ...addModel's }`. The model is llama.cpp's own server in the page, and requests reach it through `HttpProvider`, as any OpenAI-style server's do (`inPageFetch` is the `fetch` between them), so the schema, sampling, thinking and its budget work as with LM Studio. It answers `maxParallel` thinks at once, batched as `llama-server --parallel` does, each with the whole `contextLength`, so its context in memory is their product. A `thinkingBudget` is the engine's own: it ends the thought there and answers in the same request. Each think reuses what earlier ones read: every mind's system prompt is the same rules first and who it is last, so a free slot already holds most of any prompt, and sliding-window layers (Gemma's) keep their whole cache (`swa_full`), at more memory, so a cached prompt stays usable after a reply. Prompts are read 1024 tokens a pass. Serve the page cross-origin isolated (`Cross-Origin-Opener-Policy: same-origin`, `Cross-Origin-Embedder-Policy: credentialless`), or llama.cpp runs on one CPU thread beside the GPU, which slows every token. The host serves `wllama.wasm` from the installed package, so engine and code match, and says where once: `BrowserProvider.shared = new BrowserProvider({ wasm })` (with Vite, `import wasm from '@wllama/wllama/esm/wasm/wllama.wasm?url'`). A `ModelDownload` sends `{ progress, text }` to each subscriber (RxJS's `from()` accepts it), and `done` is a promise. Models with the same name share one download. To suggest a model a player's device can run, `gpuMemory()` estimates its GPU memory from the GPU's name and the system RAM (null when the browser hides them), and `fittingModel(models, memory, spareGB = 1)` picks the biggest of `{ memoryGB }` models that leaves that much over for rendering. Minds write their Arcs in any format with a browser model.
 
 ```ts
-// Follow the download as an Observable…
-director.addBrowserModel('main').subscribe({ next: ({ progress }) => bar.style.width = `${progress * 100}%` });
-// …or with callbacks, or just wait for it.
-await director.addBrowserModel('quick', { thinking: false }, { complete: () => ready() }).done;
+// A loading bar on screen while it downloads…
+const director = new ArcDirector()
+  .withLoadingBar()
+  .addBrowserModel('main', Skaldic.Gemma4E4B);
+// …or your own, following its progress.
+director.addBrowserModel('quick', { thinking: false }, { next: ({ progress }) => bar.style.width = `${progress * 100}%`, complete: () => ready() });
+// The download itself (an Observable with a `done` promise): models named alike share it.
+await BrowserProvider.shared.download(DEFAULT_BROWSER_MODEL).done;
 ```
 
 **System One** models are fast models that pick one of a `choose` step's arcs by name; they never write arcs. The director keeps them by name. A spec's `systemOne` assigns one, and a runner without an assignment uses the default. A runner left with none never sees `choose`.
@@ -185,13 +210,18 @@ await director.addBrowserModel('quick', { thinking: false }, { complete: () => r
 | --- | --- |
 | `addJevInference(opts?)` | TypeSafe's Jev, named `jev` unless `name` says otherwise. It posts `{ state, model, questions: { pick: { type: 'choice', … } } }` to `baseURL`, which defaults to `/systemone`: a page proxy that adds the API key, so the library never reads the key. `model` defaults to `jev-latest`; pass `headers` when there is no proxy. Any System One endpoint works, including LM Studio's `/v1/systemone`. A `baseURL` ending in `/decisions` is asked in OpenAI's Decisions format. |
 | `addModel(name, { decision: true, inference?, id?, maxParallel? })` | A local System One. A decision model (LM Studio's `decision` type, e.g. `ggml-org/Laya-GGUF`) answers through its server's `/v1/systemone`. Any other model is a chat model that scores the choices: they are sent as lettered options, the answer is a single token with reasoning off, and the listed letter it scores highest wins (by its log probabilities, or by the letter it answered when the server returns none). Leave out `id` to use the server's chat pick, which is already loaded; in that case also give it the chat model's `contextLength`, so the two never cause a reload. It is never the minds' default. |
-| `benchSystemOne(systemOne, cases?)` | Measures how well a System One decides. By default it runs `DECISION_BENCH` (tactics, survival, social, puzzle), each case with the choices in both orders, so a model that always favors one slot only scores half. It reports right answers per skill, the mean time per pick in milliseconds, and failures. |
+| `benchSystemOne(systemOne, cases?, { repeats? })` | The ArcSelector Bench: how well a System One decides. By default it runs `DECISION_BENCH` (tactics, survival, social, puzzle). Every choice of a case is rated from 0 to 1 (`ratings`): 1 for the best, something between for one that still helps, 0 for one that fails or does harm. Each case is asked with its choices in both orders and scores the worse of the two picks' ratings, so a model that always favors one slot earns only its worst choice's rating. A case is a success when both picks are the best, harmful when either is rated 0, and neutral between. It reports the mean rating per skill and level, the mean time per pick in milliseconds, and failures. |
 | `addInference(name, systemOne)` | Your own `pick`. |
 | `setDefaultSystemOne(name)` | The System One for runners that have none of their own. |
+| `choiceQuestion(id, choices, { doing?, last? }?)` | What `id`'s System One would be asked now to pick among `choices` (arcs or arc text), worded as `choose` words it: `{ state, criteria }`, or undefined when no choice can run. `doing` and `last` stand in for the verb it runs and its last choice. For previews and training data. |
 
 Every `add*` works before or after `start()`, and adding the same name again replaces it.
 
-**Benches** score models on scenes with known right answers, from easy to hard. A `BenchScore` holds the right answers per skill and level, the mean time per trial, and the failures. `benchSystemOne` scores picks. `benchArcs(models, cases?)` scores chat models on writing arcs that reach a goal, using `ARC_BENCH` (chain, trade, social, fight, lookup) by default. Each case is one think in a fresh director, which `models(director)` sets up just as the host would for play (`addModel`, `withArcFormat`, `withRepair`, …), so the model reads the same prompt it would in play. Its arc then plays out in a `SceneWorld`, a small world the stock verbs walk, trade and hand items around in, while the case's `act` moves the others. As in play, the mind thinks again on how that went while the goal is not reached: up to 3 thinks in a minute of play, timed by the thinks alone. The case's `done(world)` decides: any arcs that reach the goal are right, whatever their steps. In a lookup case, what the goal needs is out of sight, so only `see_map` or `recall` finds its name.
+**Benches** (imported from `arc-director/bench`; the scene simulator they play, `SceneWorld`, `playScenario` and the rest, comes from `arc-director`) score models on scenes with known right answers, from easy to hard. Each trial is a `BenchOutcome`: a `success`, `neutral` (no success, but no worse off than doing nothing), or `harmful` (worse off than doing nothing; a failed trial too). A trial that gives partial credit returns a `BenchRated` instead, its outcome with a `score` from 0 to 1; otherwise a success scores 1 and anything else 0. A `BenchScore` holds, per skill, per level and in `total`, the trials right and harmful and the mean score (`mean`): doing nothing scores 0. Each bench has a version (`DECISION_BENCH_VERSION`, now 2, and `ARC_BENCH_VERSION`, now 2), raised whenever its cases or how they are asked or played change, so compare only scores of the same version. With `repeats` above one, each case runs that many times and `se` is the standard error of that share, from how much each case's own outcome varied: how far another run of the same model would likely land. The score also keeps the mean think time, the run's wall time, and the sampling the model ran with. `runBench(trials, { repeats, parallel, warmUp })` runs any trials this way.
+
+`benchArcs(models, cases, { repeats?, parallel?, onTrial? })`, the ArcDirector Bench, scores chat models on writing arcs that reach a goal; `ARC_BENCH` holds its cases (chain, trade, social, lookup, questing, reactions, fight, tactics, economy, planning). Each case plays in a fresh director, which `models(director)` sets up just as the host would for play (`addModel`, `withArcFormat`, `withRepair`, …), so the model reads the same prompt it would in play. Its arc then plays out in a `SceneWorld`, a small world the stock verbs walk, trade and hand items around in, while the case's `act` moves the others. As in play, the mind thinks again on how that went while the goal is not reached: two thinks in a minute of play unless the case says otherwise, timed by the thinks alone. The case's `done(world)` decides: any arcs that reach the goal are a success, whatever their steps. Short of it, the scene is weighed against the same case played with the character doing nothing, at the same moment: more of its side down, or something it held gone with nothing got for it, is harmful, and so is anything the case's own `harm(world)` flags; anything else is neutral. Every case carries its `solution` and the `naive` move a weak model makes first, and with a squad what its commander would do `alone`; the bench's tests prove each case winnable and lost to every `BASELINES` trick (`baselineArc(case, baseline)`: doing nothing, everyone attacking the nearest foe, the commander alone, the naive move), so no case gives points for free.
+
+In a lookup case, what the goal needs is out of sight, so only `see_map` or `recall` finds its name. In a questing case, the job is in the NPC's memory, sometimes one among dozens of everyday ones, or out of date, or half done already. A reactions case needs a `when` or `law` set up before what it answers happens. Fights play out in a small combat simulation: each fighter is a kind (`FIGHTERS`: Archer, Knight, Cleric, Rogue, …) with health, speed and abilities (`ABILITIES`), and each ability is a verb with its range, damage or healing, cooldown, cast time, splash, and effects such as stuns, roots, shields, taunts and burns. Fighters nobody commands fight by a `tactic` (charge, hold, heal, or blow up among their foes). In a `tactics` case the character commands a `squad`, a collective whose units it gives orders and laws, while idle units hold their ground and strike back at foes in reach, and the battle plays on by their orders after the commander's last think. A scene with `rts` is an RTS (`SceneRTS` on `withRTS`): its units fight with the stock RTS verbs and tactics, and an `economy` case's workers gather, build, train and research by its kinds' costs, prerequisites and supply. A `planning` case adds its own verbs (`verbs`: run on its world, or alias arcs) and a look-ahead tool (`sceneSearch`, on `addSearch`). The world stands still while a mind thinks. The model is looked up and warmed up once (`warmUp`), untimed, and every case thinks over that one connection; cases run as many at once as the model thinks at once (its `maxParallel`), or as `parallel` says, each in its own director. Simulated time costs no real time: each tick yields with `nextTurn()`, one turn of the event loop that is never clamped or throttled (`setImmediate` in Node, a `MessageChannel` message in a browser). With `quick`, either bench climbs each skill instead, for a quick check that is not its score: a medium case, then an easy one after a miss or a hard one after a success, so a skill scores 0, ⅓, ⅔ or 1. `playArcCase(case, models)` plays one case on its own, and `pnpm --filter arc-director bench --model <id>` plays the cases with a model on LM Studio from the command line (`--skill`, `--only`, `--show`, `--parallel`, `--context`, `--url`). To write your own cases, `acceptOffer` has someone take the first fair offer made to them, `answerSpeech` has someone answer what is said to them, and `everydayMemories(count)` gives a long-running NPC an ordinary past to bury a job in.
 
 When a runner's own System One fails or names no choice, every other System One is asked, in the order they were added, and then the runner's chat model. A System One that failed is skipped for 30 s. Every pick goes to `onLog` under the character's ID: the goal, the state, the choices, the answer and who gave it, the time taken, and every miss. A cast made only of characters with a standing `choose` (no minds, no collectives) can start with `addJevInference()` alone; anything else needs chat inference too.
 
@@ -233,7 +263,9 @@ A chat request in flight occupies a slot for that mind's ID. `mind.abortThink()`
 | --- | --- |
 | `addStockVerbs(...verbs)` | Registers stock verbs, which the library runs itself (the world verbs through `withWorld`). With no arguments, it registers all of them; pass names to opt in to a subset (see the groups below). A name that is already registered is skipped. |
 | `addStockCollectiveVerbs(...verbs)` | Registers the schemas of `issue`, `tag`, `untag`, `spread`, `circle` and `hold_line`. Registering them does not grant them; the collective's kit does. |
-| `addVerb(name, { args?, help?, handler? })` | Registers a verb's schema and, optionally, the function that carries it out in the world. The handler's `args` are typed from `args` (`{ item: 'id', offer: 'number?' }` gives `{ item: string; offer?: number }`); a stock verb's args are typed from its stock args. `help` is one line shown after the verb in the prompt's verb list (`shoot(target) — needs a clear line of sight`); stock verbs have theirs too. Adding the same name again binds or replaces the handler, and a host handler replaces a stock one. |
+| `withRPG(host)` | An RPG to start from. Registers each of `equip(item, slot?)`, `unequip(slot)`, `steal(item, from)`, `attack(target?)`, `block(target?)`, `heal(target?)` and `protect(target?)` that `host` gives a handler for, and each of its `abilities` (the game's own attacks and spells) as a verb used on a `target`. A handler may come as `{ help, handler }` when the game's own rules need saying (`guard up 2s`). Registers the stock verbs too; without `withDefaultKit`, characters get them, `offer`, and these. |
+| `withMOBA(host)` | A MOBA to start from: its heroes' `attack`, `block`, `heal`, `protect` and `abilities`, registered as `withRPG` registers them. Its default kit has no `offer`. |
+| `addVerb(name, { args?, help?, seen?, handler? })` | Registers a verb's schema and, optionally, the function that carries it out in the world. `seen` is how others see one running it, with `{arg}` holes (`going to {target}`); without it, the verb with `-ing` (`firing`). Sight shows it after a seen character's health (`Kell (20/20 hp, firing)`), and a sound its maker makes while seen is not told again. The handler's `args` are typed from `args` (`{ item: 'id', offer: 'number?' }` gives `{ item: string; offer?: number }`); a stock verb's args are typed from its stock args. `help` is one line shown after the verb in the prompt's verb list (`shoot(target) — needs a clear line of sight`); stock verbs have theirs too. Adding the same name again binds or replaces the handler, and a host handler replaces a stock one. |
 | `removeVerbs(...names)` | Removes the named verbs' schemas and handlers. Missing names are skipped, and calling it with no names does nothing. |
 | `withDefaultKit(kit)` | An object or a `(ctx) => kit` function, used when a character or collective spec has no `kit` (a collective's characters included). Like any kit, it is fetched every tick. |
 | `withVerbGate(fn)` | Runs before every host verb, with the full `VerbCall`. Return a result to refuse the step (during a cutscene, or after a fight is won); return `undefined` to let it run. |
@@ -242,7 +274,7 @@ A chat request in flight occupies a slot for that mind's ID. `mind.abortThink()`
 
 Pass these groups to `addStockVerbs` spread out, as in `addStockVerbs(...STOCK_MOVE_VERBS)`:
 
-- `STOCK_MOVE_VERBS`: `go_to`, `follow`, `flee`, `wander`. `flee(from, distance?)` takes the cheapest route out of range that keeps well away from them, and ends once it has stayed `distance` away for 3 s. `distance` defaults to the kernels' `nearRadius` (what `nearby()` counts); if there is none, `flee` fails and asks how far.
+- `STOCK_MOVE_VERBS`: `go_to`, `follow`, `flee`, `wander`. `go_to(target, until?)` stops on the way, successfully, once `until` holds. `follow(target, distance?)` never ends on its own: it keeps within `distance` of them (default: arm's reach), closing in again whenever they get farther. `flee(from, distance?)` takes the cheapest route out of range that keeps well away from them, and ends once it has stayed `distance` away for 3 s. `distance` defaults to the kernels' `nearRadius` (what `nearby()` counts); if there is none, `flee` fails and asks how far.
 - `STOCK_ITEM_VERBS`: `use`, `pick_up`, `drop`, `give`, `examine`.
 - `STOCK_MIND_VERBS`: `say`, `wait`, `remember`, `think`, `set_goal`, `drop_goal`, `set_identity`, `watch`, `unwatch`, `focus`, `unfocus`.
 - `STOCK_ARC_VERBS`: `law`, `unlaw`, `when`, `loop`.
@@ -276,7 +308,7 @@ The library does the mind's half of every verb, so handlers only need to change 
 
 - **`id` args are real IDs.** The model may write its own name for a character (see [Names](#names)) or an expression that picks one (`cleave(others.filter("enemy").minBy(u => u.hp))`). The mind turns names into IDs as it reads the reply, and an expression becomes the ID it picks. An expression that picks no one fails with that reason before the handler runs. Plain names the library does not know are passed through for the host to judge (`no such place Cottag`).
 - **`watch` args are checked, then asked.** Bad syntax or leftover English (`filter("trees")`) fails before the host runs. `call.holds('until')` tells you whether the watch holds now, and `call.score('until', point)` asks how well it would hold if this character stood at `point` (this is how `wander` picks where to go).
-- **Moving and waiting are the library's job.** `call.goTo(target, { within?, check? })` moves this character into reach of `target` (or `within` that far), following it as it moves, and stops sooner once `check` returns a reason. `call.goToPoint(at, { within? })` moves it to a point, and `call.wait(seconds)` lets game time pass. All three end, marked as interrupted, when the step is aborted. A host verb that needs to be somewhere first (`steal`, `heal`) awaits one of them, and keeps only its own rules.
+- **Moving and waiting are the library's job.** `call.goTo(target, { within?, check?, crowd? })` moves this character into reach of `target` (or `within` that far), following it as it moves, and stops sooner once `check` returns a reason. `call.goToPoint(at, { within? })` moves it to a point, and `call.wait(seconds)` lets game time pass. All three end, marked as interrupted, when the step is aborted. A host verb that needs to be somewhere first (`steal`, `heal`) awaits one of them, and keeps only its own rules.
 - **Verbs internal to the mind never reach the host:** `remember`, `think`, `set_goal`, `drop_goal`, `set_identity`, `watch`, `unwatch`, `focus`, `unfocus`, `say` when a TalkNet is attached, and `wait`. `wait` lets game time pass until `seconds` is up (default 1, or 20 with `until`) or the `until` watch holds, and an aborted arc ends the wait. Only bind your own `wait` handler if waiting must do something in your world.
 
 The argument kinds are `id`, `string`, `text`, `watch`, `expr`, `law`, `number`, `string[]`, `bundle`, `bundle[]` and `arc` (add `?` to make one optional). A `bundle` is `{ [item: string]: number }`. An `expr` is any other expression (`issue(who=units.filter("Archer"))`), and a `law` is a law's name. A mind stores every `id`, `watch`, `expr`, `law` and `arc` argument in IDs. `text` is prose: unquoted, it runs to the closing `)` or to that verb's next `, key=`, so commas and apostrophes need no quotes (`say(Hello there, BridgeKeeper's friend, to=Player)`). Use it for any argument a model fills with a sentence.
@@ -295,7 +327,7 @@ Senses go into the user message on every think, and tools are called on demand. 
 | `removeSense(...names)` | Missing names are skipped, and calling it with no names does nothing. |
 | `removeTool(...names)` | The same. |
 
-`Sight.self.id` is the character's name. Without `hasLineOfSight`, everything `look()` returns is seen. Without `addTool`, the host adds no tools, but the built-in `recall`, `observe` and `see_map` still appear when their subsystems are on.
+`Sight.self.id` is the character's name. What light does not reach from where it stands (`canPass('light', …)`) is dropped from what `look()` returns, but for objects everyone sees (`always`); without `canPass`, all of it is seen. Who a character notices at all (a player hidden from NPCs) is `look()`'s own call. Without `addTool`, the host adds no tools, but the built-in `recall`, `observe` and `see_map` still appear when their subsystems are on.
 
 **Leftover English** is the plain words sight uses for unnamed things in a group, like `trees` or `house`. They are not names, so watches and verbs refuse them and point to the right name instead.
 
@@ -312,7 +344,7 @@ Articles also come to a mind unasked. When a name or alias was said or heard rec
 The library knows characters and collectives by **ID**, and a mind goes by its owner's ID. The library does not know your `World`.
 
 - **`withContext((id) => ctx)`** gives the context a character acts in. Its type is `TCtx`, and it holds whatever the game wants. Perception's `gather(ctx)`, kernels, kits and verb handlers all receive it. A mind senses through its voice's context. Generic parameters follow one rule: they start with `T` (`TCtx`, `TEntity`, `TArgs`), so a slot the host fills never reads like a library type.
-- **`withKernels((ctx, point?) => kernels)`** gives what a mind knows for its watches (`me`, `others`, `items`, `isHurt(me)`, `inventory`). When `point` is set, a verb is asking what would be true if this character stood there, so answer as if it did (who it would see from there, for example). The library always calls `buildCatalog`. The director owns each character's `SampleCache` (it overwrites `cache`, so you do not set it). It also overwrites `hasHeard` and `prev` from that mind, `canSee` when `hasLineOfSight` is set, and all geometry (`distance`, `nearby`, `isFacing`, `isLeft`, `pathDistance`, `manhattan`, …) from the `withWorld` poses and routes, so kernels never measure space themselves.
+- **`withKernels((ctx, point?) => kernels)`** gives what a mind knows for its watches (`me`, `others`, `items`, `isHurt(me)`, `inventory`). When `point` is set, a verb is asking what would be true if this character stood there, so answer as if it did (who it would see from there, for example). The library always calls `buildCatalog`. The director owns each character's `SampleCache` (it overwrites `cache`, so you do not set it). It also overwrites `hasHeard` and `prev` from that mind, fills `canSee` from light passing (`canPass`) when your kernels leave it out, and overwrites all geometry (`distance`, `nearby`, `isFacing`, `isLeft`, `pathDistance`, `manhattan`, …) from the `withWorld` poses and routes, so kernels never measure space themselves.
 
 Verbs need objects and watches need measurements; the same `ctx` serves both.
 
@@ -320,29 +352,70 @@ Verbs need objects and watches need measurements; the same `ctx` serves both.
 
 `withWorld<TEntity>(world)` describes the game's world the way the stock verbs need it. `TEntity` is the game's own type for things in its world (a GameObject, an ECS entity, a record); the library never looks inside one. `find(id)` **is the only place an ID becomes an entity**. Every other part receives entities, so the game never looks anything up twice. When `find` returns `undefined`, the verb fails with "no such …" or "… is gone" before any other part is called. Things that change hands stay IDs (a `Transfer`'s `thing`, `useItem`'s item, and `examine`'s target), because which Bread is meant depends on whose pack it is in, and that is the game's call.
 
-**Queries** (`find`, `get…`, `hasLineOfSight`, `canOffer`, `validateTransfer`, `up`) only read the world, and may be called at any time, often. **Commands** (`steerToward`, `transfer`, `useItem`) change it. Each part unlocks some verbs:
+**Queries** (`find`, `get…`, `isDown`, `canPass`, `canOffer`, `canPickUp`, `validateTransfer`, `up`) only read the world, and may be called at any time, often. **Commands** (`steerToward`, `transfer`, `useItem`) change it. Each part unlocks some verbs:
 
 | Part | Kind | Unlocks |
 | --- | --- | --- |
 | `find(id)`, `getPose(entity)` | query | Watch geometry: `distance`, `nearby`, `isFacing`, `isLeft` / `isRight`, `manhattan`, … |
-| `getPathGraph(character)`, `steerToward(character, point)` | query, command | `go_to`, `follow`, `flee`, `wander`, the collective formations (`spread`, `circle`, `hold_line`), `pathDistance` / `isReachable`, `call.goTo` |
+| `getNeighbors(point)`, `canPass(character, a, b)`, `steerToward(character, point)` | query, command | `go_to`, `follow`, `flee`, `wander`, the collective formations (`spread`, `circle`, `hold_line`), `pathDistance` / `isReachable`, `call.goTo` |
 | `getDescription(character, target)` | query | `examine` |
-| `hasLineOfSight(from, to)` | query | Sight, talk's `canSee`, and the watch function `hasSightline`. Without it, nothing blocks sight. |
+| `isDown(id)` | query | Tells the fallen from the gone. A collective's `units` and roster leave out a character that is down (dead, knocked out, destroyed) and its prompt lists it under `Down:`; a verb aimed at it fails with "… is down", not "… is gone". Without it, a member stays on the roster until the game calls `removeCharacter`. |
+| `canPass('light' \| 'sound', a, b)` | query | What sight sees, the watch functions `hasSightline` / `hasJustSeen` / `hasLostSight`, and which sounds are muffled (`withHearing`). Without it, nothing blocks sight or sound. |
 | `transfer({ character, thing, from?, to?, quantity? })`, and optionally `validateTransfer(move, deal)` | command, query | `pick_up`, `drop`, `give`, `offer` |
 | `useItem(character, item, target?)` | command | `use` |
 
 - **Positions and directions are arrays of numbers**, in world space, with however many dimensions the game uses: `[x]`, `[x, z]` or `[x, y, z]`. A position is always called `point`. A direction is named for where it points (`facing`, `right`, `up`) and is a unit vector. `getPose` returns `{ point, facing?, right? }`, so left and right mean whatever the game means by them. A 3D game can set `up` (default `[0, 1, 0]`) for formations.
 - **Earshot is not reach.** Someone can be within talking range and still out of reach (across a river, or on the phone). The earshot sense marks them with the same blockers a failed move names: `Angler (unreachable, blocked on the way: Bridge is raised)`. A failed move remembers whom it could not reach (`ArcResult.unreachable`). An arc that opens with the same verb toward them is refused in the same think while the way is still blocked, and goes through once it opens. A think whose reply never became a valid arc, even after repairs, runs nothing whose end would wake the mind again, so the mind thinks again, with `think failed — your reply was not a valid Arc: …` as its last result, or `… your plan cannot run: …` when the arc was well formed but the world rules it out.
-- **Routes are the library's job.** `getPathGraph(character)` is called once per search and returns the neighbors of any position: as many `{ point, cost?, blocked? }` steps as there are. Grid cells, navmesh polygons, a weighted network of waypoints, or a line: the library runs A* over whatever it gets. The position asked about need not be a node of the graph. A route starts where the character stands and ends with the steps into the destination: when called with `into`, the graph returns the steps arriving at a position, each `point` being where that step leaves from. So a waypoint network returns the waypoints in sight of any position, and a grid with one-way steps (a ledge you can drop off but not climb), or a destination inside a wall, gives no way in. A graph whose steps all go both ways can ignore `into`. Characters differ (a child fits through a gap a knight does not), so the graph is per character. `cost` defaults to the step's length and must not be less than that; raise it to route around crowds or rough roads. A `blocked` step ("EastDoor is locked — you carry IronKey") is avoided. When there is no open way, the move fails, naming every blocker on the way there, cheapest first, so a mind facing two locked doors learns about both and can pick the one it has the key for. In the reason, say what this character could do about it.
-- **The library moves characters; the game animates them.** While a character moves, `steerToward(character, point)` is called every tick with the position of the next waypoint (never a direction), or with `null` to stand still. It returns whether the character has reached `point`, by the motor's own measure. Speed, collisions, animation and how close counts as arrived all stay in the game, so the library needs no notion of units. A character that makes no progress gets a new route, and then fails with `stuck`. Without `getPathGraph` and `steerToward`, characters do not move, and `call.goTo` only succeeds when the character is already in reach.
+- **Routes are the library's job; what stops what is the game's.** Two parts cover walking, sight and sound alike. `getNeighbors(point)` is the shape of the world: the points one step from any position (grid cells, navmesh polygons, a weighted network of waypoints, a line), the same whoever asks and whatever is open. `canPass(what, a, b)` is the one place the game decides what stops what, along a straight line from `a` to `b`: `what` is the character walking (so its size and what it carries count: a child fits a gap a knight does not, and a locked door names the key it carries), `'light'` for sight, or `'sound'` for hearing. It returns `{ cost }` for an open way, `{ blocked, by? }` for one something stops for now, or `undefined` for none. The library runs A* over the steps: a route starts where the character stands, leaves through the steps to its neighbors, and ends through the steps into the destination, which need not be a neighbor any position names. A step is asked the way it is walked, so a ledge you may drop off but not climb, or a destination inside a wall, gives no way in. A waypoint network names the waypoints in sight of any position. `cost` defaults to the step's length and must not be less than that; raise it to route around crowds or rough roads. A `blocked` step ("EastDoor is locked — you carry IronKey") is avoided. When there is no open way, the move fails, naming every blocker on the way there, cheapest first, so a mind facing two locked doors learns about both and can pick the one it has the key for. In the reason, say what this character could do about it. Nothing standing at `a` stops it, and for light and sound nothing at `b` either, so no one hides themselves or the one looking. Sight and sound ask across a room, so `canPass` answers for any two points.
+- **The library moves characters; the game animates them.** While a character moves, `steerToward(character, point)` is called every tick with the position of the next waypoint (never a direction), or with `null` to stand still. It returns whether the character has reached `point`, by the motor's own measure. Speed, collisions, animation and how close counts as arrived all stay in the game, so the library needs no notion of units. A character that makes no progress gets a new route, and then fails with `stuck`. Without `getNeighbors`, `canPass` and `steerToward`, characters do not move, and `call.goTo` only succeeds when the character is already in reach.
 - **`getReach(character, target)`** is how close a character must be to act on `target` and to count as being there (default 1). A building can return its half-width, so that arriving inside it counts.
+- **Crowds share a character instead of piling onto it.** When several characters are bound for the same character, each move takes a `Crowd`. With `line`, the first goes in and the rest queue one behind another, `spacing` apart, out along the way the target faced when the line formed (`getPose`'s `facing`). Each moves up when the one ahead is done, and waits its turn even in reach. Use it for whoever serves one at a time, such as a vendor. With `ring`, each takes the nearest free place round the target, just inside reach, and anyone past a full ring waits in the next one out. A place stays taken while its taker stands in it. Use it for many at once: a foe, or a speaker. With `none`, each goes straight in. A crowd place it has no way to reach sends that character straight in. Three levels set it, and each overrides the ones after it: a move's own `call.goTo(target, { crowd })`, then the target character's spec `crowd` (`'line'` on a vendor), then the director's `withCrowd({ crowd?, verbs?, spacing? })` by the verb that moves them (`{ crowd: 'ring', verbs: { offer: 'line' } }`). `withRPG` sets `ring`, with `line` for `offer` and `give`. Otherwise, as with `withRTS` and `withMOBA`, the default is `none`. A move to a thing or a point takes no crowd unless it names one.
 - **Trades are offers, and nothing changes hands until one is taken.** `offer(to?, give?, get?)` names what this character hands over and what it wants back, each as a bundle (`{"gold":5}` or `{"Egg":12, "Milk":3}`). If `to` already offers that or better (in an offer made to this character, or else a standing one), the character walks until both are within each other's reach (`getReach`, default 1) and it may make an offer to them (`canOffer`), and then both sides change hands on the maker's terms, as one deal (see below). Otherwise the offer waits, and a major event wakes `to`'s mind with the reverse offer that would accept it; other terms make a counter-offer. A new offer to the same character replaces the last one, and an offer with both sides empty withdraws it. Without `to`, it is a standing offer to anyone, which can be taken in any whole multiple while stock lasts (a `Loaf` for `5 gold` sells three for 15). A new standing offer of the same goods changes the price. Seed standing offers with a character spec's `offers`, or with `director.offers.post(...)`. `director.offers` (an `OfferBook`) is saved with `exportCast`.
-- **`canOffer(character, other)`** decides who may make an offer to whom. Without it, `other` must be in `character`'s sight (`withSight`), or else in its line of sight (`hasLineOfSight`), or else it is always allowed. An offer to someone only stands while this holds. Every mind whose kit grants `offer` sees, in every prompt under "Open offers", every standing offer and every offer made by or to a character it thinks for.
-- **Everything that changes hands is a `Transfer`:** `pick_up` (no `from`: it lies somewhere for the game to find), `drop` (no `to`), `give`, and each side of a trade, one move per thing. A thing is whatever the game lets move: an item, gold, a house, a promise of work. What a name means is the game's call.
+- **`canOffer(character, other)`** decides who may make an offer to whom. Without it, `other` must be in `character`'s sight (`withSight`), or else light must pass between them (`canPass`). An offer to someone only stands while this holds. Every mind whose kit grants `offer` sees, in every prompt under "Open offers", every standing offer and every offer made by or to a character it thinks for.
+- **`canPickUp(character, item, from)`** decides what a character may go and pick up. `from` is where the item is: the item itself where it lies, or what holds it (a chest). Without it, the character must see `item` there (`withSight`; a sight row `in` a holder is held by it), or else light must pass between it and `from` (`canPass`). Return `true` to let characters fetch what they cannot see. `pick_up(item, from?)` takes from `from` when the model names it, else from where the character sees the item (loose before held), else from `find(item)`. Only a character in the cast takes a gift or a trade (`give`, `offer`), and `pick_up` never takes from one, nor `drop` put into one.
+- **Everything that changes hands is a `Transfer`:** `pick_up` (`from`: the item where it lies, or what holds it), `drop` (`to`: what it is put in, such as a chest; left out, it is put down), `give`, and each side of a trade, one move per thing. A thing is whatever the game lets move: an item, gold, a house, a promise of work. What a name means is the game's call.
 - **The game's rules live in `validateTransfer(move, deal)`,** which returns why a move cannot happen ("Chest is locked", "Realtor does not own Bridge", "Mira's pack is full"), or nothing. `transfer(move)` then only makes it: it throws on a real error, never for a rule, and returns how to take the move back. A deal moves whole or not at all: each move is checked and then made in turn, so each is checked against the world the moves before it left, and a refusal or an error takes back every move made, last first. `deal` (a `Deal`) is the rest of it as seen from this move: `pending` (the moves the world does not hold yet), `done`, and `leaving(holder)` / `receiving(holder)`. The world, this move and `pending` add up to the deal done, so a rule on what someone ends up with, such as a pack that may hold one shield, counts them without counting a move twice. Most rules look only at `move`.
-- **Some checks are dry runs** (`deal.dryRun`): a directed offer is checked when it is made, and `pick_up` and `give` before the character walks over, so terms the game rules out are refused before anyone hears them or anyone walks. Nothing moves in a dry run, so every other move of the deal is `pending`. A standing offer, with no one to receive it yet, is checked when it is taken.
+- **Some checks are dry runs** (`deal.dryRun`): a directed offer is checked when it is made, and `pick_up`, `give` and `drop` with a `to` before the character walks over, so terms the game rules out are refused before anyone hears them or anyone walks. Nothing moves in a dry run, so every other move of the deal is `pending`. A standing offer, with no one to receive it yet, is checked when it is taken.
 - **World rules stay in the game.** `useItem` changes the world and returns `{ ok, reason? }`, and `validateTransfer` returns its reason. Refuse in words the mind can act on, and announce what happened with `pushEvent`, as the game does when the player acts. The library moves the character into reach first, and checks nothing that the game knows better.
 - **Stopping a character:** `director.abortArc(id)` ends its moves and waits right away and calls `onAbortArc`.
+
+### Regions
+
+`addRegion(name, spec)` marks a place in the world that does something to the characters in it. The library checks every character against it each `tick`, using `getPose`, so it needs `withWorld`.
+
+```ts
+director
+	// Two opposite corners, in any order: a segment in 1D, a rectangle in 2D, a box in 3D.
+	.addRegion('Crypt', { from: [0, 40], to: [16, 56], memory: 'This room smells putrid.' })
+	// A center and a radius: an interval, a circle or a sphere.
+	.addRegion('Pool', {
+		center: [8, 12],
+		radius: 3,
+		memory: 'Cold water laps at your boots.',
+		onEnter: (ctx) => splash(ctx),
+		onStay: (ctx, stayed, dt) => chill(ctx, stayed, dt),
+		onExit: (ctx, stayed) => drip(ctx, stayed),
+	})
+	// Only for some: a watch, as each character sees the world, or a test of its ctx.
+	.addRegion('Lair', { from: [30, 10], to: [40, 20], memory: 'This is our lair.', who: 'me is "Undead"' })
+	// On an entity: the ball goes where it goes (an item in a pocket, with whoever carries it).
+	.addRegion('LanternGlow', { center: 'Lantern', radius: 4, memory: 'Warm lantern light falls around you.' })
+	// Gone once its condition holds.
+	.addRegion('Throne', { from: [46, 9], to: [63, 32], memory: 'The king watches from his throne.', until: () => kingDead });
+```
+
+| Field | Meaning |
+| --- | --- |
+| `from`, `to` | Opposite corners of a box, in the game's `Vec`s. An infinite number leaves that axis open: `from: [0, -Infinity, 40], to: [16, Infinity, 56]` is a room at any height. |
+| `center`, `radius` | A ball. `center` can be an entity's ID instead (an item, a character, anything `find` knows): the ball is placed where `getPose` puts it each tick, and holds no one while it has no pose (everyone inside leaves; the region stays until removed). A character the region is on is inside it too; leave it out with `who`. |
+| `memory` | What it is like to be here, or what is going on: pinned in the character's mind (the "Pinned memories" of its prompt) while it is inside, and forgotten when it leaves. Write it as the character would put it. In a collective, the line says who is there: `Tom: This room smells putrid.` It can also be a function, given the character's context as the callbacks are (`(ctx) => …`). It is read once per tick for each character inside, so a function or a getter can change the line while they stay, or return nothing to unpin it. Don't spread such a spec into a new object: the spread reads the getter once and keeps that value. |
+| `who` | Who the region is for: a watch evaluated as each character sees the world (`'me is "Undead"'`, `'isHurt(me)'`; needs `withKernels`), or `(ctx) => boolean`, given the character's context. Anyone else is never in the region, and a character the filter stops holding for leaves it. Default: everyone. |
+| `until` | `() => boolean`, checked every tick. Once it holds, the region is removed and everyone in it leaves, as with `removeRegion`. |
+| `onEnter(ctx)`, `onStay(ctx, stayed, dt)`, `onExit(ctx, stayed)` | Run for each character in the region, with or without a mind, the player too. They get the character's context from `withContext`, as verb handlers do; a character without one is in no region. `onStay` runs on every tick after the one it entered on, with that tick's `dt` (for per-second effects: `hp -= 5 * dt`). `stayed` is how long it has been inside, in game seconds. `onExit` gets the last context it was seen with, since it may have none by then. |
+
+- **A memory is the only thing a region adds to a prompt.** It stays in the prompt until the character leaves, so it works for something lasting about the place, like a smell, the cold or a holy hush. A region adds no event and does not wake the mind, so the character notices the place on its next think. For a moment instead of a lasting state, have `onEnter` call `pushEvent` or `remember`.
+- **Saves:** the memory is saved with the cast like any pinned memory. On the first tick after `restoreCast`, every character inside enters again (`onEnter` runs) and its saved memory is replaced, so nothing is doubled. A character that now stands outside loses the memory, and no `onExit` runs, because it never entered since the load.
+- **Later changes:** `addRegion` with a name in use replaces that region, and `removeRegion(...names)` removes regions. Either way, everyone who was inside leaves (`onExit` runs and the memory goes). Regions can be added before or after `start()`. A character with no pose is in no region.
 
 ### Names
 
@@ -371,7 +444,7 @@ director.pushEvent({ kind: 'Hurt', text: '{0} cleaved {1}', who: ['Brune', 'Helm
 // one party reads "Brune cleaved EnemyKnight", the other "EnemyKnight cleaved Helms"; Helms's party reads "EnemyKnight cleaved you"
 ```
 
-`director.seen(observerID, target)` gives the same name for text the host writes itself, such as a sight `note`. `observerID` can be a character or a collective.
+`director.seen(observerID, target)` gives the same name for text the host writes itself, such as a sight `note`. A sight object's `doing` says what it is doing (`reviving Bo`); left out, a character in the cast shows the verb it runs, in its `seen` words. `observerID` can be a character or a collective.
 
 ### Talk and map
 
@@ -380,11 +453,27 @@ director.pushEvent({ kind: 'Hurt', text: '{0} cleaved {1}', who: ['Brune', 'Helm
 - A mind hears through every character it thinks for. A collective hears through each of its characters, once per line, from whichever character heard it best. That includes its characters talking to each other; only its own voice's lines are not heard back.
 - A line said to, or naming, any of a collective's characters is meant for its mind and wakes it, whichever character heard it. Only a line said to its voice reads as `says to you`.
 - A collective never speaks for itself. Its commander speaks, or it issues `say` to one of its characters.
-- Line of sight comes from `hasLineOfSight`.
 - When an arc's reply verb names another character (`say` with `to`, `give`, `offer`), the actor waits up to 20 s at the end of the arc if that character is still nearby. The wait ends when they finish a verb that is not a movement. Since the wait comes at the end, the rest of the arc still runs first. A step that names no one, such as `say` without `to`, does not wait.
 - The `say` result names whom the line was for but who could not make out the words (`heard by Baker; too far for Guard to make out the words: get closer`), and earshot marks them as `too far to make out your words`.
 - A `say` whose content words (after stemming) mostly repeat a line that everyone it is meant for has already heard clearly is refused before anyone hears it: "they already heard you say that".
+- No parroting. `say` is refused when the line is the same as:
+  - the speaker's own last line. The LLM receives this error message: "you already said this, and it was heard … you are not a parrot";
+  - the last line the speaker heard from someone else: "Ann just said this, and it was heard … you are not a parrot".
+
+  Case, spacing and punctuation are ignored. `repeats` in `withTalk`'s config decides:
+  - `false` (default): refuse every repeat.
+  - `true`: allow every repeat (a chant, a password).
+  - `(ctx, text) => …`, asked for each line flagged as a repeat, with the speaker's context: `true` allows it, `false` refuses it, and a string refuses it with that string as the error.
 - `hasHeard` is only true for speech meant for this mind.
+
+`withHearing({ noise?, limit?, range?, onSound? })` lets minds hear sounds, not only speech (it needs `withWorld`). A `Sound` is `{ name, loudness, seconds?, fade? }`: its name in plain words, how loud it is at its source (0–1), and for one that goes on, how many seconds it lasts and how it fades over them (0 steady, 1 dying away evenly, more sooner).
+
+- `noise` gives the sound each verb makes while it runs, stock verbs too: `{ go_to: { name: 'footsteps', loudness: 0.14 }, reload: { name: 'reloading', loudness: 0.09 } }`. The verb's help says how far it carries (`heard as footsteps up to 15 paces`), so a mind knows which of its own deeds can be heard, and from how far. It stops when the verb ends or is cut short, unless the sound gives its own `seconds`.
+- `director.emitSound(from, sound)` is any other sound, from a character or thing the world places (it moves with it) or from a point: gunfire, a door, a fireplace. Call it where the game plays its own sound. The same sound made again by the same thing, or at the same spot, replaces it, so a game keeps a sound going by making it again. It returns what ends it early.
+- `range` says how clearly a sound carries to a listener, 0–1, which its loudness is multiplied by. The default is `{ max: 40, falloff: 2, occluded: 0.5 }`: a sound of loudness 1 carries to `max`, and nothing farther; a quieter one less far, by the inverse square of sound spreading out (`falloff` 2: a quarter as loud carries half as far; 1 drops slower, 0 not at all). Close up a sound is louder than its loudness. Times `occluded` where sound does not pass straight from it to the listener (`canPass('sound', …)`, heard `muffled`). Give a function `(listenerID, { id?, point }) => 0–1` for the game's own. A sound is heard from 0.05 up; `loudnessFor(paces)` gives the loudness heard that far by the default curve.
+- Every mind that hears it is told, from whichever of its characters hears it loudest: `You hear footsteps LOUDLY 1 pace behind you!`, `You hear muffled bush-thrashing sounds 10 paces in front of you.` From 0.5 it ends in `!` and makes the mind think; from 0.85 it is `LOUDLY`. Distances and directions are worded as sight words them, in its unit. A sound that goes on is told again only when it is heard a step louder (`!`, then `LOUDLY`), as one line. A mind is told at most `limit` (5) sounds a think, the loudest, and none whose maker it sees: sight says that already. Its maker's own mind does not hear it.
+- `onSound(from, sound, heardBy)` hears every sound too, as it is made and each tick while it goes on, for whatever has no mind: `heardBy(id)` is how loud it is at that character now, so a game's simple bots turn toward what they hear.
+- A heard sound is an event: the mind reads it in its next think, and until then watches and laws see it in `events` (`some(events.filter("sound"))`), each with `secondsAgo`.
 
 `withMap(sense)`: the host paints the `see_map` pictures and marks characters, things and places on them by `id`. The library stamps a legend on the picture in the mind's own names (no coordinates). The map is left out unless vision is on.
 
@@ -485,11 +574,13 @@ hive.removeCharacter('Tomas'); // gone for good, as director.removeCharacter
 
 **`issue(who, arc)` is instant.** It assigns programs that stick, and returns `ok` without waiting for the characters to move, talk or finish. Join several `issue` steps with `;` (`"then":"always"` in JSON) so that later ones still run. `&&`, `;` and `||` *inside* `arc=` sequence that character's own steps. `&&` after an `issue` means the orders were assigned, not that the characters finished them. To wait for them, the thinker uses `wait(until=...)` over the roster.
 
+**Two or more ordered together are a group.** `issue(who, arc, group=Raiders)` names them; the name is a tag, so `units.filter("Raiders")` reaches exactly them later, whoever else the first `who` would pick by then. A unit has one group, its latest order's: ordered away alone it leaves it, and the last one left keeps the tag. Ordered without a name, a group gets one and the reply says so: the name of the group it takes most of, a split off from one it takes a part of (`Raiders2`), or else the first free letter (`Alpha`). The commander's roster is a table with a row per group and per unit on its own: kind, health, what it is doing, how its last step went, the nearest others it sees (with their health, and `in reach` where the host's sight sets `inReach`), and the verbs it has beyond the collective's.
+
 `who=` is an expression on `units` (the roster minus the commander; `allUnits` is everyone), not on `others`. Give orders by tag. The tags in a character's spec travel with it. A tag the mind adds with `tag` is stored as ``${collective.id}:${short}`` and dropped when the character leaves; expressions and prompts use the short name.
 
 Formations (`spread`, `circle`, `hold_line`) are steps like any other, and can go anywhere in a character's arc. Every character in the squad it was issued with works out the same slots and walks to its own, and the step ends when it gets there. Each character needs them in its kit. Inside `arc=` and a law's `watch=`, `me` is that character. Each character runs what it is issued with its own kit, and the roster tells the mind which of the collective's verbs a character cannot run.
 
-**Laws.** `law` and `unlaw` set up standing emergency responses (with no LLM involved) that take over when their `watch` holds. The prompt lists laws as sentences (`- flee (for units.filter("Shopper")): when isHurt(me), run go_to(Keep)`) rather than arcs, so small models do not copy them back. A collective's own laws reach its characters through `who`. A character's own laws live on its collective, named like `Tom.flee`: the prefix is the filter, so they take no `who` and only reach Tom. Each group holds at most `maxLaws`, and the collective's own laws outrank its characters'. Law names cannot contain `.`, but IDs can, since the prefix ends at the last one. A `law(...)` step run by a character who is not the commander writes a law of that character's own (`Tom.…`). Running laws and `when` steps are tracked by the law or step itself, so renaming one never restarts it.
+**Laws.** `law` and `unlaw` set up standing emergency responses (with no LLM involved) that take over when their `watch` holds. The prompt lists laws as sentences (`- flee (for units.filter("Shopper")): when isHurt(me), run go_to(Keep)`) rather than arcs, so small models do not copy them back. A collective's own laws reach its characters through `who`. A character's own laws live on its collective, named like `Tom.flee`: the prefix is the filter, so they take no `who` and only reach Tom. Each group holds at most `maxLaws`, and the collective's own laws outrank its characters'. Law names cannot contain `.`, but IDs can, since the prefix ends at the last one. A `law(...)` step run by a character who is not the commander writes a law of that character's own (`Tom.…`). Running laws and `when` steps are tracked by the law or step itself, so renaming one never restarts it. A verb alias can be law-ready: `addVerb('strike_on_sight', { help, arc: 'loop(attack())', watch, who })`. Then `law(arc=strike_on_sight())` is a whole law: it takes the alias's `watch` and `who` when it gives none, and its name when it gives none, so `unlaw(name=strike_on_sight)` drops it. Once any alias has a watch, `law`'s own `watch` is optional.
 
 **Moving characters.** Characters change collectives through two setters, and the arc a character is running keeps running throughout.
 
@@ -513,6 +604,7 @@ You can replace the standing lines:
 
 | | |
 | --- | --- |
+| `withLawHold(seconds)` | How long every law runs once started before anything but its own end stops it: its watch turning false, or a higher law's turning true. A law's own `hold` (`LawSpec.hold`) overrides it, and its `holdBreak` (a watch) ends the hold early the moment it is true, so the game decides what may cut a law short (a blow: `isHPFalling(me)`). Keeps a watch that sits on an edge, such as a foe at just the distance a law watches for, from switching laws every frame. Default 0. |
 | `withThinkInstructions({ on?, off? })` | The line about thinking, depending on whether reasoning is on (the prompt follows the `thinking` setting of the mind's model). `on` defaults to "Think in 5 sentences, then emit the arc."; `off` defaults to nothing, since the prompt already asks for the Arc alone. |
 | `withVerbInstructions(text)` | The line about chaining verbs. For a collective, the default also asks for looping programs; this replaces both. A host's standing doctrine goes here. |
 | `withCurrency(name)` | The item ID the world pays with (`gold`). The prompt shows `give` and `offer` moving it, the purse is counted in it, and giving it is remembered as paying. Without a currency, the prompt says nothing about money. |
@@ -644,11 +736,13 @@ distance(me, Target)
 i is "marked"
 ```
 
+A bare name is a list of everyone so called. `distance` between lists is that of the nearest two, so `distance(me, Target)` and `distance(me, others.filter(o => o.foe))` (the nearest foe) both read as a number.
+
 | | |
 | --- | --- |
 | Relations | `distance`, `isNear`, `isReachable`, `isApproaching`, `isDeparting`, `hasSightline`, `hasJustSeen`, `hasLostSight`, `facing`, `isFacing`, `isBehind` |
 | List filters | `others.nearby()`, `.nearby(16)`, `others.reachable()`, `.approaching()`, `.departing()` |
-| Lists | `filter` / `find` / `some` / `all`, `map`, `sortBy`, `count`, `includes`, `first`, `max` / `min`, `sum`, `avg`, `reduce` |
+| Lists | `filter` / `find` / `some` / `all`, `map`, `sortBy`, `count`, `includes`, `first`, `max` / `min`, `sum`, `avg` (each also through a function: `others.min(u => u.hp / u.maxHP)`; none for an empty list), `maxBy` / `minBy` (the item, not the number), `reduce` |
 | Logic | `&&` / `\|\|`, `*`, ternary, `??` (only for absent values), `!` / `!!` |
 | Host extras | `hp` / `maxHP`, `isHurt`, `isHPFalling`; `isCarrying` / `wasCarrying` / `hasJustReceived` / `hasJustLost` (only with an `inventory` kernel); `isOpen` / `hasJustOpened`; `isReady(me, "verb")` (a `choose` leaves out a choice whose first verb is not ready) |
 
@@ -675,7 +769,7 @@ type HostKernels = {
 	point?: (who) => number[] | undefined;              // director: manhattan / chebyshev / inSquare
 	listCap?: number;                                   // a collective's who= caps at roster size
 	pathDistance?: (a, b) => number | undefined;        // director: route length; undefined = no way
-	canSee?: (a, b) => boolean;                         // director overwrites when hasLineOfSight
+	canSee?: (a, b) => boolean;                         // director: light passes (canPass), unless you give your own
 	facing?: (a, b) => number;                          // director: from withWorld
 	inventory?: (who) => ExprEntity[];
 	hp?: (who) => { hp: number; maxHP: number } | undefined;
@@ -696,7 +790,7 @@ type HostKernels = {
 };
 ```
 
-Space only enters expressions through these callbacks. Under `ArcDirector`, they come from `withWorld` (and `canSee` from `hasLineOfSight`); `buildCatalog` on its own takes them as given.
+Space only enters expressions through these callbacks. Under `ArcDirector`, they come from `withWorld` (and `canSee` from `canPass`); `buildCatalog` on its own takes them as given.
 
 ---
 
@@ -768,7 +862,7 @@ Episodic memory is capped at `maxEpisodic` (256). Heard speech is copied into a 
 
 ## Talk
 
-`TalkNet` only deals in names. Implement `TalkSense`: `inRange` and `others`, and optionally `canSee`, `clearHear`, `names`, `face` and `approach`.
+`TalkNet` only deals in names. Implement `TalkSense`: `inRange` and `others`, and optionally `clearHear`, `names`, `face` and `approach`.
 
 On each think, the prompt lists who is within talking range. `say(to)` first walks up to whoever it is said to, following them as they move, until they would make out every word (`inRange` and `clearHear`). When there is no way to them, the library does not speak, and gives the model `sayRangeHint` in the same think. In a world where characters do not move, `say(to)` is only valid for names in range, and the hint tells the model to get closer first. It walks with `call.goTo` and a `check`, as host verbs can. Beyond clear-hearing range, the words are muffled. If the listener comes within clear-hearing range in the next `rehear` seconds (`TalkConfig`, default 8), the line arrives again in full ("…, now clear"). Heard lines are kept as episodic memories.
 
@@ -809,7 +903,7 @@ pnpm demo      # live model, or ARC_DIRECTOR_MOCK=1
 ```text
 src/
   index.ts           public API
-  director/          ArcDirector facade, CharacterSpec, CollectiveSpec, VerbCall
+  director/          ArcDirector facade, CharacterSpec, CollectiveSpec, VerbCall, regions
   character/         ArcRunner, Character, Persona, NameBook, watches, sight focus
   mind/              Mind, prompts, name/id translation, TalkNet, map, knowledge
   collective/        Collective, its verbs, who, tags, memory handover
@@ -817,10 +911,13 @@ src/
   expr/              watch language, catalog, stringify
   arc/               verbs, parse, wire (JSON), validate, runArc, laws
   world/             HostWorld, routes, moving characters, stock world verbs, watch geometry
+  rts/               withRTS: the stock RTS verbs, run on the game's primitives
+  genre/             withRPG and withMOBA: their verbs, run by the game's handlers
   memory/            MemoryStore
   perception/        optional scene English
   inference/         HTTP chat, fake, presets, model catalog
-  bench/             System One and arc benches
+  scenario/          scene simulator: SceneWorld, combat, SceneRTS, playScenario
+  bench/             System One and arc benches (`arc-director/bench`), bench CLI
   scripts/           demo + fixtures
   testing/           test fixtures (an open grid world)
 ```

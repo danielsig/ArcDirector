@@ -4,15 +4,18 @@ import {
 	clamp,
 	lerpAngle,
 	Light as KindlingLight,
+	MeshRenderer,
 	Rigidbody,
 	Time,
 	Component,
 	type GameObject,
 } from '@arc-director/kindling';
+import { pascalCase } from 'arc-director';
 import { Order } from './order';
-import { CELL_SIZE, TILE_HEIGHT } from '../world/constants';
+import { CELL_SIZE } from '../world/constants';
 import { Pickupable } from '../items/components';
-
+import { findCarried } from '../items/inventory';
+import { characterModel } from '../render/characterModels';
 export { BoxCollider };
 
 /** Ground speed (m/s) below which a character stands. */
@@ -132,7 +135,21 @@ export class Attached extends Component {
 	public mode:'on' | 'in' | 'worn' | 'held' = 'on';
 }
 
-export class Door extends Component {
+/**
+ * What stands in the way until it is cleared (a shut door, a raised bridge, a web to burn): a route that meets one is
+ * told how to get past it. Anything else a body runs into is no way at all.
+ */
+export abstract class Barrier extends Component {
+	/** Why it stops `body` now, in words the agent can act on. */
+	public abstract whyBlocked(body:GameObject):string;
+
+	/** What the agent calls it. */
+	protected get label():string {
+		return this.gameObject.getComponent(Named)?.id ?? this.gameObject.id;
+	}
+}
+
+export class Door extends Barrier {
 	public static override order = Order.door;
 	public static override saved = ['open'];
 	public open = false;
@@ -140,22 +157,45 @@ export class Door extends Component {
 	public blockedWhenClosed = true;
 	public closedYaw = 0;
 	public openYaw = 0;
+	public size = { x: 0, y: 0, z: 0 };
+	public panel:GameObject | null = null;
+	public flipped = false;
 	/** Named building this door opens into, if any. */
 	public buildingID = '';
 
 	/** Keep the AABB in sync the moment the leaf moves — do not wait for the next tick. */
 	public syncCollision():void {
-		const col = this.gameObject.getComponent(BoxCollider);
-		if (!col) {
+		if (!this.panel) {
 			return;
 		}
-		const blocking = this.blockedWhenClosed && !this.open;
-		col.solid = blocking;
-		col.isTrigger = !blocking;
+		const yaw = this.open ? this.openYaw : this.closedYaw;
+		this.panel.transform.localYaw = yaw;
+		const offset = Math.sin(yaw) * 0.5;
+		this.panel.transform.localPosition.z = this.flipped ? -offset : offset;
+		this.panel.transform.localPosition.x = offset;
+		const collider = this.panel.getComponent(BoxCollider);
+		if (collider) {
+			collider.size = this.open
+				? { x: this.size.z, y: this.size.y, z: this.size.x }
+				: this.size;
+		}
 	}
 
 	public override update(dt:number):void {
 		this.syncCollision();
+	}
+
+	/** Shut, or locked: then whether `body` carries the key. */
+	public whyBlocked(body:GameObject):string {
+		const lock = this.gameObject.getComponent(Lock);
+		if (!lock?.locked) {
+			return `${this.label} is closed — open it first`;
+		}
+		const key = findCarried(body, (it) => it.Key?.keyID === lock.keyID);
+		if (key) {
+			return `${this.label} is locked — you carry ${pascalCase(key.name) || pascalCase(key.defID)}, use it on ${this.label}`;
+		}
+		return lock.keyID ? `${this.label} is locked — needs the ${lock.keyID} key` : `${this.label} is locked`;
 	}
 }
 
@@ -187,13 +227,29 @@ export const BRIDGE_SWING_SECONDS = 1;
 export const BRIDGE_DECK_Y = 0.22;
 
 /** Drawbridge over water. When raised (`open` false), the river cannot be crossed. */
-export class Bridge extends Component {
+export class Bridge extends Barrier {
 	public static override saved = ['open'];
 	/** Where the span is headed: lowered (open) or raised. */
 	public open = false;
+	/** While it holds, a lowered span may not be raised: someone has paid for it to stay down. A scene sets it. */
+	public paidDown:()=>boolean = () => false;
 	public cells:{ x:number; z:number }[] = [];
 	/** Mid-swing lift; undefined when the span rests where `open` says. */
 	private _swing:number | undefined;
+
+	public override start():void {
+		const world = this.gameObject.world;
+		if (!world || this.cells.length === 0) {
+			return;
+		}
+		const xs = this.cells.map((c) => c.x);
+		const zs = this.cells.map((c) => c.z);
+		world.addStepOn({
+			a: { x: Math.min(...xs) - CELL_SIZE / 2, z: Math.min(...zs) - CELL_SIZE / 2 },
+			b: { x: Math.max(...xs) + CELL_SIZE / 2, z: Math.max(...zs) + CELL_SIZE / 2 },
+			sample: (x, z) => this.enabled && this.open && this.cells.some((c) => Math.abs(c.x - x) < 0.55 && Math.abs(c.z - z) < 0.55) ? BRIDGE_DECK_Y : undefined,
+		});
+	}
 
 	/** How far up the span is: 0 lowered, 1 raised. */
 	public get lift():number {
@@ -239,6 +295,10 @@ export class Bridge extends Component {
 			this._swing = lift === this.target ? undefined : lift;
 		}
 		this.syncCollision();
+	}
+
+	public whyBlocked():string {
+		return this.open ? `${this.label} is being lowered — wait for it` : `${this.label} is raised — it must be lowered first`;
 	}
 
 	private get target():number {
@@ -321,7 +381,7 @@ export class Flame extends Component {
 }
 
 /** Set alight with a flame, it burns for `burnSeconds` and is gone, and whatever it blocked with it. */
-export class Flammable extends Component {
+export class Flammable extends Barrier {
 	public static override saved = ['burning', 'spread'];
 	public burning = false;
 	public spread = false;
@@ -337,6 +397,10 @@ export class Flammable extends Component {
 			this.gameObject.world?.destroy(this.gameObject);
 		}
 	}
+
+	public whyBlocked():string {
+		return `${this.label} blocks the way — burn it with a flame first`;
+	}
 }
 
 /** Hurt `times` over by the attacks in `to` (a fight verb, such as hex), and `others` times by every other blow. */
@@ -346,9 +410,17 @@ export class Weakness extends Component {
 	public others = 0.5;
 }
 
+/** Attacks it can make beyond its fight role's own (a Blade who can also cleave). */
+export class Moves extends Component {
+	public extra:string[] = [];
+}
+
 /** Words carved on it. Sight and `examine` read them out. */
 export class Inscription extends Component {
+	public static override saved = ['answered'];
 	public text = '';
+	/** Once its riddle is answered, what sight and `examine` say instead of the carving ("answered: SealedDoor stands open"). */
+	public answered = '';
 }
 
 export const BODY_SLOTS = [
@@ -426,6 +498,8 @@ export class Vitals extends Component {
 	public static override saved = ['hp', 'maxHP'];
 	public hp = 5;
 	public maxHP = 5;
+	/** Whether it can dodge a blow at all. A dull brute cannot: every blow that reaches it lands. */
+	public evasive = true;
 }
 
 /** A raised guard (the `block` verb): until `until`, blows from in front of where the character faces do nothing. */
@@ -510,12 +584,12 @@ const CHEER_SECONDS = 3;
 
 /**
  * Celebrating until `until` (world time): `CharacterAnimation` plays the style's clip. Each time it
- * starts it picks jumping or cheering at random. Starting to walk ends it early.
+ * starts, a feminine model picks jumping or cheering at random; the rest only cheer. Starting to walk ends it early.
  */
 export class Celebrating extends Component {
 	public static override order = Order.celebrating;
 	public until = 0;
-	public style:CelebrationStyle = 'jump';
+	public style:CelebrationStyle = 'cheer';
 	private _wasWalking = false;
 
 	/** Celebrates about `count` jumps long (a cheer lasts a few seconds instead). */
@@ -525,7 +599,8 @@ export class Celebrating extends Component {
 	}
 
 	public override onEnable():void {
-		this.style = Math.random() < 0.5 ? 'jump' : 'cheer';
+		const feminine = characterModel(this.gameObject.getComponent(MeshRenderer)?.meshID ?? '')?.feminine;
+		this.style = feminine && Math.random() < 0.6 ? 'jump' : 'cheer';
 		this._wasWalking = this.walking();
 	}
 
@@ -583,6 +658,8 @@ export class Torch extends Component {
 
 const CAMERA_HEIGHT = 11;
 const CAMERA_BEHIND = 7.4;
+/** The camera's default distance from its target, in meters. */
+export const CAMERA_DISTANCE = Math.hypot(CAMERA_HEIGHT, CAMERA_BEHIND);
 
 export class Camera extends Component {
 	public static override order = Order.camera;
@@ -597,7 +674,7 @@ export class Camera extends Component {
 	/** Desired orbit yaw in radians. PlayerInput writes look here; body facing does not. */
 	public orbitYaw = 0;
 	/** Dolly along the follow offset; pitch stays fixed. */
-	public distance = Math.hypot(CAMERA_HEIGHT, CAMERA_BEHIND);
+	public distance = CAMERA_DISTANCE;
 	public minDistance = 3;
 	public maxDistance = 24;
 	public dollySens = 0.028;

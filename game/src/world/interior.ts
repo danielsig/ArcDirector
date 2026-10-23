@@ -1,30 +1,12 @@
 import { type GameObject } from '@arc-director/kindling';
 import { Door, Interior, Lock, Named } from '../engine/components';
 import type { World } from '../engine/World';
-import { CELL_SIZE } from './constants';
-import type { Chunk } from './Chunk';
+import { passageWhereabouts } from './passages';
 
 const DOORWAY = 0.7;
 
 export function interiorContains(box:Interior, x:number, z:number):boolean {
 	return x >= box.minX && x < box.maxX && z >= box.minZ && z < box.maxZ;
-}
-
-export function innerWallAABB(
-	chunk:Chunk,
-	minLX:number,
-	maxLX:number,
-	minLZ:number,
-	maxLZ:number,
-):{ minX:number; maxX:number; minZ:number; maxZ:number } {
-	const ox = chunk.worldOriginX();
-	const oz = chunk.worldOriginZ();
-	return {
-		minX: ox + (minLX + 1) * CELL_SIZE,
-		maxX: ox + maxLX * CELL_SIZE,
-		minZ: oz + (minLZ + 1) * CELL_SIZE,
-		maxZ: oz + maxLZ * CELL_SIZE,
-	};
 }
 
 export function enclosureAt(world:World, x:number, z:number):GameObject | undefined {
@@ -132,6 +114,11 @@ export function whereabouts(character:GameObject):string {
 		const door = doorOfBuilding(world, name);
 		const way = door ? namedOf(door) : 'the door';
 		return `You are inside ${name}. You are not outdoors. Do not walk through ${way} unless you mean to leave.`;
+	}
+	// Between the rooms of a place: which passage, where it leads, and the doors on it.
+	const passage = passageWhereabouts(world, p.x, p.z);
+	if (passage) {
+		return passage;
 	}
 	const door = nearestDoorway(world, p.x, p.z);
 	if (door) {
