@@ -38,7 +38,7 @@ import { lookWorld, inventoryOf, followedCarry } from './perception';
 import { roomBounds, type RoomDef } from '../world/spawn';
 import { verbGate } from './verbs';
 import { gameWorld } from './world';
-import { decisionModelOf, menuModel, showDownload, type SamplingSource } from './inference';
+import { LM_STUDIO_ROOT, decisionModelOf, menuModel, showDownload, type SamplingSource } from './inference';
 import { HOSTED, defaultSystemOne } from './hosted';
 import { fightExprTags } from './fight';
 import {
@@ -85,7 +85,7 @@ export function addModels<TCtx>(director:ArcDirector<TCtx>, p:Prefs = prefs(), s
  * format, and repairs. Play and the arc bench share it; a bench samples as each model's makers say.
  */
 export function addThinking<TCtx>(director:ArcDirector<TCtx>, p:Prefs = prefs(), sampling:SamplingSource = 'menu'):ArcDirector<TCtx> {
-	return addModels(director.addLMStudioInference({ baseURL: '/inference/v1', load: LM_STUDIO_LOAD }), p, sampling)
+	return addModels(director.addLMStudioInference({ baseURL: `${LM_STUDIO_ROOT}/v1`, load: LM_STUDIO_LOAD }), p, sampling)
 		.withArcFormat(p.arcFormat)
 		.withRepair({ retries: ARC_RETRY_CAP });
 }

@@ -4,6 +4,7 @@ import { fetchModelCatalog, modelIDsMatch, trainedOnArcDirector } from 'arc-dire
 import {
 	BROWSER_MODELS,
 	LM_STUDIO_MODEL,
+	LM_STUDIO_ROOT,
 	SKALDIC_LAYA,
 	browserModelBusy,
 	cancelDownload,
@@ -58,7 +59,7 @@ async function pickLMStudio():Promise<void> {
 
 async function check():Promise<void> {
 	served.value = null;
-	served.value = (await fetchModelCatalog('/inference')).map((m) => m.id);
+	served.value = (await fetchModelCatalog(LM_STUDIO_ROOT)).map((m) => m.id);
 }
 
 function useLMStudio():void {
@@ -97,7 +98,7 @@ onUnmounted(watchPrefs((next) => {
 /** LM Studio's Skaldic Laya, when it serves one. */
 const laya = ref<string | null>(null);
 onMounted(async () => {
-	const ids = await fetchModelCatalog('/inference').then((models) => models.map((m) => m.id), () => []);
+	const ids = await fetchModelCatalog(LM_STUDIO_ROOT).then((models) => models.map((m) => m.id), () => []);
 	laya.value = ids.find((id) => SKALDIC_LAYA.match.test(id)) ?? null;
 });
 

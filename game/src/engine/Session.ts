@@ -20,6 +20,7 @@ import {
 	type Prefs,
 } from '../prefs';
 import { defaultSystemOne } from '../director/hosted';
+import { LM_STUDIO_ROOT } from '../director/inference';
 import {
 	fetchModelCatalog,
 	isDecisionModel,
@@ -308,7 +309,7 @@ export class Session extends Component {
 		if (prefs().inference !== 'lmstudio') {
 			return;
 		}
-		const catalog = await fetchModelCatalog('/inference');
+		const catalog = await fetchModelCatalog(LM_STUDIO_ROOT);
 		// A model on this machine and on a linked one is listed once per machine, alike: one row, with its count.
 		const chat = catalog.filter((m, i) => !isEmbeddingModel(m) && catalog.findIndex((other) => other.id === m.id) === i);
 		chat.sort((a, b) => {

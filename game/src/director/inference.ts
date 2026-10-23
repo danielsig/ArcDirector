@@ -1,6 +1,6 @@
 import { reactive } from 'vue';
 import wllamaWasm from '@wllama/wllama/esm/wasm/wllama.wasm?url';
-import { BrowserProvider, Skaldic, SKALDIC_BROWSER_MODELS, fittingModel, gpuMemory, recommendedSampling, type ModelDownload, type ModelSpec } from 'arc-director';
+import { BrowserProvider, LM_STUDIO_URL, Skaldic, SKALDIC_BROWSER_MODELS, fittingModel, gpuMemory, recommendedSampling, type ModelDownload, type ModelSpec } from 'arc-director';
 import { prefs, setPrefs, watchPrefs, type InferenceKind, type Prefs } from '../prefs';
 
 /**
@@ -21,8 +21,8 @@ export const BROWSER_MODELS:BrowserModel[] = [
 ];
 
 /**
- * Skaldic Laya: a decision model trained on the game's quick decisions, offered beside the main model as the System
- * One. LM Studio's is found by its id; the browser's is the library's own (`Skaldic.Laya`), on its own engine.
+ * Skaldic Laya: a decision model trained on the game's quick decisions, offered beside the main model as the System One.
+ * LM Studio's is found by its id; the browser's is the library's own (`Skaldic.Laya`), on its own engine.
  */
 export const SKALDIC_LAYA = { match: /skaldic-laya/i, label: 'Skaldic Laya', sizeGB: 0.45, model: SKALDIC_BROWSER_MODELS[Skaldic.Laya] };
 
@@ -63,6 +63,9 @@ export function menuModel(p:Prefs, sampling:SamplingSource = 'menu'):Pick<ModelS
 
 /** The model the LM Studio steps ask for: the best that runs on most GPUs. */
 export const LM_STUDIO_MODEL = { id: 'google/gemma-4-e4b', label: 'Gemma 4 E4B' };
+
+/** Where LM Studio answers: through the dev server's `/inference` proxy, or straight from a hosted build (LM Studio's CORS must be on). */
+export const LM_STUDIO_ROOT = import.meta.env.DEV ? '/inference' : LM_STUDIO_URL.replace(/\/v1$/, '');
 
 export type BrowserModelState = {
 	/** Downloaded already: a load reads it from disk. */

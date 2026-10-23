@@ -4,7 +4,7 @@ import type { HudModelOption } from '../ui/hudModel';
 import { prefs, type Prefs } from '../prefs';
 import { addThinking, addXAIThinking, XAI } from './adapter';
 import { HOSTED } from './hosted';
-import { BROWSER_MODELS, SKALDIC_LAYA } from './inference';
+import { BROWSER_MODELS, LM_STUDIO_ROOT, SKALDIC_LAYA } from './inference';
 
 /** What a bench asks: System One picks for `choose`, or a mind's arcs and lookups. */
 export type BenchKind = 'decision' | 'arc';
@@ -50,7 +50,7 @@ export type BenchRow = {
 	score?:BenchScore;
 };
 
-const SERVER = '/inference/v1';
+const SERVER = `${LM_STUDIO_ROOT}/v1`;
 const server = new HttpProvider({ baseURL: SERVER });
 
 /** Whether `id` is one of the game's browser models, which run in the page rather than on LM Studio. */
