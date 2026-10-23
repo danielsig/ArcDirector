@@ -70,10 +70,12 @@ function readSteps(raw:unknown, verbs:VerbRegistry):Arc {
 	if (typeof raw === 'string') {
 		return parseArcText(raw, verbs);
 	}
-	if (!Array.isArray(raw) || raw.length === 0) {
+	// An empty {} a model leaves between two steps is no step.
+	const steps = Array.isArray(raw) ? raw.filter((step) => !isRecord(step) || Object.keys(step).length > 0) : [];
+	if (steps.length === 0) {
 		throw new ArcError('an arc is a non-empty list of steps');
 	}
-	const arc = raw.map((step) => readStep(step, verbs));
+	const arc = steps.map((step) => readStep(step, verbs));
 	delete arc[arc.length - 1].then;
 	return arc;
 }

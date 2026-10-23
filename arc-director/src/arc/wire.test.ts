@@ -66,6 +66,12 @@ describe('Arc JSON', () => {
 		assert.deepEqual((loop[0].args.arc as Arc).map((step) => step.verb), ['go_to', 'wait']);
 	});
 
+	it('skips an empty {} a model left between two steps', () => {
+		const arc = parseArc('{"steps":[{"verb":"wait"},{  },{"verb":"say","text":"Hi"}]}', verbs());
+		assert.deepEqual(arc.map((step) => step.verb), ['wait', 'say']);
+		assert.throws(() => parseArc('{"steps":[{}]}', verbs()), /non-empty list of steps/);
+	});
+
 	it('takes if_ok, always and if_failed as then, or && ; ||, and drops what is the default', () => {
 		const registry = verbs();
 		const arc = parseArc('{"steps":[{"verb":"go_to","target":"A","then":"&&"},{"verb":"wait","then":";"},{"verb":"say","text":"Hi","then":"||"},{"verb":"go_to","target":"B","then":"if_ok"},{"verb":"wait","then":"always"}]}', registry);

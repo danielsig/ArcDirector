@@ -1,7 +1,24 @@
 import { reactive } from 'vue';
 import wllamaWasm from '@wllama/wllama/esm/wasm/wllama.wasm?url';
-import { BrowserProvider, LM_STUDIO_URL, Skaldic, SKALDIC_BROWSER_MODELS, fittingModel, gpuMemory, recommendedSampling, type ModelDownload, type ModelSpec } from 'arc-director';
-import { prefs, setPrefs, watchPrefs, type InferenceKind, type Prefs } from '../prefs';
+import {
+	BrowserProvider,
+	LM_STUDIO_URL,
+	Skaldic,
+	SKALDIC_BROWSER_MODELS,
+	fetchModelCatalog,
+	fittingModel,
+	gpuMemory,
+	isDecisionModel,
+	isEmbeddingModel,
+	isEncoderModel,
+	isLoadedModel,
+	recommendedSampling,
+	type ModelDownload,
+	type ModelInfo,
+	type ModelSpec,
+} from 'arc-director';
+import { prefs, setPrefs, watchPrefs, type InferenceKind, type Prefs, type SystemOneKind } from '../prefs';
+import type { HudModelOption } from '../ui/hudModel';
 
 /**
  * A model the game offers to run in the browser: its name as `addBrowserModel` takes it, what it costs to download,
@@ -30,15 +47,15 @@ export const SKALDIC_LAYA = { match: /skaldic-laya/i, label: 'Skaldic Laya', siz
 BrowserProvider.shared = new BrowserProvider({ wasm: wllamaWasm });
 
 /**
- * The decision model the menu picked for where NPCs think, or `''` for the main model scoring its own choices:
- * Skaldic Laya's download in the browser, an LM Studio model's id with LM Studio.
+ * The decision model the menu picked, or `''` for the main model scoring its own choices: Skaldic Laya's download,
+ * which runs in the browser beside either, or with LM Studio also one of its models by id.
  */
 export function decisionModelOf(p:Pick<Prefs, 'inference' | 'systemOne' | 'decisionModel'>):string {
 	if (p.systemOne !== 'local') {
 		return '';
 	}
-	const inPage = p.decisionModel === SKALDIC_LAYA.model;
-	return p.inference === 'browser' ? (inPage ? p.decisionModel : '') : (inPage ? '' : p.decisionModel);
+	// The browser has no LM Studio models.
+	return p.inference === 'browser' && p.decisionModel !== SKALDIC_LAYA.model ? '' : p.decisionModel;
 }
 
 /**
@@ -67,6 +84,100 @@ export const LM_STUDIO_MODEL = { id: 'google/gemma-4-e4b', label: 'Gemma 4 E4B' 
 /** Where LM Studio answers: through the dev server's `/inference` proxy, or straight from a hosted build (LM Studio's CORS must be on). */
 export const LM_STUDIO_ROOT = import.meta.env.DEV ? '/inference' : LM_STUDIO_URL.replace(/\/v1$/, '');
 
+/** LM Studio's models as its server last listed them: loaded ones first, embeddings left out. */
+export const lmStudio = reactive({
+	models: [] as HudModelOption[],
+	/** Asked at least once, so an empty list means it is off rather than unknown. */
+	listed: false,
+	listing: false,
+});
+
+/**
+ * Lists LM Studio's models into {@link lmStudio}, only once LM Studio is where NPCs think: contacting it makes the
+ * browser ask leave to reach apps on this device.
+ */
+export async function listLMStudioModels():Promise<void> {
+	if (prefs().inference !== 'lmstudio' || lmStudio.listing) {
+		return;
+	}
+	lmStudio.listing = true;
+	try {
+		const catalog = await fetchModelCatalog(LM_STUDIO_ROOT);
+		// A model on this machine and on a linked one is listed once per machine, alike: one row, with its count.
+		const chat = catalog.filter((m, i) => !isEmbeddingModel(m) && catalog.findIndex((other) => other.id === m.id) === i);
+		lmStudio.models = chat
+			.map((m) => ({
+				id: m.id,
+				loaded: isLoadedModel(m),
+				decision: isDecisionModel(m),
+				devices: catalog.filter((other) => other.id === m.id).length,
+				encoder: isEncoderModel(m),
+				params: paramsOf(m),
+				gb: m.sizeBytes === undefined ? undefined : m.sizeBytes / 1e9,
+			}))
+			.sort((a, b) => Number(b.loaded) - Number(a.loaded) || a.id.localeCompare(b.id));
+		lmStudio.listed = true;
+	}
+	finally {
+		lmStudio.listing = false;
+	}
+}
+
+/**
+ * Billions of parameters, all and active, from LM Studio's `26B-A4B`; else guessed from the file at about a byte each,
+ * as most models are quantized; unknown without either.
+ */
+function paramsOf(m:ModelInfo):HudModelOption['params'] {
+	const billions = (n:string, unit:string):number => Number(n) / (unit.toUpperCase() === 'M' ? 1000 : 1);
+	const match = /^([\d.]+)([MB])(?:-A([\d.]+)([MB]))?/i.exec(m.params ?? '');
+	if (match) {
+		const total = billions(match[1], match[2]);
+		return { total, active: match[3] ? billions(match[3], match[4]) : total };
+	}
+	return m.sizeBytes ? { total: m.sizeBytes / 1e9, active: m.sizeBytes / 1e9 } : undefined;
+}
+
+/** Unloads every loaded copy of each model LM Studio has whose id `which` picks, and waits until it has. */
+export async function unloadLMStudio(which:(id:string)=>boolean):Promise<void> {
+	const res = await fetch(`${LM_STUDIO_ROOT}/api/v1/models`).catch(() => undefined);
+	const rows = res?.ok ? ((await res.json()) as { models?:{ key:string; loaded_instances?:{ id:string }[] }[] }).models ?? [] : [];
+	for (const instance of rows.filter((m) => which(m.key)).flatMap((m) => m.loaded_instances ?? [])) {
+		await fetch(`${LM_STUDIO_ROOT}/api/v1/models/unload`, {
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify({ instance_id: instance.id }),
+		}).catch(() => undefined);
+	}
+}
+
+/**
+ * What scores `choose` picks, as one choice: `off`, `jev`, or `model:` and a decision model (an LM Studio model's
+ * id, or Skaldic Laya's download in the browser), empty for the one NPCs think with (`mainModel`).
+ */
+export function decisionChoice(p:Pick<Prefs, 'inference' | 'systemOne' | 'decisionModel'>, mainModel:string):string {
+	if (p.systemOne !== 'local') {
+		return p.systemOne;
+	}
+	const own = decisionModelOf(p);
+	return `model:${own === mainModel ? '' : own}`;
+}
+
+/** The decision model making NPCs' quick decisions apart from their main model, by name; empty when there is none. */
+export function decisionModelName(p:Pick<Prefs, 'inference' | 'systemOne' | 'decisionModel'>):string {
+	const own = decisionModelOf(p);
+	return SKALDIC_LAYA.match.test(own) ? SKALDIC_LAYA.label : own;
+}
+
+/** Makes `choice` (as {@link decisionChoice} gives it) the System One; Skaldic Laya in the browser downloads first. */
+export function pickDecisionChoice(choice:string):void {
+	const model = choice.startsWith('model:') ? choice.slice('model:'.length) : undefined;
+	if (model === SKALDIC_LAYA.model) {
+		void useBrowserLaya();
+		return;
+	}
+	setPrefs(model !== undefined ? { systemOne: 'local', decisionModel: model } : { systemOne: choice as SystemOneKind });
+}
+
 export type BrowserModelState = {
 	/** Downloaded already: a load reads it from disk. */
 	cached:boolean;
@@ -88,6 +199,8 @@ export const inferenceSetup = reactive({
 	models: Object.fromEntries(BROWSER_MODELS.map((m) => [m.model, { cached: false, loaded: false, progress: null, error: '' }])) as Record<string, BrowserModelState>,
 	/** Skaldic Laya's download, apart from the models: it runs on its own engine, beside whichever one is picked. */
 	laya: { cached: false, loaded: false, progress: null, error: '' } as BrowserModelState,
+	/** The browser model picked before was taken up again as the page opened: its download finishing, or its load. */
+	resumed: false,
 });
 
 watchPrefs((next) => {
@@ -103,7 +216,25 @@ void (async () => {
 	for (const m of [...BROWSER_MODELS.map((b) => b.model), SKALDIC_LAYA.model]) {
 		await checkCached(m);
 	}
+	resumeBrowserModel();
 })();
+
+/**
+ * Takes up the browser model picked before, so it need not be picked again: a download left unfinished goes on, and
+ * the one model downloaded loads into memory. With others downloaded too, which to load is left to the picker.
+ */
+function resumeBrowserModel():void {
+	const { inference, browserModel } = prefs();
+	const state = inferenceSetup.models[browserModel];
+	if (inference !== 'browser' || !state || inferenceSetup.unsupported) {
+		return;
+	}
+	const downloaded = BROWSER_MODELS.filter((m) => inferenceSetup.models[m.model].cached);
+	if (!state.cached || (downloaded.length === 1 && downloaded[0].model === browserModel)) {
+		inferenceSetup.resumed = true;
+		void useBrowserModel(browserModel);
+	}
+}
 
 /** The download state `model` shows: a browser model's, or Skaldic Laya's. */
 function stateOf(model:string):BrowserModelState | undefined {

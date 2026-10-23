@@ -660,7 +660,7 @@ export function arcRepairHint(reason:string, format:ArcFormat = 'json', tools:st
 		return `That was not a valid Arc (${reason}). That prose is discarded. `
 			+ `${job} Keep this conversation. ${emit}${toolNote}`;
 	}
-	return `That was not a valid Arc (${reason}). Keep this conversation. ${emit}${toolNote}`;
+	return `That was not a valid Arc (${reason}), so it is discarded: write the whole Arc anew. Keep this conversation. ${emit}${toolNote}`;
 }
 
 /** After tools the model wrote as text where the Arc goes: they ran anyway; here is what they said. */

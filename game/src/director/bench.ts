@@ -1,4 +1,4 @@
-import { BrowserProvider, HttpProvider, JevSystemOne, ModelSystemOne, type SystemOne } from 'arc-director';
+import { BrowserProvider, HttpProvider, type ArcDirector, JevSystemOne, ModelSystemOne, type SystemOne } from 'arc-director';
 import { ARC_BENCH, benchArcs, benchSystemOne, DECISION_BENCH, type BenchScore } from 'arc-director/bench';
 import type { HudModelOption } from '../ui/hudModel';
 import { prefs, type Prefs } from '../prefs';
@@ -64,7 +64,7 @@ function prefsFor(id:string):Prefs {
 }
 
 /** `id` as a System One: Jev, a decision model through the server's endpoint, or a chat model scored, on the server or in the page. */
-function systemOneFor(id:string, models:HudModelOption[]):SystemOne {
+export function systemOneFor(id:string, models:HudModelOption[]):SystemOne {
 	if (id === JEV_CANDIDATE) {
 		return new JevSystemOne();
 	}
@@ -112,7 +112,15 @@ export function benchDecisions(ids:string[], models:HudModelOption[], rows:Bench
  */
 export function benchArcWriting(ids:string[], rows:BenchRow[], { quick = false, repeats }:BenchRun = {}):Promise<void> {
 	return benchEach(ids, rows, quick, (id, onTrial) => {
-		const xai = xaiModel(id);
-		return benchArcs((director) => (xai ? addXAIThinking(director, xai) : addThinking(director, prefsFor(id), 'makers')), ARC_BENCH, { onTrial, repeats, quick });
+		return benchArcs(arcThinking(id), ARC_BENCH, { onTrial, repeats, quick });
 	});
+}
+
+/**
+ * How a bench's director thinks with candidate `id`: as in play, on LM Studio, in the browser or on xAI, sampling as
+ * its makers say. `maxParallel` overrides the menu's thinks at once.
+ */
+export function arcThinking(id:string, maxParallel?:number):<TCtx>(director:ArcDirector<TCtx>)=>ArcDirector<TCtx> {
+	const xai = xaiModel(id);
+	return (director) => (xai ? addXAIThinking(director, xai) : addThinking(director, { ...prefsFor(id), ...(maxParallel ? { maxParallel } : {}) }, 'makers'));
 }

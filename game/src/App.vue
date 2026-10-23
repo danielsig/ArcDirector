@@ -8,6 +8,8 @@ import CursorLayer from './ui/CursorLayer.vue';
 import MusicPlayer from './ui/MusicPlayer.vue';
 import SceneBackdrop from './ui/SceneBackdrop.vue';
 import InferencePicker from './ui/InferencePicker.vue';
+import MindMenu from './ui/MindMenu.vue';
+import { inferenceSetup } from './director/inference';
 import { emptyHud } from './ui/hudModel';
 import { sessionKey } from './ui/sessionKey';
 import type { Session } from './engine/Session';
@@ -16,7 +18,6 @@ import { clearURLView } from './engine/urlView';
 import { preloadArt } from './render/preloadArt';
 import { startMenuAudio, type MenuAudioHandle } from './audio/menu';
 import { prefs, setMusicMuted, watchPrefs } from './prefs';
-import { SKALDIC_LAYA, decisionModelOf, thinksWith } from './director/inference';
 
 preloadArt();
 
@@ -30,15 +31,14 @@ const sceneID = ref<string | null>(
 );
 /** Where NPCs think is picked: the init screen gives way to the scene cards. A scene deep link skips it. */
 const setupDone = ref(sceneID.value !== null);
+// The browser model picked before is being taken up again: nothing left to pick.
+watch(() => inferenceSetup.resumed, (resumed) => {
+	if (resumed) {
+		setupDone.value = true;
+	}
+}, { immediate: true });
 const picker = ref<HTMLElement | null>(null);
 const musicMuted = ref(prefs().musicMuted);
-/** The menu's settings, kept current: the scene picker shows what NPCs think with. */
-const live = ref(prefs());
-/** What NPCs think with, and whether Skaldic Laya makes their quick decisions. */
-const mind = computed(() => ({
-	model: thinksWith(live.value.model),
-	laya: SKALDIC_LAYA.match.test(decisionModelOf(live.value)),
-}));
 const menuHandle = shallowRef<MenuAudioHandle | null>(null);
 
 /**
@@ -99,7 +99,6 @@ watch(picker, (el) => {
 });
 onMounted(() => {
 	stopPrefs = watchPrefs((p) => {
-		live.value = p;
 		musicMuted.value = p.musicMuted;
 		if (!sceneID.value) {
 			hud.musicVolume = p.music;
@@ -205,20 +204,7 @@ function leave():void {
 						<span>{{ hoveredCard.blurb }}</span>
 					</template>
 				</div>
-				<button type="button" class="mind" @click="setupDone = false">
-					<svg class="spark" viewBox="0 0 24 24" aria-hidden="true">
-						<path d="M10 2.5l1.9 5.6 5.6 1.9-5.6 1.9L10 17.5l-1.9-5.6L2.5 10l5.6-1.9z" />
-						<path d="M18.5 14l.9 2.6 2.6.9-2.6.9-.9 2.6-.9-2.6-2.6-.9 2.6-.9z" />
-					</svg>
-					<span class="what">
-						<span class="eyebrow">The mind behind every NPC</span>
-						<span class="name">
-							<b>{{ mind.model }}</b>
-							<span v-if="mind.laya" class="chip">+ {{ SKALDIC_LAYA.label }}</span>
-						</span>
-					</span>
-					<span class="change">Change<span aria-hidden="true"> ›</span></span>
-				</button>
+				<MindMenu @change="setupDone = false" />
 			</template>
 		</div>
 		<button
@@ -465,88 +451,6 @@ function leave():void {
 .details span {
 	font-size: 15px;
 	line-height: 1.3;
-}
-
-/* What NPCs think with, under the demos, and the way back to choosing it: a quiet parchment row, as the menu's own. */
-.mind {
-	display: flex;
-	align-items: center;
-	gap: 12px;
-	padding: 10px 16px;
-	font: inherit;
-	text-align: left;
-	color: var(--ink);
-	background: var(--parchment);
-	border: var(--line) solid var(--ink);
-	border-radius: var(--radius);
-	box-shadow: var(--shadow);
-	cursor: pointer;
-	transition: transform var(--quick) var(--ease-out);
-}
-
-.mind:hover,
-.mind:focus-visible {
-	outline: none;
-	background: var(--parchment-deep);
-	transform: translateY(-2px);
-}
-
-.mind:active {
-	transform: translateY(1px);
-}
-
-.spark {
-	flex: 0 0 auto;
-	width: 26px;
-	height: 26px;
-	fill: var(--gold-deep);
-}
-
-.what {
-	flex: 1 1 auto;
-	min-width: 0;
-	display: flex;
-	flex-direction: column;
-	gap: 1px;
-}
-
-.eyebrow {
-	font-size: 12px;
-	font-weight: 700;
-	letter-spacing: 0.08em;
-	text-transform: uppercase;
-	opacity: 0.7;
-}
-
-/* The model's name in full; the chip goes to the next line before the name is cut. */
-.name {
-	display: flex;
-	flex-wrap: wrap;
-	align-items: center;
-	gap: 2px 8px;
-}
-
-.what b {
-	font-size: 17px;
-}
-
-/* Skaldic Laya, when it makes the quick decisions: a gold chip, as the picker's add-on badge. */
-.chip {
-	flex: 0 0 auto;
-	padding: 2px 8px;
-	font-size: 11px;
-	font-weight: 700;
-	letter-spacing: 0.08em;
-	text-transform: uppercase;
-	white-space: nowrap;
-	color: var(--ink);
-	background: var(--gold);
-	border-radius: 999px;
-}
-
-.change {
-	flex: 0 0 auto;
-	font-weight: 700;
 }
 
 /* Music on or off: a round button in the corner, as the HUD's. */

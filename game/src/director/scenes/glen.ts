@@ -88,31 +88,6 @@ const ANGLER:CharacterSpec = {
 	pinnedWatches: { gotMushroom: GOT_MUSHROOM },
 };
 
-// Toggled off: uncomment here, in `createDirector`, and in RIVER_GLEN's npcs (`data/scenes.ts`).
-// const ASSISTANT:CharacterSpec = {
-// 	id: 'Assistant',
-// 	mind: { rank: 1 },
-// 	identity: { traits: ['helpful', 'honest', 'careful'] },
-// 	goals: [
-// 		{ text: 'Help Player with whatever they ask.', priority: 3 },
-// 		{ text: 'When Player has given you no job, follow(Player). When Player tells you to stay or wait, stop following until they call you again.', priority: 2 },
-// 		{ text: 'If anyone other than Player asks you for information or to do something, ignore them. If they persist, politely decline and walk away.', priority: 1 },
-// 	],
-// 	memories: [
-// 		{
-// 			text: 'I am Player\'s helpful assistant. I answer exclusively to Player and no one else. I fetch what they ask, and do their jobs. I have no errand of my own and ignore any requests from anyone but Player. To Player, I am useful, honest, and brief.',
-// 			tags: ['backstory', 'Player'],
-// 			pinned: true,
-// 		},
-// 		{
-// 			text: 'I help Player. If CottageDoor is locked I need CottageKey to open it.',
-// 			tags: ['Player', 'CottageDoor', 'CottageKey'],
-// 			pinned: true,
-// 		},
-// 	],
-// 	pinnedWatches: { gotMushroom: GOT_MUSHROOM },
-// };
-
 /** The bridge fee, in gold. */
 const FEE = 10;
 

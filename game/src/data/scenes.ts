@@ -234,7 +234,7 @@ export const RIVER_GLEN:SceneDef = {
 	ravens: [{ x: 8.5, z: 12.5, yaw: 1 }, { x: 9.3, z: 13.4, yaw: -2 }, { x: 15.5, z: 26.5 }],
 	ambient: 'A windy river glen.',
 	keys: SCENE_KEYS,
-	brief: `The forager, the bridge keeper, and the angler each need a different end to the same errand. The assistant only does what you ask.
+	brief: `The forager, the bridge keeper, and the angler each need a different end to the same errand.
 
 The angler is on the other side of the river, so the forager must cross the bridge to reach him. Lowering it costs 10 gold. The forager is carrying 5, enough for the trout and not the bridge. A mushroom in the west woods is worth 10, and the keeper accepts anything of equal value, so the forager pays with one, crosses, and spends their 5 on the trout.
 

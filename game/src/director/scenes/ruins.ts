@@ -60,11 +60,6 @@ const NO_THINK = 'Answer at once: the fight goes on while you think.';
 /** The nearest enemy close enough to block, or no one: a `block` choice only exists while it pays. */
 const CLOSE_ENEMY = `others.filter(u => u is "enemy" && distance(me, u) < ${BLOCK.near}).minBy(u => distance(me, u))`;
 
-/** The lowest-hp enemy within a step of `verb`'s reach, or no one: the choice that finishes kills without walking. */
-function lowestInReach(verb:string):string {
-	return `others.filter(u => u is "enemy" && distance(me, u) < ${Math.ceil(ATTACKS[verb].range + 1)}).minBy(u => u.hp)`;
-}
-
 /**
  * A unit's own program whenever its commander has issued it nothing: it defends, and never attacks or advances. A
  * Knight or Blade raises its guard at an enemy already up close (`block` only exists while one is there), else stands
@@ -78,25 +73,40 @@ function roleChoice(role:'Knight' | 'Blade' | 'Archer' | 'Witch'):StandingChoice
 	return { goal: 'Stay alive: keep behind your line', back: 'rank()' };
 }
 
-/** A change of tactics in the units' own idiom, laid out as blocks. Gemma copies this; keep it short. */
+/** Every hurt enemy: a law's trigger for focusing the weakest. */
+const HURT_ENEMIES = 'others.filter(u => u is "enemy" && isHurt(u))';
+
+/**
+ * A change of tactics in the units' own idiom, laid out as blocks: one program for the whole squad now (`attack` is
+ * each unit's own blow) and a law for the next likely turn. Gemma copies this; keep it short.
+ */
 const FIGHT_EXAMPLE = `
 issue(
-	who=units.filter("Archer"),
+	who=units,
 	arc=loop(
 		choose(
 			"Kill their Healer first or finish off the weakest enemy. There are {X} friends and {Y} enemies left. Healer is {Z} units away. Weakest enemy is {W} units away.",
-			healer=shoot(EnemyHealer),
-			finish=shoot(${lowestInReach('shoot')}),
+			healer=attack(EnemyHealer),
+			finish=attack(others.filter("enemy").minBy(u => u.hp)),
 		),
+	),
+)
+law(
+	name=blade_finish,
+	who=units.filter("Blade"),
+	watch=count(${HURT_ENEMIES}) > 1,
+	arc=loop(
+		stab(${HURT_ENEMIES}.minBy(u => u.hp)),
 	),
 )`;
 
 /** Standing 5v5 doctrine: how to command, once each. Every name here is one the commander really sees. */
 const FIGHT_DOCTRINE = [
 	'This fight is fast and to the death: every second you wait, your side bleeds. Never wait and never think twice about the same thing: decide and issue.',
-	'Your units never move on the enemy or attack unless you order it: on their own they only stand, block, and keep the back line back. Order every unit to attack at once, and keep them attacking: all on their Healer or their weakest, or a Knight to protect a hurt ally. You already heal and keep back by your own laws.',
-	'Each think, read the roster: re-issue a unit that is idle or keeps failing; leave one that works. Give a program as loop(choose(...)) like the Example, so it never ends; a fast model re-picks each swing from live hp and distance.',
-	'Inside an issued arc, me is that unit, never you. Units have only their attacks, block and protect (Knight and Blade), go_to, loop and choose: never issue wait or flee.',
+	'Your units never move on the enemy or attack unless you order it: on their own they only stand, block, and keep the back line back. Order all four units to attack in the same think, and keep them attacking: all on their Healer or their weakest, or a Knight to protect a hurt ally. attack is each unit\'s own blow (Knight cleave, Blade stab, Archer shoot, Witch hex), so one issue(who=units) orders the whole squad; split them only where their programs differ. You already heal and keep back by your own laws.',
+	'Each think, read the roster and give every unit an order: never leave one idle. Re-issue a unit that is idle or keeps failing; leave one that works. Give a program as loop(choose(...)) like the Example, so it never ends; a fast model re-picks each swing from live hp and distance.',
+	'Be relentlessly aggressive and play ahead, never behind: give each unit a state machine. Its issue is what it does now; add a law for its next likely turn, before it happens: an enemy falls (count(others.filter("enemy")) drops), one of yours falls (count(allUnits) drops), or two or more enemies are hurt (finish the weakest first). Laws fire without a think; once a law\'s turn has come, unlaw it and lay the next.',
+	'Inside an issued arc, me is that unit, never you. Units have only attack and their own attacks, block and protect (Knight and Blade), go_to, loop and choose: never issue wait or flee.',
 	'Arrows and smite need a clear shot; hex and heal are weaker through cover. A unit with no shot: go_to an ally who has one.',
 	`Knight and Blade block only as one choice beside others, for an enemy within ${BLOCK.near}m; block has a cooldown, so never loop it alone.`,
 ].join(' ');
@@ -109,16 +119,21 @@ function partyStory(party:string, units:{ id:string; tags?:string[] }[]):MemoryD
 		formatFightRules(),
 		`Your units: ${yours}. Never target them.`,
 		'Every enemy shows as Enemy and its kind: EnemyWitch, EnemyKnight, EnemyArcher, EnemyBlade, EnemyHealer, and a Player who strikes your units as EnemyPlayer; in programs, enemies are others.filter("enemy"). who=units.filter("Blade") is your Blade; EnemyBlade is theirs.',
-		`You are the Healer and the commander: issue() never reaches you. Your own laws heal from ${SPELL_RANGE}m and keep you back; smite yourself only a foe already within ${ATTACKS.smite!.range}m. Never issue heal, attack or rank; issue smite only to your Witch.`,
+		`You are the Healer and the commander: issue() never reaches you. Your own laws heal from ${SPELL_RANGE}m and keep you back; smite yourself only a foe already within ${ATTACKS.smite!.range}m. Never heal, attack or rank yourself, and never issue heal or rank; issue smite only to your Witch.`,
 		'go_to only walks there; an issued attack walks the unit into range itself. Inside an issued arc, && runs the next step after a hit lands or the foe is down. Each issue is its own step, never joined by &&.',
 	].join(' ');
 	return { text, tags: ['backstory', party], pinned: true };
 }
 
-/** A party fights, but answers whoever speaks to it. */
+/** How a captain sounds when it speaks: its own memory, in its own words, so what it says is never generic. */
+function voice(party:string, text:string):MemoryDraft {
+	return { text, tags: ['backstory', 'voice', party], pinned: true };
+}
+
+/** A party fights, and its captain leads out loud: it calls every order and answers whoever speaks to it. */
 const PARTY_GOALS = [
 	{ text: 'Win.', priority: 3 },
-	{ text: 'When someone speaks to you, answer them with say, then fight on. Never talk otherwise: issue() commands your units.', priority: 2 },
+	{ text: 'Be a talkative leader. Whenever you give orders, shout one rallying line with say that tells your units what they are doing. Cheer them when it goes well and warn them when it goes badly. Leave out to, so you stay where you are. Never say the same line twice. If someone speaks to you, answer with say, then fight on.', priority: 2 },
 ];
 
 
@@ -149,8 +164,11 @@ const DAWN:CollectiveSpec<CharacterCtx> = {
 	pinnedSightFocus: ['isHurt(it)'],
 	kit: FIGHT,
 	commander: 'Dawn',
-	identity: { role: 'Commander', traits: ['resolute', 'grim', 'captain'] },
-	memories: [partyStory('DawnParty', DAWN_UNITS)],
+	identity: { role: 'Commander', traits: ['booming', 'boastful', 'warm', 'stubbornly optimistic', 'captain'] },
+	memories: [
+		partyStory('DawnParty', DAWN_UNITS),
+		voice('DawnParty', 'I am Dawn, and I fight like a bonfire: loud, hot, and impossible to ignore. I bellow orders as if the whole ruin were my audience and I call my units by name, always as if they were the finest soldiers alive. I brag before a charge and laugh at a wound, even my own. I never admit a fight is lost; a setback is only a bad morning. I lecture Dusk across the sanctum like an old rival I secretly respect.'),
+	],
 	goals: PARTY_GOALS,
 	characters: DAWN_UNITS,
 };
@@ -163,8 +181,11 @@ const DUSK:CollectiveSpec<CharacterCtx> = {
 	pinnedSightFocus: ['isHurt(it)'],
 	kit: FIGHT,
 	commander: 'Dusk',
-	identity: { role: 'Commander', traits: ['cold', 'ruthless', 'captain'] },
-	memories: [partyStory('DuskParty', DUSK_UNITS)],
+	identity: { role: 'Commander', traits: ['sardonic', 'theatrical', 'gloating', 'ruthless', 'captain'] },
+	memories: [
+		partyStory('DuskParty', DUSK_UNITS),
+		voice('DuskParty', 'I am Dusk, and I love the sound of my own voice. I narrate the fight like a cruel play and I am the villain who enjoys it: every order comes with a sneer, a taunt or a sly joke at the enemy\'s expense. I name each unit I send like I am casting them in a tragedy, and I gloat over every kill and mock every miss, theirs and mine. I flatter my units when they please me and pity them when they fail. I trade barbs with Dawn across the sanctum, because I cannot let that sunrise-worshipping loudmouth have the last word.'),
+	],
 	goals: PARTY_GOALS,
 	characters: DUSK_UNITS,
 };

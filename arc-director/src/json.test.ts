@@ -23,6 +23,18 @@ describe('extractJson', () => {
 		assert.deepEqual(extractJson('[{"verb":"wait"},{"verb":"say","text":"ok"}]'), [{ verb: 'wait' }, { verb: 'say', text: 'ok' }]);
 		assert.deepEqual(extractJson('[{"verb":"wait"},{"verb":"say","text":"o'), [{ verb: 'wait' }, { verb: 'say', text: 'o' }]);
 	});
+
+	it('closes an expression the model closed late, after the brackets that end it', () => {
+		// The late quote swallows `}]},` and the stray closers at the end make it parse, nested one step too deep.
+		const raw = '{"steps":[{"verb":"issue","arc":[{"verb":"block","target":"near(me).minBy(u => u.hp)}],"},{"verb":"say","text":"Go (now)!"}]}]}';
+		assert.deepEqual(extractJson(raw), {
+			steps: [{ verb: 'issue', arc: [{ verb: 'block', target: 'near(me).minBy(u => u.hp)' }] }, { verb: 'say', text: 'Go (now)!' }],
+		});
+	});
+
+	it('leaves strings that only hold brackets as prose alone', () => {
+		assert.deepEqual(extractJson('{"text":"There are {X} (or more) {Y}"}'), { text: 'There are {X} (or more) {Y}' });
+	});
 });
 
 describe('readID', () => {

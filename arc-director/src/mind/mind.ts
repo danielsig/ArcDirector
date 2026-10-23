@@ -1245,7 +1245,8 @@ export class Mind<TCtx = unknown> {
 		this._thinks += 1;
 		const ctx = this.worldContext();
 		this.owner.refreshKit();
-		const liveVerbAtThink = this.voice.liveArc ? this._lastVerb : undefined;
+		// A collective's arc orders its units: its commander's own next step leaves it no less true, so it is not asked again.
+		const liveVerbAtThink = this.voice.liveArc && this.voice === this.owner ? this._lastVerb : undefined;
 		// A repeat after new input (speech, an interruption, a nudge) can be right; without any, the model is stuck.
 		const freshInput = this.hasFreshInput();
 		const sensed = this.gatherSensed();
@@ -1463,11 +1464,9 @@ export class Mind<TCtx = unknown> {
 		if (repairsLeft <= 0) {
 			return false;
 		}
+		// The bad reply itself is left out: a small model shown its own broken reply writes it again, word for word.
 		const called = res.toolCalls.map((c) => c.name);
-		const shown = res.content
-			?? (called.length > 0 ? `(tool call: ${called.join(', ')})` : '');
-		const dropProse = !/^\s*[{`]/.test(shown) && !shown.includes('(');
-		messages.push({ role: 'assistant', content: dropProse ? null : (shown || null) });
+		messages.push({ role: 'assistant', content: called.length > 0 ? `(tool call: ${called.join(', ')})` : null });
 		messages.push({ role: 'user', content: arcRepairHint(err.message, format, toolNames, this.owner.activeVerbs()) });
 		return true;
 	}

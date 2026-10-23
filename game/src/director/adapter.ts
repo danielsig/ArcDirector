@@ -38,7 +38,7 @@ import { lookWorld, inventoryOf, followedCarry } from './perception';
 import { roomBounds, type RoomDef } from '../world/spawn';
 import { verbGate } from './verbs';
 import { gameWorld } from './world';
-import { LM_STUDIO_ROOT, decisionModelOf, menuModel, showDownload, type SamplingSource } from './inference';
+import { LM_STUDIO_ROOT, SKALDIC_LAYA, decisionModelOf, menuModel, showDownload, type SamplingSource } from './inference';
 import { HOSTED, defaultSystemOne } from './hosted';
 import { fightExprTags } from './fight';
 import {
@@ -51,7 +51,7 @@ import {
 
 export type { CharacterCtx, SceneHooks };
 
-const ARC_RETRY_CAP = 3;
+const ARC_RETRY_CAP = 1;
 const STALL_VERBS = new Set(['wait', 'wander', 'say', 'set_status']);
 
 /**
@@ -74,10 +74,12 @@ export function addModels<TCtx>(director:ArcDirector<TCtx>, p:Prefs = prefs(), s
 		return director;
 	}
 	const main:ModelSpec = { inference: 'lmstudio', id: p.model || undefined, ...menuModel(p, sampling) };
-	return director
-		.addModel('main', main)
-		.addModel('quick', { ...main, thinking: false })
-		.addModel('local', { ...main, id: decisionModelOf(p) || main.id, thinking: false, decision: true });
+	const decider = decisionModelOf(p);
+	director.addModel('main', main).addModel('quick', { ...main, thinking: false });
+	// Skaldic Laya in the browser beside LM Studio's chat model; else an LM Studio model scores, or the chat model.
+	return decider === SKALDIC_LAYA.model
+		? director.addBrowserModel('local', decider)
+		: director.addModel('local', { ...main, id: decider || main.id, thinking: false, decision: true });
 }
 
 /**

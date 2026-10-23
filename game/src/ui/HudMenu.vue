@@ -7,7 +7,7 @@ import HudDialog from './HudDialog.vue';
 import HudSwitch from './HudSwitch.vue';
 import InferencePicker from './InferencePicker.vue';
 import { HOSTED } from '../director/hosted';
-import { SKALDIC_LAYA, decisionModelOf, inferenceSetup, mainModelName, thinksWith, useBrowserLaya } from '../director/inference';
+import { SKALDIC_LAYA, decisionChoice, inferenceSetup, listLMStudioModels, lmStudio, mainModelName, pickDecisionChoice, thinksWith } from '../director/inference';
 import {
 	MAX_CONTEXT_LENGTH,
 	MAX_PARALLEL_THINKERS,
@@ -21,7 +21,6 @@ import {
 	setMusicMuted,
 	setMusicVolume,
 	setPrefs,
-	type SystemOneKind,
 } from '../prefs';
 
 const props = defineProps<{
@@ -147,28 +146,7 @@ function pickArcFormat():void {
 	setPrefs({ arcFormat: props.hud.arcFormat });
 }
 
-/**
- * What scores `choose` picks, as one choice: `off`, `jev`, or `model:` and a decision model (an LM Studio model's
- * id, or Skaldic Laya's download in the browser), empty for the one NPCs think with.
- */
-const decision = computed(() => {
-	if (props.hud.systemOne !== 'local') {
-		return props.hud.systemOne;
-	}
-	const own = decisionModelOf({ inference: inferenceSetup.inference, systemOne: props.hud.systemOne, decisionModel: props.hud.decisionModel });
-	return `model:${own === props.hud.activeModel ? '' : own}`;
-});
-
-function pickDecision(ev:Event):void {
-	const choice = (ev.target as HTMLSelectElement).value;
-	const model = choice.startsWith('model:') ? choice.slice('model:'.length) : undefined;
-	if (model === SKALDIC_LAYA.model) {
-		// Downloaded first; the System One changes once it is there.
-		void useBrowserLaya();
-		return;
-	}
-	setPrefs(model !== undefined ? { systemOne: 'local', decisionModel: model } : { systemOne: choice as SystemOneKind });
-}
+const decision = computed(() => decisionChoice({ inference: inferenceSetup.inference, systemOne: props.hud.systemOne, decisionModel: props.hud.decisionModel }, props.hud.activeModel));
 
 function dumpNPCMaps():void {
 	void session?.value?.dumpNPCMaps();
@@ -422,24 +400,24 @@ function pct(n:number):string {
 								<span class="name">LM Studio model</span>
 								<select
 									v-model="hud.model"
-									@mousedown="session?.refreshHudModels()"
+									@mousedown="listLMStudioModels()"
 									@change.stop="pickModel"
 								>
 									<option
-										v-if="hud.models.length === 0 && !hud.model"
+										v-if="lmStudio.models.length === 0 && !hud.model"
 										value=""
 										disabled
 									>
 										No models found
 									</option>
 									<option
-										v-if="hud.model && !hud.models.some((m) => m.id === hud.model)"
+										v-if="hud.model && !lmStudio.models.some((m) => m.id === hud.model)"
 										:value="hud.model"
 									>
 										{{ hud.model }}
 									</option>
 									<option
-										v-for="m in hud.models.filter((m) => !m.decision)"
+										v-for="m in lmStudio.models.filter((m) => !m.decision)"
 										:key="m.id"
 										:value="m.id"
 									>
@@ -553,23 +531,23 @@ function pct(n:number):string {
 								<span class="name" title="The System One: what scores the choices of a choose, a hosted decision model or a model you run. Off keeps choose from NPCs.">Model</span>
 								<select
 									:value="decision"
-									@mousedown="inferenceSetup.inference === 'lmstudio' && session?.refreshHudModels()"
-									@change.stop="pickDecision"
+									@mousedown="listLMStudioModels()"
+									@change.stop="pickDecisionChoice(($event.target as HTMLSelectElement).value)"
 								>
 									<option value="off">Off</option>
 									<option v-if="HOSTED.jev" value="jev">Jev (hosted)</option>
 									<option value="model:">{{ mainModelName(hud.activeModel) || 'Main model' }}</option>
-									<option v-if="inferenceSetup.inference === 'browser'" :value="`model:${SKALDIC_LAYA.model}`">
-										{{ SKALDIC_LAYA.label }}{{ inferenceSetup.laya.cached ? '' : ` (download ${SKALDIC_LAYA.sizeGB} GB)` }}
+									<option :value="`model:${SKALDIC_LAYA.model}`">
+										{{ SKALDIC_LAYA.label }} · in your browser{{ inferenceSetup.laya.cached ? '' : ` (download ${SKALDIC_LAYA.sizeGB} GB)` }}
 									</option>
 									<template v-if="inferenceSetup.inference === 'lmstudio'">
 										<option
-											v-if="decision !== 'model:' && decision.startsWith('model:') && !hud.models.some((m) => `model:${m.id}` === decision)"
+											v-if="decision !== 'model:' && decision.startsWith('model:') && !lmStudio.models.some((m) => `model:${m.id}` === decision)"
 											:value="decision"
 										>
 											{{ hud.decisionModel }}
 										</option>
-										<option v-for="m in hud.models.filter((m) => m.id !== hud.activeModel)" :key="m.id" :value="`model:${m.id}`">
+										<option v-for="m in lmStudio.models.filter((m) => m.id !== hud.activeModel)" :key="m.id" :value="`model:${m.id}`">
 											{{ modelLabel(m) }}
 										</option>
 									</template>

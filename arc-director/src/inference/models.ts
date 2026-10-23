@@ -38,6 +38,8 @@ export type ModelInfo = {
 	};
 	/** File size, from the native catalog. */
 	sizeBytes?:number;
+	/** How many parameters, as the native catalog writes it: `421M`, `4B`, `26B-A4B` (26 billion, 4 billion active). */
+	params?:string;
 	/** From `capabilities.trained_for_tool_use`. */
 	toolUse?:boolean;
 	/** The native catalog's `architecture` (`gemma4`, `modern-bert`). */
@@ -266,6 +268,7 @@ function asNativeList(payload:unknown):ModelInfo[] {
 			vision: typeof caps.vision === 'boolean' ? caps.vision : rowVision(row),
 			reasoning: rowReasoning(row),
 			sizeBytes: typeof row.size_bytes === 'number' ? row.size_bytes : undefined,
+			params: typeof row.params_string === 'string' ? row.params_string : undefined,
 			toolUse: typeof caps.trained_for_tool_use === 'boolean' ? caps.trained_for_tool_use : undefined,
 			architecture: typeof row.architecture === 'string' ? row.architecture : undefined,
 			maxContextLength: typeof row.max_context_length === 'number' ? row.max_context_length : undefined,

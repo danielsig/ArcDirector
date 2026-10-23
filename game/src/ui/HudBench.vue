@@ -5,7 +5,7 @@ import { modelLabel, type HudModel } from './hudModel';
 import HudDialog from './HudDialog.vue';
 import { benchArcWriting, benchDecisions, JEV_CANDIDATE, xaiCandidates, type BenchKind, type BenchRow, type BenchRun } from '../director/bench';
 import { HOSTED } from '../director/hosted';
-import { BROWSER_MODELS, SKALDIC_LAYA, inferenceSetup, type BrowserModel } from '../director/inference';
+import { BROWSER_MODELS, SKALDIC_LAYA, inferenceSetup, lmStudio, type BrowserModel } from '../director/inference';
 
 const props = defineProps<{
 	hud:HudModel;
@@ -19,7 +19,7 @@ const BENCHES = {
 		version: DECISION_BENCH_VERSION,
 		cases: DECISION_BENCH,
 		hint: `How well each model picks the best option in ${DECISION_BENCH.length} game situations. Every option is rated: full points for the best, some for one that still helps, none for a bad one. Each situation is asked twice, the second time with the options in reverse order, and the worse answer counts, so always picking the first option doesn't pay. No menu settings change the result.`,
-		run: (ids:string[], rows:BenchRow[], run:BenchRun) => benchDecisions(ids, props.hud.models, rows, run),
+		run: (ids:string[], rows:BenchRow[], run:BenchRun) => benchDecisions(ids, lmStudio.models, rows, run),
 		// Harm here is only a pick rated 0, which the score already counts as nothing, so no harm count.
 		harm: false,
 	},
@@ -60,7 +60,7 @@ onMounted(async () => {
  */
 const candidates = computed(() => [
 	...(props.kind === 'decision' && HOSTED.jev ? [{ id: JEV_CANDIDATE, label: JEV_CANDIDATE }] : []),
-	...props.hud.models.filter((m) => props.kind === 'decision' || !m.decision).map((m) => ({ id: m.id, label: modelLabel(m) })),
+	...lmStudio.models.filter((m) => props.kind === 'decision' || !m.decision).map((m) => ({ id: m.id, label: modelLabel(m) })),
 	...(inferenceSetup.unsupported ? [] : BROWSER_MODELS.map((m) => ({ id: m.model, label: `${m.label} · in your browser${browserDownload(m)}` }))),
 	...(props.kind === 'decision' && !inferenceSetup.unsupported
 		? [{ id: SKALDIC_LAYA.model, label: `${SKALDIC_LAYA.label} · in your browser${inferenceSetup.laya.cached ? '' : ` · ${SKALDIC_LAYA.sizeGB} GB to download`}` }]

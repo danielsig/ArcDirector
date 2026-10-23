@@ -20,13 +20,66 @@ export type JsonSchema = {
 export function extractJson(text:string):unknown {
 	const trimmed = text.trim();
 	const fenced = trimmed.match(/```(?:json)?\s*([\s\S]*?)```/i);
-	const body = fenced ? fenced[1].trim() : trimmed;
+	// Repaired first: a late-closed string can still parse, into the wrong nesting.
+	const body = repairJSON(fenced ? fenced[1].trim() : trimmed);
 	try {
 		return JSON.parse(body);
 	}
 	catch {
 		return parseLooseObject(body);
 	}
+}
+
+/**
+ * `body` with the slips a model makes in long JSON undone: an expression closed late, after the brackets that end it
+ * (`"minBy(u => u.hp)}]},"` for `"minBy(u => u.hp)"}]},`), then a comma left before a closing bracket.
+ */
+function repairJSON(body:string):string {
+	const closed = eachPart(body, (text) => {
+		const cut = lateClose(text);
+		return cut === undefined ? `"${text}"` : `"${text.slice(0, cut)}"${text.slice(cut)}`;
+	});
+	return eachPart(closed, (text) => `"${text}"`, (structure) => structure.replace(/,(\s*[}\]])/g, '$1'));
+}
+
+/** `body` rebuilt from its strings' insides through `string` and the JSON between them through `structure`. */
+function eachPart(body:string, string:(text:string)=>string, structure = (text:string):string => text):string {
+	let out = '';
+	let from = 0;
+	for (let open = body.indexOf('"'); open >= 0; open = body.indexOf('"', from)) {
+		const end = stringEnd(body, open);
+		out += structure(body.slice(from, open)) + (end < body.length ? string(body.slice(open + 1, end)) : body.slice(open));
+		from = end + 1;
+	}
+	return out + structure(body.slice(from));
+}
+
+/** The index of the quote that closes the string opening at `open`, or the end of `text`. */
+function stringEnd(text:string, open:number):number {
+	for (let i = open + 1; i < text.length; i++) {
+		if (text[i] === '\\') {
+			i++;
+		}
+		else if (text[i] === '"') {
+			return i;
+		}
+	}
+	return text.length;
+}
+
+/** Where an expression string should have closed: right after its parentheses balance, when only brackets follow. */
+function lateClose(text:string):number | undefined {
+	let depth = 0;
+	let cut:number | undefined;
+	for (let i = 0; i < text.length; i++) {
+		if (text[i] === '(') {
+			depth++;
+		}
+		else if (text[i] === ')' && --depth === 0) {
+			cut = i + 1;
+		}
+	}
+	return cut !== undefined && /^[\s,{]*[\]}][\s,\]}{]*$/.test(text.slice(cut)) ? cut : undefined;
 }
 
 type Frame = '{' | '[';

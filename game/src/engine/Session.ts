@@ -9,7 +9,7 @@ import { GameHost, addModels } from '../director/adapter';
 import { playerSay, playerSayCatalog } from '../director/playerTalk';
 import { dumpLookMaps } from '../director/aiLogSink';
 import { patchInfer } from './patchHud';
-import type { HudModel, HudModelOption } from '../ui/hudModel';
+import type { HudModel } from '../ui/hudModel';
 import {
 	contextLabel,
 	prefs,
@@ -20,13 +20,8 @@ import {
 	type Prefs,
 } from '../prefs';
 import { defaultSystemOne } from '../director/hosted';
-import { LM_STUDIO_ROOT } from '../director/inference';
-import {
-	fetchModelCatalog,
-	isDecisionModel,
-	isEmbeddingModel,
-	isLoadedModel,
-} from 'arc-director';
+import { listLMStudioModels, lmStudio } from '../director/inference';
+import { quickBenchRunning } from '../director/quickBench';
 import { captureWorld, diffWorld, resetTime, restoreWorld, Time, type WorldState } from '@arc-director/kindling';
 import { readSave, respawn, writeSave, type GameSave } from './save';
 import {
@@ -139,11 +134,12 @@ export class Session extends Component {
 		}
 		world.sayOpen = this.hud.sayOpen;
 		// A bench holds the model while it runs, so NPCs stop thinking until it is done; the `ai` setting is untouched.
-		world.arcDirectorOn = this.hud.arcDirectorOn && !this.hud.benchRunning;
-		if (this._benching && !this.hud.benchRunning && this.director.arc) {
+		const benching = this.hud.benchRunning || quickBenchRunning();
+		world.arcDirectorOn = this.hud.arcDirectorOn && !benching;
+		if (this._benching && !benching && this.director.arc) {
 			addModels(this.director.arc, prefs());
 		}
-		this._benching = this.hud.benchRunning;
+		this._benching = benching;
 		if (this.hud.menuOpen && world.input.pointerLocked) {
 			this.dropPointerLock();
 		}
@@ -304,41 +300,6 @@ export class Session extends Component {
 		this.hud.menuNotice = 'Location reset';
 	}
 
-	public async refreshHudModels():Promise<void> {
-		// Listed whether or not ArcDirector runs, so a model can be picked before turning it on.
-		if (prefs().inference !== 'lmstudio') {
-			return;
-		}
-		const catalog = await fetchModelCatalog(LM_STUDIO_ROOT);
-		// A model on this machine and on a linked one is listed once per machine, alike: one row, with its count.
-		const chat = catalog.filter((m, i) => !isEmbeddingModel(m) && catalog.findIndex((other) => other.id === m.id) === i);
-		chat.sort((a, b) => {
-			const la = isLoadedModel(a) ? 0 : 1;
-			const lb = isLoadedModel(b) ? 0 : 1;
-			if (la !== lb) {
-				return la - lb;
-			}
-			return a.id.localeCompare(b.id);
-		});
-		const models:HudModelOption[] = chat.map((m) => ({
-			id: m.id,
-			loaded: isLoadedModel(m),
-			decision: isDecisionModel(m),
-			devices: catalog.filter((other) => other.id === m.id).length,
-		}));
-		const current = this.director.arc?.modelID() || prefs().model;
-		if (current && !models.some((m) => m.id === current)) {
-			models.unshift({ id: current, loaded: false, decision: false, devices: 1 });
-		}
-		if (this.hud.model && !models.some((m) => m.id === this.hud.model)) {
-			models.unshift({ id: this.hud.model, loaded: false, decision: false, devices: 1 });
-		}
-		this.hud.models = models;
-		if (!this.hud.model) {
-			this.hud.model = current || models[0]?.id || '';
-		}
-	}
-
 	public onMenuOpened():void {
 		this.hud.menuNotice = '';
 		this.persistView();
@@ -347,7 +308,10 @@ export class Session extends Component {
 		this.hud.playerKinds = characterOptions();
 		const liveKind = this.gameObject.world?.findByID('Player')?.getComponent(MeshRenderer)?.meshID;
 		this.hud.playerKind = resolvePlayerKind(liveKind || this.hud.playerKind || prefs().playerKind);
-		void this.refreshHudModels();
+		// Listed whether or not ArcDirector runs, so a model can be picked before turning it on.
+		void listLMStudioModels().then(() => {
+			this.hud.model ||= lmStudio.models.find((m) => !m.decision)?.id ?? '';
+		});
 	}
 
 	public onMenuClosed():void {

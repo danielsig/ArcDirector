@@ -162,7 +162,8 @@ export class Seated extends Component {
 		const rod = create('fishing_rod') ?? new THREE.Group();
 		const line = new THREE.Line(
 			new THREE.BufferGeometry().setAttribute('position', new THREE.Float32BufferAttribute(new Float32Array(12 * 3), 3)),
-			new THREE.LineBasicMaterial({ color: 0xe8e2d0, transparent: true, opacity: 0.8 }),
+			// No depth, so the outline pass sees no edge along it.
+			new THREE.LineBasicMaterial({ color: 0xe8e2d0, transparent: true, opacity: 0.8, depthWrite: false }),
 		);
 		line.frustumCulled = false;
 		const float = new THREE.Mesh(new THREE.SphereGeometry(0.035, 8, 6), new THREE.MeshBasicMaterial({ color: 0xd8402a }));

@@ -97,6 +97,14 @@ const CRASH_CHARS = 4000;
 const LOAD_LINE = /ggml_webgpu|offload|fitting|fail|insufficient memory/;
 /** llama.cpp's count of the layers it put on the GPU. */
 const OFFLOADED = /offloaded (\d+)\/\d+ layers to GPU/;
+/**
+ * The slowest a chat model may write and still finish a think (a few hundred tokens) before its request times out.
+ * A browser that runs it on the CPU, or a GPU the browser handles badly, writes a token every few seconds.
+ */
+const MIN_TOKENS_PER_SECOND = 3;
+/** Tokens the speed check asks for, and how long it waits for them, the GPU's first-run warm-up included. */
+const SPEED_CHECK_TOKENS = 16;
+const SPEED_CHECK_MS = 30_000;
 
 export type BrowserProviderOptions = {
 	/**
@@ -170,14 +178,28 @@ export class BrowserProvider implements InferenceProvider {
 	}
 
 	/**
-	 * Why models cannot run well in this browser, or null when they can: it has no WebGPU, or WebGPU gives it no GPU
-	 * (hardware acceleration off, or a blocked driver). Ask before offering a download.
+	 * Why models cannot run well in this browser, and how the player can fix it, or null when they can: a short first
+	 * line, then what to do. Ask before offering a download. Without JSPI and 64-bit memory wllama turns WebGPU off
+	 * and the model crawls on the CPU (Firefox by default; Safari has wllama's slower compat build instead). With them
+	 * but no GPU, the browser has turned it off, most often after the GPU crashed, until the browser restarts.
 	 */
 	public static async unsupported():Promise<string | null> {
-		if (!(globalThis as { navigator?:{ gpu?:unknown } }).navigator?.gpu) {
-			return "This browser can't run AI models.\nTry Chrome or Edge.";
+		const agent = (globalThis as { navigator?:{ userAgent?:string } }).navigator?.userAgent ?? '';
+		const firefox = /Firefox\//.test(agent);
+		if (firefox && !fastWasm()) {
+			return "Firefox can't run AI models on the graphics card yet.\n"
+				+ 'Use Chrome or Edge. Or, in Firefox, open about:config, turn on javascript.options.wasm_js_promise_integration, and restart Firefox.';
 		}
-		return await gpuAdapter() ? null : "Your browser can't use the graphics card.\nRestarting it may help.";
+		if (!(globalThis as { navigator?:{ gpu?:unknown } }).navigator?.gpu) {
+			return firefox
+				? "This version of Firefox can't run AI models.\nUpdate Firefox, or use Chrome or Edge."
+				: "This browser can't run AI models.\nUse Chrome or Edge.";
+		}
+		if (!fastWasm() && !/Version\/[\d.]+.*Safari/.test(agent)) {
+			return 'This browser is too old to run AI models.\nUpdate it, or use Chrome or Edge.';
+		}
+		return await gpuAdapter() ? null : 'Your browser has turned off the graphics card, most often after a crash.\n'
+			+ 'Quit the browser completely (every window) and open it again. If that does not help, turn on graphics acceleration in its settings.';
 	}
 
 	/** The model on the GPU now, as it was named, or null. */
@@ -245,8 +267,7 @@ export class BrowserProvider implements InferenceProvider {
 	public async systemOneEndpoint(model:string):Promise<SystemOneEndpoint | undefined> {
 		let decides = this._decides.get(model);
 		if (decides === undefined) {
-			const meta = (await this.load(model)).getModelMetadata().meta;
-			decides = Object.keys(meta).some((key) => key.endsWith('.decision.type'));
+			decides = hasDecisionHead(await this.load(model));
 			this._decides.set(model, decides);
 		}
 		if (!decides) {
@@ -400,6 +421,14 @@ export class BrowserProvider implements InferenceProvider {
 			if (failure) {
 				throw new ModelLoadError(failure);
 			}
+			// A decision model answers in one step; a chat model that writes too slowly never finishes a think.
+			if (!hasDecisionHead(wllama)) {
+				report?.({ progress: 1, text: 'Checking its speed' });
+				const perSecond = await tokensPerSecond(wllama);
+				if (perSecond < MIN_TOKENS_PER_SECOND) {
+					throw new ModelLoadError(tooSlow(perSecond));
+				}
+			}
 		}
 		catch (err) {
 			// A failed load leaves the engine started, and a started engine loads nothing more.
@@ -505,6 +534,49 @@ export function loadFailure(lines:readonly string[]):string | null {
 	return lines.some((line) => line.includes('failed to load model')) ? `the model in the page could not load: ${why}` : null;
 }
 
+/** Whether the loaded model is a decision model: its GGUF names a decision head (Laya's). */
+function hasDecisionHead(wllama:Wllama):boolean {
+	return Object.keys(wllama.getModelMetadata().meta).some((key) => key.endsWith('.decision.type'));
+}
+
+/**
+ * How fast the loaded model writes, in tokens a second, from a short reply: timed from its first token, so the GPU's
+ * warm-up does not count against it. Zero when it wrote under two tokens in {@link SPEED_CHECK_MS}.
+ */
+async function tokensPerSecond(wllama:Wllama):Promise<number> {
+	const stop = new AbortController();
+	const timer = setTimeout(() => stop.abort(), SPEED_CHECK_MS);
+	const stamps:number[] = [];
+	try {
+		const chunks = await wllama.createChatCompletion({
+			messages: [{ role: 'user', content: 'Count from 1 to 30.' }],
+			max_tokens: SPEED_CHECK_TOKENS,
+			stream: true,
+			abortSignal: stop.signal,
+		}) as AsyncIterable<unknown>;
+		for await (const _ of chunks) {
+			stamps.push(performance.now());
+		}
+	}
+	catch (err) {
+		if (!stop.signal.aborted) {
+			throw err;
+		}
+	}
+	finally {
+		clearTimeout(timer);
+	}
+	const seconds = stamps.length < 2 ? 0 : (stamps[stamps.length - 1] - stamps[0]) / 1000;
+	return seconds > 0 ? (stamps.length - 1) / seconds : 0;
+}
+
+/** What a player sees when the model writes `perSecond` tokens a second: too slow to think with, and what to do. */
+function tooSlow(perSecond:number):string {
+	const speed = perSecond > 0 ? `${perSecond.toFixed(1)} words a second` : 'almost nothing';
+	return `It writes too slowly in this browser to think with (${speed}).\n`
+		+ 'Use Chrome or Edge with graphics acceleration on, close other tabs that use the graphics card, or run models in LM Studio instead.';
+}
+
 /**
  * The most tokens one think's cache may hold, from a model's GGUF metadata, or null when it does not say: past it,
  * moving a reused cached chunk re-ropes the cache in one ggml-webgpu dispatch of more workgroups than WebGPU allows
@@ -599,6 +671,21 @@ function gpuAdapter():Promise<GPUAdapter | null> {
 	const gpu = (globalThis as { navigator?:{ gpu?:GPU } }).navigator?.gpu;
 	adapter ??= gpu ? gpu.requestAdapter({ powerPreference: 'high-performance' }).catch(() => null) : Promise.resolve(null);
 	return adapter;
+}
+
+/** Whether wllama can run its WebGPU build here: it needs JSPI (`WebAssembly.Suspending`) and 64-bit memory. */
+function fastWasm():boolean {
+	const wasm = (globalThis as { WebAssembly?:{ Suspending?:unknown; Memory:new (descriptor:object)=>unknown } }).WebAssembly;
+	if (!wasm?.Suspending) {
+		return false;
+	}
+	try {
+		new wasm.Memory({ address: 'i64', initial: BigInt(1) });
+		return true;
+	}
+	catch {
+		return false;
+	}
 }
 
 function importWllama():Promise<WllamaModule> {

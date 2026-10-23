@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref } from 'vue';
+import { computed, onUnmounted, ref } from 'vue';
 import { fetchModelCatalog, modelIDsMatch, trainedOnArcDirector } from 'arc-director';
 import {
 	BROWSER_MODELS,
@@ -40,8 +40,12 @@ const served = ref<string[] | null>(null);
 const serving = computed(() => !!served.value?.length);
 const hasModel = computed(() => !!served.value?.some((id) => modelIDsMatch(id, LM_STUDIO_MODEL.id)));
 
-/** LM Studio answering already: it is picked. Otherwise the steps to set it up show. */
-async function pickLMStudio():Promise<void> {
+/**
+ * Asks LM Studio's server what it serves.
+ * Only call on button press because contacting it makes the browser ask for permission
+ * which nobody should have to see before actually picking LM Studio.
+ */
+async function connect():Promise<void> {
 	connecting.value = true;
 	try {
 		await check();
@@ -49,6 +53,11 @@ async function pickLMStudio():Promise<void> {
 	finally {
 		connecting.value = false;
 	}
+}
+
+/** LM Studio answering already: it is picked. Otherwise the steps to set it up show. */
+async function pickLMStudio():Promise<void> {
+	await connect();
 	if (serving.value) {
 		useLMStudio();
 	}
@@ -95,56 +104,41 @@ onUnmounted(watchPrefs((next) => {
 	decisionModel.value = next.decisionModel;
 }));
 
-/** LM Studio's Skaldic Laya, when it serves one. */
-const laya = ref<string | null>(null);
-onMounted(async () => {
-	const ids = await fetchModelCatalog(LM_STUDIO_ROOT).then((models) => models.map((m) => m.id), () => []);
-	laya.value = ids.find((id) => SKALDIC_LAYA.match.test(id)) ?? null;
-});
-
-const inBrowser = computed(() => inferenceSetup.inference === 'browser');
-/** Skaldic Laya makes the quick decisions now, where NPCs think. */
-const layaOn = computed(() => SKALDIC_LAYA.match.test(decisionModelOf({ inference: inferenceSetup.inference, systemOne: systemOne.value, decisionModel: decisionModel.value })));
+/** Skaldic Laya makes the quick decisions now, in the browser beside whichever main model NPCs think with. */
+const layaOn = computed(() => decisionModelOf({ inference: inferenceSetup.inference, systemOne: systemOne.value, decisionModel: decisionModel.value }) === SKALDIC_LAYA.model);
 const layaDownloading = computed(() => inferenceSetup.laya.progress !== null);
-/** It can be added: in the browser, which downloads it; with LM Studio, once it serves one. */
-const layaReady = computed(() => (inBrowser.value ? !inferenceSetup.unsupported && !layaDownloading.value : !!laya.value));
+const layaReady = computed(() => !inferenceSetup.unsupported && !layaDownloading.value);
 
 const layaNote = computed(() => {
 	const state = inferenceSetup.laya;
 	if (layaOn.value && state.progress === null) {
-		// In the browser it is on the GPU only once loaded; LM Studio loads it on the first pick.
-		return inBrowser.value && !state.loaded ? 'On: ready for every quick decision.' : 'On: it makes every quick decision.';
+		// It is on the GPU only once a scene loads it.
+		return state.loaded ? 'On: it makes every quick decision.' : 'On: ready for every quick decision.';
 	}
-	if (inBrowser.value) {
-		if (state.progress !== null) {
-			return `Downloading ${Math.round(state.progress * 100)}%`;
-		}
-		if (state.error) {
-			return state.error.split(/(?<=.)s/)[0];
-		}
-		if (inferenceSetup.unsupported) {
-			return 'Needs a browser that can use the graphics card.';
-		}
-		return state.cached ? 'Downloaded. Runs beside the main model.' : `Download ${SKALDIC_LAYA.sizeGB} GB. Runs beside the main model.`;
+	if (state.progress !== null) {
+		return `Downloading ${Math.round(state.progress * 100)}%`;
 	}
-	if (layaOn.value) {
-		return 'On: it makes every quick decision.';
+	if (state.error) {
+		return state.error.split(/(?<=\.)\s/)[0];
 	}
-	return laya.value ? 'Ready in LM Studio.' : 'Load it in LM Studio to add it.';
+	if (inferenceSetup.unsupported) {
+		return 'Needs a browser that can use the graphics card.';
+	}
+	return state.cached ? 'Downloaded. Runs in your browser beside either.' : `Download ${SKALDIC_LAYA.sizeGB} GB. Runs in your browser beside either.`;
 });
 
-/** Skaldic Laya on as the System One (downloaded first in the browser), or off back to the main model scoring its own choices. */
+/** Skaldic Laya on as the System One (downloaded first), or off back to the main model scoring its own choices. */
 async function toggleLaya():Promise<void> {
 	if (layaOn.value) {
 		setPrefs({ decisionModel: '' });
 	}
-	else if (inBrowser.value) {
+	else {
 		await useBrowserLaya();
 	}
-	else {
-		setPrefs({ systemOne: 'local', decisionModel: laya.value! });
-	}
 }
+
+/** Why browser models can't run here, or why one failed, whole: the cards show only its first line. */
+const problem = computed(() => inferenceSetup.unsupported || BROWSER_MODELS.map((m) => inferenceSetup.models[m.model].error).find(Boolean) || '');
 
 function status(m:BrowserModel):string {
 	const state = inferenceSetup.models[m.model];
@@ -152,11 +146,11 @@ function status(m:BrowserModel):string {
 		return `${state.cached ? 'Loading' : 'Downloading'} ${Math.round(state.progress * 100)}%`;
 	}
 	if (state.error) {
-		// WebLLM's run long: the first sentence here, all of it in the tooltip.
+		// The first sentence here; all of it under the models.
 		return state.error.split(/(?<=\.)\s/)[0];
 	}
 	if (inferenceSetup.unsupported) {
-		return inferenceSetup.unsupported;
+		return inferenceSetup.unsupported.split('\n')[0];
 	}
 	if (inUse(m.model)) {
 		return state.loaded ? 'In use' : 'Ready';
@@ -247,6 +241,7 @@ function status(m:BrowserModel):string {
 						</svg>
 					</button>
 				</div>
+				<p v-if="problem" class="problem" role="alert">{{ problem }}</p>
 			</div>
 		</div>
 		<div v-else class="steps">
@@ -314,7 +309,7 @@ function status(m:BrowserModel):string {
 				Cancel
 			</button>
 			<button
-				v-if="inBrowser && inferenceSetup.laya.cached && !layaDownloading && !layaOn"
+				v-if="inferenceSetup.laya.cached && !layaDownloading && !layaOn"
 				type="button"
 				class="delete"
 				:class="{ armed: armed === SKALDIC_LAYA.model }"
@@ -578,6 +573,19 @@ a:focus-visible {
 	-webkit-line-clamp: 2;
 	-webkit-box-orient: vertical;
 	overflow: hidden;
+}
+
+/* Why the browser can't run models, and what the player can do about it. */
+.problem {
+	margin: 0;
+	font-size: 14px;
+	line-height: 1.4;
+	white-space: pre-line;
+	color: var(--health);
+}
+
+.problem::first-line {
+	font-weight: 700;
 }
 
 .model.failed .status {

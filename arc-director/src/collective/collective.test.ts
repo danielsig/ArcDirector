@@ -786,6 +786,57 @@ describe('commander pointer and sticky issue', () => {
 		director.dispose();
 	});
 
+	it('does not ask a think again when only the commander\'s own step changed while it thought', async () => {
+		const gates:Array<()=>void> = [];
+		let hangThink:((content:string)=>void) | undefined;
+		let chats = 0;
+		const director = await new ArcDirector<Ctx>()
+			.withArcFormat('text')
+			.addFakeInference(async () => {
+				chats += 1;
+				const content = chats === 1 ? 'go_to(Keep) ; wander()' : await new Promise<string>((resolve) => {
+					hangThink = resolve;
+				});
+				return { content, toolCalls: [] };
+			})
+			.addStockVerbs()
+			.addStockCollectiveVerbs()
+			.withDefaultKit(COLLECTIVE_KIT)
+			.withKernels(kernels())
+			.onVerb(async (call) => {
+				if (call.verb !== 'say') {
+					await new Promise<void>((resolve) => {
+						gates.push(resolve);
+					});
+				}
+				return { ok: true, verb: call.verb };
+			})
+			.onAbortArc(() => {
+				gates.forEach((release) => release());
+			})
+			.withContext((id) => ({ id }))
+			.addCollective({
+				id: 'DawnParty',
+				mind: { skipHeartbeat: true },
+				kit: COLLECTIVE_KIT,
+				commander: 'Dawn',
+				identity: { role: 'Leads.' },
+				characters: [{ id: 'Dawn' }, { id: 'Wisp' }],
+			})
+			.start();
+		const party = director.collective('DawnParty')!;
+		void party.mind.tick(1);
+		await waitFor(() => gates.length === 1);
+		const second = party.mind.tick(2);
+		await waitFor(() => hangThink !== undefined);
+		gates[0]();
+		await waitFor(() => party.mind.toJSON().lastVerb === 'wander');
+		hangThink!('say("Onward!")');
+		assert.equal((await second)?.[0].verb, 'say');
+		assert.equal(chats, 2);
+		director.dispose();
+	});
+
 	for (const [name, abort] of [
 		['abortThink', (h:Hang) => h.party.mind.abortThink()],
 		['director.abortThink', (h:Hang) => h.director.abortThink('DawnParty')],

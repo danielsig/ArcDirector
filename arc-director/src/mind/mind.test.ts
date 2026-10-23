@@ -283,7 +283,7 @@ describe('Agent', () => {
 		assert.deepEqual(seen.map((text) => text.split(':')[0]), ['Last I saw Forager']);
 	});
 
-	it('retries a bad arc on the same thread when the host sets arcRetryCap', async () => {
+	it('retries a bad arc on the same thread, without the bad reply, when the host sets arcRetryCap', async () => {
 		let calls = 0;
 		const scene = paragraph();
 		const provider = new FakeProvider((req) => {
@@ -295,7 +295,7 @@ describe('Agent', () => {
 			assert.equal(last?.role, 'user');
 			assert.match(String(last?.content), /not a valid Arc/);
 			assert.equal(req.messages.some((m) => m.role === 'system'), true);
-			assert.equal(req.messages.some((m) => m.role === 'assistant' && String(m.content).includes('"nope"')), true);
+			assert.equal(req.messages.some((m) => String(m.content).includes('"nope"')), false, 'a model shown its bad reply copies it');
 			assert.equal(req.messages.some((m) => m.role === 'user' && String(m.content).includes('EastGate')), true);
 			return {
 				content: JSON.stringify({ steps: [{ verb: 'go_to', target: 'EastGate' }] }),

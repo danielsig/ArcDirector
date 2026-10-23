@@ -1,18 +1,25 @@
 <script setup lang="ts">
-import { computed } from 'vue';
+import { ref } from 'vue';
 import type { HudModel } from './hudModel';
-import { thinksWith } from '../director/inference';
+import HudDialog from './HudDialog.vue';
+import InferencePicker from './InferencePicker.vue';
+import MindMenu from './MindMenu.vue';
 
-const props = defineProps<{
+defineProps<{
 	hud:HudModel;
 }>();
 
-/** The model NPCs think with and where it runs; empty while ArcDirector is off. */
-const label = computed(() => (props.hud.arcDirectorOn ? thinksWith(props.hud.activeModel) : ''));
+/** Where NPCs think, picked over the game at the init screen's size. */
+const pickerOpen = ref(false);
 </script>
 
 <template>
-	<div v-if="label" class="hud-model-name" aria-label="Model NPCs think with">{{ label }}</div>
+	<div v-if="hud.arcDirectorOn" class="hud-model-name">
+		<MindMenu compact :active="hud.activeModel" @change="pickerOpen = true" />
+	</div>
+	<HudDialog :open="pickerOpen" title="Where should NPCs think?" close-label="Done" @close="pickerOpen = false">
+		<InferencePicker @chosen="pickerOpen = false" />
+	</HudDialog>
 </template>
 
 <style scoped>
@@ -20,15 +27,8 @@ const label = computed(() => (props.hud.arcDirectorOn ? thinksWith(props.hud.act
 .hud-model-name {
 	position: absolute;
 	left: 50%;
-	bottom: 8px;
+	bottom: 4px;
 	transform: translateX(-50%);
-	font-family: var(--font);
-	font-size: 13px;
-	font-weight: 700;
-	white-space: nowrap;
-	color: var(--on-world);
-	text-shadow: var(--on-world-edge);
-	opacity: 0.85;
-	pointer-events: none;
+	pointer-events: auto;
 }
 </style>

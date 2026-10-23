@@ -74,6 +74,12 @@ export type HudModelOption = {
 	decision:boolean;
 	/** How many linked devices list it. LM Studio names none, and routes a request to one of them itself. */
 	devices:number;
+	/** An encoder (BERT and kin): it scores choices, but cannot write. */
+	encoder?:boolean;
+	/** Billions of parameters, and of those that run per token (fewer in a mixture of experts); unknown for a model never listed. */
+	params?:{ total:number; active:number };
+	/** Gigabytes it takes up loaded: its file, as LM Studio lists it. */
+	gb?:number;
 };
 
 /** Bytes as KB or MB; `—` for none. */
@@ -224,8 +230,6 @@ export type HudModel = {
 	benchRows:Record<BenchKind, BenchRow[]>;
 	/** A bench is running; one at a time, as they share the server. */
 	benchRunning:boolean;
-	/** Local server catalog (embeddings omitted). */
-	models:HudModelOption[];
 	/** Packed kind currently drawn on the player (`player` = witch). */
 	playerKind:string;
 	/** Packed kinds for the Character dropdown. */
@@ -327,7 +331,6 @@ export function emptyHud():HudModel {
 		benchPick: { decision: [], arc: [] },
 		benchRows: { decision: [], arc: [] },
 		benchRunning: false,
-		models: [],
 		playerKind: resolvePlayerKind(p.playerKind),
 		playerKinds: characterOptions(),
 		statsOverlay: readURLStats(),
