@@ -3,6 +3,11 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { findRoute, pointGoal, type Vec } from 'arc-director';
 import { World } from '../engine/World';
+import { BoxCollider } from '../engine/components';
+import { glen_0_0 } from '../data/chunks/glen_0_0';
+import { glen_0_1 } from '../data/chunks/glen_0_1';
+import { glen_1_0 } from '../data/chunks/glen_1_0';
+import { glen_1_1 } from '../data/chunks/glen_1_1';
 import { market_1_0 } from '../data/chunks/market_1_0';
 import { RUINS_CHUNKS } from '../data/chunks/ruins';
 import { USE_RANGE } from '../items/pickup';
@@ -41,6 +46,31 @@ test('in the ruins, no route ends inside a wall or a pillar, yet a pillar is rea
 	assert.deepEqual(world.tileCoordAt(off.x, off.z), { tx: 26, tz: 9 });
 	assert.ok('points' in findRoute(ways, walker, start, pointGoal([off.x, off.z]))!);
 	assert.deepEqual(standableNear(world, walker, { x: 25.3, z: 9.6 }), { x: 25.3, z: 9.6 });
+});
+
+test('off the middle of a cell, a route does not leave through what stands in that cell', () => {
+	const world = new World();
+	for (const file of [glen_0_0, glen_0_1, glen_1_0, glen_1_1]) {
+		const chunk = decodeGlyphChunk(file).chunk;
+		spawnChunkEntities(world, chunk);
+		world.addChunk(chunk);
+	}
+	syncDressingColliders(world);
+	world.reindex();
+	const angler = new GameObject('Angler', 'Person');
+	angler.addComponent(BoxCollider, { size: { x: 0.45, y: 1.1, z: 0.45 }, pad: 0.36 });
+	const ways = cellWays(world);
+	// Stood up to the east of the glen's chair, which fills the middle of cell (27.5, 24.5).
+	const stood:Vec = [27.95, 24.5];
+	assert.equal(ways.canPass(angler, stood, [26.5, 24.5]), undefined, 'a step west through the chair');
+	assert.ok(ways.canPass(angler, stood, [28.5, 23.5]), 'no step away from the chair');
+	const route = findRoute(ways, angler, stood, pointGoal([20.5, 24.5]));
+	const first = route && 'points' in route ? route.points[0] : undefined;
+	assert.ok(first, 'no way west around the chair');
+	assert.notDeepEqual(first, [26.5, 24.5]);
+	// What it stands in does not hold it: from the chair's own middle it can still step away.
+	const away = ways.canPass(angler, [27.5, 24.5], [27.5, 23.5]);
+	assert.ok(away && !away.blocked, 'no step off the chair');
 });
 
 test('a stair is a neighbour only along its climb, not from the side', () => {

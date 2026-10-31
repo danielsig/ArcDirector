@@ -27,7 +27,7 @@ Unity-shaped, not Unity. `@arc-director/kindling` owns the canvas, `Renderer`, R
 | Type | Role |
 |------|------|
 | `Game` | Canvas, renderer, `start`/`stop`, `tick` → `simulate`. Generic over `World`. |
-| `World` | Object list, Three.js `Scene`, `add` / `remove` / `destroy`, `sampleTerrain`, `blocker` (what a body would run into standing somewhere, by physics' own tests). |
+| `World` | Object list, Three.js `Scene`, `add` / `remove` / `destroy`, `sampleTerrain`, `blocker` (what a body would run into standing somewhere or on the straight way there, by physics' own tests). |
 | `GameObject` | `id`, `name`, `parent`/`children`, component list. |
 | `Transform` | Always present. Wraps `Object3D`. `position` / `yaw` / `pitch` / `roll` are world. |
 | `Component` | Host logic. `enabled`, `static order`. |

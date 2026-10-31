@@ -381,5 +381,27 @@ describe('World.blocker', () => {
 		assert.equal(world.blocker(walker, 1.5, 4.5, { from: { x: 1.5, z: 2.5 } }), 'terrain', 'too high to step to');
 		assert.equal(world.blocker(null, 1.5, 0.5, { above: 1.5 }), undefined, 'one sees over the log');
 		assert.equal(world.blocker(null, 0.5, 2.5, { above: 1.5 }), post, 'not over the post');
+		// A step counts the whole way, and what it already touches it may leave.
+		assert.equal(world.blocker(walker, 1.5, -0.5, { from: { x: 1.5, z: 1.5 } }), log, 'a step across the log');
+		assert.equal(world.blocker(walker, 1.5, 1.5, { from: { x: 1.5, z: 0.9 } }), undefined, 'a step away from the log');
+		assert.equal(world.blocker(walker, 1.5, 0.9, { from: { x: 1.5, z: 0.8 } }), log, 'a step that stays in the log');
+		assert.equal(world.blocker(walker, 0.5, 2.75, { from: { x: 0.5, z: 1.5 } }), post, 'a step through the post');
+		assert.equal(world.blocker(walker, 0.2, 2.75, { from: { x: 0.2, z: 1.5 } }), undefined, 'a step that only brushes the post');
+		assert.equal(world.blocker(walker, 0.5, 1.5, { from: { x: 0.5, z: 2.4 } }), undefined, 'a step away from the post');
+	});
+
+	it('counts a blocked tile anywhere on the way of a step', () => {
+		class TrenchWorld extends World {
+			public override sampleTerrain(x:number):TerrainSample | undefined {
+				return { height: 0, worldY: 0, blocked: x >= 1 && x < 2, climbable: false };
+			}
+		}
+		resetAllocID();
+		const world = new TrenchWorld();
+		world.tileSize = 1;
+		const walker = new GameObject('walker');
+		walker.addComponent(BoxCollider).size = { x: 0.4, y: 1, z: 0.4 };
+		assert.equal(world.blocker(walker, 2.5, 0.5, { from: { x: 0.5, z: 0.5 } }), 'terrain');
+		assert.equal(world.blocker(walker, 0.5, 2.5, { from: { x: 0.5, z: 0.5 } }), undefined);
 	});
 });

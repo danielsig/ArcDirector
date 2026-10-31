@@ -72,13 +72,13 @@ test('in the glen, dressing blocks walking when solid, and never reaches sight',
 		assert.doesNotMatch(text, new RegExp(`\b${word}\b`, 'i'));
 	}
 
-	/** Whether a route steps from the tile east of a prop onto it. */
+	/** Whether a route steps onto a prop's tile from any side. */
 	const stepsOnto = (prop:string):boolean => {
 		const spot = planProps(chunks).find((s) => s.prop === prop)!;
 		const tile = world.tileCoordAt(spot.x, spot.z);
-		const beside = world.tileCenter(tile.tx + 1, tile.tz);
 		const onto = world.tileCenter(tile.tx, tile.tz);
-		return cellWays(world).canPass(npc, [beside.x, beside.z], [onto.x, onto.z]) !== undefined;
+		const ways = cellWays(world);
+		return ways.getNeighbors([onto.x, onto.z]).some((from) => ways.canPass(npc, from, [onto.x, onto.z]) !== undefined);
 	};
 	assert.equal(stepsOnto('weaponRack'), false, 'a route steps onto the weapon rack');
 	assert.equal(stepsOnto('bucket'), true, 'routes skip the bucket tile');

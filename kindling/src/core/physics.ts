@@ -289,8 +289,49 @@ function resolveAgainstOthers(world:World, go:GameObject, col:BoxCollider):void 
 	});
 }
 
+/** Whether box `a`, moved by `dx`, `dz`, overlaps `b` anywhere on the way. */
+function sweepOverlaps(a:AABB, dx:number, dz:number, b:AABB):boolean {
+	/** When the two overlap along one axis, as shares of the way. */
+	const during = (aMin:number, aMax:number, bMin:number, bMax:number, d:number):[number, number] => {
+		if (d === 0) {
+			return aMin < bMax && aMax > bMin ? [-Infinity, Infinity] : [Infinity, -Infinity];
+		}
+		const [t1, t2] = [(bMin - aMax) / d, (bMax - aMin) / d];
+		return [Math.min(t1, t2), Math.max(t1, t2)];
+	};
+	const [inX, outX] = during(a.minX, a.maxX, b.minX, b.maxX, dx);
+	const [inZ, outZ] = during(a.minZ, a.maxZ, b.minZ, b.maxZ, dz);
+	const enter = Math.max(inX, inZ);
+	const exit = Math.min(outX, outZ);
+	return enter < exit && enter < 1 && exit > 0;
+}
+
+/** Whether a body going from box `start` to box `end` runs into box `b`. What it already overlaps it may leave, not end up in. */
+function runsInto(start:AABB, end:AABB, b:AABB):boolean {
+	return overlaps(end, b) || (!overlaps(start, b) && sweepOverlaps(start, end.minX - start.minX, end.minZ - start.minZ, b));
+}
+
+/** Whether the middle of a body going from `from` to `x`, `z` crosses cylinder `col`. What it already stands in it may leave, not end up in. */
+function crossesCylinder(col:BoxCollider, from:{ x:number; z:number }, x:number, z:number):boolean {
+	if (col.contains(x, z)) {
+		return true;
+	}
+	if (col.contains(from.x, from.z)) {
+		return false;
+	}
+	const axis = col.gameObject.transform.position;
+	const dx = x - from.x;
+	const dz = z - from.z;
+	const length = dx * dx + dz * dz;
+	const t = length > 0 ? Math.min(1, Math.max(0, ((axis.x - from.x) * dx + (axis.z - from.z) * dz) / length)) : 0;
+	return col.contains(from.x + dx * t, from.z + dz * t);
+}
+
 export type BlockerOpts = {
-	/** Where `body` steps from: ground too high or too low to step to from there is `'terrain'`. */
+	/**
+	 * Where `body` steps from: what it would run into anywhere on the straight way from there counts, not only at the
+	 * end, and ground too high or too low to step to from there is `'terrain'`.
+	 */
 	from?:{ x:number; z:number };
 	/** Only colliders standing taller than this, in meters: what one sees or hears past. */
 	above?:number;
@@ -307,25 +348,33 @@ export function blockerAt(world:World, body:GameObject | null, x:number, z:numbe
 	const col = body?.getComponent(BoxCollider);
 	const hx = (col?.size.x ?? 0) * 0.5;
 	const hz = (col?.size.z ?? 0) * 0.5;
-	const a:AABB = { minX: x - hx, maxX: x + hx, minZ: z - hz, maxZ: z + hz };
+	const from = opts.from ?? { x, z };
+	const start:AABB = { minX: from.x - hx, maxX: from.x + hx, minZ: from.z - hz, maxZ: from.z + hz };
+	const end:AABB = { minX: x - hx, maxX: x + hx, minZ: z - hz, maxZ: z + hz };
+	const way:AABB = {
+		minX: Math.min(start.minX, end.minX),
+		maxX: Math.max(start.maxX, end.maxX),
+		minZ: Math.min(start.minZ, end.minZ),
+		maxZ: Math.max(start.maxZ, end.maxZ),
+	};
 	let hit:GameObject | undefined;
-	world.forEachNear(a.minX, a.minZ, a.maxX, a.maxZ, (go) => {
+	world.forEachNear(way.minX, way.minZ, way.maxX, way.maxZ, (go) => {
 		const other = go.getComponent(BoxCollider);
 		if (hit || go === body || !other?.enabled || !other.solid || other.isTrigger || go.getComponent(Rigidbody) || other.size.y <= (opts.above ?? -Infinity)) {
 			return;
 		}
-		if (other.shape === 'cylinder' ? other.contains(x, z) : overlaps(a, actorAABB(go, other))) {
+		if (other.shape === 'cylinder' ? crossesCylinder(other, from, x, z) : runsInto(start, end, actorAABB(go, other))) {
 			hit = go;
 		}
 	});
 	if (hit) {
 		return hit;
 	}
-	const stand = groundAt(world, opts.from?.x ?? x, opts.from?.z ?? z);
-	if (world.tileSize > 0 && tileSolids(world, a, stand).some((b) => overlaps(a, b))) {
+	const stand = groundAt(world, from.x, from.z);
+	if (world.tileSize > 0 && tileSolids(world, way, stand).some((b) => runsInto(start, end, b))) {
 		return 'terrain';
 	}
-	return opts.from && !canOccupy(groundAt(world, opts.from.x, opts.from.z), groundAt(world, x, z)) ? 'terrain' : undefined;
+	return opts.from && !canOccupy(stand, groundAt(world, x, z)) ? 'terrain' : undefined;
 }
 
 /** Same rule as walking: up only on climbable steps of 1, down at most 1, never onto blocked. */
