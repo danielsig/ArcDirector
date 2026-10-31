@@ -20,7 +20,7 @@ export { Light, polygonCookie, spotThrough, type LightKind } from './render/Ligh
 export { MeshRenderer } from './render/MeshRenderer.js';
 export { Renderer, type RendererLook, type RenderStats } from './render/Renderer.js';
 export { ShadowCache, type ShadowMode, type ShadowSettings } from './render/ShadowCache.js';
-export { OutlinePass, overInk } from './render/OutlinePass.js';
+export { OutlinePass, overInk, underInk } from './render/OutlinePass.js';
 export {
 	addEffect,
 	addMeshEffect,

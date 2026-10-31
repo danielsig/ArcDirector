@@ -1,4 +1,4 @@
-import { Time, type GameObject } from '@arc-director/kindling';
+import { Time, underInk, type GameObject } from '@arc-director/kindling';
 import * as THREE from 'three';
 import { Chest, Door, Torch, Bridge } from '../engine/components';
 import { MeshRenderer } from '../engine/MeshRenderer';
@@ -377,6 +377,7 @@ export class WorldPresent {
 			toneMapped: false,
 			side: THREE.DoubleSide,
 		});
+		underInk(mat);
 		const mesh = new THREE.Mesh(new THREE.PlaneGeometry(0.95, 0.95), mat);
 		mesh.rotation.x = -Math.PI / 2;
 		mesh.renderOrder = 2;

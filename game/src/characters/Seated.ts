@@ -1,4 +1,4 @@
-import { BoxCollider, Component, MeshRenderer, closeHand, create, crouch, humanBone, palmOf, placeFoot, reach, restFoot, yawToForward } from '@arc-director/kindling';
+import { BoxCollider, Component, MeshRenderer, closeHand, create, crouch, humanBone, palmOf, placeFoot, reach, restFoot, underInk, yawToForward } from '@arc-director/kindling';
 import * as THREE from 'three';
 import { bindMesh } from '../engine/MeshRenderer';
 import { Order } from '../engine/order';
@@ -160,10 +160,12 @@ export class Seated extends Component {
 	private makeGear(scene:THREE.Object3D):NonNullable<Seated['_gear']> {
 		bindMesh('fishing_rod');
 		const rod = create('fishing_rod') ?? new THREE.Group();
+		// No depth, so the outline pass sees no edge along it.
+		const lineMaterial = new THREE.LineBasicMaterial({ color: 0xe8e2d0, transparent: true, opacity: 0.8, depthWrite: false });
+		underInk(lineMaterial);
 		const line = new THREE.Line(
 			new THREE.BufferGeometry().setAttribute('position', new THREE.Float32BufferAttribute(new Float32Array(12 * 3), 3)),
-			// No depth, so the outline pass sees no edge along it.
-			new THREE.LineBasicMaterial({ color: 0xe8e2d0, transparent: true, opacity: 0.8, depthWrite: false }),
+			lineMaterial,
 		);
 		line.frustumCulled = false;
 		const float = new THREE.Mesh(new THREE.SphereGeometry(0.035, 8, 6), new THREE.MeshBasicMaterial({ color: 0xd8402a }));

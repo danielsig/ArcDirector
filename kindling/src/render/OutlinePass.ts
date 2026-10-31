@@ -14,7 +14,8 @@ const FRAGMENT = `
 #include <packing>
 uniform sampler2D tColor;
 uniform sampler2D tDepth;
-uniform vec2 uStep;
+uniform vec2 uTexel;
+uniform float uWidth;
 uniform vec3 uInk;
 uniform float uNear;
 uniform float uFar;
@@ -34,25 +35,45 @@ float distanceAt(vec2 uv) {
 	return -perspectiveDepthToViewZ(texture2D(tDepth, uv).x, uNear, uFar);
 }
 
+const vec2 SIDES[4] = vec2[4](vec2(-1.0, 0.0), vec2(1.0, 0.0), vec2(0.0, -1.0), vec2(0.0, 1.0));
+
+// How much ink the edge test finds at this pixel, looking reach texels to each side.
+float edgeAt(float reach, float z, float mask) {
+	float sum = 0.0;
+	float nearest = 0.0;
+	vec2 nearestUv = vUv;
+	for (int i = 0; i < 4; i++) {
+		vec2 uv = vUv + SIDES[i] * uTexel * reach;
+		float closeness = 1.0 / distanceAt(uv);
+		sum += closeness;
+		if (closeness > nearest) {
+			nearest = closeness;
+			nearestUv = uv;
+		}
+	}
+	// 1/z is linear across any flat surface on screen, so its Laplacian is zero
+	// on planes and spikes at silhouettes (negative on the near side) and creases.
+	float lap = (sum - 4.0 / z) * z;
+	// An edge belongs to the surface in front. The near side inks itself; the far side takes the
+	// ink of its nearest neighbour, even on a surface that opts out (alpha -1).
+	float owner = lap < 0.0 ? mask : texture2D(tColor, nearestUv).a;
+	return owner > 0.5 ? smoothstep(0.015, 0.05, abs(lap)) : 0.0;
+}
+
 void main() {
 	vec4 color = texture2D(tColor, vUv);
 	float edge = 0.0;
-	if (color.a > 0.5) {
+	float clear = abs(color.a);
+	if (clear > 0.5) {
 		float z = distanceAt(vUv);
-		vec2 dx = vec2(uStep.x, 0.0);
-		vec2 dy = vec2(0.0, uStep.y);
-		// 1/z is linear across any flat surface on screen, so its Laplacian is zero
-		// on planes and spikes at silhouettes (negative on the near side) and creases.
-		float lap = (1.0 / distanceAt(vUv - dx) + 1.0 / distanceAt(vUv + dx)
-			+ 1.0 / distanceAt(vUv - dy) + 1.0 / distanceAt(vUv + dy) - 4.0 / z) * z;
-		// Next to a surface that opts out (alpha 0), ink only the near side.
-		float clean = min(
-			min(texture2D(tColor, vUv - dx).a, texture2D(tColor, vUv + dx).a),
-			min(texture2D(tColor, vUv - dy).a, texture2D(tColor, vUv + dy).a)
-		);
-		float e = clean > 0.5 ? abs(lap) : max(-lap, 0.0);
+		// Depth is point-sampled, so reach comes in whole texels: blend the two around the width.
+		float reach = floor(uWidth);
+		edge = edgeAt(reach, z, color.a);
+		if (uWidth > reach) {
+			edge = mix(edge, edgeAt(reach + 1.0, z, color.a), uWidth - reach);
+		}
 		// Under see-through effects drawn with overInk, as faint as they let it through.
-		edge = smoothstep(0.015, 0.05, e) * (1.0 - smoothstep(uFogNear, uFogFar, z)) * smoothstep(0.5, 1.0, color.a);
+		edge *= (1.0 - smoothstep(uFogNear, uFogFar, z)) * smoothstep(0.5, 1.0, clear);
 	}
 	gl_FragColor = vec4(color.rgb, 1.0);
 	#include <tonemapping_fragment>
@@ -92,8 +113,24 @@ export function overInk(material:THREE.Material):void {
 	material.blendDstAlpha = THREE.OneMinusSrcAlphaFactor;
 }
 
+/**
+ * Draws see-through `material` (a ground decal, a thin line, a pane) under the ink outlines: ink falls
+ * on it as on whatever is behind it. Keeps additive blending additive; anything else blends normally.
+ */
+export function underInk(material:THREE.Material):void {
+	const additive = material.blending === THREE.AdditiveBlending;
+	material.blending = THREE.CustomBlending;
+	material.blendEquation = THREE.AddEquation;
+	material.blendSrc = THREE.SrcAlphaFactor;
+	material.blendDst = additive ? THREE.OneFactor : THREE.OneMinusSrcAlphaFactor;
+	material.blendSrcAlpha = THREE.ZeroFactor;
+	material.blendDstAlpha = THREE.OneFactor;
+}
+
 /** Window height the outline `width` is given at. */
 const REFERENCE_HEIGHT = 1080;
+/** Camera height in meters the outline `width` is given at. */
+const REFERENCE_CAMERA_HEIGHT = 10;
 
 /**
  * Screen-space ink outlines from scene depth: one offscreen render plus one fullscreen pass,
@@ -103,8 +140,12 @@ export class OutlinePass {
 	public enabled = true;
 	/** Ink color (sRGB hex as authored). */
 	public readonly color = new THREE.Color(0x23170f);
-	/** Line width in pixels at a 1080-pixel-tall window; scales with the drawing buffer. */
-	public width = 2.2;
+	/**
+	 * How far ink reaches to each side of an edge, in pixels, with the camera 10 meters up in a
+	 * 1080-pixel-tall window. Scales with the drawing buffer and with one over the square root of
+	 * camera height, never under one pixel. The same for the whole frame.
+	 */
+	public width = 1.2;
 	/** The black-and-white impact frame to draw over this frame (the camera's), or null. */
 	public impact:ImpactFrame | null = null;
 
@@ -128,7 +169,8 @@ export class OutlinePass {
 			uniforms: {
 				tColor: { value: this._target.texture },
 				tDepth: { value: this._target.depthTexture },
-				uStep: { value: new THREE.Vector2() },
+				uTexel: { value: new THREE.Vector2() },
+				uWidth: { value: 1 },
 				uInk: { value: this._ink },
 				uNear: { value: 0.1 },
 				uFar: { value: 100 },
@@ -169,8 +211,9 @@ export class OutlinePass {
 		gl.render(scene, camera);
 		gl.setRenderTarget(null);
 		const u = this._material.uniforms;
-		const px = Math.max(1, this.width * this._target.height / REFERENCE_HEIGHT);
-		(u.uStep!.value as THREE.Vector2).set(px / this._target.width, px / this._target.height);
+		(u.uTexel!.value as THREE.Vector2).set(1 / this._target.width, 1 / this._target.height);
+		const cameraHeight = Math.max(1, camera.matrixWorld.elements[13]!);
+		u.uWidth!.value = Math.max(1, this.width * this._target.height / REFERENCE_HEIGHT * Math.sqrt(REFERENCE_CAMERA_HEIGHT / cameraHeight));
 		this._ink.copy(this.color).convertLinearToSRGB();
 		u.uNear!.value = camera.near;
 		u.uFar!.value = camera.far;

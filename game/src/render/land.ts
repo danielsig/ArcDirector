@@ -1,4 +1,4 @@
-import { hash } from '@arc-director/kindling';
+import { hash, underInk } from '@arc-director/kindling';
 import * as THREE from 'three';
 import type { Chunk, Tile } from '../world/Chunk';
 import { CELL_SIZE, TILE_HEIGHT, WALL_HEIGHT } from '../world/constants';
@@ -630,6 +630,7 @@ const shadeMat = new THREE.MeshBasicMaterial({
 	polygonOffsetUnits: -8,
 });
 shadeMat.userData.shared = true;
+underInk(shadeMat);
 
 /** A sheet of shade at `y` over the grid of `xs` × `zs`, each corner as dark as `depth` meters into the woods. */
 function pushShade(d:Draws, xs:number[], zs:number[], y:number, depth:(x:number, z:number)=>number):void {

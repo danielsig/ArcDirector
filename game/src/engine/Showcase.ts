@@ -52,6 +52,8 @@ export class Showcase extends KindlingGame<World> {
 
 	constructor(sceneID:string, private readonly _fixed?:ShowcaseView) {
 		super(new World());
+		// The menu stays smooth beside another window.
+		this.unfocusedHz = Infinity;
 		this._scene = sceneByID(sceneID);
 		resetTime();
 		resetAllocID();

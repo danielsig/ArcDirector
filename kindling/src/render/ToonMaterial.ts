@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { patchCapsuleShadows } from './capsuleShadows.js';
+import { underInk } from './OutlinePass.js';
 import { patchShader } from './shader.js';
 
 /**
@@ -237,10 +238,10 @@ reflectedLight.indirectDiffuse *= uToonShade;
 }
 `;
 
-/** Clears alpha so the renderer's outline pass skips this surface. Last write in the shader. */
+/** Negative alpha tells the renderer's outline pass this surface opts out. Last write in the shader. */
 const TOON_NO_OUTLINE = `
 #ifdef TOON_NO_OUTLINE
-	gl_FragColor.a = 0.0;
+	gl_FragColor.a = -1.0;
 #endif
 `;
 
@@ -364,8 +365,9 @@ export class ToonMaterial extends THREE.MeshToonMaterial {
 	}
 
 	/**
-	 * Off keeps this surface out of the ink pass, which reads alpha as its mask. Opaque surfaces write
-	 * alpha 0; transparent ones keep their alpha for blending and leave the mask beneath untouched.
+	 * Off draws no ink for this surface's own edges; an inked surface in front of it still draws its
+	 * full line over it. The ink pass reads alpha as its mask: opaque surfaces write alpha -1,
+	 * transparent ones keep their alpha for blending and leave the mask beneath untouched ({@link underInk}).
 	 * Set `transparent` first.
 	 */
 	public set outline(value:boolean) {
@@ -378,12 +380,7 @@ export class ToonMaterial extends THREE.MeshToonMaterial {
 			delete defines.TOON_NO_OUTLINE;
 		}
 		if (!value && this.transparent) {
-			this.blending = THREE.CustomBlending;
-			this.blendEquation = THREE.AddEquation;
-			this.blendSrc = THREE.SrcAlphaFactor;
-			this.blendDst = THREE.OneMinusSrcAlphaFactor;
-			this.blendSrcAlpha = THREE.ZeroFactor;
-			this.blendDstAlpha = THREE.OneFactor;
+			underInk(this);
 		}
 		else if (this.blending === THREE.CustomBlending) {
 			this.blending = THREE.NormalBlending;

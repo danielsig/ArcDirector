@@ -1,4 +1,4 @@
-import { Component } from '@arc-director/kindling';
+import { Component, underInk } from '@arc-director/kindling';
 import * as THREE from 'three';
 import { Vitals } from './components';
 
@@ -51,6 +51,7 @@ export class TeamRing extends Component {
 			polygonOffset: true,
 			polygonOffsetFactor: -2,
 		});
+		underInk(material);
 		const ring = new THREE.Mesh(new THREE.PlaneGeometry(RING_SIZE, RING_SIZE).rotateX(-Math.PI / 2), material);
 		ring.position.y = RING_LIFT;
 		ring.castShadow = false;
