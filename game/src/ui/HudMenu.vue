@@ -101,6 +101,15 @@ function toggleFPSCounter():void {
 	setPrefs({ fpsCounter: !props.hud.fpsCounter });
 }
 
+/** What shows of minds at work, each with its own switch. */
+const MIND_VISUALS = [
+	{ key: 'arcSlates', name: 'Arc code' },
+	{ key: 'orderArcs', name: 'Order arcs' },
+	{ key: 'toolIcons', name: 'Tool icons' },
+	{ key: 'toolPoses', name: 'Tool animations' },
+	{ key: 'toolFx', name: 'Tool effects' },
+] as const;
+
 function pickShadows():void {
 	setPrefs({ shadows: props.hud.shadows });
 }
@@ -335,6 +344,15 @@ function pct(n:number):string {
 										Chunk
 									</button>
 								</div>
+							</div>
+							<h3>Minds at work</h3>
+							<div class="set">
+								<span class="name">Show all</span>
+								<HudSwitch :on="hud.mindVisuals" @toggle="setPrefs({ mindVisuals: !hud.mindVisuals })" />
+							</div>
+							<div v-for="visual in MIND_VISUALS" :key="visual.key" class="set" :class="{ dim: !hud.mindVisuals }">
+								<span class="name">{{ visual.name }}</span>
+								<HudSwitch :on="hud[visual.key]" @toggle="setPrefs({ [visual.key]: !hud[visual.key] })" />
 							</div>
 						</template>
 						<template v-else-if="hud.menuPage === 'audio'">
@@ -679,7 +697,7 @@ input:focus-visible {
 	top: 14px;
 	right: 14px;
 	z-index: 3;
-	/* Fixed, so the buttons left of it (HudKeys, HudBrief, HudQuick) can line up beside it. */
+	/* Fixed, so the buttons left of it (HudGuide, HudQuick) can line up beside it. */
 	width: 112px;
 	height: var(--btn);
 	padding: 0;

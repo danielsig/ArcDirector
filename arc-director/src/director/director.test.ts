@@ -19,7 +19,8 @@ import { ModelDownload } from '../inference/download.js';
 import type { CharacterSpec, StandingChoice, VerbCall } from './types.js';
 import type { SystemOne } from '../inference/systemone.js';
 import { OPEN_WORLD } from '../testing/world.js';
-import type { ArcFormat } from '../mind/types.js';
+import type { ArcFormat, ThinkEvent } from '../mind/types.js';
+import type { Arc } from '../arc/types.js';
 
 type Ctx = { paragraph:string; id:string };
 
@@ -256,6 +257,91 @@ describe('ArcDirector', () => {
 		assert.deepEqual(format.schema.anyOf.slice(0, -1).map((branch) => branch.properties.tool?.const), ['recall', 'observe', 'earshot', 'see_map', 'sniff']);
 		assert.ok(sent[0].length < 20_000);
 		director.dispose();
+	});
+
+	it('tells onThink how a think goes: its start, its tool, its replies, and the arc it ends on', async () => {
+		const events:ThinkEvent[] = [];
+		let asked = 0;
+		const director = await new ArcDirector<Ctx>()
+			.withPriorityQueue({ processInterval: 0, watchInterval: 100, heartbeatStart: 100, heartbeatMin: 100 })
+			.addModel('fake', { maxParallel: 2 })
+			.addFakeInference(() => ({ content: asked++ === 0 ? JSON.stringify({ tool: 'sniff', what: 'air' }) : JSON.stringify({ steps: [{ verb: 'wait' }] }), toolCalls: [] }))
+			.withArcFormat('schema')
+			.addStockVerbs()
+			.addTool('sniff', { description: 'Smell the air.', parameters: { type: 'object', properties: { what: { type: 'string' } } }, handler: () => 'smoke' })
+			.onVerb((call) => ({ ok: true, verb: call.verb }))
+			.onThink((event) => events.push(event))
+			.addSense('scene', { description: 'see', gather: (ctx) => ctx.paragraph })
+			.withContext((id) => ({ paragraph: scene(), id }))
+			.addCharacter({ id: 'Able', mind: { skipHeartbeat: true }, kit: { verbs: ['wait'], tools: ['sniff'] }, identity: { role: 'Waits.' } })
+			.start();
+		director.mindQueue()!.enqueueMajor('Able');
+		director.tick(1, 1);
+		await waitFor(() => events.some((event) => event.kind === 'end'));
+		assert.deepEqual(events.map((event) => event.kind), ['start', 'reply', 'tool', 'reply', 'end']);
+		assert.deepEqual(events[1], { kind: 'reply', who: 'Able', thought: '', arc: '' });
+		assert.deepEqual(events[2], { kind: 'tool', who: 'Able', tool: 'sniff', args: '{"what":"air"}' });
+		assert.deepEqual(events[3], { kind: 'reply', who: 'Able', thought: '', arc: 'wait()' });
+		assert.equal((events[4] as { arc?:Arc }).arc?.[0]?.verb, 'wait');
+		director.dispose();
+	});
+
+	it('logs a bug in an onThink listener, and the think goes on', async () => {
+		const logs:string[] = [];
+		const director = await new ArcDirector<Ctx>()
+			.withPriorityQueue({ processInterval: 0, watchInterval: 100, heartbeatStart: 100, heartbeatMin: 100 })
+			.addModel('fake', { maxParallel: 2 })
+			.addFakeInference(() => ({ content: 'wait()', toolCalls: [] }))
+			.withArcFormat('text')
+			.addStockVerbs()
+			.onVerb((call) => ({ ok: true, verb: call.verb }))
+			.onLog((entry) => logs.push(entry.message))
+			.onThink(() => {
+				throw new Error('listener broke');
+			})
+			.addSense('scene', { description: 'see', gather: (ctx) => ctx.paragraph })
+			.withContext((id) => ({ paragraph: scene(), id }))
+			.addCharacter({ id: 'Able', mind: { skipHeartbeat: true }, kit: { verbs: ['wait'] }, identity: { role: 'Waits.' } })
+			.start();
+		director.mindQueue()!.enqueueMajor('Able');
+		director.tick(1, 1);
+		// The arc it chose, logged after the listener has thrown on every event before it.
+		await waitFor(() => logs.includes('wait()'));
+		assert.ok(logs.some((message) => message.includes('listener broke')));
+		director.dispose();
+	});
+
+	it('tells onThink why a reply would not do, and what ended a think that never got an Arc', async () => {
+		const events:ThinkEvent[] = [];
+		const run = async (retries:number, replies:string[]):Promise<ThinkEvent[]> => {
+			events.length = 0;
+			const director = await new ArcDirector<Ctx>()
+				.withPriorityQueue({ processInterval: 0, watchInterval: 100, heartbeatStart: 100, heartbeatMin: 100 })
+				.addModel('fake', { maxParallel: 2 })
+				.addFakeInference(() => ({ content: replies.shift() ?? 'nope()', toolCalls: [] }))
+				.withArcFormat('text')
+				.withRepair({ retries })
+				.addStockVerbs()
+				.onVerb((call) => ({ ok: true, verb: call.verb }))
+				.onThink((event) => events.push(event))
+				.addSense('scene', { description: 'see', gather: (ctx) => ctx.paragraph })
+				.withContext((id) => ({ paragraph: scene(), id }))
+				.addCharacter({ id: 'Able', mind: { skipHeartbeat: true }, kit: { verbs: ['wait'] }, identity: { role: 'Waits.' } })
+				.start();
+			director.mindQueue()!.enqueueMajor('Able');
+			director.tick(1, 1);
+			await waitFor(() => events.some((event) => event.kind === 'end'));
+			director.dispose();
+			return [...events];
+		};
+		const fixed = await run(1, ['nope()', 'wait()']);
+		const retry = fixed.find((event) => event.kind === 'retry') as { reason:string } | undefined;
+		assert.match(retry?.reason ?? '', /nope/);
+		assert.equal((fixed.at(-1) as { arc?:Arc }).arc?.[0]?.verb, 'wait');
+		const failed = (await run(0, [])).at(-1) as { kind:string; arc?:Arc; error?:string };
+		assert.equal(failed.kind, 'end');
+		assert.equal(failed.arc, undefined);
+		assert.match(failed.error ?? '', /nope/);
 	});
 
 	it('fails a wait whose until never came true, so the steps after it do not run', async () => {

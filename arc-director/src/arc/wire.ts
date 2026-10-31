@@ -2,7 +2,7 @@ import { extractJson, isRecord } from '../json.js';
 import { ArcError, JOINS, SYMBOL_JOIN, isArc, isCountMap, type Arc, type Join, type Step, type StepArg } from './types.js';
 import { argBase, CHOOSE_VERB, GROUP_VERB, TEXT_ARG_KINDS, type VerbRegistry } from './stock-verbs.js';
 import { choicesOf } from './choose.js';
-import { parseArcText } from './parse.js';
+import { formatArcBlocks, parseArcText } from './parse.js';
 import { validateArc } from './validate.js';
 
 /**
@@ -179,6 +179,26 @@ export function parseArc(input:string | unknown, registry:VerbRegistry):Arc {
 		return arcFromJSON(extractJson(trimmed), registry);
 	}
 	return parseArcText(trimmed, registry);
+}
+
+/**
+ * What has been written of an Arc in a reply still coming in, as Arc text in block layout, whatever its wire format;
+ * undefined while nothing reads as one (a reply that calls a tool never does). Nothing is checked: it is for showing,
+ * and its last step may still lack what it needs.
+ */
+export function arcSoFar(reply:string, verbs:VerbRegistry):string | undefined {
+	const text = reply.trim();
+	const json = lastStepsJSON(text) ?? (/^[{[`]/.test(text) ? text : undefined);
+	if (json === undefined) {
+		return text || undefined;
+	}
+	try {
+		const raw = extractJson(json);
+		return isRecord(raw) && 'steps' in raw ? formatArcBlocks(readSteps(raw.steps, verbs), verbs) : undefined;
+	}
+	catch {
+		return undefined;
+	}
 }
 
 /** An `arc` argument as an `Arc`: already parsed, or text to parse. Undefined when it does not parse. */

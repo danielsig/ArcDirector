@@ -2,6 +2,7 @@
 import { computed } from 'vue';
 import { ITEM_DEFS } from '../items/defs';
 import type { HudModel, HudSpeech } from './hudModel';
+import HudToolBadge from './HudToolBadge.vue';
 
 const props = defineProps<{
 	hud:HudModel;
@@ -40,7 +41,10 @@ function bubbleHeight(text:string, width:number):number {
 /** Pixels of the overhead column under the bubble (thinking dots, status, nameplate, padding). */
 function belowBubble(s:HudSpeech):number {
 	let h = 8;
-	if (s.thinking) {
+	if (s.tool) {
+		h += 4 + TOOL_H;
+	}
+	else if (s.thinking) {
 		h += 4 + 34;
 	}
 	if (s.status) {
@@ -56,6 +60,8 @@ function belowBubble(s:HudSpeech):number {
 	return h;
 }
 
+/** Height of a tool's badge, its word included; matches {@link HudToolBadge}. */
+const TOOL_H = 55;
 /** Height of the carried-things row; matches `.carry`. */
 const CARRY_H = 12;
 /** How far the carried-things row drops toward the head when nothing is under it; matches `.carry:last-child`. */
@@ -133,7 +139,8 @@ function fillPct(s:HudSpeech):number {
 					class="bubble spacer"
 					:style="{ translate: shiftOf(s) }"
 				>{{ s.text }}</div>
-				<div v-if="s.thinking" class="thinking" role="img" aria-label="Thinking">
+				<HudToolBadge v-if="s.tool" :tool="s.tool" />
+				<div v-else-if="s.thinking" class="thinking" role="img" aria-label="Thinking">
 					<span class="dot" /><span class="dot" /><span class="dot" />
 				</div>
 				<div v-if="s.status" class="status">{{ s.status }}</div>
@@ -182,7 +189,8 @@ function fillPct(s:HudSpeech):number {
 					class="bubble"
 					:style="{ translate: shiftOf(s) }"
 				>{{ s.text }}</div>
-				<div v-if="s.thinking" class="thinking spacer" aria-hidden="true">
+				<div v-if="s.tool" class="tool spacer" aria-hidden="true" />
+				<div v-else-if="s.thinking" class="thinking spacer" aria-hidden="true">
 					<span class="dot" /><span class="dot" /><span class="dot" />
 				</div>
 				<div v-if="s.status" class="status spacer">{{ s.status }}</div>
@@ -327,6 +335,12 @@ function fillPct(s:HudSpeech):number {
 	height: 6px;
 	left: 33%;
 	top: calc(100% + 10px);
+}
+
+/* Holds a tool badge's place in the column of spoken lines. */
+.tool {
+	height: 55px;
+	flex: none;
 }
 
 .dot {

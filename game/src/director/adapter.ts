@@ -1,5 +1,6 @@
 import { Time, type GameObject } from '@arc-director/kindling';
 import { SpeechQueue } from './speechQueue';
+import { ThinkShow } from './thinkShow';
 import {
 	ArcDirector,
 	BrowserProvider,
@@ -123,6 +124,8 @@ export class GameHost {
 	public readonly doorOpen = new Map<string, boolean>();
 	public readonly chestOpen = new Map<string, boolean>();
 	public readonly labels = new Map<string, { text:string; until:number }>();
+	/** What minds do as they think, on show. */
+	public readonly thinks:ThinkShow;
 	public logSeq = 0;
 	public readonly chat:HudChatLine[];
 	public readonly log:HudAiLogEntry[];
@@ -150,6 +153,7 @@ export class GameHost {
 		this.world = world;
 		this.chat = chat;
 		this.speech = new SpeechQueue(world);
+		this.thinks = new ThinkShow(world, () => this.hooks.goals?.(this));
 		this.log = log;
 		this.scene = opts.scene ?? '';
 		this._playerTags = opts.playerTags ?? [];
@@ -233,6 +237,7 @@ export class GameHost {
 			.onAbortArc(this.abortArc)
 			.onLog((entry) => pushLog(this, entry.name, entry.message, entry))
 			.onStep((call, result) => noteAct(this, call, result))
+			.onThink(this.thinks.handle)
 			// The player's character, for `enactPlayer`. No mind: it never calls the model.
 			.addCharacter({ id: 'Player', tags: this._playerTags });
 	}

@@ -3,7 +3,7 @@ import { describe, it } from 'node:test';
 import { MODEL_TIERS, type ThinkOff } from './models.js';
 import { HttpProvider, loadConfigFits, parseChatTimings, stripTemplateTokens } from './http.js';
 import { ChatSystemOne, JevSystemOne, ModelSystemOne } from './systemone.js';
-import type { ChatRequest } from './provider.js';
+import type { ChatDelta, ChatRequest } from './provider.js';
 import {
 	EMPTY_THINK_PREFILL,
 	DONE_THOUGHT,
@@ -1816,5 +1816,13 @@ describe('HttpProvider thinking budget', () => {
 		assert.equal(res.content, '{"steps":[]}');
 		assert.equal(res.truncated, false);
 		assert.equal(stream.cancelled(), false);
+	});
+
+	it('hands over each piece of a streamed reply as it comes', async () => {
+		const stream = streamOf(['Go ', 'there.'], ['{"steps"', ':[]}']);
+		const pieces:ChatDelta[] = [];
+		const res = await providerFor(stream, 8).chat({ model: 'thinker', messages: [{ role: 'user', content: 'hi' }], onDelta: (piece) => pieces.push(piece) });
+		assert.deepEqual(pieces, [{ reasoning: 'Go ' }, { reasoning: 'there.' }, { content: '{"steps"' }, { content: ':[]}' }]);
+		assert.equal(res.content, '{"steps":[]}');
 	});
 });

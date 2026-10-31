@@ -900,6 +900,7 @@ async function readInferenceResponse(
 	url:string,
 	t0:number,
 	thinkingBudget?:number,
+	onDelta?:ChatRequest['onDelta'],
 ):Promise<Got> {
 	const reader = res.body?.getReader();
 	if (!reader) {
@@ -983,6 +984,7 @@ async function readInferenceResponse(
 		}
 		else if (type === 'response.output_text.delta' && typeof ev.delta === 'string') {
 			assembledText += ev.delta;
+			onDelta?.({ content: ev.delta });
 		}
 		else if (type === 'response.output_text.done' && typeof ev.text === 'string') {
 			assembledText = ev.text;
@@ -993,6 +995,7 @@ async function readInferenceResponse(
 		) {
 			responsesReasoning += ev.delta;
 			thoughtTokens += 1;
+			onDelta?.({ reasoning: ev.delta });
 		}
 		const choices = Array.isArray(ev.choices) ? ev.choices : [];
 		const choice = isRecord(choices[0]) ? choices[0] : {};
@@ -1012,10 +1015,12 @@ async function readInferenceResponse(
 		const delta = isRecord(choice.delta) ? choice.delta : {};
 		if (typeof delta.content === 'string') {
 			assembledContent += delta.content;
+			onDelta?.({ content: delta.content });
 		}
 		if (typeof delta['reasoning_content'] === 'string') {
 			assembledReasoning += delta['reasoning_content'];
 			thoughtTokens += 1;
+			onDelta?.({ reasoning: delta['reasoning_content'] });
 		}
 		if (delta['tool_calls'] !== undefined) {
 			assembledTools = mergeToolCallDeltas(assembledTools, delta['tool_calls']);
@@ -1937,7 +1942,7 @@ export class HttpProvider implements InferenceProvider {
 				throw lastErr;
 			}
 			try {
-				return await readInferenceResponse(res, url, t0, thinkingBudget);
+				return await readInferenceResponse(res, url, t0, thinkingBudget, req.onDelta);
 			}
 			catch (err) {
 				lastErr = err instanceof Error ? err : new Error(String(err));

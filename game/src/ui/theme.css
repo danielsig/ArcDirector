@@ -46,6 +46,75 @@
 	--ease-pop: cubic-bezier(0.3, 1.6, 0.5, 1);
 }
 
+/* A side's colour (`GoalColor`): its goal orbs, its slates, the orders it gives. */
+.hue-gold {
+	--hue: var(--gold);
+	--hue-deep: var(--gold-deep);
+	--hue-light: #fff3c4;
+}
+
+.hue-red {
+	--hue: #f07a5c;
+	--hue-deep: var(--health);
+	--hue-light: #ffd9cc;
+}
+
+.hue-blue {
+	--hue: #6cb8ff;
+	--hue-deep: #2f63c8;
+	--hue-light: #dff0ff;
+}
+
+/* A round parchment button along the top of the screen; each says where it stands. */
+.quick-btn {
+	position: absolute;
+	top: 14px;
+	width: var(--btn);
+	height: var(--btn);
+	padding: 0;
+	pointer-events: auto;
+	z-index: 3;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	color: var(--ink);
+	background: var(--parchment);
+	border: var(--line) solid var(--ink);
+	border-radius: 50%;
+	box-shadow: var(--shadow);
+	cursor: pointer;
+}
+
+.quick-btn svg {
+	width: 26px;
+	height: 26px;
+	display: block;
+}
+
+.quick-btn:focus {
+	outline: none;
+}
+
+.quick-btn:focus-visible {
+	outline: 2px solid var(--ink);
+	outline-offset: 2px;
+}
+
+.quick-btn:hover,
+.quick-btn.on {
+	background: var(--parchment-deep);
+}
+
+.quick-btn.away {
+	visibility: hidden;
+}
+
+/* A shockwave ring spreading from something's middle. */
+@keyframes hud-ring {
+	0% { transform: scale(0.6); opacity: 1; }
+	100% { transform: scale(2.6); opacity: 0; }
+}
+
 /*
  * Scrollbars, everywhere: a gold thumb outlined in ink on a faint ink track, like the menu's sliders. Chrome and
  * Safari draw the ::-webkit-scrollbar parts. Firefox has none of those, so it takes the standard colors; they stay

@@ -1,5 +1,5 @@
 import { formatArc, parseArcText } from '../arc/parse.js';
-import { parseArc } from '../arc/wire.js';
+import { arcSoFar, parseArc } from '../arc/wire.js';
 import { exprArgs } from '../arc/validate.js';
 import { docsFor, replySchema } from '../arc/schema.js';
 import { FOCUS_EDIT_VERBS, VerbRegistry, WATCH_EDIT_VERBS, argBase, registerStockVerbs } from '../arc/stock-verbs.js';
@@ -9,10 +9,10 @@ import { evaluate, unboundCalls } from '../expr/eval.js';
 import { observeExpr } from '../expr/stringify.js';
 import { bagOf, cloneEntity } from '../expr/prev.js';
 import { isVisionModel } from '../inference/models.js';
-import type { ChatContent, ChatContentPart, ChatMessage, ChatResponse, InferenceProvider, JsonSchemaResponseFormat, ToolDef } from '../inference/provider.js';
+import type { ChatContent, ChatContentPart, ChatDelta, ChatMessage, ChatResponse, InferenceProvider, JsonSchemaResponseFormat, ToolDef } from '../inference/provider.js';
 import { extractJson, isRecord, type JsonSchema } from '../json.js';
 import { mergeTags, nameTags, type MemoryRecord } from '../memory/store.js';
-import type { ArcFormat, ConversationTurn, MindEvent, Sense, ToolSpec } from './types.js';
+import type { ArcFormat, ConversationTurn, MindEvent, Sense, ThinkEvent, ToolSpec } from './types.js';
 import { parseMapZoom, stampMap, isMapSnapshot, DEFAULT_YOU_SYMBOL, type MapPrev, type MapSense } from './map.js';
 import {
 	articlesNamedIn,
@@ -98,6 +98,9 @@ export type MindOwner<TCtx = unknown> = ArcRunner<TCtx> & {
 	working?():boolean;
 };
 
+/** A {@link ThinkEvent} before it is told whose think it is. */
+type ThinkEventFor = ThinkEvent extends infer E ? E extends ThinkEvent ? Omit<E, 'who'> : never : never;
+
 /** What the director gives a mind when it is attached. */
 export type MindDeps<TCtx = unknown> = {
 	provider:InferenceProvider;
@@ -108,6 +111,8 @@ export type MindDeps<TCtx = unknown> = {
 	autoEnact?:boolean;
 	/** Each arc the moment a think chooses it, before it runs. */
 	onChoose?:(arc:Arc)=>void;
+	/** Whoever watches this mind think, if anyone does by now: replies are only read as they come for a watcher. */
+	thinkWatch?:()=>((event:ThinkEvent)=>void) | undefined;
 	queue?:MindQueue;
 	/** Heartbeat stretch after an arc. Default: failed or interrupted. */
 	stalled?:(result:ArcResult)=>boolean;
@@ -357,6 +362,9 @@ export class Mind<TCtx = unknown> {
 	public provider!:InferenceProvider;
 	public autoEnact = true;
 	public onChoose:((arc:Arc)=>void) | undefined;
+	private thinkWatch:MindDeps['thinkWatch'];
+	/** Who the think under way began for. */
+	private _thinkingAs = '';
 	public queue:MindQueue | undefined;
 	public stalled?:(result:ArcResult)=>boolean;
 	/** The model it is assigned, by its name on the director; `undefined` thinks with the default. */
@@ -476,6 +484,7 @@ export class Mind<TCtx = unknown> {
 		this.talk = deps.talk;
 		this.autoEnact = deps.autoEnact ?? true;
 		this.onChoose = deps.onChoose;
+		this.thinkWatch = deps.thinkWatch;
 		this.queue = deps.queue;
 		this.stalled = deps.stalled;
 		this.modelID = deps.modelID ?? '';
@@ -840,6 +849,9 @@ export class Mind<TCtx = unknown> {
 	):Promise<Arc | null> {
 		const signal = this.queue?.beginThink(this.id);
 		let arc:Arc | null = null;
+		let error:string | undefined;
+		this._thinkingAs = this.thinkThread();
+		this.showThink({ kind: 'start' });
 		try {
 			if (signal?.aborted) {
 				return null;
@@ -863,10 +875,12 @@ export class Mind<TCtx = unknown> {
 			}
 			this.lastTacticalTimestamp = this._now;
 			this.capturePrevMe();
+			error = err instanceof Error ? err.message : String(err);
 			throw err;
 		}
 		finally {
 			this.queue?.endThink(this.id, signal);
+			this.showThink({ kind: 'end', arc: signal?.aborted ? undefined : arc ?? undefined, error });
 		}
 		if (signal?.aborted) {
 			return null;
@@ -1304,7 +1318,12 @@ export class Mind<TCtx = unknown> {
 				responseFormat: reply,
 				// A repair keeps the whole conversation, so reasoning on top of it runs out of tokens again.
 				enableThinking: repairsLeft < this.arcRetryCap ? false : this.thinking(),
+				onDelta: this.replyWatch(verbs),
 			});
+			// Whole, for a server that does not stream.
+			if (this.thinkWatch?.()) {
+				this.showThink({ kind: 'reply', thought: res.reasoning ?? '', arc: arcSoFar(res.content ?? '', verbs) ?? '' });
+			}
 			// The thinking budget cut the thought short: answer from it, without thinking again.
 			if (res.truncated && !res.content && res.reasoning && repairsLeft > 0) {
 				messages.push({ role: 'assistant', content: res.reasoning });
@@ -1388,6 +1407,7 @@ export class Mind<TCtx = unknown> {
 				if (!warnedRepeat && this.isRepeat(content) && !this.supervising(arc)) {
 					warnedRepeat = true;
 					this._emitStreak += 1;
+					this.showThink({ kind: 'retry', reason: 'the same Arc as last time' });
 					messages.push({ role: 'assistant', content });
 					messages.push({ role: 'user', content: repeatOutputHint(this._emitStreak, format) });
 					continue;
@@ -1400,6 +1420,7 @@ export class Mind<TCtx = unknown> {
 						throw lastErr;
 					}
 					checksLeft -= 1;
+					this.showThink({ kind: 'retry', reason: lastErr.message });
 					messages.push({ role: 'assistant', content });
 					messages.push({ role: 'user', content: blocked ? sayRangeHint(blocked.reason, blocked.nearby, format) : blockedAgainHint(again!, format) });
 					continue;
@@ -1423,6 +1444,30 @@ export class Mind<TCtx = unknown> {
 			repairsLeft -= 1;
 		}
 		throw lastErr ?? new ArcError('failed to obtain Arc');
+	}
+
+	/**
+	 * Tells this mind's watcher, if any, how its think goes, in the name of whoever it began for: a commander may die mid-
+	 * think, and every event of one think must reach the one watching it, its end above all.
+	 */
+	private showThink(event:ThinkEventFor):void {
+		this.thinkWatch?.()?.({ ...event, who: this._thinkingAs } as ThinkEvent);
+	}
+
+	/** Tells this mind's watcher, if any, how the reply to one request is going as its pieces come in. */
+	private replyWatch(verbs:VerbRegistry):((delta:ChatDelta)=>void) | undefined {
+		if (!this.thinkWatch?.()) {
+			return undefined;
+		}
+		let thought = '';
+		let reply = '';
+		let arc = '';
+		return ({ content, reasoning }) => {
+			thought += reasoning ?? '';
+			reply += content ?? '';
+			arc = (content ? arcSoFar(reply, verbs) : undefined) ?? arc;
+			this.showThink({ kind: 'reply', thought, arc });
+		};
 	}
 
 	/** The schema the server must follow under `schema`; otherwise none, and the reply is parsed as written. */
@@ -1464,6 +1509,7 @@ export class Mind<TCtx = unknown> {
 		if (repairsLeft <= 0) {
 			return false;
 		}
+		this.showThink({ kind: 'retry', reason: err.message });
 		// The bad reply itself is left out: a small model shown its own broken reply writes it again, word for word.
 		const called = res.toolCalls.map((c) => c.name);
 		messages.push({ role: 'assistant', content: called.length > 0 ? `(tool call: ${called.join(', ')})` : null });
@@ -1961,7 +2007,11 @@ export class Mind<TCtx = unknown> {
 	private async lookUp(name:string, rawArgs:string, ctx:TCtx | undefined):Promise<string> {
 		const key = `${name} ${rawArgs.replace(/\s+/g, '')}`;
 		const window = name === 'recall' ? LOOKUP_REPEAT : 0;
-		const result = this._thinks - (this._calledOn.get(key) ?? -Infinity) <= window
+		const repeat = this._thinks - (this._calledOn.get(key) ?? -Infinity) <= window;
+		if (!repeat) {
+			this.showThink({ kind: 'tool', tool: name, args: rawArgs });
+		}
+		const result = repeat
 			? { error: 'Duplicate call. You made it this think or lately. Change the query, call another tool, or emit the arc.' }
 			: await this.runTool(name, rawArgs, ctx);
 		this._calledOn.set(key, this._thinks);

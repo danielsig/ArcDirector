@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { parseArcText, formatArc } from './parse.js';
-import { arcFromJSON, arcJSONText, arcToJSON, parseArc } from './wire.js';
+import { parseArcText, formatArc, formatArcBlocks } from './parse.js';
+import { arcFromJSON, arcJSONText, arcSoFar, arcToJSON, parseArc } from './wire.js';
 import { replySchema } from './schema.js';
 import { VerbRegistry, registerStockVerbs } from './stock-verbs.js';
 import { registerStockCollectiveVerbs } from '../collective/verbs.js';
@@ -18,6 +18,30 @@ function crowd():VerbRegistry {
 	catalog.add('cleave', { args: { target: 'id' } });
 	return catalog;
 }
+
+describe('arcSoFar', () => {
+	it('reads Arc JSON cut anywhere without throwing, and grows as it comes', () => {
+		const kit = crowd().view(['issue', 'loop', 'slash', 'cleave']);
+		const whole = '{"steps":[{"verb":"issue","who":"units.filter(\\"Blade\\")","arc":[{"verb":"loop","arc":[{"verb":"slash","target":"Knight"}]}]},{"verb":"issue","who":"allUnits","arc":[{"verb":"loop","arc":[{"verb":"cleave","target":"Knight"}]}]}]}';
+		const seen = new Set<string>();
+		for (let cut = 1; cut <= whole.length; cut += 1) {
+			const text = arcSoFar(whole.slice(0, cut), kit);
+			if (text !== undefined) {
+				seen.add(text);
+			}
+		}
+		assert.equal(arcSoFar(whole, kit), formatArcBlocks(parseArc(whole, kit), kit));
+		assert.ok(seen.size > 3, `read only ${[...seen].join(' | ')}`);
+	});
+
+	it('leaves Arc text as written', () => {
+		assert.equal(arcSoFar('go_to(Lever) && us', verbs()), 'go_to(Lever) && us');
+	});
+
+	it('reads nothing into a reply that calls a tool', () => {
+		assert.equal(arcSoFar('{"tool":"recall","query":"Keep"}', verbs()), undefined);
+	});
+});
 
 describe('Arc JSON', () => {
 	it('writes a step flat: verb first, args beside it, then last', () => {

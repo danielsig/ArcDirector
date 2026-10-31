@@ -1,4 +1,26 @@
+import type { Arc } from '../arc/types.js';
 import type { JsonSchema } from '../json.js';
+
+/**
+ * What a mind is doing as it thinks, for a host to show; none of it reaches a prompt. `who` is the character acting
+ * for the mind, or a collective's own id while it has no commander.
+ */
+export type ThinkEvent =
+	/** A think began. */
+	| { kind:'start'; who:string }
+	/**
+	 * The model's reply so far: its reasoning, and what it has written of an Arc as Arc text in block layout (`''` until
+	 * something reads as one). Restarts each time a think asks the model again, as after a tool.
+	 */
+	| { kind:'reply'; who:string; thought:string; arc:string }
+	/** The think looked something up. */
+	| { kind:'tool'; who:string; tool:string; args:string }
+	/** The model's reply would not do, and it is being asked again: why. */
+	| { kind:'retry'; who:string; reason:string }
+	/** The think ended: with the Arc it chose, with the `error` that ended it, or with neither, cut short by a newer one. */
+	| { kind:'end'; who:string; arc?:Arc; error?:string }
+	/** `who` ordered the characters `to` to run `arc`; `text` is that arc as Arc text. */
+	| { kind:'issue'; who:string; to:string[]; arc:Arc; text:string };
 
 /**
  * How a model writes the Arc it thinks up. `text`: Arc text (`go_to() && wait()`), parsed forgivingly. `json`: Arc

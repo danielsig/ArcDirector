@@ -650,6 +650,7 @@ const director = await new ArcDirector<CharacterCtx>()
 	.withContext((id) => host.ctx(id))
 	.onAbortArc((id) => host.stopCasting(id))
 	.onLog((entry) => hud.push(entry))
+	.onThink((event) => hud.showThink(event))
 	.addCharacter({
 		id: 'Captain',
 		mind: { rank: 1 },
@@ -659,6 +660,8 @@ const director = await new ArcDirector<CharacterCtx>()
 	})
 	.start();
 ```
+
+`onThink` shows what minds do as they think, for a game to put on screen; none of it reaches a prompt. Each `ThinkEvent` names `who`, the character acting for the mind, and is one of: `start`, `reply` (its reasoning and its Arc so far as Arc text, live while the server streams, whatever the wire format), `tool` (a look-up it made), `retry` (why a reply would not do, and the model is being asked again), `end` (with the Arc it chose, or the `error` that ended it, or neither when a newer think cut it short) and `issue` (an order to the characters `to`).
 
 ---
 

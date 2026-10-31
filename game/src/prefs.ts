@@ -56,6 +56,18 @@ const DEFAULT = {
 	shadows: 'auto' as ShadowQuality,
 	/** Frames per second in the top-right corner. */
 	fpsCounter: false,
+	/** Everything below at once; each keeps its own setting while this is off. */
+	mindVisuals: true,
+	/** A slate by a thinking mind's head, writing its Arc as the model does. */
+	arcSlates: true,
+	/** Each order a commander issues flies to its units along an arc. */
+	orderArcs: true,
+	/** An icon over the head of whoever is calling a tool. */
+	toolIcons: true,
+	/** Calling a tool shows in the body: reading a map, a hand to the ear. Never over a move it is making. */
+	toolPoses: true,
+	/** Light round whoever is calling a tool. */
+	toolFx: true,
 	music: MUSIC_ON_VOLUME,
 	sfx: 0.78,
 	/** Characters babble when they speak. */
@@ -94,6 +106,12 @@ const FIELDS:{ [K in keyof Prefs]:(v:unknown, fallback:Prefs[K])=>Prefs[K] } = {
 	detailMaps: bool,
 	shadows: (v, fallback) => SHADOW_QUALITIES.find((q) => q === v) ?? fallback,
 	fpsCounter: bool,
+	mindVisuals: bool,
+	arcSlates: bool,
+	orderArcs: bool,
+	toolIcons: bool,
+	toolPoses: bool,
+	toolFx: bool,
 	music: clamp01,
 	sfx: clamp01,
 	voices: bool,

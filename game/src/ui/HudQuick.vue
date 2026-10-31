@@ -23,6 +23,8 @@ const SOUND_LABEL = {
 	'muted': 'All muted (click to unmute)',
 } as const;
 
+const mindsLabel = computed(() => `Minds at work: ${props.hud.mindVisuals ? 'shown (click to hide)' : 'hidden (click to show)'}`);
+
 /** On, then music muted, then all muted, then on again. */
 function cycleSound():void {
 	if (sound.value === 'on') {
@@ -89,42 +91,38 @@ function cycleSound():void {
 				<path d="M16 9l5 6m0-6l-5 6" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
 			</svg>
 		</button>
+		<button
+			type="button"
+			class="quick-btn minds"
+			:class="{ away: hud.menuOpen }"
+			:aria-label="mindsLabel"
+			:aria-pressed="hud.mindVisuals"
+			:title="mindsLabel"
+			@click.stop="setPrefs({ mindVisuals: !hud.mindVisuals })"
+		>
+			<!-- A head, a spark of thought in it, struck through when hidden. -->
+			<svg viewBox="0 0 24 24" aria-hidden="true">
+				<path fill="currentColor" d="M12.5 2.5a7.5 7.5 0 0 0-7.5 7.5c0 2.2.9 4 2.3 5.3V21.5h8.4V19h1.8a2 2 0 0 0 2-2v-2.6l1.7-.8-1.8-3.5A7.4 7.4 0 0 0 12.5 2.5z" />
+				<path v-if="hud.mindVisuals" fill="var(--parchment)" d="M12 5.2l1.3 3.6 3.6 1.3-3.6 1.3L12 15l-1.3-3.6-3.6-1.3 3.6-1.3z" />
+				<template v-else>
+					<path d="M3.5 3.5l17 17" stroke="var(--parchment)" stroke-width="4.5" stroke-linecap="round" />
+					<path d="M3.5 3.5l17 17" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" />
+				</template>
+			</svg>
+		</button>
 	</div>
 </template>
 
 <style scoped>
 .quick-root {
-	--cream: #f0e6c8;
 	position: absolute;
 	inset: 0;
 	pointer-events: none;
 }
 
-.quick-btn {
-	position: absolute;
-	top: 14px;
-	/* Sound sits left of ?; the back button overrides this. */
-	right: 282px;
-	width: var(--btn);
-	height: var(--btn);
-	padding: 0;
-	pointer-events: auto;
-	z-index: 3;
-	display: flex;
-	align-items: center;
-	justify-content: center;
-	color: var(--ink);
-	background: var(--parchment);
-	border: var(--line) solid var(--ink);
-	border-radius: 50%;
-	box-shadow: var(--shadow);
-	cursor: pointer;
-}
-
 .back {
 	top: 10px;
 	left: 10px;
-	right: auto;
 	width: 40px;
 	height: 40px;
 }
@@ -133,26 +131,17 @@ function cycleSound():void {
 	left: 58px;
 }
 
-.quick-btn svg {
-	width: 26px;
-	height: 26px;
-	display: block;
+/* In a row left of the guide's button (HudGuide), 72px apart. */
+.minds {
+	right: 210px;
 }
 
-.quick-btn:focus {
-	outline: none;
+.sound {
+	right: 282px;
 }
 
-.quick-btn:focus-visible {
-	outline: 2px solid var(--ink);
-	outline-offset: 2px;
-}
-
-.quick-btn:hover {
-	background: var(--cream);
-}
-
-.quick-btn.away {
-	visibility: hidden;
+.minds svg {
+	width: 30px;
+	height: 30px;
 }
 </style>

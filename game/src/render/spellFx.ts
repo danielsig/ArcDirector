@@ -37,7 +37,7 @@ const MISS_WIDE:[number, number] = [0.7, 1.2];
 const MISS_PAST = 2.5;
 
 /** A cast once settled: when (its effect's age, s), how it went, and whether it landed (a hit). */
-type Settled = { at:number; outcome:Outcome; landed:boolean };
+export type Settled = { at:number; outcome:Outcome; landed:boolean };
 
 /** Seconds a cut spell takes to die out where it gathered. */
 const FIZZLE = 0.25;
@@ -304,7 +304,7 @@ function picture(name:Picture):THREE.Texture {
 }
 
 /** A sprite of `name`, tinted `color`, hidden until placed. */
-function glowSprite(name:Picture, color = 0xffffff):THREE.Sprite {
+export function glowSprite(name:Picture, color = 0xffffff):THREE.Sprite {
 	const material = new THREE.SpriteMaterial({ map: picture(name), color, transparent: true, depthWrite: false, toneMapped: false });
 	const sprite = new THREE.Sprite(material);
 	sprite.visible = false;
@@ -312,12 +312,12 @@ function glowSprite(name:Picture, color = 0xffffff):THREE.Sprite {
 }
 
 /** Adds a sprite effect; its material goes with it (the picture is shared). */
-function addSprite(scene:THREE.Object3D, sprite:THREE.Sprite, update:(age:number)=>boolean):void {
+export function addSprite(scene:THREE.Object3D, sprite:THREE.Sprite, update:(age:number)=>boolean):void {
 	addEffect(scene, sprite, update, () => sprite.material.dispose());
 }
 
 /** The middle of a body standing at `stance`, where spells strike it. */
-const middleOf = ({ feet, height }:Stance):THREE.Vector3 => feet.clone().setY(feet.y + height * 0.55);
+export const middleOf = ({ feet, height }:Stance):THREE.Vector3 => feet.clone().setY(feet.y + height * 0.55);
 const easeOut = (x:number):number => 1 - (1 - Math.min(1, Math.max(0, x))) ** 3;
 const between = ([a, b]:[number, number]):number => THREE.MathUtils.lerp(a, b, Math.random());
 const randomDirection = ():THREE.Vector3 => new THREE.Vector3().randomDirection();
@@ -460,7 +460,7 @@ export function lightning(scene:THREE.Object3D, cast:Cast):void {
  * A magic circle, `color`, turning on the ground under `body` while a spell gathers: it opens
  * out, and goes once the spell is `settled` (loosed or cut), or at once if the body is gone.
  */
-function runeCircle(scene:THREE.Object3D, body:()=>Stance | null, settled:(age:number)=>Settled | null, color:number):void {
+export function runeCircle(scene:THREE.Object3D, body:()=>Stance | null, settled:(age:number)=>Settled | null, color:number):void {
 	const uniforms = { uTurn: { value: 0 }, uStarTurn: { value: 0 }, uOpacity: { value: 0 }, uColor: { value: new THREE.Color(color) } };
 	const material = effectMaterial(SHAFT_VERTEX, RUNE_FRAGMENT, uniforms);
 	material.polygonOffset = true;
@@ -666,7 +666,7 @@ export function chargeGlint(scene:THREE.Object3D, tip:Anchor):void {
  * One sparkle twinkling in place round the body whose middle is `middle`, `delay` s from now: a
  * star or a diamond of light that pops up and shrinks away, once or a few times, turning a little.
  */
-function sparkle(scene:THREE.Object3D, middle:THREE.Vector3, delay = 0):void {
+export function sparkle(scene:THREE.Object3D, middle:THREE.Vector3, delay = 0):void {
 	const star = glowSprite(Math.random() < 0.7 ? 'sparkle' : 'diamond');
 	const turn = Math.random() * Math.PI * 2;
 	const at = middle.clone().add(new THREE.Vector3(Math.cos(turn), 0, Math.sin(turn)).multiplyScalar(SPARKLE_SPREAD * Math.sqrt(Math.random())));

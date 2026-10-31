@@ -9,13 +9,13 @@ import HudMessage from './HudMessage.vue';
 import HudModelName from './HudModelName.vue';
 import HudInventory from './HudInventory.vue';
 import HudSpeech from './HudSpeech.vue';
+import HudSlates from './HudSlates.vue';
 import HudChat from './HudChat.vue';
 import HudAiLog from './HudAiLog.vue';
 import HudSay from './HudSay.vue';
 import HudMenu from './HudMenu.vue';
 import HudQuick from './HudQuick.vue';
-import HudBrief from './HudBrief.vue';
-import HudKeys from './HudKeys.vue';
+import HudGuide from './HudGuide.vue';
 import HudToast from './HudToast.vue';
 import HudStats from './HudStats.vue';
 import HudFPS from './HudFPS.vue';
@@ -33,6 +33,7 @@ const emit = defineEmits<{
 <template>
 	<div class="hud-layer">
 		<HudSpeech :hud="hud" />
+		<HudSlates :hud="hud" />
 		<HudHearts v-if="hud.player === 'participant'" :hud="hud" />
 		<HudGoals :hud="hud" />
 		<HudInspect :hud="hud" />
@@ -44,8 +45,7 @@ const emit = defineEmits<{
 		<HudAiLog :hud="hud" />
 		<HudSay :hud="hud" />
 		<HudMinimap :hud="hud" />
-		<HudKeys :hud="hud" :sceneID="sceneID" />
-		<HudBrief :hud="hud" :sceneID="sceneID" />
+		<HudGuide :hud="hud" :sceneID="sceneID" />
 		<HudQuick :hud="hud" @scenes="emit('scenes')" />
 		<HudMenu :hud="hud" @scenes="emit('scenes')" />
 		<HudToast :hud="hud" />

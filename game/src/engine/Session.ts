@@ -151,7 +151,7 @@ export class Session extends Component {
 			this.patchSayCatalog();
 			world.sayOpen = true;
 		}
-		else if (!this.modalOpen() && (world.input.pressed('Enter') || world.input.pressed('NumpadEnter'))) {
+		else if (!this.hud.guideOpen && (world.input.pressed('Enter') || world.input.pressed('NumpadEnter'))) {
 			this.hud.sayOpen = true;
 			world.sayOpen = true;
 			this.patchSayCatalog();
@@ -162,7 +162,7 @@ export class Session extends Component {
 		else {
 			world.sayOpen = false;
 		}
-		if (this.modalOpen()) {
+		if (this.hud.guideOpen) {
 			world.sayOpen = true;
 			if (world.input.pointerLocked) {
 				this.dropPointerLock();
@@ -409,6 +409,12 @@ export class Session extends Component {
 		hud.detailMaps = next.detailMaps;
 		hud.shadows = next.shadows;
 		hud.fpsCounter = next.fpsCounter;
+		hud.mindVisuals = next.mindVisuals;
+		hud.arcSlates = next.arcSlates;
+		hud.orderArcs = next.orderArcs;
+		hud.toolIcons = next.toolIcons;
+		hud.toolPoses = next.toolPoses;
+		hud.toolFx = next.toolFx;
 		hud.musicVolume = next.music;
 		hud.sfxVolume = next.sfx;
 		hud.voices = next.voices;
@@ -468,19 +474,14 @@ export class Session extends Component {
 		this.hud.sayOffers = cat.offers;
 	}
 
-	private modalOpen():boolean {
-		return this.hud.briefOpen || this.hud.keysOpen;
-	}
-
 	private hudKeys():void {
 		const world = this.gameObject.world;
 		if (!world) {
 			return;
 		}
-		if (this.modalOpen()) {
+		if (this.hud.guideOpen) {
 			if (world.input.pressed('Escape')) {
-				this.hud.briefOpen = false;
-				this.hud.keysOpen = false;
+				this.hud.guideOpen = false;
 			}
 			return;
 		}
@@ -521,7 +522,7 @@ export class Session extends Component {
 	}
 
 	private readonly _onClick = ():void => {
-		if (this.hud.sayOpen || this.hud.menuOpen || this.modalOpen()) {
+		if (this.hud.sayOpen || this.hud.menuOpen || this.hud.guideOpen) {
 			return;
 		}
 		this.gameObject.world?.findByID('Player')?.getComponent(PlayerPilot)?.interrupt();

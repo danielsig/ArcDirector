@@ -369,6 +369,60 @@ export const SFX = {
 			{ kind: 'crackle', dur: 0.25, rate: 60, cutoff: 2000, gain: 0.4 },
 		],
 	},
+	/** A stylus scratching on a slate: one short tick, a little different each time. */
+	arcTick: {
+		gain: 0.28,
+		vary: 0.3,
+		layers: [
+			{ kind: 'noise', dur: 0.014, cutoff: 5200, q: 2, filter: 'bandpass', gain: 0.8 },
+			{ kind: 'noise', dur: 0.008, cutoff: 8000, filter: 'highpass', gain: 0.35 },
+		],
+	},
+	/** An Arc written and chosen: a rising note that settles on a chord. */
+	arcDone: {
+		gain: 0.55,
+		filters: [{ kind: 'reverb', mix: 0.3, decay: 0.35, size: 0.6 }],
+		layers: [392, 587.3, 784].map((hz, i) => ({ kind: 'fm' as const, dur: 0.45, when: i * 0.05, freq: hz, gain: 0.45 - i * 0.08 })),
+	},
+	/** A reply turned down, or a think failed: a dull knock under two notes falling out of tune. */
+	arcWrong: {
+		gain: 0.5,
+		layers: [
+			{ kind: 'thump', dur: 0.1, freq: 120, gain: 0.5 },
+			{ kind: 'fm', dur: 0.16, freq: 311, gain: 0.4 },
+			{ kind: 'fm', dur: 0.24, when: 0.1, freq: 233, gain: 0.45 },
+			{ kind: 'noise', dur: 0.14, when: 0.02, cutoff: 900, filter: 'bandpass', q: 1.2, gain: 0.2 },
+		],
+	},
+	/** An order leaving: a rush of air curving up and away. */
+	arcLaunch: {
+		gain: 0.7,
+		vary: 0.15,
+		layers: [
+			{ kind: 'noise', dur: 0.45, cutoff: 700, cutoffTo: 3600, filter: 'bandpass', q: 2.2, attack: 0.12, release: 0.3, gain: 0.8 },
+			{ kind: 'crackle', dur: 0.3, rate: 90, cutoff: 5000, gain: 0.18 },
+		],
+	},
+	/** An order landing on a unit: a knock and a bright ping. */
+	arcLand: {
+		gain: 0.5,
+		vary: 0.15,
+		filters: [{ kind: 'reverb', mix: 0.25, decay: 0.3, size: 0.5 }],
+		layers: [
+			{ kind: 'thump', dur: 0.08, freq: 170, gain: 0.5 },
+			{ kind: 'fm', dur: 0.3, freq: 880, gain: 0.45 },
+		],
+	},
+	/** A mind reaching for a tool: paper shaken out, and a soft two-note chime. */
+	toolUse: {
+		gain: 0.55,
+		filters: [{ kind: 'reverb', mix: 0.3, decay: 0.4, size: 0.6 }],
+		layers: [
+			{ kind: 'noise', dur: 0.16, cutoff: 3200, cutoffTo: 1400, filter: 'bandpass', q: 0.8, attack: 0.02, gain: 0.4 },
+			{ kind: 'fm', dur: 0.35, when: 0.04, freq: 659.3, gain: 0.32 },
+			{ kind: 'fm', dur: 0.4, when: 0.13, freq: 987.8, gain: 0.26 },
+		],
+	},
 	/**
 	 * Voices (`hurt`, `deathCry`) are made for a 360 Hz speaker; `cueVoice` scales them to each one's own.
 	 * Struck: a short, high, ragged yelp. The voice cracks up high and falls; most of it is air

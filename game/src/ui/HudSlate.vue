@@ -1,0 +1,628 @@
+<script setup lang="ts">
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
+import { SLATE_HEIGHT, SLATE_WIDTH, type HudSlate } from './hudModel';
+
+const props = defineProps<{
+	slate:HudSlate;
+}>();
+
+/** The runes that flicker at the pen's tip before each letter settles: the goal orbs' own (HudGoals) and their kin. */
+const RUNES = 'ᚠᚢᚦᚨᚱᚲᚷᚹᚺᚾᛁᛃᛇᛈᛉᛊᛏᛒᛖᛗᛚᛜᛞᛟ';
+/** How many letters behind the pen are still runes, and how many times a second they change. */
+const TIP = 6;
+const FLICKERS = 18;
+/** Letters a second the pen writes at least, and how quickly it catches up with the model (of what is still unwritten, per second). */
+const PEN_SPEED = 45;
+const PEN_CATCH_UP = 7;
+/** How far each level of an Arc's indent goes, in letters. */
+const INDENT = 2;
+
+/** The needles of light round a chosen Arc, and the rough shape of a slate they are laid out on (px): only the proportions count. */
+const RAY_COUNT = 34;
+const RAY_BOX = [330, 150] as const;
+/** How much a needle leans away from the middle rather than straight out of its edge, so the corners fan. */
+const RAY_FAN = 0.65;
+/** A needle's length and width at its base (px), and how late it starts (ms). */
+const RAY_LENGTH = [12, 46] as const;
+const RAY_WIDTH = [3, 7] as const;
+const RAY_LATE = 170;
+/** How far a needle must reach (0 to 1 of the difference in lengths) for a star to twinkle at its tip. */
+const RAY_STAR = 0.55;
+
+/** Evenly round the edge, each one's size and timing scattered by the golden ratio, so most are short and a few reach far. */
+const RAYS = Array.from({ length: RAY_COUNT }, (_, i) => {
+	const [w, h] = RAY_BOX;
+	const around = (i + 0.5) / RAY_COUNT * 2 * (w + h);
+	const onTop = around < w;
+	const onRight = !onTop && around < w + h;
+	const onBottom = !onTop && !onRight && around < 2 * w + h;
+	const x = onTop ? around : onRight ? w : onBottom ? 2 * w + h - around : 0;
+	const y = onTop ? 0 : onRight ? around - w : onBottom ? h : 2 * (w + h) - around;
+	const out = onTop ? [0, -1] : onRight ? [1, 0] : onBottom ? [0, 1] : [-1, 0];
+	const fromMiddle = [(x - w / 2) / (w / 2), (y - h / 2) / (h / 2)];
+	const angle = Math.atan2(out[0]! + fromMiddle[0]! * RAY_FAN, -(out[1]! + fromMiddle[1]! * RAY_FAN));
+	const scatter = (i * 0.618034) % 1;
+	const reach = scatter * scatter;
+	return {
+		left: `${(x / w) * 100}%`,
+		top: `${(y / h) * 100}%`,
+		'--turn': `${angle}rad`,
+		'--long': `${RAY_LENGTH[0] + reach * (RAY_LENGTH[1] - RAY_LENGTH[0])}px`,
+		'--wide': `${RAY_WIDTH[0] + reach * (RAY_WIDTH[1] - RAY_WIDTH[0])}px`,
+		animationDelay: `${((i * 0.381966) % 1) * RAY_LATE}ms`,
+		star: reach > RAY_STAR,
+	};
+});
+
+/** Letters of the Arc shown so far: the model's words come in bursts, and the pen evens them out. */
+const shown = ref(0);
+const flicker = ref(0);
+const still = matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+let frame = 0;
+let last = performance.now();
+let wrote = '';
+
+function step(now:number):void {
+	const dt = (now - last) / 1000;
+	last = now;
+	const text = props.slate.arc;
+	if (text !== wrote) {
+		// The pen goes back only as far as the words changed: a call that turns out to hold an arc is laid out anew from
+		// there, and a new request changes them all.
+		let same = 0;
+		while (same < text.length && text[same] === wrote[same]) {
+			same += 1;
+		}
+		shown.value = Math.min(shown.value, same + TIP);
+		wrote = text;
+	}
+	if (shown.value < text.length) {
+		const left = text.length - shown.value;
+		shown.value = still ? text.length : Math.min(text.length, shown.value + Math.max(PEN_SPEED, left * PEN_CATCH_UP) * dt);
+		flicker.value = Math.floor(now / 1000 * FLICKERS);
+	}
+	pin();
+	frame = requestAnimationFrame(step);
+}
+
+onMounted(() => {
+	frame = requestAnimationFrame(step);
+});
+
+onBeforeUnmount(() => {
+	cancelAnimationFrame(frame);
+});
+
+type Piece = { text:string; kind:'plain' | 'verb' | 'mark' | 'said' | 'rune' };
+
+/** Where a long line of Arc may wrap besides its spaces: after these, each with a space too thin to see. */
+const THIN_SPACE = String.fromCodePoint(0x200b);
+const breakable = (text:string):string => text.replace(/[.(,]/g, (mark) => mark + THIN_SPACE);
+
+/** Arc text coloured by what each part of it is: the verbs, the quoted words, and the marks that join steps. */
+function coloured(text:string):Piece[] {
+	const out:Piece[] = [];
+	const part = /([A-Za-z_]\w*)(?=\()|"[^"]*"?|&&|\|\||;/g;
+	let from = 0;
+	for (let m = part.exec(text); m; m = part.exec(text)) {
+		if (m.index > from) {
+			out.push({ text: breakable(text.slice(from, m.index)), kind: 'plain' });
+		}
+		out.push({ text: m[0], kind: m[1] ? 'verb' : m[0].startsWith('"') ? 'said' : 'mark' });
+		from = m.index + m[0].length;
+	}
+	if (from < text.length) {
+		out.push({ text: breakable(text.slice(from)), kind: 'plain' });
+	}
+	return out;
+}
+
+/** The letter a rune at `i` is standing in for shows when the pen has passed: until then, whichever rune it is on this flicker. */
+function rune(i:number):string {
+	return RUNES[(i * 7 + flicker.value * 11) % RUNES.length]!;
+}
+
+/** The Arc so far, line by line, each line's indent apart so that it wraps at that same indent. */
+const lines = computed(() => {
+	const text = props.slate.arc;
+	const end = Math.floor(shown.value);
+	const writing = props.slate.state === 'writing' || end < text.length;
+	const settled = writing && !still ? Math.max(0, end - TIP) : end;
+	let at = 0;
+	return text.slice(0, end).split('\n').map((line) => {
+		const indent = line.length - line.trimStart().length;
+		const from = at + indent;
+		const to = at + line.length;
+		const pieces = coloured(text.slice(from, Math.min(to, Math.max(from, settled))));
+		for (let i = Math.max(from, settled); i < to; i += 1) {
+			pieces.push(/\s/.test(text[i]!) ? { text: text[i]!, kind: 'plain' } : { text: rune(i), kind: 'rune' });
+		}
+		at = to + 1;
+		return { indent, pieces, opens: line.trimEnd().endsWith('(') };
+	});
+});
+
+/** The most opening lines kept pinned at the top of a slate: its nearest, if it is nested deeper. */
+const MAX_PINNED = 3;
+/** How tall a pinned line stands, px; matches `.pinned .line`. */
+const PINNED_LINE = 17;
+const pageEl = ref<HTMLElement | null>(null);
+const arcEl = ref<HTMLElement | null>(null);
+const pinnedEl = ref<HTMLElement | null>(null);
+/** Which lines are pinned, as in a code editor: those that opened the block the top of the page is now inside. */
+const pinned = ref<number[]>([]);
+let measured = '';
+
+/** A pinned line says only the call it opens: what comes before it in the chain has no block to follow. */
+function opening(pieces:Piece[]):Piece[] {
+	let depth = 0;
+	let from = 0;
+	pieces.forEach((piece, i) => {
+		// A `||` inside brackets is part of an expression, not of the chain.
+		if (piece.kind === 'mark' && depth <= 0) {
+			from = i + 1;
+		}
+		depth += piece.text.split('(').length - piece.text.split(')').length;
+	});
+	return pieces.slice(from).filter((piece) => piece.text.trim());
+}
+
+/** Finds them again whenever the page has moved. Pinning covers more of the page, which can change what is on top, so it looks again. */
+function pin():void {
+	const page = pageEl.value;
+	const arc = arcEl.value;
+	// They stand above the page, which has moved down by their height.
+	const shift = pinnedEl.value?.offsetHeight ?? 0;
+	const key = `${arc?.offsetHeight}/${page?.clientHeight}/${shift}/${lines.value.length}`;
+	if (key === measured) {
+		return;
+	}
+	measured = key;
+	if (!arc) {
+		pinned.value = [];
+		return;
+	}
+	const rows = [...arc.children] as HTMLElement[];
+	const list = lines.value;
+	let found:number[] = [];
+	let cover = 0;
+	for (let pass = 0; pass < 3; pass += 1) {
+		const top = rows.findIndex((row) => row.offsetTop + shift + row.offsetHeight > cover);
+		const openers:number[] = [];
+		let indent = list[top]?.indent ?? 0;
+		for (let i = top - 1; i >= 0; i -= 1) {
+			if (list[i]?.opens && list[i]!.indent < indent) {
+				openers.unshift(i);
+				indent = list[i]!.indent;
+			}
+		}
+		found = openers.slice(-MAX_PINNED);
+		// Only ever covering more: uncovering again could bring back the block just left, and it would never settle.
+		const height = found.length * PINNED_LINE;
+		if (height <= cover) {
+			break;
+		}
+		cover = height;
+	}
+	if (found.join() !== pinned.value.join()) {
+		pinned.value = found;
+	}
+}
+
+/** The last of the reasoning, faint, above the Arc: a few lines' worth, whole words. */
+const thought = computed(() => {
+	const text = props.slate.thought.replace(/\s+/g, ' ').trim();
+	return text.length > 170 ? `…${text.slice(text.indexOf(' ', text.length - 170) + 1)}` : text;
+});
+
+const time = computed(() => `${Math.round(props.slate.ms).toLocaleString('en-US')} ms`);
+</script>
+
+<template>
+	<aside
+		v-show="slate.visible"
+		class="hud-slate"
+		:class="[`hue-${slate.color}`, slate.state, { leaving: slate.leaving, wrong: slate.wrong }]"
+		:style="{ width: `${SLATE_WIDTH}px` }"
+		:aria-label="`${slate.name} writes an Arc`"
+	>
+		<template v-if="slate.state === 'done'">
+			<span class="halo" />
+			<span class="rays">
+				<template v-for="({ star, ...ray }, i) in RAYS" :key="i">
+					<span class="ray" :style="ray" />
+					<span v-if="star" class="star" :style="ray" />
+				</template>
+			</span>
+			<span class="pulse" />
+			<span class="pulse late" />
+		</template>
+		<div class="glass" :style="{ maxHeight: `${SLATE_HEIGHT}px` }">
+			<header>
+				<span class="orb" />
+				<strong>{{ slate.name }}</strong>
+				<span class="time">{{ time }}</span>
+			</header>
+			<p v-if="slate.error" class="error">{{ slate.error }}</p>
+			<div v-if="pinned.length" ref="pinnedEl" class="pinned">
+				<div
+					v-for="i in pinned"
+					:key="i"
+					class="line"
+					:style="{ paddingLeft: `${(lines[i]?.indent ?? 0) * INDENT}ch` }"
+				>
+					<span
+						v-for="(piece, p) in opening(lines[i]?.pieces ?? [])"
+						:key="p"
+						:class="piece.kind"
+					>{{ piece.text }}</span>
+				</div>
+			</div>
+			<div ref="pageEl" class="page">
+				<p v-if="thought" class="thought">{{ thought }}</p>
+				<div v-if="slate.arc || slate.state === 'writing'" ref="arcEl" class="arc">
+					<div
+						v-for="(line, i) in lines"
+						:key="i"
+						class="line"
+						:style="{ paddingLeft: `${line.indent * INDENT}ch` }"
+					>
+						<span
+							v-for="(piece, p) in line.pieces"
+							:key="p"
+							:class="piece.kind"
+						>{{ piece.text }}</span>
+						<span v-if="slate.state === 'writing' && i === lines.length - 1" class="pen" />
+					</div>
+				</div>
+			</div>
+			<span v-if="slate.state === 'done'" class="glint" />
+		</div>
+	</aside>
+</template>
+
+<style scoped>
+/* Off screen until `HudSlates` places it. Its spikes and pulses stand behind the glass, which comes after them. */
+.hud-slate {
+	position: absolute;
+	left: 0;
+	top: 0;
+	translate: -9999px 0;
+	transition: opacity 280ms;
+}
+
+.hud-slate.leaving {
+	opacity: 0;
+}
+
+/*
+ * Dark smoked glass, the goal orbs' unlit smoke: a heavy ink line round it, a band of the side's metal inside that, a
+ * hard diagonal facet like the hearts', and a short shadow, standing on the world by the head of whoever is writing.
+ */
+.glass {
+	position: relative;
+	overflow: hidden;
+	display: flex;
+	flex-direction: column;
+	padding: 6px 10px 8px;
+	color: #efe6d2;
+	background: radial-gradient(ellipse at 30% 20%, #33253d, #1a1220 70%);
+	border: var(--line) solid var(--ink);
+	border-radius: var(--radius-small);
+	box-shadow: inset 0 0 0 1.5px var(--hue-deep), var(--shadow);
+	font: 700 12.5px/1.35 var(--font-mono);
+	animation: open var(--slow) var(--ease-pop);
+	transition: box-shadow 300ms;
+}
+
+/* The light on the glass lies over everything behind it, the pinned lines too. */
+.glass::after {
+	content: '';
+	position: absolute;
+	inset: 0;
+	background: linear-gradient(112deg, rgba(255, 255, 255, 0.07) 0 34%, transparent 34%);
+	pointer-events: none;
+}
+
+.done .glass {
+	box-shadow: inset 0 0 0 1.5px var(--hue), 0 0 14px var(--hue), var(--shadow);
+	animation: chosen 500ms var(--ease-pop);
+}
+
+/* Cut short by a newer think: nothing went wrong, it just goes. */
+.dropped .glass {
+	opacity: 0.55;
+	filter: saturate(0.3);
+}
+
+/* A reply turned down: it shakes from side to side, settling like a spring, and flushes red; a failed think stays red. */
+.wrong {
+	animation: shake 600ms linear;
+}
+
+.wrong .glass,
+.failed .glass {
+	background: radial-gradient(ellipse at 30% 20%, #5a2024, #2a0f14 70%);
+	box-shadow: inset 0 0 0 1.5px var(--health), 0 0 14px var(--health), var(--shadow);
+}
+
+.wrong .orb,
+.failed .orb {
+	background: var(--health);
+	box-shadow: 0 0 6px var(--health);
+	animation: none;
+}
+
+.error {
+	flex: none;
+	margin: 0 0 3px;
+	color: #ff9d8c;
+	font: 700 11px/1.3 var(--font);
+	overflow-wrap: anywhere;
+}
+
+/* An Arc chosen: a sharp white reflection racing across the glass, as off a tilted blade: one broad bar and one thin. */
+.glint {
+	position: absolute;
+	inset: 0;
+	background: linear-gradient(108deg, transparent 40%, #fff 40% 49%, transparent 49% 52%, #fff 52% 54%, transparent 54%);
+	translate: -100% 0;
+	opacity: 0.5;
+	pointer-events: none;
+	animation: glint 420ms cubic-bezier(0.5, 0, 0.3, 1) 80ms forwards;
+}
+
+/* And a soft bloom round the glass, that the needles of light seem to come out of. */
+.halo {
+	position: absolute;
+	inset: 0;
+	border-radius: var(--radius-small);
+	box-shadow: 0 0 26px 7px var(--hue);
+	opacity: 0;
+	animation: halo 950ms ease-out forwards;
+}
+
+/* The needles: each stands on the edge, under the glass, its tip thrown outward. */
+.rays {
+	position: absolute;
+	inset: 0;
+	/* A thin ink edge, so they hold on bright ground as well as dark; then their glow. */
+	filter: drop-shadow(0 0 0.6px rgba(90, 58, 32, 0.8)) drop-shadow(0 0 3px var(--hue));
+}
+
+/* At the tips of the longest: a four-pointed star that twinkles once as its needle arrives. */
+.star {
+	position: absolute;
+	width: 11px;
+	height: 11px;
+	translate: -50% -50%;
+	transform: rotate(var(--turn)) translateY(calc(-1.1 * var(--long))) scale(0);
+	clip-path: polygon(50% 0, 60% 40%, 100% 50%, 60% 60%, 50% 100%, 40% 60%, 0 50%, 40% 40%);
+	background: #fff;
+	animation: star 760ms ease-out forwards;
+}
+
+.ray {
+	position: absolute;
+	width: var(--wide);
+	height: var(--long);
+	translate: -50% -100%;
+	transform-origin: 50% 100%;
+	transform: rotate(var(--turn)) scaleY(0);
+	clip-path: polygon(50% 0, 100% 100%, 0 100%);
+	background: linear-gradient(to top, #fff 8%, var(--hue-light) 34%, var(--hue) 68%, transparent);
+	opacity: 0;
+	animation: ray 880ms cubic-bezier(0.16, 0.9, 0.3, 1) forwards;
+}
+
+/* And rectangles of light leaving its edges, each only a little way. */
+.pulse {
+	position: absolute;
+	inset: 0;
+	border: 3px solid var(--hue);
+	border-radius: var(--radius-small);
+	box-shadow: 0 0 10px var(--hue), inset 0 0 8px var(--hue);
+	opacity: 0;
+	animation: pulse 600ms var(--ease-out) forwards;
+}
+
+.pulse.late {
+	border-color: #fffbe8;
+	animation-delay: 170ms;
+}
+
+header {
+	flex: none;
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	margin-bottom: 3px;
+	font: 700 13px/1.2 var(--font);
+}
+
+strong {
+	color: var(--hue-light);
+}
+
+.time {
+	margin-left: auto;
+	color: var(--hue);
+	font: 700 11px/1 var(--font-mono);
+}
+
+/* The little orb on the header: its glass turning with mist while the mind writes, lit once it has. */
+.orb {
+	flex: none;
+	width: 11px;
+	height: 11px;
+	border-radius: 50%;
+	border: 1.5px solid var(--ink);
+	background: conic-gradient(var(--hue), #3a2a44 40%, var(--hue-deep) 70%, var(--hue));
+	box-shadow: 0 0 0 1px var(--hue-deep);
+	animation: turn 1.4s linear infinite;
+}
+
+.done .orb {
+	background: radial-gradient(circle at 36% 32%, #fffbe8, var(--hue) 45%, var(--hue-deep));
+	box-shadow: 0 0 6px var(--hue);
+	animation: none;
+}
+
+/* The newest lines stay in sight; older ones scroll off the top, as on a terminal. */
+.page {
+	position: relative;
+	display: flex;
+	flex-direction: column;
+	justify-content: flex-end;
+	min-height: 0;
+	overflow: hidden;
+}
+
+/* The lines that opened the block on top, on the glass itself over the page, which clips at a hard rule below them. */
+.pinned {
+	flex: none;
+	border-bottom: 1.5px solid var(--hue-deep);
+}
+
+.pinned .line {
+	height: 17px;
+	min-height: 0;
+	line-height: 17px;
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+
+.thought {
+	flex: none;
+	margin: 0 0 3px;
+	color: #efe6d2;
+	opacity: 0.45;
+	font: 400 11px/1.3 var(--font);
+}
+
+.arc {
+	flex: none;
+}
+
+/* A line too long wraps at its own indent. */
+.line {
+	min-height: 1.35em;
+	white-space: pre-wrap;
+	overflow-wrap: anywhere;
+}
+
+.verb {
+	color: var(--hue);
+}
+
+.said {
+	color: var(--hue-light);
+}
+
+.mark {
+	color: #efe6d2;
+	opacity: 0.55;
+}
+
+/* Fixed width, so a rune settling into its letter does not shove the line. */
+.rune {
+	display: inline-block;
+	width: 1ch;
+	overflow: visible;
+	text-align: center;
+	color: var(--hue-light);
+	text-shadow: 0 0 5px var(--hue);
+	font-family: "Segoe UI Historic", "Noto Sans Runic", var(--font-mono);
+	font-weight: 400;
+}
+
+/* The pen: a cut gem, the shape of the Ingwaz rune on the orbs. */
+.pen {
+	display: inline-block;
+	width: 7px;
+	height: 7px;
+	margin-left: 3px;
+	background: var(--hue-light);
+	box-shadow: 0 0 6px var(--hue);
+	transform: rotate(45deg);
+	animation: blink 700ms steps(2, jump-none) infinite;
+}
+
+@keyframes open {
+	from { opacity: 0; transform: scale(0.85); }
+}
+
+@keyframes chosen {
+	0% { transform: scale(1); filter: brightness(1); }
+	30% { transform: scale(1.04); filter: brightness(1.6); }
+	100% { transform: scale(1); filter: brightness(1); }
+}
+
+@keyframes glint {
+	from { translate: -100% 0; }
+	to { translate: 100% 0; }
+}
+
+@keyframes halo {
+	0% { opacity: 0; }
+	18% { opacity: 0.6; }
+	100% { opacity: 0; }
+}
+
+/* Out fast, then it lingers, drifting a little further as it fades from the tip's end of its life. */
+@keyframes ray {
+	0% { transform: rotate(var(--turn)) scaleY(0.1); opacity: 0; }
+	14% { opacity: 1; }
+	45% { transform: rotate(var(--turn)) scaleY(1); opacity: 0.9; }
+	100% { transform: rotate(var(--turn)) scaleY(1.2); opacity: 0; }
+}
+
+@keyframes star {
+	0%, 22% { transform: rotate(var(--turn)) translateY(calc(-1.1 * var(--long))) scale(0); }
+	48% { transform: rotate(var(--turn)) translateY(calc(-1.1 * var(--long))) scale(1) rotate(45deg); }
+	100% { transform: rotate(var(--turn)) translateY(calc(-1.1 * var(--long))) scale(0) rotate(120deg); }
+}
+
+/* Each swing narrower than the last. */
+@keyframes shake {
+	0%, 100% { transform: translateX(0); }
+	12% { transform: translateX(-11px); }
+	28% { transform: translateX(9px); }
+	44% { transform: translateX(-6px); }
+	60% { transform: translateX(4px); }
+	76% { transform: translateX(-2px); }
+	90% { transform: translateX(1px); }
+}
+
+@keyframes pulse {
+	0% { inset: 0; opacity: 1; }
+	100% { inset: -16px; opacity: 0; border-radius: calc(var(--radius-small) + 12px); }
+}
+
+@keyframes turn {
+	to { transform: rotate(360deg); }
+}
+
+@keyframes blink {
+	from { opacity: 1; }
+	to { opacity: 0.25; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.glass,
+	.orb,
+	.pen,
+	.wrong {
+		animation: none;
+	}
+
+	.glint,
+	.halo,
+	.rays,
+	.pulse {
+		display: none;
+	}
+}
+</style>

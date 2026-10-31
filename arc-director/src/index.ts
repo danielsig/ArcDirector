@@ -113,7 +113,7 @@ export { formatSight, formatSightClauses, joinSightClauses, orderSightClauses, m
 export { AUDIBLE, clarityAt, DEFAULT_HEARING, heardText, LOUD, loudnessAfter, loudnessFor, noiseHelp, reachOf, type HearingRange, type Sound, type SoundListener, type SoundSource } from './perception/hearing.js';
 export { formatInventory } from './perception/formatInventory.js';
 
-export type { ArcFormat, ConversationTurn, MindEvent, Sense, ToolSpec } from './mind/types.js';
+export type { ArcFormat, ConversationTurn, MindEvent, Sense, ThinkEvent, ToolSpec } from './mind/types.js';
 export type { Identity, Goal, Kit, KitSource, WatchInput, Watches } from './character/types.js';
 export { NameBook, type NameBookJSON, type NameTarget } from './character/names.js';
 export { Persona, type PersonaJSON, type PersonaSpec } from './character/persona.js';

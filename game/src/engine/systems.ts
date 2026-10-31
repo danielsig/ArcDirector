@@ -1,6 +1,6 @@
 import { ChunkStreamer, chunkBounds, type Renderer, Time, Component } from '@arc-director/kindling';
 import { Order } from './order';
-import { patchGoals, patchInspect, patchHud, patchInfer, statusLabels, type Overheads } from './patchHud';
+import { patchGoals, patchInspect, patchHud, patchInfer, patchSlates, statusLabels, type Overheads } from './patchHud';
 import { syncHeldTorchLight } from '../items/heldLight';
 import type { GameHost } from '../director/adapter';
 import { WorldPresent } from '../render/present';
@@ -138,6 +138,7 @@ export class Hud extends Component {
 			return;
 		}
 		patchHud(world, this.model, renderer, statusLabels(this.director), this.overheads);
+		patchSlates(world, this.model, renderer, this.director);
 		patchInfer(this.director, this.model);
 		patchGoals(world, this.model, renderer, this.director.hooks.goals?.(this.director));
 		patchInspect(world, this.model, renderer, this.director, this.overheads.inspect ?? false);

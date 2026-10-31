@@ -104,7 +104,12 @@ export type ChatRequest = {
 	thread?:string;
 	/** Abort in-flight chat. */
 	signal?:AbortSignal;
+	/** Each piece of the reply as it arrives, when the server streams. {@link ChatResponse} still holds it whole. */
+	onDelta?:(delta:ChatDelta)=>void;
 };
+
+/** A piece of a reply still being written: its answer, or its reasoning. */
+export type ChatDelta = { content?:string; reasoning?:string };
 
 export type ChatResponse = {
 	content:string | null;

@@ -20,6 +20,7 @@ import { squadTag } from './tags.js';
 import { OPEN_WORLD } from '../testing/world.js';
 import { Mind } from '../mind/mind.js';
 import { TalkNet } from '../mind/talk.js';
+import type { ThinkEvent } from '../mind/types.js';
 
 type Ctx = { id:string };
 
@@ -1217,6 +1218,45 @@ describe('transfers', () => {
 		const voice = dawn.voice;
 		assert.equal((await voice.enact(parseArc('law(who=units, watch=1 > 0, arc=wait(), name=rally)', voice.verbs))).ok, true);
 		assert.deepEqual(dawn.laws.map((law) => [law.name, law.who]), [['rally', 'units'], ['Wisp.hold', 'me']]);
+		release();
+		director.dispose();
+	});
+
+	it('tells onThink every event of a think in the name it began for, though its commander changes mid-think', async () => {
+		const events:ThinkEvent[] = [];
+		let director:ArcDirector<Ctx> | undefined;
+		director = await new ArcDirector<Ctx>()
+			.withPriorityQueue({ processInterval: 0, watchInterval: 0, heartbeatStart: 100, heartbeatMin: 100 })
+			.withArcFormat('text')
+			.addFakeInference(() => {
+				const hive = director!.collective('Hive')!;
+				hive.commander = hive.character('Tomas') ?? null;
+				return { content: 'wait(seconds=1)', toolCalls: [] };
+			})
+			.addStockVerbs()
+			.addStockCollectiveVerbs()
+			.withDefaultKit(COLLECTIVE_KIT)
+			.withKernels(kernels())
+			.withContext((id) => ({ id }))
+			.onVerb(({ verb }) => ({ ok: true, verb }))
+			.onThink((event) => events.push(event))
+			.addCollective({ id: 'Hive', mind: { skipHeartbeat: true }, kit: COLLECTIVE_KIT, commander: 'Mira', characters: [{ id: 'Mira' }, { id: 'Tomas' }] })
+			.start();
+		void director.collective('Hive')!.mind.tick(1);
+		await waitFor(() => events.some((event) => event.kind === 'end'));
+		assert.deepEqual([...new Set(events.map((event) => event.who))], ['Mira']);
+		director.dispose();
+	});
+
+	it('refuses a law with an issue in it, however deep: it would run on every unit it reaches', async () => {
+		const { director, release, dawn } = await stage();
+		const voice = dawn.voice;
+		for (const arc of ['issue(who=units, arc=wait())', 'loop(issue(who=units, arc=wait()))']) {
+			const result = await voice.enact(parseArc(`law(watch=1 > 0, arc=${arc}, name=rally)`, voice.verbs));
+			assert.equal(result.ok, false);
+			assert.match(result.reason ?? '', /no issue in a law/);
+		}
+		assert.deepEqual(dawn.laws, []);
 		release();
 		director.dispose();
 	});

@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import type { GoalColor, HudModel } from './hudModel';
+import HudBurst from './HudBurst.vue';
 
 const props = defineProps<{
 	hud:HudModel;
@@ -24,7 +25,6 @@ type Segment = { key:string; progress:number; from:Side | null; color:GoalColor 
 
 /** How long a just-reached orb plays its level-up burst, ms. Matches the longest animation below. */
 const BURST_MS = 1400;
-const SPARKS = 10;
 
 /** Runes carved into the orbs, one per orb in turn, drawn round the orb's centre (0, 0). */
 const RUNES = [
@@ -229,21 +229,16 @@ onBeforeUnmount(() => {
 			<span
 				v-if="i > 0"
 				class="segment"
-				:class="[segments[i - 1].from, segments[i - 1].color]"
+				:class="[segments[i - 1].from, segments[i - 1].color && `hue-${segments[i - 1].color}`]"
 				:style="{ '--progress': segments[i - 1].progress }"
 			><span class="fill" /></span>
 			<span
 				:ref="(el) => orbRef(o.key, el)"
 				class="orb"
-				:class="[o.color, { done: o.done, burst: bursting.has(o.key) }]"
+				:class="[`hue-${o.color}`, { done: o.done, burst: bursting.has(o.key) }]"
 				:aria-label="`${o.name}${o.done ? ' (done)' : ''}`"
 			>
-				<template v-if="bursting.has(o.key)">
-					<span class="ring" />
-					<span class="ring late" />
-					<span class="rays" />
-					<span v-for="s in SPARKS" :key="s" class="spark" :style="{ '--a': `${(s / SPARKS) * 360 + 18}deg` }" />
-				</template>
+				<HudBurst v-if="bursting.has(o.key)" />
 				<svg class="gem" viewBox="0 0 40 40" aria-hidden="true">
 					<defs>
 						<radialGradient :id="`${o.key}-glass`" cx="0.36" cy="0.32" r="0.75">
@@ -310,8 +305,8 @@ onBeforeUnmount(() => {
 			</span>
 		</template>
 		<span v-if="swapping" class="clash" aria-hidden="true">
-			<span class="clash-ring" :class="swapping[0]" />
-			<span class="clash-ring late" :class="swapping[1]" />
+			<span class="clash-ring" :class="`hue-${swapping[0]}`" />
+			<span class="clash-ring late" :class="`hue-${swapping[1]}`" />
 		</span>
 	</div>
 </template>
@@ -323,25 +318,6 @@ onBeforeUnmount(() => {
 	display: flex;
 	align-items: center;
 	pointer-events: none;
-}
-
-/* Each side's colour (`GoalColor`). */
-.gold {
-	--hue: var(--gold);
-	--hue-deep: var(--gold-deep);
-	--hue-light: #fff3c4;
-}
-
-.red {
-	--hue: #f07a5c;
-	--hue-deep: var(--health);
-	--hue-light: #ffd9cc;
-}
-
-.blue {
-	--hue: #6cb8ff;
-	--hue-deep: #2f63c8;
-	--hue-light: #dff0ff;
 }
 
 .segment {
@@ -422,7 +398,7 @@ onBeforeUnmount(() => {
 	border: 3px solid var(--hue);
 	box-shadow: 0 0 12px var(--hue), inset 0 0 10px var(--hue);
 	opacity: 0;
-	animation: ring 750ms var(--ease-out) 380ms forwards;
+	animation: hud-ring 750ms var(--ease-out) 380ms forwards;
 }
 
 .clash-ring.late {
@@ -622,56 +598,6 @@ onBeforeUnmount(() => {
 	z-index: 5;
 }
 
-/* Shockwave rings */
-.ring {
-	position: absolute;
-	inset: 0;
-	border-radius: 50%;
-	border: 3px solid var(--hue);
-	box-shadow: 0 0 12px var(--hue), inset 0 0 12px var(--hue);
-	animation: ring 800ms var(--ease-out) forwards;
-}
-
-.ring.late {
-	border-color: #fffbe8;
-	animation-delay: 160ms;
-	opacity: 0;
-}
-
-/* Light rays turning behind the orb */
-.rays {
-	position: absolute;
-	inset: -30px;
-	z-index: -1;
-	border-radius: 50%;
-	background: repeating-conic-gradient(from 0deg, var(--hue) 0 8deg, transparent 8deg 30deg);
-	mask-image: radial-gradient(circle, #000 20%, transparent 70%);
-	-webkit-mask-image: radial-gradient(circle, #000 20%, transparent 70%);
-	animation: rays 1400ms ease-out forwards;
-}
-
-/* Sparks flung outward, each down its own angle */
-.spark {
-	position: absolute;
-	z-index: 2;
-	left: 50%;
-	top: 50%;
-	width: 8px;
-	height: 8px;
-	margin: -4px;
-	background: #fffbe8;
-	clip-path: polygon(50% 0, 62% 38%, 100% 50%, 62% 62%, 50% 100%, 38% 62%, 0 50%, 38% 38%);
-	filter: drop-shadow(0 0 3px var(--hue));
-	animation: spark 900ms var(--ease-out) forwards;
-}
-
-.spark:nth-of-type(even) {
-	width: 5px;
-	height: 5px;
-	margin: -2.5px;
-	animation-duration: 1100ms;
-}
-
 /* A small star glinting on a reached orb's glass now and then */
 .twinkle {
 	position: absolute;
@@ -729,23 +655,6 @@ onBeforeUnmount(() => {
 @keyframes glow {
 	0%, 100% { filter: drop-shadow(var(--shadow)) drop-shadow(0 0 5px var(--hue)); }
 	50% { filter: drop-shadow(var(--shadow)) drop-shadow(0 0 10px var(--hue)) brightness(1.12); }
-}
-
-@keyframes ring {
-	0% { transform: scale(0.6); opacity: 1; }
-	100% { transform: scale(2.6); opacity: 0; }
-}
-
-@keyframes rays {
-	0% { transform: scale(0.3) rotate(0deg); opacity: 0; }
-	20% { opacity: 0.9; }
-	100% { transform: scale(1.2) rotate(90deg); opacity: 0; }
-}
-
-@keyframes spark {
-	0% { transform: rotate(var(--a)) translateY(0) scale(0.4); opacity: 1; }
-	60% { opacity: 1; }
-	100% { transform: rotate(var(--a)) translateY(-46px) scale(1.2) rotate(180deg); opacity: 0; }
 }
 
 @keyframes twinkle {

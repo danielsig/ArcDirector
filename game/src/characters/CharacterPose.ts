@@ -1,8 +1,10 @@
 import { MeshRenderer, Time, aimHeld, ease, move, type MoveTiming, type SfxHandle, closeHand, create, crouch, palmOf, drawBow, humanBone, lookAt, orientHand, placeFoot, reach, type Hand, Component, type GameObject } from '@arc-director/kindling';
 import * as THREE from 'three';
-import { Appearance, POSE_SECONDS, SpeechBubble, Vitals } from '../engine/components';
+import { Appearance, Celebrating, POSE_SECONDS, SpeechBubble, Vitals } from '../engine/components';
 import { Order } from '../engine/order';
 import { HeldProps, turnAboutGrip } from './HeldProps';
+import { Seated } from './Seated';
+import { heldMap } from '../render/toolFx';
 import { slashTrail, thrustLance } from '../render/swordFx';
 import { dustKick, dustLine, lungeGhost } from '../render/fightFx';
 import { chargeGlint, fireball, FIREBALL_SPEED, healLight, lightning, missPoint, RELEASE_GRACE, type Cast, type Outcome, type Stance } from '../render/spellFx';
@@ -159,6 +161,26 @@ const DODGE_STEP = 0.24;
 const DODGE_DROP = 0.07;
 const DODGE_LEAN = 0.35;
 const DODGE_TWIST = 0.45;
+/**
+ * How a free hand shows a tool being called, while nothing else needs the arm: where it goes from the head (fractions
+ * of height, ahead, up, and out to its own side), and what the head looks at there (ahead and to the far side of the
+ * hand, in meters; up from the eyes). Reading a map looks at the hand itself. Any tool not named here is `recall`'s: a
+ * hand to the temple, looking up, trying to remember. A look round sweeps from side to side.
+ */
+type ToolPose = { hand:{ ahead:number; up:number; out:number }; look?:{ ahead:number; away:number; up:number }; sweep?:boolean; map?:boolean };
+const TOOL_POSES:Record<string, ToolPose> = {
+	see_map: { hand: { ahead: 0.26, up: -0.2, out: 0.03 }, map: true },
+	observe: { hand: { ahead: 0.07, up: 0.05, out: 0.02 }, look: { ahead: 6, away: 0, up: 0 }, sweep: true },
+	earshot: { hand: { ahead: 0, up: 0, out: 0.085 }, look: { ahead: 3, away: 1.6, up: 0 } },
+	recall: { hand: { ahead: 0.04, up: 0.03, out: 0.07 }, look: { ahead: 3, away: 0.8, up: 1.2 } },
+};
+/** How fast a tool's pose eases in and out (per second), how far a look round sweeps (m, each way), and how fast (radians/s). */
+const TOOL_EASE = 5;
+const SWEEP_REACH = 3.5;
+const SWEEP_SPEED = 1.6;
+/** How far a hand holding nothing closes round a map. */
+const MAP_GRIP = 0.45;
+
 /** A held sword's own axes: the tip down its −Y, the flat facing its ±Z. */
 const SWORD_TIP = new THREE.Vector3(0, -1, 0);
 const SWORD_FLAT = new THREE.Vector3(0, 0, 1);
@@ -192,7 +214,7 @@ function mixPose(a:SwordPose, b:SwordPose, u:number):SwordPose {
 }
 
 /** Where a character stands, and how tall it is. */
-function stanceOf(go:GameObject):Stance {
+export function stanceOf(go:GameObject):Stance {
 	return { feet: pointOn(go, 0), height: go.getComponent(Appearance)?.height ?? 1.7 };
 }
 
@@ -256,6 +278,33 @@ export class CharacterPose extends Component {
 	/** The take under way (its `Appearance.clipT0`) and the point it reaches for. */
 	private _takeT0 = -1;
 	private readonly _takeAt = new THREE.Vector3();
+	/** The tool being shown, until when; `weight` is how far its pose is in, eased. */
+	private _tool:{ pose:ToolPose; until:number; t0:number; weight:number } | null = null;
+	/** Where the tool's pose has the head looking. */
+	private readonly _toolLook = new THREE.Vector3();
+
+	/**
+	 * Shows `tool` being called for `seconds`, in a free hand and in the head's turn, whenever nothing else
+	 * needs them: a move, a line of speech or a fall takes the arm back at once, and it comes up again after.
+	 */
+	public useTool(tool:string, seconds:number):void {
+		const pose = TOOL_POSES[tool] ?? TOOL_POSES.recall!;
+		const shown = { pose, until: this._now + seconds, t0: this._now, weight: this._tool?.pose === pose ? this._tool.weight : 0 };
+		this._tool = shown;
+		const world = this.gameObject.world;
+		if (pose.map && world) {
+			heldMap(world.native, () => {
+				const root = this.gameObject.getComponent(MeshRenderer)?.mesh;
+				const hand = this.freeHand();
+				const palm = root && hand ? palmOf(root, hand) : null;
+				const head = root && humanBone(root, 'head');
+				if (this._tool !== shown || !palm || !head) {
+					return null;
+				}
+				return { palm, eyes: head.getWorldPosition(new THREE.Vector3()), weight: shown.weight };
+			});
+		}
+	}
 
 	/**
 	 * Dodges a blow from `from` (world XZ) that misses, arriving `delay` s from now: a sidestep to a
@@ -458,11 +507,13 @@ export class CharacterPose extends Component {
 		this.updateDodge(root, alive);
 		this.updateGrip(root, alive);
 		this.updateCast(root, alive);
+		this.updateTool(root, alive, dt);
 		this.updateLook(root, alive ? this.lookTarget() : null, dt);
 		this.updateFlights();
 	}
 
 	public override onDestroy():void {
+		this._tool = null;
 		this.endShot();
 		for (const f of this._flying) {
 			f.arrow.removeFromParent();
@@ -505,7 +556,71 @@ export class CharacterPose extends Component {
 				bestD = d;
 			}
 		});
-		return best ? pointOn(best, 0.9) : null;
+		if (best) {
+			return pointOn(best, 0.9);
+		}
+		return this._tool && this._tool.weight > 0.2 ? this._toolLook.clone() : null;
+	}
+
+	/** The hand that holds nothing, the left first (the right most often carries the weapon); none if both are full. */
+	private freeHand():Hand | undefined {
+		const held = this.gameObject.getComponent(HeldProps);
+		return !held?.prop('left') ? 'left' : !held.prop('right') ? 'right' : undefined;
+	}
+
+	/** Whether the body is busy with something a tool's pose must not cover: a move, a line of speech, sitting, a cheer. */
+	private armsBusy():boolean {
+		const go = this.gameObject;
+		const clip = go.getComponent(Appearance)?.clip;
+		const bubble = go.getComponent(SpeechBubble);
+		return !!(this._shot || this._swing || this._dodge || this._grip || this._cast)
+			|| clip === 'give' || clip === 'take'
+			|| (!!bubble?.text && Time.time < bubble.until)
+			|| !!go.getComponent(Seated)?.enabled
+			|| !!go.getComponent(Celebrating)?.enabled;
+	}
+
+	/** A free arm and the head showing the tool being called, over whatever the legs are doing. */
+	private updateTool(root:THREE.Object3D, alive:boolean, dt:number):void {
+		const tool = this._tool;
+		if (!tool) {
+			return;
+		}
+		const hand = this.freeHand();
+		const on = alive && !!hand && this._now < tool.until && !this.armsBusy();
+		tool.weight += ((on ? 1 : 0) - tool.weight) * Math.min(1, dt * TOOL_EASE);
+		if (this._now >= tool.until && tool.weight < 0.02) {
+			this._tool = null;
+			return;
+		}
+		const head = humanBone(root, 'head');
+		if (!head || !hand || tool.weight < 0.02) {
+			return;
+		}
+		root.updateMatrixWorld(true);
+		const height = this.gameObject.getComponent(Appearance)?.height ?? 1.7;
+		const ahead = this.ahead(1);
+		const right = new THREE.Vector3().crossVectors(ahead, UP);
+		const side = hand === 'left' ? right.clone().negate() : right.clone();
+		const eyes = head.getWorldPosition(new THREE.Vector3());
+		const { pose } = tool;
+		const at = eyes.clone()
+			.addScaledVector(ahead, pose.hand.ahead * height)
+			.addScaledVector(UP, pose.hand.up * height)
+			.addScaledVector(side, pose.hand.out * height);
+		reach(root, hand, at, tool.weight, UP.clone().negate().addScaledVector(side, 0.8));
+		if (pose.map) {
+			closeHand(root, hand, MAP_GRIP * tool.weight);
+			this._toolLook.copy(at);
+			return;
+		}
+		const look = pose.look!;
+		const sweep = pose.sweep ? Math.sin((this._now - tool.t0) * SWEEP_SPEED) * SWEEP_REACH : 0;
+		this._toolLook.copy(eyes)
+			.addScaledVector(ahead, look.ahead)
+			.addScaledVector(side, -look.away)
+			.addScaledVector(right, sweep)
+			.addScaledVector(UP, look.up);
 	}
 
 	private updateLook(root:THREE.Object3D, target:THREE.Vector3 | null, dt:number):void {

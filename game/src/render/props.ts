@@ -268,7 +268,7 @@ const wellRope = keep(tube([{ x: 0, y: 1.42, z: 0.06 }, { x: 0, y: 1.0, z: 0.06 
 
 function well():PropPart[] {
 	const tilt = 0.62;
-	const eave = 2.0;
+	const eave = 1.89;
 	const half = (WELL_ROOF_W / 2) * Math.cos(tilt);
 	return [
 		at('well-ring', wellRing, stone),

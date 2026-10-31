@@ -149,8 +149,7 @@ function pick(id:string, event:MouseEvent):void {
 
 function leave():void {
 	hud.menuOpen = false;
-	hud.briefOpen = false;
-	hud.keysOpen = false;
+	hud.guideOpen = false;
 	hud.menuNotice = '';
 	hud.sayOpen = false;
 	hud.chatOpen = false;

@@ -25,6 +25,8 @@ export type HudSpeech = {
 	status:string;
 	/** The mind is thinking: dots over the head instead of a status line. */
 	thinking:boolean;
+	/** The tool the mind just called: its icon over the head, in place of the dots. Empty for none. */
+	tool:string;
 	hp:number;
 	maxHP:number;
 	/** Coins carried, shown over the head as a gold dot and number. 0 shows none. */
@@ -155,6 +157,37 @@ export type HudInspect = {
 	side:'left' | 'right';
 };
 
+/** How a think on a slate stands: being written, chosen, ended by an error, or cut short by a newer think. */
+export type SlateState = 'writing' | 'done' | 'failed' | 'dropped';
+
+/** A slate by the head of a mind thinking, writing out its Arc as the model does. */
+export type HudSlate = {
+	id:string;
+	name:string;
+	color:GoalColor;
+	/** The model's reasoning so far. */
+	thought:string;
+	/** What it has written of its Arc, as Arc text. */
+	arc:string;
+	state:SlateState;
+	/** Why the model's last reply would not do, or what ended the think; `''` once it writes on. */
+	error:string;
+	/** A reply was just turned down, or the think just failed: it shakes, in red. */
+	wrong:boolean;
+	/** How long the think has run, or ran. */
+	ms:number;
+	/** Where its bottom left corner wants to be on screen, px (it grows upward); `HudSlates` keeps it clear of other things. */
+	x:number;
+	y:number;
+	visible:boolean;
+	/** About to go. */
+	leaving:boolean;
+};
+
+/** How wide a slate is, px, and the tallest it gets. */
+export const SLATE_WIDTH = 330;
+export const SLATE_HEIGHT = 190;
+
 export type MenuPage = 'game' | 'display' | 'audio' | 'testing';
 
 export type HudModel = {
@@ -185,10 +218,8 @@ export type HudModel = {
 	/** What each person offers the player, by lowercase name. */
 	sayOffers:SayCatalog['offers'];
 	menuOpen:boolean;
-	/** Scene brief. First visit opens it; later visits only the (?) button. */
-	briefOpen:boolean;
-	/** Keybindings help. */
-	keysOpen:boolean;
+	/** The scene's brief and the keys. A scene's first visit opens it; later visits only its button. */
+	guideOpen:boolean;
 	/** Last pause-menu page this session. Not persisted. */
 	menuPage:MenuPage;
 	menuNotice:string;
@@ -243,6 +274,14 @@ export type HudModel = {
 	fpsCounter:boolean;
 	/** Frames per second over the last second. Updated only while {@link fpsCounter} is on. */
 	fps:number;
+	/** Minds at work, each on its slate. */
+	slates:HudSlate[];
+	mindVisuals:boolean;
+	arcSlates:boolean;
+	orderArcs:boolean;
+	toolIcons:boolean;
+	toolPoses:boolean;
+	toolFx:boolean;
 	/** The model NPCs think with, as the director resolved it; empty until it has. */
 	activeModel:string;
 	inferCalls:number;
@@ -308,8 +347,7 @@ export function emptyHud():HudModel {
 		sayItems: [],
 		sayOffers: {},
 		menuOpen: false,
-		briefOpen: false,
-		keysOpen: false,
+		guideOpen: false,
 		menuPage: 'testing',
 		menuNotice: '',
 		savedUTC: '',
@@ -339,6 +377,13 @@ export function emptyHud():HudModel {
 		shadows: p.shadows,
 		fpsCounter: p.fpsCounter,
 		fps: 0,
+		slates: [],
+		mindVisuals: p.mindVisuals,
+		arcSlates: p.arcSlates,
+		orderArcs: p.orderArcs,
+		toolIcons: p.toolIcons,
+		toolPoses: p.toolPoses,
+		toolFx: p.toolFx,
 		activeModel: '',
 		inferCalls: 0,
 		inferContextMs: 0,

@@ -185,7 +185,6 @@ export class Game extends KindlingGame<World> {
 		}
 		stream.stream();
 		this._hud.menuOpen = false;
-		this._hud.keysOpen = false;
 		this._hud.minimap.follow = this._scene.minimapFollow !== false;
 		this._hud.model = host.arc?.modelID() || prefs().model;
 		this.session.persistView();

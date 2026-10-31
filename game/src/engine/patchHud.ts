@@ -10,7 +10,7 @@ import { allEquipped, countDef, distXZ, listCarried, slotItem } from '../items/i
 import { coinsOf } from '../items/wallet';
 import { isBackpack, type ItemInstance } from '../items/instance';
 import { nearestPickup, pickupLabel } from '../items/pickup';
-import { CARRY_ICONS, noGoals, type HudGoalSide, type HudInspect, type HudModel, type MinimapCell } from '../ui/hudModel';
+import { CARRY_ICONS, SLATE_WIDTH, noGoals, type HudGoalSide, type HudInspect, type HudModel, type MinimapCell } from '../ui/hudModel';
 import type { SceneGoalSide, SceneGoals } from '../director/types';
 import type { CarriedOverhead } from '../data/scenes';
 import type { GameHost } from '../director/adapter';
@@ -118,8 +118,8 @@ function projectOverhead(go:GameObject, view:Renderer):{ x:number; y:number; vis
 	return view.projectToCanvas(p.x, p.y + height + HEAD_PAD, p.z);
 }
 
-/** A line under someone's bubble (what they are doing), or `thinking` while their mind is. */
-export type OverheadNote = { id:string; text:string; thinking?:boolean };
+/** A line under someone's bubble (what they are doing), or `thinking` while their mind is, or the `tool` it just called. */
+export type OverheadNote = { id:string; text:string; thinking?:boolean; tool?:string };
 
 /** What a scene shows over the characters' heads besides speech and status. */
 export type Overheads = {
@@ -136,6 +136,7 @@ type OverheadRow = {
 	text:string;
 	status:string;
 	thinking:boolean;
+	tool:string;
 	hp:number;
 	maxHP:number;
 	gold:number;
@@ -165,7 +166,7 @@ function patchOverhead(
 	const rowOf = (go:GameObject):OverheadRow => {
 		let row = byID.get(go.id);
 		if (!row) {
-			row = { go, text: '', status: '', thinking: false, hp: 0, maxHP: 0, gold: 0, items: [], timestamp: 0 };
+			row = { go, text: '', status: '', thinking: false, tool: '', hp: 0, maxHP: 0, gold: 0, items: [], timestamp: 0 };
 			byID.set(go.id, row);
 		}
 		return row;
@@ -179,7 +180,7 @@ function patchOverhead(
 		row.timestamp = bubble.timestamp;
 	});
 	for (const note of npcNotes) {
-		if (!note.text && !note.thinking) {
+		if (!note.text && !note.thinking && !note.tool) {
 			continue;
 		}
 		const go = findObject(world, note.id);
@@ -189,6 +190,7 @@ function patchOverhead(
 		const row = rowOf(go);
 		row.status = note.text;
 		row.thinking = note.thinking ?? false;
+		row.tool = note.tool ?? '';
 	}
 	world.forEachComponent(HumanBody, (_, go) => {
 		if (go.id === 'Player' || !isLiving(go)) {
@@ -225,6 +227,7 @@ function patchOverhead(
 			slot.text = row.text;
 			slot.status = row.status;
 			slot.thinking = row.thinking;
+			slot.tool = row.tool;
 			slot.hp = row.hp;
 			slot.maxHP = row.maxHP;
 			slot.gold = row.gold;
@@ -243,6 +246,7 @@ function patchOverhead(
 				text: row.text,
 				status: row.status,
 				thinking: row.thinking,
+				tool: row.tool,
 				hp: row.hp,
 				maxHP: row.maxHP,
 				gold: row.gold,
@@ -427,16 +431,61 @@ export function statusLabels(host:GameHost):OverheadNote[] {
 		if (!id) {
 			continue;
 		}
+		const tool = host.thinks.toolOf(id);
 		if (queue?.isThinking(mind.id)) {
-			out.push({ id, text: '', thinking: true });
+			out.push({ id, text: '', thinking: true, tool });
 			continue;
 		}
 		const row = host.labels.get(id);
-		if (row && now < row.until) {
-			out.push({ id, text: row.text });
+		const text = row && now < row.until ? row.text : '';
+		if (text || tool) {
+			out.push({ id, text, tool });
 		}
 	}
 	return out;
+}
+
+/** How far beside the head a slate starts, px. */
+const SLATE_GAP = 24;
+/** How long before it goes that a slate fades, s. */
+const SLATE_FADE = 0.3;
+
+/**
+ * Where each slate up wants to be: over the line of heads so it hides no one standing beside its writer, growing upward
+ * from their head, on the side away from the screen's middle, so two captains facing off stand their slates at either
+ * end. Rows are reused, so a slate stays one element while it is up.
+ */
+export function patchSlates(world:World, hud:HudModel, view:Renderer, host:GameHost):void {
+	host.thinks.update();
+	const width = view.canvas.clientWidth;
+	const up = [...host.thinks.slates.values()];
+	hud.slates.length = Math.min(hud.slates.length, up.length);
+	up.forEach((slate, i) => {
+		const go = findObject(world, slate.id);
+		const screen = go ? projectOverhead(go, view) : { x: 0, y: 0, visible: false };
+		const row = {
+			id: slate.id,
+			name: go ? idOf(go) : slate.id,
+			color: slate.color,
+			thought: slate.thought,
+			arc: slate.arc,
+			state: slate.state,
+			error: slate.error,
+			wrong: Time.time < slate.wrongUntil,
+			ms: slate.state === 'writing' ? performance.now() - slate.began : slate.ms,
+			x: Math.round(screen.x < width / 2 ? screen.x - SLATE_GAP - SLATE_WIDTH : screen.x + SLATE_GAP),
+			y: Math.round(screen.y),
+			visible: screen.visible,
+			leaving: slate.until - Time.time < SLATE_FADE,
+		};
+		const shown = hud.slates[i];
+		if (shown) {
+			Object.assign(shown, row);
+		}
+		else {
+			hud.slates.push(row);
+		}
+	});
 }
 
 export function patchInfer(host:GameHost, hud:HudModel):void {

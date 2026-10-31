@@ -6,7 +6,7 @@ import type { Arc, ArcResult, Step, StepArg } from '../arc/types.js';
 import { validateArc } from '../arc/validate.js';
 import { choicePrompt, type ChoicePrompt } from '../character/choice.js';
 import { JevSystemOne, ModelSystemOne, type JevOpts, type SystemOne } from '../inference/systemone.js';
-import { ArcError, BlockedArcError } from '../arc/types.js';
+import { ArcError, BlockedArcError, eachStep } from '../arc/types.js';
 import { lawGroup, type Law, type LawSpec } from '../arc/laws.js';
 import { bodiless, type ArcRunner, type RunnerOptions } from '../character/arc-runner.js';
 import { Character, type CharacterFields, type CharacterJSON, type Wiring } from '../character/character.js';
@@ -15,7 +15,7 @@ import type { Kit, KitSource } from '../character/types.js';
 import type { NameTarget } from '../character/names.js';
 import { Collective, type CollectiveFields, type CollectiveHost, type CollectiveJSON } from '../collective/collective.js';
 import { Mind, mindFields, type MindDeps, type MindSettings } from '../mind/mind.js';
-import type { ArcFormat, MindEvent, Sense, ToolSpec } from '../mind/types.js';
+import type { ArcFormat, MindEvent, Sense, ThinkEvent, ToolSpec } from '../mind/types.js';
 import type { ThinkInstructions } from '../mind/prompt.js';
 import { TalkNet, type SpeechUtterance, type TalkConfig, type TalkMind, type TalkSense } from '../mind/talk.js';
 import type { MapSense } from '../mind/map.js';
@@ -288,6 +288,7 @@ export class ArcDirector<TCtx = unknown> {
 	private readonly _beatThinks = new Set<string>();
 	private _logFn:((entry:DirectorLog)=>void) | undefined;
 	private _stepFn:((call:VerbCall<TCtx>, result:ArcResult)=>void) | undefined;
+	private _thinkFn:((event:ThinkEvent)=>void) | undefined;
 	private _ignoreMissing = false;
 	/** Shows a loading bar for each browser model it downloads (`withLoadingBar`). */
 	private _loadingBar:LoadingBarOptions | undefined;
@@ -1183,6 +1184,21 @@ ${dump.message}`, image: dump.image });
 		this._stepFn = fn;
 		return this;
 	}
+
+	/** What each mind is doing as it thinks, down to its reply as it is written, and the orders it gives: for a host to show. */
+	public onThink(fn:(event:ThinkEvent)=>void):this {
+		// It runs in the middle of reading a reply: a bug in how a host shows a think must not end the think.
+		this._thinkFn = (event) => {
+			try {
+				fn(event);
+			}
+			catch (err) {
+				this.emitLog({ name: 'ArcDirector', message: `onThink: ${err instanceof Error ? err.message : String(err)}`, error: true });
+			}
+		};
+		return this;
+	}
+
 	/**
 	 * After characters change collectives, one model call fixes the memories of everyone involved: what went
 	 * stale in a collective left, and what a character or a collective joined should now remember. Moves
@@ -1820,6 +1836,7 @@ ${dump.message}`, image: dump.image });
 			stalled: this._stalledFn,
 			autoEnact: true,
 			onChoose: (arc) => this.emitLog({ name: mind.thinkThread(), message: formatArc(arc, this._verbs) }),
+			thinkWatch: () => this._thinkFn,
 			queue: this._queue,
 			modelID: this._models.live(mind.model)?.id ?? '',
 			embed: this._models.embedder(),
@@ -2268,6 +2285,14 @@ ${dump.message}`, image: dump.image });
 		if (!watch || !arc) {
 			return { ok: false, verb: 'law', reason: 'law needs watch and arc' };
 		}
+		// It would run on every unit it reaches, each ordering the rest again and again for as long as its watch holds.
+		let orders = false;
+		eachStep(arc, this._verbs, (inner) => {
+			orders ||= inner.verb === 'issue';
+		});
+		if (orders) {
+			return { ok: false, verb: 'law', reason: 'no issue in a law: it runs on each unit it reaches. Give it the arc they should run.' };
+		}
 		const aliasWho = arc.length === 1 && home.lawsTakeWho() ? this.aliasPart(arc[0], 'who') : undefined;
 		const aliasName = arc.length === 1 && this._aliases.has(arc[0].verb) ? arc[0].verb : undefined;
 		if (!home.addLaw({ name: name ?? aliasName, who: who ?? aliasWho, watch, arc })) {
@@ -2300,6 +2325,7 @@ ${dump.message}`, image: dump.image });
 		}
 		const group = typeof step.args.group === 'string' ? step.args.group : undefined;
 		const name = collective.issue(troops, arc, group);
+		this._thinkFn?.({ kind: 'issue', who: issuer.voice.id, to: troops.map((c) => c.id), arc, text: formatArc(arc, this._verbs) });
 		// A group ordered without its name gets one, and is told it.
 		return name && !group?.trim() ? { ok: true, verb: 'issue', reason: `no group= given: called them ${name}` } : { ok: true, verb: 'issue' };
 	}
