@@ -62,7 +62,7 @@ The full feature list, API and integration guide live in **[arc-director/README.
 
 ## Try it in five minutes
 
-You need [Node.js](https://nodejs.org/) 20+, [pnpm](https://pnpm.io/) and [LM Studio](https://lmstudio.ai/) with a chat model downloaded (Gemma 4 or Qwen 3 class models work well). No LM Studio? The game's first screen can download a model to run right in the browser instead (Chrome or Edge with WebGPU).
+You need [Node.js](https://nodejs.org/) 20+, [pnpm](https://pnpm.io/) and [LM Studio](https://lmstudio.ai/) with a chat model downloaded (Gemma 4 or Qwen 3 class models work well). No LM Studio? The game's first screen can download a model to run right in the browser instead (it needs WebGPU, and the screen says what to try if your browser can't).
 
 1. Start LM Studio's local server on its default port (`1234`).
 2. Clone and run the example game:

@@ -181,25 +181,24 @@ export class BrowserProvider implements InferenceProvider {
 	 * Why models cannot run well in this browser, and how the player can fix it, or null when they can: a short first
 	 * line, then what to do. Ask before offering a download. Without JSPI and 64-bit memory wllama turns WebGPU off
 	 * and the model crawls on the CPU (Firefox by default; Safari has wllama's slower compat build instead). With them
-	 * but no GPU, the browser has turned it off, most often after the GPU crashed, until the browser restarts.
+	 * but no GPU, the browser has turned it off, most often after the GPU crashed, until the browser restarts. Either
+	 * way the second line names what to try instead (see `tryOtherBrowser`).
 	 */
 	public static async unsupported():Promise<string | null> {
-		const agent = (globalThis as { navigator?:{ userAgent?:string } }).navigator?.userAgent ?? '';
-		const firefox = /Firefox\//.test(agent);
+		const agent = userAgent();
+		const firefox = FIREFOX.test(agent);
+		const elsewhere = tryOtherBrowser();
 		if (firefox && !fastWasm()) {
-			return "Firefox can't run AI models on the graphics card yet.\n"
-				+ 'Use Chrome or Edge. Or, in Firefox, open about:config, turn on javascript.options.wasm_js_promise_integration, and restart Firefox.';
+			return `Firefox can't run AI models on the graphics card yet.\n${elsewhere}`;
 		}
 		if (!(globalThis as { navigator?:{ gpu?:unknown } }).navigator?.gpu) {
-			return firefox
-				? "This version of Firefox can't run AI models.\nUpdate Firefox, or use Chrome or Edge."
-				: "This browser can't run AI models.\nUse Chrome or Edge.";
+			return `${firefox ? 'This version of Firefox' : 'This browser'} can't run AI models on the graphics card.\n${elsewhere}`;
 		}
 		if (!fastWasm() && !/Version\/[\d.]+.*Safari/.test(agent)) {
-			return 'This browser is too old to run AI models.\nUpdate it, or use Chrome or Edge.';
+			return `This browser is too old to run AI models on the graphics card.\n${elsewhere}`;
 		}
 		return await gpuAdapter() ? null : 'Your browser has turned off the graphics card, most often after a crash.\n'
-			+ 'Quit the browser completely (every window) and open it again. If that does not help, turn on graphics acceleration in its settings.';
+			+ `Quit the browser completely and open it again. ${elsewhere}`;
 	}
 
 	/** The model on the GPU now, as it was named, or null. */
@@ -554,7 +553,7 @@ async function tokensPerSecond(wllama:Wllama):Promise<number> {
 			stream: true,
 			abortSignal: stop.signal,
 		}) as AsyncIterable<unknown>;
-		for await (const _ of chunks) {
+		for await (const chunk of chunks) {
 			stamps.push(performance.now());
 		}
 	}
@@ -574,7 +573,7 @@ async function tokensPerSecond(wllama:Wllama):Promise<number> {
 function tooSlow(perSecond:number):string {
 	const speed = perSecond > 0 ? `${perSecond.toFixed(1)} words a second` : 'almost nothing';
 	return `It writes too slowly in this browser to think with (${speed}).\n`
-		+ 'Use Chrome or Edge with graphics acceleration on, close other tabs that use the graphics card, or run models in LM Studio instead.';
+		+ `Turn on graphics acceleration and close other tabs that use the graphics card. ${tryOtherBrowser()} Or run models in LM Studio instead.`;
 }
 
 /**
@@ -671,6 +670,27 @@ function gpuAdapter():Promise<GPUAdapter | null> {
 	const gpu = (globalThis as { navigator?:{ gpu?:GPU } }).navigator?.gpu;
 	adapter ??= gpu ? gpu.requestAdapter({ powerPreference: 'high-performance' }).catch(() => null) : Promise.resolve(null);
 	return adapter;
+}
+
+const FIREFOX = /Firefox\//;
+
+function userAgent():string {
+	return (globalThis as { navigator?:{ userAgent?:string } }).navigator?.userAgent ?? '';
+}
+
+/**
+ * What to try when this browser cannot run models on the graphics card. Chrome and the rest of that family are sent
+ * to Firefox; Firefox is sent to Chrome. On iOS every browser is WebKit underneath, so only a computer differs.
+ */
+function tryOtherBrowser():string {
+	const agent = userAgent();
+	if (FIREFOX.test(agent)) {
+		return 'Try Chrome.';
+	}
+	if (/iPhone|iPad|iPod|CriOS\/|FxiOS\//.test(agent)) {
+		return 'Try a computer.';
+	}
+	return /Chrome\//.test(agent) ? 'Try Firefox.' : 'Try Chrome or Firefox.';
 }
 
 /** Whether wllama can run its WebGPU build here: it needs JSPI (`WebAssembly.Suspending`) and 64-bit memory. */

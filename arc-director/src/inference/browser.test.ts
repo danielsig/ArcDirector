@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { contextCap, inPageFetch, loadFailure, storedModels, type Wllama } from './browser.js';
+import { BrowserProvider, contextCap, inPageFetch, loadFailure, storedModels, type Wllama } from './browser.js';
 import { ggufMetadata } from './gguf.js';
 import { HttpProvider } from './http.js';
 import { JevSystemOne } from './systemone.js';
@@ -181,6 +181,60 @@ function fakeNode(tag:string):FakeNode {
 	};
 	return node;
 }
+
+describe('BrowserProvider.unsupported', () => {
+	/** Calls `unsupported` as if the page's browser were `userAgent`, with WebGPU only given `gpu` and JSPI and 64-bit memory only when `fast`. */
+	async function unsupportedAs(userAgent:string, { gpu, fast = false }:{ gpu?:unknown; fast?:boolean } = {}):Promise<string | null> {
+		const stubs = { navigator: { userAgent, gpu }, WebAssembly: fast ? { Suspending: class {}, Memory: class {} } : {} };
+		const previous = Object.keys(stubs).map((name) => [name, Object.getOwnPropertyDescriptor(globalThis, name)] as const);
+		for (const [name, value] of Object.entries(stubs)) {
+			Object.defineProperty(globalThis, name, { configurable: true, value });
+		}
+		try {
+			return await BrowserProvider.unsupported();
+		}
+		finally {
+			for (const [name, descriptor] of previous) {
+				if (descriptor) {
+					Object.defineProperty(globalThis, name, descriptor);
+				}
+				else {
+					delete (globalThis as Record<string, unknown>)[name];
+				}
+			}
+		}
+	}
+
+	const CHROME = 'Mozilla/5.0 Chrome/131.0.0.0';
+	const FIREFOX = 'Mozilla/5.0 Firefox/133.0';
+	const SAFARI = 'Mozilla/5.0 Version/18.0 Safari/605.1.15';
+
+	it('says Firefox cannot yet without JSPI, and an old one cannot once it has JSPI but no WebGPU', async () => {
+		assert.equal(await unsupportedAs(FIREFOX), "Firefox can't run AI models on the graphics card yet.\nTry Chrome.");
+		assert.equal(await unsupportedAs(FIREFOX, { fast: true }), "This version of Firefox can't run AI models on the graphics card.\nTry Chrome.");
+	});
+
+	it('sends a browser without WebGPU to the other browsers', async () => {
+		assert.equal(await unsupportedAs(CHROME), "This browser can't run AI models on the graphics card.\nTry Firefox.");
+		assert.equal(await unsupportedAs(SAFARI), "This browser can't run AI models on the graphics card.\nTry Chrome or Firefox.");
+	});
+
+	it('sends every iOS browser to a computer, since they are all WebKit there', async () => {
+		for (const agent of ['Mozilla/5.0 (iPhone) Version/18.0 Safari/605.1.15', 'Mozilla/5.0 (iPhone) CriOS/131.0.0.0 Safari/604.1', 'Mozilla/5.0 (iPad) FxiOS/133.0 Safari/605.1.15', 'Mozilla/5.0 (Macintosh) CriOS/131.0.0.0 Safari/604.1']) {
+			assert.equal(await unsupportedAs(agent), "This browser can't run AI models on the graphics card.\nTry a computer.");
+		}
+	});
+
+	it('calls a browser with WebGPU but no JSPI too old', async () => {
+		assert.equal(await unsupportedAs(CHROME, { gpu: {} }), 'This browser is too old to run AI models on the graphics card.\nTry Firefox.');
+	});
+
+	// `gpuAdapter` keeps its first answer for the page, so only this test may get that far.
+	it('says the browser turned the graphics card off when WebGPU gives no adapter', async () => {
+		const gpu = { requestAdapter: () => Promise.resolve(null) };
+		assert.equal(await unsupportedAs(CHROME, { gpu, fast: true }), 'Your browser has turned off the graphics card, most often after a crash.\nQuit the browser completely and open it again. Try Firefox.');
+	});
+});
 
 describe('loading bar', () => {
 	it('shows one bar per download while it loads, with what it is doing, and goes once it is loaded', async () => {

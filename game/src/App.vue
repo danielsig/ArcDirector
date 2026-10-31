@@ -131,12 +131,20 @@ function toggleMenuMusic():void {
 	menuHandle.value?.setMuted(setMusicMuted(!musicMuted.value).musicMuted);
 }
 
-function pick(id:string):void {
-	window.clearTimeout(backdropTimer);
-	sceneID.value = id;
+function sceneHref(id:string):string {
 	const url = new URL(window.location.href);
 	url.searchParams.set('scene', id);
-	window.history.replaceState({}, '', url);
+	return `${url.pathname}${url.search}`;
+}
+
+function pick(id:string, event:MouseEvent):void {
+	if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) {
+		return;
+	}
+	event.preventDefault();
+	window.clearTimeout(backdropTimer);
+	sceneID.value = id;
+	window.history.replaceState({}, '', sceneHref(id));
 }
 
 function leave():void {
@@ -184,19 +192,19 @@ function leave():void {
 			</section>
 			<template v-else>
 				<div class="cards" @mouseleave="unpreview">
-					<button
+					<a
 						v-for="card in CARDS"
 						:key="card.id"
-						type="button"
 						class="card"
+						:href="sceneHref(card.id)"
 						:aria-label="SCENES[card.id]?.title"
 						@mouseenter="preview(card.id, $event.currentTarget)"
 						@focus="preview(card.id, $event.currentTarget)"
 						@blur="unpreview"
-						@click="pick(card.id)"
+						@click="pick(card.id, $event)"
 					>
 						<img :src="`/menu/${card.id}.jpg`" alt="">
-					</button>
+					</a>
 				</div>
 				<div class="details" :class="{ shown: hoveredCard }" aria-live="polite">
 					<template v-if="hoveredCard">
@@ -207,6 +215,23 @@ function leave():void {
 				<MindMenu @change="setupDone = false" />
 			</template>
 		</div>
+		<nav class="links" aria-label="Project">
+			<a href="https://github.com/danielsig/ArcDirector" target="_blank" rel="noopener" title="GitHub repository">
+				<img src="/logos/github.svg" alt="">
+				GitHub
+			</a>
+			<a href="https://www.npmjs.com/package/arc-director" target="_blank" rel="noopener" title="arc-director on npm">
+				<img src="/logos/npm.svg" alt="">
+				npm
+			</a>
+			<a href="https://huggingface.co/arc-director" target="_blank" rel="noopener" title="Skaldic models on Hugging Face">
+				<img class="face" src="/logos/huggingface.svg" alt="">
+				Skaldic
+			</a>
+			<a class="mark" href="https://x.com/DanielSigur" target="_blank" rel="noopener" title="@DanielSigur on X">
+				<img src="/logos/x.svg" alt="@DanielSigur on X">
+			</a>
+		</nav>
 		<button
 			type="button"
 			class="music"
@@ -238,7 +263,7 @@ function leave():void {
 <style scoped>
 /*
  * The main menu: the painted background, or a hovered demo's still spreading from its card and then its scene live over it; the logo, a grid of
- * frameless screenshots, and a parchment box with the hovered one's name and a line about it.
+ * frameless screenshots, and a parchment box with the hovered one's name and a line about it. GitHub, npm, the Skaldic models and X sit in the top left.
  */
 .picker {
 	position: absolute;
@@ -324,7 +349,7 @@ function leave():void {
 	z-index: 3;
 	left: 0;
 	width: 50%;
-	top: 40px;
+	top: 64px;
 	bottom: 40px;
 	padding: 0 32px;
 	box-sizing: border-box;
@@ -396,12 +421,15 @@ function leave():void {
 
 /* Just the screenshot; hovered or focused, it lifts and grows a little. */
 .card {
+	display: block;
 	padding: 0;
 	border: 0;
 	background: none;
 	border-radius: var(--radius-small);
 	overflow: hidden;
 	box-shadow: var(--shadow-panel);
+	color: inherit;
+	text-decoration: none;
 	cursor: pointer;
 	transition: transform var(--quick) var(--ease-out);
 }
@@ -453,6 +481,65 @@ function leave():void {
 	line-height: 1.3;
 }
 
+/* GitHub, the npm packages, the Skaldic models, and X: parchment chips in the top left, clear of the column. */
+.links {
+	position: absolute;
+	z-index: 3;
+	top: 14px;
+	left: 14px;
+	display: flex;
+	gap: 8px;
+}
+
+.links a {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	height: 40px;
+	padding: 0 14px 0 10px;
+	color: var(--ink);
+	background: var(--parchment);
+	border: var(--line) solid var(--ink);
+	border-radius: 999px;
+	box-shadow: var(--shadow);
+	font-size: 15px;
+	font-weight: 700;
+	text-decoration: none;
+	transition: background var(--quick) var(--ease-out), transform var(--quick) var(--ease-out);
+}
+
+.links img {
+	width: 18px;
+	height: 18px;
+	display: block;
+}
+
+.links img.face {
+	width: 22px;
+	height: 22px;
+}
+
+/* A chip with only a logo in it is a circle. */
+.links a.mark {
+	aspect-ratio: 1;
+	padding: 0;
+	justify-content: center;
+}
+
+.links a:hover {
+	background: var(--gold);
+	transform: translateY(-2px);
+}
+
+.links a:active {
+	transform: none;
+}
+
+.links a:focus-visible {
+	outline: var(--line-thin) solid var(--gold-deep);
+	outline-offset: 2px;
+}
+
 /* Music on or off: a round button in the corner, as the HUD's. */
 .music {
 	position: absolute;
@@ -487,7 +574,7 @@ function leave():void {
 	.column.wide {
 		left: 16px;
 		right: 16px;
-		top: 16px;
+		top: 64px;
 		bottom: 16px;
 		width: auto;
 		padding: 0;
@@ -505,6 +592,27 @@ function leave():void {
 
 	.cards {
 		gap: 10px;
+	}
+
+	.links {
+		right: 78px;
+		flex-wrap: wrap;
+	}
+
+	.links a {
+		height: 34px;
+		padding: 0 10px 0 8px;
+		font-size: 14px;
+	}
+
+	.links img {
+		width: 16px;
+		height: 16px;
+	}
+
+	.links img.face {
+		width: 20px;
+		height: 20px;
 	}
 }
 </style>
