@@ -18,6 +18,9 @@ import {
 } from 'arc-director';
 import { NPCInput } from '../characters/NPCInput';
 import { PlayerPilot } from '../characters/PlayerPilot';
+import { Reading } from '../characters/Reading';
+import { Seated } from '../characters/Seated';
+import { Belly } from '../engine/Belly';
 import {
 	Celebrating,
 	Named,
@@ -37,7 +40,7 @@ import { idOf, findObject, isLiving } from './names';
 import { kernelsOf, scanWorld } from './kernels';
 import { lookWorld, inventoryOf, followedCarry } from './perception';
 import { roomBounds, type RoomDef } from '../world/spawn';
-import { verbGate } from './verbs';
+import { dropDown, verbGate } from './verbs';
 import { gameWorld } from './world';
 import { LM_STUDIO_ROOT, SKALDIC_LAYA, decisionModelOf, menuModel, showDownload, type SamplingSource } from './inference';
 import { HOSTED, defaultSystemOne } from './hosted';
@@ -53,6 +56,8 @@ import {
 export type { CharacterCtx, SceneHooks };
 
 const ARC_RETRY_CAP = 1;
+const HUNGRY = 'hungry';
+const FULL = 'full';
 const STALL_VERBS = new Set(['wait', 'wander', 'say', 'set_status']);
 
 /**
@@ -90,7 +95,7 @@ export function addModels<TCtx>(director:ArcDirector<TCtx>, p:Prefs = prefs(), s
 export function addThinking<TCtx>(director:ArcDirector<TCtx>, p:Prefs = prefs(), sampling:SamplingSource = 'menu'):ArcDirector<TCtx> {
 	return addModels(director.addLMStudioInference({ baseURL: `${LM_STUDIO_ROOT}/v1`, load: LM_STUDIO_LOAD }), p, sampling)
 		.withArcFormat(p.arcFormat)
-		.withRepair({ retries: ARC_RETRY_CAP });
+		.withRepair({ retries: ARC_RETRY_CAP, perStep: true, unknownFields: true });
 }
 
 /**
@@ -108,7 +113,7 @@ export function addXAIThinking<TCtx>(director:ArcDirector<TCtx>, id:string, p:Pr
 		.addModel('quick', { ...main, thinking: false })
 		.addModel('local', { ...main, thinking: false, decision: true })
 		.withArcFormat(p.arcFormat)
-		.withRepair({ retries: ARC_RETRY_CAP });
+		.withRepair({ retries: ARC_RETRY_CAP, perStep: true, unknownFields: true });
 }
 
 export class GameHost {
@@ -151,6 +156,9 @@ export class GameHost {
 		} = {},
 	) {
 		this.world = world;
+		world.wentDown = (character) => dropDown(this, character);
+		world.caught = (character, name) => this.caught(character, name);
+		world.enact = (arc) => this.enactPlayer(arc);
 		this.chat = chat;
 		this.speech = new SpeechQueue(world);
 		this.thinks = new ThinkShow(world, () => this.hooks.goals?.(this));
@@ -191,15 +199,17 @@ export class GameHost {
 		}
 		return director
 			.withCurrency('gold')
+			.withReplaceCheck()
 			.withMindDefaults({ skipHeartbeat: true })
 			.withPriorityQueue({
 				batchThinks: prefs().batchThinks,
 				batchWait: 5,
 				verbScores: { steal: 0.95, equip: 0.5, unequip: 0.5 },
-				heartbeatStart: 2,
-				heartbeatMin: 2,
+				// A fallback only: events, watches and an arc's end are what wake a mind.
+				heartbeatStart: 30,
+				heartbeatMin: 30,
 				mayThink: (ctx) => {
-					if (this.hooks.mayThink?.(this, ctx.mindID) === false) {
+					if (this.hooks.mayThink?.(this, ctx.mindID, ctx.reason) === false) {
 						return false;
 					}
 					const collective = this.arc?.collective(ctx.mindID);
@@ -207,11 +217,16 @@ export class GameHost {
 						return collective.characters.some((c) => isLiving(findObject(this.world, c.id)));
 					}
 					const go = this.world.findByID(ctx.mindID) ?? findObject(this.world, ctx.mindID);
-					if (!isLiving(go)) {
+					// Nor does a sleeper think, until it wakes.
+					if (!isLiving(go) || go?.getComponent(Seated)?.asleep) {
 						return false;
 					}
 					// An idle mind waits for its watches to wake it; one with none has only its heartbeat.
 					if (ctx.reason === 'heartbeat') {
+						// With a book open, only a watch or an event calls it away.
+						if (go?.getComponent(Reading)?.active) {
+							return false;
+						}
 						const persona = this.arc?.character(ctx.mindID)?.persona;
 						return !!ctx.arc || (!!persona && Object.keys({ ...persona.watches, ...persona.pinnedWatches }).length === 0);
 					}
@@ -337,9 +352,29 @@ export class GameHost {
 		}
 	}
 
+	/** `character` landed a fish: everyone hears, and if it is the player, it says so. */
+	private caught(character:GameObject, name:string):void {
+		this.arc?.pushEvent({ kind: 'Caught', text: `{0} caught ${name}`, who: [idOf(character)], tags: ['fish', name], major: false });
+		if (character.id === 'Player') {
+			this.world.setMessage(`caught ${name}`);
+		}
+	}
+
+	/** `hungry` or `full` among the traits of whoever has a belly, as it says. */
+	private syncHunger():void {
+		this.world.forEachComponent(Belly, (belly, go) => {
+			const identity = this.arc?.character(idOf(go))?.persona.identity;
+			const state = belly.hungry ? HUNGRY : FULL;
+			if (identity && !identity.traits?.includes(state)) {
+				identity.traits = [...(identity.traits ?? []).filter((trait) => trait !== HUNGRY && trait !== FULL), state];
+			}
+		});
+	}
+
 	public observe(dt = 0):void {
 		this.speech.update();
 		scanWorld(this);
+		this.syncHunger();
 		this.hooks.checkBargain?.(this);
 		this.hooks.tickMarketNPC?.(this);
 		publishAiLog(this.log);
@@ -420,6 +455,9 @@ export class GameHost {
 
 	private mayHear(speakerID:string, listenerID:string):boolean {
 		const character = this.world.findByID(listenerID) ?? findObject(this.world, listenerID);
+		if (character?.getComponent(Seated)?.asleep) {
+			return false;
+		}
 		const only = character?.getComponent(HearOnly);
 		if (!only) {
 			return true;

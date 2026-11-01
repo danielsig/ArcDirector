@@ -22,6 +22,7 @@ export type ChunkEntity = {
 	name:string | undefined;
 	keyID:string | undefined;
 	locked:boolean | undefined;
+	lockedFrom:'both' | 'outside' | undefined;
 	open:boolean | undefined;
 	exit:boolean | undefined;
 	roof:RoofStyle | undefined;

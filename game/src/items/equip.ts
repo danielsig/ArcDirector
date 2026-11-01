@@ -6,8 +6,10 @@ import {
 } from '../engine/components';
 import type { World } from '../engine/World';
 import { spawnWorldItem } from '../world/spawnItem';
-import { isItemFill, isOccupied, slotItem, tryInsert } from './inventory';
+import { isItemFill, isOccupied, removeFromBags, slotItem, tryInsert } from './inventory';
 import { isBackpack, type ItemInstance } from './instance';
+
+const HELD_SLOTS:BodySlot[] = ['hands.left.held', 'hands.right.held'];
 
 function displace(character:GameObject, item:ItemInstance, world:World):void {
 	if (tryInsert(character, item)) {
@@ -108,6 +110,23 @@ export function itemInHeldSlot(character:GameObject, item:ItemInstance):boolean 
 	}
 	return slotItem(human, 'hands.left.held') === item
 		|| slotItem(human, 'hands.right.held') === item;
+}
+
+/** Puts `item` back from hand, or takes it from the bags in hand. Says what happened. */
+export function toggleHeld(character:GameObject, item:ItemInstance, world:World):string {
+	const human = character.getComponent(HumanBody);
+	const held = HELD_SLOTS.find((slot) => human && slotItem(human, slot) === item);
+	if (held) {
+		unequipSlot(character, held, world);
+		return `put away ${item.name}`;
+	}
+	// Out of the bags first: what it replaces may need the room.
+	removeFromBags(character, item);
+	const err = equipItem(character, item, world);
+	if (err) {
+		displace(character, item, world);
+	}
+	return err ?? `equipped ${item.name}`;
 }
 
 export function swapHeldHands(character:GameObject):string {

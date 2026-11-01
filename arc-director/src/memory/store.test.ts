@@ -99,4 +99,15 @@ describe('MemoryStore', () => {
 		assert.equal(store.rewrite('mem_99', 'x'), undefined);
 		assert.deepEqual(store.all().map((r) => r.text), ['Dawn led us']);
 	});
+
+	it('keeps a memory pinned for as many thinks as it was told, and after that recall still finds it', () => {
+		const store = new MemoryStore();
+		store.add({ text: 'I live in Hut.', tags: ['Hut'], pinned: true });
+		store.add({ text: 'Goal reached: bought Bread.', tags: ['goal', 'Bread'], pinned: true, pinnedThinks: 2 });
+		store.agePins();
+		assert.equal(store.pinned().length, 2);
+		store.agePins();
+		assert.deepEqual(store.pinned().map((r) => r.text), ['I live in Hut.'], 'the one for good stays');
+		assert.deepEqual(store.recall({ query: 'Bread', k: 1 }).map((r) => r.text), ['Goal reached: bought Bread.']);
+	});
 });

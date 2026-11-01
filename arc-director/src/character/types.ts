@@ -4,10 +4,23 @@ export type Identity = {
 	traits?:string[];
 };
 
-export type Goal = {
+/**
+ * Something a character or collective wants. Once reached it stops being a goal: it stays pinned as a memory for
+ * {@link GOAL_PINNED_THINKS} thinks, and after that only `recall` finds it.
+ */
+export type Goal<TCtx = unknown> = {
 	text:string;
 	priority?:number;
+	/**
+	 * When it is reached: a watch, as its voice sees the world (`'isCarrying("Loaf")'`), or a test of that voice's
+	 * context. Asked as often as watches are. Omit to leave it to the mind, which reads its goals every think and
+	 * ends one with `finish_goal`.
+	 */
+	until?:string | ((ctx:TCtx)=>boolean);
 };
+
+/** Thinks a reached goal stays pinned, as long as the thinks that keep a mentioned article or a tool's result from repeating. */
+export const GOAL_PINNED_THINKS = 5;
 
 /** Standing conditions: short name → watch-language expr. */
 export type Watches = Record<string, string>;

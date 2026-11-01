@@ -18,6 +18,9 @@ import {
 import { bindCarry, bindRoster, asEntityVal } from './me.js';
 import { bindPrev, cloneEntity, freezeMe, type PrevSpec } from './prev.js';
 
+/** Below this share of its health, someone is badly hurt. */
+const BADLY_HURT = 0.35;
+
 export type HostKernels = {
 	me:ExprEntity;
 	others:ExprEntity[];
@@ -176,6 +179,10 @@ export function buildCatalog(host:HostKernels):Catalog {
 			const v = read(who) ?? hpFromFields(who);
 			return !!v && v.hp > 0 && v.hp < v.maxHP;
 		}) }));
+		fns.set('isBadlyHurt', (args) => ({ kind: 'bool', value: whoOf(args).some((who) => {
+			const v = read(who) ?? hpFromFields(who);
+			return !!v && v.hp > 0 && v.hp < v.maxHP * BADLY_HURT;
+		}) }));
 		// Each one's health is remembered, so none is checked against an old reading next time.
 		fns.set('isHPFalling', (args) => ({ kind: 'bool', value: whoOf(args).map((who) => {
 			const v = read(who);
@@ -184,6 +191,7 @@ export function buildCatalog(host:HostKernels):Catalog {
 		}).some(Boolean) }));
 	}
 
+	bindChange(host, fns);
 	if (host.distance) {
 		bindDistance(host, fns);
 	}
@@ -243,30 +251,27 @@ function bindDistance(host:HostKernels, fns:Map<string, NativeFn>):void {
 		}
 		return { kind: 'number', value: best };
 	});
-	fns.set('isApproaching', (args) => {
+	/**
+	 * How much nearer the first has come to the second since the last sample, by its own moves where the host gives
+	 * positions: the second walking up to it is not it approaching.
+	 */
+	const closedIn = (args:ExprVal[]):number | undefined => {
 		const pair = twoEnt(args);
-		if (!pair) {
-			return { kind: 'bool', value: false };
+		const d = pair && distOf(host, pair[0], pair[1]);
+		if (!pair || d === undefined) {
+			return undefined;
 		}
-		const d = distOf(host, pair[0], pair[1]);
-		if (d === undefined) {
-			return { kind: 'bool', value: false };
+		const before = host.cache.rememberDist(pair[0].id, pair[1].id, d);
+		const at = host.point?.(pair[0]);
+		const there = host.point?.(pair[1]);
+		if (!at || !there) {
+			return before === undefined ? undefined : before - d;
 		}
-		const prev = host.cache.rememberDist(pair[0].id, pair[1].id, d);
-		return { kind: 'bool', value: prev !== undefined && d < prev - DIST_EPS };
-	});
-	fns.set('isDeparting', (args) => {
-		const pair = twoEnt(args);
-		if (!pair) {
-			return { kind: 'bool', value: false };
-		}
-		const d = distOf(host, pair[0], pair[1]);
-		if (d === undefined) {
-			return { kind: 'bool', value: false };
-		}
-		const prev = host.cache.rememberDist(pair[0].id, pair[1].id, d);
-		return { kind: 'bool', value: prev !== undefined && d > prev + DIST_EPS };
-	});
+		const was = host.cache.rememberPoint(pair[0].id, at);
+		return was && Math.hypot(...was.map((v, i) => v - (there[i] ?? 0))) - d;
+	};
+	fns.set('isApproaching', (args) => ({ kind: 'bool', value: (closedIn(args) ?? 0) > DIST_EPS }));
+	fns.set('isDeparting', (args) => ({ kind: 'bool', value: (closedIn(args) ?? 0) < -DIST_EPS }));
 	fns.set('approaching', (args, ctx) => filterMotion(host, args, ctx.catalog.me, true, fns));
 	fns.set('departing', (args, ctx) => filterMotion(host, args, ctx.catalog.me, false, fns));
 	if (host.nearRadius !== undefined) {
@@ -524,6 +529,21 @@ function bindGrid(host:HostKernels, fns:Map<string, NativeFn>):void {
 		const r = asNum(args[2]) ?? host.nearRadius ?? 0;
 		return { kind: 'bool', value: Math.max(0, ...g) <= r };
 	});
+}
+
+/**
+ * `hasRisen("name", n)` and `hasFallen("name", n)`. A watch stays true as long as what it reads does, and a true watch
+ * keeps a mind thinking: these are true once, at the sample where the number they name changed.
+ */
+function bindChange(host:HostKernels, fns:Map<string, NativeFn>):void {
+	const changed = (args:ExprVal[], by:(now:number, was:number)=>boolean):ExprVal => {
+		const key = args[0]?.kind === 'string' ? args[0].value : '';
+		const now = args[1]?.kind === 'number' ? args[1].value : Number.NaN;
+		const was = host.cache.rememberCount(key, now);
+		return { kind: 'bool', value: was !== undefined && by(now, was) };
+	};
+	fns.set('hasRisen', (args) => changed(args, (now, was) => now > was));
+	fns.set('hasFallen', (args) => changed(args, (now, was) => now < was));
 }
 
 function bindBusy(fns:Map<string, NativeFn>):void {

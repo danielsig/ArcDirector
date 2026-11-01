@@ -16,7 +16,7 @@ import { instantiateDef } from '../items/instance';
 import { spawnCamera, spawnRaven, spawnNPC, spawnPlayer, spawnRoom } from '../world/spawn';
 import { DEFAULT_SCENE_ID, sceneByID, type PlayerDef, type SceneDef } from '../data/scenes';
 import { loadCharacterModels } from '../render/characterModels';
-import { DirectorPulse, GroundPick, Hud, WorldStream, WorldView } from './systems';
+import { DirectorPulse, GroundPick, Hud, MapPan, WorldStream, WorldView } from './systems';
 import { Session } from './Session';
 import { readSave } from './save';
 import { loadViewPose } from './viewPersist';
@@ -139,6 +139,7 @@ export class Game extends KindlingGame<World> {
 		const getRenderer = () => this.renderer;
 		const view = systems.addComponent(WorldView, { getRenderer, ground: this._scene.ground, outskirts: this._scene.outskirts });
 		systems.addComponent(GroundPick, { getRenderer });
+		systems.addComponent(MapPan, { getRenderer });
 		const hudView = systems.addComponent(Hud, {
 			model: this._hud,
 			director: host,

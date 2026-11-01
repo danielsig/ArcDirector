@@ -124,7 +124,7 @@ function aimStep(step:Step, verbs:VerbRegistry, catalog:Catalog, first:boolean):
 			}
 			args[key] = inner;
 		}
-		else if (argBase(kinds[key]) === 'id' && typeof value === 'string' && /[(.]/.test(value)) {
+		else if (argBase(kinds[key]) === 'id' && key !== verbs.get(step.verb)?.group && typeof value === 'string' && /[(.]/.test(value)) {
 			const target = nearestOf(value, catalog);
 			if (!target && first) {
 				return undefined;

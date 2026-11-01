@@ -93,6 +93,8 @@ const DEFAULT = {
 	/** The local System One's model id: a chat model scored, or a decision model. Empty: the main model. */
 	decisionModel: '',
 	aiLogSource: '',
+	/** The AI log shows every prompt and reply, not only what the slates show. */
+	aiLogFull: false,
 };
 
 export type Prefs = typeof DEFAULT;
@@ -132,6 +134,7 @@ const FIELDS:{ [K in keyof Prefs]:(v:unknown, fallback:Prefs[K])=>Prefs[K] } = {
 	systemOne: (v, fallback) => SYSTEM_ONE_KINDS.find((kind) => kind === v) ?? fallback,
 	decisionModel: str,
 	aiLogSource: str,
+	aiLogFull: bool,
 };
 
 let live:Prefs | null = null;

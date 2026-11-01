@@ -5,10 +5,18 @@ import { characterIs, distXZ, findCarried, healCharacter, inBackpack, removeFrom
 import { instantiateDef, type ItemInstance } from './instance';
 import { getDef } from './defs';
 import { keyNameFor, lockedReason } from './pickup';
+import { Belly } from '../engine/Belly';
+import { Reading } from '../characters/Reading';
 import { cueAt } from '../audio/cue';
 import { applyHit } from '../director/hitFeel';
 import { idOf } from '../director/names';
 import { ATTACKS, guardStops, weaknessDamage } from '../director/fight';
+
+/** A page of the book `item`, if it is one, at random. */
+export function readPage(item:ItemInstance):string | undefined {
+	const pages = getDef(item.defID).components.Book?.pages;
+	return pages?.[Math.floor(Math.random() * pages.length)];
+}
 
 export type UseResult = {
 	ok:boolean;
@@ -21,6 +29,16 @@ function fail(reason:string):UseResult {
 
 function ok(reason = ''):UseResult {
 	return { ok: true, reason };
+}
+
+/** A potion goes down without filling anyone; everything else one consumes is a meal. */
+function isDrink(item:ItemInstance):boolean {
+	return item.Consumable?.effect === 'heal';
+}
+
+/** Whether `item` is something to eat. */
+export function isFood(item:ItemInstance):boolean {
+	return !!item.Consumable && !isDrink(item);
 }
 
 function consume(character:GameObject, item:ItemInstance):void {
@@ -94,6 +112,9 @@ export function strikeWith(character:GameObject, item:ItemInstance, target:GameO
 			world.playerHits.add(target.getComponent(Named)?.id ?? target.id);
 		}
 		applyHit(world, character, target, spec?.knock ?? 1);
+		if (hp.hp <= 0) {
+			world.wentDown(target);
+		}
 	}
 	return 'hit';
 }
@@ -118,7 +139,8 @@ export function useItem(character:GameObject, item:ItemInstance, target:GameObje
 				if (lock.keyID !== item.Key.keyID) {
 					return fail(`wrong key — ${target.getComponent(Named)?.id ?? 'it'} needs ${keyNameFor(world, lock)}`);
 				}
-				lock.locked = false;
+				// A lock on one side only: its key opens the door, and it stays locked for the next one out there.
+				lock.locked &&= lock.lockedFrom === 'outside';
 				const door = target.getComponent(Door);
 				if (door) {
 					door.open = true;
@@ -135,7 +157,7 @@ export function useItem(character:GameObject, item:ItemInstance, target:GameObje
 				if (!door && !chest) {
 					cueAt(world, 'unlock', target);
 				}
-				return ok('unlocked');
+				return ok(lock.locked ? 'opened' : 'unlocked');
 			}
 			if (lock.locked) {
 				return fail(lockedReason(world, lock));
@@ -207,18 +229,26 @@ export function useItem(character:GameObject, item:ItemInstance, target:GameObje
 		return fail('use Bitterroot on BrewHearth');
 	}
 
+	const page = readPage(item);
+	if (page) {
+		character.getComponent(Reading)?.open(item.defID);
+		return ok(`you read: "${page}"`);
+	}
+
 	if (!target && item.defID === 'magic_potion') {
 		return fail('use MagicPotion on NollCot or LinaCot');
 	}
 
 	if (!target && item.Consumable) {
-		if (item.Consumable.effect === 'heal') {
-			healCharacter(character, item.Consumable.amount);
+		const { effect, amount, consumeOnUse } = item.Consumable;
+		const felt = isDrink(item) ? 'drank' : character.getOrAddComponent(Belly).eat(item.defID, effect, amount);
+		if (effect === 'heal') {
+			healCharacter(character, amount);
 		}
-		if (item.Consumable.consumeOnUse) {
+		if (consumeOnUse) {
 			consume(character, item);
 		}
-		return ok('drank');
+		return ok(felt);
 	}
 
 	if (!target && item.Torch && itemInHeldSlot(character, item)) {

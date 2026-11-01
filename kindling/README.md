@@ -493,7 +493,9 @@ declare module '@arc-director/kindling' {
 }
 ```
 
-**Input.** `world.input` (an `Input`) handles the keyboard, the mouse and pointer lock on the canvas. `Game` attaches it and clears its per-frame fields (`pressed` and the look and wheel deltas) after each frame. Keys are named by `KeyboardEvent.code`; the left button on the locked canvas is the key `MOUSE_LEFT`, so `key` holds it and `pressed` clicks it. Set `input.captures` to the keys whose browser default (scrolling, moving focus) the game should take over.
+**Input.** `world.input` (an `Input`) handles the keyboard, the mouse, fingers and pointer lock on the canvas. `Game` attaches it and clears its per-frame fields (`pressed` and the look and wheel deltas) after each frame. Keys are named by `KeyboardEvent.code`; the left button on the locked canvas is the key `MOUSE_LEFT`, so `key` holds it and `pressed` clicks it. Set `input.captures` to the keys whose browser default (scrolling, moving focus) the game should take over.
+
+Fingers on the canvas feed the same fields: a drag is `lookDeltaX` / `lookDeltaY`, a quick tap presses the key `TOUCH_TAP` and moves the mouse there, and two fingers add `pinch` (a ratio) and `twist` (radians, clockwise). `input.touch` says no mouse or trackpad is attached (`any-pointer: fine`), so the host can show its touch controls; `requestLock` does nothing then. With one attached, fingers do nothing of their own, so a laptop with a touch screen plays as any other. On-screen controls are the host's to draw: a stick writes `stickX` / `stickY`, a button calls `press(code)` with the key it stands for.
 
 Kindling has no UI framework, no scene format, and no gameplay systems beyond the types above.
 

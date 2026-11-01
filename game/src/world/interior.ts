@@ -86,14 +86,14 @@ function namedOf(go:GameObject):string {
 function doorStatus(doorGo:GameObject):string {
 	const lock = doorGo.getComponent(Lock);
 	const door = doorGo.getComponent(Door);
+	if (door?.open) {
+		return 'open';
+	}
 	if (lock?.locked) {
 		return 'shut and locked';
 	}
-	if (door && !door.open) {
+	if (door) {
 		return 'shut';
-	}
-	if (door?.open) {
-		return 'open';
 	}
 	return 'the doorway';
 }

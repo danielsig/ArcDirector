@@ -1,11 +1,11 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { parseArcText, formatArc, formatArcBlocks } from './parse.js';
-import { arcFromJSON, arcJSONText, arcSoFar, arcToJSON, parseArc } from './wire.js';
+import { arcFromJSON, arcJSONBlocks, arcJSONText, arcSoFar, finishedSteps, arcToJSON, parseArc, replyBreakdown } from './wire.js';
 import { replySchema } from './schema.js';
 import { VerbRegistry, registerStockVerbs } from './stock-verbs.js';
 import { registerStockCollectiveVerbs } from '../collective/verbs.js';
-import { ArcError, type Arc } from './types.js';
+import { ArcError, sameProgram, type Arc } from './types.js';
 
 function verbs():VerbRegistry {
 	return registerStockVerbs(new VerbRegistry());
@@ -18,6 +18,79 @@ function crowd():VerbRegistry {
 	catalog.add('cleave', { args: { target: 'id' } });
 	return catalog;
 }
+
+describe('replyBreakdown', () => {
+	const verbs = registerStockVerbs(new VerbRegistry());
+	const first = (...pieces:string[]):string | undefined => {
+		const watch = replyBreakdown(verbs);
+		for (const piece of pieces) {
+			const why = watch(piece);
+			if (why) {
+				return why;
+			}
+		}
+		return undefined;
+	};
+
+	it('catches a quote never closed, whatever pieces it comes in', () => {
+		const junk = '{"steps":[{"verb":"block","target":"others.filter(u => u.hp).minBy(u => u.hp)}]}}]}]}]}```out of reach';
+		assert.match(first(junk) ?? '', /"target" never closed its quote/);
+		assert.match(first(...junk.split('')) ?? '', /"target" never closed its quote/);
+	});
+
+	it('catches a value that runs on, or closes what it never opened', () => {
+		assert.match(first(`{"steps":[{"verb":"go_to","target":"${'a'.repeat(301)}`) ?? '', /ran on/);
+		assert.match(first(`{"steps":[{"verb":"say","text":"${'a'.repeat(801)}`) ?? '', /ran on/);
+		assert.match(first('{"steps":[{"verb":"go_to","target":"others.minBy(u => u.hp))') ?? '', /never opened/);
+	});
+
+	it('lets real replies through: brackets in speech, a trade, the Arc\'s own closers, a fence, text', () => {
+		const real = [
+			'{"steps":[{"verb":"say","text":"Ha :) (he said) \\"no\\" ok","to":"Ann"}]}',
+			'{"steps":[{"verb":"offer","to":"Ann","give":{"gold":5},"get":{"Egg":1}}]}',
+			'{"steps":[{"verb":"issue","who":"units.filter(u => isHurt(u))","arc":[{"verb":"loop","arc":[{"verb":"choose","goal":"Hit: the weak (or not)","choices":{"a":[{"verb":"wait"}]}}]}]}]}',
+			'```json\n{"steps":[{"verb":"wait"}]}\n```',
+			'go_to(Keep) && say(text="It is (very) far: }]}")',
+			'I should think about this (at length).\n\n{"steps":[{"verb":"wait"}]}',
+		];
+		for (const reply of real) {
+			assert.equal(first(reply), undefined, reply);
+			assert.equal(first(...reply.split('')), undefined, reply);
+		}
+	});
+});
+
+describe('finishedSteps', () => {
+	it('finds the root steps written to their end, whatever is in their strings', () => {
+		const one = '{"verb":"say","text":"a } \\" ] {"}';
+		const two = '{"verb":"loop","arc":[{"verb":"wait"}]}';
+		assert.equal(finishedSteps(`{"steps":[\n\t${one},\n\t${two},\n\t{"verb":"law","watch":"some(x)}]}}]}`), `{"steps":[${one},${two}]}`);
+		assert.equal(finishedSteps(`{"steps":[${one}]}`), `{"steps":[${one}]}`);
+		assert.equal(finishedSteps('{"steps":[{"verb":"law","watch":"x'), undefined);
+		assert.equal(finishedSteps('go_to(Keep)'), undefined);
+	});
+});
+
+describe('arcJSONBlocks', () => {
+	it('lays Arc JSON out by its nesting, and it reads back the same', () => {
+		const all = registerStockVerbs(new VerbRegistry());
+		const arc = parseArcText('loop(arc=choose("why", wander=wander(), wait=wait()), until=!some(others)) ; say("Done")', all);
+		const text = arcJSONBlocks(arc, all);
+		assert.equal(text, [
+			'{"steps":[',
+			'\t{"verb":"loop","arc":[',
+			'\t\t{"verb":"choose","goal":"why","choices":{',
+			'\t\t\t"wander":[{"verb":"wander"}],',
+			'\t\t\t"wait":[{"verb":"wait"}]',
+			'\t\t}}',
+			'\t],"until":"!some(others)","then":"always"},',
+			'\t{"verb":"say","text":"Done"}',
+			']}',
+		].join('\n'));
+		assert.equal(sameProgram(parseArc(text, all), arc), true);
+		assert.equal(arcJSONBlocks(parseArcText('wait()', all), all), '{"steps":[{"verb":"wait"}]}', 'nothing to nest stays on its line');
+	});
+});
 
 describe('arcSoFar', () => {
 	it('reads Arc JSON cut anywhere without throwing, and grows as it comes', () => {
@@ -93,7 +166,7 @@ describe('Arc JSON', () => {
 	it('skips an empty {} a model left between two steps', () => {
 		const arc = parseArc('{"steps":[{"verb":"wait"},{  },{"verb":"say","text":"Hi"}]}', verbs());
 		assert.deepEqual(arc.map((step) => step.verb), ['wait', 'say']);
-		assert.throws(() => parseArc('{"steps":[{}]}', verbs()), /non-empty list of steps/);
+		assert.throws(() => parseArc('{"steps":[{}]}', verbs()), /the arc is empty/);
 	});
 
 	it('takes if_ok, always and if_failed as then, or && ; ||, and drops what is the default', () => {
@@ -178,6 +251,25 @@ describe('Arc JSON', () => {
 	});
 });
 
+describe('exits on law and when', () => {
+	it('reads times and until from Arc text and Arc JSON alike', () => {
+		const text = 'law(watch=count(others.filter(\'enemy\')) == 0, arc=say(We won, friends), name=victory_speech, times=1) ; when(watch=isHurt(me), arc=wait(), until=isNear(me, Keep), times=2)';
+		const arc = parseArcText(text, verbs());
+		assert.equal(arc[0].args.times, 1);
+		assert.equal(arc[0].args.name, 'victory_speech');
+		assert.equal(arc[1].args.times, 2);
+		assert.equal(arc[1].args.until, 'isNear(me, Keep)');
+		assert.deepEqual(arcFromJSON(JSON.parse(JSON.stringify(arcToJSON(arc))), verbs()), arc);
+		assert.deepEqual(parseArcText(formatArc(arc), verbs()), arc);
+	});
+
+	it('turns down a times that is no number, as loop does', () => {
+		for (const verb of ['law', 'when']) {
+			assert.throws(() => parseArcText(`${verb}(watch=isHurt(me), arc=wait(), times=often)`, verbs()), /'times' must be a number/);
+		}
+	});
+});
+
 describe('replySchema', () => {
 	function schemaOf(registry:VerbRegistry):{ $defs:{ step:{ anyOf:{ properties:{ verb:{ const:string } } }[] } } } {
 		return replySchema(registry) as never;
@@ -187,8 +279,41 @@ describe('replySchema', () => {
 		const catalog = crowd();
 		const kit = catalog.view(['issue', 'wait']);
 		const names = (registry:VerbRegistry):string[] => schemaOf(registry.nested()).$defs.step.anyOf.map((branch) => branch.properties.verb.const);
-		assert.deepEqual(names(kit), [...catalog.list().map((spec) => spec.name), 'group']);
+		assert.deepEqual(names(kit), [...catalog.list().map((spec) => spec.name).filter((name) => name !== 'issue'), 'group']);
 		assert.equal(JSON.stringify(replySchema(kit.nested())), JSON.stringify(replySchema(catalog)));
+	});
+
+	it('takes times and until on law and when, as on loop', () => {
+		const branches = schemaOf(verbs()).$defs.step.anyOf;
+		for (const verb of ['law', 'when', 'loop']) {
+			const { properties } = branches.find((branch) => branch.properties.verb.const === verb)! as unknown as { properties:Record<string, unknown> };
+			assert.ok(properties.times && properties.until, verb);
+		}
+	});
+
+	it('takes issue at the root of a reply only, so no nested arc can hold one', () => {
+		const schema = replySchema(crowd()) as unknown as { properties:{ steps:{ items:{ anyOf:{ properties?:{ verb:{ const:string }; arc:unknown } }[] } } } };
+		const root = schema.properties.steps.items.anyOf;
+		assert.equal(root[0].properties?.verb.const, 'issue');
+		assert.deepEqual(root[0].properties?.arc, { $ref: '#/$defs/arc' });
+		assert.deepEqual(root[1], { $ref: '#/$defs/step' });
+	});
+
+	it('calls two arcs the same program whatever their goal and choices are called, and only then', () => {
+		const kit = crowd();
+		const arc = (text:string) => parseArcText(text, kit);
+		const program = arc('loop(choose("Crush him!", kill=cleave(Knight), guard=slash(Foe)))');
+		assert.ok(sameProgram(program, arc('loop(choose("Silence that tin can.", defend=slash(Foe), attack=cleave(Knight)))')));
+		assert.ok(!sameProgram(program, arc('loop(choose("Crush him!", kill=cleave(Blade), guard=slash(Foe)))')));
+		assert.ok(!sameProgram(arc('say("Hold!")'), arc('say("Run!")')), 'what a say says is what it does');
+	});
+
+	it('refuses issue anywhere but the root of an Arc', () => {
+		const kit = crowd();
+		for (const text of ['loop(issue(who=units, arc=wait()))', 'law(watch=1 > 0, arc=issue(who=units, arc=wait()))', 'when(watch=1 > 0, arc=issue(who=units, arc=wait()))', 'issue(who=units, arc=issue(who=units, arc=wait()))']) {
+			assert.throws(() => parseArcText(text, kit), /issue goes at the root/, text);
+		}
+		assert.doesNotThrow(() => parseArcText('issue(who=units, arc=loop(wait())) ; issue(who=allUnits, arc=wait())', kit));
 	});
 
 	it('has one branch per tool before the steps, the built-ins first, and no more for a mind that lacks one', () => {

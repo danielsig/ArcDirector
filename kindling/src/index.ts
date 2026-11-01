@@ -7,7 +7,7 @@ export { Chunk } from './core/Chunk.js';
 export { ChunkBound, ChunkStreamer, StreamingAnchor } from './core/ChunkStreamer.js';
 export { Game } from './core/Game.js';
 export { Time, resetTime, MAX_DT } from './core/Time.js';
-export { Input, MOUSE_LEFT } from './core/Input.js';
+export { Input, MOUSE_LEFT, TOUCH_TAP } from './core/Input.js';
 export { Rigidbody } from './core/Rigidbody.js';
 export { BoxCollider } from './core/BoxCollider.js';
 export { SHOVE_YIELD, stepPhysics, resolveBody, canOccupy, type BlockerOpts } from './core/physics.js';

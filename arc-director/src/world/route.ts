@@ -161,6 +161,20 @@ export function pointGoal(to:Vec, near = 0):RouteGoal {
 	};
 }
 
+/**
+ * Near a group standing at `points` (at least one): within its spread of its median centre, or `floor` for a tight group.
+ * The spread is the root mean square of each one's distance from that centre, one standard deviation of where they stand.
+ */
+export function groupGoal(points:readonly Vec[], floor:number):RouteGoal {
+	const center = points[0].map((element, axis) => {
+		const sorted = points.map((point) => point[axis]).sort((a, b) => a - b);
+		const mid = sorted.length >> 1;
+		return sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
+	});
+	const spread = Math.sqrt(points.reduce((sum, point) => sum + distance(point, center) ** 2, 0) / points.length);
+	return pointGoal(center, Math.max(spread, floor));
+}
+
 /** A step's toll never passes this many times its length, however close to the threat it lands. */
 const AWAY_TOLL_CAP = 10;
 

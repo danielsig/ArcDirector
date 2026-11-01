@@ -1,3 +1,4 @@
+import { plainTagTests } from './tagTests.js';
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import {
@@ -578,6 +579,55 @@ describe('evaluate', () => {
 		assert.equal(bool('isApproaching(A, me)', host), false);
 		A.x = 11;
 		assert.equal(bool('isDeparting(A, me)', host), true);
+	});
+
+	it('reads what models write for a tag test in the language\'s own form', () => {
+		const none = ():boolean => false;
+		for (const [written, plain] of [
+			[`units.filter(u => u.is('Witch'))`, `units.filter(u => u is 'Witch')`],
+			[`units.filter(u => u.kind === 'Witch' || u.role == "Archer")`, `units.filter(u => u is 'Witch' || u is "Archer")`],
+			[`units.filter(u => u.kind != 'Witch')`, `units.filter(u => !(u is 'Witch'))`],
+			[`others.find(i => i == 'Flint')`, `others.find(i => i is 'Flint')`],
+			[`units.filter(u => u !== 'Witch')`, `units.filter(u => !(u is 'Witch'))`],
+			[`units.filter(u => u.hp !== 3)`, `units.filter(u => u.hp !== 3)`],
+			[`units.filter(u => u.name === 'Flint').minBy(u => u.hp)`, `units.filter(u => u is 'Flint').minBy(u => u.hp)`],
+			[`me == 'Flint' && u.hp > 3`, `me == 'Flint' && u.hp > 3`],
+			[`units.filter(u => u is 'Witch')`, `units.filter(u => u is 'Witch')`],
+			['not ( lexable "', 'not ( lexable "'],
+		]) {
+			assert.equal(plainTagTests(written, none), plain);
+		}
+		assert.equal(plainTagTests(`others.filter((u) => u == 'Oak')`, none), `others.filter((u) => u is 'Oak')`, 'a lambda with its param in brackets');
+		assert.equal(plainTagTests(`others.filter(u => u.kind == 'Oak')`, (name) => name === 'kind'), `others.filter(u => u.kind == 'Oak')`, 'a field the host really gives');
+		const A = { id: 'Flint', tags: ['Blade'], x: 0 };
+		const host:HostKernels = { me: { id: 'me', tags: [] }, others: [A], items: [], cache: new SampleCache() };
+		assert.equal(bool(plainTagTests(`some(others.filter(u => u.name == 'Flint'))`, none), host), true, 'by its name too');
+		assert.equal(bool(plainTagTests(`some(others.filter(u => u.kind == 'Blade'))`, none), host), true);
+	});
+
+	it('approaching is its own walk: walking up to someone does not make them approach', () => {
+		const me = { id: 'me', tags: [] as string[], x: 0 };
+		const A = { id: 'A', tags: [] as string[], x: 10 };
+		const cache = new SampleCache();
+		const host:HostKernels = {
+			me,
+			others: [A],
+			items: [],
+			cache,
+			point: (who) => [(who as typeof me).x, 0],
+			distance: (a, b) => Math.abs((a as typeof me).x - (b as typeof me).x),
+			bindings: { A: { kind: 'entity', value: A } },
+		};
+		bool('isApproaching(A, me)', host);
+		bool('isApproaching(me, A)', host);
+		cache.commit();
+		me.x = 4;
+		assert.equal(bool('isApproaching(A, me)', host), false, 'I walked, A stood still');
+		assert.equal(bool('isApproaching(me, A)', host), true);
+		cache.commit();
+		A.x = 8;
+		assert.equal(bool('isApproaching(A, me)', host), true, 'A walked');
+		assert.equal(bool('isDeparting(A, me)', host), false);
 	});
 
 	it('clamp / softClamp; list as evaluate result', () => {

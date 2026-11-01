@@ -17,12 +17,20 @@ function isTypingTarget(target:EventTarget | null):boolean {
 
 /** The key name of the left mouse button, for {@link Input.key} and {@link Input.pressed}. */
 export const MOUSE_LEFT = 'MouseLeft';
+/** The key name of a quick tap of a finger on the canvas, for {@link Input.pressed}. It moves the mouse to where it landed. */
+export const TOUCH_TAP = 'TouchTap';
+
+/** A finger that travels further than this (px) or stays down longer (ms) is no tap. */
+const TAP_SLOP = 10;
+const TAP_MS = 350;
+
+type Finger = { x:number; y:number; travel:number; downAt:number };
 
 /**
- * Keyboard, mouse and pointer lock for the game's canvas, on `world.input`. `Game` attaches it to its canvas,
- * clears the per-frame fields after every frame, and detaches it on `dispose`. Keys typed into a text field
- * never reach it. Keys are `KeyboardEvent.code` (`KeyW`, `Space`, `Digit1`), plus {@link MOUSE_LEFT} for the
- * left button on the locked canvas.
+ * Keyboard, mouse, fingers and pointer lock for the game's canvas, on `world.input`. `Game` attaches it to its
+ * canvas, clears the per-frame fields after every frame, and detaches it on `dispose`. Keys typed into a text
+ * field never reach it. Keys are `KeyboardEvent.code` (`KeyW`, `Space`, `Digit1`), plus {@link MOUSE_LEFT} for
+ * the left button on the locked canvas and {@link TOUCH_TAP} for a finger's tap.
  */
 export class Input {
 	/** Keys held now. */
@@ -31,14 +39,26 @@ export class Input {
 	public mouseNdcX = 0;
 	public mouseNdcY = 0;
 	public pointerLocked = false;
-	/** Mouse movement while the pointer is locked, this frame. */
+	/** Fingers are the way to play: no mouse or trackpad is attached. With one attached, fingers do nothing of their own, touch screen or not. */
+	public touch = false;
+	/** Mouse movement while the pointer is locked, or fingers dragging on the canvas (two: their middle), this frame. */
 	public lookDeltaX = 0;
 	public lookDeltaY = 0;
 	/** Wheel over the canvas, this frame. */
 	public wheelDelta = 0;
+	/** How much further apart two fingers on the canvas went this frame, as a ratio. */
+	public pinch = 1;
+	/** How far two fingers on the canvas turned this frame, in radians, clockwise on screen. */
+	public twist = 0;
+	/** An on-screen stick the host draws: -1..1, +Y up. It stays where it is put. */
+	public stickX = 0;
+	public stickY = 0;
 	/** Keys whose browser default (page scroll, focus moves, Quick Find) is suppressed. */
 	public captures:(code:string)=>boolean = () => false;
 	private readonly _justDown = new Set<string>();
+	private readonly _fingers = new Map<number, Finger>();
+	/** Whether a mouse or trackpad is attached; it follows them coming and going. */
+	private _mouse:MediaQueryList | null = null;
 	private _canvas:HTMLCanvasElement | null = null;
 
 	/** Held now. */
@@ -51,8 +71,16 @@ export class Input {
 		return this._justDown.has(code);
 	}
 
+	/** Presses `code` for this frame, as an on-screen button does. */
+	public press(code:string):void {
+		this._justDown.add(code);
+	}
+
+	/** Locks the pointer. Fingers have nothing to lock. */
 	public requestLock():void {
-		void this._canvas?.requestPointerLock();
+		if (!this.touch) {
+			void this._canvas?.requestPointerLock();
+		}
 	}
 
 	/** Clears this frame's deltas and presses. */
@@ -60,12 +88,22 @@ export class Input {
 		this.lookDeltaX = 0;
 		this.lookDeltaY = 0;
 		this.wheelDelta = 0;
+		this.pinch = 1;
+		this.twist = 0;
 		this._justDown.clear();
 	}
 
 	public attach(canvas:HTMLCanvasElement):void {
 		this.detach();
 		this._canvas = canvas;
+		this._mouse = window.matchMedia?.('(any-pointer: fine)') ?? null;
+		this._mouse?.addEventListener('change', this._syncTouch);
+		this._syncTouch();
+		canvas.style.touchAction = 'none';
+		canvas.addEventListener('pointerdown', this._onPointerDown);
+		canvas.addEventListener('pointermove', this._onPointerMove);
+		canvas.addEventListener('pointerup', this._onPointerUp);
+		canvas.addEventListener('pointercancel', this._onPointerCancel);
 		window.addEventListener('keydown', this._onKeyDown);
 		window.addEventListener('keyup', this._onKeyUp);
 		window.addEventListener('mousemove', this._onMouseMove);
@@ -81,6 +119,12 @@ export class Input {
 		if (!canvas) {
 			return;
 		}
+		this._mouse?.removeEventListener('change', this._syncTouch);
+		this._mouse = null;
+		canvas.removeEventListener('pointerdown', this._onPointerDown);
+		canvas.removeEventListener('pointermove', this._onPointerMove);
+		canvas.removeEventListener('pointerup', this._onPointerUp);
+		canvas.removeEventListener('pointercancel', this._onPointerCancel);
 		window.removeEventListener('keydown', this._onKeyDown);
 		window.removeEventListener('keyup', this._onKeyUp);
 		window.removeEventListener('mousemove', this._onMouseMove);
@@ -95,6 +139,9 @@ export class Input {
 		this._canvas = null;
 		this.pointerLocked = false;
 		this.keys.clear();
+		this._fingers.clear();
+		this.stickX = 0;
+		this.stickY = 0;
 		this.endFrame();
 	}
 
@@ -121,6 +168,10 @@ export class Input {
 			this.lookDeltaY += e.movementY;
 			return;
 		}
+		this.moveMouse(e.clientX, e.clientY);
+	};
+
+	private moveMouse(clientX:number, clientY:number):void {
 		const canvas = this._canvas;
 		if (!canvas) {
 			return;
@@ -128,8 +179,63 @@ export class Input {
 		const rect = canvas.getBoundingClientRect();
 		const w = rect.width || 1;
 		const h = rect.height || 1;
-		this.mouseNdcX = ((e.clientX - rect.left) / w) * 2 - 1;
-		this.mouseNdcY = -((e.clientY - rect.top) / h) * 2 + 1;
+		this.mouseNdcX = ((clientX - rect.left) / w) * 2 - 1;
+		this.mouseNdcY = -((clientY - rect.top) / h) * 2 + 1;
+	}
+
+	private readonly _syncTouch = ():void => {
+		this.touch = this._mouse ? !this._mouse.matches : false;
+		this._fingers.clear();
+	};
+
+	private readonly _onPointerDown = (e:PointerEvent):void => {
+		if (!this.touch || e.pointerType !== 'touch') {
+			return;
+		}
+		// A second finger makes it a gesture: neither is a tap any more.
+		const alone = this._fingers.size === 0;
+		for (const finger of this._fingers.values()) {
+			finger.travel = Infinity;
+		}
+		this._fingers.set(e.pointerId, { x: e.clientX, y: e.clientY, travel: alone ? 0 : Infinity, downAt: e.timeStamp });
+	};
+
+	private readonly _onPointerMove = (e:PointerEvent):void => {
+		const finger = this._fingers.get(e.pointerId);
+		if (!finger) {
+			return;
+		}
+		const dx = e.clientX - finger.x;
+		const dy = e.clientY - finger.y;
+		const other = [...this._fingers.values()].find((f) => f !== finger);
+		if (other) {
+			const fromX = finger.x - other.x;
+			const fromY = finger.y - other.y;
+			const toX = e.clientX - other.x;
+			const toY = e.clientY - other.y;
+			this.pinch *= Math.hypot(toX, toY) / Math.max(1, Math.hypot(fromX, fromY));
+			this.twist += Math.atan2(fromX * toY - fromY * toX, fromX * toX + fromY * toY);
+		}
+		// With two fingers down, the drag is their middle's: half of what one of them moved.
+		const share = other ? 0.5 : 1;
+		this.lookDeltaX += dx * share;
+		this.lookDeltaY += dy * share;
+		finger.x = e.clientX;
+		finger.y = e.clientY;
+		finger.travel += Math.hypot(dx, dy);
+	};
+
+	private readonly _onPointerUp = (e:PointerEvent):void => {
+		const finger = this._fingers.get(e.pointerId);
+		this._fingers.delete(e.pointerId);
+		if (finger && finger.travel < TAP_SLOP && e.timeStamp - finger.downAt < TAP_MS) {
+			this.moveMouse(e.clientX, e.clientY);
+			this.press(TOUCH_TAP);
+		}
+	};
+
+	private readonly _onPointerCancel = (e:PointerEvent):void => {
+		this._fingers.delete(e.pointerId);
 	};
 
 	private readonly _onWheel = (e:WheelEvent):void => {
@@ -162,5 +268,6 @@ export class Input {
 
 	private readonly _onBlur = ():void => {
 		this.keys.clear();
+		this._fingers.clear();
 	};
 }

@@ -341,7 +341,7 @@ describe('small-model slips from the AI logs', () => {
 		);
 		assert.throws(
 			() => parseArcText('issue(who=units.filter("Blade"), arc=loop(slash(Foe)) ; issue(who=units.filter("Witch"), arc=loop(slash(Foe)))', crowd),
-			/issue inside an issue arc/,
+			/issue goes at the root/,
 		);
 	});
 

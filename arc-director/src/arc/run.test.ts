@@ -6,7 +6,7 @@ import { VerbRegistry, registerStockVerbs } from './stock-verbs.js';
 import { dummyEntity, buildCatalog } from '../expr/natives.js';
 import { SampleCache } from '../expr/types.js';
 import { createArcSession, deferThinks, firstStartable, pollArcSession, runArc, THINK_ABOUT_CAP, type ArcHandler, type LastChoice } from './run.js';
-import { upsertLaw, type Law } from './laws.js';
+import { lawFinished, lawFromSpec, lawHandler, upsertLaw, type Law } from './laws.js';
 
 function go(name:string, then?:Join):Step {
 	return { verb: 'go_to', args: { name }, ...(then ? { then } : {}) };
@@ -269,6 +269,66 @@ describe('groups, fail, loop, when(watch)', () => {
 		assert.ok(verbs.includes('wander'));
 	});
 
+	it('a loop goes on through failures that say going round again may help, but not forever', async () => {
+		let now = 0;
+		const verbs = registerStockVerbs(new VerbRegistry());
+		const stage = async (results:ArcResult[]):Promise<{ result:ArcResult; tries:number }> => {
+			const session = createArcSession({ verbs, now: () => now, nextTime: async () => {
+				now += 0.5;
+			} });
+			let tries = 0;
+			const result = await runArc(parseArcText('loop(arc=go_to(Keep), times=9)', verbs), async () => results[tries++] ?? { ok: true, verb: 'go_to' }, { session });
+			return { result, tries };
+		};
+		const miss:ArcResult = { ok: false, verb: 'go_to', reason: 'too far', retry: true };
+		const through = await stage([miss, miss, { ok: true, verb: 'go_to' }]);
+		assert.equal(through.result.ok, true);
+		assert.equal(through.tries, 9, 'it carries on');
+		const gaveUp = await stage(Array.from({ length: 20 }, () => miss));
+		assert.equal(gaveUp.result.reason, 'too far');
+		assert.equal(gaveUp.tries, 6, 'not forever');
+		const final = await stage([{ ok: false, verb: 'go_to', reason: 'no such thing' }]);
+		assert.equal(final.tries, 1, 'any other failure ends it, as ever');
+	});
+
+	it('does not fire a reaction again the moment it ends, so what it interrupted gets a turn', async () => {
+		let danger = true;
+		let now = 0;
+		const verbs = registerStockVerbs(new VerbRegistry());
+		const catalog = ():ReturnType<typeof buildCatalog> => buildCatalog({ me: dummyEntity('Mira'), others: [], items: [], cache: new SampleCache(), hasHeard: danger });
+		const session = createArcSession({ catalog, now: () => now, verbs, cooldown: 8 });
+		const handler = (arc:string):ArcHandler => ({ source: {} as Step, watch: 'hasHeard', arc: parseArcText(arc, verbs), rank: 0, rest: {} });
+		const ran = async (h:ArcHandler, ok:boolean):Promise<void> => {
+			await runArc(h.arc, async (step) => ({ ok, verb: step.verb }), { session, asHandler: h });
+		};
+		const offer = (h:ArcHandler):void => {
+			session.extraHandlers = () => [h];
+		};
+
+		const speech = handler('say("Curtain!")');
+		offer(speech);
+		assert.equal(firstStartable(session), speech);
+		await ran(speech, true);
+		assert.equal(firstStartable(session), undefined, 'it needs no body: once, however long its watch holds');
+		danger = false;
+		assert.equal(firstStartable(session), undefined);
+		danger = true;
+		assert.equal(firstStartable(session), speech, 'its watch went false and came true again');
+		await ran(speech, false);
+		assert.equal(firstStartable(session), undefined, 'a line refused is spent too: saying it again would change nothing');
+
+		const blow = handler('go_to(Keep)');
+		offer(blow);
+		await ran(blow, true);
+		assert.equal(firstStartable(session), blow, 'a deed that worked goes on while its watch holds');
+		await ran(blow, false);
+		assert.equal(firstStartable(session), undefined, 'one that failed rests');
+		now = 7;
+		assert.equal(firstStartable(session), undefined);
+		now = 8;
+		assert.equal(firstStartable(session), blow);
+	});
+
 	it('keeps a handler with a hold running through its watch turning false, until the hold is up', async () => {
 		let heard = true;
 		let now = 0;
@@ -498,6 +558,76 @@ describe('handlers by reference', () => {
 			return { ok: true, verb: step.verb };
 		}, { session });
 		assert.deepEqual(sources, [when, when]);
+	});
+
+	it('a when with times fires that many times over all the passes of a loop, and its program goes on', async () => {
+		for (const [times, says] of [[1, 1], [2, 2]]) {
+			const session = createArcSession({ catalog: flagCatalog({ danger: true }) });
+			const seen:string[] = [];
+			await runArc(parseArcText(`loop(times=3, arc=(when(watch=danger, arc=say("hi"), times=${times}) ; wait()))`, verbs), async (step) => {
+				seen.push(step.verb);
+				return { ok: true, verb: step.verb };
+			}, { session });
+			assert.deepEqual(seen, [...Array<string>(says).fill('say'), 'wait', 'wait', 'wait']);
+		}
+	});
+
+	it('a when stays finished once its until has held, even if it stops holding', async () => {
+		const flags = { danger: false, over: false };
+		const session = createArcSession({ catalog: () => flagCatalog(flags)() });
+		const seen:string[] = [];
+		await runArc(parseArcText('loop(times=3, arc=(when(watch=danger, arc=say("hi"), until=over) ; wait()))', verbs), async (step) => {
+			seen.push(step.verb);
+			flags.over = true;
+			pollArcSession(session);
+			flags.over = false;
+			flags.danger = true;
+			return { ok: true, verb: step.verb };
+		}, { session });
+		assert.deepEqual(seen, ['wait', 'wait', 'wait']);
+	});
+
+	it('an until coming true does not cut short the run under way', async () => {
+		const flags = { danger: true, over: false };
+		const session = createArcSession({ catalog: () => flagCatalog(flags)() });
+		const seen:string[] = [];
+		await runArc(parseArcText('when(watch=danger, arc=say("hi") ; say("bye"), until=over) ; wait()', verbs), async (step) => {
+			seen.push(step.verb === 'say' ? String(step.args.text) : step.verb);
+			flags.over = true;
+			return { ok: true, verb: step.verb };
+		}, { session });
+		assert.deepEqual(seen, ['hi', 'bye', 'wait']);
+	});
+
+	it('a law with times=1 counts once started, however that run ends', async () => {
+		const law = lawFromSpec({ name: 'cheer', watch: 'danger', arc: 'say("hi")', times: 1 }, verbs, 'x', 'me')!;
+		const session = createArcSession({
+			catalog: flagCatalog({ danger: true }),
+			extraHandlers: () => [lawHandler(law, 0, 'Tom')],
+		});
+		await runArc(law.arc, async (step) => ({ ok: false, interrupted: true, verb: step.verb }), { session, asHandler: lawHandler(law, 0, 'Tom') });
+		assert.deepEqual(law.progress, { Tom: { runs: 1 } });
+		assert.equal(firstStartable(session), undefined);
+		assert.ok(lawFinished(law, () => ['Tom']));
+	});
+
+	it('lawFinished waits for all it reaches, and for someone to have finished', () => {
+		const law = lawFromSpec({ name: 'cheer', watch: 'danger', arc: 'say("hi")', times: 1 }, verbs, 'x', 'units')!;
+		assert.ok(!lawFinished(law, () => []), 'reaching no one yet is not finished');
+		law.progress = { Mira: { runs: 1 }, Tom: { runs: 0 } };
+		assert.ok(!lawFinished(law, () => ['Mira', 'Tom']));
+		assert.ok(lawFinished(law, () => ['Mira']));
+	});
+
+	it('upsertLaw keeps a law\'s count when it is written the same, and starts over when its exit changes', () => {
+		const spec = { name: 'cheer', watch: 'danger', arc: 'say("hi")', times: 1 };
+		const first = lawFromSpec(spec, verbs, 'x', 'me')!;
+		first.progress = { Tom: { runs: 1 } };
+		upsertLaw([first], lawFromSpec(spec, verbs, 'x', 'me')!, 8);
+		assert.deepEqual(first.progress, { Tom: { runs: 1 } });
+		upsertLaw([first], lawFromSpec({ ...spec, times: undefined }, verbs, 'x', 'me')!, 8);
+		assert.equal(first.times, undefined);
+		assert.equal(first.progress, undefined);
 	});
 
 	it('hoists a when out of the arc, and the step before it keeps its own join', async () => {

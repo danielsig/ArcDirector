@@ -20,6 +20,8 @@ const WRONG_SECONDS = 0.6;
 const MAX_SLATES = 4;
 /** Least time between the ticks of a slate being written (s). */
 const TICK_GAP = 0.07;
+/** Most thinks kept for the AI log. */
+const THINK_LOG_CAP = 250;
 /** How long a tool call shows on whoever made it (s): it takes no time itself, so this is for the eye. */
 const TOOL_SECONDS = 3;
 /** How far apart the arcs of one order leave (s). */
@@ -29,7 +31,10 @@ const ORDER_REPEAT = 3;
 
 /** One mind's think on show. */
 export type ThinkSlate = {
+	/** Which think this is, of all those of this scene. */
+	seq:number;
 	id:string;
+	name:string;
 	color:GoalColor;
 	thought:string;
 	arc:string;
@@ -41,6 +46,8 @@ export type ThinkSlate = {
 	began:number;
 	/** How long its think took, once over (ms). */
 	ms:number;
+	/** Which side of its writer it stands, decided once as it first shows. */
+	side?:'left' | 'right';
 	/** When it goes, in game time. */
 	until:number;
 	lastTick:number;
@@ -49,10 +56,14 @@ export type ThinkSlate = {
 /**
  * Puts what minds do as they think on show (`ArcDirector.onThink`): each Arc written out on a slate by its author's head,
  * each order flying to its units, each tool call in the body of whoever made it. Every part has its menu switch, under
- * one that hides them all. The HUD reads {@link slates} and {@link toolOf} each frame.
+ * one that hides them all. The HUD reads {@link slates} and {@link toolOf} each frame, and the AI log {@link thinks}.
  */
 export class ThinkShow {
 	public readonly slates = new Map<string, ThinkSlate>();
+	/** The latest thinks, oldest first, whether or not they got a slate. */
+	public readonly thinks:ThinkSlate[] = [];
+	private readonly _writing = new Map<string, ThinkSlate>();
+	private _seq = 0;
 	private readonly _began = new Map<string, number>();
 	private readonly _tools = new Map<string, { tool:string; until:number }>();
 	/** The last order shown reaching each unit, and when. */
@@ -61,7 +72,9 @@ export class ThinkShow {
 	constructor(private readonly world:World, private readonly goals:()=>SceneGoals | undefined) {}
 
 	public handle = (event:ThinkEvent):void => {
-		const go = findObject(this.world, event.who);
+		// The dead write nothing, though a think of theirs may yet come back from the model.
+		const found = findObject(this.world, event.who);
+		const go = isLiving(found) ? found : undefined;
 		switch (event.kind) {
 			case 'start':
 				this._began.set(event.who, performance.now());
@@ -94,7 +107,7 @@ export class ThinkShow {
 	public update():void {
 		const slates = this.on('arcSlates');
 		for (const [who, slate] of this.slates) {
-			if (Time.time >= slate.until || !slates) {
+			if (Time.time >= slate.until || !slates || !isLiving(findObject(this.world, who))) {
 				this.slates.delete(who);
 			}
 		}
@@ -114,26 +127,33 @@ export class ThinkShow {
 		return [goals?.left, goals?.right].find((side) => side?.who?.includes(id))?.color ?? 'gold';
 	}
 
-	/** The slate `who` is writing on, a fresh one if its last is over; none if slates are off or too many are up. */
-	private slateOf(who:string):ThinkSlate | undefined {
-		const slate = this.slates.get(who);
-		if (slate?.state === 'writing') {
-			return slate;
+	/** The think `who` is writing, a fresh one if its last is over, up on a slate unless slates are off or too many are up. */
+	private thinkOf(who:string, go:GameObject):ThinkSlate {
+		const writing = this._writing.get(who);
+		if (writing) {
+			return writing;
 		}
-		if (!this.on('arcSlates') || (!slate && this.slates.size >= MAX_SLATES)) {
-			return undefined;
+		const fresh:ThinkSlate = { seq: ++this._seq, id: who, name: idOf(go), color: this.colorOf(who), thought: '', arc: '', state: 'writing', error: '', wrongUntil: 0, began: this._began.get(who) ?? performance.now(), ms: 0, until: Infinity, lastTick: 0 };
+		this._writing.set(who, fresh);
+		this.thinks.push(fresh);
+		this.thinks.splice(0, this.thinks.length - THINK_LOG_CAP);
+		if (this.on('arcSlates') && (this.slates.has(who) || this.slates.size < MAX_SLATES)) {
+			this.slates.set(who, fresh);
 		}
-		const fresh:ThinkSlate = { id: who, color: this.colorOf(who), thought: '', arc: '', state: 'writing', error: '', wrongUntil: 0, began: this._began.get(who) ?? performance.now(), ms: 0, until: Infinity, lastTick: 0 };
-		this.slates.set(who, fresh);
 		return fresh;
 	}
 
+	/** Whether `think` is up on a slate, to be heard being written. */
+	private shown(think:ThinkSlate):boolean {
+		return this.slates.get(think.id) === think;
+	}
+
 	private write(who:string, thought:string, arc:string, go:GameObject | undefined):void {
-		const slate = go && (thought || arc) ? this.slateOf(who) : undefined;
+		const slate = go && (thought || arc) ? this.thinkOf(who, go) : undefined;
 		if (!slate) {
 			return;
 		}
-		if (arc.length > slate.arc.length && Time.time - slate.lastTick >= TICK_GAP) {
+		if (this.shown(slate) && arc.length > slate.arc.length && Time.time - slate.lastTick >= TICK_GAP) {
 			slate.lastTick = Time.time;
 			cueAt(this.world, 'arcTick', go!);
 		}
@@ -146,18 +166,21 @@ export class ThinkShow {
 
 	/** A reply would not do: the slate shakes, says why, and the model writes on. */
 	private turnDown(who:string, reason:string, go:GameObject | undefined):void {
-		const slate = go ? this.slateOf(who) : undefined;
+		const slate = go ? this.thinkOf(who, go) : undefined;
 		if (!slate) {
 			return;
 		}
 		slate.error = reason;
 		slate.wrongUntil = Time.time + WRONG_SECONDS;
-		cueAt(this.world, 'arcWrong', go!);
+		if (this.shown(slate)) {
+			cueAt(this.world, 'arcWrong', go!);
+		}
 	}
 
 	private finish(who:string, chose:boolean, error:string | undefined, go:GameObject | undefined):void {
-		const slate = error && go ? this.slateOf(who) : this.slates.get(who);
-		if (!slate || slate.state !== 'writing') {
+		const slate = error && go ? this.thinkOf(who, go) : this._writing.get(who);
+		this._writing.delete(who);
+		if (!slate) {
 			return;
 		}
 		slate.state = chose ? 'done' : error ? 'failed' : 'dropped';
@@ -167,7 +190,7 @@ export class ThinkShow {
 			slate.error = error;
 			slate.wrongUntil = Time.time + WRONG_SECONDS;
 		}
-		if (go && (chose || error)) {
+		if (go && (chose || error) && this.shown(slate)) {
 			cueAt(this.world, chose ? 'arcDone' : 'arcWrong', go);
 		}
 	}

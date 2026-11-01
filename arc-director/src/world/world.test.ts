@@ -5,11 +5,12 @@ import { dummyEntity } from '../expr/natives.js';
 import { SampleCache } from '../expr/types.js';
 import { buildCatalog } from '../expr/natives.js';
 import { evaluate } from '../expr/eval.js';
+import { VerbRegistry } from '../arc/stock-verbs.js';
 import type { ArcResult } from '../arc/types.js';
 import type { MindEvent } from '../mind/types.js';
 import { geometryKernels } from './kernels.js';
 import { Mover, type Crowd } from './mover.js';
-import { awayGoal, findRoute, memoWorld, pointGoal, reachablePoints, type Blocked, type Route, type RouteWorld } from './route.js';
+import { awayGoal, findRoute, groupGoal, memoWorld, pointGoal, reachablePoints, type Blocked, type Route, type RouteWorld } from './route.js';
 import type { Deal } from './deal.js';
 import type { HostWorld, Transfer, Vec } from './types.js';
 import { distance, groundAxes } from './vec.js';
@@ -32,6 +33,7 @@ class Grid {
 	public readonly steering = new Map<string, Vec | null>();
 	public doorLocked = false;
 	public canOffer:(character:string, other:string)=>boolean = () => true;
+	public canSee:(character:string, target:string)=>boolean = () => true;
 	public reach:(from:string, to:string)=>number = () => 1.2;
 	/** The game's own rules, checked before the grid's. */
 	public refuse:(move:Transfer<string>, deal:Deal<string>)=>string | undefined = () => undefined;
@@ -121,6 +123,7 @@ class Grid {
 			};
 		},
 		canOffer: (character, other) => this.canOffer(character, other),
+		getDescription: (character, target) => (this.canSee(character, target) ? `${target} looks fine` : undefined),
 	};
 }
 
@@ -165,7 +168,7 @@ const PEOPLE = ['Smith', 'Mira', 'Bo'];
 async function run(
 	grid:Grid,
 	reply:string,
-	opts:{ kit:string[]; seconds?:number; units?:string[]; nearRadius?:number; before?:(director:ArcDirector<Ctx>)=>void },
+	opts:{ kit:string[]; seconds?:number; units?:string[]; commander?:string; others?:string[]; nearRadius?:number; before?:(director:ArcDirector<Ctx>)=>void },
 ):Promise<{ director:ArcDirector<Ctx> }> {
 	let sent = false;
 	const director = new ArcDirector<Ctx>()
@@ -181,10 +184,10 @@ async function run(
 		.addStockCollectiveVerbs()
 		.withWorld(grid.world)
 		.withDefaultKit({ verbs: opts.kit })
-		.withKernels((ctx) => ({ me: dummyEntity(ctx.id, { tags: ['character'] }), others: [], items: [], nearRadius: opts.nearRadius }))
+		.withKernels((ctx) => ({ me: dummyEntity(ctx.id, { tags: ['character'] }), others: (opts.others ?? []).map((id) => dummyEntity(id, { tags: ['character'] })), items: [], nearRadius: opts.nearRadius }))
 		.withContext((id) => (grid.point.has(id) ? { id } : undefined));
 	if (opts.units) {
-		director.addCollective({ id: 'Hive', kit: { verbs: opts.kit }, identity: { role: 'Leads.' }, characters: opts.units.map((id) => ({ id })) });
+		director.addCollective({ id: 'Hive', kit: { verbs: opts.kit }, identity: { role: 'Leads.' }, commander: opts.commander, characters: opts.units.map((id) => ({ id })) });
 	}
 	else {
 		director.addCharacter({ id: 'Ann', mind: {}, kit: { verbs: opts.kit }, identity: { role: 'Fetches.' } });
@@ -607,6 +610,179 @@ describe('stock world verbs', () => {
 		});
 	});
 
+	describe('a verb aimed at a group', () => {
+		const GROUP = ['Mira', 'Bo', 'Smith'];
+		/** Ann at the origin and the group 10 east, 4 apart: its centre is [10, 0], its spread about 3.3. */
+		const groupGrid = (annAt:Vec = [0, 0]):Grid => new Grid().place('Ann', annAt).place('Mira', [10, 0]).place('Bo', [10, 4]).place('Smith', [10, -4]);
+		const SPREAD = Math.sqrt(32 / 3);
+		/** Talk where `range` is earshot and no one makes out a word, so only the group's own distance ends a walk. */
+		const groupTalk = (grid:Grid, said:(string | string[] | undefined)[], range = 40) => (d:ArcDirector<Ctx>):void => {
+			d.withTalk({
+				inRange: (a, b) => distance(grid.point.get(a)!, grid.point.get(b)!) <= range,
+				clearHear: () => false,
+				others: (id) => ['Ann', ...GROUP].filter((other) => other !== id),
+			}, (u) => said.push(u.to));
+		};
+		const lastResult = (director:ArcDirector<Ctx>):ArcResult | undefined => director.character('Ann')!.lastResult;
+		const ask = (grid:Grid, reply:string, more:(d:ArcDirector<Ctx>)=>void = () => undefined, said:(string | string[] | undefined)[] = [], range = 40) => run(grid, reply, {
+			kit: ['say', 'wait'],
+			others: GROUP,
+			before: (d) => {
+				groupTalk(grid, said, range)(d);
+				more(d);
+			},
+		});
+
+		it('walks near its median centre once, then says the line once to all of them', async () => {
+			const grid = groupGrid();
+			const said:(string | string[] | undefined)[] = [];
+			const { director } = await ask(grid, 'say(text=Hold fast, to=others)', undefined, said);
+			assert.deepEqual(said, [GROUP]);
+			const gap = distance(grid.point.get('Ann')!, [10, 0]);
+			assert.ok(gap <= SPREAD + 0.01, `within its spread: ${gap}`);
+			assert.ok(gap > SPREAD - 1.2, `and no closer: ${gap}`);
+			director.dispose();
+		});
+
+		it('takes an expression that filters, as a watch does', async () => {
+			const grid = groupGrid();
+			const said:(string | string[] | undefined)[] = [];
+			const { director } = await ask(grid, 'say(text=Hold fast, to=others.filter(u => u.id != "Bo"))', undefined, said);
+			assert.deepEqual(said, [['Mira', 'Smith']]);
+			director.dispose();
+		});
+
+		it('stays put when already that close', async () => {
+			const grid = groupGrid([8, 0]);
+			const said:(string | string[] | undefined)[] = [];
+			const { director } = await ask(grid, 'say(text=Hold fast, to=others)', undefined, said);
+			assert.deepEqual(said, [GROUP]);
+			assert.deepEqual(grid.point.get('Ann'), [8, 0]);
+			director.dispose();
+		});
+
+		it('a host that says no: it speaks from where it stands, to those in earshot, and names the rest', async () => {
+			const grid = groupGrid([-10, 0]);
+			grid.place('Bo', [30, 0]);
+			const asked:[string, string, readonly string[]][] = [];
+			const said:(string | string[] | undefined)[] = [];
+			const { director } = await ask(grid, 'say(text=Hold fast, to=others)', (d) => d.withGroupWalk((character, verb, targets) => {
+				asked.push([character.id, verb, targets]);
+				return false;
+			}), said, 25);
+			assert.deepEqual(asked[0], ['Ann', 'say', GROUP]);
+			assert.deepEqual(said, [['Mira', 'Smith']]);
+			assert.deepEqual(grid.point.get('Ann'), [-10, 0]);
+			assert.match(lastResult(director)?.reason ?? '', /out of earshot: Bo/);
+			director.dispose();
+		});
+
+		it('takes the body only when it would walk', async () => {
+			const stayed = groupGrid();
+			let walk = true;
+			const { director } = await ask(stayed, 'wait(seconds=100)', (d) => d.withGroupWalk(() => walk));
+			const ann = director.character('Ann')!;
+			const line = (to:string):[{ verb:string; args:{ text:string; to:string } }] => [{ verb: 'say', args: { text: 'Hi', to } }];
+			assert.equal(ann.takesNoBody(line('others')), false);
+			walk = false;
+			assert.equal(ann.takesNoBody(line('others')), true);
+			walk = true;
+			stayed.place('Ann', [8, 0]);
+			assert.equal(ann.takesNoBody(line('others')), true);
+			stayed.place('Ann', [0, 0]);
+			assert.equal(ann.takesNoBody(line('others.filter("Nope")')), true, 'it fails where it stands');
+			assert.equal(ann.takesNoBody(line('Mira')), false, 'a name walks up as ever');
+			director.dispose();
+		});
+
+		it('is not refused when no way leads to it, and speaks to those in earshot', async () => {
+			const walls = new Set(Array.from({ length: 41 }, (element, i) => `5,${i - 20}`));
+			const grid = new Grid(walls).place('Ann', [0, 0]).place('Mira', [10, 0]).place('Bo', [10, 4]).place('Smith', [10, -4]);
+			const said:(string | string[] | undefined)[] = [];
+			const { director } = await ask(grid, 'say(text=Hold fast, to=others)', undefined, said);
+			assert.deepEqual(said, [GROUP]);
+			assert.deepEqual(grid.point.get('Ann'), [0, 0]);
+			director.dispose();
+		});
+
+		it('fails clearly when no one is left, none is in earshot, or the expression does not evaluate', async () => {
+			const reasonOf = async (reply:string, range = 40):Promise<string | undefined> => {
+				const { director } = await ask(groupGrid(), reply, (d) => d.withGroupWalk(() => false), [], range);
+				const reason = lastResult(director)?.reason;
+				director.dispose();
+				return reason;
+			};
+			assert.equal(await reasonOf('say(text=Hold fast, to=others.filter("Nope"))'), 'no one left in others.filter("Nope")');
+			assert.match(await reasonOf('say(text=Hold fast, to=others.filter(u => 1 / 0))') ?? '', /^cannot read others\.filter\(u => 1 \/ 0\) as a group: /);
+			assert.equal(await reasonOf('say(text=Hold fast, to=others)', 2), 'none of them is in earshot');
+		});
+
+		it('a word that names no one and picks no list is still a name', async () => {
+			const said:(string | string[] | undefined)[] = [];
+			const { director } = await ask(groupGrid(), 'wait(seconds=100)', undefined, said);
+			const say = { verb: 'say', args: { text: 'Hi', to: 'Nobody' } };
+			assert.equal(director.character('Ann')!.aimGroup(say), say);
+			director.dispose();
+		});
+
+		it('walks before a host verb that takes a group, whose handler gets the ids', async () => {
+			const grid = groupGrid();
+			const got:unknown[] = [];
+			const { director } = await run(grid, 'rally(to=others)', {
+				kit: ['rally', 'wait'],
+				others: GROUP,
+				before: (d) => d.addVerb('rally', {
+					args: { to: 'id' },
+					group: 'to',
+					handler: (call) => {
+						got.push(call.args.to, distance(grid.point.get('Ann')!, [10, 0]) <= SPREAD + 0.01);
+						return { ok: true, verb: 'rally' };
+					},
+				}),
+			});
+			assert.deepEqual(got, [GROUP, true]);
+			director.dispose();
+		});
+
+		it('a commander speaks to its units, and stays when the host keeps commanders back', async () => {
+			for (const [stays, to] of [[false, 'units'], [true, 'units'], [false, 'allUnits'], [false, 'units.filter(u => u.id != "Tess")']] as const) {
+				const grid = new Grid().place('Cap', [0, 0]).place('Tess', [10, 0]).place('Wynn', [12, 0]);
+				const said:(string | string[] | undefined)[] = [];
+				const { director } = await run(grid, `say(text=Hold fast, to=${to})`, {
+					kit: ['say', 'wait'],
+					units: ['Cap', 'Tess', 'Wynn'],
+					commander: 'Cap',
+					before: (d) => {
+						d.withTalk({
+							inRange: () => true,
+							clearHear: () => false,
+							others: (id) => ['Cap', 'Tess', 'Wynn'].filter((other) => other !== id),
+						}, (u) => said.push(u.to));
+						if (stays) {
+							d.withGroupWalk((character) => character.collective?.commander !== character);
+						}
+					},
+				});
+				assert.deepEqual(said, [to.startsWith('units.') ? 'Wynn' : ['Tess', 'Wynn']], `${to}`);
+				assert.equal(grid.point.get('Cap')![0] === 0, stays, `${to}: ${grid.point.get('Cap')}`);
+				director.dispose();
+			}
+		});
+
+		it('refuses a group arg that is no id arg', () => {
+			assert.throws(() => new VerbRegistry().add('rally', { args: { text: 'text' }, group: 'text' }), /group arg/);
+		});
+	});
+
+	it('groupGoal: median centre, spread, and a floor for a tight group', () => {
+		const goal = groupGoal([[0, 0], [2, 0], [100, 0]], 1);
+		assert.deepEqual(goal.at, [2, 0], 'a straggler does not drag the centre');
+		const tight = groupGoal([[5, 5], [5, 5]], 1);
+		assert.equal(tight.reached([5.9, 5]), true);
+		assert.equal(tight.reached([6.1, 5]), false);
+		assert.deepEqual(groupGoal([[0, 0], [2, 0]], 0).at, [1, 0]);
+	});
+
 	it('takes a standing offer: walks over, and both sides move at once', async () => {
 		const grid = new Grid().place('Ann', [0, 0]).place('Mira', [4, 0]).place('Bread', [4, 0]);
 		grid.carry.set('Bread', 'Mira');
@@ -655,6 +831,21 @@ describe('stock world verbs', () => {
 		director.dispose();
 	});
 
+	it('examines what it sees from where it stands, however far; out of sight it walks only until it does', async () => {
+		const grid = new Grid().place('Ann', [0, 0]).place('Mira', [8, 0]);
+		const reply = 'examine(target=Mira)';
+		const inSight = await run(grid, reply, { kit: ['examine', 'wait'] });
+		assert.equal(inSight.director.character('Ann')!.lastResult?.reason, 'Mira looks fine');
+		assert.deepEqual(grid.point.get('Ann'), [0, 0], 'it had no need to move');
+		inSight.director.dispose();
+		grid.canSee = () => grid.point.get('Ann')![0] >= 3;
+		const hidden = await run(grid, reply, { kit: ['examine', 'wait'] });
+		assert.equal(hidden.director.character('Ann')!.lastResult?.reason, 'Mira looks fine');
+		const x = grid.point.get('Ann')![0];
+		assert.ok(x >= 3 && x < 6, `it walked to ${x}, not just into sight of Mira at 8`);
+		hidden.director.dispose();
+	});
+
 	it('leaves a lowball waiting where it stands, and refuses one out of sight', async () => {
 		const grid = new Grid().place('Ann', [0, 0]).place('Mira', [4, 0]).place('Bread', [4, 0]);
 		grid.carry.set('Bread', 'Mira');
@@ -663,7 +854,7 @@ describe('stock world verbs', () => {
 			d.offers.post({ from: 'Mira', give: { Bread: 1 }, get: { gold: 5 } });
 		};
 		const low = await run(grid, reply, { kit: ['offer', 'wait'], before });
-		assert.equal(low.director.character('Ann')!.lastResult?.reason, 'offered 4 gold for 1 Bread to Mira; waiting for their answer');
+		assert.equal(low.director.character('Ann')!.lastResult?.reason, 'offered 4 gold for 1 Bread to Mira; it stands until they answer, so do not offer it again');
 		assert.deepEqual(grid.point.get('Ann'), [0, 0]);
 		assert.deepEqual(low.director.offers.all.find((offer) => offer.from === 'Ann'), { from: 'Ann', to: 'Mira', give: { gold: 4 }, get: { Bread: 1 } });
 		low.director.dispose();

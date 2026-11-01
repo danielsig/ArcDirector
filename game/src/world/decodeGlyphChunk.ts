@@ -15,6 +15,8 @@ export type EntityLegend = {
 	over?:string;
 	keyID?:string;
 	locked?:boolean;
+	/** Which side a locked door cannot be opened from without its key: see `Lock.lockedFrom`. Both when unset. */
+	lockedFrom?:'both' | 'outside';
 	open?:boolean;
 	exit?:boolean;
 	/** A door's house: what its roof is made of. Thatch when unset. */
@@ -120,6 +122,7 @@ export function decodeGlyphChunk(file:ChunkFile):DecodedChunk {
 						name: file.names?.[glyph],
 						keyID: spec.keyID,
 						locked: spec.locked,
+						lockedFrom: spec.lockedFrom,
 						open: spec.open,
 						exit: spec.exit,
 						roof: spec.roof,

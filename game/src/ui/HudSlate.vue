@@ -1,5 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
+import { arcLines, bracketDepth, rootVerbs, thinkTime, thoughtTail, type ArcLine } from './arcText';
+import HudArcLine from './HudArcLine.vue';
 import { SLATE_HEIGHT, SLATE_WIDTH, type HudSlate } from './hudModel';
 
 const props = defineProps<{
@@ -14,9 +16,6 @@ const FLICKERS = 18;
 /** Letters a second the pen writes at least, and how quickly it catches up with the model (of what is still unwritten, per second). */
 const PEN_SPEED = 45;
 const PEN_CATCH_UP = 7;
-/** How far each level of an Arc's indent goes, in letters. */
-const INDENT = 2;
-
 /** The needles of light round a chosen Arc, and the rough shape of a slate they are laid out on (px): only the proportions count. */
 const RAY_COUNT = 34;
 const RAY_BOX = [330, 150] as const;
@@ -54,6 +53,9 @@ const RAYS = Array.from({ length: RAY_COUNT }, (_, i) => {
 	};
 });
 
+/** How often it looks again at what has scrolled off the top of the page (ms). */
+const COUNT_EVERY = 300;
+
 /** Letters of the Arc shown so far: the model's words come in bursts, and the pen evens them out. */
 const shown = ref(0);
 const flicker = ref(0);
@@ -62,6 +64,10 @@ const still = matchMedia('(prefers-reduced-motion: reduce)').matches;
 let frame = 0;
 let last = performance.now();
 let wrote = '';
+let nextCount = 0;
+/** The first line of the Arc in sight under the pinned ones, and the root verbs whose calls are all above it, counted. */
+let firstShown = 0;
+const scrolled = ref<[string, number][]>([]);
 
 function step(now:number):void {
 	const dt = (now - last) / 1000;
@@ -83,6 +89,13 @@ function step(now:number):void {
 		flicker.value = Math.floor(now / 1000 * FLICKERS);
 	}
 	pin();
+	if (now >= nextCount) {
+		nextCount = now + COUNT_EVERY;
+		const gone = rootVerbs(lines.value.slice(0, firstShown));
+		if (JSON.stringify(gone) !== JSON.stringify(scrolled.value)) {
+			scrolled.value = gone;
+		}
+	}
 	frame = requestAnimationFrame(step);
 }
 
@@ -94,53 +107,17 @@ onBeforeUnmount(() => {
 	cancelAnimationFrame(frame);
 });
 
-type Piece = { text:string; kind:'plain' | 'verb' | 'mark' | 'said' | 'rune' };
-
-/** Where a long line of Arc may wrap besides its spaces: after these, each with a space too thin to see. */
-const THIN_SPACE = String.fromCodePoint(0x200b);
-const breakable = (text:string):string => text.replace(/[.(,]/g, (mark) => mark + THIN_SPACE);
-
-/** Arc text coloured by what each part of it is: the verbs, the quoted words, and the marks that join steps. */
-function coloured(text:string):Piece[] {
-	const out:Piece[] = [];
-	const part = /([A-Za-z_]\w*)(?=\()|"[^"]*"?|&&|\|\||;/g;
-	let from = 0;
-	for (let m = part.exec(text); m; m = part.exec(text)) {
-		if (m.index > from) {
-			out.push({ text: breakable(text.slice(from, m.index)), kind: 'plain' });
-		}
-		out.push({ text: m[0], kind: m[1] ? 'verb' : m[0].startsWith('"') ? 'said' : 'mark' });
-		from = m.index + m[0].length;
-	}
-	if (from < text.length) {
-		out.push({ text: breakable(text.slice(from)), kind: 'plain' });
-	}
-	return out;
-}
-
 /** The letter a rune at `i` is standing in for shows when the pen has passed: until then, whichever rune it is on this flicker. */
 function rune(i:number):string {
 	return RUNES[(i * 7 + flicker.value * 11) % RUNES.length]!;
 }
 
-/** The Arc so far, line by line, each line's indent apart so that it wraps at that same indent. */
+/** The Arc so far, line by line. */
 const lines = computed(() => {
 	const text = props.slate.arc;
 	const end = Math.floor(shown.value);
 	const writing = props.slate.state === 'writing' || end < text.length;
-	const settled = writing && !still ? Math.max(0, end - TIP) : end;
-	let at = 0;
-	return text.slice(0, end).split('\n').map((line) => {
-		const indent = line.length - line.trimStart().length;
-		const from = at + indent;
-		const to = at + line.length;
-		const pieces = coloured(text.slice(from, Math.min(to, Math.max(from, settled))));
-		for (let i = Math.max(from, settled); i < to; i += 1) {
-			pieces.push(/\s/.test(text[i]!) ? { text: text[i]!, kind: 'plain' } : { text: rune(i), kind: 'rune' });
-		}
-		at = to + 1;
-		return { indent, pieces, opens: line.trimEnd().endsWith('(') };
-	});
+	return arcLines(text, end, writing && !still ? Math.max(0, end - TIP) : end, rune);
 });
 
 /** The most opening lines kept pinned at the top of a slate: its nearest, if it is nested deeper. */
@@ -155,17 +132,17 @@ const pinned = ref<number[]>([]);
 let measured = '';
 
 /** A pinned line says only the call it opens: what comes before it in the chain has no block to follow. */
-function opening(pieces:Piece[]):Piece[] {
+function opening(line:ArcLine):ArcLine {
 	let depth = 0;
 	let from = 0;
-	pieces.forEach((piece, i) => {
+	line.pieces.forEach((piece, i) => {
 		// A `||` inside brackets is part of an expression, not of the chain.
 		if (piece.kind === 'mark' && depth <= 0) {
 			from = i + 1;
 		}
-		depth += piece.text.split('(').length - piece.text.split(')').length;
+		depth += bracketDepth(piece);
 	});
-	return pieces.slice(from).filter((piece) => piece.text.trim());
+	return { ...line, pieces: line.pieces.slice(from).filter((piece) => piece.text.trim()) };
 }
 
 /** Finds them again whenever the page has moved. Pinning covers more of the page, which can change what is on top, so it looks again. */
@@ -181,6 +158,7 @@ function pin():void {
 	measured = key;
 	if (!arc) {
 		pinned.value = [];
+		firstShown = 0;
 		return;
 	}
 	const rows = [...arc.children] as HTMLElement[];
@@ -189,6 +167,7 @@ function pin():void {
 	let cover = 0;
 	for (let pass = 0; pass < 3; pass += 1) {
 		const top = rows.findIndex((row) => row.offsetTop + shift + row.offsetHeight > cover);
+		firstShown = Math.max(0, top);
 		const openers:number[] = [];
 		let indent = list[top]?.indent ?? 0;
 		for (let i = top - 1; i >= 0; i -= 1) {
@@ -210,13 +189,10 @@ function pin():void {
 	}
 }
 
-/** The last of the reasoning, faint, above the Arc: a few lines' worth, whole words. */
-const thought = computed(() => {
-	const text = props.slate.thought.replace(/\s+/g, ' ').trim();
-	return text.length > 170 ? `…${text.slice(text.indexOf(' ', text.length - 170) + 1)}` : text;
-});
+/** The last of the reasoning, faint, above the Arc. */
+const thought = computed(() => thoughtTail(props.slate.thought));
 
-const time = computed(() => `${Math.round(props.slate.ms).toLocaleString('en-US')} ms`);
+const time = computed(() => thinkTime(props.slate.ms));
 </script>
 
 <template>
@@ -242,39 +218,23 @@ const time = computed(() => `${Math.round(props.slate.ms).toLocaleString('en-US'
 			<header>
 				<span class="orb" />
 				<strong>{{ slate.name }}</strong>
+				<span v-if="scrolled.length" class="scrolled">
+					<span v-for="[verb, times] in scrolled" :key="verb">{{ verb }}<template v-if="times > 1"> ×{{ times }}</template></span>
+				</span>
 				<span class="time">{{ time }}</span>
 			</header>
 			<p v-if="slate.error" class="error">{{ slate.error }}</p>
 			<div v-if="pinned.length" ref="pinnedEl" class="pinned">
-				<div
-					v-for="i in pinned"
-					:key="i"
-					class="line"
-					:style="{ paddingLeft: `${(lines[i]?.indent ?? 0) * INDENT}ch` }"
-				>
-					<span
-						v-for="(piece, p) in opening(lines[i]?.pieces ?? [])"
-						:key="p"
-						:class="piece.kind"
-					>{{ piece.text }}</span>
-				</div>
+				<template v-for="i in pinned" :key="i">
+					<HudArcLine v-if="lines[i]" class="line" :line="opening(lines[i]!)" />
+				</template>
 			</div>
 			<div ref="pageEl" class="page">
-				<p v-if="thought" class="thought">{{ thought }}</p>
+				<p v-if="thought" class="thought" :class="{ waiting: !slate.arc }">{{ thought }}</p>
 				<div v-if="slate.arc || slate.state === 'writing'" ref="arcEl" class="arc">
-					<div
-						v-for="(line, i) in lines"
-						:key="i"
-						class="line"
-						:style="{ paddingLeft: `${line.indent * INDENT}ch` }"
-					>
-						<span
-							v-for="(piece, p) in line.pieces"
-							:key="p"
-							:class="piece.kind"
-						>{{ piece.text }}</span>
+					<HudArcLine v-for="(line, i) in lines" :key="i" :line="line">
 						<span v-if="slate.state === 'writing' && i === lines.length - 1" class="pen" />
-					</div>
+					</HudArcLine>
 				</div>
 			</div>
 			<span v-if="slate.state === 'done'" class="glint" />
@@ -306,8 +266,8 @@ const time = computed(() => `${Math.round(props.slate.ms).toLocaleString('en-US'
 	display: flex;
 	flex-direction: column;
 	padding: 6px 10px 8px;
-	color: #efe6d2;
-	background: radial-gradient(ellipse at 30% 20%, #33253d, #1a1220 70%);
+	color: var(--glass-text);
+	background: var(--glass);
 	border: var(--line) solid var(--ink);
 	border-radius: var(--radius-small);
 	box-shadow: inset 0 0 0 1.5px var(--hue-deep), var(--shadow);
@@ -321,7 +281,7 @@ const time = computed(() => `${Math.round(props.slate.ms).toLocaleString('en-US'
 	content: '';
 	position: absolute;
 	inset: 0;
-	background: linear-gradient(112deg, rgba(255, 255, 255, 0.07) 0 34%, transparent 34%);
+	background: var(--glass-facet);
 	pointer-events: none;
 }
 
@@ -442,10 +402,23 @@ header {
 }
 
 strong {
+	flex: none;
 	color: var(--hue-light);
 }
 
+/* The root verbs written and scrolled away, so it still says what the Arc did. */
+.scrolled {
+	display: flex;
+	gap: 6px;
+	min-width: 0;
+	overflow: hidden;
+	color: var(--hue);
+	font: 700 11px/1.2 var(--font-mono);
+	white-space: nowrap;
+}
+
 .time {
+	flex: none;
 	margin-left: auto;
 	color: var(--hue);
 	font: 700 11px/1 var(--font-mono);
@@ -497,45 +470,22 @@ strong {
 .thought {
 	flex: none;
 	margin: 0 0 3px;
-	color: #efe6d2;
+	color: var(--glass-text);
 	opacity: 0.45;
 	font: 400 11px/1.3 var(--font);
 }
 
+/* Until the Arc starts, the same height whatever the reasoning wraps to, its newest words at the foot. */
+.thought.waiting {
+	display: flex;
+	flex-direction: column;
+	justify-content: flex-end;
+	height: 5.2em;
+	overflow: hidden;
+}
+
 .arc {
 	flex: none;
-}
-
-/* A line too long wraps at its own indent. */
-.line {
-	min-height: 1.35em;
-	white-space: pre-wrap;
-	overflow-wrap: anywhere;
-}
-
-.verb {
-	color: var(--hue);
-}
-
-.said {
-	color: var(--hue-light);
-}
-
-.mark {
-	color: #efe6d2;
-	opacity: 0.55;
-}
-
-/* Fixed width, so a rune settling into its letter does not shove the line. */
-.rune {
-	display: inline-block;
-	width: 1ch;
-	overflow: visible;
-	text-align: center;
-	color: var(--hue-light);
-	text-shadow: 0 0 5px var(--hue);
-	font-family: "Segoe UI Historic", "Noto Sans Runic", var(--font-mono);
-	font-weight: 400;
 }
 
 /* The pen: a cut gem, the shape of the Ingwaz rune on the orbs. */

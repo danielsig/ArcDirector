@@ -5,7 +5,7 @@ export const DEFAULT_TRUE_SCORE = 0.51;
 export const DEFAULT_EPSILON = 0.05;
 export const FACING_COS = 0.70710678118;
 
-export type ScoldReason = 'typeError' | 'rawOverOne' | 'capTie' | 'fieldCall';
+export type ScoldReason = 'typeError' | 'rawOverOne' | 'capTie' | 'fieldCall' | 'misuse';
 
 export class ExprError extends Error {
 	public readonly reason:ScoldReason;
@@ -90,6 +90,10 @@ export class SampleCache {
 	private _nextOpen = new Map<string, boolean>();
 	private _path = new Map<string, number>();
 	private _nextPath = new Map<string, number>();
+	private _counts = new Map<string, number>();
+	private _nextCounts = new Map<string, number>();
+	private readonly _points = new Map<string, readonly number[]>();
+	private readonly _nextPoints = new Map<string, readonly number[]>();
 
 	public static pair(a:string, b:string):string {
 		return `${a}\0${b}`;
@@ -133,7 +137,27 @@ export class SampleCache {
 		return this._path.get(k);
 	}
 
+	/** Where `id` stands now, for the next sample; where it stood at the last. */
+	public rememberPoint(id:string, point:readonly number[]):readonly number[] | undefined {
+		this._nextPoints.set(id, point);
+		return this._points.get(id);
+	}
+
+	/** A number the watch itself names, as it stood at the last sample. */
+	public rememberCount(key:string, n:number):number | undefined {
+		this._nextCounts.set(key, n);
+		return this._counts.get(key);
+	}
+
 	public commit():void {
+		for (const [k, v] of this._nextCounts) {
+			this._counts.set(k, v);
+		}
+		this._nextCounts.clear();
+		for (const [k, v] of this._nextPoints) {
+			this._points.set(k, v);
+		}
+		this._nextPoints.clear();
 		for (const [k, v] of this._nextDist) {
 			this._dist.set(k, v);
 		}

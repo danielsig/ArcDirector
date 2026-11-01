@@ -102,7 +102,7 @@ function cycleSound():void {
 		>
 			<!-- A head, a spark of thought in it, struck through when hidden. -->
 			<svg viewBox="0 0 24 24" aria-hidden="true">
-				<path fill="currentColor" d="M12.5 2.5a7.5 7.5 0 0 0-7.5 7.5c0 2.2.9 4 2.3 5.3V21.5h8.4V19h1.8a2 2 0 0 0 2-2v-2.6l1.7-.8-1.8-3.5A7.4 7.4 0 0 0 12.5 2.5z" />
+				<path fill="currentColor" d="M11.5 2.5a7.5 7.5 0 0 1 7.5 7.5c0 2.2-.9 4-2.3 5.3V21.5H8.3V19H6.5a2 2 0 0 1-2-2v-2.6l-1.7-.8 1.8-3.5A7.4 7.4 0 0 1 11.5 2.5z" />
 				<path v-if="hud.mindVisuals" fill="var(--parchment)" d="M12 5.2l1.3 3.6 3.6 1.3-3.6 1.3L12 15l-1.3-3.6-3.6-1.3 3.6-1.3z" />
 				<template v-else>
 					<path d="M3.5 3.5l17 17" stroke="var(--parchment)" stroke-width="4.5" stroke-linecap="round" />

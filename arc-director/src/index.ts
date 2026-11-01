@@ -74,7 +74,7 @@ export { VerbRegistry, registerStockVerbs, STOCK_VERBS, STOCK_MOVE_VERBS, STOCK_
 export { replySchema, verbHelp } from './arc/schema.js';
 export { validateArc, validateStep } from './arc/validate.js';
 export { formatArc, formatArcBlocks, formatStep, parseArcText } from './arc/parse.js';
-export { arcArg, arcFromJSON, arcJSONText, arcToJSON, parseArc } from './arc/wire.js';
+export { arcArg, arcFromJSON, arcJSONBlocks, arcJSONText, arcToJSON, parseArc } from './arc/wire.js';
 
 export {
 	MemoryStore,
@@ -114,7 +114,7 @@ export { AUDIBLE, clarityAt, DEFAULT_HEARING, heardText, LOUD, loudnessAfter, lo
 export { formatInventory } from './perception/formatInventory.js';
 
 export type { ArcFormat, ConversationTurn, MindEvent, Sense, ThinkEvent, ToolSpec } from './mind/types.js';
-export type { Identity, Goal, Kit, KitSource, WatchInput, Watches } from './character/types.js';
+export { GOAL_PINNED_THINKS, type Identity, type Goal, type Kit, type KitSource, type WatchInput, type Watches } from './character/types.js';
 export { NameBook, type NameBookJSON, type NameTarget } from './character/names.js';
 export { Persona, type PersonaJSON, type PersonaSpec } from './character/persona.js';
 export { ArcRunner, sayToOf, type ArcRunnerJSON, type RunnerDeps, type RunnerOptions } from './character/arc-runner.js';

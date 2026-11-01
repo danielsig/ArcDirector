@@ -9,11 +9,13 @@ const FIGHT_VERB_DEFS = {
 	protect: { args: { target: 'id?' }, help: 'stand between an ally and the threat, then attack that threat' },
 } as const satisfies Record<string, VerbDef>;
 
-/** An RPG's verbs: what characters wear and take, and how they fight. */
+/** An RPG's verbs: what characters wear and take, how they rest, and how they fight. */
 export const STOCK_RPG_VERB_DEFS = {
 	equip: { args: { item: 'id', slot: 'string?' } },
 	unequip: { args: { slot: 'string' } },
 	steal: { args: { item: 'id', from: 'id' }, help: 'goes to them first' },
+	sit: { args: { target: 'id?' }, help: 'goes to that chair, or the nearest free one, and stays sat until you walk off', seen: 'sitting' },
+	sleep: { args: { target: 'id?', seconds: 'number?' }, help: 'goes to that bed, or the nearest free one, and sleeps: you hear nothing until you wake', seen: 'sleeping' },
 	...FIGHT_VERB_DEFS,
 } as const satisfies Record<string, VerbDef>;
 

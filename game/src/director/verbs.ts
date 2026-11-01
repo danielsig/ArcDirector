@@ -17,7 +17,9 @@ import {
 import {
 	BODY_SLOTS,
 	BoxCollider,
+	Door,
 	Flammable,
+	Furniture,
 	HumanBody,
 	Appearance,
 	MarketGate,
@@ -42,8 +44,12 @@ import {
 	healCharacter,
 } from '../items/inventory';
 import { equipItem, unequipSlot } from '../items/equip';
+import { findChestHolding, interactDoor, takeFromChest, USE_RANGE } from '../items/pickup';
 import { NPCInput } from '../characters/NPCInput';
+import { Reading } from '../characters/Reading';
+import { approachSpot, occupantName, overWater, Seated } from '../characters/Seated';
 import type { GameHost } from './adapter';
+import { readPage, useItem } from '../items/use';
 import { doTransfer, findItem, transferRefusal } from './items';
 import { idOf, findObject, isLiving } from './names';
 import { applyHit } from './hitFeel';
@@ -158,6 +164,129 @@ export const BODY_VERBS:RPGHost<CharacterCtx> = {
 	unequip: ({ ctx, args }) => doUnequip(ctx, args.slot),
 };
 
+/** How long a sleep lasts when the verb does not say, game seconds. */
+const SLEEP_SECONDS = 300;
+
+/** The `Furniture` of `kind` that fits, free or already its own, nearest `character`. */
+function nearestFree(character:GameObject, kind:Furniture['kind'], fits:(seat:GameObject)=>boolean = () => true):GameObject | undefined {
+	let best:GameObject | undefined;
+	character.world?.forEachComponent(Furniture, (furniture, go) => {
+		const free = !furniture.occupant || furniture.occupant === character;
+		if (furniture.kind === kind && free && fits(go) && (!best || distXZ(character, go) < distXZ(character, best))) {
+			best = go;
+		}
+	});
+	return best;
+}
+
+/**
+ * Walks to beside `seat`, on whichever side is nearer, and settles on it from there, unless someone is on it by then.
+ * The arc ends here: the body stays, and the mind may rest until something comes up.
+ */
+async function restOn(call:Call, seat:GameObject, opts:Parameters<Seated['settle']>[1]):Promise<ArcResult> {
+	const name = idOf(seat);
+	const body = call.ctx.character;
+	if (body.getComponent(Seated)?.seatID !== seat.id) {
+		const spot = approachSpot(seat, body);
+		const walk = await (spot ? call.goToPoint([spot.x, spot.z]) : call.goTo(name));
+		// In a tight room there may be no route to step along. Within arm's reach, it needs none.
+		if (!walk.ok && (walk.interrupted || distXZ(body, seat) > USE_RANGE)) {
+			return { ...walk, verb: call.verb };
+		}
+	}
+	const occupant = seat.getComponent(Furniture)?.occupant;
+	if (occupant && occupant !== call.ctx.character) {
+		return { ok: false, verb: call.verb, reason: `${occupantName(seat)} is on ${name}` };
+	}
+	call.ctx.character.getComponent(Seated)?.settle(seat, opts);
+	return { ok: true, verb: call.verb, reason: `on ${name}` };
+}
+
+/** The `Furniture` of `kind` that `name` calls for, or the nearest free one; or why there is none. */
+function pickSeat(call:Call, kind:Furniture['kind'], name:string | undefined):GameObject | ArcResult {
+	const seat = name ? findObject(call.ctx.world, name) : nearestFree(call.ctx.character, kind);
+	if (seat?.getComponent(Furniture)?.kind === kind) {
+		return seat;
+	}
+	return { ok: false, verb: call.verb, reason: name ? `${name} is not a ${kind}` : `no free ${kind}` };
+}
+
+/** Sitting and sleeping, for `withRPG` in a scene with chairs and beds. */
+export const REST_VERBS:Pick<RPGHost<CharacterCtx>, 'sit' | 'sleep'> = {
+	sit: (call) => {
+		const seat = pickSeat(call, 'chair', call.args.target);
+		return 'ok' in seat ? seat : restOn(call, seat, {});
+	},
+	sleep: (call) => {
+		const bed = pickSeat(call, 'bed', call.args.target);
+		return 'ok' in bed ? bed : restOn(call, bed, { seconds: call.args.seconds ?? SLEEP_SECONDS });
+	},
+};
+
+/** Fishing, for a scene with a chair looking out over water: rod out from the nearest free one until the body walks off. */
+export const FISH_VERB = {
+	help: 'goes to the chair by the river and fishes until you walk off; a catch goes in your pack',
+	seen: 'fishing',
+	handler: (call:Call):ArcResult | Promise<ArcResult> => {
+		const seat = nearestFree(call.ctx.character, 'chair', overWater);
+		return seat ? restOn(call, seat, { rod: true }) : { ok: false, verb: 'fish', reason: 'no free chair by the water' };
+	},
+};
+
+/** Fetches the book `name` from the shelf that holds it and comes back to the seat it got up from, if any. Says why not, if it cannot. */
+async function fetchBook(call:Call, name:string):Promise<ArcResult | undefined> {
+	const { character, world } = call.ctx;
+	const held = findChestHolding(world, name);
+	if (!held) {
+		return { ok: false, verb: 'read', reason: `no book called ${name} here` };
+	}
+	const seatID = character.getComponent(Seated)?.seatID;
+	const walk = await call.goTo(idOf(held.chest));
+	if (!walk.ok) {
+		return { ...walk, verb: 'read' };
+	}
+	const taken = takeFromChest(character, held);
+	if (!taken.startsWith('took ')) {
+		return { ok: false, verb: 'read', reason: taken };
+	}
+	character.getComponent(Appearance)?.playClip('take', Time.time, held.chest);
+	const seat = seatID ? world.findByID(seatID) : undefined;
+	return seat ? restOn(call, seat, {}).then((back) => (back.ok ? undefined : back)) : undefined;
+}
+
+/**
+ * Settles down with the book `name`, fetching it first if it is not carried, and says what the page said. It reads on
+ * until it walks off or the sitting is over, and owes no next think: the mind stays with the book until a watch wakes it.
+ */
+export async function doRead(call:Call, name:string):Promise<ArcResult> {
+	const fetching = findItem(call.ctx.character, name) ? undefined : await fetchBook(call, name);
+	if (fetching) {
+		return fetching;
+	}
+	const book = findItem(call.ctx.character, name);
+	if (!book || !readPage(book)) {
+		return { ok: false, verb: 'read', reason: `${name} is not a book` };
+	}
+	return { ...useItem(call.ctx.character, book, null), verb: 'read' };
+}
+
+/** Walks to the door `name` and shuts it. Anyone can: a lock only has a say in opening it. */
+export async function doClose(call:Call, name:string):Promise<ArcResult> {
+	const door = findObject(call.ctx.world, name);
+	if (!door?.getComponent(Door)) {
+		return { ok: false, verb: 'close', reason: `${name} is not a door` };
+	}
+	if (!door.getComponent(Door)?.open) {
+		return { ok: true, verb: 'close', reason: `${name} is already shut` };
+	}
+	const walk = await call.goTo(name);
+	if (!walk.ok) {
+		return { ...walk, verb: 'close' };
+	}
+	interactDoor(call.ctx.character, door);
+	return { ok: true, verb: 'close' };
+}
+
 /** Taking without paying, for `withRPG` in a scene where theft is possible. */
 export function stealVerb(host:GameHost):RPGHost<CharacterCtx>['steal'] {
 	return (call) => doSteal(host, call, call.args.item, call.args.from);
@@ -208,8 +337,11 @@ function heldWeapon(character:GameObject):{ damage:number; range:number } | unde
 	return packed?.Weapon;
 }
 
-function dropDown(host:GameHost, who:GameObject):void {
+export function dropDown(host:GameHost, who:GameObject):void {
 	host.arc?.abortArc(idOf(who));
+	// No one dies sitting up with a book: the seat is free again and the fall plays.
+	who.getComponent(Seated)?.stand();
+	who.getComponent(Reading)?.stop();
 	const npc = who.getComponent(NPCInput);
 	if (npc) {
 		npc.enabled = false;
@@ -524,7 +656,7 @@ function rollBlow(
 ):Blow {
 	const npc = ctx.npc;
 	if (distXZ(ctx.character, target) > range + 0.5) {
-		return { landed: false, result: { ok: false, verb: attack.name, reason: 'too far' } };
+		return { landed: false, result: { ok: false, verb: attack.name, reason: 'too far', retry: true } };
 	}
 	const clear = !attack.spec.cover || combatSight(ctx.world, ctx.character, target);
 	const who = [idOf(ctx.character), idOf(target)];
@@ -537,7 +669,7 @@ function rollBlow(
 			tags: ['cover', attack.name],
 			major: false,
 		});
-		return { landed: false, result: { ok: false, verb: attack.name, reason: 'no line of sight — flank for a clear shot' } };
+		return { landed: false, result: { ok: false, verb: attack.name, reason: 'no line of sight — flank for a clear shot', retry: true } };
 	}
 	const vitals = target.getComponent(Vitals);
 	if (!vitals) {

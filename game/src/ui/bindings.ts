@@ -39,6 +39,7 @@ export async function readBackquoteGlyph():Promise<string> {
 export function universalKeys(consoleKey:string):SceneKey[] {
 	return [
 		{ key: 'WASD / Arrow Keys', action: 'Move' },
+		{ key: 'Shift (Camera Mode)', action: 'Move Faster' },
 		{ key: 'Enter', action: 'Toggle Prompt' },
 		{ key: 'Tab', action: 'Toggle Chat' },
 		{ key: consoleKey, action: 'Toggle AI Log' },

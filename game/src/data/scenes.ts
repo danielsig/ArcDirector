@@ -181,11 +181,13 @@ export const RIVER_GLEN:SceneDef = {
 		{
 			id: 'Forager',
 			meshID: 'Scout',
-			chunkID: 'glen_1_1',
-			localX: 9,
-			localZ: 3,
+			// Just out of the woods: where the trail from the north meets the road to the bridge.
+			chunkID: 'glen_1_0',
+			localX: 2,
+			localZ: 14,
 			pack: true,
 			wallet: 5,
+			hungry: true,
 			// Young and quick: a bright, mousy squeak.
 			voice: { pitch: 340, rate: 6.6, range: 1.4 },
 		},
@@ -196,7 +198,7 @@ export const RIVER_GLEN:SceneDef = {
 			localX: 8,
 			localZ: 9,
 			pack: true,
-			packLoot: [{ defID: 'bridge_crank', name: 'BridgeCrank' }],
+			packLoot: [{ defID: 'bridge_crank', name: 'BridgeCrank' }, { defID: 'brass_key', name: 'CottageKey' }],
 			merchant: { goods: ['FireMushroom'] },
 			// Old and slow: low and flat.
 			voice: { pitch: 170, rate: 4.4, range: 0.6 },
@@ -205,13 +207,14 @@ export const RIVER_GLEN:SceneDef = {
 			id: 'Angler',
 			meshID: 'VillagerMale',
 			chunkID: 'glen_1_1',
-			// On the chair on the bank, fishing, until the bridge comes down.
+			// On the chair on the bank, fishing.
 			localX: 11,
 			localZ: 8,
 			yaw: 0,
-			seated: { rod: true },
+			seated: { on: 'RiverChair', rod: true },
 			pack: true,
 			wallet: 5,
+			hungry: true,
 			packLoot: [{ defID: 'silver_trout', name: 'SilverTrout' }],
 			merchant: { goods: ['SilverTrout'] },
 			// Easygoing: warm and sing-song.
@@ -233,14 +236,14 @@ export const RIVER_GLEN:SceneDef = {
 	],
 	ravens: [{ x: 8.5, z: 12.5, yaw: 1 }, { x: 9.3, z: 13.4, yaw: -2 }, { x: 15.5, z: 26.5 }],
 	ambient: 'A windy river glen.',
-	keys: SCENE_KEYS,
+	keys: [...SCENE_KEYS, { key: 'E on a chair or bed', action: 'Sit or Sleep' }, { key: 'F on RiverChair', action: 'Fish' }],
 	brief: `The forager, the bridge keeper, and the angler each need a different end to the same errand.
 
 The angler is on the other side of the river, so the forager must cross the bridge to reach him. Lowering it costs 10 gold. The forager is carrying 5, enough for the trout and not the bridge. A mushroom in the west woods is worth 10, and the keeper accepts anything of equal value, so the forager pays with one, crosses, and spends their 5 on the trout.
 
 The angler wants that mushroom, which the keeper sells for 10 gold. The angler starts with 5, takes 5 for the trout, and spends that 10 buying it.
 
-End condition: the bridge is down, the keeper has 10 gold, the forager has a trout, and the angler has a mushroom.`,
+End condition: the bridge is down, the keeper has 10 gold, and the forager has eaten a trout and the angler a mushroom, their favorite foods. After that they just live here: they eat what they carry when they are hungry and rest at home, the angler fishes from the chair on the bank, the keeper reads from a shelf of five books, and the forager looks over the mushrooms in the woods. The keeper lives in the Cottage, the angler in the Hut, and the forager came out of the forest.`,
 	createDirector: createGlenDirector,
 };
 

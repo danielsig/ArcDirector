@@ -33,10 +33,25 @@ const CAPTAIN_LAWS:LawSpec[] = [
 	},
 ];
 
+/** How soon a captain is woken again while one of its units still has no orders (s). */
+const IDLE_AGAIN = 5;
+
 /** What a party's mind may write. */
 const FIGHT:Kit = {
-	verbs: ['issue', 'when', 'law', 'unlaw', 'loop', 'go_to', 'choose', 'smite', 'heal', 'attack', 'rank', 'say'],
+	verbs: ['issue', 'when', 'law', 'unlaw', 'loop', 'go_to', 'choose', 'smite', 'heal', 'attack', 'rank', 'say', 'wait'],
 	tools: [],
+};
+
+/**
+ * What wakes a captain while its orders run, each once as it happens: one of its own falling, a unit left with no orders
+ * (they ended or failed), and someone of its own getting badly hurt; and every few seconds for as long as a unit stands
+ * idle, should a think leave it so. Anything else waits for the heartbeat.
+ */
+const PARTY_WATCHES = {
+	fallen: 'hasFallen("standing", count(allUnits))',
+	orderless: 'hasRisen("orderless", count(units.filter(u => !u.ordered)))',
+	idle: `some(units.filter(u => !u.ordered)) && prev.secondsAgo > ${IDLE_AGAIN}`,
+	wounded: 'hasRisen("wounded", count(allUnits.filter(u => isBadlyHurt(u))))',
 };
 
 /**
@@ -89,22 +104,24 @@ issue(
 			healer=attack(EnemyHealer),
 			finish=attack(others.filter("enemy").minBy(u => u.hp)),
 		),
+		until=!some(others.filter("enemy")),
 	),
+	group=Vanguard,
 )
 law(
-	name=blade_finish,
 	who=units.filter("Blade"),
 	watch=count(${HURT_ENEMIES}) > 1,
 	arc=loop(
 		stab(${HURT_ENEMIES}.minBy(u => u.hp)),
 	),
+	name=blade_finish,
 )`;
 
 /** Standing 5v5 doctrine: how to command, once each. Every name here is one the commander really sees. */
 const FIGHT_DOCTRINE = [
-	'This fight is fast and to the death: every second you wait, your side bleeds. Never wait and never think twice about the same thing: decide and issue.',
+	'This fight is fast and to the death: an idle unit bleeds your side. Decide and issue. Orders that still fit keep running without you: when nothing needs to change, reply wait().',
 	'Your units never move on the enemy or attack unless you order it: on their own they only stand, block, and keep the back line back. Order all four units to attack in the same think, and keep them attacking: all on their Healer or their weakest, or a Knight to protect a hurt ally. attack is each unit\'s own blow (Knight cleave, Blade stab, Archer shoot, Witch hex), so one issue(who=units) orders the whole squad; split them only where their programs differ. You already heal and keep back by your own laws.',
-	'Each think, read the roster and give every unit an order: never leave one idle. Re-issue a unit that is idle or keeps failing; leave one that works. Give a program as loop(choose(...)) like the Example, so it never ends; a fast model re-picks each swing from live hp and distance.',
+	'Each think, read the roster: order a unit that is idle or keeps failing, and leave one that works, never re-issuing it. Give a program as loop(choose(...)) like the Example, so it runs until the enemy is gone; a fast model re-picks each swing from live hp and distance.',
 	'Be relentlessly aggressive and play ahead, never behind: give each unit a state machine. Its issue is what it does now; add a law for its next likely turn, before it happens: an enemy falls (count(others.filter("enemy")) drops), one of yours falls (count(allUnits) drops), or two or more enemies are hurt (finish the weakest first). Laws fire without a think; once a law\'s turn has come, unlaw it and lay the next.',
 	'Inside an issued arc, me is that unit, never you. Units have only attack and their own attacks, block and protect (Knight and Blade), go_to, loop and choose: never issue wait or flee.',
 	'Arrows and smite need a clear shot; hex and heal are weaker through cover. A unit with no shot: go_to an ally who has one.',
@@ -158,9 +175,10 @@ const DUSK_UNITS = partyUnits('Dusk', { Witch: 'Nyx', Knight: 'Helms', Archer: '
 
 const DAWN:CollectiveSpec<CharacterCtx> = {
 	id: 'DawnParty',
-	// Its commander plans the tactics on every heartbeat; its units' System One picks each swing.
+	// Its commander plans when its watches say something changed; its units' System One picks each swing.
 	mind: { skipHeartbeat: false, model: 'quick' },
 	watchesWritable: false,
+	pinnedWatches: PARTY_WATCHES,
 	pinnedSightFocus: ['isHurt(it)'],
 	kit: FIGHT,
 	commander: 'Dawn',
@@ -175,9 +193,10 @@ const DAWN:CollectiveSpec<CharacterCtx> = {
 
 const DUSK:CollectiveSpec<CharacterCtx> = {
 	id: 'DuskParty',
-	// Its commander plans the tactics on every heartbeat; its units' System One picks each swing.
+	// Its commander plans when its watches say something changed; its units' System One picks each swing.
 	mind: { skipHeartbeat: false, model: 'quick' },
 	watchesWritable: false,
+	pinnedWatches: PARTY_WATCHES,
 	pinnedSightFocus: ['isHurt(it)'],
 	kit: FIGHT,
 	commander: 'Dusk',
@@ -216,9 +235,6 @@ function livingCommand(host:GameHost, id:string):boolean {
 
 /** When the commander is down, the farthest living role takes command. */
 function succeedCommand(host:GameHost, party:Collective<CharacterCtx>):void {
-	if (host.bargainDone) {
-		return;
-	}
 	if (party.commander && livingCommand(host, party.commander.id)) {
 		return;
 	}
@@ -275,17 +291,26 @@ function hopWin(host:GameHost, winners:GameObject[], spec:CollectiveSpec<Charact
 	const queue = host.arc?.mindQueue();
 	queue?.setAiOn(spec === DAWN ? DUSK.id : DAWN.id, false);
 	queue?.ensure(spec.id, { skipHeartbeat: true, skipMajor: true });
-	queue?.setWatches(spec.id, [
-		'some(others.nearby().approaching())',
-		'count(me.inventory) > count(prev.me.inventory)',
-	]);
+	queue?.abortThink(spec.id);
 	const winner = host.arc?.collective(spec.id);
 	if (!winner) {
 		return;
 	}
 	winner.replaceProgram();
+	// The fight is over: no more orders, and nothing that wakes a captain for a fight.
+	winner.kit = { verbs: ['say', 'wait'], tools: [] };
+	// What it was told for the fight would only have it write orders it can no longer give.
+	winner.mind.verbInstructions = 'The fight is over and you won. You can only speak or wait.';
+	winner.mind.arcExample = 'say("It is done.")';
+	winner.persona.watches = {};
+	winner.persona.pinnedWatches = {
+		approaching: 'hasHeard || some(others.filter(u => u is "Player").nearby().approaching())',
+		given: 'count(me.inventory) > count(prev.me.inventory)',
+	};
+	queue?.setWatches(spec.id, winner.persona.effectiveWatches());
 	winner.persona.goals = [{ text: 'You won. Stay. Speak when someone approaches or gives you something.', priority: 2 }];
 	for (const character of winner.characters) {
+		character.kit = winner.kit;
 		character.replaceProgram();
 	}
 }
@@ -340,12 +365,15 @@ function goals(host:GameHost):SceneGoals {
 }
 
 export function createDirector(host:GameHost):ArcDirector<CharacterCtx> {
-	host.hooks = { checkBargain: tickFight, goals };
+	// Once it is won only being spoken to or given something wakes a mind: a line ending must not lead to the next line.
+	host.hooks = { checkBargain: tickFight, goals, mayThink: (_, __, reason) => !host.bargainDone || reason === 'watch' };
 	return host.configure(new ArcDirector<CharacterCtx>())
 		.withMOBA(fightVerbs(host))
 		// The ruins' own line: Knight and Blade on the nearest enemy, the rest behind them.
 		.addVerb('rank', { handler: (call) => doRank(host, call) })
 		.onCommanderVacant((party) => succeedCommand(host, party))
+		// A captain stays where its doctrine and its own laws keep it: a line to its units reaches those in earshot.
+		.withGroupWalk((character) => character.collective?.commander !== character)
 		// Each rival is marked in reach or not, so its commander's roster says who can hit whom.
 		.withSight({ limit: 16, look: (ctx) => markReach(host, ctx.character, lookWorld(ctx.character, host.ambient, host)) })
 		.withNames({ seen: seenInFight })

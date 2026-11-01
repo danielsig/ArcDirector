@@ -235,6 +235,13 @@ describe('ThinkQueue', () => {
 		assert.equal(rows[0].score, 0.5);
 	});
 
+	it('resting owes no next think: the mind stays quiet until something comes up', () => {
+		for (const verb of ['sit', 'sleep', 'fish']) {
+			assert.equal(arcScore([{ verb, args: {} }]), 0, verb);
+			assert.ok(arcScore([{ verb, args: {} }], false) > 0, `${verb} that failed still calls for a think`);
+		}
+	});
+
 	it('arcScore is the max warrant; think(about) is 0.55', () => {
 		assert.equal(THINK_BARE_SCORE, 0.35);
 		assert.equal(THINK_ABOUT_SCORE, 0.55);

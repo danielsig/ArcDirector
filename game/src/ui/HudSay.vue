@@ -10,6 +10,7 @@ const props = defineProps<{
 }>();
 
 const session = inject(sessionKey);
+const root = ref<HTMLElement | null>(null);
 const field = ref<HTMLInputElement | null>(null);
 const draft = ref('');
 const pick = ref(0);
@@ -136,8 +137,24 @@ function syncCaret():void {
 	}
 }
 
-onMounted(() => document.addEventListener('selectionchange', syncCaret));
-onUnmounted(() => document.removeEventListener('selectionchange', syncCaret));
+/** On a touch screen, pressing anywhere else closes the box and the chat with it, and does nothing more: that press is not the game's. */
+function closeOnFinger(e:PointerEvent):void {
+	if (!props.hud.sayOpen || !props.hud.touch || root.value?.contains(e.target as Node)) {
+		return;
+	}
+	e.stopPropagation();
+	cancel();
+	props.hud.chatOpen = false;
+}
+
+onMounted(() => {
+	document.addEventListener('selectionchange', syncCaret);
+	document.addEventListener('pointerdown', closeOnFinger, true);
+});
+onUnmounted(() => {
+	document.removeEventListener('selectionchange', syncCaret);
+	document.removeEventListener('pointerdown', closeOnFinger, true);
+});
 
 /** Step the chip's amount by `delta`, never below 1, and gold you give never past your purse. */
 function step(delta:number):void {
@@ -336,7 +353,7 @@ function onPick(row:SaySuggestion, e:MouseEvent):void {
 </script>
 
 <template>
-	<div v-if="hud.sayOpen" class="hud-say" aria-label="say">
+	<div v-if="hud.sayOpen" ref="root" class="hud-say" aria-label="say">
 		<label class="who" for="hud-say-input">
 			<template v-if="hud.sayTo">To {{ hud.sayTo }}</template>
 			<template v-else>No one in earshot</template>

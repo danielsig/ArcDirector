@@ -1,6 +1,6 @@
 import { ChunkStreamer, chunkBounds, type Renderer, Time, Component } from '@arc-director/kindling';
 import { Order } from './order';
-import { patchGoals, patchInspect, patchHud, patchInfer, patchSlates, statusLabels, type Overheads } from './patchHud';
+import { patchGoals, patchInspect, patchHud, patchInfer, patchSlates, patchThinks, statusLabels, type Overheads } from './patchHud';
 import { syncHeldTorchLight } from '../items/heldLight';
 import type { GameHost } from '../director/adapter';
 import { WorldPresent } from '../render/present';
@@ -8,11 +8,12 @@ import type { OutskirtHeights, Surface } from '../world/land';
 import type { HudModel } from '../ui/hudModel';
 import type { Chunk } from '../world/Chunk';
 import { spawnChunkEntities } from '../world/spawn';
-import { syncDressingColliders, syncDressingFlies } from '../world/dressingColliders';
+import { syncDressingColliders, syncDressingFlies, syncFurniture } from '../world/dressingColliders';
 import { syncRoadStep } from '../world/dressingPlan';
 import type { World } from './World';
 import { Camera } from './components';
 import { CELL_SIZE, CHUNK_SIZE } from '../world/constants';
+import { PlayerInput } from '../characters/PlayerInput';
 
 export class DirectorPulse extends Component {
 	public static override order = Order.director;
@@ -35,6 +36,7 @@ export class WorldStream extends ChunkStreamer {
 		spawnChunkEntities(world, chunk);
 		syncDressingColliders(world);
 		syncDressingFlies(world);
+		syncFurniture(world);
 	}
 }
 
@@ -62,6 +64,38 @@ export class GroundPick extends Component {
 			locked ? 0 : world.input.mouseNdcY,
 			y,
 		);
+	}
+}
+
+/**
+ * A bodiless player on a touch screen moves over the world as on a phone's map: the ground follows the finger. It
+ * takes the drag before anything else reads it, so the drag neither turns nor dollies the camera.
+ */
+export class MapPan extends Component {
+	public static override order = Order.pick;
+	public getRenderer:()=>Renderer | null = () => null;
+
+	public override update(dt:number):void {
+		const world = this.gameObject.world;
+		const input = world?.input;
+		const player = world?.findByID('Player');
+		const cam = world?.findByID('MainCamera')?.getComponent(Camera);
+		const view = this.getRenderer();
+		const fov = view?.findCamera()?.fov;
+		if (!input?.touch || !player || !cam || !view || !fov || player.getComponent(PlayerInput)?.embodied !== false) {
+			return;
+		}
+		// The meters of ground one pixel covers where the camera looks; up the screen, the ground is foreshortened.
+		const across = (2 * cam.distance * Math.tan((fov * Math.PI) / 360)) / Math.max(1, view.canvas.clientHeight);
+		const right = input.lookDeltaX * across;
+		const ahead = (input.lookDeltaY * across) / Math.max(0.1, Math.sin(cam.pitch));
+		const sin = Math.sin(cam.yaw);
+		const cos = Math.cos(cam.yaw);
+		const p = player.transform.position;
+		p.x += -right * cos - ahead * sin;
+		p.z += right * sin - ahead * cos;
+		input.lookDeltaX = 0;
+		input.lookDeltaY = 0;
 	}
 }
 
@@ -139,6 +173,7 @@ export class Hud extends Component {
 		}
 		patchHud(world, this.model, renderer, statusLabels(this.director), this.overheads);
 		patchSlates(world, this.model, renderer, this.director);
+		patchThinks(this.model, this.director);
 		patchInfer(this.director, this.model);
 		patchGoals(world, this.model, renderer, this.director.hooks.goals?.(this.director));
 		patchInspect(world, this.model, renderer, this.director, this.overheads.inspect ?? false);

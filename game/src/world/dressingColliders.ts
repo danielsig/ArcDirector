@@ -1,7 +1,13 @@
 import { BoxCollider, GameObject } from '@arc-director/kindling';
+import { Bookshelf, Furniture, Named } from '../engine/components';
 import { Flies } from '../engine/Flies';
 import type { World } from '../engine/World';
+import { Container } from '../items/components';
+import { BOOKS, getDef } from '../items/defs';
+import { instantiateDef } from '../items/instance';
+import { freeWorldID } from '../items/pickup';
 import { planProps, PROP_FOOTPRINT, PROP_HEIGHT } from './dressingPlan';
+import { enclosureAt } from './interior';
 
 /** Name of the invisible obstacle objects, so paths can tell them apart. */
 export const DRESSING_NAME = 'Dressing';
@@ -35,6 +41,44 @@ export function syncDressingColliders(world:World):void {
 			: { size: { x: foot.w * cos + foot.d * sin, y: 1, z: foot.w * sin + foot.d * cos } });
 		world.add(go);
 	});
+}
+
+/** The dressing props characters can use: what each is called, and what makes it so. */
+const USABLE:Partial<Record<string, { word:string; fit:(go:GameObject)=>void }>> = {
+	chair: { word: 'Chair', fit: (go) => go.addComponent(Furniture, { kind: 'chair' }) },
+	bed: { word: 'Bed', fit: (go) => go.addComponent(Furniture, { kind: 'bed' }) },
+	bookshelf: {
+		word: 'Bookshelf',
+		fit: (go) => {
+			go.addComponent(Bookshelf);
+			go.addComponent(Container, { size: BOOKS.length }).contents.push(...BOOKS.map((id) => instantiateDef(getDef(id))));
+		},
+	},
+};
+
+/**
+ * Each chair, bed and bookshelf in the plan as something characters can name and use, once each: the mesh and the collider stay
+ * dressing. Called what the map calls it, else after the house it stands in: `HutChair`. Call it with
+ * `syncDressingColliders`, after the chunk's buildings are in.
+ */
+export function syncFurniture(world:World):void {
+	for (const spot of planProps(world.chunks.values())) {
+		const usable = USABLE[spot.prop];
+		const key = `furniture_${spot.x.toFixed(2)}_${spot.z.toFixed(2)}`;
+		if (!usable || spot.topped || world.objects.some((o) => o.name === key)) {
+			continue;
+		}
+		const house = enclosureAt(world, spot.x, spot.z);
+		const id = freeWorldID(world, spot.name ?? `${house?.getComponent(Named)?.id ?? ''}${usable.word}`);
+		const go = new GameObject(id, key);
+		go.transform.position.x = spot.x;
+		go.transform.position.y = spot.y;
+		go.transform.position.z = spot.z;
+		go.transform.yaw = spot.yaw;
+		go.addComponent(Named, { id });
+		usable.fit(go);
+		world.add(go);
+	}
 }
 
 /** Props flies hover over. */

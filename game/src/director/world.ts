@@ -1,10 +1,14 @@
 import { yawToForward, type GameObject } from '@arc-director/kindling';
 import type { HostWorld, Pose } from 'arc-director';
 import { CharacterMotor } from '../characters/CharacterMotor';
+import { Reading } from '../characters/Reading';
+import { Seated } from '../characters/Seated';
 import { NPCInput } from '../characters/NPCInput';
 import { Chest, HumanBody, Interior, Lock, MarketGate, MarketNPC } from '../engine/components';
+import { ITEM_DEFS } from '../items/defs';
 import { listCarried, itemMatchesName } from '../items/inventory';
-import { chestHolding, findChestHolding, USE_RANGE } from '../items/pickup';
+import type { ItemInstance } from '../items/instance';
+import { chestHolding, findChestHolding, openDoorAhead, USE_RANGE } from '../items/pickup';
 import { cellWays } from '../world/path';
 import { STALL_COUNTER } from '../render/meshRegistry';
 import type { GameHost } from './adapter';
@@ -47,6 +51,7 @@ export function gameWorld(host:GameHost):HostWorld<GameObject> {
 			?? findChestHolding(host.world, id)?.chest
 			?? holderOf(host, id)
 			?? thiefOf(host.world, id),
+		isItem: (name) => Object.values(ITEM_DEFS).some((def) => itemMatchesName({ id: def.id, name: def.name, defID: def.id } as ItemInstance, name)) || !!holderOf(host, name),
 		getPose: poseOf,
 		isDown: (id) => {
 			const go = findObject(host.world, id);
@@ -74,6 +79,12 @@ export function gameWorld(host:GameHost):HostWorld<GameObject> {
 			const npc = character.getComponent(NPCInput);
 			if (npc) {
 				npc.destinationPoint = point ? { x: point[0], z: point[1] } : null;
+			}
+			if (point) {
+				// Whoever sets off gets up first, and opens what it walks up to.
+				character.getComponent(Seated)?.stand();
+				character.getComponent(Reading)?.stop();
+				openDoorAhead(character, { x: point[0], z: point[1] });
 			}
 			const p = character.transform.position;
 			const motor = character.getComponent(CharacterMotor);

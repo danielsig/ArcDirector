@@ -52,6 +52,35 @@ export function arcJSONText(arc:Arc, verbs:VerbRegistry):string {
 	return JSON.stringify({ steps: stepsJSON(arc, verbs) });
 }
 
+/**
+ * The Arc JSON laid out as Arc text's blocks are, for a prompt's examples: what holds an arc opens on its line, what is in
+ * it goes a tab deeper, and it closes at its opener's depth. A small model needs the indent to follow the nesting, and
+ * no line ends on a long run of closing brackets for it to recite.
+ */
+export function arcJSONBlocks(arc:Arc, verbs:VerbRegistry):string {
+	return `{"steps":${blockJSON(stepsJSON(arc, verbs), 0)}}`;
+}
+
+function blockJSON(value:unknown, depth:number):string {
+	const inner = '\t'.repeat(depth + 1);
+	const close = '\t'.repeat(depth);
+	if (Array.isArray(value) && isRecord(value[0])) {
+		// One step with no arc inside stays on the line that holds it, as a call does in Arc text.
+		const flat = value.length === 1 && !Object.values(value[0]).some((v) => Array.isArray(v) || (isRecord(v) && Object.values(v).some(Array.isArray)));
+		return flat ? JSON.stringify(value) : `[\n${value.map((step) => inner + blockJSON(step, depth + 1)).join(',\n')}\n${close}]`;
+	}
+	if (!isRecord(value)) {
+		return JSON.stringify(value);
+	}
+	const args = Object.entries(value).map(([key, arg]) => {
+		const shown = key === 'choices' && isRecord(arg)
+			? `{\n${Object.entries(arg).map(([name, choice]) => `${inner}${JSON.stringify(name)}:${blockJSON(choice, depth + 1)}`).join(',\n')}\n${close}}`
+			: blockJSON(arg, depth);
+		return `${JSON.stringify(key)}:${shown}`;
+	});
+	return `{${args.join(',')}}`;
+}
+
 function isStepArg(v:unknown):v is StepArg {
 	return typeof v === 'string' || typeof v === 'number' || typeof v === 'boolean' || isCountMap(v)
 		|| (Array.isArray(v) && v.every((x) => typeof x === 'string'));
@@ -73,7 +102,7 @@ function readSteps(raw:unknown, verbs:VerbRegistry):Arc {
 	// An empty {} a model leaves between two steps is no step.
 	const steps = Array.isArray(raw) ? raw.filter((step) => !isRecord(step) || Object.keys(step).length > 0) : [];
 	if (steps.length === 0) {
-		throw new ArcError('an arc is a non-empty list of steps');
+		throw new ArcError('the arc is empty: give it at least one step');
 	}
 	const arc = steps.map((step) => readStep(step, verbs));
 	delete arc[arc.length - 1].then;
@@ -112,6 +141,10 @@ function readStep(raw:unknown, verbs:VerbRegistry):Step {
 		}
 	}
 	else {
+		// Its args cannot be read without its spec: the verb is what is wrong.
+		if (!verbs.has(raw.verb)) {
+			throw new ArcError(`unknown verb '${raw.verb}'`);
+		}
 		for (const [key, value] of Object.entries(raw)) {
 			if (key === 'verb' || key === 'then' || value === undefined || value === null) {
 				continue;
@@ -199,6 +232,120 @@ export function arcSoFar(reply:string, verbs:VerbRegistry):string | undefined {
 	catch {
 		return undefined;
 	}
+}
+
+/** Longest a written expression or name may run, and any other text, in letters: well past any a model has written. */
+const MAX_EXPR = 300;
+const MAX_TEXT = 800;
+/** What a closing run of an Arc's JSON looks like. In a string it means the quote was never closed. */
+const CLOSERS = /[}\]][}\]]|```/;
+
+/**
+ * Follows a reply as its pieces come in, and says why as soon as it can no longer become an Arc: a string that ran on
+ * with the Arc's closing brackets in it, or past any length a real one has. A model that forgets one closing quote
+ * otherwise writes on to its token limit, since a reply schema lets a string hold anything.
+ */
+export function replyBreakdown(verbs:VerbRegistry):(piece:string)=>string | undefined {
+	const specs = [...verbs.list(), ...verbs.nested().list()];
+	const strict = new Set(specs.flatMap((spec) => Object.entries(spec.args).filter(([, kind]) => ['watch', 'expr', 'id'].includes(argBase(kind))).map(([key]) => key)));
+	let json:boolean | undefined;
+	let inString = false;
+	let escaped = false;
+	let current = '';
+	let lastString = '';
+	let afterColon = false;
+	let key = '';
+	let depth = 0;
+	const broken = (char:string):string | undefined => {
+		const isExpr = strict.has(key);
+		if (current.length > (isExpr ? MAX_EXPR : MAX_TEXT)) {
+			return `"${key}" ran on past any real value: close its quote`;
+		}
+		if (CLOSERS.test(current.slice(-3))) {
+			return `"${key}" never closed its quote: the closing brackets went inside it`;
+		}
+		depth += char === '(' ? 1 : char === ')' ? -1 : 0;
+		return isExpr && depth < 0 ? `"${key}" closes a bracket it never opened` : undefined;
+	};
+	return (piece) => {
+		for (const char of piece) {
+			json ??= /\s/.test(char) ? undefined : char === '{' || char === '[' || char === '`';
+			if (json !== true) {
+				continue;
+			}
+			if (!inString) {
+				if (char === ':') {
+					key = lastString;
+					afterColon = true;
+				}
+				else if (char === '"') {
+					inString = true;
+					current = '';
+					depth = 0;
+				}
+				else if (!/\s/.test(char)) {
+					afterColon = false;
+				}
+				continue;
+			}
+			if (escaped) {
+				escaped = false;
+			}
+			else if (char === '\\') {
+				escaped = true;
+			}
+			else if (char === '"') {
+				inString = false;
+				lastString = current;
+				afterColon = false;
+			}
+			else {
+				current += char;
+				const why = afterColon ? broken(char) : undefined;
+				if (why) {
+					return why;
+				}
+			}
+		}
+		return undefined;
+	};
+}
+
+/** The root steps of a JSON reply that were written to their end before it broke down, as a reply of their own. */
+export function finishedSteps(reply:string):string | undefined {
+	const list = reply.indexOf('[', reply.indexOf('"steps"'));
+	if (!reply.includes('"steps"') || list < 0) {
+		return undefined;
+	}
+	const steps:string[] = [];
+	let depth = 0;
+	let inString = false;
+	let escaped = false;
+	let start = 0;
+	for (let i = list + 1; i < reply.length; i++) {
+		const char = reply[i];
+		if (inString) {
+			inString = escaped || char !== '"';
+			escaped = !escaped && char === '\\';
+		}
+		else if (char === '"') {
+			inString = true;
+		}
+		else if (char === '{' || char === '[') {
+			start = depth === 0 ? i : start;
+			depth += 1;
+		}
+		else if (char === '}' || char === ']') {
+			depth -= 1;
+			if (depth < 0) {
+				break;
+			}
+			if (depth === 0) {
+				steps.push(reply.slice(start, i + 1));
+			}
+		}
+	}
+	return steps.length > 0 ? `{"steps":[${steps.join(',')}]}` : undefined;
 }
 
 /** An `arc` argument as an `Arc`: already parsed, or text to parse. Undefined when it does not parse. */

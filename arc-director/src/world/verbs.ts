@@ -183,6 +183,13 @@ export function worldVerbs<TCtx>(deps:WorldVerbDeps<TCtx>):Handlers<TCtx> {
 				return { ok: true, verb: 'offer', reason: `traded ${bundleText(match.pay)} for ${bundleText(match.receive)} with ${name}` };
 			}
 		}
+		// Out of earshot, it goes to them first, as a gift does.
+		if (!deps.canOffer(me, to)) {
+			const near = await call.goTo(to, { check: () => (deps.canOffer(me, to) ? 'near' : undefined) });
+			if (!near.ok) {
+				return { ...near, verb: 'offer' };
+			}
+		}
 		if (!deps.canOffer(me, to)) {
 			return fail('offer', `${name} is out of sight`);
 		}
@@ -194,7 +201,7 @@ export function worldVerbs<TCtx>(deps:WorldVerbDeps<TCtx>):Handlers<TCtx> {
 			tags: ['offer'],
 			major: true,
 		});
-		return { ok: true, verb: 'offer', reason: `offered ${offerText({ give, get })} to ${name}; waiting for their answer` };
+		return { ok: true, verb: 'offer', reason: `offered ${offerText({ give, get })} to ${name}; it stands until they answer, so do not offer it again` };
 	};
 	return {
 		go_to: (call:Call<TCtx, 'go_to'>) => {
@@ -301,7 +308,9 @@ export function worldVerbs<TCtx>(deps:WorldVerbDeps<TCtx>):Handlers<TCtx> {
 			return outcome('give', { ok: true, reason: `${pays ? 'paid' : 'gave'} ${call.args.quantity ? bundleText({ [item]: call.args.quantity }) : item} to ${nameOf(call, to)}` });
 		},
 		use: async (call:Call<TCtx, 'use'>) => {
-			const { item, target } = call.args;
+			const { item } = call.args;
+			// A model that eats or drinks something often names itself as what it is used on.
+			const target = call.args.target === 'me' ? call.character.id : call.args.target;
 			const found = resolve(call, target);
 			if (failed(found)) {
 				return found;
@@ -315,12 +324,20 @@ export function worldVerbs<TCtx>(deps:WorldVerbDeps<TCtx>):Handlers<TCtx> {
 			}
 			return outcome('use', world.useItem!(found.character, item, target));
 		},
-		examine: (call:Call<TCtx, 'examine'>) => {
+		examine: async (call:Call<TCtx, 'examine'>) => {
 			const found = resolve(call, call.args.target);
 			if (failed(found)) {
 				return found;
 			}
-			const text = world.getDescription!(found.character, call.args.target);
+			const look = ():string | undefined => world.getDescription!(found.character, call.args.target);
+			// Out of sight, it goes only as far as it takes to see it, as an offer does to be heard.
+			if (look() === undefined) {
+				const near = await call.goTo(call.args.target, { check: () => (look() === undefined ? undefined : 'in sight') });
+				if (!near.ok) {
+					return { ...near, verb: 'examine' };
+				}
+			}
+			const text = look();
 			return text === undefined
 				? fail('examine', `${nameOf(call, call.args.target)} cannot be examined from here`)
 				: { ok: true, verb: 'examine', reason: text };

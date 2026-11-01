@@ -1,6 +1,6 @@
-import { MOUSE_LEFT, Time, yawToForward, yawToward, Component, type GameObject } from '@arc-director/kindling';
+import { MOUSE_LEFT, TOUCH_TAP, Time, yawToForward, yawToward, Component, type GameObject } from '@arc-director/kindling';
 import * as THREE from 'three';
-import { Camera, Chest, Door, Guard, HumanBody, Appearance, Named, Vitals, type BodySlot } from '../engine/components';
+import { Camera, Chest, Door, Furniture, Guard, HumanBody, Appearance, Named, Vitals, type BodySlot } from '../engine/components';
 import { attackFor } from '../director/fight';
 import { inReach, strikeWith, useItem } from '../items/use';
 import { CharacterAnimation } from './CharacterAnimation';
@@ -9,15 +9,19 @@ import { Order } from '../engine/order';
 import { aimAlong, aimTarget } from './aim';
 import { carryBags, slotItem } from '../items/inventory';
 import type { ItemInstance } from '../items/instance';
-import { swapHeldHands } from '../items/equip';
+import { itemInHeldSlot, swapHeldHands, toggleHeld } from '../items/equip';
 import { dropItem, interactChest, interactDoor, nearestPickup, pickup } from '../items/pickup';
 import { PlayerPilot } from './PlayerPilot';
+import { Reading } from './Reading';
+import { occupantName, overWater, Seated } from './Seated';
 import { examineWorld } from '../director/perception';
 
 const YAW_SENS = 0.0024;
 /** A held guard: renewed this far ahead each frame Shift is down; the pose holds it up this long at most. */
 const GUARD_REFRESH = 0.1;
 const GUARD_HELD = 3600;
+/** How many times faster a bodiless player moves with Shift down. */
+const CAMERA_RUSH = 3;
 
 export class PlayerInput extends Component {
 	public static override order = Order.playerInput;
@@ -52,8 +56,8 @@ export class PlayerInput extends Component {
 			return;
 		}
 		const input = world.input;
-		let wishX = 0;
-		let wishZ = 0;
+		let wishX = input.stickX;
+		let wishZ = input.stickY;
 		if (input.key('KeyW') || input.key('ArrowUp')) {
 			wishZ += 1;
 		}
@@ -68,21 +72,26 @@ export class PlayerInput extends Component {
 		}
 		const len = Math.hypot(wishX, wishZ);
 		if (len > 1e-6) {
-			wishX /= len;
-			wishZ /= len;
+			// A stick short of its rim walks slower.
+			wishX /= Math.max(1, len);
+			wishZ /= Math.max(1, len);
+			this.gameObject.getComponent(Seated)?.stand();
+			this.gameObject.getComponent(Reading)?.stop();
 		}
 
 		const yaw = cam?.yaw ?? 0;
 		const fwd = yawToForward(yaw);
 		const rightX = -fwd.z;
 		const rightZ = fwd.x;
-		this.moveX = fwd.x * wishZ + rightX * wishX;
-		this.moveZ = fwd.z * wishZ + rightZ * wishX;
+		const shift = input.key('ShiftLeft') || input.key('ShiftRight');
+		const rush = shift && !this.embodied ? CAMERA_RUSH : 1;
+		this.moveX = (fwd.x * wishZ + rightX * wishX) * rush;
+		this.moveZ = (fwd.z * wishZ + rightZ * wishX) * rush;
 
-		if (input.pointerLocked) {
-			this.lookYaw -= input.lookDeltaX * YAW_SENS;
-		}
+		this.lookYaw += input.twist - input.lookDeltaX * YAW_SENS;
 		if (cam) {
+			// Fingers turning the view hold on to it; only the rest of the look eases in.
+			cam.yaw += input.twist;
 			cam.orbitYaw = this.lookYaw;
 		}
 		// The dead only look around.
@@ -106,40 +115,20 @@ export class PlayerInput extends Component {
 		const aimed = aimTarget(world, this.gameObject);
 		this.cursorName = aimed?.getComponent(Named)?.id ?? aimed?.name ?? '';
 
-		if (input.pressed('KeyE')) {
-			const loot = nearestPickup(this.gameObject);
-			if (loot) {
-				const lootName = loot.getComponent(Named)?.id ?? loot.name;
-				const msg = pickup(this.gameObject, loot);
-				world.setMessage(msg);
-				if (msg.startsWith('picked up') || msg.startsWith('equipped')) {
-					this.gameObject.getComponent(Appearance)?.playClip('take', Time.time, loot);
-					world.pickedUp(this.gameObject, lootName);
-				}
-			}
-			else if (aimed?.getComponent(Chest)) {
-				const msg = interactChest(this.gameObject, aimed);
-				world.setMessage(msg);
-				if (msg.startsWith('took ')) {
-					this.gameObject.getComponent(Appearance)?.playClip('take', Time.time, aimed);
-				}
-			}
-			else if (aimed?.getComponent(Door)) {
-				world.setMessage(interactDoor(this.gameObject, aimed));
-			}
-			else if (aimed) {
-				// Anything else aimed at is looked over, as an NPC's `examine` would; long reads stay up longer.
-				const seen = examineWorld(aimed);
-				world.setMessage(seen, Math.max(3.2, seen.length / 15));
-			}
-		}
-
+		const seated = this.gameObject.getComponent(Seated);
 		const yielded = this.gameObject.getComponent(PlayerPilot)?.consumeYield() === true;
-		const clicked = input.pressed('KeyF') || (input.pressed(MOUSE_LEFT) && !yielded);
+		const tapped = input.pressed(TOUCH_TAP) && !yielded;
+		const interacted = (input.pressed('KeyE') || tapped) && this.interact(aimed, tapped);
+		const clicked = input.pressed('KeyF') || ((input.pressed(MOUSE_LEFT) || tapped) && !yielded && !interacted);
+		const fishingSeat = seated?.resting ? world.findByID(seated.seatID) : undefined;
+		if (input.pressed('KeyF') && seated && fishingSeat && !seated.asleep && overWater(fishingSeat)) {
+			seated.rod = !seated.rod;
+			world.setMessage(seated.rod ? 'casting a line' : 'reeling in');
+			return;
+		}
 		// A sword in hand: Shift holds the guard up; a click stabs on the move, slices standing, cleaves with Shift.
 		const weapon = this.heldWeapon();
 		const sword = weapon?.Blade ? weapon : null;
-		const shift = input.key('ShiftLeft') || input.key('ShiftRight');
 		this.holdGuard(!!sword && shift && !clicked && Time.time >= this._readyAt);
 		if (!weapon?.Bow) {
 			this.cutShot();
@@ -185,12 +174,82 @@ export class PlayerInput extends Component {
 		}
 	}
 
+	/**
+	 * Does what's at hand here: gets up, picks up, or works what is aimed at. False when there is nothing to do.
+	 * A tap looks things over only with empty hands: what is in hand is for its click.
+	 */
+	private interact(aimed:GameObject | null, tapped:boolean):boolean {
+		const world = this.gameObject.world;
+		if (!world) {
+			return false;
+		}
+		const seated = this.gameObject.getComponent(Seated);
+		const loot = nearestPickup(this.gameObject);
+		if (seated?.resting) {
+			seated.stand();
+		}
+		else if (loot) {
+			const lootName = loot.getComponent(Named)?.id ?? loot.name;
+			const msg = pickup(this.gameObject, loot);
+			world.setMessage(msg);
+			if (msg.startsWith('picked up') || msg.startsWith('equipped')) {
+				this.gameObject.getComponent(Appearance)?.playClip('take', Time.time, loot);
+				world.pickedUp(this.gameObject, lootName);
+			}
+		}
+		else if (aimed?.getComponent(Chest)) {
+			const msg = interactChest(this.gameObject, aimed);
+			world.setMessage(msg);
+			if (msg.startsWith('took ')) {
+				this.gameObject.getComponent(Appearance)?.playClip('take', Time.time, aimed);
+			}
+		}
+		else if (aimed?.getComponent(Door)) {
+			world.setMessage(interactDoor(this.gameObject, aimed));
+		}
+		else if (aimed?.getComponent(Furniture)) {
+			this.restOn(aimed);
+		}
+		else if (aimed && !(tapped && this.handItem())) {
+			// Anything else aimed at is looked over, as an NPC's `examine` would; long reads stay up longer.
+			const seen = examineWorld(aimed);
+			world.setMessage(seen, Math.max(3.2, seen.length / 15));
+		}
+		else {
+			return false;
+		}
+		return true;
+	}
+
+	/** Walks to beside `seat` and sits on it or lies down in it, as an NPC would, unless someone already has. With no director to walk it, it settles from where it stands. */
+	private restOn(seat:GameObject):void {
+		const world = this.gameObject.world;
+		const taken = occupantName(seat);
+		if (!world || taken) {
+			world?.setMessage(`${taken} is there`);
+			return;
+		}
+		const verb = seat.getComponent(Furniture)?.kind === 'bed' ? 'sleep' : 'sit';
+		world.enact(`${verb}(target=${seat.id})`).then(
+			(result) => {
+				if (!result.ok && result.reason) {
+					world.setMessage(result.reason);
+				}
+			},
+			() => this.gameObject.getComponent(Seated)?.settle(seat),
+		);
+	}
+
+	/** The selected item when it is in hand. */
+	private handItem():ItemInstance | null {
+		const item = this.activeItem();
+		return item && itemInHeldSlot(this.gameObject, item) ? item : null;
+	}
+
 	/** The selected item when it is a weapon in hand. */
 	private heldWeapon():ItemInstance | null {
-		const item = this.activeItem();
-		const body = this.gameObject.getComponent(HumanBody);
-		const inHand = !!body && (slotItem(body, 'hands.left.held') === item || slotItem(body, 'hands.right.held') === item);
-		return item?.Weapon && inHand ? item : null;
+		const item = this.handItem();
+		return item?.Weapon ? item : null;
 	}
 
 	/** Faces `target` and plays `verb`'s move with `weapon` at them; the blow lands once the wind-up is done. */
@@ -315,6 +374,20 @@ export class PlayerInput extends Component {
 			}
 		}
 		return list;
+	}
+
+	/** Takes the hotbar's `index`th item in hand, selected, or puts it back; what cannot be held is only selected. */
+	public toggleItem(index:number):void {
+		const world = this.gameObject.world;
+		const item = this.hotbar()[index];
+		if (!world || !item || (this.gameObject.getComponent(Vitals)?.hp ?? 1) <= 0) {
+			return;
+		}
+		if (item.Equipable) {
+			world.setMessage(toggleHeld(this.gameObject, item, world));
+		}
+		const kept = !item.Equipable || itemInHeldSlot(this.gameObject, item);
+		this.selected = kept ? Math.max(0, this.hotbar().indexOf(item)) : 0;
 	}
 
 	public activeItem():ItemInstance | null {

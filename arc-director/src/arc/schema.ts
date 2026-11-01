@@ -81,18 +81,20 @@ function toolReply(name:string, parameters:JsonSchema):JsonSchema {
  * What a reply must be: a call to one of the `tools` (by name, with its parameters), or `{"steps":[…]}`. One branch
  * per tool and per verb of the whole `catalog`, never of one mind's kit or tools, so the schema is the same bytes
  * for every mind and think; the kit and the mind's own tools are checked once the reply is read. An arc nests through
- * `$defs`, so any depth costs the same few kilobytes.
+ * `$defs`, so any depth costs the same few kilobytes. `issue` is a step of the reply's own root only, never of a nested
+ * arc, so a grammar cannot write one inside a loop or a law.
  */
 export function replySchema(catalog:VerbRegistry, tools:Record<string, JsonSchema> = {}):JsonSchema {
+	const issue = catalog.list().find((spec) => spec.name === 'issue');
 	const steps:JsonSchema = {
 		type: 'object',
 		additionalProperties: false,
 		required: ['steps'],
-		properties: { steps: ref('arc') },
+		properties: { steps: issue ? { type: 'array', minItems: 1, items: { anyOf: [verbStep(issue), ref('step')] } } : ref('arc') },
 	};
 	const defs:Record<string, JsonSchema> = {
 		arc: { type: 'array', minItems: 1, items: ref('step') },
-		step: { anyOf: [...catalog.list().map(verbStep), GROUP_STEP] },
+		step: { anyOf: [...catalog.list().filter((spec) => spec !== issue).map(verbStep), GROUP_STEP] },
 	};
 	const calls = Object.entries(tools).map(([name, parameters]) => toolReply(name, parameters));
 	return calls.length === 0 ? { ...steps, $defs: defs } : { anyOf: [...calls, steps], $defs: defs };

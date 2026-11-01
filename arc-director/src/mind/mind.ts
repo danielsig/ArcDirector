@@ -1,18 +1,19 @@
-import { formatArc, parseArcText } from '../arc/parse.js';
-import { arcSoFar, parseArc } from '../arc/wire.js';
+import { formatArc, formatArcBlocks, parseArcText } from '../arc/parse.js';
+import { arcJSONBlocks, arcSoFar, finishedSteps, parseArc, replyBreakdown } from '../arc/wire.js';
 import { exprArgs } from '../arc/validate.js';
 import { docsFor, replySchema } from '../arc/schema.js';
-import { FOCUS_EDIT_VERBS, VerbRegistry, WATCH_EDIT_VERBS, argBase, registerStockVerbs } from '../arc/stock-verbs.js';
+import { FOCUS_EDIT_VERBS, VerbRegistry, WATCH_EDIT_VERBS, argBase, groupTargets, registerStockVerbs } from '../arc/stock-verbs.js';
 import type { Arc, ArcResult, Step } from '../arc/types.js';
 import { ArcError, BlockedArcError } from '../arc/types.js';
-import { evaluate, unboundCalls } from '../expr/eval.js';
+import { catalogEntities, evaluate, unboundCalls } from '../expr/eval.js';
+import { plainTagTests } from '../expr/tagTests.js';
 import { observeExpr } from '../expr/stringify.js';
 import { bagOf, cloneEntity } from '../expr/prev.js';
 import { isVisionModel } from '../inference/models.js';
 import type { ChatContent, ChatContentPart, ChatDelta, ChatMessage, ChatResponse, InferenceProvider, JsonSchemaResponseFormat, ToolDef } from '../inference/provider.js';
 import { extractJson, isRecord, type JsonSchema } from '../json.js';
 import { mergeTags, nameTags, type MemoryRecord } from '../memory/store.js';
-import type { ArcFormat, ConversationTurn, MindEvent, Sense, ThinkEvent, ToolSpec } from './types.js';
+import type { ArcFormat, ConversationTurn, MindEvent, Replacing, Sense, ThinkEvent, ToolSpec } from './types.js';
 import { parseMapZoom, stampMap, isMapSnapshot, DEFAULT_YOU_SYMBOL, type MapPrev, type MapSense } from './map.js';
 import {
 	articlesNamedIn,
@@ -24,17 +25,17 @@ import {
 	type KnowledgeSource,
 } from './knowledge.js';
 import { jsonToolCall, toolFirstArgs, writtenToolCalls } from './toolText.js';
-import { arcRepairHint, thoughtCutHint, writtenToolsHint, toolResultHint, blockedAgainHint, repeatOutputHint, reviseGoalsAsk, sayRangeHint, stablePrefix, volatileBlock, type PromptStyle, type ThinkInstructions } from './prompt.js';
+import { arcRepairHint, partRepairHint, replaceAsk, thoughtCutHint, writtenToolsHint, toolResultHint, blockedAgainHint, repeatOutputHint, reviseGoalsAsk, sayRangeHint, stablePrefix, volatileBlock, type PromptStyle, type ThinkInstructions } from './prompt.js';
 import type { TalkNet } from './talk.js';
 import type { SightClause } from '../perception/types.js';
 import { idsOf, mapArc, mapExpr, mapLawName, namesOf } from './ids.js';
 import type { NameTarget } from '../character/names.js';
 import type { Persona } from '../character/persona.js';
-import type { Watches } from '../character/types.js';
+import type { Goal, Watches } from '../character/types.js';
 import { sayToOf, type ArcRunner } from '../character/arc-runner.js';
 import type { Law } from '../arc/laws.js';
 import { deferThinks, THINK_ABOUT_CAP } from '../arc/run.js';
-import { arcSteps, firstStep, isArc } from '../arc/types.js';
+import { arcSteps, firstStep, isArc, mapArgs, sameProgram } from '../arc/types.js';
 import { noWayTo } from '../world/route.js';
 import { waitUntilOf, type MindQueue } from '../think/queue.js';
 import { hasWatch, watchCount } from '../character/watch.js';
@@ -111,8 +112,14 @@ export type MindDeps<TCtx = unknown> = {
 	autoEnact?:boolean;
 	/** Each arc the moment a think chooses it, before it runs. */
 	onChoose?:(arc:Arc)=>void;
-	/** Whoever watches this mind think, if anyone does by now: replies are only read as they come for a watcher. */
+	/** Each goal as it is reached, by its `until` or by this mind's own word. */
+	onGoalReached?:(goal:Goal<never>)=>void;
+	/** Whoever watches this mind think, if anyone does by now. */
 	thinkWatch?:()=>((event:ThinkEvent)=>void) | undefined;
+	/** The unfinished work `arc` would cut short, when it is to be asked about before replacing it. */
+	replacing?:(arc:Arc)=>Replacing[];
+	/** Why an Arc just read could never work as written, for the model to write it again before it runs. */
+	arcProblem?:(arc:Arc)=>string | undefined;
 	queue?:MindQueue;
 	/** Heartbeat stretch after an arc. Default: failed or interrupted. */
 	stalled?:(result:ArcResult)=>boolean;
@@ -129,6 +136,8 @@ export type MindDeps<TCtx = unknown> = {
 	wayBlocked?:(ids:readonly string[])=>(string | undefined)[];
 	/** Extra chat turns after a bad arc or a tool call with tools closed. Host sets this; 0 means fail on the first bad reply. */
 	arcRetryCap?:number;
+	/** A reply's steps that stand alone are judged each on its own: the good ones stay, and only the rest go back. */
+	perStepRepair?:boolean;
 	/** How the model writes an Arc: `text` (`go_to() && wait()`), `json`, or `schema` (JSON the server enforces). Default `schema`. */
 	arcFormat?:ArcFormat;
 	thinkInstructions?:ThinkInstructions;
@@ -216,7 +225,7 @@ const BUILTIN_TOOL_PARAMETERS:Record<string, JsonSchema> = {
 };
 
 /** What a goal pass may write in `text`: only the verbs that edit goals and identity. */
-const GOAL_VERBS = registerStockVerbs(new VerbRegistry(), 'set_goal', 'drop_goal', 'set_identity');
+const GOAL_VERBS = registerStockVerbs(new VerbRegistry(), 'set_goal', 'drop_goal', 'finish_goal', 'set_identity');
 
 /** What a goal pass replies under `schema`: the whole goal list (empty to keep it), and an identity patch if one is due. */
 const GOALS_SCHEMA:JsonSchema = {
@@ -362,7 +371,10 @@ export class Mind<TCtx = unknown> {
 	public provider!:InferenceProvider;
 	public autoEnact = true;
 	public onChoose:((arc:Arc)=>void) | undefined;
+	private _onGoalReached:MindDeps['onGoalReached'];
 	private thinkWatch:MindDeps['thinkWatch'];
+	private replacing:MindDeps['replacing'];
+	private arcProblem:MindDeps['arcProblem'];
 	/** Who the think under way began for. */
 	private _thinkingAs = '';
 	public queue:MindQueue | undefined;
@@ -375,6 +387,7 @@ export class Mind<TCtx = unknown> {
 	public toolRoundCap = DEFAULT_TOOL_ROUNDS;
 	public wayBlocked:((ids:readonly string[])=>(string | undefined)[]) | undefined;
 	public arcRetryCap = 0;
+	public perStepRepair = false;
 	public jsonOnly:()=>boolean = () => false;
 	private _arcFormat:ArcFormat = 'schema';
 	public thinkInstructions:ThinkInstructions | undefined;
@@ -484,7 +497,10 @@ export class Mind<TCtx = unknown> {
 		this.talk = deps.talk;
 		this.autoEnact = deps.autoEnact ?? true;
 		this.onChoose = deps.onChoose;
+		this._onGoalReached = deps.onGoalReached;
 		this.thinkWatch = deps.thinkWatch;
+		this.replacing = deps.replacing;
+		this.arcProblem = deps.arcProblem;
 		this.queue = deps.queue;
 		this.stalled = deps.stalled;
 		this.modelID = deps.modelID ?? '';
@@ -492,6 +508,7 @@ export class Mind<TCtx = unknown> {
 		this.toolRoundCap = deps.toolRoundCap ?? DEFAULT_TOOL_ROUNDS;
 		this.wayBlocked = deps.wayBlocked;
 		this.arcRetryCap = deps.arcRetryCap ?? 0;
+		this.perStepRepair = deps.perStepRepair ?? false;
 		this.arcFormat = deps.arcFormat ?? 'schema';
 		this.jsonOnly = deps.jsonOnly ?? (() => false);
 		this.thinkInstructions = deps.thinkInstructions;
@@ -676,8 +693,14 @@ export class Mind<TCtx = unknown> {
 		}
 	}
 
+	/** The result of an arc that ran beside the voice's program. The next prompt shows it; only a failure calls for that think now. */
+	public ingestBeside(result:ArcResult):void {
+		this._replyTo = [];
+		this.ingestResult(result, !result.ok);
+	}
+
 	/** The result of the arc this mind gave its voice, or of a failed think. The next prompt shows it. */
-	public ingestResult(result:ArcResult):void {
+	public ingestResult(result:ArcResult, wake = true):void {
 		this.lastResult = result;
 		if (result.unreachable && result.verb) {
 			this._noWay.add(`${result.verb} ${result.unreachable}`);
@@ -703,7 +726,9 @@ export class Mind<TCtx = unknown> {
 				remember: result.verb !== 'think' && result.verb !== 'say' && !result.unreachable,
 			});
 		}
-		this.syncQueue(result);
+		if (wake) {
+			this.syncQueue(result);
+		}
 	}
 
 	/**
@@ -755,7 +780,8 @@ export class Mind<TCtx = unknown> {
 
 	/** A finished `reply` step. Remember the characters it named; the wait happens when the arc ends. */
 	public noteReply(step:Step, result:ArcResult, voice:ArcRunner<TCtx>):void {
-		if (!result.ok || !voice.verbs.get(step.verb)?.reply) {
+		// A line to a group, like one to no one, waits for no answer.
+		if (!result.ok || !voice.verbs.get(step.verb)?.reply || groupTargets(step, voice.verbs)) {
 			return;
 		}
 		for (const id of idTargets(step, voice)) {
@@ -1054,7 +1080,9 @@ export class Mind<TCtx = unknown> {
 		}
 		const line = (law:Law):string => {
 			const who = this.owner.lawsTakeWho() && law.who !== 'me' ? ` (for ${this.named(law.who)})` : '';
-			return `- ${mapLawName(law.name, namesOf(this.persona.names))}${who}: when ${this.named(law.watch)}, run ${this.namedArc(law.arc)}`;
+			const times = law.times === undefined ? '' : `, times=${law.times}`;
+			const until = law.until ? `, until ${this.named(law.until)}` : '';
+			return `- ${mapLawName(law.name, namesOf(this.persona.names))}${who}: when ${this.named(law.watch)}, run ${this.namedArc(law.arc)}${times}${until}`;
 		};
 		const intro = this.compact ? 'Laws:' : 'Laws (emergencies that already run on their own, first listed first; do not repeat them in your reply; unlaw(name) drops one):';
 		return `${intro}\n${laws.map(line).join('\n')}`;
@@ -1195,13 +1223,113 @@ export class Mind<TCtx = unknown> {
 
 	/** The reply as an arc in ids. Throws on a watch that calls a function the watch language does not have: it could never hold. */
 	private readArc(content:string, verbs:VerbRegistry):Arc {
-		const arc = mapArc(deferThinks(parseArc(content, verbs)), verbs, idsOf(this.persona.names));
+		const arc = this.inIDs(parseArc(content, verbs), verbs);
+		const problem = this.problemIn(arc, verbs);
+		if (problem) {
+			throw new ArcError(problem);
+		}
+		return arc;
+	}
+
+	/** An arc as a reply wrote it, as it is kept: in ids, with its tests of what things are in the language's own form. */
+	private inIDs(arc:Arc, verbs:VerbRegistry):Arc {
+		const catalog = this.voice.catalog?.();
+		const hasField = (name:string):boolean => !!catalog && catalogEntities(catalog).some((entity) => entity.fields?.[name] !== undefined);
+		const plain = mapArgs(arc, verbs, (text, kind) => (['watch', 'expr', 'id'].includes(kind) ? plainTagTests(text, hasField) : text));
+		return mapArc(deferThinks(plain), verbs, idsOf(this.persona.names));
+	}
+
+	/** Why `arc`, in ids, could never work as written, if it could not. */
+	private problemIn(arc:Arc, verbs:VerbRegistry):string | undefined {
 		const catalog = this.voice.catalog?.();
 		const unbound = catalog ? exprArgs(arc, verbs).flatMap((expr) => unboundCalls(expr, catalog)) : [];
 		if (unbound.length > 0) {
-			throw new ArcError(`${unbound.map((name) => `${name}()`).join(', ')} is not a watch function`);
+			return `${unbound.map((name) => `${name}()`).join(', ')} is not a watch function`;
 		}
-		return arc;
+		// With no repair turn to send it back on, it runs as written and its verbs say what went wrong.
+		return this.arcRetryCap > 0 ? this.arcProblem?.(arc) : undefined;
+	}
+
+	/**
+	 * The reply's root steps in ids, each read on its own where the whole does not read; `reason` on those that do not.
+	 * Throws when the reply gives no steps to read, as when its JSON is broken.
+	 */
+	private readRoots(content:string, verbs:VerbRegistry):{ steps:Arc; unread:{ label:string; reason:string }[] } {
+		try {
+			return { steps: this.inIDs(parseArc(content, verbs), verbs), unread: [] };
+		}
+		catch (err) {
+			let raw:unknown;
+			try {
+				raw = extractJson(content);
+			}
+			catch {
+				throw err;
+			}
+			if (!isRecord(raw) || !Array.isArray(raw.steps)) {
+				throw err;
+			}
+			const steps:Arc = [];
+			const unread:{ label:string; reason:string }[] = [];
+			for (const step of raw.steps) {
+				try {
+					steps.push(...this.inIDs(parseArc(JSON.stringify({ steps: [step] }), verbs), verbs));
+				}
+				catch (bad) {
+					unread.push({ label: isRecord(step) && typeof step.verb === 'string' ? step.verb : 'a step', reason: bad instanceof Error ? bad.message : String(bad) });
+				}
+			}
+			return { steps, unread };
+		}
+	}
+
+	/**
+	 * What a reply comes to when its steps are judged apart, given those already `kept`. A step that needs no body, and is
+	 * not joined to one that does, stands alone: it can fail while others run. The rest are one chain that stands or falls
+	 * together.
+	 */
+	private judgeSteps(content:string, verbs:VerbRegistry, kept:Arc):{ good:Arc; bad:{ label:string; reason:string }[] } {
+		const { steps, unread } = this.readRoots(content, verbs);
+		const free = (step:Step | undefined):boolean => !!step && (step.verb === 'when' || !!verbs.get(step.verb)?.free);
+		const alone = (step:Step, i:number):boolean => free(step)
+			&& (i === 0 || free(steps[i - 1]) || steps[i - 1].then === 'always')
+			&& (i === steps.length - 1 || free(steps[i + 1]) || step.then === 'always');
+		const good:Arc = [];
+		const bad = [...unread];
+		const chain = steps.filter((step, i) => !alone(step, i));
+		const labelOf = (step:Step):string => {
+			const name = typeof step.args.name === 'string' ? ` named ${step.args.name}` : typeof step.args.who === 'string' ? ` for ${step.args.who}` : '';
+			return `${step.verb}${name}`;
+		};
+		steps.forEach((step) => {
+			if (chain.includes(step)) {
+				return;
+			}
+			const reason = this.problemIn([...kept, ...good, step], verbs);
+			if (reason) {
+				bad.push({ label: labelOf(step), reason });
+			}
+			else {
+				good.push(step);
+			}
+		});
+		if (chain.length > 0) {
+			const reason = this.problemIn([...kept, ...good, ...chain], verbs);
+			if (reason) {
+				bad.push({ label: chain.map(labelOf).join(' then '), reason });
+			}
+			else {
+				good.push(...chain);
+			}
+		}
+		// Judged apart, they still run in the order the reply wrote them: a deferred think stays last.
+		return { good: steps.filter((step) => good.includes(step)), bad };
+	}
+
+	/** Steps as the model writes them, in its names. */
+	private shownSteps(arc:Arc, verbs:VerbRegistry, format:ArcFormat):string {
+		const named = mapArc(arc, verbs, namesOf(this.persona.names));
+		return format === 'text' ? formatArcBlocks(named, verbs) : arcJSONBlocks(named, verbs);
 	}
 
 	/** The reply as an arc, or null when it is empty or does not read. */
@@ -1227,8 +1355,6 @@ export class Mind<TCtx = unknown> {
 		if (!liveVerbAtThink || !this.voice.liveArc || this._lastVerb === liveVerbAtThink) {
 			return arc;
 		}
-		this.absorbPending();
-		const sensed = this.gatherSensed();
 		const format = this.arcFormat;
 		const schema = format === 'schema';
 		const form = format === 'text' ? 'Arc text' : 'Arc JSON';
@@ -1237,7 +1363,7 @@ export class Mind<TCtx = unknown> {
 				? 'Do not think again. Reply with new steps if that changes your choices, or repeat the steps you already wrote to keep them.'
 				: `Do not think again. Emit a new ${form} if that changes your choices, or confirm the arc you already wrote.`);
 		messages.push({ role: 'assistant', content: firstContent });
-		messages.push({ role: 'user', content: this.volatileUser(sensed, hint) });
+		messages.push({ role: 'user', content: hint });
 		const res = await this.provider.chat({
 			model: this.modelID,
 			thread: this.id,
@@ -1256,6 +1382,22 @@ export class Mind<TCtx = unknown> {
 	}
 
 	private async tactical():Promise<Arc> {
+		const kept:Arc = [];
+		try {
+			return await this.writeArc(kept);
+		}
+		catch (err) {
+			// Out of tries with some of it good: what is good runs, and the next think is told what did not.
+			if (kept.length === 0 || !(err instanceof ArcError)) {
+				throw err;
+			}
+			this.pushEvent({ kind: 'dropped', text: `Part of your last reply did not run: ${err.message}`, tags: ['fail'] });
+			return kept;
+		}
+	}
+
+	/** Asks the model until it has an Arc. `kept` collects the steps of a reply that stand while others go back. */
+	private async writeArc(kept:Arc):Promise<Arc> {
 		this._thinks += 1;
 		const ctx = this.worldContext();
 		this.owner.refreshKit();
@@ -1296,12 +1438,28 @@ export class Mind<TCtx = unknown> {
 		// This think has read its laws' results: from now on they are only remembered.
 		this.rememberLaws(this._lawResults);
 		this._lawResults = [];
+		this.persona.memory.agePins();
 		const messages:ChatMessage[] = [
 			{ role: 'system', content: system },
 			{ role: 'user', content: user },
 		];
 		let toolsLeft = offered.length > 0 ? this.toolRoundCap : 0;
 		let repairsLeft = this.arcRetryCap;
+		// What it was told stands needs no second go.
+		const keep = (steps:Arc):void => {
+			kept.push(...steps.filter((step) => !kept.some((had) => sameProgram([had], [step]))));
+		};
+		/** Shows the model only what stands, and says in words what became of the rest. Throws when it has no tries left. */
+		const sendBack = (failed:{ label:string; reason:string }[]):void => {
+			const reason = failed.map((step) => `${step.label}: ${step.reason}`).join('; ');
+			if (repairsLeft <= 0) {
+				throw new ArcError(reason);
+			}
+			repairsLeft -= 1;
+			this.showThink({ kind: 'retry', reason });
+			messages.push({ role: 'assistant', content: this.shownSteps(kept, verbs, format) });
+			messages.push({ role: 'user', content: partRepairHint(failed, verbs, format) });
+		};
 		let warnedRepeat = freshInput;
 		let checksLeft = Math.max(1, this.arcRetryCap);
 		let lastErr:Error | null = null;
@@ -1309,17 +1467,46 @@ export class Mind<TCtx = unknown> {
 		const budget = toolsLeft + this.arcRetryCap + 1 + (this.talk ? 1 : 0) + repeatTurn;
 		for (let turn = 0; turn < budget; turn++) {
 			const allowTools = toolsLeft > 0 && tools.length > 0;
-			const res = await this.provider.chat({
-				model: this.modelID,
-				thread: this.id,
-				messages,
-				tools: sendTools ? tools : undefined,
-				toolChoice: sendTools ? (allowTools ? 'auto' : 'none') : undefined,
-				responseFormat: reply,
-				// A repair keeps the whole conversation, so reasoning on top of it runs out of tokens again.
-				enableThinking: repairsLeft < this.arcRetryCap ? false : this.thinking(),
-				onDelta: this.replyWatch(verbs),
-			});
+			const stop = new AbortController();
+			const streamed = { text: '' };
+			let res:ChatResponse;
+			try {
+				res = await this.provider.chat({
+					model: this.modelID,
+					thread: this.id,
+					messages,
+					tools: sendTools ? tools : undefined,
+					toolChoice: sendTools ? (allowTools ? 'auto' : 'none') : undefined,
+					responseFormat: reply,
+					// A repair keeps the whole conversation, so reasoning on top of it runs out of tokens again.
+					enableThinking: repairsLeft < this.arcRetryCap ? false : this.thinking(),
+					signal: stop.signal,
+					onDelta: this.replyWatch(verbs, stop, streamed),
+				});
+			}
+			catch (err) {
+				// Cut off for going wrong: it is told why, like any other bad reply.
+				const reason:unknown = stop.signal.reason;
+				if (!(reason instanceof ArcError)) {
+					throw err;
+				}
+				lastErr = reason;
+				// The root steps it had finished before it broke down are as good as any others. A chain may have gone on into
+				// what broke, so it is written again.
+				const finished = this.perStepRepair ? finishedSteps(streamed.text) : undefined;
+				const judged = finished ? this.judgeSteps(finished, verbs, kept) : { good: [], bad: [] };
+				const stands = judged.good.filter((step) => step.verb === 'when' || verbs.get(step.verb)?.free);
+				if (stands.length + kept.length > 0) {
+					keep(stands);
+					sendBack([...judged.bad, { label: 'the rest of your reply', reason: lastErr.message }]);
+					continue;
+				}
+				if (!this.pushRepair(messages, { content: null, toolCalls: [] }, lastErr, repairsLeft, toolNames, format)) {
+					throw lastErr;
+				}
+				repairsLeft -= 1;
+				continue;
+			}
 			// Whole, for a server that does not stream.
 			if (this.thinkWatch?.()) {
 				this.showThink({ kind: 'reply', thought: res.reasoning ?? '', arc: arcSoFar(res.content ?? '', verbs) ?? '' });
@@ -1394,7 +1581,23 @@ export class Mind<TCtx = unknown> {
 			if (content) {
 				let arc:Arc;
 				try {
-					arc = this.readArc(content, verbs);
+					if (this.perStepRepair) {
+						const { good, bad } = this.judgeSteps(content, verbs, kept);
+						if (bad.length > 0 && good.length + kept.length === 0) {
+							throw new ArcError(bad[0].reason);
+						}
+						if (bad.length > 0) {
+							keep(good);
+							sendBack(bad);
+							continue;
+						}
+						// "Leave them out" adds nothing.
+						keep(good.filter((step) => kept.length === 0 || step.verb !== 'wait' || Object.keys(step.args).length > 0));
+						arc = [...kept];
+					}
+					else {
+						arc = this.readArc(content, verbs);
+					}
 				}
 				catch (err) {
 					lastErr = err instanceof Error ? err : new ArcError(String(err));
@@ -1427,7 +1630,7 @@ export class Mind<TCtx = unknown> {
 				}
 				this.acceptEmit(content);
 				this._talkStreak = !this.supervising(arc) && arcSteps(arc).every((step) => TALK_VERBS.has(step.verb)) ? this._talkStreak + 1 : 0;
-				return this.settleLiveArc(
+				const settled = await this.settleLiveArc(
 					arc,
 					content,
 					messages,
@@ -1436,6 +1639,7 @@ export class Mind<TCtx = unknown> {
 					sendTools,
 					tools,
 				);
+				return this.askReplace(settled, content, messages);
 			}
 			lastErr = new ArcError('model returned no arc');
 			if (!this.pushRepair(messages, res, lastErr, repairsLeft, toolNames, format)) {
@@ -1447,6 +1651,63 @@ export class Mind<TCtx = unknown> {
 	}
 
 	/**
+	 * `arc` as the model still wants it, once asked about any unfinished work it would cut short: a follow-up to the
+	 * think just had, so it costs a few tokens on top of what the server has cached. Each name is replaced or kept only
+	 * if the reply says exactly that; anything else, a reply that does not read or never comes too, appends: nothing is
+	 * lost either way.
+	 */
+	private async askReplace(arc:Arc, content:string, messages:ChatMessage[]):Promise<Arc> {
+		const cut = this.replacing?.(arc) ?? [];
+		if (cut.length === 0) {
+			return arc;
+		}
+		const names = new Map(cut.map((line) => [this.nameOf(line.id), line.id]));
+		this.showThink({ kind: 'retry', reason: `would cut short ${[...names.keys()].join(', ')}` });
+		const json = this.arcFormat === 'schema';
+		let said:unknown;
+		try {
+			const res = await this.provider.chat({
+				model: this.modelID,
+				thread: this.id,
+				messages: [
+					...messages,
+					{ role: 'assistant', content },
+					{ role: 'user', content: replaceAsk(cut.map((line) => ({ ...line, name: this.nameOf(line.id) })), json) },
+				],
+				responseFormat: json
+					? { name: 'replace', schema: { type: 'object', additionalProperties: false, required: [...names.keys()], properties: Object.fromEntries([...names.keys()].map((name) => [name, { enum: ['replace', 'append', 'keep'] }])) }, strict: true }
+					: undefined,
+				enableThinking: false,
+			});
+			said = extractJson(res.content ?? '');
+		}
+		catch {
+			said = undefined;
+		}
+		const answered = (answer:string):string[] => [...names].filter(([name]) => isRecord(said) && said[name] === answer).map(([, id]) => id);
+		const replace = answered('replace');
+		const keep = answered('keep');
+		return this.settled(arc, keep, [...names.values()].filter((id) => !replace.includes(id) && !keep.includes(id)));
+	}
+
+	/**
+	 * `arc` with `kept` left at what they are doing and `appended` given it after that: its orders say so, and what would
+	 * take its voice's body is dropped, or added to the voice's program (it runs now if that program has just ended).
+	 */
+	private settled(arc:Arc, kept:readonly string[], appended:readonly string[]):Arc {
+		if (kept.length === 0 && appended.length === 0) {
+			return arc;
+		}
+		const voice = this.voice;
+		const body = arc.filter((step) => !voice.takesNoBody([step]));
+		const aside = kept.includes(voice.id) || (appended.includes(voice.id) && voice.append(body));
+		const left = arc
+			.filter((step) => !aside || !body.includes(step))
+			.map((step) => (step.verb === 'issue' ? { ...step, args: { ...step.args, keep: [...kept], append: [...appended] } } : step));
+		return left.length > 0 ? left : [{ verb: 'wait', args: {}, granted: true }];
+	}
+
+	/**
 	 * Tells this mind's watcher, if any, how its think goes, in the name of whoever it began for: a commander may die mid-
 	 * think, and every event of one think must reach the one watching it, its end above all.
 	 */
@@ -1454,19 +1715,26 @@ export class Mind<TCtx = unknown> {
 		this.thinkWatch?.()?.({ ...event, who: this._thinkingAs } as ThinkEvent);
 	}
 
-	/** Tells this mind's watcher, if any, how the reply to one request is going as its pieces come in. */
-	private replyWatch(verbs:VerbRegistry):((delta:ChatDelta)=>void) | undefined {
-		if (!this.thinkWatch?.()) {
-			return undefined;
-		}
+	/**
+	 * Follows the reply to one request as its pieces come in: tells this mind's watcher, if any, how it is going, and
+	 * ends the request through `stop` the moment the reply can no longer become an Arc.
+	 */
+	private replyWatch(verbs:VerbRegistry, stop:AbortController, written:{ text:string }):(delta:ChatDelta)=>void {
+		const breakdown = replyBreakdown(verbs);
 		let thought = '';
-		let reply = '';
 		let arc = '';
 		return ({ content, reasoning }) => {
-			thought += reasoning ?? '';
-			reply += content ?? '';
-			arc = (content ? arcSoFar(reply, verbs) : undefined) ?? arc;
-			this.showThink({ kind: 'reply', thought, arc });
+			written.text += content ?? '';
+			const why = content ? breakdown(content) : undefined;
+			if (why) {
+				stop.abort(new ArcError(why));
+				return;
+			}
+			if (this.thinkWatch?.()) {
+				thought += reasoning ?? '';
+				arc = (content ? arcSoFar(written.text, verbs) : undefined) ?? arc;
+				this.showThink({ kind: 'reply', thought, arc });
+			}
 		};
 	}
 
@@ -1917,7 +2185,12 @@ export class Mind<TCtx = unknown> {
 		if (!this.talk || head?.verb !== 'say') {
 			return undefined;
 		}
-		const to = sayToOf(head.args);
+		const aimed = this.voice.aimGroup(head);
+		// A group is not refused here: running, it speaks to whoever of them it can, or says why it cannot.
+		if ('ok' in aimed || groupTargets(aimed, this.voice.verbs)) {
+			return undefined;
+		}
+		const to = sayToOf(aimed.args);
 		const check = this.talk.canSay(this.thinkThread(), to);
 		if (check.ok) {
 			return undefined;
@@ -2123,32 +2396,62 @@ export class Mind<TCtx = unknown> {
 			? this.stalled(result)
 			: !result.ok || !!result.interrupted;
 		this.queue.noteResult(this.id, stalled);
-		if (!result.interrupted && this.lastArc) {
+		// Orders given are work under way: its watches say when that needs another think.
+		const ordered = result.ok && this.lastArc && arcSteps(this.lastArc).some((step) => step.verb === 'issue');
+		if (!result.interrupted && this.lastArc && !ordered) {
 			this.queue.enqueueArc(this.id, this.lastArc, result.ok);
 		}
 	}
 
-	/** `set_goal`, `drop_goal` or `set_identity` as `by` runs it, which is how the model edits who this mind is. Undefined for any other step. */
+	/** `goal` is reached: it stops being a goal, and whoever listens hears. */
+	public finishGoal(goal:Goal<never>):void {
+		this.persona.finishGoal(goal, this._now);
+		this._onGoalReached?.(goal);
+	}
+
+	/**
+	 * This mind's own word that a goal is done: `text`, or with none its first. One with an `until` ends by that alone, so
+	 * a model cannot talk itself past what its game asks.
+	 */
+	private finishByWord(text:string | undefined, mark:string):ArcResult {
+		const goal = this.goalsMarked(mark, text).find((g) => text || !g.until);
+		if (!goal) {
+			return { ok: false, verb: 'finish_goal', reason: text ? `no goal reads "${text}"` : 'no goal to finish' };
+		}
+		if (goal.until) {
+			return { ok: false, verb: 'finish_goal', reason: 'not yet: that goal ends by itself once it is done' };
+		}
+		this.finishGoal(goal);
+		return { ok: true, verb: 'finish_goal' };
+	}
+
+	/** The goals that carry `mark`, or only the one reading `text` when it is named. */
+	private goalsMarked(mark:string, text:string | undefined):Goal<never>[] {
+		return this.persona.goals.filter((g) => (text ? g.text === mark + text : g.text.startsWith(mark)));
+	}
+
+	/** `set_goal`, `drop_goal`, `finish_goal` or `set_identity` as `by` runs it, which is how the model edits who this mind is. Undefined for any other step. */
 	private editPersona(step:Step, by:ArcRunner<TCtx>):ArcResult | undefined {
-		const voice = by === this.voice;
+		// A goal another of its characters sets is marked as theirs, and only they finish or drop it by name.
+		const mark = by === this.voice ? '' : `[${by.id}] `;
 		if (step.verb === 'set_goal') {
 			const goal = String(step.args.goal ?? '');
 			const priority = typeof step.args.priority === 'number' ? step.args.priority : 0;
-			const text = voice ? goal : `[${by.id}] ${goal}`;
+			const text = mark + goal;
 			// The same goal again only changes its priority.
-			this.persona.goals = this.persona.goals.filter((g) => g.text !== text);
-			this.persona.goals.push({ text, priority });
+			const same = this.persona.goals.find((g) => g.text === text);
+			this.persona.goals = this.persona.goals.filter((g) => g !== same);
+			this.persona.goals.push({ ...same, text, priority });
 			this.persona.trimGoals();
 			return { ok: true, verb: 'set_goal' };
 		}
+		if (step.verb === 'finish_goal') {
+			return this.finishByWord(typeof step.args.goal === 'string' ? step.args.goal : undefined, mark);
+		}
 		if (step.verb === 'drop_goal') {
 			const goal = typeof step.args.goal === 'string' ? step.args.goal : undefined;
-			if (!goal) {
-				this.persona.goals.pop();
-			}
-			else {
-				this.persona.goals = this.persona.goals.filter((g) => g.text !== goal);
-			}
+			const dropped = this.goalsMarked(mark, goal).slice(goal ? 0 : -1);
+			this.persona.goals = this.persona.goals.filter((g) => !dropped.includes(g));
 			return { ok: true, verb: 'drop_goal' };
 		}
 		if (step.verb === 'set_identity') {
@@ -2220,11 +2523,9 @@ function idTargets<TCtx>(step:Step, voice:ArcRunner<TCtx>):string[] {
 		if (argBase(kind) !== 'id') {
 			continue;
 		}
-		const value = step.args[key];
-		for (const id of Array.isArray(value) ? value : [value]) {
-			if (typeof id === 'string' && id !== voice.id && people.has(id) && !ids.includes(id)) {
-				ids.push(id);
-			}
+		const id = step.args[key];
+		if (typeof id === 'string' && id !== voice.id && people.has(id) && !ids.includes(id)) {
+			ids.push(id);
 		}
 	}
 	return ids;

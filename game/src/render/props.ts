@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { bevelBox, create, lathe, meshReady, tube, type ProfilePoint } from '@arc-director/kindling';
 import { PALETTE, thatchMat, toon } from './toon';
-import { BROOM_LEAN, type PropID } from '../world/dressingPlan';
+import { BROOM_LEAN, TABLE_TOP, type PropID } from '../world/dressingPlan';
 import { WINDOW } from '../world/thinWall';
 
 /** One instanced piece of a prop, posed in the prop's frame (meters, Y up, +Z its front). */
@@ -194,19 +194,22 @@ function flowerbed():PropPart[] {
 
 // Table, chair, bench.
 
-const tableTop = keep(bevelBox(0.92, 0.06, 0.62, 0.03));
-const tableLeg = box(0.07, 0.6, 0.07);
-const tableApronX = box(0.76, 0.08, 0.04);
-const tableApronZ = box(0.04, 0.08, 0.46);
+const TABLE_UNDER = TABLE_TOP - 0.06;
+const TABLE_APRON = 0.05;
+const tableTop = keep(bevelBox(0.92, TABLE_TOP - TABLE_UNDER, 0.62, 0.03));
+const tableLeg = box(0.07, TABLE_UNDER, 0.07);
+const tableApronX = box(0.76, TABLE_APRON, 0.04);
+const tableApronZ = box(0.04, TABLE_APRON, 0.46);
 
 function table():PropPart[] {
+	const apron = TABLE_UNDER - TABLE_APRON;
 	return [
-		at('table-top', tableTop, wood, 0, 0.6, 0),
+		at('table-top', tableTop, wood, 0, TABLE_UNDER, 0),
 		...[[-1, -1], [1, -1], [-1, 1], [1, 1]].map(([s, t]) => at('table-leg', tableLeg, woodDark, s! * 0.38, 0, t! * 0.24)),
-		at('table-apron-x', tableApronX, woodDark, 0, 0.5, -0.24),
-		at('table-apron-x', tableApronX, woodDark, 0, 0.5, 0.24),
-		at('table-apron-z', tableApronZ, woodDark, -0.38, 0.5, 0),
-		at('table-apron-z', tableApronZ, woodDark, 0.38, 0.5, 0),
+		at('table-apron-x', tableApronX, woodDark, 0, apron, -0.24),
+		at('table-apron-x', tableApronX, woodDark, 0, apron, 0.24),
+		at('table-apron-z', tableApronZ, woodDark, -0.38, apron, 0),
+		at('table-apron-z', tableApronZ, woodDark, 0.38, apron, 0),
 	];
 }
 
@@ -429,6 +432,21 @@ function shelf():PropPart[] {
 		at('shelf-board', keep(bevelBox(0.74, 0.04, 0.2, 0.015)), wood, 0, 1.28, 0),
 		at('shelf-bracket', box(0.04, 0.16, 0.16), woodDark, -0.28, 1.12, 0),
 		at('shelf-bracket', box(0.04, 0.16, 0.16), woodDark, 0.28, 1.12, 0),
+	];
+}
+
+const bookBoard = keep(bevelBox(0.74, 0.03, 0.2, 0.01));
+const bookSpine = box(0.05, 0.2, 0.14);
+const BOOK_COVERS = [0x6b4423, 0x2f6f8f, 0x7a2f2f, 0xb5651d, 0x4f7a3a].map((color) => paint(color));
+
+/** Two boards on brackets, and a row of five books on the lower one. */
+function bookshelf():PropPart[] {
+	return [
+		at('bookshelf-board', bookBoard, wood, 0, 0.98, 0),
+		at('bookshelf-board', bookBoard, wood, 0, 1.3, 0),
+		at('shelf-bracket', box(0.04, 0.16, 0.16), woodDark, -0.28, 0.82, 0),
+		at('shelf-bracket', box(0.04, 0.16, 0.16), woodDark, 0.28, 0.82, 0),
+		...BOOK_COVERS.map((cover, i) => at('bookshelf-book', bookSpine, cover, -0.16 + i * 0.075, 1.01, 0)),
 	];
 }
 
@@ -793,7 +811,7 @@ function curtains():PropPart[] {
 	];
 }
 
-// A big shelf at table height, fixed to the wall behind it (-Z) on two brackets: somewhere to eat by the bed.
+// A big shelf, fixed to the wall behind it (-Z) on two brackets: somewhere to eat by the bed.
 
 const bigShelfBoard = keep(bevelBox(0.8, 0.045, 0.38, 0.015));
 const bigShelfBracket = (():THREE.BufferGeometry => {
@@ -945,6 +963,7 @@ const catalog:Record<PropID, PropPart[]> = {
 	sacks: sacks(),
 	lantern: lantern(),
 	shelf: shelf(),
+	bookshelf: bookshelf(),
 	jars: jars(),
 	weaponRack: weaponRack(),
 	bed: bed(),

@@ -40,7 +40,8 @@ export const GLEN_LEGEND:Record<string, TerrainLegend | EntityLegend> = {
 	'O': { kind: 'entity', def: 'boulder', over: '~' },
 	'N': { kind: 'entity', def: 'boulder', over: '~', wake: { x: 0.24, z: -0.13, spread: 1.5 } },
 	'B': { kind: 'entity', def: 'boulder', over: '>' },
-	'D': { kind: 'entity', def: 'door', axis: 'z', over: ',', keyID: 'brass' },
+	/** A door locked from outside only: no key needed to open it from indoors. */
+	'D': { kind: 'entity', def: 'door', axis: 'z', over: ',', keyID: 'brass', lockedFrom: 'outside' },
 	/** A door no key locks. */
 	'd': { kind: 'entity', def: 'door', axis: 'z', over: ',', locked: false },
 	'b': { kind: 'entity', def: 'bed', over: ',' },

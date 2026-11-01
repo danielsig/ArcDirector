@@ -1,24 +1,36 @@
 <script setup lang="ts">
+import { inject } from 'vue';
 import type { HudModel } from './hudModel';
+import { sessionKey } from './sessionKey';
 
 defineProps<{
 	hud:HudModel;
 }>();
+
+const session = inject(sessionKey);
 </script>
 
 <template>
-	<div class="hud-inv">
+	<div class="hud-inv" :class="{ touch: hud.touch }">
 		<div class="line" v-if="hud.heldLeft || hud.heldRight || hud.back">
 			<span v-if="hud.heldLeft">L {{ hud.heldLeft }}</span>
 			<span v-if="hud.heldRight">R {{ hud.heldRight }}</span>
 			<span v-if="hud.back">BACK {{ hud.back }}</span>
 		</div>
 		<div class="bar">
+			<button
+				v-if="hud.touch && hud.player !== 'camera'"
+				type="button"
+				class="slot swap"
+				aria-label="Swap hands"
+				@click="session?.gameObject.world?.input.press('KeyX')"
+			>⇄</button>
 			<span
 				v-for="(it, i) in hud.hotbar"
 				:key="i"
 				class="slot"
 				:class="{ on: it.selected }"
+				@click="session?.toggleItem(i)"
 			>{{ i + 1 }} {{ it.name }}{{ it.count > 1 ? ' ×' + it.count : '' }}</span>
 		</div>
 	</div>
@@ -59,5 +71,32 @@ defineProps<{
 .slot.on {
 	border-color: #e8d5a0;
 	color: #fff6d8;
+}
+
+/* Under a finger: big enough to hit, on one row so the stick above stays clear. */
+.touch {
+	max-width: 62%;
+	font-size: 14px;
+}
+
+.touch .bar {
+	flex-wrap: nowrap;
+	overflow-x: auto;
+	scrollbar-width: none;
+	pointer-events: auto;
+	user-select: none;
+	-webkit-user-select: none;
+}
+
+.touch .slot {
+	flex: none;
+	padding: 9px 11px;
+	white-space: nowrap;
+	cursor: pointer;
+}
+
+.swap {
+	font: inherit;
+	color: inherit;
 }
 </style>

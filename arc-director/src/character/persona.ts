@@ -1,7 +1,7 @@
 import { isRecord } from '../json.js';
-import { MemoryStore, type MemoryDraft, type MemoryRecord } from '../memory/store.js';
+import { MemoryStore, nameTags, type MemoryDraft, type MemoryRecord } from '../memory/store.js';
 import { NameBook, type NameBookJSON } from './names.js';
-import type { Identity, Goal, WatchInput, Watches } from './types.js';
+import { GOAL_PINNED_THINKS, type Identity, type Goal, type WatchInput, type Watches } from './types.js';
 import {
 	applyWatchOps,
 	asWatches,
@@ -27,7 +27,8 @@ import {
  */
 export type PersonaSpec = {
 	identity?:Identity;
-	goals?:Goal[];
+	/** Each `until` test takes the context of whoever owns the persona, which the persona itself never needs to know. */
+	goals?:Goal<never>[];
 	maxGoals?:number;
 	/** Pinned ones are kept up to date from the spec, matched by their first two tags. */
 	memories?:MemoryDraft[];
@@ -43,7 +44,8 @@ export type PersonaSpec = {
 
 export type PersonaJSON = {
 	identity:Identity;
-	goals:Goal[];
+	/** Their `until` tests are not saved: a load takes them from the host's spec again, by the goal's text. */
+	goals:Goal<never>[];
 	maxGoals:number;
 	memories:MemoryRecord[];
 	maxEpisodic:number;
@@ -65,7 +67,7 @@ export type PersonaJSON = {
  */
 export class Persona {
 	public identity:Identity;
-	public goals:Goal[];
+	public goals:Goal<never>[];
 	public maxGoals:number;
 	public readonly memory:MemoryStore;
 	/** Names for other characters. Saved, because memories quote them. */
@@ -234,17 +236,31 @@ export class Persona {
 		return changed;
 	}
 
-	/** A model's goal list. Ignored unless it holds at least one goal. */
+	/** It is reached: no longer a goal, pinned for a few thinks, and after that only `recall` finds it. */
+	public finishGoal(goal:Goal<never>, now:number):void {
+		this.goals = this.goals.filter((g) => g !== goal);
+		this.memory.add({
+			text: `Goal reached: ${goal.text}`,
+			tags: ['goal', ...nameTags(goal.text)],
+			pinned: true,
+			pinnedThinks: GOAL_PINNED_THINKS,
+		}, now);
+	}
+
+	/** A model's goal list. Ignored unless it holds at least one goal. A goal it keeps keeps its `until`. */
 	public applyGoalList(raw:unknown):void {
 		if (!Array.isArray(raw)) {
 			return;
 		}
-		const goals:Goal[] = [];
+		const goals:Goal<never>[] = [];
 		for (const g of raw) {
 			if (isRecord(g) && typeof g.text === 'string' && g.text.trim()) {
+				const text = g.text.trim();
+				const until = this.goals.find((kept) => kept.text === text)?.until;
 				goals.push({
-					text: g.text.trim(),
+					text,
 					priority: typeof g.priority === 'number' ? g.priority : undefined,
+					...until ? { until } : {},
 				});
 			}
 		}
@@ -278,7 +294,7 @@ export class Persona {
 	public toJSON():PersonaJSON {
 		return {
 			identity: { ...this.identity, traits: this.identity.traits ? [...this.identity.traits] : undefined },
-			goals: this.goals.map((g) => ({ ...g })),
+			goals: this.goals.map(({ until, ...goal }) => (typeof until === 'string' ? { ...goal, until } : goal)),
 			maxGoals: this.maxGoals,
 			memories: this.memory.toJSON(),
 			maxEpisodic: this.memory.maxEpisodic,
@@ -299,7 +315,12 @@ export class Persona {
 	 * dropped), its pinned memories are refreshed, and its writable flags and sight limit win when set.
 	 */
 	public static fromJSON(json:PersonaJSON, host:PersonaSpec = {}):Persona {
-		const persona = new Persona({ identity: json.identity, goals: json.goals }, MemoryStore.fromJSON(json.memories));
+		const test = (goal:Goal<never>):Goal<never>['until'] => goal.until ?? host.goals?.find((g) => g.text === goal.text)?.until;
+		const goals = json.goals.map((goal) => {
+			const until = test(goal);
+			return until ? { ...goal, until } : goal;
+		});
+		const persona = new Persona({ identity: json.identity, goals }, MemoryStore.fromJSON(json.memories));
 		persona.addSpecMemories(host.memories ?? [], false);
 		persona.memory.maxEpisodic = json.maxEpisodic;
 		persona.maxGoals = json.maxGoals;

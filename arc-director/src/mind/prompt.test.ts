@@ -98,7 +98,7 @@ describe('prompt split', () => {
 		assert.match(system, /❌ = you/);
 		assert.equal(system.includes('Goals (highest first)'), false);
 		assert.equal(system.includes('Pinned memories'), false);
-		assert.ok(system.length < 5340, `standing prefix ${system.length} chars`);
+		assert.ok(system.length < 5550, `standing prefix ${system.length} chars`);
 		const wanderJson = system.match(/\{"steps":\[\{"verb":"wander","until":"[^"]*"\}\]\}/);
 		assert.ok(wanderJson);
 		assert.equal(parseArc(wanderJson[0], verbs)[0].verb, 'wander');
@@ -109,7 +109,7 @@ describe('prompt split', () => {
 		);
 		assert.match(system, /Close every brace\. No prose/);
 		assert.match(system, /the Arc JSON, \{"steps":\[…\]\}/);
-		const chainAt = system.indexOf('{"steps":[{"verb":"pick_up"');
+		const chainAt = system.indexOf('{"steps":[\n\t{"verb":"pick_up"');
 		assert.ok(chainAt >= 0);
 		const chained = parseArc(system.slice(chainAt), verbs);
 		assert.deepEqual(chained.map((step) => step.verb), ['pick_up', 'give']);
@@ -351,7 +351,7 @@ describe('prompt split', () => {
 		assert.equal(system.includes('There is no Forest'), false);
 		assert.equal(system.includes('Being surrounded'), false);
 		assert.equal(system.includes('filter("Tree"), never filter("trees")'), false);
-		assert.ok(system.length < 5100, `standing prefix ${system.length} chars`);
+		assert.ok(system.length < 5250, `standing prefix ${system.length} chars`);
 		const knowledgeOnly = stablePrefix('Guard', identity, verbs, { canRecallKnowledge: true });
 		assert.match(knowledgeOnly, /Call recall, or wander\(until\)/);
 		assert.match(knowledgeOnly, /Never ask anyone until recall cannot find it/);
@@ -395,16 +395,16 @@ describe('prompt split', () => {
 			assert.match(stock, /Give each issue as a step of its own\./);
 			assert.equal(stock.includes('Join several issue with ;'), false);
 			assert.equal(stock.includes('\twho='), false, 'no block layout in JSON');
-			const example = stock.match(/Example: (\{"steps":\[\{"verb":"issue".*\]\})\nYou are /);
+			const example = stock.match(/Example:\n(\{"steps":\[\n[\s\S]*?\n\]\})\nYou are /);
 			assert.ok(example, 'the stock issue example is Arc JSON');
 			const arc = parseArc(example[1], verbs);
 			assert.deepEqual(arc.map((step) => step.verb), ['issue', 'issue']);
 			assert.equal(arc[0].args.who, "units.filter('Guard')");
-			const choose = stock.match(/choose takes a goal and its choices, each a list of steps under its name, as in:\n(\{"steps".*\})\n/);
+			const choose = stock.match(/choose takes a goal and its choices, each a list of steps under its name, as in:\n(\{"steps"[\s\S]*?\n\]\})\n/);
 			assert.ok(choose, 'the choose example is Arc JSON');
 			assert.equal(parseArc(choose[1], verbs)[0].verb, 'issue');
 			const host = stablePrefix('Guard', identity, verbs, { arcFormat, arcExample: 'issue(who=units.filter("Archer"), arc=loop(shoot(others.filter("enemy").minBy(u => u.hp))))' });
-			const hosted = host.match(/Example: (\{"steps".*\})\nYou are /);
+			const hosted = host.match(/Example:\s+(\{"steps"[\s\S]*?\})\nYou are /);
 			assert.ok(hosted, 'the host example is shown as Arc JSON too');
 			assert.equal(parseArc(hosted[1], verbs)[0].args.who, "units.filter('Archer')");
 		}
@@ -482,12 +482,13 @@ describe('choose in prompts', () => {
 	it('teaches choose to a character that has it', () => {
 		const text = stablePrefix('Guard', {}, all, { arcFormat: 'text' });
 		assert.match(text, /choose\(goal, name=arc, …\) — a fast model picks one by name/);
-		assert.match(text, /as in:\nloop\(\n\tchoose\(\n\t\t"why you choose",\n\t\twander=wander\(\),\n\t\twait=wait\(\),\n\t\),\n\)\n/, 'a block, every choice named');
+		assert.match(text, /as in:\nloop\(\n\tarc=choose\(\n\t\t"why you choose",\n\t\twander=wander\(\),\n\t\twait=wait\(\),\n\t\),\n\tuntil=!some\(others\),\n\)\n/, 'a block, every choice named');
 		const json = stablePrefix('Guard', {}, all);
-		assert.match(json, /choose takes a goal and its choices, each a list of steps under its name, as in:\n\{"steps":\[\{"verb":"loop","arc":\[\{"verb":"choose","goal":"why you choose","choices":\{"wander":\[\{"verb":"wander"\}\],"wait":\[\{"verb":"wait"\}\]\}\}\]\}\]\}\nA fast model runs the one that fits right now/);
-		const example = json.match(/as in:\n(\{"steps".*\})\n/);
+		assert.match(json, /choose takes a goal and its choices, each a list of steps under its name, as in:\n\{"steps":\[\n\t\{"verb":"loop","arc":\[\n\t\t\{"verb":"choose","goal":"why you choose","choices":\{\n\t\t\t"wander":\[\{"verb":"wander"\}\],\n\t\t\t"wait":\[\{"verb":"wait"\}\]\n\t\t\}\}\n\t\],"until":"!some\(others\)"\}\n\]\}\nA fast model runs the one that fits right now/);
+		const example = json.match(/as in:\n(\{"steps"[\s\S]*?\n\]\})\n/);
 		assert.ok(example);
 		assert.equal(parseArc(example[1], all)[0].verb, 'loop');
+		assert.equal(/[}\]]{6}/.test(example[1]), false, 'no long closing run for a small model to recite');
 	});
 
 	it('says nothing of choose when it is withheld', () => {
@@ -499,7 +500,7 @@ describe('choose in prompts', () => {
 		const catalog = registerStockCollectiveVerbs(registerStockVerbs(new VerbRegistry()));
 		catalog.add('attack', { args: { target: 'id?' } });
 		const text = stablePrefix('Dawn', {}, catalog.view(['issue', 'loop', 'choose', 'attack']), { arcFormat: 'text' });
-		assert.match(text, /as in:\nissue\(\n\twho=units,\n\tarc=loop\(\n\t\tchoose\(\n\t\t\t"why you choose",\n\t\t\tattack=attack\(\),\n/);
+		assert.match(text, /as in:\nissue\(\n\twho=units,\n\tarc=loop\(\n\t\tarc=choose\(\n\t\t\t"why you choose",\n\t\t\tattack=attack\(\),\n/);
 	});
 
 	it('never offers choose to a collective whose kit lacks it, even among nested arc verbs', () => {

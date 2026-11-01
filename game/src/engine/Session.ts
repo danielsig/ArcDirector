@@ -152,12 +152,7 @@ export class Session extends Component {
 			world.sayOpen = true;
 		}
 		else if (!this.hud.guideOpen && (world.input.pressed('Enter') || world.input.pressed('NumpadEnter'))) {
-			this.hud.sayOpen = true;
-			world.sayOpen = true;
-			this.patchSayCatalog();
-			world.input.keys.clear();
-			this.dropPointerLock();
-			this.hud.chatOpen = true;
+			this.openSay();
 		}
 		else {
 			world.sayOpen = false;
@@ -184,6 +179,25 @@ export class Session extends Component {
 		world.forEachComponent(Camera, (c) => c.update(0));
 		this.view.sync();
 		this.hudView.sync();
+	}
+
+	/** Opens the say box and the chat over it. */
+	public openSay():void {
+		const world = this.gameObject.world;
+		if (!world) {
+			return;
+		}
+		this.hud.sayOpen = true;
+		world.sayOpen = true;
+		this.patchSayCatalog();
+		world.input.keys.clear();
+		this.dropPointerLock();
+		this.hud.chatOpen = true;
+	}
+
+	/** Takes the hotbar's `index`th item in hand, or puts it back. */
+	public toggleItem(index:number):void {
+		this.gameObject.world?.findByID('Player')?.getComponent(PlayerInput)?.toggleItem(index);
 	}
 
 	public say(spoken:string):void {

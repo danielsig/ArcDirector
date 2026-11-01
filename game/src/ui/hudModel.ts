@@ -41,7 +41,7 @@ export type HudSpeech = {
 };
 
 /** Item defs drawn as tiny icons over the heads of whoever carries them (`SceneDef.carried`). */
-export const CARRY_ICONS = ['fire_mushroom', 'moon_mushroom', 'silver_trout'] as const;
+export const CARRY_ICONS = ['fire_mushroom', 'moon_mushroom', 'silver_trout', 'brass_key', 'iron_key'] as const;
 
 export type HudPickup = {
 	name:string;
@@ -160,8 +160,9 @@ export type HudInspect = {
 /** How a think on a slate stands: being written, chosen, ended by an error, or cut short by a newer think. */
 export type SlateState = 'writing' | 'done' | 'failed' | 'dropped';
 
-/** A slate by the head of a mind thinking, writing out its Arc as the model does. */
-export type HudSlate = {
+/** A mind's think, as it stands: on a slate, and in the AI log. */
+export type HudThink = {
+	seq:number;
 	id:string;
 	name:string;
 	color:GoalColor;
@@ -176,6 +177,10 @@ export type HudSlate = {
 	wrong:boolean;
 	/** How long the think has run, or ran. */
 	ms:number;
+};
+
+/** A slate by the head of a mind thinking, writing out its Arc as the model does. */
+export type HudSlate = HudThink & {
 	/** Where its bottom left corner wants to be on screen, px (it grows upward); `HudSlates` keeps it clear of other things. */
 	x:number;
 	y:number;
@@ -202,6 +207,8 @@ export type HudModel = {
 	message:string;
 	cursorName:string;
 	pickupHint:HudPickup;
+	/** No mouse or trackpad is attached: the touch controls show. */
+	touch:boolean;
 	hotbar:HudItem[];
 	heldLeft:string;
 	heldRight:string;
@@ -211,6 +218,8 @@ export type HudModel = {
 	chat:HudChatLine[];
 	aiLogOpen:boolean;
 	aiLog:HudAiLogEntry[];
+	/** The latest thinks, oldest first; kept up only while the AI log is open. */
+	thinks:HudThink[];
 	sayOpen:boolean;
 	sayTo:string;
 	sayPeers:string[];
@@ -332,6 +341,7 @@ export function emptyHud():HudModel {
 			y: 0,
 			visible: false,
 		},
+		touch: false,
 		hotbar: [],
 		heldLeft: '',
 		heldRight: '',
@@ -341,6 +351,7 @@ export function emptyHud():HudModel {
 		chat: [],
 		aiLogOpen: false,
 		aiLog: [],
+		thinks: [],
 		sayOpen: false,
 		sayTo: '',
 		sayPeers: [],

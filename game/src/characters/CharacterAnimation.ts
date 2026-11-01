@@ -5,6 +5,7 @@ import { Order } from '../engine/order';
 import { characterModel } from '../render/characterModels';
 import { CharacterPose } from './CharacterPose';
 import { HeldProps } from './HeldProps';
+import { Seated } from './Seated';
 
 /**
  * Speed (m/s) at which `walk` plays at rate 1. Playback rate is `speed / WALK_PACE`, so a smaller
@@ -21,6 +22,8 @@ const IDLES = ['standing_relax', 'look_around'];
 /** Feminine models also stand legs together (`idle`) and, with nothing in hand, hands on hips. */
 const HANDS_ON_HIPS = 'wait';
 const FEMININE_IDLES = [...IDLES, 'idle', HANDS_ON_HIPS];
+/** A sleeper: the stillest standing clip, slowed to a breath. */
+const ASLEEP = { clip: 'standing_relax', rate: 0.25 };
 
 /** Ways to drop dead, one picked at random per death; each ends lying down and holds there. */
 const DEATHS = ['fall', 'defeat_03'];
@@ -147,6 +150,10 @@ export class CharacterAnimation extends Component {
 		}
 		else if (this.gameObject.getComponent(Celebrating)?.enabled) {
 			clip = this.gameObject.getComponent(Celebrating)!.style;
+		}
+		else if (this.gameObject.getComponent(Seated)?.asleep) {
+			clip = ASLEEP.clip;
+			rate = ASLEEP.rate;
 		}
 		else if (rb?.walking || pose === 'walk') {
 			clip = 'walk';

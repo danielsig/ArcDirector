@@ -39,6 +39,8 @@ export type ArcResult = {
 	unreachable?:string;
 	/** What stood in its way, by id, cheapest to get past first: the things a host named as blocking (`PathStep.by`). */
 	blockedBy?:string[];
+	/** It failed for now, and going round again may go otherwise (the target moved): a `loop` does not stop at it. */
+	retry?:boolean;
 };
 
 export class ArcError extends Error {
@@ -98,6 +100,22 @@ export function arcSteps(arc:Arc):Step[] {
 /** The verbs the arcs inside `step` may name: a group's are this registry's, any other arc arg's or choice's the full catalog's. */
 export function verbsInside(step:Step, verbs:VerbRegistry):VerbRegistry {
 	return step.verb === GROUP_VERB ? verbs : verbs.nested();
+}
+
+/** What a step does, without what its `choose` only says: a goal reworded, or a choice renamed, is the same program. */
+function programKey(arc:Arc):unknown {
+	return arc.map((step) => {
+		const choose = step.verb === 'choose';
+		const args = Object.entries(step.args)
+			.filter(([key]) => !(choose && key === 'goal'))
+			.map(([key, value]) => [choose ? '' : key, isArc(value) ? programKey(value) : value]);
+		return [step.verb, step.then, choose ? args.map((arg) => JSON.stringify(arg)).sort() : args];
+	});
+}
+
+/** Whether two arcs are the same program, for all their wording. */
+export function sameProgram(a:Arc, b:Arc):boolean {
+	return JSON.stringify(programKey(a)) === JSON.stringify(programKey(b));
 }
 
 /** `visit` each step of `arc` and of every arc inside it, with the registry that step's verb is read from. A group is visited too. */

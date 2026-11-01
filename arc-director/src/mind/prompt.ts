@@ -1,7 +1,7 @@
 import { verbHelp } from '../arc/schema.js';
 import { MIND_ONLY_VERBS, STOCK_ARC_VERBS, type VerbRegistry } from '../arc/stock-verbs.js';
 import { formatArcBlocks, parseArcText } from '../arc/parse.js';
-import { arcJSONText } from '../arc/wire.js';
+import { arcJSONBlocks } from '../arc/wire.js';
 
 const STOCK_ARC_VERBS_SET = new Set<string>(STOCK_ARC_VERBS);
 import type { ArcResult } from '../arc/types.js';
@@ -121,7 +121,7 @@ function compactArcInstructions(verbs:VerbRegistry, opts:StablePrefixOpts):strin
 		emitSentence(format, tools.length > 0),
 		`Available verbs: ${verbHelp(verbs, tools, { stockHelp: false })}.`,
 		tools.length > 0 && `Tools: ${tools.join(', ')}.`,
-		opts.arcExample ? `Example: ${format === 'text' ? opts.arcExample : showArc(opts.arcExample, verbs, format)}` : '',
+		opts.arcExample ? example(format === 'text' ? opts.arcExample : showArc(opts.arcExample, verbs, format)) : '',
 	])];
 }
 
@@ -138,7 +138,7 @@ export function watchCheatSheet(edit:boolean, observe:boolean, goTo = false):str
 
 const WATCH_RELATIONS = [
 	'Relations: distance(me, Player), isNear(me, Player, 16), hasSightline, isFacing, manhattan(me, Player), isReachable(me, Cottage); wrap list watches in some.',
-	'i is "Lantern". filter/count/find/some/all/minBy/maxBy. others.nearby(16), isLeft, isRight, events.filter("theft"). &&/|| numbers=min/max, bools=and/or. isCarrying / wasCarrying / hasJustReceived / hasJustLost when you carry.',
+	'i is "Lantern", units.filter(u => u is "Witch"). filter/count/find/some/all/minBy/maxBy. others.nearby(16), isLeft, isRight, events.filter("theft"). &&/|| numbers=min/max, bools=and/or. isCarrying / wasCarrying / hasJustReceived / hasJustLost when you carry.',
 ].join(' ');
 
 export function knowledgeHint(includeUnnamed = false, canWander = true, canObserve = false):string {
@@ -233,7 +233,7 @@ function arcInstructions(
 		emitSentence(format, toolNames.length > 0),
 		`Names only, no coordinates. Available verbs: ${verbHelp(verbs, toolNames)}.`,
 		toolsNotVerbs(toolNames, format),
-		lines.example ? `Example: ${format === 'text' ? lines.example : showArc(lines.example, verbs, format)}` : arcExample(verbs, format, chain),
+		lines.example ? example(format === 'text' ? lines.example : showArc(lines.example, verbs, format)) : arcExample(verbs, format, chain),
 	]);
 }
 
@@ -323,13 +323,13 @@ function example(shown:string):string {
 }
 
 /**
- * Arc `text` as the prompt shows an example in `format`: block layout for text, one line of Arc JSON otherwise. Every
+ * Arc `text` as the prompt shows an example in `format`: block layout for text, the same layout of Arc JSON otherwise. Every
  * example is written once, as Arc text. Shown as written where it does not parse (a placeholder).
  */
 function showArc(text:string, verbs:VerbRegistry, format:ArcFormat):string {
 	try {
 		const arc = parseArcText(text, verbs);
-		return format === 'text' ? formatArcBlocks(arc, verbs) : arcJSONText(arc, verbs);
+		return format === 'text' ? formatArcBlocks(arc, verbs) : arcJSONBlocks(arc, verbs);
 	}
 	catch {
 		return text;
@@ -405,7 +405,10 @@ function chooseSentence(verbs:VerbRegistry, format:ArcFormat, wrap:string):strin
 	const choices = bare.length === 2 ? bare.join(', ') : 'first=<arc>, second=<arc>';
 	const looped = verbs.has('loop');
 	const choose = `choose("why you choose", ${choices})`;
-	const text = looped ? `${wrap}loop(${choose})${wrap ? ')' : ''}` : `${wrap}${choose}${wrap ? ')' : ''}`;
+	// Args after the arcs, so the JSON never ends on a long run of closing brackets: a small model recites the run from
+	// memory, and if it has not closed the string it is in, it writes on in that string to its token limit.
+	const close = wrap ? ', group=Alpha)' : '';
+	const text = looped ? `${wrap}loop(${choose}, until=!some(others))${close}` : `${wrap}${choose}${close}`;
 	const example = showArc(text, verbs, format);
 	if (format !== 'text') {
 		// An example that does not parse (a placeholder, or no loop in the kit) is Arc text: not one to show beside JSON.
@@ -443,12 +446,15 @@ function collectiveInstructions(verbs:VerbRegistry, format:ArcFormat):string {
 		const until = verbs.has('unlaw') ? ' until unlaw(name)' : '';
 		const when = verbs.has('when') ? '; when is one job' : '';
 		const who = verbs.has('issue')
-			? `law(who?, watch, arc, name?) is a standing reaction${until} — it outlives the program and needs no think. Omitted who = units (troops). Prefer law for any reaction that should apply to more than one unit${when}. `
+			? `law(who?, watch, arc, name?) is a standing reaction${until} — it outlives the program and needs no think. Omitted who = units (troops), or you if it only speaks. Prefer law for any reaction that should apply to more than one unit${when}. `
 			: `law(watch, arc, name?) is a standing reaction${until} — it outlives the program and needs no think. `;
 		parts.push(who);
 	}
 	else if (verbs.has('unlaw')) {
 		parts.push('unlaw(name) drops that law. ');
+	}
+	if (verbs.has('when') && verbs.has('law')) {
+		parts.push('times=1 makes a when or a law one-time. ');
 	}
 	return parts.join('');
 }
@@ -469,7 +475,7 @@ export function volatileBlock(opts:{
 	lastResult?:ArcResult;
 	/** Articles for the names in a failed last result, shown under it. */
 	lastResultArticles?:string;
-	goals?:Goal[];
+	goals?:Pick<Goal, 'text' | 'priority'>[];
 	pinned?:(Partial<MemoryRecord> & { text:string })[];
 	recalled?:MemoryRecord[];
 	watches?:Watches;
@@ -617,7 +623,7 @@ export function reviseGoalsAsk(format:ArcFormat, maxGoals:number):string {
 	const tail = `Keep at most ${maxGoals} goals. Do not emit movement.`;
 	if (format === 'text') {
 		return `${lead}Leave set_identity out otherwise. Do not rewrite the role to summarize this moment. `
-			+ 'Reply with only Arc text, one verb per line: set_goal(goal, priority?) adds a goal, drop_goal(goal?) drops one (the last if none is named), '
+			+ 'Reply with only Arc text, one verb per line: set_goal(goal, priority?) adds a goal, drop_goal(goal?) drops one (the last if none is named), finish_goal(goal?) ends one that is done, '
 			+ `set_identity(role?, traits?) changes who you are. Name every argument, as in set_goal(goal=Hold the bridge, priority=2). Reply with nothing if nothing changes. ${tail}`;
 	}
 	const reply = format === 'schema'
@@ -651,9 +657,9 @@ export function arcRepairHint(reason:string, format:ArcFormat = 'json', tools:st
 	if (name && verbs?.has('issue') && !verbs.has(name) && verbs.nested().has(name)) {
 		return `You have no body of your own: ${name} is for your units, run through issue(who, arc=${name}(…)). Keep this conversation. ${emit}`;
 	}
-	const toolNote = tools.length > 0
+	const toolNote = (tools.length > 0
 		? ` Tools (${tools.join(', ')}) are not verbs — ${schema ? 'reply with the tool call' : 'call them'}, then emit the ${schema ? 'steps' : 'arc'}.`
-		: '';
+		: '') + (name && verbs && !verbs.has(name) ? ` You can use only: ${verbs.list().map((spec) => spec.name).join(', ')}.` : '');
 	if (reason === 'expected verb' || reason === 'model returned no arc') {
 		const ban = [verbs?.has('go_to') ? 'go_to' : '', verbs?.has('follow') ? 'follow' : ''].filter(Boolean);
 		const job = ban.length > 0 ? `Do the spoken job, not ${ban.join(' or ')} the speaker.` : 'Do the spoken job.';
@@ -661,6 +667,15 @@ export function arcRepairHint(reason:string, format:ArcFormat = 'json', tools:st
 			+ `${job} Keep this conversation. ${emit}${toolNote}`;
 	}
 	return `That was not a valid Arc (${reason}), so it is discarded: write the whole Arc anew. Keep this conversation. ${emit}${toolNote}`;
+}
+
+/**
+ * After a reply some of whose steps could never work: the model's turn before this shows only those that could, so it
+ * has no bad step to copy, and this says in words what became of the others.
+ */
+export function partRepairHint(failed:readonly { label:string; reason:string }[], verbs:VerbRegistry, format:ArcFormat = 'json'):string {
+	const rows = failed.map((step) => `- ${step.label}: ${step.reason}`).join('\n');
+	return `Those steps stand. You also wrote these, and they failed:\n${rows}\nReply with only what replaces them, not the steps that stand, or ${showArc('wait()', verbs, format)} to leave them out. ${thenEmit(format)}`;
 }
 
 /** After tools the model wrote as text where the Arc goes: they ran anyway; here is what they said. */
@@ -691,6 +706,15 @@ export function sayRangeHint(reason:string, nearby:string[], format:ArcFormat = 
 export function blockedAgainHint(reason:string, format:ArcFormat = 'json'):string {
 	return `${reason}. That already failed and still would, so it did not run. `
 		+ `Deal with what is in the way first, or do something else. Keep this conversation. ${thenEmit(format)}`;
+}
+
+/** Asked once a reply is read, when it would cut short work that has not finished. */
+export function replaceAsk(lines:readonly { name:string; now:string; next:string; looping:boolean }[], json:boolean):string {
+	const rows = lines.map((line) => `- ${line.name}: ${line.now}. Would become: ${line.next}`).join('\n');
+	const loops = lines.some((line) => line.looping)
+		? ' Appended to a loop with an exit (until, times, through), the new work runs once the loop exits; appended to a loop with no exit, it runs inside the loop, each time round.'
+		: '';
+	return `That would cut short work not finished yet:\n${rows}\nFor each name, choose. "replace": the new work takes over at once. "append": the new work runs after what it is doing.${loops} "keep": it keeps what it is doing, and the new work is dropped for it. Reply ${json ? '' : 'only '}{${lines.map((line) => `"${line.name}":"replace, append or keep"`).join(',')}}.`;
 }
 
 /**

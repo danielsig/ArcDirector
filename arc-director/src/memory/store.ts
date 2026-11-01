@@ -11,6 +11,8 @@ export type MemoryRecord = {
 	timestamp:number;
 	lastAccessed:number;
 	pinned?:boolean;
+	/** Thinks left before it stops being pinned and only `recall` finds it. Unset: pinned for good. */
+	pinnedThinks?:number;
 	emotional?:boolean;
 	embedding?:number[];
 	weight?:number;
@@ -22,6 +24,7 @@ export type MemoryDraft = {
 	tags?:string[];
 	timestamp?:number;
 	pinned?:boolean;
+	pinnedThinks?:number;
 	emotional?:boolean;
 	embedding?:number[];
 	weight?:number;
@@ -181,6 +184,7 @@ export class MemoryStore {
 			timestamp: draft.timestamp ?? now,
 			lastAccessed: draft.timestamp ?? now,
 			pinned: draft.pinned,
+			pinnedThinks: draft.pinnedThinks,
 			emotional: draft.emotional,
 			embedding: draft.embedding ? [...draft.embedding] : undefined,
 			weight: draft.weight ?? 1,
@@ -196,6 +200,16 @@ export class MemoryStore {
 
 	public pinned():MemoryRecord[] {
 		return this._records.filter((r) => r.pinned);
+	}
+
+	/** A think read the pins: those pinned for some thinks count down, and any run out become plain memories. */
+	public agePins():void {
+		for (const record of this._records) {
+			if (record.pinned && record.pinnedThinks !== undefined && --record.pinnedThinks <= 0) {
+				record.pinned = false;
+				record.pinnedThinks = undefined;
+			}
+		}
 	}
 
 	public recall(opts:{

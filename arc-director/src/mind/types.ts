@@ -22,6 +22,9 @@ export type ThinkEvent =
 	/** `who` ordered the characters `to` to run `arc`; `text` is that arc as Arc text. */
 	| { kind:'issue'; who:string; to:string[]; arc:Arc; text:string };
 
+/** Unfinished work an Arc would cut short: whose, how far along, and what would take its place. */
+export type Replacing = { id:string; now:string; next:string; looping:boolean };
+
 /**
  * How a model writes the Arc it thinks up. `text`: Arc text (`go_to() && wait()`), parsed forgivingly. `json`: Arc
  * JSON, parsed as written. `schema`: Arc JSON the server must follow, enforced by a response schema.

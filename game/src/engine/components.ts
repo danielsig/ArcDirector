@@ -13,6 +13,7 @@ import {
 import { pascalCase } from 'arc-director';
 import { Order } from './order';
 import { CELL_SIZE } from '../world/constants';
+import { doorInteriorAlong } from '../world/interior';
 import { Pickupable } from '../items/components';
 import { findCarried } from '../items/inventory';
 import { characterModel } from '../render/characterModels';
@@ -143,6 +144,11 @@ export abstract class Barrier extends Component {
 	/** Why it stops `body` now, in words the agent can act on. */
 	public abstract whyBlocked(body:GameObject):string;
 
+	/** Whether someone at `from` clears it just by walking up, so a route may go through it. */
+	public opensFrom(_from:{ x:number; z:number }):boolean {
+		return false;
+	}
+
 	/** What the agent calls it. */
 	protected get label():string {
 		return this.gameObject.getComponent(Named)?.id ?? this.gameObject.id;
@@ -185,12 +191,20 @@ export class Door extends Barrier {
 		this.syncCollision();
 	}
 
-	/** Shut, or locked: then whether `body` carries the key. */
-	public whyBlocked(body:GameObject):string {
+	/** Whether someone at `from` can open it: no lock holds it, or its lock bars only the other side. Opening leaves the lock as it is. */
+	public override opensFrom(from:{ x:number; z:number }):boolean {
 		const lock = this.gameObject.getComponent(Lock);
 		if (!lock?.locked) {
-			return `${this.label} is closed — open it first`;
+			return true;
 		}
+		const p = this.gameObject.transform.position;
+		const inward = doorInteriorAlong(this.gameObject);
+		return lock.lockedFrom === 'outside' && inward !== 0 && (this.axis === 'x' ? from.x - p.x : from.z - p.z) * inward >= 0;
+	}
+
+	/** Locked: whether `body` carries the key. */
+	public whyBlocked(body:GameObject):string {
+		const lock = this.gameObject.getComponent(Lock)!;
 		const key = findCarried(body, (it) => it.Key?.keyID === lock.keyID);
 		if (key) {
 			return `${this.label} is locked — you carry ${pascalCase(key.name) || pascalCase(key.defID)}, use it on ${this.label}`;
@@ -213,6 +227,8 @@ export class Lock extends Component {
 	public static override saved = ['keyID', 'locked'];
 	public keyID = '';
 	public locked = true;
+	/** Which side of a door the lock bars opening from. From `outside`, anyone inside opens it, and it stays locked. */
+	public lockedFrom:'both' | 'outside' = 'both';
 }
 
 export class Chest extends Component {
@@ -369,6 +385,17 @@ export class HearOnly extends Component {
 }
 
 export class BrewHearth extends Component {}
+
+/** A chest with no lid: what it holds stands in plain sight, for anyone to take down. */
+export class Bookshelf extends Chest {
+	public override open = true;
+}
+
+/** Something to rest on, drawn with the chunk's dressing: a `chair` to sit on or a `bed` to sleep in. One body at a time. */
+export class Furniture extends Component {
+	public kind:'chair' | 'bed' = 'chair';
+	public occupant:GameObject | null = null;
+}
 
 export class Sickbed extends Component {
 	public static override saved = ['tended'];
@@ -688,17 +715,12 @@ export class Camera extends Component {
 			return;
 		}
 		const input = world.input;
-		let dolly = input.wheelDelta * this.wheelSens;
-		if (input.pointerLocked) {
-			dolly += input.lookDeltaY * this.dollySens;
-		}
-		if (dolly !== 0) {
-			this.distance = clamp(
-				this.distance + dolly,
-				this.minDistance,
-				this.maxDistance,
-			);
-		}
+		const dolly = input.wheelDelta * this.wheelSens + input.lookDeltaY * this.dollySens;
+		this.distance = clamp(
+			(this.distance + dolly) / input.pinch,
+			this.minDistance,
+			this.maxDistance,
+		);
 		this.behind = this.distance * Math.cos(this.pitch);
 		this.height = this.distance * Math.sin(this.pitch);
 

@@ -6,6 +6,7 @@ import {
 	isArc,
 	isCountMap,
 	type Arc,
+	type CountMap,
 	type Step,
 } from './types.js';
 import { argBase, CHOOSE_VERB, GROUP_VERB, TEXT_ARG_KINDS, type VerbRegistry } from './stock-verbs.js';
@@ -39,25 +40,26 @@ function rejectMigrationArgs(verb:string, args:Record<string, unknown>):void {
 	}
 }
 
-export function validateStep(step:Step, registry:VerbRegistry, inIssue = false):void {
+export function validateStep(step:Step, registry:VerbRegistry, nested = false):void {
 	if (step.verb === GROUP_VERB) {
 		const inner = groupArc(step);
 		if (!inner) {
 			throw new ArcError('a group needs an arc');
 		}
-		validateArc(inner, registry, inIssue);
+		validateArc(inner, registry, nested);
 		return;
 	}
 	const spec = registry.get(step.verb);
 	if (!spec) {
 		throw new ArcError(`unknown verb '${step.verb}'`);
 	}
-	if (inIssue && step.verb === 'issue') {
-		throw new ArcError('issue inside an issue arc; close each issue(...) before the next');
+	// Only the Arc's own root gives orders: a loop of them, or a law's, re-orders the units for as long as it runs.
+	if (nested && step.verb === 'issue') {
+		throw new ArcError('issue goes at the root of an Arc, never inside another verb; close each issue(...) before the next');
 	}
 	rejectMigrationArgs(step.verb, step.args);
 	if (step.verb === CHOOSE_VERB) {
-		validateChoose(step, registry, inIssue);
+		validateChoose(step, registry);
 		return;
 	}
 	for (const key of Object.keys(step.args)) {
@@ -80,11 +82,20 @@ export function validateStep(step:Step, registry:VerbRegistry, inIssue = false):
 		if (base === 'number' && typeof value !== 'number') {
 			throw new ArcError(`verb '${step.verb}' arg '${key}' must be a number`);
 		}
+		if (key === 'times' && (!Number.isInteger(value) || (value as number) < 1)) {
+			throw new ArcError(`verb '${step.verb}' arg 'times' must be a whole number from 1 up`);
+		}
 		if (base === 'string[]' && !(Array.isArray(value) && value.every((x) => typeof x === 'string'))) {
 			throw new ArcError(`verb '${step.verb}' arg '${key}' must be string[]`);
 		}
 		if (base === 'bundle' && !isCountMap(value)) {
 			throw new ArcError(`verb '${step.verb}' arg '${key}' must be { [item: string]: number }`);
+		}
+		if (base === 'bundle') {
+			const bad = Object.entries(value as CountMap).find(([, count]) => !Number.isInteger(count) || count <= 0);
+			if (bad) {
+				throw new ArcError(`verb '${step.verb}' arg '${key}': ${bad[1]} of '${bad[0]}'; each count is a whole number above 0`);
+			}
 		}
 		if (TEXT_ARG_KINDS.includes(base) && typeof value !== 'string') {
 			throw new ArcError(`verb '${step.verb}' arg '${key}' must be a string`);
@@ -93,7 +104,7 @@ export function validateStep(step:Step, registry:VerbRegistry, inIssue = false):
 			if (!isArc(value)) {
 				throw new ArcError(`verb '${step.verb}' arg '${key}' must be an arc`);
 			}
-			validateArc(value, registry.nested(), inIssue || step.verb === 'issue');
+			validateArc(value, registry.nested(), true);
 		}
 		if (typeof value === 'string' && /^-?\d+(\.\d+)?\s*,\s*-?\d+/.test(value)) {
 			throw new ArcError(`arg '${key}' looks like coordinates`);
@@ -102,7 +113,7 @@ export function validateStep(step:Step, registry:VerbRegistry, inIssue = false):
 }
 
 /** A text `goal`, and 1 to {@link MAX_CHOICES} choices, each an arc under a name that is not reserved. */
-function validateChoose(step:Step, registry:VerbRegistry, inIssue:boolean):void {
+function validateChoose(step:Step, registry:VerbRegistry):void {
 	const goal = step.args.goal;
 	if (typeof goal !== 'string' || !goal.trim()) {
 		throw new ArcError('choose needs a goal: choose("hold the gate", name=arc, …)');
@@ -122,18 +133,19 @@ function validateChoose(step:Step, registry:VerbRegistry, inIssue:boolean):void 
 		if (!isArc(value)) {
 			throw new ArcError(`choice '${name}' must be an arc`);
 		}
-		validateArc(value, registry.nested(), inIssue);
+		validateArc(value, registry.nested(), true);
 	}
 }
 
-export function validateArc(arc:Arc, registry:VerbRegistry, inIssue = false):void {
+/** `nested`: this arc is held inside another verb's step, not the Arc's own root. */
+export function validateArc(arc:Arc, registry:VerbRegistry, nested = false):void {
 	if (arc.length === 0) {
-		throw new ArcError('an arc needs at least one step');
+		throw new ArcError('the arc is empty: give it at least one step');
 	}
 	for (const step of arc) {
 		if (step.then !== undefined && !JOINS.includes(step.then)) {
 			throw new ArcError(`unknown join '${String(step.then)}'`);
 		}
-		validateStep(step, registry, inIssue);
+		validateStep(step, registry, nested);
 	}
 }

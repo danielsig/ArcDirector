@@ -57,14 +57,16 @@ export function useOn(host:GameHost, character:GameObject, itemName:string, targ
 	if (!item) {
 		return { ok: false, reason: `not carrying ${itemName}` };
 	}
-	const target = targetID ? findObject(host.world, targetID) : undefined;
+	const named = targetID ? findObject(host.world, targetID) : undefined;
 	// Carried things are not in the world; no item here works on another.
-	if (targetID && !target) {
+	if (targetID && !named) {
 		return { ok: false, reason: 'nothing happens' };
 	}
+	// Used on oneself is simply used.
+	const target = named === character ? undefined : named;
 	const result = useItem(character, item, target ?? null);
 	const targetName = target ? target.getComponent(Named)?.id ?? target.id : undefined;
-	if (result.ok && result.reason === 'unlocked' && target?.getComponent(Door) && targetName) {
+	if (result.ok && (result.reason === 'unlocked' || result.reason === 'opened') && target?.getComponent(Door) && targetName) {
 		host.doorOpen.set(targetName, true);
 	}
 	if (result.ok) {

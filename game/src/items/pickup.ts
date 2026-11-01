@@ -6,11 +6,14 @@ import { getDef } from './defs';
 import { equipItem } from './equip';
 import { characterIs, distXZ, findCarried, findReady, itemMatchesName, tryInsert } from './inventory';
 import { instantiateDef, isBackpack, type ItemInstance } from './instance';
+import { nearestDoorway } from '../world/interior';
 import { captureItem, spawnWorldItem } from '../world/spawnItem';
 import { cueAt } from '../audio/cue';
 
 export const PICKUP_RANGE = 1.7;
 export const USE_RANGE = 2.2;
+/** How near a walker comes to a shut door before it reaches out and opens it. */
+const DOOR_REACH = 1.2;
 
 /** The name of the key that opens `lock`, wherever it lies, so a locked thing says `BrassKey` and not just "a brass key". */
 export function keyNameFor(world:World | null, lock:Lock):string {
@@ -108,7 +111,7 @@ export function dropItem(character:GameObject, item:import('./instance').ItemIns
 }
 
 /** First spawn keeps `name`. Later ones of that name get `name2`, `name3`, so each object id stays unique. */
-function freeWorldID(world:World, name:string):string {
+export function freeWorldID(world:World, name:string):string {
 	if (!world.findByID(name)) {
 		return name;
 	}
@@ -137,6 +140,21 @@ export function spawnDefAt(
 	return spawnWorldItem(world, inst, x, y, z, chunkID);
 }
 
+/** A walker heading for `to` through a shut door no lock holds, and within arm's reach of it, opens it. */
+export function openDoorAhead(character:GameObject, to:{ x:number; z:number }):void {
+	const p = character.transform.position;
+	const doorGo = character.world && nearestDoorway(character.world, p.x, p.z, DOOR_REACH);
+	const door = doorGo?.getComponent(Door);
+	if (!doorGo || !door || door.open || !door.opensFrom(p)) {
+		return;
+	}
+	const d = doorGo.transform.position;
+	const ahead = (to.x - p.x) * (d.x - p.x) + (to.z - p.z) * (d.z - p.z);
+	if (ahead > 0) {
+		interactDoor(character, doorGo);
+	}
+}
+
 export function interactDoor(character:GameObject, doorGo:GameObject):string {
 	const world = character.world;
 	const lock = doorGo.getComponent(Lock);
@@ -144,21 +162,22 @@ export function interactDoor(character:GameObject, doorGo:GameObject):string {
 	if (!door) {
 		return 'not a door';
 	}
-	if (lock?.locked) {
+	// Anyone can close a door; a lock only has a say in opening it.
+	if (!door.open && lock?.locked && !door.opensFrom(character.transform.position)) {
 		if (!findReady(character, (it) => it.Key?.keyID === lock.keyID)) {
 			if (findCarried(character, (it) => it.Key?.keyID === lock.keyID)) {
 				return 'the key is in your pack';
 			}
 			return lockedReason(character.world, lock);
 		}
-		lock.locked = false;
+		lock.locked &&= lock.lockedFrom === 'outside';
 		door.open = true;
 		door.syncCollision();
 		if (world) {
 			cueAt(world, 'unlock', doorGo);
 			cueAt(world, 'doorOpen', doorGo);
 		}
-		return 'unlocked';
+		return lock.locked ? 'opened' : 'unlocked';
 	}
 	door.open = !door.open;
 	door.syncCollision();

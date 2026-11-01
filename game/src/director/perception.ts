@@ -20,7 +20,9 @@ import {
 	Torch,
 	Bridge,
 	BridgeLever,
+	Bookshelf,
 	Flammable,
+	Furniture,
 	Inscription,
 	Wallet,
 	Merchant,
@@ -45,7 +47,7 @@ import {
 import type { ItemInstance } from '../items/instance';
 import { coinsOf } from '../items/wallet';
 import { keyNameFor } from '../items/pickup';
-import { worthOf } from '../items/defs';
+import { getDef, worthOf } from '../items/defs';
 import { whereabouts } from '../world/interior';
 import { passageDoors } from '../world/passages';
 import { lineClear } from '../world/path';
@@ -55,6 +57,12 @@ import { idOf, isLiving } from './names';
 import type { CharacterCtx } from './types';
 import type { GameHost } from './adapter';
 import { fightExprTags, fightProximityNote, fightRole } from './fight';
+import { Reading } from '../characters/Reading';
+import { occupantName, Seated } from '../characters/Seated';
+import { isFood } from '../items/use';
+
+/** The tag of whoever has a book open, as a watch reads it (`me is "reading"`), and how others see them. */
+export const READING = 'reading';
 
 /** How far a character sees, in meters, where nothing stands in the way. */
 export const SIGHT = 24;
@@ -111,6 +119,9 @@ function tagsNow(go:GameObject):string[] {
 	if (go.getComponent(Chest)) {
 		tags.push('chest', 'furniture');
 	}
+	if (go.getComponent(Reading)?.active) {
+		tags.push(READING);
+	}
 	if (go.getComponent(Inscription)) {
 		tags.push('inscription', 'landmark');
 	}
@@ -119,6 +130,10 @@ function tagsNow(go:GameObject):string[] {
 	}
 	if (go.getComponent(BrewHearth) || go.getComponent(Sickbed)) {
 		tags.push('furniture', 'landmark');
+	}
+	const furniture = go.getComponent(Furniture);
+	if (furniture) {
+		tags.push('furniture', furniture.kind);
 	}
 	if (go.getComponent(Pickupable) || go.getComponent(Item)) {
 		tags.push('item');
@@ -195,6 +210,7 @@ function seenOf(go:GameObject, observer?:GameObject, host?:GameHost):SeenObject 
 		|| !!go.getComponent(Sickbed)
 		|| !!go.getComponent(Inscription)
 		|| !!go.getComponent(Flammable)
+		|| !!go.getComponent(Furniture)
 		|| go.id === 'BridgeLever'
 		|| go.id === 'Bridge'
 		|| !!go.getComponent(MarketNPC)
@@ -221,6 +237,13 @@ function seenOf(go:GameObject, observer?:GameObject, host?:GameHost):SeenObject 
 		if (note) {
 			row.note = note;
 		}
+		const seated = go.getComponent(Seated);
+		if (go.getComponent(Reading)?.active && !row.note) {
+			row.note = READING;
+		}
+		if (seated?.resting && !row.note) {
+			row.note = seated.doing;
+		}
 	}
 	const carved = go.getComponent(Inscription);
 	if (carved?.text && !row.note) {
@@ -234,6 +257,10 @@ function seenOf(go:GameObject, observer?:GameObject, host?:GameHost):SeenObject 
 	if (fuel && !row.note) {
 		row.note = fuel.burning ? 'burning away' : 'it blocks the way; dry as tinder';
 	}
+	const taken = go.getComponent(Furniture) && occupantName(go);
+	if (taken) {
+		row.note = `${taken} is on it`;
+	}
 	const span = go.getComponent(Bridge);
 	if (span && !row.note) {
 		row.note = `it is ${span.moving ? 'being ' : ''}${span.open ? 'lowered' : 'raised'}`;
@@ -242,6 +269,7 @@ function seenOf(go:GameObject, observer?:GameObject, host?:GameHost):SeenObject 
 	if (
 		go.getComponent(Door)
 		|| go.getComponent(Chest)
+		|| go.getComponent(Furniture)
 		|| go.getComponent(Interior)
 		|| span
 		|| go.getComponent(BridgeLever)
@@ -327,10 +355,11 @@ export function lookWorld(character:GameObject, ambient:string, host?:GameHost):
 	return { self, ambient: place || undefined, objects };
 }
 
-/** A carried item, with what one is worth when it is goods: `MoonMushroom (worth 1 gold)`. Its owner knows. */
+/** A carried item, with what its owner knows of it: `MoonMushroom (worth 1 gold, food)`. */
 function carriedLabel(item:ItemInstance):string {
 	const worth = worthOf(item.defID);
-	return worth === undefined ? itemLabel(item) : `${itemLabel(item)} (worth ${worth} gold${item.count > 1 ? ' each' : ''})`;
+	const notes = [worth !== undefined && `worth ${worth} gold${item.count > 1 ? ' each' : ''}`, isFood(item) && 'food'].filter(Boolean);
+	return notes.length > 0 ? `${itemLabel(item)} (${notes.join(', ')})` : itemLabel(item);
 }
 
 export function inventoryOf(character:GameObject):Inventory {
@@ -412,6 +441,7 @@ function examineItem(world:World, item:ItemInstance):string {
 		item.Equipable && (item.Equipable.hands === 2 ? 'You can equip it, with both hands.' : 'You can equip it.'),
 		item.Container && `It holds ${item.Container.size}: ${listed(item.Container.contents.map(itemLabel))}.`,
 		item.Ingredient && `${item.Ingredient.brewer} brews ${item.Ingredient.yield} ${item.Ingredient.brew} from it, for ${item.Ingredient.fee}.`,
+		getDef(item.defID).about,
 	].filter(Boolean).join(' ');
 }
 
@@ -432,6 +462,11 @@ export function examineWorld(go:GameObject):string {
 	if (door) {
 		lines.push(`${name} is a door, ${door.open ? 'open' : 'shut'}${locked}.`);
 	}
+	const furniture = go.getComponent(Furniture);
+	if (furniture) {
+		const taken = occupantName(go);
+		lines.push(`${name} is a ${furniture.kind}${taken ? `, and ${taken} is on it` : ''}.`);
+	}
 	const carved = go.getComponent(Inscription);
 	if (carved) {
 		lines.push(carved.answered ? `${name}: ${carved.answered}.` : `Carved on ${name}: "${carved.text}"`);
@@ -448,12 +483,12 @@ export function examineWorld(go:GameObject):string {
 			: `${name} is a bridge, raised: no one can cross until it is lowered.`);
 	}
 	if (item) {
-		lines.push(item.count > 1 ? `${item.count} ${name} lie here.` : `${name} lies here.`);
+		lines.push(item.count > 1 ? `${item.count} ${name} lie here.` : `${name} lies here.`, getDef(item.defID).about);
 	}
 	if (chest) {
 		const bag = go.getComponent(Container);
 		const inside = chest.open && !lock?.locked && bag ? ` It holds ${listed(bag.contents.map((it) => pascalCase(it.name) || it.name))}.` : '';
-		lines.push(`${name} is a chest, ${chest.open ? 'open' : 'shut'}${locked}.${inside}`);
+		lines.push(go.getComponent(Bookshelf) ? `${name} is a bookshelf.${inside}` : `${name} is a chest, ${chest.open ? 'open' : 'shut'}${locked}.${inside}`);
 	}
 	if (go.getComponent(MarketNPC) || go.getComponent(HumanBody)) {
 		const npc = go.getComponent(MarketNPC);

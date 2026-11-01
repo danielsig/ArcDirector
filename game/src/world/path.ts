@@ -61,8 +61,8 @@ function walk(world:World, body:GameObject, a:Vec, b:Vec):PathStep | undefined {
 	}
 	const hit = world.blocker(body, b[0], b[1], { from: { x: a[0], z: a[1] } });
 	if (hit) {
-		const barrier = hit === 'terrain' ? undefined : hit.getComponent(Barrier);
-		return barrier && { blocked: barrier.whyBlocked(body) };
+		const barrier = hit === 'terrain' ? undefined : hit.getComponent(Barrier) ?? hit.parent?.getComponent(Barrier);
+		return barrier?.opensFrom({ x: a[0], z: a[1] }) ? {} : barrier && { blocked: barrier.whyBlocked(body) };
 	}
 	return characterIn(world, to.tx, to.tz, body) ? { cost: OCCUPANT_COST * Math.hypot(b[0] - a[0], b[1] - a[1]) } : {};
 }
@@ -164,6 +164,15 @@ export function cellWays(world:World):RouteWorld<GameObject> {
 	};
 }
 
+/** Whether a route can bring `body` to `x`, `z`: it has an open step onto it from around it. */
+export function canStand(world:World, body:GameObject, x:number, z:number):boolean {
+	const ways = cellWays(world);
+	return ways.getNeighbors([x, z]).some((from) => {
+		const step = ways.canPass(body, from, [x, z]);
+		return !!step && !step.blocked;
+	});
+}
+
 /** How many rings of cells around a point `standableNear` searches. */
 const STANDABLE_RINGS = 2;
 
@@ -173,11 +182,7 @@ const STANDABLE_RINGS = 2;
  * `point` when none is near.
  */
 export function standableNear(world:World, body:GameObject, point:{ x:number; z:number }):{ x:number; z:number } {
-	const ways = cellWays(world);
-	const standable = (x:number, z:number) => ways.getNeighbors([x, z]).some((from) => {
-		const step = ways.canPass(body, from, [x, z]);
-		return !!step && !step.blocked;
-	});
+	const standable = (x:number, z:number) => canStand(world, body, x, z);
 	if (standable(point.x, point.z)) {
 		return point;
 	}

@@ -8,6 +8,7 @@ import HudMinimap from './HudMinimap.vue';
 import HudMessage from './HudMessage.vue';
 import HudModelName from './HudModelName.vue';
 import HudInventory from './HudInventory.vue';
+import HudTouch from './HudTouch.vue';
 import HudSpeech from './HudSpeech.vue';
 import HudSlates from './HudSlates.vue';
 import HudChat from './HudChat.vue';
@@ -39,6 +40,7 @@ const emit = defineEmits<{
 		<HudInspect :hud="hud" />
 		<HudCounts v-if="hud.player === 'participant'" :hud="hud" />
 		<HudInventory :hud="hud" />
+		<HudTouch v-if="hud.touch && hud.player !== 'camera' && !hud.menuOpen" :hud="hud" />
 		<HudMessage :hud="hud" />
 		<HudModelName :hud="hud" />
 		<HudChat :hud="hud" />

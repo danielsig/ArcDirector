@@ -1,5 +1,5 @@
 import type { Arc } from '../arc/types.js';
-import { lawGroup, type Law } from '../arc/laws.js';
+import { lawGroup, lawHandler, type Law } from '../arc/laws.js';
 import type { ArcHandler } from '../arc/run.js';
 import { ArcRunner, type ArcRunnerJSON, type RunnerOptions } from '../character/arc-runner.js';
 import type { Character } from '../character/character.js';
@@ -222,7 +222,7 @@ export class Collective<TCtx = unknown> extends ArcRunner<TCtx> {
 			.filter((law) => [ '', member.id ].includes(lawGroup(law.name)))
 			.forEach((law, rank) => {
 				if (lawGroup(law.name) !== '' || matches(law)) {
-					out.push({ source: law, watch: law.watch, arc: law.arc, rank, hold: law.hold, holdBreak: law.holdBreak });
+					out.push(lawHandler(law, rank, member.id));
 				}
 			});
 		return out;
@@ -255,16 +255,33 @@ export class Collective<TCtx = unknown> extends ArcRunner<TCtx> {
 	/**
 	 * Give each of `characters` but the commander `arc` as its program, replacing what it ran. Two or more sent
 	 * together are a group: called `group`, else what {@link groupFor} names them, and tagged so; one sent alone
-	 * leaves its group. The group's name, if they are one.
+	 * leaves its group. The group's name, if they are one. Those in `appended` take it after what they are doing instead.
 	 */
-	public issue(characters:readonly Character<TCtx>[], arc:Arc, group?:string):string | undefined {
+	public issue(characters:readonly Character<TCtx>[], arc:Arc, group?:string, appended:readonly string[] = []):string | undefined {
 		const troops = characters.filter((character) => character !== this._commander);
 		const squad = troops.map((character) => character.id);
 		const name = troops.length >= 2 ? this.groupFor(troops, group?.trim() || undefined) : undefined;
 		for (const character of troops) {
 			this.joinGroup(character, name);
 			this._squads.set(character, squad);
-			void character.enact(arc);
+			// The program it runs already, however it was worded this time, goes on as it is.
+			if (character.runs(arc) || (appended.includes(character.id) && character.append(arc))) {
+				continue;
+			}
+			// Run beside what it does, this is no program: the orders it is under stand.
+			const beside = character.liveArc && character.takesNoBody(arc);
+			// Its own copy: what is appended to it later is not appended to the others'.
+			const orders = character.enact(structuredClone(arc));
+			if (beside) {
+				continue;
+			}
+			character.orders = orders;
+			void orders.finally(() => {
+				// Parked on its `when`s, it is still under these orders.
+				if (character.orders === orders && !character.arcSession?.parked) {
+					character.orders = undefined;
+				}
+			});
 		}
 		return name;
 	}

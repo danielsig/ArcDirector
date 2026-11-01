@@ -26,6 +26,7 @@ export const glen_1_1:ChunkFile = {
 	],
 	names: {
 		d: 'HutDoor',
+		h: 'RiverChair',
 	},
 };
 

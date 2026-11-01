@@ -33,13 +33,13 @@ You bring the world: a Three.js scene, a Babylon level, an ECS, or a grid of til
 - **Stock verbs:** Each game has its own verbs, but ArcDirector has these built in:
   - Movement: `go_to`, `follow`, `flee`, `wander` (using built-in A* pathfinding).
   - Items: `use`, `pick_up`, `drop`, `give`, `examine`.
-  - Mind: `say`, `wait`, `remember`, `think`, `set_goal`, `drop_goal`, `set_identity`, `watch`, `unwatch`, `focus`, `unfocus`.
+  - Mind: `say`, `wait`, `remember`, `think`, `set_goal`, `drop_goal`, `finish_goal`, `set_identity`, `watch`, `unwatch`, `focus`, `unfocus`.
   - Arc: `law`, `unlaw`, `when`, `loop`.
   - System One: `choose` (see below).
   - Trade: `offer` (used for both buying and selling).
   - Collective: `issue`, `tag`, `untag`, `spread`, `circle`, `hold_line`.
   - RTS (`withRTS`): `gather`, `build`, `wall`, `bridge`, `repair`, `train`, `research`, `cancel`, `rally` for the economy; `attack`, `attack_move`, `hold`, `patrol`, `garrison`, `unload` for units; `tribute` between sides; `staff`, `haul`, `set_policy` for cities; and standing reactions `keep_training`, `supply_ahead`, `share_workers`, `keep_distance`, `pull_back`, `spread_out`.
-  - RPG (`withRPG`): `equip`, `unequip`, `steal`, `attack`, `block`, `heal`, `protect`, and the game's own attacks and spells.
+  - RPG (`withRPG`): `equip`, `unequip`, `steal`, `sit`, `sleep`, `attack`, `block`, `heal`, `protect`, and the game's own attacks and spells.
   - MOBA (`withMOBA`): `attack`, `block`, `heal`, `protect`, and the heroes' own abilities.
 - **Genres:** `withRTS`, `withRPG` and `withMOBA` start a game of that kind with its verbs (`build`, `equip`, `heal`, …).
 - **System One:**
@@ -263,7 +263,7 @@ A chat request in flight occupies a slot for that mind's ID. `mind.abortThink()`
 | --- | --- |
 | `addStockVerbs(...verbs)` | Registers stock verbs, which the library runs itself (the world verbs through `withWorld`). With no arguments, it registers all of them; pass names to opt in to a subset (see the groups below). A name that is already registered is skipped. |
 | `addStockCollectiveVerbs(...verbs)` | Registers the schemas of `issue`, `tag`, `untag`, `spread`, `circle` and `hold_line`. Registering them does not grant them; the collective's kit does. |
-| `withRPG(host)` | An RPG to start from. Registers each of `equip(item, slot?)`, `unequip(slot)`, `steal(item, from)`, `attack(target?)`, `block(target?)`, `heal(target?)` and `protect(target?)` that `host` gives a handler for, and each of its `abilities` (the game's own attacks and spells) as a verb used on a `target`. A handler may come as `{ help, handler }` when the game's own rules need saying (`guard up 2s`). Registers the stock verbs too; without `withDefaultKit`, characters get them, `offer`, and these. |
+| `withRPG(host)` | An RPG to start from. Registers each of `equip(item, slot?)`, `unequip(slot)`, `steal(item, from)`, `sit(target?)`, `sleep(target?, seconds?)`, `attack(target?)`, `block(target?)`, `heal(target?)` and `protect(target?)` that `host` gives a handler for, and each of its `abilities` (the game's own attacks and spells) as a verb used on a `target`. A handler may come as `{ help, handler }` when the game's own rules need saying (`guard up 2s`). Registers the stock verbs too; without `withDefaultKit`, characters get them, `offer`, and these. |
 | `withMOBA(host)` | A MOBA to start from: its heroes' `attack`, `block`, `heal`, `protect` and `abilities`, registered as `withRPG` registers them. Its default kit has no `offer`. |
 | `addVerb(name, { args?, help?, seen?, handler? })` | Registers a verb's schema and, optionally, the function that carries it out in the world. `seen` is how others see one running it, with `{arg}` holes (`going to {target}`); without it, the verb with `-ing` (`firing`). Sight shows it after a seen character's health (`Kell (20/20 hp, firing)`), and a sound its maker makes while seen is not told again. The handler's `args` are typed from `args` (`{ item: 'id', offer: 'number?' }` gives `{ item: string; offer?: number }`); a stock verb's args are typed from its stock args. `help` is one line shown after the verb in the prompt's verb list (`shoot(target) — needs a clear line of sight`); stock verbs have theirs too. Adding the same name again binds or replaces the handler, and a host handler replaces a stock one. |
 | `removeVerbs(...names)` | Removes the named verbs' schemas and handlers. Missing names are skipped, and calling it with no names does nothing. |
@@ -276,7 +276,7 @@ Pass these groups to `addStockVerbs` spread out, as in `addStockVerbs(...STOCK_M
 
 - `STOCK_MOVE_VERBS`: `go_to`, `follow`, `flee`, `wander`. `go_to(target, until?)` stops on the way, successfully, once `until` holds. `follow(target, distance?)` never ends on its own: it keeps within `distance` of them (default: arm's reach), closing in again whenever they get farther. `flee(from, distance?)` takes the cheapest route out of range that keeps well away from them, and ends once it has stayed `distance` away for 3 s. `distance` defaults to the kernels' `nearRadius` (what `nearby()` counts); if there is none, `flee` fails and asks how far.
 - `STOCK_ITEM_VERBS`: `use`, `pick_up`, `drop`, `give`, `examine`.
-- `STOCK_MIND_VERBS`: `say`, `wait`, `remember`, `think`, `set_goal`, `drop_goal`, `set_identity`, `watch`, `unwatch`, `focus`, `unfocus`.
+- `STOCK_MIND_VERBS`: `say`, `wait`, `remember`, `think`, `set_goal`, `drop_goal`, `finish_goal`, `set_identity`, `watch`, `unwatch`, `focus`, `unfocus`.
 - `STOCK_ARC_VERBS`: `law`, `unlaw`, `when`, `loop`.
 - `choose` (`CHOOSE_VERB`) comes last in `STOCK_VERBS`. It is withheld from any character or collective without a System One.
 - `STOCK_TRADE_VERBS`: `offer`. It is registered with the rest but left out of `STOCK_VERBS`, so a kit only grants it where there is trade.
@@ -309,7 +309,7 @@ The library does the mind's half of every verb, so handlers only need to change 
 - **`id` args are real IDs.** The model may write its own name for a character (see [Names](#names)) or an expression that picks one (`cleave(others.filter("enemy").minBy(u => u.hp))`). The mind turns names into IDs as it reads the reply, and an expression becomes the ID it picks. An expression that picks no one fails with that reason before the handler runs. Plain names the library does not know are passed through for the host to judge (`no such place Cottag`).
 - **`watch` args are checked, then asked.** Bad syntax or leftover English (`filter("trees")`) fails before the host runs. `call.holds('until')` tells you whether the watch holds now, and `call.score('until', point)` asks how well it would hold if this character stood at `point` (this is how `wander` picks where to go).
 - **Moving and waiting are the library's job.** `call.goTo(target, { within?, check?, crowd? })` moves this character into reach of `target` (or `within` that far), following it as it moves, and stops sooner once `check` returns a reason. `call.goToPoint(at, { within? })` moves it to a point, and `call.wait(seconds)` lets game time pass. All three end, marked as interrupted, when the step is aborted. A host verb that needs to be somewhere first (`steal`, `heal`) awaits one of them, and keeps only its own rules.
-- **Verbs internal to the mind never reach the host:** `remember`, `think`, `set_goal`, `drop_goal`, `set_identity`, `watch`, `unwatch`, `focus`, `unfocus`, `say` when a TalkNet is attached, and `wait`. `wait` lets game time pass until `seconds` is up (default 1, or 20 with `until`) or the `until` watch holds, and an aborted arc ends the wait. Only bind your own `wait` handler if waiting must do something in your world.
+- **Verbs internal to the mind never reach the host:** `remember`, `think`, `set_goal`, `drop_goal`, `finish_goal`, `set_identity`, `watch`, `unwatch`, `focus`, `unfocus`, `say` when a TalkNet is attached, and `wait`. `wait` lets game time pass until `seconds` is up (default 1, or 20 with `until`) or the `until` watch holds, and an aborted arc ends the wait. Only bind your own `wait` handler if waiting must do something in your world.
 
 The argument kinds are `id`, `string`, `text`, `watch`, `expr`, `law`, `number`, `string[]`, `bundle`, `bundle[]` and `arc` (add `?` to make one optional). A `bundle` is `{ [item: string]: number }`. An `expr` is any other expression (`issue(who=units.filter("Archer"))`), and a `law` is a law's name. A mind stores every `id`, `watch`, `expr`, `law` and `arc` argument in IDs. `text` is prose: unquoted, it runs to the closing `)` or to that verb's next `, key=`, so commas and apostrophes need no quotes (`say(Hello there, BridgeKeeper's friend, to=Player)`). Use it for any argument a model fills with a sentence.
 
@@ -453,7 +453,8 @@ director.pushEvent({ kind: 'Hurt', text: '{0} cleaved {1}', who: ['Brune', 'Helm
 - A mind hears through every character it thinks for. A collective hears through each of its characters, once per line, from whichever character heard it best. That includes its characters talking to each other; only its own voice's lines are not heard back.
 - A line said to, or naming, any of a collective's characters is meant for its mind and wakes it, whichever character heard it. Only a line said to its voice reads as `says to you`.
 - A collective never speaks for itself. Its commander speaks, or it issues `say` to one of its characters.
-- When an arc's reply verb names another character (`say` with `to`, `give`, `offer`), the actor waits up to 20 s at the end of the arc if that character is still nearby. The wait ends when they finish a verb that is not a movement. Since the wait comes at the end, the rest of the arc still runs first. A step that names no one, such as `say` without `to`, does not wait.
+- When an arc's reply verb names another character (`say` with `to`, `give`, `offer`), the actor waits up to 20 s at the end of the arc if that character is still nearby. The wait ends when they finish a verb that is not a movement. Since the wait comes at the end, the rest of the arc still runs first. A step that names no one, such as `say` without `to`, does not wait, nor does a line to a group.
+- `say`'s `to` can be a group: an expression that picks a list (`say("Hold!", to=units)`, `to=units.filter("Archer")`, `to=others.nearby()`), minus the speaker and anyone down. The speaker walks to the nearest place within one standard deviation of the group's median centre (never less than `getReach`), unless it is there already or everyone makes out its words, then says the line once. Whoever of them is in earshot is addressed, and the result names the rest (`out of earshot: Tom`). A group with no one left fails with `no one left in units`, and an expression that does not evaluate fails saying so. `withGroupWalk((character, verb, targets) => boolean)` decides each time whether it walks at all: a character that does not speaks from where it stands, and its line runs beside its program. A verb of your own takes groups the same way with `group: '<id arg>'` in its definition: it walks first, and its handler receives that arg as `string[]`.
 - The `say` result names whom the line was for but who could not make out the words (`heard by Baker; too far for Guard to make out the words: get closer`), and earshot marks them as `too far to make out your words`.
 - A `say` whose content words (after stemming) mostly repeat a line that everyone it is meant for has already heard clearly is refused before anyone hears it: "they already heard you say that".
 - No parroting. `say` is refused when the line is the same as:
@@ -580,7 +581,7 @@ hive.removeCharacter('Tomas'); // gone for good, as director.removeCharacter
 
 Formations (`spread`, `circle`, `hold_line`) are steps like any other, and can go anywhere in a character's arc. Every character in the squad it was issued with works out the same slots and walks to its own, and the step ends when it gets there. Each character needs them in its kit. Inside `arc=` and a law's `watch=`, `me` is that character. Each character runs what it is issued with its own kit, and the roster tells the mind which of the collective's verbs a character cannot run.
 
-**Laws.** `law` and `unlaw` set up standing emergency responses (with no LLM involved) that take over when their `watch` holds. The prompt lists laws as sentences (`- flee (for units.filter("Shopper")): when isHurt(me), run go_to(Keep)`) rather than arcs, so small models do not copy them back. A collective's own laws reach its characters through `who`. A character's own laws live on its collective, named like `Tom.flee`: the prefix is the filter, so they take no `who` and only reach Tom. Each group holds at most `maxLaws`, and the collective's own laws outrank its characters'. Law names cannot contain `.`, but IDs can, since the prefix ends at the last one. A `law(...)` step run by a character who is not the commander writes a law of that character's own (`Tom.…`). Running laws and `when` steps are tracked by the law or step itself, so renaming one never restarts it. A verb alias can be law-ready: `addVerb('strike_on_sight', { help, arc: 'loop(attack())', watch, who })`. Then `law(arc=strike_on_sight())` is a whole law: it takes the alias's `watch` and `who` when it gives none, and its name when it gives none, so `unlaw(name=strike_on_sight)` drops it. Once any alias has a watch, `law`'s own `watch` is optional.
+**Laws.** `law` and `unlaw` set up standing emergency responses (with no LLM involved) that take over when their `watch` holds. The prompt lists laws as sentences (`- flee (for units.filter("Shopper")): when isHurt(me), run go_to(Keep)`) rather than arcs, so small models do not copy them back. A collective's own laws reach its characters through `who`. A character's own laws live on its collective, named like `Tom.flee`: the prefix is the filter, so they take no `who` and only reach Tom. Each group holds at most `maxLaws`, and the collective's own laws outrank its characters'. Law names cannot contain `.`, but IDs can, since the prefix ends at the last one. A `law(...)` step run by a character who is not the commander writes a law of that character's own (`Tom.…`). Running laws and `when` steps are tracked by the law or step itself, so renaming one never restarts it. A `when` lasts for its job and a law outlasts it, but either can end sooner, written as `loop` does: `times=N` finishes it once it has started N times (`times=1` is one-time; a run counts when it starts, even if something cuts it short), and `until=expr` finishes it once that watch has held, even if it stops holding later. Finishing never cuts short a run under way. A finished `when` stops firing while its program goes on. A finished law removes itself, pinned or not. A collective's law counts and reads `until` for each character on its own, in that character's view, so `times=1` with `who=units` runs once per unit; it goes once it has finished for someone and for all its `who` picks at that moment. To have one unit do it, name one in `who`. Progress is saved with the law, and writing the same law again keeps its count unless its `times` or `until` changed. A verb alias can be law-ready: `addVerb('strike_on_sight', { help, arc: 'loop(attack())', watch, who })`. Then `law(arc=strike_on_sight())` is a whole law: it takes the alias's `watch` and `who` when it gives none, and its name when it gives none, so `unlaw(name=strike_on_sight)` drops it. Once any alias has a watch, `law`'s own `watch` is optional.
 
 **Moving characters.** Characters change collectives through two setters, and the arc a character is running keeps running throughout.
 
@@ -661,6 +662,18 @@ const director = await new ArcDirector<CharacterCtx>()
 	.start();
 ```
 
+An Arc replaces the program its character is running, unless nothing would change: one of only `free` verbs (they need no body: `say` within earshot, a bare `wait()`, `law`, `issue`, `remember`, …; mark your own with `addVerb(name, { free: true })`) runs beside the program, and the same program again, reworded or not, goes on as it is. So `wait()` says "no change". `withReplaceCheck()` also asks the model, in a short follow-up to that think, what to do with any unfinished work the Arc would cut short, on its own or a unit's, told where each one has got to: `{ "Flint": "replace", "Ash": "append", "Nyx": "keep" }`. Replaced work stops now; appended work goes on, and the new Arc runs after it ends, or inside its loop if that loop has no exit, each time round; kept work goes on and the new Arc is dropped for it. Any other answer, or none, appends. `runner.append(arc)` does the same from your code.
+
+With `withRepair`, a reply that could never work goes back to the model in a follow-up to that think, before it runs: a watch that misuses the language (`items.nearby.filter(...)`, `some(3)`), a name nothing in the world goes by, an order that picks no unit, a law past `maxLaws` or the twin of one it has, and a trade whose terms are no items or no real counts (`HostWorld.isItem`). What is merely not so right now is left for the verb to report as it runs. With `withRepair({ retries, perStep: true })` the steps that need no body are judged one by one: a good `issue` stands while a bad `law` goes back, the follow-up shows the model only what stands and says in words what failed and why, and once retries run out what is good still runs and the next think is told what did not. A reply cut off for breaking down mid-stream keeps the root steps it had finished the same way. `unknownFields: true` also sends back a watch reading a field no one in sight has (`u.foo`), which would only ever be false.
+
+A law or `when` does not fire again the moment it ends, however long its watch stays true, so what it interrupted gets a turn. One of only `free` verbs (a `say`) runs once until its watch has gone false, and one that used the body and failed rests for the runner's `cooldown`. A collective's law that only speaks reaches its commander unless it names a `who`.
+
+A `loop` ends at the first failure, unless the result says going round again may help (`retry: true`, for a target that moved out of reach): it then waits a second and goes on, up to 5 failures in a row.
+
+What models write for "is this a Witch" (`u.is("Witch")`, `u.kind == "Witch"`, `u.role == "Witch"`, `u == "Witch"` of a lambda's own `u`) is read as `u is "Witch"`, and shown back that way in its prompts. `u.kind` and the like stay fields where your entities really have them.
+
+Watches stay true as long as what they read does, and a true watch keeps a mind thinking. To wake once on a change, read it through `hasRisen("name", n)` or `hasFallen("name", n)`: `hasFallen("standing", count(allUnits))`. `u.ordered` says a unit still runs a program its commander issued, and `isBadlyHurt(u)` that it is under 35% health.
+
 `onThink` shows what minds do as they think, for a game to put on screen; none of it reaches a prompt. Each `ThinkEvent` names `who`, the character acting for the mind, and is one of: `start`, `reply` (its reasoning and its Arc so far as Arc text, live while the server streams, whatever the wire format), `tool` (a look-up it made), `retry` (why a reply would not do, and the model is being asked again), `end` (with the Arc it chose, or the `error` that ended it, or neither when a newer think cut it short) and `issue` (an order to the characters `to`).
 
 ---
@@ -671,7 +684,7 @@ const director = await new ArcDirector<CharacterCtx>()
 
 `Mind<TCtx>` writes arcs for its owner, which is a character or a collective. `tick(gameTime)` may revise goals (the strategic pass) and emit one `Arc` (the tactical pass), which its voice enacts when that voice has an executor and `autoEnact` is on. `thinkNow({ about?, enact? })` thinks once, right away.
 
-A strategic pass revises goals first, in the format the mind writes in: Arc text (`set_goal`, `drop_goal`, `set_identity`, or nothing) under `text`, JSON `{"goals":[…],"identity"?:{…}}` under `json`, and the same JSON with a fixed `goals` schema under `schema`. The voice's `verbIndex` is the 0-based index of the step currently running inside `enact`.
+A strategic pass revises goals first, in the format the mind writes in: Arc text (`set_goal`, `drop_goal`, `finish_goal`, `set_identity`, or nothing) under `text`, JSON `{"goals":[…],"identity"?:{…}}` under `json`, and the same JSON with a fixed `goals` schema under `schema`. The voice's `verbIndex` is the 0-based index of the step currently running inside `enact`.
 
 ### When the tactical pass runs
 
@@ -703,6 +716,30 @@ A tactical pass gathers the senses, may let a memory intrude, offers tools for u
 
 `maxGoals` (default 5), watches, sight focus and their writable flags live on the `Persona`.
 
+### Reaching a goal
+
+A goal's `until` field says when it is done. There are three ways to use it:
+
+```ts
+goals: [
+	{ text: 'Buy a Loaf.', until: 'isCarrying("Loaf")' }, // a watch, checked from the character's point of view
+	{ text: 'Open the shop.', until: ({ world }) => world.shop.open }, // your own function, given the character's context
+	{ text: 'Make peace with Hilde.' }, // no until: the model decides
+]
+```
+
+The director checks watches and functions for you every 0.25 game seconds. A typo in a watch throws at `start()`, so it cannot silently leave a goal open forever.
+
+Leave out `until` for goals that code cannot easily test. The model already sees its goals in every think, next to what the character can see and is carrying, so judging them costs no extra inference. When it decides a goal is done, it adds `finish_goal(goal?)` to its reply. If it names no goal, this finishes its first goal without an `until`.
+
+A goal with an `until` can only end through that check. If the model calls `finish_goal` on one, the call fails, so it cannot claim something the game has not seen happen. A model that wants to abandon a goal uses `drop_goal` instead, which removes the goal without recording it as reached.
+
+When a goal is reached, it leaves the goal list and becomes a pinned memory (`Goal reached: Buy a Loaf.`). The memory stays in the prompt for the next 5 thinks (`GOAL_PINNED_THINKS`) so the character knows the goal is done, and after that only `recall` can find it. To react in your game, with a cheer or a line on screen, use `onGoalReached((id, goal) => …)`. You can pin any memory for a limited time the same way: `memory.add({ text, pinned: true, pinnedThinks: 3 })`.
+
+Saves remember which goals were reached. Functions cannot be saved, so on load each goal gets its `until` function back from your spec by matching the goal's text. If you reword a goal between a save and a load, the loaded goal loses its function.
+
+Under `json` or `schema`, a strategic pass replies with the whole goal list, so any goal the model leaves out is dropped, not reached: it leaves no memory and does not call `onGoalReached`.
+
 `pushEvent` queues text for the next think. A `major` event wakes the mind right away, unless it `skipMajor`. Speech is only major when it is said to the listener, names them, or is said to everyone and heard clearly, so talk between others is overheard without waking anyone. `remember` also files the event as an episodic memory, and `timestamp` defaults to now. `remember(text, tags)` writes a memory into the owner's persona. `toJSON` / `Mind.fromJSON` save and restore the mind's settings and thinking state; the persona is saved with its owner.
 
 ---
@@ -732,7 +769,7 @@ Watches are standing conditions, checked against a `Catalog` built from `HostKer
 The watch language looks like JavaScript function calls, but it is not a subset of JavaScript. Its bindings are `me`, `others` and `items`, plus the host's own names (`bindings`). When you go through `ArcDirector`, `hasHeard` and `prev` come from the mind: `prev.me`, `prev.secondsAgo` and `prev.verbs` describe the last think, or the moment the character spawned if it has never thought. Only pass `prev` yourself when you call `buildCatalog` on its own.
 
 ```text
-hasHeard || some(others.nearby().approaching())
+hasRisen("approaching", count(others.nearby().approaching()))
 isHurt(me)
 isNear(me, Other, 16)
 distance(me, Target)
@@ -849,6 +886,7 @@ After an arc, `enqueueArc` uses the **highest** score among the steps **after** 
 | `wander` | 0.3 |
 | `say` | 0.25 |
 | `drop_goal` | 0.2 |
+| `finish_goal` | 0.2 |
 | `wait` / `rest` / `follow` | 0 |
 
 ---

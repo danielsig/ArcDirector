@@ -1,4 +1,5 @@
 import { lerpAngle, yawToward, Component } from '@arc-director/kindling';
+import { Belly } from '../engine/Belly';
 import { RigidBody, Appearance, Vitals } from '../engine/components';
 import { Order } from '../engine/order';
 import { facePeer } from '../director/talkAttend';
@@ -8,6 +9,7 @@ import { WALK_STRIDE } from './CharacterAnimation';
 import { NPCInput } from './NPCInput';
 import { PlayerInput } from './PlayerInput';
 import { PlayerPilot } from './PlayerPilot';
+import { Seated } from './Seated';
 
 /** Under this fraction of `maxSpeed`, a walker counts as held in place. */
 const HELD_SPEED = 0.25;
@@ -41,6 +43,11 @@ export class CharacterMotor extends Component {
 		return this._heading;
 	}
 
+	/** How fast it walks now, what it has eaten included. */
+	private get speed():number {
+		return this.maxSpeed * (1 + (this.gameObject.getComponent(Belly)?.haste ?? 0));
+	}
+
 	public override awake():void {
 		const rb = this.gameObject.getComponent(RigidBody);
 		if (!rb) {
@@ -62,15 +69,16 @@ export class CharacterMotor extends Component {
 		const player = this.gameObject.getComponent(PlayerInput);
 		const piloted = this.gameObject.getComponent(PlayerPilot)?.claimed === true;
 
-		if (pocket || dead) {
+		// A body on its seat is the seat's until it has got up.
+		if (pocket || dead || this.gameObject.getComponent(Seated)?.held) {
 			rb.velocity.x = 0;
 			rb.velocity.z = 0;
 			return;
 		}
 
 		if (player && !piloted) {
-			rb.velocity.x = player.moveX * this.maxSpeed;
-			rb.velocity.z = player.moveZ * this.maxSpeed;
+			rb.velocity.x = player.moveX * this.speed;
+			rb.velocity.z = player.moveZ * this.speed;
 			const wish = Math.hypot(player.moveX, player.moveZ);
 			this._heading = wish > 1e-6 ? { x: player.moveX / wish, z: player.moveZ / wish } : null;
 			this.turnTowardWish(player.moveX, player.moveZ, dt);
@@ -116,8 +124,8 @@ export class CharacterMotor extends Component {
 		this._heading = { x: ux, z: uz };
 		// Held head-on by someone walking the other way: both step to their right, as fast, until they pass.
 		const [vx, vz] = this.passing(rb, ux, uz, dt) ? [-uz, ux] : [ux, uz];
-		rb.velocity.x = vx * this.maxSpeed;
-		rb.velocity.z = vz * this.maxSpeed;
+		rb.velocity.x = vx * this.speed;
+		rb.velocity.z = vz * this.speed;
 		this.gameObject.transform.yaw = yawToward(dx, dz);
 	}
 
@@ -145,7 +153,7 @@ export class CharacterMotor extends Component {
 	private passing(rb:RigidBody, ux:number, uz:number, dt:number):boolean {
 		const p = this.gameObject.transform.position;
 		const moved = Math.hypot(p.x - rb.prevX, p.z - rb.prevZ);
-		this._heldFor = moved < HELD_SPEED * this.maxSpeed * dt ? this._heldFor + dt : 0;
+		this._heldFor = moved < HELD_SPEED * this.speed * dt ? this._heldFor + dt : 0;
 		this._passing = this.oncoming(ux, uz) && (this._passing || this._heldFor >= HELD_FOR);
 		return this._passing;
 	}

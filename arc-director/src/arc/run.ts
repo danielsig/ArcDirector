@@ -4,6 +4,7 @@ import {
 	firstStep,
 	groupArc,
 	isArc,
+	arcSteps,
 	isHoistedWhen,
 	type Arc,
 	type ArcResult,
@@ -21,6 +22,42 @@ import type { Law } from './laws.js';
 export const THINK_ABOUT_CAP = 200;
 export const DEFAULT_COOLDOWN = 8;
 
+/** How a reaction with an exit has gone: the times it has started, and whether its `until` has held. */
+export type ReactionProgress = { runs:number; ended?:boolean };
+
+/** Whether a reaction has run out its `times`, or its `until` has held. It may still be running its last run. */
+export function reactionFinished(times:number | undefined, progress:ReactionProgress | undefined):boolean {
+	return !!progress && (!!progress.ended || (times !== undefined && progress.runs >= times));
+}
+
+/**
+ * When a reaction may fire again though its watch still holds. A true watch would otherwise start it again the moment it
+ * ended, and whatever the character was doing would never get a turn.
+ */
+export type ReactionRest = {
+	/** It needs no body and has run: it has done what it can until its watch has gone false. */
+	spent?:boolean;
+	/** It used the body and failed: game time it may try again. */
+	restUntil?:number;
+};
+
+const rests = new WeakMap<object, Map<string, ReactionRest>>();
+
+/** How `source`, a law or a `when` step, stands for character `id`. Not saved: a loaded game starts every reaction afresh. */
+export function reactionRest(source:object, id = ''):ReactionRest {
+	let byID = rests.get(source);
+	if (!byID) {
+		byID = new Map();
+		rests.set(source, byID);
+	}
+	let rest = byID.get(id);
+	if (!rest) {
+		rest = {};
+		byID.set(id, rest);
+	}
+	return rest;
+}
+
 /**
  * A reaction a session may run: a law, or a `when` hoisted out of the arc. `source` is that law or that
  * `when` step itself, so a handler stays recognizable while its law is renamed or edited.
@@ -34,7 +71,15 @@ export type ArcHandler = {
 	hold?:number;
 	/** A watch that ends `hold` early when true (`Law.holdBreak`). */
 	holdBreak?:string;
+	/** What finishes it for good (`times=`, `until=`), and how far it has got. None: it never finishes. */
+	exit?:{ times?:number; until?:string; progress:ReactionProgress };
+	rest?:ReactionRest;
 };
+
+/** Whether `handler` has finished for good: it fires no more. */
+export function handlerFinished(handler:ArcHandler):boolean {
+	return !!handler.exit && reactionFinished(handler.exit.times, handler.exit.progress);
+}
 
 export type ArcPending =
 	| { kind:'preempt'; handler:ArcHandler }
@@ -65,6 +110,12 @@ export type ArcSession = {
 	lastChoice?:LastChoice;
 	/** Game time of the last pick. A `choose` never picks twice at one time. */
 	lastPickAt?:number;
+	/** How many times each `loop` step has gone all the way round. */
+	passes:Map<Step, number>;
+	/** Game seconds a reaction that used the body and failed waits before it tries again. */
+	cooldown:number;
+	/** How each `when` step with an exit has gone, over every pass of a loop. */
+	whens:Map<Step, ReactionProgress>;
 };
 
 export type LastChoice = { name:string; result:ArcResult };
@@ -74,6 +125,7 @@ export type ArcPick = (goal:string, choices:Record<string, Arc>, last:LastChoice
 
 export type ArcSessionOpts = {
 	verbs?:VerbRegistry;
+	cooldown?:number;
 	catalog?:()=>Catalog | undefined;
 	now?:()=>number;
 	nextTime?:()=>Promise<void>;
@@ -96,7 +148,10 @@ export function createArcSession(opts:ArcSessionOpts = {}):ArcSession {
 		extraHandlers: opts.extraHandlers,
 		parked: false,
 		verbs: opts.verbs,
+		cooldown: opts.cooldown ?? DEFAULT_COOLDOWN,
 		pick: opts.pick,
+		passes: new Map(),
+		whens: new Map(),
 	};
 }
 
@@ -148,14 +203,43 @@ function allHandlers(session:ArcSession):ArcHandler[] {
 	return [...extras, ...inner].sort((a, b) => a.rank - b.rank);
 }
 
+/** Those of `handlers` not yet finished. An `until` is read here, and once it has held the handler stays finished. */
+function unfinished(session:ArcSession, handlers:ArcHandler[], catalog:Catalog):ArcHandler[] {
+	return handlers.filter((h) => {
+		if (h.exit?.until && watchIsTrue(h.exit.until, catalog)) {
+			h.exit.progress.ended = true;
+		}
+		if (h.rest?.spent && !watchIsTrue(h.watch, catalog)) {
+			h.rest.spent = false;
+		}
+		return !handlerFinished(h) && !h.rest?.spent && session.now() >= (h.rest?.restUntil ?? 0);
+	});
+}
+
+/** `handler` ran to its own end: whether, and when, it may fire again. Stopped by something else, nothing changes. */
+function noteRun(session:ArcSession, handler:ArcHandler, result:ArcResult):void {
+	if (!handler.rest || result.interrupted || result.preempted) {
+		return;
+	}
+	if (arcSteps(handler.arc).every((step) => session.verbs?.get(step.verb)?.free)) {
+		handler.rest.spent = true;
+	}
+	else if (!result.ok) {
+		handler.rest.restUntil = session.now() + session.cooldown;
+	}
+}
+
 function isRunning(session:ArcSession, handler:ArcHandler):boolean {
 	return session.running.some((r) => r.source === handler.source);
 }
 
-/** `handler` runs from now on: the start its `hold` counts from. */
+/** `handler` runs from now on: the start its `hold` counts from, and one of its `times`, however this run ends. */
 function startRunning(session:ArcSession, handler:ArcHandler):void {
 	session.running.push(handler);
 	session.timestamp.set(handler.source, session.now());
+	if (handler.exit) {
+		handler.exit.progress.runs += 1;
+	}
 }
 
 function stopRunning(session:ArcSession):void {
@@ -190,7 +274,7 @@ export function pollArcSession(session:ArcSession):void {
 	if (!catalog) {
 		return;
 	}
-	for (const h of candidates) {
+	for (const h of unfinished(session, candidates, catalog)) {
 		if (!watchIsTrue(h.watch, catalog)) {
 			continue;
 		}
@@ -220,7 +304,7 @@ export function firstStartable(session:ArcSession):ArcHandler | undefined {
 	if (!catalog) {
 		return undefined;
 	}
-	for (const h of candidates) {
+	for (const h of unfinished(session, candidates, catalog)) {
 		if (!watchIsTrue(h.watch, catalog)) {
 			continue;
 		}
@@ -286,8 +370,20 @@ export function deferThinks(arc:Arc):Arc {
 	return [...body, think];
 }
 
+/** What finishes a `when` step, kept by the step so it carries over every pass of a loop. */
+function whenExit(step:Step, session:ArcSession):ArcHandler['exit'] {
+	const times = typeof step.args.times === 'number' ? step.args.times : undefined;
+	const until = typeof step.args.until === 'string' ? step.args.until.trim() : '';
+	if (times === undefined && !until) {
+		return undefined;
+	}
+	const progress = session.whens.get(step) ?? { runs: 0 };
+	session.whens.set(step, progress);
+	return { times, until, progress };
+}
+
 /** The `when` steps of `arc` as handlers, and the arc without them. A step before a `when` keeps its own join. */
-function hoistWhen(arc:Arc):{ handlers:ArcHandler[]; body:Arc | undefined } {
+function hoistWhen(arc:Arc, session:ArcSession):{ handlers:ArcHandler[]; body:Arc | undefined } {
 	const handlers:ArcHandler[] = [];
 	const body:Arc = [];
 	for (const step of arc) {
@@ -297,6 +393,8 @@ function hoistWhen(arc:Arc):{ handlers:ArcHandler[]; body:Arc | undefined } {
 				watch: String(step.args.watch).trim(),
 				arc: step.args.arc,
 				rank: 100 + handlers.length,
+				exit: whenExit(step, session),
+				rest: reactionRest(step),
 			});
 		}
 		else {
@@ -364,6 +462,7 @@ async function drainPending(
 		startRunning(session, pending.handler);
 		try {
 			const result = await runFrame(pending.handler.arc, execute, session, depth + 1);
+			noteRun(session, pending.handler, result);
 			if (result.interrupted) {
 				return result;
 			}
@@ -499,6 +598,10 @@ function parseThrough(through:string):{ name:string; expr:string } | undefined {
 	return { name: m[1], expr: m[2].trim() };
 }
 
+/** Failures in a row a `loop` goes on through when each says going round again may help, and how long it waits between (s). */
+const LOOP_RETRIES = 5;
+const LOOP_RETRY_WAIT = 1;
+
 async function runLoop(
 	step:Step,
 	execute:(step:Step)=>Promise<ArcResult>,
@@ -546,6 +649,7 @@ async function runLoop(
 			finally {
 				session.bindings.delete(parsed.name);
 			}
+			session.passes.set(step, (session.passes.get(step) ?? 0) + 1);
 			if (last.interrupted) {
 				return last;
 			}
@@ -559,6 +663,7 @@ async function runLoop(
 		return { ...last, verb: last.verb ?? 'loop' };
 	}
 	let i = 0;
+	let missed = 0;
 	let last:ArcResult = { ok: true, verb: 'loop' };
 	while (true) {
 		if (times !== undefined && i >= times) {
@@ -571,6 +676,7 @@ async function runLoop(
 		const clock = session.now();
 		last = await runFrame(inner, execute, session, depth + 1);
 		i += 1;
+		session.passes.set(step, i);
 		if (last.interrupted) {
 			return last;
 		}
@@ -578,8 +684,22 @@ async function runLoop(
 			return last;
 		}
 		if (!last.ok && !last.preempted) {
-			return last;
+			missed += 1;
+			if (!last.retry || missed > LOOP_RETRIES || !session.nextTime) {
+				return last;
+			}
+			const token = session.token;
+			const from = session.now();
+			while (session.now() < from + LOOP_RETRY_WAIT) {
+				await session.nextTime();
+				const stolen = await afterSteal(session, execute, depth, token, 'loop');
+				if (stolen) {
+					return stolen;
+				}
+			}
+			continue;
 		}
+		missed = 0;
 		if (session.now() === clock) {
 			// An iteration that took no game time: the next waits for game time to move.
 			await (session.nextTime?.() ?? new Promise<void>((resolve) => {
@@ -640,7 +760,7 @@ async function runFrame(
 	session:ArcSession,
 	depth:number,
 ):Promise<ArcResult> {
-	const { handlers, body } = hoistWhen(arc);
+	const { handlers, body } = hoistWhen(arc, session);
 	session.frames.push({ handlers });
 	try {
 		const stolen = await pumpHandlers(session, execute, depth);
@@ -692,6 +812,9 @@ export async function runArc(
 	}
 	try {
 		const result = await runFrame(work, run, session, 0);
+		if (opts.asHandler) {
+			noteRun(session, opts.asHandler, result);
+		}
 		if (!trail || result.interrupted || (result.preempted && !result.ok)) {
 			return result;
 		}

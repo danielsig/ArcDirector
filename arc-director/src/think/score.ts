@@ -29,6 +29,7 @@ export const VERB_THINK_SCORES:Readonly<Record<string, number>> = {
 	wander: 0.3,
 	say: 0.25,
 	drop_goal: 0.2,
+	finish_goal: 0.2,
 	follow: 0,
 	flee: 0.5,
 };

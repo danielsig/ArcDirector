@@ -1,13 +1,15 @@
-import { CHOOSE_VERB, FOCUS_EDIT_VERBS, MIND_ONLY_VERBS, STOCK_MOVE_VERBS, WATCH_EDIT_VERBS, type VerbRegistry } from '../arc/stock-verbs.js';
+import { CHOOSE_VERB, FOCUS_EDIT_VERBS, groupTargets, MIND_ONLY_VERBS, STOCK_MOVE_VERBS, WATCH_EDIT_VERBS, type VerbRegistry } from '../arc/stock-verbs.js';
 import { formatStep } from '../arc/parse.js';
-import { isArc, type Arc, type ArcResult, type Step } from '../arc/types.js';
+import { arcSteps, isArc, sameProgram, type Arc, type ArcResult, type Step } from '../arc/types.js';
 import type { Catalog, ExprEntity } from '../expr/types.js';
 import { cloneEntity, prevMeFromJSON } from '../expr/prev.js';
 import {
 	DEFAULT_MAX_LAWS,
 	dropLaw,
+	lawFinished,
 	lawFromSpec,
 	lawGroup,
+	lawHandler,
 	upsertLaw,
 	type Law,
 	type LawSpec,
@@ -15,6 +17,7 @@ import {
 import {
 	runArc,
 	createArcSession,
+	handlerFinished,
 	holding,
 	DEFAULT_COOLDOWN,
 	type ArcHandler,
@@ -38,11 +41,15 @@ export type RunnerDeps<TCtx = unknown> = {
 	/** One host step, acted by this runner itself. */
 	execute?:(step:Step, ctx:TCtx | undefined)=>Promise<ArcResult>;
 	abortArc?:(id:string)=>void;
-	/** Host cooldown in game seconds after a handler pops or aborts. Default 8. */
+	/** Game seconds a law or `when` that used the body and failed waits before it tries again. Default 8. */
 	cooldown?:number;
 	talk?:TalkNet;
 	/** Walk this runner up to `target`, as `VerbCall.goTo` does. */
 	goTo?:(target:string, opts?:MoveOpts)=>Promise<ArcResult>;
+	/** `step` with its group arg read (`VerbDef.group`): the ids of a list, the id of one, as it was for a name, or why it picks no one. */
+	aimGroup?:(step:Step)=>Step | ArcResult;
+	/** The walk that takes this runner near the group `ids` for `verb`, or undefined when it is near already or the host says not to. */
+	walkToGroup?:(verb:string, ids:readonly string[], opts?:MoveOpts)=>(()=>Promise<ArcResult>) | undefined;
 	/** The watch-language view of the world from this runner now, or undefined when it has none. */
 	catalog?:()=>Catalog | undefined;
 	/** What it may use. Object or callback, fetched every tick, so the host can mutate it in place. */
@@ -88,6 +95,8 @@ export abstract class ArcRunner<TCtx = unknown> {
 	public arcSession:ArcSession | null = null;
 	public talk:TalkNet | undefined;
 	private readonly _goTo:RunnerDeps['goTo'];
+	private readonly _aimGroup:RunnerDeps['aimGroup'];
+	private readonly _walkToGroup:RunnerDeps['walkToGroup'];
 	public catalog?:()=>Catalog | undefined;
 	/** Object or callback. Assign a new one any time. Fetched every tick. */
 	public kit:KitSource<TCtx>;
@@ -113,6 +122,8 @@ export abstract class ArcRunner<TCtx = unknown> {
 	/** Self as `prev.me` sees it: at its mind's last think, else as first sampled. */
 	public prevMe:ExprEntity | undefined;
 	public liveArc = false;
+	/** The program its commander issued it, while that runs. */
+	public orders:Promise<ArcResult> | undefined;
 	protected now = 0;
 	/** Who waits for game time to move on, woken by the next `stamp` that moves it. */
 	private _timeWaiters:(()=>void)[] = [];
@@ -120,6 +131,8 @@ export abstract class ArcRunner<TCtx = unknown> {
 	private _handoff:((out:ArcResult | undefined)=>void) | undefined;
 	/** Counts programs begun, so one that waited on a handoff can tell a later one took over. */
 	private _programs = 0;
+	/** What was appended to the program under way, for after its end. */
+	private _appended:Arc = [];
 
 	/** The mind that thinks for this runner, or null when the host drives it. */
 	public abstract get mind():Mind<TCtx> | null;
@@ -139,6 +152,8 @@ export abstract class ArcRunner<TCtx = unknown> {
 		this.defaultLawWho = opts.defaultLawWho ?? 'me';
 		this.talk = opts.talk;
 		this._goTo = opts.goTo;
+		this._aimGroup = opts.aimGroup;
+		this._walkToGroup = opts.walkToGroup;
 		this.catalog = opts.catalog;
 		this.kit = opts.kit;
 		for (const spec of opts.laws ?? []) {
@@ -163,7 +178,7 @@ export abstract class ArcRunner<TCtx = unknown> {
 			return true;
 		}
 		const session = this.arcSession;
-		return !!session?.parked && (session.running.length > 0 || session.frames.some((f) => f.handlers.length > 0));
+		return !!session?.parked && (session.running.length > 0 || session.frames.some((f) => f.handlers.some((h) => !handlerFinished(h))));
 	}
 
 	/** Resolve `kit` (object, getters, or callback). Director calls this each tick. A callback without a context grants nothing. */
@@ -250,20 +265,18 @@ export abstract class ArcRunner<TCtx = unknown> {
 		this.laws = dropLaw(this.laws, name);
 	}
 
+	/** Drops each law finished for all `reached` says it reaches now. Pinned ones too: it ended by its own terms. */
+	public dropFinishedLaws(reached:(law:Law)=>readonly string[]):void {
+		this.laws = this.laws.filter((law) => !lawFinished(law, () => reached(law)));
+	}
+
 	public lawHandlers(matches?:(law:Law)=>boolean):ArcHandler[] {
 		const out:ArcHandler[] = [];
 		this.laws.forEach((law, i) => {
 			if (matches && !matches(law)) {
 				return;
 			}
-			out.push({
-				source: law,
-				watch: law.watch,
-				arc: law.arc,
-				rank: i,
-				hold: law.hold,
-				holdBreak: law.holdBreak,
-			});
+			out.push(lawHandler(law, i, this.id));
 		});
 		return out;
 	}
@@ -312,6 +325,12 @@ export abstract class ArcRunner<TCtx = unknown> {
 		sessionOpts?:ArcSessionOpts,
 		forceReplace = false,
 	):Promise<ArcResult> {
+		if (!handler && !forceReplace && this.runs(arc)) {
+			return { ok: true, verb: arc[0]?.verb ?? '' };
+		}
+		if (!handler && !forceReplace && this.liveArc && this.takesNoBody(arc)) {
+			return this.runBeside(arc);
+		}
 		const program = ++this._programs;
 		if (!forceReplace) {
 			const finishing = this.finishStepOf(arc);
@@ -342,6 +361,7 @@ export abstract class ArcRunner<TCtx = unknown> {
 		this.onArcStart(arc);
 		const session = createArcSession({
 			verbs: this.verbs,
+			cooldown: this.cooldown,
 			now: () => this.now,
 			nextTime: () => new Promise((resolve) => {
 				this._timeWaiters.push(resolve);
@@ -354,7 +374,7 @@ export abstract class ArcRunner<TCtx = unknown> {
 		this.arcSession = session;
 		try {
 			let i = 0;
-			const result = await runArc(arc, async (step) => {
+			const run = async (step:Step):Promise<ArcResult> => {
 				this.verbIndex = i;
 				this.verb = step.verb;
 				i += 1;
@@ -377,7 +397,11 @@ export abstract class ArcRunner<TCtx = unknown> {
 					}
 				}
 				return out;
-			}, { session, asHandler: handler });
+			};
+			let result = await runArc(arc, run, { session, asHandler: handler });
+			while (result.ok && this._appended.length > 0 && this.arcSession === session) {
+				result = await runArc(this._appended.splice(0), run, { session });
+			}
 			if (this.arcSession !== session) {
 				return result;
 			}
@@ -421,11 +445,121 @@ export abstract class ArcRunner<TCtx = unknown> {
 		});
 	}
 
+	/** Whether `arc` is the program it runs already, for all its wording: a law's arc is not its program. */
+	public runs(arc:Arc):boolean {
+		return this.liveArc && !this._law && !!this.arc && sameProgram(this.arc, arc);
+	}
+
+	/** Whether every step of `arc` can run without the body the program under way is using. */
+	public takesNoBody(arc:Arc):boolean {
+		return arcSteps(arc).every((step) => {
+			if (!this.verbs.get(step.verb)?.free) {
+				return false;
+			}
+			// A bare wait says nothing needs to change; a wait for something stands still until then.
+			if (step.verb === 'wait' && Object.keys(step.args).length > 0) {
+				return false;
+			}
+			const aimed = this.aimGroup(step);
+			// It picks no one: it fails where it stands.
+			if ('ok' in aimed) {
+				return true;
+			}
+			const group = groupTargets(aimed, this.verbs);
+			if (group) {
+				return !this.groupWalk(aimed.verb, group);
+			}
+			// Said to someone out of earshot, it walks over first.
+			return aimed.verb !== 'say' || [sayToOf(aimed.args) ?? []].flat().every((id) => this.inEarshot(id));
+		});
+	}
+
+	/** `step` with its group arg read (`VerbDef.group`): ids for a list, or why it picks no one. Any other step comes back as it is. */
+	public aimGroup(step:Step):Step | ArcResult {
+		return this._aimGroup?.(step) ?? step;
+	}
+
+	/** Whether `id` makes out every word it says from here. */
+	private inEarshot(id:string):boolean {
+		return !!this.talk?.canSay(this.id, id).ok && this.talk.clear(this.id, id);
+	}
+
+	/** The walk it takes before `verb` acts on the group `ids`, if any. A line everyone already makes out takes none. */
+	private groupWalk(verb:string, ids:readonly string[]):(()=>Promise<ArcResult>) | undefined {
+		const heard = verb === 'say' ? ():string | undefined => (ids.every((id) => this.inEarshot(id)) ? 'in earshot' : undefined) : undefined;
+		return heard?.() ? undefined : this._walkToGroup?.(verb, ids, heard && { check: heard });
+	}
+
+	/** `arc` beside the program under way, which it neither stops nor counts as its own. There is nothing to wait for: the program goes on. */
+	private async runBeside(arc:Arc):Promise<ArcResult> {
+		const session = createArcSession({
+			verbs: this.verbs,
+			now: () => this.now,
+			nextTime: () => new Promise((resolve) => {
+				this._timeWaiters.push(resolve);
+			}),
+			catalog: () => this.catalog?.(),
+		});
+		const result = await runArc(arc, (step) => (step.verb === 'wait' ? Promise.resolve({ ok: true, verb: 'wait' }) : this.doStep(step, this.context(), !!step.granted)), { session });
+		if (this.isVoice) {
+			this.mind!.ingestBeside(result);
+		}
+		return result;
+	}
+
+	/**
+	 * Adds `steps` to the program under way, which goes on: inside the loop it would never leave, else after its end.
+	 * False when it runs no program of its own to add to, as when one has just ended or a law has its body.
+	 */
+	public append(steps:Arc):boolean {
+		if (!this.liveArc || !this.arc || this._law) {
+			return false;
+		}
+		const inside = endlessBody(this.arc);
+		if (inside) {
+			inside.push(...structuredClone(steps));
+			return true;
+		}
+		// The very steps that run: what they have done so far is kept by step.
+		const copy = structuredClone(steps);
+		this._appended.push(...copy);
+		this.arc = [...this.arc, ...copy];
+		return true;
+	}
+
+	/** Whether the program under way loops. */
+	public inLoop():boolean {
+		return !!this.arc && arcSteps(this.arc).some((step) => step.verb === 'loop');
+	}
+
+	/**
+	 * What its program still owes, in words, if it is one a think or a commander gave it that has not finished, nor gone
+	 * once round its loops: where it is, and how many times round each loop.
+	 */
+	public unfinished():string | undefined {
+		const session = this.arcSession;
+		if (!this.liveArc || !session || !this.arc || this._law || !(this.orders || this.isVoice)) {
+			return undefined;
+		}
+		const loops = arcSteps(this.arc).filter((step) => step.verb === 'loop').map((step) => session.passes.get(step) ?? 0);
+		if (loops.length > 0 && loops.every((passes) => passes > 0)) {
+			return undefined;
+		}
+		const at = this.lastStep ? formatStep(this.lastStep, this.verbs) : 'starting';
+		return loops.length > 0
+			? `at ${at}, its loop${endlessBody(this.arc) ? ', which has no exit,' : ''} round ${loops.join(' and ')} times`
+			: `at ${at}, step ${Math.min(this.verbIndex + 1, this.arc.length)} of ${this.arc.length}`;
+	}
+
 	/** Stop the running arc, if any, and the host's part of it. */
 	public replaceProgram():void {
 		const handoff = this._handoff;
 		this._handoff = undefined;
 		handoff?.(undefined);
+		this._appended = [];
+		if (this.arcSession?.parked) {
+			this.orders = undefined;
+		}
 		if (this.arcSession) {
 			this.arcSession.token += 1;
 			this.arcSession.pending = { kind: 'abort' };
@@ -452,7 +586,7 @@ export abstract class ArcRunner<TCtx = unknown> {
 			id: this.id,
 			lastResult: this.lastResult ? { ...this.lastResult } : undefined,
 			liveArc: this.liveArc,
-			laws: this.laws.map((s) => ({ ...s, arc: s.arc })),
+			laws: this.laws.map((law) => structuredClone(law)),
 			maxLaws: this.maxLaws,
 			cooldown: this.cooldown,
 			prevMe: this.prevMe ? cloneEntity(this.prevMe) : undefined,
@@ -470,47 +604,79 @@ export abstract class ArcRunner<TCtx = unknown> {
 		}
 		this.prevMe = prevMeFromJSON(json.prevMe);
 		if (json.laws) {
-			this.laws = json.laws.filter((law) => isArc(law.arc)).map((law) => ({ ...law }));
+			this.laws = json.laws.filter((law) => isArc(law.arc)).map((law) => structuredClone(law));
 		}
 	}
 
 	/** One step of a running arc: mind verbs through the mind, `say` through talk, the rest through the host. */
 	protected async runStep(step:Step, ctx:TCtx | undefined, granted = false):Promise<ArcResult> {
 		this.lastStep = step;
+		return this.doStep(step, ctx, granted);
+	}
+
+	private async doStep(step:Step, ctx:TCtx | undefined, granted:boolean):Promise<ArcResult> {
 		if (!granted && !step.granted && !this.activeVerbs().has(step.verb)) {
 			// Its kit grants it, but it has no body to run it with.
 			return !this.embodied && this.currentKit.verbs.includes(step.verb)
 				? bodiless(step.verb)
 				: { ok: false, verb: step.verb, reason: `verb '${step.verb}' is not available` };
 		}
-		const done = await this.mind?.perform(step, this);
-		const out = done
-			?? (step.verb === 'say' && this.talk
-				? await this.speak(step)
-				: this.execute
-					? await this.execute(step, ctx)
-					: { ok: false, verb: step.verb, reason: `host has no executor for ${step.verb}` });
-		if (!(STOCK_MOVE_VERBS as readonly string[]).includes(step.verb)) {
+		const aimed = this.aimGroup(step);
+		if ('ok' in aimed) {
+			return aimed;
+		}
+		const done = await this.mind?.perform(aimed, this);
+		const out = done ?? (aimed.verb === 'say' && this.talk ? await this.speak(aimed) : await this.hostStep(aimed, ctx));
+		if (!(STOCK_MOVE_VERBS as readonly string[]).includes(aimed.verb)) {
 			this.replies += 1;
 		}
 		if (out.ok && this.isVoice) {
-			this.mind!.noteReply(step, out, this);
+			this.mind!.noteReply(aimed, out, this);
 		}
 		return out;
 	}
 
+	/** A step through the host, once it has walked near the group it is aimed at, if it is. */
+	private async hostStep(step:Step, ctx:TCtx | undefined):Promise<ArcResult> {
+		if (!this.execute) {
+			return { ok: false, verb: step.verb, reason: `host has no executor for ${step.verb}` };
+		}
+		const group = groupTargets(step, this.verbs);
+		const near = group && await this.groupWalk(step.verb, group)?.();
+		return near && !near.ok ? { ...near, verb: step.verb } : this.execute(step, ctx);
+	}
+
 	/** `say` through talk, walking up to whoever it is said to first. Only call with talk attached. */
 	public async speak(step:Step):Promise<SayResult> {
+		const group = groupTargets(step, this.verbs);
+		if (group) {
+			return this.speakToGroup(step, group);
+		}
 		const to = sayToOf(step.args);
-		const talk = this.talk!;
 		// Close enough to talk is where they make out every word, wherever that is for the host.
 		for (const id of [to ?? []].flat()) {
-			const near = await this._goTo?.(id, { check: () => (talk.canSay(this.id, id).ok && talk.clear(this.id, id) ? 'in earshot' : undefined) });
+			const near = await this._goTo?.(id, { check: () => (this.inEarshot(id) ? 'in earshot' : undefined) });
 			if (near && !near.ok) {
 				return { ...near, verb: 'say' };
 			}
 		}
 		return this.talk!.say(this.id, String(step.args.text ?? ''), to, this.now);
+	}
+
+	/** One line to `ids`, from near them if it may walk. It reaches whoever of them is in earshot, and says who was not. */
+	private async speakToGroup(step:Step, ids:readonly string[]):Promise<SayResult> {
+		const talk = this.talk!;
+		const near = await this.groupWalk('say', ids)?.();
+		if (near?.interrupted) {
+			return { ...near, verb: 'say' };
+		}
+		const reached = ids.filter((id) => talk.canSay(this.id, id).ok);
+		if (reached.length === 0) {
+			return near && !near.ok ? { ...near, verb: 'say' } : { ok: false, verb: 'say', reason: 'none of them is in earshot' };
+		}
+		const said = talk.say(this.id, String(step.args.text ?? ''), reached, this.now);
+		const missed = ids.filter((id) => !reached.includes(id)).map((id) => this.mind?.nameOf(id) ?? id);
+		return said.ok && missed.length > 0 ? { ...said, reason: `${said.reason}; out of earshot: ${missed.join(', ')}` } : said;
 	}
 
 	/** An arc began. A voice tells its mind. */
@@ -551,6 +717,12 @@ export abstract class ArcRunner<TCtx = unknown> {
 			this.mind!.ingestResult(result);
 		}
 	}
+}
+
+/** The steps of the loop `arc` would never leave, the innermost if one is the next: nothing after it ever runs. */
+function endlessBody(arc:Arc):Arc | undefined {
+	const loop = arcSteps(arc).find((step) => step.verb === 'loop' && isArc(step.args.arc) && !step.args.until && !step.args.through && step.args.times === undefined);
+	return loop && (endlessBody(loop.args.arc as Arc) ?? loop.args.arc as Arc);
 }
 
 /** Why a runner with no body of its own (a collective with no commander) cannot run `verb` itself. */

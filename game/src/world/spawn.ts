@@ -1,8 +1,10 @@
+import { Belly } from '../engine/Belly';
 import { Regen } from '../engine/Regen';
 import { CharacterAnimation } from '../characters/CharacterAnimation';
 import { CharacterPose } from '../characters/CharacterPose';
 import { HeldProps } from '../characters/HeldProps';
 import { Raven } from '../characters/Raven';
+import { Reading } from '../characters/Reading';
 import { Seated } from '../characters/Seated';
 import { CharacterMotor } from '../characters/CharacterMotor';
 import { NPCInput } from '../characters/NPCInput';
@@ -319,7 +321,7 @@ function spawnDoor(world:World, chunk:Chunk, ent:ChunkEntity):void {
 	door.size = axis === 'x' ? { x: 0.16, y: 2.12, z: 1 } : { x: 1, y: 2.12, z: 0.16 };
 	go.transform.yaw = axis === 'x' ? 0 : Math.PI / 2;
 	panel.parent = go;
-	go.addComponent(Lock, { keyID: ent.keyID ?? 'brass', locked: ent.locked ?? true });
+	go.addComponent(Lock, { keyID: ent.keyID ?? 'brass', locked: ent.locked ?? true, lockedFrom: ent.lockedFrom ?? 'both' });
 	go.addComponent(MeshRenderer, { meshID: ent.def });
 	if (ent.exit) {
 		go.addComponent(MarketGate);
@@ -703,8 +705,10 @@ export type NPCSpawnOpts = {
 	equip?:string[];
 	/** Its team's colors, shown in a ring on the ground under it. */
 	team?:TeamColors;
-	/** Sat on the chair where it starts (`Seated`), with `rod` fishing the water ahead. */
-	seated?:{ rod?:boolean };
+	/** Sat on the chair named `on` from the start (`Seated`), with `rod` fishing the water ahead. */
+	seated?:{ on:string; rod?:boolean };
+	/** Hungry from the start, until it eats (`Belly`). */
+	hungry?:boolean;
 };
 
 /** The voice `id` gets by default: varied by id, higher for characters drawn as women. */
@@ -724,6 +728,8 @@ function addAppearance(go:GameObject, meshID:string):void {
 	go.addComponent(CharacterAnimation);
 	go.addComponent(HeldProps);
 	go.addComponent(CharacterPose);
+	go.addComponent(Seated);
+	go.addComponent(Reading);
 }
 
 /** How far a streaming NPC keeps chunks loaded: its room and the next, not the whole map. */
@@ -804,7 +810,12 @@ export function spawnNPC(world:World, chunk:Chunk, opts:NPCSpawnOpts):GameObject
 		go.addComponent(Weakness, { ...opts.weakness, to: [...opts.weakness.to] });
 	}
 	if (opts.seated) {
-		go.addComponent(Seated, { rod: !!opts.seated.rod });
+		const seat = go.getComponent(Seated)!;
+		seat.seatID = opts.seated.on;
+		seat.rod = !!opts.seated.rod;
+	}
+	if (opts.hungry) {
+		go.addComponent(Belly);
 	}
 	if (opts.streams) {
 		go.addComponent(StreamingAnchor, { viewRadius: NPC_STREAM_RADIUS });

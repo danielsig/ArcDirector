@@ -36,6 +36,19 @@ describe('mind ids', () => {
 		assert.deepEqual(mapArc(stored, verbs, namesOf(names)), reply);
 	});
 
+	it('keeps a group expression in a verb\'s id arg, names rewritten, both ways', () => {
+		const names = book();
+		for (const to of ['units', 'allUnits', 'units.filter("Archer")', 'others.nearby()']) {
+			const reply = parseArcText(`say(text="Hold fast", to=${to})`, verbs);
+			assert.equal(reply[0].args.to, to);
+			assert.deepEqual(mapArc(mapArc(reply, verbs, idsOf(names)), verbs, namesOf(names)), reply);
+		}
+		const reply = parseArcText('say(text="Hold fast", to=others.filter(u => u != EnemyWitch2))', verbs);
+		const stored = mapArc(reply, verbs, idsOf(names));
+		assert.equal(stored[0].args.to, 'others.filter(u => u != Nyx)');
+		assert.deepEqual(mapArc(stored, verbs, namesOf(names)), reply);
+	});
+
 	it('rewrites names and string literals, never member names or tags', () => {
 		const names = book();
 		assert.equal(

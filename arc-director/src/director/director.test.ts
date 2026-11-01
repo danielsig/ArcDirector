@@ -2290,3 +2290,135 @@ describe('shared inference', () => {
 		source.dispose();
 	});
 });
+
+describe('reaching goals', () => {
+	type GoalCtx = { id:string; done:boolean };
+
+	/** A director whose one character is told, by `state`, whether it has a `Loaf`, and thinks once with `reply`. */
+	function goalDirector(goals:CharacterSpec<GoalCtx>['goals'], state:{ done:boolean }, replies:string[] = []):ArcDirector<GoalCtx> {
+		let turn = 0;
+		return new ArcDirector<GoalCtx>()
+			.withPriorityQueue({ processInterval: 0, watchInterval: 0, heartbeatStart: 100, heartbeatMin: 100 })
+			.addFakeInference(() => ({ content: replies[turn++] ?? JSON.stringify({ steps: [{ verb: 'wait' }] }), toolCalls: [] }))
+			.addStockVerbs()
+			.withDefaultKit(KIT)
+			.onVerb((call) => ({ ok: true, verb: call.verb }))
+			.withContext((id) => ({ id, done: state.done }))
+			.withKernels(() => ({
+				me: dummyEntity('Baker'),
+				others: [],
+				items: [],
+				bindings: { hasLoaf: { kind: 'bool', value: state.done } },
+			}))
+			.addCharacter({ id: 'Baker', mind: { skipHeartbeat: true, skipStart: true }, kit: KIT, goals });
+	}
+
+	const goalsOf = (d:ArcDirector<GoalCtx>):string[] => d.character('Baker')!.persona.goals.map((g) => g.text);
+	const pinnedOf = (d:ArcDirector<GoalCtx>):string[] => d.character('Baker')!.persona.memory.pinned().map((m) => m.text);
+
+	for (const [how, until] of [['a watch', 'hasLoaf'], ['a predicate', (ctx:GoalCtx) => ctx.done]] as const) {
+		it(`ends a goal when ${how} holds, pins it for a few thinks, and tells whoever listens`, async () => {
+			const state = { done: false };
+			const heard:string[] = [];
+			const d = await goalDirector([{ text: 'Buy a Loaf', until }, { text: 'Stay open' }], state)
+				.onGoalReached((id, goal) => heard.push(`${id}: ${goal.text}`))
+				.start();
+			d.tick(1, 1);
+			assert.deepEqual(goalsOf(d), ['Buy a Loaf', 'Stay open'], 'not yet');
+			state.done = true;
+			d.tick(1, 2);
+			assert.deepEqual(goalsOf(d), ['Stay open']);
+			assert.deepEqual(pinnedOf(d), ['Goal reached: Buy a Loaf']);
+			assert.deepEqual(heard, ['Baker: Buy a Loaf']);
+			d.dispose();
+		});
+	}
+
+	it('asks only as often as watches are sampled', async () => {
+		let asked = 0;
+		const d = await goalDirector([{ text: 'Buy a Loaf', until: () => {
+			asked += 1;
+			return false;
+		} }], { done: false }).start();
+		for (let i = 0; i < 10; i++) {
+			d.tick(0.05, i * 0.05);
+		}
+		assert.equal(asked, 2);
+		d.dispose();
+	});
+
+	it('leaves a goal with no until to the mind, whose finish_goal ends it; one with an until is not its to end', async () => {
+		const step = (goal:string):string => JSON.stringify({ steps: [{ verb: 'finish_goal', goal }] });
+		const d = await goalDirector([{ text: 'Feel at home' }, { text: 'Buy a Loaf', until: 'hasLoaf' }], { done: false }, [step('Buy a Loaf'), step('Feel at home')]).start();
+		const baker = d.character('Baker')!;
+		await baker.mind!.thinkNow();
+		assert.deepEqual(goalsOf(d), ['Feel at home', 'Buy a Loaf'], 'the world says when that one ends');
+		assert.match(baker.mind!.lastResult?.reason ?? '', /ends by itself/);
+		await baker.mind!.thinkNow();
+		assert.deepEqual(goalsOf(d), ['Buy a Loaf']);
+		assert.deepEqual(pinnedOf(d), ['Goal reached: Feel at home']);
+		d.dispose();
+	});
+
+	it('finish_goal by a character of a collective reads that character\'s own goals', async () => {
+		const d = await goalDirector([{ text: 'Feel at home' }], { done: false }).start();
+		const baker = d.character('Baker')!;
+		const mind = baker.mind!;
+		const perform = (goal?:string):ReturnType<typeof mind.perform> => mind.perform({ verb: 'finish_goal', args: goal ? { goal } : {} }, { id: 'Ash' } as never);
+		baker.persona.goals.push({ text: '[Ash] Hold the gate' });
+		assert.equal((await perform('Feel at home'))?.ok, false, 'not its goal to finish');
+		assert.equal((await perform())?.ok, true, 'with no name, its own');
+		assert.deepEqual(goalsOf(d), ['Feel at home']);
+		d.dispose();
+	});
+
+	it('drop_goal by a character of a collective reads that character\'s own goals', async () => {
+		const d = await goalDirector([{ text: 'Feel at home' }], { done: false }).start();
+		const baker = d.character('Baker')!;
+		const mind = baker.mind!;
+		const perform = (goal?:string):ReturnType<typeof mind.perform> => mind.perform({ verb: 'drop_goal', args: goal ? { goal } : {} }, { id: 'Ash' } as never);
+		baker.persona.goals.push({ text: '[Ash] Hold the gate' }, { text: '[Ash] Watch the road' }, { text: 'Sleep well' });
+		await perform();
+		assert.deepEqual(goalsOf(d), ['Feel at home', '[Ash] Hold the gate', 'Sleep well'], 'with no name, its own last');
+		await perform('Hold the gate');
+		assert.deepEqual(goalsOf(d), ['Feel at home', 'Sleep well'], 'by name, as it set it');
+		await perform('Sleep well');
+		assert.deepEqual(goalsOf(d), ['Feel at home', 'Sleep well'], 'not its goal to drop');
+		d.dispose();
+	});
+
+	it('pins a reached goal for five thinks, then only recall finds it', async () => {
+		const d = await goalDirector([{ text: 'Buy a Loaf', until: 'hasLoaf' }], { done: true }).start();
+		d.tick(1, 1);
+		const mind = d.character('Baker')!.mind!;
+		for (let i = 0; i < 4; i++) {
+			await mind.thinkNow({ enact: false });
+		}
+		assert.deepEqual(pinnedOf(d), ['Goal reached: Buy a Loaf']);
+		await mind.thinkNow({ enact: false });
+		assert.deepEqual(pinnedOf(d), []);
+		assert.deepEqual(d.character('Baker')!.persona.memory.recall({ query: 'Loaf', k: 1 }).map((m) => m.text), ['Goal reached: Buy a Loaf']);
+		d.dispose();
+	});
+
+	it('takes a saved goal\'s test from the spec again; a reached one stays reached', async () => {
+		const state = { done: false };
+		const goals:CharacterSpec<GoalCtx>['goals'] = [{ text: 'Buy a Loaf', until: (ctx) => ctx.done }, { text: 'Sell a Pie', until: 'hasLoaf' }];
+		const first = await goalDirector(goals, state).start();
+		const saved = JSON.parse(JSON.stringify(first.exportCast()));
+		first.dispose();
+		const next = await goalDirector(goals, state).start();
+		next.restoreCast(saved);
+		state.done = true;
+		next.tick(1, 1);
+		assert.deepEqual(goalsOf(next), []);
+		const reached = JSON.parse(JSON.stringify(next.exportCast()));
+		next.restoreCast(reached);
+		assert.deepEqual(goalsOf(next), []);
+		next.dispose();
+	});
+
+	it('throws at start on a goal watch that does not read', async () => {
+		await assert.rejects(goalDirector([{ text: 'Buy a Loaf', until: 'hasLoaf &&' }], { done: false }).start());
+	});
+});

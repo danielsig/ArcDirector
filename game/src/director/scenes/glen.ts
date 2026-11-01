@@ -1,31 +1,58 @@
 import { Time, type GameObject } from '@arc-director/kindling';
-import { ArcDirector, Character, type CharacterSpec } from 'arc-director';
+import { ArcDirector, type CharacterSpec, type Kit } from 'arc-director';
+import { Belly } from '../../engine/Belly';
 import { Bridge, Celebrating, HumanBody } from '../../engine/components';
+import type { World } from '../../engine/World';
 import { Item } from '../../items/components';
-import { Seated } from '../../characters/Seated';
 import type { GameHost } from '../adapter';
-import { BODY_VERBS, BUILDING_VERB_INSTRUCTIONS } from '../verbs';
+import { BODY_VERBS, BUILDING_VERB_INSTRUCTIONS, doClose, doRead, FISH_VERB, GAME_VERBS, REST_VERBS } from '../verbs';
 import { withReceived, type CharacterCtx, type SceneGoals } from '../types';
 import { compactName, distXZ, findCarried, itemMatchesName, listCarried } from '../../items/inventory';
 import { coinsOf } from '../../items/wallet';
 import { worthOf } from '../../items/defs';
 
 const GOT_MUSHROOM = 'hasJustReceived("mushroom")';
+/** A mind at rest looks up now and then, and may find something else to do. With a book open, it does not. */
+const LOOKS_UP = 'prev.secondsAgo > 180 && !(me is "reading")';
 
-const FORAGER:CharacterSpec = {
+/** What the glen's folk can do. The Angler and the Player fish besides. */
+const FOLK_VERBS = [...GAME_VERBS, 'offer', 'sit', 'sleep', 'close', 'read'];
+const FOLK:Kit = { verbs: FOLK_VERBS };
+
+/** A goal's test: whoever it is has eaten `defID`. */
+function ate(defID:string):(ctx:CharacterCtx)=>boolean {
+	return ({ character }) => !!character.getComponent(Belly)?.ate.includes(defID);
+}
+
+const FORAGER:CharacterSpec<CharacterCtx> = {
 	id: 'Forager',
 	mind: { rank: 0.5 },
-	identity: { traits: ['quiet', 'hungry', 'kind'] },
-	goals: [{ text: 'Buy SilverTrout, unless you already have one.', priority: 2 }],
+	kit: FOLK,
+	identity: { traits: ['shy', 'gentle', 'curious', 'soft-spoken'] },
+	goals: [
+		{ text: 'Buy a SilverTrout from Angler, your favorite food, and eat it if you are hungry.', priority: 2, until: ate('silver_trout') },
+		{ text: 'Examine the mushrooms among the trees west of Cottage, and remember which look best.', priority: 1 },
+	],
 	memories: [
 		{
-			text: 'I am a glen forager. I harvest mushrooms for a living, mostly among the trees west of Cottage.',
-			tags: ['backstory', 'mushroom', 'trees'],
+			text: 'I am a glen forager. I came out of the forest down the trail to the north, and the forest is my home: I have no house in the glen. I harvest mushrooms for a living, mostly among the trees west of Cottage.',
+			tags: ['backstory', 'mushroom', 'trees', 'forest'],
 			pinned: true,
 		},
 		{
-			text: 'BridgeKeeper can lower and raise the bridge crossing the river.',
-			tags: ['BridgeKeeper', 'Bridge', 'river'],
+			text: 'I trust the woods more than people, and I use few words, always politely. Mushrooms delight me: I talk about them when I talk at all. BridgeKeeper frightens me a little, but is fair. Angler is loud, but the fish is worth it.',
+			tags: ['character', 'manner'],
+			pinned: true,
+		},
+		{
+			text: 'With nothing left to do, I eat if I am hungry, then rest or harvest. I never buy back what I sold, and I talk only when I have something new to say.',
+			tags: ['daily', 'rest'],
+			pinned: true,
+		},
+		{
+			text: 'Only BridgeKeeper can work BridgeLever. To cross the river, I ask BridgeKeeper to lower the bridge.',
+			tags: ['BridgeKeeper', 'BridgeLever', 'Bridge', 'river'],
+			pinned: true,
 		},
 		{
 			text: 'FireMushroom grows among the trees west of Cottage, outdoors.',
@@ -42,22 +69,37 @@ const FORAGER:CharacterSpec = {
 	],
 	pinnedWatches: {
 		gotMushroom: GOT_MUSHROOM,
-		hurt: 'isHurt(me)',
-		approaching: 'hasHeard || some(others.nearby().approaching())',
+		// Heard speech wakes a mind by itself; these wake it once each, not for as long as they stay true.
+		hurt: 'isHurt(me) && prev.secondsAgo > 20',
+		approaching: 'hasRisen("approaching", count(others.nearby().approaching()))',
 		bridge: 'hasJustOpened(Bridge)',
+		looksUp: LOOKS_UP,
 	},
-	watches: {
-		mushroom: 'some(items.filter("FireMushroom").nearby())',
-	},
+	// watches: {
+	// 	mushroom: 'hasRisen("mushrooms", count(items.filter("FireMushroom").nearby()))',
+	// },
 	watchesWritable: true,
 };
 
-const BRIDGE_KEEPER:CharacterSpec = {
+const BRIDGE_KEEPER:CharacterSpec<CharacterCtx> = {
 	id: 'BridgeKeeper',
 	mind: { rank: 0.5 },
-	identity: { traits: ['stubborn', 'fair', 'dutiful', 'by-the-book'] },
-	goals: [{ text: 'Get gold by charging people a fee for lowering the bridge for them IFF the bridge is raised. Never overcharge. Never lower the bridge unpaid/underpaid. Always refund payment if insufficient, overpaid, or bridge was already lowered.', priority: 2 }],
+	kit: FOLK,
+	identity: { traits: ['stubborn', 'fair', 'dutiful', 'by-the-book', 'dry-witted'] },
+	goals: [{
+		text: 'Get gold by charging people a fee for lowering the bridge for them IFF the bridge is raised. Never overcharge. Never lower the bridge unpaid/underpaid. Refund a payment that is too little or too much, or that comes after the bridge is already lowered. A fee that lowered the bridge is yours to keep.',
+		priority: 2,
+		until: ({ world }) => bridgeOpen(world) && bridgeFeePaid(world),
+	}, {
+		text: 'In quiet moments, sit down with a book from your CottageBookshelf.',
+		priority: 1,
+	}],
 	memories: [
+		{
+			text: 'I have kept this Bridge for thirty years, as my father did. I speak in short, dry sentences and quote the rules. I quietly like Forager, who pays and keeps quiet, and I find Angler a noisy braggart. Nothing pleases me more than a chair and a book. My CottageBookshelf holds five: Almanac, RiverTales, TollBook, MushroomLore and OldSongs.',
+			tags: ['character', 'manner'],
+			pinned: true,
+		},
 		{
 			text: 'I operate the Bridge near the cottage. I accept 10 gold or items of equal value as payment for lowering the bridge: one FireMushroom is worth 10 gold, so it pays the whole fee, but a MoonMushroom is worth only 1 gold and does not. Once I hold the payment, I lower the bridge for whoever paid. I do not lower Bridge unpaid. Payment lasts for a full day and I will lower the bridge for whoever paid until the payment expires.',
 			tags: ['backstory', 'Bridge', 'gold'],
@@ -68,14 +110,27 @@ const BRIDGE_KEEPER:CharacterSpec = {
 			tags: ['BridgeCrank', 'BridgeLever', 'Bridge'],
 			pinned: true,
 		},
+		{
+			text: 'I keep SpareKey hidden by the woodpile on the east side of Cottage, in case I lose CottageKey.',
+			tags: ['SpareKey', 'CottageKey', 'Cottage'],
+		},
+		{
+			text: 'My home is Cottage, north of the river. CottageKey in my pack opens CottageDoor, and CottageChair and CottageBed are inside. With nothing left to do, I go home and rest, and I talk only when I have something new to say.',
+			tags: ['home', 'Cottage'],
+			pinned: true,
+		},
 	],
+	pinnedWatches: { looksUp: LOOKS_UP },
 };
 
-const ANGLER:CharacterSpec = {
+const ANGLER:CharacterSpec<CharacterCtx> = {
 	id: 'Angler',
 	mind: { rank: 0.5 },
-	identity: { traits: ['wet', 'impatient', 'hungry'] },
-	goals: [{ text: 'Get a FireMushroom by trade, unless you already have one.', priority: 2 }],
+	identity: { traits: ['wet', 'impatient', 'boastful', 'cheerful'] },
+	goals: [
+		{ text: 'Get a FireMushroom by trade, your favorite food, and eat it if you are hungry.', priority: 2, until: ate('fire_mushroom') },
+		{ text: 'Fish whenever you are free, and land more trout than anyone ever has.', priority: 1 },
+	],
 	offers: [{ give: { SilverTrout: 1 }, get: { gold: 5 } }],
 	memories: [
 		{
@@ -83,9 +138,19 @@ const ANGLER:CharacterSpec = {
 			tags: ['backstory', 'angler', 'river', 'fish', 'SilverTrout', 'FireMushroom'],
 			pinned: true,
 		},
+		{
+			text: 'I love a good story, above all about the fish that got away, each bigger than the last. I grumble about the weather and tease BridgeKeeper for being stiff. Forager is too quiet, but pays well.',
+			tags: ['character', 'manner'],
+			pinned: true,
+		},
+		{
+			text: 'My home is Hut, south of the river, with HutChair and HutBed inside. With nothing left to do, I fish or rest at home, and I talk only when I have something new to say.',
+			tags: ['home', 'Hut'],
+			pinned: true,
+		},
 	],
 	watches: { bridge: 'hasJustOpened(Bridge)' },
-	pinnedWatches: { gotMushroom: GOT_MUSHROOM },
+	pinnedWatches: { gotMushroom: GOT_MUSHROOM, looksUp: LOOKS_UP },
 };
 
 /** The bridge fee, in gold. */
@@ -93,8 +158,8 @@ const FEE = 10;
 
 
 /** What BridgeKeeper holds toward the fee, in gold: coins, and goods at their worth. */
-function feeHeld(host:GameHost):number {
-	const keeper = host.world.findByID(BRIDGE_KEEPER.id);
+function feeHeld(world:World):number {
+	const keeper = world.findByID(BRIDGE_KEEPER.id);
 	if (!keeper) {
 		return 0;
 	}
@@ -105,14 +170,14 @@ function feeHeld(host:GameHost):number {
 	return coinsOf(keeper) + goods;
 }
 
-function bridgeFeePaid(host:GameHost):boolean {
-	return feeHeld(host) >= FEE;
+function bridgeFeePaid(world:World):boolean {
+	return feeHeld(world) >= FEE;
 }
 
 /** Lowered, or swinging down. */
-function bridgeOpen(host:GameHost):boolean {
+function bridgeOpen(world:World):boolean {
 	let open = false;
-	host.world.forEachComponent(Bridge, (span) => {
+	world.forEachComponent(Bridge, (span) => {
 		open ||= span.open;
 	});
 	return open;
@@ -129,7 +194,7 @@ function onCottageBank(host:GameHost, go:GameObject):boolean {
 
 /** Angler, cut off across a raised bridge, has nothing to think about until it comes down. */
 function mayThink(host:GameHost, id:string):boolean {
-	if (id !== ANGLER.id || bridgeOpen(host)) {
+	if (id !== ANGLER.id || bridgeOpen(host.world)) {
 		return true;
 	}
 	const angler = host.world.findByID(ANGLER.id);
@@ -137,7 +202,6 @@ function mayThink(host:GameHost, id:string):boolean {
 }
 
 const wokeForager = new WeakSet<GameHost>();
-const glenCheers = new WeakMap<GameHost, Set<string>>();
 
 function wakeForagerOnce(host:GameHost):void {
 	if (wokeForager.has(host) || !host.arc?.ready) {
@@ -147,56 +211,22 @@ function wakeForagerOnce(host:GameHost):void {
 	host.arc.mindQueue()?.enqueueMajor(FORAGER.id, true);
 }
 
-function cheerOnce(host:GameHost, id:string):void {
-	const go = host.world.findByID(id);
-	if (!go) {
-		return;
-	}
-	let ids = glenCheers.get(host);
-	if (!ids) {
-		ids = new Set();
-		glenCheers.set(host, ids);
-	}
-	if (ids.has(id)) {
-		return;
-	}
-	ids.add(id);
-	const hop = go.getOrAddComponent(Celebrating);
-	hop.beginHops(Time.time, 3);
+/** Whether `id` has reached the goal the scene is about: its only one with a test, off its list by now. */
+function reached(host:GameHost, id:string):boolean {
+	const goals = host.arc?.character(id)?.persona.goals;
+	return !!goals && !goals.some((goal) => goal.until);
 }
 
 function checkBargain(host:GameHost):void {
 	wakeForagerOnce(host);
 	// Paid for, the bridge stays down: the keeper working the lever again would only raise it on whoever paid.
 	host.world.forEachComponent(Bridge, (span) => {
-		span.paidDown = () => bridgeFeePaid(host);
+		span.paidDown = () => bridgeFeePaid(host.world);
 	});
-	const forager = host.world.findByID(FORAGER.id);
-	const keeper = host.world.findByID(BRIDGE_KEEPER.id);
-	const angler = host.world.findByID(ANGLER.id);
-	// Fishing until the bridge comes down, then up to cross it.
-	if (bridgeOpen(host)) {
-		angler?.getComponent(Seated)?.stand();
+	if (!host.bargainDone && [FORAGER, BRIDGE_KEEPER, ANGLER].every((spec) => reached(host, spec.id))) {
+		host.bargainDone = true;
+		host.world.setMessage('The glen holds — trout, mushroom, and a lowered bridge');
 	}
-	if (forager && findCarried(forager, (it) => itemMatchesName(it, 'SilverTrout'))) {
-		cheerOnce(host, FORAGER.id);
-	}
-	if (bridgeFeePaid(host)) {
-		cheerOnce(host, BRIDGE_KEEPER.id);
-	}
-	if (angler && findCarried(angler, (it) => itemMatchesName(it, 'FireMushroom'))) {
-		cheerOnce(host, ANGLER.id);
-	}
-	if (host.bargainDone || !forager || !keeper || !angler) {
-		return;
-	}
-	const trout = !!findCarried(forager, (it) => itemMatchesName(it, 'SilverTrout'));
-	const mushroom = !!findCarried(angler, (it) => itemMatchesName(it, 'FireMushroom'));
-	if (!bridgeOpen(host) || !trout || !mushroom || !bridgeFeePaid(host)) {
-		return;
-	}
-	host.bargainDone = true;
-	host.world.setMessage('The glen holds — trout, mushroom, and a lowered bridge');
 }
 
 function carries(host:GameHost, id:string, item:string):boolean {
@@ -256,7 +286,7 @@ const WALKED = 0.9;
  * holds toward the fee counts too.
  */
 function feeProgress(host:GameHost):number {
-	if (bridgeFeePaid(host)) {
+	if (bridgeFeePaid(host.world)) {
 		return 1;
 	}
 	const forager = host.world.findByID(FORAGER.id);
@@ -264,59 +294,46 @@ function feeProgress(host:GameHost):number {
 	const walked = !forager || !carries(host, FORAGER.id, 'FireMushroom')
 		? 0.5 * closeness(host, 'mushroom', forager, forager && nearestThing(host, forager, 'FireMushroom'))
 		: 0.5 + 0.5 * closeness(host, 'keeper', forager, keeper);
-	return Math.max(feeHeld(host) / FEE, WALKED * walked);
+	return Math.max(feeHeld(host.world) / FEE, WALKED * walked);
 }
 
 /** The bridge: once paid, the BridgeKeeper walks to BridgeLever and works it. */
 function bridgeProgress(host:GameHost):number {
-	if (bridgeOpen(host)) {
+	if (bridgeOpen(host.world)) {
 		return 1;
 	}
-	if (!bridgeFeePaid(host)) {
+	if (!bridgeFeePaid(host.world)) {
 		return 0;
 	}
 	return WALKED * closeness(host, 'lever', host.world.findByID(BRIDGE_KEEPER.id), host.world.findNamed('BridgeLever'));
 }
 
-/** The bargain may go on past the bridge: the fee is paid and the bridge is down. */
-function bridgeCrossed(host:GameHost):boolean {
-	return bridgeFeePaid(host) && bridgeOpen(host);
-}
+/** How much of a meal's line the walk to its seller fills, and how much having the food does. */
+const AT_SELLER = 0.5;
+const ACQUIRED = 0.75;
 
-/** The Angler's first trade, once over the bridge: walking to the Forager to sell a SilverTrout. */
-function troutProgress(host:GameHost):number {
-	if (carries(host, FORAGER.id, 'SilverTrout')) {
+/** `eater`'s favorite food: walking to whoever sells it fills half the line, having it three quarters, and eating it all. */
+export function mealProgress(host:GameHost, eater:string, seller:string, item:string):number {
+	if (reached(host, eater)) {
 		return 1;
 	}
-	if (!bridgeCrossed(host)) {
-		return 0;
+	if (carries(host, eater, item)) {
+		return ACQUIRED;
 	}
-	return WALKED * closeness(host, 'angler:forager', host.world.findByID(ANGLER.id), host.world.findByID(FORAGER.id));
-}
-
-/** The Angler's FireMushroom, bought from the BridgeKeeper once the trout has paid enough: walking to the keeper. */
-function mushroomProgress(host:GameHost):number {
-	if (carries(host, ANGLER.id, 'FireMushroom')) {
-		return 1;
-	}
-	const angler = host.world.findByID(ANGLER.id);
-	if (!bridgeCrossed(host) || !angler || coinsOf(angler) < FEE) {
-		return 0;
-	}
-	return WALKED * closeness(host, 'angler:keeper', angler, host.world.findByID(BRIDGE_KEEPER.id));
+	return AT_SELLER * closeness(host, `${eater}:${seller}`, host.world.findByID(eater), host.world.findByID(seller));
 }
 
 /**
- * The glen's bargain, step by step, each line filling as people close in: the fee, the bridge, then the Angler sells
- * the Forager a trout and, with the gold, buys a FireMushroom from the BridgeKeeper.
+ * The glen's bargain, step by step, each line filling as people close in: the fee, the bridge, then the Forager eats
+ * the trout it wanted and the Angler the FireMushroom.
  */
 function goals(host:GameHost):SceneGoals {
 	return {
 		left: { color: 'gold', goals: [
 			{ name: 'Forager pays the bridge crossing fee', progress: feeProgress(host) },
 			{ name: 'BridgeKeeper lowers the bridge', progress: bridgeProgress(host) },
-			{ name: 'Angler sells Forager a SilverTrout', progress: troutProgress(host) },
-			{ name: 'Angler buys a FireMushroom from BridgeKeeper', progress: mushroomProgress(host) },
+			{ name: 'Forager eats a SilverTrout', progress: mealProgress(host, FORAGER.id, ANGLER.id, 'SilverTrout') },
+			{ name: 'Angler eats a FireMushroom', progress: mealProgress(host, ANGLER.id, BRIDGE_KEEPER.id, 'FireMushroom') },
 		] },
 	};
 }
@@ -324,9 +341,24 @@ function goals(host:GameHost):SceneGoals {
 export function createDirector(host:GameHost):ArcDirector<CharacterCtx> {
 	host.hooks = { checkBargain, mayThink, goals };
 	return host.configure(new ArcDirector<CharacterCtx>())
-		.withRPG(BODY_VERBS)
+		.withRPG({ ...BODY_VERBS, ...REST_VERBS })
+		.addVerb('fish', FISH_VERB)
+		.addVerb('read', {
+			args: { item: 'id' },
+			help: 'reads a while from a book you carry',
+			seen: 'reading',
+			handler: (call) => doRead(call, call.args.item),
+		})
+		.addVerb('close', {
+			args: { target: 'id' },
+			help: 'walks to a door and shuts it',
+			seen: 'closing {target}',
+			handler: (call) => doClose(call, call.args.target),
+		})
+		.withDefaultKit({ verbs: [...FOLK_VERBS, 'fish'] })
 		.withMindDefaults({ skipHeartbeat: true, skipStrategic: true })
 		.withVerbInstructions(BUILDING_VERB_INSTRUCTIONS)
+		.onGoalReached((id) => host.world.findByID(id)?.getOrAddComponent(Celebrating).beginHops(Time.time, 3))
 		.addCharacter(withReceived(FORAGER))
 		.addCharacter(withReceived(BRIDGE_KEEPER))
 		.addCharacter(withReceived(ANGLER));

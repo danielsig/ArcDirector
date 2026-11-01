@@ -43,6 +43,13 @@ export function stepDoing(step:Step, verbs:VerbRegistry, show:(id:string)=>strin
 	return seen ? fillHoles(seen, step.args, (value) => (typeof value === 'string' ? show(value) : String(value))) : doingOf(step.verb);
 }
 
+/** The ids `step` is aimed at when its group arg ({@link VerbDef.group}) holds a list; none for a single name. */
+export function groupTargets(step:Step, verbs:VerbRegistry):string[] | undefined {
+	const key = verbs.get(step.verb)?.group;
+	const value = key ? step.args[key] : undefined;
+	return Array.isArray(value) ? value as string[] : undefined;
+}
+
 /** Kinds whose value is text, as a base ({@link argBase}): what `code=417` stays when written for one. */
 export const TEXT_ARG_KINDS:readonly string[] = ['id', 'string', 'text', 'watch', 'expr', 'law'];
 
@@ -63,6 +70,10 @@ export type VerbSpec = {
 	reply?:boolean;
 	/** What one seen running it is doing, with `{arg}` holes: `going to {target}`. Default: the verb with `-ing` (`firing`). */
 	seen?:string;
+	/** It needs no body: an Arc of only such verbs runs beside the program under way, instead of replacing it. */
+	free?:boolean;
+	/** The `id` arg that may take several at once. See {@link VerbDef.group}. */
+	group?:string;
 };
 
 /** What `addVerb` and `VerbRegistry.add` take. */
@@ -73,6 +84,14 @@ export type VerbDef = {
 	reply?:boolean;
 	/** What one seen running it is doing, with `{arg}` holes: `going to {target}`. Default: the verb with `-ing` (`firing`). */
 	seen?:string;
+	/** It needs no body: an Arc of only such verbs runs beside the program under way, instead of replacing it. */
+	free?:boolean;
+	/**
+	 * The `id` arg that may take several at once: a name as ever, or an expression that picks a list (`units`,
+	 * `others.nearby()`). For a list, the character first walks near the group (`withGroupWalk`) and then acts once, and the
+	 * handler receives the ids as `string[]`, without the character itself or anyone down.
+	 */
+	group?:string;
 };
 
 export class VerbRegistry {
@@ -81,9 +100,12 @@ export class VerbRegistry {
 	/** Catalog used to parse nested `arc=` args. Kit views point at the unfiltered registry. */
 	private _nestedSource:VerbRegistry | null = null;
 
-	public add(name:string, { args = {}, help, reply, seen }:VerbDef = {}):this {
+	public add(name:string, { args = {}, help, reply, seen, free, group }:VerbDef = {}):this {
 		if (this._verbs.has(name)) {
 			throw new Error(`verb already registered: ${name}`);
+		}
+		if (group && argBase(args[group]) !== 'id') {
+			throw new Error(`verb ${name}: group arg '${group}' is not an id arg`);
 		}
 		if (name === GROUP_VERB) {
 			throw new Error(`verb ${name}: '${GROUP_VERB}' is how an Arc writes ( … ), not a verb`);
@@ -96,7 +118,7 @@ export class VerbRegistry {
 				throw new Error(`verb ${name}: arg '${key}' is reserved`);
 			}
 		}
-		this._verbs.set(name, { name, args, help, ...(reply ? { reply } : {}), ...(seen ? { seen } : {}) });
+		this._verbs.set(name, { name, args, help, ...(reply ? { reply } : {}), ...(seen ? { seen } : {}), ...(free ? { free } : {}), ...(group ? { group } : {}) });
 		return this;
 	}
 
@@ -182,7 +204,7 @@ export const STOCK_ITEM_VERBS = ['use', 'pick_up', 'drop', 'give', 'examine'] as
 /** Registered with the rest; not in `STOCK_VERBS`, so a kit grants them only where there is trade. */
 export const STOCK_TRADE_VERBS = ['offer'] as const;
 export const STOCK_MIND_VERBS = [
-	'say', 'wait', 'remember', 'think', 'set_goal', 'drop_goal', 'set_identity',
+	'say', 'wait', 'remember', 'think', 'set_goal', 'drop_goal', 'finish_goal', 'set_identity',
 	'watch', 'unwatch', 'focus', 'unfocus',
 ] as const;
 /** Withheld when the mind's persona has `watchesWritable` / `sightFocusWritable` off, whatever the kit says. */
@@ -190,7 +212,7 @@ export const WATCH_EDIT_VERBS:readonly string[] = ['watch', 'unwatch'];
 export const FOCUS_EDIT_VERBS:readonly string[] = ['focus', 'unfocus'];
 /** Verbs only a mind can run: they call the model or shape its later prompts. A character without a mind never has them. */
 export const MIND_ONLY_VERBS:readonly string[] = [
-	'think', 'remember', 'set_goal', 'drop_goal', 'set_identity', ...WATCH_EDIT_VERBS, ...FOCUS_EDIT_VERBS,
+	'think', 'remember', 'set_goal', 'drop_goal', 'finish_goal', 'set_identity', ...WATCH_EDIT_VERBS, ...FOCUS_EDIT_VERBS,
 ];
 export const STOCK_ARC_VERBS = ['when', 'loop', 'law', 'unlaw'] as const;
 /** A System One model picks one of its arcs. Withheld from any runner without a System One, whatever its kit says. */
@@ -208,22 +230,23 @@ export const STOCK_VERB_DEFS = {
 	drop: { args: { item: 'id', to: 'id?' } },
 	give: { args: { item: 'id', to: 'id', quantity: 'number?' }, help: 'goes to them first. to buy or sell, use offer', reply: true, seen: 'giving {item} to {to}' },
 	examine: { args: { target: 'id' } },
-	offer: { args: { to: 'id?', give: 'bundle?', get: 'bundle?' }, help: 'each side as {"Egg":12, "Milk":3}, items and gold only. if they offer that or better, both move at once; else it waits for their answer. no to: offered to anyone', reply: true },
-	say: { args: { text: 'text', to: 'id?' }, help: 'one short sentence', reply: true },
-	wait: { args: { seconds: 'number?', until: 'watch?' }, help: 'until fails if not met within seconds (default 20)' },
-	remember: { args: { content: 'text', tags: 'string[]?' } },
-	think: { args: { about: 'text?' } },
-	set_goal: { args: { goal: 'text', priority: 'number?' }, seen: 'thinking' },
-	drop_goal: { args: { goal: 'text?' }, seen: 'thinking' },
-	set_identity: { args: { role: 'string?', traits: 'string[]?' }, seen: 'thinking' },
-	watch: { args: { name: 'string', expr: 'expr' } },
-	unwatch: { args: { name: 'string' } },
-	focus: { args: { expr: 'expr' } },
-	unfocus: { args: { expr: 'expr' } },
-	when: { args: { watch: 'watch', arc: 'arc' }, help: `this job's interrupt; no extra think` },
+	offer: { args: { to: 'id?', give: 'bundle?', get: 'bundle?' }, help: 'goes to them first if out of earshot. each side as {"Egg":12, "Milk":3}, items and gold only. if they offer that or better, both move at once; else it waits for their answer. no to: offered to anyone', reply: true },
+	say: { args: { text: 'text', to: 'id?' }, help: 'one short sentence', reply: true, free: true, group: 'to' },
+	wait: { args: { seconds: 'number?', until: 'watch?' }, help: 'until fails if not met within seconds (default 20)', free: true },
+	remember: { args: { content: 'text', tags: 'string[]?' }, free: true },
+	think: { args: { about: 'text?' }, free: true },
+	set_goal: { args: { goal: 'text', priority: 'number?' }, seen: 'thinking', free: true },
+	drop_goal: { args: { goal: 'text?' }, seen: 'thinking', free: true },
+	finish_goal: { args: { goal: 'text?' }, help: 'it is done', seen: 'thinking', free: true },
+	set_identity: { args: { role: 'string?', traits: 'string[]?' }, seen: 'thinking', free: true },
+	watch: { args: { name: 'string', expr: 'expr' }, free: true },
+	unwatch: { args: { name: 'string' }, free: true },
+	focus: { args: { expr: 'expr' }, free: true },
+	unfocus: { args: { expr: 'expr' }, free: true },
+	when: { args: { watch: 'watch', arc: 'arc', times: 'number?', until: 'watch?' }, help: `this job's interrupt; no extra think` },
 	loop: { args: { arc: 'arc', through: 'watch?', until: 'watch?', times: 'number?' }, help: 'repeats until fail' },
-	law: { args: { who: 'expr?', watch: 'watch', arc: 'arc', name: 'law?' }, help: 'standing reaction until unlaw; no extra think' },
-	unlaw: { args: { name: 'law' }, help: 'drops that law' },
+	law: { args: { who: 'expr?', watch: 'watch', arc: 'arc', name: 'law?', times: 'number?', until: 'watch?' }, help: 'standing reaction until unlaw; no extra think', free: true },
+	unlaw: { args: { name: 'law' }, help: 'drops that law', free: true },
 	// Its choices are named args of their own; `arc/choose.ts` reads them.
 	choose: { args: { goal: 'text' }, help: 'a fast model picks one by name each run; loop it to keep picking' },
 } as const satisfies Record<StockVerb, VerbDef>;

@@ -5,7 +5,7 @@ import type { STOCK_COLLECTIVE_VERB_DEFS } from '../collective/verbs.js';
 import type { Character } from '../character/character.js';
 import type { NameTarget } from '../character/names.js';
 import type { PersonaSpec } from '../character/persona.js';
-import type { KitSource } from '../character/types.js';
+import type { Goal, KitSource } from '../character/types.js';
 import type { LawSpec } from '../arc/laws.js';
 import type { MindSettings } from '../mind/mind.js';
 import type { HostKernels } from '../expr/natives.js';
@@ -15,8 +15,9 @@ import type { Offer } from '../world/offers.js';
 import type { Vec } from '../world/types.js';
 
 /** What both a character and a collective spec hold: an id, a kit, laws, and the persona fields. */
-type RunnerSpec<TCtx> = PersonaSpec & {
+type RunnerSpec<TCtx> = Omit<PersonaSpec, 'goals'> & {
 	id:string;
+	goals?:Goal<TCtx>[];
 	/**
 	 * Fetched every tick, so the host can mutate it in place. Omit = director `withDefaultKit`; with neither,
 	 * `start()` throws. `senses` / `tools` omitted on the kit = all registered ones.

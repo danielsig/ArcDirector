@@ -29,6 +29,7 @@ export const PROP_IDS = [
 	'lantern',
 	'shelf',
 	'jars',
+	'bookshelf',
 	'weaponRack',
 	'bed',
 	'trunk',
@@ -116,6 +117,7 @@ export const PROP_FOOTPRINT:Record<PropID, { w:number; d:number; round?:boolean 
 	lantern: null,
 	shelf: null,
 	jars: null,
+	bookshelf: null,
 	weaponRack: { w: 0.9, d: 0.34 },
 	bed: { w: 0.8, d: 1.4 },
 	trunk: { w: 0.52, d: 0.34 },
@@ -148,10 +150,13 @@ export const PROP_HEIGHT:Partial<Record<PropID, number>> = {
 	rottenBasket: 0.27,
 };
 
+/** Height of a table's top: tall enough for the thighs and knees of whoever sits at it, robes included. */
+export const TABLE_TOP = 0.84;
+
 /** Height of the top of props other props can rest on (`on` in a map legend). */
 export const PROP_TOP:Partial<Record<PropID, number>> = {
 	chair: 0.47,
-	table: 0.63,
+	table: TABLE_TOP,
 	shelf: 1.32,
 	wallShelf: 0.645,
 	crate: 0.42,
@@ -164,6 +169,10 @@ export type DressingProp = {
 	y:number;
 	z:number;
 	yaw:number;
+	/** What the map calls it, if anything. */
+	name?:string;
+	/** Something else stands on it, so it is no use to sit on. */
+	topped?:boolean;
 };
 
 function chunkAt(chunks:Chunk[], x:number, z:number):Chunk | undefined {
@@ -439,13 +448,14 @@ function cottageProps(list:Chunk[]):DressingProp[] {
 	];
 	const room = [
 		// Long side to the chair.
-		place('table', at(-2.15, -0.35).x, 0, at(-2.15, -0.35).z, Math.PI / 2),
+		place('table', at(-2.15, -0.32).x, 0, at(-2.15, -0.32).z, Math.PI / 2),
 		place('chair', at(-2.15, -0.95).x, 0, at(-2.15, -0.95).z, Math.atan2(rightX, rightZ)),
-		place('lantern', at(-2.35, -0.15).x, 0.64, at(-2.35, -0.15).z),
-		...onWall(list, ['shelf', 'jars'], at(-3.15, 0.7), 0.2, [0, 1.32]),
+		place('lantern', at(-2.35, -0.12).x, TABLE_TOP, at(-2.35, -0.12).z),
+		...onWall(list, ['bookshelf'], at(-3.15, 0.7), 0.2, [0]),
 		// Head to the wall: a bed's origin is its middle, so its back is half its length behind it.
 		...onWall(list, ['bed'], at(-2.3, 1.7), PROP_FOOTPRINT.bed!.d),
-		place('trunk', at(-1.15, 1.75).x, 0, at(-1.15, 1.75).z, 0.4),
+		// In the far corner, leaving room to stand on either side of the bed.
+		place('trunk', at(-3.2, -1.1).x, 0, at(-3.2, -1.1).z),
 		...onWall(list, ['broom'], at(-1.05, -1.15), BROOM_REACH * 2),
 	];
 	const road = roadCells(list, door);
@@ -583,11 +593,12 @@ function glyphProps(list:Chunk[]):DressingProp[] {
 			const beside = ent.yaw === undefined && wallBeside(chunk, ent.localX, ent.localZ);
 			const depth = WALL_MOUNTED[def] ?? (beside ? standDepth(def) : undefined);
 			if (depth !== undefined) {
-				out.push(...onWall(list, [def, ...on], { x, z }, depth, [y, ...on.map(() => y + (PROP_TOP[def] ?? 0))]));
+				const [own, ...tops] = onWall(list, [def, ...on], { x, z }, depth, [y, ...on.map(() => y + (PROP_TOP[def] ?? 0))]);
+				out.push({ ...own!, name: ent.name, topped: on.length > 0 }, ...tops);
 				continue;
 			}
 			const yaw = ent.yaw ?? glyphYaw(chunk, ent.localX, ent.localZ);
-			out.push(place(ent.def, x, y, z, yaw));
+			out.push({ ...place(ent.def, x, y, z, yaw), name: ent.name, topped: on.length > 0 });
 			for (const top of on) {
 				out.push(place(top, x, y + (PROP_TOP[ent.def] ?? 0), z, yaw));
 			}

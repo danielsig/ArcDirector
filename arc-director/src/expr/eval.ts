@@ -112,6 +112,11 @@ function asEntity(v:ExprVal):ExprEntity | undefined {
 	return v.kind === 'entity' ? v.value : undefined;
 }
 
+/** `fn` was not given a list. A value that is not there now may be one later; anything else never will. */
+function needsList(fn:string, arg:ExprVal | undefined):ExprError {
+	return new ExprError(`${fn} needs a list`, !arg || arg.kind === 'absent' ? 'typeError' : 'misuse');
+}
+
 function asList(v:ExprVal):ExprVal[] | undefined {
 	return v.kind === 'list' ? v.value : undefined;
 }
@@ -290,7 +295,7 @@ function evalAst(ast:Ast, ctx:EvalCtx):ExprVal {
 			if (callee.kind === 'absent') {
 				throw new ExprError('unbound call');
 			}
-			throw new ExprError('not a function');
+			throw new ExprError('not a function', 'misuse');
 		}
 	}
 }
@@ -372,7 +377,7 @@ function logic(op:'&&' | '||', left:ExprVal, right:ExprVal):ExprVal {
 	const lb = left.kind === 'bool';
 	const rb = right.kind === 'bool';
 	if (lb !== rb) {
-		throw new ExprError('mixed && / ||');
+		throw new ExprError('mixed && / ||', 'misuse');
 	}
 	if (lb && rb) {
 		const a = (left as { kind:'bool'; value:boolean }).value;
@@ -463,14 +468,14 @@ export const builtins:Record<string, NativeFn> = {
 	filter(args, ctx) {
 		const list = asList(args[0]);
 		if (!list) {
-			throw new ExprError('filter needs a list');
+			throw needsList('filter', args[0]);
 		}
 		return capList(predOrNeedle(list, args[1], ctx), listCapOf(ctx));
 	},
 	find(args, ctx) {
 		const list = asList(args[0]);
 		if (!list) {
-			throw new ExprError('find needs a list');
+			throw needsList('find', args[0]);
 		}
 		const hit = predOrNeedle(list, args[1], ctx)[0];
 		return hit ?? ABSENT;
@@ -478,7 +483,7 @@ export const builtins:Record<string, NativeFn> = {
 	findLast(args, ctx) {
 		const list = asList(args[0]);
 		if (!list) {
-			throw new ExprError('findLast needs a list');
+			throw needsList('findLast', args[0]);
 		}
 		const rows = predOrNeedle(list, args[1], ctx);
 		return rows[rows.length - 1] ?? ABSENT;
@@ -487,7 +492,7 @@ export const builtins:Record<string, NativeFn> = {
 		const list = asList(args[0]);
 		const x = args[1];
 		if (!list) {
-			throw new ExprError('includes needs a list');
+			throw needsList('includes', args[0]);
 		}
 		if (x.kind === 'string' && list.every((i) => i.kind === 'entity' || i.kind === 'absent')) {
 			return { kind: 'bool', value: list.some((i) => i.kind === 'entity' && needleMatch(i.value, x.value)) };
@@ -497,7 +502,7 @@ export const builtins:Record<string, NativeFn> = {
 	first(args) {
 		const list = asList(args[0]);
 		if (!list) {
-			throw new ExprError('first needs a list');
+			throw needsList('first', args[0]);
 		}
 		return list[0] ?? ABSENT;
 	},
@@ -546,7 +551,7 @@ export const builtins:Record<string, NativeFn> = {
 	count(args, ctx) {
 		const list = asList(args[0]);
 		if (!list) {
-			throw new ExprError('count needs a list');
+			throw needsList('count', args[0]);
 		}
 		if (!args[1]) {
 			return { kind: 'number', value: list.length };
@@ -568,14 +573,14 @@ export const builtins:Record<string, NativeFn> = {
 	some(args, ctx) {
 		const list = asList(args[0]);
 		if (!list) {
-			throw new ExprError('some needs a list');
+			throw needsList('some', args[0]);
 		}
 		return { kind: 'bool', value: foldPred(list, args[1], false, ctx) };
 	},
 	all(args, ctx) {
 		const list = asList(args[0]);
 		if (!list) {
-			throw new ExprError('all needs a list');
+			throw needsList('all', args[0]);
 		}
 		return { kind: 'bool', value: foldPred(list, args[1], true, ctx) };
 	},

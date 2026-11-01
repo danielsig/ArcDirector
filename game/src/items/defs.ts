@@ -5,6 +5,8 @@ export type ItemDef = {
 	maxStack?:number;
 	meshID?:string;
 	color?:number;
+	/** What looking it over tells, beyond its name. */
+	about?:string;
 	components:{
 		Key?:{ keyID:string };
 		Equipable?:{ slots:string[]; hands:0 | 1 | 2 };
@@ -18,6 +20,8 @@ export type ItemDef = {
 		Flame?:{ canIgnite:boolean };
 		Ingredient?:{ brewer:string; fee:string; brew:string; yield:number };
 		Goods?:{ ask:number };
+		/** What reading it may turn up, a page at a time. */
+		Book?:{ pages:string[] };
 	};
 };
 
@@ -189,6 +193,83 @@ export const ITEM_DEFS:Record<string, ItemDef> = {
 		color: 0xe6c34a,
 		components: {},
 	},
+	almanac: {
+		id: 'almanac',
+		name: 'Almanac',
+		meshID: 'item_key',
+		color: 0x6b4423,
+		about: 'An old almanac of tides, tolls and weather, thumbed soft at the corners.',
+		components: {
+			Book: { pages: [
+				'A toll unpaid is a debt remembered.',
+				'When the river runs high, raise the bridge before dusk.',
+				'Trout bite best after rain, and worst for the impatient.',
+				'Blue mushrooms favor the lucky, or make them so.',
+				'He who crosses without paying will cross back without welcome.',
+				'A red sky at evening means a dry morning for the bridge.',
+			] },
+		},
+	},
+	river_tales: {
+		id: 'river_tales',
+		name: 'RiverTales',
+		meshID: 'item_key',
+		color: 0x2f6f8f,
+		about: 'Tall stories of the river, with a fish on every page.',
+		components: {
+			Book: { pages: [
+				'The trout of the old falls grew so fat they wore the riverbed smooth.',
+				'A boatman once bargained with the river, and it has kept his hat ever since.',
+				'They say the water remembers every name said over it.',
+				'No one has ever landed the great pike of the glen, though many have told of it.',
+			] },
+		},
+	},
+	toll_book: {
+		id: 'toll_book',
+		name: 'TollBook',
+		meshID: 'item_key',
+		color: 0x7a2f2f,
+		about: 'Column after column of tolls paid at this bridge, some in a hand long dead.',
+		components: {
+			Book: { pages: [
+				'Paid in full: one goat, in the year of the long frost.',
+				'Refused passage: a tinker who offered a song.',
+				'Ten gold, as ever. It has been ten gold longer than anyone remembers.',
+				'A note in the margin: the keeper before me never once raised the toll.',
+			] },
+		},
+	},
+	mushroom_lore: {
+		id: 'mushroom_lore',
+		name: 'MushroomLore',
+		meshID: 'item_key',
+		color: 0xb5651d,
+		about: 'A forager\'s notes on what grows under the trees, with small careful drawings.',
+		components: {
+			Book: { pages: [
+				'The orange cap is warm to the hand even on a cold morning.',
+				'The blue cap glows faintly at dusk, and is easiest found then.',
+				'Never take the last one from a ring: it will not come back.',
+				'What grows under the pine will not grow under the oak.',
+			] },
+		},
+	},
+	old_songs: {
+		id: 'old_songs',
+		name: 'OldSongs',
+		meshID: 'item_key',
+		color: 0x4f7a3a,
+		about: 'Songs of the glen, written down by someone who could not quite carry a tune.',
+		components: {
+			Book: { pages: [
+				'Low the river, high the moon, the keeper sleeps and wakes too soon.',
+				'Come across and pay your due, the bridge goes down for me and you.',
+				'A trout for you, a cap for me, and home before the owls are free.',
+				'Sing it slow, for it is long, and no one knows the end of the song.',
+			] },
+		},
+	},
 	bridge_crank: {
 		id: 'bridge_crank',
 		name: 'Bridge crank',
@@ -205,7 +286,8 @@ export const ITEM_DEFS:Record<string, ItemDef> = {
 		maxStack: 9,
 		meshID: 'item_mushroom',
 		color: 0xe07030,
-		components: { Goods: { ask: 10 } },
+		about: 'An orange cap, warm to the touch, smelling of smoke. They say it lightens the feet.',
+		components: { Goods: { ask: 10 }, Consumable: { effect: 'swift', amount: 0.25, consumeOnUse: true } },
 	},
 	moon_mushroom: {
 		id: 'moon_mushroom',
@@ -214,7 +296,8 @@ export const ITEM_DEFS:Record<string, ItemDef> = {
 		maxStack: 9,
 		meshID: 'item_mushroom',
 		color: 0x3a6ad8,
-		components: { Goods: { ask: 1 } },
+		about: 'A blue cap, cool and faintly glowing. They say whoever eats one has luck for a while.',
+		components: { Goods: { ask: 1 }, Consumable: { effect: 'lucky', amount: 0.25, consumeOnUse: true } },
 	},
 	silver_trout: {
 		id: 'silver_trout',
@@ -223,7 +306,8 @@ export const ITEM_DEFS:Record<string, ItemDef> = {
 		maxStack: 9,
 		meshID: 'item_potion',
 		color: 0x9eb4c8,
-		components: { Goods: { ask: 5 } },
+		about: 'Bright scales and clear eyes: fresh from the river.',
+		components: { Goods: { ask: 5 }, Consumable: { effect: 'food', amount: 0, consumeOnUse: true } },
 	},
 	bitterroot: {
 		id: 'bitterroot',
@@ -467,6 +551,9 @@ export const ITEM_DEFS:Record<string, ItemDef> = {
 export function worthOf(defID:string):number | undefined {
 	return ITEM_DEFS[defID]?.components.Goods?.ask;
 }
+
+/** The books on a bookshelf, by item def. */
+export const BOOKS = ['almanac', 'river_tales', 'toll_book', 'mushroom_lore', 'old_songs'];
 
 export function getDef(defID:string):ItemDef {
 	const def = ITEM_DEFS[defID];

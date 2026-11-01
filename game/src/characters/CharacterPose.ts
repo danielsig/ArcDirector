@@ -3,6 +3,7 @@ import * as THREE from 'three';
 import { Appearance, Celebrating, POSE_SECONDS, SpeechBubble, Vitals } from '../engine/components';
 import { Order } from '../engine/order';
 import { HeldProps, turnAboutGrip } from './HeldProps';
+import { Reading } from './Reading';
 import { Seated } from './Seated';
 import { heldMap } from '../render/toolFx';
 import { slashTrail, thrustLance } from '../render/swordFx';
@@ -523,6 +524,13 @@ export class CharacterPose extends Component {
 
 	/** Who to look at: someone being handed something, the peer this character faces, or the nearest voice. */
 	private lookTarget():THREE.Vector3 | null {
+		if (this.gameObject.getComponent(Seated)?.asleep) {
+			return null;
+		}
+		const reading = this.gameObject.getComponent(Reading)?.lookingAt;
+		if (reading) {
+			return reading.clone();
+		}
 		const go = this.gameObject;
 		const world = go.world;
 		if (!world) {
@@ -576,7 +584,8 @@ export class CharacterPose extends Component {
 		return !!(this._shot || this._swing || this._dodge || this._grip || this._cast)
 			|| clip === 'give' || clip === 'take'
 			|| (!!bubble?.text && Time.time < bubble.until)
-			|| !!go.getComponent(Seated)?.enabled
+			|| !!go.getComponent(Seated)?.held
+			|| !!go.getComponent(Reading)?.active
 			|| !!go.getComponent(Celebrating)?.enabled;
 	}
 

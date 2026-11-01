@@ -104,6 +104,11 @@ export interface HostWorld<TEntity> {
 	 */
 	find(id:string):TEntity | undefined;
 	/**
+	 * Whether `name` is an item in this world. Given, a reply whose trade names anything else is sent back to the model
+	 * to write again, before it runs. Default: any name will do, and the deal's own rules are all that check it.
+	 */
+	isItem?(name:string):boolean;
+	/**
 	 * Where `entity` is now. `from`: who is going there, so a thing spread over many cells (a forest, a wall) can answer
 	 * with its part nearest them; ignore it for a thing in one place.
 	 * @returns `undefined` when it has no place right now.

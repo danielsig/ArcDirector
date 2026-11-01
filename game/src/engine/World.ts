@@ -55,6 +55,12 @@ export class World extends KindlingWorld {
 	public daylight = false;
 	public sayOpen = false;
 	public pickedUp:(character:GameObject, name:string)=>void = () => undefined;
+	/** A blow took a character's last health. */
+	public wentDown:(character:GameObject)=>void = () => undefined;
+	/** The player's character runs this arc, as an NPC would. Rejects when it cannot: no director running, or no such verb here. */
+	public enact:(arc:string)=>Promise<{ ok:boolean; reason?:string }> = () => Promise.reject(new Error('no director'));
+	/** `character` just caught `name`, fishing. */
+	public caught:(character:GameObject, name:string)=>void = () => undefined;
 	/** Surfaces a body can stand on, above the tile itself. The drawbridge and the road add themselves. */
 	public stepOn:StepOn[] = [];
 	private _stairN = -1;

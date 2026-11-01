@@ -22,6 +22,11 @@
 	--on-world: #fff8e6;
 	--on-world-edge: 0 1px 0 #2a1a0c, 0 0 4px rgba(20, 12, 6, 0.85);
 
+	/* Dark smoked glass, the goal orbs' unlit smoke: the slates minds write on, and the AI log */
+	--glass: radial-gradient(ellipse at 30% 20%, #33253d, #1a1220 70%);
+	--glass-text: #efe6d2;
+	--glass-facet: linear-gradient(112deg, rgba(255, 255, 255, 0.07) 0 34%, transparent 34%);
+
 	/* Lines, corners, sizes */
 	--line: 3px;
 	--line-thin: 2px;

@@ -17,6 +17,7 @@ export function doingFields<TCtx>(character:Character<TCtx>):NonNullable<ExprEnt
 	return {
 		busy: { kind: 'bool', value: character.busy },
 		verb: { kind: 'string', value: character.verb },
+		ordered: { kind: 'bool', value: !!character.orders },
 		...character.work ? { doing: { kind: 'string', value: character.work } as const } : {},
 	};
 }
@@ -68,25 +69,28 @@ export function buildCollectiveCatalog<TCtx>(base:HostKernels, collective:Collec
 	return buildCatalog(collectiveKernels(base, collective, as));
 }
 
-/** The members a `who` value names: entities, lists of them, or ids. */
-export function membersFromVal<TCtx>(value:ExprVal, collective:Collective<TCtx>):Character<TCtx>[] {
+/** The ids a value picks, each once: entities, lists of them, or ids. */
+export function idsInVal(value:ExprVal):string[] {
 	const ids:string[] = [];
 	const take = (v:ExprVal):void => {
 		if (v.kind === 'entity') {
 			ids.push(v.value.id);
 		}
 		else if (v.kind === 'list') {
-			for (const row of v.value) {
-				take(row);
-			}
+			v.value.forEach(take);
 		}
 		else if (v.kind === 'string' && v.value) {
 			ids.push(v.value);
 		}
 	};
 	take(value);
+	return [...new Set(ids)];
+}
+
+/** The members a `who` value names. */
+export function membersFromVal<TCtx>(value:ExprVal, collective:Collective<TCtx>):Character<TCtx>[] {
 	const out:Character<TCtx>[] = [];
-	for (const id of new Set(ids)) {
+	for (const id of idsInVal(value)) {
 		const member = collective.character(id);
 		if (member) {
 			out.push(member);
@@ -117,6 +121,7 @@ export function usesCollective(law:Law, verbs:VerbRegistry):boolean {
 	};
 	mapExpr(law.who, note);
 	mapExpr(law.watch, note);
+	mapExpr(law.until ?? '', note);
 	mapArc(law.arc, verbs, note);
 	return words.has('units') || words.has('allUnits');
 }

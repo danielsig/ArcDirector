@@ -2,6 +2,7 @@ import { MeshRenderer, Time, humanBone, type GameObject, type Renderer } from '@
 import * as THREE from 'three';
 import { markRaw } from 'vue';
 import { PlayerInput } from '../characters/PlayerInput';
+import { Seated } from '../characters/Seated';
 import { HumanBody, Appearance, Camera, Merchant, Named, SpeechBubble, Vitals, Wallet } from './components';
 import type { World } from './World';
 import { CELL_SIZE, CHUNK_SIZE } from '../world/constants';
@@ -10,10 +11,11 @@ import { allEquipped, countDef, distXZ, listCarried, slotItem } from '../items/i
 import { coinsOf } from '../items/wallet';
 import { isBackpack, type ItemInstance } from '../items/instance';
 import { nearestPickup, pickupLabel } from '../items/pickup';
-import { CARRY_ICONS, SLATE_WIDTH, noGoals, type HudGoalSide, type HudInspect, type HudModel, type MinimapCell } from '../ui/hudModel';
+import { CARRY_ICONS, SLATE_WIDTH, noGoals, type HudGoalSide, type HudInspect, type HudModel, type HudThink, type MinimapCell } from '../ui/hudModel';
 import type { SceneGoalSide, SceneGoals } from '../director/types';
 import type { CarriedOverhead } from '../data/scenes';
 import type { GameHost } from '../director/adapter';
+import type { ThinkSlate } from '../director/thinkShow';
 import { idOf, findObject, isLiving } from '../director/names';
 
 function chunkStamp(world:World):string {
@@ -101,6 +103,8 @@ function rebuildMinimap(world:World, hud:HudModel, x:number, z:number):void {
 
 /** Extra meters above the head. */
 const HEAD_PAD = 0.28;
+/** Over a sleeper's head. */
+const ASLEEP_LABEL = 'Zzz';
 /** From the head bone (the base of the skull) up to the crown, as a share of standing height. */
 const SKULL = 0.13;
 const headAt = new THREE.Vector3();
@@ -355,6 +359,7 @@ export function patchHud(
 ):void {
 	const player = world.findByID('Player');
 	const vitals = player?.getComponent(Vitals);
+	hud.touch = world.input.touch;
 	hud.hp = vitals?.hp ?? 0;
 	hud.maxHP = vitals?.maxHP ?? 5;
 	hud.gold = player?.getComponent(Wallet)?.coins ?? 0;
@@ -437,7 +442,7 @@ export function statusLabels(host:GameHost):OverheadNote[] {
 			continue;
 		}
 		const row = host.labels.get(id);
-		const text = row && now < row.until ? row.text : '';
+		const text = findObject(host.world, id)?.getComponent(Seated)?.asleep ? ASLEEP_LABEL : row && now < row.until ? row.text : '';
 		if (text || tool) {
 			out.push({ id, text, tool });
 		}
@@ -450,30 +455,74 @@ const SLATE_GAP = 24;
 /** How long before it goes that a slate fades, s. */
 const SLATE_FADE = 0.3;
 
+/** A think as the HUD reads it. */
+function thinkRow(think:ThinkSlate):HudThink {
+	return {
+		seq: think.seq,
+		id: think.id,
+		name: think.name,
+		color: think.color,
+		thought: think.thought,
+		arc: think.arc,
+		state: think.state,
+		error: think.error,
+		wrong: Time.time < think.wrongUntil,
+		ms: think.state === 'writing' ? performance.now() - think.began : think.ms,
+	};
+}
+
+/** The AI log's list of thinks, while it is open. */
+export function patchThinks(hud:HudModel, host:GameHost):void {
+	if (!hud.aiLogOpen) {
+		return;
+	}
+	const thinks = host.thinks.thinks;
+	hud.thinks.length = Math.min(hud.thinks.length, thinks.length);
+	thinks.forEach((think, i) => {
+		const shown = hud.thinks[i];
+		if (shown) {
+			Object.assign(shown, thinkRow(think));
+		}
+		else {
+			hud.thinks.push(thinkRow(think));
+		}
+	});
+}
+
+/** Which side of `go` has fewer characters on screen; on a tie, the side away from the screen's middle. */
+function emptierSide(world:World, view:Renderer, go:GameObject | undefined, x:number):'left' | 'right' {
+	let left = 0;
+	let right = 0;
+	world.forEachComponent(HumanBody, (_, other) => {
+		const p = other.transform.position;
+		const seen = other !== go && isLiving(other) ? view.projectToCanvas(p.x, p.y, p.z) : undefined;
+		if (seen?.visible) {
+			left += seen.x < x ? 1 : 0;
+			right += seen.x < x ? 0 : 1;
+		}
+	});
+	if (left !== right) {
+		return left < right ? 'left' : 'right';
+	}
+	return x < view.canvas.clientWidth / 2 ? 'left' : 'right';
+}
+
 /**
  * Where each slate up wants to be: over the line of heads so it hides no one standing beside its writer, growing upward
- * from their head, on the side away from the screen's middle, so two captains facing off stand their slates at either
- * end. Rows are reused, so a slate stays one element while it is up.
+ * from their head, on whichever side of them has fewer characters. Rows are reused, so a slate stays one element while
+ * it is up.
  */
 export function patchSlates(world:World, hud:HudModel, view:Renderer, host:GameHost):void {
 	host.thinks.update();
-	const width = view.canvas.clientWidth;
 	const up = [...host.thinks.slates.values()];
 	hud.slates.length = Math.min(hud.slates.length, up.length);
 	up.forEach((slate, i) => {
 		const go = findObject(world, slate.id);
 		const screen = go ? projectOverhead(go, view) : { x: 0, y: 0, visible: false };
+		slate.side ??= emptierSide(world, view, go, screen.x);
 		const row = {
-			id: slate.id,
-			name: go ? idOf(go) : slate.id,
-			color: slate.color,
-			thought: slate.thought,
-			arc: slate.arc,
-			state: slate.state,
-			error: slate.error,
-			wrong: Time.time < slate.wrongUntil,
-			ms: slate.state === 'writing' ? performance.now() - slate.began : slate.ms,
-			x: Math.round(screen.x < width / 2 ? screen.x - SLATE_GAP - SLATE_WIDTH : screen.x + SLATE_GAP),
+			...thinkRow(slate),
+			x: Math.round(slate.side === 'left' ? screen.x - SLATE_GAP - SLATE_WIDTH : screen.x + SLATE_GAP),
 			y: Math.round(screen.y),
 			visible: screen.visible,
 			leaving: slate.until - Time.time < SLATE_FADE,

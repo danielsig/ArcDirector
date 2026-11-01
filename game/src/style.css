@@ -8,6 +8,11 @@ body,
 	background: #000;
 }
 
+/* Touch browsers tint what is pressed, here the canvas and so the whole screen. */
+html {
+	-webkit-tap-highlight-color: transparent;
+}
+
 #app {
 	position: relative;
 }

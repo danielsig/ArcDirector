@@ -39,6 +39,11 @@ export function lex(src:string):Tok[] {
 			i += 3;
 			continue;
 		}
+		if (src.startsWith('!==', i)) {
+			out.push({ kind: 'neq', raw: '!==', i });
+			i += 3;
+			continue;
+		}
 		const two = src.slice(i, i + 2);
 		if (TWO[two]) {
 			out.push({ kind: TWO[two], raw: two, i });
@@ -139,4 +144,23 @@ export function lex(src:string):Tok[] {
 	}
 	out.push({ kind: 'eof', raw: '', i });
 	return out;
+}
+
+/** The names `toks` binds as lambda params, both ways the language writes them: `u => …` and `(a, b) => …`. */
+export function lambdaParams(toks:readonly Tok[]):Set<string> {
+	const params = new Set<string>();
+	toks.forEach((tok, n) => {
+		const before = toks[n - 1];
+		if (tok.kind === 'arrow' && before?.kind === 'ident') {
+			params.add(before.raw);
+		}
+		else if (tok.kind === 'arrow' && before?.kind === 'rp') {
+			for (let i = n - 2; toks[i]?.kind === 'ident' || toks[i]?.kind === 'comma'; i--) {
+				if (toks[i].kind === 'ident') {
+					params.add(toks[i].raw);
+				}
+			}
+		}
+	});
+	return params;
 }

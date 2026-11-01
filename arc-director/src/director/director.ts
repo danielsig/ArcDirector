@@ -2,20 +2,20 @@ import { argBase, CHOOSE_VERB, fillHoles, registerStockVerbs, stepDoing, STOCK_T
 import { formatArc, parseArcText } from '../arc/parse.js';
 import { withLoneWait } from '../arc/choose.js';
 import { arcArg } from '../arc/wire.js';
-import type { Arc, ArcResult, Step, StepArg } from '../arc/types.js';
+import { arcSteps, eachStep, firstStep, isCountMap, sameProgram, type Arc, type ArcResult, type Step, type StepArg } from '../arc/types.js';
 import { validateArc } from '../arc/validate.js';
 import { choicePrompt, type ChoicePrompt } from '../character/choice.js';
 import { JevSystemOne, ModelSystemOne, type JevOpts, type SystemOne } from '../inference/systemone.js';
-import { ArcError, BlockedArcError, eachStep } from '../arc/types.js';
+import { ArcError, BlockedArcError } from '../arc/types.js';
 import { lawGroup, type Law, type LawSpec } from '../arc/laws.js';
 import { bodiless, type ArcRunner, type RunnerOptions } from '../character/arc-runner.js';
 import { Character, type CharacterFields, type CharacterJSON, type Wiring } from '../character/character.js';
 import { Persona } from '../character/persona.js';
-import type { Kit, KitSource } from '../character/types.js';
+import type { Goal, Kit, KitSource } from '../character/types.js';
 import type { NameTarget } from '../character/names.js';
 import { Collective, type CollectiveFields, type CollectiveHost, type CollectiveJSON } from '../collective/collective.js';
 import { Mind, mindFields, type MindDeps, type MindSettings } from '../mind/mind.js';
-import type { ArcFormat, MindEvent, Sense, ThinkEvent, ToolSpec } from '../mind/types.js';
+import type { ArcFormat, MindEvent, Replacing, Sense, ThinkEvent, ToolSpec } from '../mind/types.js';
 import type { ThinkInstructions } from '../mind/prompt.js';
 import { TalkNet, type SpeechUtterance, type TalkConfig, type TalkMind, type TalkSense } from '../mind/talk.js';
 import type { MapSense } from '../mind/map.js';
@@ -23,6 +23,7 @@ import type { KnowledgeSource } from '../mind/knowledge.js';
 import { buildCatalog, dummyEntity, type HostKernels } from '../expr/natives.js';
 import { freezeMe, type MeFreezeHost } from '../expr/prev.js';
 import { catalogEntities, evaluate, unboundCalls, type EvalResult } from '../expr/eval.js';
+import { lambdaParams, lex } from '../expr/lex.js';
 import { parse } from '../expr/parse.js';
 import { watchScore } from '../expr/score.js';
 import { ABSENT, ExprError, SampleCache, leftoverFilterHint, type Catalog, type ExprEntity, type ExprVal } from '../expr/types.js';
@@ -47,7 +48,7 @@ import {
 	isFormationVerb,
 	type StockCollectiveVerb,
 } from '../collective/verbs.js';
-import { buildCollectiveCatalog, doingFields, evaluateWho, lawMatches, memberEntity, usesCollective } from '../collective/who.js';
+import { buildCollectiveCatalog, doingFields, evaluateWho, idsInVal, lawMatches, memberEntity, usesCollective } from '../collective/who.js';
 import { chatHandover, HANDOVER_THREAD, type Handover, type Journey, type MemoryEdit } from '../collective/handover.js';
 import { nameTags, type MemoryRecord } from '../memory/store.js';
 import {
@@ -101,6 +102,8 @@ import type { DownloadObserver, ModelDownload } from '../inference/download.js';
 import { showLoadingBar, type LoadingBarOptions } from '../inference/loadingBar.js';
 import { geometryKernels, wayBlocked } from '../world/kernels.js';
 import { Mover, type Crowd, type CrowdSettings, type MoveOpts } from '../world/mover.js';
+import { groupGoal, noWayTo, type RouteGoal } from '../world/route.js';
+import { mapExpr, namesOf } from '../mind/ids.js';
 import { searchTool, type SearchSpec } from '../search/search.js';
 import { RTS } from '../rts/rts.js';
 import type { RTSHost } from '../rts/types.js';
@@ -115,6 +118,12 @@ import { CARRIED_SALIENCE, sightSalience } from '../perception/salience.js';
 import { missingParts, worldVerbs } from '../world/verbs.js';
 
 const STARTED = 'ArcDirector already started';
+
+/** What every entity can be asked, whatever fields it carries. */
+const ALWAYS_FIELDS = new Set(['id', 'name', 'tags', 'hp', 'maxHP']);
+
+/** What reads like a name in a watch and is not one. */
+const WATCH_WORDS = new Set(['me', 'it']);
 
 /** A wait in progress (stock `wait`, or a handler's `call.wait`), settled by `tick`. */
 /** A wait under way. `unmet` is why it fails when its time runs out before `met`; without it, running out is how it ends. */
@@ -177,6 +186,8 @@ const NO_MODEL:InferenceProvider = {
 
 /** How long a System One that failed is skipped, so each pick does not wait on it again. */
 const SYSTEM_ONE_REST_MS = 30_000;
+/** Game seconds between asks of goals' `until`s: as often as a think queue samples watches by default. */
+const GOAL_CHECK_INTERVAL = 0.25;
 
 /** An RPG's crowds: round whoever they come to, in line to trade or hand over. */
 const RPG_CROWD:CrowdSettings = { crowd: 'ring', verbs: { offer: 'line', give: 'line' } };
@@ -256,6 +267,8 @@ export class ArcDirector<TCtx = unknown> {
 	private _mover = new Mover(undefined, () => this._clock);
 	private _toolRounds:number | undefined;
 	private _arcRetries:number | undefined;
+	private _perStepRepair = false;
+	private _repairUnknownFields = false;
 	private _stalledFn:((result:ArcResult)=>boolean) | undefined;
 	private _senses:Record<string, Sense<TCtx>> = {};
 	private readonly _regions = new Regions<TCtx>((id, watch) => {
@@ -273,6 +286,7 @@ export class ArcDirector<TCtx = unknown> {
 	private _kernelFn:KernelSource<TCtx> | undefined;
 	private _defaultKit:KitSource<TCtx> | undefined;
 	private _crowd:CrowdSettings | undefined;
+	private _groupWalk:((character:Character<TCtx>, verb:string, targets:readonly string[])=>boolean) | undefined;
 	private _cooldownDefault = DEFAULT_COOLDOWN;
 	private _talkSense:TalkSense | undefined;
 	private _onSpoke:((utterance:SpeechUtterance)=>void) | undefined;
@@ -288,7 +302,11 @@ export class ArcDirector<TCtx = unknown> {
 	private readonly _beatThinks = new Set<string>();
 	private _logFn:((entry:DirectorLog)=>void) | undefined;
 	private _stepFn:((call:VerbCall<TCtx>, result:ArcResult)=>void) | undefined;
+	private _goalReachedFn:((id:string, goal:Goal<never>)=>void) | undefined;
+	/** Game seconds since goals' `until`s were last asked. */
+	private _goalClock = 0;
 	private _thinkFn:((event:ThinkEvent)=>void) | undefined;
+	private _replaceCheck = false;
 	private _ignoreMissing = false;
 	/** Shows a loading bar for each browser model it downloads (`withLoadingBar`). */
 	private _loadingBar:LoadingBarOptions | undefined;
@@ -688,6 +706,17 @@ ${dump.message}`, image: dump.image });
 		return this;
 	}
 
+	/**
+	 * Whether `character` walks near a group before `verb` acts on it (`VerbDef.group`), given the ids of `targets`. Default:
+	 * it walks. If not, it acts from where it stands, and `say` reaches whoever of them is in earshot. Asked on the fly, and
+	 * more than once a step, so a program knows whether a line would take its body: keep it cheap and free of side effects.
+	 */
+	public withGroupWalk(fn:(character:Character<TCtx>, verb:string, targets:readonly string[])=>boolean):this {
+		this.assertBuilder();
+		this._groupWalk = fn;
+		return this;
+	}
+
 	/** The crowd a move by `verb` to `target` takes when it names none: none to a thing, else the target's, else the game's. */
 	private crowdOf(verb:string, target:string):Crowd {
 		if (!this.character(target)) {
@@ -725,20 +754,77 @@ ${dump.message}`, image: dump.image });
 		if (r.error) {
 			return { error: r.error.message };
 		}
-		const ids:string[] = [];
-		const take = (v:ExprVal):void => {
-			if (v.kind === 'entity') {
-				ids.push(v.value.id);
+		return idsInVal(r.value);
+	}
+
+	/**
+	 * `step` with its group arg read as `runner` sees it (`VerbDef.group`). A name stays, for what names do. An expression
+	 * that picks a list becomes its ids, without `runner` or anyone down or gone; one that picks one becomes that id.
+	 * The result is why it picks no one, when it does not.
+	 */
+	private aimGroup(runner:ArcRunner<TCtx>, step:Step):Step | ArcResult {
+		const key = this._verbs.get(step.verb)?.group;
+		const value = key ? step.args[key] : undefined;
+		const word = typeof value === 'string' ? value.trim() : '';
+		if (!key || (!word && !Array.isArray(value)) || this.character(word) || this._world?.find(word) !== undefined) {
+			return step;
+		}
+		const names = runner.mind?.persona.names;
+		const shown = names ? mapExpr(word, namesOf(names)) : word;
+		const fail = (reason:string):ArcResult => ({ ok: false, verb: step.verb, reason });
+		let picked = value as string[];
+		if (word) {
+			const ctx = runner.context();
+			const catalog = ctx === undefined ? undefined : this.exprCatalog(runner, ctx, this.cacheOf(runner));
+			// A bare word the catalog does not bind is a name no one has, and fails as one.
+			if (!/[(.]|=>/.test(word) && !catalog?.names.has(word)) {
+				return step;
 			}
-			else if (v.kind === 'list') {
-				v.value.forEach(take);
+			if (!catalog) {
+				return fail(`${shown} picks no one: nothing to pick from`);
 			}
-			else if (v.kind === 'string' && v.value) {
-				ids.push(v.value);
+			const r = evaluate(word, catalog);
+			if (r.error) {
+				return fail(`cannot read ${shown} as a group: ${r.error.message}`);
 			}
+			picked = idsInVal(r.value);
+			if (r.value.kind !== 'list') {
+				return picked[0] ? { ...step, args: { ...step.args, [key]: picked[0] } } : fail(`${shown} picks no one`);
+			}
+		}
+		const ids = this.standing(picked).filter((id) => id !== runner.id);
+		return ids.length > 0 ? { ...step, args: { ...step.args, [key]: ids } } : fail(`no one left in ${shown || 'the group'}`);
+	}
+
+	/** Those of `ids` still in the world and on their feet, where there is a world to ask. */
+	private standing(ids:readonly string[]):string[] {
+		const world = this._world;
+		return ids.filter((id) => !world || (poseOf(world, id) && !world.isDown?.(id)));
+	}
+
+	/**
+	 * The walk that takes `runner` near the group `ids`, following it as it moves, ready to run. None when it is near
+	 * already, when it has no body or the world has no routes, or when the host says not to (`withGroupWalk`).
+	 */
+	private walkToGroup(runner:ArcRunner<TCtx>, verb:string, ids:readonly string[], opts?:MoveOpts):(()=>Promise<ArcResult>) | undefined {
+		const world = this._world;
+		const me = world && poseOf(world, runner.id)?.point;
+		if (!world || !me || !(runner instanceof Character) || !this._mover.canMove) {
+			return undefined;
+		}
+		const goal = ():RouteGoal | undefined => {
+			const left = this.standing(ids);
+			return left.length > 0
+				? groupGoal(left.map((id) => poseOf(world, id)!.point), world.getReach?.(world.find(runner.id), world.find(left[0])) ?? 1)
+				: undefined;
 		};
-		take(r.value);
-		return [...new Set(ids)];
+		if (goal()?.reached(me) !== false || this._groupWalk?.(runner, verb, ids) === false) {
+			return undefined;
+		}
+		return async () => {
+			const out = await this._mover.go(runner.id, { goal, noWay: (why) => noWayTo('them', why) }, verb, opts);
+			return out.reason === 'gone' ? { ...out, reason: 'no one left in the group' } : out;
+		};
 	}
 
 	public withSight({ look, limit, unitName }:{
@@ -835,11 +921,17 @@ ${dump.message}`, image: dump.image });
 
 	/**
 	 * Repair turns after a bad arc. `retries` is how many (default 0: a bad reply fails the think). Each retry samples
-	 * as the model does, so a model that wrote one bad reply does not write it again word for word.
+	 * as the model does, so a model that wrote one bad reply does not write it again word for word. With `perStep`, the
+	 * steps of a reply that need no body (`issue`, `law`, `when`, `say`, ...) are judged each on its own: the good ones
+	 * stand, the model's turn shows only those, and it is told in words what became of the rest, to replace just them. A
+	 * reply that does not read at all still goes back whole. With `unknownFields`, a watch that reads a field no one in
+	 * sight has (`u.foo`) goes back too: it would only ever be false. Leave it off if your entities gain fields later.
 	 */
-	public withRepair({ retries }:{ retries?:number }):this {
+	public withRepair({ retries, perStep, unknownFields }:{ retries?:number; perStep?:boolean; unknownFields?:boolean }):this {
 		this.assertBuilder();
 		this._arcRetries = retries;
+		this._perStepRepair = perStep ?? false;
+		this._repairUnknownFields = unknownFields ?? false;
 		return this;
 	}
 
@@ -1118,14 +1210,14 @@ ${dump.message}`, image: dump.image });
 	 * its stock args. Same name again binds or replaces the handler.
 	 */
 	public addVerb<TVerb extends StockVerbName>(name:TVerb, verb:{ help?:string; reply?:boolean; seen?:string; handler:VerbHandler<TCtx, VerbArgs<StockVerbArgs<TVerb>>> }):this;
-	public addVerb<const TArgMap extends VerbArgMap = Record<never, never>>(name:string, verb?:{ args?:TArgMap; help?:string; reply?:boolean; seen?:string; handler?:VerbHandler<TCtx, VerbArgs<TArgMap>> }):this;
+	public addVerb<const TArgMap extends VerbArgMap = Record<never, never>>(name:string, verb?:{ args?:TArgMap; help?:string; reply?:boolean; seen?:string; group?:string; handler?:VerbHandler<TCtx, VerbArgs<TArgMap>> }):this;
 	/**
 	 * An alias: a verb that runs `arc`, its `{arg}` holes filled from its args (or `arc` made from them). Usable
 	 * wherever a verb is. As a law's whole arc it brings `watch` and `who` when the law gives none:
 	 * `law(name=archers, arc=keep_distance(keep=4), who=units.filter("Archer"))`.
 	 */
 	public addVerb(name:string, verb:{ args?:VerbArgMap; help?:string; seen?:string } & VerbAlias):this;
-	public addVerb(name:string, { handler, arc, watch, who, ...def }:{ args?:VerbArgMap; help?:string; reply?:boolean; seen?:string; handler?:VerbHandler<TCtx, never>; arc?:AliasPart; watch?:AliasPart; who?:AliasPart } = {}):this {
+	public addVerb(name:string, { handler, arc, watch, who, ...def }:{ args?:VerbArgMap; help?:string; reply?:boolean; seen?:string; group?:string; handler?:VerbHandler<TCtx, never>; arc?:AliasPart; watch?:AliasPart; who?:AliasPart } = {}):this {
 		if (!this._verbs.has(name)) {
 			this._verbs.add(name, def);
 		}
@@ -1183,6 +1275,170 @@ ${dump.message}`, image: dump.image });
 	public onStep(fn:(call:VerbCall<TCtx>, result:ArcResult)=>void):this {
 		this._stepFn = fn;
 		return this;
+	}
+
+	/** Each goal as it is reached, with the id of the mind whose goal it was: a cheer, a line on the screen. */
+	public onGoalReached(fn:(id:string, goal:Goal<TCtx>)=>void):this {
+		this._goalReachedFn = fn as (id:string, goal:Goal<never>)=>void;
+		return this;
+	}
+
+	/**
+	 * Before an Arc cuts short work not finished (a program with its steps still to do, or that has not gone once round
+	 * its loop), ask the model, in a short follow-up to that same think, what to do with each, told where it has got to:
+	 * replace it, append the new work to it, or keep it and drop the new work. Off by default.
+	 */
+	public withReplaceCheck(on = true):this {
+		this._replaceCheck = on;
+		return this;
+	}
+
+	/**
+	 * Why the Arc `owner`'s mind just wrote could never work as written. Only what no change in the world would mend: what
+	 * is merely not so right now (nobody near, too far, no gold yet) is for the verb to say as it runs.
+	 */
+	private arcProblem(owner:ArcRunner<TCtx>, arc:Arc):string | undefined {
+		const voice = owner.voice;
+		const ctx = this.tryCtx(voice.id);
+		// Its own cache: a look at a reply must not use up the change `hasRisen` is waiting to see.
+		const catalog = ctx === undefined ? undefined : this.exprCatalog(voice, ctx, new SampleCache());
+		const bound = new Set(['fail']);
+		eachStep(arc, this._verbs, (step) => {
+			const named = typeof step.args.through === 'string' ? /^\s*(\w+)\s+in\b/.exec(step.args.through)?.[1] : undefined;
+			if (named) {
+				bound.add(named);
+			}
+		});
+		const known = (name:string):boolean => bound.has(name) || name === this._currency || !!catalog?.names.has(name)
+			|| !!this.character(name) || !!this.collective(name) || !this._world || !!this._rts || this._world.find(name) !== undefined || !!this._world.isItem?.(name);
+		let problem:string | undefined;
+		eachStep(arc, this._verbs, (step, verbs) => {
+			const kinds = verbs.get(step.verb)?.args ?? {};
+			for (const [key, value] of Object.entries(step.args)) {
+				const kind = argBase(kinds[key]);
+				if (typeof value === 'string' && (kind === 'watch' || kind === 'expr' || (kind === 'id' && /[(.]|=>/.test(value)))) {
+					problem ??= this.exprProblem(value, catalog, known);
+				}
+				// Only the step that runs next, of a stock verb: something can come to be by a later one, and a host's own verb may
+				// aim at what only it knows.
+				else if (kind === 'id' && typeof value === 'string' && step === firstStep(arc) && this._stockHandlers.has(step.verb) && !known(bareName(value))) {
+					problem ??= `there is no ${bareName(value)}`;
+				}
+				else if (kind === 'bundle' && isCountMap(value)) {
+					const notItem = this._world?.isItem && Object.keys(value).find((name) => name !== this._currency && !this._world!.isItem!(name));
+					problem ??= notItem ? `'${notItem}' is not an item: the terms of a trade are {"ItemName":count}` : undefined;
+				}
+			}
+		});
+		return problem ?? this.lawProblem(owner, arc) ?? this.issueProblem(owner, arc);
+	}
+
+	/** Why `expr` can never work: it does not read, misuses the language, or names what is not in this world. */
+	private exprProblem(expr:string, catalog:Catalog | undefined, known:(name:string)=>boolean):string | undefined {
+		const broken = watchProblem(expr, catalog);
+		if (broken || !catalog) {
+			return broken;
+		}
+		const { error } = evaluate(expr, catalog);
+		if (error?.reason === 'fieldCall' || error?.reason === 'misuse') {
+			return `${expr}: ${error.message}`;
+		}
+		const toks = lex(expr);
+		const params = lambdaParams(toks);
+		if (this._repairUnknownFields) {
+			const plain = expr.replace(/"[^"]*"|'[^']*'/g, ' ');
+			const entities = [catalog.me, ...catalogEntities(catalog)];
+			const read = [...params].flatMap((param) => [...plain.matchAll(new RegExp(`\\b${param}\\.(\\w+)\\b(?!\\s*\\()`, 'g'))].map((m) => m[1]));
+			const unread = read.find((field) => !ALWAYS_FIELDS.has(field) && !entities.some((entity) => entity.fields?.[field] !== undefined));
+			if (unread) {
+				return `${expr}: no one has a field '${unread}'. What something is, its tag: u is "Witch"`;
+			}
+		}
+		const words = toks
+			.filter((tok, n) => tok.kind === 'ident' && !['dot', 'qdot'].includes(toks[n - 1]?.kind) && toks[n + 1]?.kind !== 'lp' && !params.has(tok.raw) && !WATCH_WORDS.has(tok.raw))
+			.map((tok) => tok.raw);
+		const unknown = words.find((word) => !known(word) && evaluate(word, catalog).value.kind === 'absent');
+		return unknown ? `${expr}: there is no ${unknown}` : undefined;
+	}
+
+	/** A law past the cap, or one it has already under another name. */
+	private lawProblem(owner:ArcRunner<TCtx>, arc:Arc):string | undefined {
+		const own = owner.laws.filter((law) => lawGroup(law.name) === '');
+		let count = own.length;
+		for (const step of arcSteps(arc)) {
+			const name = typeof step.args.name === 'string' ? step.args.name : undefined;
+			if (step.verb === 'unlaw') {
+				count -= own.some((law) => law.name === name) ? 1 : 0;
+			}
+			if (step.verb !== 'law') {
+				continue;
+			}
+			const body = arcArg(step.args.arc, this._verbs);
+			const twin = owner.laws.find((law) => law.name !== name && law.watch === String(step.args.watch ?? '').trim()
+				&& (step.args.who ?? law.who) === law.who && !!body && sameProgram(law.arc, body));
+			if (twin) {
+				return `that is your law ${twin.name} already`;
+			}
+			count += own.some((law) => law.name === name) ? 0 : 1;
+			if (count > owner.maxLaws) {
+				return `you have ${own.length} laws, the most you can (${own.map((law) => law.name).join(', ')}): unlaw one first`;
+			}
+		}
+		return undefined;
+	}
+
+	/** An order that reaches no one right now, whom it asks for being a matter of who stands. Its own earlier groups count. */
+	private issueProblem(owner:ArcRunner<TCtx>, arc:Arc):string | undefined {
+		const collective = collectiveOf(owner);
+		const voice = owner.voice;
+		const catalog = collective && this.collectiveCatalog(collective, voice, this.tryCtx(voice.id));
+		if (!collective || !catalog) {
+			return undefined;
+		}
+		const groups:string[] = [];
+		for (const step of arc) {
+			if (step.verb !== 'issue' || typeof step.args.who !== 'string') {
+				continue;
+			}
+			const who = step.args.who;
+			const named = evaluateWho(who, catalog, collective);
+			if (named.length === 0 && !groups.some((group) => who.includes(group))) {
+				return `${who} picks no unit`;
+			}
+			if (named.length > 0 && named.every((character) => character === collective.commander)) {
+				return 'issue never lands on the commander';
+			}
+			if (typeof step.args.group === 'string') {
+				groups.push(step.args.group);
+			}
+		}
+		return undefined;
+	}
+
+	/** The unfinished work `arc` would cut short: each unit an `issue` of it reaches, and the voice, unless it takes no body. */
+	private replacedBy(owner:ArcRunner<TCtx>, arc:Arc):Replacing[] {
+		if (!this._replaceCheck) {
+			return [];
+		}
+		const out:Replacing[] = [];
+		const note = (runner:ArcRunner<TCtx>, next:Arc):void => {
+			const now = runner.runs(next) ? undefined : runner.unfinished();
+			if (now) {
+				out.push({ id: runner.id, now, next: formatArc(next, this._verbs), looping: runner.inLoop() });
+			}
+		};
+		const collective = collectiveOf(owner);
+		const voice = owner.voice;
+		for (const step of arc) {
+			const orders = step.verb === 'issue' ? arcArg(step.args.arc, this._verbs) : undefined;
+			const catalog = orders && collective ? this.collectiveCatalog(collective, voice, this.tryCtx(voice.id)) : undefined;
+			const named = catalog && typeof step.args.who === 'string' ? evaluateWho(step.args.who, catalog, collective!) : [];
+			named.filter((character) => character !== collective?.commander).forEach((character) => note(character, orders!));
+		}
+		if (!voice.takesNoBody(arc)) {
+			note(voice, arc);
+		}
+		return out;
 	}
 
 	/** What each mind is doing as it thinks, down to its reply as it is written, and the orders it gives: for a host to show. */
@@ -1416,7 +1672,8 @@ ${dump.message}`, image: dump.image });
 						const dump = formatChatLog(req);
 						this.emitLog({ name, message: `prompt\n${dump.message}`, image: dump.image });
 					}
-					const res = await inner.chat(signal ? { ...req, signal } : req);
+					// A think stopped, and a request its own mind ended, both end it.
+					const res = await inner.chat(signal ? { ...req, signal: req.signal ? AbortSignal.any([req.signal, signal]) : signal } : req);
 					const ms = Math.round(nowMs() - t0);
 					this.recordInfer(req.thread, ms, res);
 					const parts = [`${ms}ms`];
@@ -1833,10 +2090,14 @@ ${dump.message}`, image: dump.image });
 			toolRoundCap: this._toolRounds,
 			wayBlocked: (to) => (this._world ? wayBlocked(this._world, mind.thinkThread(), to) : to.map(() => undefined)),
 			arcRetryCap: this._arcRetries,
+			perStepRepair: this._perStepRepair,
 			stalled: this._stalledFn,
 			autoEnact: true,
 			onChoose: (arc) => this.emitLog({ name: mind.thinkThread(), message: formatArc(arc, this._verbs) }),
+			onGoalReached: (goal) => this._goalReachedFn?.(mind.id, goal),
 			thinkWatch: () => this._thinkFn,
+			replacing: (arc) => this.replacedBy(owner, arc),
+			arcProblem: (arc) => this.arcProblem(owner, arc),
 			queue: this._queue,
 			modelID: this._models.live(mind.model)?.id ?? '',
 			embed: this._models.embedder(),
@@ -2285,17 +2546,13 @@ ${dump.message}`, image: dump.image });
 		if (!watch || !arc) {
 			return { ok: false, verb: 'law', reason: 'law needs watch and arc' };
 		}
-		// It would run on every unit it reaches, each ordering the rest again and again for as long as its watch holds.
-		let orders = false;
-		eachStep(arc, this._verbs, (inner) => {
-			orders ||= inner.verb === 'issue';
-		});
-		if (orders) {
-			return { ok: false, verb: 'law', reason: 'no issue in a law: it runs on each unit it reaches. Give it the arc they should run.' };
-		}
 		const aliasWho = arc.length === 1 && home.lawsTakeWho() ? this.aliasPart(arc[0], 'who') : undefined;
 		const aliasName = arc.length === 1 && this._aliases.has(arc[0].verb) ? arc[0].verb : undefined;
-		if (!home.addLaw({ name: name ?? aliasName, who: who ?? aliasWho, watch, arc })) {
+		const times = typeof step.args.times === 'number' ? step.args.times : undefined;
+		const until = typeof step.args.until === 'string' ? step.args.until : undefined;
+		// All units shouting one line is never what is meant: it is the commander's own.
+		const speaks = home.lawsTakeWho() && home.voice !== home && arcSteps(arc).every((part) => part.verb === 'say');
+		if (!home.addLaw({ name: name ?? aliasName, who: who ?? aliasWho ?? (speaks ? 'me' : undefined), watch, arc, times, until })) {
 			return { ok: false, verb: 'law', reason: `no law${name ? ` ${name}` : ''}: too many laws, or a bad name; unlaw one first` };
 		}
 		return { ok: true, verb: 'law' };
@@ -2308,6 +2565,10 @@ ${dump.message}`, image: dump.image });
 		step:Step,
 		ctx:TCtx | undefined,
 	):ArcResult | Promise<ArcResult> {
+		// Validation keeps issue at an Arc's root; an alias or a host's law can still bring one to a unit, which takes orders.
+		if (issuer !== collective.voice) {
+			return { ok: false, verb: 'issue', reason: 'only your commander issues orders' };
+		}
 		const who = typeof step.args.who === 'string' ? step.args.who.trim() : '';
 		const arc = arcArg(step.args.arc, this._verbs);
 		if (!who || !arc) {
@@ -2319,13 +2580,22 @@ ${dump.message}`, image: dump.image });
 		if (troops.length === 0) {
 			return { ok: false, verb: 'issue', reason: named.length > 0 ? 'issue never lands on the commander' : `${who} picks no unit` };
 		}
+		// Those its think chose to leave at what they are doing.
+		const kept = Array.isArray(step.args.keep) ? step.args.keep as string[] : [];
+		const appended = Array.isArray(step.args.append) ? step.args.append as string[] : [];
+		if (troops.every((c) => kept.includes(c.id))) {
+			return { ok: true, verb: 'issue' };
+		}
 		const maxUnits = collective.maxUnitsPerIssue;
 		if (maxUnits !== undefined && troops.length > maxUnits) {
 			return { ok: false, verb: 'issue', reason: `that is ${troops.length} units; an issue names ${maxUnits === 1 ? 'one' : `at most ${maxUnits}`}` };
 		}
 		const group = typeof step.args.group === 'string' ? step.args.group : undefined;
-		const name = collective.issue(troops, arc, group);
-		this._thinkFn?.({ kind: 'issue', who: issuer.voice.id, to: troops.map((c) => c.id), arc, text: formatArc(arc, this._verbs) });
+		const taking = troops.filter((c) => !kept.includes(c.id) && !c.runs(arc));
+		const name = collective.issue(troops.filter((c) => !kept.includes(c.id)), arc, group, appended);
+		if (taking.length > 0) {
+			this._thinkFn?.({ kind: 'issue', who: issuer.voice.id, to: taking.map((c) => c.id), arc, text: formatArc(arc, this._verbs) });
+		}
 		// A group ordered without its name gets one, and is told it.
 		return name && !group?.trim() ? { ok: true, verb: 'issue', reason: `no group= given: called them ${name}` } : { ok: true, verb: 'issue' };
 	}
@@ -2541,6 +2811,8 @@ ${dump.message}`, image: dump.image });
 			cooldown: spec.cooldown ?? this._cooldownDefault,
 			talk: this.talk,
 			goTo: (target, opts) => this.goTo(runner().id, 'go_to', { target }, opts),
+			aimGroup: (step) => this.aimGroup(runner(), step),
+			walkToGroup: (verb, ids, opts) => this.walkToGroup(runner(), verb, ids, opts),
 			catalog: this._kernelFn ? () => this.runnerCatalog(runner()) : undefined,
 			kit,
 			laws: spec.laws,
@@ -3112,10 +3384,40 @@ ${dump.message}`, image: dump.image });
 			this.tickStanding(row.runner);
 		}
 		for (const row of this._collectiveRows.values()) {
+			// Whatever brought it down, a mind does not go on thinking through it.
+			const commander = row.runner.commander;
+			if (commander && this._world?.isDown?.(commander.id)) {
+				this.fields(row.runner).vacate(commander);
+			}
 			this.tickCollectiveLaws(row.runner);
 		}
 		this.tickHandover();
+		this.tickGoals(dt, minds);
 		this.drain(now);
+	}
+
+	/** Every goal whose `until` holds is reached. As often as watches are sampled: a view per character is not cheap. */
+	private tickGoals(dt:number, minds:readonly Mind<TCtx>[]):void {
+		this._goalClock += dt;
+		if (this._goalClock < GOAL_CHECK_INTERVAL) {
+			return;
+		}
+		this._goalClock = 0;
+		for (const mind of minds) {
+			for (const goal of mind.persona.goals.filter((g) => g.until && this.goalMet(mind.thinkThread(), g.until as NonNullable<Goal<TCtx>['until']>))) {
+				mind.finishGoal(goal);
+			}
+		}
+	}
+
+	/** Whether `until` holds for character `id`, as it sees the world. One without a context yet is not asked. */
+	private goalMet(id:string, until:NonNullable<Goal<TCtx>['until']>):boolean {
+		if (typeof until === 'string') {
+			const r = this.evaluate(id, until);
+			return !r.error && fit(r.value) > 0;
+		}
+		const ctx = this.tryCtx(id);
+		return ctx !== undefined && until(ctx);
 	}
 
 	/** What `mind`'s watches score against: its voice's view, or one view per character of a collective. */
@@ -3209,12 +3511,18 @@ ${dump.message}`, image: dump.image });
 	}
 
 	/** A spec naming a System One or a chat model this director lacks is a typo; caught when it is wired. */
-	private checkNames(spec:{ id:string; systemOne?:string | null; mind?:MindSettings }):void {
+	private checkNames(spec:{ id:string; systemOne?:string | null; mind?:MindSettings; goals?:Goal<TCtx>[] }):void {
 		if (spec.systemOne && !this._systemOnes.has(spec.systemOne)) {
 			throw new Error(`ArcDirector: '${spec.id}' names System One '${spec.systemOne}', which was never added`);
 		}
 		if (spec.mind?.model !== undefined && !this._models.has(spec.mind.model)) {
 			throw new Error(`ArcDirector: '${spec.id}' names model '${spec.mind.model}', which was never added`);
+		}
+		// A typo in a goal's watch would leave it open for good: it throws now, as a law's does, not silently in play.
+		for (const { until } of spec.goals ?? []) {
+			if (typeof until === 'string') {
+				parse(until);
+			}
 		}
 	}
 
@@ -3304,6 +3612,7 @@ ${dump.message}`, image: dump.image });
 			};
 		}
 		this.pollRunner(character, () => character.lawHandlers(), catalog);
+		character.dropFinishedLaws(() => [character.id]);
 	}
 
 	/** A collective's laws on each of its characters, their sessions, and its own session while it has no commander. */
@@ -3332,6 +3641,7 @@ ${dump.message}`, image: dump.image });
 		if (voice === collective) {
 			this.pollRunner(collective, () => [], () => whoCat);
 		}
+		collective.dropFinishedLaws((law) => (lawGroup(law.name) === '' ? evaluateWho(law.who, whoCat, collective).map((c) => c.id) : [lawGroup(law.name)]));
 	}
 
 	/**

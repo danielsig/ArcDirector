@@ -160,6 +160,10 @@ function fillPct(s:HudSpeech):number {
 							<path d="M8.5 6 11.5 3.5v5z" fill="currentColor" />
 							<circle cx="3.2" cy="5.6" r="0.7" fill="#1a1208" />
 						</template>
+						<template v-else-if="defID.endsWith('_key')">
+							<path d="M4 1a3 3 0 1 1 0 6 3 3 0 0 1 0-6zm0 1.6a1.4 1.4 0 1 0 0 2.8 1.4 1.4 0 0 0 0-2.8z" fill="currentColor" fill-rule="evenodd" />
+							<path d="M6 5.6 11 10.6 9.8 11.8 8.6 10.6 7.6 11.6 6.6 10.6 7.4 9.6 4.8 6.8z" fill="currentColor" />
+						</template>
 						<template v-else>
 							<path d="M4.6 6.5h2.8l.5 4.5H4.1z" fill="#efe2c4" />
 							<path d="M1 7c0-3 2.2-5 5-5s5 2 5 5z" fill="currentColor" />
