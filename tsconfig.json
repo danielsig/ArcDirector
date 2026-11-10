@@ -5,7 +5,9 @@
 	"references": [
 		{ "path": "./kindling" },
 		{ "path": "./arc-director" },
-		{ "path": "./game" }
+		{ "path": "./game" },
+		{ "path": "./control" },
+		{ "path": "./mcp" }
 	]
 	// Old single-package shape (replaced):
 	// "compilerOptions": {

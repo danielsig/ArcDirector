@@ -12,12 +12,6 @@ import { slotItem, tryInsert } from '../items/inventory';
 import { spawnWorldItem } from '../world/spawn-item';
 import { PlayerInput } from './PlayerInput';
 
-// A flame or a sprite may load its picture through Three, which needs document. These tests never draw.
-if (!('document' in globalThis)) {
-	const image = { addEventListener():void {}, removeEventListener():void {} };
-	Object.defineProperty(globalThis, 'document', { configurable: true, value: { createElementNS: () => image } });
-}
-
 function person(world:DemoWorld, id:string, x:number):GameObject {
 	const go = new GameObject(id, 'Person');
 	go.transform.localPosition = { x, y: 0, z: 0 };

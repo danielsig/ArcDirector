@@ -16,12 +16,6 @@ import { spawnChunkEntities } from './spawn';
 import { syncDressingColliders } from './dressing-colliders';
 import { cellWays, standableNear } from './path';
 
-// A brazier's flame loads its picture through Three, which needs document. These tests never draw.
-if (!('document' in globalThis)) {
-	const image = { addEventListener():void {}, removeEventListener():void {} };
-	Object.defineProperty(globalThis, 'document', { configurable: true, value: { createElementNS: () => image } });
-}
-
 test('in the ruins, no route ends inside a wall or a pillar, yet a pillar is reached from beside it', () => {
 	const world = new DemoWorld();
 	for (const file of RUINS_CHUNKS) {

@@ -19,7 +19,7 @@
 	"scripts": {
 		"build": "tsc -p tsconfig.json",
 		"typecheck": "tsc -p tsconfig.json --noEmit",
-		"test": "tsc -p tsconfig.json && node --test --test-reporter spec dist/hub.test.js"
+		"test": "tsc -p tsconfig.json && node ../scripts/node-test.mjs"
 	},
 	"dependencies": {
 		"ws": "^8.18.3"

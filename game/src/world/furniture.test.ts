@@ -32,12 +32,6 @@ import { planProps, roadLines } from './dressing-plan';
 import { cellWays } from './path';
 import { spawnChunkEntities } from './spawn';
 
-// A brazier's flame loads its picture through Three, which needs document. These tests never draw.
-if (!('document' in globalThis)) {
-	const image = { addEventListener():void {}, removeEventListener():void {} };
-	Object.defineProperty(globalThis, 'document', { configurable: true, value: { createElementNS: () => image } });
-}
-
 function built(files:readonly ChunkFile[]):DemoWorld {
 	const world = new DemoWorld();
 	for (const file of files) {
