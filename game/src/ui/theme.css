@@ -51,7 +51,7 @@
 	--ease-pop: cubic-bezier(0.3, 1.6, 0.5, 1);
 }
 
-/* A side's colour (`GoalColor`): its goal orbs, its slates, the orders it gives. */
+/* A side's color (`GoalColor`): its goal orbs, its slates, the orders it gives. */
 .hue-gold {
 	--hue: var(--gold);
 	--hue-deep: var(--gold-deep);

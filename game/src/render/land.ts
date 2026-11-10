@@ -81,7 +81,7 @@ type Draws = {
 	rockPos:number[];
 	rockUV:number[];
 	rockIdx:number[];
-	/** Cliff tiles, posed: centre, turn, and scale of the 1 m tile. */
+	/** Cliff tiles, posed: center, turn, and scale of the 1 m tile. */
 	cliffs:{ x:number; y:number; z:number; yaw:number; pitch:number; sx:number; sy:number; sz:number }[];
 	boulders:{ x:number; z:number; s:number; yaw:number }[];
 	/** Trees: whole ones (`trunk`), crowns only, or crowns at low detail (`far`), at a scale. */
@@ -96,13 +96,13 @@ function makeDraws():Draws {
 }
 
 /**
- * A cliff tile as modelled: its width along the wall and where its foot is (local Z). It slopes back from that foot;
+ * A cliff tile as modeled: its width along the wall and where its foot is (local Z). It slopes back from that foot;
  * tipped forward on it by `pitch` it stands upright, `up` tall (at scale 1), its rock bulging out past the foot.
  */
 const CLIFF_TILE_SIZE = { across: 0.59, foot: 0.47, pitch: 0.775, up: 1.385 };
 /** How far a cliff tile's foot sinks into the ground below, so no sliver of sky shows under it. */
 const CLIFF_SINK = 0.05;
-/** How much neighbouring cliff tiles overlap, so their edges hide each other. */
+/** How much neighboring cliff tiles overlap, so their edges hide each other. */
 const CLIFF_OVERLAP = 1.03;
 /** Cliffs lower than this are a flat rock step, not cliff tiles (which would lie nearly flat). */
 const CLIFF_MIN = 0.6;
@@ -342,7 +342,7 @@ function faceBetween(d:Draws, a:FaceSide, b:FaceSide):void {
 		const sx = (len / across / CLIFF_TILE_SIZE.across) * CLIFF_OVERLAP;
 		for (const [end, other] of [[p, q], [q, p]] as const) {
 			const side = Math.sign((end.x - other.x) * Math.cos(yaw) - (end.z - other.z) * Math.sin(yaw)) || 1;
-			// The end tile's centre, then out along the row to where its end reaches.
+			// The end tile's center, then out along the row to where its end reaches.
 			const toEnd = { x: (end.x - other.x) / len, z: (end.z - other.z) / len };
 			const reach = len / across / 2 - capOutline(side).edge * sx;
 			pushRockCap(d, { x: end.x - toEnd.x * reach, z: end.z - toEnd.z * reach }, out, y0, scale, side);
@@ -366,14 +366,14 @@ function faceBetween(d:Draws, a:FaceSide, b:FaceSide):void {
 	}
 }
 
-/** How far trees beside a trail stand from its centre line: trunks just off the cobbles (half a meter wide each side). */
+/** How far trees beside a trail stand from its center line: trunks just off the cobbles (half a meter wide each side). */
 const TRAIL_TREE = 0.8;
 
 /** Packed crowns over a forest box, far from the map sparser and bigger, so no ground shows between them. */
 function scatterForest(d:Draws, r:LandRect, map:Rect, y:number, clear:Rect[]):void {
 	const spacing = (dist:number):number => 1.7 + dist * 0.1;
 	const beyond = (v:number, lo:number, hi:number):number => Math.max(lo - v, v - hi, 0);
-	/** Centres across `lo`–`hi` from the end nearer the map: spaced by distance past `mapLo`–`mapHi`, or every `fixed` meters. */
+	/** Centers across `lo`–`hi` from the end nearer the map: spaced by distance past `mapLo`–`mapHi`, or every `fixed` meters. */
 	const steps = (lo:number, hi:number, mapLo:number, mapHi:number, fixed?:number):number[] => {
 		const out:number[] = [];
 		const dir = beyond(lo, mapLo, mapHi) <= beyond(hi, mapLo, mapHi) ? 1 : -1;
@@ -544,7 +544,7 @@ function addDraws(group:THREE.Group, d:Draws):void {
 
 /**
  * The chunk's landforms: clifftops (meadow or river), forest floor and its trees, and a rock face down to every
- * lower neighbour on the map (the outskirts face the ones past its edge). Boulders lie at the foot of tall faces.
+ * lower neighbor on the map (the outskirts face the ones past its edge). Boulders lie at the foot of tall faces.
  */
 export function addLandforms(group:THREE.Group, chunk:Chunk, tileAtWorld:(x:number, z:number)=>Tile | undefined):void {
 	const d = makeDraws();
@@ -619,7 +619,7 @@ function shadeAlpha(depth:number):number {
 	return Math.min(1, depth / SHADE_DEPTH) ** 0.7;
 }
 
-/** The colour the woods go to: the deep green of a forest floor out of the sun. */
+/** The color the woods go to: the deep green of a forest floor out of the sun. */
 const shadeMat = new THREE.MeshBasicMaterial({
 	color: 0x0b2410,
 	vertexColors: true,

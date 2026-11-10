@@ -60,7 +60,7 @@ function wedge(fill:number):string {
 			</defs>
 
 			<!--
-				Cel shading, flat colours and hard edges: a shadow over the whole heart, its lit facet over the left, then
+				Cel shading, flat colors and hard edges: a shadow over the whole heart, its lit facet over the left, then
 				a sharp glint. Empty first, then the lit share of it in crimson.
 			-->
 			<g :clip-path="`url(#heart${i}-shape)`">

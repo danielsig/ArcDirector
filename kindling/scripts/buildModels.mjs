@@ -559,7 +559,7 @@ function splitPieces(doc, name) {
 				if (turn) {
 					turnPrim(piece, turn);
 				}
-				// The foot's middle: centred on the ground, standing on its lowest point.
+				// The foot's middle: centered on the ground, standing on its lowest point.
 				const pos = piece.getAttribute('POSITION');
 				const min = [Infinity, Infinity, Infinity];
 				const max = [-Infinity, -Infinity, -Infinity];

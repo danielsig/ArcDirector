@@ -162,8 +162,8 @@ export function pointGoal(to:Vec, near = 0):RouteGoal {
 }
 
 /**
- * Near a group standing at `points` (at least one): within its spread of its median centre, or `floor` for a tight group.
- * The spread is the root mean square of each one's distance from that centre, one standard deviation of where they stand.
+ * Near a group standing at `points` (at least one): within its spread of its median center, or `floor` for a tight group.
+ * The spread is the root mean square of each one's distance from that center, one standard deviation of where they stand.
  */
 export function groupGoal(points:readonly Vec[], floor:number):RouteGoal {
 	const center = points[0].map((element, axis) => {

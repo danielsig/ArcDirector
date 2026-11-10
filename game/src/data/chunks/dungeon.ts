@@ -112,7 +112,7 @@ export const DUNGEON_CHUNKS:ChunkFile[] = splitGlyphMap('dungeon', {
 	'm': { kind: 'entity', def: 'moon_window' },
 	// Where the window's moonlight lands: on the torch in the cell west of it.
 	'o': { kind: 'entity', def: 'moonlight', offset: { x: -1.2, z: 1.4 } },
-	// The stairwell's moonlight: from its top, centred on the flight, onto the floor at its foot.
+	// The stairwell's moonlight: from its top, centered on the flight, onto the floor at its foot.
 	'n': { kind: 'entity', def: 'moonbeam', over: '2', offset: { x: 0.5, z: 0.4 } },
 	'O': { kind: 'entity', def: 'moonbeam_target', offset: { x: 0.5, z: 0.45 } },
 }, DUNGEON_ROWS, {

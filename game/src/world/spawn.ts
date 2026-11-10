@@ -134,7 +134,7 @@ function falloff(d:number, range:number):number {
 	return Math.max(0, 1 - (d / range) ** 4) ** 2 / Math.max(d ** MOON_DECAY, 0.01);
 }
 
-/** Where a glyph entity stands: its cell's centre moved by its `offset`, on its tile's top. */
+/** Where a glyph entity stands: its cell's center moved by its `offset`, on its tile's top. */
 function entityPoint(chunk:Chunk, ent:ChunkEntity):{ x:number; y:number; z:number } {
 	const center = chunk.worldCellCenter(ent.localX, ent.localZ);
 	return {

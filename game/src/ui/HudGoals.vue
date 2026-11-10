@@ -26,7 +26,7 @@ type Segment = { key:string; progress:number; from:Side | null; color:GoalColor 
 /** How long a just-reached orb plays its level-up burst, ms. Matches the longest animation below. */
 const BURST_MS = 1400;
 
-/** Runes carved into the orbs, one per orb in turn, drawn round the orb's centre (0, 0). */
+/** Runes carved into the orbs, one per orb in turn, drawn round the orb's center (0, 0). */
 const RUNES = [
 	'M0,5V-5M0,-1L-4,-5M0,-1L4,-5',			// Algiz
 	'M-2,5V-5L3,-2M-2,-1L3,2',				// Fehu
@@ -47,7 +47,7 @@ function points(o:Orb):number[] {
 /** Circumference of the setting's ring, which fills with the goal's own progress. */
 const RING = 2 * Math.PI * 16.5;
 
-/** Keyed by colour, not end, so an orb stays itself when the two sides swap ends. */
+/** Keyed by color, not end, so an orb stays itself when the two sides swap ends. */
 function orbsOf(side:Side):Orb[] {
 	const { color, goals } = props.hud.goals[side];
 	return goals.map((g, i) => ({ key: `${color}${i}`, name: g.name, progress: g.progress, done: g.progress >= 1, side, color, index: i }));
@@ -88,7 +88,7 @@ const ORB = 40;
 const LINE_MAX = 28;
 const LINE_MIN = 8;
 const CLEAR = 12;
-/** Same row as the hearts and the back and restart buttons: 40px tall from here, centres level. */
+/** Same row as the hearts and the back and restart buttons: 40px tall from here, centers level. */
 const TOP = 10;
 
 const root = ref<HTMLElement | null>(null);
@@ -160,7 +160,7 @@ const SWAP_MS = 900;
 const SWAP_ARC = 26;
 
 const orbEls = new Map<string, HTMLElement>();
-/** Both colours while two sides trade ends: the clash where they pass each other shows them both. */
+/** Both colors while two sides trade ends: the clash where they pass each other shows them both. */
 const swapping = ref<[GoalColor, GoalColor] | null>(null);
 let swapTimer:ReturnType<typeof setTimeout> | undefined;
 
@@ -175,7 +175,7 @@ function orbRef(key:string, el:unknown):void {
 
 /**
  * When the two sides trade ends, every orb flies to its new place: those heading right arc over, those heading left
- * under, so the two lines pass each other, and a flash of both colours breaks where they cross.
+ * under, so the two lines pass each other, and a flash of both colors breaks where they cross.
  */
 watch(() => `${props.hud.goals.left.color}|${props.hud.goals.right.color}`, (now, before) => {
 	const [left, right] = now.split('|') as [GoalColor, GoalColor];
@@ -365,7 +365,7 @@ onBeforeUnmount(() => {
 	animation: refill 900ms ease-in-out;
 }
 
-/* Where the two sides pass each other mid-swap: a white flash, and a ring of each side's colour spreading from it. */
+/* Where the two sides pass each other mid-swap: a white flash, and a ring of each side's color spreading from it. */
 .clash {
 	position: absolute;
 	z-index: 3;
@@ -472,7 +472,7 @@ onBeforeUnmount(() => {
 	fill: var(--ink);
 }
 
-/* Glass: smoky and dim with a hint of its side's colour until reached, then lit from within */
+/* Glass: smoky and dim with a hint of its side's color until reached, then lit from within */
 .glass-a {
 	stop-color: #8a7890;
 }

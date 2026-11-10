@@ -3,7 +3,7 @@ import { CELL_SIZE } from './constants';
 import type { RoofStyle } from './decodeGlyphChunk';
 import { THIN_WALLS, WALL_THICKNESS } from './thinWall';
 
-/** Where a door is (its cell's world centre) and which way is out (`dx`, `dz`, one of them ±1). */
+/** Where a door is (its cell's world center) and which way is out (`dx`, `dz`, one of them ±1). */
 export type DoorAnchor = { x:number; z:number; dx:number; dz:number };
 
 /** A box on the ground, world XZ meters. */

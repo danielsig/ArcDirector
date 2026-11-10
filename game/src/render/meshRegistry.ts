@@ -720,7 +720,7 @@ function roofV(z:number):number {
 	return (z - ROOF_BACK_Z) / (ROOF_FRONT_Z - ROOF_BACK_Z);
 }
 
-/** Centre Y of a 6 cm cross beam at `z`, clear of the canvas where it sags lowest. */
+/** Center Y of a 6 cm cross beam at `z`, clear of the canvas where it sags lowest. */
 function beamY(z:number):number {
 	return roofPlaneY(z) - AWNING_SAG * Math.sin(Math.PI * roofV(z)) - 0.06;
 }
@@ -943,7 +943,7 @@ function createCobwebMesh():THREE.Group {
 /**
  * A barred window cut through its wall (the chunk mesh cuts the opening), its face toward +Z: iron bars across the
  * opening on the wall face, casting the moonlight's shadow, the opening's stone aglow with it, and a wall's thickness
- * back, night sky. Bars and sky unlit: the moonlight behind the bars would leave their faces dark. Centred on the opening; it sits on the wall face.
+ * back, night sky. Bars and sky unlit: the moonlight behind the bars would leave their faces dark. Centered on the opening; it sits on the wall face.
  */
 function createMoonWindowMesh():THREE.Group {
 	const g = new THREE.Group();

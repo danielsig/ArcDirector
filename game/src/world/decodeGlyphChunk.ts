@@ -25,7 +25,7 @@ export type EntityLegend = {
 	chimney?:boolean;
 	/** Radians. Turns a prop glyph or a stall; otherwise it faces off a wall it stands against. */
 	yaw?:number;
-	/** Meters (world X, Z) a prop glyph stands off its cell's centre: a chair drawn up to a table, oars on a wall. */
+	/** Meters (world X, Z) a prop glyph stands off its cell's center: a chair drawn up to a table, oars on a wall. */
 	offset?:{ x:number; z:number, y?:number };
 	/** A rock in water: how its ripples trail. Omitted, the current draws them, or in still water they spread all round. */
 	wake?:Wake;

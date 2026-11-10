@@ -388,7 +388,7 @@ describe('stock RTS verbs', () => {
 		director.dispose();
 	});
 
-	it('researches once, and refunds what is cancelled', async () => {
+	it('researches once, and refunds what is canceled', async () => {
 		const game = new Game();
 		const director = await start(game);
 		assert.equal((await enact(director, 'Chief', 'research(what=Forging)')).ok, true);

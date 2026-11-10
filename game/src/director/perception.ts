@@ -192,8 +192,8 @@ function seenPoint(go:GameObject, observer?:GameObject):number[] {
 	const sizeX = across ? size.z : size.x;
 	const sizeZ = across ? size.x : size.z;
 	const o = observer.transform.position;
-	const along = (centre:number, half:number, at:number):number => Math.min(centre + half - SEEN_INSET, Math.max(centre - half + SEEN_INSET, at));
-	const face = (centre:number, half:number, at:number):number => centre + Math.sign(at - centre) * (half + SEEN_OUTSET);
+	const along = (center:number, half:number, at:number):number => Math.min(center + half - SEEN_INSET, Math.max(center - half + SEEN_INSET, at));
+	const face = (center:number, half:number, at:number):number => center + Math.sign(at - center) * (half + SEEN_OUTSET);
 	return sizeX >= sizeZ
 		? [along(p.x, sizeX / 2, o.x), face(p.z, sizeZ / 2, o.z)]
 		: [face(p.x, sizeX / 2, o.x), along(p.z, sizeZ / 2, o.z)];

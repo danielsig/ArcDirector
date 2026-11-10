@@ -1,14 +1,14 @@
 ---
-description: How to fix NPC behaviour. Read the AI log first; fix facts, laws, and verbs before prompt wording.
+description: How to fix NPC behavior. Read the AI log first; fix facts, laws, and verbs before prompt wording.
 alwaysApply: true
 ---
 
 # NPC prompt tuning
 
-Learned tuning the dungeon crawl on small models. When NPC behaviour looks wrong, read `game/.ai-log.txt` first (thinks, `Last verb result`, sight, short-term memory). The cause is usually there.
+Learned tuning the dungeon crawl on small models. When NPC behavior looks wrong, read `game/.ai-log.txt` first (thinks, `Last verb result`, sight, short-term memory). The cause is usually there.
 
-- Diagnose in the log before touching prompts. Most "stupid" behaviour was a bug feeding the model a wrong fact: a blade on a web returned `cut` while nothing happened, a widened web was hidden from all sight, a refused `say` read like a wrong answer, a solved riddle stayed in sight. Fix the fact, not the wording.
-- Laws outrank thinks. In a fight, behaviour comes from pinned laws and the verbs they call (`attack()`, `protect`), not from what a think writes. Fix the law or the verb (move choice, screening, regroup watch), not the prompt.
+- Diagnose in the log before touching prompts. Most "stupid" behavior was a bug feeding the model a wrong fact: a blade on a web returned `cut` while nothing happened, a widened web was hidden from all sight, a refused `say` read like a wrong answer, a solved riddle stayed in sight. Fix the fact, not the wording.
+- Laws outrank thinks. In a fight, behavior comes from pinned laws and the verbs they call (`attack()`, `protect`), not from what a think writes. Fix the law or the verb (move choice, screening, regroup watch), not the prompt.
 - Goal order is sequence. A goal below another reads as "after it". Put the current step first. One quest line on top, for the leader only.
 - Cap open-ended "set laws / learn from mistakes" goals. They cause long silent thinks (600+ tokens, numbered lists). One new law per think at most, none for what a law already covers. A wound in a fight is no mistake.
 - A goal that names something the model cannot see sends it searching (`recall` / `see_map` / `think` loops). Tell it the goal below is always the way on.

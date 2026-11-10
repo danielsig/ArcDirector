@@ -264,8 +264,8 @@ describe('loading bar', () => {
 			showLoadingBar(stopped, model);
 			const button = body.children[0].children[0].children[2] as FakeNode & { onclick?:()=>void };
 			button.onclick?.();
-			assert.equal(stopped.cancelled, true);
-			assert.equal(body.children.length, 0, 'a cancelled download takes its bar with it');
+			assert.equal(stopped.canceled, true);
+			assert.equal(body.children.length, 0, 'a canceled download takes its bar with it');
 		}
 		finally {
 			delete (globalThis as { document?:unknown }).document;

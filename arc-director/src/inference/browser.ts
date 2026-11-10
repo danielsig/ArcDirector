@@ -408,7 +408,7 @@ export class BrowserProvider implements InferenceProvider {
 				await wllama.loadModelFromUrl(model, {
 					...params,
 					useCache: false,
-					// A cancelled download stops fetching; the load fails, and the next asks again.
+					// A canceled download stops fetching; the load fails, and the next asks again.
 					signal,
 					progressCallback: ({ loaded, total }) => report?.({
 						progress: total > 0 ? loaded / total : 0,

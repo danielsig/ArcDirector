@@ -73,7 +73,7 @@ test('off the middle of a cell, a route does not leave through what stands in th
 	assert.ok(away && !away.blocked, 'no step off the chair');
 });
 
-test('a stair is a neighbour only along its climb, not from the side', () => {
+test('a stair is a neighbor only along its climb, not from the side', () => {
 	const world = new World();
 	const chunk = decodeGlyphChunk(market_1_0).chunk;
 	world.addChunk(chunk);

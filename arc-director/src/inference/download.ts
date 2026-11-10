@@ -19,11 +19,11 @@ export type DownloadSubscription = {
 	readonly closed:boolean;
 };
 
-/** How a download that was cancelled ({@link ModelDownload.cancel}) ends: not a failure to show anyone. */
-export class DownloadCancelled extends Error {
+/** How a download that was canceled ({@link ModelDownload.cancel}) ends: not a failure to show anyone. */
+export class DownloadCanceled extends Error {
 	constructor() {
-		super('the download was cancelled');
-		this.name = 'DownloadCancelled';
+		super('the download was canceled');
+		this.name = 'DownloadCanceled';
 	}
 }
 
@@ -47,19 +47,19 @@ export class ModelDownload {
 	}
 
 	/**
-	 * Stops it while it is under way: it ends at once, failed with a {@link DownloadCancelled}, and what was fetched so
+	 * Stops it while it is under way: it ends at once, failed with a {@link DownloadCanceled}, and what was fetched so
 	 * far is dropped. Every model sharing it stops too. Nothing once it has ended.
 	 */
 	public cancel():void {
 		if (this._state === 'pending') {
 			this._abort.abort();
-			this.finish('failed', new DownloadCancelled());
+			this.finish('failed', new DownloadCanceled());
 		}
 	}
 
 	/** Whether it ended by {@link cancel}. */
-	public get cancelled():boolean {
-		return this._error instanceof DownloadCancelled;
+	public get canceled():boolean {
+		return this._error instanceof DownloadCanceled;
 	}
 
 	public get progress():DownloadProgress {
@@ -119,7 +119,7 @@ export class ModelDownload {
 	}
 
 	private finish(state:'done' | 'failed', err?:unknown):void {
-		// A cancelled one has ended already; its job ending after is nothing new.
+		// A canceled one has ended already; its job ending after is nothing new.
 		if (this._state !== 'pending') {
 			return;
 		}

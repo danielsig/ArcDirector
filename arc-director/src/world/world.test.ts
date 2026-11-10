@@ -612,7 +612,7 @@ describe('stock world verbs', () => {
 
 	describe('a verb aimed at a group', () => {
 		const GROUP = ['Mira', 'Bo', 'Smith'];
-		/** Ann at the origin and the group 10 east, 4 apart: its centre is [10, 0], its spread about 3.3. */
+		/** Ann at the origin and the group 10 east, 4 apart: its center is [10, 0], its spread about 3.3. */
 		const groupGrid = (annAt:Vec = [0, 0]):Grid => new Grid().place('Ann', annAt).place('Mira', [10, 0]).place('Bo', [10, 4]).place('Smith', [10, -4]);
 		const SPREAD = Math.sqrt(32 / 3);
 		/** Talk where `range` is earshot and no one makes out a word, so only the group's own distance ends a walk. */
@@ -633,7 +633,7 @@ describe('stock world verbs', () => {
 			},
 		});
 
-		it('walks near its median centre once, then says the line once to all of them', async () => {
+		it('walks near its median center once, then says the line once to all of them', async () => {
 			const grid = groupGrid();
 			const said:(string | string[] | undefined)[] = [];
 			const { director } = await ask(grid, 'say(text=Hold fast, to=others)', undefined, said);
@@ -774,9 +774,9 @@ describe('stock world verbs', () => {
 		});
 	});
 
-	it('groupGoal: median centre, spread, and a floor for a tight group', () => {
+	it('groupGoal: median center, spread, and a floor for a tight group', () => {
 		const goal = groupGoal([[0, 0], [2, 0], [100, 0]], 1);
-		assert.deepEqual(goal.at, [2, 0], 'a straggler does not drag the centre');
+		assert.deepEqual(goal.at, [2, 0], 'a straggler does not drag the center');
 		const tight = groupGoal([[5, 5], [5, 5]], 1);
 		assert.equal(tight.reached([5.9, 5]), true);
 		assert.equal(tight.reached([6.1, 5]), false);

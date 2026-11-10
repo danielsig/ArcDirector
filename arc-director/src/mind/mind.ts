@@ -372,9 +372,9 @@ export class Mind<TCtx = unknown> {
 	public autoEnact = true;
 	public onChoose:((arc:Arc)=>void) | undefined;
 	private _onGoalReached:MindDeps['onGoalReached'];
-	private thinkWatch:MindDeps['thinkWatch'];
-	private replacing:MindDeps['replacing'];
-	private arcProblem:MindDeps['arcProblem'];
+	private _thinkWatch:MindDeps['thinkWatch'];
+	private _replacing:MindDeps['replacing'];
+	private _arcProblem:MindDeps['arcProblem'];
 	/** Who the think under way began for. */
 	private _thinkingAs = '';
 	public queue:MindQueue | undefined;
@@ -498,9 +498,9 @@ export class Mind<TCtx = unknown> {
 		this.autoEnact = deps.autoEnact ?? true;
 		this.onChoose = deps.onChoose;
 		this._onGoalReached = deps.onGoalReached;
-		this.thinkWatch = deps.thinkWatch;
-		this.replacing = deps.replacing;
-		this.arcProblem = deps.arcProblem;
+		this._thinkWatch = deps.thinkWatch;
+		this._replacing = deps.replacing;
+		this._arcProblem = deps.arcProblem;
 		this.queue = deps.queue;
 		this.stalled = deps.stalled;
 		this.modelID = deps.modelID ?? '';
@@ -1247,7 +1247,7 @@ export class Mind<TCtx = unknown> {
 			return `${unbound.map((name) => `${name}()`).join(', ')} is not a watch function`;
 		}
 		// With no repair turn to send it back on, it runs as written and its verbs say what went wrong.
-		return this.arcRetryCap > 0 ? this.arcProblem?.(arc) : undefined;
+		return this.arcRetryCap > 0 ? this._arcProblem?.(arc) : undefined;
 	}
 
 	/**
@@ -1508,7 +1508,7 @@ export class Mind<TCtx = unknown> {
 				continue;
 			}
 			// Whole, for a server that does not stream.
-			if (this.thinkWatch?.()) {
+			if (this._thinkWatch?.()) {
 				this.showThink({ kind: 'reply', thought: res.reasoning ?? '', arc: arcSoFar(res.content ?? '', verbs) ?? '' });
 			}
 			// The thinking budget cut the thought short: answer from it, without thinking again.
@@ -1657,7 +1657,7 @@ export class Mind<TCtx = unknown> {
 	 * lost either way.
 	 */
 	private async askReplace(arc:Arc, content:string, messages:ChatMessage[]):Promise<Arc> {
-		const cut = this.replacing?.(arc) ?? [];
+		const cut = this._replacing?.(arc) ?? [];
 		if (cut.length === 0) {
 			return arc;
 		}
@@ -1712,7 +1712,7 @@ export class Mind<TCtx = unknown> {
 	 * think, and every event of one think must reach the one watching it, its end above all.
 	 */
 	private showThink(event:ThinkEventFor):void {
-		this.thinkWatch?.()?.({ ...event, who: this._thinkingAs } as ThinkEvent);
+		this._thinkWatch?.()?.({ ...event, who: this._thinkingAs } as ThinkEvent);
 	}
 
 	/**
@@ -1730,7 +1730,7 @@ export class Mind<TCtx = unknown> {
 				stop.abort(new ArcError(why));
 				return;
 			}
-			if (this.thinkWatch?.()) {
+			if (this._thinkWatch?.()) {
 				thought += reasoning ?? '';
 				arc = (content ? arcSoFar(written.text, verbs) : undefined) ?? arc;
 				this.showThink({ kind: 'reply', thought, arc });

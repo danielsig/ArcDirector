@@ -70,7 +70,7 @@ export class World {
 	private _timers:{ at:number; fn:()=>void }[] = [];
 	/** Spatial hash: objects by the tile under their position, as of the last `reindex`. */
 	private _tiles = new Map<number, GameObject[]>();
-	/** Widest collider half-extent plus pad, so `forEachNear` finds boxes centred outside its area. */
+	/** Widest collider half-extent plus pad, so `forEachNear` finds boxes centered outside its area. */
 	private _reach = 0;
 
 	public sampleTerrain(x:number, z:number):TerrainSample | undefined {
@@ -219,7 +219,7 @@ export class World {
 		return this._tiles.get(tileKey(tx, tz)) ?? NONE;
 	}
 
-	/** Every object whose collider may overlap the XZ box, plus the uncollided ones centred in it. Check exactly. */
+	/** Every object whose collider may overlap the XZ box, plus the uncollided ones centered in it. Check exactly. */
 	public forEachNear(minX:number, minZ:number, maxX:number, maxZ:number, fn:(go:GameObject)=>void):void {
 		const size = this.tileSize || 1;
 		const r = this._reach;

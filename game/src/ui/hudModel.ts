@@ -121,7 +121,7 @@ export type HudGoal = {
 
 export type GoalColor = 'gold' | 'blue' | 'red';
 
-/** One side's goals, in the order reached, and the colour its orbs glow. Two sides of a track differ in colour. */
+/** One side's goals, in the order reached, and the color its orbs glow. Two sides of a track differ in color. */
 export type HudGoalSide = {
 	color:GoalColor;
 	goals:HudGoal[];

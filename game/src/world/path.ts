@@ -11,7 +11,7 @@ const OCCUPANT_COST = 8;
 const EYE_HEIGHT = 1.5;
 
 /** The eight steps to the cells around one, clockwise from east. */
-const NEIGHBOURS = [[1, 0], [1, 1], [0, 1], [-1, 1], [-1, 0], [-1, -1], [0, -1], [1, -1]];
+const NEIGHBORS = [[1, 0], [1, 1], [0, 1], [-1, 1], [-1, 0], [-1, -1], [0, -1], [1, -1]];
 
 function characterIn(world:World, tx:number, tz:number, except?:GameObject):GameObject | undefined {
 	return world.objectsInTile(tx, tz).find((go) => go !== except && go.getComponent(HumanBody)?.enabled);
@@ -130,26 +130,26 @@ export function lineClear(world:World, what:'light' | 'sound', a:{ x:number; z:n
 
 /** Whether `body` could walk straight from `a` to `b`, every step open: no wall, no web, no shut door on the line. */
 export function walkClear(world:World, body:GameObject, a:{ x:number; z:number }, b:{ x:number; z:number }):boolean {
-	const centre = ({ tx, tz }:Cell):Vec => {
+	const center = ({ tx, tz }:Cell):Vec => {
 		const { x, z } = world.tileCenter(tx, tz);
 		return [x, z];
 	};
 	return alongLine(world, a, b, (from, to) => {
-		const step = walk(world, body, centre(from), centre(to));
+		const step = walk(world, body, center(from), center(to));
 		return !!step && !step.blocked;
 	});
 }
 
 /**
- * The game's grid as ArcDirector walks and looks across it: a cell's eight neighbours, and what gets from one point
- * to another. A stair is a neighbour only along its climb, not off the sides. A body steps where it would run into
+ * The game's grid as ArcDirector walks and looks across it: a cell's eight neighbors, and what gets from one point
+ * to another. A stair is a neighbor only along its climb, not off the sides. A body steps where it would run into
  * nothing; light and sound go straight over what stands lower than the eyes, and light stops at bodies.
  */
 export function cellWays(world:World):RouteWorld<GameObject> {
 	return {
 		getNeighbors: (point) => {
 			const { tx, tz } = world.tileCoordAt(point[0], point[1]);
-			return NEIGHBOURS.flatMap(([dx, dz]) => {
+			return NEIGHBORS.flatMap(([dx, dz]) => {
 				const { x, z } = world.tileCenter(tx + dx, tz + dz);
 				const next:Vec = [x, z];
 				return alongClimb(world, point, next) ? [next] : [];
@@ -177,7 +177,7 @@ export function canStand(world:World, body:GameObject, x:number, z:number):boole
 const STANDABLE_RINGS = 2;
 
 /**
- * `point`, or, when `body` has no open step onto it (a wall, a pillar, a ledge), the nearest cell centre around it
+ * `point`, or, when `body` has no open step onto it (a wall, a pillar, a ledge), the nearest cell center around it
  * that it has. For spots worked out by geometry (a rank line, a guard's screen), which may fall in a wall.
  * `point` when none is near.
  */

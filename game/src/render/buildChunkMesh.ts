@@ -249,7 +249,7 @@ function addSlabs(group:THREE.Group, mat:THREE.Material, slabs:Slab[], castShado
 	});
 }
 
-/** A box spanning `u0`–`u1` along a wall run and `y0`–`y1` up, `depth` thick, about the cell's centre line. */
+/** A box spanning `u0`–`u1` along a wall run and `y0`–`y1` up, `depth` thick, about the cell's center line. */
 function runSlab(center:{ x:number; z:number }, run:'x' | 'z', u0:number, u1:number, y0:number, y1:number, depth:number):Slab {
 	const across = { min: -depth / 2, max: depth / 2 };
 	const [ax, az] = run === 'x' ? [{ min: u0, max: u1 }, across] : [across, { min: u0, max: u1 }];
@@ -707,7 +707,7 @@ function clipToBox(pts:Point[], x0:number, z0:number, x1:number, z1:number):Poin
 }
 
 /**
- * The road over this chunk's lawn: everything within {@link ROAD_HALF_WIDTH} of its centre lines, the lines
+ * The road over this chunk's lawn: everything within {@link ROAD_HALF_WIDTH} of its center lines, the lines
  * blended so inside corners curve. Outside corners and dead ends come out round. Drawn only on lawn, so
  * it stops square at a door or bridge it runs into.
  */

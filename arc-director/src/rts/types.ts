@@ -62,7 +62,7 @@ export type RTSHost = {
 	 * the library traces. Its id, or why not (blocked, taken).
 	 */
 	placeSite(kind:string, near:string | undefined, builder:string, at?:Vec):string | { reason:string };
-	/** Take an unfinished site down. Without it, only queued things can be cancelled. */
+	/** Take an unfinished site down. Without it, only queued things can be canceled. */
 	removeSite?(site:string):void;
 	/** `seconds` of `unit`'s work at `target`: harvest a node, build a site, repair, or work a job. */
 	work(unit:string, target:string, seconds:number):WorkDone;

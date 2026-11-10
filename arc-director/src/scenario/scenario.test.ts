@@ -333,7 +333,7 @@ describe('scene play', () => {
 	});
 
 	it('cuts a verb that ends later short for a reaction, aborting its work, and runs it again from the start after', async () => {
-		let cancelled = 0;
+		let canceled = 0;
 		let hit = false;
 		const kneels:{ until:number; done:(text:string)=>void }[] = [];
 		const s:Scenario = {
@@ -346,7 +346,7 @@ describe('scene play', () => {
 						const kneel = { until: w.time + 3, done };
 						kneels.push(kneel);
 						signal.addEventListener('abort', () => {
-							cancelled += 1;
+							canceled += 1;
 							kneels.splice(kneels.indexOf(kneel), 1);
 						});
 					}),
@@ -366,7 +366,7 @@ describe('scene play', () => {
 			done: (w) => w.near('Ash', 'Flag'),
 		};
 		const end = await playScenario(s, scripted('when(watch=isHurt(me), arc=patch()) ; kneel() && go_to(Flag)'));
-		assert.equal(cancelled, 1, 'the hit cut the kneel short, and its work stopped');
+		assert.equal(canceled, 1, 'the hit cut the kneel short, and its work stopped');
 		assert.equal(end.done, true, 'knelt again in full, then went on');
 		assert.ok(end.at >= 4, `the second kneel took its whole 3 s (${end.at})`);
 	});

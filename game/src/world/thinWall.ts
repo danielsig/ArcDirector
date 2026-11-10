@@ -4,8 +4,8 @@ import type { Chunk, Tile } from './Chunk';
 
 /**
  * Thin walls: a wall one board thick down the middle of its cell, not a solid block. Which sides it runs out
- * to comes from its neighbours, so one map glyph gives all 16 shapes (a post, an end, a run, a corner, a T, a
- * cross). The wall line goes through cell centres, so doors, routes and sight stay on the grid: the cell is
+ * to comes from its neighbors, so one map glyph gives all 16 shapes (a post, an end, a run, a corner, a T, a
+ * cross). The wall line goes through cell centers, so doors, routes and sight stay on the grid: the cell is
  * still `blocked`, and only bodies (`TerrainSample.solids`) and the floor see how thin the wall is.
  */
 

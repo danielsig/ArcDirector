@@ -19,7 +19,7 @@ export { chatContentText, DEFAULT_SAMPLING, type Sampling } from './inference/pr
 export { showLoadingBar, type LoadingBarOptions } from './inference/loadingBar.js';
 export { BROWSER_DECISION_MODELS, browserModelURL, BrowserProvider, DEFAULT_BROWSER_MODEL, Skaldic, SKALDIC_BROWSER_MODELS, inPageFetch, type BrowserProviderOptions } from './inference/browser.js';
 export { fittingModel, gpuMemory, memoryOf, type GPUMemory } from './inference/device.js';
-export { DownloadCancelled, ModelDownload, type DownloadObserver, type DownloadProgress, type DownloadSubscription } from './inference/download.js';
+export { DownloadCanceled, ModelDownload, type DownloadObserver, type DownloadProgress, type DownloadSubscription } from './inference/download.js';
 export { HttpProvider, parseChatTimings, mergeClientTimings, loadConfigFits, type HttpProviderConfig, type HttpLoadConfig, type ModelSettings, type ReasoningEffort, REASONING_EFFORTS, serverRoot } from './inference/http.js';
 export {
 	type ApplyPromptTemplate,

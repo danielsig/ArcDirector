@@ -7,7 +7,7 @@ const props = defineProps<{
 	tool:string;
 }>();
 
-/** What each known tool says under its icon, and the colour of its glass; any other is a look-up. */
+/** What each known tool says under its icon, and the color of its glass; any other is a look-up. */
 const LOOKS:Record<string, { word:string; hue:string; icon:'map' | 'memory' | 'eye' | 'ear' }> = {
 	see_map: { word: 'Map', hue: '#e9c46a', icon: 'map' },
 	recall: { word: 'Memory', hue: '#c9a6ff', icon: 'memory' },
@@ -27,7 +27,7 @@ const word = computed(() => look.value?.word ?? props.tool.replace(/_/g, ' '));
 		<span class="gem">
 			<HudBurst :sparks="6" />
 			<svg viewBox="0 0 40 40" width="40" height="40" aria-hidden="true">
-				<!-- Cut like the hearts: flat colours, a hard diagonal facet, a sharp glint and a heavy ink line. -->
+				<!-- Cut like the hearts: flat colors, a hard diagonal facet, a sharp glint and a heavy ink line. -->
 				<defs>
 					<clipPath :id="clip"><path d="M20,2L34,8L38,22L28,36H12L2,22L6,8Z" /></clipPath>
 				</defs>
@@ -70,7 +70,7 @@ const word = computed(() => look.value?.word ?? props.tool.replace(/_/g, ' '));
 
 <style scoped>
 /*
- * A cut gem over the head of whoever just called a tool, in the hearts' cel shading, its glass the tool's own colour.
+ * A cut gem over the head of whoever just called a tool, in the hearts' cel shading, its glass the tool's own color.
  * Pops in like a speech bubble and bursts like a goal orb reached, so it reads from across the screen.
  */
 .hud-tool-badge {

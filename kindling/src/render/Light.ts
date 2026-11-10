@@ -181,7 +181,7 @@ export class Light extends Component {
 			p.name = 'castLight';
 			p.castShadow = false;
 			// No depth bias: a perspective depth map's precision falls with distance, so a fixed depth bias lifted far
-			// shadows half a meter off their casters' feet. A normal bias is the same few centimetres everywhere.
+			// shadows half a meter off their casters' feet. A normal bias is the same few centimeters everywhere.
 			p.shadow.bias = 0;
 			p.shadow.normalBias = 0.04;
 			this.gameObject.transform.object3D.add(p);

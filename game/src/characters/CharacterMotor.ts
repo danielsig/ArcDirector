@@ -15,9 +15,9 @@ import { Seated } from './Seated';
 const HELD_SPEED = 0.25;
 /** Seconds held in place by someone walking the other way before stepping right to pass them. */
 const HELD_FOR = 0.2;
-/** How far ahead, centre to centre in meters, an oncoming walker can be in the way. */
+/** How far ahead, center to center in meters, an oncoming walker can be in the way. */
 const ONCOMING_REACH = 1.1;
-/** How far to one side, centre to centre in meters, an oncoming walker is no longer in the way. */
+/** How far to one side, center to center in meters, an oncoming walker is no longer in the way. */
 const PASS_CLEARANCE = 0.85;
 /** Headings this opposed (cosine below minus this) are walking toward each other. */
 const HEAD_ON = 0.7;

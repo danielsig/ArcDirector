@@ -320,7 +320,7 @@ describe('stepPhysics', () => {
 		assert.equal(canOccupy(dais, ground), true);
 	});
 
-	it('finds a wide collider whose centre is tiles away', () => {
+	it('finds a wide collider whose center is tiles away', () => {
 		resetAllocID();
 		const world = new World();
 		const bridge = new GameObject('bridge');

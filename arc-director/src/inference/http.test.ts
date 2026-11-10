@@ -1755,8 +1755,8 @@ describe('configured models', () => {
 
 describe('HttpProvider thinking budget', () => {
 	/** A streamed chat completion: these thought pieces, then these answer pieces. Reports whether the reader stopped it. */
-	function streamOf(thought:string[], answer:string[]):{ res:()=>Response; cancelled:()=>boolean } {
-		let cancelled = false;
+	function streamOf(thought:string[], answer:string[]):{ res:()=>Response; canceled:()=>boolean } {
+		let canceled = false;
 		const events = [
 			...thought.map((piece) => ({ choices: [{ delta: { reasoning_content: piece } }] })),
 			...answer.map((piece) => ({ choices: [{ delta: { content: piece } }] })),
@@ -1775,10 +1775,10 @@ describe('HttpProvider thinking budget', () => {
 					}
 				},
 				cancel() {
-					cancelled = true;
+					canceled = true;
 				},
 			}), { status: 200, headers: { 'content-type': 'text/event-stream' } }),
-			cancelled: () => cancelled,
+			canceled: () => canceled,
 		};
 	}
 
@@ -1807,7 +1807,7 @@ describe('HttpProvider thinking budget', () => {
 		assert.equal(res.truncated, true);
 		assert.equal(res.content, null);
 		assert.match(res.reasoning ?? '', /^The guard should go/);
-		assert.equal(stream.cancelled(), true, 'the server stops generating');
+		assert.equal(stream.canceled(), true, 'the server stops generating');
 	});
 
 	it('leaves a thought that ends within its budget alone', async () => {
@@ -1815,7 +1815,7 @@ describe('HttpProvider thinking budget', () => {
 		const res = await providerFor(stream, 8).chat({ model: 'thinker', messages: [{ role: 'user', content: 'hi' }] });
 		assert.equal(res.content, '{"steps":[]}');
 		assert.equal(res.truncated, false);
-		assert.equal(stream.cancelled(), false);
+		assert.equal(stream.canceled(), false);
 	});
 
 	it('hands over each piece of a streamed reply as it comes', async () => {

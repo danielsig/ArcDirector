@@ -18,7 +18,7 @@ const LOOKUP = 0xe9c46a;
 const SWEEPS = 2;
 const SWEEP_GAP = 0.45;
 const SWEEP = { radius: 5, width: 0.14, life: 1.1, color: 0xbfe6ff };
-/** Listening: how many rings out from the head, how far apart (s), how long each lives (s), how big it gets (m), and their colour. */
+/** Listening: how many rings out from the head, how far apart (s), how long each lives (s), how big it gets (m), and their color. */
 const LISTENS = 4;
 const LISTEN_GAP = 0.5;
 const LISTEN_LIFE = 0.9;

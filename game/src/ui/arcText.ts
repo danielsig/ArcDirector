@@ -1,4 +1,4 @@
-/** A run of an Arc's text and what it is, for its colour. */
+/** A run of an Arc's text and what it is, for its color. */
 export type ArcPiece = { text:string; kind:'plain' | 'verb' | 'mark' | 'said' | 'rune' };
 
 /** One line of an Arc, its indent apart so that it wraps at that same indent. */
@@ -11,8 +11,8 @@ export const ARC_INDENT = 2;
 const THIN_SPACE = String.fromCodePoint(0x200b);
 const breakable = (text:string):string => text.replace(/[.(,]/g, (mark) => mark + THIN_SPACE);
 
-/** Arc text coloured by what each part of it is: the verbs, the quoted words, and the marks that join steps. */
-function coloured(text:string):ArcPiece[] {
+/** Arc text colored by what each part of it is: the verbs, the quoted words, and the marks that join steps. */
+function colored(text:string):ArcPiece[] {
 	const out:ArcPiece[] = [];
 	const part = /([A-Za-z_]\w*)(?=\()|"[^"]*"?|&&|\|\||;/g;
 	let from = 0;
@@ -36,7 +36,7 @@ export function arcLines(text:string, end = text.length, settled = end, rune:(i:
 		const indent = line.length - line.trimStart().length;
 		const from = at + indent;
 		const to = at + line.length;
-		const pieces = coloured(text.slice(from, Math.min(to, Math.max(from, settled))));
+		const pieces = colored(text.slice(from, Math.min(to, Math.max(from, settled))));
 		for (let i = Math.max(from, settled); i < to; i += 1) {
 			pieces.push(/\s/.test(text[i]!) ? { text: text[i]!, kind: 'plain' } : { text: rune(i), kind: 'rune' });
 		}

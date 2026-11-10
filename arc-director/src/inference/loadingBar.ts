@@ -33,7 +33,7 @@ function modelName(model:string):string {
 /**
  * A plain loading bar for `download` in the page: the model's name, a `<progress>`, and what it is doing
  * ("Downloading 1.2 of 4.6 GB", then "Loading on the GPU"), and a Cancel button. Gone once the model is loaded or
- * cancelled; on a failure it stays, with the reason. Nothing outside a browser.
+ * canceled; on a failure it stays, with the reason. Nothing outside a browser.
  */
 export function showLoadingBar(download:ModelDownload, model:string, opts:LoadingBarOptions = {}):void {
 	const page = (globalThis as { document?:Page }).document;
@@ -74,7 +74,7 @@ export function showLoadingBar(download:ModelDownload, model:string, opts:Loadin
 		},
 		complete: done,
 		error: (err) => {
-			if (download.cancelled) {
+			if (download.canceled) {
 				done();
 				return;
 			}

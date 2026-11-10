@@ -19,7 +19,7 @@ export type ShadowSettings = {
 	 */
 	sunArea?:Area | null;
 	/**
-	 * `dynamic` only: the square (centre and half its side) where moving things cast the sun's shadow, drawn every
+	 * `dynamic` only: the square (center and half its side) where moving things cast the sun's shadow, drawn every
 	 * frame into a map `sunMoverSize` square of their own, so the sun's map holds still casters only and is never
 	 * copied per frame. Unset: they draw over a live copy of the sun's whole map instead.
 	 */
@@ -261,7 +261,7 @@ export class ShadowCache {
 		for (const { lamp, at } of casting) {
 			lamp.castShadow = true;
 			const maps = this.mapsOf(lamp, frame);
-			// A flickering lamp jitters a centimetre or so; it bakes again only once it has truly moved.
+			// A flickering lamp jitters a centimeter or so; it bakes again only once it has truly moved.
 			if (!maps.still || maps.at.distanceTo(at) > LAMP_MOVED || changed.some((s) => s.distanceToPoint(at) < reachOf(lamp))) {
 				maps.at.copy(at);
 				bake.push(lamp);

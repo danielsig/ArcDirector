@@ -255,7 +255,7 @@ export function roadCells(chunks:Chunk[], door:DoorAnchor):Cell[] {
 	return cells;
 }
 
-/** A straight stretch of road centre line, from `a` to `b` (the same point for a lone cell). */
+/** A straight stretch of road center line, from `a` to `b` (the same point for a lone cell). */
 export type RoadLine = { a:Cell; b:Cell };
 
 /**
@@ -300,7 +300,7 @@ export function allRoadCells(chunks:Iterable<Chunk>):Cell[] {
 }
 
 /**
- * The roads as straight centre lines: each road cell joins its road neighbours, a road's first cell runs on to
+ * The roads as straight center lines: each road cell joins its road neighbors, a road's first cell runs on to
  * its door and any cell beside a bridge span on to the span, and every straight run is one line. Turns,
  * T-junctions (where roads meet), crossings and dead ends all follow from the lines; the edge of the cell is
  * where a door or span link stops.

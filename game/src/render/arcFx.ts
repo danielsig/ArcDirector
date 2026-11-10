@@ -5,11 +5,11 @@ import { glowSprite, middleOf, runeCircle, sparkle, type Stance } from './spellF
 
 /**
  * An order on its way: a ribbon of the order's own Arc text flying from whoever gave it to whoever
- * takes it along an arc, in the side's colour, and the magic circle and sparkles it lands in. Built
+ * takes it along an arc, in the side's color, and the magic circle and sparkles it lands in. Built
  * from Kindling's effects and the spell pictures.
  */
 
-/** A side's colour in the world, as the HUD draws it (`.hue-*`). */
+/** A side's color in the world, as the HUD draws it (`.hue-*`). */
 const HUES:Record<GoalColor, number> = { gold: 0xe9c46a, blue: 0x6cb8ff, red: 0xf07a5c };
 
 /**
@@ -70,7 +70,7 @@ void main() {
 }
 `;
 
-// Cel look, hard edges: an ink line, a band of the side's colour, and the Arc in pale ink on it,
+// Cel look, hard edges: an ink line, a band of the side's color, and the Arc in pale ink on it,
 // the head end carrying the end of the text when it flies right and the start when it flies left.
 const RIBBON_FRAGMENT = `
 uniform sampler2D uText;

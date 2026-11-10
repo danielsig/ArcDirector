@@ -71,7 +71,7 @@ function carries(s:HudSpeech):boolean {
 	return s.gold > 0 || s.items.length > 0;
 }
 
-/** An item's own colour, as its mesh is tinted. */
+/** An item's own color, as its mesh is tinted. */
 function tint(defID:string):string {
 	return `#${(ITEM_DEFS[defID]?.color ?? 0xffffff).toString(16).padStart(6, '0')}`;
 }

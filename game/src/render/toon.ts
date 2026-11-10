@@ -14,7 +14,7 @@ export const PALETTE = {
 	floor: 0x857d70,
 	iron: 0x3a3a42,
 	dirt: 0xc48a4e,
-	/** Riverbank earth: tints the grey wet-sand picture brown. */
+	/** Riverbank earth: tints the gray wet-sand picture brown. */
 	earth: 0xf0d2b0,
 	leaf: 0x2f6e2e,
 	grass: 0x3f7a2e,
@@ -65,7 +65,7 @@ export function thatchMat():ToonMaterial {
 	});
 }
 
-/** Slates: a roof of dark blue-grey tiles in staggered courses. Shared; do not tint. */
+/** Slates: a roof of dark blue-gray tiles in staggered courses. Shared; do not tint. */
 export function slateMat():ToonMaterial {
 	return remember('slate', {
 		color: 0x4a5160,
@@ -134,7 +134,7 @@ export function tileMat(map:THREE.Texture):ToonMaterial {
 /** Height up to which rocks in the river look wet: a span over the surface, where it laps and splashes. */
 const WET_LINE = WATER_UPPER_Y + 0.09;
 
-/** The riverbed's blue as it comes out on screen (`toonWaterMat`, sRGB 50, 148, 184), in the output's linear colour. */
+/** The riverbed's blue as it comes out on screen (`toonWaterMat`, sRGB 50, 148, 184), in the output's linear color. */
 const UNDERWATER = 'vec3(0.04, 0.31, 0.5)';
 /** Meters under the surface over which a rock fades from tinted to nearly the riverbed's blue. */
 const UNDERWATER_FADE = 0.2;

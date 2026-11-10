@@ -55,7 +55,7 @@ float edgeAt(float reach, float z, float mask) {
 	// on planes and spikes at silhouettes (negative on the near side) and creases.
 	float lap = (sum - 4.0 / z) * z;
 	// An edge belongs to the surface in front. The near side inks itself; the far side takes the
-	// ink of its nearest neighbour, even on a surface that opts out (alpha -1).
+	// ink of its nearest neighbor, even on a surface that opts out (alpha -1).
 	float owner = lap < 0.0 ? mask : texture2D(tColor, nearestUv).a;
 	return owner > 0.5 ? smoothstep(0.015, 0.05, abs(lap)) : 0.0;
 }

@@ -15,7 +15,7 @@ withDefaults(defineProps<{
 </template>
 
 <style scoped>
-/* Something reached, in its side's colour (`.hue-*`): the goal orbs' level-up, filling whatever it is put in. */
+/* Something reached, in its side's color (`.hue-*`): the goal orbs' level-up, filling whatever it is put in. */
 .hud-burst {
 	position: absolute;
 	inset: 0;

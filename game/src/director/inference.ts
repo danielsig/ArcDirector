@@ -319,8 +319,8 @@ export function showDownload(model:string, download:ModelDownload):void {
 		error: (err) => {
 			ended();
 			state.progress = null;
-			// Cancelled is not a failure: nothing to show.
-			state.error = download.cancelled ? '' : errorText(err);
+			// Canceled is not a failure: nothing to show.
+			state.error = download.canceled ? '' : errorText(err);
 			// It may have got far enough to leave files behind.
 			void checkCached(model);
 		},
