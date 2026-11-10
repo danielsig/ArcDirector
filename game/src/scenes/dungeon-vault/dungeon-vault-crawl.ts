@@ -566,7 +566,7 @@ function leaveCrypt(host:GameHost):void {
 			continue;
 		}
 		out.ids.add(id);
-		host.arc?.mindQueue()?.setAiOn(id, false);
+		host.arc?.mindQueue().setAiOn(id, false);
 		character.laws = [];
 		void character.enact(parseArc(`go_to(${EXIT})`, character.verbs));
 	}
@@ -634,13 +634,14 @@ export function createDirector(host:GameHost):ArcDirector<CharacterCtx> {
 			help: 'walk up to them; once they come after you, lead them to the nearest of your own kind',
 			arc: `go_to({target}) && wait(seconds=6, until=isApproaching({target}, me)) && go_to(${PACK})`,
 		})
-		.withMindDefaults({ skipStrategic: true })
+		.withMind((m) => m
+			.withSkipStrategic()
+			.withVerbInstructions(BUILDING_VERB_INSTRUCTIONS)
+			// The crypt moves fast: a short think, then the answer.
+			.withThinkInstructions({ on: 'Think very quickly, in at most 3 short sentences: what is before you, and what you do now. Then answer.' }))
 		// A law stays on at least this long once it starts: a foe just at the edge of a watch no longer flips them every frame.
 		.withLawHold(1.5)
 		.withDefaultKit({ verbs: [...GAME_VERBS, 'set_status', 'rest', 'attack', 'block', 'heal', 'protect', ...Object.keys(ATTACKS)] })
-		.withVerbInstructions(BUILDING_VERB_INSTRUCTIONS)
-		// The crypt moves fast: a short think, then the answer.
-		.withThinkInstructions({ on: 'Think very quickly, in at most 3 short sentences: what is before you, and what you do now. Then answer.' })
 		// Monsters go by what they are; the player is Kaelen, the company's archer.
 		.withNames({ seen: (observer, target) => (target.id === 'Player' ? 'Kaelen' : target.id) })
 		// Where the company sets out: the leader's pep talk is said here, and the first step away from it ends it.

@@ -24,7 +24,7 @@ async function stage(reply:(req:ChatRequest)=>string = () => '{}') {
 			calls.push(req);
 			return { content: reply(req), toolCalls: [] };
 		})
-		.withArcFormat('text')
+		.withMind((m) => m.withArcFormat('text'))
 		.addStockVerbs()
 		.addStockCollectiveVerbs()
 		.withDefaultKit(KIT)
@@ -52,7 +52,7 @@ async function stage(reply:(req:ChatRequest)=>string = () => '{}') {
 			kit: KIT,
 			identity: { role: 'Takes the bridge.' },
 		})
-		.start();
+		.connect();
 	const dawn = director.collective('DawnParty')!;
 	const dusk = director.collective('DuskParty')!;
 	const of = (id:string) => director.character(id)!;

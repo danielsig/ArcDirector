@@ -13,7 +13,7 @@ import { runBench, type BenchLevel, type BenchOutcome } from './bench-score.js';
 /** A model on its own server, writing Arc text; it can see, so `see_map` is offered. `chat` answers each request. */
 function model(chat:(req:ChatRequest)=>string, spec:{ maxParallel?:number } = {}):(director:ArcDirector<SceneCtx>)=>unknown {
 	return (director) => director
-		.withArcFormat('text')
+		.withMind((m) => m.withArcFormat('text'))
 		.addInference('fake', new FakeProvider((req) => ({ content: chat(req), toolCalls: [] })), { vision: true })
 		.addModel('main', { id: 'fake', ...spec });
 }
@@ -261,7 +261,7 @@ describe('arc bench play', () => {
 		const c = arcCase('Fenwyn');
 		let answer = '';
 		await playArcCase({ ...c, thinks: 1 }, (director) => director
-			.withArcFormat('text')
+			.withMind((m) => m.withArcFormat('text'))
 			.addInference('fake', new FakeProvider((req) => {
 				const tool = req.messages.find((m) => m.role === 'tool');
 				if (!tool) {
@@ -336,12 +336,12 @@ describe('benchArcs', () => {
 
 	it('records how the model sampled: its makers\' settings unless its spec says', async () => {
 		const gemma = await benchArcs((director) => director
-			.withArcFormat('text')
+			.withMind((m) => m.withArcFormat('text'))
 			.addInference('fake', new FakeProvider(() => ({ content: 'wait(seconds=1)', toolCalls: [] })))
 			.addModel('main', { id: 'google/gemma-4-e4b' }), [arcCase('Vashti')]);
 		assert.deepEqual(gemma.sampling, { temperature: 1, topP: 0.95, topK: 64 });
 		const own = await benchArcs((director) => director
-			.withArcFormat('text')
+			.withMind((m) => m.withArcFormat('text'))
 			.addInference('fake', new FakeProvider(() => ({ content: 'wait(seconds=1)', toolCalls: [] })))
 			.addModel('main', { id: 'google/gemma-4-e4b', sampling: { temperature: 0.3 } }), [arcCase('Vashti')]);
 		assert.deepEqual(own.sampling, { temperature: 0.3, topP: 0.95, topK: 64 }, "its own setting over its makers' others");

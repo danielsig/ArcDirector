@@ -31,8 +31,8 @@ export type WorldVerbDeps<TCtx> = {
 	tell:(id:string, event:MindEvent)=>void;
 	/** Tell every mind: what the whole world comes to know, such as a trade or a gift. */
 	tellAll:(event:MindEvent)=>void;
-	/** The item id the world pays with (`withCurrency`). Giving it is remembered as paying. */
-	currency?:string;
+	/** The item id the world pays with (the `currency` setting, `withMind`). Giving it is remembered as paying. */
+	currency:()=>string | undefined;
 };
 
 type WorldPart = Exclude<keyof HostWorld<unknown>, 'find' | 'getPose' | 'getReach' | 'canOffer' | 'canPickUp' | 'up'>;
@@ -178,7 +178,7 @@ export function worldVerbs<TCtx>(deps:WorldVerbDeps<TCtx>):Handlers<TCtx> {
 					return outcome('offer', done);
 				}
 				deps.offers().settle(me, match);
-				ledger(`{0} traded ${bundleText(match.pay)} to {1} for ${bundleText(match.receive)}.`, [me, to], ['trade', tradeLabel(deps.currency, match.receive, match.pay)]);
+				ledger(`{0} traded ${bundleText(match.pay)} to {1} for ${bundleText(match.receive)}.`, [me, to], ['trade', tradeLabel(deps.currency(), match.receive, match.pay)]);
 				deps.tell(to, { kind: 'Traded', text: `{0} took your offer: you gave ${bundleText(match.receive)} for ${bundleText(match.pay)}`, who: [me], tags: ['trade'] });
 				return { ok: true, verb: 'offer', reason: `traded ${bundleText(match.pay)} for ${bundleText(match.receive)} with ${name}` };
 			}
@@ -303,7 +303,7 @@ export function worldVerbs<TCtx>(deps:WorldVerbDeps<TCtx>):Handlers<TCtx> {
 			if (!done.ok) {
 				return outcome('give', done);
 			}
-			const pays = isCurrency(item, deps.currency);
+			const pays = isCurrency(item, deps.currency());
 			ledger(`{0} ${pays ? 'paid' : 'gave'} ${bundleText({ [item]: call.args.quantity ?? 1 })} to {1}.`, [call.character.id, to], [pays ? 'pay' : 'give', item]);
 			return outcome('give', { ok: true, reason: `${pays ? 'paid' : 'gave'} ${call.args.quantity ? bundleText({ [item]: call.args.quantity }) : item} to ${nameOf(call, to)}` });
 		},

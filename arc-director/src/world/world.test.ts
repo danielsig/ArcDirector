@@ -179,7 +179,7 @@ async function run(
 			sent = true;
 			return { content, toolCalls: [] };
 		})
-		.withArcFormat('text')
+		.withMind((m) => m.withArcFormat('text'))
 		.addStockVerbs()
 		.addStockCollectiveVerbs()
 		.withWorld(grid.world)
@@ -197,7 +197,7 @@ async function run(
 		director.addCharacter({ id });
 	}
 	opts.before?.(director);
-	await director.start();
+	await director.connect();
 	director.mindQueue()!.enqueueMajor(opts.units ? 'Hive' : 'Ann');
 	const dt = 0.1;
 	for (let t = 0; t < (opts.seconds ?? 20) / dt; t++) {
@@ -565,7 +565,7 @@ describe('stock world verbs', () => {
 		const { director } = await run(grid, 'give(item=gold, to=Smith, quantity=5)', {
 			kit: ['give', 'wait'],
 			before: (d) => {
-				d.withCurrency('gold');
+				d.withMind((m) => m.withCurrency('gold'));
 				spyTellAll(d, told);
 			},
 		});
@@ -974,13 +974,13 @@ describe('stock world verbs', () => {
 		director.dispose();
 	});
 
-	it('refuses to start a kit whose verbs the world cannot run', async () => {
+	it('refuses to connect a kit whose verbs the world cannot run', async () => {
 		const director = new ArcDirector<Ctx>()
 			.addFakeInference()
 			.addStockVerbs()
 			.withWorld({ find: () => undefined, getPose: () => undefined })
 			.withContext((id) => ({ id }))
 			.addCharacter({ id: 'Ann', mind: {}, kit: { verbs: ['go_to', 'examine'] }, identity: { role: 'Waits.' } });
-		await assert.rejects(director.start(), /go_to' needs withWorld getNeighbors and canPass and steerToward.*examine' needs withWorld getDescription/);
+		await assert.rejects(director.connect(), /go_to' needs withWorld getNeighbors and canPass and steerToward.*examine' needs withWorld getDescription/);
 	});
 });

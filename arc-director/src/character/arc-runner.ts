@@ -26,6 +26,7 @@ import {
 	type ArcSessionOpts,
 } from '../arc/run.js';
 import type { Mind } from '../mind/mind.js';
+import type { MindEvent } from '../mind/mind-types.js';
 import { ArcRecord } from './ArcRecord.js';
 import { Persona, type PersonaJSON } from './Persona.js';
 import type { SayResult, SayTo, TalkNet } from '../mind/talk.js';
@@ -88,7 +89,8 @@ export abstract class ArcRunner<TCtx = unknown> {
 	public readonly id:string;
 	/** Who it is: identity, goals, memory, watches. Its mind thinks as this persona. */
 	public readonly persona:Persona;
-	public readonly verbs:VerbRegistry;
+	/** The verbs it parses and runs; its kit picks the ones it may use. The director swaps it on `withVerbs`. */
+	public verbs:VerbRegistry;
 	public readonly context:()=>TCtx | undefined;
 	public readonly execute?:(step:Step, ctx:TCtx | undefined)=>Promise<ArcResult>;
 	public readonly abortArc?:(id:string)=>void;
@@ -145,6 +147,9 @@ export abstract class ArcRunner<TCtx = unknown> {
 	/** The runner that acts for this one: a character itself, or a collective's commander. */
 	public abstract get voice():ArcRunner<TCtx>;
 
+	/** The runner whose mind thinks for this one: a character's collective, else itself when it has a mind; none when the host drives it. */
+	public abstract get owner():ArcRunner<TCtx> | undefined;
+
 	constructor(opts:RunnerOptions<TCtx>) {
 		this.id = opts.id;
 		this.persona = opts.persona ?? new Persona();
@@ -172,6 +177,11 @@ export abstract class ArcRunner<TCtx = unknown> {
 
 	/** Whether it stands in the world itself, so it can speak and walk: a character, not a collective. */
 	public abstract get embodied():boolean;
+
+	/** Tell the mind that thinks for this runner. A major event wakes it. */
+	public tell(event:MindEvent):void {
+		this.mind?.pushEvent(event);
+	}
 
 	/** Whether this runner speaks and acts for its mind: the arcs that mind writes run here. */
 	public get isVoice():boolean {

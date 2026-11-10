@@ -81,7 +81,7 @@ function agentOf(opts:{
 	watches?:WatchInput;
 	pinnedWatches?:WatchInput;
 	watchesWritable?:boolean;
-	toolRoundCap?:number;
+	toolRounds?:number;
 	arcFormat?:ArcFormat;
 	provider:FakeProvider;
 	catalog:()=>Catalog;
@@ -97,7 +97,7 @@ function agentOf(opts:{
 		watches: opts.watches,
 		pinnedWatches: opts.pinnedWatches,
 		watchesWritable: opts.watchesWritable,
-		toolRoundCap: opts.toolRoundCap ?? 0,
+		toolRounds: opts.toolRounds ?? 0,
 		arcFormat: opts.arcFormat,
 		heartbeat: 0,
 		model: 'fake',
@@ -338,12 +338,12 @@ describe('agent watches', () => {
 			};
 		});
 		// Native tool calls, as a model asked for plain JSON makes them.
-		const a = agentOf({ provider, catalog: () => cat, toolRoundCap: 1, arcFormat: 'json' });
+		const a = agentOf({ provider, catalog: () => cat, toolRounds: 1, arcFormat: 'json' });
 		const arc = await a.mind!.tick(1);
 		assert.ok(arc);
 		assert.equal(observed, true);
 		observed = false;
-		const b = agentOf({ provider, catalog: () => cat, toolRoundCap: 0, arcFormat: 'json' });
+		const b = agentOf({ provider, catalog: () => cat, toolRounds: 0, arcFormat: 'json' });
 		await b.mind!.tick(2);
 		assert.equal(observed, false);
 	});

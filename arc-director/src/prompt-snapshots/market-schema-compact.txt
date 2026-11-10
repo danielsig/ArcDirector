@@ -1,0 +1,1052 @@
+# request 1
+model: "fake"
+thread: "Hilde"
+responseFormat: {
+	"name": "reply",
+	"schema": {
+		"anyOf": [
+			{
+				"type": "object",
+				"additionalProperties": false,
+				"required": [
+					"tool",
+					"query"
+				],
+				"properties": {
+					"tool": {
+						"const": "recall"
+					},
+					"query": {
+						"type": "string"
+					},
+					"k": {
+						"type": "number"
+					}
+				}
+			},
+			{
+				"type": "object",
+				"additionalProperties": false,
+				"required": [
+					"tool",
+					"expr"
+				],
+				"properties": {
+					"tool": {
+						"const": "observe"
+					},
+					"expr": {
+						"type": "string"
+					}
+				}
+			},
+			{
+				"type": "object",
+				"additionalProperties": false,
+				"required": [
+					"tool"
+				],
+				"properties": {
+					"tool": {
+						"const": "earshot"
+					},
+					"to": {
+						"type": "string"
+					}
+				}
+			},
+			{
+				"type": "object",
+				"additionalProperties": false,
+				"required": [
+					"tool"
+				],
+				"properties": {
+					"tool": {
+						"const": "see_map"
+					},
+					"zoom": {
+						"type": "number",
+						"minimum": 0,
+						"maximum": 1
+					}
+				}
+			},
+			{
+				"type": "object",
+				"additionalProperties": false,
+				"required": [
+					"steps"
+				],
+				"properties": {
+					"steps": {
+						"$ref": "#/$defs/arc"
+					}
+				}
+			}
+		],
+		"$defs": {
+			"arc": {
+				"type": "array",
+				"minItems": 1,
+				"items": {
+					"$ref": "#/$defs/step"
+				}
+			},
+			"step": {
+				"anyOf": [
+					{
+						"type": "object",
+						"additionalProperties": false,
+						"required": [
+							"verb",
+							"target"
+						],
+						"properties": {
+							"verb": {
+								"const": "ring"
+							},
+							"target": {
+								"type": "string"
+							},
+							"then": {
+								"type": "string",
+								"enum": [
+									"if_ok",
+									"always",
+									"if_failed"
+								]
+							}
+						}
+					},
+					{
+						"type": "object",
+						"additionalProperties": false,
+						"required": [
+							"verb"
+						],
+						"properties": {
+							"verb": {
+								"const": "hush"
+							},
+							"then": {
+								"type": "string",
+								"enum": [
+									"if_ok",
+									"always",
+									"if_failed"
+								]
+							}
+						}
+					},
+					{
+						"type": "object",
+						"additionalProperties": false,
+						"required": [
+							"verb",
+							"target"
+						],
+						"properties": {
+							"verb": {
+								"const": "go_to"
+							},
+							"target": {
+								"type": "string"
+							},
+							"until": {
+								"type": "string"
+							},
+							"then": {
+								"type": "string",
+								"enum": [
+									"if_ok",
+									"always",
+									"if_failed"
+								]
+							}
+						}
+					},
+					{
+						"type": "object",
+						"additionalProperties": false,
+						"required": [
+							"verb",
+							"target"
+						],
+						"properties": {
+							"verb": {
+								"const": "follow"
+							},
+							"target": {
+								"type": "string"
+							},
+							"distance": {
+								"type": "number"
+							},
+							"then": {
+								"type": "string",
+								"enum": [
+									"if_ok",
+									"always",
+									"if_failed"
+								]
+							}
+						}
+					},
+					{
+						"type": "object",
+						"additionalProperties": false,
+						"required": [
+							"verb",
+							"from"
+						],
+						"properties": {
+							"verb": {
+								"const": "flee"
+							},
+							"from": {
+								"type": "string"
+							},
+							"distance": {
+								"type": "number"
+							},
+							"then": {
+								"type": "string",
+								"enum": [
+									"if_ok",
+									"always",
+									"if_failed"
+								]
+							}
+						}
+					},
+					{
+						"type": "object",
+						"additionalProperties": false,
+						"required": [
+							"verb"
+						],
+						"properties": {
+							"verb": {
+								"const": "wander"
+							},
+							"until": {
+								"type": "string"
+							},
+							"seconds": {
+								"type": "number"
+							},
+							"then": {
+								"type": "string",
+								"enum": [
+									"if_ok",
+									"always",
+									"if_failed"
+								]
+							}
+						}
+					},
+					{
+						"type": "object",
+						"additionalProperties": false,
+						"required": [
+							"verb",
+							"item"
+						],
+						"properties": {
+							"verb": {
+								"const": "use"
+							},
+							"item": {
+								"type": "string"
+							},
+							"target": {
+								"type": "string"
+							},
+							"then": {
+								"type": "string",
+								"enum": [
+									"if_ok",
+									"always",
+									"if_failed"
+								]
+							}
+						}
+					},
+					{
+						"type": "object",
+						"additionalProperties": false,
+						"required": [
+							"verb",
+							"item"
+						],
+						"properties": {
+							"verb": {
+								"const": "pick_up"
+							},
+							"item": {
+								"type": "string"
+							},
+							"from": {
+								"type": "string"
+							},
+							"then": {
+								"type": "string",
+								"enum": [
+									"if_ok",
+									"always",
+									"if_failed"
+								]
+							}
+						}
+					},
+					{
+						"type": "object",
+						"additionalProperties": false,
+						"required": [
+							"verb",
+							"item"
+						],
+						"properties": {
+							"verb": {
+								"const": "drop"
+							},
+							"item": {
+								"type": "string"
+							},
+							"to": {
+								"type": "string"
+							},
+							"then": {
+								"type": "string",
+								"enum": [
+									"if_ok",
+									"always",
+									"if_failed"
+								]
+							}
+						}
+					},
+					{
+						"type": "object",
+						"additionalProperties": false,
+						"required": [
+							"verb",
+							"item",
+							"to"
+						],
+						"properties": {
+							"verb": {
+								"const": "give"
+							},
+							"item": {
+								"type": "string"
+							},
+							"to": {
+								"type": "string"
+							},
+							"quantity": {
+								"type": "number"
+							},
+							"then": {
+								"type": "string",
+								"enum": [
+									"if_ok",
+									"always",
+									"if_failed"
+								]
+							}
+						}
+					},
+					{
+						"type": "object",
+						"additionalProperties": false,
+						"required": [
+							"verb",
+							"target"
+						],
+						"properties": {
+							"verb": {
+								"const": "examine"
+							},
+							"target": {
+								"type": "string"
+							},
+							"then": {
+								"type": "string",
+								"enum": [
+									"if_ok",
+									"always",
+									"if_failed"
+								]
+							}
+						}
+					},
+					{
+						"type": "object",
+						"additionalProperties": false,
+						"required": [
+							"verb",
+							"text"
+						],
+						"properties": {
+							"verb": {
+								"const": "say"
+							},
+							"text": {
+								"type": "string"
+							},
+							"to": {
+								"type": "string"
+							},
+							"then": {
+								"type": "string",
+								"enum": [
+									"if_ok",
+									"always",
+									"if_failed"
+								]
+							}
+						}
+					},
+					{
+						"type": "object",
+						"additionalProperties": false,
+						"required": [
+							"verb"
+						],
+						"properties": {
+							"verb": {
+								"const": "wait"
+							},
+							"seconds": {
+								"type": "number"
+							},
+							"until": {
+								"type": "string"
+							},
+							"then": {
+								"type": "string",
+								"enum": [
+									"if_ok",
+									"always",
+									"if_failed"
+								]
+							}
+						}
+					},
+					{
+						"type": "object",
+						"additionalProperties": false,
+						"required": [
+							"verb",
+							"content"
+						],
+						"properties": {
+							"verb": {
+								"const": "remember"
+							},
+							"content": {
+								"type": "string"
+							},
+							"tags": {
+								"type": "array",
+								"items": {
+									"type": "string"
+								}
+							},
+							"then": {
+								"type": "string",
+								"enum": [
+									"if_ok",
+									"always",
+									"if_failed"
+								]
+							}
+						}
+					},
+					{
+						"type": "object",
+						"additionalProperties": false,
+						"required": [
+							"verb"
+						],
+						"properties": {
+							"verb": {
+								"const": "think"
+							},
+							"about": {
+								"type": "string"
+							},
+							"then": {
+								"type": "string",
+								"enum": [
+									"if_ok",
+									"always",
+									"if_failed"
+								]
+							}
+						}
+					},
+					{
+						"type": "object",
+						"additionalProperties": false,
+						"required": [
+							"verb",
+							"goal"
+						],
+						"properties": {
+							"verb": {
+								"const": "set_goal"
+							},
+							"goal": {
+								"type": "string"
+							},
+							"priority": {
+								"type": "number"
+							},
+							"then": {
+								"type": "string",
+								"enum": [
+									"if_ok",
+									"always",
+									"if_failed"
+								]
+							}
+						}
+					},
+					{
+						"type": "object",
+						"additionalProperties": false,
+						"required": [
+							"verb"
+						],
+						"properties": {
+							"verb": {
+								"const": "drop_goal"
+							},
+							"goal": {
+								"type": "string"
+							},
+							"then": {
+								"type": "string",
+								"enum": [
+									"if_ok",
+									"always",
+									"if_failed"
+								]
+							}
+						}
+					},
+					{
+						"type": "object",
+						"additionalProperties": false,
+						"required": [
+							"verb"
+						],
+						"properties": {
+							"verb": {
+								"const": "finish_goal"
+							},
+							"goal": {
+								"type": "string"
+							},
+							"then": {
+								"type": "string",
+								"enum": [
+									"if_ok",
+									"always",
+									"if_failed"
+								]
+							}
+						}
+					},
+					{
+						"type": "object",
+						"additionalProperties": false,
+						"required": [
+							"verb"
+						],
+						"properties": {
+							"verb": {
+								"const": "set_identity"
+							},
+							"role": {
+								"type": "string"
+							},
+							"traits": {
+								"type": "array",
+								"items": {
+									"type": "string"
+								}
+							},
+							"then": {
+								"type": "string",
+								"enum": [
+									"if_ok",
+									"always",
+									"if_failed"
+								]
+							}
+						}
+					},
+					{
+						"type": "object",
+						"additionalProperties": false,
+						"required": [
+							"verb",
+							"name",
+							"expr"
+						],
+						"properties": {
+							"verb": {
+								"const": "watch"
+							},
+							"name": {
+								"type": "string"
+							},
+							"expr": {
+								"type": "string"
+							},
+							"then": {
+								"type": "string",
+								"enum": [
+									"if_ok",
+									"always",
+									"if_failed"
+								]
+							}
+						}
+					},
+					{
+						"type": "object",
+						"additionalProperties": false,
+						"required": [
+							"verb",
+							"name"
+						],
+						"properties": {
+							"verb": {
+								"const": "unwatch"
+							},
+							"name": {
+								"type": "string"
+							},
+							"then": {
+								"type": "string",
+								"enum": [
+									"if_ok",
+									"always",
+									"if_failed"
+								]
+							}
+						}
+					},
+					{
+						"type": "object",
+						"additionalProperties": false,
+						"required": [
+							"verb",
+							"expr"
+						],
+						"properties": {
+							"verb": {
+								"const": "focus"
+							},
+							"expr": {
+								"type": "string"
+							},
+							"then": {
+								"type": "string",
+								"enum": [
+									"if_ok",
+									"always",
+									"if_failed"
+								]
+							}
+						}
+					},
+					{
+						"type": "object",
+						"additionalProperties": false,
+						"required": [
+							"verb",
+							"expr"
+						],
+						"properties": {
+							"verb": {
+								"const": "unfocus"
+							},
+							"expr": {
+								"type": "string"
+							},
+							"then": {
+								"type": "string",
+								"enum": [
+									"if_ok",
+									"always",
+									"if_failed"
+								]
+							}
+						}
+					},
+					{
+						"type": "object",
+						"additionalProperties": false,
+						"required": [
+							"verb",
+							"watch",
+							"arc"
+						],
+						"properties": {
+							"verb": {
+								"const": "when"
+							},
+							"watch": {
+								"type": "string"
+							},
+							"arc": {
+								"$ref": "#/$defs/arc"
+							},
+							"times": {
+								"type": "number"
+							},
+							"until": {
+								"type": "string"
+							},
+							"then": {
+								"type": "string",
+								"enum": [
+									"if_ok",
+									"always",
+									"if_failed"
+								]
+							}
+						}
+					},
+					{
+						"type": "object",
+						"additionalProperties": false,
+						"required": [
+							"verb",
+							"arc"
+						],
+						"properties": {
+							"verb": {
+								"const": "loop"
+							},
+							"arc": {
+								"$ref": "#/$defs/arc"
+							},
+							"through": {
+								"type": "string"
+							},
+							"until": {
+								"type": "string"
+							},
+							"times": {
+								"type": "number"
+							},
+							"then": {
+								"type": "string",
+								"enum": [
+									"if_ok",
+									"always",
+									"if_failed"
+								]
+							}
+						}
+					},
+					{
+						"type": "object",
+						"additionalProperties": false,
+						"required": [
+							"verb",
+							"arc"
+						],
+						"properties": {
+							"verb": {
+								"const": "law"
+							},
+							"who": {
+								"type": "string"
+							},
+							"watch": {
+								"type": "string"
+							},
+							"arc": {
+								"$ref": "#/$defs/arc"
+							},
+							"name": {
+								"type": "string"
+							},
+							"times": {
+								"type": "number"
+							},
+							"until": {
+								"type": "string"
+							},
+							"then": {
+								"type": "string",
+								"enum": [
+									"if_ok",
+									"always",
+									"if_failed"
+								]
+							}
+						}
+					},
+					{
+						"type": "object",
+						"additionalProperties": false,
+						"required": [
+							"verb",
+							"name"
+						],
+						"properties": {
+							"verb": {
+								"const": "unlaw"
+							},
+							"name": {
+								"type": "string"
+							},
+							"then": {
+								"type": "string",
+								"enum": [
+									"if_ok",
+									"always",
+									"if_failed"
+								]
+							}
+						}
+					},
+					{
+						"type": "object",
+						"additionalProperties": false,
+						"required": [
+							"verb",
+							"goal",
+							"choices"
+						],
+						"properties": {
+							"verb": {
+								"const": "choose"
+							},
+							"goal": {
+								"type": "string"
+							},
+							"choices": {
+								"type": "object",
+								"additionalProperties": {
+									"$ref": "#/$defs/arc"
+								}
+							},
+							"then": {
+								"type": "string",
+								"enum": [
+									"if_ok",
+									"always",
+									"if_failed"
+								]
+							}
+						}
+					},
+					{
+						"type": "object",
+						"additionalProperties": false,
+						"required": [
+							"verb"
+						],
+						"properties": {
+							"verb": {
+								"const": "offer"
+							},
+							"to": {
+								"type": "string"
+							},
+							"give": {
+								"type": "object",
+								"additionalProperties": {
+									"type": "number"
+								}
+							},
+							"get": {
+								"type": "object",
+								"additionalProperties": {
+									"type": "number"
+								}
+							},
+							"then": {
+								"type": "string",
+								"enum": [
+									"if_ok",
+									"always",
+									"if_failed"
+								]
+							}
+						}
+					},
+					{
+						"type": "object",
+						"additionalProperties": false,
+						"required": [
+							"verb",
+							"arc"
+						],
+						"properties": {
+							"verb": {
+								"const": "group"
+							},
+							"arc": {
+								"$ref": "#/$defs/arc"
+							},
+							"then": {
+								"type": "string",
+								"enum": [
+									"if_ok",
+									"always",
+									"if_failed"
+								]
+							}
+						}
+					}
+				]
+			}
+		}
+	},
+	"strict": true
+}
+enableThinking: false
+
+## system
+{"steps":[{"verb":"give","item":"gold","to":"Player","quantity":5}]} pays 5 gold; saying so does not. In an offer, gold counts like any item: {"gold":5}. Once you know enough, emit only the Arc JSON, {"steps":[…]}. Arguments sit beside verb. Close every brace. No prose. Available verbs: ring(target) — rings a bell, hush, go_to(target, until?) — heard as footsteps up to 25 paces, follow(target, distance?), flee(from, distance?), wander(until?, seconds?), use(item, target?), pick_up(item, from?), drop(item, to?), give(item, to, quantity?), examine(target), say(text, to?), wait(seconds?, until?), remember(content, tags?), think(about?), set_goal(goal, priority?), drop_goal(goal?), finish_goal(goal?), set_identity(role?, traits?), watch(name, expr), unwatch(name), focus(expr), unfocus(expr), when(watch, arc, times?, until?), loop(arc, through?, until?, times?), law(watch?, arc, name?, times?, until?), unlaw(name), offer(to?, give?, get?). Tools: recall, observe, earshot, see_map.
+You are Hilde. Role: Herbalist.
+
+## user
+Current Conversation:
+Bram (to you): Ask Gisele about salt, she is cheaper.
+
+What you know about what was said:
+- Gisele: Gisele sells Salt at the Saltworks, 2 gold a pouch.
+
+Goals (highest first):
+- Buy a Candle and some salt
+
+Pinned memories:
+- Bram keeps his prices high until asked twice.
+
+Open offers (take or answer one with offer):
+- Bram offers 1 Candle for 3 gold to anyone
+
+sight:
+Bram 3 paces in front of you. Well 5 paces to your left.
+
+carrying:
+Purse: 9 gold
+Pockets: Basket
+Nothing else: what is not listed, you do not have.
+
+earshot:
+In talking range: Bram.
+
+# request 2
+model: "fake"
+thread: "Hilde"
+responseFormat: (as in request 1)
+enableThinking: false
+
+## system
+(as in request 1)
+
+## user
+(as in request 1)
+
+## assistant
+{"tool":"recall","query":"salt"}
+
+## user
+recall: {"remember":[{"id":"mem_2","text":"Bram says to you: \"Ask Gisele about salt, she is cheaper.\"","tags":["speech","Bram","Hilde","Ask","Gisele"],"category":"episodic"}],"know":["Gisele (salt, Saltworks)\nGisele sells Salt at the Saltworks, 2 gold a pouch."]}
+
+# request 3
+model: "fake"
+thread: "Hilde"
+responseFormat: (as in request 1)
+enableThinking: false
+
+## system
+(as in request 1)
+
+## user
+(as in request 1)
+
+## assistant
+{"tool":"recall","query":"salt"}
+
+## user
+(as in request 2)
+
+## assistant
+{"tool":"observe","expr":"others"}
+
+## user
+observe: Bram, Odo
+
+# request 4
+model: "fake"
+thread: "Hilde"
+responseFormat: (as in request 1)
+enableThinking: false
+
+## system
+(as in request 1)
+
+## user
+Short-term memory:
+- An old stone Well.
+- You hear bell 20 paces behind you.
+
+Current Conversation:
+Bram (to you): Ask Gisele about salt, she is cheaper.
+
+Goals (highest first):
+- Buy a Candle and some salt
+
+Pinned memories:
+- Bram keeps his prices high until asked twice.
+
+Open offers (take or answer one with offer):
+- Bram offers 1 Candle for 3 gold to anyone
+
+sight:
+Bram 3 paces in front of you. Well 5 paces to your left.
+
+carrying:
+Purse: 9 gold
+Pockets: Basket
+Nothing else: what is not listed, you do not have.
+
+earshot:
+In talking range: Bram.
+
+Last verb result: examine ok — An old stone Well.
+
+Laws:
+- flee: when me.hp < 3, run go_to(Well)
+
+# request 5
+model: "fake"
+thread: "Hilde"
+responseFormat: (as in request 1)
+enableThinking: false
+
+## system
+(as in request 1)
+
+## user
+(as in request 4)
+
+## assistant
+{"steps":[{"verb":"say","to":"Odo","text":"Come here"}]}
+
+## user
+no way to Odo, blocked on the way: the river. That say did not happen. In talking range: Bram. Keep this conversation. Get closer to them first, or say to someone already in range. Then emit only one valid Arc JSON — no prose. Names only, no coordinates. Close every brace.

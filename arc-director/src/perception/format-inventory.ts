@@ -9,7 +9,7 @@ const ALL = 'Nothing else: what is not listed, you do not have.';
 
 /**
  * Ends by saying the list is all there is, so a mind does not carry what its role says it often has.
- * `currency` (the director's `withCurrency`) counts the purse.
+ * `currency` (the `currency` setting, `withMind`) counts the purse.
  */
 export function formatInventory(bag:Inventory = {}, currency?:string):string {
 	const lines:string[] = [];

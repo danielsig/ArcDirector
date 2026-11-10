@@ -15,10 +15,11 @@ import type { Goal, Kit, KitSource } from '../character/character-types.js';
 import type { NameTarget } from '../character/NameBook.js';
 import { Collective, type CollectiveFields, type CollectiveHost, type CollectiveJSON } from '../collective/Collective.js';
 import { internalsOf } from '../internals.js';
-import { Mind, type MindDeps, type MindSettings } from '../mind/mind.js';
+import { Mind, type MindDeps, type MindModel, type MindSettings } from '../mind/mind.js';
+import { MindDefaults } from '../mind/MindDefaults.js';
 import type { ArcFormat, MindEvent, Replacing, Sense, ThinkEvent, ToolSpec } from '../mind/mind-types.js';
 import type { ThinkInstructions } from '../mind/prompt.js';
-import { TalkNet, type SpeechUtterance, type TalkConfig, type TalkMind, type TalkSense } from '../mind/talk.js';
+import { TalkNet, type SpeechUtterance, type TalkConfig, type TalkSense } from '../mind/talk.js';
 import type { MapSense } from '../mind/map.js';
 import type { KnowledgeSource } from '../mind/knowledge.js';
 import { buildCatalog, dummyEntity, type HostKernels } from '../expr/natives.js';
@@ -72,10 +73,8 @@ import { recommendedSampling, trainedOnArcDirector } from '../inference/models.j
 import {
 	DEFAULT_BATCH_THINKS,
 	DEFAULT_BATCH_WAIT,
-	SimpleQueue,
 	ThinkQueue,
 	type MindQueue,
-	type SimpleQueueOpts,
 	type ThinkQueueOpts,
 	type ThinkRow,
 } from '../think/queue.js';
@@ -87,7 +86,6 @@ import {
 	type InferClock,
 	type KernelSource,
 	type SeenName,
-	type StartOpts,
 	type StockVerbArgs,
 	type StockVerbName,
 	type VerbArgs,
@@ -117,8 +115,6 @@ import { centroid, distance } from '../world/vec.js';
 import { Regions, type RegionSpec } from './regions.js';
 import { CARRIED_SALIENCE, sightSalience } from '../perception/salience.js';
 import { missingParts, worldVerbs } from '../world/world-verbs.js';
-
-const STARTED = 'ArcDirector already started';
 
 /** What every entity can be asked, whatever fields it carries. */
 const ALWAYS_FIELDS = new Set(['id', 'name', 'tags', 'hp', 'maxHP']);
@@ -189,6 +185,8 @@ const NO_MODEL:InferenceProvider = {
 const SYSTEM_ONE_REST_MS = 30_000;
 /** Game seconds between asks of goals' `until`s: as often as a think queue samples watches by default. */
 const GOAL_CHECK_INTERVAL = 0.25;
+/** Game seconds between the tries `tick` makes to connect while the servers do not answer. */
+const RETRY_SECONDS = 3;
 
 /** An RPG's crowds: round whoever they come to, in line to trade or hand over. */
 const RPG_CROWD:CrowdSettings = { crowd: 'ring', verbs: { offer: 'line', give: 'line' } };
@@ -196,18 +194,10 @@ const RPG_CROWD:CrowdSettings = { crowd: 'ring', verbs: { offer: 'line', give: '
 /** A character's standing `choose`: its loop, its `until`, and the game time a failed loop rests until. */
 type Standing = { arc:Arc; until?:string; restUntil:number };
 
-type QueueSlot =
-	| { kind:'default' }
-	| { kind:'priority'; opts?:ThinkQueueOpts }
-	| { kind:'simple'; opts?:SimpleQueueOpts }
-	| { kind:'instance'; queue:MindQueue };
-
 /** What ArcDirector keeps per character or collective: the spec it was built from, and its per-tick sample cache. */
-type Row<TSpec, TRunner> = {
-	spec:TSpec;
-	runner:TRunner;
-	cache:SampleCache;
-};
+type Row<TCtx> =
+	| { spec:CharacterSpec<TCtx>; runner:Character<TCtx>; cache:SampleCache }
+	| { spec:CollectiveSpec<TCtx>; runner:Collective<TCtx>; cache:SampleCache };
 
 /** A save of every character and collective: `ArcDirector.exportCast`. */
 export type CastJSON = {
@@ -242,118 +232,226 @@ function sightDistanceDescription(unitName?:string):string {
 }
 
 export class ArcDirector<TCtx = unknown> {
-	private _ready = false;
-	/** Its servers and models answered: until then thinks wait in the queue, while laws, programs and moves run. */
-	private _inferenceUp = false;
-	/** `restoreCast` before `start()`; the cast is built from it when it is wired. */
-	private _stored:CastJSON | undefined;
+	// ---- Lifecycle ----
+
+	/** The cast is built from the specs (`wire`). Every builder works before and after. */
+	private _wired = false;
+	private _connected = false;
+	/** A `connect` under way: one at a time. */
+	private _connecting:Promise<void> | undefined;
+	/** The game time `tick` next tries to connect at, while not connected. */
+	private _retryAt = 0;
 	private _disposed = false;
-	private _queueSlot:QueueSlot = { kind: 'default' };
-	private _queue:MindQueue | undefined;
-	private _verbs = new VerbRegistry();
-	private readonly _handlers = new Map<string, VerbHandler<TCtx>>();
-	private _catchAll:VerbHandler<TCtx> | undefined;
-	private _verbGate:VerbGate<TCtx> | undefined;
-	private readonly _waits = new Set<Wait>();
-	/**
-	 * How often each runner was stopped (`abortArc`). A verb still running for it gives way at its next wait or walk,
-	 * though the stop came between two of them, while none was there to cut short.
-	 */
-	private readonly _stops = new Map<string, number>();
-	private _world:HostWorld<unknown> | undefined;
-	/** Every open offer, standing ones and ones to someone. Saved with the cast. */
-	public readonly offers = new OfferBook();
-	/** Stock world verbs, bound at `start()` for the parts `withWorld` has. A host handler of the same name wins. */
-	private readonly _stockHandlers = new Map<string, VerbHandler<TCtx>>();
-	private _mover = new Mover(undefined, () => this._clock);
-	private _toolRounds:number | undefined;
-	private _arcRetries:number | undefined;
-	private _perStepRepair = false;
-	private _repairUnknownFields = false;
-	private _stalledFn:((result:ArcResult)=>boolean) | undefined;
-	private _senses:Record<string, Sense<TCtx>> = {};
-	private readonly _regions = new Regions<TCtx>((id, watch) => {
-		const r = this.evaluate(id, watch);
-		return !r.error && fit(r.value) > 0;
-	});
-	private _tools:Record<string, ToolSpec<TCtx>> = {};
-	private _rts:RTS<TCtx> | undefined;
-	private readonly _aliases = new Map<string, VerbAlias>();
-	private _sightLook:((ctx:TCtx)=>Sight) | undefined;
-	private _inventoryLook:((ctx:TCtx)=>Inventory) | undefined;
-	private _sightLimitDefault:number | undefined;
-	private _sightUnitName:string | undefined;
-	private _contextFn:((id:string)=>TCtx | undefined) | undefined;
-	private _kernelFn:KernelSource<TCtx> | undefined;
-	private _defaultKit:KitSource<TCtx> | undefined;
-	private _crowd:CrowdSettings | undefined;
-	private _groupWalk:((character:Character<TCtx>, verb:string, targets:readonly string[])=>boolean) | undefined;
-	private _cooldownDefault = DEFAULT_COOLDOWN;
-	private _talkSense:TalkSense | undefined;
-	private _onSpoke:((utterance:SpeechUtterance)=>void) | undefined;
-	private _talkConfig:Partial<TalkConfig<TCtx>> | undefined;
-	public talk:TalkNet | undefined;
-	private _map:MapSense | undefined;
-	private _knowledge:KnowledgeSource<TCtx> | undefined;
-	private _mentionCap:number | undefined;
-	private _abortArcFn:((id:string)=>void) | undefined;
-	private _commanderVacantFn:((collective:Collective<TCtx>, character:Character<TCtx>)=>void) | undefined;
-	private _lawHold = 0;
-	/** Minds whose think in flight came of their heartbeat alone: their laws need not wait for it. */
-	private readonly _beatThinks = new Set<string>();
 	private _logFn:((entry:DirectorLog)=>void) | undefined;
-	private _stepFn:((call:VerbCall<TCtx>, result:ArcResult)=>void) | undefined;
-	private _goalReachedFn:((id:string, goal:Goal<never>)=>void) | undefined;
-	/** Game seconds since goals' `until`s were last asked. */
-	private _goalClock = 0;
-	private _thinkFn:((event:ThinkEvent)=>void) | undefined;
-	private _replaceCheck = false;
-	private _ignoreMissing = false;
+	/** The game time in seconds since the director was created (Only progresses when `tick()` is called). */
+	private _clock = 0;
+	private _loop:ReturnType<typeof setInterval> | undefined;
+
+	/** Its servers and models answered: thinks run. Until then laws, programs and moves still run on every tick. */
+	public get connected():boolean {
+		return this._connected && !this._disposed;
+	}
+
+	/**
+	 * Wires the cast if it is not yet, then connects every server and model, and resolves once they answer (loaded and
+	 * warm). Rejects with the first assembly or connection error, which `onLog` hears too; called again, it tries again.
+	 * Optional: `tick` does the same on its own, every 3 game seconds until they answer.
+	 */
+	public async connect():Promise<this> {
+		if (this._disposed) {
+			throw new Error('ArcDirector disposed');
+		}
+		try {
+			this.wire();
+			if (!this._connected) {
+				this._connecting ??= this.connectInference().finally(() => {
+					this._connecting = undefined;
+				});
+				await this._connecting;
+			}
+		}
+		catch (err:unknown) {
+			const text = err instanceof Error ? err.message : String(err);
+			this.emitLog({ name: 'ArcDirector', message: text });
+			throw err instanceof Error ? err : new Error(text);
+		}
+		return this;
+	}
+
+	/**
+	 * Build the cast from the specs, once: the first `tick`, and every accessor that hands out cast objects, call it.
+	 * Throws, building nothing, when a kit names what nothing registers or a spec does not hold together.
+	 */
+	private wire():void {
+		if (this._wired || this._disposed) {
+			return;
+		}
+		// Set first: a host's context or kernels asked while wiring may ask for the cast again.
+		this._wired = true;
+		try {
+			this.syncVerbSchemas();
+			this.reportMissingNames();
+			this.wireCast(this._stored);
+			this._stored = undefined;
+		}
+		catch (err) {
+			this.clearCast();
+			this._wired = false;
+			throw err;
+		}
+	}
+
+	/**
+	 * A setting the cast copied when it was wired changed: every runner takes its verbs, cooldown, kit, catalog and
+	 * talk again, and every mind its deps. A running arc goes on; its next step sees the new kit, a think under way
+	 * the new deps on its next think. Nothing to do before wiring.
+	 */
+	private rewire():void {
+		if (!this._wired) {
+			return;
+		}
+		this.syncVerbSchemas();
+		for (const { spec, runner } of this._rows.values()) {
+			const deps = this.runnerDeps(spec, this.kitFor(spec), () => runner);
+			runner.verbs = deps.verbs;
+			runner.cooldown = deps.cooldown ?? DEFAULT_COOLDOWN;
+			runner.kit = deps.kit;
+			runner.catalog = deps.catalog;
+			runner.talk = deps.talk;
+			const mind = runner instanceof Collective ? runner.mind : ownMindOf(runner);
+			if (mind) {
+				internalsOf(mind).attach(runner, this.mindDeps(mind, runner));
+			}
+			if (runner instanceof Character) {
+				this.syncListener(runner);
+			}
+			else {
+				this.listen(runner);
+			}
+		}
+	}
+
+	private emitLog(entry:DirectorLog):void {
+		this._logFn?.(entry);
+	}
+
+	public onLog(fn:(entry:DirectorLog)=>void):this {
+		this._logFn = fn;
+		return this;
+	}
+
+	/**
+	 * Advance game time to `now`: laws, programs, moves, sounds and talk run, and ready minds think once connected. Until
+	 * then it connects on its own (wiring the cast first) every 3 game seconds; what goes wrong goes to `onLog`,
+	 * and nothing runs while the cast cannot be wired.
+	 */
+	public tick(dt:number, now:number):void {
+		if (this._disposed) {
+			return;
+		}
+		this._clock = now;
+		if (!this._connected && !this._connecting && now >= this._retryAt) {
+			this._retryAt = now + RETRY_SECONDS;
+			void this.connect().catch(() => undefined);
+		}
+		if (!this._wired) {
+			return;
+		}
+		// Characters before collectives: steps waiting for the clock wake in that order.
+		const rows = [...this._rows.values()].sort((a, b) => Number(a.runner instanceof Collective) - Number(b.runner instanceof Collective));
+		for (const row of rows) {
+			row.runner.stamp(now);
+			row.runner.refreshKit();
+		}
+		const minds = this.minds();
+		for (const mind of minds) {
+			mind.stamp(now);
+		}
+		const world = this._world;
+		if (world) {
+			this._regions.tick(this.characters(), (id) => poseOf(world, id)?.point, dt, now);
+		}
+		// Built only for the minds whose watches are sampled this tick: a view per character is not cheap.
+		const catalogs = {
+			get: (id:string):Catalog | Catalog[] | undefined => {
+				const mind = this._kernelFn && this._contextFn ? this.mindByID(id) : undefined;
+				try {
+					return mind && this.catalogsFor(mind);
+				}
+				catch {
+					return undefined;
+				}
+			},
+		};
+		const ready = this._queue.tick(dt, catalogs);
+		this._readyThink.push(...ready);
+		this.tickWaits();
+		this._rts?.tick(dt);
+		this._mover.tick();
+		this.tickSounds();
+		this.talk?.tick(now);
+		for (const row of rows) {
+			row.cache.commit();
+		}
+		for (const { runner } of this._rows.values()) {
+			if (!(runner instanceof Character)) {
+				continue;
+			}
+			if (!runner.collective) {
+				this.tickLaws(runner);
+			}
+			this.tickStanding(runner);
+		}
+		for (const { runner } of this._rows.values()) {
+			if (!(runner instanceof Collective)) {
+				continue;
+			}
+			// Whatever brought it down, a mind does not go on thinking through it.
+			const commander = runner.commander;
+			if (commander && this._world?.isDown?.(commander.id)) {
+				internalsOf(runner).vacate(commander);
+			}
+			this.tickCollectiveLaws(runner);
+		}
+		this.tickHandover();
+		this.tickGoals(dt, minds);
+		this.drain(now);
+	}
+
+	/** Wall-clock loop for laws. Games must not use this — they already have a frame tick. */
+	public runLoop(hz:number):()=>void {
+		this.stopLoop();
+		const dt = 1 / Math.max(1, hz);
+		let now = 0;
+		this._loop = setInterval(() => {
+			now += dt;
+			this.tick(dt, now);
+		}, Math.max(1, Math.round(1000 / hz)));
+		return () => this.stopLoop();
+	}
+
+	private stopLoop():void {
+		if (this._loop !== undefined) {
+			clearInterval(this._loop);
+			this._loop = undefined;
+		}
+	}
+
+	public dispose():void {
+		this.stopLoop();
+		this._disposed = true;
+		this.clearCast();
+	}
+
+	// ---- Inference ----
+
 	/** Shows a loading bar for each browser model it downloads (`withLoadingBar`). */
 	private _loadingBar:LoadingBarOptions | undefined;
-	private _arcFormat:ArcFormat = 'schema';
 	/** System One models by name. A runner is assigned one; one without an assignment uses the default. */
 	private readonly _systemOnes = new Map<string, SystemOne>();
 	/** When each System One that failed may be asked again (`performance.now()`). */
 	private readonly _systemOneRest = new Map<string, number>();
 	private _defaultSystemOne:string | null = null;
-	/** One pick closure per character, so `withheldVerbs` asking for it every refresh stays cheap. */
-	private readonly _picks = new WeakMap<ArcRunner<TCtx>, ArcPick>();
-	private readonly _standing = new WeakMap<Character<TCtx>, Standing>();
-	private _thinkInstructions:ThinkInstructions | undefined;
-	private _verbInstructions:string | undefined;
-	private _arcExample:string | undefined;
-	private _systemNote:string | undefined;
-	private _currency:string | undefined;
-	private _seenFn:SeenName<TCtx> | undefined;
-	private _mindDefaults:MindSettings = {};
-	/** `undefined` until `start()` picks the default; `false` when the host turned it off. */
-	private _handover:Handover<TCtx> | false | undefined;
-	private _handoverTicks = 1;
-	/** Moves waiting for the next handover, one per character: its first `from`, its latest `to`. */
-	private readonly _journeys = new Map<Character<TCtx>, Journey<TCtx>>();
-	private _journeyTicks = 0;
-	/** A handover call holds one think slot until it answers. */
-	private _handoverBusy = false;
-	/** Specs from `addCharacter`, in order: the characters on their own when the cast is built or restored. */
-	private readonly _soloSpecs:CharacterSpec<TCtx>[] = [];
-	private readonly _collectiveSpecs:CollectiveSpec<TCtx>[] = [];
-	/** Every character spec by id, on its own or in a collective. One id namespace covers characters and collectives. */
-	private readonly _specs = new Map<string, CharacterSpec<TCtx>>();
-	private readonly _characterRows = new Map<string, Row<CharacterSpec<TCtx>, Character<TCtx>>>();
-	private readonly _collectiveRows = new Map<string, Row<CollectiveSpec<TCtx>, Collective<TCtx>>>();
-	/** Each mind owner's talk listener, shared by every character it hears through. */
-	private readonly _talkMinds = new WeakMap<ArcRunner<TCtx>, TalkMind>();
-	/** The sound each verb makes, and what muffles a sound for a listener, once {@link withHearing} is set. */
-	private _hearing:{ noise:ReadonlyMap<string, Sound>; limit:number; range:HearingRange; onSound?:SoundListener } | undefined;
-	/** The sounds going on, by name and where: when each was made, and how loud each mind was last told it was. */
-	private readonly _sounds = new Map<string, { from:string | Vec; sound:Sound; at:number; told:Map<TalkMind, number> }>();
-	private readonly _readyThink:ThinkRow[] = [];
-	/** Per model: when its waiting thinks started waiting for it to go idle. */
-	private readonly _batchHeld = new Map<string, number>();
-	/** The game time in seconds since the director was created (Only progresses when `tick()` is called). */
-	private _clock = 0;
-	private _loop:ReturnType<typeof setInterval> | undefined;
 	/** Chat servers and the models configured on them, by name. */
 	private readonly _models = new ModelRegistry({
 		wrap: (provider, http) => this.wrapProvider(provider, http),
@@ -366,44 +464,11 @@ export class ArcDirector<TCtx = unknown> {
 			this.emitLog({ name: whoFromMessages(req), message: `prompt ${path}
 ${dump.message}`, image: dump.image });
 		},
-		changed: () => this.syncModels(),
 		log: (message, error) => this.emitLog({ name: 'ArcDirector', message, error }),
 	});
 	public infer:InferClock = emptyInferClock();
 
-	public get ready():boolean {
-		return this._ready && !this._disposed;
-	}
-
-	private assertBuilder():void {
-		if (this._ready) {
-			throw new Error(STARTED);
-		}
-	}
-
-	private emitLog(entry:DirectorLog):void {
-		this._logFn?.(entry);
-	}
-
-	public withPriorityQueue(opts?:ThinkQueueOpts):this {
-		this.assertBuilder();
-		this._queueSlot = { kind: 'priority', opts };
-		return this;
-	}
-
-	public withSimpleQueue(opts?:SimpleQueueOpts):this {
-		this.assertBuilder();
-		this._queueSlot = { kind: 'simple', opts };
-		return this;
-	}
-
-	public withQueue(queue:MindQueue):this {
-		this.assertBuilder();
-		this._queueSlot = { kind: 'instance', queue };
-		return this;
-	}
-
-	/** LM Studio as chat server `name` (default `lmstudio`), before or after `start()`. Default URL `http://127.0.0.1:1234/v1`. */
+	/** LM Studio as chat server `name` (default `lmstudio`), any time. Default URL `http://127.0.0.1:1234/v1`. */
 	public addLMStudioInference({ name = 'lmstudio', ...opts }:HttpInferenceOpts & { name?:string } = {}):this {
 		return this.addInference(name, { kind: 'http', opts: lmStudioConfig(opts) });
 	}
@@ -424,7 +489,7 @@ ${dump.message}`, image: dump.image });
 	}
 
 	/**
-	 * A server under `name`, before or after `start()`; the same name again replaces it. A chat server is your own
+	 * A server under `name`, any time; the same name again replaces it. A chat server is your own
 	 * `InferenceProvider` or a source. A System One (anything with `pick`) answers `choose`: a spec's `systemOne`
 	 * assigns one by name, a runner without one uses {@link setDefaultSystemOne}'s, and when a runner's own fails or
 	 * names no choice, the others are asked in the order added, then the runner's chat model.
@@ -453,9 +518,9 @@ ${dump.message}`, image: dump.image });
 	}
 
 	/**
-	 * A chat model under `name`, before or after `start()`; the same name again replaces it. A mind thinks with the
+	 * A chat model under `name`, any time; the same name again replaces it. A mind thinks with the
 	 * one its settings' `model` names, else the default: the first added, unless `setDefaultModel` says otherwise.
-	 * With none added, `start()` adds the first server's own pick, named after that server. A `decision` model is
+	 * With none added, connecting adds the first server's own pick, named after that server. A `decision` model is
 	 * also System One `name`: it answers `choose` with one choice's name, never thinks aloud unless `thinking` says
 	 * so, and is never the minds' default.
 	 */
@@ -471,8 +536,8 @@ ${dump.message}`, image: dump.image });
 	}
 
 	/**
-	 * Model `name`, run in the page on the GPU through wllama (`@wllama/wllama`, llama.cpp in WebAssembly), before or
-	 * after `start()`; the same name again replaces it. `model` is one of ArcDirector's own (`Skaldic.Gemma4E4B`,
+	 * Model `name`, run in the page on the GPU through wllama (`@wllama/wllama`, llama.cpp in WebAssembly), any
+	 * time; the same name again replaces it. `model` is one of ArcDirector's own (`Skaldic.Gemma4E4B`,
 	 * `Skaldic.Laya`), a GGUF's URL ({@link BrowserModelSpec.model}), or
 	 * the whole spec; without one, Skaldic Gemma 4 E4B ({@link DEFAULT_BROWSER_MODEL}). A decision model the library
 	 * knows (Skaldic Laya) is a System One on its own engine ({@link BrowserProvider.decisions}), server
@@ -548,20 +613,19 @@ ${dump.message}`, image: dump.image });
 	}
 
 	/**
-	 * Before `start()`: think on `from`'s chat servers and models in place of this director's own, over the same
-	 * connections and as `from` resolved them, so `start()` looks nothing up again. For many short-lived directors on
+	 * Think on `from`'s chat servers and models in place of this director's own, over the same
+	 * connections and as `from` resolved them, so connecting looks nothing up again. For many short-lived directors on
 	 * one setup, such as a bench's cases. Their requests are logged by `from`.
 	 */
 	public shareInference(from:ArcDirector<TCtx>):this {
-		this.assertBuilder();
 		this._models.adopt(from._models);
 		return this;
 	}
 
 	/** The one model every memory is embedded with, so recall compares like with like whatever a mind thinks with. */
 	public withEmbeddings(spec:EmbeddingSpec):this {
-		this.assertBuilder();
 		this._models.setEmbeddings(spec);
+		this.rewire();
 		return this;
 	}
 
@@ -581,117 +645,346 @@ ${dump.message}`, image: dump.image });
 		this._defaultSystemOne = name;
 	}
 
-	public addSense(name:string, spec:Sense<TCtx>):this {
-		this._senses[name] = spec;
-		return this;
+	public resetInferStats():void {
+		this.infer = emptyInferClock();
 	}
 
-	/**
-	 * ### Add a region to inject memories or run callbacks when characters touch it.
-
-	 * Defined as either a box between two corners (`from`, `to`) or a ball (`center`, `radius`), in world coordinates (`Vec`s).
-	 * - `who` (requires `withKernels`) filters what characters the region applies to.
-	 * Either a predicate given the character's context, or a watch string from the character's perspective.
-	 * - `memory` gets injected into the mind of characters inside the region and forgotten when they leave.
-	 * - `onEnter`, `onStay` and `onExit` run for each character inside the region.
-	 * - `until` removes the region once it returns true.
-	 * - `center` can be either world coordinates or an entity's ID and the region follows it.
-	 * Requires `withWorld` with `find` to look up entities by ID and `getPose` to get their position.
-	 * - Adding a region of the same name as an existing one replaces it.
-	 *
-	 * ### Notes
-	 * Regions are often the simplest way to give a mind what it needs, just when it needs it.
-	 * The problem with goals and pinned memories is that they stay in the mind forever.
-	 * A region's memory reaches the right characters at the right time and goes away when it becomes irrelevant.
-	 * A room's atmosphere, the dread at a monster's lair, a character's presence and aura, an item's instruction manual,
-	 * one character's own take on a place, a pep talk that triggers at the beginning of a journey.
-	 * All of these keep the prompt short for better performance and the minds focused on what's relevant.
-	 *
-	 * ### Performance
-	 * Cheap to have many of. With many regions and characters the check switches to sweep and prune, so it grows as
-	 * `n log n` rather than `n²`.
-	 */
-	public addRegion(name:string, spec:RegionSpec<TCtx>):this {
-		this.removeRegion(name);
-		this._regions.add(name, spec);
-		return this;
-	}
-
-	/** Remove regions defined by {@link addRegion}.
-	 * On removal, everyone `who` counted as inside the region
-	 * has their injected memories removed and `onExit` gets called.
-	 * Regions not found by name are ignored.
-	 */
-	public removeRegion(...names:string[]):this {
-		for (const name of names) {
-			this._regions.remove(name, this._clock);
+	private recordInfer(id:string | undefined, wallMs:number, res:{ promptMs?:number; generateMs?:number }):void {
+		const context = res.promptMs;
+		const generate = res.generateMs ?? (context !== undefined ? Math.max(0, wallMs - context) : wallMs);
+		this.infer.calls += 1;
+		this.infer.wallMs += wallMs;
+		this.infer.lastWallMs = wallMs;
+		if (context !== undefined) {
+			this.infer.contextMs += context;
+			this.infer.contextKnown += 1;
+			this.infer.lastContextMs = context;
 		}
-		return this;
+		else {
+			this.infer.lastContextMs = null;
+		}
+		this.infer.generateMs += generate;
+		this.infer.lastGenerateMs = generate;
+		if (id) {
+			this.infer.thinkMs[id] = (this.infer.thinkMs[id] ?? 0) + generate;
+		}
 	}
 
-	/**
-	 * ### Add an LLM tool that minds can call.
-	 * - `description` is the tool's description.
-	 * - `parameters` is the tool's arguments' JSON schema.
-	 * - `handler` is the function that will be called when the tool is called. Returns a promise or a value.
-	 * Requires `withKernels` to look up entities by ID and `getPose` to get their position.
-	 * Adding a tool of the same name as an existing one replaces it.
-	 */
-	public addTool(name:string, spec:ToolSpec<TCtx>):this {
-		this._tools[name] = spec;
-		return this;
-	}
-
-	/**
-	 * A tool `name` that looks ahead in a game for the mind that calls it: the best moves from where it stands, each
-	 * with its chance to win and the line expected after it. Add one per game (`chess_move`, `plan_build`); a kit's
-	 * `tools` grants it like any tool.
-	 */
-	public addSearch<TState>(name:string, spec:SearchSpec<TCtx, TState>):this {
-		return this.addTool(name, searchTool(spec));
-	}
-
-	/**
-	 * An RTS: its kinds as data and a few primitives, each acting once (`RTSHost`). Registers the stock RTS verbs and
-	 * runs them all: who does the work, routes, queues, supply, target picking, failure reasons. A unit or building
-	 * whose tags name a kind gets that kind's verbs as its kit; a side's commander reads its stock, supply, queues
-	 * and grouped units in its prompt. Movement needs `withWorld`.
-	 */
-	public withRTS(host:RTSHost):this {
-		this.assertBuilder();
-		this._verbs.addAll(STOCK_RTS_VERB_DEFS);
-		const rts = new RTS<TCtx>({
-			host,
-			world: () => this._world,
-			character: (id) => this.character(id),
-			collective: (id) => this.collective(id),
-			pick: (call, expr) => this.pickIDs(call, expr),
-			seen: (call) => (this._sightLook ? this.filterSight(this._sightLook(call.ctx)).objects.map((o) => o.id) : []),
-			tell: (id, text) => {
-				const runner = this.collective(id) ?? this.character(id);
-				const owner = runner instanceof Character ? runner.collective ?? runner : runner;
-				if (owner?.mind) {
-					owner.mind.pushEvent({ kind: 'rts', text, major: true });
+	/** Timing and the AI log around a server. An HTTP one logs its own request bodies. */
+	private wrapProvider(inner:InferenceProvider, http:boolean):InferenceProvider {
+		const embed = inner.embed?.bind(inner);
+		return {
+			chat: async (req:ChatRequest):Promise<ChatResponse> => {
+				// A System One's pick is logged once, whole, by `pick`, and is not a think.
+				if (isPick(req)) {
+					return inner.chat(req);
+				}
+				const name = whoFromMessages(req);
+				const t0 = nowMs();
+				const signal = req.thread ? this._queue.thinkSignal(req.thread) : undefined;
+				try {
+					if (!http) {
+						const dump = formatChatLog(req);
+						this.emitLog({ name, message: `prompt\n${dump.message}`, image: dump.image });
+					}
+					// A think stopped, and a request its own mind ended, both end it.
+					const res = await inner.chat(signal ? { ...req, signal: req.signal ? AbortSignal.any([req.signal, signal]) : signal } : req);
+					const ms = Math.round(nowMs() - t0);
+					this.recordInfer(req.thread, ms, res);
+					const parts = [`${ms}ms`];
+					if (res.promptMs !== undefined) {
+						parts.push(`ctx ${Math.round(res.promptMs)}ms`);
+					}
+					if (res.generateMs !== undefined) {
+						parts.push(`gen ${Math.round(res.generateMs)}ms`);
+						if (res.outputTokens && res.generateMs > 0) {
+							parts.push(`${res.outputTokens} tok ${(res.outputTokens / (res.generateMs / 1000)).toFixed(1)}/s`);
+						}
+					}
+					if (res.cachedTokens) {
+						parts.push(`cache ${res.cachedTokens}`);
+					}
+					if (res.toolCalls.length > 0) {
+						parts.push(`tool ${res.toolCalls.map((c) => c.name).join(', ')}`);
+					}
+					const thought = res.reasoning?.trim() ?? '';
+					const body = res.content?.trim() ?? '';
+					if (thought && thought !== body && !body.includes(thought)) {
+						parts.push(`(thinking)\n${thought}`);
+					}
+					if (res.content) {
+						parts.push(res.content);
+					}
+					else if (!thought && res.toolCalls.length === 0) {
+						parts.push('(empty content)');
+					}
+					this.emitLog({ name, message: parts.join('\n') });
+					return res;
+				}
+				catch (err:unknown) {
+					const ms = Math.round(nowMs() - t0);
+					this.recordInfer(req.thread, ms, {});
+					const aborted = !!signal?.aborted;
+					const text = aborted
+						? 'aborted'
+						: err instanceof Error ? err.message : String(err);
+					this.emitLog({ name, message: `${ms}ms\n${text}`, error: !aborted });
+					throw err;
 				}
 			},
-			has: (verb) => this._verbs.has(verb),
-		});
-		this._rts = rts;
-		for (const [name, alias] of Object.entries({ ...rts.aliases(), ...rts.renamed() })) {
-			this.addVerb(name, alias);
+			embed: embed
+				? (texts, model) => embed(texts, model)
+				: undefined,
+			systemOneEndpoint: inner.systemOneEndpoint?.bind(inner),
+		};
+	}
+
+	/** A chat model, unless every character acts by a standing `choose` on a System One that needs no chat. */
+	private needsChat():boolean {
+		return this._systemOnes.size === 0
+			|| this._collectiveSpecs.length > 0
+			|| this._soloSpecs.some((spec) => spec.mind)
+			|| Object.values(this._stored?.characters ?? {}).some((json) => json.mind);
+	}
+
+	/** Chat model `name`, or the default, as its server answered it. Throws while there is none. */
+	private chatModel(name?:string):LiveModel {
+		const model = this._models.live(name);
+		if (!model) {
+			throw new Error(`ArcDirector: no chat model '${name ?? 'default'}' (addModel)`);
 		}
-		return this;
+		return model;
+	}
+
+	/** Chat model `name` (or the default) as a System One that names one choice. */
+	private modelSystemOne(name?:string):ModelSystemOne {
+		return new ModelSystemOne(() => this.chatModel(name));
+	}
+
+	/** Drops System One `name` when a decision model backed it, so it never falls back to the default chat model. */
+	private removeModelSystemOne(name:string):void {
+		if (this._systemOnes.get(name) instanceof ModelSystemOne) {
+			this._systemOnes.delete(name);
+		}
+	}
+
+	private async connectInference():Promise<void> {
+		if (!this._models.hasServers) {
+			if (!this.needsChat()) {
+				this._connected = true;
+				return;
+			}
+			throw new Error('ArcDirector: no inference (addLMStudioInference / addOllamaInference / addFakeInference / addInference)');
+		}
+		await this._models.start();
+		this._connected = true;
+	}
+
+	/** A spec naming a System One or a chat model this director lacks is a typo; caught when it is wired. */
+	private checkNames(spec:{ id:string; systemOne?:string | null; mind?:MindSettings; goals?:Goal<TCtx>[] }):void {
+		if (spec.systemOne && !this._systemOnes.has(spec.systemOne)) {
+			throw new Error(`ArcDirector: '${spec.id}' names System One '${spec.systemOne}', which was never added`);
+		}
+		if (spec.mind?.model !== undefined && !this._models.has(spec.mind.model)) {
+			throw new Error(`ArcDirector: '${spec.id}' names model '${spec.mind.model}', which was never added`);
+		}
+		// A typo in a goal's watch would leave it open for good: it throws now, as a law's does, not silently in play.
+		for (const { until } of spec.goals ?? []) {
+			if (typeof until === 'string') {
+				parse(until);
+			}
+		}
+	}
+
+	// ---- Choice (System One picking) ----
+
+	/** One pick closure per character, so `withheldVerbs` asking for it every refresh stays cheap. */
+	private readonly _picks = new WeakMap<ArcRunner<TCtx>, ArcPick>();
+	private readonly _standing = new WeakMap<Character<TCtx>, Standing>();
+
+	/**
+	 * What `id`'s System One would be asked now to pick among `choices` (arcs, or arc text), worded as `choose` words
+	 * it ({@link choicePrompt}): its state lines and each choice that can run, with whom it is about. `doing` and `last`
+	 * stand in for the verb it runs and its last choice. Undefined when no choice can run now. For previews and
+	 * training data.
+	 */
+	public choiceQuestion(id:string, choices:Record<string, Arc | string>, { doing, last }:{ doing?:string; last?:LastChoice } = {}):ChoicePrompt | undefined {
+		const runner = this.character(id) ?? this.collective(id);
+		if (!runner) {
+			throw new Error(`no character or collective ${id}`);
+		}
+		const arcs = Object.fromEntries(Object.entries(choices).map(([name, arc]) => [name, typeof arc === 'string' ? parseArcText(arc, this._verbs) : arc]));
+		return this.choiceQuestionOf(runner, arcs, doing ?? runner.verb, last);
+	}
+
+	private choiceQuestionOf(runner:ArcRunner<TCtx>, choices:Record<string, Arc>, verb:string, last:LastChoice | undefined):ChoicePrompt | undefined {
+		return choicePrompt({ id: runner.id, verb, last, catalog: runner.catalog?.(), choices: withLoneWait(choices), verbs: this._verbs });
 	}
 
 	/**
-	 * An RPG to start from: `equip`, `unequip`, `steal`, `attack`, `block`, `heal` and `protect`, each registered with
-	 * its args and help once the game gives its handler (`RPGHost`), and the game's own attacks and spells as
-	 * `abilities`. Registers the stock verbs too; without `withDefaultKit`, characters get them, `offer` and these.
+	 * `spec.choose` as `loop(choose(goal, …choices), until)`, checked as the cast is wired so a typo throws then, not
+	 * mid-game. Its choices may use any registered verb.
 	 */
-	public withRPG(host:RPGHost<TCtx>):this {
-		this._crowd ??= RPG_CROWD;
-		return this.withGenre(genreVerbs(STOCK_RPG_VERB_DEFS, host), STOCK_TRADE_VERBS);
+	private standingChoice(spec:CharacterSpec<TCtx>):Standing | undefined {
+		if (!spec.choose) {
+			return undefined;
+		}
+		if (spec.mind) {
+			throw new Error(`ArcDirector: '${spec.id}' has both choose and mind; give it one`);
+		}
+		const { goal, until, ...choices } = spec.choose;
+		try {
+			const args:Record<string, StepArg> = { goal };
+			for (const [name, text] of Object.entries(choices)) {
+				if (text !== undefined) {
+					args[name] = parseArcText(text, this._verbs);
+				}
+			}
+			const arc:Arc = [{ verb: 'loop', args: { arc: [{ verb: CHOOSE_VERB, args }], ...(until ? { until } : {}) } }];
+			validateArc(arc, this._verbs);
+			if (until) {
+				parse(until);
+			}
+			return { arc, until, restUntil: 0 };
+		}
+		catch (err) {
+			throw new Error(`ArcDirector: '${spec.id}' choose: ${err instanceof Error ? err.message : String(err)}`);
+		}
 	}
+
+	/** Start a character's standing `choose` while it is idle, System One is on, and its `until` does not hold. */
+	private tickStanding(character:Character<TCtx>):void {
+		const standing = this._standing.get(character);
+		if (!standing || character.arcSession || this._clock < standing.restUntil || !this.pickFor(character)) {
+			return;
+		}
+		const catalog = standing.until ? character.catalog?.() : undefined;
+		if (standing.until && catalog && watchIsTrue(standing.until, catalog)) {
+			return;
+		}
+		void character.enact(standing.arc).then((result) => {
+			// A dead endpoint or a bad pick rests like a handler would, instead of asking again every tick.
+			if (!result.ok && !result.preempted) {
+				standing.restUntil = this._clock + character.cooldown;
+			}
+		}, (err:unknown) => {
+			standing.restUntil = this._clock + character.cooldown;
+			this.emitLog({ name: character.id, message: `choose: ${err instanceof Error ? err.message : String(err)}`, error: true });
+		});
+	}
+
+	/**
+	 * The name of a runner's System One: the one its spec names, else its collective's, else the default. A spec's
+	 * `null` means none there, whatever the default is.
+	 */
+	private systemOneOf(runner:ArcRunner<TCtx>):string | null {
+		const specs = [
+			this._rows.get(runner.id)?.spec,
+			runner instanceof Character && runner.collective ? this._rows.get(runner.collective.id)?.spec : undefined,
+		];
+		const assigned = specs.find((spec) => spec?.systemOne !== undefined)?.systemOne;
+		const name = assigned === undefined ? this._defaultSystemOne : assigned;
+		return name && this._systemOnes.has(name) ? name : null;
+	}
+
+	/** This runner's pick while it has a System One. */
+	private pickFor(runner:ArcRunner<TCtx>):ArcPick | undefined {
+		if (!this.systemOneOf(runner)) {
+			return undefined;
+		}
+		let pick = this._picks.get(runner);
+		if (!pick) {
+			pick = (goal, choices, last) => this.pick(runner, goal, choices, last);
+			this._picks.set(runner, pick);
+		}
+		return pick;
+	}
+
+	/**
+	 * Ask which of `choices` serves `goal` now, worded by {@link choicePrompt}. A lone choice left is taken unasked;
+	 * with none left the pick fails unasked. The runner's own System One answers first; when it fails or names no
+	 * choice, every other System One in turn, then the runner's chat model. One that failed rests a while.
+	 */
+	private async pick(runner:ArcRunner<TCtx>, goal:string, choices:Record<string, Arc>, last:LastChoice | undefined):Promise<string> {
+		const own = this.systemOneOf(runner);
+		if (!own) {
+			throw new Error('System One is off');
+		}
+		const prompt = this.choiceQuestionOf(runner, choices, runner.verb, last);
+		if (!prompt) {
+			throw new Error('no choice can run now');
+		}
+		const { state, criteria } = prompt;
+		const shown = Object.keys(criteria);
+		const now = nowMs();
+		if (shown.length === 1) {
+			this.logPick(runner, goal, `${shown[0]}, the only one that can run`, now, [], state, criteria);
+			runner.record.picked(shown[0]);
+			return shown[0];
+		}
+		const asked = [own, ...[...this._systemOnes.keys()].filter((name) => name !== own && (this._systemOneRest.get(name) ?? 0) <= now)]
+			.map((name):[string, SystemOne] => [name, this._systemOnes.get(name)!]);
+		const chat = this._models.live(runner.mind?.setting('model'));
+		if (chat) {
+			asked.push([chat.name, this.modelSystemOne(chat.name)]);
+		}
+		const misses:string[] = [];
+		for (const [by, systemOne] of asked) {
+			try {
+				const name = await systemOne.pick(state, goal, criteria);
+				if (Object.hasOwn(criteria, name)) {
+					this.logPick(runner, goal, `${name} by ${by}`, now, misses, state, criteria);
+					runner.record.picked(name);
+					return name;
+				}
+				misses.push(`${by} named '${name}'`);
+			}
+			catch (err) {
+				misses.push(`${by}: ${err instanceof Error ? err.message : String(err)}`);
+				if (this._systemOnes.has(by)) {
+					this._systemOneRest.set(by, nowMs() + SYSTEM_ONE_REST_MS);
+				}
+			}
+		}
+		this.logPick(runner, goal, 'nothing', now, misses, state, criteria);
+		throw new Error(misses.join('; ') || 'no System One answered');
+	}
+
+	private logPick(runner:ArcRunner<TCtx>, goal:string, answer:string, started:number, misses:string[], state:string, criteria:Record<string, string>):void {
+		const lines = Object.entries(criteria).map(([key, arc]) => `  ${key}: ${arc}`).join('\n');
+		this.emitLog({
+			name: runner.id,
+			message: `choose ${JSON.stringify(goal)} → ${answer} in ${Math.round(nowMs() - started)}ms`
+				+ `${misses.length > 0 ? ` (${misses.join('; ')})` : ''}\n${state}\n${lines}`,
+			error: answer === 'nothing',
+		});
+	}
+
+	// ---- Verbs and dispatch ----
+
+	private _verbs = new VerbRegistry();
+	private readonly _handlers = new Map<string, VerbHandler<TCtx>>();
+	private _catchAll:VerbHandler<TCtx> | undefined;
+	private _verbGate:VerbGate<TCtx> | undefined;
+	private readonly _waits = new Set<Wait>();
+	/**
+	 * How often each runner was stopped (`abortArc`). A verb still running for it gives way at its next wait or walk,
+	 * though the stop came between two of them, while none was there to cut short.
+	 */
+	private readonly _stops = new Map<string, number>();
+	private _world:HostWorld<unknown> | undefined;
+	/** Every open offer, standing ones and ones to someone. Saved with the cast. */
+	public readonly offers = new OfferBook();
+	/** Stock world verbs for the parts `withWorld` has, and the RTS verbs once `withRTS` is set. A host handler of the same name wins. */
+	private readonly _stockHandlers = new Map<string, VerbHandler<TCtx>>();
+	private _mover = new Mover(undefined, () => this._clock);
+	private readonly _aliases = new Map<string, VerbAlias>();
+	/** Each noisy verb's help as it was registered, before {@link syncVerbSchemas} added how far its sound carries. */
+	private readonly _baseHelp = new Map<string, string | undefined>();
+	private _crowd:CrowdSettings | undefined;
+	private _groupWalk:((character:Character<TCtx>, verb:string, targets:readonly string[])=>boolean) | undefined;
+	private _abortArcFn:((id:string)=>void) | undefined;
+	private _stepFn:((call:VerbCall<TCtx>, result:ArcResult)=>void) | undefined;
 
 	/**
 	 * How characters bound for the same character share it: a `line` to be served one at a time, a `ring` round it,
@@ -699,7 +992,6 @@ ${dump.message}`, image: dump.image });
 	 * `none`. A character spec's `crowd` wins over this, and a move's own `crowd` over both.
 	 */
 	public withCrowd(crowd:CrowdSettings):this {
-		this.assertBuilder();
 		this._crowd = crowd;
 		return this;
 	}
@@ -710,7 +1002,6 @@ ${dump.message}`, image: dump.image });
 	 * more than once a step, so a program knows whether a line would take its body: keep it cheap and free of side effects.
 	 */
 	public withGroupWalk(fn:(character:Character<TCtx>, verb:string, targets:readonly string[])=>boolean):this {
-		this.assertBuilder();
 		this._groupWalk = fn;
 		return this;
 	}
@@ -721,38 +1012,6 @@ ${dump.message}`, image: dump.image });
 			return 'none';
 		}
 		return this._specs.get(target)?.crowd ?? this._crowd?.verbs?.[verb] ?? this._crowd?.crowd ?? 'none';
-	}
-
-	/** A MOBA to start from: as `withRPG`, with its heroes' `attack`, `block`, `heal`, `protect` and `abilities`, and no `offer`. */
-	public withMOBA(host:MOBAHost<TCtx>):this {
-		return this.withGenre(genreVerbs(STOCK_MOBA_VERB_DEFS, host));
-	}
-
-	/** Register a genre's verbs and the stock ones; with `more`, they are the default kit unless `withDefaultKit` says otherwise. */
-	private withGenre(verbs:readonly GenreVerbEntry<TCtx>[], more:readonly string[] = []):this {
-		this.assertBuilder();
-		this._verbs.addAll(STOCK_VERB_DEFS);
-		for (const { name, def, handler } of verbs) {
-			if (!this._verbs.has(name)) {
-				this._verbs.add(name, def);
-			}
-			this._handlers.set(name, handler);
-		}
-		this._defaultKit ??= { verbs: [...STOCK_VERBS, ...more, ...verbs.map((verb) => verb.name)] };
-		return this;
-	}
-
-	/** The ids `expr` picks, as `call`'s character sees: its collective's `units` too. */
-	private pickIDs(call:VerbCall<TCtx>, expr:string):string[] | { error:string } {
-		const catalog = this.exprCatalog(call.character, call.ctx, new SampleCache());
-		if (!catalog) {
-			return { error: 'nothing to pick from' };
-		}
-		const r = evaluate(expr, catalog);
-		if (r.error) {
-			return { error: r.error.message };
-		}
-		return idsInVal(r.value);
 	}
 
 	/**
@@ -825,381 +1084,67 @@ ${dump.message}`, image: dump.image });
 		};
 	}
 
-	public withSight({ look, limit, unitName }:{
-		look?:(ctx:TCtx)=>Sight;
-		limit?:number;
-		unitName?:string;
-	}):this {
-		this.assertBuilder();
-		if (limit !== undefined) {
-			this._sightLimitDefault = limit;
-		}
-		if (unitName !== undefined) {
-			this._sightUnitName = unitName;
-		}
-		if (this._senses.sight) {
-			this._senses.sight.description = sightDistanceDescription(this._sightUnitName);
-		}
-		if (!look) return this;
-		this._sightLook = look;
-		this._senses.sight = {
-			description: sightDistanceDescription(this._sightUnitName),
-			gather: (ctx) => {
-				const snap = this.filterSight(look(ctx));
-				return formatSight(snap, this.sightFormatOpts());
-			},
-		};
-		return this;
-	}
-
-	public withCooldown(seconds:number):this {
-		this.assertBuilder();
-		this._cooldownDefault = seconds;
-		return this;
-	}
-
-	/** How minds write an Arc: `text`, `json`, or `schema` (JSON the server must follow; default). Live: `setArcFormat`. */
-	public withArcFormat(format:ArcFormat):this {
-		this.assertBuilder();
-		this._arcFormat = format;
-		return this;
-	}
-
-	/**
-	 * Game seconds every law runs once started before anything but its own end stops it, unless it sets its own `hold`.
-	 * Keeps watches that sit on an edge (a foe at just the distance a law watches for) from switching laws every frame.
-	 * Default 0: a law stops the moment its watch turns false or a higher one's turns true.
-	 */
-	public withLawHold(seconds:number):this {
-		this.assertBuilder();
-		this._lawHold = Math.max(0, seconds);
-		return this;
-	}
-
-	/**
-	 * Standing think line per reasoning state. The prompt follows the live reasoning switch.
-	 * Defaults: `on` `DEFAULT_THINK_INSTRUCTIONS`, `off` nothing.
-	 */
-	public withThinkInstructions(lines:ThinkInstructions):this {
-		this.assertBuilder();
-		this._thinkInstructions = lines;
-		return this;
-	}
-
-	/** Standing verb-chain line. Default `DEFAULT_VERB_INSTRUCTIONS`, plus looping programs for a collective; this replaces both. */
-	public withVerbInstructions(text:string):this {
-		this.assertBuilder();
-		this._verbInstructions = text;
-		return this;
-	}
-
-	/** Arc that closes the prompt as its Example, in place of the stock one. Models copy it, so make it valid. */
-	public withArcExample(arc:string):this {
-		this.assertBuilder();
-		this._arcExample = arc;
-		return this;
-	}
-
-	/** One sentence in every mind's system prefix, after who it is. */
-	public withSystemNote(text:string):this {
-		this.assertBuilder();
-		this._systemNote = text;
-		return this;
-	}
-
-	/**
-	 * The item id the world pays with (`gold`). Minds are told how `give` and `offer` move it, the purse is counted in it,
-	 * and handing it over is remembered as paying. Without one, nothing is said about money.
-	 */
-	public withCurrency(name:string):this {
-		this.assertBuilder();
-		this._currency = name;
-		return this;
-	}
-
-	/**
-	 * Repair turns after a bad arc. `retries` is how many (default 0: a bad reply fails the think). Each retry samples
-	 * as the model does, so a model that wrote one bad reply does not write it again word for word. With `perStep`, the
-	 * steps of a reply that need no body (`issue`, `law`, `when`, `say`, ...) are judged each on its own: the good ones
-	 * stand, the model's turn shows only those, and it is told in words what became of the rest, to replace just them. A
-	 * reply that does not read at all still goes back whole. With `unknownFields`, a watch that reads a field no one in
-	 * sight has (`u.foo`) goes back too: it would only ever be false. Leave it off if your entities gain fields later.
-	 */
-	public withRepair({ retries, perStep, unknownFields }:{ retries?:number; perStep?:boolean; unknownFields?:boolean }):this {
-		this.assertBuilder();
-		this._arcRetries = retries;
-		this._perStepRepair = perStep ?? false;
-		this._repairUnknownFields = unknownFields ?? false;
-		return this;
-	}
-
-	/** Tool rounds a think may spend before it must emit the Arc. Default `DEFAULT_TOOL_ROUNDS`; 0 offers no tools. */
-	public withToolRounds(rounds:number):this {
-		this.assertBuilder();
-		this._toolRounds = rounds;
-		return this;
-	}
-
-	/** Whether a finished arc stalled, which stretches the heartbeat. Default: it failed or was interrupted. */
-	public withStalled(fn:(result:ArcResult)=>boolean):this {
-		this.assertBuilder();
-		this._stalledFn = fn;
-		return this;
-	}
-
-	/**
-	 * How each mind names other characters. `seen` returns a base name from what the mind holds about
-	 * the target; its owner's book keeps that name stable and numbers duplicates (`EnemyWitch2`).
-	 * Applied to sight, earshot, heard speech, watch-language entities, and event `who`. Arcs, laws and
-	 * watches are kept in ids: each mind turns its model's names into ids as it reads a reply.
-	 */
-	public withNames({ seen }:{ seen:SeenName<TCtx> }):this {
-		this.assertBuilder();
-		this._seenFn = seen;
-		return this;
-	}
-
-	/** What the mind of character or collective `observerID` calls a character, for host-built text such as a sight `note`. */
-	public seen(observerID:string, target:NameTarget):string {
-		return (this.character(observerID) ?? this.collective(observerID))?.mind?.seen(target) ?? target.id;
-	}
-
-	/**
-	 * `expr` (watch syntax) as character `id` sees the world now, for host tools such as a camera that follows
-	 * `others.filter(u => doing(u, "cleave"))`. Every character in `others` carries its `busy` and `verb`.
-	 */
-	public evaluate(id:string, expr:string):EvalResult {
-		const runner = this.character(id);
-		const ctx = runner?.context();
-		if (!runner || ctx === undefined || !this._kernelFn) {
-			return { value: ABSENT, error: new ExprError(`${id} has no view of the world`) };
-		}
-		const kernels = this.kernelsFor(runner, ctx);
-		const others = kernels.others.map((e) => {
-			const other = this.character(e.id);
-			return other ? { ...e, fields: { ...e.fields, ...memberEntity(other, '').fields } } : e;
-		});
-		return evaluate(expr, buildCatalog({ ...kernels, others }));
-	}
-
-	public withInventory(look:(ctx:TCtx)=>Inventory):this {
-		this.assertBuilder();
-		this._inventoryLook = look;
-		this._senses.carrying = {
-			description: 'What you wear and carry.',
-			gather: (ctx) => formatInventory(look(ctx), this._currency),
-		};
-		return this;
-	}
-
 	/**
 	 * The game's world: where things are, how characters move, and how items, uses, looks, and trades work.
 	 * Runs the stock world verbs (`go_to`, `pick_up`, `offer`, …) and the watch geometry. `TEntity` is the
 	 * game's own type for things in its world; every part but `find` receives one. See `HostWorld`.
 	 */
 	public withWorld<TEntity>(world:HostWorld<TEntity>):this {
-		this.assertBuilder();
 		this._world = world;
-		return this;
-	}
-
-	public removeSense(...names:string[]):this {
-		for (const name of names) {
-			delete this._senses[name];
+		// Moves under way were through the world before.
+		for (const { runner } of this._rows.values()) {
+			this._mover.stop(runner.id);
 		}
-		return this;
-	}
-
-	public removeTool(...names:string[]):this {
-		for (const name of names) {
-			delete this._tools[name];
-		}
-		return this;
-	}
-
-	public withContext(fn:(id:string)=>TCtx | undefined):this {
-		this.assertBuilder();
-		this._contextFn = fn;
-		return this;
-	}
-
-	public withKernels(fn:KernelSource<TCtx>):this {
-		this.assertBuilder();
-		this._kernelFn = fn;
-		return this;
-	}
-
-	/** Used when a character or collective spec omits `kit`, a collective's characters too. */
-	public withDefaultKit(kit:KitSource<TCtx>):this {
-		this.assertBuilder();
-		this._defaultKit = kit;
-		return this;
-	}
-
-	/**
-	 * NPCs hear sounds as they hear speech. A sound is as loud as its `loudness` (0–1) times how clearly `range` carries
-	 * it to a listener: by default an inverse-square drop out to `max`, halved where sound does not pass straight
-	 * between them (`canPass`, heard `muffled`),
-	 * or the game's own `(listenerID, source) => 0–1`. Heard from {@link AUDIBLE} up. `noise` is the sound each verb
-	 * makes while it runs (`go_to: { name: 'footsteps', loudness: 0.4 }`): its help says how far that carries, so a mind
-	 * knows which of its own deeds can be heard, and from where. Any other sound the host makes with {@link emitSound}.
-	 * A mind is told at most `limit` sounds a think, the loudest; none it sees the source of. `onSound` hears every
-	 * sound too, as it is made and again each tick while it goes on, for whatever has no mind: a game's simple bots
-	 * turning toward a noise. Needs `withWorld`.
-	 */
-	public withHearing({ noise = {}, limit = 5, range, onSound }:{
-		noise?:Record<string, Sound>;
-		limit?:number;
-		range?:Partial<typeof DEFAULT_HEARING> | ((listenerID:string, source:SoundSource)=>number);
-		onSound?:SoundListener;
-	} = {}):this {
-		this.assertBuilder();
-		this._hearing = { noise: new Map(Object.entries(noise)), limit, range: typeof range === 'function' ? range : { ...DEFAULT_HEARING, ...range }, onSound };
-		return this;
-	}
-
-	/**
-	 * `sound` made at `from`: a character or thing the world places (it moves with it), or a point. Every mind in earshot
-	 * is told it, from whichever of its characters hears it loudest, as an event it reads in its next think (`You hear
-	 * footsteps LOUDLY 1 pace behind you!`); one heard {@link LOUD} or louder makes it think. A sound that goes on
-	 * (`seconds`) is told again only once it is heard a step louder (`!`, then `LOUDLY`). The same sound made again at
-	 * the same place or by the same thing replaces it, so a game keeps a sound going by making it again. Its maker's own
-	 * mind does not hear it. Returns what ends it early.
-	 */
-	public emitSound(from:string | Vec, sound:Sound):()=>void {
-		if (!this._hearing) {
-			return () => undefined;
-		}
-		const key = `${sound.name}@${typeof from === 'string' ? from : from.map(Math.round).join(',')}`;
-		const made = { from, sound, at: this._clock, told: this._sounds.get(key)?.told ?? new Map<TalkMind, number>() };
-		this._sounds.set(key, made);
-		this.hear(key);
-		const end = ():void => {
-			if (this._sounds.get(key) === made) {
-				this._sounds.delete(key);
-			}
-		};
-		if (!((sound.seconds ?? 0) > 0)) {
-			end();
-		}
-		return end;
-	}
-
-	/** How loud a sound going on is at character `listenerID` now, and from where; nothing when it is not heard. */
-	private heardBy(listenerID:string, { from, sound, at }:{ from:string | Vec; sound:Sound; at:number }):{ level:number; source:SoundSource; muffled:boolean } | undefined {
-		const world = this._world;
-		const range = this._hearing?.range;
-		if (!world) {
-			return undefined;
-		}
-		const point = typeof from === 'string' ? poseOf(world, from)?.point : from;
-		const here = poseOf(world, listenerID)?.point;
-		if (!range || !point || !here || from === listenerID) {
-			return undefined;
-		}
-		const source:SoundSource = typeof from === 'string' ? { id: from, point } : { point };
-		const muffled = typeof range !== 'function' && !passes(world, 'sound', point, here);
-		const clarity = typeof range === 'function' ? range(listenerID, source) : clarityAt(distance(here, point), range) * (muffled ? range.occluded : 1);
-		const level = Math.min(1, loudnessAfter(sound, this._clock - at) * clarity);
-		return level >= AUDIBLE ? { level, source, muffled } : undefined;
-	}
-
-	/** Tell every mind that hears the sound `key` of it, where it is new to them or a step louder than they were told. */
-	private hear(key:string):void {
-		const made = this._sounds.get(key);
-		const world = this._world;
-		if (!made || !world || !this._hearing) {
-			return;
-		}
-		this._hearing.onSound?.(made.from, made.sound, (listenerID) => this.heardBy(listenerID, made)?.level ?? 0);
-		const maker = typeof made.from === 'string' ? this.character(made.from) : undefined;
-		const loudest = new Map<TalkMind, { id:string; level:number; source:SoundSource; muffled:boolean }>();
-		for (const id of this._characterRows.keys()) {
-			const character = this.character(id);
-			const owner = character?.collective ?? (character?.mind ? character : undefined);
-			const heard = owner && owner !== (maker?.collective ?? maker) ? this.heardBy(id, made) : undefined;
-			const mind = heard && this.talkMindOf(owner!);
-			if (heard && mind && heard.level > (loudest.get(mind)?.level ?? 0)) {
-				loudest.set(mind, { id, ...heard });
-			}
-		}
-		for (const [mind, { id, level, source, muffled }] of loudest) {
-			const step = loudnessStep(level);
-			// Told already, and no louder; or there in plain sight, which says it already.
-			if (step <= (made.told.get(mind) ?? -1) || (source.id !== undefined && this.sees(id, source.id))) {
-				continue;
-			}
-			made.told.set(mind, step);
-			const pose = poseOf(world, id)!;
-			const text = heardText(made.sound, level, pose.point, source.point, { facing: pose.facing, up: world.up, muffled, unitName: this._sightUnitName });
-			mind.pushEvent({ kind: 'sound', text, tags: ['sound'], timestamp: this._clock, key, cap: this._hearing.limit, weight: level, ...level >= LOUD ? { major: true } : {} });
-		}
-	}
-
-	/** The sounds going on, heard again as their makers and listeners move; those that ran their time end. */
-	private tickSounds():void {
-		for (const [key, { sound, at }] of this._sounds) {
-			if (this._clock - at >= (sound.seconds ?? 0)) {
-				this._sounds.delete(key);
-			}
-			else {
-				this.hear(key);
-			}
-		}
-	}
-
-	public withTalk(
-		senseOrTalk:TalkSense | TalkNet,
-		onSpoke?:(utterance:SpeechUtterance)=>void,
-		config?:Partial<TalkConfig<TCtx>>,
-	):this {
-		this.assertBuilder();
-		if (senseOrTalk instanceof TalkNet) {
-			this.talk = senseOrTalk;
-			this._talkSense = undefined;
-			this._onSpoke = undefined;
-			this._talkConfig = undefined;
-			return this;
-		}
-		this._talkSense = senseOrTalk;
-		this._onSpoke = onSpoke;
-		this._talkConfig = config;
-		return this;
-	}
-
-	public withMap(sense:MapSense):this {
-		this.assertBuilder();
-		this._map = sense;
-		return this;
-	}
-
-	/**
-	 * What minds know of the world: articles `recall` searches beside memory, and brings up unasked when a name is said
-	 * or heard. `mentions`: most articles shown per think that way (default `DEFAULT_MENTION_CAP`; 0 shows none).
-	 */
-	public withKnowledge(pages:KnowledgeSource<TCtx>, { mentions }:{ mentions?:number } = {}):this {
-		this.assertBuilder();
-		this._knowledge = pages;
-		this._mentionCap = mentions;
+		this._mover = new Mover(world, () => this._clock, (verb, target) => this.crowdOf(verb, target), () => this._crowd?.spacing ?? 1);
+		this.bindWorldVerbs();
 		return this;
 	}
 
 	public withVerbs(registry:VerbRegistry):this {
-		this.assertBuilder();
 		this._verbs = registry;
+		this._baseHelp.clear();
+		this.rewire();
 		return this;
 	}
 
 	/** Schema-only. Omit `verbs` to register the full stock set. Already-registered names are skipped. */
 	public addStockVerbs(...verbs:StockVerb[]):this {
 		this._verbs.addAll(STOCK_VERB_DEFS, ...verbs);
+		this.syncVerbSchemas();
 		return this;
 	}
 
 	/** Schema-only collective verbs (`issue`, `tag`, formations). `when` / `law` / `unlaw` ride on stock arc verbs. Kit still has to grant them. */
 	public addStockCollectiveVerbs(...verbs:StockCollectiveVerb[]):this {
 		this._verbs.addAll(STOCK_COLLECTIVE_VERB_DEFS, ...verbs);
+		this.syncVerbSchemas();
 		return this;
+	}
+
+	/**
+	 * What the registry says that other settings decide, kept in step with them; run again whenever one changes. A law
+	 * whose whole arc is an alias with a watch may leave its own out. A verb that makes a sound says so, and how far it
+	 * carries (`withHearing`, in sight's unit).
+	 */
+	private syncVerbSchemas():void {
+		if ([...this._aliases.values()].some((alias) => alias.watch !== undefined) && this._verbs.get('law')?.args.watch === 'watch') {
+			this._verbs.redefine('law', { ...STOCK_VERB_DEFS.law, args: { ...STOCK_VERB_DEFS.law.args, watch: 'watch?' } });
+		}
+		const noise = this._hearing?.noise ?? new Map<string, Sound>();
+		for (const verb of new Set([...this._baseHelp.keys(), ...noise.keys()])) {
+			const spec = this._verbs.get(verb);
+			const sound = noise.get(verb);
+			const base = this._baseHelp.has(verb) ? this._baseHelp.get(verb) : spec?.help;
+			if (spec) {
+				this._verbs.redefine(verb, { ...spec, help: sound ? [base, noiseHelp(sound, this._hearing!.range, this._sightUnitName)].filter(Boolean).join('; ') : base });
+			}
+			if (spec && sound) {
+				this._baseHelp.set(verb, base);
+			}
+			else {
+				this._baseHelp.delete(verb);
+			}
+		}
 	}
 
 	/**
@@ -1230,6 +1175,7 @@ ${dump.message}`, image: dump.image });
 			// The schema is checked before dispatch, so the args match what this handler was typed with.
 			this._handlers.set(name, handler as VerbHandler<TCtx>);
 		}
+		this.syncVerbSchemas();
 		return this;
 	}
 
@@ -1245,6 +1191,7 @@ ${dump.message}`, image: dump.image });
 		for (const name of names) {
 			this._handlers.delete(name);
 		}
+		this.syncVerbSchemas();
 		return this;
 	}
 
@@ -1258,610 +1205,35 @@ ${dump.message}`, image: dump.image });
 		return this;
 	}
 
-	/** A collective's commander left or died. Name a new one with `collective.commander = …`. */
-	public onCommanderVacant(fn:(collective:Collective<TCtx>, character:Character<TCtx>)=>void):this {
-		this._commanderVacantFn = fn;
-		return this;
-	}
-
-	public onLog(fn:(entry:DirectorLog)=>void):this {
-		this._logFn = fn;
-		return this;
-	}
-
 	/** After a host verb resolves. `say` does not come through here. */
 	public onStep(fn:(call:VerbCall<TCtx>, result:ArcResult)=>void):this {
 		this._stepFn = fn;
 		return this;
 	}
 
-	/** Each goal as it is reached, with the id of the mind whose goal it was: a cheer, a line on the screen. */
-	public onGoalReached(fn:(id:string, goal:Goal<TCtx>)=>void):this {
-		this._goalReachedFn = fn as (id:string, goal:Goal<never>)=>void;
-		return this;
-	}
-
-	/**
-	 * Before an Arc cuts short work not finished (a program with its steps still to do, or that has not gone once round
-	 * its loop), ask the model, in a short follow-up to that same think, what to do with each, told where it has got to:
-	 * replace it, append the new work to it, or keep it and drop the new work. Off by default.
-	 */
-	public withReplaceCheck(on = true):this {
-		this._replaceCheck = on;
-		return this;
-	}
-
-	/**
-	 * Why the Arc `owner`'s mind just wrote could never work as written. Only what no change in the world would mend: what
-	 * is merely not so right now (nobody near, too far, no gold yet) is for the verb to say as it runs.
-	 */
-	private arcProblem(owner:ArcRunner<TCtx>, arc:Arc):string | undefined {
-		const voice = owner.voice;
-		const ctx = this.tryCtx(voice.id);
-		// Its own cache: a look at a reply must not use up the change `hasRisen` is waiting to see.
-		const catalog = ctx === undefined ? undefined : this.exprCatalog(voice, ctx, new SampleCache());
-		const bound = new Set(['fail']);
-		eachStep(arc, this._verbs, (step) => {
-			const named = typeof step.args.through === 'string' ? /^\s*(\w+)\s+in\b/.exec(step.args.through)?.[1] : undefined;
-			if (named) {
-				bound.add(named);
-			}
-		});
-		const known = (name:string):boolean => bound.has(name) || name === this._currency || !!catalog?.names.has(name)
-			|| !!this.character(name) || !!this.collective(name) || !this._world || !!this._rts || this._world.find(name) !== undefined || !!this._world.isItem?.(name);
-		let problem:string | undefined;
-		eachStep(arc, this._verbs, (step, verbs) => {
-			const kinds = verbs.get(step.verb)?.args ?? {};
-			for (const [key, value] of Object.entries(step.args)) {
-				const kind = argBase(kinds[key]);
-				if (typeof value === 'string' && (kind === 'watch' || kind === 'expr' || (kind === 'id' && /[(.]|=>/.test(value)))) {
-					problem ??= this.exprProblem(value, catalog, known);
-				}
-				// Only the step that runs next, of a stock verb: something can come to be by a later one, and a host's own verb may
-				// aim at what only it knows.
-				else if (kind === 'id' && typeof value === 'string' && step === firstStep(arc) && this._stockHandlers.has(step.verb) && !known(bareName(value))) {
-					problem ??= `there is no ${bareName(value)}`;
-				}
-				else if (kind === 'bundle' && isCountMap(value)) {
-					const notItem = this._world?.isItem && Object.keys(value).find((name) => name !== this._currency && !this._world!.isItem!(name));
-					problem ??= notItem ? `'${notItem}' is not an item: the terms of a trade are {"ItemName":count}` : undefined;
-				}
-			}
-		});
-		return problem ?? this.lawProblem(owner, arc) ?? this.issueProblem(owner, arc);
-	}
-
-	/** Why `expr` can never work: it does not read, misuses the language, or names what is not in this world. */
-	private exprProblem(expr:string, catalog:Catalog | undefined, known:(name:string)=>boolean):string | undefined {
-		const broken = watchProblem(expr, catalog);
-		if (broken || !catalog) {
-			return broken;
-		}
-		const { error } = evaluate(expr, catalog);
-		if (error?.reason === 'fieldCall' || error?.reason === 'misuse') {
-			return `${expr}: ${error.message}`;
-		}
-		const toks = lex(expr);
-		const params = lambdaParams(toks);
-		if (this._repairUnknownFields) {
-			const plain = expr.replace(/"[^"]*"|'[^']*'/g, ' ');
-			const entities = [catalog.me, ...catalogEntities(catalog)];
-			const read = [...params].flatMap((param) => [...plain.matchAll(new RegExp(`\\b${param}\\.(\\w+)\\b(?!\\s*\\()`, 'g'))].map((m) => m[1]));
-			const unread = read.find((field) => !ALWAYS_FIELDS.has(field) && !entities.some((entity) => entity.fields?.[field] !== undefined));
-			if (unread) {
-				return `${expr}: no one has a field '${unread}'. What something is, its tag: u is "Witch"`;
-			}
-		}
-		const words = toks
-			.filter((tok, n) => tok.kind === 'ident' && !['dot', 'qdot'].includes(toks[n - 1]?.kind) && toks[n + 1]?.kind !== 'lp' && !params.has(tok.raw) && !WATCH_WORDS.has(tok.raw))
-			.map((tok) => tok.raw);
-		const unknown = words.find((word) => !known(word) && evaluate(word, catalog).value.kind === 'absent');
-		return unknown ? `${expr}: there is no ${unknown}` : undefined;
-	}
-
-	/** A law past the cap, or one it has already under another name. */
-	private lawProblem(owner:ArcRunner<TCtx>, arc:Arc):string | undefined {
-		const own = owner.laws.filter((law) => lawGroup(law.name) === '');
-		let count = own.length;
-		for (const step of arcSteps(arc)) {
-			const name = typeof step.args.name === 'string' ? step.args.name : undefined;
-			if (step.verb === 'unlaw') {
-				count -= own.some((law) => law.name === name) ? 1 : 0;
-			}
-			if (step.verb !== 'law') {
-				continue;
-			}
-			const body = arcArg(step.args.arc, this._verbs);
-			const twin = owner.laws.find((law) => law.name !== name && law.watch === String(step.args.watch ?? '').trim()
-				&& (step.args.who ?? law.who) === law.who && !!body && sameProgram(law.arc, body));
-			if (twin) {
-				return `that is your law ${twin.name} already`;
-			}
-			count += own.some((law) => law.name === name) ? 0 : 1;
-			if (count > owner.maxLaws) {
-				return `you have ${own.length} laws, the most you can (${own.map((law) => law.name).join(', ')}): unlaw one first`;
-			}
-		}
-		return undefined;
-	}
-
-	/** An order that reaches no one right now, whom it asks for being a matter of who stands. Its own earlier groups count. */
-	private issueProblem(owner:ArcRunner<TCtx>, arc:Arc):string | undefined {
-		const collective = collectiveOf(owner);
-		const voice = owner.voice;
-		const catalog = collective && this.collectiveCatalog(collective, voice, this.tryCtx(voice.id));
-		if (!collective || !catalog) {
-			return undefined;
-		}
-		const groups:string[] = [];
-		for (const step of arc) {
-			if (step.verb !== 'issue' || typeof step.args.who !== 'string') {
-				continue;
-			}
-			const who = step.args.who;
-			const named = evaluateWho(who, catalog, collective);
-			if (named.length === 0 && !groups.some((group) => who.includes(group))) {
-				return `${who} picks no unit`;
-			}
-			if (named.length > 0 && named.every((character) => character === collective.commander)) {
-				return 'issue never lands on the commander';
-			}
-			if (typeof step.args.group === 'string') {
-				groups.push(step.args.group);
-			}
-		}
-		return undefined;
-	}
-
-	/** The unfinished work `arc` would cut short: each unit an `issue` of it reaches, and the voice, unless it takes no body. */
-	private replacedBy(owner:ArcRunner<TCtx>, arc:Arc):Replacing[] {
-		if (!this._replaceCheck) {
-			return [];
-		}
-		const out:Replacing[] = [];
-		const note = (runner:ArcRunner<TCtx>, next:Arc):void => {
-			const now = runner.runs(next) ? undefined : runner.unfinished();
-			if (now) {
-				out.push({ id: runner.id, now, next: formatArc(next, this._verbs), looping: runner.inLoop() });
-			}
-		};
-		const collective = collectiveOf(owner);
-		const voice = owner.voice;
-		for (const step of arc) {
-			const orders = step.verb === 'issue' ? arcArg(step.args.arc, this._verbs) : undefined;
-			const catalog = orders && collective ? this.collectiveCatalog(collective, voice, this.tryCtx(voice.id)) : undefined;
-			const named = catalog && typeof step.args.who === 'string' ? evaluateWho(step.args.who, catalog, collective!) : [];
-			named.filter((character) => character !== collective?.commander).forEach((character) => note(character, orders!));
-		}
-		if (!voice.takesNoBody(arc)) {
-			note(voice, arc);
-		}
-		return out;
-	}
-
-	/** What each mind is doing as it thinks, down to its reply as it is written, and the orders it gives: for a host to show. */
-	public onThink(fn:(event:ThinkEvent)=>void):this {
-		// It runs in the middle of reading a reply: a bug in how a host shows a think must not end the think.
-		this._thinkFn = (event) => {
-			try {
-				fn(event);
-			}
-			catch (err) {
-				this.emitLog({ name: 'ArcDirector', message: `onThink: ${err instanceof Error ? err.message : String(err)}`, error: true });
-			}
-		};
-		return this;
-	}
-
-	/**
-	 * After characters change collectives, one model call fixes the memories of everyone involved: what went
-	 * stale in a collective left, and what a character or a collective joined should now remember. Moves
-	 * within `ticks` director ticks (default 1) share one call. It takes the next free think slot, never
-	 * stops a think, and nothing waits for it. On by default; pass your own `handover`, or `false` to turn it off.
-	 */
-	public withMemoryHandover({ ticks = 1, handover }:{ ticks?:number; handover?:Handover<TCtx> | false } = {}):this {
-		this._handoverTicks = Math.max(1, ticks);
-		this._handover = handover;
-		return this;
-	}
-
-	/** Settings every new mind starts from. A spec's `mind` settings win over them. */
-	public withMindDefaults(settings:MindSettings):this {
-		this._mindDefaults = { ...settings };
-		return this;
-	}
-
-	/**
-	 * A character on its own: an NPC with `mind` settings, or one the host drives (the Player) without them.
-	 * Its id must be new among characters and collectives.
-	 */
-	public addCharacter(spec:CharacterSpec<TCtx>):this {
-		this.claimID(spec.id);
-		this._soloSpecs.push(spec);
-		this._specs.set(spec.id, spec);
-		if (this._ready) {
-			this.reportMissingNames([spec]);
-			this.wireCharacter(spec);
-		}
-		return this;
-	}
-
-	/** Characters sharing one mind. Its id and its characters' ids must be new. */
-	public addCollective(spec:CollectiveSpec<TCtx>):this {
-		// Its own list: `removeCharacter` trims it, and the host's spec stays whole for the next director.
-		const own = { ...spec, characters: [...(spec.characters ?? [])] };
-		this.claimID(own.id);
-		for (const character of own.characters) {
-			this.claimID(character.id);
-			this._specs.set(character.id, character);
-		}
-		this._collectiveSpecs.push(own);
-		if (this._ready) {
-			this.reportMissingNames([own, ...own.characters.filter((c) => c.kit)]);
-			this.wireCollective(own);
-		}
-		return this;
-	}
-
-	/** Remove a character for good, on its own or from its collective. A commander's leaving tells `onCommanderVacant`. */
-	public removeCharacter(id:string):this {
-		this._specs.delete(id);
-		remove(this._soloSpecs, id);
-		for (const spec of this._collectiveSpecs) {
-			remove(spec.characters ?? [], id);
-		}
-		this.dropCharacter(id);
-		return this;
-	}
-
-	/** Remove a collective. Its characters stay, each on its own: with a fresh mind if their spec gave one settings. */
-	public removeCollective(id:string):this {
-		const spec = remove(this._collectiveSpecs, id);
-		const row = this._collectiveRows.get(id);
-		const members = row ? row.runner.characters.map((c) => c.id) : (spec?.characters ?? []).map((c) => c.id);
-		for (const member of members) {
-			const memberSpec = this._specs.get(member);
-			if (memberSpec) {
-				this._soloSpecs.push(memberSpec);
-			}
-		}
-		this.dropCollective(id);
-		return this;
-	}
-
-	/** Cancel an in-flight think by mind id. */
-	public abortThink(id:string):this {
-		this._queue?.abortThink(id);
-		return this;
-	}
-
-	public character(id:string):Character<TCtx> | undefined {
-		return this._characterRows.get(id)?.runner;
-	}
-
-	/** Every character: on its own or in a collective. */
-	public characters():Character<TCtx>[] {
-		return [...this._characterRows.values()].map((row) => row.runner);
-	}
-
-	public collective(id:string):Collective<TCtx> | undefined {
-		return this._collectiveRows.get(id)?.runner;
-	}
-
-	/**
-	 * What `id`'s System One would be asked now to pick among `choices` (arcs, or arc text), worded as `choose` words
-	 * it ({@link choicePrompt}): its state lines and each choice that can run, with whom it is about. `doing` and `last`
-	 * stand in for the verb it runs and its last choice. Undefined when no choice can run now. For previews and
-	 * training data.
-	 */
-	public choiceQuestion(id:string, choices:Record<string, Arc | string>, { doing, last }:{ doing?:string; last?:LastChoice } = {}):ChoicePrompt | undefined {
-		const runner = this.character(id) ?? this.collective(id);
-		if (!runner) {
-			throw new Error(`no character or collective ${id}`);
-		}
-		const arcs = Object.fromEntries(Object.entries(choices).map(([name, arc]) => [name, typeof arc === 'string' ? parseArcText(arc, this._verbs) : arc]));
-		return this.choiceQuestionOf(runner, arcs, doing ?? runner.verb, last);
-	}
-
-	private choiceQuestionOf(runner:ArcRunner<TCtx>, choices:Record<string, Arc>, verb:string, last:LastChoice | undefined):ChoicePrompt | undefined {
-		return choicePrompt({ id: runner.id, verb, last, catalog: runner.catalog?.(), choices: withLoneWait(choices), verbs: this._verbs });
-	}
-
-	public collectives():Collective<TCtx>[] {
-		return [...this._collectiveRows.values()].map((row) => row.runner);
-	}
-
-	/** Every mind that thinks: characters' own, then collectives'. */
-	public minds():Mind<TCtx>[] {
-		return [
-			...this.characters().flatMap((c) => ownMindOf(c) ?? []),
-			...this.collectives().map((c) => c.mind),
-		];
-	}
-
-	public mindQueue():MindQueue | undefined {
-		return this._queue;
-	}
-
-	public setBatchThinks(on:boolean):void {
-		if (this._queue) {
-			this._queue.batchThinks = on;
-		}
-		else if (this._queueSlot.kind === 'instance') {
-			this._queueSlot.queue.batchThinks = on;
-		}
-		else if (this._queueSlot.kind === 'simple') {
-			this._queueSlot.opts = { ...this._queueSlot.opts, batchThinks: on };
-		}
-		else {
-			this._queueSlot = { kind: 'priority', opts: { ...(this._queueSlot.kind === 'priority' ? this._queueSlot.opts : {}), batchThinks: on } };
-		}
-	}
-
-	public liveBatchThinks():boolean {
-		return this.thinkBatchPolicy().batchThinks;
-	}
-
-	public setArcFormat(format:ArcFormat):void {
-		this._arcFormat = format;
-		for (const mind of this.minds()) {
-			mind.arcFormat = format;
-		}
-	}
-
-	public get arcFormat():ArcFormat {
-		return this._arcFormat;
-	}
-
-	/** Minds re-read their model: assigned, added again, removed, or a new default. */
-	private syncModels():void {
-		for (const mind of this.minds()) {
-			this.syncModel(mind);
-		}
-	}
-
-	private syncModel(mind:Mind<TCtx>):void {
-		const live = this._models.live(mind.model);
-		mind.provider = live?.provider ?? NO_MODEL;
-		mind.modelID = live?.id ?? '';
-		mind.vision = live?.vision;
-		mind.contextTokens = live?.contextLength;
-	}
-
-	public resetInferStats():void {
-		this.infer = emptyInferClock();
-	}
-
-	private recordInfer(id:string | undefined, wallMs:number, res:{ promptMs?:number; generateMs?:number }):void {
-		const context = res.promptMs;
-		const generate = res.generateMs ?? (context !== undefined ? Math.max(0, wallMs - context) : wallMs);
-		this.infer.calls += 1;
-		this.infer.wallMs += wallMs;
-		this.infer.lastWallMs = wallMs;
-		if (context !== undefined) {
-			this.infer.contextMs += context;
-			this.infer.contextKnown += 1;
-			this.infer.lastContextMs = context;
-		}
-		else {
-			this.infer.lastContextMs = null;
-		}
-		this.infer.generateMs += generate;
-		this.infer.lastGenerateMs = generate;
-		if (id) {
-			this.infer.thinkMs[id] = (this.infer.thinkMs[id] ?? 0) + generate;
-		}
-	}
-
-	/** Timing and the AI log around a server. An HTTP one logs its own request bodies. */
-	private wrapProvider(inner:InferenceProvider, http:boolean):InferenceProvider {
-		const embed = inner.embed?.bind(inner);
-		return {
-			chat: async (req:ChatRequest):Promise<ChatResponse> => {
-				// A System One's pick is logged once, whole, by `pick`, and is not a think.
-				if (isPick(req)) {
-					return inner.chat(req);
-				}
-				const name = whoFromMessages(req);
-				const t0 = nowMs();
-				const signal = req.thread ? this._queue?.thinkSignal(req.thread) : undefined;
-				try {
-					if (!http) {
-						const dump = formatChatLog(req);
-						this.emitLog({ name, message: `prompt\n${dump.message}`, image: dump.image });
-					}
-					// A think stopped, and a request its own mind ended, both end it.
-					const res = await inner.chat(signal ? { ...req, signal: req.signal ? AbortSignal.any([req.signal, signal]) : signal } : req);
-					const ms = Math.round(nowMs() - t0);
-					this.recordInfer(req.thread, ms, res);
-					const parts = [`${ms}ms`];
-					if (res.promptMs !== undefined) {
-						parts.push(`ctx ${Math.round(res.promptMs)}ms`);
-					}
-					if (res.generateMs !== undefined) {
-						parts.push(`gen ${Math.round(res.generateMs)}ms`);
-						if (res.outputTokens && res.generateMs > 0) {
-							parts.push(`${res.outputTokens} tok ${(res.outputTokens / (res.generateMs / 1000)).toFixed(1)}/s`);
-						}
-					}
-					if (res.cachedTokens) {
-						parts.push(`cache ${res.cachedTokens}`);
-					}
-					if (res.toolCalls.length > 0) {
-						parts.push(`tool ${res.toolCalls.map((c) => c.name).join(', ')}`);
-					}
-					const thought = res.reasoning?.trim() ?? '';
-					const body = res.content?.trim() ?? '';
-					if (thought && thought !== body && !body.includes(thought)) {
-						parts.push(`(thinking)\n${thought}`);
-					}
-					if (res.content) {
-						parts.push(res.content);
-					}
-					else if (!thought && res.toolCalls.length === 0) {
-						parts.push('(empty content)');
-					}
-					this.emitLog({ name, message: parts.join('\n') });
-					return res;
-				}
-				catch (err:unknown) {
-					const ms = Math.round(nowMs() - t0);
-					this.recordInfer(req.thread, ms, {});
-					const aborted = !!signal?.aborted;
-					const text = aborted
-						? 'aborted'
-						: err instanceof Error ? err.message : String(err);
-					this.emitLog({ name, message: `${ms}ms\n${text}`, error: !aborted });
-					throw err;
-				}
-			},
-			embed: embed
-				? (texts, model) => embed(texts, model)
-				: undefined,
-			systemOneEndpoint: inner.systemOneEndpoint?.bind(inner),
-		};
-	}
-
-	private resolveQueue():MindQueue {
-		if (this._queueSlot.kind === 'instance') {
-			return this._queueSlot.queue;
-		}
-		if (this._queueSlot.kind === 'simple') {
-			return new SimpleQueue(this._queueSlot.opts);
-		}
-		const opts = this._queueSlot.kind === 'priority' ? this._queueSlot.opts : undefined;
-		return new ThinkQueue(opts);
-	}
-
-	/** A chat model, unless every character acts by a standing `choose` on a System One that needs no chat. */
-	private needsChat():boolean {
-		return this._systemOnes.size === 0
-			|| this._collectiveSpecs.length > 0
-			|| this._soloSpecs.some((spec) => spec.mind)
-			|| Object.values(this._stored?.characters ?? {}).some((json) => json.mind);
-	}
-
-	/** Chat model `name`, or the default, as its server answered it. Throws while there is none. */
-	private chatModel(name?:string):LiveModel {
-		const model = this._models.live(name);
-		if (!model) {
-			throw new Error(`ArcDirector: no chat model '${name ?? 'default'}' (addModel)`);
-		}
-		return model;
-	}
-
-	/** Chat model `name` (or the default) as a System One that names one choice. */
-	private modelSystemOne(name?:string):ModelSystemOne {
-		return new ModelSystemOne(() => this.chatModel(name));
-	}
-
-	/** Drops System One `name` when a decision model backed it, so it never falls back to the default chat model. */
-	private removeModelSystemOne(name:string):void {
-		if (this._systemOnes.get(name) instanceof ModelSystemOne) {
-			this._systemOnes.delete(name);
-		}
-	}
-
-	private async connectInference():Promise<void> {
-		if (!this._models.hasServers) {
-			if (!this.needsChat()) {
-				this._inferenceUp = true;
-				return;
-			}
-			throw new Error('ArcDirector: no inference (addLMStudioInference / addOllamaInference / addFakeInference / addInference)');
-		}
-		try {
-			await this._models.start();
-			this._inferenceUp = true;
-			this.syncModels();
-		}
-		catch (err:unknown) {
-			const text = err instanceof Error ? err.message : String(err);
-			this.emitLog({ name: 'ArcDirector', message: text });
-			throw err instanceof Error ? err : new Error(text);
-		}
-	}
-
-	/**
-	 * Wires the cast and starts at once: from the next `tick`, laws, programs and moves run. It resolves once its
-	 * servers and models answer (loaded and warm), and throws if they do not; until then thinks wait in the queue.
-	 * Called again after that throw, it tries the servers again.
-	 */
-	public async start(opts?:StartOpts):Promise<this> {
-		if (this._disposed) {
-			throw new Error('ArcDirector disposed');
-		}
-		if (this._ready) {
-			if (!this._inferenceUp) {
-				await this.connectInference();
-			}
-			return this;
-		}
-		this._ignoreMissing = opts?.ignoreMissing === true;
-		this._queue = this.resolveQueue();
-		if (!this.talk && this._talkSense) {
-			const { repeats, ...config } = this._talkConfig ?? {};
-			// A repeats function is asked with the speaker's context; one with none to give is refused.
-			const byID = typeof repeats === 'function'
-				? (id:string, text:string):boolean | string => {
-					const ctx = this.tryCtx(id);
-					return ctx !== undefined && repeats(ctx, text);
-				}
-				: repeats;
-			this.talk = new TalkNet(this._talkSense, this._onSpoke, { ...config, ...byID === undefined ? {} : { repeats: byID } });
-		}
-		this._mover = new Mover(this._world, () => this._clock, (verb, target) => this.crowdOf(verb, target), this._crowd?.spacing);
-		this.bindWorldVerbs();
-		// A verb that makes a sound says so, and how far it carries.
-		for (const [verb, sound] of this._hearing?.noise ?? []) {
-			const spec = this._verbs.get(verb);
-			if (spec) {
-				this._verbs.redefine(verb, { ...spec, help: [spec.help, noiseHelp(sound, this._hearing!.range, this._sightUnitName)].filter(Boolean).join('; ') });
-			}
-		}
-		if ([...this._aliases.values()].some((alias) => alias.watch !== undefined) && this._verbs.get('law')?.args.watch === 'watch') {
-			// A law whose whole arc is an alias with a watch may leave its own out.
-			this._verbs.redefine('law', { ...STOCK_VERB_DEFS.law, args: { ...STOCK_VERB_DEFS.law.args, watch: 'watch?' } });
-		}
-		for (const [verb, handler] of Object.entries(this._rts?.handlers() ?? {})) {
-			this._stockHandlers.set(verb, handler);
-		}
-		this.reportMissingNames();
-		this._handover ??= chatHandover((req) => this.chatModel().provider.chat(req), () => this.chatModel().id);
-		this.wireCast(this._stored);
-		this._stored = undefined;
-		this._ready = true;
-		await this.connectInference();
-		return this;
-	}
-
+	/** The stock world verbs `world` has the parts for. A host handler of the same name wins. */
 	private bindWorldVerbs():void {
-		if (!this._world) {
-			return;
-		}
+		const world = this._world!;
 		const handlers = worldVerbs<TCtx>({
-			world: this._world,
+			world,
 			mover: this._mover,
 			now: () => this._clock,
 			seen: (call) => (this._sightLook ? this.filterSight(this._sightLook(call.ctx)).objects : []),
 			nearRadius: (call) => (this._kernelFn ? this.kernelsFor(call.character, call.ctx).nearRadius : undefined),
 			offers: () => this.liveOffers(),
-			isCharacter: (id) => this._characterRows.has(id),
+			isCharacter: (id) => this.character(id) !== undefined,
 			canOffer: (fromID, toID) => this.canOffer(fromID, toID),
 			canPickUp: (call, item, fromID) => this.canPickUp(call, item, fromID),
-			tell: (id, event) => {
-				const character = this.character(id);
-				const owner = character?.collective ?? (character?.mind ? character : null);
-				if (owner) {
-					this.talkMindOf(owner).pushEvent(event);
-				}
-			},
+			tell: (id, event) => this.character(id)?.tell(event),
 			tellAll: (event) => this.pushEvent(event),
-			currency: this._currency,
+			currency: () => this._mindDefaults.settings.currency,
 		});
 		for (const [verb, handler] of Object.entries(handlers)) {
-			if (missingParts(verb, this._world).length === 0) {
+			if (missingParts(verb, world).length === 0) {
 				this._stockHandlers.set(verb, handler as VerbHandler<TCtx>);
+			}
+			else {
+				this._stockHandlers.delete(verb);
 			}
 		}
 	}
@@ -1875,45 +1247,6 @@ ${dump.message}`, image: dump.image });
 			return from !== undefined && to !== undefined && world.canOffer(from, to);
 		}
 		return this.sees(fromID, toID) ?? this.inLineOfSight(fromID, toID);
-	}
-
-	/**
-	 * Who outside `collective` its character `id` sees, nearest first, as `mind` says them: `EnemyKnight 8m (in reach)`.
-	 * Characters only, as far as sight reaches; whether in reach where the host's sight says.
-	 */
-	private othersSeenBy(id:string, collective:Collective<TCtx>, mind:Mind<TCtx>):{ name:string; away:number; text:string }[] {
-		const ctx = this._sightLook ? this.tryCtx(id) : undefined;
-		if (ctx === undefined) {
-			return [];
-		}
-		const snap = this.filterSight(this._sightLook!(ctx));
-		const members = new Set(collective.characters.map((c) => c.id));
-		return snap.objects
-			.filter((o) => !members.has(o.id) && (o.tags.includes(RESERVED_TAGS.character) || this.character(o.id) !== undefined))
-			.map((o) => ({ o, away: distance(o.point, snap.self.point) }))
-			.filter(({ o, away }) => o.always || away <= DEFAULT_SIGHT.radius)
-			.sort((a, b) => a.away - b.away)
-			.map(({ o, away }) => ({ name: o.id, away, text: `${mind.nameOf(o.id) || o.id}${o.hp !== undefined && o.maxHP !== undefined ? ` ${o.hp}/${o.maxHP} hp` : ''} ${formatMeasure(quantizeDistance(away, DEFAULT_SIGHT.closeness), this._sightUnitName ?? DEFAULT_SIGHT.unitName)}${o.inReach === undefined ? '' : o.inReach ? ' (in reach)' : ' (out of reach)'}` }));
-	}
-
-	/** Character `id`'s health by the host's `hp` kernel; nothing without one. */
-	private healthOf(id:string):{ hp:number; maxHP:number } | undefined {
-		const ctx = this._kernelFn ? this.tryCtx(id) : undefined;
-		if (ctx === undefined) {
-			return undefined;
-		}
-		const kernels = this._kernelFn!(ctx);
-		return kernels.hp?.(kernels.me);
-	}
-
-	/** Whether character `fromID` sees `toID` now, by `withSight`, as far as sight reaches; `undefined` when there is no sight to ask. */
-	private sees(fromID:string, toID:string):boolean | undefined {
-		const ctx = this._sightLook ? this.tryCtx(fromID) : undefined;
-		if (ctx === undefined) {
-			return undefined;
-		}
-		const snap = this.filterSight(this._sightLook!(ctx));
-		return snap.objects.some((o) => o.id === toID && (o.always || distance(o.point, snap.self.point) <= DEFAULT_SIGHT.radius));
 	}
 
 	/**
@@ -1940,335 +1273,10 @@ ${dump.message}`, image: dump.image });
 		return this.inLineOfSight(call.character.id, fromID);
 	}
 
-	/** Whether light passes from where `fromID` is to where `toID` is (`canPass`). No `canPass` means yes. One with no place means no. */
-	private inLineOfSight(fromID:string, toID:string):boolean {
-		const world = this._world;
-		if (!world?.canPass) {
-			return true;
-		}
-		const from = poseOf(world, fromID)?.point;
-		const to = poseOf(world, toID)?.point;
-		return !!from && !!to && passes(world, 'light', from, to);
-	}
-
 	/** The offer book, without offers to someone their maker may no longer make. */
 	private liveOffers():OfferBook {
 		this.offers.prune((offer) => offer.to === undefined || this.canOffer(offer.from, offer.to));
 		return this.offers;
-	}
-
-	/**
-	 * Every standing offer, and each offer by or to a character `mind` thinks for. A collective with no body of its
-	 * own does not have `offer` (its units do), and it still has to see the prices to send them.
-	 */
-	private offersSeenBy(mind:Mind<TCtx>):string {
-		const owner = mind.owner;
-		const traders = owner instanceof Collective ? [owner, ...owner.characters] : [owner];
-		if (!traders.some((runner) => runner.activeVerbs().has('offer'))) {
-			return '';
-		}
-		const mine = new Set(owner instanceof Collective ? owner.characters.map((c) => c.id) : [owner.id]);
-		const voice = mind.voice.id;
-		const name = (id:string):string => (id === voice ? 'you' : mind.nameOf(id));
-		return this.liveOffers().all
-			.filter((offer) => offer.to === undefined || mine.has(offer.from) || mine.has(offer.to))
-			.map((offer) => {
-				const who = offer.from === voice ? 'You offer' : `${name(offer.from)} offers`;
-				return offer.to === undefined
-					? `- ${who} ${offerText(offer)} to anyone`
-					: `- ${who} ${name(offer.to)} ${offerText(offer)}`;
-			})
-			.join('\n');
-	}
-
-	/** `point`: measure as if the character stood there. */
-	private kernelsFor(runner:ArcRunner<TCtx>, ctx:TCtx, cache = this.cacheOf(runner), point?:Vec):HostKernels {
-		const mind = runner.mind;
-		const kernels = this.namedKernels(mind, this._kernelFn!(ctx, point));
-		const here = point && this._world && poseOf(this._world, kernels.me.id);
-		const geometry = this._world
-			? geometryKernels(this._world, kernels.me.id, here ? new Map([[kernels.me.id, { ...here, point }]]) : undefined)
-			: {};
-		const lastTimestamp = mind?.lastTacticalTimestamp;
-		const last = runner.lastResult;
-		const ago = lastTimestamp !== undefined && Number.isFinite(lastTimestamp)
-			? Math.max(0, this._clock - lastTimestamp)
-			: undefined;
-		const side = !this._rts ? undefined : runner instanceof Collective ? runner.id : (runner as Character<TCtx>).collective?.id ?? runner.id;
-		// What happened since its mind last thought, as `events`: `events.filter("sound")`. A unit reads its collective's.
-		const listener = mind ?? (runner instanceof Character ? runner.collective?.mind : undefined);
-		const events:ExprVal = { kind: 'list', value: (listener?.events() ?? []).map((e, i):ExprVal => ({
-			kind: 'entity',
-			value: dummyEntity(`event${i + 1}`, { tags: [e.kind, ...e.tags ?? []], fields: { secondsAgo: { kind: 'number', value: Math.max(0, this._clock - (e.timestamp ?? this._clock)) } } }),
-		})) };
-		return {
-			...kernels,
-			...geometry,
-			// Each character among them with what it is at, so `doing(u, "go_to")` and `isBusy(u)` read it.
-			others: kernels.others.map((e) => {
-				const character = this._characterRows.get(e.id)?.runner;
-				return character ? { ...e, fields: { ...e.fields, ...doingFields(character) } } : e;
-			}),
-			// Who sees whom, where the host's kernels say; else where light passes.
-			canSee: kernels.canSee ?? (this._world?.canPass ? (a, b) => this.inLineOfSight(a.id, b.id) : undefined),
-			bindings: { events, ...kernels.bindings, ...side ? this._rts!.bindings(side) : {} },
-			cache,
-			hasHeard: mind?.hasHeard() ?? false,
-			prev: {
-				secondsAgo: ago,
-				me: this.prevMeOf(runner, kernels),
-				verbs: last
-					? [{
-						secondsAgo: ago ?? 0,
-						isOk: last.ok,
-						reason: last.reason ?? '',
-						verb: last.verb ?? '',
-					}]
-					: [],
-			},
-		} as HostKernels;
-	}
-
-	/**
-	 * Host entities under `mind`'s names for them, so its model's own words still evaluate (`observe`).
-	 * A binding keyed by a character's id is bound under its id and under the name.
-	 */
-	private namedKernels<TKernels extends Pick<HostKernels, 'others' | 'items' | 'bindings'>>(
-		mind:Mind<TCtx> | null,
-		kernels:TKernels,
-	):TKernels {
-		if (!mind || !this._seenFn) {
-			return kernels;
-		}
-		const named = (e:ExprEntity):ExprEntity => ({ ...e, name: mind.seen(e) });
-		const bindings:Record<string, ExprVal> = {};
-		for (const [key, val] of Object.entries(kernels.bindings ?? {})) {
-			if (val.kind !== 'entity') {
-				bindings[key] = val;
-				continue;
-			}
-			const name = mind.seen(val.value);
-			const value:ExprVal = { kind: 'entity', value: { ...val.value, name } };
-			bindings[key] = value;
-			if (key === val.value.id) {
-				bindings[name] = value;
-			}
-		}
-		return { ...kernels, others: kernels.others.map(named), items: kernels.items.map(named), bindings };
-	}
-
-	/** Spawn snapshot so the first think can see a change. A saved prev is left alone. */
-	private stampPrev(runner:ArcRunner<TCtx>):void {
-		if (runner.prevMe || !this._kernelFn || !this._contextFn) {
-			return;
-		}
-		const ctx = this.tryCtx(runner.id);
-		if (ctx) {
-			try {
-				this.kernelsFor(runner, ctx);
-			}
-			catch {
-				return;
-			}
-		}
-	}
-
-	private prevMeOf(runner:ArcRunner<TCtx>, kernels:MeFreezeHost) {
-		runner.prevMe ??= freezeMe(kernels);
-		return runner.prevMe;
-	}
-
-	/** What `mind` needs from this director to think for `owner`, wired when it attaches. */
-	private mindDeps(mind:Mind<TCtx>, owner:ArcRunner<TCtx>):MindDeps<TCtx> {
-		return {
-			provider: this._models.live(mind.model)?.provider ?? NO_MODEL,
-			senses: this.sensesFor(mind, owner),
-			tools: this._tools,
-			talk: this.talk,
-			toolRoundCap: this._toolRounds,
-			wayBlocked: (to) => (this._world ? wayBlocked(this._world, mind.thinkThread(), to) : to.map(() => undefined)),
-			arcRetryCap: this._arcRetries,
-			perStepRepair: this._perStepRepair,
-			stalled: this._stalledFn,
-			autoEnact: true,
-			onChoose: (arc) => this.emitLog({ name: mind.thinkThread(), message: formatArc(arc, this._verbs) }),
-			onGoalReached: (goal) => this._goalReachedFn?.(mind.id, goal),
-			thinkWatch: () => this._thinkFn,
-			replacing: (arc) => this.replacedBy(owner, arc),
-			arcProblem: (arc) => this.arcProblem(owner, arc),
-			queue: this._queue,
-			modelID: this._models.live(mind.model)?.id ?? '',
-			embed: this._models.embedder(),
-			map: this._map,
-			knowledge: this._knowledge,
-			mentionCap: this._mentionCap,
-			offers: () => this.offersSeenBy(mind),
-			vision: this._models.live(mind.model)?.vision,
-			arcFormat: this._arcFormat,
-			thinkInstructions: this._thinkInstructions,
-			thinking: () => this._models.live(mind.model)?.thinking ?? false,
-			promptStyle: () => this._models.live(mind.model)?.prompt ?? 'full',
-			jsonOnly: () => trainedOnArcDirector(this._models.live(mind.model)?.id ?? ''),
-			verbInstructions: this._verbInstructions,
-			arcExample: this._arcExample,
-			systemNote: this._systemNote,
-			currency: this._currency,
-			seenAs: this.seenAs(mind),
-			worldContext: () => this.tryCtx(owner.voice.id) ?? (owner instanceof Collective ? this.present(owner)?.ctx : undefined),
-		};
-	}
-
-	/** The host naming policy as one mind sees it: by its owner's id, from its voice's context. */
-	private seenAs(mind:Mind<TCtx>):((target:NameTarget)=>string) | undefined {
-		const seen = this._seenFn;
-		if (!seen) {
-			return undefined;
-		}
-		return (target) => seen({ id: mind.id, ctx: this.tryCtx(mind.thinkThread()) }, target);
-	}
-
-	/** Host look, minus what is out of sight, with everything seen under `mind`'s name for it. */
-	private see(mind:Mind<TCtx>, ctx:TCtx):Sight {
-		const snap = this.filterSight(this._sightLook!(ctx));
-		return {
-			...snap,
-			objects: snap.objects.map((o) => {
-				const doing = o.doing ?? this.seenDoing(o.id, mind);
-				return { ...o, ...this._seenFn ? { id: mind.seen(o) } : {}, ...doing ? { doing } : {} };
-			}),
-		};
-	}
-
-	private sensesFor(mind:Mind<TCtx>, owner:ArcRunner<TCtx>):Record<string, Sense<TCtx>> {
-		const wrapSight = !!(this._sightLook && this._senses.sight);
-		const commanderless = owner instanceof Collective && !!this._contextFn && this.tryCtx(owner.voice.id) === undefined;
-		const skipCarrying = !!this._senses.carrying && commanderless;
-		if (!wrapSight && !skipCarrying) {
-			return this._senses;
-		}
-		const senses:{ [k:string]:Sense<TCtx> } = { ...this._senses };
-		if (wrapSight && this._senses.sight) {
-			senses.sight = {
-				description: this._senses.sight.description,
-				gather: (ctx) => this.gatherSight(mind, ctx),
-			};
-		}
-		if (skipCarrying) {
-			delete senses.carrying;
-		}
-		return senses;
-	}
-
-	/** `snap` without what light does not reach from where it is seen (`canPass`), but what everyone sees (`always`). */
-	private filterSight(snap:Sight):Sight {
-		const world = this._world;
-		if (!world?.canPass) {
-			return snap;
-		}
-		return { ...snap, objects: snap.objects.filter((o) => o.always || passes(world, 'light', snap.self.point, o.point)) };
-	}
-
-	/** What character `id` is seen doing, in its verb's own words and `mind`'s names: `going to Cottage`. Nothing while idle or waiting. */
-	private seenDoing(id:string, mind:Mind<TCtx>):string | undefined {
-		const character = this.character(id);
-		const step = character?.verb && character.verb !== 'wait' ? character.lastStep : undefined;
-		return step && stepDoing(step, this._verbs, (name) => mind.nameOf(name) || name);
-	}
-
-	private sightFormatOpts():{ unitName?:string } {
-		return this._sightUnitName ? { unitName: this._sightUnitName } : {};
-	}
-
-	/** What `mind`'s voice sees; for a collective with no commander, what all its characters see, pooled. */
-	private gatherSight(mind:Mind<TCtx>, ctx:TCtx):string {
-		if (!this._sightLook) {
-			return '';
-		}
-		const focus = mind.persona.effectiveSightFocus();
-		const limit = mind.persona.sightLimit ?? this._sightLimitDefault;
-		const scores = new Map<string, number>();
-		const salience = new Map<string, number>();
-		const owner = mind.owner;
-		if (owner instanceof Collective && owner.characters.length > 0 && this._contextFn && !this.tryCtx(mind.thinkThread())) {
-			const groups:{ unitID:string; clauses:ReturnType<typeof formatSightClauses> }[] = [];
-			for (const character of owner.characters) {
-				const memberCtx = this.tryCtx(character.id);
-				if (!memberCtx) {
-					continue;
-				}
-				const snap = this.see(mind, memberCtx);
-				sightSalience(snap, salience);
-				const clauses = formatSightClauses(snap, {
-					...this.sightFormatOpts(),
-					fromName: character.id,
-					skipAmbient: groups.length > 0,
-				});
-				groups.push({ unitID: character.id, clauses });
-				if (focus.length > 0) {
-					this.scoreSightObjects(snap.objects, focus, memberCtx, character, scores);
-				}
-			}
-			const merged = mergeHiveClauses(groups, focus.length > 0 ? scores : undefined);
-			return this.shown(mind, orderSightClauses(merged, scores, limit, focus.length > 0), salience);
-		}
-		const snap = this.see(mind, ctx);
-		sightSalience(snap, salience);
-		const bag = this._inventoryLook?.(ctx);
-		for (const item of [...bag?.pockets ?? [], ...bag?.pack?.items ?? [], ...Object.values(bag?.worn ?? {})]) {
-			salience.set(item, CARRIED_SALIENCE);
-		}
-		const clauses = formatSightClauses(snap, this.sightFormatOpts());
-		if (focus.length > 0) {
-			this.scoreSightObjects(snap.objects, focus, ctx, mind.voice, scores);
-		}
-		return this.shown(mind, orderSightClauses(clauses, scores, limit, focus.length > 0), salience);
-	}
-
-	/** The sight text `mind` is shown; it remembers each name in it as last seen there, and recalls by what is salient. */
-	private shown(mind:Mind<TCtx>, clauses:SightClause[], salience:ReadonlyMap<string, number>):string {
-		internalsOf(mind).sighted(clauses, salience);
-		return joinSightClauses(clauses);
-	}
-
-	private scoreSightObjects(
-		objects:SeenObject[],
-		exprs:string[],
-		ctx:TCtx,
-		runner:ArcRunner<TCtx>,
-		into:Map<string, number>,
-	):void {
-		if (!this._kernelFn) {
-			return;
-		}
-		const kernels = this.kernelsFor(runner, ctx);
-		for (const obj of objects) {
-			const it = dummyEntity(runner.mind?.persona.names.resolve(obj.id) ?? obj.id, {
-				name: obj.id,
-				tags: obj.tags,
-				fields: obj.hp !== undefined && obj.maxHP !== undefined
-					? {
-						hp: { kind: 'number', value: obj.hp },
-						maxHP: { kind: 'number', value: obj.maxHP },
-					}
-					: undefined,
-			});
-			const cat = buildCatalog({
-				...kernels,
-				bindings: { ...kernels.bindings, it: { kind: 'entity', value: it } },
-			});
-			let best = 0;
-			for (let i = 0; i < exprs.length; i++) {
-				const r = evaluate(exprs[i], cat);
-				const s = watchScore(r.error ? { kind: 'absent' } : r.value).score * (0.8 ** i);
-				if (s > best) {
-					best = s;
-				}
-			}
-			const prev = into.get(obj.id) ?? 0;
-			if (best > prev) {
-				into.set(obj.id, best);
-			}
-		}
 	}
 
 	/** One host step, acted by `runner` itself. */
@@ -2489,10 +1497,6 @@ ${dump.message}`, image: dump.image });
 		return { ok: false, verb: step.verb, reason: `unhandled ${step.verb}` };
 	}
 
-	/**
-	 * `law` / `unlaw` from `runner`. The voice of a collective writes the collective's own laws; anyone else
-	 * writes its own, which a character in a collective keeps there (`Tom.flee`).
-	 */
 	/** `step`'s alias `part` with its `{arg}` holes filled; `undefined` when `step` is no alias or its alias has none. */
 	private aliasPart(step:Step, part:keyof VerbAlias):string | undefined {
 		const src:AliasPart | undefined = this._aliases.get(step.verb)?.[part];
@@ -2522,6 +1526,10 @@ ${dump.message}`, image: dump.image });
 		return { ...result, verb: step.verb };
 	}
 
+	/**
+	 * `law` / `unlaw` from `runner`. The voice of a collective writes the collective's own laws; anyone else
+	 * writes its own, which a character in a collective keeps there (`Tom.flee`).
+	 */
 	private handleLaw(runner:ArcRunner<TCtx>, step:Step):ArcResult {
 		const home = runner.isVoice ? collectiveOf(runner) ?? runner : runner;
 		const name = typeof step.args.name === 'string' && step.args.name ? step.args.name : undefined;
@@ -2598,6 +1606,783 @@ ${dump.message}`, image: dump.image });
 		return name && !group?.trim() ? { ok: true, verb: 'issue', reason: `no group= given: called them ${name}` } : { ok: true, verb: 'issue' };
 	}
 
+	// ---- Arc checks ----
+
+	private _repairUnknownFields = false;
+	private _thinkFn:((event:ThinkEvent)=>void) | undefined;
+	private _replaceCheck = false;
+
+	/**
+	 * Before an Arc cuts short work not finished (a program with its steps still to do, or that has not gone once round
+	 * its loop), ask the model, in a short follow-up to that same think, what to do with each, told where it has got to:
+	 * replace it, append the new work to it, or keep it and drop the new work. Off by default.
+	 */
+	public withReplaceCheck(on = true):this {
+		this._replaceCheck = on;
+		return this;
+	}
+
+	/**
+	 * Why the Arc `owner`'s mind just wrote could never work as written. Only what no change in the world would mend: what
+	 * is merely not so right now (nobody near, too far, no gold yet) is for the verb to say as it runs.
+	 */
+	private arcProblem(owner:ArcRunner<TCtx>, arc:Arc):string | undefined {
+		const voice = owner.voice;
+		const ctx = this.tryCtx(voice.id);
+		// Its own cache: a look at a reply must not use up the change `hasRisen` is waiting to see.
+		const catalog = ctx === undefined ? undefined : this.exprCatalog(voice, ctx, new SampleCache());
+		const bound = new Set(['fail']);
+		eachStep(arc, this._verbs, (step) => {
+			const named = typeof step.args.through === 'string' ? /^\s*(\w+)\s+in\b/.exec(step.args.through)?.[1] : undefined;
+			if (named) {
+				bound.add(named);
+			}
+		});
+		const known = (name:string):boolean => bound.has(name) || name === this._mindDefaults.settings.currency || !!catalog?.names.has(name)
+			|| !!this.character(name) || !!this.collective(name) || !this._world || !!this._rts || this._world.find(name) !== undefined || !!this._world.isItem?.(name);
+		let problem:string | undefined;
+		eachStep(arc, this._verbs, (step, verbs) => {
+			const kinds = verbs.get(step.verb)?.args ?? {};
+			for (const [key, value] of Object.entries(step.args)) {
+				const kind = argBase(kinds[key]);
+				if (typeof value === 'string' && (kind === 'watch' || kind === 'expr' || (kind === 'id' && /[(.]|=>/.test(value)))) {
+					problem ??= this.exprProblem(value, catalog, known);
+				}
+				// Only the step that runs next, of a stock verb: something can come to be by a later one, and a host's own verb may
+				// aim at what only it knows.
+				else if (kind === 'id' && typeof value === 'string' && step === firstStep(arc) && this._stockHandlers.has(step.verb) && !known(bareName(value))) {
+					problem ??= `there is no ${bareName(value)}`;
+				}
+				else if (kind === 'bundle' && isCountMap(value)) {
+					const notItem = this._world?.isItem && Object.keys(value).find((name) => name !== this._mindDefaults.settings.currency && !this._world!.isItem!(name));
+					problem ??= notItem ? `'${notItem}' is not an item: the terms of a trade are {"ItemName":count}` : undefined;
+				}
+			}
+		});
+		return problem ?? this.lawProblem(owner, arc) ?? this.issueProblem(owner, arc);
+	}
+
+	/** Why `expr` can never work: it does not read, misuses the language, or names what is not in this world. */
+	private exprProblem(expr:string, catalog:Catalog | undefined, known:(name:string)=>boolean):string | undefined {
+		const broken = watchProblem(expr, catalog);
+		if (broken || !catalog) {
+			return broken;
+		}
+		const { error } = evaluate(expr, catalog);
+		if (error?.reason === 'fieldCall' || error?.reason === 'misuse') {
+			return `${expr}: ${error.message}`;
+		}
+		const toks = lex(expr);
+		const params = lambdaParams(toks);
+		if (this._mindDefaults.settings.repairUnknownFields) {
+			const plain = expr.replace(/"[^"]*"|'[^']*'/g, ' ');
+			const entities = [catalog.me, ...catalogEntities(catalog)];
+			const read = [...params].flatMap((param) => [...plain.matchAll(new RegExp(`\\b${param}\\.(\\w+)\\b(?!\\s*\\()`, 'g'))].map((m) => m[1]));
+			const unread = read.find((field) => !ALWAYS_FIELDS.has(field) && !entities.some((entity) => entity.fields?.[field] !== undefined));
+			if (unread) {
+				return `${expr}: no one has a field '${unread}'. What something is, its tag: u is "Witch"`;
+			}
+		}
+		const words = toks
+			.filter((tok, n) => tok.kind === 'ident' && !['dot', 'qdot'].includes(toks[n - 1]?.kind) && toks[n + 1]?.kind !== 'lp' && !params.has(tok.raw) && !WATCH_WORDS.has(tok.raw))
+			.map((tok) => tok.raw);
+		const unknown = words.find((word) => !known(word) && evaluate(word, catalog).value.kind === 'absent');
+		return unknown ? `${expr}: there is no ${unknown}` : undefined;
+	}
+
+	/** A law past the cap, or one it has already under another name. */
+	private lawProblem(owner:ArcRunner<TCtx>, arc:Arc):string | undefined {
+		const own = owner.laws.filter((law) => lawGroup(law.name) === '');
+		let count = own.length;
+		for (const step of arcSteps(arc)) {
+			const name = typeof step.args.name === 'string' ? step.args.name : undefined;
+			if (step.verb === 'unlaw') {
+				count -= own.some((law) => law.name === name) ? 1 : 0;
+			}
+			if (step.verb !== 'law') {
+				continue;
+			}
+			const body = arcArg(step.args.arc, this._verbs);
+			const twin = owner.laws.find((law) => law.name !== name && law.watch === String(step.args.watch ?? '').trim()
+				&& (step.args.who ?? law.who) === law.who && !!body && sameProgram(law.arc, body));
+			if (twin) {
+				return `that is your law ${twin.name} already`;
+			}
+			count += own.some((law) => law.name === name) ? 0 : 1;
+			if (count > owner.maxLaws) {
+				return `you have ${own.length} laws, the most you can (${own.map((law) => law.name).join(', ')}): unlaw one first`;
+			}
+		}
+		return undefined;
+	}
+
+	/** An order that reaches no one right now, whom it asks for being a matter of who stands. Its own earlier groups count. */
+	private issueProblem(owner:ArcRunner<TCtx>, arc:Arc):string | undefined {
+		const collective = collectiveOf(owner);
+		const voice = owner.voice;
+		const catalog = collective && this.collectiveCatalog(collective, voice, this.tryCtx(voice.id));
+		if (!collective || !catalog) {
+			return undefined;
+		}
+		const groups:string[] = [];
+		for (const step of arc) {
+			if (step.verb !== 'issue' || typeof step.args.who !== 'string') {
+				continue;
+			}
+			const who = step.args.who;
+			const named = evaluateWho(who, catalog, collective);
+			if (named.length === 0 && !groups.some((group) => who.includes(group))) {
+				return `${who} picks no unit`;
+			}
+			if (named.length > 0 && named.every((character) => character === collective.commander)) {
+				return 'issue never lands on the commander';
+			}
+			if (typeof step.args.group === 'string') {
+				groups.push(step.args.group);
+			}
+		}
+		return undefined;
+	}
+
+	/** The unfinished work `arc` would cut short: each unit an `issue` of it reaches, and the voice, unless it takes no body. */
+	private replacedBy(owner:ArcRunner<TCtx>, arc:Arc):Replacing[] {
+		if (!this._replaceCheck) {
+			return [];
+		}
+		const out:Replacing[] = [];
+		const note = (runner:ArcRunner<TCtx>, next:Arc):void => {
+			const now = runner.runs(next) ? undefined : runner.unfinished();
+			if (now) {
+				out.push({ id: runner.id, now, next: formatArc(next, this._verbs), looping: runner.inLoop() });
+			}
+		};
+		const collective = collectiveOf(owner);
+		const voice = owner.voice;
+		for (const step of arc) {
+			const orders = step.verb === 'issue' ? arcArg(step.args.arc, this._verbs) : undefined;
+			const catalog = orders && collective ? this.collectiveCatalog(collective, voice, this.tryCtx(voice.id)) : undefined;
+			const named = catalog && typeof step.args.who === 'string' ? evaluateWho(step.args.who, catalog, collective!) : [];
+			named.filter((character) => character !== collective?.commander).forEach((character) => note(character, orders!));
+		}
+		if (!voice.takesNoBody(arc)) {
+			note(voice, arc);
+		}
+		return out;
+	}
+
+	/** What each mind is doing as it thinks, down to its reply as it is written, and the orders it gives: for a host to show. */
+	public onThink(fn:(event:ThinkEvent)=>void):this {
+		// It runs in the middle of reading a reply: a bug in how a host shows a think must not end the think.
+		this._thinkFn = (event) => {
+			try {
+				fn(event);
+			}
+			catch (err) {
+				this.emitLog({ name: 'ArcDirector', message: `onThink: ${err instanceof Error ? err.message : String(err)}`, error: true });
+			}
+		};
+		return this;
+	}
+
+	// ---- Genre presets ----
+
+	private _rts:RTS<TCtx> | undefined;
+
+	/**
+	 * An RTS: its kinds as data and a few primitives, each acting once (`RTSHost`). Registers the stock RTS verbs and
+	 * runs them all: who does the work, routes, queues, supply, target picking, failure reasons. A unit or building
+	 * whose tags name a kind gets that kind's verbs as its kit; a side's commander reads its stock, supply, queues
+	 * and grouped units in its prompt. Movement needs `withWorld`.
+	 */
+	public withRTS(host:RTSHost):this {
+		this._verbs.addAll(STOCK_RTS_VERB_DEFS);
+		const rts = new RTS<TCtx>({
+			host,
+			world: () => this._world,
+			character: (id) => this.character(id),
+			collective: (id) => this.collective(id),
+			pick: (call, expr) => this.pickIDs(call, expr),
+			seen: (call) => (this._sightLook ? this.filterSight(this._sightLook(call.ctx)).objects.map((o) => o.id) : []),
+			tell: (id, text) => this._rows.get(id)?.runner.tell({ kind: 'rts', text, major: true }),
+			has: (verb) => this._verbs.has(verb),
+		});
+		this._rts = rts;
+		for (const [verb, handler] of Object.entries(rts.handlers())) {
+			this._stockHandlers.set(verb, handler);
+		}
+		for (const [name, alias] of Object.entries({ ...rts.aliases(), ...rts.renamed() })) {
+			this.addVerb(name, alias);
+		}
+		this.rewire();
+		return this;
+	}
+
+	/**
+	 * An RPG to start from: `equip`, `unequip`, `steal`, `attack`, `block`, `heal` and `protect`, each registered with
+	 * its args and help once the game gives its handler (`RPGHost`), and the game's own attacks and spells as
+	 * `abilities`. Registers the stock verbs too; without `withDefaultKit`, characters get them, `offer` and these.
+	 */
+	public withRPG(host:RPGHost<TCtx>):this {
+		this._crowd ??= RPG_CROWD;
+		return this.withGenre(genreVerbs(STOCK_RPG_VERB_DEFS, host), STOCK_TRADE_VERBS);
+	}
+
+	/** A MOBA to start from: as `withRPG`, with its heroes' `attack`, `block`, `heal`, `protect` and `abilities`, and no `offer`. */
+	public withMOBA(host:MOBAHost<TCtx>):this {
+		return this.withGenre(genreVerbs(STOCK_MOBA_VERB_DEFS, host));
+	}
+
+	/** Register a genre's verbs and the stock ones; with `more`, they are the default kit unless `withDefaultKit` says otherwise. */
+	private withGenre(verbs:readonly GenreVerbEntry<TCtx>[], more:readonly string[] = []):this {
+		this._verbs.addAll(STOCK_VERB_DEFS);
+		for (const { name, def, handler } of verbs) {
+			if (!this._verbs.has(name)) {
+				this._verbs.add(name, def);
+			}
+			this._handlers.set(name, handler);
+		}
+		this._defaultKit ??= { verbs: [...STOCK_VERBS, ...more, ...verbs.map((verb) => verb.name)] };
+		this.rewire();
+		return this;
+	}
+
+	/** The ids `expr` picks, as `call`'s character sees: its collective's `units` too. */
+	private pickIDs(call:VerbCall<TCtx>, expr:string):string[] | { error:string } {
+		const catalog = this.exprCatalog(call.character, call.ctx, new SampleCache());
+		if (!catalog) {
+			return { error: 'nothing to pick from' };
+		}
+		const r = evaluate(expr, catalog);
+		if (r.error) {
+			return { error: r.error.message };
+		}
+		return idsInVal(r.value);
+	}
+
+	// ---- Perception (sight, hearing, kernels, catalogs) ----
+
+	private _senses:Record<string, Sense<TCtx>> = {};
+	private _sightLook:((ctx:TCtx)=>Sight) | undefined;
+	private _inventoryLook:((ctx:TCtx)=>Inventory) | undefined;
+	private _sightLimitDefault:number | undefined;
+	private _sightUnitName:string | undefined;
+	private _contextFn:((id:string)=>TCtx | undefined) | undefined;
+	private _kernelFn:KernelSource<TCtx> | undefined;
+	private _seenFn:SeenName<TCtx> | undefined;
+	/** The sound each verb makes, and what muffles a sound for a listener, once {@link withHearing} is set. */
+	private _hearing:{ noise:ReadonlyMap<string, Sound>; limit:number; range:HearingRange; onSound?:SoundListener } | undefined;
+	/** The sounds going on, by name and where: when each was made, and how loud each mind was last told it was. */
+	private readonly _sounds = new Map<string, { from:string | Vec; sound:Sound; at:number; told:Map<ArcRunner<TCtx>, number> }>();
+
+	public addSense(name:string, spec:Sense<TCtx>):this {
+		this._senses[name] = spec;
+		this.rewire();
+		return this;
+	}
+
+	public withSight({ look, limit, unitName }:{
+		look?:(ctx:TCtx)=>Sight;
+		limit?:number;
+		unitName?:string;
+	}):this {
+		if (limit !== undefined) {
+			this._sightLimitDefault = limit;
+		}
+		if (unitName !== undefined) {
+			this._sightUnitName = unitName;
+		}
+		if (look) {
+			this._sightLook = look;
+			this._senses.sight = {
+				description: sightDistanceDescription(this._sightUnitName),
+				gather: (ctx) => {
+					const snap = this.filterSight(look(ctx));
+					return formatSight(snap, this.sightFormatOpts());
+				},
+			};
+		}
+		else if (this._senses.sight) {
+			this._senses.sight.description = sightDistanceDescription(this._sightUnitName);
+		}
+		this.rewire();
+		return this;
+	}
+
+	/**
+	 * How each mind names other characters. `seen` returns a base name from what the mind holds about
+	 * the target; its owner's book keeps that name stable and numbers duplicates (`EnemyWitch2`).
+	 * Applied to sight, earshot, heard speech, watch-language entities, and event `who`. Arcs, laws and
+	 * watches are kept in ids: each mind turns its model's names into ids as it reads a reply.
+	 */
+	public withNames({ seen }:{ seen:SeenName<TCtx> }):this {
+		this._seenFn = seen;
+		this.rewire();
+		return this;
+	}
+
+	/** What the mind of character or collective `observerID` calls a character, for host-built text such as a sight `note`. */
+	public seen(observerID:string, target:NameTarget):string {
+		return (this.character(observerID) ?? this.collective(observerID))?.mind?.seen(target) ?? target.id;
+	}
+
+	/**
+	 * `expr` (watch syntax) as character `id` sees the world now, for host tools such as a camera that follows
+	 * `others.filter(u => doing(u, "cleave"))`. Every character in `others` carries its `busy` and `verb`.
+	 */
+	public evaluate(id:string, expr:string):EvalResult {
+		const runner = this.character(id);
+		const ctx = runner?.context();
+		if (!runner || ctx === undefined || !this._kernelFn) {
+			return { value: ABSENT, error: new ExprError(`${id} has no view of the world`) };
+		}
+		const kernels = this.kernelsFor(runner, ctx);
+		const others = kernels.others.map((e) => {
+			const other = this.character(e.id);
+			return other ? { ...e, fields: { ...e.fields, ...memberEntity(other, '').fields } } : e;
+		});
+		return evaluate(expr, buildCatalog({ ...kernels, others }));
+	}
+
+	public withInventory(look:(ctx:TCtx)=>Inventory):this {
+		this._inventoryLook = look;
+		this._senses.carrying = {
+			description: 'What you wear and carry.',
+			gather: (ctx) => formatInventory(look(ctx), this._mindDefaults.settings.currency),
+		};
+		this.rewire();
+		return this;
+	}
+
+	public removeSense(...names:string[]):this {
+		for (const name of names) {
+			delete this._senses[name];
+		}
+		this.rewire();
+		return this;
+	}
+
+	public withContext(fn:(id:string)=>TCtx | undefined):this {
+		this._contextFn = fn;
+		return this;
+	}
+
+	public withKernels(fn:KernelSource<TCtx>):this {
+		this._kernelFn = fn;
+		this.rewire();
+		return this;
+	}
+
+	/**
+	 * NPCs hear sounds as they hear speech. A sound is as loud as its `loudness` (0–1) times how clearly `range` carries
+	 * it to a listener: by default an inverse-square drop out to `max`, halved where sound does not pass straight
+	 * between them (`canPass`, heard `muffled`),
+	 * or the game's own `(listenerID, source) => 0–1`. Heard from {@link AUDIBLE} up. `noise` is the sound each verb
+	 * makes while it runs (`go_to: { name: 'footsteps', loudness: 0.4 }`): its help says how far that carries, so a mind
+	 * knows which of its own deeds can be heard, and from where. Any other sound the host makes with {@link emitSound}.
+	 * A mind is told at most `limit` sounds a think, the loudest; none it sees the source of. `onSound` hears every
+	 * sound too, as it is made and again each tick while it goes on, for whatever has no mind: a game's simple bots
+	 * turning toward a noise. Needs `withWorld`.
+	 */
+	public withHearing({ noise = {}, limit = 5, range, onSound }:{
+		noise?:Record<string, Sound>;
+		limit?:number;
+		range?:Partial<typeof DEFAULT_HEARING> | ((listenerID:string, source:SoundSource)=>number);
+		onSound?:SoundListener;
+	} = {}):this {
+		this._hearing = { noise: new Map(Object.entries(noise)), limit, range: typeof range === 'function' ? range : { ...DEFAULT_HEARING, ...range }, onSound };
+		this.syncVerbSchemas();
+		return this;
+	}
+
+	/**
+	 * `sound` made at `from`: a character or thing the world places (it moves with it), or a point. Every mind in earshot
+	 * is told it, from whichever of its characters hears it loudest, as an event it reads in its next think (`You hear
+	 * footsteps LOUDLY 1 pace behind you!`); one heard {@link LOUD} or louder makes it think. A sound that goes on
+	 * (`seconds`) is told again only once it is heard a step louder (`!`, then `LOUDLY`). The same sound made again at
+	 * the same place or by the same thing replaces it, so a game keeps a sound going by making it again. Its maker's own
+	 * mind does not hear it. Returns what ends it early.
+	 */
+	public emitSound(from:string | Vec, sound:Sound):()=>void {
+		if (!this._hearing) {
+			return () => undefined;
+		}
+		const key = `${sound.name}@${typeof from === 'string' ? from : from.map(Math.round).join(',')}`;
+		const made = { from, sound, at: this._clock, told: this._sounds.get(key)?.told ?? new Map<ArcRunner<TCtx>, number>() };
+		this._sounds.set(key, made);
+		this.hear(key);
+		const end = ():void => {
+			if (this._sounds.get(key) === made) {
+				this._sounds.delete(key);
+			}
+		};
+		if (!((sound.seconds ?? 0) > 0)) {
+			end();
+		}
+		return end;
+	}
+
+	/** How loud a sound going on is at character `listenerID` now, and from where; nothing when it is not heard. */
+	private heardBy(listenerID:string, { from, sound, at }:{ from:string | Vec; sound:Sound; at:number }):{ level:number; source:SoundSource; muffled:boolean } | undefined {
+		const world = this._world;
+		const range = this._hearing?.range;
+		if (!world) {
+			return undefined;
+		}
+		const point = typeof from === 'string' ? poseOf(world, from)?.point : from;
+		const here = poseOf(world, listenerID)?.point;
+		if (!range || !point || !here || from === listenerID) {
+			return undefined;
+		}
+		const source:SoundSource = typeof from === 'string' ? { id: from, point } : { point };
+		const muffled = typeof range !== 'function' && !passes(world, 'sound', point, here);
+		const clarity = typeof range === 'function' ? range(listenerID, source) : clarityAt(distance(here, point), range) * (muffled ? range.occluded : 1);
+		const level = Math.min(1, loudnessAfter(sound, this._clock - at) * clarity);
+		return level >= AUDIBLE ? { level, source, muffled } : undefined;
+	}
+
+	/** Tell every mind that hears the sound `key` of it, where it is new to them or a step louder than they were told. */
+	private hear(key:string):void {
+		const made = this._sounds.get(key);
+		const world = this._world;
+		if (!made || !world || !this._hearing) {
+			return;
+		}
+		this._hearing.onSound?.(made.from, made.sound, (listenerID) => this.heardBy(listenerID, made)?.level ?? 0);
+		const maker = typeof made.from === 'string' ? this.character(made.from) : undefined;
+		// Each mind hears it through whichever of its characters hears it loudest.
+		const loudest = new Map<ArcRunner<TCtx>, { id:string; level:number; source:SoundSource; muffled:boolean }>();
+		for (const character of this.characters()) {
+			const owner = character.owner;
+			const heard = owner && owner !== maker?.owner ? this.heardBy(character.id, made) : undefined;
+			if (owner && heard && heard.level > (loudest.get(owner)?.level ?? 0)) {
+				loudest.set(owner, { id: character.id, ...heard });
+			}
+		}
+		for (const [owner, { id, level, source, muffled }] of loudest) {
+			const step = loudnessStep(level);
+			// Told already, and no louder; or there in plain sight, which says it already.
+			if (step <= (made.told.get(owner) ?? -1) || (source.id !== undefined && this.sees(id, source.id))) {
+				continue;
+			}
+			made.told.set(owner, step);
+			const pose = poseOf(world, id)!;
+			const text = heardText(made.sound, level, pose.point, source.point, { facing: pose.facing, up: world.up, muffled, unitName: this._sightUnitName });
+			owner.tell({ kind: 'sound', text, tags: ['sound'], timestamp: this._clock, key, cap: this._hearing.limit, weight: level, ...level >= LOUD ? { major: true } : {} });
+		}
+	}
+
+	/** The sounds going on, heard again as their makers and listeners move; those that ran their time end. */
+	private tickSounds():void {
+		for (const [key, { sound, at }] of this._sounds) {
+			if (this._clock - at >= (sound.seconds ?? 0)) {
+				this._sounds.delete(key);
+			}
+			else {
+				this.hear(key);
+			}
+		}
+	}
+
+	/**
+	 * Who outside `collective` its character `id` sees, nearest first, as `mind` says them: `EnemyKnight 8m (in reach)`.
+	 * Characters only, as far as sight reaches; whether in reach where the host's sight says.
+	 */
+	private othersSeenBy(id:string, collective:Collective<TCtx>, mind:Mind<TCtx>):{ name:string; away:number; text:string }[] {
+		const ctx = this._sightLook ? this.tryCtx(id) : undefined;
+		if (ctx === undefined) {
+			return [];
+		}
+		const snap = this.filterSight(this._sightLook!(ctx));
+		const members = new Set(collective.characters.map((c) => c.id));
+		return snap.objects
+			.filter((o) => !members.has(o.id) && (o.tags.includes(RESERVED_TAGS.character) || this.character(o.id) !== undefined))
+			.map((o) => ({ o, away: distance(o.point, snap.self.point) }))
+			.filter(({ o, away }) => o.always || away <= DEFAULT_SIGHT.radius)
+			.sort((a, b) => a.away - b.away)
+			.map(({ o, away }) => ({ name: o.id, away, text: `${mind.nameOf(o.id) || o.id}${o.hp !== undefined && o.maxHP !== undefined ? ` ${o.hp}/${o.maxHP} hp` : ''} ${formatMeasure(quantizeDistance(away, DEFAULT_SIGHT.closeness), this._sightUnitName ?? DEFAULT_SIGHT.unitName)}${o.inReach === undefined ? '' : o.inReach ? ' (in reach)' : ' (out of reach)'}` }));
+	}
+
+	/** Character `id`'s health by the host's `hp` kernel; nothing without one. */
+	private healthOf(id:string):{ hp:number; maxHP:number } | undefined {
+		const ctx = this._kernelFn ? this.tryCtx(id) : undefined;
+		if (ctx === undefined) {
+			return undefined;
+		}
+		const kernels = this._kernelFn!(ctx);
+		return kernels.hp?.(kernels.me);
+	}
+
+	/** Whether character `fromID` sees `toID` now, by `withSight`, as far as sight reaches; `undefined` when there is no sight to ask. */
+	private sees(fromID:string, toID:string):boolean | undefined {
+		const ctx = this._sightLook ? this.tryCtx(fromID) : undefined;
+		if (ctx === undefined) {
+			return undefined;
+		}
+		const snap = this.filterSight(this._sightLook!(ctx));
+		return snap.objects.some((o) => o.id === toID && (o.always || distance(o.point, snap.self.point) <= DEFAULT_SIGHT.radius));
+	}
+
+	/** Whether light passes from where `fromID` is to where `toID` is (`canPass`). No `canPass` means yes. One with no place means no. */
+	private inLineOfSight(fromID:string, toID:string):boolean {
+		const world = this._world;
+		if (!world?.canPass) {
+			return true;
+		}
+		const from = poseOf(world, fromID)?.point;
+		const to = poseOf(world, toID)?.point;
+		return !!from && !!to && passes(world, 'light', from, to);
+	}
+
+	/** `point`: measure as if the character stood there. */
+	private kernelsFor(runner:ArcRunner<TCtx>, ctx:TCtx, cache = this.cacheOf(runner), point?:Vec):HostKernels {
+		const mind = runner.mind;
+		const kernels = this.namedKernels(mind, this._kernelFn!(ctx, point));
+		const here = point && this._world && poseOf(this._world, kernels.me.id);
+		const geometry = this._world
+			? geometryKernels(this._world, kernels.me.id, here ? new Map([[kernels.me.id, { ...here, point }]]) : undefined)
+			: {};
+		const lastTimestamp = mind?.lastTacticalTimestamp;
+		const last = runner.lastResult;
+		const ago = lastTimestamp !== undefined && Number.isFinite(lastTimestamp)
+			? Math.max(0, this._clock - lastTimestamp)
+			: undefined;
+		const side = !this._rts ? undefined : runner instanceof Collective ? runner.id : (runner as Character<TCtx>).collective?.id ?? runner.id;
+		// What happened since its mind last thought, as `events`: `events.filter("sound")`. A unit reads its collective's.
+		const listener = mind ?? (runner instanceof Character ? runner.collective?.mind : undefined);
+		const events:ExprVal = { kind: 'list', value: (listener?.events() ?? []).map((e, i):ExprVal => ({
+			kind: 'entity',
+			value: dummyEntity(`event${i + 1}`, { tags: [e.kind, ...e.tags ?? []], fields: { secondsAgo: { kind: 'number', value: Math.max(0, this._clock - (e.timestamp ?? this._clock)) } } }),
+		})) };
+		return {
+			...kernels,
+			...geometry,
+			// Each character among them with what it is at, so `doing(u, "go_to")` and `isBusy(u)` read it.
+			others: kernels.others.map((e) => {
+				const character = this.character(e.id);
+				return character ? { ...e, fields: { ...e.fields, ...doingFields(character) } } : e;
+			}),
+			// Who sees whom, where the host's kernels say; else where light passes.
+			canSee: kernels.canSee ?? (this._world?.canPass ? (a, b) => this.inLineOfSight(a.id, b.id) : undefined),
+			bindings: { events, ...kernels.bindings, ...side ? this._rts!.bindings(side) : {} },
+			cache,
+			hasHeard: mind?.hasHeard() ?? false,
+			prev: {
+				secondsAgo: ago,
+				me: this.prevMeOf(runner, kernels),
+				verbs: last
+					? [{
+						secondsAgo: ago ?? 0,
+						isOk: last.ok,
+						reason: last.reason ?? '',
+						verb: last.verb ?? '',
+					}]
+					: [],
+			},
+		} as HostKernels;
+	}
+
+	/**
+	 * Host entities under `mind`'s names for them, so its model's own words still evaluate (`observe`).
+	 * A binding keyed by a character's id is bound under its id and under the name.
+	 */
+	private namedKernels<TKernels extends Pick<HostKernels, 'others' | 'items' | 'bindings'>>(
+		mind:Mind<TCtx> | null,
+		kernels:TKernels,
+	):TKernels {
+		if (!mind || !this._seenFn) {
+			return kernels;
+		}
+		const named = (e:ExprEntity):ExprEntity => ({ ...e, name: mind.seen(e) });
+		const bindings:Record<string, ExprVal> = {};
+		for (const [key, val] of Object.entries(kernels.bindings ?? {})) {
+			if (val.kind !== 'entity') {
+				bindings[key] = val;
+				continue;
+			}
+			const name = mind.seen(val.value);
+			const value:ExprVal = { kind: 'entity', value: { ...val.value, name } };
+			bindings[key] = value;
+			if (key === val.value.id) {
+				bindings[name] = value;
+			}
+		}
+		return { ...kernels, others: kernels.others.map(named), items: kernels.items.map(named), bindings };
+	}
+
+	/** Spawn snapshot so the first think can see a change. A saved prev is left alone. */
+	private stampPrev(runner:ArcRunner<TCtx>):void {
+		if (runner.prevMe || !this._kernelFn || !this._contextFn) {
+			return;
+		}
+		const ctx = this.tryCtx(runner.id);
+		if (ctx) {
+			try {
+				this.kernelsFor(runner, ctx);
+			}
+			catch {
+				return;
+			}
+		}
+	}
+
+	private prevMeOf(runner:ArcRunner<TCtx>, kernels:MeFreezeHost) {
+		runner.prevMe ??= freezeMe(kernels);
+		return runner.prevMe;
+	}
+
+	/** The host naming policy as one mind sees it: by its owner's id, from its voice's context. */
+	private seenAs(mind:Mind<TCtx>):((target:NameTarget)=>string) | undefined {
+		const seen = this._seenFn;
+		if (!seen) {
+			return undefined;
+		}
+		return (target) => seen({ id: mind.id, ctx: this.tryCtx(mind.thinkThread()) }, target);
+	}
+
+	/** Host look, minus what is out of sight, with everything seen under `mind`'s name for it. */
+	private see(mind:Mind<TCtx>, ctx:TCtx):Sight {
+		const snap = this.filterSight(this._sightLook!(ctx));
+		return {
+			...snap,
+			objects: snap.objects.map((o) => {
+				const doing = o.doing ?? this.seenDoing(o.id, mind);
+				return { ...o, ...this._seenFn ? { id: mind.seen(o) } : {}, ...doing ? { doing } : {} };
+			}),
+		};
+	}
+
+	private sensesFor(mind:Mind<TCtx>, owner:ArcRunner<TCtx>):Record<string, Sense<TCtx>> {
+		const wrapSight = !!(this._sightLook && this._senses.sight);
+		const commanderless = owner instanceof Collective && !!this._contextFn && this.tryCtx(owner.voice.id) === undefined;
+		const skipCarrying = !!this._senses.carrying && commanderless;
+		if (!wrapSight && !skipCarrying) {
+			return this._senses;
+		}
+		const senses:{ [k:string]:Sense<TCtx> } = { ...this._senses };
+		if (wrapSight && this._senses.sight) {
+			senses.sight = {
+				description: this._senses.sight.description,
+				gather: (ctx) => this.gatherSight(mind, ctx),
+			};
+		}
+		if (skipCarrying) {
+			delete senses.carrying;
+		}
+		return senses;
+	}
+
+	/** `snap` without what light does not reach from where it is seen (`canPass`), but what everyone sees (`always`). */
+	private filterSight(snap:Sight):Sight {
+		const world = this._world;
+		if (!world?.canPass) {
+			return snap;
+		}
+		return { ...snap, objects: snap.objects.filter((o) => o.always || passes(world, 'light', snap.self.point, o.point)) };
+	}
+
+	/** What character `id` is seen doing, in its verb's own words and `mind`'s names: `going to Cottage`. Nothing while idle or waiting. */
+	private seenDoing(id:string, mind:Mind<TCtx>):string | undefined {
+		const character = this.character(id);
+		const step = character?.verb && character.verb !== 'wait' ? character.lastStep : undefined;
+		return step && stepDoing(step, this._verbs, (name) => mind.nameOf(name) || name);
+	}
+
+	private sightFormatOpts():{ unitName?:string } {
+		return this._sightUnitName ? { unitName: this._sightUnitName } : {};
+	}
+
+	/** What `mind`'s voice sees; for a collective with no commander, what all its characters see, pooled. */
+	private gatherSight(mind:Mind<TCtx>, ctx:TCtx):string {
+		if (!this._sightLook) {
+			return '';
+		}
+		const focus = mind.persona.effectiveSightFocus();
+		const limit = mind.persona.sightLimit ?? this._sightLimitDefault;
+		const scores = new Map<string, number>();
+		const salience = new Map<string, number>();
+		const owner = mind.owner;
+		if (owner instanceof Collective && owner.characters.length > 0 && this._contextFn && !this.tryCtx(mind.thinkThread())) {
+			const groups:{ unitID:string; clauses:ReturnType<typeof formatSightClauses> }[] = [];
+			for (const character of owner.characters) {
+				const memberCtx = this.tryCtx(character.id);
+				if (!memberCtx) {
+					continue;
+				}
+				const snap = this.see(mind, memberCtx);
+				sightSalience(snap, salience);
+				const clauses = formatSightClauses(snap, {
+					...this.sightFormatOpts(),
+					fromName: character.id,
+					skipAmbient: groups.length > 0,
+				});
+				groups.push({ unitID: character.id, clauses });
+				if (focus.length > 0) {
+					this.scoreSightObjects(snap.objects, focus, memberCtx, character, scores);
+				}
+			}
+			const merged = mergeHiveClauses(groups, focus.length > 0 ? scores : undefined);
+			return this.shown(mind, orderSightClauses(merged, scores, limit, focus.length > 0), salience);
+		}
+		const snap = this.see(mind, ctx);
+		sightSalience(snap, salience);
+		const bag = this._inventoryLook?.(ctx);
+		for (const item of [...bag?.pockets ?? [], ...bag?.pack?.items ?? [], ...Object.values(bag?.worn ?? {})]) {
+			salience.set(item, CARRIED_SALIENCE);
+		}
+		const clauses = formatSightClauses(snap, this.sightFormatOpts());
+		if (focus.length > 0) {
+			this.scoreSightObjects(snap.objects, focus, ctx, mind.voice, scores);
+		}
+		return this.shown(mind, orderSightClauses(clauses, scores, limit, focus.length > 0), salience);
+	}
+
+	/** The sight text `mind` is shown; it remembers each name in it as last seen there, and recalls by what is salient. */
+	private shown(mind:Mind<TCtx>, clauses:SightClause[], salience:ReadonlyMap<string, number>):string {
+		internalsOf(mind).sighted(clauses, salience);
+		return joinSightClauses(clauses);
+	}
+
+	private scoreSightObjects(
+		objects:SeenObject[],
+		exprs:string[],
+		ctx:TCtx,
+		runner:ArcRunner<TCtx>,
+		into:Map<string, number>,
+	):void {
+		if (!this._kernelFn) {
+			return;
+		}
+		const kernels = this.kernelsFor(runner, ctx);
+		for (const obj of objects) {
+			const it = dummyEntity(runner.mind?.persona.names.resolve(obj.id) ?? obj.id, {
+				name: obj.id,
+				tags: obj.tags,
+				fields: obj.hp !== undefined && obj.maxHP !== undefined
+					? {
+						hp: { kind: 'number', value: obj.hp },
+						maxHP: { kind: 'number', value: obj.maxHP },
+					}
+					: undefined,
+			});
+			const cat = buildCatalog({
+				...kernels,
+				bindings: { ...kernels.bindings, it: { kind: 'entity', value: it } },
+			});
+			let best = 0;
+			for (let i = 0; i < exprs.length; i++) {
+				const r = evaluate(exprs[i], cat);
+				const s = watchScore(r.error ? { kind: 'absent' } : r.value).score * (0.8 ** i);
+				if (s > best) {
+					best = s;
+				}
+			}
+			const prev = into.get(obj.id) ?? 0;
+			if (best > prev) {
+				into.set(obj.id, best);
+			}
+		}
+	}
+
 	private tryCtx(id:string):TCtx | undefined {
 		if (!this._contextFn) {
 			return undefined;
@@ -2663,6 +2448,353 @@ ${dump.message}`, image: dump.image });
 		return runner instanceof Collective ? this.collectiveCatalog(runner, runner, undefined) : undefined;
 	}
 
+	/** What `mind`'s watches score against: its voice's view, or one view per character of a collective. */
+	private catalogsFor(mind:Mind<TCtx>):Catalog | Catalog[] {
+		const owner = mind.owner;
+		const voiceCtx = this.tryCtx(mind.thinkThread());
+		const kernels = voiceCtx
+			? this.kernelsFor(mind.voice, voiceCtx)
+			: (owner instanceof Collective ? this.dummyHiveKernels(owner) : undefined);
+		if (!kernels) {
+			throw new Error('no ctx');
+		}
+		const thinker = buildCatalog(kernels);
+		if (!(owner instanceof Collective)) {
+			return thinker;
+		}
+		const views:Catalog[] = [];
+		for (const character of owner.characters) {
+			const ctx = this.tryCtx(character.id);
+			if (ctx) {
+				views.push(buildCollectiveCatalog(this.kernelsFor(character, ctx), owner, owner.commander ?? undefined));
+			}
+		}
+		return views.length > 0 ? views : thinker;
+	}
+
+	// ---- Mind configuration ----
+
+	private readonly _mindDefaults = new MindDefaults();
+	private _tools:Record<string, ToolSpec<TCtx>> = {};
+	public talk:TalkNet | undefined;
+	private _map:MapSense | undefined;
+	private _knowledge:KnowledgeSource<TCtx> | undefined;
+	private _mentionCap:number | undefined;
+
+	/**
+	 * The director's layer of every mind's settings: `withMind((m) => m.withCurrency('gold').withSkipHeartbeat())`. A
+	 * mind reads each setting from its own (its spec's `mind`), else this layer, else the library's; a change here
+	 * reaches every mind on its next think. The director reads its `currency` and `repairUnknownFields` from here too.
+	 */
+	public withMind(configure:(mind:MindDefaults)=>void):this {
+		configure(this._mindDefaults);
+		// The queue keeps its own copy of what wakes a mind.
+		for (const mind of this.castMinds()) {
+			this.enqueue(mind);
+		}
+		return this;
+	}
+
+	/**
+	 * ### Add an LLM tool that minds can call.
+	 * - `description` is the tool's description.
+	 * - `parameters` is the tool's arguments' JSON schema.
+	 * - `handler` is the function that will be called when the tool is called. Returns a promise or a value.
+	 * Requires `withKernels` to look up entities by ID and `getPose` to get their position.
+	 * Adding a tool of the same name as an existing one replaces it.
+	 */
+	public addTool(name:string, spec:ToolSpec<TCtx>):this {
+		this._tools[name] = spec;
+		return this;
+	}
+
+	/**
+	 * A tool `name` that looks ahead in a game for the mind that calls it: the best moves from where it stands, each
+	 * with its chance to win and the line expected after it. Add one per game (`chess_move`, `plan_build`); a kit's
+	 * `tools` grants it like any tool.
+	 */
+	public addSearch<TState>(name:string, spec:SearchSpec<TCtx, TState>):this {
+		return this.addTool(name, searchTool(spec));
+	}
+
+	public removeTool(...names:string[]):this {
+		for (const name of names) {
+			delete this._tools[name];
+		}
+		return this;
+	}
+
+	public withTalk(
+		senseOrTalk:TalkSense | TalkNet,
+		onSpoke?:(utterance:SpeechUtterance)=>void,
+		config?:Partial<TalkConfig<TCtx>>,
+	):this {
+		if (senseOrTalk instanceof TalkNet) {
+			this.talk = senseOrTalk;
+		}
+		else {
+			const { repeats, ...rest } = config ?? {};
+			// A repeats function is asked with the speaker's context; one with none to give is refused.
+			const byID = typeof repeats === 'function'
+				? (id:string, text:string):boolean | string => {
+					const ctx = this.tryCtx(id);
+					return ctx !== undefined && repeats(ctx, text);
+				}
+				: repeats;
+			this.talk = new TalkNet(senseOrTalk, onSpoke, { ...rest, ...byID === undefined ? {} : { repeats: byID } });
+		}
+		this.rewire();
+		return this;
+	}
+
+	public withMap(sense:MapSense):this {
+		this._map = sense;
+		this.rewire();
+		return this;
+	}
+
+	/**
+	 * What minds know of the world: articles `recall` searches beside memory, and brings up unasked when a name is said
+	 * or heard. `mentions`: most articles shown per think that way (default `DEFAULT_MENTION_CAP`; 0 shows none).
+	 */
+	public withKnowledge(pages:KnowledgeSource<TCtx>, { mentions }:{ mentions?:number } = {}):this {
+		this._knowledge = pages;
+		this._mentionCap = mentions;
+		this.rewire();
+		return this;
+	}
+
+	/**
+	 * Every standing offer, and each offer by or to a character `mind` thinks for. A collective with no body of its
+	 * own does not have `offer` (its units do), and it still has to see the prices to send them.
+	 */
+	private offersSeenBy(mind:Mind<TCtx>):string {
+		const owner = mind.owner;
+		const traders = owner instanceof Collective ? [owner, ...owner.characters] : [owner];
+		if (!traders.some((runner) => runner.activeVerbs().has('offer'))) {
+			return '';
+		}
+		const mine = new Set(owner instanceof Collective ? owner.characters.map((c) => c.id) : [owner.id]);
+		const voice = mind.voice.id;
+		const name = (id:string):string => (id === voice ? 'you' : mind.nameOf(id));
+		return this.liveOffers().all
+			.filter((offer) => offer.to === undefined || mine.has(offer.from) || mine.has(offer.to))
+			.map((offer) => {
+				const who = offer.from === voice ? 'You offer' : `${name(offer.from)} offers`;
+				return offer.to === undefined
+					? `- ${who} ${offerText(offer)} to anyone`
+					: `- ${who} ${name(offer.to)} ${offerText(offer)}`;
+			})
+			.join('\n');
+	}
+
+	/** What `mind` needs from this director to think for `owner`, wired when it attaches. */
+	private mindDeps(mind:Mind<TCtx>, owner:ArcRunner<TCtx>):MindDeps<TCtx> {
+		return {
+			thinksWith: () => this.modelFor(mind),
+			defaults: this._mindDefaults.settings,
+			senses: this.sensesFor(mind, owner),
+			tools: this._tools,
+			talk: this.talk,
+			wayBlocked: (to) => (this._world ? wayBlocked(this._world, mind.thinkThread(), to) : to.map(() => undefined)),
+			autoEnact: true,
+			onChoose: (arc) => this.emitLog({ name: mind.thinkThread(), message: formatArc(arc, this._verbs) }),
+			onGoalReached: (goal) => this._goalReachedFn?.(mind.id, goal),
+			thinkWatch: () => this._thinkFn,
+			replacing: (arc) => this.replacedBy(owner, arc),
+			arcProblem: (arc) => this.arcProblem(owner, arc),
+			queue: this._queue,
+			embed: this._models.embedder(),
+			map: this._map,
+			knowledge: this._knowledge,
+			mentionCap: this._mentionCap,
+			offers: () => this.offersSeenBy(mind),
+			seenAs: this.seenAs(mind),
+			worldContext: () => this.tryCtx(owner.voice.id) ?? (owner instanceof Collective ? this.present(owner)?.ctx : undefined),
+		};
+	}
+
+	/** The model `mind` thinks with now: the one its settings name, else the default; none until its server answered. */
+	private modelFor(mind:Mind<TCtx>):MindModel {
+		const live = this._models.live(mind.setting('model'));
+		return {
+			provider: live?.provider ?? NO_MODEL,
+			id: live?.id ?? '',
+			vision: live?.vision,
+			contextTokens: live?.contextLength,
+			thinking: live?.thinking ?? false,
+			promptStyle: live?.prompt ?? 'full',
+			jsonOnly: trainedOnArcDirector(live?.id ?? ''),
+		};
+	}
+
+	private toolKnown(name:string):boolean {
+		if (Object.hasOwn(this._tools, name)) {
+			return true;
+		}
+		if (name === 'recall' || name === 'observe') {
+			return true;
+		}
+		if (name === 'earshot' && this.talk) {
+			return true;
+		}
+		if (name === 'see_map' && this._map && this._models.all().some((model) => model.vision)) {
+			return true;
+		}
+		return false;
+	}
+
+	// ---- Cast (specs, rows, wiring, membership, handover, save) ----
+
+	/** `restoreCast` before the cast is wired: it is built from it then. */
+	private _stored:CastJSON | undefined;
+	private _defaultKit:KitSource<TCtx> | undefined;
+	private _cooldownDefault = DEFAULT_COOLDOWN;
+	private _commanderVacantFn:((collective:Collective<TCtx>, character:Character<TCtx>)=>void) | undefined;
+	/** `undefined` until the first handover picks the default; `false` when the host turned it off. */
+	private _handover:Handover<TCtx> | false | undefined;
+	private _handoverTicks = 1;
+	/** Moves waiting for the next handover, one per character: its first `from`, its latest `to`. */
+	private readonly _journeys = new Map<Character<TCtx>, Journey<TCtx>>();
+	private _journeyTicks = 0;
+	/** A handover call holds one think slot until it answers. */
+	private _handoverBusy = false;
+	/** Specs from `addCharacter`, in order: the characters on their own when the cast is built or restored. */
+	private readonly _soloSpecs:CharacterSpec<TCtx>[] = [];
+	private readonly _collectiveSpecs:CollectiveSpec<TCtx>[] = [];
+	/** Every character spec by id, on its own or in a collective. One id namespace covers characters and collectives. */
+	private readonly _specs = new Map<string, CharacterSpec<TCtx>>();
+	/** Every character and collective by id, in the order they were wired. */
+	private readonly _rows = new Map<string, Row<TCtx>>();
+
+	public withCooldown(seconds:number):this {
+		this._cooldownDefault = seconds;
+		this.rewire();
+		return this;
+	}
+
+	/** Used when a character or collective spec omits `kit`, a collective's characters too. */
+	public withDefaultKit(kit:KitSource<TCtx>):this {
+		this._defaultKit = kit;
+		this.rewire();
+		return this;
+	}
+
+	/** A collective's commander left or died. Name a new one with `collective.commander = …`. */
+	public onCommanderVacant(fn:(collective:Collective<TCtx>, character:Character<TCtx>)=>void):this {
+		this._commanderVacantFn = fn;
+		return this;
+	}
+
+	/**
+	 * After characters change collectives, one model call fixes the memories of everyone involved: what went
+	 * stale in a collective left, and what a character or a collective joined should now remember. Moves
+	 * within `ticks` director ticks (default 1) share one call. It takes the next free think slot, never
+	 * stops a think, and nothing waits for it. On by default; pass your own `handover`, or `false` to turn it off.
+	 */
+	public withMemoryHandover({ ticks = 1, handover }:{ ticks?:number; handover?:Handover<TCtx> | false } = {}):this {
+		this._handoverTicks = Math.max(1, ticks);
+		this._handover = handover;
+		return this;
+	}
+
+	/**
+	 * A character on its own: an NPC with `mind` settings, or one the host drives (the Player) without them.
+	 * Its id must be new among characters and collectives.
+	 */
+	public addCharacter(spec:CharacterSpec<TCtx>):this {
+		this.claimID(spec.id);
+		this._soloSpecs.push(spec);
+		this._specs.set(spec.id, spec);
+		if (this._wired) {
+			this.reportMissingNames([spec]);
+			this.wireCharacter(spec);
+		}
+		return this;
+	}
+
+	/** Characters sharing one mind. Its id and its characters' ids must be new. */
+	public addCollective(spec:CollectiveSpec<TCtx>):this {
+		// Its own list: `removeCharacter` trims it, and the host's spec stays whole for the next director.
+		const own = { ...spec, characters: [...(spec.characters ?? [])] };
+		this.claimID(own.id);
+		for (const character of own.characters) {
+			this.claimID(character.id);
+			this._specs.set(character.id, character);
+		}
+		this._collectiveSpecs.push(own);
+		if (this._wired) {
+			this.reportMissingNames([own, ...own.characters.filter((c) => c.kit)]);
+			this.wireCollective(own);
+		}
+		return this;
+	}
+
+	/** Remove a character for good, on its own or from its collective. A commander's leaving tells `onCommanderVacant`. */
+	public removeCharacter(id:string):this {
+		this._specs.delete(id);
+		remove(this._soloSpecs, id);
+		for (const spec of this._collectiveSpecs) {
+			remove(spec.characters ?? [], id);
+		}
+		this.dropCharacter(id);
+		return this;
+	}
+
+	/** Remove a collective. Its characters stay, each on its own: with a fresh mind if their spec gave one settings. */
+	public removeCollective(id:string):this {
+		const spec = remove(this._collectiveSpecs, id);
+		const runner = this._rows.get(id)?.runner;
+		const members = (runner instanceof Collective ? runner.characters : spec?.characters ?? []).map((c) => c.id);
+		for (const member of members) {
+			const memberSpec = this._specs.get(member);
+			if (memberSpec) {
+				this._soloSpecs.push(memberSpec);
+			}
+		}
+		this.dropCollective(id);
+		return this;
+	}
+
+	/** Character `id`, on its own or in a collective. Like every accessor of the cast, it wires the cast first. */
+	public character(id:string):Character<TCtx> | undefined {
+		this.wire();
+		const runner = this._rows.get(id)?.runner;
+		return runner instanceof Character ? runner : undefined;
+	}
+
+	/** Every character: on its own or in a collective. */
+	public characters():Character<TCtx>[] {
+		this.wire();
+		return [...this._rows.values()].flatMap(({ runner }) => (runner instanceof Character ? [runner] : []));
+	}
+
+	public collective(id:string):Collective<TCtx> | undefined {
+		this.wire();
+		const runner = this._rows.get(id)?.runner;
+		return runner instanceof Collective ? runner : undefined;
+	}
+
+	public collectives():Collective<TCtx>[] {
+		this.wire();
+		return [...this._rows.values()].flatMap(({ runner }) => (runner instanceof Collective ? [runner] : []));
+	}
+
+	/** Every mind that thinks: characters' own, then collectives'. */
+	public minds():Mind<TCtx>[] {
+		this.wire();
+		return this.castMinds();
+	}
+
+	/** The minds of the cast wired so far, as {@link minds} lists them, without wiring it: for builders. */
+	private castMinds():Mind<TCtx>[] {
+		const runners = [...this._rows.values()].map((row) => row.runner);
+		return [
+			...runners.flatMap((runner) => (runner instanceof Character ? ownMindOf(runner) ?? [] : [])),
+			...runners.flatMap((runner) => (runner instanceof Collective ? [runner.mind] : [])),
+		];
+	}
+
 	/** A spec's kit, else the default one. Something that can run no verb is a mistake, so it throws. */
 	private kitFor(spec:{ id:string; kit?:KitSource<TCtx>; tags?:readonly string[] }):KitSource<TCtx> {
 		const kind = this._rts && spec.tags?.find((tag) => this._rts!.spec(tag));
@@ -2674,22 +2806,6 @@ ${dump.message}`, image: dump.image });
 			throw new Error(`ArcDirector: '${spec.id}' has a kit with no verbs`);
 		}
 		return kit;
-	}
-
-	private toolKnown(name:string):boolean {
-		if (Object.hasOwn(this._tools, name)) {
-			return true;
-		}
-		if (name === 'recall' || name === 'observe') {
-			return true;
-		}
-		if (name === 'earshot' && (this.talk || this._talkSense)) {
-			return true;
-		}
-		if (name === 'see_map' && this._map && this._models.all().some((model) => model.vision)) {
-			return true;
-		}
-		return false;
 	}
 
 	private readKit(
@@ -2742,7 +2858,7 @@ ${dump.message}`, image: dump.image });
 		}
 	}
 
-	/** Kit names nothing registers: in `specs`, or in the default kit and every spec waiting for `start()`. */
+	/** Kit names nothing registers: in `specs`, or in the default kit and every spec waiting to be wired. */
 	private missingNames(specs?:{ id:string; kit?:KitSource<TCtx> }[]):string[] {
 		const out:string[] = [];
 		if (!specs && this._defaultKit && typeof this._defaultKit !== 'function') {
@@ -2771,15 +2887,9 @@ ${dump.message}`, image: dump.image });
 
 	private reportMissingNames(specs?:{ id:string; kit?:KitSource<TCtx> }[]):void {
 		const parts = this.missingNames(specs);
-		if (parts.length === 0) {
-			return;
+		if (parts.length > 0) {
+			throw new Error(`ArcDirector: ${parts.join('; ')}`);
 		}
-		const message = `ArcDirector: ${parts.join('; ')}`;
-		if (this._ignoreMissing) {
-			this.emitLog({ name: 'ArcDirector', message });
-			return;
-		}
-		throw new Error(message);
 	}
 
 	/** Throw when a character or collective already has `id`: they share one namespace. */
@@ -2791,7 +2901,7 @@ ${dump.message}`, image: dump.image });
 
 	/** A runner's per-tick sample cache. */
 	private cacheOf(runner:ArcRunner<TCtx>):SampleCache {
-		return (this._characterRows.get(runner.id) ?? this._collectiveRows.get(runner.id))?.cache ?? new SampleCache();
+		return this._rows.get(runner.id)?.cache ?? new SampleCache();
 	}
 
 	/** The deps every runner gets: dispatch through this director, its catalog, its kit. `runner` is the one built from them. */
@@ -2844,7 +2954,7 @@ ${dump.message}`, image: dump.image });
 		if (standing) {
 			this._standing.set(character, standing);
 		}
-		this._characterRows.set(spec.id, { spec, runner: character, cache: new SampleCache() });
+		this._rows.set(spec.id, { spec, runner: character, cache: new SampleCache() });
 		if (!json) {
 			for (const offer of spec.offers ?? []) {
 				this.offers.post({ ...offer, from: spec.id });
@@ -2862,7 +2972,7 @@ ${dump.message}`, image: dump.image });
 			moveLawsInto(character, internalsOf(into));
 		}
 		else if (json?.mind || spec.mind) {
-			this.attachMind(character, json?.mind ? Mind.fromJSON(json.mind) : new Mind({ ...this._mindDefaults, ...spec.mind }));
+			this.attachMind(character, json?.mind ? Mind.fromJSON(json.mind) : new Mind(spec.mind));
 		}
 		this.syncListener(character);
 		this.stampPrev(character);
@@ -2875,7 +2985,7 @@ ${dump.message}`, image: dump.image });
 		const json = cast?.collectives[spec.id];
 		const persona = json ? Persona.fromJSON(json.persona, spec) : new Persona(spec);
 		persona.sightLimit ??= this._sightLimitDefault;
-		const mind = json ? Mind.fromJSON<TCtx>(json.mind) : new Mind<TCtx>({ ...this._mindDefaults, ...spec.mind });
+		const mind = json ? Mind.fromJSON<TCtx>(json.mind) : new Mind<TCtx>(spec.mind);
 		const host:CollectiveHost<TCtx> = {
 			addCharacter: (character, into) => {
 				this.claimID(character.id);
@@ -2904,7 +3014,7 @@ ${dump.message}`, image: dump.image });
 			collective.status = () => rts.status(collective.id);
 		}
 		collective.maxUnitsPerIssue = spec.maxUnitsPerIssue;
-		this._collectiveRows.set(spec.id, { spec, runner: collective, cache: new SampleCache() });
+		this._rows.set(spec.id, { spec, runner: collective, cache: new SampleCache() });
 		const ids = json ? json.characters : (spec.characters ?? []).map((c) => c.id);
 		const chiefID = json ? json.commander : spec.commander;
 		for (const id of ids) {
@@ -2948,7 +3058,7 @@ ${dump.message}`, image: dump.image });
 		const from = character.collective;
 		const { dropped } = from ? this.leave(character, from) : { dropped: [] };
 		this.dropOwnMind(character);
-		character.mindSettings = mind?.settings();
+		character.mindSettings = mind ? { ...mind.settings } : undefined;
 		if (mind) {
 			this.attachMind(character, mind);
 		}
@@ -2965,7 +3075,7 @@ ${dump.message}`, image: dump.image });
 		if (from === to) {
 			return;
 		}
-		if (to && this._collectiveRows.get(to.id)?.runner !== to) {
+		if (to && this._rows.get(to.id)?.runner !== to) {
 			throw new Error(`ArcDirector: '${to.id}' is not a collective here`);
 		}
 		const { kept, dropped } = from ? this.leave(character, from, to) : { kept: [], dropped: [] };
@@ -2973,7 +3083,7 @@ ${dump.message}`, image: dump.image });
 			this.join(character, to, kept);
 		}
 		else if (character.mindSettings) {
-			this.attachMind(character, new Mind({ ...this._mindDefaults, ...character.mindSettings }));
+			this.attachMind(character, new Mind(character.mindSettings));
 		}
 		this.syncListener(character);
 		this.tellMoved(character, from, to, dropped);
@@ -2997,10 +3107,10 @@ ${dump.message}`, image: dump.image });
 		if (this._journeys.size === 0) {
 			return;
 		}
+		this._handover ??= chatHandover((req) => this.chatModel().provider.chat(req), () => this.chatModel().id);
 		this._journeyTicks += 1;
-		const queue = this._queue;
 		const model = this._models.live();
-		const full = !!queue && !!model && this.thinkingOn(model.name) >= model.maxParallel;
+		const full = !!model && this.thinkingOn(model.name) >= model.maxParallel;
 		if (this._journeyTicks < this._handoverTicks || this._handoverBusy || full || !this._handover) {
 			return;
 		}
@@ -3089,7 +3199,7 @@ ${dump.message}`, image: dump.image });
 	private join(character:Character<TCtx>, to:Collective<TCtx>, carried:Law[]):void {
 		const own = ownMindOf(character);
 		if (own) {
-			character.mindSettings = own.settings();
+			character.mindSettings = { ...own.settings };
 		}
 		this.dropOwnMind(character);
 		internalsOf(to).setCharacters([...to.characters, character]);
@@ -3109,7 +3219,8 @@ ${dump.message}`, image: dump.image });
 	):void {
 		const tell = (mind:Mind<TCtx>, event:MindEvent):void => {
 			mind.pushEvent(event);
-			this._queue?.enqueueMajor(mind.id, true);
+			// A major event wakes a mind; this one wakes even a mind that skips them.
+			this._queue.enqueueMajor(mind.id, true);
 		};
 		if (from) {
 			// The name it went by there: once gone, the policy may call it something else (an enemy, say).
@@ -3146,16 +3257,21 @@ ${dump.message}`, image: dump.image });
 		}
 		internalsOf(mind).attach(owner, this.mindDeps(mind, owner));
 		mind.stamp(this._clock);
-		this._queue?.ensure(mind.id, { skipHeartbeat: mind.skipHeartbeat, skipMajor: mind.skipMajor, skipStart: mind.skipStart });
-		this._queue?.setWatches(mind.id, mind.persona.effectiveWatches());
-		this._queue?.setAiOn(mind.id, true);
+		this.enqueue(mind);
+		this._queue.setAiOn(mind.id, true);
+	}
+
+	/** Give `mind` its place in the think queue, with its watches. */
+	private enqueue(mind:Mind<TCtx>):void {
+		this._queue.ensure(mind.id, { skipHeartbeat: mind.setting('skipHeartbeat'), skipMajor: mind.setting('skipMajor'), skipStart: mind.setting('skipStart') });
+		this._queue.setWatches(mind.id, mind.persona.effectiveWatches());
 	}
 
 	/** Stop `mind` thinking: its think in flight, and its place in the queue. It thinks for no one after. */
 	private detachMind(mind:Mind<TCtx>):void {
 		mind.abortThink();
-		this._queue?.setAiOn(mind.id, false);
-		this._queue?.drop(mind.id);
+		this._queue.setAiOn(mind.id, false);
+		this._queue.drop(mind.id);
 		let i = this._readyThink.length;
 		while (i--) {
 			if (this._readyThink[i].mindID === mind.id) {
@@ -3165,40 +3281,16 @@ ${dump.message}`, image: dump.image });
 		internalsOf(mind).detach();
 	}
 
-	/** The listener for `owner`'s mind: one per character with a mind of its own, and one per collective. */
-	private talkMindOf(owner:Character<TCtx> | Collective<TCtx>):TalkMind {
-		let listener = this._talkMinds.get(owner);
-		if (!listener) {
-			listener = {
-				id: owner.id,
-				nameOf: (id) => owner.mind?.nameOf(id) ?? id,
-				voice: () => owner.voice.id,
-				pushEvent: (event) => {
-					const mind = owner.mind;
-					if (!mind) {
-						return;
-					}
-					mind.pushEvent(event);
-					if (event.major) {
-						this._queue?.enqueueMajor(mind.id);
-					}
-				},
-			};
-			this._talkMinds.set(owner, listener);
-		}
-		return listener;
-	}
-
 	/** Speech said to a collective by name reaches its mind; what its characters hear does too (`syncListener`). */
 	private listen(collective:Collective<TCtx>):void {
-		this.talk?.attach(this.talkMindOf(collective));
+		this.talk?.attach(collective);
 	}
 
 	/** A character hears for the mind that thinks for it: its own, or its collective's. The host's hears nothing. */
 	private syncListener(character:Character<TCtx>):void {
-		const owner = character.collective ?? (character.mind ? character : null);
+		const owner = character.owner;
 		if (owner) {
-			this.talk?.attach(this.talkMindOf(owner), character.id);
+			this.talk?.attach(owner, character.id);
 		}
 		else {
 			this.talk?.detach(character.id);
@@ -3207,17 +3299,13 @@ ${dump.message}`, image: dump.image });
 
 	/** Take a character off the director: its arc, moves, talk, its own mind, and its place in a collective. */
 	private dropCharacter(id:string):void {
-		const row = this._characterRows.get(id);
-		if (!row) {
+		const character = this._rows.get(id)?.runner;
+		if (!(character instanceof Character)) {
 			return;
 		}
-		const character = row.runner;
-		this._characterRows.delete(id);
-		character.replaceProgram();
-		this._mover.stop(id);
-		this.talk?.detach(id);
+		this._rows.delete(id);
+		this.unwire(character);
 		this.offers.drop(id);
-		this.dropOwnMind(character);
 		if (character.collective) {
 			this.leave(character, character.collective);
 		}
@@ -3225,39 +3313,49 @@ ${dump.message}`, image: dump.image });
 
 	/** Take a collective off the director. Its characters stay, each on its own: a fresh mind if it had settings for one. */
 	private dropCollective(id:string):void {
-		const row = this._collectiveRows.get(id);
-		if (!row) {
+		const collective = this._rows.get(id)?.runner;
+		if (!(collective instanceof Collective)) {
 			return;
 		}
-		const collective = row.runner;
 		for (const character of [...collective.characters]) {
 			this.moveCharacter(character, null);
 		}
-		this._collectiveRows.delete(id);
-		collective.replaceProgram();
-		this.talk?.detach(id);
-		this.detachMind(collective.mind);
+		this._rows.delete(id);
+		this.unwire(collective);
+	}
+
+	/** Take `runner` off the director: its arc, its moves, what it hears, its own mind. Membership is the caller's. */
+	private unwire(runner:Character<TCtx> | Collective<TCtx>):void {
+		runner.replaceProgram();
+		this._mover.stop(runner.id);
+		this.talk?.detach(runner.id);
+		if (runner instanceof Character) {
+			this.dropOwnMind(runner);
+		}
+		else {
+			this.detachMind(runner.mind);
+		}
 	}
 
 	/** Every character and collective, as a save. Restore it with `restoreCast`. */
 	public exportCast():CastJSON {
 		const characters:Record<string, CharacterJSON> = {};
-		for (const row of this._characterRows.values()) {
-			characters[row.runner.id] = row.runner.toJSON();
+		for (const character of this.characters()) {
+			characters[character.id] = character.toJSON();
 		}
 		const collectives:Record<string, CollectiveJSON> = {};
-		for (const row of this._collectiveRows.values()) {
-			collectives[row.runner.id] = row.runner.toJSON();
+		for (const collective of this.collectives()) {
+			collectives[collective.id] = collective.toJSON();
 		}
 		return { characters, collectives, offers: this.offers.toJSON() };
 	}
 
 	/**
-	 * Rebuild the cast from `exportCast`, under the specs added here. Before `start()` it is kept, and `start()`
-	 * builds from it. A collective's characters come from the save, so ones that joined or died stay that way.
+	 * Rebuild the cast from `exportCast`, under the specs added here. Before the cast is wired it is kept, and the cast
+	 * is built from it then. A collective's characters come from the save, so ones that joined or died stay that way.
 	 */
 	public restoreCast(cast:CastJSON):void {
-		if (!this._ready) {
+		if (!this._wired) {
 			this._stored = cast;
 			return;
 		}
@@ -3267,21 +3365,15 @@ ${dump.message}`, image: dump.image });
 
 	/** Drop every character and collective quietly: no events, no new commanders, no fresh minds. */
 	private clearCast():void {
-		for (const { runner } of this._characterRows.values()) {
-			runner.replaceProgram();
-			this._mover.stop(runner.id);
-			this.talk?.detach(runner.id);
-			this.dropOwnMind(runner);
-			internalsOf(runner).setCollective(null);
+		for (const character of this.characters()) {
+			this.unwire(character);
+			internalsOf(character).setCollective(null);
 		}
-		for (const { runner } of this._collectiveRows.values()) {
-			runner.replaceProgram();
-			this.talk?.detach(runner.id);
-			this.detachMind(runner.mind);
-			internalsOf(runner).setCharacters([]);
+		for (const collective of this.collectives()) {
+			this.unwire(collective);
+			internalsOf(collective).setCharacters([]);
 		}
-		this._characterRows.clear();
-		this._collectiveRows.clear();
+		this._rows.clear();
 		this._journeys.clear();
 		this.offers.clear();
 	}
@@ -3315,73 +3407,69 @@ ${dump.message}`, image: dump.image });
 	public pushEvent(event:MindEvent):void {
 		for (const mind of this.minds()) {
 			mind.pushEvent(event);
-			if (event.major) {
-				this._queue?.enqueueMajor(mind.id);
-			}
 		}
 	}
 
-	public tick(dt:number, now:number):void {
-		if (!this._ready || this._disposed || !this._queue) {
-			return;
+	// ---- Regions ----
+
+	private readonly _regions = new Regions<TCtx>((id, watch) => {
+		const r = this.evaluate(id, watch);
+		return !r.error && fit(r.value) > 0;
+	});
+
+	/**
+	 * ### Add a region to inject memories or run callbacks when characters touch it.
+
+	 * Defined as either a box between two corners (`from`, `to`) or a ball (`center`, `radius`), in world coordinates (`Vec`s).
+	 * - `who` (requires `withKernels`) filters what characters the region applies to.
+	 * Either a predicate given the character's context, or a watch string from the character's perspective.
+	 * - `memory` gets injected into the mind of characters inside the region and forgotten when they leave.
+	 * - `onEnter`, `onStay` and `onExit` run for each character inside the region.
+	 * - `until` removes the region once it returns true.
+	 * - `center` can be either world coordinates or an entity's ID and the region follows it.
+	 * Requires `withWorld` with `find` to look up entities by ID and `getPose` to get their position.
+	 * - Adding a region of the same name as an existing one replaces it.
+	 *
+	 * ### Notes
+	 * Regions are often the simplest way to give a mind what it needs, just when it needs it.
+	 * The problem with goals and pinned memories is that they stay in the mind forever.
+	 * A region's memory reaches the right characters at the right time and goes away when it becomes irrelevant.
+	 * A room's atmosphere, the dread at a monster's lair, a character's presence and aura, an item's instruction manual,
+	 * one character's own take on a place, a pep talk that triggers at the beginning of a journey.
+	 * All of these keep the prompt short for better performance and the minds focused on what's relevant.
+	 *
+	 * ### Performance
+	 * Cheap to have many of. With many regions and characters the check switches to sweep and prune, so it grows as
+	 * `n log n` rather than `n²`.
+	 */
+	public addRegion(name:string, spec:RegionSpec<TCtx>):this {
+		this.removeRegion(name);
+		this._regions.add(name, spec);
+		return this;
+	}
+
+	/** Remove regions defined by {@link addRegion}.
+	 * On removal, everyone `who` counted as inside the region
+	 * has their injected memories removed and `onExit` gets called.
+	 * Regions not found by name are ignored.
+	 */
+	public removeRegion(...names:string[]):this {
+		for (const name of names) {
+			this._regions.remove(name, this._clock);
 		}
-		this._clock = now;
-		const rows = [...this._characterRows.values(), ...this._collectiveRows.values()];
-		for (const row of rows) {
-			row.runner.stamp(now);
-			row.runner.refreshKit();
-		}
-		const minds = this.minds();
-		// A host may reassign `mind.model` any time.
-		for (const mind of minds) {
-			this.syncModel(mind);
-		}
-		for (const mind of minds) {
-			mind.stamp(now);
-		}
-		const world = this._world;
-		if (world) {
-			this._regions.tick(this.characters(), (id) => poseOf(world, id)?.point, dt, now);
-		}
-		// Built only for the minds whose watches are sampled this tick: a view per character is not cheap.
-		const catalogs = {
-			get: (id:string):Catalog | Catalog[] | undefined => {
-				const mind = this._kernelFn && this._contextFn ? this.mindByID(id) : undefined;
-				try {
-					return mind && this.catalogsFor(mind);
-				}
-				catch {
-					return undefined;
-				}
-			},
-		};
-		const ready = this._queue.tick(dt, catalogs);
-		this._readyThink.push(...ready);
-		this.tickWaits();
-		this._rts?.tick(dt);
-		this._mover.tick();
-		this.tickSounds();
-		this.talk?.tick(now);
-		for (const row of rows) {
-			row.cache.commit();
-		}
-		for (const row of this._characterRows.values()) {
-			if (!row.runner.collective) {
-				this.tickLaws(row.runner);
-			}
-			this.tickStanding(row.runner);
-		}
-		for (const row of this._collectiveRows.values()) {
-			// Whatever brought it down, a mind does not go on thinking through it.
-			const commander = row.runner.commander;
-			if (commander && this._world?.isDown?.(commander.id)) {
-				internalsOf(row.runner).vacate(commander);
-			}
-			this.tickCollectiveLaws(row.runner);
-		}
-		this.tickHandover();
-		this.tickGoals(dt, minds);
-		this.drain(now);
+		return this;
+	}
+
+	// ---- Goals ----
+
+	private _goalReachedFn:((id:string, goal:Goal<never>)=>void) | undefined;
+	/** Game seconds since goals' `until`s were last asked. */
+	private _goalClock = 0;
+
+	/** Each goal as it is reached, with the id of the mind whose goal it was: a cheer, a line on the screen. */
+	public onGoalReached(fn:(id:string, goal:Goal<TCtx>)=>void):this {
+		this._goalReachedFn = fn as (id:string, goal:Goal<never>)=>void;
+		return this;
 	}
 
 	/** Every goal whose `until` holds is reached. As often as watches are sampled: a view per character is not cheap. */
@@ -3408,183 +3496,57 @@ ${dump.message}`, image: dump.image });
 		return ctx !== undefined && until(ctx);
 	}
 
-	/** What `mind`'s watches score against: its voice's view, or one view per character of a collective. */
-	private catalogsFor(mind:Mind<TCtx>):Catalog | Catalog[] {
-		const owner = mind.owner;
-		const voiceCtx = this.tryCtx(mind.thinkThread());
-		const kernels = voiceCtx
-			? this.kernelsFor(mind.voice, voiceCtx)
-			: (owner instanceof Collective ? this.dummyHiveKernels(owner) : undefined);
-		if (!kernels) {
-			throw new Error('no ctx');
+	// ---- Thinking (queue, drain, laws tick) ----
+
+	private _queue:MindQueue = new ThinkQueue();
+	private _lawHold = 0;
+	/** Minds whose think in flight came of their heartbeat alone: their laws need not wait for it. */
+	private readonly _beatThinks = new Set<string>();
+	private readonly _readyThink:ThinkRow[] = [];
+	/** Per model: when its waiting thinks started waiting for it to go idle. */
+	private readonly _batchHeld = new Map<string, number>();
+
+	/** The default queue, highest score first, with `opts`. */
+	public withPriorityQueue(opts?:ThinkQueueOpts):this {
+		return this.withQueue(new ThinkQueue(opts));
+	}
+
+	/** Your own queue, or `new SimpleQueue(opts)` (first in, first out). Every mind moves to it, and starts there as a new mind does. */
+	public withQueue(queue:MindQueue):this {
+		this._queue = queue;
+		for (const mind of this.castMinds()) {
+			this.enqueue(mind);
 		}
-		const thinker = buildCatalog(kernels);
-		if (!(owner instanceof Collective)) {
-			return thinker;
-		}
-		const views:Catalog[] = [];
-		for (const character of owner.characters) {
-			const ctx = this.tryCtx(character.id);
-			if (ctx) {
-				views.push(buildCollectiveCatalog(this.kernelsFor(character, ctx), owner, owner.commander ?? undefined));
-			}
-		}
-		return views.length > 0 ? views : thinker;
+		this.rewire();
+		return this;
 	}
 
 	/**
-	 * `spec.choose` as `loop(choose(goal, …choices), until)`, checked now so a typo throws at `start()`, not
-	 * mid-game. Its choices may use any registered verb.
+	 * Game seconds every law runs once started before anything but its own end stops it, unless it sets its own `hold`.
+	 * Keeps watches that sit on an edge (a foe at just the distance a law watches for) from switching laws every frame.
+	 * Default 0: a law stops the moment its watch turns false or a higher one's turns true.
 	 */
-	private standingChoice(spec:CharacterSpec<TCtx>):Standing | undefined {
-		if (!spec.choose) {
-			return undefined;
-		}
-		if (spec.mind) {
-			throw new Error(`ArcDirector: '${spec.id}' has both choose and mind; give it one`);
-		}
-		const { goal, until, ...choices } = spec.choose;
-		try {
-			const args:Record<string, StepArg> = { goal };
-			for (const [name, text] of Object.entries(choices)) {
-				if (text !== undefined) {
-					args[name] = parseArcText(text, this._verbs);
-				}
-			}
-			const arc:Arc = [{ verb: 'loop', args: { arc: [{ verb: CHOOSE_VERB, args }], ...(until ? { until } : {}) } }];
-			validateArc(arc, this._verbs);
-			if (until) {
-				parse(until);
-			}
-			return { arc, until, restUntil: 0 };
-		}
-		catch (err) {
-			throw new Error(`ArcDirector: '${spec.id}' choose: ${err instanceof Error ? err.message : String(err)}`);
-		}
+	public withLawHold(seconds:number):this {
+		this._lawHold = Math.max(0, seconds);
+		return this;
 	}
 
-	/** Start a character's standing `choose` while it is idle, System One is on, and its `until` does not hold. */
-	private tickStanding(character:Character<TCtx>):void {
-		const standing = this._standing.get(character);
-		if (!standing || character.arcSession || this._clock < standing.restUntil || !this.pickFor(character)) {
-			return;
-		}
-		const catalog = standing.until ? character.catalog?.() : undefined;
-		if (standing.until && catalog && watchIsTrue(standing.until, catalog)) {
-			return;
-		}
-		void character.enact(standing.arc).then((result) => {
-			// A dead endpoint or a bad pick rests like a handler would, instead of asking again every tick.
-			if (!result.ok && !result.preempted) {
-				standing.restUntil = this._clock + character.cooldown;
-			}
-		}, (err:unknown) => {
-			standing.restUntil = this._clock + character.cooldown;
-			this.emitLog({ name: character.id, message: `choose: ${err instanceof Error ? err.message : String(err)}`, error: true });
-		});
+	/** Cancel an in-flight think by mind id. */
+	public abortThink(id:string):this {
+		this._queue.abortThink(id);
+		return this;
 	}
 
-	/**
-	 * The name of a runner's System One: the one its spec names, else its collective's, else the default. A spec's
-	 * `null` means none there, whatever the default is.
-	 */
-	private systemOneOf(runner:ArcRunner<TCtx>):string | null {
-		const specs = [
-			(this._characterRows.get(runner.id) ?? this._collectiveRows.get(runner.id))?.spec,
-			runner instanceof Character && runner.collective ? this._collectiveRows.get(runner.collective.id)?.spec : undefined,
-		];
-		const assigned = specs.find((spec) => spec?.systemOne !== undefined)?.systemOne;
-		const name = assigned === undefined ? this._defaultSystemOne : assigned;
-		return name && this._systemOnes.has(name) ? name : null;
+	public mindQueue():MindQueue {
+		return this._queue;
 	}
 
-	/** A spec naming a System One or a chat model this director lacks is a typo; caught when it is wired. */
-	private checkNames(spec:{ id:string; systemOne?:string | null; mind?:MindSettings; goals?:Goal<TCtx>[] }):void {
-		if (spec.systemOne && !this._systemOnes.has(spec.systemOne)) {
-			throw new Error(`ArcDirector: '${spec.id}' names System One '${spec.systemOne}', which was never added`);
-		}
-		if (spec.mind?.model !== undefined && !this._models.has(spec.mind.model)) {
-			throw new Error(`ArcDirector: '${spec.id}' names model '${spec.mind.model}', which was never added`);
-		}
-		// A typo in a goal's watch would leave it open for good: it throws now, as a law's does, not silently in play.
-		for (const { until } of spec.goals ?? []) {
-			if (typeof until === 'string') {
-				parse(until);
-			}
-		}
+	public setBatchThinks(on:boolean):void {
+		this._queue.batchThinks = on;
 	}
 
-	/** This runner's pick while it has a System One. */
-	private pickFor(runner:ArcRunner<TCtx>):ArcPick | undefined {
-		if (!this.systemOneOf(runner)) {
-			return undefined;
-		}
-		let pick = this._picks.get(runner);
-		if (!pick) {
-			pick = (goal, choices, last) => this.pick(runner, goal, choices, last);
-			this._picks.set(runner, pick);
-		}
-		return pick;
-	}
-
-	/**
-	 * Ask which of `choices` serves `goal` now, worded by {@link choicePrompt}. A lone choice left is taken unasked;
-	 * with none left the pick fails unasked. The runner's own System One answers first; when it fails or names no
-	 * choice, every other System One in turn, then the runner's chat model. One that failed rests a while.
-	 */
-	private async pick(runner:ArcRunner<TCtx>, goal:string, choices:Record<string, Arc>, last:LastChoice | undefined):Promise<string> {
-		const own = this.systemOneOf(runner);
-		if (!own) {
-			throw new Error('System One is off');
-		}
-		const prompt = this.choiceQuestionOf(runner, choices, runner.verb, last);
-		if (!prompt) {
-			throw new Error('no choice can run now');
-		}
-		const { state, criteria } = prompt;
-		const shown = Object.keys(criteria);
-		const now = nowMs();
-		if (shown.length === 1) {
-			this.logPick(runner, goal, `${shown[0]}, the only one that can run`, now, [], state, criteria);
-			runner.record.picked(shown[0]);
-			return shown[0];
-		}
-		const asked = [own, ...[...this._systemOnes.keys()].filter((name) => name !== own && (this._systemOneRest.get(name) ?? 0) <= now)]
-			.map((name):[string, SystemOne] => [name, this._systemOnes.get(name)!]);
-		const chat = this._models.live(runner.mind?.model);
-		if (chat) {
-			asked.push([chat.name, this.modelSystemOne(chat.name)]);
-		}
-		const misses:string[] = [];
-		for (const [by, systemOne] of asked) {
-			try {
-				const name = await systemOne.pick(state, goal, criteria);
-				if (Object.hasOwn(criteria, name)) {
-					this.logPick(runner, goal, `${name} by ${by}`, now, misses, state, criteria);
-					runner.record.picked(name);
-					return name;
-				}
-				misses.push(`${by} named '${name}'`);
-			}
-			catch (err) {
-				misses.push(`${by}: ${err instanceof Error ? err.message : String(err)}`);
-				if (this._systemOnes.has(by)) {
-					this._systemOneRest.set(by, nowMs() + SYSTEM_ONE_REST_MS);
-				}
-			}
-		}
-		this.logPick(runner, goal, 'nothing', now, misses, state, criteria);
-		throw new Error(misses.join('; ') || 'no System One answered');
-	}
-
-	private logPick(runner:ArcRunner<TCtx>, goal:string, answer:string, started:number, misses:string[], state:string, criteria:Record<string, string>):void {
-		const lines = Object.entries(criteria).map(([key, arc]) => `  ${key}: ${arc}`).join('\n');
-		this.emitLog({
-			name: runner.id,
-			message: `choose ${JSON.stringify(goal)} → ${answer} in ${Math.round(nowMs() - started)}ms`
-				+ `${misses.length > 0 ? ` (${misses.join('; ')})` : ''}\n${state}\n${lines}`,
-			error: answer === 'nothing',
-		});
+	public liveBatchThinks():boolean {
+		return this.thinkBatchPolicy().batchThinks;
 	}
 
 	/** Laws and the live arc session of a character on its own. */
@@ -3638,7 +3600,7 @@ ${dump.message}`, image: dump.image });
 	 * before the mind's first think ends either: laws act from the start, not after the opening think.
 	 */
 	private thinkWaiting(mindID:string):boolean {
-		if (!this._queue?.hasThought(mindID)) {
+		if (!this._queue.hasThought(mindID)) {
 			return false;
 		}
 		return (this._queue.isThinking(mindID) && !this._beatThinks.has(mindID))
@@ -3687,25 +3649,24 @@ ${dump.message}`, image: dump.image });
 
 	/** The mind the queue knows as `id`: a character's own, or a collective's. */
 	private mindByID(id:string):Mind<TCtx> | undefined {
-		return ownMindOf(this._characterRows.get(id)?.runner) ?? this._collectiveRows.get(id)?.runner.mind ?? undefined;
+		return ownMindOf(this.character(id)) ?? this.collective(id)?.mind;
 	}
 
 	/** The model a mind thinks with: its own, or the default. `''` before any resolved. */
 	private modelOf(mind:Mind<TCtx>):string {
-		return this._models.live(mind.model)?.name ?? '';
+		return this._models.live(mind.setting('model'))?.name ?? '';
 	}
 
 	/** Thinks running on `model` now, the memory handover counting against the default. */
 	private thinkingOn(model:string):number {
-		const queue = this._queue;
-		const thinks = queue ? this.minds().filter((mind) => queue.isThinking(mind.id) && this.modelOf(mind) === model).length : 0;
+		const thinks = this.minds().filter((mind) => this._queue.isThinking(mind.id) && this.modelOf(mind) === model).length;
 		return thinks + (this._handoverBusy && model === this._models.live()?.name ? 1 : 0);
 	}
 
 	/** Start ready thinks, best first, as far as each one's model has free slots. */
 	private drain(now:number):void {
 		const queue = this._queue;
-		if (!queue || !this._inferenceUp) {
+		if (!this._connected) {
 			return;
 		}
 		this._readyThink.sort((a, b) => {
@@ -3713,7 +3674,7 @@ ${dump.message}`, image: dump.image });
 			if (score !== 0) {
 				return score;
 			}
-			return (this.mindByID(b.mindID)?.rank ?? 0) - (this.mindByID(a.mindID)?.rank ?? 0);
+			return (this.mindByID(b.mindID)?.setting('rank') ?? 0) - (this.mindByID(a.mindID)?.setting('rank') ?? 0);
 		});
 		const open = new Map<string, number>();
 		const held:ThinkRow[] = [];
@@ -3755,9 +3716,8 @@ ${dump.message}`, image: dump.image });
 	 * prefill stalls every slot already decoding), up to `batchWait`, then start as one wave.
 	 */
 	private thinkSlots(model:string, now:number):number {
-		const queue = this._queue;
 		const live = this._models.live(model);
-		if (!queue || !live) {
+		if (!live) {
 			return 0;
 		}
 		const thinking = this.thinkingOn(model);
@@ -3786,8 +3746,8 @@ ${dump.message}`, image: dump.image });
 
 	private thinkBatchPolicy():{ batchThinks:boolean; batchWait:number } {
 		return {
-			batchThinks: this._queue?.batchThinks ?? DEFAULT_BATCH_THINKS,
-			batchWait: this._queue?.batchWait ?? DEFAULT_BATCH_WAIT,
+			batchThinks: this._queue.batchThinks ?? DEFAULT_BATCH_THINKS,
+			batchWait: this._queue.batchWait ?? DEFAULT_BATCH_WAIT,
 		};
 	}
 
@@ -3797,9 +3757,9 @@ ${dump.message}`, image: dump.image });
 				if (!mind.attached) {
 					return;
 				}
-				this._queue?.setWatches(mind.id, mind.persona.effectiveWatches());
+				this._queue.setWatches(mind.id, mind.persona.effectiveWatches());
 				if (!arc) {
-					this._queue?.noteResult(mind.id, true);
+					this._queue.noteResult(mind.id, true);
 				}
 			})
 			.catch((err:unknown) => {
@@ -3808,7 +3768,7 @@ ${dump.message}`, image: dump.image });
 				}
 				const text = err instanceof Error ? err.message : String(err);
 				this.emitLog({ name: mind.thinkThread(), message: `stalled: ${text}` });
-				this._queue?.noteResult(mind.id, true);
+				this._queue.noteResult(mind.id, true);
 				// An invalid reply ends no arc, so nothing would wake this mind: think again once, told why.
 				// Aborts and inference errors are not the mind's doing.
 				if (err instanceof ArcError) {
@@ -3816,39 +3776,10 @@ ${dump.message}`, image: dump.image });
 					const why = err instanceof BlockedArcError ? 'your plan cannot run' : 'your reply was not a valid Arc';
 					mind.ingestResult({ ok: false, verb: 'think', reason: `${why}: ${text}` });
 					if (again) {
-						this._queue?.enqueueVerb(mind.id, 'think', false);
+						this._queue.enqueueVerb(mind.id, 'think', false);
 					}
 				}
 			});
-	}
-
-	/** Wall-clock loop for laws. Games must not use this — they already have a frame tick. */
-	public runLoop(hz:number):()=>void {
-		if (!this._ready) {
-			throw new Error('ArcDirector: start() before runLoop');
-		}
-		this.stopLoop();
-		const dt = 1 / Math.max(1, hz);
-		let now = 0;
-		this._loop = setInterval(() => {
-			now += dt;
-			this.tick(dt, now);
-		}, Math.max(1, Math.round(1000 / hz)));
-		return () => this.stopLoop();
-	}
-
-	private stopLoop():void {
-		if (this._loop !== undefined) {
-			clearInterval(this._loop);
-			this._loop = undefined;
-		}
-	}
-
-	public dispose():void {
-		this.stopLoop();
-		this._disposed = true;
-		this.clearCast();
-		this._ready = false;
 	}
 }
 

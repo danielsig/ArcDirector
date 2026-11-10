@@ -200,8 +200,7 @@ function appendNoThink(content:Exclude<ChatContent, null>):Exclude<ChatContent, 
 }
 
 function messageReasoning(message:Record<string, unknown>):string | undefined {
-	const text = textFrom(message['reasoning_content']);
-	return text ?? undefined;
+	return cleanThought(textFrom(message['reasoning_content']));
 }
 
 function setTemplateKwargs(body:Record<string, unknown>, patch:Record<string, unknown>):void {
@@ -411,8 +410,39 @@ function textFrom(value:unknown):string | null {
 }
 
 /** Chat-template tokens a model leaks into content: `<|x|>`, `<|x>`, `<x|>`, or a dangling `<|x` at the end. */
+const TEMPLATE_TOKENS = /<\|[\w-]+\|?>|<[\w-]+\|>|<\|[\w-]*$/g;
+
+/** `text` without leaked chat-template tokens (see `TEMPLATE_TOKENS`), trimmed; `null` when nothing is left. */
 export function stripTemplateTokens(text:string | null):string | null {
-	return text?.replace(/<\|[\w-]+\|?>|<[\w-]+\|>|<\|[\w-]*$/g, '').trim() || null;
+	return text?.replace(TEMPLATE_TOKENS, '').trim() || null;
+}
+
+/** The channel header a model may leak at the start of its thought: Gemma 4's `<|channel>thought`, Harmony's `<|channel|>analysis`. */
+const THOUGHT_HEADER = /^\s*<\|channel\|?>\w*/;
+
+/** A thought without a leaked channel header or template tokens, untrimmed. */
+function untagged(thought:string):string {
+	return thought.replace(THOUGHT_HEADER, '').replace(TEMPLATE_TOKENS, '');
+}
+
+/** A thought as shown: no leaked channel header or template tokens, trimmed; `undefined` when nothing is left. */
+export function cleanThought(text:string | null | undefined):string | undefined {
+	return (text && untagged(text).trim()) || undefined;
+}
+
+/**
+ * Streams a thought clean: given the whole thought so far, emits only its new clean text. A header or token still
+ * arriving (`<|chan`, a last `<`) is held back until it is whole and dropped, or turns out to be text.
+ */
+function thoughtStream(emit:(text:string)=>void):(soFar:string)=>void {
+	let shown = '';
+	return (soFar) => {
+		const clean = untagged(soFar).trimStart().replace(/<$/, '');
+		if (clean.length > shown.length && clean.startsWith(shown)) {
+			emit(clean.slice(shown.length));
+			shown = clean;
+		}
+	};
 }
 
 function messageText(message:Record<string, unknown>):string | null {
@@ -435,7 +465,7 @@ function messageText(message:Record<string, unknown>):string | null {
 
 /** A reply the thinking budget cut off: no answer yet, only the thought so far. */
 function cutThoughtReply(got:Got):ChatResponse {
-	return { content: null, reasoning: got.cutThought?.trim() || undefined, toolCalls: [], truncated: true, generateMs: got.wallMs };
+	return { content: null, reasoning: cleanThought(got.cutThought), toolCalls: [], truncated: true, generateMs: got.wallMs };
 }
 
 /** A chat completions reply's answer, without timings: those depend on how it was sent. */
@@ -922,6 +952,7 @@ async function readInferenceResponse(
 	let responsesReasoning = '';
 	/** Streamed thought pieces so far: a server sends one per token. */
 	let thoughtTokens = 0;
+	const showThought = thoughtStream((reasoning) => onDelta?.({ reasoning }));
 	const doneItems:Record<string, unknown>[] = [];
 	const funcs = new Map<string, { id:string; name:string; arguments:string }>();
 	const ingest = (raw:Record<string, unknown> | 'done'):void => {
@@ -990,7 +1021,7 @@ async function readInferenceResponse(
 		) {
 			responsesReasoning += ev.delta;
 			thoughtTokens += 1;
-			onDelta?.({ reasoning: ev.delta });
+			showThought(responsesReasoning);
 		}
 		const choices = Array.isArray(ev.choices) ? ev.choices : [];
 		const choice = isRecord(choices[0]) ? choices[0] : {};
@@ -1015,7 +1046,7 @@ async function readInferenceResponse(
 		if (typeof delta['reasoning_content'] === 'string') {
 			assembledReasoning += delta['reasoning_content'];
 			thoughtTokens += 1;
-			onDelta?.({ reasoning: delta['reasoning_content'] });
+			showThought(assembledReasoning);
 		}
 		if (delta['tool_calls'] !== undefined) {
 			assembledTools = mergeToolCallDeltas(assembledTools, delta['tool_calls']);
@@ -1172,7 +1203,7 @@ function parseResponsesOutput(json:Record<string, unknown>):{
 	}
 	return {
 		content: stripTemplateTokens(texts.length > 0 ? texts.join('\n') : null),
-		reasoning: thoughts.length > 0 ? thoughts.join('\n') : undefined,
+		reasoning: cleanThought(thoughts.join('\n')),
 		toolCalls,
 		id,
 		truncated: json.status === 'incomplete',

@@ -156,7 +156,7 @@ export {
 	type SpeechUtterance,
 	type TalkConfig,
 	type Repeats,
-	type TalkMind,
+	type TalkListener,
 	type TalkSense,
 } from './mind/talk.js';
 
@@ -250,7 +250,6 @@ export type {
 	VerbArgs,
 	VerbGate,
 	StandingChoice,
-	StartOpts,
 	VerbCall,
 	VerbHandler,
 	AliasPart,

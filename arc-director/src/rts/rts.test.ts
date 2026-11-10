@@ -232,7 +232,7 @@ async function start(game = new Game(), more:(g:Game)=>void = () => undefined, b
 	}
 	build(director);
 	game.director = director;
-	return director.start();
+	return director.connect();
 }
 
 /** `seconds` of play, a tenth at a time. */
@@ -400,6 +400,22 @@ describe('stock RTS verbs', () => {
 		const gold = game.stock.Red.Gold;
 		assert.equal((await enact(director, 'Chief', 'cancel(what=Worker)')).ok, true);
 		assert.equal(game.stock.Red.Gold, gold + 50);
+		director.dispose();
+	});
+
+	it('wakes its side\'s mind with what it tells it, as any major event does', async () => {
+		const game = new Game();
+		const asked:string[] = [];
+		const director = await start(game, undefined, (d) => d
+			.withPriorityQueue({ processInterval: 0 })
+			.withMind((m) => m.withSkipHeartbeat().withSkipStart())
+			.addFakeInference((req) => {
+				asked.push(req.thread ?? '');
+				return { content: JSON.stringify({ steps: [{ verb: 'wait' }] }), toolCalls: [] };
+			}));
+		await enact(director, 'Chief', 'research(what=Forging)');
+		await play(game, director, 2);
+		assert.ok(asked.includes('Red'), 'what its research came to woke it');
 		director.dispose();
 	});
 

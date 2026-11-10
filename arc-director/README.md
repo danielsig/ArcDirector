@@ -87,7 +87,7 @@ It also gives you:
 
 **Vibe-coding a Three.js game and want AI NPCs in it?** Chain a few `with…` calls, point it at LM Studio, call `director.tick(dt, now)` in your render loop, and your scene has a living cast. The stock verbs work as soon as you connect the world.
 
-**Building a real game that ships in the browser?** ArcDirector is strict TypeScript with no rendering dependencies, and every piece can be replaced: the queue, inference, verbs, senses, tools, prompt lines and memory handover. You get typed verb handlers, saves that round-trip the whole cast, and checks at `start()` that fail closed. Much of the hard design work is already done for you: keeping the prompt prefix stable, parallelism per model, clean aborts, and reasoning about targets that cannot be reached.
+**Building a real game that ships in the browser?** ArcDirector is strict TypeScript with no rendering dependencies, and every piece can be replaced: the queue, inference, verbs, senses, tools, prompt lines and memory handover. You get typed verb handlers, saves that round-trip the whole cast, and checks that fail closed as the cast is wired. Much of the hard design work is already done for you: keeping the prompt prefix stable, parallelism per model, clean aborts, and reasoning about targets that cannot be reached.
 
 The example host in [`game/`](../game/) is a complete integration to borrow from.
 
@@ -105,11 +105,11 @@ Five words to know:
 
 1. `new ArcDirector()` starts out empty.
 2. Chain `with…` calls (each sets one subsystem) and `add…` calls (each adds to a list), in any order.
-3. `await start()` is the only assembly step. It wires up characters and their minds, checks the names in each kit, and probes the model. Laws, programs and moves run from the first `tick` after it begins; only thinks wait for the model.
-4. Call `tick(dt, now)` every game frame. Do not call it while the AI is paused.
+3. Call `tick(dt, now)` every game frame. Do not call it while the AI is paused. The first tick wires up characters and their minds, checks the names in each kit, and connects to the models. Laws, programs and moves run from then on; only thinks wait for the model.
+4. `await connect()` is optional: it does what the first tick does, and resolves once the models answer, or rejects with what went wrong.
 
 ```ts
-const director = await new ArcDirector<CharacterCtx>()
+const director = new ArcDirector<CharacterCtx>()
 	.addLMStudioInference()
 	.addStockVerbs()
 	.withDefaultKit({ verbs: STOCK_VERBS })
@@ -143,15 +143,12 @@ const director = await new ArcDirector<CharacterCtx>()
 			tags: ['backstory'], pinned: true,
 		}],
 	})
-	.addCharacter({ id: 'Player' })
-	.start();
+	.addCharacter({ id: 'Player' });
 
 director.tick(dt, now);
 ```
 
-`start()` returns `Promise<this>`, and every other chain method returns `this`. Once `start()` has succeeded, the `with*` methods throw `Error('ArcDirector already started')`. The lists stay open: `addCharacter` / `removeCharacter`, `addCollective` / `removeCollective`, `addStockVerbs` / `addVerb` / `removeVerbs`, and `addSense` / `addTool` / `removeSense` / `removeTool`. `ready` turns true as soon as the cast is wired, before the servers answer: from then on `tick` runs laws, programs and moves, and thinks wait in the queue until the models are loaded and warm, when `start()` resolves. A start that failed (no model, or an unknown name in a kit) can be retried, and one whose servers did not answer tries them again; calling `start()` again after it has succeeded does nothing.
-
-`start({ ignoreMissing: true })` logs unknown names through `onLog` instead of throwing.
+Every chain method returns `this` and works before or after the first tick: a `with*` called later reaches every character and mind at once (a running arc goes on, and a think under way sees it on its next think). `connect()` returns `Promise<this>`. It wires the cast, connects every server and model, and resolves once they are loaded and warm; it rejects with the first problem (no model, or an unknown name in a kit), which `onLog` hears too, and called again it tries again. Without it, `tick` does the same on its own, every 3 game seconds until it works, and never throws for it. Nothing runs until the cast is wired; until the models answer (`connected`), thinks wait in the queue while laws, programs and moves run. Reading the cast (`character`, `characters`, `collective`, `collectives`, `minds`, `exportCast`, `pushEvent`) wires it too, and throws what wiring throws.
 
 A `Persona` is who someone is and what they know: their identity, goals, memories, the names they use for others, their watches and their sight focus. Each character and each collective has one. Its mind only reads and writes the persona, so dropping or swapping the mind loses nothing. `Character` and `Collective` both extend `ArcRunner`, the base class that runs arcs.
 
@@ -167,7 +164,7 @@ Each `with*` call sets or replaces one slot; leave out the ones you do not need.
 
 ### Inference
 
-This is how ArcDirector chats with models. A director can talk to any number of chat **servers**, and to any number of **models** on them, each by name. A mind thinks with the model its assigned to (`mind: { model: 'qwen' }`), or else with the default model. `start()` rejects if a mind has no model (`onLog` can print why). Every `add*` and `remove*` method on ArcDirector works both before and after calling `start()`.
+This is how ArcDirector chats with models. A director can talk to any number of chat **servers**, and to any number of **models** on them, each by name. A mind thinks with the model its assigned to (`mind: { model: 'qwen' }`), or else with the default model. `connect()` rejects if a mind has no model (`onLog` can print why). Every method on ArcDirector works both before and after the first tick.
 
 | | |
 | --- | --- |
@@ -180,14 +177,14 @@ This is how ArcDirector chats with models. A director can talk to any number of 
 | `addInference(name, provider, { vision? })` | Your own `chat` / `embed`, or your own System One `pick` (see below). |
 | `removeInference(name)` | Removes server `name` (chat or System One) and every model on it. Runners that were assigned a System One on that server have none until it is added again. |
 | `withLoadingBar(opts?)` | A plain loading bar in the page for each browser model the director downloads: the model's name, a `<progress>` and what it is doing ("Downloading 1.2 of 4.6 GB", "Loading on the GPU"), gone once it is loaded, or the reason it failed. In a small panel in the bottom-left corner, or in `opts.parent`. Nothing outside a browser. For your own bar, pass `addBrowserModel` an observer. |
-| `addModel(name, spec?)` | Adds a model: `{ inference?, id?, decision?, contextLength?, thinking?, thinkingBudget?, sampling?, reasoningEffort?, maxParallel?, prompt? }`. `sampling` is how it picks each token, `{ temperature?, topP?, topK? }`, set by set over what the model's makers recommend: `recommendedSampling(id, thinking)` knows the main families (Gemma: `{ temperature: 1, topK: 64, topP: 0.95 }`; Qwen3 thinking: `{ temperature: 0.6, topP: 0.95, topK: 20 }`, …), so a menu may set only the temperature. What neither sets is `DEFAULT_SAMPLING`'s, `{ temperature: 1, topP: 0.95 }`, which every OpenAI-style server takes, and `topK` is only sent when set. `modelSampling(name?)` says what a model runs with, every setting filled in; `warmUp(name?)` loads it now with a request a token long. Greedy decoding is not the default, since it makes a thinking model repeat one thought until its budget runs out. System One always decodes greedily, as a request may (`ChatRequest.sampling`). `thinkingBudget` caps a thought in tokens: past it the server stops, and the mind answers from the thought so far without thinking again, for models (Gemma 4) that only switch reasoning on or off. `decision` makes it System One `name` instead (see below). `inference` defaults to the first server, and `id` to that server's pick (for LM Studio, the loaded chat model that `modelGrade` ranks highest). `maxParallel` (default 4) caps how many thinks run on this model at once. `prompt: 'compact'` (default `'full'`) is for a model trained on ArcDirector's prompts: its minds are not told the rules and hints that are the same in every game (the watch language, how to look things up and join steps, the stock verbs' help), only what this game and character make their own (its verbs' signatures and its own verbs' help, tools, notes, persona, laws, sight), so each prompt runs about a third as long. Adding the same name again replaces it. If no model was added, `start()` adds the first server's pick, named after the server. |
+| `addModel(name, spec?)` | Adds a model: `{ inference?, id?, decision?, contextLength?, thinking?, thinkingBudget?, sampling?, reasoningEffort?, maxParallel?, prompt? }`. `sampling` is how it picks each token, `{ temperature?, topP?, topK? }`, set by set over what the model's makers recommend: `recommendedSampling(id, thinking)` knows the main families (Gemma: `{ temperature: 1, topK: 64, topP: 0.95 }`; Qwen3 thinking: `{ temperature: 0.6, topP: 0.95, topK: 20 }`, …), so a menu may set only the temperature. What neither sets is `DEFAULT_SAMPLING`'s, `{ temperature: 1, topP: 0.95 }`, which every OpenAI-style server takes, and `topK` is only sent when set. `modelSampling(name?)` says what a model runs with, every setting filled in; `warmUp(name?)` loads it now with a request a token long. Greedy decoding is not the default, since it makes a thinking model repeat one thought until its budget runs out. System One always decodes greedily, as a request may (`ChatRequest.sampling`). `thinkingBudget` caps a thought in tokens: past it the server stops, and the mind answers from the thought so far without thinking again, for models (Gemma 4) that only switch reasoning on or off. `decision` makes it System One `name` instead (see below). `inference` defaults to the first server, and `id` to that server's pick (for LM Studio, the loaded chat model that `modelGrade` ranks highest). `maxParallel` (default 4) caps how many thinks run on this model at once. `prompt: 'compact'` (default `'full'`) is for a model trained on ArcDirector's prompts: its minds are not told the rules and hints that are the same in every game (the watch language, how to look things up and join steps, the stock verbs' help), only what this game and character make their own (its verbs' signatures and its own verbs' help, tools, notes, persona, laws, sight), so each prompt runs about a third as long. Adding the same name again replaces it. If no model was added, connecting adds the first server's pick, named after the server. |
 | `removeModel(name)` | Removes a model. Minds that were assigned it think with the default. |
 | `setDefaultModel(name)` | Sets the model for every mind without an assignment. Defaults to the first model added. |
 | `modelID(name?)` | The server's ID for that model (or for the default model), or `''` until its server has answered. |
 | `modelParallel(name?)` | How many thinks that model (or the default) runs at once, its `maxParallel`; `0` until its server has answered. |
-| `shareInference(from)` | Before `start()`: think on another director's chat servers and models, over the same connections and as it resolved them, so `start()` looks nothing up again. For many short-lived directors on one setup, such as a bench's cases. Their requests are logged by `from`. |
+| `shareInference(from)` | Think on another director's chat servers and models, over the same connections and as it resolved them, so connecting looks nothing up again. For many short-lived directors on one setup, such as a bench's cases. Their requests are logged by `from`. |
 | `withEmbeddings({ inference?, id })` | The one model that every memory and recall query is embedded with, so memories stay comparable whichever model a mind thinks with. Without it, recall matches text. |
-| `withArcFormat(format)` | How minds write an Arc: `'text'` (`go_to(Keep) && wait()`, read forgivingly), `'json'` (`{"steps":[…]}`) or `'schema'` (the default). `'schema'` is the same JSON, but the server must follow a fixed reply schema: a think goes to `/v1/chat/completions`, and tool calls are replies such as `{"tool":"recall","query":"Bread"}` rather than native calls. Collectives follow the format too. Change it live with `setArcFormat(format)`, and read it with `arcFormat`. |
+| `withMind((m) => m.withArcFormat(format))` | How minds write an Arc: `'text'` (`go_to(Keep) && wait()`, read forgivingly), `'json'` (`{"steps":[…]}`) or `'schema'` (the default). `'schema'` is the same JSON, but the server must follow a fixed reply schema: a think goes to `/v1/chat/completions`, and tool calls are replies such as `{"tool":"recall","query":"Bread"}` rather than native calls. Collectives follow the format too. A mind's own `arcFormat` setting wins over it; a change reaches every mind on its next think, and `mind.arcFormat` says which one it writes. |
 
 #### Browser models and wllama
 
@@ -215,11 +212,11 @@ await BrowserProvider.shared.download(DEFAULT_BROWSER_MODEL).done;
 | `setDefaultSystemOne(name)` | The System One for runners that have none of their own. |
 | `choiceQuestion(id, choices, { doing?, last? }?)` | What `id`'s System One would be asked now to pick among `choices` (arcs or arc text), worded as `choose` words it: `{ state, criteria }`, or undefined when no choice can run. `doing` and `last` stand in for the verb it runs and its last choice. For previews and training data. |
 
-Every `add*` works before or after `start()`, and adding the same name again replaces it.
+Every `add*` works before or after the first tick, and adding the same name again replaces it.
 
 **Benches** (imported from `arc-director/bench`; the scene simulator they play, `SceneWorld`, `playScenario` and the rest, comes from `arc-director/testing`) score models on scenes with known right answers, from easy to hard. Each trial is a `BenchOutcome`: a `success`, `neutral` (no success, but no worse off than doing nothing), or `harmful` (worse off than doing nothing; a failed trial too). A trial that gives partial credit returns a `BenchRated` instead, its outcome with a `score` from 0 to 1; otherwise a success scores 1 and anything else 0. A `BenchScore` holds, per skill, per level and in `total`, the trials right and harmful and the mean score (`mean`): doing nothing scores 0. Each bench has a version (`DECISION_BENCH_VERSION`, now 2, and `ARC_BENCH_VERSION`, now 2), raised whenever its cases or how they are asked or played change, so compare only scores of the same version. With `repeats` above one, each case runs that many times and `se` is the standard error of that share, from how much each case's own outcome varied: how far another run of the same model would likely land. The score also keeps the mean think time, the run's wall time, and the sampling the model ran with. `runBench(trials, { repeats, parallel, warmUp })` runs any trials this way.
 
-`benchArcs(models, cases, { repeats?, parallel?, onTrial? })`, the ArcDirector Bench, scores chat models on writing arcs that reach a goal; `ARC_BENCH` holds its cases (chain, trade, social, lookup, questing, reactions, fight, tactics, economy, planning). Each case plays in a fresh director, which `models(director)` sets up just as the host would for play (`addModel`, `withArcFormat`, `withRepair`, …), so the model reads the same prompt it would in play. Its arc then plays out in a `SceneWorld`, a small world the stock verbs walk, trade and hand items around in, while the case's `act` moves the others. As in play, the mind thinks again on how that went while the goal is not reached: two thinks in a minute of play unless the case says otherwise, timed by the thinks alone. The case's `done(world)` decides: any arcs that reach the goal are a success, whatever their steps. Short of it, the scene is weighed against the same case played with the character doing nothing, at the same moment: more of its side down, or something it held gone with nothing got for it, is harmful, and so is anything the case's own `harm(world)` flags; anything else is neutral. Every case carries its `solution` and the `naive` move a weak model makes first, and with a squad what its commander would do `alone`; the bench's tests prove each case winnable and lost to every `BASELINES` trick (`baselineArc(case, baseline)`: doing nothing, everyone attacking the nearest foe, the commander alone, the naive move), so no case gives points for free.
+`benchArcs(models, cases, { repeats?, parallel?, onTrial? })`, the ArcDirector Bench, scores chat models on writing arcs that reach a goal; `ARC_BENCH` holds its cases (chain, trade, social, lookup, questing, reactions, fight, tactics, economy, planning). Each case plays in a fresh director, which `models(director)` sets up just as the host would for play (`addModel`, `withMind`, …), so the model reads the same prompt it would in play. Its arc then plays out in a `SceneWorld`, a small world the stock verbs walk, trade and hand items around in, while the case's `act` moves the others. As in play, the mind thinks again on how that went while the goal is not reached: two thinks in a minute of play unless the case says otherwise, timed by the thinks alone. The case's `done(world)` decides: any arcs that reach the goal are a success, whatever their steps. Short of it, the scene is weighed against the same case played with the character doing nothing, at the same moment: more of its side down, or something it held gone with nothing got for it, is harmful, and so is anything the case's own `harm(world)` flags; anything else is neutral. Every case carries its `solution` and the `naive` move a weak model makes first, and with a squad what its commander would do `alone`; the bench's tests prove each case winnable and lost to every `BASELINES` trick (`baselineArc(case, baseline)`: doing nothing, everyone attacking the nearest foe, the commander alone, the naive move), so no case gives points for free.
 
 In a lookup case, what the goal needs is out of sight, so only `see_map` or `recall` finds its name. In a questing case, the job is in the NPC's memory, sometimes one among dozens of everyday ones, or out of date, or half done already. A reactions case needs a `when` or `law` set up before what it answers happens. Fights play out in a small combat simulation: each fighter is a kind (`FIGHTERS`: Archer, Knight, Cleric, Rogue, …) with health, speed and abilities (`ABILITIES`), and each ability is a verb with its range, damage or healing, cooldown, cast time, splash, and effects such as stuns, roots, shields, taunts and burns. Fighters nobody commands fight by a `tactic` (charge, hold, heal, or blow up among their foes). In a `tactics` case the character commands a `squad`, a collective whose units it gives orders and laws, while idle units hold their ground and strike back at foes in reach, and the battle plays on by their orders after the commander's last think. A scene with `rts` is an RTS (`SceneRTS` on `withRTS`): its units fight with the stock RTS verbs and tactics, and an `economy` case's workers gather, build, train and research by its kinds' costs, prerequisites and supply. A `planning` case adds its own verbs (`verbs`: run on its world, or alias arcs) and a look-ahead tool (`sceneSearch`, on `addSearch`). The world stands still while a mind thinks. The model is looked up and warmed up once (`warmUp`), untimed, and every case thinks over that one connection; cases run as many at once as the model thinks at once (its `maxParallel`), or as `parallel` says, each in its own director. Simulated time costs no real time: each tick yields with `nextTurn()`, one turn of the event loop that is never clamped or throttled (`setImmediate` in Node, a `MessageChannel` message in a browser). With `quick`, either bench climbs each skill instead, for a quick check that is not its score: a medium case, then an easy one after a miss or a hard one after a success, so a skill scores 0, ⅓, ⅔ or 1. `playArcCase(case, models)` plays one case on its own, and `pnpm --filter arc-director bench --model <id>` plays the cases with a model on LM Studio from the command line (`--skill`, `--only`, `--show`, `--parallel`, `--context`, `--url`). To write your own cases, `acceptOffer` has someone take the first fair offer made to them, `answerSpeech` has someone answer what is said to them, and `everydayMemories(count)` gives a long-running NPC an ordinary past to bury a job in.
 
@@ -235,7 +232,7 @@ Do not wrap HTTP in a second queue of requests in flight: the mind queue's `inFl
 
 The reasoning effort is sent as `reasoning_effort` on chat completions (`off` becomes `"none"`, the only value that turns Gemma's reasoning off there) and as `reasoning: { effort }` on the responses API. It is only sent when `/api/v1/models` lists that option for the model: `low` when thinking is on and allowed, `on` / `off` for models that can only switch reasoning on or off, and nothing when the catalog has no reasoning settings for the model. If the context overflows, the request is retried with the effort at `"none"` and a 512-token answer.
 
-**Schemas.** A `schema` request (see `withArcFormat`) is specific to LM Studio and llama.cpp: its grammar uses a root `anyOf`, `$ref` recursion and optional properties, none of which OpenAI's strict mode allows. The schema is not counted as part of the prompt when the answer is capped to fit the slot, and the logs show it by name.
+**Schemas.** A `schema` request (see the `arcFormat` setting) is specific to LM Studio and llama.cpp: its grammar uses a root `anyOf`, `$ref` recursion and optional properties, none of which OpenAI's strict mode allows. The schema is not counted as part of the prompt when the answer is capped to fit the slot, and the logs show it by name.
 
 **Loading.** A model's first request loads it (on LM Studio) with its own `contextLength`, and a loaded copy that no longer fits its settings is reloaded. Loading through LM Studio's native API reuses a matching instance and unloads any extra copies of it. Parallel thinkers are a cap per model, not loaded copies. Models configured on one server stay loaded together. Anything else that is loaded is unloaded to make room in VRAM, and if a load fails, the models still loaded are unloaded and the load is retried.
 
@@ -248,8 +245,7 @@ The mind queue decides who thinks next. By default it goes by priority: watch an
 | | |
 | --- | --- |
 | `withPriorityQueue(opts?)` | Highest score first |
-| `withSimpleQueue(opts?)` | First in, first out |
-| `withQueue(instance)` | Your own `MindQueue` |
+| `withQueue(instance)` | Your own `MindQueue`, or `new SimpleQueue(opts)`: first in, first out. Every mind moves to it, and starts there as a new mind does. |
 
 `tick(dt, now)` is **synchronous**. It samples catalogs, ticks the queue, and buffers the minds that are ready. With `batchThinks` (default true), new thinks on a model are held back while any think on it is in flight, because a new prompt's prefill stalls decoding for the rest. Once the model is idle, or after `batchWait` seconds (default 20, on the same clock as `now`), up to that model's `maxParallel` thinks start together. Set `batchThinks: false` to fill a free slot right away. HTTP requests and `enact` carry on across frames. `dt` and `now` are **game time**.
 
@@ -292,7 +288,7 @@ director.addCharacter({ id: 'Baker', mind: {}, kit: vendorKit }); // same object
 director.addCharacter({ id: 'Cook', mind: {}, kit: (ctx) => kitFor(ctx) }); // callback
 ```
 
-Every character and collective needs a kit, either its own or the default one, and a fixed kit must name some `verbs`; otherwise `start()` throws. A collective's kit is what its mind may write. Each of its characters runs steps with its own kit, and the roster tells the mind what each one cannot do. Leaving out `senses` or `tools` means all registered senses or tools, and `[]` means none. `start()` also throws if a kit grants a stock world verb whose `withWorld` part is missing (and no host handler or `onVerb` covers it), or names a verb, sense or tool that is not registered. `recall` and `observe` are always registered, `earshot` is registered with talk, and `see_map` with a map and vision.
+Every character and collective needs a kit, either its own or the default one, and a fixed kit must name some `verbs`; otherwise the cast cannot be wired (`connect()` rejects). A collective's kit is what its mind may write. Each of its characters runs steps with its own kit, and the roster tells the mind what each one cannot do. Leaving out `senses` or `tools` means all registered senses or tools, and `[]` means none. Wiring also fails if a kit grants a stock world verb whose `withWorld` part is missing (and no host handler or `onVerb` covers it), or names a verb, sense or tool that is not registered. `recall` and `observe` are always registered, `earshot` is registered with talk, and `see_map` with a map and vision.
 
 **Senses** are always in the user message, written in English (the `scene`, what is carried, events). **Tools** are called on demand (`recall`, `observe`, `see_map`). A kit's `senses` and `tools` lists only allow some of what you registered; they do not add anything new.
 
@@ -315,7 +311,7 @@ The argument kinds are `id`, `string`, `text`, `watch`, `expr`, `law`, `number`,
 
 ### Perception
 
-Senses go into the user message on every think, and tools are called on demand. `addSense` and `addTool` replace any sense or tool with the same name, and both still work after `start()`.
+Senses go into the user message on every think, and tools are called on demand. `addSense` and `addTool` replace any sense or tool with the same name, and both reach every mind at once, after the first tick too.
 
 | | |
 | --- | --- |
@@ -415,7 +411,7 @@ director
 
 - **A memory is the only thing a region adds to a prompt.** It stays in the prompt until the character leaves, so it works for something lasting about the place, like a smell, the cold or a holy hush. A region adds no event and does not wake the mind, so the character notices the place on its next think. For a moment instead of a lasting state, have `onEnter` call `pushEvent` or `remember`.
 - **Saves:** the memory is saved with the cast like any pinned memory. On the first tick after `restoreCast`, every character inside enters again (`onEnter` runs) and its saved memory is replaced, so nothing is doubled. A character that now stands outside loses the memory, and no `onExit` runs, because it never entered since the load.
-- **Later changes:** `addRegion` with a name in use replaces that region, and `removeRegion(...names)` removes regions. Either way, everyone who was inside leaves (`onExit` runs and the memory goes). Regions can be added before or after `start()`. A character with no pose is in no region.
+- **Later changes:** `addRegion` with a name in use replaces that region, and `removeRegion(...names)` removes regions. Either way, everyone who was inside leaves (`onExit` runs and the memory goes). Regions can be added any time. A character with no pose is in no region.
 
 ### Names
 
@@ -482,7 +478,7 @@ director.pushEvent({ kind: 'Hurt', text: '{0} cleaved {1}', who: ['Brune', 'Helm
 
 ### Characters
 
-`addCharacter(spec: CharacterSpec)` works before or after `start()`. `removeCharacter(id)` removes a character for good, whether it is on its own or in a collective. Characters and collectives share one set of IDs, and a duplicate throws.
+`addCharacter(spec: CharacterSpec)` works before or after the first tick. `removeCharacter(id)` removes a character for good, whether it is on its own or in a collective. Characters and collectives share one set of IDs, and a duplicate throws.
 
 ```ts
 type CharacterSpec = {
@@ -516,12 +512,13 @@ type MindSettings = {
 	strategicInterval?: number;
 	model?: string; // the configured model it thinks with, by its addModel name; omit for the default
 	conversationCap?: number; // letters of Current Conversation, whole messages only; omit for one quarter of the model's context (4 letters per token); 0 shows none
+	// ...and the prompt and repair settings below (`arcFormat`, `thinkInstructions`, `verbInstructions`, `arcExample`, `systemNote`, `currency`, `toolRounds`, `repairRetries`, …)
 };
 ```
 
 A spec's `systemOne` (on characters and collectives alike) names the System One that picks for it instead of the default. A collective's `systemOne` also picks for every character in it, so `issue(who, loop(choose(...)))` asks the party's own model. `null` means none at all. A name the director never added throws when the spec is wired up. The kit must still grant `choose`.
 
-A character with `choose` and no mind keeps picking among its choices by System One. Each key except `goal` and `until` names a choice, and its value is that choice's arc. `until` is a watch that pauses the picking while it holds. The picking runs whenever the character is idle, rests for its `cooldown` after a failed pick, and stops while System One is off. In a collective, it is the character's own program whenever its commander has not issued it anything, so units fight or work well without a single think. Bad arcs or watches throw at `start()`, and so does `choose` alongside `mind`.
+A character with `choose` and no mind keeps picking among its choices by System One. Each key except `goal` and `until` names a choice, and its value is that choice's arc. `until` is a watch that pauses the picking while it holds. The picking runs whenever the character is idle, rests for its `cooldown` after a failed pick, and stops while System One is off. In a collective, it is the character's own program whenever its commander has not issued it anything, so units fight or work well without a single think. Bad arcs or watches fail wiring the cast (`connect()` rejects), and so does `choose` alongside `mind`.
 
 ```ts
 director.addCharacter({
@@ -540,7 +537,7 @@ The verb works the same way inside a mind's arc: `choose("hold the gate", hold=g
 
 The System One reads each choice in terms of whom it is about right now, using the runner's names for them: `shoot(others.filter("enemy").minBy(u => u.hp))` reads as `shoot(EnemyWitch)`, next to the runner's own hp and each target's hp, distance and side. Among the choices' targets, the one with the lowest hp and the nearest one are marked (`EnemyWitch 2/12 hp (lowest), 8 away, ahead`), so a small model that matches words instead of comparing numbers still picks right. Write goals with those words ("finish the lowest hp", "hit the nearest"). A choice whose first target expression picks no one is left out, and if only one choice is left, it is taken without asking. Write choices that only exist when they make sense (`finish=slash(others.filter(u => u is "enemy" && distance(me, u) < 3).minBy(u => u.hp))`) rather than asking a small model to judge reach.
 
-`withMindDefaults(settings)` sets what every new mind starts from; a spec's `mind` settings win over it. Other director methods: `director.character(id)`, `characters()`, `collective(id)`, `collectives()`, `minds()`, `exportCast()` / `restoreCast(cast)`, and `pushEvent` (which reaches each mind once). Calling `restoreCast` before `start()` keeps the save, and `start()` builds the cast from it while wiring everything up.
+Every mind reads its settings (`MindSettings`) in layers: its own (its spec's `mind`, saved with it, and `mind.settings` to change one live), else the director's, set with `withMind((m) => m.withSkipHeartbeat().withCurrency('gold'))`, else the library's. A change to either layer reaches a mind on its next think; `mind.setting(key)` reads one as the mind does. Other director methods: `director.character(id)`, `characters()`, `collective(id)`, `collectives()`, `minds()`, `exportCast()` / `restoreCast(cast)`, and `pushEvent` (which reaches each mind once). Calling `restoreCast` before the cast is wired keeps the save, and the cast is built from it when it is wired.
 
 A character's `id` is its name, and a mind introduces itself by its owner's ID (`You are Fern.`). `role` is an optional plain tag (`Herbalist`) that hosts can also accept as a way to address the character. Backstory goes in pinned `memories`. `set_identity(role?, traits?)` never renames anyone. Identity is who someone is: do not rewrite the role or traits to sum up a mood, an order or the current think. Those belong in goals and events (see [Prompt prefix](#prompt-prefix)).
 
@@ -566,7 +563,7 @@ const director = await new ArcDirector<CharacterCtx>()
 		characters: [{ id: 'Mira', tags: ['Guard'] }],
 		laws: [{ name: 'flee', who: 'units.filter(u => !u.busy)', watch: 'isHurt(me)', arc: 'go_to(Keep)' }],
 	})
-	.start();
+	.connect();
 
 const hive = director.collective('MarketHive')!;
 hive.addCharacter({ id: 'Tomas', tags: ['Shopper'] }); // a new character, in the hive
@@ -601,7 +598,7 @@ Each think is two messages. The **system** message holds the identity, the stand
 
 Local servers (LM Studio, llama.cpp, Ollama) keep a **KV cache**: the attention state for a run of tokens. If the next request starts with the same tokens as a recent one, the server reuses that state and skips the work. Reuse only lasts while the tokens match from the very start. From the first token that differs, everything is recomputed to the end, including the long user message you meant to be cheap. One early edit costs a full prompt reload.
 
-You can replace the standing lines:
+You can replace the standing lines. Every row but the first is a mind setting: for every mind through `withMind((m) => m.withThinkInstructions(…))`, or for one in its spec's `mind` (`{ thinkInstructions }`).
 
 | | |
 | --- | --- |
@@ -610,7 +607,7 @@ You can replace the standing lines:
 | `withVerbInstructions(text)` | The line about chaining verbs. For a collective, the default also asks for looping programs; this replaces both. A host's standing doctrine goes here. |
 | `withCurrency(name)` | The item ID the world pays with (`gold`). The prompt shows `give` and `offer` moving it, the purse is counted in it, and giving it is remembered as paying. Without a currency, the prompt says nothing about money. |
 | `withArcExample(arc)` | The example that closes the prompt, written as Arc text; the JSON formats show it as Arc JSON. Small models copy it, so make sure it is valid and its parentheses balance. |
-| `withRepair({ retries? })` | How many repair turns follow a bad arc (default 0). The bad reply is left out of the repair turn, which only says what was wrong, so the model writes it anew instead of copying it. Each samples as the model does. Repair turns never reason, since the conversation they carry has already run long. A failed think goes into short-term memory only, never into facts. |
+| `withRepairRetries(n)` | How many repair turns follow a bad arc (default 0). The bad reply is left out of the repair turn, which only says what was wrong, so the model writes it anew instead of copying it. Each samples as the model does. Repair turns never reason, since the conversation they carry has already run long. A failed think goes into short-term memory only, never into facts. |
 | `withToolRounds(n)` | How many tool rounds a think may spend before it must emit the Arc (default 6, `DEFAULT_TOOL_ROUNDS`, since small models need several lookups in a row). `0` offers no tools. Calling the same tool with the same arguments twice in one think is refused rather than run again. |
 | `withStalled(fn)` | Decides whether a finished arc stalled, which stretches that mind's heartbeat. By default, an arc stalled if it failed or was interrupted. |
 
@@ -659,12 +656,12 @@ const director = await new ArcDirector<CharacterCtx>()
 		goals,
 		pinnedWatches: { hurt: 'isHurt(me)' },
 	})
-	.start();
+	.connect();
 ```
 
 An Arc replaces the program its character is running, unless nothing would change: one of only `free` verbs (they need no body: `say` within earshot, a bare `wait()`, `law`, `issue`, `remember`, …; mark your own with `addVerb(name, { free: true })`) runs beside the program, and the same program again, reworded or not, goes on as it is. So `wait()` says "no change". `withReplaceCheck()` also asks the model, in a short follow-up to that think, what to do with any unfinished work the Arc would cut short, on its own or a unit's, told where each one has got to: `{ "Flint": "replace", "Ash": "append", "Nyx": "keep" }`. Replaced work stops now; appended work goes on, and the new Arc runs after it ends, or inside its loop if that loop has no exit, each time round; kept work goes on and the new Arc is dropped for it. Any other answer, or none, appends. `runner.append(arc)` does the same from your code.
 
-With `withRepair`, a reply that could never work goes back to the model in a follow-up to that think, before it runs: a watch that misuses the language (`items.nearby.filter(...)`, `some(3)`), a name nothing in the world goes by, an order that picks no unit, a law past `maxLaws` or the twin of one it has, and a trade whose terms are no items or no real counts (`HostWorld.isItem`). What is merely not so right now is left for the verb to report as it runs. With `withRepair({ retries, perStep: true })` the steps that need no body are judged one by one: a good `issue` stands while a bad `law` goes back, the follow-up shows the model only what stands and says in words what failed and why, and once retries run out what is good still runs and the next think is told what did not. A reply cut off for breaking down mid-stream keeps the root steps it had finished the same way. `unknownFields: true` also sends back a watch reading a field no one in sight has (`u.foo`), which would only ever be false.
+With `repairRetries`, a reply that could never work goes back to the model in a follow-up to that think, before it runs: a watch that misuses the language (`items.nearby.filter(...)`, `some(3)`), a name nothing in the world goes by, an order that picks no unit, a law past `maxLaws` or the twin of one it has, and a trade whose terms are no items or no real counts (`HostWorld.isItem`). What is merely not so right now is left for the verb to report as it runs. With `repairPerStep` too (`withMind((m) => m.withRepairRetries(2).withRepairPerStep())`) the steps that need no body are judged one by one: a good `issue` stands while a bad `law` goes back, the follow-up shows the model only what stands and says in words what failed and why, and once retries run out what is good still runs and the next think is told what did not. A reply cut off for breaking down mid-stream keeps the root steps it had finished the same way. `repairUnknownFields` (the director's layer) also sends back a watch reading a field no one in sight has (`u.foo`), which would only ever be false.
 
 A law or `when` does not fire again the moment it ends, however long its watch stays true, so what it interrupted gets a turn. One of only `free` verbs (a `say`) runs once until its watch has gone false, and one that used the body and failed rests for the runner's `cooldown`. A collective's law that only speaks reaches its commander unless it names a `who`.
 
@@ -698,15 +695,15 @@ A strategic pass revises goals first, in the format the mind writes in: Arc text
 
 Defaults: `heartbeat` is 0 under a director (its queue paces the thinks) and 30 in `soloCharacter`, and `strategicInterval` is 180. Setting `strategicInterval <= 0` turns the periodic strategic pass off.
 
-A tactical pass gathers the senses, may let a memory intrude, offers tools for up to `toolRoundCap` rounds, and ends with an `Arc`. The tools are `recall`, `observe`, `earshot` and `see_map` (when the host draws maps and the model can see), plus the host's own; `recall` also searches knowledge when `withKnowledge` is set. The Arc is `{"steps":[…]}` JSON, or `go_to() && wait()` text under `arcFormat: 'text'`; under `schema`, tools are called in the reply itself. How the prompt is split into the system and user messages is described under [Prompt prefix](#prompt-prefix).
+A tactical pass gathers the senses, may let a memory intrude, offers tools for up to `toolRounds` rounds, and ends with an `Arc`. The tools are `recall`, `observe`, `earshot` and `see_map` (when the host draws maps and the model can see), plus the host's own; `recall` also searches knowledge when `withKnowledge` is set. The Arc is `{"steps":[…]}` JSON, or `go_to() && wait()` text under `arcFormat: 'text'`; under `schema`, tools are called in the reply itself. How the prompt is split into the system and user messages is described under [Prompt prefix](#prompt-prefix).
 
 ### Options
 
 | | Default | |
 | --- | --- | --- |
 | `model` | the director's default | The configured model it thinks with, by its `addModel` name |
-| `toolRoundCap` | 6 | Tool rounds before the arc must appear; 0 offers no tools |
-| `arcRetryCap` | 0 | Extra turns after a bad arc |
+| `toolRounds` | 6 | Tool rounds before the arc must appear; 0 offers no tools |
+| `repairRetries` | 0 | Extra turns after a bad arc |
 | `intrusionThreshold` / `intrusionCooldown` | 0.55 / 45 | When an unrequested memory may come into the prompt |
 | `recallK` | 5 | How many hits `recall` returns by default |
 | `hideObserve` | false | Leaves out the built-in `observe` tool |
@@ -728,7 +725,7 @@ goals: [
 ]
 ```
 
-The director checks watches and functions for you every 0.25 game seconds. A typo in a watch throws at `start()`, so it cannot silently leave a goal open forever.
+The director checks watches and functions for you every 0.25 game seconds. A typo in a watch fails wiring the cast (`connect()` rejects), so it cannot silently leave a goal open forever.
 
 Leave out `until` for goals that code cannot easily test. The model already sees its goals in every think, next to what the character can see and is carrying, so judging them costs no extra inference. When it decides a goal is done, it adds `finish_goal(goal?)` to its reply. If it names no goal, this finishes its first goal without an `until`.
 
@@ -748,7 +745,7 @@ Under `json` or `schema`, a strategic pass replies with the whole goal list, so 
 
 On each tick, the queue adds up time, samples watches every `watchInterval` (0.25 s), emits rows every `processInterval` (1 s) and buffers the minds that are ready. With `batchThinks` (default true), the director starts a wave of up to `maxParallel` (default 4) thinks per model, but only when nothing is generating on that model, or after `batchWait` seconds (default 20). With `batchThinks: false`, a free slot is filled as soon as it opens. Set `batchThinks` and `batchWait` on `withPriorityQueue`, and `maxParallel` on `addModel`. Walking an arc does not count as being in flight. A mind thinks for one of these reasons: `start`, `watch`, `major`, `verb` or `heartbeat`.
 
-Every mind thinks once when it joins (reason `start`, with a score of 0.5, below a major event), whether or not it has a heartbeat, so a character that only wakes on events still acts from the first second. `skipStart` turns that off for a character that should only react, like a guard who waits to be approached; `withMindDefaults({ skipStart: true })` turns it off for everyone. Laws do not wait for that first think: until a mind has finished one, its voice's laws start as soon as they hold.
+Every mind thinks once when it joins (reason `start`, with a score of 0.5, below a major event), whether or not it has a heartbeat, so a character that only wakes on events still acts from the first second. `skipStart` turns that off for a character that should only react, like a guard who waits to be approached; `withMind((m) => m.withSkipStart())` turns it off for everyone. Laws do not wait for that first think: until a mind has finished one, its voice's laws start as soon as they hold.
 
 `mayThink` is optional. Without it, a live arc blocks a new think. The callback receives `mindID`, `reason`, `score`, `rankedScore`, the live `arc` (or `null`) and the `verbs` on that arc.
 
@@ -913,7 +910,7 @@ On each think, the prompt lists who is within talking range. `say(to)` first wal
 
 `see_map` is a **tool**, not an Arc verb. It is only offered when **both** a host `map.snapshot` and `vision` are set. Its `zoom` argument runs from 0 to 1 (1 is close up, 0 is the whole land). The host paints the picture; the library stamps symbols on it and returns a legend of names only, with no coordinates. The default you-mark is `❌`. Never write `see_map(...)` in an arc.
 
-If `toolRoundCap` is 0, no tools are offered, `see_map` included.
+If `toolRounds` is 0, no tools are offered, `see_map` included.
 
 `recall` also answers questions about **types** when `withKnowledge` is set. Host pages are `{ name, aliases?, text }`, or `crowdKnowledge({ name, tag, inside })`, which describes a bunch of things with that tag and works out the leftover English, plus a sense of the surroundings (being inside a place someone mentioned). Query leftover English (`trees`, `house`) or a place someone mentioned (`forest`); an empty query lists the known topics. Articles are not in the standing prefix.
 

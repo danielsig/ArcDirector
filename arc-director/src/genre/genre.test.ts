@@ -28,7 +28,7 @@ describe('withRPG and withMOBA', () => {
 				abilities: { hex: ({ args }) => ({ ok: true, verb: 'hex', reason: args.target }) },
 			})
 			.addCharacter({ id: 'Wren' })
-			.start();
+			.connect();
 		const verbs = d.character('Wren')!.activeVerbs();
 		assert.deepEqual(Object.keys(verbs.get('equip')!.args), ['item', 'slot']);
 		assert.equal(verbs.get('block')!.help, 'guard up 2s');
@@ -41,9 +41,9 @@ describe('withRPG and withMOBA', () => {
 
 	it('keeps an explicit default kit, given before or after, and a MOBA trades nothing', async () => {
 		const attack = { attack: () => ({ ok: true, verb: 'attack' }) };
-		const before = await director().withDefaultKit({ verbs: ['wait'] }).withMOBA(attack).addCharacter({ id: 'A' }).start();
-		const after = await director().withMOBA(attack).withDefaultKit({ verbs: ['wait'] }).addCharacter({ id: 'A' }).start();
-		const moba = await director().withMOBA(attack).addCharacter({ id: 'A' }).start();
+		const before = await director().withDefaultKit({ verbs: ['wait'] }).withMOBA(attack).addCharacter({ id: 'A' }).connect();
+		const after = await director().withMOBA(attack).withDefaultKit({ verbs: ['wait'] }).addCharacter({ id: 'A' }).connect();
+		const moba = await director().withMOBA(attack).addCharacter({ id: 'A' }).connect();
 		assert.deepEqual(verbsOf(before, 'A'), ['wait']);
 		assert.deepEqual(verbsOf(after, 'A'), ['wait']);
 		assert.ok(verbsOf(moba, 'A').includes('attack'));

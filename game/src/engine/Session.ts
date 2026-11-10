@@ -98,15 +98,6 @@ export class Session extends Component {
 		this._unbindControl = bindArcControl(this);
 	}
 
-	public beginPlay():void {
-		if (!this.hud.arcDirectorOn) {
-			return;
-		}
-		void this.director.start().catch((err:unknown) => {
-			console.error(err);
-		});
-	}
-
 	public override lateUpdate(dt:number):void {
 		this._persistAcc += dt;
 		if (this._persistAcc < 0.3) {
@@ -456,10 +447,13 @@ export class Session extends Component {
 			arc?.setBatchThinks(next.batchThinks);
 		}
 		if (changed('arcFormat')) {
-			arc?.setArcFormat(next.arcFormat);
+			arc?.withMind((m) => m.withArcFormat(next.arcFormat));
 		}
 		if (arc && changed('systemOne')) {
 			arc.setDefaultSystemOne(defaultSystemOne(next.systemOne));
+		}
+		if (prev && next.ai && changed('ai')) {
+			this.director.connect();
 		}
 		if (next.playerKind && changed('playerKind')) {
 			this.applyPlayerKindToBody(next.playerKind);

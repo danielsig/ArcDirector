@@ -170,10 +170,10 @@ export function seeMapHint(youSymbol = DEFAULT_YOU_SYMBOL, knowledge = false, ca
 	].join(' ');
 }
 
-/** Standing think line while reasoning is on and the host gives no `withThinkInstructions({ on })`. */
+/** Standing think line while reasoning is on and the mind's settings give no `thinkInstructions.on`. */
 export const DEFAULT_THINK_INSTRUCTIONS = 'Think in 5 sentences: what you want, what you know, and what is still missing.';
 
-/** Standing verb-chain line when the host does not call `withVerbInstructions`. */
+/** Standing verb-chain line when the mind's settings give no `verbInstructions`. */
 export const DEFAULT_VERB_INSTRUCTIONS = 'A think is expensive. Chain every next verb you already know, as far as you can see this think — not only the first step of an order.';
 
 /** Added to the default verb line for a collective that can issue looping programs. */

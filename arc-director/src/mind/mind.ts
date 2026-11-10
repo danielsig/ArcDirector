@@ -42,7 +42,10 @@ import { hasWatch, watchCount } from '../character/watch.js';
 import { asFocusList } from '../character/focus.js';
 import { hand } from '../internals.js';
 
-/** How often a mind thinks and where it stands in the think queue. A host may set these per mind. */
+/**
+ * How a mind thinks, and what its prompt tells it. One layer of them: a mind reads each setting from its own (its
+ * spec's `mind`, saved with it), else its director's (`withMind`), else the library's ({@link MIND_DEFAULTS}).
+ */
 export type MindSettings = {
 	/** No think on the queue's heartbeat; only watches, events and arc ends wake it. */
 	skipHeartbeat?:boolean;
@@ -70,6 +73,93 @@ export type MindSettings = {
 	 * kept in long-term memory, where `recall` finds it; the pins drop once a think has read them. Default 5.
 	 */
 	lawResults?:number;
+	/** How the model writes an Arc: `text` (`go_to() && wait()`), `json`, or `schema` (JSON the server must follow). Default `schema`. */
+	arcFormat?:ArcFormat;
+	/** The standing think line per reasoning state. The prompt follows the model's reasoning switch. Defaults: `on` {@link DEFAULT_THINK_INSTRUCTIONS}, `off` nothing. */
+	thinkInstructions?:ThinkInstructions;
+	/** The standing verb-chain line. Default {@link DEFAULT_VERB_INSTRUCTIONS}, plus looping programs for a collective; this replaces both. */
+	verbInstructions?:string;
+	/** The Arc that closes the prompt as its Example, in place of the stock one. Models copy it, so make it valid. */
+	arcExample?:string;
+	/** One sentence in the system prefix, after who it is. */
+	systemNote?:string;
+	/**
+	 * The item id the world pays with (`gold`). The prompt tells how `give` and `offer` move it, the purse is counted in
+	 * it, and handing it over is remembered as paying. Without one, nothing is said about money.
+	 */
+	currency?:string;
+	/** Tool rounds a think may spend before it must write the Arc. Default {@link DEFAULT_TOOL_ROUNDS}; 0 offers no tools. */
+	toolRounds?:number;
+	/**
+	 * Repair turns after a bad Arc. Default 0: a bad reply fails the think. Each retry samples as the model does, so a
+	 * model that wrote one bad reply does not write it again word for word.
+	 */
+	repairRetries?:number;
+	/**
+	 * The steps of a reply that need no body (`issue`, `law`, `when`, `say`, ...) are judged each on its own: the good ones
+	 * stand, the model's turn shows only those, and it is told in words what became of the rest, to replace just them. A
+	 * reply that does not read at all still goes back whole.
+	 */
+	repairPerStep?:boolean;
+	/**
+	 * A watch that reads a field no one in sight has (`u.foo`) goes back for repair too: it would only ever be false. Leave
+	 * it off if your entities gain fields later. Read from the director's layer.
+	 */
+	repairUnknownFields?:boolean;
+	/** Whether a finished arc stalled, which stretches the heartbeat. Default: it failed or was interrupted. */
+	stalled?:(result:ArcResult)=>boolean;
+	/** How close a memory must come to what is before it to come to mind unasked (0–1). Default 0.55. */
+	intrusionThreshold?:number;
+	/** Game seconds between two memories that come to mind unasked. Default 45. */
+	intrusionCooldown?:number;
+	/** Memories brought into each prompt, and the most `recall` returns. Default 5. */
+	recallK?:number;
+	/** No `observe` tool. */
+	hideObserve?:boolean;
+};
+
+/** Tool calls a think may make before it must emit the Arc. Small models need several lookups in a row. */
+export const DEFAULT_TOOL_ROUNDS = 6;
+
+/** The library's layer of every mind's settings: each one neither the mind nor its director sets. */
+const MIND_DEFAULTS = {
+	skipHeartbeat: false,
+	skipMajor: false,
+	skipStart: false,
+	skipStrategic: false,
+	rank: 0,
+	heartbeat: 0,
+	strategicInterval: 180,
+	lawResults: 5,
+	arcFormat: 'schema',
+	toolRounds: DEFAULT_TOOL_ROUNDS,
+	repairRetries: 0,
+	repairPerStep: false,
+	repairUnknownFields: false,
+	intrusionThreshold: 0.55,
+	intrusionCooldown: 45,
+	recallK: 5,
+	hideObserve: false,
+} as const satisfies MindSettings;
+
+/** Setting `K` as a mind reads it: never unset where the library has a default. */
+export type Setting<K extends keyof MindSettings> = K extends keyof typeof MIND_DEFAULTS ? NonNullable<MindSettings[K]> : MindSettings[K];
+
+/** The model a mind thinks with, as its director has it now. */
+export type MindModel = {
+	provider:InferenceProvider;
+	/** The id its requests name on the server; `''` until the server answered. */
+	id:string;
+	/** Whether it takes image parts: `false` never offers `see_map`, `true` offers it with a map. Omit to go by its id ({@link isVisionModel}). */
+	vision?:boolean;
+	/** Its context window in tokens, when known. */
+	contextTokens?:number;
+	/** Whether it reasons before it answers. Picks the think line and asks the server for it. */
+	thinking:boolean;
+	/** How much of the standing rules it is told: see {@link PromptStyle}. */
+	promptStyle:PromptStyle;
+	/** Whether it writes only JSON Arcs, as one trained on them does: `text` is then asked as `schema`. */
+	jsonOnly:boolean;
 };
 
 /** A mind's thinking state. Its owner's persona is saved with the owner. */
@@ -102,9 +192,12 @@ export type MindOwner<TCtx = unknown> = ArcRunner<TCtx> & {
 /** A {@link ThinkEvent} before it is told whose think it is. */
 type ThinkEventFor = ThinkEvent extends infer E ? E extends ThinkEvent ? Omit<E, 'who'> : never : never;
 
-/** What the director gives a mind when it is attached. */
+/** What the director gives a mind when it is attached: services, read live. Its settings are a layer of their own. */
 export type MindDeps<TCtx = unknown> = {
-	provider:InferenceProvider;
+	/** The model it thinks with now: asked on every think, so a model added, removed or reassigned is seen at once. */
+	thinksWith:()=>MindModel;
+	/** The director's layer of its settings (`withMind`), read live: a later change reaches it on its next think. */
+	defaults?:MindSettings;
 	senses?:Record<string, Sense<TCtx>>;
 	tools?:Record<string, ToolSpec<TCtx>>;
 	talk?:TalkNet;
@@ -121,46 +214,15 @@ export type MindDeps<TCtx = unknown> = {
 	/** Why an Arc just read could never work as written, for the model to write it again before it runs. */
 	arcProblem?:(arc:Arc)=>string | undefined;
 	queue?:MindQueue;
-	/** Heartbeat stretch after an arc. Default: failed or interrupted. */
-	stalled?:(result:ArcResult)=>boolean;
-	/** The model id its requests name on the server. */
-	modelID?:string;
 	/** Vectors for memories and recall queries. Omit to recall by text alone. */
 	embed?:(texts:string[])=>Promise<number[][]>;
-	/** Tool rounds before the Arc must be emitted. Default {@link DEFAULT_TOOL_ROUNDS}; 0 offers no tools. */
-	toolRoundCap?:number;
 	/**
 	 * Why there is no way for this character to each of `ids`, in order (`Bridge is raised`, or `''` unnamed), or
 	 * undefined where there is: one look at the world for all of them. Marks unreachable names in earshot.
 	 */
 	wayBlocked?:(ids:readonly string[])=>(string | undefined)[];
-	/** Extra chat turns after a bad arc or a tool call with tools closed. Host sets this; 0 means fail on the first bad reply. */
-	arcRetryCap?:number;
-	/** A reply's steps that stand alone are judged each on its own: the good ones stay, and only the rest go back. */
-	perStepRepair?:boolean;
-	/** How the model writes an Arc: `text` (`go_to() && wait()`), `json`, or `schema` (JSON the server enforces). Default `schema`. */
-	arcFormat?:ArcFormat;
-	thinkInstructions?:ThinkInstructions;
-	/** Whether the model reasons before it answers. Picks the think line and asks the server for it. Default: it does. */
-	thinking?:()=>boolean;
-	/** How much of the standing rules the model is told: see {@link PromptStyle}. Default `full`. */
-	promptStyle?:()=>PromptStyle;
-	/** Whether the model writes only JSON Arcs, as one trained on them does: `text` is then asked as `schema`. Default: it does not. */
-	jsonOnly?:()=>boolean;
-	/** Standing verb-chain line. Omit for {@link DEFAULT_VERB_INSTRUCTIONS}. */
-	verbInstructions?:string;
-	/** Arc that replaces the closing Example in the prompt. */
-	arcExample?:string;
-	/** Standing sentence in the system prefix. */
-	systemNote?:string;
-	/** The item id the world pays with. The prompt shows `give` and `offer` moving it. */
-	currency?:string;
 	/** Host naming policy seen from this mind: the base name for a character. Omit to use ids. */
 	seenAs?:(target:NameTarget)=>string;
-	intrusionThreshold?:number;
-	intrusionCooldown?:number;
-	recallK?:number;
-	hideObserve?:boolean;
 	/** The context its tools and articles look from. Default: its voice's. */
 	worldContext?:()=>TCtx | undefined;
 	/** Host top-down snapshots. `see_map` is omitted unless this and vision are both set. */
@@ -171,12 +233,6 @@ export type MindDeps<TCtx = unknown> = {
 	mentionCap?:number;
 	/** The open offers it may take or answer, one per line, shown in every prompt. Omit, or `''`, for none. */
 	offers?:()=>string;
-	/**
-	 * Whether the current model accepts image parts.
-	 * `false` never offers `see_map`. `true` offers it when `map` is set.
-	 * Omit to fall back to `isVisionModel(model)`.
-	 */
-	vision?:boolean;
 };
 
 function asStringArray(v:unknown):string[] {
@@ -256,8 +312,6 @@ const GOALS_SCHEMA:JsonSchema = {
 	},
 };
 
-/** Tool calls a think may make before it must emit the Arc. Small models need several lookups in a row. */
-export const DEFAULT_TOOL_ROUNDS = 6;
 /** Thinks in a row that only talk or wait before the next one is told to stop talking and act. */
 const TALK_STREAK = 3;
 /** Verbs that change nothing in the world. An arc of only these is talk. */
@@ -341,26 +395,27 @@ export type MindFields<TCtx> = {
  * has one, shared by its characters.
  *
  * It thinks with one of its director's configured models (`addModel`), by the name in its settings' `model`, or
- * with the default model when it names none or that one is removed. It never changes a model's settings; the
- * director keeps its `modelID` and provider current. Each model caps its own parallel thinks, and every
- * memory is embedded with the director's one embedding model, so a Persona's memories stay comparable whatever
+ * with the default model when it names none or that one is removed. It never changes a model's settings, and asks
+ * its director on every think for the model as it is then (`MindDeps.thinksWith`). Each model caps its own parallel
+ * thinks, and every memory is embedded with the director's one embedding model, so a Persona's memories stay comparable whatever
  * mind it moves to.
  */
 export class Mind<TCtx = unknown> {
-	public skipHeartbeat:boolean;
-	public skipMajor:boolean;
-	public skipStart:boolean;
-	public skipStrategic:boolean;
-	public rank:number;
-	public heartbeat:number;
-	public strategicInterval:number;
+	/**
+	 * Its own settings: its spec's `mind`, and whatever is set on it since; saved with it. What it leaves unset comes from
+	 * its director's (`withMind`), else the library's. Read one with {@link setting}.
+	 */
+	public readonly settings:MindSettings;
+	/** Its director's layer of settings, read live. */
+	private _defaults:MindSettings = {};
+	/** The model it thinks with now, as its director has it. */
+	private _thinksWith!:()=>MindModel;
 	private _owner:MindOwner<TCtx> | undefined;
 	/** The owner's id, kept after a detach so a think still finishing can clean up after itself. */
 	private _id = '';
 	public senses:Record<string, Sense<TCtx>> = {};
 	public tools:Record<string, ToolSpec<TCtx>> = {};
 	public talk:TalkNet | undefined;
-	public provider!:InferenceProvider;
 	public autoEnact = true;
 	public onChoose:((arc:Arc)=>void) | undefined;
 	private _onGoalReached:MindDeps['onGoalReached'];
@@ -370,52 +425,13 @@ export class Mind<TCtx = unknown> {
 	/** Who the think under way began for. */
 	private _thinkingAs = '';
 	public queue:MindQueue | undefined;
-	public stalled?:(result:ArcResult)=>boolean;
-	/** The model it is assigned, by its name on the director; `undefined` thinks with the default. */
-	public model:string | undefined;
-	/** The model id its requests name on the server, kept current by the director. */
-	public modelID = '';
 	public embed:((texts:string[])=>Promise<number[][]>) | undefined;
-	public toolRoundCap = DEFAULT_TOOL_ROUNDS;
 	public wayBlocked:((ids:readonly string[])=>(string | undefined)[]) | undefined;
-	public arcRetryCap = 0;
-	public perStepRepair = false;
-	public jsonOnly:()=>boolean = () => false;
-	private _arcFormat:ArcFormat = 'schema';
-	public thinkInstructions:ThinkInstructions | undefined;
-	public thinking:()=>boolean = () => true;
-	public promptStyle:()=>PromptStyle = () => 'full';
-
-	/**
-	 * How this mind writes an Arc: what the host set (mutable, so the Testing toggle can flip live minds), but never
-	 * `text` for a model that writes only JSON ({@link MindDeps.jsonOnly}).
-	 */
-	public get arcFormat():ArcFormat {
-		return this._arcFormat === 'text' && this.jsonOnly() ? 'schema' : this._arcFormat;
-	}
-
-	public set arcFormat(format:ArcFormat) {
-		this._arcFormat = format;
-	}
-	public verbInstructions:string | undefined;
-	public arcExample:string | undefined;
-	public systemNote:string | undefined;
-	public currency:string | undefined;
 	public seenAs:((target:NameTarget)=>string) | undefined;
 	public worldContext:()=>TCtx | undefined = () => undefined;
-	public intrusionThreshold = 0.55;
-	public intrusionCooldown = 45;
-	public recallK = 5;
-	public hideObserve = false;
 	public map:MapSense | undefined;
 	public knowledge:KnowledgeSource<TCtx> | undefined;
 	public offers:(()=>string) | undefined;
-	public vision:boolean | undefined;
-	/** The context window of the model it thinks with, kept current by the director; `undefined` when unknown. */
-	public contextTokens:number | undefined;
-	/** Letters shown in Current Conversation; `undefined` is one quarter of `contextTokens`. */
-	public conversationCap:number | undefined;
-	public lawResults:number;
 	/** Its laws' results since the last think, oldest first. */
 	private _lawResults:string[] = [];
 	/** The last arc or think's result, as the next prompt shows it. */
@@ -457,16 +473,7 @@ export class Mind<TCtx = unknown> {
 	private _salience:ReadonlyMap<string, number> = new Map();
 
 	constructor(settings:MindSettings = {}) {
-		this.skipHeartbeat = settings.skipHeartbeat ?? false;
-		this.skipMajor = settings.skipMajor ?? false;
-		this.skipStart = settings.skipStart ?? false;
-		this.skipStrategic = settings.skipStrategic ?? false;
-		this.rank = settings.rank ?? 0;
-		this.heartbeat = settings.heartbeat ?? 0;
-		this.strategicInterval = settings.strategicInterval ?? 180;
-		this.conversationCap = settings.conversationCap;
-		this.lawResults = settings.lawResults ?? 5;
-		this.model = settings.model;
+		this.settings = { ...settings };
 		hand(this, {
 			attach: (owner, deps) => this.attach(owner, deps),
 			detach: () => {
@@ -482,7 +489,8 @@ export class Mind<TCtx = unknown> {
 	private attach(owner:MindOwner<TCtx>, deps:MindDeps<TCtx>):void {
 		this._owner = owner;
 		this._id = owner.id;
-		this.provider = deps.provider;
+		this._thinksWith = deps.thinksWith;
+		this._defaults = deps.defaults ?? {};
 		this.senses = deps.senses ?? {};
 		this.tools = deps.tools ?? {};
 		this.talk = deps.talk;
@@ -493,33 +501,30 @@ export class Mind<TCtx = unknown> {
 		this._replacing = deps.replacing;
 		this._arcProblem = deps.arcProblem;
 		this.queue = deps.queue;
-		this.stalled = deps.stalled;
-		this.modelID = deps.modelID ?? '';
 		this.embed = deps.embed;
-		this.toolRoundCap = deps.toolRoundCap ?? DEFAULT_TOOL_ROUNDS;
 		this.wayBlocked = deps.wayBlocked;
-		this.arcRetryCap = deps.arcRetryCap ?? 0;
-		this.perStepRepair = deps.perStepRepair ?? false;
-		this.arcFormat = deps.arcFormat ?? 'schema';
-		this.jsonOnly = deps.jsonOnly ?? (() => false);
-		this.thinkInstructions = deps.thinkInstructions;
-		this.thinking = deps.thinking ?? (() => true);
-		this.promptStyle = deps.promptStyle ?? (() => 'full');
-		this.verbInstructions = deps.verbInstructions;
-		this.arcExample = deps.arcExample;
-		this.systemNote = deps.systemNote;
-		this.currency = deps.currency;
 		this.seenAs = deps.seenAs;
 		this.worldContext = deps.worldContext ?? (() => this.voice.context());
-		this.intrusionThreshold = deps.intrusionThreshold ?? 0.55;
-		this.intrusionCooldown = deps.intrusionCooldown ?? 45;
-		this.recallK = deps.recallK ?? 5;
-		this.hideObserve = deps.hideObserve ?? false;
 		this.map = deps.map;
 		this.knowledge = deps.knowledge;
 		this.offers = deps.offers;
 		this._mentionCap = deps.mentionCap ?? DEFAULT_MENTION_CAP;
-		this.vision = deps.vision;
+	}
+
+	/** The model it thinks with now, as its director has it: the one its `model` setting names, else the default. */
+	public get thinksWith():MindModel {
+		return this._thinksWith();
+	}
+
+	/** Setting `key` as this mind thinks with it: its own, else its director's, else the library's. */
+	public setting<K extends keyof MindSettings>(key:K):Setting<K> {
+		return (this.settings[key] ?? this._defaults[key] ?? (MIND_DEFAULTS as MindSettings)[key]) as Setting<K>;
+	}
+
+	/** How this mind writes an Arc: its `arcFormat`, but never `text` for a model that writes only JSON ({@link MindModel.jsonOnly}). */
+	public get arcFormat():ArcFormat {
+		const format = this.setting('arcFormat');
+		return format === 'text' && this.thinksWith.jsonOnly ? 'schema' : format;
 	}
 
 	/** The character or collective this mind thinks for. */
@@ -547,22 +552,6 @@ export class Mind<TCtx = unknown> {
 	/** The runner that enacts this mind's arcs: the character itself, or a collective's commander. */
 	public get voice():ArcRunner<TCtx> {
 		return this.owner.voice;
-	}
-
-	/** These settings, to give a character a fresh mind like this one later. */
-	public settings():MindSettings {
-		return {
-			skipHeartbeat: this.skipHeartbeat,
-			skipMajor: this.skipMajor,
-			skipStart: this.skipStart,
-			skipStrategic: this.skipStrategic,
-			rank: this.rank,
-			heartbeat: this.heartbeat,
-			strategicInterval: this.strategicInterval,
-			model: this.modelID,
-			conversationCap: this.conversationCap,
-			...this.lawResults !== 5 ? { lawResults: this.lawResults } : {},
-		};
 	}
 
 	/** Game time, for the events and memories this mind stamps. The director stamps every tick. */
@@ -612,7 +601,10 @@ export class Mind<TCtx = unknown> {
 		return this.persona.names.peek(id) ?? this.seenAs?.({ id }) ?? id;
 	}
 
-	/** Queue an event for the next think. It is kept in ids and read in this mind's names when that think starts. */
+	/**
+	 * Queue an event for the next think. It is kept in ids and read in this mind's names when that think starts. A major
+	 * one wakes this mind, while it thinks for someone.
+	 */
 	public pushEvent(event:MindEvent):void {
 		const pending = this._pendingEvents;
 		const same = event.key === undefined ? -1 : pending.findIndex((e) => e.key === event.key);
@@ -624,6 +616,9 @@ export class Mind<TCtx = unknown> {
 		if (kin.length > event.cap!) {
 			const least = kin.reduce((a, b) => ((b.weight ?? 0) < (a.weight ?? 0) ? b : a));
 			pending.splice(pending.indexOf(least), 1);
+		}
+		if (event.major && this.attached) {
+			this.queue?.enqueueMajor(this.id);
 		}
 	}
 
@@ -734,7 +729,7 @@ export class Mind<TCtx = unknown> {
 		const i = this._lawResults.findIndex((line) => line.replace(/ ×\d+$/, '') === text);
 		const times = i < 0 ? 1 : Number(/ ×(\d+)$/.exec(this._lawResults[i])?.[1] ?? 1) + 1;
 		const lines = [...this._lawResults.filter((_, j) => j !== i), times > 1 ? `${text} ×${times}` : text];
-		const keep = Math.max(0, this.lawResults);
+		const keep = Math.max(0, this.setting('lawResults'));
 		this.rememberLaws(lines.slice(0, Math.max(0, lines.length - keep)));
 		this._lawResults = lines.slice(lines.length - keep);
 	}
@@ -910,7 +905,7 @@ export class Mind<TCtx = unknown> {
 
 	public toJSON():MindJSON {
 		return {
-			settings: this.settings(),
+			settings: { ...this.settings },
 			events: this._pendingEvents.map((e) => ({ ...e, tags: e.tags ? [...e.tags] : undefined })),
 			lastArc: this.lastArc,
 			lastResult: this.lastResult ? { ...this.lastResult } : undefined,
@@ -953,26 +948,26 @@ export class Mind<TCtx = unknown> {
 		if (this._pendingEvents.some((e) => e.major)) {
 			return true;
 		}
-		if (this.heartbeat <= 0) {
+		if (this.setting('heartbeat') <= 0) {
 			return true;
 		}
-		return gameTime - this.lastTacticalTimestamp >= this.heartbeat;
+		return gameTime - this.lastTacticalTimestamp >= this.setting('heartbeat');
 	}
 
 	private strategicDue(gameTime:number):boolean {
-		if (this.skipStrategic) {
+		if (this.setting('skipStrategic')) {
 			return false;
 		}
 		if (this._pendingEvents.some((e) => e.major)) {
 			return true;
 		}
-		if (this.strategicInterval <= 0) {
+		if (this.setting('strategicInterval') <= 0) {
 			return false;
 		}
 		if (!Number.isFinite(this.lastStrategicTimestamp)) {
 			return false;
 		}
-		return gameTime - this.lastStrategicTimestamp >= this.strategicInterval;
+		return gameTime - this.lastStrategicTimestamp >= this.setting('strategicInterval');
 	}
 
 	/** One strategic pass: the model revises goals and identity, in the form this mind writes (`arcFormat`). A reply that does not read changes nothing. */
@@ -981,8 +976,8 @@ export class Mind<TCtx = unknown> {
 		const system = stablePrefix(this.id, this.persona.identity, this.owner.activeVerbs(), {
 			includeWatches: true,
 			omitArc: true,
-			systemNote: this.systemNote,
-			style: this.promptStyle(),
+			systemNote: this.setting('systemNote'),
+			style: this.thinksWith.promptStyle,
 		});
 		const user = `${volatileBlock({
 			goals: this.persona.goals,
@@ -993,8 +988,8 @@ export class Mind<TCtx = unknown> {
 			conversation: this.conversationLines(),
 			compact: this.compact,
 		})}\n\n${reviseGoalsAsk(format, this.persona.maxGoals)}`;
-		const ask = (messages:ChatMessage[], thinking?:boolean):Promise<ChatResponse> => this.provider.chat({
-			model: this.modelID,
+		const ask = (messages:ChatMessage[], thinking?:boolean):Promise<ChatResponse> => this.thinksWith.provider.chat({
+			model: this.thinksWith.id,
 			thread: this.id,
 			messages,
 			responseFormat: format === 'schema' ? { name: 'goals', schema: GOALS_SCHEMA, strict: true } : undefined,
@@ -1061,7 +1056,7 @@ export class Mind<TCtx = unknown> {
 	 */
 	/** Whether this mind's model is told only what its game makes its own: see {@link PromptStyle}. */
 	public get compact():boolean {
-		return this.promptStyle() === 'compact';
+		return this.thinksWith.promptStyle === 'compact';
 	}
 
 	public lawsSection():string {
@@ -1238,7 +1233,7 @@ export class Mind<TCtx = unknown> {
 			return `${unbound.map((name) => `${name}()`).join(', ')} is not a watch function`;
 		}
 		// With no repair turn to send it back on, it runs as written and its verbs say what went wrong.
-		return this.arcRetryCap > 0 ? this._arcProblem?.(arc) : undefined;
+		return this.setting('repairRetries') > 0 ? this._arcProblem?.(arc) : undefined;
 	}
 
 	/**
@@ -1355,8 +1350,8 @@ export class Mind<TCtx = unknown> {
 				: `Do not think again. Emit a new ${form} if that changes your choices, or confirm the arc you already wrote.`);
 		messages.push({ role: 'assistant', content: firstContent });
 		messages.push({ role: 'user', content: hint });
-		const res = await this.provider.chat({
-			model: this.modelID,
+		const res = await this.thinksWith.provider.chat({
+			model: this.thinksWith.id,
 			thread: this.id,
 			messages,
 			tools: sendTools ? tools : undefined,
@@ -1401,7 +1396,7 @@ export class Mind<TCtx = unknown> {
 		const format = this.arcFormat;
 		const reply = this.replyFormat(verbs, format);
 		// What a think may look up; under a schema the model calls it in its reply, so none are sent as native tools.
-		const offered = this.toolRoundCap > 0 ? this.toolDefs() : [];
+		const offered = this.setting('toolRounds') > 0 ? this.toolDefs() : [];
 		const tools = reply ? [] : offered;
 		const sendTools = tools.length > 0;
 		const toolNames = offered.map((t) => t.name);
@@ -1413,14 +1408,14 @@ export class Mind<TCtx = unknown> {
 			canRecallKnowledge: toolNames.includes('recall') && this.knowledge !== undefined,
 			youSymbol: this.youSymbol(),
 			arcFormat: this.arcFormat,
-			thinkInstructions: this.thinkInstructions,
-			thinking: this.thinking(),
-			verbInstructions: this.verbInstructions,
-			arcExample: this.arcExample,
-			systemNote: this.systemNote,
-			currency: this.currency,
+			thinkInstructions: this.setting('thinkInstructions'),
+			thinking: this.thinksWith.thinking,
+			verbInstructions: this.setting('verbInstructions'),
+			arcExample: this.setting('arcExample'),
+			systemNote: this.setting('systemNote'),
+			currency: this.setting('currency'),
 			tools: toolNames,
-			style: this.promptStyle(),
+			style: this.thinksWith.promptStyle,
 		});
 		// Talking in circles: characters who hear each other keep answering, so a streak of talk ends in a deed.
 		const user = this.volatileUser(sensed, this._talkStreak >= TALK_STREAK
@@ -1434,8 +1429,8 @@ export class Mind<TCtx = unknown> {
 			{ role: 'system', content: system },
 			{ role: 'user', content: user },
 		];
-		let toolsLeft = offered.length > 0 ? this.toolRoundCap : 0;
-		let repairsLeft = this.arcRetryCap;
+		let toolsLeft = offered.length > 0 ? this.setting('toolRounds') : 0;
+		let repairsLeft = this.setting('repairRetries');
 		// What it was told stands needs no second go.
 		const keep = (steps:Arc):void => {
 			kept.push(...steps.filter((step) => !kept.some((had) => sameProgram([had], [step]))));
@@ -1452,25 +1447,25 @@ export class Mind<TCtx = unknown> {
 			messages.push({ role: 'user', content: partRepairHint(failed, verbs, format) });
 		};
 		let warnedRepeat = freshInput;
-		let checksLeft = Math.max(1, this.arcRetryCap);
+		let checksLeft = Math.max(1, this.setting('repairRetries'));
 		let lastErr:Error | null = null;
 		const repeatTurn = 1;
-		const budget = toolsLeft + this.arcRetryCap + 1 + (this.talk ? 1 : 0) + repeatTurn;
+		const budget = toolsLeft + this.setting('repairRetries') + 1 + (this.talk ? 1 : 0) + repeatTurn;
 		for (let turn = 0; turn < budget; turn++) {
 			const allowTools = toolsLeft > 0 && tools.length > 0;
 			const stop = new AbortController();
 			const streamed = { text: '' };
 			let res:ChatResponse;
 			try {
-				res = await this.provider.chat({
-					model: this.modelID,
+				res = await this.thinksWith.provider.chat({
+					model: this.thinksWith.id,
 					thread: this.id,
 					messages,
 					tools: sendTools ? tools : undefined,
 					toolChoice: sendTools ? (allowTools ? 'auto' : 'none') : undefined,
 					responseFormat: reply,
 					// A repair keeps the whole conversation, so reasoning on top of it runs out of tokens again.
-					enableThinking: repairsLeft < this.arcRetryCap ? false : this.thinking(),
+					enableThinking: repairsLeft < this.setting('repairRetries') ? false : this.thinksWith.thinking,
 					signal: stop.signal,
 					onDelta: this.replyWatch(verbs, stop, streamed),
 				});
@@ -1484,7 +1479,7 @@ export class Mind<TCtx = unknown> {
 				lastErr = reason;
 				// The root steps it had finished before it broke down are as good as any others. A chain may have gone on into
 				// what broke, so it is written again.
-				const finished = this.perStepRepair ? finishedSteps(streamed.text) : undefined;
+				const finished = this.setting('repairPerStep') ? finishedSteps(streamed.text) : undefined;
 				const judged = finished ? this.judgeSteps(finished, verbs, kept) : { good: [], bad: [] };
 				const stands = judged.good.filter((step) => step.verb === 'when' || verbs.get(step.verb)?.free);
 				if (stands.length + kept.length > 0) {
@@ -1572,7 +1567,7 @@ export class Mind<TCtx = unknown> {
 			if (content) {
 				let arc:Arc;
 				try {
-					if (this.perStepRepair) {
+					if (this.setting('repairPerStep')) {
 						const { good, bad } = this.judgeSteps(content, verbs, kept);
 						if (bad.length > 0 && good.length + kept.length === 0) {
 							throw new ArcError(bad[0].reason);
@@ -1657,8 +1652,8 @@ export class Mind<TCtx = unknown> {
 		const json = this.arcFormat === 'schema';
 		let said:unknown;
 		try {
-			const res = await this.provider.chat({
-				model: this.modelID,
+			const res = await this.thinksWith.provider.chat({
+				model: this.thinksWith.id,
 				thread: this.id,
 				messages: [
 					...messages,
@@ -1844,9 +1839,8 @@ export class Mind<TCtx = unknown> {
 			return;
 		}
 		this._conversation.push({ ...turn, text });
-		const budget = this.conversationCap !== undefined && this.conversationCap > 0
-			? this.conversationCap
-			: conversationCapFor(this.contextTokens);
+		const cap = this.setting('conversationCap');
+		const budget = cap !== undefined && cap > 0 ? cap : conversationCapFor(this.thinksWith.contextTokens);
 		const kept = this.turnsWithin(this._conversation, budget);
 		const start = kept.length > 0 ? this._conversation.length - kept.length : this._conversation.length - 1;
 		this._conversation.splice(0, Math.max(0, start));
@@ -1872,7 +1866,7 @@ export class Mind<TCtx = unknown> {
 
 	/** The turns Current Conversation shows, oldest first. */
 	private shownTurns():ConversationTurn[] {
-		const cap = this.conversationCap ?? conversationCapFor(this.contextTokens);
+		const cap = this.setting('conversationCap') ?? conversationCapFor(this.thinksWith.contextTokens);
 		return this.turnsWithin(this._conversation, cap);
 	}
 
@@ -1966,7 +1960,7 @@ export class Mind<TCtx = unknown> {
 		const lines = new Set(shown.map((turn) => this.conversationLine(turn)));
 		return this.persona.memory.recall({
 			query,
-			k: this.recallK,
+			k: this.setting('recallK'),
 			now: this._now,
 			salience: this._salience,
 			skip: (r) => {
@@ -1983,7 +1977,7 @@ export class Mind<TCtx = unknown> {
 
 
 	private maybeIntrude(perceptionText:string):string | undefined {
-		if (this._now - this.lastIntrusionTimestamp < this.intrusionCooldown) {
+		if (this._now - this.lastIntrusionTimestamp < this.setting('intrusionCooldown')) {
 			return undefined;
 		}
 		const tags = this._pendingEvents.flatMap((e) => this.render(e).tags ?? []);
@@ -1991,7 +1985,7 @@ export class Mind<TCtx = unknown> {
 			query: perceptionText,
 			now: this._now,
 			tags,
-			threshold: this.intrusionThreshold,
+			threshold: this.setting('intrusionThreshold'),
 		});
 		if (!hit || hit.tags.includes('seen')) {
 			return undefined;
@@ -2036,7 +2030,7 @@ export class Mind<TCtx = unknown> {
 				handler: (ctx, args) => this.handleRecall(ctx, args),
 			};
 		}
-		if (!this.hideObserve && !tools.observe) {
+		if (!this.setting('hideObserve') && !tools.observe) {
 			tools.observe = {
 				description: 'Evaluate a watch expression against the current world. Standing conditions belong in watches; one-shot questions this think use observe. Names only, no coordinates.',
 				parameters: BUILTIN_TOOL_PARAMETERS.observe,
@@ -2070,13 +2064,13 @@ export class Mind<TCtx = unknown> {
 	}
 
 	private visionCapable():boolean {
-		if (this.vision === false) {
+		if (this.thinksWith.vision === false) {
 			return false;
 		}
-		if (this.vision === true) {
+		if (this.thinksWith.vision === true) {
 			return true;
 		}
-		return isVisionModel(this.modelID);
+		return isVisionModel(this.thinksWith.id);
 	}
 
 	private async handleSeeMap(args:unknown):Promise<unknown> {
@@ -2231,7 +2225,7 @@ export class Mind<TCtx = unknown> {
 	private async handleRecall(ctx:TCtx | undefined, args:unknown):Promise<unknown> {
 		const row = isRecord(args) ? args : {};
 		const query = typeof row.query === 'string' ? row.query : '';
-		const k = typeof row.k === 'number' ? row.k : this.recallK;
+		const k = typeof row.k === 'number' ? row.k : this.setting('recallK');
 		let embedding:number[] | undefined;
 		if (this.embed && query) {
 			try {
@@ -2383,9 +2377,7 @@ export class Mind<TCtx = unknown> {
 		if (!this.queue) {
 			return;
 		}
-		const stalled = this.stalled
-			? this.stalled(result)
-			: !result.ok || !!result.interrupted;
+		const stalled = this.setting('stalled')?.(result) ?? (!result.ok || !!result.interrupted);
 		this.queue.noteResult(this.id, stalled);
 		// Orders given are work under way: its watches say when that needs another think.
 		const ordered = result.ok && this.lastArc && arcSteps(this.lastArc).some((step) => step.verb === 'issue');

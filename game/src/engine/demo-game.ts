@@ -193,7 +193,7 @@ export class DemoGame extends Game<DemoWorld> {
 	}
 
 	protected override onStart():void {
-		this.session.beginPlay();
+		this.session.director.connect();
 		if (this.canvas) {
 			this.world.audio.connectUnlock(this.canvas);
 		}

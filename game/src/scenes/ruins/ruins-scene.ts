@@ -300,8 +300,8 @@ function hopWin(host:GameHost, winners:GameObject[], spec:CollectiveSpec<Charact
 	// The fight is over: no more orders, and nothing that wakes a captain for a fight.
 	winner.kit = { verbs: ['say', 'wait'], tools: [] };
 	// What it was told for the fight would only have it write orders it can no longer give.
-	winner.mind.verbInstructions = 'The fight is over and you won. You can only speak or wait.';
-	winner.mind.arcExample = 'say("It is done.")';
+	winner.mind.settings.verbInstructions = 'The fight is over and you won. You can only speak or wait.';
+	winner.mind.settings.arcExample = 'say("It is done.")';
 	winner.persona.watches = {};
 	winner.persona.pinnedWatches = {
 		approaching: 'hasHeard || some(others.filter(u => u is "Player").nearby().approaching())',
@@ -316,7 +316,7 @@ function hopWin(host:GameHost, winners:GameObject[], spec:CollectiveSpec<Charact
 }
 
 function tickFight(host:GameHost):void {
-	if (!host.arc?.ready) {
+	if (!host.arc) {
 		return;
 	}
 	if (!woke.has(host)) {
@@ -377,9 +377,10 @@ export function createDirector(host:GameHost):ArcDirector<CharacterCtx> {
 		// Each rival is marked in reach or not, so its commander's roster says who can hit whom.
 		.withSight({ limit: 16, look: (ctx) => markReach(host, ctx.character, lookWorld(ctx.character, host.ambient, host)) })
 		.withNames({ seen: seenInFight })
-		.withThinkInstructions({ off: NO_THINK })
-		.withVerbInstructions(`${DEFAULT_VERB_INSTRUCTIONS} ${FIGHT_DOCTRINE}`)
-		.withArcExample(FIGHT_EXAMPLE)
+		.withMind((m) => m
+			.withThinkInstructions({ off: NO_THINK })
+			.withVerbInstructions(`${DEFAULT_VERB_INSTRUCTIONS} ${FIGHT_DOCTRINE}`)
+			.withArcExample(FIGHT_EXAMPLE))
 		// Characters run the programs their commander issues them: their role's attack among them.
 		.withDefaultKit({ verbs: [...FIGHT.verbs, 'protect', 'block', ...Object.keys(ATTACKS)], tools: [] })
 		.addCollective(DAWN)

@@ -71,11 +71,11 @@ async function main():Promise<void> {
 			kit: { verbs: STOCK_VERBS },
 			...perception(),
 			context: () => ({ paragraph }),
-			model,
+			modelID: model,
 			heartbeat: 30,
 			strategicInterval: 10_000,
-			toolRoundCap: 2,
-			arcRetryCap: 2,
+			toolRounds: 2,
+			repairRetries: 2,
 		});
 		guard.persona.memory.add({
 			text: 'I am a dungeon guard. When I see a named interactable such as EastGate, I go to it with go_to. Never emit coordinates.',

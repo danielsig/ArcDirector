@@ -144,6 +144,11 @@ export class Collective<TCtx = unknown> extends ArcRunner<TCtx> {
 		return this._commander ?? this;
 	}
 
+	/** Its mind thinks for itself. */
+	public get owner():ArcRunner<TCtx> {
+		return this;
+	}
+
 	/** It stands nowhere itself: its commander speaks and walks for its mind, and without one a character of its must. */
 	public get embodied():boolean {
 		return false;

@@ -193,7 +193,7 @@ function stage(director:ArcDirector<SceneCtx>, s:Scenario, world:SceneWorld):Arc
 	director
 		.onAbortArc((id) => world.abort(id))
 		.addStockVerbs()
-		.withCurrency('gold')
+		.withMind((m) => m.withCurrency('gold'))
 		.withPriorityQueue({ mayThink: () => false })
 		.withWorld(world)
 		.withKernels(({ id }) => ({ ...world.kernels(id), canSee: (a, b) => world.sees(a.id, b.id) }))
@@ -256,7 +256,7 @@ async function inScene<T>(
 	models(director);
 	stage(director, s, world);
 	try {
-		await director.start();
+		await director.connect();
 		if (s.last) {
 			director.character(s.me.id)!.mind!.ingestResult(s.last);
 		}

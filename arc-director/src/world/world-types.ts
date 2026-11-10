@@ -80,7 +80,7 @@ export const RESERVED_TAGS = {
  * (a GameObject, an entity id, a record); ArcDirector never looks inside one. `find` is the only place an id
  * becomes an entity, and every other part receives entities.
  *
- * Each part unlocks verbs; a kit that grants a verb whose part is missing fails at `start()`. Queries
+ * Each part unlocks verbs; a kit that grants a verb whose part is missing fails as the cast is wired. Queries
  * (`find`, `get…`, `up`) only read the world and may be called any time, often. Commands (the rest) change
  * the world; they announce what happened with `pushEvent`, as the game does when the player acts.
  *

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { MODEL_TIERS, type ThinkOff } from './models.js';
-import { HttpProvider, loadConfigFits, parseChatTimings, stripTemplateTokens } from './http.js';
+import { cleanThought, HttpProvider, loadConfigFits, parseChatTimings, stripTemplateTokens } from './http.js';
 import { ChatSystemOne, JevSystemOne, ModelSystemOne } from './system-one.js';
 import type { ChatDelta, ChatRequest } from './provider.js';
 import {
@@ -1392,6 +1392,13 @@ describe('reply cleanup', () => {
 		assert.equal(stripTemplateTokens('<|eot|>'), null);
 	});
 
+	it('drops the channel header a model leaks at the start of its thought', () => {
+		assert.equal(cleanThought('<|channel>thought\nThe bridge is up.<channel|>'), 'The bridge is up.');
+		assert.equal(cleanThought('<|channel|>analysis\nGo.'), 'Go.');
+		assert.equal(cleanThought('I think a < b.'), 'I think a < b.');
+		assert.equal(cleanThought('<|channel>thought'), undefined);
+	});
+
 	it('cleans chat content and flags a reply that hit the token cap', async () => {
 		const cut = await providerFor({
 			choices: [{ message: { content: 'go_to(Keep<|thought' }, finish_reason: 'length' }],
@@ -1824,5 +1831,14 @@ describe('HttpProvider thinking budget', () => {
 		const res = await providerFor(stream, 8).chat({ model: 'thinker', messages: [{ role: 'user', content: 'hi' }], onDelta: (piece) => pieces.push(piece) });
 		assert.deepEqual(pieces, [{ reasoning: 'Go ' }, { reasoning: 'there.' }, { content: '{"steps"' }, { content: ':[]}' }]);
 		assert.equal(res.content, '{"steps":[]}');
+	});
+
+	it('streams a thought without the channel header the model leaks', async () => {
+		const stream = streamOf(['<|chan', 'nel>', 'thought', '\n', 'Go ', 'there <', '3.'], ['{"steps":[]}']);
+		const pieces:ChatDelta[] = [];
+		const res = await providerFor(stream, 16).chat({ model: 'thinker', messages: [{ role: 'user', content: 'hi' }], onDelta: (piece) => pieces.push(piece) });
+		const thought = pieces.map((piece) => piece.reasoning ?? '').join('');
+		assert.equal(thought, 'Go there <3.');
+		assert.equal(res.reasoning, 'Go there <3.');
 	});
 });

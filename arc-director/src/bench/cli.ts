@@ -66,8 +66,7 @@ const cases = ARC_BENCH.filter((c) => (!args.skill || c.skill === args.skill) &&
 const thinking = (link:CaseLink) => (director:ArcDirector<SceneCtx>) => director
 	.addInference('model', link)
 	.addModel('main', { inference: 'model', id: args.model, thinking: true, contextLength: Number(args.context), maxParallel: parallel })
-	.withArcFormat('schema')
-	.withRepair({ retries: 3 });
+	.withMind((m) => m.withArcFormat('schema').withRepairRetries(3));
 
 console.log(`${cases.length} cases with ${args.model}, ${parallel} at once`);
 const queue = [...cases];

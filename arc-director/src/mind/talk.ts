@@ -1,14 +1,18 @@
 import type { ArcResult } from '../arc/arc-types.js';
 import type { ConversationTurn, MindEvent } from './mind-types.js';
 
-/** A mind that can receive speech. The library never sees coordinates. */
-export type TalkMind = {
-	id:string;
-	pushEvent(event:MindEvent):void;
-	/** This mind's name for another character. Default: the id. */
-	nameOf?(id:string):string;
-	/** The character that speaks for this mind. Its own lines are not heard back; its other characters' are. Default: `id`. */
-	voice?():string;
+/**
+ * Who hears speech for a mind: the runner it thinks for, a character on its own or a collective (`ArcRunner`).
+ * The library never sees coordinates.
+ */
+export type TalkListener = {
+	readonly id:string;
+	/** The character that speaks for its mind. Its own lines are not heard back; its other characters' are. */
+	readonly voice:{ readonly id:string };
+	/** Names other characters as its mind calls them; without one, by id. */
+	readonly mind:{ nameOf(id:string):string } | null;
+	/** Tell its mind an event. A major one wakes it. */
+	tell(event:MindEvent):void;
 };
 
 /**
@@ -190,9 +194,9 @@ function isNamed(targets:readonly string[], names:readonly string[]):boolean {
 	return targets.some((t) => names.some((n) => n.toLowerCase() === t.toLowerCase()));
 }
 
-/** Whether `mind`'s own voice said it: a mind already knows what it said, so it does not hear it back. */
-function saidBy(mind:TalkMind, speakerID:string):boolean {
-	return (mind.voice?.() ?? mind.id) === speakerID;
+/** Whether `listener`'s own voice said it: a mind already knows what it said, so it does not hear it back. */
+function saidBy(listener:TalkListener, speakerID:string):boolean {
+	return listener.voice.id === speakerID;
 }
 
 /**
@@ -205,7 +209,7 @@ function saidBy(mind:TalkMind, speakerID:string):boolean {
  * `{ face: false, approach: false }` to disable.
  */
 export class TalkNet {
-	private readonly _minds = new Map<string, TalkMind>();
+	private readonly _listeners = new Map<string, TalkListener>();
 	private readonly _muffled = new Map<string, Muffled[]>();
 	/** Each speaker's last line, by {@link wordsOf}. */
 	private readonly _lastSaid = new Map<string, string>();
@@ -222,24 +226,24 @@ export class TalkNet {
 	}
 
 	/**
-	 * Listen for `mind` with the character `id` (default its own id). One mind may listen through several
+	 * Listen for `listener` through the character `id` (default its own id). One listener may listen through several
 	 * characters, as a collective does through each of its own; it hears each line once, from whichever heard it best.
 	 */
-	public attach(mind:TalkMind, id = mind.id):void {
-		this._minds.set(id, mind);
+	public attach(listener:TalkListener, id = listener.id):void {
+		this._listeners.set(id, listener);
 	}
 
 	public detach(id:string):void {
-		this._minds.delete(id);
+		this._listeners.delete(id);
 	}
 
 	public has(id:string):boolean {
-		return this.mindFor(id) !== undefined;
+		return this.listenerFor(id) !== undefined;
 	}
 
 	/** Attach key, or a host-facing name that `names()` maps back to one (`Herbalist` for Fern). */
-	private mindFor(id:string):TalkMind | undefined {
-		const direct = this._minds.get(id);
+	private listenerFor(id:string):TalkListener | undefined {
+		const direct = this._listeners.get(id);
 		if (direct) {
 			return direct;
 		}
@@ -247,12 +251,12 @@ export class TalkNet {
 		if (!want) {
 			return undefined;
 		}
-		for (const [key, mind] of this._minds) {
+		for (const [key, listener] of this._listeners) {
 			if (key.toLowerCase() === want) {
-				return mind;
+				return listener;
 			}
 			if (listenerNames(this.sense, key).some((n) => n.trim().toLowerCase() === want)) {
-				return mind;
+				return listener;
 			}
 		}
 		return undefined;
@@ -260,7 +264,7 @@ export class TalkNet {
 
 	/** `id` as `observerID`'s mind names it. */
 	private label(observerID:string, id:string):string {
-		return this.mindFor(observerID)?.nameOf?.(id) ?? id;
+		return this.listenerFor(observerID)?.mind?.nameOf(id) ?? id;
 	}
 
 	/** Ids currently close enough to talk to `speakerID`. */
@@ -337,7 +341,7 @@ export class TalkNet {
 		this.attend(utterance);
 		this._onSpoke?.(utterance);
 		const clearly:string[] = [];
-		const reached = new Set<TalkMind>();
+		const reached = new Set<TalkListener>();
 		const clearness = new Map(heardBy.map((id) => [id, this.clear(speakerID, id)]));
 		// Clear hearers first, so a mind listening through several characters takes the clearest.
 		for (const id of [...heardBy].sort((a, b) => Number(clearness.get(b)) - Number(clearness.get(a)))) {
@@ -345,19 +349,19 @@ export class TalkNet {
 			if (clear && id !== speakerID) {
 				clearly.push(id);
 			}
-			const mind = this.mindFor(id);
-			if (!mind || reached.has(mind) || saidBy(mind, speakerID)) {
+			const listener = this.listenerFor(id);
+			if (!listener || reached.has(listener) || saidBy(listener, speakerID)) {
 				continue;
 			}
-			reached.add(mind);
-			const names = this.namesFor(mind);
+			reached.add(listener);
+			const names = this.namesFor(listener);
 			const mentioned = speechMentionsName(spoken, names.ours);
 			const heardTo = targets.map((t) => this.label(id, t));
 			const speaker = this.label(id, speakerID);
 			const heard = heardLine(speaker, spoken, isNamed(targets, names.you), heardTo.join(', '), clear, mentioned);
 			// Said to any of its characters, it is meant for this mind, though only its voice is "you".
 			this.hear(
-				mind,
+				listener,
 				speaker,
 				heardTo,
 				heard.text,
@@ -391,21 +395,21 @@ export class TalkNet {
 				if (now >= row.until) {
 					return false;
 				}
-				const mind = this.mindFor(id);
-				if (mind && saidBy(mind, row.speakerID)) {
+				const listener = this.listenerFor(id);
+				if (listener && saidBy(listener, row.speakerID)) {
 					return false;
 				}
-				if (!mind || !(this.sense.clearHear?.(row.speakerID, id) ?? true)) {
-					return !!mind;
+				if (!listener || !(this.sense.clearHear?.(row.speakerID, id) ?? true)) {
+					return !!listener;
 				}
-				const names = this.namesFor(mind);
+				const names = this.namesFor(listener);
 				const addressed = isNamed(row.targets, names.you);
 				const heardTo = row.targets.map((t) => this.label(id, t));
 				const speaker = this.label(id, row.speakerID);
 				const meant = isNamed(row.targets, names.ours) || row.targets.length === 0 || speechMentionsName(row.spoken, names.ours);
 				this._lastHeard.set(id, { speakerID: row.speakerID, words: wordsOf(row.spoken) });
 				this.hear(
-					mind,
+					listener,
 					speaker,
 					heardTo,
 					saysLine(speaker, row.spoken, addressed, heardTo.join(', '), ', now clear'),
@@ -443,15 +447,15 @@ export class TalkNet {
 		return verdict === true ? undefined : typeof verdict === 'string' ? verdict : flagged;
 	}
 
-	/** The names a line uses when it is for `mind`: any character it listens through (`ours`), or its voice (`you`). */
-	private namesFor(mind:TalkMind):{ ours:string[]; you:string[] } {
+	/** The names a line uses when it is for `listener`: any character it listens through (`ours`), or its voice (`you`). */
+	private namesFor(listener:TalkListener):{ ours:string[]; you:string[] } {
 		const named = (ids:string[]):string[] => uniqueNames(ids.flatMap((id) => [id, ...listenerNames(this.sense, id)]));
-		const listening = [...this._minds].filter(([, m]) => m === mind).map(([id]) => id);
-		return { ours: named([mind.id, ...listening]), you: named([mind.voice?.() ?? mind.id, mind.id]) };
+		const listening = [...this._listeners].filter(([, m]) => m === listener).map(([id]) => id);
+		return { ours: named([listener.id, ...listening]), you: named([listener.voice.id, listener.id]) };
 	}
 
 	private hear(
-		mind:TalkMind,
+		listener:TalkListener,
 		speaker:string,
 		heardTo:string[],
 		text:string,
@@ -459,7 +463,7 @@ export class TalkNet {
 		timestamp:number,
 		turn?:ConversationTurn,
 	):void {
-		mind.pushEvent({
+		listener.tell({
 			kind: 'HeardSpeech',
 			text,
 			tags: ['speech', speaker, ...heardTo],

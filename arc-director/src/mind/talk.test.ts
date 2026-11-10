@@ -1,14 +1,16 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import type { MindEvent } from './mind-types.js';
-import { TalkNet, type TalkMind } from './talk.js';
+import { TalkNet, type TalkListener } from './talk.js';
 
-function mind(id:string):TalkMind & { events:MindEvent[] } {
+function listener(id:string):TalkListener & { events:MindEvent[] } {
 	const events:MindEvent[] = [];
 	return {
 		id,
+		voice: { id },
+		mind: null,
 		events,
-		pushEvent(event) {
+		tell(event) {
 			events.push(event);
 		},
 	};
@@ -66,8 +68,8 @@ describe('TalkNet', () => {
 	});
 
 	it('wakes a listener only for speech meant for them, never for talk between others', () => {
-		const guard = mind('Guard');
-		const baker = mind('Baker');
+		const guard = listener('Guard');
+		const baker = listener('Baker');
 		const talk = net(new Set(['Acolyte:Guard', 'Acolyte:Baker']), ['Guard', 'Baker', 'Acolyte']);
 		talk.attach(guard);
 		talk.attach(baker);
@@ -79,9 +81,9 @@ describe('TalkNet', () => {
 	});
 
 	it('delivers speech only to listeners the host says are in range', () => {
-		const guard = mind('Guard');
-		const acolyte = mind('Acolyte');
-		const far = mind('Ghost');
+		const guard = listener('Guard');
+		const acolyte = listener('Acolyte');
+		const far = listener('Ghost');
 		const spoke:{ text:string; heardBy:string[] }[] = [];
 		const talk = net(new Set(['Acolyte:Guard']), ['Guard', 'Acolyte', 'Ghost'], (u) => {
 			spoke.push({ text: u.text, heardBy: u.heardBy });
@@ -135,9 +137,9 @@ describe('TalkNet', () => {
 	});
 
 	it('addresses several names at once so each hears "to you"', () => {
-		const guard = mind('Guard');
-		const baker = mind('Baker');
-		const far = mind('Ghost');
+		const guard = listener('Guard');
+		const baker = listener('Baker');
+		const far = listener('Ghost');
 		const talk = net(
 			new Set(['Player:Guard', 'Player:Baker']),
 			['Guard', 'Baker', 'Ghost'],
@@ -154,7 +156,7 @@ describe('TalkNet', () => {
 	});
 
 	it('broadcasts to every nearby name, including mute characters', () => {
-		const guard = mind('Guard');
+		const guard = listener('Guard');
 		const talk = net(new Set(['Acolyte:Guard', 'Acolyte:Player']), ['Guard', 'Player']);
 		talk.attach(guard);
 		const result = talk.say('Acolyte', 'Make way.');
@@ -165,8 +167,8 @@ describe('TalkNet', () => {
 	});
 
 	it('drops a listener the host says cannot hear, even when addressed', () => {
-		const guard = mind('Guard');
-		const player = mind('Player');
+		const guard = listener('Guard');
+		const player = listener('Player');
 		const talk = new TalkNet({
 			inRange: (a, b) => a !== b,
 			others: (speaker) => ['Guard', 'Player', 'Forager'].filter((id) => id !== speaker),
@@ -246,7 +248,7 @@ describe('TalkNet', () => {
 	});
 
 	it('muffles far speech and asks the listener to come closer', () => {
-		const guard = mind('Guard');
+		const guard = listener('Guard');
 		const talk = new TalkNet({
 			inRange: () => true,
 			others: () => ['Guard'],
@@ -262,7 +264,7 @@ describe('TalkNet', () => {
 	});
 
 	it('does not treat muffled eavesdropping as an interrupting event', () => {
-		const captain = mind('Captain');
+		const captain = listener('Captain');
 		const talk = new TalkNet({
 			inRange: () => true,
 			others: () => ['Guard', 'Captain'],
@@ -276,7 +278,7 @@ describe('TalkNet', () => {
 	});
 
 	it('makes a muffled name-drop major for the named listener', () => {
-		const captain = mind('Captain');
+		const captain = listener('Captain');
 		const talk = new TalkNet({
 			inRange: () => true,
 			others: () => ['Guard', 'Captain'],
@@ -289,7 +291,7 @@ describe('TalkNet', () => {
 	});
 
 	it('treats host aliases as a name mention', () => {
-		const fern = mind('Fern');
+		const fern = listener('Fern');
 		const talk = new TalkNet({
 			inRange: () => true,
 			others: () => ['Fern', 'Guard'],
@@ -302,7 +304,7 @@ describe('TalkNet', () => {
 	});
 
 	it('delivers to an attached id when the host lists its role', () => {
-		const fern = mind('Fern');
+		const fern = listener('Fern');
 		const talk = new TalkNet({
 			inRange: () => true,
 			others: () => ['Herbalist', 'Lys'],
@@ -319,7 +321,7 @@ describe('TalkNet', () => {
 	});
 
 	it('makes a muffled role mention major', () => {
-		const fern = mind('Fern');
+		const fern = listener('Fern');
 		const talk = new TalkNet({
 			inRange: () => true,
 			others: () => ['Fern', 'Guard'],
@@ -334,7 +336,7 @@ describe('TalkNet', () => {
 
 describe('TalkNet muffled speech', () => {
 	it('delivers a muffled line in full once the listener comes close, within the rehear window', () => {
-		const guard = mind('Guard');
+		const guard = listener('Guard');
 		let close = false;
 		const talk = new TalkNet({
 			inRange: () => true,

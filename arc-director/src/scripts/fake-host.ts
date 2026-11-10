@@ -57,7 +57,7 @@ async function main():Promise<void> {
 	}
 
 	try {
-		await director.start();
+		await director.connect();
 	}
 	catch (err:unknown) {
 		console.error(err instanceof Error ? err.message : err);

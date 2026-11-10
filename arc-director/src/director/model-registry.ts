@@ -98,8 +98,6 @@ export type RegistryHooks = {
 	wrap(provider:InferenceProvider, http:boolean):InferenceProvider;
 	/** Sees the exact JSON an HTTP server is sent. */
 	onRequest:NonNullable<HttpInferenceOpts['onRequest']>;
-	/** A model resolved, changed or went away: minds re-read theirs. */
-	changed():void;
 	log(message:string, error?:boolean):void;
 };
 
@@ -173,7 +171,6 @@ export class ModelRegistry {
 		if (this._default === name) {
 			this._default = [...this._specs].find(([, other]) => !other.decision)?.[0] ?? null;
 		}
-		this._hooks.changed();
 	}
 
 	public setDefault(name:string):void {
@@ -181,7 +178,6 @@ export class ModelRegistry {
 			throw new Error(`ArcDirector: no model '${name}' (addModel)`);
 		}
 		this._default = name;
-		this._hooks.changed();
 	}
 
 	public has(name:string):boolean {
@@ -239,7 +235,6 @@ export class ModelRegistry {
 		}
 		this._default = other._default;
 		this._embeddings = other._embeddings;
-		this._hooks.changed();
 	}
 
 	/** Resolve every model not resolved yet; with none added, add the first server's own pick. Rejects when one cannot resolve. */
@@ -331,7 +326,6 @@ export class ModelRegistry {
 		});
 		this._hooks.log(`${name}: ${id}${vision ? ' (vision)' : ''}`);
 		// Its first request loads it, so a model nobody uses takes no VRAM.
-		this._hooks.changed();
 	}
 }
 

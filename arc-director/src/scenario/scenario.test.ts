@@ -11,7 +11,7 @@ import { SceneWorld, type SceneSpot } from './scene-world.js';
 /** A model on its own server, writing Arc text; it can see, so `see_map` is offered. `chat` answers each request. */
 function model(chat:(req:ChatRequest)=>string):(director:ArcDirector<SceneCtx>)=>unknown {
 	return (director) => director
-		.withArcFormat('text')
+		.withMind((m) => m.withArcFormat('text'))
 		.addInference('fake', new FakeProvider((req) => ({ content: chat(req), toolCalls: [] })), { vision: true })
 		.addModel('main', { id: 'fake' });
 }

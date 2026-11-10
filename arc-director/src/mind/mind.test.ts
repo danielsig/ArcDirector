@@ -219,8 +219,8 @@ describe('Agent', () => {
 			context: () => ({ paragraph: paragraph() }),
 			model: 'fake',
 			heartbeat: 0,
-			toolRoundCap: 0,
-			arcRetryCap: 0,
+			toolRounds: 0,
+			repairRetries: 0,
 			strategicInterval: 0,
 			conversationCap: 160,
 		});
@@ -268,8 +268,8 @@ describe('Agent', () => {
 			context: () => ({ paragraph: scene }),
 			model: 'fake',
 			heartbeat: 0,
-			toolRoundCap: 0,
-			arcRetryCap: 0,
+			toolRounds: 0,
+			repairRetries: 0,
 			strategicInterval: 0,
 		});
 		internalsOf(agent.mind!).sighted(formatSightClauses(sight));
@@ -311,8 +311,8 @@ describe('Agent', () => {
 			...perception(),
 			context: () => ({ paragraph: scene }),
 			model: 'fake',
-			toolRoundCap: 0,
-			arcRetryCap: 2,
+			toolRounds: 0,
+			repairRetries: 2,
 		});
 		const arc = await agent.mind!.tick(1);
 		assert.equal(calls, 2);
@@ -341,8 +341,8 @@ describe('Agent', () => {
 			...perception(),
 			context: () => ({ paragraph: scene }),
 			model: 'fake',
-			toolRoundCap: 0,
-			arcRetryCap: 2,
+			toolRounds: 0,
+			repairRetries: 2,
 			arcFormat: 'text',
 		});
 		const arc = await agent.mind!.tick(1);
@@ -367,8 +367,8 @@ describe('Agent', () => {
 			...perception(),
 			context: () => ({ paragraph: paragraph() }),
 			model: 'fake',
-			toolRoundCap: 2,
-			arcRetryCap: 0,
+			toolRounds: 2,
+			repairRetries: 0,
 			arcFormat: 'text',
 		});
 		const arc = await agent.mind!.tick(1);
@@ -400,8 +400,8 @@ describe('Agent', () => {
 			context: () => ({ paragraph: paragraph() }),
 			model: 'fake',
 			heartbeat: 0,
-			toolRoundCap: 0,
-			arcRetryCap: 0,
+			toolRounds: 0,
+			repairRetries: 0,
 			arcFormat: 'text',
 		});
 		const first = await agent.mind!.tick(1);
@@ -430,8 +430,8 @@ describe('Agent', () => {
 			context: () => ({ paragraph: paragraph() }),
 			model: 'fake',
 			heartbeat: 0,
-			toolRoundCap: 0,
-			arcRetryCap: 0,
+			toolRounds: 0,
+			repairRetries: 0,
 			arcFormat: 'text',
 		});
 		await agent.mind!.tick(1);
@@ -455,8 +455,8 @@ describe('Agent', () => {
 			...perception(),
 			context: () => ({ paragraph: paragraph() }),
 			model: 'fake',
-			toolRoundCap: 0,
-			arcRetryCap: 0,
+			toolRounds: 0,
+			repairRetries: 0,
 		});
 		await assert.rejects(() => agent.mind!.tick(1), /arc is not \{"steps"/);
 		assert.equal(calls, 1);
@@ -490,8 +490,8 @@ describe('Agent', () => {
 			// Native tool calls, as a model asked for plain JSON makes them.
 			arcFormat: 'json',
 			model: 'fake',
-			toolRoundCap: 1,
-			arcRetryCap: 0,
+			toolRounds: 1,
+			repairRetries: 0,
 		});
 		const arc = await agent.mind!.tick(1);
 		assert.equal(sawToolError, true);
@@ -518,8 +518,8 @@ describe('Agent', () => {
 			model: 'fake',
 			heartbeat: 0,
 			arcFormat: 'text',
-			toolRoundCap: 2,
-			arcRetryCap: 0,
+			toolRounds: 2,
+			repairRetries: 0,
 			strategicInterval: 0,
 		});
 		await agent.mind!.tick(10);
@@ -547,8 +547,8 @@ describe('Agent', () => {
 			model: 'fake',
 			heartbeat: 0,
 			arcFormat: 'text',
-			toolRoundCap: 0,
-			arcRetryCap: 0,
+			toolRounds: 0,
+			repairRetries: 0,
 			strategicInterval: 0,
 		});
 		await agent.mind!.tick(10);
@@ -574,8 +574,8 @@ describe('Agent', () => {
 			model: 'fake',
 			heartbeat: 0,
 			arcFormat: 'text',
-			toolRoundCap: 0,
-			arcRetryCap: 0,
+			toolRounds: 0,
+			repairRetries: 0,
 			strategicInterval: 0,
 			knowledge: [{ name: 'FireMushroom', aliases: ['10 gold'], text: 'Worth 10 gold.' }],
 		});
@@ -607,8 +607,8 @@ describe('Agent', () => {
 			model: 'fake',
 			heartbeat: 0,
 			arcFormat: 'text',
-			toolRoundCap: 2,
-			arcRetryCap: 0,
+			toolRounds: 2,
+			repairRetries: 0,
 			strategicInterval: 0,
 		});
 		for (let t = 1; t <= 4; t++) {
@@ -657,8 +657,8 @@ describe('Agent', () => {
 			// Native tool calls, as a model asked for plain JSON makes them.
 			arcFormat: 'json',
 			model: 'fake',
-			toolRoundCap: 3,
-			arcRetryCap: 0,
+			toolRounds: 3,
+			repairRetries: 0,
 		});
 		const arc = await agent.mind!.tick(1);
 		assert.equal(runs, 1);
@@ -702,8 +702,8 @@ describe('Agent', () => {
 			// Native tool calls, as a model asked for plain JSON makes them.
 			arcFormat: 'json',
 			model: 'fake',
-			toolRoundCap: 1,
-			arcRetryCap: 0,
+			toolRounds: 1,
+			repairRetries: 0,
 		});
 		const arc = await agent.mind!.tick(1);
 		assert.equal(arc?.[0].verb, 'go_to');
@@ -747,8 +747,8 @@ describe('Agent', () => {
 			context: () => ({ paragraph: paragraph() }),
 			model: 'fake',
 			talk,
-			toolRoundCap: 0,
-			arcRetryCap: 0,
+			toolRounds: 0,
+			repairRetries: 0,
 		});
 		const arc = await agent.mind!.tick(1);
 		assert.equal(calls, 2);
@@ -796,8 +796,8 @@ describe('Agent', () => {
 			context: () => ({ paragraph: paragraph() }),
 			model: 'fake',
 			heartbeat: 0,
-			toolRoundCap: 0,
-			arcRetryCap: 0,
+			toolRounds: 0,
+			repairRetries: 0,
 			strategicInterval: 0,
 		});
 		const given = { kind: 'Given', text: '{0} gave FireMushroom to {1}', who: ['Forager', 'BridgeKeeper'], tags: ['give'], remember: true };
@@ -822,7 +822,7 @@ describe('Agent', () => {
 		await cade.mind!.thinkNow({ enact: false });
 		assert.match(users[0] ?? '', /- You cleaved BridgeKeeper/);
 		assert.equal((users[0] ?? '').includes('Current Conversation'), false);
-		forager.mind!.conversationCap = 20;
+		forager.mind!.settings.conversationCap = 20;
 		forager.mind!.pushEvent({ kind: 'Note', text: 'z'.repeat(30), turn: { speakerID: 'Baker', text: 'z'.repeat(30) } });
 		users.length = 0;
 		await forager.mind!.thinkNow({ enact: false });
@@ -848,8 +848,8 @@ describe('Agent', () => {
 			model: 'fake',
 			heartbeat: 0,
 			arcFormat: 'text',
-			toolRoundCap: 0,
-			arcRetryCap: 0,
+			toolRounds: 0,
+			repairRetries: 0,
 			strategicInterval: 0,
 			knowledge: [{ name: 'FireMushroom', text: 'Worth 10 gold.', item: true }, { name: 'Bridge', text: 'Raised unless lowered.' }],
 		});
@@ -899,8 +899,8 @@ describe('Agent', () => {
 			heartbeat: 0,
 			arcFormat: 'text',
 			talk,
-			toolRoundCap: 0,
-			arcRetryCap: 0,
+			toolRounds: 0,
+			repairRetries: 0,
 			strategicInterval: 0,
 		});
 		for (let t = 1; t <= arcs.length; t++) {
@@ -934,8 +934,8 @@ describe('Agent', () => {
 			heartbeat: 0,
 			arcFormat: 'text',
 			talk,
-			toolRoundCap: 0,
-			arcRetryCap: 0,
+			toolRounds: 0,
+			repairRetries: 0,
 			strategicInterval: 0,
 		});
 		const results:boolean[] = [];
@@ -978,8 +978,8 @@ describe('Agent', () => {
 			heartbeat: 0,
 			arcFormat: 'text',
 			wayBlocked: (ids) => ids.map(() => blocked),
-			toolRoundCap: 0,
-			arcRetryCap: 0,
+			toolRounds: 0,
+			repairRetries: 0,
 			strategicInterval: 0,
 		});
 		await agent.mind!.tick(10);
@@ -1013,8 +1013,8 @@ describe('Agent', () => {
 			context: () => ({ paragraph: paragraph() }),
 			model: 'fake',
 			talk,
-			toolRoundCap: 0,
-			arcRetryCap: 0,
+			toolRounds: 0,
+			repairRetries: 0,
 		});
 		const arc = await agent.mind!.tick(1);
 		assert.equal(calls, 1);
@@ -1033,8 +1033,8 @@ describe('Agent', () => {
 			model: 'fake',
 			arcFormat: 'text',
 			heartbeat: 0,
-			toolRoundCap: 0,
-			arcRetryCap: 0,
+			toolRounds: 0,
+			repairRetries: 0,
 			strategicInterval: 0,
 		});
 		agent.mind!.ingestResult({ ok: true, verb: 'say', reason: 'heard by Guard; too far for Baker to make out the words: get closer' });
@@ -1065,8 +1065,8 @@ describe('Agent', () => {
 			model: 'fake',
 			talk,
 			wayBlocked: (ids) => ids.map((id) => (id === 'Angler' ? 'Bridge is raised' : undefined)),
-			toolRoundCap: 0,
-			arcRetryCap: 0,
+			toolRounds: 0,
+			repairRetries: 0,
 		}).mind!.tick(1);
 		assert.match(user, /In talking range: Guard, Angler \(unreachable, blocked on the way: Bridge is raised\)\./);
 	});
@@ -1110,8 +1110,8 @@ describe('Agent', () => {
 			arcFormat: 'json',
 			model: 'fake',
 			talk,
-			toolRoundCap: 1,
-			arcRetryCap: 0,
+			toolRounds: 1,
+			repairRetries: 0,
 		});
 		const arc = await agent.mind!.tick(1);
 		assert.equal(sawError, true);
@@ -1136,8 +1136,8 @@ describe('Agent', () => {
 			context: () => ({ paragraph: paragraph() }),
 			model: 'fake',
 			heartbeat: 0,
-			toolRoundCap: 0,
-			arcRetryCap: 0,
+			toolRounds: 0,
+			repairRetries: 0,
 			strategicInterval: 0,
 		};
 		const agent = soloCharacter<Ctx>({ id: 'Assistant', identity: { role: 'You assist Player.' }, ...deps });
@@ -1170,20 +1170,20 @@ describe('Agent', () => {
 			context: () => ({ paragraph: paragraph() }),
 			model: 'fake',
 			heartbeat: 0,
-			toolRoundCap: 0,
-			arcRetryCap: 0,
+			toolRounds: 0,
+			repairRetries: 0,
 			strategicInterval: 0,
 			conversationCap: 900,
+			contextTokens: 1024,
 		});
 		for (let i = 0; i < 4; i++) {
 			agent.mind!.pushEvent(heard('Player', `${i}${'x'.repeat(291)}`));
 		}
-		agent.mind!.contextTokens = 1024;
 		await agent.mind!.tick(1);
 		const shown = conversationOf(users[0]);
 		assert.equal(shown.length, 3);
 		assert.equal(shown.reduce((n, line) => n + line.length, 0), 900);
-		assert.equal(agent.mind!.settings().conversationCap, 900);
+		assert.equal(agent.mind!.setting('conversationCap'), 900);
 		assert.equal(agent.persona.memory.all().filter((row) => row.text.includes('xxx')).length, 4);
 	});
 
@@ -1219,8 +1219,8 @@ describe('Agent', () => {
 			model: 'fake',
 			talk,
 			heartbeat: 0,
-			toolRoundCap: 0,
-			arcRetryCap: 0,
+			toolRounds: 0,
+			repairRetries: 0,
 			strategicInterval: 0,
 		});
 		const forager = soloCharacter<Ctx>({
@@ -1239,8 +1239,8 @@ describe('Agent', () => {
 			model: 'fake',
 			talk,
 			heartbeat: 0,
-			toolRoundCap: 0,
-			arcRetryCap: 0,
+			toolRounds: 0,
+			repairRetries: 0,
 			strategicInterval: 0,
 		});
 		await keeper.mind!.tick(1);
@@ -1269,8 +1269,8 @@ describe('Agent', () => {
 			context: () => ({ paragraph: paragraph() }),
 			model: 'fake',
 			heartbeat: 0,
-			toolRoundCap: 0,
-			arcRetryCap: 0,
+			toolRounds: 0,
+			repairRetries: 0,
 			strategicInterval: 0,
 		});
 		const arc = await agent.mind!.tick(1);
@@ -1294,8 +1294,8 @@ describe('Agent', () => {
 			execute: async () => ({ ok: true }),
 			model: 'fake',
 			heartbeat: 0,
-			toolRoundCap: 0,
-			arcRetryCap: 0,
+			toolRounds: 0,
+			repairRetries: 0,
 			strategicInterval: 0,
 		});
 		const arc = await agent.mind!.tick(1);
@@ -1318,8 +1318,8 @@ describe('Agent', () => {
 			context: () => ({ paragraph: paragraph() }),
 			model: 'fake',
 			heartbeat: 0,
-			toolRoundCap: 0,
-			arcRetryCap: 0,
+			toolRounds: 0,
+			repairRetries: 0,
 			strategicInterval: 0,
 		});
 		const arc = await agent.mind!.tick(1);
@@ -1345,8 +1345,8 @@ describe('Agent', () => {
 			context: () => ({ paragraph: paragraph() }),
 			model: 'fake',
 			heartbeat: 0,
-			toolRoundCap: 0,
-			arcRetryCap: 0,
+			toolRounds: 0,
+			repairRetries: 0,
 			strategicInterval: 0,
 		});
 		const same = await agent.perform({ verb: 'set_identity', args: { role: 'Herbalist' } });
@@ -1387,8 +1387,8 @@ describe('Agent', () => {
 			context: () => ({ paragraph: paragraph() }),
 			model: 'fake',
 			heartbeat: 0,
-			toolRoundCap: 0,
-			arcRetryCap: 0,
+			toolRounds: 0,
+			repairRetries: 0,
 			strategicInterval: 0,
 		});
 		agent.mind!.pushEvent({
@@ -1418,8 +1418,8 @@ describe('Agent', () => {
 			context: () => ({ paragraph: paragraph() }),
 			model: 'fake',
 			heartbeat: 0,
-			toolRoundCap: 0,
-			arcRetryCap: 0,
+			toolRounds: 0,
+			repairRetries: 0,
 			skipStrategic: true,
 			autoEnact: false,
 		});
@@ -1444,8 +1444,8 @@ describe('Agent', () => {
 			context: () => ({ paragraph: paragraph() }),
 			model: 'fake',
 			heartbeat: 0,
-			toolRoundCap: 0,
-			arcRetryCap: 0,
+			toolRounds: 0,
+			repairRetries: 0,
 			strategicInterval: 0,
 			autoEnact: false,
 			arcFormat,
@@ -1548,8 +1548,8 @@ describe('Agent', () => {
 			arcFormat: 'json',
 			model: 'fake',
 			hideObserve: true,
-			toolRoundCap: 1,
-			arcRetryCap: 0,
+			toolRounds: 1,
+			repairRetries: 0,
 			strategicInterval: 0,
 			knowledge: [{
 				name: 'Tree',
@@ -1579,8 +1579,8 @@ describe('Agent', () => {
 			...perception(),
 			context: () => ({ paragraph: paragraph() }),
 			model: 'fake',
-			toolRoundCap: 0,
-			arcRetryCap: 0,
+			toolRounds: 0,
+			repairRetries: 0,
 		};
 		await soloCharacter<Ctx>({ ...base, vision: true }).mind!.tick(1);
 		await soloCharacter<Ctx>({
@@ -1621,8 +1621,8 @@ describe('Agent', () => {
 			// Native tool calls, as a model asked for plain JSON makes them.
 			arcFormat: 'json',
 			model: 'fake',
-			toolRoundCap: 1,
-			arcRetryCap: 0,
+			toolRounds: 1,
+			repairRetries: 0,
 			vision: true,
 			map: {
 				snapshot: () => ({
@@ -1651,8 +1651,8 @@ describe('Agent', () => {
 			context: () => ({ paragraph: paragraph() }),
 			arcFormat: 'json',
 			model: 'fake',
-			toolRoundCap: 1,
-			arcRetryCap: 0,
+			toolRounds: 1,
+			repairRetries: 0,
 			vision: true,
 			map: {
 				snapshot: () => ({
@@ -1710,8 +1710,8 @@ describe('Agent', () => {
 			// Native tool calls, as a model asked for plain JSON makes them.
 			arcFormat: 'json',
 			model: 'fake',
-			toolRoundCap: 1,
-			arcRetryCap: 0,
+			toolRounds: 1,
+			repairRetries: 0,
 			vision: true,
 			map: {
 				snapshot: (npcID, zoom) => {
@@ -1757,8 +1757,8 @@ describe('Agent', () => {
 			...perception(),
 			context: () => ({ paragraph: paragraph() }),
 			model: 'fake',
-			toolRoundCap: 1,
-			arcRetryCap: 1,
+			toolRounds: 1,
+			repairRetries: 1,
 			arcFormat: 'text',
 			vision: true,
 			map: {
@@ -1796,8 +1796,8 @@ describe('Agent', () => {
 			...perception(),
 			context: () => ({ paragraph: paragraph() }),
 			model: 'fake',
-			toolRoundCap: 1,
-			arcRetryCap: 0,
+			toolRounds: 1,
+			repairRetries: 0,
 			vision: true,
 			map: {
 				you: '🎯',
@@ -1876,8 +1876,8 @@ describe('Agent', () => {
 			arcFormat: 'json',
 			model: 'fake',
 			heartbeat: 0,
-			toolRoundCap: 1,
-			arcRetryCap: 0,
+			toolRounds: 1,
+			repairRetries: 0,
 			vision: true,
 			map: {
 				snapshot,
@@ -1917,8 +1917,8 @@ describe('Agent', () => {
 			context: () => ({ paragraph: paragraph() }),
 			model: 'fake',
 			heartbeat: 0,
-			toolRoundCap: 0,
-			arcRetryCap: 0,
+			toolRounds: 0,
+			repairRetries: 0,
 		});
 		const ok = await agent.perform({ verb: 'think', args: { about: 'how to open EastGate' } });
 		assert.equal(ok.ok, true);
@@ -1963,8 +1963,8 @@ describe('Agent', () => {
 			execute: async (step) => ({ ok: true, verb: step.verb }),
 			model: 'fake',
 			heartbeat: 0,
-			toolRoundCap: 0,
-			arcRetryCap: 0,
+			toolRounds: 0,
+			repairRetries: 0,
 		});
 		const arc = await agent.mind!.tick(1);
 		assert.equal(arc?.[0].verb, 'go_to');
@@ -1987,8 +1987,8 @@ describe('Agent', () => {
 			execute: async (step) => ({ ok: true, verb: step.verb }),
 			model: 'fake',
 			heartbeat: 0,
-			toolRoundCap: 0,
-			arcRetryCap: 0,
+			toolRounds: 0,
+			repairRetries: 0,
 		});
 		const arc = await agent.mind!.tick(1);
 		assert.equal(arc?.[0].verb, 'go_to');
@@ -2017,8 +2017,8 @@ describe('Agent', () => {
 			...think,
 			autoEnact: false,
 			model: 'fake',
-			toolRoundCap: 0,
-			arcRetryCap: 0,
+			toolRounds: 0,
+			repairRetries: 0,
 		});
 		q.ensure('Guard', { skipHeartbeat: true });
 		const arc = await agent.mind!.tick(1);
@@ -2059,8 +2059,8 @@ describe('Agent', () => {
 			autoEnact: false,
 			heartbeat: 30,
 			model: 'fake',
-			toolRoundCap: 0,
-			arcRetryCap: 0,
+			toolRounds: 0,
+			repairRetries: 0,
 		});
 		q.ensure('Guard', { skipHeartbeat: true });
 		agent.stamp(1);
@@ -2113,8 +2113,8 @@ describe('Agent', () => {
 			...think,
 			heartbeat: 0,
 			model: 'fake',
-			toolRoundCap: 0,
-			arcRetryCap: 0,
+			toolRounds: 0,
+			repairRetries: 0,
 		});
 		void agent.mind!.tick(1);
 		await waitUntil(() => agent.toJSON().mind!.lastVerb === 'go_to');
@@ -2178,8 +2178,8 @@ describe('Agent', () => {
 			// Native tool calls, as a model asked for plain JSON makes them.
 			arcFormat: 'json',
 			model: 'fake',
-			toolRoundCap: 0,
-			arcRetryCap: 0,
+			toolRounds: 0,
+			repairRetries: 0,
 		});
 		void agent.mind!.tick(1);
 		await waitUntil(() => gates.has('go_to'));
@@ -2250,8 +2250,8 @@ describe('Agent', () => {
 			// Native tool calls, as a model asked for plain JSON makes them.
 			arcFormat: 'json',
 			model: 'fake',
-			toolRoundCap: 0,
-			arcRetryCap: 0,
+			toolRounds: 0,
+			repairRetries: 0,
 		});
 		void agent.mind!.tick(1);
 		await waitUntil(() => gates.has('go_to'));
@@ -2280,8 +2280,8 @@ describe('repairs, mind verbs, and names', () => {
 			...perception(),
 			context: () => ({ paragraph: paragraph() }),
 			model: 'fake',
-			toolRoundCap: 0,
-			arcRetryCap: 3,
+			toolRounds: 0,
+			repairRetries: 3,
 			arcFormat: 'text',
 			...extra,
 		});
@@ -2391,7 +2391,7 @@ describe('arcFormat schema', () => {
 			model: 'fake',
 			heartbeat: 0,
 			strategicInterval: 0,
-			arcRetryCap: 0,
+			repairRetries: 0,
 			arcFormat: 'schema',
 			...extra,
 		});
@@ -2428,17 +2428,17 @@ describe('arcFormat schema', () => {
 
 	it('tells the model when a lookup was its last', async () => {
 		const seen:ChatRequest[] = [];
-		await schemaGuard([recall('gate'), steps], seen, { toolRoundCap: 1 }).mind!.tick(1);
+		await schemaGuard([recall('gate'), steps], seen, { toolRounds: 1 }).mind!.tick(1);
 		assert.match(chatContentText(seen[1].messages.at(-1)?.content), /That was your last lookup; reply with the steps now\./);
 	});
 
 	it('repairs a tool this mind lacks, and one called past the cap', async () => {
 		const lacking = schemaGuard([JSON.stringify({ tool: 'observe', expr: 'isNear(me, EastGate)' }), steps], [], { hideObserve: true });
 		await assert.rejects(lacking.mind!.tick(1), /observe is not a tool you have/);
-		const over = schemaGuard([recall('gate'), recall('door'), steps], [], { toolRoundCap: 1 });
+		const over = schemaGuard([recall('gate'), recall('door'), steps], [], { toolRounds: 1 });
 		await assert.rejects(over.mind!.tick(1), /no lookups left/);
 		const seen:ChatRequest[] = [];
-		const repaired = schemaGuard([JSON.stringify({ tool: 'observe', expr: 'x' }), steps], seen, { hideObserve: true, arcRetryCap: 1 });
+		const repaired = schemaGuard([JSON.stringify({ tool: 'observe', expr: 'x' }), steps], seen, { hideObserve: true, repairRetries: 1 });
 		assert.equal((await repaired.mind!.tick(1))?.[0].verb, 'go_to');
 		assert.match(chatContentText(seen[1].messages.at(-1)?.content), /observe is not a tool you have/);
 		assert.equal(seen[1].enableThinking, false, 'a repair does not reason again');
@@ -2492,8 +2492,8 @@ describe('arcFormat schema', () => {
 			...think,
 			heartbeat: 0,
 			model: 'fake',
-			toolRoundCap: 0,
-			arcRetryCap: 0,
+			toolRounds: 0,
+			repairRetries: 0,
 			arcFormat: 'schema',
 		});
 		void agent.mind!.tick(1);
@@ -2515,7 +2515,7 @@ describe('arcFormat schema', () => {
 	it('is one schema for every mind, whatever its kit or tools', async () => {
 		const seen:ChatRequest[] = [];
 		await schemaGuard([steps], seen, { kit: { verbs: ['go_to', 'wait'] } }).mind!.tick(1);
-		await schemaGuard([steps], seen, { toolRoundCap: 0 }).mind!.tick(1);
+		await schemaGuard([steps], seen, { toolRounds: 0 }).mind!.tick(1);
 		await schemaGuard([steps], seen, { hideObserve: true }).mind!.tick(1);
 		const bytes = seen.map((req) => JSON.stringify(req.responseFormat));
 		assert.equal(new Set(bytes).size, 1);

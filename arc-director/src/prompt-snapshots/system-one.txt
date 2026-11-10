@@ -1,0 +1,28 @@
+# choiceQuestion {
+  "state": "You are Sentry.\nDoing: wait.",
+  "criteria": {
+    "look": "examine(Well)",
+    "leave": "go_to(EastGate)"
+  }
+}
+
+# request 1
+model: "fake"
+sampling: {
+	"temperature": 0
+}
+maxTokens: 1
+enableThinking: false
+topLogprobs: 8
+
+## system
+Pick the option that best serves the goal. Answer with its letter only.
+
+## user
+You are Sentry.
+Doing: loop.
+
+Goal: Keep the gate
+Options:
+A. wait(1)
+B. go_to(EastGate)

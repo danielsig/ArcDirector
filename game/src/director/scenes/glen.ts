@@ -204,11 +204,11 @@ function mayThink(host:GameHost, id:string):boolean {
 const wokeForager = new WeakSet<GameHost>();
 
 function wakeForagerOnce(host:GameHost):void {
-	if (wokeForager.has(host) || !host.arc?.ready) {
+	if (wokeForager.has(host) || !host.arc) {
 		return;
 	}
 	wokeForager.add(host);
-	host.arc.mindQueue()?.enqueueMajor(FORAGER.id, true);
+	host.arc.mindQueue().enqueueMajor(FORAGER.id, true);
 }
 
 /** Whether `id` has reached the goal the scene is about: its only one with a test, off its list by now. */
@@ -356,8 +356,7 @@ export function createDirector(host:GameHost):ArcDirector<CharacterCtx> {
 			handler: (call) => doClose(call, call.args.target),
 		})
 		.withDefaultKit({ verbs: [...FOLK_VERBS, 'fish'] })
-		.withMindDefaults({ skipHeartbeat: true, skipStrategic: true })
-		.withVerbInstructions(BUILDING_VERB_INSTRUCTIONS)
+		.withMind((m) => m.withSkipStrategic().withVerbInstructions(BUILDING_VERB_INSTRUCTIONS))
 		.onGoalReached((id) => host.world.findByID(id)?.getOrAddComponent(Celebrating).beginHops(Time.time, 3))
 		.addCharacter(withReceived(FORAGER))
 		.addCharacter(withReceived(BRIDGE_KEEPER))

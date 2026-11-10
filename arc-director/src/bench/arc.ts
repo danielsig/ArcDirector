@@ -135,7 +135,7 @@ function attackNearest(c:ArcCase):string | undefined {
 /**
  * How well a model writes arcs that reach their goals: each case `repeats` times, played in a fresh director, and
  * timed by the model's thinks alone. `models` adds the model to bench to that director, as a host adds it for play
- * (`addModel`, `withArcFormat`, `withRepair`, …); the bench adds the scene. Each case is a success, neutral or harmful,
+ * (`addModel`, `withMind`, …); the bench adds the scene. Each case is a success, neutral or harmful,
  * as {@link playArcCase} says; a think that throws or writes no arc fails, which counts as harmful. The score records
  * how the model sampled. `onTrial` reports progress as {@link runBench} does.
  *
@@ -152,7 +152,7 @@ export async function benchArcs(
 	models(inference);
 	try {
 		// A server that cannot be reached fails each case, as it would on its own.
-		const shared = await inference.start().then(() => true, () => false);
+		const shared = await inference.connect().then(() => true, () => false);
 		const setUp = shared ? (director:ArcDirector<SceneCtx>) => {
 			models(director);
 			director.shareInference(inference);

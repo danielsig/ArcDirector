@@ -94,8 +94,7 @@ export function addModels<TCtx>(director:ArcDirector<TCtx>, p:Prefs = prefs(), s
  */
 export function addThinking<TCtx>(director:ArcDirector<TCtx>, p:Prefs = prefs(), sampling:SamplingSource = 'menu'):ArcDirector<TCtx> {
 	return addModels(director.addLMStudioInference({ baseURL: `${LM_STUDIO_ROOT}/v1`, load: LM_STUDIO_LOAD }), p, sampling)
-		.withArcFormat(p.arcFormat)
-		.withRepair({ retries: ARC_RETRY_CAP, perStep: true, unknownFields: true });
+		.withMind((m) => m.withArcFormat(p.arcFormat).withRepairRetries(ARC_RETRY_CAP).withRepairPerStep().withRepairUnknownFields());
 }
 
 /**
@@ -112,8 +111,7 @@ export function addXAIThinking<TCtx>(director:ArcDirector<TCtx>, id:string, p:Pr
 		.addModel('main', main)
 		.addModel('quick', { ...main, thinking: false })
 		.addModel('local', { ...main, thinking: false, decision: true })
-		.withArcFormat(p.arcFormat)
-		.withRepair({ retries: ARC_RETRY_CAP, perStep: true, unknownFields: true });
+		.withMind((m) => m.withArcFormat(p.arcFormat).withRepairRetries(ARC_RETRY_CAP).withRepairPerStep().withRepairUnknownFields());
 }
 
 export class GameHost {
@@ -139,10 +137,6 @@ export class GameHost {
 	/** Tags of the player's character, from the scene (a fight role). */
 	private readonly _playerTags:string[];
 	private _disposed = false;
-	private _starting = false;
-	/** Its director's start has resolved: its servers and models answered. Laws and moves run from before then. */
-	private _started = false;
-	private _nextTryTimestamp = 0;
 
 	constructor(
 		world:DemoWorld,
@@ -198,9 +192,11 @@ export class GameHost {
 			}
 		}
 		return director
-			.withCurrency('gold')
+			.withMind((m) => m
+				.withCurrency('gold')
+				.withSkipHeartbeat()
+				.withStalled((result) => !result.ok || !!result.interrupted || STALL_VERBS.has(result.verb ?? '')))
 			.withReplaceCheck()
-			.withMindDefaults({ skipHeartbeat: true })
 			.withPriorityQueue({
 				batchThinks: prefs().batchThinks,
 				batchWait: 5,
@@ -237,7 +233,6 @@ export class GameHost {
 			.addStockCollectiveVerbs()
 			.withWorld(gameWorld(this))
 			.withVerbGate(verbGate(this))
-			.withStalled((result) => !result.ok || !!result.interrupted || STALL_VERBS.has(result.verb ?? ''))
 			.withSight({ look: (ctx) => lookWorld(ctx.character, this.ambient, this), unitName: 'm' })
 			.withInventory((ctx) => inventoryOf(ctx.character))
 			.addSense('followed', {
@@ -296,26 +291,23 @@ export class GameHost {
 		(go) => fightExprTags(this, ctx.character, go),
 	);
 
-	public async start():Promise<void> {
-		if (this._disposed || !this.arc || this._starting || this._started || !this.world.arcDirectorOn) {
+	/**
+	 * Once the scene and any save are in: give each voice its alias, and, while NPCs may think, ask for the model. The
+	 * director keeps trying on its own every tick after a failure.
+	 */
+	public connect():void {
+		const arc = this.arc;
+		if (!arc) {
 			return;
 		}
-		this._starting = true;
-		try {
-			await this.arc.start();
-		}
-		catch {
-			this._nextTryTimestamp = Time.time + 3;
-			this.world.setMessage('NPCs idle — start LM Studio on port 1234');
-			return;
-		}
-		finally {
-			this._starting = false;
-		}
-		this._started = true;
-		setPrefs({ model: this.arc.modelID() });
-		for (const mind of this.arc.minds()) {
+		for (const mind of arc.minds()) {
 			this.wireVoice(mind);
+		}
+		if (prefs().ai) {
+			void arc.connect().then(
+				() => setPrefs({ model: arc.modelID() }),
+				() => this.world.setMessage('NPCs idle — start LM Studio on port 1234'),
+			);
 		}
 	}
 
@@ -348,7 +340,7 @@ export class GameHost {
 			npc.aiOn = true;
 		}
 		if (character.getComponent(Companion)) {
-			mind.strategicInterval = 0;
+			mind.settings.strategicInterval = 0;
 		}
 	}
 
@@ -378,24 +370,17 @@ export class GameHost {
 		this.hooks.checkBargain?.(this);
 		this.hooks.tickMarketNPC?.(this);
 		publishAiLog(this.log);
-		if (!this._started && Time.time >= this._nextTryTimestamp) {
-			void this.start();
-		}
 	}
 
 	public pulse(dt = 0):void {
-		if (this._disposed) {
-			return;
+		if (!this._disposed) {
+			this.arc?.tick(dt, Time.time);
 		}
-		if (!this.arc?.ready) {
-			return;
-		}
-		this.arc.tick(dt, Time.time);
 	}
 
 	/** Run one arc on the player character. Mind verbs are rejected; a canvas click aborts it. */
 	public async enactPlayer(text:string):Promise<ArcResult> {
-		const player = this.arc?.ready ? this.arc.character('Player') : undefined;
+		const player = this.arc?.character('Player');
 		const pilot = this.world.findByID('Player')?.getComponent(PlayerPilot);
 		if (!player || !pilot) {
 			throw new Error('ArcDirector is not running');

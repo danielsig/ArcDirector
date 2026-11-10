@@ -20,7 +20,7 @@ type RunnerSpec<TCtx> = Omit<PersonaSpec, 'goals'> & {
 	goals?:Goal<TCtx>[];
 	/**
 	 * Fetched every tick, so the host can mutate it in place. Omit = director `withDefaultKit`; with neither,
-	 * `start()` throws. `senses` / `tools` omitted on the kit = all registered ones.
+	 * the cast cannot be wired. `senses` / `tools` omitted on the kit = all registered ones.
 	 */
 	kit?:KitSource<TCtx>;
 	laws?:LawSpec[];
@@ -148,12 +148,6 @@ export type NameObserver<TCtx = unknown> = { id:string; ctx:TCtx | undefined };
 
 /** Base name `observer` gives `target`. Return `target.id` to name it as itself. */
 export type SeenName<TCtx = unknown> = (observer:NameObserver<TCtx>, target:NameTarget)=>string;
-
-/** Argument to `ArcDirector.start`. */
-export type StartOpts = {
-	/** Log unknown kit names via `onLog` instead of throwing. Default false. */
-	ignoreMissing?:boolean;
-};
 
 export type InferClock = {
 	calls:number;

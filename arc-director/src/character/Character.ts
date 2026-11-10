@@ -118,6 +118,10 @@ export class Character<TCtx = unknown> extends ArcRunner<TCtx> {
 		return this;
 	}
 
+	public get owner():ArcRunner<TCtx> | undefined {
+		return this._collective ?? (this._mind ? this : undefined);
+	}
+
 	public get embodied():boolean {
 		return true;
 	}

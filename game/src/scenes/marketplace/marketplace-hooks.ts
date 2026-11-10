@@ -228,7 +228,7 @@ function tickMarketNPC(host:GameHost):void {
 		text: `${spawned.id} arrived from the street`,
 		tags: [spawned.id, 'market'],
 	});
-	if (!host.arc?.ready) {
+	if (!host.arc) {
 		return;
 	}
 	host.arc.collective('MarketHive')?.addCharacter({ id: spawned.id, tags: spawned.tags, kit: HIVE_KIT });
@@ -262,7 +262,7 @@ export function createDirector(host:GameHost):ArcDirector<CharacterCtx> {
 	const d = host.configure(new ArcDirector<CharacterCtx>())
 		.withRPG({ ...BODY_VERBS, steal: stealVerb(host) })
 		.withSight({ limit: 16 })
-		.withSystemNote(LEDGER_NOTE)
+		.withMind((m) => m.withSystemNote(LEDGER_NOTE))
 		.addVerb('stand', {
 			args: {},
 			help: 'a guard walks to their side of the gate, beside the doorway',

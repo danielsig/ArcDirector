@@ -109,7 +109,7 @@ export class Mover {
 		private readonly _now:()=>number,
 		private readonly _crowdOf:CrowdOf = () => 'none',
 		/** Room between two in a line or a ring, in the world's units. */
-		private readonly _spacing = 1,
+		private readonly _spacing:()=>number = () => 1,
 	) {}
 
 	public get canMove():boolean {
@@ -194,7 +194,7 @@ export class Mover {
 		const place = dest && this.place(id, e, me, dest, aim.facing, within);
 		// In reach counts only in its turn, and with a place of its own, once there: else it stops wherever reach begins,
 		// on top of the last to get there. In reach before its first step, it stays put.
-		const settled = !place || e.plannedAt === -Infinity || distance(me, place.point) <= this._spacing / 2;
+		const settled = !place || e.plannedAt === -Infinity || distance(me, place.point) <= this._spacing() / 2;
 		if (!place?.waiting && settled) {
 			if (e.opts.check && now - e.checkedAt >= CHECK_EVERY) {
 				e.checkedAt = now;
@@ -209,7 +209,7 @@ export class Mover {
 		}
 		const toward = place?.point ?? dest;
 		const target = 'target' in e.dest ? e.dest.target : undefined;
-		const moved = target !== undefined && e.plannedTo && toward && distance(toward, e.plannedTo) > (place ? this._spacing / 2 : within);
+		const moved = target !== undefined && e.plannedTo && toward && distance(toward, e.plannedTo) > (place ? this._spacing() / 2 : within);
 		const stale = !('point' in e.dest) && now - e.plannedAt >= REPLAN_EVERY;
 		if (!e.route && now < e.retryAt) {
 			return undefined;
@@ -296,7 +296,7 @@ export class Mover {
 		const firstAt = first === undefined ? undefined : this._world!.getPose(first)?.point;
 		const way = this._lineWays.get(target) ?? (facing && unit(facing)) ?? (firstAt && unit(sub(firstAt, dest))) ?? groundAxes(dest.length, this._world!.up)[0];
 		this._lineWays.set(target, way);
-		return { point: add(dest, way, within + rank * this._spacing), waiting: true };
+		return { point: add(dest, way, within + rank * this._spacing()), waiting: true };
 	}
 
 	/**
@@ -309,8 +309,8 @@ export class Mover {
 		const taken = new Set(crowd.flatMap(([other, o]) => (other !== id && o.slot ? [key(o.slot.ring, o.slot.index)] : [])));
 		const [e1, e2] = groundAxes(dest.length, world.up);
 		const ringOf = (ring:number):{ radius:number; count:number } => {
-			const radius = within * RING_IN + ring * this._spacing;
-			return { radius, count: Math.max(1, Math.floor((Math.PI * 2 * radius) / this._spacing)) };
+			const radius = within * RING_IN + ring * this._spacing();
+			return { radius, count: Math.max(1, Math.floor((Math.PI * 2 * radius) / this._spacing())) };
 		};
 		const pointOf = (ring:number, index:number):Vec => {
 			const { radius, count } = ringOf(ring);
@@ -321,7 +321,7 @@ export class Mover {
 		for (const [other, slot] of settled ?? []) {
 			const found = world.find(other);
 			const at = found === undefined ? undefined : world.getPose(found)?.point;
-			if (at && distance(at, pointOf(slot.ring, slot.index)) <= this._spacing / 2) {
+			if (at && distance(at, pointOf(slot.ring, slot.index)) <= this._spacing() / 2) {
 				taken.add(key(slot.ring, slot.index));
 			}
 			else {
