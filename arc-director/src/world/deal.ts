@@ -1,4 +1,4 @@
-import type { HostWorld, Outcome, Transfer } from './types.js';
+import type { HostWorld, Outcome, Transfer } from './world-types.js';
 
 /**
  * The deal a move is part of, as `validateTransfer` sees it from that move. The world, this move and `pending` add

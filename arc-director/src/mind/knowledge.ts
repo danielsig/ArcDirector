@@ -2,7 +2,7 @@
 
 import { DEFAULT_SIGHT, formatSight } from '../perception/sight.js';
 import { basicPluralize } from '../perception/stringifiers.js';
-import type { SeenObject } from '../perception/types.js';
+import type { SeenObject } from '../perception/perception-types.js';
 
 export type KnowledgeEntry = {
 	/** Capitalized name used in arcs (`Tree`, `Cottage`). */

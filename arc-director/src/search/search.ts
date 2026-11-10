@@ -1,4 +1,4 @@
-import type { ToolSpec } from '../mind/types.js';
+import type { ToolSpec } from '../mind/mind-types.js';
 
 /** One move out of a state: its name as the model writes it (`c3-e5`, `Barracks`), and the state it leads to. */
 export type SearchMove<TState> = { name:string; next:TState };

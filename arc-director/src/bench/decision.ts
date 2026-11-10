@@ -1,11 +1,11 @@
-import { parseArcText } from '../arc/parse.js';
+import { parseArcText } from '../arc/arc-parse.js';
 import { VerbRegistry, registerStockVerbs } from '../arc/stock-verbs.js';
 import type { LastChoice } from '../arc/run.js';
-import type { SystemOne } from '../inference/systemone.js';
+import type { SystemOne } from '../inference/system-one.js';
 import { choicePrompt, type ChoicePrompt } from '../character/choice.js';
 import { FIGHT_VERBS } from '../scenario/combat.js';
-import { sceneCatalog, type Scene } from '../scenario/world.js';
-import { runBench, type BenchLevel, type BenchOpts, type BenchScore } from './score.js';
+import { sceneCatalog, type Scene } from '../scenario/scene-world.js';
+import { runBench, type BenchLevel, type BenchOpts, type BenchScore } from './bench-score.js';
 
 /**
  * One decision, its choices rated, as a scene. The bench asks it through {@link choicePrompt}, so a System

@@ -1,4 +1,4 @@
-import type { Vec } from '../world/types.js';
+import type { Vec } from '../world/world-types.js';
 import { add, distance, dot, sub } from '../world/vec.js';
 import { bearingOf, bearingPhrase, DEFAULT_SIGHT, formatMeasure, quantizeDistance } from './sight.js';
 

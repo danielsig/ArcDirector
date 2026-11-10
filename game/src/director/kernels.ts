@@ -19,14 +19,14 @@ import {
 	Wanted,
 	alarmActive,
 } from '../engine/components';
-import type { World } from '../engine/World';
+import type { DemoWorld } from '../engine/demo-world';
 import { NPCInput } from '../characters/NPCInput';
-import { Pickupable } from '../items/components';
+import { Pickupable } from '../items/item-components';
 import { listCarried } from '../items/inventory';
 import type { ItemInstance } from '../items/instance';
 import { coinsOf } from '../items/wallet';
 import { enclosureAt, interiorContains } from '../world/interior';
-import { CLEAR_RANGE } from './talkAttend';
+import { CLEAR_RANGE } from './talk-attend';
 import { idOf, isLiving } from './names';
 import { tagsOf } from './perception';
 import type { GameHost } from './adapter';
@@ -37,7 +37,7 @@ export function theftID(thief:GameObject):string {
 }
 
 /** The wanted thief a theft id names: the event is wherever the thief is, for as long as the mark is on. */
-export function thiefOf(world:World, id:string):GameObject | undefined {
+export function thiefOf(world:DemoWorld, id:string):GameObject | undefined {
 	let thief:GameObject | undefined;
 	world.forEachComponent(Wanted, (mark, go) => {
 		if (mark.enabled && theftID(go) === id) {
@@ -92,7 +92,7 @@ function landmarkEntity(go:GameObject):ExprEntity {
 	return e;
 }
 
-function nearbyLandmarks(world:World, character:GameObject, here?:{ x:number; z:number }):GameObject[] {
+function nearbyLandmarks(world:DemoWorld, character:GameObject, here?:{ x:number; z:number }):GameObject[] {
 	const p = here ?? character.transform.position;
 	const ranked:{ go:GameObject; dist:number }[] = [];
 	for (const go of world.objects) {
@@ -114,13 +114,13 @@ function nearbyLandmarks(world:World, character:GameObject, here?:{ x:number; z:
 	return ranked.slice(0, 16).map((r) => r.go);
 }
 
-function lookupGo(world:World, id:string):GameObject | undefined {
+function lookupGo(world:DemoWorld, id:string):GameObject | undefined {
 	return world.findNamed(id) ?? world.findByID(id);
 }
 
 /** World census for watches. ArcDirector adds geometry from `withWorld` and its own cache / hasHeard / prev. `here` poses `me` without moving the character. */
 export function kernelsOf(
-	world:World,
+	world:DemoWorld,
 	character:GameObject,
 	here?:{ x:number; z:number },
 	extraTags?:(go:GameObject)=>string[],

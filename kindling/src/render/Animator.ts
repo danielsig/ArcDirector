@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { Component } from '../core/Component.js';
-import { toonClip } from '../assets/toonModel.js';
+import { toonClip } from '../assets/toon-model.js';
 import { MeshRenderer } from './MeshRenderer.js';
 
 /**

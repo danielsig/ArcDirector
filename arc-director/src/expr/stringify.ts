@@ -1,4 +1,4 @@
-import { entityName, type Catalog, type ExprVal } from './types.js';
+import { entityName, type Catalog, type ExprVal } from './expr-types.js';
 
 export function stringifyVal(value:ExprVal, catalog?:Catalog):string {
 	if (value.kind === 'absent') {

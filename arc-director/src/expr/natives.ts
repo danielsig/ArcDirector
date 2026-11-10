@@ -14,7 +14,7 @@ import {
 	type NativeFn,
 	type SampleCache,
 	type Stringifiers,
-} from './types.js';
+} from './expr-types.js';
 import { bindCarry, bindRoster, asEntityVal } from './me.js';
 import { bindPrev, cloneEntity, freezeMe, type PrevSpec } from './prev.js';
 

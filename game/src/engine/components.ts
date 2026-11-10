@@ -14,9 +14,9 @@ import { pascalCase } from 'arc-director';
 import { Order } from './order';
 import { CELL_SIZE } from '../world/constants';
 import { doorInteriorAlong } from '../world/interior';
-import { Pickupable } from '../items/components';
+import { Pickupable } from '../items/item-components';
 import { findCarried } from '../items/inventory';
-import { characterModel } from '../render/characterModels';
+import { characterModel } from '../render/character-models';
 export { BoxCollider };
 
 /** Ground speed (m/s) below which a character stands. */
@@ -518,7 +518,7 @@ export class HumanBody extends Component {
 		'hands.left.held': null,
 		'hands.right.held': null,
 	};
-	public pockets:import('../items/components').Container | null = null;
+	public pockets:import('../items/item-components').Container | null = null;
 }
 
 export class Vitals extends Component {

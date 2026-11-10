@@ -1,19 +1,19 @@
-import { formatArc, formatArcBlocks, parseArcText } from '../arc/parse.js';
+import { formatArc, formatArcBlocks, parseArcText } from '../arc/arc-parse.js';
 import { arcJSONBlocks, arcSoFar, finishedSteps, parseArc, replyBreakdown } from '../arc/wire.js';
 import { exprArgs } from '../arc/validate.js';
 import { docsFor, replySchema } from '../arc/schema.js';
 import { FOCUS_EDIT_VERBS, VerbRegistry, WATCH_EDIT_VERBS, argBase, groupTargets, registerStockVerbs } from '../arc/stock-verbs.js';
-import type { Arc, ArcResult, Step } from '../arc/types.js';
-import { ArcError, BlockedArcError } from '../arc/types.js';
+import type { Arc, ArcResult, Step } from '../arc/arc-types.js';
+import { ArcError, BlockedArcError } from '../arc/arc-types.js';
 import { catalogEntities, evaluate, unboundCalls } from '../expr/eval.js';
-import { plainTagTests } from '../expr/tagTests.js';
+import { plainTagTests } from '../expr/tag-tests.js';
 import { observeExpr } from '../expr/stringify.js';
 import { bagOf, cloneEntity } from '../expr/prev.js';
 import { isVisionModel } from '../inference/models.js';
 import type { ChatContent, ChatContentPart, ChatDelta, ChatMessage, ChatResponse, InferenceProvider, JsonSchemaResponseFormat, ToolDef } from '../inference/provider.js';
 import { extractJson, isRecord, type JsonSchema } from '../json.js';
 import { mergeTags, nameTags, type MemoryRecord } from '../memory/store.js';
-import type { ArcFormat, ConversationTurn, MindEvent, Replacing, Sense, ThinkEvent, ToolSpec } from './types.js';
+import type { ArcFormat, ConversationTurn, MindEvent, Replacing, Sense, ThinkEvent, ToolSpec } from './mind-types.js';
 import { parseMapZoom, stampMap, isMapSnapshot, DEFAULT_YOU_SYMBOL, type MapPrev, type MapSense } from './map.js';
 import {
 	articlesNamedIn,
@@ -24,18 +24,18 @@ import {
 	receivedArticles,
 	type KnowledgeSource,
 } from './knowledge.js';
-import { jsonToolCall, toolFirstArgs, writtenToolCalls } from './toolText.js';
+import { jsonToolCall, toolFirstArgs, writtenToolCalls } from './tool-text.js';
 import { arcRepairHint, partRepairHint, replaceAsk, thoughtCutHint, writtenToolsHint, toolResultHint, blockedAgainHint, repeatOutputHint, reviseGoalsAsk, sayRangeHint, stablePrefix, volatileBlock, type PromptStyle, type ThinkInstructions } from './prompt.js';
 import type { TalkNet } from './talk.js';
-import type { SightClause } from '../perception/types.js';
+import type { SightClause } from '../perception/perception-types.js';
 import { idsOf, mapArc, mapExpr, mapLawName, namesOf } from './ids.js';
-import type { NameTarget } from '../character/names.js';
-import type { Persona } from '../character/persona.js';
-import type { Goal, Watches } from '../character/types.js';
+import type { NameTarget } from '../character/NameBook.js';
+import type { Persona } from '../character/Persona.js';
+import type { Goal, Watches } from '../character/character-types.js';
 import { sayToOf, type ArcRunner } from '../character/arc-runner.js';
 import type { Law } from '../arc/laws.js';
 import { deferThinks, THINK_ABOUT_CAP } from '../arc/run.js';
-import { arcSteps, firstStep, isArc, mapArgs, sameProgram } from '../arc/types.js';
+import { arcSteps, firstStep, isArc, mapArgs, sameProgram } from '../arc/arc-types.js';
 import { noWayTo } from '../world/route.js';
 import { waitUntilOf, type MindQueue } from '../think/queue.js';
 import { hasWatch, watchCount } from '../character/watch.js';

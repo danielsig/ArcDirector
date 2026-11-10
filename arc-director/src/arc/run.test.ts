@@ -1,10 +1,10 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { arcSteps, type Arc, type ArcResult, type Join, type Step } from './types.js';
-import { parseArcText } from './parse.js';
+import { arcSteps, type Arc, type ArcResult, type Join, type Step } from './arc-types.js';
+import { parseArcText } from './arc-parse.js';
 import { VerbRegistry, registerStockVerbs } from './stock-verbs.js';
 import { dummyEntity, buildCatalog } from '../expr/natives.js';
-import { SampleCache } from '../expr/types.js';
+import { SampleCache } from '../expr/expr-types.js';
 import { createArcSession, deferThinks, firstStartable, pollArcSession, runArc, THINK_ABOUT_CAP, type ArcHandler, type LastChoice } from './run.js';
 import { lawFinished, lawFromSpec, lawHandler, upsertLaw, type Law } from './laws.js';
 

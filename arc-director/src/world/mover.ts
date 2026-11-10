@@ -1,6 +1,6 @@
-import type { ArcResult } from '../arc/types.js';
+import type { ArcResult } from '../arc/arc-types.js';
 import { blockedReason, findRoute, hasRoutes, noWayTo, pointGoal, type Route, type RouteGoal, type RouteWorld } from './route.js';
-import type { HostWorld, Vec } from './types.js';
+import type { HostWorld, Vec } from './world-types.js';
 import { add, distance, groundAxes, sub, unit } from './vec.js';
 
 /**

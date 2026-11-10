@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, inject } from 'vue';
-import type { HudModel } from './hudModel';
-import { sessionKey } from './sessionKey';
+import type { HudModel } from './hud-model';
+import { sessionKey } from './session-key';
 import { setMusicMuted, setPrefs } from '../prefs';
 
 const props = defineProps<{

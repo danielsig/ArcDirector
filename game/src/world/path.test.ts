@@ -2,18 +2,18 @@ import { GameObject } from '@arc-director/kindling';
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { findRoute, pointGoal, type Vec } from 'arc-director';
-import { World } from '../engine/World';
+import { DemoWorld } from '../engine/demo-world';
 import { BoxCollider } from '../engine/components';
-import { glen_0_0 } from '../data/chunks/glen_0_0';
-import { glen_0_1 } from '../data/chunks/glen_0_1';
-import { glen_1_0 } from '../data/chunks/glen_1_0';
-import { glen_1_1 } from '../data/chunks/glen_1_1';
-import { market_1_0 } from '../data/chunks/market_1_0';
-import { RUINS_CHUNKS } from '../data/chunks/ruins';
+import { glen_0_0 } from '../data/chunks/glen-0-0';
+import { glen_0_1 } from '../data/chunks/glen-0-1';
+import { glen_1_0 } from '../data/chunks/glen-1-0';
+import { glen_1_1 } from '../data/chunks/glen-1-1';
+import { market_1_0 } from '../data/chunks/market-1-0';
+import { RUINS_CHUNKS } from '../scenes/ruins/ruins-map';
 import { USE_RANGE } from '../items/pickup';
-import { decodeGlyphChunk } from './decodeGlyphChunk';
+import { decodeGlyphChunk } from './decode-glyph-chunk';
 import { spawnChunkEntities } from './spawn';
-import { syncDressingColliders } from './dressingColliders';
+import { syncDressingColliders } from './dressing-colliders';
 import { cellWays, standableNear } from './path';
 
 // A brazier's flame loads its picture through Three, which needs document. These tests never draw.
@@ -23,7 +23,7 @@ if (!('document' in globalThis)) {
 }
 
 test('in the ruins, no route ends inside a wall or a pillar, yet a pillar is reached from beside it', () => {
-	const world = new World();
+	const world = new DemoWorld();
 	for (const file of RUINS_CHUNKS) {
 		const chunk = decodeGlyphChunk(file).chunk;
 		spawnChunkEntities(world, chunk);
@@ -49,7 +49,7 @@ test('in the ruins, no route ends inside a wall or a pillar, yet a pillar is rea
 });
 
 test('off the middle of a cell, a route does not leave through what stands in that cell', () => {
-	const world = new World();
+	const world = new DemoWorld();
 	for (const file of [glen_0_0, glen_0_1, glen_1_0, glen_1_1]) {
 		const chunk = decodeGlyphChunk(file).chunk;
 		spawnChunkEntities(world, chunk);
@@ -74,7 +74,7 @@ test('off the middle of a cell, a route does not leave through what stands in th
 });
 
 test('a stair is a neighbor only along its climb, not from the side', () => {
-	const world = new World();
+	const world = new DemoWorld();
 	const chunk = decodeGlyphChunk(market_1_0).chunk;
 	world.addChunk(chunk);
 	const ways = cellWays(world);

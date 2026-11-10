@@ -2,14 +2,14 @@ import { GameObject, stepPhysics } from '@arc-director/kindling';
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { BoxCollider, RigidBody } from '../engine/components';
-import { World } from '../engine/World';
-import { RUINS_CHUNKS } from '../data/chunks/ruins';
-import { decodeGlyphChunk } from '../world/decodeGlyphChunk';
+import { DemoWorld } from '../engine/demo-world';
+import { RUINS_CHUNKS } from '../scenes/ruins/ruins-map';
+import { decodeGlyphChunk } from '../world/decode-glyph-chunk';
 import { CharacterMotor } from './CharacterMotor';
 import { NPCInput } from './NPCInput';
 
 test('two walkers meeting head-on each step to their right and pass', () => {
-	const world = new World();
+	const world = new DemoWorld();
 	for (const file of RUINS_CHUNKS) {
 		world.addChunk(decodeGlyphChunk(file).chunk);
 	}

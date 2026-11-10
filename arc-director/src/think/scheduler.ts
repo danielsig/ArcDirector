@@ -1,13 +1,13 @@
-import type { Arc } from '../arc/types.js';
+import type { Arc } from '../arc/arc-types.js';
 import { evaluate } from '../expr/eval.js';
-import { clampTrueScore, watchScore } from '../expr/score.js';
+import { clampTrueScore, watchScore } from '../expr/watch-score.js';
 import {
 	DEFAULT_EPSILON,
 	DEFAULT_TRUE_SCORE,
 	type Catalog,
 	type ScoldReason,
-} from '../expr/types.js';
-import { arcVerbs } from './score.js';
+} from '../expr/expr-types.js';
+import { arcVerbs } from './think-score.js';
 
 /** How a mind joins the queue. `skipStart` only counts when it is new. */
 export type EnsureOpts = { skipHeartbeat?:boolean; skipMajor?:boolean; skipStart?:boolean };

@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { patchCapsuleShadows } from './capsuleShadows.js';
+import { patchCapsuleShadows } from './capsule-shadows.js';
 import { underInk } from './OutlinePass.js';
 import { patchShader } from './shader.js';
 

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed } from 'vue';
 import type { BenchKind } from '../director/bench';
-import { quickBench, quickBenchCurrent } from '../director/quickBench';
+import { quickBench, quickBenchCurrent } from '../director/quick-bench';
 
 /** A model's quick-bench score on its row, or that it is being tested now; nothing before it is ranked. */
 const props = defineProps<{

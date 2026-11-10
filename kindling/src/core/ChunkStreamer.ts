@@ -1,6 +1,6 @@
 import { Component } from './Component.js';
 import type { GameObject } from './GameObject.js';
-import type { ChunkType } from './types.js';
+import type { ChunkType } from './core-types.js';
 import { chunkBounds, type ChunkBounds } from './World.js';
 
 /** Keeps the chunks around its object loaded. */

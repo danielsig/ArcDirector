@@ -1,4 +1,4 @@
-import type { CountMap } from '../arc/types.js';
+import type { CountMap } from '../arc/arc-types.js';
 
 /**
  * What a character stands ready to trade: it hands over `give` for `get`. An offer to someone (`to`) is taken whole

@@ -44,10 +44,10 @@
 	"scripts": {
 		"build": "tsc -p tsconfig.json",
 		"typecheck": "tsc -p tsconfig.json --noEmit",
-		"test": "tsc -p tsconfig.json && node --test --test-reporter spec dist/json.test.js dist/arc/parse.test.js dist/arc/wire.test.js dist/memory/store.test.js dist/perception/sight.test.js dist/perception/hearing.test.js dist/mind/mind.test.js dist/mind/talk.test.js dist/character/watches.test.js dist/mind/map.test.js dist/mind/prompt.test.js dist/mind/knowledge.test.js dist/mind/toolText.test.js dist/arc/run.test.js dist/mind/ids.test.js dist/inference/models.test.js dist/inference/http.test.js dist/inference/assistantThink.test.js dist/inference/browser.test.js dist/inference/device.test.js dist/inference/download.test.js dist/inference/chatLog.test.js dist/inference/threadCache.test.js dist/expr/expr.test.js dist/think/queue.test.js dist/director/director.test.js dist/search/search.test.js dist/rts/rts.test.js dist/genre/genre.test.js dist/collective/collective.test.js dist/collective/handover.test.js dist/world/world.test.js dist/world/offers.test.js dist/scenario/scenario.test.js dist/bench/bench.test.js",
+		"test": "tsc -p tsconfig.json && node --test --test-reporter spec dist/json.test.js dist/arc/arc-parse.test.js dist/arc/wire.test.js dist/memory/store.test.js dist/perception/sight.test.js dist/perception/hearing.test.js dist/mind/mind.test.js dist/mind/talk.test.js dist/character/watches.test.js dist/mind/map.test.js dist/mind/prompt.test.js dist/mind/knowledge.test.js dist/mind/tool-text.test.js dist/arc/run.test.js dist/mind/ids.test.js dist/inference/models.test.js dist/inference/http.test.js dist/inference/assistant-think.test.js dist/inference/browser.test.js dist/inference/device.test.js dist/inference/download.test.js dist/inference/chat-log.test.js dist/inference/thread-cache.test.js dist/expr/expr.test.js dist/think/queue.test.js dist/director/ArcDirector.test.js dist/search/search.test.js dist/rts/rts.test.js dist/genre/genre.test.js dist/collective/Collective.test.js dist/collective/handover.test.js dist/world/world.test.js dist/world/offers.test.js dist/scenario/scenario.test.js dist/bench/bench.test.js",
 		"bench": "tsc -p tsconfig.json && node dist/bench/cli.js",
-		"demo": "tsc -p tsconfig.json && node dist/scripts/fakeHost.js",
-		"fixture": "tsc -p tsconfig.json && node dist/scripts/fixtureGoTo.js",
+		"demo": "tsc -p tsconfig.json && node dist/scripts/fake-host.js",
+		"fixture": "tsc -p tsconfig.json && node dist/scripts/fixture-go-to.js",
 		"prepublishOnly": "pnpm build"
 	},
 	"peerDependencies": {

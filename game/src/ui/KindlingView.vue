@@ -1,9 +1,9 @@
 <script setup lang="ts">
 import { inject, onMounted, onUnmounted, ref } from 'vue';
-import { Game } from '../engine/Game';
-import type { HudModel } from './hudModel';
-import { sessionKey } from './sessionKey';
-import { preloadArt } from '../render/preloadArt';
+import { DemoGame } from '../engine/demo-game';
+import type { HudModel } from './hud-model';
+import { sessionKey } from './session-key';
+import { preloadArt } from '../render/preload-art';
 
 const props = defineProps<{
 	hud:HudModel;
@@ -13,7 +13,7 @@ const props = defineProps<{
 const session = inject(sessionKey);
 const host = ref<HTMLElement | null>(null);
 const booted = ref(false);
-let game:Game | null = null;
+let game:DemoGame | null = null;
 let dead = false;
 
 onMounted(() => {
@@ -43,7 +43,7 @@ async function boot():Promise<void> {
 	if (!el) {
 		return;
 	}
-	game = new Game(props.hud, props.sceneID);
+	game = new DemoGame(props.hud, props.sceneID);
 	if (session) {
 		session.value = game.session;
 	}

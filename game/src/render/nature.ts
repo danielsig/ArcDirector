@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { patchShader, ToonMaterial, hash } from '@arc-director/kindling';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { TILE_HEIGHT } from '../world/constants';
-import type { Wake } from '../world/decodeGlyphChunk';
+import type { Wake } from '../world/decode-glyph-chunk';
 
 export type NatureMaps = {
 	water:THREE.Texture;
@@ -55,7 +55,7 @@ export function pieceAt(pieces:ModelTile[], x:number, z:number):ModelTile {
 	return pieces[Math.floor(hash(x, z, 61) * pieces.length) % pieces.length]!;
 }
 
-/** Every mesh of a sheet of props split by `buildModels` (`split`), in file order, each in its own frame: origin at its foot. */
+/** Every mesh of a sheet of props split by `build-models.mjs` (`split`), in file order, each in its own frame: origin at its foot. */
 async function loadPieces(url:string):Promise<ModelTile[]> {
 	const gltf = await new GLTFLoader().loadAsync(url);
 	const pieces:ModelTile[] = [];

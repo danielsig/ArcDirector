@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { Component } from '../core/Component.js';
-import { Time } from '../core/Time.js';
+import { Time } from '../core/time.js';
 
 /** An impact frame being shown: where the blow struck (world, a body's middle) and whether this frame is the inverted one. */
 export type ImpactFrame = { at:THREE.Vector3; invert:boolean };

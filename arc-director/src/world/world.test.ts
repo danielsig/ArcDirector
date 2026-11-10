@@ -1,18 +1,18 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { ArcDirector } from '../director/director.js';
+import { ArcDirector } from '../director/ArcDirector.js';
 import { dummyEntity } from '../expr/natives.js';
-import { SampleCache } from '../expr/types.js';
+import { SampleCache } from '../expr/expr-types.js';
 import { buildCatalog } from '../expr/natives.js';
 import { evaluate } from '../expr/eval.js';
 import { VerbRegistry } from '../arc/stock-verbs.js';
-import type { ArcResult } from '../arc/types.js';
-import type { MindEvent } from '../mind/types.js';
-import { geometryKernels } from './kernels.js';
+import type { ArcResult } from '../arc/arc-types.js';
+import type { MindEvent } from '../mind/mind-types.js';
+import { geometryKernels } from './geometry-kernels.js';
 import { Mover, type Crowd } from './mover.js';
 import { awayGoal, findRoute, groupGoal, memoWorld, pointGoal, reachablePoints, type Blocked, type Route, type RouteWorld } from './route.js';
 import type { Deal } from './deal.js';
-import type { HostWorld, Transfer, Vec } from './types.js';
+import type { HostWorld, Transfer, Vec } from './world-types.js';
 import { distance, groundAxes } from './vec.js';
 
 type Ctx = { id:string };

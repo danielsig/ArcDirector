@@ -1,4 +1,4 @@
-import { RESERVED_TAGS } from '../world/types.js';
+import { RESERVED_TAGS } from '../world/world-types.js';
 import { defaultLandmarkTier, groundAndFigure } from './ground.js';
 import { claimedOf, basicPluralize, builtinStringifiers } from './stringifiers.js';
 import { builtinLodLayers } from './lod.js';
@@ -11,7 +11,7 @@ import type {
 	Sight,
 	SightClause,
 	StringifyCtx,
-} from './types.js';
+} from './perception-types.js';
 
 const EPS = 0.5;
 const ATTACH_BONUS = 8;

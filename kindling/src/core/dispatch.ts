@@ -1,5 +1,5 @@
 import { Component } from './Component.js';
-import type { ComponentClass } from './types.js';
+import type { ComponentClass } from './core-types.js';
 import type { World } from './World.js';
 
 type Hook = 'update' | 'fixedUpdate' | 'lateUpdate';

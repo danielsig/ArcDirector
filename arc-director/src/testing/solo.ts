@@ -1,5 +1,5 @@
-import { Character, type CharacterJSON, type CharacterOptions, type Wiring } from '../character/character.js';
-import { Persona, type PersonaSpec } from '../character/persona.js';
+import { Character, type CharacterJSON, type CharacterOptions, type Wiring } from '../character/Character.js';
+import { Persona, type PersonaSpec } from '../character/Persona.js';
 import { Mind, mindFields, type MindDeps, type MindSettings } from '../mind/mind.js';
 
 export type SoloOptions<TCtx> = CharacterOptions<TCtx> & MindDeps<TCtx> & PersonaSpec & MindSettings;

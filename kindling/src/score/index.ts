@@ -1,6 +1,6 @@
 import { instrumentOf, type InstrumentEnvelope } from '../audio/instruments.js';
 import { scoreProblems } from '../audio/midi.js';
-import type { Note, Score, SoundFilter, Voice } from '../audio/types.js';
+import type { Note, Score, SoundFilter, Voice } from '../audio/audio-types.js';
 
 export {
 	registerInstrument,
@@ -10,7 +10,7 @@ export {
 	type InstrumentPlay,
 } from '../audio/instruments.js';
 export { overdrive, reverb } from '../audio/filters.js';
-export type { OverdriveFilter, ReverbFilter, SoundFilter } from '../audio/types.js';
+export type { OverdriveFilter, ReverbFilter, SoundFilter } from '../audio/audio-types.js';
 
 const STEP:Record<string, number> = { c: 0, d: 2, e: 4, f: 5, g: 7, a: 9, b: 11 };
 

@@ -3,8 +3,8 @@ import { describe, it } from 'node:test';
 import { STOCK_VERBS } from '../arc/stock-verbs.js';
 import { dummyEntity } from '../expr/natives.js';
 import type { ChatRequest } from '../inference/provider.js';
-import { ArcDirector } from '../director/director.js';
-import { STOCK_COLLECTIVE_VERBS } from './verbs.js';
+import { ArcDirector } from '../director/ArcDirector.js';
+import { STOCK_COLLECTIVE_VERBS } from './collective-verbs.js';
 import { HANDOVER_THREAD } from './handover.js';
 
 type Ctx = { id:string };

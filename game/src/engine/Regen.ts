@@ -1,7 +1,7 @@
 import { Component, Time } from '@arc-director/kindling';
 import * as THREE from 'three';
 import { Appearance, Vitals } from './components';
-import { healGlint } from '../render/spellFx';
+import { healGlint } from '../render/spell-fx';
 
 /**
  * Health trickling back (a heal's afterglow): `left` hp more, one at a time, evenly spaced until

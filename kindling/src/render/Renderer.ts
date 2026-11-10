@@ -3,7 +3,7 @@ import type { World } from '../core/World.js';
 import { Camera } from './Camera.js';
 import { OutlinePass } from './OutlinePass.js';
 import { ShadowCache, type ShadowMode, type ShadowSettings } from './ShadowCache.js';
-import { updateCapsuleShadows } from './capsuleShadows.js';
+import { updateCapsuleShadows } from './capsule-shadows.js';
 
 const CLEAR_COLOR = 0x000000;
 const hit = new THREE.Vector3();

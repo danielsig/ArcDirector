@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue';
 import { ARC_BENCH, ARC_BENCH_VERSION, DECISION_BENCH, DECISION_BENCH_VERSION, type BenchScore, type SkillScore } from 'arc-director/bench';
-import { modelLabel, type HudModel } from './hudModel';
+import { modelLabel, type HudModel } from './hud-model';
 import HudDialog from './HudDialog.vue';
 import { benchArcWriting, benchDecisions, JEV_CANDIDATE, xaiCandidates, type BenchKind, type BenchRow, type BenchRun } from '../director/bench';
 import { HOSTED } from '../director/hosted';

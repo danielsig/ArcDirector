@@ -1,6 +1,6 @@
 import { Audio } from '@arc-director/kindling';
 import { prefs } from '../prefs';
-import { preloadArt } from '../render/preloadArt';
+import { preloadArt } from '../render/preload-art';
 import MENU_TRACK from './herosPath.mp3';
 
 const MENU_VOL = 0.4;

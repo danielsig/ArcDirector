@@ -3,7 +3,7 @@ import { scoreProblems } from './midi.js';
 import { distanceGain, forceStereo, heardAt, makePanner, placePanner, poseListener } from './spatial.js';
 import { playVoiceNote } from './instruments.js';
 import { disconnectSoon, makeNoise, patchSeconds, pitched, playLayer, startLoopLayers, varied, type LoopNodes } from './synth.js';
-import type { ListenerPose, Score, SfxHandle, SfxOpts, SfxPatch } from './types.js';
+import type { ListenerPose, Score, SfxHandle, SfxOpts, SfxPatch } from './audio-types.js';
 
 function audioCtor():(new (opts?:AudioContextOptions)=>AudioContext) | undefined {
 	const g = globalThis as typeof globalThis & {

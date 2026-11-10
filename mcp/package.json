@@ -5,8 +5,8 @@
 	"type": "module",
 	"exports": {
 		".": {
-			"types": "./dist/main.d.ts",
-			"import": "./dist/main.js"
+			"types": "./dist/server.d.ts",
+			"import": "./dist/server.js"
 		}
 	},
 	"files": [
@@ -17,7 +17,7 @@
 		"build": "tsc -p tsconfig.json",
 		"typecheck": "tsc -p tsconfig.json --noEmit",
 		"test": "tsc -p tsconfig.json && node --test --test-reporter spec dist/project.test.js",
-		"start": "node dist/main.js"
+		"start": "node dist/server.js"
 	},
 	"dependencies": {
 		"@arc-director/control": "workspace:*",

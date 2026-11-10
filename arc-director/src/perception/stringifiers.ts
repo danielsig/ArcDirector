@@ -1,5 +1,5 @@
-import { RESERVED_TAGS } from '../world/types.js';
-import type { SeenObject, RelationshipHit, RelationshipStringifier, StringifyCtx } from './types.js';
+import { RESERVED_TAGS } from '../world/world-types.js';
+import type { SeenObject, RelationshipHit, RelationshipStringifier, StringifyCtx } from './perception-types.js';
 
 function isBareToken(text:string):boolean {
 	const body = text.replace(/^what seems to be /, '').trimStart();

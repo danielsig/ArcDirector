@@ -1,4 +1,4 @@
-import type { Vec } from './types.js';
+import type { Vec } from './world-types.js';
 
 export function sub(a:Vec, b:Vec):Vec {
 	return a.map((v, i) => v - (b[i] ?? 0));

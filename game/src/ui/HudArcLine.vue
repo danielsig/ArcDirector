@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ARC_INDENT, type ArcLine } from './arcText';
+import { ARC_INDENT, type ArcLine } from './arc-text';
 
 defineProps<{
 	line:ArcLine;

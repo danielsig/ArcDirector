@@ -2,7 +2,7 @@ import { MeshRenderer, Time, yawToward, Component } from '@arc-director/kindling
 import * as THREE from 'three';
 import { HumanBody } from '../engine/components';
 import { Order } from '../engine/order';
-import { FOLDED, applyPose, flightPose, hopPose, lookPose, peckPose, type Pose } from './ravenPose';
+import { FOLDED, applyPose, flightPose, hopPose, lookPose, peckPose, type Pose } from './raven-pose';
 
 /** Someone this close (m) sends a raven up. */
 const SPOOK = 2.6;
@@ -17,7 +17,7 @@ type Act = { kind:'peck' | 'hop' | 'look' | 'still'; t0:number; seconds:number; 
 type Flight = { from:THREE.Vector3; to:THREE.Vector3; t0:number; seconds:number };
 
 /**
- * A raven (`Raven` model, rigged by `buildModels.mjs` `bird`) on the ground: it hops, pecks and
+ * A raven (`Raven` model, rigged by `build-models.mjs` `bird`) on the ground: it hops, pecks and
  * looks about. Anyone walking close sends it flapping off to land somewhere else nearby.
  */
 export class Raven extends Component {

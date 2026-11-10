@@ -4,11 +4,11 @@ import { STOCK_VERBS, VerbRegistry, registerStockVerbs } from '../arc/stock-verb
 import { FakeProvider, goToNamedInteractable, hashEmbed } from '../inference/fake.js';
 import { chatContentText, type ChatRequest } from '../inference/provider.js';
 import { formatSight, formatSightClauses } from '../perception/sight.js';
-import type { SeenObject } from '../perception/types.js';
+import type { SeenObject } from '../perception/perception-types.js';
 import { soloCharacter, type SoloOptions } from '../testing/solo.js';
 import { mindFields } from './mind.js';
 import { CONVERSATION_HEADER } from './prompt.js';
-import type { Character, CharacterJSON } from '../character/character.js';
+import type { Character, CharacterJSON } from '../character/Character.js';
 
 /** A saved character, restored on its own. */
 function restore<TCtx>(json:CharacterJSON, deps:Omit<SoloOptions<TCtx>, 'id'>) {
@@ -16,7 +16,7 @@ function restore<TCtx>(json:CharacterJSON, deps:Omit<SoloOptions<TCtx>, 'id'>) {
 }
 import { DEFAULT_YOU_SYMBOL } from './map.js';
 import { TalkNet } from './talk.js';
-import type { MindEvent, Sense, ToolSpec } from './types.js';
+import type { MindEvent, Sense, ToolSpec } from './mind-types.js';
 import { withPriorityQueue } from '../think/queue.js';
 import { buildCatalog, dummyEntity, SampleCache } from '../expr/index.js';
 

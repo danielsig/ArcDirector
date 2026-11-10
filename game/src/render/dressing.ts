@@ -1,9 +1,9 @@
 import { hash } from '@arc-director/kindling';
 import * as THREE from 'three';
 import { CELL_SIZE, CHUNK_SIZE } from '../world/constants';
-import type { Chunk } from '../world/Chunk';
+import type { DemoChunk } from '../world/demo-chunk';
 import { propParts } from './props';
-import { planProps } from '../world/dressingPlan';
+import { planProps } from '../world/dressing-plan';
 import { treeParts } from './trees';
 
 export type DressingDraw = {
@@ -22,7 +22,7 @@ export type DressingDraw = {
 };
 
 
-function inChunk(chunk:Chunk, x:number, z:number):boolean {
+function inChunk(chunk:DemoChunk, x:number, z:number):boolean {
 	const ox = chunk.worldOriginX();
 	const oz = chunk.worldOriginZ();
 	const size = CHUNK_SIZE * CELL_SIZE;
@@ -46,8 +46,8 @@ function drawOf(
 	return { geom, mat, cast, x, y, z, rx, ry, rz, sx, sy, sz };
 }
 
-/** Instanced draws for this chunk: props and trees. The road is part of the ground mesh; grass blades are `grassBatch`. */
-export function dressingDraws(chunk:Chunk, chunks:Iterable<Chunk>):DressingDraw[] {
+/** Instanced draws for this chunk: props and trees. The road is part of the ground mesh; grass blades are `grass-batch.ts`. */
+export function dressingDraws(chunk:DemoChunk, chunks:Iterable<DemoChunk>):DressingDraw[] {
 	const list = [...chunks];
 	const draws:DressingDraw[] = [];
 	for (const spot of planProps(list)) {

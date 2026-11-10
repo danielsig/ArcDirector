@@ -1,9 +1,9 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import type { Arc } from '../arc/types.js';
+import type { Arc } from '../arc/arc-types.js';
 import { buildCatalog, dummyEntity, SampleCache, type ExprEntity } from '../expr/index.js';
 import { VERB_THINK_SCORES, THINK_ABOUT_SCORE, THINK_BARE_SCORE, SimpleQueue, ThinkQueue, verbThinkScore, arcScore, thinkRecencyScale, withPriorityQueue } from './queue.js';
-import { DEFAULT_TRUE_SCORE } from '../expr/types.js';
+import { DEFAULT_TRUE_SCORE } from '../expr/expr-types.js';
 
 type Posed = ExprEntity & { x:number; z:number };
 

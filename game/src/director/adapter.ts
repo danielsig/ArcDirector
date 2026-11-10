@@ -1,6 +1,6 @@
 import { Time, type GameObject } from '@arc-director/kindling';
-import { SpeechQueue } from './speechQueue';
-import { ThinkShow } from './thinkShow';
+import { SpeechQueue } from './SpeechQueue';
+import { ThinkShow } from './ThinkShow';
 import {
 	ArcDirector,
 	BrowserProvider,
@@ -27,21 +27,21 @@ import {
 	Companion,
 	HearOnly,
 } from '../engine/components';
-import type { World } from '../engine/World';
-import type { HudAiLogEntry, HudChatLine } from '../ui/hudModel';
+import type { DemoWorld } from '../engine/demo-world';
+import type { HudAiLogEntry, HudChatLine } from '../ui/hud-model';
 import { prefs, setPrefs, type Prefs } from '../prefs';
-import { publishAiLog, resetAiLogSink, pushLog, logLook } from './aiLogSink';
-import { talkFace, canHearClearly, SPEECH_LIFE } from './talkAttend';
-import { YOU_SYMBOL } from './mapMarks';
-import { snapshotMap } from './mapView';
-import { WORLD_KNOWLEDGE } from './knowledge';
-import type { CharacterCtx, SceneHooks } from './types';
+import { publishAiLog, resetAiLogSink, pushLog, logLook } from './ai-log-sink';
+import { talkFace, canHearClearly, SPEECH_LIFE } from './talk-attend';
+import { YOU_SYMBOL } from './map-marks';
+import { snapshotMap } from './map-view';
+import { WORLD_KNOWLEDGE } from './game-knowledge';
+import type { CharacterCtx, SceneHooks } from './game-types';
 import { idOf, findObject, isLiving } from './names';
 import { kernelsOf, scanWorld } from './kernels';
 import { lookWorld, inventoryOf, followedCarry } from './perception';
 import { roomBounds, type RoomDef } from '../world/spawn';
-import { dropDown, verbGate } from './verbs';
-import { gameWorld } from './world';
+import { dropDown, verbGate } from './game-verbs';
+import { gameWorld } from './game-world';
 import { LM_STUDIO_ROOT, SKALDIC_LAYA, decisionModelOf, menuModel, showDownload, type SamplingSource } from './inference';
 import { HOSTED, defaultSystemOne } from './hosted';
 import { fightExprTags } from './fight';
@@ -51,7 +51,7 @@ import {
 	talkNames,
 	onSpoke,
 	noteAct,
-} from './playerTalk';
+} from './player-talk';
 
 export type { CharacterCtx, SceneHooks };
 
@@ -117,7 +117,7 @@ export function addXAIThinking<TCtx>(director:ArcDirector<TCtx>, id:string, p:Pr
 }
 
 export class GameHost {
-	public readonly world:World;
+	public readonly world:DemoWorld;
 	public readonly talk:TalkNet;
 	/** Bubbles and voices, one speaker at a time. */
 	public readonly speech:SpeechQueue;
@@ -145,7 +145,7 @@ export class GameHost {
 	private _nextTryTimestamp = 0;
 
 	constructor(
-		world:World,
+		world:DemoWorld,
 		chat:HudChatLine[],
 		log:HudAiLogEntry[],
 		opts:{

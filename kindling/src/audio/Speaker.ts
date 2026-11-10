@@ -1,6 +1,6 @@
 import { AudioSource } from './AudioSource.js';
 import { speech, voiceFor, type SpeechVoice } from './speech.js';
-import type { SfxPatch } from './types.js';
+import type { SfxPatch } from './audio-types.js';
 
 /**
  * An `AudioSource` that can also talk out loud. Whatever `voice` leaves out comes from

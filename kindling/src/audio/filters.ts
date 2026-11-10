@@ -1,5 +1,5 @@
 import { clamp } from '../core/math.js';
-import type { OverdriveFilter, ReverbFilter, Score, SoundFilter } from './types.js';
+import type { OverdriveFilter, ReverbFilter, Score, SoundFilter } from './audio-types.js';
 
 function unit(n:number):boolean {
 	return Number.isFinite(n) && n >= 0 && n <= 1;

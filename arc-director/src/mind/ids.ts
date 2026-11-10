@@ -1,8 +1,8 @@
-import { mapArgs, type Arc } from '../arc/types.js';
+import { mapArgs, type Arc } from '../arc/arc-types.js';
 import type { VerbRegistry } from '../arc/stock-verbs.js';
 import { lex } from '../expr/lex.js';
 import { lawGroup } from '../arc/laws.js';
-import type { NameBook } from '../character/names.js';
+import type { NameBook } from '../character/NameBook.js';
 
 /**
  * Arcs, laws, watches and sight focus are stored in ids. A mind's model reads and writes its own names

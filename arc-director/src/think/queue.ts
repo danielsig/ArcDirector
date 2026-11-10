@@ -1,6 +1,6 @@
-import type { Arc } from '../arc/types.js';
-import { VERB_THINK_SCORES, verbThinkScore, arcScore, thinkRecencyScale } from './score.js';
-import { SimpleQueue, type SimpleQueueOpts } from './simple.js';
+import type { Arc } from '../arc/arc-types.js';
+import { VERB_THINK_SCORES, verbThinkScore, arcScore, thinkRecencyScale } from './think-score.js';
+import { SimpleQueue, type SimpleQueueOpts } from './SimpleQueue.js';
 import { MindScheduler, type MindQueueOpts, type ThinkRow, type WithMindQueue } from './scheduler.js';
 
 export type ThinkQueueOpts = MindQueueOpts & {
@@ -74,7 +74,7 @@ export {
 	arcScore,
 	thinkRecencyScale,
 	waitUntilOf,
-} from './score.js';
+} from './think-score.js';
 export {
 	DEFAULT_BATCH_THINKS,
 	DEFAULT_BATCH_WAIT,
@@ -87,4 +87,4 @@ export {
 	type ThinkRow,
 	type WithMindQueue,
 } from './scheduler.js';
-export { SimpleQueue, type SimpleQueueOpts } from './simple.js';
+export { SimpleQueue, type SimpleQueueOpts } from './SimpleQueue.js';

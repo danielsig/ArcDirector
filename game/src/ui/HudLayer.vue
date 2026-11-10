@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { HudModel } from './hudModel';
+import type { HudModel } from './hud-model';
 import HudHearts from './HudHearts.vue';
 import HudGoals from './HudGoals.vue';
 import HudInspect from './HudInspect.vue';

@@ -4,8 +4,8 @@ import { doingOf } from '../arc/stock-verbs.js';
 import { formatSight, formatSightClauses, joinSightClauses, orderSightClauses } from './sight.js';
 import { groundAndFigure } from './ground.js';
 import { builtinStringifiers, basicPluralize } from './stringifiers.js';
-import type { SeenObject, Sight, RelationshipStringifier } from './types.js';
-import { formatInventory } from './formatInventory.js';
+import type { SeenObject, Sight, RelationshipStringifier } from './perception-types.js';
+import { formatInventory } from './format-inventory.js';
 import { sightSalience } from './salience.js';
 
 function seen(

@@ -1,7 +1,7 @@
 import { Transform } from './Transform.js';
 import { Component } from './Component.js';
-import { Time } from './Time.js';
-import type { ComponentInit, Constructor, WorldType } from './types.js';
+import { Time } from './time.js';
+import type { ComponentInit, Constructor, WorldType } from './core-types.js';
 
 let nextSerial = 1;
 

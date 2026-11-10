@@ -1,8 +1,8 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
-import { arcLines, bracketDepth, rootVerbs, thinkTime, thoughtTail, type ArcLine } from './arcText';
+import { arcLines, bracketDepth, rootVerbs, thinkTime, thoughtTail, type ArcLine } from './arc-text';
 import HudArcLine from './HudArcLine.vue';
-import { SLATE_HEIGHT, SLATE_WIDTH, type HudSlate } from './hudModel';
+import { SLATE_HEIGHT, SLATE_WIDTH, type HudSlate } from './hud-model';
 
 const props = defineProps<{
 	slate:HudSlate;

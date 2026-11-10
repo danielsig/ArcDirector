@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import type { MindEvent } from './types.js';
+import type { MindEvent } from './mind-types.js';
 import { TalkNet, type TalkMind } from './talk.js';
 
 function mind(id:string):TalkMind & { events:MindEvent[] } {

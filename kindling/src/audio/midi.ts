@@ -1,6 +1,6 @@
 import { filterProblems } from './filters.js';
 import { instrumentOf } from './instruments.js';
-import type { SoundFilter } from './types.js';
+import type { SoundFilter } from './audio-types.js';
 
 /** Empty list means the score is playable. */
 export function scoreProblems(score:ScoreLike):string[] {

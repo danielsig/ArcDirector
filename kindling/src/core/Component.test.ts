@@ -3,7 +3,7 @@ import { beforeEach, describe, it } from 'node:test';
 import { Component } from './Component.js';
 import { Game } from './Game.js';
 import { GameObject, resetAllocID } from './GameObject.js';
-import { resetTime, Time } from './Time.js';
+import { resetTime, Time } from './time.js';
 
 class Probe extends Component {
 	public static log:string[] = [];

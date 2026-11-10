@@ -1,5 +1,5 @@
 import { patchSeconds } from './synth.js';
-import type { SfxLayer, SfxPatch } from './types.js';
+import type { SfxLayer, SfxPatch } from './audio-types.js';
 
 /** How a character sounds when it talks. Every field is optional; see `DEFAULT_VOICE`. */
 export type SpeechVoice = {

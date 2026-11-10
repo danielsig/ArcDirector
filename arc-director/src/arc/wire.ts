@@ -1,8 +1,8 @@
 import { extractJson, isRecord } from '../json.js';
-import { ArcError, JOINS, SYMBOL_JOIN, isArc, isCountMap, type Arc, type Join, type Step, type StepArg } from './types.js';
+import { ArcError, JOINS, SYMBOL_JOIN, isArc, isCountMap, type Arc, type Join, type Step, type StepArg } from './arc-types.js';
 import { argBase, CHOOSE_VERB, GROUP_VERB, TEXT_ARG_KINDS, type VerbRegistry } from './stock-verbs.js';
 import { choicesOf } from './choose.js';
-import { formatArcBlocks, parseArcText } from './parse.js';
+import { formatArcBlocks, parseArcText } from './arc-parse.js';
 import { validateArc } from './validate.js';
 
 /**

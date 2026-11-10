@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, inject, ref, watch } from 'vue';
-import { fmtMem, modelLabel, type HudModel, type MenuPage } from './hudModel';
-import { sessionKey } from './sessionKey';
+import { fmtMem, modelLabel, type HudModel, type MenuPage } from './hud-model';
+import { sessionKey } from './session-key';
 import HudBench from './HudBench.vue';
 import HudDialog from './HudDialog.vue';
 import HudSwitch from './HudSwitch.vue';

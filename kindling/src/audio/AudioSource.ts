@@ -1,6 +1,6 @@
 import { Component } from '../core/Component.js';
 import type { LoopSrc } from './Audio.js';
-import type { SfxHandle, SfxOpts, SfxPatch } from './types.js';
+import type { SfxHandle, SfxOpts, SfxPatch } from './audio-types.js';
 
 let next = 0;
 

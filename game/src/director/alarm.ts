@@ -5,7 +5,7 @@ import { distXZ } from '../items/inventory';
 import { USE_RANGE } from '../items/pickup';
 import type { GameHost } from './adapter';
 import { findObject, idOf } from './names';
-import { showSpeech } from './playerTalk';
+import { showSpeech } from './player-talk';
 
 /** How long a cry keeps guards running, in seconds of game time. */
 const ALARM_LIFE = 24;

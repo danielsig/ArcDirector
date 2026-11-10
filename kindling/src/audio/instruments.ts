@@ -1,5 +1,5 @@
 import { bellHz, disconnectSoon, env, midiHz, noiseBurst, pluckHz, tAt } from './synth.js';
-import type { Voice } from './types.js';
+import type { Voice } from './audio-types.js';
 
 // Instruments: the registry scores play from, and the built-in ones. Each turns a note into Web
 // Audio nodes from the building blocks in `synth.ts`.

@@ -1,4 +1,4 @@
-import { parse } from './parse.js';
+import { parse } from './expr-parse.js';
 import {
 	ABSENT,
 	asBool,
@@ -16,7 +16,7 @@ import {
 	type ExprEntity,
 	type ExprVal,
 	type NativeFn,
-} from './types.js';
+} from './expr-types.js';
 
 function listCapOf(ctx:EvalCtx):number {
 	return ctx.catalog.listCap ?? LIST_CAP;

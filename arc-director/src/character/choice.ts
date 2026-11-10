@@ -1,8 +1,8 @@
 import { evaluate } from '../expr/eval.js';
-import { entityName, type Catalog, type ExprEntity } from '../expr/types.js';
+import { entityName, type Catalog, type ExprEntity } from '../expr/expr-types.js';
 import { argBase, type VerbRegistry } from '../arc/stock-verbs.js';
-import { formatArc } from '../arc/parse.js';
-import { eachStep, firstStep, isArc, isCountMap, verbsInside, type Arc, type Step } from '../arc/types.js';
+import { formatArc } from '../arc/arc-parse.js';
+import { eachStep, firstStep, isArc, isCountMap, verbsInside, type Arc, type Step } from '../arc/arc-types.js';
 import type { LastChoice } from '../arc/run.js';
 
 /** What a System One model reads before it picks: who is choosing, what it is doing, and who is nearest. */

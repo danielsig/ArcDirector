@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
-import type { GoalColor, HudModel } from './hudModel';
+import type { GoalColor, HudModel } from './hud-model';
 import HudBurst from './HudBurst.vue';
 
 const props = defineProps<{

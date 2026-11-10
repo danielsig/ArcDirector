@@ -7,7 +7,7 @@ import { Speaker } from './Speaker.js';
 import { scoreProblems } from './midi.js';
 import { midiHz, pitched, varied } from './synth.js';
 import { distanceGain, forwardXZ, heardAt } from './spatial.js';
-import type { Score } from './types.js';
+import type { Score } from './audio-types.js';
 import { Game } from '../core/Game.js';
 import { GameObject } from '../core/GameObject.js';
 import { World } from '../core/World.js';

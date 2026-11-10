@@ -8,7 +8,7 @@ import {
 	type SlotFill,
 	Vitals,
 } from '../engine/components';
-import { Container } from './components';
+import { Container } from './item-components';
 import { isBackpack, type ItemInstance } from './instance';
 
 export function compactName(s:string):string {

@@ -10,12 +10,12 @@ import SceneBackdrop from './ui/SceneBackdrop.vue';
 import InferencePicker from './ui/InferencePicker.vue';
 import MindMenu from './ui/MindMenu.vue';
 import { inferenceSetup } from './director/inference';
-import { emptyHud } from './ui/hudModel';
-import { sessionKey } from './ui/sessionKey';
+import { emptyHud } from './ui/hud-model';
+import { sessionKey } from './ui/session-key';
 import type { Session } from './engine/Session';
 import { SCENES } from './data/scenes';
-import { clearURLView } from './engine/urlView';
-import { preloadArt } from './render/preloadArt';
+import { clearURLView } from './engine/url-view';
+import { preloadArt } from './render/preload-art';
 import { startMenuAudio, type MenuAudioHandle } from './audio/menu';
 import { prefs, setMusicMuted, watchPrefs } from './prefs';
 

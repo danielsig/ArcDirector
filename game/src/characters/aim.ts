@@ -1,7 +1,7 @@
 import { type GameObject } from '@arc-director/kindling';
 import { Bookshelf, Door, Flammable, Furniture, HumanBody, Inscription, Lock, Vitals } from '../engine/components';
-import type { World } from '../engine/World';
-import { Pickupable } from '../items/components';
+import type { DemoWorld } from '../engine/demo-world';
+import { Pickupable } from '../items/item-components';
 import { distXZ } from '../items/inventory';
 import { USE_RANGE } from '../items/pickup';
 
@@ -12,7 +12,7 @@ const AIM_WIDTH = 2;
  * The living person `character` aims at along `forward` (flat, unit length) within `range`: the
  * one nearest the line straight ahead, at most {@link AIM_WIDTH} off it. Null when no one is.
  */
-export function aimAlong(world:World, character:GameObject, forward:{ x:number; z:number }, range:number):GameObject | null {
+export function aimAlong(world:DemoWorld, character:GameObject, forward:{ x:number; z:number }, range:number):GameObject | null {
 	const p = character.transform.position;
 	let best:GameObject | null = null;
 	let bestOff = AIM_WIDTH;
@@ -31,7 +31,7 @@ export function aimAlong(world:World, character:GameObject, forward:{ x:number; 
 	return best;
 }
 
-export function aimTarget(world:World, character:GameObject):GameObject | null {
+export function aimTarget(world:DemoWorld, character:GameObject):GameObject | null {
 	const hit = world.groundHit;
 	let best:GameObject | null = null;
 	let bestScore = Infinity;

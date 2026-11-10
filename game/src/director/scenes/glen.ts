@@ -2,11 +2,11 @@ import { Time, type GameObject } from '@arc-director/kindling';
 import { ArcDirector, type CharacterSpec, type Kit } from 'arc-director';
 import { Belly } from '../../engine/Belly';
 import { Bridge, Celebrating, HumanBody } from '../../engine/components';
-import type { World } from '../../engine/World';
-import { Item } from '../../items/components';
+import type { DemoWorld } from '../../engine/demo-world';
+import { Item } from '../../items/item-components';
 import type { GameHost } from '../adapter';
-import { BODY_VERBS, BUILDING_VERB_INSTRUCTIONS, doClose, doRead, FISH_VERB, GAME_VERBS, REST_VERBS } from '../verbs';
-import { withReceived, type CharacterCtx, type SceneGoals } from '../types';
+import { BODY_VERBS, BUILDING_VERB_INSTRUCTIONS, doClose, doRead, FISH_VERB, GAME_VERBS, REST_VERBS } from '../game-verbs';
+import { withReceived, type CharacterCtx, type SceneGoals } from '../game-types';
 import { compactName, distXZ, findCarried, itemMatchesName, listCarried } from '../../items/inventory';
 import { coinsOf } from '../../items/wallet';
 import { worthOf } from '../../items/defs';
@@ -158,7 +158,7 @@ const FEE = 10;
 
 
 /** What BridgeKeeper holds toward the fee, in gold: coins, and goods at their worth. */
-function feeHeld(world:World):number {
+function feeHeld(world:DemoWorld):number {
 	const keeper = world.findByID(BRIDGE_KEEPER.id);
 	if (!keeper) {
 		return 0;
@@ -170,12 +170,12 @@ function feeHeld(world:World):number {
 	return coinsOf(keeper) + goods;
 }
 
-function bridgeFeePaid(world:World):boolean {
+function bridgeFeePaid(world:DemoWorld):boolean {
 	return feeHeld(world) >= FEE;
 }
 
 /** Lowered, or swinging down. */
-function bridgeOpen(world:World):boolean {
+function bridgeOpen(world:DemoWorld):boolean {
 	let open = false;
 	world.forEachComponent(Bridge, (span) => {
 		open ||= span.open;

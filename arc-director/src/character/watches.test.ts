@@ -15,14 +15,14 @@ import {
 import { FakeProvider } from '../inference/fake.js';
 import { ThinkQueue } from '../think/queue.js';
 import { soloCharacter, type SoloOptions } from '../testing/solo.js';
-import type { Character, CharacterJSON } from '../character/character.js';
+import type { Character, CharacterJSON } from './Character.js';
 
 /** A saved character, restored on its own. */
 function restore<TCtx>(json:CharacterJSON, deps:Omit<SoloOptions<TCtx>, 'id'>) {
 	return soloCharacter<TCtx>({ ...deps, id: json.id }, json);
 }
-import type { WatchInput } from './types.js';
-import type { ArcFormat } from '../mind/types.js';
+import type { WatchInput } from './character-types.js';
+import type { ArcFormat } from '../mind/mind-types.js';
 
 /** Every stock verb: registered, and in the kit. */
 function stockVerbs():{ verbs:VerbRegistry; kit:{ verbs:readonly string[] } } {

@@ -1,12 +1,12 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import type { ArcDirector } from '../director/director.js';
+import type { ArcDirector } from '../director/ArcDirector.js';
 import { FakeProvider } from '../inference/fake.js';
 import type { ChatRequest } from '../inference/provider.js';
 import { ABILITIES, abilityHelp } from './combat.js';
 import { loudnessFor } from '../perception/hearing.js';
 import { idleScenario, playScenario, type Scenario, type SceneCtx } from './play.js';
-import { SceneWorld, type SceneSpot } from './world.js';
+import { SceneWorld, type SceneSpot } from './scene-world.js';
 
 /** A model on its own server, writing Arc text; it can see, so `see_map` is offered. `chat` answers each request. */
 function model(chat:(req:ChatRequest)=>string):(director:ArcDirector<SceneCtx>)=>unknown {

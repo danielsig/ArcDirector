@@ -1,5 +1,5 @@
-import { RESERVED_TAGS } from '../world/types.js';
-import type { SeenObject } from './types.js';
+import { RESERVED_TAGS } from '../world/world-types.js';
+import type { SeenObject } from './perception-types.js';
 
 export function defaultLandmarkTier(obj:{ tags:string[]; movable?:boolean }):number {
 	if (obj.movable === false || obj.tags.includes(RESERVED_TAGS.landmark)) {

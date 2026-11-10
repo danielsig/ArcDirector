@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { parseArc } from '../arc/wire.js';
 import { VerbRegistry, registerStockVerbs } from '../arc/stock-verbs.js';
-import { registerStockCollectiveVerbs } from '../collective/verbs.js';
+import { registerStockCollectiveVerbs } from '../collective/collective-verbs.js';
 import { stablePrefix, volatileBlock, conversationBlock, CONVERSATION_HEADER, seeMapHint, arcRepairHint } from './prompt.js';
 import { docsFor } from '../arc/schema.js';
 

@@ -4,14 +4,14 @@ import {
 	HumanBody,
 	type BodySlot,
 } from '../engine/components';
-import type { World } from '../engine/World';
-import { spawnWorldItem } from '../world/spawnItem';
+import type { DemoWorld } from '../engine/demo-world';
+import { spawnWorldItem } from '../world/spawn-item';
 import { isItemFill, isOccupied, removeFromBags, slotItem, tryInsert } from './inventory';
 import { isBackpack, type ItemInstance } from './instance';
 
 const HELD_SLOTS:BodySlot[] = ['hands.left.held', 'hands.right.held'];
 
-function displace(character:GameObject, item:ItemInstance, world:World):void {
+function displace(character:GameObject, item:ItemInstance, world:DemoWorld):void {
 	if (tryInsert(character, item)) {
 		return;
 	}
@@ -43,7 +43,7 @@ function legalSlots(item:ItemInstance):BodySlot[] {
 	return names.filter((s):s is BodySlot => (BODY_SLOTS as readonly string[]).includes(s));
 }
 
-export function unequipSlot(character:GameObject, slot:BodySlot, world:World):void {
+export function unequipSlot(character:GameObject, slot:BodySlot, world:DemoWorld):void {
 	const human = character.getComponent(HumanBody);
 	if (!human) {
 		return;
@@ -57,7 +57,7 @@ export function unequipSlot(character:GameObject, slot:BodySlot, world:World):vo
 export function equipItem(
 	character:GameObject,
 	item:ItemInstance,
-	world:World,
+	world:DemoWorld,
 	named?:BodySlot,
 ):string | null {
 	const human = character.getComponent(HumanBody);
@@ -113,7 +113,7 @@ export function itemInHeldSlot(character:GameObject, item:ItemInstance):boolean 
 }
 
 /** Puts `item` back from hand, or takes it from the bags in hand. Says what happened. */
-export function toggleHeld(character:GameObject, item:ItemInstance, world:World):string {
+export function toggleHeld(character:GameObject, item:ItemInstance, world:DemoWorld):string {
 	const human = character.getComponent(HumanBody);
 	const held = HELD_SLOTS.find((slot) => human && slotItem(human, slot) === item);
 	if (held) {

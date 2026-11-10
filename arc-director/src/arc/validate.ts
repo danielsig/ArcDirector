@@ -8,7 +8,7 @@ import {
 	type Arc,
 	type CountMap,
 	type Step,
-} from './types.js';
+} from './arc-types.js';
 import { argBase, CHOOSE_VERB, GROUP_VERB, TEXT_ARG_KINDS, type VerbRegistry } from './stock-verbs.js';
 import { isChoiceName, MAX_CHOICES } from './choose.js';
 

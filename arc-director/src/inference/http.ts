@@ -29,12 +29,12 @@ import {
 	resolveThoughtPrefill,
 	withAssistantPrefill,
 	type ApplyPromptTemplate,
-} from './assistantThink.js';
+} from './assistant-think.js';
 import {
 	pickBestThread,
 	rememberThread,
 	type ThreadSnapshot,
-} from './threadCache.js';
+} from './thread-cache.js';
 
 export const REASONING_EFFORTS = ['low', 'medium', 'xhigh'] as const;
 export type ReasoningEffort = typeof REASONING_EFFORTS[number];

@@ -4,7 +4,8 @@
 	"private": true,
 	"type": "module",
 	"scripts": {
-		"lint": "eslint .",
+		"lint": "node lint-names.mjs && eslint .",
+		"lint:names": "node lint-names.mjs",
 		"lint:md": "markdownlint-cli2",
 		"test": "pnpm --filter arc-director test && pnpm --filter @arc-director/control test && pnpm --filter @arc-director/game test",
 		"fixture": "pnpm --filter arc-director fixture"

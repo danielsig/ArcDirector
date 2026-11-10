@@ -1,4 +1,4 @@
-import type { SfxLayer, SfxOpts, SfxPatch, Vowel } from './types.js';
+import type { SfxLayer, SfxOpts, SfxPatch, Vowel } from './audio-types.js';
 
 /** Hz of MIDI note `midi` (69 is A4, 440 Hz). */
 export function midiHz(midi:number):number {

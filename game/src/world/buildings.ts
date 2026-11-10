@@ -1,7 +1,7 @@
-import type { Chunk, ChunkEntity } from './Chunk';
+import type { DemoChunk, ChunkEntity } from './demo-chunk';
 import { CELL_SIZE } from './constants';
-import type { RoofStyle } from './decodeGlyphChunk';
-import { THIN_WALLS, WALL_THICKNESS } from './thinWall';
+import type { RoofStyle } from './decode-glyph-chunk';
+import { THIN_WALLS, WALL_THICKNESS } from './thin-wall';
 
 /** Where a door is (its cell's world center) and which way is out (`dx`, `dz`, one of them ±1). */
 export type DoorAnchor = { x:number; z:number; dx:number; dz:number };
@@ -15,7 +15,7 @@ export type GroundBox = { minX:number; maxX:number; minZ:number; maxZ:number };
  */
 export type Building = {
 	name:string;
-	chunk:Chunk;
+	chunk:DemoChunk;
 	door:ChunkEntity;
 	roof:RoofStyle;
 	chimney:boolean;
@@ -29,7 +29,7 @@ export type Building = {
 const SIDES = [[1, 0], [-1, 0], [0, 1], [0, -1]] as const;
 
 /** Every house on `chunks`: each door set in thin walls, with the walls joined to it. */
-export function findBuildings(chunks:Iterable<Chunk>):Building[] {
+export function findBuildings(chunks:Iterable<DemoChunk>):Building[] {
 	const out:Building[] = [];
 	for (const chunk of chunks) {
 		const doors = chunk.entities.filter((e) => e.def === 'door' || e.def === 'door_flipped');

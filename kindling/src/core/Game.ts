@@ -1,6 +1,6 @@
 import { World } from './World.js';
 import { updateEffects } from '../render/effects.js';
-import { Time, MAX_DT } from './Time.js';
+import { Time, MAX_DT } from './time.js';
 import { dispatch, flushStart } from './dispatch.js';
 import { stepPhysics } from './physics.js';
 import { Renderer } from '../render/Renderer.js';

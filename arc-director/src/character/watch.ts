@@ -1,5 +1,5 @@
 import { isRecord } from '../json.js';
-import type { Watches } from './types.js';
+import type { Watches } from './character-types.js';
 
 export function watchKey(name:string):string {
 	return name.trim().toLowerCase();

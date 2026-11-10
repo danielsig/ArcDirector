@@ -1,7 +1,7 @@
 import type { PathStep, RouteWorld, Vec } from 'arc-director';
 import type { GameObject } from '@arc-director/kindling';
 import { Barrier, HumanBody } from '../engine/components';
-import type { World } from '../engine/World';
+import type { DemoWorld } from '../engine/demo-world';
 import { CELL_SIZE } from './constants';
 import { stairUphill } from './stairs';
 
@@ -13,12 +13,12 @@ const EYE_HEIGHT = 1.5;
 /** The eight steps to the cells around one, clockwise from east. */
 const NEIGHBORS = [[1, 0], [1, 1], [0, 1], [-1, 1], [-1, 0], [-1, -1], [0, -1], [1, -1]];
 
-function characterIn(world:World, tx:number, tz:number, except?:GameObject):GameObject | undefined {
+function characterIn(world:DemoWorld, tx:number, tz:number, except?:GameObject):GameObject | undefined {
 	return world.objectsInTile(tx, tz).find((go) => go !== except && go.getComponent(HumanBody)?.enabled);
 }
 
 /** Whether `body` would run into anything standing in the middle of cell `tx`, `tz`. */
-function blockedCell(world:World, body:GameObject, tx:number, tz:number):boolean {
+function blockedCell(world:DemoWorld, body:GameObject, tx:number, tz:number):boolean {
 	const { x, z } = world.tileCenter(tx, tz);
 	return world.blocker(body, x, z) !== undefined;
 }
@@ -27,7 +27,7 @@ function blockedCell(world:World, body:GameObject, tx:number, tz:number):boolean
  * A stair is a step only along its climb. The sides are solid, so a route that aims at them leaves a body stuck
  * against the face.
  */
-function alongClimb(world:World, a:Vec, b:Vec):boolean {
+function alongClimb(world:DemoWorld, a:Vec, b:Vec):boolean {
 	const from = world.tileCoordAt(a[0], a[1]);
 	const to = world.tileCoordAt(b[0], b[1]);
 	const dx = to.tx - from.tx;
@@ -50,7 +50,7 @@ function alongClimb(world:World, a:Vec, b:Vec):boolean {
  * The step `body` takes from `a` into the next cell, to `b`: none where it would run into something standing there,
  * or squeeze past a corner it would run into. What stops it there and can be cleared (a `Barrier`) says how.
  */
-function walk(world:World, body:GameObject, a:Vec, b:Vec):PathStep | undefined {
+function walk(world:DemoWorld, body:GameObject, a:Vec, b:Vec):PathStep | undefined {
 	if (!alongClimb(world, a, b)) {
 		return undefined;
 	}
@@ -68,7 +68,7 @@ function walk(world:World, body:GameObject, a:Vec, b:Vec):PathStep | undefined {
 }
 
 /** Whether cell `tx`, `tz` stops `what`: solid ground but water, whatever stands there taller than the eyes, and, for light, a body. */
-function stops(world:World, what:'light' | 'sound', tx:number, tz:number):boolean {
+function stops(world:DemoWorld, what:'light' | 'sound', tx:number, tz:number):boolean {
 	const { x, z } = world.tileCenter(tx, tz);
 	const hit = world.blocker(null, x, z, { above: EYE_HEIGHT });
 	return (hit === 'terrain' ? world.tileAtWorld(x, z)?.def !== 'water' : !!hit) || (what === 'light' && !!characterIn(world, tx, tz));
@@ -80,7 +80,7 @@ type Cell = { tx:number; tz:number };
  * Grid DDA from `a` to `b`: each step from one cell to the next, to `pass`, with the corner cells of a diagonal step,
  * until one does not pass.
  */
-function alongLine(world:World, a:{ x:number; z:number }, b:{ x:number; z:number }, pass:(from:Cell, to:Cell, corners:Cell[])=>boolean):boolean {
+function alongLine(world:DemoWorld, a:{ x:number; z:number }, b:{ x:number; z:number }, pass:(from:Cell, to:Cell, corners:Cell[])=>boolean):boolean {
 	const start = world.tileCoordAt(a.x, a.z);
 	const end = world.tileCoordAt(b.x, b.z);
 	const dx = b.x - a.x;
@@ -122,14 +122,14 @@ function alongLine(world:World, a:{ x:number; z:number }, b:{ x:number; z:number
 }
 
 /** Whether `what` goes straight from `a` to `b`. Their own cells never stop it, so no one hides themselves or the one looking. */
-export function lineClear(world:World, what:'light' | 'sound', a:{ x:number; z:number }, b:{ x:number; z:number }):boolean {
+export function lineClear(world:DemoWorld, what:'light' | 'sound', a:{ x:number; z:number }, b:{ x:number; z:number }):boolean {
 	const end = world.tileCoordAt(b.x, b.z);
 	const solid = ({ tx, tz }:Cell) => stops(world, what, tx, tz);
 	return alongLine(world, a, b, (_, to, corners) => !corners.some(solid) && ((to.tx === end.tx && to.tz === end.tz) || !solid(to)));
 }
 
 /** Whether `body` could walk straight from `a` to `b`, every step open: no wall, no web, no shut door on the line. */
-export function walkClear(world:World, body:GameObject, a:{ x:number; z:number }, b:{ x:number; z:number }):boolean {
+export function walkClear(world:DemoWorld, body:GameObject, a:{ x:number; z:number }, b:{ x:number; z:number }):boolean {
 	const center = ({ tx, tz }:Cell):Vec => {
 		const { x, z } = world.tileCenter(tx, tz);
 		return [x, z];
@@ -145,7 +145,7 @@ export function walkClear(world:World, body:GameObject, a:{ x:number; z:number }
  * to another. A stair is a neighbor only along its climb, not off the sides. A body steps where it would run into
  * nothing; light and sound go straight over what stands lower than the eyes, and light stops at bodies.
  */
-export function cellWays(world:World):RouteWorld<GameObject> {
+export function cellWays(world:DemoWorld):RouteWorld<GameObject> {
 	return {
 		getNeighbors: (point) => {
 			const { tx, tz } = world.tileCoordAt(point[0], point[1]);
@@ -165,7 +165,7 @@ export function cellWays(world:World):RouteWorld<GameObject> {
 }
 
 /** Whether a route can bring `body` to `x`, `z`: it has an open step onto it from around it. */
-export function canStand(world:World, body:GameObject, x:number, z:number):boolean {
+export function canStand(world:DemoWorld, body:GameObject, x:number, z:number):boolean {
 	const ways = cellWays(world);
 	return ways.getNeighbors([x, z]).some((from) => {
 		const step = ways.canPass(body, from, [x, z]);
@@ -181,7 +181,7 @@ const STANDABLE_RINGS = 2;
  * that it has. For spots worked out by geometry (a rank line, a guard's screen), which may fall in a wall.
  * `point` when none is near.
  */
-export function standableNear(world:World, body:GameObject, point:{ x:number; z:number }):{ x:number; z:number } {
+export function standableNear(world:DemoWorld, body:GameObject, point:{ x:number; z:number }):{ x:number; z:number } {
 	const standable = (x:number, z:number) => canStand(world, body, x, z);
 	if (standable(point.x, point.z)) {
 		return point;

@@ -1,16 +1,16 @@
-import { MeshRenderer } from '../engine/MeshRenderer';
-import type { World } from '../engine/World';
+import { DemoMeshRenderer } from '../engine/demo-mesh-renderer';
+import type { DemoWorld } from '../engine/demo-world';
 import { SFX } from './sfx';
-import { showsWater } from '../world/water';
+import { showsWater } from '../world/sand';
 
 const RIVER_HEAR = 7;
 const FALLS_HEAR = 12;
 const FALLS_CLEAR = 2.2;
 
 /** Keep looping river/falls beds in range of the listener. */
-export function syncWaterAudio(world:World, px:number, pz:number):void {
+export function syncWaterAudio(world:DemoWorld, px:number, pz:number):void {
 	const falls:{ x:number; z:number; id:string }[] = [];
-	world.forEachComponent(MeshRenderer, (mesh, go) => {
+	world.forEachComponent(DemoMeshRenderer, (mesh, go) => {
 		if (mesh.meshID !== 'waterfall') {
 			return;
 		}
@@ -49,7 +49,7 @@ export function syncWaterAudio(world:World, px:number, pz:number):void {
 }
 
 function nearestRiver(
-	world:World,
+	world:DemoWorld,
 	px:number,
 	pz:number,
 	falls:{ x:number; z:number }[],

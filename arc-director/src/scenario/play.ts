@@ -1,20 +1,20 @@
 import { STOCK_TRADE_VERBS, STOCK_VERBS } from '../arc/stock-verbs.js';
-import { STOCK_COLLECTIVE_VERBS, STOCK_FORMATION_VERBS } from '../collective/verbs.js';
-import type { ArcResult, StepArg } from '../arc/types.js';
-import { ArcDirector } from '../director/director.js';
+import { STOCK_COLLECTIVE_VERBS, STOCK_FORMATION_VERBS } from '../collective/collective-verbs.js';
+import type { ArcResult, StepArg } from '../arc/arc-types.js';
+import { ArcDirector } from '../director/ArcDirector.js';
 import type { MemoryDraft } from '../memory/store.js';
 import type { KnowledgeEntry } from '../mind/knowledge.js';
 import { RTS_COMMANDER_VERBS } from '../rts/rts.js';
-import { STOCK_ECONOMY_VERBS, STOCK_UNIT_VERBS } from '../rts/verbs.js';
+import { STOCK_ECONOMY_VERBS, STOCK_UNIT_VERBS } from '../rts/rts-verbs.js';
 import type { SearchSpec } from '../search/search.js';
 import { settleDeal } from '../world/deal.js';
 import type { Sound } from '../perception/hearing.js';
 import type { Offer } from '../world/offers.js';
-import type { Outcome, Vec } from '../world/types.js';
+import type { Outcome, Vec } from '../world/world-types.js';
 import { nextTurn } from '../turn.js';
 import { ABILITIES, abilityHelp, FIGHTERS, FIGHT_VERBS } from './combat.js';
-import { SceneRTS } from './rts.js';
-import { SceneWorld, type Scene, type SceneRules, type SceneSpot } from './world.js';
+import { SceneRTS } from './SceneRTS.js';
+import { SceneWorld, type Scene, type SceneRules, type SceneSpot } from './scene-world.js';
 
 /** What a director staging a scene knows of each character: who it is. */
 export type SceneCtx = { id:string };

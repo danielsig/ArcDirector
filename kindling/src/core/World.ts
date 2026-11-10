@@ -1,12 +1,12 @@
 import { Input } from './Input.js';
-import { Time } from './Time.js';
+import { Time } from './time.js';
 import { Audio } from '../audio/Audio.js';
 import * as THREE from 'three';
 import { BoxCollider } from './BoxCollider.js';
 import { blockerAt, type BlockerOpts } from './physics.js';
 import type { Component } from './Component.js';
 import type { GameObject } from './GameObject.js';
-import type { ChunkType, Constructor, TileType } from './types.js';
+import type { ChunkType, Constructor, TileType } from './core-types.js';
 
 export type TerrainSample = {
 	/** Discrete tile height (stairs / cliffs). */

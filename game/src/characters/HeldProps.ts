@@ -1,7 +1,7 @@
 import { MeshRenderer, Time, closeHand, create, holdInHand, type Grip, type Hand, Component } from '@arc-director/kindling';
 import * as THREE from 'three';
 import { HumanBody } from '../engine/components';
-import { bindMesh } from '../engine/MeshRenderer';
+import { bindMesh } from '../engine/demo-mesh-renderer';
 import { Order } from '../engine/order';
 import { slotItem } from '../items/inventory';
 import type { ItemInstance } from '../items/instance';

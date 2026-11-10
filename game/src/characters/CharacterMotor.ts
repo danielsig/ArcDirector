@@ -2,7 +2,7 @@ import { lerpAngle, yawToward, Component } from '@arc-director/kindling';
 import { Belly } from '../engine/Belly';
 import { RigidBody, Appearance, Vitals } from '../engine/components';
 import { Order } from '../engine/order';
-import { facePeer } from '../director/talkAttend';
+import { facePeer } from '../director/talk-attend';
 import { TILE_HEIGHT } from '../world/constants';
 import { cueAt, stepKind } from '../audio/cue';
 import { WALK_STRIDE } from './CharacterAnimation';

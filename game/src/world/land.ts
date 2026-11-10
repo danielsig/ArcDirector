@@ -1,7 +1,7 @@
 import { chunkBounds } from '@arc-director/kindling';
-import type { Chunk, Tile } from './Chunk';
+import type { DemoChunk, Tile } from './demo-chunk';
 import { CELL_SIZE } from './constants';
-import { showsWater } from './water';
+import { showsWater } from './sand';
 
 /**
  * Landforms and the land beyond the map. A map has no walls at the end of the world: past each edge tile the
@@ -70,7 +70,7 @@ export type Outskirts = {
 };
 
 /** The outskirts of the map made of `chunks`, `reach` meters out. */
-export function planOutskirts(chunks:Iterable<Chunk>, ground:Surface, heights:OutskirtHeights = {}, reach = 100):Outskirts {
+export function planOutskirts(chunks:Iterable<DemoChunk>, ground:Surface, heights:OutskirtHeights = {}, reach = 100):Outskirts {
 	const list = [...chunks];
 	const map = chunkBounds(list) ?? { minX: 0, maxX: 0, minZ: 0, maxZ: 0 };
 	const cols = Math.round((map.maxX - map.minX) / CELL_SIZE);

@@ -1,0 +1,48 @@
+import type { Arc } from '../arc/arc-types.js';
+import { verbThinkScore, arcScore } from './think-score.js';
+import { MindScheduler, type MindQueueOpts, type ThinkRow } from './scheduler.js';
+
+export type SimpleQueueOpts = MindQueueOpts;
+
+/** First come, first served. Watches still wake; they do not jump the line. */
+export class SimpleQueue extends MindScheduler {
+	public override rankScore(mindID:string, raw:number):number {
+		return -(this.minds.get(mindID)?.seq ?? 0);
+	}
+
+	protected override insert(row:ThinkRow):void {
+		if (this.rows.some((r) => r.mindID === row.mindID)) {
+			return;
+		}
+		const mind = this.ensure(row.mindID);
+		mind.seq = this.nextSeq;
+		this.nextSeq += 1;
+		this.rows.push(row);
+	}
+
+	protected override prune():void {
+		const first = new Map<string, ThinkRow>();
+		for (const row of this.rows) {
+			if (!first.has(row.mindID)) {
+				first.set(row.mindID, row);
+			}
+		}
+		this.rows = [...first.values()];
+	}
+
+	protected override order():void {
+		this.rows.sort((a, b) => {
+			const sa = this.minds.get(a.mindID)?.seq ?? 0;
+			const sb = this.minds.get(b.mindID)?.seq ?? 0;
+			return sa - sb;
+		});
+	}
+
+	protected override verbScore(verb:string, ok:boolean):number {
+		return verbThinkScore(verb, ok);
+	}
+
+	protected override arcScore(arc:Arc, ok:boolean):number {
+		return arcScore(arc, ok);
+	}
+}

@@ -462,7 +462,7 @@ await registerGltf('tri', '/triangle.gltf');
 
 `MeshRenderer` uses `create(id)` and `meshReady(id)`. `registerGltf` is async, and the renderer keeps retrying until the factory exists.
 
-**Toon models.** `scripts/buildModels.mjs` turns a folder of Tripo GLBs into slim game GLBs plus one shared library of animation clips (`clips.glb`). It also rigs bows and birds that come without a rig. `registerToonModel(id, url, { height, brightness, bands })` loads one model (a character or a prop), and `registerToonClips(url)` loads the clip library. Each `MeshRenderer` instance is a skinned clone with `ToonMaterial`s, facing −Z.
+**Toon models.** `scripts/build-models.mjs` turns a folder of Tripo GLBs into slim game GLBs plus one shared library of animation clips (`clips.glb`). It also rigs bows and birds that come without a rig. `registerToonModel(id, url, { height, brightness, bands })` loads one model (a character or a prop), and `registerToonClips(url)` loads the clip library. Each `MeshRenderer` instance is a skinned clone with `ToonMaterial`s, facing −Z.
 
 `Animator` plays clips on it, and `toonClip` fits library clips to each body. Every frame starts from the clip's pose, so bones you pose on top never pile up. After the clip, every frame, you can:
 

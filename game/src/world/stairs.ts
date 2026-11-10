@@ -1,11 +1,11 @@
 import type { ChunkBounds } from '@arc-director/kindling';
-import type { Chunk } from './Chunk';
+import type { DemoChunk } from './demo-chunk';
 
 /** How far a stair's side reaches in from the cell edge. A body stops on that face. */
 const SIDE = 0.16;
 
 /** Uphill neighbor of a stair cell: the floor at this height, else a higher flight, else away from a lower one. */
-export function stairUphill(chunk:Chunk, lx:number, lz:number):{ dx:number; dz:number } {
+export function stairUphill(chunk:DemoChunk, lx:number, lz:number):{ dx:number; dz:number } {
 	const self = chunk.tile(lx, lz);
 	const dirs = [{ dx: 0, dz: -1 }, { dx: 0, dz: 1 }, { dx: 1, dz: 0 }, { dx: -1, dz: 0 }];
 	if (!self) {
@@ -33,7 +33,7 @@ export function stairUphill(chunk:Chunk, lx:number, lz:number):{ dx:number; dz:n
 }
 
 /** The two long faces of a stair cell, kept back from the foot and the landing so a body can walk on and off. */
-export function stairSides(chunk:Chunk, lx:number, lz:number):ChunkBounds[] {
+export function stairSides(chunk:DemoChunk, lx:number, lz:number):ChunkBounds[] {
 	const up = stairUphill(chunk, lx, lz);
 	const s = chunk.cellSize;
 	const x0 = chunk.worldOriginX() + lx * s;

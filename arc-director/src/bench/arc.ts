@@ -1,8 +1,8 @@
-import { ArcDirector } from '../director/director.js';
+import { ArcDirector } from '../director/ArcDirector.js';
 import { ABILITIES, FIGHTERS } from '../scenario/combat.js';
 import { idleScenario, playScenario, SCENE_TICK, type Scenario, type SceneCtx } from '../scenario/play.js';
-import { THEM, type SceneWorld } from '../scenario/world.js';
-import { runBench, type BenchLevel, type BenchOpts, type BenchOutcome, type BenchScore, type Timer } from './score.js';
+import { THEM, type SceneWorld } from '../scenario/scene-world.js';
+import { runBench, type BenchLevel, type BenchOpts, type BenchOutcome, type BenchScore, type Timer } from './bench-score.js';
 
 /**
  * One moment with a goal to reach, as a {@link Scenario}. The bench plays it as the game would ({@link playScenario}):

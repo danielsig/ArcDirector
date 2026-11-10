@@ -1,7 +1,7 @@
 import type { JsonSchema } from '../json.js';
 import { namesWord } from '../text.js';
-import { JOINS } from './types.js';
-import { STOCK_COLLECTIVE_VERB_DEFS } from '../collective/verbs.js';
+import { JOINS } from './arc-types.js';
+import { STOCK_COLLECTIVE_VERB_DEFS } from '../collective/collective-verbs.js';
 import { argBase, CHOOSE_VERB, GROUP_VERB, STOCK_VERB_DEFS, type VerbArgKind, type VerbDef, type VerbRegistry, type VerbSpec } from './stock-verbs.js';
 
 function ref(name:string):JsonSchema {

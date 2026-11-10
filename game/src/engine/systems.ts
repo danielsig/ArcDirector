@@ -1,16 +1,16 @@
 import { ChunkStreamer, chunkBounds, type Renderer, Time, Component } from '@arc-director/kindling';
 import { Order } from './order';
-import { patchGoals, patchInspect, patchHud, patchInfer, patchSlates, patchThinks, statusLabels, type Overheads } from './patchHud';
-import { syncHeldTorchLight } from '../items/heldLight';
+import { patchGoals, patchInspect, patchHud, patchInfer, patchSlates, patchThinks, statusLabels, type Overheads } from './patch-hud';
+import { syncHeldTorchLight } from '../items/held-light';
 import type { GameHost } from '../director/adapter';
-import { WorldPresent } from '../render/present';
+import { WorldPresent } from '../render/WorldPresent';
 import type { OutskirtHeights, Surface } from '../world/land';
-import type { HudModel } from '../ui/hudModel';
-import type { Chunk } from '../world/Chunk';
+import type { HudModel } from '../ui/hud-model';
+import type { DemoChunk } from '../world/demo-chunk';
 import { spawnChunkEntities } from '../world/spawn';
-import { syncDressingColliders, syncDressingFlies, syncFurniture } from '../world/dressingColliders';
-import { syncRoadStep } from '../world/dressingPlan';
-import type { World } from './World';
+import { syncDressingColliders, syncDressingFlies, syncFurniture } from '../world/dressing-colliders';
+import { syncRoadStep } from '../world/dressing-plan';
+import type { DemoWorld } from './demo-world';
 import { Camera } from './components';
 import { CELL_SIZE, CHUNK_SIZE } from '../world/constants';
 import { PlayerInput } from '../characters/PlayerInput';
@@ -31,7 +31,7 @@ export class DirectorPulse extends Component {
 export class WorldStream extends ChunkStreamer {
 	public static override order = Order.streaming;
 
-	public override spawn(chunk:Chunk):void {
+	public override spawn(chunk:DemoChunk):void {
 		const world = this.gameObject.world!;
 		spawnChunkEntities(world, chunk);
 		syncDressingColliders(world);
@@ -142,7 +142,7 @@ export class WorldView extends Component {
 	 * The square moving things cast the sun's shadow in follows the player, wider as the camera pulls back. It stays
 	 * set (on the map's middle without a player), so its light never comes and goes and shaders never recompile.
 	 */
-	private syncSunParts(world:World, renderer:Renderer):void {
+	private syncSunParts(world:DemoWorld, renderer:Renderer):void {
 		const player = world.findByID('Player');
 		const cam = world.findByID('MainCamera')?.getComponent(Camera);
 		const area = renderer.sunArea;

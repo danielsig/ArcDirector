@@ -8,7 +8,7 @@ import { keyNameFor, lockedReason } from './pickup';
 import { Belly } from '../engine/Belly';
 import { Reading } from '../characters/Reading';
 import { cueAt } from '../audio/cue';
-import { applyHit } from '../director/hitFeel';
+import { applyHit } from '../director/hit-feel';
 import { idOf } from '../director/names';
 import { ATTACKS, guardStops, weaknessDamage } from '../director/fight';
 

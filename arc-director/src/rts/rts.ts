@@ -1,16 +1,16 @@
 import type { VerbArgMap } from '../arc/stock-verbs.js';
-import type { Arc, ArcResult, CountMap, Step, StepArg } from '../arc/types.js';
-import type { Kit } from '../character/types.js';
-import type { Character } from '../character/character.js';
-import type { Collective } from '../collective/collective.js';
-import type { VerbAlias, VerbCall, VerbHandler } from '../director/types.js';
+import type { Arc, ArcResult, CountMap, Step, StepArg } from '../arc/arc-types.js';
+import type { Kit } from '../character/character-types.js';
+import type { Character } from '../character/Character.js';
+import type { Collective } from '../collective/Collective.js';
+import type { VerbAlias, VerbCall, VerbHandler } from '../director/director-types.js';
 import { poseOf } from '../world/lookup.js';
-import type { HostWorld } from '../world/types.js';
+import type { HostWorld } from '../world/world-types.js';
 import { distance } from '../world/vec.js';
 import { dummyEntity } from '../expr/natives.js';
-import type { ExprVal } from '../expr/types.js';
-import type { KindSpec, RTSHost, WorkDone } from './types.js';
-import { STOCK_ECONOMY_VERBS, STOCK_RTS_VERB_DEFS } from './verbs.js';
+import type { ExprVal } from '../expr/expr-types.js';
+import type { KindSpec, RTSHost, WorkDone } from './rts-types.js';
+import { STOCK_ECONOMY_VERBS, STOCK_RTS_VERB_DEFS } from './rts-verbs.js';
 
 /** Seconds of game time between two ticks of a unit's work or fight. */
 const TICK = 0.25;

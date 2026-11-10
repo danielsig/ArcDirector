@@ -1,15 +1,15 @@
 import { verbHelp } from '../arc/schema.js';
 import { MIND_ONLY_VERBS, STOCK_ARC_VERBS, type VerbRegistry } from '../arc/stock-verbs.js';
-import { formatArcBlocks, parseArcText } from '../arc/parse.js';
+import { formatArcBlocks, parseArcText } from '../arc/arc-parse.js';
 import { arcJSONBlocks } from '../arc/wire.js';
 
 const STOCK_ARC_VERBS_SET = new Set<string>(STOCK_ARC_VERBS);
-import type { ArcResult } from '../arc/types.js';
+import type { ArcResult } from '../arc/arc-types.js';
 import type { MemoryRecord } from '../memory/store.js';
 import { DEFAULT_YOU_SYMBOL } from './map.js';
-import type { Identity, Goal, Watches } from '../character/types.js';
+import type { Identity, Goal, Watches } from '../character/character-types.js';
 import { extrasWithoutPins, formatWatches, watchCount, watchNames } from '../character/watch.js';
-import type { ArcFormat } from './types.js';
+import type { ArcFormat } from './mind-types.js';
 
 /**
  * How much of the standing rules a prompt spells out. `full` tells every rule; `compact` leaves out the rules and hints

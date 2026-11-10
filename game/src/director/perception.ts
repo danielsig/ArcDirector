@@ -32,9 +32,9 @@ import {
 	alarmActive,
 	Interior,
 } from '../engine/components';
-import type { World } from '../engine/World';
-import { MeshRenderer } from '../engine/MeshRenderer';
-import { Container, Item, Pickupable } from '../items/components';
+import type { DemoWorld } from '../engine/demo-world';
+import { DemoMeshRenderer } from '../engine/demo-mesh-renderer';
+import { Container, Item, Pickupable } from '../items/item-components';
 import {
 	distXZ,
 	findCarried,
@@ -52,9 +52,9 @@ import { whereabouts } from '../world/interior';
 import { passageDoors } from '../world/passages';
 import { lineClear } from '../world/path';
 import { CELL_SIZE } from '../world/constants';
-import { talkNotices } from './talkAttend';
+import { talkNotices } from './talk-attend';
 import { idOf, isLiving } from './names';
-import type { CharacterCtx } from './types';
+import type { CharacterCtx } from './game-types';
 import type { GameHost } from './adapter';
 import { fightExprTags, fightProximityNote, fightRole } from './fight';
 import { Reading } from '../characters/Reading';
@@ -150,7 +150,7 @@ function tagsNow(go:GameObject):string[] {
 	if (go.getComponent(Torch) && !go.getComponent(Item)) {
 		tags.push('torch');
 	}
-	const mesh = go.getComponent(MeshRenderer)?.meshID ?? '';
+	const mesh = go.getComponent(DemoMeshRenderer)?.meshID ?? '';
 	if (mesh === 'tree_oak' || mesh === 'tree_pine') {
 		tags.push('tree');
 	}
@@ -402,7 +402,7 @@ export function followedCarry(ctx:CharacterCtx):string {
 }
 
 /** What `character` learns examining `name`: an item it carries, or a thing in sight. */
-export function doExamine(world:World, character:GameObject, name:string):ArcResult {
+export function doExamine(world:DemoWorld, character:GameObject, name:string):ArcResult {
 	const held = findCarried(character, (it) => itemMatchesName(it, name));
 	if (held) {
 		return { ok: true, verb: 'examine', reason: examineItem(world, held) };
@@ -426,14 +426,14 @@ function listed(names:string[]):string {
 }
 
 /** The named doors and chests a key with `keyID` opens. */
-function locksFor(world:World, keyID:string):string[] {
+function locksFor(world:DemoWorld, keyID:string):string[] {
 	return world.objects
 		.filter((go) => go.getComponent(Lock)?.keyID === keyID && go.getComponent(Named))
 		.map((go) => go.getComponent(Named)?.id ?? go.id);
 }
 
 /** What `examine` tells about an item you carry, in sentences. */
-function examineItem(world:World, item:ItemInstance):string {
+function examineItem(world:DemoWorld, item:ItemInstance):string {
 	const id = pascalCase(item.name) || pascalCase(item.defID);
 	return [
 		item.count > 1 ? `You carry ${item.count} ${id}.` : `You carry ${id}.`,

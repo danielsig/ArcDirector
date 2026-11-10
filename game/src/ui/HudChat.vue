@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { nextTick, ref, watch } from 'vue';
-import type { HudModel } from './hudModel';
+import type { HudModel } from './hud-model';
 
 const props = defineProps<{
 	hud:HudModel;

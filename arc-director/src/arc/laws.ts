@@ -1,4 +1,4 @@
-import type { Arc } from './types.js';
+import type { Arc } from './arc-types.js';
 import { reactionFinished, reactionRest, type ArcHandler, type ReactionProgress } from './run.js';
 import { arcArg } from './wire.js';
 import type { VerbRegistry } from './stock-verbs.js';

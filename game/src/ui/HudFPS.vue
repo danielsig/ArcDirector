@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { HudModel } from './hudModel';
+import type { HudModel } from './hud-model';
 
 defineProps<{
 	hud:HudModel;

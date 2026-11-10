@@ -1,9 +1,9 @@
 <script setup lang="ts">
 import { computed, nextTick, ref, watch } from 'vue';
 import { prefs, setPrefs } from '../prefs';
-import { arcLines, thinkTime, thoughtTail } from './arcText';
+import { arcLines, thinkTime, thoughtTail } from './arc-text';
 import HudArcLine from './HudArcLine.vue';
-import type { HudModel } from './hudModel';
+import type { HudModel } from './hud-model';
 
 const ERRORS = 'Errors';
 

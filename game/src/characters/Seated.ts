@@ -3,14 +3,14 @@ import { findRoute, pointGoal } from 'arc-director';
 import * as THREE from 'three';
 import { Belly } from '../engine/Belly';
 import { Furniture, Named, Vitals } from '../engine/components';
-import { bindMesh } from '../engine/MeshRenderer';
+import { bindMesh } from '../engine/demo-mesh-renderer';
 import { Order } from '../engine/order';
 import { getDef } from '../items/defs';
 import { instantiateDef } from '../items/instance';
 import { tryInsert } from '../items/inventory';
 import { dropItem } from '../items/pickup';
 import { canStand, cellWays } from '../world/path';
-import { showsWater } from '../world/water';
+import { showsWater } from '../world/sand';
 
 /** Hip joint height over the floor when sat (a chair seat is about 0.47 m, a mattress 0.39 m), and how far ahead of the seat's middle it sits, so the seat of the trousers clears the backrest. */
 const HIP_SEAT = 0.65;

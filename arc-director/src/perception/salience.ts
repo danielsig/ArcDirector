@@ -1,5 +1,5 @@
 import { distance } from '../world/vec.js';
-import type { Sight } from './types.js';
+import type { Sight } from './perception-types.js';
 
 /** How salient what a mind carries is: about as much as what stands right in front of it. */
 export const CARRIED_SALIENCE = 0.8;

@@ -3,7 +3,7 @@
 		"arc-director": {
 			"type": "stdio",
 			"command": "node",
-			"args": ["${CLAUDE_PROJECT_DIR:-.}/mcp/dist/main.js"]
+			"args": ["${CLAUDE_PROJECT_DIR:-.}/mcp/dist/server.js"]
 		}
 	}
 }

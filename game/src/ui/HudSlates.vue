@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { onBeforeUnmount, onMounted, ref } from 'vue';
 import HudSlate from './HudSlate.vue';
-import type { HudModel } from './hudModel';
+import type { HudModel } from './hud-model';
 import { separate, type Box } from './separate';
 
 const props = defineProps<{

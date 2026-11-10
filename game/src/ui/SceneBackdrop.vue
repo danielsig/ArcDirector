@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { onMounted, onUnmounted, ref } from 'vue';
 import { Showcase } from '../engine/Showcase';
-import { preloadArt } from '../render/preloadArt';
+import { preloadArt } from '../render/preload-art';
 
 /** One scene, live and circled by the camera, behind the main menu. Remount (a new `key`) to switch scenes. */
 const props = defineProps<{

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, watch } from 'vue';
-import type { HudModel } from './hudModel';
+import type { HudModel } from './hud-model';
 
 const LIFE_MS = 6000;
 

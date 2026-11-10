@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { respell, speech, voiceFor, type SpeechVoice } from './speech.js';
 import { patchSeconds } from './synth.js';
-import type { SfxLayer } from './types.js';
+import type { SfxLayer } from './audio-types.js';
 
 const voice = { pitch: 150 };
 

@@ -5,16 +5,16 @@ import { findRoute, pointGoal } from 'arc-director';
 import { CharacterMotor } from '../characters/CharacterMotor';
 import { NPCInput } from '../characters/NPCInput';
 import { approachSpot, overWater, Seated } from '../characters/Seated';
-import { glen_0_0 } from '../data/chunks/glen_0_0';
-import { glen_0_1 } from '../data/chunks/glen_0_1';
-import { glen_1_0 } from '../data/chunks/glen_1_0';
-import { glen_1_1 } from '../data/chunks/glen_1_1';
-import { DUNGEON_CHUNKS } from '../data/chunks/dungeon';
+import { glen_0_0 } from '../data/chunks/glen-0-0';
+import { glen_0_1 } from '../data/chunks/glen-0-1';
+import { glen_1_0 } from '../data/chunks/glen-1-0';
+import { glen_1_1 } from '../data/chunks/glen-1-1';
+import { DUNGEON_CHUNKS } from '../scenes/dungeon-vault/dungeon-vault-map';
 import { RIVER_GLEN } from '../data/scenes';
 import { Belly } from '../engine/Belly';
 import { BoxCollider, Door, Furniture, HumanBody, Lock, Named, RigidBody, Vitals } from '../engine/components';
-import { World } from '../engine/World';
-import { Container } from '../items/components';
+import { DemoWorld } from '../engine/demo-world';
+import { Container } from '../items/item-components';
 import { getDef } from '../items/defs';
 import { equipItem } from '../items/equip';
 import { instantiateDef } from '../items/instance';
@@ -23,12 +23,12 @@ import { chestHolding, interactDoor, openDoorAhead, takeFromChest, USE_RANGE } f
 import { Reading } from '../characters/Reading';
 import { isFood, readPage, useItem } from '../items/use';
 import type { GameHost } from '../director/adapter';
-import { dropDown, FISH_VERB } from '../director/verbs';
+import { dropDown, FISH_VERB } from '../director/game-verbs';
 import { mealProgress } from '../director/scenes/glen';
 import { examineWorld, tagsOf } from '../director/perception';
-import { decodeGlyphChunk, type ChunkFile } from './decodeGlyphChunk';
-import { syncDressingColliders, syncFurniture } from './dressingColliders';
-import { planProps, roadLines } from './dressingPlan';
+import { decodeGlyphChunk, type ChunkFile } from './decode-glyph-chunk';
+import { syncDressingColliders, syncFurniture } from './dressing-colliders';
+import { planProps, roadLines } from './dressing-plan';
 import { cellWays } from './path';
 import { spawnChunkEntities } from './spawn';
 
@@ -38,8 +38,8 @@ if (!('document' in globalThis)) {
 	Object.defineProperty(globalThis, 'document', { configurable: true, value: { createElementNS: () => image } });
 }
 
-function built(files:readonly ChunkFile[]):World {
-	const world = new World();
+function built(files:readonly ChunkFile[]):DemoWorld {
+	const world = new DemoWorld();
 	for (const file of files) {
 		const chunk = decodeGlyphChunk(file).chunk;
 		spawnChunkEntities(world, chunk);
@@ -51,9 +51,9 @@ function built(files:readonly ChunkFile[]):World {
 	return world;
 }
 
-const glen = ():World => built([glen_0_0, glen_0_1, glen_1_0, glen_1_1]);
+const glen = ():DemoWorld => built([glen_0_0, glen_0_1, glen_1_0, glen_1_1]);
 
-function body(world:World, id:string, x:number, z:number):GameObject {
+function body(world:DemoWorld, id:string, x:number, z:number):GameObject {
 	const go = new GameObject(id, 'Person');
 	go.transform.localPosition = { x, y: 0, z };
 	go.addComponent(Named, { id });
@@ -67,7 +67,7 @@ function body(world:World, id:string, x:number, z:number):GameObject {
 	return go;
 }
 
-function seatNames(world:World):string[] {
+function seatNames(world:DemoWorld):string[] {
 	const names:string[] = [];
 	world.forEachComponent(Furniture, (_, go) => names.push(go.id));
 	return names.sort();
@@ -157,7 +157,7 @@ test('a lock is a condition for opening, from the sides it bars, and nothing mor
 });
 
 /** Walks `go` along a route to within reach of `to`, under physics, as the mover steers it. Returns where it ends up. */
-function walkTo(world:World, go:GameObject, to:GameObject):{ x:number; z:number; points:number[][] } {
+function walkTo(world:DemoWorld, go:GameObject, to:GameObject):{ x:number; z:number; points:number[][] } {
 	const here = go.transform.position;
 	const goal = to.transform.position;
 	const route = findRoute(cellWays(world), go, [here.x, here.z], pointGoal([goal.x, goal.z], USE_RANGE * 0.55));

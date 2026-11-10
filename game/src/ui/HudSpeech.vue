@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed } from 'vue';
 import { ITEM_DEFS } from '../items/defs';
-import type { HudModel, HudSpeech } from './hudModel';
+import type { HudModel, HudSpeech } from './hud-model';
 import HudToolBadge from './HudToolBadge.vue';
 
 const props = defineProps<{

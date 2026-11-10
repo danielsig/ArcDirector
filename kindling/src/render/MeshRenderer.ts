@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { Component } from '../core/Component.js';
-import { Time } from '../core/Time.js';
+import { Time } from '../core/time.js';
 import { applyShaderFeatures, type ShaderInsert, type ShaderUniforms } from './shader.js';
 import { create as createMesh, meshReady } from '../assets/meshes.js';
 

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue';
-import type { HudModel } from './hudModel';
-import { tileFill } from '../world/tileFill';
+import type { HudModel } from './hud-model';
+import { tileFill } from '../world/tile-fill';
 import { CHUNK_SIZE } from '../world/constants';
 
 const props = defineProps<{

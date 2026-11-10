@@ -2,7 +2,7 @@ import { fileURLToPath } from 'node:url';
 import { searchForWorkspaceRoot } from 'vite';
 import { defineConfig, loadEnv } from 'vite';
 import vue from '@vitejs/plugin-vue';
-import { aiLogPlugin } from './viteAiLog.ts';
+import { aiLogPlugin } from './vite-ai-log.ts';
 
 /**
  * Hosted services' keys, from the repo-root `.env`. They stay on this dev server, which adds them to what the page

@@ -1,17 +1,17 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { parseArc } from '../arc/wire.js';
-import type { ArcResult, CountMap } from '../arc/types.js';
-import { ArcDirector } from '../director/director.js';
+import type { ArcResult, CountMap } from '../arc/arc-types.js';
+import { ArcDirector } from '../director/ArcDirector.js';
 import { dummyEntity } from '../expr/natives.js';
 import { evaluate } from '../expr/eval.js';
 import { buildCatalog } from '../expr/natives.js';
-import { SampleCache } from '../expr/types.js';
-import type { HostWorld, Vec } from '../world/types.js';
+import { SampleCache } from '../expr/expr-types.js';
+import type { HostWorld, Vec } from '../world/world-types.js';
 import { distance } from '../world/vec.js';
 import { RTS_COMMANDER_VERBS } from './rts.js';
-import { STOCK_CITY_VERBS } from './verbs.js';
-import type { KindSpec, RTSHost } from './types.js';
+import { STOCK_CITY_VERBS } from './rts-verbs.js';
+import type { KindSpec, RTSHost } from './rts-types.js';
 
 type Ctx = { id:string };
 

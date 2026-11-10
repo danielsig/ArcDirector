@@ -1,4 +1,4 @@
-import type { HostWorld, Pose, Vec } from './types.js';
+import type { HostWorld, Pose, Vec } from './world-types.js';
 
 /** Where the thing `id` names is now, if the world has it. */
 export function poseOf(world:HostWorld<unknown>, id:string):Pose | undefined {

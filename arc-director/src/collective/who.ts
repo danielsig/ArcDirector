@@ -3,10 +3,10 @@ import type { VerbRegistry } from '../arc/stock-verbs.js';
 import { mapArc, mapExpr } from '../mind/ids.js';
 import { evaluate } from '../expr/eval.js';
 import { buildCatalog, dummyEntity, type HostKernels } from '../expr/natives.js';
-import { LIST_CAP, type Catalog, type ExprEntity, type ExprVal } from '../expr/types.js';
-import { RESERVED_TAGS } from '../world/types.js';
-import type { Character } from '../character/character.js';
-import type { Collective } from './collective.js';
+import { LIST_CAP, type Catalog, type ExprEntity, type ExprVal } from '../expr/expr-types.js';
+import { RESERVED_TAGS } from '../world/world-types.js';
+import type { Character } from '../character/Character.js';
+import type { Collective } from './Collective.js';
 import { shortTags } from './tags.js';
 
 /**

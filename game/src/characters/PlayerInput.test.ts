@@ -3,13 +3,13 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { examineWorld } from '../director/perception';
 import { HumanBody, Named, Vitals } from '../engine/components';
-import { World } from '../engine/World';
-import { Container } from '../items/components';
+import { DemoWorld } from '../engine/demo-world';
+import { Container } from '../items/item-components';
 import { getDef } from '../items/defs';
 import { equipItem } from '../items/equip';
 import { instantiateDef } from '../items/instance';
 import { slotItem, tryInsert } from '../items/inventory';
-import { spawnWorldItem } from '../world/spawnItem';
+import { spawnWorldItem } from '../world/spawn-item';
 import { PlayerInput } from './PlayerInput';
 
 // A flame or a sprite may load its picture through Three, which needs document. These tests never draw.
@@ -18,7 +18,7 @@ if (!('document' in globalThis)) {
 	Object.defineProperty(globalThis, 'document', { configurable: true, value: { createElementNS: () => image } });
 }
 
-function person(world:World, id:string, x:number):GameObject {
+function person(world:DemoWorld, id:string, x:number):GameObject {
 	const go = new GameObject(id, 'Person');
 	go.transform.localPosition = { x, y: 0, z: 0 };
 	go.addComponent(Named, { id });
@@ -28,14 +28,14 @@ function person(world:World, id:string, x:number):GameObject {
 	return go;
 }
 
-function scene():{ world:World; go:GameObject; player:PlayerInput } {
+function scene():{ world:DemoWorld; go:GameObject; player:PlayerInput } {
 	resetTime();
-	const world = new World();
+	const world = new DemoWorld();
 	const go = person(world, 'Player', 0);
 	return { world, go, player: go.addComponent(PlayerInput) };
 }
 
-function frame(world:World, player:PlayerInput, code = ''):void {
+function frame(world:DemoWorld, player:PlayerInput, code = ''):void {
 	if (code) {
 		world.input.press(code);
 	}

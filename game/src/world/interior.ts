@@ -1,6 +1,6 @@
 import { type GameObject } from '@arc-director/kindling';
 import { Door, Interior, Lock, Named } from '../engine/components';
-import type { World } from '../engine/World';
+import type { DemoWorld } from '../engine/demo-world';
 import { passageWhereabouts } from './passages';
 
 const DOORWAY = 0.7;
@@ -9,7 +9,7 @@ export function interiorContains(box:Interior, x:number, z:number):boolean {
 	return x >= box.minX && x < box.maxX && z >= box.minZ && z < box.maxZ;
 }
 
-export function enclosureAt(world:World, x:number, z:number):GameObject | undefined {
+export function enclosureAt(world:DemoWorld, x:number, z:number):GameObject | undefined {
 	let hit:GameObject | undefined;
 	world.forEachComponent(Interior, (box, go) => {
 		if (!hit && interiorContains(box, x, z)) {
@@ -19,7 +19,7 @@ export function enclosureAt(world:World, x:number, z:number):GameObject | undefi
 	return hit;
 }
 
-export function doorOfBuilding(world:World, buildingID:string):GameObject | undefined {
+export function doorOfBuilding(world:DemoWorld, buildingID:string):GameObject | undefined {
 	let hit:GameObject | undefined;
 	world.forEachComponent(Door, (door, go) => {
 		if (!hit && door.buildingID === buildingID) {
@@ -56,7 +56,7 @@ export function doorInteriorAlong(doorGo:GameObject):number {
 	return side > 0 ? 1 : -1;
 }
 
-export function nearestDoorway(world:World, x:number, z:number, range = DOORWAY):GameObject | undefined {
+export function nearestDoorway(world:DemoWorld, x:number, z:number, range = DOORWAY):GameObject | undefined {
 	let best:GameObject | undefined;
 	let bestD = range;
 	world.forEachComponent(Door, (door, go) => {
@@ -71,7 +71,7 @@ export function nearestDoorway(world:World, x:number, z:number, range = DOORWAY)
 }
 
 /** Whether the world has any interior, or with `buildingsOnly`, any building (rooms aside). */
-function hasInterior(world:World, buildingsOnly = false):boolean {
+function hasInterior(world:DemoWorld, buildingsOnly = false):boolean {
 	let any = false;
 	world.forEachComponent(Interior, (box) => {
 		any ||= !buildingsOnly || !box.room;

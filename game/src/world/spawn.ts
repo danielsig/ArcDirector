@@ -44,27 +44,27 @@ import {
 	HearOnly,
 	type MarketNPCKind,
 } from '../engine/components';
-import { MeshRenderer } from '../engine/MeshRenderer';
+import { DemoMeshRenderer } from '../engine/demo-mesh-renderer';
 import { HeldTorchLight } from '../engine/systems';
-import type { World } from '../engine/World';
-import { Container, Harvest } from '../items/components';
+import type { DemoWorld } from '../engine/demo-world';
+import { Container, Harvest } from '../items/item-components';
 import { getDef } from '../items/defs';
 import { equipItem } from '../items/equip';
 import { instantiateDef, type ItemInstance } from '../items/instance';
 import { spawnDefAt } from '../items/pickup';
-import { characterModel, resolvePlayerKind } from '../render/characterModels';
-import { counterMeshID, getPostStyle, riverBoulderMeshID, roofMeshID, STALL_COUNTER } from '../render/meshRegistry';
+import { characterModel, resolvePlayerKind } from '../render/character-models';
+import { counterMeshID, getPostStyle, riverBoulderMeshID, roofMeshID, STALL_COUNTER } from '../render/mesh-registry';
 import { prefs } from '../prefs';
 import { BOULDER_SIZE, CELL_SIZE, MOON_BLUE, MOON_WINDOW, TILE_HEIGHT, WALL_HEIGHT } from './constants';
 import { findBuildings } from './buildings';
-import { WALL_THICKNESS, wallFaceInset, wallSide } from './thinWall';
-import { stallYaw } from './dressingPlan';
+import { WALL_THICKNESS, wallFaceInset, wallSide } from './thin-wall';
+import { stallYaw } from './dressing-plan';
 import { POST_MESH } from '../items/wares';
-import { showsWater } from './water';
-import type { Chunk, ChunkEntity } from './Chunk';
-import type { LootSpec } from './decodeGlyphChunk';
+import { showsWater } from './sand';
+import type { DemoChunk, ChunkEntity } from './demo-chunk';
+import type { LootSpec } from './decode-glyph-chunk';
 
-function wallOffset(chunk:Chunk, localX:number, localZ:number):{ x:number; z:number; yaw:number } {
+function wallOffset(chunk:DemoChunk, localX:number, localZ:number):{ x:number; z:number; yaw:number } {
 	const side = wallSide(chunk, localX, localZ);
 	if (!side) {
 		return { x: 0, z: 0, yaw: 0 };
@@ -79,7 +79,7 @@ function bindChunk(go:GameObject, chunkID:string):void {
 }
 
 /** A lit torch: on the wall beside its cell (`wall_torch`), or on a pole in the middle of it (`standing_torch`). */
-function spawnTorch(world:World, chunk:Chunk, ent:ChunkEntity):void {
+function spawnTorch(world:DemoWorld, chunk:DemoChunk, ent:ChunkEntity):void {
 	const standing = ent.def === 'standing_torch';
 	const center = chunk.worldCellCenter(ent.localX, ent.localZ);
 	const off = standing ? { x: 0, z: 0, yaw: 0 } : wallOffset(chunk, ent.localX, ent.localZ);
@@ -89,7 +89,7 @@ function spawnTorch(world:World, chunk:Chunk, ent:ChunkEntity):void {
 	go.transform.position.y = (tile?.height ?? 0) * TILE_HEIGHT + (standing ? 0 : 1.15);
 	go.transform.position.z = center.z + off.z;
 	go.transform.yaw = off.yaw;
-	go.addComponent(MeshRenderer, { meshID: standing ? 'torch_stand' : 'torch' });
+	go.addComponent(DemoMeshRenderer, { meshID: standing ? 'torch_stand' : 'torch' });
 	if (standing) {
 		go.addComponent(BoxCollider, { size: { x: 0.4, y: 1, z: 0.4 }, shape: 'cylinder' });
 	}
@@ -135,7 +135,7 @@ function falloff(d:number, range:number):number {
 }
 
 /** Where a glyph entity stands: its cell's center moved by its `offset`, on its tile's top. */
-function entityPoint(chunk:Chunk, ent:ChunkEntity):{ x:number; y:number; z:number } {
+function entityPoint(chunk:DemoChunk, ent:ChunkEntity):{ x:number; y:number; z:number } {
 	const center = chunk.worldCellCenter(ent.localX, ent.localZ);
 	return {
 		x: center.x + (ent.offset?.x ?? 0),
@@ -150,7 +150,7 @@ type Point = { x:number; y:number; z:number };
  * Calls `fn` with the `moonlight` cell nearest `p`, on the ground, once every chunk is in (it may lie in the next
  * one); never without one.
  */
-function withNearestMoonlight(world:World, p:Point, fn:(to:Point)=>void):void {
+function withNearestMoonlight(world:DemoWorld, p:Point, fn:(to:Point)=>void):void {
 	world.after(0, () => {
 		let to:Point | undefined;
 		for (const chunk of world.chunks.values()) {
@@ -179,7 +179,7 @@ function beyond(p:Point, from:Point, meters:number, level = false):Point {
  * it lights only through the opening (`spotThrough`), as brightly there as a lamp 3 m off would, and every body in it
  * casts its shadow.
  */
-function spawnMoonbeam(world:World, chunk:Chunk, id:string, lamp:Point, through:Point[], to:Point):void {
+function spawnMoonbeam(world:DemoWorld, chunk:DemoChunk, id:string, lamp:Point, through:Point[], to:Point):void {
 	const aim = spotThrough(lamp, through);
 	const beam = new GameObject(id, 'Moonbeam');
 	beam.transform.position.x = lamp.x;
@@ -212,7 +212,7 @@ function rectCorners(c:Point, across:{ x:number; z:number }, width:number, heigh
 }
 
 /** The moonlight down a stairwell, from its top (`from`): level with it, under the ceiling, so it never lights the rock over. */
-function spawnStairwellMoonbeam(world:World, chunk:Chunk, id:string, from:Point):void {
+function spawnStairwellMoonbeam(world:DemoWorld, chunk:DemoChunk, id:string, from:Point):void {
 	withNearestMoonlight(world, from, (to) => {
 		const reach = Math.hypot(from.x - to.x, from.z - to.z) || 1;
 		const across = { x: -(from.z - to.z) / reach, z: (from.x - to.x) / reach };
@@ -226,7 +226,7 @@ function spawnStairwellMoonbeam(world:World, chunk:Chunk, id:string, from:Point)
  * A barred window through the wall beside its cell (the chunk mesh cuts the opening), with moonlight falling through
  * it onto the chunk's `moonlight` cell: bars on the wall face, and a spot light on them, shining down into the room.
  */
-function spawnMoonWindow(world:World, chunk:Chunk, ent:ChunkEntity):void {
+function spawnMoonWindow(world:DemoWorld, chunk:DemoChunk, ent:ChunkEntity):void {
 	const center = chunk.worldCellCenter(ent.localX, ent.localZ);
 	const off = wallOffset(chunk, ent.localX, ent.localZ);
 	const floor = (chunk.tile(ent.localX, ent.localZ)?.height ?? 0) * TILE_HEIGHT;
@@ -238,7 +238,7 @@ function spawnMoonWindow(world:World, chunk:Chunk, ent:ChunkEntity):void {
 	pane.transform.position.y = floor + MOON_WINDOW.y;
 	pane.transform.position.z = center.z + out.z * face;
 	pane.transform.yaw = off.yaw + Math.PI;
-	pane.addComponent(MeshRenderer, { meshID: 'moon_window' });
+	pane.addComponent(DemoMeshRenderer, { meshID: 'moon_window' });
 	bindChunk(pane, chunk.id);
 	world.add(pane);
 	const frame = { x: pane.transform.position.x + out.x * MOON_FRAME_DEPTH, y: floor + MOON_WINDOW.y, z: pane.transform.position.z + out.z * MOON_FRAME_DEPTH };
@@ -249,7 +249,7 @@ function spawnMoonWindow(world:World, chunk:Chunk, ent:ChunkEntity):void {
 }
 
 /** Where moonlight lands: a very faint blue glow about it, as if the moonlight spilled into the room. */
-function spawnMoonlight(world:World, chunk:Chunk, ent:ChunkEntity):void {
+function spawnMoonlight(world:DemoWorld, chunk:DemoChunk, ent:ChunkEntity):void {
 	const at = entityPoint(chunk, ent);
 	const go = new GameObject(`moonlight_${chunk.id}_${ent.localX}_${ent.localZ}`, 'Moonlight');
 	go.transform.position.x = at.x;
@@ -261,7 +261,7 @@ function spawnMoonlight(world:World, chunk:Chunk, ent:ChunkEntity):void {
 }
 
 /** The fire in a brazier (its bowl and coals are chunk dressing): flames only, which no one sees as a thing. */
-function spawnFire(world:World, chunk:Chunk, ent:ChunkEntity):void {
+function spawnFire(world:DemoWorld, chunk:DemoChunk, ent:ChunkEntity):void {
 	const center = chunk.worldCellCenter(ent.localX, ent.localZ);
 	const tile = chunk.tile(ent.localX, ent.localZ);
 	const go = new GameObject(`fire_${chunk.id}_${ent.localX}_${ent.localZ}`, 'Fire');
@@ -281,7 +281,7 @@ function makeLoot(loot:LootSpec):ItemInstance {
 	return inst;
 }
 
-function spawnChest(world:World, chunk:Chunk, ent:ChunkEntity):void {
+function spawnChest(world:DemoWorld, chunk:DemoChunk, ent:ChunkEntity):void {
 	const center = chunk.worldCellCenter(ent.localX, ent.localZ);
 	const tile = chunk.tile(ent.localX, ent.localZ);
 	const go = new GameObject(ent.name ?? `chest_${chunk.id}_${ent.localX}_${ent.localZ}`, 'Chest');
@@ -289,7 +289,7 @@ function spawnChest(world:World, chunk:Chunk, ent:ChunkEntity):void {
 	go.transform.position.y = (tile?.height ?? 0) * TILE_HEIGHT + (ent.offset?.y ?? 0);
 	go.transform.position.z = center.z + (ent.offset?.z ?? 0);
 	go.transform.yaw = ent.yaw ?? Math.PI;
-	go.addComponent(MeshRenderer, { meshID: 'chest' });
+	go.addComponent(DemoMeshRenderer, { meshID: 'chest' });
 	go.addComponent(Chest);
 	const bag = go.addComponent(Container, { size: 8 });
 	go.addComponent(Lock, { keyID: ent.keyID ?? 'iron', locked: ent.locked ?? true });
@@ -303,7 +303,7 @@ function spawnChest(world:World, chunk:Chunk, ent:ChunkEntity):void {
 }
 
 /** A door in a wall, or a gate (`gate`: stone piers and iron leaves) in a town wall. Both open and shut as a `Door`. */
-function spawnDoor(world:World, chunk:Chunk, ent:ChunkEntity):void {
+function spawnDoor(world:DemoWorld, chunk:DemoChunk, ent:ChunkEntity):void {
 	const center = chunk.worldCellCenter(ent.localX, ent.localZ);
 	const tile = chunk.tile(ent.localX, ent.localZ);
 	const axis = ent.axis ?? 'x';
@@ -322,7 +322,7 @@ function spawnDoor(world:World, chunk:Chunk, ent:ChunkEntity):void {
 	go.transform.yaw = axis === 'x' ? 0 : Math.PI / 2;
 	panel.parent = go;
 	go.addComponent(Lock, { keyID: ent.keyID ?? 'brass', locked: ent.locked ?? true, lockedFrom: ent.lockedFrom ?? 'both' });
-	go.addComponent(MeshRenderer, { meshID: ent.def });
+	go.addComponent(DemoMeshRenderer, { meshID: ent.def });
 	if (ent.exit) {
 		go.addComponent(MarketGate);
 	}
@@ -381,7 +381,7 @@ const ITEM_DEFS_SPAWN = new Set([
 	'spinning_top',
 ]);
 
-export function spawnChunkEntities(world:World, chunk:Chunk):void {
+export function spawnChunkEntities(world:DemoWorld, chunk:DemoChunk):void {
 	const bridgeSpans:ChunkEntity[] = [];
 	const posts = new Map<string, ChunkEntity[]>();
 	for (const ent of chunk.entities) {
@@ -489,14 +489,14 @@ export function spawnChunkEntities(world:World, chunk:Chunk):void {
 }
 
 /** Each house on the chunk: its roof (sized to its wall line), its inside, its name, and its door told whose it is. */
-function spawnBuildings(world:World, chunk:Chunk):void {
+function spawnBuildings(world:DemoWorld, chunk:DemoChunk):void {
 	for (const b of findBuildings([chunk])) {
 		const name = b.name || `House_${chunk.id}_${b.door.localX}_${b.door.localZ}`;
 		const go = new GameObject(name, 'Building');
 		go.transform.position.x = (b.walls.minX + b.walls.maxX) * 0.5;
 		go.transform.position.y = 0;
 		go.transform.position.z = (b.walls.minZ + b.walls.maxZ) * 0.5;
-		go.addComponent(MeshRenderer, { meshID: roofMeshID(b.walls.maxX - b.walls.minX + 0.18, b.walls.maxZ - b.walls.minZ, b.roof, b.chimney) });
+		go.addComponent(DemoMeshRenderer, { meshID: roofMeshID(b.walls.maxX - b.walls.minX + 0.18, b.walls.maxZ - b.walls.minZ, b.roof, b.chimney) });
 		go.addComponent(BoxCollider, { size: { x: 0.4, y: 1, z: 0.4 }, solid: false, isTrigger: true });
 		go.addComponent(Named, { id: name });
 		go.addComponent(Interior, { ...b.inside });
@@ -510,8 +510,8 @@ function spawnBuildings(world:World, chunk:Chunk):void {
 }
 
 function spawnProp(
-	world:World,
-	chunk:Chunk,
+	world:DemoWorld,
+	chunk:DemoChunk,
 	ent:ChunkEntity,
 	meshID:string,
 	radius:number,
@@ -534,7 +534,7 @@ function spawnProp(
 		go.transform.position.z += 0.48;
 		go.transform.position.y = 0;
 	}
-	go.addComponent(MeshRenderer, { meshID });
+	go.addComponent(DemoMeshRenderer, { meshID });
 	const col = go.addComponent(BoxCollider, { size: { x: radius, y: 1, z: radius } });
 	if (meshID === 'waterfall') {
 		col.solid = false;
@@ -550,14 +550,14 @@ function spawnProp(
 	return go;
 }
 
-function spawnLever(world:World, chunk:Chunk, ent:ChunkEntity):void {
+function spawnLever(world:DemoWorld, chunk:DemoChunk, ent:ChunkEntity):void {
 	const center = chunk.worldCellCenter(ent.localX, ent.localZ);
 	const tile = chunk.tile(ent.localX, ent.localZ);
 	const go = new GameObject(ent.name ?? 'BridgeLever', 'BridgeLever');
 	go.transform.position.x = center.x;
 	go.transform.position.y = (tile?.height ?? 0) * TILE_HEIGHT;
 	go.transform.position.z = center.z;
-	go.addComponent(MeshRenderer, { meshID: 'bridge_lever' });
+	go.addComponent(DemoMeshRenderer, { meshID: 'bridge_lever' });
 	go.addComponent(BridgeLever);
 	go.addComponent(BoxCollider, { size: { x: 0.3, y: 1, z: 0.3 }, solid: false, isTrigger: true });
 	go.addComponent(Named, { id: ent.name ?? 'BridgeLever' });
@@ -565,14 +565,14 @@ function spawnLever(world:World, chunk:Chunk, ent:ChunkEntity):void {
 	world.add(go);
 }
 
-function spawnHearth(world:World, chunk:Chunk, ent:ChunkEntity):void {
+function spawnHearth(world:DemoWorld, chunk:DemoChunk, ent:ChunkEntity):void {
 	const center = chunk.worldCellCenter(ent.localX, ent.localZ);
 	const tile = chunk.tile(ent.localX, ent.localZ);
 	const go = new GameObject(ent.name ?? 'BrewHearth', 'BrewHearth');
 	go.transform.position.x = center.x;
 	go.transform.position.y = (tile?.height ?? 0) * TILE_HEIGHT;
 	go.transform.position.z = center.z;
-	go.addComponent(MeshRenderer, { meshID: 'hearth' });
+	go.addComponent(DemoMeshRenderer, { meshID: 'hearth' });
 	go.addComponent(BrewHearth);
 	go.addComponent(BoxCollider, { size: { x: 0.7, y: 0.6, z: 0.7 }, solid: false, isTrigger: true });
 	go.addComponent(Named, { id: ent.name ?? 'BrewHearth' });
@@ -580,7 +580,7 @@ function spawnHearth(world:World, chunk:Chunk, ent:ChunkEntity):void {
 	world.add(go);
 }
 
-function spawnCot(world:World, chunk:Chunk, ent:ChunkEntity):void {
+function spawnCot(world:DemoWorld, chunk:DemoChunk, ent:ChunkEntity):void {
 	const center = chunk.worldCellCenter(ent.localX, ent.localZ);
 	const tile = chunk.tile(ent.localX, ent.localZ);
 	const id = ent.name ?? 'Sickbed';
@@ -588,7 +588,7 @@ function spawnCot(world:World, chunk:Chunk, ent:ChunkEntity):void {
 	go.transform.position.x = center.x;
 	go.transform.position.y = (tile?.height ?? 0) * TILE_HEIGHT;
 	go.transform.position.z = center.z;
-	go.addComponent(MeshRenderer, { meshID: 'cot' });
+	go.addComponent(DemoMeshRenderer, { meshID: 'cot' });
 	go.addComponent(Sickbed, { caretaker: id === 'LinaCot' ? 'Captain' : 'Herbalist' });
 	go.addComponent(BoxCollider, { size: { x: 1.2, y: 0.4, z: 0.7 }, solid: false, isTrigger: true });
 	go.addComponent(Named, { id });
@@ -596,7 +596,7 @@ function spawnCot(world:World, chunk:Chunk, ent:ChunkEntity):void {
 	world.add(go);
 }
 
-function spawnBridge(world:World, chunk:Chunk, spans:ChunkEntity[]):void {
+function spawnBridge(world:DemoWorld, chunk:DemoChunk, spans:ChunkEntity[]):void {
 	const cells:{ x:number; z:number }[] = [];
 	let sx = 0;
 	let sz = 0;
@@ -619,7 +619,7 @@ function spawnBridge(world:World, chunk:Chunk, spans:ChunkEntity[]):void {
 	go.transform.position.y = 0.02;
 	go.transform.position.z = sz / spans.length;
 	go.transform.yaw = 0;
-	go.addComponent(MeshRenderer, { meshID: 'bridge' });
+	go.addComponent(DemoMeshRenderer, { meshID: 'bridge' });
 	go.addComponent(Bridge, { open: false, cells });
 	go.addComponent(BoxCollider, {
 		size: {
@@ -639,7 +639,7 @@ function spawnBridge(world:World, chunk:Chunk, spans:ChunkEntity[]):void {
  * counter drawn over a row of cells (one glyph, so one name) is one counter along them, out to the face of any wall
  * at either end.
  */
-function spawnStall(world:World, chunk:Chunk, run:ChunkEntity[]):void {
+function spawnStall(world:DemoWorld, chunk:DemoChunk, run:ChunkEntity[]):void {
 	const ent = run[0]!;
 	const alongZ = run.some((e) => e.localZ !== ent.localZ);
 	const along = (e:ChunkEntity):number => (alongZ ? e.localZ : e.localX);
@@ -662,7 +662,7 @@ function spawnStall(world:World, chunk:Chunk, run:ChunkEntity[]):void {
 	const counterMesh = meshID.startsWith('counter_');
 	const width = counterMesh ? end - start : STALL_COUNTER.w;
 	const depth = STALL_COUNTER.d + (style.bench ? 0.35 : 0) + (style.shelf ? 0.2 : 0);
-	go.addComponent(MeshRenderer, { meshID: counterMesh ? counterMeshID(meshID, width) : meshID });
+	go.addComponent(DemoMeshRenderer, { meshID: counterMesh ? counterMeshID(meshID, width) : meshID });
 	const counter = new GameObject(`${go.id} counter`, 'Stall');
 	counter.parent = go;
 	counter.transform.localPosition = { x: 0, y: STALL_COUNTER.h * 0.5, z: (depth - STALL_COUNTER.d) * 0.5 };
@@ -722,7 +722,7 @@ function addAppearance(go:GameObject, meshID:string):void {
 	if (!model) {
 		throw new Error(`${go.id}: no character model ${meshID}`);
 	}
-	go.addComponent(MeshRenderer, { meshID });
+	go.addComponent(DemoMeshRenderer, { meshID });
 	go.addComponent(Appearance, { height: model.height });
 	go.addComponent(Animator);
 	go.addComponent(CharacterAnimation);
@@ -735,7 +735,7 @@ function addAppearance(go:GameObject, meshID:string):void {
 /** How far a streaming NPC keeps chunks loaded: its room and the next, not the whole map. */
 const NPC_STREAM_RADIUS = 10;
 
-export function spawnNPC(world:World, chunk:Chunk, opts:NPCSpawnOpts):GameObject {
+export function spawnNPC(world:DemoWorld, chunk:DemoChunk, opts:NPCSpawnOpts):GameObject {
 	const pos = chunk.worldCellCenter(opts.localX, opts.localZ);
 	const tile = chunk.tile(opts.localX, opts.localZ);
 	const go = new GameObject(opts.id, 'NPC');
@@ -825,9 +825,9 @@ export function spawnNPC(world:World, chunk:Chunk, opts:NPCSpawnOpts):GameObject
 }
 
 export function spawnPlayer(
-	world:World,
+	world:DemoWorld,
 	start:{ x:number; z:number } | null,
-	chunk:Chunk,
+	chunk:DemoChunk,
 ):void {
 	if (world.findByID('Player')) {
 		return;
@@ -860,13 +860,13 @@ export function spawnPlayer(
 }
 
 /** A raven on the ground at world `x`, `z`, facing `yaw`. Scenery: nobody perceives it. */
-export function spawnRaven(world:World, id:string, x:number, z:number, yaw = 0):void {
+export function spawnRaven(world:DemoWorld, id:string, x:number, z:number, yaw = 0):void {
 	const go = new GameObject(id, 'Raven');
 	go.transform.position.x = x;
 	go.transform.position.y = world.sampleTerrain(x, z)?.worldY ?? 0;
 	go.transform.position.z = z;
 	go.transform.yaw = yaw;
-	go.addComponent(MeshRenderer, { meshID: 'Raven' });
+	go.addComponent(DemoMeshRenderer, { meshID: 'Raven' });
 	go.addComponent(Raven);
 	world.add(go);
 }
@@ -898,7 +898,7 @@ export function roomBounds(room:RoomDef):{ minX:number; maxX:number; minZ:number
  * A room: somewhere to go to and to be in, with nothing to draw. Not bound to a chunk, so it can be found from
  * anywhere in the scene.
  */
-export function spawnRoom(world:World, room:RoomDef):void {
+export function spawnRoom(world:DemoWorld, room:RoomDef):void {
 	const { minX, maxX, minZ, maxZ } = roomBounds(room);
 	const go = new GameObject(room.name, room.name);
 	go.transform.position.x = (minX + maxX) / 2;
@@ -917,7 +917,7 @@ export type CameraLook = {
 };
 
 /** The main camera behind the player. */
-export function spawnCamera(world:World, look:CameraLook = {}):void {
+export function spawnCamera(world:DemoWorld, look:CameraLook = {}):void {
 	if (world.findByID('MainCamera')) {
 		return;
 	}

@@ -1,12 +1,12 @@
 import { type GameObject } from '@arc-director/kindling';
 import { Named, Vitals } from '../engine/components';
-import type { World } from '../engine/World';
+import type { DemoWorld } from '../engine/demo-world';
 
 export function idOf(go:GameObject):string {
 	return go.getComponent(Named)?.id ?? go.id;
 }
 
-export function findObject(world:World, name:string):GameObject | undefined {
+export function findObject(world:DemoWorld, name:string):GameObject | undefined {
 	return world.findNamed(name) ?? world.findByID(name);
 }
 

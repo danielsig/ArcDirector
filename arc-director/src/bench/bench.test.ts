@@ -1,14 +1,14 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import type { ArcDirector } from '../director/director.js';
+import type { ArcDirector } from '../director/ArcDirector.js';
 import { FakeProvider } from '../inference/fake.js';
 import { chatContentText, type ChatRequest } from '../inference/provider.js';
-import type { SystemOne } from '../inference/systemone.js';
+import type { SystemOne } from '../inference/system-one.js';
 import type { SceneCtx } from '../scenario/play.js';
 import { baselineArc, BASELINES, benchArcs, playArcCase, type ArcCase } from './arc.js';
 import { ARC_BENCH } from './cases.js';
 import { benchSystemOne, DECISION_BENCH, type DecisionCase } from './decision.js';
-import { runBench, type BenchLevel, type BenchOutcome } from './score.js';
+import { runBench, type BenchLevel, type BenchOutcome } from './bench-score.js';
 
 /** A model on its own server, writing Arc text; it can see, so `see_map` is offered. `chat` answers each request. */
 function model(chat:(req:ChatRequest)=>string, spec:{ maxParallel?:number } = {}):(director:ArcDirector<SceneCtx>)=>unknown {

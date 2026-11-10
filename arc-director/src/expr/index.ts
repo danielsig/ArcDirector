@@ -1,10 +1,10 @@
 export { evaluate, builtins, type EvalResult } from './eval.js';
-export { parse } from './parse.js';
+export { parse } from './expr-parse.js';
 export { lex } from './lex.js';
 export { buildCatalog, dummyEntity, type HostKernels } from './natives.js';
 export { freezeMe, cloneEntity, type PrevSpec, type PrevVerb } from './prev.js';
 export { stringifyVal, observeExpr } from './stringify.js';
-export { watchScore, clampTrueScore } from './score.js';
+export { watchScore, clampTrueScore } from './watch-score.js';
 export {
 	ABSENT,
 	AST_CAP,
@@ -24,4 +24,4 @@ export {
 	type ScoldReason,
 	type StringifierKind,
 	type Stringifiers,
-} from './types.js';
+} from './expr-types.js';

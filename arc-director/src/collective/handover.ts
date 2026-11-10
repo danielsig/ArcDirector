@@ -1,8 +1,8 @@
 import type { ChatRequest, ChatResponse } from '../inference/provider.js';
 import { extractJson, isRecord } from '../json.js';
-import type { Character } from '../character/character.js';
-import type { Persona } from '../character/persona.js';
-import type { Collective } from './collective.js';
+import type { Character } from '../character/Character.js';
+import type { Persona } from '../character/Persona.js';
+import type { Collective } from './Collective.js';
 
 /** One character's move between collectives in a batch: where it started and where it ended. `null` is on its own. */
 export type Journey<TCtx = unknown> = {

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed } from 'vue';
 import type { BenchKind } from '../director/bench';
-import { clearQuickBench, pauseQuickBench, quickBench, quickBenchBlocked, quickBenchProgress, resumeQuickBench, startQuickBench } from '../director/quickBench';
+import { clearQuickBench, pauseQuickBench, quickBench, quickBenchBlocked, quickBenchProgress, resumeQuickBench, startQuickBench } from '../director/quick-bench';
 
 /**
  * Ranks a list of LM Studio's models by a quick bench: a wand that starts it, then a bar while it runs that pauses,

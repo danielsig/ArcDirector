@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { fmtMem, type HudModel } from './hudModel';
+import { fmtMem, type HudModel } from './hud-model';
 
 defineProps<{
 	hud:HudModel;

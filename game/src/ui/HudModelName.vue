@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref } from 'vue';
-import type { HudModel } from './hudModel';
+import type { HudModel } from './hud-model';
 import HudDialog from './HudDialog.vue';
 import InferencePicker from './InferencePicker.vue';
 import MindMenu from './MindMenu.vue';

@@ -5,9 +5,9 @@ import {
 	type ControlDispatch,
 	type ControlLink,
 } from '@arc-director/control';
-import { dispatchControl } from './dispatch';
+import { dispatchControl } from './dispatch-control';
 import type { Session } from '../engine/Session';
-import { readURLSession, writeURLSession } from '../engine/urlView';
+import { readURLSession, writeURLSession } from '../engine/url-view';
 
 export function bindArcControl(session:Session):()=>void {
 	const dispatch:ControlDispatch = (command) => dispatchControl(session, command);

@@ -1,13 +1,13 @@
 import { type GameObject } from '@arc-director/kindling';
 import { Chest, Door, Lock, Named, TAKE_REACHED } from '../engine/components';
-import type { World } from '../engine/World';
-import { Container, Harvest, Item, Pickupable } from './components';
+import type { DemoWorld } from '../engine/demo-world';
+import { Container, Harvest, Item, Pickupable } from './item-components';
 import { getDef } from './defs';
 import { equipItem } from './equip';
 import { characterIs, distXZ, findCarried, findReady, itemMatchesName, tryInsert } from './inventory';
 import { instantiateDef, isBackpack, type ItemInstance } from './instance';
 import { nearestDoorway } from '../world/interior';
-import { captureItem, spawnWorldItem } from '../world/spawnItem';
+import { captureItem, spawnWorldItem } from '../world/spawn-item';
 import { cueAt } from '../audio/cue';
 
 export const PICKUP_RANGE = 1.7;
@@ -16,7 +16,7 @@ export const USE_RANGE = 2.2;
 const DOOR_REACH = 1.2;
 
 /** The name of the key that opens `lock`, wherever it lies, so a locked thing says `BrassKey` and not just "a brass key". */
-export function keyNameFor(world:World | null, lock:Lock):string {
+export function keyNameFor(world:DemoWorld | null, lock:Lock):string {
 	const fits = (it:ItemInstance) => it.Key?.keyID === lock.keyID;
 	for (const go of world?.objects ?? []) {
 		const item = go.getComponent(Item);
@@ -32,7 +32,7 @@ export function keyNameFor(world:World | null, lock:Lock):string {
 }
 
 /** `locked — needs BrassKey`, the one failure every locked door and chest gives. */
-export function lockedReason(world:World | null, lock:Lock):string {
+export function lockedReason(world:DemoWorld | null, lock:Lock):string {
 	return lock.keyID ? `locked — needs ${keyNameFor(world, lock)}` : 'locked';
 }
 
@@ -91,7 +91,7 @@ export function pickup(character:GameObject, loot:GameObject):string {
 }
 
 /** The taken `loot` cannot be picked up again; it leaves the ground, with its sound, when the hand reaches it. */
-function takeAway(world:World, character:GameObject, loot:GameObject):void {
+function takeAway(world:DemoWorld, character:GameObject, loot:GameObject):void {
 	loot.removeComponent(Pickupable);
 	world.after(TAKE_REACHED, () => {
 		world.remove(loot);
@@ -111,7 +111,7 @@ export function dropItem(character:GameObject, item:import('./instance').ItemIns
 }
 
 /** First spawn keeps `name`. Later ones of that name get `name2`, `name3`, so each object id stays unique. */
-export function freeWorldID(world:World, name:string):string {
+export function freeWorldID(world:DemoWorld, name:string):string {
 	if (!world.findByID(name)) {
 		return name;
 	}
@@ -123,7 +123,7 @@ export function freeWorldID(world:World, name:string):string {
 }
 
 export function spawnDefAt(
-	world:World,
+	world:DemoWorld,
 	defID:string,
 	x:number,
 	y:number,
@@ -200,7 +200,7 @@ export function chestHolding(chest:GameObject, name:string):ChestHold | null {
 	return bag && item ? { chest, item, bag } : null;
 }
 
-export function findChestHolding(world:World, name:string):ChestHold | null {
+export function findChestHolding(world:DemoWorld, name:string):ChestHold | null {
 	for (const go of world.objects) {
 		const held = chestHolding(go, name);
 		if (held) {
@@ -211,7 +211,7 @@ export function findChestHolding(world:World, name:string):ChestHold | null {
 }
 
 /** Walk target for a name: floor object, or the open unlocked chest that holds it. */
-export function resolveNamedTarget(world:World, name:string):GameObject | undefined {
+export function resolveNamedTarget(world:DemoWorld, name:string):GameObject | undefined {
 	const go = world.findNamed(name);
 	if (go) {
 		return go;

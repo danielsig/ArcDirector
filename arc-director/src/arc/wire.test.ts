@@ -1,11 +1,11 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { parseArcText, formatArc, formatArcBlocks } from './parse.js';
+import { parseArcText, formatArc, formatArcBlocks } from './arc-parse.js';
 import { arcFromJSON, arcJSONBlocks, arcJSONText, arcSoFar, finishedSteps, arcToJSON, parseArc, replyBreakdown } from './wire.js';
 import { replySchema } from './schema.js';
 import { VerbRegistry, registerStockVerbs } from './stock-verbs.js';
-import { registerStockCollectiveVerbs } from '../collective/verbs.js';
-import { ArcError, sameProgram, type Arc } from './types.js';
+import { registerStockCollectiveVerbs } from '../collective/collective-verbs.js';
+import { ArcError, sameProgram, type Arc } from './arc-types.js';
 
 function verbs():VerbRegistry {
 	return registerStockVerbs(new VerbRegistry());

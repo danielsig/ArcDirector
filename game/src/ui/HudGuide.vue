@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, useTemplateRef, watch } from 'vue';
 import { SCENES } from '../data/scenes';
-import type { HudModel } from './hudModel';
+import type { HudModel } from './hud-model';
 import { readBackquoteGlyph, universalKeys } from './bindings';
 import { briefSeen, markBriefSeen } from './briefs';
 import HudDialog from './HudDialog.vue';

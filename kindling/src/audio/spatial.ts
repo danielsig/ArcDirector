@@ -1,4 +1,4 @@
-import type { ListenerPose } from './types.js';
+import type { ListenerPose } from './audio-types.js';
 
 /** Kindling yaw 0 faces −Z. */
 export function forwardXZ(yaw:number):{ x:number; z:number } {

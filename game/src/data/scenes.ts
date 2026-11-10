@@ -1,23 +1,23 @@
 import type { ArcDirector } from 'arc-director';
-import { mapCell, type ChunkFile } from '../world/decodeGlyphChunk';
-import { DUNGEON_CHUNKS } from './chunks/dungeon';
-import { glen_0_0 } from './chunks/glen_0_0';
-import { glen_0_1 } from './chunks/glen_0_1';
-import { glen_1_0 } from './chunks/glen_1_0';
-import { glen_1_1 } from './chunks/glen_1_1';
-import { market_0_0 } from './chunks/market_0_0';
-import { market_1_0 } from './chunks/market_1_0';
-import { market_0_1 } from './chunks/market_0_1';
-import { market_1_1 } from './chunks/market_1_1';
-import { RUINS_CHUNKS } from './chunks/ruins';
+import { mapCell, type ChunkFile } from '../world/decode-glyph-chunk';
+import { DUNGEON_CHUNKS } from '../scenes/dungeon-vault/dungeon-vault-map';
+import { glen_0_0 } from './chunks/glen-0-0';
+import { glen_0_1 } from './chunks/glen-0-1';
+import { glen_1_0 } from './chunks/glen-1-0';
+import { glen_1_1 } from './chunks/glen-1-1';
+import { market_0_0 } from './chunks/market-0-0';
+import { market_1_0 } from './chunks/market-1-0';
+import { market_0_1 } from './chunks/market-0-1';
+import { market_1_1 } from './chunks/market-1-1';
+import { RUINS_CHUNKS } from '../scenes/ruins/ruins-map';
 import type { CameraLook, NPCSpawnOpts, RoomDef } from '../world/spawn';
 import type { OutskirtHeights, Surface } from '../world/land';
 import { goodsOf, packOf } from '../items/wares';
 import type { GameHost, CharacterCtx } from '../director/adapter';
-import { createDirector as createDungeonDirector } from '../director/scenes/dungeon';
+import { createDirector as createDungeonDirector } from '../scenes/dungeon-vault/dungeon-vault-crawl';
 import { createDirector as createGlenDirector } from '../director/scenes/glen';
-import { createDirector as createMarketDirector } from '../director/scenes/market';
-import { createDirector as createRuinsDirector } from '../director/scenes/ruins';
+import { createDirector as createMarketDirector } from '../scenes/marketplace/marketplace-hooks';
+import { createDirector as createRuinsDirector } from '../scenes/ruins/ruins-scene';
 
 /** One NPC of a scene, in the chunk it starts in. */
 export type NPCSpawnDef = NPCSpawnOpts & { chunkID:string };

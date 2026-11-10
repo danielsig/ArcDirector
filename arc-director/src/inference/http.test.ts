@@ -2,14 +2,14 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { MODEL_TIERS, type ThinkOff } from './models.js';
 import { HttpProvider, loadConfigFits, parseChatTimings, stripTemplateTokens } from './http.js';
-import { ChatSystemOne, JevSystemOne, ModelSystemOne } from './systemone.js';
+import { ChatSystemOne, JevSystemOne, ModelSystemOne } from './system-one.js';
 import type { ChatDelta, ChatRequest } from './provider.js';
 import {
 	EMPTY_THINK_PREFILL,
 	DONE_THOUGHT,
 	PREFILL_MARKER,
 	clearAssistantThinkCache,
-} from './assistantThink.js';
+} from './assistant-think.js';
 
 function idWithThinkOff(mode:ThinkOff):string {
 	const row = MODEL_TIERS.find((t) => t.thinking && t.thinkOff === mode);

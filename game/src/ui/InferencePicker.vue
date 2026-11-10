@@ -294,17 +294,26 @@ function status(m:BrowserModel):string {
 				<button type="button" class="primary" @click="useLMStudio">Use LM Studio</button>
 			</div>
 		</div>
-		<aside v-if="!steps" class="addon skaldic" :class="{ on: layaOn }">
-			<span class="pitch">
-				<span class="eyebrow"><span class="badge">Add-on</span> Trained for ArcDirector</span>
-				<span class="title">
-					<b>{{ SKALDIC_LAYA.label }}</b>
-					<span class="size">{{ SKALDIC_LAYA.sizeGB }} GB</span>
-					<span class="note">{{ layaNote }}</span>
+		<aside v-if="!steps" class="addon-slot">
+			<button
+				type="button"
+				class="addon skaldic"
+				:class="{ on: layaOn }"
+				:disabled="!layaOn && !layaReady"
+				:aria-pressed="layaOn"
+				@click="toggleLaya"
+			>
+				<span class="pitch">
+					<span class="eyebrow"><span class="badge">Add-on</span> Trained for ArcDirector</span>
+					<span class="title">
+						<b>{{ SKALDIC_LAYA.label }}</b>
+						<span class="size">{{ SKALDIC_LAYA.sizeGB }} GB</span>
+						<span class="note">{{ layaNote }}</span>
+					</span>
+					<span class="line">Sharper reflexes: fight or flee, heal or strike, decided in under a tenth of a second.</span>
 				</span>
-				<span class="line">Sharper reflexes: fight or flee, heal or strike, decided in under a tenth of a second.</span>
-			</span>
-			<HudSwitch :on="layaOn" :disabled="!layaOn && !layaReady" @toggle="toggleLaya" />
+				<HudSwitch decorative :on="layaOn" />
+			</button>
 			<button v-if="layaDownloading" type="button" class="cancel" :title="`Stop downloading ${SKALDIC_LAYA.label}`" @click="cancelDownload(SKALDIC_LAYA.model)">
 				Cancel
 			</button>
@@ -557,11 +566,11 @@ a:focus-visible {
 	stroke-linejoin: round;
 }
 
-.model-row.recommended .model {
+.recommended .model {
 	background: color-mix(in srgb, var(--gold) 22%, var(--parchment));
 }
 
-.model-row.recommended .model:hover:not(:disabled) {
+:where(.recommended) .model:hover:not(:disabled) {
 	background: color-mix(in srgb, var(--gold) 38%, var(--parchment));
 }
 
@@ -635,11 +644,6 @@ a:focus-visible {
 	padding-right: 100px;
 }
 
-.addon .cancel {
-	position: static;
-	transform: none;
-}
-
 .delete svg {
 	width: 28px;
 	height: 28px;
@@ -665,16 +669,30 @@ a:focus-visible {
 	transition: width var(--slow) linear;
 }
 
-/* Skaldic Laya, under the choices: an add-on to the main model, not one of them, kept to three short lines. */
-.addon {
+/* Skaldic Laya, under the choices: an add-on to the main model, not one of them, kept to three short lines. The card is the button. */
+.addon-slot {
 	position: relative;
+	margin-top: 12px;
+}
+
+.addon {
 	display: flex;
 	align-items: center;
 	gap: 16px;
-	margin-top: 12px;
+	width: 100%;
 	padding: 12px 18px;
+	text-align: left;
 	border: var(--line-thin) dashed var(--ink);
 	border-radius: var(--radius);
+}
+
+/* A disabled card stays readable; only its pill dims, as the switch did when it was the only control. */
+.addon:disabled {
+	opacity: 1;
+}
+
+.addon:disabled .switch {
+	opacity: 0.5;
 }
 
 .addon.on {
@@ -767,7 +785,7 @@ a:focus-visible {
 	pointer-events: none;
 }
 
-.skaldic:hover::after,
+.skaldic:hover:not(:disabled)::after,
 .skaldic:focus-within::after {
 	transform: translateX(120%);
 	transition: transform 0.9s var(--ease-out);
@@ -780,7 +798,7 @@ a:focus-visible {
 }
 
 .model.skaldic:hover:not(:disabled),
-.addon.skaldic:hover {
+.addon.skaldic:hover:not(:disabled) {
 	box-shadow: var(--shadow), 0 0 20px rgba(255, 196, 80, 0.45), inset 0 0 18px rgba(255, 200, 90, 0.2);
 }
 
@@ -830,10 +848,22 @@ a:focus-visible {
 	border-color: var(--ink);
 }
 
-/* Its bin sits beside its switch, not over the card's corner as a model's does. */
-.addon .delete {
-	position: static;
-	transform: none;
+/* Cancel and delete sit on the card's right, beside the pill, and are not part of the card button. */
+.addon-slot .cancel,
+.addon-slot .delete {
+	z-index: 1;
+}
+
+.addon-slot:has(> .cancel) .addon {
+	padding-right: 110px;
+}
+
+.addon-slot:has(> .delete) .addon {
+	padding-right: 78px;
+}
+
+.addon-slot:has(> .delete.armed) .addon {
+	padding-right: 112px;
 }
 
 .addon.skaldic.on {
@@ -842,7 +872,7 @@ a:focus-visible {
 }
 
 @media (prefers-reduced-motion: reduce) {
-	.skaldic:hover::after,
+	.skaldic:hover:not(:disabled)::after,
 	.skaldic:focus-within::after {
 		transition: none;
 	}

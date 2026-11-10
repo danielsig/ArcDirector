@@ -1,9 +1,9 @@
 <script setup lang="ts">
 import { computed, inject, nextTick, onMounted, onUnmounted, ref, watch } from 'vue';
-import type { HudModel } from './hudModel';
-import { parseSlash, slashComplete, suggestSay, type SaySuggestion } from './sayCommands';
+import type { HudModel } from './hud-model';
+import { parseSlash, slashComplete, suggestSay, type SaySuggestion } from './say-commands';
 import { lsDel, lsGet, lsSet } from '../prefs';
-import { sessionKey } from './sessionKey';
+import { sessionKey } from './session-key';
 
 const props = defineProps<{
 	hud:HudModel;

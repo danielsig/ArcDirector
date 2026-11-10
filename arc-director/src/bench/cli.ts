@@ -7,7 +7,7 @@
  * `--only <id>` plays the case of that character alone, and `--show` prints each think's thought and reply.
  */
 import { parseArgs } from 'node:util';
-import type { ArcDirector } from '../director/director.js';
+import type { ArcDirector } from '../director/ArcDirector.js';
 import { HttpProvider, type ModelSettings } from '../inference/http.js';
 import { lmStudioConfig } from '../inference/presets.js';
 import type { ChatRequest, ChatResponse, InferenceProvider } from '../inference/provider.js';

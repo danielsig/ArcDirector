@@ -1,5 +1,5 @@
 import { bagOf } from './prev.js';
-import { ExprError, needleMatch, type ExprEntity, type ExprVal, type NativeFn } from './types.js';
+import { ExprError, needleMatch, type ExprEntity, type ExprVal, type NativeFn } from './expr-types.js';
 
 export function asEntityVal(e:ExprEntity):ExprVal {
 	return { kind: 'entity', value: e };

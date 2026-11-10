@@ -1,6 +1,6 @@
 import { BrowserProvider, HttpProvider, type ArcDirector, JevSystemOne, ModelSystemOne, type SystemOne } from 'arc-director';
 import { ARC_BENCH, benchArcs, benchSystemOne, DECISION_BENCH, type BenchScore } from 'arc-director/bench';
-import type { HudModelOption } from '../ui/hudModel';
+import type { HudModelOption } from '../ui/hud-model';
 import { prefs, type Prefs } from '../prefs';
 import { addThinking, addXAIThinking, XAI } from './adapter';
 import { HOSTED } from './hosted';

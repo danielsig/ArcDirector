@@ -1,4 +1,4 @@
-import type { LodLayer } from './types.js';
+import type { LodLayer } from './perception-types.js';
 
 export function pascalCase(name:string):string {
 	return name

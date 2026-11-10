@@ -2,7 +2,7 @@ import { Animator, Component, MeshRenderer, Time, toonClip, type GameObject } fr
 import * as THREE from 'three';
 import { Appearance, Celebrating, HurtFlash, RigidBody, SpeechBubble, Vitals } from '../engine/components';
 import { Order } from '../engine/order';
-import { characterModel } from '../render/characterModels';
+import { characterModel } from '../render/character-models';
 import { CharacterPose } from './CharacterPose';
 import { HeldProps } from './HeldProps';
 import { Seated } from './Seated';

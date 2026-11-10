@@ -1,4 +1,4 @@
-export { Collective, type CollectiveJSON, type CollectiveOptions } from './collective.js';
+export { Collective, type CollectiveJSON, type CollectiveOptions } from './Collective.js';
 export {
 	STOCK_COLLECTIVE_VERBS,
 	STOCK_COLLECTIVE_VERB_DEFS,
@@ -6,7 +6,7 @@ export {
 	registerStockCollectiveVerbs,
 	isFormationVerb,
 	type StockCollectiveVerb,
-} from './verbs.js';
+} from './collective-verbs.js';
 export { squadTag, shortTag, shortTags, isSquadTag } from './tags.js';
 export {
 	chatHandover,

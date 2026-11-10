@@ -1,4 +1,4 @@
-import { ABSENT, type ExprEntity, type ExprVal } from './types.js';
+import { ABSENT, type ExprEntity, type ExprVal } from './expr-types.js';
 
 export type PrevVerb = {
 	secondsAgo:number;

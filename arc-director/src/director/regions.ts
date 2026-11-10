@@ -1,6 +1,6 @@
-import type { Character } from '../character/character.js';
-import type { Persona } from '../character/persona.js';
-import type { Vec } from '../world/types.js';
+import type { Character } from '../character/Character.js';
+import type { Persona } from '../character/Persona.js';
+import type { Vec } from '../world/world-types.js';
 import { distance } from '../world/vec.js';
 
 /**

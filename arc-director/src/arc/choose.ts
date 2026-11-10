@@ -1,4 +1,4 @@
-import { firstStep, isArc, type Arc, type Step } from './types.js';
+import { firstStep, isArc, type Arc, type Step } from './arc-types.js';
 
 /**
  * `choose(goal, name=arc, …)`: a System One model picks one arc by name. Every arg but `goal` is a choice;

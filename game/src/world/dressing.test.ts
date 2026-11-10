@@ -3,26 +3,26 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { formatSight } from 'arc-director';
 import { Named } from '../engine/components';
-import { World } from '../engine/World';
+import { DemoWorld } from '../engine/demo-world';
 import { lookWorld } from '../director/perception';
-import { glen_0_0 } from '../data/chunks/glen_0_0';
-import { glen_0_1 } from '../data/chunks/glen_0_1';
-import { glen_1_0 } from '../data/chunks/glen_1_0';
-import { glen_1_1 } from '../data/chunks/glen_1_1';
-import { market_0_0 } from '../data/chunks/market_0_0';
-import { market_0_1 } from '../data/chunks/market_0_1';
-import { market_1_0 } from '../data/chunks/market_1_0';
-import { market_1_1 } from '../data/chunks/market_1_1';
-import { RUINS_CHUNKS } from '../data/chunks/ruins';
-import { DUNGEON_CHUNKS } from '../data/chunks/dungeon';
-import { decodeGlyphChunk, type ChunkFile } from './decodeGlyphChunk';
+import { glen_0_0 } from '../data/chunks/glen-0-0';
+import { glen_0_1 } from '../data/chunks/glen-0-1';
+import { glen_1_0 } from '../data/chunks/glen-1-0';
+import { glen_1_1 } from '../data/chunks/glen-1-1';
+import { market_0_0 } from '../data/chunks/market-0-0';
+import { market_0_1 } from '../data/chunks/market-0-1';
+import { market_1_0 } from '../data/chunks/market-1-0';
+import { market_1_1 } from '../data/chunks/market-1-1';
+import { RUINS_CHUNKS } from '../scenes/ruins/ruins-map';
+import { DUNGEON_CHUNKS } from '../scenes/dungeon-vault/dungeon-vault-map';
+import { decodeGlyphChunk, type ChunkFile } from './decode-glyph-chunk';
 import { spawnChunkEntities } from './spawn';
-import { syncDressingColliders } from './dressingColliders';
-import { DRESSING_SIGHT_WORDS, planProps, PROP_IDS } from './dressingPlan';
+import { syncDressingColliders } from './dressing-colliders';
+import { DRESSING_SIGHT_WORDS, planProps, PROP_IDS } from './dressing-plan';
 import { cellWays } from './path';
-import { solidAt, THIN_WALLS } from './thinWall';
+import { solidAt, THIN_WALLS } from './thin-wall';
 
-import type { Chunk } from './Chunk';
+import type { DemoChunk } from './demo-chunk';
 
 const SCENE_MAPS:Record<string, ChunkFile[]> = {
 	glen: [glen_0_0, glen_0_1, glen_1_0, glen_1_1],
@@ -31,7 +31,7 @@ const SCENE_MAPS:Record<string, ChunkFile[]> = {
 	dungeon: DUNGEON_CHUNKS,
 };
 
-const decode = (files:ChunkFile[]):Chunk[] => files.map((file) => decodeGlyphChunk(file).chunk);
+const decode = (files:ChunkFile[]):DemoChunk[] => files.map((file) => decodeGlyphChunk(file).chunk);
 
 test('dressing stands on open ground, and every prop is used somewhere', () => {
 	const placed = new Set<string>();
@@ -51,7 +51,7 @@ test('dressing stands on open ground, and every prop is used somewhere', () => {
 
 test('in the glen, dressing blocks walking when solid, and never reaches sight', () => {
 	const chunks = decode(SCENE_MAPS.glen!);
-	const world = new World();
+	const world = new DemoWorld();
 	for (const chunk of chunks) {
 		spawnChunkEntities(world, chunk);
 		world.addChunk(chunk);
@@ -86,7 +86,7 @@ test('in the glen, dressing blocks walking when solid, and never reaches sight',
 
 test('in the ruins, no route steps onto a cell a fallen column lies across', () => {
 	const chunks = decode(SCENE_MAPS.ruins!);
-	const world = new World();
+	const world = new DemoWorld();
 	for (const chunk of chunks) {
 		spawnChunkEntities(world, chunk);
 		world.addChunk(chunk);

@@ -10,13 +10,13 @@ import {
 	type ArcResult,
 	type Join,
 	type Step,
-} from './types.js';
+} from './arc-types.js';
 import { evaluate } from '../expr/eval.js';
-import { parse } from '../expr/parse.js';
+import { parse } from '../expr/expr-parse.js';
 import { dummyEntity } from '../expr/natives.js';
-import { watchScore } from '../expr/score.js';
+import { watchScore } from '../expr/watch-score.js';
 import { stringifyVal } from '../expr/stringify.js';
-import { LIST_CAP, SampleCache, type Ast, type Catalog, type ExprVal } from '../expr/types.js';
+import { LIST_CAP, SampleCache, type Ast, type Catalog, type ExprVal } from '../expr/expr-types.js';
 import type { Law } from './laws.js';
 
 export const THINK_ABOUT_CAP = 200;

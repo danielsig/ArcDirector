@@ -1,6 +1,6 @@
-import type { KindSpec } from '../rts/types.js';
+import type { KindSpec } from '../rts/rts-types.js';
 import { acceptOffer, answerSpeech, sceneSearch } from '../scenario/play.js';
-import { THEM, US, type SceneSpot, type SceneWorld } from '../scenario/world.js';
+import { THEM, US, type SceneSpot, type SceneWorld } from '../scenario/scene-world.js';
 import type { ArcCase } from './arc.js';
 import { everydayMemories } from './memories.js';
 

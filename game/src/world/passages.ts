@@ -1,6 +1,6 @@
 import type { GameObject } from '@arc-director/kindling';
 import { Door, Interior, Lock, Named } from '../engine/components';
-import type { World } from '../engine/World';
+import type { DemoWorld } from '../engine/demo-world';
 import { CELL_SIZE } from './constants';
 
 /**
@@ -20,9 +20,9 @@ const unkey = (k:string):[number, number] => k.split(',').map(Number) as [number
 const STEPS:[number, number][] = [[1, 0], [-1, 0], [0, 1], [0, -1]];
 
 /** The world's passages, by cell; rebuilt when its chunks change. */
-const built = new WeakMap<World, { chunks:number; byCell:Map<string, Passage> }>();
+const built = new WeakMap<DemoWorld, { chunks:number; byCell:Map<string, Passage> }>();
 
-function passages(world:World):Map<string, Passage> {
+function passages(world:DemoWorld):Map<string, Passage> {
 	const cached = built.get(world);
 	if (cached?.chunks === world.chunks.size) {
 		return cached.byCell;
@@ -131,7 +131,7 @@ function doorWord(go:GameObject):string {
 const meters = (cells:number):number => Math.round(cells * CELL_SIZE);
 
 /** The passage at `x`, `z`, if any: who stands there is in it. */
-function passageAt(world:World, x:number, z:number):{ passage:Passage; cell:string } | undefined {
+function passageAt(world:DemoWorld, x:number, z:number):{ passage:Passage; cell:string } | undefined {
 	const { tx, tz } = world.tileCoordAt(x, z);
 	const cell = key(tx, tz);
 	const passage = passages(world).get(cell);
@@ -142,7 +142,7 @@ function passageAt(world:World, x:number, z:number):{ passage:Passage; cell:stri
  * Where someone at `x`, `z` stands in a passage, in words: what it joins, how far each end is along it, and each
  * door in it or its walls with how far along it is. Nothing outside every passage.
  */
-export function passageWhereabouts(world:World, x:number, z:number):string | undefined {
+export function passageWhereabouts(world:DemoWorld, x:number, z:number):string | undefined {
 	const at = passageAt(world, x, z);
 	if (!at) {
 		return undefined;
@@ -166,6 +166,6 @@ export function passageWhereabouts(world:World, x:number, z:number):string | und
 }
 
 /** The doors of the passage someone at `x`, `z` stands in: always in their sight, however the passage turns. */
-export function passageDoors(world:World, x:number, z:number):GameObject[] {
+export function passageDoors(world:DemoWorld, x:number, z:number):GameObject[] {
 	return [...passageAt(world, x, z)?.passage.doors.keys() ?? []];
 }

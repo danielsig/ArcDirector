@@ -2,8 +2,8 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { STOCK_VERBS } from '../arc/stock-verbs.js';
 import { parseArc } from '../arc/wire.js';
-import { ArcDirector } from '../director/director.js';
-import { OPEN_WORLD } from '../testing/world.js';
+import { ArcDirector } from '../director/ArcDirector.js';
+import { OPEN_WORLD } from '../testing/open-world.js';
 
 type Ctx = { id:string };
 

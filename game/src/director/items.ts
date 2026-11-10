@@ -13,7 +13,7 @@ import {
 	MarketNPC,
 	Named,
 } from '../engine/components';
-import { Harvest, Pickupable } from '../items/components';
+import { Harvest, Pickupable } from '../items/item-components';
 import {
 	characterIs,
 	compactName,
@@ -29,7 +29,7 @@ import { coinsOf, noteWant, transferCoins } from '../items/wallet';
 import { chestHolding, dropItem, pickup, takeFromChest } from '../items/pickup';
 import { cueAt } from '../audio/cue';
 import { useItem } from '../items/use';
-import { captureItem } from '../world/spawnItem';
+import { captureItem } from '../world/spawn-item';
 import type { GameHost } from './adapter';
 import { findObject, idOf } from './names';
 

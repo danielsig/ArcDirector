@@ -1,4 +1,4 @@
-import type { HostWorld, PathStep, Vec } from './types.js';
+import type { HostWorld, PathStep, Vec } from './world-types.js';
 import { distance } from './vec.js';
 
 /** The parts of a world a route search walks on. */

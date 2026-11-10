@@ -1,7 +1,7 @@
 import { CHOOSE_VERB, FOCUS_EDIT_VERBS, groupTargets, MIND_ONLY_VERBS, STOCK_MOVE_VERBS, WATCH_EDIT_VERBS, type VerbRegistry } from '../arc/stock-verbs.js';
-import { formatStep } from '../arc/parse.js';
-import { arcSteps, isArc, sameProgram, type Arc, type ArcResult, type Step } from '../arc/types.js';
-import type { Catalog, ExprEntity } from '../expr/types.js';
+import { formatStep } from '../arc/arc-parse.js';
+import { arcSteps, isArc, sameProgram, type Arc, type ArcResult, type Step } from '../arc/arc-types.js';
+import type { Catalog, ExprEntity } from '../expr/expr-types.js';
 import { cloneEntity, prevMeFromJSON } from '../expr/prev.js';
 import {
 	DEFAULT_MAX_LAWS,
@@ -26,9 +26,9 @@ import {
 	type ArcSessionOpts,
 } from '../arc/run.js';
 import type { Mind } from '../mind/mind.js';
-import { ArcRecord } from './record.js';
+import { ArcRecord } from './ArcRecord.js';
 import type { SayResult, SayTo, TalkNet } from '../mind/talk.js';
-import type { Kit, KitSource } from './types.js';
+import type { Kit, KitSource } from './character-types.js';
 import type { MoveOpts } from '../world/mover.js';
 
 /** What a runner has while its kit cannot be read: a callback kit with no context. */

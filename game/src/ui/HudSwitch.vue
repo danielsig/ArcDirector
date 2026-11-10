@@ -1,13 +1,33 @@
 <script setup lang="ts">
-/** An on/off switch: a pill whose knob slides across when on. It reads "On" or "Off" to a screen reader. */
-defineProps<{ on:boolean; disabled?:boolean }>();
-defineEmits<{ toggle:[] }>();
+/**
+ * An on/off switch: a pill whose knob slides across when on. It reads "On" or "Off" to a screen reader.
+ * `decorative` draws the same pill with no control of its own, for a card that is itself the button.
+ */
+const props = defineProps<{ on:boolean; disabled?:boolean; decorative?:boolean }>();
+const emit = defineEmits<{ toggle:[] }>();
+
+function press(event:MouseEvent):void {
+	if (props.decorative) {
+		return;
+	}
+	event.stopPropagation();
+	emit('toggle');
+}
 </script>
 
 <template>
-	<button type="button" class="switch" :class="{ on }" :aria-pressed="on" :disabled="disabled" @click.stop="$emit('toggle')">
+	<component
+		:is="decorative ? 'span' : 'button'"
+		class="switch"
+		:class="{ on }"
+		:type="decorative ? undefined : 'button'"
+		:aria-pressed="decorative ? undefined : on"
+		:aria-hidden="decorative || undefined"
+		:disabled="decorative ? undefined : disabled"
+		@click="press"
+	>
 		{{ on ? 'On' : 'Off' }}
-	</button>
+	</component>
 </template>
 
 <style scoped>

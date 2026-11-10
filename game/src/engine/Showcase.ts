@@ -1,17 +1,17 @@
-import { Component, Game as KindlingGame, GameObject, Camera as RenderCamera, resetAllocID, resetTime } from '@arc-director/kindling';
-import { World } from './World';
+import { Component, Game, GameObject, Camera as RenderCamera, resetAllocID, resetTime } from '@arc-director/kindling';
+import { DemoWorld } from './demo-world';
 import { CAMERA_DISTANCE, Camera } from './components';
 import { PlayerInput } from '../characters/PlayerInput';
 import { rendererLook } from '../render/look';
 import { sceneByID, type SceneDef } from '../data/scenes';
-import { SHADOWS, loadSceneArt, spawnScene } from './Game';
+import { SHADOWS, loadSceneArt, spawnScene } from './demo-game';
 import { WorldStream, WorldView } from './systems';
 
 /** Radians a second the camera circles. */
 const ORBIT_SPEED = 0.06;
 /** Meters from the middle of the scene: wide enough to show most of it. */
 const ORBIT_DISTANCE = 18;
-/** Width over height of the menu's stills of each backdrop (`game/scripts/shootBackdrops.mjs` shoots at this). */
+/** Width over height of the menu's stills of each backdrop (`game/scripts/shoot-backdrops.mjs` shoots at this). */
 export const STILL_ASPECT = 16 / 9;
 /** Frames drawn after the scene's art loads before it counts as ready: shadows and lighting take a few to settle. */
 const SETTLE_FRAMES = 12;
@@ -38,7 +38,7 @@ class Orbit extends Component {
  * and plays no sound. The view is framed as its still is shown (covering the screen), and the camera holds still until `ready`.
  * With a fixed view, the camera looks from there and never circles (the menu's card pictures).
  */
-export class Showcase extends KindlingGame<World> {
+export class Showcase extends Game<DemoWorld> {
 	/** Resolves once the scene's art has loaded and a few frames are drawn; the camera starts circling then. */
 	public readonly ready:Promise<void>;
 	private readonly _scene:SceneDef;
@@ -51,7 +51,7 @@ export class Showcase extends KindlingGame<World> {
 	private _settled:()=>void = () => {};
 
 	constructor(sceneID:string, private readonly _fixed?:ShowcaseView) {
-		super(new World());
+		super(new DemoWorld());
 		// The menu stays smooth beside another window.
 		this.unfocusedHz = Infinity;
 		this._scene = sceneByID(sceneID);

@@ -1,10 +1,10 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { parseArcText } from '../arc/parse.js';
-import { firstStep, type Arc } from '../arc/types.js';
+import { parseArcText } from '../arc/arc-parse.js';
+import { firstStep, type Arc } from '../arc/arc-types.js';
 import { VerbRegistry, registerStockVerbs } from '../arc/stock-verbs.js';
-import { registerStockCollectiveVerbs } from '../collective/verbs.js';
-import { NameBook } from '../character/names.js';
+import { registerStockCollectiveVerbs } from '../collective/collective-verbs.js';
+import { NameBook } from '../character/NameBook.js';
 import { idsOf, mapArc, mapExpr, namesOf } from './ids.js';
 
 const verbs = registerStockCollectiveVerbs(registerStockVerbs(new VerbRegistry()));

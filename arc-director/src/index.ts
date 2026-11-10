@@ -16,7 +16,7 @@ export type {
 	ToolDef,
 } from './inference/provider.js';
 export { chatContentText, DEFAULT_SAMPLING, type Sampling } from './inference/provider.js';
-export { showLoadingBar, type LoadingBarOptions } from './inference/loadingBar.js';
+export { showLoadingBar, type LoadingBarOptions } from './inference/loading-bar.js';
 export { BROWSER_DECISION_MODELS, browserModelURL, BrowserProvider, DEFAULT_BROWSER_MODEL, Skaldic, SKALDIC_BROWSER_MODELS, inPageFetch, type BrowserProviderOptions } from './inference/browser.js';
 export { fittingModel, gpuMemory, memoryOf, type GPUMemory } from './inference/device.js';
 export { DownloadCanceled, ModelDownload, type DownloadObserver, type DownloadProgress, type DownloadSubscription } from './inference/download.js';
@@ -24,7 +24,7 @@ export { HttpProvider, parseChatTimings, mergeClientTimings, loadConfigFits, typ
 export {
 	type ApplyPromptTemplate,
 	type PromptTemplateMessage,
-} from './inference/assistantThink.js';
+} from './inference/assistant-think.js';
 export {
 	PREFERRED_MODELS,
 	MODEL_TIERS,
@@ -67,13 +67,13 @@ export {
 	type FakeEmbedFn,
 } from './inference/fake.js';
 
-export type { Arc, ArcResult, CountMap, Join, Step } from './arc/types.js';
-export { arcSteps, firstStep, isArc, isHoistedWhen, isIssue } from './arc/types.js';
-export { ArcError, BlockedArcError, JOIN_SYMBOL, JOINS, SYMBOL_JOIN } from './arc/types.js';
+export type { Arc, ArcResult, CountMap, Join, Step } from './arc/arc-types.js';
+export { arcSteps, firstStep, isArc, isHoistedWhen, isIssue } from './arc/arc-types.js';
+export { ArcError, BlockedArcError, JOIN_SYMBOL, JOINS, SYMBOL_JOIN } from './arc/arc-types.js';
 export { VerbRegistry, registerStockVerbs, STOCK_VERBS, STOCK_MOVE_VERBS, STOCK_ITEM_VERBS, STOCK_TRADE_VERBS, STOCK_MIND_VERBS, STOCK_ARC_VERBS, CHOOSE_VERB, GROUP_VERB, STOCK_VERB_DEFS, MIND_ONLY_VERBS, type StockVerb, type VerbArgKind, type VerbArgMap, type VerbDef, type VerbSpec } from './arc/stock-verbs.js';
 export { replySchema, verbHelp } from './arc/schema.js';
 export { validateArc, validateStep } from './arc/validate.js';
-export { formatArc, formatArcBlocks, formatStep, parseArcText } from './arc/parse.js';
+export { formatArc, formatArcBlocks, formatStep, parseArcText } from './arc/arc-parse.js';
 export { arcArg, arcFromJSON, arcJSONBlocks, arcJSONText, arcToJSON, parseArc } from './arc/wire.js';
 
 export {
@@ -98,8 +98,8 @@ export type {
 	Sight,
 	SightClause,
 	StringifyCtx,
-} from './perception/types.js';
-export type { Inventory } from './perception/inventory.js';
+} from './perception/perception-types.js';
+export type { Inventory } from './perception/format-inventory.js';
 export { defaultLandmarkTier, groundAndFigure } from './perception/ground.js';
 export { bareName, builtinLodLayers, pascalCase } from './perception/lod.js';
 export {
@@ -111,14 +111,14 @@ export {
 } from './perception/stringifiers.js';
 export { formatSight, formatSightClauses, joinSightClauses, orderSightClauses, mergeHiveClauses, dedupIntersectingClauses, clauseScore, quantizeDistance, hypotAt, bearingOf, DEFAULT_SIGHT } from './perception/sight.js';
 export { AUDIBLE, clarityAt, DEFAULT_HEARING, heardText, LOUD, loudnessAfter, loudnessFor, noiseHelp, reachOf, type HearingRange, type Sound, type SoundListener, type SoundSource } from './perception/hearing.js';
-export { formatInventory } from './perception/formatInventory.js';
+export { formatInventory } from './perception/format-inventory.js';
 
-export type { ArcFormat, ConversationTurn, MindEvent, Sense, ThinkEvent, ToolSpec } from './mind/types.js';
-export { GOAL_PINNED_THINKS, type Identity, type Goal, type Kit, type KitSource, type WatchInput, type Watches } from './character/types.js';
-export { NameBook, type NameBookJSON, type NameTarget } from './character/names.js';
-export { Persona, type PersonaJSON, type PersonaSpec } from './character/persona.js';
+export type { ArcFormat, ConversationTurn, MindEvent, Sense, ThinkEvent, ToolSpec } from './mind/mind-types.js';
+export { GOAL_PINNED_THINKS, type Identity, type Goal, type Kit, type KitSource, type WatchInput, type Watches } from './character/character-types.js';
+export { NameBook, type NameBookJSON, type NameTarget } from './character/NameBook.js';
+export { Persona, type PersonaJSON, type PersonaSpec } from './character/Persona.js';
 export { ArcRunner, sayToOf, type ArcRunnerJSON, type RunnerDeps, type RunnerOptions } from './character/arc-runner.js';
-export { Character, type CharacterJSON, type CharacterOptions } from './character/character.js';
+export { Character, type CharacterJSON, type CharacterOptions } from './character/Character.js';
 export type { ChoicePrompt } from './character/choice.js';
 export { Mind, conversationCapFor, DEFAULT_MENTION_CAP, DEFAULT_TOOL_ROUNDS, type MindDeps, type MindJSON, type MindOwner, type MindSettings } from './mind/mind.js';
 export { idsOf, namesOf, mapArc, mapExpr, mapLawName, type WordMap } from './mind/ids.js';
@@ -157,12 +157,12 @@ export {
 } from './mind/knowledge.js';
 export { runArc, deferThinks, THINK_ABOUT_CAP, type ArcPick, type LastChoice } from './arc/run.js';
 export { CHOICE_RESERVED, MAX_CHOICES } from './arc/choose.js';
-export { ChatSystemOne, JevSystemOne, ModelSystemOne, type DecidingModel, type JevOpts, type SystemOne } from './inference/systemone.js';
+export { ChatSystemOne, JevSystemOne, ModelSystemOne, type DecidingModel, type JevOpts, type SystemOne } from './inference/system-one.js';
 export { nextTurn } from './turn.js';
-export { sceneKinds, SceneWorld, THEM, US, type Scene, type SceneRTSSpec, type SceneRules, type SceneSpot, type SceneVerb } from './scenario/world.js';
+export { sceneKinds, SceneWorld, THEM, US, type Scene, type SceneRTSSpec, type SceneRules, type SceneSpot, type SceneVerb } from './scenario/scene-world.js';
 export { ABILITIES, abilityHelp, FIGHTERS, type Ability, type Effect, type FighterKind, type StatusKind, type Tactic } from './scenario/combat.js';
 export { acceptOffer, answerSpeech, idleScenario, playScenario, SCENE_TICK, sceneSearch, type Scenario, type ScenarioEnd, type SceneCtx, type SceneSearch } from './scenario/play.js';
-export { SceneRTS } from './scenario/rts.js';
+export { SceneRTS } from './scenario/SceneRTS.js';
 export { arcRepairHint, repeatOutputHint, sayRangeHint, shortTermBlock, stablePrefix, volatileBlock, watchCheatSheet, DEFAULT_THINK_INSTRUCTIONS, DEFAULT_VERB_INSTRUCTIONS, DEFAULT_COLLECTIVE_INSTRUCTIONS, type PromptStyle, type ThinkInstructions, SEE_MAP_HINT, seeMapHint, knowledgeHint } from './mind/prompt.js';
 export {
 	TalkNet,
@@ -250,14 +250,14 @@ export {
 	type StockCollectiveVerb,
 } from './collective/index.js';
 export { DEFAULT_MAX_LAWS, lawGroup, type Law, type LawSpec } from './arc/laws.js';
-export { ArcDirector, type CastJSON } from './director/director.js';
+export { ArcDirector, type CastJSON } from './director/ArcDirector.js';
 export type { RegionShape, RegionSpec } from './director/regions.js';
 export { search, searchText, searchTool, type SearchCandidate, type SearchMove, type SearchResult, type SearchSpec } from './search/search.js';
 export { RTS_COMMANDER_VERBS } from './rts/rts.js';
-export { registerStockRTSVerbs, STOCK_CITY_VERBS, STOCK_ECONOMY_VERBS, STOCK_RTS_VERB_DEFS, STOCK_RTS_VERBS, STOCK_SIDE_VERBS, STOCK_UNIT_VERBS, type StockRTSVerb } from './rts/verbs.js';
-export type { KindSpec, PolicySpec, RTSHost, WorkDone } from './rts/types.js';
-export { STOCK_MOBA_VERB_DEFS, STOCK_RPG_VERB_DEFS, type MOBAHost, type RPGHost } from './genre/verbs.js';
-export { DEFAULT_MAX_PARALLEL, type BrowserModelSpec, type EmbeddingSpec, type InferenceSource, type ModelSpec } from './director/models.js';
+export { registerStockRTSVerbs, STOCK_CITY_VERBS, STOCK_ECONOMY_VERBS, STOCK_RTS_VERB_DEFS, STOCK_RTS_VERBS, STOCK_SIDE_VERBS, STOCK_UNIT_VERBS, type StockRTSVerb } from './rts/rts-verbs.js';
+export type { KindSpec, PolicySpec, RTSHost, WorkDone } from './rts/rts-types.js';
+export { STOCK_MOBA_VERB_DEFS, STOCK_RPG_VERB_DEFS, type MOBAHost, type RPGHost } from './genre/genre-verbs.js';
+export { DEFAULT_MAX_PARALLEL, type BrowserModelSpec, type EmbeddingSpec, type InferenceSource, type ModelSpec } from './director/model-registry.js';
 export type {
 	CharacterSpec,
 	CollectiveSpec,
@@ -276,9 +276,9 @@ export type {
 	VerbHandler,
 	AliasPart,
 	VerbAlias,
-} from './director/types.js';
-export { RESERVED_TAGS } from './world/types.js';
-export type { HostWorld, Outcome, PathStep, Pose, Transfer, Vec } from './world/types.js';
+} from './director/director-types.js';
+export { RESERVED_TAGS } from './world/world-types.js';
+export type { HostWorld, Outcome, PathStep, Pose, Transfer, Vec } from './world/world-types.js';
 export { Deal } from './world/deal.js';
 export type { Crowd, CrowdSettings, MoveOpts } from './world/mover.js';
 export { OfferBook, bundleText, countOf, covers, isEmpty, offerText, type Offer, type OfferMatch } from './world/offers.js';

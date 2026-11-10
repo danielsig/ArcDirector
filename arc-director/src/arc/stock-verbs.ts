@@ -1,4 +1,4 @@
-import type { Step, StepArg } from './types.js';
+import type { Step, StepArg } from './arc-types.js';
 
 /**
  * `id` is a character, thing or place; the host always receives a real id, even when the model wrote its own name for it

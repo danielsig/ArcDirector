@@ -1,8 +1,8 @@
 import * as THREE from 'three';
 import { bevelBox, create, lathe, meshReady, tube, type ProfilePoint } from '@arc-director/kindling';
 import { PALETTE, thatchMat, toon } from './toon';
-import { BROOM_LEAN, TABLE_TOP, type PropID } from '../world/dressingPlan';
-import { WINDOW } from '../world/thinWall';
+import { BROOM_LEAN, TABLE_TOP, type PropID } from '../world/dressing-plan';
+import { WINDOW } from '../world/thin-wall';
 
 /** One instanced piece of a prop, posed in the prop's frame (meters, Y up, +Z its front). */
 export type PropPart = {

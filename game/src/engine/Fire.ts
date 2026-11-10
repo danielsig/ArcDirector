@@ -1,6 +1,6 @@
 import { AudioSource, Component, MeshRenderer, Time, clamp, overInk } from '@arc-director/kindling';
 import * as THREE from 'three';
-import { disposeFlame, flameSprite } from '../render/spellFx';
+import { disposeFlame, flameSprite } from '../render/spell-fx';
 import { flameMaterial, getSheet } from '../render/spritesheet';
 import { SFX } from '../audio/sfx';
 import { enclosureAt } from '../world/interior';

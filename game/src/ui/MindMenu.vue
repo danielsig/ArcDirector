@@ -5,8 +5,8 @@ import { HOSTED } from '../director/hosted';
 import { SKALDIC_LAYA, decisionChoice, decisionModelName, inferenceSetup, listLMStudioModels, lmStudio, pickDecisionChoice, thinksWith } from '../director/inference';
 import { prefs, setPrefs, watchPrefs } from '../prefs';
 import type { BenchKind } from '../director/bench';
-import { quickBench, quickBenchCurrent } from '../director/quickBench';
-import type { HudModelOption } from './hudModel';
+import { quickBench, quickBenchCurrent } from '../director/quick-bench';
+import type { HudModelOption } from './hud-model';
 import QuickRank from './QuickRank.vue';
 import QuickScoreBadge from './QuickScoreBadge.vue';
 

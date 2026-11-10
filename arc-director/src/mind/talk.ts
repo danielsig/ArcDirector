@@ -1,5 +1,5 @@
-import type { ArcResult } from '../arc/types.js';
-import type { ConversationTurn, MindEvent } from './types.js';
+import type { ArcResult } from '../arc/arc-types.js';
+import type { ConversationTurn, MindEvent } from './mind-types.js';
 
 /** A mind that can receive speech. The library never sees coordinates. */
 export type TalkMind = {

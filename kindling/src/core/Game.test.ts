@@ -4,7 +4,7 @@ import { Component } from './Component.js';
 import { Game } from './Game.js';
 import { GameObject, resetAllocID } from './GameObject.js';
 import { World } from './World.js';
-import { resetTime, Time, MAX_DT } from './Time.js';
+import { resetTime, Time, MAX_DT } from './time.js';
 
 class Stepper extends Component {
 	public fixed = 0;

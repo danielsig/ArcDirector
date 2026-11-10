@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { clone as cloneSkinned } from 'three/addons/utils/SkeletonUtils.js';
-import { Time } from '../core/Time.js';
+import { Time } from '../core/time.js';
 import { overInk } from './OutlinePass.js';
 
 /**

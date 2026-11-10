@@ -18,7 +18,7 @@ import {
 	type ModelSpec,
 } from 'arc-director';
 import { prefs, setPrefs, watchPrefs, type InferenceKind, type Prefs, type SystemOneKind } from '../prefs';
-import type { HudModelOption } from '../ui/hudModel';
+import type { HudModelOption } from '../ui/hud-model';
 
 /**
  * A model the game offers to run in the browser: its name as `addBrowserModel` takes it, what it costs to download,

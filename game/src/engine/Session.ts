@@ -1,15 +1,15 @@
 import { AudioSource, Camera, Component } from '@arc-director/kindling';
 import { Camera as FollowCamera, Appearance, BoxCollider, RigidBody } from './components';
-import { MeshRenderer } from './MeshRenderer';
+import { DemoMeshRenderer } from './demo-mesh-renderer';
 import { Order } from './order';
 import { PlayerInput } from '../characters/PlayerInput';
 import { PlayerPilot } from '../characters/PlayerPilot';
 import type { SceneDef } from '../data/scenes';
 import { GameHost, addModels } from '../director/adapter';
-import { playerSay, playerSayCatalog } from '../director/playerTalk';
-import { dumpLookMaps } from '../director/aiLogSink';
-import { patchInfer } from './patchHud';
-import type { HudModel } from '../ui/hudModel';
+import { playerSay, playerSayCatalog } from '../director/player-talk';
+import { dumpLookMaps } from '../director/ai-log-sink';
+import { patchInfer } from './patch-hud';
+import type { HudModel } from '../ui/hud-model';
 import {
 	contextLabel,
 	prefs,
@@ -21,21 +21,21 @@ import {
 } from '../prefs';
 import { defaultSystemOne } from '../director/hosted';
 import { listLMStudioModels, lmStudio } from '../director/inference';
-import { quickBenchRunning } from '../director/quickBench';
+import { quickBenchRunning } from '../director/quick-bench';
 import { captureWorld, diffWorld, resetTime, restoreWorld, Time, type WorldState } from '@arc-director/kindling';
-import { readSave, respawn, writeSave, type GameSave } from './save';
+import { readSave, respawn, writeSave, type GameSave } from './game-save';
 import {
 	packViewPose,
 	saveViewPose,
 	type ViewPose,
-} from './viewPersist';
+} from './view-persist';
 import {
 	applyURLView,
 	writeURLView,
 	type URLView,
-} from './urlView';
+} from './url-view';
 import type { Hud, WorldStream, WorldView } from './systems';
-import { characterLabel, characterModel, characterOptions, resolvePlayerKind } from '../render/characterModels';
+import { characterLabel, characterModel, characterOptions, resolvePlayerKind } from '../render/character-models';
 import { bindArcControl } from '../control/bind';
 
 /** Host session: Vue calls say / save / load; Kindling runs keys, flags, persist. */
@@ -175,7 +175,7 @@ export class Session extends Component {
 			c.moveX = 0;
 			c.moveZ = 0;
 		});
-		world.forEachComponent(MeshRenderer, (c) => c.update(0));
+		world.forEachComponent(DemoMeshRenderer, (c) => c.update(0));
 		world.forEachComponent(Camera, (c) => c.update(0));
 		this.view.sync();
 		this.hudView.sync();
@@ -320,7 +320,7 @@ export class Session extends Component {
 		this.dropPointerLock();
 		this.hud.model = this.director.arc?.modelID() || prefs().model || this.hud.model;
 		this.hud.playerKinds = characterOptions();
-		const liveKind = this.gameObject.world?.findByID('Player')?.getComponent(MeshRenderer)?.meshID;
+		const liveKind = this.gameObject.world?.findByID('Player')?.getComponent(DemoMeshRenderer)?.meshID;
 		this.hud.playerKind = resolvePlayerKind(liveKind || this.hud.playerKind || prefs().playerKind);
 		// Listed whether or not ArcDirector runs, so a model can be picked before turning it on.
 		void listLMStudioModels().then(() => {
@@ -549,7 +549,7 @@ export class Session extends Component {
 		const resolved = resolvePlayerKind(kind);
 		this.hud.playerKind = resolved;
 		const player = this.gameObject.world?.findByID('Player');
-		const mesh = player?.getComponent(MeshRenderer);
+		const mesh = player?.getComponent(DemoMeshRenderer);
 		if (mesh) {
 			mesh.meshID = resolved;
 		}
