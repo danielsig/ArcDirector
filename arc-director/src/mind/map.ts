@@ -3,7 +3,7 @@
 import { isRecord } from '../json.js';
 
 /** 0 = whole loaded land, 1 = close around you. */
-export function clampMapZoom(zoom:number):number {
+function clampMapZoom(zoom:number):number {
 	if (!Number.isFinite(zoom)) {
 		return 1;
 	}

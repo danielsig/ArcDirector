@@ -3,16 +3,16 @@ import { describe, it } from 'node:test';
 import { parseArcText, formatArc, formatArcBlocks } from './arc-parse.js';
 import { arcFromJSON, arcJSONBlocks, arcJSONText, arcSoFar, finishedSteps, arcToJSON, parseArc, replyBreakdown } from './wire.js';
 import { replySchema } from './schema.js';
-import { VerbRegistry, registerStockVerbs } from './stock-verbs.js';
-import { registerStockCollectiveVerbs } from '../collective/collective-verbs.js';
+import { VerbRegistry, STOCK_VERB_DEFS } from './stock-verbs.js';
+import { STOCK_COLLECTIVE_VERB_DEFS } from '../collective/collective-verbs.js';
 import { ArcError, sameProgram, type Arc } from './arc-types.js';
 
 function verbs():VerbRegistry {
-	return registerStockVerbs(new VerbRegistry());
+	return new VerbRegistry().addAll(STOCK_VERB_DEFS);
 }
 
 function crowd():VerbRegistry {
-	const catalog = registerStockCollectiveVerbs(verbs());
+	const catalog = verbs().addAll(STOCK_COLLECTIVE_VERB_DEFS);
 	catalog.add('hex', { args: { target: 'id' } });
 	catalog.add('slash', { args: { target: 'id' } });
 	catalog.add('cleave', { args: { target: 'id' } });
@@ -20,7 +20,7 @@ function crowd():VerbRegistry {
 }
 
 describe('replyBreakdown', () => {
-	const verbs = registerStockVerbs(new VerbRegistry());
+	const verbs = new VerbRegistry().addAll(STOCK_VERB_DEFS);
 	const first = (...pieces:string[]):string | undefined => {
 		const watch = replyBreakdown(verbs);
 		for (const piece of pieces) {
@@ -73,7 +73,7 @@ describe('finishedSteps', () => {
 
 describe('arcJSONBlocks', () => {
 	it('lays Arc JSON out by its nesting, and it reads back the same', () => {
-		const all = registerStockVerbs(new VerbRegistry());
+		const all = new VerbRegistry().addAll(STOCK_VERB_DEFS);
 		const arc = parseArcText('loop(arc=choose("why", wander=wander(), wait=wait()), until=!some(others)) ; say("Done")', all);
 		const text = arcJSONBlocks(arc, all);
 		assert.equal(text, [

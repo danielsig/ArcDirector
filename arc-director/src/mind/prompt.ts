@@ -126,7 +126,7 @@ function compactArcInstructions(verbs:VerbRegistry, opts:StablePrefixOpts):strin
 }
 
 /** `edit` names the standing-watch verbs. `observe` names the tool, only when it is offered. `goTo` names that verb in the crowd example. */
-export function watchCheatSheet(edit:boolean, observe:boolean, goTo = false):string {
+function watchCheatSheet(edit:boolean, observe:boolean, goTo = false):string {
 	return [
 		'Watch language (not JS). Bindings: me, others, items, units (your roster, not others), landmarks, events, prev (last think: prev.me, prev.secondsAgo, prev.verbs).',
 		edit && 'Standing: watch(name, expr) / unwatch(name).',
@@ -141,7 +141,7 @@ const WATCH_RELATIONS = [
 	'i is "Lantern", units.filter(u => u is "Witch"). filter/count/find/some/all/minBy/maxBy. others.nearby(16), isLeft, isRight, events.filter("theft"). &&/|| numbers=min/max, bools=and/or. isCarrying / wasCarrying / hasJustReceived / hasJustLost when you carry.',
 ].join(' ');
 
-export function knowledgeHint(includeUnnamed = false, canWander = true, canObserve = false):string {
+function knowledgeHint(includeUnnamed = false, canWander = true, canObserve = false):string {
 	const lines = [
 		'recall also searches what you know of the world: places, items, people, and how things work. Query a name, or a plain word or spoken place to learn its Capitalized name. Empty query lists the topics you know.',
 		canObserve
@@ -169,8 +169,6 @@ export function seeMapHint(youSymbol = DEFAULT_YOU_SYMBOL, knowledge = false, ca
 		'Never ask where something is until see_map cannot find it.',
 	].join(' ');
 }
-
-export const SEE_MAP_HINT = seeMapHint();
 
 /** Standing think line while reasoning is on and the host gives no `withThinkInstructions({ on })`. */
 export const DEFAULT_THINK_INSTRUCTIONS = 'Think in 5 sentences: what you want, what you know, and what is still missing.';
@@ -579,7 +577,7 @@ export function volatileBlock(opts:{
 }
 
 /** Rolling what-just-happened. Always in the prompt; older lines fold into `Earlier:`. */
-export function shortTermBlock(summary:string, recent:string[], compact = false):string {
+function shortTermBlock(summary:string, recent:string[], compact = false):string {
 	const earlier = summary.trim();
 	if (!earlier && recent.length === 0) {
 		return '';

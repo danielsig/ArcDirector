@@ -1,6 +1,6 @@
 /**
  * The ArcDirector benches: how well a model writes arcs that reach their goals, and how well a System One decides.
- * They play scenes from the simulator `arc-director` exports; this entry adds only the benches.
+ * They play scenes from the simulator `arc-director/testing` exports; this entry adds only the benches.
  */
 export { runBench, type BenchLevel, type BenchOpts, type BenchOutcome, type BenchScore, type BenchTrial, type SkillScore, type Timer } from './bench-score.js';
 export { everydayMemories } from './memories.js';

@@ -61,11 +61,6 @@ export function withSimpleQueue(opts?:SimpleQueueOpts):WithMindQueue {
 	return { queue: new SimpleQueue(opts), heartbeat: 0 };
 }
 
-/** @deprecated Use `withPriorityQueue`. */
-export const withThinkQueue = withPriorityQueue;
-
-export type WithThinkQueue = WithMindQueue;
-
 export {
 	VERB_THINK_SCORES,
 	THINK_ABOUT_SCORE,

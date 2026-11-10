@@ -1,12 +1,12 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { STOCK_VERBS, VerbRegistry, registerStockVerbs } from '../arc/stock-verbs.js';
+import { STOCK_VERBS, VerbRegistry, STOCK_VERB_DEFS } from '../arc/stock-verbs.js';
 import { FakeProvider, goToNamedInteractable, hashEmbed } from '../inference/fake.js';
 import { chatContentText, type ChatRequest } from '../inference/provider.js';
 import { formatSight, formatSightClauses } from '../perception/sight.js';
 import type { SeenObject } from '../perception/perception-types.js';
 import { soloCharacter, type SoloOptions } from '../testing/solo.js';
-import { mindFields } from './mind.js';
+import { internalsOf } from '../internals.js';
 import { CONVERSATION_HEADER } from './prompt.js';
 import type { Character, CharacterJSON } from '../character/Character.js';
 
@@ -22,7 +22,7 @@ import { buildCatalog, dummyEntity, SampleCache } from '../expr/index.js';
 
 /** Every stock verb: registered, and in the kit. */
 function stockVerbs():{ verbs:VerbRegistry; kit:{ verbs:readonly string[] } } {
-	return { verbs: registerStockVerbs(new VerbRegistry()), kit: { verbs: STOCK_VERBS } };
+	return { verbs: new VerbRegistry().addAll(STOCK_VERB_DEFS), kit: { verbs: STOCK_VERBS } };
 }
 
 type Ctx = { paragraph:string };
@@ -272,7 +272,7 @@ describe('Agent', () => {
 			arcRetryCap: 0,
 			strategicInterval: 0,
 		});
-		mindFields(agent.mind!).sighted(formatSightClauses(sight));
+		internalsOf(agent.mind!).sighted(formatSightClauses(sight));
 		await agent.mind!.tick(1);
 		assert.equal((users[0] ?? '').includes('Last I saw Forager'), false);
 		scene = 'empty grass.';
@@ -866,7 +866,7 @@ describe('Agent', () => {
 	it('waits at the end of an arc when a reply verb\'s target is still nearby', async () => {
 		let close = true;
 		const talk = new TalkNet({ inRange: () => close, others: () => ['Forager'] });
-		const verbs = registerStockVerbs(new VerbRegistry());
+		const verbs = new VerbRegistry().addAll(STOCK_VERB_DEFS);
 		verbs.add('heal', { args: { target: 'id' } });
 		verbs.add('attack', { args: { target: 'id' } });
 		const arcs = [
@@ -1608,7 +1608,7 @@ describe('Agent', () => {
 			description = req.tools?.find((tool) => tool.name === 'see_map')?.description ?? '';
 			return { content: '{"steps":[{"verb":"wait"}]}', toolCalls: [] };
 		});
-		const verbs = registerStockVerbs(new VerbRegistry());
+		const verbs = new VerbRegistry().addAll(STOCK_VERB_DEFS);
 		await soloCharacter<Ctx>({
 			id: 'Guard',
 			identity: { role: 'guard' },

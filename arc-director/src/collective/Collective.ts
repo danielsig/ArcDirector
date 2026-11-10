@@ -3,23 +3,23 @@ import { lawGroup, lawHandler, type Law } from '../arc/laws.js';
 import type { ArcHandler } from '../arc/run.js';
 import { ArcRunner, type ArcRunnerJSON, type RunnerOptions } from '../character/arc-runner.js';
 import type { Character } from '../character/Character.js';
-import { Persona, type PersonaJSON } from '../character/Persona.js';
+import { hand } from '../internals.js';
 import { Mind, type MindJSON } from '../mind/mind.js';
 import type { CharacterSpec } from '../director/director-types.js';
 import { squadTag, isSquadTag, shortTag, shortTags } from './tags.js';
 import { CHOOSE_VERB, MIND_ONLY_VERBS, STOCK_ARC_VERBS, stepDoing, type VerbRegistry } from '../arc/stock-verbs.js';
 import { isFormationVerb, STOCK_COLLECTIVE_VERBS } from './collective-verbs.js';
 
-/**
- * Verbs only a collective's voice runs: issuing, tagging, laws, and the mind's own. Formations are its characters'.
- * Arc verbs (`loop`, `choose`, …) shape arcs, so no character needs them in its own kit.
- */
 /** How many others each roster row says its units see: the nearest. */
 const SEEN_PER_UNIT = 3;
 
 /** What a group ordered without a name is called: the first free of these. */
 const GROUP_LETTERS = ['Alpha', 'Bravo', 'Charlie', 'Delta', 'Echo', 'Foxtrot', 'Golf', 'Hotel', 'India', 'Juliett', 'Kilo', 'Lima', 'Mike', 'November', 'Oscar', 'Papa', 'Quebec', 'Romeo', 'Sierra', 'Tango', 'Uniform', 'Victor', 'Whiskey', 'Xray', 'Yankee', 'Zulu'];
 
+/**
+ * Verbs only a collective's voice runs: issuing, tagging, laws, and the mind's own. Formations are its characters'.
+ * Arc verbs (`loop`, `choose`, …) shape arcs, so no character needs them in its own kit.
+ */
 const VOICE_VERBS = new Set<string>([
 	...STOCK_COLLECTIVE_VERBS.filter((verb) => !isFormationVerb(verb)),
 	...STOCK_ARC_VERBS,
@@ -29,7 +29,6 @@ const VOICE_VERBS = new Set<string>([
 
 /** A collective's part of a save. Its characters are saved on their own and listed here by id. */
 export type CollectiveJSON = ArcRunnerJSON & {
-	persona:PersonaJSON;
 	mind:MindJSON;
 	/** Its characters' ids, in order. */
 	characters:string[];
@@ -38,8 +37,8 @@ export type CollectiveJSON = ArcRunnerJSON & {
 
 /**
  * How a collective and its director reach each other, one for each collective. The director gives `addCharacter`
- * and `removeCharacter`. The collective's constructor fills in `fields`: the director's only way into its private
- * fields.
+ * and `removeCharacter`. The other way, the collective's constructor hands its director {@link CollectiveFields}
+ * (`internalsOf(collective)`).
  */
 export type CollectiveHost<TCtx> = {
 	addCharacter(spec:CharacterSpec<TCtx>, into:Collective<TCtx>):Character<TCtx>;
@@ -50,10 +49,9 @@ export type CollectiveHost<TCtx> = {
 	othersSeenBy?(id:string, mind:Mind<TCtx>):{ name:string; away:number; text:string }[];
 	/** One of its characters' health, where the host gives an `hp` kernel. */
 	healthOf?(id:string):{ hp:number; maxHP:number } | undefined;
-	fields?:CollectiveFields<TCtx>;
 };
 
-/** What a collective's constructor hands its director through its {@link CollectiveHost}. */
+/** What a collective's constructor hands its director: the director's only way into its private fields. */
 export type CollectiveFields<TCtx> = {
 	/** Its characters, in order. */
 	setCharacters(characters:Character<TCtx>[]):void;
@@ -67,7 +65,6 @@ export type CollectiveFields<TCtx> = {
 
 export type CollectiveOptions<TCtx = unknown> = RunnerOptions<TCtx> & {
 	host:CollectiveHost<TCtx>;
-	persona?:Persona;
 	mind?:Mind<TCtx>;
 	/** The commander left or died. The host may name a new one (`collective.commander = …`). */
 	onCommanderVacant?:(character:Character<TCtx>)=>void;
@@ -79,7 +76,6 @@ export type CollectiveOptions<TCtx = unknown> = RunnerOptions<TCtx> & {
  * `Tom.flee` and reaches only Tom.
  */
 export class Collective<TCtx = unknown> extends ArcRunner<TCtx> {
-	public readonly persona:Persona;
 	public readonly mind:Mind<TCtx>;
 	public onCommanderVacant?:(character:Character<TCtx>)=>void;
 	/**
@@ -99,18 +95,17 @@ export class Collective<TCtx = unknown> extends ArcRunner<TCtx> {
 
 	constructor(opts:CollectiveOptions<TCtx>) {
 		super({ ...opts, defaultLawWho: opts.defaultLawWho ?? 'units' });
-		this.persona = opts.persona ?? new Persona();
 		this.mind = opts.mind ?? new Mind<TCtx>();
 		this._host = opts.host;
 		this.onCommanderVacant = opts.onCommanderVacant;
-		this._host.fields = {
+		hand(this, {
 			setCharacters: (characters) => {
 				this._characters = characters;
 			},
 			vacate: (character) => this.vacate(character),
 			load: (json) => this.loadJSON(json),
 			keepLaw: (law) => this.keepLaw(law),
-		};
+		} satisfies CollectiveFields<TCtx>);
 	}
 
 	public get characters():readonly Character<TCtx>[] {
@@ -500,7 +495,6 @@ export class Collective<TCtx = unknown> extends ArcRunner<TCtx> {
 	public override toJSON():CollectiveJSON {
 		return {
 			...super.toJSON(),
-			persona: this.persona.toJSON(),
 			mind: this.mind.toJSON(),
 			characters: this._characters.map((c) => c.id),
 			commander: this._commander?.id,

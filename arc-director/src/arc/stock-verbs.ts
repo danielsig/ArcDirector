@@ -194,6 +194,22 @@ export class VerbRegistry {
 		return this._verbs.has(name);
 	}
 
+	/**
+	 * Schema only: adds each of `names` from a table of verbs (`STOCK_VERB_DEFS`, `STOCK_RTS_VERB_DEFS`, …), or the whole
+	 * table when `names` is empty, in its order. Names already registered are skipped.
+	 */
+	public addAll<TDefs extends Readonly<Record<string, VerbDef>>>(defs:TDefs, ...names:(keyof TDefs & string)[]):this {
+		for (const name of names.length > 0 ? names : Object.keys(defs)) {
+			if (!Object.hasOwn(defs, name)) {
+				throw new Error(`ArcDirector: '${name}' is not in that verb table`);
+			}
+			if (!this.has(name)) {
+				this.add(name, defs[name]);
+			}
+		}
+		return this;
+	}
+
 	public list():VerbSpec[] {
 		return [...this._verbs.values()];
 	}
@@ -220,6 +236,7 @@ export const CHOOSE_VERB = 'choose';
 export const STOCK_VERBS = [...STOCK_MOVE_VERBS, ...STOCK_ITEM_VERBS, ...STOCK_MIND_VERBS, ...STOCK_ARC_VERBS, CHOOSE_VERB] as const;
 export type StockVerb = (typeof STOCK_VERBS)[number] | (typeof STOCK_TRADE_VERBS)[number];
 
+/** Every stock verb, in the order `VerbRegistry.addAll` registers them. */
 export const STOCK_VERB_DEFS = {
 	go_to: { args: { target: 'id', until: 'watch?' }, seen: 'going to {target}' },
 	follow: { args: { target: 'id', distance: 'number?' }, help: 'stays within distance until your next arc', seen: 'following {target}' },
@@ -230,7 +247,6 @@ export const STOCK_VERB_DEFS = {
 	drop: { args: { item: 'id', to: 'id?' } },
 	give: { args: { item: 'id', to: 'id', quantity: 'number?' }, help: 'goes to them first. to buy or sell, use offer', reply: true, seen: 'giving {item} to {to}' },
 	examine: { args: { target: 'id' } },
-	offer: { args: { to: 'id?', give: 'bundle?', get: 'bundle?' }, help: 'goes to them first if out of earshot. each side as {"Egg":12, "Milk":3}, items and gold only. if they offer that or better, both move at once; else it waits for their answer. no to: offered to anyone', reply: true },
 	say: { args: { text: 'text', to: 'id?' }, help: 'one short sentence', reply: true, free: true, group: 'to' },
 	wait: { args: { seconds: 'number?', until: 'watch?' }, help: 'until fails if not met within seconds (default 20)', free: true },
 	remember: { args: { content: 'text', tags: 'string[]?' }, free: true },
@@ -249,18 +265,5 @@ export const STOCK_VERB_DEFS = {
 	unlaw: { args: { name: 'law' }, help: 'drops that law', free: true },
 	// Its choices are named args of their own; `arc/choose.ts` reads them.
 	choose: { args: { goal: 'text' }, help: 'a fast model picks one by name each run; loop it to keep picking' },
+	offer: { args: { to: 'id?', give: 'bundle?', get: 'bundle?' }, help: 'goes to them first if out of earshot. each side as {"Egg":12, "Milk":3}, items and gold only. if they offer that or better, both move at once; else it waits for their answer. no to: offered to anyone', reply: true },
 } as const satisfies Record<StockVerb, VerbDef>;
-
-/** Schema-only. Omit `verbs` to register the full stock set. Already-registered names are skipped. */
-export function registerStockVerbs(registry:VerbRegistry, ...verbs:StockVerb[]):VerbRegistry {
-	const list = verbs.length > 0 ? verbs : [...STOCK_VERBS, ...STOCK_TRADE_VERBS];
-	for (const name of list) {
-		if (!(name in STOCK_VERB_DEFS)) {
-			throw new Error(`ArcDirector: '${name}' is not a stock verb`);
-		}
-		if (!registry.has(name)) {
-			registry.add(name, STOCK_VERB_DEFS[name]);
-		}
-	}
-	return registry;
-}

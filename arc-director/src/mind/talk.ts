@@ -103,7 +103,7 @@ function addressees(to?:SayTo):string[] {
 }
 
 /** Keep word shape but hide most letters so a far listener must move closer. */
-export function muffleSpeech(spoken:string):string {
+function muffleSpeech(spoken:string):string {
 	return spoken.replace(/[A-Za-z]+/g, (word) => {
 		if (word.length <= 2) {
 			return word;
@@ -114,7 +114,7 @@ export function muffleSpeech(spoken:string):string {
 }
 
 /** True when `spoken` names someone (word boundary, optional `'s`). */
-export function speechMentionsName(spoken:string, names:readonly string[]):boolean {
+function speechMentionsName(spoken:string, names:readonly string[]):boolean {
 	for (const raw of names) {
 		const name = raw.trim();
 		if (name.length < 3) {

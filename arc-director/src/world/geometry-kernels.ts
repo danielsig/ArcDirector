@@ -5,7 +5,7 @@ import { poseOf } from './lookup.js';
 import type { HostWorld, Pose, Vec } from './world-types.js';
 import { cosToward, distance } from './vec.js';
 
-export type GeometryKernels = Pick<HostKernels, 'point' | 'distance' | 'facing' | 'side' | 'pathDistance'>;
+type GeometryKernels = Pick<HostKernels, 'point' | 'distance' | 'facing' | 'side' | 'pathDistance'>;
 
 /**
  * Watch geometry from the host's poses. `poses` overrides where some ids are (`me` standing somewhere

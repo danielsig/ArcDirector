@@ -40,7 +40,7 @@ type WorldPart = Exclude<keyof HostWorld<unknown>, 'find' | 'getPose' | 'getReac
 const MOVING:WorldPart[] = ['getNeighbors', 'canPass', 'steerToward'];
 
 /** The `withWorld` parts each stock world verb runs on. */
-export const WORLD_VERB_PARTS:Readonly<Record<string, readonly WorldPart[]>> = {
+const WORLD_VERB_PARTS:Readonly<Record<string, readonly WorldPart[]>> = {
 	go_to: MOVING,
 	follow: MOVING,
 	flee: MOVING,

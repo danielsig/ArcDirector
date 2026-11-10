@@ -217,7 +217,7 @@ await BrowserProvider.shared.download(DEFAULT_BROWSER_MODEL).done;
 
 Every `add*` works before or after `start()`, and adding the same name again replaces it.
 
-**Benches** (imported from `arc-director/bench`; the scene simulator they play, `SceneWorld`, `playScenario` and the rest, comes from `arc-director`) score models on scenes with known right answers, from easy to hard. Each trial is a `BenchOutcome`: a `success`, `neutral` (no success, but no worse off than doing nothing), or `harmful` (worse off than doing nothing; a failed trial too). A trial that gives partial credit returns a `BenchRated` instead, its outcome with a `score` from 0 to 1; otherwise a success scores 1 and anything else 0. A `BenchScore` holds, per skill, per level and in `total`, the trials right and harmful and the mean score (`mean`): doing nothing scores 0. Each bench has a version (`DECISION_BENCH_VERSION`, now 2, and `ARC_BENCH_VERSION`, now 2), raised whenever its cases or how they are asked or played change, so compare only scores of the same version. With `repeats` above one, each case runs that many times and `se` is the standard error of that share, from how much each case's own outcome varied: how far another run of the same model would likely land. The score also keeps the mean think time, the run's wall time, and the sampling the model ran with. `runBench(trials, { repeats, parallel, warmUp })` runs any trials this way.
+**Benches** (imported from `arc-director/bench`; the scene simulator they play, `SceneWorld`, `playScenario` and the rest, comes from `arc-director/testing`) score models on scenes with known right answers, from easy to hard. Each trial is a `BenchOutcome`: a `success`, `neutral` (no success, but no worse off than doing nothing), or `harmful` (worse off than doing nothing; a failed trial too). A trial that gives partial credit returns a `BenchRated` instead, its outcome with a `score` from 0 to 1; otherwise a success scores 1 and anything else 0. A `BenchScore` holds, per skill, per level and in `total`, the trials right and harmful and the mean score (`mean`): doing nothing scores 0. Each bench has a version (`DECISION_BENCH_VERSION`, now 2, and `ARC_BENCH_VERSION`, now 2), raised whenever its cases or how they are asked or played change, so compare only scores of the same version. With `repeats` above one, each case runs that many times and `se` is the standard error of that share, from how much each case's own outcome varied: how far another run of the same model would likely land. The score also keeps the mean think time, the run's wall time, and the sampling the model ran with. `runBench(trials, { repeats, parallel, warmUp })` runs any trials this way.
 
 `benchArcs(models, cases, { repeats?, parallel?, onTrial? })`, the ArcDirector Bench, scores chat models on writing arcs that reach a goal; `ARC_BENCH` holds its cases (chain, trade, social, lookup, questing, reactions, fight, tactics, economy, planning). Each case plays in a fresh director, which `models(director)` sets up just as the host would for play (`addModel`, `withArcFormat`, `withRepair`, …), so the model reads the same prompt it would in play. Its arc then plays out in a `SceneWorld`, a small world the stock verbs walk, trade and hand items around in, while the case's `act` moves the others. As in play, the mind thinks again on how that went while the goal is not reached: two thinks in a minute of play unless the case says otherwise, timed by the thinks alone. The case's `done(world)` decides: any arcs that reach the goal are a success, whatever their steps. Short of it, the scene is weighed against the same case played with the character doing nothing, at the same moment: more of its side down, or something it held gone with nothing got for it, is harmful, and so is anything the case's own `harm(world)` flags; anything else is neutral. Every case carries its `solution` and the `naive` move a weak model makes first, and with a squad what its commander would do `alone`; the bench's tests prove each case winnable and lost to every `BASELINES` trick (`baselineArc(case, baseline)`: doing nothing, everyone attacking the nearest foe, the commander alone, the naive move), so no case gives points for free.
 
@@ -680,7 +680,7 @@ Watches stay true as long as what they read does, and a true watch keeps a mind 
 
 ## Mind (low-level)
 
-`soloCharacter({...})` builds a character with its own mind and no director, for unit tests and scripts. Normal use does not need it.
+`soloCharacter({...})` (from `arc-director/testing`, with `FakeProvider` and the scene simulator) builds a character with its own mind and no director, for unit tests and scripts. Normal use does not need it.
 
 `Mind<TCtx>` writes arcs for its owner, which is a character or a collective. `tick(gameTime)` may revise goals (the strategic pass) and emit one `Arc` (the tactical pass), which its voice enacts when that voice has an executor and `autoEnact` is on. `thinkNow({ about?, enact? })` thinks once, right away.
 
@@ -944,6 +944,7 @@ pnpm demo      # live model, or ARC_DIRECTOR_MOCK=1
 ```text
 src/
   index.ts           public API
+  internals.ts       what library constructors hand the director (closures over private state)
   director/          ArcDirector facade, CharacterSpec, CollectiveSpec, VerbCall, regions
   character/         ArcRunner, Character, Persona, NameBook, watches, sight focus
   mind/              Mind, prompts, name/id translation, TalkNet, map, knowledge
@@ -960,5 +961,5 @@ src/
   scenario/          scene simulator: SceneWorld, combat, SceneRTS, playScenario
   bench/             System One and arc benches (`arc-director/bench`), bench CLI
   scripts/           demo + fixtures
-  testing/           test fixtures (an open grid world)
+  testing/           `arc-director/testing`: fake model, soloCharacter, scene simulator; test fixtures
 ```

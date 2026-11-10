@@ -40,7 +40,7 @@ function rejectMigrationArgs(verb:string, args:Record<string, unknown>):void {
 	}
 }
 
-export function validateStep(step:Step, registry:VerbRegistry, nested = false):void {
+function validateStep(step:Step, registry:VerbRegistry, nested = false):void {
 	if (step.verb === GROUP_VERB) {
 		const inner = groupArc(step);
 		if (!inner) {

@@ -1,4 +1,5 @@
 export { extractJson, isRecord, type JsonSchema } from './json.js';
+export { pascalCase } from './text.js';
 
 export type {
 	ChatContent,
@@ -20,7 +21,7 @@ export { showLoadingBar, type LoadingBarOptions } from './inference/loading-bar.
 export { BROWSER_DECISION_MODELS, browserModelURL, BrowserProvider, DEFAULT_BROWSER_MODEL, Skaldic, SKALDIC_BROWSER_MODELS, inPageFetch, type BrowserProviderOptions } from './inference/browser.js';
 export { fittingModel, gpuMemory, memoryOf, type GPUMemory } from './inference/device.js';
 export { DownloadCanceled, ModelDownload, type DownloadObserver, type DownloadProgress, type DownloadSubscription } from './inference/download.js';
-export { HttpProvider, parseChatTimings, mergeClientTimings, loadConfigFits, type HttpProviderConfig, type HttpLoadConfig, type ModelSettings, type ReasoningEffort, REASONING_EFFORTS, serverRoot } from './inference/http.js';
+export { HttpProvider, parseChatTimings, loadConfigFits, type HttpProviderConfig, type HttpLoadConfig, type ModelSettings, type ReasoningEffort, REASONING_EFFORTS, serverRoot } from './inference/http.js';
 export {
 	type ApplyPromptTemplate,
 	type PromptTemplateMessage,
@@ -51,7 +52,6 @@ export {
 	REASONING_OPTIONS,
 } from './inference/models.js';
 export {
-	fakeInference,
 	lmStudioConfig,
 	ollamaConfig,
 	LM_STUDIO_URL,
@@ -59,20 +59,13 @@ export {
 	LM_STUDIO_LOAD,
 	type HttpInferenceOpts,
 } from './inference/presets.js';
-export {
-	FakeProvider,
-	goToNamedInteractable,
-	hashEmbed,
-	type FakeChatFn,
-	type FakeEmbedFn,
-} from './inference/fake.js';
 
 export type { Arc, ArcResult, CountMap, Join, Step } from './arc/arc-types.js';
-export { arcSteps, firstStep, isArc, isHoistedWhen, isIssue } from './arc/arc-types.js';
+export { arcSteps, firstStep, isArc, isHoistedWhen } from './arc/arc-types.js';
 export { ArcError, BlockedArcError, JOIN_SYMBOL, JOINS, SYMBOL_JOIN } from './arc/arc-types.js';
-export { VerbRegistry, registerStockVerbs, STOCK_VERBS, STOCK_MOVE_VERBS, STOCK_ITEM_VERBS, STOCK_TRADE_VERBS, STOCK_MIND_VERBS, STOCK_ARC_VERBS, CHOOSE_VERB, GROUP_VERB, STOCK_VERB_DEFS, MIND_ONLY_VERBS, type StockVerb, type VerbArgKind, type VerbArgMap, type VerbDef, type VerbSpec } from './arc/stock-verbs.js';
+export { VerbRegistry, STOCK_VERBS, STOCK_MOVE_VERBS, STOCK_ITEM_VERBS, STOCK_TRADE_VERBS, STOCK_MIND_VERBS, STOCK_ARC_VERBS, CHOOSE_VERB, GROUP_VERB, STOCK_VERB_DEFS, MIND_ONLY_VERBS, type StockVerb, type VerbArgKind, type VerbArgMap, type VerbDef, type VerbSpec } from './arc/stock-verbs.js';
 export { replySchema, verbHelp } from './arc/schema.js';
-export { validateArc, validateStep } from './arc/validate.js';
+export { validateArc } from './arc/validate.js';
 export { formatArc, formatArcBlocks, formatStep, parseArcText } from './arc/arc-parse.js';
 export { arcArg, arcFromJSON, arcJSONBlocks, arcJSONText, arcToJSON, parseArc } from './arc/wire.js';
 
@@ -101,7 +94,7 @@ export type {
 } from './perception/perception-types.js';
 export type { Inventory } from './perception/format-inventory.js';
 export { defaultLandmarkTier, groundAndFigure } from './perception/ground.js';
-export { bareName, builtinLodLayers, pascalCase } from './perception/lod.js';
+export { bareName, builtinLodLayers } from './perception/lod.js';
 export {
 	attachmentStringifier,
 	basicPluralize,
@@ -109,7 +102,7 @@ export {
 	proximityPairStringifier,
 	tagCrowdStringifier,
 } from './perception/stringifiers.js';
-export { formatSight, formatSightClauses, joinSightClauses, orderSightClauses, mergeHiveClauses, dedupIntersectingClauses, clauseScore, quantizeDistance, hypotAt, bearingOf, DEFAULT_SIGHT } from './perception/sight.js';
+export { formatSight, formatSightClauses, joinSightClauses, orderSightClauses, mergeHiveClauses, quantizeDistance, bearingOf, DEFAULT_SIGHT } from './perception/sight.js';
 export { AUDIBLE, clarityAt, DEFAULT_HEARING, heardText, LOUD, loudnessAfter, loudnessFor, noiseHelp, reachOf, type HearingRange, type Sound, type SoundListener, type SoundSource } from './perception/hearing.js';
 export { formatInventory } from './perception/format-inventory.js';
 
@@ -120,24 +113,19 @@ export { Persona, type PersonaJSON, type PersonaSpec } from './character/Persona
 export { ArcRunner, sayToOf, type ArcRunnerJSON, type RunnerDeps, type RunnerOptions } from './character/arc-runner.js';
 export { Character, type CharacterJSON, type CharacterOptions } from './character/Character.js';
 export type { ChoicePrompt } from './character/choice.js';
-export { Mind, conversationCapFor, DEFAULT_MENTION_CAP, DEFAULT_TOOL_ROUNDS, type MindDeps, type MindJSON, type MindOwner, type MindSettings } from './mind/mind.js';
+export { Mind, DEFAULT_MENTION_CAP, DEFAULT_TOOL_ROUNDS, type MindDeps, type MindJSON, type MindOwner, type MindSettings } from './mind/mind.js';
 export { idsOf, namesOf, mapArc, mapExpr, mapLawName, type WordMap } from './mind/ids.js';
-export { soloCharacter, type SoloOptions } from './testing/solo.js';
 export {
 	applyWatchOps,
-	asWatch,
 	asWatches,
 	findWatchName,
-	formatWatch,
 	formatWatches,
 	hasWatch,
-	watchKey,
 	type WatchOps,
 } from './character/watch.js';
 export {
 	stampMap,
 	formatLegend,
-	clampMapZoom,
 	parseMapZoom,
 	DEFAULT_YOU_SYMBOL,
 	type MapMark,
@@ -159,16 +147,10 @@ export { runArc, deferThinks, THINK_ABOUT_CAP, type ArcPick, type LastChoice } f
 export { CHOICE_RESERVED, MAX_CHOICES } from './arc/choose.js';
 export { ChatSystemOne, JevSystemOne, ModelSystemOne, type DecidingModel, type JevOpts, type SystemOne } from './inference/system-one.js';
 export { nextTurn } from './turn.js';
-export { sceneKinds, SceneWorld, THEM, US, type Scene, type SceneRTSSpec, type SceneRules, type SceneSpot, type SceneVerb } from './scenario/scene-world.js';
-export { ABILITIES, abilityHelp, FIGHTERS, type Ability, type Effect, type FighterKind, type StatusKind, type Tactic } from './scenario/combat.js';
-export { acceptOffer, answerSpeech, idleScenario, playScenario, SCENE_TICK, sceneSearch, type Scenario, type ScenarioEnd, type SceneCtx, type SceneSearch } from './scenario/play.js';
-export { SceneRTS } from './scenario/SceneRTS.js';
-export { arcRepairHint, repeatOutputHint, sayRangeHint, shortTermBlock, stablePrefix, volatileBlock, watchCheatSheet, DEFAULT_THINK_INSTRUCTIONS, DEFAULT_VERB_INSTRUCTIONS, DEFAULT_COLLECTIVE_INSTRUCTIONS, type PromptStyle, type ThinkInstructions, SEE_MAP_HINT, seeMapHint, knowledgeHint } from './mind/prompt.js';
+export { arcRepairHint, repeatOutputHint, sayRangeHint, stablePrefix, volatileBlock, DEFAULT_THINK_INSTRUCTIONS, DEFAULT_VERB_INSTRUCTIONS, DEFAULT_COLLECTIVE_INSTRUCTIONS, type PromptStyle, type ThinkInstructions, seeMapHint } from './mind/prompt.js';
 export {
 	TalkNet,
 	DEFAULT_TALK_CONFIG,
-	muffleSpeech,
-	speechMentionsName,
 	type SayResult,
 	type SayTo,
 	type SpeechUtterance,
@@ -212,7 +194,6 @@ export {
 	THINK_ABOUT_SCORE,
 	withPriorityQueue,
 	withSimpleQueue,
-	withThinkQueue,
 	DEFAULT_BATCH_THINKS,
 	DEFAULT_BATCH_WAIT,
 	type ThinkQueueOpts,
@@ -225,14 +206,12 @@ export {
 	type MindQueue,
 	type MindQueueOpts,
 	type WithMindQueue,
-	type WithThinkQueue,
 } from './think/queue.js';
 export {
 	Collective,
 	STOCK_COLLECTIVE_VERBS,
 	STOCK_COLLECTIVE_VERB_DEFS,
 	STOCK_FORMATION_VERBS,
-	registerStockCollectiveVerbs,
 	isFormationVerb,
 	squadTag,
 	shortTag,
@@ -254,7 +233,7 @@ export { ArcDirector, type CastJSON } from './director/ArcDirector.js';
 export type { RegionShape, RegionSpec } from './director/regions.js';
 export { search, searchText, searchTool, type SearchCandidate, type SearchMove, type SearchResult, type SearchSpec } from './search/search.js';
 export { RTS_COMMANDER_VERBS } from './rts/rts.js';
-export { registerStockRTSVerbs, STOCK_CITY_VERBS, STOCK_ECONOMY_VERBS, STOCK_RTS_VERB_DEFS, STOCK_RTS_VERBS, STOCK_SIDE_VERBS, STOCK_UNIT_VERBS, type StockRTSVerb } from './rts/rts-verbs.js';
+export { STOCK_CITY_VERBS, STOCK_ECONOMY_VERBS, STOCK_RTS_VERB_DEFS, STOCK_RTS_VERBS, STOCK_SIDE_VERBS, STOCK_UNIT_VERBS, type StockRTSVerb } from './rts/rts-verbs.js';
 export type { KindSpec, PolicySpec, RTSHost, WorkDone } from './rts/rts-types.js';
 export { STOCK_MOBA_VERB_DEFS, STOCK_RPG_VERB_DEFS, type MOBAHost, type RPGHost } from './genre/genre-verbs.js';
 export { DEFAULT_MAX_PARALLEL, type BrowserModelSpec, type EmbeddingSpec, type InferenceSource, type ModelSpec } from './director/model-registry.js';

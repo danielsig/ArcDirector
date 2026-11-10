@@ -3,7 +3,6 @@ export {
 	STOCK_COLLECTIVE_VERBS,
 	STOCK_COLLECTIVE_VERB_DEFS,
 	STOCK_FORMATION_VERBS,
-	registerStockCollectiveVerbs,
 	isFormationVerb,
 	type StockCollectiveVerb,
 } from './collective-verbs.js';
@@ -20,6 +19,5 @@ export {
 	evaluateWho,
 	memberEntity,
 	buildCollectiveCatalog,
-	collectiveKernels,
 	lawMatches,
 } from './who.js';

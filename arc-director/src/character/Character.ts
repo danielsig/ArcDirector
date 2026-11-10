@@ -1,21 +1,20 @@
 import type { Collective } from '../collective/Collective.js';
 import type { Mind, MindJSON, MindSettings } from '../mind/mind.js';
 import { lawGroup, type Law, type LawSpec } from '../arc/laws.js';
+import { hand } from '../internals.js';
 import { ArcRunner, type ArcRunnerJSON, type RunnerOptions } from './arc-runner.js';
-import { Persona, type PersonaJSON } from './Persona.js';
 
 /**
  * How a character and its director reach each other, one for each character. The director gives `setMind` and
- * `setCollective`, which carry out `character.mind = …` and `character.collective = …`. The character's
- * constructor fills in `fields`: the director's only way into its private fields.
+ * `setCollective`, which carry out `character.mind = …` and `character.collective = …`. The other way, the
+ * character's constructor hands its director {@link CharacterFields} (`internalsOf(character)`).
  */
 export type Wiring<TCtx = unknown> = {
 	setMind(character:Character<TCtx>, mind:Mind<TCtx> | null):void;
 	setCollective(character:Character<TCtx>, collective:Collective<TCtx> | null):void;
-	fields?:CharacterFields<TCtx>;
 };
 
-/** What a character's constructor hands its director through its {@link Wiring}. */
+/** What a character's constructor hands its director: the director's only way into its private fields. */
 export type CharacterFields<TCtx = unknown> = {
 	/** Its own mind; null in a collective or when the host drives it. */
 	setMind(mind:Mind<TCtx> | null):void;
@@ -27,7 +26,6 @@ export type CharacterFields<TCtx = unknown> = {
 };
 
 export type CharacterOptions<TCtx = unknown> = RunnerOptions<TCtx> & {
-	persona?:Persona;
 	tags?:string[];
 	/** Settings for its own mind, kept while it belongs to a collective. */
 	mindSettings?:MindSettings;
@@ -44,7 +42,6 @@ function unwired<TCtx>():Wiring<TCtx> {
 
 /** A character's part of a save. Membership is saved on its collective. */
 export type CharacterJSON = ArcRunnerJSON & {
-	persona:PersonaJSON;
 	tags:string[];
 	/** Its own mind's thinking state. Absent in a collective, or when the host drives it. */
 	mind?:MindJSON;
@@ -56,7 +53,6 @@ export type CharacterJSON = ArcRunnerJSON & {
  * arcs: its own mind, its collective's shared one, or none when the host drives it.
  */
 export class Character<TCtx = unknown> extends ArcRunner<TCtx> {
-	public readonly persona:Persona;
 	public tags:string[];
 	/** Settings for its own mind. Kept while it belongs to a collective, so leaving can give it a fresh mind. */
 	public mindSettings:MindSettings | undefined;
@@ -67,11 +63,10 @@ export class Character<TCtx = unknown> extends ArcRunner<TCtx> {
 
 	constructor(opts:CharacterOptions<TCtx>) {
 		super(opts);
-		this.persona = opts.persona ?? new Persona();
 		this.tags = [...(opts.tags ?? [])];
 		this.mindSettings = opts.mindSettings;
 		this._wiring = opts.wiring ?? unwired();
-		this._wiring.fields = {
+		hand(this, {
 			setMind: (mind) => {
 				this._mind = mind;
 			},
@@ -84,7 +79,7 @@ export class Character<TCtx = unknown> extends ArcRunner<TCtx> {
 				this.mindSettings = json.mindSettings;
 			},
 			keepLaw: (law) => this.keepLaw(law),
-		};
+		} satisfies CharacterFields<TCtx>);
 	}
 
 	/** Its own mind, or its collective's. Null when the host drives it. */
@@ -148,7 +143,6 @@ export class Character<TCtx = unknown> extends ArcRunner<TCtx> {
 	public override toJSON():CharacterJSON {
 		return {
 			...super.toJSON(),
-			persona: this.persona.toJSON(),
 			tags: [...this.tags],
 			mind: this._mind?.toJSON(),
 			mindSettings: this.mindSettings && { ...this.mindSettings },

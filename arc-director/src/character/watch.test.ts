@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { STOCK_VERBS, VerbRegistry, registerStockVerbs } from '../arc/stock-verbs.js';
+import { STOCK_VERBS, VerbRegistry, STOCK_VERB_DEFS } from '../arc/stock-verbs.js';
 import {
 	buildCatalog,
 	dummyEntity,
@@ -26,7 +26,7 @@ import type { ArcFormat } from '../mind/mind-types.js';
 
 /** Every stock verb: registered, and in the kit. */
 function stockVerbs():{ verbs:VerbRegistry; kit:{ verbs:readonly string[] } } {
-	return { verbs: registerStockVerbs(new VerbRegistry()), kit: { verbs: STOCK_VERBS } };
+	return { verbs: new VerbRegistry().addAll(STOCK_VERB_DEFS), kit: { verbs: STOCK_VERBS } };
 }
 
 type Ctx = Record<string, never>;

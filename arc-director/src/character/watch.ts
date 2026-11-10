@@ -1,7 +1,7 @@
 import { isRecord } from '../json.js';
 import type { Watches } from './character-types.js';
 
-export function watchKey(name:string):string {
+function watchKey(name:string):string {
 	return name.trim().toLowerCase();
 }
 
@@ -48,7 +48,7 @@ function isLegacyWatchObject(raw:Record<string, unknown>):boolean {
 }
 
 /** One `{ name, expr }` from a list item or a lone object. `id` aliases `name`. */
-export function asWatch(raw:unknown, fallbackName?:string):{ name:string; expr:string } | undefined {
+function asWatch(raw:unknown, fallbackName?:string):{ name:string; expr:string } | undefined {
 	if (typeof raw === 'string') {
 		const expr = raw.trim();
 		const name = (fallbackName ?? '').trim();
@@ -196,7 +196,7 @@ export function applyWatchOps(extras:Watches, pinned:Watches, ops:WatchOps):Watc
 	return next;
 }
 
-export function formatWatch(name:string, expr:string):string {
+function formatWatch(name:string, expr:string):string {
 	return `- ${name}: ${expr}`;
 }
 

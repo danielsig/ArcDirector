@@ -24,3 +24,10 @@ export function nextTurn():Promise<void> {
 		channel.port2.postMessage(undefined);
 	});
 }
+
+/** Resolves after `ms` milliseconds. */
+export function sleep(ms:number):Promise<void> {
+	return new Promise((resolve) => {
+		setTimeout(resolve, ms);
+	});
+}

@@ -5,6 +5,7 @@ import type { Character } from '../character/Character.js';
 import type { Collective } from '../collective/Collective.js';
 import type { VerbAlias, VerbCall, VerbHandler } from '../director/director-types.js';
 import { poseOf } from '../world/lookup.js';
+import { bundleText } from '../world/offers.js';
 import type { HostWorld } from '../world/world-types.js';
 import { distance } from '../world/vec.js';
 import { dummyEntity } from '../expr/natives.js';
@@ -29,7 +30,7 @@ export const RTS_COMMANDER_VERBS = [
 ] as const;
 
 /** What the RTS reaches in the director: the world, its characters, and how the caller sees. */
-export type RTSDeps<TCtx> = {
+type RTSDeps<TCtx> = {
 	host:RTSHost;
 	world:()=>HostWorld<unknown> | undefined;
 	character:(id:string)=>Character<TCtx> | undefined;
@@ -65,10 +66,6 @@ type SideState = {
 
 function scaled(bundle:CountMap, n:number):CountMap {
 	return Object.fromEntries(Object.entries(bundle).map(([k, v]) => [k, v * n]));
-}
-
-function bundleText(bundle:CountMap):string {
-	return Object.entries(bundle).map(([k, v]) => `${v} ${k}`).join(', ');
 }
 
 function str(v:unknown):string {
@@ -1001,7 +998,7 @@ export class RTS<TCtx> {
 			if (i >= 0) {
 				const [order] = queue.splice(i, 1);
 				this.host.addStock(side, order.paid);
-				return ok('cancel', `${order.kind} at ${building.id}; got ${bundleText(order.paid) || 'nothing'} back`);
+				return ok('cancel', `${order.kind} at ${building.id}; got ${bundleText(order.paid)} back`);
 			}
 		}
 		const site = where.find((c) => this.unfinished(c) && (!what || this.kindOf(c.id) === what));
@@ -1010,7 +1007,7 @@ export class RTS<TCtx> {
 			this.host.removeSite(site.id);
 			this.host.addStock(side, back);
 			site.collective?.removeCharacter(site.id);
-			return ok('cancel', `${site.id} taken down; got ${bundleText(back) || 'nothing'} back`);
+			return ok('cancel', `${site.id} taken down; got ${bundleText(back)} back`);
 		}
 		return fail('cancel', `nothing${what ? ` ${what}` : ''} queued${at ? ` at ${at}` : ''}`);
 	}
@@ -1513,7 +1510,7 @@ export class RTS<TCtx> {
 	public status(side:string):string {
 		const stock = this.host.getStock(side);
 		const { units, queued, cap } = this.supply(side);
-		const lines = [`Stock: ${bundleText(stock) || 'nothing'}`];
+		const lines = [`Stock: ${bundleText(stock)}`];
 		if (this.capped) {
 			lines.push(`${this.cap.name}: ${units}/${cap}${queued > 0 ? ` (${queued} more queued)` : ''}`);
 		}

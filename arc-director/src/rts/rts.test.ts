@@ -449,7 +449,7 @@ describe('stock RTS verbs', () => {
 	it('shows the commander its side at a glance, in place of every unit by name', async () => {
 		const director = await start();
 		const section = director.collective('Red')!.promptSection(director.collective('Red')!.mind);
-		assert.match(section, /^Stock: 500 Gold, 500 Wood\nSupply: 2\/5\nUnits: TownCenter ×1; Worker ×2 \(2 idle\); Barracks ×1/);
+		assert.match(section, /^Stock: 500 Gold \+ 500 Wood\nSupply: 2\/5\nUnits: TownCenter ×1; Worker ×2 \(2 idle\); Barracks ×1/);
 		assert.equal(section.includes('- Brann'), false);
 		director.dispose();
 	});

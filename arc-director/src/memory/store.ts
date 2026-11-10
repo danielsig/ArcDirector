@@ -99,7 +99,7 @@ export function mergeTags(...lists:Array<readonly string[] | undefined>):string[
 	return out;
 }
 
-export function lexicalTokens(text:string):string[] {
+function lexicalTokens(text:string):string[] {
 	const names = nameTags(text).map((n) => n.toLowerCase());
 	const words = (text.toLowerCase().match(/[a-z][a-z0-9]{3,}/g) ?? [])
 		.filter((w) => !STOP.has(w));
@@ -107,7 +107,7 @@ export function lexicalTokens(text:string):string[] {
 }
 
 /** Fraction of query tokens that appear in `text`. Used when embeddings are missing. */
-export function lexicalOverlap(query:string, text:string):number {
+function lexicalOverlap(query:string, text:string):number {
 	const q = lexicalTokens(query);
 	if (q.length === 0) {
 		return 0;
@@ -143,7 +143,7 @@ function recencyBonus(timestamp:number, now:number):number {
 }
 
 /** The most a name's salience adds to a memory about it: more than a tag hit, so what stands before you comes to mind. */
-export const SALIENCE_BOOST = 0.6;
+const SALIENCE_BOOST = 0.6;
 
 /** How strongly `salience`'s names bring `record` to mind: the most salient one it is tagged with or names. */
 function salienceOf(record:MemoryRecord, salience:ReadonlyMap<string, number> | undefined):number {

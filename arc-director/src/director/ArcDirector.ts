@@ -1,4 +1,4 @@
-import { argBase, CHOOSE_VERB, fillHoles, registerStockVerbs, stepDoing, STOCK_TRADE_VERBS, STOCK_VERB_DEFS, STOCK_VERBS, type StockVerb, type VerbArgKind, type VerbArgMap, VerbRegistry } from '../arc/stock-verbs.js';
+import { argBase, CHOOSE_VERB, fillHoles, stepDoing, STOCK_TRADE_VERBS, STOCK_VERB_DEFS, STOCK_VERBS, type StockVerb, type VerbArgKind, type VerbArgMap, VerbRegistry } from '../arc/stock-verbs.js';
 import { formatArc, parseArcText } from '../arc/arc-parse.js';
 import { withLoneWait } from '../arc/choose.js';
 import { arcArg } from '../arc/wire.js';
@@ -9,12 +9,13 @@ import { JevSystemOne, ModelSystemOne, type JevOpts, type SystemOne } from '../i
 import { ArcError, BlockedArcError } from '../arc/arc-types.js';
 import { lawGroup, type Law, type LawSpec } from '../arc/laws.js';
 import { bodiless, type ArcRunner, type RunnerOptions } from '../character/arc-runner.js';
-import { Character, type CharacterFields, type CharacterJSON, type Wiring } from '../character/Character.js';
+import { Character, type CharacterJSON, type Wiring } from '../character/Character.js';
 import { Persona } from '../character/Persona.js';
 import type { Goal, Kit, KitSource } from '../character/character-types.js';
 import type { NameTarget } from '../character/NameBook.js';
 import { Collective, type CollectiveFields, type CollectiveHost, type CollectiveJSON } from '../collective/Collective.js';
-import { Mind, mindFields, type MindDeps, type MindSettings } from '../mind/mind.js';
+import { internalsOf } from '../internals.js';
+import { Mind, type MindDeps, type MindSettings } from '../mind/mind.js';
 import type { ArcFormat, MindEvent, Replacing, Sense, ThinkEvent, ToolSpec } from '../mind/mind-types.js';
 import type { ThinkInstructions } from '../mind/prompt.js';
 import { TalkNet, type SpeechUtterance, type TalkConfig, type TalkMind, type TalkSense } from '../mind/talk.js';
@@ -43,7 +44,7 @@ import { AUDIBLE, clarityAt, DEFAULT_HEARING, heardText, LOUD, loudnessAfter, lo
 import { bareName } from '../perception/lod.js';
 import type { SeenObject, Sight, SightClause } from '../perception/perception-types.js';
 import {
-	registerStockCollectiveVerbs,
+	STOCK_COLLECTIVE_VERB_DEFS,
 	STOCK_COLLECTIVE_VERBS,
 	isFormationVerb,
 	type StockCollectiveVerb,
@@ -107,7 +108,7 @@ import { mapExpr, namesOf } from '../mind/ids.js';
 import { searchTool, type SearchSpec } from '../search/search.js';
 import { RTS } from '../rts/rts.js';
 import type { RTSHost } from '../rts/rts-types.js';
-import { registerStockRTSVerbs } from '../rts/rts-verbs.js';
+import { STOCK_RTS_VERB_DEFS } from '../rts/rts-verbs.js';
 import { genreVerbs, STOCK_MOBA_VERB_DEFS, STOCK_RPG_VERB_DEFS, type GenreVerbEntry, type MOBAHost, type RPGHost } from '../genre/genre-verbs.js';
 import { OfferBook, offerText, type Offer } from '../world/offers.js';
 import { passes, poseOf } from '../world/lookup.js';
@@ -341,9 +342,6 @@ export class ArcDirector<TCtx = unknown> {
 	private readonly _specs = new Map<string, CharacterSpec<TCtx>>();
 	private readonly _characterRows = new Map<string, Row<CharacterSpec<TCtx>, Character<TCtx>>>();
 	private readonly _collectiveRows = new Map<string, Row<CollectiveSpec<TCtx>, Collective<TCtx>>>();
-	/** What each character's and collective's constructor handed this director, kept past their rows. */
-	private readonly _characterFields = new WeakMap<Character<TCtx>, CharacterFields<TCtx>>();
-	private readonly _collectiveFields = new WeakMap<Collective<TCtx>, CollectiveFields<TCtx>>();
 	/** Each mind owner's talk listener, shared by every character it hears through. */
 	private readonly _talkMinds = new WeakMap<ArcRunner<TCtx>, TalkMind>();
 	/** The sound each verb makes, and what muffles a sound for a listener, once {@link withHearing} is set. */
@@ -661,7 +659,7 @@ ${dump.message}`, image: dump.image });
 	 */
 	public withRTS(host:RTSHost):this {
 		this.assertBuilder();
-		registerStockRTSVerbs(this._verbs);
+		this._verbs.addAll(STOCK_RTS_VERB_DEFS);
 		const rts = new RTS<TCtx>({
 			host,
 			world: () => this._world,
@@ -733,7 +731,7 @@ ${dump.message}`, image: dump.image });
 	/** Register a genre's verbs and the stock ones; with `more`, they are the default kit unless `withDefaultKit` says otherwise. */
 	private withGenre(verbs:readonly GenreVerbEntry<TCtx>[], more:readonly string[] = []):this {
 		this.assertBuilder();
-		registerStockVerbs(this._verbs);
+		this._verbs.addAll(STOCK_VERB_DEFS);
 		for (const { name, def, handler } of verbs) {
 			if (!this._verbs.has(name)) {
 				this._verbs.add(name, def);
@@ -1194,13 +1192,13 @@ ${dump.message}`, image: dump.image });
 
 	/** Schema-only. Omit `verbs` to register the full stock set. Already-registered names are skipped. */
 	public addStockVerbs(...verbs:StockVerb[]):this {
-		registerStockVerbs(this._verbs, ...verbs);
+		this._verbs.addAll(STOCK_VERB_DEFS, ...verbs);
 		return this;
 	}
 
 	/** Schema-only collective verbs (`issue`, `tag`, formations). `when` / `law` / `unlaw` ride on stock arc verbs. Kit still has to grant them. */
 	public addStockCollectiveVerbs(...verbs:StockCollectiveVerb[]):this {
-		registerStockCollectiveVerbs(this._verbs, ...verbs);
+		this._verbs.addAll(STOCK_COLLECTIVE_VERB_DEFS, ...verbs);
 		return this;
 	}
 
@@ -2228,7 +2226,7 @@ ${dump.message}`, image: dump.image });
 
 	/** The sight text `mind` is shown; it remembers each name in it as last seen there, and recalls by what is salient. */
 	private shown(mind:Mind<TCtx>, clauses:SightClause[], salience:ReadonlyMap<string, number>):string {
-		mindFields(mind).sighted(clauses, salience);
+		internalsOf(mind).sighted(clauses, salience);
 		return joinSightClauses(clauses);
 	}
 
@@ -2842,8 +2840,7 @@ ${dump.message}`, image: dump.image });
 			mindSettings: spec.mind,
 			wiring,
 		});
-		const fields = filled(wiring.fields);
-		this._characterFields.set(character, fields);
+		const fields = internalsOf(character);
 		if (standing) {
 			this._standing.set(character, standing);
 		}
@@ -2860,9 +2857,9 @@ ${dump.message}`, image: dump.image });
 			}
 		}
 		if (into) {
-			this.fields(into).setCharacters([...into.characters, character]);
+			internalsOf(into).setCharacters([...into.characters, character]);
 			fields.setCollective(into);
-			moveLawsInto(character, this.fields(into));
+			moveLawsInto(character, internalsOf(into));
 		}
 		else if (json?.mind || spec.mind) {
 			this.attachMind(character, json?.mind ? Mind.fromJSON(json.mind) : new Mind({ ...this._mindDefaults, ...spec.mind }));
@@ -2902,7 +2899,6 @@ ${dump.message}`, image: dump.image });
 			host,
 			onCommanderVacant: (character) => this._commanderVacantFn?.(collective, character),
 		});
-		this._collectiveFields.set(collective, filled(host.fields));
 		if (this._rts) {
 			const rts = this._rts;
 			collective.status = () => rts.status(collective.id);
@@ -2917,7 +2913,7 @@ ${dump.message}`, image: dump.image });
 			this.wireCharacter(id === chiefID && !own.kit && spec.kit ? { ...own, kit: spec.kit } : own, cast?.characters[id], collective);
 		}
 		if (json) {
-			this.fields(collective).load(json);
+			internalsOf(collective).load(json);
 			for (const law of spec.laws ?? []) {
 				collective.addLaw(law, law.pinned);
 			}
@@ -2934,14 +2930,6 @@ ${dump.message}`, image: dump.image });
 		this.listen(collective);
 		this.stampPrev(collective);
 		return collective;
-	}
-
-	/** What `runner`'s constructor handed this director: its only way into the runner's private fields. */
-	private fields(runner:Character<TCtx>):CharacterFields<TCtx>;
-	private fields(runner:Collective<TCtx>):CollectiveFields<TCtx>;
-	private fields(runner:Character<TCtx> | Collective<TCtx>):CharacterFields<TCtx> | CollectiveFields<TCtx> {
-		const fields = runner instanceof Character ? this._characterFields.get(runner) : this._collectiveFields.get(runner);
-		return filled(fields);
 	}
 
 	/** `character.mind = mind`: its own mind from now on, out of any collective, or the host's hands for `null`. */
@@ -3080,19 +3068,19 @@ ${dump.message}`, image: dump.image });
 		from:Collective<TCtx>,
 		to:Collective<TCtx> | null = null,
 	):{ kept:Law[]; dropped:Law[] } {
-		this.fields(from).setCharacters(from.characters.filter((c) => c !== character));
-		this.fields(character).setCollective(null);
+		internalsOf(from).setCharacters(from.characters.filter((c) => c !== character));
+		internalsOf(character).setCollective(null);
 		character.tags = character.tags.filter((t) => !from.ownsTag(t));
 		const own = from.laws.filter((law) => lawGroup(law.name) === character.id);
 		from.laws = from.laws.filter((law) => !own.includes(law));
-		this.fields(from).vacate(character);
+		internalsOf(from).vacate(character);
 		if (to) {
 			return { kept: own, dropped: [] };
 		}
 		const dropped = own.filter((law) => usesCollective(law, this._verbs));
 		for (const law of own.filter((l) => !dropped.includes(l))) {
 			law.name = law.name.slice(character.id.length + 1);
-			this.fields(character).keepLaw(law);
+			internalsOf(character).keepLaw(law);
 		}
 		return { kept: [], dropped };
 	}
@@ -3104,11 +3092,11 @@ ${dump.message}`, image: dump.image });
 			character.mindSettings = own.settings();
 		}
 		this.dropOwnMind(character);
-		this.fields(to).setCharacters([...to.characters, character]);
-		this.fields(character).setCollective(to);
-		moveLawsInto(character, this.fields(to));
+		internalsOf(to).setCharacters([...to.characters, character]);
+		internalsOf(character).setCollective(to);
+		moveLawsInto(character, internalsOf(to));
 		for (const law of carried) {
-			this.fields(to).keepLaw(law);
+			internalsOf(to).keepLaw(law);
 		}
 	}
 
@@ -3147,16 +3135,16 @@ ${dump.message}`, image: dump.image });
 		const own = ownMindOf(character);
 		if (own) {
 			this.detachMind(own);
-			this.fields(character).setMind(null);
+			internalsOf(character).setMind(null);
 		}
 	}
 
 	/** Let `mind` think for `owner`: wire it, and give it a place in the think queue. */
 	private attachMind(owner:Character<TCtx> | Collective<TCtx>, mind:Mind<TCtx>):void {
 		if (owner instanceof Character) {
-			this.fields(owner).setMind(mind);
+			internalsOf(owner).setMind(mind);
 		}
-		mindFields(mind).attach(owner, this.mindDeps(mind, owner));
+		internalsOf(mind).attach(owner, this.mindDeps(mind, owner));
 		mind.stamp(this._clock);
 		this._queue?.ensure(mind.id, { skipHeartbeat: mind.skipHeartbeat, skipMajor: mind.skipMajor, skipStart: mind.skipStart });
 		this._queue?.setWatches(mind.id, mind.persona.effectiveWatches());
@@ -3174,7 +3162,7 @@ ${dump.message}`, image: dump.image });
 				this._readyThink.splice(i, 1);
 			}
 		}
-		mindFields(mind).detach();
+		internalsOf(mind).detach();
 	}
 
 	/** The listener for `owner`'s mind: one per character with a mind of its own, and one per collective. */
@@ -3284,13 +3272,13 @@ ${dump.message}`, image: dump.image });
 			this._mover.stop(runner.id);
 			this.talk?.detach(runner.id);
 			this.dropOwnMind(runner);
-			this.fields(runner).setCollective(null);
+			internalsOf(runner).setCollective(null);
 		}
 		for (const { runner } of this._collectiveRows.values()) {
 			runner.replaceProgram();
 			this.talk?.detach(runner.id);
 			this.detachMind(runner.mind);
-			this.fields(runner).setCharacters([]);
+			internalsOf(runner).setCharacters([]);
 		}
 		this._characterRows.clear();
 		this._collectiveRows.clear();
@@ -3387,7 +3375,7 @@ ${dump.message}`, image: dump.image });
 			// Whatever brought it down, a mind does not go on thinking through it.
 			const commander = row.runner.commander;
 			if (commander && this._world?.isDown?.(commander.id)) {
-				this.fields(row.runner).vacate(commander);
+				internalsOf(row.runner).vacate(commander);
 			}
 			this.tickCollectiveLaws(row.runner);
 		}
@@ -3897,14 +3885,6 @@ function moveLawsInto<TCtx>(character:Character<TCtx>, collective:CollectiveFiel
 /** A character's own mind: none while it is in a collective, whose mind it thinks with. */
 function ownMindOf<TCtx>(character:Character<TCtx> | undefined):Mind<TCtx> | null {
 	return character && !character.collective ? character.mind : null;
-}
-
-/** What a constructor filled in for this director. */
-function filled<T>(fields:T | undefined):T {
-	if (!fields) {
-		throw new Error('ArcDirector: not wired to this director');
-	}
-	return fields;
 }
 
 /** The collective `runner` acts in: itself, or the one its character belongs to. */

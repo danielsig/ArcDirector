@@ -1,4 +1,5 @@
 import { RESERVED_TAGS } from '../world/world-types.js';
+import { distance as pointDistance, dot, sub } from '../world/vec.js';
 import { defaultLandmarkTier, groundAndFigure } from './ground.js';
 import { claimedOf, basicPluralize, builtinStringifiers } from './stringifiers.js';
 import { builtinLodLayers } from './lod.js';
@@ -46,16 +47,6 @@ function clamp01(n:number):number {
 	return Math.min(1, Math.max(0, n));
 }
 
-export function hypotAt(a:number[], b:number[]):number {
-	const n = Math.min(a.length, b.length);
-	let s = 0;
-	for (let i = 0; i < n; i++) {
-		const d = (a[i] ?? 0) - (b[i] ?? 0);
-		s += d * d;
-	}
-	return Math.sqrt(s);
-}
-
 export function bearingOf(
 	self:{ point:number[]; facing?:number[] },
 	obj:{ point:number[] },
@@ -68,20 +59,14 @@ export function bearingOf(
 	if (n === 0) {
 		return 'away';
 	}
-	const delta:number[] = [];
-	for (let i = 0; i < n; i++) {
-		delta.push((obj.point[i] ?? 0) - (self.point[i] ?? 0));
-	}
-	let dot = 0;
-	for (let i = 0; i < n; i++) {
-		dot += (f[i] ?? 0) * delta[i];
-	}
+	const delta = sub(obj.point.slice(0, n), self.point);
+	const ahead = dot(delta, f);
 	if (n === 1) {
-		return dot >= 0 ? 'ahead' : 'behind';
+		return ahead >= 0 ? 'ahead' : 'behind';
 	}
-	const cross = (f[0] ?? 0) * delta[1] - (f[1] ?? 0) * delta[0];
-	if (Math.abs(dot) >= Math.abs(cross)) {
-		return dot >= 0 ? 'ahead' : 'behind';
+	const cross = f[0] * delta[1] - f[1] * delta[0];
+	if (Math.abs(ahead) >= Math.abs(cross)) {
+		return ahead >= 0 ? 'ahead' : 'behind';
 	}
 	return cross > 0 ? 'right' : 'left';
 }
@@ -353,7 +338,7 @@ export function joinSightClauses(clauses:SightClause[]):string {
 	return `${texts.join('. ')}.`;
 }
 
-export function clauseScore(clause:SightClause, objectScores?:Map<string, number>):number {
+function clauseScore(clause:SightClause, objectScores?:Map<string, number>):number {
 	if (!objectScores || clause.claimedIDs.length === 0) {
 		return 0;
 	}
@@ -368,7 +353,7 @@ export function clauseScore(clause:SightClause, objectScores?:Map<string, number
 }
 
 /** Intersecting claimed sets collapse to one clause. Disjoint sets stay separate. */
-export function dedupIntersectingClauses(
+function dedupIntersectingClauses(
 	clauses:SightClause[],
 	objectScores?:Map<string, number>,
 ):SightClause[] {
@@ -459,7 +444,7 @@ export function formatSightClauses(sight:Sight, opts:SightOpts = {}):SightClause
 	const npcID = sight.self.id;
 	const objects = sight.objects.map(fillSeen);
 	const me = selfObject(sight, objects);
-	const distance:DistFn = (a, b) => hypotAt(a.point, b.point);
+	const distance:DistFn = (a, b) => pointDistance(a.point, b.point);
 	const hasFacing = !!(sight.self.facing && sight.self.facing.length > 0);
 	const bearingFn = (obj:SeenObject):Bearing => bearingOf(sight.self, obj);
 

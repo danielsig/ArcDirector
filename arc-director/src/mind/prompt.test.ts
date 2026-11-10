@@ -1,13 +1,13 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { parseArc } from '../arc/wire.js';
-import { VerbRegistry, registerStockVerbs } from '../arc/stock-verbs.js';
-import { registerStockCollectiveVerbs } from '../collective/collective-verbs.js';
+import { VerbRegistry, STOCK_VERB_DEFS } from '../arc/stock-verbs.js';
+import { STOCK_COLLECTIVE_VERB_DEFS } from '../collective/collective-verbs.js';
 import { stablePrefix, volatileBlock, conversationBlock, CONVERSATION_HEADER, seeMapHint, arcRepairHint } from './prompt.js';
 import { docsFor } from '../arc/schema.js';
 
 describe('prompt split', () => {
-	const verbs = registerStockVerbs(new VerbRegistry());
+	const verbs = new VerbRegistry().addAll(STOCK_VERB_DEFS);
 	const identity = { role: 'Watcher', traits: ['alert'] };
 
 	it('names the agent by its id, with its role when it has one', () => {
@@ -200,17 +200,17 @@ describe('prompt split', () => {
 	});
 
 	it('tells a bodiless mind that a verb of its units runs through issue', () => {
-		const hive = registerStockCollectiveVerbs(registerStockVerbs(new VerbRegistry()), 'issue').view(['issue', 'wait']);
+		const hive = new VerbRegistry().addAll(STOCK_VERB_DEFS).addAll(STOCK_COLLECTIVE_VERB_DEFS, 'issue').view(['issue', 'wait']);
 		const hint = arcRepairHint("unknown verb 'say'", 'json', [], hive);
 		assert.match(hint, /say is for your units, run through issue\(who, arc=say\(…\)\)/);
 		assert.match(arcRepairHint("unknown verb 'dance'", 'json', [], hive), /not a valid Arc/);
 	});
 
 	it('discards verb-less prose on repair', () => {
-		const hint = arcRepairHint('expected verb', 'text', ['see_map'], registerStockVerbs(new VerbRegistry()));
+		const hint = arcRepairHint('expected verb', 'text', ['see_map'], new VerbRegistry().addAll(STOCK_VERB_DEFS));
 		assert.match(hint, /That prose is discarded/);
 		assert.match(hint, /Do the spoken job, not go_to or follow the speaker/);
-		const bare = arcRepairHint('expected verb', 'text', ['see_map'], registerStockVerbs(new VerbRegistry(), 'say', 'wait'));
+		const bare = arcRepairHint('expected verb', 'text', ['see_map'], new VerbRegistry().addAll(STOCK_VERB_DEFS, 'say', 'wait'));
 		assert.match(bare, /Do the spoken job\./);
 		assert.equal(bare.includes('go_to'), false);
 		assert.equal(bare.includes('follow'), false);
@@ -359,7 +359,7 @@ describe('prompt split', () => {
 	});
 
 	it('a host example and verb line replace the stock crowd ones', () => {
-		const catalog = registerStockCollectiveVerbs(registerStockVerbs(new VerbRegistry()));
+		const catalog = new VerbRegistry().addAll(STOCK_VERB_DEFS).addAll(STOCK_COLLECTIVE_VERB_DEFS);
 		catalog.add('shoot', { args: { target: 'id' }, help: 'needs a clear line of sight' });
 		const verbs = catalog.view(['issue', 'when', 'law', 'unlaw', 'loop', 'smite']);
 		const stock = stablePrefix('Guard', identity, verbs, { arcFormat: 'text' });
@@ -385,7 +385,7 @@ describe('prompt split', () => {
 	});
 
 	it('shows a collective the same examples as JSON when it writes JSON, and each parses back', () => {
-		const catalog = registerStockCollectiveVerbs(registerStockVerbs(new VerbRegistry()));
+		const catalog = new VerbRegistry().addAll(STOCK_VERB_DEFS).addAll(STOCK_COLLECTIVE_VERB_DEFS);
 		catalog.add('shoot', { args: { target: 'id' }, help: 'needs a clear line of sight' });
 		const verbs = catalog.view(['issue', 'when', 'law', 'unlaw', 'loop', 'choose', 'smite']);
 		for (const arcFormat of ['json', 'schema'] as const) {
@@ -411,7 +411,7 @@ describe('prompt split', () => {
 	});
 
 	it('issue and law rules appear when the kit has crowd verbs', () => {
-		const catalog = registerStockCollectiveVerbs(registerStockVerbs(new VerbRegistry()));
+		const catalog = new VerbRegistry().addAll(STOCK_VERB_DEFS).addAll(STOCK_COLLECTIVE_VERB_DEFS);
 		catalog.add('slash', { args: { target: 'id' } });
 		const verbs = catalog.view(['issue', 'when', 'law', 'unlaw', 'loop', 'smite']);
 		const system = stablePrefix('Guard', identity, verbs, { arcFormat: 'text' });
@@ -432,7 +432,7 @@ describe('prompt split', () => {
 	});
 
 	it('solo law has no who', () => {
-		const verbs = registerStockVerbs(new VerbRegistry()).withoutArg('law', 'who');
+		const verbs = new VerbRegistry().addAll(STOCK_VERB_DEFS).withoutArg('law', 'who');
 		const system = stablePrefix('Guard', identity, verbs);
 		assert.match(system, /law\(watch, arc, name\?\) is a standing reaction/);
 		assert.equal(system.includes('law(who'), false);
@@ -441,7 +441,7 @@ describe('prompt split', () => {
 	});
 
 	it('omits verb instructions the kit does not grant', () => {
-		const verbs = registerStockVerbs(new VerbRegistry(), 'say', 'wait');
+		const verbs = new VerbRegistry().addAll(STOCK_VERB_DEFS, 'say', 'wait');
 		const system = stablePrefix('Guard', identity, verbs, { canSeeMap: true, canRecallKnowledge: true });
 		assert.match(system, /wait\(until\)/);
 		assert.match(system, /Available verbs: say\(text, to\?\) — one short sentence, wait\(seconds\?, until\?\)/);
@@ -477,7 +477,7 @@ describe('prompt split', () => {
 });
 
 describe('choose in prompts', () => {
-	const all = registerStockVerbs(new VerbRegistry());
+	const all = new VerbRegistry().addAll(STOCK_VERB_DEFS);
 
 	it('teaches choose to a character that has it', () => {
 		const text = stablePrefix('Guard', {}, all, { arcFormat: 'text' });
@@ -497,14 +497,14 @@ describe('choose in prompts', () => {
 	});
 
 	it('teaches a collective whose kit grants choose to issue it in a loop', () => {
-		const catalog = registerStockCollectiveVerbs(registerStockVerbs(new VerbRegistry()));
+		const catalog = new VerbRegistry().addAll(STOCK_VERB_DEFS).addAll(STOCK_COLLECTIVE_VERB_DEFS);
 		catalog.add('attack', { args: { target: 'id?' } });
 		const text = stablePrefix('Dawn', {}, catalog.view(['issue', 'loop', 'choose', 'attack']), { arcFormat: 'text' });
 		assert.match(text, /as in:\nissue\(\n\twho=units,\n\tarc=loop\(\n\t\tarc=choose\(\n\t\t\t"why you choose",\n\t\t\tattack=attack\(\),\n/);
 	});
 
 	it('never offers choose to a collective whose kit lacks it, even among nested arc verbs', () => {
-		const catalog = registerStockCollectiveVerbs(registerStockVerbs(new VerbRegistry()));
+		const catalog = new VerbRegistry().addAll(STOCK_VERB_DEFS).addAll(STOCK_COLLECTIVE_VERB_DEFS);
 		const kit = catalog.view(['issue', 'when', 'loop', 'law', 'unlaw']);
 		const text = stablePrefix('Dawn', {}, kit, { arcFormat: 'text' });
 		assert.match(text, /Nested arc verbs/);
@@ -512,7 +512,7 @@ describe('choose in prompts', () => {
 	});
 
 	it('does not mention loop or unlaw unless the kit grants them', () => {
-		const catalog = registerStockVerbs(new VerbRegistry());
+		const catalog = new VerbRegistry().addAll(STOCK_VERB_DEFS);
 		const choose = stablePrefix('Guard', {}, catalog.view(['choose', 'wait', 'wander']), { arcFormat: 'text' });
 		assert.match(choose, /a fast model picks one by name/);
 		assert.equal(choose.includes('loop'), false);
@@ -529,7 +529,7 @@ describe('choose in prompts', () => {
 });
 
 describe('compact prompts', () => {
-	const verbs = registerStockVerbs(new VerbRegistry()).add('smite', { args: { target: 'id' }, help: '2 damage, 6 paces' });
+	const verbs = new VerbRegistry().addAll(STOCK_VERB_DEFS).add('smite', { args: { target: 'id' }, help: '2 damage, 6 paces' });
 	const identity = { role: 'Watcher', traits: ['alert'] };
 	const opts = { includeWatches: true, watchesWritable: true, canObserve: true, canRecallKnowledge: true, tools: ['recall', 'observe'], systemNote: 'The north is at war.' };
 

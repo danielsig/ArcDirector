@@ -479,7 +479,3 @@ export abstract class MindScheduler implements MindQueue {
 		return Math.min(this.heartbeatMax, Math.max(this.heartbeatMin, n));
 	}
 }
-
-export function withScheduler(queue:MindQueue):WithMindQueue {
-	return { queue, heartbeat: 0 };
-}

@@ -2,12 +2,12 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { parseArcText } from '../arc/arc-parse.js';
 import { firstStep, type Arc } from '../arc/arc-types.js';
-import { VerbRegistry, registerStockVerbs } from '../arc/stock-verbs.js';
-import { registerStockCollectiveVerbs } from '../collective/collective-verbs.js';
+import { VerbRegistry, STOCK_VERB_DEFS } from '../arc/stock-verbs.js';
+import { STOCK_COLLECTIVE_VERB_DEFS } from '../collective/collective-verbs.js';
 import { NameBook } from '../character/NameBook.js';
 import { idsOf, mapArc, mapExpr, namesOf } from './ids.js';
 
-const verbs = registerStockCollectiveVerbs(registerStockVerbs(new VerbRegistry()));
+const verbs = new VerbRegistry().addAll(STOCK_VERB_DEFS).addAll(STOCK_COLLECTIVE_VERB_DEFS);
 
 /** Ash is `EnemyWitch`, Nyx is `EnemyWitch2`. */
 function book():NameBook {

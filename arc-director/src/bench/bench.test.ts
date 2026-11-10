@@ -254,7 +254,7 @@ describe('arc bench play', () => {
 		assert.match(kite, /Units: Rifleman ×3/, 'the commander reads its side at a glance');
 		const village = (await promptOf('Corwen')).text;
 		assert.match(village, /train\(what, count\?, at\?, rally\?\)/);
-		assert.match(village, /Stock: 300 Gold, 200 Wood/);
+		assert.match(village, /Stock: 300 Gold \+ 200 Wood/);
 	});
 
 	it('answers a look-ahead call from where the case stands', async () => {

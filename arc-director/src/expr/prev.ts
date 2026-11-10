@@ -20,7 +20,7 @@ export type MeFreezeHost = {
 	hp?:(who:ExprEntity)=>{ hp:number; maxHP:number } | undefined;
 };
 
-export function cloneVal(v:ExprVal):ExprVal {
+function cloneVal(v:ExprVal):ExprVal {
 	switch (v.kind) {
 		case 'absent':
 			return ABSENT;

@@ -53,10 +53,13 @@ function times(bundle:CountMap, n:number):CountMap {
 	return out;
 }
 
-/** `5 gold`, `1 Loaf`, `3 Egg and 2 Milk`, or `nothing`. The count is always written, so a later recall can tell one from many. */
+/**
+ * `5 gold`, `1 Loaf`, `3 Egg + 2 Milk`, or `nothing`; zero counts are left out. The count is always written, so a later
+ * recall can tell one from many.
+ */
 export function bundleText(bundle:CountMap):string {
 	const parts = Object.entries(bundle).filter(([, count]) => count > 0).map(([name, count]) => `${count} ${name}`);
-	return parts.join(' and ') || 'nothing';
+	return parts.join(' + ') || 'nothing';
 }
 
 /** `1 Loaf for 5 gold`: what an offer gives, for what it gets. */

@@ -43,7 +43,7 @@ export type RegionSpec<TCtx = unknown> = RegionShape & {
 	onExit?(ctx:TCtx, stayed:number):void;
 };
 
-export function inRegion(shape:Extent, point:Vec):boolean {
+function inRegion(shape:Extent, point:Vec):boolean {
 	if ('radius' in shape) {
 		return distance(point, shape.center) <= shape.radius;
 	}

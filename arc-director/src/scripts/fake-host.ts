@@ -1,17 +1,12 @@
 import {
 	ArcDirector,
 	formatArc,
-	goToNamedInteractable,
 	STOCK_VERBS,
 } from '../index.js';
+import { goToNamedInteractable } from '../testing/index.js';
 import { fixtureParagraph, fixtureSight, type FixtureCtx } from './fixture-scene.js';
 import { resolveInferenceBaseURL, probeHttp } from './probe.js';
-
-function sleep(ms:number):Promise<void> {
-	return new Promise((resolve) => {
-		setTimeout(resolve, ms);
-	});
-}
+import { sleep } from '../turn.js';
 
 async function main():Promise<void> {
 	const paragraph = fixtureParagraph();

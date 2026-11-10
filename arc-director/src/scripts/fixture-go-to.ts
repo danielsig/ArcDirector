@@ -1,18 +1,16 @@
 import {
-	FakeProvider,
 	HttpProvider,
 	STOCK_VERBS,
 	VerbRegistry,
 	arcSteps,
 	formatArc,
-	goToNamedInteractable,
-	registerStockVerbs,
-	soloCharacter,
+	STOCK_VERB_DEFS,
 	type Arc,
 	type InferenceProvider,
 	type Sense,
 	type ToolSpec,
 } from '../index.js';
+import { FakeProvider, goToNamedInteractable, soloCharacter } from '../testing/index.js';
 import { fixtureParagraph, type FixtureCtx } from './fixture-scene.js';
 import { resolveInferenceBaseURL, resolveLiveModel, probeHttp } from './probe.js';
 
@@ -69,7 +67,7 @@ async function main():Promise<void> {
 			identity: { role: 'Guard' },
 			goals: [{ text: 'Go to EastGate', priority: 1 }],
 			provider,
-			verbs: registerStockVerbs(new VerbRegistry()),
+			verbs: new VerbRegistry().addAll(STOCK_VERB_DEFS),
 			kit: { verbs: STOCK_VERBS },
 			...perception(),
 			context: () => ({ paragraph }),

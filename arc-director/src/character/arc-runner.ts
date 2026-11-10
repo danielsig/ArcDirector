@@ -27,6 +27,7 @@ import {
 } from '../arc/run.js';
 import type { Mind } from '../mind/mind.js';
 import { ArcRecord } from './ArcRecord.js';
+import { Persona, type PersonaJSON } from './Persona.js';
 import type { SayResult, SayTo, TalkNet } from '../mind/talk.js';
 import type { Kit, KitSource } from './character-types.js';
 import type { MoveOpts } from '../world/mover.js';
@@ -60,14 +61,16 @@ export type RunnerDeps<TCtx = unknown> = {
 
 export type RunnerOptions<TCtx = unknown> = RunnerDeps<TCtx> & {
 	id:string;
+	persona?:Persona;
 	laws?:LawSpec[];
 	maxLaws?:number;
 	defaultLawWho?:string;
 };
 
-/** A runner's part of a save: its laws and how its last arc went. */
+/** A runner's part of a save: its persona, its laws and how its last arc went. */
 export type ArcRunnerJSON = {
 	id:string;
+	persona:PersonaJSON;
 	lastResult?:ArcResult;
 	liveArc:boolean;
 	laws?:Law[];
@@ -83,6 +86,8 @@ export type ArcRunnerJSON = {
  */
 export abstract class ArcRunner<TCtx = unknown> {
 	public readonly id:string;
+	/** Who it is: identity, goals, memory, watches. Its mind thinks as this persona. */
+	public readonly persona:Persona;
 	public readonly verbs:VerbRegistry;
 	public readonly context:()=>TCtx | undefined;
 	public readonly execute?:(step:Step, ctx:TCtx | undefined)=>Promise<ArcResult>;
@@ -142,6 +147,7 @@ export abstract class ArcRunner<TCtx = unknown> {
 
 	constructor(opts:RunnerOptions<TCtx>) {
 		this.id = opts.id;
+		this.persona = opts.persona ?? new Persona();
 		this.verbs = opts.verbs;
 		this.context = opts.context;
 		this.execute = opts.execute;
@@ -584,6 +590,7 @@ export abstract class ArcRunner<TCtx = unknown> {
 	public toJSON():ArcRunnerJSON {
 		return {
 			id: this.id,
+			persona: this.persona.toJSON(),
 			lastResult: this.lastResult ? { ...this.lastResult } : undefined,
 			liveArc: this.liveArc,
 			laws: this.laws.map((law) => structuredClone(law)),

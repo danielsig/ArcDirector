@@ -4,7 +4,7 @@ import { parseArcText, formatArc } from '../arc/arc-parse.js';
 import { chatContentText } from '../inference/provider.js';
 import { parseArc } from '../arc/wire.js';
 import { isArc, type Arc, type ArcResult } from '../arc/arc-types.js';
-import { VerbRegistry, registerStockVerbs, STOCK_VERBS } from '../arc/stock-verbs.js';
+import { VerbRegistry, STOCK_VERB_DEFS, STOCK_VERBS } from '../arc/stock-verbs.js';
 import { dummyEntity } from '../expr/natives.js';
 import {
 	formatSightClauses,
@@ -16,20 +16,15 @@ import { ArcDirector } from '../director/ArcDirector.js';
 import type { CollectiveSpec, VerbCall } from '../director/director-types.js';
 import type { Collective, CollectiveJSON } from './Collective.js';
 import type { Law } from '../arc/laws.js';
-import { registerStockCollectiveVerbs, STOCK_COLLECTIVE_VERBS } from './collective-verbs.js';
+import { STOCK_COLLECTIVE_VERB_DEFS, STOCK_COLLECTIVE_VERBS } from './collective-verbs.js';
 import { squadTag } from './tags.js';
 import { OPEN_WORLD } from '../testing/open-world.js';
 import { Mind } from '../mind/mind.js';
 import { TalkNet } from '../mind/talk.js';
 import type { ThinkEvent } from '../mind/mind-types.js';
+import { sleep } from '../turn.js';
 
 type Ctx = { id:string };
-
-function sleep(ms:number):Promise<void> {
-	return new Promise((resolve) => {
-		setTimeout(resolve, ms);
-	});
-}
 
 async function waitFor(fn:()=>boolean, ms = 400):Promise<void> {
 	const t0 = Date.now();
@@ -42,7 +37,7 @@ async function waitFor(fn:()=>boolean, ms = 400):Promise<void> {
 }
 
 function collectiveVerbs():VerbRegistry {
-	return registerStockCollectiveVerbs(registerStockVerbs(new VerbRegistry()));
+	return new VerbRegistry().addAll(STOCK_VERB_DEFS).addAll(STOCK_COLLECTIVE_VERB_DEFS);
 }
 
 const COLLECTIVE_KIT = { verbs: [...STOCK_VERBS, ...STOCK_COLLECTIVE_VERBS] };

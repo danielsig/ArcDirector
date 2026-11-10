@@ -1,6 +1,7 @@
-import { Character, type CharacterJSON, type CharacterOptions, type Wiring } from '../character/Character.js';
+import { Character, type CharacterJSON, type CharacterOptions } from '../character/Character.js';
 import { Persona, type PersonaSpec } from '../character/Persona.js';
-import { Mind, mindFields, type MindDeps, type MindSettings } from '../mind/mind.js';
+import { internalsOf } from '../internals.js';
+import { Mind, type MindDeps, type MindSettings } from '../mind/mind.js';
 
 export type SoloOptions<TCtx> = CharacterOptions<TCtx> & MindDeps<TCtx> & PersonaSpec & MindSettings;
 
@@ -13,16 +14,14 @@ export function soloCharacter<TCtx>(opts:SoloOptions<TCtx>, json?:CharacterJSON)
 	const fail = ():never => {
 		throw new Error('ArcDirector: a solo character has no director to move it');
 	};
-	const wiring:Wiring<TCtx> = { setMind: fail, setCollective: fail };
-	const character = new Character<TCtx>({ ...opts, persona, wiring });
-	// The constructor filled these in.
-	const fields = wiring.fields!;
+	const character = new Character<TCtx>({ ...opts, persona, wiring: { setMind: fail, setCollective: fail } });
+	const fields = internalsOf(character);
 	if (json) {
 		fields.load(json);
 	}
 	const mind = json?.mind ? Mind.fromJSON<TCtx>(json.mind) : new Mind<TCtx>({ heartbeat: 30, ...opts });
 	fields.setMind(mind);
-	mindFields(mind).attach(character, opts);
+	internalsOf(mind).attach(character, opts);
 	opts.talk?.attach({ id: character.id, nameOf: (id) => mind.nameOf(id), pushEvent: (event) => mind.pushEvent(event) });
 	return character;
 }

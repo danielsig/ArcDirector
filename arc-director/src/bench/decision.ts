@@ -1,5 +1,5 @@
 import { parseArcText } from '../arc/arc-parse.js';
-import { VerbRegistry, registerStockVerbs } from '../arc/stock-verbs.js';
+import { VerbRegistry, STOCK_VERB_DEFS } from '../arc/stock-verbs.js';
 import type { LastChoice } from '../arc/run.js';
 import type { SystemOne } from '../inference/system-one.js';
 import { choicePrompt, type ChoicePrompt } from '../character/choice.js';
@@ -193,7 +193,7 @@ export const DECISION_BENCH:DecisionCase[] = [
 ];
 
 /** The stock verbs and the 5v5 fight's attacks, which the cases' choices use. */
-const VERBS = Object.entries(FIGHT_VERBS).reduce((verbs, [name, def]) => verbs.add(name, def), registerStockVerbs(new VerbRegistry()));
+const VERBS = Object.entries(FIGHT_VERBS).reduce((verbs, [name, def]) => verbs.add(name, def), new VerbRegistry().addAll(STOCK_VERB_DEFS));
 
 /** What a System One reads for `c`: its scene in a catalog, worded by {@link choicePrompt}. */
 function decisionPrompt(c:DecisionCase):ChoicePrompt {

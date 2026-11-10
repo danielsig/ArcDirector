@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { arcSteps, type Arc, type ArcResult, type Join, type Step } from './arc-types.js';
 import { parseArcText } from './arc-parse.js';
-import { VerbRegistry, registerStockVerbs } from './stock-verbs.js';
+import { VerbRegistry, STOCK_VERB_DEFS } from './stock-verbs.js';
 import { dummyEntity, buildCatalog } from '../expr/natives.js';
 import { SampleCache } from '../expr/expr-types.js';
 import { createArcSession, deferThinks, firstStartable, pollArcSession, runArc, THINK_ABOUT_CAP, type ArcHandler, type LastChoice } from './run.js';
@@ -125,19 +125,19 @@ describe('runArc', () => {
 	});
 
 	it('a && b || c with a failing runs only a', async () => {
-		const arc = parseArcText('go_to(A) && wait() || say(Hi)', registerStockVerbs(new VerbRegistry()));
+		const arc = parseArcText('go_to(A) && wait() || say(Hi)', new VerbRegistry().addAll(STOCK_VERB_DEFS));
 		assert.deepEqual((await ran(arc, ['go_to'])).verbs, ['go_to'], 'a failed, so && ends the chain: c is a fallback for b, not for a');
 		assert.deepEqual((await ran(arc, ['wait'])).verbs, ['go_to', 'wait', 'say'], 'b failed, so c runs');
 	});
 
 	it('a || b ; c with a succeeding runs only a', async () => {
-		const arc = parseArcText('go_to(A) || wait() ; say(Hi)', registerStockVerbs(new VerbRegistry()));
+		const arc = parseArcText('go_to(A) || wait() ; say(Hi)', new VerbRegistry().addAll(STOCK_VERB_DEFS));
 		assert.deepEqual((await ran(arc)).verbs, ['go_to']);
 		assert.deepEqual((await ran(arc, ['go_to'])).verbs, ['go_to', 'wait', 'say'], 'the fallback is everything after ||');
 	});
 
 	it('a || b && c with a failing runs b and c with fail set, then cleared', async () => {
-		const verbs = registerStockVerbs(new VerbRegistry());
+		const verbs = new VerbRegistry().addAll(STOCK_VERB_DEFS);
 		const arc = parseArcText('go_to(A) || say(fail.reason) && wait()', verbs);
 		const session = createArcSession({ verbs });
 		const seen:string[] = [];
@@ -151,7 +151,7 @@ describe('runArc', () => {
 	});
 
 	it('nested || hands the latest reason on', async () => {
-		const verbs = registerStockVerbs(new VerbRegistry());
+		const verbs = new VerbRegistry().addAll(STOCK_VERB_DEFS);
 		const arc = parseArcText('go_to(A) || (wait() || say(fail.reason))', verbs);
 		const seen:string[] = [];
 		await runArc(arc, async (step) => {
@@ -162,7 +162,7 @@ describe('runArc', () => {
 	});
 
 	it('(a ; b) && c and (a || b) && c', async () => {
-		const verbs = registerStockVerbs(new VerbRegistry());
+		const verbs = new VerbRegistry().addAll(STOCK_VERB_DEFS);
 		const seq = parseArcText('(go_to(A) ; wait()) && say(Hi)', verbs);
 		assert.deepEqual((await ran(seq, ['go_to'])).verbs, ['go_to', 'wait', 'say'], 'the group ran to its end and succeeded');
 		assert.deepEqual((await ran(seq, ['wait'])).verbs, ['go_to', 'wait'], 'the group failed, so && stops');
@@ -175,7 +175,7 @@ describe('runArc', () => {
 describe('groups, fail, loop, when(watch)', () => {
 	it('runs (A && B) || C and interpolates fail.reason', async () => {
 		const seen:string[] = [];
-		const arc = parseArcText('(go_to(Keep) && wait(seconds=1)) || say(fail.reason)', registerStockVerbs(new VerbRegistry()));
+		const arc = parseArcText('(go_to(Keep) && wait(seconds=1)) || say(fail.reason)', new VerbRegistry().addAll(STOCK_VERB_DEFS));
 		const result = await runArc(arc, async (step) => {
 			seen.push(`${step.verb}:${String(step.args.text ?? step.args.target ?? '')}`);
 			if (step.verb === 'go_to') {
@@ -189,14 +189,14 @@ describe('groups, fail, loop, when(watch)', () => {
 
 	it('loop times and until-fail', async () => {
 		const n:string[] = [];
-		const arc = parseArcText('loop(times=3, arc=go_to(Keep))', registerStockVerbs(new VerbRegistry()));
+		const arc = parseArcText('loop(times=3, arc=go_to(Keep))', new VerbRegistry().addAll(STOCK_VERB_DEFS));
 		await runArc(arc, async (step) => {
 			n.push(step.verb);
 			return { ok: true, verb: step.verb };
 		});
 		assert.deepEqual(n, ['go_to', 'go_to', 'go_to']);
 		const failAt:string[] = [];
-		await runArc(parseArcText('loop(arc=go_to(Keep))', registerStockVerbs(new VerbRegistry())), async (step) => {
+		await runArc(parseArcText('loop(arc=go_to(Keep))', new VerbRegistry().addAll(STOCK_VERB_DEFS)), async (step) => {
 			failAt.push(step.verb);
 			return { ok: failAt.length < 2, verb: step.verb };
 		});
@@ -214,7 +214,7 @@ describe('groups, fail, loop, when(watch)', () => {
 		const session = createArcSession({
 			catalog: () => catalog,
 		});
-		const arc = parseArcText('loop(through=x in others, arc=follow(x))', registerStockVerbs(new VerbRegistry()));
+		const arc = parseArcText('loop(through=x in others, arc=follow(x))', new VerbRegistry().addAll(STOCK_VERB_DEFS));
 		await runArc(arc, async (step) => {
 			names.push(String(step.args.target ?? ''));
 			return { ok: true, verb: step.verb };
@@ -223,7 +223,7 @@ describe('groups, fail, loop, when(watch)', () => {
 	});
 
 	it('loop through fills a character by id, and by name only in prose', async () => {
-		const verbs = registerStockVerbs(new VerbRegistry());
+		const verbs = new VerbRegistry().addAll(STOCK_VERB_DEFS);
 		const catalog = buildCatalog({
 			me: dummyEntity('Mira'),
 			others: [dummyEntity('Nyx', { name: 'EnemyWitch' })],
@@ -261,7 +261,7 @@ describe('groups, fail, loop, when(watch)', () => {
 		};
 		const arc = parseArcText(
 			'when(watch=hasHeard, arc=go_to(Keep)) ; wander()',
-			registerStockVerbs(new VerbRegistry()),
+			new VerbRegistry().addAll(STOCK_VERB_DEFS),
 		);
 		const result = await runArc(arc, execute, { session });
 		assert.equal(result.ok, true);
@@ -271,7 +271,7 @@ describe('groups, fail, loop, when(watch)', () => {
 
 	it('a loop goes on through failures that say going round again may help, but not forever', async () => {
 		let now = 0;
-		const verbs = registerStockVerbs(new VerbRegistry());
+		const verbs = new VerbRegistry().addAll(STOCK_VERB_DEFS);
 		const stage = async (results:ArcResult[]):Promise<{ result:ArcResult; tries:number }> => {
 			const session = createArcSession({ verbs, now: () => now, nextTime: async () => {
 				now += 0.5;
@@ -294,7 +294,7 @@ describe('groups, fail, loop, when(watch)', () => {
 	it('does not fire a reaction again the moment it ends, so what it interrupted gets a turn', async () => {
 		let danger = true;
 		let now = 0;
-		const verbs = registerStockVerbs(new VerbRegistry());
+		const verbs = new VerbRegistry().addAll(STOCK_VERB_DEFS);
 		const catalog = ():ReturnType<typeof buildCatalog> => buildCatalog({ me: dummyEntity('Mira'), others: [], items: [], cache: new SampleCache(), hasHeard: danger });
 		const session = createArcSession({ catalog, now: () => now, verbs, cooldown: 8 });
 		const handler = (arc:string):ArcHandler => ({ source: {} as Step, watch: 'hasHeard', arc: parseArcText(arc, verbs), rank: 0, rest: {} });
@@ -342,7 +342,7 @@ describe('groups, fail, loop, when(watch)', () => {
 		const session = createArcSession({ catalog, now: () => now });
 		const law:ArcHandler = { source: { verb: 'law', args: {} }, watch: 'hasHeard', arc: [], rank: 0, hold: 2 };
 		const pending:(string | undefined)[] = [];
-		await runArc(parseArcText('wander()', registerStockVerbs(new VerbRegistry())), async (step) => {
+		await runArc(parseArcText('wander()', new VerbRegistry().addAll(STOCK_VERB_DEFS)), async (step) => {
 			heard = false;
 			now = 1;
 			pollArcSession(session);
@@ -369,7 +369,7 @@ describe('groups, fail, loop, when(watch)', () => {
 		const session = createArcSession({ catalog, now: () => 1 });
 		const law:ArcHandler = { source: { verb: 'law', args: {} }, watch: 'hasHeard', arc: [], rank: 0, hold: 2, holdBreak: 'struck' };
 		const pending:(string | undefined)[] = [];
-		await runArc(parseArcText('wander()', registerStockVerbs(new VerbRegistry())), async (step) => {
+		await runArc(parseArcText('wander()', new VerbRegistry().addAll(STOCK_VERB_DEFS)), async (step) => {
 			heard = false;
 			pollArcSession(session);
 			pending.push(session.pending?.kind);
@@ -392,7 +392,7 @@ describe('groups, fail, loop, when(watch)', () => {
 		});
 		const session = createArcSession({ catalog, now: () => 0 });
 		const seen:string[] = [];
-		const arc = parseArcText('when(watch=danger, arc=go_to(Hut)) ; pick_up(Morel1) && pick_up(Morel2)', registerStockVerbs(new VerbRegistry()));
+		const arc = parseArcText('when(watch=danger, arc=go_to(Hut)) ; pick_up(Morel1) && pick_up(Morel2)', new VerbRegistry().addAll(STOCK_VERB_DEFS));
 		const result = await runArc(arc, async (step) => {
 			seen.push(String(step.args.item ?? step.args.target));
 			if (seen.length === 1) {
@@ -413,7 +413,7 @@ describe('groups, fail, loop, when(watch)', () => {
 	it('does not run a step again when its program was replaced instead', async () => {
 		const session = createArcSession({ now: () => 0 });
 		const seen:string[] = [];
-		const result = await runArc(parseArcText('pick_up(Morel1) && pick_up(Morel2)', registerStockVerbs(new VerbRegistry())), async (step) => {
+		const result = await runArc(parseArcText('pick_up(Morel1) && pick_up(Morel2)', new VerbRegistry().addAll(STOCK_VERB_DEFS)), async (step) => {
 			seen.push(String(step.args.item));
 			session.pending = { kind: 'abort' };
 			session.token += 1;
@@ -454,7 +454,7 @@ describe('groups, fail, loop, when(watch)', () => {
 		};
 		const arc = parseArcText(
 			'when(watch=first, arc=say("A")) ; when(watch=second, arc=say("B")) ; wait()',
-			registerStockVerbs(new VerbRegistry()),
+			new VerbRegistry().addAll(STOCK_VERB_DEFS),
 		);
 		const result = await runArc(arc, execute, { session });
 		assert.equal(result.ok, true);
@@ -473,7 +473,7 @@ describe('groups, fail, loop, when(watch)', () => {
 		const session = createArcSession({ catalog, now: () => 0 });
 		const arc = parseArcText(
 			'when(watch=hasHeard, arc=say("ow")) ; wait()',
-			registerStockVerbs(new VerbRegistry()),
+			new VerbRegistry().addAll(STOCK_VERB_DEFS),
 		);
 		const result = await runArc(arc, async (step) => {
 			verbs.push(step.verb);
@@ -487,7 +487,7 @@ describe('groups, fail, loop, when(watch)', () => {
 
 	it('does not park a finished body with no when', async () => {
 		const session = createArcSession();
-		const arc = parseArcText('wait()', registerStockVerbs(new VerbRegistry()));
+		const arc = parseArcText('wait()', new VerbRegistry().addAll(STOCK_VERB_DEFS));
 		const result = await runArc(arc, async (step) => ({ ok: true, verb: step.verb }), { session });
 		assert.equal(result.ok, true);
 		assert.equal(session.parked, false);
@@ -495,7 +495,7 @@ describe('groups, fail, loop, when(watch)', () => {
 });
 
 describe('handlers by reference', () => {
-	const verbs = registerStockVerbs(new VerbRegistry());
+	const verbs = new VerbRegistry().addAll(STOCK_VERB_DEFS);
 	const flagCatalog = (flags:Record<string, boolean>) => ():ReturnType<typeof buildCatalog> => buildCatalog({
 		me: dummyEntity('Tom'),
 		others: [],
@@ -664,7 +664,7 @@ describe('handlers by reference', () => {
 });
 
 describe('choose', () => {
-	const verbs = registerStockVerbs(new VerbRegistry());
+	const verbs = new VerbRegistry().addAll(STOCK_VERB_DEFS);
 	let clock = 0;
 	const ticking = ():number => {
 		clock += 1;

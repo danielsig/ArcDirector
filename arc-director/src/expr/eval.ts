@@ -389,7 +389,7 @@ function logic(op:'&&' | '||', left:ExprVal, right:ExprVal):ExprVal {
 	return { kind: 'number', value: op === '&&' ? Math.min(a, b) : Math.max(a, b) };
 }
 
-export function applyLambda(fn:Extract<ExprVal, { kind:'lambda' }>, args:ExprVal[], ctx:EvalCtx):ExprVal {
+function applyLambda(fn:Extract<ExprVal, { kind:'lambda' }>, args:ExprVal[], ctx:EvalCtx):ExprVal {
 	const env = new Map(ctx.env);
 	for (let i = 0; i < fn.params.length; i++) {
 		env.set(fn.params[i], args[i] ?? ABSENT);
@@ -397,7 +397,7 @@ export function applyLambda(fn:Extract<ExprVal, { kind:'lambda' }>, args:ExprVal
 	return evalAst(fn.body, { ...ctx, env });
 }
 
-export function predOrNeedle(list:ExprVal[], arg:ExprVal | undefined, ctx:EvalCtx):ExprVal[] {
+function predOrNeedle(list:ExprVal[], arg:ExprVal | undefined, ctx:EvalCtx):ExprVal[] {
 	if (!arg) {
 		return list.filter(isTruthy);
 	}
@@ -705,5 +705,3 @@ export function evaluate(expr:string, catalog:Catalog):EvalResult {
 		return { value: ABSENT, error };
 	}
 }
-
-export { predOrNeedle as matchPred };

@@ -6,7 +6,7 @@ import { buildCatalog, dummyEntity } from '../expr/natives.js';
 import { evaluate } from '../expr/eval.js';
 import { choicePrompt, choiceState, namesIn, targetNotes, withTargets } from '../character/choice.js';
 import { parseArcText } from '../arc/arc-parse.js';
-import { VerbRegistry, registerStockVerbs } from '../arc/stock-verbs.js';
+import { VerbRegistry, STOCK_VERB_DEFS } from '../arc/stock-verbs.js';
 import { SampleCache } from '../expr/expr-types.js';
 import { FakeProvider } from '../inference/fake.js';
 import type { ChatRequest, ChatResponse } from '../inference/provider.js';
@@ -21,14 +21,9 @@ import type { SystemOne } from '../inference/system-one.js';
 import { OPEN_WORLD } from '../testing/open-world.js';
 import type { ArcFormat, ThinkEvent } from '../mind/mind-types.js';
 import type { Arc } from '../arc/arc-types.js';
+import { sleep } from '../turn.js';
 
 type Ctx = { paragraph:string; id:string };
-
-function sleep(ms:number):Promise<void> {
-	return new Promise((resolve) => {
-		setTimeout(resolve, ms);
-	});
-}
 
 async function waitFor(fn:()=>boolean, ms = 400):Promise<void> {
 	const t0 = Date.now();
@@ -145,7 +140,7 @@ describe('ArcDirector', () => {
 		const keeper = director.character('BridgeKeeper')!;
 		const forager = director.character('Forager')!;
 		let released = false;
-		const running = keeper.enact(parseArcText('give(item=FireMushroom, to=Forager)', registerStockVerbs(new VerbRegistry()))).then(() => {
+		const running = keeper.enact(parseArcText('give(item=FireMushroom, to=Forager)', new VerbRegistry().addAll(STOCK_VERB_DEFS))).then(() => {
 			released = true;
 		});
 		await Promise.resolve();
@@ -972,7 +967,7 @@ describe('ArcDirector', () => {
 	it('addStockVerbs throws on a name that is not stock', () => {
 		assert.throws(
 			() => new ArcDirector().addStockVerbs('fly' as 'go_to'),
-			/not a stock verb/,
+			/'fly' is not in that verb table/,
 		);
 	});
 
@@ -2030,7 +2025,7 @@ describe('choose', () => {
 			cache: new SampleCache(),
 			distance: (_a, b) => (b.id === 'Raider' ? 3.2 : b.id === 'Wim' ? 1 : undefined),
 		});
-		const verbs = registerStockVerbs(new VerbRegistry());
+		const verbs = new VerbRegistry().addAll(STOCK_VERB_DEFS);
 		const choices = [parseArcText('go_to(Raider) && say("Halt, Raider!")', verbs), parseArcText('go_to(Keep)', verbs)];
 		const names = namesIn(choices, verbs);
 		assert.deepEqual(names, ['Raider', 'Keep']);
@@ -2061,7 +2056,7 @@ describe('choose', () => {
 			cache: new SampleCache(),
 			isReady: (_who, verb) => (verb === 'wait' ? false : undefined),
 		});
-		const verbs = registerStockVerbs(new VerbRegistry());
+		const verbs = new VerbRegistry().addAll(STOCK_VERB_DEFS);
 		const choices = { rest: parseArcText('wait()', verbs), walk: parseArcText('go_to(Keep)', verbs) };
 		assert.deepEqual(Object.keys(choicePrompt({ id: 'Guard', verb: '', catalog, choices, verbs })!.criteria), ['walk']);
 		assert.equal(choicePrompt({ id: 'Guard', verb: '', catalog, choices: { rest: choices.rest }, verbs }), undefined, 'none ready: none can run');

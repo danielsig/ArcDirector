@@ -2,7 +2,7 @@ import { formatArc, formatArcBlocks, parseArcText } from '../arc/arc-parse.js';
 import { arcJSONBlocks, arcSoFar, finishedSteps, parseArc, replyBreakdown } from '../arc/wire.js';
 import { exprArgs } from '../arc/validate.js';
 import { docsFor, replySchema } from '../arc/schema.js';
-import { FOCUS_EDIT_VERBS, VerbRegistry, WATCH_EDIT_VERBS, argBase, groupTargets, registerStockVerbs } from '../arc/stock-verbs.js';
+import { FOCUS_EDIT_VERBS, VerbRegistry, WATCH_EDIT_VERBS, argBase, groupTargets, STOCK_VERB_DEFS } from '../arc/stock-verbs.js';
 import type { Arc, ArcResult, Step } from '../arc/arc-types.js';
 import { ArcError, BlockedArcError } from '../arc/arc-types.js';
 import { catalogEntities, evaluate, unboundCalls } from '../expr/eval.js';
@@ -40,6 +40,7 @@ import { noWayTo } from '../world/route.js';
 import { waitUntilOf, type MindQueue } from '../think/queue.js';
 import { hasWatch, watchCount } from '../character/watch.js';
 import { asFocusList } from '../character/focus.js';
+import { hand } from '../internals.js';
 
 /** How often a mind thinks and where it stands in the think queue. A host may set these per mind. */
 export type MindSettings = {
@@ -90,7 +91,6 @@ export type MindJSON = {
 
 /** What a mind thinks for: a character, or a collective. Its `voice` enacts the arcs the mind writes. */
 export type MindOwner<TCtx = unknown> = ArcRunner<TCtx> & {
-	readonly persona:Persona;
 	/** The owner's own block of the prompt, in place of the laws. A collective lists its roster here. */
 	promptSection?(mind:Mind<TCtx>):string;
 	/** The verbs its prompt lists, when fewer than it may parse: a collective's nested ones its characters can run. */
@@ -225,7 +225,7 @@ const BUILTIN_TOOL_PARAMETERS:Record<string, JsonSchema> = {
 };
 
 /** What a goal pass may write in `text`: only the verbs that edit goals and identity. */
-const GOAL_VERBS = registerStockVerbs(new VerbRegistry(), 'set_goal', 'drop_goal', 'finish_goal', 'set_identity');
+const GOAL_VERBS = new VerbRegistry().addAll(STOCK_VERB_DEFS, 'set_goal', 'drop_goal', 'finish_goal', 'set_identity');
 
 /** What a goal pass replies under `schema`: the whole goal list (empty to keep it), and an identity patch if one is due. */
 const GOALS_SCHEMA:JsonSchema = {
@@ -306,7 +306,7 @@ function foldRecent(prev:string, overflow:string[]):string {
  * One quarter of the context window, in letters. English runs about 4 letters a token, so this is
  * `contextTokens / 4 * 4`. An unknown window is unlimited. 0 shows none.
  */
-export function conversationCapFor(contextTokens:number | undefined):number {
+function conversationCapFor(contextTokens:number | undefined):number {
 	if (contextTokens === undefined || !Number.isFinite(contextTokens)) {
 		return Number.POSITIVE_INFINITY;
 	}
@@ -333,14 +333,6 @@ export type MindFields<TCtx> = {
 	 */
 	sighted(clauses:readonly SightClause[], salience?:ReadonlyMap<string, number>):void;
 };
-
-/** Every mind's fields. `index.ts` does not export `mindFields`, so only the library reaches them. */
-const allFields = new WeakMap<object, unknown>();
-
-/** The fields `mind`'s constructor handed over. */
-export function mindFields<TCtx>(mind:Mind<TCtx>):MindFields<TCtx> {
-	return allFields.get(mind) as MindFields<TCtx>;
-}
 
 /**
  * Writes arcs: it thinks with the model about its owner's persona and what the owner's voice senses, and hands
@@ -475,7 +467,7 @@ export class Mind<TCtx = unknown> {
 		this.conversationCap = settings.conversationCap;
 		this.lawResults = settings.lawResults ?? 5;
 		this.model = settings.model;
-		const fields:MindFields<TCtx> = {
+		hand(this, {
 			attach: (owner, deps) => this.attach(owner, deps),
 			detach: () => {
 				this._owner = undefined;
@@ -484,8 +476,7 @@ export class Mind<TCtx = unknown> {
 				this._sighted = clauses;
 				this._salience = salience ?? new Map();
 			},
-		};
-		allFields.set(this, fields);
+		} satisfies MindFields<TCtx>);
 	}
 
 	private attach(owner:MindOwner<TCtx>, deps:MindDeps<TCtx>):void {

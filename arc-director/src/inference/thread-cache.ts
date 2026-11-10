@@ -7,7 +7,7 @@ export type ThreadSnapshot = {
 
 const THREAD_CAP = 32;
 
-export function messageEqual(a:ChatMessage, b:ChatMessage):boolean {
+function messageEqual(a:ChatMessage, b:ChatMessage):boolean {
 	if (a.role !== b.role || a.name !== b.name || a.toolCallID !== b.toolCallID) {
 		return false;
 	}
@@ -61,7 +61,7 @@ function toolCallsEqual(a:ToolCall[] | undefined, b:ToolCall[] | undefined):bool
 	return true;
 }
 
-export function commonPrefixLength(a:ChatMessage[], b:ChatMessage[]):number {
+function commonPrefixLength(a:ChatMessage[], b:ChatMessage[]):number {
 	const n = Math.min(a.length, b.length);
 	let i = 0;
 	for (; i < n; i++) {

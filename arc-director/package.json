@@ -30,6 +30,10 @@
 		"./bench": {
 			"types": "./dist/bench/index.d.ts",
 			"import": "./dist/bench/index.js"
+		},
+		"./testing": {
+			"types": "./dist/testing/index.d.ts",
+			"import": "./dist/testing/index.js"
 		}
 	},
 	"main": "./dist/index.js",

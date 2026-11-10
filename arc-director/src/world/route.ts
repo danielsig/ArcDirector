@@ -16,7 +16,7 @@ export type Route = { points:Vec[]; cost:number };
 export type Blocked = { blockers:{ reason:string; cost:number; by?:string }[] };
 
 /** Blocked ways named when there is no open way, cheapest first. */
-export const BLOCKERS_TOLD = 3;
+const BLOCKERS_TOLD = 3;
 
 /** What a failed move says: `no way to Well`, plus what blocks the way when something does. */
 export function noWayTo(target:string, why:string):string {
@@ -29,7 +29,7 @@ export function blockedReason(blocked:Blocked):string {
 }
 
 /** Points a search may settle along open ways, and again along blocked ones, before it gives up. */
-export const SEARCH_CAP = 4096;
+const SEARCH_CAP = 4096;
 
 /** Key of the goal's own point, which need not be a neighbor the world names. */
 const END = 'end';

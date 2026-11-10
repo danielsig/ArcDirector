@@ -2,12 +2,12 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { parseArcText, formatArc } from './arc-parse.js';
 import { parseArc } from './wire.js';
-import { VerbRegistry, registerStockVerbs, STOCK_MOVE_VERBS, STOCK_TRADE_VERBS, STOCK_VERBS } from './stock-verbs.js';
-import { registerStockCollectiveVerbs } from '../collective/collective-verbs.js';
+import { VerbRegistry, STOCK_VERB_DEFS, STOCK_MOVE_VERBS, STOCK_TRADE_VERBS, STOCK_VERBS } from './stock-verbs.js';
+import { STOCK_COLLECTIVE_VERB_DEFS } from '../collective/collective-verbs.js';
 import { ArcError, isArc, type Arc } from './arc-types.js';
 
 function verbs():VerbRegistry {
-	return registerStockVerbs(new VerbRegistry());
+	return new VerbRegistry().addAll(STOCK_VERB_DEFS);
 }
 
 function inner(arc:Arc, at = 0):Arc {
@@ -52,7 +52,7 @@ describe('Arc parse', () => {
 	});
 
 	it('parses issue who= expr and nested arc=', () => {
-		const registry = registerStockCollectiveVerbs(registerStockVerbs(new VerbRegistry()));
+		const registry = new VerbRegistry().addAll(STOCK_VERB_DEFS).addAll(STOCK_COLLECTIVE_VERB_DEFS);
 		const arc = parseArcText(
 			'issue(who=units.filter("Guard"), arc=go_to(Keep) && wait(seconds=1))',
 			registry,
@@ -68,7 +68,7 @@ describe('Arc parse', () => {
 	});
 
 	it('rejects when(who) and issue(watch) with migration errors', () => {
-		const registry = registerStockCollectiveVerbs(registerStockVerbs(new VerbRegistry()));
+		const registry = new VerbRegistry().addAll(STOCK_VERB_DEFS).addAll(STOCK_COLLECTIVE_VERB_DEFS);
 		assert.throws(
 			() => parseArcText('when(who=units.filter("Guard"), arc=go_to(Keep))', registry),
 			/when\(who\) is issue/,
@@ -115,9 +115,9 @@ describe('isArc', () => {
 	});
 });
 
-describe('registerStockVerbs', () => {
+describe('VerbRegistry.addAll', () => {
 	it('registers a subset when stock verb names are passed', () => {
-		const verbs = registerStockVerbs(new VerbRegistry(), 'go_to', 'follow');
+		const verbs = new VerbRegistry().addAll(STOCK_VERB_DEFS, 'go_to', 'follow');
 		assert.ok(verbs.has('go_to'));
 		assert.ok(verbs.has('follow'));
 		assert.equal(verbs.has('wander'), false);
@@ -126,8 +126,8 @@ describe('registerStockVerbs', () => {
 	});
 
 	it('spreads a group and skips names already registered', () => {
-		const verbs = registerStockVerbs(new VerbRegistry(), ...STOCK_MOVE_VERBS);
-		registerStockVerbs(verbs, 'go_to', 'say');
+		const verbs = new VerbRegistry().addAll(STOCK_VERB_DEFS, ...STOCK_MOVE_VERBS);
+		verbs.addAll(STOCK_VERB_DEFS, 'go_to', 'say');
 		assert.deepEqual(
 			verbs.list().map((v) => v.name),
 			['go_to', 'follow', 'flee', 'wander', 'say'],
@@ -148,7 +148,7 @@ describe('registerStockVerbs', () => {
 	});
 
 	it('registers the full stock set when called with no verbs', () => {
-		const verbs = registerStockVerbs(new VerbRegistry());
+		const verbs = new VerbRegistry().addAll(STOCK_VERB_DEFS);
 		assert.equal(verbs.list().length, STOCK_VERBS.length + STOCK_TRADE_VERBS.length);
 		assert.ok(verbs.has('go_to'));
 		assert.ok(verbs.has('set_identity'));
@@ -167,7 +167,7 @@ describe('registerStockVerbs', () => {
 
 describe('VerbRegistry view and remove', () => {
 	it('views a subset and remove drops names', () => {
-		const verbs = registerStockVerbs(new VerbRegistry(), ...STOCK_MOVE_VERBS);
+		const verbs = new VerbRegistry().addAll(STOCK_VERB_DEFS, ...STOCK_MOVE_VERBS);
 		assert.deepEqual(verbs.view(['go_to', 'missing']).list().map((v) => v.name), ['go_to']);
 		assert.equal(verbs.view(null), verbs);
 		verbs.remove('follow', 'flee', 'wander');
@@ -179,7 +179,7 @@ describe('VerbRegistry view and remove', () => {
 
 describe('kit views and issue(who)', () => {
 	function fightKit():VerbRegistry {
-		const catalog = registerStockCollectiveVerbs(registerStockVerbs(new VerbRegistry()));
+		const catalog = new VerbRegistry().addAll(STOCK_VERB_DEFS).addAll(STOCK_COLLECTIVE_VERB_DEFS);
 		catalog.add('hex', { args: { target: 'id' } });
 		catalog.add('smite', { args: { target: 'id' } });
 		return catalog.view(['issue', 'go_to', 'smite']);
@@ -206,13 +206,13 @@ describe('kit views and issue(who)', () => {
 	});
 
 	it('names an argument written after the closing parenthesis', () => {
-		const verbs = registerStockVerbs(new VerbRegistry());
+		const verbs = new VerbRegistry().addAll(STOCK_VERB_DEFS);
 		assert.throws(() => parseArcText('say(text="Hi") to=BridgeKeeper', verbs), /to is outside the parentheses/);
 		assert.throws(() => parseArcText('say("Hi") to BridgeKeeper', verbs), /to is outside the parentheses/);
 	});
 
 	it('reads a verb and one bare name with no parentheses as its first arg', () => {
-		const verbs = registerStockVerbs(new VerbRegistry());
+		const verbs = new VerbRegistry().addAll(STOCK_VERB_DEFS);
 		assert.deepEqual(parseArcText('go_to BridgeKeeper', verbs), [{ verb: 'go_to', args: { target: 'BridgeKeeper' } }]);
 		const chain = parseArcText('go_to BridgeKeeper && say(Hi, to=BridgeKeeper)', verbs);
 		assert.equal(chain[1].verb, 'say');
@@ -220,7 +220,7 @@ describe('kit views and issue(who)', () => {
 	});
 
 	it('drops a stuttered key= the model repeated inside its own value', () => {
-		const verbs = registerStockVerbs(new VerbRegistry());
+		const verbs = new VerbRegistry().addAll(STOCK_VERB_DEFS);
 		const arc = parseArcText('say(text=text="How much?", to=BridgeKeeper)', verbs);
 		assert.deepEqual(arc[0].args, { text: 'How much?', to: 'BridgeKeeper' });
 	});
@@ -268,7 +268,7 @@ describe('kit views and issue(who)', () => {
 	});
 
 	it('binds a leftover positional to the next unset law arg', () => {
-		const registry = registerStockCollectiveVerbs(registerStockVerbs(new VerbRegistry()));
+		const registry = new VerbRegistry().addAll(STOCK_VERB_DEFS).addAll(STOCK_COLLECTIVE_VERB_DEFS);
 		const arc = parseArcText(
 			'law(who=units, watch=isHurt(me), go_to(Keep), name=lastStand)',
 			registry,
@@ -333,7 +333,7 @@ describe('small-model slips from the AI logs', () => {
 	});
 
 	it('still rejects an issue cut off before its arc, and an issue swallowed by the one before it', () => {
-		const crowd = registerStockCollectiveVerbs(verbs());
+		const crowd = verbs().addAll(STOCK_COLLECTIVE_VERB_DEFS);
 		crowd.add('slash', { args: { target: 'id' } });
 		assert.throws(
 			() => parseArcText('issue(who=units.filter("Witch"), arc=loop(slash(Foe))) ; issue(who', crowd),
@@ -363,7 +363,7 @@ describe('small-model slips from the AI logs', () => {
 	});
 
 	it('drops a stray comma after extra closers', () => {
-		const crowd = registerStockCollectiveVerbs(verbs());
+		const crowd = verbs().addAll(STOCK_COLLECTIVE_VERB_DEFS);
 		crowd.add('slash', { args: { target: 'id' } });
 		const arc = parseArcText(
 			'issue(who=units.filter("Blade"), arc=loop(slash(Foe)))), ; issue(who=units.filter("Witch"), arc=loop(slash(Foe)))',

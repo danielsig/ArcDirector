@@ -42,7 +42,7 @@ function asList(entities:ExprEntity[]):ExprVal {
  * member, so a unit's own law or arc reads itself; or `as`, when the view is someone else's (its mind's, through a
  * member's eyes, is its commander's).
  */
-export function collectiveKernels<TCtx>(base:HostKernels, collective:Collective<TCtx>, as?:Character<TCtx>):HostKernels {
+function collectiveKernels<TCtx>(base:HostKernels, collective:Collective<TCtx>, as?:Character<TCtx>):HostKernels {
 	const all = collective.standing;
 	const commander = collective.commander;
 	const troops = commander ? all.filter((c) => c !== commander) : all;
@@ -88,7 +88,7 @@ export function idsInVal(value:ExprVal):string[] {
 }
 
 /** The members a `who` value names. */
-export function membersFromVal<TCtx>(value:ExprVal, collective:Collective<TCtx>):Character<TCtx>[] {
+function membersFromVal<TCtx>(value:ExprVal, collective:Collective<TCtx>):Character<TCtx>[] {
 	const out:Character<TCtx>[] = [];
 	for (const id of idsInVal(value)) {
 		const member = collective.character(id);

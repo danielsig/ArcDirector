@@ -165,7 +165,3 @@ export function isHoistedWhen(step:Step):boolean {
 	const watch = typeof step.args.watch === 'string' ? step.args.watch.trim() : '';
 	return step.verb === 'when' && watch.length > 0;
 }
-
-export function isIssue(step:Step):boolean {
-	return step.verb === 'issue';
-}

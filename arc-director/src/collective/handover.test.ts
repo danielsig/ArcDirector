@@ -6,16 +6,11 @@ import type { ChatRequest } from '../inference/provider.js';
 import { ArcDirector } from '../director/ArcDirector.js';
 import { STOCK_COLLECTIVE_VERBS } from './collective-verbs.js';
 import { HANDOVER_THREAD } from './handover.js';
+import { sleep } from '../turn.js';
 
 type Ctx = { id:string };
 
 const KIT = { verbs: [...STOCK_VERBS, ...STOCK_COLLECTIVE_VERBS] };
-
-function sleep(ms:number):Promise<void> {
-	return new Promise((resolve) => {
-		setTimeout(resolve, ms);
-	});
-}
 
 /** Tom and Ann in DawnParty, Bob too but with no identity, and an empty DuskParty. `reply` answers the handover. */
 async function stage(reply:(req:ChatRequest)=>string = () => '{}') {

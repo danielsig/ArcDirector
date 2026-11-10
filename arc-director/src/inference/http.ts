@@ -35,6 +35,7 @@ import {
 	rememberThread,
 	type ThreadSnapshot,
 } from './thread-cache.js';
+import { sleep } from '../turn.js';
 
 export const REASONING_EFFORTS = ['low', 'medium', 'xhigh'] as const;
 export type ReasoningEffort = typeof REASONING_EFFORTS[number];
@@ -128,7 +129,7 @@ export type ModelSettings = {
 /** A reply as it came over the wire, or the thought so far when the thinking budget cut it off. */
 type Got = { json:Record<string, unknown>; firstMs?:number; wallMs:number; cutThought?:string };
 
-export type RequestInfo = {
+type RequestInfo = {
 	req:ChatRequest;
 	body:Record<string, unknown>;
 	path:string;
@@ -289,12 +290,6 @@ function asFetch(impl:typeof fetch):typeof fetch {
 	return (input, init) => impl(input, init);
 }
 
-function sleep(ms:number):Promise<void> {
-	return new Promise((resolve) => {
-		setTimeout(resolve, ms);
-	});
-}
-
 function isContextOverflow(msg:string):boolean {
 	return /context size has been exceeded|exceeds the (available )?context/i.test(msg);
 }
@@ -444,7 +439,7 @@ function cutThoughtReply(got:Got):ChatResponse {
 }
 
 /** A chat completions reply's answer, without timings: those depend on how it was sent. */
-export function parseChatCompletion(json:Record<string, unknown>):ChatResponse {
+function parseChatCompletion(json:Record<string, unknown>):ChatResponse {
 	const choices = Array.isArray(json.choices) ? json.choices : [];
 	const first = isRecord(choices[0]) ? choices[0] : {};
 	const message = isRecord(first.message) ? first.message : isRecord(first.delta) ? first.delta : {};
@@ -665,7 +660,7 @@ function nowMs():number {
 	return performance.now();
 }
 
-export function mergeClientTimings(
+function mergeClientTimings(
 	server:{ promptMs?:number; generateMs?:number },
 	firstMs:number | undefined,
 	wallMs:number,

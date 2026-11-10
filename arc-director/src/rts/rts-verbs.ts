@@ -1,4 +1,4 @@
-import type { VerbDef, VerbRegistry } from '../arc/stock-verbs.js';
+import type { VerbDef } from '../arc/stock-verbs.js';
 
 /**
  * Economy verbs: a commander calls them and names who does the work (`by` workers, `at` buildings), and they finish
@@ -36,17 +36,3 @@ export const STOCK_RTS_VERB_DEFS = {
 	haul: { args: { what: 'string', from: 'id', to: 'id', by: 'expr?', workers: 'number?', keep: 'number?' }, help: 'carries it over and over; keep: stops once there are that many there' },
 	set_policy: { args: { name: 'string', to: 'string' }, seen: 'setting a policy' },
 } as const satisfies Record<StockRTSVerb, VerbDef>;
-
-/** Schema-only. Omit `verbs` to register them all. Already-registered names are skipped. */
-export function registerStockRTSVerbs(registry:VerbRegistry, ...verbs:StockRTSVerb[]):VerbRegistry {
-	const list = verbs.length > 0 ? verbs : STOCK_RTS_VERBS;
-	for (const name of list) {
-		if (!(name in STOCK_RTS_VERB_DEFS)) {
-			throw new Error(`ArcDirector: '${name}' is not a stock RTS verb`);
-		}
-		if (!registry.has(name)) {
-			registry.add(name, STOCK_RTS_VERB_DEFS[name]);
-		}
-	}
-	return registry;
-}

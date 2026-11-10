@@ -1,12 +1,5 @@
 import type { LodLayer } from './perception-types.js';
-
-export function pascalCase(name:string):string {
-	return name
-		.split(/[\s_-]+/)
-		.filter(Boolean)
-		.map((w) => w.charAt(0).toUpperCase() + w.slice(1))
-		.join('');
-}
+import { pascalCase } from '../text.js';
 
 /** What sight and talk put before a name: the far-off hedge, then an article. */
 const DECORATION = /^(?:what seems to be\s+)?(?:(?:a|an|the)\s+)?/i;
