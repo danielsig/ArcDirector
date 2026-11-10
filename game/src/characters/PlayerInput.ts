@@ -1,4 +1,4 @@
-import { MOUSE_LEFT, TOUCH_TAP, Time, yawToForward, yawToward, Component, type GameObject } from '@arc-director/kindling';
+import { MOUSE_LEFT, TOUCH_TAP, Time, yawToForward, yawToward, Component, type GameObject, type XZ } from '@arc-director/kindling';
 import * as THREE from 'three';
 import { Camera, Chest, Door, Furniture, Guard, HumanBody, Appearance, Named, Vitals, type BodySlot } from '../engine/components';
 import { attackFor } from '../director/fight';
@@ -272,7 +272,7 @@ export class PlayerInput extends Component {
 	 * drawn; moving lowers it. All the while it turns on whoever stands nearest the line straight
 	 * ahead of the camera, or along that line when no one does.
 	 */
-	private drawBow(bow:ItemInstance, clicked:boolean, held:boolean, moving:boolean, forward:{ x:number; z:number }):void {
+	private drawBow(bow:ItemInstance, clicked:boolean, held:boolean, moving:boolean, forward:XZ):void {
 		const world = this.gameObject.world;
 		if (moving) {
 			this.cutShot();
@@ -337,7 +337,7 @@ export class PlayerInput extends Component {
 	}
 
 	/** The ground `range` m off along `forward`: where a shot at no one lands. */
-	private groundAhead(forward:{ x:number; z:number }, range:number):THREE.Vector3 {
+	private groundAhead(forward:XZ, range:number):THREE.Vector3 {
 		const p = this.gameObject.transform.position;
 		const x = p.x + forward.x * range;
 		const z = p.z + forward.z * range;

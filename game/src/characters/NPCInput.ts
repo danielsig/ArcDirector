@@ -1,11 +1,11 @@
-import { Time, Component } from '@arc-director/kindling';
+import { Time, Component, type XZ } from '@arc-director/kindling';
 import { Order } from '../engine/order';
 
 /** What ArcDirector asks of an NPC body: where to head, whom to face, and its cooldowns. The motor does the moving. */
 export class NPCInput extends Component {
 	public static override order = Order.npcInput;
 	/** Set by ArcDirector every tick while this body moves; `null` stands still. */
-	public destinationPoint:{ x:number; z:number } | null = null;
+	public destinationPoint:XZ | null = null;
 	public faceName:string | null = null;
 	public faceUntil = 0;
 	public aiOn = true;

@@ -1,4 +1,4 @@
-import { MeshRenderer, Time, aimHeld, ease, move, type MoveTiming, type SfxHandle, closeHand, create, crouch, palmOf, drawBow, humanBone, lookAt, orientHand, placeFoot, reach, type Hand, Component, type GameObject } from '@arc-director/kindling';
+import { MeshRenderer, Time, aimHeld, ease, move, type MoveTiming, type SfxHandle, closeHand, create, crouch, palmOf, drawBow, humanBone, lookAt, orientHand, placeFoot, reach, type Hand, Component, type GameObject, type XZ } from '@arc-director/kindling';
 import * as THREE from 'three';
 import { Appearance, Celebrating, POSE_SECONDS, SpeechBubble, Vitals } from '../engine/components';
 import { Order } from '../engine/order';
@@ -311,7 +311,7 @@ export class CharacterPose extends Component {
 	 * Dodges a blow from `from` (world XZ) that misses, arriving `delay` s from now: a sidestep to a
 	 * random side and a lean away, leaving a ghost where the body stood, with a whoosh.
 	 */
-	public dodge(from:{ x:number; z:number }, delay:number):void {
+	public dodge(from:XZ, delay:number):void {
 		const p = this.gameObject.transform.position;
 		const away = new THREE.Vector3(p.x - from.x, 0, p.z - from.z);
 		if (away.lengthSq() < 1e-6) {

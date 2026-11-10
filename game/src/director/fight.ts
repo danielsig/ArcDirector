@@ -1,4 +1,4 @@
-import { type GameObject } from '@arc-director/kindling';
+import { distanceXZ, type GameObject, type XZ } from '@arc-director/kindling';
 import { shortTag, type Collective, type SeenName } from 'arc-director';
 import type { GameHost, CharacterCtx } from './adapter';
 import { Guard, HumanBody, Interior, Vitals, Weakness } from '../engine/components';
@@ -258,7 +258,7 @@ function nearestWhere(
 			continue;
 		}
 		const p = go.transform.position;
-		const dist = Math.hypot(p.x - here.x, p.z - here.z);
+		const dist = distanceXZ(p, here);
 		if (dist < bestDist) {
 			bestDist = dist;
 			best = go;
@@ -310,7 +310,7 @@ function livingOfRoles(host:GameHost, character:GameObject, roles:readonly Fight
 	return out;
 }
 
-function centroidOf(characters:GameObject[]):{ x:number; z:number } {
+function centroidOf(characters:GameObject[]):XZ {
 	let x = 0;
 	let z = 0;
 	for (const go of characters) {
@@ -321,12 +321,12 @@ function centroidOf(characters:GameObject[]):{ x:number; z:number } {
 }
 
 function slotOnLine(
-	origin:{ x:number; z:number },
+	origin:XZ,
 	px:number,
 	pz:number,
 	index:number,
 	count:number,
-):{ x:number; z:number } {
+):XZ {
 	const mid = (count - 1) / 2;
 	return {
 		x: origin.x + px * (index - mid) * RANK_SPACING,
@@ -335,11 +335,11 @@ function slotOnLine(
 }
 
 function awayFrom(
-	from:{ x:number; z:number },
-	foe:{ x:number; z:number },
+	from:XZ,
+	foe:XZ,
 	dist:number,
-	fallback?:{ x:number; z:number },
-):{ x:number; z:number } {
+	fallback?:XZ,
+):XZ {
 	let dx = from.x - foe.x;
 	let dz = from.z - foe.z;
 	let len = Math.hypot(dx, dz);
@@ -359,8 +359,8 @@ function awayFrom(
 function keepClearOfRival(
 	host:GameHost,
 	character:GameObject,
-	slot:{ x:number; z:number },
-):{ x:number; z:number } {
+	slot:XZ,
+):XZ {
 	const threat = nearestRival(host, character);
 	if (!threat) {
 		return slot;
@@ -380,13 +380,13 @@ function keepClearOfRival(
 }
 
 /** Rank slot for this character: melee line on the rival, backline behind that line, on ground it can stand on. */
-export function rankSlot(host:GameHost, character:GameObject):{ x:number; z:number } | undefined {
+export function rankSlot(host:GameHost, character:GameObject):XZ | undefined {
 	const slot = lineSlot(host, character);
 	return slot && standableNear(host.world, character, slot);
 }
 
 /** Where the rank line puts this character, wherever that falls: a wall, a pillar. */
-function lineSlot(host:GameHost, character:GameObject):{ x:number; z:number } | undefined {
+function lineSlot(host:GameHost, character:GameObject):XZ | undefined {
 	const role = fightRole(host, character);
 	if (!role) {
 		return undefined;
@@ -426,7 +426,7 @@ function lineSlot(host:GameHost, character:GameObject):{ x:number; z:number } | 
 		return slotOnLine(hold, px, pz, i, front.length);
 	}
 	if (isBackRole(role)) {
-		let slot:{ x:number; z:number } | undefined;
+		let slot:XZ | undefined;
 		if (origin) {
 			const i = back.findIndex((go) => idOf(go) === idOf(character));
 			if (i >= 0) {
@@ -487,7 +487,7 @@ export function fightProximityNote(host:GameHost, observer:GameObject, go:GameOb
 			continue;
 		}
 		const p = other.transform.position;
-		const dist = Math.hypot(p.x - here.x, p.z - here.z);
+		const dist = distanceXZ(p, here);
 		if (dist > THREAT_NOTE_M) {
 			continue;
 		}

@@ -238,9 +238,3 @@ export function healCharacter(character:GameObject, amount:number):void {
 	}
 	vitals.hp = Math.min(vitals.maxHP, vitals.hp + amount);
 }
-
-export function distXZ(a:GameObject, b:GameObject):number {
-	const pa = a.transform.position;
-	const pb = b.transform.position;
-	return Math.hypot(pa.x - pb.x, pa.z - pb.z);
-}

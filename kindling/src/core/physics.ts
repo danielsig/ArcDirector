@@ -2,17 +2,12 @@ import { BoxCollider } from './BoxCollider.js';
 import { Rigidbody } from './Rigidbody.js';
 import type { GameObject } from './GameObject.js';
 import type { TerrainSample, World } from './World.js';
+import { inBounds, type Bounds } from './bounds.js';
+import type { XZ } from './xz.js';
 
 /** Padded characters: pad-only overlap shoves at this fraction of the walker’s speed. */
 export const SHOVE_YIELD = 0.1;
 const SHOVE_MIN_SPEED = 0.05;
-
-type AABB = {
-	minX:number;
-	maxX:number;
-	minZ:number;
-	maxZ:number;
-};
 
 type Mtv = {
 	axis:'x' | 'z';
@@ -22,7 +17,7 @@ type Mtv = {
 
 type Shover = { go:GameObject; col:BoxCollider; rb:Rigidbody };
 
-function actorAABB(go:GameObject, col:BoxCollider, pad = 0):AABB {
+function actorAABB(go:GameObject, col:BoxCollider, pad = 0):Bounds {
 	const p = go.transform.position;
 	const hx = col.size.x * 0.5 + pad;
 	const hz = col.size.z * 0.5 + pad;
@@ -34,11 +29,11 @@ function actorAABB(go:GameObject, col:BoxCollider, pad = 0):AABB {
 	};
 }
 
-function overlaps(a:AABB, b:AABB):boolean {
+function overlaps(a:Bounds, b:Bounds):boolean {
 	return a.minX < b.maxX && a.maxX > b.minX && a.minZ < b.maxZ && a.maxZ > b.minZ;
 }
 
-function mtvOf(a:AABB, b:AABB, idA:string, idB:string):Mtv {
+function mtvOf(a:Bounds, b:Bounds, idA:string, idB:string):Mtv {
 	const overlapX = Math.min(a.maxX - b.minX, b.maxX - a.minX);
 	const overlapZ = Math.min(a.maxZ - b.minZ, b.maxZ - a.minZ);
 	const ax = (a.minX + a.maxX) * 0.5;
@@ -55,7 +50,7 @@ function mtvOf(a:AABB, b:AABB, idA:string, idB:string):Mtv {
 	return { axis: 'z', dir, depth: overlapZ };
 }
 
-function shift(pos:{ x:number; z:number }, axis:'x' | 'z', delta:number):void {
+function shift(pos:XZ, axis:'x' | 'z', delta:number):void {
 	if (axis === 'x') {
 		pos.x += delta;
 	}
@@ -64,7 +59,7 @@ function shift(pos:{ x:number; z:number }, axis:'x' | 'z', delta:number):void {
 	}
 }
 
-function applyMtv(pos:{ x:number; z:number }, hit:Mtv, invert:boolean):void {
+function applyMtv(pos:XZ, hit:Mtv, invert:boolean):void {
 	shift(pos, hit.axis, (invert ? -hit.dir : hit.dir) * hit.depth);
 }
 
@@ -73,9 +68,9 @@ function applyMtv(pos:{ x:number; z:number }, hit:Mtv, invert:boolean):void {
  * Anything else blocked, or ground `stand` cannot step up onto, is the whole tile, so a body stops at a face
  * instead of walking into it.
  */
-function tileSolids(world:World, a:AABB, stand?:TerrainSample):AABB[] {
+function tileSolids(world:World, a:Bounds, stand?:TerrainSample):Bounds[] {
 	const size = world.tileSize;
-	const boxes:AABB[] = [];
+	const boxes:Bounds[] = [];
 	for (let tz = Math.floor(a.minZ / size); tz <= Math.floor((a.maxZ - 1e-6) / size); tz++) {
 		for (let tx = Math.floor(a.minX / size); tx <= Math.floor((a.maxX - 1e-6) / size); tx++) {
 			const hit = world.sampleTerrain((tx + 0.5) * size, (tz + 0.5) * size);
@@ -108,7 +103,7 @@ function resolveAgainstTiles(go:GameObject, col:BoxCollider, world:World, rb?:Ri
 	const hz = col.size.z * 0.5;
 	const prevX = rb?.enabled ? rb.prevX : pos.x;
 	const prevZ = rb?.enabled ? rb.prevZ : pos.z;
-	const axisOf = (b:AABB):'x' | 'z' | undefined => {
+	const axisOf = (b:Bounds):'x' | 'z' | undefined => {
 		const wasX = prevX + hx > b.minX && prevX - hx < b.maxX;
 		const wasZ = prevZ + hz > b.minZ && prevZ - hz < b.maxZ;
 		return wasX === wasZ ? undefined : wasX ? 'z' : 'x';
@@ -130,13 +125,13 @@ function resolveAgainstTiles(go:GameObject, col:BoxCollider, world:World, rb?:Ri
 /** The ground at a point for a body standing there: a tile with `solids` is blocked only inside them. */
 function groundAt(world:World, x:number, z:number):TerrainSample | undefined {
 	const s = world.sampleTerrain(x, z);
-	return s?.solids && !s.solids.some((b) => x >= b.minX && x < b.maxX && z >= b.minZ && z < b.maxZ)
+	return s?.solids && !s.solids.some((b) => inBounds(b, x, z))
 		? { ...s, blocked: false }
 		: s;
 }
 
 function shoveAlong(
-	pos:{ x:number; z:number },
+	pos:XZ,
 	vx:number,
 	vz:number,
 	speed:number,
@@ -228,7 +223,7 @@ function resolveShove(world:World, dt:number):void {
 			continue;
 		}
 		const near = actorAABB(go, a.col, a.col.pad);
-		world.forEachNear(near.minX, near.minZ, near.maxX, near.maxZ, (other) => {
+		world.forEachNear(near, (other) => {
 			const b = other.id > go.id ? shoverOf(other) : undefined;
 			if (b) {
 				resolveShovePair(world, a, b, dt);
@@ -238,7 +233,7 @@ function resolveShove(world:World, dt:number):void {
 }
 
 /** Push box `a` (centered on `pos`) out of an upright cylinder, away from its axis, so bodies slide around it. */
-function pushOutOfCylinder(pos:{ x:number; z:number }, a:AABB, center:{ x:number; z:number }, radius:number):void {
+function pushOutOfCylinder(pos:XZ, a:Bounds, center:XZ, radius:number):void {
 	const dx = Math.min(Math.max(center.x, a.minX), a.maxX) - center.x;
 	const dz = Math.min(Math.max(center.z, a.minZ), a.maxZ) - center.z;
 	const d = Math.hypot(dx, dz);
@@ -263,7 +258,7 @@ function resolveAgainstOthers(world:World, go:GameObject, col:BoxCollider):void 
 	const pos = go.transform.position;
 	const a = actorAABB(go, col);
 	const near = actorAABB(go, col, col.pad);
-	world.forEachNear(near.minX, near.minZ, near.maxX, near.maxZ, (other) => {
+	world.forEachNear(near, (other) => {
 		const otherCol = other.getComponent(BoxCollider);
 		if (other === go || !otherCol?.enabled || !otherCol.solid || otherCol.isTrigger) {
 			return;
@@ -290,7 +285,7 @@ function resolveAgainstOthers(world:World, go:GameObject, col:BoxCollider):void 
 }
 
 /** Whether box `a`, moved by `dx`, `dz`, overlaps `b` anywhere on the way. */
-function sweepOverlaps(a:AABB, dx:number, dz:number, b:AABB):boolean {
+function sweepOverlaps(a:Bounds, dx:number, dz:number, b:Bounds):boolean {
 	/** When the two overlap along one axis, as shares of the way. */
 	const during = (aMin:number, aMax:number, bMin:number, bMax:number, d:number):[number, number] => {
 		if (d === 0) {
@@ -307,12 +302,12 @@ function sweepOverlaps(a:AABB, dx:number, dz:number, b:AABB):boolean {
 }
 
 /** Whether a body going from box `start` to box `end` runs into box `b`. What it already overlaps it may leave, not end up in. */
-function runsInto(start:AABB, end:AABB, b:AABB):boolean {
+function runsInto(start:Bounds, end:Bounds, b:Bounds):boolean {
 	return overlaps(end, b) || (!overlaps(start, b) && sweepOverlaps(start, end.minX - start.minX, end.minZ - start.minZ, b));
 }
 
 /** Whether the middle of a body going from `from` to `x`, `z` crosses cylinder `col`. What it already stands in it may leave, not end up in. */
-function crossesCylinder(col:BoxCollider, from:{ x:number; z:number }, x:number, z:number):boolean {
+function crossesCylinder(col:BoxCollider, from:XZ, x:number, z:number):boolean {
 	if (col.contains(x, z)) {
 		return true;
 	}
@@ -332,7 +327,7 @@ export type BlockerOpts = {
 	 * Where `body` steps from: what it would run into anywhere on the straight way from there counts, not only at the
 	 * end, and ground too high or too low to step to from there is `'terrain'`.
 	 */
-	from?:{ x:number; z:number };
+	from?:XZ;
 	/** Only colliders standing taller than this, in meters: what one sees or hears past. */
 	above?:number;
 };
@@ -349,16 +344,16 @@ export function blockerAt(world:World, body:GameObject | null, x:number, z:numbe
 	const hx = (col?.size.x ?? 0) * 0.5;
 	const hz = (col?.size.z ?? 0) * 0.5;
 	const from = opts.from ?? { x, z };
-	const start:AABB = { minX: from.x - hx, maxX: from.x + hx, minZ: from.z - hz, maxZ: from.z + hz };
-	const end:AABB = { minX: x - hx, maxX: x + hx, minZ: z - hz, maxZ: z + hz };
-	const way:AABB = {
+	const start:Bounds = { minX: from.x - hx, maxX: from.x + hx, minZ: from.z - hz, maxZ: from.z + hz };
+	const end:Bounds = { minX: x - hx, maxX: x + hx, minZ: z - hz, maxZ: z + hz };
+	const way:Bounds = {
 		minX: Math.min(start.minX, end.minX),
 		maxX: Math.max(start.maxX, end.maxX),
 		minZ: Math.min(start.minZ, end.minZ),
 		maxZ: Math.max(start.maxZ, end.maxZ),
 	};
 	let hit:GameObject | undefined;
-	world.forEachNear(way.minX, way.minZ, way.maxX, way.maxZ, (go) => {
+	world.forEachNear(way, (go) => {
 		const other = go.getComponent(BoxCollider);
 		if (hit || go === body || !other?.enabled || !other.solid || other.isTrigger || go.getComponent(Rigidbody) || other.size.y <= (opts.above ?? -Infinity)) {
 			return;

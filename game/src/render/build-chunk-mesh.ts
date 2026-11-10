@@ -1,4 +1,4 @@
-import { chunkBounds, hash, ToonMaterial } from '@arc-director/kindling';
+import { chunkBounds, hash, inBounds, SIDE_OFFSETS, ToonMaterial, type Bounds, type LocalCoord, type XZ } from '@arc-director/kindling';
 import * as THREE from 'three';
 import { CELL_SIZE, MOON_WINDOW, TILE_HEIGHT, WALL_HEIGHT } from '../world/constants';
 import type { DemoChunk, Tile } from '../world/demo-chunk';
@@ -9,7 +9,7 @@ import { createWaterFlowField, type Flow } from './water-flow';
 import { attachChunkAo } from './bake-ao';
 import { addLandforms, BANK_BED, bankFall, bankWet } from './land-mesh';
 import { LANDFORMS } from '../world/land';
-import { bankUV, finishYMesh, makeYBuf, pushGround, pushYPoly, pushYTri, type Point, type YBuf } from './ground-mesh';
+import { bankUV, finishYMesh, makeYBuf, pushGround, pushYPoly, pushYTri, type YBuf } from './ground-mesh';
 import { sandField, showsWater } from '../world/sand';
 import { roadInside, roadLines, ROAD_HALF_WIDTH, ROAD_Y, segmentDistance, type RoadLine } from '../world/dressing-plan';
 import { DECK_TOP, PLANK_Y, STONE_Y } from '../engine/demo-world';
@@ -20,8 +20,6 @@ export const CHUNK_MESH_REV = 118;
 
 /** Squares per cell side where lawn meets water, for the sand edge to curve through. */
 const SHORE_STEPS = 8;
-
-type Cell = { lx:number; lz:number };
 
 const dummy = new THREE.Object3D();
 
@@ -55,11 +53,11 @@ function addInstanced<T>(
 	return mesh;
 }
 
-function cellsWhere(chunk:DemoChunk, keep:(tile:NonNullable<ReturnType<DemoChunk['tile']>>)=>boolean):Cell[] {
-	const cells:Cell[] = [];
+function cellsWhere(chunk:DemoChunk, keep:(tile:NonNullable<ReturnType<DemoChunk['tile']>>)=>boolean):LocalCoord[] {
+	const cells:LocalCoord[] = [];
 	chunk.forEachTile((tile, lx, lz) => {
 		if (keep(tile)) {
-			cells.push({ lx, lz });
+			cells.push({ localX: lx, localZ: lz });
 		}
 	});
 	return cells;
@@ -77,7 +75,7 @@ function addStairs(group:THREE.Group, chunk:DemoChunk):void {
 	const oz = chunk.worldOriginZ();
 	const steps = 4;
 	const stepLen = CELL_SIZE / steps;
-	type Step = { x:number; z:number; h:number; alongZ:boolean; uphill:{ x:number; z:number }; cast:boolean };
+	type Step = { x:number; z:number; h:number; alongZ:boolean; uphill:XZ; cast:boolean };
 	const bySize = new Map<string, Step[]>();
 	const ceilings:Slab[] = [];
 	chunk.forEachTile((tile, lx, lz) => {
@@ -89,25 +87,25 @@ function addStairs(group:THREE.Group, chunk:DemoChunk):void {
 			const z = oz + lz * CELL_SIZE;
 			ceilings.push({ minX: x, maxX: x + CELL_SIZE, minY: WALL_HEIGHT - STAIRWELL_CEILING, maxY: WALL_HEIGHT, minZ: z, maxZ: z + CELL_SIZE });
 		}
-		const uphill = stairUphill(chunk, lx, lz);
+		const uphill = SIDE_OFFSETS[stairUphill(chunk, lx, lz)];
 		const top = tile.height * TILE_HEIGHT;
 		const bottom = Math.max(0, top - TILE_HEIGHT);
-		const alongZ = uphill.dx === 0;
+		const alongZ = uphill.tx === 0;
 		for (let i = 0; i < steps; i++) {
 			const h = bottom + ((i + 1) / steps) * (top - bottom);
-			const along = uphill.dx + uphill.dz < 0
+			const along = uphill.tx + uphill.tz < 0
 				? CELL_SIZE - (i + 0.5) * stepLen
 				: (i + 0.5) * stepLen;
 			const x = alongZ ? ox + (lx + 0.5) * CELL_SIZE : ox + lx * CELL_SIZE + along;
 			const z = alongZ ? oz + lz * CELL_SIZE + along : oz + (lz + 0.5) * CELL_SIZE;
-			const key = `${h},${uphill.dx},${uphill.dz},${tile.blocked}`;
+			const key = `${h},${uphill.tx},${uphill.tz},${tile.blocked}`;
 			let list = bySize.get(key);
 			if (!list) {
 				list = [];
 				bySize.set(key, list);
 			}
 			// A stairwell's steps cast no shadow: light coming down them from far off would have each step shade the next.
-			list.push({ x, z, h, alongZ, uphill: { x: uphill.dx, z: uphill.dz }, cast: !tile.blocked });
+			list.push({ x, z, h, alongZ, uphill: { x: uphill.tx, z: uphill.tz }, cast: !tile.blocked });
 		}
 	});
 	for (const list of bySize.values()) {
@@ -127,8 +125,8 @@ function isFlatStone(tile:Tile):boolean {
 
 function addFlatFloors(group:THREE.Group, chunk:DemoChunk):void {
 	const squares = [
-		...cellsWhere(chunk, isFlatStone).map(({ lx, lz }) => ({ ...chunk.worldCellCenter(lx, lz), size: CELL_SIZE })),
-		...wallFloorsOf(chunk, isFlatStone).map((q) => ({ x: (q.x0 + q.x1) / 2, z: (q.z0 + q.z1) / 2, size: q.x1 - q.x0 })),
+		...cellsWhere(chunk, isFlatStone).map(({ localX, localZ }) => ({ ...chunk.worldCellCenter(localX, localZ), size: CELL_SIZE })),
+		...wallFloorsOf(chunk, isFlatStone).map(({ bounds: b }) => ({ x: (b.minX + b.maxX) / 2, z: (b.minZ + b.maxZ) / 2, size: b.maxX - b.minX })),
 	];
 	addInstanced(group, new THREE.PlaneGeometry(1, 1), stoneFloorMat(), squares, false, ({ x, z, size }) => {
 		dummy.position.set(x, 0.002, z);
@@ -140,7 +138,7 @@ function addFlatFloors(group:THREE.Group, chunk:DemoChunk):void {
 function addRaisedFloors(group:THREE.Group, chunk:DemoChunk):void {
 	const ox = chunk.worldOriginX();
 	const oz = chunk.worldOriginZ();
-	const byHeight = new Map<number, Cell[]>();
+	const byHeight = new Map<number, LocalCoord[]>();
 	chunk.forEachTile((tile, lx, lz) => {
 		if (tile.blocked || tile.def === 'stairs' || tile.height <= 0) {
 			return;
@@ -151,14 +149,14 @@ function addRaisedFloors(group:THREE.Group, chunk:DemoChunk):void {
 			cells = [];
 			byHeight.set(h, cells);
 		}
-		cells.push({ lx, lz });
+		cells.push({ localX: lx, localZ: lz });
 	});
 	const wall = stoneWallMat();
 	const floor = stoneFloorMat();
 	for (const [h, cells] of byHeight) {
 		const geom = new THREE.BoxGeometry(CELL_SIZE, h, CELL_SIZE);
-		addInstanced(group, geom, [wall, wall, floor, floor, wall, wall], cells, true, ({ lx, lz }) => {
-			dummy.position.set(ox + (lx + 0.5) * CELL_SIZE, h * 0.5, oz + (lz + 0.5) * CELL_SIZE);
+		addInstanced(group, geom, [wall, wall, floor, floor, wall, wall], cells, true, ({ localX, localZ }) => {
+			dummy.position.set(ox + (localX + 0.5) * CELL_SIZE, h * 0.5, oz + (localZ + 0.5) * CELL_SIZE);
 		});
 	}
 }
@@ -169,10 +167,10 @@ function addWalls(group:THREE.Group, terrain:Terrain, chunk:DemoChunk):void {
 	const windows = moonWindowWalls(chunk);
 	addSlabs(group, stoneWallMat(), [...windows.values()].flat(), true);
 	const cells = cellsWhere(chunk, (tile) => tile.blocked && tile.def !== 'water' && tile.def !== 'stairs' && !THIN_WALLS.has(tile.def) && !LANDFORMS.has(tile.def))
-		.filter(({ lx, lz }) => !windows.has(lz * chunk.size + lx));
-	addInstanced(group, new THREE.BoxGeometry(CELL_SIZE, WALL_HEIGHT, CELL_SIZE), stoneWallMat(), cells, true, ({ lx, lz }) => {
-		const h = wallHeight(chunk, lx, lz);
-		dummy.position.set(ox + (lx + 0.5) * CELL_SIZE, h * 0.5, oz + (lz + 0.5) * CELL_SIZE);
+		.filter(({ localX, localZ }) => !windows.has(localZ * chunk.size + localX));
+	addInstanced(group, new THREE.BoxGeometry(CELL_SIZE, WALL_HEIGHT, CELL_SIZE), stoneWallMat(), cells, true, ({ localX, localZ }) => {
+		const h = wallHeight(chunk, localX, localZ);
+		dummy.position.set(ox + (localX + 0.5) * CELL_SIZE, h * 0.5, oz + (localZ + 0.5) * CELL_SIZE);
 		dummy.scale.set(1, h / WALL_HEIGHT, 1);
 	});
 	// The foot of a wall that stands in the river, from the water up into the courses.
@@ -208,7 +206,7 @@ function moonWindowWalls(chunk:DemoChunk):Map<number, Slab[]> {
 		if (!side) {
 			continue;
 		}
-		const [dx, dz] = side;
+		const { tx: dx, tz: dz } = SIDE_OFFSETS[side];
 		const lx = ent.localX + dx;
 		const lz = ent.localZ + dz;
 		const floor = (chunk.tile(ent.localX, ent.localZ)?.height ?? 0) * TILE_HEIGHT;
@@ -237,7 +235,7 @@ function wallHeight(chunk:DemoChunk, lx:number, lz:number):number {
 }
 
 /** An axis-aligned box in world meters, drawn as a scaled unit cube (patterns are world-space, so boards stay true). */
-type Slab = { minX:number; maxX:number; minY:number; maxY:number; minZ:number; maxZ:number };
+type Slab = Bounds & { minY:number; maxY:number };
 
 const unitBox = new THREE.BoxGeometry(1, 1, 1).translate(0, 0.5, 0);
 unitBox.userData.shared = true;
@@ -250,7 +248,7 @@ function addSlabs(group:THREE.Group, mat:THREE.Material, slabs:Slab[], castShado
 }
 
 /** A box spanning `u0`–`u1` along a wall run and `y0`–`y1` up, `depth` thick, about the cell's center line. */
-function runSlab(center:{ x:number; z:number }, run:'x' | 'z', u0:number, u1:number, y0:number, y1:number, depth:number):Slab {
+function runSlab(center:XZ, run:'x' | 'z', u0:number, u1:number, y0:number, y1:number, depth:number):Slab {
 	const across = { min: -depth / 2, max: depth / 2 };
 	const [ax, az] = run === 'x' ? [{ min: u0, max: u1 }, across] : [across, { min: u0, max: u1 }];
 	return { minX: center.x + ax.min, maxX: center.x + ax.max, minY: y0, maxY: y1, minZ: center.z + az.min, maxZ: center.z + az.max };
@@ -356,7 +354,7 @@ function floorTile(terrain:Terrain, chunks:DemoChunk[], x:number, z:number):Tile
 				continue;
 			}
 			const { localX, localZ } = chunk.worldToLocal(x, z);
-			return wallFloors(chunk, localX, localZ).find((q) => x >= q.x0 && x < q.x1 && z >= q.z0 && z < q.z1)?.tile;
+			return wallFloors(chunk, localX, localZ).find((q) => inBounds(q.bounds, x, z))?.tile;
 		}
 		return undefined;
 	}
@@ -367,9 +365,9 @@ function floorTile(terrain:Terrain, chunks:DemoChunk[], x:number, z:number):Tile
 }
 
 /** Surfaces piled on a tile after its earth and its own floor, such as a road. */
-function makeCovers():{ add(ring:Point[], y:number):void; at(x:number, z:number):number[] } {
-	const cells = new Map<string, { ring:Point[]; y:number }[]>();
-	const holds = (ring:Point[], x:number, z:number):boolean => {
+function makeCovers():{ add(ring:XZ[], y:number):void; at(x:number, z:number):number[] } {
+	const cells = new Map<string, { ring:XZ[]; y:number }[]>();
+	const holds = (ring:XZ[], x:number, z:number):boolean => {
 		let inside = false;
 		for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
 			const a = ring[i]!;
@@ -460,8 +458,8 @@ function addPlankFloors(group:THREE.Group, chunk:DemoChunk, levels:(x:number, z:
 			sheet(ox + lx * CELL_SIZE, oz + lz * CELL_SIZE, ox + (lx + 1) * CELL_SIZE, oz + (lz + 1) * CELL_SIZE);
 		}
 	});
-	for (const q of wallFloorsOf(chunk, (tile) => tile.def === 'plank')) {
-		sheet(q.x0, q.z0, q.x1, q.z1);
+	for (const { bounds: b } of wallFloorsOf(chunk, (tile) => tile.def === 'plank')) {
+		sheet(b.minX, b.minZ, b.maxX, b.maxZ);
 	}
 	if (boards.v > 0) {
 		group.add(finishYMesh(boards, plankMat(), true));
@@ -480,19 +478,19 @@ function addFootbridges(group:THREE.Group, chunk:DemoChunk):void {
 		return;
 	}
 	const wood = plankMat();
-	addInstanced(group, new THREE.BoxGeometry(CELL_SIZE, 0.12, CELL_SIZE), wood, decks, true, ({ lx, lz }) => {
-		dummy.position.set(ox + (lx + 0.5) * CELL_SIZE, DECK_TOP - 0.06, oz + (lz + 0.5) * CELL_SIZE);
+	addInstanced(group, new THREE.BoxGeometry(CELL_SIZE, 0.12, CELL_SIZE), wood, decks, true, ({ localX, localZ }) => {
+		dummy.position.set(ox + (localX + 0.5) * CELL_SIZE, DECK_TOP - 0.06, oz + (localZ + 0.5) * CELL_SIZE);
 	});
 	type Edge = { x:number; z:number; alongX:boolean };
 	const edges:Edge[] = [];
-	for (const { lx, lz } of decks) {
+	for (const { localX, localZ } of decks) {
 		for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]] as const) {
-			if (chunk.tile(lx + dx, lz + dz)?.def !== 'water') {
+			if (chunk.tile(localX + dx, localZ + dz)?.def !== 'water') {
 				continue;
 			}
 			edges.push({
-				x: ox + (lx + 0.5 + dx * 0.45) * CELL_SIZE,
-				z: oz + (lz + 0.5 + dz * 0.45) * CELL_SIZE,
+				x: ox + (localX + 0.5 + dx * 0.45) * CELL_SIZE,
+				z: oz + (localZ + 0.5 + dz * 0.45) * CELL_SIZE,
 				alongX: dz !== 0,
 			});
 		}
@@ -572,13 +570,13 @@ function grassOutline(
 	z0:number,
 	x1:number,
 	z1:number,
-):{ x:number; z:number }[] {
+):XZ[] {
 	const cut = CELL_SIZE * 0.52;
 	const n = isWater(terrain, chunk, lx, lz - 1);
 	const s = isWater(terrain, chunk, lx, lz + 1);
 	const e = isWater(terrain, chunk, lx + 1, lz);
 	const w = isWater(terrain, chunk, lx - 1, lz);
-	const pts:{ x:number; z:number }[] = [];
+	const pts:XZ[] = [];
 	if (n && w) {
 		pts.push({ x: x0, z: z0 + cut }, { x: x0 + cut, z: z0 });
 	}
@@ -610,8 +608,8 @@ function addGrassFloor(
 	group:THREE.Group,
 	terrain:Terrain,
 	chunk:DemoChunk,
-	cells:{ lx:number; lz:number }[],
-	waterCells:{ lx:number; lz:number }[],
+	cells:LocalCoord[],
+	waterCells:LocalCoord[],
 	levels:(x:number, z:number)=>number[],
 ):void {
 	const ox = chunk.worldOriginX();
@@ -619,17 +617,17 @@ function addGrassFloor(
 	const grass = makeYBuf();
 	const sand = makeYBuf();
 	const defAt = (x:number, z:number):string | undefined => terrain.tileAtWorld(x, z)?.def;
-	const sandy = (p:Point):number => sandField(defAt, p.x, p.z);
-	const lawny = (p:Point):number => -sandField(defAt, p.x, p.z);
-	const shallow = (p:Point):number => BANK_BED - sandField(defAt, p.x, p.z);
+	const sandy = (p:XZ):number => sandField(defAt, p.x, p.z);
+	const lawny = (p:XZ):number => -sandField(defAt, p.x, p.z);
+	const shallow = (p:XZ):number => BANK_BED - sandField(defAt, p.x, p.z);
 	// Just under the bed where it meets the water, so no seam shows.
 	const bankY = (x:number, z:number):number => GRASS_Y - (GRASS_Y - WATER_LOWER_Y + 0.01) * bankFall(sandField(defAt, x, z));
 	const step = CELL_SIZE / SHORE_STEPS;
-	const near = (lx:number, lz:number, test:(c:{ x:number; z:number })=>boolean):boolean => (
+	const near = (lx:number, lz:number, test:(c:XZ)=>boolean):boolean => (
 		[-1, 0, 1].some((dx) => [-1, 0, 1].some((dz) => test(chunk.worldCellCenter(lx + dx, lz + dz))))
 	);
 	// Beside water: small squares, each split where the sand field crosses its cuts, so the sand edge curves.
-	const forEachStep = (x0:number, z0:number, outline:Point[], draw:(piece:Point[])=>void):void => {
+	const forEachStep = (x0:number, z0:number, outline:XZ[], draw:(piece:XZ[])=>void):void => {
 		for (let iz = 0; iz < SHORE_STEPS; iz++) {
 			for (let ix = 0; ix < SHORE_STEPS; ix++) {
 				const sx = x0 + ix * step;
@@ -638,11 +636,11 @@ function addGrassFloor(
 			}
 		}
 	};
-	for (const { lx, lz } of cells) {
-		const x0 = ox + lx * CELL_SIZE;
-		const z0 = oz + lz * CELL_SIZE;
-		const outline = grassOutline(terrain, chunk, lx, lz, x0, z0, x0 + CELL_SIZE, z0 + CELL_SIZE);
-		if (!near(lx, lz, (c) => showsWater(defAt(c.x, c.z)))) {
+	for (const { localX, localZ } of cells) {
+		const x0 = ox + localX * CELL_SIZE;
+		const z0 = oz + localZ * CELL_SIZE;
+		const outline = grassOutline(terrain, chunk, localX, localZ, x0, z0, x0 + CELL_SIZE, z0 + CELL_SIZE);
+		if (!near(localX, localZ, (c) => showsWater(defAt(c.x, c.z)))) {
 			pushGround(grass, outline, GRASS_Y, levels);
 			continue;
 		}
@@ -652,20 +650,20 @@ function addGrassFloor(
 		});
 	}
 	// The bank goes on into the river's cells until it sinks under the bed, so the water's corners come out round.
-	for (const { lx, lz } of waterCells) {
-		if (!near(lx, lz, (c) => defAt(c.x, c.z) === 'grass')) {
+	for (const { localX, localZ } of waterCells) {
+		if (!near(localX, localZ, (c) => defAt(c.x, c.z) === 'grass')) {
 			continue;
 		}
-		const x0 = ox + lx * CELL_SIZE;
-		const z0 = oz + lz * CELL_SIZE;
+		const x0 = ox + localX * CELL_SIZE;
+		const z0 = oz + localZ * CELL_SIZE;
 		const x1 = x0 + CELL_SIZE;
 		const z1 = z0 + CELL_SIZE;
 		forEachStep(x0, z0, [{ x: x0, z: z0 }, { x: x1, z: z0 }, { x: x1, z: z1 }, { x: x0, z: z1 }], (piece) => {
 			pushGround(sand, clipBy(piece, shallow), bankY);
 		});
 	}
-	for (const q of wallFloorsOf(chunk, (tile) => tile.def === 'grass')) {
-		pushGround(grass, [{ x: q.x0, z: q.z0 }, { x: q.x1, z: q.z0 }, { x: q.x1, z: q.z1 }, { x: q.x0, z: q.z1 }], GRASS_Y, levels);
+	for (const { bounds: b } of wallFloorsOf(chunk, (tile) => tile.def === 'grass')) {
+		pushGround(grass, [{ x: b.minX, z: b.minZ }, { x: b.maxX, z: b.minZ }, { x: b.maxX, z: b.maxZ }, { x: b.minX, z: b.maxZ }], GRASS_Y, levels);
 	}
 	// The bank runs across the way the sand field climbs toward the water.
 	const e = 0.05;
@@ -684,9 +682,9 @@ function addGrassFloor(
  * The part of `pts` where `inside` is not below zero, in the same winding: one Sutherland–Hodgman step,
  * cutting each edge where `inside` crosses zero (linear between its ends, so exact for straight cuts).
  */
-function clipBy(pts:Point[], inside:(p:Point)=>number):Point[] {
+function clipBy(pts:XZ[], inside:(p:XZ)=>number):XZ[] {
 	const d = pts.map(inside);
-	const out:Point[] = [];
+	const out:XZ[] = [];
 	pts.forEach((a, i) => {
 		const j = (i + 1) % pts.length;
 		const b = pts[j]!;
@@ -702,8 +700,8 @@ function clipBy(pts:Point[], inside:(p:Point)=>number):Point[] {
 }
 
 /** The part of convex `pts` inside the box, in the same winding. */
-function clipToBox(pts:Point[], x0:number, z0:number, x1:number, z1:number):Point[] {
-	return [(p:Point) => p.x - x0, (p:Point) => x1 - p.x, (p:Point) => p.z - z0, (p:Point) => z1 - p.z].reduce(clipBy, pts);
+function clipToBox(pts:XZ[], x0:number, z0:number, x1:number, z1:number):XZ[] {
+	return [(p:XZ) => p.x - x0, (p:XZ) => x1 - p.x, (p:XZ) => p.z - z0, (p:XZ) => z1 - p.z].reduce(clipBy, pts);
 }
 
 /**
@@ -715,13 +713,13 @@ function addRoad(group:THREE.Group, terrain:Terrain, chunk:DemoChunk, lines:Road
 	if (lines.length === 0) {
 		return;
 	}
-	const inside = (p:Point):number => roadInside(lines, p.x, p.z);
+	const inside = (p:XZ):number => roadInside(lines, p.x, p.z);
 	const ox = chunk.worldOriginX();
 	const oz = chunk.worldOriginZ();
 	const step = CELL_SIZE / SHORE_STEPS;
 	const reach = CELL_SIZE * Math.SQRT1_2 + ROAD_HALF_WIDTH;
 	const buf = makeYBuf();
-	const polys:Point[][] = [];
+	const polys:XZ[][] = [];
 	chunk.forEachTile((tile, lx, lz) => {
 		const x0 = ox + lx * CELL_SIZE;
 		const z0 = oz + lz * CELL_SIZE;
@@ -754,7 +752,7 @@ function fillWaterSheet(
 	buf:YBuf,
 	terrain:Terrain,
 	chunk:DemoChunk,
-	cells:{ lx:number; lz:number }[],
+	cells:LocalCoord[],
 	y:number,
 	flowAt:(x:number, z:number)=>Flow,
 	shoreAt:(x:number, z:number)=>number,
@@ -764,9 +762,9 @@ function fillWaterSheet(
 	const cut = CELL_SIZE * 0.82;
 	const waterRep = 1;
 	const div = 4;
-	for (const { lx, lz } of cells) {
-		const x0 = ox + lx * CELL_SIZE;
-		const z0 = oz + lz * CELL_SIZE;
+	for (const { localX, localZ } of cells) {
+		const x0 = ox + localX * CELL_SIZE;
+		const z0 = oz + localZ * CELL_SIZE;
 		const x1 = x0 + CELL_SIZE;
 		const z1 = z0 + CELL_SIZE;
 		const cellF = flowAt(x0 + CELL_SIZE * 0.5, z0 + CELL_SIZE * 0.5);
@@ -832,7 +830,7 @@ function fillWaterSheet(
 	});
 }
 
-function addWater(group:THREE.Group, terrain:Terrain, chunk:DemoChunk, cells:{ lx:number; lz:number }[], nature:ReturnType<typeof getNature>):void {
+function addWater(group:THREE.Group, terrain:Terrain, chunk:DemoChunk, cells:LocalCoord[], nature:ReturnType<typeof getNature>):void {
 	const field = createWaterFlowField(terrain);
 	const flowAt = (x:number, z:number):Flow => field.sample(x, z);
 	const shoreAt = (x:number, z:number):number => shoreAmt(terrain, x, z);
@@ -854,14 +852,14 @@ function addGrassAndWater(group:THREE.Group, terrain:Terrain, chunk:DemoChunk, l
 	catch {
 		return;
 	}
-	const grassCells:{ lx:number; lz:number }[] = [];
-	const waterCells:{ lx:number; lz:number }[] = [];
+	const grassCells:LocalCoord[] = [];
+	const waterCells:LocalCoord[] = [];
 	chunk.forEachTile((tile, lx, lz) => {
 		if (tile.def === 'grass') {
-			grassCells.push({ lx, lz });
+			grassCells.push({ localX: lx, localZ: lz });
 		}
 		else if (showsWater(tile.def)) {
-			waterCells.push({ lx, lz });
+			waterCells.push({ localX: lx, localZ: lz });
 		}
 	});
 	if (grassCells.length > 0 || waterCells.length > 0) {

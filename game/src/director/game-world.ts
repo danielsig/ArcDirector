@@ -61,7 +61,7 @@ export function gameWorld(host:GameHost):HostWorld<GameObject> {
 		getReach: (character, target) => {
 			const room = target.getComponent(Interior);
 			if (room) {
-				return Math.min(room.maxX - room.minX, room.maxZ - room.minZ) / 2;
+				return Math.min(room.bounds.maxX - room.bounds.minX, room.bounds.maxZ - room.bounds.minZ) / 2;
 			}
 			// Shoppers have to step into the opening. Stopping short leaves them standing in the frame.
 			if (target.getComponent(MarketGate) && character.getComponent(MarketNPC)?.kind === 'customer') {

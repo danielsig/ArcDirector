@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { hash } from '@arc-director/kindling';
+import { hash, distanceXZ, type Bounds, type XZ } from '@arc-director/kindling';
 import { CELL_SIZE } from '../world/constants';
 import { CLIFF_TILE, GRASS_UV_REP, GRASS_Y } from './nature';
 import type { Flow } from './water-flow';
@@ -57,7 +57,7 @@ export function pushYTri(
 
 export function pushYPoly(
 	buf:YBuf,
-	pts:{ x:number; z:number }[],
+	pts:XZ[],
 	y:Height,
 	rep:number,
 	flowAt?:(x:number, z:number)=>Flow,
@@ -94,8 +94,6 @@ export function finishYMesh(buf:YBuf, mat:THREE.Material, shadows:boolean):THREE
 	return mesh;
 }
 
-export type Point = { x:number; z:number };
-
 /** Every surface already drawn at `x, z`, earth included. The lowest is the earth; the highest under a new top is the layer it sits on. */
 export type GroundAt = (x:number, z:number)=>number[];
 
@@ -124,7 +122,7 @@ function skirtBottom(levels:number[], top:number, corners:boolean):number {
 }
 
 /** An outline on the ground at height `y` (level, or a height field), its corners in order (NW, NE, SE, SW for a cell): two triangles for a quad, else a fan. */
-export function pushGround(buf:YBuf, pts:Point[], y:Height = GRASS_Y, ground?:GroundAt):void {
+export function pushGround(buf:YBuf, pts:XZ[], y:Height = GRASS_Y, ground?:GroundAt):void {
 	if (ground && typeof y === 'number') {
 		drawGroundSurface(buf, pts, y, ground);
 		return;
@@ -144,13 +142,13 @@ export function pushGround(buf:YBuf, pts:Point[], y:Height = GRASS_Y, ground?:Gr
  * cell's corners, in which case it stops on the surface drawn under it. A long edge splits where its two halves meet
  * different ground, so a corner steps. Where the outside is already at `top`, there is no skirt.
  */
-export function drawGroundSurface(buf:YBuf, ring:Point[], top:number, ground:GroundAt):void {
+export function drawGroundSurface(buf:YBuf, ring:XZ[], top:number, ground:GroundAt):void {
 	if (ring.length < 3) {
 		return;
 	}
 	// Both ends of the edge are on a cell corner when each is at most this far from one, in manhattan distance.
 	const nearCorner = 0.05;
-	const atCorner = (p:Point):boolean => {
+	const atCorner = (p:XZ):boolean => {
 		const x0 = Math.floor(p.x / CELL_SIZE) * CELL_SIZE;
 		const z0 = Math.floor(p.z / CELL_SIZE) * CELL_SIZE;
 		for (const cx of [x0, x0 + CELL_SIZE]) {
@@ -162,7 +160,7 @@ export function drawGroundSurface(buf:YBuf, ring:Point[], top:number, ground:Gro
 		}
 		return false;
 	};
-	const pts:(Point & { skirt:number })[] = [];
+	const pts:(XZ & { skirt:number })[] = [];
 	for (let i = 0; i < ring.length; i++) {
 		const a = ring[i]!;
 		const b = ring[(i + 1) % ring.length]!;
@@ -239,15 +237,12 @@ export function bankUV(buf:YBuf, from:number, tile:number, wetAt:(x:number, z:nu
 	}
 }
 
-/** A world XZ box, meters. */
-export type Box = { minX:number; maxX:number; minZ:number; maxZ:number };
-
 /**
  * Both water sheets over a box: `lower` the bed at `bedY`, `upper` the current lines at `linesY`, flowing with `flow`.
  * `land` says what is not water, so the banks get their edge line wherever the box meets it. Half-meter quads across
  * the box, so a narrow river is deep between its banks; longer ones down a long box.
  */
-export function pushWaterBox(lower:YBuf, upper:YBuf, box:Box, bedY:number, linesY:number, flow:Flow, land:(x:number, z:number)=>boolean):void {
+export function pushWaterBox(lower:YBuf, upper:YBuf, box:Bounds, bedY:number, linesY:number, flow:Flow, land:(x:number, z:number)=>boolean):void {
 	const shore = (x:number, z:number):number => [[-0.3, -0.3], [0.3, -0.3], [-0.3, 0.3], [0.3, 0.3]]
 		.filter(([dx, dz]) => land(x + dx!, z + dz!)).length / 4;
 	const quads = (span:number):number => Math.max(1, Math.round(span / (span > 4 ? 2 : 0.5)));
@@ -272,12 +267,12 @@ export function pushWaterBox(lower:YBuf, upper:YBuf, box:Box, bedY:number, lines
  * A flat rock face standing on the line `a`–`b`, from `y0` up to `y1`, facing away from the high side (`into`, a
  * unit XZ vector toward it), painted with the cliff picture in meters across (`x + z`) and up from its foot.
  */
-export function pushRockFace(pos:number[], uv:number[], idx:number[], a:Point, b:Point, y0:number, y1:number, into:Point):void {
+export function pushRockFace(pos:number[], uv:number[], idx:number[], a:XZ, b:XZ, y0:number, y1:number, into:XZ):void {
 	// Face away from the high side: (b - a) × up must point against `into`.
 	if (-(b.z - a.z) * into.x + (b.x - a.x) * into.z > 0) {
 		[a, b] = [b, a];
 	}
-	const len = Math.hypot(b.x - a.x, b.z - a.z);
+	const len = distanceXZ(b, a);
 	const n = Math.max(1, Math.ceil(len / 2));
 	const m = Math.max(1, Math.ceil((y1 - y0) / 4));
 	const first = pos.length / 3;

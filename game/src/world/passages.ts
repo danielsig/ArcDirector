@@ -1,4 +1,4 @@
-import type { GameObject } from '@arc-director/kindling';
+import { inBounds, type GameObject } from '@arc-director/kindling';
 import { Door, Interior, Lock, Named } from '../engine/components';
 import type { DemoWorld } from '../engine/demo-world';
 import { CELL_SIZE } from './constants';
@@ -42,8 +42,7 @@ function passages(world:DemoWorld):Map<string, Passage> {
 	const roomAt = (tx:number, tz:number):string | undefined => {
 		const { x, z } = world.tileCenter(tx, tz);
 		const room = rooms.find((go) => {
-			const b = go.getComponent(Interior)!;
-			return x >= b.minX && x < b.maxX && z >= b.minZ && z < b.maxZ;
+			return inBounds(go.getComponent(Interior)!.bounds, x, z);
 		});
 		return room && (room.getComponent(Named)?.id ?? room.id);
 	};

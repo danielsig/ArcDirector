@@ -1,4 +1,4 @@
-import { Time, type GameObject } from '@arc-director/kindling';
+import { Time, distanceXZ, type GameObject } from '@arc-director/kindling';
 import { ArcDirector, type CharacterSpec, type Kit } from 'arc-director';
 import { Belly } from '../../engine/Belly';
 import { Bridge, Celebrating, HumanBody } from '../../engine/components';
@@ -7,7 +7,7 @@ import { Item } from '../../items/item-components';
 import type { GameHost } from '../adapter';
 import { BODY_VERBS, BUILDING_VERB_INSTRUCTIONS, doClose, doRead, FISH_VERB, GAME_VERBS, REST_VERBS } from '../game-verbs';
 import { withReceived, type CharacterCtx, type SceneGoals } from '../game-types';
-import { compactName, distXZ, findCarried, itemMatchesName, listCarried } from '../../items/inventory';
+import { compactName, findCarried, itemMatchesName, listCarried } from '../../items/inventory';
 import { coinsOf } from '../../items/wallet';
 import { worthOf } from '../../items/defs';
 
@@ -240,7 +240,7 @@ function nearestThing(host:GameHost, seeker:GameObject, item:string):GameObject 
 	let best:GameObject | undefined;
 	let bestDist = Infinity;
 	const consider = (go:GameObject):void => {
-		const d = distXZ(seeker, go);
+		const d = distanceXZ(seeker, go);
 		if (go !== seeker && d < bestDist) {
 			best = go;
 			bestDist = d;
@@ -272,7 +272,7 @@ function closeness(host:GameHost, leg:string, who:GameObject | undefined, to:Gam
 		starts = new Map();
 		legStarts.set(host, starts);
 	}
-	const d = distXZ(who, to);
+	const d = distanceXZ(who, to);
 	const start = Math.max(d, starts.get(leg) ?? 0);
 	starts.set(leg, start);
 	return start > 0 ? 1 - d / start : 1;

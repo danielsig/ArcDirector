@@ -1,4 +1,4 @@
-import { Component, type GameObject } from '@arc-director/kindling';
+import { Component, distanceXZ, type GameObject } from '@arc-director/kindling';
 import { RigidBody } from '../engine/components';
 import { Order } from '../engine/order';
 import { walkClear } from '../world/path';
@@ -62,7 +62,7 @@ export class Leash extends Component {
 		const p = this.gameObject.transform.position;
 		return !!world && this.foes().some((go) => {
 			const q = go.transform.position;
-			return Math.hypot(q.x - p.x, q.z - p.z) <= this.wary && walkClear(world, go, q, p);
+			return distanceXZ(q, p) <= this.wary && walkClear(world, go, q, p);
 		});
 	}
 }

@@ -1,3 +1,4 @@
+import { SIDE_OFFSETS, type Bounds } from '@arc-director/kindling';
 import type { DemoChunk, ChunkEntity } from './demo-chunk';
 import { CELL_SIZE } from './constants';
 import type { RoofStyle } from './decode-glyph-chunk';
@@ -5,9 +6,6 @@ import { THIN_WALLS, WALL_THICKNESS } from './thin-wall';
 
 /** Where a door is (its cell's world center) and which way is out (`dx`, `dz`, one of them ±1). */
 export type DoorAnchor = { x:number; z:number; dx:number; dz:number };
-
-/** A box on the ground, world XZ meters. */
-export type GroundBox = { minX:number; maxX:number; minZ:number; maxZ:number };
 
 /**
  * A house: a ring of thin walls with a door in it, named after its door (`HutDoor` makes `Hut`). A side may be a
@@ -21,12 +19,10 @@ export type Building = {
 	chimney:boolean;
 	out:DoorAnchor;
 	/** Where the walls stand: down the middle of the thin walls, and on the face of any stone wall. */
-	walls:GroundBox;
+	walls:Bounds;
 	/** Inside the walls, up to their faces. */
-	inside:GroundBox;
+	inside:Bounds;
 };
-
-const SIDES = [[1, 0], [-1, 0], [0, 1], [0, -1]] as const;
 
 /** Every house on `chunks`: each door set in thin walls, with the walls joined to it. */
 export function findBuildings(chunks:Iterable<DemoChunk>):Building[] {
@@ -40,7 +36,7 @@ export function findBuildings(chunks:Iterable<DemoChunk>):Building[] {
 			return !!tile?.blocked && tile.def !== 'water' && !THIN_WALLS.has(tile.def);
 		};
 		for (const door of doors) {
-			if (!SIDES.some(([dx, dz]) => THIN_WALLS.has(chunk.tile(door.localX + dx, door.localZ + dz)?.def ?? ''))) {
+			if (!Object.values(SIDE_OFFSETS).some(({ tx: dx, tz: dz }) => THIN_WALLS.has(chunk.tile(door.localX + dx, door.localZ + dz)?.def ?? ''))) {
 				continue;
 			}
 			// The walls joined to the door.
@@ -53,7 +49,7 @@ export function findBuildings(chunks:Iterable<DemoChunk>):Building[] {
 				maxLX = Math.max(maxLX, lx);
 				minLZ = Math.min(minLZ, lz);
 				maxLZ = Math.max(maxLZ, lz);
-				for (const [dx, dz] of SIDES) {
+				for (const { tx: dx, tz: dz } of Object.values(SIDE_OFFSETS)) {
 					const key = `${lx + dx},${lz + dz}`;
 					if (!seen.has(key) && wallAt(lx + dx, lz + dz)) {
 						seen.add(key);

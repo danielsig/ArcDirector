@@ -1,4 +1,4 @@
-import { BoxCollider, Component, MeshRenderer, Time, closeHand, create, crouch, humanBone, palmOf, placeFoot, reach, restFoot, underInk, yawToForward, type GameObject } from '@arc-director/kindling';
+import { BoxCollider, Component, MeshRenderer, Time, closeHand, create, crouch, humanBone, palmOf, placeFoot, reach, restFoot, underInk, yawToForward, type GameObject, type XZ } from '@arc-director/kindling';
 import { findRoute, pointGoal } from 'arc-director';
 import * as THREE from 'three';
 import { Belly } from '../engine/Belly';
@@ -52,7 +52,7 @@ const LENGTHWISE = new THREE.Vector3(0, 0, 1);
 const BESIDE_ALONG = [0, -0.3, -0.6, 0.3];
 
 /** Where a body fits beside `seat` on its `side` (1 the seat's right, -1 its left), the likeliest first. */
-function spotsBeside(seat:GameObject, side:number, body:GameObject):{ x:number; z:number }[] {
+function spotsBeside(seat:GameObject, side:number, body:GameObject):XZ[] {
 	const s = seat.transform.position;
 	const right = yawToForward(seat.transform.yaw - Math.PI / 2);
 	const along = yawToForward(seat.transform.yaw);
@@ -74,7 +74,7 @@ function nearerSide(seat:GameObject, body:GameObject):number {
  * Where `body` goes to sit on or lie in `seat`: beside it on its nearer side, or the other when it cannot get there. None
  * when it cannot get to either: a chair in a tight corner, or a house it is locked out of.
  */
-export function approachSpot(seat:GameObject, body:GameObject):{ x:number; z:number } | undefined {
+export function approachSpot(seat:GameObject, body:GameObject):XZ | undefined {
 	const world = body.world;
 	if (!world) {
 		return undefined;
@@ -286,7 +286,7 @@ export class Seated extends Component {
 	}
 
 	/** How far along `yaw` a body steps off `seat`, as far as the seat asks. */
-	private stepOff(seat:GameObject, yaw:number):{ x:number; z:number } {
+	private stepOff(seat:GameObject, yaw:number):XZ {
 		const reach = seat.getComponent(Furniture)!.kind === 'bed' ? STEP_OUT_OF_BED : STEP_ASIDE;
 		const f = yawToForward(yaw);
 		return { x: f.x * reach, z: f.z * reach };
@@ -342,7 +342,7 @@ export class Seated extends Component {
 	}
 
 	/** Sat with its hip joints `hipHeight` over the floor at `s`, the seat's middle. */
-	private poseSitting(root:THREE.Object3D, s:{ x:number; z:number }, hipHeight:number, w:number):void {
+	private poseSitting(root:THREE.Object3D, s:XZ, hipHeight:number, w:number):void {
 		const go = this.gameObject;
 		const p = go.transform.position;
 		const f = yawToForward(go.transform.yaw);

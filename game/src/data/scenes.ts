@@ -1,3 +1,4 @@
+import type { XZ } from '@arc-director/kindling';
 import type { ArcDirector } from 'arc-director';
 import { mapCell, type ChunkFile } from '../world/decode-glyph-chunk';
 import { DUNGEON_CHUNKS } from '../scenes/dungeon-vault/dungeon-vault-map';
@@ -86,7 +87,7 @@ export type SceneDef = {
 	/** Ravens on the ground at the start, at world `x`, `z`. */
 	ravens?:{ x:number; z:number; yaw?:number }[];
 	/** World `x`, `z` the main-menu backdrop's camera circles (`Showcase`); the player's start when unset. */
-	orbit?:{ x:number; z:number };
+	orbit?:XZ;
 	/** How the camera starts. */
 	camera?:CameraLook;
 	/** Player stays centered and the chunk-sized map scrolls. `false` = current chunk, moving arrow. */

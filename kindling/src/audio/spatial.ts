@@ -1,9 +1,5 @@
 import type { ListenerPose } from './audio-types.js';
-
-/** Kindling yaw 0 faces −Z. */
-export function forwardXZ(yaw:number):{ x:number; z:number } {
-	return { x: -Math.sin(yaw), z: -Math.cos(yaw) };
-}
+import { yawToForward } from '../core/math.js';
 
 /**
  * Sharp fall, long tail. Full through the first meter, then a steep drop,
@@ -39,7 +35,7 @@ export function heardAt(listener:ListenerPose, x:number, z:number):{ x:number; y
 	if (spread >= 1) {
 		return { x, y: listener.y, z };
 	}
-	const ahead = forwardXZ(listener.yaw);
+	const ahead = yawToForward(listener.yaw);
 	const toX = flat > 1e-6 ? dx / flat : 0;
 	const toZ = flat > 1e-6 ? dz / flat : 0;
 	let ax = ahead.x * (1 - spread) + toX * spread;
@@ -90,7 +86,7 @@ export function placePanner(
 }
 
 export function poseListener(ctx:AudioContext, pose:ListenerPose, when:number):void {
-	const { x, z } = forwardXZ(pose.yaw);
+	const { x, z } = yawToForward(pose.yaw);
 	const listener = ctx.listener;
 	if (listener.positionX) {
 		listener.positionX.setTargetAtTime(pose.x, when, 0.04);

@@ -1,4 +1,4 @@
-import { BoxCollider, Time, yawToForward, type GameObject } from '@arc-director/kindling';
+import { BoxCollider, Time, yawToForward, distanceXZ, type GameObject } from '@arc-director/kindling';
 import {
 	pascalCase,
 	RESERVED_TAGS,
@@ -36,7 +36,6 @@ import type { DemoWorld } from '../engine/demo-world';
 import { DemoMeshRenderer } from '../engine/demo-mesh-renderer';
 import { Container, Item, Pickupable } from '../items/item-components';
 import {
-	distXZ,
 	findCarried,
 	isOccupied,
 	itemMatchesName,
@@ -413,7 +412,7 @@ export function doExamine(world:DemoWorld, character:GameObject, name:string):Ar
 	}
 	// Everyone sees the bridge; anything else is seen where light reaches it from near enough.
 	const seen = !!go.getComponent(Bridge)
-		|| (talkNotices(character, go) && distXZ(character, go) <= SIGHT && lineClear(world, 'light', character.transform.position, go.transform.position));
+		|| (talkNotices(character, go) && distanceXZ(character, go) <= SIGHT && lineClear(world, 'light', character.transform.position, go.transform.position));
 	if (!seen) {
 		return { ok: false, verb: 'examine', reason: `${name} is not in sight` };
 	}

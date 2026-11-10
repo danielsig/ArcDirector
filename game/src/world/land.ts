@@ -1,4 +1,4 @@
-import { chunkBounds } from '@arc-director/kindling';
+import { chunkBounds, type Bounds, type Side, type XZ } from '@arc-director/kindling';
 import type { DemoChunk, Tile } from './demo-chunk';
 import { CELL_SIZE } from './constants';
 import { showsWater } from './sand';
@@ -19,9 +19,7 @@ export const LANDFORMS = new Set(['cliff', 'cliff_water', 'forest', 'trail']);
 export type Surface = 'meadow' | 'floor' | 'water' | 'forest' | 'trail' | 'void';
 
 /** Land as the outskirts continue it: its surface, its height in tiles, and a river's current. */
-export type Land = { surface:Surface; height:number; flow?:{ x:number; z:number }; /** Meters the surface sits above the tile height. Unset land sits on the grass line. */ deck?:number };
-
-export type Side = 'north' | 'east' | 'south' | 'west';
+export type Land = { surface:Surface; height:number; flow?:XZ; /** Meters the surface sits above the tile height. Unset land sits on the grass line. */ deck?:number };
 
 /**
  * Height in tiles of the land beyond each edge tile, per side: north and south west to east, east and west north
@@ -29,11 +27,8 @@ export type Side = 'north' | 'east' | 'south' | 'west';
  */
 export type OutskirtHeights = Partial<Record<Side, (number | undefined)[]>>;
 
-/** World XZ box, meters. */
-export type Rect = { minX:number; maxX:number; minZ:number; maxZ:number };
-
 /** A stretch of the outskirts: one land over a box, and which way is away from the map. */
-export type LandRect = Land & Rect & { out:{ x:number; z:number } };
+export type LandRect = Land & Bounds & { out:XZ };
 
 /** The land `tile` is, as the outskirts carry it on; `ground` is the scene's land behind its walls. */
 export function landOf(tile:Tile | undefined, ground:Surface):Land {
@@ -62,11 +57,11 @@ function sameLand(a:Land, b:Land):boolean {
 
 export type Outskirts = {
 	/** The map's box. */
-	map:Rect;
+	map:Bounds;
 	/** The land beyond it, out to `reach` meters: strips off each side (runs of equal edge tiles merged) and the four corners. */
 	land:LandRect[];
 	/** The map's edge cells, each with its tile, for where the outskirts meet them. */
-	edge:(Rect & { tile:Tile | undefined })[];
+	edge:(Bounds & { tile:Tile | undefined })[];
 };
 
 /** The outskirts of the map made of `chunks`, `reach` meters out. */
@@ -86,14 +81,14 @@ export function planOutskirts(chunks:Iterable<DemoChunk>, ground:Surface, height
 	};
 	const land:LandRect[] = [];
 	const edge:Outskirts['edge'] = [];
-	const cell = (i:number, j:number):Rect => ({
+	const cell = (i:number, j:number):Bounds => ({
 		minX: map.minX + i * CELL_SIZE,
 		maxX: map.minX + (i + 1) * CELL_SIZE,
 		minZ: map.minZ + j * CELL_SIZE,
 		maxZ: map.minZ + (j + 1) * CELL_SIZE,
 	});
 	/** One side: its edge cells in order, each strip running from the cell's outer edge `reach` meters out. */
-	const side = (name:Side, count:number, at:(k:number)=>[number, number], out:{ x:number; z:number }):void => {
+	const side = (name:Side, count:number, at:(k:number)=>[number, number], out:XZ):void => {
 		let run:LandRect | undefined;
 		for (let k = 0; k < count; k++) {
 			const [i, j] = at(k);
@@ -123,7 +118,7 @@ export function planOutskirts(chunks:Iterable<DemoChunk>, ground:Surface, height
 	side('south', cols, (k) => [k, rows - 1], { x: 0, z: 1 });
 	side('west', rows, (k) => [0, k], { x: -1, z: 0 });
 	side('east', rows, (k) => [cols - 1, k], { x: 1, z: 0 });
-	const corner = (i:number, j:number, out:{ x:number; z:number }, override:number | undefined):void => {
+	const corner = (i:number, j:number, out:XZ, override:number | undefined):void => {
 		land.push({
 			...landAt(i, j, override),
 			out,

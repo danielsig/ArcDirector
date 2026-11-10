@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import type { World } from '../core/World.js';
+import type { XZ } from '../core/xz.js';
 import { Camera } from './Camera.js';
 import { OutlinePass } from './OutlinePass.js';
 import { ShadowCache, type ShadowMode, type ShadowSettings } from './ShadowCache.js';
@@ -219,7 +220,7 @@ export class Renderer {
 		};
 	}
 
-	public pickGround(ndcX:number, ndcY:number, planeY:number):{ x:number; z:number } | null {
+	public pickGround(ndcX:number, ndcY:number, planeY:number):XZ | null {
 		const cam = this.findCamera();
 		if (!cam) {
 			return null;

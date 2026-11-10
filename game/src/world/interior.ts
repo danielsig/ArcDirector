@@ -1,18 +1,14 @@
-import { type GameObject } from '@arc-director/kindling';
+import { inBounds, type GameObject } from '@arc-director/kindling';
 import { Door, Interior, Lock, Named } from '../engine/components';
 import type { DemoWorld } from '../engine/demo-world';
 import { passageWhereabouts } from './passages';
 
 const DOORWAY = 0.7;
 
-export function interiorContains(box:Interior, x:number, z:number):boolean {
-	return x >= box.minX && x < box.maxX && z >= box.minZ && z < box.maxZ;
-}
-
 export function enclosureAt(world:DemoWorld, x:number, z:number):GameObject | undefined {
 	let hit:GameObject | undefined;
 	world.forEachComponent(Interior, (box, go) => {
-		if (!hit && interiorContains(box, x, z)) {
+		if (!hit && inBounds(box.bounds, x, z)) {
 			hit = go;
 		}
 	});
@@ -47,8 +43,8 @@ export function doorInteriorAlong(doorGo:GameObject):number {
 		return 0;
 	}
 	const t = doorGo.transform.position;
-	const cx = (box.minX + box.maxX) * 0.5;
-	const cz = (box.minZ + box.maxZ) * 0.5;
+	const cx = (box.bounds.minX + box.bounds.maxX) * 0.5;
+	const cz = (box.bounds.minZ + box.bounds.maxZ) * 0.5;
 	const side = door.axis === 'x' ? cx - t.x : cz - t.z;
 	if (Math.abs(side) < 1e-4) {
 		return 0;
@@ -140,8 +136,8 @@ export function whereabouts(character:GameObject):string {
 		if (box.room) {
 			return;
 		}
-		const cx = (box.minX + box.maxX) * 0.5;
-		const cz = (box.minZ + box.maxZ) * 0.5;
+		const cx = (box.bounds.minX + box.bounds.maxX) * 0.5;
+		const cz = (box.bounds.minZ + box.bounds.maxZ) * 0.5;
 		const d = Math.hypot(cx - p.x, cz - p.z);
 		if (d < nearD) {
 			nearD = d;

@@ -1,10 +1,10 @@
-import { yawToward } from '@arc-director/kindling';
+import { yawToward, distanceXZ, type XZ } from '@arc-director/kindling';
 import { CELL_SIZE, CHUNK_SIZE, TILE_HEIGHT } from './constants';
 import type { DemoChunk } from './demo-chunk';
 import { findBuildings, type DoorAnchor } from './buildings';
 import { solidAt, straightRun, WALL_THICKNESS } from './thin-wall';
 import { showsWater } from './sand';
-import type { DemoWorld } from '../engine/demo-world';
+import type { DemoWorld, StepOn } from '../engine/demo-world';
 
 /**
  * Where scene dressing goes: the props around a wooden house, the path from its door to the
@@ -184,16 +184,14 @@ function chunkAt(chunks:DemoChunk[], x:number, z:number):DemoChunk | undefined {
 	return undefined;
 }
 
-type Cell = { x:number; z:number };
-
 function lawnAt(chunks:DemoChunk[], x:number, z:number):boolean {
 	const tile = chunkAt(chunks, x, z)?.tileAtWorld(x, z);
 	return !!tile && !tile.blocked && tile.def === 'grass';
 }
 
 /** The lawn tile in front of the bridge span nearest `from`. */
-function bridgeApproach(chunks:DemoChunk[], from:Cell):Cell | undefined {
-	let best:Cell | undefined;
+function bridgeApproach(chunks:DemoChunk[], from:XZ):XZ | undefined {
+	let best:XZ | undefined;
 	let bestD = Infinity;
 	for (const chunk of chunks) {
 		for (const ent of chunk.entities) {
@@ -203,7 +201,7 @@ function bridgeApproach(chunks:DemoChunk[], from:Cell):Cell | undefined {
 			const span = chunk.worldCellCenter(ent.localX, ent.localZ);
 			for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]] as const) {
 				const c = { x: span.x + dx * CELL_SIZE, z: span.z + dz * CELL_SIZE };
-				const d = Math.hypot(c.x - from.x, c.z - from.z);
+				const d = distanceXZ(c, from);
 				if (d < bestD && lawnAt(chunks, c.x, c.z)) {
 					best = c;
 					bestD = d;
@@ -215,11 +213,11 @@ function bridgeApproach(chunks:DemoChunk[], from:Cell):Cell | undefined {
 }
 
 /** Straight run of cells from `a` to `b` along one axis, both ends included; empty if any is not lawn. */
-function run(chunks:DemoChunk[], a:Cell, b:Cell):Cell[] {
+function run(chunks:DemoChunk[], a:XZ, b:XZ):XZ[] {
 	const steps = Math.round((Math.abs(b.x - a.x) + Math.abs(b.z - a.z)) / CELL_SIZE);
 	const sx = Math.sign(b.x - a.x) * CELL_SIZE;
 	const sz = Math.sign(b.z - a.z) * CELL_SIZE;
-	const cells:Cell[] = [];
+	const cells:XZ[] = [];
 	for (let i = 0; i <= steps; i++) {
 		const c = { x: a.x + sx * i, z: a.z + sz * i };
 		if (!lawnAt(chunks, c.x, c.z)) {
@@ -234,7 +232,7 @@ function run(chunks:DemoChunk[], a:Cell, b:Cell):Cell[] {
  * Path from the door: out from the house, turn halfway, then on to the bridge (an L, never a
  * staircase). Without a reachable bridge it runs straight out until the lawn ends.
  */
-export function roadCells(chunks:DemoChunk[], door:DoorAnchor):Cell[] {
+export function roadCells(chunks:DemoChunk[], door:DoorAnchor):XZ[] {
 	const start = { x: door.x + door.dx * CELL_SIZE, z: door.z + door.dz * CELL_SIZE };
 	const target = bridgeApproach(chunks, start);
 	if (target && door.dx === 0 && Math.sign(target.z - start.z) === door.dz) {
@@ -248,7 +246,7 @@ export function roadCells(chunks:DemoChunk[], door:DoorAnchor):Cell[] {
 			}
 		}
 	}
-	const cells:Cell[] = [];
+	const cells:XZ[] = [];
 	for (let c = start; cells.length < 24 && lawnAt(chunks, c.x, c.z); c = { x: c.x + door.dx * CELL_SIZE, z: c.z + door.dz * CELL_SIZE }) {
 		cells.push(c);
 	}
@@ -256,18 +254,18 @@ export function roadCells(chunks:DemoChunk[], door:DoorAnchor):Cell[] {
 }
 
 /** A straight stretch of road center line, from `a` to `b` (the same point for a lone cell). */
-export type RoadLine = { a:Cell; b:Cell };
+export type RoadLine = { a:XZ; b:XZ };
 
 /**
  * Each house's door and its road (`roadCells`), then each trailhead (a `trail` tile, `out` toward the open lawn) and
  * its road: straight out across the lawn until it meets another road.
  */
-function roadsOf(chunks:DemoChunk[]):{ door:DoorAnchor; cells:Cell[] }[] {
+function roadsOf(chunks:DemoChunk[]):{ door:DoorAnchor; cells:XZ[] }[] {
 	const roads = findBuildings(chunks).map(({ out }) => ({ door: out, cells: roadCells(chunks, out) }));
-	const key = (c:Cell):string => `${Math.round(c.x)},${Math.round(c.z)}`;
+	const key = (c:XZ):string => `${Math.round(c.x)},${Math.round(c.z)}`;
 	for (const head of trailheads(chunks)) {
 		const taken = new Set(roads.flatMap((r) => r.cells).map(key));
-		const cells:Cell[] = [];
+		const cells:XZ[] = [];
 		for (let c = { x: head.x + head.dx * CELL_SIZE, z: head.z + head.dz * CELL_SIZE }; lawnAt(chunks, c.x, c.z) && !taken.has(key(c)); c = { x: c.x + head.dx * CELL_SIZE, z: c.z + head.dz * CELL_SIZE }) {
 			cells.push(c);
 		}
@@ -295,7 +293,7 @@ function trailheads(chunks:DemoChunk[]):DoorAnchor[] {
 }
 
 /** Every road cell, from every door. */
-export function allRoadCells(chunks:Iterable<DemoChunk>):Cell[] {
+export function allRoadCells(chunks:Iterable<DemoChunk>):XZ[] {
 	return roadsOf([...chunks]).flatMap((road) => road.cells);
 }
 
@@ -316,7 +314,7 @@ export function roadLines(chunks:Iterable<DemoChunk>):RoadLine[] {
 		.map((e) => chunk.worldCellCenter(e.localX, e.localZ))
 		.map((c) => key(c.x, c.z))));
 	/** How far the road runs from cell `c` toward `d`: a whole cell to another road cell, half to a door or span, else none. */
-	const reach = (c:Cell, [dx, dz]:readonly [number, number]):number => {
+	const reach = (c:XZ, [dx, dz]:readonly [number, number]):number => {
 		const x = c.x + dx * CELL_SIZE;
 		const z = c.z + dz * CELL_SIZE;
 		if (byKey.has(key(x, z))) {
@@ -368,7 +366,7 @@ function smoothMin(a:number, b:number, k:number):number {
 	return Math.min(a, b) - (h * h * k) / 4;
 }
 
-export function segmentDistance(p:{ x:number; z:number }, a:{ x:number; z:number }, b:{ x:number; z:number }):number {
+export function segmentDistance(p:XZ, a:XZ, b:XZ):number {
 	const dx = b.x - a.x;
 	const dz = b.z - a.z;
 	const len2 = dx * dx + dz * dz;
@@ -392,16 +390,14 @@ export function syncRoadStep(world:DemoWorld):void {
 	const xs = lines.flatMap((l) => [l.a.x, l.b.x]);
 	const zs = lines.flatMap((l) => [l.a.z, l.b.z]);
 	const pad = ROAD_HALF_WIDTH + ROAD_FILLET;
-	const step = {
-		a: { x: Math.min(...xs) - pad, z: Math.min(...zs) - pad },
-		b: { x: Math.max(...xs) + pad, z: Math.max(...zs) + pad },
-		sample: (x:number, z:number) => world.tileAtWorld(x, z)?.def === 'grass' && roadInside(lines, x, z) >= 0 ? ROAD_Y : undefined,
+	const step:StepOn = {
+		bounds: { minX: Math.min(...xs) - pad, maxX: Math.max(...xs) + pad, minZ: Math.min(...zs) - pad, maxZ: Math.max(...zs) + pad },
+		sample: (x, z) => world.tileAtWorld(x, z)?.def === 'grass' && roadInside(lines, x, z) >= 0 ? ROAD_Y : undefined,
 	};
-	const host = world as DemoWorld & { [roadSteps]?:{ a:{ x:number; z:number }; b:{ x:number; z:number }; sample:(x:number, z:number)=>number | undefined } };
+	const host = world as DemoWorld & { [roadSteps]?:StepOn };
 	const prev = host[roadSteps];
 	if (prev) {
-		prev.a = step.a;
-		prev.b = step.b;
+		prev.bounds = step.bounds;
 		prev.sample = step.sample;
 		return;
 	}
@@ -627,7 +623,7 @@ function glyphYaw(chunk:DemoChunk, lx:number, lz:number):number {
  * put the props' backs (half `depth` behind their origin) flat against it, and face them away.
  * `heights` lifts each prop (e.g. jars onto the shelf). Nothing within a meter and a half: none placed.
  */
-function onWall(chunks:DemoChunk[], props:PropID[], p:{ x:number; z:number }, depth:number, heights:number[] = []):DressingProp[] {
+function onWall(chunks:DemoChunk[], props:PropID[], p:XZ, depth:number, heights:number[] = []):DressingProp[] {
 	const step = 0.05;
 	let best:{ x:number; z:number; yaw:number; d:number } | undefined;
 	for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]] as const) {
@@ -649,7 +645,7 @@ function onWall(chunks:DemoChunk[], props:PropID[], p:{ x:number; z:number }, de
 }
 
 /** Lawn under a circle of `radius`, off the path, and at least a meter from water. */
-function openGround(chunks:DemoChunk[], road:{ x:number; z:number }[], x:number, z:number, radius:number):boolean {
+function openGround(chunks:DemoChunk[], road:XZ[], x:number, z:number, radius:number):boolean {
 	const onRoad = (px:number, pz:number):boolean => road.some((c) => Math.abs(c.x - px) < 0.5 + radius && Math.abs(c.z - pz) < 0.5 + radius);
 	if (onRoad(x, z)) {
 		return false;

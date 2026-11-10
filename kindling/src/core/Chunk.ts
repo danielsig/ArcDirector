@@ -1,8 +1,11 @@
+import type { ChunkCoord, LocalCoord } from './tile-coord.js';
+import type { XZ } from './xz.js';
+
 /** A square of `size` × `size` tiles at chunk coordinate `origin`. Tiles are row-major (`localZ * size + localX`). */
 export class Chunk<T = unknown> {
 	constructor(
 		public readonly id:string,
-		public readonly origin:{ cx:number; cz:number },
+		public readonly origin:ChunkCoord,
 		/** Tiles per side. */
 		public readonly size:number,
 		/** Meters per tile. */
@@ -39,14 +42,14 @@ export class Chunk<T = unknown> {
 		return this.tile(localX, localZ);
 	}
 
-	public worldCellCenter(localX:number, localZ:number):{ x:number; z:number } {
+	public worldCellCenter(localX:number, localZ:number):XZ {
 		return {
 			x: this.worldOriginX() + (localX + 0.5) * this.cellSize,
 			z: this.worldOriginZ() + (localZ + 0.5) * this.cellSize,
 		};
 	}
 
-	public worldToLocal(x:number, z:number):{ localX:number; localZ:number } {
+	public worldToLocal(x:number, z:number):LocalCoord {
 		return {
 			localX: Math.floor((x - this.worldOriginX()) / this.cellSize),
 			localZ: Math.floor((z - this.worldOriginZ()) / this.cellSize),

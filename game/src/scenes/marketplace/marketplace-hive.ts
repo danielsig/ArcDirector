@@ -1,4 +1,4 @@
-import { type GameObject } from '@arc-director/kindling';
+import { type GameObject, type XZ } from '@arc-director/kindling';
 import type { CharacterSpec } from 'arc-director';
 import { Door, MarketNPC, Named } from '../../engine/components';
 import { DemoMeshRenderer } from '../../engine/demo-mesh-renderer';
@@ -39,7 +39,7 @@ export const MARKET_SEEDS:CharacterSpec[] = SELLERS.map(vendorSeed);
  * Where a guard stands: one meter inside the gate and one meter off the opening, so the pair flanks the
  * door. The opening itself stays clear for people walking out.
  */
-export function guardPost(world:DemoWorld, guard:GameObject):{ x:number; z:number } | undefined {
+export function guardPost(world:DemoWorld, guard:GameObject):XZ | undefined {
 	const npc = guard.getComponent(MarketNPC);
 	if (npc?.kind !== 'guard' || !npc.leaveGate) {
 		return undefined;

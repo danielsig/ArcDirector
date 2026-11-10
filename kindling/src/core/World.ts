@@ -4,6 +4,9 @@ import { Audio } from '../audio/Audio.js';
 import * as THREE from 'three';
 import { BoxCollider } from './BoxCollider.js';
 import { blockerAt, type BlockerOpts } from './physics.js';
+import type { Bounds } from './bounds.js';
+import type { ChunkCoord, TileCoord } from './tile-coord.js';
+import type { XZ } from './xz.js';
 import type { Component } from './Component.js';
 import type { GameObject } from './GameObject.js';
 import type { ChunkType, Constructor, TileType } from './core-types.js';
@@ -20,23 +23,20 @@ export type TerrainSample = {
 	 * wall through it). Bodies collide with these and may stand in the rest of the tile; routes and sight still
 	 * go by `blocked`.
 	 */
-	solids?:readonly ChunkBounds[];
+	solids?:readonly Bounds[];
 };
 
 const NONE:readonly GameObject[] = [];
 const pos = new THREE.Vector3();
 
-/** World XZ box, in meters. */
-export type ChunkBounds = { minX:number; minZ:number; maxX:number; maxZ:number };
-
 /** World XZ box around `chunks`, or `undefined` when there are none. */
-export function chunkBounds(chunks:Iterable<ChunkType>):ChunkBounds | undefined {
-	let bounds:ChunkBounds | undefined;
+export function chunkBounds(chunks:Iterable<ChunkType>):Bounds | undefined {
+	let bounds:Bounds | undefined;
 	for (const chunk of chunks) {
 		const x = chunk.worldOriginX();
 		const z = chunk.worldOriginZ();
 		const span = chunk.size * chunk.cellSize;
-		bounds ??= { minX: x, minZ: z, maxX: x + span, maxZ: z + span };
+		bounds ??= { minX: x, maxX: x + span, minZ: z, maxZ: z + span };
 		bounds.minX = Math.min(bounds.minX, x);
 		bounds.minZ = Math.min(bounds.minZ, z);
 		bounds.maxX = Math.max(bounds.maxX, x + span);
@@ -78,19 +78,19 @@ export class World {
 	}
 
 	/** Tile coordinate of a world XZ point (`tileSize`, or 1 when 0). */
-	public tileCoordAt(x:number, z:number):{ tx:number; tz:number } {
+	public tileCoordAt(x:number, z:number):TileCoord {
 		const size = this.tileSize || 1;
 		return { tx: Math.floor(x / size), tz: Math.floor(z / size) };
 	}
 
 	/** World XZ center of tile `(tx, tz)`. */
-	public tileCenter(tx:number, tz:number):{ x:number; z:number } {
+	public tileCenter(tx:number, tz:number):XZ {
 		const size = this.tileSize || 1;
 		return { x: (tx + 0.5) * size, z: (tz + 0.5) * size };
 	}
 
 	/** Chunk coordinate of a world XZ point. */
-	public chunkCoordAt(x:number, z:number):{ cx:number; cz:number } {
+	public chunkCoordAt(x:number, z:number):ChunkCoord {
 		const span = this.chunkSize * (this.tileSize || 1);
 		return { cx: Math.floor(x / span), cz: Math.floor(z / span) };
 	}
@@ -108,7 +108,7 @@ export class World {
 	}
 
 	/** World XZ box around every loaded chunk, or `undefined` when none is. The whole scene: `ChunkStreamer.bounds`. */
-	public chunkBounds():ChunkBounds | undefined {
+	public chunkBounds():Bounds | undefined {
 		return chunkBounds(this.chunks.values());
 	}
 
@@ -219,12 +219,12 @@ export class World {
 		return this._tiles.get(tileKey(tx, tz)) ?? NONE;
 	}
 
-	/** Every object whose collider may overlap the XZ box, plus the uncollided ones centered in it. Check exactly. */
-	public forEachNear(minX:number, minZ:number, maxX:number, maxZ:number, fn:(go:GameObject)=>void):void {
+	/** Every object whose collider may overlap `area`, plus the uncollided ones centered in it. Check exactly. */
+	public forEachNear(area:Bounds, fn:(go:GameObject)=>void):void {
 		const size = this.tileSize || 1;
 		const r = this._reach;
-		for (let tz = Math.floor((minZ - r) / size); tz <= Math.floor((maxZ + r) / size); tz++) {
-			for (let tx = Math.floor((minX - r) / size); tx <= Math.floor((maxX + r) / size); tx++) {
+		for (let tz = Math.floor((area.minZ - r) / size); tz <= Math.floor((area.maxZ + r) / size); tz++) {
+			for (let tx = Math.floor((area.minX - r) / size); tx <= Math.floor((area.maxX + r) / size); tx++) {
 				for (const go of this.objectsInTile(tx, tz)) {
 					fn(go);
 				}

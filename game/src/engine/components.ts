@@ -8,7 +8,9 @@ import {
 	Rigidbody,
 	Time,
 	Component,
+	type Bounds,
 	type GameObject,
+	type XZ,
 } from '@arc-director/kindling';
 import { pascalCase } from 'arc-director';
 import { Order } from './order';
@@ -145,7 +147,7 @@ export abstract class Barrier extends Component {
 	public abstract whyBlocked(body:GameObject):string;
 
 	/** Whether someone at `from` clears it just by walking up, so a route may go through it. */
-	public opensFrom(_from:{ x:number; z:number }):boolean {
+	public opensFrom(_from:XZ):boolean {
 		return false;
 	}
 
@@ -192,7 +194,7 @@ export class Door extends Barrier {
 	}
 
 	/** Whether someone at `from` can open it: no lock holds it, or its lock bars only the other side. Opening leaves the lock as it is. */
-	public override opensFrom(from:{ x:number; z:number }):boolean {
+	public override opensFrom(from:XZ):boolean {
 		const lock = this.gameObject.getComponent(Lock);
 		if (!lock?.locked) {
 			return true;
@@ -213,12 +215,9 @@ export class Door extends Barrier {
 	}
 }
 
-/** Walkable AABB of a named building, or of a `room` (world XZ, walls excluded). */
+/** A named building, or a `room`: the walkable box inside it (walls excluded). */
 export class Interior extends Component {
-	public minX = 0;
-	public maxX = 0;
-	public minZ = 0;
-	public maxZ = 0;
+	public bounds:Bounds = { minX: 0, maxX: 0, minZ: 0, maxZ: 0 };
 	/** A room of a larger place (a crypt hall), not a building with an outdoors around it. */
 	public room = false;
 }
@@ -249,7 +248,7 @@ export class Bridge extends Barrier {
 	public open = false;
 	/** While it holds, a lowered span may not be raised: someone has paid for it to stay down. A scene sets it. */
 	public paidDown:()=>boolean = () => false;
-	public cells:{ x:number; z:number }[] = [];
+	public cells:XZ[] = [];
 	/** Mid-swing lift; undefined when the span rests where `open` says. */
 	private _swing:number | undefined;
 
@@ -261,8 +260,12 @@ export class Bridge extends Barrier {
 		const xs = this.cells.map((c) => c.x);
 		const zs = this.cells.map((c) => c.z);
 		world.addStepOn({
-			a: { x: Math.min(...xs) - CELL_SIZE / 2, z: Math.min(...zs) - CELL_SIZE / 2 },
-			b: { x: Math.max(...xs) + CELL_SIZE / 2, z: Math.max(...zs) + CELL_SIZE / 2 },
+			bounds: {
+				minX: Math.min(...xs) - CELL_SIZE / 2,
+				maxX: Math.max(...xs) + CELL_SIZE / 2,
+				minZ: Math.min(...zs) - CELL_SIZE / 2,
+				maxZ: Math.max(...zs) + CELL_SIZE / 2,
+			},
 			sample: (x, z) => this.enabled && this.open && this.cells.some((c) => Math.abs(c.x - x) < 0.55 && Math.abs(c.z - z) < 0.55) ? BRIDGE_DECK_Y : undefined,
 		});
 	}

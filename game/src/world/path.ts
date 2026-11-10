@@ -1,5 +1,5 @@
 import type { PathStep, RouteWorld, Vec } from 'arc-director';
-import type { GameObject } from '@arc-director/kindling';
+import { SIDE_OFFSETS, distanceXZ, type GameObject, type TileCoord, type XZ } from '@arc-director/kindling';
 import { Barrier, HumanBody } from '../engine/components';
 import type { DemoWorld } from '../engine/demo-world';
 import { CELL_SIZE } from './constants';
@@ -40,8 +40,8 @@ function alongClimb(world:DemoWorld, a:Vec, b:Vec):boolean {
 			return true;
 		}
 		const { localX, localZ } = chunk.worldToLocal(x, z);
-		const up = stairUphill(chunk, localX, localZ);
-		return (dx === up.dx && dz === up.dz) || (dx === -up.dx && dz === -up.dz);
+		const up = SIDE_OFFSETS[stairUphill(chunk, localX, localZ)];
+		return (dx === up.tx && dz === up.tz) || (dx === -up.tx && dz === -up.tz);
 	};
 	return along(from.tx, from.tz) && along(to.tx, to.tz);
 }
@@ -74,13 +74,11 @@ function stops(world:DemoWorld, what:'light' | 'sound', tx:number, tz:number):bo
 	return (hit === 'terrain' ? world.tileAtWorld(x, z)?.def !== 'water' : !!hit) || (what === 'light' && !!characterIn(world, tx, tz));
 }
 
-type Cell = { tx:number; tz:number };
-
 /**
  * Grid DDA from `a` to `b`: each step from one cell to the next, to `pass`, with the corner cells of a diagonal step,
  * until one does not pass.
  */
-function alongLine(world:DemoWorld, a:{ x:number; z:number }, b:{ x:number; z:number }, pass:(from:Cell, to:Cell, corners:Cell[])=>boolean):boolean {
+function alongLine(world:DemoWorld, a:XZ, b:XZ, pass:(from:TileCoord, to:TileCoord, corners:TileCoord[])=>boolean):boolean {
 	const start = world.tileCoordAt(a.x, a.z);
 	const end = world.tileCoordAt(b.x, b.z);
 	const dx = b.x - a.x;
@@ -95,10 +93,10 @@ function alongLine(world:DemoWorld, a:{ x:number; z:number }, b:{ x:number; z:nu
 	let tMaxZ = stepZ === 0
 		? Infinity
 		: ((stepZ > 0 ? start.tz + 1 : start.tz) * CELL_SIZE - a.z) / dz;
-	let from:Cell = { tx: start.tx, tz: start.tz };
+	let from = start;
 	while (from.tx !== end.tx || from.tz !== end.tz) {
-		let to:Cell;
-		let corners:Cell[] = [];
+		let to:TileCoord;
+		let corners:TileCoord[] = [];
 		if (tMaxX < tMaxZ) {
 			to = { tx: from.tx + stepX, tz: from.tz };
 			tMaxX += tDeltaX;
@@ -122,15 +120,15 @@ function alongLine(world:DemoWorld, a:{ x:number; z:number }, b:{ x:number; z:nu
 }
 
 /** Whether `what` goes straight from `a` to `b`. Their own cells never stop it, so no one hides themselves or the one looking. */
-export function lineClear(world:DemoWorld, what:'light' | 'sound', a:{ x:number; z:number }, b:{ x:number; z:number }):boolean {
+export function lineClear(world:DemoWorld, what:'light' | 'sound', a:XZ, b:XZ):boolean {
 	const end = world.tileCoordAt(b.x, b.z);
-	const solid = ({ tx, tz }:Cell) => stops(world, what, tx, tz);
+	const solid = ({ tx, tz }:TileCoord) => stops(world, what, tx, tz);
 	return alongLine(world, a, b, (_, to, corners) => !corners.some(solid) && ((to.tx === end.tx && to.tz === end.tz) || !solid(to)));
 }
 
 /** Whether `body` could walk straight from `a` to `b`, every step open: no wall, no web, no shut door on the line. */
-export function walkClear(world:DemoWorld, body:GameObject, a:{ x:number; z:number }, b:{ x:number; z:number }):boolean {
-	const center = ({ tx, tz }:Cell):Vec => {
+export function walkClear(world:DemoWorld, body:GameObject, a:XZ, b:XZ):boolean {
+	const center = ({ tx, tz }:TileCoord):Vec => {
 		const { x, z } = world.tileCenter(tx, tz);
 		return [x, z];
 	};
@@ -181,18 +179,18 @@ const STANDABLE_RINGS = 2;
  * that it has. For spots worked out by geometry (a rank line, a guard's screen), which may fall in a wall.
  * `point` when none is near.
  */
-export function standableNear(world:DemoWorld, body:GameObject, point:{ x:number; z:number }):{ x:number; z:number } {
+export function standableNear(world:DemoWorld, body:GameObject, point:XZ):XZ {
 	const standable = (x:number, z:number) => canStand(world, body, x, z);
 	if (standable(point.x, point.z)) {
 		return point;
 	}
 	const { tx, tz } = world.tileCoordAt(point.x, point.z);
 	for (let ring = 1; ring <= STANDABLE_RINGS; ring++) {
-		let best:{ x:number; z:number } | undefined;
+		let best:XZ | undefined;
 		for (let dz = -ring; dz <= ring; dz++) {
 			for (let dx = -ring; dx <= ring; dx++) {
 				const c = world.tileCenter(tx + dx, tz + dz);
-				const closer = !best || Math.hypot(c.x - point.x, c.z - point.z) < Math.hypot(best.x - point.x, best.z - point.z);
+				const closer = !best || distanceXZ(c, point) < distanceXZ(best, point);
 				if (Math.max(Math.abs(dx), Math.abs(dz)) === ring && closer && standable(c.x, c.z)) {
 					best = c;
 				}

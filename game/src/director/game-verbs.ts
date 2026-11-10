@@ -1,5 +1,5 @@
 import { Regen } from '../engine/Regen';
-import { Time, type GameObject } from '@arc-director/kindling';
+import { Time, distanceXZ, type GameObject, type XZ } from '@arc-director/kindling';
 import { CharacterAnimation } from '../characters/CharacterAnimation';
 import { CharacterPose } from '../characters/CharacterPose';
 import { FIREBALL_SPEED } from '../render/spell-fx';
@@ -35,7 +35,6 @@ import {
 } from '../engine/components';
 import type { DemoWorld } from '../engine/demo-world';
 import {
-	distXZ,
 	findCarried,
 	removeFromBags,
 	slotItem,
@@ -172,7 +171,7 @@ function nearestFree(character:GameObject, kind:Furniture['kind'], fits:(seat:Ga
 	let best:GameObject | undefined;
 	character.world?.forEachComponent(Furniture, (furniture, go) => {
 		const free = !furniture.occupant || furniture.occupant === character;
-		if (furniture.kind === kind && free && fits(go) && (!best || distXZ(character, go) < distXZ(character, best))) {
+		if (furniture.kind === kind && free && fits(go) && (!best || distanceXZ(character, go) < distanceXZ(character, best))) {
 			best = go;
 		}
 	});
@@ -190,7 +189,7 @@ async function restOn(call:Call, seat:GameObject, opts:Parameters<Seated['settle
 		const spot = approachSpot(seat, body);
 		const walk = await (spot ? call.goToPoint([spot.x, spot.z]) : call.goTo(name));
 		// In a tight room there may be no route to step along. Within arm's reach, it needs none.
-		if (!walk.ok && (walk.interrupted || distXZ(body, seat) > USE_RANGE)) {
+		if (!walk.ok && (walk.interrupted || distanceXZ(body, seat) > USE_RANGE)) {
 			return { ...walk, verb: call.verb };
 		}
 	}
@@ -389,7 +388,7 @@ export function markReach(host:GameHost, viewer:GameObject, sight:Sight):Sight {
 			if (!isRival(host, viewer, other)) {
 				return other !== viewer && fightRole(host, other) ? { ...o, note: o.note ? `yours; ${o.note}` : 'yours' } : o;
 			}
-			return { ...o, inReach: distXZ(viewer, other) <= attack.range && (attack.cover !== 'block' || combatSight(host.world, viewer, other)) };
+			return { ...o, inReach: distanceXZ(viewer, other) <= attack.range && (attack.cover !== 'block' || combatSight(host.world, viewer, other)) };
 		}),
 	};
 }
@@ -414,24 +413,24 @@ async function closeTo(host:GameHost, call:Call, target:GameObject, range:number
 	const slot = useRank ? rankSlot(host, character) : undefined;
 	if (slot && (isBackRole(role) || isFrontRole(role))) {
 		const here = character.transform.position;
-		if (Math.hypot(here.x - slot.x, here.z - slot.z) > RANK_ARRIVE) {
+		if (distanceXZ(here, slot) > RANK_ARRIVE) {
 			const walk = await call.goToPoint([slot.x, slot.z]);
 			if (walk.interrupted) {
 				return walk;
 			}
 		}
-		if (distXZ(character, target) <= range + 0.5) {
+		if (distanceXZ(character, target) <= range + 0.5) {
 			return { ok: true };
 		}
 	}
 	const close = Math.max(0.9, range - 0.6);
-	if (distXZ(character, target) > close) {
+	if (distanceXZ(character, target) > close) {
 		const walk = await call.goTo(idOf(target), { within: close });
 		if (!walk.ok) {
 			return walk;
 		}
 	}
-	if (distXZ(character, target) > range + 0.5) {
+	if (distanceXZ(character, target) > range + 0.5) {
 		return { ok: false, reason: 'too far' };
 	}
 	return { ok: true };
@@ -444,7 +443,7 @@ export async function doRank(host:GameHost, call:Call):Promise<ArcResult> {
 		return { ok: false, verb: 'rank', reason: 'no line' };
 	}
 	const here = call.ctx.character.transform.position;
-	if (Math.hypot(here.x - slot.x, here.z - slot.z) <= RANK_ARRIVE) {
+	if (distanceXZ(here, slot) <= RANK_ARRIVE) {
 		const hold = await call.wait(0.35);
 		if (!hold.ok) {
 			return { ...hold, verb: 'rank' };
@@ -655,7 +654,7 @@ function rollBlow(
 	weapon:{ damage:number; range:number } | undefined,
 ):Blow {
 	const npc = ctx.npc;
-	if (distXZ(ctx.character, target) > range + 0.5) {
+	if (distanceXZ(ctx.character, target) > range + 0.5) {
 		return { landed: false, result: { ok: false, verb: attack.name, reason: 'too far', retry: true } };
 	}
 	const clear = !attack.spec.cover || combatSight(ctx.world, ctx.character, target);
@@ -684,7 +683,7 @@ function rollBlow(
 		cueAt(ctx.world, 'clash', target);
 		return { landed: true, result: { ok: true, verb: attack.name, reason: `${foe} blocked it` } };
 	}
-	const dist = distXZ(ctx.character, target);
+	const dist = distanceXZ(ctx.character, target);
 	const covered = attack.spec.cover === 'soften' && !clear;
 	let chance = vitals.evasive ? hitChance(attack.spec, dist, agilityOf(host, target)) : 1;
 	// Cover makes a spell easier to dodge, so it only weakens one cast at whoever cannot dodge.
@@ -785,7 +784,7 @@ const WARD_DANGER = 3;
  * Where to stand to screen `ward` from `threat`: anywhere on the line between them will do, at least a step out
  * from the ward. Standing on it already, where it stands; else the nearest point on it.
  */
-function screenPoint(ward:GameObject, threat:GameObject, from:{ x:number; z:number }):{ x:number; z:number } {
+function screenPoint(ward:GameObject, threat:GameObject, from:XZ):XZ {
 	const a = ward.transform.position;
 	const t = threat.transform.position;
 	const dx = t.x - a.x;
@@ -796,7 +795,7 @@ function screenPoint(ward:GameObject, threat:GameObject, from:{ x:number; z:numb
 	}
 	const along = Math.min(len, Math.max(Math.min(PROTECT_COVER, len * 0.45), ((from.x - a.x) * dx + (from.z - a.z) * dz) / len));
 	const on = { x: a.x + (dx / len) * along, z: a.z + (dz / len) * along };
-	return Math.hypot(from.x - on.x, from.z - on.z) <= SCREEN_SLACK ? { x: from.x, z: from.z } : on;
+	return distanceXZ(from, on) <= SCREEN_SLACK ? { x: from.x, z: from.z } : on;
 }
 
 /** The foe each protector is fighting, so it keeps at it rather than walking back to screen between swings. */
@@ -826,8 +825,8 @@ async function doProtect(host:GameHost, call:Call, name:string):Promise<ArcResul
 	// Still on the foe it engaged, in reach, and no other foe at the ward: keep swinging there.
 	const fighting = engaged.get(ctx.character);
 	const reach = verb ? Math.max(ATTACKS[verb].range, heldWeapon(ctx.character)?.range ?? 0) + 0.5 : 0;
-	const stay = verb && fighting && isLiving(fighting) && distXZ(ctx.character, fighting) <= reach
-		&& !(nearest && nearest !== fighting && distXZ(ward, nearest) <= WARD_DANGER);
+	const stay = verb && fighting && isLiving(fighting) && distanceXZ(ctx.character, fighting) <= reach
+		&& !(nearest && nearest !== fighting && distanceXZ(ward, nearest) <= WARD_DANGER);
 	const threat = stay ? fighting : nearest;
 	if (!threat) {
 		const walk = await call.goTo(idOf(ward), { within: 1.4 });
@@ -842,7 +841,7 @@ async function doProtect(host:GameHost, call:Call, name:string):Promise<ArcResul
 	}
 	const here = ctx.character.transform.position;
 	const screen = stay ? here : standableNear(host.world, ctx.character, screenPoint(ward, threat, here));
-	if (Math.hypot(screen.x - here.x, screen.z - here.z) > 0.55) {
+	if (distanceXZ(screen, here) > 0.55) {
 		const walk = await call.goToPoint([screen.x, screen.z]);
 		if (!walk.ok) {
 			return { ...walk, verb: 'protect' };
@@ -942,7 +941,7 @@ async function doHeal(host:GameHost, call:Call, name:string):Promise<ArcResult> 
 	}
 	const healed = target;
 	// Walked out of reach while it is cast, the heal is broken off then, not wasted at the end.
-	const outOfRange = ():string | undefined => (healed !== ctx.character && distXZ(ctx.character, healed) > HEAL.range + 0.5 ? 'out of range' : undefined);
+	const outOfRange = ():string | undefined => (healed !== ctx.character && distanceXZ(ctx.character, healed) > HEAL.range + 0.5 ? 'out of range' : undefined);
 	const held = await holdReady(call, Time.time, npc.healReadyTimestamp, HEAL.castTime, () => {
 		ctx.character.getComponent(CharacterAnimation)?.strike('heal', HEAL.castTime, healed);
 	}, outOfRange);
@@ -963,7 +962,7 @@ function landHeal(host:GameHost, ctx:CharacterCtx, id:string, healed:GameObject)
 		if (isRival(host, ctx.character, target)) {
 			return { ok: false, verb: 'heal', reason: 'heal your party, not the enemy' };
 		}
-		if (distXZ(ctx.character, target) > HEAL.range + 0.5) {
+		if (distanceXZ(ctx.character, target) > HEAL.range + 0.5) {
 			return { ok: false, verb: 'heal', reason: 'too far' };
 		}
 	}

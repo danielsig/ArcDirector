@@ -1,3 +1,4 @@
+import { distanceXZ, type XZ } from '@arc-director/kindling';
 import { DemoMeshRenderer } from '../engine/demo-mesh-renderer';
 import type { DemoWorld } from '../engine/demo-world';
 import { SFX } from './sfx';
@@ -52,9 +53,9 @@ function nearestRiver(
 	world:DemoWorld,
 	px:number,
 	pz:number,
-	falls:{ x:number; z:number }[],
-):{ x:number; z:number } | null {
-	let best:{ x:number; z:number } | null = null;
+	falls:XZ[],
+):XZ | null {
+	let best:XZ | null = null;
 	let bestScore = RIVER_HEAR;
 	for (const chunk of world.chunks.values()) {
 		chunk.forEachTile((tile, lx, lz) => {
@@ -62,7 +63,7 @@ function nearestRiver(
 				return;
 			}
 			const c = chunk.worldCellCenter(lx, lz);
-			if (falls.some((f) => Math.hypot(f.x - c.x, f.z - c.z) < FALLS_CLEAR)) {
+			if (falls.some((f) => distanceXZ(f, c) < FALLS_CLEAR)) {
 				return;
 			}
 			const d = Math.hypot(c.x - px, c.z - pz);

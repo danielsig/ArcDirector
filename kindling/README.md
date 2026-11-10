@@ -99,7 +99,7 @@ Override `onStart` for one-off setup when the loop begins.
 | `forEachComponent(ctor, fn)` | Calls `fn` with one component per object, disabled ones included. |
 | `tileCoordAt(x, z)` / `tileCenter(tx, tz)` | Converts between world XZ and tile coordinates (using `tileSize`, or 1 when it is 0). |
 | `objectsInTile(tx, tz)` | Spatial hash lookup: the objects whose position falls in that tile (using `tileSize`, or 1 when it is 0). |
-| `forEachNear(minX, minZ, maxX, maxZ, fn)` | Broad phase: every object whose `BoxCollider` may overlap the XZ box. Check the exact overlap yourself. |
+| `forEachNear(area, fn)` | Broad phase: every object whose `BoxCollider` may overlap `area` (a `Bounds`). Check the exact overlap yourself. |
 | `blocker(body, x, z, { from?, above? })` | What `body` would run into standing at that point, by the same tests physics pushes bodies out with: a solid collider with no `Rigidbody`, else `'terrain'` (a blocked tile's solids, or ground it cannot step to `from` where it is), else nothing. With `from`, whatever it would run into on the straight way from there counts too, except what it already touches, which it may leave. Plan routes with it and they are walkable. Bodies slide around a cylinder, so it stops one only over the body's middle. With `body` null, what stands at the point itself; `above` keeps to colliders taller than that (what one sees past). |
 | `reindex()` | Rebuilds the spatial hash. Physics does this once per step, after moving things, so queries see positions (and added or removed objects) as they were at that step. |
 
@@ -139,6 +139,17 @@ A `Transform` wraps a `THREE.Object3D` (`transform.object3D`). `position` is a w
 | `scale` (uniform) | `localScale` |
 
 `forward` is Kindling's forward, **−Z**. Assigning `parent` keeps the world position and rotation.
+
+### Ground-plane types
+
+The ground is XZ, and these name its shapes. A function that only reads a point takes two numbers (`tileAtWorld(x, z)`, `inBounds(box, x, z)`); one that stores, returns or forwards one takes an `XZ`.
+
+| | |
+|--|--|
+| `XZ`, `distanceXZ(a, b)` | A point or direction on the ground, `{ x, z }`, and the ground distance between two points or GameObjects (a GameObject counts at its position). A `Transform.position` is an `XZ` too. |
+| `Bounds`, `inBounds(box, x, z)` | A box on the ground, `{ minX, maxX, minZ, maxZ }`: a chunk, a collider's footprint, `TerrainSample.solids`. `inBounds` holds `min` up to, not at, `max`. |
+| `TileCoord`, `ChunkCoord`, `LocalCoord` | A tile `{ tx, tz }`, a chunk `{ cx, cz }`, a tile inside its chunk `{ localX, localZ }`. Not points: `tileCenter` and `worldCellCenter` make one. |
+| `Side`, `SIDES`, `SIDE_OFFSETS`, `opposite(side)` | A side of a tile (`north` is −Z), the four clockwise from north, one tile toward each as a `TileCoord`, and the side across. |
 
 ---
 

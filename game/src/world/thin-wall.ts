@@ -1,4 +1,4 @@
-import type { ChunkBounds } from '@arc-director/kindling';
+import { inBounds, SIDE_OFFSETS, SIDES, type Bounds, type Side } from '@arc-director/kindling';
 import { CELL_SIZE } from './constants';
 import type { DemoChunk, Tile } from './demo-chunk';
 
@@ -18,11 +18,6 @@ export const WALL_THICKNESS = 0.16;
 /** The opening of a `window` tile: its width along the wall, and its sill and head heights. */
 export const WINDOW = { width: 0.64, sill: 0.95, top: 1.8 } as const;
 
-/** North, east, south, west. */
-const SIDES = [[0, -1], [1, 0], [0, 1], [-1, 0]] as const;
-
-export type Side = (typeof SIDES)[number];
-
 /** Whether a wall runs on into this cell: any wall but water, or a doorway. */
 function joinsWall(chunk:DemoChunk, lx:number, lz:number):boolean {
 	const tile = chunk.tile(lx, lz);
@@ -32,19 +27,19 @@ function joinsWall(chunk:DemoChunk, lx:number, lz:number):boolean {
 
 /** The sides a thin wall runs out to from the middle of its cell. */
 export function wallSides(chunk:DemoChunk, lx:number, lz:number):Side[] {
-	return SIDES.filter(([dx, dz]) => joinsWall(chunk, lx + dx, lz + dz));
+	return SIDES.filter((side) => joinsWall(chunk, lx + SIDE_OFFSETS[side].tx, lz + SIDE_OFFSETS[side].tz));
 }
 
 /** A run straight through the cell (west–east or north–south), as a window needs; else `undefined`. */
 export function straightRun(chunk:DemoChunk, lx:number, lz:number):'x' | 'z' | undefined {
-	const sides = wallSides(chunk, lx, lz).map(([dx, dz]) => `${dx},${dz}`).sort().join(' ');
-	return sides === '-1,0 1,0' ? 'x' : sides === '0,-1 0,1' ? 'z' : undefined;
+	const sides = wallSides(chunk, lx, lz).join(' ');
+	return sides === 'east west' ? 'x' : sides === 'north south' ? 'z' : undefined;
 }
 
-const cache = new WeakMap<DemoChunk, Map<number, ChunkBounds[]>>();
+const cache = new WeakMap<DemoChunk, Map<number, Bounds[]>>();
 
 /** The wall's solid boxes, world XZ: an arm from the middle out to each side it runs to (a post when none). */
-export function thinWallBoxes(chunk:DemoChunk, lx:number, lz:number):ChunkBounds[] {
+export function thinWallBoxes(chunk:DemoChunk, lx:number, lz:number):Bounds[] {
 	let byCell = cache.get(chunk);
 	if (!byCell) {
 		byCell = new Map();
@@ -56,8 +51,8 @@ export function thinWallBoxes(chunk:DemoChunk, lx:number, lz:number):ChunkBounds
 		const c = chunk.worldCellCenter(lx, lz);
 		const t = WALL_THICKNESS / 2;
 		const r = CELL_SIZE / 2;
-		const sides:readonly (readonly [number, number])[] = wallSides(chunk, lx, lz);
-		boxes = (sides.length > 0 ? sides : [[0, 0] as const]).map(([dx, dz]) => ({
+		const arms = wallSides(chunk, lx, lz).map((side) => SIDE_OFFSETS[side]);
+		boxes = (arms.length > 0 ? arms : [{ tx: 0, tz: 0 }]).map(({ tx: dx, tz: dz }) => ({
 			minX: c.x + (dx < 0 ? -r : -t),
 			maxX: c.x + (dx > 0 ? r : t),
 			minZ: c.z + (dz < 0 ? -r : -t),
@@ -78,16 +73,16 @@ export function solidAt(chunk:DemoChunk, x:number, z:number):boolean {
 		return true;
 	}
 	const { localX, localZ } = chunk.worldToLocal(x, z);
-	return thinWallBoxes(chunk, localX, localZ).some((b) => x >= b.minX && x < b.maxX && z >= b.minZ && z < b.maxZ);
+	return thinWallBoxes(chunk, localX, localZ).some((b) => inBounds(b, x, z));
 }
 
 /** The side of a cell a wall stands on (east, west, south, then north), for what is set against it; none when open all round. */
-export function wallSide(chunk:DemoChunk, lx:number, lz:number):readonly [number, number] | undefined {
-	return ([[1, 0], [-1, 0], [0, 1], [0, -1]] as const).find(([dx, dz]) => chunk.tile(lx + dx, lz + dz)?.blocked);
+export function wallSide(chunk:DemoChunk, lx:number, lz:number):Side | undefined {
+	return (['east', 'west', 'south', 'north'] as const).find((side) => chunk.tile(lx + SIDE_OFFSETS[side].tx, lz + SIDE_OFFSETS[side].tz)?.blocked);
 }
 
 /** One quarter of a thin-wall cell's floor, world XZ, and the floor tile it continues. */
-export type FloorQuarter = { tile:Tile; x0:number; z0:number; x1:number; z1:number };
+export type FloorQuarter = { tile:Tile; bounds:Bounds };
 
 /**
  * The floor either side of a thin wall: each quarter of the cell continues the open floor beside it (the cell
@@ -103,7 +98,13 @@ export function wallFloors(chunk:DemoChunk, lx:number, lz:number):FloorQuarter[]
 				.map(([dx, dz]) => chunk.tile(lx + dx!, lz + dz!))
 				.find((tile) => tile && !tile.blocked);
 			if (open) {
-				out.push({ tile: open, x0: Math.min(c.x, c.x + qx * r), z0: Math.min(c.z, c.z + qz * r), x1: Math.max(c.x, c.x + qx * r), z1: Math.max(c.z, c.z + qz * r) });
+				const bounds = {
+					minX: Math.min(c.x, c.x + qx * r),
+					maxX: Math.max(c.x, c.x + qx * r),
+					minZ: Math.min(c.z, c.z + qz * r),
+					maxZ: Math.max(c.z, c.z + qz * r),
+				};
+				out.push({ tile: open, bounds });
 			}
 		}
 	}

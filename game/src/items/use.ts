@@ -1,7 +1,7 @@
-import { type GameObject } from '@arc-director/kindling';
+import { distanceXZ, type GameObject } from '@arc-director/kindling';
 import { BrewHearth, Bridge, BridgeLever, Chest, Door, Flammable, HumanBody, Lock, Named, Sickbed, Vitals } from '../engine/components';
 import { equipItem, itemInHeldSlot } from './equip';
-import { characterIs, distXZ, findCarried, healCharacter, inBackpack, removeFromBags, tryInsert } from './inventory';
+import { characterIs, findCarried, healCharacter, inBackpack, removeFromBags, tryInsert } from './inventory';
 import { instantiateDef, type ItemInstance } from './instance';
 import { getDef } from './defs';
 import { keyNameFor, lockedReason } from './pickup';
@@ -83,7 +83,7 @@ function brewAtHearth(character:GameObject, item:ItemInstance):UseResult {
 /** Whether `target` is within reach of weapon `item` swung (or shot) with `verb`: the longer of the two. */
 export function inReach(character:GameObject, item:ItemInstance, target:GameObject, verb?:string):boolean {
 	const spec = verb ? ATTACKS[verb] : undefined;
-	return distXZ(character, target) <= Math.max(item.Weapon?.range ?? 0, spec?.range ?? 0);
+	return distanceXZ(character, target) <= Math.max(item.Weapon?.range ?? 0, spec?.range ?? 0);
 }
 
 /**

@@ -1,9 +1,10 @@
+import type { XZ } from '@arc-director/kindling';
 import { TILE_HEIGHT, WALL_HEIGHT } from '../../world/constants';
 import type { EntityLegend, TerrainLegend } from '../../world/decode-glyph-chunk';
 
 const CLIFF = WALL_HEIGHT / TILE_HEIGHT;
 
-function water(flow:{ x:number; z:number } = { x: 0, z: 0 }):TerrainLegend {
+function water(flow:XZ = { x: 0, z: 0 }):TerrainLegend {
 	return { def: 'water', height: 0, blocked: true, flow };
 }
 

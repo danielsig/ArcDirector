@@ -1,4 +1,4 @@
-import { GameObject } from '@arc-director/kindling';
+import { GameObject, type XZ } from '@arc-director/kindling';
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { findRoute, pointGoal, type Vec } from 'arc-director';
@@ -14,7 +14,7 @@ import { USE_RANGE } from '../items/pickup';
 import { decodeGlyphChunk } from './decode-glyph-chunk';
 import { spawnChunkEntities } from './spawn';
 import { syncDressingColliders } from './dressing-colliders';
-import { cellWays, standableNear } from './path';
+import { cellWays, standableNear, walkClear } from './path';
 
 test('in the ruins, no route ends inside a wall or a pillar, yet a pillar is reached from beside it', () => {
 	const world = new DemoWorld();
@@ -78,7 +78,7 @@ test('a stair is a neighbor only along its climb, not from the side', () => {
 	const beside = chunk.worldCellCenter(3, 6);
 	const foot = chunk.worldCellCenter(2, 5);
 	const landing = chunk.worldCellCenter(2, 7);
-	const has = (from:{ x:number; z:number }, to:{ x:number; z:number }) => ways.getNeighbors([from.x, from.z]).some(([x, z]) => x === to.x && z === to.z);
+	const has = (from:XZ, to:XZ) => ways.getNeighbors([from.x, from.z]).some(([x, z]) => x === to.x && z === to.z);
 	assert.equal(has(beside, stair), false);
 	assert.equal(has(stair, beside), false);
 	assert.equal(has(foot, stair), true);
@@ -87,4 +87,22 @@ test('a stair is a neighbor only along its climb, not from the side', () => {
 	assert.ok(ways.canPass(walker, [foot.x, foot.z], [stair.x, stair.z]));
 	const up = findRoute(ways, walker, [foot.x, foot.z], pointGoal([landing.x, landing.z]));
 	assert.ok(up && 'points' in up, 'no way up the stairs from the foot');
+});
+
+test('a walk along a wall and past its corner is clear, one through the wall is not', () => {
+	const world = new DemoWorld();
+	for (const file of RUINS_CHUNKS) {
+		world.addChunk(decodeGlyphChunk(file).chunk);
+	}
+	world.reindex();
+	const walker = new GameObject('Walker', 'Person');
+	walker.addComponent(BoxCollider, { size: { x: 0.45, y: 1.1, z: 0.45 }, pad: 0.36 });
+	// Glyph row 8 of the ruins: a low wall from column 27 to 30, its west end a corner where it turns south. Row 7
+	// above it is open floor. Each step is checked from cell center to cell center, half a meter from the wall's face;
+	// a probe half a meter off the center, toward the wall, would stand on that face.
+	assert.equal(world.tileAtWorld(27.5, 8.5)?.blocked, true);
+	assert.equal(world.tileAtWorld(27.5, 7.5)?.blocked, false);
+	assert.ok(walkClear(world, walker, { x: 24.5, z: 7.5 }, { x: 33.5, z: 7.5 }), 'stopped walking along the wall');
+	assert.ok(walkClear(world, walker, { x: 26.5, z: 9.5 }, { x: 25.5, z: 6.5 }), 'stopped walking past its corner');
+	assert.equal(walkClear(world, walker, { x: 25.5, z: 9.5 }, { x: 28.5, z: 9.5 }), false, 'walked through the wall');
 });

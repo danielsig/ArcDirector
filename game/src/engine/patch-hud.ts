@@ -1,4 +1,4 @@
-import { MeshRenderer, Time, humanBone, type GameObject, type Renderer } from '@arc-director/kindling';
+import { MeshRenderer, Time, humanBone, distanceXZ, type GameObject, type Renderer } from '@arc-director/kindling';
 import * as THREE from 'three';
 import { markRaw } from 'vue';
 import { PlayerInput } from '../characters/PlayerInput';
@@ -7,7 +7,7 @@ import { HumanBody, Appearance, Camera, Merchant, Named, SpeechBubble, Vitals, W
 import type { DemoWorld } from './demo-world';
 import { CELL_SIZE, CHUNK_SIZE } from '../world/constants';
 import { Container, Item } from '../items/item-components';
-import { allEquipped, countDef, distXZ, listCarried, slotItem } from '../items/inventory';
+import { allEquipped, countDef, listCarried, slotItem } from '../items/inventory';
 import { coinsOf } from '../items/wallet';
 import { isBackpack, type ItemInstance } from '../items/instance';
 import { nearestPickup, pickupLabel } from '../items/pickup';
@@ -702,7 +702,7 @@ function inspectTarget(world:DemoWorld, view:Renderer):GameObject | undefined {
 	let best:GameObject | undefined;
 	let bestDist = INSPECT_NEAR;
 	world.forEachComponent(HumanBody, (body, go) => {
-		const d = distXZ(player, go);
+		const d = distanceXZ(player, go);
 		if (inspectable(go) && d <= bestDist && inView(player, yaw, go)) {
 			best = go;
 			bestDist = d;

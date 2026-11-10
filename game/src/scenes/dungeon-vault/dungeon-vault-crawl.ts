@@ -1,10 +1,10 @@
-import { GameObject, Time } from '@arc-director/kindling';
+import { GameObject, Time, distanceXZ, inBounds } from '@arc-director/kindling';
 import { ArcDirector, parseArc, type CharacterSpec, type CollectiveSpec, type Goal, type LawSpec, type MemoryDraft, type SpeechUtterance } from 'arc-director';
 import { Confine } from '../../characters/Confine';
 import { Leash } from '../../characters/Leash';
 import { Celebrating, Door, Inscription, Lock, Named, Vitals } from '../../engine/components';
 import { cueAt } from '../../audio/cue';
-import { distXZ, findCarried, itemMatchesName } from '../../items/inventory';
+import { findCarried, itemMatchesName } from '../../items/inventory';
 import type { GameHost } from '../../director/adapter';
 import { ATTACKS, HEAL } from '../../director/fight';
 import { findObject, idOf, isLiving } from '../../director/names';
@@ -418,10 +418,11 @@ function lairsOf(host:GameHost):Map<string, string[]> {
 
 function addLairs(host:GameHost, director:ArcDirector<CharacterCtx>):void {
 	for (const room of host.rooms) {
-		const { minX, maxX, minZ, maxZ } = roomBounds(room);
+		const bounds = roomBounds(room);
+		const { minX, maxX, minZ, maxZ } = bounds;
 		const lair = (HORDE.characters ?? []).filter(({ id }) => {
 			const p = findObject(host.world, id)?.transform.position;
-			return !!p && p.x >= minX && p.x <= maxX && p.z >= minZ && p.z <= maxZ;
+			return !!p && inBounds(bounds, p.x, p.z);
 		});
 		if (lair.length === 0) {
 			continue;
@@ -430,7 +431,7 @@ function addLairs(host:GameHost, director:ArcDirector<CharacterCtx>):void {
 		for (const { id } of lair) {
 			const go = findObject(host.world, id);
 			if (go) {
-				Object.assign(go.getOrAddComponent(Confine), { minX, maxX, minZ, maxZ });
+				go.getOrAddComponent(Confine).bounds = bounds;
 			}
 		}
 		const living = ():typeof lair => lair.filter(({ id }) => isLiving(findObject(host.world, id)));
@@ -516,7 +517,7 @@ function goals(host:GameHost):SceneGoals {
 function onSpoke(host:GameHost, utterance:SpeechUtterance):void {
 	const speaker = findObject(host.world, utterance.speakerID);
 	const door = host.world.findNamed('SealedDoor');
-	if (!speaker || !door || !ANSWER.test(utterance.text) || distXZ(speaker, door) > ANSWER_REACH) {
+	if (!speaker || !door || !ANSWER.test(utterance.text) || distanceXZ(speaker, door) > ANSWER_REACH) {
 		return;
 	}
 	openDoor(host, 'SealedDoor', 'The riddle is answered. SealedDoor grinds open');

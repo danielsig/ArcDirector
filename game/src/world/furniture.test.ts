@@ -1,4 +1,4 @@
-import { GameObject, resetTime, stepPhysics, Time } from '@arc-director/kindling';
+import { GameObject, resetTime, stepPhysics, Time, distanceXZ } from '@arc-director/kindling';
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { findRoute, pointGoal } from 'arc-director';
@@ -184,7 +184,7 @@ for (const [house, door, chair, bed, from] of [['Cottage', 'CottageDoor', 'Cotta
 			const go = body(world, `Walker${name}`, from[0], from[1]);
 			const seat = world.findByID(name)!;
 			const end = walkTo(world, go, seat);
-			const off = Math.hypot(end.x - seat.transform.position.x, end.z - seat.transform.position.z);
+			const off = distanceXZ(end, seat);
 			assert.ok(off <= USE_RANGE * 0.55 + 0.4, `stuck at ${end.x.toFixed(2)}, ${end.z.toFixed(2)}, ${off.toFixed(2)} m off ${name}, on ${JSON.stringify(end.points)}`);
 			world.remove(go);
 			world.reindex();
@@ -208,7 +208,7 @@ test('BridgeKeeper carries one key, and the spare lies hidden by the woodpile', 
 	assert.ok(keeper.packLoot?.some((loot) => loot.name === 'CottageKey' && loot.defID === 'brass_key'));
 	const spare = world.findNamed('SpareKey')!.transform.position;
 	const pile = planProps([...world.chunks.values()]).find((spot) => spot.prop === 'woodpile')!;
-	assert.ok(Math.hypot(spare.x - pile.x, spare.z - pile.z) < 1.2, `the spare is not by the woodpile: ${spare.x}, ${spare.z} and ${pile.x}, ${pile.z}`);
+	assert.ok(distanceXZ(spare, pile) < 1.2, `the spare is not by the woodpile: ${spare.x}, ${spare.z} and ${pile.x}, ${pile.z}`);
 	assert.equal(world.objects.filter((go) => go.getComponent(Named)?.id === 'CottageKey').length, 0, 'only the spare lies about');
 });
 
@@ -241,7 +241,7 @@ test('someone settled holds the seat and is not solid; getting up frees both', (
 	for (let i = 0; i < 100; i++) {
 		seated.lateUpdate(0.02);
 	}
-	assert.ok(Math.hypot(go.transform.position.x - seat.transform.position.x, go.transform.position.z - seat.transform.position.z) < 1e-6, 'off its seat');
+	assert.ok(distanceXZ(go, seat) < 1e-6, 'off its seat');
 	seated.stand();
 	assert.equal(seated.resting, false);
 	assert.equal(seated.held, true, 'still getting up');

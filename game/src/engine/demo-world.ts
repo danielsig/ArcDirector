@@ -1,4 +1,4 @@
-import { World, Time, type Component, type Constructor, type GameObject, type TerrainSample } from '@arc-director/kindling';
+import { World, Time, inBounds, SIDE_OFFSETS, type Bounds, type Component, type Constructor, type GameObject, type TerrainSample, type XZ } from '@arc-director/kindling';
 import { Named } from './components';
 import type { DemoChunk, Tile } from '../world/demo-chunk';
 import { CELL_SIZE, CHUNK_SIZE, TILE_HEIGHT } from '../world/constants';
@@ -26,9 +26,8 @@ function nameQuery(name:string):{ want:string; compact:string } {
 	return { want: s, compact: s.replace(/[^a-z0-9]/g, '') };
 }
 
-type XZ = { x:number; z:number };
-/** Opposite corners, and the height at a point inside them, or nothing when the point is not on it. */
-export type StepOn = { a:XZ; b:XZ; sample:(x:number, z:number)=>number | undefined };
+/** A box, and the height at a point inside it, or nothing when the point is not on it. */
+export type StepOn = { bounds:Bounds; sample:(x:number, z:number)=>number | undefined };
 
 type NameIndex = {
 	time:number;
@@ -43,7 +42,7 @@ type NameIndex = {
 
 export class DemoWorld extends World {
 	/** Where the mouse points on the ground (the crosshair while the pointer is locked). Set by `GroundPick`. */
-	public groundHit:{ x:number; z:number } | null = null;
+	public groundHit:XZ | null = null;
 	public hudMessage = '';
 	public hudMessageTimestamp = 0;
 	public hudMessageLife = 3.2;
@@ -93,10 +92,7 @@ export class DemoWorld extends World {
 
 	private cover(x:number, z:number):number | undefined {
 		for (const step of [...this.stepOn, ...this.stairs()]) {
-			if (x < step.a.x || x > step.b.x || z < step.a.z || z > step.b.z) {
-				continue;
-			}
-			const y = step.sample(x, z);
+			const y = inBounds(step.bounds, x, z) ? step.sample(x, z) : undefined;
 			if (y !== undefined) {
 				return y;
 			}
@@ -118,12 +114,11 @@ export class DemoWorld extends World {
 				const x0 = chunk.worldOriginX() + lx * CELL_SIZE;
 				const z0 = chunk.worldOriginZ() + lz * CELL_SIZE;
 				list.push({
-					a: { x: x0, z: z0 },
-					b: { x: x0 + CELL_SIZE, z: z0 + CELL_SIZE },
+					bounds: { minX: x0, maxX: x0 + CELL_SIZE, minZ: z0, maxZ: z0 + CELL_SIZE },
 					sample: (x, z) => {
-						const up = stairUphill(chunk, lx, lz);
-						const along = up.dx ? x - chunk.worldOriginX() - lx * CELL_SIZE : z - chunk.worldOriginZ() - lz * CELL_SIZE;
-						const t = Math.min(0.999, Math.max(0, (up.dx + up.dz < 0 ? CELL_SIZE - along : along) / CELL_SIZE));
+						const up = SIDE_OFFSETS[stairUphill(chunk, lx, lz)];
+						const along = up.tx ? x - chunk.worldOriginX() - lx * CELL_SIZE : z - chunk.worldOriginZ() - lz * CELL_SIZE;
+						const t = Math.min(0.999, Math.max(0, (up.tx + up.tz < 0 ? CELL_SIZE - along : along) / CELL_SIZE));
 						return Math.max(0, tile.height - 1) * TILE_HEIGHT + (Math.floor(t * 4) + 1) / 4 * TILE_HEIGHT;
 					},
 				});

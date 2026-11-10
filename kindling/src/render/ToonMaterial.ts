@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { patchCapsuleShadows } from './capsule-shadows.js';
 import { underInk } from './OutlinePass.js';
 import { patchShader } from './shader.js';
+import type { XZ } from '../core/xz.js';
 
 /**
  * Drawn surface detail, computed from world position so it needs no texture or UVs.
@@ -26,7 +27,7 @@ export type ToonMaterialParameters = THREE.MeshToonMaterialParameters & {
 	/** Brick length in meters, staggered by half each course. Default two side courses. */
 	brickLength?:number;
 	/** Direction courses count along on flat tops (rows run across it). Default +z. Stairs point it uphill so each tread continues the brick course below it. */
-	topAxis?:{ x:number; z:number };
+	topAxis?:XZ;
 	/** How dark pattern lines are, 0 (none) to 1 (black). */
 	patternInk?:number;
 	/** Darkens a face as its normal's Y approaches 0. 0 leaves it, 1 is black on a vertical face. */

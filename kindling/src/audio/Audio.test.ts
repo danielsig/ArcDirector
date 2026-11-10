@@ -6,7 +6,8 @@ import { overdriveSample, reverbTapTimes } from './filters.js';
 import { Speaker } from './Speaker.js';
 import { scoreProblems } from './midi.js';
 import { midiHz, pitched, varied } from './synth.js';
-import { distanceGain, forwardXZ, heardAt } from './spatial.js';
+import { distanceGain, heardAt } from './spatial.js';
+import { yawToForward } from '../core/math.js';
 import type { Score } from './audio-types.js';
 import { Game } from '../core/Game.js';
 import { GameObject } from '../core/GameObject.js';
@@ -49,13 +50,13 @@ describe('Audio', () => {
 	});
 
 	it('yaw 0 faces -Z', () => {
-		const f = forwardXZ(0);
+		const f = yawToForward(0);
 		assert.ok(Math.abs(f.x) < 1e-9);
 		assert.ok(Math.abs(f.z + 1) < 1e-9);
 	});
 
 	it('yaw π/2 faces -X', () => {
-		const f = forwardXZ(Math.PI / 2);
+		const f = yawToForward(Math.PI / 2);
 		assert.ok(Math.abs(f.x + 1) < 1e-9);
 		assert.ok(Math.abs(f.z) < 1e-9);
 	});

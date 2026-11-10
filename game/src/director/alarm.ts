@@ -1,7 +1,6 @@
-import { Time, type GameObject } from '@arc-director/kindling';
+import { Time, distanceXZ, type GameObject } from '@arc-director/kindling';
 import type { SpeechUtterance } from 'arc-director';
 import { Alarm, MarketNPC, Wanted } from '../engine/components';
-import { distXZ } from '../items/inventory';
 import { USE_RANGE } from '../items/pickup';
 import type { GameHost } from './adapter';
 import { findObject, idOf } from './names';
@@ -66,7 +65,7 @@ export function answerCries(host:GameHost):void {
 			alarm.enabled = false;
 			return;
 		}
-		const guard = guards.find((go) => distXZ(go, crier) <= USE_RANGE);
+		const guard = guards.find((go) => distanceXZ(go, crier) <= USE_RANGE);
 		if (!guard) {
 			return;
 		}

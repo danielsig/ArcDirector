@@ -1,4 +1,4 @@
-import { Component } from '@arc-director/kindling';
+import { Component, type XZ } from '@arc-director/kindling';
 import type { ExprVal } from 'arc-director';
 import { Camera } from './components';
 import { Order } from './order';
@@ -18,7 +18,7 @@ export class CameraFocus extends Component {
 	public static override order = Order.camera;
 	public director!:GameHost;
 	public expr = '';
-	private _goal:{ x:number; z:number } | null = null;
+	private _goal:XZ | null = null;
 	private _wait = 0;
 
 	/** Camera distance from the rig, in meters (clamped to the camera's range). */
@@ -57,7 +57,7 @@ export class CameraFocus extends Component {
 		}
 	}
 
-	private middle():{ x:number; z:number } | null {
+	private middle():XZ | null {
 		const world = this.gameObject.world;
 		const ids = this.picks();
 		if (!world || !Array.isArray(ids)) {

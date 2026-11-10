@@ -1,4 +1,4 @@
-import { Chunk } from '@arc-director/kindling';
+import { Chunk, type XZ, type ChunkCoord } from '@arc-director/kindling';
 import { CELL_SIZE, CHUNK_SIZE } from './constants';
 import type { LootSpec, RoofStyle, Wake } from './decode-glyph-chunk';
 
@@ -10,7 +10,7 @@ export type Tile = {
 	height:number;
 	blocked:boolean;
 	/** World XZ current; zero or omitted is still water. */
-	flow?:{ x:number; z:number };
+	flow?:XZ;
 };
 
 export type ChunkEntity = {
@@ -40,7 +40,7 @@ export class DemoChunk extends Chunk<Tile> {
 	/** Cells a `SOLID_PROPS` prop stands on. Filled on first query; decode pushes entities after `new Chunk`. */
 	private _props:Set<number> | null = null;
 
-	constructor(id:string, origin:{ cx:number; cz:number }, tiles:Tile[], entities:ChunkEntity[]) {
+	constructor(id:string, origin:ChunkCoord, tiles:Tile[], entities:ChunkEntity[]) {
 		super(id, origin, CHUNK_SIZE, CELL_SIZE, tiles);
 		this.entities = entities;
 	}

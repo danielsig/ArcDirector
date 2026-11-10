@@ -1,8 +1,7 @@
-import { Time, type GameObject } from '@arc-director/kindling';
+import { Time, distanceXZ, type GameObject } from '@arc-director/kindling';
 import { type ArcResult, type SpeechUtterance, type VerbCall } from 'arc-director';
 import { HumanBody, Named } from '../engine/components';
 import type { DemoWorld } from '../engine/demo-world';
-import { distXZ } from '../items/inventory';
 import { coinsOf } from '../items/wallet';
 import { parseSlash, type ParsedSlash, type SayCatalog } from '../ui/say-commands';
 import type { GameHost } from './adapter';
@@ -30,7 +29,7 @@ export function inTalkRange(world:DemoWorld, speakerID:string, listenerID:string
 	if (!speaker || !listener || speaker === listener) {
 		return false;
 	}
-	return distXZ(speaker, listener) <= HEAR_RANGE;
+	return distanceXZ(speaker, listener) <= HEAR_RANGE;
 }
 
 export function nearbyTalkPeers(world:DemoWorld, speakerID:string):string[] {
@@ -43,7 +42,7 @@ export function nearbyTalkPeers(world:DemoWorld, speakerID:string):string[] {
 		if (go === speaker || !go.getComponent(HumanBody)) {
 			continue;
 		}
-		const d = distXZ(speaker, go);
+		const d = distanceXZ(speaker, go);
 		if (d <= TALK_RANGE) {
 			hits.push({ name: idOf(go), d });
 		}

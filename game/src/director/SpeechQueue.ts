@@ -1,7 +1,6 @@
-import { Speaker, Time, type GameObject } from '@arc-director/kindling';
+import { Speaker, Time, distanceXZ, type GameObject } from '@arc-director/kindling';
 import { SpeechBubble } from '../engine/components';
 import type { DemoWorld } from '../engine/demo-world';
-import { distXZ } from '../items/inventory';
 import { prefs } from '../prefs';
 import { HEAR_RANGE } from './talk-attend';
 
@@ -48,7 +47,7 @@ export class SpeechQueue {
 			if (line.go.world !== this._world) {
 				continue;
 			}
-			const near = (other:GameObject):boolean => distXZ(line.go, other) <= HEAR_RANGE;
+			const near = (other:GameObject):boolean => distanceXZ(line.go, other) <= HEAR_RANGE;
 			if (this._speaking.some((s) => near(s.go)) || held.some((h) => near(h.go))) {
 				held.push(line);
 				continue;

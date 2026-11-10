@@ -1,4 +1,4 @@
-import { Time, type GameObject } from '@arc-director/kindling';
+import { Time, type GameObject, type XZ } from '@arc-director/kindling';
 import type { MapMark, MapPrev, MapSnapshot } from 'arc-director';
 import {
 	Bridge,
@@ -57,7 +57,7 @@ export function snapshotMap(
 	npcID:string,
 	zoom:number,
 	prev?:MapPrev,
-	origin?:{ x:number; z:number },
+	origin?:XZ,
 ):MapSnapshot | { image:string } | null {
 	const go = world.findByID(npcID);
 	const p = origin ?? go?.transform.position;
@@ -115,7 +115,7 @@ function worldBounds(world:DemoWorld):Bounds | null {
 	};
 }
 
-function nearBounds(world:DemoWorld, npcID:string, origin?:{ x:number; z:number }):Bounds | null {
+function nearBounds(world:DemoWorld, npcID:string, origin?:XZ):Bounds | null {
 	const p = origin ?? world.findByID(npcID)?.transform.position;
 	if (!p || world.chunks.size === 0) {
 		return null;
@@ -134,7 +134,7 @@ function mix(a:number, b:number, t:number):number {
 	return a + (b - a) * t;
 }
 
-function viewBounds(world:DemoWorld, npcID:string, zoom:number, origin?:{ x:number; z:number }):Bounds | null {
+function viewBounds(world:DemoWorld, npcID:string, zoom:number, origin?:XZ):Bounds | null {
 	const far = worldBounds(world);
 	const close = nearBounds(world, npcID, origin);
 	if (!far) {
@@ -183,7 +183,7 @@ function collectMarks(
 	npcID:string,
 	detail:boolean,
 	bounds:Bounds,
-	origin?:{ x:number; z:number },
+	origin?:XZ,
 ):MapMark[] {
 	const out:MapMark[] = [];
 	const seen = new Set<string>();

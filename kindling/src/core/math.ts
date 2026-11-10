@@ -1,3 +1,5 @@
+import type { XZ } from './xz.js';
+
 export function clamp(v:number, lo:number, hi:number):number {
 	return Math.max(lo, Math.min(hi, v));
 }
@@ -15,7 +17,7 @@ export function lerpAngle(a:number, b:number, t:number):number {
 }
 
 /** Unit ground direction a yaw faces. Yaw 0 faces -Z. */
-export function yawToForward(yaw:number):{ x:number; z:number } {
+export function yawToForward(yaw:number):XZ {
 	return {
 		x: -Math.sin(yaw),
 		z: -Math.cos(yaw),

@@ -1,4 +1,4 @@
-import { lerpAngle, yawToward, Component } from '@arc-director/kindling';
+import { lerpAngle, yawToward, Component, type XZ } from '@arc-director/kindling';
 import { Belly } from '../engine/Belly';
 import { RigidBody, Appearance, Vitals } from '../engine/components';
 import { Order } from '../engine/order';
@@ -25,21 +25,21 @@ const HEAD_ON = 0.7;
 export class CharacterMotor extends Component {
 	public static override order = Order.motor;
 	public destinationName:string | null = null;
-	public destinationPoint:{ x:number; z:number } | null = null;
+	public destinationPoint:XZ | null = null;
 	public arriveEpsilon = 0.35;
 	public maxSpeed = 3.4;
 	/** Distance accumulated toward the next plant. Rests halfway, where a fresh `walk` clip plants. */
 	private _stepPhase = WALK_STRIDE / 2;
 	/** Seconds to ease body yaw toward WASD. Staggers A+S release so we keep ~8, not 6 or 9. */
 	private static readonly _faceTurn = 0.09;
-	private _heading:{ x:number; z:number } | null = null;
+	private _heading:XZ | null = null;
 	/** Seconds walking without getting anywhere. */
 	private _heldFor = 0;
 	/** Stepping right past an oncoming walker. */
 	private _passing = false;
 
 	/** Unit direction this character means to walk this frame (not a sidestep), or `null` standing. */
-	public get heading():{ x:number; z:number } | null {
+	public get heading():XZ | null {
 		return this._heading;
 	}
 
@@ -162,7 +162,8 @@ export class CharacterMotor extends Component {
 	private oncoming(ux:number, uz:number):boolean {
 		const p = this.gameObject.transform.position;
 		let found = false;
-		this.gameObject.world?.forEachNear(p.x - ONCOMING_REACH, p.z - ONCOMING_REACH, p.x + ONCOMING_REACH, p.z + ONCOMING_REACH, (go) => {
+		const near = { minX: p.x - ONCOMING_REACH, maxX: p.x + ONCOMING_REACH, minZ: p.z - ONCOMING_REACH, maxZ: p.z + ONCOMING_REACH };
+		this.gameObject.world?.forEachNear(near, (go) => {
 			const other = go === this.gameObject ? null : go.getComponent(CharacterMotor)?.heading;
 			if (found || !other || other.x * ux + other.z * uz > -HEAD_ON) {
 				return;
@@ -187,7 +188,7 @@ export class CharacterMotor extends Component {
 		);
 	}
 
-	private resolveDestination():{ x:number; z:number } | null {
+	private resolveDestination():XZ | null {
 		if (this.destinationPoint) {
 			return this.destinationPoint;
 		}

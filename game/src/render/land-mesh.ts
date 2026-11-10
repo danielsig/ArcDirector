@@ -1,10 +1,10 @@
-import { hash, underInk } from '@arc-director/kindling';
+import { hash, inBounds, SIDE_OFFSETS, underInk, distanceXZ, type Bounds, type XZ } from '@arc-director/kindling';
 import * as THREE from 'three';
 import type { DemoChunk, Tile } from '../world/demo-chunk';
 import { CELL_SIZE, TILE_HEIGHT, WALL_HEIGHT } from '../world/constants';
-import { landOf, LANDFORMS, type Land, type LandRect, type Outskirts, type Rect } from '../world/land';
+import { landOf, LANDFORMS, type Land, type LandRect, type Outskirts } from '../world/land';
 import { sandField, showsWater } from '../world/sand';
-import { bankUV, finishRock, finishYMesh, makeYBuf, pushGround, pushRockFace, pushWaterBox, type Point, type YBuf } from './ground-mesh';
+import { bankUV, finishRock, finishYMesh, makeYBuf, pushGround, pushRockFace, pushWaterBox, type YBuf } from './ground-mesh';
 import { CLIFF_TILE, getNature, GRASS_Y, natureReady, pieceAt, SAND_TILE, SURFACE_ORDER, toonWaterMat, WATER_LOWER_Y, WATER_UPPER_Y } from './nature';
 import { BOULDER_ACROSS } from './nature-meshes';
 import { cliffMat, dirtMat, meadowMat, sandMat, stoneFloorMat, tileMat } from './toon';
@@ -15,8 +15,6 @@ import { farCrown, treeParts } from './trees';
  * carry the edge tiles on to the horizon. Wherever two lands meet at different heights a cliff stands between
  * them (a row of `Cliff.glb` tiles sloping back into the high side), so a cliff is just high land beside low land.
  */
-
-const SIDES = [[1, 0], [-1, 0], [0, 1], [0, -1]] as const;
 
 /** A river's bed, `height` tiles up. */
 function bedY(height:number):number {
@@ -64,7 +62,7 @@ function landY(land:Land):number {
 	return land.surface === 'water' ? bedY(land.height) : land.height * TILE_HEIGHT + (land.deck ?? GRASS_Y);
 }
 
-function quad(r:Rect):Point[] {
+function quad(r:Bounds):XZ[] {
 	return [{ x: r.minX, z: r.minZ }, { x: r.maxX, z: r.minZ }, { x: r.maxX, z: r.maxZ }, { x: r.minX, z: r.maxZ }];
 }
 
@@ -73,7 +71,7 @@ type Draws = {
 	/** Riverbank sand on the land beside a river. */
 	sand:YBuf;
 	/** Where that sand lies: strips along the land's edge, left out of its ground. */
-	banks:Rect[];
+	banks:Bounds[];
 	trail:YBuf;
 	floor:YBuf;
 	lower:YBuf;
@@ -201,7 +199,7 @@ function capOutline(side:number):{ edge:number; rim:RimPoint[] } {
  * that upright plane, from the edge out along `out` to the tile's own end edge (`capOutline` of its `side`), through
  * its every vertex, so the tile's end shows rock, never sky.
  */
-function pushRockCap(d:Draws, at:Point, out:Point, y0:number, scale:number, side:number):void {
+function pushRockCap(d:Draws, at:XZ, out:XZ, y0:number, scale:number, side:number):void {
 	const first = d.rockPos.length / 3;
 	capOutline(side).rim.forEach((p, k) => {
 		const y = y0 - CLIFF_SINK + p.up * scale;
@@ -217,14 +215,14 @@ function pushRockCap(d:Draws, at:Point, out:Point, y0:number, scale:number, side
 }
 
 /** The box around `points`. */
-function boxOf(points:Point[]):Rect {
+function boxOf(points:XZ[]):Bounds {
 	const xs = points.map((c) => c.x);
 	const zs = points.map((c) => c.z);
 	return { minX: Math.min(...xs), maxX: Math.max(...xs), minZ: Math.min(...zs), maxZ: Math.max(...zs) };
 }
 
 /** `r` without `cut`, where `cut` is a strip along the whole of one of its sides (a riverbank's sand); else `r`. */
-function trim<R extends Rect>(r:R, cut:Rect):R {
+function trim<R extends Bounds>(r:R, cut:Bounds):R {
 	if (cut.minZ <= r.minZ && cut.maxZ >= r.maxZ) {
 		if (cut.minX === r.minX) {
 			return { ...r, minX: cut.maxX };
@@ -249,12 +247,12 @@ function trim<R extends Rect>(r:R, cut:Rect):R {
  * from the land's edge sloping down to under the river's bed, and rock closing the slope's ends (seen where the bank
  * meets a waterfall's lip). The land leaves its sand out of its ground (`banks`).
  */
-function pushSandBank(d:Draws, p:Point, q:Point, into:Point, y0:number, y1:number, bank:Bank):void {
+function pushSandBank(d:Draws, p:XZ, q:XZ, into:XZ, y0:number, y1:number, bank:Bank):void {
 	const foot = y0 - 0.01;
 	/** The bank's height `s` meters into the river from the edge (out over the land where below 0). */
 	const heightAt = (s:number):number => y1 - (y1 - foot) * bank.fall(s);
-	const across = (v:Point):number => -((v.x - p.x) * into.x + (v.z - p.z) * into.z);
-	const at = (v:Point, s:number):Point => ({ x: v.x - into.x * s, z: v.z - into.z * s });
+	const across = (v:XZ):number => -((v.x - p.x) * into.x + (v.z - p.z) * into.z);
+	const at = (v:XZ, s:number):XZ => ({ x: v.x - into.x * s, z: v.z - into.z * s });
 	const { breaks } = bank;
 	const from = d.sand.v;
 	for (let k = 1; k < breaks.length; k++) {
@@ -279,7 +277,7 @@ function pushSandBank(d:Draws, p:Point, q:Point, into:Point, y0:number, y1:numbe
 }
 
 /** One side of a cliff edge: its box, its surface height, and whether it is water (a river cut into its top). */
-type FaceSide = { r:Rect; y:number; water:boolean };
+type FaceSide = { r:Bounds; y:number; water:boolean };
 
 /**
  * The cliff on the shared edge of two touching boxes, from the lower surface up to the higher: a row of cliff tiles
@@ -293,8 +291,8 @@ function faceBetween(d:Draws, a:FaceSide, b:FaceSide):void {
 	const [lo, hi] = a.y < b.y ? [a, b] : [b, a];
 	const y0 = lo.y;
 	const y1 = hi.y;
-	let line:[Point, Point];
-	let into:Point;
+	let line:[XZ, XZ];
+	let into:XZ;
 	if (lo.r.maxX === hi.r.minX || lo.r.minX === hi.r.maxX) {
 		const z0 = Math.max(lo.r.minZ, hi.r.minZ);
 		const z1 = Math.min(lo.r.maxZ, hi.r.maxZ);
@@ -332,7 +330,7 @@ function faceBetween(d:Draws, a:FaceSide, b:FaceSide):void {
 	// One tile from the foot to the top, tipped upright on its foot, as wide as that makes it. Foot and lip stand on
 	// the edge, so the high ground runs right up to it; the rock bulges out over the low ground.
 	const scale = (y1 - y0 + CLIFF_SINK) / CLIFF_TILE_SIZE.up;
-	const len = Math.hypot(q.x - p.x, q.z - p.z);
+	const len = distanceXZ(q, p);
 	const across = Math.max(1, Math.round(len / (CLIFF_TILE_SIZE.across * scale)));
 	// Turn the tile's foot (+Z) away from the high side.
 	const yaw = Math.atan2(-into.x, -into.z);
@@ -370,7 +368,7 @@ function faceBetween(d:Draws, a:FaceSide, b:FaceSide):void {
 const TRAIL_TREE = 0.8;
 
 /** Packed crowns over a forest box, far from the map sparser and bigger, so no ground shows between them. */
-function scatterForest(d:Draws, r:LandRect, map:Rect, y:number, clear:Rect[]):void {
+function scatterForest(d:Draws, r:LandRect, map:Bounds, y:number, clear:Bounds[]):void {
 	const spacing = (dist:number):number => 1.7 + dist * 0.1;
 	const beyond = (v:number, lo:number, hi:number):number => Math.max(lo - v, v - hi, 0);
 	/** Centers across `lo`–`hi` from the end nearer the map: spaced by distance past `mapLo`–`mapHi`, or every `fixed` meters. */
@@ -440,7 +438,7 @@ function archTrail(d:Draws, r:LandRect, y:number):void {
  * Tops of `land` over `r`: grass, flagstones, a river, or forest floor under trees. After its faces: the ground stops
  * where a riverbank's sand starts (`banks`).
  */
-function topOf(d:Draws, r:LandRect | (Rect & Land), land:(x:number, z:number)=>boolean, map?:Rect, trails:Rect[] = [], under?:(x:number, z:number)=>number):void {
+function topOf(d:Draws, r:LandRect | (Bounds & Land), land:(x:number, z:number)=>boolean, map?:Bounds, trails:Bounds[] = [], under?:(x:number, z:number)=>number):void {
 	if (r.surface === 'water') {
 		// Up on a clifftop the river stops short of the land beside it, where its bank stands (`faceBetween`).
 		pushWaterBox(d.lower, d.upper, r, landY(r), r.height * TILE_HEIGHT + WATER_UPPER_Y, r.flow ?? { x: 0, z: 0 }, land);
@@ -558,15 +556,15 @@ export function addLandforms(group:THREE.Group, chunk:DemoChunk, tileAtWorld:(x:
 			return;
 		}
 		const c = chunk.worldCellCenter(lx, lz);
-		const cell:Rect = { minX: c.x - CELL_SIZE / 2, maxX: c.x + CELL_SIZE / 2, minZ: c.z - CELL_SIZE / 2, maxZ: c.z + CELL_SIZE / 2 };
+		const cell:Bounds = { minX: c.x - CELL_SIZE / 2, maxX: c.x + CELL_SIZE / 2, minZ: c.z - CELL_SIZE / 2, maxZ: c.z + CELL_SIZE / 2 };
 		const surface = landOf(tile, 'meadow').surface;
 		const top = surfaceY(tile);
-		for (const [dx, dz] of SIDES) {
+		for (const { tx: dx, tz: dz } of Object.values(SIDE_OFFSETS)) {
 			const n = tileAtWorld(c.x + dx * CELL_SIZE, c.z + dz * CELL_SIZE);
 			if (!n || isBlock(n) || surfaceY(n) >= top) {
 				continue;
 			}
-			const other:Rect = { minX: cell.minX + dx, maxX: cell.maxX + dx, minZ: cell.minZ + dz, maxZ: cell.maxZ + dz };
+			const other:Bounds = { minX: cell.minX + dx, maxX: cell.maxX + dx, minZ: cell.minZ + dz, maxZ: cell.maxZ + dz };
 			faceBetween(d, { r: cell, y: top, water: surface === 'water' }, { r: other, y: surfaceY(n), water: isWaterTile(n) });
 			if (top - surfaceY(n) > 1 && !showsWater(n.def) && hash(c.x + dx * 0.5, c.z + dz * 0.5, 31) > 0.45) {
 				const along = hash(c.x, c.z, 32) - 0.5;
@@ -581,23 +579,23 @@ export function addLandforms(group:THREE.Group, chunk:DemoChunk, tileAtWorld:(x:
 		topOf(d, { ...cell, surface, height: tile.height, flow: tile.flow }, isLand);
 		if (surface === 'forest' || surface === 'trail') {
 			// Shade from the treeline: clear on the side open to the glade, a tile deep on the far side.
-			const open = SIDES.filter(([dx, dz]) => {
+			const open = Object.values(SIDE_OFFSETS).filter(({ tx: dx, tz: dz }) => {
 				const n = tileAtWorld(c.x + dx, c.z + dz);
 				return !!n && !n.blocked;
 			});
 			pushShade(d, [cell.minX, cell.maxX], [cell.minZ, cell.maxZ], top, (x, z) => (
-				open.length === 0 ? CELL_SIZE : Math.min(...open.map(([dx, dz]) => (dx ? Math.abs(x - (c.x + dx * CELL_SIZE / 2)) : Math.abs(z - (c.z + dz * CELL_SIZE / 2)))))
+				open.length === 0 ? CELL_SIZE : Math.min(...open.map(({ tx: dx, tz: dz }) => (dx ? Math.abs(x - (c.x + dx * CELL_SIZE / 2)) : Math.abs(z - (c.z + dz * CELL_SIZE / 2)))))
 			));
 		}
 		if (surface === 'forest') {
 			// Two whole trees to a cell, crowns locked together; beside a trail only jittered along it, so they stay
 			// a meter from its middle, just off the cobbles.
-			const trail = SIDES.find(([dx, dz]) => tileAtWorld(c.x + dx, c.z + dz)?.def === 'trail');
+			const trail = Object.values(SIDE_OFFSETS).find(({ tx: dx, tz: dz }) => tileAtWorld(c.x + dx, c.z + dz)?.def === 'trail');
 			for (const k of [0, 1]) {
 				d.trees.push({
-					x: c.x + (hash(c.x, c.z, 40 + k) - 0.5) * (trail?.[0] ? 0.2 : 0.8),
+					x: c.x + (hash(c.x, c.z, 40 + k) - 0.5) * (trail?.tx ? 0.2 : 0.8),
 					y: tile.height * TILE_HEIGHT,
-					z: c.z + (hash(c.x, c.z, 42 + k) - 0.5) * (trail?.[1] ? 0.2 : 0.8),
+					z: c.z + (hash(c.x, c.z, 42 + k) - 0.5) * (trail?.tz ? 0.2 : 0.8),
 					s: 1 + hash(c.x, c.z, 44 + k) * 0.2,
 					yaw: hash(c.x, c.z, 46 + k) * Math.PI * 2,
 					variant: k,
@@ -655,7 +653,7 @@ function pushShade(d:Draws, xs:number[], zs:number[], y:number, depth:(x:number,
  * Shade over the outskirts' woods (and trails into them). Each grew out of a forest edge tile, so its floor is one
  * tile deeper in than the map's edge.
  */
-function shadeOutskirts(d:Draws, rects:LandRect[], map:Rect):void {
+function shadeOutskirts(d:Draws, rects:LandRect[], map:Bounds):void {
 	const beyond = (v:number, lo:number, hi:number):number => Math.max(lo - v, v - hi, 0);
 	/** `lo`, `hi`, and every meter of the first {@link SHADE_DEPTH} past the map inside them: where the shade changes. */
 	const breaks = (lo:number, hi:number, mapLo:number, mapHi:number):number[] => {
@@ -711,13 +709,12 @@ export function createOutskirts(plan:Outskirts):THREE.Group {
 	const group = new THREE.Group();
 	group.name = 'outskirts';
 	const d = makeDraws();
-	const inside = (r:Rect, x:number, z:number):boolean => x >= r.minX && x < r.maxX && z >= r.minZ && z < r.maxZ;
 	const isLand = (x:number, z:number):boolean => {
-		const r = plan.land.find((l) => inside(l, x, z));
+		const r = plan.land.find((l) => inBounds(l, x, z));
 		if (r) {
 			return r.surface !== 'water';
 		}
-		const e = plan.edge.find((c) => inside(c, x, z));
+		const e = plan.edge.find((c) => inBounds(c, x, z));
 		return !e?.tile || !(e.tile.def === 'cliff_water' || showsWater(e.tile.def));
 	};
 	plan.land.forEach((a, i) => {
@@ -745,7 +742,7 @@ export function createOutskirts(plan:Outskirts):THREE.Group {
 	for (const r of plan.land) {
 		const y = landY(r);
 		topOf(d, r, isLand, plan.map, trails, (x, z) => {
-			const tile = plan.edge.find((c) => inside(c, x, z))?.tile;
+			const tile = plan.edge.find((c) => inBounds(c, x, z))?.tile;
 			return tile ? edgeFloor(tile) ?? y : y;
 		});
 	}

@@ -1,7 +1,8 @@
 import { Component } from './Component.js';
 import type { GameObject } from './GameObject.js';
 import type { ChunkType } from './core-types.js';
-import { chunkBounds, type ChunkBounds } from './World.js';
+import { chunkBounds } from './World.js';
+import type { Bounds } from './bounds.js';
 
 /** Keeps the chunks around its object loaded. */
 export class StreamingAnchor extends Component {
@@ -30,7 +31,7 @@ export class ChunkStreamer extends Component {
 	public spawn(chunk:ChunkType):void {}
 
 	/** World XZ box around every chunk of the scene, loaded or not. */
-	public bounds():ChunkBounds | undefined {
+	public bounds():Bounds | undefined {
 		return chunkBounds(this.chunks);
 	}
 

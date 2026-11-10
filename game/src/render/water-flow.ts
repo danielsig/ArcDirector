@@ -1,7 +1,8 @@
+import type { XZ } from '@arc-director/kindling';
 import type { Tile } from '../world/demo-chunk';
 import { showsWater } from '../world/sand';
 
-export type Flow = { x:number; z:number };
+export type Flow = XZ;
 
 const ZERO:Flow = { x: 0, z: 0 };
 

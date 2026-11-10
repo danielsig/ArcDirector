@@ -1,4 +1,4 @@
-import { Time, type GameObject } from '@arc-director/kindling';
+import { Time, type GameObject, type XZ } from '@arc-director/kindling';
 import { SpeechQueue } from './SpeechQueue';
 import { ThinkShow } from './ThinkShow';
 import {
@@ -432,7 +432,7 @@ export class GameHost {
 		return out;
 	}
 
-	private lookOrigin(id:string):{ x:number; z:number } | undefined {
+	private lookOrigin(id:string):XZ | undefined {
 		if (isLiving(this.world.findByID(id) ?? findObject(this.world, id))) {
 			return undefined;
 		}

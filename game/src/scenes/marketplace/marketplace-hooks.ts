@@ -1,9 +1,9 @@
-import { Time, type GameObject } from '@arc-director/kindling';
+import { Time, distanceXZ, type GameObject } from '@arc-director/kindling';
 import { parseArc, pascalCase, STOCK_COLLECTIVE_VERBS, STOCK_FORMATION_VERBS, ArcDirector, type Kit } from 'arc-director';
 import { MarketNPC, MarketGate, Merchant, Wanted } from '../../engine/components';
 import { CharacterMotor } from '../../characters/CharacterMotor';
 import { NPCInput } from '../../characters/NPCInput';
-import { compactName, distXZ, findCarried, itemMatchesName, tryInsert } from '../../items/inventory';
+import { compactName, findCarried, itemMatchesName, tryInsert } from '../../items/inventory';
 import { dropItem, USE_RANGE } from '../../items/pickup';
 import type { GameHost, CharacterCtx } from '../../director/adapter';
 import { customerCount, guardPost, spawnRandomCustomer, MARKET_SEEDS, HIVE_UNITS, GUARD_UNITS } from './marketplace-hive';
@@ -126,7 +126,7 @@ function seizeNearby(host:GameHost):void {
 			if (!mark.enabled) {
 				return;
 			}
-			if (distXZ(guard, thief) <= USE_RANGE) {
+			if (distanceXZ(guard, thief) <= USE_RANGE) {
 				catchThief(host, guard, thief);
 			}
 		});

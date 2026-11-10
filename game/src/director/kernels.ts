@@ -1,4 +1,4 @@
-import { Time, type GameObject } from '@arc-director/kindling';
+import { Time, inBounds, distanceXZ, type GameObject, type XZ } from '@arc-director/kindling';
 import {
 	dummyEntity,
 	pascalCase,
@@ -25,7 +25,7 @@ import { Pickupable } from '../items/item-components';
 import { listCarried } from '../items/inventory';
 import type { ItemInstance } from '../items/instance';
 import { coinsOf } from '../items/wallet';
-import { enclosureAt, interiorContains } from '../world/interior';
+import { enclosureAt } from '../world/interior';
 import { CLEAR_RANGE } from './talk-attend';
 import { idOf, isLiving } from './names';
 import { tagsOf } from './perception';
@@ -92,7 +92,7 @@ function landmarkEntity(go:GameObject):ExprEntity {
 	return e;
 }
 
-function nearbyLandmarks(world:DemoWorld, character:GameObject, here?:{ x:number; z:number }):GameObject[] {
+function nearbyLandmarks(world:DemoWorld, character:GameObject, here?:XZ):GameObject[] {
 	const p = here ?? character.transform.position;
 	const ranked:{ go:GameObject; dist:number }[] = [];
 	for (const go of world.objects) {
@@ -104,7 +104,7 @@ function nearbyLandmarks(world:DemoWorld, character:GameObject, here?:{ x:number
 			continue;
 		}
 		const gp = go.transform.position;
-		const dist = Math.hypot(gp.x - p.x, gp.z - p.z);
+		const dist = distanceXZ(gp, p);
 		if (dist > 28) {
 			continue;
 		}
@@ -122,7 +122,7 @@ function lookupGo(world:DemoWorld, id:string):GameObject | undefined {
 export function kernelsOf(
 	world:DemoWorld,
 	character:GameObject,
-	here?:{ x:number; z:number },
+	here?:XZ,
 	extraTags?:(go:GameObject)=>string[],
 ) {
 	const hidePlayer = world.playerInperceivable && world.playerHits.size === 0;
@@ -261,7 +261,7 @@ export function kernelsOf(
 				if (buildingID) {
 					const building = world.findNamed(buildingID) ?? world.findByID(buildingID);
 					const box = building?.getComponent(Interior);
-					return { kind: 'bool' as const, value: !!box && interiorContains(box, p.x, p.z) };
+					return { kind: 'bool' as const, value: !!box && inBounds(box.bounds, p.x, p.z) };
 				}
 				return { kind: 'bool' as const, value: !!enclosureAt(world, p.x, p.z) };
 			},

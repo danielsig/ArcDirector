@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { patchShader, ToonMaterial, type ToonMaterialParameters } from '@arc-director/kindling';
+import { patchShader, ToonMaterial, type ToonMaterialParameters, type XZ } from '@arc-director/kindling';
 import { getNature, WATER_UPPER_Y } from './nature';
 import { CELL_SIZE, MOON_BLUE, TILE_HEIGHT } from '../world/constants';
 
@@ -101,7 +101,7 @@ export function moonlitStoneMat():ToonMaterial {
 }
 
 /** Masonry for stairs climbing toward `uphill`: each tread is the top of the brick course below it. */
-export function stoneStairMat(uphill:{ x:number; z:number }):ToonMaterial {
+export function stoneStairMat(uphill:XZ):ToonMaterial {
 	return remember(`stoneStair:${uphill.x},${uphill.z}`, { ...STONE_WALL, topAxis: uphill });
 }
 

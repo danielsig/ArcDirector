@@ -12,7 +12,7 @@ import { PlayerInput } from '../characters/PlayerInput';
 import { PlayerPilot } from '../characters/PlayerPilot';
 import { Burns, Fire } from '../engine/Fire';
 import { TeamRing, type TeamColors } from '../engine/TeamRing';
-import { Animator, ChunkBound, Camera as RenderCamera, StreamingAnchor, Speaker, voiceFor, type SpeechVoice, hash, GameObject, spotThrough } from '@arc-director/kindling';
+import { Animator, ChunkBound, Camera as RenderCamera, StreamingAnchor, Speaker, voiceFor, distanceXZ, type SpeechVoice, hash, GameObject, spotThrough, SIDE_OFFSETS, type Bounds, type XZ } from '@arc-director/kindling';
 import {
 	BoxCollider,
 	Bridge,
@@ -69,7 +69,7 @@ function wallOffset(chunk:DemoChunk, localX:number, localZ:number):{ x:number; z
 	if (!side) {
 		return { x: 0, z: 0, yaw: 0 };
 	}
-	const [dx, dz] = side;
+	const { tx: dx, tz: dz } = SIDE_OFFSETS[side];
 	const out = CELL_SIZE / 2 + wallFaceInset(chunk.tile(localX + dx, localZ + dz)?.def) - 0.12;
 	return { x: dx * out, z: dz * out, yaw: dz !== 0 ? (dz > 0 ? 0 : Math.PI) : (dx * Math.PI) / 2 };
 }
@@ -156,7 +156,7 @@ function withNearestMoonlight(world:DemoWorld, p:Point, fn:(to:Point)=>void):voi
 		for (const chunk of world.chunks.values()) {
 			for (const lit of chunk.entities) {
 				const at = lit.def === 'moonlight' || lit.def === 'moonbeam_target' ? entityPoint(chunk, lit) : undefined;
-				if (at && (!to || Math.hypot(at.x - p.x, at.z - p.z) < Math.hypot(to.x - p.x, to.z - p.z))) {
+				if (at && (!to || distanceXZ(at, p) < distanceXZ(to, p))) {
 					to = at;
 				}
 			}
@@ -207,14 +207,14 @@ function spawnMoonbeam(world:DemoWorld, chunk:DemoChunk, id:string, lamp:Point, 
 }
 
 /** A rectangle's corners: `width` along `across` (level) and `height` up, about `c`. */
-function rectCorners(c:Point, across:{ x:number; z:number }, width:number, height:number):Point[] {
+function rectCorners(c:Point, across:XZ, width:number, height:number):Point[] {
 	return [-1, 1].flatMap((s) => [-1, 1].map((t) => ({ x: c.x + across.x * s * width / 2, y: c.y + t * height / 2, z: c.z + across.z * s * width / 2 })));
 }
 
 /** The moonlight down a stairwell, from its top (`from`): level with it, under the ceiling, so it never lights the rock over. */
 function spawnStairwellMoonbeam(world:DemoWorld, chunk:DemoChunk, id:string, from:Point):void {
 	withNearestMoonlight(world, from, (to) => {
-		const reach = Math.hypot(from.x - to.x, from.z - to.z) || 1;
+		const reach = distanceXZ(from, to) || 1;
 		const across = { x: -(from.z - to.z) / reach, z: (from.x - to.x) / reach };
 		// The band from where it comes in, under the ceiling, down to the moonlight at the stairs' foot.
 		const through = [...rectCorners(from, across, MOONBEAM_WIDTH, 0), ...rectCorners(to, across, MOONBEAM_WIDTH, 0)];
@@ -499,7 +499,7 @@ function spawnBuildings(world:DemoWorld, chunk:DemoChunk):void {
 		go.addComponent(DemoMeshRenderer, { meshID: roofMeshID(b.walls.maxX - b.walls.minX + 0.18, b.walls.maxZ - b.walls.minZ, b.roof, b.chimney) });
 		go.addComponent(BoxCollider, { size: { x: 0.4, y: 1, z: 0.4 }, solid: false, isTrigger: true });
 		go.addComponent(Named, { id: name });
-		go.addComponent(Interior, { ...b.inside });
+		go.addComponent(Interior, { bounds: { ...b.inside } });
 		bindChunk(go, chunk.id);
 		world.add(go);
 		const leaf = b.door.name ? world.findNamed(b.door.name)?.getComponent(Door) : undefined;
@@ -597,7 +597,7 @@ function spawnCot(world:DemoWorld, chunk:DemoChunk, ent:ChunkEntity):void {
 }
 
 function spawnBridge(world:DemoWorld, chunk:DemoChunk, spans:ChunkEntity[]):void {
-	const cells:{ x:number; z:number }[] = [];
+	const cells:XZ[] = [];
 	let sx = 0;
 	let sz = 0;
 	let minX = Infinity;
@@ -679,7 +679,7 @@ export type NPCSpawnOpts = {
 	meshID:string;
 	localX:number;
 	localZ:number;
-	offset?:{ x:number; z:number };
+	offset?:XZ;
 	destLocalX?:number;
 	destLocalZ?:number;
 	yaw?:number;
@@ -826,7 +826,7 @@ export function spawnNPC(world:DemoWorld, chunk:DemoChunk, opts:NPCSpawnOpts):Ga
 
 export function spawnPlayer(
 	world:DemoWorld,
-	start:{ x:number; z:number } | null,
+	start:XZ | null,
 	chunk:DemoChunk,
 ):void {
 	if (world.findByID('Player')) {
@@ -885,7 +885,7 @@ export type RoomDef = {
 };
 
 /** A room's floor in meters: the outer edges of its corner cells. */
-export function roomBounds(room:RoomDef):{ minX:number; maxX:number; minZ:number; maxZ:number } {
+export function roomBounds(room:RoomDef):Bounds {
 	return {
 		minX: Math.min(room.from[0], room.to[0]) * CELL_SIZE,
 		maxX: (Math.max(room.from[0], room.to[0]) + 1) * CELL_SIZE,
@@ -899,12 +899,12 @@ export function roomBounds(room:RoomDef):{ minX:number; maxX:number; minZ:number
  * anywhere in the scene.
  */
 export function spawnRoom(world:DemoWorld, room:RoomDef):void {
-	const { minX, maxX, minZ, maxZ } = roomBounds(room);
+	const bounds = roomBounds(room);
 	const go = new GameObject(room.name, room.name);
-	go.transform.position.x = (minX + maxX) / 2;
-	go.transform.position.z = (minZ + maxZ) / 2;
+	go.transform.position.x = (bounds.minX + bounds.maxX) / 2;
+	go.transform.position.z = (bounds.minZ + bounds.maxZ) / 2;
 	go.addComponent(Named, { id: room.name });
-	go.addComponent(Interior, { minX, maxX, minZ, maxZ, room: true });
+	go.addComponent(Interior, { bounds, room: true });
 	world.add(go);
 }
 

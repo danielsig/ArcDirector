@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import type { Bounds } from '../core/bounds.js';
 
 /**
  * How shadows render. `off` disposes the maps. `static` casts the still scene only: moving things cast none.
@@ -17,7 +18,7 @@ export type ShadowSettings = {
 	 * World XZ box the sun's map covers (the playable map, say), so its texels are not spread over scenery far off.
 	 * Unset: every still caster.
 	 */
-	sunArea?:Area | null;
+	sunArea?:Bounds | null;
 	/**
 	 * `dynamic` only: the square (center and half its side) where moving things cast the sun's shadow, drawn every
 	 * frame into a map `sunMoverSize` square of their own, so the sun's map holds still casters only and is never
@@ -26,9 +27,6 @@ export type ShadowSettings = {
 	sunFocus?:{ x:number; z:number; half:number } | null;
 	sunMoverSize?:number;
 };
-
-/** World XZ box, meters. */
-export type Area = { minX:number; maxX:number; minZ:number; maxZ:number };
 
 /**
  * Every directional light is shadowed by every directional shadow map together. The sun keeps a map of its still
@@ -56,7 +54,7 @@ THREE.ShaderChunk.lights_fragment_begin = THREE.ShaderChunk.lights_fragment_begi
 /** How far below and above the ground the mover map reaches, in meters. */
 const MOVER_DEPTH = { below: 3, above: 12 };
 
-function areaKey(area:Area | null | undefined):string {
+function areaKey(area:Bounds | null | undefined):string {
 	return area ? `${area.minX},${area.maxX},${area.minZ},${area.maxZ}` : '';
 }
 
@@ -483,7 +481,7 @@ export class ShadowCache {
 	}
 
 	/** The box round every baked caster, cut down to `area` on XZ when given. */
-	private casterBox(area:Area | null | undefined):THREE.Box3 {
+	private casterBox(area:Bounds | null | undefined):THREE.Box3 {
 		const box = new THREE.Box3();
 		const part = new THREE.Box3();
 		for (const caster of this._casters.values()) {

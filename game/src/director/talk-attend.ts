@@ -1,9 +1,8 @@
-import { Time, clamp, lerpAngle, yawToward, type GameObject } from '@arc-director/kindling';
+import { Time, clamp, lerpAngle, yawToward, distanceXZ, type GameObject } from '@arc-director/kindling';
 import { NPCInput } from '../characters/NPCInput';
 import { PlayerInput } from '../characters/PlayerInput';
 import { Companion, HumanBody, Named } from '../engine/components';
 import type { DemoWorld } from '../engine/demo-world';
-import { distXZ } from '../items/inventory';
 import { lineClear } from '../world/path';
 import { findObject } from './names';
 
@@ -35,7 +34,7 @@ export function canHearClearly(world:DemoWorld, speakerID:string, listenerID:str
 	if (!speaker || !listener || speaker === listener) {
 		return false;
 	}
-	const dist = distXZ(speaker, listener);
+	const dist = distanceXZ(speaker, listener);
 	if (dist <= CONVERSE_RANGE) {
 		return true;
 	}

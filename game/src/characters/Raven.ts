@@ -1,4 +1,4 @@
-import { MeshRenderer, Time, yawToward, Component } from '@arc-director/kindling';
+import { MeshRenderer, Time, yawToward, Component, distanceXZ } from '@arc-director/kindling';
 import * as THREE from 'three';
 import { HumanBody } from '../engine/components';
 import { Order } from '../engine/order';
@@ -46,7 +46,7 @@ export class Raven extends Component {
 		let near = false;
 		world?.forEachComponent(HumanBody, (_body, go) => {
 			const q = go.transform.position;
-			near ||= Math.hypot(q.x - p.x, q.z - p.z) < SPOOK;
+			near ||= distanceXZ(q, p) < SPOOK;
 		});
 		return near;
 	}

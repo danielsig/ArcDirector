@@ -1,3 +1,4 @@
+import type { XZ, ChunkCoord } from '@arc-director/kindling';
 import { CHUNK_SIZE } from './constants';
 import { DemoChunk, type ChunkEntity, type Tile } from './demo-chunk';
 
@@ -5,7 +6,7 @@ export type TerrainLegend = {
 	def:string;
 	height:number;
 	blocked?:boolean;
-	flow?:{ x:number; z:number };
+	flow?:XZ;
 };
 
 export type EntityLegend = {
@@ -51,7 +52,7 @@ export type LootSpec = { defID:string; name:string; count?:number };
 
 export type ChunkFile = {
 	id:string;
-	origin:{ cx:number; cz:number };
+	origin:ChunkCoord;
 	legend:Record<string, TerrainLegend | EntityLegend>;
 	tiles:string[];
 	names?:Record<string, string>;
@@ -69,7 +70,7 @@ const impliedFloor:Tile = {
 
 export type DecodedChunk = {
 	chunk:DemoChunk;
-	playerStart:{ x:number; z:number } | null;
+	playerStart:XZ | null;
 };
 
 export function decodeGlyphChunk(file:ChunkFile):DecodedChunk {
@@ -79,7 +80,7 @@ export function decodeGlyphChunk(file:ChunkFile):DecodedChunk {
 
 	const tiles:Tile[] = [];
 	const entities:ChunkEntity[] = [];
-	let playerStart:{ x:number; z:number } | null = null;
+	let playerStart:XZ | null = null;
 	const chunk = new DemoChunk(file.id, file.origin, tiles, entities);
 
 	for (let localZ = 0; localZ < CHUNK_SIZE; localZ++) {

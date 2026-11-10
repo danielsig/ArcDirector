@@ -1,10 +1,10 @@
-import { type GameObject } from '@arc-director/kindling';
+import { distanceXZ, type GameObject, type XZ } from '@arc-director/kindling';
 import { Chest, Door, Lock, Named, TAKE_REACHED } from '../engine/components';
 import type { DemoWorld } from '../engine/demo-world';
 import { Container, Harvest, Item, Pickupable } from './item-components';
 import { getDef } from './defs';
 import { equipItem } from './equip';
-import { characterIs, distXZ, findCarried, findReady, itemMatchesName, tryInsert } from './inventory';
+import { characterIs, findCarried, findReady, itemMatchesName, tryInsert } from './inventory';
 import { instantiateDef, isBackpack, type ItemInstance } from './instance';
 import { nearestDoorway } from '../world/interior';
 import { captureItem, spawnWorldItem } from '../world/spawn-item';
@@ -47,7 +47,7 @@ export function nearestPickup(character:GameObject):GameObject | null {
 		if (go === character || !go.getComponent(Pickupable)) {
 			continue;
 		}
-		const d = distXZ(character, go);
+		const d = distanceXZ(character, go);
 		if (d < bestD) {
 			bestD = d;
 			best = go;
@@ -141,7 +141,7 @@ export function spawnDefAt(
 }
 
 /** A walker heading for `to` through a shut door no lock holds, and within arm's reach of it, opens it. */
-export function openDoorAhead(character:GameObject, to:{ x:number; z:number }):void {
+export function openDoorAhead(character:GameObject, to:XZ):void {
 	const p = character.transform.position;
 	const doorGo = character.world && nearestDoorway(character.world, p.x, p.z, DOOR_REACH);
 	const door = doorGo?.getComponent(Door);

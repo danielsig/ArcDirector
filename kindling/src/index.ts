@@ -3,6 +3,10 @@ export { GameObject, allocID, allocSerial, resetAllocID } from './core/GameObjec
 export { captureWorld, diffWorld, restoreWorld, type ObjectState, type WorldSave, type WorldState } from './core/save.js';
 export { Transform, type Vec3 } from './core/Transform.js';
 export { World, chunkBounds } from './core/World.js';
+export { inBounds, type Bounds } from './core/bounds.js';
+export { distanceXZ, type XZ } from './core/xz.js';
+export type { ChunkCoord, LocalCoord, TileCoord } from './core/tile-coord.js';
+export { SIDES, SIDE_OFFSETS, opposite, type Side } from './core/side.js';
 export { Chunk } from './core/Chunk.js';
 export { ChunkBound, ChunkStreamer, StreamingAnchor } from './core/ChunkStreamer.js';
 export { Game } from './core/Game.js';
@@ -12,7 +16,7 @@ export { Rigidbody } from './core/Rigidbody.js';
 export { BoxCollider } from './core/BoxCollider.js';
 export { SHOVE_YIELD, stepPhysics, resolveBody, canOccupy, type BlockerOpts } from './core/physics.js';
 export { clamp, hash, lerpAngle, yawToForward, yawToward } from './core/math.js';
-export type { ChunkBounds, TerrainSample } from './core/World.js';
+export type { TerrainSample } from './core/World.js';
 export type { Constructor, ComponentClass, ComponentInit, KindlingTypes } from './core/core-types.js';
 
 export { Camera, type ImpactFrame } from './render/Camera.js';

@@ -1,4 +1,4 @@
-import { AudioSource, Speaker, type SfxHandle, type SfxPatch, type GameObject } from '@arc-director/kindling';
+import { AudioSource, Speaker, type SfxHandle, type SfxPatch, type GameObject, type XZ } from '@arc-director/kindling';
 import type { DemoWorld } from '../engine/demo-world';
 import { CELL_SIZE } from '../world/constants';
 import { allRoadCells } from '../world/dressing-plan';
@@ -51,7 +51,7 @@ export function cueAtPoint(world:DemoWorld | null | undefined, name:SfxName, at:
 	return world?.audio.playSfx(take(name), { x: at.x, y: at.y, z: at.z, gain, dur }) ?? null;
 }
 
-const roads = new WeakMap<DemoWorld, { x:number; z:number }[]>();
+const roads = new WeakMap<DemoWorld, XZ[]>();
 
 /** Whether `x`, `z` is on a cobbled road from a house door: dressing drawn over grass, planned in `dressing-plan.ts`. */
 function onRoad(world:DemoWorld, x:number, z:number):boolean {
