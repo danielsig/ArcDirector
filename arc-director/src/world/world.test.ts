@@ -70,11 +70,8 @@ class Grid {
 			const cell = point.map(Math.round);
 			return [[1, 0], [-1, 0], [0, 1], [0, -1]].map(([dx, dz]) => [cell[0] + dx, cell[1] + dz]);
 		},
-		canPass: (what, _from, to) => {
+		canTraverse: (_who, _from, to) => {
 			const key = to.join(',');
-			if (what === 'light' || what === 'sound') {
-				return {};
-			}
 			if (this.walls.has(key) || Math.abs(to[1]) > 8) {
 				return undefined;
 			}
@@ -132,7 +129,7 @@ class Grid {
  * way round is east. Off the network, the waypoints within 6 are in sight.
  */
 const WAYPOINTS:Vec[] = [[0, 0], [10, 0], [10, 10], [0, 10]];
-const ROADS:[number, number, number][] = [[0, 1, 10], [1, 2, 10], [0, 3, 30], [3, 2, 10]];
+const ROADS:[number, number, number][] = [[0, 1, 1], [1, 2, 1], [0, 3, 3], [3, 2, 1]];
 const waypointAt = (point:Vec):number => WAYPOINTS.findIndex((p) => distance(p, point) < 1e-9);
 const NETWORK:RouteWorld<string> = {
 	getNeighbors: (point) => {
@@ -142,16 +139,16 @@ const NETWORK:RouteWorld<string> = {
 		}
 		return ROADS.filter(([a, b]) => a === i || b === i).map(([a, b]) => WAYPOINTS[a === i ? b : a]);
 	},
-	canPass: (_what, from, to) => {
+	canTraverse: (_who, from, to) => {
 		const ends = [waypointAt(from), waypointAt(to)].sort().join();
 		const road = ROADS.find(([a, b]) => [a, b].sort().join() === ends);
-		return road ? { cost: road[2] } : {};
+		return road ? { weight: road[2] } : {};
 	},
 };
 
 /** Every step open, onto `getNeighbors`. */
 function openWays(getNeighbors:(point:Vec)=>Vec[]):RouteWorld<string> {
-	return { getNeighbors, canPass: () => ({}) };
+	return { getNeighbors };
 }
 
 /** Collect what `director` tells every mind. */
@@ -223,10 +220,29 @@ describe('findRoute', () => {
 		assert.equal(route.cost, 4);
 	});
 
+	it('walks the host\'s own points, from getNearby at both ends, never a plain one', () => {
+		type Tagged = Vec & { tag:string };
+		const tagged = (x:number, tag:string):Tagged => Object.assign([x], { tag });
+		const asked:string[] = [];
+		const world:RouteWorld<string, Tagged> = {
+			getNearby: ([x]) => ({ at: tagged(x, 'here'), nearby: [tagged(Math.floor(x), 'node'), tagged(Math.ceil(x), 'node')] }),
+			getNeighbors: ([x]) => [tagged(x - 1, 'node'), tagged(x + 1, 'node')],
+			canTraverse: (_who, from, to) => {
+				asked.push(from.tag, to.tag);
+				return {};
+			},
+		};
+		const found = findRoute(world, 'Ann', [0.5], pointGoal([3.5]));
+		assert.ok(found && 'points' in found);
+		assert.deepEqual(found.points.map((p) => [p[0], p.tag]), [[1, 'node'], [2, 'node'], [3, 'node'], [3.5, 'here']]);
+		assert.equal(found.cost, 3);
+		assert.ok(asked.every(Boolean), 'a plain point was asked');
+	});
+
 	it('works in 3D and goes around a pricey step', () => {
 		const world:RouteWorld<string> = {
 			getNeighbors: (point) => [[1, 0, 0], [0, 1, 0], [0, 0, 1], [-1, 0, 0], [0, -1, 0], [0, 0, -1]].map((d) => point.map((v, i) => v + d[i])),
-			canPass: (_what, _from, to) => (to.join() === '1,0,0' ? { cost: 50 } : {}),
+			canTraverse: (_who, _from, to) => (to.join() === '1,0,0' ? { weight: 50 } : {}),
 		};
 		const route = openRoute(findRoute(world, 'Ann', [0, 0, 0], pointGoal([2, 0, 0])));
 		assert.equal(route.cost, 4);
@@ -234,7 +250,7 @@ describe('findRoute', () => {
 	});
 
 	it('names the blocker when a blocked step is the only way, and gives up past the cap', () => {
-		const gated:RouteWorld<string> = { getNeighbors: lineNeighbors, canPass: (_what, _from, to) => (to[0] === 2 ? { blocked: 'Gate is shut' } : {}) };
+		const gated:RouteWorld<string> = { getNeighbors: lineNeighbors, canTraverse: (_who, _from, to) => (to[0] === 2 ? { blocked: 'Gate is shut' } : {}) };
 		assert.deepEqual(findRoute(gated, 'Ann', [0], pointGoal([4])), { blockers: [{ reason: 'Gate is shut', cost: 4 }] });
 		assert.equal(findRoute(line, 'Ann', [0], pointGoal([1e6]), 50), undefined);
 	});
@@ -244,10 +260,10 @@ describe('findRoute', () => {
 		const shed:Vec = [-10, -10];
 		const gated:RouteWorld<string> = {
 			getNeighbors: (point) => [...NETWORK.getNeighbors(point), ...waypointAt(point) === 0 ? [shed] : []],
-			canPass: (what, from, to) => {
+			canTraverse: (who, from, to) => {
 				const i = waypointAt(from);
 				const reason = i >= 0 ? locks.get([i, to === shed ? 4 : waypointAt(to)].sort().join()) : undefined;
-				return { ...NETWORK.canPass(what, from, to), ...reason ? { blocked: reason } : {} };
+				return reason ? { blocked: reason } : {};
 			},
 		};
 		const found = findRoute(gated, 'Ann', [1, 1], pointGoal([11, 9]));
@@ -271,7 +287,7 @@ describe('findRoute', () => {
 		const wall = new Set(['1,0']);
 		const grid:RouteWorld<string> = {
 			getNeighbors: (point) => [[1, 0], [-1, 0], [0, 1], [0, -1]].map(([dx, dz]) => [Math.round(point[0]) + dx, Math.round(point[1]) + dz]),
-			canPass: (_what, _from, to) => (wall.has(to.join(',')) || Math.abs(to[1]) > 4 ? undefined : {}),
+			canTraverse: (_who, _from, to) => (wall.has(to.join(',')) || Math.abs(to[1]) > 4 ? undefined : {}),
 		};
 		const route = openRoute(findRoute(grid, 'Ann', [0, 0], pointGoal([2, 0], 2.5)));
 		assert.equal(route.points.some((p) => p[0] === 1 && p[1] === 0), false);
@@ -283,7 +299,7 @@ describe('findRoute', () => {
 		const ledge = 2;
 		const grid:RouteWorld<string> = {
 			getNeighbors: (point) => [Math.round(point[0]) - 1, Math.round(point[0]) + 1].filter((next) => next >= 0 && next <= 3).map((next) => [next]),
-			canPass: (_what, _from, to) => (Math.round(to[0]) === ledge ? undefined : {}),
+			canTraverse: (_who, _from, to) => (Math.round(to[0]) === ledge ? undefined : {}),
 		};
 		assert.equal(findRoute(grid, 'Ann', [0], pointGoal([2.2])), undefined, 'climbed the ledge on the last step');
 		assert.deepEqual(openRoute(findRoute(grid, 'Ann', [2], pointGoal([0.2]))).points, [[1], [0.2]]);
@@ -292,14 +308,14 @@ describe('findRoute', () => {
 	it('lists reachable points without crossing a blocked step', () => {
 		const gated:RouteWorld<string> = {
 			getNeighbors: lineNeighbors,
-			canPass: (_what, _from, to) => (to[0] < 0 ? undefined : to[0] === 3 ? { blocked: 'x' } : {}),
+			canTraverse: (_who, _from, to) => (to[0] < 0 ? undefined : to[0] === 3 ? { blocked: 'x' } : {}),
 		};
 		assert.deepEqual(reachablePoints(gated, 'Ann', [0], 99).map((p) => p.point[0]), [0, 1, 2]);
 	});
 
 	it('asks a shared world once per step, however many searches walk it', () => {
 		let asked = 0;
-		const counted = memoWorld<string>({ getNeighbors: lineNeighbors, canPass: () => {
+		const counted = memoWorld<string>({ getNeighbors: lineNeighbors, canTraverse: () => {
 			asked += 1;
 			return {};
 		} });
@@ -354,7 +370,7 @@ describe('Mover', () => {
 			getPose: (id) => ({ point: id === 'Ann' ? me : [2, 0] }),
 			getReach: () => 2.5,
 			getNeighbors: (point) => [[1, 0], [-1, 0], [0, 1], [0, -1]].map(([dx, dz]) => [Math.round(point[0]) + dx, Math.round(point[1]) + dz]),
-			canPass: (_what, _from, to) => (walls.has(to.join(',')) || Math.abs(to[0]) > 4 || Math.abs(to[1]) > 8 ? undefined : {}),
+			canTraverse: (_who, _from, to) => (walls.has(to.join(',')) || Math.abs(to[0]) > 4 || Math.abs(to[1]) > 8 ? undefined : {}),
 			steerToward: (_character, point) => {
 				to = point;
 				return !!point && distance(me, point) <= 0.05;
@@ -389,7 +405,6 @@ describe('Mover', () => {
 			getPose: (id) => ({ point: points.get(id) ?? target, facing: [0, 1] }),
 			getReach: () => reach,
 			getNeighbors: (point) => [[1, 0], [-1, 0], [0, 1], [0, -1]].map(([dx, dz]) => [Math.round(point[0]) + dx, Math.round(point[1]) + dz]),
-			canPass: () => ({}),
 			steerToward: (id, point) => {
 				steering.set(id, point);
 				return !!point && distance(points.get(id)!, point) <= 0.05;
@@ -982,6 +997,6 @@ describe('stock world verbs', () => {
 			.withWorld({ find: () => undefined, getPose: () => undefined })
 			.withContext((id) => ({ id }))
 			.addCharacter({ id: 'Ann', mind: {}, kit: { verbs: ['go_to', 'examine'] }, identity: { role: 'Waits.' } });
-		await assert.rejects(director.connect(), /go_to' needs withWorld getNeighbors and canPass and steerToward.*examine' needs withWorld getDescription/);
+		await assert.rejects(director.connect(), /go_to' needs withWorld getNeighbors and steerToward.*examine' needs withWorld getDescription/);
 	});
 });

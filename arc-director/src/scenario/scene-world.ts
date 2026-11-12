@@ -480,9 +480,9 @@ export class SceneWorld implements HostWorld<string> {
 		return GRID.map(([dx, dz]) => [Math.round(x) + dx, Math.round(z) + dz]).filter((point) => point[0] !== x || point[1] !== z);
 	}
 
-	/** Light and sound pass everywhere; who sees whom is the rules' `sees`. A walk onto a point the rules' `blocks` close is blocked. */
-	public canPass(what:string, _from:Vec, to:Vec):PathStep {
-		const blocked = what === 'light' || what === 'sound' ? undefined : this._rules.blocks?.(this, to);
+	/** A step onto a point the rules' `blocks` close is blocked. Light and sound pass everywhere (no `canPass`); who sees whom is the rules' `sees`. */
+	public canTraverse(_who:string, _from:Vec, to:Vec):PathStep {
+		const blocked = this._rules.blocks?.(this, to);
 		return blocked ? { blocked } : {};
 	}
 

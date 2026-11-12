@@ -84,7 +84,6 @@ class Game {
 			return point ? { point, facing: [0, 1], right: [1, 0] } : undefined;
 		},
 		getNeighbors: (point) => [[1, 0], [-1, 0], [0, 1], [0, -1]].map(([dx, dz]) => [Math.round(point[0]) + dx, Math.round(point[1]) + dz]),
-		canPass: () => ({}),
 		steerToward: (character, to) => {
 			this.steering.set(character, to);
 			const point = this.point.get(character);

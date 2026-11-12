@@ -112,7 +112,7 @@ import type { RTSHost } from '../rts/rts-types.js';
 import { STOCK_RTS_VERB_DEFS } from '../rts/rts-verbs.js';
 import { genreVerbs, STOCK_MOBA_VERB_DEFS, STOCK_RPG_VERB_DEFS, type GenreVerbEntry, type MOBAHost, type RPGHost } from '../genre/genre-verbs.js';
 import { OfferBook, offerText, type Offer } from '../world/offers.js';
-import { passes, poseOf } from '../world/lookup.js';
+import { poseOf } from '../world/lookup.js';
 import { RESERVED_TAGS, type HostWorld, type Pose, type Vec } from '../world/world-types.js';
 import { centroid, distance } from '../world/vec.js';
 import { Regions, type RegionSpec } from './regions.js';
@@ -2080,7 +2080,7 @@ ${dump.message}`, image: dump.image });
 			return undefined;
 		}
 		const source:SoundSource = typeof from === 'string' ? { id: from, point } : { point };
-		const muffled = typeof range !== 'function' && !passes(world, 'sound', point, here);
+		const muffled = typeof range !== 'function' && (world.canPass?.('sound', point, here) ?? 1) <= 0;
 		const clarity = typeof range === 'function' ? range(listenerID, source) : clarityAt(distance(here, point), range) * (muffled ? range.occluded : 1);
 		const level = Math.min(1, loudnessAfter(sound, this._time - at) * clarity);
 		return level >= AUDIBLE ? { level, source, muffled } : undefined;
@@ -2176,7 +2176,7 @@ ${dump.message}`, image: dump.image });
 		}
 		const from = poseOf(world, fromID)?.point;
 		const to = poseOf(world, toID)?.point;
-		return !!from && !!to && passes(world, 'light', from, to);
+		return !!from && !!to && world.canPass('light', from, to) > 0;
 	}
 
 	/** `point`: measure as if the character stood there. */
@@ -2347,7 +2347,7 @@ ${dump.message}`, image: dump.image });
 		if (!world?.canPass) {
 			return snap;
 		}
-		return { ...snap, objects: snap.objects.filter((o) => o.always || passes(world, 'light', snap.self.point, o.point)) };
+		return { ...snap, objects: snap.objects.filter((o) => o.always || world.canPass!('light', snap.self.point, o.point) > 0) };
 	}
 
 	/** What character `id` is seen doing, in its verb's own words and `mind`'s names: `going to Cottage`. Nothing while idle or waiting. */

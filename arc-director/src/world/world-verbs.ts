@@ -37,7 +37,7 @@ export type WorldVerbDeps<TCtx> = {
 
 type WorldPart = Exclude<keyof HostWorld<unknown>, 'find' | 'getPose' | 'getReach' | 'canOffer' | 'canPickUp' | 'up'>;
 
-const MOVING:WorldPart[] = ['getNeighbors', 'canPass', 'steerToward'];
+const MOVING:WorldPart[] = ['getNeighbors', 'steerToward'];
 
 /** The `withWorld` parts each stock world verb runs on. */
 const WORLD_VERB_PARTS:Readonly<Record<string, readonly WorldPart[]>> = {

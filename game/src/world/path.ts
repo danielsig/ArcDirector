@@ -1,4 +1,4 @@
-import type { PathStep, RouteWorld, Vec } from 'arc-director';
+import { isOpen, type HostWorld, type PathStep, type Vec } from 'arc-director';
 import { SIDE_OFFSETS, distanceXZ, type GameObject, type TileCoord, type XZ } from '@arc-director/kindling';
 import { Barrier, HumanBody } from '../engine/components';
 import type { DemoWorld } from '../engine/demo-world';
@@ -6,12 +6,21 @@ import { CELL_SIZE } from './constants';
 import { stairUphill } from './stairs';
 
 /** A step onto a cell another body stands on costs this many times its length, so routes go around people when they can. */
-const OCCUPANT_COST = 8;
+const OCCUPANT_WEIGHT = 8;
 /** Light and sound go over what stands lower than this, in meters: a counter, a chest, a fallen column. */
 const EYE_HEIGHT = 1.5;
 
 /** The eight steps to the cells around one, clockwise from east. */
 const NEIGHBORS = [[1, 0], [1, 1], [0, 1], [-1, 1], [-1, 0], [-1, -1], [0, -1], [1, -1]];
+
+/** A point on the grid that knows the cell it lies in. */
+export type Cell = Vec & TileCoord;
+
+/** The middle of cell `tx`, `tz`. */
+function centerOf(world:DemoWorld, { tx, tz }:TileCoord):Cell {
+	const { x, z } = world.tileCenter(tx, tz);
+	return Object.assign([x, z], { tx, tz });
+}
 
 function characterIn(world:DemoWorld, tx:number, tz:number, except?:GameObject):GameObject | undefined {
 	return world.objectsInTile(tx, tz).find((go) => go !== except && go.getComponent(HumanBody)?.enabled);
@@ -27,9 +36,7 @@ function blockedCell(world:DemoWorld, body:GameObject, tx:number, tz:number):boo
  * A stair is a step only along its climb. The sides are solid, so a route that aims at them leaves a body stuck
  * against the face.
  */
-function alongClimb(world:DemoWorld, a:Vec, b:Vec):boolean {
-	const from = world.tileCoordAt(a[0], a[1]);
-	const to = world.tileCoordAt(b[0], b[1]);
+function alongClimb(world:DemoWorld, from:TileCoord, to:TileCoord):boolean {
 	const dx = to.tx - from.tx;
 	const dz = to.tz - from.tz;
 	const along = (tx:number, tz:number):boolean => {
@@ -50,13 +57,11 @@ function alongClimb(world:DemoWorld, a:Vec, b:Vec):boolean {
  * The step `body` takes from `a` into the next cell, to `b`: none where it would run into something standing there,
  * or squeeze past a corner it would run into. What stops it there and can be cleared (a `Barrier`) says how.
  */
-function walk(world:DemoWorld, body:GameObject, a:Vec, b:Vec):PathStep | undefined {
+function walk(world:DemoWorld, body:GameObject, a:Cell, b:Cell):PathStep | undefined {
 	if (!alongClimb(world, a, b)) {
 		return undefined;
 	}
-	const from = world.tileCoordAt(a[0], a[1]);
-	const to = world.tileCoordAt(b[0], b[1]);
-	if (to.tx !== from.tx && to.tz !== from.tz && (blockedCell(world, body, to.tx, from.tz) || blockedCell(world, body, from.tx, to.tz))) {
+	if (b.tx !== a.tx && b.tz !== a.tz && (blockedCell(world, body, b.tx, a.tz) || blockedCell(world, body, a.tx, b.tz))) {
 		return undefined;
 	}
 	const hit = world.blocker(body, b[0], b[1], { from: { x: a[0], z: a[1] } });
@@ -64,7 +69,7 @@ function walk(world:DemoWorld, body:GameObject, a:Vec, b:Vec):PathStep | undefin
 		const barrier = hit === 'terrain' ? undefined : hit.getComponent(Barrier) ?? hit.parent?.getComponent(Barrier);
 		return barrier?.opensFrom({ x: a[0], z: a[1] }) ? {} : barrier && { blocked: barrier.whyBlocked(body) };
 	}
-	return characterIn(world, to.tx, to.tz, body) ? { cost: OCCUPANT_COST * Math.hypot(b[0] - a[0], b[1] - a[1]) } : {};
+	return characterIn(world, b.tx, b.tz, body) ? { weight: OCCUPANT_WEIGHT } : {};
 }
 
 /** Whether cell `tx`, `tz` stops `what`: solid ground but water, whatever stands there taller than the eyes, and, for light, a body. */
@@ -128,47 +133,31 @@ export function lineClear(world:DemoWorld, what:'light' | 'sound', a:XZ, b:XZ):b
 
 /** Whether `body` could walk straight from `a` to `b`, every step open: no wall, no web, no shut door on the line. */
 export function walkClear(world:DemoWorld, body:GameObject, a:XZ, b:XZ):boolean {
-	const center = ({ tx, tz }:TileCoord):Vec => {
-		const { x, z } = world.tileCenter(tx, tz);
-		return [x, z];
-	};
-	return alongLine(world, a, b, (from, to) => {
-		const step = walk(world, body, center(from), center(to));
-		return !!step && !step.blocked;
-	});
+	return alongLine(world, a, b, (from, to) => isOpen(walk(world, body, centerOf(world, from), centerOf(world, to))));
 }
 
 /**
- * The game's grid as ArcDirector walks and looks across it: a cell's eight neighbors, and what gets from one point
- * to another. A stair is a neighbor only along its climb, not off the sides. A body steps where it would run into
- * nothing; light and sound go straight over what stands lower than the eyes, and light stops at bodies.
+ * The game's grid as ArcDirector walks and looks across it: a cell's eight neighbors, the step a body takes to one,
+ * and what light and sound get across. A body steps where it would run into nothing, and onto or off a stair only
+ * along its climb; light and sound go straight over what stands lower than the eyes, and light stops at bodies.
  */
-export function cellWays(world:DemoWorld):RouteWorld<GameObject> {
+export function cellWays(world:DemoWorld):Required<Pick<HostWorld<GameObject, Cell>, 'getNearby' | 'getNeighbors' | 'canTraverse' | 'canPass'>> {
+	const getNeighbors = ({ tx, tz }:TileCoord):Cell[] => NEIGHBORS.map(([dx, dz]) => centerOf(world, { tx: tx + dx, tz: tz + dz }));
 	return {
-		getNeighbors: (point) => {
-			const { tx, tz } = world.tileCoordAt(point[0], point[1]);
-			return NEIGHBORS.flatMap(([dx, dz]) => {
-				const { x, z } = world.tileCenter(tx + dx, tz + dz);
-				const next:Vec = [x, z];
-				return alongClimb(world, point, next) ? [next] : [];
-			});
+		getNearby: ([x, z]) => {
+			const tile = world.tileCoordAt(x, z);
+			return { at: Object.assign([x, z], tile), nearby: getNeighbors(tile) };
 		},
-		canPass: (what, a, b) => {
-			if (what === 'light' || what === 'sound') {
-				return lineClear(world, what, { x: a[0], z: a[1] }, { x: b[0], z: b[1] }) ? {} : undefined;
-			}
-			return walk(world, what, a, b);
-		},
+		getNeighbors,
+		canTraverse: (body, a, b) => walk(world, body, a, b),
+		canPass: (what, a, b) => (lineClear(world, what, { x: a[0], z: a[1] }, { x: b[0], z: b[1] }) ? 1 : 0),
 	};
 }
 
 /** Whether a route can bring `body` to `x`, `z`: it has an open step onto it from around it. */
 export function canStand(world:DemoWorld, body:GameObject, x:number, z:number):boolean {
-	const ways = cellWays(world);
-	return ways.getNeighbors([x, z]).some((from) => {
-		const step = ways.canPass(body, from, [x, z]);
-		return !!step && !step.blocked;
-	});
+	const { at, nearby } = cellWays(world).getNearby([x, z]);
+	return nearby.some((from) => isOpen(walk(world, body, from, at)));
 }
 
 /** How many rings of cells around a point `standableNear` searches. */

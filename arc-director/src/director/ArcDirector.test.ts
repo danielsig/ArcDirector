@@ -1430,7 +1430,7 @@ describe('ArcDirector', () => {
 			],
 		};
 		const director = await new ArcDirector<Ctx>()
-			.withWorld({ ...OPEN_WORLD, canPass: (what, _from, to) => (what === 'light' && to[0] === 1 ? undefined : {}) })
+			.withWorld({ ...OPEN_WORLD, canPass: (what, _from, to) => (what === 'light' && to[0] === 1 ? 0 : 1) })
 			.withPriorityQueue({ processInterval: 0, heartbeatStart: 0.01, heartbeatMin: 0.01 })
 			.withIntervals({ watch: 0, think: 0 })
 			.addFakeInference(goToNamedInteractable())

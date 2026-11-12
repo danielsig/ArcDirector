@@ -18,13 +18,25 @@ export interface Pose {
 	right?:Vec;
 }
 
-/** What `canPass` says of a way it lets through, or of one something stops for now. */
+/**
+ * What `canPass` is asked about: the library asks `light` (sight) and `sound` (hearing). A game adds its own for its
+ * own verbs, and its `canPass` answers them too: `declare module 'arc-director' { interface Media { smell:true } }`.
+ */
+export interface Media {
+	light:true;
+	sound:true;
+}
+
+/** One of the {@link Media}: `light`, `sound`, or one the game added. */
+export type Medium = keyof Media;
+
+/** What `canTraverse` says of a step it lets through, or of one something stops for now. */
 export interface PathStep {
 	/**
-	 * What the step costs. Default: its length. Never less than its length, so the search stays exact;
-	 * raise it to route around crowds or rough ground.
+	 * How many times its length the step costs. Default 1, and never less, so the search stays exact; raise it to
+	 * route around crowds or rough ground.
 	 */
-	cost?:number;
+	weight?:number;
 	/**
 	 * What stops this step right now, for this character ("EastDoor is locked — you carry IronKey"). The search
 	 * avoids it; with no open way, the move fails naming each blocker that leads there, cheapest first.
@@ -87,13 +99,16 @@ export const RESERVED_TAGS = {
  * | Part | Unlocks |
  * |--|--|
  * | `find`, `getPose` | watch geometry: `distance`, `nearby`, `isFacing`, `isLeft` / `isRight`, `manhattan`, … |
- * | `getNeighbors`, `canPass`, `steerToward` | `go_to`, `follow`, `wander`, crowd formations, `pathDistance` / `isReachable`, `call.goTo` |
+ * | `getNeighbors`, `steerToward` (and `canTraverse`, `getNearby`) | `go_to`, `follow`, `wander`, crowd formations, `pathDistance` / `isReachable`, `call.goTo` |
  * | `canPass` | what sight sees and what sounds are muffled; the watch function `hasSightline` |
  * | `transfer` (and `validateTransfer`, for the game's rules) | `pick_up`, `drop`, `give`, `offer` |
  * | `useItem` | `use` |
  * | `getDescription` | `examine` |
+ *
+ * `TPoint` is the game's own point, a `Vec` with its own fields (a cell that knows its tile, a waypoint its links).
+ * The route hooks get back exactly the points they returned, never copies, so only `getNearby` looks one up.
  */
-export interface HostWorld<TEntity> {
+export interface HostWorld<TEntity, TPoint extends Vec = Vec> {
 	// Queries
 
 	/**
@@ -121,22 +136,30 @@ export interface HostWorld<TEntity> {
 	 */
 	isDown?(id:string):boolean;
 	/**
-	 * The points one step from `point`: a grid's cells around it, a navmesh's adjacent polygons, a waypoint network's
-	 * links. Only the shape of the world, the same whoever asks and whatever stands open: `canPass` says which steps
-	 * are open, and to whom. `point` need not be one it named, since a route starts wherever a character stands.
+	 * `point` as a `TPoint` at exactly its coordinates (never moved to a node), and every node it links to, any
+	 * direction, any count (the waypoints in sight of it): where a route starts, and where it ends on a goal's own point.
+	 * Default: `point` and its `getNeighbors`, for a game whose points are plain `Vec`s.
 	 */
-	getNeighbors?(point:Vec):Vec[];
+	getNearby?(point:Vec):{ at:TPoint; nearby:TPoint[] };
 	/**
-	 * Whether `what` gets straight from `a` to `b` now: a character walking (the character itself, so its size and
-	 * what it carries count), or `light` (sight) or `sound` (hearing). The one place the game decides what stops
-	 * what. A walk asks it of each step to a neighbor, the way it is walked, so a ledge one may drop off but not climb
-	 * answers each way differently; sight and sound ask it across a room. Nothing standing at `a` stops it, and for
-	 * light and sound nothing standing at `b` either: no one hides themselves, or the one looking.
-	 * @returns `{ cost }` when open (more than its length for a crowd or rough ground), `{ blocked, by }` when
-	 * something stops it for now and says how to get past, `undefined` when it never gets through. Without it, nothing
-	 * stops sight or sound, and no one walks.
+	 * The nodes one step from `node`: a grid's cells around it, a navmesh's adjacent polygons, a waypoint's links.
+	 * The shape of the world alone, the same for everyone, and only nodes someone can step to; `canTraverse` says
+	 * which steps are open, and to whom.
 	 */
-	canPass?(what:'light' | 'sound' | TEntity, a:Vec, b:Vec):PathStep | undefined;
+	getNeighbors?(node:TPoint):TPoint[];
+	/**
+	 * The step `who` (its size, what it carries) takes from `from` to its neighbor `to` now, asked the way it is
+	 * walked: a ledge one may drop off but not climb answers each way differently. Nothing standing at `from` stops it.
+	 * @returns `{ weight? }` when open, `{ blocked, by? }` when something stops it for now, `undefined` when it never
+	 * gets through. Without it, every step is open, at weight 1.
+	 */
+	canTraverse?(who:TEntity, from:TPoint, to:TPoint):PathStep | undefined;
+	/**
+	 * How clearly `what` (a {@link Medium}) goes straight from `a` to `b` now: 1 clear, 0 blocked, between for fog or
+	 * a half-shut door; for now anything above 0 passes. Nothing standing at `a` or `b` stops it: no one hides
+	 * themselves, or the one looking. Without it, nothing stops sight or sound.
+	 */
+	canPass?(what:Medium, a:Vec, b:Vec):number;
 	/**
 	 * How close `character` must be to `target` to act on it, and to count as there.
 	 * @returns A distance. Default 1.

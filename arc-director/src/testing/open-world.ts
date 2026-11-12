@@ -5,7 +5,6 @@ export const OPEN_WORLD:HostWorld<string> = {
 	find: (id) => id,
 	getPose: () => ({ point: [0, 0], facing: [0, 1], right: [1, 0] }),
 	getNeighbors: (point) => [[1, 0], [-1, 0], [0, 1], [0, -1]].map(([dx, dz]) => [point[0] + dx, point[1] + dz]),
-	canPass: () => ({}),
 	steerToward: () => false,
 	transfer: () => () => undefined,
 	useItem: () => ({ ok: true }),

@@ -9,7 +9,7 @@ import { ITEM_DEFS } from '../items/defs';
 import { listCarried, itemMatchesName } from '../items/inventory';
 import type { ItemInstance } from '../items/instance';
 import { chestHolding, findChestHolding, openDoorAhead, USE_RANGE } from '../items/pickup';
-import { cellWays } from '../world/path';
+import { cellWays, type Cell } from '../world/path';
 import { STALL_COUNTER } from '../render/mesh-registry';
 import type { GameHost } from './adapter';
 import { thiefOf } from './kernels';
@@ -45,7 +45,7 @@ function holderOf(host:GameHost, name:string):GameObject | undefined {
 }
 
 /** The game world as ArcDirector's stock verbs and watch geometry see it. */
-export function gameWorld(host:GameHost):HostWorld<GameObject> {
+export function gameWorld(host:GameHost):HostWorld<GameObject, Cell> {
 	return {
 		find: (id) => findObject(host.world, id)
 			?? findChestHolding(host.world, id)?.chest

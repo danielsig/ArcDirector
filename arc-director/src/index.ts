@@ -259,8 +259,8 @@ export type {
 	VerbAlias,
 } from './director/director-types.js';
 export { RESERVED_TAGS } from './world/world-types.js';
-export type { HostWorld, Outcome, PathStep, Pose, Transfer, Vec } from './world/world-types.js';
+export type { HostWorld, Media, Medium, Outcome, PathStep, Pose, Transfer, Vec } from './world/world-types.js';
 export { Deal } from './world/deal.js';
 export type { Crowd, CrowdSettings, MoveOpts } from './world/mover.js';
 export { OfferBook, bundleText, countOf, covers, isEmpty, offerText, type Offer, type OfferMatch } from './world/offers.js';
-export { awayGoal, findRoute, pointGoal, reachablePoints, type Blocked, type Route, type RouteGoal, type RouteWorld } from './world/route.js';
+export { awayGoal, findRoute, isOpen, pointGoal, reachablePoints, type Blocked, type Route, type RouteGoal, type RouteWorld } from './world/route.js';

@@ -54,38 +54,37 @@ test('off the middle of a cell, a route does not leave through what stands in th
 	const angler = new GameObject('Angler', 'Person');
 	angler.addComponent(BoxCollider, { size: { x: 0.45, y: 1.1, z: 0.45 }, pad: 0.36 });
 	const ways = cellWays(world);
+	const at = (x:number, z:number) => ways.getNearby([x, z]).at;
 	// Stood up to the east of the glen's chair, which fills the middle of cell (27.5, 24.5).
-	const stood:Vec = [27.95, 24.5];
-	assert.equal(ways.canPass(angler, stood, [26.5, 24.5]), undefined, 'a step west through the chair');
-	assert.ok(ways.canPass(angler, stood, [28.5, 23.5]), 'no step away from the chair');
+	const stood = at(27.95, 24.5);
+	assert.equal(ways.canTraverse(angler, stood, at(26.5, 24.5)), undefined, 'a step west through the chair');
+	assert.ok(ways.canTraverse(angler, stood, at(28.5, 23.5)), 'no step away from the chair');
 	const route = findRoute(ways, angler, stood, pointGoal([20.5, 24.5]));
 	const first = route && 'points' in route ? route.points[0] : undefined;
 	assert.ok(first, 'no way west around the chair');
-	assert.notDeepEqual(first, [26.5, 24.5]);
+	assert.notDeepEqual([first[0], first[1]], [26.5, 24.5]);
 	// What it stands in does not hold it: from the chair's own middle it can still step away.
-	const away = ways.canPass(angler, [27.5, 24.5], [27.5, 23.5]);
+	const away = ways.canTraverse(angler, at(27.5, 24.5), at(27.5, 23.5));
 	assert.ok(away && !away.blocked, 'no step off the chair');
 });
 
-test('a stair is a neighbor only along its climb, not from the side', () => {
+test('a stair is stepped on and off only along its climb, not from the side', () => {
 	const world = new DemoWorld();
 	const chunk = decodeGlyphChunk(market_1_0).chunk;
 	world.addChunk(chunk);
 	const ways = cellWays(world);
 	const walker = new GameObject('Walker', 'Person');
 	// The shop steps: a row of stair cells, the raised floor south of them, open ground north and east.
-	const stair = chunk.worldCellCenter(2, 6);
-	const beside = chunk.worldCellCenter(3, 6);
-	const foot = chunk.worldCellCenter(2, 5);
-	const landing = chunk.worldCellCenter(2, 7);
-	const has = (from:XZ, to:XZ) => ways.getNeighbors([from.x, from.z]).some(([x, z]) => x === to.x && z === to.z);
-	assert.equal(has(beside, stair), false);
-	assert.equal(has(stair, beside), false);
-	assert.equal(has(foot, stair), true);
-	assert.equal(has(landing, stair), true);
-	assert.equal(ways.canPass(walker, [beside.x, beside.z], [stair.x, stair.z]), undefined);
-	assert.ok(ways.canPass(walker, [foot.x, foot.z], [stair.x, stair.z]));
-	const up = findRoute(ways, walker, [foot.x, foot.z], pointGoal([landing.x, landing.z]));
+	const at = (p:XZ) => ways.getNearby([p.x, p.z]).at;
+	const stair = at(chunk.worldCellCenter(2, 6));
+	const beside = at(chunk.worldCellCenter(3, 6));
+	const foot = at(chunk.worldCellCenter(2, 5));
+	const landing = at(chunk.worldCellCenter(2, 7));
+	assert.equal(ways.canTraverse(walker, beside, stair), undefined);
+	assert.equal(ways.canTraverse(walker, stair, beside), undefined);
+	assert.ok(ways.canTraverse(walker, foot, stair));
+	assert.ok(ways.canTraverse(walker, landing, stair));
+	const up = findRoute(ways, walker, foot, pointGoal(landing));
 	assert.ok(up && 'points' in up, 'no way up the stairs from the foot');
 });
 

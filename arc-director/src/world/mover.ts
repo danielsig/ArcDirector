@@ -96,7 +96,7 @@ function straightEnd(points:readonly Vec[], i:number):number {
 	return end;
 }
 
-/** Drives characters along routes over the host's `getNeighbors` and `canPass`, one move per character; a new move replaces the old. */
+/** Drives characters along routes over the host's `getNeighbors` and `canTraverse`, one move per character; a new move replaces the old. */
 export class Mover {
 	private readonly _errands = new Map<string, Errand>();
 	/** Ring places whose takers got there, by target then taker: taken while the taker still stands in it. */
