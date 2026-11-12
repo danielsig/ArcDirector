@@ -84,7 +84,7 @@ describe('prompt split', () => {
 		assert.match(system, /instead of waiting to think/);
 		assert.match(system, /law\(watch, arc, name\?\) is a standing reaction/);
 		assert.match(system, /outlives the program and needs no think/);
-		assert.match(system, /"then" ends a step: "if_ok" \(the default: the next step only if this one succeeded\), "always" \(the next step whatever happened\) or "if_failed" \(the rest are its fallback\)/);
+		assert.match(system, /"then" joins the next step: "if_ok" \(the default\) only when it must not run if this one failed, else "always"; "if_failed" runs it only on failure/);
 		assert.match(system, /"verb":"pick_up"/);
 		assert.match(system, /pick_up\(item, from\?\) — goes to it first/);
 		assert.match(system, /use\(item=TheItem, target=TheThing\)/);
@@ -98,7 +98,7 @@ describe('prompt split', () => {
 		assert.match(system, /❌ = you/);
 		assert.equal(system.includes('Goals (highest first)'), false);
 		assert.equal(system.includes('Pinned memories'), false);
-		assert.ok(system.length < 5550, `standing prefix ${system.length} chars`);
+		assert.ok(system.length < 6100, `standing prefix ${system.length} chars`);
 		const wanderJson = system.match(/\{"steps":\[\{"verb":"wander","until":"[^"]*"\}\]\}/);
 		assert.ok(wanderJson);
 		assert.equal(parseArc(wanderJson[0], verbs)[0].verb, 'wander');
@@ -147,7 +147,7 @@ describe('prompt split', () => {
 		assert.match(system, /trees\.nearby\(\)/);
 		assert.match(system, /Write wander\(until\) as a program/);
 		assert.match(system, /not go_to or follow the speaker/);
-		assert.match(system, /&& continues only on success/);
+		assert.match(system, /Use && only when the next step must not run if this one failed; else a new line or ;\. \|\| is the failure fallback\./);
 		assert.equal(system.includes('Arc JSON'), false);
 		assert.equal(system.includes('"verb":"wander"'), false);
 		assert.equal(system.includes('JSON shape'), false);
@@ -199,10 +199,10 @@ describe('prompt split', () => {
 		assert.equal(hint.includes('unknown verb'), false);
 	});
 
-	it('tells a bodiless mind that a verb of its units runs through issue', () => {
-		const hive = new VerbRegistry().addAll(STOCK_VERB_DEFS).addAll(STOCK_COLLECTIVE_VERB_DEFS, 'issue').view(['issue', 'wait']);
+	it('tells a bodiless mind that a verb of its units runs through command', () => {
+		const hive = new VerbRegistry().addAll(STOCK_VERB_DEFS).addAll(STOCK_COLLECTIVE_VERB_DEFS, 'command').view(['command', 'wait']);
 		const hint = arcRepairHint("unknown verb 'say'", 'json', [], hive);
-		assert.match(hint, /say is for your units, run through issue\(who, arc=say\(…\)\)/);
+		assert.match(hint, /say is for your units, run through a command whose arc holds say/);
 		assert.match(arcRepairHint("unknown verb 'dance'", 'json', [], hive), /not a valid Arc/);
 	});
 
@@ -219,7 +219,7 @@ describe('prompt split', () => {
 	it('omits Arc emit rules when revising goals', () => {
 		const system = stablePrefix('Guard', identity, verbs, { includeWatches: true, omitArc: true });
 		assert.match(system, /You are Guard/);
-		assert.match(system, /Watch language/);
+		assert.match(system, /Watches are Arc expressions/);
 		assert.equal(system.includes('Arc JSON'), false);
 		assert.equal(system.includes('Arc text'), false);
 		assert.equal(system.includes('Available verbs'), false);
@@ -278,7 +278,7 @@ describe('prompt split', () => {
 
 	it('shows the articles for a failure under its result', () => {
 		const user = volatileBlock({
-			lastResult: { ok: false, verb: 'go_to', reason: 'no way to Angler: Bridge is raised' },
+			lastResult: { status: 'failed', verb: 'go_to', reason: 'no way to Angler: Bridge is raised' },
 			lastResultArticles: 'Bridge: BridgeKeeper lowers it.',
 		});
 		assert.match(user, /Last verb result: go_to failed — no way to Angler: Bridge is raised\n {2}Bridge: BridgeKeeper lowers it\./);
@@ -351,7 +351,7 @@ describe('prompt split', () => {
 		assert.equal(system.includes('There is no Forest'), false);
 		assert.equal(system.includes('Being surrounded'), false);
 		assert.equal(system.includes('filter("Tree"), never filter("trees")'), false);
-		assert.ok(system.length < 5250, `standing prefix ${system.length} chars`);
+		assert.ok(system.length < 5800, `standing prefix ${system.length} chars`);
 		const knowledgeOnly = stablePrefix('Guard', identity, verbs, { canRecallKnowledge: true });
 		assert.match(knowledgeOnly, /Call recall, or wander\(until\)/);
 		assert.match(knowledgeOnly, /Never ask anyone until recall cannot find it/);
@@ -361,20 +361,20 @@ describe('prompt split', () => {
 	it('a host example and verb line replace the stock crowd ones', () => {
 		const catalog = new VerbRegistry().addAll(STOCK_VERB_DEFS).addAll(STOCK_COLLECTIVE_VERB_DEFS);
 		catalog.add('shoot', { args: { target: 'id' }, help: 'needs a clear line of sight' });
-		const verbs = catalog.view(['issue', 'when', 'law', 'unlaw', 'loop', 'smite']);
+		const verbs = catalog.view(['command', 'when', 'law', 'unlaw', 'loop', 'smite']);
 		const stock = stablePrefix('Guard', identity, verbs, { arcFormat: 'text' });
-		assert.match(stock, /Issue looping programs with a bunch of when/);
+		assert.match(stock, /Give units looping programs with a bunch of when/);
 		assert.match(stock, /shoot\(target\) — needs a clear line of sight/);
 		assert.match(stock, /unlaw\(name\) — drops that law/);
-		assert.match(stock, /Example:\nissue\(\n\twho=units\.filter\("Guard"\),/, 'laid out as blocks, like the rule asks');
+		assert.match(stock, /Example:\ncommand\(units\.filter\("Guard"\)\) \{\n\tgo_to\(Keep\)\n\}/, 'laid out as blocks, like the rule asks');
 		const system = stablePrefix('Guard', identity, verbs, {
 			arcFormat: 'text',
 			verbInstructions: 'Hold the line.',
-			arcExample: 'issue(who=units.filter("Archer"), arc=loop(shoot(others.filter("enemy").minBy(u => u.hp))))',
+			arcExample: 'command(who=units.filter("Archer"), arc=loop(shoot(others.filter("enemy").minBy(u => u.hp))))',
 		});
 		assert.match(system, /Hold the line\./);
-		assert.equal(system.includes('Issue looping programs'), false);
-		assert.ok(system.includes('Example: issue(who=units.filter("Archer"), arc=loop(shoot(others.filter("enemy").minBy(u => u.hp))))\nYou are Guard'), 'the example ends the rules; who it is comes after');
+		assert.equal(system.includes('Give units looping programs'), false);
+		assert.ok(system.includes('Example: command(who=units.filter("Archer"), arc=loop(shoot(others.filter("enemy").minBy(u => u.hp))))\nYou are Guard'), 'the example ends the rules; who it is comes after');
 		assert.match(system, /Prefer law for any reaction that should apply to more than one unit/);
 		assert.match(system, /Answer immediately with only the Arc text/);
 		assert.match(system, /No JSON, no prose/);
@@ -387,40 +387,38 @@ describe('prompt split', () => {
 	it('shows a collective the same examples as JSON when it writes JSON, and each parses back', () => {
 		const catalog = new VerbRegistry().addAll(STOCK_VERB_DEFS).addAll(STOCK_COLLECTIVE_VERB_DEFS);
 		catalog.add('shoot', { args: { target: 'id' }, help: 'needs a clear line of sight' });
-		const verbs = catalog.view(['issue', 'when', 'law', 'unlaw', 'loop', 'choose', 'smite']);
+		const verbs = catalog.view(['command', 'when', 'law', 'unlaw', 'loop', 'choose', 'smite']);
 		for (const arcFormat of ['json', 'schema'] as const) {
 			const stock = stablePrefix('Guard', identity, verbs, { arcFormat });
 			assert.match(stock, /Answer immediately with only the Arc JSON, \{"steps":\[…\]\}/);
 			assert.equal(stock.includes('No JSON, no prose'), false);
-			assert.match(stock, /Give each issue as a step of its own\./);
-			assert.equal(stock.includes('Join several issue with ;'), false);
+			assert.match(stock, /"then" joins the next step/);
 			assert.equal(stock.includes('\twho='), false, 'no block layout in JSON');
 			const example = stock.match(/Example:\n(\{"steps":\[\n[\s\S]*?\n\]\})\nYou are /);
-			assert.ok(example, 'the stock issue example is Arc JSON');
+			assert.ok(example, 'the stock command example is Arc JSON');
 			const arc = parseArc(example[1], verbs);
-			assert.deepEqual(arc.map((step) => step.verb), ['issue', 'issue']);
+			assert.deepEqual(arc.map((step) => step.verb), ['command', 'command']);
 			assert.equal(arc[0].args.who, "units.filter('Guard')");
 			const choose = stock.match(/choose takes a goal and its choices, each a list of steps under its name, as in:\n(\{"steps"[\s\S]*?\n\]\})\n/);
 			assert.ok(choose, 'the choose example is Arc JSON');
-			assert.equal(parseArc(choose[1], verbs)[0].verb, 'issue');
-			const host = stablePrefix('Guard', identity, verbs, { arcFormat, arcExample: 'issue(who=units.filter("Archer"), arc=loop(shoot(others.filter("enemy").minBy(u => u.hp))))' });
+			assert.equal(parseArc(choose[1], verbs)[0].verb, 'command');
+			const host = stablePrefix('Guard', identity, verbs, { arcFormat, arcExample: 'command(who=units.filter("Archer"), arc=loop(shoot(others.filter("enemy").minBy(u => u.hp))))' });
 			const hosted = host.match(/Example:\s+(\{"steps"[\s\S]*?\})\nYou are /);
 			assert.ok(hosted, 'the host example is shown as Arc JSON too');
 			assert.equal(parseArc(hosted[1], verbs)[0].args.who, "units.filter('Archer')");
 		}
 	});
 
-	it('issue and law rules appear when the kit has crowd verbs', () => {
+	it('command and law rules appear when the kit has crowd verbs', () => {
 		const catalog = new VerbRegistry().addAll(STOCK_VERB_DEFS).addAll(STOCK_COLLECTIVE_VERB_DEFS);
 		catalog.add('slash', { args: { target: 'id' } });
-		const verbs = catalog.view(['issue', 'when', 'law', 'unlaw', 'loop', 'smite']);
+		const verbs = catalog.view(['command', 'when', 'law', 'unlaw', 'loop', 'smite']);
 		const system = stablePrefix('Guard', identity, verbs, { arcFormat: 'text' });
-		assert.match(system, /issue\(who, arc\) assigns a sticky program/);
+		assert.match(system, /command\(who, arc\) assigns a sticky program/);
 		assert.match(system, /who is YOUR roster/);
 		assert.match(system, /units\.filter\("Witch"\)/);
 		assert.match(system, /allUnits is one identical program/);
-		assert.match(system, /Join several issue with ;/);
-		assert.match(system, /Each issue arc is that unit's full chain/);
+		assert.match(system, /Each command arc is that unit's full chain/);
 		assert.match(system, /law\(who\?, watch, arc, name\?\) is a standing reaction/);
 		assert.match(system, /when\(watch, arc\) is this job's interrupt/);
 		assert.match(system, /Omitted who = units/);
@@ -482,9 +480,9 @@ describe('choose in prompts', () => {
 	it('teaches choose to a character that has it', () => {
 		const text = stablePrefix('Guard', {}, all, { arcFormat: 'text' });
 		assert.match(text, /choose\(goal, name=arc, …\) — a fast model picks one by name/);
-		assert.match(text, /as in:\nloop\(\n\tarc=choose\(\n\t\t"why you choose",\n\t\twander=wander\(\),\n\t\twait=wait\(\),\n\t\),\n\tuntil=!some\(others\),\n\)\n/, 'a block, every choice named');
+		assert.match(text, /as in:\nloop\(until=!some\(others\)\) \{\n\tchoose\("why you choose"\) \{\n\t\twander: wander\(\)\n\t\twait: wait\(\)\n\t\toffer: offer\(\)\n\t\}\n\}\n/, 'a block, every choice named');
 		const json = stablePrefix('Guard', {}, all);
-		assert.match(json, /choose takes a goal and its choices, each a list of steps under its name, as in:\n\{"steps":\[\n\t\{"verb":"loop","arc":\[\n\t\t\{"verb":"choose","goal":"why you choose","choices":\{\n\t\t\t"wander":\[\{"verb":"wander"\}\],\n\t\t\t"wait":\[\{"verb":"wait"\}\]\n\t\t\}\}\n\t\],"until":"!some\(others\)"\}\n\]\}\nA fast model runs the one that fits right now/);
+		assert.match(json, /choose takes a goal and its choices, each a list of steps under its name, as in:\n\{"steps":\[\n\t\{"verb":"loop","arc":\[\n\t\t\{"verb":"choose","goal":"why you choose","choices":\{\n\t\t\t"wander":\[\{"verb":"wander"\}\],\n\t\t\t"wait":\[\{"verb":"wait"\}\],\n\t\t\t"offer":\[\{"verb":"offer"\}\]\n\t\t\}\}\n\t\],"until":"!some\(others\)"\}\n\]\}\nA fast model runs the one that fits right now/);
 		const example = json.match(/as in:\n(\{"steps"[\s\S]*?\n\]\})\n/);
 		assert.ok(example);
 		assert.equal(parseArc(example[1], all)[0].verb, 'loop');
@@ -496,16 +494,16 @@ describe('choose in prompts', () => {
 		assert.equal(stablePrefix('Guard', {}, kit, { arcFormat: 'text' }).includes('choose'), false);
 	});
 
-	it('teaches a collective whose kit grants choose to issue it in a loop', () => {
+	it('teaches a collective whose kit grants choose to command it in a loop, ending on no more than two closers', () => {
 		const catalog = new VerbRegistry().addAll(STOCK_VERB_DEFS).addAll(STOCK_COLLECTIVE_VERB_DEFS);
 		catalog.add('attack', { args: { target: 'id?' } });
-		const text = stablePrefix('Dawn', {}, catalog.view(['issue', 'loop', 'choose', 'attack']), { arcFormat: 'text' });
-		assert.match(text, /as in:\nissue\(\n\twho=units,\n\tarc=loop\(\n\t\tarc=choose\(\n\t\t\t"why you choose",\n\t\t\tattack=attack\(\),\n/);
+		const text = stablePrefix('Dawn', {}, catalog.view(['command', 'loop', 'choose', 'attack']), { arcFormat: 'text' });
+		assert.match(text, /as in this command body:\nloop\(until=!some\(others\)\) \{\n\tchoose\("why you choose"\) \{\n\t\tattack: attack\(\)\n\t\twander: wander\(\)\n\t\twait: wait\(\)\n\t\}\n\}\n/);
 	});
 
 	it('never offers choose to a collective whose kit lacks it, even among nested arc verbs', () => {
 		const catalog = new VerbRegistry().addAll(STOCK_VERB_DEFS).addAll(STOCK_COLLECTIVE_VERB_DEFS);
-		const kit = catalog.view(['issue', 'when', 'loop', 'law', 'unlaw']);
+		const kit = catalog.view(['command', 'when', 'loop', 'law', 'unlaw']);
 		const text = stablePrefix('Dawn', {}, kit, { arcFormat: 'text' });
 		assert.match(text, /Nested arc verbs/);
 		assert.equal(text.includes('choose'), false);
@@ -537,7 +535,7 @@ describe('compact prompts', () => {
 		const full = stablePrefix('Fern', identity, verbs, opts);
 		const compact = stablePrefix('Fern', identity, verbs, { ...opts, style: 'compact' });
 		assert.ok(compact.length < full.length / 2, `${compact.length} of ${full.length}`);
-		for (const rule of ['Watch language', 'recall answers', 'Your name, role, and pinned memories', 'stays within distance until your next arc']) {
+		for (const rule of ['Watches are Arc expressions', 'recall answers', 'Your name, role, and pinned memories', 'stays within distance until your next arc']) {
 			assert.match(full, new RegExp(rule));
 			assert.equal(compact.includes(rule), false, rule);
 		}

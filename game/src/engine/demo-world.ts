@@ -1,5 +1,6 @@
 import { World, Time, inBounds, SIDE_OFFSETS, type Bounds, type Component, type Constructor, type GameObject, type TerrainSample, type XZ } from '@arc-director/kindling';
 import { Named } from './components';
+import { PerfHistory } from './PerfHistory';
 import type { DemoChunk, Tile } from '../world/demo-chunk';
 import { CELL_SIZE, CHUNK_SIZE, TILE_HEIGHT } from '../world/constants';
 import { LANDFORMS } from '../world/land';
@@ -50,6 +51,8 @@ export class DemoWorld extends World {
 	/** Body ids this player has damaged. A party that owns one treats the player as a rival. */
 	public playerHits = new Set<string>();
 	public arcDirectorOn = true;
+	/** Frame history for the stats overlay and `render_stats`. */
+	public readonly perf = new PerfHistory();
 	/** The scene is sunlit: fires light nothing but indoors. Set from its look before its chunks spawn. */
 	public daylight = false;
 	public sayOpen = false;
@@ -57,7 +60,7 @@ export class DemoWorld extends World {
 	/** A blow took a character's last health. */
 	public wentDown:(character:GameObject)=>void = () => undefined;
 	/** The player's character runs this arc, as an NPC would. Rejects when it cannot: no director running, or no such verb here. */
-	public enact:(arc:string)=>Promise<{ ok:boolean; reason?:string }> = () => Promise.reject(new Error('no director'));
+	public enact:(arc:string)=>Promise<{ status:'ok' | 'failed' | 'stopped'; reason?:string }> = () => Promise.reject(new Error('no director'));
 	/** `character` just caught `name`, fishing. */
 	public caught:(character:GameObject, name:string)=>void = () => undefined;
 	/** Surfaces a body can stand on, above the tile itself. The drawbridge and the road add themselves. */

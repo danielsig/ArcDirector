@@ -1,4 +1,4 @@
-import { Time, inBounds, distanceXZ, type GameObject, type XZ } from '@arc-director/kindling';
+import { Time, inBounds, type GameObject, type XZ } from '@arc-director/kindling';
 import {
 	dummyEntity,
 	pascalCase,
@@ -92,26 +92,76 @@ function landmarkEntity(go:GameObject):ExprEntity {
 	return e;
 }
 
+type Landmark = { go:GameObject; at:XZ };
+
+/** Each world's landmarks, and where they stand, for the frame they were found in: every character's kernels ask. */
+const frameLandmarks = new WeakMap<DemoWorld, { time:number; landmarks:Landmark[] }>();
+
+/** What counts as a landmark in `world` this frame, and where it stands: no character, nothing to pick up. */
+function landmarksOf(world:DemoWorld):Landmark[] {
+	const known = frameLandmarks.get(world);
+	if (known?.time === Time.time) {
+		return known.landmarks;
+	}
+	const landmarks = world.objects
+		.filter((go) => {
+			const tags = tagsOf(go);
+			return !tags.includes(RESERVED_TAGS.character) && !(tags.includes('item') && go.getComponent(Pickupable))
+				&& ['tree', 'waterfall', 'boulder', 'pillar', 'building', 'room', 'bridge'].some((t) => tags.includes(t));
+		})
+		.map((go) => ({ go, at: { x: go.transform.position.x, z: go.transform.position.z } }));
+	frameLandmarks.set(world, { time: Time.time, landmarks });
+	return landmarks;
+}
+
 function nearbyLandmarks(world:DemoWorld, character:GameObject, here?:XZ):GameObject[] {
-	const p = here ?? character.transform.position;
+	// Read once: a transform works its world position out on every read.
+	const at = character.transform.position;
+	const p = here ?? { x: at.x, z: at.z };
 	const ranked:{ go:GameObject; dist:number }[] = [];
-	for (const go of world.objects) {
-		const tags = tagsOf(go);
-		if (go === character || tags.includes(RESERVED_TAGS.character) || (tags.includes('item') && go.getComponent(Pickupable))) {
+	for (const landmark of landmarksOf(world)) {
+		if (landmark.go === character) {
 			continue;
 		}
-		if (!['tree', 'waterfall', 'boulder', 'pillar', 'building', 'room', 'bridge'].some((t) => tags.includes(t))) {
-			continue;
-		}
-		const gp = go.transform.position;
-		const dist = distanceXZ(gp, p);
+		const dist = Math.hypot(landmark.at.x - p.x, landmark.at.z - p.z);
 		if (dist > 28) {
 			continue;
 		}
-		ranked.push({ go, dist });
+		ranked.push({ go: landmark.go, dist });
 	}
 	ranked.sort((a, b) => a.dist - b.dist);
 	return ranked.slice(0, 16).map((r) => r.go);
+}
+
+/** The characters, items and places by the name a watch gives them, in world order (the last of a name wins). */
+type Scan = { characters:GameObject[]; items:GameObject[]; places:Map<string, GameObject> };
+
+/** Each world's scan for the frame it was made in: every character's kernels ask, every frame. */
+const frameScans = new WeakMap<DemoWorld, { time:number; scan:Scan }>();
+
+function scanOf(world:DemoWorld):Scan {
+	const known = frameScans.get(world);
+	if (known?.time === Time.time) {
+		return known.scan;
+	}
+	const scan:Scan = { characters: [], items: [], places: new Map() };
+	for (const go of world.objects) {
+		const tags = tagsOf(go);
+		const isCharacter = tags.includes(RESERVED_TAGS.character);
+		if (isCharacter) {
+			scan.characters.push(go);
+		}
+		const item = tags.includes(RESERVED_TAGS.item) && !isCharacter;
+		if (item) {
+			scan.items.push(go);
+		}
+		// Places a watch may name: openable things, and every named one (`BakerStall`, `WestGate`).
+		if (['door', 'bridge', 'chest', 'building'].some((t) => tags.includes(t)) || (!item && !isCharacter && go.getComponent(Named))) {
+			scan.places.set(idOf(go), go);
+		}
+	}
+	frameScans.set(world, { time: Time.time, scan });
+	return scan;
 }
 
 function lookupGo(world:DemoWorld, id:string):GameObject | undefined {
@@ -135,44 +185,22 @@ export function kernelsOf(
 			z: here.z,
 		}
 		: undefined;
+	const scan = scanOf(world);
 	const others:ExprEntity[] = [];
-	const items:ExprEntity[] = [];
-	const bindings:Record<string, ExprVal> = {};
-	for (const go of world.objects) {
-		const tags = tagsOf(go);
-		const isCharacter = tags.includes(RESERVED_TAGS.character);
-		if (isCharacter) {
-			if (go === character) {
-				continue;
-			}
-			if (hidePlayer && go.id === 'Player' && !alarmActive(go, Time.time)) {
-				continue;
-			}
-			if (!isLiving(go)) {
-				continue;
-			}
+	for (const go of scan.characters) {
+		if (go !== character && !(hidePlayer && go.id === 'Player' && !alarmActive(go, Time.time)) && isLiving(go)) {
 			others.push(entityOf(go, extraTags?.(go)));
 		}
-		const item = tags.includes(RESERVED_TAGS.item) && !isCharacter;
-		if (item) {
-			items.push(entityOf(go));
-		}
-		// Places a watch may name: openable things, and every named one (`BakerStall`, `WestGate`).
-		if (
-			['door', 'bridge', 'chest', 'building'].some((t) => tags.includes(t))
-			|| (!item && !isCharacter && go.getComponent(Named))
-		) {
-			const name = idOf(go);
-			bindings[name] = { kind: 'entity', value: entityOf(go) };
-		}
 	}
-	const landmarks = nearbyLandmarks(world, character, here);
-	bindings.landmarks = {
-		kind: 'list',
-		value: landmarks.map((go) => ({
-			kind: 'entity' as const,
-			value: landmarkEntity(go),
-		})),
+	const items = scan.items.map((go) => entityOf(go));
+	const bindings:Record<string, ExprVal> = {};
+	// Places and landmarks only when a watch reads them: most never do, and a big world has hundreds.
+	const lookup = (name:string):ExprVal | undefined => {
+		if (name === 'landmarks') {
+			return { kind: 'list', value: nearbyLandmarks(world, character, here).map((go) => ({ kind: 'entity' as const, value: landmarkEntity(go) })) };
+		}
+		const place = scan.places.get(name);
+		return place && { kind: 'entity', value: entityOf(place) };
 	};
 	if (!hidePlayer) {
 		const player = world.findByID('Player');
@@ -192,6 +220,7 @@ export function kernelsOf(
 		others,
 		items,
 		bindings,
+		lookup,
 		nearRadius: NEAR_RADIUS,
 		inventory: (who:ExprEntity) => {
 			const go = lookupGo(world, who.id);

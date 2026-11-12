@@ -1,3 +1,4 @@
+import { ThinkQueue } from '../think/queue.js';
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { STOCK_MOVE_VERBS, STOCK_VERBS } from '../arc/stock-verbs.js';
@@ -14,14 +15,15 @@ import { formatSight } from '../perception/sight.js';
 import { formatInventory } from '../perception/format-inventory.js';
 import { parseArc } from '../arc/wire.js';
 import { ArcDirector } from './ArcDirector.js';
+import { Ticker } from './Ticker.js';
 import { BrowserProvider, Skaldic, SKALDIC_BROWSER_MODELS } from '../inference/browser.js';
 import { ModelDownload } from '../inference/download.js';
 import type { CharacterSpec, StandingChoice, VerbCall } from './director-types.js';
 import type { SystemOne } from '../inference/system-one.js';
 import { OPEN_WORLD } from '../testing/open-world.js';
 import type { ArcFormat, ThinkEvent } from '../mind/mind-types.js';
-import type { Arc } from '../arc/arc-types.js';
-import { sleep } from '../turn.js';
+import type { Arc, ArcResult } from '../arc/arc-types.js';
+import { nextTurn, sleep } from '../turn.js';
 
 type Ctx = { paragraph:string; id:string };
 
@@ -33,6 +35,68 @@ async function waitFor(fn:()=>boolean, ms = 400):Promise<void> {
 		}
 		await sleep(10);
 	}
+}
+
+/**
+ * A director with `intervals`, Player (no law) and Guard (a law that goes to Tom once Tom is `near`), recording the game
+ * time of each tick the laws' watches (`watch`) and the minds' watches (`think`) were asked at, each `dt` the think
+ * queue counted, and Guard's verbs.
+ */
+async function timedDirector(intervals:{ watch?:number; think?:number }):Promise<{
+	director:ArcDirector<Ctx>;
+	tick:(now:number)=>void;
+	at:{ watch:string[]; think:string[] };
+	dts:number[];
+	calls:string[];
+	player:ReturnType<ArcDirector<Ctx>['character']> & object;
+	near:(on:boolean)=>void;
+}> {
+	let clock = 0;
+	let near = false;
+	const at = { watch: [] as string[], think: [] as string[] };
+	const dts:number[] = [];
+	const calls:string[] = [];
+	const note = (list:string[]):void => {
+		if (list.at(-1) !== clock.toFixed(2)) {
+			list.push(clock.toFixed(2));
+		}
+	};
+	const queue = new ThinkQueue({ processInterval: 0, heartbeatStart: 100, heartbeatMin: 100 });
+	const queueTick = queue.tick.bind(queue);
+	queue.tick = (dt, catalogs) => {
+		dts.push(dt);
+		if (catalogs) {
+			note(at.think);
+		}
+		return queueTick(dt, catalogs);
+	};
+	const director = await new ArcDirector<Ctx>()
+		.addFakeInference()
+		.addStockVerbs()
+		.withDefaultKit({ verbs: [...STOCK_VERBS] })
+		.onVerb((call) => {
+			calls.push(`${call.verb} ${String(call.args.target ?? '')}`);
+			return { status: 'ok', verb: call.verb };
+		})
+		.withContext((id) => ({ paragraph: scene(), id }))
+		.withKernels(({ id }) => {
+			// Not connect's own look before the first tick.
+			if (id === 'Guard' && clock > 0) {
+				note(at.watch);
+			}
+			return { me: dummyEntity(id), others: near ? [dummyEntity('Tom')] : [], items: [] };
+		})
+		.withQueue(queue)
+		.withIntervals(intervals)
+		.addCharacter({ id: 'Player' })
+		.addCharacter({ id: 'Guard', laws: [{ name: 'greet', watch: 'some(others)', arc: 'go_to(Tom)' }] })
+		.connect();
+	// Ticked by game time, as a host with a clock of its own ticks it.
+	const tick = (now:number):void => {
+		clock = now;
+		director.tick(now - director.time);
+	};
+	return { director, tick, at, dts, calls, player: director.character('Player')!, near: (on) => { near = on; } };
 }
 
 function scene():string {
@@ -60,12 +124,12 @@ async function gatedTrio(opts:{
 	const director = await new ArcDirector<Ctx>()
 		.withPriorityQueue({
 			processInterval: 0,
-			watchInterval: 0,
 			heartbeatStart: 100,
 			heartbeatMin: 100,
 			batchThinks: opts.batchThinks,
 			batchWait: opts.batchWait,
 		})
+		.withIntervals({ watch: 0, think: 0 })
 		.addFakeInference((req) => new Promise((resolve) => {
 			chats.push(req.thread ?? '?');
 			gates.push(() => resolve(WAIT_REPLY));
@@ -73,7 +137,7 @@ async function gatedTrio(opts:{
 		.addModel('fake', { maxParallel: 2 })
 		.addStockVerbs()
 		.withDefaultKit(KIT)
-		.onVerb(() => ({ ok: true, verb: 'wait' }))
+		.onVerb(() => ({ status: 'ok', verb: 'wait' }))
 		.addSense('scene', {
 			description: 'see',
 			gather: (ctx) => ctx.paragraph,
@@ -112,16 +176,16 @@ function directorOf(calls?:VerbCall<Ctx>[]):ArcDirector<Ctx> {
 	return new ArcDirector<Ctx>()
 		.withPriorityQueue({
 			processInterval: 0,
-			watchInterval: 0,
 			heartbeatStart: 0.01,
 			heartbeatMin: 0.01,
 		})
+		.withIntervals({ watch: 0, think: 0 })
 		.addFakeInference(goToNamedInteractable())
 		.addStockVerbs()
 		.withDefaultKit(KIT)
 		.onVerb((call) => {
 			calls?.push(call);
-			return { ok: true, verb: call.verb, reason: String(call.args.target ?? '') };
+			return { status: 'ok', verb: call.verb, reason: String(call.args.target ?? '') };
 		})
 		.addSense('scene', {
 			description: 'What you can see. Names only.',
@@ -146,10 +210,10 @@ describe('ArcDirector', () => {
 		await Promise.resolve();
 		assert.equal(released, false);
 		await forager.perform({ verb: 'go_to', args: { target: 'BridgeKeeper' } });
-		director.tick(0.1, 1);
+		director.tick(1);
 		assert.equal(released, false);
 		await forager.perform({ verb: 'examine', args: { target: 'BridgeKeeper' } });
-		director.tick(0.1, 1.2);
+		director.tick(0.2);
 		await running;
 		assert.equal(released, true);
 		director.dispose();
@@ -167,7 +231,7 @@ describe('ArcDirector', () => {
 			.addCharacter({ id: 'Forager', mind: { skipHeartbeat: true }, identity: { role: 'forager' } })
 			.addCharacter({ id: 'BridgeKeeper', mind: { skipHeartbeat: true }, identity: { role: 'keeper' } })
 			.connect();
-		assert.equal(director.talk!.say('Forager', 'Lower the bridge.').ok, true);
+		assert.equal(director.talk!.say('Forager', 'Lower the bridge.').status === 'ok', true);
 		assert.equal(director.talk!.say('Forager', 'Lower the bridge.').reason, 'Say it another way.');
 		assert.deepEqual(asked, ['Forager: Lower the bridge.']);
 		director.dispose();
@@ -225,7 +289,8 @@ describe('ArcDirector', () => {
 	it('sends every mind the same reply schema, whatever its kit, with the host tools in it', async () => {
 		const sent:string[] = [];
 		const director = await new ArcDirector<Ctx>()
-			.withPriorityQueue({ processInterval: 0, watchInterval: 100, heartbeatStart: 100, heartbeatMin: 100 })
+			.withPriorityQueue({ processInterval: 0, heartbeatStart: 100, heartbeatMin: 100 })
+			.withIntervals({ think: Infinity })
 			.addModel('fake', { maxParallel: 2 })
 			.addFakeInference((req) => {
 				sent.push(JSON.stringify(req.responseFormat));
@@ -234,7 +299,7 @@ describe('ArcDirector', () => {
 			.withMind((m) => m.withArcFormat('schema'))
 			.addStockVerbs()
 			.addTool('sniff', { description: 'Smell the air.', parameters: { type: 'object', properties: { what: { type: 'string' } } }, handler: () => 'smoke' })
-			.onVerb((call) => ({ ok: true, verb: call.verb }))
+			.onVerb((call) => ({ status: 'ok', verb: call.verb }))
 			.addSense('scene', { description: 'see', gather: (ctx) => ctx.paragraph })
 			.withContext((id) => ({ paragraph: scene(), id }))
 			.addCharacter({ id: 'Able', mind: { skipHeartbeat: true }, kit: { verbs: ['wait', 'go_to'] }, identity: { role: 'Waits.' } })
@@ -242,7 +307,7 @@ describe('ArcDirector', () => {
 			.connect();
 		director.mindQueue()!.enqueueMajor('Able');
 		director.mindQueue()!.enqueueMajor('Baker');
-		director.tick(1, 1);
+		director.tick(1);
 		await waitFor(() => sent.length >= 2);
 		assert.equal(new Set(sent).size, 1);
 		const format = JSON.parse(sent[0]) as { name:string; schema:{ anyOf:{ properties:{ tool?:{ const:string } } }[] } };
@@ -256,20 +321,21 @@ describe('ArcDirector', () => {
 		const events:ThinkEvent[] = [];
 		let asked = 0;
 		const director = await new ArcDirector<Ctx>()
-			.withPriorityQueue({ processInterval: 0, watchInterval: 100, heartbeatStart: 100, heartbeatMin: 100 })
+			.withPriorityQueue({ processInterval: 0, heartbeatStart: 100, heartbeatMin: 100 })
+			.withIntervals({ think: Infinity })
 			.addModel('fake', { maxParallel: 2 })
 			.addFakeInference(() => ({ content: asked++ === 0 ? JSON.stringify({ tool: 'sniff', what: 'air' }) : JSON.stringify({ steps: [{ verb: 'wait' }] }), toolCalls: [] }))
 			.withMind((m) => m.withArcFormat('schema'))
 			.addStockVerbs()
 			.addTool('sniff', { description: 'Smell the air.', parameters: { type: 'object', properties: { what: { type: 'string' } } }, handler: () => 'smoke' })
-			.onVerb((call) => ({ ok: true, verb: call.verb }))
+			.onVerb((call) => ({ status: 'ok', verb: call.verb }))
 			.onThink((event) => events.push(event))
 			.addSense('scene', { description: 'see', gather: (ctx) => ctx.paragraph })
 			.withContext((id) => ({ paragraph: scene(), id }))
 			.addCharacter({ id: 'Able', mind: { skipHeartbeat: true }, kit: { verbs: ['wait'], tools: ['sniff'] }, identity: { role: 'Waits.' } })
 			.connect();
 		director.mindQueue()!.enqueueMajor('Able');
-		director.tick(1, 1);
+		director.tick(1);
 		await waitFor(() => events.some((event) => event.kind === 'end'));
 		assert.deepEqual(events.map((event) => event.kind), ['start', 'reply', 'tool', 'reply', 'end']);
 		assert.deepEqual(events[1], { kind: 'reply', who: 'Able', thought: '', arc: '' });
@@ -282,12 +348,13 @@ describe('ArcDirector', () => {
 	it('logs a bug in an onThink listener, and the think goes on', async () => {
 		const logs:string[] = [];
 		const director = await new ArcDirector<Ctx>()
-			.withPriorityQueue({ processInterval: 0, watchInterval: 100, heartbeatStart: 100, heartbeatMin: 100 })
+			.withPriorityQueue({ processInterval: 0, heartbeatStart: 100, heartbeatMin: 100 })
+			.withIntervals({ think: Infinity })
 			.addModel('fake', { maxParallel: 2 })
 			.addFakeInference(() => ({ content: 'wait()', toolCalls: [] }))
 			.withMind((m) => m.withArcFormat('text'))
 			.addStockVerbs()
-			.onVerb((call) => ({ ok: true, verb: call.verb }))
+			.onVerb((call) => ({ status: 'ok', verb: call.verb }))
 			.onLog((entry) => logs.push(entry.message))
 			.onThink(() => {
 				throw new Error('listener broke');
@@ -297,7 +364,7 @@ describe('ArcDirector', () => {
 			.addCharacter({ id: 'Able', mind: { skipHeartbeat: true }, kit: { verbs: ['wait'] }, identity: { role: 'Waits.' } })
 			.connect();
 		director.mindQueue()!.enqueueMajor('Able');
-		director.tick(1, 1);
+		director.tick(1);
 		// The arc it chose, logged after the listener has thrown on every event before it.
 		await waitFor(() => logs.includes('wait()'));
 		assert.ok(logs.some((message) => message.includes('listener broke')));
@@ -309,19 +376,20 @@ describe('ArcDirector', () => {
 		const run = async (retries:number, replies:string[]):Promise<ThinkEvent[]> => {
 			events.length = 0;
 			const director = await new ArcDirector<Ctx>()
-				.withPriorityQueue({ processInterval: 0, watchInterval: 100, heartbeatStart: 100, heartbeatMin: 100 })
+				.withPriorityQueue({ processInterval: 0, heartbeatStart: 100, heartbeatMin: 100 })
+				.withIntervals({ think: Infinity })
 				.addModel('fake', { maxParallel: 2 })
 				.addFakeInference(() => ({ content: replies.shift() ?? 'nope()', toolCalls: [] }))
 				.withMind((m) => m.withArcFormat('text').withRepairRetries(retries))
 				.addStockVerbs()
-				.onVerb((call) => ({ ok: true, verb: call.verb }))
+				.onVerb((call) => ({ status: 'ok', verb: call.verb }))
 				.onThink((event) => events.push(event))
 				.addSense('scene', { description: 'see', gather: (ctx) => ctx.paragraph })
 				.withContext((id) => ({ paragraph: scene(), id }))
 				.addCharacter({ id: 'Able', mind: { skipHeartbeat: true }, kit: { verbs: ['wait'] }, identity: { role: 'Waits.' } })
 				.connect();
 			director.mindQueue()!.enqueueMajor('Able');
-			director.tick(1, 1);
+			director.tick(1);
 			await waitFor(() => events.some((event) => event.kind === 'end'));
 			director.dispose();
 			return [...events];
@@ -344,7 +412,7 @@ describe('ArcDirector', () => {
 			.withDefaultKit({ verbs: [...STOCK_VERBS] })
 			.onVerb((call) => {
 				calls.push(call);
-				return { ok: true, verb: call.verb };
+				return { status: 'ok', verb: call.verb };
 			})
 			.withContext((id) => ({ paragraph: scene(), id }))
 			.addCharacter({ id: 'Player' })
@@ -352,13 +420,222 @@ describe('ArcDirector', () => {
 		const player = director.character('Player')!;
 		const running = player.enact(parseArc('wait(seconds=2, until=1 > 2) && go_to(EastGate)', player.activeVerbs()));
 		for (let t = 1; t <= 4; t++) {
-			director.tick(1, t);
+			director.tick(1);
 			await sleep(5);
 		}
 		const result = await running;
-		assert.equal(result.ok, false);
+		assert.equal(result.status === 'ok', false);
 		assert.match(result.reason ?? '', /until not met after 2s/);
 		assert.equal(calls.some((c) => c.verb === 'go_to'), false);
+		director.dispose();
+	});
+
+	it('runs a parked when once its watch comes true, and a law to its end once its watch goes', async () => {
+		let near = false;
+		const calls:string[] = [];
+		const director = await new ArcDirector<Ctx>()
+			.addFakeInference()
+			.addStockVerbs()
+			.withDefaultKit({ verbs: [...STOCK_VERBS] })
+			.onVerb((call) => {
+				calls.push(`${call.verb} ${String(call.args.target ?? call.args.text ?? '')}`);
+				return { status: 'ok', verb: call.verb };
+			})
+			.withContext((id) => ({ paragraph: scene(), id }))
+			.withKernels(() => ({ me: dummyEntity('Player'), others: near ? [dummyEntity('Tom')] : [], items: [] }))
+			.withRearm(0)
+			.addCharacter({ id: 'Player', laws: [{ name: 'greet', watch: 'some(others)', arc: 'go_to(Tom) ; wait(seconds=3) ; go_to(Keep)' }] })
+			.connect();
+		const player = director.character('Player')!;
+		void player.enact(parseArc('go_to(Gate) ; when(some(others)) { say("Hi") }', player.activeVerbs()), undefined, undefined, true);
+		const tick = async (n:number):Promise<void> => {
+			for (let i = 0; i < n; i++) {
+				director.tick(1);
+				await sleep(5);
+			}
+		};
+		await tick(2);
+		assert.deepEqual(calls, ['go_to Gate'], 'parked on its when');
+		near = true;
+		await tick(1);
+		near = false;
+		await tick(6);
+		assert.deepEqual(calls.slice(1), ['go_to Tom', 'go_to Keep'], 'the law outranks the when, and runs to its end though its watch went false');
+		player.removeLaw('greet');
+		near = true;
+		await tick(2);
+		assert.deepEqual(calls.slice(3), ['say Hi'], 'the parked when, once its watch comes true again');
+		director.dispose();
+	});
+
+	it('runs a never-ending verb in a law while its trigger holds, then the program that waited for it', async () => {
+		let near = true;
+		const calls:string[] = [];
+		const director = await new ArcDirector<Ctx>()
+			.addFakeInference()
+			.addStockVerbs()
+			.withDefaultKit({ verbs: [...STOCK_VERBS] })
+			// The host's follow goes on until something stops it.
+			.onVerb((call) => {
+				calls.push(`${call.verb} ${String(call.args.target ?? '')}`);
+				return call.verb === 'follow' ? call.wait(1000) : { status: 'ok', verb: call.verb };
+			})
+			.withContext((id) => ({ paragraph: scene(), id }))
+			.withKernels(() => ({ me: dummyEntity('Player'), others: near ? [dummyEntity('Tom')] : [], items: [] }))
+			.addCharacter({ id: 'Player', laws: [{ name: 'shadow', watch: 'some(others)', arc: 'follow(Tom)' }] })
+			.connect();
+		const player = director.character('Player')!;
+		const tick = async (n:number):Promise<void> => {
+			for (let i = 0; i < n; i++) {
+				director.tick(1);
+				await sleep(5);
+			}
+		};
+		await tick(2);
+		const program = player.enact(parseArc('go_to(Gate)', player.activeVerbs()));
+		await tick(10);
+		assert.deepEqual(calls, ['follow Tom'], 'its trigger holds: it follows on, and the program waits');
+		assert.equal(player.verb, 'follow');
+		near = false;
+		await tick(2);
+		assert.equal((await program).status, 'ok');
+		assert.deepEqual(calls, ['follow Tom', 'go_to Gate'], 'its trigger gone, the follow ends, and the program runs');
+		director.dispose();
+	});
+
+	it('gives a law whose whole arc is an alias the rearm of the alias, unless the law sets its own', async () => {
+		const director = await new ArcDirector<Ctx>()
+			.addFakeInference()
+			.addStockVerbs()
+			.addVerb('dodge', { arc: 'wait()', watch: 'some(others)', rearm: 0 })
+			.withDefaultKit({ verbs: [...STOCK_VERBS, 'dodge'] })
+			.onVerb((call) => ({ status: 'ok', verb: call.verb }))
+			.withContext((id) => ({ paragraph: scene(), id }))
+			.addCharacter({ id: 'Player' })
+			.connect();
+		const player = director.character('Player')!;
+		await player.enact(parseArc('law(arc=dodge()) ; law(name=slow, arc=dodge(), rearm=2)', player.activeVerbs()));
+		assert.deepEqual(player.laws.map((law) => [law.name, law.watch, law.rearm]), [['dodge', 'some(others)', 0], ['slow', 'some(others)', 2]]);
+		director.dispose();
+	});
+
+	it('asks the laws once a watch interval, so a law starts within one interval of its watch, not on that frame', async () => {
+		let near = false;
+		const calls:string[] = [];
+		const director = await new ArcDirector<Ctx>()
+			.addFakeInference()
+			.addStockVerbs()
+			.withDefaultKit({ verbs: [...STOCK_VERBS] })
+			.onVerb((call) => {
+				calls.push(`${call.verb} ${String(call.args.target ?? '')}`);
+				return { status: 'ok', verb: call.verb };
+			})
+			.withContext((id) => ({ paragraph: scene(), id }))
+			.withKernels(() => ({ me: dummyEntity('Player'), others: near ? [dummyEntity('Tom')] : [], items: [] }))
+			.addCharacter({ id: 'Player', laws: [{ name: 'greet', watch: 'some(others)', arc: 'go_to(Tom)' }] })
+			.connect();
+		// Frames 10 ms apart; the default watch interval is 0.05 s, so the laws are asked at 0.01, 0.06, 0.11, …
+		const at:Record<string, string[]> = {};
+		for (let t = 1; t <= 10; t++) {
+			near = t >= 3;
+			director.tick(0.01);
+			await sleep(5);
+			at[(t / 100).toFixed(2)] = [...calls];
+		}
+		assert.deepEqual(at['0.03'], [], 'not on the frame its watch turned true');
+		assert.deepEqual(at['0.05'], [], 'nor before the next poll');
+		assert.deepEqual(at['0.06'], ['go_to Tom'], 'at the next poll, one step after the last');
+		director.dispose();
+	});
+
+	it('names what the host looks up as the mind names it, and finds it by that name', async () => {
+		const director = await new ArcDirector<Ctx>()
+			.addFakeInference()
+			.addStockVerbs()
+			.withDefaultKit({ verbs: [...STOCK_VERBS] })
+			.withContext((id) => ({ paragraph: scene(), id }))
+			.withKernels(() => ({ me: dummyEntity('Player'), others: [], items: [], lookup: (name) => (name === 'Well' ? { kind: 'entity', value: dummyEntity('Well', { tags: ['place'] }) } : undefined) }))
+			.withNames({ seen: (_observer, target) => (target.id === 'Well' ? 'OldWell' : target.id) })
+			.onVerb((call) => ({ status: 'ok', verb: call.verb }))
+			.addCharacter({ id: 'Player', mind: {} })
+			.connect();
+		assert.deepEqual(director.evaluate('Player', 'Well').value, { kind: 'entity', value: { ...dummyEntity('Well', { tags: ['place'] }), name: 'OldWell' } });
+		assert.deepEqual(director.evaluate('Player', 'OldWell is "place"').value, { kind: 'bool', value: true });
+		director.dispose();
+	});
+
+	it('fires the watch and think intervals on the game time since each last fired, once, never catching up', async () => {
+		const { director, tick, at } = await timedDirector({ watch: 0.2, think: 0.3 });
+		for (const now of [0.1, 0.2, 0.35, 0.4, 1, 1.1, 1.3]) {
+			tick(now);
+		}
+		assert.deepEqual(at.watch, ['0.10', '0.35', '1.00', '1.30'], 'the first tick, then 0.2 s on from the last');
+		assert.deepEqual(at.think, ['0.40', '1.00', '1.30'], '0.3 s on, counted from the first tick');
+		director.dispose();
+	});
+
+	it('does nothing on a tick at the same or an earlier game time: no watch, think or law, and no wait goes on', async () => {
+		const { director, tick, at, calls, player, near } = await timedDirector({ watch: 0, think: 0 });
+		tick(1);
+		let waited:ArcResult | undefined;
+		void player.enact(parseArc('wait(seconds=1)', player.activeVerbs()), undefined, undefined, true).then((result) => {
+			waited = result;
+		});
+		near(true);
+		for (let i = 0; i < 50; i++) {
+			tick(i % 2 === 0 ? 1 : 0.5);
+			await nextTurn();
+		}
+		assert.deepEqual([at.watch, at.think, calls, waited], [['1.00'], ['1.00'], [], undefined], 'only the first tick did anything');
+		tick(2.1);
+		await sleep(5);
+		assert.deepEqual([at.watch, at.think, calls, waited?.status], [['1.00', '2.10'], ['1.00', '2.10'], ['go_to Tom'], 'ok']);
+		director.dispose();
+	});
+
+	it('ends a step on its until at the next watch, not on the tick it came true', async () => {
+		const { director, tick, player, near } = await timedDirector({ watch: 0.2 });
+		let done = false;
+		void player.enact(parseArc('wait(until=some(others))', player.activeVerbs()), undefined, undefined, true).then(() => {
+			done = true;
+		});
+		const at:Record<string, boolean> = {};
+		for (const now of [0.05, 0.1, 0.15, 0.2, 0.25]) {
+			near(now >= 0.1);
+			tick(now);
+			await sleep(5);
+			at[now.toFixed(2)] = done;
+		}
+		assert.deepEqual(at, { '0.05': false, '0.10': false, '0.15': false, '0.20': false, '0.25': true });
+		director.dispose();
+	});
+
+	it('ends a wait when its until comes true, and gives up after its within', async () => {
+		let open = false;
+		const director = await new ArcDirector<Ctx>()
+			.addFakeInference()
+			.addStockVerbs()
+			.withDefaultKit({ verbs: [...STOCK_VERBS] })
+			.onVerb((call) => ({ status: 'ok', verb: call.verb }))
+			.withContext((id) => ({ paragraph: scene(), id }))
+			.withKernels(() => ({ me: dummyEntity('Player'), others: open ? [dummyEntity('Tom')] : [], items: [] }))
+			.addCharacter({ id: 'Player' })
+			.connect();
+		const player = director.character('Player')!;
+		const run = async (arc:string, openAt:number):Promise<ArcResult> => {
+			open = false;
+			const running = player.enact(parseArc(arc, player.activeVerbs()), undefined, undefined, true);
+			for (let t = 1; t <= 6; t++) {
+				open = t >= openAt;
+				director.tick(1);
+				await sleep(5);
+			}
+			return running;
+		};
+		const met = await run('wait(until=some(others))', 2);
+		assert.deepEqual([met.status === 'ok', met.reason], [true, 'until']);
+		const late = await run('wait(until=some(others), within=3s)', 99);
+		assert.deepEqual([late.status === 'ok', late.reason], [false, 'until not met after 3s']);
 		director.dispose();
 	});
 
@@ -370,18 +647,18 @@ describe('ArcDirector', () => {
 			.withDefaultKit({ verbs: [...STOCK_VERBS] })
 			.onVerb((call) => {
 				calls.push(call);
-				return { ok: true, verb: call.verb };
+				return { status: 'ok', verb: call.verb };
 			})
 			.withContext((id) => ({ paragraph: scene(), id }))
 			.addCharacter({ id: 'Player' })
 			.connect();
 		const player = director.character('Player')!;
 		const first = player.enact(parseArc('wait(seconds=2) && go_to(Keep)', player.activeVerbs()));
-		director.tick(1, 1);
+		director.tick(1);
 		await sleep(5);
 		const thought = player.enact(parseArc('wait(seconds=2) && go_to(EastGate)', player.activeVerbs()));
 		for (let t = 2; t <= 5; t++) {
-			director.tick(1, t);
+			director.tick(1);
 			await sleep(5);
 		}
 		await Promise.all([first, thought]);
@@ -398,18 +675,18 @@ describe('ArcDirector', () => {
 			.withDefaultKit({ verbs: [...STOCK_VERBS] })
 			.onVerb((call) => {
 				calls.push(call);
-				return { ok: true, verb: call.verb };
+				return { status: 'ok', verb: call.verb };
 			})
 			.withContext((id) => ({ paragraph: scene(), id }))
 			.addCharacter({ id: 'Player' })
 			.connect();
 		const player = director.character('Player')!;
 		void player.enact(parseArc('wait(seconds=30) && go_to(Keep)', player.activeVerbs()));
-		director.tick(1, 1);
+		director.tick(1);
 		await sleep(5);
 		const thought = player.enact(parseArc('wait(seconds=2) && go_to(EastGate)', player.activeVerbs()));
 		for (let t = 2; t <= 5; t++) {
-			director.tick(1, t);
+			director.tick(1);
 			await sleep(5);
 		}
 		await thought;
@@ -423,10 +700,10 @@ describe('ArcDirector', () => {
 		const director = await new ArcDirector<Ctx>()
 			.withPriorityQueue({
 				processInterval: 0,
-				watchInterval: 100,
 				heartbeatStart: 0.1,
 				heartbeatMin: 0.1,
 			})
+			.withIntervals({ think: Infinity })
 			.addModel('fake', { maxParallel: 1 })
 			.addFakeInference(() => {
 				chats += 1;
@@ -437,7 +714,7 @@ describe('ArcDirector', () => {
 			.withDefaultKit({ verbs: [...STOCK_VERBS] })
 			.onVerb((call) => {
 				calls.push(call);
-				return { ok: true, verb: call.verb };
+				return { status: 'ok', verb: call.verb };
 			})
 			.addSense('scene', {
 				description: 'see',
@@ -452,14 +729,14 @@ describe('ArcDirector', () => {
 		assert.deepEqual(director.characters().map((a) => a.id), ['Player']);
 		assert.deepEqual(director.minds(), []);
 		for (let t = 1; t <= 4; t++) {
-			director.tick(1, t);
+			director.tick(1);
 		}
 		await sleep(30);
 		for (const verb of ['think(about=x)', 'remember(content=x)', 'set_goal(goal=x)']) {
 			assert.throws(() => parseArc(verb, player.activeVerbs()));
 		}
 		const result = await player.enact(parseArc('go_to(EastGate)', player.activeVerbs()));
-		assert.equal(result.ok, true);
+		assert.equal(result.status === 'ok', true);
 		assert.equal(calls.some((c) => c.verb === 'go_to' && c.character === player), true);
 		assert.equal(chats, 0);
 		director.dispose();
@@ -475,7 +752,7 @@ describe('ArcDirector', () => {
 			.withDefaultKit({ verbs: [...STOCK_VERBS] })
 			.onVerb((call) => {
 				targets.push(call.args.target);
-				return { ok: true, verb: call.verb };
+				return { status: 'ok', verb: call.verb };
 			})
 			.withContext((id) => ({ paragraph: scene(), id }))
 			.addCharacter({ id: 'Player' })
@@ -495,10 +772,10 @@ describe('ArcDirector', () => {
 			const director = await new ArcDirector<Ctx>()
 				.withPriorityQueue({
 					processInterval: 0,
-					watchInterval: 100,
 					heartbeatStart: 100,
 					heartbeatMin: 100,
 				})
+				.withIntervals({ think: Infinity })
 				.addModel('fake', { maxParallel: 1 })
 				.addFakeInference(() => {
 					chats += 1;
@@ -507,7 +784,7 @@ describe('ArcDirector', () => {
 				.withMind((m) => m.withArcFormat('text'))
 				.addStockVerbs()
 				.withDefaultKit({ verbs: [...STOCK_VERBS, 'offer'] })
-				.onVerb((call) => ({ ok: true, verb: call.verb }))
+				.onVerb((call) => ({ status: 'ok', verb: call.verb }))
 				.addSense('scene', {
 					description: 'see',
 					gather: (ctx) => ctx.paragraph,
@@ -521,9 +798,9 @@ describe('ArcDirector', () => {
 				})
 				.connect();
 			director.mindQueue()!.enqueueMajor('Npc');
-			director.tick(1, 1);
-			await waitFor(() => chats === 1 && director.character('Npc')?.lastResult?.ok === true);
-			director.tick(1, 2);
+			director.tick(1);
+			await waitFor(() => chats === 1 && director.character('Npc')?.lastResult?.status === 'ok' === true);
+			director.tick(1);
 			await waitFor(() => chats === 2);
 			director.dispose();
 		}
@@ -532,7 +809,8 @@ describe('ArcDirector', () => {
 	it('thinks again, told why, after a reply that never became an arc', async () => {
 		const users:string[] = [];
 		const director = await new ArcDirector<Ctx>()
-			.withPriorityQueue({ processInterval: 0, watchInterval: 100, heartbeatStart: 100, heartbeatMin: 100 })
+			.withPriorityQueue({ processInterval: 0, heartbeatStart: 100, heartbeatMin: 100 })
+			.withIntervals({ think: Infinity })
 			.addModel('fake', { maxParallel: 1 })
 			.addFakeInference((req) => {
 				const user = String(req.messages[1]?.content);
@@ -542,18 +820,17 @@ describe('ArcDirector', () => {
 			.withMind((m) => m.withArcFormat('text'))
 			.addStockVerbs()
 			.withDefaultKit({ verbs: [...STOCK_VERBS] })
-			.onVerb((call) => ({ ok: true, verb: call.verb }))
+			.onVerb((call) => ({ status: 'ok', verb: call.verb }))
 			.addSense('scene', { description: 'see', gather: (ctx) => ctx.paragraph })
 			.withContext((id) => ({ paragraph: scene(), id }))
 			.addCharacter({ id: 'Npc', mind: { skipHeartbeat: true }, identity: { role: 'Talks.' } })
 			.connect();
 		director.mindQueue()!.enqueueMajor('Npc');
-		director.tick(1, 1);
+		director.tick(1);
 		await waitFor(() => director.character('Npc')?.mind?.lastResult?.verb === 'think');
-		let t = 2;
 		await waitFor(() => {
-			director.tick(1, t++);
-			return director.character('Npc')?.mind?.lastResult?.ok === true;
+			director.tick(1);
+			return director.character('Npc')?.mind?.lastResult?.status === 'ok' === true;
 		});
 		assert.match(users[users.length - 1], /think failed — your reply was not a valid Arc: to is outside the parentheses/);
 		director.dispose();
@@ -562,7 +839,8 @@ describe('ArcDirector', () => {
 	it('retries a stalled think once, not forever', async () => {
 		let thinks = 0;
 		const director = await new ArcDirector<Ctx>()
-			.withPriorityQueue({ processInterval: 0, watchInterval: 100, heartbeatStart: 100, heartbeatMin: 100 })
+			.withPriorityQueue({ processInterval: 0, heartbeatStart: 100, heartbeatMin: 100 })
+			.withIntervals({ think: Infinity })
 			.addModel('fake', { maxParallel: 1 })
 			.addFakeInference((req) => {
 				thinks += req.messages.length === 2 ? 1 : 0;
@@ -571,14 +849,14 @@ describe('ArcDirector', () => {
 			.withMind((m) => m.withArcFormat('text'))
 			.addStockVerbs()
 			.withDefaultKit({ verbs: [...STOCK_VERBS] })
-			.onVerb((call) => ({ ok: true, verb: call.verb }))
+			.onVerb((call) => ({ status: 'ok', verb: call.verb }))
 			.addSense('scene', { description: 'see', gather: (ctx) => ctx.paragraph })
 			.withContext((id) => ({ paragraph: scene(), id }))
 			.addCharacter({ id: 'Npc', mind: { skipHeartbeat: true }, identity: { role: 'Talks.' } })
 			.connect();
 		director.mindQueue()!.enqueueMajor('Npc');
 		for (let t = 1; t <= 10; t++) {
-			director.tick(1, t);
+			director.tick(1);
 			await sleep(20);
 		}
 		assert.equal(thinks, 2);
@@ -596,7 +874,7 @@ describe('ArcDirector', () => {
 				goals: [{ text: 'Go to EastGate', priority: 1 }],
 			})
 			.connect();
-		director.tick(1, 1);
+		director.tick(1);
 		await waitFor(() => !!director.character('Watcher')?.mind!.lastArc);
 		const arc = director.character('Watcher')!.mind!.lastArc!;
 		assert.equal(arc[0].verb, 'go_to');
@@ -614,10 +892,10 @@ describe('ArcDirector', () => {
 		const director = await new ArcDirector<Ctx>()
 			.withPriorityQueue({
 				processInterval: 0,
-				watchInterval: 0,
 				heartbeatStart: 0.01,
 				heartbeatMin: 0.01,
 			})
+			.withIntervals({ watch: 0, think: 0 })
 			.addFakeInference(() => ({
 				content: arc,
 				reasoning: 'Blade is close; loop slash, do not go_to.',
@@ -625,7 +903,7 @@ describe('ArcDirector', () => {
 			}))
 			.addStockVerbs()
 			.withDefaultKit(KIT)
-			.onVerb(() => ({ ok: true, verb: 'wait' }))
+			.onVerb(() => ({ status: 'ok', verb: 'wait' }))
 			.onLog((entry) => logs.push(entry.message))
 			.addSense('scene', {
 				description: 'What you can see. Names only.',
@@ -640,7 +918,7 @@ describe('ArcDirector', () => {
 				goals: [{ text: 'Win.', priority: 1 }],
 			})
 			.connect();
-		director.tick(1, 1);
+		director.tick(1);
 		await waitFor(() => logs.some((m) => m.includes('(thinking)')));
 		const prompt = logs.find((m) => m.startsWith('prompt\n')) ?? '';
 		assert.match(prompt, /"role":"system"/);
@@ -672,7 +950,7 @@ describe('ArcDirector', () => {
 		const { director, prompts } = await promptedWatcher();
 		director.withMind((m) => m.withSystemNote('The bell tolls at dusk.')).withCooldown(7);
 		assert.equal(director.character('Watcher')!.cooldown, 7);
-		director.tick(1, 1);
+		director.tick(1);
 		await waitFor(() => prompts.length > 0);
 		assert.match(prompts[0], /The bell tolls at dusk\./);
 		director.dispose();
@@ -681,7 +959,7 @@ describe('ArcDirector', () => {
 	it('reaches a mind that sees with a sense added after the cast is wired', async () => {
 		const { director, prompts } = await promptedWatcher((d) => d.withSight({ look: (ctx) => ({ self: { id: ctx.id, point: [0, 0] }, objects: [] }) }));
 		director.addSense('weather', { description: 'The weather.', gather: () => 'Rain on the roof.' });
-		director.tick(1, 1);
+		director.tick(1);
 		await waitFor(() => prompts.length > 0);
 		assert.match(prompts[0], /Rain on the roof\./);
 		director.dispose();
@@ -716,7 +994,7 @@ describe('ArcDirector', () => {
 			goals: [{ text: 'Go to EastGate', priority: 1 }],
 		});
 		assert.ok(director.character('Guard'));
-		director.tick(1, 1);
+		director.tick(1);
 		await waitFor(() => !!director.character('Guard')?.mind!.lastArc);
 		assert.equal(director.character('Guard')!.mind!.lastArc![0].verb, 'go_to');
 		director.removeCharacter('Guard');
@@ -751,12 +1029,12 @@ describe('ArcDirector', () => {
 				args: { item: 'id', to: 'id', quantity: 'number?' },
 				handler: ({ args }) => {
 					gave.push(String(args.item));
-					return { ok: true, verb: 'give' };
+					return { status: 'ok', verb: 'give' };
 				},
 			})
 			.onVerb(({ verb }) => {
 				other.push(verb);
-				return { ok: true, verb };
+				return { status: 'ok', verb };
 			})
 			.addSense('scene', {
 				description: 'see',
@@ -771,7 +1049,7 @@ describe('ArcDirector', () => {
 				goals: [{ text: 'give the key', priority: 1 }],
 			})
 			.connect();
-		director.tick(1, 1);
+		director.tick(1);
 		await waitFor(() => gave.length + other.length > 0);
 		assert.ok(gave.length > 0 || other.includes('go_to'));
 		director.dispose();
@@ -782,7 +1060,7 @@ describe('ArcDirector', () => {
 		const director = await directorOf()
 			.onVerb(({ character, verb }) => {
 				order.push(character.id);
-				return { ok: true, verb };
+				return { status: 'ok', verb };
 			})
 			.addCharacter({
 				id: 'Low',
@@ -800,13 +1078,13 @@ describe('ArcDirector', () => {
 			})
 			.addModel('fake', { maxParallel: 1 })
 			.connect();
-		director.tick(1, 1);
+		director.tick(1);
 		await waitFor(() => order.length > 0);
 		assert.equal(order[0], 'High');
 		director.dispose();
 	});
 
-	it('runLoop returns a stop function', async () => {
+	it('thinks by the wall clock with a Ticker, with no loop of its own', async () => {
 		const director = await directorOf().addCharacter({
 			id: 'Watcher',
 			mind: {},
@@ -814,9 +1092,10 @@ describe('ArcDirector', () => {
 			identity: { role: 'Pays attention.' },
 			goals: [{ text: 'Go to EastGate', priority: 1 }],
 		}).connect();
-		const stop = director.runLoop(50);
-		await waitFor(() => !!director.character('Watcher')?.mind!.lastArc, 800);
-		stop();
+		{
+			using ticker = new Ticker(director, { interval: 0.02 });
+			await waitFor(() => !!director.character('Watcher')?.mind!.lastArc, 800);
+		}
 		director.dispose();
 	});
 
@@ -836,7 +1115,7 @@ describe('ArcDirector', () => {
 			.addStockVerbs()
 			.onVerb((call) => {
 				seen.push(call.character.verbIndex);
-				return { ok: true, verb: call.verb };
+				return { status: 'ok', verb: call.verb };
 			})
 			.addSense('scene', {
 				description: 'see',
@@ -851,7 +1130,7 @@ describe('ArcDirector', () => {
 				goals: [{ text: 'act', priority: 1 }],
 			})
 			.connect();
-		director.tick(1, 1);
+		director.tick(1);
 		await waitFor(() => seen.length >= 2);
 		assert.deepEqual(seen.slice(0, 2), [0, 1]);
 		director.dispose();
@@ -943,17 +1222,17 @@ describe('ArcDirector', () => {
 			})
 			.connect();
 		const agent = director.character('Guard')!;
-		director.tick(1, 1);
+		director.tick(1);
 		assert.deepEqual(agent.activeVerbs().list().map((v) => v.name), ['go_to', 'wait']);
 		kit.verbs = ['wait'];
-		director.tick(1, 2);
+		director.tick(1);
 		assert.deepEqual(agent.activeVerbs().list().map((v) => v.name), ['wait']);
 		const denied = await agent.perform({ verb: 'go_to', args: { target: 'EastGate' } });
-		assert.equal(denied.ok, false);
+		assert.equal(denied.status === 'ok', false);
 		assert.match(denied.reason ?? '', /not available/);
 		agent.kit = () => ({ verbs: ['go_to'] });
 		const ok = await agent.perform({ verb: 'go_to', args: { target: 'EastGate' } });
-		assert.equal(ok.ok, true);
+		assert.equal(ok.status === 'ok', true);
 		director.dispose();
 	});
 
@@ -1025,12 +1304,12 @@ describe('ArcDirector', () => {
 			.onLog((entry) => logs.push(entry.message))
 			.withDefaultKit({ verbs: ['fly'] })
 			.addCharacter({ id: 'Guard', mind: {}, identity: { role: 'Walks.' } });
-		director.tick(1, 1);
+		director.tick(1);
 		assert.match(logs.join('\n'), /verb 'fly' is not registered/);
-		director.tick(1, 3.5);
+		director.tick(2.5);
 		assert.equal(logs.length, 1);
 		director.addVerb('fly');
-		director.tick(1, 4);
+		director.tick(0.5);
 		await waitFor(() => director.connected);
 		assert.ok(director.character('Guard'));
 		director.dispose();
@@ -1089,7 +1368,8 @@ describe('ArcDirector', () => {
 		};
 		const director = await new ArcDirector<Ctx>()
 			.withWorld(OPEN_WORLD)
-			.withPriorityQueue({ processInterval: 0, watchInterval: 0, heartbeatStart: 0.01, heartbeatMin: 0.01 })
+			.withPriorityQueue({ processInterval: 0, heartbeatStart: 0.01, heartbeatMin: 0.01 })
+			.withIntervals({ watch: 0, think: 0 })
 			.addFakeInference(goToNamedInteractable())
 			.addStockVerbs()
 			.withDefaultKit(KIT)
@@ -1116,7 +1396,8 @@ describe('ArcDirector', () => {
 		};
 		const director = await new ArcDirector<Ctx>()
 			.withWorld(OPEN_WORLD)
-			.withPriorityQueue({ processInterval: 0, watchInterval: 0, heartbeatStart: 0.01, heartbeatMin: 0.01 })
+			.withPriorityQueue({ processInterval: 0, heartbeatStart: 0.01, heartbeatMin: 0.01 })
+			.withIntervals({ watch: 0, think: 0 })
 			.addFakeInference(goToNamedInteractable())
 			.addStockVerbs()
 			.withDefaultKit(KIT)
@@ -1150,7 +1431,8 @@ describe('ArcDirector', () => {
 		};
 		const director = await new ArcDirector<Ctx>()
 			.withWorld({ ...OPEN_WORLD, canPass: (what, _from, to) => (what === 'light' && to[0] === 1 ? undefined : {}) })
-			.withPriorityQueue({ processInterval: 0, watchInterval: 0, heartbeatStart: 0.01, heartbeatMin: 0.01 })
+			.withPriorityQueue({ processInterval: 0, heartbeatStart: 0.01, heartbeatMin: 0.01 })
+			.withIntervals({ watch: 0, think: 0 })
 			.addFakeInference(goToNamedInteractable())
 			.addStockVerbs()
 			.withDefaultKit(KIT)
@@ -1185,7 +1467,8 @@ describe('ArcDirector', () => {
 		};
 		const director = await new ArcDirector<Ctx>()
 			.withWorld(OPEN_WORLD)
-			.withPriorityQueue({ processInterval: 0, watchInterval: 0, heartbeatStart: 0.01, heartbeatMin: 0.01 })
+			.withPriorityQueue({ processInterval: 0, heartbeatStart: 0.01, heartbeatMin: 0.01 })
+			.withIntervals({ watch: 0, think: 0 })
 			.addFakeInference(goToNamedInteractable())
 			.addStockVerbs()
 			.withDefaultKit(KIT)
@@ -1209,7 +1492,8 @@ describe('ArcDirector', () => {
 		const chats:string[] = [];
 		const director = await new ArcDirector<Ctx>()
 			.withWorld(OPEN_WORLD)
-			.withPriorityQueue({ processInterval: 0, watchInterval: 0, heartbeatStart: 0.01, heartbeatMin: 0.01 })
+			.withPriorityQueue({ processInterval: 0, heartbeatStart: 0.01, heartbeatMin: 0.01 })
+			.withIntervals({ watch: 0, think: 0 })
 			.addFakeInference((req) => {
 				chats.push(req.thread ?? '?');
 				return Promise.resolve(WAIT_REPLY);
@@ -1225,7 +1509,7 @@ describe('ArcDirector', () => {
 			})
 			.connect();
 		director.pushEvent({ kind: 'Opened', text: 'A door opens', tags: ['door'], major: true, timestamp: 1 });
-		director.tick(1, 1);
+		director.tick(1);
 		await sleep(20);
 		assert.deepEqual(chats, []);
 		director.dispose();
@@ -1236,10 +1520,10 @@ describe('ArcDirector', () => {
 			.withWorld(OPEN_WORLD)
 			.withPriorityQueue({
 				processInterval: 0,
-				watchInterval: 0,
 				heartbeatStart: 0.01,
 				heartbeatMin: 0.01,
 			})
+			.withIntervals({ watch: 0, think: 0 })
 			.addFakeInference(goToNamedInteractable())
 			.addStockVerbs()
 			.withDefaultKit(KIT)
@@ -1259,7 +1543,7 @@ describe('ArcDirector', () => {
 				watches: { heard: 'hasHeard' },
 			})
 			.connect();
-		director.tick(1, 1);
+		director.tick(1);
 		assert.equal(director.character('Guard')?.mind!.lastArc, undefined);
 		director.character('Guard')!.mind!.pushEvent({
 			kind: 'HeardSpeech',
@@ -1268,7 +1552,7 @@ describe('ArcDirector', () => {
 			major: true,
 			timestamp: 1,
 		});
-		director.tick(1, 2);
+		director.tick(1);
 		await waitFor(() => !!director.character('Guard')?.mind!.lastArc);
 		director.dispose();
 	});
@@ -1276,13 +1560,13 @@ describe('ArcDirector', () => {
 	it('does not start a think while another generation is still in flight', async () => {
 		const { director, chats, gates } = await gatedTrio({});
 		const queue = director.mindQueue()!;
-		director.tick(1, 1);
+		director.tick(1);
 		await waitFor(() => chats.length === 2);
 		assert.equal(queue.inFlight, 2);
 		assert.equal(chats.includes('Charlie'), false);
 		gates.shift()!();
 		await waitFor(() => queue.inFlight === 1);
-		director.tick(1, 2);
+		director.tick(1);
 		await sleep(20);
 		assert.equal(chats.length, 2);
 		assert.equal(queue.inFlight, 1);
@@ -1291,7 +1575,7 @@ describe('ArcDirector', () => {
 		}
 		await waitFor(() => queue.inFlight === 0);
 		queue.enqueueMajor('Charlie');
-		director.tick(1, 3);
+		director.tick(1);
 		await waitFor(() => chats.includes('Charlie'));
 		director.dispose();
 	});
@@ -1299,12 +1583,12 @@ describe('ArcDirector', () => {
 	it('fills a free slot immediately when batchThinks is false', async () => {
 		const { director, chats, gates } = await gatedTrio({ batchThinks: false });
 		const queue = director.mindQueue()!;
-		director.tick(1, 1);
+		director.tick(1);
 		await waitFor(() => chats.length === 2);
 		assert.equal(chats.includes('Charlie'), false);
 		gates.shift()!();
 		await waitFor(() => queue.inFlight === 1);
-		director.tick(1, 2);
+		director.tick(1);
 		await waitFor(() => chats.includes('Charlie'));
 		assert.equal(chats.length, 3);
 		for (const release of [...gates]) {
@@ -1317,14 +1601,14 @@ describe('ArcDirector', () => {
 	it('starts a waiting think after batchWait even if someone is still generating', async () => {
 		const { director, chats, gates } = await gatedTrio({ batchThinks: true, batchWait: 20 });
 		const queue = director.mindQueue()!;
-		director.tick(1, 1);
+		director.tick(1);
 		await waitFor(() => chats.length === 2);
 		gates.shift()!();
 		await waitFor(() => queue.inFlight === 1);
-		director.tick(1, 20);
+		director.tick(19);
 		await sleep(20);
 		assert.equal(chats.includes('Charlie'), false);
-		director.tick(1, 21);
+		director.tick(1);
 		await waitFor(() => chats.includes('Charlie'));
 		assert.equal(queue.inFlight, 2);
 		for (const release of [...gates]) {
@@ -1357,7 +1641,7 @@ describe('ArcDirector', () => {
 			}))
 			.onVerb((call) => {
 				seen.push(call.verb);
-				return { ok: true, verb: call.verb };
+				return { status: 'ok', verb: call.verb };
 			})
 			.addSense('scene', {
 				description: 'see',
@@ -1377,7 +1661,7 @@ describe('ArcDirector', () => {
 				}],
 			})
 			.connect();
-		director.tick(1, 1);
+		director.tick(1);
 		await waitFor(() => seen.includes('go_to'));
 		director.dispose();
 	});
@@ -1403,7 +1687,7 @@ describe('ArcDirector', () => {
 			.withKernels(() => ({ me: dummyEntity('BridgeKeeper'), others: [], items: [], cache: new SampleCache() }))
 			.onVerb((call) => {
 				seen.push(call.verb);
-				return { ok: true, verb: call.verb };
+				return { status: 'ok', verb: call.verb };
 			})
 			.withContext((id) => ({ paragraph: scene(), id }))
 			.addCharacter({
@@ -1416,7 +1700,7 @@ describe('ArcDirector', () => {
 		const starting = director.connect();
 		await waitFor(() => asked > 0);
 		assert.equal(director.connected, false, 'not connected before the server answers');
-		director.tick(1, 1);
+		director.tick(1);
 		await waitFor(() => seen.includes('go_to'));
 		open();
 		await assert.rejects(starting);
@@ -1462,6 +1746,23 @@ describe('restoreCast', () => {
 		assert.deepEqual(agent.laws.map((l) => l.name), ['sluice']);
 		next.dispose();
 	});
+
+	it('keeps the time, so every time in the cast means the same moment after a load', async () => {
+		const kernels = ({ id }:Ctx) => ({ me: dummyEntity(id), others: [], items: [] });
+		const first = await director().withKernels(kernels).connect();
+		first.tick(100);
+		await first.character('BridgeKeeper')!.mind!.thinkNow({ enact: false });
+		first.tick(10);
+		const saved = JSON.parse(JSON.stringify(first.exportCast()));
+		first.dispose();
+
+		const next = director().withKernels(kernels);
+		next.restoreCast(saved);
+		assert.equal(next.time, 110);
+		next.tick(5);
+		assert.deepEqual(next.evaluate('BridgeKeeper', 'prev.secondsAgo').value, { kind: 'number', value: 15 }, 'thought at 100, now 115');
+		next.dispose();
+	});
 });
 
 describe('regions', () => {
@@ -1489,15 +1790,15 @@ describe('regions', () => {
 			onStay: ({ id }, stayed, dt) => calls.push(`stay ${id} ${stayed} ${dt}`),
 			onExit: ({ id }, stayed) => calls.push(`exit ${id} after ${stayed}`),
 		});
-		d.tick(0.1, 1);
-		d.tick(0.1, 2);
+		d.tick(1);
+		d.tick(1);
 		assert.deepEqual(pinned(d, 'Keeper'), ['This room smells putrid.']);
 		at.Keeper = [5, 0];
 		at.Tom = [0.5, 0];
-		d.tick(0.1, 3);
+		d.tick(1);
 		assert.deepEqual(pinned(d, 'Keeper'), []);
 		assert.deepEqual(pinned(d, 'Hive'), ['Tom: This room smells putrid.']);
-		assert.deepEqual(calls, ['enter Keeper', 'stay Keeper 1 0.1', 'exit Keeper after 2', 'enter Tom']);
+		assert.deepEqual(calls, ['enter Keeper', 'stay Keeper 1 1', 'exit Keeper after 2', 'enter Tom']);
 		d.removeRegion('Crypt');
 		assert.deepEqual(pinned(d, 'Hive'), []);
 		assert.deepEqual(calls.at(-1), 'exit Tom after 0');
@@ -1509,7 +1810,7 @@ describe('regions', () => {
 		at.Tom = [3, 4.1];
 		const d = await director().connect();
 		d.addRegion('Pool', { center: [0, 0], radius: 5, memory: 'Cold water laps at your boots.' });
-		d.tick(0.1, 1);
+		d.tick(1);
 		assert.deepEqual(pinned(d, 'Keeper'), ['Cold water laps at your boots.']);
 		assert.deepEqual(pinned(d, 'Hive'), []);
 		d.dispose();
@@ -1529,11 +1830,11 @@ describe('regions', () => {
 			onEnter: ({ id }) => calls.push(`enter ${id}`),
 			onExit: ({ id }) => calls.push(`exit ${id}`),
 		});
-		d.tick(0.1, 1);
+		d.tick(1);
 		assert.deepEqual(pinned(d, 'Keeper'), ['This is our lair.']);
 		assert.deepEqual(pinned(d, 'Hive'), []);
 		cursed = new Set(['Tom']);
-		d.tick(0.1, 2);
+		d.tick(1);
 		assert.deepEqual(pinned(d, 'Keeper'), []);
 		assert.deepEqual(pinned(d, 'Hive'), ['Tom: This is our lair.']);
 		assert.deepEqual(calls, ['enter Keeper', 'exit Keeper', 'enter Tom']);
@@ -1554,18 +1855,18 @@ describe('regions', () => {
 				return torches;
 			},
 		});
-		d.tick(0.1, 1);
+		d.tick(1);
 		assert.equal(reads, 1);
 		assert.deepEqual(pinned(d, 'Keeper'), ['The torches burn bright.']);
 		torches = 'The torches are burning low.';
-		d.tick(0.1, 2);
+		d.tick(1);
 		assert.equal(reads, 2);
 		assert.deepEqual(pinned(d, 'Keeper'), ['The torches are burning low.']);
 		torches = '';
-		d.tick(0.1, 3);
+		d.tick(1);
 		assert.deepEqual(pinned(d, 'Keeper'), []);
 		torches = 'Dark.';
-		d.tick(0.1, 4);
+		d.tick(1);
 		assert.deepEqual(pinned(d, 'Keeper'), ['Dark.']);
 		d.dispose();
 	});
@@ -1575,7 +1876,7 @@ describe('regions', () => {
 		at.Tom = [0, 0];
 		const d = await director().connect();
 		d.addRegion('Hall', { from: [-1, -1], to: [1, 1], memory: ({ id }) => (id === 'Tom' ? 'My old cell.' : undefined) });
-		d.tick(0.1, 1);
+		d.tick(1);
 		assert.deepEqual(pinned(d, 'Keeper'), []);
 		assert.deepEqual(pinned(d, 'Hive'), ['Tom: My old cell.']);
 		d.dispose();
@@ -1594,14 +1895,14 @@ describe('regions', () => {
 			until: () => kingDead,
 			onExit: ({ id }) => calls.push(`exit ${id}`),
 		});
-		d.tick(0.1, 1);
+		d.tick(1);
 		assert.deepEqual(pinned(d, 'Keeper'), ['The king watches from his throne.']);
 		kingDead = true;
-		d.tick(0.1, 2);
+		d.tick(1);
 		assert.deepEqual(pinned(d, 'Keeper'), []);
 		assert.deepEqual(calls, ['exit Keeper']);
 		kingDead = false;
-		d.tick(0.1, 3);
+		d.tick(1);
 		assert.deepEqual(pinned(d, 'Keeper'), [], 'gone for good');
 		d.dispose();
 	});
@@ -1613,7 +1914,7 @@ describe('regions', () => {
 			.withKernels((ctx) => ({ me: dummyEntity(ctx.id, { tags: ctx.id === 'Tom' ? ['Undead'] : [] }), others: [], items: [] }))
 			.connect();
 		d.addRegion('Crypt', { from: [-1, -1], to: [1, 1], memory: 'This is our lair.', who: 'me is "Undead"' });
-		d.tick(0.1, 1);
+		d.tick(1);
 		assert.deepEqual(pinned(d, 'Keeper'), []);
 		assert.deepEqual(pinned(d, 'Hive'), ['Tom: This is our lair.']);
 		d.dispose();
@@ -1635,12 +1936,12 @@ describe('regions', () => {
 			});
 		}
 		d.addRegion('Pool', { center: [52, 9], radius: 1, memory: 'In the Pool.' });
-		d.tick(0.1, 1);
+		d.tick(1);
 		assert.deepEqual(pinned(d, 'Keeper'), ['In Room1.']);
 		assert.deepEqual(pinned(d, 'Hive'), ['Tom: In Room10.']);
 		at.Keeper = [52, 9];
 		at.Tom = [2, 2];
-		d.tick(0.1, 2);
+		d.tick(1);
 		assert.deepEqual(pinned(d, 'Keeper'), ['In the Pool.']);
 		assert.deepEqual(pinned(d, 'Hive'), ['Tom: In Room0.']);
 		assert.deepEqual(calls, ['enter Keeper Room1', 'enter Tom Room10', 'enter Tom Room0', 'exit Keeper Room1', 'exit Tom Room10']);
@@ -1653,7 +1954,7 @@ describe('regions', () => {
 		const region = { from: [-1, -1], to: [1, 1], memory: 'This room smells putrid.' };
 		const first = await director().connect();
 		first.addRegion('Crypt', region);
-		first.tick(0.1, 1);
+		first.tick(1);
 		const saved = JSON.parse(JSON.stringify(first.exportCast()));
 		first.dispose();
 
@@ -1662,7 +1963,7 @@ describe('regions', () => {
 		next.restoreCast(saved);
 		await next.connect();
 		assert.deepEqual(pinned(next, 'Hive'), ['Tom: This room smells putrid.']);
-		next.tick(0.1, 2);
+		next.tick(2);
 		assert.deepEqual(pinned(next, 'Keeper'), ['This room smells putrid.']);
 		assert.deepEqual(pinned(next, 'Hive'), []);
 		next.dispose();
@@ -1681,13 +1982,14 @@ describe('withNames', () => {
 			],
 		};
 		const director = await new ArcDirector<Ctx>()
-			.withPriorityQueue({ processInterval: 0, watchInterval: 0, heartbeatStart: 0.01, heartbeatMin: 0.01 })
+			.withPriorityQueue({ processInterval: 0, heartbeatStart: 0.01, heartbeatMin: 0.01 })
+			.withIntervals({ watch: 0, think: 0 })
 			.addFakeInference(() => ({ content: 'go_to(Stranger2)', toolCalls: [] }))
 			.withMind((m) => m.withArcFormat('text'))
 			.addStockVerbs()
 			.onVerb((call) => {
 				calls.push(call);
-				return { ok: true, verb: call.verb };
+				return { status: 'ok', verb: call.verb };
 			})
 			.withSight({ look: () => sight })
 			.withNames({
@@ -1710,7 +2012,7 @@ describe('withNames', () => {
 		assert.equal(text.includes('Nyx') || text.includes('Ash'), false);
 		assert.equal(director.seen('Captain', { id: 'Ash', tags: ['enemy'] }), 'Stranger2');
 		director.mindQueue()!.enqueueMajor('Captain');
-		director.tick(1, 1);
+		director.tick(1);
 		await waitFor(() => calls.length > 0);
 		assert.equal(calls[0]?.args.target, 'Ash');
 		director.dispose();
@@ -1721,7 +2023,8 @@ describe('withNames', () => {
 		const prompts:string[] = [];
 		const law = 'law(watch=some(EnemyWitch2) && some(others.filter("EnemyWitch2")), arc=examine(EnemyWitch2), name=flee)';
 		const director = await new ArcDirector<Ctx>()
-			.withPriorityQueue({ processInterval: 0, watchInterval: 0, heartbeatStart: 100, heartbeatMin: 100 })
+			.withPriorityQueue({ processInterval: 0, heartbeatStart: 100, heartbeatMin: 100 })
+			.withIntervals({ watch: 0, think: 0 })
 			.addModel('fake', { maxParallel: 1 })
 			.addFakeInference((req) => {
 				prompts.push(String(req.messages.at(-1)?.content ?? ''));
@@ -1739,7 +2042,7 @@ describe('withNames', () => {
 				if (call.verb === 'examine') {
 					examined.push(call.args.target);
 				}
-				return { ok: true, verb: call.verb };
+				return { status: 'ok', verb: call.verb };
 			})
 			.withContext((id) => ({ paragraph: scene(), id }))
 			.addCharacter({ id: 'Captain', mind: {}, kit: { verbs: ['law', 'examine', 'wait'] }, identity: { role: 'Watches.' } })
@@ -1747,17 +2050,17 @@ describe('withNames', () => {
 		const captain = director.character('Captain')!;
 		director.mindQueue()!.enqueueMajor('Captain');
 		for (let t = 1; t < 20 && examined.length === 0; t++) {
-			director.tick(1, t);
+			director.tick(1);
 			await sleep(10);
 		}
 		assert.equal(captain.laws[0]?.watch, 'some(Nyx) && some(others.filter("Nyx"))');
 		assert.equal(examined[0], 'Nyx');
 		director.mindQueue()!.enqueueMajor('Captain');
 		for (let t = 20; t < 40 && prompts.length < 2; t++) {
-			director.tick(1, t);
+			director.tick(1);
 			await sleep(10);
 		}
-		assert.match(prompts[1] ?? '', /- flee: when some\(EnemyWitch2\) && some\(others\.filter\("EnemyWitch2"\)\), run examine\(.*EnemyWitch2\)/);
+		assert.match(prompts[1] ?? '', /- flee: when some\(EnemyWitch2\) && some\(others\.filter\("EnemyWitch2"\)\), it runs examine\(.*EnemyWitch2\)/);
 		director.dispose();
 	});
 
@@ -1765,7 +2068,8 @@ describe('withNames', () => {
 		const examined:unknown[] = [];
 		const prompts:string[] = [];
 		const director = await new ArcDirector<Ctx>()
-			.withPriorityQueue({ processInterval: 0, watchInterval: 0, heartbeatStart: 100, heartbeatMin: 100 })
+			.withPriorityQueue({ processInterval: 0, heartbeatStart: 100, heartbeatMin: 100 })
+			.withIntervals({ watch: 0, think: 0 })
 			.addModel('fake', { maxParallel: 1 })
 			.addFakeInference((req) => {
 				const user = String(req.messages.at(-1)?.content ?? '');
@@ -1782,7 +2086,7 @@ describe('withNames', () => {
 				if (call.verb === 'examine') {
 					examined.push(call.args.target);
 				}
-				return { ok: true, verb: call.verb };
+				return { status: 'ok', verb: call.verb };
 			})
 			.withContext((id) => ({ paragraph: scene(), id }))
 			.addCharacter({ id: 'Captain', mind: {}, kit: { verbs: ['law', 'examine', 'wait'] }, identity: { role: 'Watches.' } })
@@ -1790,7 +2094,7 @@ describe('withNames', () => {
 		const captain = director.character('Captain')!;
 		director.mindQueue()!.enqueueMajor('Captain');
 		for (let t = 1; t < 40 && examined.length === 0; t++) {
-			director.tick(1, t);
+			director.tick(1);
 			await sleep(10);
 		}
 		assert.deepEqual(captain.laws.map((law) => law.name), ['always'], 'the law calling nope() was never stored');
@@ -1831,7 +2135,8 @@ describe('host verbs', () => {
 	it('hands handlers real ids from expressions, gates steps, and runs wait itself', async () => {
 		const went:unknown[] = [];
 		const director = await new ArcDirector<Ctx>()
-			.withPriorityQueue({ processInterval: 0, watchInterval: 0, heartbeatStart: 100, heartbeatMin: 100 })
+			.withPriorityQueue({ processInterval: 0, heartbeatStart: 100, heartbeatMin: 100 })
+			.withIntervals({ watch: 0, think: 0 })
 			.addModel('fake', { maxParallel: 1 })
 			.addFakeInference(() => ({
 				content: 'go_to(others.filter("enemy")) ; wait(seconds=2) ; examine(Brune)',
@@ -1847,18 +2152,18 @@ describe('host verbs', () => {
 			.addVerb('go_to', {
 				handler: ({ args }) => {
 					went.push(args.target);
-					return { ok: true, verb: 'go_to' };
+					return { status: 'ok', verb: 'go_to' };
 				},
 			})
-			.onVerb(({ verb }) => ({ ok: true, verb }))
-			.withVerbGate(({ verb }) => (verb === 'examine' ? { ok: false, verb, reason: 'gated' } : undefined))
+			.onVerb(({ verb }) => ({ status: 'ok', verb }))
+			.withVerbGate(({ verb }) => (verb === 'examine' ? { status: 'failed', verb, reason: 'gated' } : undefined))
 			.withContext((id) => ({ paragraph: scene(), id }))
 			.addCharacter({ id: 'Guard', mind: {}, kit: KIT, identity: { role: 'Guards.' } })
 			.connect();
 		director.mindQueue()!.enqueueMajor('Guard');
 		const guard = director.character('Guard')!;
 		for (let t = 1; t < 12 && guard.lastResult?.verb !== 'examine'; t++) {
-			director.tick(1, t);
+			director.tick(1);
 			await sleep(20);
 		}
 		assert.deepEqual(went, ['Nyx']);
@@ -1870,7 +2175,8 @@ describe('host verbs', () => {
 		let scored:number[] = [];
 		const director = await new ArcDirector<Ctx>()
 			.withWorld(OPEN_WORLD)
-			.withPriorityQueue({ processInterval: 0, watchInterval: 0, heartbeatStart: 100, heartbeatMin: 100 })
+			.withPriorityQueue({ processInterval: 0, heartbeatStart: 100, heartbeatMin: 100 })
+			.withIntervals({ watch: 0, think: 0 })
 			.addModel('fake', { maxParallel: 1 })
 			.addFakeInference(() => ({ content: 'wander(until=some(others.filter("Mushroom")))', toolCalls: [] }))
 			.withMind((m) => m.withArcFormat('text'))
@@ -1883,14 +2189,14 @@ describe('host verbs', () => {
 			.addVerb('wander', {
 				handler: (call) => {
 					scored = [call.score('until'), call.score('until', [5, 0])];
-					return { ok: true, verb: 'wander' };
+					return { status: 'ok', verb: 'wander' };
 				},
 			})
 			.withContext((id) => ({ paragraph: scene(), id }))
 			.addCharacter({ id: 'Forager', mind: {}, kit: KIT, identity: { role: 'Forages.' } })
 			.connect();
 		director.mindQueue()!.enqueueMajor('Forager');
-		director.tick(1, 1);
+		director.tick(1);
 		await waitFor(() => scored.length > 0);
 		assert.equal(scored[0], 0);
 		assert.ok(scored[1] > 0);
@@ -1918,7 +2224,7 @@ describe('choose', () => {
 			.withDefaultKit(KIT)
 			.onVerb((call) => {
 				ran.push(`${call.verb}(${String(call.args.target ?? '')})`);
-				return { ok: true, verb: call.verb };
+				return { status: 'ok', verb: call.verb };
 			})
 			.withContext((id) => ({ paragraph: scene(), id }))
 			.withKernels(() => ({
@@ -1943,7 +2249,7 @@ describe('choose', () => {
 
 	async function ticks(director:ArcDirector<Ctx>, from:number, to:number):Promise<void> {
 		for (let t = from; t <= to; t++) {
-			director.tick(1, t);
+			director.tick(1);
 			await sleep(15);
 		}
 	}
@@ -2013,7 +2319,7 @@ describe('choose', () => {
 		const { director } = await guard(async () => 'hold');
 		const asked = director.choiceQuestion('Guard', { hold: 'go_to(EastGate)', flee: 'go_to(Keep)' }, {
 			doing: 'wait',
-			last: { name: 'hold', result: { ok: false, verb: 'go_to', reason: 'no way there' } },
+			last: { name: 'hold', result: { status: 'failed', verb: 'go_to', reason: 'no way there' } },
 		});
 		assert.deepEqual(Object.keys(asked!.criteria), ['hold', 'flee']);
 		assert.match(asked!.criteria.hold, /^go_to\(EastGate\)/);
@@ -2093,14 +2399,14 @@ describe('choose', () => {
 			.addFakeInference()
 			.onVerb((call) => {
 				ran.push(`${call.character.id}:${call.verb}`);
-				return { ok: true, verb: call.verb };
+				return { status: 'ok', verb: call.verb };
 			})
 			.withContext((id) => ({ paragraph: scene(), id }))
 			.addInference('dawn', party('Dawn'))
 			.addInference('dusk', party('Dusk'))
-			.addCollective({ id: 'Dawn', kit: { verbs: ['issue', 'choose'] }, systemOne: 'dawn', characters: [{ id: 'Knight', kit: KIT }] })
-			.addCollective({ id: 'Dusk', kit: { verbs: ['issue', 'choose'] }, systemOne: 'dusk', characters: [{ id: 'Witch', kit: KIT }] })
-			.addCollective({ id: 'Hive', kit: { verbs: ['issue', 'choose'] }, characters: [{ id: 'Mira', kit: KIT }] })
+			.addCollective({ id: 'Dawn', kit: { verbs: ['command', 'choose'] }, systemOne: 'dawn', characters: [{ id: 'Knight', kit: KIT }] })
+			.addCollective({ id: 'Dusk', kit: { verbs: ['command', 'choose'] }, systemOne: 'dusk', characters: [{ id: 'Witch', kit: KIT }] })
+			.addCollective({ id: 'Hive', kit: { verbs: ['command', 'choose'] }, characters: [{ id: 'Mira', kit: KIT }] })
 			.connect();
 		assert.equal(director.collective('Dawn')!.activeVerbs().has('choose'), true);
 		assert.equal(director.collective('Hive')!.activeVerbs().has('choose'), false);
@@ -2115,7 +2421,7 @@ describe('choose', () => {
 		const build = (spec:CharacterSpec<Ctx>):Promise<unknown> => new ArcDirector<Ctx>()
 			.addStockVerbs()
 			.withDefaultKit(KIT)
-			.onVerb(() => ({ ok: true }))
+			.onVerb(() => ({ status: 'ok' }))
 			.addCharacter(spec)
 			.addFakeInference()
 			.addJevInference()
@@ -2130,11 +2436,12 @@ describe('choose', () => {
 describe('models', () => {
 	function cast(chat:(req:ChatRequest)=>Promise<ChatResponse> | ChatResponse):ArcDirector<Ctx> {
 		return new ArcDirector<Ctx>()
-			.withPriorityQueue({ processInterval: 0, watchInterval: 0, heartbeatStart: 100, heartbeatMin: 100, batchThinks: false })
+			.withPriorityQueue({ processInterval: 0, heartbeatStart: 100, heartbeatMin: 100, batchThinks: false })
+			.withIntervals({ watch: 0, think: 0 })
 			.addFakeInference(chat)
 			.addStockVerbs()
 			.withDefaultKit(KIT)
-			.onVerb((call) => ({ ok: true, verb: call.verb }))
+			.onVerb((call) => ({ status: 'ok', verb: call.verb }))
 			.withContext((id) => ({ paragraph: scene(), id }));
 	}
 
@@ -2156,7 +2463,7 @@ describe('models', () => {
 		assert.equal(director.modelID('big'), 'big-27b');
 		director.setDefaultModel('big');
 		director.removeModel('big');
-		director.tick(1, 1);
+		director.tick(1);
 		await director.character('Able')!.mind!.thinkNow({ enact: false });
 		assert.equal(seen.Able, 'small-1b');
 		director.dispose();
@@ -2178,14 +2485,14 @@ describe('models', () => {
 		for (const id of ['Able', 'Baker', 'Cutler']) {
 			director.mindQueue()!.enqueueMajor(id);
 		}
-		director.tick(1, 1);
+		director.tick(1);
 		await waitFor(() => started.length >= 2);
 		await sleep(30);
 		assert.equal(started.length, 2);
 		assert.ok(started.includes('Cutler'));
 		gates[started.findIndex((id) => id !== 'Cutler')]();
 		await sleep(10);
-		director.tick(1, 2);
+		director.tick(1);
 		await waitFor(() => started.length === 3);
 		for (const open of gates) {
 			open();
@@ -2203,7 +2510,7 @@ describe('models', () => {
 			.withEmbeddings({ id: 'nomic-embed' })
 			.addStockVerbs()
 			.withDefaultKit(KIT)
-			.onVerb((call) => ({ ok: true, verb: call.verb }))
+			.onVerb((call) => ({ status: 'ok', verb: call.verb }))
 			.addCharacter({ id: 'Able', mind: {} })
 			.connect();
 		const record = await director.character('Able')!.mind!.remember('EastGate is locked');
@@ -2214,7 +2521,7 @@ describe('models', () => {
 
 	it('throws at connect on a model name never added', async () => {
 		await assert.rejects(
-			new ArcDirector<Ctx>().addFakeInference().addStockVerbs().withDefaultKit(KIT).onVerb(() => ({ ok: true }))
+			new ArcDirector<Ctx>().addFakeInference().addStockVerbs().withDefaultKit(KIT).onVerb(() => ({ status: 'ok' }))
 				.addCharacter({ id: 'Able', mind: { model: 'huge' } }).connect(),
 			/'Able' names model 'huge', which was never added/,
 		);
@@ -2230,7 +2537,7 @@ describe('System One fallback', () => {
 			.withDefaultKit(KIT)
 			.onVerb((call) => {
 				ran.push(String(call.args.target));
-				return { ok: true, verb: call.verb };
+				return { status: 'ok', verb: call.verb };
 			})
 			.addInference('cloud', { pick: async () => {
 				asked.push('cloud');
@@ -2264,7 +2571,7 @@ describe('decision models', () => {
 			.addModel('local', { decision: true })
 			.addStockVerbs()
 			.withDefaultKit(KIT)
-			.onVerb(() => ({ ok: true }))
+			.onVerb(() => ({ status: 'ok' }))
 			.addCharacter({ id: 'Able', mind: {} })
 			.connect();
 		assert.equal(director.modelID('local'), 'google/gemma-4-e2b', 'loaded already, and it scores choices well');
@@ -2289,7 +2596,7 @@ describe('shared inference', () => {
 			.shareInference(source)
 			.addStockVerbs()
 			.withDefaultKit(KIT)
-			.onVerb(() => ({ ok: true }))
+			.onVerb(() => ({ status: 'ok' }))
 			.addCharacter({ id: 'Able', mind: {} })
 			.connect();
 		assert.equal(asked, before, 'no second lookup');
@@ -2307,11 +2614,12 @@ describe('reaching goals', () => {
 	function goalDirector(goals:CharacterSpec<GoalCtx>['goals'], state:{ done:boolean }, replies:string[] = []):ArcDirector<GoalCtx> {
 		let turn = 0;
 		return new ArcDirector<GoalCtx>()
-			.withPriorityQueue({ processInterval: 0, watchInterval: 0, heartbeatStart: 100, heartbeatMin: 100 })
+			.withPriorityQueue({ processInterval: 0, heartbeatStart: 100, heartbeatMin: 100 })
+			.withIntervals({ watch: 0, think: 0 })
 			.addFakeInference(() => ({ content: replies[turn++] ?? JSON.stringify({ steps: [{ verb: 'wait' }] }), toolCalls: [] }))
 			.addStockVerbs()
 			.withDefaultKit(KIT)
-			.onVerb((call) => ({ ok: true, verb: call.verb }))
+			.onVerb((call) => ({ status: 'ok', verb: call.verb }))
 			.withContext((id) => ({ id, done: state.done }))
 			.withKernels(() => ({
 				me: dummyEntity('Baker'),
@@ -2332,10 +2640,10 @@ describe('reaching goals', () => {
 			const d = await goalDirector([{ text: 'Buy a Loaf', until }, { text: 'Stay open' }], state)
 				.onGoalReached((id, goal) => heard.push(`${id}: ${goal.text}`))
 				.connect();
-			d.tick(1, 1);
+			d.tick(1);
 			assert.deepEqual(goalsOf(d), ['Buy a Loaf', 'Stay open'], 'not yet');
 			state.done = true;
-			d.tick(1, 2);
+			d.tick(1);
 			assert.deepEqual(goalsOf(d), ['Stay open']);
 			assert.deepEqual(pinnedOf(d), ['Goal reached: Buy a Loaf']);
 			assert.deepEqual(heard, ['Baker: Buy a Loaf']);
@@ -2343,16 +2651,16 @@ describe('reaching goals', () => {
 		});
 	}
 
-	it('asks only as often as watches are sampled', async () => {
+	it('asks only on the think interval', async () => {
 		let asked = 0;
 		const d = await goalDirector([{ text: 'Buy a Loaf', until: () => {
 			asked += 1;
 			return false;
-		} }], { done: false }).connect();
-		for (let i = 0; i < 10; i++) {
-			d.tick(0.05, i * 0.05);
+		} }], { done: false }).withIntervals({ think: 0.25 }).connect();
+		for (let i = 0; i <= 10; i++) {
+			d.tick(0.05);
 		}
-		assert.equal(asked, 2);
+		assert.equal(asked, 2, 'at 0.3 s and 0.55 s, the think interval from the first tick');
 		d.dispose();
 	});
 
@@ -2375,8 +2683,8 @@ describe('reaching goals', () => {
 		const mind = baker.mind!;
 		const perform = (goal?:string):ReturnType<typeof mind.perform> => mind.perform({ verb: 'finish_goal', args: goal ? { goal } : {} }, { id: 'Ash' } as never);
 		baker.persona.goals.push({ text: '[Ash] Hold the gate' });
-		assert.equal((await perform('Feel at home'))?.ok, false, 'not its goal to finish');
-		assert.equal((await perform())?.ok, true, 'with no name, its own');
+		assert.equal((await perform('Feel at home'))?.status === 'ok', false, 'not its goal to finish');
+		assert.equal((await perform())?.status === 'ok', true, 'with no name, its own');
 		assert.deepEqual(goalsOf(d), ['Feel at home']);
 		d.dispose();
 	});
@@ -2398,7 +2706,7 @@ describe('reaching goals', () => {
 
 	it('pins a reached goal for five thinks, then only recall finds it', async () => {
 		const d = await goalDirector([{ text: 'Buy a Loaf', until: 'hasLoaf' }], { done: true }).connect();
-		d.tick(1, 1);
+		d.tick(1);
 		const mind = d.character('Baker')!.mind!;
 		for (let i = 0; i < 4; i++) {
 			await mind.thinkNow({ enact: false });
@@ -2419,7 +2727,7 @@ describe('reaching goals', () => {
 		const next = await goalDirector(goals, state).connect();
 		next.restoreCast(saved);
 		state.done = true;
-		next.tick(1, 1);
+		next.tick(1);
 		assert.deepEqual(goalsOf(next), []);
 		const reached = JSON.parse(JSON.stringify(next.exportCast()));
 		next.restoreCast(reached);

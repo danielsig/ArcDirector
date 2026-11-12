@@ -107,6 +107,12 @@ export function evaluateWho<TCtx>(who:string, catalog:Catalog, collective:Collec
 	return membersFromVal(r.value, collective);
 }
 
+/** Why `who` picks no unit: the error that stopped it reading, else that it picks none. */
+export function noUnitReason(who:string, catalog:Catalog | undefined):string {
+	const error = catalog && evaluate(who, catalog).error;
+	return error ? `cannot read ${who}: ${error.message}` : `${who} picks no unit`;
+}
+
 /** Whether a collective's own `law` reaches `member`: its `who` names that member. */
 export function lawMatches<TCtx>(law:Law, member:Character<TCtx>, whoCatalog:Catalog, collective:Collective<TCtx>):boolean {
 	return evaluateWho(law.who, whoCatalog, collective).includes(member);

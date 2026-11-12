@@ -1,13 +1,14 @@
-import type { Arc } from '../arc/arc-types.js';
+import type { Arc, ArcResult } from '../arc/arc-types.js';
 import { lawGroup, lawHandler, type Law } from '../arc/laws.js';
 import type { ArcHandler } from '../arc/run.js';
-import { ArcRunner, type ArcRunnerJSON, type RunnerOptions } from '../character/arc-runner.js';
+import { ArcRunner, type ArcRunnerJSON, type ProgramState, type RunnerOptions } from '../character/arc-runner.js';
 import type { Character } from '../character/Character.js';
 import { hand } from '../internals.js';
 import { Mind, type MindJSON } from '../mind/mind.js';
+import { programFilesSection, type ProgramFile } from '../mind/prompt.js';
 import type { CharacterSpec } from '../director/director-types.js';
 import { squadTag, isSquadTag, shortTag, shortTags } from './tags.js';
-import { CHOOSE_VERB, MIND_ONLY_VERBS, STOCK_ARC_VERBS, stepDoing, type VerbRegistry } from '../arc/stock-verbs.js';
+import { CHOOSE_VERB, MIND_ONLY_VERBS, PASS_VERB, STOCK_ARC_VERBS, stepDoing, type VerbRegistry } from '../arc/stock-verbs.js';
 import { isFormationVerb, STOCK_COLLECTIVE_VERBS } from './collective-verbs.js';
 
 /** How many others each roster row says its units see: the nearest. */
@@ -83,8 +84,8 @@ export class Collective<TCtx = unknown> extends ArcRunner<TCtx> {
 	 * set, it stands in for the roster of every unit by name and their programs.
 	 */
 	public status?:()=>string;
-	/** Most units one `issue` may address at once. Unset to allow issue to address all units. */
-	public maxUnitsPerIssue?:number;
+	/** Most units one `command` may address at once. Unset to allow command to address all units. */
+	public maxUnitsPerCommand?:number;
 	private _characters:Character<TCtx>[] = [];
 	private _commander:Character<TCtx> | null = null;
 	/** The characters each was last issued a program with. */
@@ -136,6 +137,8 @@ export class Collective<TCtx = unknown> extends ArcRunner<TCtx> {
 		if (!this._characters.includes(character)) {
 			throw new Error(`ArcDirector: '${character.id}' is not in '${this.id}'`);
 		}
+		// A unit that takes command leaves its group: its row is its own, `(you)`, and its group's name no longer picks it.
+		this.joinGroup(character, undefined);
 		this._commander = character;
 	}
 
@@ -160,7 +163,7 @@ export class Collective<TCtx = unknown> extends ArcRunner<TCtx> {
 	}
 
 	/**
-	 * The verbs its prompt lists: its own, and as nested arc verbs (`issue`, laws, `loop`) only what it or one of its
+	 * The verbs its prompt lists: its own, and as nested arc verbs (`command`, laws, `loop`) only what it or one of its
 	 * characters can run, never what no one of it has (another faction's abilities). Parsing and the reply schema keep
 	 * the whole catalog, the same for every mind.
 	 */
@@ -257,7 +260,7 @@ export class Collective<TCtx = unknown> extends ArcRunner<TCtx> {
 	 * together are a group: called `group`, else what {@link groupFor} names them, and tagged so; one sent alone
 	 * leaves its group. The group's name, if they are one. Those in `appended` take it after what they are doing instead.
 	 */
-	public issue(characters:readonly Character<TCtx>[], arc:Arc, group?:string, appended:readonly string[] = []):string | undefined {
+	public command(characters:readonly Character<TCtx>[], arc:Arc, group?:string, appended:readonly string[] = []):string | undefined {
 		const troops = characters.filter((character) => character !== this._commander);
 		const squad = troops.map((character) => character.id);
 		const name = troops.length >= 2 ? this.groupFor(troops, group?.trim() || undefined) : undefined;
@@ -373,59 +376,144 @@ export class Collective<TCtx = unknown> extends ArcRunner<TCtx> {
 			// A law reaches `units` by default, so a commander must be told how its own laws reach it too.
 			const yours = this._commander && this.refreshKit().verbs.includes('law') ? 'a law reaches you too only with who=allUnits' : '';
 			const named = 'a group\'s name picks its units: units.filter("Alpha")';
-			const one = this.maxUnitsPerIssue === 1 ? 'an issue names one unit' : '';
+			const one = this.maxUnitsPerCommand === 1 ? 'a command names one unit' : '';
 			const header = mind.compact
 				? `Units (${[one, named, yours].filter(Boolean).join('; ')}):`
 				: one
 					? `Units (${one}; who=units.filter("Mira"), or a tag only one of them has${yours ? `; ${yours}` : ''}):`
-					: `Units (issue who=units.filter("Tag") is this roster; allUnits is every troop, one program; ${named}${yours ? `; ${yours}` : ''}):`;
+					: `Units (command who=units.filter("Tag") is this roster; allUnits is every troop, one program; ${named}${yours ? `; ${yours}` : ''}):`;
 			parts.push(`${header}\n${lines.join('\n')}`);
 			const down = this._characters.filter((c) => !standing.includes(c));
 			if (down.length > 0) {
 				parts.push(`Down: ${down.map((c) => mind.nameOf(c.id)).join(', ')}`);
 			}
 		}
-		const laws = mind.lawsSection();
+		const programs = this.standing
+			.filter((character) => character !== this._commander)
+			.flatMap((character) => {
+				const state = character.programState();
+				return state ? [{ character, name: mind.nameOf(character.id), state }] : [];
+			});
+		const laws = mind.lawsSection(this.lawsRunning(programs, mind));
 		if (laws) {
 			parts.push(laws);
 		}
-		const groups = new Map<string, string[]>();
-		const records:string[] = [];
-		for (const character of this.standing) {
-			if (character === this._commander || !character.busy || !character.arc) {
-				continue;
-			}
-			const key = mind.namedArc(character.arc);
-			groups.set(key, [...groups.get(key) ?? [], mind.nameOf(character.id)]);
-			if (!character.record.empty) {
-				records.push(`- ${mind.nameOf(character.id)}: ${character.record}`);
-			}
-		}
-		if (groups.size > 0 && !status) {
-			const lines = [...groups].map(([arc, names]) => `- ${names.join(', ')}: ${arc}`);
-			parts.push(`Unit programs:\n${lines.join('\n')}`);
-		}
+		const records = this.standing
+			.filter((character) => character !== this._commander && character.busy && character.arc && !character.record.empty)
+			.map((character) => `- ${mind.nameOf(character.id)}: ${character.record}`);
 		if (records.length > 0) {
 			parts.push(`How each program is going (latest steps; failures say why; picked counts its choose picks). Reprogram what keeps failing, and keep what works:\n${records.join('\n')}`);
+		}
+		const commander = this._commander ?? this;
+		const keep = commander.activeVerbs().has(PASS_VERB) ? mind.shownSteps([{ verb: PASS_VERB, args: {} }], commander.verbs, mind.arcFormat) : undefined;
+		const files = programFilesSection(this.programFiles(programs, mind), keep);
+		if (files) {
+			parts.push(files);
 		}
 		return parts.join('\n');
 	}
 
-	/** What one of its characters is at now, for its roster row: its step in that verb's words (`protecting Dawn`), waiting, or idle. */
+	/** By law name, who runs it now and at what step: `for Tom: flee(Wolf)`, for the Laws section. */
+	private lawsRunning(programs:readonly UnitProgram<TCtx>[], mind:Mind<TCtx>):Map<string, string> {
+		const by = new Map<string, Map<string, string[]>>();
+		for (const { name, state } of programs) {
+			if (state.law) {
+				const step = state.law.step ? mind.namedArc([state.law.step]) : '';
+				const steps = by.get(state.law.name) ?? new Map<string, string[]>();
+				by.set(state.law.name, steps.set(step, [...steps.get(step) ?? [], name]));
+			}
+		}
+		return new Map([...by].map(([law, steps]) => [law, [...steps].map(([step, names]) => `for ${names.join(', ')}${step ? `: ${step}` : ''}`).join('; ')]));
+	}
+
+	/**
+	 * Its units' programs, running or ended, as files: one a program and group, named as its units are addressed (the
+	 * group, or the one unit), each step a unit is on marked with who is there, like threads in a debugger, a step a
+	 * reaction holds marked apart, and how it ended for each that finished.
+	 */
+	private programFiles(programs:readonly UnitProgram<TCtx>[], mind:Mind<TCtx>):ProgramFile[] {
+		const files = new Map<string, ProgramDraft<TCtx>>();
+		for (const unit of programs) {
+			const { character, state } = unit;
+			const lines = mind.programLines(state.arc, undefined, character.verbs).lines;
+			// Named as its units are addressed: its group (units.filter("Vanguard") is exactly them), or the one unit.
+			const name = this._groupOf.get(character) ?? unit.name;
+			const key = `${name}\n${lines.join('\n')}`;
+			const file = files.get(key) ?? { name, lines, units: [], on: [] };
+			file.units.push(unit);
+			for (const mark of state.marks) {
+				const line = mind.programLines(state.arc, mark.step, character.verbs).at;
+				if (line >= 0) {
+					file.on.push({ line, name: unit.name, seconds: mark.seconds, held: mark.heldBy && mind.holderText(mark.heldBy) });
+				}
+			}
+			files.set(key, file);
+		}
+		const health = (unit:UnitProgram<TCtx>):string => {
+			const h = this._host.healthOf?.(unit.character.id);
+			return h ? ` ${h.hp}/${h.maxHP} hp` : '';
+		};
+		return [...files.values()].map(({ name, lines, units, on }) => {
+			const running = units.filter((unit) => unit.state.running);
+			const ended = units.filter((unit) => !unit.state.running);
+			const marks = new Map<number, string>();
+			const put = (line:number, mark:string):void => {
+				marks.set(line, marks.has(line) ? `${marks.get(line)}; ${mark}` : mark);
+			};
+			const named = (there:readonly { name:string; seconds:number }[]):string => (there.length > 4 ? `${there.length} units`
+				: there.length === 1 ? `${there[0].name}, ${there[0].seconds}s` : there.map((unit) => unit.name).join(', '));
+			const moving = on.filter((mark) => !mark.held);
+			for (const line of new Set(moving.map((mark) => mark.line))) {
+				const there = moving.filter((mark) => mark.line === line);
+				put(line, there.length === units.length && on.length === units.length
+					? `← now, ${Math.max(...there.map((mark) => mark.seconds))}s`
+					: `← ${named(there)}`);
+			}
+			for (const key of new Set(on.filter((mark) => mark.held).map((mark) => `${mark.line}:${mark.held}`))) {
+				const there = on.filter((mark) => mark.held && `${mark.line}:${mark.held}` === key);
+				put(there[0].line, `⏸ ${there.length > 4 ? `${there.length} units` : there.map((mark) => mark.name).join(', ')}, while ${there[0].held} runs`);
+			}
+			const endings = new Map<string, { ending:Ending; names:string[] }>();
+			for (const unit of ended) {
+				const ending = endingOf(unit.state.result);
+				const key = `${ending.how}:${ending.why}`;
+				endings.set(key, { ending, names: [...endings.get(key)?.names ?? [], unit.name] });
+			}
+			// All ended alike: how, once; else who ended how.
+			const same = running.length === 0 && endings.size === 1;
+			return {
+				path: `programs/${name}.arc`,
+				// Who runs it, as a who picks them all, and each by the name that picks it alone, its health beside it: a
+				// program can be right for some of its units and wrong for one.
+				who: `units.filter("${name}") = ${units.map((unit) => `${unit.name}${health(unit)}`).join(', ')}`,
+				lines,
+				marks,
+				running: running.length > 0,
+				seconds: Math.max(0, ...running.map((unit) => unit.state.seconds)),
+				endings: [...endings.values()].map(({ ending, names }) => endingText(ending, same ? undefined : names.join(', '))),
+			};
+		});
+	}
+
+	/** What one of its characters is at now, for its roster row: its step in that verb's words (`protecting Dawn`), waiting, how its last program ended, or idle. */
 	private activityOf(character:Character<TCtx>, mind:Mind<TCtx>):string {
 		if (character.verb && character.lastStep) {
 			return character.verb === 'wait' ? 'waiting' : stepDoing(character.lastStep, this.verbs, (id) => mind.nameOf(id) || id);
 		}
-		return character.busy ? 'waiting' : 'idle';
+		if (character.busy) {
+			return 'waiting';
+		}
+		const state = character.programState();
+		return state ? endingText(endingOf(state.result)) : 'idle';
 	}
 
 	/** How its last step went, for its roster row: `shoot failed: no target`, `protect ok`; so a program that failed and ended is seen. */
 	private lastOf(character:Character<TCtx>):string {
 		const last = character.lastResult;
-		if (!last?.verb || last.preempted) {
+		if (!last?.verb || last.status === 'stopped') {
 			return '';
 		}
-		return last.ok ? `${last.verb} ok` : `${last.verb} failed${last.reason ? `: ${last.reason}` : ''}`;
+		return last.status === 'ok' ? `${last.verb} ok` : `${last.verb} failed${last.reason ? `: ${last.reason}` : ''}`;
 	}
 
 	/**
@@ -521,3 +609,27 @@ function counted(items:readonly string[], of:number):string {
 	const counts = tally(items);
 	return counts.length === 1 ? counts[0][0] : counts.map(([item, n]) => `${n === of ? '' : `${n} `}${item}`).join('; ');
 }
+
+/** How a program ended: done, failed and why, or stopped by another. */
+type Ending = { how:'done' | 'failed' | 'stopped'; why:string };
+
+function endingOf(result:ArcResult | undefined):Ending {
+	if (result?.status === 'failed') {
+		return { how: 'failed', why: result.reason || result.verb || '' };
+	}
+	return result?.status === 'stopped' ? { how: 'stopped', why: '' } : { how: 'done', why: 'ok' };
+}
+
+/** `done, ok`, `failed: no path`, `stopped`; with `who`, who ended so: `done: Mira, ok`, `failed: Mira, no path`. */
+function endingText({ how, why }:Ending, who?:string):string {
+	if (how === 'stopped') {
+		return who ? `stopped: ${who}` : 'stopped';
+	}
+	return who ? `${how}: ${who}, ${why}` : `${how}${how === 'done' ? ',' : ':'} ${why}`;
+}
+
+/** One of its characters, by the name its mind knows it by, and the program it runs or ran. */
+type UnitProgram<TCtx> = { character:Character<TCtx>; name:string; state:ProgramState };
+
+/** One group's program, or one unit's, as the roster gathers it: who runs it, its lines, and where each is in it. */
+type ProgramDraft<TCtx> = { name:string; lines:string[]; units:UnitProgram<TCtx>[]; on:{ line:number; name:string; seconds:number; held?:string }[] };

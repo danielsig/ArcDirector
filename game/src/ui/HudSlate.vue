@@ -162,11 +162,17 @@ function pin():void {
 		return;
 	}
 	const rows = [...arc.children] as HTMLElement[];
+	const column = arc.parentElement!.offsetTop;
 	const list = lines.value;
 	let found:number[] = [];
 	let cover = 0;
 	for (let pass = 0; pass < 3; pass += 1) {
-		const top = rows.findIndex((row) => row.offsetTop + shift + row.offsetHeight > cover);
+		// Rows are placed within the column, which the page has pushed up as the Arc outgrew it.
+		let top = rows.findIndex((row) => column + row.offsetTop + shift + row.offsetHeight > cover);
+		// A long opening line wraps: once its start is out of sight it is pinned like one above.
+		if (list[top]?.opens && top + 1 < rows.length && column + rows[top]!.offsetTop + shift < cover) {
+			top += 1;
+		}
 		firstShown = Math.max(0, top);
 		const openers:number[] = [];
 		let indent = list[top]?.indent ?? 0;
@@ -176,12 +182,12 @@ function pin():void {
 				indent = list[i]!.indent;
 			}
 		}
-		found = openers.slice(-MAX_PINNED);
 		// Only ever covering more: uncovering again could bring back the block just left, and it would never settle.
-		const height = found.length * PINNED_LINE;
+		const height = Math.min(openers.length, MAX_PINNED) * PINNED_LINE;
 		if (height <= cover) {
 			break;
 		}
+		found = openers.slice(-MAX_PINNED);
 		cover = height;
 	}
 	if (found.join() !== pinned.value.join()) {
@@ -223,18 +229,20 @@ const time = computed(() => thinkTime(props.slate.ms));
 				</span>
 				<span class="time">{{ time }}</span>
 			</header>
-			<p v-if="slate.error" class="error">{{ slate.error }}</p>
+			<p v-if="slate.error && slate.state !== 'done'" class="error">{{ slate.error }}</p>
 			<div v-if="pinned.length" ref="pinnedEl" class="pinned">
 				<template v-for="i in pinned" :key="i">
 					<HudArcLine v-if="lines[i]" class="line" :line="opening(lines[i]!)" />
 				</template>
 			</div>
-			<div ref="pageEl" class="page">
-				<p v-if="thought" class="thought" :class="{ waiting: !slate.arc }">{{ thought }}</p>
-				<div v-if="slate.arc || slate.state === 'writing'" ref="arcEl" class="arc">
-					<HudArcLine v-for="(line, i) in lines" :key="i" :line="line">
-						<span v-if="slate.state === 'writing' && i === lines.length - 1" class="pen" />
-					</HudArcLine>
+			<div ref="pageEl" class="page" :class="{ thinking: thought }">
+				<div class="column">
+					<p v-if="thought" class="thought">{{ thought }}</p>
+					<div v-if="slate.arc || slate.state === 'writing'" ref="arcEl" class="arc">
+						<HudArcLine v-for="(line, i) in lines" :key="i" :line="line">
+							<span v-if="slate.state === 'writing' && i === lines.length - 1" class="pen" />
+						</HudArcLine>
+					</div>
 				</div>
 			</div>
 			<span v-if="slate.state === 'done'" class="glint" />
@@ -467,21 +475,32 @@ strong {
 	text-overflow: ellipsis;
 }
 
-.thought {
+/* The reasoning and the Arc under it: only the Arc takes room, so the slate grows once the Arc outgrows the reasoning. */
+.column {
+	position: relative;
 	flex: none;
-	margin: 0 0 3px;
-	color: var(--glass-text);
-	opacity: 0.45;
-	font: 400 11px/1.3 var(--font);
 }
 
-/* Until the Arc starts, the same height whatever the reasoning wraps to, its newest words at the foot. */
-.thought.waiting {
+/* While there is reasoning, the page is at least as tall as it stands. */
+.page.thinking {
+	min-height: calc(5.2 * 11px + 3px);
+}
+
+/* The same height whatever the reasoning wraps to, its newest words at the foot, riding on top of the Arc. */
+.thought {
+	position: absolute;
+	bottom: 100%;
+	left: 0;
+	right: 0;
 	display: flex;
 	flex-direction: column;
 	justify-content: flex-end;
 	height: 5.2em;
+	margin: 0 0 3px;
 	overflow: hidden;
+	color: var(--glass-text);
+	opacity: 0.45;
+	font: 400 11px/1.3 var(--font);
 }
 
 .arc {

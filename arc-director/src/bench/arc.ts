@@ -123,10 +123,10 @@ function attackNearest(c:ArcCase):string | undefined {
 	const own = c.rts ? (c.me.as ? 'attack' : undefined) : basicAttack(c.me.as);
 	const kinds = [...new Set(Object.values(c.squad ?? {}).map((spot) => spot.as))];
 	const orders = c.rts
-		? kinds.some((kind) => kind) ? [`issue(who=units, arc=${strike('attack')})`] : []
+		? kinds.some((kind) => kind) ? [`command(who=units, arc=${strike('attack')})`] : []
 		: kinds.flatMap((kind) => {
 			const verb = basicAttack(kind);
-			return verb ? [`issue(who=units.filter("${kind}"), arc=${strike(verb)})`] : [];
+			return verb ? [`command(who=units.filter("${kind}"), arc=${strike(verb)})`] : [];
 		});
 	const steps = [...orders, ...own ? [strike(own)] : []];
 	return steps.length > 0 ? steps.join(' ; ') : undefined;

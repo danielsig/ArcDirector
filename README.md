@@ -7,7 +7,7 @@
 
 Most "AI NPCs" are chatbots wearing a costume: you type, they talk, nothing in the world changes. ArcDirector NPCs **act**. They look around, weigh what they know and what they want, write themselves a short plan, and then carry it out in your game: walking across the map, haggling over a price, handing over the key, burning the cobweb, flanking the archer. When a plan fails, they read why and try something else.
 
-No behavior trees. No dialogue scripts. No cloud bill. Just a local model, a few callbacks into your world, and characters that surprise you.
+No behavior trees. No dialogue scripts. No cloud bill. Just a local model and a few callbacks into your world to bring your NPCs to life.
 
 ## See it running: **[▶ Play the demo](https://arcdirector.com)**
 
@@ -26,30 +26,22 @@ Every screenshot below is a live session: no scripted moves, nothing staged. Eac
 
 ## What a plan looks like
 
-Dawn captains a squad of five in the 5v5 scene. Nobody scripted an attack. In one think, Dawn wrote this and every fighter has followed it since:
+Dawn captains a squad of five in the 5v5 scene. Nobody scripted an attack. Dawn writes plans like this one in a single think: every fighter goes after the weakest enemy with its own blow, and Dawn heals whoever is badly hurt.
 
 ```arc
-issue(
-    who=units.filter("Knight"),
-    arc=loop(cleave(others.filter("enemy").minBy(u => u.hp)))
-);
-issue(
-    who=units.filter("Blade"),
-    arc=loop(slash(others.filter("enemy").minBy(u => u.hp)))
-);
-issue(
-    who=units.filter("Archer"),
-    arc=loop(shoot(others.filter("enemy").minBy(u => u.hp)))
-);
-issue(
-    who=units.filter("Witch"),
-    arc=loop(hex(others.filter("enemy").minBy(u => u.hp)))
-)
+command(units) {
+    loop {
+        attack(others.filter("enemy").minBy(u => u.hp))
+    }
+}
+when(some(units.filter(u => isBadlyHurt(u)))) {
+    heal(units.minBy(u => u.hp))
+}
 ```
 
-That is an **Arc**: a tiny program of verbs, conditions and loops that the model writes and ArcDirector runs, frame by frame, against your game. The model is only called when someone has something to decide, so a single consumer GPU can keep a whole squad, a crowded market or a dungeon party busy.
+That is an **Arc**: a tiny program of verbs, conditions and loops that the model writes and ArcDirector runs at a fixed interval in your game. The model is only called when someone has something to decide, so a single consumer GPU can keep a whole squad, a crowded market, or a dungeon party busy.
 
-## Why you'll like it
+## Why use ArcDirector
 
 - **NPCs that change the world, not just the chat log.** Every verb ends in your code, and your game keeps the rules. Refuse an action with a reason and the NPC plans around it.
 - **Runs locally.** LM Studio, Ollama or any OpenAI-compatible endpoint. Built for small models: forgiving parsing, self-repairing plans, cache-friendly prompts.

@@ -1,3 +1,5 @@
+import { commentEnd } from './expr/lex.js';
+
 export type JsonSchema = {
 	type?:string | string[];
 	properties?:Record<string, JsonSchema>;
@@ -21,13 +23,32 @@ export function extractJson(text:string):unknown {
 	const trimmed = text.trim();
 	const fenced = trimmed.match(/```(?:json)?\s*([\s\S]*?)```/i);
 	// Repaired first: a late-closed string can still parse, into the wrong nesting.
-	const body = repairJSON(fenced ? fenced[1].trim() : trimmed);
+	const body = repairJSON(withoutComments(fenced ? fenced[1].trim() : trimmed));
 	try {
 		return JSON.parse(body);
 	}
 	catch {
 		return parseLooseObject(body);
 	}
+}
+
+/** `body` without its comments outside strings, as Arc text reads them (`commentEnd`): a model copies the prompt's `// ← now`. */
+function withoutComments(body:string):string {
+	let out = '';
+	let from = 0;
+	for (let i = 0; i < body.length; i++) {
+		if (body[i] === '"') {
+			i = stringEnd(body, i);
+			continue;
+		}
+		const end = commentEnd(body, i);
+		if (end !== undefined) {
+			out += body.slice(from, i);
+			from = end;
+			i = end - 1;
+		}
+	}
+	return out + body.slice(from);
 }
 
 /**

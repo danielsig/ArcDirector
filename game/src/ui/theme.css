@@ -4,6 +4,13 @@
  * radius, shadow and font comes from here; HudHearts, HudMenu and HudSpeech show how they combine.
  */
 :root {
+	/* HUD stacking layers, low to high. Each HUD part's root takes one, so its own z-indexes stay inside it: world-anchored things (bubbles, nameplates, slates, tool badges) under panels and buttons, the stats readout over those, the pause menu over all of them, and dialogs on top. */
+	--z-world: 0;
+	--z-hud: 1;
+	--z-overlay: 2;
+	--z-menu: 3;
+	--z-modal: 4;
+
 	/* Fills */
 	--parchment: #f4e7c5;
 	--parchment-deep: #e8d4a4;
@@ -78,7 +85,7 @@
 	height: var(--btn);
 	padding: 0;
 	pointer-events: auto;
-	z-index: 3;
+	z-index: var(--z-hud);
 	display: flex;
 	align-items: center;
 	justify-content: center;

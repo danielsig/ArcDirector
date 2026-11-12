@@ -487,7 +487,7 @@ test('fishing again from the chair it already holds keeps it there, rod out', as
 	const seated = go.getComponent(Seated)!;
 	seated.settle(seat);
 	const result = await FISH_VERB.handler({ ctx: { character: go, world }, verb: 'fish' } as never);
-	assert.equal(result.ok, true, result.reason);
+	assert.equal(result.status, 'ok', result.reason);
 	assert.equal(seated.seatID, 'RiverChair');
 	assert.equal(seated.rod, true);
 });

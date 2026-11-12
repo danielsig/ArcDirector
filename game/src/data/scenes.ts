@@ -11,6 +11,7 @@ import { market_1_0 } from './chunks/market-1-0';
 import { market_0_1 } from './chunks/market-0-1';
 import { market_1_1 } from './chunks/market-1-1';
 import { RUINS_CHUNKS } from '../scenes/ruins/ruins-map';
+import { RUINS_PLACES } from '../scenes/ruins/ruins-places';
 import type { CameraLook, NPCSpawnOpts, RoomDef } from '../world/spawn';
 import type { OutskirtHeights, Surface } from '../world/land';
 import { goodsOf, packOf } from '../items/wares';
@@ -461,6 +462,7 @@ export const RUINS:SceneDef = {
 	minimapFollow: true,
 	player: { equip: ['iron_sword'] },
 	chunks: RUINS_CHUNKS,
+	rooms: RUINS_PLACES,
 	// Each party starts in its colonnade a couple of paces behind its places by the sanctum's gap: Dawn in the west,
 	// Dusk in the east. The sanctum and its dais lie between them.
 	npcs: [

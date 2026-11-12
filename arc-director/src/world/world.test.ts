@@ -172,7 +172,8 @@ async function run(
 ):Promise<{ director:ArcDirector<Ctx> }> {
 	let sent = false;
 	const director = new ArcDirector<Ctx>()
-		.withPriorityQueue({ processInterval: 0, watchInterval: 0, heartbeatStart: 1000, heartbeatMin: 1000 })
+		.withPriorityQueue({ processInterval: 0, heartbeatStart: 1000, heartbeatMin: 1000 })
+		.withIntervals({ watch: 0, think: 0 })
 		.addModel('fake', { maxParallel: 1 })
 		.addFakeInference(() => {
 			const content = sent ? 'wait(seconds=100)' : reply;
@@ -202,7 +203,7 @@ async function run(
 	const dt = 0.1;
 	for (let t = 0; t < (opts.seconds ?? 20) / dt; t++) {
 		grid.step(dt);
-		director.tick(dt, t * dt);
+		director.tick(dt);
 		await flush();
 	}
 	return { director };
@@ -339,7 +340,7 @@ describe('Mover', () => {
 			wentEast ||= me[0] > 9 && me[1] < 1;
 			await flush();
 		}
-		assert.deepEqual(result, { ok: true, verb: 'go_to' });
+		assert.deepEqual(result, { status: 'ok', verb: 'go_to' });
 		assert.ok(wentEast, 'went the cheap way, east');
 	});
 
@@ -374,7 +375,7 @@ describe('Mover', () => {
 			assert.equal(walls.has(me.map(Math.round).join(',')), false, `walked through the wall to ${me}`);
 			await flush();
 		}
-		assert.equal(result?.ok, true);
+		assert.equal(result?.status === 'ok', true);
 		assert.equal(walls.has(me.map(Math.round).join(',')), false);
 	});
 
@@ -398,7 +399,7 @@ describe('Mover', () => {
 		const order:string[] = [];
 		for (const id of points.keys()) {
 			void mover.go(id, { target: 'Target' }, 'go_to').then((r) => {
-				assert.equal(r.ok, true, `${id}: ${r.reason}`);
+				assert.equal(r.status === 'ok', true, `${id}: ${r.reason}`);
 				order.push(id);
 			});
 		}
@@ -736,7 +737,7 @@ describe('stock world verbs', () => {
 					group: 'to',
 					handler: (call) => {
 						got.push(call.args.to, distance(grid.point.get('Ann')!, [10, 0]) <= SPREAD + 0.01);
-						return { ok: true, verb: 'rally' };
+						return { status: 'ok', verb: 'rally' };
 					},
 				}),
 			});
@@ -908,7 +909,7 @@ describe('stock world verbs', () => {
 		const grid = new Grid().place('Ann', [0, 0]).place('Well', [20, 0]);
 		const { director } = await run(grid, 'go_to(target=Well, until=prev.secondsAgo > 1)', { kit: ['go_to', 'wait'], seconds: 6 });
 		const ann = director.character('Ann')!;
-		assert.deepEqual(ann.lastResult && { ok: ann.lastResult.ok, reason: ann.lastResult.reason }, { ok: true, reason: 'until' });
+		assert.deepEqual(ann.lastResult && { status: ann.lastResult.status, reason: ann.lastResult.reason }, { status: 'ok', reason: 'until' });
 		const went = distance(grid.point.get('Ann')!, [0, 0]);
 		assert.ok(went > 0.5 && went < 15, `walked ${went.toFixed(1)} of the 20 to the Well`);
 		director.dispose();
@@ -921,7 +922,7 @@ describe('stock world verbs', () => {
 		grid.place('Bo', [5, 6]);
 		for (let t = 0; t < 40; t++) {
 			grid.step(0.1);
-			director.tick(0.1, 20 + t * 0.1);
+			director.tick(0.1);
 			await flush();
 		}
 		assert.ok(distance(grid.point.get('Ann')!, [5, 6]) <= 1.3);
@@ -936,18 +937,18 @@ describe('stock world verbs', () => {
 		assert.equal(ann.arc?.[0].verb, 'flee', 'not safe for long enough yet');
 		const at = grid.point.get('Ann')!;
 		grid.place('Bo', [at[0] + 1, at[1]]);
-		const tick = async (seconds:number, from:number):Promise<void> => {
+		const tick = async (seconds:number):Promise<void> => {
 			for (let t = 0; t < seconds * 10; t++) {
 				grid.step(0.1);
-				director.tick(0.1, from + t * 0.1);
+				director.tick(0.1);
 				await flush();
 			}
 		};
-		await tick(2, 20);
+		await tick(2);
 		assert.ok(distance(grid.point.get('Ann')!, grid.point.get('Bo')!) >= 4, 'ran again');
 		assert.equal(ann.arc?.[0].verb, 'flee', 'the clock restarted when they closed in');
-		await tick(3, 22);
-		assert.deepEqual(ann.lastResult && { ok: ann.lastResult.ok, reason: ann.lastResult.reason }, { ok: true, reason: 'got away from Bo' });
+		await tick(4);
+		assert.deepEqual(ann.lastResult && { status: ann.lastResult.status, reason: ann.lastResult.reason }, { status: 'ok', reason: 'got away from Bo' });
 		director.dispose();
 	});
 
@@ -964,8 +965,8 @@ describe('stock world verbs', () => {
 
 	it('forms a line of units across the way to the foe', async () => {
 		const grid = new Grid().place('A', [0, 0]).place('B', [1, 3]).place('C', [2, -3]).place('Gate', [0, 8]);
-		const { director } = await run(grid, 'issue(who=units, arc=hold_line(at=A, facing=Gate, paces=2))', {
-			kit: ['issue', 'hold_line', 'wait'],
+		const { director } = await run(grid, 'command(who=units, arc=hold_line(at=A, facing=Gate, paces=2))', {
+			kit: ['command', 'hold_line', 'wait'],
 			units: ['A', 'B', 'C'],
 			seconds: 4,
 		});

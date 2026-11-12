@@ -1390,6 +1390,9 @@ describe('reply cleanup', () => {
 		assert.equal(stripTemplateTokens('<|channel|>go_to(Keep)<|end>'), 'go_to(Keep)');
 		assert.equal(stripTemplateTokens('wait(until=a<b||c>d)'), 'wait(until=a<b||c>d)');
 		assert.equal(stripTemplateTokens('<|eot|>'), null);
+		// Qwen's tool calls written as text are no tokens: the mind reads them as tools.
+		const call = '<tool_call>\n<function=earshot>\n</function>\n</tool_call>';
+		assert.equal(stripTemplateTokens(call), call);
 	});
 
 	it('drops the channel header a model leaks at the start of its thought', () => {

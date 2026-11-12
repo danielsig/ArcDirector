@@ -22,25 +22,25 @@ describe('withRPG and withMOBA', () => {
 			.withRPG({
 				equip: ({ args }) => {
 					equipped.push(args.item);
-					return { ok: true, verb: 'equip' };
+					return { status: 'ok', verb: 'equip' };
 				},
-				block: { help: 'guard up 2s', handler: () => ({ ok: true, verb: 'block' }) },
-				abilities: { hex: ({ args }) => ({ ok: true, verb: 'hex', reason: args.target }) },
+				block: { help: 'guard up 2s', handler: () => ({ status: 'ok', verb: 'block' }) },
+				abilities: { hex: ({ args }) => ({ status: 'ok', verb: 'hex', reason: args.target }) },
 			})
 			.addCharacter({ id: 'Wren' })
 			.connect();
 		const verbs = d.character('Wren')!.activeVerbs();
 		assert.deepEqual(Object.keys(verbs.get('equip')!.args), ['item', 'slot']);
 		assert.equal(verbs.get('block')!.help, 'guard up 2s');
-		assert.equal(verbs.get('hex')!.args.target, 'id');
+		assert.equal(verbs.get('hex')!.args.target?.kind, 'id');
 		assert.deepEqual(verbsOf(d, 'Wren').filter((verb) => !(STOCK_VERBS as readonly string[]).includes(verb)), ['offer', 'equip', 'block', 'hex']);
-		assert.equal((await d.character('Wren')!.enact(parseArc('equip(item=Sword)', verbs))).ok, true);
+		assert.equal((await d.character('Wren')!.enact(parseArc('equip(item=Sword)', verbs))).status === 'ok', true);
 		assert.deepEqual(equipped, ['Sword']);
 		d.dispose();
 	});
 
 	it('keeps an explicit default kit, given before or after, and a MOBA trades nothing', async () => {
-		const attack = { attack: () => ({ ok: true, verb: 'attack' }) };
+		const attack = { attack: () => ({ status: 'ok' as const, verb: 'attack' }) };
 		const before = await director().withDefaultKit({ verbs: ['wait'] }).withMOBA(attack).addCharacter({ id: 'A' }).connect();
 		const after = await director().withMOBA(attack).withDefaultKit({ verbs: ['wait'] }).addCharacter({ id: 'A' }).connect();
 		const moba = await director().withMOBA(attack).addCharacter({ id: 'A' }).connect();

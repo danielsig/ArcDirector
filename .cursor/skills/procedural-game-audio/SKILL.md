@@ -38,13 +38,13 @@ piece({ bpm: 110, id: 'example' }, [
 
 `c4:2` is C4 for **2 beats** (not LilyPond). Durationless notes in one `|` cell share a beat. Do not mix `:n` and durationless in the same cell. Marks sit after the notes they apply to. Running dynamic persists. `crescendo` / `diminuendo` with no target looks ahead to the next absolute mark. Extra voices: `registerInstrument` (`percussive` or `sustaining`). Do not add `swell` / `taut` / `mist` / `veil` — a climb is a `line` string.
 
-Tracks: `pad` body; `bass` roots; `pluck` guitar/harp (`arpeggio`); `lead` one melody; `piano` hammer; `bell` sparse hits; `drum` groove (MIDI `<40` dum, `<45` tek, else tap); `air` noise bed. Guitar is `pluck`.
+Tracks: `pad` body; `bass` roots; `pluck` guitar/harp (`arpeggio`); `lead` one melody; `piano` hammer; `bell` sparse hits; `drum` groove (MIDI `<40` dum, `<45` tek, else tap); `air` noise bed. Also `violin`, `cello`, `brass`, `flute`, `guitar`, `twelveString`, `koto`, `choir`.
 
 After writing, unlock audio, listen through one loop. Loop click → shorten the last note or land the next chord on beat 0 only.
 
 ## SFX
 
-A patch is a few layers (`noise`, `thump`, `click`, `creak`, `pluck`, `fm`, `chirp`, `murmur`) with short envelopes. Cue with `AudioSource.play` / `AudioSource.loop`, or `world.audio.playSfx` / `playLoop`. Prefer `AudioSource` so pose follows `transform`. `playLoop` every frame with a **stable** object (patch or `Score`); the mixer keeps the clock.
+A patch is a few layers (`noise`, `thump`, `click`, `creak`, `pluck`, `fm`, `chirp`, `bee`, `boo`, `crackle`, `metal`, `formant`, `rumble`) with short envelopes. Cue with `AudioSource.play` / `AudioSource.loop`, or `world.audio.playSfx` / `playLoop`. Prefer `AudioSource` so pose follows `transform`. `playLoop` every frame with a **stable** object (patch or `Score`); the mixer keeps the clock.
 
 ## Quality
 

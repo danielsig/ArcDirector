@@ -92,6 +92,11 @@ export class Game<W extends World = World> {
 		this.world.flushDestroy();
 	}
 
+	/** Draws one frame at `now` (rAF ms). Hosts override to work around it and call `super.draw`. */
+	protected draw(_now:number):void {
+		this.renderer?.render();
+	}
+
 	/** Runs once when `start` begins the loop. */
 	protected onStart():void {}
 
@@ -118,7 +123,7 @@ export class Game<W extends World = World> {
 		this.tick(dt);
 		this.world.input.endFrame();
 		if (typeof document === 'undefined' || document.hasFocus() || now - this._lastDraw >= 1000 / this.unfocusedHz) {
-			this.renderer?.render();
+			this.draw(now);
 			this._lastDraw = now;
 		}
 		this._raf = requestAnimationFrame(this._frame);

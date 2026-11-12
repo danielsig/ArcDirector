@@ -1,7 +1,9 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { parseArcText, formatArc } from './arc-parse.js';
-import { parseArc } from './wire.js';
+import { parseArcText } from './arc-parse.js';
+import { formatArc, formatArcBlocks } from './arc-format.js';
+import { arcToJSON, parseArc } from './wire.js';
+import { parse } from '../expr/expr-parse.js';
 import { VerbRegistry, STOCK_VERB_DEFS, STOCK_MOVE_VERBS, STOCK_TRADE_VERBS, STOCK_VERBS } from './stock-verbs.js';
 import { STOCK_COLLECTIVE_VERB_DEFS } from '../collective/collective-verbs.js';
 import { ArcError, isArc, type Arc } from './arc-types.js';
@@ -51,31 +53,28 @@ describe('Arc parse', () => {
 		);
 	});
 
-	it('parses issue who= expr and nested arc=', () => {
+	it('parses command who= expr and nested arc=', () => {
 		const registry = new VerbRegistry().addAll(STOCK_VERB_DEFS).addAll(STOCK_COLLECTIVE_VERB_DEFS);
 		const arc = parseArcText(
-			'issue(who=units.filter("Guard"), arc=go_to(Keep) && wait(seconds=1))',
+			'command(who=units.filter("Guard"), arc=go_to(Keep) && wait(seconds=1))',
 			registry,
 		);
-		assert.equal(arc[0].verb, 'issue');
+		assert.equal(arc[0].verb, 'command');
 		assert.equal(arc[0].args.who, 'units.filter("Guard")');
 		assert.deepEqual(inner(arc).map((step) => step.verb), ['go_to', 'wait']);
 		assert.equal(inner(arc)[0].args.target, 'Keep');
-		assert.equal(
-			formatArc(arc, verbs()),
-			'issue(who=units.filter("Guard"), arc=go_to(Keep) && wait(1))',
-		);
+		assert.equal(formatArc(arc, registry), 'command(units.filter("Guard")) { go_to(Keep) && wait(1) }');
 	});
 
-	it('rejects when(who) and issue(watch) with migration errors', () => {
+	it('rejects when(who) and command(watch) with migration errors', () => {
 		const registry = new VerbRegistry().addAll(STOCK_VERB_DEFS).addAll(STOCK_COLLECTIVE_VERB_DEFS);
 		assert.throws(
 			() => parseArcText('when(who=units.filter("Guard"), arc=go_to(Keep))', registry),
-			/when\(who\) is issue/,
+			/when\(who\) is command/,
 		);
 		assert.throws(
-			() => parseArcText('issue(watch=isHurt(me), arc=go_to(Keep))', registry),
-			/issue\(watch\) is when/,
+			() => parseArcText('command(watch=isHurt(me), arc=go_to(Keep))', registry),
+			/command\(watch\) is when/,
 		);
 	});
 
@@ -177,21 +176,21 @@ describe('VerbRegistry view and remove', () => {
 	});
 });
 
-describe('kit views and issue(who)', () => {
+describe('kit views and command(who)', () => {
 	function fightKit():VerbRegistry {
 		const catalog = new VerbRegistry().addAll(STOCK_VERB_DEFS).addAll(STOCK_COLLECTIVE_VERB_DEFS);
 		catalog.add('hex', { args: { target: 'id' } });
 		catalog.add('smite', { args: { target: 'id' } });
-		return catalog.view(['issue', 'go_to', 'smite']);
+		return catalog.view(['command', 'go_to', 'smite']);
 	}
 
-	it('parses unit verbs inside issue(who) that the kit does not grant the thinker', () => {
+	it('parses unit verbs inside command(who) that the kit does not grant the thinker', () => {
 		const kit = fightKit();
 		const arc = parseArcText(
-			'issue(who=units.filter("Witch"), arc=hex("Healer")) ; smite("Healer")',
+			'command(who=units.filter("Witch"), arc=hex("Healer")) ; smite("Healer")',
 			kit,
 		);
-		assert.equal(arc[0].verb, 'issue');
+		assert.equal(arc[0].verb, 'command');
 		assert.equal(inner(arc)[0].verb, 'hex');
 		assert.equal(inner(arc)[0].args.target, 'Healer');
 		assert.equal(arc[0].then, 'always');
@@ -199,10 +198,10 @@ describe('kit views and issue(who)', () => {
 		assert.throws(() => parseArcText('hex("Healer")', kit), /unknown verb 'hex'/);
 	});
 
-	it('reads a group inside issue(who) with the catalog, not the kit', () => {
+	it('reads an arc in brackets inside command(who) with the catalog, not the kit, as the arc itself', () => {
 		const kit = fightKit();
-		const arc = parseArcText('issue(who=units, arc=(hex(Healer) ; go_to(Keep)))', kit);
-		assert.deepEqual(inner(inner(arc)).map((step) => step.verb), ['hex', 'go_to']);
+		const arc = parseArcText('command(who=units, arc=(hex(Healer) ; go_to(Keep)))', kit);
+		assert.deepEqual(inner(arc).map((step) => step.verb), ['hex', 'go_to']);
 	});
 
 	it('names an argument written after the closing parenthesis', () => {
@@ -219,6 +218,15 @@ describe('kit views and issue(who)', () => {
 		assert.deepEqual(parseArcText('wander', verbs), [{ verb: 'wander', args: {} }]);
 	});
 
+	it('reads a verb and one string with no parentheses as its first arg', () => {
+		const verbs = new VerbRegistry().addAll(STOCK_VERB_DEFS);
+		assert.deepEqual(parseArcText('say "Hold the line"', verbs), [{ verb: 'say', args: { text: 'Hold the line' } }]);
+		const chain = parseArcText('say "Hold, the line!" && go_to(BridgeKeeper)\nsay \'On me\'', verbs);
+		assert.deepEqual(chain.map((step) => step.args.text ?? step.args.target), ['Hold, the line!', 'BridgeKeeper', 'On me']);
+		assert.throws(() => parseArcText('"Hold the line"', verbs), /alone is not a step/);
+		assert.throws(() => parseArcText('Guard "Hold the line"', verbs), ArcError);
+	});
+
 	it('drops a stuttered key= the model repeated inside its own value', () => {
 		const verbs = new VerbRegistry().addAll(STOCK_VERB_DEFS);
 		const arc = parseArcText('say(text=text="How much?", to=BridgeKeeper)', verbs);
@@ -228,14 +236,14 @@ describe('kit views and issue(who)', () => {
 	it('parses long chains; nested arc= is a separate list', () => {
 		const kit = fightKit();
 		const arc = parseArcText(
-			'issue(who=units.filter("Witch"), arc=hex("Healer")) '
-			+ '; issue(who=units.filter("Archer"), arc=hex("Witch")) '
-			+ '; issue(who=units.filter("Knight"), arc=hex("Archer")) '
-			+ '; issue(who=units.filter("Blade"), arc=hex("Blade")) '
+			'command(who=units.filter("Witch"), arc=hex("Healer")) '
+			+ '; command(who=units.filter("Archer"), arc=hex("Witch")) '
+			+ '; command(who=units.filter("Knight"), arc=hex("Archer")) '
+			+ '; command(who=units.filter("Blade"), arc=hex("Blade")) '
 			+ '; smite("Healer")',
 			kit,
 		);
-		assert.deepEqual(arc.map((step) => step.verb), ['issue', 'issue', 'issue', 'issue', 'smite']);
+		assert.deepEqual(arc.map((step) => step.verb), ['command', 'command', 'command', 'command', 'smite']);
 		const long = parseArcText(
 			'go_to(A) && go_to(B) && go_to(C) && go_to(D) && go_to(E)',
 			kit,
@@ -244,13 +252,13 @@ describe('kit views and issue(who)', () => {
 		assert.equal(long[4].args.target, 'E');
 	});
 
-	it('skips extra closing parens between joined issue() steps', () => {
+	it('skips extra closing parens between joined command() steps', () => {
 		const kit = fightKit();
 		const arc = parseArcText(
-			'issue(who=units.filter("Knight"), arc=loop(hex(Healer)))))) ; issue(who=units.filter("Blade"), arc=loop(hex(Witch)))',
+			'command(who=units.filter("Knight"), arc=loop(hex(Healer)))))) ; command(who=units.filter("Blade"), arc=loop(hex(Witch)))',
 			kit,
 		);
-		assert.equal(arc[0].verb, 'issue');
+		assert.equal(arc[0].verb, 'command');
 		assert.equal(arc[0].args.who, 'units.filter("Knight")');
 		assert.equal(arc[0].then, 'always');
 		assert.equal(arc[1].args.who, 'units.filter("Blade")');
@@ -259,7 +267,7 @@ describe('kit views and issue(who)', () => {
 	it('skips a trailing period after copied Example text', () => {
 		const kit = fightKit();
 		const arc = parseArcText(
-			'issue(who=units.filter("Knight"), arc=loop(hex(Healer))) ; issue(who=units.filter("Blade"), arc=loop(hex(Witch))).',
+			'command(who=units.filter("Knight"), arc=loop(hex(Healer))) ; command(who=units.filter("Blade"), arc=loop(hex(Witch))).',
 			kit,
 		);
 		assert.equal(arc.length, 2);
@@ -283,6 +291,28 @@ describe('kit views and issue(who)', () => {
 });
 
 describe('small-model slips from the AI logs', () => {
+	it('refuses steps after a verb that never ends, and says how to turn the chain around', () => {
+		const commander = new VerbRegistry().addAll(STOCK_VERB_DEFS).addAll(STOCK_COLLECTIVE_VERB_DEFS);
+		assert.throws(() => parseArcText('follow(Valerius, distance=3) && say("These torches")', verbs()), {
+			message: 'follow never ends, so say(…) after it never runs. Write go_to(Valerius) && say(…) && follow(target=Valerius, distance=3, until=…) — follow last, with an until= or within= to end it.',
+		});
+		assert.throws(() => parseArcText('follow(Bo) || say("a") ; wait()', verbs()), /so say\(…\) && wait\(…\) after it/);
+		assert.throws(() => parseArcText('command(who=units) { follow(Bo) ; say("a") }', commander), /follow never ends/, 'what its units run');
+		for (const fine of ['follow(Bo, until=done) && say("a")', 'follow(Bo, within=5s) ; say("a")', 'say("a") && follow(Bo)', 'when(danger) { follow(Bo) ; say("lost him") }']) {
+			assert.doesNotThrow(() => parseArcText(fine, verbs()), fine);
+		}
+		assert.doesNotThrow(() => parseArcText('follow(Bo) ; say("a")', commander), 'a commander\'s own steps are orders');
+	});
+
+	it('takes braces as a named arc arg, as it takes a body', () => {
+		const registry = new VerbRegistry().addAll(STOCK_VERB_DEFS).addAll(STOCK_COLLECTIVE_VERB_DEFS);
+		const command = parseArcText('command(who=units, arc={\n\tloop(until=done) {\n\t\twait()\n\t}\n})', registry);
+		assert.deepEqual(command, parseArcText('command(who=units) {\n\tloop(until=done) {\n\t\twait()\n\t}\n}', registry));
+		const branch = parseArcText('if(cond=done, arc={ wait() }, else={ say("not yet") })', registry);
+		assert.deepEqual(branch, parseArcText('if (done) { wait() } else { say("not yet") }', registry));
+		assert.deepEqual(parseArcText('offer(to=Bo, give={"Egg": 2})', registry)[0].args.give, { Egg: 2 }, 'braces with key: value stay an object');
+	});
+
 	it('reads block layout: args one per line, each ending in a comma, and ) alone', () => {
 		const arc = parseArcText('loop(\n\tchoose(\n\t\t"Hold the gate",\n\t\tgo_to(Keep),\n\t\tgate=go_to(EastGate),\n\t),\n)\nwander(\n\tuntil=done,\n)', verbs());
 		assert.equal(arc[0].verb, 'loop');
@@ -332,16 +362,16 @@ describe('small-model slips from the AI logs', () => {
 		assert.throws(() => parseArcText('go_to(', verbs()), /missing required arg 'target'/);
 	});
 
-	it('still rejects an issue cut off before its arc, and an issue swallowed by the one before it', () => {
+	it('still rejects a command cut off before its arc, and a command swallowed by the one before it', () => {
 		const crowd = verbs().addAll(STOCK_COLLECTIVE_VERB_DEFS);
 		crowd.add('slash', { args: { target: 'id' } });
 		assert.throws(
-			() => parseArcText('issue(who=units.filter("Witch"), arc=loop(slash(Foe))) ; issue(who', crowd),
+			() => parseArcText('command(who=units.filter("Witch"), arc=loop(slash(Foe))) ; command(who', crowd),
 			/missing required arg 'arc'/,
 		);
 		assert.throws(
-			() => parseArcText('issue(who=units.filter("Blade"), arc=loop(slash(Foe)) ; issue(who=units.filter("Witch"), arc=loop(slash(Foe)))', crowd),
-			/issue goes at the root/,
+			() => parseArcText('command(who=units.filter("Blade"), arc=loop(slash(Foe)) ; command(who=units.filter("Witch"), arc=loop(slash(Foe)))', crowd),
+			/command goes at the root/,
 		);
 	});
 
@@ -366,7 +396,7 @@ describe('small-model slips from the AI logs', () => {
 		const crowd = verbs().addAll(STOCK_COLLECTIVE_VERB_DEFS);
 		crowd.add('slash', { args: { target: 'id' } });
 		const arc = parseArcText(
-			'issue(who=units.filter("Blade"), arc=loop(slash(Foe)))), ; issue(who=units.filter("Witch"), arc=loop(slash(Foe)))',
+			'command(who=units.filter("Blade"), arc=loop(slash(Foe)))), ; command(who=units.filter("Witch"), arc=loop(slash(Foe)))',
 			crowd,
 		);
 		assert.equal(arc[1].args.who, 'units.filter("Witch")');
@@ -402,7 +432,7 @@ describe('choose', () => {
 	});
 
 	it('round-trips through formatArc', () => {
-		const text = 'choose("hold the gate", hold=go_to(EastGate) && wait(), follow(Raider), wait_2=wait())';
+		const text = 'choose("hold the gate") { hold: go_to(EastGate) && wait() ; follow(Raider) ; wait_2: wait() }';
 		const arc = parseArcText(text, verbs());
 		assert.equal(formatArc(arc, verbs()), text);
 		assert.deepEqual(parseArcText(formatArc(arc, verbs()), verbs()), arc);
@@ -427,5 +457,186 @@ describe('choose', () => {
 
 	it('leaves every other verb closed to unknown keys', () => {
 		assert.throws(() => parseArcText('wait(hold=wait())', verbs()), ArcError);
+	});
+});
+
+describe('one grammar: watches', () => {
+	it('parses literals, arrays, infix is, ternary, ??', () => {
+		assert.ok(parse('1 + 2'));
+		assert.ok(parse('["key", "door"]'));
+		assert.ok(parse('i is "door"'));
+		assert.ok(parse('a ? b : c'));
+		assert.ok(parse('x ?? y'));
+		assert.ok(parse('p => p is "key"'));
+		assert.ok(parse('matches(first(prev.verbs).reason, "locked|blocked")'));
+	});
+
+	it('reads method syntax as call syntax', () => {
+		assert.deepEqual(parse('Player.isNear(me)').ast, parse('isNear(Player, me)').ast);
+	});
+
+	it('rejects this and self', () => {
+		assert.throws(() => parse('this.hp'));
+		assert.throws(() => parse('self'));
+	});
+
+	it('treats ?. as .', () => {
+		assert.deepEqual(parse('me?.inventory').ast, parse('me.inventory').ast);
+	});
+
+	it('maps and/or/equals/===/in', () => {
+		assert.deepEqual(parse('a and b').ast, parse('a && b').ast);
+		assert.deepEqual(parse('a or b').ast, parse('a || b').ast);
+		assert.deepEqual(parse('a equals b').ast, parse('a == b').ast);
+		assert.deepEqual(parse('a === b').ast, parse('a == b').ast);
+		assert.deepEqual(parse('x in y').ast, parse('y.includes(x)').ast);
+	});
+
+	it('does not treat is "key" or "door" as any-of', () => {
+		const ast = parse('i is "key" or "door"');
+		assert.equal(ast.ast.type, 'binary');
+		if (ast.ast.type === 'binary') {
+			assert.equal(ast.ast.op, '||');
+		}
+	});
+
+	it('reads durations as game seconds', () => {
+		assert.deepEqual(parse('prev.secondsAgo > 1.5min').ast, parse('prev.secondsAgo > 90').ast);
+		assert.deepEqual(parse('2h').ast, parse('7200').ast);
+		assert.throws(() => parse('isNear(me, Keep, 5m)'), /5m: distances are plain numbers; minutes are min/, 'm is meters in sight, never minutes');
+	});
+
+	it('is one expression that only asks: no steps, no named args, no bodies', () => {
+		for (const text of ['go_to(A) ; wait()', 'say(text="Hi")', 'loop { wait() }', 'hasLoaf &&', 'let x = isHurt(me)']) {
+			assert.throws(() => parse(text), text);
+		}
+	});
+
+	it('reads comments as space', () => {
+		assert.deepEqual(parse('isHurt(me) // hurt').ast, parse('isHurt(me)').ast);
+		assert.deepEqual(parse('isHurt(me) /* hurt */ && some(others)').ast, parse('isHurt(me) && some(others)').ast);
+	});
+});
+
+describe('one grammar: arcs', () => {
+	const crowd = ():VerbRegistry => verbs().addAll(STOCK_COLLECTIVE_VERB_DEFS).add('attack', { args: { target: 'id' } });
+
+	it('takes a verb\'s arc as a body after its call, braces on its line or the next', () => {
+		const knr = parseArcText('command(units.filter("Archers")) {\n\tgo_to(Wall)\n\tattack(Wolf)\n}', crowd());
+		const allman = parseArcText('command(units.filter("Archers"))\n{\n\tgo_to(Wall); attack(Wolf)\n}', crowd());
+		assert.deepEqual(knr, allman);
+		assert.equal(knr[0].args.who, 'units.filter("Archers")');
+		assert.deepEqual(inner(knr).map((step) => [step.verb, step.then]), [['go_to', 'always'], ['attack', undefined]]);
+		assert.deepEqual(parseArcText('loop { wander() }', verbs()), [{ verb: 'loop', args: { arc: [{ verb: 'wander', args: {} }] } }]);
+	});
+
+	it('reads if, else and else if, with blocks or one statement each', () => {
+		const registry = crowd().add('heal', { args: { target: 'id' } }).add('revive', { args: { target: 'id' } });
+		const blocks = parseArcText([
+			'if (isHurt(Mira))',
+			'{',
+			'    heal(Mira)',
+			'}',
+			'else if (isDead(Mira))',
+			'{',
+			'    revive(Mira)',
+			'    say("Get back up and fight!")',
+			'}',
+			'else {',
+			'    say("You are not dead yet Mira, go get them!")',
+			'}',
+		].join('\n'), registry);
+		assert.equal(blocks.length, 1);
+		assert.deepEqual(blocks[0].args.cond, [{ verb: 'test', args: { watch: 'isHurt(Mira)' } }]);
+		const otherwise = blocks[0].args.else as Arc;
+		assert.equal(otherwise[0].verb, 'if');
+		assert.deepEqual((otherwise[0].args.arc as Arc).map((step) => step.verb), ['revive', 'say']);
+		assert.equal((otherwise[0].args.else as Arc)[0].args.text, 'You are not dead yet Mira, go get them!');
+		const lines = parseArcText('if (isHurt(Mira))\n    heal(Mira)\nelse if (isDead(Mira))\n    revive(Mira)', registry);
+		assert.equal(lines.length, 1);
+		assert.equal(((lines[0].args.else as Arc)[0].args.arc as Arc)[0].verb, 'revive');
+		assert.deepEqual(parseArcText('if isHurt(Mira) { heal(Mira) }', registry), parseArcText('if (isHurt(Mira)) { heal(Mira) }', registry), 'a condition without its brackets is read too');
+	});
+
+	it('drops comments outside strings, as small models write them', () => {
+		const plain = parseArcText('if (pick_up(Bucket)) {\n\tgo_to(Well)\n} else {\n\tsay("No bucket.")\n}', verbs());
+		const commented = parseArcText([
+			'// try the bucket first',
+			'if (pick_up(Bucket)) { /* got it */',
+			'\tgo_to(Well) // then fill it',
+			'} else {',
+			'\t/* none here',
+			'\t   so say so */',
+			'\tsay("No bucket.")',
+			'}',
+		].join('\n'), verbs());
+		assert.deepEqual(commented, plain);
+		assert.equal(parseArcText('say("a // b /* c */")', verbs())[0].args.text, 'a // b /* c */', 'inside a string it stays');
+		assert.deepEqual(parseArcText('go_to(Well) /* never closed', verbs()), parseArcText('go_to(Well)', verbs()));
+	});
+
+	it('takes a verb as a condition, and a query as a step', () => {
+		const arc = parseArcText('if (pick_up(Bucket)) { go_to(Well) } else { say("No bucket.") }', verbs());
+		assert.deepEqual(arc[0].args.cond, [{ verb: 'pick_up', args: { item: 'Bucket' } }]);
+		const chain = parseArcText('isHurt(me) && say("Ouch") ; !some(others) || wait()', verbs());
+		assert.deepEqual(chain.map((step) => step.verb), ['test', 'say', 'test', 'wait']);
+		assert.equal(chain[2].args.watch, '!some(others)');
+		assert.throws(() => parseArcText('fly(EastGate)', verbs()), /unknown verb 'fly'/, 'an unknown verb is still no query');
+		assert.throws(() => parseArcText('isHurt(me) ? go_to(Keep) : wait()', verbs()), /a verb inside an expression/);
+	});
+
+	it('reads when with its watch bare, and choose with labeled choices', () => {
+		const when = parseArcText('when !isHurt(Mira) { say("Better.") }', verbs());
+		assert.equal(when[0].args.watch, '!isHurt(Mira)');
+		const choose = parseArcText('choose("stay alive") {\n\tfight: go_to(Wolf)\n\tflee: {\n\t\tflee(Wolf)\n\t\tsay("Run!", to=Mira)\n\t}\n}', verbs());
+		assert.deepEqual(Object.keys(choose[0].args), ['goal', 'fight', 'flee']);
+		assert.deepEqual((choose[0].args.flee as Arc).map((step) => step.verb), ['flee', 'say']);
+		assert.throws(() => parseArcText('fight: go_to(Wolf)', verbs()), /inside choose/);
+	});
+
+	it('takes named args with = or :, durations, and method syntax for verbs', () => {
+		assert.deepEqual(parseArcText('say("Hi", to: Mira)', verbs()), parseArcText('say("Hi", to=Mira)', verbs()));
+		assert.equal(parseArcText('wait(1.5min)', verbs())[0].args.seconds, 90);
+		assert.equal(parseArcText('wander(seconds=20s)', verbs())[0].args.seconds, 20);
+		assert.deepEqual(parseArcText('Keep.go_to()', verbs()), parseArcText('go_to(Keep)', verbs()));
+	});
+
+	it('names a step\'s result with let, once in its arc', () => {
+		const arc = parseArcText('let picked = pick_up(Key)\nif (picked) { go_to(Door) }', verbs());
+		assert.equal(arc[0].let, 'picked');
+		assert.deepEqual(arc[1].args.cond, [{ verb: 'test', args: { watch: 'picked' } }]);
+		assert.equal(parseArcText('let both = pick_up(Key) && go_to(Door)', verbs())[0].verb, 'group', 'a chain is one step');
+		assert.throws(() => parseArcText('let x = pick_up(Key) ; let x = go_to(Door)', verbs()), /let x twice/);
+		assert.throws(() => parseArcText('let x = pick_up(Key) ; loop { let x = wait() }', verbs()), /let x twice/, 'an inner arc sees the outer name');
+		assert.doesNotThrow(() => parseArcText('loop { let x = wait() } ; let x = go_to(Door)', verbs()), 'a name ends with its arc');
+		assert.throws(() => parseArcText('let me = wait()', verbs()), /let me/);
+	});
+
+	it('writes bodies, if, let and choices back as it reads them, indented in block layout', () => {
+		const registry = crowd();
+		const text = 'let ok = pick_up(Key) ; if (ok) { go_to(Door) } else { say("It is locked.") } ; command(units) { loop { attack(Wolf) } }';
+		const arc = parseArcText(text, registry);
+		assert.equal(formatArc(arc, registry), text);
+		assert.deepEqual(parseArcText(formatArcBlocks(arc, registry), registry), arc);
+		assert.equal(formatArcBlocks(arc, registry), [
+			'let ok = pick_up(Key)',
+			'if (ok) {',
+			'\tgo_to(Door)',
+			'} else {',
+			'\tsay("It is locked.")',
+			'}',
+			'command(units) {',
+			'\tloop {',
+			'\t\tattack(Wolf)',
+			'\t}',
+			'}',
+		].join('\n'));
+		assert.deepEqual(parseArc(JSON.stringify(arcToJSON(arc)), registry), arc, 'the same tree in Arc JSON');
+	});
+
+	it('sends back prose, and a quoted line with no verb, instead of running nothing', () => {
+		assert.throws(() => parseArcText('I see four foes. say("Charge!")', verbs()), /expected verb/);
+		assert.throws(() => parseArcText('"Charge, my friends!"\ngo_to(Keep)', verbs()), /alone is not a step: say/);
+		assert.equal(parseArcText('if (true) { wait() }', verbs())[0].verb, 'if', 'a literal is a condition still');
 	});
 });

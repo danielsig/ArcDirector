@@ -175,7 +175,7 @@ describe('arc bench cases', () => {
 		assert.equal(await outcome(arcCase('Liesel'), arcCase('Liesel').naive!), 'harmful', 'gave the Wool again');
 		assert.equal(await outcome(arcCase('Sabeth'), 'give(item=Letter, to=Ansel)'), 'harmful', 'gave the Letter to the wrong one');
 		assert.equal(await outcome(arcCase('Wilmer'), 'offer(to=Maelis, give={"Scarf":1}, get={"gold":4})'), 'harmful', 'sold below its price: the case\'s own harm');
-		assert.equal(await outcome(arcCase('Sigmar'), 'issue(who=units, arc=go_to(Gnasher1))'), 'harmful', 'sent the hurt unit at the raiders, and lost it');
+		assert.equal(await outcome(arcCase('Sigmar'), 'command(who=units, arc=go_to(Gnasher1))'), 'harmful', 'sent the hurt unit at the raiders, and lost it');
 	});
 
 	it('scores where an arc gets, not what it says', async () => {
@@ -210,7 +210,7 @@ describe('arc bench cases', () => {
 			// Sold the Pelts, but offered too little for the Lute.
 			['Fennick', 'offer(to=Thibault, give={"Pelt":3}, get={"gold":6}) && offer(to=Merrin, give={"gold":5}, get={"Lute":1})'],
 			// Sent everyone to one tower.
-			['Ottar', 'issue(who=units, arc=go_to(EastTower))'],
+			['Ottar', 'command(who=units, arc=go_to(EastTower))'],
 			// Took 1, then the wrong reply.
 			['Fenwyn', ['take(stones=1)', 'take(stones=1)', 'take(stones=1)']],
 		];

@@ -1,45 +1,25 @@
 import type { Arc } from './arc-types.js';
-import { reactionFinished, reactionRest, type ArcHandler, type ReactionProgress } from './run.js';
+import { reactionArm, reactionFinished, type ArcHandler, type Reaction, type ReactionProgress } from './run.js';
 import { arcArg } from './wire.js';
 import type { VerbRegistry } from './stock-verbs.js';
 
-/** A standing reaction: while `watch` holds, the runner drops what it is doing and runs `arc`. */
-export type Law = {
+/**
+ * A standing reaction of a runner, until `unlaw`: when `watch` becomes true for a character it reaches, that character
+ * drops what it is doing and runs `arc` to its end. Its `times` and `until` count for each character on its own.
+ */
+export type Law = Reaction & {
 	name:string;
 	who:string;
-	watch:string;
-	arc:Arc;
 	pinned?:boolean;
-	/**
-	 * Game seconds it runs once started before anything but its own end stops it: its watch turning false, another
-	 * law's turning true, or a new program from a think (which waits until then). Keeps a watch that sits on an edge from
-	 * switching laws every frame, and lets a slow act finish (a cast). None: the director's `withLawHold`.
-	 */
-	hold?:number;
-	/** A watch that ends its `hold` early the moment it is true, so a game decides what may cut it short: a blow. */
-	holdBreak?:string;
-	/** It has run this many times for a character, counted as each run starts, and is then finished for that character. */
-	times?:number;
-	/** A watch: once it holds in a character's own view, the law is finished for that character. */
-	until?:string;
 	/** How far it has got for each character it has reached, by id. Only with `times` or `until`. */
 	progress?:Record<string, ReactionProgress>;
 };
 
-export type LawSpec = {
+export type LawSpec = Omit<Reaction, 'arc'> & {
 	name?:string;
 	who?:string;
-	watch:string;
 	arc:Arc | string;
 	pinned?:boolean;
-	/** See {@link Law.hold}. */
-	hold?:number;
-	/** See {@link Law.holdBreak}. */
-	holdBreak?:string;
-	/** See {@link Law.times}. */
-	times?:number;
-	/** See {@link Law.until}. */
-	until?:string;
 };
 
 /** Most laws per group: a collective's own laws, and each member's. */
@@ -73,19 +53,16 @@ export function lawFromSpec(
 		watch,
 		arc,
 		pinned: spec.pinned,
-		...spec.hold === undefined ? {} : { hold: spec.hold },
-		...spec.holdBreak?.trim() ? { holdBreak: spec.holdBreak.trim() } : {},
 		times: spec.times,
 		until: spec.until?.trim() || undefined,
+		...spec.rearm === undefined ? {} : { rearm: spec.rearm },
 	};
 }
 
 /** `law` as a reaction of the character `id`, at `rank`. */
 export function lawHandler(law:Law, rank:number, id:string):ArcHandler {
-	const exit = law.times !== undefined || law.until
-		? { times: law.times, until: law.until, progress: (law.progress ??= {})[id] ??= { runs: 0 } }
-		: undefined;
-	return { source: law, watch: law.watch, arc: law.arc, rank, hold: law.hold, holdBreak: law.holdBreak, exit, rest: reactionRest(law, id) };
+	const progress = law.times !== undefined || law.until ? (law.progress ??= {})[id] ??= { runs: 0 } : undefined;
+	return { source: law, watch: law.watch, arc: law.arc, times: law.times, until: law.until, rearm: law.rearm, rank, progress, arm: reactionArm(law, id) };
 }
 
 /** Whether `law` has finished for someone and for all `reached` says it reaches now, so it can go. */

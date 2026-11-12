@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { parseArcText, formatArc, formatArcBlocks } from './arc-parse.js';
+import { parseArcText } from './arc-parse.js';
+import { formatArc, formatArcBlocks } from './arc-format.js';
 import { arcFromJSON, arcJSONBlocks, arcJSONText, arcSoFar, finishedSteps, arcToJSON, parseArc, replyBreakdown } from './wire.js';
 import { replySchema } from './schema.js';
 import { VerbRegistry, STOCK_VERB_DEFS } from './stock-verbs.js';
@@ -48,7 +49,7 @@ describe('replyBreakdown', () => {
 		const real = [
 			'{"steps":[{"verb":"say","text":"Ha :) (he said) \\"no\\" ok","to":"Ann"}]}',
 			'{"steps":[{"verb":"offer","to":"Ann","give":{"gold":5},"get":{"Egg":1}}]}',
-			'{"steps":[{"verb":"issue","who":"units.filter(u => isHurt(u))","arc":[{"verb":"loop","arc":[{"verb":"choose","goal":"Hit: the weak (or not)","choices":{"a":[{"verb":"wait"}]}}]}]}]}',
+			'{"steps":[{"verb":"command","who":"units.filter(u => isHurt(u))","arc":[{"verb":"loop","arc":[{"verb":"choose","goal":"Hit: the weak (or not)","choices":{"a":[{"verb":"wait"}]}}]}]}]}',
 			'```json\n{"steps":[{"verb":"wait"}]}\n```',
 			'go_to(Keep) && say(text="It is (very) far: }]}")',
 			'I should think about this (at length).\n\n{"steps":[{"verb":"wait"}]}',
@@ -94,8 +95,8 @@ describe('arcJSONBlocks', () => {
 
 describe('arcSoFar', () => {
 	it('reads Arc JSON cut anywhere without throwing, and grows as it comes', () => {
-		const kit = crowd().view(['issue', 'loop', 'slash', 'cleave']);
-		const whole = '{"steps":[{"verb":"issue","who":"units.filter(\\"Blade\\")","arc":[{"verb":"loop","arc":[{"verb":"slash","target":"Knight"}]}]},{"verb":"issue","who":"allUnits","arc":[{"verb":"loop","arc":[{"verb":"cleave","target":"Knight"}]}]}]}';
+		const kit = crowd().view(['command', 'loop', 'slash', 'cleave']);
+		const whole = '{"steps":[{"verb":"command","who":"units.filter(\\"Blade\\")","arc":[{"verb":"loop","arc":[{"verb":"slash","target":"Knight"}]}]},{"verb":"command","who":"allUnits","arc":[{"verb":"loop","arc":[{"verb":"cleave","target":"Knight"}]}]}]}';
 		const seen = new Set<string>();
 		for (let cut = 1; cut <= whole.length; cut += 1) {
 			const text = arcSoFar(whole.slice(0, cut), kit);
@@ -131,7 +132,7 @@ describe('Arc JSON', () => {
 			'go_to(A) && wait(seconds=2) ; say(Hi) || go_to(B)',
 			'(go_to(Keep) && wait(seconds=1)) || say(fail.reason)',
 			'loop(choose("hold the gate", hold=go_to(EastGate) && wait(), chase=follow(Raider)), until=isHurt(me))',
-			'issue(who=units.filter("Witch"), arc=hex(Healer) ; (slash(Foe) || wait())) ; issue(who=units, arc=loop(cleave(Knight)))',
+			'command(who=units.filter("Witch"), arc=hex(Healer) ; (slash(Foe) || wait())) ; command(who=units, arc=loop(cleave(Knight)))',
 			'when(watch=isHurt(me), arc=go_to(Keep)) ; wander()',
 		]) {
 			const arc = parseArcText(text, registry);
@@ -182,15 +183,15 @@ describe('Arc JSON', () => {
 		assert.equal(arc[1].args.seconds, 1);
 	});
 
-	it('parses a truncated issue chain from CoT JSON', () => {
-		const kit = crowd().view(['issue', 'loop', 'slash', 'cleave']);
-		const raw = '{"steps":[{"verb":"issue","who":"allUnits","arc":[{"verb":"loop","arc":[{"verb":"slash","target":"Blade"}]}]},{"verb":"issue","who":"allUnits","arc":[{"verb":"loop","arc":[{"verb":"cleave","target":"Knight"';
+	it('parses a truncated command chain from CoT JSON', () => {
+		const kit = crowd().view(['command', 'loop', 'slash', 'cleave']);
+		const raw = '{"steps":[{"verb":"command","who":"allUnits","arc":[{"verb":"loop","arc":[{"verb":"slash","target":"Blade"}]}]},{"verb":"command","who":"allUnits","arc":[{"verb":"loop","arc":[{"verb":"cleave","target":"Knight"';
 		const arc = parseArc(raw, kit);
 		assert.equal(arc[0].args.who, 'allUnits');
 		assert.equal(arc[1].args.who, 'allUnits');
 		assert.equal(
 			formatArc(arc, kit),
-			'issue(who=allUnits, arc=loop(slash(Blade))) && issue(who=allUnits, arc=loop(cleave(Knight)))',
+			'command(allUnits) { loop { slash(Blade) } } && command(allUnits) { loop { cleave(Knight) } }',
 		);
 	});
 
@@ -275,11 +276,11 @@ describe('replySchema', () => {
 		return replySchema(registry) as never;
 	}
 
-	it('has one branch per verb of the catalog, plus the group, whatever kit asks', () => {
+	it('has one branch per verb of the catalog, plus the group and the test, whatever kit asks', () => {
 		const catalog = crowd();
-		const kit = catalog.view(['issue', 'wait']);
+		const kit = catalog.view(['command', 'wait']);
 		const names = (registry:VerbRegistry):string[] => schemaOf(registry.nested()).$defs.step.anyOf.map((branch) => branch.properties.verb.const);
-		assert.deepEqual(names(kit), [...catalog.list().map((spec) => spec.name).filter((name) => name !== 'issue'), 'group']);
+		assert.deepEqual(names(kit), [...catalog.list().map((spec) => spec.name).filter((name) => name !== 'command'), 'group', 'test']);
 		assert.equal(JSON.stringify(replySchema(kit.nested())), JSON.stringify(replySchema(catalog)));
 	});
 
@@ -291,10 +292,10 @@ describe('replySchema', () => {
 		}
 	});
 
-	it('takes issue at the root of a reply only, so no nested arc can hold one', () => {
+	it('takes command at the root of a reply only, so no nested arc can hold one', () => {
 		const schema = replySchema(crowd()) as unknown as { properties:{ steps:{ items:{ anyOf:{ properties?:{ verb:{ const:string }; arc:unknown } }[] } } } };
 		const root = schema.properties.steps.items.anyOf;
-		assert.equal(root[0].properties?.verb.const, 'issue');
+		assert.equal(root[0].properties?.verb.const, 'command');
 		assert.deepEqual(root[0].properties?.arc, { $ref: '#/$defs/arc' });
 		assert.deepEqual(root[1], { $ref: '#/$defs/step' });
 	});
@@ -308,12 +309,12 @@ describe('replySchema', () => {
 		assert.ok(!sameProgram(arc('say("Hold!")'), arc('say("Run!")')), 'what a say says is what it does');
 	});
 
-	it('refuses issue anywhere but the root of an Arc', () => {
+	it('refuses command anywhere but the root of an Arc', () => {
 		const kit = crowd();
-		for (const text of ['loop(issue(who=units, arc=wait()))', 'law(watch=1 > 0, arc=issue(who=units, arc=wait()))', 'when(watch=1 > 0, arc=issue(who=units, arc=wait()))', 'issue(who=units, arc=issue(who=units, arc=wait()))']) {
-			assert.throws(() => parseArcText(text, kit), /issue goes at the root/, text);
+		for (const text of ['loop(command(who=units, arc=wait()))', 'law(watch=1 > 0, arc=command(who=units, arc=wait()))', 'when(watch=1 > 0, arc=command(who=units, arc=wait()))', 'command(who=units, arc=command(who=units, arc=wait()))']) {
+			assert.throws(() => parseArcText(text, kit), /command goes at the root/, text);
 		}
-		assert.doesNotThrow(() => parseArcText('issue(who=units, arc=loop(wait())) ; issue(who=allUnits, arc=wait())', kit));
+		assert.doesNotThrow(() => parseArcText('command(who=units, arc=loop(wait())) ; command(who=allUnits, arc=wait())', kit));
 	});
 
 	it('has one branch per tool before the steps, the built-ins first, and no more for a mind that lacks one', () => {
@@ -353,7 +354,7 @@ describe('replySchema', () => {
 
 	it('writes group and choose as steps of their own, with the nested arc by reference', () => {
 		const schema = replySchema(verbs()) as unknown as { $defs:{ step:{ anyOf:{ required:string[]; properties:Record<string, { $ref?:string; additionalProperties?:unknown; const?:string }> }[] } } };
-		const group = schema.$defs.step.anyOf.at(-1);
+		const group = schema.$defs.step.anyOf.at(-2);
 		assert.deepEqual(group?.required, ['verb', 'arc']);
 		assert.equal(group?.properties.verb.const, 'group');
 		assert.equal(group?.properties.arc.$ref, '#/$defs/arc');
@@ -372,10 +373,29 @@ describe('replySchema', () => {
 		assert.equal(schema.properties.steps.$ref, '#/$defs/arc');
 		assert.equal(schema.$defs.arc.minItems, 1);
 		const use = schema.$defs.step.anyOf.find((branch) => (branch.properties.verb as { const:string }).const === 'use');
-		assert.deepEqual(Object.keys(use?.properties ?? {}), ['verb', 'item', 'target', 'then']);
+		assert.deepEqual(Object.keys(use?.properties ?? {}), ['let', 'verb', 'item', 'target', 'until', 'within', 'then']);
 		assert.deepEqual(use?.required, ['verb', 'item']);
 		const loop = schema.$defs.step.anyOf.find((branch) => (branch.properties.verb as { const:string }).const === 'loop');
 		assert.deepEqual((loop?.properties.arc as { $ref:string }).$ref, '#/$defs/arc');
 		assert.ok(JSON.stringify(schema).length < 20_000);
+	});
+});
+
+describe('Arc text a reply wraps', () => {
+	const verbs = ():VerbRegistry => new VerbRegistry().addAll(STOCK_VERB_DEFS);
+
+	it('keeps the steps after a think tag, the last piece that parses', () => {
+		const reply = 'go_to(Keep) && say("Hi")\n</redacted_thinking>\ngo_to(Keep) && say("Hi")\n</redacted_thinking>\ngo_to(Keep) && say("Hi there")';
+		assert.deepEqual(parseArc(reply, verbs()), parseArcText('go_to(Keep) && say("Hi there")', verbs()));
+		assert.equal(parseArc('</think>\nwait()', verbs())[0].verb, 'wait');
+	});
+
+	it('drops the prose before and after the steps, and keeps a block whole', () => {
+		const reply = 'I need a FireMushroom first. Let me wander.\n\nwander(until=some(items.filter("FireMushroom").nearby()))\nloop {\n\tpick_up(FireMushroom)\n}\nThat should do it.';
+		assert.deepEqual(parseArc(reply, verbs()).map((step) => step.verb), ['wander', 'loop']);
+	});
+
+	it('still refuses a reply with no steps in it, with the whole reply\'s reason', () => {
+		assert.throws(() => parseArc('I see four foes and I am afraid.', verbs()), /expected verb/);
 	});
 });

@@ -1,15 +1,15 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue';
-import type { HudModel } from './hud-model';
-import { tileFill } from '../world/tile-fill';
+import { MINIMAP_SIZE, type HudModel } from './hud-model';
 import { CHUNK_SIZE } from '../world/constants';
+import { tileFill } from '../world/tile-fill';
 
 const props = defineProps<{
 	hud:HudModel;
 }>();
 
-const cell = 7;
-const view = CHUNK_SIZE * cell;
+const cell = MINIMAP_SIZE / CHUNK_SIZE;
+const view = MINIMAP_SIZE;
 const canvasRef = ref<HTMLCanvasElement | null>(null);
 
 const size = computed(() => ({

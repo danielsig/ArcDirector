@@ -135,8 +135,8 @@ export function playerSay(host:GameHost, text:string):void {
 	const directed = parseDirectedLine(spoken, talkOthers(host.world, 'Player'));
 	const line = directed?.text ?? spoken;
 	const to = directed?.to ?? (peers.length <= 1 ? peers[0] : peers);
-	const result = host.talk.say('Player', line, to, Time.time);
-	if (!result.ok) {
+	const result = host.talk.say('Player', line, to, host.arc?.time);
+	if (result.status !== 'ok') {
 		host.world.setMessage(result.reason ?? 'no one heard');
 	}
 }
@@ -184,7 +184,7 @@ export function pushChat(host:GameHost, speaker:string, text:string, to?:string,
 
 /** A successful verb aimed at another living character. `say` is already logged by talk. A walk is not chat. */
 export function noteAct(host:GameHost, call:VerbCall<CharacterCtx>, result:ArcResult):void {
-	if (!result.ok || result.verb === 'say' || (result.verb ?? call.verb) === 'go_to') {
+	if (result.status !== 'ok' || result.verb === 'say' || (result.verb ?? call.verb) === 'go_to') {
 		return;
 	}
 	const self = call.ctx.character;

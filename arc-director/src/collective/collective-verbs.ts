@@ -3,7 +3,7 @@ import type { VerbDef } from '../arc/stock-verbs.js';
 export const STOCK_FORMATION_VERBS = ['spread', 'circle', 'hold_line'] as const;
 
 export const STOCK_COLLECTIVE_VERBS = [
-	'issue',
+	'command',
 	'tag',
 	'untag',
 	...STOCK_FORMATION_VERBS,
@@ -12,7 +12,7 @@ export const STOCK_COLLECTIVE_VERBS = [
 export type StockCollectiveVerb = (typeof STOCK_COLLECTIVE_VERBS)[number];
 
 export const STOCK_COLLECTIVE_VERB_DEFS = {
-	issue: { args: { who: 'expr', arc: 'arc', group: 'string?' }, help: 'assigns a sticky program to matching units, never the commander; two or more: name them, group=Name', free: true },
+	command: { args: { who: 'expr', arc: 'arc', group: 'string?' }, help: 'assigns a sticky program to matching units, never the commander; two or more: name them, group=Name', free: true },
 	tag: { args: { who: 'expr', name: 'string' }, help: 'assigns only', free: true },
 	untag: { args: { who: 'expr', name: 'string' }, help: 'assigns only', free: true },
 	spread: { args: { around: 'id?', paces: 'number?' } },

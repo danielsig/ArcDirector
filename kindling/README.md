@@ -78,7 +78,7 @@ Creates a `World` (or uses the one you pass in) and, when there is a `document`,
 
 `unfocusedHz` (default `3`) caps how often the canvas is drawn while the page is not focused. Set it on your `Game` instance.
 
-Set `paused` to freeze the simulation. Frames still tick and draw, but `Time` stands still and no component runs. To do extra work every frame, override `tick` and call `super.tick(dt)`. `resetTime(t)` restarts the clock at `t` (a loaded save's time, for example) with no fixed steps owed.
+Set `paused` to freeze the simulation. Frames still tick and draw, but `Time` stands still and no component runs. To do extra work every frame, override `tick` and call `super.tick(dt)`; to work around drawing (timing it, say), override `draw(now)` and call `super.draw(now)`. `resetTime(t)` restarts the clock at `t` (a loaded save's time, for example) with no fixed steps owed.
 
 Override `onStart` for one-off setup when the loop begins.
 
@@ -440,7 +440,7 @@ Notation:
 
 Each **part** in a `bar` starts on that bar's downbeat, so the parts play on top of each other. Notes that follow one another belong in **one** track call: `low('c2:4 g2:4')`. To start a second idea later, open it with a rest: `low('c2:4'), low('r:4 g2:4')`. Two `track(bass)` calls make two separate tracks, each with its own gain and cutoff.
 
-The dynamics are `p`, `mp`, `mf`, `f` and `ff`. A mark comes right after the notes it applies to. `crescendo(f)` and `diminuendo(p)` shape `sustaining` instruments; on the others, a note's velocity is set when it starts.
+The dynamics are `pp`, `p`, `mp`, `mf`, `f` and `ff`. A mark comes right after the notes it applies to. `crescendo(f)` and `diminuendo(p)` shape `sustaining` instruments; on the others, a note's velocity is set when it starts.
 
 `slot()` stores a phrase so it can be played again or varied with `.with` / `.without`. `start()` and `end()` trim the piece while you listen to it. `callback(fn)` fires when playback reaches that point.
 
@@ -520,6 +520,8 @@ src/
   core/              Game, World, GameObject, Transform, Time, physics
   render/            Renderer, Camera, Light, MeshRenderer, shader inserts, effects
   assets/            mesh registry, glTF
-  audio/             procedural mixer, scores, SFX
+  audio/             procedural mixer, instruments, SFX, speech
+  score/             score authoring (`@arc-director/kindling/score`)
 playground/          Vite demos (cube, parenting, glTF, lights) and the character.html lineup
+scripts/             build-models.mjs (Tripo GLBs to game models), shoot.mjs (headless screenshots)
 ```

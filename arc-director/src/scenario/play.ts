@@ -141,7 +141,7 @@ function stage(director:ArcDirector<SceneCtx>, s:Scenario, world:SceneWorld):Arc
 				help,
 				seen,
 				handler: (call) => {
-					const result = (done:string | Outcome):ArcResult => (typeof done === 'string' ? { ok: true, verb: name, reason: done } : { ...done, verb: name });
+					const result = (done:string | Outcome):ArcResult => (typeof done === 'string' ? { status: 'ok', verb: name, reason: done } : { status: done.ok ? 'ok' : 'failed', verb: name, reason: done.reason });
 					const who = call.character.id;
 					const stop = new AbortController();
 					const done = verb.run(world, { who, args: call.args as Record<string, StepArg>, signal: stop.signal });
@@ -154,7 +154,7 @@ function stage(director:ArcDirector<SceneCtx>, s:Scenario, world:SceneWorld):Arc
 						const forget = world.onAbort(who, () => {
 							forget();
 							stop.abort();
-							resolve({ ok: false, interrupted: true, verb: name });
+							resolve({ status: 'stopped', verb: name });
 						});
 						void done.then((out) => {
 							forget();
@@ -351,5 +351,5 @@ async function play(director:ArcDirector<SceneCtx>, s:Scenario, world:SceneWorld
 function tick(director:ArcDirector<SceneCtx>, s:Scenario, world:SceneWorld):void {
 	world.step(SCENE_TICK);
 	s.act?.(world, director);
-	director.tick(SCENE_TICK, world.time);
+	director.tick(SCENE_TICK);
 }

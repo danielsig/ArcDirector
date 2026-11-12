@@ -1,5 +1,6 @@
-import { argBase, CHOOSE_VERB, fillHoles, stepDoing, STOCK_TRADE_VERBS, STOCK_VERB_DEFS, STOCK_VERBS, type StockVerb, type VerbArgKind, type VerbArgMap, VerbRegistry } from '../arc/stock-verbs.js';
-import { formatArc, parseArcText } from '../arc/arc-parse.js';
+import { argKind, CHOOSE_VERB, fillHoles, stepDoing, STOCK_TRADE_VERBS, STOCK_VERB_DEFS, STOCK_VERBS, type StockVerb, type VerbArgKind, type VerbArgMap, VerbRegistry } from '../arc/stock-verbs.js';
+import { parseArcText } from '../arc/arc-parse.js';
+import { formatArc } from '../arc/arc-format.js';
 import { withLoneWait } from '../arc/choose.js';
 import { arcArg } from '../arc/wire.js';
 import { arcSteps, eachStep, firstStep, isCountMap, sameProgram, type Arc, type ArcResult, type Step, type StepArg } from '../arc/arc-types.js';
@@ -50,7 +51,7 @@ import {
 	isFormationVerb,
 	type StockCollectiveVerb,
 } from '../collective/collective-verbs.js';
-import { buildCollectiveCatalog, doingFields, evaluateWho, idsInVal, lawMatches, memberEntity, usesCollective } from '../collective/who.js';
+import { buildCollectiveCatalog, doingFields, evaluateWho, idsInVal, lawMatches, memberEntity, noUnitReason, usesCollective } from '../collective/who.js';
 import { chatHandover, HANDOVER_THREAD, type Handover, type Journey, type MemoryEdit } from '../collective/handover.js';
 import { nameTags, type MemoryRecord } from '../memory/store.js';
 import {
@@ -58,6 +59,8 @@ import {
 	createArcSession,
 	firstStartable,
 	pollArcSession,
+	reactionOf,
+	DEFAULT_REARM,
 	runArc,
 	watchIsTrue,
 	type ArcHandler,
@@ -183,10 +186,10 @@ const NO_MODEL:InferenceProvider = {
 
 /** How long a System One that failed is skipped, so each pick does not wait on it again. */
 const SYSTEM_ONE_REST_MS = 30_000;
-/** Game seconds between asks of goals' `until`s: as often as a think queue samples watches by default. */
-const GOAL_CHECK_INTERVAL = 0.25;
 /** Game seconds between the tries `tick` makes to connect while the servers do not answer. */
 const RETRY_SECONDS = 3;
+/** What a step no race stops is handed: it never aborts. */
+const NEVER = new AbortController().signal;
 
 /** An RPG's crowds: round whoever they come to, in line to trade or hand over. */
 const RPG_CROWD:CrowdSettings = { crowd: 'ring', verbs: { offer: 'line', give: 'line' } };
@@ -205,10 +208,17 @@ export type CastJSON = {
 	collectives:Record<string, CollectiveJSON>;
 	/** Every open offer; none when no one offers anything. */
 	offers?:Offer[];
+	/** The director's `time`, which every time in the cast is on. */
+	time?:number;
 };
 
 function nowMs():number {
 	return performance.now();
+}
+
+/** Whether an interval of `every` seconds that last fired at `last` is due at `now` (game time adds up in floating point). */
+function due(last:number | undefined, every:number, now:number):boolean {
+	return last === undefined || now - last >= every - 1e-6;
 }
 
 function whoFromMessages(req:ChatRequest):string {
@@ -243,9 +253,7 @@ export class ArcDirector<TCtx = unknown> {
 	private _retryAt = 0;
 	private _disposed = false;
 	private _logFn:((entry:DirectorLog)=>void) | undefined;
-	/** The game time in seconds since the director was created (Only progresses when `tick()` is called). */
-	private _clock = 0;
-	private _loop:ReturnType<typeof setInterval> | undefined;
+	private _time = 0;
 
 	/** Its servers and models answered: thinks run. Until then laws, programs and moves still run on every tick. */
 	public get connected():boolean {
@@ -340,16 +348,22 @@ export class ArcDirector<TCtx = unknown> {
 		return this;
 	}
 
+	/** Game seconds its ticks have added up to: the clock its deadlines, rearms and memories go by. A save keeps it. */
+	public get time():number {
+		return this._time;
+	}
+
 	/**
-	 * Advance game time to `now`: laws, programs, moves, sounds and talk run, and ready minds think once connected. Until
-	 * then it connects on its own (wiring the cast first) every 3 game seconds; what goes wrong goes to `onLog`,
-	 * and nothing runs while the cast cannot be wired.
+	 * `dt` game seconds pass: laws, programs, moves, sounds and talk run, and ready minds think once connected. Until
+	 * then it connects on its own (wiring the cast first) every 3 game seconds; what goes wrong goes to `onLog`, and
+	 * nothing runs while the cast cannot be wired. A `dt` of 0 or less (a paused game) does nothing.
 	 */
-	public tick(dt:number, now:number):void {
-		if (this._disposed) {
+	public tick(dt:number):void {
+		if (this._disposed || !(dt > 0)) {
 			return;
 		}
-		this._clock = now;
+		this._time += dt;
+		const now = this._time;
 		if (!this._connected && !this._connecting && now >= this._retryAt) {
 			this._retryAt = now + RETRY_SECONDS;
 			void this.connect().catch(() => undefined);
@@ -357,10 +371,18 @@ export class ArcDirector<TCtx = unknown> {
 		if (!this._wired) {
 			return;
 		}
+		const watch = due(this._watchedAt, this._intervals.watch, now);
+		const think = due(this._thoughtAt ??= now, this._intervals.think, now);
+		if (watch) {
+			this._watchedAt = now;
+		}
+		if (think) {
+			this._thoughtAt = now;
+		}
 		// Characters before collectives: steps waiting for the clock wake in that order.
 		const rows = [...this._rows.values()].sort((a, b) => Number(a.runner instanceof Collective) - Number(b.runner instanceof Collective));
 		for (const row of rows) {
-			row.runner.stamp(now);
+			row.runner.stamp(now, this._watchedAt);
 			row.runner.refreshKit();
 		}
 		const minds = this.minds();
@@ -371,7 +393,7 @@ export class ArcDirector<TCtx = unknown> {
 		if (world) {
 			this._regions.tick(this.characters(), (id) => poseOf(world, id)?.point, dt, now);
 		}
-		// Built only for the minds whose watches are sampled this tick: a view per character is not cheap.
+		// Built only for the minds whose watches are asked this tick: a view per character is not cheap.
 		const catalogs = {
 			get: (id:string):Catalog | Catalog[] | undefined => {
 				const mind = this._kernelFn && this._contextFn ? this.mindByID(id) : undefined;
@@ -383,7 +405,7 @@ export class ArcDirector<TCtx = unknown> {
 				}
 			},
 		};
-		const ready = this._queue.tick(dt, catalogs);
+		const ready = this._queue.tick(dt, think ? catalogs : undefined);
 		this._readyThink.push(...ready);
 		this.tickWaits();
 		this._rts?.tick(dt);
@@ -393,6 +415,18 @@ export class ArcDirector<TCtx = unknown> {
 		for (const row of rows) {
 			row.cache.commit();
 		}
+		if (watch) {
+			this.tickAllLaws();
+		}
+		this.tickHandover();
+		if (think) {
+			this.tickGoals(minds);
+		}
+		this.drain(now);
+	}
+
+	/** Every runner's laws and standing `choose`, and each collective's laws. */
+	private tickAllLaws():void {
 		for (const { runner } of this._rows.values()) {
 			if (!(runner instanceof Character)) {
 				continue;
@@ -413,32 +447,9 @@ export class ArcDirector<TCtx = unknown> {
 			}
 			this.tickCollectiveLaws(runner);
 		}
-		this.tickHandover();
-		this.tickGoals(dt, minds);
-		this.drain(now);
-	}
-
-	/** Wall-clock loop for laws. Games must not use this — they already have a frame tick. */
-	public runLoop(hz:number):()=>void {
-		this.stopLoop();
-		const dt = 1 / Math.max(1, hz);
-		let now = 0;
-		this._loop = setInterval(() => {
-			now += dt;
-			this.tick(dt, now);
-		}, Math.max(1, Math.round(1000 / hz)));
-		return () => this.stopLoop();
-	}
-
-	private stopLoop():void {
-		if (this._loop !== undefined) {
-			clearInterval(this._loop);
-			this._loop = undefined;
-		}
 	}
 
 	public dispose():void {
-		this.stopLoop();
 		this._disposed = true;
 		this.clearCast();
 	}
@@ -855,7 +866,7 @@ ${dump.message}`, image: dump.image });
 	/** Start a character's standing `choose` while it is idle, System One is on, and its `until` does not hold. */
 	private tickStanding(character:Character<TCtx>):void {
 		const standing = this._standing.get(character);
-		if (!standing || character.arcSession || this._clock < standing.restUntil || !this.pickFor(character)) {
+		if (!standing || character.arcSession || this._time < standing.restUntil || !this.pickFor(character)) {
 			return;
 		}
 		const catalog = standing.until ? character.catalog?.() : undefined;
@@ -864,11 +875,11 @@ ${dump.message}`, image: dump.image });
 		}
 		void character.enact(standing.arc).then((result) => {
 			// A dead endpoint or a bad pick rests like a handler would, instead of asking again every tick.
-			if (!result.ok && !result.preempted) {
-				standing.restUntil = this._clock + character.cooldown;
+			if (result.status === 'failed') {
+				standing.restUntil = this._time + character.cooldown;
 			}
 		}, (err:unknown) => {
-			standing.restUntil = this._clock + character.cooldown;
+			standing.restUntil = this._time + character.cooldown;
 			this.emitLog({ name: character.id, message: `choose: ${err instanceof Error ? err.message : String(err)}`, error: true });
 		});
 	}
@@ -977,7 +988,7 @@ ${dump.message}`, image: dump.image });
 	public readonly offers = new OfferBook();
 	/** Stock world verbs for the parts `withWorld` has, and the RTS verbs once `withRTS` is set. A host handler of the same name wins. */
 	private readonly _stockHandlers = new Map<string, VerbHandler<TCtx>>();
-	private _mover = new Mover(undefined, () => this._clock);
+	private _mover = new Mover(undefined, () => this._time);
 	private readonly _aliases = new Map<string, VerbAlias>();
 	/** Each noisy verb's help as it was registered, before {@link syncVerbSchemas} added how far its sound carries. */
 	private readonly _baseHelp = new Map<string, string | undefined>();
@@ -1028,7 +1039,7 @@ ${dump.message}`, image: dump.image });
 		}
 		const names = runner.mind?.persona.names;
 		const shown = names ? mapExpr(word, namesOf(names)) : word;
-		const fail = (reason:string):ArcResult => ({ ok: false, verb: step.verb, reason });
+		const fail = (reason:string):ArcResult => ({ status: 'failed', verb: step.verb, reason });
 		let picked = value as string[];
 		if (word) {
 			const ctx = runner.context();
@@ -1095,7 +1106,7 @@ ${dump.message}`, image: dump.image });
 		for (const { runner } of this._rows.values()) {
 			this._mover.stop(runner.id);
 		}
-		this._mover = new Mover(world, () => this._clock, (verb, target) => this.crowdOf(verb, target), () => this._crowd?.spacing ?? 1);
+		this._mover = new Mover(world, () => this._time, (verb, target) => this.crowdOf(verb, target), () => this._crowd?.spacing ?? 1);
 		this.bindWorldVerbs();
 		return this;
 	}
@@ -1114,7 +1125,7 @@ ${dump.message}`, image: dump.image });
 		return this;
 	}
 
-	/** Schema-only collective verbs (`issue`, `tag`, formations). `when` / `law` / `unlaw` ride on stock arc verbs. Kit still has to grant them. */
+	/** Schema-only collective verbs (`command`, `tag`, formations). `when` / `law` / `unlaw` ride on stock arc verbs. Kit still has to grant them. */
 	public addStockCollectiveVerbs(...verbs:StockCollectiveVerb[]):this {
 		this._verbs.addAll(STOCK_COLLECTIVE_VERB_DEFS, ...verbs);
 		this.syncVerbSchemas();
@@ -1127,7 +1138,7 @@ ${dump.message}`, image: dump.image });
 	 * carries (`withHearing`, in sight's unit).
 	 */
 	private syncVerbSchemas():void {
-		if ([...this._aliases.values()].some((alias) => alias.watch !== undefined) && this._verbs.get('law')?.args.watch === 'watch') {
+		if ([...this._aliases.values()].some((alias) => alias.watch !== undefined) && this._verbs.get('law')?.args.watch?.kind === 'watch') {
 			this._verbs.redefine('law', { ...STOCK_VERB_DEFS.law, args: { ...STOCK_VERB_DEFS.law.args, watch: 'watch?' } });
 		}
 		const noise = this._hearing?.noise ?? new Map<string, Sound>();
@@ -1153,14 +1164,14 @@ ${dump.message}`, image: dump.image });
 	 * its stock args. Same name again binds or replaces the handler.
 	 */
 	public addVerb<TVerb extends StockVerbName>(name:TVerb, verb:{ help?:string; reply?:boolean; seen?:string; handler:VerbHandler<TCtx, VerbArgs<StockVerbArgs<TVerb>>> }):this;
-	public addVerb<const TArgMap extends VerbArgMap = Record<never, never>>(name:string, verb?:{ args?:TArgMap; help?:string; reply?:boolean; seen?:string; group?:string; handler?:VerbHandler<TCtx, VerbArgs<TArgMap>> }):this;
+	public addVerb<const TArgMap extends VerbArgMap = Record<never, never>>(name:string, verb?:{ args?:TArgMap; help?:string; reply?:boolean; seen?:string; group?:string; endless?:boolean; handler?:VerbHandler<TCtx, VerbArgs<TArgMap>> }):this;
 	/**
 	 * An alias: a verb that runs `arc`, its `{arg}` holes filled from its args (or `arc` made from them). Usable
-	 * wherever a verb is. As a law's whole arc it brings `watch` and `who` when the law gives none:
+	 * wherever a verb is. As a law's whole arc it brings `watch`, `who` and `rearm` when the law gives none:
 	 * `law(name=archers, arc=keep_distance(keep=4), who=units.filter("Archer"))`.
 	 */
 	public addVerb(name:string, verb:{ args?:VerbArgMap; help?:string; seen?:string } & VerbAlias):this;
-	public addVerb(name:string, { handler, arc, watch, who, ...def }:{ args?:VerbArgMap; help?:string; reply?:boolean; seen?:string; group?:string; handler?:VerbHandler<TCtx, never>; arc?:AliasPart; watch?:AliasPart; who?:AliasPart } = {}):this {
+	public addVerb(name:string, { handler, arc, watch, who, rearm, ...def }:{ args?:VerbArgMap; help?:string; reply?:boolean; seen?:string; group?:string; endless?:boolean; handler?:VerbHandler<TCtx, never> } & Partial<VerbAlias> = {}):this {
 		if (!this._verbs.has(name)) {
 			this._verbs.add(name, def);
 		}
@@ -1169,7 +1180,7 @@ ${dump.message}`, image: dump.image });
 			this._verbs.redefine(name, { ...this._verbs.get(name)!, seen: def.seen });
 		}
 		if (arc !== undefined) {
-			this._aliases.set(name, { arc, watch, who });
+			this._aliases.set(name, { arc, watch, who, rearm });
 		}
 		if (handler) {
 			// The schema is checked before dispatch, so the args match what this handler was typed with.
@@ -1217,7 +1228,7 @@ ${dump.message}`, image: dump.image });
 		const handlers = worldVerbs<TCtx>({
 			world,
 			mover: this._mover,
-			now: () => this._clock,
+			now: () => this._time,
 			seen: (call) => (this._sightLook ? this.filterSight(this._sightLook(call.ctx)).objects : []),
 			nearRadius: (call) => (this._kernelFn ? this.kernelsFor(call.character, call.ctx).nearRadius : undefined),
 			offers: () => this.liveOffers(),
@@ -1279,8 +1290,26 @@ ${dump.message}`, image: dump.image });
 		return this.offers;
 	}
 
-	/** One host step, acted by `runner` itself. */
-	private dispatch(runner:ArcRunner<TCtx>, step:Step, ctx:TCtx | undefined):Promise<ArcResult> | ArcResult {
+	/**
+	 * One host step, acted by `runner` itself. When `signal` aborts (its `until` held, its `within` ran out, a reaction
+	 * took over, a new program came), what the host does for `runner` stops, as `abortArc` stops it.
+	 */
+	private async dispatch(runner:ArcRunner<TCtx>, step:Step, ctx:TCtx | undefined, signal = NEVER):Promise<ArcResult> {
+		// Stopped before the host began it.
+		if (signal.aborted) {
+			return { status: 'stopped', verb: step.verb };
+		}
+		const stop = ():void => this.abortArc(runner.id);
+		signal.addEventListener('abort', stop, { once: true });
+		try {
+			return await this.dispatchStep(runner, step, ctx, signal);
+		}
+		finally {
+			signal.removeEventListener('abort', stop);
+		}
+	}
+
+	private dispatchStep(runner:ArcRunner<TCtx>, step:Step, ctx:TCtx | undefined, signal:AbortSignal):Promise<ArcResult> | ArcResult {
 		const liveCtx = this.tryCtx(runner.id) ?? ctx;
 		if (step.verb === 'law' || step.verb === 'unlaw') {
 			return this.handleLaw(runner, step);
@@ -1292,24 +1321,22 @@ ${dump.message}`, image: dump.image });
 			const collective = collectiveOf(runner);
 			return collective
 				? this.handleCollectiveVerb(collective, runner, step, liveCtx)
-				: { ok: false, verb: step.verb, reason: `${step.verb} needs a collective` };
+				: { status: 'failed', verb: step.verb, reason: `${step.verb} needs a collective` };
 		}
 		if (!(runner instanceof Character)) {
 			// No body to hand a host: only the director's own clock runs for it.
-			return step.verb === 'wait'
-				? this.stockWait(runner.id, step.args, () => watchFit(String(step.args.until), runner.catalog?.()) > 0)
-				: bodiless(step.verb);
+			return step.verb === 'wait' ? this.stockWait(runner.id, step.args) : bodiless(step.verb);
 		}
 		const handler = this._handlers.get(step.verb)
 			?? this._stockHandlers.get(step.verb)
 			?? (step.verb === 'wait' ? this._waitVerb : this._catchAll);
 		if (!handler) {
-			return { ok: false, verb: step.verb, reason: `unhandled ${step.verb}` };
+			return { status: 'failed', verb: step.verb, reason: `unhandled ${step.verb}` };
 		}
 		if (liveCtx === undefined) {
-			return { ok: false, verb: step.verb, reason: 'not in this scene' };
+			return { status: 'failed', verb: step.verb, reason: 'not in this scene' };
 		}
-		const call = this.verbCall(runner, step, liveCtx);
+		const call = this.verbCall(runner, step, liveCtx, signal);
 		if (!('character' in call)) {
 			return call;
 		}
@@ -1339,13 +1366,14 @@ ${dump.message}`, image: dump.image });
 		character:Character<TCtx>,
 		step:Step,
 		ctx:TCtx,
+		signal:AbortSignal,
 	):VerbCall<TCtx> | ArcResult {
-		const fail = (reason:string):ArcResult => ({ ok: false, verb: step.verb, reason });
+		const fail = (reason:string):ArcResult => ({ status: 'failed', verb: step.verb, reason });
 		const catalogAt = (point?:Vec):Catalog | undefined => this.exprCatalog(character, ctx, point ? new SampleCache() : this.cacheOf(character), point);
-		const kinds = this._verbs.get(step.verb)?.args ?? {};
+		const spec = this._verbs.get(step.verb);
 		const args:Record<string, unknown> = { ...step.args };
 		for (const [key, value] of Object.entries(args)) {
-			const kind = argBase(kinds[key]);
+			const kind = argKind(spec, key);
 			if (typeof value !== 'string' || !value.trim()) {
 				continue;
 			}
@@ -1373,12 +1401,13 @@ ${dump.message}`, image: dump.image });
 			return typeof expr === 'string' && expr.trim() ? watchFit(expr, catalogAt(point)) : 0;
 		};
 		const stops = this._stops.get(character.id) ?? 0;
-		const stopped = ():ArcResult | undefined => ((this._stops.get(character.id) ?? 0) === stops ? undefined : { ok: false, interrupted: true, verb: step.verb });
+		const stopped = ():ArcResult | undefined => ((this._stops.get(character.id) ?? 0) === stops && !signal.aborted ? undefined : { status: 'stopped', verb: step.verb });
 		return {
 			verb: step.verb,
 			args,
 			character,
 			ctx,
+			signal,
 			score,
 			holds: (arg, point) => score(arg, point) > 0,
 			goTo: async (target, opts) => stopped() ?? this.goTo(character.id, step.verb, { target }, opts),
@@ -1394,7 +1423,7 @@ ${dump.message}`, image: dump.image });
 	private goTo(characterID:string, verb:string, dest:{ target:string } | { point:Vec }, opts:MoveOpts = {}):Promise<ArcResult> {
 		const met = opts.check?.();
 		if (met !== undefined) {
-			return Promise.resolve({ ok: true, verb, reason: met });
+			return Promise.resolve({ status: 'ok', verb, reason: met });
 		}
 		if (this._mover.canMove) {
 			return this._mover.go(characterID, dest, verb, opts);
@@ -1407,12 +1436,12 @@ ${dump.message}`, image: dump.image });
 		const me = character === undefined ? undefined : world?.getPose(character)?.point;
 		const near = within ?? (character !== undefined && target !== undefined ? world?.getReach?.(character, target) : undefined) ?? 1;
 		const ok = !me || !point || distance(me, point) <= near;
-		return Promise.resolve(ok ? { ok: true, verb } : { ok: false, verb, reason: 'out of reach' });
+		return Promise.resolve(ok ? { status: 'ok', verb } : { status: 'failed', verb, reason: 'out of reach' });
 	}
 
 	private waitFor(runnerID:string, seconds:number, verb:string, met?:()=>boolean, unmet?:string):Promise<ArcResult> {
 		return new Promise((done) => {
-			this._waits.add({ runnerID, verb, end: this._clock + seconds, seconds, met, unmet, done });
+			this._waits.add({ runnerID, verb, end: this._time + seconds, seconds, met, unmet, done });
 		});
 	}
 
@@ -1427,31 +1456,34 @@ ${dump.message}`, image: dump.image });
 	}
 
 	/** Stock `wait` for a character. A host `wait` handler replaces it. */
-	private readonly _waitVerb:VerbHandler<TCtx> = (call) => this.stockWait(call.character.id, call.args, () => call.holds('until'));
+	private readonly _waitVerb:VerbHandler<TCtx> = (call) => this.stockWait(call.character.id, call.args);
 
 	/**
-	 * Game time passes for runner `id` until `seconds`, until `until` holds, or until someone named by `reply`
-	 * finishes a non-movement verb. `reply` is how a mind waits out an answer; it is not a model arg. A wait on `until`
-	 * that runs out of time first fails, so the steps after it never run as if it had come true.
+	 * Game time passes for runner `id` for `seconds`, or until someone named by `reply` finishes a non-movement verb.
+	 * `reply` is how a mind waits out an answer; it is not a model arg. A wait for its `until` (which the runtime
+	 * watches, and which ends it) that runs out of time first fails, so the steps after it never run as if it had come
+	 * true. With a `within`, that is all the time it has.
 	 */
-	private stockWait(id:string, args:Record<string, unknown>, until:()=>boolean):Promise<ArcResult> {
+	private stockWait(id:string, args:Record<string, unknown>):Promise<ArcResult> {
 		const watching = typeof args.until === 'string' && args.until.trim() !== '';
 		const replyTo = replyTargets(args.reply);
 		const seen = new Map(replyTo.map((who) => [who, this.character(who)?.replies ?? 0]));
-		const seconds = typeof args.seconds === 'number' ? args.seconds : watching || replyTo.length > 0 ? 20 : 1;
-		const met = ():boolean => (watching && until()) || replyTo.some((who) => (this.character(who)?.replies ?? 0) !== seen.get(who));
+		const seconds = typeof args.seconds === 'number' ? args.seconds
+			: typeof args.within === 'number' ? Infinity
+				: watching || replyTo.length > 0 ? 20 : 1;
+		const met = ():boolean => replyTo.some((who) => (this.character(who)?.replies ?? 0) !== seen.get(who));
 		const unmet = watching && replyTo.length === 0 ? `until not met after ${seconds}s` : undefined;
-		return this.waitFor(id, seconds, 'wait', watching || replyTo.length > 0 ? met : undefined, unmet);
+		return this.waitFor(id, seconds, 'wait', replyTo.length > 0 ? met : undefined, unmet);
 	}
 
 	private tickWaits():void {
 		for (const wait of this._waits) {
 			const met = wait.met?.() ?? false;
-			if (met || this._clock >= wait.end) {
+			if (met || this._time >= wait.end) {
 				this._waits.delete(wait);
 				wait.done(!met && wait.unmet
-					? { ok: false, verb: wait.verb, reason: wait.unmet }
-					: { ok: true, verb: wait.verb, reason: met ? 'until' : `${wait.seconds}s` });
+					? { status: 'failed', verb: wait.verb, reason: wait.unmet }
+					: { status: 'ok', verb: wait.verb, reason: met ? 'until' : `${wait.seconds}s` });
 			}
 		}
 	}
@@ -1462,7 +1494,7 @@ ${dump.message}`, image: dump.image });
 		for (const wait of this._waits) {
 			if (wait.runnerID === id) {
 				this._waits.delete(wait);
-				wait.done({ ok: false, interrupted: true, verb: wait.verb });
+				wait.done({ status: 'stopped', verb: wait.verb });
 			}
 		}
 		this._mover.stop(id);
@@ -1475,14 +1507,14 @@ ${dump.message}`, image: dump.image });
 		step:Step,
 		ctx:TCtx | undefined,
 	):ArcResult | Promise<ArcResult> {
-		if (step.verb === 'issue') {
+		if (step.verb === 'command') {
 			return this.handleIssue(collective, runner, step, ctx);
 		}
 		if (step.verb === 'tag' || step.verb === 'untag') {
 			const who = typeof step.args.who === 'string' ? step.args.who : '';
 			const name = typeof step.args.name === 'string' ? step.args.name : '';
 			if (!who || !name) {
-				return { ok: false, verb: step.verb, reason: `${step.verb} needs who and name` };
+				return { status: 'failed', verb: step.verb, reason: `${step.verb} needs who and name` };
 			}
 			const cat = this.collectiveCatalog(collective, runner, ctx);
 			const characters = cat ? evaluateWho(who, cat, collective) : [];
@@ -1492,13 +1524,13 @@ ${dump.message}`, image: dump.image });
 			else {
 				collective.untagCharacters(characters, name);
 			}
-			return { ok: true, verb: step.verb };
+			return { status: 'ok', verb: step.verb };
 		}
-		return { ok: false, verb: step.verb, reason: `unhandled ${step.verb}` };
+		return { status: 'failed', verb: step.verb, reason: `unhandled ${step.verb}` };
 	}
 
 	/** `step`'s alias `part` with its `{arg}` holes filled; `undefined` when `step` is no alias or its alias has none. */
-	private aliasPart(step:Step, part:keyof VerbAlias):string | undefined {
+	private aliasPart(step:Step, part:'arc' | 'watch' | 'who'):string | undefined {
 		const src:AliasPart | undefined = this._aliases.get(step.verb)?.[part];
 		if (src === undefined) {
 			return undefined;
@@ -1511,18 +1543,19 @@ ${dump.message}`, image: dump.image });
 		const text = this.aliasPart(step, 'arc') ?? '';
 		const hole = /\{([A-Za-z_]\w*)\}/.exec(text)?.[1];
 		if (hole) {
-			return { ok: false, verb: step.verb, reason: `${step.verb} needs ${hole}` };
+			return { status: 'failed', verb: step.verb, reason: `${step.verb} needs ${hole}` };
 		}
 		let arc:Arc;
 		try {
 			arc = parseArcText(text, this._verbs);
 		}
 		catch (err) {
-			return { ok: false, verb: step.verb, reason: err instanceof Error ? err.message : String(err) };
+			return { status: 'failed', verb: step.verb, reason: err instanceof Error ? err.message : String(err) };
 		}
-		const session = createArcSession({ verbs: this._verbs, catalog: () => runner.catalog?.(), now: () => this._clock });
+		// Run inside a reaction, its arc follows that reaction's trigger as the reaction's own steps do.
+		const session = createArcSession({ verbs: this._verbs, catalog: () => runner.catalog?.(), now: () => this._time, watchedAt: () => this._watchedAt, nextTime: () => runner.nextTime(), reaction: runner.arcSession?.running.at(-1) });
 		// Granting the alias grants what it runs: a game may offer `advance` and never `attack_move`.
-		const result = await runArc(arc, (inner) => runner.perform(inner, runner.context(), true), { session });
+		const result = await runArc(arc, (inner, signal) => runner.perform(inner, runner.context(), true, signal), { session });
 		return { ...result, verb: step.verb };
 	}
 
@@ -1535,75 +1568,74 @@ ${dump.message}`, image: dump.image });
 		const name = typeof step.args.name === 'string' && step.args.name ? step.args.name : undefined;
 		if (step.verb === 'unlaw') {
 			if (!name) {
-				return { ok: false, verb: 'unlaw', reason: 'unlaw needs name' };
+				return { status: 'failed', verb: 'unlaw', reason: 'unlaw needs name' };
 			}
 			home.removeLaw(name);
-			return { ok: true, verb: 'unlaw' };
+			return { status: 'ok', verb: 'unlaw' };
 		}
 		const who = typeof step.args.who === 'string' ? step.args.who : undefined;
 		if (who && !home.lawsTakeWho()) {
 			const reason = collectiveOf(runner) ? 'your own law reaches only you; it has no who' : 'solo law has no who';
-			return { ok: false, verb: 'law', reason };
+			return { status: 'failed', verb: 'law', reason };
 		}
 		const arc = arcArg(step.args.arc, this._verbs);
-		// A law whose whole arc is one alias takes the alias's watch, who and name when it gives none.
+		// A law whose whole arc is one alias takes the alias's watch, who, rearm and name when it gives none.
 		const alias = arc?.length === 1 ? this.aliasPart(arc[0], 'watch') : undefined;
 		const watch = typeof step.args.watch === 'string' && step.args.watch ? step.args.watch : alias ?? '';
 		if (!watch || !arc) {
-			return { ok: false, verb: 'law', reason: 'law needs watch and arc' };
+			return { status: 'failed', verb: 'law', reason: 'law needs watch and arc' };
 		}
 		const aliasWho = arc.length === 1 && home.lawsTakeWho() ? this.aliasPart(arc[0], 'who') : undefined;
 		const aliasName = arc.length === 1 && this._aliases.has(arc[0].verb) ? arc[0].verb : undefined;
-		const times = typeof step.args.times === 'number' ? step.args.times : undefined;
-		const until = typeof step.args.until === 'string' ? step.args.until : undefined;
+		const aliasRearm = aliasName ? this._aliases.get(aliasName)!.rearm : undefined;
 		// All units shouting one line is never what is meant: it is the commander's own.
 		const speaks = home.lawsTakeWho() && home.voice !== home && arcSteps(arc).every((part) => part.verb === 'say');
-		if (!home.addLaw({ name: name ?? aliasName, who: who ?? aliasWho ?? (speaks ? 'me' : undefined), watch, arc, times, until })) {
-			return { ok: false, verb: 'law', reason: `no law${name ? ` ${name}` : ''}: too many laws, or a bad name; unlaw one first` };
+		if (!home.addLaw({ rearm: aliasRearm, ...reactionOf(step.args), name: name ?? aliasName, who: who ?? aliasWho ?? (speaks ? 'me' : undefined), watch, arc })) {
+			return { status: 'failed', verb: 'law', reason: `no law${name ? ` ${name}` : ''}: too many laws, or a bad name; unlaw one first` };
 		}
-		return { ok: true, verb: 'law' };
+		return { status: 'ok', verb: 'law' };
 	}
 
-	/** Handles the `issue` verb produced by {@link Collective}s. */
+	/** Handles the `command` verb produced by {@link Collective}s. */
 	private handleIssue(
 		collective:Collective<TCtx>,
 		issuer:ArcRunner<TCtx>,
 		step:Step,
 		ctx:TCtx | undefined,
 	):ArcResult | Promise<ArcResult> {
-		// Validation keeps issue at an Arc's root; an alias or a host's law can still bring one to a unit, which takes orders.
+		// Validation keeps command at an Arc's root; an alias or a host's law can still bring one to a unit, which takes orders.
 		if (issuer !== collective.voice) {
-			return { ok: false, verb: 'issue', reason: 'only your commander issues orders' };
+			return { status: 'failed', verb: 'command', reason: 'only your commander issues orders' };
 		}
 		const who = typeof step.args.who === 'string' ? step.args.who.trim() : '';
 		const arc = arcArg(step.args.arc, this._verbs);
 		if (!who || !arc) {
-			return { ok: false, verb: 'issue', reason: 'issue needs who and arc' };
+			return { status: 'failed', verb: 'command', reason: 'command needs who and arc' };
 		}
 		const cat = this.collectiveCatalog(collective, issuer, ctx);
 		const named = cat ? evaluateWho(who, cat, collective) : [];
 		const troops = named.filter((c) => c !== collective.commander);
 		if (troops.length === 0) {
-			return { ok: false, verb: 'issue', reason: named.length > 0 ? 'issue never lands on the commander' : `${who} picks no unit` };
+			return { status: 'failed', verb: 'command', reason: named.length > 0 ? 'command never lands on the commander' : noUnitReason(who, cat) };
 		}
 		// Those its think chose to leave at what they are doing.
 		const kept = Array.isArray(step.args.keep) ? step.args.keep as string[] : [];
 		const appended = Array.isArray(step.args.append) ? step.args.append as string[] : [];
 		if (troops.every((c) => kept.includes(c.id))) {
-			return { ok: true, verb: 'issue' };
+			return { status: 'ok', verb: 'command' };
 		}
-		const maxUnits = collective.maxUnitsPerIssue;
+		const maxUnits = collective.maxUnitsPerCommand;
 		if (maxUnits !== undefined && troops.length > maxUnits) {
-			return { ok: false, verb: 'issue', reason: `that is ${troops.length} units; an issue names ${maxUnits === 1 ? 'one' : `at most ${maxUnits}`}` };
+			return { status: 'failed', verb: 'command', reason: `that is ${troops.length} units; a command names ${maxUnits === 1 ? 'one' : `at most ${maxUnits}`}` };
 		}
 		const group = typeof step.args.group === 'string' ? step.args.group : undefined;
 		const taking = troops.filter((c) => !kept.includes(c.id) && !c.runs(arc));
-		const name = collective.issue(troops.filter((c) => !kept.includes(c.id)), arc, group, appended);
+		const name = collective.command(troops.filter((c) => !kept.includes(c.id)), arc, group, appended);
 		if (taking.length > 0) {
-			this._thinkFn?.({ kind: 'issue', who: issuer.voice.id, to: taking.map((c) => c.id), arc, text: formatArc(arc, this._verbs) });
+			this._thinkFn?.({ kind: 'command', who: issuer.voice.id, to: taking.map((c) => c.id), arc, text: formatArc(arc, this._verbs) });
 		}
 		// A group ordered without its name gets one, and is told it.
-		return name && !group?.trim() ? { ok: true, verb: 'issue', reason: `no group= given: called them ${name}` } : { ok: true, verb: 'issue' };
+		return name && !group?.trim() ? { status: 'ok', verb: 'command', reason: `no group= given: called them ${name}` } : { status: 'ok', verb: 'command' };
 	}
 
 	// ---- Arc checks ----
@@ -1624,14 +1656,17 @@ ${dump.message}`, image: dump.image });
 
 	/**
 	 * Why the Arc `owner`'s mind just wrote could never work as written. Only what no change in the world would mend: what
-	 * is merely not so right now (nobody near, too far, no gold yet) is for the verb to say as it runs.
+	 * is merely not so right now (nobody near, too far, no gold yet) is for the verb to say as it runs. A
+	 * {@link BlockedArcError} when the world changed under the reply instead (a thing it saw went while it thought): no
+	 * repair turn mends that, since the prompt still shows the old world, so the mind thinks again from a fresh one.
 	 */
-	private arcProblem(owner:ArcRunner<TCtx>, arc:Arc):string | undefined {
+	private arcProblem(owner:ArcRunner<TCtx>, arc:Arc):ArcError | undefined {
 		const voice = owner.voice;
 		const ctx = this.tryCtx(voice.id);
 		// Its own cache: a look at a reply must not use up the change `hasRisen` is waiting to see.
 		const catalog = ctx === undefined ? undefined : this.exprCatalog(voice, ctx, new SampleCache());
 		const bound = new Set(['fail']);
+		let gone:string | undefined;
 		eachStep(arc, this._verbs, (step) => {
 			const named = typeof step.args.through === 'string' ? /^\s*(\w+)\s+in\b/.exec(step.args.through)?.[1] : undefined;
 			if (named) {
@@ -1642,16 +1677,17 @@ ${dump.message}`, image: dump.image });
 			|| !!this.character(name) || !!this.collective(name) || !this._world || !!this._rts || this._world.find(name) !== undefined || !!this._world.isItem?.(name);
 		let problem:string | undefined;
 		eachStep(arc, this._verbs, (step, verbs) => {
-			const kinds = verbs.get(step.verb)?.args ?? {};
+			const spec = verbs.get(step.verb);
 			for (const [key, value] of Object.entries(step.args)) {
-				const kind = argBase(kinds[key]);
+				const kind = argKind(spec, key);
 				if (typeof value === 'string' && (kind === 'watch' || kind === 'expr' || (kind === 'id' && /[(.]|=>/.test(value)))) {
 					problem ??= this.exprProblem(value, catalog, known);
 				}
 				// Only the step that runs next, of a stock verb: something can come to be by a later one, and a host's own verb may
 				// aim at what only it knows.
 				else if (kind === 'id' && typeof value === 'string' && step === firstStep(arc) && this._stockHandlers.has(step.verb) && !known(bareName(value))) {
-					problem ??= `there is no ${bareName(value)}`;
+					gone ??= problem === undefined ? this.goneSince(voice, bareName(value)) : undefined;
+					problem ??= gone ?? `there is no ${bareName(value)}`;
 				}
 				else if (kind === 'bundle' && isCountMap(value)) {
 					const notItem = this._world?.isItem && Object.keys(value).find((name) => name !== this._mindDefaults.settings.currency && !this._world!.isItem!(name));
@@ -1659,7 +1695,17 @@ ${dump.message}`, image: dump.image });
 				}
 			}
 		});
-		return problem ?? this.lawProblem(owner, arc) ?? this.issueProblem(owner, arc);
+		const reason = problem ?? this.lawProblem(owner, arc) ?? this.commandProblem(owner, arc);
+		return reason === undefined ? undefined : reason === gone ? new BlockedArcError(reason) : new ArcError(reason);
+	}
+
+	/**
+	 * Why an arc may not aim at `id`, which nothing in the world answers to, when the mind has seen it: it was there when it
+	 * looked and went while it thought (burned, picked up). Undefined for a name it never saw.
+	 */
+	private goneSince(voice:ArcRunner<TCtx>, id:string):string | undefined {
+		const name = voice.mind?.nameOf(id) ?? id;
+		return voice.persona.memory.all().some((row) => row.tags.includes(`seen:${name}`)) ? `${name} is gone since you looked` : undefined;
 	}
 
 	/** Why `expr` can never work: it does not read, misuses the language, or names what is not in this world. */
@@ -1717,7 +1763,7 @@ ${dump.message}`, image: dump.image });
 	}
 
 	/** An order that reaches no one right now, whom it asks for being a matter of who stands. Its own earlier groups count. */
-	private issueProblem(owner:ArcRunner<TCtx>, arc:Arc):string | undefined {
+	private commandProblem(owner:ArcRunner<TCtx>, arc:Arc):string | undefined {
 		const collective = collectiveOf(owner);
 		const voice = owner.voice;
 		const catalog = collective && this.collectiveCatalog(collective, voice, this.tryCtx(voice.id));
@@ -1726,16 +1772,16 @@ ${dump.message}`, image: dump.image });
 		}
 		const groups:string[] = [];
 		for (const step of arc) {
-			if (step.verb !== 'issue' || typeof step.args.who !== 'string') {
+			if (step.verb !== 'command' || typeof step.args.who !== 'string') {
 				continue;
 			}
 			const who = step.args.who;
 			const named = evaluateWho(who, catalog, collective);
 			if (named.length === 0 && !groups.some((group) => who.includes(group))) {
-				return `${who} picks no unit`;
+				return noUnitReason(who, catalog);
 			}
 			if (named.length > 0 && named.every((character) => character === collective.commander)) {
-				return 'issue never lands on the commander';
+				return 'command never lands on the commander';
 			}
 			if (typeof step.args.group === 'string') {
 				groups.push(step.args.group);
@@ -1744,7 +1790,7 @@ ${dump.message}`, image: dump.image });
 		return undefined;
 	}
 
-	/** The unfinished work `arc` would cut short: each unit an `issue` of it reaches, and the voice, unless it takes no body. */
+	/** The unfinished work `arc` would cut short: each unit an `command` of it reaches, and the voice, unless it takes no body. */
 	private replacedBy(owner:ArcRunner<TCtx>, arc:Arc):Replacing[] {
 		if (!this._replaceCheck) {
 			return [];
@@ -1759,7 +1805,7 @@ ${dump.message}`, image: dump.image });
 		const collective = collectiveOf(owner);
 		const voice = owner.voice;
 		for (const step of arc) {
-			const orders = step.verb === 'issue' ? arcArg(step.args.arc, this._verbs) : undefined;
+			const orders = step.verb === 'command' ? arcArg(step.args.arc, this._verbs) : undefined;
 			const catalog = orders && collective ? this.collectiveCatalog(collective, voice, this.tryCtx(voice.id)) : undefined;
 			const named = catalog && typeof step.args.who === 'string' ? evaluateWho(step.args.who, catalog, collective!) : [];
 			named.filter((character) => character !== collective?.commander).forEach((character) => note(character, orders!));
@@ -2007,7 +2053,7 @@ ${dump.message}`, image: dump.image });
 			return () => undefined;
 		}
 		const key = `${sound.name}@${typeof from === 'string' ? from : from.map(Math.round).join(',')}`;
-		const made = { from, sound, at: this._clock, told: this._sounds.get(key)?.told ?? new Map<ArcRunner<TCtx>, number>() };
+		const made = { from, sound, at: this._time, told: this._sounds.get(key)?.told ?? new Map<ArcRunner<TCtx>, number>() };
 		this._sounds.set(key, made);
 		this.hear(key);
 		const end = ():void => {
@@ -2036,7 +2082,7 @@ ${dump.message}`, image: dump.image });
 		const source:SoundSource = typeof from === 'string' ? { id: from, point } : { point };
 		const muffled = typeof range !== 'function' && !passes(world, 'sound', point, here);
 		const clarity = typeof range === 'function' ? range(listenerID, source) : clarityAt(distance(here, point), range) * (muffled ? range.occluded : 1);
-		const level = Math.min(1, loudnessAfter(sound, this._clock - at) * clarity);
+		const level = Math.min(1, loudnessAfter(sound, this._time - at) * clarity);
 		return level >= AUDIBLE ? { level, source, muffled } : undefined;
 	}
 
@@ -2067,14 +2113,14 @@ ${dump.message}`, image: dump.image });
 			made.told.set(owner, step);
 			const pose = poseOf(world, id)!;
 			const text = heardText(made.sound, level, pose.point, source.point, { facing: pose.facing, up: world.up, muffled, unitName: this._sightUnitName });
-			owner.tell({ kind: 'sound', text, tags: ['sound'], timestamp: this._clock, key, cap: this._hearing.limit, weight: level, ...level >= LOUD ? { major: true } : {} });
+			owner.tell({ kind: 'sound', text, tags: ['sound'], timestamp: this._time, key, cap: this._hearing.limit, weight: level, ...level >= LOUD ? { major: true } : {} });
 		}
 	}
 
 	/** The sounds going on, heard again as their makers and listeners move; those that ran their time end. */
 	private tickSounds():void {
 		for (const [key, { sound, at }] of this._sounds) {
-			if (this._clock - at >= (sound.seconds ?? 0)) {
+			if (this._time - at >= (sound.seconds ?? 0)) {
 				this._sounds.delete(key);
 			}
 			else {
@@ -2144,14 +2190,14 @@ ${dump.message}`, image: dump.image });
 		const lastTimestamp = mind?.lastTacticalTimestamp;
 		const last = runner.lastResult;
 		const ago = lastTimestamp !== undefined && Number.isFinite(lastTimestamp)
-			? Math.max(0, this._clock - lastTimestamp)
+			? Math.max(0, this._time - lastTimestamp)
 			: undefined;
 		const side = !this._rts ? undefined : runner instanceof Collective ? runner.id : (runner as Character<TCtx>).collective?.id ?? runner.id;
 		// What happened since its mind last thought, as `events`: `events.filter("sound")`. A unit reads its collective's.
 		const listener = mind ?? (runner instanceof Character ? runner.collective?.mind : undefined);
 		const events:ExprVal = { kind: 'list', value: (listener?.events() ?? []).map((e, i):ExprVal => ({
 			kind: 'entity',
-			value: dummyEntity(`event${i + 1}`, { tags: [e.kind, ...e.tags ?? []], fields: { secondsAgo: { kind: 'number', value: Math.max(0, this._clock - (e.timestamp ?? this._clock)) } } }),
+			value: dummyEntity(`event${i + 1}`, { tags: [e.kind, ...e.tags ?? []], fields: { secondsAgo: { kind: 'number', value: Math.max(0, this._time - (e.timestamp ?? this._time)) } } }),
 		})) };
 		return {
 			...kernels,
@@ -2164,6 +2210,8 @@ ${dump.message}`, image: dump.image });
 			// Who sees whom, where the host's kernels say; else where light passes.
 			canSee: kernels.canSee ?? (this._world?.canPass ? (a, b) => this.inLineOfSight(a.id, b.id) : undefined),
 			bindings: { events, ...kernels.bindings, ...side ? this._rts!.bindings(side) : {} },
+			// Its watches by name, so `wait(until=fallen || idle)` reads them.
+			watches: listener?.persona.watchList(),
 			cache,
 			hasHeard: mind?.hasHeard() ?? false,
 			prev: {
@@ -2172,7 +2220,7 @@ ${dump.message}`, image: dump.image });
 				verbs: last
 					? [{
 						secondsAgo: ago ?? 0,
-						isOk: last.ok,
+						isOk: last.status === 'ok',
 						reason: last.reason ?? '',
 						verb: last.verb ?? '',
 					}]
@@ -2185,7 +2233,7 @@ ${dump.message}`, image: dump.image });
 	 * Host entities under `mind`'s names for them, so its model's own words still evaluate (`observe`).
 	 * A binding keyed by a character's id is bound under its id and under the name.
 	 */
-	private namedKernels<TKernels extends Pick<HostKernels, 'others' | 'items' | 'bindings'>>(
+	private namedKernels<TKernels extends Pick<HostKernels, 'others' | 'items' | 'bindings' | 'lookup'>>(
 		mind:Mind<TCtx> | null,
 		kernels:TKernels,
 	):TKernels {
@@ -2206,7 +2254,25 @@ ${dump.message}`, image: dump.image });
 				bindings[name] = value;
 			}
 		}
-		return { ...kernels, others: kernels.others.map(named), items: kernels.items.map(named), bindings };
+		const lookup = kernels.lookup && this.namedLookup(mind, kernels.lookup);
+		return { ...kernels, others: kernels.others.map(named), items: kernels.items.map(named), bindings, ...lookup ? { lookup } : {} };
+	}
+
+	/**
+	 * The host's `lookup` in `mind`'s names, as `namedKernels` names a binding: an entity under the name the mind gives it,
+	 * and also found by that name.
+	 */
+	private namedLookup(mind:Mind<TCtx>, lookup:(name:string)=>ExprVal | undefined):(name:string)=>ExprVal | undefined {
+		const named = (val:ExprVal | undefined):ExprVal | undefined => (val?.kind === 'entity' ? { kind: 'entity', value: { ...val.value, name: mind.seen(val.value) } } : val);
+		return (name) => {
+			const found = lookup(name);
+			if (found) {
+				return named(found);
+			}
+			const id = mind.persona.names.resolve(name);
+			const known = id === name ? undefined : named(lookup(id));
+			return known?.kind === 'entity' && known.value.id === id && known.value.name === name ? known : undefined;
+		};
 	}
 
 	/** Spawn snapshot so the first think can see a change. A saved prev is left alone. */
@@ -2236,7 +2302,11 @@ ${dump.message}`, image: dump.image });
 		if (!seen) {
 			return undefined;
 		}
-		return (target) => seen({ id: mind.id, ctx: this.tryCtx(mind.thinkThread()) }, target);
+		// Its context only when the policy reads it: a kernel set names every entity in it, many times a frame.
+		const tryCtx = ():TCtx | undefined => this.tryCtx(mind.thinkThread());
+		return (target) => seen({ id: mind.id, get ctx() {
+			return tryCtx();
+		} }, target);
 	}
 
 	/** Host look, minus what is out of sight, with everything seen under `mind`'s name for it. */
@@ -2443,7 +2513,10 @@ ${dump.message}`, image: dump.image });
 	private runnerCatalog(runner:ArcRunner<TCtx>):Catalog | undefined {
 		const ctx = runner.context();
 		if (ctx !== undefined) {
-			return buildCatalog(this.kernelsFor(runner, ctx));
+			// A character in a collective reads its roster (`units`) too, as its laws do.
+			const collective = runner instanceof Character ? runner.collective : undefined;
+			const kernels = this.kernelsFor(runner, ctx);
+			return collective ? buildCollectiveCatalog(kernels, collective) : buildCatalog(kernels);
 		}
 		return runner instanceof Collective ? this.collectiveCatalog(runner, runner, undefined) : undefined;
 	}
@@ -2667,6 +2740,7 @@ ${dump.message}`, image: dump.image });
 	/** Every character and collective by id, in the order they were wired. */
 	private readonly _rows = new Map<string, Row<TCtx>>();
 
+	/** Game seconds a standing `choose` rests after a failed pick, for every runner without its own. Default 8. */
 	public withCooldown(seconds:number):this {
 		this._cooldownDefault = seconds;
 		this.rewire();
@@ -2914,7 +2988,7 @@ ${dump.message}`, image: dump.image });
 			id: spec.id,
 			verbs: this._verbs,
 			context: () => this.tryCtx(runner().voice.id),
-			execute: async (step, ctx) => this.dispatch(runner(), step, ctx),
+			execute: async (step, ctx, signal) => this.dispatch(runner(), step, ctx, signal),
 			abortArc: (id) => this.abortArc(id),
 			cooldown: spec.cooldown ?? this._cooldownDefault,
 			talk: this.talk,
@@ -3013,7 +3087,7 @@ ${dump.message}`, image: dump.image });
 			const rts = this._rts;
 			collective.status = () => rts.status(collective.id);
 		}
-		collective.maxUnitsPerIssue = spec.maxUnitsPerIssue;
+		collective.maxUnitsPerCommand = spec.maxUnitsPerCommand;
 		this._rows.set(spec.id, { spec, runner: collective, cache: new SampleCache() });
 		const ids = json ? json.characters : (spec.characters ?? []).map((c) => c.id);
 		const chiefID = json ? json.commander : spec.commander;
@@ -3153,7 +3227,7 @@ ${dump.message}`, image: dump.image });
 			for (const text of edit.add ?? []) {
 				const line = text.trim();
 				if (line) {
-					this.embedLater(memory.add({ category: 'semantic', text: line, tags: nameTags(line), timestamp: this._clock }, this._clock));
+					this.embedLater(memory.add({ category: 'semantic', text: line, tags: nameTags(line), timestamp: this._time }, this._time));
 				}
 			}
 		}
@@ -3256,7 +3330,7 @@ ${dump.message}`, image: dump.image });
 			internalsOf(owner).setMind(mind);
 		}
 		internalsOf(mind).attach(owner, this.mindDeps(mind, owner));
-		mind.stamp(this._clock);
+		mind.stamp(this._time);
 		this.enqueue(mind);
 		this._queue.setAiOn(mind.id, true);
 	}
@@ -3347,7 +3421,7 @@ ${dump.message}`, image: dump.image });
 		for (const collective of this.collectives()) {
 			collectives[collective.id] = collective.toJSON();
 		}
-		return { characters, collectives, offers: this.offers.toJSON() };
+		return { characters, collectives, offers: this.offers.toJSON(), time: this._time };
 	}
 
 	/**
@@ -3355,6 +3429,7 @@ ${dump.message}`, image: dump.image });
 	 * is built from it then. A collective's characters come from the save, so ones that joined or died stay that way.
 	 */
 	public restoreCast(cast:CastJSON):void {
+		this._time = cast.time ?? this._time;
 		if (!this._wired) {
 			this._stored = cast;
 			return;
@@ -3455,7 +3530,7 @@ ${dump.message}`, image: dump.image });
 	 */
 	public removeRegion(...names:string[]):this {
 		for (const name of names) {
-			this._regions.remove(name, this._clock);
+			this._regions.remove(name, this._time);
 		}
 		return this;
 	}
@@ -3463,9 +3538,6 @@ ${dump.message}`, image: dump.image });
 	// ---- Goals ----
 
 	private _goalReachedFn:((id:string, goal:Goal<never>)=>void) | undefined;
-	/** Game seconds since goals' `until`s were last asked. */
-	private _goalClock = 0;
-
 	/** Each goal as it is reached, with the id of the mind whose goal it was: a cheer, a line on the screen. */
 	public onGoalReached(fn:(id:string, goal:Goal<TCtx>)=>void):this {
 		this._goalReachedFn = fn as (id:string, goal:Goal<never>)=>void;
@@ -3473,12 +3545,7 @@ ${dump.message}`, image: dump.image });
 	}
 
 	/** Every goal whose `until` holds is reached. As often as watches are sampled: a view per character is not cheap. */
-	private tickGoals(dt:number, minds:readonly Mind<TCtx>[]):void {
-		this._goalClock += dt;
-		if (this._goalClock < GOAL_CHECK_INTERVAL) {
-			return;
-		}
-		this._goalClock = 0;
+	private tickGoals(minds:readonly Mind<TCtx>[]):void {
 		for (const mind of minds) {
 			for (const goal of mind.persona.goals.filter((g) => g.until && this.goalMet(mind.thinkThread(), g.until as NonNullable<Goal<TCtx>['until']>))) {
 				mind.finishGoal(goal);
@@ -3499,7 +3566,11 @@ ${dump.message}`, image: dump.image });
 	// ---- Thinking (queue, drain, laws tick) ----
 
 	private _queue:MindQueue = new ThinkQueue();
-	private _lawHold = 0;
+	private _rearm = DEFAULT_REARM;
+	private _intervals = { watch: 0.05, think: 0.25 };
+	/** Game time the `watch` interval and the `think` interval last fired at. */
+	private _watchedAt:number | undefined;
+	private _thoughtAt:number | undefined;
 	/** Minds whose think in flight came of their heartbeat alone: their laws need not wait for it. */
 	private readonly _beatThinks = new Set<string>();
 	private readonly _readyThink:ThinkRow[] = [];
@@ -3522,12 +3593,25 @@ ${dump.message}`, image: dump.image });
 	}
 
 	/**
-	 * Game seconds every law runs once started before anything but its own end stops it, unless it sets its own `hold`.
-	 * Keeps watches that sit on an edge (a foe at just the distance a law watches for) from switching laws every frame.
-	 * Default 0: a law stops the moment its watch turns false or a higher one's turns true.
+	 * Game seconds a `when`'s or a law's watch must have been false before it may start again, unless it sets its own
+	 * `rearm`. A reaction that started runs to its end whatever its watch does; this keeps one whose watch flickers (a foe
+	 * at just the distance it watches for) from starting over and over. Default 1.
 	 */
-	public withLawHold(seconds:number):this {
-		this._lawHold = Math.max(0, seconds);
+	public withRearm(seconds:number):this {
+		this._rearm = Math.max(0, seconds);
+		return this;
+	}
+
+	/**
+	 * Game seconds between asks of the watches; each ask builds the world as each character sees it, which a frame cannot
+	 * afford many times over. Every `watch` (default 0.05) every law, every parked `when` and every step's `until` is
+	 * asked, so a reaction starts within one interval of its watch turning true; every `think` (default 0.25) the minds'
+	 * own watches are sampled for the think queue, and goals' `until`s asked. Each fires once it is due and never catches
+	 * up: `watch` fires on the first tick, `think` an interval after it. `0` asks every tick. A `within` is no watch: it ends
+	 * on time.
+	 */
+	public withIntervals(intervals:{ watch?:number; think?:number }):this {
+		this._intervals = { ...this._intervals, ...intervals };
 		return this;
 	}
 
@@ -3617,13 +3701,14 @@ ${dump.message}`, image: dump.image });
 		lawHandlers:()=>ArcHandler[],
 		catalog:ArcSession['catalog'],
 	):void {
-		const extras = ():ArcHandler[] => lawHandlers().map((h) => (h.hold === undefined && this._lawHold > 0 ? { ...h, hold: this._lawHold } : h));
+		const extras = lawHandlers;
 		const session = runner.arcSession;
 		if (session) {
 			if (catalog) {
 				session.catalog = catalog;
 			}
-			session.now = () => this._clock;
+			session.now = () => this._time;
+			session.rearm = this._rearm;
 			session.extraHandlers = extras;
 			session.abortHost = () => this.abortArc(runner.id);
 			pollArcSession(session);
@@ -3631,7 +3716,8 @@ ${dump.message}`, image: dump.image });
 		}
 		const probe = createArcSession({
 			catalog,
-			now: () => this._clock,
+			now: () => this._time,
+			rearm: this._rearm,
 			extraHandlers: extras,
 		});
 		const first = firstStartable(probe);
@@ -3640,7 +3726,8 @@ ${dump.message}`, image: dump.image });
 		if (first && !(mind && this.thinkWaiting(mind.id))) {
 			runner.beginLaw(first, {
 				catalog,
-				now: () => this._clock,
+				now: () => this._time,
+				rearm: this._rearm,
 				abortHost: () => this.abortArc(runner.id),
 				extraHandlers: extras,
 			});
@@ -3772,9 +3859,9 @@ ${dump.message}`, image: dump.image });
 				// An invalid reply ends no arc, so nothing would wake this mind: think again once, told why.
 				// Aborts and inference errors are not the mind's doing.
 				if (err instanceof ArcError) {
-					const again = mind.lastResult?.verb !== 'think' || mind.lastResult.ok;
+					const again = mind.lastResult?.verb !== 'think' || mind.lastResult.status === 'ok';
 					const why = err instanceof BlockedArcError ? 'your plan cannot run' : 'your reply was not a valid Arc';
-					mind.ingestResult({ ok: false, verb: 'think', reason: `${why}: ${text}` });
+					mind.ingestResult({ status: 'failed', verb: 'think', reason: `${why}: ${text}` });
 					if (again) {
 						this._queue.enqueueVerb(mind.id, 'think', false);
 					}

@@ -62,9 +62,10 @@ export function mapArc(arc:Arc, verbs:VerbRegistry, map:WordMap):Arc {
 
 function mapArg(kind:string, value:string, map:WordMap):string {
 	if (kind === 'id') {
-		const word = value.trim();
+		// A model copies the stars of the prompt's `*starred*` names: `*SealedDoor*` is SealedDoor.
+		const word = value.trim().replace(/^\*+([^*]+)\*+$/, '$1');
 		const whole = map(word);
-		return whole !== word ? whole : mapExpr(value, map);
+		return whole !== word || word !== value.trim() ? whole : mapExpr(value, map);
 	}
 	if (kind === 'watch' || kind === 'expr') {
 		return mapExpr(value, map);

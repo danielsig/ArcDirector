@@ -7,16 +7,47 @@ export type WrittenToolCall = { name:string; args:Record<string, unknown> };
 /** Opens a tool call at the start of the reply, a line, or after a join: `earshot(`, `call:observe{`, `tool:recall {`. */
 const HEAD = /(^|\n|&&|\|\||;)(\s*)(?:(?:call|tool)\s*:\s*)?([A-Za-z_]\w*)\s*([({])/g;
 
+/** A tool call in Qwen's (or Hermes') chat template syntax that reached the reply unparsed: `<tool_call>…</tool_call>`. */
+const TEMPLATE_CALL = /<tool_call>([\s\S]*?)<\/tool_call>/g;
+
+/**
+ * What a `<tool_call>` holds: Qwen's `<function=earshot><parameter=to>Forager</parameter></function>` (each value
+ * trimmed), or the JSON `{"name":"earshot","arguments":{"to":"Forager"}}`; `undefined` for anything else.
+ */
+function templateCall(body:string):WrittenToolCall | undefined {
+	const fn = /^\s*<function=([A-Za-z_]\w*)>([\s\S]*?)<\/function>\s*$/.exec(body);
+	if (fn) {
+		const params = [...fn[2].matchAll(/<parameter=([A-Za-z_]\w*)>([\s\S]*?)<\/parameter>/g)];
+		return { name: fn[1], args: Object.fromEntries(params.map(([, key, value]) => [key, valueOf(value.trim())])) };
+	}
+	try {
+		const raw:unknown = JSON.parse(body);
+		const args:unknown = isRecord(raw) && typeof raw.arguments === 'string' ? JSON.parse(raw.arguments) : isRecord(raw) ? raw.arguments ?? {} : undefined;
+		return isRecord(raw) && typeof raw.name === 'string' && isRecord(args) ? { name: raw.name, args } : undefined;
+	}
+	catch {
+		return undefined;
+	}
+}
+
 /**
  * Tool calls written as text, in any of the shapes small models slip into: `earshot(to=Forager)`, `recall("Bread")`,
- * `earshot{to="Forager"}`, or a chat template's own syntax that reached the reply unparsed
- * (`call:observe{expr:<|"|>isNear(me, Forager)<|"|>}`). Only names in `firstArgs` count, and only at the start of
- * the reply, a line, or after a join, so prose and nested args are never read. `rest` is the reply without them;
- * `firstArgs` names the arg a lone value fills (`recall("Bread")` is `query`).
+ * `earshot{to="Forager"}`, or a chat template's own syntax that reached the reply unparsed: Gemma's
+ * (`call:observe{expr:<|"|>isNear(me, Forager)<|"|>}`) and Qwen's (`<tool_call>…</tool_call>`, see
+ * {@link templateCall}). Only names in `firstArgs` count, and outside a `<tool_call>` only at the start of the reply, a
+ * line, or after a join, so prose and nested args are never read. `rest` is the reply without them; `firstArgs` names
+ * the arg a lone value fills (`recall("Bread")` is `query`).
  */
 export function writtenToolCalls(text:string, firstArgs:ReadonlyMap<string, string | undefined>):{ calls:WrittenToolCall[]; rest:string } {
-	const src = text.replaceAll('<|"|>', '"');
 	const calls:WrittenToolCall[] = [];
+	const src = text.replaceAll('<|"|>', '"').replace(TEMPLATE_CALL, (whole, body:string) => {
+		const call = templateCall(body);
+		if (!call || !firstArgs.has(call.name)) {
+			return whole;
+		}
+		calls.push(call);
+		return '\n';
+	});
 	let rest = '';
 	let at = 0;
 	for (const m of src.matchAll(HEAD)) {

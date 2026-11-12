@@ -1,7 +1,9 @@
 import { verbHelp } from '../arc/schema.js';
-import { MIND_ONLY_VERBS, STOCK_ARC_VERBS, type VerbRegistry } from '../arc/stock-verbs.js';
-import { formatArcBlocks, parseArcText } from '../arc/arc-parse.js';
+import { isOptional, MIND_ONLY_VERBS, STOCK_ARC_VERBS, type VerbRegistry } from '../arc/stock-verbs.js';
+import { parseArcText } from '../arc/arc-parse.js';
+import { formatArcBlocks } from '../arc/arc-format.js';
 import { arcJSONBlocks } from '../arc/wire.js';
+import { DEFAULT_MIN_CHOICES } from '../arc/choose.js';
 
 const STOCK_ARC_VERBS_SET = new Set<string>(STOCK_ARC_VERBS);
 import type { ArcResult } from '../arc/arc-types.js';
@@ -49,6 +51,8 @@ export type StablePrefixOpts = {
 	omitArc?:boolean;
 	/** Tool names offered this think. Never listed as Arc verbs. */
 	tools?:string[];
+	/** The fewest choices a `choose` should have. Default {@link DEFAULT_MIN_CHOICES}. */
+	minChoices?:number;
 	/** Default `full`. */
 	style?:PromptStyle;
 };
@@ -90,6 +94,7 @@ export function stablePrefix(
 			verbs: opts.verbInstructions ?? defaultVerbInstructions(verbs),
 			example: opts.arcExample,
 			currency: opts.currency,
+			minChoices: opts.minChoices ?? DEFAULT_MIN_CHOICES,
 		}));
 	}
 	return [...lines, ...whoYouAre(id, identity, opts)].join('\n');
@@ -128,7 +133,7 @@ function compactArcInstructions(verbs:VerbRegistry, opts:StablePrefixOpts):strin
 /** `edit` names the standing-watch verbs. `observe` names the tool, only when it is offered. `goTo` names that verb in the crowd example. */
 function watchCheatSheet(edit:boolean, observe:boolean, goTo = false):string {
 	return [
-		'Watch language (not JS). Bindings: me, others, items, units (your roster, not others), landmarks, events, prev (last think: prev.me, prev.secondsAgo, prev.verbs).',
+		'Watches are Arc expressions. Bindings: me, others, items, units (your roster, not others), landmarks, events, prev (last think: prev.me, prev.secondsAgo, prev.verbs).',
 		edit && 'Standing: watch(name, expr) / unwatch(name).',
 		observe && 'One-shot this think: the observe tool evaluates any expr on the world now, even past sight (distance(me, Cottage), count(others.filter(u => isNear(u, Cottage, 5))), isNear(Player, Cottage, 4)).',
 		WATCH_RELATIONS,
@@ -176,16 +181,16 @@ export const DEFAULT_THINK_INSTRUCTIONS = 'Think in 5 sentences: what you want, 
 /** Standing verb-chain line when the mind's settings give no `verbInstructions`. */
 export const DEFAULT_VERB_INSTRUCTIONS = 'A think is expensive. Chain every next verb you already know, as far as you can see this think — not only the first step of an order.';
 
-/** Added to the default verb line for a collective that can issue looping programs. */
-export const DEFAULT_COLLECTIVE_INSTRUCTIONS = 'Issue looping programs with a bunch of when(watch, arc) reactions so they keep working without another think. A later think only edits — replace one program or add a law, do not rewrite the whole roster.';
+/** Added to the default verb line for a collective that can command looping programs. */
+export const DEFAULT_COLLECTIVE_INSTRUCTIONS = 'Give units looping programs with a bunch of when(watch, arc) reactions so they keep working without another think. A later think only edits — replace one program or add a law, do not rewrite the whole roster.';
 
 function defaultVerbInstructions(verbs:VerbRegistry):string {
-	if (!verbs.has('issue') || (!verbs.has('loop') && !verbs.has('when'))) {
+	if (!verbs.has('command') || (!verbs.has('loop') && !verbs.has('when'))) {
 		return DEFAULT_VERB_INSTRUCTIONS;
 	}
 	const via = verbs.has('when') ? 'a bunch of when(watch, arc) reactions' : 'loop(arc)';
 	const law = verbs.has('law') ? ' or add a law' : '';
-	return `${DEFAULT_VERB_INSTRUCTIONS} Issue looping programs with ${via} so they keep working without another think. A later think only edits — replace one program${law}, do not rewrite the whole roster.`;
+	return `${DEFAULT_VERB_INSTRUCTIONS} Give units looping programs with ${via} so they keep working without another think. A later think only edits — replace one program${law}, do not rewrite the whole roster.`;
 }
 
 function joinSentences(parts:Array<string | false>):string {
@@ -199,7 +204,7 @@ function arcInstructions(
 	verbs:VerbRegistry,
 	format:ArcFormat,
 	toolNames:string[] = [],
-	lines:{ think:string; verbs:string; example?:string; currency?:string },
+	lines:{ think:string; verbs:string; example?:string; currency?:string; minChoices:number },
 ):string {
 	const has = (name:string):boolean => verbs.has(name);
 	const chain = has('pick_up') && has('give');
@@ -212,22 +217,23 @@ function arcInstructions(
 		lines.think,
 		toolInstructions(toolNames, format),
 		has('wait') && 'wait(until) is a one-shot watch, dropped next think.',
+		'Any step takes until= (a watch that ends it once true) and within= (how long it may take: within=20s).',
 		has('wait') && 'Steps run back to back and never wait for others on their own. A step that needs someone else to act first (pay, give, answer) goes after wait(until) on that act, or in a later think.',
 		lookFor(verbs, toolNames.includes('see_map')),
 		has('wander') && `Example: ${showArc('wander(until=some(items.filter("Lantern").nearby()))', verbs, format)}`,
 		unnamedPlace(verbs),
 		afterWander(verbs),
 		has('wander') && 'wander(until) is one step, not the rest of the think.',
-		has('choose') && !has('issue') && chooseSentence(verbs, format, ''),
+		has('choose') && !has('command') && chooseSentence(verbs, format, '', lines.minChoices),
 		'If the order says then, after, or and then, put those steps in one chain this think.',
 		spokenGo(verbs, toolNames.includes('see_map')),
-		collectiveInstructions(verbs, format),
+		collectiveInstructions(verbs, format, lines.minChoices),
 		has('use') && 'use(item=TheItem, target=TheThing) on the name it operates.',
 		moneySentence(verbs, format, lines.currency),
 		lines.verbs,
 		arcText
-			? '&& continues only on success; ; always continues; || is the failure fallback.'
-			: '"then" ends a step: "if_ok" (the default: the next step only if this one succeeded), "always" (the next step whatever happened) or "if_failed" (the rest are its fallback).',
+			? 'Use && only when the next step must not run if this one failed; else a new line or ;. || is the failure fallback.'
+			: '"then" joins the next step: "if_ok" (the default) only when it must not run if this one failed, else "always"; "if_failed" runs it only on failure.',
 		emitSentence(format, toolNames.length > 0),
 		`Names only, no coordinates. Available verbs: ${verbHelp(verbs, toolNames)}.`,
 		toolsNotVerbs(toolNames, format),
@@ -290,22 +296,22 @@ function emitSentence(format:ArcFormat, tools:boolean):string {
 }
 
 /**
- * Arc text layout. Indentation counts the parens: on one line a small model miscounts a run of `)))))`, nests the
- * next issue inside the last, or ends the run with a Python-style `:`.
+ * Arc text layout: a verb's steps in braces after its call, a tab deeper, with `}` alone. On one line a small model
+ * miscounts a run of `)))))`, nests the next command inside the last, or ends the run with a Python-style `:`.
  */
-const BLOCK_LAYOUT = 'A call that holds an arc or choices opens on its own line, its args go one per line a tab deeper, each ending in a comma, and its ) stands alone at the opener\'s depth. A call with no arc inside stays on one line.';
+const BLOCK_LAYOUT = 'A verb that holds steps takes them after its call in { }, one per line a tab deeper, and } alone: when(isHurt(me)) { … }, if (watch) { … } else { … }. let name = step keeps its result for a later if (name).';
 
 /** Last in the prefix so a copied Example is valid Arc, with no trailing sentence. */
 function arcExample(verbs:VerbRegistry, format:ArcFormat, chain:boolean):string | false {
-	if (verbs.has('issue')) {
+	if (verbs.has('command')) {
 		const nested = verbs.nested();
 		const go = nested.has('go_to');
 		const wait = nested.has('wait');
 		if (go && wait) {
-			return example(showArc('issue(who=units.filter("Guard"), arc=go_to(Keep)) ; issue(who=units.filter("Scout"), arc=go_to(EastGate) && wait(seconds=5))', verbs, format));
+			return example(showArc('command(units.filter("Guard")) { go_to(Keep) } ; command(units.filter("Scout")) { go_to(EastGate) && wait(5s) }', verbs, format));
 		}
 		if (go) {
-			return example(showArc('issue(who=units.filter("Guard"), arc=go_to(Keep))', verbs, format));
+			return example(showArc('command(units.filter("Guard")) { go_to(Keep) }', verbs, format));
 		}
 		return false;
 	}
@@ -391,59 +397,65 @@ function spokenGo(verbs:VerbRegistry, map = false):string {
 
 /**
  * How to write `choose`, with an example made of verbs the kit really grants (then the catalog's), so a model that
- * copies it still writes a valid arc. `wrap` opens what the loop goes in (`issue(who=units, arc=`), closed after it.
+ * copies it still writes a valid arc. `wrap` opens what the loop goes in (`command(who=units, arc=`), closed after it.
  */
-function chooseSentence(verbs:VerbRegistry, format:ArcFormat, wrap:string):string {
+function chooseSentence(verbs:VerbRegistry, format:ArcFormat, wrap:string, minChoices:number):string {
+	const count = minChoices > 1 ? ` Give it ${minChoices} to ${minChoices + 2} choices, one for each way things may go.` : '';
 	const pool = [...verbs.list(), ...verbs.nested().list().filter((spec) => !verbs.has(spec.name))];
 	const bare = pool
 		.filter((spec) => spec.name !== 'choose' && !STOCK_ARC_VERBS_SET.has(spec.name) && !MIND_ONLY_VERBS.includes(spec.name)
-			&& Object.values(spec.args).every((kind) => kind.endsWith('?')))
-		.slice(0, 2)
+			&& Object.values(spec.args).every(isOptional))
+		.slice(0, 3)
 		.map((spec) => `${spec.name}=${spec.name}()`);
-	const choices = bare.length === 2 ? bare.join(', ') : 'first=<arc>, second=<arc>';
+	// Three, as models copy the count they are shown: shown two, they write two, or one.
+	const choices = bare.length === 3 ? bare.join(', ') : 'first=<arc>, second=<arc>, third=<arc>';
 	const looped = verbs.has('loop');
 	const choose = `choose("why you choose", ${choices})`;
 	// Args after the arcs, so the JSON never ends on a long run of closing brackets: a small model recites the run from
 	// memory, and if it has not closed the string it is in, it writes on in that string to its token limit.
-	const close = wrap ? ', group=Alpha)' : '';
-	const text = looped ? `${wrap}loop(${choose}, until=!some(others))${close}` : `${wrap}${choose}${close}`;
+	// In text each block closes on a line of its own: the wrapper would end the example on a run of three, so the text
+	// shows what goes inside it and says where it goes.
+	const outer = format === 'text' ? '' : wrap;
+	const close = outer ? ', group=Alpha)' : '';
+	const text = looped ? `${outer}loop(${choose}, until=!some(others))${close}` : `${outer}${choose}${close}`;
 	const example = showArc(text, verbs, format);
 	if (format !== 'text') {
 		// An example that does not parse (a placeholder, or no loop in the kit) is Arc text: not one to show beside JSON.
 		const shown = example === text ? ' ' : `, as in:\n${example}\n`;
 		const keeps = looped ? ', and loop keeps it choosing' : '';
-		return `choose takes a goal and its choices, each a list of steps under its name${shown}A fast model runs the one that fits right now${keeps}.`;
+		return `choose takes a goal and its choices, each a list of steps under its name${shown}A fast model runs the one that fits right now${keeps}.${count}`;
 	}
 	// Small models otherwise write `"label", arc` pairs, and turn the goal into the first label.
 	const again = looped ? ', again on each loop,' : '';
-	return `Each choice is name=arc after a goal in quotes, as in:\n${example}\nThe goal is choose's only quoted string: never a quoted label before a choice. A fast model runs the one that fits right now${again} with no think.`;
+	const where = wrap ? `, as in this ${wrap.match(/^\w+/)?.[0]} body` : ', as in';
+	return `Each choice is name: step inside choose("goal") { }${where}:\n${example}\nThe goal is choose's only quoted string: never a quoted label before a choice. A fast model runs the one that fits right now${again} with no think.${count}`;
 }
 
-function collectiveInstructions(verbs:VerbRegistry, format:ArcFormat):string {
+function collectiveInstructions(verbs:VerbRegistry, format:ArcFormat, minChoices:number):string {
 	const parts:string[] = [];
 	if (verbs.has('when')) {
 		parts.push(
-			`when(watch, arc) is this job's interrupt: it stays until the program is replaced and needs no extra think. Put known reactions on when instead of waiting to think. `,
+			`when(watch, arc) is this job's interrupt from where it is written: it stays until the program is replaced and needs no extra think. Put known reactions on when instead of waiting to think. `,
 		);
 	}
-	if (verbs.has('issue')) {
+	if (verbs.has('command')) {
 		parts.push(
-			`issue(who, arc) assigns a sticky program to matching units (never you). who is YOUR roster (units.filter("Witch")), never an enemy. `
-			+ `allUnits is one identical program for every troop. ${format === 'text' ? 'Join several issue with ; or a new line.' : 'Give each issue as a step of its own.'} Each issue arc is that unit's full chain. `
-			+ `One who per issue: a program for several roles is one issue per role, or one who that matches them all (units.filter(u => u is "Archer" || u is "Witch")). `
+			`command(who, arc) assigns a sticky program to matching units (never you). who is YOUR roster (units.filter("Witch")), never an enemy. `
+			+ `allUnits is one identical program for every troop. Each command arc is that unit's full chain. `
+			+ `One who per command: a program for several roles is one command per role, or one who that matches them all (units.filter(u => u is "Archer" || u is "Witch")). `
 			+ `Ordering two or more, name them with group=Name; units.filter("Name") picks that group later. `,
 		);
 	}
 	if (verbs.has('loop')) {
-		parts.push('loop(arc) repeats until fail. through= / until= / times=. ');
+		parts.push('loop(arc) repeats until a round fails. through= / until= / times=. ');
 	}
-	if (verbs.has('issue') && verbs.has('choose')) {
-		parts.push(`${chooseSentence(verbs, format, 'issue(who=units, arc=')} `);
+	if (verbs.has('command') && verbs.has('choose')) {
+		parts.push(`${chooseSentence(verbs, format, 'command(who=units, arc=', minChoices)} `);
 	}
 	if (verbs.has('law')) {
 		const until = verbs.has('unlaw') ? ' until unlaw(name)' : '';
 		const when = verbs.has('when') ? '; when is one job' : '';
-		const who = verbs.has('issue')
+		const who = verbs.has('command')
 			? `law(who?, watch, arc, name?) is a standing reaction${until} — it outlives the program and needs no think. Omitted who = units (troops), or you if it only speaks. Prefer law for any reaction that should apply to more than one unit${when}. `
 			: `law(watch, arc, name?) is a standing reaction${until} — it outlives the program and needs no think. `;
 		parts.push(who);
@@ -492,6 +504,11 @@ export function volatileBlock(opts:{
 	/** Open offers, one per line. */
 	offers?:string;
 	thinkAbout?:string;
+	/**
+	 * The program its own body runs now, and the reply that keeps it (`wait()`), each as the reply would write it. Without
+	 * it in sight a mind woken mid-job writes the job anew, or a first step of it.
+	 */
+	program?:{ steps:string; keep:string };
 	/** Leave out the standing hints a model trained on these prompts knows: see {@link PromptStyle}. */
 	compact?:boolean;
 }):string {
@@ -532,13 +549,12 @@ export function volatileBlock(opts:{
 	}
 	if (opts.lastResult) {
 		const r = opts.lastResult;
-		const status = r.interrupted ? 'interrupted' : r.ok ? 'ok' : 'failed';
 		const reason = r.reason ? ` — ${r.reason}` : '';
 		const articles = (opts.lastResultArticles ?? '').split('\n')
 			.filter((line) => line.trim() !== '')
 			.map((line) => `\n  ${line.trim()}`)
 			.join('');
-		parts.push(`Last verb result: ${r.verb ?? 'verb'} ${status}${reason}${articles}`);
+		parts.push(`Last verb result: ${r.verb ?? 'verb'} ${r.status}${reason}${articles}`);
 	}
 	if (opts.thinkAbout) {
 		parts.push(`You asked to think about: ${opts.thinkAbout}`);
@@ -573,7 +589,59 @@ export function volatileBlock(opts:{
 	if (opts.scold) {
 		parts.push(`[watch: ${opts.scold}]`);
 	}
+	if (opts.program) {
+		parts.push(`Your program, still running. When nothing needs to change, reply ${opts.program.keep} and it goes on:\n${opts.program.steps}`);
+	}
 	return parts.join('\n\n');
+}
+
+/**
+ * A program as a file: its path and who runs it, a line a step, each line a runner is on marked (`marks`: line → the
+ * marker, as `← now, 3s` or `⏸ Tom, while law flee runs`; a comment, so a copied one is read as space), whether any
+ * still runs it and for how long, and how it ended for those it did.
+ */
+export type ProgramFile = {
+	path:string;
+	who:string;
+	lines:readonly string[];
+	marks:ReadonlyMap<number, string>;
+	running:boolean;
+	seconds:number;
+	endings:readonly string[];
+};
+
+/** Letters of program files past which each shows only its header and the line it is at. */
+export const PROGRAM_FILES_CAP = 1500;
+
+/**
+ * Programs as files, as an agentic coder reads them: what runs where, and how far it got. Seeing a program still fit,
+ * a model leaves it be instead of re-issuing or rewriting it. Past {@link PROGRAM_FILES_CAP} letters, one line a file.
+ */
+export function programFiles(files:readonly ProgramFile[]):string {
+	const header = (file:ProgramFile):string => `${file.path} (${file.who ? `${file.who}; ` : ''}${file.running ? `running ${file.seconds}s` : 'ended'})`;
+	const whole = files.map((file) => [
+		header(file),
+		...file.lines.map((line, i) => (file.marks.has(i) ? `${line} // ${file.marks.get(i)}` : line)),
+		...file.endings.map((ending) => `// ${ending}`),
+	].join('\n')).join('\n\n');
+	if (whole.length <= PROGRAM_FILES_CAP) {
+		return whole;
+	}
+	return files.map((file) => {
+		const at = [...file.marks.keys()][0];
+		return `${header(file)}: ${at === undefined ? file.endings[0] ?? file.lines[0]?.trim() ?? '' : file.lines[at].trim()}`;
+	}).join('\n');
+}
+
+/** A commander's program files, and what to do when they still fit: `keep` is the reply that changes nothing. */
+export function programFilesSection(files:readonly ProgramFile[], keep:string | undefined):string {
+	if (files.length === 0) {
+		return '';
+	}
+	const fit = keep
+		? `\n\nThese files run now. A program can be right for some of its units and wrong for others: command only the units it is wrong for, by name or by a filter that leaves the rest out; reply ${keep} if all still fit.`
+		: '';
+	return `Programs your units run now:\n\n${programFiles(files)}${fit}`;
 }
 
 /** Rolling what-just-happened. Always in the prompt; older lines fold into `Earlier:`. */
@@ -652,8 +720,8 @@ export function arcRepairHint(reason:string, format:ArcFormat = 'json', tools:st
 			? `${name} is a tool, not a verb. Reply {"tool":"${name}", …its arguments} to use it. Never put it in the steps. Keep this conversation. ${thenEmit(format)}`
 			: `${name} is a tool, not a verb. Call the tool. Never write ${name}(...) in the Arc. Keep this conversation. ${thenEmit(format)}`;
 	}
-	if (name && verbs?.has('issue') && !verbs.has(name) && verbs.nested().has(name)) {
-		return `You have no body of your own: ${name} is for your units, run through issue(who, arc=${name}(…)). Keep this conversation. ${emit}`;
+	if (name && verbs?.has('command') && !verbs.has(name) && verbs.nested().has(name)) {
+		return `You have no body of your own: ${name} is for your units, run through ${format === 'text' ? `command(who) { ${name}(…) }` : `a command whose arc holds ${name}`}. Keep this conversation. ${emit}`;
 	}
 	const toolNote = (tools.length > 0
 		? ` Tools (${tools.join(', ')}) are not verbs — ${schema ? 'reply with the tool call' : 'call them'}, then emit the ${schema ? 'steps' : 'arc'}.`

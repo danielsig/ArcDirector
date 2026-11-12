@@ -2,20 +2,24 @@ import type { JsonSchema } from '../json.js';
 import { namesWord } from '../text.js';
 import { JOINS } from './arc-types.js';
 import { STOCK_COLLECTIVE_VERB_DEFS } from '../collective/collective-verbs.js';
-import { argBase, CHOOSE_VERB, GROUP_VERB, STOCK_VERB_DEFS, type VerbArgKind, type VerbDef, type VerbRegistry, type VerbSpec } from './stock-verbs.js';
+import { argBase, argKinds, CHOOSE_VERB, isOptional, GROUP_VERB, STOCK_VERB_DEFS, TEST_VERB, type VerbArgKind, type VerbDef, type VerbRegistry, type VerbSpec } from './stock-verbs.js';
 
 function ref(name:string):JsonSchema {
 	return { $ref: `#/$defs/${name}` };
 }
 
-/** The schema of one arg by its kind. An arc is the shared `$defs.arc`. */
-function argSchema(kind:VerbArgKind):JsonSchema {
+/** The schema of one arg by its kind, on an `endless` verb or not. An arc is the shared `$defs.arc`. */
+function argSchema(kind:VerbArgKind, endless?:boolean):JsonSchema {
 	const base = argBase(kind);
 	if (base === 'arc') {
 		return ref('arc');
 	}
 	if (base === 'number') {
 		return { type: 'number' };
+	}
+	// True, rounds or seconds; an endless verb holds for seconds only.
+	if (base === 'hold') {
+		return endless ? { type: 'string' } : { anyOf: [{ const: true }, { type: 'integer', minimum: 0 }, { type: 'string' }] };
 	}
 	if (base === 'string[]') {
 		return { type: 'array', items: { type: 'string' } };
@@ -29,6 +33,9 @@ function argSchema(kind:VerbArgKind):JsonSchema {
 /** Last in every step, so a grammar writes the step's own args before how it joins the next. */
 const THEN:JsonSchema = { type: 'string', enum: [...JOINS] };
 
+/** `let name = step`, first in a step as in Arc text. */
+const LET:JsonSchema = { type: 'string' };
+
 /** One step of one verb: `verb` is that verb's name and comes first, its args follow in the order the verb lists them. */
 function verbStep(spec:VerbSpec):JsonSchema {
 	if (spec.name === CHOOSE_VERB) {
@@ -37,6 +44,7 @@ function verbStep(spec:VerbSpec):JsonSchema {
 			additionalProperties: false,
 			required: ['verb', 'goal', 'choices'],
 			properties: {
+				let: LET,
 				verb: { const: CHOOSE_VERB },
 				goal: { type: 'string' },
 				choices: { type: 'object', additionalProperties: ref('arc') },
@@ -44,13 +52,15 @@ function verbStep(spec:VerbSpec):JsonSchema {
 			},
 		};
 	}
+	const kinds = Object.entries(argKinds(spec));
 	return {
 		type: 'object',
 		additionalProperties: false,
-		required: ['verb', ...Object.entries(spec.args).filter(([, kind]) => !kind.endsWith('?')).map(([key]) => key)],
+		required: ['verb', ...kinds.filter(([, kind]) => !kind.endsWith('?')).map(([key]) => key)],
 		properties: {
+			let: LET,
 			verb: { const: spec.name },
-			...Object.fromEntries(Object.entries(spec.args).map(([key, kind]) => [key, argSchema(kind)])),
+			...Object.fromEntries(kinds.map(([key, kind]) => [key, argSchema(kind, spec.endless)])),
 			then: THEN,
 		},
 	};
@@ -60,7 +70,14 @@ const GROUP_STEP:JsonSchema = {
 	type: 'object',
 	additionalProperties: false,
 	required: ['verb', 'arc'],
-	properties: { verb: { const: GROUP_VERB }, arc: ref('arc'), then: THEN },
+	properties: { let: LET, verb: { const: GROUP_VERB }, arc: ref('arc'), then: THEN },
+};
+
+const TEST_STEP:JsonSchema = {
+	type: 'object',
+	additionalProperties: false,
+	required: ['verb', 'watch'],
+	properties: { let: LET, verb: { const: TEST_VERB }, watch: { type: 'string' }, then: THEN },
 };
 
 /** One tool call: `{"tool":"recall","query":"Bread"}`. The tool's own parameters sit beside `tool`. */
@@ -81,20 +98,20 @@ function toolReply(name:string, parameters:JsonSchema):JsonSchema {
  * What a reply must be: a call to one of the `tools` (by name, with its parameters), or `{"steps":[…]}`. One branch
  * per tool and per verb of the whole `catalog`, never of one mind's kit or tools, so the schema is the same bytes
  * for every mind and think; the kit and the mind's own tools are checked once the reply is read. An arc nests through
- * `$defs`, so any depth costs the same few kilobytes. `issue` is a step of the reply's own root only, never of a nested
+ * `$defs`, so any depth costs the same few kilobytes. `command` is a step of the reply's own root only, never of a nested
  * arc, so a grammar cannot write one inside a loop or a law.
  */
 export function replySchema(catalog:VerbRegistry, tools:Record<string, JsonSchema> = {}):JsonSchema {
-	const issue = catalog.list().find((spec) => spec.name === 'issue');
+	const command = catalog.list().find((spec) => spec.name === 'command');
 	const steps:JsonSchema = {
 		type: 'object',
 		additionalProperties: false,
 		required: ['steps'],
-		properties: { steps: issue ? { type: 'array', minItems: 1, items: { anyOf: [verbStep(issue), ref('step')] } } : ref('arc') },
+		properties: { steps: command ? { type: 'array', minItems: 1, items: { anyOf: [verbStep(command), ref('step')] } } : ref('arc') },
 	};
 	const defs:Record<string, JsonSchema> = {
 		arc: { type: 'array', minItems: 1, items: ref('step') },
-		step: { anyOf: [...catalog.list().filter((spec) => spec !== issue).map(verbStep), GROUP_STEP] },
+		step: { anyOf: [...catalog.list().filter((spec) => spec !== command).map(verbStep), GROUP_STEP, TEST_STEP] },
 	};
 	const calls = Object.entries(tools).map(([name, parameters]) => toolReply(name, parameters));
 	return calls.length === 0 ? { ...steps, $defs: defs } : { anyOf: [...calls, steps], $defs: defs };
@@ -132,9 +149,7 @@ function formatVerbHelp(spec:VerbSpec, allowed:ReadonlySet<string>, catalog:read
 	if (spec.name === CHOOSE_VERB) {
 		return help ? `${spec.name}(goal, name=arc, …) — ${help}` : `${spec.name}(goal, name=arc, …)`;
 	}
-	const parts = Object.entries(spec.args).map(([k, kind]) => {
-		return kind.endsWith('?') ? `${k}?` : k;
-	});
+	const parts = Object.entries(spec.args).map(([k, arg]) => (isOptional(arg) ? `${k}?` : k));
 	const base = parts.length === 0 ? spec.name : `${spec.name}(${parts.join(', ')})`;
 	return help ? `${base} — ${help}` : base;
 }
@@ -153,7 +168,7 @@ export function verbHelp(registry:VerbRegistry, tools:readonly string[] = [], { 
 	const catalog = [...registry.nested().list().map((spec) => spec.name), ...tools];
 	const own = new Set([...registry.list().map((spec) => spec.name), ...tools]);
 	const kit = registry.list().map((spec) => formatVerbHelp(spec, own, catalog, stockHelp)).join(', ');
-	if (!registry.has('issue')) {
+	if (!registry.has('command')) {
 		return kit;
 	}
 	const nested = registry.nested();

@@ -232,7 +232,7 @@ export class PlayerInput extends Component {
 		const verb = seat.getComponent(Furniture)?.kind === 'bed' ? 'sleep' : 'sit';
 		world.enact(`${verb}(target=${seat.id})`).then(
 			(result) => {
-				if (!result.ok && result.reason) {
+				if (result.status !== 'ok' && result.reason) {
 					world.setMessage(result.reason);
 				}
 			},

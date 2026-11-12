@@ -31,17 +31,17 @@ describe('TalkNet', () => {
 	it('refuses a line said again and again in a row, or echoed word for word right after another said it', () => {
 		const range = new Set(['Ann:Bo']);
 		const talk = net(range, ['Ann', 'Bo']);
-		assert.equal(talk.say('Ann', 'The way is clear, Bo.').ok, true);
+		assert.equal(talk.say('Ann', 'The way is clear, Bo.').status === 'ok', true);
 		const again = talk.say('Ann', 'the way is clear Bo!');
-		assert.equal(again.ok, false);
+		assert.equal(again.status === 'ok', false);
 		assert.match(again.reason ?? '', /you already said this, and it was heard/);
-		assert.equal(talk.say('Ann', 'The way is clear, Bo.').ok, false);
+		assert.equal(talk.say('Ann', 'The way is clear, Bo.').status === 'ok', false);
 		const echo = talk.say('Bo', 'The way is clear, Bo.');
-		assert.equal(echo.ok, false);
+		assert.equal(echo.status === 'ok', false);
 		assert.match(echo.reason ?? '', /Ann just said this, and it was heard/);
-		assert.equal(talk.say('Bo', 'Then lead on.').ok, true);
-		assert.equal(talk.say('Ann', 'Stay close.').ok, true);
-		assert.equal(talk.say('Ann', 'The way is clear, Bo.').ok, true);
+		assert.equal(talk.say('Bo', 'Then lead on.').status === 'ok', true);
+		assert.equal(talk.say('Ann', 'Stay close.').status === 'ok', true);
+		assert.equal(talk.say('Ann', 'The way is clear, Bo.').status === 'ok', true);
 	});
 
 	it('lets a game decide each repeat: allow it, refuse it, or refuse it in its own words', () => {
@@ -52,9 +52,9 @@ describe('TalkNet', () => {
 				return text === 'Hail!' || (who === 'Bo' ? 'Find your own words.' : false);
 			},
 		});
-		assert.equal(talk.say('Ann', 'Hail!').ok, true);
-		assert.equal(talk.say('Ann', 'Hail!').ok, true);
-		assert.equal(talk.say('Ann', 'Onward.').ok, true);
+		assert.equal(talk.say('Ann', 'Hail!').status === 'ok', true);
+		assert.equal(talk.say('Ann', 'Hail!').status === 'ok', true);
+		assert.equal(talk.say('Ann', 'Onward.').status === 'ok', true);
 		assert.match(talk.say('Ann', 'Onward.').reason ?? '', /not a parrot/);
 		assert.equal(talk.say('Bo', 'Onward.').reason, 'Find your own words.');
 		assert.deepEqual(asked, ['Ann: Hail!', 'Ann: Onward.', 'Bo: Onward.']);
@@ -62,9 +62,9 @@ describe('TalkNet', () => {
 
 	it('lets a game allow repeats', () => {
 		const talk = new TalkNet({ inRange: () => true, others: (speaker) => ['Ann', 'Bo'].filter((id) => id !== speaker) }, undefined, { repeats: true });
-		assert.equal(talk.say('Ann', 'Onward.').ok, true);
-		assert.equal(talk.say('Ann', 'Onward.').ok, true);
-		assert.equal(talk.say('Bo', 'Onward.').ok, true);
+		assert.equal(talk.say('Ann', 'Onward.').status === 'ok', true);
+		assert.equal(talk.say('Ann', 'Onward.').status === 'ok', true);
+		assert.equal(talk.say('Bo', 'Onward.').status === 'ok', true);
 	});
 
 	it('wakes a listener only for speech meant for them, never for talk between others', () => {
@@ -95,7 +95,7 @@ describe('TalkNet', () => {
 		assert.deepEqual(talk.nearby('Acolyte'), ['Guard']);
 
 		const ok = talk.say('Acolyte', 'Open the gate.', 'Guard', 3);
-		assert.equal(ok.ok, true);
+		assert.equal(ok.status === 'ok', true);
 		assert.equal(ok.reason, 'to Guard');
 		assert.equal(guard.events.length, 1);
 		assert.equal(guard.events[0].kind, 'HeardSpeech');
@@ -119,7 +119,7 @@ describe('TalkNet', () => {
 	it('rejects say(to) when the host reports out of range', () => {
 		const talk = net(new Set(), ['Guard', 'Acolyte']);
 		const result = talk.say('Acolyte', 'Hello.', 'Guard');
-		assert.equal(result.ok, false);
+		assert.equal(result.status === 'ok', false);
 		assert.equal(result.reason, 'Guard is not in earshot');
 		assert.equal(talk.canSay('Acolyte', 'Guard').ok, false);
 	});
@@ -130,7 +130,7 @@ describe('TalkNet', () => {
 			spoke.push({ text: u.text });
 		});
 		const result = talk.say('Acolyte', 'Make way.');
-		assert.equal(result.ok, false);
+		assert.equal(result.status === 'ok', false);
 		assert.equal(result.reason, 'no one in earshot');
 		assert.equal(spoke.length, 0);
 		assert.equal(talk.canSay('Acolyte').ok, false);
@@ -148,7 +148,7 @@ describe('TalkNet', () => {
 		talk.attach(baker);
 		talk.attach(far);
 		const ok = talk.say('Player', 'Which of you sells swords?', ['Guard', 'Baker']);
-		assert.equal(ok.ok, true);
+		assert.equal(ok.status === 'ok', true);
 		assert.equal(ok.reason, 'to Guard, Baker');
 		assert.match(guard.events[0].text, /says to you/);
 		assert.match(baker.events[0].text, /says to you/);
@@ -160,7 +160,7 @@ describe('TalkNet', () => {
 		const talk = net(new Set(['Acolyte:Guard', 'Acolyte:Player']), ['Guard', 'Player']);
 		talk.attach(guard);
 		const result = talk.say('Acolyte', 'Make way.');
-		assert.equal(result.ok, true);
+		assert.equal(result.status === 'ok', true);
 		assert.equal(result.reason, 'heard by Guard, Player');
 		assert.equal(guard.events.length, 1);
 		assert.match(guard.events[0].text, /Make way/);
@@ -178,7 +178,7 @@ describe('TalkNet', () => {
 		talk.attach(player);
 		const fromForager = talk.say('Forager', 'Help me across.', 'Guard');
 		const fromPlayer = talk.say('Player', 'Stay here.', 'Guard');
-		assert.equal(fromForager.ok, true);
+		assert.equal(fromForager.status === 'ok', true);
 		assert.equal(guard.events.length, 1);
 		assert.match(guard.events[0].text, /Stay here/);
 		assert.equal(fromPlayer.heard?.includes('Guard'), true);
@@ -189,7 +189,7 @@ describe('TalkNet', () => {
 	it('lets an unattached name hear if the host says they are in range', () => {
 		const talk = net(new Set(['Acolyte:Player']), ['Player']);
 		const result = talk.say('Acolyte', 'After you.', 'Player');
-		assert.equal(result.ok, true);
+		assert.equal(result.status === 'ok', true);
 		assert.equal(result.reason, 'to Player');
 	});
 
@@ -207,7 +207,7 @@ describe('TalkNet', () => {
 			},
 		});
 		const ok = talk.say('Acolyte', 'Open the gate.', 'Guard');
-		assert.equal(ok.ok, true);
+		assert.equal(ok.status === 'ok', true);
 		assert.deepEqual(faces, [['Acolyte', 'Guard'], ['Guard', 'Acolyte']]);
 		assert.deepEqual(steps, [['Acolyte', 'Guard'], ['Guard', 'Acolyte']]);
 	});
@@ -256,7 +256,7 @@ describe('TalkNet', () => {
 		});
 		talk.attach(guard);
 		const ok = talk.say('Baker', 'Which of you sells swords?', 'Guard');
-		assert.equal(ok.ok, true);
+		assert.equal(ok.status === 'ok', true);
 		assert.match(guard.events[0].text, /only catch/);
 		assert.match(guard.events[0].text, /Get closer to Baker to hear clearly/);
 		assert.match(guard.events[0].text, /Wh—/);
@@ -313,7 +313,7 @@ describe('TalkNet', () => {
 		});
 		talk.attach(fern);
 		const ok = talk.say('Player', 'Herbalist, save your friends.');
-		assert.equal(ok.ok, true);
+		assert.equal(ok.status === 'ok', true);
 		assert.equal(fern.events.length, 1);
 		assert.equal(fern.events[0].kind, 'HeardSpeech');
 		assert.equal(fern.events[0].major, true);

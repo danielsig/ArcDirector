@@ -1,4 +1,4 @@
-import { Time, type GameObject, type XZ } from '@arc-director/kindling';
+import type { GameObject, XZ } from '@arc-director/kindling';
 import { SpeechQueue } from './SpeechQueue';
 import { ThinkShow } from './ThinkShow';
 import {
@@ -195,7 +195,7 @@ export class GameHost {
 			.withMind((m) => m
 				.withCurrency('gold')
 				.withSkipHeartbeat()
-				.withStalled((result) => !result.ok || !!result.interrupted || STALL_VERBS.has(result.verb ?? '')))
+				.withStalled((result) => result.status !== 'ok' || STALL_VERBS.has(result.verb ?? '')))
 			.withReplaceCheck()
 			.withPriorityQueue({
 				batchThinks: prefs().batchThinks,
@@ -372,9 +372,10 @@ export class GameHost {
 		publishAiLog(this.log);
 	}
 
-	public pulse(dt = 0):void {
+	/** `dt` game seconds pass for the director. */
+	public pulse(dt:number):void {
 		if (!this._disposed) {
-			this.arc?.tick(dt, Time.time);
+			this.arc?.tick(dt);
 		}
 	}
 

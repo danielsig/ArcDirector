@@ -229,7 +229,7 @@ watch(
 	left: 14px;
 	right: 14px;
 	bottom: 0;
-	z-index: 2;
+	z-index: var(--z-hud);
 	max-height: min(52vh, 520px);
 	display: flex;
 	flex-direction: column;

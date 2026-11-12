@@ -1,14 +1,16 @@
 import { extractJson, isRecord } from '../json.js';
-import { ArcError, JOINS, SYMBOL_JOIN, isArc, isCountMap, type Arc, type Join, type Step, type StepArg } from './arc-types.js';
-import { argBase, CHOOSE_VERB, GROUP_VERB, TEXT_ARG_KINDS, type VerbRegistry } from './stock-verbs.js';
+import { ArcError, JOINS, SYMBOL_JOIN, isArc, isCountMap, verbsInside, type Arc, type Join, type Step, type StepArg } from './arc-types.js';
+import { argBase, argKind, argKinds, CHOOSE_VERB, GROUP_VERB, TEXT_ARG_KINDS, type VerbRegistry } from './stock-verbs.js';
 import { choicesOf } from './choose.js';
-import { formatArcBlocks, parseArcText } from './arc-parse.js';
+import { parseArcText } from './arc-parse.js';
+import { formatArcBlocks } from './arc-format.js';
 import { validateArc } from './validate.js';
 
 /**
  * An Arc as JSON, the way a model writes it: `{"steps":[{"verb":"go_to","target":"Lever"},{"verb":"say","text":"Hi",
- * "then":"always"}]}`. Args are inline, `verb` first and `then` last; a nested arc is a bare array of steps; a group
- * is `{"verb":"group","arc":[…]}` and `choose` is `{"verb":"choose","goal":"…","choices":{"name":[…]}}`.
+ * "then":"always"}]}`. Args are inline, `verb` first (after a `let`) and `then` last; a nested arc is a bare array of
+ * steps; a group is `{"verb":"group","arc":[…]}`, a query `{"verb":"test","watch":"…"}`, and `choose` is
+ * `{"verb":"choose","goal":"…","choices":{"name":[…]}}`.
  */
 
 /** The JSON values of `arc`'s steps. With `verbs`, expression args read their string literals in single quotes. */
@@ -17,8 +19,8 @@ function stepsJSON(arc:Arc, verbs:VerbRegistry | undefined):unknown[] {
 }
 
 function stepJSON(step:Step, verbs:VerbRegistry | undefined):Record<string, unknown> {
-	const out:Record<string, unknown> = { verb: step.verb };
-	const inside = verbs && (step.verb === GROUP_VERB ? verbs : verbs.nested());
+	const out:Record<string, unknown> = step.let ? { let: step.let, verb: step.verb } : { verb: step.verb };
+	const inside = verbs && verbsInside(step, verbs);
 	if (step.verb === CHOOSE_VERB) {
 		if (step.args.goal !== undefined) {
 			out.goal = step.args.goal;
@@ -26,9 +28,9 @@ function stepJSON(step:Step, verbs:VerbRegistry | undefined):Record<string, unkn
 		out.choices = Object.fromEntries(Object.entries(choicesOf(step)).map(([name, arc]) => [name, stepsJSON(arc, inside)]));
 	}
 	else {
-		const kinds = verbs?.get(step.verb)?.args ?? {};
+		const spec = verbs?.get(step.verb);
 		for (const [key, value] of Object.entries(step.args)) {
-			out[key] = isArc(value) ? stepsJSON(value, inside) : typeof value === 'string' ? singleQuoted(value, argBase(kinds[key])) : value;
+			out[key] = isArc(value) ? stepsJSON(value, inside) : typeof value === 'string' ? singleQuoted(value, argKind(spec, key)) : value;
 		}
 	}
 	if (step.then) {
@@ -81,6 +83,9 @@ function blockJSON(value:unknown, depth:number):string {
 	return `{${args.join(',')}}`;
 }
 
+/** What a step's JSON holds beside its args. */
+const STEP_KEYS:readonly string[] = ['verb', 'then', 'let'];
+
 function isStepArg(v:unknown):v is StepArg {
 	return typeof v === 'string' || typeof v === 'number' || typeof v === 'boolean' || isCountMap(v)
 		|| (Array.isArray(v) && v.every((x) => typeof x === 'string'));
@@ -117,16 +122,20 @@ function readStep(raw:unknown, verbs:VerbRegistry):Step {
 		throw new ArcError('step.verb must be a string');
 	}
 	const step:Step = { verb: raw.verb, args: {} };
-	const kinds = verbs.get(raw.verb)?.args ?? {};
+	if (typeof raw.let === 'string' && raw.let.trim()) {
+		step.let = raw.let.trim();
+	}
+	const spec = verbs.get(raw.verb);
+	const inside = verbsInside(step, verbs);
 	const only = (...keys:string[]):void => {
-		const extra = Object.keys(raw).find((key) => key !== 'verb' && key !== 'then' && !keys.includes(key));
+		const extra = Object.keys(raw).find((key) => !STEP_KEYS.includes(key) && !keys.includes(key));
 		if (extra) {
 			throw new ArcError(`'${raw.verb as string}' takes ${keys.join(' and ')}, not '${extra}'`);
 		}
 	};
 	if (raw.verb === GROUP_VERB) {
 		only('arc');
-		step.args.arc = readSteps(raw.arc, verbs);
+		step.args.arc = readSteps(raw.arc, inside);
 	}
 	else if (raw.verb === CHOOSE_VERB) {
 		only('goal', 'choices');
@@ -137,24 +146,24 @@ function readStep(raw:unknown, verbs:VerbRegistry):Step {
 			throw new ArcError('choose needs choices: {"name":[steps], …}');
 		}
 		for (const [name, choice] of Object.entries(raw.choices)) {
-			step.args[name] = readSteps(choice, verbs.nested());
+			step.args[name] = readSteps(choice, inside);
 		}
 	}
 	else {
 		// Its args cannot be read without its spec: the verb is what is wrong.
-		if (!verbs.has(raw.verb)) {
+		if (!verbs.get(raw.verb)) {
 			throw new ArcError(`unknown verb '${raw.verb}'`);
 		}
 		for (const [key, value] of Object.entries(raw)) {
-			if (key === 'verb' || key === 'then' || value === undefined || value === null) {
+			if (STEP_KEYS.includes(key) || value === undefined || value === null) {
 				continue;
 			}
-			if (argBase(kinds[key]) === 'arc') {
-				step.args[key] = readSteps(value, verbs.nested());
+			if (argKind(spec, key) === 'arc') {
+				step.args[key] = readSteps(value, inside);
 			}
 			else if (isStepArg(value)) {
 				// A number or a yes written for a text arg is its text: `"code": 417`.
-				step.args[key] = TEXT_ARG_KINDS.includes(argBase(kinds[key])) && (typeof value === 'number' || typeof value === 'boolean') ? String(value) : value;
+				step.args[key] = TEXT_ARG_KINDS.includes(argKind(spec, key)) && (typeof value === 'number' || typeof value === 'boolean') ? String(value) : value;
 			}
 			else {
 				throw new ArcError(`arg '${key}' has an unsupported type`);
@@ -211,7 +220,52 @@ export function parseArc(input:string | unknown, registry:VerbRegistry):Arc {
 	if (/^[{[`]/.test(trimmed)) {
 		return arcFromJSON(extractJson(trimmed), registry);
 	}
-	return parseArcText(trimmed, registry);
+	return parseWrappedArc(trimmed, registry);
+}
+
+/** A think tag a model leaves in its answer: `</think>`, `<redacted_thinking>`, … */
+const THINK_TAG = /<\/?(?:think|thinking|thought|reasoning|redacted_thinking)>/gi;
+
+/**
+ * Arc text, or where it does not parse, the Arc a reply wraps: its pieces between think tags, the last first, each
+ * without the lines of prose before and after its steps. The first piece that parses; the whole reply's error when none
+ * does. Nothing is cut out of the middle of an arc: that is the longest valid prefix's to do.
+ */
+function parseWrappedArc(text:string, registry:VerbRegistry):Arc {
+	try {
+		return parseArcText(text, registry);
+	}
+	catch (err) {
+		const pieces = text.split(THINK_TAG).map((piece) => withoutProse(piece, registry)).filter((piece) => piece && piece !== text);
+		for (const piece of pieces.reverse()) {
+			try {
+				return parseArcText(piece, registry);
+			}
+			catch {
+				// The next piece, or the whole reply's error.
+			}
+		}
+		throw err;
+	}
+}
+
+/**
+ * `text` from its first line that starts a step (a verb, `let`) to its last that can belong to one (indented, a closer, a
+ * join, `else`, or a step's own start). Empty when no line starts a step.
+ */
+function withoutProse(text:string, registry:VerbRegistry):string {
+	const lines = text.split('\n');
+	const word = (line:string):string => /^\s*([A-Za-z_]\w*)/.exec(line)?.[1] ?? '';
+	const starts = (line:string):boolean => word(line) === 'let' || !!(registry.get(word(line)) ?? registry.nested().get(word(line)));
+	const first = lines.findIndex(starts);
+	if (first < 0) {
+		return '';
+	}
+	let last = lines.length - 1;
+	while (last > first && !(starts(lines[last]) || /^\s+\S|^\s*[)}&|;]|^\s*else\b/.test(lines[last]))) {
+		last -= 1;
+	}
+	return lines.slice(first, last + 1).join('\n').trim();
 }
 
 /**
@@ -247,7 +301,7 @@ const CLOSERS = /[}\]][}\]]|```/;
  */
 export function replyBreakdown(verbs:VerbRegistry):(piece:string)=>string | undefined {
 	const specs = [...verbs.list(), ...verbs.nested().list()];
-	const strict = new Set(specs.flatMap((spec) => Object.entries(spec.args).filter(([, kind]) => ['watch', 'expr', 'id'].includes(argBase(kind))).map(([key]) => key)));
+	const strict = new Set(specs.flatMap((spec) => Object.entries(argKinds(spec)).filter(([, kind]) => ['watch', 'expr', 'id'].includes(argBase(kind))).map(([key]) => key)));
 	let json:boolean | undefined;
 	let inString = false;
 	let escaped = false;

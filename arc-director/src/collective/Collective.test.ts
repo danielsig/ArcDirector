@@ -1,9 +1,10 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { parseArcText, formatArc } from '../arc/arc-parse.js';
+import { parseArcText } from '../arc/arc-parse.js';
+import { formatArc } from '../arc/arc-format.js';
 import { chatContentText } from '../inference/provider.js';
 import { parseArc } from '../arc/wire.js';
-import { isArc, type Arc, type ArcResult } from '../arc/arc-types.js';
+import { BlockedArcError, isArc, type Arc, type ArcResult } from '../arc/arc-types.js';
 import { VerbRegistry, STOCK_VERB_DEFS, STOCK_VERBS } from '../arc/stock-verbs.js';
 import { dummyEntity } from '../expr/natives.js';
 import {
@@ -76,10 +77,10 @@ async function hiveOf(opts:{
 	const director = await new ArcDirector<Ctx>()
 		.withPriorityQueue({
 			processInterval: 0,
-			watchInterval: 0,
 			heartbeatStart: 100,
 			heartbeatMin: 100,
 		})
+		.withIntervals({ watch: 0, think: 0 })
 		.addFakeInference()
 		.addStockVerbs()
 		.addStockCollectiveVerbs()
@@ -94,7 +95,7 @@ async function hiveOf(opts:{
 			if (opts.slow) {
 				await sleep(40);
 			}
-			return { ok: true, verb: call.verb };
+			return { status: 'ok', verb: call.verb };
 		})
 		.withContext((id) => ({ id }))
 		.addCollective({
@@ -150,7 +151,7 @@ async function hangingDawn():Promise<{
 		.withKernels(kernels())
 		.onVerb((call) => {
 			calls.push(call);
-			return { ok: true, verb: call.verb };
+			return { status: 'ok', verb: call.verb };
 		})
 		.withContext((id) => ({ id }))
 		.addCollective({
@@ -187,8 +188,8 @@ describe('Collective chain', () => {
 			})
 			.connect();
 		const hive = director.collective('Hive')!;
-		assert.ok(hive.verbs.has('issue'));
-		assert.equal(hive.activeVerbs().has('issue'), false);
+		assert.ok(hive.verbs.has('command'));
+		assert.equal(hive.activeVerbs().has('command'), false);
 		assert.ok(hive.verbs.has('when'));
 		director.dispose();
 	});
@@ -225,7 +226,7 @@ describe('Collective chain', () => {
 		director.dispose();
 	});
 
-	it('removeCharacter drops them from the roster and issue who', async () => {
+	it('removeCharacter drops them from the roster and command who', async () => {
 		const calls:VerbCall<Ctx>[] = [];
 		const director = await hiveOf({ calls });
 		hive(director).removeCharacter('Mira');
@@ -234,7 +235,7 @@ describe('Collective chain', () => {
 		assert.equal(director.character('Mira'), undefined);
 		const text = hive1.promptSection(hive1.mind);
 		assert.equal(/Mira/.test(text), false);
-		await hive1.enact(parseArc('issue(who=allUnits, arc=go_to(Keep))', hive1.verbs));
+		await hive1.enact(parseArc('command(who=allUnits, arc=go_to(Keep))', hive1.verbs));
 		await waitFor(() => calls.some((c) => c.verb === 'go_to'));
 		assert.equal(calls.some((c) => c.character.id === 'Mira'), false);
 		assert.equal(calls.some((c) => c.character.id === 'Tomas' && c.verb === 'go_to'), true);
@@ -272,13 +273,13 @@ describe('Collective chain', () => {
 			.addStockCollectiveVerbs()
 			.withDefaultKit(COLLECTIVE_KIT)
 			.withContext((id) => ({ id }))
-			.onVerb(({ verb }) => ({ ok: true, verb }))
+			.onVerb(({ verb }) => ({ status: 'ok', verb }))
 			.withDefaultKit({ verbs: ['go_to', 'follow'] })
 			.addCharacter({ id: 'Tom', kit: { verbs: ['go_to', 'wander'] } })
 			.addCollective({
 				id: 'DawnParty',
 				mind: { skipHeartbeat: true },
-				kit: { verbs: ['go_to', 'follow', 'issue'] },
+				kit: { verbs: ['go_to', 'follow', 'command'] },
 				characters: [{ id: 'Ann' }],
 			})
 			.connect();
@@ -302,32 +303,32 @@ describe('Collective chain', () => {
 			.withContext((id) => ({ id }))
 			.withKernels(kernels())
 			.onVerb(() => new Promise<ArcResult>(() => undefined))
-			.addCollective({ id: 'Host', mind: { skipHeartbeat: true }, kit: { verbs: ['go_to', 'issue'] }, characters: ['A', 'B', 'C', 'D', 'E', 'F'].map((id) => ({ id, tags: ['Blade'] })) })
+			.addCollective({ id: 'Host', mind: { skipHeartbeat: true }, kit: { verbs: ['go_to', 'command'] }, characters: ['A', 'B', 'C', 'D', 'E', 'F'].map((id) => ({ id, tags: ['Blade'] })) })
 			.connect();
 		const host = director.collective('Host')!;
 		const [a, b, c, d, e, f] = ['A', 'B', 'C', 'D', 'E', 'F'].map((id) => director.character(id)!);
 		const march:Arc = [{ verb: 'go_to', args: { target: 'Ford' } }];
 		const groupOf = (character:typeof a):string[] => character.tags.filter((t) => host.ownsTag(t)).map((t) => host.shortOf(t));
-		assert.equal(host.issue([a, b, c, d, e, f], march, 'Pack'), 'Pack');
+		assert.equal(host.command([a, b, c, d, e, f], march, 'Pack'), 'Pack');
 		assert.deepEqual(groupOf(a), ['Pack']);
 		assert.match(host.promptSection(host.mind), /^\| Pack \| 6 Blade \|/m, 'one row for the group, its kind without its name');
-		assert.equal(host.issue([a, b], march), 'Pack2', 'a few split off unnamed are named after it');
-		assert.equal(host.issue([c, d, e], march), 'Pack', 'most of it, unnamed, keeps its name');
+		assert.equal(host.command([a, b], march), 'Pack2', 'a few split off unnamed are named after it');
+		assert.equal(host.command([c, d, e], march), 'Pack', 'most of it, unnamed, keeps its name');
 		assert.deepEqual(groupOf(f), [], 'and the one left behind loses it');
-		host.issue([d], march);
+		host.command([d], march);
 		assert.deepEqual(groupOf(d), [], 'one sent alone leaves its group');
-		assert.equal(host.issue([d, f], march), 'Alpha', 'from no group: a letter');
-		host.issue([c], march);
+		assert.equal(host.command([d, f], march), 'Alpha', 'from no group: a letter');
+		host.command([c], march);
 		assert.deepEqual(groupOf(e), ['Pack'], 'the last one left keeps its tag');
 		assert.match(host.promptSection(host.mind), /^\| E \| Blade \|/m, 'but shows by its own name');
-		const result = await host.enact(parseArc('issue(who=units.filter(u => u is "Blade"), arc=go_to(Ford))', host.verbs));
+		const result = await host.enact(parseArc('command(who=units.filter(u => u is "Blade"), arc=go_to(Ford))', host.verbs));
 		assert.equal(result.reason, 'no group= given: called them Bravo', 'told the name it was given');
-		host.issue([a, b, c, d, e], march, 'Bravo2');
-		assert.equal(host.issue([a, b], march), 'Bravo3', 'a split off a split counts on from its name, not onto it');
+		host.command([a, b, c, d, e], march, 'Bravo2');
+		assert.equal(host.command([a, b], march), 'Bravo3', 'a split off a split counts on from its name, not onto it');
 		director.dispose();
 	});
 
-	it('says on each roster line what the unit is at: its step in its verb\'s words, or idle and how its last step failed', async () => {
+	it('says on each roster line what the unit is at: its step in its verb\'s words, or how its program ended and its last step', async () => {
 		let release:((r:ArcResult)=>void) | undefined;
 		const director = await new ArcDirector<Ctx>()
 			.addFakeInference()
@@ -339,16 +340,16 @@ describe('Collective chain', () => {
 				? new Promise<ArcResult>((done) => {
 					release = done;
 				})
-				: { ok: false, verb, reason: 'no target' }))
-			.addCollective({ id: 'DawnParty', mind: { skipHeartbeat: true }, kit: { verbs: ['go_to', 'follow', 'issue'] }, characters: [{ id: 'Ann' }, { id: 'Bo' }] })
+				: { status: 'failed', verb, reason: 'no target' }))
+			.addCollective({ id: 'DawnParty', mind: { skipHeartbeat: true }, kit: { verbs: ['go_to', 'follow', 'command'] }, characters: [{ id: 'Ann' }, { id: 'Bo' }] })
 			.connect();
 		const party = director.collective('DawnParty')!;
 		void director.character('Ann')!.enact([{ verb: 'go_to', args: { target: 'Cottage' } }]);
 		await director.character('Bo')!.enact([{ verb: 'follow', args: { target: 'Ann' } }]);
 		const roster = party.promptSection(party.mind);
 		assert.match(roster, /^\| Ann \| [^|]* \| [^|]* \| going to Cottage \|/m);
-		assert.match(roster, /^\| Bo \| [^|]* \| [^|]* \| idle \| follow failed: no target \|/m);
-		release?.({ ok: true, verb: 'go_to' });
+		assert.match(roster, /^\| Bo \| [^|]* \| [^|]* \| failed: no target \| follow failed: no target \|/m);
+		release?.({ status: 'ok', verb: 'go_to' });
 		director.dispose();
 	});
 
@@ -358,7 +359,7 @@ describe('Collective chain', () => {
 		const mira = hive(director).character('Mira');
 		assert.ok(mira);
 		const result = await mira.enact(parseArc('go_to(Keep)', mira.verbs));
-		assert.equal(result.ok, true);
+		assert.equal(result.status === 'ok', true);
 		assert.equal(result.verb, 'go_to');
 		assert.equal(calls.some((c) => c.character.id === 'Mira' && c.verb === 'go_to'), true);
 		assert.equal(calls.some((c) => c.character.id === 'Tomas'), false);
@@ -366,22 +367,22 @@ describe('Collective chain', () => {
 	});
 });
 
-describe('issue(who)', () => {
+describe('command(who)', () => {
 	it('parses unquoted who= and nested arc=', () => {
 		const registry = collectiveVerbs();
 		const arc = parseArcText(
-			'issue(who=units.filter("Loaf").filter(u => !u.busy), arc=go_to(BakerStall)) '
-			+ '; issue(who=units.filter("Guard"), arc=go_to(Tomas) && give(item=Loaf, to=Tomas))',
+			'command(who=units.filter("Loaf").filter(u => !u.busy), arc=go_to(BakerStall)) '
+			+ '; command(who=units.filter("Guard"), arc=go_to(Tomas) && give(item=Loaf, to=Tomas))',
 			registry,
 		);
-		assert.equal(arc[0].verb, 'issue');
+		assert.equal(arc[0].verb, 'command');
 		assert.equal(arc[0].args.who, 'units.filter("Loaf").filter(u => !u.busy)');
 		assert.equal(isArc(arc[0].args.arc), true);
 		assert.deepEqual((arc[0].args.arc as Arc).map((step) => step.verb), ['go_to']);
-		assert.equal(arc[1].verb, 'issue');
+		assert.equal(arc[1].verb, 'command');
 		assert.equal(arc[0].then, 'always');
 		assert.deepEqual((arc[1].args.arc as Arc).map((step) => step.verb), ['go_to', 'give']);
-		assert.match(formatArc(arc), /issue\(/);
+		assert.match(formatArc(arc), /command\(/);
 	});
 
 	it('is instantaneous and fans out to each character', async () => {
@@ -390,28 +391,28 @@ describe('issue(who)', () => {
 		const hive = director.collective('Hive')!;
 		const t0 = Date.now();
 		const result = await hive.enact(parseArc(
-			'issue(who=units.filter("Guard"), arc=go_to(Keep))',
+			'command(who=units.filter("Guard"), arc=go_to(Keep))',
 			hive.verbs,
 		));
 		assert.ok(Date.now() - t0 < 30);
-		assert.equal(result.ok, true);
-		assert.equal(result.verb, 'issue');
+		assert.equal(result.status === 'ok', true);
+		assert.equal(result.verb, 'command');
 		await waitFor(() => calls.some((c) => c.verb === 'go_to' && c.character.id === 'Mira'));
 		assert.ok(calls.some((c) => c.verb === 'go_to' && c.character.id === 'Tomas'));
-		assert.equal(calls.some((c) => c.verb === 'issue'), false);
+		assert.equal(calls.some((c) => c.verb === 'command'), false);
 		director.dispose();
 	});
 
-	it('issue ; issue starts both groups without waiting on characters', async () => {
+	it('command ; command starts both groups without waiting on characters', async () => {
 		const calls:VerbCall<Ctx>[] = [];
 		const director = await hiveOf({ calls, slow: true });
 		const hive = director.collective('Hive')!;
 		const result = await hive.enact(parseArc(
-			'issue(who=units.filter("Mira"), arc=go_to(WestGate)) '
-			+ '; issue(who=units.filter("Tomas"), arc=go_to(EastGate))',
+			'command(who=units.filter("Mira"), arc=go_to(WestGate)) '
+			+ '; command(who=units.filter("Tomas"), arc=go_to(EastGate))',
 			hive.verbs,
 		));
-		assert.equal(result.ok, true);
+		assert.equal(result.status === 'ok', true);
 		await waitFor(() => (
 			calls.some((c) => c.character.id === 'Mira' && String(c.args.target) === 'WestGate')
 			&& calls.some((c) => c.character.id === 'Tomas' && String(c.args.target) === 'EastGate')
@@ -424,7 +425,7 @@ describe('issue(who)', () => {
 		const director = await hiveOf({ calls });
 		const hive = director.collective('Hive')!;
 		await hive.enact(parseArc(
-			'issue(who=units.filter("Mira"), arc=go_to(Tomas) && examine(Tomas))',
+			'command(who=units.filter("Mira"), arc=go_to(Tomas) && examine(Tomas))',
 			hive.verbs,
 		));
 		await waitFor(() => calls.filter((c) => c.character.id === 'Mira').length >= 2);
@@ -438,12 +439,12 @@ describe('issue(who)', () => {
 		const director = await hiveOf({ calls, hold: (call) => call.args.target === 'Keep' });
 		const hive = director.collective('Hive')!;
 		void hive.enact(parseArc(
-			'issue(who=units.filter("Guard"), arc=go_to(Keep))',
+			'command(who=units.filter("Guard"), arc=go_to(Keep))',
 			hive.verbs,
 		));
 		await waitFor(() => hive.character('Mira')?.busy === true);
 		await hive.enact(parseArc(
-			'issue(who=units.filter("Mira"), arc=go_to(Home))',
+			'command(who=units.filter("Mira"), arc=go_to(Home))',
 			hive.verbs,
 		));
 		await waitFor(() => calls.some((c) => c.character.id === 'Mira' && String(c.args.target) === 'Home'));
@@ -456,15 +457,16 @@ describe('issue(who)', () => {
 		const director = await hiveOf({ calls });
 		const hive = director.collective('Hive')!;
 		await hive.enact(parseArc(
-			'issue(who=units.filter("Mira"), arc=wander(until=isNear(me, Tomas))) '
-			+ '; issue(who=units.filter("Tomas"), arc=wander(until=isNear(me, Mira)))',
+			// Not near yet: an until that already holds would end the wander before it began.
+			'command(who=units.filter("Mira"), arc=wander(until=isNear(me, Tomas, 1))) '
+			+ '; command(who=units.filter("Tomas"), arc=wander(until=isNear(me, Mira, 1)))',
 			hive.verbs,
 		));
 		await waitFor(() => calls.filter((c) => c.verb === 'wander').length >= 2);
 		const mira = calls.find((c) => c.character.id === 'Mira' && c.verb === 'wander');
 		const tomas = calls.find((c) => c.character.id === 'Tomas' && c.verb === 'wander');
-		assert.equal(mira?.args.until, 'isNear(me, Tomas)');
-		assert.equal(tomas?.args.until, 'isNear(me, Mira)');
+		assert.equal(mira?.args.until, 'isNear(me, Tomas, 1)');
+		assert.equal(tomas?.args.until, 'isNear(me, Mira, 1)');
 		director.dispose();
 	});
 
@@ -473,7 +475,7 @@ describe('issue(who)', () => {
 		const director = await hiveOf({ calls });
 		const hive = director.collective('Hive')!;
 		await hive.enact(parseArc(
-			'issue(who=units.filter("Guard"), arc=hold_line(at=WestGate, facing=Player))',
+			'command(who=units.filter("Guard"), arc=hold_line(at=WestGate, facing=Player))',
 			hive.verbs,
 		));
 		await waitFor(() => calls.filter((c) => c.verb === 'hold_line').length === 2);
@@ -493,15 +495,15 @@ describe('laws and tags', () => {
 		const director = await hiveOf({ calls, hurt, slow: true });
 		const hive = director.collective('Hive')!;
 		assert.equal(hive.mind.lastArc, undefined);
-		director.tick(0.05, 1);
+		director.tick(1);
 		await waitFor(() => calls.some((c) => c.character.id === 'Mira' && c.verb === 'go_to'));
 		assert.equal(hive.mind.lastArc, undefined);
 		const n = calls.filter((c) => c.character.id === 'Mira' && c.verb === 'go_to').length;
-		director.tick(0.05, 2);
+		director.tick(1);
 		await sleep(20);
 		assert.equal(calls.filter((c) => c.character.id === 'Mira' && c.verb === 'go_to').length, n);
 		await hive.enact(parseArc(
-			'issue(who=units.filter("Mira"), arc=go_to(Home))',
+			'command(who=units.filter("Mira"), arc=go_to(Home))',
 			hive.verbs,
 		));
 		await waitFor(() => calls.some((c) => c.character.id === 'Mira' && String(c.args.target) === 'Home'));
@@ -518,7 +520,7 @@ describe('laws and tags', () => {
 			.withKernels(kernels())
 			.onVerb((call) => {
 				calls.push(call);
-				return { ok: true, verb: call.verb };
+				return { status: 'ok', verb: call.verb };
 			})
 			.withContext((id) => ({ id }))
 			.addCollective({
@@ -539,7 +541,7 @@ describe('laws and tags', () => {
 		const red = director.collective('Red')!;
 		const blue = director.collective('Blue')!;
 		assert.deepEqual(red.character('Able')?.tags, ['Guard']);
-		await red.enact(parseArc('issue(who=units.filter("Guard"), arc=go_to(Keep))', red.verbs));
+		await red.enact(parseArc('command(who=units.filter("Guard"), arc=go_to(Keep))', red.verbs));
 		await waitFor(() => calls.some((c) => c.character.id === 'Able'));
 		assert.equal(calls.some((c) => c.character.id === 'Baker'), false);
 		await red.enact(parseArc('tag(who=units.filter("Able"), name=Flank)', red.verbs));
@@ -562,7 +564,7 @@ describe('commander and sightFocus', () => {
 			.withKernels(kernels())
 			.onVerb((call) => {
 				calls.push(call);
-				return { ok: true, verb: call.verb };
+				return { status: 'ok', verb: call.verb };
 			})
 			.withContext((id) => ({ id }))
 			.addCollective({
@@ -577,7 +579,7 @@ describe('commander and sightFocus', () => {
 		const captain = director.collective('Guards')!.voice;
 		assert.equal(captain, director.character('Captain'));
 		await captain.enact(parseArc(
-			'issue(who=units.filter("Mira"), arc=go_to(Keep)) ; go_to(WestGate)',
+			'command(who=units.filter("Mira"), arc=go_to(Keep)) ; go_to(WestGate)',
 			captain.verbs,
 		));
 		await waitFor(() => (
@@ -605,7 +607,7 @@ describe('commander and sightFocus', () => {
 		const conductor = hive(director);
 		assert.deepEqual(conductor.persona.pinnedSightFocus, ['isHurt(it)']);
 		assert.deepEqual(conductor.persona.sightFocus, ['isNear(it, Player)']);
-		assert.equal((await conductor.perform({ verb: 'focus', args: { expr: 'isHurt(it)' } })).ok, false);
+		assert.equal((await conductor.perform({ verb: 'focus', args: { expr: 'isHurt(it)' } })).status === 'ok', false);
 		await conductor.perform({ verb: 'focus', args: { expr: 'isNear(it, EastGate)' } });
 		await conductor.perform({ verb: 'unfocus', args: { expr: 'isNear(it, Player)' } });
 		assert.deepEqual(conductor.persona.pinnedSightFocus, ['isHurt(it)']);
@@ -652,8 +654,8 @@ describe('characters, laws, dummy me', () => {
 		const director = await hiveOf({ calls, slow: true });
 		const hive = director.collective('Hive')!;
 		await hive.enact(parseArc(
-			'issue(who=units.filter("Mira"), arc=go_to(WestGate)) '
-			+ '; issue(who=units.filter("Tomas"), arc=go_to(EastGate))',
+			'command(who=units.filter("Mira"), arc=go_to(WestGate)) '
+			+ '; command(who=units.filter("Tomas"), arc=go_to(EastGate))',
 			hive.verbs,
 		));
 		await waitFor(() => (
@@ -676,7 +678,7 @@ describe('characters, laws, dummy me', () => {
 		const hive = director.collective('Hive')!;
 		assert.ok(hive.laws.some((l) => l.name === 'flee'));
 		await hive.enact(parseArc(
-			'issue(who=units.filter("Mira"), arc=say("hold"))',
+			'command(who=units.filter("Mira"), arc=say("hold"))',
 			hive.verbs,
 		));
 		assert.ok(hive.laws.some((l) => l.name === 'flee'));
@@ -686,7 +688,7 @@ describe('characters, laws, dummy me', () => {
 	it('a unit reads itself as me in its law, not its commander', async () => {
 		const calls:VerbCall<Ctx>[] = [];
 		const director = await hiveOf({ calls, hurt: new Set(['Tomas']), commander: 'Mira' });
-		director.tick(0.05, 1);
+		director.tick(1);
 		// Only Tomas is hurt: read as the unhurt commander, his law would never start.
 		await waitFor(() => calls.some((c) => c.character.id === 'Tomas' && c.verb === 'go_to'));
 		director.dispose();
@@ -697,10 +699,10 @@ describe('characters, laws, dummy me', () => {
 		const hurt = new Set(['Mira']);
 		const director = await hiveOf({ calls, hurt, slow: true });
 		const hive = director.collective('Hive')!;
-		director.tick(0.05, 1);
+		director.tick(1);
 		await waitFor(() => hive.character('Mira')?.busy === true);
 		hurt.delete('Mira');
-		director.tick(0.05, 2);
+		director.tick(1);
 		await waitFor(() => hive.character('Mira')?.busy === false);
 		director.dispose();
 	});
@@ -732,7 +734,7 @@ describe('characters, laws, dummy me', () => {
 				],
 			})
 			.connect();
-		director.tick(0.05, 1);
+		director.tick(1);
 		assert.equal(hiveCarry, 0);
 		director.dispose();
 	});
@@ -742,7 +744,7 @@ describe('characters, laws, dummy me', () => {
 		const director = await hiveOf({ calls });
 		const hive = director.collective('Hive')!;
 		await hive.enact(parseArc(
-			'issue(who=units.filter("Mira"), arc=go_to(Keep) && hold_line(at=WestGate, facing=Player))',
+			'command(who=units.filter("Mira"), arc=go_to(Keep) && hold_line(at=WestGate, facing=Player))',
 			hive.verbs,
 		));
 		await waitFor(() => calls.some((c) => c.verb === 'hold_line'));
@@ -754,7 +756,7 @@ describe('characters, laws, dummy me', () => {
 	});
 });
 
-describe('commander pointer and sticky issue', () => {
+describe('commander pointer and sticky command', () => {
 	it('thinkThread and identity follow the living commander', async () => {
 		const director = await new ArcDirector<Ctx>()
 			.addFakeInference()
@@ -762,7 +764,7 @@ describe('commander pointer and sticky issue', () => {
 			.addStockCollectiveVerbs()
 			.withDefaultKit(COLLECTIVE_KIT)
 			.withKernels(kernels())
-			.onVerb(() => ({ ok: true, verb: 'go_to' }))
+			.onVerb(() => ({ status: 'ok', verb: 'go_to' }))
 			.withContext((id) => ({ id }))
 			.addCollective({
 				id: 'DawnParty',
@@ -806,7 +808,7 @@ describe('commander pointer and sticky issue', () => {
 						gates.push(resolve);
 					});
 				}
-				return { ok: true, verb: call.verb };
+				return { status: 'ok', verb: call.verb };
 			})
 			.onAbortArc(() => {
 				gates.forEach((release) => release());
@@ -851,7 +853,7 @@ describe('commander pointer and sticky issue', () => {
 		});
 	}
 
-	it('issue(me) fails, as does an issue that picks no unit; allUnits skips the commander', async () => {
+	it('command(me) fails, as does a command that picks no unit; allUnits skips the commander', async () => {
 		const calls:VerbCall<Ctx>[] = [];
 		const director = await new ArcDirector<Ctx>()
 			.addFakeInference()
@@ -861,7 +863,7 @@ describe('commander pointer and sticky issue', () => {
 			.withKernels(kernels())
 			.onVerb((call) => {
 				calls.push(call);
-				return { ok: true, verb: call.verb };
+				return { status: 'ok', verb: call.verb };
 			})
 			.withContext((id) => ({ id }))
 			.addCollective({
@@ -879,19 +881,19 @@ describe('commander pointer and sticky issue', () => {
 		const guards = director.collective('Guards')!;
 		assert.equal(guards.commander?.id, 'Captain');
 		const captain = guards.voice;
-		const me = await captain.enact(parseArc('issue(who=me, arc=go_to(Keep))', captain.verbs));
-		assert.equal(me.ok, false);
+		const me = await captain.enact(parseArc('command(who=me, arc=go_to(Keep))', captain.verbs));
+		assert.equal(me.status === 'ok', false);
 		assert.equal(calls.some((c) => c.character.id === 'Captain' && c.verb === 'go_to'), false);
-		const nobody = await captain.enact(parseArc('issue(who=units.filter("Archer"), arc=go_to(Keep))', captain.verbs));
-		assert.equal(nobody.ok, false);
+		const nobody = await captain.enact(parseArc('command(who=units.filter("Archer"), arc=go_to(Keep))', captain.verbs));
+		assert.equal(nobody.status === 'ok', false);
 		assert.match(nobody.reason ?? '', /picks no unit/);
-		await captain.enact(parseArc('issue(who=allUnits, arc=go_to(Home))', captain.verbs));
+		await captain.enact(parseArc('command(who=allUnits, arc=go_to(Home))', captain.verbs));
 		await waitFor(() => calls.some((c) => c.character.id === 'Mira' && String(c.args.target) === 'Home'));
 		assert.equal(calls.some((c) => c.character.id === 'Captain' && String(c.args.target) === 'Home'), false);
 		director.dispose();
 	});
 
-	it('refuses an issue that names more units than maxUnitsPerIssue', async () => {
+	it('refuses a command that names more units than maxUnitsPerCommand', async () => {
 		const calls:VerbCall<Ctx>[] = [];
 		const director = await new ArcDirector<Ctx>()
 			.addFakeInference()
@@ -901,14 +903,14 @@ describe('commander pointer and sticky issue', () => {
 			.withKernels(kernels())
 			.onVerb((call) => {
 				calls.push(call);
-				return { ok: true, verb: call.verb };
+				return { status: 'ok', verb: call.verb };
 			})
 			.withContext((id) => ({ id }))
 			.addCollective({
 				id: 'Hive',
 				mind: { skipHeartbeat: true },
 				kit: COLLECTIVE_KIT,
-				maxUnitsPerIssue: 1,
+				maxUnitsPerCommand: 1,
 				identity: { role: 'Leads.' },
 				characters: [
 					{ id: 'Mira', tags: ['Shopper'] },
@@ -917,15 +919,15 @@ describe('commander pointer and sticky issue', () => {
 			})
 			.connect();
 		const hive = director.collective('Hive')!;
-		const all = await hive.enact(parseArc('issue(who=units.filter("Shopper"), arc=go_to(Baker))', hive.verbs));
-		assert.equal(all.ok, false);
-		assert.match(all.reason ?? '', /that is 2 units; an issue names one/);
+		const all = await hive.enact(parseArc('command(who=units.filter("Shopper"), arc=go_to(Baker))', hive.verbs));
+		assert.equal(all.status === 'ok', false);
+		assert.match(all.reason ?? '', /that is 2 units; a command names one/);
 		assert.equal(calls.length, 0);
-		const one = await hive.enact(parseArc('issue(who=units.filter("Mira"), arc=go_to(Baker))', hive.verbs));
-		assert.equal(one.ok, true);
+		const one = await hive.enact(parseArc('command(who=units.filter("Mira"), arc=go_to(Baker))', hive.verbs));
+		assert.equal(one.status === 'ok', true);
 		await waitFor(() => calls.some((c) => c.character.id === 'Mira'));
 		assert.equal(calls.some((c) => c.character.id === 'Tomas'), false);
-		assert.match(hive.promptSection(hive.mind), /an issue names one unit/);
+		assert.match(hive.promptSection(hive.mind), /a command names one unit/);
 		director.dispose();
 	});
 
@@ -933,24 +935,24 @@ describe('commander pointer and sticky issue', () => {
 		const director = await hiveOf({ slow: true });
 		const hive = director.collective('Hive')!;
 		await hive.enact(parseArc(
-			'issue(who=units.filter("Guard"), arc=go_to(Keep))',
+			'command(who=units.filter("Guard"), arc=go_to(Keep))',
 			hive.verbs,
 		));
 		await waitFor(() => hive.character('Mira')?.busy === true && hive.character('Tomas')?.busy === true);
 		const text = hive.promptSection(hive.mind);
-		assert.match(text, /Mira, Tomas: go_to\(Keep\)/);
+		assert.match(text, /^programs\/Alpha\.arc \(units\.filter\("Alpha"\) = Mira 5\/5 hp, Tomas 5\/5 hp; running 0s\)\n\{"steps":\[\{"verb":"go_to","target":"Keep"\}\]\} \/\/ ← now, 0s$/m);
 		director.dispose();
 	});
 
 	it('shows how each unit program is going, failures with why and choose picks', async () => {
 		const director = await hiveOf({ slow: true });
 		const hive = director.collective('Hive')!;
-		await hive.enact(parseArc('issue(who=units.filter("Guard"), arc=go_to(Keep))', hive.verbs));
+		await hive.enact(parseArc('command(who=units.filter("Guard"), arc=go_to(Keep))', hive.verbs));
 		await waitFor(() => hive.character('Mira')?.busy === true);
 		const mira = hive.character('Mira')!;
-		mira.record.note({ ok: true, verb: 'shoot' });
+		mira.record.note({ status: 'ok', verb: 'shoot' });
 		for (let i = 0; i < 3; i++) {
-			mira.record.note({ ok: false, verb: 'shoot', reason: 'no line of sight' });
+			mira.record.note({ status: 'failed', verb: 'shoot', reason: 'no line of sight' });
 		}
 		mira.record.picked('nearest');
 		mira.record.picked('finish');
@@ -965,7 +967,7 @@ describe('commander pointer and sticky issue', () => {
 		const director = await hiveOf();
 		const hive = director.collective('Hive')!;
 		const text = hive.promptSection(hive.mind);
-		assert.match(text, /Units \(issue who=units\.filter\("Tag"\)/);
+		assert.match(text, /Units \(command who=units\.filter\("Tag"\)/);
 		assert.match(text, /^\| Mira \| Guard \|/m);
 		assert.match(text, /^\| Tomas \| Guard \|/m);
 		director.dispose();
@@ -976,10 +978,10 @@ describe('commander pointer and sticky issue', () => {
 		const director = await new ArcDirector<Ctx>()
 			.withPriorityQueue({
 				processInterval: 0,
-				watchInterval: 0,
 				heartbeatStart: 100,
 				heartbeatMin: 100,
 			})
+			.withIntervals({ watch: 0, think: 0 })
 			.addFakeInference()
 			.addStockVerbs()
 			.addStockCollectiveVerbs()
@@ -987,7 +989,7 @@ describe('commander pointer and sticky issue', () => {
 			.withKernels(kernels(new Set(['Mira', 'Tomas'])))
 			.onVerb((call) => {
 				calls.push(call);
-				return { ok: true, verb: call.verb };
+				return { status: 'ok', verb: call.verb };
 			})
 			.withContext((id) => (id === 'Mira' ? undefined : { id }))
 			.addCollective({
@@ -1008,7 +1010,7 @@ describe('commander pointer and sticky issue', () => {
 				}],
 			})
 			.connect();
-		director.tick(1, 1);
+		director.tick(1);
 		await waitFor(() => calls.some((c) => c.character.id === 'Tomas' && c.verb === 'go_to'));
 		assert.equal(calls.some((c) => c.character.id === 'Mira'), false);
 		director.dispose();
@@ -1022,7 +1024,7 @@ describe('commander pointer and sticky issue', () => {
 			.addStockCollectiveVerbs()
 			.withDefaultKit(COLLECTIVE_KIT)
 			.withKernels(kernels())
-			.onVerb(() => ({ ok: true, verb: 'go_to' }))
+			.onVerb(() => ({ status: 'ok', verb: 'go_to' }))
 			.withContext((id) => ({ id }))
 			.onCommanderVacant((collective, character) => vacant.push({ collective: collective.id, character: character.id }))
 			.addCollective({
@@ -1048,11 +1050,11 @@ describe('laws with an exit', () => {
 		const director = await hiveOf({ calls });
 		const hive = director.collective('Hive')!;
 		hive.addLaw({ name: 'cheer', watch: '1 > 0', arc: 'go_to(Home)', times: 1 }, true);
-		director.tick(0.05, 1);
+		director.tick(1);
 		assert.ok(!hive.laws.some((law) => law.name === 'cheer'));
 		await waitFor(() => calls.length === 2);
 		await sleep(20);
-		director.tick(0.05, 2);
+		director.tick(1);
 		await sleep(20);
 		assert.deepEqual(calls.map((c) => c.character.id).sort(), ['Mira', 'Tomas']);
 		director.dispose();
@@ -1064,7 +1066,7 @@ describe('laws with an exit', () => {
 		const hive = director.collective('Hive')!;
 		hive.addLaw({ name: 'mira', watch: 'me.id == "Mira"', arc: 'go_to(Home)', times: 1 });
 		hive.addLaw({ name: 'tomas', watch: '1 > 2', arc: 'go_to(Home)', until: 'me.id == "Tomas"' });
-		director.tick(0.05, 1);
+		director.tick(1);
 		await waitFor(() => calls.length === 1);
 		assert.equal(calls[0].character.id, 'Mira');
 		const named = (name:string):Law | undefined => hive.laws.find((law) => law.name === name);
@@ -1083,7 +1085,7 @@ describe('laws with an exit', () => {
 			.withKernels(kernels())
 			.onVerb((call) => {
 				calls.push(call);
-				return { ok: true, verb: call.verb };
+				return { status: 'ok', verb: call.verb };
 			})
 			.withContext((id) => ({ id }))
 			.addCharacter({
@@ -1094,7 +1096,7 @@ describe('laws with an exit', () => {
 				laws: [{ name: 'speech', watch: '1 > 0', arc: 'go_to(Keep)', times: 2 }],
 			});
 		const first = await build().connect();
-		first.tick(0.05, 1);
+		first.tick(1);
 		await waitFor(() => calls.length === 1);
 		const law = first.character('Guard')!.laws.find((l) => l.name === 'speech');
 		assert.deepEqual(law?.progress, { Guard: { runs: 1 } });
@@ -1105,11 +1107,11 @@ describe('laws with an exit', () => {
 		await second.connect();
 		const guard = second.character('Guard')!;
 		assert.deepEqual(guard.laws.find((l) => l.name === 'speech')?.progress, { Guard: { runs: 1 } });
-		second.tick(0.05, 1);
+		second.tick(1);
 		await waitFor(() => calls.length === 2);
 		assert.ok(!guard.laws.some((l) => l.name === 'speech'));
 		await sleep(20);
-		second.tick(0.05, 2);
+		second.tick(1);
 		await sleep(20);
 		assert.equal(calls.length, 2);
 		second.dispose();
@@ -1131,12 +1133,12 @@ describe('laws with an exit', () => {
 		const director = await hiveOf({ calls });
 		const mira = director.character('Mira')!;
 		void mira.enact(parseArc('when(watch=1 > 0, arc=go_to(Home), times=1)', mira.verbs));
-		director.tick(0.05, 1);
+		director.tick(1);
 		await waitFor(() => calls.length === 1);
 		await waitFor(() => !mira.busy);
 		assert.ok(mira.arc, 'its program is still there');
 		await sleep(20);
-		director.tick(0.05, 2);
+		director.tick(1);
 		await sleep(20);
 		assert.equal(calls.length, 1);
 		director.dispose();
@@ -1149,7 +1151,7 @@ describe('solo law', () => {
 			.addFakeInference()
 			.addStockVerbs()
 			.withKernels(kernels())
-			.onVerb(() => ({ ok: true, verb: 'go_to' }))
+			.onVerb(() => ({ status: 'ok', verb: 'go_to' }))
 			.withContext((id) => ({ id }))
 			.addCharacter({
 				id: 'Guard',
@@ -1197,7 +1199,7 @@ describe('transfers', () => {
 				if (call.verb === 'go_to') {
 					await held;
 				}
-				return { ok: true, verb: call.verb };
+				return { status: 'ok', verb: call.verb };
 			})
 			.withContext((id) => ({ id }))
 			.onCommanderVacant((party, character) => opts.vacant?.push(`${party.id}:${character.id}`))
@@ -1236,7 +1238,7 @@ describe('transfers', () => {
 	it('join, move and leave keep the running arc and the law that started it', async () => {
 		const { director, calls, release, tom, dawn, dusk } = await stage({ hurt: new Set(['Tom']) });
 		const flee = tom.laws[0];
-		director.tick(0.05, 1);
+		director.tick(1);
 		await waitFor(() => calls.some((c) => c.character.id === 'Tom' && c.verb === 'go_to'));
 		const ownMind = tom.mind;
 		tom.collective = dawn;
@@ -1245,7 +1247,7 @@ describe('transfers', () => {
 		assert.deepEqual(tom.laws, []);
 		assert.equal(dawn.laws.find((law) => law.name === 'Tom.flee'), flee);
 		assert.equal(tom.liveArc, true);
-		director.tick(0.05, 2);
+		director.tick(1);
 		await sleep(20);
 		assert.equal(calls.filter((c) => c.character.id === 'Tom' && c.verb === 'go_to').length, 1);
 		tom.collective = dusk;
@@ -1258,7 +1260,7 @@ describe('transfers', () => {
 		assert.equal(tom.mind?.owner, tom);
 		assert.equal(tom.mind?.setting('rank'), 2);
 		assert.equal(tom.liveArc, true);
-		director.tick(0.05, 3);
+		director.tick(1);
 		await sleep(20);
 		assert.equal(calls.filter((c) => c.character.id === 'Tom' && c.verb === 'go_to').length, 1);
 		release();
@@ -1310,10 +1312,10 @@ describe('transfers', () => {
 	it('a member\'s own law step writes its own law; the voice writes the collective\'s', async () => {
 		const { director, release, dawn } = await stage();
 		const wisp = dawn.character('Wisp')!;
-		assert.equal((await wisp.enact(parseArc('law(watch=1 > 0, arc=wait(), name=hold)', wisp.verbs))).ok, true);
-		assert.equal((await wisp.enact(parseArc('law(who=units, watch=1 > 0, arc=wait(), name=x)', wisp.verbs))).ok, false);
+		assert.equal((await wisp.enact(parseArc('law(watch=1 > 0, arc=wait(), name=hold)', wisp.verbs))).status === 'ok', true);
+		assert.equal((await wisp.enact(parseArc('law(who=units, watch=1 > 0, arc=wait(), name=x)', wisp.verbs))).status === 'ok', false);
 		const voice = dawn.voice;
-		assert.equal((await voice.enact(parseArc('law(who=units, watch=1 > 0, arc=wait(), name=rally)', voice.verbs))).ok, true);
+		assert.equal((await voice.enact(parseArc('law(who=units, watch=1 > 0, arc=wait(), name=rally)', voice.verbs))).status === 'ok', true);
 		assert.deepEqual(dawn.laws.map((law) => [law.name, law.who]), [['rally', 'units'], ['Wisp.hold', 'me']]);
 		release();
 		director.dispose();
@@ -1323,7 +1325,8 @@ describe('transfers', () => {
 		const events:ThinkEvent[] = [];
 		let director:ArcDirector<Ctx> | undefined;
 		director = await new ArcDirector<Ctx>()
-			.withPriorityQueue({ processInterval: 0, watchInterval: 0, heartbeatStart: 100, heartbeatMin: 100 })
+			.withPriorityQueue({ processInterval: 0, heartbeatStart: 100, heartbeatMin: 100 })
+			.withIntervals({ watch: 0, think: 0 })
 			.withMind((m) => m.withArcFormat('text'))
 			.addFakeInference(() => {
 				const hive = director!.collective('Hive')!;
@@ -1335,7 +1338,7 @@ describe('transfers', () => {
 			.withDefaultKit(COLLECTIVE_KIT)
 			.withKernels(kernels())
 			.withContext((id) => ({ id }))
-			.onVerb(({ verb }) => ({ ok: true, verb }))
+			.onVerb(({ verb }) => ({ status: 'ok', verb }))
 			.onThink((event) => events.push(event))
 			.addCollective({ id: 'Hive', mind: { skipHeartbeat: true }, kit: COLLECTIVE_KIT, commander: 'Mira', characters: [{ id: 'Mira' }, { id: 'Tomas' }] })
 			.connect();
@@ -1351,13 +1354,140 @@ describe('transfers', () => {
 		const mira = director.collective('Hive')!.character('Mira')!;
 		void mira.enact(parseArc('go_to(Keep)', mira.verbs));
 		await waitFor(() => calls.length === 1);
-		assert.equal((await mira.enact(parseArc('wait()', mira.verbs))).ok, true);
+		assert.equal((await mira.enact(parseArc('wait()', mira.verbs))).status === 'ok', true);
 		assert.equal(mira.verb, 'go_to', 'it needs no body: the walk goes on');
-		assert.equal((await mira.enact(parseArc('go_to(Keep)', mira.verbs))).ok, true);
+		assert.equal((await mira.enact(parseArc('go_to(Keep)', mira.verbs))).status === 'ok', true);
 		assert.equal(calls.length, 1, 'the same program is not begun again');
 		void mira.enact(parseArc('go_to(Gate)', mira.verbs));
 		await waitFor(() => calls.length === 2);
 		assert.equal(calls[1]!.args.target, 'Gate', 'one that needs the body takes over');
+		director.dispose();
+	});
+
+	it('a commander\'s pass keeps every unit\'s program running and changes no law', async () => {
+		const calls:VerbCall<Ctx>[] = [];
+		const director = await hiveOf({ calls, hold: (call) => call.verb === 'go_to' });
+		const hive = director.collective('Hive')!;
+		void hive.enact(parseArc('command(who=units, arc=go_to(Keep)) ; law(who=units, watch=1 > 2, arc=wait(), name=x)', hive.verbs));
+		await waitFor(() => calls.length === 2 && hive.laws.some((law) => law.name === 'x'));
+		const programs = hive.characters.map((c) => c.arc);
+		const laws = [...hive.laws];
+		assert.equal((await hive.enact(parseArc('pass()', hive.verbs))).status === 'ok', true);
+		await sleep(5);
+		assert.deepEqual(hive.characters.map((c) => c.arc), programs, 'every program is the one it was');
+		assert.equal(calls.length, 2, 'none is begun again');
+		assert.deepEqual(hive.laws, laws);
+		director.dispose();
+	});
+
+	it('a pass a commander wrote into a unit\'s program does nothing there, and the program goes on', async () => {
+		const calls:VerbCall<Ctx>[] = [];
+		const director = await hiveOf({ calls });
+		const hive = director.collective('Hive')!;
+		await hive.enact(parseArc('command(who=units.filter("Mira"), arc=pass() && go_to(Keep))', hive.verbs));
+		await waitFor(() => calls.length === 1);
+		assert.deepEqual([calls[0].character.id, calls[0].verb], ['Mira', 'go_to']);
+		director.dispose();
+	});
+
+	it('shows its units\' programs as files: one a program, every step a unit is on marked with who, and who finished how', async () => {
+		const held = (call:VerbCall<Ctx>):boolean => (call.character.id === 'Mira' && call.args.target === 'Keep') || (call.character.id === 'Tomas' && call.args.target === 'Gate');
+		const director = await new ArcDirector<Ctx>()
+			.withIntervals({ watch: 0, think: 0 })
+			.withMind((m) => m.withArcFormat('text'))
+			.addFakeInference()
+			.addStockVerbs()
+			.addStockCollectiveVerbs()
+			.withDefaultKit(COLLECTIVE_KIT)
+			.withKernels(kernels())
+			.onVerb(async (call) => {
+				if (held(call)) {
+					await new Promise(() => {});
+				}
+				return { status: 'ok', verb: call.verb };
+			})
+			.withContext((id) => ({ id }))
+			.addCollective({ id: 'Hive', mind: { skipHeartbeat: true }, kit: COLLECTIVE_KIT, characters: [{ id: 'Mira' }, { id: 'Tomas' }, { id: 'Ash' }] })
+			.connect();
+		const hive = director.collective('Hive')!;
+		void hive.enact(parseArc('command(who=units, arc=go_to(Keep) ; go_to(Gate))', hive.verbs));
+		await waitFor(() => hive.character('Mira')!.verb === 'go_to' && hive.character('Tomas')!.lastStep?.args.target === 'Gate' && !hive.character('Ash')!.busy);
+		assert.match(hive.promptSection(hive.mind), new RegExp([
+			'Programs your units run now:',
+			'',
+			'programs/Alpha\\.arc \\(units\\.filter\\("Alpha"\\) = Mira 5/5 hp, Tomas 5/5 hp, Ash 5/5 hp; running 0s\\)',
+			'go_to\\(Keep\\) // ← Mira, 0s',
+			'go_to\\(Gate\\) // ← Tomas, 0s',
+			'// done: Ash, ok',
+			'',
+			'These files run now\\. A program can be right for some of its units and wrong for others: command only the units it is wrong for, by name or by a filter that leaves the rest out; reply pass\\(\\) if all still fit\\.$',
+		].join('\n')));
+		assert.match(hive.promptSection(hive.mind), /\| Alpha \| 3 unit \| 15\/15 \| 1 going to Keep; 1 going to Gate; 1 done, ok \|/, 'one that finished is done, not idle');
+		director.dispose();
+	});
+
+	it('names a program file as its units are addressed: its group, which reaches exactly them', async () => {
+		const calls:VerbCall<Ctx>[] = [];
+		const director = await new ArcDirector<Ctx>()
+			.withIntervals({ watch: 0, think: 0 })
+			.withMind((m) => m.withArcFormat('text'))
+			.addFakeInference()
+			.addStockVerbs()
+			.addStockCollectiveVerbs()
+			.withDefaultKit(COLLECTIVE_KIT)
+			.withKernels(kernels())
+			.onVerb((call) => {
+				calls.push(call);
+				return new Promise((done) => {
+					call.signal.addEventListener('abort', () => done({ status: 'stopped', verb: call.verb }), { once: true });
+				});
+			})
+			.withContext((id) => ({ id }))
+			.addCollective({ id: 'Hive', mind: { skipHeartbeat: true }, kit: COLLECTIVE_KIT, characters: [{ id: 'Mira' }, { id: 'Tomas' }, { id: 'Ash' }] })
+			.connect();
+		const hive = director.collective('Hive')!;
+		await hive.enact(parseArc('command(who=units.filter(u => u.id != "Ash"), arc=go_to(Keep), group=Vanguard) ; command(who=units.filter("Ash"), arc=go_to(Keep))', hive.verbs));
+		await waitFor(() => calls.length === 3);
+		const text = hive.promptSection(hive.mind);
+		assert.match(text, /^programs\/Vanguard\.arc \(units\.filter\("Vanguard"\) = Mira 5\/5 hp, Tomas 5\/5 hp; running 0s\)\ngo_to\(Keep\) \/\/ ← now, 0s$/m);
+		assert.match(text, /^programs\/Ash\.arc \(units\.filter\("Ash"\) = Ash 5\/5 hp; running 0s\)\ngo_to\(Keep\) \/\/ ← now, 0s$/m, 'the same program, another file: it is addressed apart');
+		await hive.enact(parseArc('command(who=units.filter("Vanguard"), arc=go_to(Gate))', hive.verbs));
+		await waitFor(() => calls.length === 5);
+		assert.deepEqual(calls.slice(3).map((call) => call.character.id).sort(), ['Mira', 'Tomas'], 'the file\'s name re-targets exactly its units');
+		await hive.enact(parseArc('command(who=units.filter("Tomas"), arc=go_to(Well))', hive.verbs));
+		await waitFor(() => calls.length === 6);
+		assert.equal(calls[5].character.id, 'Tomas', 'and the name beside each unit picks it alone');
+		director.dispose();
+	});
+
+	it('marks a program step a law holds apart from the step the law runs', async () => {
+		const director = await new ArcDirector<Ctx>()
+			.withIntervals({ watch: 0, think: 0 })
+			.withMind((m) => m.withArcFormat('text'))
+			.addFakeInference()
+			.addStockVerbs()
+			.addStockCollectiveVerbs()
+			.withDefaultKit(COLLECTIVE_KIT)
+			.withKernels(kernels())
+			// A walk goes on until it is stopped, as a host's does.
+			.onVerb((call) => new Promise((done) => {
+				call.signal.addEventListener('abort', () => done({ status: 'stopped', verb: call.verb }), { once: true });
+			}))
+			.withContext((id) => ({ id }))
+			.addCollective({ id: 'Hive', mind: { skipHeartbeat: true }, kit: COLLECTIVE_KIT, characters: [{ id: 'Mira' }, { id: 'Tomas' }] })
+			.connect();
+		const hive = director.collective('Hive')!;
+		const mira = hive.character('Mira')!;
+		hive.command([mira], parseArc('go_to(Keep)', mira.verbs));
+		await waitFor(() => mira.verb === 'go_to');
+		await hive.enact(parseArc('law(who=units.filter("Mira"), watch=1 > 0, arc=go_to(Gate), name=bolt)', hive.verbs));
+		for (let i = 0; i < 20 && mira.lastStep?.args.target !== 'Gate'; i++) {
+			director.tick(0.5);
+			await sleep(5);
+		}
+		const text = hive.promptSection(hive.mind);
+		assert.match(text, /^go_to\(Keep\) \/\/ ⏸ Mira, while law bolt runs$/m);
+		assert.match(text, /- bolt \(for units\.filter\("Mira"\)\): when 1 > 0, it runs go_to\(Gate\); running for Mira: go_to\(Gate\)$/m);
 		director.dispose();
 	});
 
@@ -1366,7 +1496,8 @@ describe('transfers', () => {
 		const asked:string[] = [];
 		let think = 0;
 		const director = await new ArcDirector<Ctx>()
-			.withPriorityQueue({ processInterval: 0, watchInterval: 0, heartbeatStart: 100, heartbeatMin: 100 })
+			.withPriorityQueue({ processInterval: 0, heartbeatStart: 100, heartbeatMin: 100 })
+			.withIntervals({ watch: 0, think: 0 })
 			.withMind((m) => m.withArcFormat('text'))
 			.withReplaceCheck()
 			.addFakeInference((req) => {
@@ -1376,7 +1507,7 @@ describe('transfers', () => {
 					return { content: '{"Mira":"replace","Tomas":"keep"}', toolCalls: [] };
 				}
 				think += 1;
-				return { content: `issue(who=units, arc=go_to(${think === 1 ? 'Keep' : 'Gate'}))`, toolCalls: [] };
+				return { content: `command(who=units, arc=go_to(${think === 1 ? 'Keep' : 'Gate'}))`, toolCalls: [] };
 			})
 			.addStockVerbs()
 			.addStockCollectiveVerbs()
@@ -1386,7 +1517,7 @@ describe('transfers', () => {
 			.onVerb(async (call) => {
 				calls.push(call);
 				await new Promise(() => {});
-				return { ok: true, verb: call.verb };
+				return { status: 'ok', verb: call.verb };
 			})
 			.addCollective({ id: 'Hive', mind: { skipHeartbeat: true }, kit: COLLECTIVE_KIT, characters: [{ id: 'Mira' }, { id: 'Tomas' }] })
 			.connect();
@@ -1410,7 +1541,8 @@ describe('transfers', () => {
 		const release:(()=>void)[] = [];
 		let reply = 'wait()';
 		const director = await new ArcDirector<Ctx>()
-			.withPriorityQueue({ processInterval: 0, watchInterval: 0, heartbeatStart: 100, heartbeatMin: 100 })
+			.withPriorityQueue({ processInterval: 0, heartbeatStart: 100, heartbeatMin: 100 })
+			.withIntervals({ watch: 0, think: 0 })
 			.withMind((m) => m.withArcFormat('text'))
 			.withReplaceCheck()
 			.addFakeInference((req) => {
@@ -1429,15 +1561,15 @@ describe('transfers', () => {
 				await new Promise<void>((resolve) => {
 					release.push(resolve);
 				});
-				return { ok: true, verb: call.verb };
+				return { status: 'ok', verb: call.verb };
 			})
 			.addCollective({ id: 'Hive', mind: { skipHeartbeat: true }, kit: COLLECTIVE_KIT, characters: [{ id: 'Mira' }] })
 			.connect();
 		const hive = director.collective('Hive')!;
-		reply = 'issue(who=units, arc=go_to(Keep))';
+		reply = 'command(who=units, arc=go_to(Keep))';
 		await hive.mind.thinkNow();
 		await waitFor(() => calls.length >= 1);
-		reply = 'issue(who=units, arc=go_to(Gate))';
+		reply = 'command(who=units, arc=go_to(Gate))';
 		await hive.mind.thinkNow();
 		release.splice(0).forEach((go) => go());
 		await waitFor(() => calls.length >= 2);
@@ -1453,7 +1585,8 @@ describe('transfers', () => {
 		// Anything but replace or keep appends: omitted, a word it made up, or a reply that does not read.
 		const appendReplies = ['{}', '{"Mira":"whatever"}', 'no idea'];
 		const director = await new ArcDirector<Ctx>()
-			.withPriorityQueue({ processInterval: 0, watchInterval: 0, heartbeatStart: 100, heartbeatMin: 100 })
+			.withPriorityQueue({ processInterval: 0, heartbeatStart: 100, heartbeatMin: 100 })
+			.withIntervals({ watch: 0, think: 0 })
 			.withMind((m) => m.withArcFormat('text'))
 			.withReplaceCheck()
 			.addFakeInference((req) => {
@@ -1474,20 +1607,18 @@ describe('transfers', () => {
 				await new Promise<void>((resolve) => {
 					release.push(resolve);
 				});
-				return { ok: true, verb: call.verb };
+				return { status: 'ok', verb: call.verb };
 			})
 			.addCollective({ id: 'Hive', mind: { skipHeartbeat: true }, kit: COLLECTIVE_KIT, characters: [{ id: 'Mira' }] })
 			.connect();
 		const hive = director.collective('Hive')!;
 		const mira = hive.character('Mira')!;
 		// A loop waits for game time to move before it goes round again.
-		let clock = 0;
 		const time = setInterval(() => {
-			clock += 0.05;
-			director.tick(0.05, clock);
+			director.tick(0.05);
 		}, 2);
 		const think = async (arc:string):Promise<void> => {
-			reply = `issue(who=units, arc=${arc})`;
+			reply = `command(who=units, arc=${arc})`;
 			await hive.mind.thinkNow();
 			reply = 'wait()';
 		};
@@ -1543,29 +1674,30 @@ describe('transfers', () => {
 		let down = false;
 		const vacated:string[] = [];
 		const director = await new ArcDirector<Ctx>()
-			.withPriorityQueue({ processInterval: 0, watchInterval: 0, heartbeatStart: 100, heartbeatMin: 100 })
+			.withPriorityQueue({ processInterval: 0, heartbeatStart: 100, heartbeatMin: 100 })
+			.withIntervals({ watch: 0, think: 0 })
 			.addFakeInference()
 			.addStockVerbs()
 			.addStockCollectiveVerbs()
-			.withDefaultKit({ verbs: ['issue', 'wait'], tools: [] })
+			.withDefaultKit({ verbs: ['command', 'wait'], tools: [] })
 			.withWorld({ find: () => undefined, getPose: () => undefined, isDown: (id:string) => down && id === 'Mira' })
 			.withKernels(kernels())
 			.withContext((id) => ({ id }))
 			.onCommanderVacant((_, character) => vacated.push(character.id))
-			.addCollective({ id: 'Hive', mind: { skipHeartbeat: true }, kit: { verbs: ['issue', 'wait'], tools: [] }, commander: 'Mira', characters: [{ id: 'Mira' }, { id: 'Tomas' }] })
+			.addCollective({ id: 'Hive', mind: { skipHeartbeat: true }, kit: { verbs: ['command', 'wait'], tools: [] }, commander: 'Mira', characters: [{ id: 'Mira' }, { id: 'Tomas' }] })
 			.connect();
 		const hive = director.collective('Hive')!;
-		director.tick(0.1, 0.1);
+		director.tick(0.1);
 		assert.equal(hive.commander?.id, 'Mira');
 		down = true;
-		director.tick(0.1, 0.2);
+		director.tick(0.1);
 		assert.equal(hive.commander, null);
 		assert.deepEqual(vacated, ['Mira']);
 		director.dispose();
 	});
 
 	it('sends back a trade that names no item or no real count, an empty arc, and a verb it does not have', async () => {
-		const replies = ['offer(give={"filter":1}, get={"gold":5})', 'offer(give={"gold":-1})', '{"steps":[{"verb":"issue","who":"units","arc":[]}]}', 'wait()'];
+		const replies = ['offer(give={"filter":1}, get={"gold":5})', 'offer(give={"gold":-1})', '{"steps":[{"verb":"command","who":"units","arc":[]}]}', 'wait()'];
 		const asked:string[] = [];
 		const director = await new ArcDirector<Ctx>()
 			.withMind((m) => m.withArcFormat('text').withRepairRetries(3))
@@ -1583,7 +1715,7 @@ describe('transfers', () => {
 		await director.character('Mira')!.mind!.thinkNow({ enact: false });
 		assert.match(asked[1]!, /'filter' is not an item/);
 		assert.match(asked[2]!, /-1 of 'gold'; each count is a whole number above 0/);
-		assert.match(asked[3]!, /unknown verb 'issue'.*You can use only: /s);
+		assert.match(asked[3]!, /unknown verb 'command'.*You can use only: /s);
 		director.dispose();
 	});
 
@@ -1591,7 +1723,7 @@ describe('transfers', () => {
 		const director = await hiveOf({ calls: [], hold: () => false });
 		const hive = director.collective('Hive')!;
 		const mira = hive.character('Mira')!;
-		hive.issue([mira], parseArc('when(watch=hasHeard, arc=wait())', mira.verbs));
+		hive.command([mira], parseArc('when(watch=hasHeard, arc=wait())', mira.verbs));
 		await waitFor(() => !!mira.arcSession?.parked);
 		await sleep(5);
 		assert.ok(mira.orders, 'parked on its when');
@@ -1604,11 +1736,11 @@ describe('transfers', () => {
 		const director = await hiveOf({ calls: [], hold: () => true });
 		const hive = director.collective('Hive')!;
 		const mira = hive.character('Mira')!;
-		hive.issue([mira], parseArc('go_to(Keep)', mira.verbs));
+		hive.command([mira], parseArc('go_to(Keep)', mira.verbs));
 		await waitFor(() => mira.liveArc);
 		const orders = mira.orders;
 		assert.ok(orders);
-		hive.issue([mira], parseArc('say(text=hold)', mira.verbs));
+		hive.command([mira], parseArc('say(text=hold)', mira.verbs));
 		await sleep(5);
 		assert.equal(mira.orders, orders);
 		director.dispose();
@@ -1654,13 +1786,55 @@ describe('transfers', () => {
 		director.dispose();
 	});
 
+	it('reads a watch\'s name as its value, so an arc may wait on it', async () => {
+		const asked:string[] = [];
+		const director = await new ArcDirector<Ctx>()
+			.withMind((m) => m.withArcFormat('text').withRepairRetries(1))
+			.addFakeInference((req) => {
+				asked.push(String(req.messages.at(-1)?.content));
+				return { content: asked.length === 1 ? 'wait(until=fallen || !calm)' : 'wait()', toolCalls: [] };
+			})
+			.addStockVerbs()
+			.withDefaultKit({ verbs: ['wait'], tools: [] })
+			.withWorld({ find: () => undefined, getPose: () => undefined, transfer: () => undefined, getNeighbors: () => [], canPass: () => true, steerToward: () => true } as never)
+			.withKernels(kernels())
+			.withContext((id) => ({ id }))
+			.addCharacter({ id: 'Mira', mind: { skipHeartbeat: true }, pinnedWatches: { fallen: 'isHurt(me)', calm: 'count(others) == 0' } })
+			.connect();
+		const arc = await director.character('Mira')!.mind!.thinkNow({ enact: false });
+		assert.equal(asked.length, 1, asked[1]);
+		assert.equal(arc![0].args.until, 'fallen || !calm');
+		assert.equal(director.evaluate('Mira', 'fallen || !calm').error, undefined);
+		director.dispose();
+	});
+
+	it('thinks again instead of repairing a reply aimed at a thing gone since its mind looked', async () => {
+		const asked:string[] = [];
+		const director = await new ArcDirector<Ctx>()
+			.withMind((m) => m.withArcFormat('text').withRepairRetries(3))
+			.addFakeInference((req) => {
+				asked.push(String(req.messages.at(-1)?.content));
+				return { content: 'go_to(Cobweb)', toolCalls: [] };
+			})
+			.addStockVerbs()
+			.withDefaultKit({ verbs: ['go_to', 'wait'], tools: [] })
+			.withWorld({ find: () => undefined, getPose: () => undefined, transfer: () => undefined, getNeighbors: () => [], canPass: () => true, steerToward: () => true } as never)
+			.withKernels(kernels())
+			.withContext((id) => ({ id }))
+			.addCharacter({ id: 'Mira', mind: { skipHeartbeat: true }, memories: [{ text: 'Last I saw Cobweb: Cobweb 5m in front of you', tags: ['seen:Cobweb', 'Cobweb', 'seen'], category: 'semantic' }] })
+			.connect();
+		await assert.rejects(director.character('Mira')!.mind!.thinkNow({ enact: false }), (err:Error) => err instanceof BlockedArcError && /Cobweb is gone since you looked/.test(err.message));
+		assert.equal(asked.length, 1, 'no repair turn on the old sight');
+		director.dispose();
+	});
+
 	it('sends back what could never work: misused watches, unknown names, orders to no one, too many or twin laws', async () => {
 		const asked:string[] = [];
 		const replies = [
 			"law(watch=some(others.nearby.filter('item').length) > 0, arc=wait())",
 			'law(watch=count(others) > 0, arc=wait(), until=some(3))',
 			'law(watch=some_condition, arc=wait())',
-			'issue(who=units.filter("Nobody"), arc=wait())',
+			'command(who=units.filter("Nobody"), arc=wait())',
 			'go_to(Nowhere)',
 			'law(watch=count(others) > 5, arc=wait(), name=two)',
 			'law(watch=count(others) > 6, arc=wait(), name=three)',
@@ -1674,11 +1848,11 @@ describe('transfers', () => {
 			})
 			.addStockVerbs()
 			.addStockCollectiveVerbs()
-			.withDefaultKit({ verbs: ['issue', 'law', 'wait', 'go_to'], tools: [] })
+			.withDefaultKit({ verbs: ['command', 'law', 'wait', 'go_to'], tools: [] })
 			.withWorld({ find: (id:string) => (['Mira', 'Tomas', 'Keep'].includes(id) ? id : undefined), getPose: () => undefined, getNeighbors: () => [], canPass: () => true, steerToward: () => true } as never)
 			.withKernels(kernels())
 			.withContext((id) => ({ id }))
-			.addCollective({ id: 'Hive', mind: { skipHeartbeat: true }, kit: { verbs: ['issue', 'law', 'wait', 'go_to'], tools: [] }, commander: 'Mira', maxLaws: 1, characters: [{ id: 'Mira' }, { id: 'Tomas' }] })
+			.addCollective({ id: 'Hive', mind: { skipHeartbeat: true }, kit: { verbs: ['command', 'law', 'wait', 'go_to'], tools: [] }, commander: 'Mira', maxLaws: 1, characters: [{ id: 'Mira' }, { id: 'Tomas' }] })
 			.connect();
 		const hive = director.collective('Hive')!;
 		// The first law goes in by hand, to be the twin and to fill the cap.
@@ -1729,7 +1903,7 @@ describe('transfers', () => {
 	it('keeps the good steps of a reply and sends back only the bad, shown only what stands', async () => {
 		const stage = async (replies:string[], retries:number):Promise<{ arc:Arc | null; asked:{ last:string; before:string }[]; hive:Collective<Ctx>; director:ArcDirector<Ctx> }> => {
 			const asked:{ last:string; before:string }[] = [];
-			const kit = { verbs: ['issue', 'law', 'wait'], tools: [] };
+			const kit = { verbs: ['command', 'law', 'wait'], tools: [] };
 			const director = await new ArcDirector<Ctx>()
 				.withMind((m) => m.withArcFormat('text').withRepairRetries(retries).withRepairPerStep())
 				.addFakeInference((req) => {
@@ -1746,27 +1920,27 @@ describe('transfers', () => {
 			const hive = director.collective('Hive')!;
 			return { arc: await hive.mind.thinkNow({ enact: false }), asked, hive, director };
 		};
-		const good = 'issue(who=units, arc=wait(seconds=1))';
+		const good = 'command(who=units, arc=wait(seconds=1))';
 		const bad = 'law(watch=some(others.nearby.filter("x")), arc=wait(seconds=2), name=dead)';
 
 		const fixed = await stage([`${good} ; ${bad}`, 'law(watch=count(others) > 3, arc=wait(seconds=2), name=alive)'], 2);
-		assert.deepEqual(fixed.arc!.map((step) => step.verb), ['issue', 'law']);
+		assert.deepEqual(fixed.arc!.map((step) => step.verb), ['command', 'law']);
 		assert.equal(fixed.arc![1].args.name, 'alive');
 		assert.match(fixed.asked[1].last, /Those steps stand.*law named dead: .*'nearby' needs a call/s);
-		assert.match(fixed.asked[1].before, /issue/);
+		assert.match(fixed.asked[1].before, /command/);
 		assert.doesNotMatch(fixed.asked[1].before, /law|dead/, 'the bad step is not there to copy');
 		fixed.director.dispose();
 
 		const left = await stage([`${good} ; ${bad}`, 'wait()'], 2);
-		assert.deepEqual(left.arc!.map((step) => step.verb), ['issue'], 'wait leaves it out');
+		assert.deepEqual(left.arc!.map((step) => step.verb), ['command'], 'wait leaves it out');
 		left.director.dispose();
 
 		const again = await stage([`${good} ; ${bad}`, `${good} ; law(watch=count(others) > 3, arc=wait(seconds=2), name=alive)`], 2);
-		assert.deepEqual(again.arc!.map((step) => step.verb), ['issue', 'law'], 'what stands written again runs once');
+		assert.deepEqual(again.arc!.map((step) => step.verb), ['command', 'law'], 'what stands written again runs once');
 		again.director.dispose();
 
 		const out = await stage([`${good} ; ${bad}`, bad], 1);
-		assert.deepEqual(out.arc!.map((step) => step.verb), ['issue'], 'out of tries, what is good runs');
+		assert.deepEqual(out.arc!.map((step) => step.verb), ['command'], 'out of tries, what is good runs');
 		assert.match(out.hive.mind.events().map((event) => event.text).join('\n'), /did not run.*needs a call/);
 		out.director.dispose();
 
@@ -1825,8 +1999,8 @@ describe('transfers', () => {
 
 	it('keeps the root steps finished before a reply broke down', async () => {
 		const asked:{ last:string; before:string }[] = [];
-		const kit = { verbs: ['issue', 'law', 'wait'], tools: [] };
-		const pieces = ['{"steps":[{"verb":"issue","who":"units","arc":[{"verb":"wait","seconds":1}]},', '{"verb":"law","watch":"count(others', '}]}}]}]}]}', ' more junk'];
+		const kit = { verbs: ['command', 'law', 'wait'], tools: [] };
+		const pieces = ['{"steps":[{"verb":"command","who":"units","arc":[{"verb":"wait","seconds":1}]},', '{"verb":"law","watch":"count(others', '}]}}]}]}]}', ' more junk'];
 		let wrote = 0;
 		const director = await new ArcDirector<Ctx>()
 			.withMind((m) => m.withRepairRetries(1).withRepairPerStep())
@@ -1853,20 +2027,20 @@ describe('transfers', () => {
 			.connect();
 		const arc = await director.collective('Hive')!.mind.thinkNow({ enact: false });
 		assert.equal(wrote, 3, 'cut off as it broke down');
-		assert.match(asked[1]!.before, /"issue"/);
+		assert.match(asked[1]!.before, /"command"/);
 		assert.doesNotMatch(asked[1]!.before, /"law"/);
 		assert.match(asked[1]!.last, /the rest of your reply: "watch" never closed its quote/);
-		assert.deepEqual(arc!.map((step) => step.verb), ['issue', 'law']);
+		assert.deepEqual(arc!.map((step) => step.verb), ['command', 'law']);
 		director.dispose();
 	});
 
-	it('lets only its commander issue, whatever brings an issue to a unit', async () => {
+	it('lets only its commander command, whatever brings a command to a unit', async () => {
 		const { director, release, dawn } = await stage();
 		const wisp = dawn.character('Wisp')!;
-		const result = await wisp.enact(parseArc('issue(who=units, arc=wait())', wisp.verbs));
-		assert.equal(result.ok, false);
+		const result = await wisp.enact(parseArc('command(who=units, arc=wait())', wisp.verbs));
+		assert.equal(result.status === 'ok', false);
 		assert.match(result.reason ?? '', /only your commander/);
-		assert.equal((await dawn.voice.enact(parseArc('issue(who=units, arc=wait(seconds=1))', dawn.voice.verbs))).ok, true);
+		assert.equal((await dawn.voice.enact(parseArc('command(who=units, arc=wait(seconds=1))', dawn.voice.verbs))).status === 'ok', true);
 		release();
 		director.dispose();
 	});
@@ -1879,14 +2053,14 @@ describe('transfers', () => {
 			.addVerb('strike', { help: 'law-ready: every unit hits a seen enemy', arc: 'wait()', watch: 'isHurt(me)', who: 'units.filter("Guard")' })
 			.withDefaultKit({ verbs: [...COLLECTIVE_KIT.verbs, 'strike'] })
 			.withKernels(kernels())
-			.onVerb(() => ({ ok: true, verb: 'wait' }))
+			.onVerb(() => ({ status: 'ok', verb: 'wait' }))
 			.withContext((id) => ({ id }))
 			.addCollective({ id: 'Hive', mind: { skipHeartbeat: true }, kit: { verbs: [...COLLECTIVE_KIT.verbs, 'strike'] }, characters: [{ id: 'Mira', tags: ['Guard'] }] })
 			.connect();
 		const voice = hive(director).voice;
-		assert.equal((await voice.enact(parseArc('law(arc=strike())', voice.verbs))).ok, true);
+		assert.equal((await voice.enact(parseArc('law(arc=strike())', voice.verbs))).status === 'ok', true);
 		assert.deepEqual(hive(director).laws.map((law) => [law.name, law.who, law.watch]), [['strike', 'units.filter("Guard")', 'isHurt(me)']]);
-		assert.equal((await voice.enact(parseArc('unlaw(name=strike)', voice.verbs))).ok, true);
+		assert.equal((await voice.enact(parseArc('unlaw(name=strike)', voice.verbs))).status === 'ok', true);
 		assert.deepEqual(hive(director).laws, []);
 		director.dispose();
 	});
@@ -1977,7 +2151,7 @@ describe('hearing', () => {
 			.addStockCollectiveVerbs()
 			.withDefaultKit(COLLECTIVE_KIT)
 			.withContext((id) => ({ id }))
-			.onVerb(({ verb }) => ({ ok: true, verb }))
+			.onVerb(({ verb }) => ({ status: 'ok', verb }))
 			.withTalk(talk)
 			.addCharacter({ id: 'Player' })
 			.addCollective({ id: 'Hive', mind: { skipHeartbeat: true }, kit: COLLECTIVE_KIT, characters: [{ id: 'Mira' }, { id: 'Tomas' }] })
@@ -2037,8 +2211,8 @@ describe('hearing', () => {
 		const { director } = await stage({ Player: 10 });
 		const hive = director.collective('Hive')!;
 		const result = await hive.enact(parseArc('say(text=hi)', hive.verbs));
-		assert.equal(result.ok, false);
-		assert.match(result.reason ?? '', /not a character in this scene; issue say to one of your characters/);
+		assert.equal(result.status === 'ok', false);
+		assert.match(result.reason ?? '', /not a character in this scene; command one of your characters to say/);
 		director.dispose();
 	});
 });
@@ -2047,7 +2221,8 @@ describe('a collective with no commander', () => {
 	it('looks things up from its characters, and waits on the director\'s clock', async () => {
 		const toolResults:string[] = [];
 		const director = await new ArcDirector<Ctx>()
-			.withPriorityQueue({ processInterval: 0, watchInterval: 0, heartbeatStart: 100, heartbeatMin: 100 })
+			.withPriorityQueue({ processInterval: 0, heartbeatStart: 100, heartbeatMin: 100 })
+			.withIntervals({ watch: 0, think: 0 })
 			// Native tool calls, as a model asked for plain JSON makes them.
 			.withMind((m) => m.withArcFormat('json'))
 			.addFakeInference((req) => {
@@ -2070,7 +2245,7 @@ describe('a collective with no commander', () => {
 			.withKernels(kernels())
 			.withKnowledge((ctx:Ctx) => [{ name: 'Keep', text: `A stone keep, as ${ctx.id} knows it.` }])
 			.withContext((id) => (id === 'Hive' ? undefined : { id }))
-			.onVerb(({ verb }) => ({ ok: true, verb }))
+			.onVerb(({ verb }) => ({ status: 'ok', verb }))
 			.addCollective({ id: 'Hive', mind: { skipHeartbeat: true }, kit: COLLECTIVE_KIT, characters: [{ id: 'Mira' }, { id: 'Tomas' }] })
 			.connect();
 		const hive = director.collective('Hive')!;
@@ -2080,9 +2255,9 @@ describe('a collective with no commander', () => {
 		assert.match(toolResults[0], /stone keep, as Mira knows it/);
 		assert.match(toolResults[1], /Mira/);
 		assert.match(toolResults[1], /Tomas/);
-		director.tick(2, 3);
+		director.tick(3);
 		await waitFor(() => hive.lastResult?.verb === 'wait');
-		assert.equal(hive.lastResult?.ok, true);
+		assert.equal(hive.lastResult?.status === 'ok', true);
 		director.dispose();
 	});
 
@@ -2092,11 +2267,51 @@ describe('a collective with no commander', () => {
 		const offered = hive.activeVerbs();
 		assert.equal(offered.has('go_to'), false);
 		assert.equal(offered.has('say'), false);
-		assert.ok(offered.has('wait') && offered.has('issue'));
-		const arc = parseArc('issue(who=units, arc=go_to(Keep))', offered);
-		assert.equal(arc[0].verb, 'issue');
+		assert.ok(offered.has('wait') && offered.has('command'));
+		const arc = parseArc('command(who=units, arc=go_to(Keep))', offered);
+		assert.equal(arc[0].verb, 'command');
 		hive.commander = hive.character('Mira')!;
 		assert.ok(hive.activeVerbs().has('go_to'));
+		director.dispose();
+	});
+
+	it('picks one unit by health or distance as a who, and as a verb target', async () => {
+		const calls:VerbCall<Ctx>[] = [];
+		const director = await hiveOf({ calls, hurt: new Set(['Tomas']), hold: (call) => call.verb === 'go_to' });
+		const hive = director.collective('Hive')!;
+		const ran = async (arc:string):Promise<string[]> => {
+			calls.length = 0;
+			const result = await hive.enact(parseArc(arc, hive.verbs));
+			assert.equal(result.status, 'ok', `${arc}: ${result.reason}`);
+			await waitFor(() => calls.length > 0);
+			return calls.map((call) => `${call.character.id} ${call.verb} ${String(call.args.target)}`);
+		};
+		assert.deepEqual(await ran('command(units.minBy(u => u.hp)) { go_to(Keep) }'), ['Tomas go_to Keep']);
+		assert.deepEqual(await ran('command(units.maxBy(u => u.hp)) { go_to(Well) }'), ['Mira go_to Well']);
+		assert.deepEqual(await ran('command(who=units.minBy(u => distance(me, u))) { go_to(Gate) }'), ['Mira go_to Gate']);
+		assert.deepEqual(await ran('command(units.filter("Mira")) { go_to(units.minBy(u => u.hp)) }'), ['Mira go_to Tomas']);
+		director.dispose();
+	});
+
+	it('says why a who that cannot be read picks no unit', async () => {
+		const director = await hiveOf();
+		const hive = director.collective('Hive')!;
+		const result = await hive.enact(parseArc('command(units.minBy(u => u.mana)) { go_to(Keep) }', hive.verbs));
+		assert.equal(result.status, 'failed');
+		assert.match(result.reason ?? '', /cannot read units\.minBy\(u => u\.mana\): key is not a number/);
+		director.dispose();
+	});
+
+	it('shows a unit that takes command as you, out of the group it was commanded in', async () => {
+		const director = await hiveOf();
+		const hive = director.collective('Hive')!;
+		hive.addCharacter({ id: 'Ada', tags: ['Guard'] });
+		await hive.enact(parseArc('command(who=units, group=Pack, arc=wait(5s))', hive.verbs));
+		hive.commander = hive.character('Mira')!;
+		const roster = hive.promptSection(hive.mind).split('\n');
+		assert.ok(roster.some((line) => line.startsWith('| Mira (you) |')), roster.join('\n'));
+		assert.ok(roster.some((line) => line.startsWith('| Pack |')));
+		assert.equal(hive.character('Mira')!.tags.some((tag) => tag.endsWith('Pack')), false);
 		director.dispose();
 	});
 
@@ -2125,7 +2340,7 @@ describe('a collective under arcFormat schema', () => {
 			.addStockCollectiveVerbs()
 			.withDefaultKit(COLLECTIVE_KIT)
 			.withKernels(kernels())
-			.onVerb((call) => ({ ok: true, verb: call.verb }))
+			.onVerb((call) => ({ status: 'ok', verb: call.verb }))
 			.withContext((id) => ({ id }))
 			.addCollective({
 				id: 'DawnParty',
@@ -2141,11 +2356,11 @@ describe('a collective under arcFormat schema', () => {
 		assert.deepEqual(Object.keys(sent).sort(), ['DawnParty', 'Tom']);
 		assert.equal(sent.DawnParty, sent.Tom);
 		assert.match(sent.DawnParty, /^\{"name":"reply","schema":/);
-		const party = prompts.find((text) => text.includes('issue(who, arc)'));
+		const party = prompts.find((text) => text.includes('command(who, arc)'));
 		assert.ok(party);
 		assert.match(party, /Once you know enough, emit only the Arc JSON, \{"steps":\[…\]\}/);
 		assert.match(party, /recall and observe are tools, not verbs: reply with the tool call, never in the steps\./);
-		assert.match(party, /Give each issue as a step of its own/);
+		assert.match(party, /"then" joins the next step: "if_ok" \(the default\) only when/);
 		director.dispose();
 	});
 });

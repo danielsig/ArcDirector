@@ -63,7 +63,6 @@ export type ThinkBatchOpts = {
 export type MindQueueOpts = ThinkBatchOpts & {
 	trueScore?:number;
 	epsilon?:number;
-	watchInterval?:number;
 	processInterval?:number;
 	heartbeatStart?:number;
 	heartbeatMin?:number;
@@ -110,7 +109,8 @@ export type MindQueue = {
 	enqueueVerb(mindID:string, verb:string, ok?:boolean):void;
 	enqueueArc(mindID:string, arc:Arc, ok?:boolean):void;
 	noteResult(mindID:string, stalled:boolean):void;
-	tick(dt:number, catalogs:WatchCatalogs):ThinkRow[];
+	/** Time passes; with `catalogs`, every mind's watches are sampled too (the director passes them on its `withIntervals` `think`). */
+	tick(dt:number, catalogs?:WatchCatalogs):ThinkRow[];
 	drop(mindID:string):void;
 };
 
@@ -142,7 +142,6 @@ const START_SCORE = 0.5;
 export abstract class MindScheduler implements MindQueue {
 	public readonly trueScore:number;
 	public readonly epsilon:number;
-	public readonly watchInterval:number;
 	public readonly processInterval:number;
 	public batchThinks:boolean | undefined;
 	public batchWait:number | undefined;
@@ -151,7 +150,6 @@ export abstract class MindScheduler implements MindQueue {
 	public readonly heartbeatMax:number;
 	public readonly heartbeatAdjust:HeartbeatAdjust;
 	public mayThink:((ctx:MayThink)=>boolean) | undefined;
-	protected watchClock = 0;
 	protected processClock = 0;
 	protected rows:ThinkRow[] = [];
 	protected readonly minds = new Map<string, MindState>();
@@ -162,7 +160,6 @@ export abstract class MindScheduler implements MindQueue {
 	constructor(opts:MindQueueOpts = {}) {
 		this.trueScore = clampTrueScore(opts.trueScore ?? DEFAULT_TRUE_SCORE);
 		this.epsilon = opts.epsilon ?? DEFAULT_EPSILON;
-		this.watchInterval = opts.watchInterval ?? 0.25;
 		this.processInterval = opts.processInterval ?? 1;
 		this.batchThinks = opts.batchThinks;
 		this.batchWait = opts.batchWait;
@@ -393,9 +390,8 @@ export abstract class MindScheduler implements MindQueue {
 		}
 	}
 
-	public tick(dt:number, catalogs:WatchCatalogs):ThinkRow[] {
+	public tick(dt:number, catalogs?:WatchCatalogs):ThinkRow[] {
 		if (dt > 0) {
-			this.watchClock += dt;
 			this.processClock += dt;
 			for (const [id, mind] of this.minds) {
 				if (!mind.aiOn) {
@@ -414,8 +410,7 @@ export abstract class MindScheduler implements MindQueue {
 				}
 			}
 		}
-		if (this.watchClock >= this.watchInterval) {
-			this.watchClock = 0;
+		if (catalogs) {
 			for (const [id, mind] of this.minds) {
 				if (!mind.aiOn) {
 					continue;

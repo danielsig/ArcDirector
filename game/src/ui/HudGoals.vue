@@ -314,6 +314,7 @@ onBeforeUnmount(() => {
 <style scoped>
 /* Same size and same short shadow as the hearts (HudHearts), on the world with no panel. Placed by `layout`. */
 .hud-goals {
+	z-index: var(--z-hud);
 	position: absolute;
 	display: flex;
 	align-items: center;

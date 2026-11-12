@@ -26,7 +26,7 @@ const BUILDING_VERBS = ['train', 'research', 'cancel', 'rally', 'keep_training',
 export const RTS_COMMANDER_VERBS = [
 	...STOCK_ECONOMY_VERBS, 'tribute',
 	'keep_distance', 'pull_back', 'spread_out', 'keep_training', 'supply_ahead', 'share_workers',
-	'issue', 'tag', 'untag', 'law', 'unlaw', 'when', 'loop', 'wait', 'say',
+	'command', 'tag', 'untag', 'law', 'unlaw', 'when', 'loop', 'wait', 'say',
 ] as const;
 
 /** What the RTS reaches in the director: the world, its characters, and how the caller sees. */
@@ -77,11 +77,11 @@ function num(v:unknown):number | undefined {
 }
 
 function ok(verb:string, reason?:string):ArcResult {
-	return { ok: true, verb, ...reason ? { reason } : {} };
+	return { status: 'ok', verb, ...reason ? { reason } : {} };
 }
 
 function fail(verb:string, reason:string):ArcResult {
-	return { ok: false, verb, reason };
+	return { status: 'failed', verb, reason };
 }
 
 /**
@@ -534,7 +534,7 @@ export class RTS<TCtx> {
 		for (const worker of workers) {
 			const before:Arc = resume ? this.rest(worker) : [];
 			const own:Step = { ...this.asNamed(step(worker)), ...before.length > 0 ? { then: 'always' as const } : {} };
-			worker.collective?.issue([worker], [own, ...before]);
+			worker.collective?.command([worker], [own, ...before]);
 		}
 	}
 
@@ -570,7 +570,7 @@ export class RTS<TCtx> {
 	/** Walk `call`'s character into reach of `target`; `undefined` once there. */
 	private async reach(call:VerbCall<TCtx>, target:string, within?:number):Promise<ArcResult | undefined> {
 		const r = await call.goTo(target, within === undefined ? {} : { within });
-		return r.ok ? undefined : r;
+		return r.status === 'ok' ? undefined : r;
 	}
 
 	/** `seconds` of work, repeated until full, done, stopped, or interrupted. */
@@ -584,7 +584,7 @@ export class RTS<TCtx> {
 				return done;
 			}
 			const waited = await call.wait(TICK);
-			if (waited.interrupted) {
+			if (waited.status === 'stopped') {
 				return waited;
 			}
 		}
@@ -619,7 +619,7 @@ export class RTS<TCtx> {
 				continue;
 			}
 			const worked = await this.workAt(call, node, (w) => !!w.full);
-			if ('ok' in worked) {
+			if ('status' in worked) {
 				return worked;
 			}
 			if (worked.stop && !worked.full) {
@@ -753,7 +753,7 @@ export class RTS<TCtx> {
 			return fail(call.verb, laid);
 		}
 		const built = await this.build({ ...call, args: { what: laid.kind, near: this.nearest(call.character.id, laid.sites) ?? laid.sites[0] } });
-		return built.ok ? ok(call.verb, `${tag.toLowerCase()} from ${str(call.args.from)} to ${str(call.args.to)} built`) : built;
+		return built.status === 'ok' ? ok(call.verb, `${tag.toLowerCase()} from ${str(call.args.from)} to ${str(call.args.to)} built`) : built;
 	}
 
 	/** Why `side` cannot build `count` of `what` now; empty when it can. */
@@ -822,7 +822,7 @@ export class RTS<TCtx> {
 				continue;
 			}
 			const worked = await this.workAt(call, site, (w) => !!w.done);
-			if ('ok' in worked) {
+			if ('status' in worked) {
 				return worked;
 			}
 			if (worked.stop) {
@@ -851,7 +851,7 @@ export class RTS<TCtx> {
 		}
 		const worked = await this.workAt(call, target, (w) => !!w.done);
 		this.clearDoing(call);
-		if ('ok' in worked) {
+		if ('status' in worked) {
 			return worked;
 		}
 		return worked.stop ? fail('repair', worked.stop) : ok('repair', `${target} repaired`);
@@ -1081,7 +1081,7 @@ export class RTS<TCtx> {
 		while (this.host.describe(target) && !leave?.()) {
 			if (!this.host.attack(me, target, TICK)) {
 				const there = await call.goTo(target, { within: this.range(me), check: () => (leave?.() ? 'left' : undefined) });
-				if (!there.ok) {
+				if (there.status !== 'ok') {
 					const wall = this.inTheWay(call, there);
 					const broke = wall && await this.fight(call, wall);
 					if (!wall || broke) {
@@ -1090,7 +1090,7 @@ export class RTS<TCtx> {
 				}
 			}
 			const waited = await call.wait(TICK);
-			if (waited.interrupted) {
+			if (waited.status === 'stopped') {
 				return waited;
 			}
 		}
@@ -1139,7 +1139,7 @@ export class RTS<TCtx> {
 				continue;
 			}
 			const went = await call.goTo(to, { check: () => (this.acquire(call, chase, focus, unreached) ? 'foe' : undefined) });
-			if (!went.ok) {
+			if (went.status !== 'ok') {
 				// A foe's wall in the way: through it, and on.
 				const wall = this.inTheWay(call, went);
 				const broke = wall && await this.fight(call, wall);
@@ -1177,12 +1177,12 @@ export class RTS<TCtx> {
 			const now = world && poseOf(world, me)?.point;
 			if (spot && now && distance(spot, now) > HOLD_SLACK) {
 				const back = await call.goToPoint(spot);
-				if (!back.ok) {
+				if (back.status !== 'ok') {
 					return back;
 				}
 			}
 			const waited = await call.wait(TICK);
-			if (waited.interrupted) {
+			if (waited.status === 'stopped') {
 				return waited;
 			}
 		}
@@ -1212,7 +1212,7 @@ export class RTS<TCtx> {
 				continue;
 			}
 			const went = out || !home ? await call.goTo(to, { check }) : await call.goToPoint(home, { check });
-			if (!went.ok) {
+			if (went.status !== 'ok') {
 				return went;
 			}
 			if (went.reason !== 'foe') {
@@ -1251,7 +1251,7 @@ export class RTS<TCtx> {
 				this.clearDoing(call);
 				return ok('garrison', `out of ${container}`);
 			}
-			if (waited.interrupted) {
+			if (waited.status === 'stopped') {
 				inside.delete(me);
 				this.host.exit(me, container);
 				this.clearDoing(call);
@@ -1376,7 +1376,7 @@ export class RTS<TCtx> {
 		this.setDoing(call, `working at ${at}`);
 		const worked = await this.workAt(call, at, () => false);
 		this.clearDoing(call);
-		if ('ok' in worked) {
+		if ('status' in worked) {
 			return worked;
 		}
 		return fail('staff', worked.stop ?? `${at} has no work`);
@@ -1404,7 +1404,7 @@ export class RTS<TCtx> {
 			if (this.host.withdraw(me, from, what) <= 0) {
 				// Nothing there yet: wait for some.
 				const waited = await call.wait(TICK * 4);
-				if (waited.interrupted) {
+				if (waited.status === 'stopped') {
 					return waited;
 				}
 				continue;
@@ -1456,7 +1456,11 @@ export class RTS<TCtx> {
 				help: 'steps back from the nearest of from (default: foes); as a law: whenever one is nearer than keep',
 				args: { from: 'expr?', keep: 'number?' },
 				watch: (a) => `${from(a)}.some(u => distance(me, u) < ${n(a.keep, 3)})`,
-				arc: (a) => `flee(from=${from(a)}.minBy(u => distance(me, u)), distance=${n(a.keep, 3) + 2})`,
+				// It keeps distance, no more: it steps back from the nearest, again while one is still nearer than keep, and then
+				// the fight goes on at range.
+				arc: (a) => `loop(until=!${from(a)}.some(u => distance(me, u) < ${n(a.keep, 3)})) { flee(from=${from(a)}.minBy(u => distance(me, u)), distance=${n(a.keep, 3) + 2}) }`,
+				// Kiting: a foe that follows comes back within keep at once, and it steps back again at once.
+				rearm: 0,
 			},
 			pull_back: {
 				help: 'goes to to (default: nearest own building) until healed; as a law: whenever below hp %',
@@ -1464,8 +1468,7 @@ export class RTS<TCtx> {
 				watch: (a) => `me.hp * 100 < me.maxHP * ${n(a.below, 35)}`,
 				arc: (a) => `go_to(${str(a.to) || 'units.filter("Building").minBy(u => distance(me, u))'}) && wait(until=me.hp >= me.maxHP, seconds=120)`,
 			},
-			// It holds once spread: a law runs its arc again while its watch holds, so a bare spread would walk to its
-			// slot over and over and never fight.
+			// It holds once spread, fighting what comes in range, instead of standing idle in its slot.
 			spread_out: {
 				help: 'spreads apart and holds there, fighting what comes in range; as a law: whenever a foe that hits many at once (Splash) is seen',
 				args: { paces: 'number?' },
@@ -1473,11 +1476,16 @@ export class RTS<TCtx> {
 				arc: (a) => `spread(paces=${n(a.paces, 4)}) && hold()`,
 			},
 			keep_training: {
-				help: 'a building trains one what and waits for it; as a law: while there are fewer than until',
-				args: { what: 'string', until: 'number?' },
-				watch: (a) => `count(units.filter("${str(a.what)}")) < ${n(a.until, 999)}`,
+				help: 'a building trains what, one at a time, until there are to; as a law: whenever there are fewer',
+				args: { what: 'string', to: 'number?' },
+				watch: (a) => `count(units.filter("${str(a.what)}")) < ${n(a.to, 999)}`,
 				who: (a) => `units.filter("${this.spec(str(a.what))?.madeAt?.[0] ?? 'Building'}")`,
-				arc: (a) => `train(what=${str(a.what)}) ; wait(seconds=${Math.max(1, this.spec(str(a.what))?.seconds ?? 1)})`,
+				arc: (a) => {
+					const many = `count(units.filter("${str(a.what)}"))`;
+					// Each one is waited for until it is there, so the count is never behind what is on its way; one it cannot pay
+					// for yet is tried again a second later.
+					return `loop(until=${many} >= ${n(a.to, 999)}) { let had = ${many} ; train(what=${str(a.what)}) && wait(until=${many} > had, seconds=${2 * Math.max(1, this.spec(str(a.what))?.seconds ?? 1)}) || wait(seconds=1) }`;
+				},
 			},
 			...this.capped ? {
 				supply_ahead: {
@@ -1489,11 +1497,11 @@ export class RTS<TCtx> {
 				},
 			} : {},
 			share_workers: {
-				help: 'sends one idle worker to gather on; as a law: while fewer than of gather it',
+				help: 'sends idle workers to gather on, one at a time, until of gather it; as a law: whenever fewer do',
 				args: { on: 'string', of: 'number?' },
 				watch: (a) => `gathering.${str(a.on)} < ${n(a.of, 1)} && count(units.filter("Worker").filter(u => !u.busy)) > 0`,
 				who: () => 'me',
-				arc: (a) => `gather(from=${str(a.on)}, workers=1)`,
+				arc: (a) => `loop(until=gathering.${str(a.on)} >= ${n(a.of, 1)} || count(units.filter("Worker").filter(u => !u.busy)) == 0) { gather(from=${str(a.on)}, workers=1) ; wait(seconds=1) }`,
 			},
 		};
 	}

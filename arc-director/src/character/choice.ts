@@ -1,7 +1,7 @@
 import { evaluate } from '../expr/eval.js';
-import { entityName, type Catalog, type ExprEntity } from '../expr/expr-types.js';
-import { argBase, type VerbRegistry } from '../arc/stock-verbs.js';
-import { formatArc } from '../arc/arc-parse.js';
+import { entityName, Names, type Catalog, type ExprEntity } from '../expr/expr-types.js';
+import { argKind, type VerbRegistry } from '../arc/stock-verbs.js';
+import { formatArc } from '../arc/arc-format.js';
 import { eachStep, firstStep, isArc, isCountMap, verbsInside, type Arc, type Step } from '../arc/arc-types.js';
 import type { LastChoice } from '../arc/run.js';
 
@@ -65,8 +65,7 @@ export function choiceState({ id, verb, last, catalog, names }:ChoiceStateInput)
 		lines.push(`Doing: ${verb}.`);
 	}
 	if (last) {
-		const how = last.result.ok ? 'ok' : last.result.interrupted ? 'interrupted' : 'failed';
-		lines.push(`Last choice: ${last.name}, ${how}${last.result.reason ? ` (${last.result.reason})` : ''}.`);
+		lines.push(`Last choice: ${last.name}, ${last.result.status}${last.result.reason ? ` (${last.result.reason})` : ''}.`);
 	}
 	const nearest = catalog && nearestOf('others', catalog);
 	if (catalog && nearest && !names.includes(entityName(nearest))) {
@@ -114,7 +113,7 @@ export function withTargets(arc:Arc, verbs:VerbRegistry, catalog:Catalog, first 
 }
 
 function aimStep(step:Step, verbs:VerbRegistry, catalog:Catalog, first:boolean):Step | undefined {
-	const kinds = verbs.get(step.verb)?.args ?? {};
+	const spec = verbs.get(step.verb);
 	const args = { ...step.args };
 	for (const [key, value] of Object.entries(args)) {
 		if (isArc(value)) {
@@ -124,7 +123,7 @@ function aimStep(step:Step, verbs:VerbRegistry, catalog:Catalog, first:boolean):
 			}
 			args[key] = inner;
 		}
-		else if (argBase(kinds[key]) === 'id' && key !== verbs.get(step.verb)?.group && typeof value === 'string' && /[(.]/.test(value)) {
+		else if (argKind(spec, key) === 'id' && key !== spec?.group && typeof value === 'string' && /[(.]/.test(value)) {
 			const target = nearestOf(value, catalog);
 			if (!target && first) {
 				return undefined;
@@ -150,12 +149,12 @@ export function namesIn(arcs:Arc[], verbs:VerbRegistry):string[] {
 	const out = new Set<string>();
 	for (const arc of arcs) {
 		eachStep(arc, verbs, (step, registry) => {
-			const kinds = registry.get(step.verb)?.args ?? {};
+			const spec = registry.get(step.verb);
 			for (const [key, value] of Object.entries(step.args)) {
-				if (argBase(kinds[key]) === 'id' && typeof value === 'string' && /^[A-Za-z_]\w*$/.test(value)) {
+				if (argKind(spec, key) === 'id' && typeof value === 'string' && /^[A-Za-z_]\w*$/.test(value)) {
 					out.add(value);
 				}
-				if (argBase(kinds[key]) === 'bundle' && isCountMap(value)) {
+				if (argKind(spec, key) === 'bundle' && isCountMap(value)) {
 					for (const name of Object.keys(value)) {
 						out.add(name);
 					}
@@ -190,7 +189,7 @@ function placeOf(entity:ExprEntity | undefined, catalog:Catalog):Place | undefin
 	if (!entity) {
 		return undefined;
 	}
-	const names = new Map(catalog.names).set('it', { kind: 'entity', value: entity });
+	const names = new Names(catalog.names).set('it', { kind: 'entity', value: entity });
 	const at:Catalog = { ...catalog, names };
 	const distance = evaluate('distance(me, it)', at);
 	if (distance.error || distance.value.kind !== 'number') {

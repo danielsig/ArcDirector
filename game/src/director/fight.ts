@@ -1,4 +1,4 @@
-import { distanceXZ, type GameObject, type XZ } from '@arc-director/kindling';
+import { Time, distanceXZ, type GameObject, type XZ } from '@arc-director/kindling';
 import { shortTag, type Collective, type SeenName } from 'arc-director';
 import type { GameHost, CharacterCtx } from './adapter';
 import { Guard, HumanBody, Interior, Vitals, Weakness } from '../engine/components';
@@ -227,6 +227,17 @@ export function seenName(host:GameHost, observer:GameObject, target:GameObject):
  * collective, its own tags; the player's only while NPCs can see the player.
  */
 export function fightTags(host:GameHost, character:GameObject):string[] {
+	const known = frameFightTags.get(character);
+	if (known?.time !== Time.time) {
+		frameFightTags.set(character, { time: Time.time, tags: fightTagsNow(host, character) });
+	}
+	return [...frameFightTags.get(character)!.tags];
+}
+
+/** Each character's fight tags for the frame they were worked out in: every observer's kernels ask them of everyone. */
+const frameFightTags = new WeakMap<GameObject, { time:number; tags:string[] }>();
+
+function fightTagsNow(host:GameHost, character:GameObject):string[] {
 	const party = fightParty(host, character);
 	const member = party?.character(idOf(character));
 	if (!party || !member) {
@@ -463,11 +474,20 @@ export function fightExprTags(host:GameHost, observer:GameObject, go:GameObject)
 	return tags;
 }
 
+/** Each fighter's room for the frame it was worked out in: every observer's kernels ask it of everyone, every frame. */
+const frameRooms = new WeakMap<GameObject, { time:number; room:GameObject | undefined }>();
+
 /** The room `go` stands in, if any: a room of a larger place, not a building. */
 function roomOf(go:GameObject):GameObject | undefined {
+	const known = frameRooms.get(go);
+	if (known?.time === Time.time) {
+		return known.room;
+	}
 	const p = go.transform.position;
 	const hit = go.world && enclosureAt(go.world, p.x, p.z);
-	return hit?.getComponent(Interior)?.room ? hit : undefined;
+	const room = hit?.getComponent(Interior)?.room ? hit : undefined;
+	frameRooms.set(go, { time: Time.time, room });
+	return room;
 }
 
 const THREAT_NOTE_M = 8;

@@ -60,13 +60,14 @@ export {
 	type HttpInferenceOpts,
 } from './inference/presets.js';
 
-export type { Arc, ArcResult, CountMap, Join, Step } from './arc/arc-types.js';
-export { arcSteps, firstStep, isArc, isHoistedWhen } from './arc/arc-types.js';
+export type { Arc, ArcResult, ArcStatus, CountMap, Join, Step } from './arc/arc-types.js';
+export { arcSteps, firstStep, isArc } from './arc/arc-types.js';
 export { ArcError, BlockedArcError, JOIN_SYMBOL, JOINS, SYMBOL_JOIN } from './arc/arc-types.js';
-export { VerbRegistry, STOCK_VERBS, STOCK_MOVE_VERBS, STOCK_ITEM_VERBS, STOCK_TRADE_VERBS, STOCK_MIND_VERBS, STOCK_ARC_VERBS, CHOOSE_VERB, GROUP_VERB, STOCK_VERB_DEFS, MIND_ONLY_VERBS, type StockVerb, type VerbArgKind, type VerbArgMap, type VerbDef, type VerbSpec } from './arc/stock-verbs.js';
+export { VerbRegistry, STOCK_VERBS, STOCK_MOVE_VERBS, STOCK_ITEM_VERBS, STOCK_TRADE_VERBS, STOCK_MIND_VERBS, STOCK_ARC_VERBS, CHOOSE_VERB, GROUP_VERB, PASS_VERB, STOCK_VERB_DEFS, MIND_ONLY_VERBS, type StockVerb, type ArgSpec, type VerbArgKind, type VerbArgMap, type VerbDef, type VerbSpec } from './arc/stock-verbs.js';
 export { replySchema, verbHelp } from './arc/schema.js';
 export { validateArc } from './arc/validate.js';
-export { formatArc, formatArcBlocks, formatStep, parseArcText } from './arc/arc-parse.js';
+export { parseArcText } from './arc/arc-parse.js';
+export { formatArc, formatArcBlocks, formatStep } from './arc/arc-format.js';
 export { arcArg, arcFromJSON, arcJSONBlocks, arcJSONText, arcToJSON, parseArc } from './arc/wire.js';
 
 export {
@@ -110,10 +111,11 @@ export type { ArcFormat, ConversationTurn, MindEvent, Sense, ThinkEvent, ToolSpe
 export { GOAL_PINNED_THINKS, type Identity, type Goal, type Kit, type KitSource, type WatchInput, type Watches } from './character/character-types.js';
 export { NameBook, type NameBookJSON, type NameTarget } from './character/NameBook.js';
 export { Persona, type PersonaJSON, type PersonaSpec } from './character/Persona.js';
-export { ArcRunner, sayToOf, type ArcRunnerJSON, type RunnerDeps, type RunnerOptions } from './character/arc-runner.js';
+export { ArcRunner, sayToOf, type ArcRunnerJSON, type Holder, type ProgramMark, type ProgramState, type RunnerDeps, type RunnerOptions } from './character/arc-runner.js';
 export { Character, type CharacterJSON, type CharacterOptions } from './character/Character.js';
 export type { ChoicePrompt } from './character/choice.js';
 export { Mind, DEFAULT_MENTION_CAP, DEFAULT_TOOL_ROUNDS, type MindDeps, type MindJSON, type MindOwner, type MindSettings } from './mind/mind.js';
+export type { MindDefaults } from './mind/MindDefaults.js';
 export { idsOf, namesOf, mapArc, mapExpr, mapLawName, type WordMap } from './mind/ids.js';
 export {
 	applyWatchOps,
@@ -143,11 +145,11 @@ export {
 	type KnowledgeSource,
 	type CrowdKnowledgeSpec,
 } from './mind/knowledge.js';
-export { runArc, deferThinks, THINK_ABOUT_CAP, type ArcPick, type LastChoice } from './arc/run.js';
-export { CHOICE_RESERVED, MAX_CHOICES } from './arc/choose.js';
+export { runArc, deferThinks, THINK_ABOUT_CAP, type ArcPick, type LastChoice, type Reaction } from './arc/run.js';
+export { CHOICE_RESERVED, DEFAULT_MIN_CHOICES, MAX_CHOICES } from './arc/choose.js';
 export { ChatSystemOne, JevSystemOne, ModelSystemOne, type DecidingModel, type JevOpts, type SystemOne } from './inference/system-one.js';
 export { nextTurn } from './turn.js';
-export { arcRepairHint, repeatOutputHint, sayRangeHint, stablePrefix, volatileBlock, DEFAULT_THINK_INSTRUCTIONS, DEFAULT_VERB_INSTRUCTIONS, DEFAULT_COLLECTIVE_INSTRUCTIONS, type PromptStyle, type ThinkInstructions, seeMapHint } from './mind/prompt.js';
+export { arcRepairHint, repeatOutputHint, sayRangeHint, stablePrefix, volatileBlock, DEFAULT_THINK_INSTRUCTIONS, DEFAULT_VERB_INSTRUCTIONS, DEFAULT_COLLECTIVE_INSTRUCTIONS, PROGRAM_FILES_CAP, type PromptStyle, type ThinkInstructions, seeMapHint } from './mind/prompt.js';
 export {
 	TalkNet,
 	DEFAULT_TALK_CONFIG,
@@ -230,6 +232,7 @@ export {
 } from './collective/index.js';
 export { DEFAULT_MAX_LAWS, lawGroup, type Law, type LawSpec } from './arc/laws.js';
 export { ArcDirector, type CastJSON } from './director/ArcDirector.js';
+export { Ticker } from './director/Ticker.js';
 export type { RegionShape, RegionSpec } from './director/regions.js';
 export { search, searchText, searchTool, type SearchCandidate, type SearchMove, type SearchResult, type SearchSpec } from './search/search.js';
 export { RTS_COMMANDER_VERBS } from './rts/rts.js';

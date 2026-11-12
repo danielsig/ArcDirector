@@ -106,15 +106,15 @@ const FIGHTING = new Set(['attack', 'block', 'protect', ...Object.keys(ATTACKS)]
 export function verbGate(host:GameHost):VerbGate<CharacterCtx> {
 	return ({ verb, ctx, args }) => {
 		if (host.bargainDone && FIGHTING.has(verb) && fightRole(host, ctx.character)) {
-			return { ok: false, interrupted: true, verb, reason: 'won' };
+			return { status: 'stopped', verb, reason: 'won' };
 		}
 		const hop = ctx.character.getComponent(Celebrating);
 		if (hop?.enabled && Time.time < hop.until) {
-			return { ok: false, interrupted: true, verb, reason: 'celebrating' };
+			return { status: 'stopped', verb, reason: 'celebrating' };
 		}
 		const foe = verb === 'go_to' && typeof args.target === 'string' ? findObject(ctx.world, args.target) : undefined;
 		if (foe && isRival(host, ctx.character, foe)) {
-			return { ok: false, verb, reason: `${seenName(host, ctx.character, foe)} is an enemy; go_to does not attack` };
+			return { status: 'failed', verb, reason: `${seenName(host, ctx.character, foe)} is an enemy; go_to does not attack` };
 		}
 		const stall = stallBound(ctx, verb, args);
 		if (stall) {
@@ -124,7 +124,7 @@ export function verbGate(host:GameHost):VerbGate<CharacterCtx> {
 			const raw = args.target;
 			const dest = typeof raw === 'string' && raw ? findObject(ctx.world, raw) : undefined;
 			if (dest?.getComponent(MarketGate)) {
-				return { ok: false, verb, reason: `stand beside ${idOf(dest)}` };
+				return { status: 'failed', verb, reason: `stand beside ${idOf(dest)}` };
 			}
 		}
 		return undefined;
@@ -143,7 +143,7 @@ function stallBound(ctx:CharacterCtx, verb:string, args:Record<string, unknown>)
 		return undefined;
 	}
 	if (roaming) {
-		return { ok: false, verb, reason: `stay at ${npc.post}` };
+		return { status: 'failed', verb, reason: `stay at ${npc.post}` };
 	}
 	const raw = verb === 'offer' ? args.to : args.target;
 	const dest = typeof raw === 'string' && raw ? findObject(ctx.world, raw) : undefined;
@@ -152,7 +152,7 @@ function stallBound(ctx:CharacterCtx, verb:string, args:Record<string, unknown>)
 	}
 	const place = dest.transform.position;
 	if (Math.hypot(place.x - npc.postX, place.z - npc.postZ) > STALL_LEASH) {
-		return { ok: false, verb, reason: `stay at ${npc.post}` };
+		return { status: 'failed', verb, reason: `stay at ${npc.post}` };
 	}
 	return undefined;
 }
@@ -189,16 +189,16 @@ async function restOn(call:Call, seat:GameObject, opts:Parameters<Seated['settle
 		const spot = approachSpot(seat, body);
 		const walk = await (spot ? call.goToPoint([spot.x, spot.z]) : call.goTo(name));
 		// In a tight room there may be no route to step along. Within arm's reach, it needs none.
-		if (!walk.ok && (walk.interrupted || distanceXZ(body, seat) > USE_RANGE)) {
+		if (walk.status !== 'ok' && (walk.status === 'stopped' || distanceXZ(body, seat) > USE_RANGE)) {
 			return { ...walk, verb: call.verb };
 		}
 	}
 	const occupant = seat.getComponent(Furniture)?.occupant;
 	if (occupant && occupant !== call.ctx.character) {
-		return { ok: false, verb: call.verb, reason: `${occupantName(seat)} is on ${name}` };
+		return { status: 'failed', verb: call.verb, reason: `${occupantName(seat)} is on ${name}` };
 	}
 	call.ctx.character.getComponent(Seated)?.settle(seat, opts);
-	return { ok: true, verb: call.verb, reason: `on ${name}` };
+	return { status: 'ok', verb: call.verb, reason: `on ${name}` };
 }
 
 /** The `Furniture` of `kind` that `name` calls for, or the nearest free one; or why there is none. */
@@ -207,18 +207,18 @@ function pickSeat(call:Call, kind:Furniture['kind'], name:string | undefined):Ga
 	if (seat?.getComponent(Furniture)?.kind === kind) {
 		return seat;
 	}
-	return { ok: false, verb: call.verb, reason: name ? `${name} is not a ${kind}` : `no free ${kind}` };
+	return { status: 'failed', verb: call.verb, reason: name ? `${name} is not a ${kind}` : `no free ${kind}` };
 }
 
 /** Sitting and sleeping, for `withRPG` in a scene with chairs and beds. */
 export const REST_VERBS:Pick<RPGHost<CharacterCtx>, 'sit' | 'sleep'> = {
 	sit: (call) => {
 		const seat = pickSeat(call, 'chair', call.args.target);
-		return 'ok' in seat ? seat : restOn(call, seat, {});
+		return 'status' in seat ? seat : restOn(call, seat, {});
 	},
 	sleep: (call) => {
 		const bed = pickSeat(call, 'bed', call.args.target);
-		return 'ok' in bed ? bed : restOn(call, bed, { seconds: call.args.seconds ?? SLEEP_SECONDS });
+		return 'status' in bed ? bed : restOn(call, bed, { seconds: call.args.seconds ?? SLEEP_SECONDS });
 	},
 };
 
@@ -228,7 +228,7 @@ export const FISH_VERB = {
 	seen: 'fishing',
 	handler: (call:Call):ArcResult | Promise<ArcResult> => {
 		const seat = nearestFree(call.ctx.character, 'chair', overWater);
-		return seat ? restOn(call, seat, { rod: true }) : { ok: false, verb: 'fish', reason: 'no free chair by the water' };
+		return seat ? restOn(call, seat, { rod: true }) : { status: 'failed', verb: 'fish', reason: 'no free chair by the water' };
 	},
 };
 
@@ -237,20 +237,20 @@ async function fetchBook(call:Call, name:string):Promise<ArcResult | undefined> 
 	const { character, world } = call.ctx;
 	const held = findChestHolding(world, name);
 	if (!held) {
-		return { ok: false, verb: 'read', reason: `no book called ${name} here` };
+		return { status: 'failed', verb: 'read', reason: `no book called ${name} here` };
 	}
 	const seatID = character.getComponent(Seated)?.seatID;
 	const walk = await call.goTo(idOf(held.chest));
-	if (!walk.ok) {
+	if (walk.status !== 'ok') {
 		return { ...walk, verb: 'read' };
 	}
 	const taken = takeFromChest(character, held);
 	if (!taken.startsWith('took ')) {
-		return { ok: false, verb: 'read', reason: taken };
+		return { status: 'failed', verb: 'read', reason: taken };
 	}
 	character.getComponent(Appearance)?.playClip('take', Time.time, held.chest);
 	const seat = seatID ? world.findByID(seatID) : undefined;
-	return seat ? restOn(call, seat, {}).then((back) => (back.ok ? undefined : back)) : undefined;
+	return seat ? restOn(call, seat, {}).then((back) => (back.status === 'ok' ? undefined : back)) : undefined;
 }
 
 /**
@@ -264,26 +264,27 @@ export async function doRead(call:Call, name:string):Promise<ArcResult> {
 	}
 	const book = findItem(call.ctx.character, name);
 	if (!book || !readPage(book)) {
-		return { ok: false, verb: 'read', reason: `${name} is not a book` };
+		return { status: 'failed', verb: 'read', reason: `${name} is not a book` };
 	}
-	return { ...useItem(call.ctx.character, book, null), verb: 'read' };
+	const read = useItem(call.ctx.character, book, null);
+	return { status: read.ok ? 'ok' : 'failed', verb: 'read', reason: read.reason };
 }
 
 /** Walks to the door `name` and shuts it. Anyone can: a lock only has a say in opening it. */
 export async function doClose(call:Call, name:string):Promise<ArcResult> {
 	const door = findObject(call.ctx.world, name);
 	if (!door?.getComponent(Door)) {
-		return { ok: false, verb: 'close', reason: `${name} is not a door` };
+		return { status: 'failed', verb: 'close', reason: `${name} is not a door` };
 	}
 	if (!door.getComponent(Door)?.open) {
-		return { ok: true, verb: 'close', reason: `${name} is already shut` };
+		return { status: 'ok', verb: 'close', reason: `${name} is already shut` };
 	}
 	const walk = await call.goTo(name);
-	if (!walk.ok) {
+	if (walk.status !== 'ok') {
 		return { ...walk, verb: 'close' };
 	}
 	interactDoor(call.ctx.character, door);
-	return { ok: true, verb: 'close' };
+	return { status: 'ok', verb: 'close' };
 }
 
 /** Taking without paying, for `withRPG` in a scene where theft is possible. */
@@ -304,7 +305,7 @@ export function fightVerbs(host:GameHost):MOBAHost<CharacterCtx> {
 			const verb = role ? attackVerbFor(role) : undefined;
 			return verb
 				? doAttack(host, call, verb, call.args.target ?? '', undefined, true)
-				: { ok: false, verb: 'attack', reason: 'no attack' };
+				: { status: 'failed', verb: 'attack', reason: 'no attack' };
 		},
 		block: {
 			help: `guard up ${BLOCK.seconds}s against them (or the nearest enemy), then ${BLOCK.cooldown}s to ready again; only when an enemy is within ${BLOCK.near}m or attacking you or whom you protect`,
@@ -415,40 +416,40 @@ async function closeTo(host:GameHost, call:Call, target:GameObject, range:number
 		const here = character.transform.position;
 		if (distanceXZ(here, slot) > RANK_ARRIVE) {
 			const walk = await call.goToPoint([slot.x, slot.z]);
-			if (walk.interrupted) {
+			if (walk.status === 'stopped') {
 				return walk;
 			}
 		}
 		if (distanceXZ(character, target) <= range + 0.5) {
-			return { ok: true };
+			return { status: 'ok' };
 		}
 	}
 	const close = Math.max(0.9, range - 0.6);
 	if (distanceXZ(character, target) > close) {
 		const walk = await call.goTo(idOf(target), { within: close });
-		if (!walk.ok) {
+		if (walk.status !== 'ok') {
 			return walk;
 		}
 	}
 	if (distanceXZ(character, target) > range + 0.5) {
-		return { ok: false, reason: 'too far' };
+		return { status: 'failed', reason: 'too far' };
 	}
-	return { ok: true };
+	return { status: 'ok' };
 }
 
 /** Ruins: walks to this character's place in its party's line. */
 export async function doRank(host:GameHost, call:Call):Promise<ArcResult> {
 	const slot = rankSlot(host, call.ctx.character);
 	if (!slot) {
-		return { ok: false, verb: 'rank', reason: 'no line' };
+		return { status: 'failed', verb: 'rank', reason: 'no line' };
 	}
 	const here = call.ctx.character.transform.position;
 	if (distanceXZ(here, slot) <= RANK_ARRIVE) {
 		const hold = await call.wait(0.35);
-		if (!hold.ok) {
+		if (hold.status !== 'ok') {
 			return { ...hold, verb: 'rank' };
 		}
-		return { ok: true, verb: 'rank' };
+		return { status: 'ok', verb: 'rank' };
 	}
 	const walk = await call.goToPoint([slot.x, slot.z]);
 	return { ...walk, verb: 'rank' };
@@ -477,25 +478,25 @@ async function holdReady(
 	const cool = readyTimestamp - now;
 	if (cool > 0.02) {
 		const waited = await call.wait(cool);
-		if (!waited.ok || waited.interrupted) {
-			return { ok: false, interrupted: waited.interrupted, reason: waited.reason, verb: 'wait' };
+		if (waited.status !== 'ok') {
+			return { status: waited.status, reason: waited.reason, verb: 'wait' };
 		}
 	}
 	onCast?.();
 	for (let left = castTime; left > 0.02; left -= CAST_CHECK) {
 		const cast = await call.wait(stop ? Math.min(CAST_CHECK, left) : left);
-		if (!cast.ok || cast.interrupted) {
-			return { ok: false, interrupted: cast.interrupted, reason: cast.reason ?? 'cast', verb: 'wait' };
+		if (cast.status !== 'ok') {
+			return { status: cast.status, reason: cast.reason ?? 'cast', verb: 'wait' };
 		}
 		const why = stop?.();
 		if (why) {
-			return { ok: false, reason: why, verb: 'wait' };
+			return { status: 'failed', reason: why, verb: 'wait' };
 		}
 		if (!stop) {
 			break;
 		}
 	}
-	return { ok: true };
+	return { status: 'ok' };
 }
 
 function rangeAccuracy(spec:AttackKind, dist:number):number {
@@ -551,18 +552,18 @@ async function doAttack(host:GameHost, call:Call, verb:string, name:string, lock
 	const role = fightRole(host, ctx.character);
 	let attack = attackOf(verb, role);
 	if (!attack) {
-		return { ok: false, verb, reason: `unhandled attack ${verb}` };
+		return { status: 'failed', verb, reason: `unhandled attack ${verb}` };
 	}
 	if (role && !attack.spec.roles.includes(role) && !ctx.character.getComponent(Moves)?.extra.includes(attack.name)) {
 		const need = attack.spec.roles.join(' or ');
-		return { ok: false, verb, reason: `only a ${need} can ${attack.name}` };
+		return { status: 'failed', verb, reason: `only a ${need} can ${attack.name}` };
 	}
 	// Shots and spells go for the nearest foe they can see, not one behind the scrum.
 	const seen = attack.spec.cover ? (go:GameObject) => combatSight(ctx.world, ctx.character, go) : undefined;
 	const target = locked ?? (name.trim() ? otherCharacter(ctx, name) : nearestRival(host, ctx.character, seen) ?? nearestRival(host, ctx.character));
 	if (!target) {
 		return {
-			ok: false,
+			status: 'failed',
 			verb: attack.name,
 			reason: name.trim() ? `no such person ${name}` : 'no one to attack',
 		};
@@ -572,7 +573,7 @@ async function doAttack(host:GameHost, call:Call, verb:string, name:string, lock
 		return burnWith(host, call, attack, target, fuel);
 	}
 	if (!isRival(host, ctx.character, target)) {
-		return { ok: false, verb: attack.name, reason: `${idOf(target)} is not an enemy` };
+		return { status: 'failed', verb: attack.name, reason: `${idOf(target)} is not an enemy` };
 	}
 	if (pick) {
 		attack = attackOf(pickMove(host, ctx.character, attack.name, target), role) ?? attack;
@@ -582,14 +583,14 @@ async function doAttack(host:GameHost, call:Call, verb:string, name:string, lock
 	const melee = !attack.spec.cover;
 	const range = melee ? Math.max(attack.spec.range, weapon?.range ?? 0) : attack.spec.range;
 	const walk = await closeTo(host, call, target, range, !locked);
-	if (!walk.ok) {
+	if (walk.status !== 'ok') {
 		return { ...walk, verb: attack.name };
 	}
 	npc.faceToward(dest);
 	const held = await holdReady(call, Time.time, npc.attackReadyTimestamp, attack.spec.castTime, () => {
 		ctx.character.getComponent(CharacterAnimation)?.strike(attack.name, attack.spec.castTime, target);
 	});
-	if (!held.ok) {
+	if (held.status !== 'ok') {
 		// Cut short before its blow: the shot or spell never goes.
 		ctx.character.getComponent(CharacterPose)?.resolve('cut');
 		return { ...held, verb: attack.name };
@@ -600,7 +601,7 @@ async function doAttack(host:GameHost, call:Call, verb:string, name:string, lock
 	// The shot or spell flies now, at the target or wide of it; a hit does its harm once it gets there.
 	pose?.resolve(blow.landed ? 'hit' : 'miss');
 	// A miss (an attack that went, `ok`, but never reached) is dodged as it arrives.
-	if (!blow.landed && 'result' in blow && blow.result.ok) {
+	if (!blow.landed && 'result' in blow && blow.result.status === 'ok') {
 		target.getComponent(CharacterPose)?.dodge(ctx.character.transform.position, flight);
 	}
 	if ('result' in blow) {
@@ -616,7 +617,7 @@ async function doAttack(host:GameHost, call:Call, verb:string, name:string, lock
 async function burnWith(host:GameHost, call:Call, attack:{ name:string; spec:AttackKind }, target:GameObject, fuel:Flammable):Promise<ArcResult> {
 	const { ctx } = call;
 	const walk = await closeTo(host, call, target, attack.spec.range, false);
-	if (!walk.ok) {
+	if (walk.status !== 'ok') {
 		return { ...walk, verb: attack.name };
 	}
 	ctx.npc.faceToward(idOf(target));
@@ -624,7 +625,7 @@ async function burnWith(host:GameHost, call:Call, attack:{ name:string; spec:Att
 		ctx.character.getComponent(CharacterAnimation)?.strike(attack.name, attack.spec.castTime, target);
 	});
 	const pose = ctx.character.getComponent(CharacterPose);
-	if (!held.ok) {
+	if (held.status !== 'ok') {
 		pose?.resolve('cut');
 		return { ...held, verb: attack.name };
 	}
@@ -633,7 +634,7 @@ async function burnWith(host:GameHost, call:Call, attack:{ name:string; spec:Att
 	// It catches once the fireball lands: as long as one takes to fly the spell's whole reach, so never before.
 	await new Promise<void>((landed) => ctx.world.after(attack.spec.range / FIREBALL_SPEED, landed));
 	fuel.burning = true;
-	return { ok: true, verb: attack.name, reason: 'ignited' };
+	return { status: 'ok', verb: attack.name, reason: 'ignited' };
 }
 
 /**
@@ -655,7 +656,7 @@ function rollBlow(
 ):Blow {
 	const npc = ctx.npc;
 	if (distanceXZ(ctx.character, target) > range + 0.5) {
-		return { landed: false, result: { ok: false, verb: attack.name, reason: 'too far', retry: true } };
+		return { landed: false, result: { status: 'failed', verb: attack.name, reason: 'too far', retry: true } };
 	}
 	const clear = !attack.spec.cover || combatSight(ctx.world, ctx.character, target);
 	const who = [idOf(ctx.character), idOf(target)];
@@ -668,20 +669,20 @@ function rollBlow(
 			tags: ['cover', attack.name],
 			major: false,
 		});
-		return { landed: false, result: { ok: false, verb: attack.name, reason: 'no line of sight — flank for a clear shot', retry: true } };
+		return { landed: false, result: { status: 'failed', verb: attack.name, reason: 'no line of sight — flank for a clear shot', retry: true } };
 	}
 	const vitals = target.getComponent(Vitals);
 	if (!vitals) {
-		return { landed: false, result: { ok: false, verb: attack.name, reason: 'no vitals' } };
+		return { landed: false, result: { status: 'failed', verb: attack.name, reason: 'no vitals' } };
 	}
 	npc.attackReadyTimestamp = Time.time + attack.spec.cooldown;
 	if (vitals.hp <= 0) {
-		return { landed: true, result: { ok: true, verb: attack.name, reason: 'already down' } };
+		return { landed: true, result: { status: 'ok', verb: attack.name, reason: 'already down' } };
 	}
 	if (attack.spec.cover !== 'soften' && guardStops(target, ctx.character)) {
 		host.arc?.pushEvent({ kind: 'Miss', text: '{1} blocked {0}', who, tags: ['blocked', attack.name], major: false });
 		cueAt(ctx.world, 'clash', target);
-		return { landed: true, result: { ok: true, verb: attack.name, reason: `${foe} blocked it` } };
+		return { landed: true, result: { status: 'ok', verb: attack.name, reason: `${foe} blocked it` } };
 	}
 	const dist = distanceXZ(ctx.character, target);
 	const covered = attack.spec.cover === 'soften' && !clear;
@@ -699,7 +700,7 @@ function rollBlow(
 			tags: ['miss', attack.name, ...(covered ? ['cover'] : [])],
 			major: false,
 		});
-		return { landed: false, result: { ok: true, verb: attack.name, reason: covered ? `missed ${foe} through cover` : `missed ${foe}` } };
+		return { landed: false, result: { status: 'ok', verb: attack.name, reason: covered ? `missed ${foe} through cover` : `missed ${foe}` } };
 	}
 	let dmg = melee ? Math.max(attack.spec.damage, weapon?.damage ?? 0) : attack.spec.damage;
 	if (covered) {
@@ -713,7 +714,7 @@ function strikeHome(host:GameHost, ctx:CharacterCtx, attack:{ name:string; spec:
 	const vitals = target.getComponent(Vitals);
 	const foe = seenName(host, ctx.character, target);
 	if (!vitals || vitals.hp <= 0) {
-		return { ok: true, verb: attack.name, reason: 'already down' };
+		return { status: 'ok', verb: attack.name, reason: 'already down' };
 	}
 	const who = [idOf(ctx.character), idOf(target)];
 	const struck = weaknessDamage(target, attack.name, dmg);
@@ -729,10 +730,10 @@ function strikeHome(host:GameHost, ctx:CharacterCtx, attack:{ name:string; spec:
 	});
 	if (vitals.hp <= 0) {
 		dropDown(host, target);
-		return { ok: true, verb: attack.name, reason: `${foe} is down` };
+		return { status: 'ok', verb: attack.name, reason: `${foe} is down` };
 	}
 	return {
-		ok: true,
+		status: 'ok',
 		verb: attack.name,
 		reason: covered
 			? `${foe} ${vitals.hp}/${vitals.maxHP} through cover`
@@ -748,15 +749,15 @@ async function doBlock(host:GameHost, call:Call, name:string):Promise<ArcResult>
 	const { ctx } = call;
 	const role = fightRole(host, ctx.character);
 	if (role && !BLOCK.roles.includes(role)) {
-		return { ok: false, verb: 'block', reason: `only a ${BLOCK.roles.join(' or ')} can block` };
+		return { status: 'failed', verb: 'block', reason: `only a ${BLOCK.roles.join(' or ')} can block` };
 	}
 	const cool = ctx.npc.blockReadyTimestamp - Time.time;
 	if (cool > 0) {
-		return { ok: false, verb: 'block', reason: `guard ready in ${Math.ceil(cool)}s` };
+		return { status: 'failed', verb: 'block', reason: `guard ready in ${Math.ceil(cool)}s` };
 	}
 	const threat = name.trim() ? otherCharacter(ctx, name) : nearestRival(host, ctx.character);
 	if (name.trim() && !threat) {
-		return { ok: false, verb: 'block', reason: `no such person ${name}` };
+		return { status: 'failed', verb: 'block', reason: `no such person ${name}` };
 	}
 	if (threat) {
 		ctx.npc.faceToward(idOf(threat));
@@ -768,10 +769,10 @@ async function doBlock(host:GameHost, call:Call, name:string):Promise<ArcResult>
 	guard.lower();
 	ctx.character.getComponent(CharacterPose)?.guard(0);
 	ctx.npc.blockReadyTimestamp = Time.time + BLOCK.cooldown;
-	if (!held.ok) {
+	if (held.status !== 'ok') {
 		return { ...held, verb: 'block' };
 	}
-	return { ok: true, verb: 'block', reason: guard.blocked ? `blocked ${guard.blocked}` : 'nothing came' };
+	return { status: 'ok', verb: 'block', reason: guard.blocked ? `blocked ${guard.blocked}` : 'nothing came' };
 }
 
 const PROTECT_COVER = 1.2;
@@ -814,7 +815,7 @@ async function doProtect(host:GameHost, call:Call, name:string):Promise<ArcResul
 	const ward = protectWard(host, ctx, name);
 	if (!ward) {
 		return {
-			ok: false,
+			status: 'failed',
 			verb: 'protect',
 			reason: name.trim() ? `no such person ${name}` : 'no one to protect',
 		};
@@ -830,20 +831,20 @@ async function doProtect(host:GameHost, call:Call, name:string):Promise<ArcResul
 	const threat = stay ? fighting : nearest;
 	if (!threat) {
 		const walk = await call.goTo(idOf(ward), { within: 1.4 });
-		if (!walk.ok) {
+		if (walk.status !== 'ok') {
 			return { ...walk, verb: 'protect' };
 		}
 		const hold = await call.wait(0.35);
-		if (!hold.ok) {
+		if (hold.status !== 'ok') {
 			return { ...hold, verb: 'protect' };
 		}
-		return { ok: true, verb: 'protect', reason: `guard ${idOf(ward)}` };
+		return { status: 'ok', verb: 'protect', reason: `guard ${idOf(ward)}` };
 	}
 	const here = ctx.character.transform.position;
 	const screen = stay ? here : standableNear(host.world, ctx.character, screenPoint(ward, threat, here));
 	if (distanceXZ(screen, here) > 0.55) {
 		const walk = await call.goToPoint([screen.x, screen.z]);
-		if (!walk.ok) {
+		if (walk.status !== 'ok') {
 			return { ...walk, verb: 'protect' };
 		}
 	}
@@ -854,10 +855,10 @@ async function doProtect(host:GameHost, call:Call, name:string):Promise<ArcResul
 		return { ...hit, verb: 'protect', reason: hit.reason ?? `peel ${idOf(threat)}` };
 	}
 	const hold = await call.wait(0.35);
-	if (!hold.ok) {
+	if (hold.status !== 'ok') {
 		return { ...hold, verb: 'protect' };
 	}
-	return { ok: true, verb: 'protect', reason: `screen ${idOf(ward)}` };
+	return { status: 'ok', verb: 'protect', reason: `screen ${idOf(ward)}` };
 }
 
 const HEAL_REST = ['Witch', 'Archer', 'Blade'] as const;
@@ -919,14 +920,14 @@ async function doHeal(host:GameHost, call:Call, name:string):Promise<ArcResult> 
 	const npc = ctx.npc;
 	const role = fightRole(host, ctx.character);
 	if (role && role !== 'Healer') {
-		return { ok: false, verb: 'heal', reason: 'only a healer can heal' };
+		return { status: 'failed', verb: 'heal', reason: 'only a healer can heal' };
 	}
 	const target = name.trim()
 		? findHealNamed(host, ctx.character, name)
 		: pickHealTarget(host, ctx.character);
 	if (!target) {
 		return {
-			ok: false,
+			status: 'failed',
 			verb: 'heal',
 			reason: name.trim() ? `no such person ${name}` : 'no one hurt',
 		};
@@ -934,7 +935,7 @@ async function doHeal(host:GameHost, call:Call, name:string):Promise<ArcResult> 
 	const id = idOf(target);
 	if (target !== ctx.character) {
 		const walk = await closeTo(host, call, target, HEAL.range);
-		if (!walk.ok) {
+		if (walk.status !== 'ok') {
 			return { ...walk, verb: 'heal' };
 		}
 		npc.faceToward(id);
@@ -945,9 +946,9 @@ async function doHeal(host:GameHost, call:Call, name:string):Promise<ArcResult> 
 	const held = await holdReady(call, Time.time, npc.healReadyTimestamp, HEAL.castTime, () => {
 		ctx.character.getComponent(CharacterAnimation)?.strike('heal', HEAL.castTime, healed);
 	}, outOfRange);
-	const result = held.ok ? landHeal(host, ctx, id, healed) : { ...held, verb: 'heal' };
+	const result = held.status === 'ok' ? landHeal(host, ctx, id, healed) : { ...held, verb: 'heal' };
 	// Its light blooms on the healed, or goes out.
-	ctx.character.getComponent(CharacterPose)?.resolve(result.ok ? 'hit' : held.ok ? 'miss' : 'cut');
+	ctx.character.getComponent(CharacterPose)?.resolve(result.status === 'ok' ? 'hit' : held.status === 'ok' ? 'miss' : 'cut');
 	return result;
 }
 
@@ -956,19 +957,19 @@ function landHeal(host:GameHost, ctx:CharacterCtx, id:string, healed:GameObject)
 	const npc = ctx.npc;
 	const target = findObject(ctx.world, id) ?? healed;
 	if (!isLiving(target)) {
-		return { ok: false, verb: 'heal', reason: 'down' };
+		return { status: 'failed', verb: 'heal', reason: 'down' };
 	}
 	if (target !== ctx.character) {
 		if (isRival(host, ctx.character, target)) {
-			return { ok: false, verb: 'heal', reason: 'heal your party, not the enemy' };
+			return { status: 'failed', verb: 'heal', reason: 'heal your party, not the enemy' };
 		}
 		if (distanceXZ(ctx.character, target) > HEAL.range + 0.5) {
-			return { ok: false, verb: 'heal', reason: 'too far' };
+			return { status: 'failed', verb: 'heal', reason: 'too far' };
 		}
 	}
 	const vitals = target.getComponent(Vitals);
 	if (!vitals) {
-		return { ok: false, verb: 'heal', reason: 'no vitals' };
+		return { status: 'failed', verb: 'heal', reason: 'no vitals' };
 	}
 	const covered = target !== ctx.character && !combatSight(ctx.world, ctx.character, target);
 	const hp = covered ? Math.max(1, Math.round(HEAL.hp * COVER_SOFTEN)) : HEAL.hp;
@@ -984,7 +985,7 @@ function landHeal(host:GameHost, ctx:CharacterCtx, id:string, healed:GameObject)
 		major: false,
 	});
 	return {
-		ok: true,
+		status: 'ok',
 		verb: 'heal',
 		reason: covered
 			? `${ally} ${vitals.hp}/${vitals.maxHP} through cover, +${hp} more over ${HEAL.regen}s`
@@ -995,58 +996,58 @@ function landHeal(host:GameHost, ctx:CharacterCtx, id:string, healed:GameObject)
 async function doEquip(ctx:CharacterCtx, itemName:string, slotName?:string):Promise<ArcResult> {
 	const item = findItem(ctx.character, itemName);
 	if (!item) {
-		return { ok: false, verb: 'equip', reason: `not carrying ${itemName}` };
+		return { status: 'failed', verb: 'equip', reason: `not carrying ${itemName}` };
 	}
 	const slot = slotName ? asSlot(slotName) : undefined;
 	if (slotName && !slot) {
-		return { ok: false, verb: 'equip', reason: `no slot ${slotName}` };
+		return { status: 'failed', verb: 'equip', reason: `no slot ${slotName}` };
 	}
 	const err = equipItem(ctx.character, item, ctx.world, slot);
 	if (err) {
-		return { ok: false, verb: 'equip', reason: err };
+		return { status: 'failed', verb: 'equip', reason: err };
 	}
 	removeFromBags(ctx.character, item);
-	return { ok: true, verb: 'equip' };
+	return { status: 'ok', verb: 'equip' };
 }
 
 async function doUnequip(ctx:CharacterCtx, slotName:string):Promise<ArcResult> {
 	const slot = asSlot(slotName);
 	if (!slot) {
-		return { ok: false, verb: 'unequip', reason: `no slot ${slotName}` };
+		return { status: 'failed', verb: 'unequip', reason: `no slot ${slotName}` };
 	}
 	unequipSlot(ctx.character, slot, ctx.world);
-	return { ok: true, verb: 'unequip' };
+	return { status: 'ok', verb: 'unequip' };
 }
 
 async function doSteal(host:GameHost, call:Call, itemName:string, fromName:string):Promise<ArcResult> {
 	const { ctx } = call;
 	if (!fromName) {
-		return { ok: false, verb: 'steal', reason: 'steal from whom?' };
+		return { status: 'failed', verb: 'steal', reason: 'steal from whom?' };
 	}
 	if (ctx.character.getComponent(MarketNPC)?.kind === 'guard') {
-		return { ok: false, verb: 'steal', reason: 'the watch does not steal' };
+		return { status: 'failed', verb: 'steal', reason: 'the watch does not steal' };
 	}
 	const victim = findObject(ctx.world, fromName);
 	if (!victim) {
-		return { ok: false, verb: 'steal', reason: `no such character ${fromName}` };
+		return { status: 'failed', verb: 'steal', reason: `no such character ${fromName}` };
 	}
 	if (victim === ctx.character) {
-		return { ok: false, verb: 'steal', reason: 'cannot steal from yourself' };
+		return { status: 'failed', verb: 'steal', reason: 'cannot steal from yourself' };
 	}
 	const walk = await call.goTo(fromName);
-	if (!walk.ok) {
+	if (walk.status !== 'ok') {
 		return { ...walk, verb: 'steal' };
 	}
 	const move = { verb: 'steal', thing: itemName, from: victim, to: ctx.character };
 	const refused = transferRefusal(move);
 	if (refused) {
-		return { ok: false, verb: 'steal', reason: refused };
+		return { status: 'failed', verb: 'steal', reason: refused };
 	}
 	const stock = findItem(victim, itemName);
 	const label = pascalCase(stock?.name ?? itemName) || itemName;
 	doTransfer(host, move);
 	reportTheft(host, ctx.character, label, fromName, 'stole without paying');
-	return { ok: true, verb: 'steal', reason: `stole ${label} from ${fromName}` };
+	return { status: 'ok', verb: 'steal', reason: `stole ${label} from ${fromName}` };
 }
 
 export function reportTheft(

@@ -24,7 +24,9 @@ export class DirectorPulse extends Component {
 		if (!this.gameObject.world?.arcDirectorOn) {
 			return;
 		}
+		const start = performance.now();
 		this.director.pulse(dt);
+		this.gameObject.world.perf.add('director', performance.now() - start);
 	}
 }
 

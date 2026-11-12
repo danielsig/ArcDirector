@@ -1,9 +1,11 @@
 import { prefs, type ArcFormatPref, type PlayerMode, type ShadowQuality, type SystemOneKind } from '../prefs';
 import { characterOptions, resolvePlayerKind } from '../render/character-models';
 import type { RenderStats } from '@arc-director/kindling';
+import type { PerfStats } from '../engine/PerfHistory';
 import { readURLStats } from '../engine/url-view';
 import type { BenchKind, BenchRow } from '../director/bench';
 import type { SayCatalog } from './say-commands';
+import { CHUNK_SIZE } from '../world/constants';
 
 export type MinimapCell = {
 	def:string;
@@ -193,6 +195,9 @@ export type HudSlate = HudThink & {
 export const SLATE_WIDTH = 330;
 export const SLATE_HEIGHT = 190;
 
+/** The minimap's side in pixels: one chunk at 7 px a tile. The key hints stack above it. */
+export const MINIMAP_SIZE = CHUNK_SIZE * 7;
+
 export type MenuPage = 'game' | 'display' | 'audio' | 'testing';
 
 export type HudModel = {
@@ -209,6 +214,8 @@ export type HudModel = {
 	pickupHint:HudPickup;
 	/** No mouse or trackpad is attached: the touch controls show. */
 	touch:boolean;
+	/** The mouse is captured (pointer lock): the Esc hint shows. */
+	pointerLocked:boolean;
 	hotbar:HudItem[];
 	heldLeft:string;
 	heldRight:string;
@@ -277,7 +284,7 @@ export type HudModel = {
 	/** Testing-only overlay (`stats=1`). */
 	statsOverlay:boolean;
 	/** Updated only while the overlay or the Testing page shows it (reading it walks the scene). */
-	renderStats:RenderStats;
+	renderStats:RenderStats & PerfStats;
 	detailMaps:boolean;
 	shadows:ShadowQuality;
 	fpsCounter:boolean;
@@ -342,6 +349,7 @@ export function emptyHud():HudModel {
 			visible: false,
 		},
 		touch: false,
+		pointerLocked: false,
 		hotbar: [],
 		heldLeft: '',
 		heldRight: '',
@@ -383,7 +391,7 @@ export function emptyHud():HudModel {
 		playerKind: resolvePlayerKind(p.playerKind),
 		playerKinds: characterOptions(),
 		statsOverlay: readURLStats(),
-		renderStats: { calls: 0, triangles: 0, geometries: 0, textures: 0, framebufferMemory: 0, sceneMemory: 0, frameMS: 0, frameMSNow: 0 },
+		renderStats: { calls: 0, triangles: 0, geometries: 0, textures: 0, framebufferMemory: 0, sceneMemory: 0, frameMS: 0, frameMSNow: 0, fps: [], phaseMS: { director: 0, simulate: 0, render: 0 }, heapMB: undefined },
 		detailMaps: p.detailMaps,
 		shadows: p.shadows,
 		fpsCounter: p.fpsCounter,

@@ -122,9 +122,9 @@ export class Mover {
 
 	public go(characterID:string, dest:MoveDest, verb:string, opts:MoveOpts = {}):Promise<ArcResult> {
 		if (!this.canMove) {
-			return Promise.resolve({ ok: false, verb, reason: 'cannot move' });
+			return Promise.resolve({ status: 'failed', verb, reason: 'cannot move' });
 		}
-		this.stop(characterID, { ok: false, interrupted: true, verb, reason: 'replaced' });
+		this.stop(characterID, { status: 'stopped', verb, reason: 'replaced' });
 		for (const settled of this._settled.values()) {
 			settled.delete(characterID);
 		}
@@ -148,7 +148,7 @@ export class Mover {
 		});
 	}
 
-	/** End `characterID`'s move, standing still. Default result: interrupted. */
+	/** End `characterID`'s move, standing still. Default result: stopped. */
 	public stop(characterID:string, result?:ArcResult):void {
 		const errand = this._errands.get(characterID);
 		if (!errand) {
@@ -158,7 +158,7 @@ export class Mover {
 		if (errand.character !== undefined) {
 			this._world?.steerToward?.(errand.character, null);
 		}
-		errand.done(result ?? { ok: false, interrupted: true, verb: errand.verb });
+		errand.done(result ?? { status: 'stopped', verb: errand.verb });
 	}
 
 	public tick():void {
@@ -182,12 +182,12 @@ export class Mover {
 		const character = world.find(id);
 		const me = character === undefined ? undefined : world.getPose(character)?.point;
 		if (character === undefined || !me) {
-			return { ok: false, verb: e.verb, reason: 'not in this scene' };
+			return { status: 'failed', verb: e.verb, reason: 'not in this scene' };
 		}
 		e.character = character;
 		const now = this._now();
 		const aim = this.aim(e, character);
-		if ('ok' in aim) {
+		if ('status' in aim) {
 			return aim;
 		}
 		const { goal, dest, within } = aim;
@@ -200,7 +200,7 @@ export class Mover {
 				e.checkedAt = now;
 				const met = e.opts.check();
 				if (met !== undefined) {
-					return { ok: true, verb: e.verb, reason: met };
+					return { status: 'ok', verb: e.verb, reason: met };
 				}
 			}
 			if (goal.reached(me)) {
@@ -260,7 +260,7 @@ export class Mover {
 		const world = this._world!;
 		if ('goal' in e.dest) {
 			const goal = e.dest.goal();
-			return goal ? { goal, within: 0 } : { ok: false, verb: e.verb, reason: 'gone' };
+			return goal ? { goal, within: 0 } : { status: 'failed', verb: e.verb, reason: 'gone' };
 		}
 		if ('point' in e.dest) {
 			const within = e.opts.within ?? 0;
@@ -270,7 +270,7 @@ export class Mover {
 		// Its part nearest the one going there, for a thing spread over many cells.
 		const pose = found === undefined ? undefined : world.getPose(found, character);
 		if (!pose) {
-			return { ok: false, verb: e.verb, reason: `${e.dest.target} is ${world.isDown?.(e.dest.target) ? 'down' : 'gone'}` };
+			return { status: 'failed', verb: e.verb, reason: `${e.dest.target} is ${world.isDown?.(e.dest.target) ? 'down' : 'gone'}` };
 		}
 		const within = e.opts.within ?? world.getReach?.(character, found) ?? 1;
 		return { goal: pointGoal(pose.point, within), dest: pose.point, facing: pose.facing, within };
@@ -359,7 +359,7 @@ export class Mover {
 				const settled = this._settled.get(e.dest.target) ?? new Map<string, { ring:number; index:number }>();
 				this._settled.set(e.dest.target, settled.set(id, e.slot));
 			}
-			return { ok: true, verb: e.verb };
+			return { status: 'ok', verb: e.verb };
 		}
 		e.route = undefined;
 		e.bestAt = now;
@@ -381,7 +381,7 @@ export class Mover {
 	/** New route to `goal`. A result means there is none. */
 	private plan(e:Errand, character:unknown, me:Vec, goal:RouteGoal, dest:Vec | undefined, toPlace:boolean):ArcResult | undefined {
 		if (e.stuck >= STUCK_TRIES) {
-			return { ok: false, verb: e.verb, reason: 'stuck' };
+			return { status: 'failed', verb: e.verb, reason: 'stuck' };
 		}
 		const route = findRoute(this._world as RouteWorld<unknown>, character, me, goal);
 		e.plannedAt = this._now();
@@ -394,7 +394,7 @@ export class Mover {
 			const target = 'target' in e.dest ? e.dest.target : undefined;
 			const reason = 'goal' in e.dest ? e.dest.noWay(why) : target !== undefined ? noWayTo(target, why) : why || 'no way there';
 			const by = route ? route.blockers.flatMap((b) => (b.by ? [b.by] : [])) : [];
-			return { ok: false, verb: e.verb, reason, unreachable: target, ...by.length > 0 ? { blockedBy: by } : {} };
+			return { status: 'failed', verb: e.verb, reason, unreachable: target, ...by.length > 0 ? { blockedBy: by } : {} };
 		}
 		e.route = route;
 		return undefined;

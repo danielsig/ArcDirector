@@ -1,335 +1,296 @@
 import { validateArc } from './validate.js';
-import { ArcError, JOIN_SYMBOL, SYMBOL_JOIN, groupArc, isArc, isCountMap, type Arc, type Join, type Step, type StepArg } from './arc-types.js';
-import { argBase, CHOOSE_VERB, GROUP_VERB, TEXT_ARG_KINDS, type VerbRegistry, type VerbSpec } from './stock-verbs.js';
-import { choicesOf, deriveChoiceName, freeChoiceName } from './choose.js';
-
-/** Arg kinds whose value is an expression. */
-const EXPR_KINDS = new Set(['watch', 'expr']);
-
-/** Watch / who exprs: `some(...)`, `isNear(me, BridgeKeeper)`, `units.filter("Guard")`. */
-function isCallExpr(s:string):boolean {
-	return /[A-Za-z_][\w.]*\(/.test(s);
-}
-
-/** `kind` is the arg's kind from the verb's spec: a `watch` or `expr` is written as it reads, never quoted. */
-function formatArg(v:StepArg, verbs:VerbRegistry | undefined, depth:Depth, kind?:string):string {
-	if (isArc(v)) {
-		return formatAt(v, verbs?.nested(), depth);
-	}
-	if (isCountMap(v)) {
-		return JSON.stringify(v);
-	}
-	if (Array.isArray(v)) {
-		return kind !== undefined && argBase(kind) === 'string[]' ? JSON.stringify(v) : v.join(',');
-	}
-	if (typeof v === 'string') {
-		if (isCallExpr(v) || (kind !== undefined && EXPR_KINDS.has(argBase(kind)))) {
-			return v;
-		}
-		if (/[\s,"()]/.test(v)) {
-			return JSON.stringify(v);
-		}
-		return v;
-	}
-	return String(v);
-}
-
-function isBareArg(formatted:string):boolean {
-	return /^-?\d+(\.\d+)?$/.test(formatted)
-		|| /^[A-Za-z][A-Za-z0-9_.]*$/.test(formatted)
-		|| ((formatted.startsWith('"') || formatted.startsWith("'")) && formatted.endsWith(formatted[0]));
-}
+import { ArcError, isCountMap, type Arc, type CountMap, type Join, type Step, type StepArg } from './arc-types.js';
+import { argBase, argKinds, CHOOSE_VERB, GROUP_VERB, IF_VERB, TEST_VERB, type VerbRegistry } from './stock-verbs.js';
+import { deriveChoiceName, freeChoiceName } from './choose.js';
+import { argKeys, hasVerbCall, parseProgram, type Arg, type Syntax, type VerbHooks } from '../expr/expr-parse.js';
+import { ExprError, RESERVED } from '../expr/expr-types.js';
 
 /**
- * Arc text that parses back to the same step. A lone arg drops its `key=` only when it is the verb's
- * first arg, which is where the parser puts a positional value; without `verbs` every arg keeps its key.
+ * Arc text: the one grammar (`expr/expr-parse.ts`) read into steps (`arc-format.ts` writes them back). `&&`, `||` and
+ * `;` (or a new line) between statements are the steps' joins; a group `( … )` or `{ … }` is one step; a verb's body is
+ * its arc arg; a statement that is a query, not a verb, is a {@link TEST_VERB} step.
  */
-export function formatStep(step:Step, verbs?:VerbRegistry, depth?:number):string {
-	const inner = groupArc(step);
-	if (inner) {
-		return `(${formatAt(inner, verbs, depth)})`;
-	}
-	if (step.verb === CHOOSE_VERB) {
-		return formatChoose(step, verbs, depth);
-	}
-	const keys = Object.keys(step.args);
-	if (keys.length === 0) {
-		return `${step.verb}()`;
-	}
-	const kinds:Record<string, string> = verbs?.get(step.verb)?.args ?? {};
-	const first = Object.keys(kinds)[0];
-	const block = depth !== undefined && keys.some((k) => isArc(step.args[k]));
-	const parts = keys.map((k) => {
-		const value = step.args[k];
-		const formatted = formatArg(value, verbs, block ? depth + 1 : undefined, kinds[k]);
-		if (keys.length === 1 && k === first && (isBareArg(formatted) || isArc(value))) {
-			return formatted;
-		}
-		return `${k}=${formatted}`;
-	});
-	return call(step.verb, parts, block ? depth : undefined);
+
+/** Joins by operator, and how tightly each binds. */
+const JOIN_OF:Record<string, Join> = { '&&': 'if_ok', '||': 'if_failed', ';': 'always' };
+
+/** Query functions a statement may call though no verb has its name; any `is…`, `has…`, `was…` or `can…` too. */
+const QUERY_NAMES = new Set([...RESERVED, 'distance', 'facing', 'manhattan', 'chebyshev', 'inSquare', 'doing', 'hp']);
+
+function isQueryName(name:string):boolean {
+	return QUERY_NAMES.has(name) || /^(is|has|was|can)[A-Z]/.test(name);
 }
 
-/** `choose("goal", name=arc, …)`. A choice whose name is the one its arc would get is written bare. */
-function formatChoose(step:Step, verbs:VerbRegistry | undefined, depth:Depth):string {
-	const parts = typeof step.args.goal === 'string' ? [JSON.stringify(step.args.goal)] : [];
-	const inner = depth === undefined ? undefined : depth + 1;
-	for (const [name, arc] of Object.entries(choicesOf(step))) {
-		const text = formatAt(arc, verbs?.nested(), inner);
-		// Block layout is what prompts show, and they ask for every choice named.
-		parts.push(depth === undefined && name === deriveChoiceName(arc) ? text : `${name}=${text}`);
-	}
-	return call(CHOOSE_VERB, parts, depth);
-}
-
-/** `verb(a, b)`, or at a block depth each part on its own line a tab deeper, ending in a comma, and `)` alone. */
-function call(verb:string, parts:string[], depth:Depth):string {
-	if (depth === undefined) {
-		return `${verb}(${parts.join(', ')})`;
-	}
-	const pad = '\t'.repeat(depth);
-	return `${verb}(\n${parts.map((part) => `${pad}\t${part},\n`).join('')}${pad})`;
-}
-
-export function formatArc(arc:Arc, verbs?:VerbRegistry):string {
-	return formatAt(arc, verbs, undefined);
-}
-
-/**
- * Arc text in block layout: a call that holds an arc or choices opens on its own line, its args go one per line a
- * tab deeper, each ending in a comma, and its `)` stands alone. A top-level `;` is a new line. Prompts show
- * arcs this way, so a model copies a layout whose indentation counts its parens.
- */
-export function formatArcBlocks(arc:Arc, verbs?:VerbRegistry):string {
-	return formatAt(arc, verbs, 0);
-}
-
-/** One line where `depth` is undefined, else block layout at that depth. */
-type Depth = number | undefined;
-
-function formatAt(arc:Arc, verbs:VerbRegistry | undefined, depth:Depth):string {
-	return arc.map((step, i) => {
-		const text = formatStep(step, verbs, depth);
-		if (i === arc.length - 1) {
-			return text;
-		}
-		const join = step.then ?? 'if_ok';
-		return `${text}${depth === 0 && join === 'always' ? '\n' : ` ${JOIN_SYMBOL[join]} `}`;
-	}).join('');
-}
-
-function skipWs(s:string, i:number):number {
-	while (i < s.length && /\s/.test(s[i])) {
-		i += 1;
-	}
-	return i;
-}
-
-function parseQuoted(s:string, i:number):{ value:string; next:number } {
-	const q = s[i];
-	i += 1;
-	let out = '';
-	while (i < s.length) {
-		if (s[i] === '\\' && i + 1 < s.length) {
-			out += s[i + 1];
-			i += 2;
-			continue;
-		}
-		if (s[i] === q) {
-			return { value: out, next: i + 1 };
-		}
-		out += s[i];
-		i += 1;
-	}
-	return { value: out, next: i };
-}
-
-/** Index past the `)` at `i`. End of input stands in for every closer the model left off. */
-function closeAt(s:string, i:number, missing:string):number {
-	if (i >= s.length) {
-		return i;
-	}
-	if (s[i] !== ')') {
-		throw new ArcError(missing);
-	}
-	return i + 1;
-}
-
-/** True when `, key=` at `i` starts another arg of this verb. */
-function namedArgAt(s:string, i:number, keys:string[]):boolean {
-	const m = /^\s*([A-Za-z_]\w*)\s*=(?!=)/.exec(s.slice(i, i + 64));
-	return !!m && keys.includes(m[1]);
-}
-
-/**
- * Prose arg (`text` kind). Double-quoted, or raw up to the closing `)` or the next
- * `, key=` of this verb. Commas and apostrophes are plain text.
- */
-function parseText(s:string, i:number, keys:string[]):{ value:string; next:number } {
-	i = skipWs(s, i);
-	if (s[i] === '"') {
-		return parseQuoted(s, i);
-	}
-	const start = i;
-	let depth = 0;
-	while (i < s.length) {
-		const c = s[i];
-		if (c === '(') {
-			depth += 1;
-		}
-		else if (c === ')') {
-			if (depth === 0) {
-				break;
+/** What the parser needs to know of `registry`'s verbs, nested arcs' included. */
+function hooksOf(registry:VerbRegistry):VerbHooks {
+	const specOf = (name:string) => registry.get(name) ?? registry.nested().get(name);
+	return {
+		argsOf: (name) => {
+			const spec = specOf(name);
+			return spec && argKinds(spec);
+		},
+		takesBody: (name, args) => {
+			if (name === CHOOSE_VERB) {
+				return args.every((arg) => arg.name === 'goal' || (arg.name === undefined && (arg.value.type === 'lit' || arg.value.type === 'text')));
 			}
-			depth -= 1;
-		}
-		else if (c === ',' && depth === 0 && namedArgAt(s, i + 1, keys)) {
-			break;
-		}
-		i += 1;
-	}
-	const raw = s.slice(start, i).trim();
-	const quoted = raw.length > 1 && raw.startsWith("'") && raw.endsWith("'");
-	return { value: quoted ? raw.slice(1, -1) : raw, next: i };
+			const spec = specOf(name);
+			const kinds = spec ? argKinds(spec) : {};
+			const given = new Set(argKeys(kinds, args));
+			return Object.entries(kinds).some(([key, kind]) => kind === 'arc' && !given.has(key));
+		},
+		anyNamed: (name) => name === CHOOSE_VERB,
+	};
 }
 
-function parseBalanced(s:string, i:number):{ value:string; next:number } {
-	i = skipWs(s, i);
-	const start = i;
-	let depth = 0;
-	let quote:string | null = null;
-	let escape = false;
-	while (i < s.length) {
-		const c = s[i];
-		if (quote) {
-			if (escape) {
-				escape = false;
-				i += 1;
+export function parseArcText(text:string, registry:VerbRegistry):Arc {
+	let syntax:Syntax | undefined;
+	try {
+		syntax = parseProgram(text, hooksOf(registry));
+	}
+	catch (err) {
+		throw err instanceof ExprError ? new ArcError(err.message) : err;
+	}
+	if (!syntax) {
+		throw new ArcError('expected verb');
+	}
+	const arc = new Reader(text).chain(syntax, registry);
+	validateArc(arc, registry);
+	return arc;
+}
+
+/** Steps from a parsed program. `cond`: a call to a name that is no verb is a query (an `if`'s condition). */
+class Reader {
+	constructor(private readonly _src:string) {}
+
+	/** How `node` was written. */
+	private text(node:Syntax):string {
+		return this._src.slice(node.from, node.to).trim();
+	}
+
+	/** `node` as steps: `&&`, `||` and `;` are joins, as the parser ranked them. */
+	public chain(node:Syntax, verbs:VerbRegistry, cond = false):Arc {
+		const out:Step[] = [];
+		this.flatten(node, verbs, cond, out);
+		return out;
+	}
+
+	private flatten(node:Syntax, verbs:VerbRegistry, cond:boolean, out:Step[]):void {
+		if (node.type === 'binary' && JOIN_OF[node.op]) {
+			this.flatten(node.left, verbs, cond, out);
+			const join = JOIN_OF[node.op];
+			if (join !== 'if_ok') {
+				out[out.length - 1].then = join;
+			}
+			this.flatten(node.right, verbs, cond, out);
+			return;
+		}
+		out.push(this.step(node, verbs, cond));
+	}
+
+	private step(node:Syntax, verbs:VerbRegistry, cond:boolean):Step {
+		switch (node.type) {
+			case 'paren':
+				return { verb: GROUP_VERB, args: { arc: this.chain(node.expr, verbs, cond) } };
+			case 'block':
+				if (!node.body) {
+					throw new ArcError('{ } holds no step');
+				}
+				return { verb: GROUP_VERB, args: { arc: this.chain(node.body, verbs, cond) } };
+			case 'let':
+				return this.let(node.name, node.value, verbs);
+			case 'label':
+				throw new ArcError(`${node.name}: names a choice, inside choose("goal") { … } only`);
+			case 'call': {
+				const name = node.callee.type === 'ident' || node.callee.type === 'member' ? node.callee.name : '';
+				if (verbs.get(name) || verbs.nested().get(name)) {
+					return this.verb(node, name, verbs);
+				}
+				if (!cond && !isQueryName(name)) {
+					throw new ArcError(`unknown verb '${name}'`);
+				}
+				return this.test(node, verbs);
+			}
+			case 'lit':
+			case 'text':
+			case 'array':
+			case 'object':
+				if (cond) {
+					return this.test(node, verbs);
+				}
+				throw new ArcError(`${this.text(node)} alone is not a step${node.type === 'lit' && node.value.kind === 'string' ? ': say("…") speaks a line' : ''}`);
+			case 'ident':
+				// A lone name is a test of a name this arc gave (`let picked`); a capitalized one is a thing, not a step.
+				if (/^[A-Z]/.test(node.name) && !cond) {
+					throw new ArcError(`${node.name} alone is not a step: give it to a verb, as in go_to(${node.name})`);
+				}
+				return this.test(node, verbs);
+			default:
+				return this.test(node, verbs);
+		}
+	}
+
+	/** A statement that asks rather than acts: it succeeds while it holds. */
+	private test(node:Syntax, verbs:VerbRegistry):Step {
+		if (hasVerbCall(node, hooksOf(verbs))) {
+			throw new ArcError(`${this.text(node)}: a verb inside an expression; join steps with &&, || or ;, or branch with if`);
+		}
+		return { verb: TEST_VERB, args: { watch: this.text(node) } };
+	}
+
+	/** `let name = step`: the step, named. A chain is one step, its group. */
+	private let(name:string, value:Syntax, verbs:VerbRegistry):Step {
+		const arc = this.chain(value, verbs);
+		const step = arc.length === 1 && !arc[0].let ? arc[0] : { verb: GROUP_VERB, args: { arc } };
+		return { ...step, let: name };
+	}
+
+	private verb(node:Syntax & { type:'call' }, name:string, verbs:VerbRegistry):Step {
+		const spec = verbs.get(name) ?? verbs.nested().get(name)!;
+		const inside = name === IF_VERB ? verbs : verbs.nested();
+		// Method syntax is call syntax: `Wolf.attack()` is `attack(Wolf)`.
+		const written:Arg[] = node.callee.type === 'member' ? [{ value: node.callee.recv }, ...node.args] : node.args;
+		if (name === CHOOSE_VERB) {
+			return this.choose(written, node.body, inside);
+		}
+		const kinds = argKinds(spec);
+		const keys = argKeys(kinds, written);
+		const args:Record<string, StepArg> = {};
+		const put = (key:string | undefined, value:Syntax, cond = false):void => {
+			if (key === undefined) {
+				throw new ArcError(`verb '${name}' got an unexpected positional arg`);
+			}
+			if (key in args) {
+				throw new ArcError(`${name}(...) got ${key}= twice; give it once`);
+			}
+			args[key] = this.value(value, kinds[key], key, inside, cond || (name === IF_VERB && key === 'cond'));
+		};
+		written.forEach((arg, n) => put(keys[n], arg.value));
+		if (node.body) {
+			const key = Object.keys(kinds).find((k) => argBase(kinds[k]) === 'arc' && !(k in args));
+			if (!key) {
+				throw new ArcError(`${name} has its arc already: give it no { } body`);
+			}
+			put(key, node.body);
+		}
+		if (node.else) {
+			put('else' in spec.args ? 'else' : undefined, node.else);
+		}
+		return { verb: name, args };
+	}
+
+	/** `choose("goal") { name: step … }`, or the old `choose("goal", name=arc, arc, …)`. Unnamed choices are named after their first verb. */
+	private choose(written:readonly Arg[], body:Syntax | undefined, verbs:VerbRegistry):Step {
+		let goal:string | undefined;
+		const rows:{ name?:string; arc:Arc }[] = [];
+		const add = (name:string | undefined, node:Syntax):void => {
+			if (name !== undefined && rows.some((row) => row.name === name)) {
+				throw new ArcError(`choose has two choices named '${name}'`);
+			}
+			rows.push({ name, arc: this.chain(node.type === 'block' ? node.body ?? node : node, verbs) });
+		};
+		for (const arg of written) {
+			const prose = arg.value.type === 'text' || (arg.value.type === 'lit' && arg.value.value.kind === 'string');
+			if (arg.name === 'goal' || (arg.name === undefined && prose && goal === undefined && rows.length === 0)) {
+				if (goal !== undefined) {
+					throw new ArcError('choose has two goals');
+				}
+				const value = arg.value.type === 'text' || arg.value.type === 'lit' ? this.value(arg.value, 'text', 'goal', verbs) : undefined;
+				if (typeof value !== 'string') {
+					throw new ArcError('choose goal must be text');
+				}
+				goal = value;
 				continue;
 			}
-			if (c === '\\') {
-				escape = true;
-				i += 1;
-				continue;
+			add(arg.name, arg.value);
+		}
+		for (const statement of body?.type === 'block' ? statements(body.body) : statements(body)) {
+			if (statement.type === 'label') {
+				add(statement.name, statement.body);
 			}
-			if (c === quote) {
-				quote = null;
+			else {
+				add(undefined, statement);
 			}
-			i += 1;
-			continue;
 		}
-		if (c === '"' || c === "'") {
-			quote = c;
-			i += 1;
-			continue;
+		const taken = new Set(rows.flatMap((row) => (row.name ? [row.name] : [])));
+		const args:Record<string, StepArg> = goal === undefined ? {} : { goal };
+		for (const row of rows) {
+			const name = row.name ?? freeChoiceName(deriveChoiceName(row.arc), taken);
+			taken.add(name);
+			args[name] = row.arc;
 		}
-		if (c === '(' || c === '[' || c === '{') {
-			depth += 1;
-			i += 1;
-			continue;
+		return { verb: CHOOSE_VERB, args };
+	}
+
+	/** One arg's value, read for its `kind`. */
+	private value(node:Syntax, kind:string | undefined, key:string, inside:VerbRegistry, cond = false):StepArg {
+		const base = argBase(kind);
+		const literal = node.type === 'lit' ? node.value : undefined;
+		if (base === 'arc') {
+			return this.chain(node.type === 'paren' || node.type === 'block' ? (node.type === 'paren' ? node.expr : node.body ?? node) : node, inside, cond);
 		}
-		if (c === ')' || c === ']' || c === '}') {
-			if (depth === 0) {
-				break;
+		if (literal?.kind === 'string' || node.type === 'text') {
+			const text = node.type === 'text' ? node.value : (literal as { value:string }).value;
+			return base === 'string[]' ? asStringArray(text) : base === 'bundle' ? asBundle(readJson(text), key) : text;
+		}
+		const number = numberOf(node);
+		if (base === 'number' && number !== undefined) {
+			return number;
+		}
+		// A duration keeps its unit, so seconds and rounds stay apart: `10s`, `2`.
+		if (base === 'hold' && number !== undefined) {
+			const raw = this.text(node);
+			return /\d$/.test(raw) ? number : raw;
+		}
+		if (base === 'hold' && literal?.kind === 'bool') {
+			return literal.value;
+		}
+		if (base === 'string[]') {
+			return asStringArray(node.type === 'array' ? node.items.map((item) => (item.type === 'lit' && item.value.kind === 'string' ? item.value.value : this.text(item))) : this.text(node));
+		}
+		if (base === 'bundle') {
+			return asBundle(node.type === 'object' ? this.counts(node.entries, key) : readJson(this.text(node)), key);
+		}
+		// What is not text by kind is read as its literal: an arg no verb has fails validation by its own name.
+		if (!kind && literal && (literal.kind === 'number' || literal.kind === 'bool')) {
+			return literal.value;
+		}
+		return this.text(node);
+	}
+
+	private counts(entries:readonly { key:string; value:Syntax }[], key:string):CountMap {
+		const out:CountMap = {};
+		for (const entry of entries) {
+			const count = numberOf(entry.value);
+			if (count === undefined) {
+				throw new ArcError(`${key} is {"Egg":12, "Milk":3}`);
 			}
-			depth -= 1;
-			i += 1;
-			continue;
+			out[entry.key] = count;
 		}
-		// No expression holds `;`: at depth 0 it ends the value, as a C-style arg separator.
-		if (depth === 0 && (c === ',' || c === ';')) {
-			break;
-		}
-		i += 1;
-	}
-	if (depth > 0) {
-		throw new ArcError('expression cut off before its closing bracket');
-	}
-	return { value: s.slice(start, i).trim(), next: i };
-}
-
-/** One arg's value. `text`: it is text whatever it looks like, so `code=007` stays `007`. */
-function parseValue(s:string, i:number, text = false):{ value:StepArg; next:number } {
-	i = skipWs(s, i);
-	if (s[i] === '"' || s[i] === "'") {
-		return parseQuoted(s, i);
-	}
-	const parsed = parseBalanced(s, i);
-	const raw = parsed.value;
-	if (text) {
-		return parsed;
-	}
-	if (raw === 'true' || raw === 'false') {
-		return { value: raw === 'true', next: parsed.next };
-	}
-	if (/^-?\d+(\.\d+)?$/.test(raw)) {
-		return { value: Number(raw), next: parsed.next };
-	}
-	return { value: raw, next: parsed.next };
-}
-
-
-/** One step of a chain: a group `( … )` or a verb call. */
-function parseStepAtom(s:string, i:number, registry:VerbRegistry):{ step:Step; next:number } {
-	i = skipWs(s, i);
-	if (s[i] === '(') {
-		const inner = parseNestedArc(s, i + 1, registry);
-		const next = closeAt(s, skipWs(s, inner.next), 'missing ) for grouped arc');
-		return { step: { verb: GROUP_VERB, args: { arc: inner.value } }, next };
-	}
-	return parseStepText(s, i, registry);
-}
-
-/** Say how `step` joins the one after it. `&&` is the default and is not written down. */
-function joinTo(step:Step, join:Join):void {
-	if (join !== 'if_ok') {
-		step.then = join;
+		return out;
 	}
 }
 
-function parseNestedArc(s:string, i:number, registry:VerbRegistry):{ value:Arc; next:number } {
-	const first = parseStepAtom(s, i, registry);
-	const arc:Arc = [first.step];
-	let pos = first.next;
-	while (true) {
-		const j = skipWs(s, pos);
-		if (j >= s.length || s[j] === ',' || s[j] === ')') {
-			break;
-		}
-		const join = joinAt(s, pos);
-		if (!join) {
-			break;
-		}
-		const nxt = parseStepAtom(s, join.next, registry);
-		joinTo(arc[arc.length - 1], join.join);
-		arc.push(nxt.step);
-		pos = nxt.next;
+/** A number written as one: `5`, `-1`, `20s`. */
+function numberOf(node:Syntax):number | undefined {
+	if (node.type === 'lit' && node.value.kind === 'number') {
+		return node.value.value;
 	}
-	return { value: arc, next: pos };
+	const inner = node.type === 'unary' && node.op === '-' ? numberOf(node.expr) : undefined;
+	return inner === undefined ? undefined : -inner;
 }
 
-/** A lone name at `i` that is not a verb, with nothing after it but a join or the end: `BridgeKeeper` in `go_to BridgeKeeper`. */
-function bareArgAt(s:string, i:number, registry:VerbRegistry):{ value:string; next:number } | undefined {
-	const m = /^[A-Za-z_]\w*/.exec(s.slice(i, i + 128));
-	if (!m || registry.has(m[0])) {
-		return undefined;
+/** The statements of a body joined by `;` or new lines. */
+function statements(node:Syntax | undefined):Syntax[] {
+	if (!node) {
+		return [];
 	}
-	const next = i + m[0].length;
-	const after = skipWs(s, next);
-	return after >= s.length || s[after] === ')' || joinAt(s, next) ? { value: m[0], next } : undefined;
-}
-
-/** Index past a stuttered `key=` the model repeated after `key=`, as in `say(text=text="Hi")`. */
-function skipRepeatedKey(s:string, i:number, key:string):number {
-	const m = new RegExp(`^\\s*${key}\\s*=(?!=)`).exec(s.slice(i, i + key.length + 16));
-	return m ? i + m[0].length : i;
+	return node.type === 'binary' && node.op === ';' ? [...statements(node.left), ...statements(node.right)] : [node];
 }
 
 /** `{"Egg":12, "Milk":3}`. */
-function asBundle(value:StepArg, key:string):StepArg {
-	const parsed = typeof value === 'string' ? readJson(value) : value;
-	if (isCountMap(parsed)) {
-		return parsed;
+function asBundle(value:unknown, key:string):CountMap {
+	if (isCountMap(value)) {
+		return value;
 	}
 	throw new ArcError(`${key} is {"Egg":12, "Milk":3}`);
 }
@@ -344,268 +305,17 @@ function readJson(raw:string):unknown {
 }
 
 /** `["5 Egg", "Loaf"]`, or one bare line such as `5 Egg`. */
-function asStringArray(value:StepArg):string[] {
-	if (Array.isArray(value) && value.every((item):item is string => typeof item === 'string')) {
+function asStringArray(value:string | string[]):string[] {
+	if (Array.isArray(value)) {
 		return value;
 	}
-	if (Array.isArray(value)) {
-		throw new ArcError('a list arg is strings, as ["5 Egg", "Loaf"]');
-	}
-	if (typeof value !== 'string') {
-		throw new ArcError('a list arg is strings, as ["5 Egg", "Loaf"]');
-	}
 	const raw = value.trim();
-	if (!raw) {
-		return [];
+	if (!raw.startsWith('[')) {
+		return raw ? [raw] : [];
 	}
-	if (raw.startsWith('[')) {
-		let parsed:unknown;
-		try {
-			parsed = JSON.parse(raw);
-		}
-		catch {
-			throw new ArcError(`cannot read list ${raw}`);
-		}
-		if (!Array.isArray(parsed) || !parsed.every((item) => typeof item === 'string')) {
-			throw new ArcError('a list arg is strings, as ["5 Egg", "Loaf"]');
-		}
-		return parsed;
+	const parsed = readJson(raw);
+	if (!Array.isArray(parsed) || !parsed.every((item) => typeof item === 'string')) {
+		throw new ArcError('a list arg is strings, as ["5 Egg", "Loaf"]');
 	}
-	return [raw];
-}
-
-function parseStepText(s:string, i:number, registry:VerbRegistry):{ step:Step; next:number } {
-	i = skipWs(s, i);
-	const start = i;
-	while (i < s.length && /[A-Za-z0-9_]/.test(s[i])) {
-		i += 1;
-	}
-	const verb = s.slice(start, i);
-	if (!verb) {
-		throw new ArcError('expected verb');
-	}
-	i = skipWs(s, i);
-	const spec = registry.get(verb);
-	if (!spec) {
-		// A bare word is an argument that slipped out of its verb: `say(text=Hi) to=Guard`, `say(Hi) to Guard`.
-		if (start > 0 && s[i] !== '(') {
-			throw new ArcError(`${verb} is outside the parentheses. Put every argument inside its verb's parentheses, as in say(text=Hi, to=Name)`);
-		}
-		throw new ArcError(`unknown verb '${verb}'`);
-	}
-	if (verb === CHOOSE_VERB) {
-		return parseChoose(s, i, registry);
-	}
-	const bare = bareArgAt(s, i, registry);
-	const firstKey = nextPositionalKey(spec, {}, 0);
-	if (bare && firstKey) {
-		// `go_to BridgeKeeper`: one name with no parentheses is the verb's first arg.
-		return { step: { verb, args: { [firstKey]: bare.value } }, next: bare.next };
-	}
-	const args:Record<string, StepArg> = {};
-	const read = (key:string, at:number):{ value:StepArg; next:number } => {
-		const base = argBase(spec.args[key]);
-		if (base === 'arc') {
-			return parseNestedArc(s, at, registry.nested());
-		}
-		if (base === 'text') {
-			return parseText(s, at, Object.keys(spec.args).filter((k) => k !== key));
-		}
-		if (base === 'string[]') {
-			const parsed = parseValue(s, at);
-			return { value: asStringArray(parsed.value), next: parsed.next };
-		}
-		if (base === 'bundle') {
-			const parsed = parseValue(s, at);
-			return { value: asBundle(parsed.value, key), next: parsed.next };
-		}
-		return parseValue(s, at, TEXT_ARG_KINDS.includes(base));
-	};
-	if (s[i] === '(') {
-		i += 1;
-		i = skipWs(s, i);
-		if (i < s.length && s[i] !== ')') {
-			let positional = 0;
-			while (true) {
-				i = skipWs(s, i);
-				const nameStart = i;
-				while (i < s.length && /[A-Za-z0-9_]/.test(s[i])) {
-					i += 1;
-				}
-				const ident = s.slice(nameStart, i);
-				i = skipWs(s, i);
-				const key = nextPositionalKey(spec, args, positional);
-				// Prose may hold `=`: only this verb's own arg names start a named arg there.
-				const prose = !!key && argBase(spec.args[key]) === 'text' && !(ident in spec.args);
-				if (s[i] === '=' && !prose) {
-					if (ident in args) {
-						throw new ArcError(`${verb}(...) got ${ident}= twice; give it once`);
-					}
-					const parsed = read(ident, skipRepeatedKey(s, i + 1, ident));
-					args[ident] = parsed.value;
-					i = parsed.next;
-				}
-				else {
-					if (!key) {
-						throw new ArcError(`verb '${verb}' got an unexpected positional arg`);
-					}
-					const parsed = read(key, nameStart);
-					args[key] = parsed.value;
-					i = parsed.next;
-					positional += 1;
-				}
-				i = skipWs(s, i);
-				// Among args `;` is a comma a model wrote in C style: a `;` joining steps inside an arc arg was read with it.
-				if (s[i] === ',' || s[i] === ';') {
-					i = skipWs(s, i + 1);
-					// A trailing comma, as block layout ends every arg line.
-					if (s[i] === ')') {
-						break;
-					}
-					continue;
-				}
-				if (i >= s.length || s[i] === ')') {
-					break;
-				}
-				throw new ArcError(`expected ',' or ')' in ${verb}(...)`);
-			}
-		}
-		i = closeAt(s, i, `missing ')' for ${verb}`);
-	}
-	return { step: { verb, args }, next: i };
-}
-
-/**
- * The args of `choose("goal", name=arc, arc, …)` from its `(`. Every arg but `goal` is a choice. Bare ones are
- * named once every written name is known, so a written name always keeps its own.
- */
-function parseChoose(s:string, i:number, registry:VerbRegistry):{ step:Step; next:number } {
-	if (s[i] !== '(') {
-		throw new ArcError('choose needs ("goal", name=arc, …)');
-	}
-	i += 1;
-	let goal:string | undefined;
-	const rows:{ name?:string; arc:Arc }[] = [];
-	while (true) {
-		i = skipWs(s, i);
-		if (i >= s.length || s[i] === ')') {
-			break;
-		}
-		const named = /^([A-Za-z_]\w*)\s*=(?!=)/.exec(s.slice(i, i + 64));
-		const call = /^([A-Za-z_]\w*)\s*\(/.exec(s.slice(i, i + 64));
-		// Unquoted prose first is the goal, unless it is a verb call: `choose(hold the gate, …)`.
-		const leadingGoal = !named && goal === undefined && rows.length === 0 && s[i] !== '('
-			&& !(call && registry.nested().has(call[1]));
-		if (named?.[1] === 'goal' || leadingGoal) {
-			if (goal !== undefined) {
-				throw new ArcError('choose has two goals');
-			}
-			const parsed = parseValue(s, named ? i + named[0].length : i);
-			if (typeof parsed.value !== 'string') {
-				throw new ArcError('choose goal must be text');
-			}
-			goal = parsed.value;
-			i = parsed.next;
-		}
-		else {
-			const name = named?.[1];
-			if (name !== undefined && rows.some((row) => row.name === name)) {
-				throw new ArcError(`choose has two choices named '${name}'`);
-			}
-			const parsed = parseNestedArc(s, named ? i + named[0].length : i, registry.nested());
-			rows.push({ name, arc: parsed.value });
-			i = parsed.next;
-		}
-		i = skipWs(s, i);
-		if (s[i] === ',') {
-			i += 1;
-			continue;
-		}
-		if (i >= s.length || s[i] === ')') {
-			break;
-		}
-		throw new ArcError(`expected ',' or ')' in choose(...)`);
-	}
-	i = closeAt(s, i, `missing ')' for choose`);
-	const taken = new Set(rows.flatMap((row) => (row.name ? [row.name] : [])));
-	const args:Record<string, StepArg> = goal === undefined ? {} : { goal };
-	for (const row of rows) {
-		const name = row.name ?? freeChoiceName(deriveChoiceName(row.arc), taken);
-		taken.add(name);
-		args[name] = row.arc;
-	}
-	return { step: { verb: CHOOSE_VERB, args }, next: i };
-}
-
-function parseJoin(s:string, i:number):{ join:Join; next:number } | null {
-	i = skipWs(s, i);
-	if (s.startsWith('&&', i)) {
-		return { join: SYMBOL_JOIN['&&'], next: i + 2 };
-	}
-	if (s.startsWith('||', i)) {
-		return { join: SYMBOL_JOIN['||'], next: i + 2 };
-	}
-	if (s[i] === ';') {
-		return { join: SYMBOL_JOIN[';'], next: i + 1 };
-	}
-	return null;
-}
-
-/** A join, or `;` when the next atom follows with none (`think(...)use(...)`). A join with nothing after it is dropped. */
-function joinAt(s:string, i:number):{ join:Join; next:number } | null {
-	const join = parseJoin(s, i);
-	if (join) {
-		return skipWs(s, join.next) < s.length ? join : null;
-	}
-	const j = skipWs(s, i);
-	return /[A-Za-z_(]/.test(s[j] ?? '') ? { join: SYMBOL_JOIN[';'], next: j } : null;
-}
-
-function nextPositionalKey(
-	spec:VerbSpec,
-	args:Record<string, StepArg>,
-	from:number,
-):string | undefined {
-	const keys = Object.keys(spec.args);
-	for (let i = from; i < keys.length; i++) {
-		if (!(keys[i] in args)) {
-			return keys[i];
-		}
-	}
-	for (const key of keys) {
-		if (!(key in args)) {
-			return key;
-		}
-	}
-	return undefined;
-}
-
-/** Gemma copies the Example including a trailing period, and adds `)` or `,` between issue(). */
-function fixTrail(s:string, i:number):number {
-	i = skipWs(s, i);
-	while (i < s.length && (s[i] === ')' || s[i] === '.' || s[i] === ',')) {
-		i = skipWs(s, i + 1);
-	}
-	return i;
-}
-
-export function parseArcText(text:string, registry:VerbRegistry):Arc {
-	const parsed = parseNestedArc(text, 0, registry);
-	const arc = parsed.value;
-	let i = fixTrail(text, parsed.next);
-	while (i < text.length) {
-		const join = joinAt(text, i);
-		if (!join) {
-			if (parseJoin(text, i)) {
-				break;
-			}
-			throw new ArcError(`unexpected trailing text: ${text.slice(i)}`);
-		}
-		const nxt = parseNestedArc(text, join.next, registry);
-		joinTo(arc[arc.length - 1], join.join);
-		arc.push(...nxt.value);
-		i = fixTrail(text, nxt.next);
-	}
-	validateArc(arc, registry);
-	return arc;
+	return parsed;
 }

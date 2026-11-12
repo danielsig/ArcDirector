@@ -4,7 +4,7 @@ import { disposeFlame, flameSprite } from '../render/spell-fx';
 import { flameMaterial, getSheet } from '../render/spritesheet';
 import { SFX } from '../audio/sfx';
 import { enclosureAt } from '../world/interior';
-import { Flammable, Light } from './components';
+import { Flammable, Interior, Light } from './components';
 
 /** How far off a fire is heard crackling (m). */
 const HEAR = 6;
@@ -68,7 +68,9 @@ export class Fire extends Component {
 	private shines():boolean {
 		const world = this.gameObject.world;
 		const p = this.gameObject.transform.position;
-		return !world?.daylight || !!enclosureAt(world, p.x, p.z);
+		// A room of a place is only a named area: open sky over the ruins, rock over the crypt (never daylight).
+		const under = world && enclosureAt(world, p.x, p.z);
+		return !world?.daylight || (!!under && !under.getComponent(Interior)?.room);
 	}
 
 	public override onDisable():void {

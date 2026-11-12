@@ -73,7 +73,7 @@ export function gameWorld(host:GameHost):HostWorld<GameObject> {
 		canOffer: (from, to) => canHearClearly(host.world, idOf(from), idOf(to)),
 		getDescription: (character, target) => {
 			const seen = doExamine(host.world, character, target);
-			return seen.ok ? seen.reason : undefined;
+			return seen.status === 'ok' ? seen.reason : undefined;
 		},
 		steerToward: (character, point) => {
 			const npc = character.getComponent(NPCInput);

@@ -310,9 +310,8 @@ export function lookWorld(character:GameObject, ambient:string, host?:GameHost):
 		if (go.getComponent(HumanBody) && !isLiving(go)) {
 			continue;
 		}
-		const named = go.getComponent(Named);
-		const torch = go.getComponent(Torch) && !go.getComponent(Item);
-		if (!named && !torch) {
+		// Only what has a name: unnamed dressing (a wall torch) would show by its internal id, and a model goes to it.
+		if (!go.getComponent(Named)) {
 			continue;
 		}
 		const gp = go.transform.position;
@@ -404,19 +403,19 @@ export function followedCarry(ctx:CharacterCtx):string {
 export function doExamine(world:DemoWorld, character:GameObject, name:string):ArcResult {
 	const held = findCarried(character, (it) => itemMatchesName(it, name));
 	if (held) {
-		return { ok: true, verb: 'examine', reason: examineItem(world, held) };
+		return { status: 'ok', verb: 'examine', reason: examineItem(world, held) };
 	}
 	const go = world.findNamed(name);
 	if (!go) {
-		return { ok: false, verb: 'examine', reason: `unknown name ${name}` };
+		return { status: 'failed', verb: 'examine', reason: `unknown name ${name}` };
 	}
 	// Everyone sees the bridge; anything else is seen where light reaches it from near enough.
 	const seen = !!go.getComponent(Bridge)
 		|| (talkNotices(character, go) && distanceXZ(character, go) <= SIGHT && lineClear(world, 'light', character.transform.position, go.transform.position));
 	if (!seen) {
-		return { ok: false, verb: 'examine', reason: `${name} is not in sight` };
+		return { status: 'failed', verb: 'examine', reason: `${name} is not in sight` };
 	}
-	return { ok: true, verb: 'examine', reason: examineWorld(go) };
+	return { status: 'ok', verb: 'examine', reason: examineWorld(go) };
 }
 
 /** `A, B and C`, or `nothing`. */

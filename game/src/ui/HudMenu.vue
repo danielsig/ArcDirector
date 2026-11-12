@@ -664,6 +664,7 @@ function pct(n:number):string {
  * mockup-calm-menu.jpg). Switches are knobs, choices are outlined segments, sliders have a gold thumb.
  */
 .hud-menu-root {
+	z-index: var(--z-menu);
 	position: absolute;
 	inset: 0;
 	pointer-events: none;

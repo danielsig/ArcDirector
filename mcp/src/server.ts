@@ -110,7 +110,8 @@ async function main():Promise<void> {
 
 	server.registerTool('render_stats', {
 		description: 'Read GPU cost in a connected client: last frame draw calls and triangles, live geometries and textures, '
-			+ 'estimated sceneMemory (shadow maps, geometry, textures) and framebufferMemory (window-size dependent) in bytes, frameMS averaged over the last 30 s, and frameMSNow over the last second. Wait 30 s after loading a scene for a fair frameMS.',
+			+ 'estimated sceneMemory (shadow maps, geometry, textures) and framebufferMemory (window-size dependent) in bytes, frameMS averaged over the last 30 s, and frameMSNow over the last second; '
+			+ 'fps (frames drawn per second, last 600 s, oldest first), phaseMS (average ms per frame over the last second for director, simulate without the director, and render) and heapMB (used JS heap, Chrome only). Wait 30 s after loading a scene for a fair frameMS.',
 		inputSchema: { session: sessionField },
 	}, async ({ session }) => {
 		return text(await hub.call(session, { op: 'renderStats' }));

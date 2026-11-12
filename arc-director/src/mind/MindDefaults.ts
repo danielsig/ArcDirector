@@ -124,8 +124,14 @@ export class MindDefaults {
 		return this;
 	}
 
+	/** The fewest choices a `choose` in a reply may have before it goes back for repair, and the prompt asks for. Default 3. Needs repair turns. */
+	public withMinChoices(count:number):this {
+		this.settings.minChoices = count;
+		return this;
+	}
+
 	/**
-	 * The steps of a reply that need no body (`issue`, `law`, `when`, `say`, ...) are judged each on its own: the good ones
+	 * The steps of a reply that need no body (`command`, `law`, `when`, `say`, ...) are judged each on its own: the good ones
 	 * stand, the model's turn shows only those, and it is told in words what became of the rest, to replace just them. A
 	 * reply that does not read at all still goes back whole.
 	 */
@@ -143,7 +149,7 @@ export class MindDefaults {
 		return this;
 	}
 
-	/** Whether a finished arc stalled, which stretches the heartbeat. Default: it failed or was interrupted. */
+	/** Whether a finished arc stalled, which stretches the heartbeat. Default: it failed or was stopped. */
 	public withStalled(fn:(result:ArcResult)=>boolean):this {
 		this.settings.stalled = fn;
 		return this;

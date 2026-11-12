@@ -26,7 +26,7 @@ async function main():Promise<void> {
 		.withDefaultKit({ verbs: STOCK_VERBS })
 		.onVerb((call) => {
 			console.log(`host execute: ${call.verb}`, call.args);
-			return { ok: true, verb: call.verb };
+			return { status: 'ok', verb: call.verb };
 		})
 		.withSight({ look: () => fixtureSight() })
 		.withContext(() => ({ paragraph }))
@@ -69,7 +69,7 @@ async function main():Promise<void> {
 		console.log(`model: ${director.modelID()}`);
 	}
 
-	director.tick(1, 1);
+	director.tick(1);
 	const t0 = Date.now();
 	while (!director.character('Guard')?.mind?.lastArc) {
 		if (Date.now() - t0 > 180_000) {

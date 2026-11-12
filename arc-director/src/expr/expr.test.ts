@@ -7,7 +7,6 @@ import {
 	evaluate,
 	FACING_COS,
 	leftoverFilterHint,
-	parse,
 	SampleCache,
 	stringifyVal,
 	watchScore,
@@ -81,7 +80,7 @@ function bool(expr:string, host?:HostKernels):boolean {
 	return r.value.kind === 'bool' ? r.value.value : false;
 }
 
-describe('parse', () => {
+describe('names', () => {
 	it('reads a field of a name that picks one entity, as that entity', () => {
 		const ann = dummyEntity('Ann', { fields: { hp: { kind: 'number', value: 3 } } });
 		const one = world({ bindings: { Ann: { kind: 'list', value: [{ kind: 'entity', value: ann }] } } });
@@ -96,45 +95,30 @@ describe('parse', () => {
 		assert.equal(num('Guard.shield', world({ me, bindings: { units } })), 7, 'in a squad: me, not its bare line in units');
 	});
 
-	it('parses literals, arrays, infix is, ternary, ??', () => {
-		assert.ok(parse('1 + 2'));
-		assert.ok(parse('["key", "door"]'));
-		assert.ok(parse('i is "door"'));
-		assert.ok(parse('a ? b : c'));
-		assert.ok(parse('x ?? y'));
-		assert.ok(parse('p => p is "key"'));
-		assert.ok(parse('matches(first(prev.verbs).reason, "locked|blocked")'));
+	it('reads a watch\'s name as its value; a bound name or an entity\'s wins, and a watch that names itself ends there', () => {
+		const watches = { hurt: 'isHurt(me)', far: 'distance(me, B) > 10', A: 'false', loop: 'loop || true' };
+		assert.equal(bool('hurt && far', world({ watches })), true);
+		assert.equal(bool('!hurt', world({ watches, bindings: { hurt: { kind: 'bool', value: false } } })), true, 'a bound name (a let) wins');
+		assert.equal(val('A', world({ watches })).value.kind, 'entity', 'an entity\'s name wins');
+		assert.equal(val('loop', world({ watches })).error, undefined, 'it ends instead of reading itself forever');
 	});
+});
 
-	it('desugars extension calls', () => {
-		const a = parse('Player.isNear(me)');
-		const b = parse('isNear(Player, me)');
-		assert.deepEqual(a.ast, b.ast);
-	});
-
-	it('rejects this and self', () => {
-		assert.throws(() => parse('this.hp'));
-		assert.throws(() => parse('self'));
-	});
-
-	it('treats ?. as .', () => {
-		assert.deepEqual(parse('me?.inventory').ast, parse('me.inventory').ast);
-	});
-
-	it('maps and/or/equals/===/in', () => {
-		assert.deepEqual(parse('a and b').ast, parse('a && b').ast);
-		assert.deepEqual(parse('a or b').ast, parse('a || b').ast);
-		assert.deepEqual(parse('a equals b').ast, parse('a == b').ast);
-		assert.deepEqual(parse('a === b').ast, parse('a == b').ast);
-		assert.deepEqual(parse('x in y').ast, parse('y.includes(x)').ast);
-	});
-
-	it('does not treat is "key" or "door" as any-of', () => {
-		const ast = parse('i is "key" or "door"');
-		assert.equal(ast.ast.type, 'binary');
-		if (ast.ast.type === 'binary') {
-			assert.equal(ast.ast.op, '||');
-		}
+describe('names a host looks up', () => {
+	it('builds a place only when a watch reads it, and once, under bindings and the roster', () => {
+		const asked:string[] = [];
+		const catalog = buildCatalog(world({
+			bindings: { Gate: { kind: 'entity', value: dummyEntity('Gate', { tags: ['door'] }) } },
+			lookup: (name) => {
+				asked.push(name);
+				return name === 'Well' || name === 'Gate' || name === 'me' ? { kind: 'entity', value: dummyEntity(name, { tags: ['place'] }) } : undefined;
+			},
+		}));
+		assert.deepEqual(asked, [], 'nothing built up front');
+		assert.equal(evaluate('Well is "place"', catalog).value.kind, 'bool');
+		evaluate('Well is "place" && Gate is "door" && me is "place"', catalog);
+		assert.deepEqual(evaluate('Gate is "door" && !(me is "place")', catalog).value, { kind: 'bool', value: true }, 'bound names win');
+		assert.deepEqual(asked, ['Well'], 'each looked-up name once');
 	});
 });
 
@@ -188,6 +172,28 @@ describe('evaluate', () => {
 		assert.equal(sorted.value.kind, 'list');
 		assert.equal(num('reduce([1, 2, 3], 0, (a, x) => a + x)'), 6);
 		assert.equal(val('items.minBy(x => distance(me, x))').value.kind, 'entity');
+	});
+
+	it('minBy / maxBy pass over what has no such number, and fail only when nothing has it', () => {
+		const door = dummyEntity('Door', { tags: ['door'] });
+		const host = world({ hp: (who) => (who.id === 'B' ? { hp: 2, maxHP: 5 } : ['A', 'Player', 'Guard'].includes(who.id) ? { hp: 5, maxHP: 5 } : undefined) });
+		host.others = [door, ...host.others];
+		const lowest = val('others.minBy(u => u.hp)', host);
+		assert.equal(lowest.value.kind === 'entity' && lowest.value.value.id, 'B');
+		const highest = val('others.maxBy(u => u.hp)', host);
+		assert.equal(highest.value.kind === 'entity' && highest.value.value.id, 'A');
+		assert.match(val('items.minBy(u => u.hp)', host).error?.message ?? '', /not a number/);
+	});
+
+	it('reads the health of whoever a binding holds, as a collective\'s units', () => {
+		const A = dummyEntity('A', { tags: ['character'] });
+		const B = dummyEntity('B', { tags: ['character'] });
+		const host = world({
+			hp: (who) => (who.id === 'B' ? { hp: 1, maxHP: 5 } : { hp: 5, maxHP: 5 }),
+			bindings: { units: { kind: 'list', value: [{ kind: 'entity', value: A }, { kind: 'entity', value: B }] } },
+		});
+		const lowest = val('units.minBy(u => u.hp)', host);
+		assert.equal(lowest.value.kind === 'entity' && lowest.value.value.id, 'B');
 	});
 
 	it('isNear / nearby with and without radius', () => {

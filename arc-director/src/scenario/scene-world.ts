@@ -92,14 +92,14 @@ export type SceneVerb = {
 	/** How others see one running it, with `{arg}` holes (`reviving {target}`). Default: the verb with `-ing`. */
 	seen?:string;
 	/**
-	 * `me`'s squad runs it too, as an order (`issue(who=…, arc=ambush(…))`), not only `me`. In an RTS scene a kind's
+	 * `me`'s squad runs it too, as an order (`command(who=…, arc=ambush(…))`), not only `me`. In an RTS scene a kind's
 	 * own verbs come from its `KindSpec.verbs` instead.
 	 */
 	units?:boolean;
 } & (
 	/**
 	 * What happened, or a promise of it, for a verb that ends later (a battle move that waits for its round to resolve,
-	 * a revive held for seconds). When a reaction or a new order takes over, the step ends at once, interrupted, and
+	 * a revive held for seconds). When a reaction or a new order takes over, the step ends at once, stopped, and
 	 * `signal` aborts: a verb that keeps work going (a revive's progress, its sound) stops it there.
 	 */
 	| { run:(world:SceneWorld, call:{ who:string; args:Readonly<Record<string, StepArg>>; signal:AbortSignal })=>string | Outcome | Promise<string | Outcome> }
@@ -576,7 +576,7 @@ export class SceneWorld implements HostWorld<string> {
 		return typeof done === 'string' ? { ok: true, reason: done } : done;
 	}
 
-	/** Stop whatever `id` is doing: an ability running for it gives way, interrupted. The director's `onAbortArc`. */
+	/** Stop whatever `id` is doing: an ability running for it gives way, stopped. The director's `onAbortArc`. */
 	public abort(id:string):void {
 		this._aborts.set(id, (this._aborts.get(id) ?? 0) + 1);
 		for (const stop of [...this._onAbort.get(id) ?? []]) {
@@ -602,7 +602,7 @@ export class SceneWorld implements HostWorld<string> {
 		const me = call.character.id;
 		const name = call.verb;
 		const ability = ABILITIES[name];
-		const fail = (reason:string):ArcResult => ({ ok: false, verb: name, reason });
+		const fail = (reason:string):ArcResult => ({ status: 'failed', verb: name, reason });
 		const self = this._fighters.get(me);
 		if (!self || !self.kind.abilities.includes(name)) {
 			return fail(`you cannot ${name}`);
@@ -617,18 +617,18 @@ export class SceneWorld implements HostWorld<string> {
 		}
 		const aborts = this._aborts.get(me) ?? 0;
 		const aborted = () => (this._aborts.get(me) ?? 0) !== aborts;
-		const interrupted:ArcResult = { ok: false, interrupted: true, verb: name };
+		const stopped:ArcResult = { status: 'stopped', verb: name };
 		for (;;) {
 			if (this.isDown(me)) {
 				return fail('you are down');
 			}
 			if (this.isDown(target)) {
-				return { ok: true, verb: name, reason: `${target} is down` };
+				return { status: 'ok', verb: name, reason: `${target} is down` };
 			}
 			// In range, it strikes again as soon as it is ready, as a fighter on its own does.
 			if (this.distance(me, target) > ability.range) {
 				const near = await call.goTo(target, { within: ability.range });
-				if (!near.ok) {
+				if (near.status !== 'ok') {
 					return near;
 				}
 			}
@@ -637,14 +637,14 @@ export class SceneWorld implements HostWorld<string> {
 			}
 			if (self.wait(name, this.time) > 0 || !self.allowed(name, this.time) || this.crowded(me, name, target)) {
 				const waited = await call.wait(Math.max(BEAT, self.wait(name, this.time)));
-				if (!waited.ok) {
+				if (waited.status !== 'ok') {
 					return waited;
 				}
 				continue;
 			}
 			// A wait or walk that ended the same tick it was stopped still says ok.
 			if (aborted()) {
-				return interrupted;
+				return stopped;
 			}
 			self.used(name, this.time);
 			if (ability.cast) {
@@ -654,11 +654,11 @@ export class SceneWorld implements HostWorld<string> {
 				const waited = await call.wait(ability.cast);
 				const broken = self.casting !== cast;
 				self.casting = undefined;
-				if (!waited.ok) {
+				if (waited.status !== 'ok') {
 					return waited;
 				}
 				if (aborted()) {
-					return interrupted;
+					return stopped;
 				}
 				if (broken) {
 					return fail(`your ${name} was broken`);
@@ -666,7 +666,7 @@ export class SceneWorld implements HostWorld<string> {
 			}
 			const told = this.land(me, name, target);
 			if (!ability.repeat) {
-				return { ok: true, verb: name, reason: told };
+				return { status: 'ok', verb: name, reason: told };
 			}
 		}
 	}

@@ -314,15 +314,15 @@ export class TalkNet {
 	public say(speakerID:string, text:string, to?:SayTo, timestamp = 0):SayResult {
 		const spoken = text.trim();
 		if (!spoken) {
-			return { ok: false, verb: 'say', reason: 'nothing to say' };
+			return { status: 'failed', verb: 'say', reason: 'nothing to say' };
 		}
 		const check = this.canSay(speakerID, to);
 		if (!check.ok) {
-			return { ok: false, verb: 'say', reason: check.reason };
+			return { status: 'failed', verb: 'say', reason: check.reason };
 		}
 		const parrot = this.parrot(speakerID, spoken);
 		if (parrot) {
-			return { ok: false, verb: 'say', reason: parrot };
+			return { status: 'failed', verb: 'say', reason: parrot };
 		}
 		const targets = addressees(to);
 		const heardBy = this.hearers(speakerID, targets);
@@ -385,7 +385,7 @@ export class TalkNet {
 		const muffled = (targets.length > 0 ? targets : heardBy).filter((id) => id !== speakerID && heardBy.includes(id) && !clearly.includes(id));
 		const said = targets.length > 0 ? `to ${names(targets)}` : clearly.length > 0 ? `heard by ${names(clearly)}` : 'no one made out the words';
 		const far = muffled.length > 0 ? `; too far for ${names(muffled)} to make out the words: get closer` : '';
-		return { ok: true, verb: 'say', reason: `${said}${far}`, heard: clearly };
+		return { status: 'ok', verb: 'say', reason: `${said}${far}`, heard: clearly };
 	}
 
 	/** Deliver muffled lines in full to listeners who came close enough. Call once per frame. */

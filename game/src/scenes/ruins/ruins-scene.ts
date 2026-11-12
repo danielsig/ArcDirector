@@ -10,6 +10,7 @@ import { SIGHT, lookWorld } from '../../director/perception';
 import { ATTACKS, BACK_STANDOFF, BLOCK, FIGHT_WALK, SPELL_RANGE, formatFightRules, seenInFight } from '../../director/fight';
 import { HOSTED } from '../../director/hosted';
 import { idOf, findObject, isLiving } from '../../director/names';
+import { RUINS_PLACES_ABOUT } from './ruins-places';
 
 /** Whether its character sees an enemy: in sight range with nothing in the way. `others` alone is everyone on the map. */
 const ENEMY_IN_SIGHT = `some(others.filter("enemy").nearby(${SIGHT}))`;
@@ -38,7 +39,7 @@ const IDLE_AGAIN = 5;
 
 /** What a party's mind may write. */
 const FIGHT:Kit = {
-	verbs: ['issue', 'when', 'law', 'unlaw', 'loop', 'go_to', 'choose', 'smite', 'heal', 'attack', 'rank', 'say', 'wait'],
+	verbs: ['command', 'if', 'when', 'law', 'unlaw', 'loop', 'go_to', 'choose', 'smite', 'heal', 'attack', 'rank', 'say', 'wait', 'pass'],
 	tools: [],
 };
 
@@ -96,34 +97,27 @@ const HURT_ENEMIES = 'others.filter(u => u is "enemy" && isHurt(u))';
  * each unit's own blow) and a law for the next likely turn. Gemma copies this; keep it short.
  */
 const FIGHT_EXAMPLE = `
-issue(
-	who=units,
-	arc=loop(
-		choose(
-			"Kill their Healer first or finish off the weakest enemy. There are {X} friends and {Y} enemies left. Healer is {Z} units away. Weakest enemy is {W} units away.",
-			healer=attack(EnemyHealer),
-			finish=attack(others.filter("enemy").minBy(u => u.hp)),
-		),
-		until=!some(others.filter("enemy")),
-	),
-	group=Vanguard,
-)
-law(
-	who=units.filter("Blade"),
-	watch=count(${HURT_ENEMIES}) > 1,
-	arc=loop(
-		stab(${HURT_ENEMIES}.minBy(u => u.hp)),
-	),
-	name=blade_finish,
-)`;
+command(who=units, group=Vanguard) {
+	loop(until=!some(others.filter("enemy"))) {
+		choose("Kill their Healer first or finish off the weakest enemy. There are {X} friends and {Y} enemies left. Healer is {Z} units away. Weakest enemy is {W} units away.") {
+			healer: attack(EnemyHealer)
+			finish: attack(others.filter("enemy").minBy(u => u.hp))
+		}
+	}
+}
+law(who=units.filter("Blade"), watch=count(${HURT_ENEMIES}) > 1, name=blade_finish) {
+	loop {
+		stab(${HURT_ENEMIES}.minBy(u => u.hp))
+	}
+}`;
 
 /** Standing 5v5 doctrine: how to command, once each. Every name here is one the commander really sees. */
 const FIGHT_DOCTRINE = [
-	'This fight is fast and to the death: an idle unit bleeds your side. Decide and issue. Orders that still fit keep running without you: when nothing needs to change, reply wait().',
-	'Your units never move on the enemy or attack unless you order it: on their own they only stand, block, and keep the back line back. Order all four units to attack in the same think, and keep them attacking: all on their Healer or their weakest, or a Knight to protect a hurt ally. attack is each unit\'s own blow (Knight cleave, Blade stab, Archer shoot, Witch hex), so one issue(who=units) orders the whole squad; split them only where their programs differ. You already heal and keep back by your own laws.',
-	'Each think, read the roster: order a unit that is idle or keeps failing, and leave one that works, never re-issuing it. Give a program as loop(choose(...)) like the Example, so it runs until the enemy is gone; a fast model re-picks each swing from live hp and distance.',
-	'Be relentlessly aggressive and play ahead, never behind: give each unit a state machine. Its issue is what it does now; add a law for its next likely turn, before it happens: an enemy falls (count(others.filter("enemy")) drops), one of yours falls (count(allUnits) drops), or two or more enemies are hurt (finish the weakest first). Laws fire without a think; once a law\'s turn has come, unlaw it and lay the next.',
-	'Inside an issued arc, me is that unit, never you. Units have only attack and their own attacks, block and protect (Knight and Blade), go_to, loop and choose: never issue wait or flee.',
+	'This fight is fast and to the death: an idle unit bleeds your side. Decide and command. Orders that still fit keep running without you: when nothing needs to change, reply pass().',
+	'Your units never move on the enemy or attack unless you order it: on their own they only stand, block, and keep the back line back. Order all four units to attack in the same think, and keep them attacking: all on their Healer or their weakest, or a Knight to protect a hurt ally. attack is each unit\'s own blow (Knight cleave, Blade stab, Archer shoot, Witch hex), so one command(who=units) orders the whole squad; split them only where their programs differ. You already heal and keep back by your own laws.',
+	'Each think, read the roster: order a unit that is idle or keeps failing, and leave one that works, never re-issuing it. Give a program as loop { choose(…) { … } } like the Example, so it runs until the enemy is gone; a fast model re-picks each swing from live hp and distance.',
+	'Be relentlessly aggressive and play ahead, never behind: give each unit a state machine. Its command is what it does now; add a law for its next likely turn, before it happens: an enemy falls (count(others.filter("enemy")) drops), one of yours falls (count(allUnits) drops), or two or more enemies are hurt (finish the weakest first). Laws fire without a think; once a law\'s turn has come, unlaw it and lay the next.',
+	'Inside an issued arc, me is that unit, never you. Units have only attack and their own attacks, block and protect (Knight and Blade), go_to, loop and choose: never command wait or flee.',
 	'Arrows and smite need a clear shot; hex and heal are weaker through cover. A unit with no shot: go_to an ally who has one.',
 	`Knight and Blade block only as one choice beside others, for an enemy within ${BLOCK.near}m; block has a cooldown, so never loop it alone.`,
 ].join(' ');
@@ -136,8 +130,9 @@ function partyStory(party:string, units:{ id:string; tags?:string[] }[]):MemoryD
 		formatFightRules(),
 		`Your units: ${yours}. Never target them.`,
 		'Every enemy shows as Enemy and its kind: EnemyWitch, EnemyKnight, EnemyArcher, EnemyBlade, EnemyHealer, and a Player who strikes your units as EnemyPlayer; in programs, enemies are others.filter("enemy"). who=units.filter("Blade") is your Blade; EnemyBlade is theirs.',
-		`You are the Healer and the commander: issue() never reaches you. Your own laws heal from ${SPELL_RANGE}m and keep you back; smite yourself only a foe already within ${ATTACKS.smite!.range}m. Never heal, attack or rank yourself, and never issue heal or rank; issue smite only to your Witch.`,
-		'go_to only walks there; an issued attack walks the unit into range itself. Inside an issued arc, && runs the next step after a hit lands or the foe is down. Each issue is its own step, never joined by &&.',
+		`You are the Healer and the commander: command() never reaches you. Your own laws heal from ${SPELL_RANGE}m and keep you back; smite yourself only a foe already within ${ATTACKS.smite!.range}m. Never heal, attack or rank yourself, and never command heal or rank; command smite only to your Witch.`,
+		RUINS_PLACES_ABOUT,
+		'go_to only walks there; an issued attack walks the unit into range itself. Inside an issued arc, && runs the next step after a hit lands or the foe is down. Each command is its own step, never joined by &&.',
 	].join(' ');
 	return { text, tags: ['backstory', party], pinned: true };
 }

@@ -91,7 +91,7 @@ export class ThinkShow {
 			case 'end':
 				this.finish(event.who, !!event.arc, event.error, go);
 				return;
-			case 'issue':
+			case 'command':
 				this.order(event.to, event.text, go);
 				return;
 		}
@@ -157,11 +157,9 @@ export class ThinkShow {
 			slate.lastTick = Time.time;
 			cueAt(this.world, 'arcTick', go!);
 		}
-		slate.thought = thought;
+		// Each request of a think (after a tool, or a repair) starts its reasoning anew, often empty: the last words stay above the Arc until new ones come.
+		slate.thought = thought || slate.thought;
 		slate.arc = arc;
-		if (arc) {
-			slate.error = '';
-		}
 	}
 
 	/** A reply would not do: the slate shakes, says why, and the model writes on. */
@@ -189,6 +187,10 @@ export class ThinkShow {
 		if (error) {
 			slate.error = error;
 			slate.wrongUntil = Time.time + WRONG_SECONDS;
+		}
+		else if (chose) {
+			// Fixed in a repair turn: the slate stops shaking and hides the turned-down reason; the AI log keeps it.
+			slate.wrongUntil = 0;
 		}
 		if (go && (chose || error) && this.shown(slate)) {
 			cueAt(this.world, chose ? 'arcDone' : 'arcWrong', go);

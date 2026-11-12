@@ -20,7 +20,7 @@ export type ThinkEvent =
 	/** The think ended: with the Arc it chose, with the `error` that ended it, or with neither, cut short by a newer one. */
 	| { kind:'end'; who:string; arc?:Arc; error?:string }
 	/** `who` ordered the characters `to` to run `arc`; `text` is that arc as Arc text. */
-	| { kind:'issue'; who:string; to:string[]; arc:Arc; text:string };
+	| { kind:'command'; who:string; to:string[]; arc:Arc; text:string };
 
 /** Unfinished work an Arc would cut short: whose, how far along, and what would take its place. */
 export type Replacing = { id:string; now:string; next:string; looping:boolean };

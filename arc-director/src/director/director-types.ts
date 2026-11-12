@@ -25,7 +25,7 @@ type RunnerSpec<TCtx> = Omit<PersonaSpec, 'goals'> & {
 	kit?:KitSource<TCtx>;
 	laws?:LawSpec[];
 	maxLaws?:number;
-	/** Override director handler cooldown (game seconds). */
+	/** Game seconds its standing `choose` rests after a failed pick; overrides `withCooldown`. */
 	cooldown?:number;
 	/**
 	 * The System One it picks `choose` with, by its name on the director (`addJevInference`, …); `null` for none.
@@ -72,21 +72,27 @@ export type CollectiveSpec<TCtx = unknown> = RunnerSpec<TCtx> & {
 	characters?:CharacterSpec<TCtx>[];
 	/** The character the mind acts through. Omit for a collective without one, like a market hive. */
 	commander?:string;
-	/** Most units one `issue` may address at once. Unset to allow issue to address all units. */
-	maxUnitsPerIssue?:number;
+	/** Most units one `command` may address at once. Unset to allow command to address all units. */
+	maxUnitsPerCommand?:number;
 };
 
-type ArgValue<TKind> = TKind extends `number${'' | '?'}` ? number
-	: TKind extends `bundle${'' | '?'}` ? Record<string, number>
-		: TKind extends `string[]${'' | '?'}` ? string[]
-			: TKind extends `arc${'' | '?'}` ? Arc
-				: string;
+type ArgValue<TArg> = ArgKindValue<TArg extends { kind:infer TKind } ? TKind : TArg>;
+
+type ArgKindValue<TKind> = TKind extends `number${'' | '?'}` ? number
+	: TKind extends `count${'' | '?'}` ? number | true
+		: TKind extends `bundle${'' | '?'}` ? Record<string, number>
+			: TKind extends `string[]${'' | '?'}` ? string[]
+				: TKind extends `arc${'' | '?'}` ? Arc
+					: string;
+
+/** Whether an arg as declared, a kind or an `ArgSpec`, may be left out. */
+type Optional<TArg> = (TArg extends { kind:infer TKind } ? TKind : TArg) extends `${string}?` ? true : false;
 
 /** The `args` a handler receives for an arg map: `{ item: 'id', offer: 'number?' }` is `{ item: string; offer?: number }`. */
 export type VerbArgs<TArgMap> = {
-	[K in keyof TArgMap as TArgMap[K] extends `${string}?` ? never : K]:ArgValue<TArgMap[K]>;
+	[K in keyof TArgMap as Optional<TArgMap[K]> extends true ? never : K]:ArgValue<TArgMap[K]>;
 } & {
-	[K in keyof TArgMap as TArgMap[K] extends `${string}?` ? K : never]?:ArgValue<TArgMap[K]>;
+	[K in keyof TArgMap as Optional<TArgMap[K]> extends true ? K : never]?:ArgValue<TArgMap[K]>;
 };
 
 type StockDefs = typeof STOCK_VERB_DEFS & typeof STOCK_COLLECTIVE_VERB_DEFS;
@@ -104,6 +110,11 @@ export type VerbCall<TCtx = unknown, TArgs = Record<string, unknown>> = {
 	/** The character running the step. */
 	character:Character<TCtx>;
 	ctx:TCtx;
+	/**
+	 * Aborts when the step's `until` holds (reason `'until'`) or its `within` runs out (`'within'`). Its moves and waits
+	 * end then on their own; a verb that can still say how it went returns that (`wander`: what it saw).
+	 */
+	signal:AbortSignal;
 	/** How well a `watch` arg fits right now, 0–1, or as if this character stood at `point`. Missing arg: 0. */
 	score(arg:keyof TArgs & string, point?:Vec):number;
 	/** `score(arg, point) > 0`. */
@@ -115,7 +126,7 @@ export type VerbCall<TCtx = unknown, TArgs = Record<string, unknown>> = {
 	goTo(target:string, opts?:MoveOpts):Promise<ArcResult>;
 	/** Move this character to a point. */
 	goToPoint(point:Vec, opts?:MoveOpts):Promise<ArcResult>;
-	/** Let game time pass. Ends early, interrupted, when the step is aborted. */
+	/** Let game time pass. Ends early, stopped, when the step is aborted. */
 	wait(seconds:number):Promise<ArcResult>;
 };
 
@@ -123,10 +134,10 @@ export type VerbCall<TCtx = unknown, TArgs = Record<string, unknown>> = {
 export type AliasPart = string | ((args:Readonly<Record<string, StepArg>>)=>string);
 
 /**
- * A verb that is a named arc (`keep_distance(keep=3)` runs `flee(…)`). As a law's whole arc it brings its own `watch`
- * and `who` when the law gives none.
+ * A verb that is a named arc (`keep_distance(keep=3)` runs `flee(…)`). As a law's whole arc it brings its own `watch`,
+ * `who` and `rearm` when the law gives none.
  */
-export type VerbAlias = { arc:AliasPart; watch?:AliasPart; who?:AliasPart };
+export type VerbAlias = { arc:AliasPart; watch?:AliasPart; who?:AliasPart; rearm?:number };
 
 export type VerbHandler<TCtx = unknown, TArgs = Record<string, unknown>> = (
 	call:VerbCall<TCtx, TArgs>,
@@ -144,7 +155,7 @@ export type DirectorLog = {
 };
 
 /** What a naming policy knows about the mind doing the naming: its owner's id, and its voice's context (none for a collective with no commander). */
-export type NameObserver<TCtx = unknown> = { id:string; ctx:TCtx | undefined };
+export type NameObserver<TCtx = unknown> = { readonly id:string; readonly ctx:TCtx | undefined };
 
 /** Base name `observer` gives `target`. Return `target.id` to name it as itself. */
 export type SeenName<TCtx = unknown> = (observer:NameObserver<TCtx>, target:NameTarget)=>string;

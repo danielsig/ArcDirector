@@ -77,11 +77,9 @@ const MEND:LawSpec = {
 	name: 'mend',
 	who: 'me',
 	watch: 'isReady(me, "heal") && (isHurt(me) || some(others.filter(u => !(u is "enemy") && isHurt(u)).nearby(8)))',
+	// A law runs to its end once started, so the cast goes through.
 	arc: `heal(target=${LOWEST})`,
 	pinned: true,
-	// Long enough to cast: a heal takes this long, and only a blow to her cuts it short.
-	hold: HEAL.castTime + 1,
-	holdBreak: 'isHPFalling(me)',
 };
 
 /** Tags the pinned memories that only hold while the company is more than one. */
@@ -100,8 +98,8 @@ const LEAVING = `${ALLIES}.filter(u => (${WALKING_OFF}) && !(isNear(me, u, 10) &
 /**
  * Whoever an ally walks off from, or fights out of sight or too far away, follows it until it catches up, even with
  * another ally still beside it: nobody stands idle while a friend fights a room away. Not when it wandered off itself
- * and the rest stood still. It holds a while, so a walker who arrives
- * is still caught up with. Last, so a fight, a flight or a heal still comes first.
+ * and the rest stood still. It follows until no one is left to catch up with (a follow in a law ends with its trigger).
+ * Last, so a fight, a flight or a heal still comes first.
  */
 const REGROUP:LawSpec = {
 	name: 'regroup',
@@ -109,7 +107,6 @@ const REGROUP:LawSpec = {
 	watch: `some(${LEAVING})`,
 	arc: `follow(target=${LEAVING}.minBy(u => distance(me, u)), distance=4)`,
 	pinned: true,
-	hold: 8,
 };
 
 /**
@@ -187,7 +184,7 @@ const TALK = 'Say something in your own voice on most thinks: add a say step to 
 function healGoal(leader:string):Goal {
 	const keep = HEAL.range - 2;
 	return {
-		text: `Always heal whoever has the lowest health first, yourself included, but do not heal anyone who already has full health like 50/50. Right before you heal, stay within heal reach (${HEAL.range}m): follow with a distance, and let a when heal from there. Like: when(watch=isHurt(me) || some(${ALLIES}.filter(u => isHurt(u)).nearby(${HEAL.range})), arc=heal(target=${LOWEST})) && follow(${leader}, distance=${keep})`,
+		text: `Always heal whoever has the lowest health first, yourself included, but do not heal anyone who already has full health like 50/50. Right before you heal, stay within heal reach (${HEAL.range}m): follow with a distance, and let a when heal from there. Like: when(isHurt(me) || some(${ALLIES}.filter(u => isHurt(u)).nearby(${HEAL.range}))) { heal(target=${LOWEST}) } ; follow(${leader}, distance=${keep})`,
 		priority: 3,
 	};
 }
@@ -618,15 +615,15 @@ export function createDirector(host:GameHost):ArcDirector<CharacterCtx> {
 			handler: ({ ctx, args }) => {
 				const label = args.text.trim().slice(0, 72);
 				if (!label) {
-					return { ok: false, verb: 'set_status', reason: 'nothing to show' };
+					return { status: 'failed', verb: 'set_status', reason: 'nothing to show' };
 				}
 				const life = Math.min(60, Math.max(1, args.seconds ?? 6));
 				host.labels.set(idOf(ctx.character), { text: label, until: Time.time + life });
-				return { ok: true, verb: 'set_status', reason: `${life}s` };
+				return { status: 'ok', verb: 'set_status', reason: `${life}s` };
 			},
 		})
 		.addVerb('rest', {
-			handler: () => ({ ok: true, verb: 'rest', reason: companyHolds(host, PRIZE) ? 'done — still listening' : 'goal still open' }),
+			handler: () => ({ status: 'ok', verb: 'rest', reason: companyHolds(host, PRIZE) ? 'done — still listening' : 'goal still open' }),
 		})
 		// A monster's trick: show itself, and once they come after it, draw them onto the rest of its pack.
 		.addVerb('bait', {
@@ -639,8 +636,8 @@ export function createDirector(host:GameHost):ArcDirector<CharacterCtx> {
 			.withVerbInstructions(BUILDING_VERB_INSTRUCTIONS)
 			// The crypt moves fast: a short think, then the answer.
 			.withThinkInstructions({ on: 'Think very quickly, in at most 3 short sentences: what is before you, and what you do now. Then answer.' }))
-		// A law stays on at least this long once it starts: a foe just at the edge of a watch no longer flips them every frame.
-		.withLawHold(1.5)
+		// A law's watch is false this long before it starts again: a foe just at the edge of a watch no longer flips them.
+		.withRearm(1.5)
 		.withDefaultKit({ verbs: [...GAME_VERBS, 'set_status', 'rest', 'attack', 'block', 'heal', 'protect', ...Object.keys(ATTACKS)] })
 		// Monsters go by what they are; the player is Kaelen, the company's archer.
 		.withNames({ seen: (observer, target) => (target.id === 'Player' ? 'Kaelen' : target.id) })

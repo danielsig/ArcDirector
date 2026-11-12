@@ -97,6 +97,7 @@ onBeforeUnmount(() => {
 
 <style scoped>
 .hud-slates {
+	z-index: var(--z-world);
 	position: absolute;
 	inset: 0;
 	pointer-events: none;

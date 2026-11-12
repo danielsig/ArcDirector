@@ -215,11 +215,22 @@ export class DemoGame extends Game<DemoWorld> {
 		this.session.poll();
 		this.syncDisplay();
 		this.paused = this._hud.menuOpen;
+		const perf = this.world.perf;
+		const start = performance.now();
+		const director = perf.totalMS.director;
 		super.tick(dt);
+		perf.add('simulate', performance.now() - start - (perf.totalMS.director - director));
 		if (this.paused) {
 			this.session.pausePresent();
 		}
 		this.syncAudio();
+	}
+
+	protected override draw(now:number):void {
+		const start = performance.now();
+		super.draw(now);
+		this.world.perf.add('render', performance.now() - start);
+		this.world.perf.frame(now);
 	}
 
 	/** Menu display settings onto the renderer. */

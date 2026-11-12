@@ -269,7 +269,7 @@ export function createDirector(host:GameHost):ArcDirector<CharacterCtx> {
 			handler: (call) => {
 				const post = guardPost(call.ctx.world, call.ctx.character);
 				if (!post) {
-					return { ok: false, verb: 'stand', reason: 'no gate to hold' };
+					return { status: 'failed', verb: 'stand', reason: 'no gate to hold' };
 				}
 				return call.goToPoint([post.x, post.z], { within: 0.35 });
 			},
@@ -278,7 +278,7 @@ export function createDirector(host:GameHost):ArcDirector<CharacterCtx> {
 			id: 'MarketHive',
 			kit: hiveKit,
 			// One shopper per order. A filter such as units.filter("Shopper") would march the whole square.
-			maxUnitsPerIssue: 1,
+			maxUnitsPerCommand: 1,
 			identity: { role: 'Hive', traits: ['busy', 'fair', 'thrifty', 'watchful'] },
 			// They stroll on their own. The game's minds skip the heartbeat unless asked: this one thinks on it, about whom to send and what to offer.
 			mind: { skipStart: true, skipStrategic: true, skipMajor: true, skipHeartbeat: false },

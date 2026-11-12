@@ -20,6 +20,7 @@ import HudGuide from './HudGuide.vue';
 import HudToast from './HudToast.vue';
 import HudStats from './HudStats.vue';
 import HudFPS from './HudFPS.vue';
+import HudKeyHints from './HudKeyHints.vue';
 
 defineProps<{
 	hud:HudModel;
@@ -53,6 +54,7 @@ const emit = defineEmits<{
 		<HudToast :hud="hud" />
 		<HudStats :hud="hud" />
 		<HudFPS :hud="hud" />
+		<HudKeyHints :hud="hud" />
 	</div>
 </template>
 

@@ -520,7 +520,7 @@ export const ARC_BENCH:ArcCase[] = [
 		skill: 'fight',
 		level: 2,
 		me: { id: 'Ruadh', as: 'Archer', hp: [9, 12] },
-		last: { ok: false, verb: 'shoot', reason: 'no line of sight to Mirela' },
+		last: { status: 'failed', verb: 'shoot', reason: 'no line of sight to Mirela' },
 		others: {
 			Mirela: { away: 9, side: 'ahead', as: 'Witch', hp: [4, 12], tactic: 'hold' },
 			Torsk: { away: 14, side: 'left', as: 'Knight', hp: [20, 28], tactic: 'charge' },
@@ -583,8 +583,8 @@ export const ARC_BENCH:ArcCase[] = [
 		others: { ...band('Reaver', 2, { away: 9, side: 'ahead', ...RAIDER, hp: [10, 14] }), Sawbones: { away: 11, side: 'left', as: 'Medic', tactic: 'healer' } },
 		goal: 'Win the fight. Take out their Medic first',
 		done: (w) => w.firstDown(THEM) === 'Sawbones' && w.routed(THEM) && w.lost(US) <= 1,
-		solution: 'issue(who=units, arc=attack(target=Sawbones) ; attack(target=others.filter(u => u.foe))) ; attack(target=Sawbones) ; attack(target=others.filter(u => u.foe))',
-		naive: 'issue(who=units, arc=attack(target=others.filter(u => u.foe))) ; attack(target=others.filter(u => u.foe))',
+		solution: 'command(who=units, arc=attack(target=Sawbones) ; attack(target=others.filter(u => u.foe))) ; attack(target=Sawbones) ; attack(target=others.filter(u => u.foe))',
+		naive: 'command(who=units, arc=attack(target=others.filter(u => u.foe))) ; attack(target=others.filter(u => u.foe))',
 		alone: 'attack(target=Sawbones)',
 	},
 	{
@@ -602,8 +602,8 @@ export const ARC_BENCH:ArcCase[] = [
 		things: { Blockhouse: { away: 15, side: 'behind', kind: 'Blockhouse' } },
 		goal: 'Their army is far bigger than yours. Get everyone inside the Blockhouse, and lose no one',
 		done: (w) => w.lost(US) === 0 && ['Ostrom', 'Ebbe', 'Frode', 'Hakon'].every((id) => w.isSheltered(id)),
-		solution: 'issue(who=units, arc=garrison(in=Blockhouse)) ; garrison(in=Blockhouse)',
-		naive: 'issue(who=units, arc=go_to(Blockhouse)) ; go_to(Blockhouse)',
+		solution: 'command(who=units, arc=garrison(in=Blockhouse)) ; garrison(in=Blockhouse)',
+		naive: 'command(who=units, arc=go_to(Blockhouse)) ; go_to(Blockhouse)',
 		alone: 'garrison(in=Blockhouse)',
 	},
 	{
@@ -627,8 +627,8 @@ export const ARC_BENCH:ArcCase[] = [
 		},
 		goal: 'Bursters roll into the thickest crowd of your units and blow up. Destroy them, and lose no more than three of your units',
 		done: (w) => w.routed(THEM) && w.lost(US) <= 3,
-		solution: 'issue(who=units, arc=spread_out(paces=6))',
-		naive: 'issue(who=units, arc=hold()) ; hold()',
+		solution: 'command(who=units, arc=spread_out(paces=6))',
+		naive: 'command(who=units, arc=hold()) ; hold()',
 		alone: 'spread_out(paces=6)',
 	},
 	{
@@ -646,8 +646,8 @@ export const ARC_BENCH:ArcCase[] = [
 		goal: 'Your units must destroy the lurkers without losing anyone. Lurkers are slower than you, but hit hard',
 		seconds: 120,
 		done: (w) => w.routed(THEM) && w.lost(US) === 0,
-		solution: 'law(name=kite, arc=keep_distance(keep=6)) ; issue(who=units, arc=attack(target=others.filter(u => u.foe)))',
-		naive: 'issue(who=units, arc=attack(target=others.filter(u => u.foe)))',
+		solution: 'law(name=kite, arc=keep_distance(keep=6)) ; command(who=units, arc=attack(target=others.filter(u => u.foe)))',
+		naive: 'command(who=units, arc=attack(target=others.filter(u => u.foe)))',
 		alone: 'attack(target=others.filter(u => u.foe))',
 	},
 	{
@@ -665,8 +665,8 @@ export const ARC_BENCH:ArcCase[] = [
 		things: { Handcart: { away: 6, side: 'behind' } },
 		goal: 'Win the fight without losing anyone',
 		done: (w) => w.routed(THEM) && w.lost(US) === 0,
-		solution: 'issue(who=units.filter("Quinn"), arc=go_to(Handcart))',
-		naive: 'issue(who=units, arc=fire(target=Gnasher1))',
+		solution: 'command(who=units.filter("Quinn"), arc=go_to(Handcart))',
+		naive: 'command(who=units, arc=fire(target=Gnasher1))',
 		alone: 'fire(target=Gnasher1)',
 	},
 	{
@@ -689,8 +689,8 @@ export const ARC_BENCH:ArcCase[] = [
 		things: { WestTower: { away: 16, side: 'left', team: US, hp: [75, 75] }, EastTower: { away: 16, side: 'right', team: US, hp: [75, 75] } },
 		goal: 'Raiders are coming for both towers. Keep both towers standing and destroy the raiders',
 		done: (w) => w.routed(THEM) && !w.isDown('WestTower') && !w.isDown('EastTower'),
-		solution: 'issue(who=units.filter("Red"), arc=go_to(WestTower)) ; issue(who=units.filter("Blue"), arc=go_to(EastTower))',
-		naive: 'issue(who=units, arc=go_to(WestTower)) ; go_to(WestTower)',
+		solution: 'command(who=units.filter("Red"), arc=go_to(WestTower)) ; command(who=units.filter("Blue"), arc=go_to(EastTower))',
+		naive: 'command(who=units, arc=go_to(WestTower)) ; go_to(WestTower)',
 		alone: 'go_to(WestTower)',
 	},
 
@@ -761,7 +761,7 @@ export const ARC_BENCH:ArcCase[] = [
 		goal: 'Grow your village: have 9 Workers and at least 150 Gold in stock',
 		seconds: 90,
 		done: (w) => unitsOf(w, 'Worker') >= 9 && (w.stockOf(US).Gold ?? 0) >= 150,
-		solution: 'build(what=House) ; gather(from=Gold) ; law(name=grow, arc=keep_training(what=Worker, until=9)) ; law(name=work, arc=share_workers(on=Gold, of=9))',
+		solution: 'build(what=House) ; gather(from=Gold) ; law(name=grow, arc=keep_training(what=Worker, to=9)) ; law(name=work, arc=share_workers(on=Gold, of=9))',
 		naive: 'train(what=Worker, count=6) ; gather(from=Gold)',
 	},
 

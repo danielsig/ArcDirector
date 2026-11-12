@@ -103,11 +103,20 @@ responseFormat: {
 							"target"
 						],
 						"properties": {
+							"let": {
+								"type": "string"
+							},
 							"verb": {
 								"const": "ring"
 							},
 							"target": {
 								"type": "string"
+							},
+							"until": {
+								"type": "string"
+							},
+							"within": {
+								"type": "number"
 							},
 							"then": {
 								"type": "string",
@@ -126,8 +135,17 @@ responseFormat: {
 							"verb"
 						],
 						"properties": {
+							"let": {
+								"type": "string"
+							},
 							"verb": {
 								"const": "hush"
+							},
+							"until": {
+								"type": "string"
+							},
+							"within": {
+								"type": "number"
 							},
 							"then": {
 								"type": "string",
@@ -147,6 +165,9 @@ responseFormat: {
 							"target"
 						],
 						"properties": {
+							"let": {
+								"type": "string"
+							},
 							"verb": {
 								"const": "go_to"
 							},
@@ -156,6 +177,9 @@ responseFormat: {
 							"until": {
 								"type": "string"
 							},
+							"within": {
+								"type": "number"
+							},
 							"then": {
 								"type": "string",
 								"enum": [
@@ -174,6 +198,9 @@ responseFormat: {
 							"target"
 						],
 						"properties": {
+							"let": {
+								"type": "string"
+							},
 							"verb": {
 								"const": "follow"
 							},
@@ -182,6 +209,15 @@ responseFormat: {
 							},
 							"distance": {
 								"type": "number"
+							},
+							"until": {
+								"type": "string"
+							},
+							"within": {
+								"type": "number"
+							},
+							"unbreakable": {
+								"type": "string"
 							},
 							"then": {
 								"type": "string",
@@ -201,6 +237,9 @@ responseFormat: {
 							"from"
 						],
 						"properties": {
+							"let": {
+								"type": "string"
+							},
 							"verb": {
 								"const": "flee"
 							},
@@ -208,6 +247,12 @@ responseFormat: {
 								"type": "string"
 							},
 							"distance": {
+								"type": "number"
+							},
+							"until": {
+								"type": "string"
+							},
+							"within": {
 								"type": "number"
 							},
 							"then": {
@@ -227,6 +272,9 @@ responseFormat: {
 							"verb"
 						],
 						"properties": {
+							"let": {
+								"type": "string"
+							},
 							"verb": {
 								"const": "wander"
 							},
@@ -234,6 +282,9 @@ responseFormat: {
 								"type": "string"
 							},
 							"seconds": {
+								"type": "number"
+							},
+							"within": {
 								"type": "number"
 							},
 							"then": {
@@ -254,6 +305,9 @@ responseFormat: {
 							"item"
 						],
 						"properties": {
+							"let": {
+								"type": "string"
+							},
 							"verb": {
 								"const": "use"
 							},
@@ -263,6 +317,12 @@ responseFormat: {
 							"target": {
 								"type": "string"
 							},
+							"until": {
+								"type": "string"
+							},
+							"within": {
+								"type": "number"
+							},
 							"then": {
 								"type": "string",
 								"enum": [
@@ -281,6 +341,9 @@ responseFormat: {
 							"item"
 						],
 						"properties": {
+							"let": {
+								"type": "string"
+							},
 							"verb": {
 								"const": "pick_up"
 							},
@@ -290,6 +353,12 @@ responseFormat: {
 							"from": {
 								"type": "string"
 							},
+							"until": {
+								"type": "string"
+							},
+							"within": {
+								"type": "number"
+							},
 							"then": {
 								"type": "string",
 								"enum": [
@@ -308,6 +377,9 @@ responseFormat: {
 							"item"
 						],
 						"properties": {
+							"let": {
+								"type": "string"
+							},
 							"verb": {
 								"const": "drop"
 							},
@@ -316,6 +388,12 @@ responseFormat: {
 							},
 							"to": {
 								"type": "string"
+							},
+							"until": {
+								"type": "string"
+							},
+							"within": {
+								"type": "number"
 							},
 							"then": {
 								"type": "string",
@@ -336,6 +414,9 @@ responseFormat: {
 							"to"
 						],
 						"properties": {
+							"let": {
+								"type": "string"
+							},
 							"verb": {
 								"const": "give"
 							},
@@ -346,6 +427,12 @@ responseFormat: {
 								"type": "string"
 							},
 							"quantity": {
+								"type": "number"
+							},
+							"until": {
+								"type": "string"
+							},
+							"within": {
 								"type": "number"
 							},
 							"then": {
@@ -366,11 +453,20 @@ responseFormat: {
 							"target"
 						],
 						"properties": {
+							"let": {
+								"type": "string"
+							},
 							"verb": {
 								"const": "examine"
 							},
 							"target": {
 								"type": "string"
+							},
+							"until": {
+								"type": "string"
+							},
+							"within": {
+								"type": "number"
 							},
 							"then": {
 								"type": "string",
@@ -390,6 +486,9 @@ responseFormat: {
 							"text"
 						],
 						"properties": {
+							"let": {
+								"type": "string"
+							},
 							"verb": {
 								"const": "say"
 							},
@@ -398,6 +497,12 @@ responseFormat: {
 							},
 							"to": {
 								"type": "string"
+							},
+							"until": {
+								"type": "string"
+							},
+							"within": {
+								"type": "number"
 							},
 							"then": {
 								"type": "string",
@@ -416,6 +521,9 @@ responseFormat: {
 							"verb"
 						],
 						"properties": {
+							"let": {
+								"type": "string"
+							},
 							"verb": {
 								"const": "wait"
 							},
@@ -424,6 +532,38 @@ responseFormat: {
 							},
 							"until": {
 								"type": "string"
+							},
+							"within": {
+								"type": "number"
+							},
+							"then": {
+								"type": "string",
+								"enum": [
+									"if_ok",
+									"always",
+									"if_failed"
+								]
+							}
+						}
+					},
+					{
+						"type": "object",
+						"additionalProperties": false,
+						"required": [
+							"verb"
+						],
+						"properties": {
+							"let": {
+								"type": "string"
+							},
+							"verb": {
+								"const": "pass"
+							},
+							"until": {
+								"type": "string"
+							},
+							"within": {
+								"type": "number"
 							},
 							"then": {
 								"type": "string",
@@ -443,6 +583,9 @@ responseFormat: {
 							"content"
 						],
 						"properties": {
+							"let": {
+								"type": "string"
+							},
 							"verb": {
 								"const": "remember"
 							},
@@ -455,54 +598,10 @@ responseFormat: {
 									"type": "string"
 								}
 							},
-							"then": {
-								"type": "string",
-								"enum": [
-									"if_ok",
-									"always",
-									"if_failed"
-								]
-							}
-						}
-					},
-					{
-						"type": "object",
-						"additionalProperties": false,
-						"required": [
-							"verb"
-						],
-						"properties": {
-							"verb": {
-								"const": "think"
-							},
-							"about": {
+							"until": {
 								"type": "string"
 							},
-							"then": {
-								"type": "string",
-								"enum": [
-									"if_ok",
-									"always",
-									"if_failed"
-								]
-							}
-						}
-					},
-					{
-						"type": "object",
-						"additionalProperties": false,
-						"required": [
-							"verb",
-							"goal"
-						],
-						"properties": {
-							"verb": {
-								"const": "set_goal"
-							},
-							"goal": {
-								"type": "string"
-							},
-							"priority": {
+							"within": {
 								"type": "number"
 							},
 							"then": {
@@ -522,12 +621,89 @@ responseFormat: {
 							"verb"
 						],
 						"properties": {
+							"let": {
+								"type": "string"
+							},
+							"verb": {
+								"const": "think"
+							},
+							"about": {
+								"type": "string"
+							},
+							"until": {
+								"type": "string"
+							},
+							"within": {
+								"type": "number"
+							},
+							"then": {
+								"type": "string",
+								"enum": [
+									"if_ok",
+									"always",
+									"if_failed"
+								]
+							}
+						}
+					},
+					{
+						"type": "object",
+						"additionalProperties": false,
+						"required": [
+							"verb",
+							"goal"
+						],
+						"properties": {
+							"let": {
+								"type": "string"
+							},
+							"verb": {
+								"const": "set_goal"
+							},
+							"goal": {
+								"type": "string"
+							},
+							"priority": {
+								"type": "number"
+							},
+							"until": {
+								"type": "string"
+							},
+							"within": {
+								"type": "number"
+							},
+							"then": {
+								"type": "string",
+								"enum": [
+									"if_ok",
+									"always",
+									"if_failed"
+								]
+							}
+						}
+					},
+					{
+						"type": "object",
+						"additionalProperties": false,
+						"required": [
+							"verb"
+						],
+						"properties": {
+							"let": {
+								"type": "string"
+							},
 							"verb": {
 								"const": "drop_goal"
 							},
 							"goal": {
 								"type": "string"
 							},
+							"until": {
+								"type": "string"
+							},
+							"within": {
+								"type": "number"
+							},
 							"then": {
 								"type": "string",
 								"enum": [
@@ -545,12 +721,21 @@ responseFormat: {
 							"verb"
 						],
 						"properties": {
+							"let": {
+								"type": "string"
+							},
 							"verb": {
 								"const": "finish_goal"
 							},
 							"goal": {
 								"type": "string"
 							},
+							"until": {
+								"type": "string"
+							},
+							"within": {
+								"type": "number"
+							},
 							"then": {
 								"type": "string",
 								"enum": [
@@ -568,6 +753,9 @@ responseFormat: {
 							"verb"
 						],
 						"properties": {
+							"let": {
+								"type": "string"
+							},
 							"verb": {
 								"const": "set_identity"
 							},
@@ -579,6 +767,12 @@ responseFormat: {
 								"items": {
 									"type": "string"
 								}
+							},
+							"until": {
+								"type": "string"
+							},
+							"within": {
+								"type": "number"
 							},
 							"then": {
 								"type": "string",
@@ -599,6 +793,9 @@ responseFormat: {
 							"expr"
 						],
 						"properties": {
+							"let": {
+								"type": "string"
+							},
 							"verb": {
 								"const": "watch"
 							},
@@ -607,6 +804,12 @@ responseFormat: {
 							},
 							"expr": {
 								"type": "string"
+							},
+							"until": {
+								"type": "string"
+							},
+							"within": {
+								"type": "number"
 							},
 							"then": {
 								"type": "string",
@@ -626,12 +829,21 @@ responseFormat: {
 							"name"
 						],
 						"properties": {
+							"let": {
+								"type": "string"
+							},
 							"verb": {
 								"const": "unwatch"
 							},
 							"name": {
 								"type": "string"
 							},
+							"until": {
+								"type": "string"
+							},
+							"within": {
+								"type": "number"
+							},
 							"then": {
 								"type": "string",
 								"enum": [
@@ -650,12 +862,21 @@ responseFormat: {
 							"expr"
 						],
 						"properties": {
+							"let": {
+								"type": "string"
+							},
 							"verb": {
 								"const": "focus"
 							},
 							"expr": {
 								"type": "string"
 							},
+							"until": {
+								"type": "string"
+							},
+							"within": {
+								"type": "number"
+							},
 							"then": {
 								"type": "string",
 								"enum": [
@@ -674,11 +895,60 @@ responseFormat: {
 							"expr"
 						],
 						"properties": {
+							"let": {
+								"type": "string"
+							},
 							"verb": {
 								"const": "unfocus"
 							},
 							"expr": {
 								"type": "string"
+							},
+							"until": {
+								"type": "string"
+							},
+							"within": {
+								"type": "number"
+							},
+							"then": {
+								"type": "string",
+								"enum": [
+									"if_ok",
+									"always",
+									"if_failed"
+								]
+							}
+						}
+					},
+					{
+						"type": "object",
+						"additionalProperties": false,
+						"required": [
+							"verb",
+							"cond",
+							"arc"
+						],
+						"properties": {
+							"let": {
+								"type": "string"
+							},
+							"verb": {
+								"const": "if"
+							},
+							"cond": {
+								"$ref": "#/$defs/arc"
+							},
+							"arc": {
+								"$ref": "#/$defs/arc"
+							},
+							"else": {
+								"$ref": "#/$defs/arc"
+							},
+							"until": {
+								"type": "string"
+							},
+							"within": {
+								"type": "number"
 							},
 							"then": {
 								"type": "string",
@@ -699,6 +969,9 @@ responseFormat: {
 							"arc"
 						],
 						"properties": {
+							"let": {
+								"type": "string"
+							},
 							"verb": {
 								"const": "when"
 							},
@@ -714,37 +987,10 @@ responseFormat: {
 							"until": {
 								"type": "string"
 							},
-							"then": {
-								"type": "string",
-								"enum": [
-									"if_ok",
-									"always",
-									"if_failed"
-								]
-							}
-						}
-					},
-					{
-						"type": "object",
-						"additionalProperties": false,
-						"required": [
-							"verb",
-							"arc"
-						],
-						"properties": {
-							"verb": {
-								"const": "loop"
+							"rearm": {
+								"type": "number"
 							},
-							"arc": {
-								"$ref": "#/$defs/arc"
-							},
-							"through": {
-								"type": "string"
-							},
-							"until": {
-								"type": "string"
-							},
-							"times": {
+							"within": {
 								"type": "number"
 							},
 							"then": {
@@ -765,6 +1011,62 @@ responseFormat: {
 							"arc"
 						],
 						"properties": {
+							"let": {
+								"type": "string"
+							},
+							"verb": {
+								"const": "loop"
+							},
+							"arc": {
+								"$ref": "#/$defs/arc"
+							},
+							"through": {
+								"type": "string"
+							},
+							"until": {
+								"type": "string"
+							},
+							"times": {
+								"type": "number"
+							},
+							"unbreakable": {
+								"anyOf": [
+									{
+										"const": true
+									},
+									{
+										"type": "integer",
+										"minimum": 0
+									},
+									{
+										"type": "string"
+									}
+								]
+							},
+							"within": {
+								"type": "number"
+							},
+							"then": {
+								"type": "string",
+								"enum": [
+									"if_ok",
+									"always",
+									"if_failed"
+								]
+							}
+						}
+					},
+					{
+						"type": "object",
+						"additionalProperties": false,
+						"required": [
+							"verb",
+							"arc"
+						],
+						"properties": {
+							"let": {
+								"type": "string"
+							},
 							"verb": {
 								"const": "law"
 							},
@@ -786,6 +1088,12 @@ responseFormat: {
 							"until": {
 								"type": "string"
 							},
+							"rearm": {
+								"type": "number"
+							},
+							"within": {
+								"type": "number"
+							},
 							"then": {
 								"type": "string",
 								"enum": [
@@ -804,11 +1112,20 @@ responseFormat: {
 							"name"
 						],
 						"properties": {
+							"let": {
+								"type": "string"
+							},
 							"verb": {
 								"const": "unlaw"
 							},
 							"name": {
 								"type": "string"
+							},
+							"until": {
+								"type": "string"
+							},
+							"within": {
+								"type": "number"
 							},
 							"then": {
 								"type": "string",
@@ -829,6 +1146,9 @@ responseFormat: {
 							"choices"
 						],
 						"properties": {
+							"let": {
+								"type": "string"
+							},
 							"verb": {
 								"const": "choose"
 							},
@@ -858,6 +1178,9 @@ responseFormat: {
 							"verb"
 						],
 						"properties": {
+							"let": {
+								"type": "string"
+							},
 							"verb": {
 								"const": "offer"
 							},
@@ -875,6 +1198,12 @@ responseFormat: {
 								"additionalProperties": {
 									"type": "number"
 								}
+							},
+							"until": {
+								"type": "string"
+							},
+							"within": {
+								"type": "number"
 							},
 							"then": {
 								"type": "string",
@@ -894,11 +1223,41 @@ responseFormat: {
 							"arc"
 						],
 						"properties": {
+							"let": {
+								"type": "string"
+							},
 							"verb": {
 								"const": "group"
 							},
 							"arc": {
 								"$ref": "#/$defs/arc"
+							},
+							"then": {
+								"type": "string",
+								"enum": [
+									"if_ok",
+									"always",
+									"if_failed"
+								]
+							}
+						}
+					},
+					{
+						"type": "object",
+						"additionalProperties": false,
+						"required": [
+							"verb",
+							"watch"
+						],
+						"properties": {
+							"let": {
+								"type": "string"
+							},
+							"verb": {
+								"const": "test"
+							},
+							"watch": {
+								"type": "string"
 							},
 							"then": {
 								"type": "string",
@@ -919,7 +1278,7 @@ responseFormat: {
 enableThinking: false
 
 ## system
-{"steps":[{"verb":"give","item":"gold","to":"Player","quantity":5}]} pays 5 gold; saying so does not. In an offer, gold counts like any item: {"gold":5}. Once you know enough, emit only the Arc JSON, {"steps":[…]}. Arguments sit beside verb. Close every brace. No prose. Available verbs: ring(target) — rings a bell, hush, go_to(target, until?) — heard as footsteps up to 25 paces, follow(target, distance?), flee(from, distance?), wander(until?, seconds?), use(item, target?), pick_up(item, from?), drop(item, to?), give(item, to, quantity?), examine(target), say(text, to?), wait(seconds?, until?), remember(content, tags?), think(about?), set_goal(goal, priority?), drop_goal(goal?), finish_goal(goal?), set_identity(role?, traits?), watch(name, expr), unwatch(name), focus(expr), unfocus(expr), when(watch, arc, times?, until?), loop(arc, through?, until?, times?), law(watch?, arc, name?, times?, until?), unlaw(name), offer(to?, give?, get?). Tools: recall, observe, earshot, see_map.
+{"steps":[{"verb":"give","item":"gold","to":"Player","quantity":5}]} pays 5 gold; saying so does not. In an offer, gold counts like any item: {"gold":5}. Once you know enough, emit only the Arc JSON, {"steps":[…]}. Arguments sit beside verb. Close every brace. No prose. Available verbs: ring(target) — rings a bell, hush, go_to(target) — heard as footsteps up to 25 paces, follow(target, distance?), flee(from, distance?), wander(until?, seconds?), use(item, target?), pick_up(item, from?), drop(item, to?), give(item, to, quantity?), examine(target), say(text, to?), wait(seconds?, until?), pass, remember(content, tags?), think(about?), set_goal(goal, priority?), drop_goal(goal?), finish_goal(goal?), set_identity(role?, traits?), watch(name, expr), unwatch(name), focus(expr), unfocus(expr), if(cond, arc, else?), when(watch, arc, times?, until?, rearm?), loop(arc, through?, until?, times?, unbreakable?), law(watch?, arc, name?, times?, until?, rearm?), unlaw(name), offer(to?, give?, get?). Tools: recall, observe, earshot, see_map.
 You are Hilde. Role: Herbalist.
 
 ## user
@@ -1031,7 +1390,7 @@ In talking range: Bram.
 Last verb result: examine ok — An old stone Well.
 
 Laws:
-- flee: when me.hp < 3, run go_to(Well)
+- flee: when me.hp < 3, it runs go_to(Well)
 
 # request 5
 model: "fake"

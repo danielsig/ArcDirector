@@ -8,6 +8,7 @@ import {
 	ExprError,
 	FACING_COS,
 	LIST_CAP,
+	Names,
 	type Catalog,
 	type ExprEntity,
 	type ExprVal,
@@ -27,6 +28,11 @@ export type HostKernels = {
 	items:ExprEntity[];
 	cache:SampleCache;
 	bindings?:Record<string, ExprVal>;
+	/**
+	 * A name no binding gives, built the first time a watch reads it: the places and landmarks of a big world, which most
+	 * watches never name. Absent: no such name.
+	 */
+	lookup?:(name:string)=>ExprVal | undefined;
 	hostFns?:Record<string, NativeFn>;
 	distance?:(a:ExprEntity, b:ExprEntity)=>number | undefined;
 	nearRadius?:number;
@@ -51,6 +57,8 @@ export type HostKernels = {
 	point?:(who:ExprEntity)=>number[] | undefined;
 	/** Override watch LIST_CAP (a collective's `who` uses its roster size). */
 	listCap?:number;
+	/** The mind's watches by name, read as values where an expression names one (`Catalog.watches`). */
+	watches?:Readonly<Record<string, string>>;
 };
 
 function hpFromFields(who:ExprEntity):{ hp:number; maxHP:number } | undefined {
@@ -124,14 +132,14 @@ function pathOf(host:HostKernels, a:ExprEntity, b:ExprEntity):number | undefined
 }
 
 export function buildCatalog(host:HostKernels):Catalog {
-	const names = new Map<string, ExprVal>();
+	const names = new Names();
 	const fns = new Map<string, NativeFn>(Object.entries(builtins));
 	bindRoster(names, host);
 	if (host.hasHeard !== undefined) {
 		names.set('hasHeard', { kind: 'bool', value: host.hasHeard });
 	}
 	for (const [k, v] of Object.entries(host.bindings ?? {})) {
-		if (!names.has(k)) {
+		if (!names.bound(k)) {
 			names.set(k, v);
 		}
 	}
@@ -169,7 +177,9 @@ export function buildCatalog(host:HostKernels):Catalog {
 			host.cache.rememberHP(who.id, v.hp);
 		};
 		attach(host.me);
-		for (const o of host.others) {
+		// Whoever a binding holds too, unless it says its own: a collective's `units`, so `units.minBy(u => u.hp)` reads their health.
+		const bound = Object.values(host.bindings ?? {}).flatMap(entitiesOf).filter((o) => !o.fields?.hp);
+		for (const o of [...host.others, ...bound]) {
 			attach(o);
 		}
 		names.set('me', asEntityVal(host.me));
@@ -221,6 +231,7 @@ export function buildCatalog(host:HostKernels):Catalog {
 		fns.set(k, fn);
 	}
 
+	names.lookup = host.lookup;
 	return {
 		names,
 		fns,
@@ -228,6 +239,7 @@ export function buildCatalog(host:HostKernels):Catalog {
 		cache: host.cache,
 		stringifiers: host.stringifiers,
 		listCap: host.listCap,
+		...host.watches ? { watches: host.watches } : {},
 	};
 }
 

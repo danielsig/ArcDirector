@@ -40,11 +40,31 @@ function identLookup(name:string, ctx:EvalCtx):ExprVal {
 	if (ctx.catalog.fns.has(name)) {
 		return { kind: 'fn', name };
 	}
+	const watched = watchValue(name, ctx.catalog);
+	if (watched) {
+		return watched;
+	}
 	const leftover = leftoverEnglishHint(name, catalogEntities(ctx.catalog));
 	if (leftover) {
 		throw new ExprError(leftover);
 	}
 	return inferTypeList(name, ctx) ?? ABSENT;
+}
+
+/**
+ * A watch's current value, where `name` is a watch's and no entity's: an entity's name means that entity in every
+ * expression and verb arg, so a watch cannot take it over. Read without its own name, so a watch that names itself, or
+ * two that name each other, end there. Absent from a watch that does not evaluate.
+ */
+function watchValue(name:string, catalog:Catalog):ExprVal | undefined {
+	const expr = catalog.watches && Object.hasOwn(catalog.watches, name) ? catalog.watches[name] : undefined;
+	if (expr === undefined || catalogEntities(catalog).some((e) => needleMatch(e, name))) {
+		return undefined;
+	}
+	const rest = { ...catalog.watches };
+	delete rest[name];
+	const r = evaluate(expr, { ...catalog, watches: rest });
+	return r.error ? ABSENT : r.value;
 }
 
 /** Every entity in the catalog's landmarks, items, others, and units. */
@@ -667,20 +687,18 @@ function byExtrema(args:ExprVal[], ctx:EvalCtx, hi:boolean):ExprVal {
 	if (list.length === 0) {
 		return ABSENT;
 	}
-	let best = list[0];
-	let bestK = asNum(applyLambda(fn, [best], ctx));
-	if (bestK === undefined) {
-		throw new ExprError('key is not a number');
-	}
-	for (let i = 1; i < list.length; i++) {
-		const k = asNum(applyLambda(fn, [list[i]], ctx));
-		if (k === undefined) {
-			throw new ExprError('key is not a number');
-		}
-		if (hi ? k > bestK : k < bestK) {
-			best = list[i];
+	// What has no such number is passed over, as a door among the foes has no hp; only a key nothing has is an error.
+	let best:ExprVal | undefined;
+	let bestK = 0;
+	for (const item of list) {
+		const k = asNum(applyLambda(fn, [item], ctx));
+		if (k !== undefined && (best === undefined || (hi ? k > bestK : k < bestK))) {
+			best = item;
 			bestK = k;
 		}
+	}
+	if (best === undefined) {
+		throw new ExprError('key is not a number');
 	}
 	return best;
 }

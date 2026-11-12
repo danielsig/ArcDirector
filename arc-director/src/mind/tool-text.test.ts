@@ -51,3 +51,31 @@ describe('jsonToolCall', () => {
 		assert.equal(jsonToolCall(''), undefined);
 	});
 });
+
+describe('tool calls in Qwen\'s chat template syntax', () => {
+	const xml = '<tool_call>\n<function=earshot>\n<parameter=to>\nForager\n</parameter>\n</function>\n</tool_call>';
+	const json = '<tool_call>\n{"name": "earshot", "arguments": {"to": "Forager"}}\n</tool_call>';
+
+	it('reads a lone call, in either shape', () => {
+		assert.deepEqual(read(xml), { calls: [{ name: 'earshot', args: { to: 'Forager' } }], rest: '' });
+		assert.deepEqual(read(json), { calls: [{ name: 'earshot', args: { to: 'Forager' } }], rest: '' });
+		assert.deepEqual(read('<tool_call>{"name":"recall","arguments":"{\\"query\\":\\"Bread\\"}"}</tool_call>').calls, [{ name: 'recall', args: { query: 'Bread' } }], 'arguments as a JSON string');
+	});
+
+	it('leaves the Arc written beside it', () => {
+		assert.deepEqual(read(`${xml}\ngo_to(Forager)`), { calls: [{ name: 'earshot', args: { to: 'Forager' } }], rest: 'go_to(Forager)' });
+		assert.deepEqual(read(`go_to(Forager) && ${json}`), { calls: [{ name: 'earshot', args: { to: 'Forager' } }], rest: 'go_to(Forager)' });
+	});
+
+	it('trims a multiline value, and reads each parameter', () => {
+		const text = '<tool_call>\n<function=observe>\n<parameter=expr>\n\nisNear(me,\n  Forager, 16)\n\n</parameter>\n</function>\n</tool_call>';
+		assert.deepEqual(read(text).calls, [{ name: 'observe', args: { expr: 'isNear(me,\n  Forager, 16)' } }]);
+		assert.deepEqual(read('<tool_call>\n<function=see_map>\n<parameter=zoom>\n2\n</parameter>\n</function>\n</tool_call>').calls, [{ name: 'see_map', args: { zoom: 2 } }]);
+	});
+
+	it('leaves a call to no tool it has in the reply', () => {
+		const text = '<tool_call>\n<function=think>\n<parameter=about>\nthe bridge\n</parameter>\n</function>\n</tool_call>';
+		assert.deepEqual(read(text), { calls: [], rest: text });
+		assert.deepEqual(read(`${text}\nrecall("Bread")`).calls, [{ name: 'recall', args: { query: 'Bread' } }]);
+	});
+});

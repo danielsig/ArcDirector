@@ -5,7 +5,7 @@ import type { VerbDef } from '../arc/stock-verbs.js';
  * once the work is handed out. Inside a unit's own program the unit does the work itself, and they finish when it is done.
  */
 export const STOCK_ECONOMY_VERBS = ['gather', 'build', 'wall', 'bridge', 'repair', 'train', 'research', 'cancel', 'rally'] as const;
-/** Unit verbs: given to units with `issue` or `law`. */
+/** Unit verbs: given to units with `command` or `law`. */
 export const STOCK_UNIT_VERBS = ['attack', 'attack_move', 'hold', 'patrol', 'garrison', 'unload'] as const;
 /** Verbs a commander runs for its side as a whole. */
 export const STOCK_SIDE_VERBS = ['tribute'] as const;
@@ -16,7 +16,7 @@ export const STOCK_RTS_VERBS = [...STOCK_ECONOMY_VERBS, ...STOCK_UNIT_VERBS, ...
 export type StockRTSVerb = (typeof STOCK_RTS_VERBS)[number];
 
 export const STOCK_RTS_VERB_DEFS = {
-	gather: { args: { from: 'string', by: 'expr?', workers: 'number?', drop_at: 'id?' }, help: 'from a node, or a resource (Wood) for the nearest of it; they carry it back until told otherwise' },
+	gather: { args: { from: 'string', by: 'expr?', workers: 'number?', drop_at: 'id?' }, help: 'from a node, or a resource (Wood) for the nearest of it; they carry it back until told otherwise', endless: true },
 	build: { args: { what: 'string', near: 'id?', count: 'number?', by: 'expr?', workers: 'number?' }, help: 'pays up front; near an unfinished one of it: helps build that' },
 	wall: { args: { from: 'id', to: 'id', what: 'string?', gates: 'number?', by: 'expr?', workers: 'number?' }, help: 'a line of wall from one place to the other, paid up front; gates: how many in it your side walks through' },
 	bridge: { args: { from: 'id', to: 'id', what: 'string?', by: 'expr?', workers: 'number?' }, help: 'a bridge over the water from one shore to the other, paid up front; it is built out from the near shore' },
@@ -27,8 +27,8 @@ export const STOCK_RTS_VERB_DEFS = {
 	rally: { args: { to: 'id', at: 'expr?' }, help: 'where new units go' },
 	attack: { args: { target: 'expr' }, help: 'one foe or a list, killed in order' },
 	attack_move: { args: { to: 'id', focus: 'expr?' }, help: 'fights what it meets on the way; focus: foes it prefers', seen: 'advancing on {to}' },
-	hold: { args: { at: 'id?', fire_within: 'number?', focus: 'expr?' }, help: 'stays and never chases; fire_within: holds fire until a foe is that close' },
-	patrol: { args: { to: 'id', focus: 'expr?' }, help: 'back and forth from here, fighting what it meets' },
+	hold: { args: { at: 'id?', fire_within: 'number?', focus: 'expr?' }, help: 'stays and never chases; fire_within: holds fire until a foe is that close', endless: true },
+	patrol: { args: { to: 'id', focus: 'expr?' }, help: 'back and forth from here, fighting what it meets', endless: true },
 	garrison: { args: { in: 'id' }, help: 'a building or transport; stays inside until let out' },
 	unload: { args: { at: 'id?' }, help: 'a building or transport lets everyone out, at a place first if it moves' },
 	tribute: { args: { to: 'id', give: 'bundle' }, help: 'to an ally, as {"Gold":100}' },

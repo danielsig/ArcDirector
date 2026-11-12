@@ -36,6 +36,15 @@ describe('mind ids', () => {
 		assert.deepEqual(mapArc(stored, verbs, namesOf(names)), reply);
 	});
 
+	it('reads a *starred* name in an id arg as the name', () => {
+		const names = book();
+		const reply = parseArcText('go_to(target=*SealedDoor*) && say(text="*Hi*", to=*EnemyWitch2*)', verbs);
+		const stored = mapArc(reply, verbs, idsOf(names));
+		assert.equal(stored[0].args.target, 'SealedDoor');
+		assert.equal(stored[1].args.to, 'Nyx');
+		assert.equal(stored[1].args.text, '*Hi*');
+	});
+
 	it('keeps a group expression in a verb\'s id arg, names rewritten, both ways', () => {
 		const names = book();
 		for (const to of ['units', 'allUnits', 'units.filter("Archer")', 'others.nearby()']) {

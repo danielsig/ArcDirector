@@ -16,7 +16,8 @@ const KIT = { verbs: [...STOCK_VERBS, ...STOCK_COLLECTIVE_VERBS] };
 async function stage(reply:(req:ChatRequest)=>string = () => '{}') {
 	const calls:ChatRequest[] = [];
 	const director = await new ArcDirector<Ctx>()
-		.withPriorityQueue({ processInterval: 0, watchInterval: 0, heartbeatStart: 100, heartbeatMin: 100 })
+		.withPriorityQueue({ processInterval: 0, heartbeatStart: 100, heartbeatMin: 100 })
+		.withIntervals({ watch: 0, think: 0 })
 		.addFakeInference((req) => {
 			if (req.thread !== HANDOVER_THREAD) {
 				return { content: 'wait()', toolCalls: [] };
@@ -30,7 +31,7 @@ async function stage(reply:(req:ChatRequest)=>string = () => '{}') {
 		.withDefaultKit(KIT)
 		.withKernels((ctx) => ({ me: dummyEntity(ctx.id), others: [], items: [] }))
 		.withContext((id) => ({ id }))
-		.onVerb(({ verb }) => ({ ok: true, verb }))
+		.onVerb(({ verb }) => ({ status: 'ok', verb }))
 		.addCollective({
 			id: 'DawnParty',
 			mind: { skipHeartbeat: true, skipMajor: true },
@@ -57,10 +58,9 @@ async function stage(reply:(req:ChatRequest)=>string = () => '{}') {
 	const dusk = director.collective('DuskParty')!;
 	const of = (id:string) => director.character(id)!;
 	/** Director ticks until the thinks the moves woke are done and the handover had its free slot. */
-	let clock = 0;
 	const tick = async ():Promise<void> => {
 		for (let i = 0; i < 8; i++) {
-			director.tick(1, clock += 1);
+			director.tick(1);
 			await sleep(10);
 		}
 	};

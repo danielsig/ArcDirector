@@ -8,6 +8,9 @@ import { firstStep, isArc, type Arc, type Step } from './arc-types.js';
 /** Names no choice may take. `until` is reserved so a spec's `choose` and the verb read alike. */
 export const CHOICE_RESERVED:readonly string[] = ['goal', 'until'];
 
+/** The fewest choices a mind's `choose` may have, unless its `minChoices` says otherwise: models left alone write one or two. */
+export const DEFAULT_MIN_CHOICES = 3;
+
 /** Jev's cap on criteria in one question. */
 export const MAX_CHOICES = 255;
 

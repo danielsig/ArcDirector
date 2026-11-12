@@ -39,10 +39,11 @@ describe('scene play', () => {
 		const dealt = async (arc:string):Promise<number> => (await playScenario(squad, scripted(arc), { judge: (w) => 1000 - w.hp('Dummy')! })).judged;
 		const idle = await dealt('say(text=Ready.)');
 		assert.equal(idle, 40, 'the commander and its unit each strike back every second on their own');
-		assert.equal(await dealt('issue(who=units, arc=fire(target=Dummy)) ; fire(target=Dummy)'), idle, 'commanded, as often');
+		assert.equal(await dealt('command(who=units, arc=fire(target=Dummy)) ; fire(target=Dummy)'), idle, 'commanded, as often');
 		const fled = await reached(
 			{ me: { id: 'Ash', as: 'Archer' }, others, things: { Keep: { away: 10, side: 'behind' } }, goal: 'g', thinks: 1, seconds: 20, done: (w) => w.near('Ash', 'Keep') },
-			'when(watch=isHurt(Dummy), arc=go_to(Keep)) ; shoot(target=Dummy)',
+			// A reaction runs to its end, and then the program goes on: this one stays at the Keep.
+			'when(watch=isHurt(Dummy), arc=go_to(Keep) && wait(seconds=30)) ; shoot(target=Dummy)',
 		);
 		assert.ok(fled, 'the reaction stops the shooting');
 	});
@@ -53,7 +54,7 @@ describe('scene play', () => {
 			squad: Object.fromEntries(['A', 'B', 'C'].map((id) => [id, { away: 3, side: 'ahead', as: 'Blade', tags: ['Sword'] }])),
 			done: () => false,
 		};
-		const { judged: at } = await playScenario(bunched, scripted('issue(who=units.filter("Sword"), arc=spread(paces=4))'), {
+		const { judged: at } = await playScenario(bunched, scripted('command(who=units.filter("Sword"), arc=spread(paces=4))'), {
 			judge: (w) => ['A', 'B', 'C'].map((id) => w.getPose(id)!.point),
 		});
 		const apart = Math.min(...at.flatMap((a, i) => at.slice(i + 1).map((b) => Math.hypot(a[0] - b[0], a[1] - b[1]))));
@@ -89,8 +90,8 @@ describe('scene play', () => {
 			done: () => false,
 		};
 		const dealt = async (s:Scenario, arc:string):Promise<number> => (await playScenario(s, scripted(arc), { judge: (w) => 1000 - w.hp('Dummy')! })).judged;
-		const charge = 'issue(who=units, arc=stab(target=Dummy))';
-		const ring = 'issue(who=units, arc=circle(around=Dummy, paces=1.5) && stab(target=Dummy))';
+		const charge = 'command(who=units, arc=stab(target=Dummy))';
+		const ring = 'command(who=units, arc=circle(around=Dummy, paces=1.5) && stab(target=Dummy))';
 		const crowded = { ...column, crowding: 1.5 };
 		const [line, round] = [await dealt(crowded, charge), await dealt(crowded, ring)];
 		assert.ok(round >= 3 * line, `a ring dealt ${round}, a column ${line}`);
@@ -104,7 +105,7 @@ describe('scene play', () => {
 			others: { Dummy: { away: 3, side: 'ahead', hp: [100, 100] } },
 			done: () => false,
 		};
-		const dealt = async (spot:SceneSpot):Promise<number> => (await playScenario({ ...s, others: { Dummy: spot } }, scripted('issue(who=units, arc=impale(target=Dummy))'), {
+		const dealt = async (spot:SceneSpot):Promise<number> => (await playScenario({ ...s, others: { Dummy: spot } }, scripted('command(who=units, arc=impale(target=Dummy))'), {
 			judge: (w) => 100 - w.hp('Dummy')!,
 		})).judged;
 		assert.equal(await dealt({ away: 3, side: 'ahead', hp: [100, 100] }), 2);
@@ -121,8 +122,8 @@ describe('scene play', () => {
 			done: () => false,
 		};
 		const fallen = async (arc:string):Promise<string[]> => (await playScenario(s, scripted(arc), { judge: (w) => [...w.downed] })).judged;
-		assert.deepEqual(await fallen('issue(who=units, arc=snipe(target=X))'), ['X'], 'both shots on X: one wasted');
-		assert.deepEqual((await fallen('issue(who=A, arc=snipe(target=X)) ; issue(who=B, arc=snipe(target=Y))')).sort(), ['X', 'Y']);
+		assert.deepEqual(await fallen('command(who=units, arc=snipe(target=X))'), ['X'], 'both shots on X: one wasted');
+		assert.deepEqual((await fallen('command(who=A, arc=snipe(target=X)) ; command(who=B, arc=snipe(target=Y))')).sort(), ['X', 'Y']);
 	});
 
 	it('plays an RTS scene with no cap on units, and idles one to its end', async () => {
@@ -143,7 +144,7 @@ describe('scene play', () => {
 			verbs: { mark: { units: true, help: 'marks where you stand', run: (_w, { who }) => (marked.push(who), 'marked') } },
 			done: () => false,
 		};
-		await playScenario(s, scripted('issue(who=units.filter("Sword"), arc=mark())'));
+		await playScenario(s, scripted('command(who=units.filter("Sword"), arc=mark())'));
 		assert.deepEqual(marked, ['A']);
 	});
 
@@ -244,7 +245,7 @@ describe('scene play', () => {
 				return 'OK';
 			}
 			prompts.push(req.messages.map((m) => (typeof m.content === 'string' ? m.content : '')).join(' '));
-			return thinks++ === 0 ? 'issue(who=units, arc=fire(target=Raider))' : 'wait(seconds=1)';
+			return thinks++ === 0 ? 'command(who=units, arc=fire(target=Raider))' : 'wait(seconds=1)';
 		}));
 		assert.match(prompts[1], /Kell \([^)]*firing\)/);
 		assert.match(prompts[1], /Raider \([^)]*shooting\)/);
@@ -393,7 +394,7 @@ describe('scene play', () => {
 				return 'OK';
 			}
 			prompts.push(req.messages.map((m) => (typeof m.content === 'string' ? m.content : '')).join(' '));
-			return thinks++ === 0 ? 'go_to(Foe)' : 'issue(who=units, arc=say(text=Here.))';
+			return thinks++ === 0 ? 'go_to(Foe)' : 'command(who=units, arc=say(text=Here.))';
 		}), { judge: (w) => w.isDown('B') });
 		assert.equal(listed, true);
 		assert.match(prompts[0], /^\| B \|/m, 'standing at first');

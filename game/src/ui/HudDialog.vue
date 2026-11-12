@@ -69,7 +69,7 @@ function animate(el:Element, done:()=>void, open:boolean):void {
 .dim {
 	position: absolute;
 	inset: 0;
-	z-index: 4;
+	z-index: var(--z-modal);
 	pointer-events: auto;
 	cursor: default;
 	display: flex;

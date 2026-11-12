@@ -225,10 +225,11 @@ async function waitFor(fn:()=>boolean):Promise<void> {
 /** A plain director on the scripted model: stock verbs, a scene sense, every verb done at once. */
 function director(format:ArcFormat, replies:Reply[], sent:Sent):ArcDirector<Ctx> {
 	const director = new ArcDirector<Ctx>()
-		.withPriorityQueue({ processInterval: 0, watchInterval: 0, heartbeatStart: 100, heartbeatMin: 100 })
+		.withPriorityQueue({ processInterval: 0, heartbeatStart: 100, heartbeatMin: 100 })
+		.withIntervals({ watch: 0, think: 0 })
 		.addStockVerbs()
 		.withDefaultKit({ verbs: STOCK_VERBS })
-		.onVerb((call) => ({ ok: true, verb: call.verb }))
+		.onVerb((call) => ({ status: 'ok', verb: call.verb }))
 		.addSense('scene', { description: 'What you can see. Names only.', gather: () => 'A damp stone hall. EastGate stands in the east wall. A Well.' })
 		.withContext((id) => ({ id }));
 	scriptedModel<Ctx>(format, 'full', replies, sent)(director);
@@ -247,7 +248,7 @@ describe('prompt snapshots', () => {
 	for (const [format, style] of [['text', 'full'], ['schema', 'compact']] as const) {
 		it(`a collective and its roster, ${format} ${style}`, async () => {
 			const sent = new Sent();
-			await playScenario(SQUAD, scriptedModel(format, style, ['issue(who=units.filter("Scout"), arc=go_to(target=Raider))'], sent));
+			await playScenario(SQUAD, scriptedModel(format, style, ['command(who=units.filter("Scout"), arc=go_to(target=Raider))'], sent));
 			matchesSnapshot(`squad-${format}-${style}`, String(sent));
 		});
 	}
@@ -266,7 +267,7 @@ describe('prompt snapshots', () => {
 				.addCharacter({ id: 'Guard', mind: { skipHeartbeat: true }, identity: { role: 'Gate guard', traits: ['dutiful'] }, goals: [{ text: 'Keep the gate', priority: 1 }] })
 				.connect();
 			built.pushEvent({ kind: 'alarm', text: 'The bell rings.', major: true });
-			built.tick(1, 1);
+			built.tick(1);
 			await waitFor(() => sent.count >= 2);
 			await sleep(10);
 			built.dispose();
@@ -289,11 +290,11 @@ describe('prompt snapshots', () => {
 			.connect();
 		const queue = built.mindQueue()!;
 		queue.enqueueMajor('Guard');
-		built.tick(1, 1);
+		built.tick(1);
 		await waitFor(() => sent.count >= 4 && !queue.isThinking('Guard'));
 		await sleep(10);
 		queue.enqueueMajor('Guard');
-		built.tick(1, 2);
+		built.tick(1);
 		await waitFor(() => sent.count >= 6 && !queue.isThinking('Guard'));
 		built.dispose();
 		matchesSnapshot('repairs-text', String(sent));
@@ -302,17 +303,17 @@ describe('prompt snapshots', () => {
 	it('the replace question', async () => {
 		const sent = new Sent();
 		const built = await director('schema', ['loop(arc=go_to(target=EastGate) && go_to(target=Well))', 'examine(target=Well)'], sent)
-			.onVerb((call) => (call.verb === 'go_to' ? new Promise(() => undefined) : { ok: true, verb: call.verb }))
+			.onVerb((call) => (call.verb === 'go_to' ? new Promise(() => undefined) : { status: 'ok', verb: call.verb }))
 			.withReplaceCheck()
 			.addCharacter({ id: 'Guard', mind: { skipHeartbeat: true, skipStrategic: true }, identity: { role: 'Gate guard' } })
 			.connect();
 		const queue = built.mindQueue()!;
 		queue.enqueueMajor('Guard');
-		built.tick(1, 1);
+		built.tick(1);
 		await waitFor(() => sent.count >= 1 && !queue.isThinking('Guard'));
 		await sleep(10);
 		queue.enqueueMajor('Guard');
-		built.tick(1, 2);
+		built.tick(1);
 		await waitFor(() => sent.count >= 3 && !queue.isThinking('Guard'));
 		built.dispose();
 		matchesSnapshot('replace-schema', String(sent));
@@ -325,7 +326,7 @@ describe('prompt snapshots', () => {
 			.addCharacter({ id: 'Sentry', systemOne: 'decider', choose: { goal: 'Keep the gate', hold: 'wait(seconds=1)', patrol: 'go_to(target=EastGate)' } })
 			.connect();
 		const question = built.choiceQuestion('Sentry', { look: 'examine(target=Well)', leave: 'go_to(target=EastGate)' }, { doing: 'wait' });
-		built.tick(1, 1);
+		built.tick(1);
 		await waitFor(() => sent.count >= 1);
 		built.dispose();
 		matchesSnapshot('system-one', `# choiceQuestion ${JSON.stringify(question, null, 2)}\n\n${String(sent)}`);
@@ -339,7 +340,7 @@ describe('prompt snapshots', () => {
 			.addCollective({ id: 'Smiths', mind: { skipHeartbeat: true, skipStart: true }, identity: { role: 'The smithy' }, characters: [member('Cy', 'Smith')] })
 			.connect();
 		built.character('Ada')!.collective = built.collective('Smiths')!;
-		built.tick(1, 1);
+		built.tick(1);
 		await waitFor(() => sent.count >= 1);
 		built.dispose();
 		matchesSnapshot('handover', String(sent));

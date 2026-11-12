@@ -216,6 +216,7 @@ function fillPct(s:HudSpeech):number {
  * while the mind thinks, a status line, and the nameplate (name over a health bar).
  */
 .speech-layer {
+	z-index: var(--z-world);
 	position: absolute;
 	inset: 0;
 	pointer-events: none;

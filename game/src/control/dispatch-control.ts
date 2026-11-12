@@ -24,7 +24,7 @@ export async function dispatchControl(session:Session, command:Command):Promise<
 		case 'readAiLog':
 			return { entries: logEntries(session, command) };
 		case 'renderStats':
-			return { scene: session.scene.id, ...session.hudView.getRenderer()?.stats() };
+			return { scene: session.scene.id, ...session.hudView.getRenderer()?.stats(), ...session.gameObject.world?.perf.stats() };
 		case 'saveGame': {
 			const save = session.save();
 			if (!save) {
@@ -76,7 +76,7 @@ function listCharacters(session:Session):CastRows {
 				tags: tags.length > 0 ? tags : undefined,
 				arc: character.arc ? formatArc(character.arc) : undefined,
 				verb: character.verb || undefined,
-				last: last ? `${last.verb ?? ''} ${last.ok ? 'ok' : 'failed'}${last.reason ? `: ${last.reason}` : ''}` : undefined,
+				last: last ? `${last.verb ?? ''} ${last.status === 'ok' ? 'ok' : 'failed'}${last.reason ? `: ${last.reason}` : ''}` : undefined,
 				at: pos ? [Math.round(pos.x * 10) / 10, Math.round(pos.z * 10) / 10] : undefined,
 			};
 		}),
@@ -102,16 +102,10 @@ async function runVerb(session:Session, id:string, text:string):Promise<ArcResul
 	return resultRow(await character.enact(parseArc(text, character.verbs)));
 }
 
-type ArcResultRow = Pick<ArcResult, 'ok' | 'verb' | 'reason'> & { interrupted:boolean };
+type ArcResultRow = Pick<ArcResult, 'status' | 'verb' | 'reason'>;
 
-/** A preempted step that still failed counts as interrupted: something else took over the character. */
 function resultRow(result:ArcResult):ArcResultRow {
-	return {
-		ok: result.ok,
-		verb: result.verb,
-		reason: result.reason,
-		interrupted: !!result.interrupted || (!!result.preempted && !result.ok),
-	};
+	return { status: result.status, verb: result.verb, reason: result.reason };
 }
 
 /** Move a character into a collective, or out of one: what it is in, and who thinks for it, after. */

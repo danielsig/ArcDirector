@@ -61,6 +61,41 @@ export type Stringifiers = Partial<Record<StringifierKind, (value:ExprVal)=>stri
 
 export type NativeFn = (args:ExprVal[], ctx:EvalCtx)=>ExprVal;
 
+/**
+ * A catalog's names: those bound here, then its `parent`'s, then what `lookup` finds when a name is first read (a big
+ * world's places and landmarks, built only for a watch that reads them). Iterating it yields only what is bound here.
+ */
+export class Names extends Map<string, ExprVal> {
+	/** Names read past those bound here, once bound. A name it does not know is absent. */
+	public lookup:((name:string)=>ExprVal | undefined) | undefined;
+	private readonly _parent:ReadonlyMap<string, ExprVal> | undefined;
+
+	constructor(parent?:ReadonlyMap<string, ExprVal>) {
+		super();
+		this._parent = parent;
+	}
+
+	public override get(name:string):ExprVal | undefined {
+		if (super.has(name)) {
+			return super.get(name);
+		}
+		const found = this._parent?.get(name) ?? this.lookup?.(name);
+		if (found !== undefined) {
+			super.set(name, found);
+		}
+		return found;
+	}
+
+	public override has(name:string):boolean {
+		return this.get(name) !== undefined;
+	}
+
+	/** Whether `name` is bound here already, without reading further. */
+	public bound(name:string):boolean {
+		return super.has(name);
+	}
+}
+
 export type Catalog = {
 	names:Map<string, ExprVal>;
 	fns:Map<string, NativeFn>;
@@ -69,6 +104,11 @@ export type Catalog = {
 	stringifiers?:Stringifiers;
 	/** Override watch LIST_CAP. A collective's selectors use its roster size. */
 	listCap?:number;
+	/**
+	 * The mind's watches by name: in an expression a watch's name stands for its current value (`fallen || idle`). A name
+	 * the catalog binds (a `let`, `me`, a host binding) or an entity's name wins over it.
+	 */
+	watches?:Readonly<Record<string, string>>;
 };
 
 export type EvalCtx = {

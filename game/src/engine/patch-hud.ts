@@ -360,13 +360,14 @@ export function patchHud(
 	const player = world.findByID('Player');
 	const vitals = player?.getComponent(Vitals);
 	hud.touch = world.input.touch;
+	hud.pointerLocked = world.input.pointerLocked;
 	hud.hp = vitals?.hp ?? 0;
 	hud.maxHP = vitals?.maxHP ?? 5;
 	hud.gold = player?.getComponent(Wallet)?.coins ?? 0;
 	hud.showGold = sceneHasGold(world);
 	hud.message = Time.time - world.hudMessageTimestamp < world.hudMessageLife ? world.hudMessage : '';
 	if (hud.statsOverlay || (hud.menuOpen && hud.menuPage === 'testing')) {
-		hud.renderStats = view.stats();
+		hud.renderStats = { ...view.stats(), ...world.perf.stats() };
 	}
 	if (hud.fpsCounter) {
 		const ms = view.frameMS(1000);

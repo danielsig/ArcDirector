@@ -35,7 +35,7 @@ export class ArcRecord {
 			const verb = result.verb ?? 'step';
 			const row = verbs.get(verb) ?? { ok: 0, failed: 0, why: new Map() };
 			verbs.set(verb, row);
-			if (result.ok) {
+			if (result.status === 'ok') {
 				row.ok += 1;
 				continue;
 			}

@@ -117,7 +117,7 @@ describe('agent watches', () => {
 		await a.perform({ verb: 'watch', args: { name: 'theft', expr: 'some(events.filter("theft").nearby(16))' } });
 		await a.perform({ verb: 'unwatch', args: { name: 'approaching' } });
 		assert.deepEqual(a.persona.watches, { theft: 'some(events.filter("theft").nearby(16))' });
-		const q = new ThinkQueue({ watchInterval: 0, processInterval: 0 });
+		const q = new ThinkQueue({ processInterval: 0 });
 		q.ensure('Forager', { skipHeartbeat: true });
 		q.setWatches('Forager', a.persona.effectiveWatches());
 		const far = hostAt(20);
@@ -134,7 +134,7 @@ describe('agent watches', () => {
 			provider,
 			catalog: () => live,
 		});
-		assert.equal((await frozen.perform({ verb: 'watch', args: { name: 'x', expr: 'true' } })).ok, false);
+		assert.equal((await frozen.perform({ verb: 'watch', args: { name: 'x', expr: 'true' } })).status === 'ok', false);
 		assert.deepEqual(frozen.persona.watches, { approaching: 'hasHeard || some(others.approaching())' });
 
 		const json = a.toJSON();
@@ -171,7 +171,7 @@ describe('agent watches', () => {
 			provider: new FakeProvider(() => ({ content: 'wait()', toolCalls: [] })),
 			catalog: () => cat,
 		});
-		assert.equal((await a.perform({ verb: 'watch', args: { name: 'nearby', expr: 'isNear(me, Player, 16)' } })).ok, true);
+		assert.equal((await a.perform({ verb: 'watch', args: { name: 'nearby', expr: 'isNear(me, Player, 16)' } })).status === 'ok', true);
 		assert.deepEqual(a.persona.watches, { nearby: 'isNear(me, Player, 16)' });
 	});
 
@@ -186,8 +186,8 @@ describe('agent watches', () => {
 		});
 		assert.deepEqual(a.persona.effectiveWatches(), ['isHurt(me)', 'some(others.approaching())']);
 		await a.perform({ verb: 'watch', args: { name: 'heard', expr: 'hasHeard' } });
-		assert.equal((await a.perform({ verb: 'watch', args: { name: 'hurt', expr: 'isNear(me, Player)' } })).ok, false);
-		assert.equal((await a.perform({ verb: 'unwatch', args: { name: 'hurt' } })).ok, false);
+		assert.equal((await a.perform({ verb: 'watch', args: { name: 'hurt', expr: 'isNear(me, Player)' } })).status === 'ok', false);
+		assert.equal((await a.perform({ verb: 'unwatch', args: { name: 'hurt' } })).status === 'ok', false);
 		assert.deepEqual(a.persona.watches, {
 			approaching: 'some(others.approaching())',
 			heard: 'hasHeard',
@@ -255,7 +255,7 @@ describe('agent watches', () => {
 	});
 
 	it('isNear / nearby radius on/off enqueues; observe names only', () => {
-		const q = new ThinkQueue({ watchInterval: 0, processInterval: 0 });
+		const q = new ThinkQueue({ processInterval: 0 });
 		q.ensure('G', { skipHeartbeat: true });
 		q.drop('G');
 		q.setWatches('G', ['isNear(me, Player)']);
@@ -294,7 +294,7 @@ describe('agent watches', () => {
 
 	it('approaching chain enqueues only when in range and closing', () => {
 		const cache = new SampleCache();
-		const q = new ThinkQueue({ watchInterval: 0, processInterval: 0 });
+		const q = new ThinkQueue({ processInterval: 0 });
 		q.ensure('G', { skipHeartbeat: true });
 		q.setWatches('G', ['some(events.filter("theft").nearby(16).approaching())']);
 		const first = hostAt(12, { cache });

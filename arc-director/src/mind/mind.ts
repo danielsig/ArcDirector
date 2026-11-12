@@ -1,8 +1,9 @@
-import { formatArc, formatArcBlocks, parseArcText } from '../arc/arc-parse.js';
+import { parseArcText } from '../arc/arc-parse.js';
+import { formatArc, formatArcBlocks } from '../arc/arc-format.js';
 import { arcJSONBlocks, arcSoFar, finishedSteps, parseArc, replyBreakdown } from '../arc/wire.js';
 import { exprArgs } from '../arc/validate.js';
 import { docsFor, replySchema } from '../arc/schema.js';
-import { FOCUS_EDIT_VERBS, VerbRegistry, WATCH_EDIT_VERBS, argBase, groupTargets, STOCK_VERB_DEFS } from '../arc/stock-verbs.js';
+import { CHOOSE_VERB, FOCUS_EDIT_VERBS, PASS_VERB, VerbRegistry, WATCH_EDIT_VERBS, argBase, groupTargets, STOCK_VERB_DEFS } from '../arc/stock-verbs.js';
 import type { Arc, ArcResult, Step } from '../arc/arc-types.js';
 import { ArcError, BlockedArcError } from '../arc/arc-types.js';
 import { catalogEntities, evaluate, unboundCalls } from '../expr/eval.js';
@@ -25,17 +26,18 @@ import {
 	type KnowledgeSource,
 } from './knowledge.js';
 import { jsonToolCall, toolFirstArgs, writtenToolCalls } from './tool-text.js';
-import { arcRepairHint, partRepairHint, replaceAsk, thoughtCutHint, writtenToolsHint, toolResultHint, blockedAgainHint, repeatOutputHint, reviseGoalsAsk, sayRangeHint, stablePrefix, volatileBlock, type PromptStyle, type ThinkInstructions } from './prompt.js';
+import { arcRepairHint, partRepairHint, programFiles, replaceAsk, thoughtCutHint, writtenToolsHint, toolResultHint, blockedAgainHint, repeatOutputHint, reviseGoalsAsk, sayRangeHint, stablePrefix, volatileBlock, type PromptStyle, type ThinkInstructions } from './prompt.js';
 import type { TalkNet } from './talk.js';
 import type { SightClause } from '../perception/perception-types.js';
 import { idsOf, mapArc, mapExpr, mapLawName, namesOf } from './ids.js';
 import type { NameTarget } from '../character/NameBook.js';
 import type { Persona } from '../character/Persona.js';
 import type { Goal, Watches } from '../character/character-types.js';
-import { sayToOf, type ArcRunner } from '../character/arc-runner.js';
-import type { Law } from '../arc/laws.js';
+import { sayToOf, type ArcRunner, type Holder } from '../character/arc-runner.js';
+import { lawGroup, type Law } from '../arc/laws.js';
 import { deferThinks, THINK_ABOUT_CAP } from '../arc/run.js';
-import { arcSteps, firstStep, isArc, mapArgs, sameProgram } from '../arc/arc-types.js';
+import { arcSteps, eachStep, firstStep, isArc, mapArgs, sameProgram } from '../arc/arc-types.js';
+import { choicesOf, DEFAULT_MIN_CHOICES } from '../arc/choose.js';
 import { noWayTo } from '../world/route.js';
 import { waitUntilOf, type MindQueue } from '../think/queue.js';
 import { hasWatch, watchCount } from '../character/watch.js';
@@ -96,7 +98,12 @@ export type MindSettings = {
 	 */
 	repairRetries?:number;
 	/**
-	 * The steps of a reply that need no body (`issue`, `law`, `when`, `say`, ...) are judged each on its own: the good ones
+	 * The fewest choices a `choose` in a reply may have; one with fewer goes back for repair, and the prompt asks for this
+	 * many to two more. Default {@link DEFAULT_MIN_CHOICES}: models left alone write one or two. Needs repair turns.
+	 */
+	minChoices?:number;
+	/**
+	 * The steps of a reply that need no body (`command`, `law`, `when`, `say`, ...) are judged each on its own: the good ones
 	 * stand, the model's turn shows only those, and it is told in words what became of the rest, to replace just them. A
 	 * reply that does not read at all still goes back whole.
 	 */
@@ -106,7 +113,7 @@ export type MindSettings = {
 	 * it off if your entities gain fields later. Read from the director's layer.
 	 */
 	repairUnknownFields?:boolean;
-	/** Whether a finished arc stalled, which stretches the heartbeat. Default: it failed or was interrupted. */
+	/** Whether a finished arc stalled, which stretches the heartbeat. Default: it failed or was stopped. */
 	stalled?:(result:ArcResult)=>boolean;
 	/** How close a memory must come to what is before it to come to mind unasked (0–1). Default 0.55. */
 	intrusionThreshold?:number;
@@ -134,6 +141,7 @@ const MIND_DEFAULTS = {
 	arcFormat: 'schema',
 	toolRounds: DEFAULT_TOOL_ROUNDS,
 	repairRetries: 0,
+	minChoices: DEFAULT_MIN_CHOICES,
 	repairPerStep: false,
 	repairUnknownFields: false,
 	intrusionThreshold: 0.55,
@@ -212,7 +220,7 @@ export type MindDeps<TCtx = unknown> = {
 	/** The unfinished work `arc` would cut short, when it is to be asked about before replacing it. */
 	replacing?:(arc:Arc)=>Replacing[];
 	/** Why an Arc just read could never work as written, for the model to write it again before it runs. */
-	arcProblem?:(arc:Arc)=>string | undefined;
+	arcProblem?:(arc:Arc)=>ArcError | undefined;
 	queue?:MindQueue;
 	/** Vectors for memories and recall queries. Omit to recall by text alone. */
 	embed?:(texts:string[])=>Promise<number[][]>;
@@ -342,7 +350,7 @@ const LOOKUP_REPEAT = 5;
 const RECENT_CAP = 8;
 const RECENT_SUMMARY_MAX = 600;
 const RECENT_SEPARATOR = '; ';
-const BARE_RESULT = new Set(['ok', 'failed', 'interrupted']);
+const BARE_RESULT = new Set(['ok', 'failed', 'stopped']);
 
 /** The folded summary with `overflow` added: lines kept apart, the oldest whole lines dropped past the cap. */
 function foldRecent(prev:string, overflow:string[]):string {
@@ -682,7 +690,7 @@ export class Mind<TCtx = unknown> {
 	/** The result of an arc that ran beside the voice's program. The next prompt shows it; only a failure calls for that think now. */
 	public ingestBeside(result:ArcResult):void {
 		this._replyTo = [];
-		this.ingestResult(result, !result.ok);
+		this.ingestResult(result, result.status !== 'ok');
 	}
 
 	/** The result of the arc this mind gave its voice, or of a failed think. The next prompt shows it. */
@@ -692,11 +700,11 @@ export class Mind<TCtx = unknown> {
 			this._noWay.add(`${result.verb} ${result.unreachable}`);
 		}
 		const walk = result.verb === 'go_to' ? ['go_to'] : [];
-		if (result.interrupted) {
+		if (result.status === 'stopped') {
 			this.pushEvent({
-				kind: 'Interrupted',
-				text: result.reason ?? 'interrupted',
-				tags: ['interrupted', ...walk],
+				kind: 'Stopped',
+				text: result.reason ?? 'stopped',
+				tags: ['stopped', ...walk],
 			});
 		}
 		else {
@@ -707,8 +715,8 @@ export class Mind<TCtx = unknown> {
 			const said = result.verb === 'say' ? ['said'] : [];
 			this.pushEvent({
 				kind: 'arc_result',
-				text: result.reason ?? (result.ok ? 'ok' : 'failed'),
-				tags: [result.ok ? 'ok' : 'fail', ...walk, ...said],
+				text: result.reason ?? (result.status === 'ok' ? 'ok' : 'failed'),
+				tags: [result.status === 'ok' ? 'ok' : 'fail', ...walk, ...said],
 				remember: result.verb !== 'think' && result.verb !== 'say' && !result.unreachable,
 			});
 		}
@@ -724,7 +732,7 @@ export class Mind<TCtx = unknown> {
 	 * for what it chose.
 	 */
 	public ingestLawResult(law:string, result:ArcResult):void {
-		const outcome = result.interrupted ? 'interrupted' : result.ok ? 'ran' : 'failed';
+		const outcome = result.status === 'ok' ? 'ran' : result.status;
 		const text = `Law ${law} ${outcome}${result.reason ? `: ${result.reason}` : ''}`;
 		const i = this._lawResults.findIndex((line) => line.replace(/ ×\d+$/, '') === text);
 		const times = i < 0 ? 1 : Number(/ ×(\d+)$/.exec(this._lawResults[i])?.[1] ?? 1) + 1;
@@ -757,7 +765,7 @@ export class Mind<TCtx = unknown> {
 	 * The wait is at the end, so `give(...) && say(...)` still runs the say. A step that names no character waits for no one.
 	 */
 	public async afterArc(result:ArcResult, voice:ArcRunner<TCtx>):Promise<void> {
-		const who = result.interrupted ? [] : this.nearbyReply(voice);
+		const who = result.status === 'stopped' ? [] : this.nearbyReply(voice);
 		this._replyTo = [];
 		if (who.length > 0 && voice.execute) {
 			await voice.execute({ verb: 'wait', args: { seconds: 20, reply: who.length === 1 ? who[0] : who } }, voice.context());
@@ -767,7 +775,7 @@ export class Mind<TCtx = unknown> {
 	/** A finished `reply` step. Remember the characters it named; the wait happens when the arc ends. */
 	public noteReply(step:Step, result:ArcResult, voice:ArcRunner<TCtx>):void {
 		// A line to a group, like one to no one, waits for no answer.
-		if (!result.ok || !voice.verbs.get(step.verb)?.reply || groupTargets(step, voice.verbs)) {
+		if (result.status !== 'ok' || !voice.verbs.get(step.verb)?.reply || groupTargets(step, voice.verbs)) {
 			return;
 		}
 		for (const id of idTargets(step, voice)) {
@@ -942,7 +950,7 @@ export class Mind<TCtx = unknown> {
 		if (!Number.isFinite(this.lastTacticalTimestamp)) {
 			return true;
 		}
-		if (this.lastResult?.interrupted) {
+		if (this.lastResult?.status === 'stopped') {
 			return true;
 		}
 		if (this._pendingEvents.some((e) => e.major)) {
@@ -1039,6 +1047,41 @@ export class Mind<TCtx = unknown> {
 		return [this.lawsSection(), this.receivedSinceThink()].filter(Boolean).join('\n\n');
 	}
 
+	/**
+	 * The program its own body runs now, for a mind that is no commander (a commander's roster shows its units'), and the
+	 * reply that keeps it: `pass()` is free, so it runs beside the program instead of replacing it.
+	 */
+	private ownProgram():{ steps:string; keep:string } | undefined {
+		const voice = this.voice;
+		const state = voice.programState();
+		if (this.owner.promptSection || !state?.running || !voice.activeVerbs().has(PASS_VERB)) {
+			return undefined;
+		}
+		// One marker: the step it is on, a `when`'s over the program's it holds.
+		const mark = state.marks.at(-1);
+		const { lines, at } = this.programLines(state.arc, mark?.step, voice.verbs);
+		const note = mark && (mark.heldBy ? `⏸ while ${this.holderText(mark.heldBy)} runs` : `← now, ${mark.seconds}s`);
+		const file = { path: 'program.arc', who: '', lines, marks: new Map(at < 0 || !note ? [] : [[at, note]]), running: true, seconds: state.seconds, endings: [] };
+		return { steps: programFiles([file]), keep: this.shownSteps([{ verb: PASS_VERB, args: {} }], voice.verbs, this.arcFormat) };
+	}
+
+	/** What holds a program's step, in this mind's names: `law flee`, `when isHurt(me)`. */
+	public holderText(holder:Holder):string {
+		return 'law' in holder ? `law ${mapLawName(holder.law, namesOf(this.persona.names))}` : `when ${this.named(holder.when)}`;
+	}
+
+	/**
+	 * `arc` as this mind writes it, a line a step, and the line `step` is on (-1: none). The step is found by where it
+	 * sits in `arc`'s tree (the very object, at any depth: a loop's body, a branch, a choice), not by its text, so a
+	 * step written twice marks the one running.
+	 */
+	public programLines(arc:Arc, step:Step | undefined, verbs:VerbRegistry):{ lines:string[]; at:number } {
+		const format = this.arcFormat;
+		const lines = this.shownSteps(arc, verbs, format).split('\n');
+		const marked = step && markStep(arc, step);
+		return { lines, at: marked ? this.shownSteps(marked, verbs, format).split('\n').findIndex((line) => line.includes(STEP_MARK)) : -1 };
+	}
+
 	/** A stored expression in this mind's names. */
 	public named(expr:string):string {
 		return mapExpr(expr, namesOf(this.persona.names));
@@ -1052,14 +1095,14 @@ export class Mind<TCtx = unknown> {
 
 	/**
 	 * The owner's laws in list order, as this mind's model reads them: sentences, not arcs, so a small model does
-	 * not copy them back as its reply.
+	 * not copy them back as its reply. `running`: by law name, who runs it now and at what step (`for Tom: flee(Wolf)`).
 	 */
 	/** Whether this mind's model is told only what its game makes its own: see {@link PromptStyle}. */
 	public get compact():boolean {
 		return this.thinksWith.promptStyle === 'compact';
 	}
 
-	public lawsSection():string {
+	public lawsSection(running:ReadonlyMap<string, string> = new Map()):string {
 		const laws = this.owner.laws;
 		if (laws.length === 0) {
 			return '';
@@ -1068,9 +1111,17 @@ export class Mind<TCtx = unknown> {
 			const who = this.owner.lawsTakeWho() && law.who !== 'me' ? ` (for ${this.named(law.who)})` : '';
 			const times = law.times === undefined ? '' : `, times=${law.times}`;
 			const until = law.until ? `, until ${this.named(law.until)}` : '';
-			return `- ${mapLawName(law.name, namesOf(this.persona.names))}${who}: when ${this.named(law.watch)}, run ${this.namedArc(law.arc)}${times}${until}`;
+			// A sentence, never `name: arc`: a model copies what reads as Arc text back into its reply, `Tom.` included.
+			const name = mapLawName(law.name, namesOf(this.persona.names));
+			const group = lawGroup(name);
+			const label = group ? `${name.slice(group.length + 1)}, ${group}'s own` : name;
+			const now = running.has(law.name) ? `; running ${running.get(law.name)}` : '';
+			return `- ${label}${who}: when ${this.named(law.watch)}, it runs ${this.namedArc(law.arc)}${times}${until}${now}`;
 		};
-		const intro = this.compact ? 'Laws:' : 'Laws (emergencies that already run on their own, first listed first; do not repeat them in your reply; unlaw(name) drops one):';
+		// One of a character's own goes by its whole name: say so, with a real one, only where there is one.
+		const owned = laws.map((law) => mapLawName(law.name, namesOf(this.persona.names))).find((name) => lawGroup(name));
+		const unlaw = owned ? `unlaw(name) drops one, unlaw(${owned}) ${lawGroup(owned)}'s own` : 'unlaw(name) drops one';
+		const intro = this.compact ? 'Laws:' : `Laws (emergencies that already run on their own, first listed first; do not repeat them in your reply; ${unlaw}):`;
 		return `${intro}\n${laws.map(line).join('\n')}`;
 	}
 
@@ -1143,7 +1194,7 @@ export class Mind<TCtx = unknown> {
 	 * this does the obstacle's lookup for it, when it is stuck on it and only then.
 	 */
 	private failureArticles():string {
-		const reason = this.lastResult && !this.lastResult.ok ? this.lastResult.reason : undefined;
+		const reason = this.lastResult && this.lastResult.status !== 'ok' ? this.lastResult.reason : undefined;
 		const ctx = reason ? this.worldContext() : undefined;
 		if (!reason || !this.knowledge || ctx === undefined) {
 			return '';
@@ -1199,6 +1250,7 @@ export class Mind<TCtx = unknown> {
 			mentioned: this.mentionedText(),
 			offers: this.offers?.(),
 			thinkAbout: this._pendingAbout,
+			program: this.ownProgram(),
 			compact: this.compact,
 		}), this.extraVolatile()].filter(Boolean).join('\n\n');
 	}
@@ -1212,7 +1264,7 @@ export class Mind<TCtx = unknown> {
 		const arc = this.inIDs(parseArc(content, verbs), verbs);
 		const problem = this.problemIn(arc, verbs);
 		if (problem) {
-			throw new ArcError(problem);
+			throw problem;
 		}
 		return arc;
 	}
@@ -1226,14 +1278,30 @@ export class Mind<TCtx = unknown> {
 	}
 
 	/** Why `arc`, in ids, could never work as written, if it could not. */
-	private problemIn(arc:Arc, verbs:VerbRegistry):string | undefined {
+	private problemIn(arc:Arc, verbs:VerbRegistry):ArcError | undefined {
 		const catalog = this.voice.catalog?.();
 		const unbound = catalog ? exprArgs(arc, verbs).flatMap((expr) => unboundCalls(expr, catalog)) : [];
 		if (unbound.length > 0) {
-			return `${unbound.map((name) => `${name}()`).join(', ')} is not a watch function`;
+			return new ArcError(`${unbound.map((name) => `${name}()`).join(', ')} is not a watch function`);
 		}
 		// With no repair turn to send it back on, it runs as written and its verbs say what went wrong.
-		return this.setting('repairRetries') > 0 ? this._arcProblem?.(arc) : undefined;
+		if (this.setting('repairRetries') === 0) {
+			return undefined;
+		}
+		return this.fewChoices(arc, verbs) ?? this._arcProblem?.(arc);
+	}
+
+	/** Why a `choose` in `arc` has too few choices to be worth asking about, if one has. */
+	private fewChoices(arc:Arc, verbs:VerbRegistry):ArcError | undefined {
+		const least = this.setting('minChoices');
+		let found:number | undefined;
+		eachStep(arc, verbs, (step) => {
+			const count = Object.keys(choicesOf(step)).length;
+			if (step.verb === CHOOSE_VERB && count < least) {
+				found ??= count;
+			}
+		});
+		return found === undefined ? undefined : new ArcError(`choose needs at least ${least} choices, one for each way things may go: this one has ${found}`);
 	}
 
 	/**
@@ -1291,7 +1359,7 @@ export class Mind<TCtx = unknown> {
 			if (chain.includes(step)) {
 				return;
 			}
-			const reason = this.problemIn([...kept, ...good, step], verbs);
+			const reason = this.problemIn([...kept, ...good, step], verbs)?.message;
 			if (reason) {
 				bad.push({ label: labelOf(step), reason });
 			}
@@ -1300,7 +1368,7 @@ export class Mind<TCtx = unknown> {
 			}
 		});
 		if (chain.length > 0) {
-			const reason = this.problemIn([...kept, ...good, ...chain], verbs);
+			const reason = this.problemIn([...kept, ...good, ...chain], verbs)?.message;
 			if (reason) {
 				bad.push({ label: chain.map(labelOf).join(' then '), reason });
 			}
@@ -1313,7 +1381,7 @@ export class Mind<TCtx = unknown> {
 	}
 
 	/** Steps as the model writes them, in its names. */
-	private shownSteps(arc:Arc, verbs:VerbRegistry, format:ArcFormat):string {
+	public shownSteps(arc:Arc, verbs:VerbRegistry, format:ArcFormat):string {
 		const named = mapArc(arc, verbs, namesOf(this.persona.names));
 		return format === 'text' ? formatArcBlocks(named, verbs) : arcJSONBlocks(named, verbs);
 	}
@@ -1414,6 +1482,7 @@ export class Mind<TCtx = unknown> {
 			arcExample: this.setting('arcExample'),
 			systemNote: this.setting('systemNote'),
 			currency: this.setting('currency'),
+			minChoices: this.setting('minChoices'),
 			tools: toolNames,
 			style: this.thinksWith.promptStyle,
 		});
@@ -1449,8 +1518,11 @@ export class Mind<TCtx = unknown> {
 		let warnedRepeat = freshInput;
 		let checksLeft = Math.max(1, this.setting('repairRetries'));
 		let lastErr:Error | null = null;
-		const repeatTurn = 1;
-		const budget = toolsLeft + this.setting('repairRetries') + 1 + (this.talk ? 1 : 0) + repeatTurn;
+		// A thought that never got to its Arc is asked for it once, whatever repairs are left.
+		let askedForArc = false;
+		// The repeat warning and that ask.
+		const extraTurns = 2;
+		const budget = toolsLeft + this.setting('repairRetries') + 1 + (this.talk ? 1 : 0) + extraTurns;
 		for (let turn = 0; turn < budget; turn++) {
 			const allowTools = toolsLeft > 0 && tools.length > 0;
 			const stop = new AbortController();
@@ -1465,7 +1537,7 @@ export class Mind<TCtx = unknown> {
 					toolChoice: sendTools ? (allowTools ? 'auto' : 'none') : undefined,
 					responseFormat: reply,
 					// A repair keeps the whole conversation, so reasoning on top of it runs out of tokens again.
-					enableThinking: repairsLeft < this.setting('repairRetries') ? false : this.thinksWith.thinking,
+					enableThinking: repairsLeft < this.setting('repairRetries') || askedForArc ? false : this.thinksWith.thinking,
 					signal: stop.signal,
 					onDelta: this.replyWatch(verbs, stop, streamed),
 				});
@@ -1525,9 +1597,11 @@ export class Mind<TCtx = unknown> {
 				toolsLeft -= 1;
 				continue;
 			}
-			// A tool written where the Arc goes is the call the model meant: run it, or drop it from an Arc beside it.
-			const written = format === 'text' && res.content ? writtenToolCalls(res.content, toolFirstArgs(tools)) : undefined;
-			if (written && written.calls.length > 0 && !written.rest && allowTools) {
+			// A tool written where the Arc goes, or in a thought that never got to the Arc, is the call the model meant: run
+			// it, or drop it from an Arc beside it.
+			const thought = !res.content && res.reasoning ? writtenToolCalls(res.reasoning, toolFirstArgs(tools)) : undefined;
+			const written = format === 'text' && res.content ? writtenToolCalls(res.content, toolFirstArgs(tools)) : thought;
+			if (written && written.calls.length > 0 && (!written.rest || thought) && allowTools) {
 				messages.push({ role: 'assistant', content: res.content });
 				const results:string[] = [];
 				for (const call of written.calls) {
@@ -1555,7 +1629,7 @@ export class Mind<TCtx = unknown> {
 				messages.push({ role: 'user', content: this.withMapImage(toolResultHint(called.name, result, toolsLeft <= 0, this.compact)) });
 				continue;
 			}
-			const content = written?.rest || res.content;
+			const content = (res.content && written?.rest) || res.content;
 			if (res.toolCalls.length > 0) {
 				lastErr = new ArcError('model called a tool when it must emit an Arc');
 				if (!this.pushRepair(messages, res, lastErr, repairsLeft, toolNames, format)) {
@@ -1587,7 +1661,8 @@ export class Mind<TCtx = unknown> {
 				}
 				catch (err) {
 					lastErr = err instanceof Error ? err : new ArcError(String(err));
-					if (!this.pushRepair(messages, res, lastErr, repairsLeft, toolNames, format)) {
+					// The world moved under the reply: a repair turn would show the model the old world again.
+					if (lastErr instanceof BlockedArcError || !this.pushRepair(messages, res, lastErr, repairsLeft, toolNames, format)) {
 						throw lastErr;
 					}
 					repairsLeft -= 1;
@@ -1628,6 +1703,13 @@ export class Mind<TCtx = unknown> {
 				return this.askReplace(settled, content, messages);
 			}
 			lastErr = new ArcError('model returned no arc');
+			if (!askedForArc) {
+				askedForArc = true;
+				this.showThink({ kind: 'retry', reason: lastErr.message });
+				messages.push({ role: 'assistant', content: null });
+				messages.push({ role: 'user', content: 'Emit the Arc now.' });
+				continue;
+			}
 			if (!this.pushRepair(messages, res, lastErr, repairsLeft, toolNames, format)) {
 				throw lastErr;
 			}
@@ -1689,7 +1771,7 @@ export class Mind<TCtx = unknown> {
 		const aside = kept.includes(voice.id) || (appended.includes(voice.id) && voice.append(body));
 		const left = arc
 			.filter((step) => !aside || !body.includes(step))
-			.map((step) => (step.verb === 'issue' ? { ...step, args: { ...step.args, keep: [...kept], append: [...appended] } } : step));
+			.map((step) => (step.verb === 'command' ? { ...step, args: { ...step.args, keep: [...kept], append: [...appended] } } : step));
 		return left.length > 0 ? left : [{ verb: 'wait', args: {}, granted: true }];
 	}
 
@@ -2172,7 +2254,7 @@ export class Mind<TCtx = unknown> {
 		}
 		const aimed = this.voice.aimGroup(head);
 		// A group is not refused here: running, it speaks to whoever of them it can, or says why it cannot.
-		if ('ok' in aimed || groupTargets(aimed, this.voice.verbs)) {
+		if ('status' in aimed || groupTargets(aimed, this.voice.verbs)) {
 			return undefined;
 		}
 		const to = sayToOf(aimed.args);
@@ -2329,7 +2411,7 @@ export class Mind<TCtx = unknown> {
 	private runThink(step:Step, voice:boolean):ArcResult {
 		if (voice && this._lastVerb === 'think') {
 			return {
-				ok: false,
+				status: 'failed',
 				verb: 'think',
 				reason: 'act first; think() cannot follow think()',
 			};
@@ -2342,14 +2424,14 @@ export class Mind<TCtx = unknown> {
 		if (voice) {
 			this._lastVerb = 'think';
 		}
-		return { ok: true, verb: 'think' };
+		return { status: 'ok', verb: 'think' };
 	}
 
 	/** watch(name, expr) adds or replaces an extra watch; unwatch(name) drops one. Pins fail closed. */
 	private runWatch(step:Step):ArcResult {
 		const name = String(step.args.name ?? '');
 		if (hasWatch(this.persona.pinnedWatches, name)) {
-			return { ok: false, verb: step.verb, reason: `${name} is a required watch` };
+			return { status: 'failed', verb: step.verb, reason: `${name} is a required watch` };
 		}
 		const expr = String(step.args.expr ?? '');
 		const ok = step.verb === 'unwatch'
@@ -2358,31 +2440,31 @@ export class Mind<TCtx = unknown> {
 		if (ok) {
 			this.queue?.setWatches(this.id, this.persona.effectiveWatches());
 		}
-		return { ok, verb: step.verb, reason: ok ? undefined : `no watch ${name}` };
+		return { status: ok ? 'ok' : 'failed', verb: step.verb, reason: ok ? undefined : `no watch ${name}` };
 	}
 
 	/** focus(expr) puts an extra sightFocus first; unfocus(expr) drops one. Pins fail closed. */
 	private runFocus(step:Step):ArcResult {
 		const expr = String(step.args.expr ?? '').trim();
 		if (this.persona.pinnedSightFocus.includes(expr)) {
-			return { ok: false, verb: step.verb, reason: 'that sightFocus is required' };
+			return { status: 'failed', verb: step.verb, reason: 'that sightFocus is required' };
 		}
 		const rest = this.persona.sightFocus.filter((e) => e !== expr);
 		const ok = step.verb === 'focus' ? expr.length > 0 : rest.length < this.persona.sightFocus.length;
 		this.persona.sightFocus = step.verb === 'focus' ? asFocusList([expr, ...rest], this.persona.maxSightFocus) : rest;
-		return { ok, verb: step.verb, reason: ok ? undefined : 'no such sightFocus' };
+		return { status: ok ? 'ok' : 'failed', verb: step.verb, reason: ok ? undefined : 'no such sightFocus' };
 	}
 
 	private syncQueue(result:ArcResult):void {
 		if (!this.queue) {
 			return;
 		}
-		const stalled = this.setting('stalled')?.(result) ?? (!result.ok || !!result.interrupted);
+		const stalled = this.setting('stalled')?.(result) ?? result.status !== 'ok';
 		this.queue.noteResult(this.id, stalled);
 		// Orders given are work under way: its watches say when that needs another think.
-		const ordered = result.ok && this.lastArc && arcSteps(this.lastArc).some((step) => step.verb === 'issue');
-		if (!result.interrupted && this.lastArc && !ordered) {
-			this.queue.enqueueArc(this.id, this.lastArc, result.ok);
+		const ordered = result.status === 'ok' && this.lastArc && arcSteps(this.lastArc).some((step) => step.verb === 'command');
+		if (result.status !== 'stopped' && this.lastArc && !ordered) {
+			this.queue.enqueueArc(this.id, this.lastArc, result.status === 'ok');
 		}
 	}
 
@@ -2399,13 +2481,13 @@ export class Mind<TCtx = unknown> {
 	private finishByWord(text:string | undefined, mark:string):ArcResult {
 		const goal = this.goalsMarked(mark, text).find((g) => text || !g.until);
 		if (!goal) {
-			return { ok: false, verb: 'finish_goal', reason: text ? `no goal reads "${text}"` : 'no goal to finish' };
+			return { status: 'failed', verb: 'finish_goal', reason: text ? `no goal reads "${text}"` : 'no goal to finish' };
 		}
 		if (goal.until) {
-			return { ok: false, verb: 'finish_goal', reason: 'not yet: that goal ends by itself once it is done' };
+			return { status: 'failed', verb: 'finish_goal', reason: 'not yet: that goal ends by itself once it is done' };
 		}
 		this.finishGoal(goal);
-		return { ok: true, verb: 'finish_goal' };
+		return { status: 'ok', verb: 'finish_goal' };
 	}
 
 	/** The goals that carry `mark`, or only the one reading `text` when it is named. */
@@ -2426,7 +2508,7 @@ export class Mind<TCtx = unknown> {
 			this.persona.goals = this.persona.goals.filter((g) => g !== same);
 			this.persona.goals.push({ ...same, text, priority });
 			this.persona.trimGoals();
-			return { ok: true, verb: 'set_goal' };
+			return { status: 'ok', verb: 'set_goal' };
 		}
 		if (step.verb === 'finish_goal') {
 			return this.finishByWord(typeof step.args.goal === 'string' ? step.args.goal : undefined, mark);
@@ -2435,11 +2517,11 @@ export class Mind<TCtx = unknown> {
 			const goal = typeof step.args.goal === 'string' ? step.args.goal : undefined;
 			const dropped = this.goalsMarked(mark, goal).slice(goal ? 0 : -1);
 			this.persona.goals = this.persona.goals.filter((g) => !dropped.includes(g));
-			return { ok: true, verb: 'drop_goal' };
+			return { status: 'ok', verb: 'drop_goal' };
 		}
 		if (step.verb === 'set_identity') {
 			const changed = this.persona.applyIdentityPatch(step.args, this.id, this._now);
-			return { ok: changed, verb: 'set_identity', reason: changed ? undefined : 'nothing to change' };
+			return { status: changed ? 'ok' : 'failed', verb: 'set_identity', reason: changed ? undefined : 'nothing to change' };
 		}
 		return undefined;
 	}
@@ -2466,7 +2548,7 @@ export class Mind<TCtx = unknown> {
 			const content = String(step.args.content ?? '');
 			const tags = asStringArray(step.args.tags);
 			await this.remember(content, voice ? tags : [...tags, `unit:${by.id}`], this._now);
-			return { ok: true, verb: 'remember' };
+			return { status: 'ok', verb: 'remember' };
 		}
 		const edited = this.editPersona(step, by);
 		if (edited) {
@@ -2479,10 +2561,10 @@ export class Mind<TCtx = unknown> {
 			const text = String(step.args.text ?? '').trim();
 			const echo = this.alreadySaid(text, step.args);
 			if (echo) {
-				return { ok: false, verb: 'say', reason: `they already heard you say that ("${echo}"). Saying it again changes nothing: act on it, or say something new` };
+				return { status: 'failed', verb: 'say', reason: `they already heard you say that ("${echo}"). Saying it again changes nothing: act on it, or say something new` };
 			}
 			const result = await by.speak(step);
-			if (result.ok && text) {
+			if (result.status === 'ok' && text) {
 				this._said = [...this._said, { gist: gistOf(text), text, heard: new Set(result.heard ?? []) }].slice(-SAID_CAP);
 				this.noteConversation({ speakerID: this.thinkThread(), to: [sayToOf(step.args) ?? []].flat(), text });
 			}
@@ -2502,8 +2584,8 @@ function idTargets<TCtx>(step:Step, voice:ArcRunner<TCtx>):string[] {
 	const people = otherCharacters(voice);
 	const kinds = voice.verbs.get(step.verb)?.args ?? {};
 	const ids:string[] = [];
-	for (const [key, kind] of Object.entries(kinds)) {
-		if (argBase(kind) !== 'id') {
+	for (const [key, arg] of Object.entries(kinds)) {
+		if (argBase(arg.kind) !== 'id') {
 			continue;
 		}
 		const id = step.args[key];
@@ -2512,6 +2594,23 @@ function idTargets<TCtx>(step:Step, voice:ArcRunner<TCtx>):string[] {
 		}
 	}
 	return ids;
+}
+
+/** Written into the one step {@link markStep} marks, so its line can be found once the arc is laid out. */
+const STEP_MARK = '§step§';
+
+/** `arc` with `step`, the very object at any depth, carrying {@link STEP_MARK}; undefined when `step` is not in it. */
+function markStep(arc:Arc, step:Step):Arc | undefined {
+	let found = false;
+	const walk = (steps:Arc):Arc => steps.map((s) => {
+		if (s === step) {
+			found = true;
+			return { ...s, args: { ...s.args, [STEP_MARK]: STEP_MARK } };
+		}
+		return { ...s, args: Object.fromEntries(Object.entries(s.args).map(([key, value]) => [key, isArc(value) ? walk(value) : value])) };
+	});
+	const marked = walk(arc);
+	return found ? marked : undefined;
 }
 
 /** Living characters besides the one acting: the catalog's `others`, and anyone talk can address. */
