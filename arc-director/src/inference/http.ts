@@ -129,12 +129,6 @@ export type ModelSettings = {
 /** A reply as it came over the wire, or the thought so far when the thinking budget cut it off. */
 type Got = { json:Record<string, unknown>; firstMs?:number; wallMs:number; cutThought?:string };
 
-type RequestInfo = {
-	req:ChatRequest;
-	body:Record<string, unknown>;
-	path:string;
-};
-
 export type HttpProviderConfig = {
 	baseURL?:string;
 	apiKey?:string;
@@ -160,8 +154,6 @@ export type HttpProviderConfig = {
 	 * When a turn asks for a canned thought, used to wrap it in the model's think tokens.
 	 */
 	applyPromptTemplate?:ApplyPromptTemplate;
-	/** Fired with the exact JSON body after prepare, immediately before the HTTP send. */
-	onRequest?:(info:RequestInfo)=>void;
 };
 
 function withNoThink(messages:ChatMessage[]):ChatMessage[] {
@@ -1230,7 +1222,6 @@ export class HttpProvider implements InferenceProvider {
 	private readonly _maxTokens:number | undefined;
 	private readonly _loadOpts:HttpLoadConfig;
 	private readonly _applyPromptTemplateFn:ApplyPromptTemplate | undefined;
-	private readonly _onRequest?:(info:RequestInfo)=>void;
 	private readonly _reasoningByModel = new Map<string, ReasoningOption[]>();
 	/** Each catalog model's most context. A load asking for more gets less, and must still count as fitting. */
 	private readonly _maxContextByModel = new Map<string, number>();
@@ -1268,7 +1259,6 @@ export class HttpProvider implements InferenceProvider {
 			contextLength: config.load?.contextLength,
 		};
 		this._applyPromptTemplateFn = config.applyPromptTemplate;
-		this._onRequest = config.onRequest;
 	}
 
 	/**
@@ -1434,10 +1424,6 @@ export class HttpProvider implements InferenceProvider {
 			messages = withAssistantPrefill(messages, prefill);
 		}
 		return messages;
-	}
-
-	private emitRequest(req:ChatRequest, body:Record<string, unknown>, path:string):void {
-		this._onRequest?.({ req, body, path });
 	}
 
 	private async chatCompletions(req:ChatRequest, messages:ChatMessage[]):Promise<ChatResponse> {
@@ -1932,7 +1918,7 @@ export class HttpProvider implements InferenceProvider {
 			if (stream && completions) {
 				payload['stream_options'] = { include_usage: true };
 			}
-			this.emitRequest(req, payload, url);
+			req.onRequest?.({ body: payload, path: url });
 			const t0 = nowMs();
 			const res = await this._fetchImpl(url, {
 				method: 'POST',

@@ -2,9 +2,13 @@ import { HttpProvider, type ModelSettings } from './http.js';
 import { ModelDownload, type DownloadProgress } from './download.js';
 import { ggufMetadata } from './gguf.js';
 import type { ChatRequest, ChatResponse, InferenceProvider, SystemOneEndpoint } from './provider.js';
+import { showLoadingBar, type LoadingBarOptions } from './loading-bar.js';
+import type { ModelInfo } from './models.js';
+import type { ArcDirector } from '../director/ArcDirector.js';
+import { ModelProvider, providerShortcuts, type ModelSpec, type ProviderConfig } from '../director/ModelProvider.js';
 
 /**
- * ArcDirector's own models, trained on its prompts: `addBrowserModel('main', Skaldic.Gemma4E4B)` runs one.
+ * ArcDirector's own models, trained on its prompts: `addWllama({ models: { main: Skaldic.Gemma4E4B } })` runs one.
  * - `Gemma4E4B`: Skaldic Gemma 4 E4B, the best Arcs of any model small enough to run in a browser.
  * - `Laya`: Skaldic Laya (0.45 GB), a decision model: a System One that picks `choose` choices in one pass, in well
  *   under a tenth of a second.
@@ -20,8 +24,8 @@ export const SKALDIC_BROWSER_MODELS:Readonly<Record<Skaldic, string>> = {
 };
 
 /**
- * The browser models the library knows to be decision models (a decision head, no chat): `addBrowserModel` makes
- * them a System One on their own engine ({@link BrowserProvider.decisions}).
+ * The browser models the library knows to be decision models (a decision head, no chat): {@link Wllama} runs
+ * them as a System One on their own engine ({@link BrowserProvider.decisions}).
  */
 export const BROWSER_DECISION_MODELS:readonly string[] = [SKALDIC_BROWSER_MODELS[Skaldic.Laya]];
 
@@ -30,7 +34,7 @@ export function browserModelURL(model:Skaldic | string):string {
 	return SKALDIC_BROWSER_MODELS[model as Skaldic] ?? model;
 }
 
-/** What `addBrowserModel` runs when given no model: Skaldic Gemma 4 E4B. */
+/** What {@link Wllama} runs for a model with no id: Skaldic Gemma 4 E4B. */
 export const DEFAULT_BROWSER_MODEL = SKALDIC_BROWSER_MODELS[Skaldic.Gemma4E4B];
 
 /** Tokens each think may fill when the model's spec names no `contextLength`. */
@@ -40,7 +44,7 @@ const DEFAULT_CONTEXT = 8192;
  * What this provider uses of wllama (`@wllama/wllama`, an optional peer dependency imported on first use): llama.cpp's
  * own server, compiled to run in the page. Hosts without it installed must not need its types.
  */
-type WllamaModule = { Wllama:new (paths:{ default:string }, config?:{ logger?:WllamaLogger })=>Wllama };
+type WllamaModule = { Wllama:new (paths:{ default:string }, config?:{ logger?:WllamaLogger })=>WllamaEngine };
 
 type WllamaLogger = Pick<Console, 'debug' | 'log' | 'warn' | 'error'>;
 
@@ -51,7 +55,7 @@ type WllamaLogger = Pick<Console, 'debug' | 'log' | 'warn' | 'error'>;
 export type StoredFile = { name:string; size:number; metadata:{ originalURL:string; originalSize:number } };
 
 /** The parts of a `Wllama` this provider calls. */
-export type Wllama = {
+export type WllamaEngine = {
 	modelManager:{
 		cacheManager:{
 			list():Promise<StoredFile[]>;
@@ -131,7 +135,7 @@ export class BrowserProvider implements InferenceProvider {
 	private readonly _downloads = new Map<string, ModelDownload>();
 	private readonly _http:HttpProvider;
 	private readonly _wasm:string;
-	private _wllama:Promise<Wllama> | undefined;
+	private _wllama:Promise<WllamaEngine> | undefined;
 	/**
 	 * The engine's last lines: it only tells its logger why it crashed, and llama.cpp prints the reason (a GPU error,
 	 * a failed check) as a plain line, a few before the stack traces.
@@ -144,7 +148,7 @@ export class BrowserProvider implements InferenceProvider {
 	/** Each model's {@link contextCap}, once read from its stored header: null when the header does not say. */
 	private readonly _caps = new Map<string, number | null>();
 	/** The model loading or loaded now, and the settings it loaded with. */
-	private _current:{ model:string; key:string; ready:Promise<Wllama> } | undefined;
+	private _current:{ model:string; key:string; ready:Promise<WllamaEngine> } | undefined;
 	private _loaded:string | null = null;
 	private readonly _fetch:typeof fetch;
 	/** Whether each model loaded so far has a decision head, read from its GGUF. */
@@ -156,7 +160,7 @@ export class BrowserProvider implements InferenceProvider {
 		this._http = new HttpProvider({ baseURL: IN_PAGE_URL, fetch: this._fetch });
 	}
 
-	/** The page's provider: `ArcDirector.addBrowserModel` uses it unless given another. The host sets it first. */
+	/** The page's engine for chat models, which {@link Wllama} runs them on. The host sets it first. */
 	public static get shared():BrowserProvider {
 		if (!BrowserProvider._shared) {
 			throw new Error('Set BrowserProvider.shared = new BrowserProvider({ wasm }) first: wasm is where you serve wllama.wasm');
@@ -324,7 +328,7 @@ export class BrowserProvider implements InferenceProvider {
 	 * `model` on the GPU, as its settings say, loading it in place of the last one unless it is there already. Each
 	 * of its parallel thinks gets the whole `contextLength`, up to its {@link contextCap}.
 	 */
-	private load(model:string, report?:(progress:DownloadProgress)=>void, signal?:AbortSignal):Promise<Wllama> {
+	private load(model:string, report?:(progress:DownloadProgress)=>void, signal?:AbortSignal):Promise<WllamaEngine> {
 		const key = JSON.stringify(this.params(model));
 		if (this._current?.model === model && this._current.key === key) {
 			return this._current.ready;
@@ -391,7 +395,7 @@ export class BrowserProvider implements InferenceProvider {
 	}
 
 	/** Loads `model` as {@link params} says, from the store or the network, failing a load that left no model. */
-	private async start(wllama:Wllama, model:string, report?:(progress:DownloadProgress)=>void, signal?:AbortSignal):Promise<void> {
+	private async start(wllama:WllamaEngine, model:string, report?:(progress:DownloadProgress)=>void, signal?:AbortSignal):Promise<void> {
 		const params = this.params(model);
 		const stored = (await this.stored()).get(model);
 		this._loadLines = [];
@@ -449,9 +453,9 @@ export class BrowserProvider implements InferenceProvider {
 		}
 	}
 
-	private wllama():Promise<Wllama> {
+	private wllama():Promise<WllamaEngine> {
 		this._wllama ??= (async () => {
-			const { Wllama } = await importWllama();
+			const { Wllama: Engine } = await importWllama();
 			this._lines = [];
 			const remember = (print:(...args:unknown[])=>void) => (...args:unknown[]):void => {
 				const line = args.map(describe).join(' ');
@@ -462,18 +466,69 @@ export class BrowserProvider implements InferenceProvider {
 				print(...args);
 			};
 			const logger = { debug: () => undefined, log: remember(console.log), warn: remember(console.warn), error: remember(console.error) };
-			return new Wllama({ default: this._wasm }, { logger });
+			return new Engine({ default: this._wasm }, { logger });
 		})();
 		return this._wllama;
 	}
 }
+
+/** What `addWllama` takes: with `loadingBar`, a plain bar in the page for each model it downloads ({@link showLoadingBar}). */
+export type WllamaConfig = ProviderConfig & { loadingBar?:LoadingBarOptions };
+
+/** The page's engine for `model`: a decision model's own, so it decides beside the chat model instead of unloading it. */
+function engineFor(model:string):BrowserProvider {
+	return BROWSER_DECISION_MODELS.includes(model) ? BrowserProvider.decisions : BrowserProvider.shared;
+}
+
+/**
+ * Models in the page through wllama (`addWllama`): a model's id is one of ArcDirector's own ({@link Skaldic}) or a
+ * GGUF's URL, Skaldic Gemma 4 E4B without one. Chat models run on {@link BrowserProvider.shared}, decision models
+ * (Skaldic Laya) on {@link BrowserProvider.decisions}. Each starts downloading as it is added.
+ */
+export class Wllama extends ModelProvider {
+	constructor(private readonly _config:WllamaConfig = {}) {
+		super(_config.name ?? 'wllama', {
+			chat: (req) => engineFor(req.model).chat(req),
+			systemOneEndpoint: (model) => engineFor(model).systemOneEndpoint(model),
+			configureModel: (model, settings) => engineFor(model).configureModel(model, settings),
+			forgetModel: (model) => engineFor(model).forgetModel(model),
+		}, _config);
+	}
+
+	public override addModel(role:string, model:string | ModelSpec):this {
+		const spec = typeof model === 'string' ? { id: model } : model;
+		const id = browserModelURL(spec.id ?? DEFAULT_BROWSER_MODEL);
+		super.addModel(role, { ...spec, id });
+		// It downloads now, set up as it will run.
+		void this.resolve(role).then(() => {
+			const download = engineFor(id).download(id);
+			if (this._config.loadingBar) {
+				showLoadingBar(download, id, this._config.loadingBar);
+			}
+		}, () => undefined);
+		return this;
+	}
+
+	protected override catalog():Promise<ModelInfo[]> {
+		return Promise.resolve(BROWSER_DECISION_MODELS.map((id) => ({ id, type: 'decision' })));
+	}
+}
+
+declare module '../director/ArcDirector.js' {
+	interface ArcDirector<TCtx, TEntity> {
+		/** {@link Wllama}: `addWllama({ models: { main: Skaldic.Gemma4E4B } })`. */
+		addWllama(config?:WllamaConfig):this;
+		getWllama(name?:string):Wllama | undefined;
+	}
+}
+export const { add: addWllama, get: getWllama } = providerShortcuts(Wllama, 'wllama');
 
 /**
  * A `fetch` that answers from the model in the page, as an OpenAI-style server would: chat completions as JSON, or a
  * stream of server-sent events whose cancel stops the model, and a decision model's System One answers
  * (`/systemone`). Anything else is not found, as on a server without it.
  */
-export function inPageFetch(engine:()=>Promise<Wllama> | undefined):typeof fetch {
+export function inPageFetch(engine:()=>Promise<WllamaEngine> | undefined):typeof fetch {
 	return async (input, init) => {
 		const ready = engine();
 		const url = String(input instanceof Request ? input.url : input);
@@ -534,7 +589,7 @@ export function loadFailure(lines:readonly string[]):string | null {
 }
 
 /** Whether the loaded model is a decision model: its GGUF names a decision head (Laya's). */
-function hasDecisionHead(wllama:Wllama):boolean {
+function hasDecisionHead(wllama:WllamaEngine):boolean {
 	return Object.keys(wllama.getModelMetadata().meta).some((key) => key.endsWith('.decision.type'));
 }
 
@@ -542,7 +597,7 @@ function hasDecisionHead(wllama:Wllama):boolean {
  * How fast the loaded model writes, in tokens a second, from a short reply: timed from its first token, so the GPU's
  * warm-up does not count against it. Zero when it wrote under two tokens in {@link SPEED_CHECK_MS}.
  */
-async function tokensPerSecond(wllama:Wllama):Promise<number> {
+async function tokensPerSecond(wllama:WllamaEngine):Promise<number> {
 	const stop = new AbortController();
 	const timer = setTimeout(() => stop.abort(), SPEED_CHECK_MS);
 	const stamps:number[] = [];
@@ -641,7 +696,7 @@ export function storedModels(files:readonly StoredFile[]):Map<string, StoredMode
 }
 
 /** A whole stored model's parts, in order, to load. */
-async function openParts(wllama:Wllama, model:StoredModel):Promise<Blob[]> {
+async function openParts(wllama:WllamaEngine, model:StoredModel):Promise<Blob[]> {
 	return Promise.all(model.parts.map(async (part) => {
 		const file = model.files.find((f) => f.metadata.originalURL === part);
 		const blob = file && await wllama.modelManager.cacheManager.open(file.name);

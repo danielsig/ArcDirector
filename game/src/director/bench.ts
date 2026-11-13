@@ -70,7 +70,8 @@ export function systemOneFor(id:string, models:HudModelOption[]):SystemOne {
 	}
 	const xai = xaiModel(id);
 	if (xai) {
-		return new ModelSystemOne(() => ({ provider: XAI, id: xai }));
+		const provider = new HttpProvider(XAI);
+		return new ModelSystemOne(() => ({ provider, id: xai }));
 	}
 	if (id === SKALDIC_LAYA.model) {
 		// On its own engine in the page, as the game runs it: it answers through its System One endpoint.

@@ -1,11 +1,12 @@
 import type { Arc, ArcResult } from '../arc/arc-types.js';
 import { lawGroup, lawHandler, type Law } from '../arc/laws.js';
 import type { ArcHandler } from '../arc/run.js';
-import { ArcRunner, type ArcRunnerJSON, type ProgramState, type RunnerOptions } from '../character/arc-runner.js';
+import { ArcRunner, type ArcRunnerJSON, type ProgramState, type RunnerFields, type RunnerOptions } from '../character/arc-runner.js';
 import type { Character } from '../character/Character.js';
-import { hand } from '../internals.js';
+import { hand, internalsOf } from '../internals.js';
 import { Mind, type MindJSON } from '../mind/mind.js';
 import { programFilesSection, type ProgramFile } from '../mind/prompt.js';
+import type { ArcDirector } from '../director/ArcDirector.js';
 import type { CharacterSpec } from '../director/director-types.js';
 import { squadTag, isSquadTag, shortTag, shortTags } from './tags.js';
 import { CHOOSE_VERB, MIND_ONLY_VERBS, PASS_VERB, STOCK_ARC_VERBS, stepDoing, type VerbRegistry } from '../arc/stock-verbs.js';
@@ -36,24 +37,8 @@ export type CollectiveJSON = ArcRunnerJSON & {
 	commander?:string;
 };
 
-/**
- * How a collective and its director reach each other, one for each collective. The director gives `addCharacter`
- * and `removeCharacter`. The other way, the collective's constructor hands its director {@link CollectiveFields}
- * (`internalsOf(collective)`).
- */
-export type CollectiveHost<TCtx> = {
-	addCharacter(spec:CharacterSpec<TCtx>, into:Collective<TCtx>):Character<TCtx>;
-	removeCharacter(id:string):void;
-	/** Whether one of its characters is down, as the world says (`HostWorld.isDown`). */
-	isDown?(id:string):boolean;
-	/** Who of no part of it one of its characters sees, nearest first: each one's name, how far, and in `mind`'s words (`EnemyKnight 12/28 hp 8m (in reach)`). */
-	othersSeenBy?(id:string, mind:Mind<TCtx>):{ name:string; away:number; text:string }[];
-	/** One of its characters' health, where the host gives an `hp` kernel. */
-	healthOf?(id:string):{ hp:number; maxHP:number } | undefined;
-};
-
 /** What a collective's constructor hands its director: the director's only way into its private fields. */
-export type CollectiveFields<TCtx> = {
+export type CollectiveFields<TCtx> = RunnerFields<TCtx> & {
 	/** Its characters, in order. */
 	setCharacters(characters:Character<TCtx>[]):void;
 	/** The commander left: drop the post, stop the think it was the voice for, and tell the host. */
@@ -62,13 +47,17 @@ export type CollectiveFields<TCtx> = {
 	load(json:CollectiveJSON):void;
 	/** Keep `law` itself, not a copy, so an arc it started still counts as its own after a transfer. */
 	keepLaw(law:Law):boolean;
+	/**
+	 * The laws that may reach `member`: the collective's own (when `matches` says their `who` names it), then its
+	 * own `member.name` laws. Ranks follow that order, so the collective's own laws outrank a member's.
+	 */
+	lawHandlersFor(member:Character<TCtx>, matches:(law:Law)=>boolean):ArcHandler[];
 };
 
 export type CollectiveOptions<TCtx = unknown> = RunnerOptions<TCtx> & {
-	host:CollectiveHost<TCtx>;
+	/** The director it is in: its world, its cast, and what its features say of the roster. */
+	director:ArcDirector<TCtx>;
 	mind?:Mind<TCtx>;
-	/** The commander left or died. The host may name a new one (`collective.commander = …`). */
-	onCommanderVacant?:(character:Character<TCtx>)=>void;
 };
 
 /**
@@ -78,12 +67,6 @@ export type CollectiveOptions<TCtx = unknown> = RunnerOptions<TCtx> & {
  */
 export class Collective<TCtx = unknown> extends ArcRunner<TCtx> {
 	public readonly mind:Mind<TCtx>;
-	public onCommanderVacant?:(character:Character<TCtx>)=>void;
-	/**
-	 * Its side at a glance, for its mind's prompt (an RTS's stock, supply, queues and units grouped by kind). When
-	 * set, it stands in for the roster of every unit by name and their programs.
-	 */
-	public status?:()=>string;
 	/** Most units one `command` may address at once. Unset to allow command to address all units. */
 	public maxUnitsPerCommand?:number;
 	private _characters:Character<TCtx>[] = [];
@@ -92,13 +75,12 @@ export class Collective<TCtx = unknown> extends ArcRunner<TCtx> {
 	private readonly _squads = new WeakMap<Character<TCtx>, readonly string[]>();
 	/** The group each character is in: the name of the last order that sent it with others, also a tag of it. */
 	private readonly _groupOf = new Map<Character<TCtx>, string>();
-	private readonly _host:CollectiveHost<TCtx>;
+	private readonly _director:ArcDirector<TCtx>;
 
 	constructor(opts:CollectiveOptions<TCtx>) {
 		super({ ...opts, defaultLawWho: opts.defaultLawWho ?? 'units' });
 		this.mind = opts.mind ?? new Mind<TCtx>();
-		this._host = opts.host;
-		this.onCommanderVacant = opts.onCommanderVacant;
+		this._director = opts.director;
 		hand(this, {
 			setCharacters: (characters) => {
 				this._characters = characters;
@@ -106,7 +88,8 @@ export class Collective<TCtx = unknown> extends ArcRunner<TCtx> {
 			vacate: (character) => this.vacate(character),
 			load: (json) => this.loadJSON(json),
 			keepLaw: (law) => this.keepLaw(law),
-		} satisfies CollectiveFields<TCtx>);
+			lawHandlersFor: (member, matches) => this.lawHandlersFor(member, matches),
+		} satisfies Omit<CollectiveFields<TCtx>, keyof RunnerFields<TCtx>>);
 	}
 
 	public get characters():readonly Character<TCtx>[] {
@@ -115,7 +98,7 @@ export class Collective<TCtx = unknown> extends ArcRunner<TCtx> {
 
 	/** Its characters still standing: `units`, the roster and the programs leave out the ones that are down. */
 	public get standing():readonly Character<TCtx>[] {
-		return this._characters.filter((c) => !this._host.isDown?.(c.id));
+		return this._characters.filter((c) => !this._director.world?.isDown?.(c.id));
 	}
 
 	public character(id:string):Character<TCtx> | undefined {
@@ -182,17 +165,19 @@ export class Collective<TCtx = unknown> extends ArcRunner<TCtx> {
 		return [...withheld, ...this.refreshKit().verbs.filter((verb) => !VOICE_VERBS.has(verb) && verb !== 'wait')];
 	}
 
-	/** A new character, in this collective. Its kit is its spec's, or the director's default. */
-	public addCharacter(spec:CharacterSpec<TCtx>):Character<TCtx> {
-		return this._host.addCharacter(spec, this);
+	/** A new character, in this collective: `character(id)` then. Its kit is its spec's, or the director's default. */
+	public addCharacter(spec:CharacterSpec<TCtx>):this {
+		internalsOf(this._director).cast.addTo(spec, this);
+		return this;
 	}
 
 	/** Remove one of its characters for good, as `ArcDirector.removeCharacter` does. */
-	public removeCharacter(id:string):void {
+	public removeCharacter(id:string):this {
 		if (!this.character(id)) {
 			throw new Error(`ArcDirector: no '${id}' in '${this.id}'`);
 		}
-		this._host.removeCharacter(id);
+		this._director.removeCharacter(id);
+		return this;
 	}
 
 	/** The commander left: drop the post, stop the think it was the voice for, and tell the host. */
@@ -202,7 +187,7 @@ export class Collective<TCtx = unknown> extends ArcRunner<TCtx> {
 		}
 		this._commander = null;
 		this.mind.abortThink();
-		this.onCommanderVacant?.(character);
+		internalsOf(this._director).tell('onCommanderVacant', this, character);
 	}
 
 	public override lawsTakeWho():boolean {
@@ -215,11 +200,7 @@ export class Collective<TCtx = unknown> extends ArcRunner<TCtx> {
 		return group === '' || this.character(group) !== undefined;
 	}
 
-	/**
-	 * The laws that may reach `member`: the collective's own (when `matches` says their `who` names it), then its
-	 * own `member.name` laws. Ranks follow that order, so the collective's own laws outrank a member's.
-	 */
-	public lawHandlersFor(member:Character<TCtx>, matches:(law:Law)=>boolean):ArcHandler[] {
+	private lawHandlersFor(member:Character<TCtx>, matches:(law:Law)=>boolean):ArcHandler[] {
 		const out:ArcHandler[] = [];
 		this.laws
 			.filter((law) => [ '', member.id ].includes(lawGroup(law.name)))
@@ -362,7 +343,7 @@ export class Collective<TCtx = unknown> extends ArcRunner<TCtx> {
 	/** The roster, the laws, and the programs the characters run, for the mind's prompt. */
 	public promptSection(mind:Mind<TCtx>):string {
 		const parts:string[] = [];
-		const status = this.status?.();
+		const status = internalsOf(this._director).features.map((feature) => feature.rosterStatus(this)).find(Boolean);
 		if (status) {
 			parts.push(status);
 		}
@@ -450,7 +431,7 @@ export class Collective<TCtx = unknown> extends ArcRunner<TCtx> {
 			files.set(key, file);
 		}
 		const health = (unit:UnitProgram<TCtx>):string => {
-			const h = this._host.healthOf?.(unit.character.id);
+			const h = internalsOf(this._director).watches.healthOf(unit.character.id);
 			return h ? ` ${h.hp}/${h.maxHP} hp` : '';
 		};
 		return [...files.values()].map(({ name, lines, units, on }) => {
@@ -551,10 +532,10 @@ export class Collective<TCtx = unknown> extends ArcRunner<TCtx> {
 		const you = members.includes(this._commander!);
 		// Its kind is its tags, but for the group it is in: that is the row's name.
 		const kinds = tally(members.map((c) => shortTags(this.id, c.tags).filter((t) => t !== this._groupOf.get(c)).join(', ') || 'unit'));
-		const health = members.map((c) => this._host.healthOf?.(c.id)).filter((h) => h !== undefined);
+		const health = members.map((c) => internalsOf(this._director).watches.healthOf(c.id)).filter((h) => h !== undefined);
 		const seen = new Map<string, { away:number; text:string }>();
 		for (const c of members) {
-			for (const other of this._host.othersSeenBy?.(c.id, mind) ?? []) {
+			for (const other of internalsOf(this._director).features.flatMap((feature) => feature.othersSeenBy(c.id, this, mind))) {
 				if (other.away < (seen.get(other.name)?.away ?? Infinity)) {
 					seen.set(other.name, other);
 				}

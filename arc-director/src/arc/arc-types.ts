@@ -8,7 +8,7 @@ import { argKind, GROUP_VERB, IF_VERB, type VerbRegistry } from './stock-verbs.j
  */
 export type Join = 'if_ok' | 'always' | 'if_failed';
 
-/** How many of each item. The currency (`withMind` `withCurrency`) is an item like any other. */
+/** How many of each item. The currency (`withMind({ currency })`) is an item like any other. */
 export type CountMap = Record<string, number>;
 
 export function isCountMap(v:unknown):v is CountMap {

@@ -39,28 +39,7 @@ export type MayThink = {
 	verbs:string[];
 };
 
-export const DEFAULT_BATCH_THINKS = true;
-/** Seconds on the `tick` clock. */
-export const DEFAULT_BATCH_WAIT = 20;
-
-/**
- * Hold new thinks while any generation is in flight, then start a wave.
- * A new prompt's prefill stalls decode of every slot already generating.
- */
-export type ThinkBatchOpts = {
-	/**
-	 * Buffer starts until the model is idle (or `batchWait`), then launch up to its `maxParallel`.
-	 * `false` fills a free slot as soon as one opens. Default true.
-	 */
-	batchThinks?:boolean;
-	/**
-	 * Seconds (`tick`'s `now`) to wait for idle before starting anyway. Default 20.
-	 * Non-finite or ≤ 0 waits until idle. Ignored when `batchThinks` is false.
-	 */
-	batchWait?:number;
-};
-
-export type MindQueueOpts = ThinkBatchOpts & {
+export type MindQueueOpts = {
 	trueScore?:number;
 	epsilon?:number;
 	processInterval?:number;
@@ -77,8 +56,6 @@ export type MindQueueOpts = ThinkBatchOpts & {
 
 /** Interchangeable scheduler: the director keeps one, keyed by mind id. Each model's `maxParallel` caps its thinks. */
 export type MindQueue = {
-	batchThinks:boolean | undefined;
-	batchWait:number | undefined;
 	mayThink:((ctx:MayThink)=>boolean) | undefined;
 	readonly inFlight:number;
 	isThinking(mindID:string):boolean;
@@ -91,7 +68,6 @@ export type MindQueue = {
 	beginThink(mindID:string):AbortSignal;
 	endThink(mindID:string, signal?:AbortSignal):void;
 	abortThink(mindID:string):void;
-	thinkSignal(mindID:string):AbortSignal | undefined;
 	beginArc(mindID:string, arc:Arc):void;
 	endArc(mindID:string):void;
 	allowThink(row:ThinkRow):boolean;
@@ -112,11 +88,6 @@ export type MindQueue = {
 	/** Time passes; with `catalogs`, every mind's watches are sampled too (the director passes them on its `withIntervals` `think`). */
 	tick(dt:number, catalogs?:WatchCatalogs):ThinkRow[];
 	drop(mindID:string):void;
-};
-
-export type WithMindQueue = {
-	queue:MindQueue;
-	heartbeat:0;
 };
 
 export type MindState = {
@@ -143,8 +114,6 @@ export abstract class MindScheduler implements MindQueue {
 	public readonly trueScore:number;
 	public readonly epsilon:number;
 	public readonly processInterval:number;
-	public batchThinks:boolean | undefined;
-	public batchWait:number | undefined;
 	public readonly heartbeatStart:number;
 	public readonly heartbeatMin:number;
 	public readonly heartbeatMax:number;
@@ -161,8 +130,6 @@ export abstract class MindScheduler implements MindQueue {
 		this.trueScore = clampTrueScore(opts.trueScore ?? DEFAULT_TRUE_SCORE);
 		this.epsilon = opts.epsilon ?? DEFAULT_EPSILON;
 		this.processInterval = opts.processInterval ?? 1;
-		this.batchThinks = opts.batchThinks;
-		this.batchWait = opts.batchWait;
 		this.heartbeatStart = opts.heartbeatStart ?? 3;
 		this.heartbeatMin = opts.heartbeatMin ?? 3;
 		this.heartbeatMax = opts.heartbeatMax ?? 300;
@@ -209,10 +176,6 @@ export abstract class MindScheduler implements MindQueue {
 
 	public abortThink(mindID:string):void {
 		this.inflight.get(mindID)?.abort();
-	}
-
-	public thinkSignal(mindID:string):AbortSignal | undefined {
-		return this.inflight.get(mindID)?.signal;
 	}
 
 	public beginArc(mindID:string, arc:Arc):void {

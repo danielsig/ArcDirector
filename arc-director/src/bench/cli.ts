@@ -8,6 +8,7 @@
  */
 import { parseArgs } from 'node:util';
 import type { ArcDirector } from '../director/ArcDirector.js';
+import { ModelProvider } from '../director/ModelProvider.js';
 import { HttpProvider, type ModelSettings } from '../inference/http.js';
 import { lmStudioConfig } from '../inference/presets.js';
 import type { ChatRequest, ChatResponse, InferenceProvider } from '../inference/provider.js';
@@ -64,9 +65,8 @@ const cases = ARC_BENCH.filter((c) => (!args.skill || c.skill === args.skill) &&
  * as seeing images, as a model in the browser is not, so no think is offered the map.
  */
 const thinking = (link:CaseLink) => (director:ArcDirector<SceneCtx>) => director
-	.addInference('model', link)
-	.addModel('main', { inference: 'model', id: args.model, thinking: true, contextLength: Number(args.context), maxParallel: parallel })
-	.withMind((m) => m.withArcFormat('schema').withRepairRetries(3));
+	.addProvider(new ModelProvider('model', link).configure({ models: { main: { id: args.model, thinking: true, contextLength: Number(args.context), maxParallel: parallel } } }))
+	.withMind({ arcFormat: 'schema', repairRetries: 3 });
 
 console.log(`${cases.length} cases with ${args.model}, ${parallel} at once`);
 const queue = [...cases];

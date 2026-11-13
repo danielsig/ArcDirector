@@ -2,7 +2,8 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { parseArc } from '../arc/wire.js';
 import type { ArcResult, CountMap } from '../arc/arc-types.js';
-import { ArcDirector } from '../director/ArcDirector.js';
+import { ArcDirector } from '../index.js';
+import { internalsOf } from '../internals.js';
 import { dummyEntity } from '../expr/natives.js';
 import { evaluate } from '../expr/eval.js';
 import { buildCatalog } from '../expr/natives.js';
@@ -205,9 +206,9 @@ async function start(game = new Game(), more:(g:Game)=>void = () => undefined, b
 	more(game);
 	const members = [...game.what].filter(([id, w]) => w.owner === 'Red' && id !== 'Chief');
 	const director = new ArcDirector<Ctx>()
-		.addFakeInference()
-		.addStockVerbs()
-		.addStockCollectiveVerbs()
+		.addFake()
+		.withVerbs((v) => v.addStock()
+			.addStockCollective())
 		.withWorld(game.world)
 		.withRTS(game.host)
 		.withKernels((ctx) => ({
@@ -224,10 +225,8 @@ async function start(game = new Game(), more:(g:Game)=>void = () => undefined, b
 			kit: { verbs: COMMAND.verbs.filter((v) => v !== 'supply_ahead' || Object.values(game.host.kinds).some((k) => (k.provides ?? 0) > 0)) },
 			characters: [{ id: 'Chief' }, ...members.map(([id, w]) => ({ id, tags: [w.kind] }))],
 		});
-	for (const [id, w] of game.what) {
-		if (w.owner && w.owner !== 'Red') {
-			director.addCharacter({ id, tags: [w.kind], kit: { verbs: ['wait'] } });
-		}
+	for (const [id, w] of [...game.what].filter(([, { owner }]) => owner && owner !== 'Red')) {
+		director.addCharacter({ id, tags: [w.kind], kit: { verbs: ['wait'] } });
 	}
 	build(director);
 	game.director = director;
@@ -251,6 +250,14 @@ function enact(director:ArcDirector<Ctx>, id:string, arc:string):Promise<ArcResu
 }
 
 describe('stock RTS verbs', () => {
+	it('sends a reply that names nothing in the RTS back, but knows its kinds and units', async () => {
+		const director = await start();
+		const problem = (text:string) => internalsOf(director).dispatcher.arcProblem(director.collective('Red')!, parseArc(text, director.verbs))?.message;
+		assert.equal(problem('wait(until=count(units.filter("Worker")) >= 2 || Hall == Mine || Barracks == Hall)'), undefined);
+		assert.match(problem('wait(until=Gols == Hall)') ?? '', /there is no Gols/);
+		director.dispose();
+	});
+
 	it('gives each kind its verbs: workers gather, buildings train, fighters fight', async () => {
 		const director = await start();
 		assert.ok(director.character('Brann')!.activeVerbs().has('gather'));
@@ -293,7 +300,7 @@ describe('stock RTS verbs', () => {
 		assert.match(result.reason ?? '', /waiting for supply/);
 		await play(game, director, 8);
 		assert.equal(director.collective('Red')!.characters.filter((c) => c.tags.includes('Worker')).length, 5);
-		assert.match(director.collective('Red')!.status!(), /Supply: 5\/5 \(2 more queued\)/);
+		assert.match(director.getRTS()!.rosterStatus(director.collective('Red')!)!, /Supply: 5\/5 \(2 more queued\)/);
 		assert.equal((await enact(director, 'Chief', 'build(what=House, near=Hall)')).status === 'ok', true);
 		await play(game, director, 10);
 		assert.equal(director.collective('Red')!.characters.filter((c) => c.tags.includes('Worker')).length, 7);
@@ -308,7 +315,7 @@ describe('stock RTS verbs', () => {
 		assert.equal(result.reason, undefined, 'a handed-out order is a bare ok');
 		await play(game, director, 6);
 		assert.ok(game.stock.Red.Gold > 500);
-		assert.match(director.collective('Red')!.status!(), /Worker ×2 \(1 gathering Gold, 1 idle\)/);
+		assert.match(director.getRTS()!.rosterStatus(director.collective('Red')!)!, /Worker ×2 \(1 gathering Gold, 1 idle\)/);
 		director.dispose();
 	});
 
@@ -405,12 +412,12 @@ describe('stock RTS verbs', () => {
 		const game = new Game();
 		const asked:string[] = [];
 		const director = await start(game, undefined, (d) => d
-			.withPriorityQueue({ processInterval: 0 })
-			.withMind((m) => m.withSkipHeartbeat().withSkipStart())
-			.addFakeInference((req) => {
+			.withPriorityThinkQueue({ processInterval: 0 })
+			.withMind({ skipHeartbeat: true, skipStart: true })
+			.addFake({ chat: (req) => {
 				asked.push(req.thread ?? '');
 				return { content: JSON.stringify({ steps: [{ verb: 'wait' }] }), toolCalls: [] };
-			}));
+			} }));
 		await enact(director, 'Chief', 'research(what=Forging)');
 		await play(game, director, 2);
 		assert.ok(asked.includes('Red'), 'what its research came to woke it');
@@ -435,7 +442,7 @@ describe('stock RTS verbs', () => {
 		const brann = enact(director, 'Brann', 'garrison(in=Hall) && go_to(Mine)');
 		await play(game, director, 2);
 		assert.ok(game.inside.has('Brann'));
-		assert.match(director.collective('Red')!.status!(), /1 inside Hall/);
+		assert.match(director.getRTS()!.rosterStatus(director.collective('Red')!)!, /1 inside Hall/);
 		await enact(director, 'Hall', 'unload()');
 		await play(game, director, 10);
 		assert.equal((await brann).status === 'ok', true);
@@ -510,7 +517,7 @@ describe('fighting and hauling verbs', () => {
 		void enact(director, spear.id, 'patrol(to=Hill)');
 		await play(game, director, 15);
 		assert.equal(game.point.has('Rook'), false);
-		assert.match(director.collective('Red')!.status!(), /patrolling to Hill/);
+		assert.match(director.getRTS()!.rosterStatus(director.collective('Red')!)!, /patrolling to Hill/);
 		director.dispose();
 	});
 
@@ -519,11 +526,11 @@ describe('fighting and hauling verbs', () => {
 		const director = await start(game);
 		assert.equal((await enact(director, 'Chief', 'staff(at=Yard)')).status === 'ok', true);
 		await play(game, director, 2);
-		assert.match(director.collective('Red')!.status!(), /Worker ×2 \(2 working at Yard\)/);
+		assert.match(director.getRTS()!.rosterStatus(director.collective('Red')!)!, /Worker ×2 \(2 working at Yard\)/);
 		assert.match((await enact(director, 'Chief', 'staff(at=Yard)')).reason ?? '', /no free jobs \(2\/2\)/);
 		await enact(director, 'Chief', 'staff(at=Yard, workers=0)');
 		await play(game, director, 1);
-		assert.match(director.collective('Red')!.status!(), /Worker ×2 \(2 idle\)/);
+		assert.match(director.getRTS()!.rosterStatus(director.collective('Red')!)!, /Worker ×2 \(2 idle\)/);
 		director.dispose();
 	});
 
@@ -554,7 +561,7 @@ describe('stock verbs under a game\'s own names', () => {
 		assert.equal((await enact(director, 'Chief', 'harvest(source=Gold, workers=1)')).status === 'ok', true);
 		assert.equal((await enact(director, 'Chief', 'recruit(what=Worker)')).status === 'ok', true);
 		await play(game, director, 3);
-		assert.match(director.collective('Red')!.status!(), /1 gathering Gold/);
+		assert.match(director.getRTS()!.rosterStatus(director.collective('Red')!)!, /1 gathering Gold/);
 		assert.equal(director.collective('Red')!.characters.filter((c) => c.tags.includes('Worker')).length, 3);
 		director.dispose();
 	});
@@ -627,7 +634,7 @@ describe('stock tactics, as alias verbs', () => {
 		const director = await start(game);
 		assert.equal((await enact(director, 'Chief', 'law(name=gold, arc=share_workers(on=Gold, of=2))')).status === 'ok', true);
 		await play(game, director, 2);
-		assert.match(director.collective('Red')!.status!(), /Worker ×2 \(2 gathering Gold\)/);
+		assert.match(director.getRTS()!.rosterStatus(director.collective('Red')!)!, /Worker ×2 \(2 gathering Gold\)/);
 		director.dispose();
 	});
 
@@ -656,13 +663,13 @@ describe('stock tactics, as alias verbs', () => {
 
 	it('fills a template alias from its args, and says which one is missing', async () => {
 		const game = new Game();
-		const director = await start(game, () => undefined, (d) => d.addVerb('mine_at', { args: { node: 'string?' }, help: 'gathers at node', arc: 'gather(from={node})' }));
+		const director = await start(game, () => undefined, (d) => d.withVerbs((v) => v.addAlias('mine_at', { args: { node: 'string?' }, help: 'gathers at node', arc: 'gather(from={node})' })));
 		const brann = director.character('Brann')!;
 		brann.kit = { verbs: [...brann.refreshKit().verbs, 'mine_at'] };
 		const ran = enact(director, 'Brann', 'mine_at(node=Mine)');
 		await play(game, director, 2);
 		assert.equal(director.character('Brann')!.verb, 'mine_at');
-		assert.match(director.collective('Red')!.status!(), /1 gathering Gold/);
+		assert.match(director.getRTS()!.rosterStatus(director.collective('Red')!)!, /1 gathering Gold/);
 		void ran;
 		assert.match((await enact(director, 'Brann', 'mine_at()')).reason ?? '', /mine_at needs node/);
 		director.dispose();
@@ -671,10 +678,10 @@ describe('stock tactics, as alias verbs', () => {
 	it('shows the results of its laws since the last think in the next prompt, then only remembers them', async () => {
 		const game = new Game();
 		const prompts:string[] = [];
-		const director = await start(game, () => undefined, (d) => d.addFakeInference((req) => {
+		const director = await start(game, () => undefined, (d) => d.addFake({ chat: (req) => {
 			prompts.push(req.messages.map((m) => String(m.content)).join('\n'));
 			return { content: 'wait(seconds=1)', toolCalls: [] };
-		}));
+		} }));
 		// The commander's own: it runs once, and has run its course.
 		await enact(director, 'Chief', 'law(name=gold, who=me, watch=gathering.Gold < 2, arc=wait(seconds=0.5))');
 		await play(game, director, 3);
@@ -691,14 +698,14 @@ describe('stock tactics, as alias verbs', () => {
 		const named = new Game();
 		named.host.supplyName = 'Energy';
 		const director = await start(named);
-		assert.match(director.collective('Red')!.status!(), /^Energy: 2\/5$/m);
+		assert.match(director.getRTS()!.rosterStatus(director.collective('Red')!)!, /^Energy: 2\/5$/m);
 		const [seen] = await Promise.all([enact(director, 'Chief', 'wait(until=energy == 2 && energyCap == 5, seconds=1)'), play(named, director, 1)]);
 		assert.equal(seen.status === 'ok', true, seen.reason);
 		director.dispose();
 		const free = new Game();
 		free.host.kinds = Object.fromEntries(Object.entries(free.host.kinds).map(([kind, spec]) => [kind, { ...spec, provides: 0 }]));
 		const uncapped = await start(free);
-		assert.equal(/Supply/.test(uncapped.collective('Red')!.status!()), false, 'no cap, no line');
+		assert.equal(/Supply/.test(uncapped.getRTS()!.rosterStatus(uncapped.collective('Red')!)!), false, 'no cap, no line');
 		assert.equal(uncapped.collective('Red')!.activeVerbs().has('supply_ahead'), false, 'nothing to build ahead of');
 		uncapped.dispose();
 	});

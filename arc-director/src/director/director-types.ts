@@ -28,7 +28,7 @@ type RunnerSpec<TCtx> = Omit<PersonaSpec, 'goals'> & {
 	/** Game seconds its standing `choose` rests after a failed pick; overrides `withCooldown`. */
 	cooldown?:number;
 	/**
-	 * The System One it picks `choose` with, by its name on the director (`addJevInference`, …); `null` for none.
+	 * The System One it picks `choose` with, by its model role on the director (`addJev`, any role); `null` for none.
 	 * Omit for the director's default. A collective's also picks for every character in it. Its kit must still
 	 * grant `choose`.
 	 */
@@ -53,7 +53,7 @@ export type CharacterSpec<TCtx = unknown> = RunnerSpec<TCtx> & {
 	choose?:StandingChoice;
 	/** Standing offers it makes from the start, to anyone: `{ give: { Loaf: 1 }, get: { gold: 5 } }`. A save keeps its own. */
 	offers?:Pick<Offer, 'give' | 'get'>[];
-	/** How others coming to it share it, whatever the director's `withCrowd` says for their verb: `line` for a vendor. A move's own `crowd` still wins. */
+	/** How others coming to it share it, whatever the director's `withWorldVerbs` `crowd` says for their verb: `line` for a vendor. A move's own `crowd` still wins. */
 	crowd?:Crowd;
 };
 
@@ -153,6 +153,21 @@ export type DirectorLog = {
 	/** A failure the host should surface (inference threw, model failed to load). Not an abort. */
 	error?:boolean;
 };
+
+/**
+ * Calls each of `listeners` (what an `on*` added) with `args`. One that throws goes to `log` as `name`'s, and the rest
+ * are still called: a bug in how a host shows something must not end what told it.
+ */
+export function callEach<A extends unknown[]>(name:string, listeners:readonly ((...args:A)=>void)[], args:A, log?:(entry:DirectorLog)=>void):void {
+	for (const listener of listeners) {
+		try {
+			listener(...args);
+		}
+		catch (err) {
+			log?.({ name: 'ArcDirector', message: `${name}: ${err instanceof Error ? err.message : String(err)}`, error: true });
+		}
+	}
+}
 
 /** What a naming policy knows about the mind doing the naming: its owner's id, and its voice's context (none for a collective with no commander). */
 export type NameObserver<TCtx = unknown> = { readonly id:string; readonly ctx:TCtx | undefined };

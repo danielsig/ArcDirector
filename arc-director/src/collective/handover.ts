@@ -1,8 +1,8 @@
-import type { ChatRequest, ChatResponse } from '../inference/provider.js';
 import { extractJson, isRecord } from '../json.js';
 import type { Character } from '../character/Character.js';
 import type { Persona } from '../character/Persona.js';
 import type { Collective } from './Collective.js';
+import type { ModelChat } from '../director/ModelSlots.js';
 
 /** One character's move between collectives in a batch: where it started and where it ended. `null` is on its own. */
 export type Journey<TCtx = unknown> = {
@@ -21,8 +21,8 @@ export type MemoryEdit = {
 	add?:string[];
 };
 
-/** Fixes memories after characters change collectives. One call covers a whole batch of journeys. */
-export type Handover<TCtx = unknown> = (journeys:Journey<TCtx>[])=>Promise<MemoryEdit[]>;
+/** Fixes memories after characters change collectives. One call covers a whole batch of journeys, with `chat` leased of the default model. */
+export type Handover<TCtx = unknown> = (journeys:Journey<TCtx>[], chat:ModelChat)=>Promise<MemoryEdit[]>;
 
 /** Most memories of each persona the default handover shows the model, newest first. */
 export const HANDOVER_MEMORY_CAP = 40;
@@ -36,19 +36,16 @@ type Owner = { id:string; persona:Persona };
  * The default handover: one chat call over every persona involved (the characters, and the collectives they
  * left and joined). It asks which memories went stale, which need new wording, and what to add.
  */
-export function chatHandover<TCtx>(chat:(req:ChatRequest)=>Promise<ChatResponse>, model:()=>string):Handover<TCtx> {
-	return async (journeys) => {
-		const owners = ownersOf(journeys);
-		const res = await chat({
-			model: model(),
-			thread: HANDOVER_THREAD,
-			messages: [
-				{ role: 'system', content: HANDOVER_SYSTEM },
-				{ role: 'user', content: handoverPrompt(journeys, owners) },
-			],
-		});
-		return readEdits(res.content ?? '', owners);
-	};
+export async function chatHandover<TCtx>(journeys:Journey<TCtx>[], chat:ModelChat):Promise<MemoryEdit[]> {
+	const owners = ownersOf(journeys);
+	const res = await chat({
+		thread: HANDOVER_THREAD,
+		messages: [
+			{ role: 'system', content: HANDOVER_SYSTEM },
+			{ role: 'user', content: handoverPrompt(journeys, owners) },
+		],
+	});
+	return readEdits(res.content ?? '', owners);
 }
 
 const HANDOVER_SYSTEM = [

@@ -106,6 +106,8 @@ export type ChatRequest = {
 	signal?:AbortSignal;
 	/** Each piece of the reply as it arrives, when the server streams. {@link ChatResponse} still holds it whole. */
 	onDelta?:(delta:ChatDelta)=>void;
+	/** The body as it is sent and where, when the server sends one: what a log shows. */
+	onRequest?:(sent:{ body:Record<string, unknown>; path:string })=>void;
 };
 
 /** A piece of a reply still being written: its answer, or its reasoning. */

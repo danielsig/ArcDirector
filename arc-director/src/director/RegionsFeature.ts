@@ -2,6 +2,9 @@ import type { Character } from '../character/Character.js';
 import type { Persona } from '../character/Persona.js';
 import type { Vec } from '../world/world-types.js';
 import { distance } from '../world/vec.js';
+import { poseOf } from '../world/lookup.js';
+import type { ArcDirector } from './ArcDirector.js';
+import { Feature, type FeatureTick } from './Feature.js';
 
 /**
  * Where a region is, in the game's own `Vec`s: a box between two opposite corners (a segment in 1D, a rectangle in
@@ -15,7 +18,7 @@ export type RegionShape = { from:Vec; to:Vec } | { center:Vec | string; radius:n
 /** A shape where it is this tick: a ball on an entity centered where that entity stands. */
 type Extent = { from:Vec; to:Vec } | { center:Vec; radius:number };
 
-/** Argument to `ArcDirector.addRegion`: where it is, and what it does to each character in it. */
+/** Argument to `RegionsFeature.add`: where it is, and what it does to each character in it. */
 export type RegionSpec<TCtx = unknown> = RegionShape & {
 	/**
 	 * What it is like to be here, or what is going on ("This room smells of flowers."): pinned as a memory in the mind of
@@ -82,42 +85,66 @@ type Region<TCtx> = {
 };
 
 /**
- * The director's regions, and who is in each. A memory's id is the region's and the character's. The first time a
- * character is ticked, any region memory a save brought back for it is dropped, and the regions it stands in pin
- * theirs again on that tick.
+ * Regions, and who is in each: places that inject memories or run callbacks while characters are in them
+ * (`addRegions({ Crypt: { from, to, memory } })`). Needs `withWorld` with `find` and `getPose`. A memory's id
+ * is the region's and the character's. The first time a character is ticked, any region memory a save brought back for
+ * it is dropped, and the regions it stands in pin theirs again on that tick.
+ *
+ * Regions are often the simplest way to give a mind what it needs, just when it needs it. Goals and pinned memories stay
+ * in a mind for good; a region's memory reaches the right characters at the right time and goes away once it is beside
+ * the point: a room's atmosphere, the dread at a monster's lair, a character's presence and aura, an item's instruction
+ * manual, one character's own take on a place, a pep talk as a journey begins. The prompt stays short, and minds stay on
+ * what matters. Cheap to have many of: with many regions and characters the check sweeps and prunes, so it grows as
+ * `n log n` rather than `n²`.
  */
-export class Regions<TCtx> {
+export class RegionsFeature<TCtx = unknown> extends Feature<TCtx> {
 	private readonly _regions = new Map<string, Region<TCtx>>();
 	/** `_regions` by `lo`, for the sweep; rebuilt after a region is added or removed. */
 	private _byLo:Region<TCtx>[] | undefined;
 	/** Characters `forgetRegions` already ran for. */
 	private readonly _seen = new WeakSet<Character<TCtx>>();
 
-	/** `_holds`: whether a watch holds for a character, as it sees the world. */
-	constructor(private readonly _holds:(id:string, watch:string)=>boolean) {}
+	public override readonly order = 10;
 
-	public add(name:string, spec:RegionSpec<TCtx>):void {
+	/** Add each of `regions` by its name ({@link add}). */
+	public configure(regions:Readonly<Record<string, RegionSpec<TCtx>>>):this {
+		Object.entries(regions).forEach(([name, spec]) => this.add(name, spec));
+		return this;
+	}
+
+	/** Region `name` ({@link RegionSpec}). The same name again replaces it: everyone in the old one leaves first. */
+	public add(name:string, spec:RegionSpec<TCtx>):this {
+		this.remove(name);
 		const on = 'radius' in spec && typeof spec.center === 'string' ? spec.center : undefined;
 		const region:Region<TCtx> = { name, spec, on, extent: undefined, lo: Infinity, hi: -Infinity, inside: new Map() };
 		place(region, extentOf(spec, () => undefined));
 		this._regions.set(name, region);
 		this._byLo = undefined;
+		return this;
 	}
 
-	/** Remove region `name` at game time `now`: everyone in it leaves. */
-	public remove(name:string, now:number):void {
-		const region = this._regions.get(name);
-		this._regions.delete(name);
-		this._byLo = undefined;
-		for (const [character, pinned] of region?.inside ?? []) {
-			this.leave(region!, character, pinned, now);
+	/** Remove regions by name: everyone `who` counted as inside leaves, its memory unpinned and `onExit` called. Unknown names are ignored. */
+	public remove(...names:string[]):this {
+		for (const name of names) {
+			const region = this._regions.get(name);
+			this._regions.delete(name);
+			this._byLo = undefined;
+			for (const [character, pinned] of region?.inside ?? []) {
+				this.leave(region!, character, pinned, this.director.time);
+			}
 		}
+		return this;
 	}
 
-	/** Enter, stay or leave, for each character where `pointOf` puts it now, and each region on an entity where it puts that. One with no point is nowhere. */
-	public tick(characters:readonly Character<TCtx>[], pointOf:(id:string)=>Vec | undefined, dt:number, now:number):void {
+	/** Enter, stay or leave, for each character where the world puts it now, and each region on an entity where it puts that. One with no point is nowhere. */
+	public override beforeWatches({ dt, now }:FeatureTick):void {
+		const world = this.director.world;
+		if (!world) {
+			return;
+		}
+		const pointOf = (id:string):Vec | undefined => poseOf(world, id)?.point;
 		for (const region of [...this._regions.values()].filter((r) => r.spec.until?.())) {
-			this.remove(region.name, now);
+			this.remove(region.name);
 		}
 		if (this._regions.size === 0) {
 			return;
@@ -128,6 +155,7 @@ export class Regions<TCtx> {
 				this._byLo = undefined;
 			}
 		}
+		const characters = this.director.characters();
 		const placed:Placed<TCtx>[] = [];
 		for (const character of characters) {
 			if (!this._seen.has(character)) {
@@ -174,7 +202,7 @@ export class Regions<TCtx> {
 	}
 
 	private admits({ who }:RegionSpec<TCtx>, character:Character<TCtx>, ctx:TCtx):boolean {
-		return who === undefined || (typeof who === 'string' ? this._holds(character.id, who) : who(ctx));
+		return who === undefined || (typeof who === 'string' ? this.director.holds(character.id, who) : who(ctx));
 	}
 
 	private enter(region:Region<TCtx>, character:Character<TCtx>, ctx:TCtx, now:number):void {
@@ -258,4 +286,15 @@ function forgetRegions<TCtx>(character:Character<TCtx>):void {
 
 function memoryID(name:string, character:{ id:string }):string {
 	return `region:${name}:${character.id}`;
+}
+
+declare module './ArcDirector.js' {
+	interface ArcDirector<TCtx, TEntity> {
+		/** {@link RegionsFeature}: `addRegions({ Crypt: { from, to, memory } })`. A name added before is replaced. */
+		addRegions(regions:Readonly<Record<string, RegionSpec<TCtx>>>):this;
+		getRegions():RegionsFeature<TCtx> | undefined;
+	}
+}
+export function addRegions<TCtx>(this:ArcDirector<TCtx>, regions:Readonly<Record<string, RegionSpec<TCtx>>>):ArcDirector<TCtx> {
+	return this.configureFeature(RegionsFeature<TCtx>, () => new RegionsFeature<TCtx>(), (feature) => feature.configure(regions));
 }

@@ -2,7 +2,7 @@ import type { Collective } from '../collective/Collective.js';
 import type { Mind, MindJSON, MindSettings } from '../mind/mind.js';
 import { lawGroup, type Law, type LawSpec } from '../arc/laws.js';
 import { hand } from '../internals.js';
-import { ArcRunner, type ArcRunnerJSON, type RunnerOptions } from './arc-runner.js';
+import { ArcRunner, type ArcRunnerJSON, type RunnerFields, type RunnerOptions } from './arc-runner.js';
 
 /**
  * How a character and its director reach each other, one for each character. The director gives `setMind` and
@@ -15,7 +15,7 @@ export type Wiring<TCtx = unknown> = {
 };
 
 /** What a character's constructor hands its director: the director's only way into its private fields. */
-export type CharacterFields<TCtx = unknown> = {
+export type CharacterFields<TCtx = unknown> = RunnerFields<TCtx> & {
 	/** Its own mind; null in a collective or when the host drives it. */
 	setMind(mind:Mind<TCtx> | null):void;
 	setCollective(collective:Collective<TCtx> | null):void;
@@ -79,7 +79,7 @@ export class Character<TCtx = unknown> extends ArcRunner<TCtx> {
 				this.mindSettings = json.mindSettings;
 			},
 			keepLaw: (law) => this.keepLaw(law),
-		} satisfies CharacterFields<TCtx>);
+		} satisfies Omit<CharacterFields<TCtx>, keyof RunnerFields<TCtx>>);
 	}
 
 	/** Its own mind, or its collective's. Null when the host drives it. */

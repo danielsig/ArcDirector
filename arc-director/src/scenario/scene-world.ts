@@ -5,7 +5,7 @@ import { buildCatalog, dummyEntity, type HostKernels } from '../expr/natives.js'
 import { SampleCache, type Catalog, type ExprEntity, type ExprVal } from '../expr/expr-types.js';
 import { DEFAULT_YOU_SYMBOL, type MapMark, type MapSense } from '../mind/map.js';
 import type { SpeechUtterance } from '../mind/talk.js';
-import type { Inventory } from '../perception/format-inventory.js';
+import type { Inventory } from '../perception/carrying.js';
 import type { KindSpec } from '../rts/rts-types.js';
 import { doingOf } from '../arc/stock-verbs.js';
 import type { Sight } from '../perception/perception-types.js';

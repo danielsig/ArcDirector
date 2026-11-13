@@ -1,4 +1,5 @@
 import type { Step, StepArg } from './arc-types.js';
+import { STOCK_COLLECTIVE_VERB_DEFS, type StockCollectiveVerb } from '../collective/collective-verbs.js';
 
 /**
  * `id` is a character, thing or place; the host always receives a real id, even when the model wrote its own name for it
@@ -126,7 +127,7 @@ export type VerbSpec = {
 	endless?:boolean;
 };
 
-/** What `addVerb` and `VerbRegistry.add` take. */
+/** What `VerbRegistry.add` takes. */
 export type VerbDef = {
 	args?:VerbArgMap;
 	help?:string;
@@ -138,7 +139,7 @@ export type VerbDef = {
 	free?:boolean;
 	/**
 	 * The `id` arg that may take several at once: a name as ever, or an expression that picks a list (`units`,
-	 * `others.nearby()`). For a list, the character first walks near the group (`withGroupWalk`) and then acts once, and the
+	 * `others.nearby()`). For a list, the character first walks near the group (`withWorldVerbs` `groupWalk`) and then acts once, and the
 	 * handler receives the ids as `string[]`, without the character itself or anyone down.
 	 */
 	group?:string;
@@ -149,16 +150,42 @@ export type VerbDef = {
 	endless?:boolean;
 };
 
+/** The verbs arcs may name: each one's args, help, and how others see it run. A director's own adds what runs each one. */
 export class VerbRegistry {
 	private readonly _verbs = new Map<string, VerbSpec>();
 
 	/** Catalog used to parse nested `arc=` args. Kit views point at the unfiltered registry. */
 	private _nestedSource:VerbRegistry | null = null;
 
-	public add(name:string, { args = {}, help, reply, seen, free, group, endless }:VerbDef = {}):this {
-		if (this._verbs.has(name)) {
-			throw new Error(`verb already registered: ${name}`);
+	/**
+	 * Verb `name`, unless it is here already: then only its `seen` changes, so a stock verb may say how others see it.
+	 * `help` is the one line shown after the verb in the prompt's verb list.
+	 */
+	public add(name:string, def:VerbDef = {}):this {
+		if (!this._verbs.has(name)) {
+			this.define(name, def);
 		}
+		else if (def.seen) {
+			this._verbs.set(name, { ...this._verbs.get(name)!, seen: def.seen });
+		}
+		this.changed();
+		return this;
+	}
+
+	/** Schema only: the stock verbs `verbs` names, or all of them. Already-registered names are skipped. */
+	public addStock(...verbs:StockVerb[]):this {
+		return this.addAll(STOCK_VERB_DEFS, ...verbs);
+	}
+
+	/** Schema only: collective verbs (`command`, `tag`, formations); a kit still has to grant them. `when` / `law` / `unlaw` are stock arc verbs. */
+	public addStockCollective(...verbs:StockCollectiveVerb[]):this {
+		return this.addAll(STOCK_COLLECTIVE_VERB_DEFS, ...verbs);
+	}
+
+	/** Told after each change but a {@link redefine}. */
+	protected changed():void {}
+
+	private define(name:string, { args = {}, help, reply, seen, free, group, endless }:VerbDef):void {
 		const specs = Object.fromEntries(Object.entries(args).map(([key, arg]) => [key, typeof arg === 'string' ? { kind: arg } : arg]));
 		if (group && argBase(specs[group]?.kind) !== 'id') {
 			throw new Error(`verb ${name}: group arg '${group}' is not an id arg`);
@@ -179,7 +206,6 @@ export class VerbRegistry {
 			}
 		}
 		this._verbs.set(name, { name, args: specs, help, ...(reply ? { reply } : {}), ...(seen ? { seen } : {}), ...(free ? { free } : {}), ...(group ? { group } : {}), ...(endless ? { endless } : {}) });
-		return this;
 	}
 
 	/** Full catalog. Nested unit / loop / law arcs may name verbs this kit does not grant the thinker. */
@@ -203,12 +229,12 @@ export class VerbRegistry {
 		next._nestedSource = this._nestedSource ?? this;
 		for (const spec of this.list()) {
 			if (spec.name !== verb) {
-				next.add(spec.name, spec);
+				next.define(spec.name, spec);
 				continue;
 			}
 			const args = { ...spec.args };
 			delete args[key];
-			next.add(spec.name, { ...spec, args });
+			next.define(spec.name, { ...spec, args });
 		}
 		return next;
 	}
@@ -223,10 +249,12 @@ export class VerbRegistry {
 		return this;
 	}
 
+	/** Drop verbs. */
 	public remove(...names:string[]):this {
 		for (const name of names) {
 			this._verbs.delete(name);
 		}
+		this.changed();
 		return this;
 	}
 
@@ -240,7 +268,7 @@ export class VerbRegistry {
 		next._nestedSource = this._nestedSource ?? this;
 		for (const spec of this.list()) {
 			if (wanted.has(spec.name)) {
-				next.add(spec.name, spec);
+				next.define(spec.name, spec);
 			}
 		}
 		return next;
@@ -264,9 +292,10 @@ export class VerbRegistry {
 				throw new Error(`ArcDirector: '${name}' is not in that verb table`);
 			}
 			if (!this.has(name)) {
-				this.add(name, defs[name]);
+				this.define(name, defs[name]);
 			}
 		}
+		this.changed();
 		return this;
 	}
 

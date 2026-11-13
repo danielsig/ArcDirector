@@ -1,5 +1,5 @@
 import { GameObject, Time, distanceXZ, inBounds } from '@arc-director/kindling';
-import { ArcDirector, parseArc, type CharacterSpec, type CollectiveSpec, type Goal, type LawSpec, type MemoryDraft, type SpeechUtterance } from 'arc-director';
+import { ArcDirector, parseArc, type CharacterSpec, type CollectiveSpec, type Goal, type LawSpec, type MemoryDraft, type RegionSpec, type SpeechUtterance } from 'arc-director';
 import { Confine } from '../../characters/Confine';
 import { Leash } from '../../characters/Leash';
 import { Celebrating, Door, Inscription, Lock, Named, Vitals } from '../../engine/components';
@@ -413,7 +413,9 @@ function lairsOf(host:GameHost):Map<string, string[]> {
 	return rooms;
 }
 
-function addLairs(host:GameHost, director:ArcDirector<CharacterCtx>):void {
+/** Each room the horde starts in, as a lair: its monsters kept in it, and a region warning the company of them. */
+function lairRegions(host:GameHost):Record<string, RegionSpec<CharacterCtx>> {
+	const regions:Record<string, RegionSpec<CharacterCtx>> = {};
 	for (const room of host.rooms) {
 		const bounds = roomBounds(room);
 		const { minX, maxX, minZ, maxZ } = bounds;
@@ -432,7 +434,7 @@ function addLairs(host:GameHost, director:ArcDirector<CharacterCtx>):void {
 			}
 		}
 		const living = ():typeof lair => lair.filter(({ id }) => isLiving(findObject(host.world, id)));
-		director.addRegion(`${room.name}Lair`, {
+		regions[`${room.name}Lair`] = {
 			from: [minX, minZ],
 			to: [maxX, maxZ],
 			who: ({ character }) => COMPANY.includes(idOf(character)),
@@ -448,8 +450,9 @@ function addLairs(host:GameHost, director:ArcDirector<CharacterCtx>):void {
 				return `Danger: ${foes.join('; ')}. Every one of them must be destroyed before this room is safe: they fight to the death, and one of us caught alone here dies.`;
 			},
 			until: () => living().length === 0,
-		});
+		};
 	}
+	return regions;
 }
 
 function openDoor(host:GameHost, name:string, message:string):void {
@@ -563,7 +566,7 @@ function leaveCrypt(host:GameHost):void {
 			continue;
 		}
 		out.ids.add(id);
-		host.arc?.mindQueue().setAiOn(id, false);
+		host.arc?.queue.setAiOn(id, false);
 		character.laws = [];
 		void character.enact(parseArc(`go_to(${EXIT})`, character.verbs));
 	}
@@ -604,61 +607,64 @@ function tickCrypt(host:GameHost):void {
 	leaving.set(host, { at: Time.time + CELEBRATE, ids: new Set() });
 }
 
-export function createDirector(host:GameHost):ArcDirector<CharacterCtx> {
+export function createDirector(host:GameHost):ArcDirector<CharacterCtx, GameObject> {
 	host.hooks = { checkBargain: tickCrypt, onSpoke, goals };
 	spawnExit(host);
-	const director = host.configure(new ArcDirector<CharacterCtx>())
+	return host.configure(new ArcDirector<CharacterCtx, GameObject>())
 		.withRPG({ ...BODY_VERBS, ...fightVerbs(host) })
 		// The crypt's own: an overhead status line, and rest once the prize is won.
-		.addVerb('set_status', {
-			args: { text: 'text', seconds: 'number?' },
-			handler: ({ ctx, args }) => {
-				const label = args.text.trim().slice(0, 72);
-				if (!label) {
-					return { status: 'failed', verb: 'set_status', reason: 'nothing to show' };
-				}
-				const life = Math.min(60, Math.max(1, args.seconds ?? 6));
-				host.labels.set(idOf(ctx.character), { text: label, until: Time.time + life });
-				return { status: 'ok', verb: 'set_status', reason: `${life}s` };
-			},
-		})
-		.addVerb('rest', {
-			handler: () => ({ status: 'ok', verb: 'rest', reason: companyHolds(host, PRIZE) ? 'done — still listening' : 'goal still open' }),
-		})
-		// A monster's trick: show itself, and once they come after it, draw them onto the rest of its pack.
-		.addVerb('bait', {
-			args: { target: 'id' },
-			help: 'walk up to them; once they come after you, lead them to the nearest of your own kind',
-			arc: `go_to({target}) && wait(seconds=6, until=isApproaching({target}, me)) && go_to(${PACK})`,
-		})
-		.withMind((m) => m
-			.withSkipStrategic()
-			.withVerbInstructions(BUILDING_VERB_INSTRUCTIONS)
+		.withVerbs((v) => v
+			.add('set_status', {
+				args: { text: 'text', seconds: 'number?' },
+				handler: ({ ctx, args }) => {
+					const label = args.text.trim().slice(0, 72);
+					if (!label) {
+						return { status: 'failed', verb: 'set_status', reason: 'nothing to show' };
+					}
+					const life = Math.min(60, Math.max(1, args.seconds ?? 6));
+					host.labels.set(idOf(ctx.character), { text: label, until: Time.time + life });
+					return { status: 'ok', verb: 'set_status', reason: `${life}s` };
+				},
+			})
+			.add('rest', {
+				handler: () => ({ status: 'ok', verb: 'rest', reason: companyHolds(host, PRIZE) ? 'done — still listening' : 'goal still open' }),
+			})
+			// A monster's trick: show itself, and once they come after it, draw them onto the rest of its pack.
+			.addAlias('bait', {
+				args: { target: 'id' },
+				help: 'walk up to them; once they come after you, lead them to the nearest of your own kind',
+				arc: `go_to({target}) && wait(seconds=6, until=isApproaching({target}, me)) && go_to(${PACK})`,
+			}))
+		.withMind({
+			skipStrategic: true,
+			verbInstructions: BUILDING_VERB_INSTRUCTIONS,
 			// The crypt moves fast: a short think, then the answer.
-			.withThinkInstructions({ on: 'Think very quickly, in at most 3 short sentences: what is before you, and what you do now. Then answer.' }))
+			thinkInstructions: { on: 'Think very quickly, in at most 3 short sentences: what is before you, and what you do now. Then answer.' },
+		})
 		// A law's watch is false this long before it starts again: a foe just at the edge of a watch no longer flips them.
 		.withRearm(1.5)
 		.withDefaultKit({ verbs: [...GAME_VERBS, 'set_status', 'rest', 'attack', 'block', 'heal', 'protect', ...Object.keys(ATTACKS)] })
 		// Monsters go by what they are; the player is Kaelen, the company's archer.
-		.withNames({ seen: (observer, target) => (target.id === 'Player' ? 'Kaelen' : target.id) })
-		// Where the company sets out: the leader's pep talk is said here, and the first step away from it ends it.
-		.addRegion('Setout', {
-			center: [7, 40.6],
-			radius: 1.5,
-			who: ({ character }) => idOf(character) === LEADERS[0],
-			memory: 'We are about to set off: time for my one short pep talk to the company, naming no task.',
-		})
-		// The foot of the stairs: a companion on its way out who reaches it climbs out of the crypt.
-		.addRegion('Exit', {
-			center: [EXIT_AT.x, EXIT_AT.z],
-			radius: 1,
-			who: ({ character }) => !!leaving.get(host)?.ids.has(idOf(character)),
-			onEnter: ({ character }) => climbOut(host, character),
+		.withNames((observer, target) => (target.id === 'Player' ? 'Kaelen' : target.id))
+		.addRegions({
+			// Where the company sets out: the leader's pep talk is said here, and the first step away from it ends it.
+			Setout: {
+				center: [7, 40.6],
+				radius: 1.5,
+				who: ({ character }) => idOf(character) === LEADERS[0],
+				memory: 'We are about to set off: time for my one short pep talk to the company, naming no task.',
+			},
+			// The foot of the stairs: a companion on its way out who reaches it climbs out of the crypt.
+			Exit: {
+				center: [EXIT_AT.x, EXIT_AT.z],
+				radius: 1,
+				who: ({ character }) => !!leaving.get(host)?.ids.has(idOf(character)),
+				onEnter: ({ character }) => climbOut(host, character),
+			},
+			...lairRegions(host),
 		})
 		.addCharacter(KNIGHT)
 		.addCharacter(HEALER)
 		.addCharacter(WITCH)
 		.addCollective(HORDE);
-	addLairs(host, director);
-	return director;
 }

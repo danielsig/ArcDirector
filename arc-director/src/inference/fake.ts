@@ -1,4 +1,7 @@
+import type { ArcDirector } from '../director/ArcDirector.js';
+import { ModelProvider, providerShortcuts, type ProviderConfig } from '../director/ModelProvider.js';
 import { chatContentText, type ChatRequest, type ChatResponse, type InferenceProvider } from './provider.js';
+import type { SystemOne } from './system-one.js';
 
 export type FakeChatFn = (req:ChatRequest)=>ChatResponse | Promise<ChatResponse>;
 export type FakeEmbedFn = (texts:string[], model?:string)=>number[][] | Promise<number[][]>;
@@ -66,3 +69,33 @@ export function hashEmbed(text:string, dims = 8):number[] {
 	const s = Math.sqrt(n) || 1;
 	return vec.map((v) => v / s);
 }
+
+/**
+ * What `addFake` takes: canned replies (default {@link goToNamedInteractable}), vectors, whether its models see, and
+ * `pick`, with which it is a System One instead, under its one role, its name.
+ */
+export type FakeConfig = ProviderConfig & { chat?:FakeChatFn; embed?:FakeEmbedFn; pick?:SystemOne['pick']; vision?:boolean };
+
+/** Canned replies for tests (`addFake`): each model's id is `fake` unless its spec says. */
+export class Fake extends ModelProvider {
+	constructor(private readonly _config:FakeConfig = {}) {
+		super(_config.name ?? 'fake', new FakeProvider(_config.chat ?? goToNamedInteractable(), _config.embed), _config, _config.pick && { pick: _config.pick });
+	}
+
+	protected override defaultID():string {
+		return 'fake';
+	}
+
+	protected override sees():boolean {
+		return this._config.vision ?? false;
+	}
+}
+
+declare module '../director/ArcDirector.js' {
+	interface ArcDirector<TCtx, TEntity> {
+		/** {@link Fake}: `addFake({ chat: (req) => reply })`. */
+		addFake(config?:FakeConfig):this;
+		getFake(name?:string):Fake | undefined;
+	}
+}
+export const { add: addFake, get: getFake } = providerShortcuts(Fake, 'fake');

@@ -2,10 +2,10 @@ import type { Arc } from '../arc/arc-types.js';
 import { verbThinkScore, arcScore } from './think-score.js';
 import { MindScheduler, type MindQueueOpts, type ThinkRow } from './scheduler.js';
 
-export type SimpleQueueOpts = MindQueueOpts;
+export type SimpleThinkQueueOpts = MindQueueOpts;
 
 /** First come, first served. Watches still wake; they do not jump the line. */
-export class SimpleQueue extends MindScheduler {
+export class SimpleThinkQueue extends MindScheduler {
 	public override rankScore(mindID:string, raw:number):number {
 		return -(this.minds.get(mindID)?.seq ?? 0);
 	}

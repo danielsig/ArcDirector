@@ -1,5 +1,5 @@
 import { type GameObject, type XZ } from '@arc-director/kindling';
-import type { CharacterSpec } from 'arc-director';
+import type { CharacterSpec, MemoryDraft } from 'arc-director';
 import { Door, MarketNPC, Named } from '../../engine/components';
 import { DemoMeshRenderer } from '../../engine/demo-mesh-renderer';
 import type { DemoWorld } from '../../engine/demo-world';
@@ -7,33 +7,32 @@ import { idOf } from '../../director/names';
 import { spawnNPC, type NPCSpawnOpts } from '../../world/spawn';
 import { SELLERS, type Seller } from '../../items/wares';
 
-function vendorSeed(seller:Seller):CharacterSpec {
-	const prices = seller.wares.map((ware) => `${ware.name} for ${ware.ask} gold, never under ${ware.floor}`).join('; ');
+/** Where `seller` serves from, and what they sell at what price. */
+function stallOf(seller:Seller):{ place:string; prices:string } {
 	const place = seller.shop ? `${seller.post}, inside ${seller.shop}` : seller.post;
-	return {
-		id: seller.vendor,
-		// The posted price sells itself. They think when someone offers them something else, and answer it.
-		mind: { skipStart: true, skipHeartbeat: true, skipMajor: true, skipStrategic: true },
-		pinnedWatches: { offer: 'some(events.filter("offer"))' },
-		identity: { role: 'Vendor', traits: seller.traits },
-		goals: [
-			{ text: `Stay at ${place}. Never leave it.`, priority: 2 },
-			{ text: `Sell ${prices}.`, priority: 2 },
-		],
-		offers: seller.wares.map((ware) => ({ give: { [ware.name]: 1 }, get: { gold: ware.ask } })),
-		memories: [{
-			text: `I am a seller, not a nobody: my place is ${place} and I never leave it, not to shop and not to chase anyone. I sell ${prices}. Each offer stands, so whoever pays it gets one at once. Someone who offers less waits for my answer: I accept with the reverse offer, or counter. I do not walk off to get ${seller.want}.`,
-			tags: ['backstory', seller.post, ...seller.wares.map((ware) => ware.name)],
-			pinned: true,
-		}, {
-			text: seller.manner,
-			tags: ['manner', seller.vendor],
-			pinned: true,
-		}],
-	};
+	return { place, prices: seller.wares.map((ware) => `${ware.name} for ${ware.ask} gold, never under ${ware.floor}`).join('; ') };
 }
 
-export const MARKET_SEEDS:CharacterSpec[] = SELLERS.map(vendorSeed);
+/** The sellers, units of the `Sellers` hive: each at their post, each ware's posted offer standing. */
+export const SELLER_UNITS:Pick<CharacterSpec, 'id' | 'tags' | 'offers'>[] = SELLERS.map((seller) => ({
+	id: seller.vendor,
+	tags: ['Seller', seller.post],
+	offers: seller.wares.map((ware) => ({ give: { [ware.name]: 1 }, get: { gold: ware.ask } })),
+}));
+
+/** What the `Sellers` hive knows of each seller: their place, their prices, and how they talk. */
+export const SELLER_MEMORIES:MemoryDraft[] = SELLERS.flatMap((seller) => {
+	const { place, prices } = stallOf(seller);
+	return [{
+		text: `${seller.vendor}'s place is ${place}, and ${seller.vendor} never leaves it, not to shop and not to chase anyone. ${seller.vendor} sells ${prices}. ${seller.vendor} does not walk off to get ${seller.want}.`,
+		tags: ['backstory', seller.post, ...seller.wares.map((ware) => ware.name)],
+		pinned: true,
+	}, {
+		text: `${seller.vendor}: ${seller.manner}`,
+		tags: ['manner', seller.vendor],
+		pinned: true,
+	}];
+});
 
 /**
  * Where a guard stands: one meter inside the gate and one meter off the opening, so the pair flanks the

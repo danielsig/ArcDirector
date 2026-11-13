@@ -2,13 +2,16 @@ import type { VerbArgMap } from '../arc/stock-verbs.js';
 import type { Arc, ArcResult, CountMap, Step, StepArg } from '../arc/arc-types.js';
 import type { Kit } from '../character/character-types.js';
 import type { Character } from '../character/Character.js';
-import type { Collective } from '../collective/Collective.js';
+import { idsInVal } from '../collective/who.js';
+import type { ArcDirector } from '../director/ArcDirector.js';
 import type { VerbAlias, VerbCall, VerbHandler } from '../director/director-types.js';
 import { poseOf } from '../world/lookup.js';
 import { bundleText } from '../world/offers.js';
 import type { HostWorld } from '../world/world-types.js';
 import { distance } from '../world/vec.js';
+import { evaluate } from '../expr/eval.js';
 import { dummyEntity } from '../expr/natives.js';
+import { SightFeature } from '../perception/SightFeature.js';
 import type { ExprVal } from '../expr/expr-types.js';
 import type { KindSpec, RTSHost, WorkDone } from './rts-types.js';
 import { STOCK_ECONOMY_VERBS, STOCK_RTS_VERB_DEFS } from './rts-verbs.js';
@@ -28,23 +31,6 @@ export const RTS_COMMANDER_VERBS = [
 	'keep_distance', 'pull_back', 'spread_out', 'keep_training', 'supply_ahead', 'share_workers',
 	'command', 'tag', 'untag', 'law', 'unlaw', 'when', 'loop', 'wait', 'say',
 ] as const;
-
-/** What the RTS reaches in the director: the world, its characters, and how the caller sees. */
-type RTSDeps<TCtx> = {
-	host:RTSHost;
-	world:()=>HostWorld<unknown> | undefined;
-	character:(id:string)=>Character<TCtx> | undefined;
-	/** The collective a side is. */
-	collective:(side:string)=>Collective<TCtx> | undefined;
-	/** The ids `expr` picks, as `call`'s character sees: `units.filter("Archer")` from a commander, `others…` from a unit. */
-	pick:(call:VerbCall<TCtx>, expr:string)=>string[] | { error:string };
-	/** The ids `call`'s character sees now. */
-	seen:(call:VerbCall<TCtx>)=>readonly string[];
-	/** Tell the mind that thinks for character `id`. */
-	tell:(id:string, text:string)=>void;
-	/** Verbs the director has, so a kit names only those. */
-	has:(verb:string)=>boolean;
-};
 
 /** One thing in a building's queue. */
 type Order = {
@@ -89,7 +75,6 @@ function fail(verb:string, reason:string):ArcResult {
  * same verb in a unit's own program does the work and finishes when it is done.
  */
 export class RTS<TCtx> {
-	private readonly _deps:RTSDeps<TCtx>;
 	private readonly _sides = new Map<string, SideState>();
 	/** Who is inside each building or transport. */
 	private readonly _inside = new Map<string, Set<string>>();
@@ -123,12 +108,23 @@ export class RTS<TCtx> {
 		};
 	}
 
-	constructor(deps:RTSDeps<TCtx>) {
-		this._deps = deps;
-	}
+	/** `_director`: the one it runs for, whose world, characters and verbs it reaches. */
+	constructor(private readonly _host:RTSHost, private readonly _director:ArcDirector<TCtx>) {}
 
 	private get host():RTSHost {
-		return this._deps.host;
+		return this._host;
+	}
+
+	/** The ids `expr` picks, as `call`'s character sees: `units.filter("Archer")` from a commander, `others…` from a unit. */
+	private pick(call:VerbCall<TCtx>, expr:string):string[] | { error:string } {
+		const catalog = this._director.catalogOf(call.character, call.ctx);
+		const r = catalog && evaluate(expr, catalog);
+		return !r ? { error: 'nothing to pick from' } : r.error ? { error: r.error.message } : idsInVal(r.value);
+	}
+
+	/** Tell the mind that thinks for character or side `id`. */
+	private tell(id:string, text:string):void {
+		(this._director.character(id) ?? this._director.collective(id))?.tell({ kind: 'rts', text, major: true });
 	}
 
 	// ── Kinds ──────────────────────────────────────────────────────────
@@ -171,7 +167,7 @@ export class RTS<TCtx> {
 		for (const verb of spec.verbs ?? []) {
 			verbs.add(verb);
 		}
-		return { verbs: [...verbs].map((v) => this.named(v)).filter((v) => this._deps.has(v)) };
+		return { verbs: [...verbs].map((v) => this.named(v)).filter((v) => this._director.verbs.has(v)) };
 	}
 
 	/** `verb` as this game names it. */
@@ -220,11 +216,11 @@ export class RTS<TCtx> {
 
 	/** A side's units and buildings: its collective's characters, or a lone character itself. */
 	private members(side:string):Character<TCtx>[] {
-		const collective = this._deps.collective(side);
+		const collective = this._director.collective(side);
 		if (collective) {
 			return [...collective.characters];
 		}
-		const alone = this._deps.character(side);
+		const alone = this._director.character(side);
 		return alone ? [alone] : [];
 	}
 
@@ -323,7 +319,7 @@ export class RTS<TCtx> {
 	// ── Where things are ───────────────────────────────────────────────
 
 	private distance(a:string, b:string):number {
-		const world = this._deps.world();
+		const world = this._director.world;
 		const pa = world && poseOf(world, a)?.point;
 		const pb = world && poseOf(world, b)?.point;
 		return pa && pb ? distance(pa, pb) : Infinity;
@@ -365,7 +361,7 @@ export class RTS<TCtx> {
 		for (const [side, state] of this._sides) {
 			for (const [building, queue] of state.queues) {
 				const head = queue[0];
-				const at = this._deps.character(building);
+				const at = this._director.character(building);
 				if (!head) {
 					continue;
 				}
@@ -399,7 +395,7 @@ export class RTS<TCtx> {
 		if (order.tech) {
 			this.state(order.side).techs.add(order.kind);
 			this.host.applyTech(order.side, order.kind);
-			this._deps.tell(order.side, `${order.kind} researched.`);
+			this.tell(order.side, `${order.kind} researched.`);
 			return;
 		}
 		const id = this.host.spawn(order.building, order.kind);
@@ -412,11 +408,11 @@ export class RTS<TCtx> {
 
 	/** `id` joins `side` as a unit of `kind`, with the tags and verbs its kind gives. */
 	private join(side:string, id:string, kind:string, near:string, unfinished = false):Character<TCtx> | undefined {
-		const collective = this._deps.collective(side) ?? this._deps.character(near)?.collective;
+		const collective = this._director.collective(side) ?? this._director.character(near)?.collective;
 		if (!collective) {
 			return undefined;
 		}
-		return collective.addCharacter({ id, tags: [...this.tagsOf(kind), ...unfinished ? ['Unfinished'] : []], kit: this.kitOf(kind) });
+		return collective.addCharacter({ id, tags: [...this.tagsOf(kind), ...unfinished ? ['Unfinished'] : []], kit: this.kitOf(kind) }).character(id);
 	}
 
 	// ── Verbs ──────────────────────────────────────────────────────────
@@ -456,14 +452,14 @@ export class RTS<TCtx> {
 
 	/** The members `expr` picks, as `call` sees; or why it picks none. */
 	private pickMembers(call:VerbCall<TCtx>, expr:string):Character<TCtx>[] | string {
-		const picked = this._deps.pick(call, expr);
+		const picked = this.pick(call, expr);
 		if (!Array.isArray(picked)) {
 			return `${expr}: ${picked.error}`;
 		}
 		const side = this.sideOf(call.character);
 		const out:Character<TCtx>[] = [];
 		for (const id of picked) {
-			const c = this._deps.character(id);
+			const c = this._director.character(id);
 			if (!c) {
 				continue;
 			}
@@ -666,7 +662,7 @@ export class RTS<TCtx> {
 
 	/** Whether `id` is an unfinished site of `kind`, or of any wall piece when `kind` is one: a wall is one job. */
 	private isSiteOf(id:string, kind:string):boolean {
-		const c = this._deps.character(id);
+		const c = this._director.character(id);
 		const piece = (k:string | undefined):boolean => this.tagged(k, 'Wall') || this.tagged(k, 'Gate');
 		const theirs = this.kindOf(id);
 		return !!c && this.unfinished(c) && (theirs === kind || (piece(kind) && piece(theirs)));
@@ -686,7 +682,7 @@ export class RTS<TCtx> {
 	private layLine(call:VerbCall<TCtx>, builder:string, tag:'Wall' | 'Bridge'):{ sites:string[]; kind:string } | string {
 		const noun = tag.toLowerCase();
 		const side = this.sideOf(call.character);
-		const world = this._deps.world();
+		const world = this._director.world;
 		const from = str(call.args.from);
 		const to = str(call.args.to);
 		const a = world && poseOf(world, from)?.point;
@@ -829,7 +825,7 @@ export class RTS<TCtx> {
 				this.clearDoing(call);
 				return fail('build', worked.stop);
 			}
-			const built = this._deps.character(site);
+			const built = this._director.character(site);
 			if (built) {
 				built.tags = built.tags.filter((t) => t !== 'Unfinished');
 			}
@@ -1015,7 +1011,7 @@ export class RTS<TCtx> {
 	private rally(call:VerbCall<TCtx>):ArcResult {
 		const side = this.sideOf(call.character);
 		const to = str(call.args.to);
-		if (!this.host.describe(to) && !this._deps.world()?.find(to)) {
+		if (!this.host.describe(to) && !this._director.world?.find(to)) {
 			return fail('rally', `no ${to}`);
 		}
 		const at = str(call.args.at);
@@ -1056,7 +1052,7 @@ export class RTS<TCtx> {
 	private acquire(call:VerbCall<TCtx>, within:number, focus:string[], out?:ReadonlySet<string>):string | undefined {
 		const me = call.character.id;
 		const side = this.sideOf(call.character);
-		const seen = this._deps.seen(call).filter((id) => this.isFoe(side, id) && this.distance(me, id) <= within && !out?.has(id));
+		const seen = (this._director.getFeature(SightFeature)?.seenBy(call.ctx)?.objects.map((o) => o.id) ?? []).filter((id) => this.isFoe(side, id) && this.distance(me, id) <= within && !out?.has(id));
 		return focus.find((id) => seen.includes(id)) ?? this.nearest(me, seen);
 	}
 
@@ -1065,7 +1061,7 @@ export class RTS<TCtx> {
 		if (!expr) {
 			return [];
 		}
-		const picked = this._deps.pick(call, expr);
+		const picked = this.pick(call, expr);
 		return Array.isArray(picked) ? picked : [];
 	}
 
@@ -1098,7 +1094,7 @@ export class RTS<TCtx> {
 	}
 
 	private async attack(call:VerbCall<TCtx>):Promise<ArcResult> {
-		const picked = this._deps.pick(call, str(call.args.target));
+		const picked = this.pick(call, str(call.args.target));
 		if (!Array.isArray(picked)) {
 			return fail('attack', picked.error);
 		}
@@ -1164,7 +1160,7 @@ export class RTS<TCtx> {
 				return there;
 			}
 		}
-		const world = this._deps.world();
+		const world = this._director.world;
 		const spot = world && poseOf(world, me)?.point;
 		const within = num(call.args.fire_within) ?? this.range(me);
 		const focus = this.focusOf(call);
@@ -1191,7 +1187,7 @@ export class RTS<TCtx> {
 	private async patrol(call:VerbCall<TCtx>):Promise<ArcResult> {
 		const me = call.character.id;
 		const to = str(call.args.to);
-		const world = this._deps.world();
+		const world = this._director.world;
 		const home = world && poseOf(world, me)?.point;
 		const focus = this.focusOf(call);
 		const chase = this.range(me) + (this.host.chase ?? CHASE);
@@ -1291,7 +1287,7 @@ export class RTS<TCtx> {
 	private tribute(call:VerbCall<TCtx>):ArcResult {
 		const side = this.sideOf(call.character);
 		const to = str(call.args.to);
-		const them = this._deps.character(to)?.collective?.id ?? this.host.describe(to)?.owner ?? to;
+		const them = this._director.character(to)?.collective?.id ?? this.host.describe(to)?.owner ?? to;
 		if (them === side || !(this.host.areAllies?.(side, them) ?? false)) {
 			return fail('tribute', `${to} is not your ally`);
 		}
@@ -1305,7 +1301,7 @@ export class RTS<TCtx> {
 		const arrived = Object.fromEntries(Object.entries(give).map(([k, v]) => [k, Math.floor(v * share)]));
 		this.host.addStock(side, scaled(give, -1));
 		this.host.addStock(them, arrived);
-		this._deps.tell(them, `${side} sent you ${bundleText(arrived)}.`);
+		this.tell(them, `${side} sent you ${bundleText(arrived)}.`);
 		return ok('tribute', `${bundleText(arrived)} arrived`);
 	}
 
@@ -1363,7 +1359,7 @@ export class RTS<TCtx> {
 	}
 
 	private staffOf(building:string):Character<TCtx>[] {
-		return [...this._doing].filter(([, doing]) => doing.text === `working at ${building}`).map(([id]) => this._deps.character(id)).filter((c):c is Character<TCtx> => !!c);
+		return [...this._doing].filter(([, doing]) => doing.text === `working at ${building}`).map(([id]) => this._director.character(id)).filter((c):c is Character<TCtx> => !!c);
 	}
 
 	private async staff(call:VerbCall<TCtx>):Promise<ArcResult> {
@@ -1527,7 +1523,7 @@ export class RTS<TCtx> {
 			.map(([b, q]) => {
 				const runs = new Map<string, number>();
 				q.forEach((o) => runs.set(o.kind, (runs.get(o.kind) ?? 0) + 1));
-				const building = this._deps.character(b);
+				const building = this._director.character(b);
 				const wait = building && this.unfinished(building) ? `, waiting for ${b} to be finished` : '';
 				return `${b} ${[...runs].map(([k, n]) => (n > 1 ? `${k} ×${n}` : k)).join(', ')} (${Math.ceil(q[0].left)} s${wait})`;
 			});
@@ -1538,7 +1534,7 @@ export class RTS<TCtx> {
 		if (techs.length > 0) {
 			lines.push(`Researched: ${techs.join(', ')}`);
 		}
-		const commander = this._deps.collective(side)?.commander;
+		const commander = this._director.collective(side)?.commander;
 		const groups = new Map<string, Map<string, number>>();
 		for (const c of this.members(side)) {
 			if (c === commander) {

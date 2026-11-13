@@ -1,12 +1,12 @@
 import { Time, distanceXZ, type GameObject } from '@arc-director/kindling';
-import { parseArc, pascalCase, STOCK_COLLECTIVE_VERBS, STOCK_FORMATION_VERBS, ArcDirector, type Kit } from 'arc-director';
+import { parseArc, pascalCase, STOCK_COLLECTIVE_VERBS, STOCK_FORMATION_VERBS, ArcDirector, type Kit, type RegionSpec } from 'arc-director';
 import { MarketNPC, MarketGate, Merchant, Wanted } from '../../engine/components';
 import { CharacterMotor } from '../../characters/CharacterMotor';
 import { NPCInput } from '../../characters/NPCInput';
 import { compactName, findCarried, itemMatchesName, tryInsert } from '../../items/inventory';
 import { dropItem, USE_RANGE } from '../../items/pickup';
 import type { GameHost, CharacterCtx } from '../../director/adapter';
-import { customerCount, guardPost, spawnRandomCustomer, MARKET_SEEDS, HIVE_UNITS, GUARD_UNITS } from './marketplace-hive';
+import { customerCount, guardPost, spawnRandomCustomer, HIVE_UNITS, GUARD_UNITS, SELLER_MEMORIES, SELLER_UNITS } from './marketplace-hive';
 import { squareList } from '../../items/wares';
 import { coinsOf } from '../../items/wallet';
 import { idOf, findObject } from '../../director/names';
@@ -145,8 +145,19 @@ function addGateExits(host:GameHost):void {
 	if (!director || gated.has(host)) {
 		return;
 	}
+	const thresholds:Record<string, RegionSpec<CharacterCtx>> = {};
+	host.world.forEachComponent(MarketGate, (_exit, gate) => {
+		gated.add(host);
+		const { x, z } = gate.transform.position;
+		thresholds[`${idOf(gate)}Threshold`] = {
+			center: [x, z],
+			radius: DOORWAY,
+			who: ({ character }) => character.getComponent(MarketNPC)?.kind === 'customer' && !character.getComponent(Wanted)?.enabled,
+			onEnter: ({ character }) => despawn(host, character),
+		};
+	});
 	// What each shopper walked in with. Read again every tick, so a purchase shows, and only while they are in the square.
-	director.addRegion('purses', {
+	director.addRegions({ purses: {
 		from: [-Infinity, -Infinity],
 		to: [Infinity, Infinity],
 		who: ({ character }) => character.getComponent(MarketNPC)?.kind === 'customer',
@@ -155,18 +166,7 @@ function addGateExits(host:GameHost):void {
 			const gold = `${coinsOf(character)} gold`;
 			return wants.length > 0 ? `carrying ${gold}, looking for ${wants.join(' and ')}` : `carrying ${gold}, done looking`;
 		},
-	});
-	host.world.forEachComponent(MarketGate, (_exit, gate) => {
-		gated.add(host);
-		const name = idOf(gate);
-		const { x, z } = gate.transform.position;
-		director.addRegion(`${name}Threshold`, {
-			center: [x, z],
-			radius: DOORWAY,
-			who: ({ character }) => character.getComponent(MarketNPC)?.kind === 'customer' && !character.getComponent(Wanted)?.enabled,
-			onEnter: ({ character }) => despawn(host, character),
-		});
-	});
+	}, ...thresholds });
 }
 
 /** CharacterMotor's own walk, m/s. NPCs in this scene use {@link MARKET_WALK} instead. */
@@ -250,7 +250,7 @@ const GUARD_KIT:Kit = { verbs: [...MARKET_VERBS, 'stand'] };
 /** Every market mind. Recall is how it reads the trade ledger. */
 const LEDGER_NOTE = 'The ledger of who gave or traded what, from whom, to whom, in what quantity, and for what, is your memory. Whenever any of that is in doubt, call recall. That is how you read the ledger. Never guess a trade.';
 
-export function createDirector(host:GameHost):ArcDirector<CharacterCtx> {
+export function createDirector(host:GameHost):ArcDirector<CharacterCtx, GameObject> {
 	host.hooks = {
 		allowTheft: true,
 		afterPickUp,
@@ -259,11 +259,11 @@ export function createDirector(host:GameHost):ArcDirector<CharacterCtx> {
 	};
 	const hiveKit = { verbs: [...MARKET_VERBS, ...ORDERS, 'offer', 'steal'] };
 	const guardVoice = { verbs: [...MARKET_VERBS, ...ORDERS] };
-	const d = host.configure(new ArcDirector<CharacterCtx>())
+	const d = host.configure(new ArcDirector<CharacterCtx, GameObject>())
 		.withRPG({ ...BODY_VERBS, steal: stealVerb(host) })
 		.withSight({ limit: 16 })
-		.withMind((m) => m.withSystemNote(LEDGER_NOTE))
-		.addVerb('stand', {
+		.withMind({ systemNote: LEDGER_NOTE })
+		.withVerbs((v) => v.add('stand', {
 			args: {},
 			help: 'a guard walks to their side of the gate, beside the doorway',
 			handler: (call) => {
@@ -273,7 +273,7 @@ export function createDirector(host:GameHost):ArcDirector<CharacterCtx> {
 				}
 				return call.goToPoint([post.x, post.z], { within: 0.35 });
 			},
-		})
+		}))
 		.addCollective({
 			id: 'MarketHive',
 			kit: hiveKit,
@@ -281,10 +281,13 @@ export function createDirector(host:GameHost):ArcDirector<CharacterCtx> {
 			maxUnitsPerCommand: 1,
 			identity: { role: 'Hive', traits: ['busy', 'fair', 'thrifty', 'watchful'] },
 			// They stroll on their own. The game's minds skip the heartbeat unless asked: this one thinks on it, about whom to send and what to offer.
-			mind: { skipStart: true, skipStrategic: true, skipMajor: true, skipHeartbeat: false },
+			mind: { skipStrategic: true, skipMajor: true, skipHeartbeat: false },
 			goals: [{
 				text: 'Shoppers look around and buy what they came for when the price suits them, then leave by their own gate.',
 				priority: 2,
+			}, {
+				text: 'Shoppers talk with each other as they browse. When two stand near each other, order one to say a line to the other, and the other to answer it a little later, both in the same think. They talk as townsfolk of a fantasy market would: prices and haggling, the harvest, the weather on the canal, news off the road, a guild quarrel, a rumor from the keep. One plain sentence each, in their own voice, never about the hive.',
+				priority: 1,
 			}],
 			// A pinned memory replaces the one with its first two tags: each line its own second tag.
 			memories: Object.entries({
@@ -292,7 +295,7 @@ export function createDirector(host:GameHost):ArcDirector<CharacterCtx> {
 				canal: 'A canal runs east to west through the middle of the market, crossed by three footbridges.',
 				squares: `${squareList()}.`,
 				tags: 'Each shopper is tagged Shopper and wanting, with each good it still wants and the gate it leaves by. The wanting tag comes off with the last of those, and then they walk to that gate on their own.',
-				others: 'The sellers keep their own stalls and think for themselves; the Guards hold the gates. A seller answers a low offer themselves.',
+				others: 'The sellers keep their own stalls and have their own mind, the Sellers; the Guards hold the gates. A seller answers a low offer themselves.',
 			}).map(([key, text]) => ({ text, tags: ['backstory', key], pinned: true })),
 			pinnedSightFocus: ['isHurt(it)', 'isNear(it, Player)'],
 			pinnedWatches: {
@@ -323,7 +326,7 @@ export function createDirector(host:GameHost):ArcDirector<CharacterCtx> {
 		.addCollective({
 			id: 'Guards',
 			kit: guardVoice,
-			mind: { skipStart: true, skipMajor: true },
+			mind: { skipMajor: true, skipHeartbeat: true },
 			identity: { role: 'Watch', traits: ['stern', 'alert'] },
 			goals: [{
 				text: 'Keep the market safe: thieves caught, cries answered, gates held.',
@@ -349,8 +352,23 @@ export function createDirector(host:GameHost):ArcDirector<CharacterCtx> {
 				pinned: true,
 			}],
 		});
-	for (const seed of MARKET_SEEDS) {
-		d.addCharacter(seed);
-	}
-	return d;
+	return d.addCollective({
+		id: 'Sellers',
+		kit: { verbs: [...MARKET_VERBS, ...ORDERS, 'offer'] },
+		// One seller per order: each answers the offers made to them.
+		maxUnitsPerCommand: 1,
+		identity: { role: 'Hive', traits: ['shrewd', 'fair', 'proud of their wares'] },
+		// A posted price sells itself. The hive thinks when someone offers a seller something else, and that seller answers it.
+		mind: { skipHeartbeat: true, skipMajor: true, skipStrategic: true },
+		pinnedWatches: { offer: 'some(events.filter("offer"))' },
+		goals: [
+			{ text: 'Every seller stays at their own post and never leaves it.', priority: 2 },
+			{ text: 'Sell at the posted prices. Someone who offers a seller less waits for that seller\'s answer: accept with the reverse offer, or counter, never under that ware\'s floor.', priority: 2 },
+		],
+		memories: [
+			{ text: 'I am the sellers\' one mind, not a person in the square: each seller keeps their own stall, and I answer for them.', tags: ['backstory', 'self'], pinned: true },
+			...SELLER_MEMORIES,
+		],
+		characters: SELLER_UNITS.map((unit) => ({ ...unit, kit: { verbs: [...MARKET_VERBS, 'offer'] } })),
+	});
 }

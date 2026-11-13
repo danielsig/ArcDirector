@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { afterEach, beforeEach, describe, it, mock } from 'node:test';
 import { ArcDirector } from './ArcDirector.js';
+import './shortcuts.js';
 import { Ticker } from './Ticker.js';
 
 describe('Ticker', () => {
@@ -23,7 +24,7 @@ describe('Ticker', () => {
 	});
 
 	it('ticks a director at its interval, by wall time times timeScale', async () => {
-		const director = await new ArcDirector().addFakeInference().connect();
+		const director = await new ArcDirector().addFake().connect();
 		const at:string[] = [];
 		using ticker = new Ticker({ tick: (dt) => {
 			director.tick(dt);

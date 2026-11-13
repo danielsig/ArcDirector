@@ -1,10 +1,12 @@
 import { Time, type GameObject } from '@arc-director/kindling';
 import type { ThinkEvent } from 'arc-director';
-import { cueAt } from '../audio/cue';
+import { cueAt, cueAtPoint } from '../audio/cue';
 import { CharacterPose, stanceOf } from '../characters/CharacterPose';
 import type { DemoWorld } from '../engine/demo-world';
+import type { SfxName } from '../audio/sfx';
 import { prefs } from '../prefs';
 import { orderArcs } from '../render/arc-fx';
+import type { Stance } from '../render/spell-fx';
 import { toolFx } from '../render/tool-fx';
 import type { GoalColor, SlateState } from '../ui/hud-model';
 import { findObject, idOf, isLiving } from './names';
@@ -54,8 +56,22 @@ export type ThinkSlate = {
 };
 
 /**
+ * Where a mind's thinks show: over a living character (`go`), or for a bodiless collective (a hive) at the median of its
+ * living characters, standing as tall as they do.
+ */
+export type ThinkAnchor = { name:string; go?:GameObject; stance:Stance };
+
+/** The middle value of `values` (not empty). */
+function median(values:number[]):number {
+	const sorted = [...values].sort((a, b) => a - b);
+	const mid = sorted.length >> 1;
+	return sorted.length % 2 ? sorted[mid]! : (sorted[mid - 1]! + sorted[mid]!) / 2;
+}
+
+/**
  * Puts what minds do as they think on show (`ArcDirector.onThink`): each Arc written out on a slate by its author's head,
- * each order flying to its units, each tool call in the body of whoever made it. Every part has its menu switch, under
+ * each order flying to its units, each tool call in the body of whoever made it. A bodiless collective writes and orders
+ * from the middle of its characters ({@link anchorOf}), with no body to hold a tool. Every part has its menu switch, under
  * one that hides them all. The HUD reads {@link slates} and {@link toolOf} each frame, and the AI log {@link thinks}.
  */
 export class ThinkShow {
@@ -69,33 +85,50 @@ export class ThinkShow {
 	/** The last order shown reaching each unit, and when. */
 	private readonly _orders = new Map<string, { text:string; at:number }>();
 
-	constructor(private readonly world:DemoWorld, private readonly goals:()=>SceneGoals | undefined) {}
+	/**
+	 * @param crew The characters of the bodiless collective with this id, or undefined for any other mind.
+	 */
+	constructor(private readonly world:DemoWorld, private readonly goals:()=>SceneGoals | undefined, private readonly crew:(id:string)=>readonly { id:string }[] | undefined) {}
 
 	public handle = (event:ThinkEvent):void => {
-		// The dead write nothing, though a think of theirs may yet come back from the model.
-		const found = findObject(this.world, event.who);
-		const go = isLiving(found) ? found : undefined;
+		// The dead write nothing, though a think of theirs may yet come back from the model; nor does a collective with none left standing.
+		const anchor = event.kind === 'start' ? null : this.anchorOf(event.who);
 		switch (event.kind) {
 			case 'start':
 				this._began.set(event.who, performance.now());
 				return;
 			case 'reply':
-				this.write(event.who, event.thought, event.arc, go);
+				this.write(event.who, event.thought, event.arc, anchor);
 				return;
 			case 'tool':
-				this.tool(event.tool, go);
+				this.tool(event.who, event.tool, anchor);
 				return;
 			case 'retry':
-				this.turnDown(event.who, event.reason, go);
+				this.turnDown(event.who, event.reason, anchor);
 				return;
 			case 'end':
-				this.finish(event.who, !!event.arc, event.error, go);
+				this.finish(event.who, !!event.arc, event.error, anchor);
 				return;
 			case 'command':
-				this.order(event.to, event.text, go);
+				this.order(event.to, event.text, anchor);
 				return;
 		}
 	};
+
+	/** Where `who`'s thinks show now, or null when it is down (or, a collective, has no one living). */
+	public anchorOf(who:string):ThinkAnchor | null {
+		const crew = this.crew(who);
+		if (!crew) {
+			const go = findObject(this.world, who);
+			return isLiving(go) ? { name: idOf(go), go, stance: stanceOf(go) } : null;
+		}
+		const stances = crew.map((c) => findObject(this.world, c.id)).filter(isLiving).map(stanceOf);
+		if (stances.length === 0) {
+			return null;
+		}
+		const feet = stances[0]!.feet.clone().set(median(stances.map((s) => s.feet.x)), median(stances.map((s) => s.feet.y)), median(stances.map((s) => s.feet.z)));
+		return { name: who, stance: { feet, height: median(stances.map((s) => s.height)) } };
+	}
 
 	/** The tool `id` is showing now, or `''`. */
 	public toolOf(id:string):string {
@@ -107,7 +140,7 @@ export class ThinkShow {
 	public update():void {
 		const slates = this.on('arcSlates');
 		for (const [who, slate] of this.slates) {
-			if (Time.time >= slate.until || !slates || !isLiving(findObject(this.world, who))) {
+			if (Time.time >= slate.until || !slates || !this.anchorOf(who)) {
 				this.slates.delete(who);
 			}
 		}
@@ -128,12 +161,12 @@ export class ThinkShow {
 	}
 
 	/** The think `who` is writing, a fresh one if its last is over, up on a slate unless slates are off or too many are up. */
-	private thinkOf(who:string, go:GameObject):ThinkSlate {
+	private thinkOf(who:string, anchor:ThinkAnchor):ThinkSlate {
 		const writing = this._writing.get(who);
 		if (writing) {
 			return writing;
 		}
-		const fresh:ThinkSlate = { seq: ++this._seq, id: who, name: idOf(go), color: this.colorOf(who), thought: '', arc: '', state: 'writing', error: '', wrongUntil: 0, began: this._began.get(who) ?? performance.now(), ms: 0, until: Infinity, lastTick: 0 };
+		const fresh:ThinkSlate = { seq: ++this._seq, id: who, name: anchor.name, color: this.colorOf(who), thought: '', arc: '', state: 'writing', error: '', wrongUntil: 0, began: this._began.get(who) ?? performance.now(), ms: 0, until: Infinity, lastTick: 0 };
 		this._writing.set(who, fresh);
 		this.thinks.push(fresh);
 		this.thinks.splice(0, this.thinks.length - THINK_LOG_CAP);
@@ -148,14 +181,24 @@ export class ThinkShow {
 		return this.slates.get(think.id) === think;
 	}
 
-	private write(who:string, thought:string, arc:string, go:GameObject | undefined):void {
-		const slate = go && (thought || arc) ? this.thinkOf(who, go) : undefined;
-		if (!slate) {
+	/** Plays `name` at `anchor`: from a character's own voice, or at a collective's middle. */
+	private cue(name:SfxName, anchor:ThinkAnchor):void {
+		if (anchor.go) {
+			cueAt(this.world, name, anchor.go);
+		}
+		else {
+			cueAtPoint(this.world, name, anchor.stance.feet);
+		}
+	}
+
+	private write(who:string, thought:string, arc:string, anchor:ThinkAnchor | null):void {
+		if (!anchor || !(thought || arc)) {
 			return;
 		}
+		const slate = this.thinkOf(who, anchor);
 		if (this.shown(slate) && arc.length > slate.arc.length && Time.time - slate.lastTick >= TICK_GAP) {
 			slate.lastTick = Time.time;
-			cueAt(this.world, 'arcTick', go!);
+			this.cue('arcTick', anchor);
 		}
 		// Each request of a think (after a tool, or a repair) starts its reasoning anew, often empty: the last words stay above the Arc until new ones come.
 		slate.thought = thought || slate.thought;
@@ -163,20 +206,20 @@ export class ThinkShow {
 	}
 
 	/** A reply would not do: the slate shakes, says why, and the model writes on. */
-	private turnDown(who:string, reason:string, go:GameObject | undefined):void {
-		const slate = go ? this.thinkOf(who, go) : undefined;
-		if (!slate) {
+	private turnDown(who:string, reason:string, anchor:ThinkAnchor | null):void {
+		if (!anchor) {
 			return;
 		}
+		const slate = this.thinkOf(who, anchor);
 		slate.error = reason;
 		slate.wrongUntil = Time.time + WRONG_SECONDS;
 		if (this.shown(slate)) {
-			cueAt(this.world, 'arcWrong', go!);
+			this.cue('arcWrong', anchor);
 		}
 	}
 
-	private finish(who:string, chose:boolean, error:string | undefined, go:GameObject | undefined):void {
-		const slate = error && go ? this.thinkOf(who, go) : this._writing.get(who);
+	private finish(who:string, chose:boolean, error:string | undefined, anchor:ThinkAnchor | null):void {
+		const slate = error && anchor ? this.thinkOf(who, anchor) : this._writing.get(who);
 		this._writing.delete(who);
 		if (!slate) {
 			return;
@@ -192,34 +235,36 @@ export class ThinkShow {
 			// Fixed in a repair turn: the slate stops shaking and hides the turned-down reason; the AI log keeps it.
 			slate.wrongUntil = 0;
 		}
-		if (go && (chose || error) && this.shown(slate)) {
-			cueAt(this.world, chose ? 'arcDone' : 'arcWrong', go);
+		if (anchor && (chose || error) && this.shown(slate)) {
+			this.cue(chose ? 'arcDone' : 'arcWrong', anchor);
 		}
 	}
 
-	private tool(tool:string, go:GameObject | undefined):void {
-		if (!go || !isLiving(go)) {
+	/** A tool call: its icon and a free arm on a body, its light on a body or a collective's middle. */
+	private tool(who:string, tool:string, anchor:ThinkAnchor | null):void {
+		if (!anchor) {
 			return;
 		}
-		const icon = this.on('toolIcons');
-		const pose = this.on('toolPoses');
+		const go = anchor.go;
+		const icon = !!go && this.on('toolIcons');
+		const pose = !!go && this.on('toolPoses');
 		const fx = this.on('toolFx');
 		if (icon) {
-			this._tools.set(idOf(go), { tool, until: Time.time + TOOL_SECONDS });
+			this._tools.set(anchor.name, { tool, until: Time.time + TOOL_SECONDS });
 		}
 		if (pose) {
 			go.getComponent(CharacterPose)?.useTool(tool, TOOL_SECONDS);
 		}
 		if (fx) {
-			toolFx(this.world.native, tool, () => (isLiving(go) ? stanceOf(go) : null), TOOL_SECONDS);
+			toolFx(this.world.native, tool, () => this.anchorOf(who)?.stance ?? null, TOOL_SECONDS);
 		}
 		if (icon || pose || fx) {
-			cueAt(this.world, 'toolUse', go);
+			this.cue('toolUse', anchor);
 		}
 	}
 
-	private order(to:string[], text:string, go:GameObject | undefined):void {
-		if (!this.on('orderArcs') || !go) {
+	private order(to:string[], text:string, anchor:ThinkAnchor | null):void {
+		if (!this.on('orderArcs') || !anchor) {
 			return;
 		}
 		const units = to.map((id) => findObject(this.world, id)).filter((unit):unit is GameObject => {
@@ -232,8 +277,8 @@ export class ThinkShow {
 		for (const unit of units) {
 			this._orders.set(unit.id, { text, at: Time.time });
 		}
-		cueAt(this.world, 'arcLaunch', go);
-		orderArcs(this.world.native, stanceOf(go), units.map((unit) => () => (isLiving(unit) ? stanceOf(unit) : null)), text, this.colorOf(idOf(go)), ORDER_STAGGER, (i) => {
+		this.cue('arcLaunch', anchor);
+		orderArcs(this.world.native, anchor.stance, units.map((unit) => () => (isLiving(unit) ? stanceOf(unit) : null)), text, this.colorOf(anchor.name), ORDER_STAGGER, (i) => {
 			cueAt(this.world, 'arcLand', units[i]!);
 		});
 	}

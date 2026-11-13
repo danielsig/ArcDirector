@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { BrowserProvider, contextCap, inPageFetch, loadFailure, storedModels, type Wllama } from './browser.js';
+import { BrowserProvider, contextCap, inPageFetch, loadFailure, storedModels, type WllamaEngine } from './browser.js';
 import { ggufMetadata } from './gguf.js';
 import { HttpProvider } from './http.js';
 import { JevSystemOne } from './system-one.js';
@@ -8,10 +8,10 @@ import { ModelDownload } from './download.js';
 import { showLoadingBar } from './loading-bar.js';
 
 /** A wllama that answers every chat with `chunks`, as one reply or streamed, and records what it was asked. */
-function fakeWllama(chunks:{ reasoning_content?:string; content?:string }[]):{ wllama:Wllama; asked:Record<string, unknown>[]; stopped:()=>boolean } {
+function fakeWllama(chunks:{ reasoning_content?:string; content?:string }[]):{ wllama:WllamaEngine; asked:Record<string, unknown>[]; stopped:()=>boolean } {
 	const asked:Record<string, unknown>[] = [];
 	let signal:AbortSignal | undefined;
-	const wllama:Wllama = {
+	const wllama:WllamaEngine = {
 		modelManager: { cacheManager: { list: async () => [], open: async () => null, deleteMany: async () => undefined } },
 		loadModel: async () => undefined,
 		// eslint-disable-next-line no-restricted-syntax -- wllama's own name
@@ -71,7 +71,7 @@ function gguf(entries:Record<string, string | number | string[] | number[]>):Blo
 	return new Blob([new Uint8Array(bytes)]);
 }
 
-function providerOn(wllama:Wllama):HttpProvider {
+function providerOn(wllama:WllamaEngine):HttpProvider {
 	return new HttpProvider({ baseURL: 'http://browser.invalid/v1', fetch: inPageFetch(() => Promise.resolve(wllama)) });
 }
 

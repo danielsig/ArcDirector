@@ -5,7 +5,7 @@ import { formatSight, formatSightClauses, joinSightClauses, orderSightClauses } 
 import { groundAndFigure } from './ground.js';
 import { builtinStringifiers, basicPluralize } from './stringifiers.js';
 import type { SeenObject, Sight, RelationshipStringifier } from './perception-types.js';
-import { formatInventory } from './format-inventory.js';
+import { formatInventory } from './carrying.js';
 import { sightSalience } from './salience.js';
 
 function seen(

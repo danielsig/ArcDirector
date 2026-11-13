@@ -14,6 +14,7 @@ import {
 	orderSightClauses,
 } from '../perception/sight.js';
 import { ArcDirector } from '../director/ArcDirector.js';
+import '../director/shortcuts.js';
 import type { CollectiveSpec, VerbCall } from '../director/director-types.js';
 import type { Collective, CollectiveJSON } from './Collective.js';
 import type { Law } from '../arc/laws.js';
@@ -21,7 +22,9 @@ import { STOCK_COLLECTIVE_VERB_DEFS, STOCK_COLLECTIVE_VERBS } from './collective
 import { squadTag } from './tags.js';
 import { OPEN_WORLD } from '../testing/open-world.js';
 import { Mind } from '../mind/mind.js';
-import { TalkNet } from '../mind/talk.js';
+import { TalkFeature } from '../mind/TalkFeature.js';
+import { KnowledgeFeature } from '../mind/KnowledgeFeature.js';
+import { InventoryFeature } from '../perception/carrying.js';
 import type { ThinkEvent } from '../mind/mind-types.js';
 import { sleep } from '../turn.js';
 
@@ -75,15 +78,15 @@ async function hiveOf(opts:{
 	commander?:string;
 } = {}):Promise<ArcDirector<Ctx>> {
 	const director = await new ArcDirector<Ctx>()
-		.withPriorityQueue({
+		.withPriorityThinkQueue({
 			processInterval: 0,
 			heartbeatStart: 100,
 			heartbeatMin: 100,
 		})
 		.withIntervals({ watch: 0, think: 0 })
-		.addFakeInference()
-		.addStockVerbs()
-		.addStockCollectiveVerbs()
+		.addFake()
+		.withVerbs((v) => v.addStock()
+			.addStockCollective())
 		.withDefaultKit(COLLECTIVE_KIT)
 		.withSight({ limit: 16 })
 		.withKernels(kernels(opts.hurt))
@@ -140,13 +143,13 @@ async function hangingDawn():Promise<{
 		release = resolve;
 	});
 	const director = await new ArcDirector<Ctx>()
-		.withMind((m) => m.withArcFormat('text'))
-		.addFakeInference(async () => {
+		.withMind({ arcFormat: 'text' })
+		.addFake({ chat: async () => {
 			await hang;
 			return { content: 'go_to(Keep)', toolCalls: [] };
-		})
-		.addStockVerbs()
-		.addStockCollectiveVerbs()
+		} })
+		.withVerbs((v) => v.addStock()
+			.addStockCollective())
 		.withDefaultKit(COLLECTIVE_KIT)
 		.withKernels(kernels())
 		.onVerb((call) => {
@@ -174,9 +177,9 @@ type Hang = Awaited<ReturnType<typeof hangingDawn>>;
 describe('Collective chain', () => {
 	it('addStockCollectiveVerbs registers; kit must still grant when', async () => {
 		const director = await new ArcDirector<Ctx>()
-			.addFakeInference()
-			.addStockVerbs()
-			.addStockCollectiveVerbs()
+			.addFake()
+			.withVerbs((v) => v.addStock()
+				.addStockCollective())
 			.withDefaultKit({ verbs: ['wait'] })
 			.withContext((id) => ({ id }))
 			.addCollective({
@@ -198,9 +201,9 @@ describe('Collective chain', () => {
 		const laws = ['a', 'b', 'c'].map((name) => ({ name, watch: '1 > 0', arc: 'wait()' }));
 		await assert.rejects(async () => {
 			await new ArcDirector<Ctx>()
-				.addFakeInference()
-				.addStockVerbs()
-				.addStockCollectiveVerbs()
+				.addFake()
+				.withVerbs((v) => v.addStock()
+					.addStockCollective())
 				.withDefaultKit({ verbs: ['wait'] })
 				.withContext((id) => ({ id }))
 				.addCollective({ id: 'Hive', maxLaws: 2, laws, kit: { verbs: ['wait'] }, identity: { role: 'Waits.' }, characters: [{ id: 'Mira' }] })
@@ -210,7 +213,7 @@ describe('Collective chain', () => {
 
 	it('addCharacter and addLaw stay open after connect', async () => {
 		const director = await hiveOf();
-		const pike = hive(director).addCharacter({ id: 'Pike', tags: ['Flank'] });
+		const pike = hive(director).addCharacter({ id: 'Pike', tags: ['Flank'] }).character('Pike')!;
 		hive(director).addLaw({
 			name: 'follow',
 			who: 'units.filter("Pike")',
@@ -223,6 +226,15 @@ describe('Collective chain', () => {
 		assert.ok(hive(director).laws.some((s) => s.name === 'follow'));
 		assert.deepEqual(pike.tags, ['Flank']);
 		assert.throws(() => hive(director).addCharacter({ id: 'Mira' }), /already a character or a collective/);
+		director.dispose();
+	});
+
+	it('evaluate and holds take a collective id, seeing as its laws do', async () => {
+		const director = await hiveOf();
+		assert.equal(director.evaluate('Hive', 'units').error, undefined);
+		assert.equal(director.holds('Hive', 'units.filter("Pike")'), false);
+		hive(director).addCharacter({ id: 'Pike', tags: ['Flank'] });
+		assert.equal(director.holds('Hive', 'units.filter("Flank")'), true);
 		director.dispose();
 	});
 
@@ -251,9 +263,9 @@ describe('Collective chain', () => {
 			characters: [{ id: 'Dawn' }, { id: 'Wisp' }],
 		};
 		const build = ():Promise<ArcDirector<Ctx>> => new ArcDirector<Ctx>()
-			.addFakeInference()
-			.addStockVerbs()
-			.addStockCollectiveVerbs()
+			.addFake()
+			.withVerbs((v) => v.addStock()
+				.addStockCollective())
 			.withDefaultKit({ verbs: ['wait'] })
 			.withContext((id) => ({ id }))
 			.addCollective(party)
@@ -268,9 +280,9 @@ describe('Collective chain', () => {
 
 	it('a character keeps its own kit in a collective; the roster says what it alone can do and what it cannot', async () => {
 		const director = await new ArcDirector<Ctx>()
-			.addFakeInference()
-			.addStockVerbs()
-			.addStockCollectiveVerbs()
+			.addFake()
+			.withVerbs((v) => v.addStock()
+				.addStockCollective())
 			.withDefaultKit(COLLECTIVE_KIT)
 			.withContext((id) => ({ id }))
 			.onVerb(({ verb }) => ({ status: 'ok', verb }))
@@ -296,9 +308,9 @@ describe('Collective chain', () => {
 
 	it('names units ordered together a group: its own name or a letter, kept by its larger part, one row in the roster', async () => {
 		const director = await new ArcDirector<Ctx>()
-			.addFakeInference()
-			.addStockVerbs()
-			.addStockCollectiveVerbs()
+			.addFake()
+			.withVerbs((v) => v.addStock()
+				.addStockCollective())
 			.withDefaultKit(COLLECTIVE_KIT)
 			.withContext((id) => ({ id }))
 			.withKernels(kernels())
@@ -331,9 +343,9 @@ describe('Collective chain', () => {
 	it('says on each roster line what the unit is at: its step in its verb\'s words, or how its program ended and its last step', async () => {
 		let release:((r:ArcResult)=>void) | undefined;
 		const director = await new ArcDirector<Ctx>()
-			.addFakeInference()
-			.addStockVerbs()
-			.addStockCollectiveVerbs()
+			.addFake()
+			.withVerbs((v) => v.addStock()
+				.addStockCollective())
 			.withDefaultKit(COLLECTIVE_KIT)
 			.withContext((id) => ({ id }))
 			.onVerb(({ verb }) => (verb === 'go_to'
@@ -513,9 +525,9 @@ describe('laws and tags', () => {
 	it('tags are namespaced per conductor', async () => {
 		const calls:VerbCall<Ctx>[] = [];
 		const director = await new ArcDirector<Ctx>()
-			.addFakeInference()
-			.addStockVerbs()
-			.addStockCollectiveVerbs()
+			.addFake()
+			.withVerbs((v) => v.addStock()
+				.addStockCollective())
 			.withDefaultKit(COLLECTIVE_KIT)
 			.withKernels(kernels())
 			.onVerb((call) => {
@@ -557,9 +569,9 @@ describe('commander and sightFocus', () => {
 	it('commander mixes own go_to with when(who)', async () => {
 		const calls:VerbCall<Ctx>[] = [];
 		const director = await new ArcDirector<Ctx>()
-			.addFakeInference()
-			.addStockVerbs()
-			.addStockCollectiveVerbs()
+			.addFake()
+			.withVerbs((v) => v.addStock()
+				.addStockCollective())
 			.withDefaultKit(COLLECTIVE_KIT)
 			.withKernels(kernels())
 			.onVerb((call) => {
@@ -711,17 +723,17 @@ describe('characters, laws, dummy me', () => {
 		let hiveCarry = 0;
 		const director = await new ArcDirector<Ctx>()
 			.withWorld(OPEN_WORLD)
-			.addFakeInference()
-			.addStockVerbs()
-			.addStockCollectiveVerbs()
+			.addFake()
+			.withVerbs((v) => v.addStock()
+				.addStockCollective())
 			.withDefaultKit(COLLECTIVE_KIT)
 			.withKernels(kernels())
-			.withInventory((ctx) => {
+			.addFeature(new InventoryFeature((ctx) => {
 				if (ctx.id === 'Hive') {
 					hiveCarry += 1;
 				}
 				return { pockets: [] };
-			})
+			}))
 			.withContext((id) => id === 'Hive' ? undefined : { id })
 			.addCollective({
 				id: 'Hive',
@@ -759,9 +771,9 @@ describe('characters, laws, dummy me', () => {
 describe('commander pointer and sticky command', () => {
 	it('thinkThread and identity follow the living commander', async () => {
 		const director = await new ArcDirector<Ctx>()
-			.addFakeInference()
-			.addStockVerbs()
-			.addStockCollectiveVerbs()
+			.addFake()
+			.withVerbs((v) => v.addStock()
+				.addStockCollective())
 			.withDefaultKit(COLLECTIVE_KIT)
 			.withKernels(kernels())
 			.onVerb(() => ({ status: 'ok', verb: 'go_to' }))
@@ -790,16 +802,16 @@ describe('commander pointer and sticky command', () => {
 		let hangThink:((content:string)=>void) | undefined;
 		let chats = 0;
 		const director = await new ArcDirector<Ctx>()
-			.withMind((m) => m.withArcFormat('text'))
-			.addFakeInference(async () => {
+			.withMind({ arcFormat: 'text' })
+			.addFake({ chat: async () => {
 				chats += 1;
 				const content = chats === 1 ? 'go_to(Keep) ; wander()' : await new Promise<string>((resolve) => {
 					hangThink = resolve;
 				});
 				return { content, toolCalls: [] };
-			})
-			.addStockVerbs()
-			.addStockCollectiveVerbs()
+			} })
+			.withVerbs((v) => v.addStock()
+				.addStockCollective())
 			.withDefaultKit(COLLECTIVE_KIT)
 			.withKernels(kernels())
 			.onVerb(async (call) => {
@@ -838,10 +850,10 @@ describe('commander pointer and sticky command', () => {
 
 	for (const [name, abort] of [
 		['abortThink', (h:Hang) => h.party.mind.abortThink()],
-		['director.abortThink', (h:Hang) => h.director.abortThink('DawnParty')],
+		['director.abortThink', (h:Hang) => h.director.queue.abortThink('DawnParty')],
 		['vacating the commander', (h:Hang) => h.director.removeCharacter('Dawn')],
 		['removeCollective', (h:Hang) => h.director.removeCollective('DawnParty')],
-		['setAiOn(false)', (h:Hang) => h.director.mindQueue()?.setAiOn('DawnParty', false)],
+		['setAiOn(false)', (h:Hang) => h.director.queue?.setAiOn('DawnParty', false)],
 	] as const) {
 		it(`${name} aborts the in-flight think`, async () => {
 			const h = await hangingDawn();
@@ -856,9 +868,9 @@ describe('commander pointer and sticky command', () => {
 	it('command(me) fails, as does a command that picks no unit; allUnits skips the commander', async () => {
 		const calls:VerbCall<Ctx>[] = [];
 		const director = await new ArcDirector<Ctx>()
-			.addFakeInference()
-			.addStockVerbs()
-			.addStockCollectiveVerbs()
+			.addFake()
+			.withVerbs((v) => v.addStock()
+				.addStockCollective())
 			.withDefaultKit(COLLECTIVE_KIT)
 			.withKernels(kernels())
 			.onVerb((call) => {
@@ -896,9 +908,9 @@ describe('commander pointer and sticky command', () => {
 	it('refuses a command that names more units than maxUnitsPerCommand', async () => {
 		const calls:VerbCall<Ctx>[] = [];
 		const director = await new ArcDirector<Ctx>()
-			.addFakeInference()
-			.addStockVerbs()
-			.addStockCollectiveVerbs()
+			.addFake()
+			.withVerbs((v) => v.addStock()
+				.addStockCollective())
 			.withDefaultKit(COLLECTIVE_KIT)
 			.withKernels(kernels())
 			.onVerb((call) => {
@@ -976,15 +988,15 @@ describe('commander pointer and sticky command', () => {
 	it('does not start a law on a unit with no host context', async () => {
 		const calls:VerbCall<Ctx>[] = [];
 		const director = await new ArcDirector<Ctx>()
-			.withPriorityQueue({
+			.withPriorityThinkQueue({
 				processInterval: 0,
 				heartbeatStart: 100,
 				heartbeatMin: 100,
 			})
 			.withIntervals({ watch: 0, think: 0 })
-			.addFakeInference()
-			.addStockVerbs()
-			.addStockCollectiveVerbs()
+			.addFake()
+			.withVerbs((v) => v.addStock()
+				.addStockCollective())
 			.withDefaultKit(COLLECTIVE_KIT)
 			.withKernels(kernels(new Set(['Mira', 'Tomas'])))
 			.onVerb((call) => {
@@ -1019,9 +1031,9 @@ describe('commander pointer and sticky command', () => {
 	it('vacates the commander on commander = null', async () => {
 		const vacant:{ collective:string; character:string }[] = [];
 		const director = await new ArcDirector<Ctx>()
-			.addFakeInference()
-			.addStockVerbs()
-			.addStockCollectiveVerbs()
+			.addFake()
+			.withVerbs((v) => v.addStock()
+				.addStockCollective())
 			.withDefaultKit(COLLECTIVE_KIT)
 			.withKernels(kernels())
 			.onVerb(() => ({ status: 'ok', verb: 'go_to' }))
@@ -1080,8 +1092,8 @@ describe('laws with an exit', () => {
 	it('a solo law with times=1 goes by itself, and comes back from a save with its count', async () => {
 		const calls:VerbCall<Ctx>[] = [];
 		const build = ():ArcDirector<Ctx> => new ArcDirector<Ctx>()
-			.addFakeInference()
-			.addStockVerbs()
+			.addFake()
+			.withVerbs((v) => v.addStock())
 			.withKernels(kernels())
 			.onVerb((call) => {
 				calls.push(call);
@@ -1148,8 +1160,8 @@ describe('laws with an exit', () => {
 describe('solo law', () => {
 	it('survives think and omits who from the kit', async () => {
 		const director = await new ArcDirector<Ctx>()
-			.addFakeInference()
-			.addStockVerbs()
+			.addFake()
+			.withVerbs((v) => v.addStock())
 			.withKernels(kernels())
 			.onVerb(() => ({ status: 'ok', verb: 'go_to' }))
 			.withContext((id) => ({ id }))
@@ -1188,10 +1200,10 @@ describe('transfers', () => {
 			release = resolve;
 		});
 		const director = await new ArcDirector<Ctx>()
-			.addFakeInference(() => ({ content: 'wait()', toolCalls: [] }))
-			.withMind((m) => m.withArcFormat('text'))
-			.addStockVerbs()
-			.addStockCollectiveVerbs()
+			.addFake({ chat: () => ({ content: 'wait()', toolCalls: [] }) })
+			.withMind({ arcFormat: 'text' })
+			.withVerbs((v) => v.addStock()
+				.addStockCollective())
 			.withDefaultKit(COLLECTIVE_KIT)
 			.withKernels(kernels(opts.hurt))
 			.onVerb(async (call) => {
@@ -1325,16 +1337,16 @@ describe('transfers', () => {
 		const events:ThinkEvent[] = [];
 		let director:ArcDirector<Ctx> | undefined;
 		director = await new ArcDirector<Ctx>()
-			.withPriorityQueue({ processInterval: 0, heartbeatStart: 100, heartbeatMin: 100 })
+			.withPriorityThinkQueue({ processInterval: 0, heartbeatStart: 100, heartbeatMin: 100 })
 			.withIntervals({ watch: 0, think: 0 })
-			.withMind((m) => m.withArcFormat('text'))
-			.addFakeInference(() => {
+			.withMind({ arcFormat: 'text' })
+			.addFake({ chat: () => {
 				const hive = director!.collective('Hive')!;
 				hive.commander = hive.character('Tomas') ?? null;
 				return { content: 'wait(seconds=1)', toolCalls: [] };
-			})
-			.addStockVerbs()
-			.addStockCollectiveVerbs()
+			} })
+			.withVerbs((v) => v.addStock()
+				.addStockCollective())
 			.withDefaultKit(COLLECTIVE_KIT)
 			.withKernels(kernels())
 			.withContext((id) => ({ id }))
@@ -1394,10 +1406,10 @@ describe('transfers', () => {
 		const held = (call:VerbCall<Ctx>):boolean => (call.character.id === 'Mira' && call.args.target === 'Keep') || (call.character.id === 'Tomas' && call.args.target === 'Gate');
 		const director = await new ArcDirector<Ctx>()
 			.withIntervals({ watch: 0, think: 0 })
-			.withMind((m) => m.withArcFormat('text'))
-			.addFakeInference()
-			.addStockVerbs()
-			.addStockCollectiveVerbs()
+			.withMind({ arcFormat: 'text' })
+			.addFake()
+			.withVerbs((v) => v.addStock()
+				.addStockCollective())
 			.withDefaultKit(COLLECTIVE_KIT)
 			.withKernels(kernels())
 			.onVerb(async (call) => {
@@ -1430,10 +1442,10 @@ describe('transfers', () => {
 		const calls:VerbCall<Ctx>[] = [];
 		const director = await new ArcDirector<Ctx>()
 			.withIntervals({ watch: 0, think: 0 })
-			.withMind((m) => m.withArcFormat('text'))
-			.addFakeInference()
-			.addStockVerbs()
-			.addStockCollectiveVerbs()
+			.withMind({ arcFormat: 'text' })
+			.addFake()
+			.withVerbs((v) => v.addStock()
+				.addStockCollective())
 			.withDefaultKit(COLLECTIVE_KIT)
 			.withKernels(kernels())
 			.onVerb((call) => {
@@ -1463,10 +1475,10 @@ describe('transfers', () => {
 	it('marks a program step a law holds apart from the step the law runs', async () => {
 		const director = await new ArcDirector<Ctx>()
 			.withIntervals({ watch: 0, think: 0 })
-			.withMind((m) => m.withArcFormat('text'))
-			.addFakeInference()
-			.addStockVerbs()
-			.addStockCollectiveVerbs()
+			.withMind({ arcFormat: 'text' })
+			.addFake()
+			.withVerbs((v) => v.addStock()
+				.addStockCollective())
 			.withDefaultKit(COLLECTIVE_KIT)
 			.withKernels(kernels())
 			// A walk goes on until it is stopped, as a host's does.
@@ -1496,11 +1508,11 @@ describe('transfers', () => {
 		const asked:string[] = [];
 		let think = 0;
 		const director = await new ArcDirector<Ctx>()
-			.withPriorityQueue({ processInterval: 0, heartbeatStart: 100, heartbeatMin: 100 })
+			.withPriorityThinkQueue({ processInterval: 0, heartbeatStart: 100, heartbeatMin: 100 })
 			.withIntervals({ watch: 0, think: 0 })
-			.withMind((m) => m.withArcFormat('text'))
+			.withMind({ arcFormat: 'text' })
 			.withReplaceCheck()
-			.addFakeInference((req) => {
+			.addFake({ chat: (req) => {
 				const last = String(req.messages.at(-1)?.content);
 				if (last.includes('cut short')) {
 					asked.push(last);
@@ -1508,9 +1520,9 @@ describe('transfers', () => {
 				}
 				think += 1;
 				return { content: `command(who=units, arc=go_to(${think === 1 ? 'Keep' : 'Gate'}))`, toolCalls: [] };
-			})
-			.addStockVerbs()
-			.addStockCollectiveVerbs()
+			} })
+			.withVerbs((v) => v.addStock()
+				.addStockCollective())
 			.withDefaultKit(COLLECTIVE_KIT)
 			.withKernels(kernels())
 			.withContext((id) => ({ id }))
@@ -1541,18 +1553,18 @@ describe('transfers', () => {
 		const release:(()=>void)[] = [];
 		let reply = 'wait()';
 		const director = await new ArcDirector<Ctx>()
-			.withPriorityQueue({ processInterval: 0, heartbeatStart: 100, heartbeatMin: 100 })
+			.withPriorityThinkQueue({ processInterval: 0, heartbeatStart: 100, heartbeatMin: 100 })
 			.withIntervals({ watch: 0, think: 0 })
-			.withMind((m) => m.withArcFormat('text'))
+			.withMind({ arcFormat: 'text' })
 			.withReplaceCheck()
-			.addFakeInference((req) => {
+			.addFake({ chat: (req) => {
 				if (String(req.messages.at(-1)?.content).includes('cut short')) {
 					throw new Error('server gone');
 				}
 				return { content: reply, toolCalls: [] };
-			})
-			.addStockVerbs()
-			.addStockCollectiveVerbs()
+			} })
+			.withVerbs((v) => v.addStock()
+				.addStockCollective())
 			.withDefaultKit(COLLECTIVE_KIT)
 			.withKernels(kernels())
 			.withContext((id) => ({ id }))
@@ -1585,20 +1597,20 @@ describe('transfers', () => {
 		// Anything but replace or keep appends: omitted, a word it made up, or a reply that does not read.
 		const appendReplies = ['{}', '{"Mira":"whatever"}', 'no idea'];
 		const director = await new ArcDirector<Ctx>()
-			.withPriorityQueue({ processInterval: 0, heartbeatStart: 100, heartbeatMin: 100 })
+			.withPriorityThinkQueue({ processInterval: 0, heartbeatStart: 100, heartbeatMin: 100 })
 			.withIntervals({ watch: 0, think: 0 })
-			.withMind((m) => m.withArcFormat('text'))
+			.withMind({ arcFormat: 'text' })
 			.withReplaceCheck()
-			.addFakeInference((req) => {
+			.addFake({ chat: (req) => {
 				const last = String(req.messages.at(-1)?.content);
 				if (last.includes('cut short')) {
 					asked.push(last);
 					return { content: appendReplies.shift() ?? '{"Mira":"append"}', toolCalls: [] };
 				}
 				return { content: reply, toolCalls: [] };
-			})
-			.addStockVerbs()
-			.addStockCollectiveVerbs()
+			} })
+			.withVerbs((v) => v.addStock()
+				.addStockCollective())
 			.withDefaultKit(COLLECTIVE_KIT)
 			.withKernels(kernels())
 			.withContext((id) => ({ id }))
@@ -1674,11 +1686,11 @@ describe('transfers', () => {
 		let down = false;
 		const vacated:string[] = [];
 		const director = await new ArcDirector<Ctx>()
-			.withPriorityQueue({ processInterval: 0, heartbeatStart: 100, heartbeatMin: 100 })
+			.withPriorityThinkQueue({ processInterval: 0, heartbeatStart: 100, heartbeatMin: 100 })
 			.withIntervals({ watch: 0, think: 0 })
-			.addFakeInference()
-			.addStockVerbs()
-			.addStockCollectiveVerbs()
+			.addFake()
+			.withVerbs((v) => v.addStock()
+				.addStockCollective())
 			.withDefaultKit({ verbs: ['command', 'wait'], tools: [] })
 			.withWorld({ find: () => undefined, getPose: () => undefined, isDown: (id:string) => down && id === 'Mira' })
 			.withKernels(kernels())
@@ -1700,12 +1712,12 @@ describe('transfers', () => {
 		const replies = ['offer(give={"filter":1}, get={"gold":5})', 'offer(give={"gold":-1})', '{"steps":[{"verb":"command","who":"units","arc":[]}]}', 'wait()'];
 		const asked:string[] = [];
 		const director = await new ArcDirector<Ctx>()
-			.withMind((m) => m.withArcFormat('text').withRepairRetries(3))
-			.addFakeInference((req) => {
+			.withMind({ arcFormat: 'text', repairRetries: 3 })
+			.addFake({ chat: (req) => {
 				asked.push(String(req.messages.at(-1)?.content));
 				return { content: replies.shift() ?? 'wait()', toolCalls: [] };
-			})
-			.addStockVerbs()
+			} })
+			.withVerbs((v) => v.addStock())
 			.withDefaultKit({ verbs: ['offer', 'wait'], tools: [] })
 			.withWorld({ find: () => undefined, getPose: () => undefined, transfer: () => undefined, getNeighbors: () => [], steerToward: () => true, canOffer: () => true, isItem: (name:string) => name === 'gold' } as never)
 			.withKernels(kernels())
@@ -1750,9 +1762,9 @@ describe('transfers', () => {
 		const kit = { verbs: ['go_to', 'say', 'think', 'wait'], tools: [] };
 		const replies = ['go_to(Keep) ; say(text=hello) ; think(about=next)'];
 		const director = await new ArcDirector<Ctx>()
-			.withMind((m) => m.withArcFormat('text').withRepairRetries(1).withRepairPerStep())
-			.addFakeInference(() => ({ content: replies.shift() ?? 'wait()', toolCalls: [] }))
-			.addStockVerbs()
+			.withMind({ arcFormat: 'text', repairRetries: 1, repairPerStep: true })
+			.addFake({ chat: () => ({ content: replies.shift() ?? 'wait()', toolCalls: [] }) })
+			.withVerbs((v) => v.addStock())
 			.withDefaultKit(kit)
 			.withWorld({ find: (id:string) => (id === 'Keep' ? {} : undefined), getPose: () => undefined, transfer: () => undefined, getNeighbors: () => [], steerToward: () => true } as never)
 			.withKernels(kernels())
@@ -1768,12 +1780,12 @@ describe('transfers', () => {
 		const asked:string[] = [];
 		const reply = 'law(watch=some(others.filter((u) => u.hp > 0)) or me.foo == undefined, arc=wait(seconds=1), name=fine)';
 		const director = await new ArcDirector<Ctx>()
-			.withMind((m) => m.withArcFormat('text').withRepairRetries(1))
-			.addFakeInference((req) => {
+			.withMind({ arcFormat: 'text', repairRetries: 1 })
+			.addFake({ chat: (req) => {
 				asked.push(String(req.messages.at(-1)?.content));
 				return { content: asked.length === 1 ? reply : 'wait()', toolCalls: [] };
-			})
-			.addStockVerbs()
+			} })
+			.withVerbs((v) => v.addStock())
 			.withDefaultKit({ verbs: ['law', 'wait'], tools: [] })
 			.withWorld({ find: () => undefined, getPose: () => undefined, transfer: () => undefined, getNeighbors: () => [], steerToward: () => true } as never)
 			.withKernels(kernels())
@@ -1789,12 +1801,12 @@ describe('transfers', () => {
 	it('reads a watch\'s name as its value, so an arc may wait on it', async () => {
 		const asked:string[] = [];
 		const director = await new ArcDirector<Ctx>()
-			.withMind((m) => m.withArcFormat('text').withRepairRetries(1))
-			.addFakeInference((req) => {
+			.withMind({ arcFormat: 'text', repairRetries: 1 })
+			.addFake({ chat: (req) => {
 				asked.push(String(req.messages.at(-1)?.content));
 				return { content: asked.length === 1 ? 'wait(until=fallen || !calm)' : 'wait()', toolCalls: [] };
-			})
-			.addStockVerbs()
+			} })
+			.withVerbs((v) => v.addStock())
 			.withDefaultKit({ verbs: ['wait'], tools: [] })
 			.withWorld({ find: () => undefined, getPose: () => undefined, transfer: () => undefined, getNeighbors: () => [], steerToward: () => true } as never)
 			.withKernels(kernels())
@@ -1811,12 +1823,12 @@ describe('transfers', () => {
 	it('thinks again instead of repairing a reply aimed at a thing gone since its mind looked', async () => {
 		const asked:string[] = [];
 		const director = await new ArcDirector<Ctx>()
-			.withMind((m) => m.withArcFormat('text').withRepairRetries(3))
-			.addFakeInference((req) => {
+			.withMind({ arcFormat: 'text', repairRetries: 3 })
+			.addFake({ chat: (req) => {
 				asked.push(String(req.messages.at(-1)?.content));
 				return { content: 'go_to(Cobweb)', toolCalls: [] };
-			})
-			.addStockVerbs()
+			} })
+			.withVerbs((v) => v.addStock())
 			.withDefaultKit({ verbs: ['go_to', 'wait'], tools: [] })
 			.withWorld({ find: () => undefined, getPose: () => undefined, transfer: () => undefined, getNeighbors: () => [], steerToward: () => true } as never)
 			.withKernels(kernels())
@@ -1841,13 +1853,13 @@ describe('transfers', () => {
 			'wait()',
 		];
 		const director = await new ArcDirector<Ctx>()
-			.withMind((m) => m.withArcFormat('text').withRepairRetries(10))
-			.addFakeInference((req) => {
+			.withMind({ arcFormat: 'text', repairRetries: 10 })
+			.addFake({ chat: (req) => {
 				asked.push(String(req.messages.at(-1)?.content));
 				return { content: replies.shift() ?? 'wait()', toolCalls: [] };
-			})
-			.addStockVerbs()
-			.addStockCollectiveVerbs()
+			} })
+			.withVerbs((v) => v.addStock()
+				.addStockCollective())
 			.withDefaultKit({ verbs: ['command', 'law', 'wait', 'go_to'], tools: [] })
 			.withWorld({ find: (id:string) => (['Mira', 'Tomas', 'Keep'].includes(id) ? id : undefined), getPose: () => undefined, getNeighbors: () => [], steerToward: () => true } as never)
 			.withKernels(kernels())
@@ -1873,8 +1885,8 @@ describe('transfers', () => {
 		const asked:string[] = [];
 		let wrote = 0;
 		const director = await new ArcDirector<Ctx>()
-			.withMind((m) => m.withRepairRetries(1))
-			.addFakeInference(async (req) => {
+			.withMind({ repairRetries: 1 })
+			.addFake({ chat: async (req) => {
 				asked.push(String(req.messages.at(-1)?.content));
 				if (asked.length > 1) {
 					return { content: '{"steps":[{"verb":"wait"}]}', toolCalls: [] };
@@ -1887,8 +1899,8 @@ describe('transfers', () => {
 					}
 				}
 				return { content: 'junk', toolCalls: [] };
-			})
-			.addStockVerbs()
+			} })
+			.withVerbs((v) => v.addStock())
 			.withDefaultKit({ verbs: ['say', 'wait'], tools: [] })
 			.withKernels(kernels())
 			.withContext((id) => ({ id }))
@@ -1905,13 +1917,13 @@ describe('transfers', () => {
 			const asked:{ last:string; before:string }[] = [];
 			const kit = { verbs: ['command', 'law', 'wait'], tools: [] };
 			const director = await new ArcDirector<Ctx>()
-				.withMind((m) => m.withArcFormat('text').withRepairRetries(retries).withRepairPerStep())
-				.addFakeInference((req) => {
+				.withMind({ arcFormat: 'text', repairRetries: retries, repairPerStep: true })
+				.addFake({ chat: (req) => {
 					asked.push({ last: String(req.messages.at(-1)?.content), before: String(req.messages.at(-2)?.content) });
 					return { content: replies.shift() ?? 'wait()', toolCalls: [] };
-				})
-				.addStockVerbs()
-				.addStockCollectiveVerbs()
+				} })
+				.withVerbs((v) => v.addStock()
+					.addStockCollective())
 				.withDefaultKit(kit)
 				.withKernels(kernels())
 				.withContext((id) => ({ id }))
@@ -1952,8 +1964,8 @@ describe('transfers', () => {
 	it('gives a law that only speaks to its commander unless it says otherwise', async () => {
 		const kit = { verbs: ['law', 'wait', 'say'], tools: [] };
 		const director = await new ArcDirector<Ctx>()
-			.addFakeInference()
-			.addStockVerbs()
+			.addFake()
+			.withVerbs((v) => v.addStock())
 			.withDefaultKit(kit)
 			.withKernels(kernels())
 			.withContext((id) => ({ id }))
@@ -1977,12 +1989,12 @@ describe('transfers', () => {
 			const asked:string[] = [];
 			const kit = { verbs: ['law', 'wait'], tools: [] };
 			const director = await new ArcDirector<Ctx>()
-				.withMind((m) => m.withArcFormat('text').withRepairRetries(1).withRepairUnknownFields(unknownFields))
-				.addFakeInference((req) => {
+				.withMind({ arcFormat: 'text', repairRetries: 1, repairUnknownFields: unknownFields })
+				.addFake({ chat: (req) => {
 					asked.push(String(req.messages.at(-1)?.content));
 					return { content: asked.length === 1 ? reply : 'wait()', toolCalls: [] };
-				})
-				.addStockVerbs()
+				} })
+				.withVerbs((v) => v.addStock())
 				.withDefaultKit(kit)
 				.withKernels(kernels())
 				.withContext((id) => ({ id }))
@@ -2003,8 +2015,8 @@ describe('transfers', () => {
 		const pieces = ['{"steps":[{"verb":"command","who":"units","arc":[{"verb":"wait","seconds":1}]},', '{"verb":"law","watch":"count(others', '}]}}]}]}]}', ' more junk'];
 		let wrote = 0;
 		const director = await new ArcDirector<Ctx>()
-			.withMind((m) => m.withRepairRetries(1).withRepairPerStep())
-			.addFakeInference(async (req) => {
+			.withMind({ repairRetries: 1, repairPerStep: true })
+			.addFake({ chat: async (req) => {
 				asked.push({ last: String(req.messages.at(-1)?.content), before: String(req.messages.at(-2)?.content) });
 				if (asked.length > 1) {
 					return { content: '{"steps":[{"verb":"law","watch":"count(others) > 3","arc":[{"verb":"wait","seconds":2}],"name":"alive"}]}', toolCalls: [] };
@@ -2017,9 +2029,9 @@ describe('transfers', () => {
 					}
 				}
 				return { content: 'junk', toolCalls: [] };
-			})
-			.addStockVerbs()
-			.addStockCollectiveVerbs()
+			} })
+			.withVerbs((v) => v.addStock()
+				.addStockCollective())
 			.withDefaultKit(kit)
 			.withKernels(kernels())
 			.withContext((id) => ({ id }))
@@ -2047,10 +2059,10 @@ describe('transfers', () => {
 
 	it('a law whose whole arc is an alias takes its watch, who and name', async () => {
 		const director = await new ArcDirector<Ctx>()
-			.addFakeInference()
-			.addStockVerbs()
-			.addStockCollectiveVerbs()
-			.addVerb('strike', { help: 'law-ready: every unit hits a seen enemy', arc: 'wait()', watch: 'isHurt(me)', who: 'units.filter("Guard")' })
+			.addFake()
+			.withVerbs((v) => v.addStock()
+				.addStockCollective()
+				.addAlias('strike', { help: 'law-ready: every unit hits a seen enemy', arc: 'wait()', watch: 'isHurt(me)', who: 'units.filter("Guard")' }))
 			.withDefaultKit({ verbs: [...COLLECTIVE_KIT.verbs, 'strike'] })
 			.withKernels(kernels())
 			.onVerb(() => ({ status: 'ok', verb: 'wait' }))
@@ -2141,18 +2153,18 @@ describe('transfers', () => {
 describe('hearing', () => {
 	/** Bodies on a line; talk carries 2 paces. A hive with no commander, and a party whose commander is Dawn. */
 	async function stage(at:Record<string, number>) {
-		const talk = new TalkNet({
+		const talk = new TalkFeature<Ctx>({
 			inRange: (a, b) => Math.abs((at[a] ?? 1e9) - (at[b] ?? -1e9)) <= 2,
 			others: (speaker) => Object.keys(at).filter((id) => id !== speaker),
 		});
 		const director = await new ArcDirector<Ctx>()
-			.addFakeInference(() => ({ content: 'wait()', toolCalls: [] }))
-			.addStockVerbs()
-			.addStockCollectiveVerbs()
+			.addFake({ chat: () => ({ content: 'wait()', toolCalls: [] }) })
+			.withVerbs((v) => v.addStock()
+				.addStockCollective())
 			.withDefaultKit(COLLECTIVE_KIT)
 			.withContext((id) => ({ id }))
 			.onVerb(({ verb }) => ({ status: 'ok', verb }))
-			.withTalk(talk)
+			.addFeature(talk)
 			.addCharacter({ id: 'Player' })
 			.addCollective({ id: 'Hive', mind: { skipHeartbeat: true }, kit: COLLECTIVE_KIT, characters: [{ id: 'Mira' }, { id: 'Tomas' }] })
 			.addCollective({
@@ -2221,11 +2233,11 @@ describe('a collective with no commander', () => {
 	it('looks things up from its characters, and waits on the director\'s clock', async () => {
 		const toolResults:string[] = [];
 		const director = await new ArcDirector<Ctx>()
-			.withPriorityQueue({ processInterval: 0, heartbeatStart: 100, heartbeatMin: 100 })
+			.withPriorityThinkQueue({ processInterval: 0, heartbeatStart: 100, heartbeatMin: 100 })
 			.withIntervals({ watch: 0, think: 0 })
 			// Native tool calls, as a model asked for plain JSON makes them.
-			.withMind((m) => m.withArcFormat('json'))
-			.addFakeInference((req) => {
+			.withMind({ arcFormat: 'json' })
+			.addFake({ chat: (req) => {
 				const results = req.messages.filter((m) => m.role === 'tool').map((m) => String(m.content));
 				if (results.length > 0) {
 					toolResults.push(...results);
@@ -2238,12 +2250,12 @@ describe('a collective with no commander', () => {
 						{ id: 'b', name: 'observe', arguments: '{"expr":"units"}' },
 					],
 				};
-			})
-			.addStockVerbs()
-			.addStockCollectiveVerbs()
+			} })
+			.withVerbs((v) => v.addStock()
+				.addStockCollective())
 			.withDefaultKit(COLLECTIVE_KIT)
 			.withKernels(kernels())
-			.withKnowledge((ctx:Ctx) => [{ name: 'Keep', text: `A stone keep, as ${ctx.id} knows it.` }])
+			.addFeature(new KnowledgeFeature({ pages: (ctx:Ctx) => [{ name: 'Keep', text: `A stone keep, as ${ctx.id} knows it.` }] }))
 			.withContext((id) => (id === 'Hive' ? undefined : { id }))
 			.onVerb(({ verb }) => ({ status: 'ok', verb }))
 			.addCollective({ id: 'Hive', mind: { skipHeartbeat: true }, kit: COLLECTIVE_KIT, characters: [{ id: 'Mira' }, { id: 'Tomas' }] })
@@ -2330,14 +2342,14 @@ describe('a collective under arcFormat schema', () => {
 		const sent:Record<string, string> = {};
 		const prompts:string[] = [];
 		const director = await new ArcDirector<Ctx>()
-			.withMind((m) => m.withArcFormat('schema'))
-			.addFakeInference((req) => {
+			.withMind({ arcFormat: 'schema' })
+			.addFake({ chat: (req) => {
 				sent[req.thread ?? '?'] = JSON.stringify(req.responseFormat);
 				prompts.push(chatContentText(req.messages[0].content));
 				return { content: JSON.stringify({ steps: [{ verb: 'wait' }] }), toolCalls: [] };
-			})
-			.addStockVerbs()
-			.addStockCollectiveVerbs()
+			} })
+			.withVerbs((v) => v.addStock()
+				.addStockCollective())
 			.withDefaultKit(COLLECTIVE_KIT)
 			.withKernels(kernels())
 			.onVerb((call) => ({ status: 'ok', verb: call.verb }))

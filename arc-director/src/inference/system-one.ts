@@ -1,3 +1,5 @@
+import type { ArcDirector } from '../director/ArcDirector.js';
+import { ModelProvider, providerShortcuts } from '../director/ModelProvider.js';
 import { isRecord } from '../json.js';
 import type { InferenceProvider } from './provider.js';
 
@@ -143,3 +145,22 @@ export class ChatSystemOne implements SystemOne {
 		return i >= 0 ? names[i] : (res.content ?? '');
 	}
 }
+
+/** What `addJev` takes: its name (default `jev`), and where Jev answers ({@link JevOpts}). */
+export type JevConfig = Partial<JevOpts> & { name?:string };
+
+/** TypeSafe's Jev as a provider (`addJev`): a System One and nothing else, under its one role, its name. */
+export class Jev extends ModelProvider {
+	constructor({ name = 'jev', ...opts }:JevConfig = {}) {
+		super(name, { chat: () => Promise.reject(new Error('Jev only picks')) }, opts, new JevSystemOne(opts));
+	}
+}
+
+declare module '../director/ArcDirector.js' {
+	interface ArcDirector<TCtx, TEntity> {
+		/** {@link Jev} as provider and System One `name` (default `jev`): `addJev({ baseURL, headers })`. */
+		addJev(config?:JevConfig):this;
+		getJev(name?:string):Jev | undefined;
+	}
+}
+export const { add: addJev, get: getJev } = providerShortcuts(Jev, 'jev');

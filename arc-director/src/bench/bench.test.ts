@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import type { ArcDirector } from '../director/ArcDirector.js';
+import '../director/shortcuts.js';
 import { FakeProvider } from '../inference/fake.js';
 import { chatContentText, type ChatRequest } from '../inference/provider.js';
 import type { SystemOne } from '../inference/system-one.js';
@@ -13,9 +14,8 @@ import { runBench, type BenchLevel, type BenchOutcome } from './bench-score.js';
 /** A model on its own server, writing Arc text; it can see, so `see_map` is offered. `chat` answers each request. */
 function model(chat:(req:ChatRequest)=>string, spec:{ maxParallel?:number } = {}):(director:ArcDirector<SceneCtx>)=>unknown {
 	return (director) => director
-		.withMind((m) => m.withArcFormat('text'))
-		.addInference('fake', new FakeProvider((req) => ({ content: chat(req), toolCalls: [] })), { vision: true })
-		.addModel('main', { id: 'fake', ...spec });
+		.withMind({ arcFormat: 'text' })
+		.addFake({ chat: (req) => ({ content: chat(req), toolCalls: [] }), vision: true, models: { main: { id: 'fake', ...spec } } });
 }
 
 /** A model that writes `arcs` in turn, one a think, the last again after; a request that is no think gets `OK`. */
@@ -261,16 +261,15 @@ describe('arc bench play', () => {
 		const c = arcCase('Fenwyn');
 		let answer = '';
 		await playArcCase({ ...c, thinks: 1 }, (director) => director
-			.withMind((m) => m.withArcFormat('text'))
-			.addInference('fake', new FakeProvider((req) => {
+			.withMind({ arcFormat: 'text' })
+			.addFake({ chat: (req) => {
 				const tool = req.messages.find((m) => m.role === 'tool');
 				if (!tool) {
 					return { content: null, toolCalls: [{ id: '1', name: 'plan_stones', arguments: '{}' }] };
 				}
 				answer = chatContentText(tool.content);
 				return { content: 'wait(seconds=1)', toolCalls: [] };
-			}), { vision: true })
-			.addModel('main', { id: 'fake' }));
+			}, vision: true, models: { main: { id: 'fake' } } }));
 		assert.match(answer, /^1\. take\(stones=2\): win \d+%/);
 	});
 
@@ -320,11 +319,10 @@ describe('benchArcs', () => {
 	it('warms the model up untimed, times only the think, and counts a think that throws as failed', async () => {
 		const asked:(string | undefined)[] = [];
 		const down = await benchArcs((director) => director
-			.addInference('fake', new FakeProvider((req) => {
+			.addFake({ chat: (req) => {
 				asked.push(req.thread);
 				throw new Error('down');
-			}))
-			.addModel('main', { id: 'fake' }), [arcCase('Vashti')]);
+			}, models: { main: { id: 'fake' } } }), [arcCase('Vashti')]);
 		assert.equal(asked[0], undefined, 'one warm-up request first, from no mind');
 		assert.equal(down.failed, 1);
 		assert.equal(down.error, 'down');
@@ -336,14 +334,12 @@ describe('benchArcs', () => {
 
 	it('records how the model sampled: its makers\' settings unless its spec says', async () => {
 		const gemma = await benchArcs((director) => director
-			.withMind((m) => m.withArcFormat('text'))
-			.addInference('fake', new FakeProvider(() => ({ content: 'wait(seconds=1)', toolCalls: [] })))
-			.addModel('main', { id: 'google/gemma-4-e4b' }), [arcCase('Vashti')]);
+			.withMind({ arcFormat: 'text' })
+			.addFake({ chat: () => ({ content: 'wait(seconds=1)', toolCalls: [] }), models: { main: { id: 'google/gemma-4-e4b' } } }), [arcCase('Vashti')]);
 		assert.deepEqual(gemma.sampling, { temperature: 1, topP: 0.95, topK: 64 });
 		const own = await benchArcs((director) => director
-			.withMind((m) => m.withArcFormat('text'))
-			.addInference('fake', new FakeProvider(() => ({ content: 'wait(seconds=1)', toolCalls: [] })))
-			.addModel('main', { id: 'google/gemma-4-e4b', sampling: { temperature: 0.3 } }), [arcCase('Vashti')]);
+			.withMind({ arcFormat: 'text' })
+			.addFake({ chat: () => ({ content: 'wait(seconds=1)', toolCalls: [] }), models: { main: { id: 'google/gemma-4-e4b', sampling: { temperature: 0.3 } } } }), [arcCase('Vashti')]);
 		assert.deepEqual(own.sampling, { temperature: 0.3, topP: 0.95, topK: 64 }, "its own setting over its makers' others");
 	});
 

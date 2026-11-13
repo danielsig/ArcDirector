@@ -1,4 +1,4 @@
-import type { XZ } from '@arc-director/kindling';
+import type { GameObject, XZ } from '@arc-director/kindling';
 import type { ArcDirector } from 'arc-director';
 import { mapCell, type ChunkFile } from '../world/decode-glyph-chunk';
 import { DUNGEON_CHUNKS } from '../scenes/dungeon-vault/dungeon-vault-map';
@@ -93,7 +93,7 @@ export type SceneDef = {
 	camera?:CameraLook;
 	/** Player stays centered and the chunk-sized map scrolls. `false` = current chunk, moving arrow. */
 	minimapFollow?:boolean;
-	createDirector:(host:GameHost)=>ArcDirector<CharacterCtx>;
+	createDirector:(host:GameHost)=>ArcDirector<CharacterCtx, GameObject>;
 };
 
 /** What fighters carry in hand. */

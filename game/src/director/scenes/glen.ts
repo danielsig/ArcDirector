@@ -208,7 +208,7 @@ function wakeForagerOnce(host:GameHost):void {
 		return;
 	}
 	wokeForager.add(host);
-	host.arc.mindQueue().enqueueMajor(FORAGER.id, true);
+	host.arc.queue.enqueueMajor(FORAGER.id, true);
 }
 
 /** Whether `id` has reached the goal the scene is about: its only one with a test, off its list by now. */
@@ -338,26 +338,27 @@ function goals(host:GameHost):SceneGoals {
 	};
 }
 
-export function createDirector(host:GameHost):ArcDirector<CharacterCtx> {
+export function createDirector(host:GameHost):ArcDirector<CharacterCtx, GameObject> {
 	host.hooks = { checkBargain, mayThink, goals };
-	return host.configure(new ArcDirector<CharacterCtx>())
+	return host.configure(new ArcDirector<CharacterCtx, GameObject>())
 		.withRPG({ ...BODY_VERBS, ...REST_VERBS })
-		.addVerb('fish', FISH_VERB)
-		.addVerb('read', {
-			args: { item: 'id' },
-			help: 'reads a while from a book you carry',
-			seen: 'reading',
-			handler: (call) => doRead(call, call.args.item),
-		})
-		.addVerb('close', {
-			args: { target: 'id' },
-			help: 'walks to a door and shuts it',
-			seen: 'closing {target}',
-			handler: (call) => doClose(call, call.args.target),
-		})
+		.withVerbs((v) => v
+			.add('fish', FISH_VERB)
+			.add('read', {
+				args: { item: 'id' },
+				help: 'reads a while from a book you carry',
+				seen: 'reading',
+				handler: (call) => doRead(call, call.args.item),
+			})
+			.add('close', {
+				args: { target: 'id' },
+				help: 'walks to a door and shuts it',
+				seen: 'closing {target}',
+				handler: (call) => doClose(call, call.args.target),
+			}))
 		.withDefaultKit({ verbs: [...FOLK_VERBS, 'fish'] })
-		.withMind((m) => m.withSkipStrategic().withVerbInstructions(BUILDING_VERB_INSTRUCTIONS))
-		.onGoalReached((id) => host.world.findByID(id)?.getOrAddComponent(Celebrating).beginHops(Time.time, 3))
+		.withMind({ skipStrategic: true, verbInstructions: BUILDING_VERB_INSTRUCTIONS })
+		.withGoals({ onReached: (id) => host.world.findByID(id)?.getOrAddComponent(Celebrating).beginHops(Time.time, 3) })
 		.addCharacter(withReceived(FORAGER))
 		.addCharacter(withReceived(BRIDGE_KEEPER))
 		.addCharacter(withReceived(ANGLER));

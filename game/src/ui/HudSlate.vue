@@ -229,7 +229,7 @@ const time = computed(() => thinkTime(props.slate.ms));
 				</span>
 				<span class="time">{{ time }}</span>
 			</header>
-			<p v-if="slate.error && slate.state !== 'done'" class="error">{{ slate.error }}</p>
+			<p v-if="slate.error && slate.state !== 'done'" class="error" :style="{ maxHeight: `${SLATE_HEIGHT * 0.2}px` }">{{ slate.error }}</p>
 			<div v-if="pinned.length" ref="pinnedEl" class="pinned">
 				<template v-for="i in pinned" :key="i">
 					<HudArcLine v-if="lines[i]" class="line" :line="opening(lines[i]!)" />
@@ -328,6 +328,7 @@ const time = computed(() => thinkTime(props.slate.ms));
 	color: #ff9d8c;
 	font: 700 11px/1.3 var(--font);
 	overflow-wrap: anywhere;
+	overflow: hidden;
 }
 
 /* An Arc chosen: a sharp white reflection racing across the glass, as off a tilted blade: one broad bar and one thin. */

@@ -1,331 +1,223 @@
-import { HttpProvider, type ReasoningEffort } from '../inference/http.js';
-import { fakeInference, type HttpInferenceOpts } from '../inference/presets.js';
-import { fetchModelCatalog, findModel, isDecisionModel, isVisionModel, pickSingleChatModel, PREFERRED_MODELS, recommendedSampling, trainedOnArcDirector, type ModelInfo } from '../inference/models.js';
-import type { FakeChatFn } from '../inference/fake.js';
-import { samplingOf, type InferenceProvider, type Sampling } from '../inference/provider.js';
-import type { PromptStyle } from '../mind/prompt.js';
-import type { BrowserProvider, DEFAULT_BROWSER_MODEL } from '../inference/browser.js';
+import { loggedProvider } from '../inference/chat-log.js';
+import type { InferenceProvider } from '../inference/provider.js';
+import { ModelSystemOne } from '../inference/system-one.js';
+import { emptyInferClock, type DirectorLog, type InferClock } from './director-types.js';
+import type { ModelProvider, ProvidedModel } from './ModelProvider.js';
+import { URGENT, type ModelChat, type ModelRun } from './ModelSlots.js';
 
-/** How to reach a chat server: `add*Inference`. */
-export type InferenceSource =
-	| { kind:'http'; opts:HttpInferenceOpts }
-	| { kind:'fake'; chat?:FakeChatFn }
-	| { kind:'custom'; provider:InferenceProvider; vision?:boolean };
+/** How long a System One that failed is skipped, so each pick does not wait on it again. */
+const SYSTEM_ONE_REST_MS = 30_000;
 
-/** Argument to `ArcDirector.addModel`: one model on one server, and what it runs with. A mind never changes these. */
-export type ModelSpec = {
-	/** The server, by its `add*Inference` name. Default: the first one added. */
-	inference?:string;
-	/** The server's model id. Default: the server's pick (LM Studio: the best loaded chat model, which scores choices well and is loaded already). */
-	id?:string;
-	/** A System One's model: it picks `choose` choices, reasoning off, and is never the minds' default. */
-	decision?:boolean;
-	/** LM Studio `context_length` it loads with. Default: the server's `load.contextLength`. */
-	contextLength?:number;
-	/** Reason before answering. Default: the server's `enableThinking`. */
-	thinking?:boolean;
-	/**
-	 * Most tokens a thought may run. Past it the thought is cut off, and the mind answers from what it thought so far
-	 * without thinking again. Default: no limit.
-	 */
-	thinkingBudget?:number;
-	/**
-	 * How it picks each token, over what its makers recommend ({@link recommendedSampling}) setting by setting, as a
-	 * menu sets only the temperature. What neither sets is {@link DEFAULT_SAMPLING}'s.
-	 */
-	sampling?:Sampling;
-	reasoningEffort?:ReasoningEffort;
-	/** Thinks on this model at once. Default {@link DEFAULT_MAX_PARALLEL}. */
-	maxParallel?:number;
-	/**
-	 * How much of the standing rules its minds are told. `compact` only for a model trained on ArcDirector's prompts,
-	 * which knows the rest: its prompts run far shorter, so each think reads faster. Default `full`; always `compact`
-	 * for a model trained on them ({@link trainedOnArcDirector}).
-	 */
-	prompt?:PromptStyle;
-};
+/** A model as a director thinks with it: as its provider answered it, with leases on its slots (`ModelSlots.on`) logged here. */
+export type LiveModel = ProvidedModel & { chat:ModelChat; run:ModelRun };
 
-/** Argument to `ArcDirector.addBrowserModel`: a model that runs in the page, and what it runs with. */
-export type BrowserModelSpec = Omit<ModelSpec, 'id' | 'inference'> & {
-	/**
-	 * One of ArcDirector's own models (`Skaldic.Gemma4E4B`, `Skaldic.Laya`), or a GGUF's URL, its first part's when
-	 * split (`…-00001-of-00004.gguf`). Default {@link DEFAULT_BROWSER_MODEL}.
-	 */
-	model?:string;
-	/** Default {@link BrowserProvider.shared}. */
-	provider?:BrowserProvider;
-	/** The server it is added under. Default `browser`. */
-	inference?:string;
-};
-
-/** Argument to `ArcDirector.withEmbeddings`: the one model every memory is embedded with. */
-export type EmbeddingSpec = {
-	/** The server, by its `add*Inference` name. Default: the first one added. */
-	inference?:string;
-	id:string;
-};
-
-export const DEFAULT_MAX_PARALLEL = 4;
-
-/** A configured model once its server answered: what a mind thinking with it needs. */
-export type LiveModel = {
-	name:string;
-	id:string;
-	provider:InferenceProvider;
-	vision:boolean;
-	thinking:boolean;
-	maxParallel:number;
-	prompt:PromptStyle;
-	/** How it picks each token, every setting filled in: its spec's, else its makers', else the default. */
-	sampling:Sampling;
-	/** Context window it loads with, when the host or the server set one. */
-	contextLength?:number;
-	/** A decision model's System One endpoint on its server; absent for a chat model. */
-	systemOneURL?:string;
-};
-
-type Server = {
-	source:InferenceSource;
-	/** `inner`, logged and timed by the director: what minds call. */
-	provider:InferenceProvider;
-	inner:InferenceProvider;
-	http?:HttpProvider;
-};
-
-/** What the registry needs from its director. */
-export type RegistryHooks = {
-	/** The director's logging and timing around a provider. `http` ones log their own request bodies. */
-	wrap(provider:InferenceProvider, http:boolean):InferenceProvider;
-	/** Sees the exact JSON an HTTP server is sent. */
-	onRequest:NonNullable<HttpInferenceOpts['onRequest']>;
-	log(message:string, error?:boolean):void;
-};
+/** A provider on this director: its transport timed and logged here, and how to stop hearing its roles. */
+type Held = { provider:ModelProvider; logged:InferenceProvider; unwatch:()=>void };
 
 /**
- * The chat servers a director talks to and the models configured on them, each by name. A mind is assigned one
- * by name; one without an assignment, or whose model went away, uses the default: the first model added unless
- * `setDefault` says otherwise. With no chat model added at all, `start` adds the first server's own pick.
+ * A director's providers and the one index of roles to them, each held by one provider at a time; minds without a
+ * role, or whose role went away, use the default (the README's Inference). Every request is timed and logged here.
  */
 export class ModelRegistry {
-	private readonly _servers = new Map<string, Server>();
-	private readonly _specs = new Map<string, ModelSpec>();
-	private readonly _live = new Map<string, LiveModel>();
-	private readonly _hooks:RegistryHooks;
+	private readonly _providers = new Map<string, Held>();
+	private readonly _leases = new WeakMap<ProvidedModel, LiveModel>();
+	/** When each System One that failed may be asked again (`performance.now()`). */
+	private readonly _systemOneRest = new Map<string, number>();
+	private _defaultSystemOne:string | null = null;
 	private _default:string | null = null;
-	private _embeddings:EmbeddingSpec | undefined;
 	private _started = false;
+	private readonly _infer:InferClock = emptyInferClock();
 
-	constructor(hooks:RegistryHooks) {
-		this._hooks = hooks;
+	constructor(private readonly _log:(entry:DirectorLog)=>void) {}
+
+	/** How long the servers took, all requests together and per mind, since the start or `resetInferStats`. */
+	public get infer():InferClock {
+		return this._infer;
 	}
 
-	/** The default model's name, or null with none. */
-	public get defaultName():string | null {
-		return this._default;
+	public resetInferStats():void {
+		Object.assign(this._infer, emptyInferClock());
 	}
 
-	/** Server `name`'s own provider, without the director's logging, or undefined. */
-	public providerOf(name:string):InferenceProvider | undefined {
-		return this._servers.get(name)?.inner;
+	/** `provider` under its name, any time, in place of one named alike; each of its roles moves to it. */
+	public addProvider(provider:ModelProvider):this {
+		this._providers.get(provider.name)?.unwatch();
+		const logged = loggedProvider(provider.transport, this._infer, this._log);
+		this._providers.set(provider.name, { provider, logged, unwatch: provider.watch((role) => this.heard(provider, role)) });
+		provider.roles.forEach((role) => this.heard(provider, role));
+		return this;
 	}
 
-	public get hasServers():boolean {
-		return this._servers.size > 0;
+	public getProvider(name:string):ModelProvider | undefined {
+		return this._providers.get(name)?.provider;
 	}
 
-	public addInference(name:string, source:InferenceSource):void {
-		const http = source.kind === 'http' ? new HttpProvider({ ...source.opts, onRequest: this._hooks.onRequest }) : undefined;
-		const inner = source.kind === 'fake' ? fakeInference(source.chat) : source.kind === 'custom' ? source.provider : http!;
-		this._servers.set(name, { source, http, inner, provider: this._hooks.wrap(inner, !!http) });
-		this.resolveOn(name);
+	/** Every provider, in the order added: another director thinks on them as they are with `addProvider`. */
+	public get providers():ModelProvider[] {
+		return [...this._providers.values()].map(({ provider }) => provider);
 	}
 
-	/** Drops the server and every model on it. */
-	public removeInference(name:string):void {
-		this._servers.delete(name);
-		for (const model of [...this._specs.keys()]) {
-			if (this.serverName(this._specs.get(model)!) === undefined) {
-				this.removeModel(model);
-			}
+	/** Stop hearing every provider: the director is gone, and they may outlive it. */
+	public dispose():void {
+		this._providers.forEach((held) => held.unwatch());
+	}
+
+	/** The model minds think with when their settings name none. */
+	public withDefault(role:string):this {
+		this.held(role);
+		this._default = role;
+		return this;
+	}
+
+	/** The System One of every runner without one of its own, any time; `null` for none, which withholds `choose`. */
+	public withDefaultSystemOne(role:string | null):this {
+		if (role !== null) {
+			this.held(role);
 		}
+		this._defaultSystemOne = role;
+		return this;
 	}
 
-	/** Adds or replaces `name`. The first one added is the default until `setDefault` says otherwise. */
-	public addModel(name:string, spec:ModelSpec = {}):void {
-		this._specs.set(name, { ...spec });
-		if (!spec.decision) {
-			this._default ??= name;
-		}
-		if (this._started) {
-			void this.resolve(name).catch((err:unknown) => this._hooks.log(errorText(err), true));
-		}
+	public get defaultSystemOne():string | null {
+		return this._defaultSystemOne;
 	}
 
-	public removeModel(name:string):void {
-		const live = this._live.get(name);
-		this._specs.delete(name);
-		this._live.delete(name);
-		if (live && ![...this._live.values()].some((other) => other.id === live.id)) {
-			this.serverOf(name)?.inner.forgetModel?.(live.id);
-		}
-		if (this._default === name) {
-			this._default = [...this._specs].find(([, other]) => !other.decision)?.[0] ?? null;
-		}
+	/** Every role, on whichever provider holds it. */
+	public get roles():string[] {
+		return this.providers.flatMap((provider) => provider.roles);
 	}
 
-	public setDefault(name:string):void {
-		if (!this._specs.has(name)) {
-			throw new Error(`ArcDirector: no model '${name}' (addModel)`);
-		}
-		this._default = name;
+	public has(role:string):boolean {
+		return this.roles.includes(role);
 	}
 
-	public has(name:string):boolean {
-		return this._specs.has(name);
-	}
-
-	/** `name`'s model, or the default when `name` is omitted or gone. Undefined until its server answered. */
-	public live(name?:string):LiveModel | undefined {
-		const own = name !== undefined && this._specs.has(name) ? name : this._default;
-		return own === null ? undefined : this._live.get(own);
-	}
-
-	/** Every model resolved so far. */
-	public all():LiveModel[] {
-		return [...this._live.values()];
-	}
-
-	public setEmbeddings(spec:EmbeddingSpec | undefined):void {
-		this._embeddings = spec;
-	}
-
-	/** Vectors from the director's one embedding model, or undefined without one. */
-	public embedder():((texts:string[])=>Promise<number[][]>) | undefined {
-		const spec = this._embeddings;
-		if (!spec) {
-			return undefined;
-		}
-		return async (texts) => {
-			const server = this.serverFor(spec.inference);
-			if (!server?.provider.embed) {
-				throw new Error(`ArcDirector: no server for embeddings '${spec.id}'`);
-			}
-			return server.provider.embed(texts, spec.id);
-		};
+	/** `role`'s model, or the default's when `role` is omitted or gone. Undefined until its provider answered. */
+	public live(role?:string):LiveModel | undefined {
+		const own = [role, this._default].find((name):name is string => name != null && this.has(name));
+		return own !== undefined ? this.exact(own) : this.roles.map((name) => this.exact(name)).find((model) => model && !model.decision && !model.embedding);
 	}
 
 	/**
-	 * `other`'s servers and models in place of this registry's own: the same connections, and its models as they
-	 * resolved, so `start` looks none of them up again. Requests sent through them are logged by `other`'s director.
+	 * Which of `criteria`'s choices serves `goal` given `state`: System One `own` answers first; when it fails or names
+	 * no choice, every other decision model not resting in turn, then chat model `chat`. One that failed rests a while.
+	 * Undefined `name` when none named a choice; `misses` says why each did not.
 	 */
-	public adopt(other:ModelRegistry):void {
-		this._servers.clear();
-		this._specs.clear();
-		this._live.clear();
-		for (const [name, server] of other._servers) {
-			this._servers.set(name, { ...server, provider: this._hooks.wrap(server.inner, !!server.http) });
-		}
-		for (const [name, spec] of other._specs) {
-			this._specs.set(name, { ...spec });
-			const live = other._live.get(name);
-			const server = this.serverOf(name);
-			if (live && server) {
-				this._live.set(name, { ...live, provider: server.provider });
+	public async pick(own:string, state:string, goal:string, criteria:Record<string, string>, chat?:string):Promise<{ name?:string; by?:string; misses:string[] }> {
+		const now = performance.now();
+		const others = this.roles.filter((role) => this.exact(role)?.decision && (this._systemOneRest.get(role) ?? 0) <= now);
+		const asked = [...new Set([own, ...others, this.live(chat)?.name])].filter((by) => by !== undefined);
+		const misses:string[] = [];
+		for (const by of asked) {
+			try {
+				const systemOne = this.held(by).provider.systemOne;
+				const ask = ():Promise<string> => (systemOne ?? new ModelSystemOne(() => ({ ...this.need(by), provider: this.held(by).logged }))).pick(state, goal, criteria);
+				// A model's pick takes one of its slots, ahead of every think.
+				const name = await (systemOne ? ask() : this.need(by).run(URGENT, ask));
+				if (Object.hasOwn(criteria, name)) {
+					return { name, by, misses };
+				}
+				misses.push(`${by} named '${name}'`);
+			}
+			catch (err) {
+				misses.push(`${by}: ${errorText(err)}`);
+				this._systemOneRest.set(by, performance.now() + SYSTEM_ONE_REST_MS);
 			}
 		}
-		this._default = other._default;
-		this._embeddings = other._embeddings;
+		return { misses };
 	}
 
-	/** Resolve every model not resolved yet; with none added, add the first server's own pick. Rejects when one cannot resolve. */
-	public async start():Promise<void> {
-		this._started = true;
-		const first = this._servers.keys().next().value;
-		if (this._default === null && first !== undefined && !this._specs.has(first)) {
-			this._specs.set(first, {});
-			this._default = first;
+	/** Vectors from the one model flagged `embedding`; rejects without one, so recall matches text. */
+	public async embed(texts:string[]):Promise<number[][]> {
+		const model = this.roles.map((role) => this.exact(role)).find((live) => live?.embedding);
+		const embed = model && this.held(model.name).logged.embed;
+		if (!model || !embed) {
+			throw new Error('ArcDirector: no embedding model');
 		}
-		await Promise.all([...this._specs.keys()].filter((name) => !this._live.has(name)).map((name) => this.resolve(name)));
+		return embed(texts, model.id);
 	}
 
-	private serverName(spec:ModelSpec):string | undefined {
-		const name = spec.inference ?? this._servers.keys().next().value;
-		return name !== undefined && this._servers.has(name) ? name : undefined;
+	/**
+	 * Load model `role`, or the default, now: one request a token long, so the first think is not the one that waits
+	 * for it, as before a bench times thinks. Rejects when the model cannot answer.
+	 */
+	public async warmUp(role?:string):Promise<void> {
+		const model = this.live(role);
+		if (!model) {
+			throw new Error(`ArcDirector: no chat model '${role ?? 'default'}'`);
+		}
+		await model.run(URGENT, (chat) => chat({ messages: [{ role: 'user', content: 'Reply with OK.' }], maxTokens: 1, enableThinking: false }));
 	}
 
-	private serverFor(name:string | undefined):Server | undefined {
-		return this._servers.get(name ?? this._servers.keys().next().value ?? '');
+	/**
+	 * Look up every role; with none on any chat provider, the first takes its own pick, named after it. Rejects when one
+	 * cannot be looked up, or two models embed.
+	 */
+	public async start():Promise<void> {
+		const chat = this.providers.filter((provider) => !provider.systemOne);
+		if (chat[0] && chat.every((provider) => provider.roles.length === 0)) {
+			chat[0].addModel(chat[0].name, {});
+		}
+		this._started = true;
+		await Promise.all(this.roles.filter((role) => !this.exact(role)).map((role) => this.resolve(role)));
+		const embedding = this.roles.filter((role) => this.exact(role)?.embedding);
+		if (embedding.length > 1) {
+			throw new Error(`ArcDirector: one model embeds, not ${embedding.join(' and ')}`);
+		}
 	}
 
-	private serverOf(model:string):Server | undefined {
-		const spec = this._specs.get(model);
-		const name = spec && this.serverName(spec);
-		return name === undefined ? undefined : this._servers.get(name);
+	private log(message:string, error?:boolean):void {
+		this._log({ name: 'ArcDirector', message, error });
 	}
 
-	/** After a server is added again, its models resolve against it. */
-	private resolveOn(server:string):void {
-		if (!this._started) {
+	/** A role added to `provider` leaves every other provider here, and is looked up once the director started. */
+	private heard(provider:ModelProvider, role:string):void {
+		if (!provider.has(role)) {
 			return;
 		}
-		for (const [name, spec] of this._specs) {
-			if (this.serverName(spec) === server) {
-				void this.resolve(name).catch((err:unknown) => this._hooks.log(errorText(err), true));
+		for (const { provider: other } of this._providers.values()) {
+			if (other !== provider && other.has(role)) {
+				other.removeModel(role);
+				this.log(`${role}: moved from ${other.name} to ${provider.name}`);
 			}
 		}
+		if (this._started) {
+			void this.resolve(role).catch((err:unknown) => this.log(errorText(err), true));
+		}
 	}
 
-	private async catalogOf(server:Server):Promise<ModelInfo[]> {
-		if (!server.http || server.source.kind !== 'http') {
-			return [];
-		}
-		const { apiKey, fetch } = server.source.opts;
-		return fetchModelCatalog(server.http.rootURL, { fetch, headers: apiKey ? { Authorization: `Bearer ${apiKey}` } : undefined });
+	private async resolve(role:string):Promise<void> {
+		const { id, vision } = await this.held(role).provider.resolve(role);
+		this.log(`${role}: ${id}${vision ? ' (vision)' : ''}`);
 	}
 
-	private async resolve(name:string):Promise<void> {
-		const spec = this._specs.get(name);
-		const serverName = spec && this.serverName(spec);
-		const server = serverName === undefined ? undefined : this._servers.get(serverName);
-		if (!spec || !server) {
-			throw new Error(`ArcDirector: model '${name}' has no server (add*Inference)`);
+	/** The provider here that holds `role`. Throws when none does. */
+	private held(role:string):Held {
+		const held = [...this._providers.values()].find(({ provider }) => provider.has(role));
+		if (!held) {
+			throw new Error(`ArcDirector: no model '${role}'`);
 		}
-		const { source } = server;
-		const catalog = await this.catalogOf(server);
-		const id = spec.id
-			? findModel(catalog, spec.id)?.id ?? spec.id
-			: source.kind === 'fake' ? 'fake' : source.kind === 'custom' ? name
-				: pickSingleChatModel(catalog, PREFERRED_MODELS);
-		if (!id) {
-			throw new Error(`ArcDirector: no model at ${server.http?.baseURL ?? serverName}`);
+		return held;
+	}
+
+	/** Exactly `role`'s model, with its leases here; undefined while its provider has not answered. */
+	private exact(role:string):LiveModel | undefined {
+		const held = this.has(role) ? this.held(role) : undefined;
+		const model = held?.provider.model(role);
+		if (!held || !model) {
+			return undefined;
 		}
-		const info = findModel(catalog, id);
-		const vision = source.kind === 'custom' && source.vision !== undefined
-			? source.vision
-			: source.kind !== 'fake' && isVisionModel(info ?? id);
-		const thinking = spec.thinking ?? (source.kind === 'http' && source.opts.enableThinking === true);
-		// A decision model answers through the System One endpoint, which loads it itself.
-		const systemOneURL = info && isDecisionModel(info) && server.http ? `${server.http.baseURL.replace(/\/+$/, '')}/systemone` : undefined;
-		const sampling = { ...recommendedSampling(id, thinking), ...spec.sampling };
-		if (!systemOneURL) {
-			server.inner.configureModel?.(id, { contextLength: spec.contextLength, enableThinking: spec.thinking, reasoningEffort: spec.reasoningEffort, thinkingBudget: spec.thinkingBudget, sampling, maxParallel: spec.maxParallel });
+		const live = this._leases.get(model) ?? { ...model, ...model.slots.on(held.logged, model.id) };
+		this._leases.set(model, live);
+		return live;
+	}
+
+	/** `role`'s model; throws while there is none. */
+	private need(role:string):LiveModel {
+		const model = this.exact(role);
+		if (!model) {
+			throw new Error(`ArcDirector: no chat model '${role}'`);
 		}
-		const contextLength = spec.contextLength
-			?? (source.kind === 'http' ? source.opts.load?.contextLength : undefined);
-		this._live.set(name, {
-			name,
-			id,
-			provider: server.provider,
-			vision,
-			thinking,
-			maxParallel: spec.maxParallel ?? DEFAULT_MAX_PARALLEL,
-			prompt: trainedOnArcDirector(id) ? 'compact' : spec.prompt ?? 'full',
-			sampling: samplingOf(sampling, undefined),
-			contextLength,
-			systemOneURL,
-		});
-		this._hooks.log(`${name}: ${id}${vision ? ' (vision)' : ''}`);
-		// Its first request loads it, so a model nobody uses takes no VRAM.
+		return model;
 	}
 }
 

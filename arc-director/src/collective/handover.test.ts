@@ -4,6 +4,7 @@ import { STOCK_VERBS } from '../arc/stock-verbs.js';
 import { dummyEntity } from '../expr/natives.js';
 import type { ChatRequest } from '../inference/provider.js';
 import { ArcDirector } from '../director/ArcDirector.js';
+import '../director/shortcuts.js';
 import { STOCK_COLLECTIVE_VERBS } from './collective-verbs.js';
 import { HANDOVER_THREAD } from './handover.js';
 import { sleep } from '../turn.js';
@@ -16,18 +17,18 @@ const KIT = { verbs: [...STOCK_VERBS, ...STOCK_COLLECTIVE_VERBS] };
 async function stage(reply:(req:ChatRequest)=>string = () => '{}') {
 	const calls:ChatRequest[] = [];
 	const director = await new ArcDirector<Ctx>()
-		.withPriorityQueue({ processInterval: 0, heartbeatStart: 100, heartbeatMin: 100 })
+		.withPriorityThinkQueue({ processInterval: 0, heartbeatStart: 100, heartbeatMin: 100 })
 		.withIntervals({ watch: 0, think: 0 })
-		.addFakeInference((req) => {
+		.addFake({ chat: (req) => {
 			if (req.thread !== HANDOVER_THREAD) {
 				return { content: 'wait()', toolCalls: [] };
 			}
 			calls.push(req);
 			return { content: reply(req), toolCalls: [] };
-		})
-		.withMind((m) => m.withArcFormat('text'))
-		.addStockVerbs()
-		.addStockCollectiveVerbs()
+		} })
+		.withMind({ arcFormat: 'text' })
+		.withVerbs((v) => v.addStock()
+			.addStockCollective())
 		.withDefaultKit(KIT)
 		.withKernels((ctx) => ({ me: dummyEntity(ctx.id), others: [], items: [] }))
 		.withContext((id) => ({ id }))
@@ -120,9 +121,7 @@ describe('memory handover', () => {
 	it('leaves pinned memories alone even when the reply names them', async () => {
 		const { director, dawn, of, tick } = await stage(() => '{}');
 		const pin = dawn.persona.memory.pinned()[0];
-		director.withMemoryHandover({
-			handover: async () => [{ id: 'DawnParty', remove: [pin.id], rewrite: [{ id: pin.id, text: 'gone' }] }],
-		});
+		director.withHandover({ handover: async () => [{ id: 'DawnParty', remove: [pin.id], rewrite: [{ id: pin.id, text: 'gone' }] }] });
 		of('Tom').collective = null;
 		await tick();
 		assert.equal(dawn.persona.memory.pinned()[0], pin);
@@ -135,7 +134,7 @@ describe('memory handover', () => {
 		of('Bob').collective = null;
 		await tick();
 		assert.equal(calls.length, 0);
-		director.withMemoryHandover({ handover: false });
+		director.withHandover({ handover: false });
 		of('Tom').collective = null;
 		await tick();
 		assert.equal(calls.length, 0);

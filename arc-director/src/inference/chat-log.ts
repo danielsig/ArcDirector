@@ -1,3 +1,5 @@
+import type { DirectorLog, InferClock } from '../director/director-types.js';
+import type { ChatRequest, ChatResponse, InferenceProvider } from './provider.js';
 import { isRecord } from '../json.js';
 
 function contentText(content:unknown):string {
@@ -109,4 +111,118 @@ export function formatChatLog(payload:unknown):{ message:string; image?:string }
 	const json = JSON.stringify(stripContents(schemaNamed(payload), blocks));
 	const message = blocks.length > 0 ? `${json}\n${blocks.map(fence).join('\n')}` : json;
 	return image ? { message, image } : { message };
+}
+
+/** A System One's pick: only a pick asks for the answer token's log probabilities. It is logged once, whole, by the pick. */
+function isPick(req:ChatRequest):boolean {
+	return req.topLogprobs !== undefined;
+}
+
+/** Who a request thinks for: the `You are …` of its system prompt, else its thread. */
+function whoFromMessages(req:ChatRequest):string {
+	for (const m of req.messages) {
+		if (m.role !== 'system' || typeof m.content !== 'string') {
+			continue;
+		}
+		const hit = /^You are ([^.]+)/.exec(m.content);
+		if (hit) {
+			return hit[1].trim();
+		}
+	}
+	return req.thread ?? 'ArcDirector';
+}
+
+/**
+ * `inner` timed into `clock` and logged: the prompt (the body as sent, when the server sends one), then the reply with
+ * its timings, or why it failed. A stopped think ends its request.
+ */
+export function loggedProvider(inner:InferenceProvider, clock:InferClock, log:(entry:DirectorLog)=>void):InferenceProvider {
+	const embed = inner.embed?.bind(inner);
+	return {
+		chat: async (req:ChatRequest):Promise<ChatResponse> => {
+			if (isPick(req)) {
+				return inner.chat(req);
+			}
+			const name = whoFromMessages(req);
+			const t0 = performance.now();
+			let sent = false;
+			const prompt = (payload:unknown, path?:string):void => {
+				sent = true;
+				const dump = formatChatLog(payload);
+				log({ name, message: `prompt${path ? ` ${path}` : ''}\n${dump.message}`, image: dump.image });
+			};
+			try {
+				const res = await inner.chat({ ...req, onRequest: ({ body, path }) => prompt(body, path) });
+				if (!sent) {
+					prompt(req);
+				}
+				const ms = Math.round(performance.now() - t0);
+				recordInfer(clock, req.thread, ms, res);
+				const parts = [`${ms}ms`];
+				if (res.promptMs !== undefined) {
+					parts.push(`ctx ${Math.round(res.promptMs)}ms`);
+				}
+				if (res.generateMs !== undefined) {
+					parts.push(`gen ${Math.round(res.generateMs)}ms`);
+					if (res.outputTokens && res.generateMs > 0) {
+						parts.push(`${res.outputTokens} tok ${(res.outputTokens / (res.generateMs / 1000)).toFixed(1)}/s`);
+					}
+				}
+				if (res.cachedTokens) {
+					parts.push(`cache ${res.cachedTokens}`);
+				}
+				if (res.toolCalls.length > 0) {
+					parts.push(`tool ${res.toolCalls.map((c) => c.name).join(', ')}`);
+				}
+				const thought = res.reasoning?.trim() ?? '';
+				const body = res.content?.trim() ?? '';
+				if (thought && thought !== body && !body.includes(thought)) {
+					parts.push(`(thinking)\n${thought}`);
+				}
+				if (res.content) {
+					parts.push(res.content);
+				}
+				else if (!thought && res.toolCalls.length === 0) {
+					parts.push('(empty content)');
+				}
+				log({ name, message: parts.join('\n') });
+				return res;
+			}
+			catch (err:unknown) {
+				if (!sent) {
+					prompt(req);
+				}
+				const ms = Math.round(performance.now() - t0);
+				recordInfer(clock, req.thread, ms, {});
+				const aborted = !!req.signal?.aborted;
+				const text = aborted ? 'aborted' : err instanceof Error ? err.message : String(err);
+				log({ name, message: `${ms}ms\n${text}`, error: !aborted });
+				throw err;
+			}
+		},
+		embed: embed ? (texts, model) => embed(texts, model) : undefined,
+		systemOneEndpoint: inner.systemOneEndpoint?.bind(inner),
+	};
+}
+
+/** One request's time into `clock`: wall time, and the context and generation time where the server says. */
+function recordInfer(clock:InferClock, id:string | undefined, wallMs:number, res:{ promptMs?:number; generateMs?:number }):void {
+	const context = res.promptMs;
+	const generate = res.generateMs ?? (context !== undefined ? Math.max(0, wallMs - context) : wallMs);
+	clock.calls += 1;
+	clock.wallMs += wallMs;
+	clock.lastWallMs = wallMs;
+	if (context !== undefined) {
+		clock.contextMs += context;
+		clock.contextKnown += 1;
+		clock.lastContextMs = context;
+	}
+	else {
+		clock.lastContextMs = null;
+	}
+	clock.generateMs += generate;
+	clock.lastGenerateMs = generate;
+	if (id) {
+		clock.thinkMs[id] = (clock.thinkMs[id] ?? 0) + generate;
+	}
 }

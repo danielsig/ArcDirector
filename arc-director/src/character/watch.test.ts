@@ -13,7 +13,7 @@ import {
 	type HostKernels,
 } from '../expr/index.js';
 import { FakeProvider } from '../inference/fake.js';
-import { ThinkQueue } from '../think/queue.js';
+import { PriorityThinkQueue } from '../think/queue.js';
 import { soloCharacter, type SoloOptions } from '../testing/solo.js';
 import type { Character, CharacterJSON } from './Character.js';
 
@@ -73,8 +73,8 @@ function hostAt(dist:number, extra:Partial<HostKernels> = {}):{ host:HostKernels
 	return { host, cat: buildCatalog(host) };
 }
 
-function perception():{ senses:Record<string, { description:string; gather:()=>string }>; tools:Record<string, never> } {
-	return { senses: { scene: { description: 'x', gather: () => 'a glen' } }, tools: {} };
+function perception():{ senses:Record<string, ()=>string>; tools:Record<string, never> } {
+	return { senses: { scene: () => 'a glen' }, tools: {} };
 }
 
 function agentOf(opts:{
@@ -117,7 +117,7 @@ describe('agent watches', () => {
 		await a.perform({ verb: 'watch', args: { name: 'theft', expr: 'some(events.filter("theft").nearby(16))' } });
 		await a.perform({ verb: 'unwatch', args: { name: 'approaching' } });
 		assert.deepEqual(a.persona.watches, { theft: 'some(events.filter("theft").nearby(16))' });
-		const q = new ThinkQueue({ processInterval: 0 });
+		const q = new PriorityThinkQueue({ processInterval: 0 });
 		q.ensure('Forager', { skipHeartbeat: true });
 		q.setWatches('Forager', a.persona.effectiveWatches());
 		const far = hostAt(20);
@@ -255,7 +255,7 @@ describe('agent watches', () => {
 	});
 
 	it('isNear / nearby radius on/off enqueues; observe names only', () => {
-		const q = new ThinkQueue({ processInterval: 0 });
+		const q = new PriorityThinkQueue({ processInterval: 0 });
 		q.ensure('G', { skipHeartbeat: true });
 		q.drop('G');
 		q.setWatches('G', ['isNear(me, Player)']);
@@ -294,7 +294,7 @@ describe('agent watches', () => {
 
 	it('approaching chain enqueues only when in range and closing', () => {
 		const cache = new SampleCache();
-		const q = new ThinkQueue({ processInterval: 0 });
+		const q = new PriorityThinkQueue({ processInterval: 0 });
 		q.ensure('G', { skipHeartbeat: true });
 		q.setWatches('G', ['some(events.filter("theft").nearby(16).approaching())']);
 		const first = hostAt(12, { cache });

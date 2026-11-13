@@ -44,38 +44,6 @@ responseFormat: {
 				"type": "object",
 				"additionalProperties": false,
 				"required": [
-					"tool"
-				],
-				"properties": {
-					"tool": {
-						"const": "earshot"
-					},
-					"to": {
-						"type": "string"
-					}
-				}
-			},
-			{
-				"type": "object",
-				"additionalProperties": false,
-				"required": [
-					"tool"
-				],
-				"properties": {
-					"tool": {
-						"const": "see_map"
-					},
-					"zoom": {
-						"type": "number",
-						"minimum": 0,
-						"maximum": 1
-					}
-				}
-			},
-			{
-				"type": "object",
-				"additionalProperties": false,
-				"required": [
 					"steps"
 				],
 				"properties": {

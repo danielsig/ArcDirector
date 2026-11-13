@@ -31,7 +31,7 @@ export type MoveOpts = {
 /** The crowd a move to `target` takes when its options name none. */
 export type CrowdOf = (verb:string, target:string)=>Crowd;
 
-/** A game's crowds, for `withCrowd`: how characters bound for the same character share it. */
+/** A game's crowds, for `withWorldVerbs({ crowd })`: how characters bound for the same character share it. */
 export type CrowdSettings = {
 	/** For a verb `verbs` does not name. Default `none`. */
 	crowd?:Crowd;

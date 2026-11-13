@@ -1,18 +1,19 @@
 import type { Arc } from '../arc/arc-types.js';
+import type { ArcDirector } from '../director/ArcDirector.js';
 import { VERB_THINK_SCORES, verbThinkScore, arcScore, thinkRecencyScale } from './think-score.js';
-import { SimpleQueue, type SimpleQueueOpts } from './SimpleQueue.js';
-import { MindScheduler, type MindQueueOpts, type ThinkRow, type WithMindQueue } from './scheduler.js';
+import { SimpleThinkQueue, type SimpleThinkQueueOpts } from './SimpleThinkQueue.js';
+import { MindScheduler, type MindQueueOpts, type ThinkRow } from './scheduler.js';
 
-export type ThinkQueueOpts = MindQueueOpts & {
+export type PriorityThinkQueueOpts = MindQueueOpts & {
 	/** Override or add verb → score for `enqueueVerb`. 0 suppresses a default. */
 	verbScores?:Record<string, number>;
 };
 
 /** Highest watch / arc score first, then recency. */
-export class ThinkQueue extends MindScheduler {
+export class PriorityThinkQueue extends MindScheduler {
 	public readonly verbScores:Record<string, number>;
 
-	constructor(opts:ThinkQueueOpts = {}) {
+	constructor(opts:PriorityThinkQueueOpts = {}) {
 		super(opts);
 		this.verbScores = { ...VERB_THINK_SCORES, ...opts.verbScores };
 	}
@@ -53,12 +54,19 @@ export class ThinkQueue extends MindScheduler {
 	}
 }
 
-export function withPriorityQueue(opts?:ThinkQueueOpts):WithMindQueue {
-	return { queue: new ThinkQueue(opts), heartbeat: 0 };
+declare module '../director/ArcDirector.js' {
+	interface ArcDirector<TCtx, TEntity> {
+		/** `withQueue(new PriorityThinkQueue(opts))`, the default. A director has one queue, so another `with*ThinkQueue` replaces it. */
+		withPriorityThinkQueue(opts?:PriorityThinkQueueOpts):this;
+		/** `withQueue(new SimpleThinkQueue(opts))`: first in, first out. */
+		withSimpleThinkQueue(opts?:SimpleThinkQueueOpts):this;
+	}
 }
-
-export function withSimpleQueue(opts?:SimpleQueueOpts):WithMindQueue {
-	return { queue: new SimpleQueue(opts), heartbeat: 0 };
+export function withPriorityThinkQueue<TCtx>(this:ArcDirector<TCtx>, opts?:PriorityThinkQueueOpts):ArcDirector<TCtx> {
+	return this.withQueue(new PriorityThinkQueue(opts));
+}
+export function withSimpleThinkQueue<TCtx>(this:ArcDirector<TCtx>, opts?:SimpleThinkQueueOpts):ArcDirector<TCtx> {
+	return this.withQueue(new SimpleThinkQueue(opts));
 }
 
 export {
@@ -71,15 +79,11 @@ export {
 	waitUntilOf,
 } from './think-score.js';
 export {
-	DEFAULT_BATCH_THINKS,
-	DEFAULT_BATCH_WAIT,
 	type HeartbeatAdjust,
 	type MayThink,
 	type MindQueue,
 	type MindQueueOpts,
-	type ThinkBatchOpts,
 	type ThinkReason,
 	type ThinkRow,
-	type WithMindQueue,
 } from './scheduler.js';
-export { SimpleQueue, type SimpleQueueOpts } from './SimpleQueue.js';
+export { SimpleThinkQueue, type SimpleThinkQueueOpts } from './SimpleThinkQueue.js';

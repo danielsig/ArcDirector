@@ -1,6 +1,7 @@
 import { CHOOSE_VERB, FOCUS_EDIT_VERBS, groupTargets, MIND_ONLY_VERBS, PASS_VERB, STOCK_MOVE_VERBS, WATCH_EDIT_VERBS, type VerbRegistry } from '../arc/stock-verbs.js';
 import { formatStep } from '../arc/arc-format.js';
 import { arcSteps, isArc, sameProgram, type Arc, type ArcResult, type Step } from '../arc/arc-types.js';
+import { hand, internalsOf } from '../internals.js';
 import type { Catalog, ExprEntity } from '../expr/expr-types.js';
 import { cloneEntity, prevMeFromJSON } from '../expr/prev.js';
 import {
@@ -28,7 +29,8 @@ import type { Mind } from '../mind/mind.js';
 import type { MindEvent } from '../mind/mind-types.js';
 import { ArcRecord } from './ArcRecord.js';
 import { Persona, type PersonaJSON } from './Persona.js';
-import type { SayResult, SayTo, TalkNet } from '../mind/talk.js';
+import type { SayResult, SayTo } from '../mind/talk.js';
+import type { TalkFeature } from '../mind/TalkFeature.js';
 import type { Kit, KitSource } from './character-types.js';
 import type { MoveOpts } from '../world/mover.js';
 
@@ -44,7 +46,8 @@ export type RunnerDeps<TCtx = unknown> = {
 	abortArc?:(id:string)=>void;
 	/** Game seconds a standing `choose` that failed waits before it picks again. Default 8. */
 	cooldown?:number;
-	talk?:TalkNet;
+	/** Talk, while there is any: `say` goes through it. Asked each time, so talk added later is heard. */
+	talk?:()=>TalkFeature<TCtx> | undefined;
 	/** Walk this runner up to `target`, as `VerbCall.goTo` does. */
 	goTo?:(target:string, opts?:MoveOpts)=>Promise<ArcResult>;
 	/** `step` with its group arg read (`VerbDef.group`): the ids of a list, the id of one, as it was for a name, or why it picks no one. */
@@ -65,6 +68,18 @@ export type RunnerOptions<TCtx = unknown> = RunnerDeps<TCtx> & {
 	laws?:LawSpec[];
 	maxLaws?:number;
 	defaultLawWho?:string;
+};
+
+/** What a runner's constructor hands the director (`internalsOf`): what only its ticks call. */
+export type RunnerFields<TCtx> = {
+	/** Game time now, and when the watches were last asked: what its waits and laws go by. */
+	stamp(now:number, watchedAt?:number):void;
+	/** A handler for each of its own laws, by rank. */
+	lawHandlers():ArcHandler[];
+	/** Start what `handler` holds: over a live arc once the step in hand ends, or by stopping it. */
+	beginLaw(handler:ArcHandler, sessionOpts?:ArcSessionOpts):void;
+	/** Drop each law finished for all `reached` says it reaches now. Pinned ones too: it ended by its own terms. */
+	dropFinishedLaws(reached:(law:Law)=>readonly string[]):void;
 };
 
 /** A runner's part of a save: its persona, its laws and how its last arc went. */
@@ -122,7 +137,7 @@ export abstract class ArcRunner<TCtx = unknown> {
 	public maxLaws:number;
 	protected defaultLawWho:string;
 	public arcSession:ArcSession | null = null;
-	public talk:TalkNet | undefined;
+	private readonly _talk:RunnerDeps<TCtx>['talk'];
 	private readonly _goTo:RunnerDeps['goTo'];
 	private readonly _aimGroup:RunnerDeps['aimGroup'];
 	private readonly _walkToGroup:RunnerDeps['walkToGroup'];
@@ -193,18 +208,30 @@ export abstract class ArcRunner<TCtx = unknown> {
 		this.cooldown = opts.cooldown ?? DEFAULT_COOLDOWN;
 		this.maxLaws = opts.maxLaws ?? DEFAULT_MAX_LAWS;
 		this.defaultLawWho = opts.defaultLawWho ?? 'me';
-		this.talk = opts.talk;
+		this._talk = opts.talk;
 		this._goTo = opts.goTo;
 		this._aimGroup = opts.aimGroup;
 		this._walkToGroup = opts.walkToGroup;
 		this.catalog = opts.catalog;
 		this.kit = opts.kit;
+		hand(this, {
+			stamp: (now, watchedAt) => this.stamp(now, watchedAt),
+			lawHandlers: () => this.laws.map((law, i) => lawHandler(law, i, this.id)),
+			beginLaw: (handler, sessionOpts) => this.beginLaw(handler, sessionOpts),
+			dropFinishedLaws: (reached) => {
+				this.laws = this.laws.filter((law) => !lawFinished(law, () => reached(law)));
+			},
+		} satisfies RunnerFields<TCtx>);
 		for (const spec of opts.laws ?? []) {
 			const group = lawGroup(spec.name ?? '');
 			if (!this.addLaw(spec, spec.pinned) && this.laws.filter((law) => lawGroup(law.name) === group).length >= this.maxLaws) {
 				throw new Error(`${this.id}: law ${spec.name ?? spec.watch} is past its ${this.maxLaws} laws (maxLaws)`);
 			}
 		}
+	}
+
+	private talk():TalkFeature<TCtx> | undefined {
+		return this._talk?.();
 	}
 
 	/** Whether it stands in the world itself, so it can speak and walk: a character, not a collective. */
@@ -313,23 +340,7 @@ export abstract class ArcRunner<TCtx = unknown> {
 		this.laws = dropLaw(this.laws, name);
 	}
 
-	/** Drops each law finished for all `reached` says it reaches now. Pinned ones too: it ended by its own terms. */
-	public dropFinishedLaws(reached:(law:Law)=>readonly string[]):void {
-		this.laws = this.laws.filter((law) => !lawFinished(law, () => reached(law)));
-	}
-
-	public lawHandlers(matches?:(law:Law)=>boolean):ArcHandler[] {
-		const out:ArcHandler[] = [];
-		this.laws.forEach((law, i) => {
-			if (matches && !matches(law)) {
-				return;
-			}
-			out.push(lawHandler(law, i, this.id));
-		});
-		return out;
-	}
-
-	public beginLaw(handler:ArcHandler, sessionOpts?:ArcSessionOpts):void {
+	private beginLaw(handler:ArcHandler, sessionOpts?:ArcSessionOpts):void {
 		if (this.arcSession && (this.liveArc || this.arcSession.parked)) {
 			const finishing = this.finishStepOf(handler.arc);
 			if (finishing) {
@@ -357,7 +368,7 @@ export abstract class ArcRunner<TCtx = unknown> {
 		});
 	}
 
-	public stamp(now:number, watchedAt?:number):void {
+	private stamp(now:number, watchedAt?:number):void {
 		this.watchedAt = watchedAt;
 		if (now === this.now) {
 			return;
@@ -422,7 +433,10 @@ export abstract class ArcRunner<TCtx = unknown> {
 		// A law's handler has a law as its source; a hoisted `when`'s is its step.
 		this._law = handler && !('verb' in handler.source) ? handler.source.name : undefined;
 		this.verbIndex = 0;
-		this.onArcStart(arc);
+		if (this.isVoice) {
+			this.talk()?.forgetReplies(this);
+			internalsOf(this.mind!).arcStarted(arc);
+		}
 		const session = createArcSession({
 			verbs: this.verbs,
 			now: () => this.now,
@@ -476,7 +490,10 @@ export abstract class ArcRunner<TCtx = unknown> {
 				this.onArcEnd();
 				return result;
 			}
-			await this.afterArc(result);
+			// While the arc is still live (a new think can still abort it), a voice waits for the answers it asked for.
+			if (this.isVoice) {
+				await this.talk()?.awaitReplies(this, result);
+			}
 			if (this.arcSession !== session) {
 				return result;
 			}
@@ -551,7 +568,8 @@ export abstract class ArcRunner<TCtx = unknown> {
 
 	/** Whether `id` makes out every word it says from here. */
 	private inEarshot(id:string):boolean {
-		return !!this.talk?.canSay(this.id, id).ok && this.talk.clear(this.id, id);
+		const talk = this.talk();
+		return !!talk?.canSay(this.id, id).ok && talk.clear(this.id, id);
 	}
 
 	/** The walk it takes before `verb` acts on the group `ids`, if any. A line everyone already makes out takes none. */
@@ -571,7 +589,8 @@ export abstract class ArcRunner<TCtx = unknown> {
 		});
 		const result = await runArc(arc, (step, signal) => (step.verb === 'wait' ? Promise.resolve({ status: 'ok', verb: 'wait' }) : this.doStep(step, this.context(), !!step.granted, signal)), { session });
 		if (this.isVoice) {
-			this.mind!.ingestBeside(result);
+			this.talk()?.forgetReplies(this);
+			this.mind!.ingestResult(result, result.status !== 'ok');
 		}
 		return result;
 	}
@@ -741,12 +760,13 @@ export abstract class ArcRunner<TCtx = unknown> {
 			return aimed;
 		}
 		const done = await this.mind?.perform(aimed, this);
-		const out = done ?? (aimed.verb === 'say' && this.talk ? await this.speak(aimed) : await this.hostStep(aimed, ctx, signal));
+		const talk = aimed.verb === 'say' ? this.talk() : undefined;
+		const out = done ?? (talk ? await talk.speak(this, aimed) : await this.hostStep(aimed, ctx, signal));
 		if (!(STOCK_MOVE_VERBS as readonly string[]).includes(aimed.verb)) {
 			this.replies += 1;
 		}
 		if (out.status === 'ok' && this.isVoice) {
-			this.mind!.noteReply(aimed, out, this);
+			this.talk()?.noteReply(this, aimed);
 		}
 		return out;
 	}
@@ -775,12 +795,12 @@ export abstract class ArcRunner<TCtx = unknown> {
 				return { ...near, verb: 'say' };
 			}
 		}
-		return this.talk!.say(this.id, String(step.args.text ?? ''), to, this.now);
+		return this.talk()!.say(this.id, String(step.args.text ?? ''), to, this.now);
 	}
 
 	/** One line to `ids`, from near them if it may walk. It reaches whoever of them is in earshot, and says who was not. */
 	private async speakToGroup(step:Step, ids:readonly string[]):Promise<SayResult> {
-		const talk = this.talk!;
+		const talk = this.talk()!;
 		const near = await this.groupWalk('say', ids)?.();
 		if (near?.status === 'stopped') {
 			return { ...near, verb: 'say' };
@@ -794,24 +814,10 @@ export abstract class ArcRunner<TCtx = unknown> {
 		return said.status === 'ok' && missed.length > 0 ? { ...said, reason: `${said.reason}; out of earshot: ${missed.join(', ')}` } : said;
 	}
 
-	/** An arc began. A voice tells its mind. */
-	protected onArcStart(arc:Arc):void {
-		if (this.isVoice) {
-			this.mind!.arcStarted(arc);
-		}
-	}
-
 	/** The running arc stopped or parked. A voice tells its mind. */
 	protected onArcEnd():void {
 		if (this.isVoice) {
-			this.mind!.arcEnded();
-		}
-	}
-
-	/** After the last step, while the arc is still live (a new think can still abort it). */
-	protected async afterArc(result:ArcResult):Promise<void> {
-		if (this.isVoice) {
-			await this.mind!.afterArc(result, this);
+			internalsOf(this.mind!).arcEnded();
 		}
 	}
 
@@ -826,7 +832,7 @@ export abstract class ArcRunner<TCtx = unknown> {
 			return;
 		}
 		if (this._law) {
-			this.mind!.ingestLawResult(this._law, result);
+			internalsOf(this.mind!).ingestLawResult(this._law, result);
 		}
 		else {
 			this.mind!.ingestResult(result);

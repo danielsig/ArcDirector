@@ -16,6 +16,7 @@ import type { SceneGoalSide, SceneGoals } from '../director/game-types';
 import type { CarriedOverhead } from '../data/scenes';
 import type { GameHost } from '../director/adapter';
 import type { ThinkSlate } from '../director/ThinkShow';
+import type { Stance } from '../render/spell-fx';
 import { idOf, findObject, isLiving } from '../director/names';
 
 function chunkStamp(world:DemoWorld):string {
@@ -109,8 +110,11 @@ const ASLEEP_LABEL = 'Zzz';
 const SKULL = 0.13;
 const headAt = new THREE.Vector3();
 
-/** Screen point just over the top of the head, wherever the pose has put it: lower sitting or crouched. */
-function projectOverhead(go:GameObject, view:Renderer):{ x:number; y:number; visible:boolean } {
+/** Screen point just over the top of the head, wherever the pose has put it: lower sitting or crouched. A bare stance stands upright. */
+function projectOverhead(go:GameObject | Stance, view:Renderer):{ x:number; y:number; visible:boolean } {
+	if ('feet' in go) {
+		return view.projectToCanvas(go.feet.x, go.feet.y + go.height + HEAD_PAD, go.feet.z);
+	}
 	const height = go.getComponent(Appearance)?.height ?? 1.7;
 	const mesh = go.getComponent(MeshRenderer)?.mesh;
 	const head = mesh && humanBone(mesh, 'head');
@@ -431,7 +435,7 @@ function overheadID(host:GameHost, mind:{ thinkThread():string }):string | undef
 export function statusLabels(host:GameHost):OverheadNote[] {
 	const now = Time.time;
 	const out:OverheadNote[] = [];
-	const queue = host.arc?.mindQueue();
+	const queue = host.arc?.queue;
 	for (const mind of host.arc?.minds() ?? []) {
 		const id = overheadID(host, mind);
 		if (!id) {
@@ -518,9 +522,9 @@ export function patchSlates(world:DemoWorld, hud:HudModel, view:Renderer, host:G
 	const up = [...host.thinks.slates.values()];
 	hud.slates.length = Math.min(hud.slates.length, up.length);
 	up.forEach((slate, i) => {
-		const go = findObject(world, slate.id);
-		const screen = go ? projectOverhead(go, view) : { x: 0, y: 0, visible: false };
-		slate.side ??= emptierSide(world, view, go, screen.x);
+		const anchor = host.thinks.anchorOf(slate.id);
+		const screen = anchor ? projectOverhead(anchor.go ?? anchor.stance, view) : { x: 0, y: 0, visible: false };
+		slate.side ??= emptierSide(world, view, anchor?.go, screen.x);
 		const row = {
 			...thinkRow(slate),
 			x: Math.round(slate.side === 'left' ? screen.x - SLATE_GAP - SLATE_WIDTH : screen.x + SLATE_GAP),
@@ -539,8 +543,8 @@ export function patchSlates(world:DemoWorld, hud:HudModel, view:Renderer, host:G
 }
 
 export function patchInfer(host:GameHost, hud:HudModel):void {
-	const infer = host.arc?.infer;
-	const queue = host.arc?.mindQueue();
+	const infer = host.arc?.models.infer;
+	const queue = host.arc?.queue;
 	const now = Time.time;
 	const rows = host.arc?.minds() ?? [];
 	const next = rows.map((mind) => {
@@ -555,7 +559,7 @@ export function patchInfer(host:GameHost, hud:HudModel):void {
 	});
 	next.sort((a, b) => a.id.localeCompare(b.id));
 	hud.heartrates = next;
-	hud.activeModel = host.arc?.modelID() ?? '';
+	hud.activeModel = host.arc?.getModel()?.id ?? '';
 
 	if (!infer) return;
 	hud.inferCalls = infer.calls;

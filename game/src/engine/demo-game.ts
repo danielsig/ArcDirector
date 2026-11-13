@@ -187,7 +187,7 @@ export class DemoGame extends Game<DemoWorld> {
 		stream.stream();
 		this._hud.menuOpen = false;
 		this._hud.minimap.follow = this._scene.minimapFollow !== false;
-		this._hud.model = host.arc?.modelID() || prefs().model;
+		this._hud.model = host.arc?.getModel()?.id || prefs().model;
 		this.session.persistView();
 		this.session.syncURLView();
 	}

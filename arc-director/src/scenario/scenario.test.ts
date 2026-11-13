@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import type { ArcDirector } from '../director/ArcDirector.js';
+import '../director/shortcuts.js';
 import { FakeProvider } from '../inference/fake.js';
 import type { ChatRequest } from '../inference/provider.js';
 import { ABILITIES, abilityHelp } from './combat.js';
@@ -11,9 +12,8 @@ import { SceneWorld, type SceneSpot } from './scene-world.js';
 /** A model on its own server, writing Arc text; it can see, so `see_map` is offered. `chat` answers each request. */
 function model(chat:(req:ChatRequest)=>string):(director:ArcDirector<SceneCtx>)=>unknown {
 	return (director) => director
-		.withMind((m) => m.withArcFormat('text'))
-		.addInference('fake', new FakeProvider((req) => ({ content: chat(req), toolCalls: [] })), { vision: true })
-		.addModel('main', { id: 'fake' });
+		.withMind({ arcFormat: 'text' })
+		.addFake({ chat: (req) => ({ content: chat(req), toolCalls: [] }), vision: true, models: { main: { id: 'fake' } } });
 }
 
 /** A model that writes `arcs` in turn, one a think, the last again after; a request that is no think gets `OK`. */
@@ -192,7 +192,7 @@ describe('scene play', () => {
 			act: (w, director) => {
 				if (w.time >= 1 && !made) {
 					made = true;
-					director.emitSound(w.getPose('Foe')!.point, { name: 'footsteps', loudness: 0.8 });
+					director.getHearing()!.emit(w.getPose('Foe')!.point, { name: 'footsteps', loudness: 0.8 });
 				}
 			},
 			done: () => false,
@@ -216,7 +216,7 @@ describe('scene play', () => {
 			act: (w, director) => {
 				// A fire 2 paces behind catches, louder each second; the game keeps the sound going by making it again.
 				const at = w.getPose('Ash')!.point;
-				director.emitSound([at[0], at[1] + 2], { name: 'crackling', loudness: Math.min(1, 0.2 + w.time * 0.2), seconds: 1 });
+				director.getHearing()!.emit([at[0], at[1] + 2], { name: 'crackling', loudness: Math.min(1, 0.2 + w.time * 0.2), seconds: 1 });
 			},
 			done: () => false,
 		};
@@ -259,8 +259,8 @@ describe('scene play', () => {
 			noise: {},
 			act: (w, director) => {
 				if (w.time >= 1 && w.time < 1.5) {
-					director.emitSound('Foe', { name: 'footsteps', loudness: 0.8 });
-					director.emitSound(w.getPose('Foe')!.point.map((v) => v + 2), { name: 'a twig snapping', loudness: 0.8 });
+					director.getHearing()!.emit('Foe', { name: 'footsteps', loudness: 0.8 });
+					director.getHearing()!.emit(w.getPose('Foe')!.point.map((v) => v + 2), { name: 'a twig snapping', loudness: 0.8 });
 				}
 			},
 			done: () => false,
@@ -285,7 +285,7 @@ describe('scene play', () => {
 			act: (w, director) => {
 				if (w.time >= 1 && !made) {
 					made = true;
-					director.emitSound(w.getPose('Foe')!.point, { name: 'footsteps', loudness: 0.8 });
+					director.getHearing()!.emit(w.getPose('Foe')!.point, { name: 'footsteps', loudness: 0.8 });
 				}
 			},
 			done: () => false,

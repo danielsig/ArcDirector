@@ -1,6 +1,6 @@
 import type { ModelDownload } from './download.js';
 
-/** Where `ArcDirector.withLoadingBar` shows its bars. */
+/** Where `addWllama`'s `loadingBar` shows its bars. */
 export type LoadingBarOptions = {
 	/** An element of the page to put each bar in. Default: a small panel in the page's bottom-left corner. */
 	parent?:unknown;

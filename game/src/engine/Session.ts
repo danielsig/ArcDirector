@@ -283,7 +283,7 @@ export class Session extends Component {
 	}
 
 	public resetInferStats():void {
-		this.director.arc?.resetInferStats();
+		this.director.arc?.models.resetInferStats();
 		patchInfer(this.director, this.hud);
 	}
 
@@ -309,7 +309,7 @@ export class Session extends Component {
 		this.hud.menuNotice = '';
 		this.persistView();
 		this.dropPointerLock();
-		this.hud.model = this.director.arc?.modelID() || prefs().model || this.hud.model;
+		this.hud.model = this.director.arc?.getModel()?.id || prefs().model || this.hud.model;
 		this.hud.playerKinds = characterOptions();
 		const liveKind = this.gameObject.world?.findByID('Player')?.getComponent(DemoMeshRenderer)?.meshID;
 		this.hud.playerKind = resolvePlayerKind(liveKind || this.hud.playerKind || prefs().playerKind);
@@ -438,20 +438,10 @@ export class Session extends Component {
 		if (next.model && changed('model')) {
 			hud.model = next.model;
 		}
-		if ((['inference', 'model', 'browserModel', 'maxParallel', 'contextLength', 'thinkingBudget', 'temperature', 'decisionModel'] as const).some((key) => changed(key))) {
-			if (arc) {
-				addModels(arc, next);
-			}
-		}
-		if (changed('batchThinks')) {
-			arc?.setBatchThinks(next.batchThinks);
-		}
-		if (changed('arcFormat')) {
-			arc?.withMind((m) => m.withArcFormat(next.arcFormat));
-		}
-		if (arc && changed('systemOne')) {
-			arc.setDefaultSystemOne(defaultSystemOne(next.systemOne));
-		}
+		arc
+			?.if((['inference', 'model', 'browserModel', 'maxParallel', 'batchThinks', 'contextLength', 'thinkingBudget', 'temperature', 'decisionModel'] as const).some((key) => changed(key)), (d) => addModels(d, next))
+			.if(changed('arcFormat'), (d) => d.withMind({ arcFormat: next.arcFormat }))
+			.if(changed('systemOne'), (d) => d.models.withDefaultSystemOne(defaultSystemOne(next.systemOne)));
 		if (prev && next.ai && changed('ai')) {
 			this.director.connect();
 		}

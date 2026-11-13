@@ -9,6 +9,7 @@ import { arcJSONText } from './arc/wire.js';
 import { STOCK_COLLECTIVE_VERB_DEFS } from './collective/collective-verbs.js';
 import { HANDOVER_THREAD } from './collective/handover.js';
 import { ArcDirector } from './director/ArcDirector.js';
+import './director/shortcuts.js';
 import { FakeProvider } from './inference/fake.js';
 import type { ChatContent, ChatRequest, ChatResponse } from './inference/provider.js';
 import type { ArcFormat } from './mind/mind-types.js';
@@ -55,8 +56,8 @@ class Sent {
 	public add(req:ChatRequest):void {
 		const n = this._texts.length + 1;
 		const lines = Object.entries(req)
-			// What reaches the model; an abort signal and a stream listener do not.
-			.filter(([key, value]) => value !== undefined && !['messages', 'signal', 'onDelta'].includes(key))
+			// What reaches the model; an abort signal, a stream listener and a log of the body sent do not.
+			.filter(([key, value]) => value !== undefined && !['messages', 'signal', 'onDelta', 'onRequest'].includes(key))
 			.map(([key, value]) => `${key}: ${this.once(`${key}: `, JSON.stringify(value, null, '\t'), n)}`);
 		this._texts.push([
 			`# request ${n}\n${lines.join('\n')}`,
@@ -120,9 +121,8 @@ function scriptedModel<TCtx>(format:ArcFormat, style:PromptStyle, replies:Reply[
 		return req.thread && req.thread !== HANDOVER_THREAD ? answer(replies[Math.min(n++, replies.length - 1)]) : { content: '{}', toolCalls: [] };
 	};
 	return (director) => director
-		.withMind((m) => m.withArcFormat(format))
-		.addInference('fake', new FakeProvider(chat), { vision: true })
-		.addModel('main', { id: 'fake', prompt: style });
+		.withMind({ arcFormat: format })
+		.addFake({ chat, vision: true, models: { main: { id: 'fake', prompt: style } } });
 }
 
 /**
@@ -156,7 +156,7 @@ const MARKET:Scenario = {
 	act: (world, director) => {
 		if (world.time >= 1 && !world.flags.has('rang')) {
 			world.flags.add('rang');
-			director.emitSound('Bell', { name: 'bell', loudness: 1 });
+			director.getHearing()!.emit('Bell', { name: 'bell', loudness: 1 });
 		}
 	},
 	thinks: 2,
@@ -225,12 +225,12 @@ async function waitFor(fn:()=>boolean):Promise<void> {
 /** A plain director on the scripted model: stock verbs, a scene sense, every verb done at once. */
 function director(format:ArcFormat, replies:Reply[], sent:Sent):ArcDirector<Ctx> {
 	const director = new ArcDirector<Ctx>()
-		.withPriorityQueue({ processInterval: 0, heartbeatStart: 100, heartbeatMin: 100 })
+		.withPriorityThinkQueue({ processInterval: 0, heartbeatStart: 100, heartbeatMin: 100 })
 		.withIntervals({ watch: 0, think: 0 })
-		.addStockVerbs()
+		.withVerbs((v) => v.addStock())
 		.withDefaultKit({ verbs: STOCK_VERBS })
 		.onVerb((call) => ({ status: 'ok', verb: call.verb }))
-		.addSense('scene', { description: 'What you can see. Names only.', gather: () => 'A damp stone hall. EastGate stands in the east wall. A Well.' })
+		.withSenses((s) => s.add('scene', () => 'A damp stone hall. EastGate stands in the east wall. A Well.'))
 		.withContext((id) => ({ id }));
 	scriptedModel<Ctx>(format, 'full', replies, sent)(director);
 	return director;
@@ -285,10 +285,10 @@ describe('prompt snapshots', () => {
 			'examine(target=Well)',
 			'go_to(target=EastGate)',
 		], sent)
-			.withMind((m) => m.withRepairRetries(4).withRepairPerStep())
+			.withMind({ repairRetries: 4, repairPerStep: true })
 			.addCharacter({ id: 'Guard', mind: { skipHeartbeat: true, skipStrategic: true }, identity: { role: 'Gate guard' }, goals: [{ text: 'Look around', priority: 1 }] })
 			.connect();
-		const queue = built.mindQueue()!;
+		const queue = built.queue!;
 		queue.enqueueMajor('Guard');
 		built.tick(1);
 		await waitFor(() => sent.count >= 4 && !queue.isThinking('Guard'));
@@ -307,7 +307,7 @@ describe('prompt snapshots', () => {
 			.withReplaceCheck()
 			.addCharacter({ id: 'Guard', mind: { skipHeartbeat: true, skipStrategic: true }, identity: { role: 'Gate guard' } })
 			.connect();
-		const queue = built.mindQueue()!;
+		const queue = built.queue!;
 		queue.enqueueMajor('Guard');
 		built.tick(1);
 		await waitFor(() => sent.count >= 1 && !queue.isThinking('Guard'));
@@ -321,8 +321,9 @@ describe('prompt snapshots', () => {
 
 	it('System One: the choice question, and a chat model asked to pick', async () => {
 		const sent = new Sent();
-		const built = await director('text', ['wait(seconds=1)'], sent)
-			.addModel('decider', { id: 'fake', decision: true })
+		const scene = director('text', ['wait(seconds=1)'], sent);
+		scene.getFake()!.addModel('decider', 'fake');
+		const built = await scene
 			.addCharacter({ id: 'Sentry', systemOne: 'decider', choose: { goal: 'Keep the gate', hold: 'wait(seconds=1)', patrol: 'go_to(target=EastGate)' } })
 			.connect();
 		const question = built.choiceQuestion('Sentry', { look: 'examine(target=Well)', leave: 'go_to(target=EastGate)' }, { doing: 'wait' });

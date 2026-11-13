@@ -21,7 +21,7 @@ import { prefs, setPrefs, watchPrefs, type InferenceKind, type Prefs, type Syste
 import type { HudModelOption } from '../ui/hud-model';
 
 /**
- * A model the game offers to run in the browser: its name as `addBrowserModel` takes it, what it costs to download,
+ * A model the game offers to run in the browser: its id as `addWllama` takes it, what it costs to download,
  * and roughly how much GPU memory it holds once loaded (weights, cache and working space).
  */
 export type BrowserModel = {
@@ -66,15 +66,16 @@ export type SamplingSource = 'menu' | 'makers';
 
 /**
  * How the menu runs its chat model, wherever it runs: context, thinking (off at a budget of 0, unbounded below it),
- * temperature, and thinks at once.
+ * temperature, thinks at once, and whether new thinks wait (5 s at most) to start together.
  */
-export function menuModel(p:Prefs, sampling:SamplingSource = 'menu'):Pick<ModelSpec, 'contextLength' | 'thinking' | 'thinkingBudget' | 'sampling' | 'maxParallel'> {
+export function menuModel(p:Prefs, sampling:SamplingSource = 'menu'):Pick<ModelSpec, 'contextLength' | 'thinking' | 'thinkingBudget' | 'sampling' | 'maxParallel' | 'batchWait'> {
 	return {
 		contextLength: p.contextLength,
 		thinking: p.thinkingBudget !== 0,
 		thinkingBudget: p.thinkingBudget > 0 ? p.thinkingBudget : undefined,
 		sampling: sampling === 'menu' ? { temperature: p.temperature } : undefined,
 		maxParallel: p.maxParallel,
+		batchWait: p.batchThinks ? 5 : 0,
 	};
 }
 

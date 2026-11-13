@@ -16,9 +16,12 @@ function restore<TCtx>(json:CharacterJSON, deps:Omit<SoloOptions<TCtx>, 'id'>) {
 	return soloCharacter<TCtx>({ ...deps, id: json.id }, json);
 }
 import { DEFAULT_YOU_SYMBOL } from './map.js';
-import { TalkNet } from './talk.js';
+import { TalkFeature } from './TalkFeature.js';
+import type { TalkSense } from './talk.js';
+import { MapFeature } from './MapFeature.js';
+import { KnowledgeFeature } from './KnowledgeFeature.js';
 import type { MindEvent, Sense, ToolSpec } from './mind-types.js';
-import { withPriorityQueue } from '../think/queue.js';
+import { PriorityThinkQueue } from '../think/queue.js';
 import { buildCatalog, dummyEntity, SampleCache } from '../expr/index.js';
 
 /** Every stock verb: registered, and in the kit. */
@@ -28,7 +31,23 @@ function stockVerbs():{ verbs:VerbRegistry; kit:{ verbs:readonly string[] } } {
 
 type Ctx = { paragraph:string };
 
-/** A line `speakerID` said clearly, as TalkNet delivers it. */
+/** A feature as a solo mind has it: what it puts in the prompt, and its tool. */
+function featured(feature:MapFeature<Ctx> | KnowledgeFeature<Ctx>):Pick<SoloOptions<Ctx>, 'features' | 'tools'> {
+	return { features: [feature], tools: { [feature instanceof MapFeature ? 'see_map' : 'recall']: feature.tool } };
+}
+
+/** Talk whose world says why there is no way to each id, as a director's world does. */
+class WaysTalk extends TalkFeature<Ctx> {
+	constructor(sense:TalkSense, private readonly _ways:(ids:readonly string[])=>(string | undefined)[]) {
+		super(sense);
+	}
+
+	protected override ways(_from:string, ids:readonly string[]):(string | undefined)[] {
+		return this._ways(ids);
+	}
+}
+
+/** A line `speakerID` said clearly, as TalkFeature delivers it. */
 function heard(speakerID:string, text:string, to:string[] = []):MindEvent {
 	return {
 		kind: 'HeardSpeech',
@@ -78,10 +97,7 @@ function paragraph():string {
 function perception():{ senses:Record<string, Sense<Ctx>>; tools:Record<string, ToolSpec<Ctx>> } {
 	return {
 		senses: {
-			environment: {
-				description: 'Described scene; no coordinates.',
-				gather: (ctx) => ctx.paragraph,
-			},
+			environment: (ctx) => ctx.paragraph,
 		},
 		tools: {},
 	};
@@ -260,10 +276,7 @@ describe('Agent', () => {
 			provider,
 			...stockVerbs(),
 			senses: {
-				environment: {
-					description: 'Described scene; no coordinates.',
-					gather: (ctx) => ctx.paragraph,
-				},
+				environment: (ctx) => ctx.paragraph,
 			},
 			tools: {},
 			context: () => ({ paragraph: scene }),
@@ -648,7 +661,7 @@ describe('Agent', () => {
 			toolRounds: 0,
 			repairRetries: 0,
 			strategicInterval: 0,
-			knowledge: [{ name: 'FireMushroom', aliases: ['10 gold'], text: 'Worth 10 gold.' }],
+			...featured(new KnowledgeFeature<Ctx>({ pages: [{ name: 'FireMushroom', aliases: ['10 gold'], text: 'Worth 10 gold.' }] })),
 		});
 		agent.mind!.pushEvent({ kind: 'HeardSpeech', remember: true, text: 'BridgeKeeper says: "10 gold or items of equal value."', tags: ['speech'] });
 		await agent.mind!.tick(10);
@@ -783,11 +796,12 @@ describe('Agent', () => {
 
 	it('rejects an out-of-range say arc without speaking and keeps thinking', async () => {
 		const spoke:string[] = [];
-		const talk = new TalkNet({
+		const talk = new TalkFeature<Ctx>({
 			inRange: () => false,
 			others: () => ['Guard'],
-		}, (u) => {
+		onSpoke: (u) => {
 			spoke.push(u.text);
+		},
 		});
 		let calls = 0;
 		const provider = new FakeProvider((req) => {
@@ -922,7 +936,7 @@ describe('Agent', () => {
 			toolRounds: 0,
 			repairRetries: 0,
 			strategicInterval: 0,
-			knowledge: [{ name: 'FireMushroom', text: 'Worth 10 gold.', item: true }, { name: 'Bridge', text: 'Raised unless lowered.' }],
+			...featured(new KnowledgeFeature<Ctx>({ pages: [{ name: 'FireMushroom', text: 'Worth 10 gold.', item: true }, { name: 'Bridge', text: 'Raised unless lowered.' }] })),
 		});
 		agent.mind!.pushEvent({ kind: 'HeardSpeech', remember: true, text: 'Forager says to you: "Here, take this FireMushroom for the Bridge."', tags: ['speech'] });
 		await agent.mind!.tick(10);
@@ -936,7 +950,7 @@ describe('Agent', () => {
 
 	it('waits at the end of an arc when a reply verb\'s target is still nearby', async () => {
 		let close = true;
-		const talk = new TalkNet({ inRange: () => close, others: () => ['Forager'] });
+		const talk = new TalkFeature<Ctx>({ inRange: () => close, others: () => ['Forager'] });
 		const verbs = new VerbRegistry().addAll(STOCK_VERB_DEFS);
 		verbs.add('heal', { args: { target: 'id' } });
 		verbs.add('attack', { args: { target: 'id' } });
@@ -985,7 +999,7 @@ describe('Agent', () => {
 
 	it('refuses a say that everyone it is for already heard, and lets it reach someone new', async () => {
 		const listeners = ['Forager'];
-		const talk = new TalkNet({ inRange: () => true, others: () => listeners });
+		const talk = new TalkFeature<Ctx>({ inRange: () => true, others: () => listeners });
 		const lines = [
 			'Excuse me? Could you repeat what you said about the bridge?',
 			'Excuse me, sir? I can lower the bridge for you, but I require ten gold or items of equal value.',
@@ -1048,7 +1062,7 @@ describe('Agent', () => {
 			model: 'fake',
 			heartbeat: 0,
 			arcFormat: 'text',
-			wayBlocked: (ids) => ids.map(() => blocked),
+			talk: new WaysTalk({ inRange: () => false, others: () => [] }, (ids) => ids.map(() => blocked)),
 			toolRounds: 0,
 			repairRetries: 0,
 			strategicInterval: 0,
@@ -1063,7 +1077,7 @@ describe('Agent', () => {
 	});
 
 	it('accepts say when the audience is already in range', async () => {
-		const talk = new TalkNet({
+		const talk = new TalkFeature<Ctx>({
 			inRange: () => true,
 			others: () => ['Guard'],
 		});
@@ -1117,10 +1131,10 @@ describe('Agent', () => {
 	});
 
 	it('marks who is in earshot but out of reach, and why', async () => {
-		const talk = new TalkNet({
+		const talk = new WaysTalk({
 			inRange: () => true,
 			others: () => ['Guard', 'Angler'],
-		});
+		}, (ids) => ids.map((id) => (id === 'Angler' ? 'Bridge is raised' : undefined)));
 		let user = '';
 		const provider = new FakeProvider((req) => {
 			user = String(req.messages.find((m) => m.role === 'user')?.content);
@@ -1135,7 +1149,6 @@ describe('Agent', () => {
 			context: () => ({ paragraph: paragraph() }),
 			model: 'fake',
 			talk,
-			wayBlocked: (ids) => ids.map((id) => (id === 'Angler' ? 'Bridge is raised' : undefined)),
 			toolRounds: 0,
 			repairRetries: 0,
 		}).mind!.tick(1);
@@ -1143,7 +1156,7 @@ describe('Agent', () => {
 	});
 
 	it('lets earshot({to}) fail closed so the model can go_to instead', async () => {
-		const talk = new TalkNet({
+		const talk = new TalkFeature<Ctx>({
 			inRange: () => false,
 			others: () => ['Guard'],
 		});
@@ -1259,7 +1272,7 @@ describe('Agent', () => {
 	});
 
 	it('names its own lines Me, the listener you, and others as it knows them', async () => {
-		const talk = new TalkNet({
+		const talk = new TalkFeature<Ctx>({
 			inRange: () => true,
 			others: (id) => id === 'BridgeKeeper' ? ['Forager'] : ['BridgeKeeper'],
 		});
@@ -1622,11 +1635,11 @@ describe('Agent', () => {
 			toolRounds: 1,
 			repairRetries: 0,
 			strategicInterval: 0,
-			knowledge: [{
+			...featured(new KnowledgeFeature<Ctx>({ pages: [{
 				name: 'Tree',
 				aliases: ['trees'],
 				text: 'Landmark type. Many; not reachable with go_to.',
-			}],
+			}] })),
 		});
 		await agent.mind!.tick(1);
 		const { remember, know } = JSON.parse(grepped) as { remember:unknown[]; know:string[] };
@@ -1656,7 +1669,7 @@ describe('Agent', () => {
 		await soloCharacter<Ctx>({ ...base, vision: true }).mind!.tick(1);
 		await soloCharacter<Ctx>({
 			...base,
-			map: {
+			...featured(new MapFeature<Ctx>({
 				snapshot: () => ({
 					image: 'data:image/png;base64,xx',
 					width: 4,
@@ -1664,7 +1677,7 @@ describe('Agent', () => {
 					toPixel: () => ({ u: 0, v: 0 }),
 					marks: [],
 				}),
-			},
+			})),
 			vision: false,
 		}).mind!.tick(1);
 		assert.equal(names[0]?.includes('see_map'), false);
@@ -1695,7 +1708,7 @@ describe('Agent', () => {
 			toolRounds: 1,
 			repairRetries: 0,
 			vision: true,
-			map: {
+			...featured(new MapFeature<Ctx>({
 				snapshot: () => ({
 					image: 'data:image/png;base64,xx',
 					width: 4,
@@ -1703,7 +1716,7 @@ describe('Agent', () => {
 					toPixel: () => ({ u: 0, v: 0 }),
 					marks: [],
 				}),
-			},
+			})),
 		}).mind!.tick(1);
 		assert.match(description, /Look here before you ask where something is/);
 		assert.equal(description.includes('wander'), false);
@@ -1725,7 +1738,7 @@ describe('Agent', () => {
 			toolRounds: 1,
 			repairRetries: 0,
 			vision: true,
-			map: {
+			...featured(new MapFeature<Ctx>({
 				snapshot: () => ({
 					image: 'data:image/png;base64,xx',
 					width: 4,
@@ -1733,7 +1746,7 @@ describe('Agent', () => {
 					toPixel: () => ({ u: 0, v: 0 }),
 					marks: [],
 				}),
-			},
+			})),
 		}).mind!.tick(1);
 		assert.match(description, /Look here before you wander/);
 	});
@@ -1784,7 +1797,7 @@ describe('Agent', () => {
 			toolRounds: 1,
 			repairRetries: 0,
 			vision: true,
-			map: {
+			...featured(new MapFeature<Ctx>({
 				snapshot: (npcID, zoom) => {
 					assert.equal(zoom, 1);
 					return {
@@ -1798,7 +1811,7 @@ describe('Agent', () => {
 						],
 					};
 				},
-			},
+			})),
 		});
 		const arc = await agent.mind!.tick(1);
 		assert.equal(calls, 2);
@@ -1832,7 +1845,7 @@ describe('Agent', () => {
 			repairRetries: 1,
 			arcFormat: 'text',
 			vision: true,
-			map: {
+			...featured(new MapFeature<Ctx>({
 				snapshot: () => {
 					snaps += 1;
 					return {
@@ -1843,7 +1856,7 @@ describe('Agent', () => {
 						marks: [],
 					};
 				},
-			},
+			})),
 		});
 		const arc = await agent.mind!.tick(1);
 		assert.equal(calls, 2);
@@ -1870,7 +1883,7 @@ describe('Agent', () => {
 			toolRounds: 1,
 			repairRetries: 0,
 			vision: true,
-			map: {
+			...featured(new MapFeature<Ctx>({
 				you: '🎯',
 				snapshot: () => ({
 					image: 'data:image/png;base64,xx',
@@ -1879,7 +1892,7 @@ describe('Agent', () => {
 					toPixel: (x, y) => ({ u: x, v: y }),
 					marks: [{ symbol: '🎯', id: 'you', x: 1, y: 1 }],
 				}),
-			},
+			})),
 		}).mind!.tick(1);
 	});
 
@@ -1950,9 +1963,9 @@ describe('Agent', () => {
 			toolRounds: 1,
 			repairRetries: 0,
 			vision: true,
-			map: {
+			...featured(new MapFeature<Ctx>({
 				snapshot,
-			},
+			})),
 		});
 		await agent.mind!.tick(1);
 		assert.equal(snaps, 1);
@@ -2071,7 +2084,7 @@ describe('Agent', () => {
 	});
 
 	it('tick occupies a think slot; enact arms wait(until) and notes the queue', async () => {
-		const think = withPriorityQueue({ processInterval: 0 });
+		const think = { queue: new PriorityThinkQueue({ processInterval: 0 }), heartbeat: 0 };
 		const q = think.queue;
 		const provider = new FakeProvider(() => ({
 			content: JSON.stringify({ steps: [{ verb: 'go_to', target: 'EastGate', then: 'always' }, { verb: 'wait', until: 'hasHeard' }] }),
@@ -2113,7 +2126,7 @@ describe('Agent', () => {
 	});
 
 	it('thinkNow skips heartbeat and occupies the think slot', async () => {
-		const think = withPriorityQueue({ processInterval: 0 });
+		const think = { queue: new PriorityThinkQueue({ processInterval: 0 }), heartbeat: 0 };
 		const q = think.queue;
 		const agent = soloCharacter<Ctx>({
 			id: 'Guard',
@@ -2134,7 +2147,7 @@ describe('Agent', () => {
 			repairRetries: 0,
 		});
 		q.ensure('Guard', { skipHeartbeat: true });
-		agent.stamp(1);
+		internalsOf(agent).stamp(1);
 		const first = await agent.mind!.tick(1);
 		assert.equal(first?.[0].verb, 'wait');
 		const skipped = await agent.mind!.tick(2);
@@ -2146,7 +2159,7 @@ describe('Agent', () => {
 	});
 
 	it('replaces a live arc when the current verb did not change during think', async () => {
-		const think = withPriorityQueue({ processInterval: 0 });
+		const think = { queue: new PriorityThinkQueue({ processInterval: 0 }), heartbeat: 0 };
 		let releaseGoTo:(()=>void) | undefined;
 		const chats:Array<{ enableThinking?:boolean; fakeThought?:boolean; user:string }> = [];
 		const replies = [
@@ -2199,7 +2212,7 @@ describe('Agent', () => {
 	});
 
 	it('shows a lone mind the program it runs, and pass keeps that program going', async () => {
-		const think = withPriorityQueue({ processInterval: 0 });
+		const think = { queue: new PriorityThinkQueue({ processInterval: 0 }), heartbeat: 0 };
 		const users:string[] = [];
 		const walks:unknown[] = [];
 		let aborted = 0;
@@ -2251,7 +2264,7 @@ describe('Agent', () => {
 	});
 
 	it('asks again with a canned thought when the live verb changed, and confirm keeps the first arc', async () => {
-		const think = withPriorityQueue({ processInterval: 0 });
+		const think = { queue: new PriorityThinkQueue({ processInterval: 0 }), heartbeat: 0 };
 		const gates = new Map<string, (result:ArcResult)=>void>();
 		let hangThink:((res:{ content:string; toolCalls:[] })=>void) | undefined;
 		const chats:Array<{ enableThinking?:boolean; fakeThought?:boolean; user:string }> = [];
@@ -2325,7 +2338,7 @@ describe('Agent', () => {
 	});
 
 	it('uses a new verb list from the canned-thought follow-up when the live verb changed', async () => {
-		const think = withPriorityQueue({ processInterval: 0 });
+		const think = { queue: new PriorityThinkQueue({ processInterval: 0 }), heartbeat: 0 };
 		const gates = new Map<string, (result:ArcResult)=>void>();
 		let hangThink:((res:{ content:string; toolCalls:[] })=>void) | undefined;
 		const chats:Array<{ fakeThought?:boolean }> = [];
@@ -2531,7 +2544,7 @@ describe('arcFormat schema', () => {
 		assert.match(system, /Tools this think, not verbs: recall, observe\. Call one by replying \{"tool":"name","argument":"value"\}/);
 		assert.match(system, /Reply \{"tool":"recall","query":"Bread"\}/);
 		const schema = seen[0].responseFormat!.schema as { anyOf:{ properties:{ tool?:{ const:string } } }[] };
-		assert.deepEqual(schema.anyOf.slice(0, -1).map((branch) => branch.properties.tool?.const), ['recall', 'observe', 'earshot', 'see_map']);
+		assert.deepEqual(schema.anyOf.slice(0, -1).map((branch) => branch.properties.tool?.const), ['recall', 'observe']);
 	});
 
 	it('looks a tool up from its reply, then answers with the steps', async () => {
@@ -2575,7 +2588,7 @@ describe('arcFormat schema', () => {
 	});
 
 	it('asks for the steps again, without a canned thought, when the live verb changed, and a tool reply keeps the first arc', async () => {
-		const think = withPriorityQueue({ processInterval: 0 });
+		const think = { queue: new PriorityThinkQueue({ processInterval: 0 }), heartbeat: 0 };
 		const gates = new Map<string, (result:ArcResult)=>void>();
 		let hangThink:((res:{ content:string; toolCalls:[] })=>void) | undefined;
 		const chats:ChatRequest[] = [];
@@ -2635,12 +2648,12 @@ describe('arcFormat schema', () => {
 		assert.match(chatContentText(chats[2].messages.at(-1)?.content), /live verb changed from go_to to pick_up[^]*repeat the steps you already wrote to keep them/);
 	});
 
-	it('is one schema for every mind, whatever its kit or tools', async () => {
+	it('lets a reply call only the tools its mind is offered', async () => {
 		const seen:ChatRequest[] = [];
 		await schemaGuard([steps], seen, { kit: { verbs: ['go_to', 'wait'] } }).mind!.tick(1);
 		await schemaGuard([steps], seen, { toolRounds: 0 }).mind!.tick(1);
 		await schemaGuard([steps], seen, { hideObserve: true }).mind!.tick(1);
-		const bytes = seen.map((req) => JSON.stringify(req.responseFormat));
-		assert.equal(new Set(bytes).size, 1);
+		const tools = seen.map((req) => [...JSON.stringify(req.responseFormat).matchAll(/"tool":\{"const":"(\w+)"/g)].map((hit) => hit[1]));
+		assert.deepEqual(tools, [['recall', 'observe'], [], ['recall']]);
 	});
 });

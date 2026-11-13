@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import type { MindEvent } from './mind-types.js';
-import { TalkNet, type TalkListener } from './talk.js';
+import type { TalkListener } from './talk.js';
+import { TalkFeature } from './TalkFeature.js';
 
 function listener(id:string):TalkListener & { events:MindEvent[] } {
 	const events:MindEvent[] = [];
@@ -20,14 +21,15 @@ function net(
 	range:Set<string>,
 	roster:string[],
 	onSpoke?:(u:{ text:string; heardBy:string[] })=>void,
-):TalkNet {
-	return new TalkNet({
+):TalkFeature {
+	return new TalkFeature({
 		inRange: (a, b) => a !== b && (range.has(`${a}:${b}`) || range.has(`${b}:${a}`)),
 		others: (speaker) => roster.filter((id) => id !== speaker),
-	}, onSpoke);
+		onSpoke,
+	});
 }
 
-describe('TalkNet', () => {
+describe('TalkFeature', () => {
 	it('refuses a line said again and again in a row, or echoed word for word right after another said it', () => {
 		const range = new Set(['Ann:Bo']);
 		const talk = net(range, ['Ann', 'Bo']);
@@ -46,7 +48,9 @@ describe('TalkNet', () => {
 
 	it('lets a game decide each repeat: allow it, refuse it, or refuse it in its own words', () => {
 		const asked:string[] = [];
-		const talk = new TalkNet({ inRange: () => true, others: (speaker) => ['Ann', 'Bo'].filter((id) => id !== speaker) }, undefined, {
+		const talk = new TalkFeature({
+			inRange: () => true,
+			others: (speaker) => ['Ann', 'Bo'].filter((id) => id !== speaker),
 			repeats: (who, text) => {
 				asked.push(`${who}: ${text}`);
 				return text === 'Hail!' || (who === 'Bo' ? 'Find your own words.' : false);
@@ -61,7 +65,7 @@ describe('TalkNet', () => {
 	});
 
 	it('lets a game allow repeats', () => {
-		const talk = new TalkNet({ inRange: () => true, others: (speaker) => ['Ann', 'Bo'].filter((id) => id !== speaker) }, undefined, { repeats: true });
+		const talk = new TalkFeature({ inRange: () => true, others: (speaker) => ['Ann', 'Bo'].filter((id) => id !== speaker), repeats: true });
 		assert.equal(talk.say('Ann', 'Onward.').status === 'ok', true);
 		assert.equal(talk.say('Ann', 'Onward.').status === 'ok', true);
 		assert.equal(talk.say('Bo', 'Onward.').status === 'ok', true);
@@ -105,7 +109,7 @@ describe('TalkNet', () => {
 	});
 
 	it('tells the speaker who was too far to make out the words', () => {
-		const talk = new TalkNet({
+		const talk = new TalkFeature({
 			inRange: (a, b) => a !== b,
 			others: (speaker) => ['Guard', 'Baker', 'Acolyte'].filter((id) => id !== speaker),
 			clearHear: (speaker, listener) => listener !== 'Guard',
@@ -169,7 +173,7 @@ describe('TalkNet', () => {
 	it('drops a listener the host says cannot hear, even when addressed', () => {
 		const guard = listener('Guard');
 		const player = listener('Player');
-		const talk = new TalkNet({
+		const talk = new TalkFeature({
 			inRange: (a, b) => a !== b,
 			others: (speaker) => ['Guard', 'Player', 'Forager'].filter((id) => id !== speaker),
 			hears: (speaker, listener) => listener !== 'Guard' || speaker === 'Player',
@@ -196,7 +200,7 @@ describe('TalkNet', () => {
 	it('asks the host to face and approach speaker and listener', () => {
 		const faces:[string, string][] = [];
 		const steps:[string, string][] = [];
-		const talk = new TalkNet({
+		const talk = new TalkFeature({
 			inRange: () => true,
 			others: () => ['Guard'],
 			face: (who, toward) => {
@@ -212,27 +216,9 @@ describe('TalkNet', () => {
 		assert.deepEqual(steps, [['Acolyte', 'Guard'], ['Guard', 'Acolyte']]);
 	});
 
-	it('can disable face and approach', () => {
-		let faced = 0;
-		let stepped = 0;
-		const talk = new TalkNet({
-			inRange: () => true,
-			others: () => ['Guard'],
-			face: () => {
-				faced += 1;
-			},
-			approach: () => {
-				stepped += 1;
-			},
-		}, undefined, { face: false, approach: false });
-		talk.say('Acolyte', 'Hold.', 'Guard');
-		assert.equal(faced, 0);
-		assert.equal(stepped, 0);
-	});
-
 	it('turns eavesdroppers toward the speaker', () => {
 		const faces:[string, string][] = [];
-		const talk = new TalkNet({
+		const talk = new TalkFeature({
 			inRange: () => true,
 			others: () => ['Guard', 'Captain'],
 			face: (who, toward) => {
@@ -249,7 +235,7 @@ describe('TalkNet', () => {
 
 	it('muffles far speech and asks the listener to come closer', () => {
 		const guard = listener('Guard');
-		const talk = new TalkNet({
+		const talk = new TalkFeature({
 			inRange: () => true,
 			others: () => ['Guard'],
 			clearHear: () => false,
@@ -265,7 +251,7 @@ describe('TalkNet', () => {
 
 	it('does not treat muffled eavesdropping as an interrupting event', () => {
 		const captain = listener('Captain');
-		const talk = new TalkNet({
+		const talk = new TalkFeature({
 			inRange: () => true,
 			others: () => ['Guard', 'Captain'],
 			clearHear: (speaker, listener) => listener === 'Guard',
@@ -279,7 +265,7 @@ describe('TalkNet', () => {
 
 	it('makes a muffled name-drop major for the named listener', () => {
 		const captain = listener('Captain');
-		const talk = new TalkNet({
+		const talk = new TalkFeature({
 			inRange: () => true,
 			others: () => ['Guard', 'Captain'],
 			clearHear: () => false,
@@ -292,7 +278,7 @@ describe('TalkNet', () => {
 
 	it('treats host aliases as a name mention', () => {
 		const fern = listener('Fern');
-		const talk = new TalkNet({
+		const talk = new TalkFeature({
 			inRange: () => true,
 			others: () => ['Fern', 'Guard'],
 			clearHear: () => false,
@@ -305,7 +291,7 @@ describe('TalkNet', () => {
 
 	it('delivers to an attached id when the host lists its role', () => {
 		const fern = listener('Fern');
-		const talk = new TalkNet({
+		const talk = new TalkFeature({
 			inRange: () => true,
 			others: () => ['Herbalist', 'Lys'],
 			clearHear: () => true,
@@ -322,7 +308,7 @@ describe('TalkNet', () => {
 
 	it('makes a muffled role mention major', () => {
 		const fern = listener('Fern');
-		const talk = new TalkNet({
+		const talk = new TalkFeature({
 			inRange: () => true,
 			others: () => ['Fern', 'Guard'],
 			clearHear: () => false,
@@ -334,15 +320,16 @@ describe('TalkNet', () => {
 	});
 });
 
-describe('TalkNet muffled speech', () => {
+describe('TalkFeature muffled speech', () => {
 	it('delivers a muffled line in full once the listener comes close, within the rehear window', () => {
 		const guard = listener('Guard');
 		let close = false;
-		const talk = new TalkNet({
+		const talk = new TalkFeature({
 			inRange: () => true,
 			others: (speaker) => ['Guard', 'BridgeKeeper'].filter((id) => id !== speaker),
 			clearHear: () => close,
-		}, undefined, { face: false, approach: false, rehear: 5 });
+			rehear: 5,
+		});
 		talk.attach(guard);
 		talk.say('BridgeKeeper', 'The bridge is down', undefined, 10);
 		assert.match(guard.events[0]?.text ?? '', /You catch/);

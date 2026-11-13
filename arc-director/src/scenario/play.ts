@@ -1,12 +1,14 @@
 import { STOCK_TRADE_VERBS, STOCK_VERBS } from '../arc/stock-verbs.js';
 import { STOCK_COLLECTIVE_VERBS, STOCK_FORMATION_VERBS } from '../collective/collective-verbs.js';
 import type { ArcResult, StepArg } from '../arc/arc-types.js';
-import { ArcDirector } from '../director/ArcDirector.js';
+import { ArcDirector } from '../index.js';
+import type { CollectiveSpec, VerbCall } from '../director/director-types.js';
+import type { Verbs } from '../director/Verbs.js';
 import type { MemoryDraft } from '../memory/store.js';
 import type { KnowledgeEntry } from '../mind/knowledge.js';
 import { RTS_COMMANDER_VERBS } from '../rts/rts.js';
 import { STOCK_ECONOMY_VERBS, STOCK_UNIT_VERBS } from '../rts/rts-verbs.js';
-import type { SearchSpec } from '../search/search.js';
+import { searchTool, type SearchSpec } from '../search/search.js';
 import { settleDeal } from '../world/deal.js';
 import type { Sound } from '../perception/hearing.js';
 import type { Offer } from '../world/offers.js';
@@ -14,7 +16,7 @@ import type { Outcome, Vec } from '../world/world-types.js';
 import { nextTurn } from '../turn.js';
 import { ABILITIES, abilityHelp, FIGHTERS, FIGHT_VERBS } from './combat.js';
 import { SceneRTS } from './SceneRTS.js';
-import { SceneWorld, type Scene, type SceneRules, type SceneSpot } from './scene-world.js';
+import { SceneWorld, type Scene, type SceneRules, type SceneSpot, type SceneVerb } from './scene-world.js';
 
 /** What a director staging a scene knows of each character: who it is. */
 export type SceneCtx = { id:string };
@@ -48,9 +50,9 @@ export type Scenario = Scene & SceneRules & {
 	thinkEvery?:number;
 	/** Seconds of play it gets. Default {@link PLAY_SECONDS}. */
 	seconds?:number;
-	/** A look-ahead tool `me` may call (`addSearch`): {@link sceneSearch}. */
+	/** A look-ahead tool `me` may call: {@link sceneSearch}. */
 	search?:SceneSearch;
-	/** The sound each verb makes, by name (`withHearing`): with it, minds hear sounds, and `act` may make others (`director.emitSound`). */
+	/** The sound each verb makes, by name (`withHearing`): with it, minds hear sounds, and `act` may make others (`HearingFeature.emit`). */
 	noise?:Record<string, Sound>;
 	/** Every sound made, as the scene's mindless fighters may hear it: whom it draws, and where. `heardBy` gives how loud it is at a fighter, 0 unheard. */
 	onSound?:(world:SceneWorld, from:string | Vec, sound:Sound, heardBy:(id:string)=>number)=>void;
@@ -59,9 +61,9 @@ export type Scenario = Scene & SceneRules & {
 /** A scenario's look-ahead tool, made on its world. */
 export type SceneSearch = { name:string; add:(director:ArcDirector<SceneCtx>, world:SceneWorld)=>void };
 
-/** A look-ahead tool `name` for a scenario, its game read off the scenario's world (`addSearch`). */
+/** A look-ahead tool `name` for a scenario, its game read off the scenario's world (`searchTool`). */
 export function sceneSearch<TState>(name:string, spec:(world:SceneWorld)=>SearchSpec<SceneCtx, TState>):SceneSearch {
-	return { name, add: (director, world) => director.addSearch(name, spec(world)) };
+	return { name, add: (director, world) => director.withTools((t) => t.add(name, searchTool(spec(world)))) };
 }
 
 /** For a scenario's `act`: `maker` takes the first offer made to them, near enough to trade, that `fair` approves. */
@@ -84,7 +86,7 @@ export function answerSpeech(w:SceneWorld, director:ArcDirector<SceneCtx>, who:s
 			w.flags.add(key);
 			const text = reply(line.text);
 			if (text) {
-				director.talk!.say(who, text, to);
+				director.getTalk()!.say(who, text, to);
 			}
 		}
 	}
@@ -129,55 +131,7 @@ function squadOf(s:Scenario):string {
  * kind gives its verbs, and the commander has the stock RTS commander's.
  */
 function stage(director:ArcDirector<SceneCtx>, s:Scenario, world:SceneWorld):ArcDirector<SceneCtx> {
-	// Only what `me` and its squad can do, so a unit's arc is offered no ability none of them has.
-	for (const name of new Set([s.me, ...Object.values(s.squad ?? {})].flatMap(abilitiesOf))) {
-		director.addVerb(name, { ...FIGHT_VERBS[name], help: abilityHelp(ABILITIES[name]), handler: (call) => world.useAbility(call) });
-	}
-	for (const [name, verb] of Object.entries(s.verbs ?? {})) {
-		const { args, help, seen } = verb;
-		if ('run' in verb) {
-			director.addVerb(name, {
-				args,
-				help,
-				seen,
-				handler: (call) => {
-					const result = (done:string | Outcome):ArcResult => (typeof done === 'string' ? { status: 'ok', verb: name, reason: done } : { status: done.ok ? 'ok' : 'failed', verb: name, reason: done.reason });
-					const who = call.character.id;
-					const stop = new AbortController();
-					const done = verb.run(world, { who, args: call.args as Record<string, StepArg>, signal: stop.signal });
-					if (!(done instanceof Promise)) {
-						// A verb that ends at once stays in step.
-						return result(done);
-					}
-					// One that waits (a battle move, a held revive) ends when its promise does, or at once when aborted.
-					return new Promise<ArcResult>((resolve) => {
-						const forget = world.onAbort(who, () => {
-							forget();
-							stop.abort();
-							resolve({ status: 'stopped', verb: name });
-						});
-						void done.then((out) => {
-							forget();
-							resolve(result(out));
-						});
-					});
-				},
-			});
-		}
-		else {
-			director.addVerb(name, { args, help, seen, arc: verb.arc, watch: verb.watch, who: verb.who });
-		}
-	}
-	if (s.rts) {
-		director.withRTS(new SceneRTS(world, squadOf(s), s.rts));
-	}
-	if (s.noise) {
-		director.withHearing({ noise: s.noise, onSound: (from, sound, heardBy) => s.onSound?.(world, from, sound, heardBy) });
-	}
 	s.search?.add(director, world);
-	for (const [id, spot] of Object.entries(s.others ?? {})) {
-		director.addCharacter({ id, offers: spot.offers });
-	}
 	// Waiting is idle too: nothing to do until then.
 	world.idle = (id) => {
 		const character = director.character(id);
@@ -190,11 +144,16 @@ function stage(director:ArcDirector<SceneCtx>, s:Scenario, world:SceneWorld):Arc
 		goals: [{ text: s.goal }],
 		memories: Object.values(s.squad ?? {}).some((spot) => spot.as) ? [...s.memories ?? [], { text: SQUAD_IDLE, pinned: true }] : s.memories,
 	};
-	director
+	for (const [id, spot] of Object.entries(s.others ?? {})) {
+		director.addCharacter({ id, offers: spot.offers });
+	}
+	return director
+		.if(s.rts, (d) => d.withRTS(new SceneRTS(world, squadOf(s), s.rts)))
+		.if(s.noise, (d) => d.withHearing({ noise: s.noise, onSound: (from, sound, heardBy) => s.onSound?.(world, from, sound, heardBy) }))
 		.onAbortArc((id) => world.abort(id))
-		.addStockVerbs()
-		.withMind((m) => m.withCurrency('gold'))
-		.withPriorityQueue({ mayThink: () => false })
+		.withVerbs((v) => sceneVerbs(v, s, world).addStock())
+		.withMind({ currency: 'gold' })
+		.withPriorityThinkQueue({ mayThink: () => false })
 		.withWorld(world)
 		.withKernels(({ id }) => ({ ...world.kernels(id), canSee: (a, b) => world.sees(a.id, b.id) }))
 		.withSight({ look: ({ id }) => world.sight(id) })
@@ -202,14 +161,60 @@ function stage(director:ArcDirector<SceneCtx>, s:Scenario, world:SceneWorld):Arc
 		.withTalk({
 			inRange: (a, b) => world.distance(a, b) <= TALK_RANGE,
 			others: (id) => world.characters.filter((other) => other !== id),
-		}, (line) => world.said.push(line))
+			onSpoke: (line) => world.said.push(line),
+		})
 		.withMap(world.map())
-		.withKnowledge(s.know ?? [])
+		.withKnowledge({ pages: s.know ?? [] })
 		.withContext((id) => (world.find(id) === id ? { id } : undefined))
-		.withDefaultKit({ verbs });
-	if (!s.squad) {
-		return director.addCharacter({ id: s.me.id, ...persona, kit: { verbs: [...verbs, ...abilitiesOf(s.me)] } });
+		.withDefaultKit({ verbs })
+		.if(!s.squad,
+			d => d.addCharacter({ id: s.me.id, ...persona, kit: { verbs: [...verbs, ...abilitiesOf(s.me)] } }),
+			d => d.withVerbs((v) => v.addStockCollective()).addCollective({ ...squadSpec(s, world, verbs), ...persona })
+		);
+}
+
+/** `s`'s own verbs in `v`: the abilities `me` and its squad have (only those, so no arc is offered one none has), and the scene's. */
+function sceneVerbs(v:Verbs<SceneCtx>, s:Scenario, world:SceneWorld):Verbs<SceneCtx> {
+	for (const name of new Set([s.me, ...Object.values(s.squad ?? {})].flatMap(abilitiesOf))) {
+		v.add(name, { ...FIGHT_VERBS[name], help: abilityHelp(ABILITIES[name]), handler: (call) => world.useAbility(call) });
 	}
+	for (const [name, verb] of Object.entries(s.verbs ?? {})) {
+		const { args, help, seen } = verb;
+		if ('run' in verb) {
+			v.add(name, { args, help, seen, handler: (call) => runSceneVerb(world, name, verb.run, call) });
+		}
+		else {
+			v.addAlias(name, { args, help, seen, arc: verb.arc, watch: verb.watch, who: verb.who });
+		}
+	}
+	return v;
+}
+
+/** A scene verb's `run`, as a step: one that ends at once stays in step; one that waits ends with its promise, or stopped. */
+function runSceneVerb(world:SceneWorld, name:string, run:Extract<SceneVerb, { run:unknown }>['run'], call:VerbCall<SceneCtx>):ArcResult | Promise<ArcResult> {
+	const result = (done:string | Outcome):ArcResult => (typeof done === 'string' ? { status: 'ok', verb: name, reason: done } : { status: done.ok ? 'ok' : 'failed', verb: name, reason: done.reason });
+	const who = call.character.id;
+	const stop = new AbortController();
+	const done = run(world, { who, args: call.args as Record<string, StepArg>, signal: stop.signal });
+	if (!(done instanceof Promise)) {
+		return result(done);
+	}
+	return new Promise<ArcResult>((resolve) => {
+		const forget = world.onAbort(who, () => {
+			forget();
+			stop.abort();
+			resolve({ status: 'stopped', verb: name });
+		});
+		void done.then((out) => {
+			forget();
+			resolve(result(out));
+		});
+	});
+}
+
+/** `s`'s squad as a collective: `me` its commander and voice, running the orders its mind gives. */
+function squadSpec(s:Scenario, world:SceneWorld, verbs:string[]):CollectiveSpec<SceneCtx> {
+	const squad = s.squad ?? {};
 	// The scenario's verbs its squad runs too.
 	const unitVerbs = Object.entries(s.verbs ?? {}).filter(([, verb]) => verb.units).map(([name]) => name);
 	const unit = (id:string, spot:Pick<SceneSpot, 'as' | 'kind' | 'tags'>) => {
@@ -222,8 +227,8 @@ function stage(director:ArcDirector<SceneCtx>, s:Scenario, world:SceneWorld):Arc
 		};
 	};
 	// The commander runs the orders its mind gives, so its own kit is its collective's; in an RTS a fighter fights as a unit too.
-	const fights = [s.me, ...Object.values(s.squad)].some((spot) => spot.as);
-	const builds = Object.values(s.squad).some((spot) => spot.kind);
+	const fights = [s.me, ...Object.values(squad)].some((spot) => spot.as);
+	const builds = Object.values(squad).some((spot) => spot.kind);
 	// A scene nothing in which raises a cap on units has nothing to build ahead of.
 	const capped = Object.values(world.kinds).some((k) => (k.provides ?? 0) > 0);
 	const rts = RTS_COMMANDER_VERBS.filter((v) => (fights || !RTS_TACTICS.includes(v)) && (builds || !RTS_ECONOMY.includes(v)) && (capped || v !== 'supply_ahead'));
@@ -233,13 +238,12 @@ function stage(director:ArcDirector<SceneCtx>, s:Scenario, world:SceneWorld):Arc
 		...s.rts ? [...rts, ...s.me.as ? STOCK_UNIT_VERBS.filter((v) => v !== 'unload') : []] : [],
 		...abilitiesOf(s.me),
 	])] };
-	return director.addStockCollectiveVerbs().addCollective({
+	return {
 		id: squadOf(s),
-		...persona,
 		kit: command,
-		characters: [{ ...unit(s.me.id, s.me), kit: command }, ...Object.entries(s.squad).map(([id, spot]) => unit(id, spot))],
+		characters: [{ ...unit(s.me.id, s.me), kit: command }, ...Object.entries(squad).map(([id, spot]) => unit(id, spot))],
 		commander: s.me.id,
-	});
+	};
 }
 
 /**
@@ -261,7 +265,7 @@ async function inScene<T>(
 			director.character(s.me.id)!.mind!.ingestResult(s.last);
 		}
 		for (const { from, text } of s.heard ?? []) {
-			director.talk!.say(from, text, s.me.id);
+			director.getTalk()!.say(from, text, s.me.id);
 		}
 		return await run(world, director);
 	}
@@ -321,7 +325,7 @@ export async function playScenario<T = undefined>(
  * reads off the world at the start and after every tick ({@link SCENE_TICK}).
  */
 export function idleScenario<T>(s:Scenario, look:(world:SceneWorld)=>T):Promise<T[]> {
-	return inScene(s, (director) => director.addFakeInference(), async (world, director) => {
+	return inScene(s, (director) => director.addFake(), async (world, director) => {
 		const seen = [look(world)];
 		while (world.time < (s.seconds ?? PLAY_SECONDS)) {
 			tick(director, s, world);

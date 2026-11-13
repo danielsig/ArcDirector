@@ -8,6 +8,18 @@ import { fixtureParagraph, fixtureSight, type FixtureCtx } from './fixture-scene
 import { resolveInferenceBaseURL, probeHttp } from './probe.js';
 import { sleep } from '../turn.js';
 
+/** The local model's URL, or none (saying why, and exit code 1) when nothing answers there. */
+async function liveBaseURL():Promise<string | undefined> {
+	const baseURL = await resolveInferenceBaseURL();
+	if (await probeHttp(baseURL)) {
+		return baseURL;
+	}
+	console.log('No local model at ARC_DIRECTOR_BASE_URL (default LM Studio http://127.0.0.1:1234/v1).');
+	console.log('Start LM Studio with `lms server start`, or rerun with ARC_DIRECTOR_MOCK=1.');
+	process.exitCode = 1;
+	return undefined;
+}
+
 async function main():Promise<void> {
 	const paragraph = fixtureParagraph();
 	console.log('scene:');
@@ -15,14 +27,17 @@ async function main():Promise<void> {
 	console.log('');
 
 	const mock = process.env.ARC_DIRECTOR_MOCK === '1';
+	const baseURL = mock ? undefined : await liveBaseURL();
+	if (!mock && !baseURL) {
+		return;
+	}
 	const director = new ArcDirector<FixtureCtx>()
-		.withPriorityQueue({
+		.withPriorityThinkQueue({
 			processInterval: 0,
 			heartbeatStart: 0.01,
 			heartbeatMin: 0.01,
 		})
-		.addModel('main', { maxParallel: 1 })
-		.addStockVerbs()
+		.withVerbs((v) => v.addStock())
 		.withDefaultKit({ verbs: STOCK_VERBS })
 		.onVerb((call) => {
 			console.log(`host execute: ${call.verb}`, call.args);
@@ -40,21 +55,11 @@ async function main():Promise<void> {
 				tags: ['gate', 'EastGate'],
 				pinned: true,
 			}],
-		});
-
-	if (mock) {
-		director.addFakeInference(goToNamedInteractable());
-	}
-	else {
-		const baseURL = await resolveInferenceBaseURL();
-		if (!await probeHttp(baseURL)) {
-			console.log('No local model at ARC_DIRECTOR_BASE_URL (default LM Studio http://127.0.0.1:1234/v1).');
-			console.log('Start LM Studio with `lms server start`, or rerun with ARC_DIRECTOR_MOCK=1.');
-			process.exitCode = 1;
-			return;
-		}
-		director.addHttpInference({ baseURL, timeoutMs: 180_000 });
-	}
+		})
+		.if(mock,
+			d => d.addFake({ chat: goToNamedInteractable(), models: { main: { maxParallel: 1 } } }),
+			d => d.addHttp({ baseURL, timeoutMs: 180_000, models: { main: { maxParallel: 1 } } })
+		);
 
 	try {
 		await director.connect();
@@ -66,7 +71,7 @@ async function main():Promise<void> {
 	}
 
 	if (!mock) {
-		console.log(`model: ${director.modelID()}`);
+		console.log(`model: ${director.getModel()?.id}`);
 	}
 
 	director.tick(1);

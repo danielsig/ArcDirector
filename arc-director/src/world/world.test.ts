@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { ArcDirector } from '../director/ArcDirector.js';
+import '../director/shortcuts.js';
 import { dummyEntity } from '../expr/natives.js';
 import { SampleCache } from '../expr/expr-types.js';
 import { buildCatalog } from '../expr/natives.js';
@@ -14,6 +15,8 @@ import { awayGoal, findRoute, groupGoal, memoWorld, pointGoal, reachablePoints, 
 import type { Deal } from './deal.js';
 import type { HostWorld, Transfer, Vec } from './world-types.js';
 import { distance, groundAxes } from './vec.js';
+import { TalkFeature } from '../mind/TalkFeature.js';
+import { WorldVerbsFeature } from './WorldVerbsFeature.js';
 
 type Ctx = { id:string };
 
@@ -169,34 +172,31 @@ async function run(
 ):Promise<{ director:ArcDirector<Ctx> }> {
 	let sent = false;
 	const director = new ArcDirector<Ctx>()
-		.withPriorityQueue({ processInterval: 0, heartbeatStart: 1000, heartbeatMin: 1000 })
+		.withPriorityThinkQueue({ processInterval: 0, heartbeatStart: 1000, heartbeatMin: 1000 })
 		.withIntervals({ watch: 0, think: 0 })
-		.addModel('fake', { maxParallel: 1 })
-		.addFakeInference(() => {
+		.addFake({ chat: () => {
 			const content = sent ? 'wait(seconds=100)' : reply;
 			sent = true;
 			return { content, toolCalls: [] };
-		})
-		.withMind((m) => m.withArcFormat('text'))
-		.addStockVerbs()
-		.addStockCollectiveVerbs()
+		}, models: { fake: { maxParallel: 1 } } })
+		.withMind({ arcFormat: 'text' })
+		.withVerbs((v) => v.addStock()
+			.addStockCollective())
 		.withWorld(grid.world)
 		.withDefaultKit({ verbs: opts.kit })
 		.withKernels((ctx) => ({ me: dummyEntity(ctx.id, { tags: ['character'] }), others: (opts.others ?? []).map((id) => dummyEntity(id, { tags: ['character'] })), items: [], nearRadius: opts.nearRadius }))
-		.withContext((id) => (grid.point.has(id) ? { id } : undefined));
-	if (opts.units) {
-		director.addCollective({ id: 'Hive', kit: { verbs: opts.kit }, identity: { role: 'Leads.' }, commander: opts.commander, characters: opts.units.map((id) => ({ id })) });
-	}
-	else {
-		director.addCharacter({ id: 'Ann', mind: {}, kit: { verbs: opts.kit }, identity: { role: 'Fetches.' } });
-	}
+		.withContext((id) => (grid.point.has(id) ? { id } : undefined))
+		.if(opts.units,
+			d => d.addCollective({ id: 'Hive', kit: { verbs: opts.kit }, identity: { role: 'Leads.' }, commander: opts.commander, characters: (opts.units ?? []).map((id) => ({ id })) }),
+			d => d.addCharacter({ id: 'Ann', mind: {}, kit: { verbs: opts.kit }, identity: { role: 'Fetches.' } })
+		);
 	// The others on the grid are in the cast, without minds: only a character takes a gift or a trade.
 	for (const id of PEOPLE.filter((p) => grid.point.has(p))) {
 		director.addCharacter({ id });
 	}
 	opts.before?.(director);
 	await director.connect();
-	director.mindQueue()!.enqueueMajor(opts.units ? 'Hive' : 'Ann');
+	director.queue!.enqueueMajor(opts.units ? 'Hive' : 'Ann');
 	const dt = 0.1;
 	for (let t = 0; t < (opts.seconds ?? 20) / dt; t++) {
 		grid.step(dt);
@@ -525,12 +525,10 @@ describe('stock world verbs', () => {
 		const grid = new Grid().place('Ann', [0, 0]).place('Lantern', [4, 0]).place('Chest', [4, 0]);
 		grid.carry.set('Lantern', 'Chest');
 		const sight = (d:ArcDirector<Ctx>):void => {
-			d.withSight({
-				look: () => ({
-					self: { id: 'Ann', point: grid.point.get('Ann')! },
-					objects: [{ id: 'Chest', point: [4, 0], tags: [] }, { id: 'Lantern', point: [4, 0], tags: ['item'], attachedTo: 'Chest', attachMode: 'in' }],
-				}),
-			});
+			d.withSight({ look: () => ({
+				self: { id: 'Ann', point: grid.point.get('Ann')! },
+				objects: [{ id: 'Chest', point: [4, 0], tags: [] }, { id: 'Lantern', point: [4, 0], tags: ['item'], attachedTo: 'Chest', attachMode: 'in' }],
+			}) });
 		};
 		const { director } = await run(grid, 'pick_up(Lantern)', { kit: ['pick_up', 'wait'], before: sight });
 		assert.equal(grid.carry.get('Lantern'), 'Ann');
@@ -581,7 +579,7 @@ describe('stock world verbs', () => {
 		const { director } = await run(grid, 'give(item=gold, to=Smith, quantity=5)', {
 			kit: ['give', 'wait'],
 			before: (d) => {
-				d.withMind((m) => m.withCurrency('gold'));
+				d.withMind({ currency: 'gold' });
 				spyTellAll(d, told);
 			},
 		});
@@ -602,7 +600,7 @@ describe('stock world verbs', () => {
 	describe('say walks up to whoever it is said to', () => {
 		const talkOn = (grid:Grid, spoken:string[]) => (d:ArcDirector<Ctx>):void => {
 			const gap = (a:string, b:string):number => distance(grid.point.get(a)!, grid.point.get(b)!);
-			d.withTalk({ inRange: (a, b) => gap(a, b) <= 20, clearHear: (a, b) => gap(a, b) <= 3, others: () => ['Ann', 'Bo'] }, (u) => spoken.push(u.text));
+			d.addFeature(new TalkFeature<Ctx>({ inRange: (a, b) => gap(a, b) <= 20, clearHear: (a, b) => gap(a, b) <= 3, others: () => ['Ann', 'Bo'], onSpoke: (u) => spoken.push(u.text) }));
 		};
 
 		it('until they make out every word, then says it', async () => {
@@ -633,11 +631,12 @@ describe('stock world verbs', () => {
 		const SPREAD = Math.sqrt(32 / 3);
 		/** Talk where `range` is earshot and no one makes out a word, so only the group's own distance ends a walk. */
 		const groupTalk = (grid:Grid, said:(string | string[] | undefined)[], range = 40) => (d:ArcDirector<Ctx>):void => {
-			d.withTalk({
+			d.addFeature(new TalkFeature<Ctx>({
 				inRange: (a, b) => distance(grid.point.get(a)!, grid.point.get(b)!) <= range,
 				clearHear: () => false,
 				others: (id) => ['Ann', ...GROUP].filter((other) => other !== id),
-			}, (u) => said.push(u.to));
+				onSpoke: (u) => said.push(u.to),
+			}));
 		};
 		const lastResult = (director:ArcDirector<Ctx>):ArcResult | undefined => director.character('Ann')!.lastResult;
 		const ask = (grid:Grid, reply:string, more:(d:ArcDirector<Ctx>)=>void = () => undefined, said:(string | string[] | undefined)[] = [], range = 40) => run(grid, reply, {
@@ -682,10 +681,10 @@ describe('stock world verbs', () => {
 			grid.place('Bo', [30, 0]);
 			const asked:[string, string, readonly string[]][] = [];
 			const said:(string | string[] | undefined)[] = [];
-			const { director } = await ask(grid, 'say(text=Hold fast, to=others)', (d) => d.withGroupWalk((character, verb, targets) => {
+			const { director } = await ask(grid, 'say(text=Hold fast, to=others)', (d) => d.withWorldVerbs({ groupWalk: (character, verb, targets) => {
 				asked.push([character.id, verb, targets]);
 				return false;
-			}), said, 25);
+			} }), said, 25);
 			assert.deepEqual(asked[0], ['Ann', 'say', GROUP]);
 			assert.deepEqual(said, [['Mira', 'Smith']]);
 			assert.deepEqual(grid.point.get('Ann'), [-10, 0]);
@@ -696,7 +695,7 @@ describe('stock world verbs', () => {
 		it('takes the body only when it would walk', async () => {
 			const stayed = groupGrid();
 			let walk = true;
-			const { director } = await ask(stayed, 'wait(seconds=100)', (d) => d.withGroupWalk(() => walk));
+			const { director } = await ask(stayed, 'wait(seconds=100)', (d) => d.withWorldVerbs({ groupWalk: () => walk }));
 			const ann = director.character('Ann')!;
 			const line = (to:string):[{ verb:string; args:{ text:string; to:string } }] => [{ verb: 'say', args: { text: 'Hi', to } }];
 			assert.equal(ann.takesNoBody(line('others')), false);
@@ -723,7 +722,7 @@ describe('stock world verbs', () => {
 
 		it('fails clearly when no one is left, none is in earshot, or the expression does not evaluate', async () => {
 			const reasonOf = async (reply:string, range = 40):Promise<string | undefined> => {
-				const { director } = await ask(groupGrid(), reply, (d) => d.withGroupWalk(() => false), [], range);
+				const { director } = await ask(groupGrid(), reply, (d) => d.withWorldVerbs({ groupWalk: () => false }), [], range);
 				const reason = lastResult(director)?.reason;
 				director.dispose();
 				return reason;
@@ -747,14 +746,14 @@ describe('stock world verbs', () => {
 			const { director } = await run(grid, 'rally(to=others)', {
 				kit: ['rally', 'wait'],
 				others: GROUP,
-				before: (d) => d.addVerb('rally', {
+				before: (d) => d.withVerbs((v) => v.add('rally', {
 					args: { to: 'id' },
 					group: 'to',
 					handler: (call) => {
 						got.push(call.args.to, distance(grid.point.get('Ann')!, [10, 0]) <= SPREAD + 0.01);
 						return { status: 'ok', verb: 'rally' };
 					},
-				}),
+				})),
 			});
 			assert.deepEqual(got, [GROUP, true]);
 			director.dispose();
@@ -768,16 +767,14 @@ describe('stock world verbs', () => {
 					kit: ['say', 'wait'],
 					units: ['Cap', 'Tess', 'Wynn'],
 					commander: 'Cap',
-					before: (d) => {
-						d.withTalk({
+					before: (d) => d
+						.addFeature(new TalkFeature<Ctx>({
 							inRange: () => true,
 							clearHear: () => false,
 							others: (id) => ['Cap', 'Tess', 'Wynn'].filter((other) => other !== id),
-						}, (u) => said.push(u.to));
-						if (stays) {
-							d.withGroupWalk((character) => character.collective?.commander !== character);
-						}
-					},
+							onSpoke: (u) => said.push(u.to),
+						}))
+						.if(stays, (s) => s.withWorldVerbs({ groupWalk: (character) => character.collective?.commander !== character })),
 				});
 				assert.deepEqual(said, [to.startsWith('units.') ? 'Wynn' : ['Tess', 'Wynn']], `${to}`);
 				assert.equal(grid.point.get('Cap')![0] === 0, stays, `${to}: ${grid.point.get('Cap')}`);
@@ -992,8 +989,8 @@ describe('stock world verbs', () => {
 
 	it('refuses to connect a kit whose verbs the world cannot run', async () => {
 		const director = new ArcDirector<Ctx>()
-			.addFakeInference()
-			.addStockVerbs()
+			.addFake()
+			.withVerbs((v) => v.addStock())
 			.withWorld({ find: () => undefined, getPose: () => undefined })
 			.withContext((id) => ({ id }))
 			.addCharacter({ id: 'Ann', mind: {}, kit: { verbs: ['go_to', 'examine'] }, identity: { role: 'Waits.' } });

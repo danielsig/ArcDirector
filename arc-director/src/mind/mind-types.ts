@@ -1,4 +1,6 @@
 import type { Arc } from '../arc/arc-types.js';
+import type { Mind } from './mind.js';
+import type { ModelChat } from '../director/ModelSlots.js';
 import type { JsonSchema } from '../json.js';
 
 /**
@@ -65,13 +67,8 @@ export interface ConversationTurn {
 	text:string;
 };
 
-/** Named English that is always in the user block this think. */
-export interface Sense<TCtx = unknown> {
-	/** The sense's description. */
-	description:string;
-	/** The function that will be called to gather the sense. */
-	gather:(ctx:TCtx)=>unknown;
-}
+/** Named English that is always in the user block this think: what it senses now, from the voice's context, for `mind`; `undefined` leaves it out of this think. */
+export type Sense<TCtx = unknown> = (ctx:TCtx, mind:Mind<TCtx>)=>unknown;
 
 export interface ToolSpec<TCtx = unknown> {
 
@@ -79,6 +76,8 @@ export interface ToolSpec<TCtx = unknown> {
 	description:string;
 	/** The tool's arguments' JSON schema. */
 	parameters:JsonSchema;
-	/** The function that will be called when the tool is called. Returns a promise or a value. */
-	handler:(ctx:TCtx, args:unknown)=>unknown | Promise<unknown>;
+	/** Whether it can work for `mind` now (`see_map` for a model that sees); omit for always. A kit's `tools` is the host's say. */
+	offered?:(mind:Mind<TCtx>)=>boolean;
+	/** What the tool answers `mind`, which called it from `ctx`: a value or a promise of one. `chat` is its think's own lease. */
+	handler:(ctx:TCtx, args:unknown, mind:Mind<TCtx>, chat:ModelChat)=>unknown | Promise<unknown>;
 }

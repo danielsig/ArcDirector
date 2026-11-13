@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { Mind } from '../mind/mind.js';
 import { describe, it } from 'node:test';
 import { search, searchText, searchTool, type SearchMove } from './search.js';
 
@@ -95,6 +96,6 @@ describe('search', () => {
 	it('is a tool that searches from where its caller stands', () => {
 		const tool = searchTool<{ id:string }, Board>({ help: 'Look ahead in tic-tac-toe.', state: () => board('XX. OO. ...', 'X'), ...TIC_TAC_TOE });
 		assert.match(tool.description, /^Look ahead in tic-tac-toe\./);
-		assert.match(String(tool.handler({ id: 'Ada' }, {})), /^1\. c1: win/);
+		assert.match(String(tool.handler({ id: 'Ada' }, {}, new Mind(), () => Promise.reject(new Error('no chat')))), /^1\. c1: win/);
 	});
 });

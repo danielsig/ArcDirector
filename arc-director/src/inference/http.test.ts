@@ -159,11 +159,6 @@ describe('HttpProvider thinking', () => {
 		const model = idWithThinkOff('strength');
 		const provider = new HttpProvider({
 			baseURL: 'http://127.0.0.1:9/v1',
-			onRequest: ({ body, path }) => {
-				order.push('request');
-				logged = body;
-				assert.match(path, /chat\/completions$/);
-			},
 			fetch: async (input, init) => {
 				const url = String(input);
 				if (url.includes('/responses') || url.endsWith('/api/v1/models')) {
@@ -180,6 +175,11 @@ describe('HttpProvider thinking', () => {
 		await provider.chat({
 			model,
 			messages: [{ role: 'user', content: 'pong' }],
+			onRequest: ({ body, path }) => {
+				order.push('request');
+				logged = body;
+				assert.match(path, /chat\/completions$/);
+			},
 		});
 		assert.deepEqual(order, ['request', 'fetch']);
 		const messages = logged?.messages as Array<{ role?:string; content?:string }>;

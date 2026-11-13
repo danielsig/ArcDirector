@@ -1,4 +1,5 @@
 export { Collective, type CollectiveJSON, type CollectiveOptions } from './Collective.js';
+export { HandoverFeature, type HandoverOptions } from './HandoverFeature.js';
 export {
 	STOCK_COLLECTIVE_VERBS,
 	STOCK_COLLECTIVE_VERB_DEFS,

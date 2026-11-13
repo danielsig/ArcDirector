@@ -20,10 +20,7 @@ const RUNS = 20;
 function perception():{ senses:Record<string, Sense<FixtureCtx>>; tools:Record<string, ToolSpec<FixtureCtx>> } {
 	return {
 		senses: {
-			environment: {
-				description: 'English scene with grouped trees and one PascalCase interactable. No coordinates.',
-				gather: (ctx) => ctx.paragraph,
-			},
+			environment: (ctx) => ctx.paragraph,
 		},
 		tools: {},
 	};

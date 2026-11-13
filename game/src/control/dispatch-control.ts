@@ -142,7 +142,8 @@ async function think(
 	return {
 		mind: mind.id,
 		arc: out ? formatArc(out, mind.owner.verbs) : null,
-		enacted: enact ?? mind.autoEnact,
+		// Under a director a think enacts its Arc unless told not to.
+		enacted: enact ?? true,
 	};
 }
 

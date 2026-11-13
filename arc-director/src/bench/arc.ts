@@ -155,17 +155,17 @@ export async function benchArcs(
 		const shared = await inference.connect().then(() => true, () => false);
 		const setUp = shared ? (director:ArcDirector<SceneCtx>) => {
 			models(director);
-			director.shareInference(inference);
+			inference.models.providers.forEach((provider) => director.addProvider(provider));
 		} : models;
 		const trials = cases.map((c) => ({ name: c.me.id, skill: c.skill, level: c.level, run: (time:Timer) => playArcCase(c, setUp, time) }));
 		const score = await runBench(trials, {
 			onTrial,
 			repeats,
 			quick,
-			parallel: parallel ?? Math.max(1, inference.modelParallel()),
-			warmUp: shared ? () => inference.warmUp() : undefined,
+			parallel: parallel ?? Math.max(1, inference.getModel()?.maxParallel ?? 0),
+			warmUp: shared ? () => inference.models.warmUp() : undefined,
 		});
-		const sampling = inference.modelSampling();
+		const sampling = inference.getModel()?.sampling;
 		return sampling ? { ...score, sampling } : score;
 	}
 	finally {

@@ -251,7 +251,7 @@ export type HudModel = {
 	arcDirectorOn:boolean;
 	/** Chat model id currently in use / selected in the menu. */
 	model:string;
-	/** ThinkQueue slots (HTTP in flight). Menu + localStorage. */
+	/** PriorityThinkQueue slots (HTTP in flight). Menu + localStorage. */
 	maxParallel:number;
 	/** LM Studio `context_length` when loading the chat model. Menu + localStorage. */
 	contextLength:number;

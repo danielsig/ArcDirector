@@ -1,10 +1,10 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { OfferBook } from './offers.js';
+import { OffersFeature } from './OffersFeature.js';
 
-describe('OfferBook', () => {
+describe('OffersFeature', () => {
 	it('takes a standing offer in whole lots, and a directed one only whole', () => {
-		const book = new OfferBook();
+		const book = new OffersFeature();
 		book.post({ from: 'Baker', give: { Loaf: 1 }, get: { gold: 5 } });
 		assert.deepEqual(book.match('Ann', 'Baker', { gold: 15 }, { loaf: 3 }), {
 			offer: book.all[0],
@@ -19,13 +19,13 @@ describe('OfferBook', () => {
 	});
 
 	it('settles better terms at the maker\'s price', () => {
-		const book = new OfferBook();
+		const book = new OffersFeature();
 		book.post({ from: 'Baker', give: { Loaf: 1 }, get: { gold: 5 } });
 		assert.deepEqual(book.match('Ann', 'Baker', { gold: 9 }, { Loaf: 1 })?.pay, { gold: 5 });
 	});
 
 	it('replaces, withdraws, and uses up', () => {
-		const book = new OfferBook();
+		const book = new OffersFeature();
 		book.post({ from: 'Baker', give: { Loaf: 1 }, get: { gold: 5 } });
 		book.post({ from: 'Baker', give: { Loaf: 1 }, get: { Egg: 2 } });
 		book.post({ from: 'Baker', give: { Loaf: 1 }, get: { gold: 6 } });

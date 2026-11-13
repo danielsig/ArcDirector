@@ -1,5 +1,5 @@
 import { Time, distanceXZ, type GameObject } from '@arc-director/kindling';
-import { type ArcResult, type SpeechUtterance, type VerbCall } from 'arc-director';
+import type { ArcResult, SpeechUtterance, VerbCall } from 'arc-director';
 import { HumanBody, Named } from '../engine/components';
 import type { DemoWorld } from '../engine/demo-world';
 import { coinsOf } from '../items/wallet';
@@ -135,9 +135,9 @@ export function playerSay(host:GameHost, text:string):void {
 	const directed = parseDirectedLine(spoken, talkOthers(host.world, 'Player'));
 	const line = directed?.text ?? spoken;
 	const to = directed?.to ?? (peers.length <= 1 ? peers[0] : peers);
-	const result = host.talk.say('Player', line, to, host.arc?.time);
-	if (result.status !== 'ok') {
-		host.world.setMessage(result.reason ?? 'no one heard');
+	const result = host.arc?.getTalk()?.say('Player', line, to, host.arc.time);
+	if (result?.status !== 'ok') {
+		host.world.setMessage(result?.reason ?? 'no one heard');
 	}
 }
 

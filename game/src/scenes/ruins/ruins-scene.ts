@@ -283,7 +283,7 @@ function hopWin(host:GameHost, winners:GameObject[], spec:CollectiveSpec<Charact
 		hop.until = Time.time + 48;
 		hop.enabled = true;
 	}
-	const queue = host.arc?.mindQueue();
+	const queue = host.arc?.queue;
 	queue?.setAiOn(spec === DAWN ? DUSK.id : DAWN.id, false);
 	queue?.ensure(spec.id, { skipHeartbeat: true, skipMajor: true });
 	queue?.abortThink(spec.id);
@@ -359,23 +359,24 @@ function goals(host:GameHost):SceneGoals {
 	};
 }
 
-export function createDirector(host:GameHost):ArcDirector<CharacterCtx> {
+export function createDirector(host:GameHost):ArcDirector<CharacterCtx, GameObject> {
 	// Once it is won only being spoken to or given something wakes a mind: a line ending must not lead to the next line.
-	host.hooks = { checkBargain: tickFight, goals, mayThink: (_, __, reason) => !host.bargainDone || reason === 'watch' };
-	return host.configure(new ArcDirector<CharacterCtx>())
+	host.hooks = { checkBargain: tickFight, goals, mayThink: (h, m, reason) => !host.bargainDone || reason === 'watch' };
+	return host.configure(new ArcDirector<CharacterCtx, GameObject>())
+		// A captain stays where its doctrine and its own laws keep it: a line to its units reaches those in earshot.
+		.withWorldVerbs({ groupWalk: (character) => character.collective?.commander !== character })
 		.withMOBA(fightVerbs(host))
 		// The ruins' own line: Knight and Blade on the nearest enemy, the rest behind them.
-		.addVerb('rank', { handler: (call) => doRank(host, call) })
+		.withVerbs((v) => v.add('rank', { handler: (call) => doRank(host, call) }))
 		.onCommanderVacant((party) => succeedCommand(host, party))
-		// A captain stays where its doctrine and its own laws keep it: a line to its units reaches those in earshot.
-		.withGroupWalk((character) => character.collective?.commander !== character)
 		// Each rival is marked in reach or not, so its commander's roster says who can hit whom.
 		.withSight({ limit: 16, look: (ctx) => markReach(host, ctx.character, lookWorld(ctx.character, host.ambient, host)) })
-		.withNames({ seen: seenInFight })
-		.withMind((m) => m
-			.withThinkInstructions({ off: NO_THINK })
-			.withVerbInstructions(`${DEFAULT_VERB_INSTRUCTIONS} ${FIGHT_DOCTRINE}`)
-			.withArcExample(FIGHT_EXAMPLE))
+		.withNames(seenInFight)
+		.withMind({
+			thinkInstructions: { off: NO_THINK },
+			verbInstructions: `${DEFAULT_VERB_INSTRUCTIONS} ${FIGHT_DOCTRINE}`,
+			arcExample: FIGHT_EXAMPLE,
+		})
 		// Characters run the programs their commander issues them: their role's attack among them.
 		.withDefaultKit({ verbs: [...FIGHT.verbs, 'protect', 'block', ...Object.keys(ATTACKS)], tools: [] })
 		.addCollective(DAWN)
