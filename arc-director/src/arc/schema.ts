@@ -2,20 +2,21 @@ import type { JsonSchema } from '../json.js';
 import { namesWord } from '../text.js';
 import { JOINS } from './arc-types.js';
 import { STOCK_COLLECTIVE_VERB_DEFS } from '../collective/collective-verbs.js';
-import { argBase, argKinds, CHOOSE_VERB, isOptional, GROUP_VERB, STOCK_VERB_DEFS, TEST_VERB, type VerbArgKind, type VerbDef, type VerbRegistry, type VerbSpec } from './stock-verbs.js';
+import { argBase, argKinds, CHOOSE_VERB, IF_VERB, isOptional, GROUP_VERB, STOCK_VERB_DEFS, TEST_VERB, type VerbArgKind, type VerbDef, type VerbRegistry, type VerbSpec } from './stock-verbs.js';
+import { constraintAt, constraintHelp, insideOf, narrowsAt, type ArgConstraint, type ArgPath } from './constraints.js';
 
 function ref(name:string):JsonSchema {
 	return { $ref: `#/$defs/${name}` };
 }
 
-/** The schema of one arg by its kind, on an `endless` verb or not. An arc is the shared `$defs.arc`. */
-function argSchema(kind:VerbArgKind, endless?:boolean):JsonSchema {
+/** The schema of one arg by its kind and constraint `c` (not its `custom` rules), on an `endless` verb or not. An arc is `arc`, its defs. */
+function argSchema(kind:VerbArgKind, c:ArgConstraint, arc:JsonSchema, endless?:boolean):JsonSchema {
 	const base = argBase(kind);
 	if (base === 'arc') {
-		return ref('arc');
+		return arc;
 	}
 	if (base === 'number') {
-		return { type: 'number' };
+		return { type: c.integer ? 'integer' : 'number', ...(c.min === undefined ? {} : { minimum: c.min }), ...(c.max === undefined ? {} : { maximum: c.max }) };
 	}
 	// True, rounds or seconds; an endless verb holds for seconds only.
 	if (base === 'hold') {
@@ -27,7 +28,7 @@ function argSchema(kind:VerbArgKind, endless?:boolean):JsonSchema {
 	if (base === 'bundle') {
 		return { type: 'object', additionalProperties: { type: 'number' } };
 	}
-	return { type: 'string' };
+	return c.names ? { type: 'string', enum: [...c.names] } : { type: 'string' };
 }
 
 /** Last in every step, so a grammar writes the step's own args before how it joins the next. */
@@ -36,8 +37,14 @@ const THEN:JsonSchema = { type: 'string', enum: [...JOINS] };
 /** `let name = step`, first in a step as in Arc text. */
 const LET:JsonSchema = { type: 'string' };
 
-/** One step of one verb: `verb` is that verb's name and comes first, its args follow in the order the verb lists them. */
-function verbStep(spec:VerbSpec):JsonSchema {
+/** The schema of the arc held where `path` says (none: the root's), by reference. */
+type ArcRef = (path?:ArgPath)=>JsonSchema;
+
+/**
+ * One step of one verb written `at` an arc arg: `verb` is that verb's name and comes first, its args follow in the order
+ * the verb lists them.
+ */
+function verbStep(spec:VerbSpec, at:ArgPath | undefined, arcRef:ArcRef):JsonSchema {
 	if (spec.name === CHOOSE_VERB) {
 		return {
 			type: 'object',
@@ -47,12 +54,16 @@ function verbStep(spec:VerbSpec):JsonSchema {
 				let: LET,
 				verb: { const: CHOOSE_VERB },
 				goal: { type: 'string' },
-				choices: { type: 'object', additionalProperties: ref('arc') },
+				choices: { type: 'object', additionalProperties: arcRef(`${CHOOSE_VERB}.arc`) },
 				then: THEN,
 			},
 		};
 	}
 	const kinds = Object.entries(argKinds(spec));
+	const argSchemaOf = (key:string, kind:VerbArgKind):JsonSchema => {
+		const c = constraintAt(spec, key, at);
+		return Object.assign(argSchema(kind, c, arcRef(spec.name === IF_VERB ? at : `${spec.name}.${key}`), spec.endless), ...(c.custom ?? []).map((rule) => rule.schema));
+	};
 	return {
 		type: 'object',
 		additionalProperties: false,
@@ -60,18 +71,25 @@ function verbStep(spec:VerbSpec):JsonSchema {
 		properties: {
 			let: LET,
 			verb: { const: spec.name },
-			...Object.fromEntries(kinds.map(([key, kind]) => [key, argSchema(kind, spec.endless)])),
+			...Object.fromEntries(kinds.map(([key, kind]) => [key, argSchemaOf(key, kind)])),
 			then: THEN,
 		},
 	};
 }
 
-const GROUP_STEP:JsonSchema = {
-	type: 'object',
-	additionalProperties: false,
-	required: ['verb', 'arc'],
-	properties: { let: LET, verb: { const: GROUP_VERB }, arc: ref('arc'), then: THEN },
-};
+function groupStep(arc:JsonSchema):JsonSchema {
+	return {
+		type: 'object',
+		additionalProperties: false,
+		required: ['verb', 'arc'],
+		properties: { let: LET, verb: { const: GROUP_VERB }, arc, then: THEN },
+	};
+}
+
+/** The args of `spec` whose arcs are a place of their own: none of an `if`'s (they are where it is), a choice as `arc`. */
+function arcKeys(spec:VerbSpec):string[] {
+	return spec.name === IF_VERB ? [] : spec.name === CHOOSE_VERB ? ['arc'] : Object.keys(spec.args).filter((key) => argBase(spec.args[key].kind) === 'arc');
+}
 
 const TEST_STEP:JsonSchema = {
 	type: 'object',
@@ -99,20 +117,44 @@ function toolReply(name:string, parameters:JsonSchema):JsonSchema {
  * per tool and per verb of the whole `catalog`, never of one mind's kit or tools, so the schema is the same bytes
  * for every mind and think; the kit and the mind's own tools are checked once the reply is read. An arc nests through
  * `$defs`, so any depth costs the same few kilobytes. `command` is a step of the reply's own root only, never of a nested
- * arc, so a grammar cannot write one inside a loop or a law.
+ * arc, so a grammar cannot write one inside a loop or a law. An arc arg that constraints narrow (`law.arc`) has defs of
+ * its own (`arc_in_law`, `step_in_law`). It accepts all the validator does, and may accept more (`depth`, `syntax`).
  */
 export function replySchema(catalog:VerbRegistry, tools:Record<string, JsonSchema> = {}):JsonSchema {
 	const command = catalog.list().find((spec) => spec.name === 'command');
+	const places = new Map<ArgPath, ArgConstraint>();
+	for (const spec of catalog.list()) {
+		for (const key of arcKeys(spec)) {
+			const path:ArgPath = `${spec.name}.${key}`;
+			const c = constraintAt(spec, key);
+			if (c.subverbs || c.not || c.maxSteps !== undefined || narrowsAt(catalog.list(), path)) {
+				places.set(path, c);
+			}
+		}
+	}
+	const nameOf = (path:ArgPath):string => path.replace(/\.arc$/, '').replace('.', '_');
+	const arcRef:ArcRef = (path) => ref(path && places.has(path) ? `arc_in_${nameOf(path)}` : 'arc');
+	const stepAt = (at?:ArgPath, { subverbs, not }:ArgConstraint = {}):JsonSchema => ({
+		anyOf: [
+			...catalog.list().filter((spec) => spec !== command && (subverbs?.includes(spec.name) ?? true) && !not?.includes(spec.name)).map((spec) => verbStep(spec, at, arcRef)),
+			groupStep(arcRef(at)),
+			TEST_STEP,
+		],
+	});
 	const steps:JsonSchema = {
 		type: 'object',
 		additionalProperties: false,
 		required: ['steps'],
-		properties: { steps: command ? { type: 'array', minItems: 1, items: { anyOf: [verbStep(command), ref('step')] } } : ref('arc') },
+		properties: { steps: command ? { type: 'array', minItems: 1, items: { anyOf: [verbStep(command, undefined, arcRef), ref('step')] } } : ref('arc') },
 	};
 	const defs:Record<string, JsonSchema> = {
 		arc: { type: 'array', minItems: 1, items: ref('step') },
-		step: { anyOf: [...catalog.list().filter((spec) => spec !== command).map(verbStep), GROUP_STEP, TEST_STEP] },
+		step: stepAt(),
 	};
+	for (const [path, c] of places) {
+		defs[`arc_in_${nameOf(path)}`] = { type: 'array', minItems: 1, ...(c.maxSteps === undefined ? {} : { maxItems: c.maxSteps }), items: ref(`step_in_${nameOf(path)}`) };
+		defs[`step_in_${nameOf(path)}`] = stepAt(path, c);
+	}
 	const calls = Object.entries(tools).map(([name, parameters]) => toolReply(name, parameters));
 	return calls.length === 0 ? { ...steps, $defs: defs } : { anyOf: [...calls, steps], $defs: defs };
 }
@@ -144,8 +186,19 @@ export function docsFor(text:string, self:string, allowed:ReadonlySet<string>, c
 	return kept.join(' ').replace(/\s+/g, ' ').trim();
 }
 
+/** What constraints say of `spec`'s args, in its help line: `seconds at most 10 inside a law`. Only verbs in `allowed` are named. */
+function constraintsHelp(spec:VerbSpec, allowed:ReadonlySet<string>):string {
+	const shown = (verbs:readonly string[]):string[] => verbs.filter((verb) => allowed.has(verb));
+	const inside = Object.entries(spec.whenInside ?? {}).filter(([path]) => path.startsWith('*.') || allowed.has(path.slice(0, path.indexOf('.'))));
+	return [
+		...Object.entries(spec.args).map(([key, c]) => constraintHelp(key, c, shown)),
+		...inside.flatMap(([path, args]) => Object.entries(args).map(([key, c]) => constraintHelp(key, c, shown)).filter(Boolean).map((text) => `${text} ${insideOf(path)}`)),
+	].filter(Boolean).join('; ');
+}
+
 function formatVerbHelp(spec:VerbSpec, allowed:ReadonlySet<string>, catalog:readonly string[], stockHelp = true):string {
-	const help = spec.help && (stockHelp || !isStockHelp(spec)) ? docsFor(spec.help, spec.name, allowed, catalog) : '';
+	const docs = spec.help && (stockHelp || !isStockHelp(spec)) ? docsFor(spec.help, spec.name, allowed, catalog) : '';
+	const help = [docs, constraintsHelp(spec, allowed)].filter(Boolean).join('; ');
 	if (spec.name === CHOOSE_VERB) {
 		return help ? `${spec.name}(goal, name=arc, …) — ${help}` : `${spec.name}(goal, name=arc, …)`;
 	}

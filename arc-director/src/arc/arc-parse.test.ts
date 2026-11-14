@@ -640,3 +640,61 @@ describe('one grammar: arcs', () => {
 		assert.equal(parseArcText('if (true) { wait() }', verbs())[0].verb, 'if', 'a literal is a condition still');
 	});
 });
+
+describe('constraints', () => {
+	const read = (text:string, registry:VerbRegistry):Arc => parseArcText(text, registry);
+
+	it('narrows an arg where its verb is written, and only there', () => {
+		const registry = verbs().constrain('wait', 'seconds', { max: 10 }, 'law.arc').constrain('wait', 'seconds', { min: 1 }, '*.arc');
+		read('wait(seconds=30)', registry);
+		read('loop { wait(seconds=30) }', registry);
+		assert.throws(() => read('law(watch=isHurt(me)) { wait(seconds=12) }', registry), /^ArcError: wait inside a law: seconds is at least 1 and at most 10$/, 'law.arc and *.arc both');
+		assert.throws(() => read('law(watch=isHurt(me)) { (go_to(Keep) && wait(seconds=12)) }', registry), /seconds is at least 1 and at most 10/, 'a group is where it stands');
+		assert.throws(() => read('loop { wait(seconds=0.5) }', registry), /^ArcError: wait inside a loop: seconds is at least 1$/);
+		read('law(watch=isHurt(me)) { loop { wait(seconds=12) } }', registry);
+	});
+
+	it('meets constraints in any order: bounds tighten, lists intersect, not joins', () => {
+		const a = verbs().constrain('go_to', 'target', { names: ['Keep', 'Well', 'Gate'] }).constrain('go_to', 'target', { names: ['Gate', 'Keep'] })
+			.constrain('wait', 'seconds', { max: 10, integer: true }).constrain('wait', 'seconds', { max: 20, min: 2 })
+			.constrain('loop', 'arc', { not: ['say'] }).constrain('loop', 'arc', { not: ['give'], subverbs: ['go_to', 'say', 'give', 'wait'] });
+		const b = verbs().constrain('loop', 'arc', { not: ['give'], subverbs: ['wait', 'go_to', 'say', 'give'] }).constrain('loop', 'arc', { not: ['say'] })
+			.constrain('wait', 'seconds', { max: 20, min: 2 }).constrain('wait', 'seconds', { integer: true, max: 10 })
+			.constrain('go_to', 'target', { names: ['Gate', 'Keep'] }).constrain('go_to', 'target', { names: ['Keep', 'Well', 'Gate'] });
+		for (const registry of [a, b]) {
+			assert.throws(() => read('go_to(Well)', registry), /^ArcError: go_to: target is one of (Keep, Gate|Gate, Keep); Well is not$/);
+			assert.throws(() => read('wait(seconds=11)', registry), /seconds is a whole number and at least 2 and at most 10/);
+			assert.throws(() => read('wait(seconds=2.5)', registry), /seconds is a whole number/);
+			assert.throws(() => read('loop { say(Hi) }', registry), /^ArcError: loop's arc may not hold say$/);
+			assert.throws(() => read('loop { give(item=Egg, to=Mira) }', registry), /may not hold give/);
+			assert.throws(() => read('loop { wander() }', registry), /^ArcError: loop's arc may hold only .+; not wander$/);
+			read('go_to(Keep) && wait(seconds=4) && loop { go_to(Gate) ; wait() ; isHurt(me) }', registry);
+		}
+	});
+
+	it('bounds an arc: its steps, its verbs inside it at any depth, and how deep it nests', () => {
+		const registry = verbs().constrain('law', 'arc', { maxSteps: 2, not: ['say'], depth: 1 });
+		assert.throws(() => read('law(watch=isHurt(me)) { go_to(Keep) ; wait() ; wait() }', registry), /^ArcError: law's arc may hold at most 2 steps; it has 3$/);
+		assert.throws(() => read('law(watch=isHurt(me)) { loop { say(Help) } }', registry), /loop's arc may not hold say/);
+		assert.throws(() => read('law(watch=isHurt(me)) { loop { loop { wait() } } }', registry), /^ArcError: loop's arc may hold no arc inside it; loop holds one$/);
+		read('law(watch=isHurt(me)) { loop { wait() } }', registry);
+		read('say(Hi) ; loop { say(Hi) ; wait() ; wait() }', registry);
+	});
+
+	it('checks expression syntax and the host\'s own rules', () => {
+		const registry = verbs()
+			.constrain('wait', 'until', { syntax: 'expr' }, '*.arc')
+			.constrain('say', 'text', { custom: [{ check: (text) => (String(text).length > 12 ? 'text is 12 letters at most' : undefined) }] });
+		const broken = JSON.stringify({ steps: [{ verb: 'loop', arc: [{ verb: 'wait', until: 'isHurt(me) &&' }] }] });
+		parseArc(broken, verbs());
+		assert.throws(() => parseArc(broken, registry), /^ArcError: wait inside a loop: until: /);
+		assert.throws(() => read('say("Hello there, friend")', registry), /^ArcError: say: text is 12 letters at most$/);
+	});
+
+	it('constrains only an arg the verb has, and keeps it through a view', () => {
+		assert.throws(() => verbs().constrain('wait', 'speed', { max: 1 }), /verb wait: no arg 'speed'/);
+		assert.throws(() => verbs().constrain('go_to', 'within', { max: 1 }), /no arg 'within'/, 'a runtime arg is narrowed only inside an arc');
+		const view = verbs().constrain('go_to', 'within', { max: 5 }, 'loop.arc').view(['go_to', 'loop']);
+		assert.throws(() => read('loop { go_to(Keep, within=9) }', view), /go_to inside a loop: within is at most 5/);
+	});
+});

@@ -32,6 +32,7 @@ export type { Arc, ArcResult, ArcStatus, CountMap, Join, Step } from './arc/arc-
 export { arcSteps, firstStep, isArc } from './arc/arc-types.js';
 export { ArcError, BlockedArcError } from './arc/arc-types.js';
 export { VerbRegistry, STOCK_VERBS, STOCK_MOVE_VERBS, STOCK_ITEM_VERBS, STOCK_TRADE_VERBS, STOCK_MIND_VERBS, STOCK_ARC_VERBS, CHOOSE_VERB, GROUP_VERB, PASS_VERB, STOCK_VERB_DEFS, MIND_ONLY_VERBS, type StockVerb, type ArgSpec, type VerbArgKind, type VerbArgMap, type VerbDef, type VerbSpec } from './arc/stock-verbs.js';
+export type { ArgCheck, ArgConstraint, ArgPath } from './arc/constraints.js';
 export { replySchema, verbHelp } from './arc/schema.js';
 export { validateArc } from './arc/validate.js';
 export { parseArcText } from './arc/arc-parse.js';

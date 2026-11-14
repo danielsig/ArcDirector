@@ -1,5 +1,6 @@
 import type { Step, StepArg } from './arc-types.js';
 import { STOCK_COLLECTIVE_VERB_DEFS, type StockCollectiveVerb } from '../collective/collective-verbs.js';
+import { meet, type ArgConstraint, type ArgPath } from './constraints.js';
 
 /**
  * `id` is a character, thing or place; the host always receives a real id, even when the model wrote its own name for it
@@ -11,8 +12,11 @@ import { STOCK_COLLECTIVE_VERB_DEFS, type StockCollectiveVerb } from '../collect
  */
 export type VerbArgKind = 'id' | 'id?' | 'string' | 'string?' | 'text' | 'text?' | 'watch' | 'watch?' | 'expr' | 'expr?' | 'law' | 'law?' | 'number' | 'number?' | 'string[]' | 'string[]?' | 'bundle' | 'bundle?' | 'arc' | 'arc?' | 'hold' | 'hold?';
 
-/** One arg of a verb: its kind. */
-export type ArgSpec = { kind:VerbArgKind };
+/** One arg of a verb: its kind, and what it may hold beyond that. */
+export type ArgSpec = { kind:VerbArgKind } & ArgConstraint;
+
+/** Each arg of a verb, narrowed where the verb is written inside another verb's arc: `{ 'law.arc': { seconds: { max: 10 } } }`. */
+export type WhenInside = Readonly<Record<ArgPath, Readonly<Record<string, ArgConstraint>>>>;
 
 /** A kind without its optional mark: `id?` is `id`. */
 export function argBase(kind:string | undefined):string {
@@ -125,6 +129,8 @@ export type VerbSpec = {
 	group?:string;
 	/** It has no end of its own. See {@link VerbDef.endless}. */
 	endless?:boolean;
+	/** See {@link VerbDef.whenInside}. */
+	whenInside?:WhenInside;
 };
 
 /** What `VerbRegistry.add` takes. */
@@ -148,6 +154,8 @@ export type VerbDef = {
 	 * stops once the trigger is no longer true.
 	 */
 	endless?:boolean;
+	/** Its args, narrowed further where it is written inside the arc arg a key names (the nearest enclosing one; `*.arc`, any). */
+	whenInside?:WhenInside;
 };
 
 /** The verbs arcs may name: each one's args, help, and how others see it run. A director's own adds what runs each one. */
@@ -185,7 +193,25 @@ export class VerbRegistry {
 	/** Told after each change but a {@link redefine}. */
 	protected changed():void {}
 
-	private define(name:string, { args = {}, help, reply, seen, free, group, endless }:VerbDef):void {
+	/**
+	 * Narrows what `verb`'s `arg` may hold, everywhere, or with `path` only where the verb is written inside that arc:
+	 * `constrain('wait', 'seconds', { max: 10 }, 'law.arc')`. Constraints only narrow, so no call loosens another.
+	 */
+	public constrain(verb:string, arg:string, constraint:ArgConstraint, path?:ArgPath):this {
+		const spec = this._verbs.get(verb);
+		const own = spec?.args[arg];
+		if (!spec || !(own ?? (path && argOf(spec, arg)))) {
+			throw new Error(`verb ${verb}: no arg '${arg}' to constrain`);
+		}
+		const inside = path && spec.whenInside?.[path];
+		this._verbs.set(verb, path
+			? { ...spec, whenInside: { ...spec.whenInside, [path]: { ...inside, [arg]: meet(inside?.[arg] ?? {}, constraint) } } }
+			: { ...spec, args: { ...spec.args, [arg]: meet(own!, constraint) } });
+		this.changed();
+		return this;
+	}
+
+	private define(name:string, { args = {}, help, reply, seen, free, group, endless, whenInside }:VerbDef):void {
 		const specs = Object.fromEntries(Object.entries(args).map(([key, arg]) => [key, typeof arg === 'string' ? { kind: arg } : arg]));
 		if (group && argBase(specs[group]?.kind) !== 'id') {
 			throw new Error(`verb ${name}: group arg '${group}' is not an id arg`);
@@ -205,7 +231,7 @@ export class VerbRegistry {
 				throw new Error(`verb ${name}: arg '${key}' is the runtime's, a ${argBase(runtime.kind)}`);
 			}
 		}
-		this._verbs.set(name, { name, args: specs, help, ...(reply ? { reply } : {}), ...(seen ? { seen } : {}), ...(free ? { free } : {}), ...(group ? { group } : {}), ...(endless ? { endless } : {}) });
+		this._verbs.set(name, { name, args: specs, help, ...(reply ? { reply } : {}), ...(seen ? { seen } : {}), ...(free ? { free } : {}), ...(group ? { group } : {}), ...(endless ? { endless } : {}), ...(whenInside ? { whenInside } : {}) });
 	}
 
 	/** Full catalog. Nested unit / loop / law arcs may name verbs this kit does not grant the thinker. */
@@ -339,7 +365,7 @@ export const STOCK_VERB_DEFS = {
 	give: { args: { item: 'id', to: 'id', quantity: 'number?' }, help: 'goes to them first. to buy or sell, use offer', reply: true, seen: 'giving {item} to {to}' },
 	examine: { args: { target: 'id' } },
 	say: { args: { text: 'text', to: 'id?' }, help: 'one short sentence', reply: true, free: true, group: 'to' },
-	wait: { args: { seconds: 'number?', until: 'watch?' }, help: 'until fails if not met within seconds (default 20)', free: true },
+	wait: { args: { seconds: { kind: 'number?', min: 0 }, until: 'watch?' }, help: 'until fails if not met within seconds (default 20)', free: true },
 	pass: { args: {}, help: 'keeps your current program; reply pass() when nothing needs to change', free: true },
 	remember: { args: { content: 'text', tags: 'string[]?' }, free: true },
 	think: { args: { about: 'text?' }, free: true },
@@ -354,7 +380,7 @@ export const STOCK_VERB_DEFS = {
 	if: { args: { cond: 'arc', arc: 'arc', else: 'arc?' } },
 	when: { args: { watch: 'watch', arc: 'arc', times: 'number?', until: 'watch?', rearm: 'number?' }, help: `this job's interrupt from where it is written; no extra think` },
 	loop: { args: { arc: 'arc', through: 'watch?', until: 'watch?', times: 'number?', unbreakable: 'hold?' }, help: 'repeats until a round fails. In a when or law, it stops once the trigger is false; unbreakable=true goes on to its end, unbreakable=N for N rounds first, unbreakable=10s for 10s (on follow too)' },
-	law: { args: { who: 'expr?', watch: 'watch', arc: 'arc', name: 'law?', times: 'number?', until: 'watch?', rearm: 'number?' }, help: 'standing reaction until unlaw; no extra think', free: true },
+	law: { args: { who: 'expr?', watch: 'watch', arc: { kind: 'arc', not: ['law'] }, name: 'law?', times: 'number?', until: 'watch?', rearm: 'number?' }, help: 'standing reaction until unlaw; no extra think', free: true },
 	unlaw: { args: { name: 'law' }, help: 'drops that law', free: true },
 	// Its choices are named args of their own; `arc/choose.ts` reads them.
 	choose: { args: { goal: 'text' }, help: 'a fast model picks one by name each run; loop it to keep picking' },

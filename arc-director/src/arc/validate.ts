@@ -10,7 +10,8 @@ import {
 	type CountMap,
 	type Step,
 } from './arc-types.js';
-import { argBase, argKind, argKinds, CHOOSE_VERB, GROUP_VERB, TEXT_ARG_KINDS, type VerbRegistry } from './stock-verbs.js';
+import { argBase, argKind, argKinds, CHOOSE_VERB, GROUP_VERB, TEST_VERB, TEXT_ARG_KINDS, type VerbRegistry, type VerbSpec } from './stock-verbs.js';
+import { argProblem, constraintAt, insideOf, meet, type ArgConstraint, type ArgPath } from './constraints.js';
 import { isChoiceName, MAX_CHOICES } from './choose.js';
 import { RESERVED } from '../expr/expr-types.js';
 import { durationSeconds } from '../expr/lex.js';
@@ -44,13 +45,38 @@ function rejectMigrationArgs(verb:string, args:Record<string, unknown>):void {
 	}
 }
 
-function validateStep(step:Step, registry:VerbRegistry, nested = false):void {
+/** Where a step is: inside the nearest enclosing verb's arc arg (none at the root), and what that arc lets its steps be. */
+type Place = { path?:ArgPath; arc:ArgConstraint };
+
+const ROOT:Place = { arc: {} };
+
+/** `law's arc` for `law.arc`. */
+function arcOf(at:Place):string {
+	return at.path?.replace('.', '\'s ') ?? 'the arc';
+}
+
+/**
+ * Where the steps of `step`'s arc arg `key` are: where `step` is for a group's or an `if`'s, else inside it, under its
+ * own constraint and what the arc `step` is in says of every step inside it.
+ */
+function into(step:Step, spec:VerbSpec, key:string, at:Place):Place {
+	if (opensArc(step)) {
+		return at;
+	}
+	if (at.arc.depth === 0) {
+		throw new ArcError(`${arcOf(at)} may hold no arc inside it; ${step.verb} holds one`);
+	}
+	const { subverbs, not, depth } = at.arc;
+	return { path: `${step.verb}.${key}`, arc: meet(constraintAt(spec, key, at.path), { subverbs, not, depth: depth === undefined ? undefined : depth - 1 }) };
+}
+
+function validateStep(step:Step, registry:VerbRegistry, at:Place):void {
 	if (step.verb === GROUP_VERB) {
 		const inner = groupArc(step);
 		if (!inner) {
 			throw new ArcError('a group needs an arc');
 		}
-		validateArc(inner, registry, nested);
+		validateArc(inner, registry, at);
 		return;
 	}
 	const spec = registry.get(step.verb);
@@ -58,12 +84,19 @@ function validateStep(step:Step, registry:VerbRegistry, nested = false):void {
 		throw new ArcError(`unknown verb '${step.verb}'`);
 	}
 	// Only the Arc's own root gives orders: a loop of them, or a law's, re-orders the units for as long as it runs.
-	if (nested && step.verb === 'command') {
+	if (at.path && step.verb === 'command') {
 		throw new ArcError('command goes at the root of an Arc, never inside another verb; close each command(...) before the next');
+	}
+	const { subverbs, not } = at.arc;
+	if (step.verb !== TEST_VERB && subverbs && !subverbs.includes(step.verb)) {
+		throw new ArcError(`${arcOf(at)} may hold only ${subverbs.join(', ')}; not ${step.verb}`);
+	}
+	if (not?.includes(step.verb)) {
+		throw new ArcError(`${arcOf(at)} may not hold ${step.verb}`);
 	}
 	rejectMigrationArgs(step.verb, step.args);
 	if (step.verb === CHOOSE_VERB) {
-		validateChoose(step, registry);
+		validateChoose(step, registry, into(step, spec, 'arc', at));
 		return;
 	}
 	const kinds = argKinds(spec);
@@ -116,16 +149,20 @@ function validateStep(step:Step, registry:VerbRegistry, nested = false):void {
 			if (!isArc(value)) {
 				throw new ArcError(`verb '${step.verb}' arg '${key}' must be an arc`);
 			}
-			validateArc(value, opensArc(step) ? registry : registry.nested(), nested || !opensArc(step));
+			validateArc(value, opensArc(step) ? registry : registry.nested(), into(step, spec, key, at));
 		}
 		if (typeof value === 'string' && /^-?\d+(\.\d+)?\s*,\s*-?\d+/.test(value)) {
 			throw new ArcError(`arg '${key}' looks like coordinates`);
 		}
+		const problem = argProblem(key, value, constraintAt(spec, key, at.path));
+		if (problem) {
+			throw new ArcError(`${step.verb}${at.path ? ` ${insideOf(at.path)}` : ''}: ${problem}`);
+		}
 	}
 }
 
-/** A text `goal`, and 1 to {@link MAX_CHOICES} choices, each an arc under a name that is not reserved. */
-function validateChoose(step:Step, registry:VerbRegistry):void {
+/** A text `goal`, and 1 to {@link MAX_CHOICES} choices, each an arc under a name that is not reserved, written `inside`. */
+function validateChoose(step:Step, registry:VerbRegistry, inside:Place):void {
 	const goal = step.args.goal;
 	if (typeof goal !== 'string' || !goal.trim()) {
 		throw new ArcError('choose needs a goal: choose("hold the gate", name=arc, …)');
@@ -145,22 +182,25 @@ function validateChoose(step:Step, registry:VerbRegistry):void {
 		if (!isArc(value)) {
 			throw new ArcError(`choice '${name}' must be an arc`);
 		}
-		validateArc(value, registry.nested(), true);
+		validateArc(value, registry.nested(), inside);
 	}
 }
 
-/** `nested`: this arc is held inside another verb's step, not the Arc's own root. */
-export function validateArc(arc:Arc, registry:VerbRegistry, nested = false):void {
+/** `at`: where this arc is; the Arc's own root unless it is held inside another verb's step. */
+export function validateArc(arc:Arc, registry:VerbRegistry, at = ROOT):void {
 	if (arc.length === 0) {
 		throw new ArcError('the arc is empty: give it at least one step');
+	}
+	if (arc.length > (at.arc.maxSteps ?? arc.length)) {
+		throw new ArcError(`${arcOf(at)} may hold at most ${at.arc.maxSteps} steps; it has ${arc.length}`);
 	}
 	for (const step of arc) {
 		if (step.then !== undefined && !JOINS.includes(step.then)) {
 			throw new ArcError(`unknown join '${String(step.then)}'`);
 		}
-		validateStep(step, registry, nested);
+		validateStep(step, registry, at);
 	}
-	if (!nested) {
+	if (!at.path) {
 		checkLets(arc, new Set());
 		checkEndless(arc, registry.nested(), registry.has('command'));
 	}

@@ -551,3 +551,23 @@ describe('compact prompts', () => {
 		assert.equal(conversationBlock(['Ash: hi']).startsWith(CONVERSATION_HEADER), true);
 	});
 });
+
+describe('constraints in help lines', () => {
+	const identity = { role: 'Guard', traits: [] };
+
+	it('says each constraint once, after the verb\'s own help, naming only the verbs this mind has', () => {
+		const verbs = new VerbRegistry().addAll(STOCK_VERB_DEFS, 'go_to', 'say', 'wait', 'loop', 'law')
+			.constrain('wait', 'seconds', { max: 10 }, 'law.arc')
+			.constrain('wait', 'seconds', { min: 1, integer: true })
+			.constrain('law', 'arc', { not: ['law', 'command'], maxSteps: 6, depth: 0 })
+			.constrain('loop', 'arc', { subverbs: ['go_to', 'wait', 'wander'] })
+			.constrain('go_to', 'target', { names: ['Keep', 'Gate'] });
+		const system = stablePrefix('Guard', identity, verbs);
+		assert.match(system, /go_to\(target\) — target one of Keep\/Gate, /);
+		assert.match(system, /wait\(seconds\?, until\?\) — until fails if not met within seconds \(default 20\); seconds a whole number and at least 1; seconds at most 10 inside a law, /);
+		assert.match(system, /loop\(arc, through\?, until\?, times\?, unbreakable\?\) — [^,]*,[^—]*; arc only go_to\/wait, /);
+		assert.match(system, /law\(who\?, watch, arc, name\?, times\?, until\?, rearm\?\) — standing reaction until unlaw; no extra think; arc without law and at most 6 steps and with no arc inside/);
+		const solo = stablePrefix('Guard', identity, verbs.view(['go_to', 'wait']));
+		assert.match(solo, /wait\(seconds\?, until\?\) — until fails if not met within seconds \(default 20\); seconds a whole number and at least 1\./, 'no law, no word of one');
+	});
+});

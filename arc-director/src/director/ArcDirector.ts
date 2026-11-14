@@ -1,4 +1,3 @@
-import { STOCK_VERB_DEFS } from '../arc/stock-verbs.js';
 import { parseArcText } from '../arc/arc-parse.js';
 import { withLoneWait } from '../arc/choose.js';
 import { arcArg } from '../arc/wire.js';
@@ -532,8 +531,9 @@ export class ArcDirector<TCtx = unknown, TEntity = unknown> {
 	 * whose whole arc is an alias with a watch may leave its own out; every feature says what it adds to help lines again.
 	 */
 	private syncVerbSchemas():void {
-		if (this.verbs.list().some((spec) => this.verbs.alias(spec.name)?.watch !== undefined) && this.verbs.get('law')?.args.watch?.kind === 'watch') {
-			this.verbs.redefine('law', { ...STOCK_VERB_DEFS.law, args: { ...STOCK_VERB_DEFS.law.args, watch: 'watch?' } });
+		const law = this.verbs.get('law');
+		if (this.verbs.list().some((spec) => this.verbs.alias(spec.name)?.watch !== undefined) && law?.args.watch?.kind === 'watch') {
+			this.verbs.redefine('law', { ...law, args: { ...law.args, watch: { ...law.args.watch, kind: 'watch?' } } });
 		}
 		this._features.forEach((feature) => feature.verbsChanged());
 	}
