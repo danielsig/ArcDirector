@@ -5,22 +5,28 @@ import { lawGroup } from '../arc/laws.js';
 import type { NameBook } from '../character/NameBook.js';
 
 /**
- * Arcs, laws, watches and sight focus are stored in ids. A mind's model reads and writes its own names
- * for characters, so each mind turns its model's replies into ids and its prompts back into names, through
- * the names its owner gave ({@link NameBook}).
+ * Arcs, laws, watches and sight focus are stored in ids. A mind's model reads and writes its own names for characters,
+ * so each mind turns its model's replies into ids and its prompts back into names, through the names its owner gave
+ * ({@link NameBook}). These are code, read by their grammar; prose that names anyone is `TextWithIDs` (`character/text-with-ids.ts`).
  */
 
 /** One word rewritten: a name to its id, or an id to a name. Any other word comes back unchanged. */
 export type WordMap = (word:string)=>string;
 
-/** The ids behind the names `book` gave. */
-export function idsOf(book:NameBook):WordMap {
-	return (word) => book.resolve(word);
+/**
+ * The ids behind the names `book` gave, in words its mind wrote ({@link NameBook.read}); behind its vague labels too,
+ * unless `vague` is off (what a mind knows, not what it acts on).
+ */
+export function idsOf(book:NameBook, vague = true):WordMap {
+	return (word) => (vague ? book.read(word) : book.resolve(word, false));
 }
 
-/** `book`'s names for ids. An id it never named stays as it is. */
-export function namesOf(book:NameBook):WordMap {
-	return (word) => book.peek(word) ?? word;
+/**
+ * `book`'s names for ids, as code shows them to its mind ({@link NameBook.inCode}); without vague labels unless `vague`
+ * is on. An id it never named stays as it is.
+ */
+export function namesOf(book:NameBook, vague = true):WordMap {
+	return (word) => (vague ? book.inCode(word) : book.peek(word, false) ?? word);
 }
 
 const IDENT = /^[A-Za-z_$][A-Za-z0-9_$]*$/;

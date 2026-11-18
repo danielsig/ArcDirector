@@ -101,7 +101,7 @@ function fit(shared:THREE.AnimationClip, from:Rest, to:Rest):THREE.AnimationClip
 	// Target bones driven by a source bone with keys; the rest only follow their parents.
 	const driven = to.rig.order.filter((bone) => rotations.has(byRole.get(bone) ?? bone));
 	const frames = Math.max(2, Math.round(shared.duration * FIT_FPS) + 1);
-	const times = Float32Array.from({ length: frames }, (_, f) => (f / (frames - 1)) * shared.duration);
+	const times = Float32Array.from({ length: frames }, (element, f) => (f / (frames - 1)) * shared.duration);
 	const keys = new Map(driven.map((bone) => [bone, new Float32Array(frames * 4)]));
 	times.forEach((t, f) => {
 		const pose = retarget((bone) => {

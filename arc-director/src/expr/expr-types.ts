@@ -102,6 +102,8 @@ export type Catalog = {
 	me:ExprEntity;
 	cache:SampleCache;
 	stringifiers?:Stringifiers;
+	/** Where someone is, as this catalog measures (as if `me` stood where a verb asks): for a host's own functions. */
+	point?:(who:ExprEntity)=>readonly number[] | undefined;
 	/** Override watch LIST_CAP. A collective's selectors use its roster size. */
 	listCap?:number;
 	/**

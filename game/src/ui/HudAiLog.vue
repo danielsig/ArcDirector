@@ -48,7 +48,7 @@ const thinks = computed(() => {
 		if (source.value === ERRORS ? !think.error : source.value && think.name !== source.value) {
 			return false;
 		}
-		return !q || [think.name, think.arc, think.thought, think.error].some((text) => text.toLowerCase().includes(q));
+		return !q || [think.name, think.why, think.arc, think.thought, think.error].some((text) => text.toLowerCase().includes(q));
 	});
 });
 
@@ -185,6 +185,7 @@ watch(
 						<header>
 							<span class="orb" />
 							<strong>{{ think.name }}</strong>
+							<span v-if="think.why" class="why">why: {{ think.why }}</span>
 							<span class="time">{{ thinkTime(think.ms) }}</span>
 						</header>
 						<p v-if="think.error" class="error">{{ think.error }}</p>
@@ -422,6 +423,14 @@ watch(
 
 .think strong {
 	color: var(--hue-light);
+}
+
+.think .why {
+	overflow: hidden;
+	opacity: 0.7;
+	font: 400 11px/1.2 var(--font-mono);
+	white-space: nowrap;
+	text-overflow: ellipsis;
 }
 
 .think .time {

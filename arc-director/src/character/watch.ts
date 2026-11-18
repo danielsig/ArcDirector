@@ -47,16 +47,8 @@ function isLegacyWatchObject(raw:Record<string, unknown>):boolean {
 	return typeof expr === 'string' && typeof name === 'string';
 }
 
-/** One `{ name, expr }` from a list item or a lone object. `id` aliases `name`. */
+/** One `{ name, expr }` from a lone object or a dict value. `id` aliases `name`. */
 function asWatch(raw:unknown, fallbackName?:string):{ name:string; expr:string } | undefined {
-	if (typeof raw === 'string') {
-		const expr = raw.trim();
-		const name = (fallbackName ?? '').trim();
-		if (!expr || !name) {
-			return undefined;
-		}
-		return { name, expr };
-	}
 	if (!isRecord(raw)) {
 		return undefined;
 	}
@@ -87,24 +79,10 @@ function putWatch(out:Watches, seen:Set<string>, name:string, expr:string):void 
 	out[name] = expr;
 }
 
-/** Dict name → expr. Also accepts a list of `{ name, expr }` / strings, or a lone `{ name, expr }`. */
+/** Dict name → expr. Also accepts a lone `{ name, expr }`. */
 export function asWatches(raw:unknown):Watches {
 	if (raw == null) {
 		return {};
-	}
-	if (Array.isArray(raw)) {
-		const out:Watches = {};
-		const seen = new Set<string>();
-		let n = 0;
-		for (const row of raw) {
-			n += 1;
-			const fallback = typeof row === 'string' ? `watch_${n}` : undefined;
-			const w = asWatch(row, fallback);
-			if (w) {
-				putWatch(out, seen, w.name, w.expr);
-			}
-		}
-		return out;
 	}
 	if (!isRecord(raw)) {
 		return {};

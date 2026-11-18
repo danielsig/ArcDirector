@@ -7,6 +7,7 @@ import { parse } from '../expr/expr-parse.js';
 import { VerbRegistry, STOCK_VERB_DEFS, STOCK_MOVE_VERBS, STOCK_TRADE_VERBS, STOCK_VERBS } from './stock-verbs.js';
 import { STOCK_COLLECTIVE_VERB_DEFS } from '../collective/collective-verbs.js';
 import { ArcError, isArc, type Arc } from './arc-types.js';
+import { MAX_ARC_DEPTH } from './validate.js';
 
 function verbs():VerbRegistry {
 	return new VerbRegistry().addAll(STOCK_VERB_DEFS);
@@ -204,10 +205,33 @@ describe('kit views and command(who)', () => {
 		assert.deepEqual(inner(arc).map((step) => step.verb), ['hex', 'go_to']);
 	});
 
+	it('reads one of the verb\'s arg names and one plain value after its call as that arg, where it is unambiguous', () => {
+		const verbs = new VerbRegistry().addAll(STOCK_VERB_DEFS);
+		const hi = [{ verb: 'say', args: { text: 'Hi', to: 'Bram' } }];
+		assert.deepEqual(parseArcText('say("Hi") to Bram', verbs), hi);
+		assert.deepEqual(parseArcText('say(text="Hi") to=Bram', verbs), hi);
+		assert.deepEqual(parseArcText('say "Hi" to Bram', verbs), hi);
+		assert.deepEqual(parseArcText('say("Hi") to Bram && wait(2)', verbs), [{ ...hi[0] }, { verb: 'wait', args: { seconds: 2 } }]);
+		assert.deepEqual(parseArcText('give(Bread) to Bram', verbs), [{ verb: 'give', args: { item: 'Bread', to: 'Bram' } }]);
+		assert.deepEqual(parseArcText('pick_up(Bread) from Chest', verbs), [{ verb: 'pick_up', args: { item: 'Bread', from: 'Chest' } }]);
+	});
+
+	it('reads a string after a call, ending the statement, as its text arg not given', () => {
+		const verbs = new VerbRegistry().addAll(STOCK_VERB_DEFS);
+		const quiet = { verb: 'say', args: { to: 'Bram', as: 'whisper', text: 'Quiet now' } };
+		assert.deepEqual(parseArcText('say(to=Bram, as=whisper) "Quiet now"', verbs), [quiet]);
+		assert.deepEqual(parseArcText('say(to=Bram, as=whisper) "Quiet now" && wait(2)', verbs), [quiet, { verb: 'wait', args: { seconds: 2 } }]);
+		assert.throws(() => parseArcText('say("Hi") "Bye"', verbs), 'text given already');
+		assert.throws(() => parseArcText('go_to(Keep) "Bye"', verbs), 'go_to takes no text');
+	});
+
 	it('names an argument written after the closing parenthesis', () => {
 		const verbs = new VerbRegistry().addAll(STOCK_VERB_DEFS);
-		assert.throws(() => parseArcText('say(text="Hi") to=BridgeKeeper', verbs), /to is outside the parentheses/);
-		assert.throws(() => parseArcText('say("Hi") to BridgeKeeper', verbs), /to is outside the parentheses/);
+		assert.throws(() => parseArcText('say("Hi", to=Ann) to Bram', verbs), /to is outside the parentheses/, 'given twice');
+		assert.throws(() => parseArcText('go_to(Keep) to Bram', verbs), /to is outside the parentheses/, 'go_to takes no to');
+		assert.throws(() => parseArcText('pick_up(Bread) from Chest by Well', verbs), /from is outside the parentheses/, 'not the statement\'s end');
+		assert.throws(() => parseArcText('say("Hi") to Bram Smith', verbs), /to is outside the parentheses/, 'not one name');
+		assert.throws(() => parseArcText('say(text="Hi") loudly', verbs), /loudly is outside the parentheses/);
 	});
 
 	it('reads a verb and one bare name with no parentheses as its first arg', () => {
@@ -304,6 +328,36 @@ describe('small-model slips from the AI logs', () => {
 		assert.doesNotThrow(() => parseArcText('follow(Bo) ; say("a")', commander), 'a commander\'s own steps are orders');
 	});
 
+	it('refuses steps after a loop that never ends, but not in a reaction, unless the endless step is unbreakable=true', () => {
+		assert.throws(() => parseArcText('loop {\n\tgo_to(Mill)\n}\nsay("done")', verbs()), {
+			message: 'loop never ends, so say(…) after it never runs. Write say(…) && loop — loop last, with an until=, within= or times= to end it.',
+		});
+		assert.throws(() => parseArcText('go_to(Mill) while loop {\n\tsay("a")\n}\nsay("b")', verbs()), /loop never ends/, 'in a while');
+		for (const reacting of ['law(watch=danger) {\n\tloop {\n\t\twait()\n\t}\n\tsay("a")\n}', 'when(danger) {\n\tloop {\n\t\twait()\n\t}\n\tsay("a")\n}', 'law(watch=danger) {\n\tfollow(Bo)\n\tsay("a")\n}', 'law(watch=danger) {\n\tfollow(Bo, unbreakable=10s)\n\tsay("a")\n}', 'when(danger) {\n\tloop(unbreakable=3) {\n\t\twait()\n\t}\n\tsay("a")\n}']) {
+			assert.doesNotThrow(() => parseArcText(reacting, verbs()), reacting);
+		}
+		for (const unbreakable of ['law(watch=danger) {\n\tloop(unbreakable=true) {\n\t\twait()\n\t}\n\tsay("a")\n}', 'when(danger) {\n\tloop(unbreakable=true) {\n\t\twait()\n\t}\n\tsay("a")\n}']) {
+			assert.throws(() => parseArcText(unbreakable, verbs()), /loop never ends, so say\(…\) after it never runs/, unbreakable);
+		}
+		// Last in its sequence: nothing waits on it.
+		for (const last of ['say("a")\nloop {\n\twait()\n}', 'law(watch=danger) {\n\tsay("a")\n\tloop(unbreakable=true) {\n\t\twait()\n\t}\n}', 'say("a")\nfollow(Bo)']) {
+			assert.doesNotThrow(() => parseArcText(last, verbs()), last);
+		}
+		for (const fine of ['loop(times=3) {\n\twait()\n}\nsay("a")','loop(until=done) {\n\twait()\n}\nsay("a")', 'loop(within=10s) {\n\twait()\n}\nsay("a")', 'loop(through=others) {\n\twait()\n}\nsay("a")']) {
+			assert.doesNotThrow(() => parseArcText(fine, verbs()), fine);
+		}
+	});
+
+	it('refuses arcs nested deeper than an Arc may, with room for a law\'s loop of a choose and one more', () => {
+		const real = 'law(watch=danger) {\n\tloop {\n\t\tchoose("Hold the line") {\n\t\t\tguard: protect()\n\t\t\tstrike: loop(times=2) {\n\t\t\t\twait()\n\t\t\t}\n\t\t}\n\t}\n}';
+		assert.doesNotThrow(() => parseArcText(real, verbs().add('protect', { args: {} })));
+		const loops = (n:number):string => (n === 0 ? 'wait()' : `loop(times=2) {\n${loops(n - 1).replace(/^/gm, '\t')}\n}`);
+		assert.doesNotThrow(() => parseArcText(loops(MAX_ARC_DEPTH), verbs()));
+		assert.throws(() => parseArcText(loops(MAX_ARC_DEPTH + 1), verbs()), /loop's arc may hold no arc inside it; loop holds one/);
+		const where = `if (danger) {\n\tsay("a") while loop(times=2) {\n\t\twait()\n\t}\n}`;
+		assert.doesNotThrow(() => parseArcText(loops(MAX_ARC_DEPTH - 1).replace('wait()', where), verbs()), 'an if and a while are where their step is');
+	});
+
 	it('takes braces as a named arc arg, as it takes a body', () => {
 		const registry = new VerbRegistry().addAll(STOCK_VERB_DEFS).addAll(STOCK_COLLECTIVE_VERB_DEFS);
 		const command = parseArcText('command(who=units, arc={\n\tloop(until=done) {\n\t\twait()\n\t}\n})', registry);
@@ -314,7 +368,7 @@ describe('small-model slips from the AI logs', () => {
 	});
 
 	it('reads block layout: args one per line, each ending in a comma, and ) alone', () => {
-		const arc = parseArcText('loop(\n\tchoose(\n\t\t"Hold the gate",\n\t\tgo_to(Keep),\n\t\tgate=go_to(EastGate),\n\t),\n)\nwander(\n\tuntil=done,\n)', verbs());
+		const arc = parseArcText('loop(\n\ttimes=2,\n\tchoose(\n\t\t"Hold the gate",\n\t\tgo_to(Keep),\n\t\tgate=go_to(EastGate),\n\t),\n)\nwander(\n\tuntil=done,\n)', verbs());
 		assert.equal(arc[0].verb, 'loop');
 		assert.equal(inner(arc).length, 1);
 		assert.equal(arc[0].then, 'always', 'a new line joins like ;');
@@ -451,7 +505,7 @@ describe('choose', () => {
 		assert.throws(() => parseArcText('choose("hold", until=wait())', verbs()), ArcError);
 		assert.throws(() => parseArcText('choose("hold", a=wait(), a=go_to(EastGate))', verbs()), ArcError);
 		assert.throws(() => parseArcText('choose("hold", a=hold the gate)', verbs()), ArcError);
-		const many = Array.from({ length: 256 }, (_, n) => `c${n}=wait()`).join(', ');
+		const many = Array.from({ length: 256 }, (element, n) => `c${n}=wait()`).join(', ');
 		assert.throws(() => parseArcText(`choose("hold", ${many})`, verbs()), ArcError);
 	});
 
@@ -608,7 +662,7 @@ describe('one grammar: arcs', () => {
 		assert.equal(parseArcText('let both = pick_up(Key) && go_to(Door)', verbs())[0].verb, 'group', 'a chain is one step');
 		assert.throws(() => parseArcText('let x = pick_up(Key) ; let x = go_to(Door)', verbs()), /let x twice/);
 		assert.throws(() => parseArcText('let x = pick_up(Key) ; loop { let x = wait() }', verbs()), /let x twice/, 'an inner arc sees the outer name');
-		assert.doesNotThrow(() => parseArcText('loop { let x = wait() } ; let x = go_to(Door)', verbs()), 'a name ends with its arc');
+		assert.doesNotThrow(() => parseArcText('loop(times=2) { let x = wait() } ; let x = go_to(Door)', verbs()), 'a name ends with its arc');
 		assert.throws(() => parseArcText('let me = wait()', verbs()), /let me/);
 	});
 

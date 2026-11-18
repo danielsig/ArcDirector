@@ -104,10 +104,10 @@ export function modelLabel(m:HudModelOption):string {
 	return `${m.id}${devices}${m.decision ? ' · decision' : m.loaded ? ' · loaded' : ''}`;
 }
 
-export type HudHeartrate = {
+export type HudMindStats = {
 	id:string;
-	/** Queue pulse seconds. `null` when this mind skips heartbeat. */
-	pulse:number | null;
+	/** Seconds between its rethinks; `null` when it never rethinks on the timer. */
+	rethink:number | null;
 	/** Seconds since last tactical think. `null` if never. */
 	ago:number | null;
 	thinking:boolean;
@@ -168,6 +168,8 @@ export type HudThink = {
 	id:string;
 	name:string;
 	color:GoalColor;
+	/** What started the think (`rethink`, `heard speech`), or `''`. */
+	why:string;
 	/** The model's reasoning so far. */
 	thought:string;
 	/** What it has written of its Arc, as Arc text. */
@@ -292,6 +294,8 @@ export type HudModel = {
 	fps:number;
 	/** Minds at work, each on its slate. */
 	slates:HudSlate[];
+	/** Dots over the head of a mind thinking. */
+	thinkingBubbles:boolean;
 	mindVisuals:boolean;
 	arcSlates:boolean;
 	orderArcs:boolean;
@@ -308,7 +312,7 @@ export type HudModel = {
 	inferLastContextMs:number | null;
 	inferLastGenerateMs:number | null;
 	inferLastWallMs:number | null;
-	heartrates:HudHeartrate[];
+	mindStats:HudMindStats[];
 	musicVolume:number;
 	sfxVolume:number;
 	voices:boolean;
@@ -397,6 +401,7 @@ export function emptyHud():HudModel {
 		fpsCounter: p.fpsCounter,
 		fps: 0,
 		slates: [],
+		thinkingBubbles: p.thinkingBubbles,
 		mindVisuals: p.mindVisuals,
 		arcSlates: p.arcSlates,
 		orderArcs: p.orderArcs,
@@ -412,7 +417,7 @@ export function emptyHud():HudModel {
 		inferLastContextMs: null,
 		inferLastGenerateMs: null,
 		inferLastWallMs: null,
-		heartrates: [],
+		mindStats: [],
 		musicVolume: p.music,
 		sfxVolume: p.sfx,
 		voices: p.voices,

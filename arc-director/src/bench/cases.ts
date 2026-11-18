@@ -19,7 +19,7 @@ function meter(w:SceneWorld, name:string, start = 0):number {
 
 /** `count` fighters of one kind named `name1`, `name2`, …, from `away` paces on `side`, a pace apart. */
 function band(name:string, count:number, spot:Omit<SceneSpot, 'away'> & { away:number }):Record<string, SceneSpot> {
-	return Object.fromEntries(Array.from({ length: count }, (_, i) => [`${name}${i + 1}`, { ...spot, away: spot.away + i }]));
+	return Object.fromEntries(Array.from({ length: count }, (element, i) => [`${name}${i + 1}`, { ...spot, away: spot.away + i }]));
 }
 
 /** A village's kinds: its buildings, workers, soldiers, a tech and two resources. */
@@ -78,7 +78,8 @@ const RAIDER:Pick<SceneSpot, 'as' | 'tactic'> = { as: 'Raider', tactic: 'charge'
 /**
  * Goals as games set them, from easy to hard: chaining deeds, trading, dealing with people, looking up what no prompt
  * shows, keeping promises, reacting while busy, fighting, commanding squads, running an economy, and planning with the
- * verbs and tools a game adds. Things past the sight radius (24) are out of sight: only the map shows them.
+ * verbs and tools a game adds. Things past 35 paces are seen only vaguely, unnamed, and past 50 not at all: only the
+ * map shows them.
  */
 export const ARC_BENCH:ArcCase[] = [
 	// ── chain: deeds in order, each one opening the next ───────────────────
@@ -172,7 +173,7 @@ export const ARC_BENCH:ArcCase[] = [
 			'BronzeKey>Shed': (w) => (w.flags.add('Shed open'), 'the Shed door swings open; the Crank hangs inside'),
 			'Crank>Sluice': (w) => (w.flags.add('Sluice open'), 'the Sluice grinds open'),
 		},
-		sees: (w, _from, to) => to !== 'Crank' || w.flags.has('Shed open'),
+		sees: (w, from, to) => to !== 'Crank' || w.flags.has('Shed open'),
 		done: (w) => w.flags.has('Sluice open'),
 		solution: 'pick_up(BronzeKey) && use(item=BronzeKey, target=Shed) && pick_up(Crank) && use(item=Crank, target=Sluice)',
 		naive: 'pick_up(IronKey) && use(item=IronKey, target=Shed) && pick_up(Crank) && use(item=Crank, target=Sluice)',
@@ -307,7 +308,7 @@ export const ARC_BENCH:ArcCase[] = [
 		level: 2,
 		me: { id: 'Corran', hp: [3, 12] },
 		know: [{ name: 'Hesketh', aliases: ['healer', 'heal', 'wounds', 'hurt', 'herbalist'], text: 'Hesketh the herbalist mends wounds for free. He lives at the Apiary.' }],
-		things: { Granary: { away: 30, side: 'left' }, Apiary: { away: 45, side: 'behind' } },
+		things: { Granary: { away: 40, side: 'left' }, Apiary: { away: 45, side: 'behind' } },
 		goal: 'You are badly hurt. Get healed',
 		act: (w) => w.near('Corran', 'Apiary') && w.heal('Corran'),
 		done: (w) => w.hp('Corran') === 12,
@@ -356,7 +357,7 @@ export const ARC_BENCH:ArcCase[] = [
 			...everydayMemories(30),
 		],
 		others: { Osgood: { away: 4, side: 'behind' } },
-		things: { Malthouse: { away: 35, side: 'right' }, MaltSack: { away: 36, side: 'right' }, Stile: { away: 8, side: 'left' } },
+		things: { Malthouse: { away: 40, side: 'right' }, MaltSack: { away: 41, side: 'right' }, Stile: { away: 8, side: 'left' } },
 		goal: 'Do the jobs people asked of you',
 		done: (w) => w.holds('Osgood', 'MaltSack'),
 		solution: 'pick_up(MaltSack) && give(item=MaltSack, to=Osgood)',
@@ -376,7 +377,7 @@ export const ARC_BENCH:ArcCase[] = [
 			...everydayMemories(8),
 		],
 		others: { Garrick: { away: 38, side: 'right' } },
-		things: { Anvilhall: { away: 30, side: 'left' }, Wharf: { away: 36, side: 'right' } },
+		things: { Anvilhall: { away: 40, side: 'left' }, Wharf: { away: 41, side: 'right' } },
 		goal: 'Keep your promises',
 		done: (w) => w.holds('Garrick', 'Tongs'),
 		solution: 'give(item=Tongs, to=Garrick)',
@@ -431,7 +432,7 @@ export const ARC_BENCH:ArcCase[] = [
 				w.walk('Lynx', 'Halla', 2.5);
 			}
 		},
-		done: (w) => !w.isDown('Halla') && ['Morel1', 'Morel2', 'Morel3', 'Morel4'].every((m) => w.holds('Halla', m)),
+		done: (w) => !w.hasFallen('Halla') && ['Morel1', 'Morel2', 'Morel3', 'Morel4'].every((m) => w.holds('Halla', m)),
 		solution: 'when(watch=distance(me, Lynx) < 10, arc=go_to(Hut)) ; pick_up(Morel1) && pick_up(Morel2) && pick_up(Morel3) && pick_up(Morel4)',
 		naive: 'pick_up(Morel1) && pick_up(Morel2) && pick_up(Morel3) && pick_up(Morel4)',
 	},
@@ -488,7 +489,7 @@ export const ARC_BENCH:ArcCase[] = [
 			Morwen: { away: 6, side: 'ahead', as: 'Shaman', hp: [80, 80], tactic: 'hold', focus: 'Tilla' },
 		},
 		goal: 'Kill Morwen and keep Tilla alive. Morwen\'s firestorm would kill Tilla: never let one land',
-		done: (w) => w.isDown('Morwen') && w.lost(US) === 0,
+		done: (w) => w.hasFallen('Morwen') && w.lost(US) === 0,
 		solution: 'when(watch=Morwen.casting, arc=bash(target=Morwen)) ; cleave(target=Morwen)',
 		naive: 'bash(target=Morwen) && cleave(target=Morwen)',
 	},
@@ -500,7 +501,7 @@ export const ARC_BENCH:ArcCase[] = [
 		me: { id: 'Corvus', as: 'Archer', hp: [30, 30] },
 		others: { Grisk: { away: 14, side: 'ahead', as: 'Cleric', tactic: 'healer' }, Varga: { away: 7, side: 'left', as: 'Blade', tactic: 'charge' } },
 		goal: 'Kill Grisk, their healer, first',
-		done: (w) => w.downed[0] === 'Grisk',
+		done: (w) => w.fallen[0] === 'Grisk',
 		solution: 'shoot(target=Grisk)',
 		naive: 'shoot(target=Varga) ; shoot(target=Grisk)',
 	},
@@ -512,7 +513,7 @@ export const ARC_BENCH:ArcCase[] = [
 		others: { Brakk: { away: 4, side: 'left', as: 'Blade', hp: [6, 20], tactic: 'charge' } },
 		goal: 'You are badly hurt. Defeat Brakk, and never die',
 		uses: { Elixir: (w) => (w.heal('Ysra'), 'your wounds close') },
-		done: (w) => w.isDown('Brakk') && !w.isDown('Ysra'),
+		done: (w) => w.hasFallen('Brakk') && !w.hasFallen('Ysra'),
 		solution: 'use(item=Elixir) && hex(target=Brakk)',
 		naive: 'hex(target=Brakk)',
 	},
@@ -529,7 +530,7 @@ export const ARC_BENCH:ArcCase[] = [
 		goal: 'Kill Mirela. From the Cairn you can see past the cover',
 		// Cover stands between them both ways.
 		sees: (w, from, to) => (to === 'Mirela' ? w.near(from, 'Cairn') : from === 'Mirela' ? w.near(to, 'Cairn') : true),
-		done: (w) => w.isDown('Mirela'),
+		done: (w) => w.hasFallen('Mirela'),
 		solution: 'go_to(Cairn) && shoot(target=Mirela)',
 		naive: 'shoot(target=Mirela)',
 	},
@@ -561,7 +562,7 @@ export const ARC_BENCH:ArcCase[] = [
 			Shrike: { away: 3, side: 'ahead', as: 'Assassin', tactic: 'charge', focus: 'Nim' },
 		},
 		goal: 'Survive. Shrike is faster than you and hits harder than you can take',
-		done: (w) => w.isDown('Shrike') && w.lost(US) === 0,
+		done: (w) => w.hasFallen('Shrike') && w.lost(US) === 0,
 		solution: 'kick(target=Shrike) && go_to(Gunnar) && stab(target=Shrike)',
 		naive: 'flee(from=Shrike)',
 	},
@@ -582,7 +583,7 @@ export const ARC_BENCH:ArcCase[] = [
 		// Its raiders stand nearer, so whoever shoots the nearest never shoots it first.
 		others: { ...band('Reaver', 2, { away: 9, side: 'ahead', ...RAIDER, hp: [10, 14] }), Sawbones: { away: 11, side: 'left', as: 'Medic', tactic: 'healer' } },
 		goal: 'Win the fight. Take out their Medic first',
-		done: (w) => w.firstDown(THEM) === 'Sawbones' && w.routed(THEM) && w.lost(US) <= 1,
+		done: (w) => w.firstFallen(THEM) === 'Sawbones' && w.routed(THEM) && w.lost(US) <= 1,
 		solution: 'command(who=units, arc=attack(target=Sawbones) ; attack(target=others.filter(u => u.foe))) ; attack(target=Sawbones) ; attack(target=others.filter(u => u.foe))',
 		naive: 'command(who=units, arc=attack(target=others.filter(u => u.foe))) ; attack(target=others.filter(u => u.foe))',
 		alone: 'attack(target=Sawbones)',
@@ -688,7 +689,7 @@ export const ARC_BENCH:ArcCase[] = [
 		},
 		things: { WestTower: { away: 16, side: 'left', team: US, hp: [75, 75] }, EastTower: { away: 16, side: 'right', team: US, hp: [75, 75] } },
 		goal: 'Raiders are coming for both towers. Keep both towers standing and destroy the raiders',
-		done: (w) => w.routed(THEM) && !w.isDown('WestTower') && !w.isDown('EastTower'),
+		done: (w) => w.routed(THEM) && !w.hasFallen('WestTower') && !w.hasFallen('EastTower'),
 		solution: 'command(who=units.filter("Red"), arc=go_to(WestTower)) ; command(who=units.filter("Blue"), arc=go_to(EastTower))',
 		naive: 'command(who=units, arc=go_to(WestTower)) ; go_to(WestTower)',
 		alone: 'go_to(WestTower)',

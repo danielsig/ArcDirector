@@ -46,7 +46,7 @@ import { equipItem, unequipSlot } from '../items/equip';
 import { findChestHolding, interactDoor, takeFromChest, USE_RANGE } from '../items/pickup';
 import { NPCInput } from '../characters/NPCInput';
 import { Reading } from '../characters/Reading';
-import { approachSpot, occupantName, overWater, Seated } from '../characters/Seated';
+import { approachSpot, overWater, Seated } from '../characters/Seated';
 import type { GameHost } from './adapter';
 import { readPage, useItem } from '../items/use';
 import { doTransfer, findItem, transferRefusal } from './items';
@@ -62,7 +62,6 @@ import {
 	BLOCK,
 	COVER_SOFTEN,
 	fightParty,
-	seenName,
 	fightRole,
 	fightTags,
 	guardStops,
@@ -114,7 +113,7 @@ export function verbGate(host:GameHost):VerbGate<CharacterCtx> {
 		}
 		const foe = verb === 'go_to' && typeof args.target === 'string' ? findObject(ctx.world, args.target) : undefined;
 		if (foe && isRival(host, ctx.character, foe)) {
-			return { status: 'failed', verb, reason: `${seenName(host, ctx.character, foe)} is an enemy; go_to does not attack` };
+			return { status: 'failed', verb, reason: (name) => `${name(idOf(foe))} is an enemy; go_to does not attack` };
 		}
 		const stall = stallBound(ctx, verb, args);
 		if (stall) {
@@ -124,7 +123,7 @@ export function verbGate(host:GameHost):VerbGate<CharacterCtx> {
 			const raw = args.target;
 			const dest = typeof raw === 'string' && raw ? findObject(ctx.world, raw) : undefined;
 			if (dest?.getComponent(MarketGate)) {
-				return { status: 'failed', verb, reason: `stand beside ${idOf(dest)}` };
+				return { status: 'failed', verb, reason: (name) => `stand beside ${name(idOf(dest))}` };
 			}
 		}
 		return undefined;
@@ -195,7 +194,7 @@ async function restOn(call:Call, seat:GameObject, opts:Parameters<Seated['settle
 	}
 	const occupant = seat.getComponent(Furniture)?.occupant;
 	if (occupant && occupant !== call.ctx.character) {
-		return { status: 'failed', verb: call.verb, reason: `${occupantName(seat)} is on ${name}` };
+		return { status: 'failed', verb: call.verb, reason: (who) => `${who(idOf(occupant))} is on ${name}` };
 	}
 	call.ctx.character.getComponent(Seated)?.settle(seat, opts);
 	return { status: 'ok', verb: call.verb, reason: `on ${name}` };
@@ -245,7 +244,7 @@ async function fetchBook(call:Call, name:string):Promise<ArcResult | undefined> 
 		return { ...walk, verb: 'read' };
 	}
 	const taken = takeFromChest(character, held);
-	if (!taken.startsWith('took ')) {
+	if (!findItem(character, name)) {
 		return { status: 'failed', verb: 'read', reason: taken };
 	}
 	character.getComponent(Appearance)?.playClip('take', Time.time, held.chest);
@@ -285,11 +284,6 @@ export async function doClose(call:Call, name:string):Promise<ArcResult> {
 	}
 	interactDoor(call.ctx.character, door);
 	return { status: 'ok', verb: 'close' };
-}
-
-/** Taking without paying, for `withRPG` in a scene where theft is possible. */
-export function stealVerb(host:GameHost):RPGHost<CharacterCtx>['steal'] {
-	return (call) => doSteal(host, call, call.args.item, call.args.from);
 }
 
 const COVER_HELP:Record<NonNullable<AttackKind['cover']>, string> = {
@@ -363,33 +357,23 @@ export function dropDown(host:GameHost, who:GameObject):void {
 	}
 	host.arc?.pushEvent({
 		kind: 'Hurt',
-		text: '{0} is down',
-		who: [idOf(who)],
-		tags: ['down'],
-		// A fall changes the fight: 5v5 commanders think on it instead of a heartbeat.
+		text: (name) => `${name(idOf(who))} has fallen`,
+		tags: ['fallen'],
+		// A fall changes the fight: 5v5 commanders think on it instead of a rethink.
 		major: true,
 	});
 }
 
-/** `sight` as `viewer` sees it, each rival marked in reach or not of its role's own attack: range, and a clear shot where it needs one. */
-export function markReach(host:GameHost, viewer:GameObject, sight:Sight):Sight {
-	const role = fightRole(host, viewer);
-	const attack = role && attackFor(attackVerbFor(role), role);
-	if (!attack) {
+/** `sight` as fighter `viewer` sees it, each fighter of its own side marked, so a captain never takes its own Blade for a foe. */
+export function markSides(host:GameHost, viewer:GameObject, sight:Sight):Sight {
+	if (!fightRole(host, viewer)) {
 		return sight;
 	}
 	return {
 		...sight,
 		objects: sight.objects.map((o) => {
 			const other = findObject(host.world, o.id);
-			if (!isLiving(other)) {
-				return o;
-			}
-			// One of its own side: marked, so a captain never takes its own Blade for a foe.
-			if (!isRival(host, viewer, other)) {
-				return other !== viewer && fightRole(host, other) ? { ...o, note: o.note ? `yours; ${o.note}` : 'yours' } : o;
-			}
-			return { ...o, inReach: distanceXZ(viewer, other) <= attack.range && (attack.cover !== 'block' || combatSight(host.world, viewer, other)) };
+			return isLiving(other) && other !== viewer && !isRival(host, viewer, other) && fightRole(host, other) ? { ...o, note: o.note ? `yours; ${o.note}` : 'yours' } : o;
 		}),
 	};
 }
@@ -573,7 +557,7 @@ async function doAttack(host:GameHost, call:Call, verb:string, name:string, lock
 		return burnWith(host, call, attack, target, fuel);
 	}
 	if (!isRival(host, ctx.character, target)) {
-		return { status: 'failed', verb: attack.name, reason: `${idOf(target)} is not an enemy` };
+		return { status: 'failed', verb: attack.name, reason: (name) => `${name(idOf(target))} is not an enemy` };
 	}
 	if (pick) {
 		attack = attackOf(pickMove(host, ctx.character, attack.name, target), role) ?? attack;
@@ -660,12 +644,11 @@ function rollBlow(
 	}
 	const clear = !attack.spec.cover || combatSight(ctx.world, ctx.character, target);
 	const who = [idOf(ctx.character), idOf(target)];
-	const foe = seenName(host, ctx.character, target);
+	const foe = idOf(target);
 	if (attack.spec.cover === 'block' && !clear) {
 		host.arc?.pushEvent({
 			kind: 'Miss',
-			text: '{0} has no shot at {1} — flank',
-			who,
+			text: (name) => `${name(who[0])} has no shot at ${name(who[1])} — flank`,
 			tags: ['cover', attack.name],
 			major: false,
 		});
@@ -677,12 +660,12 @@ function rollBlow(
 	}
 	npc.attackReadyTimestamp = Time.time + attack.spec.cooldown;
 	if (vitals.hp <= 0) {
-		return { landed: true, result: { status: 'ok', verb: attack.name, reason: 'already down' } };
+		return { landed: true, result: { status: 'ok', verb: attack.name, reason: 'already fallen' } };
 	}
 	if (attack.spec.cover !== 'soften' && guardStops(target, ctx.character)) {
-		host.arc?.pushEvent({ kind: 'Miss', text: '{1} blocked {0}', who, tags: ['blocked', attack.name], major: false });
+		host.arc?.pushEvent({ kind: 'Miss', text: (name) => `${name(who[1])} blocked ${name(who[0])}`, who, tags: ['blocked', attack.name], major: false });
 		cueAt(ctx.world, 'clash', target);
-		return { landed: true, result: { status: 'ok', verb: attack.name, reason: `${foe} blocked it` } };
+		return { landed: true, result: { status: 'ok', verb: attack.name, reason: (name) => `${name(foe)} blocked it` } };
 	}
 	const dist = distanceXZ(ctx.character, target);
 	const covered = attack.spec.cover === 'soften' && !clear;
@@ -695,12 +678,11 @@ function rollBlow(
 	if (Math.random() >= chance) {
 		host.arc?.pushEvent({
 			kind: 'Miss',
-			text: covered ? '{0} missed {1} through cover' : '{0} missed {1}',
-			who,
+			text: (name) => `${name(who[0])} missed ${name(who[1])}${covered ? ' through cover' : ''}`,
 			tags: ['miss', attack.name, ...(covered ? ['cover'] : [])],
 			major: false,
 		});
-		return { landed: false, result: { status: 'ok', verb: attack.name, reason: covered ? `missed ${foe} through cover` : `missed ${foe}` } };
+		return { landed: false, result: { status: 'ok', verb: attack.name, reason: (name) => `missed ${name(foe)}${covered ? ' through cover' : ''}` } };
 	}
 	let dmg = melee ? Math.max(attack.spec.damage, weapon?.damage ?? 0) : attack.spec.damage;
 	if (covered) {
@@ -712,9 +694,9 @@ function rollBlow(
 /** A hit striking home on `target` for `dmg` (softened by cover when `covered`): the wound, the knock, and a fall. */
 function strikeHome(host:GameHost, ctx:CharacterCtx, attack:{ name:string; spec:AttackKind }, target:GameObject, dmg:number, covered:boolean):ArcResult {
 	const vitals = target.getComponent(Vitals);
-	const foe = seenName(host, ctx.character, target);
+	const foe = idOf(target);
 	if (!vitals || vitals.hp <= 0) {
-		return { status: 'ok', verb: attack.name, reason: 'already down' };
+		return { status: 'ok', verb: attack.name, reason: 'already fallen' };
 	}
 	const who = [idOf(ctx.character), idOf(target)];
 	const struck = weaknessDamage(target, attack.name, dmg);
@@ -723,21 +705,18 @@ function strikeHome(host:GameHost, ctx:CharacterCtx, attack:{ name:string; spec:
 	const how = struck.weak ? ' — its weakness, it burns' : target.getComponent(Weakness) ? ', barely a scratch' : '';
 	host.arc?.pushEvent({
 		kind: 'Hurt',
-		text: `{0} ${attack.spec.word} {1}${covered ? ' through cover' : ''}${how}`,
-		who,
+		text: (name) => `${name(who[0])} ${attack.spec.word} ${name(who[1])}${covered ? ' through cover' : ''}${how}`,
 		tags: ['hurt', attack.name, ...(covered ? ['cover'] : []), ...(struck.weak ? ['weakness'] : [])],
 		major: false,
 	});
 	if (vitals.hp <= 0) {
 		dropDown(host, target);
-		return { status: 'ok', verb: attack.name, reason: `${foe} is down` };
+		return { status: 'ok', verb: attack.name, reason: (name) => `${name(foe)} has fallen` };
 	}
 	return {
 		status: 'ok',
 		verb: attack.name,
-		reason: covered
-			? `${foe} ${vitals.hp}/${vitals.maxHP} through cover`
-			: `${foe} ${vitals.hp}/${vitals.maxHP}`,
+		reason: (name) => `${name(foe)} ${vitals.hp}/${vitals.maxHP}${covered ? ' through cover' : ''}`,
 	};
 }
 
@@ -838,7 +817,7 @@ async function doProtect(host:GameHost, call:Call, name:string):Promise<ArcResul
 		if (hold.status !== 'ok') {
 			return { ...hold, verb: 'protect' };
 		}
-		return { status: 'ok', verb: 'protect', reason: `guard ${idOf(ward)}` };
+		return { status: 'ok', verb: 'protect', reason: (name) => `guard ${name(idOf(ward))}` };
 	}
 	const here = ctx.character.transform.position;
 	const screen = stay ? here : standableNear(host.world, ctx.character, screenPoint(ward, threat, here));
@@ -852,13 +831,13 @@ async function doProtect(host:GameHost, call:Call, name:string):Promise<ArcResul
 	if (verb) {
 		engaged.set(ctx.character, threat);
 		const hit = await doAttack(host, call, verb, '', threat, true);
-		return { ...hit, verb: 'protect', reason: hit.reason ?? `peel ${idOf(threat)}` };
+		return { ...hit, verb: 'protect', reason: hit.reason ?? ((name) => `peel ${name(idOf(threat))}`) };
 	}
 	const hold = await call.wait(0.35);
 	if (hold.status !== 'ok') {
 		return { ...hold, verb: 'protect' };
 	}
-	return { status: 'ok', verb: 'protect', reason: `screen ${idOf(ward)}` };
+	return { status: 'ok', verb: 'protect', reason: (name) => `screen ${name(idOf(ward))}` };
 }
 
 const HEAL_REST = ['Witch', 'Archer', 'Blade'] as const;
@@ -957,7 +936,7 @@ function landHeal(host:GameHost, ctx:CharacterCtx, id:string, healed:GameObject)
 	const npc = ctx.npc;
 	const target = findObject(ctx.world, id) ?? healed;
 	if (!isLiving(target)) {
-		return { status: 'failed', verb: 'heal', reason: 'down' };
+		return { status: 'failed', verb: 'heal', reason: 'fallen' };
 	}
 	if (target !== ctx.character) {
 		if (isRival(host, ctx.character, target)) {
@@ -979,17 +958,14 @@ function landHeal(host:GameHost, ctx:CharacterCtx, id:string, healed:GameObject)
 	const ally = idOf(target);
 	host.arc?.pushEvent({
 		kind: 'Heal',
-		text: covered ? '{0} healed {1} through cover' : '{0} healed {1}',
-		who: [idOf(ctx.character), ally],
+		text: (name) => `${name(idOf(ctx.character))} healed ${name(ally)}${covered ? ' through cover' : ''}`,
 		tags: ['heal', ...(covered ? ['cover'] : [])],
 		major: false,
 	});
 	return {
 		status: 'ok',
 		verb: 'heal',
-		reason: covered
-			? `${ally} ${vitals.hp}/${vitals.maxHP} through cover, +${hp} more over ${HEAL.regen}s`
-			: `${ally} ${vitals.hp}/${vitals.maxHP}, +${hp} more over ${HEAL.regen}s`,
+		reason: (name) => `${name(ally)} ${vitals.hp}/${vitals.maxHP}${covered ? ' through cover' : ''}, +${hp} more over ${HEAL.regen}s`,
 	};
 }
 
@@ -1019,49 +995,10 @@ async function doUnequip(ctx:CharacterCtx, slotName:string):Promise<ArcResult> {
 	return { status: 'ok', verb: 'unequip' };
 }
 
-async function doSteal(host:GameHost, call:Call, itemName:string, fromName:string):Promise<ArcResult> {
-	const { ctx } = call;
-	if (!fromName) {
-		return { status: 'failed', verb: 'steal', reason: 'steal from whom?' };
-	}
-	if (ctx.character.getComponent(MarketNPC)?.kind === 'guard') {
-		return { status: 'failed', verb: 'steal', reason: 'the watch does not steal' };
-	}
-	const victim = findObject(ctx.world, fromName);
-	if (!victim) {
-		return { status: 'failed', verb: 'steal', reason: `no such character ${fromName}` };
-	}
-	if (victim === ctx.character) {
-		return { status: 'failed', verb: 'steal', reason: 'cannot steal from yourself' };
-	}
-	const walk = await call.goTo(fromName);
-	if (walk.status !== 'ok') {
-		return { ...walk, verb: 'steal' };
-	}
-	const move = { verb: 'steal', thing: itemName, from: victim, to: ctx.character };
-	const refused = transferRefusal(move);
-	if (refused) {
-		return { status: 'failed', verb: 'steal', reason: refused };
-	}
-	const stock = findItem(victim, itemName);
-	const label = pascalCase(stock?.name ?? itemName) || itemName;
-	doTransfer(host, move);
-	reportTheft(host, ctx.character, label, fromName, 'stole without paying');
-	return { status: 'ok', verb: 'steal', reason: `stole ${label} from ${fromName}` };
-}
-
-export function reportTheft(
-	host:GameHost,
-	thief:GameObject,
-	item:string,
-	fromID:string,
-	reason:string,
-):void {
-	if (!host.hooks.allowTheft) {
-		return;
-	}
-	if (thief.getComponent(MarketNPC)?.kind === 'guard') {
-		return;
+/** Marks `thief` wanted for taking `item` from `fromID`, where the scene allows theft and it is no guard; whether it did. */
+export function markThief(host:GameHost, thief:GameObject, item:string, fromID:string, reason:string):boolean {
+	if (!host.hooks.allowTheft || thief.getComponent(MarketNPC)?.kind === 'guard') {
+		return false;
 	}
 	const mark = thief.getOrAddComponent(Wanted);
 	mark.enabled = true;
@@ -1072,12 +1009,6 @@ export function reportTheft(
 	if (!mark.items.some((it) => compactName(it) === compactName(item))) {
 		mark.items.push(item);
 	}
-	const who = idOf(thief);
-	host.arc?.pushEvent({
-		kind: 'Theft',
-		text: `${who} ${reason}: ${item}${fromID ? ` from ${fromID}` : ''}`,
-		tags: ['steal', item, who, fromID],
-		major: true,
-	});
-	host.world.setMessage(`Theft — ${who} took ${item}`);
+	host.world.setMessage(`Theft — ${idOf(thief)} took ${item}`);
+	return true;
 }

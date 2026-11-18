@@ -1,8 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import type { Arc } from '../arc/arc-types.js';
 import { buildCatalog, dummyEntity, SampleCache, type ExprEntity } from '../expr/index.js';
-import { VERB_THINK_SCORES, THINK_ABOUT_SCORE, THINK_BARE_SCORE, SimpleThinkQueue, PriorityThinkQueue, verbThinkScore, arcScore, thinkRecencyScale } from './queue.js';
+import { SimpleThinkQueue, PriorityThinkQueue, thinkRecencyScale } from './queue.js';
 import { DEFAULT_TRUE_SCORE } from '../expr/expr-types.js';
 
 type Posed = ExprEntity & { x:number; z:number };
@@ -36,7 +35,7 @@ describe('PriorityThinkQueue', () => {
 			bindings: { Player: { kind: 'entity', value: Player } },
 			hasHeard: true,
 		});
-		q.setWatches('Guard', ['hasHeard', 'isNear(me, Player)']);
+		q.setWatches('Guard', { heard: 'hasHeard', near: 'isNear(me, Player)' });
 		q.ensure('Guard');
 		const catalogs = new Map([['Guard', cat]]);
 		const rows = q.tick(1, catalogs);
@@ -44,16 +43,16 @@ describe('PriorityThinkQueue', () => {
 		assert.equal(rows[0].mindID, 'Guard');
 		assert.ok(rows[0].score <= 0.51 + 1e-9);
 		assert.ok(rows[0].score > 0.05);
+		assert.equal(rows[0].why, 'watch heard', 'the first watch that scored highest, by its name');
 	});
 
-	it('prunes to one row per NPC; heartbeat lowest; major ~1', () => {
+	it('prunes to one row per NPC; rethink lowest; major ~1', () => {
 		const q = new PriorityThinkQueue({
 			processInterval: 0,
-			heartbeatStart: 0.01,
-			heartbeatMin: 0.01,
+			rethinkInterval: 0.01,
 		});
 		q.ensure('A');
-		q.ensure('B', { skipHeartbeat: true });
+		q.ensure('B', { rethinks: false });
 		q.enqueueMajor('A');
 		q.tick(1, new Map());
 		q.enqueueMajor('A');
@@ -65,7 +64,7 @@ describe('PriorityThinkQueue', () => {
 
 	it('abortThink trips the inflight signal; drop and setAiOn(false) abort', () => {
 		const q = new PriorityThinkQueue({ processInterval: 0 });
-		q.ensure('A', { skipHeartbeat: true });
+		q.ensure('A', { rethinks: false });
 		const sig = q.beginThink('A');
 		assert.equal(sig.aborted, false);
 		q.abortThink('A');
@@ -82,9 +81,9 @@ describe('PriorityThinkQueue', () => {
 
 	it('never hands out a mind already thinking; a live arc does not hold it back', () => {
 		const q = new PriorityThinkQueue({ processInterval: 0 });
-		q.ensure('A', { skipHeartbeat: true });
-		q.ensure('B', { skipHeartbeat: true });
-		q.ensure('C', { skipHeartbeat: true });
+		q.ensure('A', { rethinks: false });
+		q.ensure('B', { rethinks: false });
+		q.ensure('C', { rethinks: false });
 		q.beginThink('A');
 		q.enqueueMajor('A', true);
 		q.enqueueMajor('B');
@@ -97,22 +96,22 @@ describe('PriorityThinkQueue', () => {
 		assert.deepEqual(q.tick(1, new Map()).map((row) => row.mindID).sort(), ['A', 'B', 'C']);
 	});
 
-	it('queues one opening think for a new mind, heartbeat or not, below a major event', () => {
+	it('queues one opening think for a new mind, rethinking or not, below a major event', () => {
 		const q = new PriorityThinkQueue({ processInterval: 0 });
-		q.ensure('Quiet', { skipHeartbeat: true });
-		q.ensure('Loud', { skipHeartbeat: true });
+		q.ensure('Quiet', { rethinks: false });
+		q.ensure('Loud', { rethinks: false });
 		q.enqueueMajor('Loud');
 		const rows = q.tick(1, new Map());
 		assert.deepEqual(rows.map((row) => [row.mindID, row.reason]), [['Loud', 'major'], ['Quiet', 'start']]);
 		q.ensure('Quiet');
 		assert.equal(q.tick(1, new Map()).length, 0, 'once: ensuring it again queues nothing');
-		q.ensure('Waiter', { skipHeartbeat: true, skipStart: true });
+		q.ensure('Waiter', { rethinks: false, skipStart: true });
 		assert.equal(q.tick(1, new Map()).length, 0, 'skipStart: it waits for something to happen');
 	});
 
 	it('skipMajor drops enqueue unless forced', () => {
 		const q = new PriorityThinkQueue({ processInterval: 0 });
-		q.ensure('A', { skipMajor: true, skipHeartbeat: true });
+		q.ensure('A', { skipMajor: true, rethinks: false });
 		q.drop('A');
 		q.enqueueMajor('A');
 		assert.equal(q.tick(1, new Map()).length, 0);
@@ -120,18 +119,18 @@ describe('PriorityThinkQueue', () => {
 		assert.equal(q.tick(1, new Map()).length, 1);
 	});
 
-	it('heartbeat is a low-priority pulse every 3s and does not stretch', () => {
+	it('rethink is a low-priority row every 3s and does not stretch', () => {
 		const q = new PriorityThinkQueue({ processInterval: 0 });
 		q.ensure('A');
 		const first = q.tick(0, new Map());
 		assert.equal(first.length, 1);
-		assert.equal(first[0].reason, 'start', 'the opening think, then the pulse');
-		q.noteResult('A', true);
-		assert.equal(q.heartbeatSeconds('A'), 3);
+		assert.equal(first[0].reason, 'start', 'the opening think, then the rethink');
+		q.noteResult('A');
+		assert.equal(q.rethinkSeconds('A'), 3);
 		assert.equal(q.tick(2.9, new Map()).length, 0);
 		const again = q.tick(0.2, new Map());
 		assert.equal(again.length, 1);
-		assert.equal(again[0].reason, 'heartbeat');
+		assert.equal(again[0].reason, 'rethink');
 		assert.equal(again[0].score, 0.001);
 	});
 
@@ -143,20 +142,18 @@ describe('PriorityThinkQueue', () => {
 		assert.equal(rows.length, 0);
 	});
 
-	it('scales score by trueScore after a think, recovering by half of heartbeatStart', () => {
+	it('scales score by trueScore after a think, recovering by half of rethinkInterval', () => {
 		assert.equal(thinkRecencyScale(0, 120, DEFAULT_TRUE_SCORE), DEFAULT_TRUE_SCORE);
 		assert.equal(thinkRecencyScale(60, 120, DEFAULT_TRUE_SCORE), 1);
 		assert.equal(thinkRecencyScale(30, 120, DEFAULT_TRUE_SCORE), (DEFAULT_TRUE_SCORE + 1) / 2);
 		assert.equal(thinkRecencyScale(120, 120, DEFAULT_TRUE_SCORE), 1);
 		const q = new PriorityThinkQueue({
 			processInterval: 0,
-			heartbeatStart: 120,
-			heartbeatMin: 30,
-			heartbeatAdjust: false,
+			rethinkInterval: 120,
 		});
-		q.ensure('Hot', { skipHeartbeat: true });
-		q.ensure('Cold', { skipHeartbeat: true });
-		q.noteResult('Hot', false);
+		q.ensure('Hot', { rethinks: false });
+		q.ensure('Cold', { rethinks: false });
+		q.noteResult('Hot');
 		q.enqueueMajor('Hot');
 		q.enqueueMajor('Cold');
 		assert.deepEqual(q.tick(1, new Map()).map((row) => row.mindID), ['Cold', 'Hot']);
@@ -166,104 +163,19 @@ describe('PriorityThinkQueue', () => {
 		assert.ok(Math.abs(q.recencyScale('Hot') - 1) < 1e-9);
 	});
 
-	it('enqueueVerb uses seriousness; wait is silent; fail still wakes', () => {
-		assert.ok(verbThinkScore('go_to') > verbThinkScore('give'));
-		assert.ok(verbThinkScore('go_to') > verbThinkScore('think'));
-		assert.ok(verbThinkScore('think') > verbThinkScore('wander'));
-		assert.ok(verbThinkScore('wander') > verbThinkScore('wait'));
-		// An arc that only learns something must lead to a think that uses it.
-		assert.ok(arcScore([{ verb: 'examine', args: { target: 'BridgeLever' } }]) >= verbThinkScore('use'));
-		assert.equal(verbThinkScore('wait'), 0);
-		assert.ok(verbThinkScore('wait', false) > 0);
-		assert.equal(verbThinkScore('follow'), 0);
-		assert.equal(verbThinkScore('follow', false), 0.3);
-		assert.equal(verbThinkScore('wait', false), 0.3);
-		assert.ok(verbThinkScore('give', false) >= 0.3);
-		assert.equal(VERB_THINK_SCORES.go_to, 0.8);
-
+	it('an Arc that ends queues a think at the score it is given', () => {
 		const q = new PriorityThinkQueue({ processInterval: 0 });
-		q.ensure('A', { skipHeartbeat: true });
-		q.drop('A');
-		q.enqueueVerb('A', 'wait');
-		assert.equal(q.tick(1, new Map()).length, 0);
-		q.enqueueVerb('A', 'follow');
-		assert.equal(q.tick(1, new Map()).length, 0);
-		q.enqueueVerb('A', 'follow', false);
-		const lost = q.tick(1, new Map());
-		assert.equal(lost.length, 1);
-		assert.equal(lost[0].score, 0.3);
-		q.enqueueVerb('A', 'wander');
-		const wander = q.tick(1, new Map());
-		assert.equal(wander.length, 1);
-		assert.equal(wander[0].reason, 'verb');
-		assert.equal(wander[0].score, VERB_THINK_SCORES.wander);
-		q.enqueueVerb('A', 'wait', false);
-		const failed = q.tick(1, new Map());
-		assert.equal(failed.length, 1);
-		assert.equal(failed[0].score, 0.3);
-	});
-
-	it('prunes verb rows to the more serious verb; skipMajor does not drop them', () => {
-		const q = new PriorityThinkQueue({ processInterval: 0 });
-		q.ensure('A', { skipHeartbeat: true, skipMajor: true });
-		q.enqueueMajor('A');
-		q.enqueueVerb('A', 'wander');
-		q.enqueueVerb('A', 'go_to');
+		q.ensure('Opening', { rethinks: false });
+		q.ensure('Ended', { rethinks: false, skipStart: true });
+		q.ensure('Loud', { rethinks: false, skipStart: true });
+		q.enqueueArcEnd('Ended', 'arc ok at wait', 0.8);
+		q.enqueueMajor('Loud');
 		const rows = q.tick(1, new Map());
-		assert.equal(rows.length, 1);
-		assert.equal(rows[0].reason, 'verb');
-		assert.equal(rows[0].score, VERB_THINK_SCORES.go_to);
-	});
-
-	it('verbScores overrides defaults, including suppressing a verb', () => {
-		const q = new PriorityThinkQueue({
-			processInterval: 0,
-			verbScores: { wander: 0, inspect: 0.5 },
-		});
-		q.ensure('A', { skipHeartbeat: true });
-		q.drop('A');
-		q.enqueueVerb('A', 'wander');
-		assert.equal(q.tick(1, new Map()).length, 0);
-		q.enqueueVerb('A', 'inspect');
-		const rows = q.tick(1, new Map());
-		assert.equal(rows.length, 1);
-		assert.equal(rows[0].score, 0.5);
-	});
-
-	it('resting owes no next think: the mind stays quiet until something comes up', () => {
-		for (const verb of ['sit', 'sleep', 'fish']) {
-			assert.equal(arcScore([{ verb, args: {} }]), 0, verb);
-			assert.ok(arcScore([{ verb, args: {} }], false) > 0, `${verb} that failed still calls for a think`);
-		}
-	});
-
-	it('arcScore is the max warrant; think(about) is 0.55', () => {
-		assert.equal(THINK_BARE_SCORE, 0.35);
-		assert.equal(THINK_ABOUT_SCORE, 0.55);
-		assert.equal(arcScore([{ verb: 'wait', args: {}, then: 'always' }, { verb: 'think', args: {} }]), THINK_BARE_SCORE);
-		assert.equal(arcScore([{ verb: 'wait', args: {}, then: 'always' }, { verb: 'think', args: { about: 'the lock' } }]), THINK_ABOUT_SCORE);
-		assert.equal(arcScore([{ verb: 'go_to', args: { target: 'EastGate' }, then: 'always' }, { verb: 'think', args: { about: 'the lock' } }]), VERB_THINK_SCORES.go_to);
-		assert.equal(arcScore([{ verb: 'go_to', args: { target: 'EastGate' }, then: 'always' }, { verb: 'think', args: {} }]), VERB_THINK_SCORES.go_to);
-
-		const q = new PriorityThinkQueue({ processInterval: 0 });
-		q.ensure('A', { skipHeartbeat: true });
-		q.enqueueArc('A', [{ verb: 'wait', args: {}, then: 'always' }, { verb: 'think', args: { about: 'the lock' } }]);
-		const rows = q.tick(1, new Map());
-		assert.equal(rows.length, 1);
-		assert.equal(rows[0].score, THINK_ABOUT_SCORE);
-		assert.equal(rows[0].reason, 'verb');
-	});
-
-	it('wait(until) drops warrants before it; wait without until does not', () => {
-		const giveThenGo:Arc = [
-			{ verb: 'give', args: { item: 'Loaf', to: 'Baker' }, then: 'always' },
-			{ verb: 'wait', args: { until: 'some(others.approaching())' }, then: 'always' },
-			{ verb: 'go_to', args: { target: 'EastGate' } },
-		];
-		assert.equal(arcScore(giveThenGo), VERB_THINK_SCORES.go_to);
-		assert.equal(arcScore([{ verb: 'give', args: { item: 'Loaf', to: 'Baker' }, then: 'always' }, { verb: 'wait', args: { until: 'hasHeard' } }]), 0);
-		assert.equal(arcScore([{ verb: 'give', args: { item: 'Loaf', to: 'Baker' }, then: 'always' }, { verb: 'wait', args: { seconds: 8 } }]), VERB_THINK_SCORES.give);
-		assert.equal(arcScore([{ verb: 'give', args: { item: 'Loaf', to: 'Baker' }, then: 'always' }, { verb: 'wait', args: { until: 'hasHeard' } }], false), 0.3);
+		assert.deepEqual(rows.map((row) => [row.mindID, row.reason]), [['Loud', 'major'], ['Ended', 'arc'], ['Opening', 'start']]);
+		assert.equal(rows[1].why, 'arc ok at wait');
+		q.setAiOn('Ended', false);
+		q.enqueueArcEnd('Ended', 'arc failed at go_to', 0.5);
+		assert.equal(q.tick(1, new Map()).length, 0, 'not while its AI is off');
 	});
 
 	it('armOnce is sampled like a watch and clearOnce drops it', () => {
@@ -272,7 +184,7 @@ describe('PriorityThinkQueue', () => {
 			trueScore: 0.51,
 			epsilon: 0.05,
 		});
-		q.ensure('Guard', { skipHeartbeat: true });
+		q.ensure('Guard', { rethinks: false });
 		q.armOnce('Guard', 'hasHeard');
 		const me = posed('me', { x: 0, z: 0 });
 		const cat = buildCatalog({
@@ -288,13 +200,14 @@ describe('PriorityThinkQueue', () => {
 		const rows = q.tick(1, catalogs);
 		assert.equal(rows.length, 1);
 		assert.equal(rows[0].reason, 'watch');
+		assert.equal(rows[0].why, 'until hasHeard');
 		q.clearOnce('Guard');
 		assert.equal(q.tick(1, catalogs).length, 0);
 	});
 
 	it('default mayThink allows while an arc is live; callback can block it', () => {
 		const q = new PriorityThinkQueue({ processInterval: 0 });
-		q.ensure('A', { skipHeartbeat: true });
+		q.ensure('A', { rethinks: false });
 		q.beginArc('A', [{ verb: 'go_to', args: { target: 'Gate' }, then: 'always' }, { verb: 'steal', args: { item: 'Loaf', from: 'Baker' } }]);
 		q.enqueueMajor('A');
 		assert.equal(q.tick(1, new Map()).length, 1);
@@ -312,15 +225,15 @@ describe('PriorityThinkQueue', () => {
 			processInterval: 0,
 			mayThink: ({ arc }) => !arc,
 		});
-		q.ensure('A', { skipHeartbeat: true });
+		q.ensure('A', { rethinks: false });
 		q.enqueueMajor('A');
 		assert.equal(q.tick(1, new Map()).length, 1);
 	});
 
 	it('simple queue is first come, first served', () => {
 		const q = new SimpleThinkQueue({ processInterval: 0 });
-		q.ensure('Late', { skipHeartbeat: true });
-		q.ensure('Early', { skipHeartbeat: true });
+		q.ensure('Late', { rethinks: false });
+		q.ensure('Early', { rethinks: false });
 		q.drop('Late');
 		q.drop('Early');
 		q.enqueueMajor('Early');
@@ -330,9 +243,9 @@ describe('PriorityThinkQueue', () => {
 
 	it('simple queue does not let a later major jump the line', () => {
 		const q = new SimpleThinkQueue({ processInterval: 0 });
-		q.ensure('Early', { skipHeartbeat: true });
-		q.ensure('Loud', { skipHeartbeat: true });
-		q.enqueueVerb('Early', 'wander');
+		q.ensure('Early', { rethinks: false });
+		q.ensure('Loud', { rethinks: false });
+		q.enqueueArcEnd('Early', 'arc ok at wander', 0.1);
 		q.enqueueMajor('Loud');
 		assert.equal(q.tick(1, new Map())[0].mindID, 'Early');
 	});

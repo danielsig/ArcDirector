@@ -4,10 +4,11 @@ import { STOCK_VERBS } from '../arc/stock-verbs.js';
 import type { ArcRunner } from '../character/arc-runner.js';
 import type { Character } from '../character/Character.js';
 import type { Collective } from '../collective/Collective.js';
+import { isRecord, type JsonValue } from '../json.js';
 import { PriorityThinkQueue } from '../think/queue.js';
 import { ArcDirector } from './ArcDirector.js';
 import './shortcuts.js';
-import { Feature, type FeatureTick } from './Feature.js';
+import { Feature } from './Feature.js';
 
 type Ctx = { id:string };
 
@@ -20,16 +21,16 @@ class Recorder extends Feature<Ctx> {
 	public override install():void {
 		this.heard.push(`${this.name} install`);
 	}
-	public override beforeWatches(_tick:FeatureTick):void {
+	public override beforeWatches():void {
 		this.heard.push(`${this.name} beforeWatches`);
 	}
-	public override beforeMoves(_tick:FeatureTick):void {
+	public override beforeMoves():void {
 		this.heard.push(`${this.name} beforeMoves`);
 	}
-	public override afterMoves(_tick:FeatureTick):void {
+	public override afterMoves():void {
 		this.heard.push(`${this.name} afterMoves`);
 	}
-	public override beforeThinks(_tick:FeatureTick):void {
+	public override beforeThinks():void {
 		this.heard.push(`${this.name} beforeThinks`);
 	}
 	public override runnerAdded(runner:ArcRunner<Ctx>):void {
@@ -40,6 +41,21 @@ class Recorder extends Feature<Ctx> {
 	}
 	public override characterMoved(character:Character<Ctx>, from:Collective<Ctx> | null, to:Collective<Ctx> | null):void {
 		this.heard.push(`${this.name} moved ${character.id} ${from?.id ?? '-'} ${to?.id ?? '-'}`);
+	}
+}
+
+/** Counts, and keeps its count over a save. */
+class Tally extends Feature<Ctx> {
+	public count = 0;
+	public readonly loaded:(JsonValue | undefined)[] = [];
+	public override readonly saveKey = 'tally';
+
+	public override toJSON():JsonValue {
+		return { count: this.count };
+	}
+	public override load(json:JsonValue | undefined):void {
+		this.loaded.push(json);
+		this.count = isRecord(json) && typeof json.count === 'number' ? json.count : 0;
 	}
 }
 
@@ -99,5 +115,40 @@ describe('Feature', () => {
 		const feature = new Recorder('f', []);
 		director().addFeature(feature);
 		assert.throws(() => director().addFeature(feature), /one director/);
+	});
+
+	it('keeps its state over a save, under its saveKey, whether restored before or after the cast is wired', () => {
+		const first = director().addCharacter({ id: 'Ada' }).addFeature(new Tally());
+		first.getFeature(Tally)!.count = 7;
+		const saved = JSON.parse(JSON.stringify(first.exportCast()));
+		assert.deepEqual(saved.features.tally, { count: 7 });
+
+		const early = director().addCharacter({ id: 'Ada' }).addFeature(new Tally());
+		early.restoreCast(saved);
+		assert.deepEqual(early.getFeature(Tally)!.loaded, [], 'loads as the cast is wired');
+		early.tick(0.1);
+		assert.equal(early.getFeature(Tally)!.count, 7);
+
+		const late = director().addCharacter({ id: 'Ada' }).addFeature(new Tally());
+		late.tick(0.1);
+		late.getFeature(Tally)!.count = 2;
+		late.restoreCast(saved);
+		assert.equal(late.getFeature(Tally)!.count, 7);
+	});
+
+	it('ignores state no feature here saves as, and loads nothing for one the save lacks', () => {
+		const saved = JSON.parse(JSON.stringify(director().addCharacter({ id: 'Ada' }).exportCast()));
+		saved.features.ghost = { haunts: 'Ada' };
+		const next = director().addCharacter({ id: 'Ada' }).addFeature(new Tally());
+		next.getFeature(Tally)!.count = 3;
+		next.restoreCast(saved);
+		next.tick(0.1);
+		assert.deepEqual(next.getFeature(Tally)!.loaded, [undefined]);
+		assert.equal(next.getFeature(Tally)!.count, 0);
+		assert.ok(next.character('Ada'));
+	});
+
+	it('refuses a second feature that saves under the same key', () => {
+		assert.throws(() => director().addFeature(new Tally()).addFeature(new Tally()), /two features save as 'tally'/);
 	});
 });

@@ -204,9 +204,9 @@ function jug():THREE.Group {
 		{ r: 0.06, y: 0.16 },
 		{ r: 0.032, y: 0.2 },
 		{ r: 0.048, y: 0.24 },
+		// The lip's closing cone faces inward, so culling shows the world through the mouth.
 		{ r: 0.02, y: 0.25 },
 	], 12), clay);
-	// The lip's closing cone faces inward, so culling shows the world through the mouth.
 	const mouth = part(new THREE.CircleGeometry(0.044, 12).rotateX(-Math.PI / 2), hole);
 	mouth.position.y = 0.242;
 	mouth.castShadow = false;

@@ -12,9 +12,9 @@ export const STOCK_COLLECTIVE_VERBS = [
 export type StockCollectiveVerb = (typeof STOCK_COLLECTIVE_VERBS)[number];
 
 export const STOCK_COLLECTIVE_VERB_DEFS = {
-	command: { args: { who: 'expr', arc: 'arc', group: 'string?' }, help: 'assigns a sticky program to matching units, never the commander; two or more: name them, group=Name', free: true },
-	tag: { args: { who: 'expr', name: 'string' }, help: 'assigns only', free: true },
-	untag: { args: { who: 'expr', name: 'string' }, help: 'assigns only', free: true },
+	command: { args: { who: 'expr', arc: 'arc', group: 'string?', append: 'bool?' }, help: 'assigns a sticky program to matching units, never the commander; two or more: name them, group=Name', channel: '' },
+	tag: { args: { who: 'expr', name: 'string' }, help: 'assigns only', channel: '' },
+	untag: { args: { who: 'expr', name: 'string' }, help: 'assigns only', channel: '' },
 	spread: { args: { around: 'id?', paces: 'number?' } },
 	circle: { args: { around: 'id?', paces: 'number?' } },
 	hold_line: { args: { at: 'id?', facing: 'id?', paces: 'number?' }, seen: 'holding the line' },

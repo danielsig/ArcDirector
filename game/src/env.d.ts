@@ -7,4 +7,6 @@ declare module '*.vue' {
 }
 
 /** Which hosted services have a key on the dev server (`vite.config.ts`, read through `director/hosted.ts`). */
-declare const __HOSTED__:{ jev:boolean; xai:boolean };
+interface ImportMetaEnv {
+	readonly HOSTED:{ jev:boolean; xai:boolean };
+}

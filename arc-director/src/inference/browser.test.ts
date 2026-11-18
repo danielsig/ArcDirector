@@ -116,7 +116,7 @@ describe('browser', () => {
 	});
 
 	it('stops the model once the thinking budget runs out', async () => {
-		const thought = Array.from({ length: 40 }, () => ({ reasoning_content: 'I need to lower the Bridge. ' }));
+		const thought = Array.from({ length: 40 }, (element, i) => ({ reasoning_content: `I need to lower the Bridge, step ${i}. ` }));
 		const { wllama, stopped } = fakeWllama([...thought, { content: '{}' }]);
 		const provider = providerOn(wllama);
 		provider.configureModel('gemma', { thinkingBudget: 16 });
@@ -124,6 +124,16 @@ describe('browser', () => {
 		assert.equal(res.truncated, true);
 		assert.equal(res.content, null);
 		assert.ok(stopped(), 'the model stops thinking too, not only the reader');
+	});
+
+	it("hands the engine what is left of the think's thinking budget, and lets it end the thought", async () => {
+		const { wllama, asked } = fakeWllama([...Array.from({ length: 12 }, (element, i) => ({ reasoning_content: `step ${i} ` })), { content: '{}' }]);
+		const provider = new HttpProvider({ baseURL: 'http://browser.invalid/v1', fetch: inPageFetch(() => Promise.resolve(wllama)), budgetField: 'thinking_budget_tokens' });
+		provider.configureModel('gemma', { thinkingBudget: 16, thinkingFloor: 0 });
+		const res = await provider.chat({ model: 'gemma', messages: [{ role: 'user', content: 'hi' }], enableThinking: true, thinkingSpent: 10 });
+		await provider.chat({ model: 'gemma', messages: [{ role: 'user', content: 'hi' }], enableThinking: true, thinkingSpent: 20 });
+		assert.equal(res.content, '{}', 'twelve thought past six left: the engine ends it, the client does not');
+		assert.deepEqual(asked.map((params) => params['thinking_budget_tokens']), [6, 0]);
 	});
 
 	it('fails a load that llama.cpp failed, or that put no layer on the GPU, and passes one on the GPU', () => {

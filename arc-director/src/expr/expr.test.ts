@@ -1,4 +1,5 @@
 import { plainTagTests } from './tag-tests.js';
+import { lex } from './lex.js';
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import {
@@ -11,8 +12,8 @@ import {
 	stringifyVal,
 	watchScore,
 	type ExprEntity,
-	type HostKernels,
 } from './index.js';
+import type { CatalogInputs } from './natives.js';
 
 type Posed = ExprEntity & { x:number; z:number };
 
@@ -26,7 +27,7 @@ function xz(a:ExprEntity, b:ExprEntity):number {
 	return Math.hypot((pa.x ?? 0) - (pb.x ?? 0), (pa.z ?? 0) - (pb.z ?? 0));
 }
 
-function world(extra:Partial<HostKernels> = {}):HostKernels {
+function world(extra:Partial<CatalogInputs> = {}):CatalogInputs {
 	const me = posed('Guard', { x: 0, z: 0, tags: ['character'] });
 	const A = posed('A', { x: 5, z: 0, tags: ['character'] });
 	const B = posed('B', { x: 12, z: 0, tags: ['character'] });
@@ -61,23 +62,24 @@ function world(extra:Partial<HostKernels> = {}):HostKernels {
 	};
 }
 
-function val(expr:string, host?:HostKernels) {
+function val(expr:string, host?:CatalogInputs) {
 	const cat = buildCatalog(host ?? world());
 	return evaluate(expr, cat);
 }
 
-function num(expr:string, host?:HostKernels):number {
+function num(expr:string, host?:CatalogInputs):number {
 	const r = val(expr, host);
 	assert.equal(r.error, undefined, r.error?.message);
 	assert.equal(r.value.kind, 'number');
 	return r.value.kind === 'number' ? r.value.value : NaN;
 }
 
-function bool(expr:string, host?:HostKernels):boolean {
+/** `expr` as a condition: a bool, or what `some` found, or nothing. */
+function bool(expr:string, host?:CatalogInputs):boolean {
 	const r = val(expr, host);
 	assert.equal(r.error, undefined, r.error?.message);
-	assert.equal(r.value.kind, 'bool', expr);
-	return r.value.kind === 'bool' ? r.value.value : false;
+	assert.ok(['bool', 'entity', 'absent'].includes(r.value.kind), expr);
+	return watchScore(r.value).score > 0;
 }
 
 describe('names', () => {
@@ -222,7 +224,7 @@ describe('evaluate', () => {
 	});
 
 	it('nearby drops anyone out of the anchor\'s line of sight', () => {
-		const hidden = world({ canSee: (_a, b) => b.id !== 'A' });
+		const hidden = world({ canSee: (a, b) => b.id !== 'A' });
 		const near = val('others.nearby()', hidden);
 		assert.equal(near.value.kind, 'list');
 		if (near.value.kind === 'list') {
@@ -232,7 +234,7 @@ describe('evaluate', () => {
 		}
 		assert.equal(bool('isNear(me, A)', hidden), true);
 		const blind = world();
-		delete (blind as { canSee?:HostKernels['canSee'] }).canSee;
+		delete (blind as { canSee?:CatalogInputs['canSee'] }).canSee;
 		const open = val('others.nearby()', blind);
 		assert.equal(open.value.kind, 'list');
 		if (open.value.kind === 'list') {
@@ -275,10 +277,9 @@ describe('evaluate', () => {
 		const right = world({ facing: () => 0, side: () => 1 });
 		assert.equal(bool('isRight(me, Player)', right), true);
 		assert.equal(bool('isLeft(me, Player)', right), false);
-		const onlyBool = world({ facing: undefined, isFacing: () => true });
-		delete (onlyBool as { facing?:unknown }).facing;
-		assert.ok(val('facing(me, Player)', onlyBool).error);
-		assert.equal(bool('isFacing(me, Player)', onlyBool), true);
+		const blind = world();
+		delete blind.facing;
+		assert.ok(val('facing(me, Player)', blind).error, 'without facing, no one faces anything');
 	});
 
 	it('isFacing / isLeft / isRight / isBehind any of a type list', () => {
@@ -606,7 +607,7 @@ describe('evaluate', () => {
 		assert.equal(plainTagTests(`others.filter((u) => u == 'Oak')`, none), `others.filter((u) => u is 'Oak')`, 'a lambda with its param in brackets');
 		assert.equal(plainTagTests(`others.filter(u => u.kind == 'Oak')`, (name) => name === 'kind'), `others.filter(u => u.kind == 'Oak')`, 'a field the host really gives');
 		const A = { id: 'Flint', tags: ['Blade'], x: 0 };
-		const host:HostKernels = { me: { id: 'me', tags: [] }, others: [A], items: [], cache: new SampleCache() };
+		const host:CatalogInputs = { me: { id: 'me', tags: [] }, others: [A], items: [], cache: new SampleCache() };
 		assert.equal(bool(plainTagTests(`some(others.filter(u => u.name == 'Flint'))`, none), host), true, 'by its name too');
 		assert.equal(bool(plainTagTests(`some(others.filter(u => u.kind == 'Blade'))`, none), host), true);
 	});
@@ -615,7 +616,7 @@ describe('evaluate', () => {
 		const me = { id: 'me', tags: [] as string[], x: 0 };
 		const A = { id: 'A', tags: [] as string[], x: 10 };
 		const cache = new SampleCache();
-		const host:HostKernels = {
+		const host:CatalogInputs = {
 			me,
 			others: [A],
 			items: [],
@@ -710,5 +711,15 @@ describe('stringify', () => {
 		assert.equal(r.error, undefined);
 		assert.equal(r.value.kind, 'list');
 		assert.equal(r.value.kind === 'list' ? r.value.value.length : 0, 40);
+	});
+});
+
+describe('lex', () => {
+	it('reads a regex literal where a value starts, and / after a value as division', () => {
+		const kinds = (src:string):string[] => lex(src).map((tok) => `${tok.kind}:${tok.raw}`);
+		assert.deepEqual(kinds('a / b'), ['ident:a', 'slash:/', 'ident:b', 'eof:']);
+		assert.deepEqual(kinds('f(x) / 2 / n'), ['ident:f', 'lp:(', 'ident:x', 'rp:)', 'slash:/', 'num:2', 'slash:/', 'ident:n', 'eof:']);
+		assert.deepEqual(kinds(String.raw`name.matches(/^Fire\/[a/]/i)`), ['ident:name', 'dot:.', 'ident:matches', 'lp:(', String.raw`str:^Fire\/[a/]`, 'rp:)', 'eof:']);
+		assert.deepEqual(kinds('x == /a b/'), ['ident:x', 'eq:==', 'str:a b', 'eof:']);
 	});
 });

@@ -1,4 +1,4 @@
-import { DEFAULT_TRUE_SCORE, type ExprVal, type ScoldReason } from './expr-types.js';
+import { DEFAULT_TRUE_SCORE, isTruthy, type ExprVal, type ScoldReason } from './expr-types.js';
 
 export function clampTrueScore(n:number | undefined):number {
 	if (n === undefined || !Number.isFinite(n) || n <= 0 || n > 1) {
@@ -12,8 +12,8 @@ export function watchScore(value:ExprVal, trueScore = DEFAULT_TRUE_SCORE):{ scor
 	if (value.kind === 'absent') {
 		return { score: 0 };
 	}
-	if (value.kind === 'bool') {
-		return { score: value.value ? ts : 0 };
+	if (value.kind === 'bool' || value.kind === 'entity') {
+		return { score: isTruthy(value) ? ts : 0 };
 	}
 	if (value.kind === 'number') {
 		if (!Number.isFinite(value.value)) {

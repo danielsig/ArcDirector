@@ -1,5 +1,7 @@
 import { stampMap, type MapSnapshot } from 'arc-director';
+import type { AiLogPost, AiLogRow, AiLogRun } from '@arc-director/control';
 import { HumanBody } from '../engine/components';
+import { readURLSession } from '../engine/url-view';
 import type { HudAiLogEntry } from '../ui/hud-model';
 import { snapshotMap } from './map-view';
 import { isLiving } from './names';
@@ -19,36 +21,36 @@ export function publishAiLog(entries:HudAiLogEntry[]):void {
 	host().aiLog = entries;
 }
 
-export function resetAiLogSink():void {
-	publishAiLog([]);
-	void fetch('/__ai-log', {
-		method: 'POST',
-		headers: { 'content-type': 'application/json' },
-		body: JSON.stringify({ reset: true }),
-	}).catch(() => undefined);
+/** The last post to the dev server, so rows land in order. */
+let posting = Promise.resolve();
+
+/** A new run of the AI log, starting now: the dev server stores each run's rows in a file of its own (`vite-ai-log.ts`). */
+export function aiLogRun(scene:string):AiLogRun {
+	return { session: readURLSession(), scene, started: new Date().toISOString() };
 }
 
-function withoutImage(entry:HudAiLogEntry):{ seq:number; name:string; message:string } {
-	return { seq: entry.seq, name: entry.name, message: entry.message };
+/** A row as the control hub and the stored log give it: the map image as a flag. */
+export function aiLogRow(entry:HudAiLogEntry):AiLogRow {
+	const row:AiLogRow = { seq: entry.seq, name: entry.name, message: entry.message };
+	if (entry.image) row.image = true;
+	if (entry.error) row.error = true;
+	return row;
 }
 
-export function sinkAiLog(entries:HudAiLogEntry[], added:HudAiLogEntry, trimmed:boolean):void {
-	publishAiLog(entries);
-	const body = trimmed
-		? { replace: entries.map(withoutImage) }
-		: withoutImage(added);
-	void fetch('/__ai-log', {
+function store(post:AiLogPost):void {
+	const body = JSON.stringify(post);
+	posting = posting.then(() => fetch('/__ai-log', {
 		method: 'POST',
 		headers: { 'content-type': 'application/json' },
-		body: JSON.stringify(body),
-	}).catch(() => undefined);
+		body,
+	})).then(() => undefined, () => undefined);
 }
 
 export function pushLog(
 	host:GameHost,
 	name:string,
 	message:string,
-	extra:{ image?:string; error?:boolean } = {},
+	extra:{ image?:string; error?:boolean; schema?:Record<string, unknown> } = {},
 ):void {
 	if (message.startsWith('choose')) {
 		return; // comment out for `choose` verb logs
@@ -58,12 +60,11 @@ export function pushLog(
 	if (extra.image) entry.image = extra.image;
 	if (extra.error) entry.error = true;
 	host.log.push(entry);
-	let trimmed = false;
 	if (host.log.length > AI_LOG_CAP) {
 		host.log.splice(0, host.log.length - AI_LOG_CAP);
-		trimmed = true;
 	}
-	sinkAiLog(host.log, entry, trimmed);
+	publishAiLog(host.log);
+	store({ run: host.logRun, row: aiLogRow(entry), schema: extra.schema });
 }
 
 export async function logLook(host:GameHost, id:string, zoom:number, snap:MapSnapshot):Promise<void> {

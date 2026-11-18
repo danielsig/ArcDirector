@@ -1,5 +1,6 @@
 import { MOUSE_LEFT, TOUCH_TAP, Time, yawToForward, yawToward, Component, type GameObject, type XZ } from '@arc-director/kindling';
 import * as THREE from 'three';
+import { showNamingText } from 'arc-director';
 import { Camera, Chest, Door, Furniture, Guard, HumanBody, Appearance, Named, Vitals, type BodySlot } from '../engine/components';
 import { attackFor } from '../director/fight';
 import { inReach, strikeWith, useItem } from '../items/use';
@@ -143,7 +144,7 @@ export class PlayerInput extends Component {
 			const item = this.activeItem();
 			if (item) {
 				const result = useItem(this.gameObject, item, aimed);
-				world.setMessage(result.reason);
+				world.setMessage(showNamingText(result.reason));
 			}
 			else if (aimed?.getComponent(Door)) {
 				world.setMessage(interactDoor(this.gameObject, aimed));

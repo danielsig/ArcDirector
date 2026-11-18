@@ -6,6 +6,7 @@ import type { CollectiveSpec, VerbCall } from '../director/director-types.js';
 import type { Verbs } from '../director/Verbs.js';
 import type { MemoryDraft } from '../memory/store.js';
 import type { KnowledgeEntry } from '../mind/knowledge.js';
+import type { TalkStyle } from '../mind/talk.js';
 import { RTS_COMMANDER_VERBS } from '../rts/rts.js';
 import { STOCK_ECONOMY_VERBS, STOCK_UNIT_VERBS } from '../rts/rts-verbs.js';
 import { searchTool, type SearchSpec } from '../search/search.js';
@@ -31,6 +32,8 @@ export type Scenario = Scene & SceneRules & {
 	role?:string;
 	/** What it remembers, as a persona spec's memories. */
 	memories?:MemoryDraft[];
+	/** How `me` talks unasked, as a character spec's `talk`. */
+	talk?:TalkStyle;
 	/** What the world knows: `recall` finds these, not the prompt. */
 	know?:KnowledgeEntry[];
 	/** Lines said to `me` just before it thinks. */
@@ -139,7 +142,7 @@ function stage(director:ArcDirector<SceneCtx>, s:Scenario, world:SceneWorld):Arc
 	};
 	const verbs = [...STOCK_VERBS, ...STOCK_TRADE_VERBS, ...Object.keys(s.verbs ?? {})];
 	const persona = {
-		mind: { skipStart: true, skipHeartbeat: true, skipMajor: true, skipStrategic: true },
+		mind: { skipStart: true, rethinkingThreshold: 0, skipMajor: true, skipStrategic: true },
 		identity: s.role || s.me.as ? { role: s.role ?? s.me.as } : undefined,
 		goals: [{ text: s.goal }],
 		memories: Object.values(s.squad ?? {}).some((spot) => spot.as) ? [...s.memories ?? [], { text: SQUAD_IDLE, pinned: true }] : s.memories,
@@ -155,7 +158,7 @@ function stage(director:ArcDirector<SceneCtx>, s:Scenario, world:SceneWorld):Arc
 		.withMind({ currency: 'gold' })
 		.withPriorityThinkQueue({ mayThink: () => false })
 		.withWorld(world)
-		.withKernels(({ id }) => ({ ...world.kernels(id), canSee: (a, b) => world.sees(a.id, b.id) }))
+		.withKernels(({ id }) => world.kernels(id))
 		.withSight({ look: ({ id }) => world.sight(id) })
 		.withInventory(({ id }) => world.inventory(id))
 		.withTalk({
@@ -168,7 +171,7 @@ function stage(director:ArcDirector<SceneCtx>, s:Scenario, world:SceneWorld):Arc
 		.withContext((id) => (world.find(id) === id ? { id } : undefined))
 		.withDefaultKit({ verbs })
 		.if(!s.squad,
-			d => d.addCharacter({ id: s.me.id, ...persona, kit: { verbs: [...verbs, ...abilitiesOf(s.me)] } }),
+			d => d.addCharacter({ id: s.me.id, ...persona, talk: s.talk, kit: { verbs: [...verbs, ...abilitiesOf(s.me)] } }),
 			d => d.withVerbs((v) => v.addStockCollective()).addCollective({ ...squadSpec(s, world, verbs), ...persona })
 		);
 }
@@ -293,7 +296,7 @@ export async function playScenario<T = undefined>(
 		const mind = director.character(s.me.id)!.mind!;
 		const seconds = s.seconds ?? PLAY_SECONDS;
 		const ended = ():ScenarioEnd<T> => ({ done: s.done(world), at: world.time, judged: judge?.(world) as T });
-		for (let thinks = 0; thinks < (s.thinks ?? THINKS) && world.time < seconds && !world.isDown(s.me.id); thinks++) {
+		for (let thinks = 0; thinks < (s.thinks ?? THINKS) && world.time < seconds && !world.hasFallen(s.me.id); thinks++) {
 			const thought = world.time;
 			const arc = await time(mind.thinkNow({ now: world.time, enact: false }));
 			if (!arc) {

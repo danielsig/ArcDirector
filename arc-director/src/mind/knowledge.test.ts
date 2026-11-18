@@ -11,6 +11,9 @@ import {
 	type KnowledgeEntry,
 } from './knowledge.js';
 
+/** A mind that can ask: `say`, no `wander`. */
+const ASKS = new Set(['say']);
+
 const TREE = crowdKnowledge({
 	name: 'Tree',
 	tag: 'tree',
@@ -45,12 +48,12 @@ describe('crowdKnowledge', () => {
 });
 
 describe('knowledgeFor', () => {
-	const know = (query:string):string => knowledgeFor(PAGES, query).join('\n\n');
+	const know = (query:string):string => knowledgeFor(PAGES, query, ASKS).join('\n\n');
 
 	it('lists topics on an empty query', () => {
 		assert.match(know(''), /Topics: Tree, Cottage/);
 		assert.match(know('*'), /Recall one for more/);
-		assert.deepEqual(knowledgeFor([], ''), [], 'nothing to know, nothing said');
+		assert.deepEqual(knowledgeFor([], '', ASKS), [], 'nothing to know, nothing said');
 	});
 
 	it('maps leftover trees and a spoken forest to surrounded-by-Tree', () => {
@@ -71,8 +74,8 @@ describe('knowledgeFor', () => {
 	});
 
 	it('returns at most KNOW_CAP articles', () => {
-		const many = Array.from({ length: 5 }, (_, i) => ({ name: `Stall${i}`, text: 'sells bread' }));
-		assert.equal(knowledgeFor(many, 'bread').length, KNOW_CAP);
+		const many = Array.from({ length: 5 }, (element, i) => ({ name: `Stall${i}`, text: 'sells bread' }));
+		assert.equal(knowledgeFor(many, 'bread', ASKS).length, KNOW_CAP);
 	});
 });
 

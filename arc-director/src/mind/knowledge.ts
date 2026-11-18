@@ -1,8 +1,10 @@
 /** What a mind knows about the world: host-authored articles, which `recall` searches beside memory. Leftover sight English is not a name. */
 
 import { DEFAULT_SIGHT, formatSight } from '../perception/sight.js';
+import { Axes } from '../world/axes.js';
 import { basicPluralize } from '../perception/stringifiers.js';
 import type { SeenObject } from '../perception/perception-types.js';
+import { nothingFoundThen } from './prompt.js';
 
 export type KnowledgeEntry = {
 	/** Capitalized name used in arcs (`Tree`, `Cottage`). */
@@ -111,7 +113,7 @@ export function knowledgePages<TCtx>(
  * text. An empty query lists the topics instead, and one that matches nothing says a plain word is not a name.
  * `[]` when there is nothing to know.
  */
-export function knowledgeFor(entries:readonly KnowledgeEntry[], query:string, cap = KNOW_CAP):string[] {
+export function knowledgeFor(entries:readonly KnowledgeEntry[], query:string, verbs:{ has(name:string):boolean }, cap = KNOW_CAP):string[] {
 	const q = query.replace(/\s+/g, ' ').trim();
 	if (!q || q === '*' || /^list$/i.test(q)) {
 		const names = entries.map((e) => e.name.trim()).filter(Boolean);
@@ -131,7 +133,7 @@ export function knowledgeFor(entries:readonly KnowledgeEntry[], query:string, ca
 		.sort((a, b) => b.score - a.score || a.entry.name.localeCompare(b.entry.name))
 		.slice(0, cap);
 	if (hits.length === 0) {
-		return [`Nothing you know is called "${q}". A plain word is not a name: call recall again with different words.`];
+		return [`Nothing you know is called "${q}". A plain word is not a name: recall its Capitalized name if you know it, else ${nothingFoundThen(verbs)}.`];
 	}
 	return hits.map((row) => formatEntry(row.entry));
 }
@@ -190,8 +192,8 @@ export function crowdKnowledge(spec:CrowdKnowledgeSpec):KnowledgeEntry {
 	const unitName = spec.unitName ?? DEFAULT_SIGHT.unitName;
 	const objects = crowdAround(tag);
 	const self = { id: 'You', point: [0, 0], facing: [0, -1] };
-	const leftover = firstClause(formatSight({ self, objects }, { unitName }));
-	const around = formatSight({ self, objects }, { unitName, relationships: [] }).trim();
+	const leftover = firstClause(formatSight({ self, objects }, { unitName, axes: Axes.Plane }));
+	const around = formatSight({ self, objects }, { unitName, axes: Axes.Plane, relationships: [] }).trim();
 	const y = inside[0] ?? leftover;
 	const yRest = inside.slice(1);
 	const yPhrase = yRest.length > 0 ? `${aPlace(y)} (${yRest.join(', ')})` : aPlace(y);

@@ -1,6 +1,8 @@
 import type { Vec } from '../world/world-types.js';
-import { add, distance, dot, sub } from '../world/vec.js';
-import { bearingOf, bearingPhrase, DEFAULT_SIGHT, formatMeasure, quantizeDistance } from './sight.js';
+import { distance } from '../world/vec.js';
+import type { Axes } from '../world/axes.js';
+import { Bearing, type BearingMode } from './perception-types.js';
+import { bearingPhrase, bearingText, DEFAULT_SIGHT, formatMeasure, quantizeDistance } from './sight.js';
 
 /**
  * A sound something makes: its name in plain words (`footsteps`, `bush-thrashing sounds`, `a jetpack roar`), how loud
@@ -15,12 +17,12 @@ export type SoundSource = { id?:string; point:Vec };
 /**
  * How clearly a listener hears a source, which a sound's loudness is multiplied by: the numbers of the default curve,
  * or the game's own, 0–1. `max`: how far a sound of loudness 1 carries, and nothing farther. `falloff`: how it drops
- * with distance, 2 the inverse square of sound spreading out, 1 slower, 0 not at all. `occluded`: what is left of it
- * with no line of sight between them; heard `muffled`.
+ * with distance, 2 the inverse square of sound spreading out, 1 slower, 0 not at all. What walls leave of it is the
+ * world's `getClarity('sound')`; a sound heard through one is `muffled`.
  */
-export type HearingRange = { max:number; falloff:number; occluded:number } | ((listenerID:string, source:SoundSource)=>number);
+export type HearingRange = { max:number; falloff:number } | ((listenerID:string, source:SoundSource)=>number);
 
-export const DEFAULT_HEARING:Readonly<{ max:number; falloff:number; occluded:number }> = { max: 40, falloff: 2, occluded: 0.5 };
+export const DEFAULT_HEARING:Readonly<{ max:number; falloff:number }> = { max: 40, falloff: 2 };
 
 /** How loud a sound must be at a listener to be heard at all. */
 export const AUDIBLE = 0.05;
@@ -28,6 +30,11 @@ export const AUDIBLE = 0.05;
 export const LOUD = 0.5;
 /** From here it is heard `LOUDLY`: close to its source. */
 const LOUDLY = 0.85;
+
+/** How loud a line said plainly is: heard 16 paces off by the default curve, its words made out to 8. */
+export const SPEAKING = 0.16;
+/** From here a line's words are made out, in silence; under it, or through anything, it is muffled. */
+export const WORDS = 0.2;
 
 /**
  * How clearly the default curve carries a sound `at` that far: past 1 near its source (a sound is louder close up than
@@ -57,22 +64,19 @@ export function loudnessFor(reach:number, { max, falloff }:{ max:number; falloff
 }
 
 /**
- * What a listener at `listener` (facing `facing`, with `up` the world's up) makes of `sound` from `from`, heard at
+ * What a listener at `listener` (facing `facing`, in checked `axes`, standing along `up` if not the world's) makes of
+ * `sound` from `from`, its bearing told as `bearing` says (default `BearingMode.Relative`), heard at
  * `level` (its loudness there, 0–1): `You hear footsteps LOUDLY 1 pace behind you!`, `You hear muffled bush-thrashing
- * sounds 10 paces in front of you.` From {@link LOUD} it ends in `!`; distances as sight gives them.
+ * sounds 10 paces in front of you.` From {@link LOUD} it ends in `!`; distances as sight gives them. A sound that came
+ * round things is told from `via`, the last bend it came round, `length` off: `You hear footsteps 12 paces off, round a
+ * corner to your right.`
  */
-export function heardText(sound:Sound, level:number, listener:Vec, from:Vec, opts:{ facing?:Vec; up?:Vec; muffled?:boolean; unitName?:string; closeness?:number } = {}):string {
-	const delta = sub(from, listener);
-	const rise = opts.up ? dot(delta, opts.up) : 0;
-	const flat = opts.up ? sub(delta, opts.up.map((v) => v * rise)) : delta;
-	const across = Math.hypot(...flat);
-	// Above or below when it is more up or down than away.
-	const where = opts.up && Math.abs(rise) > across && Math.abs(rise) >= 1
-		? (rise > 0 ? 'above you' : 'below you')
-		: bearingPhrase(bearingOf({ point: listener, facing: opts.facing }, { point: add(listener, flat) }));
-	const measure = formatMeasure(quantizeDistance(distance(listener, from), opts.closeness ?? DEFAULT_SIGHT.closeness), opts.unitName ?? DEFAULT_SIGHT.unitName);
+export function heardText(sound:Sound, level:number, listener:Vec, from:Vec, opts:{ facing?:Vec; axes?:Axes; up?:Vec; bearing?:BearingMode; muffled?:boolean; unitName?:string; closeness?:number; via?:Vec; length?:number } = {}):string {
+	const { axes } = opts;
+	const where = (axes && bearingText({ point: listener, facing: opts.facing, up: opts.up }, { point: opts.via ?? from }, axes, opts.bearing)) || bearingPhrase(Bearing.Away);
+	const measure = formatMeasure(quantizeDistance(opts.length ?? distance(listener, from), opts.closeness ?? DEFAULT_SIGHT.closeness), opts.unitName ?? DEFAULT_SIGHT.unitName);
 	const name = `${opts.muffled ? 'muffled ' : ''}${sound.name}${level >= LOUDLY ? ' LOUDLY' : ''}`;
-	return `You hear ${name} ${measure} ${where}${level >= LOUD ? '!' : '.'}`;
+	return `You hear ${name} ${measure} ${opts.via ? `off, round a corner ${where}` : where}${level >= LOUD ? '!' : '.'}`;
 }
 
 /** How loud a level sounds, in steps: 0 heard, 1 loud (`!`), 2 `LOUDLY`. A sound is told again only when it climbs one. */

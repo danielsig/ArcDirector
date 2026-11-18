@@ -4,9 +4,9 @@ import { ModelDownload, type DownloadProgress } from './download.js';
 
 /** A download its test drives by hand. */
 function manual():{ download:ModelDownload; report(progress:number):void; finish():void; fail(err:Error):void } {
-	let report = (_p:DownloadProgress):void => undefined;
+	let report = (progress:DownloadProgress):void => undefined;
 	let finish = ():void => undefined;
-	let fail = (_err:Error):void => undefined;
+	let fail = (error:Error):void => undefined;
 	const download = new ModelDownload((r) => new Promise((resolve, reject) => {
 		report = r;
 		finish = resolve;

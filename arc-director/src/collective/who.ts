@@ -2,7 +2,7 @@ import type { Law } from '../arc/laws.js';
 import type { VerbRegistry } from '../arc/stock-verbs.js';
 import { mapArc, mapExpr } from '../mind/ids.js';
 import { evaluate } from '../expr/eval.js';
-import { buildCatalog, dummyEntity, type HostKernels } from '../expr/natives.js';
+import { buildCatalog, dummyEntity, type CatalogInputs } from '../expr/natives.js';
 import { LIST_CAP, type Catalog, type ExprEntity, type ExprVal } from '../expr/expr-types.js';
 import { RESERVED_TAGS } from '../world/world-types.js';
 import type { Character } from '../character/Character.js';
@@ -42,7 +42,7 @@ function asList(entities:ExprEntity[]):ExprVal {
  * member, so a unit's own law or arc reads itself; or `as`, when the view is someone else's (its mind's, through a
  * member's eyes, is its commander's).
  */
-function collectiveKernels<TCtx>(base:HostKernels, collective:Collective<TCtx>, as?:Character<TCtx>):HostKernels {
+function collectiveKernels<TCtx>(base:CatalogInputs, collective:Collective<TCtx>, as?:Character<TCtx>):CatalogInputs {
 	const all = collective.standing;
 	const commander = collective.commander;
 	const troops = commander ? all.filter((c) => c !== commander) : all;
@@ -65,7 +65,7 @@ function collectiveKernels<TCtx>(base:HostKernels, collective:Collective<TCtx>, 
 	};
 }
 
-export function buildCollectiveCatalog<TCtx>(base:HostKernels, collective:Collective<TCtx>, as?:Character<TCtx>):Catalog {
+export function buildCollectiveCatalog<TCtx>(base:CatalogInputs, collective:Collective<TCtx>, as?:Character<TCtx>):Catalog {
 	return buildCatalog(collectiveKernels(base, collective, as));
 }
 

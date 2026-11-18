@@ -74,6 +74,11 @@ export function constraintAt(spec:VerbSpec | undefined, key:string, path?:ArgPat
 	return inside.reduce<ArgConstraint>((out, [, args]) => meet(out, args[key]), spec?.args[key] ?? {});
 }
 
+/** Whether `path`, the arc a step is directly in, is one of `paths` (`*.arc`: any verb's). None, the root, never is. */
+export function within(paths:readonly ArgPath[], path:ArgPath | undefined):boolean {
+	return !!path && paths.some((at) => matches(at, path));
+}
+
 /** Whether any of `verbs` narrows an arg when written at `path`. */
 export function narrowsAt(verbs:readonly VerbSpec[], path:ArgPath):boolean {
 	return verbs.some((spec) => Object.keys(spec.whenInside ?? {}).some((at) => matches(at, path)));

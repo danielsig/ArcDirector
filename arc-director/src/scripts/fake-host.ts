@@ -34,8 +34,7 @@ async function main():Promise<void> {
 	const director = new ArcDirector<FixtureCtx>()
 		.withPriorityThinkQueue({
 			processInterval: 0,
-			heartbeatStart: 0.01,
-			heartbeatMin: 0.01,
+			rethinkInterval: 0.01,
 		})
 		.withVerbs((v) => v.addStock())
 		.withDefaultKit({ verbs: STOCK_VERBS })

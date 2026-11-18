@@ -2,6 +2,7 @@ import { Feature, type PromptPart } from '../director/Feature.js';
 import type { ArcDirector } from '../director/ArcDirector.js';
 import type { Mind } from './mind.js';
 import type { ToolSpec } from './mind-types.js';
+import type { JsonValue } from '../json.js';
 import { DEFAULT_YOU_SYMBOL, isMapSnapshot, parseMapZoom, stampMap, type MapPrev, type MapSense } from './map.js';
 
 /**
@@ -37,12 +38,12 @@ export class MapFeature<TCtx = unknown> extends Feature<TCtx> {
 			description: 'Map of the land: every named person, place, and thing on it, and where. Look here before you ask where something is. Look here before you wander. Never ask where something is until this cannot find it. zoom 1 is close around you, 0 the whole land. A second look soon, without moving, is the same legend and no new picture.',
 			parameters: { type: 'object', additionalProperties: false, properties: { zoom: { type: 'number', minimum: 0, maximum: 1 } } },
 			offered: (mind) => mind.thinksWith.vision,
-			handler: (_ctx, args, mind) => this.look(mind, args),
+			handler: (ctx, args, mind) => this.look(mind, args),
 		};
 	}
 
 	/** `mind`'s look at the map: its legend, and the picture shown with the answer; the legend alone when it has not changed. */
-	private async look(mind:Mind<TCtx>, args:unknown):Promise<unknown> {
+	private async look(mind:Mind<TCtx>, args:unknown):Promise<JsonValue> {
 		const zoom = parseMapZoom(args);
 		const prev = this._last.get(mind);
 		let snap;

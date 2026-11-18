@@ -33,8 +33,10 @@ const GAME_KEYS = new Set([
 	'Space', 'Tab', 'Backquote', 'Enter', 'NumpadEnter', 'Escape',
 ]);
 
-/** What each shadow tier asks of the renderer. */
-/** Each tier's shadows (map sides in texels): `point` lights, the `sun`'s still map, and the `mover` map moving things cast into round the player (`dynamic` only). */
+/** What each shadow tier asks of the renderer.
+ * Each tier's shadows (map sides in texels):
+ * `point` lights, the `sun`'s still map, and the `mover` map moving things cast into round the player (`dynamic` only).
+ **/
 export const SHADOWS:Record<ShadowTier, { mode:ShadowMode; point:number; sun:number; mover:number }> = {
 	off: { mode: 'off', point: 256, sun: 2048, mover: 1024 },
 	simple: { mode: 'static', point: 256, sun: 2048, mover: 1024 },

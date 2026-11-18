@@ -14,6 +14,7 @@ import { FakeProvider } from './inference/fake.js';
 import type { ChatContent, ChatRequest, ChatResponse } from './inference/provider.js';
 import type { ArcFormat } from './mind/mind-types.js';
 import type { PromptStyle } from './mind/prompt.js';
+import { TalkInstructions } from './mind/talk.js';
 import { playScenario, type Scenario, type SceneCtx } from './scenario/play.js';
 import { US } from './scenario/scene-world.js';
 import { sleep } from './turn.js';
@@ -126,7 +127,7 @@ function scriptedModel<TCtx>(format:ArcFormat, style:PromptStyle, replies:Reply[
 }
 
 /**
- * One character with everything on: sight, carrying, talk, hearing (with a noisy verb), the map, knowledge mentions,
+ * One character with everything on: sight, carrying, talk (in a style of its own), hearing (with a noisy verb), the map, knowledge mentions,
  * offers, currency, a pinned memory, a host verb and an alias with a watch (which makes `law`'s own watch optional).
  */
 const MARKET:Scenario = {
@@ -146,13 +147,14 @@ const MARKET:Scenario = {
 	},
 	heard: [{ from: 'Bram', text: 'Ask Gisele about salt, she is cheaper.' }],
 	goal: 'Buy a Candle and some salt',
+	talk: { instructions: TalkInstructions.Banter, avoid: ['the salt tax'] },
 	verbs: {
 		ring: { args: { target: 'id' }, help: 'rings a bell', run: () => 'it rings' },
 		hush: { arc: 'wait(seconds=1)', watch: 'me.hp < 4' },
 	},
 	noise: { go_to: { name: 'footsteps', loudness: 0.4 } },
-	sees: (_world, _from, to) => to !== 'Bell',
-	blocks: (_world, point) => (Math.hypot(...point) > 20 ? 'the river' : undefined),
+	sees: (world, from, to) => to !== 'Bell',
+	blocks: (world, point) => (Math.hypot(...point) > 20 ? 'the river' : undefined),
 	act: (world, director) => {
 		if (world.time >= 1 && !world.flags.has('rang')) {
 			world.flags.add('rang');
@@ -225,7 +227,7 @@ async function waitFor(fn:()=>boolean):Promise<void> {
 /** A plain director on the scripted model: stock verbs, a scene sense, every verb done at once. */
 function director(format:ArcFormat, replies:Reply[], sent:Sent):ArcDirector<Ctx> {
 	const director = new ArcDirector<Ctx>()
-		.withPriorityThinkQueue({ processInterval: 0, heartbeatStart: 100, heartbeatMin: 100 })
+		.withPriorityThinkQueue({ processInterval: 0, rethinkInterval: 100 })
 		.withIntervals({ watch: 0, think: 0 })
 		.withVerbs((v) => v.addStock())
 		.withDefaultKit({ verbs: STOCK_VERBS })
@@ -264,7 +266,7 @@ describe('prompt snapshots', () => {
 			const sent = new Sent();
 			const goals = format === 'text' ? 'set_goal(text="Guard the Well", priority=2)' : { content: '{"goals":[{"text":"Guard the Well","priority":2}]}', toolCalls: [] };
 			const built = await director(format, [goals, 'go_to(target=EastGate)'], sent)
-				.addCharacter({ id: 'Guard', mind: { skipHeartbeat: true }, identity: { role: 'Gate guard', traits: ['dutiful'] }, goals: [{ text: 'Keep the gate', priority: 1 }] })
+				.addCharacter({ id: 'Guard', mind: { rethinkingThreshold: 0 }, identity: { role: 'Gate guard', traits: ['dutiful'] }, goals: [{ text: 'Keep the gate', priority: 1 }] })
 				.connect();
 			built.pushEvent({ kind: 'alarm', text: 'The bell rings.', major: true });
 			built.tick(1);
@@ -286,7 +288,7 @@ describe('prompt snapshots', () => {
 			'go_to(target=EastGate)',
 		], sent)
 			.withMind({ repairRetries: 4, repairPerStep: true })
-			.addCharacter({ id: 'Guard', mind: { skipHeartbeat: true, skipStrategic: true }, identity: { role: 'Gate guard' }, goals: [{ text: 'Look around', priority: 1 }] })
+			.addCharacter({ id: 'Guard', mind: { rethinkingThreshold: 0, skipStrategic: true }, identity: { role: 'Gate guard' }, goals: [{ text: 'Look around', priority: 1 }] })
 			.connect();
 		const queue = built.queue!;
 		queue.enqueueMajor('Guard');
@@ -300,12 +302,12 @@ describe('prompt snapshots', () => {
 		matchesSnapshot('repairs-text', String(sent));
 	});
 
-	it('the replace question', async () => {
+	// Merged, a second think's reply keeps the step the loop is on; the snapshot keeps its old name.
+	it('a second think while a loop runs', async () => {
 		const sent = new Sent();
 		const built = await director('schema', ['loop(arc=go_to(target=EastGate) && go_to(target=Well))', 'examine(target=Well)'], sent)
 			.onVerb((call) => (call.verb === 'go_to' ? new Promise(() => undefined) : { status: 'ok', verb: call.verb }))
-			.withReplaceCheck()
-			.addCharacter({ id: 'Guard', mind: { skipHeartbeat: true, skipStrategic: true }, identity: { role: 'Gate guard' } })
+			.addCharacter({ id: 'Guard', mind: { rethinkingThreshold: 0, skipStrategic: true }, identity: { role: 'Gate guard' } })
 			.connect();
 		const queue = built.queue!;
 		queue.enqueueMajor('Guard');
@@ -314,7 +316,7 @@ describe('prompt snapshots', () => {
 		await sleep(10);
 		queue.enqueueMajor('Guard');
 		built.tick(1);
-		await waitFor(() => sent.count >= 3 && !queue.isThinking('Guard'));
+		await waitFor(() => sent.count >= 2 && !queue.isThinking('Guard'));
 		built.dispose();
 		matchesSnapshot('replace-schema', String(sent));
 	});
@@ -324,7 +326,7 @@ describe('prompt snapshots', () => {
 		const scene = director('text', ['wait(seconds=1)'], sent);
 		scene.getFake()!.addModel('decider', 'fake');
 		const built = await scene
-			.addCharacter({ id: 'Sentry', systemOne: 'decider', choose: { goal: 'Keep the gate', hold: 'wait(seconds=1)', patrol: 'go_to(target=EastGate)' } })
+			.addCharacter({ id: 'Sentry', systemOne: 'decider', choose: { goal: 'Keep the gate', choices: { hold: 'wait(seconds=1)', patrol: 'go_to(target=EastGate)' } } })
 			.connect();
 		const question = built.choiceQuestion('Sentry', { look: 'examine(target=Well)', leave: 'go_to(target=EastGate)' }, { doing: 'wait' });
 		built.tick(1);
@@ -337,8 +339,8 @@ describe('prompt snapshots', () => {
 		const sent = new Sent();
 		const member = (id:string, role:string) => ({ id, identity: { role } });
 		const built = await director('text', ['wait(seconds=1)'], sent)
-			.addCollective({ id: 'Watch', mind: { skipHeartbeat: true, skipStart: true }, identity: { role: 'The night watch' }, characters: [member('Ada', 'Watchman'), member('Bo', 'Watchman')], memories: [{ text: 'Ada keeps the keys.' }] })
-			.addCollective({ id: 'Smiths', mind: { skipHeartbeat: true, skipStart: true }, identity: { role: 'The smithy' }, characters: [member('Cy', 'Smith')] })
+			.addCollective({ id: 'Watch', mind: { rethinkingThreshold: 0, skipStart: true }, identity: { role: 'The night watch' }, characters: [member('Ada', 'Watchman'), member('Bo', 'Watchman')], memories: [{ text: 'Ada keeps the keys.' }] })
+			.addCollective({ id: 'Smiths', mind: { rethinkingThreshold: 0, skipStart: true }, identity: { role: 'The smithy' }, characters: [member('Cy', 'Smith')] })
 			.connect();
 		built.character('Ada')!.collective = built.collective('Smiths')!;
 		built.tick(1);

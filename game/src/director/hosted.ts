@@ -5,7 +5,7 @@ import { systemOneName, type SystemOneKind } from '../prefs';
  * `XAI_API_KEY` for xAI's models. Set from `vite.config.ts` as flags only; the keys never reach the page. A service
  * without its key is not offered anywhere.
  */
-export const HOSTED:{ readonly jev:boolean; readonly xai:boolean } = __HOSTED__;
+export const HOSTED:{ readonly jev:boolean; readonly xai:boolean } = import.meta.env.HOSTED;
 
 /** The director's default System One for the menu's choice: Jev only with its key, else the local one. */
 export function defaultSystemOne(kind:SystemOneKind):string | null {

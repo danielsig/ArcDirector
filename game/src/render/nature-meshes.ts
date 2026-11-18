@@ -213,7 +213,7 @@ export function createBridgeMesh():THREE.Group {
 	const plankN = 11;
 	const pitch = BRIDGE_LEN / plankN;
 	const plank = new THREE.BoxGeometry(BRIDGE_W, 0.07, pitch - 0.03);
-	hinge.add(solidMesh(mergeParts(Array.from({ length: plankN }, (_, i) => ({
+	hinge.add(solidMesh(mergeParts(Array.from({ length: plankN }, (element, i) => ({
 		geo: plank,
 		x: ((i * 37) % 5 - 2) * 0.012,
 		y: 0.1 + ((i * 53) % 3) * 0.006,

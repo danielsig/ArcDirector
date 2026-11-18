@@ -93,10 +93,8 @@ export class ModelSystemOne implements SystemOne {
 
 	public async pick(state:string, goal:string, criteria:Record<string, string>):Promise<string> {
 		const { provider, id, systemOneURL } = this._model();
-		const endpoint = systemOneURL ? { url: systemOneURL } : await provider.systemOneEndpoint?.(id);
-		return endpoint
-			? new JevSystemOne({ baseURL: endpoint.url, model: id, fetch: endpoint.fetch }).pick(state, goal, criteria)
-			: this._chat.pick(state, goal, criteria);
+		const one = systemOneURL ? new JevSystemOne({ baseURL: systemOneURL, model: id }) : await provider.systemOne?.(id);
+		return (one ?? this._chat).pick(state, goal, criteria);
 	}
 }
 

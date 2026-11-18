@@ -243,7 +243,7 @@ function build():{ oak:TreePart[][]; pine:TreePart[][]; farCrowns:TreePart[] } {
 		oak.push([{ geom: oakTrunk(v + 1), mat: bark }, { geom: oakCanopy(v + 1), mat: leaves }]);
 		pine.push([{ geom: v === 0 ? pineTrunk() : pine[0]![0]!.geom, mat: bark }, { geom: pineCanopy(v + 1), mat: leaves }]);
 	}
-	return { oak, pine, farCrowns: oak.map((_, v) => ({ geom: oakCanopy(v + 1, 1), mat: leaves })) };
+	return { oak, pine, farCrowns: oak.map((parts, v) => ({ geom: oakCanopy(v + 1, 1), mat: leaves })) };
 }
 
 /** Parts of one tree. Shared geometry and materials: instance them, never tint or dispose. */

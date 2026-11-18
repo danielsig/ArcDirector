@@ -1,0 +1,1897 @@
+{
+	"about": "Arc text, as parsed with the stock and collective verbs: its steps, printed back, and its JSON; or why it is refused.",
+	"rows": [
+		{
+			"text": "go_to(EastGate) && use(item=BrassKey, target=EastGate) ; say(\"After you.\")",
+			"arc": [
+				{
+					"verb": "go_to",
+					"args": {
+						"target": "EastGate"
+					}
+				},
+				{
+					"verb": "use",
+					"args": {
+						"item": "BrassKey",
+						"target": "EastGate"
+					},
+					"then": "always"
+				},
+				{
+					"verb": "say",
+					"args": {
+						"text": "After you."
+					}
+				}
+			],
+			"back": "go_to(EastGate) && use(item=BrassKey, target=EastGate) ; say(\"After you.\")",
+			"json": "{\"steps\":[{\"verb\":\"go_to\",\"target\":\"EastGate\"},{\"verb\":\"use\",\"item\":\"BrassKey\",\"target\":\"EastGate\",\"then\":\"always\"},{\"verb\":\"say\",\"text\":\"After you.\"}]}"
+		},
+		{
+			"text": "go_to(A) && wait() ; say(Hi) || go_to(B)\nwait()",
+			"arc": [
+				{
+					"verb": "go_to",
+					"args": {
+						"target": "A"
+					}
+				},
+				{
+					"verb": "wait",
+					"args": {},
+					"then": "always"
+				},
+				{
+					"verb": "say",
+					"args": {
+						"text": "Hi"
+					},
+					"then": "if_failed"
+				},
+				{
+					"verb": "go_to",
+					"args": {
+						"target": "B"
+					},
+					"then": "always"
+				},
+				{
+					"verb": "wait",
+					"args": {}
+				}
+			],
+			"back": "go_to(A) && wait() ; say(Hi) || go_to(B) ; wait()",
+			"json": "{\"steps\":[{\"verb\":\"go_to\",\"target\":\"A\"},{\"verb\":\"wait\",\"then\":\"always\"},{\"verb\":\"say\",\"text\":\"Hi\",\"then\":\"if_failed\"},{\"verb\":\"go_to\",\"target\":\"B\",\"then\":\"always\"},{\"verb\":\"wait\"}]}"
+		},
+		{
+			"text": "wander(until=some(landmarks.filter(\"waterfall\").nearby()))",
+			"error": "wander(until=some(landmarks.filter(\"waterfall\").nearby())): its JSON reads back as itself\n+ actual - expected\n\n  [\n    {\n      args: {\n+       until: \"some(landmarks.filter('waterfall').nearby())\"\n-       until: 'some(landmarks.filter(\"waterfall\").nearby())'\n      },\n      verb: 'wander'\n    }\n  ]\n"
+		},
+		{
+			"text": "command(who=units.filter(\"Guard\"), arc=go_to(Keep) && wait(seconds=1))",
+			"error": "command(who=units.filter(\"Guard\"), arc=go_to(Keep) && wait(seconds=1)): its JSON reads back as itself\n+ actual - expected\n... Skipped lines\n\n  [\n    {\n      args: {\n        arc: [\n          {\n...\n        ],\n+       who: \"units.filter('Guard')\"\n-       who: 'units.filter(\"Guard\")'\n      },\n      verb: 'command'\n    }\n  ]\n"
+		},
+		{
+			"text": "when(who=units.filter(\"Guard\"), arc=go_to(Keep))",
+			"error": "when(who) is command(who, arc); when is when(watch, arc)"
+		},
+		{
+			"text": "command(watch=isHurt(me), arc=go_to(Keep))",
+			"error": "command(watch) is when(watch, arc); command is command(who, arc)"
+		},
+		{
+			"text": "fly(EastGate)",
+			"error": "unknown verb 'fly'"
+		},
+		{
+			"text": "think(\"how to open EastGate\")",
+			"arc": [
+				{
+					"verb": "think",
+					"args": {
+						"about": "how to open EastGate"
+					}
+				}
+			],
+			"back": "think(\"how to open EastGate\")",
+			"json": "{\"steps\":[{\"verb\":\"think\",\"about\":\"how to open EastGate\"}]}"
+		},
+		{
+			"text": "think()",
+			"arc": [
+				{
+					"verb": "think",
+					"args": {}
+				}
+			],
+			"back": "think()",
+			"json": "{\"steps\":[{\"verb\":\"think\"}]}"
+		},
+		{
+			"text": "wait(until=hasHeard)",
+			"arc": [
+				{
+					"verb": "wait",
+					"args": {
+						"until": "hasHeard"
+					}
+				}
+			],
+			"back": "wait(until=hasHeard)",
+			"json": "{\"steps\":[{\"verb\":\"wait\",\"until\":\"hasHeard\"}]}"
+		},
+		{
+			"text": "wait(until=isNear(me, Cottage))",
+			"arc": [
+				{
+					"verb": "wait",
+					"args": {
+						"until": "isNear(me, Cottage)"
+					}
+				}
+			],
+			"back": "wait(until=isNear(me, Cottage))",
+			"json": "{\"steps\":[{\"verb\":\"wait\",\"until\":\"isNear(me, Cottage)\"}]}"
+		},
+		{
+			"text": "wander(until=hasHeard)",
+			"arc": [
+				{
+					"verb": "wander",
+					"args": {
+						"until": "hasHeard"
+					}
+				}
+			],
+			"back": "wander(hasHeard)",
+			"json": "{\"steps\":[{\"verb\":\"wander\",\"until\":\"hasHeard\"}]}"
+		},
+		{
+			"text": "wander(until='some(items.filter(\"FireMushroom\").nearby())')",
+			"error": "wander(until='some(items.filter(\"FireMushroom\").nearby())'): its JSON reads back as itself\n+ actual - expected\n\n  [\n    {\n      args: {\n+       until: \"some(items.filter('FireMushroom').nearby())\"\n-       until: 'some(items.filter(\"FireMushroom\").nearby())'\n      },\n      verb: 'wander'\n    }\n  ]\n"
+		},
+		{
+			"text": "dial(code=007) ; say(text=42)",
+			"error": "unknown verb 'dial'"
+		},
+		{
+			"text": "(go_to(Keep) && wait(seconds=1)) || say(fail.reason)",
+			"arc": [
+				{
+					"verb": "group",
+					"args": {
+						"arc": [
+							{
+								"verb": "go_to",
+								"args": {
+									"target": "Keep"
+								}
+							},
+							{
+								"verb": "wait",
+								"args": {
+									"seconds": 1
+								}
+							}
+						]
+					},
+					"then": "if_failed"
+				},
+				{
+					"verb": "say",
+					"args": {
+						"text": "fail.reason"
+					}
+				}
+			],
+			"back": "(go_to(Keep) && wait(1)) || say(fail.reason)",
+			"json": "{\"steps\":[{\"verb\":\"group\",\"arc\":[{\"verb\":\"go_to\",\"target\":\"Keep\"},{\"verb\":\"wait\",\"seconds\":1}],\"then\":\"if_failed\"},{\"verb\":\"say\",\"text\":\"fail.reason\"}]}"
+		},
+		{
+			"text": "(go_to(Keep) && hex(Healer))",
+			"error": "unknown verb 'hex'"
+		},
+		{
+			"text": "command(who=units.filter(\"Witch\"), arc=hex(\"Healer\")) ; smite(\"Healer\")",
+			"error": "unknown verb 'hex'"
+		},
+		{
+			"text": "hex(\"Healer\")",
+			"error": "unknown verb 'hex'"
+		},
+		{
+			"text": "command(who=units, arc=(hex(Healer) ; go_to(Keep)))",
+			"error": "unknown verb 'hex'"
+		},
+		{
+			"text": "say(text=\"Hi\") to=BridgeKeeper",
+			"arc": [
+				{
+					"verb": "say",
+					"args": {
+						"text": "Hi",
+						"to": "BridgeKeeper"
+					}
+				}
+			],
+			"back": "say(text=Hi, to=BridgeKeeper)",
+			"json": "{\"steps\":[{\"verb\":\"say\",\"text\":\"Hi\",\"to\":\"BridgeKeeper\"}]}"
+		},
+		{
+			"text": "say(\"Hi\") to BridgeKeeper",
+			"arc": [
+				{
+					"verb": "say",
+					"args": {
+						"text": "Hi",
+						"to": "BridgeKeeper"
+					}
+				}
+			],
+			"back": "say(text=Hi, to=BridgeKeeper)",
+			"json": "{\"steps\":[{\"verb\":\"say\",\"text\":\"Hi\",\"to\":\"BridgeKeeper\"}]}"
+		},
+		{
+			"text": "say(to=BridgeKeeper, as=whisper) \"Quiet now\" && wait()",
+			"arc": [
+				{
+					"verb": "say",
+					"args": {
+						"to": "BridgeKeeper",
+						"as": "whisper",
+						"text": "Quiet now"
+					}
+				},
+				{
+					"verb": "wait",
+					"args": {}
+				}
+			],
+			"back": "say(to=BridgeKeeper, as=whisper, text=\"Quiet now\") && wait()",
+			"json": "{\"steps\":[{\"verb\":\"say\",\"to\":\"BridgeKeeper\",\"as\":\"whisper\",\"text\":\"Quiet now\"},{\"verb\":\"wait\"}]}"
+		},
+		{
+			"text": "pick_up(Bread) from Chest",
+			"arc": [
+				{
+					"verb": "pick_up",
+					"args": {
+						"item": "Bread",
+						"from": "Chest"
+					}
+				}
+			],
+			"back": "pick_up(item=Bread, from=Chest)",
+			"json": "{\"steps\":[{\"verb\":\"pick_up\",\"item\":\"Bread\",\"from\":\"Chest\"}]}"
+		},
+		{
+			"text": "go_to(Keep) to BridgeKeeper",
+			"error": "to is outside the parentheses. Put every argument inside its verb's parentheses, as in say(text=Hi, to=Name)"
+		},
+		{
+			"text": "go_to BridgeKeeper",
+			"arc": [
+				{
+					"verb": "go_to",
+					"args": {
+						"target": "BridgeKeeper"
+					}
+				}
+			],
+			"back": "go_to(BridgeKeeper)",
+			"json": "{\"steps\":[{\"verb\":\"go_to\",\"target\":\"BridgeKeeper\"}]}"
+		},
+		{
+			"text": "go_to BridgeKeeper && say(Hi, to=BridgeKeeper)",
+			"arc": [
+				{
+					"verb": "go_to",
+					"args": {
+						"target": "BridgeKeeper"
+					}
+				},
+				{
+					"verb": "say",
+					"args": {
+						"text": "Hi",
+						"to": "BridgeKeeper"
+					}
+				}
+			],
+			"back": "go_to(BridgeKeeper) && say(text=Hi, to=BridgeKeeper)",
+			"json": "{\"steps\":[{\"verb\":\"go_to\",\"target\":\"BridgeKeeper\"},{\"verb\":\"say\",\"text\":\"Hi\",\"to\":\"BridgeKeeper\"}]}"
+		},
+		{
+			"text": "wander",
+			"arc": [
+				{
+					"verb": "wander",
+					"args": {}
+				}
+			],
+			"back": "wander()",
+			"json": "{\"steps\":[{\"verb\":\"wander\"}]}"
+		},
+		{
+			"text": "say \"Hold the line\"",
+			"arc": [
+				{
+					"verb": "say",
+					"args": {
+						"text": "Hold the line"
+					}
+				}
+			],
+			"back": "say(\"Hold the line\")",
+			"json": "{\"steps\":[{\"verb\":\"say\",\"text\":\"Hold the line\"}]}"
+		},
+		{
+			"text": "say \"Hold, the line!\" && go_to(BridgeKeeper)\nsay 'On me'",
+			"arc": [
+				{
+					"verb": "say",
+					"args": {
+						"text": "Hold, the line!"
+					}
+				},
+				{
+					"verb": "go_to",
+					"args": {
+						"target": "BridgeKeeper"
+					},
+					"then": "always"
+				},
+				{
+					"verb": "say",
+					"args": {
+						"text": "On me"
+					}
+				}
+			],
+			"back": "say(\"Hold, the line!\") && go_to(BridgeKeeper) ; say(\"On me\")",
+			"json": "{\"steps\":[{\"verb\":\"say\",\"text\":\"Hold, the line!\"},{\"verb\":\"go_to\",\"target\":\"BridgeKeeper\",\"then\":\"always\"},{\"verb\":\"say\",\"text\":\"On me\"}]}"
+		},
+		{
+			"text": "\"Hold the line\"",
+			"error": "\"Hold the line\" alone is not a step: say(\"…\") speaks a line"
+		},
+		{
+			"text": "Guard \"Hold the line\"",
+			"error": "expected verb"
+		},
+		{
+			"text": "say(text=text=\"How much?\", to=BridgeKeeper)",
+			"arc": [
+				{
+					"verb": "say",
+					"args": {
+						"text": "How much?",
+						"to": "BridgeKeeper"
+					}
+				}
+			],
+			"back": "say(text=\"How much?\", to=BridgeKeeper)",
+			"json": "{\"steps\":[{\"verb\":\"say\",\"text\":\"How much?\",\"to\":\"BridgeKeeper\"}]}"
+		},
+		{
+			"text": "go_to(A) && go_to(B) && go_to(C) && go_to(D) && go_to(E)",
+			"arc": [
+				{
+					"verb": "go_to",
+					"args": {
+						"target": "A"
+					}
+				},
+				{
+					"verb": "go_to",
+					"args": {
+						"target": "B"
+					}
+				},
+				{
+					"verb": "go_to",
+					"args": {
+						"target": "C"
+					}
+				},
+				{
+					"verb": "go_to",
+					"args": {
+						"target": "D"
+					}
+				},
+				{
+					"verb": "go_to",
+					"args": {
+						"target": "E"
+					}
+				}
+			],
+			"back": "go_to(A) && go_to(B) && go_to(C) && go_to(D) && go_to(E)",
+			"json": "{\"steps\":[{\"verb\":\"go_to\",\"target\":\"A\"},{\"verb\":\"go_to\",\"target\":\"B\"},{\"verb\":\"go_to\",\"target\":\"C\"},{\"verb\":\"go_to\",\"target\":\"D\"},{\"verb\":\"go_to\",\"target\":\"E\"}]}"
+		},
+		{
+			"text": "command(who=units.filter(\"Knight\"), arc=loop(hex(Healer)))))) ; command(who=units.filter(\"Blade\"), arc=loop(hex(Witch)))",
+			"error": "unknown verb 'hex'"
+		},
+		{
+			"text": "command(who=units.filter(\"Knight\"), arc=loop(hex(Healer))) ; command(who=units.filter(\"Blade\"), arc=loop(hex(Witch))).",
+			"error": "unknown verb 'hex'"
+		},
+		{
+			"text": "law(who=units, watch=isHurt(me), go_to(Keep), name=lastStand)",
+			"arc": [
+				{
+					"verb": "law",
+					"args": {
+						"who": "units",
+						"watch": "isHurt(me)",
+						"arc": [
+							{
+								"verb": "go_to",
+								"args": {
+									"target": "Keep"
+								}
+							}
+						],
+						"name": "lastStand"
+					}
+				}
+			],
+			"back": "law(who=units, watch=isHurt(me), name=lastStand) { go_to(Keep) }",
+			"json": "{\"steps\":[{\"verb\":\"law\",\"who\":\"units\",\"watch\":\"isHurt(me)\",\"arc\":[{\"verb\":\"go_to\",\"target\":\"Keep\"}],\"name\":\"lastStand\"}]}"
+		},
+		{
+			"text": "follow(Valerius, distance=3) && say(\"These torches\")",
+			"arc": [
+				{
+					"verb": "follow",
+					"args": {
+						"target": "Valerius",
+						"distance": 3
+					}
+				},
+				{
+					"verb": "say",
+					"args": {
+						"text": "These torches"
+					}
+				}
+			],
+			"back": "follow(target=Valerius, distance=3) && say(\"These torches\")",
+			"json": "{\"steps\":[{\"verb\":\"follow\",\"target\":\"Valerius\",\"distance\":3},{\"verb\":\"say\",\"text\":\"These torches\"}]}"
+		},
+		{
+			"text": "follow(Bo) || say(\"a\") ; wait()",
+			"arc": [
+				{
+					"verb": "follow",
+					"args": {
+						"target": "Bo"
+					},
+					"then": "if_failed"
+				},
+				{
+					"verb": "say",
+					"args": {
+						"text": "a"
+					},
+					"then": "always"
+				},
+				{
+					"verb": "wait",
+					"args": {}
+				}
+			],
+			"back": "follow(Bo) || say(a) ; wait()",
+			"json": "{\"steps\":[{\"verb\":\"follow\",\"target\":\"Bo\",\"then\":\"if_failed\"},{\"verb\":\"say\",\"text\":\"a\",\"then\":\"always\"},{\"verb\":\"wait\"}]}"
+		},
+		{
+			"text": "command(who=units) { follow(Bo) ; say(\"a\") }",
+			"error": "follow never ends, so say(…) after it never runs. Write go_to(Bo) && say(…) && follow(target=Bo, until=…) — follow last, with an until= or within= to end it."
+		},
+		{
+			"text": "loop(times=2, arc=loop(times=2, arc=loop(times=2, arc=loop(times=2, arc=loop(times=2, arc=wait())))))",
+			"error": "loop's arc may hold no arc inside it; loop holds one"
+		},
+		{
+			"text": "follow(Bo) ; say(\"a\")",
+			"arc": [
+				{
+					"verb": "follow",
+					"args": {
+						"target": "Bo"
+					},
+					"then": "always"
+				},
+				{
+					"verb": "say",
+					"args": {
+						"text": "a"
+					}
+				}
+			],
+			"back": "follow(Bo) ; say(a)",
+			"json": "{\"steps\":[{\"verb\":\"follow\",\"target\":\"Bo\",\"then\":\"always\"},{\"verb\":\"say\",\"text\":\"a\"}]}"
+		},
+		{
+			"text": "command(who=units, arc={\n\tloop(until=done) {\n\t\twait()\n\t}\n})",
+			"arc": [
+				{
+					"verb": "command",
+					"args": {
+						"who": "units",
+						"arc": [
+							{
+								"verb": "loop",
+								"args": {
+									"until": "done",
+									"arc": [
+										{
+											"verb": "wait",
+											"args": {}
+										}
+									]
+								}
+							}
+						]
+					}
+				}
+			],
+			"back": "command(units) { loop(until=done) { wait() } }",
+			"json": "{\"steps\":[{\"verb\":\"command\",\"who\":\"units\",\"arc\":[{\"verb\":\"loop\",\"until\":\"done\",\"arc\":[{\"verb\":\"wait\"}]}]}]}"
+		},
+		{
+			"text": "command(who=units) {\n\tloop(until=done) {\n\t\twait()\n\t}\n}",
+			"arc": [
+				{
+					"verb": "command",
+					"args": {
+						"who": "units",
+						"arc": [
+							{
+								"verb": "loop",
+								"args": {
+									"until": "done",
+									"arc": [
+										{
+											"verb": "wait",
+											"args": {}
+										}
+									]
+								}
+							}
+						]
+					}
+				}
+			],
+			"back": "command(units) { loop(until=done) { wait() } }",
+			"json": "{\"steps\":[{\"verb\":\"command\",\"who\":\"units\",\"arc\":[{\"verb\":\"loop\",\"until\":\"done\",\"arc\":[{\"verb\":\"wait\"}]}]}]}"
+		},
+		{
+			"text": "if(cond=done, arc={ wait() }, else={ say(\"not yet\") })",
+			"arc": [
+				{
+					"verb": "if",
+					"args": {
+						"cond": [
+							{
+								"verb": "test",
+								"args": {
+									"watch": "done"
+								}
+							}
+						],
+						"arc": [
+							{
+								"verb": "wait",
+								"args": {}
+							}
+						],
+						"else": [
+							{
+								"verb": "say",
+								"args": {
+									"text": "not yet"
+								}
+							}
+						]
+					}
+				}
+			],
+			"back": "if (done) { wait() } else { say(\"not yet\") }",
+			"json": "{\"steps\":[{\"verb\":\"if\",\"cond\":[{\"verb\":\"test\",\"watch\":\"done\"}],\"arc\":[{\"verb\":\"wait\"}],\"else\":[{\"verb\":\"say\",\"text\":\"not yet\"}]}]}"
+		},
+		{
+			"text": "if (done) { wait() } else { say(\"not yet\") }",
+			"arc": [
+				{
+					"verb": "if",
+					"args": {
+						"cond": [
+							{
+								"verb": "test",
+								"args": {
+									"watch": "done"
+								}
+							}
+						],
+						"arc": [
+							{
+								"verb": "wait",
+								"args": {}
+							}
+						],
+						"else": [
+							{
+								"verb": "say",
+								"args": {
+									"text": "not yet"
+								}
+							}
+						]
+					}
+				}
+			],
+			"back": "if (done) { wait() } else { say(\"not yet\") }",
+			"json": "{\"steps\":[{\"verb\":\"if\",\"cond\":[{\"verb\":\"test\",\"watch\":\"done\"}],\"arc\":[{\"verb\":\"wait\"}],\"else\":[{\"verb\":\"say\",\"text\":\"not yet\"}]}]}"
+		},
+		{
+			"text": "offer(to=Bo, give={\"Egg\": 2})",
+			"arc": [
+				{
+					"verb": "offer",
+					"args": {
+						"to": "Bo",
+						"give": {
+							"Egg": 2
+						}
+					}
+				}
+			],
+			"back": "offer(to=Bo, give={\"Egg\":2})",
+			"json": "{\"steps\":[{\"verb\":\"offer\",\"to\":\"Bo\",\"give\":{\"Egg\":2}}]}"
+		},
+		{
+			"text": "loop(\n\tchoose(\n\t\t\"Hold the gate\",\n\t\tgo_to(Keep),\n\t\tgate=go_to(EastGate),\n\t),\n)\nwander(\n\tuntil=done,\n)",
+			"arc": [
+				{
+					"verb": "loop",
+					"args": {
+						"arc": [
+							{
+								"verb": "choose",
+								"args": {
+									"goal": "Hold the gate",
+									"go_to_Keep": [
+										{
+											"verb": "go_to",
+											"args": {
+												"target": "Keep"
+											}
+										}
+									],
+									"gate": [
+										{
+											"verb": "go_to",
+											"args": {
+												"target": "EastGate"
+											}
+										}
+									]
+								}
+							}
+						]
+					},
+					"then": "always"
+				},
+				{
+					"verb": "wander",
+					"args": {
+						"until": "done"
+					}
+				}
+			],
+			"back": "loop { choose(\"Hold the gate\") { go_to(Keep) ; gate: go_to(EastGate) } } ; wander(done)",
+			"json": "{\"steps\":[{\"verb\":\"loop\",\"arc\":[{\"verb\":\"choose\",\"goal\":\"Hold the gate\",\"choices\":{\"go_to_Keep\":[{\"verb\":\"go_to\",\"target\":\"Keep\"}],\"gate\":[{\"verb\":\"go_to\",\"target\":\"EastGate\"}]}}],\"then\":\"always\"},{\"verb\":\"wander\",\"until\":\"done\"}]}"
+		},
+		{
+			"text": "wander(\n\tuntil=done;\n\tseconds=5;\n)",
+			"arc": [
+				{
+					"verb": "wander",
+					"args": {
+						"until": "done",
+						"seconds": 5
+					}
+				}
+			],
+			"back": "wander(until=done, seconds=5)",
+			"json": "{\"steps\":[{\"verb\":\"wander\",\"until\":\"done\",\"seconds\":5}]}"
+		},
+		{
+			"text": "wander(until=done; until=ready)",
+			"error": "wander(...) got until= twice; give it once"
+		},
+		{
+			"text": "say(Hello there, friend, to=Player) ; go_to(BridgeKeeper)",
+			"arc": [
+				{
+					"verb": "say",
+					"args": {
+						"text": "Hello there, friend",
+						"to": "Player"
+					},
+					"then": "always"
+				},
+				{
+					"verb": "go_to",
+					"args": {
+						"target": "BridgeKeeper"
+					}
+				}
+			],
+			"back": "say(text=\"Hello there, friend\", to=Player) ; go_to(BridgeKeeper)",
+			"json": "{\"steps\":[{\"verb\":\"say\",\"text\":\"Hello there, friend\",\"to\":\"Player\",\"then\":\"always\"},{\"verb\":\"go_to\",\"target\":\"BridgeKeeper\"}]}"
+		},
+		{
+			"text": "say(\"Wait :) here\", to=Player)",
+			"arc": [
+				{
+					"verb": "say",
+					"args": {
+						"text": "Wait :) here",
+						"to": "Player"
+					}
+				}
+			],
+			"back": "say(text=\"Wait :) here\", to=Player)",
+			"json": "{\"steps\":[{\"verb\":\"say\",\"text\":\"Wait :) here\",\"to\":\"Player\"}]}"
+		},
+		{
+			"text": "say(Hello, Player)",
+			"arc": [
+				{
+					"verb": "say",
+					"args": {
+						"text": "Hello, Player"
+					}
+				}
+			],
+			"back": "say(\"Hello, Player\")",
+			"json": "{\"steps\":[{\"verb\":\"say\",\"text\":\"Hello, Player\"}]}"
+		},
+		{
+			"text": "go_to(BridgeKeeper) && give(item=FireMushroom, to=BridgeKeeper",
+			"arc": [
+				{
+					"verb": "go_to",
+					"args": {
+						"target": "BridgeKeeper"
+					}
+				},
+				{
+					"verb": "give",
+					"args": {
+						"item": "FireMushroom",
+						"to": "BridgeKeeper"
+					}
+				}
+			],
+			"back": "go_to(BridgeKeeper) && give(item=FireMushroom, to=BridgeKeeper)",
+			"json": "{\"steps\":[{\"verb\":\"go_to\",\"target\":\"BridgeKeeper\"},{\"verb\":\"give\",\"item\":\"FireMushroom\",\"to\":\"BridgeKeeper\"}]}"
+		},
+		{
+			"text": "say(\"Good day",
+			"arc": [
+				{
+					"verb": "say",
+					"args": {
+						"text": "Good day"
+					}
+				}
+			],
+			"back": "say(\"Good day\")",
+			"json": "{\"steps\":[{\"verb\":\"say\",\"text\":\"Good day\"}]}"
+		},
+		{
+			"text": "(go_to(BridgeKeeper) && wait(seconds=2)",
+			"arc": [
+				{
+					"verb": "group",
+					"args": {
+						"arc": [
+							{
+								"verb": "go_to",
+								"args": {
+									"target": "BridgeKeeper"
+								}
+							},
+							{
+								"verb": "wait",
+								"args": {
+									"seconds": 2
+								}
+							}
+						]
+					}
+				}
+			],
+			"back": "(go_to(BridgeKeeper) && wait(2))",
+			"json": "{\"steps\":[{\"verb\":\"group\",\"arc\":[{\"verb\":\"go_to\",\"target\":\"BridgeKeeper\"},{\"verb\":\"wait\",\"seconds\":2}]}]}"
+		},
+		{
+			"text": "go_to(",
+			"error": "verb 'go_to' missing required arg 'target'"
+		},
+		{
+			"text": "command(who=units.filter(\"Witch\"), arc=loop(slash(Foe))) ; command(who",
+			"error": "unknown verb 'slash'"
+		},
+		{
+			"text": "command(who=units.filter(\"Blade\"), arc=loop(slash(Foe)) ; command(who=units.filter(\"Witch\"), arc=loop(slash(Foe)))",
+			"error": "unknown verb 'slash'"
+		},
+		{
+			"text": "go_to(BridgeKeeper) && give(item=FireMushroom, to=BridgeKeeper) ;",
+			"arc": [
+				{
+					"verb": "go_to",
+					"args": {
+						"target": "BridgeKeeper"
+					}
+				},
+				{
+					"verb": "give",
+					"args": {
+						"item": "FireMushroom",
+						"to": "BridgeKeeper"
+					}
+				}
+			],
+			"back": "go_to(BridgeKeeper) && give(item=FireMushroom, to=BridgeKeeper)",
+			"json": "{\"steps\":[{\"verb\":\"go_to\",\"target\":\"BridgeKeeper\"},{\"verb\":\"give\",\"item\":\"FireMushroom\",\"to\":\"BridgeKeeper\"}]}"
+		},
+		{
+			"text": "wander(until=some(items.filter(\"FireMushroom\"",
+			"error": "expression cut off before its closing bracket"
+		},
+		{
+			"text": "go_to(BridgeKeeper)",
+			"arc": [
+				{
+					"verb": "go_to",
+					"args": {
+						"target": "BridgeKeeper"
+					}
+				}
+			],
+			"back": "go_to(BridgeKeeper)",
+			"json": "{\"steps\":[{\"verb\":\"go_to\",\"target\":\"BridgeKeeper\"}]}"
+		},
+		{
+			"text": "command(who=units.filter(\"Blade\"), arc=loop(slash(Foe)))), ; command(who=units.filter(\"Witch\"), arc=loop(slash(Foe)))",
+			"error": "unknown verb 'slash'"
+		},
+		{
+			"text": "choose(goal=\"hold the gate\", hold=go_to(EastGate) && wait(), chase=follow(Raider), stand=wait())",
+			"arc": [
+				{
+					"verb": "choose",
+					"args": {
+						"goal": "hold the gate",
+						"hold": [
+							{
+								"verb": "go_to",
+								"args": {
+									"target": "EastGate"
+								}
+							},
+							{
+								"verb": "wait",
+								"args": {}
+							}
+						],
+						"chase": [
+							{
+								"verb": "follow",
+								"args": {
+									"target": "Raider"
+								}
+							}
+						],
+						"stand": [
+							{
+								"verb": "wait",
+								"args": {}
+							}
+						]
+					}
+				}
+			],
+			"back": "choose(\"hold the gate\") { hold: go_to(EastGate) && wait() ; chase: follow(Raider) ; stand: wait() }",
+			"json": "{\"steps\":[{\"verb\":\"choose\",\"goal\":\"hold the gate\",\"choices\":{\"hold\":[{\"verb\":\"go_to\",\"target\":\"EastGate\"},{\"verb\":\"wait\"}],\"chase\":[{\"verb\":\"follow\",\"target\":\"Raider\"}],\"stand\":[{\"verb\":\"wait\"}]}}]}"
+		},
+		{
+			"text": "choose(\"hold\", go_to(EastGate), wait(), wait())",
+			"arc": [
+				{
+					"verb": "choose",
+					"args": {
+						"goal": "hold",
+						"go_to_EastGate": [
+							{
+								"verb": "go_to",
+								"args": {
+									"target": "EastGate"
+								}
+							}
+						],
+						"wait": [
+							{
+								"verb": "wait",
+								"args": {}
+							}
+						],
+						"wait_2": [
+							{
+								"verb": "wait",
+								"args": {}
+							}
+						]
+					}
+				}
+			],
+			"back": "choose(\"hold\") { go_to(EastGate) ; wait() ; wait_2: wait() }",
+			"json": "{\"steps\":[{\"verb\":\"choose\",\"goal\":\"hold\",\"choices\":{\"go_to_EastGate\":[{\"verb\":\"go_to\",\"target\":\"EastGate\"}],\"wait\":[{\"verb\":\"wait\"}],\"wait_2\":[{\"verb\":\"wait\"}]}}]}"
+		},
+		{
+			"text": "choose(goal=greet them, hi=wait() ; say(\"hi\"), no=wait())",
+			"arc": [
+				{
+					"verb": "choose",
+					"args": {
+						"goal": "greet them",
+						"hi": [
+							{
+								"verb": "wait",
+								"args": {},
+								"then": "always"
+							},
+							{
+								"verb": "say",
+								"args": {
+									"text": "hi"
+								}
+							}
+						],
+						"no": [
+							{
+								"verb": "wait",
+								"args": {}
+							}
+						]
+					}
+				}
+			],
+			"back": "choose(\"greet them\") { hi: { wait() ; say(hi) } ; no: wait() }",
+			"json": "{\"steps\":[{\"verb\":\"choose\",\"goal\":\"greet them\",\"choices\":{\"hi\":[{\"verb\":\"wait\",\"then\":\"always\"},{\"verb\":\"say\",\"text\":\"hi\"}],\"no\":[{\"verb\":\"wait\"}]}}]}"
+		},
+		{
+			"text": "loop(choose(\"hold\", a=wait(), b=go_to(EastGate)), until=isHurt(me))",
+			"arc": [
+				{
+					"verb": "loop",
+					"args": {
+						"arc": [
+							{
+								"verb": "choose",
+								"args": {
+									"goal": "hold",
+									"a": [
+										{
+											"verb": "wait",
+											"args": {}
+										}
+									],
+									"b": [
+										{
+											"verb": "go_to",
+											"args": {
+												"target": "EastGate"
+											}
+										}
+									]
+								}
+							}
+						],
+						"until": "isHurt(me)"
+					}
+				}
+			],
+			"back": "loop(until=isHurt(me)) { choose(\"hold\") { a: wait() ; b: go_to(EastGate) } }",
+			"json": "{\"steps\":[{\"verb\":\"loop\",\"arc\":[{\"verb\":\"choose\",\"goal\":\"hold\",\"choices\":{\"a\":[{\"verb\":\"wait\"}],\"b\":[{\"verb\":\"go_to\",\"target\":\"EastGate\"}]}}],\"until\":\"isHurt(me)\"}]}"
+		},
+		{
+			"text": "choose(a=wait())",
+			"error": "choose needs a goal: choose(\"hold the gate\", name=arc, …)"
+		},
+		{
+			"text": "choose(\"hold\")",
+			"error": "choose needs at least one name=arc choice"
+		},
+		{
+			"text": "choose(\"hold\", until=wait())",
+			"error": "'until' cannot name a choice"
+		},
+		{
+			"text": "choose(\"hold\", a=wait(), a=go_to(EastGate))",
+			"error": "choose has two choices named 'a'"
+		},
+		{
+			"text": "choose(\"hold\", a=hold the gate)",
+			"error": "expected ',' or ')' in choose(...)"
+		},
+		{
+			"text": "wait(hold=wait())",
+			"error": "verb 'wait' has no arg 'hold'"
+		},
+		{
+			"text": "command(units.filter(\"Archers\")) {\n\tgo_to(Wall)\n\tattack(Wolf)\n}",
+			"error": "unknown verb 'attack'"
+		},
+		{
+			"text": "command(units.filter(\"Archers\"))\n{\n\tgo_to(Wall); attack(Wolf)\n}",
+			"error": "unknown verb 'attack'"
+		},
+		{
+			"text": "loop { wander() }",
+			"arc": [
+				{
+					"verb": "loop",
+					"args": {
+						"arc": [
+							{
+								"verb": "wander",
+								"args": {}
+							}
+						]
+					}
+				}
+			],
+			"back": "loop { wander() }",
+			"json": "{\"steps\":[{\"verb\":\"loop\",\"arc\":[{\"verb\":\"wander\"}]}]}"
+		},
+		{
+			"text": "if (isHurt(Mira))\n    heal(Mira)\nelse if (isDead(Mira))\n    revive(Mira)",
+			"error": "unknown verb 'heal'"
+		},
+		{
+			"text": "if isHurt(Mira) { heal(Mira) }",
+			"error": "unknown verb 'heal'"
+		},
+		{
+			"text": "if (isHurt(Mira)) { heal(Mira) }",
+			"error": "unknown verb 'heal'"
+		},
+		{
+			"text": "if (pick_up(Bucket)) {\n\tgo_to(Well)\n} else {\n\tsay(\"No bucket.\")\n}",
+			"arc": [
+				{
+					"verb": "if",
+					"args": {
+						"cond": [
+							{
+								"verb": "pick_up",
+								"args": {
+									"item": "Bucket"
+								}
+							}
+						],
+						"arc": [
+							{
+								"verb": "go_to",
+								"args": {
+									"target": "Well"
+								}
+							}
+						],
+						"else": [
+							{
+								"verb": "say",
+								"args": {
+									"text": "No bucket."
+								}
+							}
+						]
+					}
+				}
+			],
+			"back": "if (pick_up(Bucket)) { go_to(Well) } else { say(\"No bucket.\") }",
+			"json": "{\"steps\":[{\"verb\":\"if\",\"cond\":[{\"verb\":\"pick_up\",\"item\":\"Bucket\"}],\"arc\":[{\"verb\":\"go_to\",\"target\":\"Well\"}],\"else\":[{\"verb\":\"say\",\"text\":\"No bucket.\"}]}]}"
+		},
+		{
+			"text": "say(\"a // b /* c */\")",
+			"arc": [
+				{
+					"verb": "say",
+					"args": {
+						"text": "a // b /* c */"
+					}
+				}
+			],
+			"back": "say(\"a // b /* c */\")",
+			"json": "{\"steps\":[{\"verb\":\"say\",\"text\":\"a // b /* c */\"}]}"
+		},
+		{
+			"text": "go_to(Well) /* never closed",
+			"arc": [
+				{
+					"verb": "go_to",
+					"args": {
+						"target": "Well"
+					}
+				}
+			],
+			"back": "go_to(Well)",
+			"json": "{\"steps\":[{\"verb\":\"go_to\",\"target\":\"Well\"}]}"
+		},
+		{
+			"text": "go_to(Well)",
+			"arc": [
+				{
+					"verb": "go_to",
+					"args": {
+						"target": "Well"
+					}
+				}
+			],
+			"back": "go_to(Well)",
+			"json": "{\"steps\":[{\"verb\":\"go_to\",\"target\":\"Well\"}]}"
+		},
+		{
+			"text": "if (pick_up(Bucket)) { go_to(Well) } else { say(\"No bucket.\") }",
+			"arc": [
+				{
+					"verb": "if",
+					"args": {
+						"cond": [
+							{
+								"verb": "pick_up",
+								"args": {
+									"item": "Bucket"
+								}
+							}
+						],
+						"arc": [
+							{
+								"verb": "go_to",
+								"args": {
+									"target": "Well"
+								}
+							}
+						],
+						"else": [
+							{
+								"verb": "say",
+								"args": {
+									"text": "No bucket."
+								}
+							}
+						]
+					}
+				}
+			],
+			"back": "if (pick_up(Bucket)) { go_to(Well) } else { say(\"No bucket.\") }",
+			"json": "{\"steps\":[{\"verb\":\"if\",\"cond\":[{\"verb\":\"pick_up\",\"item\":\"Bucket\"}],\"arc\":[{\"verb\":\"go_to\",\"target\":\"Well\"}],\"else\":[{\"verb\":\"say\",\"text\":\"No bucket.\"}]}]}"
+		},
+		{
+			"text": "isHurt(me) && say(\"Ouch\") ; !some(others) || wait()",
+			"arc": [
+				{
+					"verb": "test",
+					"args": {
+						"watch": "isHurt(me)"
+					}
+				},
+				{
+					"verb": "say",
+					"args": {
+						"text": "Ouch"
+					},
+					"then": "always"
+				},
+				{
+					"verb": "test",
+					"args": {
+						"watch": "!some(others)"
+					},
+					"then": "if_failed"
+				},
+				{
+					"verb": "wait",
+					"args": {}
+				}
+			],
+			"back": "isHurt(me) && say(Ouch) ; !some(others) || wait()",
+			"json": "{\"steps\":[{\"verb\":\"test\",\"watch\":\"isHurt(me)\"},{\"verb\":\"say\",\"text\":\"Ouch\",\"then\":\"always\"},{\"verb\":\"test\",\"watch\":\"!some(others)\",\"then\":\"if_failed\"},{\"verb\":\"wait\"}]}"
+		},
+		{
+			"text": "isHurt(me) ? go_to(Keep) : wait()",
+			"error": "isHurt(me) ? go_to(Keep) : wait(): a verb inside an expression; join steps with &&, || or ;, or branch with if"
+		},
+		{
+			"text": "when !isHurt(Mira) { say(\"Better.\") }",
+			"arc": [
+				{
+					"verb": "when",
+					"args": {
+						"watch": "!isHurt(Mira)",
+						"arc": [
+							{
+								"verb": "say",
+								"args": {
+									"text": "Better."
+								}
+							}
+						]
+					}
+				}
+			],
+			"back": "when(!isHurt(Mira)) { say(Better.) }",
+			"json": "{\"steps\":[{\"verb\":\"when\",\"watch\":\"!isHurt(Mira)\",\"arc\":[{\"verb\":\"say\",\"text\":\"Better.\"}]}]}"
+		},
+		{
+			"text": "choose(\"stay alive\") {\n\tfight: go_to(Wolf)\n\tflee: {\n\t\tflee(Wolf)\n\t\tsay(\"Run!\", to=Mira)\n\t}\n}",
+			"arc": [
+				{
+					"verb": "choose",
+					"args": {
+						"goal": "stay alive",
+						"fight": [
+							{
+								"verb": "go_to",
+								"args": {
+									"target": "Wolf"
+								}
+							}
+						],
+						"flee": [
+							{
+								"verb": "flee",
+								"args": {
+									"from": "Wolf"
+								},
+								"then": "always"
+							},
+							{
+								"verb": "say",
+								"args": {
+									"text": "Run!",
+									"to": "Mira"
+								}
+							}
+						]
+					}
+				}
+			],
+			"back": "choose(\"stay alive\") { fight: go_to(Wolf) ; flee: { flee(Wolf) ; say(text=Run!, to=Mira) } }",
+			"json": "{\"steps\":[{\"verb\":\"choose\",\"goal\":\"stay alive\",\"choices\":{\"fight\":[{\"verb\":\"go_to\",\"target\":\"Wolf\"}],\"flee\":[{\"verb\":\"flee\",\"from\":\"Wolf\",\"then\":\"always\"},{\"verb\":\"say\",\"text\":\"Run!\",\"to\":\"Mira\"}]}}]}"
+		},
+		{
+			"text": "fight: go_to(Wolf)",
+			"error": "fight: names a choice, inside choose(\"goal\") { … } only"
+		},
+		{
+			"text": "say(\"Hi\", to: Mira)",
+			"arc": [
+				{
+					"verb": "say",
+					"args": {
+						"text": "Hi",
+						"to": "Mira"
+					}
+				}
+			],
+			"back": "say(text=Hi, to=Mira)",
+			"json": "{\"steps\":[{\"verb\":\"say\",\"text\":\"Hi\",\"to\":\"Mira\"}]}"
+		},
+		{
+			"text": "say(\"Hi\", to=Mira)",
+			"arc": [
+				{
+					"verb": "say",
+					"args": {
+						"text": "Hi",
+						"to": "Mira"
+					}
+				}
+			],
+			"back": "say(text=Hi, to=Mira)",
+			"json": "{\"steps\":[{\"verb\":\"say\",\"text\":\"Hi\",\"to\":\"Mira\"}]}"
+		},
+		{
+			"text": "wait(1.5min)",
+			"arc": [
+				{
+					"verb": "wait",
+					"args": {
+						"seconds": 90
+					}
+				}
+			],
+			"back": "wait(90)",
+			"json": "{\"steps\":[{\"verb\":\"wait\",\"seconds\":90}]}"
+		},
+		{
+			"text": "wander(seconds=20s)",
+			"arc": [
+				{
+					"verb": "wander",
+					"args": {
+						"seconds": 20
+					}
+				}
+			],
+			"back": "wander(seconds=20)",
+			"json": "{\"steps\":[{\"verb\":\"wander\",\"seconds\":20}]}"
+		},
+		{
+			"text": "Keep.go_to()",
+			"arc": [
+				{
+					"verb": "go_to",
+					"args": {
+						"target": "Keep"
+					}
+				}
+			],
+			"back": "go_to(Keep)",
+			"json": "{\"steps\":[{\"verb\":\"go_to\",\"target\":\"Keep\"}]}"
+		},
+		{
+			"text": "go_to(Keep)",
+			"arc": [
+				{
+					"verb": "go_to",
+					"args": {
+						"target": "Keep"
+					}
+				}
+			],
+			"back": "go_to(Keep)",
+			"json": "{\"steps\":[{\"verb\":\"go_to\",\"target\":\"Keep\"}]}"
+		},
+		{
+			"text": "let picked = pick_up(Key)\nif (picked) { go_to(Door) }",
+			"arc": [
+				{
+					"verb": "pick_up",
+					"args": {
+						"item": "Key"
+					},
+					"let": "picked",
+					"then": "always"
+				},
+				{
+					"verb": "if",
+					"args": {
+						"cond": [
+							{
+								"verb": "test",
+								"args": {
+									"watch": "picked"
+								}
+							}
+						],
+						"arc": [
+							{
+								"verb": "go_to",
+								"args": {
+									"target": "Door"
+								}
+							}
+						]
+					}
+				}
+			],
+			"back": "let picked = pick_up(Key) ; if (picked) { go_to(Door) }",
+			"json": "{\"steps\":[{\"let\":\"picked\",\"verb\":\"pick_up\",\"item\":\"Key\",\"then\":\"always\"},{\"verb\":\"if\",\"cond\":[{\"verb\":\"test\",\"watch\":\"picked\"}],\"arc\":[{\"verb\":\"go_to\",\"target\":\"Door\"}]}]}"
+		},
+		{
+			"text": "let both = pick_up(Key) && go_to(Door)",
+			"arc": [
+				{
+					"verb": "group",
+					"args": {
+						"arc": [
+							{
+								"verb": "pick_up",
+								"args": {
+									"item": "Key"
+								}
+							},
+							{
+								"verb": "go_to",
+								"args": {
+									"target": "Door"
+								}
+							}
+						]
+					},
+					"let": "both"
+				}
+			],
+			"back": "let both = (pick_up(Key) && go_to(Door))",
+			"json": "{\"steps\":[{\"let\":\"both\",\"verb\":\"group\",\"arc\":[{\"verb\":\"pick_up\",\"item\":\"Key\"},{\"verb\":\"go_to\",\"target\":\"Door\"}]}]}"
+		},
+		{
+			"text": "let x = pick_up(Key) ; let x = go_to(Door)",
+			"error": "let x twice: a name is given once in its arc; pick another"
+		},
+		{
+			"text": "let x = pick_up(Key) ; loop { let x = wait() }",
+			"error": "let x twice: a name is given once in its arc; pick another"
+		},
+		{
+			"text": "loop { let x = wait() } ; let x = go_to(Door)",
+			"arc": [
+				{
+					"verb": "loop",
+					"args": {
+						"arc": [
+							{
+								"verb": "wait",
+								"args": {},
+								"let": "x"
+							}
+						]
+					},
+					"then": "always"
+				},
+				{
+					"verb": "go_to",
+					"args": {
+						"target": "Door"
+					},
+					"let": "x"
+				}
+			],
+			"back": "loop { let x = wait() } ; let x = go_to(Door)",
+			"json": "{\"steps\":[{\"verb\":\"loop\",\"arc\":[{\"let\":\"x\",\"verb\":\"wait\"}],\"then\":\"always\"},{\"let\":\"x\",\"verb\":\"go_to\",\"target\":\"Door\"}]}"
+		},
+		{
+			"text": "let me = wait()",
+			"error": "let me: a name for a result is a new word starting in lowercase, not one watches read"
+		},
+		{
+			"text": "I see four foes. say(\"Charge!\")",
+			"error": "expected verb"
+		},
+		{
+			"text": "\"Charge, my friends!\"\ngo_to(Keep)",
+			"error": "\"Charge, my friends!\" alone is not a step: say(\"…\") speaks a line"
+		},
+		{
+			"text": "if (true) { wait() }",
+			"arc": [
+				{
+					"verb": "if",
+					"args": {
+						"cond": [
+							{
+								"verb": "test",
+								"args": {
+									"watch": "true"
+								}
+							}
+						],
+						"arc": [
+							{
+								"verb": "wait",
+								"args": {}
+							}
+						]
+					}
+				}
+			],
+			"back": "if (true) { wait() }",
+			"json": "{\"steps\":[{\"verb\":\"if\",\"cond\":[{\"verb\":\"test\",\"watch\":\"true\"}],\"arc\":[{\"verb\":\"wait\"}]}]}"
+		},
+		{
+			"text": "loop(arc=choose(\"why\", wander=wander(), wait=wait()), until=!some(others)) ; say(\"Done\")",
+			"arc": [
+				{
+					"verb": "loop",
+					"args": {
+						"arc": [
+							{
+								"verb": "choose",
+								"args": {
+									"goal": "why",
+									"wander": [
+										{
+											"verb": "wander",
+											"args": {}
+										}
+									],
+									"wait": [
+										{
+											"verb": "wait",
+											"args": {}
+										}
+									]
+								}
+							}
+						],
+						"until": "!some(others)"
+					},
+					"then": "always"
+				},
+				{
+					"verb": "say",
+					"args": {
+						"text": "Done"
+					}
+				}
+			],
+			"back": "loop(until=!some(others)) { choose(\"why\") { wander() ; wait() } } ; say(Done)",
+			"json": "{\"steps\":[{\"verb\":\"loop\",\"arc\":[{\"verb\":\"choose\",\"goal\":\"why\",\"choices\":{\"wander\":[{\"verb\":\"wander\"}],\"wait\":[{\"verb\":\"wait\"}]}}],\"until\":\"!some(others)\",\"then\":\"always\"},{\"verb\":\"say\",\"text\":\"Done\"}]}"
+		},
+		{
+			"text": "wait()",
+			"arc": [
+				{
+					"verb": "wait",
+					"args": {}
+				}
+			],
+			"back": "wait()",
+			"json": "{\"steps\":[{\"verb\":\"wait\"}]}"
+		},
+		{
+			"text": "go_to(Lever) || use(item=Lever) ; say(\"It's stuck.\", to=Forager)",
+			"arc": [
+				{
+					"verb": "go_to",
+					"args": {
+						"target": "Lever"
+					},
+					"then": "if_failed"
+				},
+				{
+					"verb": "use",
+					"args": {
+						"item": "Lever"
+					},
+					"then": "always"
+				},
+				{
+					"verb": "say",
+					"args": {
+						"text": "It's stuck.",
+						"to": "Forager"
+					}
+				}
+			],
+			"back": "go_to(Lever) || use(Lever) ; say(text=\"It's stuck.\", to=Forager)",
+			"json": "{\"steps\":[{\"verb\":\"go_to\",\"target\":\"Lever\",\"then\":\"if_failed\"},{\"verb\":\"use\",\"item\":\"Lever\",\"then\":\"always\"},{\"verb\":\"say\",\"text\":\"It's stuck.\",\"to\":\"Forager\"}]}"
+		},
+		{
+			"text": "(go_to(A) ; wait()) && say(Hi)",
+			"arc": [
+				{
+					"verb": "group",
+					"args": {
+						"arc": [
+							{
+								"verb": "go_to",
+								"args": {
+									"target": "A"
+								},
+								"then": "always"
+							},
+							{
+								"verb": "wait",
+								"args": {}
+							}
+						]
+					}
+				},
+				{
+					"verb": "say",
+					"args": {
+						"text": "Hi"
+					}
+				}
+			],
+			"back": "(go_to(A) ; wait()) && say(Hi)",
+			"json": "{\"steps\":[{\"verb\":\"group\",\"arc\":[{\"verb\":\"go_to\",\"target\":\"A\",\"then\":\"always\"},{\"verb\":\"wait\"}]},{\"verb\":\"say\",\"text\":\"Hi\"}]}"
+		},
+		{
+			"text": "choose(\"hold\", stand=wait(), chase=follow(Raider))",
+			"arc": [
+				{
+					"verb": "choose",
+					"args": {
+						"goal": "hold",
+						"stand": [
+							{
+								"verb": "wait",
+								"args": {}
+							}
+						],
+						"chase": [
+							{
+								"verb": "follow",
+								"args": {
+									"target": "Raider"
+								}
+							}
+						]
+					}
+				}
+			],
+			"back": "choose(\"hold\") { stand: wait() ; chase: follow(Raider) }",
+			"json": "{\"steps\":[{\"verb\":\"choose\",\"goal\":\"hold\",\"choices\":{\"stand\":[{\"verb\":\"wait\"}],\"chase\":[{\"verb\":\"follow\",\"target\":\"Raider\"}]}}]}"
+		},
+		{
+			"text": "wander(until=some(items.filter(\"Lantern\").nearby())) ; say(\"A \\\"fine\\\" day\")",
+			"error": "wander(until=some(items.filter(\"Lantern\").nearby())) ; say(\"A \\\"fine\\\" day\"): its JSON reads back as itself\n+ actual - expected\n\n  [\n    {\n      args: {\n+       until: \"some(items.filter('Lantern').nearby())\"\n-       until: 'some(items.filter(\"Lantern\").nearby())'\n      },\n      then: 'always',\n      verb: 'wander'\n    },\n    {\n"
+		},
+		{
+			"text": "command(who=units, arc=loop(wait())) ; command(who=allUnits, arc=wait())",
+			"arc": [
+				{
+					"verb": "command",
+					"args": {
+						"who": "units",
+						"arc": [
+							{
+								"verb": "loop",
+								"args": {
+									"arc": [
+										{
+											"verb": "wait",
+											"args": {}
+										}
+									]
+								}
+							}
+						]
+					},
+					"then": "always"
+				},
+				{
+					"verb": "command",
+					"args": {
+						"who": "allUnits",
+						"arc": [
+							{
+								"verb": "wait",
+								"args": {}
+							}
+						]
+					}
+				}
+			],
+			"back": "command(units) { loop { wait() } } ; command(allUnits) { wait() }",
+			"json": "{\"steps\":[{\"verb\":\"command\",\"who\":\"units\",\"arc\":[{\"verb\":\"loop\",\"arc\":[{\"verb\":\"wait\"}]}],\"then\":\"always\"},{\"verb\":\"command\",\"who\":\"allUnits\",\"arc\":[{\"verb\":\"wait\"}]}]}"
+		},
+		{
+			"text": "go_to(Keep) && say(\"Hi there\")",
+			"arc": [
+				{
+					"verb": "go_to",
+					"args": {
+						"target": "Keep"
+					}
+				},
+				{
+					"verb": "say",
+					"args": {
+						"text": "Hi there"
+					}
+				}
+			],
+			"back": "go_to(Keep) && say(\"Hi there\")",
+			"json": "{\"steps\":[{\"verb\":\"go_to\",\"target\":\"Keep\"},{\"verb\":\"say\",\"text\":\"Hi there\"}]}"
+		},
+		{
+			"text": "go_to(Well) while say(\"Follow me\") && examine(Well)",
+			"arc": [
+				{
+					"verb": "go_to",
+					"args": {
+						"target": "Well",
+						"while": [
+							{
+								"verb": "say",
+								"args": {
+									"text": "Follow me"
+								}
+							}
+						]
+					}
+				},
+				{
+					"verb": "examine",
+					"args": {
+						"target": "Well"
+					}
+				}
+			],
+			"back": "go_to(Well) while say(\"Follow me\") && examine(Well)",
+			"json": "{\"steps\":[{\"verb\":\"go_to\",\"target\":\"Well\",\"while\":[{\"verb\":\"say\",\"text\":\"Follow me\"}]},{\"verb\":\"examine\",\"target\":\"Well\"}]}"
+		},
+		{
+			"text": "loop {\n\tgo_to(Mill)\n\tgo_to(Barn)\n} while say(\"Off I go\")",
+			"arc": [
+				{
+					"verb": "loop",
+					"args": {
+						"arc": [
+							{
+								"verb": "go_to",
+								"args": {
+									"target": "Mill"
+								},
+								"then": "always"
+							},
+							{
+								"verb": "go_to",
+								"args": {
+									"target": "Barn"
+								}
+							}
+						],
+						"while": [
+							{
+								"verb": "say",
+								"args": {
+									"text": "Off I go"
+								}
+							}
+						]
+					}
+				}
+			],
+			"back": "loop { go_to(Mill) ; go_to(Barn) } while say(\"Off I go\")",
+			"json": "{\"steps\":[{\"verb\":\"loop\",\"arc\":[{\"verb\":\"go_to\",\"target\":\"Mill\",\"then\":\"always\"},{\"verb\":\"go_to\",\"target\":\"Barn\"}],\"while\":[{\"verb\":\"say\",\"text\":\"Off I go\"}]}]}"
+		},
+		{
+			"text": "follow(Bram, until=isHurt(me)) while { say(\"Come\") ; say(\"Hurry\") } ; remember(\"x\")",
+			"arc": [
+				{
+					"verb": "follow",
+					"args": {
+						"target": "Bram",
+						"until": "isHurt(me)",
+						"while": [
+							{
+								"verb": "say",
+								"args": {
+									"text": "Come"
+								},
+								"then": "always"
+							},
+							{
+								"verb": "say",
+								"args": {
+									"text": "Hurry"
+								}
+							}
+						]
+					},
+					"then": "always"
+				},
+				{
+					"verb": "remember",
+					"args": {
+						"content": "x"
+					}
+				}
+			],
+			"back": "follow(target=Bram, until=isHurt(me)) while { say(Come) ; say(Hurry) } ; remember(x)",
+			"json": "{\"steps\":[{\"verb\":\"follow\",\"target\":\"Bram\",\"until\":\"isHurt(me)\",\"while\":[{\"verb\":\"say\",\"text\":\"Come\",\"then\":\"always\"},{\"verb\":\"say\",\"text\":\"Hurry\"}],\"then\":\"always\"},{\"verb\":\"remember\",\"content\":\"x\"}]}"
+		},
+		{
+			"text": "go_to(Well) while say(\"a\") while remember(\"x\")",
+			"arc": [
+				{
+					"verb": "go_to",
+					"args": {
+						"target": "Well",
+						"while": [
+							{
+								"verb": "say",
+								"args": {
+									"text": "a",
+									"while": [
+										{
+											"verb": "remember",
+											"args": {
+												"content": "x"
+											}
+										}
+									]
+								}
+							}
+						]
+					}
+				}
+			],
+			"back": "go_to(Well) while say(a) while remember(x)",
+			"json": "{\"steps\":[{\"verb\":\"go_to\",\"target\":\"Well\",\"while\":[{\"verb\":\"say\",\"text\":\"a\",\"while\":[{\"verb\":\"remember\",\"content\":\"x\"}]}]}]}"
+		},
+		{
+			"text": "while (isHurt(me)) { say(\"ow\") }",
+			"error": "while joins two steps: A while B"
+		},
+		{
+			"text": "command(allUnits, append=true) {\n\tgo_to(Gate)\n\twait(seconds=30)\n}",
+			"arc": [
+				{
+					"verb": "command",
+					"args": {
+						"who": "allUnits",
+						"append": true,
+						"arc": [
+							{
+								"verb": "go_to",
+								"args": {
+									"target": "Gate"
+								},
+								"then": "always"
+							},
+							{
+								"verb": "wait",
+								"args": {
+									"seconds": 30
+								}
+							}
+						]
+					}
+				}
+			],
+			"back": "command(who=allUnits, append=true) { go_to(Gate) ; wait(30) }",
+			"json": "{\"steps\":[{\"verb\":\"command\",\"who\":\"allUnits\",\"append\":true,\"arc\":[{\"verb\":\"go_to\",\"target\":\"Gate\",\"then\":\"always\"},{\"verb\":\"wait\",\"seconds\":30}]}]}"
+		},
+		{
+			"text": "say(\"Change of plan\")\ninstead {\n\tgo_to(Gate)\n}",
+			"arc": [
+				{
+					"verb": "say",
+					"args": {
+						"text": "Change of plan"
+					},
+					"then": "always"
+				},
+				{
+					"verb": "instead",
+					"args": {
+						"arc": [
+							{
+								"verb": "go_to",
+								"args": {
+									"target": "Gate"
+								}
+							}
+						]
+					}
+				}
+			],
+			"back": "say(\"Change of plan\") ; instead { go_to(Gate) }",
+			"json": "{\"steps\":[{\"verb\":\"say\",\"text\":\"Change of plan\",\"then\":\"always\"},{\"verb\":\"instead\",\"arc\":[{\"verb\":\"go_to\",\"target\":\"Gate\"}]}]}"
+		},
+		{
+			"text": "command(units.filter(\"Archers\")) {\n\tinstead {\n\t\tgo_to(Gate)\n\t}\n}",
+			"error": "orders already replace what units do: write command(Archers) { … } without instead"
+		},
+		{
+			"text": "loop {\n\tinstead {\n\t\tgo_to(Gate)\n\t}\n}",
+			"error": "instead goes at the root of a reply, never inside another step"
+		}
+	]
+}

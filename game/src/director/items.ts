@@ -1,5 +1,5 @@
 import { Time, type GameObject } from '@arc-director/kindling';
-import { pascalCase, type Deal, type Outcome, type Transfer } from 'arc-director';
+import { showNamingText, type Deal, type NamingText, type Outcome, type Transfer } from 'arc-director';
 import {
 	BODY_SLOTS,
 	Bridge,
@@ -24,7 +24,7 @@ import {
 	slotItem,
 	tryInsert,
 } from '../items/inventory';
-import { cloneItem, isBackpack, type ItemInstance } from '../items/instance';
+import { cloneItem, isBackpack, itemID, type ItemInstance } from '../items/instance';
 import { coinsOf, noteWant, transferCoins } from '../items/wallet';
 import { chestHolding, dropItem, pickup, takeFromChest } from '../items/pickup';
 import { cueAt } from '../audio/cue';
@@ -71,11 +71,10 @@ export function useOn(host:GameHost, character:GameObject, itemName:string, targ
 	}
 	if (result.ok) {
 		// Everyone learns what changed, as with a give or a pick-up: "BridgeKeeper used BridgeCrank on BridgeLever: raised Bridge".
-		const label = pascalCase(item.name) || item.name;
+		const label = itemID(item);
 		host.arc?.pushEvent({
 			kind: 'Used',
-			text: targetName ? `{0} used ${label} on ${targetName}: ${result.reason}` : `{0} used ${label}: ${result.reason}`,
-			who: [idOf(character)],
+			text: (name) => `${name(idOf(character))} used ${name(label)}${targetName ? ` on ${name(targetName)}` : ''}: ${showNamingText(result.reason, name)}`,
 			tags: ['use', label, ...(targetName ? [targetName] : [])],
 			major: false,
 		});
@@ -128,13 +127,16 @@ function keepsAtFeet(from:GameObject, to:GameObject):boolean {
 }
 
 /**
- * Why `move` cannot happen, or nothing: the game's item rules, for ArcDirector's verbs (`validateTransfer`) and the
- * steal verb alike. `deal` is what else changes hands with it: an item leaving `to` in the same trade frees a slot.
+ * Why `move` cannot happen, or nothing: the game's item rules, for ArcDirector's verbs (`validateTransfer`). `deal` is
+ * what else changes hands with it: an item leaving `to` in the same trade frees a slot.
  */
-export function transferRefusal(move:Transfer<GameObject>, deal?:Deal<GameObject>):string | undefined {
+export function transferRefusal(move:Transfer<GameObject>, deal?:Deal<GameObject>):NamingText | undefined {
 	const { verb, thing, from, to } = move;
 	if (verb === 'pick_up') {
 		return takeRefusal(to!, thing, from);
+	}
+	if (verb === 'steal' && to?.getComponent(MarketNPC)?.kind === 'guard') {
+		return 'the watch does not steal';
 	}
 	if (to === from) {
 		return 'cannot give to yourself';
@@ -144,7 +146,7 @@ export function transferRefusal(move:Transfer<GameObject>, deal?:Deal<GameObject
 		if (isGold(thing) && !findItem(from, thing)) {
 			return 'gold stays in your purse; give or offer it';
 		}
-		const shut = to && (to.getComponent(Chest) ? chestRefusal(to) : `${idOf(to)} cannot hold things`);
+		const shut = to && (to.getComponent(Chest) ? chestRefusal(to) : (name:(id:string)=>string) => `${name(idOf(to))} cannot hold things`);
 		if (shut) {
 			return shut;
 		}
@@ -152,42 +154,43 @@ export function transferRefusal(move:Transfer<GameObject>, deal?:Deal<GameObject
 	const count = countOf(move);
 	if (isGold(thing) && !findItem(from, thing)) {
 		const have = coinsOf(from);
-		return have < count ? `${idOf(from)} has only ${have} gold` : undefined;
+		return have < count ? (name) => `${name(idOf(from))} has only ${have} gold` : undefined;
 	}
 	const stock = findItem(from, thing);
 	if (!stock || stock.count < count) {
-		return stock ? `${idOf(from)} has only ${stock.count} ${thing}` : `${idOf(from)} has no ${thing}`;
+		return stock ? (name) => `${name(idOf(from))} has only ${stock.count} ${name(thing)}` : (name) => `${name(idOf(from))} has no ${name(thing)}`;
 	}
 	// A whole stack leaving `to` in the same trade frees its slot first.
 	const room = !to || hasRoom(to, stock, count) || keepsAtFeet(from, to) || !!deal?.leaving(to).some((m) => !isGold(m.thing));
-	return room ? undefined : `${idOf(to)} has no room`;
+	return room ? undefined : (name) => `${name(idOf(to))} has no room`;
 }
 
 /** Why nothing goes into or out of `chest` now, or nothing. */
-function chestRefusal(chest:GameObject):string | undefined {
+function chestRefusal(chest:GameObject):NamingText | undefined {
 	if (chest.getComponent(Lock)?.locked) {
-		return `${idOf(chest)} is locked — unlock it first`;
+		return (name) => `${name(idOf(chest))} is locked — unlock it first`;
 	}
-	return chest.getComponent(Chest)?.open === false ? `${idOf(chest)} is closed` : undefined;
+	return chest.getComponent(Chest)?.open === false ? (name) => `${name(idOf(chest))} is closed` : undefined;
 }
 
-/** Why `character` cannot take `name` from `from` (the loot itself on the ground, or the chest it is in), or nothing. */
-function takeRefusal(character:GameObject, name:string, from:GameObject):string | undefined {
+/** Why `character` cannot take `thing` from `from` (the loot itself on the ground, or the chest it is in), or nothing. */
+function takeRefusal(character:GameObject, thing:string, from:GameObject):NamingText | undefined {
+	const fromID = idOf(from);
 	if (from.getComponent(Chest)) {
-		const held = chestHolding(from, name);
+		const held = chestHolding(from, thing);
 		if (!held) {
-			return `${idOf(from)} holds no ${name}`;
+			return (name) => `${name(fromID)} holds no ${name(thing)}`;
 		}
 		// Shut is no bar: the lid is lifted to take it. Locked is.
 		if (from.getComponent(Lock)?.locked) {
-			return `${idOf(from)} is locked — unlock it first`;
+			return chestRefusal(from);
 		}
 		return hasRoom(character, held.item, held.item.count) ? undefined : 'no room';
 	}
 	if (from.getComponent(Pickupable)) {
 		const inst = captureItem(from);
-		if (idOf(from) !== name && !itemMatchesName(inst, name)) {
-			return `${idOf(from)} is not ${name}`;
+		if (fromID !== thing && !itemMatchesName(inst, thing)) {
+			return (name) => `${name(fromID)} is not ${name(thing)}`;
 		}
 		const crop = from.getComponent(Harvest);
 		if (crop && !characterIs(character, crop.harvester)) {
@@ -199,17 +202,18 @@ function takeRefusal(character:GameObject, name:string, from:GameObject):string 
 		return hasRoom(character, inst, inst.count) ? undefined : 'no room';
 	}
 	if (from.getComponent(BridgeLever)) {
-		return `${name} is a sluice, not loot. Only BridgeKeeper uses BridgeCrank on BridgeLever`;
+		return (name) => `${name(thing)} is a sluice, not loot. Only ${name('BridgeKeeper')} uses ${name('BridgeCrank')} on ${name('BridgeLever')}`;
 	}
 	if (from === character) {
-		return `you already carry ${name}`;
+		return (name) => `you already carry ${name(thing)}`;
 	}
 	if (from.getComponent(HumanBody) || from.getComponent(MarketNPC)) {
 		// Someone has it: it is theirs to hand over, and saying where it is beats "no such item".
-		const who = idOf(from);
-		return findCarried(from, (it) => itemMatchesName(it, name)) ? `${who} carries ${name}. You cannot take it; ${who} must give it to you` : `cannot pick up ${who}`;
+		return findCarried(from, (it) => itemMatchesName(it, thing))
+			? (name) => `${name(fromID)} carries ${name(thing)}. You cannot take it; ${name(fromID)} must give it to you`
+			: (name) => `cannot pick up ${name(fromID)}`;
 	}
-	return `${idOf(from)} is ${from.getComponent(Door) ? 'a door' : from.getComponent(Bridge) ? 'a bridge' : 'not loot'}`;
+	return (name) => `${name(fromID)} is ${from.getComponent(Door) ? 'a door' : from.getComponent(Bridge) ? 'a bridge' : 'not loot'}`;
 }
 
 /**
@@ -261,12 +265,12 @@ export function doTransfer(host:GameHost, move:Transfer<GameObject>):()=>void {
  */
 function takeLoot(host:GameHost, character:GameObject, name:string, from:GameObject):void {
 	const held = chestHolding(from, name);
-	const reason = held ? takeFromChest(character, held) : pickup(character, from);
+	const reason = held ? showNamingText(takeFromChest(character, held)) : pickup(character, from);
 	if (!/^(picked up|equipped|took) /.test(reason)) {
 		throw new Error(`taking ${name} failed after its rules allowed it: ${reason}`);
 	}
 	character.getComponent(Appearance)?.playClip('take', Time.time, from);
-	host.arc?.pushEvent({ kind: 'PickedUp', text: `{0} picked up ${name}`, who: [idOf(character)], tags: ['item', name], major: false });
+	host.arc?.pushEvent({ kind: 'PickedUp', text: (who) => `${who(idOf(character))} picked up ${name}`, tags: ['item', name], major: false });
 	host.hooks.afterPickUp?.(host, character, name);
 }
 

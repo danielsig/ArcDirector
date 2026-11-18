@@ -44,7 +44,7 @@ export class Raven extends Component {
 		const world = this.gameObject.world;
 		const p = this.gameObject.transform.position;
 		let near = false;
-		world?.forEachComponent(HumanBody, (_body, go) => {
+		world?.forEachComponent(HumanBody, (body, go) => {
 			const q = go.transform.position;
 			near ||= distanceXZ(q, p) < SPOOK;
 		});

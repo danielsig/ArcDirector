@@ -1,5 +1,6 @@
 import type { JsonSchema } from '../json.js';
 import type { ModelSettings } from './http.js';
+import type { SystemOne } from './system-one.js';
 
 export type ChatRole = 'system' | 'user' | 'assistant' | 'tool';
 
@@ -78,6 +79,11 @@ export function samplingOf(model:Sampling | undefined, req:Sampling | undefined)
 	return { ...DEFAULT_SAMPLING, ...model, ...req };
 }
 
+/** A thought's length in tokens, roughly: 1.3 a word. */
+export function thoughtTokens(thought:string | undefined):number {
+	return Math.ceil((thought?.match(/\S+/g)?.length ?? 0) * 1.3);
+}
+
 export type ChatRequest = {
 	model:string;
 	messages:ChatMessage[];
@@ -94,10 +100,13 @@ export type ChatRequest = {
 	 */
 	enableThinking?:boolean;
 	/**
-	 * Prefill a finished thought so this turn does not generate new CoT.
-	 * Thinking stays on; only the canned thought is injected.
+	 * Tokens of thought the earlier requests of this one's think spent: they share one thinking budget, so this one gets
+	 * what is left, or half of {@link lastThinkingAllowance} when that is more, and never under the model's `thinkingFloor`. A
+	 * think's lease on its model (`ModelRun`) counts it.
 	 */
-	fakeThought?:boolean;
+	thinkingSpent?:number;
+	/** What the last request of this think that thought was allowed to think ({@link ChatResponse.thinkingAllowance}). */
+	lastThinkingAllowance?:number;
 	/** Ask for the first answer token's top `topLogprobs` candidates: {@link ChatResponse.logprobs}. */
 	topLogprobs?:number;
 	/** Mind id (or similar) so the HTTP layer can pick a cached response thread. */
@@ -128,21 +137,20 @@ export type ChatResponse = {
 	reasoning?:string;
 	/** The reply stopped at the output-token cap, so `content` is cut off. */
 	truncated?:boolean;
+	/** Most tokens this reply was allowed to think, when it thought on a budget. */
+	thinkingAllowance?:number;
 	/** With `topLogprobs`: the first answer token's candidates, each token (trimmed) to its log probability. */
 	logprobs?:Record<string, number>;
 };
-
-/** Where a decision model answers as a System One (`POST …/systemone`), and the `fetch` that reaches it. */
-export type SystemOneEndpoint = { url:string; fetch?:typeof fetch };
 
 export type InferenceProvider = {
 	chat(req:ChatRequest):Promise<ChatResponse>;
 	embed?(texts:string[], model?:string):Promise<number[][]>;
 	/**
-	 * Where `model` answers as a System One, when this provider serves it as a decision model (a GGUF with a decision
-	 * head, such as Laya, in the page); undefined for a chat model, which is scored instead.
+	 * `model` as a System One, when this provider serves it as a decision model (a GGUF with a decision head, such as
+	 * Laya, in the page); undefined for a chat model, which is scored instead.
 	 */
-	systemOneEndpoint?(model:string):Promise<SystemOneEndpoint | undefined>;
+	systemOne?(model:string):Promise<SystemOne | undefined>;
 	/** Run `model` with `settings` from now on. A director calls it for each chat model it resolves on this server. */
 	configureModel?(model:string, settings:ModelSettings):void;
 	/** `model` is no longer configured: no model the director holds uses it. */

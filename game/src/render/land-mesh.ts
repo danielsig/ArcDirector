@@ -133,14 +133,14 @@ type Bank = { breaks:number[]; fall:(s:number)=>number; wet:(s:number)=>number }
 
 /** The breaks of a slope from `a` to `b` meters into the river. */
 function slope(a:number, b:number):number[] {
-	return Array.from({ length: BANK_STEPS + 1 }, (_, k) => a + (k / BANK_STEPS) * (b - a));
+	return Array.from({ length: BANK_STEPS + 1 }, (element, k) => a + (k / BANK_STEPS) * (b - a));
 }
 
 /**
  * Down in the glen, as the map's lawn draws it beside a long straight river (water where z > 0): half a cell of sand,
  * level, then sloping down to the bed at the river's cells.
  */
-const straightSand = (s:number):number => sandField((_x, z) => (z > 0 ? 'water' : undefined), 0, s);
+const straightSand = (s:number):number => sandField((x, z) => (z > 0 ? 'water' : undefined), 0, s);
 const GLEN_BANK:Bank = {
 	breaks: [-0.5, ...slope(-0.3, 0)],
 	fall: (s) => bankFall(straightSand(s)),

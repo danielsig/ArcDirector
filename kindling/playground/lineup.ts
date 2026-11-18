@@ -50,9 +50,7 @@ const clip = params.get('clip') ?? 'idle';
 const spin = params.get('spin') === '1';
 const yaw = Number(params.get('yaw') ?? 0);
 const waitFrames = Number(params.get('frames') ?? 10);
-// eslint-disable-next-line @typescript-eslint/naming-convention
-declare const __GAME_MODELS__:string;
-const base = params.get('base') ?? __GAME_MODELS__;
+const base = params.get('base') ?? import.meta.env.GAME_MODELS;
 
 const game = new Game();
 game.mount(document.body);
@@ -75,9 +73,9 @@ const held = (['left', 'right'] as const).flatMap((hand) => {
 	return prop ? [{ hand, prop }] : [];
 });
 await Promise.all([
-	registerToonClips(`${__GAME_MODELS__}clips.glb`),
+	registerToonClips(`${import.meta.env.GAME_MODELS}clips.glb`),
 	...names.map((n) => registerToonModel(n, `${base}${n}.glb`, { height: 1.7 })),
-	...held.map(({ prop }) => registerToonModel(prop, `${__GAME_MODELS__}${prop}.glb`, { height: PROPS[prop]?.height ?? 1 })),
+	...held.map(({ prop }) => registerToonModel(prop, `${import.meta.env.GAME_MODELS}${prop}.glb`, { height: PROPS[prop]?.height ?? 1 })),
 ]);
 
 /** Props, head turn, reach and bow draw from the query, every frame after the clip. */
@@ -99,7 +97,7 @@ class Pose extends Component {
 			return obj && holdInHand(root, hand, obj, g) ? [{ hand, prop: obj }] : [];
 		});
 		if (params.get('look') === '1') {
-			lookAt(root, cam.transform.position.clone(), 1);
+			lookAt(root, cam.transform.worldPositionVec(new THREE.Vector3()), 1);
 		}
 		const side = params.get('reach') as Hand | null;
 		if (side) {

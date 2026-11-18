@@ -1,4 +1,5 @@
 import type { SpeechVoice } from '@arc-director/kindling';
+import type { ServingSpot } from 'arc-director';
 
 /** One thing a seller sells, and the gold price a standing offer posts. */
 export type Ware = {
@@ -27,6 +28,11 @@ export type Seller = {
 	postMesh:string;
 	/** The house the counter stands in: a shop, not a stall. */
 	shop?:string;
+	/**
+	 * Where a buyer stands to be served, in front of the seller ({@link ServingSpot}). Left out, just before the counter's
+	 * front, which the seller's pose measures; a seller beside their counter adds an `aside`.
+	 */
+	servingSpot?:ServingSpot;
 	square:'north' | 'south';
 	cell:[number, number];
 	yaw:number;
@@ -176,6 +182,9 @@ export const SELLERS:Seller[] = [
 		model: 'Robe',
 		voice: { pitch: 230, rate: 5.6, range: 2.2 },
 		post: 'ToyCounter',
+		// The shop is a pace deep before its counter, so its buyer stands a pace to Toymaker's right, inside ToyShopDoor,
+		// and the line runs out through the door.
+		servingSpot: { aside: 1 },
 		postMesh: 'counter_toys',
 		shop: 'ToyShop',
 		square: 'south',

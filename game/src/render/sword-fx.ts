@@ -36,7 +36,7 @@ export function thrustLance(scene:THREE.Object3D, hilt:THREE.Vector3, tip:THREE.
 	const line = impact.clone().sub(hilt).normalize();
 	const across = new THREE.Vector3().crossVectors(line, Math.abs(line.y) < 0.9 ? new THREE.Vector3(0, 1, 0) : new THREE.Vector3(1, 0, 0)).normalize();
 	const across2 = new THREE.Vector3().crossVectors(line, across);
-	const lance = Array.from({ length: LANCE_STREAKS }, (_, i):Streak => {
+	const lance = Array.from({ length: LANCE_STREAKS }, (element, i):Streak => {
 		const core = i === 0;
 		// Roots spread a little round the blade, tighter toward the tip; heads gather at the impact.
 		const along = core ? 0.1 : Math.random();

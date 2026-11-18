@@ -1,11 +1,13 @@
 import { distanceXZ, type GameObject, type XZ } from '@arc-director/kindling';
+import { showNamingText, type NamingText } from 'arc-director';
 import { Chest, Door, Lock, Named, TAKE_REACHED } from '../engine/components';
 import type { DemoWorld } from '../engine/demo-world';
+import { idOf } from '../director/names';
 import { Container, Harvest, Item, Pickupable } from './item-components';
 import { getDef } from './defs';
 import { equipItem } from './equip';
 import { characterIs, findCarried, findReady, itemMatchesName, tryInsert } from './inventory';
-import { instantiateDef, isBackpack, type ItemInstance } from './instance';
+import { instantiateDef, isBackpack, itemID, type ItemInstance } from './instance';
 import { nearestDoorway } from '../world/interior';
 import { captureItem, spawnWorldItem } from '../world/spawn-item';
 import { cueAt } from '../audio/cue';
@@ -15,25 +17,33 @@ export const USE_RANGE = 2.2;
 /** How near a walker comes to a shut door before it reaches out and opens it. */
 const DOOR_REACH = 1.2;
 
-/** The name of the key that opens `lock`, wherever it lies, so a locked thing says `BrassKey` and not just "a brass key". */
-export function keyNameFor(world:DemoWorld | null, lock:Lock):string {
-	const fits = (it:ItemInstance) => it.Key?.keyID === lock.keyID;
-	for (const go of world?.objects ?? []) {
-		const item = go.getComponent(Item);
-		if (item && getDef(item.defID).components.Key?.keyID === lock.keyID) {
-			return go.getComponent(Named)?.id ?? go.name;
+/**
+ * The key that opens `lock`, wherever it lies, so a locked thing says `BrassKey` and not just "a brass key"; with who
+ * carries it or what holds it, where `viewer` knows (`BrassKey, carried by William`, `BrassKey; it's in CellarChest`).
+ * Each mind reads it in its own names, and the key is looked for only then: a route search past locked doors only
+ * holds it.
+ */
+export function keyNameFor(world:DemoWorld | null, lock:Lock, viewer?:GameObject):NamingText {
+	return (name) => {
+		const fits = (it:ItemInstance) => it.Key?.keyID === lock.keyID;
+		for (const go of world?.objects ?? []) {
+			const item = go.getComponent(Item);
+			if (item && getDef(item.defID).components.Key?.keyID === lock.keyID) {
+				return name(idOf(go));
+			}
+			const held = findCarried(go, fits);
+			if (held) {
+				const known = viewer && go !== viewer && world!.canSeeInventoryOf(viewer, go);
+				return !known ? name(itemID(held)) : `${name(itemID(held))}${go.getComponent(Chest) ? "; it's in" : ', carried by'} ${name(idOf(go))}`;
+			}
 		}
-		const held = findCarried(go, fits);
-		if (held) {
-			return held.name;
-		}
-	}
-	return `a ${lock.keyID} key`;
+		return `a ${lock.keyID} key`;
+	};
 }
 
-/** `locked — needs BrassKey`, the one failure every locked door and chest gives. */
-export function lockedReason(world:DemoWorld | null, lock:Lock):string {
-	return lock.keyID ? `locked — needs ${keyNameFor(world, lock)}` : 'locked';
+/** `locked — needs BrassKey`, the one failure every locked door and chest gives, worded for `viewer` ({@link keyNameFor}). */
+export function lockedReason(world:DemoWorld | null, lock:Lock, viewer?:GameObject):NamingText {
+	return lock.keyID ? (name) => `locked — needs ${showNamingText(keyNameFor(world, lock, viewer), name)}` : 'locked';
 }
 
 export function nearestPickup(character:GameObject):GameObject | null {
@@ -81,13 +91,13 @@ export function pickup(character:GameObject, loot:GameObject):string {
 			return err;
 		}
 		takeAway(world, character, loot);
-		return `equipped ${inst.name}`;
+		return `equipped ${itemID(inst)}`;
 	}
 	if (!tryInsert(character, inst)) {
 		return 'no room';
 	}
 	takeAway(world, character, loot);
-	return `picked up ${inst.name}`;
+	return `picked up ${itemID(inst)}`;
 }
 
 /** The taken `loot` cannot be picked up again; it leaves the ground, with its sound, when the hand reaches it. */
@@ -168,7 +178,7 @@ export function interactDoor(character:GameObject, doorGo:GameObject):string {
 			if (findCarried(character, (it) => it.Key?.keyID === lock.keyID)) {
 				return 'the key is in your pack';
 			}
-			return lockedReason(character.world, lock);
+			return showNamingText(lockedReason(character.world, lock, character));
 		}
 		lock.locked &&= lock.lockedFrom === 'outside';
 		door.open = true;
@@ -228,12 +238,13 @@ export function resolveNamedTarget(world:DemoWorld, name:string):GameObject | un
 	return held.chest;
 }
 
-export function takeFromChest(character:GameObject, held:ChestHold):string {
+/** `character` takes `held` out of its chest: `took Almanac from CottageBookshelf`, or why not, naming by id. */
+export function takeFromChest(character:GameObject, held:ChestHold):NamingText {
 	const lock = held.chest.getComponent(Lock);
 	const chest = held.chest.getComponent(Chest);
-	const chestName = held.chest.getComponent(Named)?.id ?? held.chest.id;
+	const chestID = idOf(held.chest);
 	if (lock?.locked) {
-		return `${chestName} is locked`;
+		return (name) => `${name(chestID)} is locked`;
 	}
 	if (!tryInsert(character, held.item)) {
 		return 'no room';
@@ -248,7 +259,7 @@ export function takeFromChest(character:GameObject, held:ChestHold):string {
 		held.bag.contents.splice(i, 1);
 	}
 	character.world?.after(TAKE_REACHED, () => cueAt(character.world, 'take', character));
-	return `took ${held.item.name} from ${chestName}`;
+	return (name) => `took ${name(itemID(held.item))} from ${name(chestID)}`;
 }
 
 export function interactChest(character:GameObject, chestGo:GameObject):string {
@@ -264,7 +275,7 @@ export function interactChest(character:GameObject, chestGo:GameObject):string {
 			if (findCarried(character, (it) => it.Key?.keyID === lock.keyID)) {
 				return 'the key is in your pack';
 			}
-			return lockedReason(character.world, lock);
+			return showNamingText(lockedReason(character.world, lock, character));
 		}
 		lock.locked = false;
 		chest.open = true;
@@ -281,5 +292,5 @@ export function interactChest(character:GameObject, chestGo:GameObject):string {
 	if (!first) {
 		return `${name} is empty`;
 	}
-	return takeFromChest(character, { chest: chestGo, item: first, bag });
+	return showNamingText(takeFromChest(character, { chest: chestGo, item: first, bag }));
 }

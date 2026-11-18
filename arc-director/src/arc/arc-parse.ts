@@ -1,6 +1,6 @@
 import { validateArc } from './validate.js';
-import { ArcError, isCountMap, type Arc, type CountMap, type Join, type Step, type StepArg } from './arc-types.js';
-import { argBase, argKinds, CHOOSE_VERB, GROUP_VERB, IF_VERB, TEST_VERB, type VerbRegistry } from './stock-verbs.js';
+import { ArcError, isCountMap, verbsInside, type Arc, type CountMap, type Join, type Step, type StepArg } from './arc-types.js';
+import { argBase, argKinds, CHOOSE_VERB, GROUP_VERB, IF_VERB, TEST_VERB, WHILE_ARG, type VerbRegistry } from './stock-verbs.js';
 import { deriveChoiceName, freeChoiceName } from './choose.js';
 import { argKeys, hasVerbCall, parseProgram, type Arg, type Syntax, type VerbHooks } from '../expr/expr-parse.js';
 import { ExprError, RESERVED } from '../expr/expr-types.js';
@@ -8,7 +8,8 @@ import { ExprError, RESERVED } from '../expr/expr-types.js';
 /**
  * Arc text: the one grammar (`expr/expr-parse.ts`) read into steps (`arc-format.ts` writes them back). `&&`, `||` and
  * `;` (or a new line) between statements are the steps' joins; a group `( … )` or `{ … }` is one step; a verb's body is
- * its arc arg; a statement that is a query, not a verb, is a {@link TEST_VERB} step.
+ * its arc arg; `A while B` is A with B as its {@link WHILE_ARG} arc; a statement that is a query, not a verb, is a
+ * {@link TEST_VERB} step.
  */
 
 /** Joins by operator, and how tightly each binds. */
@@ -23,17 +24,16 @@ function isQueryName(name:string):boolean {
 
 /** What the parser needs to know of `registry`'s verbs, nested arcs' included. */
 function hooksOf(registry:VerbRegistry):VerbHooks {
-	const specOf = (name:string) => registry.get(name) ?? registry.nested().get(name);
 	return {
 		argsOf: (name) => {
-			const spec = specOf(name);
+			const spec = registry.find(name);
 			return spec && argKinds(spec);
 		},
 		takesBody: (name, args) => {
 			if (name === CHOOSE_VERB) {
 				return args.every((arg) => arg.name === 'goal' || (arg.name === undefined && (arg.value.type === 'lit' || arg.value.type === 'text')));
 			}
-			const spec = specOf(name);
+			const spec = registry.find(name);
 			const kinds = spec ? argKinds(spec) : {};
 			const given = new Set(argKeys(kinds, args));
 			return Object.entries(kinds).some(([key, kind]) => kind === 'arc' && !given.has(key));
@@ -89,6 +89,8 @@ class Reader {
 
 	private step(node:Syntax, verbs:VerbRegistry, cond:boolean):Step {
 		switch (node.type) {
+			case 'binary':
+				return node.op === 'while' ? this.whileStep(node.left, node.right, verbs, cond) : this.test(node, verbs);
 			case 'paren':
 				return { verb: GROUP_VERB, args: { arc: this.chain(node.expr, verbs, cond) } };
 			case 'block':
@@ -102,11 +104,11 @@ class Reader {
 				throw new ArcError(`${node.name}: names a choice, inside choose("goal") { … } only`);
 			case 'call': {
 				const name = node.callee.type === 'ident' || node.callee.type === 'member' ? node.callee.name : '';
-				if (verbs.get(name) || verbs.nested().get(name)) {
+				if (verbs.find(name)) {
 					return this.verb(node, name, verbs);
 				}
 				if (!cond && !isQueryName(name)) {
-					throw new ArcError(`unknown verb '${name}'`);
+					throw new ArcError(`unknown verb '${name}'`, name);
 				}
 				return this.test(node, verbs);
 			}
@@ -129,6 +131,15 @@ class Reader {
 		}
 	}
 
+	/** `A while B`: step A with B's steps as its {@link WHILE_ARG} arc. */
+	private whileStep(a:Syntax, b:Syntax, verbs:VerbRegistry, cond:boolean):Step {
+		const step = this.step(a, verbs, cond);
+		if (WHILE_ARG in step.args) {
+			throw new ArcError('a step takes one `while`: join more with `A while B while C`');
+		}
+		return { ...step, args: { ...step.args, [WHILE_ARG]: this.chain(b.type === 'block' ? b.body ?? b : b, verbs, cond) } };
+	}
+
 	/** A statement that asks rather than acts: it succeeds while it holds. */
 	private test(node:Syntax, verbs:VerbRegistry):Step {
 		if (hasVerbCall(node, hooksOf(verbs))) {
@@ -145,12 +156,11 @@ class Reader {
 	}
 
 	private verb(node:Syntax & { type:'call' }, name:string, verbs:VerbRegistry):Step {
-		const spec = verbs.get(name) ?? verbs.nested().get(name)!;
-		const inside = name === IF_VERB ? verbs : verbs.nested();
+		const spec = verbs.find(name)!;
 		// Method syntax is call syntax: `Wolf.attack()` is `attack(Wolf)`.
 		const written:Arg[] = node.callee.type === 'member' ? [{ value: node.callee.recv }, ...node.args] : node.args;
 		if (name === CHOOSE_VERB) {
-			return this.choose(written, node.body, inside);
+			return this.choose(written, node.body, verbs.nested());
 		}
 		const kinds = argKinds(spec);
 		const keys = argKeys(kinds, written);
@@ -162,9 +172,10 @@ class Reader {
 			if (key in args) {
 				throw new ArcError(`${name}(...) got ${key}= twice; give it once`);
 			}
-			args[key] = this.value(value, kinds[key], key, inside, cond || (name === IF_VERB && key === 'cond'));
+			args[key] = this.value(value, kinds[key], key, verbsInside({ verb: name, args }, verbs, key), cond || (name === IF_VERB && key === 'cond'));
 		};
 		written.forEach((arg, n) => put(keys[n], arg.value));
+		// The body fills its first arc not given.
 		if (node.body) {
 			const key = Object.keys(kinds).find((k) => argBase(kinds[k]) === 'arc' && !(k in args));
 			if (!key) {
@@ -241,7 +252,7 @@ class Reader {
 			const raw = this.text(node);
 			return /\d$/.test(raw) ? number : raw;
 		}
-		if (base === 'hold' && literal?.kind === 'bool') {
+		if ((base === 'hold' || base === 'bool') && literal?.kind === 'bool') {
 			return literal.value;
 		}
 		if (base === 'string[]') {

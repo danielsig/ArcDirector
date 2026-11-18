@@ -359,7 +359,6 @@ function boo(ctx:AudioContext, dest:AudioNode, noise:AudioBuffer, t:number, freq
 	disconnectSoon([buzz, ...mouth, out, ...air.nodes, airLevel], t, ctx, dur + 0.12);
 }
 
-/** How long a patch sounds: until its last layer ends, every layer lasting `dur` if given. */
 const crackles = new WeakMap<BaseAudioContext, Map<number, AudioBuffer>>();
 
 /**
@@ -581,6 +580,7 @@ export function varied(patch:SfxPatch):SfxPatch {
 	};
 }
 
+/** How long a patch sounds: until its last layer ends, every layer lasting `dur` if given. */
 export function patchSeconds(patch:SfxPatch, dur?:number):number {
 	return patch.layers.reduce((end, layer) => Math.max(end, (layer.when ?? 0) + (dur ?? layer.dur)), 0);
 }

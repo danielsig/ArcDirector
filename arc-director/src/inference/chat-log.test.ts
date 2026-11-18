@@ -22,18 +22,19 @@ describe('chatLog', () => {
 		assert.equal(image, 'data:image/png;base64,aaaa');
 	});
 
-	it('shows a response-format schema by name only', () => {
-		const wire = formatChatLog({
-			model: 'muse',
-			response_format: { type: 'json_schema', json_schema: { name: 'reply', schema: { type: 'object', properties: { zzz: {} } }, strict: true } },
-		}).message;
-		assert.match(wire, /"response_format":"reply"/);
-		assert.equal(wire.includes('zzz'), false);
+	it('shows a response-format schema by name only, and returns it whole apart', () => {
+		const jsonSchema = { name: 'reply', schema: { type: 'object', properties: { zzz: {} } }, strict: true };
+		const wire = formatChatLog({ model: 'muse', response_format: { type: 'json_schema', json_schema: jsonSchema } });
+		assert.match(wire.message, /"response_format":"reply"/);
+		assert.equal(wire.message.includes('zzz'), false);
+		assert.deepEqual(wire.schema, jsonSchema);
 		const raw = formatChatLog({
 			model: 'muse',
 			responseFormat: { name: 'reply', schema: { type: 'object', properties: { zzz: {} } } },
-		}).message;
-		assert.match(raw, /"responseFormat":"reply"/);
-		assert.equal(raw.includes('zzz'), false);
+		});
+		assert.match(raw.message, /"responseFormat":"reply"/);
+		assert.equal(raw.message.includes('zzz'), false);
+		assert.equal(raw.schema?.name, 'reply');
+		assert.equal(formatChatLog({ model: 'muse' }).schema, undefined);
 	});
 });

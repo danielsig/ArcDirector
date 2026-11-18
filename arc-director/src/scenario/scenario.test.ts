@@ -6,8 +6,12 @@ import { FakeProvider } from '../inference/fake.js';
 import type { ChatRequest } from '../inference/provider.js';
 import { ABILITIES, abilityHelp } from './combat.js';
 import { loudnessFor } from '../perception/hearing.js';
+import { SAY_TONES } from '../mind/talk.js';
+import { parseArcText } from '../arc/arc-parse.js';
+import { replySchema } from '../arc/schema.js';
+import { validateArc } from '../arc/validate.js';
 import { idleScenario, playScenario, type Scenario, type SceneCtx } from './play.js';
-import { SceneWorld, type SceneSpot } from './scene-world.js';
+import type { SceneSpot } from './scene-world.js';
 
 /** A model on its own server, writing Arc text; it can see, so `see_map` is offered. `chat` answers each request. */
 function model(chat:(req:ChatRequest)=>string):(director:ArcDirector<SceneCtx>)=>unknown {
@@ -113,7 +117,7 @@ describe('scene play', () => {
 		assert.match(abilityHelp(ABILITIES.impale), /14 more on a rooted foe/);
 	});
 
-	it('wastes an aimed shot whose target is down before it lands', async () => {
+	it('wastes an aimed shot whose target has fallen before it lands', async () => {
 		const s:Scenario = {
 			me: { id: 'Cap', as: 'Knight' }, goal: 'g', thinks: 1, seconds: 6,
 			squad: Object.fromEntries(['A', 'B'].map((id, i) => [id, { away: 1, side: i ? 'left' : 'right', as: 'Marksman' }])),
@@ -121,7 +125,7 @@ describe('scene play', () => {
 			others: Object.fromEntries(['X', 'Y'].map((id, i) => [id, { away: 16, side: 'ahead', offset: [i * 2, 0], hp: [10, 10] }])),
 			done: () => false,
 		};
-		const fallen = async (arc:string):Promise<string[]> => (await playScenario(s, scripted(arc), { judge: (w) => [...w.downed] })).judged;
+		const fallen = async (arc:string):Promise<string[]> => (await playScenario(s, scripted(arc), { judge: (w) => [...w.fallen] })).judged;
 		assert.deepEqual(await fallen('command(who=units, arc=snipe(target=X))'), ['X'], 'both shots on X: one wasted');
 		assert.deepEqual((await fallen('command(who=A, arc=snipe(target=X)) ; command(who=B, arc=snipe(target=Y))')).sort(), ['X', 'Y']);
 	});
@@ -141,7 +145,7 @@ describe('scene play', () => {
 		const s:Scenario = {
 			me: { id: 'Cap', as: 'Knight' }, goal: 'g', thinks: 1, seconds: 4,
 			squad: { A: { away: 2, side: 'left', as: 'Blade', tags: ['Sword'] } },
-			verbs: { mark: { units: true, help: 'marks where you stand', run: (_w, { who }) => (marked.push(who), 'marked') } },
+			verbs: { mark: { units: true, help: 'marks where you stand', run: (w, { who }) => (marked.push(who), 'marked') } },
 			done: () => false,
 		};
 		await playScenario(s, scripted('command(who=units.filter("Sword"), arc=mark())'));
@@ -154,7 +158,7 @@ describe('scene play', () => {
 		assert.equal(await reached({ ...quick, thinkEvery: 10 }, 'wait(seconds=1)'), true, 'paced, the scene is still going at 15 s');
 	});
 
-	it('lets the verbs a scenario adds wait to end, and hurt and bind by their own rules', async () => {
+	it('lets the verbs a scenario adds wait to end, and hurt by their own rules', async () => {
 		let release:((text:string)=>void) | undefined;
 		const s:Scenario = {
 			me: { id: 'Ash' }, goal: 'g', thinks: 1, seconds: 6,
@@ -175,9 +179,8 @@ describe('scene play', () => {
 			act: (w) => (w.time >= 2 ? release?.('the hex lands') : undefined),
 			done: () => false,
 		};
-		const end = await playScenario(s, scripted('hex(target=Dummy) && say(text=Done.)'), { judge: (w) => ({ hp: w.hp('Dummy'), statuses: w.statusesOf('Dummy'), said: w.said.map((l) => l.text), time: w.time }) });
+		const end = await playScenario(s, scripted('hex(target=Dummy) && say(text=Done.)'), { judge: (w) => ({ hp: w.hp('Dummy'), said: w.said.map((l) => l.text), time: w.time }) });
 		assert.equal(end.judged.hp, 5, 'hurt by its own rules');
-		assert.deepEqual(end.judged.statuses, ['root']);
 		assert.deepEqual(end.judged.said, ['Done.'], 'the next step ran once the verb ended');
 	});
 
@@ -229,6 +232,123 @@ describe('scene play', () => {
 		const heard = prompts[1].match(/You hear crackling[^.!]*[.!]/g) ?? [];
 		assert.deepEqual(heard.length, 1, `one line for it: ${heard.join(' | ')}`);
 		assert.match(heard[0], /LOUDLY/, 'the latest, loudest');
+	});
+
+	it('tells a quiet sound going on as the mind starts thinking within earshot, though it was out of earshot when made', async () => {
+		const prompts:string[] = [];
+		const s:Scenario = {
+			me: { id: 'Ash' }, goal: 'g', thinks: 2, seconds: 30,
+			things: { Rock: { away: 20, side: 'ahead' } },
+			noise: {},
+			act: (w, director) => {
+				if (w.time >= 0.5 && w.time < 0.6) {
+					director.getHearing()!.emit(w.getPose('Rock')!.point, { name: 'humming', loudness: 0.002, seconds: 60 });
+				}
+			},
+			done: () => false,
+		};
+		let thinks = 0;
+		await playScenario(s, model((req) => {
+			if (!req.thread) {
+				return 'OK';
+			}
+			prompts.push(req.messages.map((m) => (typeof m.content === 'string' ? m.content : '')).join(' '));
+			return thinks++ === 0 ? 'go_to(Rock)' : 'wait(seconds=1)';
+		}));
+		assert.doesNotMatch(prompts[0], /humming/);
+		assert.match(prompts[1], /You hear humming [^!]*\./, 'heard, and not loud');
+	});
+
+	it('drowns a quiet sound under a loud one going on, and tells it in silence', async () => {
+		const heardTwig = async (forge:boolean):Promise<boolean> => {
+			const prompts:string[] = [];
+			let lit = false;
+			let snapped = false;
+			const s:Scenario = {
+				me: { id: 'Ash' }, goal: 'g', thinks: 2, thinkEvery: 3, seconds: 6,
+				noise: {},
+				act: (w, director) => {
+					const at = w.getPose('Ash')!.point;
+					if (forge && !lit) {
+						lit = true;
+						director.getHearing()!.emit([at[0] + 2, at[1]], { name: 'hammering', loudness: 1, seconds: 30 });
+					}
+					if (w.time >= 1 && !snapped) {
+						snapped = true;
+						director.getHearing()!.emit([at[0], at[1] + 6], { name: 'a twig snapping', loudness: 0.05 });
+					}
+				},
+				done: () => false,
+			};
+			await playScenario(s, model((req) => {
+				if (req.thread) {
+					prompts.push(req.messages.map((m) => (typeof m.content === 'string' ? m.content : '')).join(' '));
+				}
+				return req.thread ? 'wait(seconds=1)' : 'OK';
+			}));
+			return /a twig snapping/.test(prompts[1]);
+		};
+		assert.equal(await heardTwig(false), true, 'heard in silence');
+		assert.equal(await heardTwig(true), false, 'drowned by the hammering');
+	});
+
+	it('measures a line by its voice: words near, muffled farther, a whisper short, a shout far', async () => {
+		const heard:Record<string, string | undefined> = {};
+		const s:Scenario = {
+			me: { id: 'Ash' }, goal: 'g', thinks: 1, seconds: 1,
+			others: { Near: { away: 3, side: 'ahead' }, Mid: { away: 12, side: 'left' }, Far: { away: 24, side: 'behind' } },
+			noise: {},
+			act: (w, director) => {
+				const hearing = director.getHearing()!;
+				for (const who of ['Near', 'Mid', 'Far']) {
+					heard[who] = hearing.speech(who, 'Ash');
+					heard[`${who} whispers`] = hearing.speech(who, 'Ash', SAY_TONES.whisper);
+					heard[`${who} shouts`] = hearing.speech(who, 'Ash', SAY_TONES.shout);
+				}
+			},
+			done: () => false,
+		};
+		await playScenario(s, scripted('wait(seconds=1)'));
+		assert.deepEqual(heard, {
+			'Near': 'words', 'Near whispers': 'muffled', 'Near shouts': 'words',
+			'Mid': 'muffled', 'Mid whispers': undefined, 'Mid shouts': 'words',
+			'Far': undefined, 'Far whispers': undefined, 'Far shouts': 'muffled',
+		});
+	});
+
+	it('takes a tone the game added: say(as) allows it, and hearing carries its words and its sound', async () => {
+		const prompts:string[] = [];
+		const sounds:string[] = [];
+		const seen:Record<string, unknown> = {};
+		const s:Scenario = {
+			me: { id: 'Ash' }, goal: 'g', thinks: 1, thinkEvery: 2, seconds: 3,
+			others: { Wolf: { away: 10, side: 'ahead' } },
+			noise: {},
+			onSound: (w, from, sound) => sounds.push(sound.name),
+			act: (w, director) => {
+				const talk = director.getTalk()!;
+				if (w.time >= 1 && !('growl' in seen)) {
+					seen.plain = talk.clear('Wolf', 'Ash');
+					seen.growl = talk.clear('Wolf', 'Ash', 'growl');
+					seen.valid = validateArc(parseArcText('say(text="Back off", as=growl)', director.verbs), director.verbs) === undefined;
+					seen.schema = JSON.stringify(replySchema(director.verbs)).includes('"growl"');
+					talk.say('Wolf', 'Leave my den.', 'Ash', w.time, 'growl');
+				}
+			},
+			done: () => false,
+		};
+		await playScenario(s, (director) => {
+			director.withTalk({ inRange: () => false, others: () => [], tones: { growl: { says: 'growls', words: 0.6, sound: { name: 'growling', loudness: 0.5 } } } });
+			return model((req) => {
+				if (req.thread) {
+					prompts.push(req.messages.map((m) => (typeof m.content === 'string' ? m.content : '')).join(' '));
+				}
+				return req.thread ? 'wait(seconds=1)' : 'OK';
+			})(director);
+		});
+		assert.deepEqual(seen, { plain: false, growl: true, valid: true, schema: true });
+		assert.match(prompts[0], /as one of whisper\/sing\/laugh\/sob\/sigh\/scream\/shout\/growl/);
+		assert.ok(sounds.includes('growling'));
 	});
 
 	it('shows what each one in sight is doing: a squad mate the verb it runs, a foe fighting on its own what it uses', async () => {
@@ -297,28 +417,15 @@ describe('scene play', () => {
 		assert.equal(still, false, 'no sound, no reaction');
 	});
 
-	it('places a thing that comes during play, and lets its rules change what a blow deals', async () => {
-		const w = new SceneWorld({ me: { id: 'Ash' }, goal: 'g', others: { Bo: { away: 2, side: 'left', hp: [20, 20] } } });
-		w.addThing('Box1', 'Bo', { carrying: ['Armor'], description: 'the box Bo left' });
-		assert.ok(w.sight('Ash').objects.some((o) => o.id === 'Box1'), 'seen');
-		assert.equal(w.count('Box1', 'Armor'), 1);
-		assert.equal(w.getDescription('Ash', 'Box1'), 'the box Bo left');
+	it('lets its rules change what a blow deals', async () => {
 		const s:Scenario = {
 			me: { id: 'Ash', as: 'Archer' }, goal: 'g', thinks: 1, seconds: 3,
 			others: { Dummy: { away: 5, side: 'ahead', hp: [100, 100] } },
-			damage: (_w, _by, _target, d) => d * 2,
+			damage: (w, by, target, d) => d * 2,
 			done: () => false,
 		};
 		const left = (await playScenario(s, scripted('shoot(target=Dummy)'), { judge: (w2) => w2.hp('Dummy') })).judged;
 		assert.equal(100 - left!, 20, 'two shots of 5, doubled');
-	});
-
-	it('brings a fallen fighter back, as an inn or a revive would', () => {
-		const w = new SceneWorld({ me: { id: 'Ash' }, goal: 'g', others: { Bo: { away: 2, side: 'left', hp: [20, 20] } } });
-		w.hurt('Bo', 50);
-		assert.equal(w.isDown('Bo'), true);
-		w.revive('Bo', 5);
-		assert.deepEqual([w.isDown('Bo'), w.hp('Bo')], [false, 5]);
 	});
 
 	it('lets a squad of two count four foes in a watch: its lists hold more than its own members', async () => {
@@ -372,7 +479,7 @@ describe('scene play', () => {
 		assert.ok(end.at >= 4, `the second kneel took its whole 3 s (${end.at})`);
 	});
 
-	it('tells the fallen apart from the gone: off the roster and out of units, and a walk to one ends "down"', async () => {
+	it('tells the fallen apart from the gone: off the roster and out of units, and a walk to one ends "has fallen"', async () => {
 		const prompts:string[] = [];
 		let struck = false;
 		const s:Scenario = {
@@ -395,15 +502,15 @@ describe('scene play', () => {
 			}
 			prompts.push(req.messages.map((m) => (typeof m.content === 'string' ? m.content : '')).join(' '));
 			return thinks++ === 0 ? 'go_to(Foe)' : 'command(who=units, arc=say(text=Here.))';
-		}), { judge: (w) => w.isDown('B') });
+		}), { judge: (w) => w.hasFallen('B') });
 		assert.equal(listed, true);
 		assert.match(prompts[0], /^\| B \|/m, 'standing at first');
 		assert.match(prompts[0], /^\| A \| Blade \| \d+\/\d+ \|/m, 'with its health');
-		assert.match(prompts[0], /^\| A \|[^\n]*\| Foe 20\/20 hp \d+ paces \|/m, 'and who it sees, with theirs');
+		assert.match(prompts[0], /^\| A \|[^\n]*\| Foe 20\/20 hp \d+ paces \(out of reach\) \|/m, 'and who it sees, with theirs, out of its reach');
 		assert.match(prompts[0], /a law reaches you too only with who=allUnits/, 'its commander is told how its own laws reach it');
-		assert.doesNotMatch(prompts[1], /^\| B \|/m, 'off the roster once down');
-		assert.match(prompts[1], /Down: B/);
-		assert.match(prompts[1], /Foe is down/);
+		assert.doesNotMatch(prompts[1], /^\| B \|/m, 'off the roster once fallen');
+		assert.match(prompts[1], /Fallen: B/);
+		assert.match(prompts[1], /Foe has fallen/);
 		assert.doesNotMatch(prompts[1], /is gone/);
 	});
 });

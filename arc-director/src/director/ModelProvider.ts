@@ -1,6 +1,7 @@
 import type { ReasoningEffort } from '../inference/http.js';
 import type { ArcDirector } from './ArcDirector.js';
 import { findModel, isDecisionModel, isVisionModel, recommendedSampling, trainedOnArcDirector, type ModelInfo } from '../inference/models.js';
+import { contextPerSlot } from '../inference/LMStudioLoader.js';
 import { samplingOf, type InferenceProvider, type Sampling } from '../inference/provider.js';
 import type { SystemOne } from '../inference/system-one.js';
 import type { PromptStyle } from '../mind/prompt.js';
@@ -18,6 +19,8 @@ export type ModelSpec = {
 	thinking?:boolean;
 	/** Most tokens a thought may run; the mind answers from what it thought so far. */
 	thinkingBudget?:number;
+	/** The lowest the thinking cap may go after a tool call (`ModelSettings.thinkingFloor`). Default 64. */
+	thinkingFloor?:number;
 	/** Over its makers' ({@link recommendedSampling}), setting by setting; then {@link DEFAULT_SAMPLING}'s. */
 	sampling?:Sampling;
 	reasoningEffort?:ReasoningEffort;
@@ -43,6 +46,8 @@ export type ProvidedModel = Required<Pick<ModelSpec, 'id' | 'thinking' | 'maxPar
 	name:string;
 	vision:boolean;
 	contextLength?:number;
+	/** Tokens one of its requests may fill, when its context is known: its share with every slot busy ({@link ModelProvider.slotContext}). */
+	slotContext?:number;
 	/** A decision model (Skaldic Laya, Jev): it only picks `choose` choices, so it is never the default. */
 	decision:boolean;
 	/** A decision model's System One endpoint on its server, when the server serves one. */
@@ -146,13 +151,18 @@ export class ModelProvider<TTransport extends InferenceProvider = InferenceProvi
 	}
 
 	/** The model it runs for `role` when the spec names none. */
-	protected defaultID(_catalog:ModelInfo[], role:string):string | undefined {
+	protected defaultID(catalog:ModelInfo[], role:string):string | undefined {
 		return role;
 	}
 
 	/** Whether model `id` sees images. */
 	protected sees(id:string, info:ModelInfo | undefined):boolean {
 		return isVisionModel(info ?? id);
+	}
+
+	/** Tokens each of `maxParallel` requests at once may fill of a model loaded with `contextLength`: LM Studio's rule, {@link contextPerSlot}. */
+	protected slotContext(contextLength:number, maxParallel:number):number {
+		return contextPerSlot(contextLength, maxParallel);
 	}
 
 	private async lookUp(role:string, own:ModelSpec):Promise<ProvidedModel> {
@@ -169,7 +179,7 @@ export class ModelProvider<TTransport extends InferenceProvider = InferenceProvi
 		// A decision model on its server's System One endpoint is loaded by it.
 		const systemOneURL = decision ? this.systemOneURL : undefined;
 		if (!systemOneURL && !spec.embedding) {
-			this.transport.configureModel?.(id, { contextLength: spec.contextLength, enableThinking: spec.thinking, reasoningEffort: spec.reasoningEffort, thinkingBudget: spec.thinkingBudget, sampling, maxParallel: spec.maxParallel });
+			this.transport.configureModel?.(id, { contextLength: spec.contextLength, enableThinking: spec.thinking, reasoningEffort: spec.reasoningEffort, thinkingBudget: spec.thinkingBudget, thinkingFloor: spec.thinkingFloor, sampling, maxParallel: spec.maxParallel });
 		}
 		const maxParallel = spec.maxParallel ?? DEFAULT_MAX_PARALLEL;
 		const slots = this._slots.get(id) ?? new ModelSlots(maxParallel, spec.batchWait ?? DEFAULT_BATCH_WAIT);
@@ -183,6 +193,7 @@ export class ModelProvider<TTransport extends InferenceProvider = InferenceProvi
 			prompt: trainedOnArcDirector(id) ? 'compact' : spec.prompt ?? 'full',
 			sampling: samplingOf(sampling, undefined),
 			contextLength: spec.contextLength,
+			slotContext: spec.contextLength === undefined ? undefined : this.slotContext(spec.contextLength, maxParallel),
 			decision,
 			embedding: spec.embedding === true,
 			systemOneURL,

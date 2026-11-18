@@ -1,4 +1,4 @@
-import type { ChatRequest, ChatResponse, InferenceProvider } from '../inference/provider.js';
+import { thoughtTokens, type ChatRequest, type ChatResponse, type InferenceProvider } from '../inference/provider.js';
 
 /** A chat with the model a lease holds: it names the model, and the lease's signal ends it too. */
 export type ModelChat = (req:Omit<ChatRequest, 'model'>)=>Promise<ChatResponse>;
@@ -73,11 +73,27 @@ export class ModelSlots {
 
 	/** Leases on these slots for model `id` on `provider`, and a lone request as a lease of its own. */
 	public on(provider:InferenceProvider, id:string):{ run:ModelRun; chat:ModelChat } {
-		const run:ModelRun = (priority, work, signal) => this.run(priority, () => work((req) => provider.chat({
-			model: id,
-			...req,
-			signal: req.signal && signal ? AbortSignal.any([req.signal, signal]) : req.signal ?? signal,
-		})), signal);
+		const run:ModelRun = (priority, work, signal) => this.run(priority, () => {
+			// Its requests share one thinking budget: each is told how much the ones before it thought, and what the last
+			// that thought was allowed.
+			let thinkingSpent = 0;
+			let lastThinkingAllowance:number | undefined;
+			return work(async (req) => {
+				const res = await provider.chat({
+					model: id,
+					...req,
+					thinkingSpent: thinkingSpent || undefined,
+					lastThinkingAllowance,
+					signal: req.signal && signal ? AbortSignal.any([req.signal, signal]) : req.signal ?? signal,
+				});
+				// A reply the budget cut short spent all it was allowed, whatever the count says: 1.3 a word falls short of the
+				// tokens a stream counts.
+				const cut = !!res.truncated && !res.content;
+				thinkingSpent += Math.max(thoughtTokens(res.reasoning), cut ? res.thinkingAllowance ?? 0 : 0);
+				lastThinkingAllowance = res.thinkingAllowance ?? lastThinkingAllowance;
+				return res;
+			});
+		}, signal);
 		return { run, chat: (req) => run(CHAT_PRIORITY, (chat) => chat(req)) };
 	}
 

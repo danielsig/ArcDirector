@@ -1,40 +1,18 @@
+import { FAMILY_TAGS, thinkTags, type ThoughtTags } from './models.js';
 import type { ChatMessage } from './provider.js';
 
 /**
  * Prefills for the model's reasoning channel.
- * Lifted from the LM Studio imageVision plugin: close an empty think block, or
- * use the Harmony `to=user` assistant header from the model's prompt template.
- * The same tokens wrap a canned finished thought so a follow-up turn does not
- * generate new CoT.
+ * Lifted from the LM Studio imageVision plugin: close an empty thought in the tags the model's prompt template writes,
+ * or use the Harmony `to=user` assistant header from the template.
  */
-const thinkingTag = 'redacted_thinking';
-export const EMPTY_THINK_PREFILL = `<${thinkingTag}></${thinkingTag}>`;
-/**
- * A closed, empty think block, as a template writes one when thinking is off (Qwen's `<think>\n\n</think>\n\n`): the
- * answer's first token comes next, which a one-token pick reads.
- */
-function emptyThought({ open, close }:{ open:string; close:string }):string {
-	return `${open}\n\n${close}\n\n`;
-}
-
-/** A closed, empty think block in `<think>` tags: for a template that opens one on every reply (`alwaysThinks`). */
-export const ALWAYS_THINKS_PREFILL = emptyThought({ open: '<think>', close: '</think>' });
-export const DONE_THOUGHT = 'I have to respond either with "ok" or a new Arc adapted to the circumstances but only if I must.\n\nI\'m ready to respond.';
-const THINK_TAG_RE = /<\/?(?:redacted_)?think(?:ing)?>/i;
-const THINK_OPEN_RE = /<(redacted_thinking|think(?:ing)?)>/i;
+/** `<think>`'s kin some templates write instead. */
+const THINK_KIN_RE = /<(redacted_thinking|thinking)>/i;
 export const PREFILL_MARKER = '§PREFILL§';
-const TURN_OPEN_TOKENS = ['<|start|>', '<|im_start|>', '<|start_header_id|>', '<start_of_turn>'];
+const TURN_OPEN_TOKENS = ['<|start|>', '<|im_start|>', '<|start_header_id|>', '<start_of_turn>', '<|turn>', '<｜Assistant｜>'];
 
-type ThinkTags = { open:string; close:string };
-
-export type AssistantThink = {
-	/** Skip CoT (empty think or Harmony `to=user`). */
-	skip:string | null;
-	/** Finished thought so generation starts at the answer. */
-	done:string;
-};
-
-const assistantThinkByModelKey = new Map<string, AssistantThink>();
+/** Each model's skip prefill, by modelKey. */
+const prefillByModelKey = new Map<string, string | null>();
 
 export type PromptTemplateMessage = {
 	role:'system' | 'user' | 'assistant';
@@ -59,14 +37,10 @@ function turnSuffix(s:string):string {
 	return at >= 0 ? s.slice(at) : '';
 }
 
-function thinkTagsFrom(s:string):ThinkTags {
-	const m = s.match(THINK_OPEN_RE);
-	const name = m?.[1] ?? thinkingTag;
-	return { open: `<${name}>`, close: `</${name}>` };
-}
-
-function wrapThought(tags:ThinkTags, body:string):string {
-	return `${tags.open}\n${body}\n${tags.close}`;
+/** The tags `text` (a template's) writes a thought in: a family's, or `<think>`'s kin; undefined for none. */
+function tagsIn(text:string):ThoughtTags | undefined {
+	const kin = THINK_KIN_RE.exec(text)?.[1];
+	return FAMILY_TAGS.find((tags) => text.includes(tags.open)) ?? (kin ? thinkTags(kin) : undefined);
 }
 
 function templateParts(generation:string, withAssistant:string):{ asstHeader:string; genTail:string } {
@@ -87,9 +61,9 @@ export function prefillFromTemplates(generation:string, withAssistant:string):st
 	if (/to=user/i.test(asstHeader)) {
 		return asstHeader;
 	}
-	if (THINK_TAG_RE.test(genTail)) {
-		const { open, close } = thinkTagsFrom(genTail);
-		return emptyThought({ open, close });
+	const tags = tagsIn(genTail);
+	if (tags) {
+		return tags.thought('');
 	}
 	if (asstHeader && asstHeader !== genTail) {
 		return asstHeader;
@@ -97,45 +71,18 @@ export function prefillFromTemplates(generation:string, withAssistant:string):st
 	return null;
 }
 
-/** Canned finished thought in the template's think tokens, then the answer channel if Harmony. */
-export function thoughtPrefillFromTemplates(
-	generation:string,
-	withAssistant:string,
-	body = DONE_THOUGHT,
-):string {
-	const { genTail } = templateParts(generation, withAssistant);
-	const thought = wrapThought(thinkTagsFrom(genTail), body);
-	const skip = prefillFromTemplates(generation, withAssistant);
-	if (skip && !THINK_TAG_RE.test(skip)) {
-		return `${thought}${skip}`;
-	}
-	return thought;
-}
-
-export function fallbackThoughtPrefill(body = DONE_THOUGHT):string {
-	return wrapThought(thinkTagsFrom(''), body);
-}
-
 export function clearAssistantThinkCache():void {
-	assistantThinkByModelKey.clear();
+	prefillByModelKey.clear();
 }
 
-function fromTemplates(generation:string, withAssistant:string):AssistantThink {
-	return {
-		skip: prefillFromTemplates(generation, withAssistant),
-		done: thoughtPrefillFromTemplates(generation, withAssistant),
-	};
-}
-
-/** Cached in-memory by modelKey. */
-export async function resolveAssistantThink(
+/** The skip prefill ({@link prefillFromTemplates}) from `modelKey`'s prompt template, cached by `modelKey`; null when the template cannot be read. */
+export async function resolveAssistantPrefill(
 	applyPromptTemplate:ApplyPromptTemplate,
 	modelKey?:string,
-):Promise<AssistantThink> {
-	if (modelKey !== undefined && assistantThinkByModelKey.has(modelKey)) {
-		return assistantThinkByModelKey.get(modelKey)!;
+):Promise<string | null> {
+	if (modelKey !== undefined && prefillByModelKey.has(modelKey)) {
+		return prefillByModelKey.get(modelKey)!;
 	}
-	const fallback:AssistantThink = { skip: null, done: fallbackThoughtPrefill() };
 	try {
 		const prefix:PromptTemplateMessage[] = [
 			{ role: 'system', content: 'x' },
@@ -145,31 +92,15 @@ export async function resolveAssistantThink(
 			applyPromptTemplate(prefix),
 			applyPromptTemplate([...prefix, { role: 'assistant', content: PREFILL_MARKER }]),
 		]);
-		const think = fromTemplates(generation, withAssistant);
+		const skip = prefillFromTemplates(generation, withAssistant);
 		if (modelKey !== undefined) {
-			assistantThinkByModelKey.set(modelKey, think);
+			prefillByModelKey.set(modelKey, skip);
 		}
-		return think;
+		return skip;
 	}
 	catch {
-		return fallback;
+		return null;
 	}
-}
-
-/** Cached skip prefill. */
-export async function resolveAssistantPrefill(
-	applyPromptTemplate:ApplyPromptTemplate,
-	modelKey?:string,
-):Promise<string | null> {
-	return (await resolveAssistantThink(applyPromptTemplate, modelKey)).skip;
-}
-
-/** Cached finished-thought prefill. */
-export async function resolveThoughtPrefill(
-	applyPromptTemplate:ApplyPromptTemplate,
-	modelKey?:string,
-):Promise<string> {
-	return (await resolveAssistantThink(applyPromptTemplate, modelKey)).done;
 }
 
 /** Trailing assistant message is the generation prefill (OpenAI / LM Studio). */

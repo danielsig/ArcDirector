@@ -1,5 +1,5 @@
 import { Time, distanceXZ, type GameObject } from '@arc-director/kindling';
-import type { ArcResult, SpeechUtterance, VerbCall } from 'arc-director';
+import { showNamingText, type ArcResult, type SpeechUtterance, type VerbCall } from 'arc-director';
 import { HumanBody, Named } from '../engine/components';
 import type { DemoWorld } from '../engine/demo-world';
 import { coinsOf } from '../items/wallet';
@@ -137,7 +137,7 @@ export function playerSay(host:GameHost, text:string):void {
 	const to = directed?.to ?? (peers.length <= 1 ? peers[0] : peers);
 	const result = host.arc?.getTalk()?.say('Player', line, to, host.arc.time);
 	if (result?.status !== 'ok') {
-		host.world.setMessage(result?.reason ?? 'no one heard');
+		host.world.setMessage(showNamingText(result?.reason ?? 'no one heard'));
 	}
 }
 
@@ -148,7 +148,7 @@ export function playerSlash(host:GameHost, slash:ParsedSlash):void {
 	}
 	// The player's character runs it like any other arc: it walks over first, as an NPC would.
 	host.enactPlayer(slash.arc).then(
-		(result) => host.world.setMessage(result.reason ?? ''),
+		(result) => host.world.setMessage(showNamingText(result.reason ?? '')),
 		(err:unknown) => host.world.setMessage(err instanceof Error ? err.message : String(err)),
 	);
 }
@@ -202,7 +202,7 @@ export function noteAct(host:GameHost, call:VerbCall<CharacterCtx>, result:ArcRe
 	if (!to) {
 		return;
 	}
-	pushChat(host, idOf(self), actText(result.verb ?? call.verb, call.args, result.reason), to, true);
+	pushChat(host, idOf(self), actText(result.verb ?? call.verb, call.args, result.reason && showNamingText(result.reason)), to, true);
 }
 
 function actText(verb:string, args:Record<string, unknown>, reason?:string):string {

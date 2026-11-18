@@ -3,8 +3,7 @@ import { Character } from '../character/Character.js';
 import type { KitSource } from '../character/character-types.js';
 import { Collective } from '../collective/Collective.js';
 import type { ArcDirector } from '../director/ArcDirector.js';
-import { Feature, type FeatureTick } from '../director/Feature.js';
-import type { HostKernels } from '../expr/natives.js';
+import { Feature, type FeatureTick, type WatchKernels } from '../director/Feature.js';
 import { RTS } from './rts.js';
 import type { RTSHost } from './rts-types.js';
 import { STOCK_RTS_VERB_DEFS } from './rts-verbs.js';
@@ -66,7 +65,7 @@ export class RTSFeature<TCtx = unknown> extends Feature<TCtx> {
 	}
 
 	/** Its side's numbers as watch bindings: a collective's own, or a character's collective's. */
-	public override watchKernels(runner:ArcRunner<TCtx>):Partial<HostKernels> {
+	public override watchKernels(runner:ArcRunner<TCtx>):WatchKernels {
 		const side = runner instanceof Character ? runner.collective?.id ?? runner.id : runner.id;
 		return { bindings: this._rts!.bindings(side) };
 	}

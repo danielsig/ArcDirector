@@ -1,23 +1,12 @@
-import type { Arc } from '../arc/arc-types.js';
 import type { ArcDirector } from '../director/ArcDirector.js';
-import { VERB_THINK_SCORES, verbThinkScore, arcScore, thinkRecencyScale } from './think-score.js';
+import { thinkRecencyScale } from './think-score.js';
 import { SimpleThinkQueue, type SimpleThinkQueueOpts } from './SimpleThinkQueue.js';
 import { MindScheduler, type MindQueueOpts, type ThinkRow } from './scheduler.js';
 
-export type PriorityThinkQueueOpts = MindQueueOpts & {
-	/** Override or add verb → score for `enqueueVerb`. 0 suppresses a default. */
-	verbScores?:Record<string, number>;
-};
+export type PriorityThinkQueueOpts = MindQueueOpts;
 
 /** Highest watch / arc score first, then recency. */
 export class PriorityThinkQueue extends MindScheduler {
-	public readonly verbScores:Record<string, number>;
-
-	constructor(opts:PriorityThinkQueueOpts = {}) {
-		super(opts);
-		this.verbScores = { ...VERB_THINK_SCORES, ...opts.verbScores };
-	}
-
 	public override rankScore(mindID:string, raw:number):number {
 		return raw * this.recencyScale(mindID);
 	}
@@ -27,7 +16,7 @@ export class PriorityThinkQueue extends MindScheduler {
 		if (!mind?.thoughtOnce) {
 			return 1;
 		}
-		return thinkRecencyScale(mind.sinceThought, this.heartbeatStart, this.trueScore);
+		return thinkRecencyScale(mind.sinceThought, this.rethinkInterval, this.trueScore);
 	}
 
 	protected override prune():void {
@@ -43,14 +32,6 @@ export class PriorityThinkQueue extends MindScheduler {
 
 	protected override order():void {
 		this.rows.sort((a, b) => this.rankScore(b.mindID, b.score) - this.rankScore(a.mindID, a.score));
-	}
-
-	protected override verbScore(verb:string, ok:boolean):number {
-		return verbThinkScore(verb, ok, this.verbScores);
-	}
-
-	protected override arcScore(arc:Arc, ok:boolean):number {
-		return arcScore(arc, ok, this.verbScores);
 	}
 }
 
@@ -69,17 +50,8 @@ export function withSimpleThinkQueue<TCtx>(this:ArcDirector<TCtx>, opts?:SimpleT
 	return this.withQueue(new SimpleThinkQueue(opts));
 }
 
+export { thinkRecencyScale } from './think-score.js';
 export {
-	VERB_THINK_SCORES,
-	THINK_ABOUT_SCORE,
-	THINK_BARE_SCORE,
-	verbThinkScore,
-	arcScore,
-	thinkRecencyScale,
-	waitUntilOf,
-} from './think-score.js';
-export {
-	type HeartbeatAdjust,
 	type MayThink,
 	type MindQueue,
 	type MindQueueOpts,

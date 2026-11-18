@@ -1,7 +1,7 @@
 export type TokKind =
 	| 'num' | 'str' | 'ident'
 	| 'true' | 'false' | 'null' | 'undefined'
-	| 'eq' | 'neq' | 'is' | 'in'
+	| 'eq' | 'neq' | 'is' | 'in' | 'while'
 	| 'lt' | 'gt' | 'le' | 'ge'
 	| 'plus' | 'minus' | 'star' | 'slash'
 	| 'amp' | 'pipe' | 'qq' | 'not'
@@ -56,7 +56,14 @@ const WORDS:Record<string, TokKind> = {
 	undefined: 'undefined',
 	is: 'is',
 	in: 'in',
+	while: 'while',
 };
+
+/** Tokens a value ends with: after one `/` divides, and anywhere else it opens a regex literal, as in JavaScript. */
+const VALUE_ENDS = new Set<TokKind>(['num', 'str', 'ident', 'true', 'false', 'null', 'undefined', 'rp', 'rb']);
+
+/** A regex literal on one line, `/^Fire/i`: its pattern. Its flags are read and dropped: patterns ignore case. */
+const REGEX = /^\/((?:\\.|\[(?:\\.|[^\]\\\n])*\]|[^/\\\n[])+)\/[a-z]*/;
 
 /** Words read as operators whatever their case. */
 const LOOSE_WORDS:Record<string, TokKind> = { and: 'amp', or: 'pipe', equals: 'eq' };
@@ -91,10 +98,10 @@ export function commentEnd(src:string, i:number):number | undefined {
 }
 
 /**
- * The token that starts at or after `i` in `src`. Never throws: a character no token starts with is a `bad` token.
- * Comments (`commentEnd`) are space.
+ * The token that starts at or after `i` in `src`, `after` the kind of the one before it. Never throws: a character no
+ * token starts with is a `bad` token. Comments (`commentEnd`) are space. A regex literal is a string of its pattern.
  */
-export function lexAt(src:string, i:number):Tok {
+export function lexAt(src:string, i:number, after?:TokKind):Tok {
 	let nl = false;
 	for (let stop:number | undefined; ;) {
 		if (i < src.length && /\s/.test(src[i])) {
@@ -134,6 +141,10 @@ export function lexAt(src:string, i:number):Tok {
 		}
 		return tok('str', s, Math.min(i + 1, src.length));
 	}
+	const regex = c === '/' && !(after && VALUE_ENDS.has(after)) ? REGEX.exec(src.slice(i)) : null;
+	if (regex) {
+		return tok('str', regex[1], i + regex[0].length);
+	}
 	if (/[0-9]/.test(c) || (c === '.' && /[0-9]/.test(src[i + 1] ?? ''))) {
 		while (i < src.length && /[0-9.]/.test(src[i])) {
 			i += 1;
@@ -160,7 +171,7 @@ export function lexAt(src:string, i:number):Tok {
 export function lex(src:string):Tok[] {
 	const out:Tok[] = [];
 	for (let at = 0; ;) {
-		const tok = lexAt(src, at);
+		const tok = lexAt(src, at, out.at(-1)?.kind);
 		if (tok.kind === 'bad') {
 			throw new Error(tok.hint ?? `unexpected '${tok.raw}' in expression`);
 		}

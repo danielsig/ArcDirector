@@ -52,7 +52,7 @@ function passages(world:DemoWorld):Map<string, Passage> {
 		return !!tile && !tile.blocked;
 	};
 	const doorsAt = new Map<string, GameObject>();
-	world.forEachComponent(Door, (_door, go) => {
+	world.forEachComponent(Door, (door, go) => {
 		const { tx, tz } = world.tileCoordAt(go.transform.position.x, go.transform.position.z);
 		doorsAt.set(key(tx, tz), go);
 	});

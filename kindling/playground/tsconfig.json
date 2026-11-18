@@ -1,0 +1,16 @@
+{
+	// The playground pages, served by `vite.config.ts` here. Typecheck only: Vite owns the build.
+	"extends": "../../tsconfig.base.json",
+	"compilerOptions": {
+		"module": "ESNext",
+		"moduleResolution": "bundler",
+		"lib": ["ES2022", "DOM", "DOM.Iterable"],
+		"noEmit": true,
+		"types": ["vite/client"],
+		"paths": {
+			"@arc-director/kindling": ["../src/index.ts"]
+		}
+	},
+	"include": ["*.ts"],
+	"exclude": ["vite.config.ts"]
+}

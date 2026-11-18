@@ -1,4 +1,5 @@
-import type { Arc, ArcResult } from '../arc/arc-types.js';
+import { showNamingText } from '../character/text-with-ids.js';
+import { isArc, type Arc, type ArcResult } from '../arc/arc-types.js';
 import { lawGroup, lawHandler, type Law } from '../arc/laws.js';
 import type { ArcHandler } from '../arc/run.js';
 import { ArcRunner, type ArcRunnerJSON, type ProgramState, type RunnerFields, type RunnerOptions } from '../character/arc-runner.js';
@@ -11,6 +12,7 @@ import type { CharacterSpec } from '../director/director-types.js';
 import { squadTag, isSquadTag, shortTag, shortTags } from './tags.js';
 import { CHOOSE_VERB, MIND_ONLY_VERBS, PASS_VERB, STOCK_ARC_VERBS, stepDoing, type VerbRegistry } from '../arc/stock-verbs.js';
 import { isFormationVerb, STOCK_COLLECTIVE_VERBS } from './collective-verbs.js';
+import { evaluateWho } from './who.js';
 
 /** How many others each roster row says its units see: the nearest. */
 const SEEN_PER_UNIT = 3;
@@ -96,9 +98,9 @@ export class Collective<TCtx = unknown> extends ArcRunner<TCtx> {
 		return this._characters;
 	}
 
-	/** Its characters still standing: `units`, the roster and the programs leave out the ones that are down. */
+	/** Its characters still standing: `units`, the roster and the programs leave out the fallen. */
 	public get standing():readonly Character<TCtx>[] {
-		return this._characters.filter((c) => !this._director.world?.isDown?.(c.id));
+		return this._characters.filter((c) => !this._director.world?.hasFallen?.(c.id));
 	}
 
 	public character(id:string):Character<TCtx> | undefined {
@@ -138,6 +140,21 @@ export class Collective<TCtx = unknown> extends ArcRunner<TCtx> {
 	/** It stands nowhere itself: its commander speaks and walks for its mind, and without one a character of its must. */
 	public get embodied():boolean {
 		return false;
+	}
+
+	/**
+	 * Whether `arc`, a reply of its mind, changes nothing: what remains of its voice's program, or commands each of whose
+	 * units runs that command's arc already, from the step it is on ({@link ArcRunner.runs}).
+	 */
+	public override runs(arc:Arc):boolean {
+		if (this._commander?.runs(arc) ?? super.runs(arc)) {
+			return true;
+		}
+		const catalog = arc.length > 0 && arc.every((step) => step.verb === 'command') ? internalsOf(this._director).watches.catalog(this.voice) : undefined;
+		return !!catalog && arc.every((step) => {
+			const units = typeof step.args.who === 'string' ? evaluateWho(step.args.who, catalog, this).filter((c) => c !== this._commander) : [];
+			return isArc(step.args.arc) && units.length > 0 && units.every((c) => c.runs(step.args.arc as Arc));
+		});
 	}
 
 	/** Whether any of its characters but the commander runs a program: waiting then is supervising. */
@@ -237,11 +254,12 @@ export class Collective<TCtx = unknown> extends ArcRunner<TCtx> {
 	}
 
 	/**
-	 * Give each of `characters` but the commander `arc` as its program, replacing what it ran. Two or more sent
-	 * together are a group: called `group`, else what {@link groupFor} names them, and tagged so; one sent alone
-	 * leaves its group. The group's name, if they are one. Those in `appended` take it after what they are doing instead.
+	 * Give each of `characters` but the commander `arc` as its program, replacing what it ran, or, to `append`, after
+	 * it: its endless step ends, a loop at the end of its round (`ArcRunner.append`). Two or more sent together are a
+	 * group: called `group`, else what {@link groupFor} names them, and tagged so; one sent alone leaves its group.
+	 * The group's name, if they are one.
 	 */
-	public command(characters:readonly Character<TCtx>[], arc:Arc, group?:string, appended:readonly string[] = []):string | undefined {
+	public command(characters:readonly Character<TCtx>[], arc:Arc, group?:string, append = false):string | undefined {
 		const troops = characters.filter((character) => character !== this._commander);
 		const squad = troops.map((character) => character.id);
 		const name = troops.length >= 2 ? this.groupFor(troops, group?.trim() || undefined) : undefined;
@@ -249,14 +267,14 @@ export class Collective<TCtx = unknown> extends ArcRunner<TCtx> {
 			this.joinGroup(character, name);
 			this._squads.set(character, squad);
 			// The program it runs already, however it was worded this time, goes on as it is.
-			if (character.runs(arc) || (appended.includes(character.id) && character.append(arc))) {
+			if (character.runs(arc)) {
 				continue;
 			}
-			// Run beside what it does, this is no program: the orders it is under stand.
-			const beside = character.liveArc && character.takesNoBody(arc);
+			// Run beside what it does, or after it, this is no program of its own: the orders it is under stand.
+			const joins = character.liveArc && (append || character.takesNoBody(arc));
 			// Its own copy: what is appended to it later is not appended to the others'.
-			const orders = character.enact(structuredClone(arc));
-			if (beside) {
+			const orders = character.enact(structuredClone(arc), undefined, undefined, append ? 'append' : 'merge');
+			if (joins) {
 				continue;
 			}
 			character.orders = orders;
@@ -366,7 +384,7 @@ export class Collective<TCtx = unknown> extends ArcRunner<TCtx> {
 			parts.push(`${header}\n${lines.join('\n')}`);
 			const down = this._characters.filter((c) => !standing.includes(c));
 			if (down.length > 0) {
-				parts.push(`Down: ${down.map((c) => mind.nameOf(c.id)).join(', ')}`);
+				parts.push(`Fallen: ${down.map((c) => mind.nameOf(c.id)).join(', ')}`);
 			}
 		}
 		const programs = this.standing
@@ -381,7 +399,7 @@ export class Collective<TCtx = unknown> extends ArcRunner<TCtx> {
 		}
 		const records = this.standing
 			.filter((character) => character !== this._commander && character.busy && character.arc && !character.record.empty)
-			.map((character) => `- ${mind.nameOf(character.id)}: ${character.record}`);
+			.map((character) => `- ${mind.nameOf(character.id)}: ${character.record.toString((id) => mind.nameOf(id))}`);
 		if (records.length > 0) {
 			parts.push(`How each program is going (latest steps; failures say why; picked counts its choose picks). Reprogram what keeps failing, and keep what works:\n${records.join('\n')}`);
 		}
@@ -456,7 +474,7 @@ export class Collective<TCtx = unknown> extends ArcRunner<TCtx> {
 			}
 			const endings = new Map<string, { ending:Ending; names:string[] }>();
 			for (const unit of ended) {
-				const ending = endingOf(unit.state.result);
+				const ending = endingOf(unit.state.result, (id) => this.mind.nameOf(id));
 				const key = `${ending.how}:${ending.why}`;
 				endings.set(key, { ending, names: [...endings.get(key)?.names ?? [], unit.name] });
 			}
@@ -476,25 +494,24 @@ export class Collective<TCtx = unknown> extends ArcRunner<TCtx> {
 		});
 	}
 
-	/** What one of its characters is at now, for its roster row: its step in that verb's words (`protecting Dawn`), waiting, how its last program ended, or idle. */
+	/** What one of its characters is at now, for its roster row: its step in that verb's words (`protecting Dawn`), waiting, or idle. */
 	private activityOf(character:Character<TCtx>, mind:Mind<TCtx>):string {
 		if (character.verb && character.lastStep) {
 			return character.verb === 'wait' ? 'waiting' : stepDoing(character.lastStep, this.verbs, (id) => mind.nameOf(id) || id);
 		}
-		if (character.busy) {
-			return 'waiting';
-		}
-		const state = character.programState();
-		return state ? endingText(endingOf(state.result)) : 'idle';
+		return character.busy ? 'waiting' : 'idle';
 	}
 
-	/** How its last step went, for its roster row: `shoot failed: no target`, `protect ok`; so a program that failed and ended is seen. */
+	/**
+	 * How its last step went, for its roster row: `shoot failed: no target`, `protect ok`. None once its program has
+	 * ended: its program file says how, once.
+	 */
 	private lastOf(character:Character<TCtx>):string {
 		const last = character.lastResult;
-		if (!last?.verb || last.status === 'stopped') {
+		if (!last?.verb || last.status === 'stopped' || character.programState()?.running === false) {
 			return '';
 		}
-		return last.status === 'ok' ? `${last.verb} ok` : `${last.verb} failed${last.reason ? `: ${last.reason}` : ''}`;
+		return last.status === 'ok' ? `${last.verb} ok` : `${last.verb} failed${last.reason ? `: ${showNamingText(last.reason, (id) => this.mind.nameOf(id))}` : ''}`;
 	}
 
 	/**
@@ -594,9 +611,9 @@ function counted(items:readonly string[], of:number):string {
 /** How a program ended: done, failed and why, or stopped by another. */
 type Ending = { how:'done' | 'failed' | 'stopped'; why:string };
 
-function endingOf(result:ArcResult | undefined):Ending {
+function endingOf(result:ArcResult | undefined, name:(id:string)=>string):Ending {
 	if (result?.status === 'failed') {
-		return { how: 'failed', why: result.reason || result.verb || '' };
+		return { how: 'failed', why: (result.reason && showNamingText(result.reason, name)) || result.verb || '' };
 	}
 	return result?.status === 'stopped' ? { how: 'stopped', why: '' } : { how: 'done', why: 'ok' };
 }

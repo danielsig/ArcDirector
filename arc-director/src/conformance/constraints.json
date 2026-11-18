@@ -1,0 +1,283 @@
+{
+	"about": "Arcs checked against the stock and collective verbs narrowed by each row's constraints ([verb, arg, constraint, path?]): the problem, or none.",
+	"rows": [
+		{
+			"constrain": [
+				[
+					"wait",
+					"seconds",
+					{
+						"min": 1,
+						"max": 10,
+						"integer": true
+					}
+				]
+			],
+			"text": "wait(seconds=5)"
+		},
+		{
+			"constrain": [
+				[
+					"wait",
+					"seconds",
+					{
+						"min": 1,
+						"max": 10,
+						"integer": true
+					}
+				]
+			],
+			"text": "wait(seconds=0)",
+			"problem": "wait: seconds is a whole number and at least 1 and at most 10"
+		},
+		{
+			"constrain": [
+				[
+					"wait",
+					"seconds",
+					{
+						"min": 1,
+						"max": 10,
+						"integer": true
+					}
+				]
+			],
+			"text": "wait(seconds=11)",
+			"problem": "wait: seconds is a whole number and at least 1 and at most 10"
+		},
+		{
+			"constrain": [
+				[
+					"wait",
+					"seconds",
+					{
+						"min": 1,
+						"max": 10,
+						"integer": true
+					}
+				]
+			],
+			"text": "wait(seconds=2.5)",
+			"problem": "wait: seconds is a whole number and at least 1 and at most 10"
+		},
+		{
+			"constrain": [
+				[
+					"go_to",
+					"target",
+					{
+						"names": [
+							"Keep",
+							"Gate"
+						]
+					}
+				]
+			],
+			"text": "go_to(Keep)"
+		},
+		{
+			"constrain": [
+				[
+					"go_to",
+					"target",
+					{
+						"names": [
+							"Keep",
+							"Gate"
+						]
+					}
+				]
+			],
+			"text": "go_to(Well)",
+			"problem": "go_to: target is one of Keep, Gate; Well is not"
+		},
+		{
+			"constrain": [
+				[
+					"loop",
+					"arc",
+					{
+						"subverbs": [
+							"go_to",
+							"wait"
+						]
+					}
+				]
+			],
+			"text": "loop { go_to(Keep) ; wait(1) }"
+		},
+		{
+			"constrain": [
+				[
+					"loop",
+					"arc",
+					{
+						"subverbs": [
+							"go_to",
+							"wait"
+						]
+					}
+				]
+			],
+			"text": "loop { say(\"hi\") }",
+			"problem": "loop's arc may hold only go_to, wait; not say"
+		},
+		{
+			"constrain": [
+				[
+					"loop",
+					"arc",
+					{
+						"subverbs": [
+							"go_to",
+							"wait"
+						]
+					}
+				]
+			],
+			"text": "say(\"hi\") ; go_to(Keep)"
+		},
+		{
+			"constrain": [
+				[
+					"law",
+					"arc",
+					{
+						"maxSteps": 2,
+						"not": [
+							"say"
+						],
+						"depth": 1
+					}
+				]
+			],
+			"text": "law(name=hide, watch=isHurt(me), arc=go_to(Keep) ; wait(1))"
+		},
+		{
+			"constrain": [
+				[
+					"law",
+					"arc",
+					{
+						"maxSteps": 2,
+						"not": [
+							"say"
+						],
+						"depth": 1
+					}
+				]
+			],
+			"text": "law(name=hide, watch=isHurt(me), arc=go_to(Keep) ; wait(1) ; go_to(Gate))",
+			"problem": "law's arc may hold at most 2 steps; it has 3"
+		},
+		{
+			"constrain": [
+				[
+					"law",
+					"arc",
+					{
+						"maxSteps": 2,
+						"not": [
+							"say"
+						],
+						"depth": 1
+					}
+				]
+			],
+			"text": "law(name=hide, watch=isHurt(me), arc=say(\"ow\"))",
+			"problem": "law's arc may not hold say"
+		},
+		{
+			"constrain": [
+				[
+					"law",
+					"arc",
+					{
+						"maxSteps": 2,
+						"not": [
+							"say"
+						],
+						"depth": 1
+					}
+				]
+			],
+			"text": "law(name=hide, watch=isHurt(me), arc=loop { loop { wait(1) } })",
+			"problem": "loop's arc may hold no arc inside it; loop holds one"
+		},
+		{
+			"constrain": [
+				[
+					"wait",
+					"seconds",
+					{
+						"max": 10
+					},
+					"law.arc"
+				],
+				[
+					"wait",
+					"seconds",
+					{
+						"min": 1
+					},
+					"*.arc"
+				]
+			],
+			"text": "law(name=rest, watch=isHurt(me), arc=wait(20))",
+			"problem": "wait inside a law: seconds is at least 1 and at most 10"
+		},
+		{
+			"constrain": [
+				[
+					"wait",
+					"seconds",
+					{
+						"max": 10
+					},
+					"law.arc"
+				],
+				[
+					"wait",
+					"seconds",
+					{
+						"min": 1
+					},
+					"*.arc"
+				]
+			],
+			"text": "loop { wait(0) }",
+			"problem": "wait inside a loop: seconds is at least 1"
+		},
+		{
+			"constrain": [
+				[
+					"wait",
+					"seconds",
+					{
+						"max": 10
+					},
+					"law.arc"
+				],
+				[
+					"wait",
+					"seconds",
+					{
+						"min": 1
+					},
+					"*.arc"
+				]
+			],
+			"text": "wait(0)"
+		},
+		{
+			"constrain": [],
+			"text": "law(name=a, watch=isHurt(me), arc=law(name=b, watch=true, arc=wait(1)))",
+			"problem": "law's arc may not hold law"
+		},
+		{
+			"constrain": [],
+			"text": "wait(-1)",
+			"problem": "wait: seconds is at least 0"
+		}
+	]
+}

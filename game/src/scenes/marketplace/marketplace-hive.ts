@@ -13,11 +13,16 @@ function stallOf(seller:Seller):{ place:string; prices:string } {
 	return { place, prices: seller.wares.map((ware) => `${ware.name} for ${ware.ask} gold, never under ${ware.floor}`).join('; ') };
 }
 
-/** The sellers, units of the `Sellers` hive: each at their post, each ware's posted offer standing. */
-export const SELLER_UNITS:Pick<CharacterSpec, 'id' | 'tags' | 'offers'>[] = SELLERS.map((seller) => ({
+/**
+ * The sellers, units of the `Sellers` hive: each at their post, each ware's posted offer standing, serving one buyer
+ * at a time at their serving spot while the rest line up behind.
+ */
+export const SELLER_UNITS:Pick<CharacterSpec, 'id' | 'tags' | 'offers' | 'crowd' | 'servingSpot'>[] = SELLERS.map((seller) => ({
 	id: seller.vendor,
 	tags: ['Seller', seller.post],
 	offers: seller.wares.map((ware) => ({ give: { [ware.name]: 1 }, get: { gold: ware.ask } })),
+	crowd: 'line',
+	servingSpot: seller.servingSpot,
 }));
 
 /** What the `Sellers` hive knows of each seller: their place, their prices, and how they talk. */
@@ -75,9 +80,11 @@ function guard(id:string, gate:string):Pick<CharacterSpec, 'id' | 'tags' | 'choo
 		tags: ['Guard', gate],
 		choose: {
 			goal: `Guard ${gate} from beside the doorway, never in it. A thief outranks a cry. Chase a thief you see, else run to whoever cried a security word, else hold`,
-			hold: 'stand() && wait(until=some(others.filter("thief")) || some(others.filter("alarm")))',
-			chase: 'go_to(others.filter("thief").minBy(u => distance(me, u)))',
-			answer: 'go_to(others.filter("alarm").minBy(u => distance(me, u)))',
+			choices: {
+				hold: 'stand() && wait(until=some(others.filter("thief")) || some(others.filter("alarm")))',
+				chase: 'go_to(others.filter("thief").minBy(u => distance(me, u)))',
+				answer: 'go_to(others.filter("alarm").minBy(u => distance(me, u)))',
+			},
 		},
 	};
 }

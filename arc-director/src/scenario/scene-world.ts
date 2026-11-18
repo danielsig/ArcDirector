@@ -1,7 +1,7 @@
 import type { VerbArgMap } from '../arc/stock-verbs.js';
 import type { ArcResult, CountMap, StepArg } from '../arc/arc-types.js';
 import type { VerbAlias, VerbCall } from '../director/director-types.js';
-import { buildCatalog, dummyEntity, type HostKernels } from '../expr/natives.js';
+import { buildCatalog, dummyEntity, type CatalogInputs } from '../expr/natives.js';
 import { SampleCache, type Catalog, type ExprEntity, type ExprVal } from '../expr/expr-types.js';
 import { DEFAULT_YOU_SYMBOL, type MapMark, type MapSense } from '../mind/map.js';
 import type { SpeechUtterance } from '../mind/talk.js';
@@ -10,9 +10,10 @@ import type { KindSpec } from '../rts/rts-types.js';
 import { doingOf } from '../arc/stock-verbs.js';
 import type { Sight } from '../perception/perception-types.js';
 import { geometryKernels } from '../world/geometry-kernels.js';
-import { RESERVED_TAGS, type HostWorld, type Outcome, type PathStep, type Pose, type Transfer, type Vec } from '../world/world-types.js';
+import { RESERVED_TAGS, type HostWorld, type Outcome, type Passage, type Pose, type Transfer, type Vec, type WorldGeometry, type WorldRoutes, type WorldTransfers } from '../world/world-types.js';
+import { Axes } from '../world/axes.js';
 import { distance } from '../world/vec.js';
-import { ABILITIES, FIGHTERS, Fighter, type Effect, type StatusKind, type Tactic } from './combat.js';
+import { ABILITIES, FIGHTERS, Fighter, type Effect, type Tactic } from './combat.js';
 
 /** Where someone or something is, seen from the one the scene is about, and what a character there has. */
 export type SceneSpot = {
@@ -155,8 +156,8 @@ const SEEN_DOING = 2;
 /** The longest reach a blow has that {@link SceneRules.crowding} limits: close in. */
 const CLOSE_IN = 2;
 
-/** `me` stands at the origin facing north (−Z), its right hand east (+X). */
-const FACING:Pick<Pose, 'facing' | 'right'> = { facing: [0, -1], right: [1, 0] };
+/** `me` stands at the origin facing north (−Z), its right hand east (+X), in {@link Axes.Plane}. */
+const FACING:Pick<Pose, 'facing'> = { facing: [0, -1] };
 
 /** The grid steps from a whole pace: itself and its four neighbors. */
 const GRID = [[0, 0], [1, 0], [-1, 0], [0, 1], [0, -1]];
@@ -201,7 +202,13 @@ export class SceneWorld implements HostWorld<string> {
 	/** What a case's rules measure as play goes on (a kiln's heat, buckets carried), by name. */
 	public readonly meters = new Map<string, number>();
 	/** Characters who fell, in order. */
-	public readonly downed:string[] = [];
+	public readonly fallen:string[] = [];
+	/** The ground as `[x, z]`: north −Z, east +X. */
+	public readonly axes = Axes.Plane;
+	/** It places, walks and trades as itself. */
+	public readonly geometry:WorldGeometry<string> = this;
+	public readonly routes:WorldRoutes<string> = this;
+	public readonly transfers:WorldTransfers<string> = this;
 	/** Seconds since the arc started. */
 	public time = 0;
 	/** Whether a squad fighter, its commander too, is idle (or only waiting), so it strikes back at foes in reach on its own. Set by whoever stages it. */
@@ -226,10 +233,8 @@ export class SceneWorld implements HostWorld<string> {
 	private readonly _teams = new Map<string, string>();
 	/** Each side's stock in an RTS, by team: `us`, or an ally's id. */
 	private readonly _stock = new Map<string, CountMap>();
-	/** Things and places, the scene's own and any that came since (a fallen fighter's box, a banner). */
+	/** Things and places in the scene. */
 	private readonly _things = new Set<string>();
-	/** What `examine` tells of a thing that came since. */
-	private readonly _descriptions = new Map<string, string>();
 	/** Fighters inside a building or transport: out of every fight until they come out. */
 	private readonly _sheltered = new Set<string>();
 	/** How far each character may still walk this tick. */
@@ -307,26 +312,6 @@ export class SceneWorld implements HostWorld<string> {
 		}
 	}
 
-	/**
-	 * A thing that comes into the scene now, where `at` stands (someone or something by name) or at a point: a fallen
-	 * fighter's box, a banner. It holds `carrying`, which the scene's own rules hand out (`take`); `description` is what
-	 * `examine` tells.
-	 */
-	public addThing(id:string, at:string | Vec, more:{ carrying?:string[]; description?:string } = {}):void {
-		const point = typeof at === 'string' ? this._points.get(this.find(at) ?? at) : at;
-		if (!point) {
-			return;
-		}
-		this._things.add(id);
-		this._points.set(id, [...point]);
-		for (const item of more.carrying ?? []) {
-			this.add(id, item, 1);
-		}
-		if (more.description) {
-			this._descriptions.set(id, more.description);
-		}
-	}
-
 	/** Gone from the scene, as a site taken down: neither down nor anywhere. */
 	public remove(id:string):void {
 		this._points.delete(id);
@@ -352,7 +337,7 @@ export class SceneWorld implements HostWorld<string> {
 
 	/** `id`'s kind, of {@link kinds}. */
 	public kindOf(id:string):string | undefined {
-		return this.isDown(id) || (!this._points.has(id) && !this._characters.includes(id)) ? undefined : this._kinds.get(id);
+		return this.hasFallen(id) || (!this._points.has(id) && !this._characters.includes(id)) ? undefined : this._kinds.get(id);
 	}
 
 	/** Whose side `id` is on, if any. */
@@ -393,7 +378,7 @@ export class SceneWorld implements HostWorld<string> {
 
 	/** Everyone and everything placed and standing: characters, and things on the ground. */
 	public get placed():string[] {
-		return [...this._points.keys()].filter((id) => !this.isDown(id));
+		return [...this._points.keys()].filter((id) => !this.hasFallen(id));
 	}
 
 	/** `amount` of `id`'s health back, as a repair: whether it is whole again. */
@@ -425,7 +410,7 @@ export class SceneWorld implements HostWorld<string> {
 	public strike(by:string, target:string):boolean {
 		const f = this._fighters.get(by);
 		const name = f?.kind.abilities.find((a) => ABILITIES[a].repeat);
-		if (!f || !name || this.isDown(by) || this.isDown(target) || this._sheltered.has(target) || !this._fighters.has(target)) {
+		if (!f || !name || this.hasFallen(by) || this.hasFallen(target) || this._sheltered.has(target) || !this._fighters.has(target)) {
 			return false;
 		}
 		if (this.distance(by, target) > ABILITIES[name].range || !this.sees(by, target)) {
@@ -458,13 +443,13 @@ export class SceneWorld implements HostWorld<string> {
 
 	/** Every character still standing: `me` first. */
 	public get characters():string[] {
-		return this._characters.filter((id) => !this.isDown(id));
+		return this._characters.filter((id) => !this.hasFallen(id));
 	}
 
 	// Queries
 
 	public find(id:string):string | undefined {
-		if (this.isDown(id)) {
+		if (this.hasFallen(id)) {
 			return undefined;
 		}
 		return this._points.has(id) ? id : this._characters.find((who) => this.count(who, id) > 0);
@@ -480,8 +465,8 @@ export class SceneWorld implements HostWorld<string> {
 		return GRID.map(([dx, dz]) => [Math.round(x) + dx, Math.round(z) + dz]).filter((point) => point[0] !== x || point[1] !== z);
 	}
 
-	/** A step onto a point the rules' `blocks` close is blocked. Light and sound pass everywhere (no `canPass`); who sees whom is the rules' `sees`. */
-	public canTraverse(_who:string, _from:Vec, to:Vec):PathStep {
+	/** A step onto a point the rules' `blocks` close is blocked. Light and sound pass everywhere (no `getClarity`); who sees whom is the rules' `sees`. */
+	public getPassage(who:string, from:Vec, to:Vec):Passage {
 		const blocked = this._rules.blocks?.(this, to);
 		return blocked ? { blocked } : {};
 	}
@@ -490,12 +475,12 @@ export class SceneWorld implements HostWorld<string> {
 		return REACH;
 	}
 
-	public getDescription(_character:string, target:string):string | undefined {
+	public getDescription(character:string, target:string):string | undefined {
 		if (!this._points.has(target)) {
 			return undefined;
 		}
 		const spot = this.scene.things?.[target] ?? this.scene.others?.[target] ?? this.scene.squad?.[target];
-		return spot?.description ?? this._descriptions.get(target) ?? `${target}, nothing out of the ordinary.`;
+		return spot?.description ?? `${target}, nothing out of the ordinary.`;
 	}
 
 	/** Whether `from` sees `to`, by the rules' `sees`: who `find` says they are, if anyone. */
@@ -595,7 +580,7 @@ export class SceneWorld implements HostWorld<string> {
 
 	/**
 	 * One of {@link ABILITIES}, as its verb: close in to its range, wait out its cooldown or a stun, cast, and land it.
-	 * A basic attack keeps striking until the target is down; anything else lands once. A stun breaks a cast, and an
+	 * A basic attack keeps striking until the target has fallen; anything else lands once. A stun breaks a cast, and an
 	 * {@link abort} (a reaction taking over) ends it before it lands again.
 	 */
 	public async useAbility<TCtx>(call:VerbCall<TCtx>):Promise<ArcResult> {
@@ -609,8 +594,8 @@ export class SceneWorld implements HostWorld<string> {
 		}
 		const target = ability.on === 'self' ? me : String(call.args.target ?? '');
 		const other = this._fighters.get(target);
-		if (!other || this.isDown(target)) {
-			return fail(this.isDown(target) ? `${target} is already down` : `${target} is no one to ${name}`);
+		if (!other || this.hasFallen(target)) {
+			return fail(this.hasFallen(target) ? `${target} has already fallen` : `${target} is no one to ${name}`);
 		}
 		if (ability.on !== 'self' && (ability.on === 'ally') !== (other.team === self.team)) {
 			return fail(ability.on === 'ally' ? `${target} is not on your side` : `${target} is on your side`);
@@ -618,14 +603,14 @@ export class SceneWorld implements HostWorld<string> {
 		const aborts = this._aborts.get(me) ?? 0;
 		const aborted = () => (this._aborts.get(me) ?? 0) !== aborts;
 		const stopped:ArcResult = { status: 'stopped', verb: name };
+		// In range, it strikes again as soon as it is ready, as a fighter on its own does.
 		for (;;) {
-			if (this.isDown(me)) {
-				return fail('you are down');
+			if (this.hasFallen(me)) {
+				return fail('you have fallen');
 			}
-			if (this.isDown(target)) {
-				return { status: 'ok', verb: name, reason: `${target} is down` };
+			if (this.hasFallen(target)) {
+				return { status: 'ok', verb: name, reason: (name) => `${name(target)} has fallen` };
 			}
-			// In range, it strikes again as soon as it is ready, as a fighter on its own does.
 			if (this.distance(me, target) > ability.range) {
 				const near = await call.goTo(target, { within: ability.range });
 				if (near.status !== 'ok') {
@@ -675,11 +660,11 @@ export class SceneWorld implements HostWorld<string> {
 	private land(by:string, name:string, target:string):string {
 		const ability = ABILITIES[name];
 		const center = this._fighters.get(target);
-		if (!center || this.isDown(target)) {
-			return `${target} is already down`;
+		if (!center || this.hasFallen(target)) {
+			return `${target} has already fallen`;
 		}
 		const hit = ability.splash
-			? [...this._fighters].filter(([id, f]) => f.team === center.team && !this.isDown(id) && !this._sheltered.has(id) && this.distance(id, target) <= ability.splash!).map(([id]) => id)
+			? [...this._fighters].filter(([id, f]) => f.team === center.team && !this.hasFallen(id) && !this._sheltered.has(id) && this.distance(id, target) <= ability.splash!).map(([id]) => id)
 			: [target];
 		const told = hit.map((id) => {
 			const f = this._fighters.get(id)!;
@@ -694,7 +679,7 @@ export class SceneWorld implements HostWorld<string> {
 			}
 			if (f.hp <= 0) {
 				this.fell(id);
-				return `${id} is down`;
+				return `${id} has fallen`;
 			}
 			const what = [damage && `took ${dealt}`, ability.heal && 'healed', ...f.note(this.time)].filter(Boolean).join(', ');
 			return `${id} ${what} (${Math.ceil(f.hp)}/${f.maxHP} hp)`;
@@ -711,7 +696,7 @@ export class SceneWorld implements HostWorld<string> {
 	 */
 	private fight():void {
 		for (const [id, f] of this._fighters) {
-			if (this.isDown(id) || this._sheltered.has(id) || !f.canAct(this.time)) {
+			if (this.hasFallen(id) || this._sheltered.has(id) || !f.canAct(this.time)) {
 				continue;
 			}
 			// A cast it began on its own lands, even once an order has come since: a verb's lands when the verb says.
@@ -770,7 +755,7 @@ export class SceneWorld implements HostWorld<string> {
 
 	/** What `id` does next under `tactic`, and to whom. */
 	private plan(id:string, f:Fighter, tactic:Tactic):{ ability:string; target:string } | undefined {
-		const living = [...this._fighters].filter(([other]) => !this.isDown(other) && !this._sheltered.has(other));
+		const living = [...this._fighters].filter(([other]) => !this.hasFallen(other) && !this._sheltered.has(other));
 		const foes = living.filter(([, g]) => g.team !== f.team).map(([other]) => other);
 		const byDistance = (ids:string[]) => [...ids].sort((a, b) => this.distance(id, a) - this.distance(id, b));
 		if (tactic === 'healer') {
@@ -794,8 +779,8 @@ export class SceneWorld implements HostWorld<string> {
 			: tactic === 'march' ? this.distance(id, foe) <= reach + MARCH_REACH
 			: tactic === 'guard' && post ? distance(this._points.get(foe) ?? post.at, post.at) <= post.within
 			: true);
-		const target = (taunter && !this.isDown(taunter) ? taunter : undefined)
-			?? (f.focus && !this.isDown(f.focus) && !this._sheltered.has(f.focus) && (!['march', 'guard'].includes(tactic) || within(f.focus)) ? f.focus : undefined)
+		const target = (taunter && !this.hasFallen(taunter) ? taunter : undefined)
+			?? (f.focus && !this.hasFallen(f.focus) && !this._sheltered.has(f.focus) && (!['march', 'guard'].includes(tactic) || within(f.focus)) ? f.focus : undefined)
 			?? byDistance(foes.filter(within))[0];
 		if (!target) {
 			return undefined;
@@ -850,7 +835,7 @@ export class SceneWorld implements HostWorld<string> {
 	 */
 	public hurt(who:string, damage:number):number {
 		const f = this._fighters.get(who);
-		if (!f || this.isDown(who)) {
+		if (!f || this.hasFallen(who)) {
 			return 0;
 		}
 		const dealt = f.hurt(damage, this.time);
@@ -858,16 +843,6 @@ export class SceneWorld implements HostWorld<string> {
 			this.fell(who);
 		}
 		return dealt;
-	}
-
-	/** `who` back on its feet with `hp` (default full), as an inn or a revive brings it back. */
-	public revive(who:string, hp?:number):void {
-		const f = this._fighters.get(who);
-		if (!f) {
-			return;
-		}
-		this.downed.splice(this.downed.indexOf(who) >>> 0, 1);
-		f.hp = Math.min(f.maxHP, hp ?? f.maxHP);
 	}
 
 	/** `effect` on `who` from a scenario's own rules, as an ability would put it there, from `by`. */
@@ -880,15 +855,9 @@ export class SceneWorld implements HostWorld<string> {
 		return this._fighters.get(who)?.has('shield', this.time)?.amount ?? 0;
 	}
 
-	/** The statuses on `who` now: `stun`, `root`, … */
-	public statusesOf(who:string):StatusKind[] {
-		const f = this._fighters.get(who);
-		return f ? (['stun', 'root', 'slow', 'silence', 'shield', 'taunt', 'burn'] as const).filter((kind) => f.has(kind, this.time)) : [];
-	}
-
 	public fell(who:string):void {
-		if (!this.isDown(who)) {
-			this.downed.push(who);
+		if (!this.hasFallen(who)) {
+			this.fallen.push(who);
 		}
 	}
 
@@ -907,8 +876,8 @@ export class SceneWorld implements HostWorld<string> {
 		return new Map(this._held.get(who));
 	}
 
-	public isDown(who:string):boolean {
-		return this.downed.includes(who);
+	public hasFallen(who:string):boolean {
+		return this.fallen.includes(who);
 	}
 
 	public hp(who:string):number | undefined {
@@ -921,18 +890,18 @@ export class SceneWorld implements HostWorld<string> {
 	}
 
 	/** The first of `team`'s fighters to fall. */
-	public firstDown(team:string):string | undefined {
-		return this.downed.find((who) => this.team(who) === team);
+	public firstFallen(team:string):string | undefined {
+		return this.fallen.find((who) => this.team(who) === team);
 	}
 
-	/** Whether every fighter of `team` is down. */
+	/** Whether every fighter of `team` has fallen. */
 	public routed(team:string):boolean {
-		return [...this._fighters].every(([id, f]) => f.team !== team || this.isDown(id));
+		return [...this._fighters].every(([id, f]) => f.team !== team || this.hasFallen(id));
 	}
 
 	/** How many fighters of `team` are down. */
 	public lost(team:string):number {
-		return [...this._fighters].filter(([id, f]) => f.team === team && this.isDown(id)).length;
+		return [...this._fighters].filter(([id, f]) => f.team === team && this.hasFallen(id)).length;
 	}
 
 	public distance(a:string, b:string):number {
@@ -955,7 +924,7 @@ export class SceneWorld implements HostWorld<string> {
 	// What the director reads
 
 	/** Who and what `id` can reach in the watch language. Where they are is this world's own. */
-	public kernels(id:string):Pick<HostKernels, 'me' | 'others' | 'items' | 'inventory' | 'hp' | 'nearRadius'> {
+	public kernels(id:string):Pick<CatalogInputs, 'me' | 'others' | 'items' | 'inventory' | 'hp' | 'nearRadius'> {
 		return {
 			me: this.entity(id, id),
 			others: this.characters.filter((other) => other !== id).map((other) => this.entity(other, id)),
@@ -1030,7 +999,7 @@ export class SceneWorld implements HostWorld<string> {
 	public map():MapSense {
 		return {
 			snapshot: () => {
-				const placed = [...this._points].filter(([id]) => id !== this.scene.me.id && !this.isDown(id));
+				const placed = [...this._points].filter(([id]) => id !== this.scene.me.id && !this.hasFallen(id));
 				const half = Math.max(0, ...placed.map(([, [x, y]]) => Math.max(Math.abs(x), Math.abs(y)))) + 4;
 				const marks:MapMark[] = placed.map(([id, [x, y]], i) => ({ symbol: MARKS[i % MARKS.length], id, x, y }));
 				const [x, y] = this._points.get(this.scene.me.id)!;

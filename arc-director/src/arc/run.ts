@@ -1,26 +1,15 @@
-import { argKind, CHOOSE_VERB, IF_VERB, TEST_VERB, type VerbRegistry } from './stock-verbs.js';
-import { choicesOf, withLoneWait } from './choose.js';
-import {
-	firstStep,
-	groupArc,
-	isArc,
-	arcSteps,
-	type Arc,
-	type ArcResult,
-	type Join,
-	type Step,
-} from './arc-types.js';
+import { showNamingText, type NamingText } from '../character/text-with-ids.js';
+import { argKind, TEST_VERB, type VerbRegistry } from './stock-verbs.js';
+import { isArc, type Arc, type ArcResult, type Step, type StepArg } from './arc-types.js';
 import { evaluate } from '../expr/eval.js';
 import { parse } from '../expr/expr-parse.js';
 import { durationSeconds } from '../expr/lex.js';
 import { dummyEntity } from '../expr/natives.js';
 import { watchScore } from '../expr/watch-score.js';
 import { stringifyVal } from '../expr/stringify.js';
-import { isTruthy, LIST_CAP, Names, SampleCache, type Ast, type Catalog, type ExprVal } from '../expr/expr-types.js';
+import { isTruthy, Names, SampleCache, type Ast, type Catalog, type ExprVal } from '../expr/expr-types.js';
 import type { Law } from './laws.js';
-import type { StepArg } from './arc-types.js';
 
-export const THINK_ABOUT_CAP = 200;
 export const DEFAULT_COOLDOWN = 8;
 
 /** Game seconds a reaction's watch must have been false before it may start again, unless it says (`rearm=`). */
@@ -73,16 +62,9 @@ const arms = new WeakMap<object, Map<string, ReactionArm>>();
 
 /** How `source`, a law or a `when` step, stands for character `id`. Not saved: a loaded game starts every reaction armed. */
 export function reactionArm(source:object, id = ''):ReactionArm {
-	let byID = arms.get(source);
-	if (!byID) {
-		byID = new Map();
-		arms.set(source, byID);
-	}
-	let arm = byID.get(id);
-	if (!arm) {
-		arm = {};
-		byID.set(id, arm);
-	}
+	const byID = arms.get(source) ?? new Map<string, ReactionArm>();
+	const arm = byID.get(id) ?? {};
+	arms.set(source, byID.set(id, arm));
 	return arm;
 }
 
@@ -120,6 +102,10 @@ export type ArcSession = {
 	races:Race[];
 	/** Stops the host step running now, or the one about to start: when a reaction takes over, or the program is replaced. */
 	stepStop?:AbortController;
+	/** Who holds each channel (`VerbDef.channel`) now, shared by the parts of `A while B`: a step waits for its own. */
+	lanes:Map<string, unknown>;
+	/** The channels a step holds beside its verb's (`channel`): a line said far off walks first, so the body too. */
+	extraLanes?:(step:Step, channel:string)=>string[];
 	/** The reactions running now, outermost first. */
 	running:ArcHandler[];
 	/** Game time a reaction last started: one start per moment. */
@@ -133,7 +119,9 @@ export type ArcSession = {
 	watchedAt?:()=>number | undefined;
 	frames:{ handlers:ArcHandler[] }[];
 	pending?:ArcPending;
-	fail?:{ verb:string; reason:string };
+	fail?:{ verb:string; reason:NamingText };
+	/** How whoever runs it names `id` in what its arc reads (`fail.reason`): its mind's name for it. Default: the id. */
+	nameOf?:(id:string)=>string;
 	bindings:Map<string, ExprVal>;
 	catalog?:()=>Catalog | undefined;
 	now:()=>number;
@@ -142,6 +130,8 @@ export type ArcSession = {
 	abortHost?:()=>void;
 	/** Called each time a reaction it ran stops, however it ended. */
 	onReactionEnd?:()=>void;
+	/** Called as each step of its arc runs, once its race and the reactions due let it: a control step (`if`, `loop`, a group) too, and only the branch taken. */
+	onStepRun?:(step:Step)=>void;
 	extraHandlers?:()=>ArcHandler[];
 	/** Body finished; its `when`s still poll until the program is replaced. */
 	parked?:boolean;
@@ -166,46 +156,32 @@ export type LastChoice = { name:string; result:ArcResult };
 /** The name of the choice to run, given the goal, the choices by name, and the last choice. */
 export type ArcPick = (goal:string, choices:Record<string, Arc>, last:LastChoice | undefined)=>Promise<string>;
 
-export type ArcSessionOpts = {
-	verbs?:VerbRegistry;
-	rearm?:number;
+/** What a new session is given: its hooks into the world and clock. */
+export type ArcSessionOpts = Partial<Pick<ArcSession, 'verbs' | 'rearm' | 'catalog' | 'now' | 'watchedAt' | 'nextTime' | 'abortHost' | 'onReactionEnd' | 'onStepRun' | 'extraHandlers' | 'pick' | 'extraLanes' | 'nameOf'>> & {
 	/** The reaction this session's arc runs within (an alias's arc in a law): its loops and endless verbs follow its trigger. */
 	reaction?:ArcHandler;
-	catalog?:()=>Catalog | undefined;
-	now?:()=>number;
-	watchedAt?:()=>number | undefined;
-	nextTime?:()=>Promise<void>;
-	abortHost?:()=>void;
-	onReactionEnd?:()=>void;
-	extraHandlers?:()=>ArcHandler[];
-	pick?:ArcPick;
 };
 
 export function createArcSession(opts:ArcSessionOpts = {}):ArcSession {
+	const { reaction, rearm = DEFAULT_REARM, now = () => 0, ...hooks } = opts;
 	return {
+		...hooks,
 		token: 0,
-		running: opts.reaction ? [opts.reaction] : [],
+		running: reaction ? [reaction] : [],
 		races: [],
-		rearm: opts.rearm ?? DEFAULT_REARM,
+		lanes: new Map(),
+		rearm,
 		frames: [],
 		bindings: new Map(),
-		catalog: opts.catalog,
-		now: opts.now ?? (() => 0),
-		watchedAt: opts.watchedAt,
-		nextTime: opts.nextTime,
-		abortHost: opts.abortHost,
-		onReactionEnd: opts.onReactionEnd,
-		extraHandlers: opts.extraHandlers,
+		now,
 		parked: false,
-		verbs: opts.verbs,
-		pick: opts.pick,
 		passes: new Map(),
 		whens: new Map(),
 		shields: 0,
 	};
 }
 
-function liveCatalog(session:ArcSession):Catalog | undefined {
+export function liveCatalog(session:ArcSession):Catalog | undefined {
 	const base = session.catalog?.();
 	if (!base && !session.fail && session.bindings.size === 0) {
 		return undefined;
@@ -217,7 +193,7 @@ function liveCatalog(session:ArcSession):Catalog | undefined {
 			value: dummyEntity('fail', {
 				fields: {
 					verb: { kind: 'string', value: session.fail.verb },
-					reason: { kind: 'string', value: session.fail.reason ?? '' },
+					reason: { kind: 'string', value: showNamingText(session.fail.reason, session.nameOf) },
 				},
 			}),
 		});
@@ -225,15 +201,7 @@ function liveCatalog(session:ArcSession):Catalog | undefined {
 	for (const [k, v] of session.bindings) {
 		names.set(k, v);
 	}
-	if (base) {
-		return { ...base, names };
-	}
-	return {
-		names,
-		fns: new Map(),
-		me: dummyEntity('me'),
-		cache: new SampleCache(),
-	};
+	return { ...base ?? { fns: new Map(), me: dummyEntity('me'), cache: new SampleCache() }, names };
 }
 
 export function watchIsTrue(watch:string, catalog:Catalog):boolean {
@@ -280,7 +248,7 @@ function noteTrigger(session:ArcSession, h:ArcHandler, holds:boolean):boolean {
 }
 
 /** `handler` runs from now on: it is fired, and it has started one of its `times`, however this run ends. */
-function startRunning(session:ArcSession, handler:ArcHandler):void {
+export function startRunning(session:ArcSession, handler:ArcHandler):void {
 	session.running.push(handler);
 	session.lastStartAt = session.now();
 	handler.arm.fired = true;
@@ -291,7 +259,7 @@ function startRunning(session:ArcSession, handler:ArcHandler):void {
 }
 
 /** The reaction on top has ended. Its watch is asked now too: one that ended as its watch went false may re-arm at once. */
-function stopRunning(session:ArcSession):void {
+export function stopRunning(session:ArcSession):void {
 	const ended = session.running.pop();
 	const catalog = ended && liveCatalog(session);
 	if (ended && catalog) {
@@ -319,16 +287,15 @@ export function pollArcSession(session:ArcSession):void {
 	if (top?.until && top.progress && !top.progress.ended && watchIsTrue(top.until, catalog)) {
 		top.progress.ended = true;
 	}
-	if (top?.progress?.ended) {
-		session.pending = { kind: 'abort' };
+	const next = top?.progress?.ended || session.lastStartAt === session.now() ? undefined : ready.find((h) => !top || h.rank < top.rank);
+	if (top?.progress?.ended || next) {
+		interruptArc(session, next ? { kind: 'preempt', handler: next } : { kind: 'abort' });
 	}
-	else {
-		const next = session.lastStartAt === session.now() ? undefined : ready.find((h) => !top || h.rank < top.rank);
-		if (!next) {
-			return;
-		}
-		session.pending = { kind: 'preempt', handler: next };
-	}
+}
+
+/** Stops the step running now, and the host's part of it, for `pending`: a reaction taking over, or an abort. */
+export function interruptArc(session:ArcSession, pending:ArcPending):void {
+	session.pending = pending;
 	session.token += 1;
 	session.stepStop?.abort('stopped');
 	session.abortHost?.();
@@ -341,65 +308,11 @@ export function firstStartable(session:ArcSession):ArcHandler | undefined {
 	return catalog && startable(session, candidates, catalog)[0];
 }
 
-function thinkAbout(step:Step):string {
-	return typeof step.args.about === 'string' ? step.args.about.replace(/\s+/g, ' ').trim() : '';
-}
-
-function withVerb(result:ArcResult, step:Step):ArcResult {
-	return { ...result, verb: result.verb ?? step.verb };
-}
-
-/**
- * Pull every think() out of the arc (and out of each group in it), concat abouts, append one think at the end. The
- * same array comes back when nothing moves; only a group that changes, and the step before the appended think,
- * are copied.
- */
-export function deferThinks(arc:Arc):Arc {
-	const abouts:string[] = [];
-	const body:Step[] = [];
-	let thought = false;
-	let moved = false;
-	for (const step of arc) {
-		if (step.verb === 'think') {
-			thought = true;
-			const about = thinkAbout(step);
-			if (about) {
-				abouts.push(about);
-			}
-			continue;
-		}
-		const inner = groupArc(step);
-		const deferred = inner && deferThinks(inner);
-		if (deferred && deferred !== inner) {
-			moved = true;
-			body.push({ ...step, args: { ...step.args, arc: deferred } });
-			continue;
-		}
-		body.push(step);
-	}
-	if (!thought && !moved) {
-		return arc;
-	}
-	if (!thought) {
-		return body;
-	}
-	let about = abouts.join(' ');
-	if (about.length > THINK_ABOUT_CAP) {
-		about = about.slice(0, THINK_ABOUT_CAP).trim();
-	}
-	const think:Step = { verb: 'think', args: about ? { about } : {} };
-	if (body.length === 0) {
-		return [think];
-	}
-	body[body.length - 1] = { ...body[body.length - 1], then: 'always' };
-	return [...body, think];
-}
-
 /**
  * A `when` step: its reaction guards the rest of the arc it is written in from here, so it joins that arc's frame and
  * goes with it. Its count and its `until` are kept by the step, over every pass of a loop.
  */
-function registerWhen(step:Step, session:ArcSession):ArcResult {
+export function registerWhen(step:Step, session:ArcSession):ArcResult {
 	const { watch, arc, ...rest } = reactionOf(step.args);
 	if (!watch || !arc) {
 		return { status: 'failed', verb: 'when', reason: 'when needs watch and arc' };
@@ -414,17 +327,32 @@ function registerWhen(step:Step, session:ArcSession):ArcResult {
 	return { status: 'ok', verb: 'when' };
 }
 
-function rootedAtBinding(ast:Ast, session:ArcSession):boolean {
-	if (ast.type === 'ident') {
-		return ast.name === 'fail' || session.bindings.has(ast.name);
-	}
-	if (ast.type === 'member') {
-		return rootedAtBinding(ast.recv, session);
-	}
-	return false;
+/** The name an expression reads through (`fail` in `fail.reason`), when it is a name or a field of one. */
+function rootName(ast:Ast):string | undefined {
+	return ast.type === 'ident' ? ast.name : ast.type === 'member' ? rootName(ast.recv) : undefined;
 }
 
-function interpolateStep(step:Step, session:ArcSession):Step {
+/** Each step's string args by the name each reads through, if it is one: parsed once per step, not on every run. */
+const roots = new WeakMap<Step, [key:string, root:string][]>();
+
+function rootsOf(step:Step):[key:string, root:string][] {
+	let found = roots.get(step);
+	if (!found) {
+		found = Object.entries(step.args).flatMap(([key, value]):[string, string][] => {
+			try {
+				const root = typeof value === 'string' ? rootName(parse(value).ast) : undefined;
+				return root ? [[key, root]] : [];
+			}
+			catch {
+				return [];
+			}
+		});
+		roots.set(step, found);
+	}
+	return found;
+}
+
+export function interpolateStep(step:Step, session:ArcSession):Step {
 	if (!session.fail && session.bindings.size === 0) {
 		return step;
 	}
@@ -434,86 +362,19 @@ function interpolateStep(step:Step, session:ArcSession):Step {
 	}
 	const args = { ...step.args };
 	let changed = false;
-	for (const [key, value] of Object.entries(args)) {
-		if (typeof value !== 'string') {
-			continue;
-		}
-		try {
-			const { ast } = parse(value);
-			if (!rootedAtBinding(ast, session)) {
-				continue;
-			}
-			const r = evaluate(value, catalog);
-			if (r.error) {
-				continue;
-			}
+	for (const [key, root] of rootsOf(step)) {
+		const r = root === 'fail' || session.bindings.has(root) ? evaluate(String(args[key]), catalog) : undefined;
+		if (r && !r.error) {
 			const prose = argKind(session.verbs?.get(step.verb), key) === 'text';
 			args[key] = r.value.kind === 'entity' && !prose ? r.value.value.id : stringifyVal(r.value, catalog);
 			changed = true;
-		}
-		catch {
-			continue;
 		}
 	}
 	return changed ? { ...step, args } : step;
 }
 
-async function drainPending(
-	session:ArcSession,
-	execute:StepExecutor,
-	depth:number,
-):Promise<ArcResult | undefined> {
-	while (session.pending) {
-		const pending = session.pending;
-		session.pending = undefined;
-		if (pending.kind === 'abort') {
-			return { status: 'stopped', verb: session.running.at(-1) ? 'when' : '' };
-		}
-		startRunning(session, pending.handler);
-		// What the reaction runs is its own: a race of the step it cut short does not stop it.
-		const signal = session.signal;
-		const races = session.races;
-		session.signal = undefined;
-		session.races = [];
-		try {
-			const result = await runFrame(pending.handler.arc, execute, session, depth + 1);
-			// Stopped, the reaction ends here; what it cut short goes on, unless its program was replaced.
-			if (result.status === 'stopped' && session.ended) {
-				return result;
-			}
-		}
-		finally {
-			session.signal = signal;
-			session.races = races;
-			stopRunning(session);
-		}
-	}
-	return undefined;
-}
-
-async function pumpHandlers(
-	session:ArcSession,
-	execute:StepExecutor,
-	depth:number,
-):Promise<ArcResult | undefined> {
-	for (let n = 0; n < 32; n++) {
-		pollArcSession(session);
-		if (!session.pending) {
-			return undefined;
-		}
-		const before = await drainPending(session, execute, depth);
-		if (before) {
-			return before;
-		}
-	}
-	return { status: 'failed', verb: 'when', reason: 'handler pump cap' };
-}
-
 /** Verbs whose `until` is their reaction's, not a race of the step: the step itself ends at once. */
 const REACTION_VERBS:ReadonlySet<string> = new Set(['when', 'law']);
-
-/** How often a race asks its `until` without a game clock to wait on (ms). */
-const RACE_POLL_MS = 10;
 
 /**
  * A step racing the args the runtime gives every verb: `until`, a watch that stops it once it holds, and `within`,
@@ -535,7 +396,7 @@ export type Race = {
 	cause?:'until' | 'within' | 'trigger';
 };
 
-function raceOf(step:Step, session:ArcSession):Race | undefined {
+export function raceOf(step:Step, session:ArcSession):Race | undefined {
 	const until = typeof step.args.until === 'string' ? step.args.until.trim() : '';
 	const within = typeof step.args.within === 'number' ? step.args.within : undefined;
 	const endless = !!session.verbs?.get(step.verb)?.endless;
@@ -543,16 +404,13 @@ function raceOf(step:Step, session:ArcSession):Race | undefined {
 	if (REACTION_VERBS.has(step.verb) || (!until && within === undefined && !reaction)) {
 		return undefined;
 	}
-	const stop = new AbortController();
-	const outer = session.signal;
-	outer?.addEventListener('abort', () => stop.abort(outer.reason), { once: true });
 	const now = session.now();
 	const hold = typeof step.args.unbreakable === 'string' ? durationSeconds(step.args.unbreakable) ?? 0 : 0;
-	return { until, within, deadline: within === undefined ? Infinity : now + within, reaction, endless, holdUntil: now + hold, stop };
+	return { until, within, deadline: within === undefined ? Infinity : now + within, reaction, endless, holdUntil: now + hold, stop: new AbortController() };
 }
 
 /** Whether `race` is over now: its time is up, its `until` holds, or its reaction's trigger does not. It notes which. */
-function raceOver(race:Race, session:ArcSession):boolean {
+export function raceOver(race:Race, session:ArcSession):boolean {
 	if (!race.cause && session.now() >= race.deadline) {
 		race.cause = 'within';
 	}
@@ -579,7 +437,7 @@ function raceOver(race:Race, session:ArcSession):boolean {
  * done when its `until` held or its trigger went, failed when its time ran out, unless it is endless: then that is
  * how it ends.
  */
-function raceResult(race:Race, step:Step, result?:ArcResult):ArcResult {
+export function raceResult(race:Race, step:Step, result?:ArcResult):ArcResult {
 	if (result?.status === 'ok') {
 		return result;
 	}
@@ -589,137 +447,8 @@ function raceResult(race:Race, step:Step, result?:ArcResult):ArcResult {
 	return { status: 'failed', verb: step.verb, reason: race.until ? `until not met after ${race.within}s` : `not done after ${race.within}s` };
 }
 
-/** Resolves once game time moves on, or after a moment without a game clock. */
-function nextTick(session:ArcSession):Promise<void> {
-	return session.nextTime?.() ?? new Promise<void>((resolve) => {
-		setTimeout(resolve, RACE_POLL_MS);
-	});
-}
-
-/**
- * `running`, stopped once `race` is over: the signal its verbs were handed aborts, which stops the host's part. While a
- * reaction has the step, or one is due, the race waits: what stops the step does not stop the reaction.
- */
-async function raced(race:Race, running:Promise<ArcResult>, session:ArcSession):Promise<ArcResult> {
-	let settled = false;
-	void running.then(() => {
-		settled = true;
-	}, () => {
-		settled = true;
-	});
-	const above = session.running.length;
-	while (!settled && !session.ended) {
-		await Promise.race([running, nextTick(session)]);
-		if (settled || session.ended || session.pending || session.running.length > above) {
-			continue;
-		}
-		if (raceOver(race, session)) {
-			race.stop.abort(race.cause);
-			break;
-		}
-	}
-	return running;
-}
-
-/** One step, raced against its `until` and `within` when it has them. */
-async function execStep(
-	step:Step,
-	execute:StepExecutor,
-	session:ArcSession,
-	depth:number,
-):Promise<ArcResult> {
-	const before = await pumpHandlers(session, execute, depth);
-	if (before) {
-		return before;
-	}
-	// A step inside one whose race is over runs no more: steps that end at once would otherwise go on and on.
-	const over = session.races.find((race) => raceOver(race, session));
-	over?.stop.abort(over.cause);
-	if (session.signal?.aborted) {
-		return { status: 'stopped', verb: step.verb };
-	}
-	const race = raceOf(step, session);
-	if (!race) {
-		return runStep(step, execute, session, depth);
-	}
-	if (raceOver(race, session)) {
-		return raceResult(race, step);
-	}
-	const outer = session.signal;
-	session.signal = race.stop.signal;
-	session.races.push(race);
-	try {
-		const result = await raced(race, runStep(step, execute, session, depth, race), session);
-		return race.cause && !session.ended ? raceResult(race, step, result) : result;
-	}
-	finally {
-		session.signal = outer;
-		session.races.pop();
-	}
-}
-
-async function runStep(
-	step:Step,
-	execute:StepExecutor,
-	session:ArcSession,
-	depth:number,
-	race?:Race,
-):Promise<ArcResult> {
-	if (step.verb === 'loop') {
-		return runLoop(step, execute, session, depth);
-	}
-	if (step.verb === CHOOSE_VERB) {
-		return runChoose(step, execute, session, depth);
-	}
-	if (step.verb === IF_VERB) {
-		return runIf(step, execute, session, depth);
-	}
-	for (;;) {
-		// A reaction that came due since the step was asked for goes first.
-		if (session.pending) {
-			const stolen = await drainPending(session, execute, depth);
-			if (stolen) {
-				return stolen;
-			}
-			if (race && raceOver(race, session)) {
-				return { status: 'stopped', verb: step.verb };
-			}
-			continue;
-		}
-		const live = interpolateStep(step, session);
-		const token = session.token;
-		// Its own signal, so a reaction or a new program that comes before the host has even begun it still stops it.
-		const stop = new AbortController();
-		const outer = session.signal;
-		outer?.addEventListener('abort', () => stop.abort(outer.reason), { once: true });
-		if (outer?.aborted) {
-			stop.abort(outer.reason);
-		}
-		session.stepStop = stop;
-		const result = withVerb(await execute(live, stop.signal), live);
-		if (session.stepStop === stop) {
-			session.stepStop = undefined;
-		}
-		const stolen = await afterSteal(session, execute, depth, token);
-		// A step that had done what it does is done. One a reaction cut short is suspended, and goes on now the reaction is
-		// over, unless its race ended meanwhile. A program replaced instead ends it.
-		if (stolen || result.status !== 'stopped' || session.token === token || (race && raceOver(race, session))) {
-			return stolen ?? result;
-		}
-	}
-}
-
-/**
- * After a wait in which a reaction may have come due (the session's token moved from `token`): it runs first. A
- * `stopped` result when the program was replaced or the reaction under way was stopped; else `undefined`, and the
- * step that waited goes on.
- */
-async function afterSteal(session:ArcSession, execute:StepExecutor, depth:number, token:number):Promise<ArcResult | undefined> {
-	return session.token === token && !session.pending ? undefined : drainPending(session, execute, depth);
-}
-
 /** A query as a step: it worked while its watch holds. A `let` on it names the value, not only whether it held. */
-function runTest(step:Step, session:ArcSession):ArcResult {
+export function runTest(step:Step, session:ArcSession):ArcResult {
 	const watch = String(step.args.watch ?? '');
 	const catalog = liveCatalog(session);
 	const r = catalog ? evaluate(watch, catalog) : undefined;
@@ -733,383 +462,11 @@ function runTest(step:Step, session:ArcSession):ArcResult {
 }
 
 /**
- * `if (cond) { arc } else { else }`: `cond` runs as steps, and whether it worked picks the branch. Without an `else`, a
- * `cond` that failed ends the `if` as done; in an `else`, `fail` is why `cond` failed.
- */
-async function runIf(
-	step:Step,
-	execute:StepExecutor,
-	session:ArcSession,
-	depth:number,
-):Promise<ArcResult> {
-	const { cond, arc, else: otherwise } = step.args;
-	if (!isArc(cond) || !isArc(arc)) {
-		return { status: 'failed', verb: IF_VERB, reason: 'if needs cond and arc' };
-	}
-	const asked = await runFrame(cond, execute, session, depth + 1);
-	if (endsChain(asked)) {
-		return asked;
-	}
-	if (asked.status === 'ok') {
-		return runFrame(arc, execute, session, depth + 1);
-	}
-	if (!isArc(otherwise)) {
-		return { status: 'ok', verb: IF_VERB };
-	}
-	const outer = session.fail;
-	session.fail = { verb: asked.verb ?? '', reason: asked.reason ?? '' };
-	try {
-		return await runFrame(otherwise, execute, session, depth + 1);
-	}
-	finally {
-		session.fail = outer;
-	}
-}
-
-/** Ask `session.pick` for a name, then run the choice under it. A choice gone stale while asking does not run. */
-async function runChoose(
-	step:Step,
-	execute:StepExecutor,
-	session:ArcSession,
-	depth:number,
-):Promise<ArcResult> {
-	const fail = (reason:string):ArcResult => ({ status: 'failed', verb: CHOOSE_VERB, reason });
-	if (!session.pick) {
-		return fail('no System One model');
-	}
-	const choices = withLoneWait(choicesOf(step));
-	let name:string;
-	// A pick a reaction ran through is stale: it is asked again.
-	for (;;) {
-		const token = session.token;
-		// A loop of instant choices waits for game time to move instead of asking again at once.
-		while (session.now() === session.lastPickAt) {
-			await new Promise<void>((resolve) => {
-				setTimeout(resolve, 10);
-			});
-			const stolen = await afterSteal(session, execute, depth, token);
-			if (stolen) {
-				return stolen;
-			}
-		}
-		session.lastPickAt = session.now();
-		try {
-			name = await session.pick(typeof step.args.goal === 'string' ? step.args.goal : '', choices, session.lastChoice);
-		}
-		catch (err) {
-			return await afterSteal(session, execute, depth, token)
-				?? fail(`System One: ${err instanceof Error ? err.message : String(err)}`);
-		}
-		const stolen = await afterSteal(session, execute, depth, token);
-		if (stolen) {
-			return stolen;
-		}
-		if (session.token === token) {
-			break;
-		}
-	}
-	if (!Object.hasOwn(choices, name)) {
-		return fail(`unknown choice '${name}'`);
-	}
-	const result = await runFrame(choices[name], execute, session, depth + 1);
-	session.lastChoice = { name, result };
-	return result;
-}
-
-function parseThrough(through:string):{ name:string; expr:string } | undefined {
-	const m = /^([A-Za-z_][A-Za-z0-9_]*)\s+in\s+([\s\S]+)$/.exec(through.trim());
-	if (!m) {
-		return undefined;
-	}
-	return { name: m[1], expr: m[2].trim() };
-}
-
-/** Failures in a row a `loop` goes on through when each says going round again may help, and how long it waits between (s). */
-const LOOP_RETRIES = 5;
-const LOOP_RETRY_WAIT = 1;
-
-/**
  * Whether the trigger of `reaction` still holds. In a reaction's arc, at any depth, what would otherwise go on and on
  * goes on only while it does: a loop asks before each round, and an endless verb (`VerbDef.endless`) stops once it no
  * longer holds.
  */
-function triggerHolds(reaction:ArcHandler, session:ArcSession):boolean {
+export function triggerHolds(reaction:ArcHandler, session:ArcSession):boolean {
 	const catalog = liveCatalog(session);
 	return !catalog || watchIsTrue(reaction.watch, catalog);
-}
-
-/**
- * Whether round `round` (from 0) of a loop that began at `since` is unbreakable: inside one, or by its own
- * `unbreakable` (`true`, a number of rounds first, or seconds first).
- */
-function held(session:ArcSession, unbreakable:StepArg | undefined, round:number, since:number):boolean {
-	return session.shields > 0 || unbreakable === true || (typeof unbreakable === 'number' && round < unbreakable)
-		|| (typeof unbreakable === 'string' && session.now() < since + (durationSeconds(unbreakable) ?? 0));
-}
-
-/** Whether a loop goes round: outside a reaction always; in one when the round is `held`, or its trigger holds. */
-function goesRound(session:ArcSession, hold:boolean):boolean {
-	const reaction = session.running.at(-1);
-	return !reaction || hold || triggerHolds(reaction, session);
-}
-
-/** A loop round: a `held` one shields what runs in it, loops and endless verbs, from the trigger. */
-async function round(session:ArcSession, hold:boolean, run:()=>Promise<ArcResult>):Promise<ArcResult> {
-	session.shields += Number(hold);
-	try {
-		return await run();
-	}
-	finally {
-		session.shields -= Number(hold);
-	}
-}
-
-async function runLoop(
-	step:Step,
-	execute:StepExecutor,
-	session:ArcSession,
-	depth:number,
-):Promise<ArcResult> {
-	const inner = isArc(step.args.arc) ? step.args.arc : undefined;
-	if (!inner) {
-		return { status: 'failed', verb: 'loop', reason: 'loop needs arc' };
-	}
-	const through = typeof step.args.through === 'string' ? step.args.through : '';
-	const times = typeof step.args.times === 'number' ? step.args.times : undefined;
-	const since = session.now();
-	if (through) {
-		const parsed = parseThrough(through);
-		if (!parsed) {
-			return { status: 'failed', verb: 'loop', reason: 'through needs x in expr' };
-		}
-		const catalog = liveCatalog(session);
-		if (!catalog) {
-			return { status: 'failed', verb: 'loop', reason: 'through needs a catalog' };
-		}
-		const listed = evaluate(parsed.expr, catalog);
-		if (listed.error || listed.value.kind !== 'list') {
-			return { status: 'failed', verb: 'loop', reason: listed.error?.message ?? 'through expr is not a list' };
-		}
-		const items = listed.value.value;
-		const cap = catalog.listCap ?? LIST_CAP;
-		if (items.length > cap) {
-			return { status: 'failed', verb: 'loop', reason: 'through list cap' };
-		}
-		let last:ArcResult = { status: 'ok', verb: 'loop' };
-		for (let i = 0; i < items.length; i++) {
-			const hold = held(session, step.args.unbreakable, i, since);
-			if ((times !== undefined && i >= times) || !goesRound(session, hold)) {
-				break;
-			}
-			session.bindings.set(parsed.name, items[i]);
-			try {
-				last = await round(session, hold, () => runFrame(inner, execute, session, depth + 1));
-			}
-			finally {
-				session.bindings.delete(parsed.name);
-			}
-			session.passes.set(step, (session.passes.get(step) ?? 0) + 1);
-			if (last.status === 'stopped') {
-				return last;
-			}
-			if (last.status !== 'ok') {
-				return last;
-			}
-		}
-		return { ...last, verb: last.verb ?? 'loop' };
-	}
-	let i = 0;
-	let missed = 0;
-	let last:ArcResult = { status: 'ok', verb: 'loop' };
-	while (true) {
-		const hold = held(session, step.args.unbreakable, i, since);
-		if ((times !== undefined && i >= times) || !goesRound(session, hold)) {
-			return { ...last, verb: last.verb ?? 'loop' };
-		}
-		const clock = session.now();
-		last = await round(session, hold, () => runFrame(inner, execute, session, depth + 1));
-		i += 1;
-		session.passes.set(step, i);
-		if (last.status === 'stopped') {
-			return last;
-		}
-		if (last.status !== 'ok') {
-			missed += 1;
-			if (!last.retry || missed > LOOP_RETRIES || !session.nextTime) {
-				return last;
-			}
-			const token = session.token;
-			const from = session.now();
-			while (session.now() < from + LOOP_RETRY_WAIT) {
-				await session.nextTime();
-				const stolen = await afterSteal(session, execute, depth, token);
-				if (stolen) {
-					return stolen;
-				}
-			}
-			continue;
-		}
-		missed = 0;
-		if (session.now() === clock) {
-			// An iteration that took no game time: the next waits for game time to move.
-			await (session.nextTime?.() ?? new Promise<void>((resolve) => {
-				setTimeout(resolve, 0);
-			}));
-		}
-	}
-}
-
-/** Whether a step that went this way ends every chain it is in: its program was replaced, or a reaction cut it short. */
-function endsChain(result:ArcResult):boolean {
-	return result.status === 'stopped';
-}
-
-/**
- * The step a chain runs after step `i`, by standard short-circuit precedence over the flat list: `&&` binds tighter
- * than `||`, and `;` is lowest. A step that worked skips its `||` alternatives, to the step after the next `;`; one that
- * failed skips the rest of its `&&` run, to the step after the next `||` or `;`. `arc.length` when none is left.
- */
-function nextStep(arc:Arc, i:number, ok:boolean):number {
-	const join = arc[i].then ?? 'if_ok';
-	if (join === 'always' || (join === 'if_ok') === ok) {
-		return i + 1;
-	}
-	const stops:Join[] = ok ? ['always'] : ['always', 'if_failed'];
-	for (let j = i + 1; j < arc.length - 1; j++) {
-		if (stops.includes(arc[j].then ?? 'if_ok')) {
-			return j + 1;
-		}
-	}
-	return arc.length;
-}
-
-/**
- * Run `arc` step by step, each join read as in JavaScript ({@link nextStep}). The chain's result is the last step's.
- * `fail` is the latest failure in it, kept to its end, and what it was outside the chain once the chain is done. A
- * step's `let` name holds its result from then to the chain's end.
- */
-async function runChain(
-	arc:Arc,
-	execute:StepExecutor,
-	session:ArcSession,
-	depth:number,
-):Promise<ArcResult> {
-	const outer = session.fail;
-	const named:string[] = [];
-	let result:ArcResult = { status: 'ok' };
-	try {
-		for (let i = 0; i < arc.length; i = nextStep(arc, i, result.status === 'ok')) {
-			const step = arc[i];
-			const inner = groupArc(step);
-			result = inner ? await runFrame(inner, execute, session, depth + 1)
-				: step.verb === TEST_VERB ? runTest(step, session)
-					: step.verb === 'when' ? registerWhen(step, session)
-						: await execStep(step, execute, session, depth);
-			if (endsChain(result)) {
-				return result;
-			}
-			if (step.let) {
-				named.push(step.let);
-				if (step.verb !== TEST_VERB) {
-					session.bindings.set(step.let, { kind: 'bool', value: result.status === 'ok' });
-				}
-			}
-			if (result.status === 'failed') {
-				session.fail = { verb: result.verb ?? firstStep([step])?.verb ?? '', reason: result.reason ?? '' };
-			}
-		}
-		return result;
-	}
-	finally {
-		session.fail = outer;
-		for (const name of named) {
-			session.bindings.delete(name);
-		}
-	}
-}
-
-async function runFrame(
-	arc:Arc,
-	execute:StepExecutor,
-	session:ArcSession,
-	depth:number,
-):Promise<ArcResult> {
-	const frame:{ handlers:ArcHandler[] } = { handlers: [] };
-	session.frames.push(frame);
-	try {
-		// As written when it starts: steps appended to it meanwhile run from its next time round.
-		const result = await runChain([...arc], execute, session, depth);
-		// Its `when`s outlive a program's own body, until the program is replaced.
-		if (depth === 0 && result.status !== 'stopped' && frame.handlers.length > 0) {
-			session.parked = true;
-			void keepWatching(session, execute, frame);
-		}
-		return result;
-	}
-	finally {
-		if (!(session.parked && depth === 0)) {
-			session.frames.pop();
-		}
-	}
-}
-
-/**
- * A parked program's `when`s, run as they come due, until the program is replaced or none of them can fire again: asked
- * each time its director asks watches (`watchedAt`), every tick without one, and at once when a reaction is due
- * already. Only by a game clock (`nextTime`): without one a session is polled by hand.
- */
-async function keepWatching(session:ArcSession, execute:StepExecutor, frame:{ handlers:ArcHandler[] }):Promise<void> {
-	let asked:number | undefined;
-	while (!session.ended && frame.handlers.some((h) => !handlerFinished(h))) {
-		const watchedAt = session.watchedAt?.();
-		if (session.pending || watchedAt === undefined || watchedAt !== asked) {
-			asked = watchedAt;
-			const stopped = await pumpHandlers(session, execute, 0);
-			if (stopped?.status === 'stopped') {
-				return;
-			}
-		}
-		if (!session.nextTime) {
-			return;
-		}
-		await session.nextTime();
-	}
-}
-
-export type RunArcOpts = {
-	session?:ArcSession;
-	asHandler?:ArcHandler;
-	onStep?:(step:Step)=>void;
-};
-
-export async function runArc(
-	arc:Arc,
-	execute:StepExecutor,
-	opts:RunArcOpts = {},
-):Promise<ArcResult> {
-	const session = opts.session ?? createArcSession();
-	const run = async (step:Step, signal?:AbortSignal):Promise<ArcResult> => {
-		opts.onStep?.(step);
-		return execute(step, signal);
-	};
-	const ordered = deferThinks(arc);
-	const last = ordered.at(-1);
-	// A trailing think runs after the rest, unless nothing else is left to run.
-	const trail = ordered.length > 1 && last?.verb === 'think' ? last : undefined;
-	const work = trail ? ordered.slice(0, -1) : ordered.length > 0 ? ordered : [{ verb: 'think', args: {} }];
-	if (opts.asHandler) {
-		startRunning(session, opts.asHandler);
-	}
-	try {
-		const result = await runFrame(work, run, session, 0);
-		if (!trail || result.status === 'stopped') {
-			return result;
-		}
-		return withVerb(await run(trail), trail);
-	}
-	finally {
-		if (opts.asHandler) {
-			stopRunning(session);
-		}
-	}
 }

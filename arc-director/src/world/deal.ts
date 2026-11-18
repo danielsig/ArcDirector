@@ -1,3 +1,4 @@
+import type { NamingText } from '../character/text-with-ids.js';
 import type { HostWorld, Outcome, Transfer } from './world-types.js';
 
 /**
@@ -28,7 +29,7 @@ export class Deal<TEntity> {
 	/** The other moves the world does not hold yet: those after this one, or in a dry run all of them. */
 	public get pending():readonly Transfer<TEntity>[] {
 		this._pending ??= this._dryRun
-			? this._moves.filter((_, i) => i !== this._at)
+			? this._moves.filter((move, i) => i !== this._at)
 			: this._moves.slice(this._at + 1);
 		return this._pending;
 	}
@@ -59,9 +60,9 @@ function cached<K, V>(map:Map<K, V>, key:K, make:()=>V):V {
 }
 
 /** Why `moves` could not happen as they stand, or nothing: each one checked against the world now, moving none. */
-export function checkDeal<TEntity>(world:HostWorld<TEntity>, moves:readonly Transfer<TEntity>[]):string | undefined {
+export function checkDeal<TEntity>(world:HostWorld<TEntity>, moves:readonly Transfer<TEntity>[]):NamingText | undefined {
 	for (let i = 0; i < moves.length; i++) {
-		const reason = world.validateTransfer?.(moves[i], new Deal(moves, i, true));
+		const reason = world.transfers?.validateTransfer?.(moves[i], new Deal(moves, i, true));
 		if (reason) {
 			return reason;
 		}
@@ -82,12 +83,12 @@ export function settleDeal<TEntity>(world:HostWorld<TEntity>, moves:readonly Tra
 	};
 	try {
 		for (let i = 0; i < moves.length; i++) {
-			const reason = world.validateTransfer?.(moves[i], new Deal(moves, i, false));
+			const reason = world.transfers?.validateTransfer?.(moves[i], new Deal(moves, i, false));
 			if (reason) {
 				rollBack();
 				return { ok: false, reason };
 			}
-			undo.push(world.transfer!(moves[i]));
+			undo.push(world.transfers!.transfer(moves[i]));
 		}
 	}
 	catch (err) {

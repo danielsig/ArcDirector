@@ -3,11 +3,13 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { z } from 'zod';
 import { openHub, type HubHandle } from '@arc-director/control/hub';
 import { HttpProvider, fetchModelCatalog, findModel, lmStudioConfig, pickSingleChatModel } from 'arc-director';
-import { projectEntries, type LogEntry } from './project.js';
+import { AiLogStore } from '@arc-director/control/ai-log-store';
+import type { AiLogRow } from '@arc-director/control';
+import { projectEntries } from './project.js';
 
 const sessionField = z.string().min(1).describe('Client session id from ?session=');
 
-function isEntries(value:unknown):value is { entries:LogEntry[] } {
+function isEntries(value:unknown):value is { entries:AiLogRow[] } {
 	return typeof value === 'object' && value !== null && Array.isArray((value as { entries?:unknown }).entries);
 }
 
@@ -17,6 +19,7 @@ function text(value:unknown):{ content:Array<{ type:'text'; text:string }> } {
 
 async function main():Promise<void> {
 	const hub:HubHandle = openHub();
+	const logs = new AiLogStore();
 	const server = new McpServer({ name: 'arc-director', version: '0.0.1' });
 
 	server.registerTool('list_clients', {
@@ -86,26 +89,46 @@ async function main():Promise<void> {
 	});
 
 	server.registerTool('read_ai_log', {
-		description: 'Read the live AI log for a connected client, optionally filtered. Omits map image bytes; image is a boolean. '
+		description: 'Read the AI log of a connected client, live (the last 250 rows), or a stored run with `run`: every row of each game (a scene start, restart or load) is also kept in logs/ai, the 10 newest runs, so a reload loses nothing (list_ai_logs lists them). '
+			+ 'Optionally filtered. Omits map image bytes; image is true where a row had one. '
+			+ 'A stored run also answers `schemas`: the whole response format (JSON schema) of each prompt row that asked for one, by the id in its `schema`; the prompt itself names the format only. '
 			+ 'Pass `each` to reduce every row in-process so you do not parse the tool-result file. '
-			+ '`each` is a JavaScript expression. `entry` is { seq, name, message, image }. '
+			+ '`each` is a JavaScript expression. `entry` is { seq, name, message, image?, error?, schema? }. '
 			+ '`take(re, text?)` returns the first capture group, or the whole match, from `text` (default `entry.message`); empty string if none. '
 			+ 'A string result is returned as { seq, name, text }. An object is kept as returned. null, undefined, or false drops the row. '
 			+ 'Example: entry.message.startsWith("prompt") ? [take(/Short-term[\\s\\S]*?\\n\\n/), take(/Last verb result:.*/), take(/In talking range:.*/)].filter(Boolean).join("\\n") : entry.message.slice(0, 2500)',
 		inputSchema: {
-			session: sessionField,
+			session: sessionField.optional().describe('Client session id from ?session=. Needed for the live log; with a numeric `run`, counts that session\'s runs only.'),
+			run: z.union([z.number().int().min(0), z.string().min(1)]).optional()
+				.describe('A stored run instead of the live log: 0 = the newest (the live page\'s, whole), 1 = the one before, …; or a file name from list_ai_logs.'),
 			name: z.string().optional().describe('Agent id to keep (same as the HUD source filter).'),
 			pattern: z.string().optional().describe('JavaScript regular expression matched against name or message.'),
 			after: z.number().optional().describe('Only rows with seq greater than this.'),
 			limit: z.number().optional().describe('Keep the last N matching rows.'),
 			each: z.string().optional().describe('JavaScript expression run per row. Bindings: entry, take(re, text?).'),
 		},
-	}, async ({ session, name, pattern, after, limit, each }) => {
-		const result = await hub.call(session, { op: 'readAiLog', name, pattern, after, limit });
+	}, async ({ session, run, name, pattern, after, limit, each }) => {
+		const query = { name, pattern, after, limit };
+		let result:unknown;
+		if (run !== undefined) {
+			result = logs.read(run, session, query);
+		}
+		else if (session) {
+			result = await hub.call(session, { op: 'readAiLog', ...query });
+		}
+		else {
+			throw new Error('pass session for the live log, or run for a stored one');
+		}
 		if (!each || !isEntries(result)) {
 			return text(result);
 		}
-		return text({ entries: projectEntries(result.entries, each) });
+		return text({ ...result, entries: projectEntries(result.entries, each) });
+	});
+
+	server.registerTool('list_ai_logs', {
+		description: 'List the stored AI log runs in logs/ai, newest first: file, session, scene, started (ISO time) and rows. One per game (each scene start, restart or load), the 10 newest across sessions. Read one with read_ai_log `run`.',
+	}, async () => {
+		return text(logs.list());
 	});
 
 	server.registerTool('render_stats', {

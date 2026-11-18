@@ -31,12 +31,14 @@ export type WatchInput = Watches | readonly unknown[];
 /**
  * What a character or collective may use. Fetched every tick from its `kit`.
  * `verbs` are all it may run; a fixed kit without any is a mistake the director refuses.
- * `senses` / `tools` omitted = all registered senses / tools; `[]` = none.
+ * `senses` / `tools` omitted = all registered senses / tools; `[]` = none. `cooldowns`: game seconds after a verb before
+ * this character may run it again, by verb, over the verb's own (`VerbDef.cooldown`).
  */
 export type Kit = {
 	verbs:readonly string[];
 	senses?:readonly string[];
 	tools?:readonly string[];
+	cooldowns?:Readonly<Record<string, number>>;
 };
 
 /** Plain object (mutate in place, or use getters) or a callback. */

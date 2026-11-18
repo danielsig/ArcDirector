@@ -1,10 +1,12 @@
 import { RESERVED_TAGS } from '../world/world-types.js';
-import { distance as pointDistance, dot, sub } from '../world/vec.js';
+import { rightOf, toLocal, type Axes } from '../world/axes.js';
+import { add, distance as pointDistance, dot, sub } from '../world/vec.js';
 import { defaultLandmarkTier, groundAndFigure } from './ground.js';
 import { claimedOf, basicPluralize, builtinStringifiers } from './stringifiers.js';
 import { builtinLodLayers } from './lod.js';
+import { Bearing, BearingMode } from './perception-types.js';
 import type {
-	Bearing,
+	Sighting,
 	SightOpts,
 	LodCtx,
 	RelationshipHit,
@@ -17,15 +19,81 @@ import type {
 const EPS = 0.5;
 const ATTACH_BONUS = 8;
 
+/** How far distance alone lets a thing be made out: clear up to `clear`, dim up to `dim`, vague up to `vague`, then not at all. */
+export type SightRange = { clear:number; dim:number; vague:number };
+
+/** Clear up to 20 paces, dim up to 35, vague up to 50. */
+export const DEFAULT_SIGHT_RANGE:SightRange = { clear: 20, dim: 35, vague: 50 };
+
 export const DEFAULT_SIGHT:Required<Pick<SightOpts,
-	'radius' | 'unitName' | 'closeness' | 'farDistance' | 'clusterFactor'
+	'unitName' | 'closeness' | 'farDistance' | 'clusterFactor'
 >> = {
-	radius: 24,
 	unitName: 'pace',
 	closeness: 2,
 	farDistance: 12,
 	clusterFactor: 1.2,
 };
+
+/** How clearly a thing is made out, by its {@link SeenObject.clarity}: all of it, its name only, what it seems to be, or nothing. */
+export type SightTier = 'clear' | 'dim' | 'vague' | 'none';
+
+/** The least `clarity` of each tier. */
+const TIER_FLOOR = { clear: 0.5, dim: 0.2, vague: 0.05 };
+
+/** The tier `clarity` falls in: clear from 0.5, dim from 0.2, vague from 0.05. Text changes only as a tier is crossed. */
+export function sightTier(clarity = 1):SightTier {
+	return clarity >= TIER_FLOOR.clear ? 'clear' : clarity >= TIER_FLOOR.dim ? 'dim' : clarity >= TIER_FLOOR.vague ? 'vague' : 'none';
+}
+
+/** Whether `obj` is made out well enough to tell who or what it is (clear or dim): what sight names, remembers and lets be talked to. */
+export function madeOut(obj:Pick<SeenObject, 'clarity' | 'always'>):boolean {
+	return !!obj.always || (obj.clarity ?? 1) >= TIER_FLOOR.dim;
+}
+
+/**
+ * How clearly distance alone lets a thing `at` that far be made out, by `range`: whole up to `clear`, then down evenly
+ * through dim and vague to each one's floor where it ends, and none past `vague`.
+ */
+export function sightClarityAt(at:number, { clear, dim, vague }:SightRange = DEFAULT_SIGHT_RANGE):number {
+	const down = (from:number, to:number, start:number, end:number):number => {
+		const t = (at - start) / (end - start);
+		return from * (1 - t) + to * t;
+	};
+	return at <= clear ? 1
+		: at <= dim ? down(TIER_FLOOR.clear, TIER_FLOOR.dim, clear, dim)
+			: at <= vague ? down(TIER_FLOOR.dim, TIER_FLOOR.vague, dim, vague)
+				: 0;
+}
+
+/** What a thing seen but not made out goes by: its `kind`, else `Figure` for a character and `Something` for the rest. */
+export function vagueKind(obj:Pick<SeenObject, 'kind'>, character:boolean):string {
+	return obj.kind ?? (character ? 'Figure' : 'Something');
+}
+
+/**
+ * `obj` as its tier shows it: clear, whole; dim, without its health, what it does or carries (the host's `note`, why it is dim,
+ * stays); vague, not even its name, only its kind ({@link vagueKind}; sight letters it, `FigureA`).
+ */
+export function asMadeOut(obj:SeenObject, character:boolean):SeenObject {
+	const tier = sightTier(obj.clarity);
+	if (tier === 'clear' || obj.always) {
+		return obj;
+	}
+	const shown:SeenObject = { ...obj };
+	delete shown.hp;
+	delete shown.maxHP;
+	delete shown.doing;
+	delete shown.looks;
+	delete shown.carrying;
+	if (tier === 'dim') {
+		return shown;
+	}
+	// Not made out, it is nothing to handle, nor named by a mark, nor hedged (`what seems to be`): its kind says as much.
+	delete shown.interactable;
+	delete shown.movable;
+	delete shown.interesting;
+	return { ...shown, label: vagueKind(obj, character) };
+}
 
 type DistFn = (a:SeenObject, b:SeenObject)=>number;
 
@@ -47,28 +115,76 @@ function clamp01(n:number):number {
 	return Math.min(1, Math.max(0, n));
 }
 
-export function bearingOf(
-	self:{ point:number[]; facing?:number[] },
-	obj:{ point:number[] },
-):Bearing {
-	const f = self.facing;
-	if (!f || f.length === 0) {
-		return 'away';
+/** Who looks, for a bearing: where it stands, which way it faces, and its own up if not the world's. */
+type Looker = { point:number[]; facing?:number[]; up?:number[] };
+
+/**
+ * Where `obj` is from `self` (a {@link Sighting}), in checked `axes` (`checkAxes`), its bearing told as `mode` says.
+ * Without axes, neither its facing nor its bearing (`away`) is told.
+ */
+export function sightingOf(self:Looker, obj:{ point:number[]; facing?:number[]; clarity?:number }, axes:Axes | undefined, mode:BearingMode = BearingMode.Relative):Sighting {
+	const facing = axes && self.facing && obj.facing && toLocal(obj.facing, self.facing, axes, self.up);
+	return { distance: pointDistance(self.point, obj.point), clarity: obj.clarity ?? 1, ...facing ? { facing } : {}, bearing: axes ? bearingOf(self, obj, axes, mode) : Bearing.Away };
+}
+
+/** Every bearing in order: the compass clockwise from north, then clockwise from ahead. */
+const BEARINGS = Object.values(Bearing);
+
+/** Of the eight bearings clockwise from `first`, the way `side` across and `along` ahead points. */
+function eighth(first:Bearing, side:number, along:number):Bearing {
+	return BEARINGS[BEARINGS.indexOf(first) + (Math.round(Math.atan2(side, along) / (Math.PI / 4)) + 8) % 8];
+}
+
+/** How far `delta` rises along `self`'s up, and how far it goes level: in 3D only, else no rise. */
+function riseOf(self:Looker, delta:number[], axes:Axes):{ rise:number; across:number } {
+	const up = axes.up && (self.up ?? axes.up);
+	const rise = up ? dot(delta, up) : 0;
+	return { rise, across: Math.hypot(...up ? add(delta, up, -rise) : delta) };
+}
+
+/** `Above` or `Below` where it is steeper than 45° (more up or down than away); else undefined. */
+function steepOf({ rise, across }:{ rise:number; across:number }):Bearing | undefined {
+	return Math.abs(rise) > across ? (rise > 0 ? Bearing.Above : Bearing.Below) : undefined;
+}
+
+/** Which way `delta` points on the level, as {@link bearingOf} tells it. */
+function levelOf(self:Looker, delta:number[], axes:Axes, mode:BearingMode):Bearing {
+	if (mode !== BearingMode.Relative) {
+		const north = dot(delta, axes.forward);
+		return axes.right ? eighth(Bearing.North, dot(delta, axes.right), north) : north >= 0 ? Bearing.North : Bearing.South;
 	}
-	const n = Math.min(self.point.length, obj.point.length, f.length);
-	if (n === 0) {
-		return 'away';
+	if (!self.facing?.length) {
+		return Bearing.Away;
 	}
-	const delta = sub(obj.point.slice(0, n), self.point);
-	const ahead = dot(delta, f);
-	if (n === 1) {
-		return ahead >= 0 ? 'ahead' : 'behind';
+	const right = rightOf(self.facing, axes, self.up);
+	return eighth(Bearing.Ahead, right ? dot(delta, right) : 0, dot(delta, self.facing));
+}
+
+/**
+ * Which way `obj` is from `self`, in checked `axes` (`checkAxes`): in 3D, `Above` or `Below` where it is steeper than
+ * 45°, in every mode; else in eighths: `Relative`, from where `self` faces (`Ahead`, `AheadRight`, `Right`, …; `Away`
+ * when it faces nowhere); else by the compass, north along `axes.forward` and east along `axes.right`.
+ */
+export function bearingOf(self:Looker, obj:{ point:number[] }, axes:Axes, mode:BearingMode = BearingMode.Relative):Bearing {
+	const delta = sub(obj.point, self.point);
+	return steepOf(riseOf(self, delta, axes)) ?? levelOf(self, delta, axes, mode);
+}
+
+/**
+ * Where `obj` is from `self`, in words, as `mode` tells it in checked `axes`: `to your right`, `south`, or
+ * `to your right (south)`; `above you` in every mode, `above you (north)` in `Both`; `''` when it cannot be told
+ * (`Relative`, and `self` faces nowhere).
+ */
+export function bearingText(self:Looker, obj:{ point:number[] }, axes:Axes, mode:BearingMode = BearingMode.Relative):string {
+	const delta = sub(obj.point, self.point);
+	const rise = riseOf(self, delta, axes);
+	const steep = steepOf(rise);
+	const compass = mode !== BearingMode.Relative ? levelOf(self, delta, axes, BearingMode.Absolute) : undefined;
+	if (steep) {
+		return mode === BearingMode.Both && rise.across > 0 ? `${bearingPhrase(steep)} (${compass})` : bearingPhrase(steep);
 	}
-	const cross = f[0] * delta[1] - f[1] * delta[0];
-	if (Math.abs(ahead) >= Math.abs(cross)) {
-		return ahead >= 0 ? 'ahead' : 'behind';
-	}
-	return cross > 0 ? 'right' : 'left';
+	const relative = mode !== BearingMode.Absolute && self.facing?.length ? bearingPhrase(levelOf(self, delta, axes, BearingMode.Relative)) : undefined;
+	return relative && compass ? `${relative} (${compass})` : relative ?? compass ?? '';
 }
 
 function fillSeen(obj:SeenObject):SeenObject {
@@ -226,33 +342,44 @@ export function formatMeasure(d:number, unitName:string):string {
 
 export function bearingPhrase(bearing:Bearing):string {
 	switch (bearing) {
-		case 'ahead':
+		case Bearing.Ahead:
 			return 'in front of you';
-		case 'behind':
+		case Bearing.Behind:
 			return 'behind you';
-		case 'left':
+		case Bearing.Left:
 			return 'to your left';
-		case 'right':
+		case Bearing.Right:
 			return 'to your right';
-		case 'north':
-			return 'north of you';
-		case 'east':
-			return 'east of you';
-		case 'south':
-			return 'south of you';
-		case 'west':
-			return 'west of you';
-		default:
+		case Bearing.AheadRight:
+			return 'ahead to your right';
+		case Bearing.AheadLeft:
+			return 'ahead to your left';
+		case Bearing.BehindRight:
+			return 'behind you to the right';
+		case Bearing.BehindLeft:
+			return 'behind you to the left';
+		case Bearing.Above:
+			return 'above you';
+		case Bearing.Below:
+			return 'below you';
+		case Bearing.Away:
 			return 'away from you';
+		default:
+			return bearing;
 	}
 }
 
-/** ` (4/12 hp, foe Blade, firing)`: health, the host's note and what it is doing, set apart so the name before them stays the only name. */
+/**
+ * ` (4/12 hp, foe Blade, looking angry, firing, carrying: Purse)`: health, the host's note, how it looks, what it is doing
+ * and what it carries (last, its list running to the end), set apart so the name before them stays the only name.
+ */
 function detailsBit(obj:SeenObject):string {
 	const details = [
 		obj.hp !== undefined && obj.maxHP !== undefined ? `${obj.hp}/${obj.maxHP} hp` : '',
 		obj.note?.trim() ?? '',
+		obj.looks?.trim() ?? '',
 		obj.doing?.trim() ?? '',
+		obj.carrying?.length ? `carrying: ${obj.carrying.join(', ')}` : '',
 	].filter(Boolean);
 	return details.length > 0 ? ` (${details.join(', ')})` : '';
 }
@@ -283,7 +410,7 @@ function leftoverClause(
 	},
 	npcID:string,
 	bearingFn:(obj:SeenObject)=>Bearing,
-	hasFacing:boolean,
+	whereFn:(obj:SeenObject)=>string,
 ):string {
 	const text = leftoverHead(
 		obj,
@@ -297,14 +424,13 @@ function leftoverClause(
 	if (opts.fromName) {
 		return `${text} ${measure} from ${opts.fromName}`;
 	}
-	if (!hasFacing) {
-		return `${text} ${measure}`;
-	}
-	return `${text} ${measure} ${bearingPhrase(bearingFn(obj))}`;
+	const where = whereFn(obj);
+	return where ? `${text} ${measure} ${where}` : `${text} ${measure}`;
 }
 
+/** The ids a row stands for: none for what is not {@link madeOut}, so nothing names or remembers it by one. */
 function idsOf(obj:SeenObject):string[] {
-	return obj.claimedIDs && obj.claimedIDs.length > 0 ? obj.claimedIDs : [obj.id];
+	return obj.claimedIDs ?? (madeOut(obj) ? [obj.id] : []);
 }
 
 function uniqueIDs(ids:string[]):string[] {
@@ -432,7 +558,6 @@ export function mergeHiveClauses(
 }
 
 export function formatSightClauses(sight:Sight, opts:SightOpts = {}):SightClause[] {
-	const radius = opts.radius ?? DEFAULT_SIGHT.radius;
 	const unitName = opts.unitName ?? DEFAULT_SIGHT.unitName;
 	const closeness = opts.closeness ?? DEFAULT_SIGHT.closeness;
 	const farDistance = opts.farDistance ?? DEFAULT_SIGHT.farDistance;
@@ -445,12 +570,11 @@ export function formatSightClauses(sight:Sight, opts:SightOpts = {}):SightClause
 	const objects = sight.objects.map(fillSeen);
 	const me = selfObject(sight, objects);
 	const distance:DistFn = (a, b) => pointDistance(a.point, b.point);
-	const hasFacing = !!(sight.self.facing && sight.self.facing.length > 0);
-	const bearingFn = (obj:SeenObject):Bearing => bearingOf(sight.self, obj);
+	const { axes, bearing: mode = BearingMode.Relative } = opts;
+	const bearingFn = (obj:SeenObject):Bearing => (axes ? bearingOf(sight.self, obj, axes, mode) : Bearing.Away);
+	const whereFn = (obj:SeenObject):string => (axes ? bearingText(sight.self, obj, axes, mode) : '');
 
-	const remaining = objects.filter((o) => (
-		o.id !== npcID && (o.always || finite(distance(o, me)) <= radius)
-	));
+	const remaining = objects.filter((o) => o.id !== npcID);
 	const stringifyCtx:StringifyCtx = {
 		self: { id: npcID },
 		closeness,
@@ -514,7 +638,7 @@ export function formatSightClauses(sight:Sight, opts:SightOpts = {}):SightClause
 			|| (b.interesting ?? 0) - (a.interesting ?? 0)
 			|| a.id.localeCompare(b.id))
 		.map((o) => ({
-			text: leftoverClause(o, me, distance, leftoverOpts, npcID, bearingFn, hasFacing),
+			text: leftoverClause(o, me, distance, leftoverOpts, npcID, bearingFn, whereFn),
 			claimedIDs: idsOf(o),
 			prefer: isCharacter(o) || o.always === true,
 		}));

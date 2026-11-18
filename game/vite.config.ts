@@ -12,7 +12,7 @@ const { TYPE_SAFE_KEY, XAI_API_KEY } = loadEnv('development', fileURLToPath(new 
 
 /** A proxy's answer when its key is not set: 503 here, so nothing goes out unauthenticated. */
 function withoutKey(key:string | undefined, name:string) {
-	return (_req:unknown, res:{ statusCode:number; end(text:string):void } | undefined):false | undefined => {
+	return (req:unknown, res:{ statusCode:number; end(text:string):void } | undefined):false | undefined => {
 		if (key || !res) {
 			return undefined;
 		}
@@ -34,7 +34,7 @@ const ISOLATED = {
 export default defineConfig({
 	plugins: [vue(), aiLogPlugin()],
 	// Which hosted services can be offered (`director/hosted.ts`): flags only, never the keys.
-	define: { __HOSTED__: JSON.stringify({ jev: !!TYPE_SAFE_KEY, xai: !!XAI_API_KEY }) },
+	define: { 'import.meta.env.HOSTED': JSON.stringify({ jev: !!TYPE_SAFE_KEY, xai: !!XAI_API_KEY }) },
 	/** Saves key components by class name (`captureWorld`); keep names through minify. */
 	esbuild: { keepNames: true },
 	resolve: {

@@ -15,7 +15,7 @@ const CHORES = ['mended a fence', 'chopped firewood', 'swept the yard', 'fed the
 export function everydayMemories(count:number, endsAt = 0):MemoryDraft[] {
 	const at = (i:number) => endsAt - (count - i) * 3600;
 	const pick = <T>(items:readonly T[], i:number, step:number):T => items[(i * step + Math.floor(i / items.length)) % items.length];
-	return Array.from({ length: count }, (_, i) => {
+	return Array.from({ length: count }, (element, i) => {
 		const who = pick(FOLK, i, 5);
 		const where = pick(SPOTS, i, 3);
 		const lines = [

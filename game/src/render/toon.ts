@@ -145,8 +145,7 @@ const UNDERWATER_FADE = 0.2;
  */
 function wetBelowWaterline(mat:ToonMaterial):ToonMaterial {
 	patchShader(mat, 'wetBelowWaterline', (shader) => {
-		shader.vertexShader = `varying float vWetY;
-${shader.vertexShader}`.replace(
+		shader.vertexShader = `varying float vWetY;\n${shader.vertexShader}`.replace(
 			'#include <begin_vertex>',
 			`#include <begin_vertex>
 			vec4 wetAt = vec4(transformed, 1.0);
@@ -155,8 +154,7 @@ ${shader.vertexShader}`.replace(
 			#endif
 			vWetY = (modelMatrix * wetAt).y;`,
 		);
-		shader.fragmentShader = `varying float vWetY;
-${shader.fragmentShader}`.replace(
+		shader.fragmentShader = `varying float vWetY;\n${shader.fragmentShader}`.replace(
 			'#include <tonemapping_fragment>',
 			// After tone mapping, so it darkens as much on screen however brightly the rock is lit.
 			`#include <tonemapping_fragment>

@@ -1,14 +1,16 @@
+import { showNamingText } from '../character/text-with-ids.js';
 import type { Arc, ArcResult } from '../arc/arc-types.js';
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { STOCK_VERBS, VerbRegistry, STOCK_VERB_DEFS } from '../arc/stock-verbs.js';
 import { FakeProvider, goToNamedInteractable, hashEmbed } from '../inference/fake.js';
-import { chatContentText, type ChatRequest } from '../inference/provider.js';
+import { DEFAULT_EXPLICIT_THINK_ALLOWED_INSIDE } from '../arc/validate.js';
+import { chatContentText, type ChatRequest, type ChatResponse } from '../inference/provider.js';
 import { formatSight, formatSightClauses } from '../perception/sight.js';
 import type { SeenObject } from '../perception/perception-types.js';
 import { soloCharacter, type SoloOptions } from '../testing/solo.js';
 import { internalsOf } from '../internals.js';
-import { CONVERSATION_HEADER } from './prompt.js';
+import { refusedCall } from './prompt.js';
 import type { Character, CharacterJSON } from '../character/Character.js';
 
 /** A saved character, restored on its own. */
@@ -20,7 +22,7 @@ import { TalkFeature } from './TalkFeature.js';
 import type { TalkSense } from './talk.js';
 import { MapFeature } from './MapFeature.js';
 import { KnowledgeFeature } from './KnowledgeFeature.js';
-import type { MindEvent, Sense, ToolSpec } from './mind-types.js';
+import type { MindEvent, Sense, ThinkEvent, ToolSpec } from './mind-types.js';
 import { PriorityThinkQueue } from '../think/queue.js';
 import { buildCatalog, dummyEntity, SampleCache } from '../expr/index.js';
 
@@ -42,7 +44,7 @@ class WaysTalk extends TalkFeature<Ctx> {
 		super(sense);
 	}
 
-	protected override ways(_from:string, ids:readonly string[]):(string | undefined)[] {
+	protected override ways(from:string, ids:readonly string[]):(string | undefined)[] {
 		return this._ways(ids);
 	}
 }
@@ -60,7 +62,7 @@ function heard(speakerID:string, text:string, to:string[] = []):MindEvent {
 
 /** The Current Conversation lines in a prompt. */
 function conversationOf(prompt:string | undefined):string[] {
-	const block = (prompt ?? '').split(`${CONVERSATION_HEADER}\n`)[1];
+	const block = (prompt ?? '').split(/^Current Conversation \(.*\):\n/m)[1];
 	return block ? block.split('\n\n')[0].split('\n') : [];
 }
 
@@ -210,7 +212,7 @@ describe('Agent', () => {
 			arcFormat: 'json',
 			model: 'fake',
 		});
-		await agent.mind!.remember('EastGate is the door in the east wall', ['gate', 'EastGate'], 0);
+		await agent.mind!.memory.remember('EastGate is the door in the east wall', ['gate', 'EastGate'], 0);
 		const arc = await agent.mind!.tick(1);
 		assert.equal(sawRecall, true);
 		assert.equal(arc?.[0].verb, 'go_to');
@@ -235,7 +237,7 @@ describe('Agent', () => {
 			...perception(),
 			context: () => ({ paragraph: paragraph() }),
 			model: 'fake',
-			heartbeat: 0,
+			minThinkInterval: 0,
 			toolRounds: 0,
 			repairRetries: 0,
 			strategicInterval: 0,
@@ -281,7 +283,7 @@ describe('Agent', () => {
 			tools: {},
 			context: () => ({ paragraph: scene }),
 			model: 'fake',
-			heartbeat: 0,
+			minThinkInterval: 0,
 			toolRounds: 0,
 			repairRetries: 0,
 			strategicInterval: 0,
@@ -295,6 +297,86 @@ describe('Agent', () => {
 		assert.match(users[0] ?? '', /Last I saw Forager/);
 		const seen = agent.persona.memory.all().filter((r) => r.tags.includes('seen')).map((r) => r.text);
 		assert.deepEqual(seen.map((text) => text.split(':')[0]), ['Last I saw Forager']);
+	});
+
+	it('remembers no sighting of what it could not make out, and forgets where it last saw one who has fallen', async () => {
+		let fallen = false;
+		const agent = soloCharacter<Ctx>({
+			id: 'Angler',
+			identity: { role: 'angler' },
+			goals: [{ text: 'Fish.' }],
+			provider: new FakeProvider(() => ({ content: JSON.stringify({ steps: [{ verb: 'wait', seconds: 1 }] }), toolCalls: [] })),
+			...stockVerbs(),
+			senses: { environment: (ctx) => ctx.paragraph },
+			tools: {},
+			context: () => ({ paragraph: 'empty grass.' }),
+			model: 'fake',
+			minThinkInterval: 0,
+			toolRounds: 0,
+			repairRetries: 0,
+			strategicInterval: 0,
+			hasFallen: (id) => fallen && id === 'Reaver',
+		});
+		const seen = ():string[] => agent.persona.memory.all().filter((r) => r.tags.includes('seen')).map((r) => r.text);
+		internalsOf(agent.mind!).sighted([
+			{ text: 'Reaver (1/14 hp, foe Knight) 2 paces in front of you', claimedIDs: ['Reaver'] },
+			{ text: 'FigureA 9 paces to your left', claimedIDs: [] },
+		]);
+		await agent.mind!.tick(1);
+		assert.deepEqual(seen(), ['Last I saw Reaver: Reaver (1/14 hp, foe Knight) 2 paces in front of you'], 'nothing of what it could not make out');
+		fallen = true;
+		await agent.mind!.tick(2);
+		assert.deepEqual(seen(), [], 'its stale health is gone with it');
+	});
+
+	it('recalls only what its prompt does not show, and says so when that is nothing', async () => {
+		const agent = soloCharacter<Ctx>({
+			id: 'Brannoc',
+			identity: { role: 'knight' },
+			goals: [{ text: 'Win.' }],
+			provider: new FakeProvider(() => ({ content: JSON.stringify({ steps: [{ verb: 'wait', seconds: 1 }] }), toolCalls: [] })),
+			...stockVerbs(),
+			senses: { environment: (ctx) => ctx.paragraph },
+			tools: {},
+			context: () => ({ paragraph: 'empty grass.' }),
+			model: 'fake',
+			minThinkInterval: 0,
+			toolRounds: 0,
+			repairRetries: 0,
+			strategicInterval: 0,
+		});
+		agent.mind!.ingestResult({ status: 'failed', verb: 'cleave', reason: 'Reaver1 has already fallen' });
+		await agent.mind!.tick(1);
+		assert.deepEqual(await agent.mind!.memory.recall({ query: 'Reaver1' }), [], 'its last result is on screen, as a fact kept too');
+		assert.equal(agent.mind!.memory.nothingMore({ query: 'Reaver1' }), 'Nothing more on "Reaver1" than what you see and hear above. Do not recall it again: ask someone who might know, or wander(until).');
+		await agent.mind!.memory.remember('Reaver1 hid a key under the well');
+		assert.deepEqual((await agent.mind!.memory.recall({ query: 'Reaver1' })).map((r) => r.text), ['Reaver1 hid a key under the well']);
+	});
+
+	it('says its last result once, as Last verb result, not again among the recent lines', async () => {
+		const users:string[] = [];
+		const agent = soloCharacter<Ctx>({
+			id: 'Brannoc',
+			identity: { role: 'knight' },
+			goals: [{ text: 'Win.' }],
+			provider: new FakeProvider((req) => {
+				users.push(chatContentText(req.messages[req.messages.length - 1].content));
+				return { content: JSON.stringify({ steps: [{ verb: 'wait', seconds: 1 }] }), toolCalls: [] };
+			}),
+			...stockVerbs(),
+			senses: { environment: (ctx) => ctx.paragraph },
+			tools: {},
+			context: () => ({ paragraph: 'empty grass.' }),
+			model: 'fake',
+			minThinkInterval: 0,
+			toolRounds: 0,
+			repairRetries: 0,
+			strategicInterval: 0,
+		});
+		agent.mind!.ingestResult({ status: 'failed', verb: 'cleave', reason: 'Reaver1 has already fallen' });
+		await agent.mind!.tick(1);
+		assert.match(users[0], /Last verb result: cleave failed — Reaver1 has already fallen/);
+		assert.equal(users[0].match(/has already fallen/g)?.length, 1);
 	});
 
 	it('retries a bad arc on the same thread, without the bad reply, when the host sets arcRetryCap', async () => {
@@ -422,6 +504,33 @@ describe('Agent', () => {
 		assert.deepEqual(arc?.[0], { verb: 'go_to', args: { target: 'EastGate' } });
 	});
 
+	it('says no lookups are left to a tool written as text past them, and that observe is no watch function', async () => {
+		const seen:{ last:string; tools?:unknown }[] = [];
+		const replies = ['call:recall{query:<|"|>EastGate<|"|>}', 'call recall(query="Gate")', 'wait(until=observe(isNear(me, EastGate, 3)))', 'go_to(EastGate)'];
+		const agent = soloCharacter<Ctx>({
+			id: 'Guard',
+			identity: { role: 'guard' },
+			goals: [{ text: 'Go to EastGate' }],
+			provider: new FakeProvider((req) => ({ content: replies[seen.push({ last: chatContentText(req.messages.at(-1)?.content), tools: req.tools }) - 1], toolCalls: [] })),
+			...stockVerbs(),
+			...perception(),
+			context: () => ({ paragraph: paragraph() }),
+			catalog: () => buildCatalog({ me: dummyEntity('me'), others: [], items: [], cache: new SampleCache() }),
+			model: 'fake',
+			toolRounds: 1,
+			repairRetries: 2,
+			strategicInterval: 0,
+			arcFormat: 'text',
+		});
+		assert.equal((await agent.mind!.tick(1))?.[0].verb, 'go_to');
+		const last = seen.map((req) => req.last);
+		assert.match(last[1], /\nrecall: .*\nNo lookups left: answer with the Arc now\.$/s);
+		assert.equal(seen[1].tools, undefined);
+		assert.match(last[2], /^That was not a valid Arc \(no lookups left: write the Arc without recall/);
+		assert.equal(last[2].includes('call them'), false, 'no tool is offered to call');
+		assert.match(last[3], /\(observe is a tool, not a function: write the expression itself, e\.g\. until=isNear\(me, Well, 3\)/);
+	});
+
 	it('runs a tool a thought wrote and never got to call, else asks once for the Arc, before it gives up', async () => {
 		const run = async (replies:{ content:string; reasoning?:string }[]):Promise<{ lasts:string[]; arc:Arc | null; err?:string }> => {
 			const lasts:string[] = [];
@@ -483,11 +592,12 @@ describe('Agent', () => {
 			...perception(),
 			context: () => ({ paragraph: paragraph() }),
 			model: 'fake',
-			heartbeat: 0,
+			minThinkInterval: 0,
 			toolRounds: 0,
 			repairRetries: 0,
 			arcFormat: 'text',
 		});
+		agent.mind!.settings.thinkUnchanged = true;
 		const first = await agent.mind!.tick(1);
 		assert.equal(first?.[0].args.target, 'EastGate');
 		const insisted = await agent.mind!.tick(2);
@@ -496,6 +606,310 @@ describe('Agent', () => {
 		assert.equal(third?.[0].args.target, 'Well');
 		assert.match(warnings[0] ?? '', /twice in a row/);
 		assert.match(warnings[1] ?? '', /3 times in a row/);
+	});
+
+	it('skips a rethink that would see nothing new, elapsed times aside, and counts it as done', async () => {
+		let asked = 0;
+		const ends:ThinkEvent[] = [];
+		const agent = soloCharacter<Ctx>({
+			id: 'Guard',
+			identity: { role: 'guard' },
+			goals: [{ text: 'Go to EastGate' }],
+			provider: new FakeProvider(() => {
+				asked += 1;
+				return { content: 'wait(seconds=1)', toolCalls: [] };
+			}),
+			...stockVerbs(),
+			...perception(),
+			context: () => ({ paragraph: paragraph() }),
+			model: 'fake',
+			minThinkInterval: 0,
+			skipStrategic: true,
+			toolRounds: 0,
+			arcFormat: 'text',
+			thinkWatch: () => (event) => {
+				if (event.kind === 'end') {
+					ends.push(event);
+				}
+			},
+		});
+		assert.ok(await agent.mind!.tick(1));
+		assert.equal(await agent.mind!.tick(2), null);
+		assert.equal(asked, 1, 'no second request');
+		assert.equal(agent.mind!.lastTacticalTimestamp, 2, 'it counts as a think');
+		const last = ends.at(-1);
+		assert.equal(last?.kind === 'end' && last.skipped, true);
+		agent.mind!.pushEvent({ kind: 'HeardSpeech', text: 'Bram: hello', major: true });
+		assert.ok(await agent.mind!.tick(3), 'something new: it asks');
+		assert.equal(asked, 2);
+	});
+
+	it('starts a reply\'s first step as soon as its text closes, and the rest as it follows', async () => {
+		const ran:string[] = [];
+		let finish = ():void => undefined;
+		const agent = soloCharacter<Ctx>({
+			id: 'Guard',
+			identity: { role: 'guard' },
+			provider: new FakeProvider(async (req) => {
+				req.onDelta?.({ content: 'go_to(EastGate) && ' });
+				await new Promise<void>((resolve) => {
+					finish = resolve;
+				});
+				req.onDelta?.({ content: 'say(text="here")' });
+				return { content: 'go_to(EastGate) && say(text="here")', toolCalls: [] };
+			}),
+			...stockVerbs(),
+			...perception(),
+			context: () => ({ paragraph: paragraph() }),
+			execute: async (step) => {
+				ran.push(step.verb);
+				return { status: 'ok', verb: step.verb };
+			},
+			model: 'fake',
+			minThinkInterval: 0,
+			toolRounds: 0,
+			arcFormat: 'text',
+		});
+		const think = agent.mind!.tick(1);
+		while (ran.length === 0) {
+			await new Promise((resolve) => setTimeout(resolve, 1));
+		}
+		assert.deepEqual(ran, ['go_to'], 'under way while the reply is still being written');
+		finish();
+		await think;
+		assert.deepEqual(ran, ['go_to', 'say'], 'the rest, once written, and nothing twice');
+	});
+
+	it('takes a line it hears before its reply begins the Arc into the think, up to its limit, and never once the Arc has begun', async () => {
+		const asked:ChatRequest['messages'][] = [];
+		const line = (n:number):string => `Bram says to you: "Line ${n}"`;
+		const agent:Character<Ctx> = soloCharacter<Ctx>({
+			id: 'Guard',
+			identity: { role: 'guard' },
+			provider: new FakeProvider((req) => {
+				asked.push([...req.messages]);
+				const hear = ():void => agent.mind!.pushEvent({ kind: 'HeardSpeech', text: line(asked.length), major: true });
+				if (asked.length < 3) {
+					req.onDelta?.({ reasoning: 'Where to go?' });
+					hear();
+				}
+				req.onDelta?.({ content: 'wait(seconds=1)' });
+				if (asked.length === 3) {
+					hear();
+				}
+				return { content: 'wait(seconds=1)', toolCalls: [] };
+			}),
+			...stockVerbs(),
+			...perception(),
+			context: () => ({ paragraph: paragraph() }),
+			model: 'fake',
+			minThinkInterval: 0,
+			skipStrategic: true,
+			toolRounds: 0,
+			arcFormat: 'text',
+		});
+		await agent.mind!.tick(1);
+		assert.equal(asked.length, 2, 'the first reply stopped for line 1; line 2 came past the limit');
+		assert.equal(asked[1].at(-2)?.content, 'Where to go?');
+		assert.match(String(asked[1].at(-1)?.content), /^While you thought, you heard:\nBram says to you: "Line 1"\nThink on with that in mind\. Then emit/);
+		await agent.mind!.tick(2);
+		assert.match(String(asked[2][1].content), /Line 2/, 'line 2 waited for the next think');
+		assert.equal(asked.length, 3);
+		assert.deepEqual(agent.mind!.events().map((e) => e.text), [line(3)], 'line 3 came once the Arc had begun');
+	});
+
+	it('takes an offer made to it into the think as it takes a line', async () => {
+		const asked:ChatRequest['messages'][] = [];
+		const agent:Character<Ctx> = soloCharacter<Ctx>({
+			id: 'Guard',
+			provider: new FakeProvider((req) => {
+				asked.push([...req.messages]);
+				if (asked.length === 1) {
+					agent.mind!.pushEvent({ kind: 'Offer', text: 'Bram offers you 1 Bread for 2 gold', tags: ['offer'], major: true });
+				}
+				return { content: 'wait(seconds=1)', toolCalls: [] };
+			}),
+			...stockVerbs(),
+			...perception(),
+			context: () => ({ paragraph: paragraph() }),
+			model: 'fake',
+			minThinkInterval: 0,
+			skipStrategic: true,
+			toolRounds: 0,
+			arcFormat: 'text',
+		});
+		await agent.mind!.tick(1);
+		assert.equal(asked.length, 2);
+		assert.match(String(asked[1].at(-1)?.content), /^While you thought, you heard:\nBram offers you 1 Bread for 2 gold\nThink on/);
+	});
+
+	it('takes a line it hears while it looks something up into its next turn, and marks only that line read', async () => {
+		const asked:ChatRequest['messages'][] = [];
+		const agent:Character<Ctx> = soloCharacter<Ctx>({
+			id: 'Guard',
+			identity: { role: 'guard' },
+			provider: new FakeProvider((req) => {
+				asked.push([...req.messages]);
+				return asked.length === 1 ? { content: null, toolCalls: [{ id: 'c1', name: 'count', arguments: '{}' }] } : { content: 'wait(seconds=1)', toolCalls: [] };
+			}),
+			...stockVerbs(),
+			...perception(),
+			tools: {
+				count: { description: 'Counts.', parameters: { type: 'object', properties: {} }, handler: async () => {
+					agent.mind!.pushEvent({ kind: 'Seen', text: 'A crow lands.' });
+					agent.mind!.pushEvent({ kind: 'HeardSpeech', text: 'Bram says to you: "Hurry"', major: true });
+					return 1;
+				} },
+			},
+			context: () => ({ paragraph: paragraph() }),
+			model: 'fake',
+			minThinkInterval: 0,
+			skipStrategic: true,
+			toolRounds: 2,
+			arcFormat: 'text',
+		});
+		await agent.mind!.tick(1);
+		assert.equal(asked.length, 2, 'the line stopped nothing: it joined the answer');
+		assert.deepEqual(asked[1].slice(-2).map((m) => m.role), ['tool', 'user']);
+		assert.equal(asked[1].at(-1)?.content, 'While you thought, you heard:\nBram says to you: "Hurry"');
+		assert.deepEqual(agent.mind!.events().map((e) => e.text), ['A crow lands.'], 'what it did not take in waits for the next think');
+	});
+
+	it('wakes again for a line it took in when the think then fails', async () => {
+		const queue = new PriorityThinkQueue({ processInterval: 0 });
+		const woke:string[] = [];
+		const enqueue = queue.enqueueMajor.bind(queue);
+		queue.enqueueMajor = (id, force, kind) => {
+			woke.push(kind ?? '');
+			enqueue(id, force, kind);
+		};
+		let asked = 0;
+		const agent:Character<Ctx> = soloCharacter<Ctx>({
+			id: 'Guard',
+			identity: { role: 'guard' },
+			provider: new FakeProvider(() => {
+				asked += 1;
+				if (asked === 1) {
+					agent.mind!.pushEvent({ kind: 'HeardSpeech', text: 'Bram says to you: "Hi"', major: true });
+				}
+				return { content: '{"nope":true}', toolCalls: [] };
+			}),
+			...stockVerbs(),
+			...perception(),
+			context: () => ({ paragraph: paragraph() }),
+			queue,
+			model: 'fake',
+			minThinkInterval: 0,
+			skipStrategic: true,
+			toolRounds: 0,
+			repairRetries: 0,
+			arcFormat: 'json',
+		});
+		await assert.rejects(agent.mind!.tick(1));
+		assert.equal(asked, 2, 'the line was taken in');
+		assert.deepEqual(woke, ['HeardSpeech'], 'woken once, as the think ended');
+		assert.deepEqual(agent.mind!.events().map((e) => e.text), ['Bram says to you: "Hi"']);
+	});
+
+	it('keeps the steps a reply streamed before it called a tool, with no repairs to spare', async () => {
+		const ran:string[] = [];
+		let asked = 0;
+		const agent = soloCharacter<Ctx>({
+			id: 'Guard',
+			identity: { role: 'guard' },
+			provider: new FakeProvider((req) => {
+				asked += 1;
+				if (asked > 1) {
+					return { content: 'say(text="here")', toolCalls: [] };
+				}
+				req.onDelta?.({ content: 'go_to(EastGate) && ' });
+				return { content: 'go_to(EastGate) && ', toolCalls: [{ id: 'c1', name: 'count', arguments: '{}' }] };
+			}),
+			...stockVerbs(),
+			...perception(),
+			tools: { count: { description: 'Counts.', parameters: { type: 'object', properties: {} }, handler: () => 1 } },
+			context: () => ({ paragraph: paragraph() }),
+			execute: async (step) => {
+				ran.push(step.verb);
+				return { status: 'ok', verb: step.verb };
+			},
+			model: 'fake',
+			minThinkInterval: 0,
+			toolRounds: 1,
+			repairRetries: 0,
+			arcFormat: 'text',
+		});
+		const arc = await agent.mind!.tick(1);
+		assert.deepEqual(arc?.map((step) => step.verb), ['go_to', 'say'], 'the Arc it reports is what ran');
+		assert.deepEqual(ran, ['go_to', 'say']);
+	});
+
+	it('answers every call of a round before it shows their maps, in order, in one message', async () => {
+		const asked:ChatRequest['messages'][] = [];
+		let snaps = 0;
+		const agent = soloCharacter<Ctx>({
+			id: 'Guard',
+			identity: { role: 'guard' },
+			provider: new FakeProvider((req) => {
+				asked.push([...req.messages]);
+				return asked.length > 1 ? { content: 'wait(seconds=1)', toolCalls: [] } : {
+					content: null,
+					toolCalls: [{ id: 'a', name: 'see_map', arguments: '{"zoom":1}' }, { id: 'b', name: 'see_map', arguments: '{"zoom":0}' }],
+				};
+			}),
+			...stockVerbs(),
+			...perception(),
+			context: () => ({ paragraph: paragraph() }),
+			model: 'fake',
+			minThinkInterval: 0,
+			toolRounds: 1,
+			arcFormat: 'text',
+			vision: true,
+			...featured(new MapFeature<Ctx>({
+				snapshot: () => {
+					snaps += 1;
+					return { image: `data:image/png;base64,${snaps}`, width: 8, height: 8, toPixel: () => ({ u: 0, v: 0 }), marks: [] };
+				},
+			})),
+		});
+		await agent.mind!.tick(1);
+		const round = asked[1].slice(asked[1].findIndex((m) => m.toolCalls));
+		assert.deepEqual(round.map((m) => m.role), ['assistant', 'tool', 'tool', 'user']);
+		const shown = round[3].content;
+		assert.ok(Array.isArray(shown));
+		assert.deepEqual(shown.flatMap((part) => (part.type === 'image_url' ? [part.image_url.url] : [])), ['data:image/png;base64,1', 'data:image/png;base64,2']);
+	});
+
+	it('keeps a streamed step running when the rest of its reply does not read, and asks for only the rest', async () => {
+		const ran:string[] = [];
+		const asked:{ last:string; before:string }[] = [];
+		const agent = soloCharacter<Ctx>({
+			id: 'Guard',
+			identity: { role: 'guard' },
+			provider: new FakeProvider((req) => {
+				asked.push({ last: String(req.messages.at(-1)?.content), before: String(req.messages.at(-2)?.content) });
+				const content = asked.length === 1 ? 'go_to(EastGate) && pick_up()' : 'say(text="here")';
+				content.split(/(?<=&& )/).forEach((piece) => req.onDelta?.({ content: piece }));
+				return { content, toolCalls: [] };
+			}),
+			...stockVerbs(),
+			...perception(),
+			context: () => ({ paragraph: paragraph() }),
+			execute: async (step) => {
+				ran.push(step.verb);
+				return { status: 'ok', verb: step.verb };
+			},
+			model: 'fake',
+			minThinkInterval: 0,
+			toolRounds: 0,
+			repairRetries: 1,
+			arcFormat: 'text',
+		});
+		await agent.mind!.tick(1);
+		assert.match(asked[1].last, /Those steps already run\. .*the rest of your reply/s);
+		assert.match(asked[1].before, /go_to\(EastGate\)/);
+		assert.doesNotMatch(asked[1].before, /pick_up/, 'the broken rest is not there to copy');
+		assert.deepEqual(ran, ['go_to', 'say'], 'the first step ran once, then only the rest');
 	});
 
 	it('does not warn about a repeat when something new came in since the last think', async () => {
@@ -513,7 +927,7 @@ describe('Agent', () => {
 			...perception(),
 			context: () => ({ paragraph: paragraph() }),
 			model: 'fake',
-			heartbeat: 0,
+			minThinkInterval: 0,
 			toolRounds: 0,
 			repairRetries: 0,
 			arcFormat: 'text',
@@ -600,12 +1014,13 @@ describe('Agent', () => {
 			...perception(),
 			context: () => ({ paragraph: paragraph() }),
 			model: 'fake',
-			heartbeat: 0,
+			minThinkInterval: 0,
 			arcFormat: 'text',
 			toolRounds: 2,
 			repairRetries: 0,
 			strategicInterval: 0,
 		});
+		agent.mind!.settings.thinkUnchanged = true;
 		await agent.mind!.tick(10);
 		await agent.mind!.tick(20);
 		assert.equal(results[0].includes('Duplicate call'), false);
@@ -617,7 +1032,7 @@ describe('Agent', () => {
 		const provider = new FakeProvider((req) => {
 			users.push(String(req.messages[1]?.content));
 			if (users.length === 1) {
-				agent.mind!.pushEvent({ kind: 'Given', text: '{0} gave FireMushroom to {1}', who: ['Forager', 'BridgeKeeper'], tags: ['give'] });
+				agent.mind!.pushEvent({ kind: 'Given', text: (name:(id:string)=>string) => `${name('Forager')} gave FireMushroom to ${name('BridgeKeeper')}`, tags: ['give'] });
 			}
 			return { content: `remember(content=Note ${users.length})`, toolCalls: [] };
 		});
@@ -629,7 +1044,7 @@ describe('Agent', () => {
 			...perception(),
 			context: () => ({ paragraph: paragraph() }),
 			model: 'fake',
-			heartbeat: 0,
+			minThinkInterval: 0,
 			arcFormat: 'text',
 			toolRounds: 0,
 			repairRetries: 0,
@@ -656,7 +1071,7 @@ describe('Agent', () => {
 			...perception(),
 			context: () => ({ paragraph: paragraph() }),
 			model: 'fake',
-			heartbeat: 0,
+			minThinkInterval: 0,
 			arcFormat: 'text',
 			toolRounds: 0,
 			repairRetries: 0,
@@ -668,6 +1083,48 @@ describe('Agent', () => {
 		await agent.mind!.tick(20);
 		assert.match(users[0] ?? '', /What you know about what was said:\n- FireMushroom: Worth 10 gold\./);
 		assert.equal((users[1] ?? '').includes('What you know about what was said'), false);
+	});
+
+	it('promises world knowledge only where the world has articles, and says plainly when recall finds nothing', async () => {
+		const think = async (pages:{ name:string; text:string }[], kit:readonly string[] = STOCK_VERBS):Promise<ChatRequest[]> => {
+			const seen:ChatRequest[] = [];
+			const agent = soloCharacter<Ctx>({
+				id: 'Forager',
+				identity: { role: 'forager' },
+				goals: [{ text: 'Buy SilverTrout.' }],
+				provider: new FakeProvider((req) => {
+					seen.push(req);
+					return seen.length === 1 ? { content: null, toolCalls: [{ id: 'call_1', name: 'recall', arguments: '{"query":"salt"}' }] } : goToNamedInteractable()(req);
+				}),
+				...stockVerbs(),
+				kit: { verbs: kit },
+				...perception(),
+				context: () => ({ paragraph: paragraph() }),
+				model: 'fake',
+				minThinkInterval: 0,
+				arcFormat: 'json',
+				toolRounds: 2,
+				repairRetries: 0,
+				strategicInterval: 0,
+				...featured(new KnowledgeFeature<Ctx>({ pages })),
+			});
+			await agent.mind!.tick(1);
+			return seen;
+		};
+		const description = (req:ChatRequest):string => req.tools?.find((tool) => tool.name === 'recall')?.description ?? '';
+		const none = await think([]);
+		const system = chatContentText(none[0].messages[0].content);
+		assert.equal(system.includes('recall also searches what you know of the world'), false);
+		assert.equal(system.includes('Bread'), false);
+		assert.match(description(none[0]), /^Search your own memory/);
+		assert.equal(chatContentText(none[1].messages.find((m) => m.role === 'tool')?.content), 'Nothing more on "salt" than what you see and hear above. Do not recall it again: ask someone who might know, or wander(until).');
+		const some = await think([{ name: 'Bread', text: 'Baked by Baker.' }]);
+		assert.match(chatContentText(some[0].messages[0].content), /recall also searches what you know of the world/);
+		assert.match(description(some[0]), /what you know of the world/);
+		const mute = await think([{ name: 'Bread', text: 'Baked by Baker.' }], STOCK_VERBS.filter((verb) => verb !== 'say' && verb !== 'wander'));
+		const told = [chatContentText(mute[0].messages[0].content), description(mute[0]), chatContentText(mute[1].messages.find((m) => m.role === 'tool')?.content)].join('\n');
+		assert.doesNotMatch(told, /ask someone|wander\(until\)/, 'no hint names a verb it lacks');
+		assert.match(description(mute[0]), /If it finds nothing, act on what you have\./);
 	});
 
 	it('tells the think after three talk-only arcs to stop talking and act, with every tool still offered', async () => {
@@ -689,13 +1146,14 @@ describe('Agent', () => {
 			...perception(),
 			context: () => ({ paragraph: paragraph() }),
 			model: 'fake',
-			heartbeat: 0,
+			minThinkInterval: 0,
 			arcFormat: 'text',
 			toolRounds: 2,
 			repairRetries: 0,
 			strategicInterval: 0,
 		});
 		for (let t = 1; t <= 4; t++) {
+			agent.mind!.settings.thinkUnchanged = true;
 			await agent.mind!.tick(t * 10);
 		}
 		assert.deepEqual(firstTurns.map((turn) => turn.choice), ['auto', 'auto', 'auto', 'auto']);
@@ -704,20 +1162,17 @@ describe('Agent', () => {
 		assert.deepEqual(firstTurns[3].tools, firstTurns[2].tools, 'no lookup is forced: it may act at once');
 	});
 
-	it('refuses a repeated tool call in one think instead of rerunning it', async () => {
-		let calls = 0;
+	it('refuses a repeated tool call in one think and offers that tool no more', async () => {
+		const seen:ChatRequest[] = [];
 		let runs = 0;
 		const provider = new FakeProvider((req) => {
-			calls += 1;
-			if (calls <= 2) {
+			seen.push(req);
+			if (seen.length <= 2) {
 				return {
 					content: null,
-					toolCalls: [{ id: `call_${calls}`, name: 'count', arguments: calls === 1 ? '{"q":"x"}' : '{ "q": "x" }' }],
+					toolCalls: [{ id: `call_${seen.length}`, name: 'count', arguments: seen.length === 1 ? '{"q":"x"}' : '{ "q": "x" }' }],
 				};
 			}
-			const results = req.messages.filter((m) => m.role === 'tool').map((m) => String(m.content));
-			assert.equal(results.length, 2);
-			assert.match(results[1], /Duplicate call/);
 			return goToNamedInteractable()(req);
 		});
 		const agent = soloCharacter<Ctx>({
@@ -741,12 +1196,44 @@ describe('Agent', () => {
 			// Native tool calls, as a model asked for plain JSON makes them.
 			arcFormat: 'json',
 			model: 'fake',
-			toolRounds: 3,
+			toolRounds: 2,
 			repairRetries: 0,
 		});
 		const arc = await agent.mind!.tick(1);
 		assert.equal(runs, 1);
 		assert.equal(arc?.[0].verb, 'go_to');
+		const results = seen[2].messages.filter((m) => m.role === 'tool').map((m) => String(m.content));
+		assert.equal(results[1], 'REFUSED: you already called count("x") in this think and got its answer above. Repeating a call is a mistake. count is disabled until your next think: use what you have, ask someone, or act.');
+		assert.deepEqual(seen.map((req) => req.tools?.some((tool) => tool.name === 'count')), [true, true, false], 'the refused tool is not offered again');
+	});
+
+	it('refuses any call of a tool refused this think, and drops it from the reply schema', async () => {
+		assert.equal(refusedCall('recall', '{"query":"bread"}', false), 'REFUSED: recall is disabled until your next think: use what you have, ask someone, or act.');
+		const seen:ChatRequest[] = [];
+		const provider = new FakeProvider((req) => {
+			seen.push(req);
+			return seen.length <= 2 ? { content: '{"tool":"count","q":"x"}', toolCalls: [] } : goToNamedInteractable()(req);
+		});
+		const agent = soloCharacter<Ctx>({
+			id: 'Guard',
+			identity: { role: 'guard' },
+			goals: [{ text: 'Go to EastGate' }],
+			provider,
+			...stockVerbs(),
+			...perception(),
+			tools: {
+				count: { description: 'Counts.', parameters: { type: 'object', additionalProperties: false, properties: { q: { type: 'string' } } }, handler: () => 1 },
+			},
+			context: () => ({ paragraph: paragraph() }),
+			arcFormat: 'schema',
+			model: 'fake',
+			toolRounds: 3,
+			repairRetries: 0,
+		});
+		await agent.mind!.tick(1);
+		const offersCount = (req:ChatRequest):boolean => JSON.stringify(req.responseFormat).includes('"count"');
+		assert.deepEqual(seen.map(offersCount), [true, true, false]);
+		assert.match(chatContentText(seen[2].messages.at(-1)?.content), /^count: REFUSED: you already called count\("x"\)/);
 	});
 
 	it('turns a thrown tool handler into an error result on the thread', async () => {
@@ -799,9 +1286,9 @@ describe('Agent', () => {
 		const talk = new TalkFeature<Ctx>({
 			inRange: () => false,
 			others: () => ['Guard'],
-		onSpoke: (u) => {
-			spoke.push(u.text);
-		},
+			onSpoke: (u) => {
+				spoke.push(u.text);
+			},
 		});
 		let calls = 0;
 		const provider = new FakeProvider((req) => {
@@ -852,7 +1339,7 @@ describe('Agent', () => {
 			context: () => ({ paragraph: paragraph() }),
 			model: 'fake',
 		});
-		const given = { kind: 'Given', text: '{0} gave FireMushroom to {1}', who: ['Forager', 'BridgeKeeper'], tags: ['give'] };
+		const given = { kind: 'Given', text: (name:(id:string)=>string) => `${name('Forager')} gave FireMushroom to ${name('BridgeKeeper')}`, tags: ['give'] };
 		const views = ['Forager', 'BridgeKeeper', 'Angler'].map((id) => {
 			const agent = agentOf(id);
 			agent.mind!.pushEvent(given);
@@ -880,12 +1367,12 @@ describe('Agent', () => {
 			...perception(),
 			context: () => ({ paragraph: paragraph() }),
 			model: 'fake',
-			heartbeat: 0,
+			minThinkInterval: 0,
 			toolRounds: 0,
 			repairRetries: 0,
 			strategicInterval: 0,
 		});
-		const given = { kind: 'Given', text: '{0} gave FireMushroom to {1}', who: ['Forager', 'BridgeKeeper'], tags: ['give'], remember: true };
+		const given = { kind: 'Given', text: (name:(id:string)=>string) => `${name('Forager')} gave FireMushroom to ${name('BridgeKeeper')}`, tags: ['give'], remember: true };
 		const forager = agentOf('Forager');
 		const angler = agentOf('Angler');
 		forager.mind!.pushEvent(given);
@@ -902,7 +1389,7 @@ describe('Agent', () => {
 		assert.doesNotMatch(foragerPrompt, /You remember:[\s\S]*gave FireMushroom/);
 		// A passing deed, a blow in a fight, is short-term memory, not conversation.
 		const cade = agentOf('Cade');
-		cade.mind!.pushEvent({ kind: 'Hurt', text: '{0} cleaved {1}', who: ['Cade', 'BridgeKeeper'] });
+		cade.mind!.pushEvent({ kind: 'Hurt', text: (name) => `${name('Cade')} cleaved ${name('BridgeKeeper')}` });
 		users.length = 0;
 		await cade.mind!.thinkNow({ enact: false });
 		assert.match(users[0] ?? '', /- You cleaved BridgeKeeper/);
@@ -931,7 +1418,7 @@ describe('Agent', () => {
 			context: () => ({ paragraph: paragraph() }),
 			catalog: () => buildCatalog({ me: dummyEntity('me'), others: [], items: [], cache: new SampleCache(), inventory: (who) => (who.id === 'me' ? carried : []) }),
 			model: 'fake',
-			heartbeat: 0,
+			minThinkInterval: 0,
 			arcFormat: 'text',
 			toolRounds: 0,
 			repairRetries: 0,
@@ -981,7 +1468,7 @@ describe('Agent', () => {
 			...perception(),
 			context: () => ({ paragraph: paragraph() }),
 			model: 'fake',
-			heartbeat: 0,
+			minThinkInterval: 0,
 			arcFormat: 'text',
 			talk,
 			toolRounds: 0,
@@ -1016,7 +1503,7 @@ describe('Agent', () => {
 			...perception(),
 			context: () => ({ paragraph: paragraph() }),
 			model: 'fake',
-			heartbeat: 0,
+			minThinkInterval: 0,
 			arcFormat: 'text',
 			talk,
 			toolRounds: 0,
@@ -1029,10 +1516,38 @@ describe('Agent', () => {
 			results.push(agent.lastResult?.status === 'ok' === true);
 		}
 		assert.deepEqual(results, [true, true, false]);
-		assert.match(agent.lastResult?.reason ?? '', /already heard you say that \("Excuse me, sir\?/);
+		assert.match(showNamingText(agent.lastResult?.reason ?? ''), /already heard you say that \("Excuse me, sir\?/);
 		listeners.push('Angler');
 		await agent.mind!.tick(40);
 		assert.equal(agent.lastResult?.status === 'ok', true);
+	});
+
+	it('checks a say for repeats only once it has two words of five letters, and refuses one 80% said before', async () => {
+		const talk = new TalkFeature<Ctx>({ inRange: () => true, others: () => ['Forager'] });
+		const lines = ['Run north!', 'Run north, now!', 'The bridge is raised, friend.', 'Friend, the raised bridge stays.', 'Friend, the bridge is raised!', 'Bridge raised.'];
+		let n = 0;
+		const agent = soloCharacter<Ctx>({
+			id: 'BridgeKeeper',
+			identity: { role: 'keeper' },
+			provider: new FakeProvider(() => ({ content: `say(text=${lines[n++]})`, toolCalls: [] })),
+			execute: async (step) => ({ status: 'ok', verb: step.verb }),
+			...stockVerbs(),
+			...perception(),
+			context: () => ({ paragraph: paragraph() }),
+			model: 'fake',
+			minThinkInterval: 0,
+			arcFormat: 'text',
+			talk,
+			toolRounds: 0,
+			repairRetries: 0,
+			strategicInterval: 0,
+		});
+		const results:boolean[] = [];
+		for (let t = 1; t <= lines.length; t++) {
+			await agent.mind!.tick(t * 10);
+			results.push(agent.lastResult?.status === 'ok');
+		}
+		assert.deepEqual(results, [true, true, true, true, false, false], 'one content word is never checked; three of four said before is new enough');
 	});
 
 	it('refuses a move that already found no way until the way opens', async () => {
@@ -1060,7 +1575,7 @@ describe('Agent', () => {
 			...perception(),
 			context: () => ({ paragraph: paragraph() }),
 			model: 'fake',
-			heartbeat: 0,
+			minThinkInterval: 0,
 			arcFormat: 'text',
 			talk: new WaysTalk({ inRange: () => false, others: () => [] }, (ids) => ids.map(() => blocked)),
 			toolRounds: 0,
@@ -1117,7 +1632,7 @@ describe('Agent', () => {
 			context: () => ({ paragraph: paragraph() }),
 			model: 'fake',
 			arcFormat: 'text',
-			heartbeat: 0,
+			minThinkInterval: 0,
 			toolRounds: 0,
 			repairRetries: 0,
 			strategicInterval: 0,
@@ -1126,8 +1641,8 @@ describe('Agent', () => {
 		agent.mind!.ingestResult({ status: 'ok', verb: 'examine', reason: 'Gate is shut' });
 		await agent.mind!.tick(10);
 		const kept = agent.persona.memory.all().map((r) => r.text);
-		assert.ok(!kept.some((text) => text.startsWith('heard by Guard')), 'a say result was kept as a memory');
-		assert.ok(kept.includes('Gate is shut'), 'an examine result was not kept');
+		assert.ok(!kept.some((text) => text.startsWith('say: heard by Guard')), 'a say result was kept as a memory');
+		assert.ok(kept.includes('examine: Gate is shut'), 'an examine result was not kept');
 	});
 
 	it('marks who is in earshot but out of reach, and why', async () => {
@@ -1219,7 +1734,7 @@ describe('Agent', () => {
 			...perception(),
 			context: () => ({ paragraph: paragraph() }),
 			model: 'fake',
-			heartbeat: 0,
+			minThinkInterval: 0,
 			toolRounds: 0,
 			repairRetries: 0,
 			strategicInterval: 0,
@@ -1253,7 +1768,7 @@ describe('Agent', () => {
 			...perception(),
 			context: () => ({ paragraph: paragraph() }),
 			model: 'fake',
-			heartbeat: 0,
+			minThinkInterval: 0,
 			toolRounds: 0,
 			repairRetries: 0,
 			strategicInterval: 0,
@@ -1302,7 +1817,7 @@ describe('Agent', () => {
 			context: () => ({ paragraph: paragraph() }),
 			model: 'fake',
 			talk,
-			heartbeat: 0,
+			minThinkInterval: 0,
 			toolRounds: 0,
 			repairRetries: 0,
 			strategicInterval: 0,
@@ -1322,7 +1837,7 @@ describe('Agent', () => {
 			context: () => ({ paragraph: paragraph() }),
 			model: 'fake',
 			talk,
-			heartbeat: 0,
+			minThinkInterval: 0,
 			toolRounds: 0,
 			repairRetries: 0,
 			strategicInterval: 0,
@@ -1352,7 +1867,7 @@ describe('Agent', () => {
 			...perception(),
 			context: () => ({ paragraph: paragraph() }),
 			model: 'fake',
-			heartbeat: 0,
+			minThinkInterval: 0,
 			toolRounds: 0,
 			repairRetries: 0,
 			strategicInterval: 0,
@@ -1377,7 +1892,7 @@ describe('Agent', () => {
 			context: () => ({ paragraph: paragraph() }),
 			execute: async () => ({ status: 'ok' }),
 			model: 'fake',
-			heartbeat: 0,
+			minThinkInterval: 0,
 			toolRounds: 0,
 			repairRetries: 0,
 			strategicInterval: 0,
@@ -1401,7 +1916,7 @@ describe('Agent', () => {
 			...perception(),
 			context: () => ({ paragraph: paragraph() }),
 			model: 'fake',
-			heartbeat: 0,
+			minThinkInterval: 0,
 			toolRounds: 0,
 			repairRetries: 0,
 			strategicInterval: 0,
@@ -1428,7 +1943,7 @@ describe('Agent', () => {
 			...perception(),
 			context: () => ({ paragraph: paragraph() }),
 			model: 'fake',
-			heartbeat: 0,
+			minThinkInterval: 0,
 			toolRounds: 0,
 			repairRetries: 0,
 			strategicInterval: 0,
@@ -1470,7 +1985,7 @@ describe('Agent', () => {
 			...perception(),
 			context: () => ({ paragraph: paragraph() }),
 			model: 'fake',
-			heartbeat: 0,
+			minThinkInterval: 0,
 			toolRounds: 0,
 			repairRetries: 0,
 			strategicInterval: 0,
@@ -1501,7 +2016,7 @@ describe('Agent', () => {
 			...perception(),
 			context: () => ({ paragraph: paragraph() }),
 			model: 'fake',
-			heartbeat: 0,
+			minThinkInterval: 0,
 			toolRounds: 0,
 			repairRetries: 0,
 			skipStrategic: true,
@@ -1527,7 +2042,7 @@ describe('Agent', () => {
 			...perception(),
 			context: () => ({ paragraph: paragraph() }),
 			model: 'fake',
-			heartbeat: 0,
+			minThinkInterval: 0,
 			toolRounds: 0,
 			repairRetries: 0,
 			strategicInterval: 0,
@@ -1556,7 +2071,6 @@ describe('Agent', () => {
 		assert.deepEqual(agent.persona.goals.map((goal) => goal.text), ['Go to the waterfall']);
 		assert.equal(agent.persona.goals[0].priority, 3);
 		assert.equal(agent.persona.identity.role, 'Waterfall scout');
-		assert.equal(agent.toJSON().mind!.lastVerb, undefined, 'a goal pass is not a verb the mind ran, so it never changes what it was last doing');
 	});
 
 	it('changes nothing for a goal pass that is empty, not Arc text, or holds any other verb', async () => {
@@ -1576,7 +2090,7 @@ describe('Agent', () => {
 		agent.mind!.pushEvent(speech);
 		await agent.mind!.tick(1);
 		assert.equal(seen[0].responseFormat, undefined);
-		assert.match(chatContentText(seen[0].messages[1].content), /Emit JSON \{"goals":/);
+		assert.match(chatContentText(seen[0].messages[1].content), /Emit JSON with the whole goals list, and "identity" only if needed:\n\{\n\t"goals":\[\n\t\t\{"text":"...","priority":0\}\n\t\],/);
 		assert.deepEqual(agent.persona.goals.map((goal) => goal.text), ['Go to the waterfall']);
 		assert.equal(agent.persona.identity.role, 'Waterfall scout');
 	});
@@ -1589,7 +2103,7 @@ describe('Agent', () => {
 		assert.equal(seen[0].responseFormat?.name, 'goals');
 		assert.equal(seen[0].responseFormat?.strict, true);
 		assert.deepEqual((seen[0].responseFormat?.schema as { required:string[] }).required, ['goals']);
-		assert.match(chatContentText(seen[0].messages[1].content), /Reply \{"goals":\[\{"text":"...","priority":0\}\]\}, the whole list, or \[\] to keep yours/);
+		assert.match(chatContentText(seen[0].messages[1].content), /Reply with the whole goals list, or "goals":\[\] to keep yours, and "identity" only if needed:\n\{\n\t"goals":\[\n\t\t\{"text":"...","priority":0\}\n\t\],/);
 		assert.equal(seen[1].responseFormat?.name, 'reply');
 		assert.deepEqual(agent.persona.goals.map((goal) => goal.text), ['Go to the waterfall']);
 		const kept:ChatRequest[] = [];
@@ -1765,8 +2279,8 @@ describe('Agent', () => {
 					toolCalls: [{ id: 'call_map', name: 'see_map', arguments: '{"zoom":1}' }],
 				};
 			}
-			assert.ok((req.tools ?? []).some((t) => t.name === 'see_map'));
-			assert.equal(req.toolChoice, 'none');
+			assert.equal(req.tools, undefined, 'spent, tools are not sent at all');
+			assert.equal(req.toolChoice, undefined);
 			const tool = req.messages.find((m) => m.role === 'tool');
 			const body = JSON.parse(String(tool?.content));
 			assert.equal(body.ok, true);
@@ -1828,8 +2342,8 @@ describe('Agent', () => {
 			}
 			const last = req.messages[req.messages.length - 1];
 			assert.equal(last?.role, 'user');
-			assert.match(String(last?.content), /Those were tools written as text; they ran anyway:\nsee_map: /);
-			assert.ok(req.messages.some((m) => Array.isArray(m.content)), 'the map picture came along');
+			assert.match(chatContentText(last?.content), /Those were tools written as text; they ran anyway:\nsee_map: /);
+			assert.ok(Array.isArray(last?.content) && last.content.some((part) => part.type === 'image_url'), 'the map picture came along, in the same message');
 			return { content: 'wait(seconds=1)', toolCalls: [] };
 		});
 		const agent = soloCharacter<Ctx>({
@@ -1959,7 +2473,8 @@ describe('Agent', () => {
 			// Native tool calls, as a model asked for plain JSON makes them.
 			arcFormat: 'json',
 			model: 'fake',
-			heartbeat: 0,
+			minThinkInterval: 0,
+			thinkUnchanged: true,
 			toolRounds: 1,
 			repairRetries: 0,
 			vision: true,
@@ -1980,7 +2495,7 @@ describe('Agent', () => {
 		assert.equal(looks, 3);
 	});
 
-	it('think(about) is a one-shot note and cannot follow itself', async () => {
+	it('think(about) is a one-shot note', async () => {
 		const seen:string[] = [];
 		const provider = new FakeProvider((req) => {
 			const user = req.messages.find((m) => m.role === 'user');
@@ -2000,23 +2515,15 @@ describe('Agent', () => {
 			...perception(),
 			context: () => ({ paragraph: paragraph() }),
 			model: 'fake',
-			heartbeat: 0,
+			minThinkInterval: 0,
 			toolRounds: 0,
 			repairRetries: 0,
 		});
 		const ok = await agent.perform({ verb: 'think', args: { about: 'how to open EastGate' } });
 		assert.equal(ok.status === 'ok', true);
-		const twice = await agent.perform({ verb: 'think', args: { about: 'something else' } });
-		assert.equal(twice.status === 'ok', false);
-		assert.match(twice.reason ?? '', /act first/);
-		const empty = await agent.perform({ verb: 'set_goal', args: { goal: 'open EastGate' } });
-		assert.equal(empty.status === 'ok', true);
 		const blank = await agent.perform({ verb: 'think', args: { about: '   ' } });
 		assert.equal(blank.status === 'ok', true);
 		assert.equal(agent.toJSON().mind!.thinkAbout, undefined);
-		const blocked = await agent.perform({ verb: 'think', args: { about: 'which key' } });
-		assert.equal(blocked.status === 'ok', false);
-		await agent.perform({ verb: 'set_goal', args: { goal: 'find the key' } });
 		const again = await agent.perform({ verb: 'think', args: { about: 'which key' } });
 		assert.equal(again.status === 'ok', true);
 		await agent.mind!.tick(1);
@@ -2024,17 +2531,38 @@ describe('Agent', () => {
 		await agent.mind!.tick(2);
 		assert.equal(seen.filter((s) => s.includes('which key')).length, 1);
 		const long = 'x'.repeat(300);
-		await agent.perform({ verb: 'set_goal', args: { goal: 'keep going' } });
 		const capped = await agent.perform({ verb: 'think', args: { about: long } });
 		assert.equal(capped.status === 'ok', true);
 		const json = agent.toJSON();
 		assert.equal(json.mind!.thinkAbout?.length, 200);
-		assert.equal(json.mind!.lastVerb, 'think');
 	});
 
-	it('allows think after a world verb in the same arc', async () => {
+	it('runs a think in an else block once the step it tests has failed', async () => {
 		const provider = new FakeProvider(() => ({
-			content: JSON.stringify({ steps: [{ verb: 'go_to', target: 'EastGate' }, { verb: 'think', about: 'how to open it' }] }),
+			content: JSON.stringify({ steps: [{ verb: 'if', cond: [{ verb: 'go_to', target: 'EastGate' }], arc: [{ verb: 'wait' }], else: [{ verb: 'think', about: 'how to open it' }] }] }),
+			toolCalls: [],
+		}));
+		const agent = soloCharacter<Ctx>({
+			id: 'Guard',
+			identity: { role: 'guard' },
+			provider,
+			...stockVerbs(),
+			...perception(),
+			context: () => ({ paragraph: paragraph() }),
+			execute: async (step) => ({ status: step.verb === 'go_to' ? 'failed' : 'ok', verb: step.verb }),
+			model: 'fake',
+			minThinkInterval: 0,
+			toolRounds: 0,
+			repairRetries: 0,
+		});
+		const arc = await agent.mind!.tick(1);
+		assert.equal(arc?.[0].verb, 'if');
+		await waitUntil(() => agent.toJSON().mind!.thinkAbout === 'how to open it');
+	});
+
+	it('turns down a think at the root of a reply, and keeps the step it began', async () => {
+		const provider = new FakeProvider(() => ({
+			content: JSON.stringify({ steps: [{ verb: 'go_to', target: 'EastGate' }, { verb: 'think', about: 'which key' }] }),
 			toolCalls: [],
 		}));
 		const agent = soloCharacter<Ctx>({
@@ -2046,45 +2574,45 @@ describe('Agent', () => {
 			context: () => ({ paragraph: paragraph() }),
 			execute: async (step) => ({ status: 'ok', verb: step.verb }),
 			model: 'fake',
-			heartbeat: 0,
+			minThinkInterval: 0,
 			toolRounds: 0,
 			repairRetries: 0,
 		});
 		const arc = await agent.mind!.tick(1);
-		assert.equal(arc?.[0].verb, 'go_to');
-		assert.equal(agent.toJSON().mind!.thinkAbout, 'how to open it');
-		assert.equal(agent.toJSON().mind!.lastVerb, 'think');
+		assert.deepEqual(arc?.map((step) => step.verb), ['go_to'], 'the step it began stands');
+		assert.match(agent.mind!.events().find((e) => e.kind === 'dropped')?.text ?? '', /did not run: .*think\(\) only inside if\/else or a choose choice/);
+		assert.equal(agent.toJSON().mind!.thinkAbout, undefined);
 	});
 
-	it('moves think to the end and concatenates abouts', async () => {
-		const provider = new FakeProvider(() => ({
-			content: JSON.stringify({ steps: [{ verb: 'think', about: 'the lock' }, { verb: 'go_to', target: 'EastGate', then: 'always' }, { verb: 'think', about: 'which key' }] }),
-			toolCalls: [],
-		}));
+	it('lets a think stand in a host verb of its own once explicitThinkAllowedInside lists it', async () => {
+		const prompts:string[] = [];
+		const provider = new FakeProvider((req) => {
+			prompts.push(chatContentText(req.messages[0].content));
+			return { content: 'maybe(chance=0.5) { think("which key") }', toolCalls: [] };
+		});
+		const { verbs, kit } = stockVerbs();
 		const agent = soloCharacter<Ctx>({
 			id: 'Guard',
 			identity: { role: 'guard' },
 			provider,
-			...stockVerbs(),
+			verbs: verbs.add('maybe', { args: { chance: 'number', arc: 'arc' } }),
+			kit: { verbs: [...kit.verbs, 'maybe'] },
 			...perception(),
 			context: () => ({ paragraph: paragraph() }),
 			execute: async (step) => ({ status: 'ok', verb: step.verb }),
 			model: 'fake',
-			heartbeat: 0,
+			minThinkInterval: 0,
 			toolRounds: 0,
 			repairRetries: 0,
+			arcFormat: 'text',
+			explicitThinkAllowedInside: [...DEFAULT_EXPLICIT_THINK_ALLOWED_INSIDE, 'maybe.arc'],
 		});
-		const arc = await agent.mind!.tick(1);
-		assert.equal(arc?.[0].verb, 'go_to');
-		assert.equal(arc?.[0].then, 'always');
-		assert.equal(arc?.[1].verb, 'think');
-		assert.equal(arc?.[1].args.about, 'the lock which key');
-		assert.equal(agent.toJSON().mind!.thinkAbout, 'the lock which key');
-		assert.equal(agent.toJSON().mind!.lastVerb, 'think');
+		assert.equal((await agent.mind!.tick(1))?.[0].verb, 'maybe');
+		assert.match(prompts[0], /NEVER write `think` in the steps; only inside if\/else or maybe\./,'choose is withheld without a System One');
 	});
 
 	it('tick occupies a think slot; enact arms wait(until) and notes the queue', async () => {
-		const think = { queue: new PriorityThinkQueue({ processInterval: 0 }), heartbeat: 0 };
+		const think = { queue: new PriorityThinkQueue({ processInterval: 0 }), minThinkInterval: 0 };
 		const q = think.queue;
 		const provider = new FakeProvider(() => ({
 			content: JSON.stringify({ steps: [{ verb: 'go_to', target: 'EastGate', then: 'always' }, { verb: 'wait', until: 'hasHeard' }] }),
@@ -2104,7 +2632,7 @@ describe('Agent', () => {
 			toolRounds: 0,
 			repairRetries: 0,
 		});
-		q.ensure('Guard', { skipHeartbeat: true });
+		q.ensure('Guard', { rethinks: false });
 		const arc = await agent.mind!.tick(1);
 		assert.equal(q.inFlight, 0);
 		assert.equal(arc?.[0].verb, 'go_to');
@@ -2125,8 +2653,8 @@ describe('Agent', () => {
 		assert.equal(q.scoreWatches('Guard', cat), 0);
 	});
 
-	it('thinkNow skips heartbeat and occupies the think slot', async () => {
-		const think = { queue: new PriorityThinkQueue({ processInterval: 0 }), heartbeat: 0 };
+	it('thinkNow skips minThinkInterval and occupies the think slot', async () => {
+		const think = { queue: new PriorityThinkQueue({ processInterval: 0 }), minThinkInterval: 0 };
 		const q = think.queue;
 		const agent = soloCharacter<Ctx>({
 			id: 'Guard',
@@ -2141,12 +2669,12 @@ describe('Agent', () => {
 			execute: async (step) => ({ status: 'ok', verb: step.verb }),
 			...think,
 			autoEnact: false,
-			heartbeat: 30,
+			minThinkInterval: 30,
 			model: 'fake',
 			toolRounds: 0,
 			repairRetries: 0,
 		});
-		q.ensure('Guard', { skipHeartbeat: true });
+		q.ensure('Guard', { rethinks: false });
 		internalsOf(agent).stamp(1);
 		const first = await agent.mind!.tick(1);
 		assert.equal(first?.[0].verb, 'wait');
@@ -2159,9 +2687,9 @@ describe('Agent', () => {
 	});
 
 	it('replaces a live arc when the current verb did not change during think', async () => {
-		const think = { queue: new PriorityThinkQueue({ processInterval: 0 }), heartbeat: 0 };
+		const think = { queue: new PriorityThinkQueue({ processInterval: 0 }), minThinkInterval: 0 };
 		let releaseGoTo:(()=>void) | undefined;
-		const chats:Array<{ enableThinking?:boolean; fakeThought?:boolean; user:string }> = [];
+		const chats:Array<{ enableThinking?:boolean; user:string }> = [];
 		const replies = [
 			JSON.stringify({ steps: [{ verb: 'go_to', target: 'EastGate' }] }),
 			JSON.stringify({ steps: [{ verb: 'wait' }] }),
@@ -2170,7 +2698,6 @@ describe('Agent', () => {
 			const lastUser = [...req.messages].reverse().find((m) => m.role === 'user');
 			chats.push({
 				enableThinking: req.enableThinking,
-				fakeThought: req.fakeThought,
 				user: chatContentText(lastUser?.content),
 			});
 			return { content: replies.shift() ?? '', toolCalls: [] };
@@ -2195,32 +2722,33 @@ describe('Agent', () => {
 				releaseGoTo?.();
 			},
 			...think,
-			heartbeat: 0,
+			minThinkInterval: 0,
 			model: 'fake',
 			toolRounds: 0,
 			repairRetries: 0,
 		});
 		void agent.mind!.tick(1);
-		await waitUntil(() => agent.toJSON().mind!.lastVerb === 'go_to');
+		await waitUntil(() => releaseGoTo !== undefined);
 		const next = await agent.mind!.tick(2);
 		assert.equal(next?.[0].verb, 'wait');
 		assert.equal(agent.mind!.lastArc?.[0].verb, 'wait');
 		assert.equal(chats.length, 2);
 		assert.equal(chats[1]?.enableThinking, true, 'a fresh think asks for the mind\'s own thinking');
-		assert.equal(chats[1]?.fakeThought, undefined);
 		assert.equal(chats[1]?.user.includes('live verb changed'), false);
 	});
 
 	it('shows a lone mind the program it runs, and pass keeps that program going', async () => {
-		const think = { queue: new PriorityThinkQueue({ processInterval: 0 }), heartbeat: 0 };
+		const think = { queue: new PriorityThinkQueue({ processInterval: 0 }), minThinkInterval: 0 };
 		const users:string[] = [];
 		const walks:unknown[] = [];
 		let aborted = 0;
 		let stop = ():void => {};
+		let arrive = ():void => {};
 		const replies = [
 			JSON.stringify({ steps: [{ verb: 'go_to', target: 'EastGate' }] }),
 			JSON.stringify({ steps: [{ verb: 'pass' }] }),
 			JSON.stringify({ steps: [{ verb: 'pass' }, { verb: 'go_to', target: 'Well' }] }),
+			JSON.stringify({ steps: [{ verb: 'say', text: 'Almost there' }] }),
 		];
 		const agent = soloCharacter<Ctx>({
 			id: 'Guard',
@@ -2239,6 +2767,7 @@ describe('Agent', () => {
 				walks.push(step.args.target);
 				return new Promise<ArcResult>((done) => {
 					stop = () => done({ status: 'stopped', verb: 'go_to' });
+					arrive = () => done({ status: 'ok', verb: 'go_to' });
 				});
 			},
 			abortArc: () => {
@@ -2246,7 +2775,7 @@ describe('Agent', () => {
 				stop();
 			},
 			...think,
-			heartbeat: 0,
+			minThinkInterval: 0,
 			model: 'fake',
 			toolRounds: 0,
 			repairRetries: 0,
@@ -2256,154 +2785,130 @@ describe('Agent', () => {
 		assert.equal(users[0].includes('Your program'), false, 'nothing runs yet');
 		const before = aborted;
 		await agent.mind!.tick(2);
-		assert.match(users[1], /Your program, still running\. When nothing needs to change, reply \{"steps":\[\{"verb":"pass"\}\]\} and it goes on:\nprogram\.arc \(running \d+s\)\n\{"steps":\[\{"verb":"go_to","target":"EastGate"\}\]\} \/\/ ← now, \d+s$/);
+		assert.match(users[1], /Your program, still running\. A reply that starts at the step marked ← now continues from there; nothing above it runs again\. A reply identical to what remains changes nothing \(or \{"steps":\[\{"verb":"pass"\}\]\}\)\. Other steps run after the program; a step marked ← now that never ends stops for them\.\nprogram\.arc \(running \d+s\)\n\{"steps":\[\{"verb":"go_to","target":"EastGate"\}\]\} \/\/ ← now, \d+s\nTo speak and keep it running, reply with only the say: \{"steps":\[\{"verb":"say","text":"…"\}\]\}\. A law, watch or remember runs beside it too\.\nTo drop it and do something else now, put the new steps in an instead step:\n\{"steps":\[\n\t\{"verb":"instead",\n\t\t"arc":\[\{"verb":"go_to","target":"Gate"\}\]\n\t\}\n\]\}\n\nThink in 5 sentences: what you want, what you know, and what is still missing\.$/, 'the think line comes last, just before the answer');
 		assert.deepEqual([agent.verb, walks, aborted], ['go_to', ['EastGate'], before], 'pass needs no body: the walk goes on, never stopped');
-		void agent.mind!.tick(3);
+		await agent.mind!.tick(3);
+		assert.deepEqual([walks, aborted], [['EastGate'], before], 'a step that needs the body waits for the walk under way');
+		await agent.mind!.tick(4);
+		assert.deepEqual([agent.verb, walks, aborted, agent.arc?.map((step) => step.args.target)], ['go_to', ['EastGate'], before, ['EastGate', 'Well']], 'a reply of only a say runs beside it too, as the prompt says');
+		arrive();
 		await waitUntil(() => walks.length === 2);
-		assert.deepEqual(walks, ['EastGate', 'Well'], 'beside a step that needs the body, it takes over as ever');
+		assert.deepEqual(walks, ['EastGate', 'Well'], 'and runs after it');
 	});
 
-	it('asks again with a canned thought when the live verb changed, and confirm keeps the first arc', async () => {
-		const think = { queue: new PriorityThinkQueue({ processInterval: 0 }), heartbeat: 0 };
-		const gates = new Map<string, (result:ArcResult)=>void>();
-		let hangThink:((res:{ content:string; toolCalls:[] })=>void) | undefined;
-		const chats:Array<{ enableThinking?:boolean; fakeThought?:boolean; user:string }> = [];
-		const provider = new FakeProvider((req) => {
-			const lastUser = [...req.messages].reverse().find((m) => m.role === 'user');
-			chats.push({
-				enableThinking: req.enableThinking,
-				fakeThought: req.fakeThought,
-				user: chatContentText(lastUser?.content),
+	for (const format of ['json', 'text'] as const) {
+		it(`drops a lone mind's program at once for a reply's instead, as ${format}; a reply without one waits its turn`, async () => {
+			const walks:unknown[] = [];
+			let aborted = 0;
+			let stop = ():void => {};
+			const step = (target:string):string => (format === 'json' ? JSON.stringify({ steps: [{ verb: 'go_to', target }] }) : `go_to(${target})`);
+			const instead = format === 'json' ? JSON.stringify({ steps: [{ verb: 'instead', arc: [{ verb: 'go_to', target: 'Well' }] }] }) : 'instead {\n\tgo_to(Well)\n}';
+			const replies = [step('EastGate'), step('Gate'), instead];
+			const users:string[] = [];
+			const agent = soloCharacter<Ctx>({
+				id: 'Guard',
+				identity: { role: 'guard' },
+				provider: new FakeProvider((req) => {
+					users.push(chatContentText(req.messages.at(-1)?.content));
+					return { content: replies.shift() ?? '', toolCalls: [] };
+				}),
+				...stockVerbs(),
+				...perception(),
+				context: () => ({ paragraph: paragraph() }),
+				execute: (run) => {
+					if (run.verb !== 'go_to') {
+						return Promise.resolve({ status: 'ok', verb: run.verb });
+					}
+					walks.push(run.args.target);
+					return new Promise<ArcResult>((done) => {
+						stop = () => done({ status: 'stopped', verb: 'go_to' });
+					});
+				},
+				abortArc: () => {
+					aborted += 1;
+					stop();
+				},
+				queue: new PriorityThinkQueue({ processInterval: 0 }),
+				minThinkInterval: 0,
+				model: 'fake',
+				toolRounds: 0,
+				repairRetries: 0,
+				arcFormat: format,
 			});
-			if (chats.length === 1) {
-				return {
-					content: JSON.stringify({ steps: [{ verb: 'go_to', target: 'EastGate', then: 'always' }, { verb: 'pick_up', item: 'Lantern' }] }),
-					toolCalls: [],
-				};
-			}
-			if (chats.length === 2) {
-				return new Promise((resolve) => {
-					hangThink = resolve;
-				});
-			}
-			return { content: 'looks good', toolCalls: [] };
+			void agent.mind!.tick(1);
+			await waitUntil(() => agent.verb === 'go_to');
+			const before = aborted;
+			await agent.mind!.tick(2);
+			assert.ok(users[1].includes(`To speak and keep it running, reply with only the say: ${format === 'json' ? '{"steps":[{"verb":"say","text":"…"}]}' : 'say("…")'}. A law, watch or remember runs beside it too.\n`), users[1]);
+			assert.deepEqual([walks, aborted], [['EastGate'], before], 'a reply without instead waits for the walk under way');
+			// A think that begins a program runs on with it.
+			void agent.mind!.tick(3);
+			await waitUntil(() => walks.length === 2);
+			assert.deepEqual(walks, ['EastGate', 'Well'], 'instead stops the walk at once');
+			assert.ok(aborted > before);
+			assert.deepEqual(agent.arc?.map((run) => run.args.target), ['Well'], 'and the step added after it');
 		});
+	}
+
+	it('names only the verbs its kit has as running beside its program', async () => {
+		const users:string[] = [];
+		const replies = [JSON.stringify({ steps: [{ verb: 'go_to', target: 'EastGate' }] }), JSON.stringify({ steps: [{ verb: 'pass' }] })];
 		const agent = soloCharacter<Ctx>({
 			id: 'Guard',
 			identity: { role: 'guard' },
-			provider,
-			...stockVerbs(),
+			provider: new FakeProvider((req) => {
+				users.push(chatContentText([...req.messages].reverse().find((m) => m.role === 'user')?.content));
+				return { content: replies.shift() ?? '', toolCalls: [] };
+			}),
+			verbs: new VerbRegistry().addAll(STOCK_VERB_DEFS),
+			kit: { verbs: ['go_to', 'pass', 'watch'] },
 			...perception(),
 			context: () => ({ paragraph: paragraph() }),
-			execute: (step) => {
-				if (step.verb === 'go_to' || step.verb === 'pick_up') {
-					return new Promise((resolve) => {
-						gates.set(step.verb, resolve);
-					});
-				}
-				return Promise.resolve({ status: 'ok', verb: step.verb });
-			},
-			abortArc: () => {
-				for (const [verb, resolve] of gates) {
-					resolve({ status: 'stopped', verb });
-				}
-				gates.clear();
-			},
-			...think,
-			heartbeat: 0,
-			// Native tool calls, as a model asked for plain JSON makes them.
-			arcFormat: 'json',
+			execute: (step) => (step.verb === 'go_to' ? new Promise<ArcResult>(() => undefined) : Promise.resolve({ status: 'ok', verb: step.verb })),
+			queue: new PriorityThinkQueue({ processInterval: 0 }),
+			minThinkInterval: 0,
 			model: 'fake',
 			toolRounds: 0,
 			repairRetries: 0,
 		});
 		void agent.mind!.tick(1);
-		await waitUntil(() => gates.has('go_to'));
-		const second = agent.mind!.tick(2);
-		await waitUntil(() => hangThink !== undefined);
-		gates.get('go_to')!({ status: 'ok', verb: 'go_to' });
-		await waitUntil(() => agent.toJSON().mind!.lastVerb === 'pick_up');
-		hangThink!({
-			content: JSON.stringify({ steps: [{ verb: 'wander' }] }),
-			toolCalls: [],
-		});
-		const arc = await second;
-		assert.equal(arc?.[0].verb, 'wander');
-		assert.equal(agent.mind!.lastArc?.[0].verb, 'wander');
-		assert.equal(chats.length, 3);
-		assert.equal(chats[2]?.enableThinking, undefined);
-		assert.equal(chats[2]?.fakeThought, true);
-		assert.match(chats[2]?.user ?? '', /live verb changed from go_to to pick_up/);
-		assert.match(chats[2]?.user ?? '', /Do not think again/);
+		await waitUntil(() => agent.verb === 'go_to');
+		await agent.mind!.tick(2);
+		const block = users[1].slice(users[1].indexOf('Your program'));
+		assert.match(block, /\nA watch runs beside it, and it keeps running\.\n/);
+		assert.equal(/\b(say|law|remember)\b/.test(block), false, block);
 	});
 
-	it('uses a new verb list from the canned-thought follow-up when the live verb changed', async () => {
-		const think = { queue: new PriorityThinkQueue({ processInterval: 0 }), heartbeat: 0 };
-		const gates = new Map<string, (result:ArcResult)=>void>();
-		let hangThink:((res:{ content:string; toolCalls:[] })=>void) | undefined;
-		const chats:Array<{ fakeThought?:boolean }> = [];
-		const provider = new FakeProvider((req) => {
-			chats.push({ fakeThought: req.fakeThought });
-			if (chats.length === 1) {
-				return {
-					content: JSON.stringify({ steps: [{ verb: 'go_to', target: 'EastGate', then: 'always' }, { verb: 'pick_up', item: 'Lantern' }] }),
-					toolCalls: [],
-				};
-			}
-			if (chats.length === 2) {
-				return new Promise((resolve) => {
-					hangThink = resolve;
-				});
-			}
-			return {
-				content: JSON.stringify({ steps: [{ verb: 'wait' }] }),
-				toolCalls: [],
-			};
-		});
+	it('marks every running part of A while B, each with its channel', async () => {
+		const users:string[] = [];
+		const replies = [
+			JSON.stringify({ steps: [{ verb: 'go_to', target: 'EastGate', while: [{ verb: 'wait', seconds: 100 }] }] }),
+			JSON.stringify({ steps: [{ verb: 'pass' }] }),
+		];
 		const agent = soloCharacter<Ctx>({
 			id: 'Guard',
 			identity: { role: 'guard' },
-			provider,
+			provider: new FakeProvider((req) => {
+				users.push(chatContentText([...req.messages].reverse().find((m) => m.role === 'user')?.content));
+				return { content: replies.shift() ?? '', toolCalls: [] };
+			}),
 			...stockVerbs(),
 			...perception(),
 			context: () => ({ paragraph: paragraph() }),
-			execute: (step) => {
-				if (step.verb === 'go_to' || step.verb === 'pick_up') {
-					return new Promise((resolve) => {
-						gates.set(step.verb, resolve);
-					});
-				}
-				return Promise.resolve({ status: 'ok', verb: step.verb });
-			},
-			abortArc: () => {
-				for (const [verb, resolve] of gates) {
-					resolve({ status: 'stopped', verb });
-				}
-				gates.clear();
-			},
-			...think,
-			heartbeat: 0,
-			// Native tool calls, as a model asked for plain JSON makes them.
-			arcFormat: 'json',
+			execute: (step) => (step.verb === 'go_to' || step.verb === 'wait' ? new Promise<ArcResult>(() => undefined) : Promise.resolve({ status: 'ok', verb: step.verb })),
+			queue: new PriorityThinkQueue({ processInterval: 0 }),
+			minThinkInterval: 0,
 			model: 'fake',
 			toolRounds: 0,
 			repairRetries: 0,
 		});
 		void agent.mind!.tick(1);
-		await waitUntil(() => gates.has('go_to'));
-		const second = agent.mind!.tick(2);
-		await waitUntil(() => hangThink !== undefined);
-		gates.get('go_to')!({ status: 'ok', verb: 'go_to' });
-		await waitUntil(() => agent.toJSON().mind!.lastVerb === 'pick_up');
-		hangThink!({
-			content: JSON.stringify({ steps: [{ verb: 'wander' }] }),
-			toolCalls: [],
-		});
-		const arc = await second;
-		assert.equal(arc?.[0].verb, 'wait');
-		assert.equal(chats.length, 3);
-		assert.equal(chats[2]?.fakeThought, true);
+		await waitUntil(() => agent.verb === 'wait');
+		await agent.mind!.tick(2);
+		const marks = users[1].match(/← now, \d+s(, \w+)?/g) ?? [];
+		assert.deepEqual(marks.map((mark) => mark.replace(/\d+s/, 'Ns')).sort(), ['← now, Ns', '← now, Ns, body'], users[1]);
 	});
+
 });
 
 describe('repairs, mind verbs, and names', () => {
@@ -2459,6 +2964,32 @@ describe('repairs, mind verbs, and names', () => {
 		assert.deepEqual(thinking, [true, false]);
 	});
 
+	it('thinks again after a tool answers the turn that answered a thought cut short', async () => {
+		const replies:ChatResponse[] = [
+			{ content: null, reasoning: 'Where is the EastGate?', toolCalls: [], truncated: true },
+			{ content: null, toolCalls: [{ id: 'c1', name: 'count', arguments: '{}' }] },
+			{ content: 'go_to(EastGate)', toolCalls: [] },
+		];
+		const thinking:(boolean | undefined)[] = [];
+		const provider = new FakeProvider((req) => {
+			thinking.push(req.enableThinking);
+			return replies.shift()!;
+		});
+		const tools = { count: { description: 'Counts.', parameters: { type: 'object', properties: {} }, handler: async () => 1 } };
+		await agentOf(provider, { tools, toolRounds: 2 }).mind!.tick(1);
+		assert.deepEqual(thinking, [true, false, true]);
+	});
+
+	it('spends no repair on a thought cut short', async () => {
+		const replies:ChatResponse[] = [
+			{ content: null, reasoning: 'The bridge is closed', toolCalls: [], truncated: true },
+			{ content: 'go_to(', toolCalls: [] },
+			{ content: 'go_to(EastGate)', toolCalls: [] },
+		];
+		const arc = await agentOf(new FakeProvider(() => replies.shift()!), { repairRetries: 1 }).mind!.tick(1);
+		assert.equal(arc?.[0].args.target, 'EastGate', 'its one repair is still there for the bad reply');
+	});
+
 	it('watch, unwatch, focus, and unfocus edit the extras and leave pins alone', async () => {
 		const agent = agentOf(new FakeProvider(() => ({ content: 'wait()', toolCalls: [] })), {
 			pinnedWatches: { hurt: 'isHurt(me)' },
@@ -2468,7 +2999,7 @@ describe('repairs, mind verbs, and names', () => {
 		assert.equal((await run('watch', { name: 'near', expr: 'isNear(me, Player)' })).status === 'ok', true);
 		assert.equal((await run('watch', { name: 'near', expr: 'isNear(me, Player, 4)' })).status === 'ok', true);
 		assert.deepEqual(agent.persona.watches, { near: 'isNear(me, Player, 4)' });
-		assert.match((await run('watch', { name: 'hurt', expr: 'false' })).reason ?? '', /required watch/);
+		assert.match(showNamingText((await run('watch', { name: 'hurt', expr: 'false' })).reason ?? ''), /required watch/);
 		assert.equal((await run('unwatch', { name: 'near' })).status === 'ok', true);
 		assert.equal((await run('unwatch', { name: 'near' })).status === 'ok', false);
 		assert.equal((await run('focus', { expr: 'isNear(it, Player)' })).status === 'ok', true);
@@ -2476,7 +3007,7 @@ describe('repairs, mind verbs, and names', () => {
 		assert.equal((await run('unfocus', { expr: 'isHurt(it)' })).status === 'ok', false);
 		assert.equal((await run('unfocus', { expr: 'isNear(it, Player)' })).status === 'ok', true);
 		agent.persona.watchesWritable = false;
-		assert.match((await run('watch', { name: 'x', expr: 'true' })).reason ?? '', /not available/);
+		assert.match(showNamingText((await run('watch', { name: 'x', expr: 'true' })).reason ?? ''), /not available/);
 	});
 
 	it('names characters by the host policy, numbers duplicates, and reads events through those names', () => {
@@ -2490,7 +3021,7 @@ describe('repairs, mind verbs, and names', () => {
 		assert.equal(agent.mind!.seen({ id: 'Brune', tags: [] }), 'Brune');
 		assert.equal(agent.persona.names.resolve('EnemyKnight2'), 'Stone');
 		assert.equal(agent.persona.names.resolve('Tree'), 'Tree');
-		agent.mind!.pushEvent({ kind: 'hit', text: '{0} cleaved {1}', who: ['Brune', 'Helms'], tags: ['hit'] });
+		agent.mind!.pushEvent({ kind: 'hit', text: (name) => `${name('Brune')} cleaved ${name('Helms')}`, tags: ['hit'] });
 		assert.equal(agent.mind!.events()[0]?.text, 'Brune cleaved EnemyKnight');
 		assert.deepEqual(agent.mind!.events()[0]?.tags, ['hit', 'Brune', 'EnemyKnight']);
 		const json = agent.toJSON();
@@ -2503,6 +3034,22 @@ describe('repairs, mind verbs, and names', () => {
 		assert.equal(restored.persona.names.resolve('EnemyKnight2'), 'Stone');
 		assert.equal(restored.mind!.nameOf('Helms'), 'EnemyKnight');
 		assert.equal(restored.mind!.events()[0]?.text, 'Brune cleaved EnemyKnight');
+	});
+
+	it('remembers its own words by id once, keeps a word that is only an id a word, and a save keeps both', async () => {
+		const provider = new FakeProvider(() => ({ content: 'wait()', toolCalls: [] }));
+		const agent = agentOf(provider, { seenAs: (target) => (target.id === 'Helms' ? 'OldKnight' : target.id) });
+		agent.mind!.seen({ id: 'Helms', tags: ['character'] });
+		agent.mind!.seen({ id: 'Rook', tags: ['character'] });
+		const kept = await agent.mind!.memory.remember('OldKnight guards the Helms gate');
+		assert.deepEqual(kept.segments(), [{ text: 'Helms', id: 'Helms' }, { text: ' guards the Helms gate' }]);
+		const shown = async (memory:{ recall(args:unknown):Promise<{ text:string }[]> }):Promise<string[]> => (await memory.recall({ query: 'gate' })).map((r) => r.text);
+		assert.deepEqual(await shown(agent.mind!.memory), ['OldKnight guards the Helms gate']);
+		agent.mind!.pruneNames();
+		assert.equal(agent.persona.names.peek('Helms'), 'OldKnight', 'a memory names it');
+		const restored = restore(agent.toJSON(), { provider, ...stockVerbs(), context: () => ({ paragraph: paragraph() }) });
+		assert.deepEqual(restored.persona.memory.all().find((r) => r.id === kept.id)?.text, kept.text);
+		assert.deepEqual(await shown(restored.mind!.memory), ['OldKnight guards the Helms gate']);
 	});
 });
 
@@ -2525,7 +3072,7 @@ describe('arcFormat schema', () => {
 			...perception(),
 			context: () => ({ paragraph: paragraph() }),
 			model: 'fake',
-			heartbeat: 0,
+			minThinkInterval: 0,
 			strategicInterval: 0,
 			repairRetries: 0,
 			arcFormat: 'schema',
@@ -2541,8 +3088,8 @@ describe('arcFormat schema', () => {
 		assert.equal(seen[0].tools, undefined);
 		assert.equal(seen[0].toolChoice, undefined);
 		const system = chatContentText(seen[0].messages[0].content);
-		assert.match(system, /Tools this think, not verbs: recall, observe\. Call one by replying \{"tool":"name","argument":"value"\}/);
-		assert.match(system, /Reply \{"tool":"recall","query":"Bread"\}/);
+		assert.match(system, /Tools this think: recall, observe\. Call one by replying \{"tool":"recall","query":"…"\}\./, 'a real tool, by its real first argument');
+		assert.doesNotMatch(system, /Bread/, 'no worked lookup of world knowledge where the world has none');
 		const schema = seen[0].responseFormat!.schema as { anyOf:{ properties:{ tool?:{ const:string } } }[] };
 		assert.deepEqual(schema.anyOf.slice(0, -1).map((branch) => branch.properties.tool?.const), ['recall', 'observe']);
 	});
@@ -2550,7 +3097,7 @@ describe('arcFormat schema', () => {
 	it('looks a tool up from its reply, then answers with the steps', async () => {
 		const seen:ChatRequest[] = [];
 		const guard = schemaGuard([recall('gate'), steps], seen);
-		await guard.mind!.remember('EastGate is the door in the east wall', ['gate', 'EastGate'], 0);
+		await guard.mind!.memory.remember('EastGate is the door in the east wall', ['gate', 'EastGate'], 0);
 		const arc = await guard.mind!.tick(1);
 		assert.equal(arc?.[0].verb, 'go_to');
 		assert.equal(seen.length, 2);
@@ -2559,7 +3106,7 @@ describe('arcFormat schema', () => {
 		assert.equal(call.role, 'assistant');
 		assert.equal(chatContentText(call.content), recall('gate'));
 		assert.equal(answer.role, 'user');
-		assert.match(chatContentText(answer.content), /^recall: .*EastGate is the door.*\nLook up something else, or reply with the steps\. Names only/s);
+		assert.match(chatContentText(answer.content), /^recall: Nothing more on "gate" than what you see and hear above\..*\nLook up something else, or reply with the steps\. Names only/s, 'the fact it remembers is on screen already');
 	});
 
 	it('tells the model when a lookup was its last', async () => {
@@ -2587,67 +3134,6 @@ describe('arcFormat schema', () => {
 		assert.match(JSON.stringify(seen[0].responseFormat?.schema), /"const":"use"/, 'the schema holds the whole catalog, not the kit');
 	});
 
-	it('asks for the steps again, without a canned thought, when the live verb changed, and a tool reply keeps the first arc', async () => {
-		const think = { queue: new PriorityThinkQueue({ processInterval: 0 }), heartbeat: 0 };
-		const gates = new Map<string, (result:ArcResult)=>void>();
-		let hangThink:((res:{ content:string; toolCalls:[] })=>void) | undefined;
-		const chats:ChatRequest[] = [];
-		const provider = new FakeProvider((req) => {
-			chats.push(req);
-			if (chats.length === 1) {
-				return { content: JSON.stringify({ steps: [{ verb: 'go_to', target: 'EastGate', then: 'always' }, { verb: 'pick_up', item: 'Lantern' }] }), toolCalls: [] };
-			}
-			if (chats.length === 2) {
-				return new Promise((resolve) => {
-					hangThink = resolve;
-				});
-			}
-			return { content: recall('lantern'), toolCalls: [] };
-		});
-		const agent = soloCharacter<Ctx>({
-			id: 'Guard',
-			identity: { role: 'guard' },
-			provider,
-			...stockVerbs(),
-			...perception(),
-			context: () => ({ paragraph: paragraph() }),
-			execute: (step) => {
-				if (step.verb === 'go_to' || step.verb === 'pick_up') {
-					return new Promise((resolve) => {
-						gates.set(step.verb, resolve);
-					});
-				}
-				return Promise.resolve({ status: 'ok', verb: step.verb });
-			},
-			abortArc: () => {
-				for (const [verb, resolve] of gates) {
-					resolve({ status: 'stopped', verb });
-				}
-				gates.clear();
-			},
-			...think,
-			heartbeat: 0,
-			model: 'fake',
-			toolRounds: 0,
-			repairRetries: 0,
-			arcFormat: 'schema',
-		});
-		void agent.mind!.tick(1);
-		await waitUntil(() => gates.has('go_to'));
-		const second = agent.mind!.tick(2);
-		await waitUntil(() => hangThink !== undefined);
-		gates.get('go_to')!({ status: 'ok', verb: 'go_to' });
-		await waitUntil(() => agent.toJSON().mind!.lastVerb === 'pick_up');
-		hangThink!({ content: JSON.stringify({ steps: [{ verb: 'wander' }] }), toolCalls: [] });
-		const arc = await second;
-		assert.equal(arc?.[0].verb, 'wander', 'the tool reply is not steps, so the first arc stands');
-		assert.equal(chats.length, 3);
-		assert.equal(chats[2].enableThinking, false);
-		assert.equal(chats[2].fakeThought, undefined);
-		assert.equal(chats[2].responseFormat?.name, 'reply');
-		assert.match(chatContentText(chats[2].messages.at(-1)?.content), /live verb changed from go_to to pick_up[^]*repeat the steps you already wrote to keep them/);
-	});
-
 	it('lets a reply call only the tools its mind is offered', async () => {
 		const seen:ChatRequest[] = [];
 		await schemaGuard([steps], seen, { kit: { verbs: ['go_to', 'wait'] } }).mind!.tick(1);
@@ -2655,5 +3141,138 @@ describe('arcFormat schema', () => {
 		await schemaGuard([steps], seen, { hideObserve: true }).mind!.tick(1);
 		const tools = seen.map((req) => [...JSON.stringify(req.responseFormat).matchAll(/"tool":\{"const":"(\w+)"/g)].map((hit) => hit[1]));
 		assert.deepEqual(tools, [['recall', 'observe'], [], ['recall']]);
+	});
+});
+
+describe('a verb that never ends', () => {
+	const replies = {
+		text: 'follow(EastGate) ; say("A") ; say("B")',
+		json: '{"steps":[{"verb":"follow","target":"EastGate","then":"always"},{"verb":"say","text":"A","then":"always"},{"verb":"say","text":"B"}]}',
+	};
+	for (const format of ['text', 'json', 'schema'] as const) {
+		it(`sends back steps after it in ${format}, as every format is checked alike`, async () => {
+			const seen:ChatRequest[] = [];
+			const provider = new FakeProvider((req) => {
+				seen.push(req);
+				return seen.length === 1 ? { content: format === 'text' ? replies.text : replies.json, toolCalls: [] } : goToNamedInteractable()(req);
+			});
+			const agent = soloCharacter<Ctx>({
+				id: 'Guard',
+				identity: { role: 'guard' },
+				goals: [{ text: 'Go to EastGate' }],
+				provider,
+				...stockVerbs(),
+				...perception(),
+				context: () => ({ paragraph: paragraph() }),
+				arcFormat: format,
+				model: 'fake',
+				repairRetries: 1,
+				repairPerStep: true,
+			});
+			await agent.mind!.tick(1);
+			assert.equal(seen.length, 2, 'the first reply goes back');
+			assert.match(chatContentText(seen[1].messages.at(-1)?.content), /follow never ends/);
+		});
+	}
+
+	for (const format of ['text', 'json'] as const) {
+		it(`is not started while its reply streams in ${format}, so a rest after it is written again whole, not left behind it`, async () => {
+			const ran:string[] = [];
+			const seen:ChatRequest[] = [];
+			const pieces = {
+				text: ['follow(EastGate) ; ', 'say("A")'],
+				json: ['{"steps":[{"verb":"follow","target":"EastGate","then":"always"},', '{"verb":"say","text":"A"}]}'],
+			}[format];
+			const fixed = { text: 'say("A") ; follow(EastGate)', json: '{"steps":[{"verb":"say","text":"A","then":"always"},{"verb":"follow","target":"EastGate"}]}' }[format];
+			const agent = soloCharacter<Ctx>({
+				id: 'Guard',
+				identity: { role: 'guard' },
+				provider: new FakeProvider((req) => {
+					seen.push(req);
+					const content = seen.length === 1 ? pieces.join('') : fixed;
+					(seen.length === 1 ? pieces : [fixed]).forEach((piece) => req.onDelta?.({ content: piece }));
+					return { content, toolCalls: [] };
+				}),
+				...stockVerbs(),
+				...perception(),
+				context: () => ({ paragraph: paragraph() }),
+				execute: async (step) => {
+					ran.push(step.verb);
+					return { status: 'ok', verb: step.verb };
+				},
+				model: 'fake',
+				minThinkInterval: 0,
+				toolRounds: 0,
+				repairRetries: 1,
+				repairPerStep: true,
+				arcFormat: format,
+			});
+			const arc = await agent.mind!.tick(1);
+			const repair = chatContentText(seen[1].messages.at(-1)?.content);
+			assert.match(repair, /follow never ends/);
+			assert.doesNotMatch(repair, /already run/, 'nothing ran, so the whole reply is written again');
+			assert.deepEqual(arc?.map((step) => step.verb), ['say', 'follow'], 'the repair is the program, not a tail after follow');
+			assert.deepEqual(ran, ['say', 'follow']);
+		});
+	}
+
+	it('keeps none of a reply sent back as a repeat, so the one written instead is not joined after its follow', async () => {
+		const seen:string[] = [];
+		const agent = soloCharacter<Ctx>({
+			id: 'Guard',
+			identity: { role: 'guard' },
+			provider: new FakeProvider((req) => {
+				seen.push(chatContentText(req.messages.at(-1)?.content));
+				return { content: seen.at(-1)?.includes('Same output again') ? 'say("A") ; follow(EastGate)' : 'follow(EastGate)', toolCalls: [] };
+			}),
+			...stockVerbs(),
+			...perception(),
+			context: () => ({ paragraph: paragraph() }),
+			model: 'fake',
+			minThinkInterval: 0,
+			toolRounds: 0,
+			repairRetries: 1,
+			repairPerStep: true,
+			arcFormat: 'text',
+		});
+		agent.mind!.settings.thinkUnchanged = true;
+		await agent.mind!.tick(1);
+		const arc = await agent.mind!.tick(2);
+		assert.ok(seen.some((text) => text.includes('Same output again')));
+		assert.deepEqual(arc?.map((step) => step.verb), ['say', 'follow']);
+	});
+
+	it('takes the same reply as last time that is what remains of the program under way as changing nothing, never as a repeat', async () => {
+		const seen:string[] = [];
+		const follows:unknown[] = [];
+		const agent = soloCharacter<Ctx>({
+			id: 'Guard',
+			identity: { role: 'guard' },
+			provider: new FakeProvider((req) => {
+				seen.push(chatContentText(req.messages.at(-1)?.content));
+				return { content: 'follow(EastGate)', toolCalls: [] };
+			}),
+			...stockVerbs(),
+			...perception(),
+			context: () => ({ paragraph: paragraph() }),
+			execute: (step) => {
+				if (step.verb !== 'follow') {
+					return Promise.resolve({ status: 'ok', verb: step.verb });
+				}
+				follows.push(step.args.target);
+				return new Promise<ArcResult>(() => {});
+			},
+			model: 'fake',
+			minThinkInterval: 0,
+			toolRounds: 0,
+			repairRetries: 1,
+			arcFormat: 'text',
+		});
+		agent.mind!.settings.thinkUnchanged = true;
+		void agent.mind!.tick(1);
+		await waitUntil(() => agent.verb === 'follow');
+		await agent.mind!.tick(2);
+		assert.equal(seen.some((text) => text.includes('Same output again')), false);
+		assert.deepEqual([follows, agent.verb], [['EastGate'], 'follow'], 'the follow under way goes on, never begun again');
 	});
 });

@@ -14,7 +14,7 @@ export type SoloOptions<TCtx> = Omit<CharacterOptions<TCtx>, 'talk'> & Omit<Mind
 /**
  * A character with a mind of its own, wired without a director: for tests and scripts. It has every mind's own tools
  * (`mindTools`) besides `tools`, and with `talk` its sense, tool and checks. `opts` stand in for a director's
- * layer of its mind's settings, and its model thinks unless `thinking` says not. Its mind paces itself (heartbeat 30
+ * layer of its mind's settings, and its model thinks unless `thinking` says not. Its mind paces itself (`minThinkInterval` 30
  * unless set), since no think queue does. `json` restores a saved character.
  */
 export function soloCharacter<TCtx>(opts:SoloOptions<TCtx>, json?:CharacterJSON):Character<TCtx> {
@@ -33,7 +33,9 @@ export function soloCharacter<TCtx>(opts:SoloOptions<TCtx>, json?:CharacterJSON)
 	const { provider, modelID = '', vision = isVisionModel(modelID), contextTokens, thinking = true, promptStyle = 'full', jsonOnly = false } = opts;
 	const model:MindModel = { run: new ModelSlots(Infinity, 0).on(provider, modelID).run, vision, contextTokens, thinking, promptStyle, jsonOnly };
 	const tools = { ...mindTools<TCtx>(), ...talk && { earshot: talk.tool }, ...opts.tools };
-	internalsOf(mind).attach(character, { ...opts, tools, senses: { ...opts.senses, ...talk && { earshot: talk.earshot } }, features: [...opts.features ?? [], ...talk ? [talk] : []], thinksWith: () => model, defaults: { heartbeat: 30, ...opts } });
-	talk?.attach(character);
+	internalsOf(mind).attach(character, { ...opts, tools, senses: { ...opts.senses, ...talk && { earshot: talk.earshot } }, features: [...opts.features ?? [], ...talk ? [talk] : []], thinksWith: () => model, defaults: { minThinkInterval: 30, ...opts } });
+	if (talk) {
+		internalsOf(talk).listen(character);
+	}
 	return character;
 }

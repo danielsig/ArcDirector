@@ -1,4 +1,5 @@
 import { allocID } from '@arc-director/kindling';
+import { pascalCase } from 'arc-director';
 import type { ItemDef } from './defs';
 
 export type ItemInstance = {
@@ -22,6 +23,11 @@ export type ItemInstance = {
 	Flame?:{ canIgnite:boolean };
 	Ingredient?:{ brewer:string; fee:string; brew:string; yield:number };
 };
+
+/** What ArcDirector calls a carried `item` (`BrassKey`): what the watch kernels list it as, and what its minds name. */
+export function itemID(item:ItemInstance):string {
+	return pascalCase(item.name) || item.name;
+}
 
 export function isBackpack(item:ItemInstance):boolean {
 	return !!item.Equipable && !!item.Container;

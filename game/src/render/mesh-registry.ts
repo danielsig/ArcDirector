@@ -594,7 +594,7 @@ function createGateMesh():THREE.Group {
 	masonry.receiveShadow = true;
 	g.add(masonry);
 	// The arch: a half ring over the opening, between the pier caps, with a lantern hook at its crown.
-	const arch = Array.from({ length: 9 }, (_, i) => {
+	const arch = Array.from({ length: 9 }, (element, i) => {
 		const a = (i / 8) * Math.PI;
 		return { x: 0, y: 2.3 + Math.sin(a) * 0.5, z: -Math.cos(a) * 0.52 };
 	});
@@ -750,7 +750,7 @@ function stripedAwning(paint:StallStyle):THREE.BufferGeometry {
 			col.push(c.r, c.g, c.b);
 			return pos.length / 3 - 1 - base;
 		};
-		const valanceRow = (v:number, t:number, z:number):number[] => Array.from({ length: nu + 1 }, (_, i) => {
+		const valanceRow = (v:number, t:number, z:number):number[] => Array.from({ length: nu + 1 }, (element, i) => {
 			const u = (s + i / nu) / stripes;
 			const tongue = t < 1 ? 1 : 0.5 + 0.5 * Math.sin(Math.PI * (i / nu));
 			return vertex((u - 0.5) * width, roofY(u, v) - valance * t * tongue, z);
@@ -758,7 +758,7 @@ function stripedAwning(paint:StallStyle):THREE.BufferGeometry {
 		rows.push(valanceRow(0, 1, ROOF_BACK_Z - 0.005), valanceRow(0, 0.5, ROOF_BACK_Z - 0.005));
 		for (let j = 0; j <= nz; j++) {
 			const v = j / nz;
-			rows.push(Array.from({ length: nu + 1 }, (_, i) => {
+			rows.push(Array.from({ length: nu + 1 }, (element, i) => {
 				const u = (s + i / nu) / stripes;
 				return vertex((u - 0.5) * width, roofY(u, v), roofZ(v));
 			}));
@@ -923,7 +923,7 @@ function createCobwebMesh():THREE.Group {
 	const sheetMat = toon(0xd8d6e0, { transparent: true, opacity: 0.32, side: THREE.DoubleSide, depthWrite: false, outline: false });
 	const center = { x: 0.05, y: 1.15 };
 	const spokes = 9;
-	const ends = Array.from({ length: spokes }, (_, i) => {
+	const ends = Array.from({ length: spokes }, (element, i) => {
 		const a = (i / spokes) * Math.PI * 2 + 0.2;
 		return { x: Math.max(-0.5, Math.min(0.5, Math.cos(a) * 0.9)), y: Math.max(0.02, Math.min(2.3, center.y + Math.sin(a) * 1.3)) };
 	});
@@ -970,7 +970,7 @@ function createMoonWindowMesh():THREE.Group {
 	// Set a little into the opening, their ends sunk in the stone above and below.
 	const bars = 5;
 	const end = height / 2 + 0.04;
-	const parts:PosedPart[] = Array.from({ length: bars }, (_, i) => {
+	const parts:PosedPart[] = Array.from({ length: bars }, (element, i) => {
 		const x = -width / 2 + ((i + 1) * width) / (bars + 1);
 		return { geo: tube([{ x, y: -end, z: -0.08 }, { x, y: end, z: -0.08 }], 0.018, 6) };
 	});

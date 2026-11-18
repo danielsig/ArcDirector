@@ -1,3 +1,4 @@
+import { showNamingText } from './text-with-ids.js';
 import type { ArcResult } from '../arc/arc-types.js';
 
 /** How many of the latest step results and picks a record keeps. */
@@ -28,8 +29,8 @@ export class ArcRecord {
 		keep(this._picks, choice);
 	}
 
-	/** `shoot 2 ok, 5 failed (no line of sight ×5); picked finish ×3, nearest ×4`, or `''` while empty. */
-	public toString():string {
+	/** `shoot 2 ok, 5 failed (no line of sight ×5); picked finish ×3, nearest ×4`, or `''` while empty; `name` names whom its reasons name. */
+	public toString(name?:(id:string)=>string):string {
 		const verbs = new Map<string, { ok:number; failed:number; why:Map<string, number> }>();
 		for (const result of this._results) {
 			const verb = result.verb ?? 'step';
@@ -40,7 +41,7 @@ export class ArcRecord {
 				continue;
 			}
 			row.failed += 1;
-			const why = result.reason ?? 'failed';
+			const why = showNamingText(result.reason ?? 'failed', name);
 			row.why.set(why, (row.why.get(why) ?? 0) + 1);
 		}
 		const parts = [...verbs].map(([verb, { ok, failed, why }]) => {

@@ -110,6 +110,33 @@ export function alwaysThinks(id:string):boolean {
 	return /qwq|qwen3.*thinking/i.test(id);
 }
 
+/** How a template marks a thought: what opens and closes one, and a whole one around `text` (`''` for an empty one). */
+export type ThoughtTags = { open:string; close:string; thought:(text:string)=>string };
+
+/** `<name>` tags, as Qwen3, QwQ, DeepSeek R1 and Phi-4 reasoning write a thought. */
+export function thinkTags(name = 'think'):ThoughtTags {
+	return { open: `<${name}>`, close: `</${name}>`, thought: (text) => `<${name}>\n${text}\n</${name}>\n\n` };
+}
+
+/**
+ * The families that do not write `<think>`, as their chat templates (on Hugging Face) write a thought: Gemma 4's
+ * thought channel, Harmony's analysis channel (gpt-oss), Muse's message to itself. A thought is followed by the
+ * answer's own header, which the model writes. First match on a model id wins.
+ */
+const THOUGHT_TAGS:{ match:RegExp; tags:ThoughtTags }[] = [
+	{ match: /gemma-?4/i, tags: { open: '<|channel>thought', close: '<channel|>', thought: (text) => `<|channel>thought\n${text && `${text}\n`}<channel|>` } },
+	{ match: /gpt-oss|harmony/i, tags: { open: '<|channel|>analysis<|message|>', close: '<|end|>', thought: (text) => `<|channel|>analysis<|message|>${text}<|end|>` } },
+	{ match: /muse/i, tags: { open: '<|start|>assistant to=self<|message|>', close: '<|eom|>', thought: (text) => ` to=self<|message|>${text}<|eom|>` } },
+];
+
+/** Every family's thought tags, `<think>` last: what a template is searched for, and what a shown thought is cleaned of. */
+export const FAMILY_TAGS:ThoughtTags[] = [...THOUGHT_TAGS.map((row) => row.tags), thinkTags()];
+
+/** How `id`'s family writes a thought: for when its template cannot be read. */
+export function thoughtTagsOf(id:string):ThoughtTags {
+	return THOUGHT_TAGS.find((row) => row.match.test(id))?.tags ?? thinkTags();
+}
+
 /**
  * What each family's makers say to sample it with, first match wins. Qwen3 splits by reasoning: its thinking mode
  * runs cooler and wider than its instruct mode. Fine-tunes keep their base's settings.
@@ -130,10 +157,6 @@ const RECOMMENDED_SAMPLING:{ match:RegExp; thinking?:boolean; sampling:Sampling 
 ];
 
 /**
- * The sampling `id`'s makers recommend, reasoning or not (Qwen3 differs by mode); `undefined` for a family this
- * library does not know. What a model spec without `sampling` runs with.
- */
-/**
  * Whether `id` was trained on ArcDirector's own prompts (a Skaldic model). Such a model only ever read the compact
  * prompt and wrote JSON Arcs, so its minds get just those, whatever the host asks.
  */
@@ -141,6 +164,10 @@ export function trainedOnArcDirector(id:string):boolean {
 	return /skaldic/i.test(id);
 }
 
+/**
+ * The sampling `id`'s makers recommend, reasoning or not (Qwen3 differs by mode); `undefined` for a family this
+ * library does not know. What a model spec without `sampling` runs with.
+ */
 export function recommendedSampling(id:string, thinking?:boolean):Sampling | undefined {
 	const reasons = alwaysThinks(id) || thinking === true;
 	const row = RECOMMENDED_SAMPLING.find((r) => r.match.test(id) && (r.thinking === undefined || r.thinking === reasons));
@@ -178,14 +205,18 @@ function rowReasoning(row:Record<string, unknown>):ModelInfo['reasoning'] {
 	};
 }
 
-/** Pick a listed option. `prefer` is used when thinking is on (`low` if allowed). */
+/**
+ * Pick a listed option. `prefer` is used when thinking is on (`low` if allowed). A model whose options are not listed
+ * is asked all the same, `prefer` or `on`, else `off`: a turn that names no effort runs at the model's default, and
+ * thinks when it should not.
+ */
 export function pickReasoningOption(
 	allowed:ReasoningOption[] | undefined,
 	thinking:boolean,
 	prefer?:ReasoningOption,
 ):ReasoningOption | undefined {
 	if (!allowed || allowed.length === 0) {
-		return undefined;
+		return thinking ? prefer ?? 'on' : 'off';
 	}
 	if (!thinking) {
 		return allowed.includes('off') ? 'off' : undefined;

@@ -545,7 +545,6 @@ a:focus-visible {
 	white-space: nowrap;
 }
 
-/* Keeps a message's line breaks, and still wraps a line too long for the button. */
 /* What fits this device: the card's first line, behind a gold star, over a gold tint. */
 .model .fit {
 	display: flex;
@@ -574,6 +573,7 @@ a:focus-visible {
 	background: color-mix(in srgb, var(--gold) 38%, var(--parchment));
 }
 
+/* Keeps a message's line breaks, and still wraps a line too long for the button. */
 .model .status {
 	font-size: 14px;
 	opacity: 0.8;

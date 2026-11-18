@@ -1,0 +1,209 @@
+{
+	"about": "Which verbs an arc runs, in order, and how it ends, when the verbs in failing fail and every other one works.",
+	"rows": [
+		{
+			"text": "go_to(A) ; wait(1) ; say(\"hi\")",
+			"ran": [
+				"go_to",
+				"wait",
+				"say"
+			],
+			"status": "ok"
+		},
+		{
+			"text": "go_to(A) ; wait(1) ; say(\"hi\")",
+			"failing": [
+				"wait"
+			],
+			"ran": [
+				"go_to",
+				"wait",
+				"say"
+			],
+			"status": "ok"
+		},
+		{
+			"text": "go_to(A) && wait(1) && say(\"hi\")",
+			"failing": [
+				"wait"
+			],
+			"ran": [
+				"go_to",
+				"wait"
+			],
+			"status": "failed"
+		},
+		{
+			"text": "go_to(A) && wait(1) || say(\"hi\")",
+			"failing": [
+				"go_to"
+			],
+			"ran": [
+				"go_to",
+				"say"
+			],
+			"status": "ok"
+		},
+		{
+			"text": "go_to(A) && wait(1) || say(\"hi\")",
+			"ran": [
+				"go_to",
+				"wait"
+			],
+			"status": "ok"
+		},
+		{
+			"text": "go_to(A) || wait(1) ; say(\"hi\")",
+			"ran": [
+				"go_to",
+				"say"
+			],
+			"status": "ok"
+		},
+		{
+			"text": "go_to(A) || wait(1) ; say(\"hi\")",
+			"failing": [
+				"go_to"
+			],
+			"ran": [
+				"go_to",
+				"wait",
+				"say"
+			],
+			"status": "ok"
+		},
+		{
+			"text": "go_to(A) || wait(1) && say(\"hi\")",
+			"ran": [
+				"go_to"
+			],
+			"status": "ok"
+		},
+		{
+			"text": "go_to(A) || wait(1) && say(\"hi\")",
+			"failing": [
+				"go_to"
+			],
+			"ran": [
+				"go_to",
+				"wait",
+				"say"
+			],
+			"status": "ok"
+		},
+		{
+			"text": "go_to(A) || wait(1) && say(\"hi\")",
+			"failing": [
+				"go_to",
+				"wait"
+			],
+			"ran": [
+				"go_to",
+				"wait"
+			],
+			"status": "failed"
+		},
+		{
+			"text": "(go_to(A) && wait(1)) || say(\"hi\")",
+			"failing": [
+				"wait"
+			],
+			"ran": [
+				"go_to",
+				"wait",
+				"say"
+			],
+			"status": "ok"
+		},
+		{
+			"text": "(go_to(A) || wait(1)) && say(\"hi\")",
+			"failing": [
+				"go_to"
+			],
+			"ran": [
+				"go_to",
+				"wait",
+				"say"
+			],
+			"status": "ok"
+		},
+		{
+			"text": "(go_to(A) || wait(1)) && say(\"hi\")",
+			"failing": [
+				"go_to",
+				"wait"
+			],
+			"ran": [
+				"go_to",
+				"wait"
+			],
+			"status": "failed"
+		},
+		{
+			"text": "loop(times=2) { go_to(A) ; wait(1) }",
+			"ran": [
+				"go_to",
+				"wait",
+				"go_to",
+				"wait"
+			],
+			"status": "ok"
+		},
+		{
+			"text": "loop(times=3) { go_to(A) && wait(1) }",
+			"failing": [
+				"wait"
+			],
+			"ran": [
+				"go_to",
+				"wait"
+			],
+			"status": "failed"
+		},
+		{
+			"text": "if (go_to(A)) { pick_up(Key) } else { think(\"another way to A\") }",
+			"ran": [
+				"go_to",
+				"pick_up"
+			],
+			"status": "ok"
+		},
+		{
+			"text": "if (go_to(A)) { pick_up(Key) } else { think(\"another way to A\") }",
+			"failing": [
+				"go_to"
+			],
+			"ran": [
+				"go_to",
+				"think"
+			],
+			"status": "ok"
+		},
+		{
+			"text": "go_to(A) ; say(fail.reason)",
+			"failing": [
+				"go_to"
+			],
+			"ran": [
+				"go_to",
+				"say"
+			],
+			"status": "ok"
+		},
+		{
+			"text": "pass()",
+			"ran": [
+				"pass"
+			],
+			"status": "ok"
+		},
+		{
+			"text": "remember(\"the gate\") ; go_to(A)",
+			"ran": [
+				"remember",
+				"go_to"
+			],
+			"status": "ok"
+		}
+	]
+}

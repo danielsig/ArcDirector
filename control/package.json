@@ -11,6 +11,10 @@
 		"./hub": {
 			"types": "./dist/hub.d.ts",
 			"import": "./dist/hub.js"
+		},
+		"./ai-log-store": {
+			"types": "./dist/AiLogStore.d.ts",
+			"import": "./dist/AiLogStore.js"
 		}
 	},
 	"files": [

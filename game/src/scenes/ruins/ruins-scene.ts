@@ -5,7 +5,7 @@ import { Celebrating, Vitals } from '../../engine/components';
 import type { HudGoal } from '../../ui/hud-model';
 import type { SceneGoals } from '../../director/game-types';
 import type { GameHost, CharacterCtx } from '../../director/adapter';
-import { doRank, fightVerbs, markReach } from '../../director/game-verbs';
+import { doRank, fightVerbs, markSides } from '../../director/game-verbs';
 import { SIGHT, lookWorld } from '../../director/perception';
 import { ATTACKS, BACK_STANDOFF, BLOCK, FIGHT_WALK, SPELL_RANGE, formatFightRules, seenInFight } from '../../director/fight';
 import { HOSTED } from '../../director/hosted';
@@ -46,7 +46,7 @@ const FIGHT:Kit = {
 /**
  * What wakes a captain while its orders run, each once as it happens: one of its own falling, a unit left with no orders
  * (they ended or failed), and someone of its own getting badly hurt; and every few seconds for as long as a unit stands
- * idle, should a think leave it so. Anything else waits for the heartbeat.
+ * idle, should a think leave it so. Anything else waits for a rethink.
  */
 const PARTY_WATCHES = {
 	fallen: 'hasFallen("standing", count(allUnits))',
@@ -84,9 +84,9 @@ const CLOSE_ENEMY = `others.filter(u => u is "enemy" && distance(me, u) < ${BLOC
  */
 function roleChoice(role:'Knight' | 'Blade' | 'Archer' | 'Witch'):StandingChoice {
 	if (role === 'Knight' || role === 'Blade') {
-		return { goal: 'Defend: block an enemy up close', block: `block(${CLOSE_ENEMY})` };
+		return { goal: 'Defend: block an enemy up close', choices: { block: `block(${CLOSE_ENEMY})` } };
 	}
-	return { goal: 'Stay alive: keep behind your line', back: 'rank()' };
+	return { goal: 'Stay alive: keep behind your line', choices: { back: 'rank()' } };
 }
 
 /** Every hurt enemy: a law's trigger for focusing the weakest. */
@@ -132,7 +132,7 @@ function partyStory(party:string, units:{ id:string; tags?:string[] }[]):MemoryD
 		'Every enemy shows as Enemy and its kind: EnemyWitch, EnemyKnight, EnemyArcher, EnemyBlade, EnemyHealer, and a Player who strikes your units as EnemyPlayer; in programs, enemies are others.filter("enemy"). who=units.filter("Blade") is your Blade; EnemyBlade is theirs.',
 		`You are the Healer and the commander: command() never reaches you. Your own laws heal from ${SPELL_RANGE}m and keep you back; smite yourself only a foe already within ${ATTACKS.smite!.range}m. Never heal, attack or rank yourself, and never command heal or rank; command smite only to your Witch.`,
 		RUINS_PLACES_ABOUT,
-		'go_to only walks there; an issued attack walks the unit into range itself. Inside an issued arc, && runs the next step after a hit lands or the foe is down. Each command is its own step, never joined by &&.',
+		'go_to only walks there; an issued attack walks the unit into range itself. Inside an issued arc, && runs the next step after a hit lands or the foe has fallen. Each command is its own step, never joined by &&.',
 	].join(' ');
 	return { text, tags: ['backstory', party], pinned: true };
 }
@@ -171,7 +171,7 @@ const DUSK_UNITS = partyUnits('Dusk', { Witch: 'Nyx', Knight: 'Helms', Archer: '
 const DAWN:CollectiveSpec<CharacterCtx> = {
 	id: 'DawnParty',
 	// Its commander plans when its watches say something changed; its units' System One picks each swing.
-	mind: { skipHeartbeat: false, model: 'quick' },
+	mind: { model: 'quick' },
 	watchesWritable: false,
 	pinnedWatches: PARTY_WATCHES,
 	pinnedSightFocus: ['isHurt(it)'],
@@ -189,7 +189,7 @@ const DAWN:CollectiveSpec<CharacterCtx> = {
 const DUSK:CollectiveSpec<CharacterCtx> = {
 	id: 'DuskParty',
 	// Its commander plans when its watches say something changed; its units' System One picks each swing.
-	mind: { skipHeartbeat: false, model: 'quick' },
+	mind: { model: 'quick' },
 	watchesWritable: false,
 	pinnedWatches: PARTY_WATCHES,
 	pinnedSightFocus: ['isHurt(it)'],
@@ -228,7 +228,7 @@ function livingCommand(host:GameHost, id:string):boolean {
 	return isLiving(findObject(host.world, id));
 }
 
-/** When the commander is down, the farthest living role takes command. */
+/** When the commander has fallen, the farthest living role takes command. */
 function succeedCommand(host:GameHost, party:Collective<CharacterCtx>):void {
 	if (party.commander && livingCommand(host, party.commander.id)) {
 		return;
@@ -285,7 +285,7 @@ function hopWin(host:GameHost, winners:GameObject[], spec:CollectiveSpec<Charact
 	}
 	const queue = host.arc?.queue;
 	queue?.setAiOn(spec === DAWN ? DUSK.id : DAWN.id, false);
-	queue?.ensure(spec.id, { skipHeartbeat: true, skipMajor: true });
+	queue?.ensure(spec.id, { rethinks: false, skipMajor: true });
 	queue?.abortThink(spec.id);
 	const winner = host.arc?.collective(spec.id);
 	if (!winner) {
@@ -302,7 +302,7 @@ function hopWin(host:GameHost, winners:GameObject[], spec:CollectiveSpec<Charact
 		approaching: 'hasHeard || some(others.filter(u => u is "Player").nearby().approaching())',
 		given: 'count(me.inventory) > count(prev.me.inventory)',
 	};
-	queue?.setWatches(spec.id, winner.persona.effectiveWatches());
+	queue?.setWatches(spec.id, winner.persona.watchList());
 	winner.persona.goals = [{ text: 'You won. Stay. Speak when someone approaches or gives you something.', priority: 2 }];
 	for (const character of winner.characters) {
 		character.kit = winner.kit;
@@ -337,16 +337,16 @@ function tickFight(host:GameHost):void {
 }
 
 /**
- * One orb per enemy downed, so the two sides race toward the middle: the downed fill theirs, and the next orb fills as
+ * One orb per fallen enemy, so the two sides race toward the middle: the fallen fill theirs, and the next orb fills as
  * the most hurt enemy still standing weakens.
  */
-function downed(host:GameHost, foes:CollectiveSpec<CharacterCtx>):HudGoal[] {
+function fallenGoals(host:GameHost, foes:CollectiveSpec<CharacterCtx>):HudGoal[] {
 	const vitals = (foes.characters ?? []).map(({ id }) => findObject(host.world, id)?.getComponent(Vitals));
-	const down = vitals.filter((v) => !v || v.hp <= 0).length;
+	const fallen = vitals.filter((v) => !v || v.hp <= 0).length;
 	const next = Math.max(0, ...vitals.map((v) => (v && v.hp > 0 ? 1 - v.hp / v.maxHP : 0)));
 	return vitals.map((v, i) => ({
 		name: `Defeat ${i + 1} of ${vitals.length} ${PARTIES.find((p) => p.spec === foes)?.name} fighters`,
-		progress: i < down ? 1 : i === down ? next : 0,
+		progress: i < fallen ? 1 : i === fallen ? next : 0,
 	}));
 }
 
@@ -354,8 +354,8 @@ function downed(host:GameHost, foes:CollectiveSpec<CharacterCtx>):HudGoal[] {
 function goals(host:GameHost):SceneGoals {
 	const who = (party:CollectiveSpec<CharacterCtx>):string[] => (party.characters ?? []).map(({ id }) => id);
 	return {
-		left: { color: 'gold', goals: downed(host, DUSK), who: who(DAWN) },
-		right: { color: 'blue', goals: downed(host, DAWN), who: who(DUSK) },
+		left: { color: 'gold', goals: fallenGoals(host, DUSK), who: who(DAWN) },
+		right: { color: 'blue', goals: fallenGoals(host, DAWN), who: who(DUSK) },
 	};
 }
 
@@ -369,8 +369,8 @@ export function createDirector(host:GameHost):ArcDirector<CharacterCtx, GameObje
 		// The ruins' own line: Knight and Blade on the nearest enemy, the rest behind them.
 		.withVerbs((v) => v.add('rank', { handler: (call) => doRank(host, call) }))
 		.onCommanderVacant((party) => succeedCommand(host, party))
-		// Each rival is marked in reach or not, so its commander's roster says who can hit whom.
-		.withSight({ limit: 16, look: (ctx) => markReach(host, ctx.character, lookWorld(ctx.character, host.ambient, host)) })
+		// Each of its own side is marked; its commander's roster says who is in reach of whose attack (`getReach`).
+		.withSight({ limit: 16, look: (ctx) => markSides(host, ctx.character, lookWorld(ctx.character, host.ambient, host)) })
 		.withNames(seenInFight)
 		.withMind({
 			thinkInstructions: { off: NO_THINK },

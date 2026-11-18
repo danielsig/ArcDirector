@@ -1,15 +1,11 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { MODEL_TIERS, type ThinkOff } from './models.js';
-import { cleanThought, HttpProvider, loadConfigFits, parseChatTimings, stripTemplateTokens } from './http.js';
+import { HttpProvider, loadConfigFits, parseChatTimings, type ModelSettings } from './http.js';
+import { cleanThought, loops, stripTemplateTokens } from './wire-formats.js';
 import { ChatSystemOne, JevSystemOne, ModelSystemOne } from './system-one.js';
 import type { ChatDelta, ChatRequest } from './provider.js';
-import {
-	EMPTY_THINK_PREFILL,
-	DONE_THOUGHT,
-	PREFILL_MARKER,
-	clearAssistantThinkCache,
-} from './assistant-think.js';
+import { PREFILL_MARKER, clearAssistantThinkCache } from './assistant-think.js';
 
 function idWithThinkOff(mode:ThinkOff):string {
 	const row = MODEL_TIERS.find((t) => t.thinking && t.thinkOff === mode);
@@ -150,7 +146,7 @@ describe('HttpProvider thinking', () => {
 		assert.match(String(system?.content), /\/no_think/);
 		assert.equal(messages.find((m) => m.role === 'user')?.content, 'pong');
 		assert.equal(messages.at(-1)?.role, 'assistant');
-		assert.equal(messages.at(-1)?.content, EMPTY_THINK_PREFILL);
+		assert.equal(messages.at(-1)?.content, '<think>\n\n</think>\n\n');
 	});
 
 	it('reports the prepared body before the HTTP send', async () => {
@@ -184,7 +180,7 @@ describe('HttpProvider thinking', () => {
 		assert.deepEqual(order, ['request', 'fetch']);
 		const messages = logged?.messages as Array<{ role?:string; content?:string }>;
 		assert.equal(messages.at(-1)?.role, 'assistant');
-		assert.equal(messages.at(-1)?.content, EMPTY_THINK_PREFILL);
+		assert.equal(messages.at(-1)?.content, '<|channel|>analysis<|message|><|end|>');
 	});
 
 	it('ignores reasoning_content that is not a JSON arc', async () => {
@@ -235,13 +231,14 @@ describe('HttpProvider thinking', () => {
 		assert.deepEqual(body['chat_template_kwargs'], { enable_thinking: true });
 	});
 
-	it('does not send reasoning low unless the catalog allows it', async () => {
+	it('asks an unlisted model for its default effort, or none, rather than leaving it out', async () => {
 		const model = idWithThinkOff('strength');
 		const body = await captureBody({
 			enableThinking: true,
 			maxTokens: 384,
 		}, model);
-		assert.equal(body['reasoning_effort'], undefined);
+		assert.equal(body['reasoning_effort'], 'medium');
+		assert.equal((await captureBody({}, model))['reasoning_effort'], 'none');
 	});
 
 	it('sends reasoning low when the listed model allows low', async () => {
@@ -264,7 +261,7 @@ describe('HttpProvider thinking', () => {
 		assert.equal(body['reasoning_effort'], 'none');
 		const messages = body.messages as Array<{ role?:string; content?:string }>;
 		assert.equal(messages.at(-1)?.role, 'assistant');
-		assert.equal(messages.at(-1)?.content, EMPTY_THINK_PREFILL);
+		assert.equal(messages.at(-1)?.content, '<|channel|>analysis<|message|><|end|>');
 	});
 
 	it('does not prefill when thinking is on', async () => {
@@ -278,18 +275,6 @@ describe('HttpProvider thinking', () => {
 		assert.equal(messages.at(-1)?.content, 'pong');
 	});
 
-	it('prefills a canned thought for one request when thinking stays on', async () => {
-		const model = idWithThinkOff('strength');
-		const body = await captureBody({
-			enableThinking: true,
-			maxTokens: 384,
-		}, model, catalogWithReasoning(model, ['off', 'on', 'low', 'medium', 'high']), { fakeThought: true });
-		assert.equal(body['reasoning_effort'], 'low');
-		const messages = body.messages as Array<{ role?:string; content?:string }>;
-		assert.equal(messages.at(-1)?.role, 'assistant');
-		assert.equal(messages.at(-1)?.content, `<redacted_thinking>\n${DONE_THOUGHT}\n</redacted_thinking>`);
-	});
-
 	it('turns thinking off for one request even when the provider has it on', async () => {
 		const model = idWithThinkOff('strength');
 		const body = await captureBody({
@@ -299,7 +284,7 @@ describe('HttpProvider thinking', () => {
 		assert.equal(body['reasoning_effort'], 'none');
 		const messages = body.messages as Array<{ role?:string; content?:string }>;
 		assert.equal(messages.at(-1)?.role, 'assistant');
-		assert.equal(messages.at(-1)?.content, EMPTY_THINK_PREFILL);
+		assert.equal(messages.at(-1)?.content, '<|channel|>analysis<|message|><|end|>');
 	});
 
 	it('uses the Harmony to=user prefill from applyPromptTemplate', async () => {
@@ -316,35 +301,6 @@ describe('HttpProvider thinking', () => {
 		assert.equal(messages.at(-1)?.role, 'assistant');
 		assert.equal(messages.at(-1)?.content, header);
 		clearAssistantThinkCache();
-	});
-
-	it('prefills a canned Harmony thought from applyPromptTemplate', async () => {
-		clearAssistantThinkCache();
-		const header = '<|start|>assistant to=user<|channel|>final<|message|>';
-		const model = idWithThinkOff('strength');
-		const body = await captureBody({
-			enableThinking: true,
-			applyPromptTemplate: async (messages) => {
-				if (messages.at(-1)?.role === 'assistant') {
-					return `<|start|>user<|message|>y<|end|>${header}${PREFILL_MARKER}`;
-				}
-				return '<|start|>user<|message|>y<|end|><|start|>assistant<|channel|>analysis<|message|><think>';
-			},
-		}, model, catalogWithReasoning(model, ['off', 'on', 'low', 'medium', 'high']), { fakeThought: true });
-		const messages = body.messages as Array<{ role?:string; content?:string }>;
-		assert.equal(body['reasoning_effort'], 'low');
-		assert.equal(messages.at(-1)?.role, 'assistant');
-		assert.equal(messages.at(-1)?.content, `<think>\n${DONE_THOUGHT}\n</think>${header}`);
-		clearAssistantThinkCache();
-	});
-
-	it('sends reasoning on for on/off models, not low', async () => {
-		const model = 'google/gemma-4-26b-a4b';
-		const body = await captureBody({
-			enableThinking: true,
-			maxTokens: 384,
-		}, model, catalogWithReasoning(model, ['off', 'on']));
-		assert.equal(body['reasoning_effort'], 'medium');
 	});
 
 	it('does not send reasoning off when the model only allows on', async () => {
@@ -467,7 +423,7 @@ describe('HttpProvider thinking', () => {
 		assert.equal(content[1]?.type, 'image_url');
 		assert.equal(content[1]?.image_url?.url, 'data:image/png;base64,xx');
 		assert.equal(messages.at(-1)?.role, 'assistant');
-		assert.equal(messages.at(-1)?.content, EMPTY_THINK_PREFILL);
+		assert.equal(messages.at(-1)?.content, '<think>\n\n</think>\n\n');
 	});
 });
 
@@ -959,6 +915,7 @@ describe('HttpProvider native server', () => {
 			toolChoice: 'none',
 		});
 		assert.equal(bodies[1]?.['previous_response_id'], 'resp_1');
+		assert.deepEqual(bodies.map((body) => body.reasoning), [{ effort: 'none' }, { effort: 'none' }], 'every turn says its effort, a model the catalog lists no options for too');
 		const input = bodies[1]?.input as Array<{ type?:string }>;
 		assert.equal(input[0]?.type, 'function_call_output');
 		assert.equal(second.cachedTokens, 40);
@@ -1082,7 +1039,7 @@ describe('HttpProvider native server', () => {
 `;
 		const provider = new HttpProvider({
 			baseURL: 'http://127.0.0.1:9/v1',
-			fetch: async (_input, init) => (init?.method === 'POST'
+			fetch: async (input, init) => (init?.method === 'POST'
 				? new Response(`: keepalive
 
 : keepalive
@@ -1454,6 +1411,14 @@ describe('response format', () => {
 		assert.deepEqual(body?.response_format, { type: 'json_schema', json_schema: format });
 	});
 
+	it('clamps max_tokens to one slot\'s share of a model loaded with parallel slots', async () => {
+		const loaded = (parallel:number) => ({ models: [{ key: 'm', loaded_instances: [{ id: 'm', config: { context_length: 32768, parallel } }] }] });
+		const cap = async (parallel:number) => Number((await captureBody({}, 'm', loaded(parallel), { maxTokens: 30000 }))['max_tokens']);
+		assert.equal(await cap(1), 30000, 'one slot holds the whole context');
+		const quarter = await cap(4);
+		assert.ok(quarter < 8192 && quarter > 8000, 'each of 4 slots holds a quarter');
+	});
+
 	it('does not count the schema as prompt when clamping max_tokens to the slot', async () => {
 		const catalog = { models: [{ key: 'm', loaded_instances: [{ id: 'm', config: { context_length: 4096 } }] }] };
 		const maxTokens = (responseFormat:typeof format) => captureBody({}, 'm', catalog, { maxTokens: 4096, responseFormat });
@@ -1493,7 +1458,7 @@ describe('System One', () => {
 		const decisions = new JevSystemOne({
 			baseURL: 'http://127.0.0.1:9/v1/decisions',
 			model: 'laya',
-			fetch: async (_input, init) => {
+			fetch: async (input, init) => {
 				body = JSON.parse(String(init?.body));
 				return new Response(JSON.stringify({ answers: [{ type: 'choice', name: 'pick', choice: 'slash' }] }), { status: 200 });
 			},
@@ -1592,104 +1557,6 @@ describe('System One', () => {
 });
 
 describe('configured models', () => {
-	/** A server with `gemma` loaded at 4096 and `laya` on disk; records every load and unload. */
-	function server():{ provider:HttpProvider; posts:{ path:string; body:Record<string, unknown> }[] } {
-		const posts:{ path:string; body:Record<string, unknown> }[] = [];
-		const loaded = [{ key: 'gemma', loaded_instances: [{ id: 'gemma', config: { context_length: 4096 } }] }, { key: 'laya', loaded_instances: [] as unknown[] }];
-		const provider = new HttpProvider({
-			baseURL: 'http://127.0.0.1:9/v1',
-			fetch: async (input, init) => {
-				const url = String(input);
-				if (url.endsWith('/api/v1/models') && init?.method !== 'POST') {
-					return new Response(JSON.stringify({ models: loaded }), { status: 200 });
-				}
-				const body = JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>;
-				posts.push({ path: url.replace(/^.*\/api\/v1\/models\//, ''), body });
-				if (url.endsWith('/load')) {
-					loaded[1].loaded_instances = [{ id: 'laya', config: { context_length: body.context_length } }];
-					return new Response(JSON.stringify({ instance_id: 'laya', load_config: { context_length: body.context_length } }), { status: 200 });
-				}
-				return new Response('{}', { status: 200 });
-			},
-		});
-		return { provider, posts };
-	}
-
-	it('loads a second configured model beside the first, each with its own context', async () => {
-		const { provider, posts } = server();
-		provider.configureModel('gemma', { contextLength: 4096 });
-		provider.configureModel('laya', { contextLength: 2048 });
-		await provider.ensureLoaded('laya');
-		assert.deepEqual(posts.map((p) => p.path), ['load']);
-		assert.equal(posts[0].body.model, 'laya');
-		assert.equal(posts[0].body.context_length, 2048);
-	});
-
-	it('unloads a model that is not configured to make room', async () => {
-		const { provider, posts } = server();
-		provider.configureModel('laya', {});
-		await provider.ensureLoaded('laya');
-		assert.deepEqual(posts.map((p) => p.path), ['unload', 'load']);
-	});
-
-	it('reloads an idle instance onto the configured context', async () => {
-		const posts:{ path:string; context?:number }[] = [];
-		let context = 16384;
-		const provider = new HttpProvider({
-			baseURL: 'http://127.0.0.1:9/v1',
-			fetch: async (input, init) => {
-				const url = String(input);
-				if (url.endsWith('/api/v1/models') && init?.method !== 'POST') {
-					const models = [{ key: 'npc', max_context_length: 131072, loaded_instances: context ? [{ id: 'npc', config: { context_length: context } }] : [] }];
-					return new Response(JSON.stringify({ models }), { status: 200 });
-				}
-				const body = JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>;
-				const path = url.replace(/^.*\/api\/v1\/models\//, '');
-				posts.push(typeof body.context_length === 'number' ? { path, context: body.context_length } : { path });
-				if (path === 'unload') {
-					context = 0;
-				}
-				if (path === 'load') {
-					context = Number(body.context_length);
-					return new Response(JSON.stringify({ instance_id: 'npc', load_config: { context_length: context } }), { status: 200 });
-				}
-				return new Response('{}', { status: 200 });
-			},
-		});
-		provider.configureModel('npc', { contextLength: 8192 });
-		await provider.ensureLoaded('npc');
-		assert.deepEqual(posts, [{ path: 'unload' }, { path: 'load', context: 8192 }]);
-	});
-
-	it('keeps the configured context and unloads a larger idle copy', async () => {
-		const unloaded:string[] = [];
-		const provider = new HttpProvider({
-			baseURL: 'http://127.0.0.1:9/v1',
-			fetch: async (input, init) => {
-				const url = String(input);
-				if (url.endsWith('/api/v1/models') && init?.method !== 'POST') {
-					return new Response(JSON.stringify({
-						models: [{
-							key: 'npc',
-							loaded_instances: [
-								{ id: 'npc', config: { context_length: 8192, flash_attention: true } },
-								{ id: 'npc:2', config: { context_length: 65536, flash_attention: true } },
-							],
-						}],
-					}), { status: 200 });
-				}
-				if (url.includes('/models/unload')) {
-					unloaded.push(String(JSON.parse(String(init?.body)).instance_id));
-					return new Response(JSON.stringify({ instance_id: unloaded.at(-1) }), { status: 200 });
-				}
-				return new Response('should not load', { status: 500 });
-			},
-		});
-		provider.configureModel('npc', { contextLength: 8192 });
-		await provider.ensureLoaded('npc');
-		assert.deepEqual(unloaded, ['npc:2']);
-	});
-
 	it('does not unload a different context while a chat is in flight', async () => {
 		let context = 8192;
 		let chats = 0;
@@ -1738,28 +1605,8 @@ describe('configured models', () => {
 		assert.deepEqual(unloaded, []);
 		release();
 		await Promise.all([first, second]);
-		await provider.ensureLoaded('npc');
+		await provider.chat({ model: 'npc', messages: [{ role: 'user', content: 'again' }] });
 		assert.deepEqual(unloaded, ['npc']);
-	});
-
-	it('keeps a model loaded at the most context it takes when more is asked for', async () => {
-		const posts:string[] = [];
-		const provider = new HttpProvider({
-			baseURL: 'http://127.0.0.1:9/v1',
-			fetch: async (input, init) => {
-				const url = String(input);
-				if (url.endsWith('/api/v1/models') && init?.method !== 'POST') {
-					const models = [{ key: 'npc', max_context_length: 4096, loaded_instances: [{ id: 'npc', config: { context_length: 4096 } }] }];
-					return new Response(JSON.stringify({ models }), { status: 200 });
-				}
-				posts.push(url.replace(/^.*\/api\/v1\/models\//, ''));
-				return new Response('{}', { status: 200 });
-			},
-		});
-		provider.configureModel('npc', { contextLength: 16384 });
-		await provider.ensureLoaded('npc');
-		await provider.ensureLoaded('npc');
-		assert.deepEqual(posts, [], 'a 4k model never fits a 16k ask exactly: it must not reload on every request');
 	});
 });
 
@@ -1843,5 +1690,156 @@ describe('HttpProvider thinking budget', () => {
 		const thought = pieces.map((piece) => piece.reasoning ?? '').join('');
 		assert.equal(thought, 'Go there <3.');
 		assert.equal(res.reasoning, 'Go there <3.');
+	});
+
+	/** A provider that answers each chat with the next of `streams`, and keeps the bodies it was sent. */
+	function providerOver(streams:ReturnType<typeof streamOf>[], settings:ModelSettings = {}):{ provider:HttpProvider; bodies:Record<string, unknown>[] } {
+		const bodies:Record<string, unknown>[] = [];
+		const provider = new HttpProvider({
+			baseURL: 'http://127.0.0.1:9/v1',
+			fetch: async (input, init) => {
+				const url = String(input);
+				if (url.endsWith('/models') || url.includes('/responses')) {
+					return new Response('nope', { status: 404 });
+				}
+				bodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+				return streams[bodies.length - 1]!.res();
+			},
+		});
+		provider.configureModel('thinker', settings);
+		return { provider, bodies };
+	}
+
+	const words = (n:number):string[] => Array.from({ length: n }, (element, i) => `step${i} `);
+	const hi:ChatRequest = { model: 'thinker', messages: [{ role: 'user', content: 'hi' }] };
+
+	it('cuts a thought short when thinking is off, and hands it back as a budget cut is', async () => {
+		const stream = streamOf(words(40), ['{}']);
+		const { provider, bodies } = providerOver([stream]);
+		const res = await provider.chat(hi);
+		assert.equal(bodies[0]?.['reasoning_effort'], 'none');
+		assert.equal(res.truncated, true);
+		assert.equal(res.content, null);
+		assert.match(res.reasoning ?? '', /^step0 step1/);
+		assert.equal(stream.canceled(), true);
+	});
+
+	it("gives each request what its think's earlier requests left of the budget, and no thinking once it is spent", async () => {
+		const { provider, bodies } = providerOver([streamOf(words(12), ['{}']), streamOf(words(12), ['{}'])], { enableThinking: true, thinkingBudget: 20, thinkingFloor: 0 });
+		assert.equal((await provider.chat({ ...hi, thinkingSpent: 10 })).truncated, true, 'ten tokens left, twelve thought');
+		assert.equal((await provider.chat({ ...hi, thinkingSpent: 20 })).content, '{}', 'thought within the few a turn without thinking may');
+		assert.deepEqual(bodies.map((body) => body['reasoning_effort']), ['medium', 'none']);
+	});
+
+	it('lets a later request think half what the last that thought was allowed, if that is more than is left, and never under the floor', async () => {
+		const { provider, bodies } = providerOver([0, 1, 2].map(() => streamOf([], ['{}'])), { enableThinking: true, thinkingBudget: 256 });
+		const allowed:(number | undefined)[] = [];
+		for (const [spent, last] of [[200, 256], [300, 128], [400, 64]] as const) {
+			allowed.push((await provider.chat({ ...hi, thinkingSpent: spent, lastThinkingAllowance: last })).thinkingAllowance);
+		}
+		assert.deepEqual(allowed, [128, 64, 64], '56 left, but half of 256; then half of 128; then the floor of 64, over half of 64');
+		assert.deepEqual(bodies.map((body) => [body['reasoning_effort'], body['max_tokens']]), [['medium', 128 + 512], ['medium', 64 + 512], ['medium', 64 + 512]]);
+		const low = providerOver([streamOf([], ['{}'])], { enableThinking: true, thinkingBudget: 256, thinkingFloor: 32 });
+		assert.equal((await low.provider.chat({ ...hi, thinkingSpent: 400, lastThinkingAllowance: 64 })).thinkingAllowance, 32, 'a floor of 32 lets it think 32');
+	});
+
+	it('lowers the floor to a budget under it', async () => {
+		const { provider, bodies } = providerOver([0, 1].map(() => streamOf([], ['{}'])), { enableThinking: true, thinkingBudget: 32 });
+		assert.equal((await provider.chat(hi)).thinkingAllowance, 32, 'all 32, under the floor of 64');
+		assert.equal((await provider.chat({ ...hi, thinkingSpent: 32, lastThinkingAllowance: 32 })).thinkingAllowance, 32, 'the floor, clamped to 32, over half of 32');
+		assert.deepEqual(bodies.map((body) => body['reasoning_effort']), ['medium', 'medium']);
+	});
+
+	it('asks the server to stop at what the budget leaves, plus room to answer', async () => {
+		const { provider, bodies } = providerOver([streamOf([], ['{}']), streamOf([], ['{}'])], { enableThinking: true, thinkingBudget: 256 });
+		await provider.chat({ ...hi, thinkingSpent: 56 });
+		await provider.chat({ ...hi, enableThinking: false });
+		assert.equal(bodies[0]?.['max_tokens'], 200 + 512);
+		assert.equal('max_tokens' in bodies[1]!, false, 'a turn that does not think is sent as before');
+	});
+
+	it('hands back a thought the server stopped at its cap, with no answer, as a budget cut', async () => {
+		const thought = 'The bridge is closed, so';
+		const chat = { choices: [{ message: { content: '', reasoning_content: thought }, finish_reason: 'length' }] };
+		const responses = `event: response.incomplete\ndata: ${JSON.stringify({ type: 'response.incomplete', response: {
+			status: 'incomplete',
+			output: [{ type: 'reasoning', content: [{ type: 'reasoning_text', text: thought }] }],
+		} })}\n\n`;
+		const bodies:Record<string, unknown>[] = [];
+		const over = (responsesAPI:boolean):HttpProvider => {
+			const provider = new HttpProvider({
+				baseURL: 'http://127.0.0.1:9/v1',
+				fetch: async (input, init) => {
+					const url = String(input);
+					if (url.endsWith('/api/v1/models') && init?.method !== 'POST') {
+						return responsesAPI
+							? new Response(JSON.stringify({ models: [{ key: 'thinker', loaded_instances: [{ id: 'thinker' }] }] }), { status: 200 })
+							: new Response('nope', { status: 404 });
+					}
+					if (url.includes('/responses') !== responsesAPI) {
+						return new Response('nope', { status: 404 });
+					}
+					bodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+					return responsesAPI
+						? new Response(responses, { status: 200, headers: { 'content-type': 'text/event-stream' } })
+						: new Response(JSON.stringify(chat), { status: 200 });
+				},
+			});
+			provider.configureModel('thinker', { enableThinking: true, thinkingBudget: 256 });
+			return provider;
+		};
+		for (const responsesAPI of [false, true]) {
+			const res = await over(responsesAPI).chat(hi);
+			assert.deepEqual([res.truncated, res.content, res.reasoning], [true, null, thought], responsesAPI ? 'responses' : 'chat completions');
+		}
+		assert.deepEqual(bodies.map((body) => body['max_tokens'] ?? body['max_output_tokens']), [768, 768]);
+	});
+
+	it('asks a reply stuck repeating its thought again, once, without thinking', async () => {
+		const looping = streamOf(Array.from({ length: 30 }, () => 'thought\n'), ['{}']);
+		const { provider, bodies } = providerOver([looping, streamOf([], ['{"steps":[]}'])], { enableThinking: true });
+		const res = await provider.chat(hi);
+		assert.equal(looping.canceled(), true);
+		assert.deepEqual(bodies.map((body) => body['reasoning_effort']), ['medium', 'none']);
+		assert.equal(res.content, '{"steps":[]}');
+	});
+
+	it('fails a reply stuck repeating its answer', async () => {
+		const { provider } = providerOver([streamOf([], Array.from({ length: 30 }, () => 'and '))]);
+		await assert.rejects(provider.chat(hi), / repeats itself in its answer/);
+	});
+
+	it('asks again without an effort when the server takes none', async () => {
+		const bodies:Record<string, unknown>[] = [];
+		const provider = new HttpProvider({
+			baseURL: 'http://127.0.0.1:9/v1',
+			fetch: async (input, init) => {
+				if (String(input).includes('/models') || String(input).includes('/responses')) {
+					return new Response('nope', { status: 404 });
+				}
+				bodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+				return bodies.length === 1
+					? new Response(JSON.stringify({ error: { message: "Unsupported parameter: 'reasoning_effort' is not supported with this model." } }), { status: 400 })
+					: new Response(JSON.stringify({ choices: [{ message: { content: '{}' } }] }), { status: 200 });
+			},
+		});
+		assert.equal((await provider.chat(hi)).content, '{}');
+		assert.deepEqual(bodies.map((body) => body['reasoning_effort']), ['none', undefined]);
+	});
+});
+
+describe('loops', () => {
+	it('catches a short run said over and over', () => {
+		assert.equal(loops(`Let me see.\n${'thought\n'.repeat(12)}`), true);
+		assert.equal(loops(`{"a":${'}'.repeat(80)}`), true);
+		assert.equal(loops(`I will go ${'and '.repeat(20)}`), true);
+	});
+
+	it('leaves real lists, indentation and short runs alone', () => {
+		const arc = ['Farm', 'Mill', 'Bridge', 'Well', 'Inn', 'Keep', 'Gate', 'Smithy', 'Dock', 'Shrine'].map((place) => `\tgo_to(${place})\n`).join('');
+		assert.equal(loops(arc), false);
+		assert.equal(loops(`${arc}${'\t'.repeat(12)}`), false);
+		assert.equal(loops(`${arc}]]]`), false);
+		assert.equal(loops('thought\n'.repeat(7)), false, 'seven times is not yet a loop');
 	});
 });

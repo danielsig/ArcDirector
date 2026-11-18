@@ -10,6 +10,8 @@ const TURN_GAP = 0.25;
 const READ_CHARS_PER_SECOND = 16;
 const MIN_SECONDS = 1;
 const MAX_SECONDS = 8;
+/** A bubble stays up this many times as long as its line takes to say, so it can still be read once the voice is done. */
+const BUBBLE_LINGER = 1.5;
 
 type Line = { go:GameObject; text:string };
 
@@ -62,7 +64,7 @@ export class SpeechQueue {
 		const bubble = go.getOrAddComponent(SpeechBubble);
 		bubble.text = text;
 		bubble.timestamp = now;
-		bubble.until = now + seconds;
+		bubble.until = now + seconds * BUBBLE_LINGER;
 		if (prefs().voices) {
 			const speaker = go.getComponent(Speaker);
 			speaker?.say(speaker.line(text, seconds));

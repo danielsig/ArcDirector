@@ -1,5 +1,7 @@
+import { parseTextWithIDs } from './text-with-ids.js';
+import { internalsOf } from '../internals.js';
 import { isRecord } from '../json.js';
-import { MemoryStore, nameTags, type MemoryDraft, type MemoryRecord } from '../memory/store.js';
+import { MemoryStore, nameTags, type MemoryDraft, type MemoryJSON, type MemoryRecord } from '../memory/store.js';
 import { NameBook, type NameBookJSON } from './NameBook.js';
 import { GOAL_PINNED_THINKS, type Identity, type Goal, type WatchInput, type Watches } from './character-types.js';
 import {
@@ -47,7 +49,7 @@ export type PersonaJSON = {
 	/** Their `until` tests are not saved: a load takes them from the host's spec again, by the goal's text. */
 	goals:Goal<never>[];
 	maxGoals:number;
-	memories:MemoryRecord[];
+	memories:MemoryJSON[];
 	maxEpisodic:number;
 	names?:NameBookJSON;
 	watches?:WatchInput;
@@ -120,7 +122,7 @@ export class Persona {
 				keyTags.length > 0 && keyTags.every((tag) => row.tags.includes(tag))
 			));
 			if (existing) {
-				existing.text = mem.text;
+				this.memory.rewrite(existing.id, mem.text);
 				existing.tags = [...tags];
 				continue;
 			}
@@ -239,8 +241,9 @@ export class Persona {
 	/** It is reached: no longer a goal, pinned for a few thinks, and after that only `recall` finds it. */
 	public finishGoal(goal:Goal<never>, now:number):void {
 		this.goals = this.goals.filter((g) => g !== goal);
-		this.memory.add({
-			text: `Goal reached: ${goal.text}`,
+		internalsOf(this.memory).add({
+			// The goal is in its mind's words: kept by id, as every memory.
+			text: parseTextWithIDs(`Goal reached: ${goal.text}`, (word) => this.names.idOf(word)),
 			tags: ['goal', ...nameTags(goal.text)],
 			pinned: true,
 			pinnedThinks: GOAL_PINNED_THINKS,
@@ -276,7 +279,7 @@ export class Persona {
 			row.category === 'identity' || row.tags.includes('identity')
 		));
 		if (existing) {
-			existing.text = text;
+			this.memory.rewrite(existing.id, text);
 			existing.category = 'identity';
 			if (!existing.tags.includes('identity')) {
 				existing.tags = [...existing.tags, 'identity'];

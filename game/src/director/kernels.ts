@@ -1,10 +1,10 @@
 import { Time, inBounds, type GameObject, type XZ } from '@arc-director/kindling';
 import {
 	dummyEntity,
-	pascalCase,
 	RESERVED_TAGS,
 	type ExprEntity,
 	type ExprVal,
+	type NativeFn,
 	type Stringifiers,
 } from 'arc-director';
 import {
@@ -23,7 +23,7 @@ import type { DemoWorld } from '../engine/demo-world';
 import { NPCInput } from '../characters/NPCInput';
 import { Pickupable } from '../items/item-components';
 import { listCarried } from '../items/inventory';
-import type { ItemInstance } from '../items/instance';
+import { itemID, type ItemInstance } from '../items/instance';
 import { coinsOf } from '../items/wallet';
 import { enclosureAt } from '../world/interior';
 import { CLEAR_RANGE } from './talk-attend';
@@ -49,7 +49,8 @@ export function thiefOf(world:DemoWorld, id:string):GameObject | undefined {
 
 const NEAR_RADIUS = CLEAR_RANGE;
 
-const EXPR_STRINGIFIERS:Stringifiers = {
+/** Numbers to a tenth, so a watch's answer reads `3.2`, not `3.2000000000000006`. */
+export const EXPR_STRINGIFIERS:Stringifiers = {
 	number: (v) => {
 		if (v.kind !== 'number') {
 			return '';
@@ -72,7 +73,7 @@ export function entityOf(go:GameObject, extraTags?:string[]):ExprEntity {
 }
 
 function itemEntity(item:ItemInstance):ExprEntity {
-	const id = pascalCase(item.name) || item.name;
+	const id = itemID(item);
 	const tags = ['item'];
 	if (item.Key) {
 		tags.push('key');
@@ -178,13 +179,6 @@ export function kernelsOf(
 	const hidePlayer = world.playerInperceivable && world.playerHits.size === 0;
 	const me = entityOf(character);
 	me.fields = { gold: { kind: 'number', value: coinsOf(character) } };
-	const meAt = here
-		? {
-			ids: new Set([character.id, idOf(character), character.getComponent(Named)?.id].filter((id):id is string => !!id)),
-			x: here.x,
-			z: here.z,
-		}
-		: undefined;
 	const scan = scanOf(world);
 	const others:ExprEntity[] = [];
 	for (const go of scan.characters) {
@@ -257,43 +251,47 @@ export function kernelsOf(
 			return undefined;
 		},
 		isReady: (who:ExprEntity, verb:string) => lookupGo(world, who.id)?.getComponent(NPCInput)?.isReady(verb),
-		stringifiers: EXPR_STRINGIFIERS,
-		hostFns: {
-			isInside: (args:ExprVal[], kctx:{ catalog:{ me:ExprEntity } }) => {
-				let who = kctx.catalog.me;
-				let buildingID:string | undefined;
-				const a0 = args[0];
-				const a1 = args[1];
-				if (a0?.kind === 'entity') {
-					const go = lookupGo(world, a0.value.id);
-					if (go?.getComponent(Interior)) {
-						buildingID = a0.value.id;
-					}
-					else {
-						who = a0.value;
-					}
+	};
+}
+
+/**
+ * The game's own watch functions (`withFunctions`). `isInside(who?, building?)`: whether someone (`me` by default) is
+ * inside that building, or any, measured where the catalog says they are (as if `me` stood where a verb asks).
+ */
+export function gameFunctions(host:GameHost):Record<string, NativeFn> {
+	return {
+		isInside: (args, { catalog }) => {
+			const world = host.world;
+			let who = catalog.me;
+			let buildingID:string | undefined;
+			const [a0, a1] = args;
+			if (a0?.kind === 'entity') {
+				if (lookupGo(world, a0.value.id)?.getComponent(Interior)) {
+					buildingID = a0.value.id;
 				}
-				if (a1?.kind === 'entity') {
-					buildingID = a1.value.id;
+				else {
+					who = a0.value;
 				}
-				else if (a1?.kind === 'string') {
-					buildingID = a1.value;
-				}
-				else if (a0?.kind === 'string') {
-					buildingID = a0.value;
-				}
-				const whoGo = lookupGo(world, who.id);
-				if (!whoGo) {
-					return { kind: 'bool' as const, value: false };
-				}
-				const p = meAt && meAt.ids.has(who.id) ? meAt : whoGo.transform.position;
-				if (buildingID) {
-					const building = world.findNamed(buildingID) ?? world.findByID(buildingID);
-					const box = building?.getComponent(Interior);
-					return { kind: 'bool' as const, value: !!box && inBounds(box.bounds, p.x, p.z) };
-				}
-				return { kind: 'bool' as const, value: !!enclosureAt(world, p.x, p.z) };
-			},
+			}
+			if (a1?.kind === 'entity') {
+				buildingID = a1.value.id;
+			}
+			else if (a1?.kind === 'string') {
+				buildingID = a1.value;
+			}
+			else if (a0?.kind === 'string') {
+				buildingID = a0.value;
+			}
+			const at = catalog.point?.(who);
+			if (!at) {
+				return { kind: 'bool', value: false };
+			}
+			const [x, z] = at;
+			if (buildingID) {
+				const box = lookupGo(world, buildingID)?.getComponent(Interior);
+				return { kind: 'bool', value: !!box && inBounds(box.bounds, x, z) };
+			}
+			return { kind: 'bool', value: !!enclosureAt(world, x, z) };
 		},
 	};
 }

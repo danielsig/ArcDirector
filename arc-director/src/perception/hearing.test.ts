@@ -1,18 +1,34 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { Mind } from '../mind/mind.js';
+import { Axes, checkAxes } from '../world/axes.js';
 import { AUDIBLE, clarityAt, heardText, loudnessAfter, loudnessFor, noiseHelp, reachOf } from './hearing.js';
+import { BearingMode } from './perception-types.js';
 
 describe('hearing', () => {
 	const facing = [0, -1];
+	const axes = Axes.Plane;
 	const steps = { name: 'footsteps', loudness: 1 };
 
 	it('words a sound as sight words where things are, louder with a ! and close to its source LOUDLY', () => {
-		assert.equal(heardText(steps, 0.9, [0, 0], [0, 1], { facing }), 'You hear footsteps LOUDLY 1 pace behind you!');
-		assert.equal(heardText(steps, 0.6, [0, 0], [-5, 0], { facing }), 'You hear footsteps 5 paces to your left!');
-		assert.equal(heardText({ name: 'bush-thrashing sounds', loudness: 0.4 }, 0.2, [0, 0], [0, -10], { facing }), 'You hear bush-thrashing sounds 10 paces in front of you.');
-		assert.equal(heardText(steps, 0.3, [0, 0], [0, -5], { facing, muffled: true }), 'You hear muffled footsteps 5 paces in front of you.');
-		assert.equal(heardText({ name: 'something breaking', loudness: 1 }, 0.9, [0, 0, 0], [0, 2, 0], { facing: [0, 0, -1], up: [0, 1, 0], unitName: 'm' }), 'You hear something breaking LOUDLY 2m above you!');
+		assert.equal(heardText(steps, 0.9, [0, 0], [0, 1], { facing, axes }), 'You hear footsteps LOUDLY 1 pace behind you!');
+		assert.equal(heardText(steps, 0.6, [0, 0], [-5, 0], { facing, axes }), 'You hear footsteps 5 paces to your left!');
+		assert.equal(heardText({ name: 'bush-thrashing sounds', loudness: 0.4 }, 0.2, [0, 0], [0, -10], { facing, axes }), 'You hear bush-thrashing sounds 10 paces in front of you.');
+		assert.equal(heardText(steps, 0.3, [0, 0], [0, -5], { facing, axes, muffled: true }), 'You hear muffled footsteps 5 paces in front of you.');
+		assert.equal(heardText(steps, 0.3, [0, 0], [-4, 4], { facing, axes, bearing: BearingMode.Both }), 'You hear footsteps 5 paces behind you to the left (southwest).');
+		assert.equal(heardText({ name: 'something breaking', loudness: 1 }, 0.9, [0, 0, 0], [0, 2, 0], { facing: [0, 0, -1], axes: Axes.ThreeJS, unitName: 'm' }), 'You hear something breaking LOUDLY 2m above you!');
+	});
+
+	it('hears from above or below as sight sees it: steeper than 45°, with the compass in both modes', () => {
+		const three = checkAxes(Axes.ThreeJS);
+		const scream = { name: 'a scream', loudness: 1 };
+		assert.equal(heardText(scream, 0.3, [0, 0, 0], [0, -2, -1], { facing: [0, 0, -1], axes: three, unitName: 'm' }), 'You hear a scream 2m below you.');
+		assert.equal(heardText(scream, 0.3, [0, 0, 0], [0, -2, -1], { facing: [0, 0, -1], axes: three, unitName: 'm', bearing: BearingMode.Both }), 'You hear a scream 2m below you (north).');
+		assert.equal(heardText(scream, 0.3, [0, 0, 0], [0, -2, -3], { facing: [0, 0, -1], axes: three, unitName: 'm' }), 'You hear a scream 4m in front of you.');
+	});
+
+	it('tells a sound that came round things from the last bend, as far off as it went', () => {
+		assert.equal(heardText(steps, 0.2, [0, 0], [-9, -9], { facing, axes, via: [3, 0], length: 10 }), 'You hear footsteps 10 paces off, round a corner to your right.');
 	});
 
 	it('carries a sound less the farther it goes, a sound of loudness 1 just as far as its max, and none past it', () => {

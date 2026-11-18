@@ -18,11 +18,17 @@ import { internalsOf } from '../internals.js';
 import { Mind, type MindDeps, type MindSettings } from '../mind/mind.js';
 import type { MindEvent } from '../mind/mind-types.js';
 import { TalkFeature } from '../mind/TalkFeature.js';
-import { missingParts } from '../world/world-verbs.js';
+import { missingPart } from '../world/world-verbs.js';
 import type { ArcDirector, CastJSON } from './ArcDirector.js';
 import type { Feature } from './Feature.js';
 import type { CharacterSpec, CollectiveSpec } from './director-types.js';
 import type { ModelRun } from './ModelSlots.js';
+
+/**
+ * Verbs a collective takes only from a kit of its own, never from a shared one: `think` is a single character's habit,
+ * and who a collective is belongs to the game's design.
+ */
+const OWN_KIT_ONLY = new Set(['think', 'set_identity']);
 
 /** A character's standing `choose`: its loop, its `until`, and the game time a failed loop rests until. */
 export type Standing = { arc:Arc; until?:string; restUntil:number };
@@ -115,7 +121,7 @@ export class Cast<TCtx> {
 	/** Every runner takes its verbs, cooldown, kit and catalog again, and every mind its deps. */
 	public rewire():void {
 		for (const { spec, runner } of this.rows.values()) {
-			const deps = this.runnerDeps(spec, this.kitFor(spec), () => runner);
+			const deps = this.runnerDeps(spec, this.kitFor(spec, runner instanceof Collective), () => runner);
 			runner.verbs = deps.verbs;
 			runner.cooldown = deps.cooldown ?? DEFAULT_COOLDOWN;
 			runner.kit = deps.kit;
@@ -130,8 +136,8 @@ export class Cast<TCtx> {
 	/** Give `mind` its place in the think queue, with its watches. */
 	public enqueue(mind:Mind<TCtx>):void {
 		const queue = this._director.queue;
-		queue.ensure(mind.id, { skipHeartbeat: mind.setting('skipHeartbeat'), skipMajor: mind.setting('skipMajor'), skipStart: mind.setting('skipStart') });
-		queue.setWatches(mind.id, mind.persona.effectiveWatches());
+		queue.ensure(mind.id, { rethinks: mind.setting('rethinkingThreshold') > 0, skipMajor: mind.setting('skipMajor'), skipStart: mind.setting('skipStart') });
+		queue.setWatches(mind.id, mind.persona.watchList());
 	}
 
 	/** Wire a character: alone, or `into` a collective. `json` restores a save. */
@@ -196,7 +202,7 @@ export class Cast<TCtx> {
 		const persona = json ? Persona.fromJSON(json.persona, spec) : new Persona(spec);
 		const mind = json ? Mind.fromJSON<TCtx>(json.mind) : new Mind<TCtx>(spec.mind);
 		const collective:Collective<TCtx> = new Collective<TCtx>({
-			...this.runnerDeps(spec, this.kitFor(spec), () => collective),
+			...this.runnerDeps(spec, this.kitFor(spec, true), () => collective),
 			pick: () => internalsOf(director).pick(collective),
 			defaultLawWho: 'units',
 			persona,
@@ -232,11 +238,11 @@ export class Cast<TCtx> {
 
 	/**
 	 * Build every character and collective from the specs added here, or from `cast` under them: then the save
-	 * says who belongs to which collective, and who is on their own.
+	 * says who belongs to which collective, and who is on their own, and each feature with a `saveKey` loads its part first.
 	 */
 	public wireAll(cast?:CastJSON):void {
 		if (cast) {
-			this._director.offers.load(cast.offers ?? []);
+			this.loadFeatures(cast.features);
 		}
 		const members = new Set(Object.values(cast?.collectives ?? {}).flatMap((c) => c.characters));
 		const solo = new Set(this.solo.map((spec) => spec.id));
@@ -267,7 +273,16 @@ export class Cast<TCtx> {
 			}
 		}
 		this.rows.clear();
-		this._director.offers.load([]);
+		this.loadFeatures(undefined);
+	}
+
+	/** Each feature with a `saveKey` loads its part of `saved`: none, its fresh state. */
+	private loadFeatures(saved:CastJSON['features']):void {
+		for (const feature of internalsOf(this._director).features) {
+			if (feature.saveKey !== undefined) {
+				feature.load(saved?.[feature.saveKey]);
+			}
+		}
 	}
 
 	/** Take a character off the director: its arc, moves, its own mind, and its place in a collective. */
@@ -331,13 +346,11 @@ export class Cast<TCtx> {
 			throw new Error(`ArcDirector: '${spec.id}' has both choose and mind; give it one`);
 		}
 		const verbs = this._director.verbs;
-		const { goal, until, ...choices } = spec.choose;
+		const { goal, until, choices } = spec.choose;
 		try {
 			const args:Record<string, StepArg> = { goal };
 			for (const [name, text] of Object.entries(choices)) {
-				if (text !== undefined) {
-					args[name] = parseArcText(text, verbs);
-				}
+				args[name] = parseArcText(text, verbs);
 			}
 			const arc:Arc = [{ verb: 'loop', args: { arc: [{ verb: CHOOSE_VERB, args }], ...(until ? { until } : {}) } }];
 			validateArc(arc, verbs);
@@ -351,8 +364,11 @@ export class Cast<TCtx> {
 		}
 	}
 
-	/** A spec's kit, else the default one. Something that can run no verb is a mistake, so it throws. */
-	private kitFor(spec:{ id:string; kit?:KitSource<TCtx>; tags?:readonly string[] }):KitSource<TCtx> {
+	/**
+	 * A spec's kit, else the default one. Something that can run no verb is a mistake, so it throws. A collective
+	 * gets `OWN_KIT_ONLY` only from a kit of its own.
+	 */
+	private kitFor(spec:{ id:string; kit?:KitSource<TCtx>; tags?:readonly string[] }, collective = false):KitSource<TCtx> {
 		const kit = spec.kit ?? this.kindOf(spec.tags)?.kit ?? this.defaultKit;
 		if (!kit) {
 			throw new Error(`ArcDirector: '${spec.id}' has no kit; give it one, or call withDefaultKit`);
@@ -360,7 +376,11 @@ export class Cast<TCtx> {
 		if (typeof kit !== 'function' && kit.verbs.length === 0) {
 			throw new Error(`ArcDirector: '${spec.id}' has a kit with no verbs`);
 		}
-		return kit;
+		if (!collective || spec.kit) {
+			return kit;
+		}
+		const shared = (k:Kit):Kit => ({ ...k, verbs: k.verbs.filter((verb) => !OWN_KIT_ONLY.has(verb)) });
+		return typeof kit === 'function' ? (ctx) => shared(kit(ctx)) : shared(kit);
 	}
 
 	/** The kind `tags` name, by the first feature that knows one (`Feature.kindOf`). */
@@ -397,9 +417,9 @@ export class Cast<TCtx> {
 				out.push(`verb '${name}' is not registered (${where})`);
 				continue;
 			}
-			const missing = director.verbs.handler(name) || internalsOf(director).dispatcher.catchAll ? [] : missingParts(name, director.world);
-			if (missing.length > 0) {
-				out.push(`verb '${name}' needs withWorld ${missing.join(' and ')} (${where})`);
+			const missing = director.verbs.handler(name) || internalsOf(director).dispatcher.catchAll ? undefined : missingPart(name, director.world);
+			if (missing) {
+				out.push(`verb '${name}' needs withWorld ${missing} (${where})`);
 			}
 		}
 		for (const name of kit.senses ?? []) {
@@ -472,7 +492,7 @@ export class Cast<TCtx> {
 				return {
 					run: live?.run ?? NO_MODEL,
 					vision: live?.vision ?? false,
-					contextTokens: live?.contextLength,
+					contextTokens: live?.slotContext,
 					thinking: live?.thinking ?? false,
 					promptStyle: live?.prompt ?? 'full',
 					jsonOnly: trainedOnArcDirector(live?.id ?? ''),
@@ -484,13 +504,13 @@ export class Cast<TCtx> {
 			autoEnact: true,
 			onChoose: (arc) => director.log({ name: mind.thinkThread(), message: formatArc(arc, director.verbs) }),
 			thinkWatch: () => (listeners.onThink.length > 0 ? (event) => tell('onThink', event) : undefined),
-			replacing: (arc) => dispatcher.replacedBy(owner, arc),
 			arcProblem: (arc) => dispatcher.arcProblem(owner, arc),
 			queue: director.queue,
 			embed: (texts) => director.models.embed(texts),
 			features,
 			seenAs: watches.seenAs(mind),
 			worldContext: () => director.contextOf(owner.voice.id) ?? (owner instanceof Collective ? watches.present(owner)?.ctx : undefined),
+			hasFallen: (id) => director.world?.hasFallen?.(id) ?? false,
 		};
 	}
 
@@ -581,7 +601,7 @@ export class Cast<TCtx> {
 		const tell = (mind:Mind<TCtx>, event:MindEvent):void => {
 			mind.pushEvent(event);
 			// A major event wakes a mind; this one wakes even a mind that skips them.
-			this._director.queue.enqueueMajor(mind.id, true);
+			this._director.queue.enqueueMajor(mind.id, true, event.kind);
 		};
 		if (from) {
 			// The name it went by there: once gone, the policy may call it something else (an enemy, say).
@@ -589,15 +609,15 @@ export class Cast<TCtx> {
 			tell(from.mind, { kind: 'Left', text: `${name} left`, tags: [name], major: true });
 		}
 		if (to) {
-			tell(to.mind, { kind: 'Joined', text: '{0} joined', who: [character.id], major: true });
+			tell(to.mind, { kind: 'Joined', text: (who) => `${who(character.id)} joined`, major: true });
 		}
 		const own = ownMindOf(character);
 		if (from && own) {
-			const doing = character.arc ? ` You are still doing what {0} gave you: ${own.namedArc(character.arc)}.` : '';
+			const doing = (who:(id:string)=>string):string => (character.arc ? ` You are still doing what ${who(from.id)} gave you: ${own.namedArc(character.arc)}.` : '');
 			const gone = dropped.length > 0
 				? ` Your laws that only work in a group are gone: ${dropped.map((law) => law.name.slice(character.id.length + 1)).join(', ')}.`
 				: '';
-			tell(own, { kind: 'Left', text: `You left {0}.${doing}${gone}`, who: [from.id], major: true });
+			tell(own, { kind: 'Left', text: (who) => `You left ${who(from.id)}.${doing(who)}${gone}`, major: true });
 		}
 		internalsOf(this._director).features.forEach((feature) => feature.characterMoved(character, from, to));
 	}

@@ -1,5 +1,7 @@
+import { namedText, namingText, readTextWithIDs, type NamingText } from '../character/text-with-ids.js';
+import type { JsonValue } from '../json.js';
 import { isRecord } from '../json.js';
-import { argKind, GROUP_VERB, IF_VERB, type VerbRegistry } from './stock-verbs.js';
+import { argKind, GROUP_VERB, IF_VERB, INSTEAD_VERB, WHILE_ARG, type VerbRegistry } from './stock-verbs.js';
 
 /**
  * Whether the step after this one runs, judged by how this one went: `if_ok` (`&&`) only when it succeeded,
@@ -43,18 +45,34 @@ export type ArcStatus = 'ok' | 'failed' | 'stopped';
 
 export type ArcResult = {
 	status:ArcStatus;
-	reason?:string;
+	/** Why, naming characters and things by id ({@link NamingText}): each mind reads it in its own names. */
+	reason?:NamingText;
 	verb?:string;
 	/** The character, thing or place this step found no way to reach. */
 	unreachable?:string;
-	/** What stood in its way, by id, cheapest to get past first: the things a host named as blocking (`PathStep.by`). */
+	/** What stood in its way, by id, cheapest to get past first: the things a host named as blocking (`Passage.by`). */
 	blockedBy?:string[];
 	/** It failed for now, and going round again may go otherwise (the target moved): a `loop` does not stop at it. */
 	retry?:boolean;
 };
 
+/** An {@link ArcResult} as a save keeps it. */
+export type ArcResultJSON = Omit<ArcResult, 'reason'> & { reason?:JsonValue };
+
+/** `result` as a save keeps it: a reason that names anyone keeps them by id. */
+export function resultToJSON(result:ArcResult):ArcResultJSON {
+	return { ...result, reason: typeof result.reason === 'function' ? namedText(result.reason) : result.reason };
+}
+
+/** A saved result read back. */
+export function resultFromJSON({ reason, ...result }:ArcResultJSON):ArcResult {
+	const text = reason === undefined ? undefined : readTextWithIDs(reason);
+	return { ...result, ...text ? { reason: text.length === 1 ? text[0] : namingText(text) } : {} };
+}
+
+/** Why an arc is refused, and the text of the reply it is about (`at`) when one piece of it is at fault. */
 export class ArcError extends Error {
-	constructor(message:string) {
+	constructor(message:string, public readonly at?:string) {
 		super(message);
 		this.name = 'ArcError';
 	}
@@ -62,8 +80,8 @@ export class ArcError extends Error {
 
 /** A well-formed arc the world rules out: a step that already failed and still would, or speech no one is near enough to hear. */
 export class BlockedArcError extends ArcError {
-	constructor(message:string) {
-		super(message);
+	constructor(message:string, at?:string) {
+		super(message, at);
 		this.name = 'BlockedArcError';
 	}
 }
@@ -92,9 +110,12 @@ export function groupArc(step:Step):Arc | undefined {
 	return step.verb === GROUP_VERB && isArc(step.args.arc) ? step.args.arc : undefined;
 }
 
-/** Whether `step`'s arcs are part of the program it is in, as a group's and an `if`'s are, not handed on (a loop, a law, an order). */
-export function opensArc(step:Step):boolean {
-	return step.verb === GROUP_VERB || step.verb === IF_VERB;
+/**
+ * Whether `step`'s arc arg `key` (any, without one) is part of the program it is in, as a group's, an `if`'s, an
+ * `instead`'s and a `while`'s are, not handed on (a loop, a law, an order).
+ */
+export function opensArc(step:Step, key?:string):boolean {
+	return step.verb === GROUP_VERB || step.verb === IF_VERB || step.verb === INSTEAD_VERB || key === WHILE_ARG;
 }
 
 /** The first step to run, looking inside a leading group. */
@@ -102,6 +123,23 @@ export function firstStep(arc:Arc):Step | undefined {
 	const first = arc[0];
 	const inner = first && groupArc(first);
 	return inner ? firstStep(inner) : first;
+}
+
+/**
+ * `arc` with each `instead { … }` at its root opened in place, its steps where it stood, the last joined to the next as
+ * it was, or undefined when it has none: a reply that replaces its writer's own program under way.
+ */
+export function insteadOf(arc:Arc):Arc | undefined {
+	if (!arc.some((step) => step.verb === INSTEAD_VERB)) {
+		return undefined;
+	}
+	return arc.flatMap((step) => {
+		if (step.verb !== INSTEAD_VERB || !isArc(step.args.arc)) {
+			return [step];
+		}
+		const inner = step.args.arc;
+		return step.then === undefined ? inner : [...inner.slice(0, -1), { ...inner.at(-1)!, then: step.then }];
+	});
 }
 
 /** Every step in order, groups opened. Arcs held in args (`loop`, `when`, a choice) stay closed. */
@@ -112,19 +150,22 @@ export function arcSteps(arc:Arc):Step[] {
 	});
 }
 
-/** The verbs the arcs inside `step` may name: a group's and an `if`'s are this registry's, any other arc arg's or choice's the full catalog's. */
-export function verbsInside(step:Step, verbs:VerbRegistry):VerbRegistry {
-	return opensArc(step) ? verbs : verbs.nested();
+/** The verbs `step`'s arc arg `key` may name: a group's, an `if`'s and a `while`'s are this registry's, any other arc arg's or choice's the full catalog's. */
+export function verbsInside(step:Step, verbs:VerbRegistry, key?:string):VerbRegistry {
+	return opensArc(step, key) ? verbs : verbs.nested();
 }
 
-/** What a step does, without what its `choose` only says: a goal reworded, or a choice renamed, is the same program. */
+/**
+ * What a step does, without what its `choose` only says: a goal reworded, or a choice renamed, is the same program. The
+ * last step's `then` joins nothing, so it says nothing.
+ */
 function programKey(arc:Arc):unknown {
-	return arc.map((step) => {
+	return arc.map((step, i) => {
 		const choose = step.verb === 'choose';
 		const args = Object.entries(step.args)
 			.filter(([key]) => !(choose && key === 'goal'))
 			.map(([key, value]) => [choose ? '' : key, isArc(value) ? programKey(value) : value]);
-		return [step.verb, step.then, step.let, choose ? args.map((arg) => JSON.stringify(arg)).sort() : args];
+		return [step.verb, i < arc.length - 1 ? step.then : undefined, step.let, choose ? args.map((arg) => JSON.stringify(arg)).sort() : args];
 	});
 }
 
@@ -137,10 +178,9 @@ export function sameProgram(a:Arc, b:Arc):boolean {
 export function eachStep(arc:Arc, verbs:VerbRegistry, visit:(step:Step, verbs:VerbRegistry)=>void):void {
 	for (const step of arc) {
 		visit(step, verbs);
-		const inside = verbsInside(step, verbs);
-		for (const value of Object.values(step.args)) {
+		for (const [key, value] of Object.entries(step.args)) {
 			if (isArc(value)) {
-				eachStep(value, inside, visit);
+				eachStep(value, verbsInside(step, verbs, key), visit);
 			}
 		}
 	}
@@ -159,11 +199,10 @@ function mapCountMap(row:CountMap, map:(text:string, kind:string)=>string):Count
 export function mapArgs(arc:Arc, verbs:VerbRegistry, map:(text:string, kind:string)=>string):Arc {
 	return arc.map((step) => {
 		const spec = verbs.get(step.verb);
-		const inside = verbsInside(step, verbs);
 		const args = { ...step.args };
 		for (const [key, value] of Object.entries(args)) {
 			if (isArc(value)) {
-				args[key] = mapArgs(value, inside, map);
+				args[key] = mapArgs(value, verbsInside(step, verbs, key), map);
 			}
 			else if (typeof value === 'string') {
 				args[key] = map(value, argKind(spec, key));

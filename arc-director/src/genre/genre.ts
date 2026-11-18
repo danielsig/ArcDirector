@@ -5,19 +5,18 @@ import { Feature } from '../director/Feature.js';
 import type { CrowdSettings } from '../world/mover.js';
 import { WorldVerbsFeature } from '../world/WorldVerbsFeature.js';
 
-/** How fighters fight, in an RPG and a MOBA alike. */
+/** How fighters fight, in an RPG and a MOBA alike. A blow, once begun, is not to be broken off. */
 const FIGHT_VERB_DEFS = {
-	attack: { args: { target: 'id?' } },
-	block: { args: { target: 'id?' }, help: 'guard up against them, or the nearest enemy, for a moment' },
-	heal: { args: { target: 'id?' } },
-	protect: { args: { target: 'id?' }, help: 'stand between an ally and the threat, then attack that threat' },
+	attack: { args: { target: 'id?' }, impact: 0.9 },
+	block: { args: { target: 'id?' }, help: 'guard up against them, or the nearest enemy, for a moment', impact: 0.9 },
+	heal: { args: { target: 'id?' }, impact: 0.9 },
+	protect: { args: { target: 'id?' }, help: 'stand between an ally and the threat, then attack that threat', impact: 0.9 },
 } as const satisfies Record<string, VerbDef>;
 
-/** An RPG's verbs: what characters wear and take, how they rest, and how they fight. */
+/** An RPG's verbs: what characters wear, how they rest, and how they fight. Stealing is its own (`withStealing`). */
 export const STOCK_RPG_VERB_DEFS = {
 	equip: { args: { item: 'id', slot: 'string?' } },
 	unequip: { args: { slot: 'string' } },
-	steal: { args: { item: 'id', from: 'id' }, help: 'goes to them first' },
 	sit: { args: { target: 'id?' }, help: 'goes to that chair, or the nearest free one, and stays sat until you walk off', seen: 'sitting' },
 	sleep: { args: { target: 'id?', seconds: 'number?' }, help: 'goes to that bed, or the nearest free one, and sleeps: you hear nothing until you wake', seen: 'sleeping' },
 	...FIGHT_VERB_DEFS,
@@ -27,7 +26,7 @@ export const STOCK_RPG_VERB_DEFS = {
 export const STOCK_MOBA_VERB_DEFS = FIGHT_VERB_DEFS;
 
 /** One of the game's own attacks and spells: a verb used on someone. */
-const ABILITY_DEF = { args: { target: 'id' } } as const satisfies VerbDef;
+const ABILITY_DEF = { args: { target: 'id' }, impact: 0.9 } as const satisfies VerbDef;
 
 /** A genre verb as the game runs it: its handler, or its handler and the help line the game's own rules call for. */
 type GenreVerb<TCtx, TArgMap> = VerbHandler<TCtx, VerbArgs<TArgMap>> | { help?:string; handler:VerbHandler<TCtx, VerbArgs<TArgMap>> };
@@ -69,7 +68,7 @@ function genreVerbs<TCtx>(defs:Readonly<Record<string, VerbDef>>, { abilities = 
 /** What each genre brings: its verbs, the stock verbs its default kit grants besides the rest, and its crowds. */
 const GENRES = {
 	/**
-	 * An RPG: `equip`, `unequip`, `steal`, `attack`, `block`, `heal` and `protect`, each the game gives a handler for, and
+	 * An RPG: `equip`, `unequip`, `sit`, `sleep`, `attack`, `block`, `heal` and `protect`, each the game gives a handler for, and
 	 * its own attacks and spells as `abilities`; characters get them, the stock verbs and `offer`. Crowds ring round
 	 * whoever they come to, in line to trade or hand over.
 	 */

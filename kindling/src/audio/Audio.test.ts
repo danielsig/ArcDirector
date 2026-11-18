@@ -214,14 +214,6 @@ describe('Audio', () => {
 		audio.dispose();
 	});
 
-	it('queues one sfx before resume and drops the rest', () => {
-		const audio = new Audio();
-		audio.warnDropped = false;
-		audio.playSfx({ layers: [{ kind: 'thump', dur: 0.1, freq: 80 }] });
-		audio.playSfx({ layers: [{ kind: 'click', dur: 0.05, freq: 400 }] });
-		audio.dispose();
-	});
-
 	it('lives on World', () => {
 		const world = new World();
 		assert.equal(world.audio.playing, null);
@@ -300,7 +292,7 @@ describe('AudioSource', () => {
 	it('scales one-shot gain by its own and is silent disabled, Speaker too', () => {
 		const game = new Game();
 		const gains:(number | undefined)[] = [];
-		game.world.audio.playSfx = (_patch, opts) => {
+		game.world.audio.playSfx = (patch, opts) => {
 			gains.push(opts?.gain);
 			return null;
 		};

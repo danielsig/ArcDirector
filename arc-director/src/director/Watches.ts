@@ -1,3 +1,4 @@
+import { showNamingText } from '../character/text-with-ids.js';
 import type { ArcRunner } from '../character/arc-runner.js';
 import { Character } from '../character/Character.js';
 import type { NameTarget } from '../character/NameBook.js';
@@ -5,14 +6,15 @@ import { Collective } from '../collective/Collective.js';
 import { buildCollectiveCatalog, doingFields } from '../collective/who.js';
 import { catalogEntities, unboundCalls } from '../expr/eval.js';
 import { parse } from '../expr/expr-parse.js';
-import { leftoverFilterHint, type Catalog, type ExprEntity, type ExprVal, type SampleCache } from '../expr/expr-types.js';
-import { buildCatalog, dummyEntity, type HostKernels } from '../expr/natives.js';
+import { leftoverFilterHint, type Catalog, type ExprEntity, type ExprVal, type NativeFn, type SampleCache, type Stringifiers } from '../expr/expr-types.js';
+import { buildCatalog, dummyEntity, type CatalogInputs } from '../expr/natives.js';
 import { freezeMe } from '../expr/prev.js';
 import { watchScore } from '../expr/watch-score.js';
 import { internalsOf } from '../internals.js';
 import type { Mind } from '../mind/mind.js';
+import { SightFeature } from '../perception/SightFeature.js';
 import { geometryKernels } from '../world/geometry-kernels.js';
-import { inLineOfSight, poseOf } from '../world/lookup.js';
+import { blocksLines, inLineOfSight, poseOf } from '../world/lookup.js';
 import { centroid } from '../world/vec.js';
 import { RESERVED_TAGS, type Pose, type Vec } from '../world/world-types.js';
 import type { ArcDirector } from './ArcDirector.js';
@@ -53,6 +55,10 @@ export class Watches<TCtx> {
 	public kernels:KernelSource<TCtx> | undefined;
 	/** The host's naming policy (`withNames`). */
 	public names:SeenName<TCtx> | undefined;
+	/** The host's own watch functions (`withFunctions`), over every feature's. */
+	public functions:Record<string, NativeFn> = {};
+	/** How the host writes values in the watch language (`withStringifiers`). */
+	public stringifiers:Stringifiers | undefined;
 
 	constructor(private readonly _director:ArcDirector<TCtx>) {}
 
@@ -64,6 +70,39 @@ export class Watches<TCtx> {
 		const collective = collectiveOf(runner);
 		const kernels = ctx !== undefined ? this.kernelsFor(runner, ctx, cache, point) : collective ? this.pooled(collective) : undefined;
 		return kernels && (collective ? buildCollectiveCatalog(kernels, collective) : buildCatalog(kernels));
+	}
+
+	/**
+	 * {@link catalog} with each character and thing in it as `seen` makes it out (`observe`): whole, stripped, or gone,
+	 * so a name it cannot make out does not resolve. Places and the rest stay.
+	 */
+	public catalogSeen(runner:ArcRunner<TCtx>, seen:(entity:ExprEntity)=>ExprEntity | undefined):Catalog | undefined {
+		const collective = collectiveOf(runner);
+		const ctx = runner.context();
+		const all = ctx !== undefined ? this.kernelsFor(runner, ctx) : collective ? this.pooled(collective) : undefined;
+		if (!all) {
+			return undefined;
+		}
+		const tiered = new Set([...all.others, ...all.items].map((e) => e.id));
+		const see = (val:ExprVal | undefined):ExprVal | undefined => {
+			if (val?.kind !== 'entity' || !(tiered.has(val.value.id) || this._director.character(val.value.id))) {
+				return val;
+			}
+			const shown = seen(val.value);
+			return shown && { kind: 'entity', value: shown };
+		};
+		const { lookup } = all;
+		const kernels:CatalogInputs = {
+			...all,
+			others: all.others.flatMap((e) => seen(e) ?? []),
+			items: all.items.flatMap((e) => seen(e) ?? []),
+			bindings: Object.fromEntries(Object.entries(all.bindings ?? {}).flatMap(([key, val]) => {
+				const shown = see(val);
+				return shown ? [[key, shown]] : [];
+			})),
+			...lookup ? { lookup: (name:string) => see(lookup(name)) } : {},
+		};
+		return collective ? buildCollectiveCatalog(kernels, collective) : buildCatalog(kernels);
 	}
 
 	/** What `mind`'s watches score against: its voice's view, or one view per character of a collective. */
@@ -86,7 +125,7 @@ export class Watches<TCtx> {
 	 * What `runner` sees from `ctx` in the watch language, under its mind's names, with the world's geometry, every
 	 * feature's kernels, what happened since its mind last thought, and its last result. `point`: measure as if it stood there.
 	 */
-	public kernelsFor(runner:ArcRunner<TCtx>, ctx:TCtx, cache = internalsOf(this._director).cast.cacheOf(runner), point?:Vec):HostKernels | undefined {
+	public kernelsFor(runner:ArcRunner<TCtx>, ctx:TCtx, cache = internalsOf(this._director).cast.cacheOf(runner), point?:Vec):CatalogInputs | undefined {
 		if (!this.kernels) {
 			return undefined;
 		}
@@ -103,7 +142,9 @@ export class Watches<TCtx> {
 		const ago = lastTimestamp !== undefined && Number.isFinite(lastTimestamp)
 			? Math.max(0, director.time - lastTimestamp)
 			: undefined;
-		const added = Object.assign({}, ...internalsOf(director).features.map((feature) => feature.watchKernels(runner))) as Partial<HostKernels>;
+		const parts = internalsOf(director).features.map((feature) => feature.watchKernels(runner));
+		const sight = director.getFeature(SightFeature);
+		const added = Object.assign({}, ...parts) as Partial<CatalogInputs>;
 		// What happened since its mind last thought, as `events`: `events.filter("sound")`. A unit reads its collective's.
 		const listener = mind ?? (runner instanceof Character ? runner.collective?.mind : undefined);
 		const events:ExprVal = { kind: 'list', value: (listener?.events() ?? []).map((e, i):ExprVal => ({
@@ -119,9 +160,15 @@ export class Watches<TCtx> {
 				const character = director.character(e.id);
 				return character ? { ...e, fields: { ...e.fields, ...doingFields(character) } } : e;
 			}),
-			// Who sees whom, where the host's kernels say; else where light passes.
-			canSee: kernels.canSee ?? (world?.canPass ? (a, b) => inLineOfSight(world, a.id, b.id) : undefined),
+			// Who sees whom: where what each sees by passes, where the world says what stands between; else by sight.
+			canSee: blocksLines(world) ? (a, b) => inLineOfSight(world, a.id, b.id, sight?.mediumOf(director.contextOf(a.id)))
+				: sight && ((a, b) => sight.sees(a.id, b.id) ?? true),
 			bindings: { events, ...kernels.bindings, ...added.bindings },
+			// Ready once its cooldown is over: the library's count (`VerbDef.cooldown`, a kit's `cooldowns`) and the host's.
+			isReady: (who, verb) => (director.character(who.id)?.readyIn(verb) ?? 0) <= 0 && (kernels.isReady?.(who, verb) ?? true),
+			// Every feature's natives (`feeling(u)`), the host's own over them.
+			functions: Object.assign({}, ...parts.map((part) => part?.functions), this.functions),
+			stringifiers: this.stringifiers,
 			// Its watches by name, so `wait(until=fallen || idle)` reads them.
 			watches: listener?.persona.watchList(),
 			cache,
@@ -130,9 +177,9 @@ export class Watches<TCtx> {
 				secondsAgo: ago,
 				// Its spawn snapshot, so the first think can see a change.
 				me: runner.prevMe ??= freezeMe(kernels),
-				verbs: last ? [{ secondsAgo: ago ?? 0, isOk: last.status === 'ok', reason: last.reason ?? '', verb: last.verb ?? '' }] : [],
+				verbs: last ? [{ secondsAgo: ago ?? 0, isOk: last.status === 'ok', reason: showNamingText(last.reason ?? '', (id) => mind?.nameOf(id) ?? id), verb: last.verb ?? '' }] : [],
 			},
-		} as HostKernels;
+		} as CatalogInputs;
 	}
 
 	/** Spawn snapshot so the first think can see a change. A saved prev is left alone. */
@@ -180,7 +227,7 @@ export class Watches<TCtx> {
 	}
 
 	/** The view of a collective with no commander: its first living character's kernels, measured from the middle of them all. */
-	private pooled(collective:Collective<TCtx>):HostKernels | undefined {
+	private pooled(collective:Collective<TCtx>):CatalogInputs | undefined {
 		const first = this.present(collective);
 		const sample = first && this.kernelsFor(first.character, first.ctx);
 		if (!first || !sample) {
@@ -204,7 +251,7 @@ export class Watches<TCtx> {
 	 * Host entities under `mind`'s names for them, so its model's own words still evaluate (`observe`).
 	 * A binding keyed by a character's id is bound under its id and under the name.
 	 */
-	private namedKernels<TKernels extends Pick<HostKernels, 'others' | 'items' | 'bindings' | 'lookup'>>(mind:Mind<TCtx> | null, kernels:TKernels):TKernels {
+	private namedKernels<TKernels extends Pick<CatalogInputs, 'others' | 'items' | 'bindings' | 'lookup'>>(mind:Mind<TCtx> | null, kernels:TKernels):TKernels {
 		if (!mind || !this.names) {
 			return kernels;
 		}

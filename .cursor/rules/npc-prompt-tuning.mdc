@@ -5,7 +5,7 @@ alwaysApply: true
 
 # NPC prompt tuning
 
-Learned tuning the dungeon crawl on small models. When NPC behavior looks wrong, read `game/.ai-log.txt` first (thinks, `Last verb result`, sight, short-term memory). The cause is usually there.
+Learned tuning the dungeon crawl on small models. When NPC behavior looks wrong, read the AI log first: the newest file in `logs/ai/`, or `read_ai_log` (thinks, `Last verb result`, sight, short-term memory). The cause is usually there.
 
 - Diagnose in the log before touching prompts. Most "stupid" behavior was a bug feeding the model a wrong fact: a blade on a web returned `cut` while nothing happened, a widened web was hidden from all sight, a refused `say` read like a wrong answer, a solved riddle stayed in sight. Fix the fact, not the wording.
 - Laws outrank thinks. In a fight, behavior comes from pinned laws and the verbs they call (`attack()`, `protect`), not from what a think writes. Fix the law or the verb (move choice, screening, regroup watch), not the prompt.

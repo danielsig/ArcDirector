@@ -108,7 +108,7 @@ const DEFS:Record<BenchKind, QuickBenchDef> = {
 		// What most graphics cards hold is free; past it, each doubling costs a little.
 		memory: [[8, 1], [16, 0.9], [32, 0.75], [64, 0.55], [128, 0.4]],
 		// The three at once: the bench runs as many cases at once as its director thinks at once.
-		run: async (id, _models, cases, onTrial) => {
+		run: async (id, models, cases, onTrial) => {
 			const s = await benchArcs(arcThinking(id, QUICK_CASES), cases.map((i) => ARC_BENCH[i]), { onTrial });
 			return { precision: s.total.mean, ms: s.msPerTrial, failed: failed(s) };
 		},

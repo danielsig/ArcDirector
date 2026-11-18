@@ -93,7 +93,7 @@ export class Game<W extends World = World> {
 	}
 
 	/** Draws one frame at `now` (rAF ms). Hosts override to work around it and call `super.draw`. */
-	protected draw(_now:number):void {
+	protected draw(now:number):void {
 		this.renderer?.render();
 	}
 

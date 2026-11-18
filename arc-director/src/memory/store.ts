@@ -1,12 +1,21 @@
 import { readID } from '../json.js';
 import { namesWord } from '../text.js';
+import { joinTextWithIDs, namedText, readTextWithIDs, showTextWithIDs, textSegments, type NamingText, type TextWithIDs } from '../character/text-with-ids.js';
+import { hand } from '../internals.js';
+import type { JsonValue } from '../json.js';
 
 export type MemoryCategory = 'episodic' | 'semantic' | 'identity';
 
 export type MemoryRecord = {
 	id:string;
 	category:MemoryCategory;
-	text:string;
+	/** What it holds, each character and thing it names written as its id; recall searches it so. */
+	readonly text:string;
+	/**
+	 * What it holds in pieces, each character or thing it names a piece with its id, so a host can name it its own way.
+	 * The library reads its ids here, so a copy of the record keeps them.
+	 */
+	segments():{ text:string; id?:string }[];
 	tags:string[];
 	timestamp:number;
 	lastAccessed:number;
@@ -20,7 +29,8 @@ export type MemoryRecord = {
 
 export type MemoryDraft = {
 	category?:MemoryCategory;
-	text:string;
+	/** What it holds; a function names characters and things by id, so each mind reads its own names for them. */
+	text:NamingText;
 	tags?:string[];
 	timestamp?:number;
 	pinned?:boolean;
@@ -30,6 +40,28 @@ export type MemoryDraft = {
 	weight?:number;
 	id?:string;
 };
+
+/** A memory as a save keeps it. */
+export type MemoryJSON = Omit<MemoryRecord, 'text' | 'segments'> & { text:JsonValue };
+
+/** A {@link MemoryDraft} as the library writes one: its text by id already. */
+export type KeptDraft = Omit<MemoryDraft, 'text'> & { text:TextWithIDs };
+
+/** What a store's constructor hands the library (`internalsOf`): adding and rewriting text that is by id already. */
+export type MemoryFields = {
+	add(draft:KeptDraft, now?:number):MemoryRecord;
+	rewrite(id:string, text:TextWithIDs):MemoryRecord | undefined;
+};
+
+/** What `record` holds, characters and things by id: its `segments()` read back. */
+export function keptText(record:MemoryRecord):TextWithIDs {
+	return joinTextWithIDs(...record.segments().map((piece) => (piece.id === undefined ? piece.text : ['', piece.id, ''])));
+}
+
+/** The fields a record holds `text` in. */
+function holding(text:TextWithIDs):Pick<MemoryRecord, 'text' | 'segments'> {
+	return { text: showTextWithIDs(text), segments: () => textSegments(text, (id) => id) };
+}
 
 export type RecallScoreFn = (args:{
 	cosine:number;
@@ -175,11 +207,18 @@ export class MemoryStore {
 	private _records:MemoryRecord[] = [];
 	private _next = 1;
 
+	constructor() {
+		hand(this, { add: (draft, now) => this.keep(draft, now), rewrite: (id, text) => this.retext(id, text) } satisfies MemoryFields);
+	}
+
 	public add(draft:MemoryDraft, now = draft.timestamp ?? 0):MemoryRecord {
+		return this.keep({ ...draft, text: namedText(draft.text) }, now);
+	}
+
+	private keep(draft:KeptDraft, now = draft.timestamp ?? 0):MemoryRecord {
 		const rec:MemoryRecord = {
 			id: draft.id ?? `mem_${this._next++}`,
 			category: draft.category ?? 'episodic',
-			text: draft.text,
 			tags: draft.tags ? [...draft.tags] : [],
 			timestamp: draft.timestamp ?? now,
 			lastAccessed: draft.timestamp ?? now,
@@ -188,6 +227,7 @@ export class MemoryStore {
 			emotional: draft.emotional,
 			embedding: draft.embedding ? [...draft.embedding] : undefined,
 			weight: draft.weight ?? 1,
+			...holding(draft.text),
 		};
 		this._records.push(rec);
 		this.evict();
@@ -311,33 +351,37 @@ export class MemoryStore {
 	}
 
 	/** New text for the record `id`. Its embedding no longer fits the text, so it is dropped. */
-	public rewrite(id:string, text:string):MemoryRecord | undefined {
+	public rewrite(id:string, text:NamingText):MemoryRecord | undefined {
+		return this.retext(id, namedText(text));
+	}
+
+	private retext(id:string, text:TextWithIDs):MemoryRecord | undefined {
 		const record = this._records.find((r) => r.id === id);
 		if (record) {
-			record.text = text;
+			Object.assign(record, holding(text));
 			record.embedding = undefined;
 		}
 		return record;
 	}
 
-	public toJSON():MemoryRecord[] {
-		return this._records.map((r) => ({
-			...r,
-			tags: [...r.tags],
-			embedding: r.embedding ? [...r.embedding] : undefined,
-		}));
+	public toJSON():MemoryJSON[] {
+		return this._records.map((record) => {
+			const { text, segments, ...r } = record;
+			return { ...r, text: [...keptText(record)], tags: [...r.tags], embedding: r.embedding ? [...r.embedding] : undefined };
+		});
 	}
 
-	public static fromJSON(rows:MemoryRecord[]):MemoryStore {
+	public static fromJSON(rows:MemoryJSON[]):MemoryStore {
 		const store = new MemoryStore();
 		let max = 0;
-		for (const row of rows) {
+		for (const { text, ...row } of rows) {
 			const id = readID(row) ?? '';
 			store._records.push({
 				...row,
 				id,
 				tags: [...row.tags],
 				embedding: row.embedding ? [...row.embedding] : undefined,
+				...holding(readTextWithIDs(text)),
 			});
 			const n = Number(String(id).replace(/^mem_/, ''));
 			if (Number.isFinite(n) && n > max) {

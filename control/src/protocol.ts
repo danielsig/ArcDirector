@@ -17,6 +17,41 @@ export type AiLogQuery = {
 	pattern?:string;
 };
 
+/** The rows `query` keeps, in order. */
+export function filterAiLog<T extends AiLogRow>(rows:readonly T[], query:AiLogQuery):T[] {
+	const re = query.pattern ? new RegExp(query.pattern) : null;
+	const after = query.after ?? -Infinity;
+	const kept = rows.filter((row) => row.seq > after
+		&& (!query.name || row.name === query.name)
+		&& (!re || re.test(row.name) || re.test(row.message)));
+	return query.limit !== undefined && query.limit > 0 ? kept.slice(-query.limit) : kept;
+}
+
+/** One AI log row, live or stored. `image` stands for the map image the row had; `schema` is the stored id of the response format its prompt asked for. */
+export type AiLogRow = {
+	seq:number;
+	name:string;
+	message:string;
+	image?:boolean;
+	error?:boolean;
+	schema?:string;
+};
+
+/** A run of the AI log: one per game a page boots (a scene's start, restart or load). */
+export type AiLogRun = {
+	session:string;
+	scene:string;
+	/** ISO time the run began. */
+	started:string;
+};
+
+/** What a page sends to store a row: its run, the row, and the whole response format when the row is a prompt that asked for one. */
+export type AiLogPost = {
+	run:AiLogRun;
+	row:Omit<AiLogRow, 'schema'>;
+	schema?:Record<string, unknown>;
+};
+
 export type Command =
 	| { op:'listCharacters' }
 	| { op:'runVerb'; character:string; arc:string }

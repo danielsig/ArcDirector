@@ -1,5 +1,6 @@
 import { distance } from '../world/vec.js';
 import type { Sight } from './perception-types.js';
+import { madeOut } from './sight.js';
 
 /** How salient what a mind carries is: about as much as what stands right in front of it. */
 export const CARRIED_SALIENCE = 0.8;
@@ -10,11 +11,12 @@ const BEHIND = 0.4;
 
 /**
  * How much each thing `snap` shows should bring memories of it to mind, 0–1, kept in `into` where higher than what
- * is there: close and straight ahead most, far off or behind least. Seeing Hilde reminds you of Hilde.
+ * is there: close and straight ahead most, far off or behind least; nothing for what is not made out. Seeing Hilde
+ * reminds you of Hilde, a shape in the dark of no one.
  */
 export function sightSalience(snap:Sight, into:Map<string, number>):void {
 	const { point: at, facing } = snap.self;
-	for (const o of snap.objects) {
+	for (const o of snap.objects.filter(madeOut)) {
 		const away = distance(at, o.point);
 		const ahead = facing && away > 0
 			? (facing[0] * (o.point[0] - at[0]) + facing[1] * (o.point[1] - at[1])) / away

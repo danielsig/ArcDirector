@@ -4,9 +4,11 @@ import type { ArcRunner } from '../character/arc-runner.js';
 import type { Character } from '../character/Character.js';
 import type { Collective } from '../collective/Collective.js';
 import type { Mind } from '../mind/mind.js';
-import type { ArcFormat } from '../mind/mind-types.js';
-import type { HostKernels } from '../expr/natives.js';
+import type { ArcFormat, Manner } from '../mind/mind-types.js';
+import type { ExprVal, NativeFn } from '../expr/expr-types.js';
 import type { Goal, KitSource } from '../character/character-types.js';
+import type { JsonValue } from '../json.js';
+import type { SeenObject } from '../perception/perception-types.js';
 import type { ArcDirector } from './ArcDirector.js';
 import type { VerbCall } from './director-types.js';
 
@@ -14,6 +16,9 @@ import type { VerbCall } from './director-types.js';
 export type FeatureFields<TCtx> = {
 	attach(director:ArcDirector<TCtx>):void;
 };
+
+/** What a feature adds to the watch language ({@link Feature.watchKernels}): functions of its own, and values under names. */
+export type WatchKernels = { functions?:Record<string, NativeFn>; bindings?:Record<string, ExprVal> };
 
 /** One tick as a feature's tick hooks see it: game seconds passed, the game time now, and which intervals fired. */
 export type FeatureTick = {
@@ -67,6 +72,12 @@ export abstract class Feature<TCtx = unknown> {
 	/** Where its hooks run among the other features'. The built-ins keep the library's sequence; a game's own come after. */
 	public readonly order:number = 100;
 
+	/**
+	 * The key a save keeps its state under (`'feelings'`): set, `exportCast` keeps what {@link toJSON} returns and
+	 * `restoreCast` hands it to {@link load}. A word of its own, not the class name, which a minifier renames.
+	 */
+	public readonly saveKey:string | undefined = undefined;
+
 	/** Whether it was added to a director yet. */
 	protected get attached():boolean {
 		return this._director !== undefined;
@@ -82,6 +93,17 @@ export abstract class Feature<TCtx = unknown> {
 
 	/** Once, when added: register verbs, tools and senses through the director's registries. */
 	public install():void {}
+
+	/** Its state for a save, under its {@link saveKey}; undefined keeps nothing. */
+	public toJSON():JsonValue | undefined {
+		return undefined;
+	}
+
+	/**
+	 * Its state from a save, in place of what it holds: once `restoreCast` cleared the cast, before it is rebuilt.
+	 * Undefined when the save holds none for it (it had none, or was not there yet).
+	 */
+	public load(json:JsonValue | undefined):void {}
 
 	/** The verbs changed (one added, removed, or given a handler): what it says in their help lines is said again. */
 	public verbsChanged():void {}
@@ -112,7 +134,7 @@ export abstract class Feature<TCtx = unknown> {
 		return false;
 	}
 
-	/** Who of no part of `collective` its character `id` sees, in `mind`'s words (`EnemyKnight 12/28 hp 8m (in reach)`): its roster says the nearest. */
+	/** Who of no part of `collective` its character `id` sees, in `mind`'s words (`EnemyKnight 12/28 hp 8m (in reach)`, `(in reach, no clear shot)`, `(out of reach)`): its roster says the nearest. */
 	public othersSeenBy(id:string, collective:Collective<TCtx>, mind:Mind<TCtx>):{ name:string; away:number; text:string }[] {
 		return [];
 	}
@@ -126,12 +148,24 @@ export abstract class Feature<TCtx = unknown> {
 	}
 
 	/** What it adds to the watch language for `runner`: bindings (an RTS side's numbers), or kernels of its own. */
-	public watchKernels(runner:ArcRunner<TCtx>):Partial<HostKernels> | undefined {
+	public watchKernels(runner:ArcRunner<TCtx>):WatchKernels | undefined {
 		return undefined;
 	}
 
+	/** `mind` is about to think: what it should know by then, it is told now (hearing tells it what it hears). */
+	public thinkStarts(mind:Mind<TCtx>):void {}
 	/** What it adds to `mind`'s prompt this think. Called once a think, so it may count thinks. */
 	public promptPart(mind:Mind<TCtx>):PromptPart | undefined {
+		return undefined;
+	}
+
+	/** What `selfID` sees from `ctx` (`SightFeature.seenBy`), with what it adds: `objects` as they are by default. */
+	public seen(ctx:TCtx, selfID:string, objects:SeenObject[]):SeenObject[] {
+		return objects;
+	}
+
+	/** How `turn` was said, in the word Current Conversation shows it with (`growls`, `angrily`); features' words join in order. */
+	public manner(turn:Manner):string | undefined {
 		return undefined;
 	}
 
@@ -151,7 +185,7 @@ export abstract class Feature<TCtx = unknown> {
 
 /** Feature `type`'s `get*` shortcut, which its file declares on `ArcDirector` typed with the director's context and `shortcuts.ts` builds. */
 export function featureGetter<F>(type:abstract new (...args:never[])=>F):(this:ArcDirector)=>F | undefined {
-	return function () {
+	return function() {
 		return this.getFeature(type);
 	};
 }

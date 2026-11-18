@@ -2,8 +2,9 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { parseArcText } from './arc-parse.js';
 import { formatArc, formatArcBlocks } from './arc-format.js';
-import { arcFromJSON, arcJSONBlocks, arcJSONText, arcSoFar, finishedSteps, arcToJSON, parseArc, replyBreakdown } from './wire.js';
+import { arcFromJSON, arcJSONBlocks, arcJSONText, arcSoFar, finishedSteps, finishedText, arcToJSON, parseArc, replyBreakdown } from './wire.js';
 import { replySchema } from './schema.js';
+import { MAX_ARC_DEPTH } from './validate.js';
 import { VerbRegistry, STOCK_VERB_DEFS } from './stock-verbs.js';
 import { STOCK_COLLECTIVE_VERB_DEFS } from '../collective/collective-verbs.js';
 import { ArcError, sameProgram, type Arc } from './arc-types.js';
@@ -59,6 +60,21 @@ describe('replyBreakdown', () => {
 			assert.equal(first(...reply.split('')), undefined, reply);
 		}
 	});
+
+	it('stops arcs nested past the deepest an Arc may, as soon as the one too deep opens, counting as the validator does', () => {
+		const loops = (n:number, inside = '{"verb":"wait"}'):string => (n === 0 ? inside : `{"verb":"loop","arc":[${loops(n - 1, inside)}]}`);
+		const reply = (n:number, inside?:string):string => `{"steps":[${loops(n, inside)}]}`;
+		assert.equal(first(reply(MAX_ARC_DEPTH)), undefined);
+		const deep = reply(MAX_ARC_DEPTH + 1);
+		assert.match(first(deep) ?? '', new RegExp(`arcs nest at most ${MAX_ARC_DEPTH} deep`));
+		assert.match(first(...deep.slice(0, deep.lastIndexOf('[') + 1).split('')) ?? '', /nest at most/, 'cut at the bracket that opens it');
+		assert.throws(() => parseArc(deep, verbs), /may hold no arc inside it/, 'the validator draws the same line');
+		const choice = `{"verb":"choose","goal":"g","choices":{"a":[{"verb":"wait"}],"b":[${loops(1)}]}}`;
+		assert.match(first(reply(MAX_ARC_DEPTH - 1, choice)) ?? '', /nest at most/, 'a choice counts');
+		assert.equal(first(reply(MAX_ARC_DEPTH - 2, choice)), undefined);
+		const where = '{"verb":"if","cond":[{"verb":"test","watch":"x"}],"arc":[{"verb":"wait","while":[{"verb":"say","text":"a"}]}],"else":[{"verb":"remember","content":"c","tags":["t"]}]}';
+		assert.equal(first(reply(MAX_ARC_DEPTH, where)), undefined, 'an if, a while and a list of tags are where their step is');
+	});
 });
 
 describe('finishedSteps', () => {
@@ -79,16 +95,31 @@ describe('arcJSONBlocks', () => {
 		const text = arcJSONBlocks(arc, all);
 		assert.equal(text, [
 			'{"steps":[',
-			'\t{"verb":"loop","arc":[',
-			'\t\t{"verb":"choose","goal":"why","choices":{',
-			'\t\t\t"wander":[{"verb":"wander"}],',
-			'\t\t\t"wait":[{"verb":"wait"}]',
-			'\t\t}}',
-			'\t],"until":"!some(others)","then":"always"},',
+			'\t{"verb":"loop",',
+			'\t\t"arc":[',
+			'\t\t\t{"verb":"choose","goal":"why",',
+			'\t\t\t\t"choices":{',
+			'\t\t\t\t\t"wander":[{"verb":"wander"}],',
+			'\t\t\t\t\t"wait":[{"verb":"wait"}]',
+			'\t\t\t\t}',
+			'\t\t\t}',
+			'\t\t],',
+			'\t\t"until":"!some(others)","then":"always"',
+			'\t},',
 			'\t{"verb":"say","text":"Done"}',
 			']}',
 		].join('\n'));
 		assert.equal(sameProgram(parseArc(text, all), arc), true);
+		const branch = parseArcText('if (pick_up(Key)) { go_to(Door) } else { think("where") }', all);
+		assert.equal(arcJSONBlocks(branch, all), [
+			'{"steps":[',
+			'\t{"verb":"if",',
+			'\t\t"cond":[{"verb":"pick_up","item":"Key"}],',
+			'\t\t"arc":[{"verb":"go_to","target":"Door"}],',
+			'\t\t"else":[{"verb":"think","about":"where"}]',
+			'\t}',
+			']}',
+		].join('\n'), 'each of an if\'s arcs on a line of its own, never a run of closing brackets');
 		assert.equal(arcJSONBlocks(parseArcText('wait()', all), all), '{"steps":[{"verb":"wait"}]}', 'nothing to nest stays on its line');
 	});
 });
@@ -276,11 +307,11 @@ describe('replySchema', () => {
 		return replySchema(registry) as never;
 	}
 
-	it('has one branch per verb of the catalog, plus the group and the test, whatever kit asks', () => {
+	it('has one branch per verb of the catalog but think, plus the group and the test, whatever kit asks', () => {
 		const catalog = crowd();
 		const kit = catalog.view(['command', 'wait']);
 		const names = (registry:VerbRegistry):string[] => schemaOf(registry.nested()).$defs.step.anyOf.map((branch) => branch.properties.verb.const);
-		assert.deepEqual(names(kit), [...catalog.list().map((spec) => spec.name).filter((name) => name !== 'command'), 'group', 'test']);
+		assert.deepEqual(names(kit), [...catalog.list().map((spec) => spec.name).filter((name) => name !== 'command' && name !== 'think'), 'group', 'test']);
 		assert.equal(JSON.stringify(replySchema(kit.nested())), JSON.stringify(replySchema(catalog)));
 	});
 
@@ -317,6 +348,16 @@ describe('replySchema', () => {
 		assert.doesNotThrow(() => parseArcText('command(who=units, arc=loop(wait())) ; command(who=allUnits, arc=wait())', kit));
 	});
 
+	it('takes instead at the root of a reply only, as text and as JSON, and never in an order', () => {
+		const kit = crowd();
+		assert.deepEqual(parseArcText('say("Change of plan") ; instead {\n\tgo_to(Gate)\n}', kit)[1].args.arc, [{ verb: 'go_to', args: { target: 'Gate' } }]);
+		assert.deepEqual(parseArc({ steps: [{ verb: 'instead', arc: [{ verb: 'go_to', target: 'Gate' }] }] }, kit), [{ verb: 'instead', args: { arc: [{ verb: 'go_to', args: { target: 'Gate' } }] } }]);
+		assert.throws(() => parseArcText('command(units) {\n\tinstead {\n\t\tgo_to(Gate)\n\t}\n}', kit), /orders already replace what units do: write command\(Archers\) \{ … \} without instead/);
+		for (const text of ['loop {\n\tinstead {\n\t\tgo_to(Gate)\n\t}\n}', 'if (isHurt(me)) {\n\tinstead {\n\t\tgo_to(Gate)\n\t}\n}', 'instead {\n\tinstead {\n\t\tgo_to(Gate)\n\t}\n}']) {
+			assert.throws(() => parseArcText(text, kit), /instead goes at the root of a reply/, text);
+		}
+	});
+
 	it('has one branch per tool before the steps, the built-ins first, and no more for a mind that lacks one', () => {
 		const tools = {
 			recall: { type: 'object', required: ['query'], properties: { query: { type: 'string' }, k: { type: 'number' } } },
@@ -331,7 +372,7 @@ describe('replySchema', () => {
 		assert.deepEqual(Object.keys(schema.anyOf[0].properties), ['tool', 'query', 'k']);
 		assert.deepEqual(schema.anyOf[2].required, ['tool']);
 		assert.equal(schema.anyOf[0].additionalProperties, false);
-		assert.ok(JSON.stringify(schema).length < 20_000);
+		assert.ok(JSON.stringify(schema).length < 21_000);
 	});
 
 	it('refuses a tool with a parameter called tool', () => {
@@ -360,7 +401,7 @@ describe('replySchema', () => {
 		assert.equal(group?.properties.arc.$ref, '#/$defs/arc');
 		const choose = schema.$defs.step.anyOf.find((branch) => branch.properties.verb.const === 'choose');
 		assert.deepEqual(choose?.required, ['verb', 'goal', 'choices']);
-		assert.deepEqual(choose?.properties.choices.additionalProperties, { $ref: '#/$defs/arc' });
+		assert.deepEqual(choose?.properties.choices.additionalProperties, { $ref: '#/$defs/arc_think' }, 'a choice may hold a think');
 	});
 
 	it('names each verb, its args in order and then last, and recurses through $defs', () => {
@@ -373,10 +414,12 @@ describe('replySchema', () => {
 		assert.equal(schema.properties.steps.$ref, '#/$defs/arc');
 		assert.equal(schema.$defs.arc.minItems, 1);
 		const use = schema.$defs.step.anyOf.find((branch) => (branch.properties.verb as { const:string }).const === 'use');
-		assert.deepEqual(Object.keys(use?.properties ?? {}), ['let', 'verb', 'item', 'target', 'until', 'within', 'then']);
+		assert.deepEqual(Object.keys(use?.properties ?? {}), ['let', 'verb', 'item', 'target', 'until', 'within', 'while', 'then']);
 		assert.deepEqual(use?.required, ['verb', 'item']);
+		assert.deepEqual(use?.properties.while, { $ref: '#/$defs/arc' }, 'a while is an arc where its step is');
 		const loop = schema.$defs.step.anyOf.find((branch) => (branch.properties.verb as { const:string }).const === 'loop');
 		assert.deepEqual((loop?.properties.arc as { $ref:string }).$ref, '#/$defs/arc');
+		assert.deepEqual(loop?.properties.while, { $ref: '#/$defs/arc' }, 'a loop takes a while too');
 		assert.ok(JSON.stringify(schema).length < 20_000);
 	});
 });
@@ -397,5 +440,17 @@ describe('Arc text a reply wraps', () => {
 
 	it('still refuses a reply with no steps in it, with the whole reply\'s reason', () => {
 		assert.throws(() => parseArc('I see four foes and I am afraid.', verbs()), /expected verb/);
+	});
+});
+
+describe('finishedText', () => {
+	it('ends a statement at its ) or } once the token after it goes on no while or else', () => {
+		assert.equal(finishedText('go_to(Well)'), undefined, 'a while may still come');
+		assert.equal(finishedText('go_to(Well) wh'), undefined, 'half a while');
+		assert.equal(finishedText('go_to(Well) while say("Hi")'), undefined);
+		assert.equal(finishedText('go_to(Well) while say("Hi") && exam'), 'go_to(Well) while say("Hi")');
+		assert.equal(finishedText('loop {\n\tgo_to(Mill)\n} while say("Off")\nsay'), 'loop {\n\tgo_to(Mill)\n} while say("Off")');
+		assert.equal(finishedText('go_to(Gate) while {\n\tsay("a")\n}\nsay("b")'), 'go_to(Gate) while {\n\tsay("a")\n}');
+		assert.equal(finishedText('if (isHurt(me)) { flee(Wolf) } el'), undefined, 'half an else');
 	});
 });

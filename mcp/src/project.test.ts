@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { projectEntries, type LogEntry } from './project.js';
+import type { AiLogRow } from '@arc-director/control';
+import { projectEntries } from './project.js';
 
 const prompt = [
 	'prompt',
@@ -22,7 +23,7 @@ const prompt = [
 	'```',
 ].join('\n');
 
-const entries:LogEntry[] = [
+const entries:AiLogRow[] = [
 	{ seq: 4, name: 'Mira', message: prompt, image: true },
 	{ seq: 5, name: 'Mira', message: 'go_to(Well)' },
 ];

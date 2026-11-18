@@ -2,8 +2,9 @@ import type { JsonSchema } from '../json.js';
 import { namesWord } from '../text.js';
 import { JOINS } from './arc-types.js';
 import { STOCK_COLLECTIVE_VERB_DEFS } from '../collective/collective-verbs.js';
-import { argBase, argKinds, CHOOSE_VERB, IF_VERB, isOptional, GROUP_VERB, STOCK_VERB_DEFS, TEST_VERB, type VerbArgKind, type VerbDef, type VerbRegistry, type VerbSpec } from './stock-verbs.js';
-import { constraintAt, constraintHelp, insideOf, narrowsAt, type ArgConstraint, type ArgPath } from './constraints.js';
+import { argBase, argKinds, CHOOSE_VERB, IF_VERB, isOptional, GROUP_VERB, STOCK_VERB_DEFS, TEST_VERB, type VerbArgKind, type VerbDef, type VerbRegistry, type VerbSpec, WHILE_ARG } from './stock-verbs.js';
+import { DEFAULT_EXPLICIT_THINK_ALLOWED_INSIDE, placesHelp } from './validate.js';
+import { constraintAt, constraintHelp, insideOf, narrowsAt, within, type ArgConstraint, type ArgPath } from './constraints.js';
 
 function ref(name:string):JsonSchema {
 	return { $ref: `#/$defs/${name}` };
@@ -22,6 +23,9 @@ function argSchema(kind:VerbArgKind, c:ArgConstraint, arc:JsonSchema, endless?:b
 	if (base === 'hold') {
 		return endless ? { type: 'string' } : { anyOf: [{ const: true }, { type: 'integer', minimum: 0 }, { type: 'string' }] };
 	}
+	if (base === 'bool') {
+		return { type: 'boolean' };
+	}
 	if (base === 'string[]') {
 		return { type: 'array', items: { type: 'string' } };
 	}
@@ -31,14 +35,17 @@ function argSchema(kind:VerbArgKind, c:ArgConstraint, arc:JsonSchema, endless?:b
 	return c.names ? { type: 'string', enum: [...c.names] } : { type: 'string' };
 }
 
-/** Last in every step, so a grammar writes the step's own args before how it joins the next. */
-const THEN:JsonSchema = { type: 'string', enum: [...JOINS] };
+/**
+ * Last in every step, so a grammar writes the step's own args before how it joins the next. By reference, as every
+ * step has it: written out in each, it cost the schema a tenth of its length.
+ */
+const THEN:JsonSchema = ref('then');
 
 /** `let name = step`, first in a step as in Arc text. */
 const LET:JsonSchema = { type: 'string' };
 
-/** The schema of the arc held where `path` says (none: the root's), by reference. */
-type ArcRef = (path?:ArgPath)=>JsonSchema;
+/** The schema of the arc held where `path` says (none: the root's), directly in the arc arg `here`, by reference. */
+type ArcRef = (path?:ArgPath, here?:ArgPath)=>JsonSchema;
 
 /**
  * One step of one verb written `at` an arc arg: `verb` is that verb's name and comes first, its args follow in the order
@@ -54,7 +61,7 @@ function verbStep(spec:VerbSpec, at:ArgPath | undefined, arcRef:ArcRef):JsonSche
 				let: LET,
 				verb: { const: CHOOSE_VERB },
 				goal: { type: 'string' },
-				choices: { type: 'object', additionalProperties: arcRef(`${CHOOSE_VERB}.arc`) },
+				choices: { type: 'object', additionalProperties: arcRef(`${CHOOSE_VERB}.arc`, `${CHOOSE_VERB}.arc`) },
 				then: THEN,
 			},
 		};
@@ -62,7 +69,7 @@ function verbStep(spec:VerbSpec, at:ArgPath | undefined, arcRef:ArcRef):JsonSche
 	const kinds = Object.entries(argKinds(spec));
 	const argSchemaOf = (key:string, kind:VerbArgKind):JsonSchema => {
 		const c = constraintAt(spec, key, at);
-		return Object.assign(argSchema(kind, c, arcRef(spec.name === IF_VERB ? at : `${spec.name}.${key}`), spec.endless), ...(c.custom ?? []).map((rule) => rule.schema));
+		return Object.assign(argSchema(kind, c, arcRef(spec.name === IF_VERB || key === WHILE_ARG ? at : `${spec.name}.${key}`, `${spec.name}.${key}`), spec.endless), ...(c.custom ?? []).map((rule) => rule.schema));
 	};
 	return {
 		type: 'object',
@@ -118,9 +125,12 @@ function toolReply(name:string, parameters:JsonSchema):JsonSchema {
  * for every mind and think; the kit and the mind's own tools are checked once the reply is read. An arc nests through
  * `$defs`, so any depth costs the same few kilobytes. `command` is a step of the reply's own root only, never of a nested
  * arc, so a grammar cannot write one inside a loop or a law. An arc arg that constraints narrow (`law.arc`) has defs of
- * its own (`arc_in_law`, `step_in_law`). It accepts all the validator does, and may accept more (`depth`, `syntax`).
+ * its own (`arc_in_law`, `step_in_law`). `think` is a step only of the arcs `explicitThinkAllowedInside` lists (`if.arc`): each has a def
+ * of its own (`arc_think`, `arc_in_law_think`). It accepts all the validator does, and may accept more
+ * (`depth`, `syntax`): a def per level of nesting would cost the steps' def again for each, so how deep an Arc nests
+ * (`MAX_ARC_DEPTH`) is the validator's to check, and `replyBreakdown`'s to stop as it is written.
  */
-export function replySchema(catalog:VerbRegistry, tools:Record<string, JsonSchema> = {}):JsonSchema {
+export function replySchema(catalog:VerbRegistry, tools:Record<string, JsonSchema> = {}, explicitThinkAllowedInside = DEFAULT_EXPLICIT_THINK_ALLOWED_INSIDE):JsonSchema {
 	const command = catalog.list().find((spec) => spec.name === 'command');
 	const places = new Map<ArgPath, ArgConstraint>();
 	for (const spec of catalog.list()) {
@@ -133,10 +143,21 @@ export function replySchema(catalog:VerbRegistry, tools:Record<string, JsonSchem
 		}
 	}
 	const nameOf = (path:ArgPath):string => path.replace(/\.arc$/, '').replace('.', '_');
-	const arcRef:ArcRef = (path) => ref(path && places.has(path) ? `arc_in_${nameOf(path)}` : 'arc');
-	const stepAt = (at?:ArgPath, { subverbs, not }:ArgConstraint = {}):JsonSchema => ({
+	const allows = (spec:VerbSpec, { subverbs, not }:ArgConstraint):boolean => (subverbs?.includes(spec.name) ?? true) && !not?.includes(spec.name);
+	const defs:Record<string, JsonSchema> = {};
+	const think = catalog.get('think');
+	const arcRef:ArcRef = (path, here) => {
+		const c = (path && places.get(path)) || {};
+		const base = path && places.has(path) ? `arc_in_${nameOf(path)}` : 'arc';
+		if (!think || !within(explicitThinkAllowedInside, here) || !allows(think, c)) {
+			return ref(base);
+		}
+		defs[`${base}_think`] ??= { type: 'array', minItems: 1, ...(c.maxSteps === undefined ? {} : { maxItems: c.maxSteps }), items: { anyOf: [ref(base.replace(/^arc/, 'step')), verbStep(think, path, arcRef)] } };
+		return ref(`${base}_think`);
+	};
+	const stepAt = (at?:ArgPath, c:ArgConstraint = {}):JsonSchema => ({
 		anyOf: [
-			...catalog.list().filter((spec) => spec !== command && (subverbs?.includes(spec.name) ?? true) && !not?.includes(spec.name)).map((spec) => verbStep(spec, at, arcRef)),
+			...catalog.list().filter((spec) => spec !== command && spec !== think && allows(spec, c)).map((spec) => verbStep(spec, at, arcRef)),
 			groupStep(arcRef(at)),
 			TEST_STEP,
 		],
@@ -147,10 +168,9 @@ export function replySchema(catalog:VerbRegistry, tools:Record<string, JsonSchem
 		required: ['steps'],
 		properties: { steps: command ? { type: 'array', minItems: 1, items: { anyOf: [verbStep(command, undefined, arcRef), ref('step')] } } : ref('arc') },
 	};
-	const defs:Record<string, JsonSchema> = {
-		arc: { type: 'array', minItems: 1, items: ref('step') },
-		step: stepAt(),
-	};
+	defs.then = { type: 'string', enum: [...JOINS] };
+	defs.arc = { type: 'array', minItems: 1, items: ref('step') };
+	defs.step = stepAt();
 	for (const [path, c] of places) {
 		defs[`arc_in_${nameOf(path)}`] = { type: 'array', minItems: 1, ...(c.maxSteps === undefined ? {} : { maxItems: c.maxSteps }), items: ref(`step_in_${nameOf(path)}`) };
 		defs[`step_in_${nameOf(path)}`] = stepAt(path, c);
@@ -196,9 +216,10 @@ function constraintsHelp(spec:VerbSpec, allowed:ReadonlySet<string>):string {
 	].filter(Boolean).join('; ');
 }
 
-function formatVerbHelp(spec:VerbSpec, allowed:ReadonlySet<string>, catalog:readonly string[], stockHelp = true):string {
+/** `spec`'s line in the verb list; `think`'s says where it goes, `explicitThinkAllowedInside`. */
+function formatVerbHelp(spec:VerbSpec, allowed:ReadonlySet<string>, catalog:readonly string[], stockHelp:boolean, explicitThinkAllowedInside:readonly ArgPath[]):string {
 	const docs = spec.help && (stockHelp || !isStockHelp(spec)) ? docsFor(spec.help, spec.name, allowed, catalog) : '';
-	const help = [docs, constraintsHelp(spec, allowed)].filter(Boolean).join('; ');
+	const help = [spec.name === 'think' && placesHelp(explicitThinkAllowedInside, allowed), docs, constraintsHelp(spec, allowed)].filter(Boolean).join('; ');
 	if (spec.name === CHOOSE_VERB) {
 		return help ? `${spec.name}(goal, name=arc, …) — ${help}` : `${spec.name}(goal, name=arc, …)`;
 	}
@@ -217,10 +238,10 @@ function isStockHelp(spec:VerbSpec):boolean {
  * Every verb of `registry` with its args and help, and in a collective the verbs its nested arcs may use. Without
  * `stockHelp`, a stock verb's own help is left out: a compact prompt keeps only what this game says.
  */
-export function verbHelp(registry:VerbRegistry, tools:readonly string[] = [], { stockHelp = true }:{ stockHelp?:boolean } = {}):string {
+export function verbHelp(registry:VerbRegistry, tools:readonly string[] = [], { stockHelp = true, explicitThinkAllowedInside = DEFAULT_EXPLICIT_THINK_ALLOWED_INSIDE }:{ stockHelp?:boolean; explicitThinkAllowedInside?:readonly ArgPath[] } = {}):string {
 	const catalog = [...registry.nested().list().map((spec) => spec.name), ...tools];
 	const own = new Set([...registry.list().map((spec) => spec.name), ...tools]);
-	const kit = registry.list().map((spec) => formatVerbHelp(spec, own, catalog, stockHelp)).join(', ');
+	const kit = registry.list().map((spec) => formatVerbHelp(spec, own, catalog, stockHelp, explicitThinkAllowedInside)).join(', ');
 	if (!registry.has('command')) {
 		return kit;
 	}
@@ -229,11 +250,11 @@ export function verbHelp(registry:VerbRegistry, tools:readonly string[] = [], { 
 		return kit;
 	}
 	// Nested arcs may use the catalog. Their help may name those verbs, not a tool this think does not offer.
-	const nestedAllowed = new Set([...nested.list().map((spec) => spec.name), ...tools]);
+	const nestedAllowed = new Set([...nested.list().map((spec) => spec.name).filter((name) => name !== CHOOSE_VERB), ...tools]);
 	// `choose` reaches a collective's characters only when its own kit grants it, so it is never a nested extra.
 	const extras = nested.list()
 		.filter((spec) => !registry.has(spec.name) && spec.name !== CHOOSE_VERB)
-		.map((spec) => formatVerbHelp(spec, nestedAllowed, catalog, stockHelp));
+		.map((spec) => formatVerbHelp(spec, nestedAllowed, catalog, stockHelp, explicitThinkAllowedInside));
 	if (extras.length === 0) {
 		return kit;
 	}

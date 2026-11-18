@@ -1,5 +1,5 @@
-import { JOIN_SYMBOL, groupArc, isArc, isCountMap, type Arc, type Step, type StepArg } from './arc-types.js';
-import { argBase, argKinds, CHOOSE_VERB, IF_VERB, TEST_VERB, type VerbRegistry } from './stock-verbs.js';
+import { JOIN_SYMBOL, groupArc, isArc, isCountMap, verbsInside, type Arc, type Step, type StepArg } from './arc-types.js';
+import { argBase, argKinds, CHOOSE_VERB, IF_VERB, TEST_VERB, WHILE_ARG, type VerbRegistry } from './stock-verbs.js';
 import { choicesOf, deriveChoiceName } from './choose.js';
 
 /** Steps written back as Arc text that parses to the same steps (`arc-parse.ts` reads it): on one line, or in blocks. */
@@ -35,9 +35,16 @@ function formatArg(v:StepArg, kind:string | undefined):string {
 
 /**
  * Arc text that parses back to the same step. A lone arg drops its `key=` only when it is the verb's first arg, which
- * is where the parser puts a positional value; without `verbs` every arg keeps its key. A verb's arc is its body.
+ * is where the parser puts a positional value; without `verbs` every arg keeps its key. A verb's arc is its body; its
+ * {@link WHILE_ARG} arc follows it: `go_to(Well) while say("Follow me")`, a `{ }` block for more than one step.
  */
 export function formatStep(step:Step, verbs?:VerbRegistry, depth?:number):string {
+	const whileArc = step.args[WHILE_ARG];
+	if (isArc(whileArc)) {
+		const alone = formatStep({ ...step, args: Object.fromEntries(Object.entries(step.args).filter(([key]) => key !== WHILE_ARG)) }, verbs, depth);
+		const inside = verbs && verbsInside(step, verbs, WHILE_ARG);
+		return `${alone} while ${whileArc.length === 1 && !whileArc[0].let ? formatStep(whileArc[0], inside, depth) : body(whileArc, inside, depth)}`;
+	}
 	const named = step.let ? `let ${step.let} = ` : '';
 	const inner = groupArc(step);
 	if (inner) {
@@ -51,24 +58,24 @@ export function formatStep(step:Step, verbs?:VerbRegistry, depth?:number):string
 	}
 	const spec = verbs?.get(step.verb);
 	const kinds:Record<string, string> = spec ? argKinds(spec) : {};
-	const inside = step.verb === IF_VERB ? verbs : verbs?.nested();
+	const inside = (key:string):VerbRegistry | undefined => verbs && verbsInside(step, verbs, key);
 	const arcs = Object.keys(step.args).filter((key) => isArc(step.args[key]));
 	if (step.verb === IF_VERB && isArc(step.args.cond) && isArc(step.args.arc)) {
-		const els = isArc(step.args.else) ? ` else ${body(step.args.else, inside, depth)}` : '';
-		return `${named}if (${formatAt(step.args.cond, inside, undefined)}) ${body(step.args.arc, inside, depth)}${els}`;
+		const els = isArc(step.args.else) ? ` else ${body(step.args.else, verbs, depth)}` : '';
+		return `${named}if (${formatAt(step.args.cond, verbs, undefined)}) ${body(step.args.arc, verbs, depth)}${els}`;
 	}
 	const bodyKey = arcs[0];
 	const keys = Object.keys(step.args).filter((key) => key !== bodyKey);
 	const first = Object.keys(kinds)[0];
 	const parts = keys.map((key) => {
 		const value = step.args[key];
-		const formatted = isArc(value) ? `(${formatAt(value, inside, undefined)})` : formatArg(value, kinds[key]);
+		const formatted = isArc(value) ? `(${formatAt(value, inside(key), undefined)})` : formatArg(value, kinds[key]);
 		// The one arg of a verb with a body reads best bare: `command(units.filter("Guard")) { … }`.
 		const bare = isBareArg(formatted) || (bodyKey !== undefined && (EXPR_KINDS.has(argBase(kinds[key])) || /^[\w.]+\(/.test(formatted)));
 		return keys.length === 1 && key === first && !isArc(value) && bare ? formatted : `${key}=${formatted}`;
 	});
 	const call = parts.length > 0 ? `${step.verb}(${parts.join(', ')})` : bodyKey ? step.verb : `${step.verb}()`;
-	return `${named}${call}${bodyKey ? ` ${body(step.args[bodyKey] as Arc, inside, depth)}` : ''}`;
+	return `${named}${call}${bodyKey ? ` ${body(step.args[bodyKey] as Arc, inside(bodyKey), depth)}` : ''}`;
 }
 
 /** `{ … }`: on one line, or its steps a tab deeper, one statement per line, and `}` alone at the opener's depth. */

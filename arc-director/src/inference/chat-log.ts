@@ -87,30 +87,37 @@ function fence(text:string):string {
 	return `${marks}\n${text}\n${marks}`;
 }
 
-/** A response-format schema is kilobytes of grammar, so the log shows its name: wire `response_format` or raw `responseFormat`. */
-function schemaNamed(payload:unknown):unknown {
+/**
+ * A response-format schema is kilobytes of grammar, so the message shows its name (wire `response_format` or raw
+ * `responseFormat`) and the schema comes back apart, for a stored log to keep once.
+ */
+function schemaNamed(payload:unknown):{ payload:unknown; schema?:Record<string, unknown> } {
 	if (!isRecord(payload)) {
-		return payload;
+		return { payload };
 	}
 	const out:Record<string, unknown> = { ...payload };
+	let schema:Record<string, unknown> | undefined;
 	const wire = out['response_format'];
 	if (isRecord(wire) && isRecord(wire['json_schema']) && typeof wire['json_schema'].name === 'string') {
-		out['response_format'] = wire['json_schema'].name;
+		schema = wire['json_schema'];
+		out['response_format'] = schema.name;
 	}
 	const raw = out['responseFormat'];
 	if (isRecord(raw) && typeof raw.name === 'string') {
+		schema = raw;
 		out['responseFormat'] = raw.name;
 	}
-	return out;
+	return { payload: out, schema };
 }
 
-/** Wire/request dump: JSON minus message bodies, bodies in fences, schemas by name, last data-URL as `image`. */
-export function formatChatLog(payload:unknown):{ message:string; image?:string } {
+/** Wire/request dump: JSON minus message bodies, bodies in fences, schemas by name (the schema apart), last data-URL as `image`. */
+export function formatChatLog(payload:unknown):{ message:string; image?:string; schema?:Record<string, unknown> } {
 	const blocks:string[] = [];
 	const image = findImage(payload);
-	const json = JSON.stringify(stripContents(schemaNamed(payload), blocks));
+	const named = schemaNamed(payload);
+	const json = JSON.stringify(stripContents(named.payload, blocks));
 	const message = blocks.length > 0 ? `${json}\n${blocks.map(fence).join('\n')}` : json;
-	return image ? { message, image } : { message };
+	return { message, ...image ? { image } : {}, ...named.schema ? { schema: named.schema } : {} };
 }
 
 /** A System One's pick: only a pick asks for the answer token's log probabilities. It is logged once, whole, by the pick. */
@@ -149,7 +156,7 @@ export function loggedProvider(inner:InferenceProvider, clock:InferClock, log:(e
 			const prompt = (payload:unknown, path?:string):void => {
 				sent = true;
 				const dump = formatChatLog(payload);
-				log({ name, message: `prompt${path ? ` ${path}` : ''}\n${dump.message}`, image: dump.image });
+				log({ name, message: `prompt${path ? ` ${path}` : ''}\n${dump.message}`, image: dump.image, schema: dump.schema });
 			};
 			try {
 				const res = await inner.chat({ ...req, onRequest: ({ body, path }) => prompt(body, path) });
@@ -201,7 +208,7 @@ export function loggedProvider(inner:InferenceProvider, clock:InferClock, log:(e
 			}
 		},
 		embed: embed ? (texts, model) => embed(texts, model) : undefined,
-		systemOneEndpoint: inner.systemOneEndpoint?.bind(inner),
+		systemOne: inner.systemOne?.bind(inner),
 	};
 }
 

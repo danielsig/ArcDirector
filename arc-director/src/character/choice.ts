@@ -1,3 +1,4 @@
+import { showNamingText } from './text-with-ids.js';
 import { evaluate } from '../expr/eval.js';
 import { entityName, Names, type Catalog, type ExprEntity } from '../expr/expr-types.js';
 import { argKind, type VerbRegistry } from '../arc/stock-verbs.js';
@@ -65,7 +66,7 @@ export function choiceState({ id, verb, last, catalog, names }:ChoiceStateInput)
 		lines.push(`Doing: ${verb}.`);
 	}
 	if (last) {
-		lines.push(`Last choice: ${last.name}, ${last.result.status}${last.result.reason ? ` (${last.result.reason})` : ''}.`);
+		lines.push(`Last choice: ${last.name}, ${last.result.status}${last.result.reason ? ` (${showNamingText(last.result.reason)})` : ''}.`);
 	}
 	const nearest = catalog && nearestOf('others', catalog);
 	if (catalog && nearest && !names.includes(entityName(nearest))) {

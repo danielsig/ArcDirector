@@ -4,8 +4,8 @@ import type { ToolDef } from '../inference/provider.js';
 /** A tool call a model wrote as text where the Arc goes, instead of calling the tool. */
 export type WrittenToolCall = { name:string; args:Record<string, unknown> };
 
-/** Opens a tool call at the start of the reply, a line, or after a join: `earshot(`, `call:observe{`, `tool:recall {`. */
-const HEAD = /(^|\n|&&|\|\||;)(\s*)(?:(?:call|tool)\s*:\s*)?([A-Za-z_]\w*)\s*([({])/g;
+/** Opens a tool call at the start of the reply, a line, or after a join: `earshot(`, `call:observe{`, `tool:recall {`, `call recall(`. */
+const HEAD = /(^|\n|&&|\|\||;)(\s*)(?:(?:call|tool)(?:\s*:\s*|\s+))?([A-Za-z_]\w*)\s*([({])/g;
 
 /** A tool call in Qwen's (or Hermes') chat template syntax that reached the reply unparsed: `<tool_call>…</tool_call>`. */
 const TEMPLATE_CALL = /<tool_call>([\s\S]*?)<\/tool_call>/g;

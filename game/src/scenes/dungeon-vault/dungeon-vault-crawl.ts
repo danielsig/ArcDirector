@@ -1,5 +1,5 @@
 import { GameObject, Time, distanceXZ, inBounds } from '@arc-director/kindling';
-import { ArcDirector, parseArc, type CharacterSpec, type CollectiveSpec, type Goal, type LawSpec, type MemoryDraft, type RegionSpec, type SpeechUtterance } from 'arc-director';
+import { ArcDirector, parseArc, TalkInstructions, type CharacterSpec, type CollectiveSpec, type Goal, type LawSpec, type MemoryDraft, type RegionSpec, type SpeechUtterance, type TalkStyle } from 'arc-director';
 import { Confine } from '../../characters/Confine';
 import { Leash } from '../../characters/Leash';
 import { Celebrating, Door, Inscription, Lock, Named, Vitals } from '../../engine/components';
@@ -15,8 +15,7 @@ import type { CharacterCtx, SceneGoals } from '../../director/game-types';
 const PRIZE = 'SunCrown';
 const BOSS = 'HollowKing';
 const COMPANY = ['Valerius', 'Seraphine', 'Morrigan'];
-/** Who solves the crypt's puzzles, and who gives the orders: the first of each still standing. */
-const SOLVERS = ['Seraphine', 'Morrigan'];
+/** Who gives the orders: the first still standing. */
 const LEADERS = ['Valerius', 'Morrigan'];
 
 /** The riddle's answer, as people say it. Spoken this close to SealedDoor, it opens. */
@@ -131,28 +130,28 @@ const QUEST_MEMORIES:MemoryDraft[] = [
 	},
 ];
 
-/** Morrigan is next in line for both posts. */
+/** Morrigan is next in line to lead. */
 const SUCCESSION:MemoryDraft = {
-	text: 'I am next in line: if Valerius falls, I lead the company in his place; if Seraphine falls, the crypt\'s puzzles become mine.',
+	text: 'I am next in line: if Valerius falls, I lead the company in his place.',
 	tags: [TEAM, 'succession'],
 	pinned: true,
 };
 
 /**
- * A step on the way to the crown: where it is done, what is to be done there, and whether it is the solver's puzzle or
- * everyone's; `label` is what the goal track says of it. `how` is the answer, told only once the puzzle has stalled: until then the company works it out. `room`
- * is the room it is done in, whose monsters stand in the way of it.
+ * A step on the way to the crown: where it is done and what is to be done there; `label` is what the goal track says of
+ * it. `how` makes it a puzzle, anyone's to solve, and is its answer, told only once it has stalled: until then the
+ * company works it out. `room` is the room it is done in, whose monsters stand in the way of it.
  */
-type Step = { done:(host:GameHost)=>boolean; where:string; text:string; how?:string; puzzle?:boolean; room?:string; label:string };
+type Step = { done:(host:GameHost)=>boolean; where:string; text:string; how?:string; room?:string; label:string };
 
 /** The way to the crown, in order. The first step not done is the company's one goal, so nobody has to ask where to go. */
 const STEPS:Step[] = [
-	{ done: (host) => !host.world.findNamed('Cobweb'), where: 'Cobweb', puzzle: true, text: 'get past Cobweb', label: 'Destroy the cobweb', how: 'pick_up(WoodenTorch) && use(item=WoodenTorch, target=Cobweb)' },
-	{ done: (host) => opened(host, 'SealedDoor'), where: 'SealedDoor', room: 'PillaredHall', puzzle: true, text: 'open SealedDoor', label: 'Solve the riddle at SealedDoor', how: 'read the riddle on RiddleStone beside it, work out the one thing it describes, and say that thing aloud' },
-	{ done: (host) => opened(host, 'CryptGate') || companyHolds(host, 'CryptKey'), where: 'OssuaryChest', room: 'Ossuary', puzzle: true, text: 'find CryptKey', label: 'Find CryptKey in the Ossuary', how: 'pick_up(item=CryptKey, from=OssuaryChest)' },
-	{ done: (host) => opened(host, 'CryptGate'), where: 'CryptGate', puzzle: true, text: 'open CryptGate', label: 'Unlock CryptGate', how: 'use(item=CryptKey, target=CryptGate)' },
+	{ done: (host) => !host.world.findNamed('Cobweb'), where: 'Cobweb', text: 'get past Cobweb', label: 'Destroy the cobweb', how: 'pick_up(WoodenTorch) && use(item=WoodenTorch, target=Cobweb)' },
+	{ done: (host) => opened(host, 'SealedDoor'), where: 'SealedDoor', room: 'PillaredHall', text: 'open SealedDoor', label: 'Solve the riddle at SealedDoor', how: 'read the riddle on RiddleStone beside it, work out the one thing it describes, and say that thing aloud' },
+	{ done: (host) => opened(host, 'CryptGate') || companyHolds(host, 'CryptKey'), where: 'OssuaryChest', room: 'Ossuary', text: 'find CryptKey', label: 'Find CryptKey in the Ossuary', how: 'pick_up(item=CryptKey, from=OssuaryChest)' },
+	{ done: (host) => opened(host, 'CryptGate'), where: 'CryptGate', text: 'open CryptGate', label: 'Unlock CryptGate', how: 'use(item=CryptKey, target=CryptGate)' },
 	{ done: (host) => !isLiving(host.world.findByID(BOSS)), where: BOSS, room: 'ThroneCrypt', text: `kill the ${BOSS}`, label: `Slay the ${BOSS}` },
-	{ done: (host) => companyHolds(host, PRIZE), where: 'HoardChest', puzzle: true, text: `take the ${PRIZE}`, label: `Claim the ${PRIZE}`, how: `pick_up(item=${PRIZE}, from=HoardChest)` },
+	{ done: (host) => companyHolds(host, PRIZE), where: 'HoardChest', text: `take the ${PRIZE}`, label: `Claim the ${PRIZE}`, how: `pick_up(item=${PRIZE}, from=HoardChest)` },
 ];
 
 const NEAREST_FOE = 'others.filter("enemy").minBy(u => distance(me, u))';
@@ -177,8 +176,8 @@ function dangerGoal(id:string):Goal {
 	};
 }
 
-/** How the company talks: often, in character, never at length. Orders stay the leader's, and only when needed. */
-const TALK = 'Say something in your own voice on most thinks: add a say step to your arc, one short sentence of 3 to 7 words. Talk about what is right here and now: this room, a sound, a smell, a friend, your nerves, a joke. Never the crown, the treasure or the quest: everyone knows. Never repeat a line already said, and never claim what you have not seen. Chatter is never an order.';
+/** How the company talks: banter, never of the quest everyone knows. Orders stay the leader's, and only when needed. */
+const TALK:TalkStyle = { instructions: TalkInstructions.Banter, avoid: ['the crown', 'the treasure', 'the quest'] };
 
 /** The healer keeps within heal reach of the leader, and heals the lowest first whenever someone near is hurt. */
 function healGoal(leader:string):Goal {
@@ -189,20 +188,32 @@ function healGoal(leader:string):Goal {
 	};
 }
 
+/**
+ * How the company works as one: each room cleared, its puzzles talked over, and a friend in danger warned with a shout,
+ * which wakes whoever hears it, and acted on at once.
+ */
+function teamworkGoal(id:string):Goal {
+	const friend = COMPANY.find((other) => other !== id);
+	return {
+		text: `Clear every room of its monsters before you go on, and solve its puzzles together: for a hard one, say what you notice and what you think the answer is, and build on what the others say. The moment you see a friend in danger, shout a warning to them at once. Like: say(text="Behind you!", to=${friend}, as=shout) When a friend shouts a warning at you, act on it at once, before anything else.`,
+		priority: 3,
+	};
+}
+
 /** Every mistake becomes a law, so it is never made twice. */
 const LEARN:Goal = {
 	text: 'You MUST learn from every mistake: each failed step, each time you were caught alone or out of place, set one law at once so it never happens again; a wound in a fight is no mistake. One new law per think at most, and none for what a law of yours already covers. When one of your laws turns out bad (it fails, or makes things worse), unlaw it at once. Never make the same mistake twice.',
 	priority: 3,
 };
 
-/** Game seconds a puzzle may go unsolved before its answer is told: to the solver, and to the leader to pass on. */
+/** Game seconds a puzzle may go unsolved before its answer is told to the company. */
 const STALL_SECONDS = 60;
 
 /** How `id` gets to where `step` is done: the leader walks in front, everyone else close behind. */
 function wayThere(id:string, leader:string, step:Step):string {
 	return id === leader
 		? `Lead the way in front: go_to(${step.where}), and wait for anyone who falls behind. Once the fight is over and no monster is left near, never lead on into the next room while anyone of the company has less than half their health: wait where you are, tell Seraphine once, briefly, whom to heal, and go on only once they are healed. In a fight, this does not apply: fight.`
-		: `Stay close behind ${leader}, never ahead: follow(${leader}).`;
+		: `Stay close behind ${leader}, never ahead: follow(${leader}); ${leader} leads you to ${step.where}, so never go_to it yourself.`;
 }
 
 /**
@@ -215,25 +226,19 @@ const QUESTS = {
 };
 
 /**
- * `id`'s goals while `leader` gives the orders, `solver` solves the puzzles, and `step` is next: the step alone and
- * first, since a small model reads a goal below the quest as something for after it. Only the solver is told what a
- * puzzle is, so no one else has an order to give about it, and it works out how by itself, until it has `stalled`:
- * then the solver is told how, and the leader may tell it too. The leader alone carries the quest, above the step.
+ * `id`'s goals while `leader` gives the orders and `step` is next: the step alone and first, since a small model reads
+ * a goal below the quest as something for after it. A puzzle is anyone's: whoever sees how solves it, and the company
+ * works out how by itself until it has `stalled`, when everyone is told. The leader alone carries the quest, above the
+ * step.
  */
-function roleGoals(id:string, leader:string, solver:string, step:Step, stalled:boolean, quest:keyof typeof QUESTS):Goal[] {
-	const way = wayThere(id, leader, step);
+function roleGoals(id:string, leader:string, step:Step, stalled:boolean, quest:keyof typeof QUESTS):Goal[] {
 	const how = stalled && step.how ? `: ${step.how}` : '';
-	const now = !step.puzzle
-		? `Now, all together, ${step.text}. ${way}`
-		: id === solver
-			? `Now, yourself: ${step.text}${how}. Never walk ahead alone into a room with monsters in it.`
-			: id === leader && stalled
-				? `${way} ${solver} has made no headway for a while: if no monster is near, tell ${solver} once, briefly: ${step.text}${how}.`
-				: `${way} ${solver} works on what is there: leave it to ${solver}, never do it, never tell ${solver} how. Keep ${solver} alive.`;
+	const anyone = step.how ? ' Any of you may do it, once there: whoever sees how does it, and asks for what they lack.' : '';
+	const now = `Now, all together, ${step.text}${how}. ${wayThere(id, leader, step)}${anyone}`;
 	const orders = id === leader
 		? 'You lead by example, not by words: your friends follow you on their own, so never tell anyone to move on or keep close. Give an order only when someone fails their part, like the hurt left unhealed.'
 		: `${leader} leads: do what ${leader} orders.`;
-	const goals = [{ text: now, priority: 3 }, { text: TALK, priority: 3 }, dangerGoal(id), LEARN, { text: orders, priority: 2 }];
+	const goals = [{ text: now, priority: 3 }, dangerGoal(id), teamworkGoal(id), LEARN, { text: orders, priority: 2 }];
 	if (id === 'Seraphine') {
 		goals.splice(1, 0, healGoal(leader));
 	}
@@ -245,37 +250,35 @@ function firstLiving(host:GameHost, ids:string[]):string | undefined {
 	return ids.find((id) => isLiving(findObject(host.world, id)));
 }
 
-const briefed = new WeakMap<GameHost, { roles:string; step:Step; since:number; stalled:boolean }>();
+const briefed = new WeakMap<GameHost, { leader:string; step:Step; since:number; stalled:boolean }>();
 
 /**
- * Keep every companion's goals on who leads, who solves, the next step, and whether it has stalled. When the leader
- * or the solver falls, the next in line takes the post, and the company hears it.
+ * Keep every companion's goals on who leads, the next step, and whether it has stalled. When the leader falls, the
+ * next in line takes the lead, and the company hears it.
  */
 function briefCompany(host:GameHost):void {
 	const leader = firstLiving(host, LEADERS);
-	const solver = firstLiving(host, SOLVERS);
 	const step = STEPS.find((s) => !s.done(host));
-	if (!leader || !solver || !step) {
+	if (!leader || !step) {
 		return;
 	}
-	const roles = `${leader}/${solver}`;
 	const before = briefed.get(host);
 	const since = step === before?.step ? before.since : Time.time;
 	const stalled = Time.time - since >= STALL_SECONDS;
-	if (roles === before?.roles && step === before.step && stalled === before.stalled) {
+	if (leader === before?.leader && step === before.step && stalled === before.stalled) {
 		return;
 	}
-	briefed.set(host, { roles, step, since, stalled });
+	briefed.set(host, { leader, step, since, stalled });
 	// The king's step is the last before the treasure, so a new step after his is the leader's quest narrowing.
 	const quest = isLiving(host.world.findByID(BOSS)) ? 'king' : 'loot';
 	for (const id of COMPANY) {
 		const persona = host.arc?.character(id)?.persona;
 		if (persona) {
-			persona.goals = roleGoals(id, leader, solver, step, stalled, quest);
+			persona.goals = roleGoals(id, leader, step, stalled, quest);
 		}
 	}
-	if (before && roles !== before.roles) {
-		host.arc?.pushEvent({ kind: 'Orders', text: `${leader} leads now, and ${solver} solves the puzzles`, who: [], tags: ['company', leader, solver], major: true });
+	if (before && leader !== before.leader) {
+		host.arc?.pushEvent({ kind: 'Orders', text: `${leader} leads now`, who: [], tags: ['company', leader], major: true });
 	}
 }
 
@@ -308,7 +311,8 @@ const KNIGHT:CharacterSpec = {
 	// A knight by title who fights as a Blade: quick stabs and slices, not slow cleaves.
 	tags: ['Blade'],
 	identity: { role: 'Knight', traits: ['meek', 'brave', 'very strategic', 'soft-spoken', 'terrified of spiders'] },
-	goals: roleGoals('Valerius', LEADERS[0], SOLVERS[0], STEPS[0], false, 'king'),
+	goals: roleGoals('Valerius', LEADERS[0], STEPS[0], false, 'king'),
+	talk: TALK,
 	memories: [
 		{
 			text: 'I am Valerius, a knight twenty years past my prime, and no boaster: the company is the strength, not me. I swore to Morrigan\'s late mother I would keep the girl alive, and I will. I plan much and say it plainly: I think a step ahead, put each friend where they do best, and give the credit to them. When it comes to it, I stand between my friends and whatever comes. Spiders, though: I will not touch a web.',
@@ -326,10 +330,11 @@ const HEALER:CharacterSpec = {
 	watchesWritable: false,
 	tags: ['Healer'],
 	identity: { role: 'Healer', traits: ['warm', 'stern when it matters', 'keeps a tally of every wound she mends', 'hums hymns when afraid'] },
-	goals: roleGoals('Seraphine', LEADERS[0], SOLVERS[0], STEPS[0], false, 'king'),
+	goals: roleGoals('Seraphine', LEADERS[0], STEPS[0], false, 'king'),
+	talk: TALK,
 	memories: [
 		{
-			text: 'I am Seraphine, a healer of the Dawn chapel. I have patched these fools up for six years and I keep a tally of every wound: Valerius owes me forty-one. I scold them for taking risks because I love them. I have the steadiest hands and the clearest head of us, so locks, webs and riddles are mine. I stay behind Valerius in a fight and heal whoever is hurt; I carry two HealthPotion for the worst of it.',
+			text: 'I am Seraphine, a healer of the Dawn chapel. I have patched these fools up for six years and I keep a tally of every wound: Valerius owes me forty-one. I scold them for taking risks because I love them. I have the steadiest hands and the clearest head of us. I stay behind Valerius in a fight and heal whoever is hurt; I carry two HealthPotion for the worst of it.',
 			tags: ['backstory', 'Seraphine', 'HealthPotion'],
 			pinned: true,
 		},
@@ -344,10 +349,11 @@ const WITCH:CharacterSpec = {
 	watchesWritable: false,
 	tags: ['Witch'],
 	identity: { role: 'Witch', traits: ['brilliant', 'cocky', 'sharp-tongued', 'loves riddles', 'braver than she feels', 'hates the very sight of cobwebs'] },
-	goals: roleGoals('Morrigan', LEADERS[0], SOLVERS[0], STEPS[0], false, 'king'),
+	goals: roleGoals('Morrigan', LEADERS[0], STEPS[0], false, 'king'),
+	talk: TALK,
 	memories: [
 		{
-			text: 'I am Morrigan, a fire witch, nineteen and the cleverest person in any room, as I like to remind Valerius. My hex is witchfire. I adore riddles, but the crypt\'s puzzles are Seraphine\'s while she lives. I tease Valerius about spiders, but I would walk into fire for him and Seraphine. I keep my distance in a fight and burn things from behind Valerius.',
+			text: 'I am Morrigan, a fire witch, nineteen and the cleverest person in any room, as I like to remind Valerius. My hex is witchfire. I adore riddles. I tease Valerius about spiders, but I would walk into fire for him and Seraphine. I keep my distance in a fight and burn things from behind Valerius.',
 			tags: ['backstory', 'Morrigan', 'hex', 'riddle'],
 			pinned: true,
 		},
@@ -361,7 +367,7 @@ const WITCH:CharacterSpec = {
 /** Who lies in wait, room by room. They have no voice and never think: their one law wakes them. */
 const HORDE:CollectiveSpec<CharacterCtx> = {
 	id: 'Horde',
-	mind: { skipHeartbeat: true, skipMajor: true, skipStart: true, skipStrategic: true },
+	mind: { rethinkingThreshold: 0, skipMajor: true, skipStart: true, skipStrategic: true },
 	watchesWritable: false,
 	// No mind of its own, but the fast model picks each blow: it reads how the last went ("missed Valerius") and switches.
 	kit: { verbs: ['loop', 'attack', 'choose', 'wander', 'go_to', 'bait'], tools: [] },
@@ -400,8 +406,8 @@ function oneDoes(threat:string):string {
 /**
  * Every room monsters lie in wait in, as a region: whoever of the company stands in it knows which of them still live
  * and how each is dangerous, until the last of them is down. Each monster is kept in its room.
- */
-/** The monsters each room starts with, by room name: who stands between the company and that room's step. */
+ * The monsters each room starts with, by room name: who stands between the company and that room's step.
+ **/
 const lairs = new WeakMap<GameHost, Map<string, string[]>>();
 
 function lairsOf(host:GameHost):Map<string, string[]> {
@@ -478,6 +484,12 @@ function company(host:GameHost):GameObject[] {
 	const player = host.world.findByID('Player');
 	const ids = player && host.world.npcCanSee(player) ? [...COMPANY, 'Player'] : COMPANY;
 	return ids.map((id) => findObject(host.world, id)).filter(isLiving);
+}
+
+/** Each of the company always knows what the others carry, so whoever holds what a puzzle takes is asked for it. */
+function knowsCarried(host:GameHost, viewer:GameObject, holder:GameObject):boolean | undefined {
+	const party = company(host);
+	return (party.includes(viewer) && party.includes(holder)) || undefined;
 }
 
 function companyHolds(host:GameHost, name:string):boolean {
@@ -608,7 +620,7 @@ function tickCrypt(host:GameHost):void {
 }
 
 export function createDirector(host:GameHost):ArcDirector<CharacterCtx, GameObject> {
-	host.hooks = { checkBargain: tickCrypt, onSpoke, goals };
+	host.hooks = { checkBargain: tickCrypt, onSpoke, goals, canSeeInventoryOf: knowsCarried };
 	spawnExit(host);
 	return host.configure(new ArcDirector<CharacterCtx, GameObject>())
 		.withRPG({ ...BODY_VERBS, ...fightVerbs(host) })

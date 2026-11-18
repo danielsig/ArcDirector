@@ -3,7 +3,10 @@ import type { Character, CharacterFields } from './character/Character.js';
 import type { Collective, CollectiveFields } from './collective/Collective.js';
 import type { ArcDirector, DirectorFields } from './director/ArcDirector.js';
 import type { Feature, FeatureFields } from './director/Feature.js';
+import type { MemoryFields, MemoryStore } from './memory/store.js';
 import type { Mind, MindFields } from './mind/mind.js';
+import type { MindMemory, MindMemoryFields } from './mind/MindMemory.js';
+import type { TalkFeature, TalkFields } from './mind/TalkFeature.js';
 
 /**
  * What each library class's constructor handed the director, and the director its parts: closures over its private
@@ -22,8 +25,11 @@ export function internalsOf<TCtx>(owner:Character<TCtx>):CharacterFields<TCtx>;
 export function internalsOf<TCtx>(owner:Collective<TCtx>):CollectiveFields<TCtx>;
 export function internalsOf<TCtx>(owner:ArcRunner<TCtx>):RunnerFields<TCtx>;
 export function internalsOf<TCtx>(owner:Mind<TCtx>):MindFields<TCtx>;
+export function internalsOf<TCtx>(owner:TalkFeature<TCtx>):TalkFields<TCtx>;
 export function internalsOf<TCtx>(owner:Feature<TCtx>):FeatureFields<TCtx>;
 export function internalsOf<TCtx>(owner:ArcDirector<TCtx>):DirectorFields<TCtx>;
+export function internalsOf(owner:MemoryStore):MemoryFields;
+export function internalsOf<TCtx>(owner:MindMemory<TCtx>):MindMemoryFields;
 export function internalsOf(owner:object):unknown {
 	const internals = handed.get(owner);
 	if (!internals) {

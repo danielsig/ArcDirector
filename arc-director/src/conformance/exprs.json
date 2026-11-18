@@ -1,0 +1,475 @@
+{
+	"about": "Watch expressions in a fixed world: each value as text and its truth score (3 decimals), or why it is refused. Kernels: distance on [x, z], sight under sightRange, everyone faces everyone, hp from [hp, maxHP].",
+	"world": {
+		"me": "Guard",
+		"others": [
+			"A",
+			"B",
+			"Player"
+		],
+		"items": [
+			"Lantern",
+			"CottageDoor"
+		],
+		"entities": {
+			"Guard": {
+				"point": [
+					0,
+					0
+				],
+				"tags": [
+					"character"
+				],
+				"hp": [
+					3,
+					5
+				],
+				"carries": [
+					"Lantern"
+				]
+			},
+			"A": {
+				"point": [
+					5,
+					0
+				],
+				"tags": [
+					"character"
+				],
+				"hp": [
+					5,
+					5
+				]
+			},
+			"B": {
+				"point": [
+					12,
+					0
+				],
+				"tags": [
+					"character"
+				],
+				"hp": [
+					5,
+					5
+				]
+			},
+			"Player": {
+				"point": [
+					5,
+					0
+				],
+				"tags": [
+					"character"
+				],
+				"hp": [
+					5,
+					5
+				]
+			},
+			"Lantern": {
+				"point": [
+					3,
+					0
+				],
+				"tags": [
+					"item",
+					"key"
+				]
+			},
+			"CottageDoor": {
+				"point": [
+					1,
+					0
+				],
+				"tags": [
+					"door"
+				],
+				"open": true
+			},
+			"Bridge": {
+				"tags": [
+					"bridge"
+				],
+				"open": true
+			},
+			"Theft": {
+				"point": [
+					5,
+					0
+				],
+				"tags": [
+					"theft"
+				]
+			}
+		},
+		"bindings": [
+			"Player",
+			"A",
+			"B",
+			"CottageDoor",
+			"Bridge",
+			"Lantern"
+		],
+		"events": [
+			"Theft"
+		],
+		"nearRadius": 8,
+		"sightRange": 20
+	},
+	"rows": [
+		{
+			"expr": "2 && 5",
+			"value": "2",
+			"score": 1
+		},
+		{
+			"expr": "2 || 5",
+			"value": "5",
+			"score": 1
+		},
+		{
+			"expr": "true * 4",
+			"value": "4",
+			"score": 1
+		},
+		{
+			"expr": "distance(me, others.filter(o => o == B))",
+			"value": "12",
+			"score": 1
+		},
+		{
+			"expr": "distance(me, others)",
+			"value": "5",
+			"score": 1
+		},
+		{
+			"expr": "distance(others, me)",
+			"value": "5",
+			"score": 1
+		},
+		{
+			"expr": "count(others)",
+			"value": "3",
+			"score": 1
+		},
+		{
+			"expr": "sum([1, 2, 3])",
+			"value": "6",
+			"score": 1
+		},
+		{
+			"expr": "avg([2, 4])",
+			"value": "3",
+			"score": 1
+		},
+		{
+			"expr": "max([1, 9, 3])",
+			"value": "9",
+			"score": 1
+		},
+		{
+			"expr": "min(1, 9, 3)",
+			"value": "1",
+			"score": 1
+		},
+		{
+			"expr": "reduce([1, 2, 3], 0, (a, x) => a + x)",
+			"value": "6",
+			"score": 1
+		},
+		{
+			"expr": "me.hp",
+			"value": "3",
+			"score": 1
+		},
+		{
+			"expr": "me.maxHP",
+			"value": "5",
+			"score": 1
+		},
+		{
+			"expr": "clamp(4)",
+			"value": "1",
+			"score": 1
+		},
+		{
+			"expr": "clamp(-1)",
+			"value": "0",
+			"score": 0
+		},
+		{
+			"expr": "softClamp(1)",
+			"value": "0.67",
+			"score": 0.667
+		},
+		{
+			"expr": "true && false",
+			"value": "false",
+			"score": 0
+		},
+		{
+			"expr": "true || false",
+			"value": "true",
+			"score": 0.51
+		},
+		{
+			"expr": "!false",
+			"value": "true",
+			"score": 0.51
+		},
+		{
+			"expr": "!!1",
+			"value": "true",
+			"score": 0.51
+		},
+		{
+			"expr": "!!0",
+			"value": "false",
+			"score": 0
+		},
+		{
+			"expr": "some([0, 2], x => x)",
+			"value": "true",
+			"score": 0.51
+		},
+		{
+			"expr": "some([0, 0], x => x)",
+			"value": "",
+			"score": 0
+		},
+		{
+			"expr": "items.find(\"nope\") == null",
+			"value": "true",
+			"score": 0.51
+		},
+		{
+			"expr": "isNear(items.find(\"nope\"), me)",
+			"value": "false",
+			"score": 0
+		},
+		{
+			"expr": "items.includes(\"Lantern\")",
+			"value": "true",
+			"score": 0.51
+		},
+		{
+			"expr": "all([true, true], x => x)",
+			"value": "true",
+			"score": 0.51
+		},
+		{
+			"expr": "some(items, i => i is \"key\")",
+			"value": "Lantern",
+			"score": 0.51
+		},
+		{
+			"expr": "some(others.nearby())",
+			"value": "A",
+			"score": 0.51
+		},
+		{
+			"expr": "!some(items.filter(\"nope\"))",
+			"value": "true",
+			"score": 0.51
+		},
+		{
+			"expr": "some(others) && isNear(me, A)",
+			"value": "true",
+			"score": 0.51
+		},
+		{
+			"expr": "Lantern.name.matches(/^lan/)",
+			"value": "true",
+			"score": 0.51
+		},
+		{
+			"expr": "Lantern.name.search(\"tern\")",
+			"value": "3",
+			"score": 1
+		},
+		{
+			"expr": "8 / 2 / 2",
+			"value": "2",
+			"score": 1
+		},
+		{
+			"expr": "isNear(me, A)",
+			"value": "true",
+			"score": 0.51
+		},
+		{
+			"expr": "isNear(me, B)",
+			"value": "false",
+			"score": 0
+		},
+		{
+			"expr": "isNear(me, B, 16)",
+			"value": "true",
+			"score": 0.51
+		},
+		{
+			"expr": "isNear(me, A, 3)",
+			"value": "false",
+			"score": 0
+		},
+		{
+			"expr": "hasSightline(me, Player)",
+			"value": "true",
+			"score": 0.51
+		},
+		{
+			"expr": "hasSightline(Player, me)",
+			"value": "true",
+			"score": 0.51
+		},
+		{
+			"expr": "isFacing(me, Player)",
+			"value": "true",
+			"score": 0.51
+		},
+		{
+			"expr": "isCarrying(\"key\")",
+			"value": "true",
+			"score": 0.51
+		},
+		{
+			"expr": "isCarrying(\"Lantern\")",
+			"value": "true",
+			"score": 0.51
+		},
+		{
+			"expr": "items.find(\"Lantern\") is \"key\"",
+			"value": "true",
+			"score": 0.51
+		},
+		{
+			"expr": "isHurt(me)",
+			"value": "true",
+			"score": 0.51
+		},
+		{
+			"expr": "some(events.filter(\"theft\"))",
+			"value": "Theft",
+			"score": 0.51
+		},
+		{
+			"expr": "some(events.filter(\"theft\").nearby(16))",
+			"value": "Theft",
+			"score": 0.51
+		},
+		{
+			"expr": "isNear(A)",
+			"value": "true",
+			"score": 0.51
+		},
+		{
+			"expr": "isNear(A, me)",
+			"value": "true",
+			"score": 0.51
+		},
+		{
+			"expr": "true && 1",
+			"error": "mixed && / ||"
+		},
+		{
+			"expr": "items.find(\"nope\")",
+			"value": "",
+			"score": 0
+		},
+		{
+			"expr": "items.find(\"nope\") ?? items.find(\"Lantern\")",
+			"value": "Lantern",
+			"score": 0.51
+		},
+		{
+			"expr": "distance(items.find(\"nope\"), me)",
+			"error": "distance needs two people or things"
+		},
+		{
+			"expr": "distance(me, others.filter(o => o == \"nobody\"))",
+			"error": "distance needs two people or things"
+		},
+		{
+			"expr": "first(items)",
+			"value": "Lantern",
+			"score": 0.51
+		},
+		{
+			"expr": "items.find(\"Lantern\")",
+			"value": "Lantern",
+			"score": 0.51
+		},
+		{
+			"expr": "[\"key\", \"door\"].map(t => items.find(i => i is t))",
+			"value": "Lantern, CottageDoor",
+			"score": 0
+		},
+		{
+			"expr": "sortBy([3, 1, 2], x => x)",
+			"value": "1, 2, 3",
+			"score": 0
+		},
+		{
+			"expr": "items.minBy(x => distance(me, x))",
+			"value": "CottageDoor",
+			"score": 0.51
+		},
+		{
+			"expr": "others.nearby()",
+			"value": "A, Player",
+			"score": 0
+		},
+		{
+			"expr": "nearby(others)",
+			"value": "A, Player",
+			"score": 0
+		},
+		{
+			"expr": "others.nearby(16)",
+			"value": "A, B, Player",
+			"score": 0
+		},
+		{
+			"expr": "others.nearby(4)",
+			"value": "",
+			"score": 0
+		},
+		{
+			"expr": "items.nearby(Player)",
+			"value": "Lantern, CottageDoor",
+			"score": 0
+		},
+		{
+			"expr": "isReachable(me, A)",
+			"error": "unbound 'isReachable'"
+		},
+		{
+			"expr": "others.reachable()",
+			"error": "unbound 'reachable'"
+		},
+		{
+			"expr": "isCarrying(Player, \"key\")",
+			"error": "isCarrying takes one argument"
+		},
+		{
+			"expr": "me.id",
+			"value": "Guard",
+			"score": 0
+		},
+		{
+			"expr": "items.find(\"nope\").inventory",
+			"value": "",
+			"score": 0
+		},
+		{
+			"expr": "Player.isNear",
+			"error": "'isNear' needs a call"
+		},
+		{
+			"expr": "others",
+			"value": "A, B, Player",
+			"score": 0
+		}
+	]
+}

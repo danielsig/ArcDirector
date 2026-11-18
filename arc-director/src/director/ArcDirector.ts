@@ -12,17 +12,19 @@ import { Collective, type CollectiveJSON } from '../collective/Collective.js';
 import { hand, internalsOf } from '../internals.js';
 import { Mind, mindTools, type MindSettings } from '../mind/mind.js';
 import type { MindEvent, Sense, ThinkEvent, ToolSpec } from '../mind/mind-types.js';
-import { buildCatalog, type HostKernels } from '../expr/natives.js';
+import { buildCatalog } from '../expr/natives.js';
 import { evaluate, type EvalResult } from '../expr/eval.js';
-import { ABSENT, ExprError, SampleCache, type Catalog } from '../expr/expr-types.js';
+import { ABSENT, ExprError, SampleCache, type Catalog, type NativeFn, type Stringifiers } from '../expr/expr-types.js';
 import { evaluateWho, lawMatches } from '../collective/who.js';
 import { HandoverFeature } from '../collective/HandoverFeature.js';
 import { createArcSession, DEFAULT_REARM, firstStartable, pollArcSession, reactionOf, watchIsTrue, type ArcHandler, type ArcPick, type ArcSession, type LastChoice } from '../arc/run.js';
 import { PriorityThinkQueue, type MindQueue, type ThinkRow } from '../think/queue.js';
+import { FAILED_ARC_SCORE } from '../think/scheduler.js';
 import { callEach, type CharacterSpec, type CollectiveSpec, type DirectorLog, type KernelSource, type SeenName, type VerbCall, type VerbHandler } from './director-types.js';
 import { ModelRegistry, type LiveModel } from './model-registry.js';
 import type { ModelProvider } from './ModelProvider.js';
-import type { Offer } from '../world/offers.js';
+import type { JsonValue } from '../json.js';
+import { checkAxes } from '../world/axes.js';
 import { OffersFeature } from '../world/OffersFeature.js';
 import type { HostWorld } from '../world/world-types.js';
 import type { Feature, FeatureTick } from './Feature.js';
@@ -41,8 +43,8 @@ const RETRY_SECONDS = 3;
 export type CastJSON = {
 	characters:Record<string, CharacterJSON>;
 	collectives:Record<string, CollectiveJSON>;
-	/** Every open offer; none when no one offers anything. */
-	offers?:Offer[];
+	/** Each feature's own state, by its `saveKey` (`Feature.toJSON`): the open offers, the feelings shown. */
+	features?:Record<string, JsonValue>;
 	/** The director's `time`, which every time in the cast is on. */
 	time?:number;
 };
@@ -283,6 +285,9 @@ export class ArcDirector<TCtx = unknown, TEntity = unknown> {
 		if (this._features.includes(feature)) {
 			return this;
 		}
+		if (feature.saveKey !== undefined && this._features.some((other) => other.saveKey === feature.saveKey)) {
+			throw new Error(`ArcDirector: two features save as '${feature.saveKey}'`);
+		}
 		internalsOf(feature).attach(this);
 		const after = this._features.findIndex((other) => other.order > feature.order);
 		this._features.splice(after < 0 ? this._features.length : after, 0, feature);
@@ -330,7 +335,7 @@ export class ArcDirector<TCtx = unknown, TEntity = unknown> {
 			}
 			// Whatever brought it down, a mind does not go on thinking through it.
 			const commander = runner.commander;
-			if (commander && this._world?.isDown?.(commander.id)) {
+			if (commander && this._world?.hasFallen?.(commander.id)) {
 				internalsOf(runner).vacate(commander);
 			}
 			this.tickCollectiveLaws(runner);
@@ -515,6 +520,10 @@ export class ArcDirector<TCtx = unknown, TEntity = unknown> {
 	 * `withWorldVerbs`. Every part but `find` receives a `TEntity`.
 	 */
 	public withWorld(world:HostWorld<TEntity>):this {
+		// Axes that say too little, or are skewed, fail here rather than at the first look.
+		if (world.geometry) {
+			checkAxes(world.geometry.axes);
+		}
 		this._world = world;
 		this._dispatcher.moveIn(world);
 		return this;
@@ -607,16 +616,6 @@ export class ArcDirector<TCtx = unknown, TEntity = unknown> {
 	// ---- Arc checks ----
 
 	/**
-	 * Before an Arc cuts short work not finished (a program with its steps still to do, or that has not gone once round
-	 * its loop), ask the model, in a short follow-up to that same think, what to do with each, told where it has got to:
-	 * replace it, append the new work to it, or keep it and drop the new work. Off by default.
-	 */
-	public withReplaceCheck(on = true):this {
-		this._dispatcher.replaceCheck = on;
-		return this;
-	}
-
-	/**
 	 * What each mind is doing as it thinks, down to its reply as it is written, and the orders it gives: for a host to
 	 * show. Each call adds a listener.
 	 */
@@ -682,14 +681,25 @@ export class ArcDirector<TCtx = unknown, TEntity = unknown> {
 		return this;
 	}
 
+	/**
+	 * The game's own functions in the watch language, by name (`isInside(me, Hut)`), over the built-in and features'
+	 * ones. Each gets its args and the catalog it runs in: `me`, and `point(who)` to measure where someone is (as if
+	 * `me` stood where a verb asks). A second call replaces the first.
+	 */
+	public withFunctions(functions:Record<string, NativeFn>):this {
+		this._watches.functions = functions;
+		return this;
+	}
+
+	/** How values read in the watch language are written back as text (`observe`'s answers, a step's args): by kind. */
+	public withStringifiers(stringifiers:Stringifiers):this {
+		this._watches.stringifiers = stringifiers;
+		return this;
+	}
+
 	/** The watch-language view `runner` has from `ctx` now, its collective's `units` too; none without `withKernels`. */
 	public catalogOf(runner:ArcRunner<TCtx>, ctx:TCtx):Catalog | undefined {
 		return this._watches.catalog(runner, ctx, new SampleCache());
-	}
-
-	/** What the cast's minds see from, in this director's words: `kernelsFor` for a host feature, none without `withKernels`. */
-	public kernelsOf(runner:ArcRunner<TCtx>, ctx:TCtx):HostKernels | undefined {
-		return this._watches.kernelsFor(runner, ctx);
 	}
 
 	/** Character or collective `id`'s context (`withContext`); none when it has none, or asking threw. */
@@ -851,8 +861,11 @@ export class ArcDirector<TCtx = unknown, TEntity = unknown> {
 		return this._cast.minds();
 	}
 
-	/** Every character and collective, as a save. Restore it with `restoreCast`. */
+	/** Every character and collective, as a save, each name book pruned first. Restore it with `restoreCast`. */
 	public exportCast():CastJSON {
+		for (const runner of [...this.characters(), ...this.collectives()]) {
+			runner.mind?.pruneNames();
+		}
 		const characters:Record<string, CharacterJSON> = {};
 		for (const character of this.characters()) {
 			characters[character.id] = character.toJSON();
@@ -861,7 +874,14 @@ export class ArcDirector<TCtx = unknown, TEntity = unknown> {
 		for (const collective of this.collectives()) {
 			collectives[collective.id] = collective.toJSON();
 		}
-		return { characters, collectives, offers: this.offers.toJSON(), time: this._time };
+		const features:Record<string, JsonValue> = {};
+		for (const feature of this._features) {
+			const json = feature.saveKey === undefined ? undefined : feature.toJSON();
+			if (json !== undefined) {
+				features[feature.saveKey!] = json;
+			}
+		}
+		return { characters, collectives, features, time: this._time };
 	}
 
 	/**
@@ -893,8 +913,8 @@ export class ArcDirector<TCtx = unknown, TEntity = unknown> {
 	/** Game time the `watch` interval and the `think` interval last fired at. */
 	private _watchedAt:number | undefined;
 	private _thoughtAt:number | undefined;
-	/** Minds whose think in flight came of their heartbeat alone: their laws need not wait for it. */
-	private readonly _beatThinks = new Set<string>();
+	/** Minds whose think in flight came of a rethink alone: their laws need not wait for it. */
+	private readonly _rethinks = new Set<string>();
 	private readonly _readyThink:ThinkRow[] = [];
 
 	/** Your own queue minds wait in to think; `withPriorityThinkQueue` (the default) and `withSimpleThinkQueue` set the stock ones. */
@@ -965,16 +985,16 @@ export class ArcDirector<TCtx = unknown, TEntity = unknown> {
 
 	/**
 	 * A think something called for is in flight or already queued, so a law must not walk the character out from under
-	 * it. Not a heartbeat's: a mind that thinks on a beat always has one coming, and its laws would never act. Not
+	 * it. Not a rethink's: a mind that rethinks on the timer always has one coming, and its laws would never act. Not
 	 * before the mind's first think ends either: laws act from the start, not after the opening think.
 	 */
 	private thinkWaiting(mindID:string):boolean {
 		if (!this._queue.hasThought(mindID)) {
 			return false;
 		}
-		return (this._queue.isThinking(mindID) && !this._beatThinks.has(mindID))
-			|| this._queue.hasPending(mindID, 'heartbeat')
-			|| this._readyThink.some((row) => row.mindID === mindID && row.reason !== 'heartbeat');
+		return (this._queue.isThinking(mindID) && !this._rethinks.has(mindID))
+			|| this._queue.hasPending(mindID, 'rethink')
+			|| this._readyThink.some((row) => row.mindID === mindID && row.reason !== 'rethink');
 	}
 
 	/**
@@ -1007,12 +1027,14 @@ export class ArcDirector<TCtx = unknown, TEntity = unknown> {
 		if (!this._connected) {
 			return;
 		}
-		const score = (row:ThinkRow):number => queue.rankScore(row.mindID, row.score);
+		// A rethink may wake a mind only while what remains of its program has an impact below its `rethinkingThreshold`, least impact first.
+		const impact = new Map(this._readyThink.filter((row) => row.reason === 'rethink').map((row) => [row, this.mindByID(row.mindID)?.voice.impact() ?? 0]));
+		const score = (row:ThinkRow):number => queue.rankScore(row.mindID, row.score * (1 - (impact.get(row) ?? 0)));
 		this._readyThink.sort((a, b) => score(b) - score(a) || (this.mindByID(b.mindID)?.setting('rank') ?? 0) - (this.mindByID(a.mindID)?.setting('rank') ?? 0));
 		const held:ThinkRow[] = [];
 		for (const row of this._readyThink) {
 			const mind = this.mindByID(row.mindID);
-			if (!mind) {
+			if (!mind || (impact.has(row) && impact.get(row)! >= mind.setting('rethinkingThreshold'))) {
 				continue;
 			}
 			if (queue.isThinking(row.mindID) || !queue.allowThink(row)) {
@@ -1020,22 +1042,22 @@ export class ArcDirector<TCtx = unknown, TEntity = unknown> {
 				continue;
 			}
 			queue.drop(row.mindID);
-			this._beatThinks[row.reason === 'heartbeat' ? 'add' : 'delete'](row.mindID);
-			this.fireThink(mind, now, score(row));
+			this._rethinks[row.reason === 'rethink' ? 'add' : 'delete'](row.mindID);
+			this.fireThink(mind, now, score(row), row.why);
 		}
 		this._readyThink.length = 0;
 		this._readyThink.push(...held);
 	}
 
-	private fireThink(mind:Mind<TCtx>, now:number, priority:number):void {
-		void mind.tick(now, priority)
+	private fireThink(mind:Mind<TCtx>, now:number, priority:number, why:string):void {
+		void mind.tick(now, priority, why)
 			.then((arc) => {
 				if (!mind.attached) {
 					return;
 				}
-				this._queue.setWatches(mind.id, mind.persona.effectiveWatches());
+				this._queue.setWatches(mind.id, mind.persona.watchList());
 				if (!arc) {
-					this._queue.noteResult(mind.id, true);
+					this._queue.noteResult(mind.id);
 				}
 			})
 			.catch((err:unknown) => {
@@ -1044,15 +1066,15 @@ export class ArcDirector<TCtx = unknown, TEntity = unknown> {
 				}
 				const text = err instanceof Error ? err.message : String(err);
 				this.log({ name: mind.thinkThread(), message: `stalled: ${text}` });
-				this._queue.noteResult(mind.id, true);
+				this._queue.noteResult(mind.id);
 				// An invalid reply ends no arc, so nothing would wake this mind: think again once, told why.
 				// Aborts and inference errors are not the mind's doing.
 				if (err instanceof ArcError) {
 					const again = mind.lastResult?.verb !== 'think' || mind.lastResult.status === 'ok';
 					const why = err instanceof BlockedArcError ? 'your plan cannot run' : 'your reply was not a valid Arc';
-					mind.ingestResult({ status: 'failed', verb: 'think', reason: `${why}: ${text}` });
+					mind.ingestResult({ status: 'failed', verb: 'think', reason: `${why}: ${text}` }, false);
 					if (again) {
-						this._queue.enqueueVerb(mind.id, 'think', false);
+						this._queue.enqueueArcEnd(mind.id, 'verb think failed', FAILED_ARC_SCORE);
 					}
 				}
 			});

@@ -1,42 +1,41 @@
-import type { HostWorld, PathStep, Vec } from './world-types.js';
-import { distance } from './vec.js';
+import { showNamingText, type NamingText } from '../character/text-with-ids.js';
+import type { Passage, Vec, WorldRoutes } from './world-types.js';
+import { Heap } from './Heap.js';
+import { distance, dot, sub, unit } from './vec.js';
 
-/** The parts of a world a route search walks on. */
-export type RouteWorld<TEntity, TPoint extends Vec = Vec> = Required<Pick<HostWorld<TEntity, TPoint>, 'getNeighbors'>>
-	& Pick<HostWorld<TEntity, TPoint>, 'getNearby' | 'canTraverse'>;
+/** The half of a world's routes a route search walks on. */
+export type RouteWorld<TEntity, TPoint extends Vec = Vec> = Pick<WorldRoutes<TEntity, TPoint>, 'createAt' | 'getNeighbors' | 'getPassage'>;
 
-/** Whether `world` has what a route search walks on. */
-export function hasRoutes<TEntity, TPoint extends Vec>(world:HostWorld<TEntity, TPoint> | undefined):world is HostWorld<TEntity, TPoint> & RouteWorld<TEntity, TPoint> {
-	return !!world?.getNeighbors;
+/** The passage `who` has from `a` to `b`: its `getPassage`, else open. */
+function passage<TEntity, TPoint extends Vec>(world:RouteWorld<TEntity, TPoint>, who:TEntity, a:TPoint, b:TPoint):Passage | undefined {
+	return world.getPassage ? world.getPassage(who, a, b) : {};
 }
 
-/** The step `who` takes from `a` to `b`: its `canTraverse`, else open. */
-function traverse<TEntity, TPoint extends Vec>(world:RouteWorld<TEntity, TPoint>, who:TEntity, a:TPoint, b:TPoint):PathStep | undefined {
-	return world.canTraverse ? world.canTraverse(who, a, b) : {};
-}
-
-/** `point` as a node of `world` and the nodes it links to: its `getNearby`, else `point` itself, a plain `Vec` node. */
-function nearby<TEntity, TPoint extends Vec>(world:RouteWorld<TEntity, TPoint>, point:Vec):{ at:TPoint; nearby:TPoint[] } {
-	return world.getNearby ? world.getNearby(point) : { at: point as TPoint, nearby: world.getNeighbors(point as TPoint) };
+/** A new point of `world` at `pos`: its `createAt`, else `pos` itself, a plain `Vec` point. */
+export function createAt<TEntity, TPoint extends Vec>(world:RouteWorld<TEntity, TPoint>, pos:Vec):TPoint {
+	return world.createAt ? world.createAt(pos) : pos as TPoint;
 }
 
 /** Points to pass through after the start, and the total cost. */
 export type Route<TPoint extends Vec = Vec> = { points:TPoint[]; cost:number };
 
 /** No open way. Each blocked step that leads there, with the cost of the cheapest route through it, cheapest first. */
-export type Blocked = { blockers:{ reason:string; cost:number; by?:string }[] };
+export type Blocked = { blockers:{ reason:NamingText; cost:number; by?:string }[] };
 
 /** Blocked ways named when there is no open way, cheapest first. */
 const BLOCKERS_TOLD = 3;
 
 /** What a failed move says: `no way to Well`, plus what blocks the way when something does. */
-export function noWayTo(target:string, why:string):string {
-	return why ? `no way to ${target}, blocked on the way: ${why}` : `no way to ${target}`;
+export function noWayTo(target:NamingText, why:NamingText):NamingText {
+	return (name) => {
+		const [to, blocked] = [showNamingText(target, name), showNamingText(why, name)];
+		return blocked ? `no way to ${to}, blocked on the way: ${blocked}` : `no way to ${to}`;
+	};
 }
 
-/** What stands in the way, as the agent is told: the cheapest few blockers. */
-export function blockedReason(blocked:Blocked):string {
-	return blocked.blockers.slice(0, BLOCKERS_TOLD).map((b) => b.reason).join('; ');
+/** What stands in the way, as the agent is told: the cheapest few blockers, each read only when it is shown. */
+export function blockedReason(blocked:Blocked):NamingText {
+	return (name) => blocked.blockers.slice(0, BLOCKERS_TOLD).map((b) => showNamingText(b.reason, name)).join('; ');
 }
 
 /** Points a search may settle along open ways, and again along blocked ones, before it gives up. */
@@ -46,85 +45,36 @@ const SEARCH_CAP = 4096;
 const END = 'end';
 
 /**
- * `key` says where it is (`END` on the goal's own point); `via` is the first blocked step on the way here, which open
- * ways lack and always come first; `nearby`, on the start only, is what it links to.
+ * `key` says where it is (`END` on the goal's own point); `via` is the first blocked step on the way here, by the
+ * number of its blocker, which open ways lack and always come first.
  */
-type Node<TPoint> = { point:TPoint; key:string; cost:number; rank:number; prev?:Node<TPoint>; via?:string; nearby?:TPoint[] };
+type Node<TPoint> = { point:TPoint; key:string; cost:number; rank:number; prev?:Node<TPoint>; via?:number };
 
 function keyOf(point:Vec):string {
 	return point.map((v) => Math.round(v * 1000)).join(',');
 }
 
+/** Open before blocked, then on `rank`: the order a route search settles its points in. */
 function before<TPoint>(a:Node<TPoint>, b:Node<TPoint>):boolean {
 	const blockedA = a.via !== undefined;
 	return blockedA === (b.via !== undefined) ? a.rank < b.rank : !blockedA;
 }
 
-/** Min-heap: open before blocked, then on `rank`. */
-class Frontier<TPoint> {
-	private readonly _size:Node<TPoint>[] = [];
-
-	public get size():number {
-		return this._size.length;
-	}
-
-	public push(node:Node<TPoint>):void {
-		const h = this._size;
-		h.push(node);
-		let i = h.length - 1;
-		while (i > 0) {
-			const up = (i - 1) >> 1;
-			if (!before(h[i], h[up])) {
-				break;
-			}
-			[h[up], h[i]] = [h[i], h[up]];
-			i = up;
-		}
-	}
-
-	public pop():Node<TPoint> {
-		const h = this._size;
-		const top = h[0];
-		const last = h.pop()!;
-		if (h.length > 0) {
-			h[0] = last;
-			let i = 0;
-			for (;;) {
-				const l = i * 2 + 1;
-				const r = l + 1;
-				let min = i;
-				if (l < h.length && before(h[l], h[min])) {
-					min = l;
-				}
-				if (r < h.length && before(h[r], h[min])) {
-					min = r;
-				}
-				if (min === i) {
-					break;
-				}
-				[h[min], h[i]] = [h[i], h[min]];
-				i = min;
-			}
-		}
-		return top;
-	}
-}
-
-/** Whether `canTraverse` let a step through: there is one, and nothing stops it for now. */
-export function isOpen(step:PathStep | undefined):boolean {
-	return !!step && !step.blocked;
+/** Whether `getPassage` let a step through: there is one, and nothing stops it for now. */
+export function isOpen(passage:Passage | undefined):boolean {
+	return !!passage && !passage.blocked;
 }
 
 /** Its length times its weight, never less than its length, so the search stays exact. */
-function stepCost(from:Vec, to:Vec, step:PathStep):number {
-	return distance(from, to) * Math.max(1, step.weight ?? 1);
+function passageCost(from:Vec, to:Vec, passage:Passage):number {
+	return distance(from, to) * Math.max(1, passage.weight ?? 1);
 }
 
-/** Each node `who` can step to from `node`, and what that step is. */
-function stepsFrom<TEntity, TPoint extends Vec>(world:RouteWorld<TEntity, TPoint>, who:TEntity, node:Node<TPoint>):[TPoint, PathStep][] {
-	return (node.nearby ?? world.getNeighbors(node.point)).flatMap((next):[TPoint, PathStep][] => {
-		const step = traverse(world, who, node.point, next);
-		return step ? [[next, step]] : [];
+/** Each node `who` can step to from `node`, and its passage there. */
+function passagesFrom<TEntity, TPoint extends Vec>(world:RouteWorld<TEntity, TPoint>, who:TEntity, node:Node<TPoint>):[TPoint, Passage][] {
+	return world.getNeighbors(node.point).flatMap((next):[TPoint, Passage][] => {
+		const there = passage(world, who, node.point, next);
+		return there ? [[next, there]] : [];
 	});
 }
 
@@ -142,13 +92,13 @@ function remember<K, V>(map:Map<K, V>, key:K, make:()=>V):V {
  * at the same coordinates get the same answers.
  */
 export function memoWorld<TEntity, TPoint extends Vec = Vec>(world:RouteWorld<TEntity, TPoint>):RouteWorld<TEntity, TPoint> {
-	const near = new Map<string, { at:TPoint; nearby:TPoint[] }>();
+	const points = new Map<string, TPoint>();
 	const neighbors = new Map<string, TPoint[]>();
-	const steps = new Map<TEntity, Map<string, PathStep | undefined>>();
+	const passages = new Map<TEntity, Map<string, Passage | undefined>>();
 	return {
-		getNearby: (point) => remember(near, keyOf(point), () => nearby(world, point)),
+		createAt: (pos) => remember(points, keyOf(pos), () => createAt(world, pos)),
 		getNeighbors: (node) => remember(neighbors, keyOf(node), () => world.getNeighbors(node)),
-		canTraverse: (who, a, b) => remember(remember(steps, who, () => new Map()), `${keyOf(a)}>${keyOf(b)}`, () => traverse(world, who, a, b)),
+		getPassage: (who, a, b) => remember(remember(passages, who, () => new Map()), `${keyOf(a)}>${keyOf(b)}`, () => passage(world, who, a, b)),
 	};
 }
 
@@ -205,10 +155,11 @@ export function awayGoal(threat:Vec, keep:number):RouteGoal {
 }
 
 /**
- * Cheapest open route for `who` from `from` to `goal`, over `world`'s neighbors and what `canTraverse` says of each step.
- * Neither end has to be a node the world names: the route starts on `from` as `getNearby` gives it and leaves through
- * what it links to, and, for a goal with its own point, ends on it only through a step into it from what that links
- * to, so a sparse waypoint network works as well as a grid, and a goal inside a wall is no place to walk to.
+ * Cheapest open route for `who` from `from` to `goal`, over `world`'s neighbors and what `getPassage` says of each step.
+ * Neither end has to be a point the world names: the route starts on the point `createAt` makes at `from` and leaves
+ * through its `getNeighbors`, and, for a goal with its own point, ends on the one `createAt` makes there only through a
+ * step into it from its `getNeighbors`, so a sparse waypoint network works as well as a grid, and a goal inside a wall
+ * is no place to walk to.
  *
  * One search: open ways settle first, so an open route comes back exactly as if blocked steps did not exist.
  * Without one, the search goes on through blocked steps, once per first blocker, and lists every blocker
@@ -221,34 +172,38 @@ export function findRoute<TEntity, TPoint extends Vec = Vec>(
 	goal:RouteGoal,
 	cap = SEARCH_CAP,
 ):Route<TPoint> | Blocked | undefined {
-	const end = goal.at && nearby(world, goal.at);
+	const end = goal.at && createAt(world, goal.at);
 	// The steps into the goal's own point, by where each leaves from: the only ways a route ends on it.
-	const entries = new Map<string, PathStep>();
+	const entries = new Map<string, Passage>();
 	// An open step either way: a goal no one stands on (a tree, a stall) is still reached from beside it.
 	const beside = new Set<string>();
-	for (const point of end?.nearby ?? []) {
-		const into = traverse(world, who, point, end!.at);
+	for (const point of end ? world.getNeighbors(end) : []) {
+		const into = passage(world, who, point, end!);
 		if (into) {
 			entries.set(keyOf(point), into);
 		}
-		if (isOpen(into) || isOpen(traverse(world, who, end!.at, point))) {
+		if (isOpen(into) || isOpen(passage(world, who, end!, point))) {
 			beside.add(keyOf(point));
 		}
 	}
-	const stateOf = (key:string, via?:string):string => (via === undefined ? key : `${key}|${via}`);
-	const start = startOf(world, from, goal.estimate(from));
+	const stateOf = (key:string, via?:number):string => (via === undefined ? key : `${key}|${via}`);
+	const here = createAt(world, from);
+	const start:Node<TPoint> = { point: here, key: keyOf(here), cost: 0, rank: goal.estimate(from) };
 	const best = new Map<string, number>([[start.key, 0]]);
 	const openlyReached = new Set<string>();
-	const blockers = new Map<string, number>();
-	/** What blocks, by its reason, where `canTraverse` said. */
-	const blockedBy = new Map<string, string>();
-	const open = new Frontier<TPoint>();
-	const relax = (node:Node<TPoint>, point:TPoint, step:PathStep, key:string):void => {
-		const via = node.via ?? step.blocked;
-		if (step.blocked && step.by) {
-			blockedBy.set(step.blocked, step.by);
+	/** The cheapest cost to the goal through each blocker that leads there, by its number. */
+	const blockers = new Map<number, number>();
+	/** Each blocker met, numbered by its `blocked` (a function by identity), with what blocks where `getPassage` said. */
+	const numbers = new Map<NamingText, number>();
+	const met:{ reason:NamingText; by?:string }[] = [];
+	const open = new Heap<Node<TPoint>>(before);
+	const relax = (node:Node<TPoint>, point:TPoint, passage:Passage, key:string):void => {
+		const blocker = passage.blocked ? remember(numbers, passage.blocked, () => met.push({ reason: passage.blocked! }) - 1) : undefined;
+		const via = node.via ?? blocker;
+		if (blocker !== undefined && passage.by) {
+			met[blocker].by = passage.by;
 		}
-		const length = stepCost(node.point, point, step);
+		const length = passageCost(node.point, point, passage);
 		const cost = node.cost + length + (goal.toll?.(point, length) ?? 0);
 		const state = stateOf(key, via);
 		if (cost < (best.get(state) ?? Infinity)) {
@@ -284,13 +239,13 @@ export function findRoute<TEntity, TPoint extends Vec = Vec>(
 		}
 		const entry = entries.get(key);
 		if (entry) {
-			relax(node, end!.at, entry, END);
+			relax(node, end!, entry, END);
 		}
-		for (const [point, step] of stepsFrom(world, who, node)) {
-			relax(node, point, step, keyOf(point));
+		for (const [point, passage] of passagesFrom(world, who, node)) {
+			relax(node, point, passage, keyOf(point));
 		}
 	}
-	return blockers.size > 0 ? { blockers: [...blockers].map(([reason, cost]) => ({ reason, cost, ...blockedBy.has(reason) ? { by: blockedBy.get(reason) } : {} })) } : undefined;
+	return blockers.size > 0 ? { blockers: [...blockers].map(([blocker, cost]) => ({ ...met[blocker], cost })) } : undefined;
 }
 
 /**
@@ -319,36 +274,39 @@ function routeTo<TPoint extends Vec>(end:Node<TPoint>):Route<TPoint> {
 	return { points, cost: end.cost };
 }
 
-/** Where a search starts: `from` as a node of `world`, leaving through what it links to. */
-function startOf<TEntity, TPoint extends Vec>(world:RouteWorld<TEntity, TPoint>, from:Vec, rank:number):Node<TPoint> {
-	const { at, nearby: links } = nearby(world, from);
-	return { point: at, key: keyOf(at), cost: 0, rank, nearby: links };
-}
+/** A node a scout passed: how far it had gone there, and the share of its steps out that are open (1: no wall at hand). */
+export type Scouted<TPoint extends Vec = Vec> = { point:TPoint; gone:number; openness:number };
 
-/** Points `who` reaches from `from` without a blocked step, cheapest first, up to `cap` of them. */
-export function reachablePoints<TEntity, TPoint extends Vec = Vec>(world:RouteWorld<TEntity, TPoint>, who:TEntity, from:Vec, cap:number):{ point:TPoint; cost:number }[] {
-	const start = startOf(world, from, 0);
-	const best = new Map<string, number>([[start.key, 0]]);
-	const open = new Frontier<TPoint>();
-	const out:{ point:TPoint; cost:number }[] = [];
-	open.push(start);
-	while (open.size > 0 && out.length < cap) {
-		const node = open.pop();
-		if (node.cost > (best.get(node.key) ?? Infinity)) {
-			continue;
-		}
-		out.push({ point: node.point, cost: node.cost });
-		for (const [point, step] of stepsFrom(world, who, node)) {
-			if (step.blocked) {
-				continue;
+/**
+ * A scout for `who` from `from`, sent out on as many headings as asked: the nodes it passes heading `way` (a unit
+ * vector) over open steps, for up to `length`. Each step gains ground along `way`, onto the open neighbor that keeps
+ * closest to the line out; it ends where that strays more than 45° off it, so a wall across the way ends it.
+ */
+export function scout<TEntity, TPoint extends Vec>(world:RouteWorld<TEntity, TPoint>, who:TEntity, from:Vec):(way:Vec, length:number)=>Scouted<TPoint>[] {
+	const start = createAt(world, from);
+	const openFrom = (here:TPoint, points:TPoint[]):TPoint[] => points.filter((point) => isOpen(passage(world, who, here, point)));
+	const first = openFrom(start, world.getNeighbors(start));
+	return (way, length) => {
+		const out = (point:Vec):number => dot(unit(sub(point, start)) ?? way, way);
+		const passed:Scouted<TPoint>[] = [];
+		let [here, ways] = [start, first];
+		// Every step gains ground along `way`, so it never comes back to a node.
+		for (let gone = 0; gone < length;) {
+			// No farther than 45° off the line out (a cosine of 0.7).
+			let [next, along] = [undefined as TPoint | undefined, 0.7];
+			for (const point of ways) {
+				const line = dot(sub(point, here), way) > 0 ? out(point) : -1;
+				[next, along] = line > along ? [point, line] : [next, along];
 			}
-			const cost = node.cost + stepCost(node.point, point, step);
-			const key = keyOf(point);
-			if (cost < (best.get(key) ?? Infinity)) {
-				best.set(key, cost);
-				open.push({ point, key, cost, rank: cost });
+			if (!next) {
+				break;
 			}
+			const neighbors = world.getNeighbors(next);
+			ways = openFrom(next, neighbors);
+			gone += distance(here, next);
+			here = next;
+			passed.push({ point: next, gone, openness: ways.length / Math.max(1, neighbors.length) });
 		}
-	}
-	return out;
+		return passed;
+	};
 }

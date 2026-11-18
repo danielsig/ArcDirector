@@ -10,8 +10,8 @@ import {
 	stringifyVal,
 	type Catalog,
 	type ExprEntity,
-	type HostKernels,
 } from '../expr/index.js';
+import type { CatalogInputs } from '../expr/natives.js';
 import { FakeProvider } from '../inference/fake.js';
 import { PriorityThinkQueue } from '../think/queue.js';
 import { soloCharacter, type SoloOptions } from '../testing/solo.js';
@@ -43,12 +43,12 @@ function xz(a:ExprEntity, b:ExprEntity):number {
 	return Math.hypot((pa.x ?? 0) - (pb.x ?? 0), (pa.z ?? 0) - (pb.z ?? 0));
 }
 
-function hostAt(dist:number, extra:Partial<HostKernels> = {}):{ host:HostKernels; cat:Catalog } {
+function hostAt(dist:number, extra:Partial<CatalogInputs> = {}):{ host:CatalogInputs; cat:Catalog } {
 	const me = posed('Forager', { x: 0, z: 0, tags: ['character'] });
 	const Player = posed('Player', { x: dist, z: 0, tags: ['character'] });
 	const theft = posed('Theft', { x: dist, z: 0, tags: ['theft'] });
 	const cache = extra.cache ?? new SampleCache();
-	const host:HostKernels = {
+	const host:CatalogInputs = {
 		me,
 		others: [Player],
 		items: [],
@@ -99,7 +99,7 @@ function agentOf(opts:{
 		watchesWritable: opts.watchesWritable,
 		toolRounds: opts.toolRounds ?? 0,
 		arcFormat: opts.arcFormat,
-		heartbeat: 0,
+		minThinkInterval: 0,
 		model: 'fake',
 	});
 }
@@ -118,8 +118,8 @@ describe('agent watches', () => {
 		await a.perform({ verb: 'unwatch', args: { name: 'approaching' } });
 		assert.deepEqual(a.persona.watches, { theft: 'some(events.filter("theft").nearby(16))' });
 		const q = new PriorityThinkQueue({ processInterval: 0 });
-		q.ensure('Forager', { skipHeartbeat: true });
-		q.setWatches('Forager', a.persona.effectiveWatches());
+		q.ensure('Forager', { rethinks: false });
+		q.setWatches('Forager', a.persona.watchList());
 		const far = hostAt(20);
 		live = far.cat;
 		q.tick(1, new Map([['Forager', far.cat]]));
@@ -147,32 +147,6 @@ describe('agent watches', () => {
 			model: 'fake',
 		});
 		assert.deepEqual(restored.persona.watches, a.persona.watches);
-	});
-
-	it('does not replace extras when the model omits watch ops', async () => {
-		const { cat } = hostAt(3);
-		const provider = new FakeProvider(() => ({
-			content: JSON.stringify({ steps: [{ verb: 'wait', seconds: 1 }] }),
-			toolCalls: [],
-		}));
-		const a = agentOf({
-			watches: { approaching: 'some(others.approaching())' },
-			provider,
-			catalog: () => cat,
-		});
-		await a.mind!.tick(1);
-		assert.deepEqual(a.persona.watches, { approaching: 'some(others.approaching())' });
-	});
-
-	it('watch replaces a watch of the same name', async () => {
-		const { cat } = hostAt(3);
-		const a = agentOf({
-			watches: { nearby: 'isNear(me, Player)' },
-			provider: new FakeProvider(() => ({ content: 'wait()', toolCalls: [] })),
-			catalog: () => cat,
-		});
-		assert.equal((await a.perform({ verb: 'watch', args: { name: 'nearby', expr: 'isNear(me, Player, 16)' } })).status === 'ok', true);
-		assert.deepEqual(a.persona.watches, { nearby: 'isNear(me, Player, 16)' });
 	});
 
 	it('keeps host pinnedWatches; LLM cannot edit or remove them', async () => {
@@ -221,65 +195,32 @@ describe('agent watches', () => {
 		assert.deepEqual(merged.persona.effectiveWatches(), ['isHurt(me)', 'some(others.approaching())', 'hasHeard']);
 	});
 
-	it('loads legacy string watches as watch_N and still merges host pins', () => {
-		const { cat } = hostAt(3);
-		const provider = new FakeProvider(() => ({
-			content: JSON.stringify({ steps: [{ verb: 'wait', seconds: 1 }] }),
-			toolCalls: [],
-		}));
-		const restored = restore({
-			id: 'Forager',
-			persona: {
-				identity: { role: 'Watch the glen.' },
-				goals: [],
-				memories: [],
-				watches: ['some(others.approaching())'],
-				pinnedWatches: ['isHurt(me)'],
-				maxGoals: 5,
-				maxEpisodic: 40,
-			},
-			tags: [],
-			liveArc: false,
-		}, {
-			provider,
-			...stockVerbs(),
-			...perception(),
-			context: () => ({}),
-			catalog: () => cat,
-			model: 'fake',
-			pinnedWatches: { hurt: 'isHurt(me)' },
-		});
-		assert.deepEqual(restored.persona.pinnedWatches, { hurt: 'isHurt(me)' });
-		assert.equal(Object.keys(restored.persona.watches).length, 1);
-		assert.equal(Object.values(restored.persona.watches)[0], 'some(others.approaching())');
-	});
-
 	it('isNear / nearby radius on/off enqueues; observe names only', () => {
 		const q = new PriorityThinkQueue({ processInterval: 0 });
-		q.ensure('G', { skipHeartbeat: true });
+		q.ensure('G', { rethinks: false });
 		q.drop('G');
-		q.setWatches('G', ['isNear(me, Player)']);
+		q.setWatches('G', { near: 'isNear(me, Player)' });
 		const at5 = hostAt(5);
 		let rows = q.tick(1, new Map([['G', at5.cat]]));
 		assert.ok(rows.length === 1);
-		q.ensure('G2', { skipHeartbeat: true });
+		q.ensure('G2', { rethinks: false });
 		q.drop('G2');
-		q.setWatches('G2', ['isNear(me, Player)']);
+		q.setWatches('G2', { near: 'isNear(me, Player)' });
 		const at12 = hostAt(12);
 		rows = q.tick(1, new Map([['G2', at12.cat]]));
 		assert.equal(rows.some((r) => r.mindID === 'G2'), false);
-		q.ensure('G3', { skipHeartbeat: true });
+		q.ensure('G3', { rethinks: false });
 		q.drop('G3');
-		q.setWatches('G3', ['isNear(me, Player, 16)']);
+		q.setWatches('G3', { near: 'isNear(me, Player, 16)' });
 		rows = q.tick(1, new Map([['G3', at12.cat]]));
 		assert.ok(rows.some((r) => r.mindID === 'G3'));
-		q.ensure('G4', { skipHeartbeat: true });
+		q.ensure('G4', { rethinks: false });
 		q.drop('G4');
-		q.setWatches('G4', ['events.filter("theft").nearby(16)']);
+		q.setWatches('G4', { near: 'events.filter("theft").nearby(16)' });
 		assert.equal(q.scoreWatches('G4', at12.cat) > 0, false);
-		q.ensure('G5', { skipHeartbeat: true });
+		q.ensure('G5', { rethinks: false });
 		q.drop('G5');
-		q.setWatches('G5', ['some(events.filter("theft").nearby(16))']);
+		q.setWatches('G5', { near: 'some(events.filter("theft").nearby(16))' });
 		assert.ok(q.scoreWatches('G5', at12.cat) > 0.05);
 		const text = observeExpr('events.filter("theft").nearby(16)', at5.cat, evaluate);
 		assert.equal(typeof text, 'string');
@@ -295,15 +236,15 @@ describe('agent watches', () => {
 	it('approaching chain enqueues only when in range and closing', () => {
 		const cache = new SampleCache();
 		const q = new PriorityThinkQueue({ processInterval: 0 });
-		q.ensure('G', { skipHeartbeat: true });
-		q.setWatches('G', ['some(events.filter("theft").nearby(16).approaching())']);
+		q.ensure('G', { rethinks: false });
+		q.setWatches('G', { near: 'some(events.filter("theft").nearby(16).approaching())' });
 		const first = hostAt(12, { cache });
 		q.scoreWatches('G', first.cat);
 		evaluate('distance(me, events.find("theft"))', first.cat);
 		cache.commit();
 		const closer = posed('Theft', { x: 6, z: 0, tags: ['theft'] });
 		const me = posed('Forager', { x: 0, z: 0, tags: ['character'] });
-		const host:HostKernels = {
+		const host:CatalogInputs = {
 			me,
 			others: [],
 			items: [],

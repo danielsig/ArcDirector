@@ -11,7 +11,7 @@ import { squareList } from '../../items/wares';
 import { coinsOf } from '../../items/wallet';
 import { idOf, findObject } from '../../director/names';
 import { takeSome } from '../../director/items';
-import { BODY_VERBS, GAME_VERBS, reportTheft, stealVerb } from '../../director/game-verbs';
+import { BODY_VERBS, GAME_VERBS, markThief } from '../../director/game-verbs';
 import { showSpeech } from '../../director/player-talk';
 import { answerCries, noteSecurityCry } from '../../director/alarm';
 import { Alarm } from '../../engine/components';
@@ -40,18 +40,12 @@ function stallOwner(host:GameHost, itemName:string):GameObject | undefined {
 	return owner;
 }
 
+/** Stall goods taken unpaid are stolen: the taker is wanted, and everyone hears of it. */
 function afterPickUp(host:GameHost, character:GameObject, name:string):void {
-	if (character.getComponent(MarketNPC)?.kind === 'guard') {
-		return;
+	const [who, owner] = [idOf(character), stallOwner(host, name)];
+	if (owner && who !== idOf(owner) && markThief(host, character, name, idOf(owner), 'took unpaid stall goods')) {
+		host.arc?.pushEvent({ kind: 'Theft', text: `${who} took unpaid stall goods: ${name} from ${idOf(owner)}`, tags: ['steal', name, who, idOf(owner)], major: true });
 	}
-	const owner = stallOwner(host, name);
-	if (!owner) {
-		return;
-	}
-	if (idOf(character) === idOf(owner)) {
-		return;
-	}
-	reportTheft(host, character, name, idOf(owner), 'took unpaid stall goods');
 }
 
 function despawn(host:GameHost, go:GameObject):void {
@@ -146,7 +140,7 @@ function addGateExits(host:GameHost):void {
 		return;
 	}
 	const thresholds:Record<string, RegionSpec<CharacterCtx>> = {};
-	host.world.forEachComponent(MarketGate, (_exit, gate) => {
+	host.world.forEachComponent(MarketGate, (exit, gate) => {
 		gated.add(host);
 		const { x, z } = gate.transform.position;
 		thresholds[`${idOf(gate)}Threshold`] = {
@@ -260,7 +254,8 @@ export function createDirector(host:GameHost):ArcDirector<CharacterCtx, GameObje
 	const hiveKit = { verbs: [...MARKET_VERBS, ...ORDERS, 'offer', 'steal'] };
 	const guardVoice = { verbs: [...MARKET_VERBS, ...ORDERS] };
 	const d = host.configure(new ArcDirector<CharacterCtx, GameObject>())
-		.withRPG({ ...BODY_VERBS, steal: stealVerb(host) })
+		.withRPG(BODY_VERBS)
+		.withStealing()
 		.withSight({ limit: 16 })
 		.withMind({ systemNote: LEDGER_NOTE })
 		.withVerbs((v) => v.add('stand', {
@@ -280,8 +275,8 @@ export function createDirector(host:GameHost):ArcDirector<CharacterCtx, GameObje
 			// One shopper per order. A filter such as units.filter("Shopper") would march the whole square.
 			maxUnitsPerCommand: 1,
 			identity: { role: 'Hive', traits: ['busy', 'fair', 'thrifty', 'watchful'] },
-			// They stroll on their own. The game's minds skip the heartbeat unless asked: this one thinks on it, about whom to send and what to offer.
-			mind: { skipStrategic: true, skipMajor: true, skipHeartbeat: false },
+			// They stroll on their own. It rethinks on the timer, about whom to send and what to offer.
+			mind: { skipStrategic: true, skipMajor: true },
 			goals: [{
 				text: 'Shoppers look around and buy what they came for when the price suits them, then leave by their own gate.',
 				priority: 2,
@@ -326,7 +321,7 @@ export function createDirector(host:GameHost):ArcDirector<CharacterCtx, GameObje
 		.addCollective({
 			id: 'Guards',
 			kit: guardVoice,
-			mind: { skipMajor: true, skipHeartbeat: true },
+			mind: { skipMajor: true },
 			identity: { role: 'Watch', traits: ['stern', 'alert'] },
 			goals: [{
 				text: 'Keep the market safe: thieves caught, cries answered, gates held.',
@@ -358,8 +353,8 @@ export function createDirector(host:GameHost):ArcDirector<CharacterCtx, GameObje
 		// One seller per order: each answers the offers made to them.
 		maxUnitsPerCommand: 1,
 		identity: { role: 'Hive', traits: ['shrewd', 'fair', 'proud of their wares'] },
-		// A posted price sells itself. The hive thinks when someone offers a seller something else, and that seller answers it.
-		mind: { skipHeartbeat: true, skipMajor: true, skipStrategic: true },
+		// A posted price sells itself. The hive thinks when someone offers a seller something else, and that seller answers it, or rethinks when idle.
+		mind: { skipMajor: true, skipStrategic: true },
 		pinnedWatches: { offer: 'some(events.filter("offer"))' },
 		goals: [
 			{ text: 'Every seller stays at their own post and never leaves it.', priority: 2 },

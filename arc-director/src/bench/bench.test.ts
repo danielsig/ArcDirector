@@ -3,6 +3,7 @@ import { describe, it } from 'node:test';
 import type { ArcDirector } from '../director/ArcDirector.js';
 import '../director/shortcuts.js';
 import { FakeProvider } from '../inference/fake.js';
+import { DEFAULT_SIGHT_RANGE } from '../perception/sight.js';
 import { chatContentText, type ChatRequest } from '../inference/provider.js';
 import type { SystemOne } from '../inference/system-one.js';
 import type { SceneCtx } from '../scenario/play.js';
@@ -101,7 +102,7 @@ describe('bench scoring', () => {
 
 	it('benches a System One per case in both orders, rated by the worse pick', async () => {
 		const asked:[string, Record<string, string>][] = [];
-		const first:SystemOne = { pick: async (state, _g, criteria) => {
+		const first:SystemOne = { pick: async (state, goal, criteria) => {
 			asked.push([state, criteria]);
 			return Object.keys(criteria)[0];
 		} };
@@ -292,7 +293,7 @@ describe('arc bench play', () => {
 				return 'wait(seconds=1)';
 			}));
 			const said = [c.goal, ...(c.heard ?? []).map((line) => line.text), ...(c.memories ?? []).map((m) => m.text), ...(c.know ?? []).map((k) => k.text)].join(' ');
-			const far = Object.entries({ ...c.others, ...c.things }).filter(([name, spot]) => spot.away > 24 && !said.includes(name));
+			const far = Object.entries({ ...c.others, ...c.things }).filter(([name, spot]) => spot.away > DEFAULT_SIGHT_RANGE.dim && !said.includes(name));
 			for (const [name] of far) {
 				assert.equal(prompt.includes(name), false, `${c.me.id}'s prompt names ${name}`);
 			}

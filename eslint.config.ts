@@ -34,7 +34,8 @@ const commonRules = {
 	// Units (Mb/MB, Ms/MS, …) are not acronyms — do not add them here.
 	"no-restricted-syntax": ["error",
 		{
-			selector: "Identifier[name=/[a-z]Id[A-Z]/], Identifier[name=/[a-z]Id$/]",
+			// The DOM's own names (`PointerEvent.pointerId`) keep the DOM's spelling.
+			selector: "Identifier[name=/[a-z]Id[A-Z]/], Identifier[name=/[a-z]Id$/]:not([name='pointerId'])",
 			message: "Never Id. Use ID (npcID, readID, findByID).",
 		},
 		{
@@ -150,9 +151,8 @@ const commonRules = {
 	// checked in no-restricted-syntax below: this rule counts arrow-function fields as methods.
 	"@typescript-eslint/naming-convention": ["error",
 		{ "selector": CLASS_MEMBERS, "modifiers": ["private"], "format": null, "leadingUnderscore": "allow", "trailingUnderscore": "forbid" },
+		{ "selector": "enumMember", "format": ["PascalCase"], "leadingUnderscore": "forbid", "trailingUnderscore": "forbid" },
 		{ "selector": "default", "format": null, "leadingUnderscore": "forbid", "trailingUnderscore": "forbid" },
-		// An unused parameter may say so: `(_a, b) => b`.
-		{ "selector": "parameter", "format": null, "leadingUnderscore": "allow", "trailingUnderscore": "forbid" },
 	],
 
 	// Stylistic

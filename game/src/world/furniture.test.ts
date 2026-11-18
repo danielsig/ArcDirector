@@ -1,7 +1,7 @@
 import { GameObject, resetTime, stepPhysics, Time, distanceXZ } from '@arc-director/kindling';
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { findRoute, pointGoal } from 'arc-director';
+import { findRoute, pointGoal, showNamingText } from 'arc-director';
 import { CharacterMotor } from '../characters/CharacterMotor';
 import { NPCInput } from '../characters/NPCInput';
 import { approachSpot, overWater, Seated } from '../characters/Seated';
@@ -14,7 +14,7 @@ import { RIVER_GLEN } from '../data/scenes';
 import { Belly } from '../engine/Belly';
 import { BoxCollider, Door, Furniture, HumanBody, Lock, Named, RigidBody, Vitals } from '../engine/components';
 import { DemoWorld } from '../engine/demo-world';
-import { Container } from '../items/item-components';
+import { Container, Item } from '../items/item-components';
 import { getDef } from '../items/defs';
 import { equipItem } from '../items/equip';
 import { instantiateDef } from '../items/instance';
@@ -63,7 +63,7 @@ function body(world:DemoWorld, id:string, x:number, z:number):GameObject {
 
 function seatNames(world:DemoWorld):string[] {
 	const names:string[] = [];
-	world.forEachComponent(Furniture, (_, go) => names.push(go.id));
+	world.forEachComponent(Furniture, (furniture, go) => names.push(go.id));
 	return names.sort();
 }
 
@@ -108,7 +108,31 @@ test('a locked door still says what it takes', () => {
 	const stranger = body(world, 'Stranger', 24.5, 9.5);
 	const route = findRoute(cellWays(world), stranger, [24.5, 9.5], pointGoal([25.5, 6.5]));
 	assert.ok(route && 'blockers' in route, `a way through a locked door: ${JSON.stringify(route)}`);
-	assert.match(route.blockers[0]!.reason, /CottageDoor is locked/);
+	assert.match(showNamingText(route.blockers[0]!.reason), /CottageDoor is locked/);
+});
+
+test('a route search past locked doors asks no one what anyone carries; the failure, shown, names who carries the key', () => {
+	const world = glen();
+	for (const go of [...world.objects]) {
+		if (go.getComponent(Item)?.defID === 'brass_key') {
+			world.remove(go);
+		}
+	}
+	world.findNamed('HutDoor')!.addComponent(Lock, { keyID: 'brass' });
+	const bram = body(world, 'Bram', 40.5, 12.5);
+	assert.equal(tryInsert(bram, instantiateDef(getDef('brass_key'))), true);
+	let asked = 0;
+	world.canSeeInventoryOf = () => {
+		asked++;
+		return true;
+	};
+	const stranger = body(world, 'Stranger', 24.5, 9.5);
+	const route = findRoute(cellWays(world), stranger, [24.5, 9.5], pointGoal([25.5, 6.5]));
+	assert.ok(route && 'blockers' in route, `a way through a locked door: ${JSON.stringify(route)}`);
+	assert.equal(asked, 0, 'the search only holds what it would say');
+	const aliases = (id:string):string => ({ CottageDoor: 'BlueDoor', BrassKey: 'ShinyKey', Bram: 'OldBram' })[id] ?? id;
+	assert.equal(showNamingText(route.blockers[0]!.reason, aliases), 'BlueDoor is locked — needs ShinyKey, carried by OldBram');
+	assert.equal(asked, 1, 'asked once it is shown');
 });
 
 test('a lock is a condition for opening, from the sides it bars, and nothing more', () => {
@@ -380,7 +404,7 @@ test('the Cottage has a shelf of five books, and taking one down leaves four', (
 	const bag = shelf.getComponent(Container)!;
 	assert.deepEqual(bag.contents.map((book) => book.name), ['Almanac', 'RiverTales', 'TollBook', 'MushroomLore', 'OldSongs']);
 	const go = body(world, 'Keeper', shelf.transform.position.x, shelf.transform.position.z + 1);
-	assert.match(takeFromChest(go, chestHolding(shelf, 'Almanac')!), /took Almanac/);
+	assert.match(showNamingText(takeFromChest(go, chestHolding(shelf, 'Almanac')!)), /took Almanac/);
 	assert.equal(bag.contents.length, 4);
 	assert.ok(findCarried(go, (it) => it.defID === 'almanac'));
 });
@@ -391,7 +415,7 @@ test('someone with a book open is reading until it walks off, the sitting ends, 
 	const reading = go.addComponent(Reading);
 	const book = instantiateDef(getDef('almanac'));
 	assert.equal(tryInsert(go, book), true);
-	assert.match(useItem(go, book, null).reason, /^you read: "/);
+	assert.match(showNamingText(useItem(go, book, null).reason), /^you read: "/);
 	assert.equal(reading.active, true);
 	assert.ok(tagsOf(go).includes('reading'), 'a watch can tell');
 	assert.ok(findCarried(go, (it) => it.defID === 'almanac'), 'reading does not use it up');
@@ -438,9 +462,9 @@ test('eating fills, takes one off the stack, and each food does its own thing', 
 		assert.equal(tryInsert(go, item), true);
 		const held = findCarried(go, (it) => it.defID === id)!;
 		const result = useItem(go, held, null);
-		assert.equal(result.ok, true, result.reason);
+		assert.equal(result.ok, true, showNamingText(result.reason));
 		assert.equal(findCarried(go, (it) => it.defID === id), null, `${id} still carried`);
-		return result.reason;
+		return showNamingText(result.reason);
 	};
 	assert.equal(go.getComponent(Belly), undefined, 'hungry only from a meal on, or from the spawn');
 	assert.match(feed('silver_trout'), /full/);
@@ -526,7 +550,7 @@ test('fishing brings a trout at even chances, and luck makes it likelier', () =>
 	const go = body(world, 'Angler', seat.transform.position.x, seat.transform.position.z);
 	const seated = go.getComponent(Seated)!;
 	const caught:string[] = [];
-	world.caught = (_, name) => caught.push(name);
+	world.caught = (character, name) => caught.push(name);
 	seated.settle(seat, { rod: true });
 	const realRandom = Math.random;
 	const bite = (roll:number):void => {

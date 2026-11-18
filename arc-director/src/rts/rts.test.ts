@@ -1,3 +1,4 @@
+import { showNamingText } from '../character/text-with-ids.js';
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { parseArc } from '../arc/wire.js';
@@ -9,6 +10,7 @@ import { evaluate } from '../expr/eval.js';
 import { buildCatalog } from '../expr/natives.js';
 import { SampleCache } from '../expr/expr-types.js';
 import type { HostWorld, Vec } from '../world/world-types.js';
+import { PAGE_AXES } from '../testing/open-world.js';
 import { distance } from '../world/vec.js';
 import { RTS_COMMANDER_VERBS } from './rts.js';
 import { STOCK_CITY_VERBS } from './rts-verbs.js';
@@ -55,8 +57,8 @@ class Game {
 	public readonly stored = new Map<string, Record<string, number>>();
 	public readonly hauling = new Map<string, [string, number]>();
 	public readonly techs:string[] = [];
-	private readonly steering = new Map<string, Vec | null>();
-	private spawned = 0;
+	private readonly _steering = new Map<string, Vec | null>();
+	private _spawned = 0;
 	public director!:ArcDirector<Ctx>;
 
 	public add(id:string, kind:string, point:Vec, owner?:string):this {
@@ -67,7 +69,7 @@ class Game {
 	}
 
 	public step(dt:number):void {
-		for (const [id, to] of this.steering) {
+		for (const [id, to] of this._steering) {
 			const point = this.point.get(id);
 			if (!to || !point || this.inside.has(id)) {
 				continue;
@@ -80,17 +82,22 @@ class Game {
 
 	public readonly world:HostWorld<string> = {
 		find: (id) => (this.point.has(id) ? id : undefined),
-		getPose: (id) => {
-			const point = this.point.get(id);
-			return point ? { point, facing: [0, 1], right: [1, 0] } : undefined;
+		geometry: {
+			axes: PAGE_AXES,
+			getPose: (id) => {
+				const point = this.point.get(id);
+				return point ? { point, facing: [0, 1] } : undefined;
+			},
+			getReach: () => 1.2,
 		},
-		getNeighbors: (point) => [[1, 0], [-1, 0], [0, 1], [0, -1]].map(([dx, dz]) => [Math.round(point[0]) + dx, Math.round(point[1]) + dz]),
-		steerToward: (character, to) => {
-			this.steering.set(character, to);
-			const point = this.point.get(character);
-			return !!(to && point && distance(point, to) < 0.05);
+		routes: {
+			getNeighbors: (point) => [[1, 0], [-1, 0], [0, 1], [0, -1]].map(([dx, dz]) => [Math.round(point[0]) + dx, Math.round(point[1]) + dz]),
+			steerToward: (character, to) => {
+				this._steering.set(character, to);
+				const point = this.point.get(character);
+				return !!(to && point && distance(point, to) < 0.05);
+			},
 		},
-		getReach: () => 1.2,
 	};
 
 	public readonly host:RTSHost = {
@@ -109,7 +116,7 @@ class Game {
 			if (!at) {
 				return { reason: `no room near ${near}` };
 			}
-			const id = `${kind}Site${++this.spawned}`;
+			const id = `${kind}Site${++this._spawned}`;
 			this.add(id, kind, exact ? [...exact] : [at[0] + 2, at[1]], this.what.get(builder)?.owner);
 			return id;
 		},
@@ -158,12 +165,12 @@ class Game {
 		},
 		holding: (building, good) => this.stored.get(building)?.[good] ?? 0,
 		spawn: (building, kind) => {
-			const id = `${kind}${++this.spawned}`;
+			const id = `${kind}${++this._spawned}`;
 			const at = this.point.get(building)!;
 			this.add(id, kind, [at[0], at[1] + 1], this.what.get(building)?.owner);
 			return id;
 		},
-		applyTech: (_side, tech) => {
+		applyTech: (side, tech) => {
 			this.techs.push(tech);
 		},
 		attack: (unit, target) => {
@@ -273,7 +280,7 @@ describe('stock RTS verbs', () => {
 		const director = await start(game, (g) => g.add('Hall2', 'TownCenter', [-6, 2], 'Red'));
 		const result = await enact(director, 'Chief', 'train(what=Worker, count=3)');
 		assert.equal(result.status === 'ok', true);
-		assert.match(result.reason ?? '', /^Worker ×(2 at Hall, Worker ×1 at Hall2|1 at Hall2, Worker ×2 at Hall|2 at Hall2, Worker ×1 at Hall|1 at Hall, Worker ×2 at Hall2)$/);
+		assert.match(showNamingText(result.reason ?? ''), /^Worker ×(2 at Hall, Worker ×1 at Hall2|1 at Hall2, Worker ×2 at Hall|2 at Hall2, Worker ×1 at Hall|1 at Hall, Worker ×2 at Hall2)$/);
 		assert.equal(game.stock.Red.Gold, 350);
 		await play(game, director, 3);
 		const workers = director.collective('Red')!.characters.filter((c) => c.tags.includes('Worker'));
@@ -285,10 +292,10 @@ describe('stock RTS verbs', () => {
 	it('says what is wrong: a building that cannot make it, nothing that makes it, too little to pay', async () => {
 		const game = new Game();
 		const director = await start(game);
-		assert.match((await enact(director, 'Chief', 'train(what=Worker, at=Yard)')).reason ?? '', /Yard can't make Worker; it makes Spearman, Forging/);
-		assert.match((await enact(director, 'Chief', 'train(what=Knight)')).reason ?? '', /nothing you own makes Knight; Stable does/);
+		assert.match(showNamingText((await enact(director, 'Chief', 'train(what=Worker, at=Yard)')).reason ?? ''), /Yard can't make Worker; it makes Spearman, Forging/);
+		assert.match(showNamingText((await enact(director, 'Chief', 'train(what=Knight)')).reason ?? ''), /nothing you own makes Knight; Stable does/);
 		game.stock.Red.Gold = 10;
-		assert.match((await enact(director, 'Chief', 'train(what=Worker)')).reason ?? '', /short 40 Gold/);
+		assert.match(showNamingText((await enact(director, 'Chief', 'train(what=Worker)')).reason ?? ''), /short 40 Gold/);
 		director.dispose();
 	});
 
@@ -297,7 +304,7 @@ describe('stock RTS verbs', () => {
 		const director = await start(game);
 		// The town center gives 5; two workers take 2.
 		const result = await enact(director, 'Chief', 'train(what=Worker, count=5)');
-		assert.match(result.reason ?? '', /waiting for supply/);
+		assert.match(showNamingText(result.reason ?? ''), /waiting for supply/);
 		await play(game, director, 8);
 		assert.equal(director.collective('Red')!.characters.filter((c) => c.tags.includes('Worker')).length, 5);
 		assert.match(director.getRTS()!.rosterStatus(director.collective('Red')!)!, /Supply: 5\/5 \(2 more queued\)/);
@@ -374,20 +381,20 @@ describe('stock RTS verbs', () => {
 		assert.equal(game.stock.Red.Wood, 500 - 6 * 5 - 20);
 		await play(game, director, 12);
 		assert.equal(pieces.some((c) => c.tags.includes('Unfinished')), false);
-		assert.match((await enact(director, 'Chief', 'wall(from=Hall, to=Ford, what=Barracks)')).reason ?? '', /Barracks is not a wall/);
+		assert.match(showNamingText((await enact(director, 'Chief', 'wall(from=Hall, to=Ford, what=Barracks)')).reason ?? ''), /Barracks is not a wall/);
 		game.stock.Red.Wood = 10;
-		assert.match((await enact(director, 'Chief', 'wall(from=Hall, to=Ford)')).reason ?? '', /short 25 Wood for a wall of 7/);
+		assert.match(showNamingText((await enact(director, 'Chief', 'wall(from=Hall, to=Ford)')).reason ?? ''), /short 25 Wood for a wall of 7/);
 		director.dispose();
 	});
 
 	it('waits to train at a barracks still being built, and needs one to start', async () => {
 		const game = new Game();
 		const director = await start(game, (g) => g.what.delete('Yard'));
-		assert.match((await enact(director, 'Chief', 'train(what=Spearman)')).reason ?? '', /nothing you own makes Spearman/);
+		assert.match(showNamingText((await enact(director, 'Chief', 'train(what=Spearman)')).reason ?? ''), /nothing you own makes Spearman/);
 		await enact(director, 'Chief', 'build(what=Barracks, near=Hall)');
 		const queued = await enact(director, 'Chief', 'train(what=Spearman, count=2)');
 		assert.equal(queued.status === 'ok', true);
-		assert.match(queued.reason ?? '', /waiting/);
+		assert.match(showNamingText(queued.reason ?? ''), /waiting/);
 		await play(game, director, 8);
 		assert.equal(director.collective('Red')!.characters.filter((c) => c.tags.includes('Spearman')).length, 2);
 		director.dispose();
@@ -397,10 +404,10 @@ describe('stock RTS verbs', () => {
 		const game = new Game();
 		const director = await start(game);
 		assert.equal((await enact(director, 'Chief', 'research(what=Forging)')).status === 'ok', true);
-		assert.match((await enact(director, 'Chief', 'research(what=Forging)')).reason ?? '', /already queued at Yard/);
+		assert.match(showNamingText((await enact(director, 'Chief', 'research(what=Forging)')).reason ?? ''), /already queued at Yard/);
 		await play(game, director, 2);
 		assert.deepEqual(game.techs, ['Forging']);
-		assert.match((await enact(director, 'Chief', 'research(what=Forging)')).reason ?? '', /already researched/);
+		assert.match(showNamingText((await enact(director, 'Chief', 'research(what=Forging)')).reason ?? ''), /already researched/);
 		await enact(director, 'Chief', 'train(what=Worker, count=2)');
 		const gold = game.stock.Red.Gold;
 		assert.equal((await enact(director, 'Chief', 'cancel(what=Worker)')).status === 'ok', true);
@@ -413,7 +420,7 @@ describe('stock RTS verbs', () => {
 		const asked:string[] = [];
 		const director = await start(game, undefined, (d) => d
 			.withPriorityThinkQueue({ processInterval: 0 })
-			.withMind({ skipHeartbeat: true, skipStart: true })
+			.withMind({ rethinkingThreshold: 0, skipStart: true })
 			.addFake({ chat: (req) => {
 				asked.push(req.thread ?? '');
 				return { content: JSON.stringify({ steps: [{ verb: 'wait' }] }), toolCalls: [] };
@@ -453,17 +460,17 @@ describe('stock RTS verbs', () => {
 	it('sends tribute to allies only', async () => {
 		const game = new Game();
 		const director = await start(game, (g) => g.add('Goldie', 'Commander', [9, 9], 'Gold').add('Bluey', 'Commander', [9, -9], 'Blue'));
-		assert.match((await enact(director, 'Chief', 'tribute(to=Bluey, give={"Gold":10})')).reason ?? '', /not your ally/);
+		assert.match(showNamingText((await enact(director, 'Chief', 'tribute(to=Bluey, give={"Gold":10})')).reason ?? ''), /not your ally/);
 		assert.equal((await enact(director, 'Chief', 'tribute(to=Goldie, give={"Gold":100})')).status === 'ok', true);
 		assert.equal(game.stock.Gold.Gold, 100);
-		assert.match((await enact(director, 'Chief', 'tribute(to=Goldie, give={"Gold":1000})')).reason ?? '', /you have 400 Gold/);
+		assert.match(showNamingText((await enact(director, 'Chief', 'tribute(to=Goldie, give={"Gold":1000})')).reason ?? ''), /you have 400 Gold/);
 		director.dispose();
 	});
 
 	it('refuses an ally\'s units in by and at', async () => {
 		const game = new Game();
 		const director = await start(game);
-		assert.match((await enact(director, 'Chief', 'gather(from=Gold, by=Hall)')).reason ?? '', /not a worker: Hall/);
+		assert.match(showNamingText((await enact(director, 'Chief', 'gather(from=Gold, by=Hall)')).reason ?? ''), /not a worker: Hall/);
 		director.dispose();
 	});
 
@@ -484,7 +491,7 @@ describe('fighting and hauling verbs', () => {
 		await play(game, director, 2);
 		const spear = director.collective('Red')!.characters.find((c) => c.tags.includes('Spearman'))!;
 		const [went] = await Promise.all([enact(director, spear.id, 'attack_move(to=Ford)'), play(game, director, 12)]);
-		assert.equal(went.status === 'ok', true, went.reason);
+		assert.equal(went.status === 'ok', true, showNamingText(went.reason ?? ''));
 		assert.equal(game.point.has('Reaver'), false);
 		assert.ok(distance(game.point.get(spear.id)!, [5, 9]) < 2);
 		director.dispose();
@@ -527,7 +534,7 @@ describe('fighting and hauling verbs', () => {
 		assert.equal((await enact(director, 'Chief', 'staff(at=Yard)')).status === 'ok', true);
 		await play(game, director, 2);
 		assert.match(director.getRTS()!.rosterStatus(director.collective('Red')!)!, /Worker ×2 \(2 working at Yard\)/);
-		assert.match((await enact(director, 'Chief', 'staff(at=Yard)')).reason ?? '', /no free jobs \(2\/2\)/);
+		assert.match(showNamingText((await enact(director, 'Chief', 'staff(at=Yard)')).reason ?? ''), /no free jobs \(2\/2\)/);
 		await enact(director, 'Chief', 'staff(at=Yard, workers=0)');
 		await play(game, director, 1);
 		assert.match(director.getRTS()!.rosterStatus(director.collective('Red')!)!, /Worker ×2 \(2 idle\)/);
@@ -539,7 +546,7 @@ describe('fighting and hauling verbs', () => {
 		const director = await start(game, (g) => g.add('Granary1', 'Granary', [-4, 2], 'Red'));
 		game.stored.set('Hall', { Grain: 12 });
 		const [hauled] = await Promise.all([enact(director, 'Brann', 'haul(what=Grain, from=Hall, to=Granary1, keep=6)'), play(game, director, 20)]);
-		assert.equal(hauled.status === 'ok', true, hauled.reason);
+		assert.equal(hauled.status === 'ok', true, showNamingText(hauled.reason ?? ''));
 		assert.ok((game.stored.get('Granary1')?.Grain ?? 0) >= 6);
 		director.dispose();
 	});
@@ -572,7 +579,7 @@ describe('stock tactics, as alias verbs', () => {
 		const game = new Game();
 		const director = await start(game, (g) => g.add('Brute', 'Raider', [3, 2], 'Blue'));
 		const set = await enact(director, 'Chief', 'law(name=away, arc=keep_distance(from=others.filter("Raider"), keep=3), who=Brann)');
-		assert.equal(set.status === 'ok', true, set.reason);
+		assert.equal(set.status === 'ok', true, showNamingText(set.reason ?? ''));
 		await play(game, director, 3);
 		assert.ok(distance(game.point.get('Brann')!, game.point.get('Brute')!) >= 3);
 		director.dispose();
@@ -604,7 +611,7 @@ describe('stock tactics, as alias verbs', () => {
 		const game = new Game();
 		const director = await start(game, (g) => g.add('Brute', 'Raider', [8, 2], 'Blue'));
 		const set = await enact(director, 'Chief', 'law(name=away, arc=keep_distance(from=others.filter("Raider"), keep=3), who=Brann)');
-		assert.equal(set.status === 'ok', true, set.reason);
+		assert.equal(set.status === 'ok', true, showNamingText(set.reason ?? ''));
 		void enact(director, 'Brann', 'hold()');
 		// The Brute walks up to Brann while it holds; each tick is longer than hold's waits, so one ends every tick.
 		for (let i = 0; i < 16; i++) {
@@ -623,7 +630,7 @@ describe('stock tactics, as alias verbs', () => {
 		const game = new Game();
 		const director = await start(game);
 		const set = await enact(director, 'Chief', 'law(name=workers, arc=keep_training(what=Worker, to=4))');
-		assert.equal(set.status === 'ok', true, set.reason);
+		assert.equal(set.status === 'ok', true, showNamingText(set.reason ?? ''));
 		await play(game, director, 6);
 		assert.equal(director.collective('Red')!.characters.filter((c) => c.tags.includes('Worker')).length, 4);
 		director.dispose();
@@ -655,9 +662,9 @@ describe('stock tactics, as alias verbs', () => {
 		assert.match(verbs.get('keep_distance')!.help ?? '', /as a law: whenever one is nearer than keep/);
 		assert.equal(verbs.get('law')!.args.watch?.kind, 'watch?');
 		const [ran] = await Promise.all([enact(director, 'Brann', 'keep_distance(keep=4)'), play(game, director, 12)]);
-		assert.equal(ran.status === 'ok', true, ran.reason);
+		assert.equal(ran.status === 'ok', true, showNamingText(ran.reason ?? ''));
 		assert.ok(distance(game.point.get('Brann')!, game.point.get('Brute')!) > 2);
-		assert.match((await enact(director, 'Chief', 'law(name=x, arc=wait())')).reason ?? '', /law needs watch and arc/);
+		assert.match(showNamingText((await enact(director, 'Chief', 'law(name=x, arc=wait())')).reason ?? ''), /law needs watch and arc/);
 		director.dispose();
 	});
 
@@ -671,7 +678,7 @@ describe('stock tactics, as alias verbs', () => {
 		assert.equal(director.character('Brann')!.verb, 'mine_at');
 		assert.match(director.getRTS()!.rosterStatus(director.collective('Red')!)!, /1 gathering Gold/);
 		void ran;
-		assert.match((await enact(director, 'Brann', 'mine_at()')).reason ?? '', /mine_at needs node/);
+		assert.match(showNamingText((await enact(director, 'Brann', 'mine_at()')).reason ?? ''), /mine_at needs node/);
 		director.dispose();
 	});
 
@@ -700,7 +707,7 @@ describe('stock tactics, as alias verbs', () => {
 		const director = await start(named);
 		assert.match(director.getRTS()!.rosterStatus(director.collective('Red')!)!, /^Energy: 2\/5$/m);
 		const [seen] = await Promise.all([enact(director, 'Chief', 'wait(until=energy == 2 && energyCap == 5, seconds=1)'), play(named, director, 1)]);
-		assert.equal(seen.status === 'ok', true, seen.reason);
+		assert.equal(seen.status === 'ok', true, showNamingText(seen.reason ?? ''));
 		director.dispose();
 		const free = new Game();
 		free.host.kinds = Object.fromEntries(Object.entries(free.host.kinds).map(([kind, spec]) => [kind, { ...spec, provides: 0 }]));
@@ -716,7 +723,7 @@ describe('stock tactics, as alias verbs', () => {
 		await enact(director, 'Chief', 'gather(from=Gold, by=Brann)');
 		await play(game, director, 1);
 		const moved = await enact(director, 'Chief', 'command(who=units.filter(u => doing(u, "gathering Gold")), arc=go_to(Hall))');
-		assert.equal(moved.status === 'ok', true, moved.reason);
+		assert.equal(moved.status === 'ok', true, showNamingText(moved.reason ?? ''));
 		assert.equal(director.character('Brann')!.verb, 'go_to');
 		assert.notEqual(director.character('Cole')!.verb, 'go_to', 'only the one gathering');
 		director.dispose();
@@ -727,7 +734,7 @@ describe('stock tactics, as alias verbs', () => {
 		const director = await start(game);
 		await enact(director, 'Chief', 'gather(from=Gold, workers=1)');
 		const [seen] = await Promise.all([enact(director, 'Chief', 'wait(until=supply == 2 && supplyCap == 5 && stock.Wood == 500 && gathering.Gold == 1, seconds=1)'), play(game, director, 1)]);
-		assert.equal(seen.status === 'ok', true, seen.reason);
+		assert.equal(seen.status === 'ok', true, showNamingText(seen.reason ?? ''));
 		director.dispose();
 	});
 });

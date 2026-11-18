@@ -1,15 +1,18 @@
-import { GameObject, type XZ } from '@arc-director/kindling';
+import { GameObject, stepPhysics, type XZ } from '@arc-director/kindling';
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { findRoute, pointGoal, type Vec } from 'arc-director';
 import { DemoWorld } from '../engine/demo-world';
-import { BoxCollider } from '../engine/components';
+import { BoxCollider, Door, Lock, RigidBody } from '../engine/components';
+import { CharacterMotor } from '../characters/CharacterMotor';
+import { NPCInput } from '../characters/NPCInput';
 import { glen_0_0 } from '../data/chunks/glen-0-0';
 import { glen_0_1 } from '../data/chunks/glen-0-1';
 import { glen_1_0 } from '../data/chunks/glen-1-0';
 import { glen_1_1 } from '../data/chunks/glen-1-1';
 import { market_1_0 } from '../data/chunks/market-1-0';
 import { RUINS_CHUNKS } from '../scenes/ruins/ruins-map';
+import { DUNGEON_CHUNKS } from '../scenes/dungeon-vault/dungeon-vault-map';
 import { USE_RANGE } from '../items/pickup';
 import { decodeGlyphChunk } from './decode-glyph-chunk';
 import { spawnChunkEntities } from './spawn';
@@ -54,17 +57,17 @@ test('off the middle of a cell, a route does not leave through what stands in th
 	const angler = new GameObject('Angler', 'Person');
 	angler.addComponent(BoxCollider, { size: { x: 0.45, y: 1.1, z: 0.45 }, pad: 0.36 });
 	const ways = cellWays(world);
-	const at = (x:number, z:number) => ways.getNearby([x, z]).at;
+	const at = (x:number, z:number) => ways.createAt([x, z]);
 	// Stood up to the east of the glen's chair, which fills the middle of cell (27.5, 24.5).
 	const stood = at(27.95, 24.5);
-	assert.equal(ways.canTraverse(angler, stood, at(26.5, 24.5)), undefined, 'a step west through the chair');
-	assert.ok(ways.canTraverse(angler, stood, at(28.5, 23.5)), 'no step away from the chair');
+	assert.equal(ways.getPassage(angler, stood, at(26.5, 24.5)), undefined, 'a step west through the chair');
+	assert.ok(ways.getPassage(angler, stood, at(28.5, 23.5)), 'no step away from the chair');
 	const route = findRoute(ways, angler, stood, pointGoal([20.5, 24.5]));
 	const first = route && 'points' in route ? route.points[0] : undefined;
 	assert.ok(first, 'no way west around the chair');
 	assert.notDeepEqual([first[0], first[1]], [26.5, 24.5]);
 	// What it stands in does not hold it: from the chair's own middle it can still step away.
-	const away = ways.canTraverse(angler, at(27.5, 24.5), at(27.5, 23.5));
+	const away = ways.getPassage(angler, at(27.5, 24.5), at(27.5, 23.5));
 	assert.ok(away && !away.blocked, 'no step off the chair');
 });
 
@@ -75,15 +78,15 @@ test('a stair is stepped on and off only along its climb, not from the side', ()
 	const ways = cellWays(world);
 	const walker = new GameObject('Walker', 'Person');
 	// The shop steps: a row of stair cells, the raised floor south of them, open ground north and east.
-	const at = (p:XZ) => ways.getNearby([p.x, p.z]).at;
+	const at = (p:XZ) => ways.createAt([p.x, p.z]);
 	const stair = at(chunk.worldCellCenter(2, 6));
 	const beside = at(chunk.worldCellCenter(3, 6));
 	const foot = at(chunk.worldCellCenter(2, 5));
 	const landing = at(chunk.worldCellCenter(2, 7));
-	assert.equal(ways.canTraverse(walker, beside, stair), undefined);
-	assert.equal(ways.canTraverse(walker, stair, beside), undefined);
-	assert.ok(ways.canTraverse(walker, foot, stair));
-	assert.ok(ways.canTraverse(walker, landing, stair));
+	assert.equal(ways.getPassage(walker, beside, stair), undefined);
+	assert.equal(ways.getPassage(walker, stair, beside), undefined);
+	assert.ok(ways.getPassage(walker, foot, stair));
+	assert.ok(ways.getPassage(walker, landing, stair));
 	const up = findRoute(ways, walker, foot, pointGoal(landing));
 	assert.ok(up && 'points' in up, 'no way up the stairs from the foot');
 });
@@ -104,4 +107,48 @@ test('a walk along a wall and past its corner is clear, one through the wall is 
 	assert.ok(walkClear(world, walker, { x: 24.5, z: 7.5 }, { x: 33.5, z: 7.5 }), 'stopped walking along the wall');
 	assert.ok(walkClear(world, walker, { x: 26.5, z: 9.5 }, { x: 25.5, z: 6.5 }), 'stopped walking past its corner');
 	assert.equal(walkClear(world, walker, { x: 25.5, z: 9.5 }, { x: 28.5, z: 9.5 }), false, 'walked through the wall');
+});
+
+test('a walker gets past an open door\'s leaf instead of pressing against it', () => {
+	const world = new DemoWorld();
+	for (const file of DUNGEON_CHUNKS) {
+		const chunk = decodeGlyphChunk(file).chunk;
+		spawnChunkEntities(world, chunk);
+		world.addChunk(chunk);
+	}
+	const doorGo = world.findNamed('SealedDoor')!;
+	const door = doorGo.getComponent(Door)!;
+	doorGo.getComponent(Lock)!.locked = false;
+	door.open = true;
+	door.syncCollision();
+	// From the PillaredHall, north of the open leaf that sticks half a meter into it, east to the far side.
+	const walker = new GameObject('Walker', 'Person');
+	walker.transform.localPosition = { x: 19.5, y: 0, z: 17.5 };
+	const npc = walker.addComponent(NPCInput);
+	const motor = walker.addComponent(CharacterMotor);
+	walker.addComponent(RigidBody, { kinematic: true });
+	walker.addComponent(BoxCollider, { size: { x: 0.45, y: 1.1, z: 0.45 }, pad: 0.36 });
+	world.add(walker);
+	world.reindex();
+	const ways = cellWays(world);
+	assert.equal(ways.getPassage(walker, ways.createAt([19.5, 17.5]), ways.createAt([19.5, 18.5])), undefined, 'the leaf is a door to open');
+	const goal:Vec = [32.5, 16.5];
+	const route = findRoute(ways, walker, [19.5, 17.5], pointGoal(goal, 1));
+	assert.ok(route && 'points' in route, 'no way past the open door');
+	const dt = 1 / 60;
+	let i = 0;
+	for (let t = 0; t < 10 && i < route.points.length; t += dt) {
+		const q = route.points[i];
+		const at = walker.transform.position;
+		npc.destinationPoint = { x: q[0], z: q[1] };
+		if (Math.hypot(at.x - q[0], at.z - q[1]) <= motor.arriveEpsilon) {
+			i++;
+			continue;
+		}
+		motor.update(dt);
+		stepPhysics(world, dt);
+		world.reindex();
+	}
+	const at = walker.transform.position;
+	assert.ok(Math.hypot(at.x - goal[0], at.z - goal[1]) <= 1.5, `stuck at ${at.x.toFixed(2)}, ${at.z.toFixed(2)}`);
 });

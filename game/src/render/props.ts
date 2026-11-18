@@ -365,7 +365,7 @@ const LEG_Z = -0.3;
 const barrowLeg = box(0.045, UNDER_TUB, 0.045);
 
 function wheelbarrow():PropPart[] {
-	const spokes = Array.from({ length: 6 }, (_, i) => at('barrow-spoke', wheelSpoke, woodDark, 0, WHEEL_R, 0.62, (i / 6) * Math.PI * 2));
+	const spokes = Array.from({ length: 6 }, (element, i) => at('barrow-spoke', wheelSpoke, woodDark, 0, WHEEL_R, 0.62, (i / 6) * Math.PI * 2));
 	return [
 		at('barrow-tub', barrowTub, barrowTubMat),
 		at('barrow-rim', wheelRim, iron, 0, WHEEL_R, 0.62),

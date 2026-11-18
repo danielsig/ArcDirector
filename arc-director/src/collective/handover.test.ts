@@ -17,7 +17,7 @@ const KIT = { verbs: [...STOCK_VERBS, ...STOCK_COLLECTIVE_VERBS] };
 async function stage(reply:(req:ChatRequest)=>string = () => '{}') {
 	const calls:ChatRequest[] = [];
 	const director = await new ArcDirector<Ctx>()
-		.withPriorityThinkQueue({ processInterval: 0, heartbeatStart: 100, heartbeatMin: 100 })
+		.withPriorityThinkQueue({ processInterval: 0, rethinkInterval: 100 })
 		.withIntervals({ watch: 0, think: 0 })
 		.addFake({ chat: (req) => {
 			if (req.thread !== HANDOVER_THREAD) {
@@ -35,7 +35,7 @@ async function stage(reply:(req:ChatRequest)=>string = () => '{}') {
 		.onVerb(({ verb }) => ({ status: 'ok', verb }))
 		.addCollective({
 			id: 'DawnParty',
-			mind: { skipHeartbeat: true, skipMajor: true },
+			mind: { rethinkingThreshold: 0, skipMajor: true },
 			kit: KIT,
 			identity: { role: 'Holds the bridge.' },
 			memories: [
@@ -43,14 +43,14 @@ async function stage(reply:(req:ChatRequest)=>string = () => '{}') {
 				{ text: 'We hold the bridge.', tags: ['backstory', 'bridge'], pinned: true },
 			],
 			characters: [
-				{ id: 'Tom', mind: { skipHeartbeat: true, skipMajor: true }, identity: { role: 'Scout' }, memories: [{ text: 'The east road is clear.' }] },
-				{ id: 'Ann', mind: { skipHeartbeat: true, skipMajor: true }, identity: { traits: ['loud'] } },
+				{ id: 'Tom', mind: { rethinkingThreshold: 0, skipMajor: true }, identity: { role: 'Scout' }, memories: [{ text: 'The east road is clear.' }] },
+				{ id: 'Ann', mind: { rethinkingThreshold: 0, skipMajor: true }, identity: { traits: ['loud'] } },
 				{ id: 'Bob' },
 			],
 		})
 		.addCollective({
 			id: 'DuskParty',
-			mind: { skipHeartbeat: true, skipMajor: true },
+			mind: { rethinkingThreshold: 0, skipMajor: true },
 			kit: KIT,
 			identity: { role: 'Takes the bridge.' },
 		})
@@ -91,6 +91,17 @@ describe('memory handover', () => {
 		assert.equal(calls.length, 1);
 		const moves = userText(calls[0]).split('\n\n')[0];
 		assert.equal(moves, 'Moves:\n- Tom moved from DawnParty to DuskParty.');
+		director.dispose();
+	});
+
+	it('keeps the ids the model was shown, never whom a name it happens to share stands for', async () => {
+		const { director, dusk, of, tick } = await stage(() => JSON.stringify({ DuskParty: { add: ['Tom joined us from DawnParty.'] } }));
+		// DuskParty calls Ann "Tom": the reply means Tom by id, as it was shown.
+		dusk.persona.names.name('Ann', 'Tom', { character: true });
+		of('Tom').collective = dusk;
+		await tick();
+		const added = dusk.persona.memory.all().find((m) => m.text.includes('joined'));
+		assert.deepEqual(added?.segments(), [{ text: 'Tom', id: 'Tom' }, { text: ' joined us from ' }, { text: 'DawnParty', id: 'DawnParty' }, { text: '.' }]);
 		director.dispose();
 	});
 

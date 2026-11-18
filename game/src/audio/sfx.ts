@@ -11,7 +11,7 @@ function seeded(seed:number):()=>number {
 
 /** Tiny crackles of bent and snapping blades between `from` and `to` seconds: dense early, thinning out, quieter as they go. */
 function crackles(rand:()=>number, count:number, from:number, to:number, loud:number):SfxLayer[] {
-	return Array.from({ length: count }, (_, i) => {
+	return Array.from({ length: count }, (element, i) => {
 		const t = i / count;
 		const snap = rand() < 0.2;
 		return {
@@ -45,7 +45,7 @@ function grassStep(seed:number):SfxPatch {
 	};
 }
 
-const GRASS_TAKES = Array.from({ length: 6 }, (_, i) => grassStep(i));
+const GRASS_TAKES = Array.from({ length: 6 }, (element, i) => grassStep(i));
 
 /** Sound effects by name. A list holds several takes of one sound; `cueAt` picks one each time. */
 export const SFX = {

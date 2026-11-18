@@ -1,10 +1,11 @@
 import { Time } from '@arc-director/kindling';
-import { formatArc, parseArc, type ArcResult } from 'arc-director';
-import type { AiLogQuery, CastRows, Command, ReconnectResult } from '@arc-director/control';
+import { formatArc, parseArc, showNamingText, type ArcResult } from 'arc-director';
+import { filterAiLog, type AiLogQuery, type AiLogRow, type CastRows, type Command, type ReconnectResult } from '@arc-director/control';
 import type { Session } from '../engine/Session';
 import { coercePrefsPatch, prefs, setPrefs } from '../prefs';
 import { PlayerPilot } from '../characters/PlayerPilot';
 import { findObject } from '../director/names';
+import { aiLogRow } from '../director/ai-log-sink';
 import { CameraFocus } from '../engine/CameraFocus';
 
 export async function dispatchControl(session:Session, command:Command):Promise<unknown> {
@@ -76,7 +77,7 @@ function listCharacters(session:Session):CastRows {
 				tags: tags.length > 0 ? tags : undefined,
 				arc: character.arc ? formatArc(character.arc) : undefined,
 				verb: character.verb || undefined,
-				last: last ? `${last.verb ?? ''} ${last.status === 'ok' ? 'ok' : 'failed'}${last.reason ? `: ${last.reason}` : ''}` : undefined,
+				last: last ? `${last.verb ?? ''} ${last.status === 'ok' ? 'ok' : 'failed'}${last.reason ? `: ${showNamingText(last.reason)}` : ''}` : undefined,
 				at: pos ? [Math.round(pos.x * 10) / 10, Math.round(pos.z * 10) / 10] : undefined,
 			};
 		}),
@@ -102,10 +103,10 @@ async function runVerb(session:Session, id:string, text:string):Promise<ArcResul
 	return resultRow(await character.enact(parseArc(text, character.verbs)));
 }
 
-type ArcResultRow = Pick<ArcResult, 'status' | 'verb' | 'reason'>;
+type ArcResultRow = Pick<ArcResult, 'status' | 'verb'> & { reason?:string };
 
 function resultRow(result:ArcResult):ArcResultRow {
-	return { status: result.status, verb: result.verb, reason: result.reason };
+	return { status: result.status, verb: result.verb, reason: result.reason && showNamingText(result.reason) };
 }
 
 /** Move a character into a collective, or out of one: what it is in, and who thinks for it, after. */
@@ -148,23 +149,5 @@ async function think(
 }
 
 function logEntries(session:Session, query:AiLogQuery):AiLogRow[] {
-	const re = query.pattern ? new RegExp(query.pattern) : null;
-	const after = query.after ?? -Infinity;
-	const rows = session.director.log.filter((entry) => entry.seq > after
-		&& (!query.name || entry.name === query.name)
-		&& (!re || re.test(entry.name) || re.test(entry.message)));
-	const kept = query.limit !== undefined && query.limit > 0 ? rows.slice(-query.limit) : rows;
-	return kept.map((entry) => ({
-		seq: entry.seq,
-		name: entry.name,
-		message: entry.message,
-		image: !!entry.image,
-	}));
+	return filterAiLog(session.director.log.map(aiLogRow), query);
 }
-
-type AiLogRow = {
-	seq:number;
-	name:string;
-	message:string;
-	image:boolean;
-};

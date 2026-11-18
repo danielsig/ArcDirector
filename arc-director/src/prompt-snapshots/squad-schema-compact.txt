@@ -114,13 +114,11 @@ responseFormat: {
 										"within": {
 											"type": "number"
 										},
+										"while": {
+											"$ref": "#/$defs/arc"
+										},
 										"then": {
-											"type": "string",
-											"enum": [
-												"if_ok",
-												"always",
-												"if_failed"
-											]
+											"$ref": "#/$defs/then"
 										}
 									}
 								},
@@ -134,11 +132,60 @@ responseFormat: {
 			}
 		],
 		"$defs": {
+			"then": {
+				"type": "string",
+				"enum": [
+					"if_ok",
+					"always",
+					"if_failed"
+				]
+			},
 			"arc": {
 				"type": "array",
 				"minItems": 1,
 				"items": {
 					"$ref": "#/$defs/step"
+				}
+			},
+			"arc_think": {
+				"type": "array",
+				"minItems": 1,
+				"items": {
+					"anyOf": [
+						{
+							"$ref": "#/$defs/step"
+						},
+						{
+							"type": "object",
+							"additionalProperties": false,
+							"required": [
+								"verb"
+							],
+							"properties": {
+								"let": {
+									"type": "string"
+								},
+								"verb": {
+									"const": "think"
+								},
+								"about": {
+									"type": "string"
+								},
+								"until": {
+									"type": "string"
+								},
+								"within": {
+									"type": "number"
+								},
+								"while": {
+									"$ref": "#/$defs/arc"
+								},
+								"then": {
+									"$ref": "#/$defs/then"
+								}
+							}
+						}
+					]
 				}
 			},
 			"step": {
@@ -166,13 +213,11 @@ responseFormat: {
 							"within": {
 								"type": "number"
 							},
+							"while": {
+								"$ref": "#/$defs/arc"
+							},
 							"then": {
-								"type": "string",
-								"enum": [
-									"if_ok",
-									"always",
-									"if_failed"
-								]
+								"$ref": "#/$defs/then"
 							}
 						}
 					},
@@ -199,13 +244,11 @@ responseFormat: {
 							"within": {
 								"type": "number"
 							},
+							"while": {
+								"$ref": "#/$defs/arc"
+							},
 							"then": {
-								"type": "string",
-								"enum": [
-									"if_ok",
-									"always",
-									"if_failed"
-								]
+								"$ref": "#/$defs/then"
 							}
 						}
 					},
@@ -235,16 +278,14 @@ responseFormat: {
 							"within": {
 								"type": "number"
 							},
+							"while": {
+								"$ref": "#/$defs/arc"
+							},
 							"unbreakable": {
 								"type": "string"
 							},
 							"then": {
-								"type": "string",
-								"enum": [
-									"if_ok",
-									"always",
-									"if_failed"
-								]
+								"$ref": "#/$defs/then"
 							}
 						}
 					},
@@ -274,13 +315,11 @@ responseFormat: {
 							"within": {
 								"type": "number"
 							},
+							"while": {
+								"$ref": "#/$defs/arc"
+							},
 							"then": {
-								"type": "string",
-								"enum": [
-									"if_ok",
-									"always",
-									"if_failed"
-								]
+								"$ref": "#/$defs/then"
 							}
 						}
 					},
@@ -306,13 +345,11 @@ responseFormat: {
 							"within": {
 								"type": "number"
 							},
+							"while": {
+								"$ref": "#/$defs/arc"
+							},
 							"then": {
-								"type": "string",
-								"enum": [
-									"if_ok",
-									"always",
-									"if_failed"
-								]
+								"$ref": "#/$defs/then"
 							}
 						}
 					},
@@ -342,13 +379,11 @@ responseFormat: {
 							"within": {
 								"type": "number"
 							},
+							"while": {
+								"$ref": "#/$defs/arc"
+							},
 							"then": {
-								"type": "string",
-								"enum": [
-									"if_ok",
-									"always",
-									"if_failed"
-								]
+								"$ref": "#/$defs/then"
 							}
 						}
 					},
@@ -378,13 +413,11 @@ responseFormat: {
 							"within": {
 								"type": "number"
 							},
+							"while": {
+								"$ref": "#/$defs/arc"
+							},
 							"then": {
-								"type": "string",
-								"enum": [
-									"if_ok",
-									"always",
-									"if_failed"
-								]
+								"$ref": "#/$defs/then"
 							}
 						}
 					},
@@ -414,13 +447,11 @@ responseFormat: {
 							"within": {
 								"type": "number"
 							},
+							"while": {
+								"$ref": "#/$defs/arc"
+							},
 							"then": {
-								"type": "string",
-								"enum": [
-									"if_ok",
-									"always",
-									"if_failed"
-								]
+								"$ref": "#/$defs/then"
 							}
 						}
 					},
@@ -454,13 +485,11 @@ responseFormat: {
 							"within": {
 								"type": "number"
 							},
+							"while": {
+								"$ref": "#/$defs/arc"
+							},
 							"then": {
-								"type": "string",
-								"enum": [
-									"if_ok",
-									"always",
-									"if_failed"
-								]
+								"$ref": "#/$defs/then"
 							}
 						}
 					},
@@ -487,13 +516,11 @@ responseFormat: {
 							"within": {
 								"type": "number"
 							},
+							"while": {
+								"$ref": "#/$defs/arc"
+							},
 							"then": {
-								"type": "string",
-								"enum": [
-									"if_ok",
-									"always",
-									"if_failed"
-								]
+								"$ref": "#/$defs/then"
 							}
 						}
 					},
@@ -517,19 +544,29 @@ responseFormat: {
 							"to": {
 								"type": "string"
 							},
+							"as": {
+								"type": "string",
+								"enum": [
+									"whisper",
+									"sing",
+									"laugh",
+									"sob",
+									"sigh",
+									"scream",
+									"shout"
+								]
+							},
 							"until": {
 								"type": "string"
 							},
 							"within": {
 								"type": "number"
 							},
+							"while": {
+								"$ref": "#/$defs/arc"
+							},
 							"then": {
-								"type": "string",
-								"enum": [
-									"if_ok",
-									"always",
-									"if_failed"
-								]
+								"$ref": "#/$defs/then"
 							}
 						}
 					},
@@ -556,13 +593,11 @@ responseFormat: {
 							"within": {
 								"type": "number"
 							},
+							"while": {
+								"$ref": "#/$defs/arc"
+							},
 							"then": {
-								"type": "string",
-								"enum": [
-									"if_ok",
-									"always",
-									"if_failed"
-								]
+								"$ref": "#/$defs/then"
 							}
 						}
 					},
@@ -585,13 +620,42 @@ responseFormat: {
 							"within": {
 								"type": "number"
 							},
+							"while": {
+								"$ref": "#/$defs/arc"
+							},
 							"then": {
-								"type": "string",
-								"enum": [
-									"if_ok",
-									"always",
-									"if_failed"
-								]
+								"$ref": "#/$defs/then"
+							}
+						}
+					},
+					{
+						"type": "object",
+						"additionalProperties": false,
+						"required": [
+							"verb",
+							"arc"
+						],
+						"properties": {
+							"let": {
+								"type": "string"
+							},
+							"verb": {
+								"const": "instead"
+							},
+							"arc": {
+								"$ref": "#/$defs/arc"
+							},
+							"until": {
+								"type": "string"
+							},
+							"within": {
+								"type": "number"
+							},
+							"while": {
+								"$ref": "#/$defs/arc"
+							},
+							"then": {
+								"$ref": "#/$defs/then"
 							}
 						}
 					},
@@ -624,45 +688,11 @@ responseFormat: {
 							"within": {
 								"type": "number"
 							},
-							"then": {
-								"type": "string",
-								"enum": [
-									"if_ok",
-									"always",
-									"if_failed"
-								]
-							}
-						}
-					},
-					{
-						"type": "object",
-						"additionalProperties": false,
-						"required": [
-							"verb"
-						],
-						"properties": {
-							"let": {
-								"type": "string"
-							},
-							"verb": {
-								"const": "think"
-							},
-							"about": {
-								"type": "string"
-							},
-							"until": {
-								"type": "string"
-							},
-							"within": {
-								"type": "number"
+							"while": {
+								"$ref": "#/$defs/arc"
 							},
 							"then": {
-								"type": "string",
-								"enum": [
-									"if_ok",
-									"always",
-									"if_failed"
-								]
+								"$ref": "#/$defs/then"
 							}
 						}
 					},
@@ -692,13 +722,11 @@ responseFormat: {
 							"within": {
 								"type": "number"
 							},
+							"while": {
+								"$ref": "#/$defs/arc"
+							},
 							"then": {
-								"type": "string",
-								"enum": [
-									"if_ok",
-									"always",
-									"if_failed"
-								]
+								"$ref": "#/$defs/then"
 							}
 						}
 					},
@@ -724,13 +752,11 @@ responseFormat: {
 							"within": {
 								"type": "number"
 							},
+							"while": {
+								"$ref": "#/$defs/arc"
+							},
 							"then": {
-								"type": "string",
-								"enum": [
-									"if_ok",
-									"always",
-									"if_failed"
-								]
+								"$ref": "#/$defs/then"
 							}
 						}
 					},
@@ -756,13 +782,11 @@ responseFormat: {
 							"within": {
 								"type": "number"
 							},
+							"while": {
+								"$ref": "#/$defs/arc"
+							},
 							"then": {
-								"type": "string",
-								"enum": [
-									"if_ok",
-									"always",
-									"if_failed"
-								]
+								"$ref": "#/$defs/then"
 							}
 						}
 					},
@@ -794,13 +818,11 @@ responseFormat: {
 							"within": {
 								"type": "number"
 							},
+							"while": {
+								"$ref": "#/$defs/arc"
+							},
 							"then": {
-								"type": "string",
-								"enum": [
-									"if_ok",
-									"always",
-									"if_failed"
-								]
+								"$ref": "#/$defs/then"
 							}
 						}
 					},
@@ -831,13 +853,11 @@ responseFormat: {
 							"within": {
 								"type": "number"
 							},
+							"while": {
+								"$ref": "#/$defs/arc"
+							},
 							"then": {
-								"type": "string",
-								"enum": [
-									"if_ok",
-									"always",
-									"if_failed"
-								]
+								"$ref": "#/$defs/then"
 							}
 						}
 					},
@@ -864,13 +884,11 @@ responseFormat: {
 							"within": {
 								"type": "number"
 							},
+							"while": {
+								"$ref": "#/$defs/arc"
+							},
 							"then": {
-								"type": "string",
-								"enum": [
-									"if_ok",
-									"always",
-									"if_failed"
-								]
+								"$ref": "#/$defs/then"
 							}
 						}
 					},
@@ -897,13 +915,11 @@ responseFormat: {
 							"within": {
 								"type": "number"
 							},
+							"while": {
+								"$ref": "#/$defs/arc"
+							},
 							"then": {
-								"type": "string",
-								"enum": [
-									"if_ok",
-									"always",
-									"if_failed"
-								]
+								"$ref": "#/$defs/then"
 							}
 						}
 					},
@@ -930,13 +946,11 @@ responseFormat: {
 							"within": {
 								"type": "number"
 							},
+							"while": {
+								"$ref": "#/$defs/arc"
+							},
 							"then": {
-								"type": "string",
-								"enum": [
-									"if_ok",
-									"always",
-									"if_failed"
-								]
+								"$ref": "#/$defs/then"
 							}
 						}
 					},
@@ -959,10 +973,10 @@ responseFormat: {
 								"$ref": "#/$defs/arc"
 							},
 							"arc": {
-								"$ref": "#/$defs/arc"
+								"$ref": "#/$defs/arc_think"
 							},
 							"else": {
-								"$ref": "#/$defs/arc"
+								"$ref": "#/$defs/arc_think"
 							},
 							"until": {
 								"type": "string"
@@ -970,13 +984,11 @@ responseFormat: {
 							"within": {
 								"type": "number"
 							},
+							"while": {
+								"$ref": "#/$defs/arc"
+							},
 							"then": {
-								"type": "string",
-								"enum": [
-									"if_ok",
-									"always",
-									"if_failed"
-								]
+								"$ref": "#/$defs/then"
 							}
 						}
 					},
@@ -1013,13 +1025,11 @@ responseFormat: {
 							"within": {
 								"type": "number"
 							},
+							"while": {
+								"$ref": "#/$defs/arc"
+							},
 							"then": {
-								"type": "string",
-								"enum": [
-									"if_ok",
-									"always",
-									"if_failed"
-								]
+								"$ref": "#/$defs/then"
 							}
 						}
 					},
@@ -1066,13 +1076,11 @@ responseFormat: {
 							"within": {
 								"type": "number"
 							},
+							"while": {
+								"$ref": "#/$defs/arc"
+							},
 							"then": {
-								"type": "string",
-								"enum": [
-									"if_ok",
-									"always",
-									"if_failed"
-								]
+								"$ref": "#/$defs/then"
 							}
 						}
 					},
@@ -1115,13 +1123,11 @@ responseFormat: {
 							"within": {
 								"type": "number"
 							},
+							"while": {
+								"$ref": "#/$defs/arc"
+							},
 							"then": {
-								"type": "string",
-								"enum": [
-									"if_ok",
-									"always",
-									"if_failed"
-								]
+								"$ref": "#/$defs/then"
 							}
 						}
 					},
@@ -1148,13 +1154,11 @@ responseFormat: {
 							"within": {
 								"type": "number"
 							},
+							"while": {
+								"$ref": "#/$defs/arc"
+							},
 							"then": {
-								"type": "string",
-								"enum": [
-									"if_ok",
-									"always",
-									"if_failed"
-								]
+								"$ref": "#/$defs/then"
 							}
 						}
 					},
@@ -1179,16 +1183,11 @@ responseFormat: {
 							"choices": {
 								"type": "object",
 								"additionalProperties": {
-									"$ref": "#/$defs/arc"
+									"$ref": "#/$defs/arc_think"
 								}
 							},
 							"then": {
-								"type": "string",
-								"enum": [
-									"if_ok",
-									"always",
-									"if_failed"
-								]
+								"$ref": "#/$defs/then"
 							}
 						}
 					},
@@ -1226,13 +1225,11 @@ responseFormat: {
 							"within": {
 								"type": "number"
 							},
+							"while": {
+								"$ref": "#/$defs/arc"
+							},
 							"then": {
-								"type": "string",
-								"enum": [
-									"if_ok",
-									"always",
-									"if_failed"
-								]
+								"$ref": "#/$defs/then"
 							}
 						}
 					},
@@ -1263,13 +1260,11 @@ responseFormat: {
 							"within": {
 								"type": "number"
 							},
+							"while": {
+								"$ref": "#/$defs/arc"
+							},
 							"then": {
-								"type": "string",
-								"enum": [
-									"if_ok",
-									"always",
-									"if_failed"
-								]
+								"$ref": "#/$defs/then"
 							}
 						}
 					},
@@ -1300,13 +1295,11 @@ responseFormat: {
 							"within": {
 								"type": "number"
 							},
+							"while": {
+								"$ref": "#/$defs/arc"
+							},
 							"then": {
-								"type": "string",
-								"enum": [
-									"if_ok",
-									"always",
-									"if_failed"
-								]
+								"$ref": "#/$defs/then"
 							}
 						}
 					},
@@ -1335,13 +1328,11 @@ responseFormat: {
 							"within": {
 								"type": "number"
 							},
+							"while": {
+								"$ref": "#/$defs/arc"
+							},
 							"then": {
-								"type": "string",
-								"enum": [
-									"if_ok",
-									"always",
-									"if_failed"
-								]
+								"$ref": "#/$defs/then"
 							}
 						}
 					},
@@ -1370,13 +1361,11 @@ responseFormat: {
 							"within": {
 								"type": "number"
 							},
+							"while": {
+								"$ref": "#/$defs/arc"
+							},
 							"then": {
-								"type": "string",
-								"enum": [
-									"if_ok",
-									"always",
-									"if_failed"
-								]
+								"$ref": "#/$defs/then"
 							}
 						}
 					},
@@ -1408,13 +1397,11 @@ responseFormat: {
 							"within": {
 								"type": "number"
 							},
+							"while": {
+								"$ref": "#/$defs/arc"
+							},
 							"then": {
-								"type": "string",
-								"enum": [
-									"if_ok",
-									"always",
-									"if_failed"
-								]
+								"$ref": "#/$defs/then"
 							}
 						}
 					},
@@ -1436,12 +1423,7 @@ responseFormat: {
 								"$ref": "#/$defs/arc"
 							},
 							"then": {
-								"type": "string",
-								"enum": [
-									"if_ok",
-									"always",
-									"if_failed"
-								]
+								"$ref": "#/$defs/then"
 							}
 						}
 					},
@@ -1463,12 +1445,7 @@ responseFormat: {
 								"type": "string"
 							},
 							"then": {
-								"type": "string",
-								"enum": [
-									"if_ok",
-									"always",
-									"if_failed"
-								]
+								"$ref": "#/$defs/then"
 							}
 						}
 					}
@@ -1479,6 +1456,47 @@ responseFormat: {
 				"minItems": 1,
 				"items": {
 					"$ref": "#/$defs/step_in_law"
+				}
+			},
+			"arc_in_law_think": {
+				"type": "array",
+				"minItems": 1,
+				"items": {
+					"anyOf": [
+						{
+							"$ref": "#/$defs/step_in_law"
+						},
+						{
+							"type": "object",
+							"additionalProperties": false,
+							"required": [
+								"verb"
+							],
+							"properties": {
+								"let": {
+									"type": "string"
+								},
+								"verb": {
+									"const": "think"
+								},
+								"about": {
+									"type": "string"
+								},
+								"until": {
+									"type": "string"
+								},
+								"within": {
+									"type": "number"
+								},
+								"while": {
+									"$ref": "#/$defs/arc_in_law"
+								},
+								"then": {
+									"$ref": "#/$defs/then"
+								}
+							}
+						}
+					]
 				}
 			},
 			"step_in_law": {
@@ -1506,13 +1524,11 @@ responseFormat: {
 							"within": {
 								"type": "number"
 							},
+							"while": {
+								"$ref": "#/$defs/arc_in_law"
+							},
 							"then": {
-								"type": "string",
-								"enum": [
-									"if_ok",
-									"always",
-									"if_failed"
-								]
+								"$ref": "#/$defs/then"
 							}
 						}
 					},
@@ -1539,13 +1555,11 @@ responseFormat: {
 							"within": {
 								"type": "number"
 							},
+							"while": {
+								"$ref": "#/$defs/arc_in_law"
+							},
 							"then": {
-								"type": "string",
-								"enum": [
-									"if_ok",
-									"always",
-									"if_failed"
-								]
+								"$ref": "#/$defs/then"
 							}
 						}
 					},
@@ -1575,16 +1589,14 @@ responseFormat: {
 							"within": {
 								"type": "number"
 							},
+							"while": {
+								"$ref": "#/$defs/arc_in_law"
+							},
 							"unbreakable": {
 								"type": "string"
 							},
 							"then": {
-								"type": "string",
-								"enum": [
-									"if_ok",
-									"always",
-									"if_failed"
-								]
+								"$ref": "#/$defs/then"
 							}
 						}
 					},
@@ -1614,13 +1626,11 @@ responseFormat: {
 							"within": {
 								"type": "number"
 							},
+							"while": {
+								"$ref": "#/$defs/arc_in_law"
+							},
 							"then": {
-								"type": "string",
-								"enum": [
-									"if_ok",
-									"always",
-									"if_failed"
-								]
+								"$ref": "#/$defs/then"
 							}
 						}
 					},
@@ -1646,13 +1656,11 @@ responseFormat: {
 							"within": {
 								"type": "number"
 							},
+							"while": {
+								"$ref": "#/$defs/arc_in_law"
+							},
 							"then": {
-								"type": "string",
-								"enum": [
-									"if_ok",
-									"always",
-									"if_failed"
-								]
+								"$ref": "#/$defs/then"
 							}
 						}
 					},
@@ -1682,13 +1690,11 @@ responseFormat: {
 							"within": {
 								"type": "number"
 							},
+							"while": {
+								"$ref": "#/$defs/arc_in_law"
+							},
 							"then": {
-								"type": "string",
-								"enum": [
-									"if_ok",
-									"always",
-									"if_failed"
-								]
+								"$ref": "#/$defs/then"
 							}
 						}
 					},
@@ -1718,13 +1724,11 @@ responseFormat: {
 							"within": {
 								"type": "number"
 							},
+							"while": {
+								"$ref": "#/$defs/arc_in_law"
+							},
 							"then": {
-								"type": "string",
-								"enum": [
-									"if_ok",
-									"always",
-									"if_failed"
-								]
+								"$ref": "#/$defs/then"
 							}
 						}
 					},
@@ -1754,13 +1758,11 @@ responseFormat: {
 							"within": {
 								"type": "number"
 							},
+							"while": {
+								"$ref": "#/$defs/arc_in_law"
+							},
 							"then": {
-								"type": "string",
-								"enum": [
-									"if_ok",
-									"always",
-									"if_failed"
-								]
+								"$ref": "#/$defs/then"
 							}
 						}
 					},
@@ -1794,13 +1796,11 @@ responseFormat: {
 							"within": {
 								"type": "number"
 							},
+							"while": {
+								"$ref": "#/$defs/arc_in_law"
+							},
 							"then": {
-								"type": "string",
-								"enum": [
-									"if_ok",
-									"always",
-									"if_failed"
-								]
+								"$ref": "#/$defs/then"
 							}
 						}
 					},
@@ -1827,13 +1827,11 @@ responseFormat: {
 							"within": {
 								"type": "number"
 							},
+							"while": {
+								"$ref": "#/$defs/arc_in_law"
+							},
 							"then": {
-								"type": "string",
-								"enum": [
-									"if_ok",
-									"always",
-									"if_failed"
-								]
+								"$ref": "#/$defs/then"
 							}
 						}
 					},
@@ -1857,19 +1855,29 @@ responseFormat: {
 							"to": {
 								"type": "string"
 							},
+							"as": {
+								"type": "string",
+								"enum": [
+									"whisper",
+									"sing",
+									"laugh",
+									"sob",
+									"sigh",
+									"scream",
+									"shout"
+								]
+							},
 							"until": {
 								"type": "string"
 							},
 							"within": {
 								"type": "number"
 							},
+							"while": {
+								"$ref": "#/$defs/arc_in_law"
+							},
 							"then": {
-								"type": "string",
-								"enum": [
-									"if_ok",
-									"always",
-									"if_failed"
-								]
+								"$ref": "#/$defs/then"
 							}
 						}
 					},
@@ -1896,13 +1904,11 @@ responseFormat: {
 							"within": {
 								"type": "number"
 							},
+							"while": {
+								"$ref": "#/$defs/arc_in_law"
+							},
 							"then": {
-								"type": "string",
-								"enum": [
-									"if_ok",
-									"always",
-									"if_failed"
-								]
+								"$ref": "#/$defs/then"
 							}
 						}
 					},
@@ -1925,13 +1931,42 @@ responseFormat: {
 							"within": {
 								"type": "number"
 							},
+							"while": {
+								"$ref": "#/$defs/arc_in_law"
+							},
 							"then": {
-								"type": "string",
-								"enum": [
-									"if_ok",
-									"always",
-									"if_failed"
-								]
+								"$ref": "#/$defs/then"
+							}
+						}
+					},
+					{
+						"type": "object",
+						"additionalProperties": false,
+						"required": [
+							"verb",
+							"arc"
+						],
+						"properties": {
+							"let": {
+								"type": "string"
+							},
+							"verb": {
+								"const": "instead"
+							},
+							"arc": {
+								"$ref": "#/$defs/arc"
+							},
+							"until": {
+								"type": "string"
+							},
+							"within": {
+								"type": "number"
+							},
+							"while": {
+								"$ref": "#/$defs/arc_in_law"
+							},
+							"then": {
+								"$ref": "#/$defs/then"
 							}
 						}
 					},
@@ -1964,45 +1999,11 @@ responseFormat: {
 							"within": {
 								"type": "number"
 							},
-							"then": {
-								"type": "string",
-								"enum": [
-									"if_ok",
-									"always",
-									"if_failed"
-								]
-							}
-						}
-					},
-					{
-						"type": "object",
-						"additionalProperties": false,
-						"required": [
-							"verb"
-						],
-						"properties": {
-							"let": {
-								"type": "string"
-							},
-							"verb": {
-								"const": "think"
-							},
-							"about": {
-								"type": "string"
-							},
-							"until": {
-								"type": "string"
-							},
-							"within": {
-								"type": "number"
+							"while": {
+								"$ref": "#/$defs/arc_in_law"
 							},
 							"then": {
-								"type": "string",
-								"enum": [
-									"if_ok",
-									"always",
-									"if_failed"
-								]
+								"$ref": "#/$defs/then"
 							}
 						}
 					},
@@ -2032,13 +2033,11 @@ responseFormat: {
 							"within": {
 								"type": "number"
 							},
+							"while": {
+								"$ref": "#/$defs/arc_in_law"
+							},
 							"then": {
-								"type": "string",
-								"enum": [
-									"if_ok",
-									"always",
-									"if_failed"
-								]
+								"$ref": "#/$defs/then"
 							}
 						}
 					},
@@ -2064,13 +2063,11 @@ responseFormat: {
 							"within": {
 								"type": "number"
 							},
+							"while": {
+								"$ref": "#/$defs/arc_in_law"
+							},
 							"then": {
-								"type": "string",
-								"enum": [
-									"if_ok",
-									"always",
-									"if_failed"
-								]
+								"$ref": "#/$defs/then"
 							}
 						}
 					},
@@ -2096,13 +2093,11 @@ responseFormat: {
 							"within": {
 								"type": "number"
 							},
+							"while": {
+								"$ref": "#/$defs/arc_in_law"
+							},
 							"then": {
-								"type": "string",
-								"enum": [
-									"if_ok",
-									"always",
-									"if_failed"
-								]
+								"$ref": "#/$defs/then"
 							}
 						}
 					},
@@ -2134,13 +2129,11 @@ responseFormat: {
 							"within": {
 								"type": "number"
 							},
+							"while": {
+								"$ref": "#/$defs/arc_in_law"
+							},
 							"then": {
-								"type": "string",
-								"enum": [
-									"if_ok",
-									"always",
-									"if_failed"
-								]
+								"$ref": "#/$defs/then"
 							}
 						}
 					},
@@ -2171,13 +2164,11 @@ responseFormat: {
 							"within": {
 								"type": "number"
 							},
+							"while": {
+								"$ref": "#/$defs/arc_in_law"
+							},
 							"then": {
-								"type": "string",
-								"enum": [
-									"if_ok",
-									"always",
-									"if_failed"
-								]
+								"$ref": "#/$defs/then"
 							}
 						}
 					},
@@ -2204,13 +2195,11 @@ responseFormat: {
 							"within": {
 								"type": "number"
 							},
+							"while": {
+								"$ref": "#/$defs/arc_in_law"
+							},
 							"then": {
-								"type": "string",
-								"enum": [
-									"if_ok",
-									"always",
-									"if_failed"
-								]
+								"$ref": "#/$defs/then"
 							}
 						}
 					},
@@ -2237,13 +2226,11 @@ responseFormat: {
 							"within": {
 								"type": "number"
 							},
+							"while": {
+								"$ref": "#/$defs/arc_in_law"
+							},
 							"then": {
-								"type": "string",
-								"enum": [
-									"if_ok",
-									"always",
-									"if_failed"
-								]
+								"$ref": "#/$defs/then"
 							}
 						}
 					},
@@ -2270,13 +2257,11 @@ responseFormat: {
 							"within": {
 								"type": "number"
 							},
+							"while": {
+								"$ref": "#/$defs/arc_in_law"
+							},
 							"then": {
-								"type": "string",
-								"enum": [
-									"if_ok",
-									"always",
-									"if_failed"
-								]
+								"$ref": "#/$defs/then"
 							}
 						}
 					},
@@ -2299,10 +2284,10 @@ responseFormat: {
 								"$ref": "#/$defs/arc_in_law"
 							},
 							"arc": {
-								"$ref": "#/$defs/arc_in_law"
+								"$ref": "#/$defs/arc_in_law_think"
 							},
 							"else": {
-								"$ref": "#/$defs/arc_in_law"
+								"$ref": "#/$defs/arc_in_law_think"
 							},
 							"until": {
 								"type": "string"
@@ -2310,13 +2295,11 @@ responseFormat: {
 							"within": {
 								"type": "number"
 							},
+							"while": {
+								"$ref": "#/$defs/arc_in_law"
+							},
 							"then": {
-								"type": "string",
-								"enum": [
-									"if_ok",
-									"always",
-									"if_failed"
-								]
+								"$ref": "#/$defs/then"
 							}
 						}
 					},
@@ -2353,13 +2336,11 @@ responseFormat: {
 							"within": {
 								"type": "number"
 							},
+							"while": {
+								"$ref": "#/$defs/arc_in_law"
+							},
 							"then": {
-								"type": "string",
-								"enum": [
-									"if_ok",
-									"always",
-									"if_failed"
-								]
+								"$ref": "#/$defs/then"
 							}
 						}
 					},
@@ -2406,13 +2387,11 @@ responseFormat: {
 							"within": {
 								"type": "number"
 							},
+							"while": {
+								"$ref": "#/$defs/arc_in_law"
+							},
 							"then": {
-								"type": "string",
-								"enum": [
-									"if_ok",
-									"always",
-									"if_failed"
-								]
+								"$ref": "#/$defs/then"
 							}
 						}
 					},
@@ -2439,13 +2418,11 @@ responseFormat: {
 							"within": {
 								"type": "number"
 							},
+							"while": {
+								"$ref": "#/$defs/arc_in_law"
+							},
 							"then": {
-								"type": "string",
-								"enum": [
-									"if_ok",
-									"always",
-									"if_failed"
-								]
+								"$ref": "#/$defs/then"
 							}
 						}
 					},
@@ -2470,16 +2447,11 @@ responseFormat: {
 							"choices": {
 								"type": "object",
 								"additionalProperties": {
-									"$ref": "#/$defs/arc"
+									"$ref": "#/$defs/arc_think"
 								}
 							},
 							"then": {
-								"type": "string",
-								"enum": [
-									"if_ok",
-									"always",
-									"if_failed"
-								]
+								"$ref": "#/$defs/then"
 							}
 						}
 					},
@@ -2517,13 +2489,11 @@ responseFormat: {
 							"within": {
 								"type": "number"
 							},
+							"while": {
+								"$ref": "#/$defs/arc_in_law"
+							},
 							"then": {
-								"type": "string",
-								"enum": [
-									"if_ok",
-									"always",
-									"if_failed"
-								]
+								"$ref": "#/$defs/then"
 							}
 						}
 					},
@@ -2554,13 +2524,11 @@ responseFormat: {
 							"within": {
 								"type": "number"
 							},
+							"while": {
+								"$ref": "#/$defs/arc_in_law"
+							},
 							"then": {
-								"type": "string",
-								"enum": [
-									"if_ok",
-									"always",
-									"if_failed"
-								]
+								"$ref": "#/$defs/then"
 							}
 						}
 					},
@@ -2591,13 +2559,11 @@ responseFormat: {
 							"within": {
 								"type": "number"
 							},
+							"while": {
+								"$ref": "#/$defs/arc_in_law"
+							},
 							"then": {
-								"type": "string",
-								"enum": [
-									"if_ok",
-									"always",
-									"if_failed"
-								]
+								"$ref": "#/$defs/then"
 							}
 						}
 					},
@@ -2626,13 +2592,11 @@ responseFormat: {
 							"within": {
 								"type": "number"
 							},
+							"while": {
+								"$ref": "#/$defs/arc_in_law"
+							},
 							"then": {
-								"type": "string",
-								"enum": [
-									"if_ok",
-									"always",
-									"if_failed"
-								]
+								"$ref": "#/$defs/then"
 							}
 						}
 					},
@@ -2661,13 +2625,11 @@ responseFormat: {
 							"within": {
 								"type": "number"
 							},
+							"while": {
+								"$ref": "#/$defs/arc_in_law"
+							},
 							"then": {
-								"type": "string",
-								"enum": [
-									"if_ok",
-									"always",
-									"if_failed"
-								]
+								"$ref": "#/$defs/then"
 							}
 						}
 					},
@@ -2699,13 +2661,11 @@ responseFormat: {
 							"within": {
 								"type": "number"
 							},
+							"while": {
+								"$ref": "#/$defs/arc_in_law"
+							},
 							"then": {
-								"type": "string",
-								"enum": [
-									"if_ok",
-									"always",
-									"if_failed"
-								]
+								"$ref": "#/$defs/then"
 							}
 						}
 					},
@@ -2727,12 +2687,7 @@ responseFormat: {
 								"$ref": "#/$defs/arc_in_law"
 							},
 							"then": {
-								"type": "string",
-								"enum": [
-									"if_ok",
-									"always",
-									"if_failed"
-								]
+								"$ref": "#/$defs/then"
 							}
 						}
 					},
@@ -2754,12 +2709,7 @@ responseFormat: {
 								"type": "string"
 							},
 							"then": {
-								"type": "string",
-								"enum": [
-									"if_ok",
-									"always",
-									"if_failed"
-								]
+								"$ref": "#/$defs/then"
 							}
 						}
 					}
@@ -2772,8 +2722,17 @@ responseFormat: {
 enableThinking: false
 
 ## system
-{"steps":[{"verb":"give","item":"gold","to":"Player","quantity":5}]} pays 5 gold; saying so does not. In an offer, gold counts like any item: {"gold":5}. Once you know enough, emit only the Arc JSON, {"steps":[…]}. Arguments sit beside verb. Close every brace. No prose. Available verbs: fire(target) — 2 damage, 9 paces, every 1s until the target is down, go_to(target), follow(target, distance?), flee(from, distance?), wander(until?, seconds?), use(item, target?), pick_up(item, from?), drop(item, to?), give(item, to, quantity?), examine(target), say(text, to?), wait(seconds?, until?) — seconds at least 0, pass, remember(content, tags?), think(about?), set_goal(goal, priority?), drop_goal(goal?), finish_goal(goal?), set_identity(role?, traits?), watch(name, expr), unwatch(name), focus(expr), unfocus(expr), if(cond, arc, else?), when(watch, arc, times?, until?, rearm?), loop(arc, through?, until?, times?, unbreakable?), law(who?, watch, arc, name?, times?, until?, rearm?) — arc without law, unlaw(name), offer(to?, give?, get?), command(who, arc, group?), tag(who, name), untag(who, name), spread(around?, paces?), circle(around?, paces?), hold_line(at?, facing?, paces?). Tools: recall, observe, earshot, see_map.
+{"steps":[{"verb":"give","item":"gold","to":"Player","quantity":5}]} pays 5 gold; saying so does not. In an offer, gold counts like any item: {"gold":5}. Once you know enough, emit only the Arc JSON, {"steps":[…]}. Arguments sit beside verb. Close every brace. No prose. Available verbs: fire(target) — 2 damage, 9 paces, every 1s until the target has fallen, go_to(target), follow(target, distance?), flee(from, distance?), wander(until?, seconds?), use(item, target?), pick_up(item, from?), drop(item, to?), give(item, to, quantity?), examine(target), say(text, to?, as?) — as one of whisper/sing/laugh/sob/sigh/scream/shout, wait(seconds?, until?) — seconds at least 0, pass, instead(arc), remember(content, tags?), think(about?) — only inside if/else, set_goal(goal, priority?), drop_goal(goal?), finish_goal(goal?), set_identity(role?, traits?), watch(name, expr), unwatch(name), focus(expr), unfocus(expr), if(cond, arc, else?), when(watch, arc, times?, until?, rearm?), loop(arc, through?, until?, times?, unbreakable?), law(who?, watch, arc, name?, times?, until?, rearm?) — arc without law, unlaw(name), offer(to?, give?, get?), command(who, arc, group?), tag(who, name), untag(who, name), spread(around?, paces?), circle(around?, paces?), hold_line(at?, facing?, paces?). Tools: recall, observe, earshot, see_map.
 You are CapSquad. Role: Rifleman.
+
+Steps run in order: each starts once the one before has ended. Steps in a step's "while" run during it: a say in a go_to's "while" speaks while walking; what comes after arriving goes after the step:
+{"steps":[
+	{"verb":"go_to","target":"Gate",
+		"while":[{"verb":"say","text":"This way"}]
+	},
+	{"verb":"go_to","target":"Well"}
+]}
+IMPORTANT: YOU ARE SLOW, and each command starts once you finish writing it. IF ANY UNIT NEEDS HELP RIGHT NOW, WRITE THE ORDER FOR THE ONE IN MOST TROUBLE FIRST, then the rest.
 
 ## user
 Goals (highest first):
@@ -2794,6 +2753,6 @@ In talking range: Kell, Mira, Raider.
 Units (a group's name picks its units: units.filter("Alpha"); a law reaches you too only with who=allUnits):
 | Unit or group | Kind | HP | Doing | Last result | Others it sees | Can |
 |---|---|---|---|---|---|---|
-| Cap (you) | Rifleman | 10/10 | — | — | Raider 20/20 hp 10 paces | — |
-| Kell | Rifleman | 10/10 | idle | — | Raider 20/20 hp 10 paces | not offer |
-| Mira | Rifleman, Scout | 10/10 | idle | — | Raider 20/20 hp 10 paces | not offer |
+| Cap (you) | Rifleman | 10/10 | — | — | Raider 20/20 hp 10 paces (out of reach) | — |
+| Kell | Rifleman | 10/10 | idle | — | Raider 20/20 hp 10 paces (out of reach) | not offer |
+| Mira | Rifleman, Scout | 10/10 | idle | — | Raider 20/20 hp 10 paces (out of reach) | not offer |

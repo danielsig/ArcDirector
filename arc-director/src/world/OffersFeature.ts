@@ -1,7 +1,8 @@
-import type { CountMap } from '../arc/arc-types.js';
+import { isCountMap, type CountMap } from '../arc/arc-types.js';
 import type { ArcRunner } from '../character/arc-runner.js';
 import { Collective } from '../collective/Collective.js';
 import { Feature, type PromptPart } from '../director/Feature.js';
+import { isRecord, type JsonValue } from '../json.js';
 import type { Mind } from '../mind/mind.js';
 import { SightFeature } from '../perception/SightFeature.js';
 import { inLineOfSight } from './lookup.js';
@@ -62,27 +63,53 @@ export class OffersFeature<TCtx = unknown> extends Feature<TCtx> {
 		this._offers = this._offers.filter(live);
 	}
 
-	public toJSON():Offer[] {
+	public override readonly saveKey = 'offers';
+
+	public override toJSON():Offer[] {
 		return this._offers.map((offer) => ({ ...offer, give: { ...offer.give }, get: { ...offer.get } }));
 	}
 
-	/** Every offer in `offers`, and no other. */
-	public load(offers:readonly Offer[]):void {
+	/** Every well-formed offer in `json` (a list of {@link Offer}), and no other. */
+	public override load(json:JsonValue | undefined):void {
 		this._offers = [];
-		for (const offer of offers) {
-			this.post(offer);
+		for (const offer of Array.isArray(json) ? json : []) {
+			if (!isRecord(offer) || typeof offer.from !== 'string' || (offer.to !== undefined && typeof offer.to !== 'string') || !isCountMap(offer.give) || !isCountMap(offer.get)) {
+				continue;
+			}
+			this.post({ from: offer.from, ...offer.to === undefined ? {} : { to: offer.to }, give: offer.give, get: offer.get });
 		}
 	}
 
-	/** Whether character `fromID` may make an offer to `toID`: the host's `canOffer`, else in its sight, else in its line of sight, else yes. */
+	/**
+	 * Whether character `fromID` may make an offer to `toID`: the host's `canOffer`; else, a deal being spoken, `toID` makes
+	 * out its words, in talk's range (`withTalk`) or by hearing's measure (`withHearing`); else it is in its sight, else
+	 * in its line of sight, else yes.
+	 */
 	public canOffer(fromID:string, toID:string):boolean {
-		const world = this.director.world;
-		if (world?.canOffer) {
+		const director = this.director;
+		const world = director.world;
+		const canOffer = world?.transfers?.canOffer;
+		if (world && canOffer) {
 			const from = world.find(fromID);
 			const to = world.find(toID);
-			return from !== undefined && to !== undefined && world.canOffer(from, to);
+			return from !== undefined && to !== undefined && canOffer(from, to);
 		}
-		return this.director.getFeature(SightFeature)?.sees(fromID, toID) ?? inLineOfSight(world, fromID, toID);
+		const talk = director.getTalk();
+		if (talk) {
+			return talk.sense.inRange(fromID, toID) && talk.clear(fromID, toID);
+		}
+		const hearing = director.getHearing();
+		if (hearing) {
+			return hearing.speech(fromID, toID) === 'words';
+		}
+		return director.getFeature(SightFeature)?.sees(fromID, toID) ?? inLineOfSight(world, fromID, toID);
+	}
+
+	/** Why an offer to `name` cannot be made where {@link canOffer} says no: out of earshot where words decide it, else out of sight. */
+	public outOfRange(name:string):string {
+		const director = this.director;
+		const spoken = !director.world?.transfers?.canOffer && (director.getTalk() ?? director.getHearing());
+		return `${name} is out of ${spoken ? 'earshot' : 'sight'}`;
 	}
 
 	/** The offers, without those to someone their maker may no longer make. */

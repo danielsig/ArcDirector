@@ -21,6 +21,8 @@ export type SceneHooks<H> = {
 	/** May this mind think now? Held thinks wait in the queue until it may. Default: yes. */
 	mayThink?:(host:H, mindID:string, reason:ThinkReason)=>boolean;
 	allowTheft?:boolean;
+	/** Whether `viewer` knows what `holder` carries. Undefined (or no hook): as ArcDirector has it by default. */
+	canSeeInventoryOf?:(host:H, viewer:GameObject, holder:GameObject)=>boolean | undefined;
 	/** The scene's goal track at the top of the screen, asked every frame. None: no track. */
 	goals?:(host:H)=>SceneGoals;
 };

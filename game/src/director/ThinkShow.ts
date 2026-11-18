@@ -38,6 +38,8 @@ export type ThinkSlate = {
 	id:string;
 	name:string;
 	color:GoalColor;
+	/** What started it (`rethink`, `heard speech`), or `''`. */
+	why:string;
 	thought:string;
 	arc:string;
 	state:SlateState;
@@ -80,7 +82,7 @@ export class ThinkShow {
 	public readonly thinks:ThinkSlate[] = [];
 	private readonly _writing = new Map<string, ThinkSlate>();
 	private _seq = 0;
-	private readonly _began = new Map<string, number>();
+	private readonly _began = new Map<string, { at:number; why:string }>();
 	private readonly _tools = new Map<string, { tool:string; until:number }>();
 	/** The last order shown reaching each unit, and when. */
 	private readonly _orders = new Map<string, { text:string; at:number }>();
@@ -88,14 +90,14 @@ export class ThinkShow {
 	/**
 	 * @param crew The characters of the bodiless collective with this id, or undefined for any other mind.
 	 */
-	constructor(private readonly world:DemoWorld, private readonly goals:()=>SceneGoals | undefined, private readonly crew:(id:string)=>readonly { id:string }[] | undefined) {}
+	constructor(private readonly _world:DemoWorld, private readonly _goals:()=>SceneGoals | undefined, private readonly _crew:(id:string)=>readonly { id:string }[] | undefined) {}
 
 	public handle = (event:ThinkEvent):void => {
 		// The dead write nothing, though a think of theirs may yet come back from the model; nor does a collective with none left standing.
 		const anchor = event.kind === 'start' ? null : this.anchorOf(event.who);
 		switch (event.kind) {
 			case 'start':
-				this._began.set(event.who, performance.now());
+				this._began.set(event.who, { at: performance.now(), why: event.why ?? '' });
 				return;
 			case 'reply':
 				this.write(event.who, event.thought, event.arc, anchor);
@@ -107,6 +109,9 @@ export class ThinkShow {
 				this.turnDown(event.who, event.reason, anchor);
 				return;
 			case 'end':
+				if (event.skipped) {
+					this.write(event.who, 'Nothing changed since the last think: skipped.', '', anchor);
+				}
 				this.finish(event.who, !!event.arc, event.error, anchor);
 				return;
 			case 'command':
@@ -117,12 +122,12 @@ export class ThinkShow {
 
 	/** Where `who`'s thinks show now, or null when it is down (or, a collective, has no one living). */
 	public anchorOf(who:string):ThinkAnchor | null {
-		const crew = this.crew(who);
+		const crew = this._crew(who);
 		if (!crew) {
-			const go = findObject(this.world, who);
+			const go = findObject(this._world, who);
 			return isLiving(go) ? { name: idOf(go), go, stance: stanceOf(go) } : null;
 		}
-		const stances = crew.map((c) => findObject(this.world, c.id)).filter(isLiving).map(stanceOf);
+		const stances = crew.map((c) => findObject(this._world, c.id)).filter(isLiving).map(stanceOf);
 		if (stances.length === 0) {
 			return null;
 		}
@@ -156,7 +161,7 @@ export class ThinkShow {
 	}
 
 	private colorOf(id:string):GoalColor {
-		const goals = this.goals();
+		const goals = this._goals();
 		return [goals?.left, goals?.right].find((side) => side?.who?.includes(id))?.color ?? 'gold';
 	}
 
@@ -166,7 +171,8 @@ export class ThinkShow {
 		if (writing) {
 			return writing;
 		}
-		const fresh:ThinkSlate = { seq: ++this._seq, id: who, name: anchor.name, color: this.colorOf(who), thought: '', arc: '', state: 'writing', error: '', wrongUntil: 0, began: this._began.get(who) ?? performance.now(), ms: 0, until: Infinity, lastTick: 0 };
+		const began = this._began.get(who);
+		const fresh:ThinkSlate = { seq: ++this._seq, id: who, name: anchor.name, color: this.colorOf(who), why: began?.why ?? '', thought: '', arc: '', state: 'writing', error: '', wrongUntil: 0, began: began?.at ?? performance.now(), ms: 0, until: Infinity, lastTick: 0 };
 		this._writing.set(who, fresh);
 		this.thinks.push(fresh);
 		this.thinks.splice(0, this.thinks.length - THINK_LOG_CAP);
@@ -184,10 +190,10 @@ export class ThinkShow {
 	/** Plays `name` at `anchor`: from a character's own voice, or at a collective's middle. */
 	private cue(name:SfxName, anchor:ThinkAnchor):void {
 		if (anchor.go) {
-			cueAt(this.world, name, anchor.go);
+			cueAt(this._world, name, anchor.go);
 		}
 		else {
-			cueAtPoint(this.world, name, anchor.stance.feet);
+			cueAtPoint(this._world, name, anchor.stance.feet);
 		}
 	}
 
@@ -256,7 +262,7 @@ export class ThinkShow {
 			go.getComponent(CharacterPose)?.useTool(tool, TOOL_SECONDS);
 		}
 		if (fx) {
-			toolFx(this.world.native, tool, () => this.anchorOf(who)?.stance ?? null, TOOL_SECONDS);
+			toolFx(this._world.native, tool, () => this.anchorOf(who)?.stance ?? null, TOOL_SECONDS);
 		}
 		if (icon || pose || fx) {
 			this.cue('toolUse', anchor);
@@ -267,7 +273,7 @@ export class ThinkShow {
 		if (!this.on('orderArcs') || !anchor) {
 			return;
 		}
-		const units = to.map((id) => findObject(this.world, id)).filter((unit):unit is GameObject => {
+		const units = to.map((id) => findObject(this._world, id)).filter((unit):unit is GameObject => {
 			const last = unit && this._orders.get(unit.id);
 			return !!unit && !(last?.text === text && Time.time - last.at < ORDER_REPEAT);
 		});
@@ -278,8 +284,8 @@ export class ThinkShow {
 			this._orders.set(unit.id, { text, at: Time.time });
 		}
 		this.cue('arcLaunch', anchor);
-		orderArcs(this.world.native, anchor.stance, units.map((unit) => () => (isLiving(unit) ? stanceOf(unit) : null)), text, this.colorOf(anchor.name), ORDER_STAGGER, (i) => {
-			cueAt(this.world, 'arcLand', units[i]!);
+		orderArcs(this._world.native, anchor.stance, units.map((unit) => () => (isLiving(unit) ? stanceOf(unit) : null)), text, this.colorOf(anchor.name), ORDER_STAGGER, (i) => {
+			cueAt(this._world, 'arcLand', units[i]!);
 		});
 	}
 }

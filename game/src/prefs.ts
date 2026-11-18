@@ -56,6 +56,8 @@ const DEFAULT = {
 	shadows: 'auto' as ShadowQuality,
 	/** Frames per second in the top-right corner. */
 	fpsCounter: false,
+	/** Dots over the head of a mind thinking. Apart from the minds at work below, which it outlasts. */
+	thinkingBubbles: true,
 	/** Everything below at once; each keeps its own setting while this is off. */
 	mindVisuals: true,
 	/** A slate by a thinking mind's head, writing its Arc as the model does. */
@@ -108,6 +110,7 @@ const FIELDS:{ [K in keyof Prefs]:(v:unknown, fallback:Prefs[K])=>Prefs[K] } = {
 	detailMaps: bool,
 	shadows: (v, fallback) => SHADOW_QUALITIES.find((q) => q === v) ?? fallback,
 	fpsCounter: bool,
+	thinkingBubbles: bool,
 	mindVisuals: bool,
 	arcSlates: bool,
 	orderArcs: bool,

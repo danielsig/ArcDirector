@@ -28,7 +28,7 @@ export type Ability = {
 	bonus?:{ against:StatusKind; damage:number };
 	/** Whom it is for: a foe (default), an ally (heals, wards) or its user alone. */
 	on?:'foe' | 'ally' | 'self';
-	/** A basic attack: it keeps striking until the target is down. Anything else is one use. */
+	/** A basic attack: it keeps striking until the target has fallen. Anything else is one use. */
 	repeat?:true;
 	/** Its user is spent when it lands, as a burster blowing up. */
 	spends?:true;
@@ -58,7 +58,7 @@ export const ABILITIES:Record<string, Ability> = {
 	venom: { range: 7, damage: 1, cooldown: 6, effects: [{ status: 'burn', seconds: 8, amount: 1 }, { status: 'slow', seconds: 8, amount: 0.5 }] },
 	burst: { range: 1, damage: 12, cooldown: 1, splash: 2.5, spends: true },
 	potion: { range: 0, heal: 12, cooldown: 30, on: 'self' },
-	// Aimed: wasted if its target is down before it lands.
+	// Aimed: wasted if its target has fallen before it lands.
 	snipe: { range: 14, damage: 10, cooldown: 8, cast: 2 },
 	impale: { range: 2, damage: 2, cooldown: 6, bonus: { against: 'root', damage: 14 } },
 };
@@ -104,7 +104,7 @@ export type Tactic =
 /** Every ability as a verb: whom it is used on. The verb's help is the ability's numbers. */
 export const FIGHT_VERBS:Record<string, VerbDef> = Object.fromEntries(Object.entries(ABILITIES).map(([name, ability]):[string, VerbDef] => [
 	name,
-	{ args: ability.on === 'self' ? {} : { target: 'id' } },
+	{ args: ability.on === 'self' ? {} : { target: 'id' }, impact: 0.9 },
 ]));
 
 /** One line on what `ability` does, as its verb's help. */
@@ -118,7 +118,7 @@ export function abilityHelp(ability:Ability):string {
 		ability.splash && `hits all within ${ability.splash} paces of the target`,
 		ability.range > 0 && `${ability.range} paces`,
 		ability.cast && `${ability.cast}s to cast`,
-		ability.repeat ? `every ${ability.cooldown}s until the target is down` : `then ${ability.cooldown}s before again`,
+		ability.repeat ? `every ${ability.cooldown}s until the target has fallen` : `then ${ability.cooldown}s before again`,
 		ability.on === 'ally' && 'on an ally or you',
 		ability.spends && 'you are spent',
 	];

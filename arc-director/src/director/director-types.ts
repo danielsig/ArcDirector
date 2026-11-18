@@ -7,10 +7,10 @@ import type { NameTarget } from '../character/NameBook.js';
 import type { PersonaSpec } from '../character/Persona.js';
 import type { Goal, KitSource } from '../character/character-types.js';
 import type { LawSpec } from '../arc/laws.js';
+import type { ExprEntity, ExprVal } from '../expr/expr-types.js';
 import type { MindSettings } from '../mind/mind.js';
-import type { HostKernels } from '../expr/natives.js';
-import type { SampleCache } from '../expr/expr-types.js';
-import type { Crowd, MoveOpts } from '../world/mover.js';
+import type { TalkStyle } from '../mind/talk.js';
+import type { Crowd, MoveOpts, ServingSpot } from '../world/mover.js';
 import type { Offer } from '../world/offers.js';
 import type { Vec } from '../world/world-types.js';
 
@@ -45,9 +45,14 @@ export type CharacterSpec<TCtx = unknown> = RunnerSpec<TCtx> & {
 	 */
 	mind?:MindSettings;
 	/**
-	 * Act without a mind: a System One model keeps picking one of these arcs by name for `goal`. Every key but
-	 * `goal` and `until` names a choice; its value is that choice's arc text. `until` is a watch that ends the
-	 * picking while it holds. Runs whenever the character is idle and the director has a System One; in a
+	 * How it talks unasked, shown with who is in earshot (`withTalk`): `{ instructions: TalkInstructions.Banter, avoid:
+	 * ['the crown'] }`. Its instructions replace the director's (`withTalk({ instructions })`); `avoid` adds `Never
+	 * mention the crown.` to whichever it talks by.
+	 */
+	talk?:TalkStyle;
+	/**
+	 * Act without a mind: a System One model keeps picking one of its `choices` by name for `goal`. `until` is a watch
+	 * that ends the picking while it holds. Runs whenever the character is idle and the director has a System One; in a
 	 * collective, that is whenever its commander has issued it nothing.
 	 */
 	choose?:StandingChoice;
@@ -55,13 +60,16 @@ export type CharacterSpec<TCtx = unknown> = RunnerSpec<TCtx> & {
 	offers?:Pick<Offer, 'give' | 'get'>[];
 	/** How others coming to it share it, whatever the director's `withWorldVerbs` `crowd` says for their verb: `line` for a vendor. A move's own `crowd` still wins. */
 	crowd?:Crowd;
+	/** Where the one it serves stands while others line up to it (a `line`), in its own frame. Default just clear of its edge. */
+	servingSpot?:ServingSpot;
 };
 
-/** A character spec's `choose`: `{ goal, until?, hold: 'go_to(EastGate) && wait()', … }`. */
+/** A character spec's `choose`: `{ goal, until?, choices: { hold: 'go_to(EastGate) && wait()', … } }`. */
 export type StandingChoice = {
 	goal:string;
 	until?:string;
-	[choice:string]:string | undefined;
+	/** Each choice's arc text, by its name. */
+	choices:Record<string, string>;
 };
 
 /** Argument to `ArcDirector.addCollective`: characters sharing one mind. */
@@ -119,8 +127,10 @@ export type VerbCall<TCtx = unknown, TArgs = Record<string, unknown>> = {
 	score(arg:keyof TArgs & string, point?:Vec):number;
 	/** `score(arg, point) > 0`. */
 	holds(arg:keyof TArgs & string, point?:Vec):boolean;
+	/** `score(arg, point)` for a graded `watch` arg (a number here: a `count`, a `distance`); none for a yes/no one. */
+	grader(arg:keyof TArgs & string):((point:Vec)=>number) | undefined;
 	/**
-	 * Move this character until in reach of `target` (`within`, default `withWorld` `getReach`), following it as it
+	 * Move this character until in reach of `target` (`within`, default `withWorld` `getReach` with the step's `with`, else its verb), following it as it
 	 * moves, or sooner once `check` gives a reason. Fails only when there is no way there.
 	 */
 	goTo(target:string, opts?:MoveOpts):Promise<ArcResult>;
@@ -152,6 +162,8 @@ export type DirectorLog = {
 	image?:string;
 	/** A failure the host should surface (inference threw, model failed to load). Not an abort. */
 	error?:boolean;
+	/** The response format a prompt asked for, whole (`message` names it only): what a stored log needs to replay the request. */
+	schema?:Record<string, unknown>;
 };
 
 /**
@@ -202,14 +214,26 @@ export function emptyInferClock():InferClock {
 	};
 }
 
-/** Measurements the director derives from `withWorld` poses and routes; a kernel source does not give them. */
-type WorldMeasures = 'point' | 'distance' | 'pathDistance' | 'facing' | 'side' | 'isFacing';
-
 /**
- * Host measurements for watches. `point` is set when a verb asks what if the character stood there: answer as if it
- * did. Director injects `cache`, `hasHeard`, `prev`, and the geometry from `withWorld`; do not commit `cache`.
+ * What a character sees of the world in the watch language, from its context: who (`others`) and what (`items`) is
+ * there, names a watch may read (`bindings`, `lookup`), and how to read health, packs, doors and cooldowns. `point`
+ * is set when a verb asks what if the character stood there: answer as if it did. The director adds the rest:
+ * geometry from `withWorld` (`distance`, `canSee`, …), `withFunctions`, `withStringifiers`, and its cache.
  */
 export type KernelSource<TCtx> = (
 	ctx:TCtx,
 	point?:Vec,
-)=>Omit<HostKernels, 'cache' | WorldMeasures> & { cache?:SampleCache };
+)=>{
+	me:ExprEntity;
+	others:ExprEntity[];
+	items:ExprEntity[];
+	bindings?:Record<string, ExprVal>;
+	/** A name no binding gives, built the first time a watch reads it (the places of a big world); absent, no such name. */
+	lookup?:(name:string)=>ExprVal | undefined;
+	nearRadius?:number;
+	inventory?:(who:ExprEntity)=>ExprEntity[];
+	hp?:(who:ExprEntity)=>{ hp:number; maxHP:number } | undefined;
+	isOpen?:(who:ExprEntity)=>boolean | undefined;
+	/** Whether `who` may `verb` now, its cooldown over; undefined (ready) for a verb with none. */
+	isReady?:(who:ExprEntity, verb:string)=>boolean | undefined;
+};

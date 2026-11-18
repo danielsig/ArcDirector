@@ -388,7 +388,13 @@ function evalBinary(op:string, leftAst:Ast, rightAst:Ast, ctx:EvalCtx):ExprVal {
 	throw new ExprError(`unknown op ${op}`);
 }
 
-function logic(op:'&&' | '||', left:ExprVal, right:ExprVal):ExprVal {
+/** A thing found holds, and nothing found does not (`some(others) && …`); any other value is itself. */
+function asLogic(v:ExprVal):ExprVal {
+	return v.kind === 'entity' || v.kind === 'absent' ? { kind: 'bool', value: isTruthy(v) } : v;
+}
+
+function logic(op:'&&' | '||', l:ExprVal, r:ExprVal):ExprVal {
+	const [left, right] = [asLogic(l), asLogic(r)];
 	const ln = left.kind === 'number' || left.kind === 'bool';
 	const rn = right.kind === 'number' || right.kind === 'bool';
 	if (!ln || !rn) {
@@ -436,23 +442,9 @@ function predOrNeedle(list:ExprVal[], arg:ExprVal | undefined, ctx:EvalCtx):Expr
 	throw new ExprError('predicate or needle expected');
 }
 
-function foldPred(list:ExprVal[], arg:ExprVal | undefined, all:boolean, ctx:EvalCtx):boolean {
-	const rows = arg ? predOrNeedle(list, arg, ctx) : list.filter((x) => {
-		if (x.kind === 'number') {
-			return x.value > 0;
-		}
-		return isTruthy(x);
-	});
-	if (!arg && list.length === 0) {
-		return all;
-	}
-	if (!arg) {
-		return all ? rows.length === list.length : rows.length > 0;
-	}
-	if (arg.kind === 'string' || arg.kind === 'lambda') {
-		return all ? rows.length === list.length : rows.length > 0;
-	}
-	return all ? rows.length === list.length : rows.length > 0;
+/** The rows of `list` that `arg` picks, a predicate or a needle; without one, those that hold (a number above 0). */
+function picked(list:ExprVal[], arg:ExprVal | undefined, ctx:EvalCtx):ExprVal[] {
+	return arg ? predOrNeedle(list, arg, ctx) : list.filter((x) => (x.kind === 'number' ? x.value > 0 : isTruthy(x)));
 }
 
 export const builtins:Record<string, NativeFn> = {
@@ -595,14 +587,16 @@ export const builtins:Record<string, NativeFn> = {
 		if (!list) {
 			throw needsList('some', args[0]);
 		}
-		return { kind: 'bool', value: foldPred(list, args[1], false, ctx) };
+		// The first thing that matches, nearest first in a list that is, so it names a thing as well as it tests.
+		const hit = picked(list, args[1], ctx)[0];
+		return !hit ? ABSENT : hit.kind === 'entity' ? hit : { kind: 'bool', value: true };
 	},
 	all(args, ctx) {
 		const list = asList(args[0]);
 		if (!list) {
 			throw needsList('all', args[0]);
 		}
-		return { kind: 'bool', value: foldPred(list, args[1], true, ctx) };
+		return { kind: 'bool', value: picked(list, args[1], ctx).length === list.length };
 	},
 	matches(args) {
 		const text = stringOf(args[0]);

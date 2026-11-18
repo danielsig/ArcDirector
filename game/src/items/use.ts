@@ -1,4 +1,5 @@
 import { distanceXZ, type GameObject } from '@arc-director/kindling';
+import { showNamingText, type NamingText } from 'arc-director';
 import { BrewHearth, Bridge, BridgeLever, Chest, Door, Flammable, HumanBody, Lock, Named, Sickbed, Vitals } from '../engine/components';
 import { equipItem, itemInHeldSlot } from './equip';
 import { characterIs, findCarried, healCharacter, inBackpack, removeFromBags, tryInsert } from './inventory';
@@ -20,10 +21,11 @@ export function readPage(item:ItemInstance):string | undefined {
 
 export type UseResult = {
 	ok:boolean;
-	reason:string;
+	/** What came of it, naming by id: a mind reads it in its own names, the player's HUD as ids (`showNamingText`). */
+	reason:NamingText;
 };
 
-function fail(reason:string):UseResult {
+function fail(reason:NamingText):UseResult {
 	return { ok: false, reason };
 }
 
@@ -137,7 +139,8 @@ export function useItem(character:GameObject, item:ItemInstance, target:GameObje
 					removeFromBags(character, item);
 				}
 				if (lock.keyID !== item.Key.keyID) {
-					return fail(`wrong key — ${target.getComponent(Named)?.id ?? 'it'} needs ${keyNameFor(world, lock)}`);
+					const lockID = target.getComponent(Named)?.id;
+					return fail((name) => `wrong key — ${lockID ? name(lockID) : 'it'} needs ${showNamingText(keyNameFor(world, lock, character), name)}`);
 				}
 				// A lock on one side only: its key opens the door, and it stays locked for the next one out there.
 				lock.locked &&= lock.lockedFrom === 'outside';
@@ -160,7 +163,7 @@ export function useItem(character:GameObject, item:ItemInstance, target:GameObje
 				return ok(lock.locked ? 'opened' : 'unlocked');
 			}
 			if (lock.locked) {
-				return fail(lockedReason(world, lock));
+				return fail(lockedReason(world, lock, character));
 			}
 		}
 		const flam = target.getComponent(Flammable);

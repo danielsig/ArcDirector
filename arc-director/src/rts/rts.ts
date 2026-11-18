@@ -696,7 +696,7 @@ export class RTS<TCtx> {
 		}
 		const gateKind = tag === 'Wall' ? this.cheapest(side, 'Gate') : undefined;
 		const steps = Math.max(1, Math.ceil(distance(a, b)));
-		const cells = [...new Map(Array.from({ length: steps + 1 }, (_, i) => {
+		const cells = [...new Map(Array.from({ length: steps + 1 }, (element, i) => {
 			const p = a.map((v, k) => Math.round(v + ((b[k] - v) * i) / steps));
 			return [p.join(), p] as const;
 		})).values()];
@@ -704,7 +704,7 @@ export class RTS<TCtx> {
 		if (gates > 0 && !gateKind) {
 			return 'nothing you can build makes a gate';
 		}
-		const gateAt = new Set(Array.from({ length: gates }, (_, g) => Math.min(cells.length - 1, Math.round(((g + 1) * cells.length) / (gates + 1)))));
+		const gateAt = new Set(Array.from({ length: gates }, (element, g) => Math.min(cells.length - 1, Math.round(((g + 1) * cells.length) / (gates + 1)))));
 		const plan = cells.map((at, i) => ({ at, kind: gateAt.has(i) ? gateKind! : kind }));
 		const total:CountMap = {};
 		for (const { kind: k } of plan) {
@@ -1111,7 +1111,7 @@ export class RTS<TCtx> {
 			}
 		}
 		this.clearDoing(call);
-		return ok('attack', `${targets.join(', ')} down`);
+		return ok('attack', `${targets.join(', ')} fallen`);
 	}
 
 	private async attackMove(call:VerbCall<TCtx>):Promise<ArcResult> {

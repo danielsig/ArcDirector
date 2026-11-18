@@ -9,7 +9,7 @@ const gameModels = fileURLToPath(new URL('../../game/public/models/', import.met
 export default defineConfig({
 	root: playground,
 	define: {
-		__GAME_MODELS__: JSON.stringify(`/@fs/${gameModels.replace(/^\//, '')}`),
+		'import.meta.env.GAME_MODELS': JSON.stringify(`/@fs/${gameModels.replace(/^\//, '')}`),
 	},
 	resolve: {
 		alias: {

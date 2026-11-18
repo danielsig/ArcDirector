@@ -1,9 +1,4 @@
-export type LogEntry = {
-	seq:number;
-	name:string;
-	message:string;
-	image?:boolean;
-};
+import type { AiLogRow } from '@arc-director/control';
 
 /** First capture group, or the whole match. Empty string when nothing matches. */
 export type Take = (re:RegExp, text?:string)=>string;
@@ -12,13 +7,13 @@ export type Take = (re:RegExp, text?:string)=>string;
  * Reduce each log row with a JavaScript expression. `entry` is the row; `take(re, text?)` is the first match in `text` (default `entry.message`).
  * A string becomes `{ seq, name, text }`. An object is kept as returned. `null`, `undefined`, and `false` drop the row.
  */
-export function projectEntries(entries:LogEntry[], each:string | undefined):unknown {
+export function projectEntries(entries:AiLogRow[], each:string | undefined):unknown {
 	if (!each) {
 		return entries;
 	}
-	let fn:(entry:LogEntry, take:Take)=>unknown;
+	let fn:(entry:AiLogRow, take:Take)=>unknown;
 	try {
-		fn = new Function('entry', 'take', `"use strict"; return (${each});`) as (entry:LogEntry, take:Take)=>unknown;
+		fn = new Function('entry', 'take', `"use strict"; return (${each});`) as (entry:AiLogRow, take:Take)=>unknown;
 	}
 	catch (err) {
 		throw new Error(`each: ${err instanceof Error ? err.message : String(err)}`);

@@ -94,7 +94,7 @@ describe('MemoryStore', () => {
 		const gone = store.add({ text: 'Dusk is the enemy' });
 		assert.equal(store.remove(gone.id), true);
 		assert.equal(store.remove(gone.id), false);
-		assert.equal(store.rewrite(kept.id, 'Dawn led us')?.text, 'Dawn led us');
+		assert.deepEqual(store.rewrite(kept.id, 'Dawn led us')?.text, 'Dawn led us');
 		assert.equal(kept.embedding, undefined);
 		assert.equal(store.rewrite('mem_99', 'x'), undefined);
 		assert.deepEqual(store.all().map((r) => r.text), ['Dawn led us']);

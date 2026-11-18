@@ -1,20 +1,20 @@
+import { showNamingText } from '../character/text-with-ids.js';
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { arcSteps, type Arc, type ArcResult, type Join, type Step } from './arc-types.js';
+import { type Arc, type ArcResult, type Join, type Step } from './arc-types.js';
 import { parseArcText } from './arc-parse.js';
-import { parseArc } from './wire.js';
+import { arcJSONText, parseArc } from './wire.js';
+import { formatArc } from './arc-format.js';
 import { VerbRegistry, STOCK_VERB_DEFS } from './stock-verbs.js';
 import { dummyEntity, buildCatalog } from '../expr/natives.js';
 import { SampleCache } from '../expr/expr-types.js';
-import { createArcSession, deferThinks, firstStartable, handlerFinished, pollArcSession, reactionArm, runArc, THINK_ABOUT_CAP, type ArcHandler, type LastChoice } from './run.js';
+import { createArcSession, firstStartable, handlerFinished, interruptArc, pollArcSession, reactionArm, type ArcHandler, type LastChoice } from './run.js';
+import { DEFAULT_EXPLICIT_THINK_ALLOWED_INSIDE, misplacedThink, placesHelp } from './validate.js';
+import { drive, restoreArc, runArc, startArc, type ArcMachine, type ArcMachineJSON } from './arc-machine.js';
 import { lawFinished, lawFromSpec, lawHandler, upsertLaw, type Law } from './laws.js';
 
 function go(name:string, then?:Join):Step {
 	return { verb: 'go_to', args: { name }, ...(then ? { then } : {}) };
-}
-
-function think(about?:string, then?:Join):Step {
-	return { verb: 'think', args: about ? { about } : {}, ...(then ? { then } : {}) };
 }
 
 function wait(seconds = 1, then?:Join):Step {
@@ -35,91 +35,32 @@ async function ran(arc:Arc, failing:string[] = []):Promise<{ verbs:string[]; res
 	return { verbs, result };
 }
 
-describe('deferThinks', () => {
-	it('leaves an arc without think unchanged', () => {
-		const arc:Arc = [go('EastGate'), wait()];
-		assert.equal(deferThinks(arc), arc);
+describe('misplacedThink', () => {
+	const verbs = new VerbRegistry().addStock();
+	const where = (text:string, inside = DEFAULT_EXPLICIT_THINK_ALLOWED_INSIDE):string | undefined => misplacedThink(parseArcText(text, verbs), inside)?.message;
+
+	it('turns down a think at the root, in a plain chain, a group, a loop or a when', () => {
+		for (const text of ['think("x")', 'go_to(Gate) ; think("x")', '(go_to(Gate) && think("x"))', 'loop(think("x"))', 'when(some(others)) { think("x") }', 'if (some(others)) { (think("x")) }']) {
+			assert.equal(where(text), 'think() only inside if/else or a choose choice: if (…) { think("…") }', text);
+		}
 	});
 
-	it('moves think to the end even when the LLM put it first', () => {
-		const ordered = deferThinks([think('the lock'), go('EastGate')]);
-		assert.deepEqual(ordered.map((step) => step.verb), ['go_to', 'think']);
-		assert.equal(ordered[0].then, 'always');
-		assert.equal(ordered[1].args.about, 'the lock');
+	it('lets a think stand directly in an if, an else or a choice', () => {
+		for (const text of ['if (some(others)) { think("x") }', 'if (pick_up(Key)) { go_to(Door) } else { think("x") }', 'loop(choose("g", a=think("x"), b=wait(), c=wander()))']) {
+			assert.equal(where(text), undefined, text);
+		}
 	});
 
-	it('concatenates several abouts into one trailing think', () => {
-		const ordered = deferThinks([think('the lock', 'always'), go('EastGate'), think('which key')]);
-		const steps = arcSteps(ordered);
-		assert.deepEqual(steps.map((s) => s.verb), ['go_to', 'think']);
-		assert.equal(steps[1].args.about, 'the lock which key');
-	});
-
-	it('keeps a bare think when no about is set', () => {
-		const ordered = deferThinks([wait(1), think()]);
-		assert.equal(ordered[1].verb, 'think');
-		assert.deepEqual(ordered[1].args, {});
-	});
-
-	it('caps concatenated abouts', () => {
-		const a = 'a'.repeat(120);
-		const b = 'b'.repeat(120);
-		const ordered = deferThinks([think(a), think(b)]);
-		const about = String(ordered[0].args.about ?? '');
-		assert.equal(about.length, THINK_ABOUT_CAP);
-		assert.equal(about.startsWith('a'), true);
-	});
-
-	it('copies only the step before the appended think, and keeps every other step', () => {
-		const first = go('EastGate', 'if_failed');
-		const second = wait(1);
-		const arc:Arc = [first, think('x'), second];
-		const ordered = deferThinks(arc);
-		assert.equal(ordered[0], first, 'the step before a removed think keeps its own join');
-		assert.notEqual(ordered[1], second, 'the step before the appended think is a copy that joins it');
-		assert.equal(ordered[1].then, 'always');
-		assert.equal(second.then, undefined, 'the original is not touched');
-		assert.equal(arc.length, 3);
-	});
-
-	it('defers a think inside a later group too', () => {
-		const inner:Arc = [think('inside'), go('Keep')];
-		const group:Step = { verb: 'group', args: { arc: inner } };
-		const arc:Arc = [wait(1), group];
-		const ordered = deferThinks(arc);
-		assert.notEqual(ordered, arc);
-		assert.equal(ordered[0], arc[0]);
-		const moved = ordered[1].args.arc as Arc;
-		assert.deepEqual(moved.map((step) => step.verb), ['go_to', 'think']);
-		assert.equal(group.args.arc, inner, 'the original group is not touched');
-		const plain:Arc = [wait(1), { verb: 'group', args: { arc: [go('Keep')] } }];
-		assert.equal(deferThinks(plain), plain);
+	it("lets a think stand in a host verb's arc once explicitThinkAllowedInside lists it", () => {
+		const own = new VerbRegistry().addStock().add('maybe', { args: { chance: 'number', arc: 'arc' } });
+		const arc = parseArcText('maybe(0.5) { think("x") }', own);
+		assert.ok(misplacedThink(arc, DEFAULT_EXPLICIT_THINK_ALLOWED_INSIDE));
+		assert.equal(misplacedThink(arc, [...DEFAULT_EXPLICIT_THINK_ALLOWED_INSIDE, 'maybe.arc']), undefined);
+		assert.equal(placesHelp([...DEFAULT_EXPLICIT_THINK_ALLOWED_INSIDE, 'maybe.arc']), 'only inside if/else, a choose choice or maybe');
 	});
 });
 
 describe('runArc', () => {
-	it('runs think last after the rest of the arc', async () => {
-		const { verbs } = await ran([think('later'), go('EastGate'), pickUp('Key')]);
-		assert.deepEqual(verbs, ['go_to', 'pick_up', 'think']);
-	});
-
-	it('still runs think when an earlier && fails', async () => {
-		const { verbs, result } = await ran([think('anyway'), go('EastGate'), pickUp('Key')], ['go_to']);
-		assert.deepEqual(verbs, ['go_to', 'think']);
-		assert.equal(result.verb, 'think');
-		assert.equal(result.status === 'ok', true);
-	});
-
-	it('skips think when the body is interrupted', async () => {
-		const verbs:string[] = [];
-		const result = await runArc([go('EastGate', 'always'), think('nope')], async (step) => {
-			verbs.push(step.verb);
-			return { status: 'stopped', verb: step.verb, reason: 'hurt' };
-		});
-		assert.deepEqual(verbs, ['go_to']);
-		assert.equal(result.status === 'stopped', true);
-	});
-
 	it('a missing then is if_ok, and the last step then is ignored', async () => {
 		assert.deepEqual((await ran([go('A'), wait(), pickUp('Key')], ['go_to'])).verbs, ['go_to']);
 		assert.deepEqual((await ran([go('A'), wait(), pickUp('Key', 'if_failed')])).verbs, ['go_to', 'wait', 'pick_up']);
@@ -640,14 +581,13 @@ describe('handlers by reference', () => {
 			return value;
 		};
 		const shared = freeze<Arc>([
-			think('later', 'always'),
 			go('A', 'if_failed'),
-			{ verb: 'group', args: { arc: [think('inside'), wait(1), go('B', 'always')] } },
+			{ verb: 'group', args: { arc: [wait(1), go('B', 'always')] } },
 			pickUp('Key'),
 		]);
 		const both = await Promise.all([ran(shared, ['go_to']), ran(shared)]);
-		assert.deepEqual(both[0].verbs, ['go_to', 'wait', 'go_to', 'think', 'pick_up', 'think'], 'a failed: the fallback runs the group (its own think last), pick_up, then the deferred think');
-		assert.deepEqual(both[1].verbs, ['go_to', 'think']);
+		assert.deepEqual(both[0].verbs, ['go_to', 'wait', 'go_to'], 'a failed: the fallback runs the group, whose failed go_to skips pick_up');
+		assert.deepEqual(both[1].verbs, ['go_to']);
 	});
 });
 
@@ -683,7 +623,7 @@ describe('choose', () => {
 		const ran:Step[] = [];
 		const session = createArcSession({
 			now: ticking,
-			pick: async (_goal, choices) => {
+			pick: async (goal, choices) => {
 				asked.push(Object.keys(choices));
 				return 'wait';
 			},
@@ -705,21 +645,21 @@ describe('choose', () => {
 			return { status: 'ok', verb: step.verb };
 		}, { session });
 		assert.equal(result.status === 'ok', false);
-		assert.match(result.reason ?? '', /unknown choice 'flee'/);
+		assert.match(showNamingText(result.reason ?? ''), /unknown choice 'flee'/);
 		assert.deepEqual(ran, []);
 	});
 
 	it('fails without a System One model', async () => {
 		const result = await runArc(parseArcText('choose("hold", stand=wait())', verbs), async (step) => ({ status: 'ok', verb: step.verb }));
 		assert.equal(result.status === 'ok', false);
-		assert.match(result.reason ?? '', /no System One model/);
+		assert.match(showNamingText(result.reason ?? ''), /no System One model/);
 	});
 
 	it('asks again on each loop pass and shows the last result', async () => {
 		const lasts:(LastChoice | undefined)[] = [];
 		const session = createArcSession({
 			now: ticking,
-			pick: async (_goal, _choices, last) => {
+			pick: async (goal, choices, last) => {
 				lasts.push(last);
 				return 'stand';
 			},
@@ -874,7 +814,7 @@ describe('until and within on any step', () => {
 		assert.equal(result.status === 'ok', true);
 		assert.equal(seen, undefined, 'an until that holds from the start runs nothing');
 		const late = stage(() => late.now() >= 2);
-		const said = await runArc(parseArcText('wander(until=hasHeard)', verbs), (_step, signal) => new Promise((done) => {
+		const said = await runArc(parseArcText('wander(until=hasHeard)', verbs), (step, signal) => new Promise((done) => {
 			signal?.addEventListener('abort', () => done({ status: 'ok', verb: 'wander', reason: `until — saw Lantern (${String(signal.reason)})` }), { once: true });
 		}), { session: late.session });
 		assert.equal(said.reason, 'until — saw Lantern (until)');
@@ -944,7 +884,7 @@ describe('unbreakable', () => {
 		assert.throws(() => parseArcText('follow(Tom, unbreakable=true)', verbs), /follow holds for seconds: unbreakable=10s; true would never let it end/);
 		assert.throws(() => parseArcText('follow(Tom, unbreakable=3)', verbs), /follow holds for seconds: unbreakable=10s$/);
 		assert.throws(() => parseArcText('go_to(Keep, unbreakable=3s)', verbs), /no arg 'unbreakable'/);
-		const json = '{"steps":[{"verb":"loop","arc":[{"verb":"wait"}],"unbreakable":2},{"verb":"follow","target":"Tom","unbreakable":"10s"}]}';
+		const json = '{"steps":[{"verb":"loop","arc":[{"verb":"wait"}],"times":3,"unbreakable":2},{"verb":"follow","target":"Tom","unbreakable":"10s"}]}';
 		assert.deepEqual(parseArc(json, verbs).map((step) => step.args.unbreakable), [2, '10s'], 'Arc JSON writes both');
 	});
 });
@@ -1037,5 +977,325 @@ describe('reactions commit', () => {
 		};
 		assert.deepEqual(await run('go_to(Gate) ; when(danger) { say("ow") } ; wait()'), ['go_to', 'ow', 'wait'], 'not over the go_to before it');
 		assert.deepEqual(await run('(wait() ; when(danger) { say("ow") }) ; go_to(Gate)'), ['wait', 'go_to'], 'gone with its group');
+	});
+});
+
+describe('a running program saved', () => {
+	const verbs = new VerbRegistry().addAll(STOCK_VERB_DEFS);
+	const ARC = 'go_to(A) ; loop(times=3) { let x = say("round") ; follow(Tom, within=3s) } ; say("end")';
+
+	/** A clock that moves a second each time it is waited on; `follow` runs until stopped. */
+	const stage = (ran:string[]):{ session:ReturnType<typeof createArcSession>; execute:(step:Step, signal?:AbortSignal)=>Promise<ArcResult> } => {
+		let now = 0;
+		const session = createArcSession({ verbs, now: () => now, nextTime: async () => {
+			now += 1;
+		} });
+		const execute = (step:Step, signal?:AbortSignal):Promise<ArcResult> => {
+			ran.push(`${step.verb}${step.args.text ? ` ${String(step.args.text)}` : ''}`);
+			return step.verb !== 'follow' ? Promise.resolve({ status: 'ok', verb: step.verb }) : new Promise((done) => {
+				signal?.addEventListener('abort', () => done({ status: 'stopped', verb: 'follow' }), { once: true });
+			});
+		};
+		return { session, execute };
+	};
+
+	it('goes on where it was once loaded: its loop round, its race, its let', async () => {
+		const whole:string[] = [];
+		const all = stage(whole);
+		await runArc(parseArcText(ARC, verbs), all.execute, { session: all.session });
+		const before:string[] = [];
+		const first = stage(before);
+		const machine = startArc(parseArcText(ARC, verbs), first.execute, { session: first.session });
+		// Into the second round, its follow under way.
+		let byTime = false;
+		while (before.filter((verb) => verb === 'follow').length < 2) {
+			const out = machine.advance(byTime);
+			assert.ok('wake' in out, 'it is still running');
+			byTime = await out.wake() === 'time';
+		}
+		const saved = JSON.parse(JSON.stringify(machine.toJSON())) as ArcMachineJSON;
+		const after:string[] = [];
+		const second = stage(after);
+		const program = { work: parseArcText(ARC, verbs) };
+		const result = await drive(restoreArc(saved, program, second.execute, second.session));
+		assert.equal(result.status, 'ok');
+		// The follow under way runs again; nothing before it does.
+		assert.deepEqual([...before.slice(0, -1), ...after], whole);
+		assert.equal(second.session.passes.get(program.work[1]), 3);
+	});
+
+	/**
+	 * `text` run until it says "here" (a host call that never comes back), saved as JSON, loaded on a new session, and
+	 * saved again: the two saves are alike. `examine` fails; `wait` calls in the law `duck` the first time.
+	 */
+	const roundTrip = async (text:string, opts:{ duck?:boolean; open?:Arc; parked?:boolean } = {}):Promise<ArcMachineJSON> => {
+		const duck:Law = { name: 'duck', who: 'me', watch: 'true', arc: parseArcText('remember("ow") ; say("here")', verbs) };
+		const laws = { duck: duck.arc };
+		const law = ():ArcHandler => ({ source: duck, watch: duck.watch, arc: duck.arc, rank: 0, arm: reactionArm(duck) });
+		let here = false;
+		let ducked = !opts.duck;
+		const { session } = stage([]);
+		session.pick = async () => 'talk';
+		const execute = (step:Step, signal?:AbortSignal):Promise<ArcResult> => {
+			here ||= step.args.text === 'here';
+			if (step.verb === 'wait' && !ducked) {
+				ducked = true;
+				interruptArc(session, { kind: 'preempt', handler: law() });
+			}
+			return step.args.text !== 'here' ? Promise.resolve({ status: step.verb === 'examine' ? 'failed' : 'ok', verb: step.verb, reason: 'no' }) : new Promise((done) => {
+				signal?.addEventListener('abort', () => done({ status: 'stopped', verb: step.verb }), { once: true });
+			});
+		};
+		const program = { work: parseArcText(text, verbs) };
+		let machine:ArcMachine = startArc(program.work, execute, { session, open: !!opts.open });
+		if (opts.open) {
+			machine.advance();
+			machine.root()!.append(opts.open);
+			machine.root()!.close();
+		}
+		let byTime = false;
+		while (!here) {
+			const out = machine.advance(byTime);
+			machine = machine.takeParked() ?? machine;
+			if (!here && opts.parked && !('wake' in out)) {
+				break;
+			}
+			assert.ok('wake' in out, `it is still running: ${JSON.stringify(out)}`);
+			byTime = !here && await out.wake() === 'time';
+		}
+		const saved = JSON.parse(JSON.stringify(machine.toJSON(laws))) as ArcMachineJSON;
+		const loaded = restoreArc(saved, program, execute, stage([]).session, laws, law);
+		assert.deepEqual(JSON.parse(JSON.stringify(loaded.toJSON(laws))), saved);
+		// Both stop, the parts of a `while` too.
+		for (const running of [machine, loaded]) {
+			running.session.ended = true;
+			interruptArc(running.session, { kind: 'abort' });
+			running.advance();
+		}
+		return saved;
+	};
+
+	it('saves every kind of frame as it is, and saves a loaded one alike', async () => {
+		const kinds = async (text:string, opts?:Parameters<typeof roundTrip>[1]):Promise<string[]> => (await roundTrip(text, opts)).frames.map((frame) => frame.kind);
+		assert.deepEqual(await kinds('loop(times=3) { wait(1) ; say("here", within=50) }'), ['root', 'chain', 'exec', 'loop', 'chain', 'exec', 'host']);
+		assert.deepEqual(await kinds('examine(Y) ; if (examine(X)) { say("no") } else { say("here") }'), ['root', 'chain', 'exec', 'if', 'chain', 'exec', 'host']);
+		assert.deepEqual(await kinds('choose("talk or stand", talk=say("here"), stand=wait())'), ['root', 'chain', 'exec', 'choose', 'chain', 'exec', 'host']);
+		const parallel = await roundTrip('go_to(Gate) while { wait(1) ; say("here") }');
+		assert.deepEqual(parallel.frames.map((frame) => frame.kind), ['root', 'chain', 'exec', 'parallel']);
+		assert.ok(parallel.frames.some((frame) => frame.kind === 'parallel' && frame.parts[0]?.frames.some((part) => part.kind === 'host')), 'the part saves its step under way');
+		const reaction = await roundTrip('when(danger, times=2) { remember("x") } ; wait(5)', { duck: true });
+		assert.deepEqual(reaction.frames.map((frame) => frame.kind), ['root', 'chain', 'exec', 'host', 'reaction', 'chain', 'exec', 'host']);
+		assert.deepEqual(reaction.handlers, [{ when: 'work.0', rank: 100 }, { law: 'duck' }]);
+		assert.deepEqual(reaction.session.whens, [['work.0', { runs: 0 }]]);
+		assert.deepEqual((await roundTrip('when(danger) { say("x") }', { parked: true })).frames.map((frame) => frame.kind), ['park']);
+		const streamed = await roundTrip('wait(1)', { open: parseArcText('wait(2) ; say("here")', verbs) });
+		assert.deepEqual(streamed.steps.map((step) => step.verb), ['wait', 'say'], 'steps streamed in are saved once');
+		assert.deepEqual(streamed.frames.find((frame) => frame.kind === 'chain')?.arc, ['work.0', 'steps.0.0', 'steps.1.0']);
+	});
+
+	it('saves the shape it says, whatever its frames call their fields', async () => {
+		const saved = await roundTrip('examine(X) ; say("here", within=50)');
+		assert.deepEqual(saved, {
+			frames: [
+				{ kind: 'root', depth: 0, draining: false, open: false, started: true },
+				{
+					kind: 'chain', depth: 0, draining: false, arc: ['work.0', 'work.1'], open: false, started: true, i: 1,
+					result: { status: 'failed', verb: 'examine', reason: 'no' }, named: [], handlers: [], outerFail: undefined,
+				},
+				{ kind: 'exec', depth: 0, draining: false, step: 'work.1', alone: false, rounds: 1, race: 0, above: 0, running: true },
+				{ kind: 'host', depth: 0, draining: false, step: 'work.1', race: 0, token: 0, since: 0 },
+			].map((frame) => JSON.parse(JSON.stringify(frame)) as unknown),
+			session: { token: 0, fail: { verb: 'examine', reason: ['no'] }, shields: 0, parked: false, running: [], bindings: [], passes: [], whens: [] },
+			races: [{ until: '', within: 50, deadline: 50, endless: false, holdUntil: 0 }],
+			handlers: [],
+			steps: [],
+		});
+	});
+});
+
+describe('A while B', () => {
+	const verbs = new VerbRegistry().addAll(STOCK_VERB_DEFS);
+	/**
+	 * A clock that moves a second each time it is waited on. `go_to` takes `walk` seconds, `follow` and `wait` their time
+	 * or until stopped; a verb named in `fails` fails at once.
+	 */
+	const stage = (walk:number, fails:readonly string[] = [], begun:(verb:string)=>void = () => undefined):{ session:ReturnType<typeof createArcSession>; log:string[]; execute:(step:Step, signal?:AbortSignal)=>Promise<ArcResult> } => {
+		let now = 0;
+		const log:string[] = [];
+		const session = createArcSession({ verbs, now: () => now, nextTime: async () => {
+			now += 1;
+		} });
+		const execute = async (step:Step, signal?:AbortSignal):Promise<ArcResult> => {
+			const what = [step.verb, step.args.target, step.args.text].filter((part) => typeof part === 'string').join(' ');
+			log.push(what);
+			begun(step.verb);
+			if (fails.includes(step.verb)) {
+				return { status: 'failed', verb: step.verb, reason: `${step.verb} failed` };
+			}
+			const takes = step.verb === 'go_to' ? walk : step.verb === 'wait' ? Number(step.args.seconds) : step.verb === 'follow' ? Infinity : 0;
+			const end = now + takes;
+			while (now < end && !signal?.aborted) {
+				await session.nextTime!();
+			}
+			if (takes > 0) {
+				log.push(`${signal?.aborted ? 'stopped' : 'ended'} ${what}`);
+			}
+			return { status: signal?.aborted ? 'stopped' : 'ok', verb: step.verb };
+		};
+		return { session, log, execute };
+	};
+	const say = (text:string):Step => ({ verb: 'say', args: { text } });
+
+	it('puts B in A\'s while, Arc text and JSON alike, and writes it back so', () => {
+		const arc = parseArcText('go_to(Well) while say("Follow me")', verbs);
+		assert.equal(arc.length, 1);
+		assert.deepEqual(arc[0].args.while, [say('Follow me')]);
+		assert.equal(formatArc(arc, verbs), 'go_to(Well) while say("Follow me")');
+		assert.match(arcJSONText(arc, verbs), /"while":\[\{"verb":"say"/);
+		assert.deepEqual(parseArc(arcJSONText(arc, verbs), verbs), arc);
+		const block = parseArcText('go_to(Gate) while {\n\tsay("This way")\n\tsay("Nearly there")\n}\nsay("Here we are")', verbs);
+		assert.deepEqual(block.map((step) => step.verb), ['go_to', 'say']);
+		assert.deepEqual(block[0].args.while, [{ ...say('This way'), then: 'always' }, say('Nearly there')]);
+		assert.equal(formatArc(block, verbs), 'go_to(Gate) while { say("This way") ; say("Nearly there") } ; say("Here we are")');
+	});
+
+	it('takes a block verb on either side, and on any verb in JSON', () => {
+		const loop = parseArcText('loop {\n\tgo_to(Mill)\n\tgo_to(Barn)\n} while say("Off I go")', verbs)[0];
+		assert.equal(loop.verb, 'loop');
+		assert.equal((loop.args.arc as Arc).length, 2);
+		assert.deepEqual(loop.args.while, [say('Off I go')]);
+		const follow = parseArcText('follow(Bram) while {\n\tsay("Come")\n\tsay("Hurry")\n}', verbs)[0];
+		assert.deepEqual((follow.args.while as Arc).map((step) => step.args.text), ['Come', 'Hurry']);
+		const looped = parseArcText('say("Off") while loop { go_to(Mill) ; go_to(Barn) }', verbs)[0];
+		assert.equal((looped.args.while as Arc)[0].verb, 'loop');
+		assert.deepEqual(parseArc('{"steps":[{"verb":"loop","arc":[{"verb":"go_to","target":"Well"}],"while":[{"verb":"say","text":"hi"}]}]}', verbs)[0].args.while, [say('hi')]);
+	});
+
+	it('binds tighter than &&, || and ;', () => {
+		const verbsOf = (text:string):string[] => parseArcText(text, verbs).map((step) => `${step.verb}${step.args.while ? '+' : ''}${step.then ? ` ${step.then}` : ''}`);
+		assert.deepEqual(verbsOf('go_to(Well) while say("Follow me") && examine(Well)'), ['go_to+', 'examine']);
+		assert.deepEqual(verbsOf('pick_up(Lantern) && go_to(Well) while say("hi")'), ['pick_up', 'go_to+']);
+		assert.deepEqual(verbsOf('go_to(Bell) while say("Make way") || say("Help!")'), ['go_to+ if_failed', 'say']);
+		assert.deepEqual(verbsOf('say("Ready") ; go_to(Well) while say("hi")'), ['say always', 'go_to+']);
+	});
+
+	it('repeats from the right, and is refused at a statement\'s start', () => {
+		const arc = parseArcText('go_to(Well) while say("a") while remember("x")', verbs);
+		assert.deepEqual(arc[0].args.while, [{ ...say('a'), args: { text: 'a', while: [{ verb: 'remember', args: { content: 'x' } }] } }]);
+		assert.equal(formatArc(arc, verbs), 'go_to(Well) while say(a) while remember(x)');
+		assert.throws(() => parseArcText('while (isHurt(me)) { say("ow") }', verbs), /while joins two steps: A while B/);
+		// A { } on a verb's line is refused; on the next line it is a step of its own.
+		assert.throws(() => parseArcText('go_to(Well) { say("hi") }', verbs), /to run steps during it, write go_to\(Well\) while \{ … \}; for after it, put the block on the next line/);
+		assert.deepEqual(parseArcText('go_to(Well)\n{\n\tsay("hi")\n}', verbs).map((step) => step.verb), ['go_to', 'group']);
+		assert.deepEqual(parseArcText('loop {\n\tgo_to(Well)\n}', verbs).map((step) => step.verb), ['loop'], 'a block verb keeps its body');
+	});
+
+	it('runs B during A, and the next step waits for both', async () => {
+		const { session, log, execute } = stage(3);
+		const result = await runArc(parseArcText('go_to(Gate) while say("This way") ; remember("led them")', verbs), execute, { session });
+		assert.equal(result.status, 'ok');
+		assert.ok(log.indexOf('say This way') < log.indexOf('ended go_to Gate'), 'spoken while walking');
+		assert.equal(log.at(-1), 'remember', 'the next step waits for both');
+	});
+
+	it('ends once A and B have, whichever is last', async () => {
+		const { session, log, execute } = stage(1);
+		await runArc(parseArcText('go_to(Gate) while { wait(4) ; say("Here") } ; remember("x")', verbs), execute, { session });
+		assert.ok(log.indexOf('ended go_to Gate') < log.indexOf('say Here'));
+		assert.deepEqual(log.slice(-2), ['say Here', 'remember']);
+	});
+
+	it('runs A while B while C as three parts side by side', async () => {
+		const { session, log, execute } = stage(4);
+		let saved:ArcMachineJSON | undefined;
+		const arc = parseArcText('go_to(Gate) while wait(2) while say("Hi") ; remember("x")', verbs);
+		const machine = startArc(arc, async (step, signal) => {
+			saved ??= step.verb === 'say' ? JSON.parse(JSON.stringify(machine.toJSON())) as ArcMachineJSON : undefined;
+			return execute(step, signal);
+		}, { session });
+		assert.equal((await drive(machine)).status, 'ok');
+		assert.ok(log.indexOf('say Hi') < Math.min(log.indexOf('ended wait'), log.indexOf('ended go_to Gate')), 'all three run at once: ' + log.join(', '));
+		assert.equal(log.at(-1), 'remember');
+		const frames = saved!.frames.flatMap((frame) => (frame.kind === 'parallel' ? [frame] : []));
+		assert.equal(frames.length, 1, 'one frame, no nesting');
+		assert.equal(frames[0].parts.length, 2);
+	});
+
+	it('queues a step on every channel the session says it needs', async () => {
+		const { session, log, execute } = stage(3);
+		session.extraLanes = (step) => (step.verb === 'say' ? ['body'] : []);
+		await runArc(parseArcText('go_to(Well) while say("Wait for me")', verbs), execute, { session });
+		assert.ok(log.indexOf('ended go_to Well') < log.indexOf('say Wait for me'), 'a line that walks first waits for the body');
+	});
+
+	it('queues a step behind a part that holds its channel', async () => {
+		const { session, log, execute } = stage(3);
+		await runArc(parseArcText('go_to(Well) while examine(Well)', verbs), execute, { session });
+		assert.ok(log.indexOf('ended go_to Well') < log.indexOf('examine Well'), log.join(', '));
+		const voices = stage(1);
+		await runArc(parseArcText('loop(times=1) { say("a") ; go_to(Mill) } while say("b")', verbs), voices.execute, { session: voices.session });
+		assert.deepEqual(voices.log.filter((line) => line.startsWith('say')), ['say a', 'say b'], 'the voice is one at a time');
+	});
+
+	it('fails as its first part to fail, once every part has ended', async () => {
+		const { session, log, execute } = stage(5, ['go_to']);
+		const result = await runArc(parseArcText('go_to(Gate) while { wait(3) ; say("Late") } && remember("x")', verbs), execute, { session });
+		assert.equal(result.status, 'failed');
+		assert.equal(result.reason, 'go_to failed');
+		assert.ok(log.includes('say Late') && !log.includes('remember'), log.join(', '));
+		const part = stage(3, ['say']);
+		const failed = await runArc(parseArcText('go_to(Gate) while say("Hi") && remember("x")', verbs), part.execute, { session: part.session });
+		assert.equal(failed.reason, 'say failed');
+		assert.ok(part.log.includes('ended go_to Gate') && !part.log.includes('remember'));
+	});
+
+	it('ends every part at A\'s until or within, and is endless with an endless part', async () => {
+		const { session, log, execute } = stage(1);
+		const result = await runArc(parseArcText('follow(Bram, within=5) while say("Come") ; remember("x")', verbs), execute, { session });
+		assert.equal(result.status, 'ok');
+		assert.ok(log.indexOf('say Come') < log.indexOf('stopped follow Bram') && log.at(-1) === 'remember', log.join(', '));
+		const part = stage(1);
+		await runArc(parseArcText('say("Come", within=5) while follow(Bram)', verbs), part.execute, { session: part.session });
+		assert.ok(part.log.includes('stopped follow Bram'), 'A\'s within ends B too');
+		assert.throws(() => parseArcText('say("Come") while follow(Bram) ; remember("x")', verbs), /follow never ends/);
+	});
+
+	it('is held, every part, while a reaction runs over it, and goes on with it', async () => {
+		const law:Law = { name: 'duck', who: 'me', watch: 'true', arc: parseArcText('remember("ow") ; wait(3)', verbs) };
+		let fired = false;
+		const { session, log, execute } = stage(20, [], (verb) => {
+			if (verb === 'wait' && !fired) {
+				fired = true;
+				interruptArc(session, { kind: 'preempt', handler: { source: law, watch: law.watch, arc: law.arc, rank: 0, arm: reactionArm(law) } });
+			}
+		});
+		const result = await runArc(parseArcText('go_to(Gate) while { say("a") ; wait(10) ; say("b") }', verbs), execute, { session });
+		assert.equal(result.status, 'ok');
+		const waits = log.flatMap((line, i) => (line === 'wait' ? [i] : []));
+		assert.equal(waits.length, 3, `B's wait, the reaction's, B's again: ${log.join(', ')}`);
+		assert.ok(log.indexOf('stopped wait') < waits[1], 'B\'s wait is cut short as the reaction begins');
+		assert.ok(log.indexOf('ended wait') < waits[2], 'and runs again once the reaction is done');
+		assert.ok(log.indexOf('say b') > log.indexOf('remember') && log.includes('ended go_to Gate'));
+	});
+
+	it('goes on where it was once loaded', async () => {
+		const text = 'go_to(Gate) while { say("a") ; wait(100) ; say("b") } ; remember("x")';
+		// Saved as B's wait begins, the walk under way.
+		let reach:(json:ArcMachineJSON)=>void = () => undefined;
+		const reached = new Promise<ArcMachineJSON>((resolve) => {
+			reach = resolve;
+		});
+		const first = stage(500, [], (verb) => verb === 'wait' && reach(JSON.parse(JSON.stringify(machine.toJSON())) as ArcMachineJSON));
+		const machine = startArc(parseArcText(text, verbs), first.execute, { session: first.session });
+		void drive(machine);
+		const saved = await reached;
+		assert.ok(saved.frames.some((frame) => frame.kind === 'parallel' && frame.parts[0]), 'B is saved with its frame');
+		const second = stage(2);
+		const result = await drive(restoreArc(saved, { work: parseArcText(text, verbs) }, second.execute, second.session));
+		assert.equal(result.status, 'ok');
+		// The steps under way run again; B's first step does not.
+		assert.ok(!second.log.includes('say a'));
+		assert.ok(second.log.includes('go_to Gate') && second.log.includes('wait') && second.log.includes('say b'));
+		assert.equal(second.log.at(-1), 'remember');
 	});
 });

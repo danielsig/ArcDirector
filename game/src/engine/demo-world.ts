@@ -61,6 +61,8 @@ export class DemoWorld extends World {
 	public wentDown:(character:GameObject)=>void = () => undefined;
 	/** The player's character runs this arc, as an NPC would. Rejects when it cannot: no director running, or no such verb here. */
 	public enact:(arc:string)=>Promise<{ status:'ok' | 'failed' | 'stopped'; reason?:string }> = () => Promise.reject(new Error('no director'));
+	/** Whether `viewer` knows what `holder` carries, as ArcDirector has it (`canSeeInventoryOf`). Without a director, no. */
+	public canSeeInventoryOf:(viewer:GameObject, holder:GameObject)=>boolean = () => false;
 	/** `character` just caught `name`, fishing. */
 	public caught:(character:GameObject, name:string)=>void = () => undefined;
 	/** Surfaces a body can stand on, above the tile itself. The drawbridge and the road add themselves. */

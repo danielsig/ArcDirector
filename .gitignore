@@ -4,6 +4,7 @@ dist
 .DS_Store
 *.ai-log.txt
 *.ai-log.jsonl
+/logs/
 brainstorming
 .env
 **/_gen/

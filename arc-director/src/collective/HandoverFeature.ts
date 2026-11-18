@@ -3,7 +3,9 @@ import type { Character } from '../character/Character.js';
 import type { ArcDirector } from '../director/ArcDirector.js';
 import { Feature } from '../director/Feature.js';
 import { URGENT } from '../director/ModelSlots.js';
-import { nameTags, type MemoryRecord } from '../memory/store.js';
+import { keptText, nameTags, type MemoryRecord } from '../memory/store.js';
+import { idsIn, parseTextWithIDs, type TextWithIDs } from '../character/text-with-ids.js';
+import { internalsOf } from '../internals.js';
 import type { Collective } from './Collective.js';
 import { chatHandover, HANDOVER_THREAD, type Handover, type Journey, type MemoryEdit } from './handover.js';
 
@@ -51,13 +53,21 @@ export class HandoverFeature<TCtx = unknown> extends Feature<TCtx> {
 			return;
 		}
 		void model.run(URGENT, (chat) => handover(journeys, chat))
-			.then((edits) => this.apply(edits))
+			.then((edits) => this.apply(edits, journeys))
 			.catch((err:unknown) => director.log({ name: HANDOVER_THREAD, message: `failed: ${err instanceof Error ? err.message : String(err)}`, error: true }));
 	}
 
-	/** A handover's edits. Pinned memories and unknown ids are left alone; embeddings follow, unawaited. */
-	private apply(edits:MemoryEdit[]):void {
+	/**
+	 * A handover's edits. Pinned memories and unknown ids are left alone; embeddings follow, unawaited. The model was shown
+	 * everyone by id, so its text is kept by the ids it was shown: those its memories name, the names its book gives,
+	 * and everyone who moved and where.
+	 */
+	private apply(edits:MemoryEdit[], journeys:Journey<TCtx>[]):void {
 		const { time, models } = this.director;
+		const known = new Set(journeys.flatMap(({ character, from, to }) => [character, from, to].flatMap((owner) => (owner
+			? [owner.id, ...owner.persona.names.ids(), ...owner.persona.memory.all().flatMap((m) => idsIn(keptText(m)))]
+			: []))));
+		const ided = (text:string):TextWithIDs => parseTextWithIDs(text, (word) => (known.has(word) ? word : undefined));
 		const embed = (record:MemoryRecord):void => {
 			void models.embed([record.text]).then(([vec]) => {
 				record.embedding = vec;
@@ -73,11 +83,11 @@ export class HandoverFeature<TCtx = unknown> extends Feature<TCtx> {
 			}
 			for (const { id, text } of (memory && edit.rewrite) ?? []) {
 				if (editable(id) && text.trim()) {
-					embed(memory!.rewrite(id, text.trim())!);
+					embed(internalsOf(memory!).rewrite(id, ided(text.trim()))!);
 				}
 			}
 			for (const line of ((memory && edit.add) ?? []).map((text) => text.trim()).filter(Boolean)) {
-				embed(memory!.add({ category: 'semantic', text: line, tags: nameTags(line), timestamp: time }, time));
+				embed(internalsOf(memory!).add({ category: 'semantic', text: ided(line), tags: nameTags(line), timestamp: time }, time));
 			}
 		}
 	}

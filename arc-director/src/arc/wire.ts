@@ -1,10 +1,10 @@
 import { extractJson, isRecord } from '../json.js';
-import { ArcError, JOINS, SYMBOL_JOIN, isArc, isCountMap, verbsInside, type Arc, type Join, type Step, type StepArg } from './arc-types.js';
+import { ArcError, JOINS, SYMBOL_JOIN, isArc, isCountMap, opensArc, verbsInside, type Arc, type Join, type Step, type StepArg } from './arc-types.js';
 import { argBase, argKind, argKinds, CHOOSE_VERB, GROUP_VERB, TEXT_ARG_KINDS, type VerbRegistry } from './stock-verbs.js';
 import { choicesOf } from './choose.js';
 import { parseArcText } from './arc-parse.js';
 import { formatArcBlocks } from './arc-format.js';
-import { validateArc } from './validate.js';
+import { MAX_ARC_DEPTH, validateArc } from './validate.js';
 
 /**
  * An Arc as JSON, the way a model writes it: `{"steps":[{"verb":"go_to","target":"Lever"},{"verb":"say","text":"Hi",
@@ -19,18 +19,17 @@ function stepsJSON(arc:Arc, verbs:VerbRegistry | undefined):unknown[] {
 }
 
 function stepJSON(step:Step, verbs:VerbRegistry | undefined):Record<string, unknown> {
-	const out:Record<string, unknown> = step.let ? { let: step.let, verb: step.verb } : { verb: step.verb };
-	const inside = verbs && verbsInside(step, verbs);
+	const out:Record<string, unknown> = { ...step.let ? { let: step.let } : {}, verb: step.verb };
 	if (step.verb === CHOOSE_VERB) {
 		if (step.args.goal !== undefined) {
 			out.goal = step.args.goal;
 		}
-		out.choices = Object.fromEntries(Object.entries(choicesOf(step)).map(([name, arc]) => [name, stepsJSON(arc, inside)]));
+		out.choices = Object.fromEntries(Object.entries(choicesOf(step)).map(([name, arc]) => [name, stepsJSON(arc, verbs?.nested())]));
 	}
 	else {
 		const spec = verbs?.get(step.verb);
 		for (const [key, value] of Object.entries(step.args)) {
-			out[key] = isArc(value) ? stepsJSON(value, inside) : typeof value === 'string' ? singleQuoted(value, argKind(spec, key)) : value;
+			out[key] = isArc(value) ? stepsJSON(value, verbs && verbsInside(step, verbs, key)) : typeof value === 'string' ? singleQuoted(value, argKind(spec, key)) : value;
 		}
 	}
 	if (step.then) {
@@ -74,13 +73,27 @@ function blockJSON(value:unknown, depth:number):string {
 	if (!isRecord(value)) {
 		return JSON.stringify(value);
 	}
-	const args = Object.entries(value).map(([key, arg]) => {
-		const shown = key === 'choices' && isRecord(arg)
-			? `{\n${Object.entries(arg).map(([name, choice]) => `${inner}${JSON.stringify(name)}:${blockJSON(choice, depth + 1)}`).join(',\n')}\n${close}}`
-			: blockJSON(arg, depth);
-		return `${JSON.stringify(key)}:${shown}`;
-	});
-	return `{${args.join(',')}}`;
+	// A step's arcs (an if's cond, arc and else; a choose's choices) each go on a line of their own, a tab deeper, the
+	// args after them on one more, and its } alone: on one line a small model loses the nesting, and recites the run of
+	// closing brackets it ends in. The args keep their order, as the step is compared by it.
+	const holdsArc = (key:string, arg:unknown):boolean => (Array.isArray(arg) && isRecord(arg[0])) || (key === 'choices' && isRecord(arg));
+	const lines:string[][] = [[]];
+	let nested = false;
+	for (const [key, arg] of Object.entries(value)) {
+		const arc = holdsArc(key, arg);
+		if (arc || nested !== arc) {
+			lines.push([]);
+		}
+		nested = arc;
+		const deeper = '\t'.repeat(depth + 2);
+		const shown = !arc ? JSON.stringify(arg)
+			: key === 'choices' && isRecord(arg)
+				? `{\n${Object.entries(arg).map(([name, choice]) => `${deeper}${JSON.stringify(name)}:${blockJSON(choice, depth + 2)}`).join(',\n')}\n${inner}}`
+				: blockJSON(arg, depth + 1);
+		lines.at(-1)!.push(`${JSON.stringify(key)}:${shown}`);
+	}
+	const [head, ...rest] = lines.filter((line) => line.length > 0);
+	return rest.length === 0 ? `{${head.join(',')}}` : `{${head.join(',')},\n${rest.map((line) => inner + line.join(',')).join(',\n')}\n${close}}`;
 }
 
 /** What a step's JSON holds beside its args. */
@@ -126,7 +139,7 @@ function readStep(raw:unknown, verbs:VerbRegistry):Step {
 		step.let = raw.let.trim();
 	}
 	const spec = verbs.get(raw.verb);
-	const inside = verbsInside(step, verbs);
+	const inside = (key:string):VerbRegistry => verbsInside(step, verbs, key);
 	const only = (...keys:string[]):void => {
 		const extra = Object.keys(raw).find((key) => !STEP_KEYS.includes(key) && !keys.includes(key));
 		if (extra) {
@@ -135,7 +148,7 @@ function readStep(raw:unknown, verbs:VerbRegistry):Step {
 	};
 	if (raw.verb === GROUP_VERB) {
 		only('arc');
-		step.args.arc = readSteps(raw.arc, inside);
+		step.args.arc = readSteps(raw.arc, inside('arc'));
 	}
 	else if (raw.verb === CHOOSE_VERB) {
 		only('goal', 'choices');
@@ -146,20 +159,20 @@ function readStep(raw:unknown, verbs:VerbRegistry):Step {
 			throw new ArcError('choose needs choices: {"name":[steps], …}');
 		}
 		for (const [name, choice] of Object.entries(raw.choices)) {
-			step.args[name] = readSteps(choice, inside);
+			step.args[name] = readSteps(choice, inside(name));
 		}
 	}
 	else {
 		// Its args cannot be read without its spec: the verb is what is wrong.
 		if (!verbs.get(raw.verb)) {
-			throw new ArcError(`unknown verb '${raw.verb}'`);
+			throw new ArcError(`unknown verb '${raw.verb}'`, String(raw.verb));
 		}
 		for (const [key, value] of Object.entries(raw)) {
 			if (STEP_KEYS.includes(key) || value === undefined || value === null) {
 				continue;
 			}
 			if (argKind(spec, key) === 'arc') {
-				step.args[key] = readSteps(value, inside);
+				step.args[key] = readSteps(value, inside(key));
 			}
 			else if (isStepArg(value)) {
 				// A number or a yes written for a text arg is its text: `"code": 417`.
@@ -256,7 +269,7 @@ function parseWrappedArc(text:string, registry:VerbRegistry):Arc {
 function withoutProse(text:string, registry:VerbRegistry):string {
 	const lines = text.split('\n');
 	const word = (line:string):string => /^\s*([A-Za-z_]\w*)/.exec(line)?.[1] ?? '';
-	const starts = (line:string):boolean => word(line) === 'let' || !!(registry.get(word(line)) ?? registry.nested().get(word(line)));
+	const starts = (line:string):boolean => word(line) === 'let' || !!registry.find(word(line));
 	const first = lines.findIndex(starts);
 	if (first < 0) {
 		return '';
@@ -296,8 +309,9 @@ const CLOSERS = /[}\]][}\]]|```/;
 
 /**
  * Follows a reply as its pieces come in, and says why as soon as it can no longer become an Arc: a string that ran on
- * with the Arc's closing brackets in it, or past any length a real one has. A model that forgets one closing quote
- * otherwise writes on to its token limit, since a reply schema lets a string hold anything.
+ * with the Arc's closing brackets in it, or past any length a real one has, or arcs nested past {@link MAX_ARC_DEPTH}.
+ * A model that forgets one closing quote, or loses its way in its nesting, otherwise writes on to its token limit,
+ * since a reply schema lets a string hold anything and an arc nest without end.
  */
 export function replyBreakdown(verbs:VerbRegistry):(piece:string)=>string | undefined {
 	const specs = [...verbs.list(), ...verbs.nested().list()];
@@ -310,6 +324,21 @@ export function replyBreakdown(verbs:VerbRegistry):(piece:string)=>string | unde
 	let afterColon = false;
 	let key = '';
 	let depth = 0;
+	// Each bracket open: a step's verb once written, and how many arcs deep it is, as the validator counts them.
+	const open:{ verb?:string; choices?:boolean; arcs:number }[] = [];
+	const nests = (char:string):string | undefined => {
+		const outer = open.at(-1);
+		if (char === '{') {
+			open.push({ arcs: outer?.arcs ?? 0, choices: afterColon && key === 'choices' });
+			return undefined;
+		}
+		// A step's arc arg, or a choice; not one that is where its step is (`if`, `while`, a group).
+		const spec = specs.find((verb) => verb.name === outer?.verb);
+		const arc = !!outer?.choices || (!!spec && argKind(spec, key) === 'arc' && !opensArc({ verb: spec.name, args: {} }, key));
+		const arcs = (outer?.arcs ?? 0) + (arc ? 1 : 0);
+		open.push({ arcs });
+		return arcs > MAX_ARC_DEPTH ? `arcs nest at most ${MAX_ARC_DEPTH} deep: write it flatter` : undefined;
+	};
 	const broken = (char:string):string | undefined => {
 		const isExpr = strict.has(key);
 		if (current.length > (isExpr ? MAX_EXPR : MAX_TEXT)) {
@@ -328,6 +357,13 @@ export function replyBreakdown(verbs:VerbRegistry):(piece:string)=>string | unde
 				continue;
 			}
 			if (!inString) {
+				const why = char === '{' || char === '[' ? nests(char) : undefined;
+				if (why) {
+					return why;
+				}
+				if (char === '}' || char === ']') {
+					open.pop();
+				}
 				if (char === ':') {
 					key = lastString;
 					afterColon = true;
@@ -351,6 +387,10 @@ export function replyBreakdown(verbs:VerbRegistry):(piece:string)=>string | unde
 			else if (char === '"') {
 				inString = false;
 				lastString = current;
+				const step = open.at(-1);
+				if (afterColon && key === 'verb' && step) {
+					step.verb = current;
+				}
 				afterColon = false;
 			}
 			else {
@@ -400,6 +440,40 @@ export function finishedSteps(reply:string):string | undefined {
 		}
 	}
 	return steps.length > 0 ? `{"steps":[${steps.join(',')}]}` : undefined;
+}
+
+/**
+ * The root statements of an Arc text reply written to their end so far, as a reply of their own: each ends at the `)` or
+ * `}` that closes it, once the token after it is written and goes on no statement: not its body, an `else`, a `while`
+ * or a member.
+ */
+export function finishedText(reply:string):string | undefined {
+	let depth = 0;
+	let quote = false;
+	let end:number | undefined;
+	for (let i = 0; i < reply.length; i++) {
+		const char = reply[i];
+		if (quote) {
+			quote = char !== '"' || reply[i - 1] === '\\';
+			continue;
+		}
+		if (char === '/' && reply[i + 1] === '/') {
+			i = reply.indexOf('\n', i) < 0 ? reply.length : reply.indexOf('\n', i);
+			continue;
+		}
+		quote = char === '"';
+		depth += '([{'.includes(char) ? 1 : ')]}'.includes(char) ? -1 : 0;
+		if (depth !== 0 || !')}'.includes(char)) {
+			continue;
+		}
+		const after = reply.slice(i + 1).trimStart();
+		// Still the same statement: its body, an `else`, a `while`, a member, or a word yet to be written in full.
+		if (/^(else\b|while\b|\.|\{)/.test(after) || (/^\w*$/.test(after) && ['else', 'while'].some((word) => word.startsWith(after)))) {
+			continue;
+		}
+		end = i + 1;
+	}
+	return end === undefined ? undefined : reply.slice(0, end);
 }
 
 /** An `arc` argument as an `Arc`: already parsed, or text to parse. Undefined when it does not parse. */

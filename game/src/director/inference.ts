@@ -79,6 +79,15 @@ export function menuModel(p:Prefs, sampling:SamplingSource = 'menu'):Pick<ModelS
 	};
 }
 
+/**
+ * Whether `model` (an LM Studio id, or a browser model's file) is Gemma 4 12B or larger: those queue orders after what
+ * units do (`offerAppendedCommands`) when they mean to, and never on an urgent order. Smaller ones barely do.
+ */
+export function queuesOrders(model:string | undefined):boolean {
+	const size = /gemma-?4\D*?(\d+)b/i.exec(model ?? '');
+	return !!size && Number(size[1]) >= 12;
+}
+
 /** The model the LM Studio steps ask for: the best that runs on most GPUs. */
 export const LM_STUDIO_MODEL = { id: 'google/gemma-4-e4b', label: 'Gemma 4 E4B' };
 

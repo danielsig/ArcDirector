@@ -1,13 +1,11 @@
-import { Time, clamp, lerpAngle, yawToward, distanceXZ, type GameObject } from '@arc-director/kindling';
+import { Time, clamp, lerpAngle, yawToward, type GameObject } from '@arc-director/kindling';
 import { NPCInput } from '../characters/NPCInput';
 import { PlayerInput } from '../characters/PlayerInput';
 import { Companion, HumanBody, Named } from '../engine/components';
 import type { DemoWorld } from '../engine/demo-world';
-import { lineClear } from '../world/path';
 import { findObject } from './names';
 
-export const CONVERSE_RANGE = 2;
-/** Clear-with-LOS cutoff (meters). Closer than CONVERSE_RANGE is always clear. */
+/** How far a line is heard clearly, where sound passes (meters). */
 export const CLEAR_RANGE = 8;
 /** How far a line carries at all (meters). */
 export const HEAR_RANGE = 16;
@@ -25,23 +23,6 @@ export function talkNotices(viewer:GameObject, go:GameObject):boolean {
 	}
 	const bond = viewer.getComponent(Companion);
 	return !!bond && (go.id === bond.targetID || go.getComponent(Named)?.id === bond.targetID);
-}
-
-/** Close enough to catch every word: within 2 m, or within 8 m where sound passes. People in the way do not stop a voice. */
-export function canHearClearly(world:DemoWorld, speakerID:string, listenerID:string):boolean {
-	const speaker = findObject(world, speakerID);
-	const listener = findObject(world, listenerID);
-	if (!speaker || !listener || speaker === listener) {
-		return false;
-	}
-	const dist = distanceXZ(speaker, listener);
-	if (dist <= CONVERSE_RANGE) {
-		return true;
-	}
-	if (dist > CLEAR_RANGE) {
-		return false;
-	}
-	return lineClear(world, 'sound', speaker.transform.position, listener.transform.position);
 }
 
 export function talkFace(world:DemoWorld, who:string, toward:string):void {

@@ -69,7 +69,7 @@ test('in the glen, dressing blocks walking when solid, and never reaches sight',
 	const text = [sight.ambient ?? '', formatSight(sight), ...sight.objects.map((obj) => `${obj.id} ${(obj.tags ?? []).join(' ')}`)].join('\n');
 	assert.match(text, /Cottage/);
 	for (const word of DRESSING_SIGHT_WORDS) {
-		assert.doesNotMatch(text, new RegExp(`\b${word}\b`, 'i'));
+		assert.doesNotMatch(text, new RegExp(String.raw`\b${word}\b`, 'i'));
 	}
 
 	/** Whether a route steps onto a prop's tile from any side. */
@@ -78,8 +78,8 @@ test('in the glen, dressing blocks walking when solid, and never reaches sight',
 		const tile = world.tileCoordAt(spot.x, spot.z);
 		const onto = world.tileCenter(tile.tx, tile.tz);
 		const ways = cellWays(world);
-		const { at, nearby } = ways.getNearby([onto.x, onto.z]);
-		return nearby.some((from) => ways.canTraverse(npc, from, at) !== undefined);
+		const at = ways.createAt([onto.x, onto.z]);
+		return ways.getNeighbors(at).some((from) => ways.getPassage(npc, from, at) !== undefined);
 	};
 	assert.equal(stepsOnto('weaponRack'), false, 'a route steps onto the weapon rack');
 	assert.equal(stepsOnto('bucket'), true, 'routes skip the bucket tile');
@@ -106,15 +106,15 @@ test('in the ruins, no route steps onto a cell a fallen column lies across', () 
 			for (const [dx, dz] of [[along.z, along.x], [-along.z, -along.x]]) {
 				const beside = world.tileCenter(under.tx + dx!, under.tz + dz!);
 				const middle = world.tileCenter(under.tx, under.tz);
-				const onto = ways.canTraverse(walker, ways.getNearby([beside.x, beside.z]).at, ways.getNearby([middle.x, middle.z]).at) !== undefined;
+				const onto = ways.getPassage(walker, ways.createAt([beside.x, beside.z]), ways.createAt([middle.x, middle.z])) !== undefined;
 				assert.equal(onto, false, `a step lands on the fallen column at ${column.x}, ${column.z} (cell ${under.tx}, ${under.tz})`);
 			}
 		}
 	}
 	for (const brazier of planProps(chunks).filter((spot) => spot.prop === 'brazier')) {
 		const { x, z } = world.tileCenter(world.tileCoordAt(brazier.x, brazier.z).tx, world.tileCoordAt(brazier.x, brazier.z).tz);
-		const { at, nearby } = ways.getNearby([x, z]);
-		const into = nearby.filter((from) => ways.canTraverse(walker, from, at) !== undefined);
+		const at = ways.createAt([x, z]);
+		const into = ways.getNeighbors(at).filter((from) => ways.getPassage(walker, from, at) !== undefined);
 		assert.deepEqual(into, [], `a step lands in the brazier at ${brazier.x}, ${brazier.z}`);
 	}
 });

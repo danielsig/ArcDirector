@@ -19,7 +19,7 @@ export class Flies extends Component {
 	public override onEnable():void {
 		const geo = new THREE.SphereGeometry(0.012, 4, 3);
 		const mat = new THREE.MeshBasicMaterial({ color: 0x0c0c0c });
-		this._flies = Array.from({ length: this.count }, (_, i) => {
+		this._flies = Array.from({ length: this.count }, (element, i) => {
 			const mesh = new THREE.Mesh(geo, mat);
 			this.gameObject.transform.object3D.add(mesh);
 			return { mesh, wx: 0.6 + (i % 3) * 0.2, wz: 0.8 + (i % 2) * 0.3, wy: 1.7 + (i % 4) * 0.4, speed: 3 + (i % 5) * 0.6, phase: i * 1.7 };

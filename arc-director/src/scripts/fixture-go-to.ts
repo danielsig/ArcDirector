@@ -69,7 +69,7 @@ async function main():Promise<void> {
 			...perception(),
 			context: () => ({ paragraph }),
 			modelID: model,
-			heartbeat: 30,
+			minThinkInterval: 30,
 			strategicInterval: 10_000,
 			toolRounds: 2,
 			repairRetries: 2,
@@ -79,7 +79,7 @@ async function main():Promise<void> {
 			pinned: true,
 		}, 0);
 		const mind = guard.mind!;
-		await mind.remember('EastGate is the door in the east wall.', ['gate', 'EastGate'], 0);
+		await mind.memory.remember('EastGate is the door in the east wall.', ['gate', 'EastGate'], 0);
 		try {
 			const arc = await mind.tick(1);
 			if (!arc) {

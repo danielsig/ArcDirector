@@ -1,0 +1,5316 @@
+{
+	"about": "The reply schema for the stock and collective verbs narrowed by each row's constraints.",
+	"rows": [
+		{
+			"constrain": [],
+			"schema": {
+				"type": "object",
+				"additionalProperties": false,
+				"required": [
+					"steps"
+				],
+				"properties": {
+					"steps": {
+						"type": "array",
+						"minItems": 1,
+						"items": {
+							"anyOf": [
+								{
+									"type": "object",
+									"additionalProperties": false,
+									"required": [
+										"verb",
+										"who",
+										"arc"
+									],
+									"properties": {
+										"let": {
+											"type": "string"
+										},
+										"verb": {
+											"const": "command"
+										},
+										"who": {
+											"type": "string"
+										},
+										"arc": {
+											"$ref": "#/$defs/arc"
+										},
+										"group": {
+											"type": "string"
+										},
+										"append": {
+											"type": "boolean"
+										},
+										"until": {
+											"type": "string"
+										},
+										"within": {
+											"type": "number"
+										},
+										"while": {
+											"$ref": "#/$defs/arc"
+										},
+										"then": {
+											"$ref": "#/$defs/then"
+										}
+									}
+								},
+								{
+									"$ref": "#/$defs/step"
+								}
+							]
+						}
+					}
+				},
+				"$defs": {
+					"then": {
+						"type": "string",
+						"enum": [
+							"if_ok",
+							"always",
+							"if_failed"
+						]
+					},
+					"arc": {
+						"type": "array",
+						"minItems": 1,
+						"items": {
+							"$ref": "#/$defs/step"
+						}
+					},
+					"arc_think": {
+						"type": "array",
+						"minItems": 1,
+						"items": {
+							"anyOf": [
+								{
+									"$ref": "#/$defs/step"
+								},
+								{
+									"type": "object",
+									"additionalProperties": false,
+									"required": [
+										"verb"
+									],
+									"properties": {
+										"let": {
+											"type": "string"
+										},
+										"verb": {
+											"const": "think"
+										},
+										"about": {
+											"type": "string"
+										},
+										"until": {
+											"type": "string"
+										},
+										"within": {
+											"type": "number"
+										},
+										"while": {
+											"$ref": "#/$defs/arc"
+										},
+										"then": {
+											"$ref": "#/$defs/then"
+										}
+									}
+								}
+							]
+						}
+					},
+					"step": {
+						"anyOf": [
+							{
+								"type": "object",
+								"additionalProperties": false,
+								"required": [
+									"verb",
+									"target"
+								],
+								"properties": {
+									"let": {
+										"type": "string"
+									},
+									"verb": {
+										"const": "go_to"
+									},
+									"target": {
+										"type": "string"
+									},
+									"until": {
+										"type": "string"
+									},
+									"within": {
+										"type": "number"
+									},
+									"while": {
+										"$ref": "#/$defs/arc"
+									},
+									"then": {
+										"$ref": "#/$defs/then"
+									}
+								}
+							},
+							{
+								"type": "object",
+								"additionalProperties": false,
+								"required": [
+									"verb",
+									"target"
+								],
+								"properties": {
+									"let": {
+										"type": "string"
+									},
+									"verb": {
+										"const": "follow"
+									},
+									"target": {
+										"type": "string"
+									},
+									"distance": {
+										"type": "number"
+									},
+									"until": {
+										"type": "string"
+									},
+									"within": {
+										"type": "number"
+									},
+									"while": {
+										"$ref": "#/$defs/arc"
+									},
+									"unbreakable": {
+										"type": "string"
+									},
+									"then": {
+										"$ref": "#/$defs/then"
+									}
+								}
+							},
+							{
+								"type": "object",
+								"additionalProperties": false,
+								"required": [
+									"verb",
+									"from"
+								],
+								"properties": {
+									"let": {
+										"type": "string"
+									},
+									"verb": {
+										"const": "flee"
+									},
+									"from": {
+										"type": "string"
+									},
+									"distance": {
+										"type": "number"
+									},
+									"until": {
+										"type": "string"
+									},
+									"within": {
+										"type": "number"
+									},
+									"while": {
+										"$ref": "#/$defs/arc"
+									},
+									"then": {
+										"$ref": "#/$defs/then"
+									}
+								}
+							},
+							{
+								"type": "object",
+								"additionalProperties": false,
+								"required": [
+									"verb"
+								],
+								"properties": {
+									"let": {
+										"type": "string"
+									},
+									"verb": {
+										"const": "wander"
+									},
+									"until": {
+										"type": "string"
+									},
+									"seconds": {
+										"type": "number"
+									},
+									"within": {
+										"type": "number"
+									},
+									"while": {
+										"$ref": "#/$defs/arc"
+									},
+									"then": {
+										"$ref": "#/$defs/then"
+									}
+								}
+							},
+							{
+								"type": "object",
+								"additionalProperties": false,
+								"required": [
+									"verb",
+									"item"
+								],
+								"properties": {
+									"let": {
+										"type": "string"
+									},
+									"verb": {
+										"const": "use"
+									},
+									"item": {
+										"type": "string"
+									},
+									"target": {
+										"type": "string"
+									},
+									"until": {
+										"type": "string"
+									},
+									"within": {
+										"type": "number"
+									},
+									"while": {
+										"$ref": "#/$defs/arc"
+									},
+									"then": {
+										"$ref": "#/$defs/then"
+									}
+								}
+							},
+							{
+								"type": "object",
+								"additionalProperties": false,
+								"required": [
+									"verb",
+									"item"
+								],
+								"properties": {
+									"let": {
+										"type": "string"
+									},
+									"verb": {
+										"const": "pick_up"
+									},
+									"item": {
+										"type": "string"
+									},
+									"from": {
+										"type": "string"
+									},
+									"until": {
+										"type": "string"
+									},
+									"within": {
+										"type": "number"
+									},
+									"while": {
+										"$ref": "#/$defs/arc"
+									},
+									"then": {
+										"$ref": "#/$defs/then"
+									}
+								}
+							},
+							{
+								"type": "object",
+								"additionalProperties": false,
+								"required": [
+									"verb",
+									"item"
+								],
+								"properties": {
+									"let": {
+										"type": "string"
+									},
+									"verb": {
+										"const": "drop"
+									},
+									"item": {
+										"type": "string"
+									},
+									"to": {
+										"type": "string"
+									},
+									"until": {
+										"type": "string"
+									},
+									"within": {
+										"type": "number"
+									},
+									"while": {
+										"$ref": "#/$defs/arc"
+									},
+									"then": {
+										"$ref": "#/$defs/then"
+									}
+								}
+							},
+							{
+								"type": "object",
+								"additionalProperties": false,
+								"required": [
+									"verb",
+									"item",
+									"to"
+								],
+								"properties": {
+									"let": {
+										"type": "string"
+									},
+									"verb": {
+										"const": "give"
+									},
+									"item": {
+										"type": "string"
+									},
+									"to": {
+										"type": "string"
+									},
+									"quantity": {
+										"type": "number"
+									},
+									"until": {
+										"type": "string"
+									},
+									"within": {
+										"type": "number"
+									},
+									"while": {
+										"$ref": "#/$defs/arc"
+									},
+									"then": {
+										"$ref": "#/$defs/then"
+									}
+								}
+							},
+							{
+								"type": "object",
+								"additionalProperties": false,
+								"required": [
+									"verb",
+									"target"
+								],
+								"properties": {
+									"let": {
+										"type": "string"
+									},
+									"verb": {
+										"const": "examine"
+									},
+									"target": {
+										"type": "string"
+									},
+									"until": {
+										"type": "string"
+									},
+									"within": {
+										"type": "number"
+									},
+									"while": {
+										"$ref": "#/$defs/arc"
+									},
+									"then": {
+										"$ref": "#/$defs/then"
+									}
+								}
+							},
+							{
+								"type": "object",
+								"additionalProperties": false,
+								"required": [
+									"verb",
+									"text"
+								],
+								"properties": {
+									"let": {
+										"type": "string"
+									},
+									"verb": {
+										"const": "say"
+									},
+									"text": {
+										"type": "string"
+									},
+									"to": {
+										"type": "string"
+									},
+									"as": {
+										"type": "string",
+										"enum": [
+											"whisper",
+											"sing",
+											"laugh",
+											"sob",
+											"sigh",
+											"scream",
+											"shout"
+										]
+									},
+									"until": {
+										"type": "string"
+									},
+									"within": {
+										"type": "number"
+									},
+									"while": {
+										"$ref": "#/$defs/arc"
+									},
+									"then": {
+										"$ref": "#/$defs/then"
+									}
+								}
+							},
+							{
+								"type": "object",
+								"additionalProperties": false,
+								"required": [
+									"verb"
+								],
+								"properties": {
+									"let": {
+										"type": "string"
+									},
+									"verb": {
+										"const": "wait"
+									},
+									"seconds": {
+										"type": "number",
+										"minimum": 0
+									},
+									"until": {
+										"type": "string"
+									},
+									"within": {
+										"type": "number"
+									},
+									"while": {
+										"$ref": "#/$defs/arc"
+									},
+									"then": {
+										"$ref": "#/$defs/then"
+									}
+								}
+							},
+							{
+								"type": "object",
+								"additionalProperties": false,
+								"required": [
+									"verb"
+								],
+								"properties": {
+									"let": {
+										"type": "string"
+									},
+									"verb": {
+										"const": "pass"
+									},
+									"until": {
+										"type": "string"
+									},
+									"within": {
+										"type": "number"
+									},
+									"while": {
+										"$ref": "#/$defs/arc"
+									},
+									"then": {
+										"$ref": "#/$defs/then"
+									}
+								}
+							},
+							{
+								"type": "object",
+								"additionalProperties": false,
+								"required": [
+									"verb",
+									"arc"
+								],
+								"properties": {
+									"let": {
+										"type": "string"
+									},
+									"verb": {
+										"const": "instead"
+									},
+									"arc": {
+										"$ref": "#/$defs/arc"
+									},
+									"until": {
+										"type": "string"
+									},
+									"within": {
+										"type": "number"
+									},
+									"while": {
+										"$ref": "#/$defs/arc"
+									},
+									"then": {
+										"$ref": "#/$defs/then"
+									}
+								}
+							},
+							{
+								"type": "object",
+								"additionalProperties": false,
+								"required": [
+									"verb",
+									"content"
+								],
+								"properties": {
+									"let": {
+										"type": "string"
+									},
+									"verb": {
+										"const": "remember"
+									},
+									"content": {
+										"type": "string"
+									},
+									"tags": {
+										"type": "array",
+										"items": {
+											"type": "string"
+										}
+									},
+									"until": {
+										"type": "string"
+									},
+									"within": {
+										"type": "number"
+									},
+									"while": {
+										"$ref": "#/$defs/arc"
+									},
+									"then": {
+										"$ref": "#/$defs/then"
+									}
+								}
+							},
+							{
+								"type": "object",
+								"additionalProperties": false,
+								"required": [
+									"verb",
+									"goal"
+								],
+								"properties": {
+									"let": {
+										"type": "string"
+									},
+									"verb": {
+										"const": "set_goal"
+									},
+									"goal": {
+										"type": "string"
+									},
+									"priority": {
+										"type": "number"
+									},
+									"until": {
+										"type": "string"
+									},
+									"within": {
+										"type": "number"
+									},
+									"while": {
+										"$ref": "#/$defs/arc"
+									},
+									"then": {
+										"$ref": "#/$defs/then"
+									}
+								}
+							},
+							{
+								"type": "object",
+								"additionalProperties": false,
+								"required": [
+									"verb"
+								],
+								"properties": {
+									"let": {
+										"type": "string"
+									},
+									"verb": {
+										"const": "drop_goal"
+									},
+									"goal": {
+										"type": "string"
+									},
+									"until": {
+										"type": "string"
+									},
+									"within": {
+										"type": "number"
+									},
+									"while": {
+										"$ref": "#/$defs/arc"
+									},
+									"then": {
+										"$ref": "#/$defs/then"
+									}
+								}
+							},
+							{
+								"type": "object",
+								"additionalProperties": false,
+								"required": [
+									"verb"
+								],
+								"properties": {
+									"let": {
+										"type": "string"
+									},
+									"verb": {
+										"const": "finish_goal"
+									},
+									"goal": {
+										"type": "string"
+									},
+									"until": {
+										"type": "string"
+									},
+									"within": {
+										"type": "number"
+									},
+									"while": {
+										"$ref": "#/$defs/arc"
+									},
+									"then": {
+										"$ref": "#/$defs/then"
+									}
+								}
+							},
+							{
+								"type": "object",
+								"additionalProperties": false,
+								"required": [
+									"verb"
+								],
+								"properties": {
+									"let": {
+										"type": "string"
+									},
+									"verb": {
+										"const": "set_identity"
+									},
+									"role": {
+										"type": "string"
+									},
+									"traits": {
+										"type": "array",
+										"items": {
+											"type": "string"
+										}
+									},
+									"until": {
+										"type": "string"
+									},
+									"within": {
+										"type": "number"
+									},
+									"while": {
+										"$ref": "#/$defs/arc"
+									},
+									"then": {
+										"$ref": "#/$defs/then"
+									}
+								}
+							},
+							{
+								"type": "object",
+								"additionalProperties": false,
+								"required": [
+									"verb",
+									"name",
+									"expr"
+								],
+								"properties": {
+									"let": {
+										"type": "string"
+									},
+									"verb": {
+										"const": "watch"
+									},
+									"name": {
+										"type": "string"
+									},
+									"expr": {
+										"type": "string"
+									},
+									"until": {
+										"type": "string"
+									},
+									"within": {
+										"type": "number"
+									},
+									"while": {
+										"$ref": "#/$defs/arc"
+									},
+									"then": {
+										"$ref": "#/$defs/then"
+									}
+								}
+							},
+							{
+								"type": "object",
+								"additionalProperties": false,
+								"required": [
+									"verb",
+									"name"
+								],
+								"properties": {
+									"let": {
+										"type": "string"
+									},
+									"verb": {
+										"const": "unwatch"
+									},
+									"name": {
+										"type": "string"
+									},
+									"until": {
+										"type": "string"
+									},
+									"within": {
+										"type": "number"
+									},
+									"while": {
+										"$ref": "#/$defs/arc"
+									},
+									"then": {
+										"$ref": "#/$defs/then"
+									}
+								}
+							},
+							{
+								"type": "object",
+								"additionalProperties": false,
+								"required": [
+									"verb",
+									"expr"
+								],
+								"properties": {
+									"let": {
+										"type": "string"
+									},
+									"verb": {
+										"const": "focus"
+									},
+									"expr": {
+										"type": "string"
+									},
+									"until": {
+										"type": "string"
+									},
+									"within": {
+										"type": "number"
+									},
+									"while": {
+										"$ref": "#/$defs/arc"
+									},
+									"then": {
+										"$ref": "#/$defs/then"
+									}
+								}
+							},
+							{
+								"type": "object",
+								"additionalProperties": false,
+								"required": [
+									"verb",
+									"expr"
+								],
+								"properties": {
+									"let": {
+										"type": "string"
+									},
+									"verb": {
+										"const": "unfocus"
+									},
+									"expr": {
+										"type": "string"
+									},
+									"until": {
+										"type": "string"
+									},
+									"within": {
+										"type": "number"
+									},
+									"while": {
+										"$ref": "#/$defs/arc"
+									},
+									"then": {
+										"$ref": "#/$defs/then"
+									}
+								}
+							},
+							{
+								"type": "object",
+								"additionalProperties": false,
+								"required": [
+									"verb",
+									"cond",
+									"arc"
+								],
+								"properties": {
+									"let": {
+										"type": "string"
+									},
+									"verb": {
+										"const": "if"
+									},
+									"cond": {
+										"$ref": "#/$defs/arc"
+									},
+									"arc": {
+										"$ref": "#/$defs/arc_think"
+									},
+									"else": {
+										"$ref": "#/$defs/arc_think"
+									},
+									"until": {
+										"type": "string"
+									},
+									"within": {
+										"type": "number"
+									},
+									"while": {
+										"$ref": "#/$defs/arc"
+									},
+									"then": {
+										"$ref": "#/$defs/then"
+									}
+								}
+							},
+							{
+								"type": "object",
+								"additionalProperties": false,
+								"required": [
+									"verb",
+									"watch",
+									"arc"
+								],
+								"properties": {
+									"let": {
+										"type": "string"
+									},
+									"verb": {
+										"const": "when"
+									},
+									"watch": {
+										"type": "string"
+									},
+									"arc": {
+										"$ref": "#/$defs/arc"
+									},
+									"times": {
+										"type": "number"
+									},
+									"until": {
+										"type": "string"
+									},
+									"rearm": {
+										"type": "number"
+									},
+									"within": {
+										"type": "number"
+									},
+									"while": {
+										"$ref": "#/$defs/arc"
+									},
+									"then": {
+										"$ref": "#/$defs/then"
+									}
+								}
+							},
+							{
+								"type": "object",
+								"additionalProperties": false,
+								"required": [
+									"verb",
+									"arc"
+								],
+								"properties": {
+									"let": {
+										"type": "string"
+									},
+									"verb": {
+										"const": "loop"
+									},
+									"arc": {
+										"$ref": "#/$defs/arc"
+									},
+									"through": {
+										"type": "string"
+									},
+									"until": {
+										"type": "string"
+									},
+									"times": {
+										"type": "number"
+									},
+									"unbreakable": {
+										"anyOf": [
+											{
+												"const": true
+											},
+											{
+												"type": "integer",
+												"minimum": 0
+											},
+											{
+												"type": "string"
+											}
+										]
+									},
+									"within": {
+										"type": "number"
+									},
+									"while": {
+										"$ref": "#/$defs/arc"
+									},
+									"then": {
+										"$ref": "#/$defs/then"
+									}
+								}
+							},
+							{
+								"type": "object",
+								"additionalProperties": false,
+								"required": [
+									"verb",
+									"watch",
+									"arc"
+								],
+								"properties": {
+									"let": {
+										"type": "string"
+									},
+									"verb": {
+										"const": "law"
+									},
+									"who": {
+										"type": "string"
+									},
+									"watch": {
+										"type": "string"
+									},
+									"arc": {
+										"$ref": "#/$defs/arc_in_law"
+									},
+									"name": {
+										"type": "string"
+									},
+									"times": {
+										"type": "number"
+									},
+									"until": {
+										"type": "string"
+									},
+									"rearm": {
+										"type": "number"
+									},
+									"within": {
+										"type": "number"
+									},
+									"while": {
+										"$ref": "#/$defs/arc"
+									},
+									"then": {
+										"$ref": "#/$defs/then"
+									}
+								}
+							},
+							{
+								"type": "object",
+								"additionalProperties": false,
+								"required": [
+									"verb",
+									"name"
+								],
+								"properties": {
+									"let": {
+										"type": "string"
+									},
+									"verb": {
+										"const": "unlaw"
+									},
+									"name": {
+										"type": "string"
+									},
+									"until": {
+										"type": "string"
+									},
+									"within": {
+										"type": "number"
+									},
+									"while": {
+										"$ref": "#/$defs/arc"
+									},
+									"then": {
+										"$ref": "#/$defs/then"
+									}
+								}
+							},
+							{
+								"type": "object",
+								"additionalProperties": false,
+								"required": [
+									"verb",
+									"goal",
+									"choices"
+								],
+								"properties": {
+									"let": {
+										"type": "string"
+									},
+									"verb": {
+										"const": "choose"
+									},
+									"goal": {
+										"type": "string"
+									},
+									"choices": {
+										"type": "object",
+										"additionalProperties": {
+											"$ref": "#/$defs/arc_think"
+										}
+									},
+									"then": {
+										"$ref": "#/$defs/then"
+									}
+								}
+							},
+							{
+								"type": "object",
+								"additionalProperties": false,
+								"required": [
+									"verb"
+								],
+								"properties": {
+									"let": {
+										"type": "string"
+									},
+									"verb": {
+										"const": "offer"
+									},
+									"to": {
+										"type": "string"
+									},
+									"give": {
+										"type": "object",
+										"additionalProperties": {
+											"type": "number"
+										}
+									},
+									"get": {
+										"type": "object",
+										"additionalProperties": {
+											"type": "number"
+										}
+									},
+									"until": {
+										"type": "string"
+									},
+									"within": {
+										"type": "number"
+									},
+									"while": {
+										"$ref": "#/$defs/arc"
+									},
+									"then": {
+										"$ref": "#/$defs/then"
+									}
+								}
+							},
+							{
+								"type": "object",
+								"additionalProperties": false,
+								"required": [
+									"verb",
+									"who",
+									"name"
+								],
+								"properties": {
+									"let": {
+										"type": "string"
+									},
+									"verb": {
+										"const": "tag"
+									},
+									"who": {
+										"type": "string"
+									},
+									"name": {
+										"type": "string"
+									},
+									"until": {
+										"type": "string"
+									},
+									"within": {
+										"type": "number"
+									},
+									"while": {
+										"$ref": "#/$defs/arc"
+									},
+									"then": {
+										"$ref": "#/$defs/then"
+									}
+								}
+							},
+							{
+								"type": "object",
+								"additionalProperties": false,
+								"required": [
+									"verb",
+									"who",
+									"name"
+								],
+								"properties": {
+									"let": {
+										"type": "string"
+									},
+									"verb": {
+										"const": "untag"
+									},
+									"who": {
+										"type": "string"
+									},
+									"name": {
+										"type": "string"
+									},
+									"until": {
+										"type": "string"
+									},
+									"within": {
+										"type": "number"
+									},
+									"while": {
+										"$ref": "#/$defs/arc"
+									},
+									"then": {
+										"$ref": "#/$defs/then"
+									}
+								}
+							},
+							{
+								"type": "object",
+								"additionalProperties": false,
+								"required": [
+									"verb"
+								],
+								"properties": {
+									"let": {
+										"type": "string"
+									},
+									"verb": {
+										"const": "spread"
+									},
+									"around": {
+										"type": "string"
+									},
+									"paces": {
+										"type": "number"
+									},
+									"until": {
+										"type": "string"
+									},
+									"within": {
+										"type": "number"
+									},
+									"while": {
+										"$ref": "#/$defs/arc"
+									},
+									"then": {
+										"$ref": "#/$defs/then"
+									}
+								}
+							},
+							{
+								"type": "object",
+								"additionalProperties": false,
+								"required": [
+									"verb"
+								],
+								"properties": {
+									"let": {
+										"type": "string"
+									},
+									"verb": {
+										"const": "circle"
+									},
+									"around": {
+										"type": "string"
+									},
+									"paces": {
+										"type": "number"
+									},
+									"until": {
+										"type": "string"
+									},
+									"within": {
+										"type": "number"
+									},
+									"while": {
+										"$ref": "#/$defs/arc"
+									},
+									"then": {
+										"$ref": "#/$defs/then"
+									}
+								}
+							},
+							{
+								"type": "object",
+								"additionalProperties": false,
+								"required": [
+									"verb"
+								],
+								"properties": {
+									"let": {
+										"type": "string"
+									},
+									"verb": {
+										"const": "hold_line"
+									},
+									"at": {
+										"type": "string"
+									},
+									"facing": {
+										"type": "string"
+									},
+									"paces": {
+										"type": "number"
+									},
+									"until": {
+										"type": "string"
+									},
+									"within": {
+										"type": "number"
+									},
+									"while": {
+										"$ref": "#/$defs/arc"
+									},
+									"then": {
+										"$ref": "#/$defs/then"
+									}
+								}
+							},
+							{
+								"type": "object",
+								"additionalProperties": false,
+								"required": [
+									"verb",
+									"arc"
+								],
+								"properties": {
+									"let": {
+										"type": "string"
+									},
+									"verb": {
+										"const": "group"
+									},
+									"arc": {
+										"$ref": "#/$defs/arc"
+									},
+									"then": {
+										"$ref": "#/$defs/then"
+									}
+								}
+							},
+							{
+								"type": "object",
+								"additionalProperties": false,
+								"required": [
+									"verb",
+									"watch"
+								],
+								"properties": {
+									"let": {
+										"type": "string"
+									},
+									"verb": {
+										"const": "test"
+									},
+									"watch": {
+										"type": "string"
+									},
+									"then": {
+										"$ref": "#/$defs/then"
+									}
+								}
+							}
+						]
+					},
+					"arc_in_law": {
+						"type": "array",
+						"minItems": 1,
+						"items": {
+							"$ref": "#/$defs/step_in_law"
+						}
+					},
+					"arc_in_law_think": {
+						"type": "array",
+						"minItems": 1,
+						"items": {
+							"anyOf": [
+								{
+									"$ref": "#/$defs/step_in_law"
+								},
+								{
+									"type": "object",
+									"additionalProperties": false,
+									"required": [
+										"verb"
+									],
+									"properties": {
+										"let": {
+											"type": "string"
+										},
+										"verb": {
+											"const": "think"
+										},
+										"about": {
+											"type": "string"
+										},
+										"until": {
+											"type": "string"
+										},
+										"within": {
+											"type": "number"
+										},
+										"while": {
+											"$ref": "#/$defs/arc_in_law"
+										},
+										"then": {
+											"$ref": "#/$defs/then"
+										}
+									}
+								}
+							]
+						}
+					},
+					"step_in_law": {
+						"anyOf": [
+							{
+								"type": "object",
+								"additionalProperties": false,
+								"required": [
+									"verb",
+									"target"
+								],
+								"properties": {
+									"let": {
+										"type": "string"
+									},
+									"verb": {
+										"const": "go_to"
+									},
+									"target": {
+										"type": "string"
+									},
+									"until": {
+										"type": "string"
+									},
+									"within": {
+										"type": "number"
+									},
+									"while": {
+										"$ref": "#/$defs/arc_in_law"
+									},
+									"then": {
+										"$ref": "#/$defs/then"
+									}
+								}
+							},
+							{
+								"type": "object",
+								"additionalProperties": false,
+								"required": [
+									"verb",
+									"target"
+								],
+								"properties": {
+									"let": {
+										"type": "string"
+									},
+									"verb": {
+										"const": "follow"
+									},
+									"target": {
+										"type": "string"
+									},
+									"distance": {
+										"type": "number"
+									},
+									"until": {
+										"type": "string"
+									},
+									"within": {
+										"type": "number"
+									},
+									"while": {
+										"$ref": "#/$defs/arc_in_law"
+									},
+									"unbreakable": {
+										"type": "string"
+									},
+									"then": {
+										"$ref": "#/$defs/then"
+									}
+								}
+							},
+							{
+								"type": "object",
+								"additionalProperties": false,
+								"required": [
+									"verb",
+									"from"
+								],
+								"properties": {
+									"let": {
+										"type": "string"
+									},
+									"verb": {
+										"const": "flee"
+									},
+									"from": {
+										"type": "string"
+									},
+									"distance": {
+										"type": "number"
+									},
+									"until": {
+										"type": "string"
+									},
+									"within": {
+										"type": "number"
+									},
+									"while": {
+										"$ref": "#/$defs/arc_in_law"
+									},
+									"then": {
+										"$ref": "#/$defs/then"
+									}
+								}
+							},
+							{
+								"type": "object",
+								"additionalProperties": false,
+								"required": [
+									"verb"
+								],
+								"properties": {
+									"let": {
+										"type": "string"
+									},
+									"verb": {
+										"const": "wander"
+									},
+									"until": {
+										"type": "string"
+									},
+									"seconds": {
+										"type": "number"
+									},
+									"within": {
+										"type": "number"
+									},
+									"while": {
+										"$ref": "#/$defs/arc_in_law"
+									},
+									"then": {
+										"$ref": "#/$defs/then"
+									}
+								}
+							},
+							{
+								"type": "object",
+								"additionalProperties": false,
+								"required": [
+									"verb",
+									"item"
+								],
+								"properties": {
+									"let": {
+										"type": "string"
+									},
+									"verb": {
+										"const": "use"
+									},
+									"item": {
+										"type": "string"
+									},
+									"target": {
+										"type": "string"
+									},
+									"until": {
+										"type": "string"
+									},
+									"within": {
+										"type": "number"
+									},
+									"while": {
+										"$ref": "#/$defs/arc_in_law"
+									},
+									"then": {
+										"$ref": "#/$defs/then"
+									}
+								}
+							},
+							{
+								"type": "object",
+								"additionalProperties": false,
+								"required": [
+									"verb",
+									"item"
+								],
+								"properties": {
+									"let": {
+										"type": "string"
+									},
+									"verb": {
+										"const": "pick_up"
+									},
+									"item": {
+										"type": "string"
+									},
+									"from": {
+										"type": "string"
+									},
+									"until": {
+										"type": "string"
+									},
+									"within": {
+										"type": "number"
+									},
+									"while": {
+										"$ref": "#/$defs/arc_in_law"
+									},
+									"then": {
+										"$ref": "#/$defs/then"
+									}
+								}
+							},
+							{
+								"type": "object",
+								"additionalProperties": false,
+								"required": [
+									"verb",
+									"item"
+								],
+								"properties": {
+									"let": {
+										"type": "string"
+									},
+									"verb": {
+										"const": "drop"
+									},
+									"item": {
+										"type": "string"
+									},
+									"to": {
+										"type": "string"
+									},
+									"until": {
+										"type": "string"
+									},
+									"within": {
+										"type": "number"
+									},
+									"while": {
+										"$ref": "#/$defs/arc_in_law"
+									},
+									"then": {
+										"$ref": "#/$defs/then"
+									}
+								}
+							},
+							{
+								"type": "object",
+								"additionalProperties": false,
+								"required": [
+									"verb",
+									"item",
+									"to"
+								],
+								"properties": {
+									"let": {
+										"type": "string"
+									},
+									"verb": {
+										"const": "give"
+									},
+									"item": {
+										"type": "string"
+									},
+									"to": {
+										"type": "string"
+									},
+									"quantity": {
+										"type": "number"
+									},
+									"until": {
+										"type": "string"
+									},
+									"within": {
+										"type": "number"
+									},
+									"while": {
+										"$ref": "#/$defs/arc_in_law"
+									},
+									"then": {
+										"$ref": "#/$defs/then"
+									}
+								}
+							},
+							{
+								"type": "object",
+								"additionalProperties": false,
+								"required": [
+									"verb",
+									"target"
+								],
+								"properties": {
+									"let": {
+										"type": "string"
+									},
+									"verb": {
+										"const": "examine"
+									},
+									"target": {
+										"type": "string"
+									},
+									"until": {
+										"type": "string"
+									},
+									"within": {
+										"type": "number"
+									},
+									"while": {
+										"$ref": "#/$defs/arc_in_law"
+									},
+									"then": {
+										"$ref": "#/$defs/then"
+									}
+								}
+							},
+							{
+								"type": "object",
+								"additionalProperties": false,
+								"required": [
+									"verb",
+									"text"
+								],
+								"properties": {
+									"let": {
+										"type": "string"
+									},
+									"verb": {
+										"const": "say"
+									},
+									"text": {
+										"type": "string"
+									},
+									"to": {
+										"type": "string"
+									},
+									"as": {
+										"type": "string",
+										"enum": [
+											"whisper",
+											"sing",
+											"laugh",
+											"sob",
+											"sigh",
+											"scream",
+											"shout"
+										]
+									},
+									"until": {
+										"type": "string"
+									},
+									"within": {
+										"type": "number"
+									},
+									"while": {
+										"$ref": "#/$defs/arc_in_law"
+									},
+									"then": {
+										"$ref": "#/$defs/then"
+									}
+								}
+							},
+							{
+								"type": "object",
+								"additionalProperties": false,
+								"required": [
+									"verb"
+								],
+								"properties": {
+									"let": {
+										"type": "string"
+									},
+									"verb": {
+										"const": "wait"
+									},
+									"seconds": {
+										"type": "number",
+										"minimum": 0
+									},
+									"until": {
+										"type": "string"
+									},
+									"within": {
+										"type": "number"
+									},
+									"while": {
+										"$ref": "#/$defs/arc_in_law"
+									},
+									"then": {
+										"$ref": "#/$defs/then"
+									}
+								}
+							},
+							{
+								"type": "object",
+								"additionalProperties": false,
+								"required": [
+									"verb"
+								],
+								"properties": {
+									"let": {
+										"type": "string"
+									},
+									"verb": {
+										"const": "pass"
+									},
+									"until": {
+										"type": "string"
+									},
+									"within": {
+										"type": "number"
+									},
+									"while": {
+										"$ref": "#/$defs/arc_in_law"
+									},
+									"then": {
+										"$ref": "#/$defs/then"
+									}
+								}
+							},
+							{
+								"type": "object",
+								"additionalProperties": false,
+								"required": [
+									"verb",
+									"arc"
+								],
+								"properties": {
+									"let": {
+										"type": "string"
+									},
+									"verb": {
+										"const": "instead"
+									},
+									"arc": {
+										"$ref": "#/$defs/arc"
+									},
+									"until": {
+										"type": "string"
+									},
+									"within": {
+										"type": "number"
+									},
+									"while": {
+										"$ref": "#/$defs/arc_in_law"
+									},
+									"then": {
+										"$ref": "#/$defs/then"
+									}
+								}
+							},
+							{
+								"type": "object",
+								"additionalProperties": false,
+								"required": [
+									"verb",
+									"content"
+								],
+								"properties": {
+									"let": {
+										"type": "string"
+									},
+									"verb": {
+										"const": "remember"
+									},
+									"content": {
+										"type": "string"
+									},
+									"tags": {
+										"type": "array",
+										"items": {
+											"type": "string"
+										}
+									},
+									"until": {
+										"type": "string"
+									},
+									"within": {
+										"type": "number"
+									},
+									"while": {
+										"$ref": "#/$defs/arc_in_law"
+									},
+									"then": {
+										"$ref": "#/$defs/then"
+									}
+								}
+							},
+							{
+								"type": "object",
+								"additionalProperties": false,
+								"required": [
+									"verb",
+									"goal"
+								],
+								"properties": {
+									"let": {
+										"type": "string"
+									},
+									"verb": {
+										"const": "set_goal"
+									},
+									"goal": {
+										"type": "string"
+									},
+									"priority": {
+										"type": "number"
+									},
+									"until": {
+										"type": "string"
+									},
+									"within": {
+										"type": "number"
+									},
+									"while": {
+										"$ref": "#/$defs/arc_in_law"
+									},
+									"then": {
+										"$ref": "#/$defs/then"
+									}
+								}
+							},
+							{
+								"type": "object",
+								"additionalProperties": false,
+								"required": [
+									"verb"
+								],
+								"properties": {
+									"let": {
+										"type": "string"
+									},
+									"verb": {
+										"const": "drop_goal"
+									},
+									"goal": {
+										"type": "string"
+									},
+									"until": {
+										"type": "string"
+									},
+									"within": {
+										"type": "number"
+									},
+									"while": {
+										"$ref": "#/$defs/arc_in_law"
+									},
+									"then": {
+										"$ref": "#/$defs/then"
+									}
+								}
+							},
+							{
+								"type": "object",
+								"additionalProperties": false,
+								"required": [
+									"verb"
+								],
+								"properties": {
+									"let": {
+										"type": "string"
+									},
+									"verb": {
+										"const": "finish_goal"
+									},
+									"goal": {
+										"type": "string"
+									},
+									"until": {
+										"type": "string"
+									},
+									"within": {
+										"type": "number"
+									},
+									"while": {
+										"$ref": "#/$defs/arc_in_law"
+									},
+									"then": {
+										"$ref": "#/$defs/then"
+									}
+								}
+							},
+							{
+								"type": "object",
+								"additionalProperties": false,
+								"required": [
+									"verb"
+								],
+								"properties": {
+									"let": {
+										"type": "string"
+									},
+									"verb": {
+										"const": "set_identity"
+									},
+									"role": {
+										"type": "string"
+									},
+									"traits": {
+										"type": "array",
+										"items": {
+											"type": "string"
+										}
+									},
+									"until": {
+										"type": "string"
+									},
+									"within": {
+										"type": "number"
+									},
+									"while": {
+										"$ref": "#/$defs/arc_in_law"
+									},
+									"then": {
+										"$ref": "#/$defs/then"
+									}
+								}
+							},
+							{
+								"type": "object",
+								"additionalProperties": false,
+								"required": [
+									"verb",
+									"name",
+									"expr"
+								],
+								"properties": {
+									"let": {
+										"type": "string"
+									},
+									"verb": {
+										"const": "watch"
+									},
+									"name": {
+										"type": "string"
+									},
+									"expr": {
+										"type": "string"
+									},
+									"until": {
+										"type": "string"
+									},
+									"within": {
+										"type": "number"
+									},
+									"while": {
+										"$ref": "#/$defs/arc_in_law"
+									},
+									"then": {
+										"$ref": "#/$defs/then"
+									}
+								}
+							},
+							{
+								"type": "object",
+								"additionalProperties": false,
+								"required": [
+									"verb",
+									"name"
+								],
+								"properties": {
+									"let": {
+										"type": "string"
+									},
+									"verb": {
+										"const": "unwatch"
+									},
+									"name": {
+										"type": "string"
+									},
+									"until": {
+										"type": "string"
+									},
+									"within": {
+										"type": "number"
+									},
+									"while": {
+										"$ref": "#/$defs/arc_in_law"
+									},
+									"then": {
+										"$ref": "#/$defs/then"
+									}
+								}
+							},
+							{
+								"type": "object",
+								"additionalProperties": false,
+								"required": [
+									"verb",
+									"expr"
+								],
+								"properties": {
+									"let": {
+										"type": "string"
+									},
+									"verb": {
+										"const": "focus"
+									},
+									"expr": {
+										"type": "string"
+									},
+									"until": {
+										"type": "string"
+									},
+									"within": {
+										"type": "number"
+									},
+									"while": {
+										"$ref": "#/$defs/arc_in_law"
+									},
+									"then": {
+										"$ref": "#/$defs/then"
+									}
+								}
+							},
+							{
+								"type": "object",
+								"additionalProperties": false,
+								"required": [
+									"verb",
+									"expr"
+								],
+								"properties": {
+									"let": {
+										"type": "string"
+									},
+									"verb": {
+										"const": "unfocus"
+									},
+									"expr": {
+										"type": "string"
+									},
+									"until": {
+										"type": "string"
+									},
+									"within": {
+										"type": "number"
+									},
+									"while": {
+										"$ref": "#/$defs/arc_in_law"
+									},
+									"then": {
+										"$ref": "#/$defs/then"
+									}
+								}
+							},
+							{
+								"type": "object",
+								"additionalProperties": false,
+								"required": [
+									"verb",
+									"cond",
+									"arc"
+								],
+								"properties": {
+									"let": {
+										"type": "string"
+									},
+									"verb": {
+										"const": "if"
+									},
+									"cond": {
+										"$ref": "#/$defs/arc_in_law"
+									},
+									"arc": {
+										"$ref": "#/$defs/arc_in_law_think"
+									},
+									"else": {
+										"$ref": "#/$defs/arc_in_law_think"
+									},
+									"until": {
+										"type": "string"
+									},
+									"within": {
+										"type": "number"
+									},
+									"while": {
+										"$ref": "#/$defs/arc_in_law"
+									},
+									"then": {
+										"$ref": "#/$defs/then"
+									}
+								}
+							},
+							{
+								"type": "object",
+								"additionalProperties": false,
+								"required": [
+									"verb",
+									"watch",
+									"arc"
+								],
+								"properties": {
+									"let": {
+										"type": "string"
+									},
+									"verb": {
+										"const": "when"
+									},
+									"watch": {
+										"type": "string"
+									},
+									"arc": {
+										"$ref": "#/$defs/arc"
+									},
+									"times": {
+										"type": "number"
+									},
+									"until": {
+										"type": "string"
+									},
+									"rearm": {
+										"type": "number"
+									},
+									"within": {
+										"type": "number"
+									},
+									"while": {
+										"$ref": "#/$defs/arc_in_law"
+									},
+									"then": {
+										"$ref": "#/$defs/then"
+									}
+								}
+							},
+							{
+								"type": "object",
+								"additionalProperties": false,
+								"required": [
+									"verb",
+									"arc"
+								],
+								"properties": {
+									"let": {
+										"type": "string"
+									},
+									"verb": {
+										"const": "loop"
+									},
+									"arc": {
+										"$ref": "#/$defs/arc"
+									},
+									"through": {
+										"type": "string"
+									},
+									"until": {
+										"type": "string"
+									},
+									"times": {
+										"type": "number"
+									},
+									"unbreakable": {
+										"anyOf": [
+											{
+												"const": true
+											},
+											{
+												"type": "integer",
+												"minimum": 0
+											},
+											{
+												"type": "string"
+											}
+										]
+									},
+									"within": {
+										"type": "number"
+									},
+									"while": {
+										"$ref": "#/$defs/arc_in_law"
+									},
+									"then": {
+										"$ref": "#/$defs/then"
+									}
+								}
+							},
+							{
+								"type": "object",
+								"additionalProperties": false,
+								"required": [
+									"verb",
+									"name"
+								],
+								"properties": {
+									"let": {
+										"type": "string"
+									},
+									"verb": {
+										"const": "unlaw"
+									},
+									"name": {
+										"type": "string"
+									},
+									"until": {
+										"type": "string"
+									},
+									"within": {
+										"type": "number"
+									},
+									"while": {
+										"$ref": "#/$defs/arc_in_law"
+									},
+									"then": {
+										"$ref": "#/$defs/then"
+									}
+								}
+							},
+							{
+								"type": "object",
+								"additionalProperties": false,
+								"required": [
+									"verb",
+									"goal",
+									"choices"
+								],
+								"properties": {
+									"let": {
+										"type": "string"
+									},
+									"verb": {
+										"const": "choose"
+									},
+									"goal": {
+										"type": "string"
+									},
+									"choices": {
+										"type": "object",
+										"additionalProperties": {
+											"$ref": "#/$defs/arc_think"
+										}
+									},
+									"then": {
+										"$ref": "#/$defs/then"
+									}
+								}
+							},
+							{
+								"type": "object",
+								"additionalProperties": false,
+								"required": [
+									"verb"
+								],
+								"properties": {
+									"let": {
+										"type": "string"
+									},
+									"verb": {
+										"const": "offer"
+									},
+									"to": {
+										"type": "string"
+									},
+									"give": {
+										"type": "object",
+										"additionalProperties": {
+											"type": "number"
+										}
+									},
+									"get": {
+										"type": "object",
+										"additionalProperties": {
+											"type": "number"
+										}
+									},
+									"until": {
+										"type": "string"
+									},
+									"within": {
+										"type": "number"
+									},
+									"while": {
+										"$ref": "#/$defs/arc_in_law"
+									},
+									"then": {
+										"$ref": "#/$defs/then"
+									}
+								}
+							},
+							{
+								"type": "object",
+								"additionalProperties": false,
+								"required": [
+									"verb",
+									"who",
+									"name"
+								],
+								"properties": {
+									"let": {
+										"type": "string"
+									},
+									"verb": {
+										"const": "tag"
+									},
+									"who": {
+										"type": "string"
+									},
+									"name": {
+										"type": "string"
+									},
+									"until": {
+										"type": "string"
+									},
+									"within": {
+										"type": "number"
+									},
+									"while": {
+										"$ref": "#/$defs/arc_in_law"
+									},
+									"then": {
+										"$ref": "#/$defs/then"
+									}
+								}
+							},
+							{
+								"type": "object",
+								"additionalProperties": false,
+								"required": [
+									"verb",
+									"who",
+									"name"
+								],
+								"properties": {
+									"let": {
+										"type": "string"
+									},
+									"verb": {
+										"const": "untag"
+									},
+									"who": {
+										"type": "string"
+									},
+									"name": {
+										"type": "string"
+									},
+									"until": {
+										"type": "string"
+									},
+									"within": {
+										"type": "number"
+									},
+									"while": {
+										"$ref": "#/$defs/arc_in_law"
+									},
+									"then": {
+										"$ref": "#/$defs/then"
+									}
+								}
+							},
+							{
+								"type": "object",
+								"additionalProperties": false,
+								"required": [
+									"verb"
+								],
+								"properties": {
+									"let": {
+										"type": "string"
+									},
+									"verb": {
+										"const": "spread"
+									},
+									"around": {
+										"type": "string"
+									},
+									"paces": {
+										"type": "number"
+									},
+									"until": {
+										"type": "string"
+									},
+									"within": {
+										"type": "number"
+									},
+									"while": {
+										"$ref": "#/$defs/arc_in_law"
+									},
+									"then": {
+										"$ref": "#/$defs/then"
+									}
+								}
+							},
+							{
+								"type": "object",
+								"additionalProperties": false,
+								"required": [
+									"verb"
+								],
+								"properties": {
+									"let": {
+										"type": "string"
+									},
+									"verb": {
+										"const": "circle"
+									},
+									"around": {
+										"type": "string"
+									},
+									"paces": {
+										"type": "number"
+									},
+									"until": {
+										"type": "string"
+									},
+									"within": {
+										"type": "number"
+									},
+									"while": {
+										"$ref": "#/$defs/arc_in_law"
+									},
+									"then": {
+										"$ref": "#/$defs/then"
+									}
+								}
+							},
+							{
+								"type": "object",
+								"additionalProperties": false,
+								"required": [
+									"verb"
+								],
+								"properties": {
+									"let": {
+										"type": "string"
+									},
+									"verb": {
+										"const": "hold_line"
+									},
+									"at": {
+										"type": "string"
+									},
+									"facing": {
+										"type": "string"
+									},
+									"paces": {
+										"type": "number"
+									},
+									"until": {
+										"type": "string"
+									},
+									"within": {
+										"type": "number"
+									},
+									"while": {
+										"$ref": "#/$defs/arc_in_law"
+									},
+									"then": {
+										"$ref": "#/$defs/then"
+									}
+								}
+							},
+							{
+								"type": "object",
+								"additionalProperties": false,
+								"required": [
+									"verb",
+									"arc"
+								],
+								"properties": {
+									"let": {
+										"type": "string"
+									},
+									"verb": {
+										"const": "group"
+									},
+									"arc": {
+										"$ref": "#/$defs/arc_in_law"
+									},
+									"then": {
+										"$ref": "#/$defs/then"
+									}
+								}
+							},
+							{
+								"type": "object",
+								"additionalProperties": false,
+								"required": [
+									"verb",
+									"watch"
+								],
+								"properties": {
+									"let": {
+										"type": "string"
+									},
+									"verb": {
+										"const": "test"
+									},
+									"watch": {
+										"type": "string"
+									},
+									"then": {
+										"$ref": "#/$defs/then"
+									}
+								}
+							}
+						]
+					}
+				}
+			}
+		},
+		{
+			"constrain": [
+				[
+					"wait",
+					"seconds",
+					{
+						"min": 1,
+						"max": 10,
+						"integer": true
+					}
+				],
+				[
+					"go_to",
+					"target",
+					{
+						"names": [
+							"Keep",
+							"Gate"
+						]
+					}
+				],
+				[
+					"law",
+					"arc",
+					{
+						"not": [
+							"say",
+							"law"
+						],
+						"maxSteps": 6
+					}
+				],
+				[
+					"wait",
+					"seconds",
+					{
+						"max": 10
+					},
+					"law.arc"
+				],
+				[
+					"loop",
+					"arc",
+					{
+						"subverbs": [
+							"go_to",
+							"wait"
+						]
+					}
+				]
+			],
+			"schema": {
+				"type": "object",
+				"additionalProperties": false,
+				"required": [
+					"steps"
+				],
+				"properties": {
+					"steps": {
+						"type": "array",
+						"minItems": 1,
+						"items": {
+							"anyOf": [
+								{
+									"type": "object",
+									"additionalProperties": false,
+									"required": [
+										"verb",
+										"who",
+										"arc"
+									],
+									"properties": {
+										"let": {
+											"type": "string"
+										},
+										"verb": {
+											"const": "command"
+										},
+										"who": {
+											"type": "string"
+										},
+										"arc": {
+											"$ref": "#/$defs/arc"
+										},
+										"group": {
+											"type": "string"
+										},
+										"append": {
+											"type": "boolean"
+										},
+										"until": {
+											"type": "string"
+										},
+										"within": {
+											"type": "number"
+										},
+										"while": {
+											"$ref": "#/$defs/arc"
+										},
+										"then": {
+											"$ref": "#/$defs/then"
+										}
+									}
+								},
+								{
+									"$ref": "#/$defs/step"
+								}
+							]
+						}
+					}
+				},
+				"$defs": {
+					"then": {
+						"type": "string",
+						"enum": [
+							"if_ok",
+							"always",
+							"if_failed"
+						]
+					},
+					"arc": {
+						"type": "array",
+						"minItems": 1,
+						"items": {
+							"$ref": "#/$defs/step"
+						}
+					},
+					"arc_think": {
+						"type": "array",
+						"minItems": 1,
+						"items": {
+							"anyOf": [
+								{
+									"$ref": "#/$defs/step"
+								},
+								{
+									"type": "object",
+									"additionalProperties": false,
+									"required": [
+										"verb"
+									],
+									"properties": {
+										"let": {
+											"type": "string"
+										},
+										"verb": {
+											"const": "think"
+										},
+										"about": {
+											"type": "string"
+										},
+										"until": {
+											"type": "string"
+										},
+										"within": {
+											"type": "number"
+										},
+										"while": {
+											"$ref": "#/$defs/arc"
+										},
+										"then": {
+											"$ref": "#/$defs/then"
+										}
+									}
+								}
+							]
+						}
+					},
+					"step": {
+						"anyOf": [
+							{
+								"type": "object",
+								"additionalProperties": false,
+								"required": [
+									"verb",
+									"target"
+								],
+								"properties": {
+									"let": {
+										"type": "string"
+									},
+									"verb": {
+										"const": "go_to"
+									},
+									"target": {
+										"type": "string",
+										"enum": [
+											"Keep",
+											"Gate"
+										]
+									},
+									"until": {
+										"type": "string"
+									},
+									"within": {
+										"type": "number"
+									},
+									"while": {
+										"$ref": "#/$defs/arc"
+									},
+									"then": {
+										"$ref": "#/$defs/then"
+									}
+								}
+							},
+							{
+								"type": "object",
+								"additionalProperties": false,
+								"required": [
+									"verb",
+									"target"
+								],
+								"properties": {
+									"let": {
+										"type": "string"
+									},
+									"verb": {
+										"const": "follow"
+									},
+									"target": {
+										"type": "string"
+									},
+									"distance": {
+										"type": "number"
+									},
+									"until": {
+										"type": "string"
+									},
+									"within": {
+										"type": "number"
+									},
+									"while": {
+										"$ref": "#/$defs/arc"
+									},
+									"unbreakable": {
+										"type": "string"
+									},
+									"then": {
+										"$ref": "#/$defs/then"
+									}
+								}
+							},
+							{
+								"type": "object",
+								"additionalProperties": false,
+								"required": [
+									"verb",
+									"from"
+								],
+								"properties": {
+									"let": {
+										"type": "string"
+									},
+									"verb": {
+										"const": "flee"
+									},
+									"from": {
+										"type": "string"
+									},
+									"distance": {
+										"type": "number"
+									},
+									"until": {
+										"type": "string"
+									},
+									"within": {
+										"type": "number"
+									},
+									"while": {
+										"$ref": "#/$defs/arc"
+									},
+									"then": {
+										"$ref": "#/$defs/then"
+									}
+								}
+							},
+							{
+								"type": "object",
+								"additionalProperties": false,
+								"required": [
+									"verb"
+								],
+								"properties": {
+									"let": {
+										"type": "string"
+									},
+									"verb": {
+										"const": "wander"
+									},
+									"until": {
+										"type": "string"
+									},
+									"seconds": {
+										"type": "number"
+									},
+									"within": {
+										"type": "number"
+									},
+									"while": {
+										"$ref": "#/$defs/arc"
+									},
+									"then": {
+										"$ref": "#/$defs/then"
+									}
+								}
+							},
+							{
+								"type": "object",
+								"additionalProperties": false,
+								"required": [
+									"verb",
+									"item"
+								],
+								"properties": {
+									"let": {
+										"type": "string"
+									},
+									"verb": {
+										"const": "use"
+									},
+									"item": {
+										"type": "string"
+									},
+									"target": {
+										"type": "string"
+									},
+									"until": {
+										"type": "string"
+									},
+									"within": {
+										"type": "number"
+									},
+									"while": {
+										"$ref": "#/$defs/arc"
+									},
+									"then": {
+										"$ref": "#/$defs/then"
+									}
+								}
+							},
+							{
+								"type": "object",
+								"additionalProperties": false,
+								"required": [
+									"verb",
+									"item"
+								],
+								"properties": {
+									"let": {
+										"type": "string"
+									},
+									"verb": {
+										"const": "pick_up"
+									},
+									"item": {
+										"type": "string"
+									},
+									"from": {
+										"type": "string"
+									},
+									"until": {
+										"type": "string"
+									},
+									"within": {
+										"type": "number"
+									},
+									"while": {
+										"$ref": "#/$defs/arc"
+									},
+									"then": {
+										"$ref": "#/$defs/then"
+									}
+								}
+							},
+							{
+								"type": "object",
+								"additionalProperties": false,
+								"required": [
+									"verb",
+									"item"
+								],
+								"properties": {
+									"let": {
+										"type": "string"
+									},
+									"verb": {
+										"const": "drop"
+									},
+									"item": {
+										"type": "string"
+									},
+									"to": {
+										"type": "string"
+									},
+									"until": {
+										"type": "string"
+									},
+									"within": {
+										"type": "number"
+									},
+									"while": {
+										"$ref": "#/$defs/arc"
+									},
+									"then": {
+										"$ref": "#/$defs/then"
+									}
+								}
+							},
+							{
+								"type": "object",
+								"additionalProperties": false,
+								"required": [
+									"verb",
+									"item",
+									"to"
+								],
+								"properties": {
+									"let": {
+										"type": "string"
+									},
+									"verb": {
+										"const": "give"
+									},
+									"item": {
+										"type": "string"
+									},
+									"to": {
+										"type": "string"
+									},
+									"quantity": {
+										"type": "number"
+									},
+									"until": {
+										"type": "string"
+									},
+									"within": {
+										"type": "number"
+									},
+									"while": {
+										"$ref": "#/$defs/arc"
+									},
+									"then": {
+										"$ref": "#/$defs/then"
+									}
+								}
+							},
+							{
+								"type": "object",
+								"additionalProperties": false,
+								"required": [
+									"verb",
+									"target"
+								],
+								"properties": {
+									"let": {
+										"type": "string"
+									},
+									"verb": {
+										"const": "examine"
+									},
+									"target": {
+										"type": "string"
+									},
+									"until": {
+										"type": "string"
+									},
+									"within": {
+										"type": "number"
+									},
+									"while": {
+										"$ref": "#/$defs/arc"
+									},
+									"then": {
+										"$ref": "#/$defs/then"
+									}
+								}
+							},
+							{
+								"type": "object",
+								"additionalProperties": false,
+								"required": [
+									"verb",
+									"text"
+								],
+								"properties": {
+									"let": {
+										"type": "string"
+									},
+									"verb": {
+										"const": "say"
+									},
+									"text": {
+										"type": "string"
+									},
+									"to": {
+										"type": "string"
+									},
+									"as": {
+										"type": "string",
+										"enum": [
+											"whisper",
+											"sing",
+											"laugh",
+											"sob",
+											"sigh",
+											"scream",
+											"shout"
+										]
+									},
+									"until": {
+										"type": "string"
+									},
+									"within": {
+										"type": "number"
+									},
+									"while": {
+										"$ref": "#/$defs/arc"
+									},
+									"then": {
+										"$ref": "#/$defs/then"
+									}
+								}
+							},
+							{
+								"type": "object",
+								"additionalProperties": false,
+								"required": [
+									"verb"
+								],
+								"properties": {
+									"let": {
+										"type": "string"
+									},
+									"verb": {
+										"const": "wait"
+									},
+									"seconds": {
+										"type": "integer",
+										"minimum": 1,
+										"maximum": 10
+									},
+									"until": {
+										"type": "string"
+									},
+									"within": {
+										"type": "number"
+									},
+									"while": {
+										"$ref": "#/$defs/arc"
+									},
+									"then": {
+										"$ref": "#/$defs/then"
+									}
+								}
+							},
+							{
+								"type": "object",
+								"additionalProperties": false,
+								"required": [
+									"verb"
+								],
+								"properties": {
+									"let": {
+										"type": "string"
+									},
+									"verb": {
+										"const": "pass"
+									},
+									"until": {
+										"type": "string"
+									},
+									"within": {
+										"type": "number"
+									},
+									"while": {
+										"$ref": "#/$defs/arc"
+									},
+									"then": {
+										"$ref": "#/$defs/then"
+									}
+								}
+							},
+							{
+								"type": "object",
+								"additionalProperties": false,
+								"required": [
+									"verb",
+									"arc"
+								],
+								"properties": {
+									"let": {
+										"type": "string"
+									},
+									"verb": {
+										"const": "instead"
+									},
+									"arc": {
+										"$ref": "#/$defs/arc"
+									},
+									"until": {
+										"type": "string"
+									},
+									"within": {
+										"type": "number"
+									},
+									"while": {
+										"$ref": "#/$defs/arc"
+									},
+									"then": {
+										"$ref": "#/$defs/then"
+									}
+								}
+							},
+							{
+								"type": "object",
+								"additionalProperties": false,
+								"required": [
+									"verb",
+									"content"
+								],
+								"properties": {
+									"let": {
+										"type": "string"
+									},
+									"verb": {
+										"const": "remember"
+									},
+									"content": {
+										"type": "string"
+									},
+									"tags": {
+										"type": "array",
+										"items": {
+											"type": "string"
+										}
+									},
+									"until": {
+										"type": "string"
+									},
+									"within": {
+										"type": "number"
+									},
+									"while": {
+										"$ref": "#/$defs/arc"
+									},
+									"then": {
+										"$ref": "#/$defs/then"
+									}
+								}
+							},
+							{
+								"type": "object",
+								"additionalProperties": false,
+								"required": [
+									"verb",
+									"goal"
+								],
+								"properties": {
+									"let": {
+										"type": "string"
+									},
+									"verb": {
+										"const": "set_goal"
+									},
+									"goal": {
+										"type": "string"
+									},
+									"priority": {
+										"type": "number"
+									},
+									"until": {
+										"type": "string"
+									},
+									"within": {
+										"type": "number"
+									},
+									"while": {
+										"$ref": "#/$defs/arc"
+									},
+									"then": {
+										"$ref": "#/$defs/then"
+									}
+								}
+							},
+							{
+								"type": "object",
+								"additionalProperties": false,
+								"required": [
+									"verb"
+								],
+								"properties": {
+									"let": {
+										"type": "string"
+									},
+									"verb": {
+										"const": "drop_goal"
+									},
+									"goal": {
+										"type": "string"
+									},
+									"until": {
+										"type": "string"
+									},
+									"within": {
+										"type": "number"
+									},
+									"while": {
+										"$ref": "#/$defs/arc"
+									},
+									"then": {
+										"$ref": "#/$defs/then"
+									}
+								}
+							},
+							{
+								"type": "object",
+								"additionalProperties": false,
+								"required": [
+									"verb"
+								],
+								"properties": {
+									"let": {
+										"type": "string"
+									},
+									"verb": {
+										"const": "finish_goal"
+									},
+									"goal": {
+										"type": "string"
+									},
+									"until": {
+										"type": "string"
+									},
+									"within": {
+										"type": "number"
+									},
+									"while": {
+										"$ref": "#/$defs/arc"
+									},
+									"then": {
+										"$ref": "#/$defs/then"
+									}
+								}
+							},
+							{
+								"type": "object",
+								"additionalProperties": false,
+								"required": [
+									"verb"
+								],
+								"properties": {
+									"let": {
+										"type": "string"
+									},
+									"verb": {
+										"const": "set_identity"
+									},
+									"role": {
+										"type": "string"
+									},
+									"traits": {
+										"type": "array",
+										"items": {
+											"type": "string"
+										}
+									},
+									"until": {
+										"type": "string"
+									},
+									"within": {
+										"type": "number"
+									},
+									"while": {
+										"$ref": "#/$defs/arc"
+									},
+									"then": {
+										"$ref": "#/$defs/then"
+									}
+								}
+							},
+							{
+								"type": "object",
+								"additionalProperties": false,
+								"required": [
+									"verb",
+									"name",
+									"expr"
+								],
+								"properties": {
+									"let": {
+										"type": "string"
+									},
+									"verb": {
+										"const": "watch"
+									},
+									"name": {
+										"type": "string"
+									},
+									"expr": {
+										"type": "string"
+									},
+									"until": {
+										"type": "string"
+									},
+									"within": {
+										"type": "number"
+									},
+									"while": {
+										"$ref": "#/$defs/arc"
+									},
+									"then": {
+										"$ref": "#/$defs/then"
+									}
+								}
+							},
+							{
+								"type": "object",
+								"additionalProperties": false,
+								"required": [
+									"verb",
+									"name"
+								],
+								"properties": {
+									"let": {
+										"type": "string"
+									},
+									"verb": {
+										"const": "unwatch"
+									},
+									"name": {
+										"type": "string"
+									},
+									"until": {
+										"type": "string"
+									},
+									"within": {
+										"type": "number"
+									},
+									"while": {
+										"$ref": "#/$defs/arc"
+									},
+									"then": {
+										"$ref": "#/$defs/then"
+									}
+								}
+							},
+							{
+								"type": "object",
+								"additionalProperties": false,
+								"required": [
+									"verb",
+									"expr"
+								],
+								"properties": {
+									"let": {
+										"type": "string"
+									},
+									"verb": {
+										"const": "focus"
+									},
+									"expr": {
+										"type": "string"
+									},
+									"until": {
+										"type": "string"
+									},
+									"within": {
+										"type": "number"
+									},
+									"while": {
+										"$ref": "#/$defs/arc"
+									},
+									"then": {
+										"$ref": "#/$defs/then"
+									}
+								}
+							},
+							{
+								"type": "object",
+								"additionalProperties": false,
+								"required": [
+									"verb",
+									"expr"
+								],
+								"properties": {
+									"let": {
+										"type": "string"
+									},
+									"verb": {
+										"const": "unfocus"
+									},
+									"expr": {
+										"type": "string"
+									},
+									"until": {
+										"type": "string"
+									},
+									"within": {
+										"type": "number"
+									},
+									"while": {
+										"$ref": "#/$defs/arc"
+									},
+									"then": {
+										"$ref": "#/$defs/then"
+									}
+								}
+							},
+							{
+								"type": "object",
+								"additionalProperties": false,
+								"required": [
+									"verb",
+									"cond",
+									"arc"
+								],
+								"properties": {
+									"let": {
+										"type": "string"
+									},
+									"verb": {
+										"const": "if"
+									},
+									"cond": {
+										"$ref": "#/$defs/arc"
+									},
+									"arc": {
+										"$ref": "#/$defs/arc_think"
+									},
+									"else": {
+										"$ref": "#/$defs/arc_think"
+									},
+									"until": {
+										"type": "string"
+									},
+									"within": {
+										"type": "number"
+									},
+									"while": {
+										"$ref": "#/$defs/arc"
+									},
+									"then": {
+										"$ref": "#/$defs/then"
+									}
+								}
+							},
+							{
+								"type": "object",
+								"additionalProperties": false,
+								"required": [
+									"verb",
+									"watch",
+									"arc"
+								],
+								"properties": {
+									"let": {
+										"type": "string"
+									},
+									"verb": {
+										"const": "when"
+									},
+									"watch": {
+										"type": "string"
+									},
+									"arc": {
+										"$ref": "#/$defs/arc"
+									},
+									"times": {
+										"type": "number"
+									},
+									"until": {
+										"type": "string"
+									},
+									"rearm": {
+										"type": "number"
+									},
+									"within": {
+										"type": "number"
+									},
+									"while": {
+										"$ref": "#/$defs/arc"
+									},
+									"then": {
+										"$ref": "#/$defs/then"
+									}
+								}
+							},
+							{
+								"type": "object",
+								"additionalProperties": false,
+								"required": [
+									"verb",
+									"arc"
+								],
+								"properties": {
+									"let": {
+										"type": "string"
+									},
+									"verb": {
+										"const": "loop"
+									},
+									"arc": {
+										"$ref": "#/$defs/arc_in_loop"
+									},
+									"through": {
+										"type": "string"
+									},
+									"until": {
+										"type": "string"
+									},
+									"times": {
+										"type": "number"
+									},
+									"unbreakable": {
+										"anyOf": [
+											{
+												"const": true
+											},
+											{
+												"type": "integer",
+												"minimum": 0
+											},
+											{
+												"type": "string"
+											}
+										]
+									},
+									"within": {
+										"type": "number"
+									},
+									"while": {
+										"$ref": "#/$defs/arc"
+									},
+									"then": {
+										"$ref": "#/$defs/then"
+									}
+								}
+							},
+							{
+								"type": "object",
+								"additionalProperties": false,
+								"required": [
+									"verb",
+									"watch",
+									"arc"
+								],
+								"properties": {
+									"let": {
+										"type": "string"
+									},
+									"verb": {
+										"const": "law"
+									},
+									"who": {
+										"type": "string"
+									},
+									"watch": {
+										"type": "string"
+									},
+									"arc": {
+										"$ref": "#/$defs/arc_in_law"
+									},
+									"name": {
+										"type": "string"
+									},
+									"times": {
+										"type": "number"
+									},
+									"until": {
+										"type": "string"
+									},
+									"rearm": {
+										"type": "number"
+									},
+									"within": {
+										"type": "number"
+									},
+									"while": {
+										"$ref": "#/$defs/arc"
+									},
+									"then": {
+										"$ref": "#/$defs/then"
+									}
+								}
+							},
+							{
+								"type": "object",
+								"additionalProperties": false,
+								"required": [
+									"verb",
+									"name"
+								],
+								"properties": {
+									"let": {
+										"type": "string"
+									},
+									"verb": {
+										"const": "unlaw"
+									},
+									"name": {
+										"type": "string"
+									},
+									"until": {
+										"type": "string"
+									},
+									"within": {
+										"type": "number"
+									},
+									"while": {
+										"$ref": "#/$defs/arc"
+									},
+									"then": {
+										"$ref": "#/$defs/then"
+									}
+								}
+							},
+							{
+								"type": "object",
+								"additionalProperties": false,
+								"required": [
+									"verb",
+									"goal",
+									"choices"
+								],
+								"properties": {
+									"let": {
+										"type": "string"
+									},
+									"verb": {
+										"const": "choose"
+									},
+									"goal": {
+										"type": "string"
+									},
+									"choices": {
+										"type": "object",
+										"additionalProperties": {
+											"$ref": "#/$defs/arc_think"
+										}
+									},
+									"then": {
+										"$ref": "#/$defs/then"
+									}
+								}
+							},
+							{
+								"type": "object",
+								"additionalProperties": false,
+								"required": [
+									"verb"
+								],
+								"properties": {
+									"let": {
+										"type": "string"
+									},
+									"verb": {
+										"const": "offer"
+									},
+									"to": {
+										"type": "string"
+									},
+									"give": {
+										"type": "object",
+										"additionalProperties": {
+											"type": "number"
+										}
+									},
+									"get": {
+										"type": "object",
+										"additionalProperties": {
+											"type": "number"
+										}
+									},
+									"until": {
+										"type": "string"
+									},
+									"within": {
+										"type": "number"
+									},
+									"while": {
+										"$ref": "#/$defs/arc"
+									},
+									"then": {
+										"$ref": "#/$defs/then"
+									}
+								}
+							},
+							{
+								"type": "object",
+								"additionalProperties": false,
+								"required": [
+									"verb",
+									"who",
+									"name"
+								],
+								"properties": {
+									"let": {
+										"type": "string"
+									},
+									"verb": {
+										"const": "tag"
+									},
+									"who": {
+										"type": "string"
+									},
+									"name": {
+										"type": "string"
+									},
+									"until": {
+										"type": "string"
+									},
+									"within": {
+										"type": "number"
+									},
+									"while": {
+										"$ref": "#/$defs/arc"
+									},
+									"then": {
+										"$ref": "#/$defs/then"
+									}
+								}
+							},
+							{
+								"type": "object",
+								"additionalProperties": false,
+								"required": [
+									"verb",
+									"who",
+									"name"
+								],
+								"properties": {
+									"let": {
+										"type": "string"
+									},
+									"verb": {
+										"const": "untag"
+									},
+									"who": {
+										"type": "string"
+									},
+									"name": {
+										"type": "string"
+									},
+									"until": {
+										"type": "string"
+									},
+									"within": {
+										"type": "number"
+									},
+									"while": {
+										"$ref": "#/$defs/arc"
+									},
+									"then": {
+										"$ref": "#/$defs/then"
+									}
+								}
+							},
+							{
+								"type": "object",
+								"additionalProperties": false,
+								"required": [
+									"verb"
+								],
+								"properties": {
+									"let": {
+										"type": "string"
+									},
+									"verb": {
+										"const": "spread"
+									},
+									"around": {
+										"type": "string"
+									},
+									"paces": {
+										"type": "number"
+									},
+									"until": {
+										"type": "string"
+									},
+									"within": {
+										"type": "number"
+									},
+									"while": {
+										"$ref": "#/$defs/arc"
+									},
+									"then": {
+										"$ref": "#/$defs/then"
+									}
+								}
+							},
+							{
+								"type": "object",
+								"additionalProperties": false,
+								"required": [
+									"verb"
+								],
+								"properties": {
+									"let": {
+										"type": "string"
+									},
+									"verb": {
+										"const": "circle"
+									},
+									"around": {
+										"type": "string"
+									},
+									"paces": {
+										"type": "number"
+									},
+									"until": {
+										"type": "string"
+									},
+									"within": {
+										"type": "number"
+									},
+									"while": {
+										"$ref": "#/$defs/arc"
+									},
+									"then": {
+										"$ref": "#/$defs/then"
+									}
+								}
+							},
+							{
+								"type": "object",
+								"additionalProperties": false,
+								"required": [
+									"verb"
+								],
+								"properties": {
+									"let": {
+										"type": "string"
+									},
+									"verb": {
+										"const": "hold_line"
+									},
+									"at": {
+										"type": "string"
+									},
+									"facing": {
+										"type": "string"
+									},
+									"paces": {
+										"type": "number"
+									},
+									"until": {
+										"type": "string"
+									},
+									"within": {
+										"type": "number"
+									},
+									"while": {
+										"$ref": "#/$defs/arc"
+									},
+									"then": {
+										"$ref": "#/$defs/then"
+									}
+								}
+							},
+							{
+								"type": "object",
+								"additionalProperties": false,
+								"required": [
+									"verb",
+									"arc"
+								],
+								"properties": {
+									"let": {
+										"type": "string"
+									},
+									"verb": {
+										"const": "group"
+									},
+									"arc": {
+										"$ref": "#/$defs/arc"
+									},
+									"then": {
+										"$ref": "#/$defs/then"
+									}
+								}
+							},
+							{
+								"type": "object",
+								"additionalProperties": false,
+								"required": [
+									"verb",
+									"watch"
+								],
+								"properties": {
+									"let": {
+										"type": "string"
+									},
+									"verb": {
+										"const": "test"
+									},
+									"watch": {
+										"type": "string"
+									},
+									"then": {
+										"$ref": "#/$defs/then"
+									}
+								}
+							}
+						]
+					},
+					"arc_in_loop": {
+						"type": "array",
+						"minItems": 1,
+						"items": {
+							"$ref": "#/$defs/step_in_loop"
+						}
+					},
+					"step_in_loop": {
+						"anyOf": [
+							{
+								"type": "object",
+								"additionalProperties": false,
+								"required": [
+									"verb",
+									"target"
+								],
+								"properties": {
+									"let": {
+										"type": "string"
+									},
+									"verb": {
+										"const": "go_to"
+									},
+									"target": {
+										"type": "string",
+										"enum": [
+											"Keep",
+											"Gate"
+										]
+									},
+									"until": {
+										"type": "string"
+									},
+									"within": {
+										"type": "number"
+									},
+									"while": {
+										"$ref": "#/$defs/arc_in_loop"
+									},
+									"then": {
+										"$ref": "#/$defs/then"
+									}
+								}
+							},
+							{
+								"type": "object",
+								"additionalProperties": false,
+								"required": [
+									"verb"
+								],
+								"properties": {
+									"let": {
+										"type": "string"
+									},
+									"verb": {
+										"const": "wait"
+									},
+									"seconds": {
+										"type": "integer",
+										"minimum": 1,
+										"maximum": 10
+									},
+									"until": {
+										"type": "string"
+									},
+									"within": {
+										"type": "number"
+									},
+									"while": {
+										"$ref": "#/$defs/arc_in_loop"
+									},
+									"then": {
+										"$ref": "#/$defs/then"
+									}
+								}
+							},
+							{
+								"type": "object",
+								"additionalProperties": false,
+								"required": [
+									"verb",
+									"arc"
+								],
+								"properties": {
+									"let": {
+										"type": "string"
+									},
+									"verb": {
+										"const": "group"
+									},
+									"arc": {
+										"$ref": "#/$defs/arc_in_loop"
+									},
+									"then": {
+										"$ref": "#/$defs/then"
+									}
+								}
+							},
+							{
+								"type": "object",
+								"additionalProperties": false,
+								"required": [
+									"verb",
+									"watch"
+								],
+								"properties": {
+									"let": {
+										"type": "string"
+									},
+									"verb": {
+										"const": "test"
+									},
+									"watch": {
+										"type": "string"
+									},
+									"then": {
+										"$ref": "#/$defs/then"
+									}
+								}
+							}
+						]
+					},
+					"arc_in_law": {
+						"type": "array",
+						"minItems": 1,
+						"maxItems": 6,
+						"items": {
+							"$ref": "#/$defs/step_in_law"
+						}
+					},
+					"arc_in_law_think": {
+						"type": "array",
+						"minItems": 1,
+						"maxItems": 6,
+						"items": {
+							"anyOf": [
+								{
+									"$ref": "#/$defs/step_in_law"
+								},
+								{
+									"type": "object",
+									"additionalProperties": false,
+									"required": [
+										"verb"
+									],
+									"properties": {
+										"let": {
+											"type": "string"
+										},
+										"verb": {
+											"const": "think"
+										},
+										"about": {
+											"type": "string"
+										},
+										"until": {
+											"type": "string"
+										},
+										"within": {
+											"type": "number"
+										},
+										"while": {
+											"$ref": "#/$defs/arc_in_law"
+										},
+										"then": {
+											"$ref": "#/$defs/then"
+										}
+									}
+								}
+							]
+						}
+					},
+					"step_in_law": {
+						"anyOf": [
+							{
+								"type": "object",
+								"additionalProperties": false,
+								"required": [
+									"verb",
+									"target"
+								],
+								"properties": {
+									"let": {
+										"type": "string"
+									},
+									"verb": {
+										"const": "go_to"
+									},
+									"target": {
+										"type": "string",
+										"enum": [
+											"Keep",
+											"Gate"
+										]
+									},
+									"until": {
+										"type": "string"
+									},
+									"within": {
+										"type": "number"
+									},
+									"while": {
+										"$ref": "#/$defs/arc_in_law"
+									},
+									"then": {
+										"$ref": "#/$defs/then"
+									}
+								}
+							},
+							{
+								"type": "object",
+								"additionalProperties": false,
+								"required": [
+									"verb",
+									"target"
+								],
+								"properties": {
+									"let": {
+										"type": "string"
+									},
+									"verb": {
+										"const": "follow"
+									},
+									"target": {
+										"type": "string"
+									},
+									"distance": {
+										"type": "number"
+									},
+									"until": {
+										"type": "string"
+									},
+									"within": {
+										"type": "number"
+									},
+									"while": {
+										"$ref": "#/$defs/arc_in_law"
+									},
+									"unbreakable": {
+										"type": "string"
+									},
+									"then": {
+										"$ref": "#/$defs/then"
+									}
+								}
+							},
+							{
+								"type": "object",
+								"additionalProperties": false,
+								"required": [
+									"verb",
+									"from"
+								],
+								"properties": {
+									"let": {
+										"type": "string"
+									},
+									"verb": {
+										"const": "flee"
+									},
+									"from": {
+										"type": "string"
+									},
+									"distance": {
+										"type": "number"
+									},
+									"until": {
+										"type": "string"
+									},
+									"within": {
+										"type": "number"
+									},
+									"while": {
+										"$ref": "#/$defs/arc_in_law"
+									},
+									"then": {
+										"$ref": "#/$defs/then"
+									}
+								}
+							},
+							{
+								"type": "object",
+								"additionalProperties": false,
+								"required": [
+									"verb"
+								],
+								"properties": {
+									"let": {
+										"type": "string"
+									},
+									"verb": {
+										"const": "wander"
+									},
+									"until": {
+										"type": "string"
+									},
+									"seconds": {
+										"type": "number"
+									},
+									"within": {
+										"type": "number"
+									},
+									"while": {
+										"$ref": "#/$defs/arc_in_law"
+									},
+									"then": {
+										"$ref": "#/$defs/then"
+									}
+								}
+							},
+							{
+								"type": "object",
+								"additionalProperties": false,
+								"required": [
+									"verb",
+									"item"
+								],
+								"properties": {
+									"let": {
+										"type": "string"
+									},
+									"verb": {
+										"const": "use"
+									},
+									"item": {
+										"type": "string"
+									},
+									"target": {
+										"type": "string"
+									},
+									"until": {
+										"type": "string"
+									},
+									"within": {
+										"type": "number"
+									},
+									"while": {
+										"$ref": "#/$defs/arc_in_law"
+									},
+									"then": {
+										"$ref": "#/$defs/then"
+									}
+								}
+							},
+							{
+								"type": "object",
+								"additionalProperties": false,
+								"required": [
+									"verb",
+									"item"
+								],
+								"properties": {
+									"let": {
+										"type": "string"
+									},
+									"verb": {
+										"const": "pick_up"
+									},
+									"item": {
+										"type": "string"
+									},
+									"from": {
+										"type": "string"
+									},
+									"until": {
+										"type": "string"
+									},
+									"within": {
+										"type": "number"
+									},
+									"while": {
+										"$ref": "#/$defs/arc_in_law"
+									},
+									"then": {
+										"$ref": "#/$defs/then"
+									}
+								}
+							},
+							{
+								"type": "object",
+								"additionalProperties": false,
+								"required": [
+									"verb",
+									"item"
+								],
+								"properties": {
+									"let": {
+										"type": "string"
+									},
+									"verb": {
+										"const": "drop"
+									},
+									"item": {
+										"type": "string"
+									},
+									"to": {
+										"type": "string"
+									},
+									"until": {
+										"type": "string"
+									},
+									"within": {
+										"type": "number"
+									},
+									"while": {
+										"$ref": "#/$defs/arc_in_law"
+									},
+									"then": {
+										"$ref": "#/$defs/then"
+									}
+								}
+							},
+							{
+								"type": "object",
+								"additionalProperties": false,
+								"required": [
+									"verb",
+									"item",
+									"to"
+								],
+								"properties": {
+									"let": {
+										"type": "string"
+									},
+									"verb": {
+										"const": "give"
+									},
+									"item": {
+										"type": "string"
+									},
+									"to": {
+										"type": "string"
+									},
+									"quantity": {
+										"type": "number"
+									},
+									"until": {
+										"type": "string"
+									},
+									"within": {
+										"type": "number"
+									},
+									"while": {
+										"$ref": "#/$defs/arc_in_law"
+									},
+									"then": {
+										"$ref": "#/$defs/then"
+									}
+								}
+							},
+							{
+								"type": "object",
+								"additionalProperties": false,
+								"required": [
+									"verb",
+									"target"
+								],
+								"properties": {
+									"let": {
+										"type": "string"
+									},
+									"verb": {
+										"const": "examine"
+									},
+									"target": {
+										"type": "string"
+									},
+									"until": {
+										"type": "string"
+									},
+									"within": {
+										"type": "number"
+									},
+									"while": {
+										"$ref": "#/$defs/arc_in_law"
+									},
+									"then": {
+										"$ref": "#/$defs/then"
+									}
+								}
+							},
+							{
+								"type": "object",
+								"additionalProperties": false,
+								"required": [
+									"verb"
+								],
+								"properties": {
+									"let": {
+										"type": "string"
+									},
+									"verb": {
+										"const": "wait"
+									},
+									"seconds": {
+										"type": "integer",
+										"minimum": 1,
+										"maximum": 10
+									},
+									"until": {
+										"type": "string"
+									},
+									"within": {
+										"type": "number"
+									},
+									"while": {
+										"$ref": "#/$defs/arc_in_law"
+									},
+									"then": {
+										"$ref": "#/$defs/then"
+									}
+								}
+							},
+							{
+								"type": "object",
+								"additionalProperties": false,
+								"required": [
+									"verb"
+								],
+								"properties": {
+									"let": {
+										"type": "string"
+									},
+									"verb": {
+										"const": "pass"
+									},
+									"until": {
+										"type": "string"
+									},
+									"within": {
+										"type": "number"
+									},
+									"while": {
+										"$ref": "#/$defs/arc_in_law"
+									},
+									"then": {
+										"$ref": "#/$defs/then"
+									}
+								}
+							},
+							{
+								"type": "object",
+								"additionalProperties": false,
+								"required": [
+									"verb",
+									"arc"
+								],
+								"properties": {
+									"let": {
+										"type": "string"
+									},
+									"verb": {
+										"const": "instead"
+									},
+									"arc": {
+										"$ref": "#/$defs/arc"
+									},
+									"until": {
+										"type": "string"
+									},
+									"within": {
+										"type": "number"
+									},
+									"while": {
+										"$ref": "#/$defs/arc_in_law"
+									},
+									"then": {
+										"$ref": "#/$defs/then"
+									}
+								}
+							},
+							{
+								"type": "object",
+								"additionalProperties": false,
+								"required": [
+									"verb",
+									"content"
+								],
+								"properties": {
+									"let": {
+										"type": "string"
+									},
+									"verb": {
+										"const": "remember"
+									},
+									"content": {
+										"type": "string"
+									},
+									"tags": {
+										"type": "array",
+										"items": {
+											"type": "string"
+										}
+									},
+									"until": {
+										"type": "string"
+									},
+									"within": {
+										"type": "number"
+									},
+									"while": {
+										"$ref": "#/$defs/arc_in_law"
+									},
+									"then": {
+										"$ref": "#/$defs/then"
+									}
+								}
+							},
+							{
+								"type": "object",
+								"additionalProperties": false,
+								"required": [
+									"verb",
+									"goal"
+								],
+								"properties": {
+									"let": {
+										"type": "string"
+									},
+									"verb": {
+										"const": "set_goal"
+									},
+									"goal": {
+										"type": "string"
+									},
+									"priority": {
+										"type": "number"
+									},
+									"until": {
+										"type": "string"
+									},
+									"within": {
+										"type": "number"
+									},
+									"while": {
+										"$ref": "#/$defs/arc_in_law"
+									},
+									"then": {
+										"$ref": "#/$defs/then"
+									}
+								}
+							},
+							{
+								"type": "object",
+								"additionalProperties": false,
+								"required": [
+									"verb"
+								],
+								"properties": {
+									"let": {
+										"type": "string"
+									},
+									"verb": {
+										"const": "drop_goal"
+									},
+									"goal": {
+										"type": "string"
+									},
+									"until": {
+										"type": "string"
+									},
+									"within": {
+										"type": "number"
+									},
+									"while": {
+										"$ref": "#/$defs/arc_in_law"
+									},
+									"then": {
+										"$ref": "#/$defs/then"
+									}
+								}
+							},
+							{
+								"type": "object",
+								"additionalProperties": false,
+								"required": [
+									"verb"
+								],
+								"properties": {
+									"let": {
+										"type": "string"
+									},
+									"verb": {
+										"const": "finish_goal"
+									},
+									"goal": {
+										"type": "string"
+									},
+									"until": {
+										"type": "string"
+									},
+									"within": {
+										"type": "number"
+									},
+									"while": {
+										"$ref": "#/$defs/arc_in_law"
+									},
+									"then": {
+										"$ref": "#/$defs/then"
+									}
+								}
+							},
+							{
+								"type": "object",
+								"additionalProperties": false,
+								"required": [
+									"verb"
+								],
+								"properties": {
+									"let": {
+										"type": "string"
+									},
+									"verb": {
+										"const": "set_identity"
+									},
+									"role": {
+										"type": "string"
+									},
+									"traits": {
+										"type": "array",
+										"items": {
+											"type": "string"
+										}
+									},
+									"until": {
+										"type": "string"
+									},
+									"within": {
+										"type": "number"
+									},
+									"while": {
+										"$ref": "#/$defs/arc_in_law"
+									},
+									"then": {
+										"$ref": "#/$defs/then"
+									}
+								}
+							},
+							{
+								"type": "object",
+								"additionalProperties": false,
+								"required": [
+									"verb",
+									"name",
+									"expr"
+								],
+								"properties": {
+									"let": {
+										"type": "string"
+									},
+									"verb": {
+										"const": "watch"
+									},
+									"name": {
+										"type": "string"
+									},
+									"expr": {
+										"type": "string"
+									},
+									"until": {
+										"type": "string"
+									},
+									"within": {
+										"type": "number"
+									},
+									"while": {
+										"$ref": "#/$defs/arc_in_law"
+									},
+									"then": {
+										"$ref": "#/$defs/then"
+									}
+								}
+							},
+							{
+								"type": "object",
+								"additionalProperties": false,
+								"required": [
+									"verb",
+									"name"
+								],
+								"properties": {
+									"let": {
+										"type": "string"
+									},
+									"verb": {
+										"const": "unwatch"
+									},
+									"name": {
+										"type": "string"
+									},
+									"until": {
+										"type": "string"
+									},
+									"within": {
+										"type": "number"
+									},
+									"while": {
+										"$ref": "#/$defs/arc_in_law"
+									},
+									"then": {
+										"$ref": "#/$defs/then"
+									}
+								}
+							},
+							{
+								"type": "object",
+								"additionalProperties": false,
+								"required": [
+									"verb",
+									"expr"
+								],
+								"properties": {
+									"let": {
+										"type": "string"
+									},
+									"verb": {
+										"const": "focus"
+									},
+									"expr": {
+										"type": "string"
+									},
+									"until": {
+										"type": "string"
+									},
+									"within": {
+										"type": "number"
+									},
+									"while": {
+										"$ref": "#/$defs/arc_in_law"
+									},
+									"then": {
+										"$ref": "#/$defs/then"
+									}
+								}
+							},
+							{
+								"type": "object",
+								"additionalProperties": false,
+								"required": [
+									"verb",
+									"expr"
+								],
+								"properties": {
+									"let": {
+										"type": "string"
+									},
+									"verb": {
+										"const": "unfocus"
+									},
+									"expr": {
+										"type": "string"
+									},
+									"until": {
+										"type": "string"
+									},
+									"within": {
+										"type": "number"
+									},
+									"while": {
+										"$ref": "#/$defs/arc_in_law"
+									},
+									"then": {
+										"$ref": "#/$defs/then"
+									}
+								}
+							},
+							{
+								"type": "object",
+								"additionalProperties": false,
+								"required": [
+									"verb",
+									"cond",
+									"arc"
+								],
+								"properties": {
+									"let": {
+										"type": "string"
+									},
+									"verb": {
+										"const": "if"
+									},
+									"cond": {
+										"$ref": "#/$defs/arc_in_law"
+									},
+									"arc": {
+										"$ref": "#/$defs/arc_in_law_think"
+									},
+									"else": {
+										"$ref": "#/$defs/arc_in_law_think"
+									},
+									"until": {
+										"type": "string"
+									},
+									"within": {
+										"type": "number"
+									},
+									"while": {
+										"$ref": "#/$defs/arc_in_law"
+									},
+									"then": {
+										"$ref": "#/$defs/then"
+									}
+								}
+							},
+							{
+								"type": "object",
+								"additionalProperties": false,
+								"required": [
+									"verb",
+									"watch",
+									"arc"
+								],
+								"properties": {
+									"let": {
+										"type": "string"
+									},
+									"verb": {
+										"const": "when"
+									},
+									"watch": {
+										"type": "string"
+									},
+									"arc": {
+										"$ref": "#/$defs/arc"
+									},
+									"times": {
+										"type": "number"
+									},
+									"until": {
+										"type": "string"
+									},
+									"rearm": {
+										"type": "number"
+									},
+									"within": {
+										"type": "number"
+									},
+									"while": {
+										"$ref": "#/$defs/arc_in_law"
+									},
+									"then": {
+										"$ref": "#/$defs/then"
+									}
+								}
+							},
+							{
+								"type": "object",
+								"additionalProperties": false,
+								"required": [
+									"verb",
+									"arc"
+								],
+								"properties": {
+									"let": {
+										"type": "string"
+									},
+									"verb": {
+										"const": "loop"
+									},
+									"arc": {
+										"$ref": "#/$defs/arc_in_loop"
+									},
+									"through": {
+										"type": "string"
+									},
+									"until": {
+										"type": "string"
+									},
+									"times": {
+										"type": "number"
+									},
+									"unbreakable": {
+										"anyOf": [
+											{
+												"const": true
+											},
+											{
+												"type": "integer",
+												"minimum": 0
+											},
+											{
+												"type": "string"
+											}
+										]
+									},
+									"within": {
+										"type": "number"
+									},
+									"while": {
+										"$ref": "#/$defs/arc_in_law"
+									},
+									"then": {
+										"$ref": "#/$defs/then"
+									}
+								}
+							},
+							{
+								"type": "object",
+								"additionalProperties": false,
+								"required": [
+									"verb",
+									"name"
+								],
+								"properties": {
+									"let": {
+										"type": "string"
+									},
+									"verb": {
+										"const": "unlaw"
+									},
+									"name": {
+										"type": "string"
+									},
+									"until": {
+										"type": "string"
+									},
+									"within": {
+										"type": "number"
+									},
+									"while": {
+										"$ref": "#/$defs/arc_in_law"
+									},
+									"then": {
+										"$ref": "#/$defs/then"
+									}
+								}
+							},
+							{
+								"type": "object",
+								"additionalProperties": false,
+								"required": [
+									"verb",
+									"goal",
+									"choices"
+								],
+								"properties": {
+									"let": {
+										"type": "string"
+									},
+									"verb": {
+										"const": "choose"
+									},
+									"goal": {
+										"type": "string"
+									},
+									"choices": {
+										"type": "object",
+										"additionalProperties": {
+											"$ref": "#/$defs/arc_think"
+										}
+									},
+									"then": {
+										"$ref": "#/$defs/then"
+									}
+								}
+							},
+							{
+								"type": "object",
+								"additionalProperties": false,
+								"required": [
+									"verb"
+								],
+								"properties": {
+									"let": {
+										"type": "string"
+									},
+									"verb": {
+										"const": "offer"
+									},
+									"to": {
+										"type": "string"
+									},
+									"give": {
+										"type": "object",
+										"additionalProperties": {
+											"type": "number"
+										}
+									},
+									"get": {
+										"type": "object",
+										"additionalProperties": {
+											"type": "number"
+										}
+									},
+									"until": {
+										"type": "string"
+									},
+									"within": {
+										"type": "number"
+									},
+									"while": {
+										"$ref": "#/$defs/arc_in_law"
+									},
+									"then": {
+										"$ref": "#/$defs/then"
+									}
+								}
+							},
+							{
+								"type": "object",
+								"additionalProperties": false,
+								"required": [
+									"verb",
+									"who",
+									"name"
+								],
+								"properties": {
+									"let": {
+										"type": "string"
+									},
+									"verb": {
+										"const": "tag"
+									},
+									"who": {
+										"type": "string"
+									},
+									"name": {
+										"type": "string"
+									},
+									"until": {
+										"type": "string"
+									},
+									"within": {
+										"type": "number"
+									},
+									"while": {
+										"$ref": "#/$defs/arc_in_law"
+									},
+									"then": {
+										"$ref": "#/$defs/then"
+									}
+								}
+							},
+							{
+								"type": "object",
+								"additionalProperties": false,
+								"required": [
+									"verb",
+									"who",
+									"name"
+								],
+								"properties": {
+									"let": {
+										"type": "string"
+									},
+									"verb": {
+										"const": "untag"
+									},
+									"who": {
+										"type": "string"
+									},
+									"name": {
+										"type": "string"
+									},
+									"until": {
+										"type": "string"
+									},
+									"within": {
+										"type": "number"
+									},
+									"while": {
+										"$ref": "#/$defs/arc_in_law"
+									},
+									"then": {
+										"$ref": "#/$defs/then"
+									}
+								}
+							},
+							{
+								"type": "object",
+								"additionalProperties": false,
+								"required": [
+									"verb"
+								],
+								"properties": {
+									"let": {
+										"type": "string"
+									},
+									"verb": {
+										"const": "spread"
+									},
+									"around": {
+										"type": "string"
+									},
+									"paces": {
+										"type": "number"
+									},
+									"until": {
+										"type": "string"
+									},
+									"within": {
+										"type": "number"
+									},
+									"while": {
+										"$ref": "#/$defs/arc_in_law"
+									},
+									"then": {
+										"$ref": "#/$defs/then"
+									}
+								}
+							},
+							{
+								"type": "object",
+								"additionalProperties": false,
+								"required": [
+									"verb"
+								],
+								"properties": {
+									"let": {
+										"type": "string"
+									},
+									"verb": {
+										"const": "circle"
+									},
+									"around": {
+										"type": "string"
+									},
+									"paces": {
+										"type": "number"
+									},
+									"until": {
+										"type": "string"
+									},
+									"within": {
+										"type": "number"
+									},
+									"while": {
+										"$ref": "#/$defs/arc_in_law"
+									},
+									"then": {
+										"$ref": "#/$defs/then"
+									}
+								}
+							},
+							{
+								"type": "object",
+								"additionalProperties": false,
+								"required": [
+									"verb"
+								],
+								"properties": {
+									"let": {
+										"type": "string"
+									},
+									"verb": {
+										"const": "hold_line"
+									},
+									"at": {
+										"type": "string"
+									},
+									"facing": {
+										"type": "string"
+									},
+									"paces": {
+										"type": "number"
+									},
+									"until": {
+										"type": "string"
+									},
+									"within": {
+										"type": "number"
+									},
+									"while": {
+										"$ref": "#/$defs/arc_in_law"
+									},
+									"then": {
+										"$ref": "#/$defs/then"
+									}
+								}
+							},
+							{
+								"type": "object",
+								"additionalProperties": false,
+								"required": [
+									"verb",
+									"arc"
+								],
+								"properties": {
+									"let": {
+										"type": "string"
+									},
+									"verb": {
+										"const": "group"
+									},
+									"arc": {
+										"$ref": "#/$defs/arc_in_law"
+									},
+									"then": {
+										"$ref": "#/$defs/then"
+									}
+								}
+							},
+							{
+								"type": "object",
+								"additionalProperties": false,
+								"required": [
+									"verb",
+									"watch"
+								],
+								"properties": {
+									"let": {
+										"type": "string"
+									},
+									"verb": {
+										"const": "test"
+									},
+									"watch": {
+										"type": "string"
+									},
+									"then": {
+										"$ref": "#/$defs/then"
+									}
+								}
+							}
+						]
+					}
+				}
+			}
+		}
+	]
+}

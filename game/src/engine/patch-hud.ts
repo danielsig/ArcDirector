@@ -197,10 +197,10 @@ function patchOverhead(
 		}
 		const row = rowOf(go);
 		row.status = note.text;
-		row.thinking = note.thinking ?? false;
+		row.thinking = hud.thinkingBubbles && (note.thinking ?? false);
 		row.tool = note.tool ?? '';
 	}
-	world.forEachComponent(HumanBody, (_, go) => {
+	world.forEachComponent(HumanBody, (body, go) => {
 		if (go.id === 'Player' || !isLiving(go)) {
 			return;
 		}
@@ -467,6 +467,7 @@ function thinkRow(think:ThinkSlate):HudThink {
 		id: think.id,
 		name: think.name,
 		color: think.color,
+		why: think.why,
 		thought: think.thought,
 		arc: think.arc,
 		state: think.state,
@@ -498,7 +499,7 @@ export function patchThinks(hud:HudModel, host:GameHost):void {
 function emptierSide(world:DemoWorld, view:Renderer, go:GameObject | undefined, x:number):'left' | 'right' {
 	let left = 0;
 	let right = 0;
-	world.forEachComponent(HumanBody, (_, other) => {
+	world.forEachComponent(HumanBody, (body, other) => {
 		const p = other.transform.position;
 		const seen = other !== go && isLiving(other) ? view.projectToCanvas(p.x, p.y, p.z) : undefined;
 		if (seen?.visible) {
@@ -551,14 +552,14 @@ export function patchInfer(host:GameHost, hud:HudModel):void {
 		const last = mind.lastTacticalTimestamp;
 		return {
 			id: mind.id,
-			pulse: queue?.heartbeatSeconds(mind.id) ?? null,
+			rethink: queue?.rethinkSeconds(mind.id) ?? null,
 			ago: Number.isFinite(last) ? Math.max(0, now - last) : null,
 			thinking: queue?.isThinking(mind.id) ?? false,
 			thinkMs: infer?.thinkMs[mind.id] ?? 0,
 		};
 	});
 	next.sort((a, b) => a.id.localeCompare(b.id));
-	hud.heartrates = next;
+	hud.mindStats = next;
 	hud.activeModel = host.arc?.getModel()?.id ?? '';
 
 	if (!infer) return;

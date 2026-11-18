@@ -102,10 +102,10 @@ const STAFF = ['oak_staff'];
 const BONE_BOW = ['bone_bow'];
 const BOW = ['short_bow'];
 
-/** Someone in the crypt at map cell `x`, `z`. */
 /** A low monster of the crypt: too dull to dodge. */
 const DULL:Partial<NPCSpawnDef> = { evasive: false };
 
+/** Someone in the crypt at map cell `x`, `z`. */
 function delver(id:string, meshID:string, x:number, z:number, hp:number, extra:Partial<NPCSpawnDef> = {}):NPCSpawnDef {
 	return { id, meshID, ...mapCell('dungeon', x, z), hp, pack: true, ...extra };
 }
@@ -161,7 +161,7 @@ export const DUNGEON_VAULT:SceneDef = {
 	],
 	ambient: 'Black stone halls of the crypt, deep under the hills, lit by old torches.',
 	keys: SCENE_KEYS,
-	brief: `A company of three, Valerius the knight, Seraphine the healer and Morrigan the witch, goes down into the Sunken Crypt for the SunCrown in its treasury. Kaelen, their archer, is you: set Player to Participant to join them, or stay an Observer and watch. Valerius gives the orders and Seraphine solves every puzzle; if either falls, Morrigan takes the post.
+	brief: `A company of three, Valerius the knight, Seraphine the healer and Morrigan the witch, goes down into the Sunken Crypt for the SunCrown in its treasury. Kaelen, their archer, is you: set Player to Participant to join them, or stay an Observer and watch. Valerius gives the orders, and any of them may solve a puzzle; if he falls, Morrigan leads.
 
 Five rooms lie between them and the crown, joined by winding passages with dead ends. North of the Gatehouse, a Cobweb chokes the way out of the Storeroom; a flame burns it, and a WoodenTorch lies among the Storeroom's junk. In the Pillared Hall, SealedDoor opens to whoever speaks the answer to the riddle on RiddleStone (footsteps). The Ossuary keeps CryptKey in OssuaryChest, and CryptKey opens CryptGate. Beyond it the HollowKing guards the Throne Crypt. Everyone knows his weakness: steel and arrows barely scratch him, but witchfire burns, so Morrigan's hex does triple damage. When he falls, HoardGate opens on the Treasury, and the SunCrown waits in HoardChest.
 

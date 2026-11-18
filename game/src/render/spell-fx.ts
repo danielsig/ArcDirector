@@ -568,7 +568,7 @@ export function fireball(scene:THREE.Object3D, cast:Cast):void {
 	let flight:{ t0:number; from:THREE.Vector3; wide:THREE.Vector3 | null; seconds:number } | null = null;
 	const heading = new THREE.Vector3();
 	// In flight the flame streams back: the picture's up turned, on screen, against the way it flies.
-	ball.onBeforeRender = (_renderer, _scene, camera):void => {
+	ball.onBeforeRender = (renderer, scene, camera):void => {
 		if (!flight) {
 			ball.material.rotation = 0;
 			return;

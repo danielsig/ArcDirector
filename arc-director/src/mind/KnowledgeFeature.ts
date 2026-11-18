@@ -1,16 +1,22 @@
+import { showNamingText } from '../character/text-with-ids.js';
 import { Feature, type PromptPart } from '../director/Feature.js';
 import type { ArcDirector } from '../director/ArcDirector.js';
 import { bagOf } from '../expr/prev.js';
-import { isRecord } from '../json.js';
 import { internalsOf } from '../internals.js';
 import { mindTools, type Mind } from './mind.js';
+import { recallQuery } from './MindMemory.js';
 import type { ToolSpec } from './mind-types.js';
 import { articlesNamedIn, isAboutItem, knowledgeFor, knowledgePages, mentionedArticles, receivedArticles, type KnowledgeSource } from './knowledge.js';
+import { nothingFoundThen } from './prompt.js';
 
 /** Articles shown per think for names said or heard. */
 export const DEFAULT_MENTION_CAP = 2;
 /** Thinks before an article shown for a mention may be shown again. */
 const MENTION_REPEAT = 5;
+/** `recall`'s description where the world has articles, for a mind with `verbs`. */
+function knowledgeRecall(verbs:{ has(name:string):boolean }):string {
+	return `Search what you remember (what you were told, saw, or did) and what you know of the world (places, items, people, who sells or makes what, how things work). Query a name or keyword your goal needs (Bread, Gate), or a plain word (trees, house) to learn its Capitalized name. Empty query lists the topics you know. It answers any question. If it finds nothing, ${nothingFoundThen(verbs)}.`;
+}
 
 /** What `withKnowledge` takes. */
 export type KnowledgeOptions<TCtx = unknown> = {
@@ -48,22 +54,32 @@ export class KnowledgeFeature<TCtx = unknown> extends Feature<TCtx> {
 		const marks = this._minds.get(mind) ?? { thinks: 0, shownOn: new Map<string, number>() };
 		this._minds.set(mind, marks);
 		marks.thinks += 1;
-		return { mentioned: this.mentioned(mind, marks), lastResultArticles: this.failureArticles(mind), section: this.received(mind), recallKnows: true };
+		return { mentioned: this.mentioned(mind, marks), lastResultArticles: this.failureArticles(mind), section: this.received(mind), recallKnows: this.hasPages(mind) };
+	}
+
+	/** Whether the world `mind` looks from has articles: only then does `recall` promise what the world knows. */
+	private hasPages(mind:Mind<TCtx>):boolean {
+		return knowledgePages(this._pages, internalsOf(mind).worldContext()).length > 0;
 	}
 
 	public override install():void {
 		this.director.withTools((t) => t.add('recall', this.tool));
 	}
 
-	/** `recall` with the articles: memory, and what the world knows. What `install` registers, and what a solo character is given. */
+	/**
+	 * `recall` with the articles: memory, and what the world knows, where the world has any; memory alone, as every mind
+	 * has it, where it has none. What `install` registers, and what a solo character is given.
+	 */
 	public get tool():ToolSpec<TCtx> {
+		const memory = mindTools<TCtx>().recall;
 		return {
-			...mindTools<TCtx>().recall,
-			description: 'Search what you remember (what you were told, saw, or did) and what you know of the world (places, items, people, who sells or makes what, how things work). Query a name or keyword your goal needs (Bread, Gate), or a plain word (trees, house) to learn its Capitalized name. Empty query lists the topics you know. It answers any question. Never ask anyone until this cannot find it. Then try different words.',
-			handler: async (ctx, args, mind) => ({
-				remember: await mind.recall(args),
-				know: knowledgeFor(knowledgePages(this._pages, ctx), isRecord(args) && typeof args.query === 'string' ? args.query : ''),
-			}),
+			...memory,
+			description: (mind) => (this.hasPages(mind) ? knowledgeRecall(mind.owner.activeVerbs()) : typeof memory.description === 'string' ? memory.description : memory.description(mind)),
+			handler: async (ctx, args, mind) => {
+				const remember = await mind.memory.recall(args);
+				const know = knowledgeFor(knowledgePages(this._pages, ctx), recallQuery(args), mind.owner.activeVerbs());
+				return remember.length + know.length > 0 ? { remember, know } : mind.memory.nothingMore(args);
+			},
 		};
 	}
 
@@ -72,7 +88,7 @@ export class KnowledgeFeature<TCtx = unknown> extends Feature<TCtx> {
 	 * itself is not repeated within a few thinks.
 	 */
 	private mentioned(mind:Mind<TCtx>, marks:{ thinks:number; shownOn:Map<string, number> }):string {
-		const talked = mind.talkedOf().join('\n');
+		const talked = mind.memory.talkedOf().join('\n');
 		const ctx = this._mentions > 0 && talked.trim() ? internalsOf(mind).worldContext() : undefined;
 		if (ctx === undefined) {
 			return '';
@@ -102,7 +118,7 @@ export class KnowledgeFeature<TCtx = unknown> extends Feature<TCtx> {
 	 * lookup for it, when it is stuck on it and only then.
 	 */
 	private failureArticles(mind:Mind<TCtx>):string {
-		const reason = mind.lastResult && mind.lastResult.status !== 'ok' ? mind.lastResult.reason : undefined;
+		const reason = mind.lastResult?.reason && mind.lastResult.status !== 'ok' ? showNamingText(mind.lastResult.reason, (id) => mind.nameOf(id)) : undefined;
 		const ctx = reason ? internalsOf(mind).worldContext() : undefined;
 		return reason && ctx !== undefined ? articlesNamedIn(knowledgePages(this._pages, ctx), reason) : '';
 	}

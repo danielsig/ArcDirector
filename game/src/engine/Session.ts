@@ -414,6 +414,7 @@ export class Session extends Component {
 		hud.detailMaps = next.detailMaps;
 		hud.shadows = next.shadows;
 		hud.fpsCounter = next.fpsCounter;
+		hud.thinkingBubbles = next.thinkingBubbles;
 		hud.mindVisuals = next.mindVisuals;
 		hud.arcSlates = next.arcSlates;
 		hud.orderArcs = next.orderArcs;

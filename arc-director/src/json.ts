@@ -1,5 +1,8 @@
 import { commentEnd } from './expr/lex.js';
 
+/** Any value JSON holds: what a sense or a tool hands a mind. */
+export type JsonValue = string | number | boolean | null | JsonValue[] | { [key:string]:JsonValue | undefined };
+
 export type JsonSchema = {
 	type?:string | string[];
 	properties?:Record<string, JsonSchema>;

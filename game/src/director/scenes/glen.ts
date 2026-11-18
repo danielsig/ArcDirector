@@ -1,5 +1,5 @@
 import { Time, distanceXZ, type GameObject } from '@arc-director/kindling';
-import { ArcDirector, type CharacterSpec, type Kit } from 'arc-director';
+import { ArcDirector, Feeling, type CharacterSpec, type Kit } from 'arc-director';
 import { Belly } from '../../engine/Belly';
 import { Bridge, Celebrating, HumanBody } from '../../engine/components';
 import type { DemoWorld } from '../../engine/demo-world';
@@ -16,7 +16,7 @@ const GOT_MUSHROOM = 'hasJustReceived("mushroom")';
 const LOOKS_UP = 'prev.secondsAgo > 180 && !(me is "reading")';
 
 /** What the glen's folk can do. The Angler and the Player fish besides. */
-const FOLK_VERBS = [...GAME_VERBS, 'offer', 'sit', 'sleep', 'close', 'read'];
+const FOLK_VERBS = [...GAME_VERBS, 'offer', 'sit', 'sleep', 'close', 'read', 'express'];
 const FOLK:Kit = { verbs: FOLK_VERBS };
 
 /** A goal's test: whoever it is has eaten `defID`. */
@@ -359,6 +359,8 @@ export function createDirector(host:GameHost):ArcDirector<CharacterCtx, GameObje
 		.withDefaultKit({ verbs: [...FOLK_VERBS, 'fish'] })
 		.withMind({ skipStrategic: true, verbInstructions: BUILDING_VERB_INSTRUCTIONS })
 		.withGoals({ onReached: (id) => host.world.findByID(id)?.getOrAddComponent(Celebrating).beginHops(Time.time, 3) })
+		// Joy shows as a cheer; the other feelings show in what others see and hear.
+		.withFeelings({ onFeeling: (id, feeling) => feeling === Feeling.Happy && host.world.findByID(id)?.getOrAddComponent(Celebrating).beginHops(Time.time, 3) })
 		.addCharacter(withReceived(FORAGER))
 		.addCharacter(withReceived(BRIDGE_KEEPER))
 		.addCharacter(withReceived(ANGLER));

@@ -21,8 +21,8 @@ export type Grip = {
 	roll?:number;
 };
 
-const _q = new THREE.Quaternion();
-const _q2 = new THREE.Quaternion();
+const worldTurn = new THREE.Quaternion();
+const parentTurn = new THREE.Quaternion();
 
 /**
  * Puts `prop` (an instance of a registered model) in `root`'s hand, as a child of the hand bone, so
@@ -69,8 +69,8 @@ export function holdInHand(root:THREE.Object3D, hand:Hand, prop:THREE.Object3D, 
 
 /** Turns a bone by `turn` (world space), keeping its parent where it is. */
 function turnBone(bone:THREE.Object3D, turn:THREE.Quaternion):void {
-	const parent = bone.parent!.getWorldQuaternion(_q2);
-	const world = bone.getWorldQuaternion(_q).premultiply(turn);
+	const parent = bone.parent!.getWorldQuaternion(parentTurn);
+	const world = bone.getWorldQuaternion(worldTurn).premultiply(turn);
 	bone.quaternion.copy(parent.invert().multiply(world));
 	bone.updateMatrixWorld(true);
 }
@@ -95,8 +95,8 @@ export function lookAt(root:THREE.Object3D, target:THREE.Vector3, weight:number)
 	const eye = head.getWorldPosition(new THREE.Vector3());
 	const want = target.clone().sub(eye).normalize();
 	// Faces ahead (−Z of the root): through the head's rest turn, then where the clip has it now.
-	const face = new THREE.Vector3(0, 0, -1).applyQuaternion(turn.clone().invert()).applyQuaternion(head.getWorldQuaternion(_q));
-	const body = new THREE.Vector3(0, 0, -1).applyQuaternion(root.getWorldQuaternion(_q));
+	const face = new THREE.Vector3(0, 0, -1).applyQuaternion(turn.clone().invert()).applyQuaternion(head.getWorldQuaternion(worldTurn));
+	const body = new THREE.Vector3(0, 0, -1).applyQuaternion(root.getWorldQuaternion(worldTurn));
 	const behind = THREE.MathUtils.smoothstep(body.angleTo(want), LOOK_REACH - 0.4, LOOK_REACH);
 	const amount = weight * (1 - behind);
 	if (amount <= 0) {
@@ -169,7 +169,7 @@ export function orientHand(root:THREE.Object3D, hand:Hand, point:THREE.Vector3, 
 	const swing = new THREE.Quaternion().setFromRotationMatrix(want.multiply(rest.transpose()));
 	const goal = swing.multiply(rootTurn).multiply(turn);
 	const now = bone.getWorldQuaternion(new THREE.Quaternion()).slerp(goal, Math.min(1, weight));
-	bone.quaternion.copy(bone.parent.getWorldQuaternion(_q2).invert().multiply(now));
+	bone.quaternion.copy(bone.parent.getWorldQuaternion(parentTurn).invert().multiply(now));
 	bone.updateMatrixWorld(true);
 }
 
@@ -288,7 +288,7 @@ export function crouch(root:THREE.Object3D, bend:Bend, weight:number):void {
 	}
 	const { drop = 0, lean = 0, twist = 0, turn = 0 } = bend;
 	root.updateMatrixWorld(true);
-	const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(root.getWorldQuaternion(_q)).setY(0).normalize();
+	const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(root.getWorldQuaternion(worldTurn)).setY(0).normalize();
 	const right = new THREE.Vector3().crossVectors(forward, new THREE.Vector3(0, 1, 0)).normalize();
 	const feet = (['left', 'right'] as const).map((side) => {
 		const foot = humanBone(root, `${side}Foot`);
@@ -323,7 +323,7 @@ export function crouch(root:THREE.Object3D, bend:Bend, weight:number):void {
 			continue;
 		}
 		limb(root, `${f.side}UpperLeg`, `${f.side}LowerLeg`, `${f.side}Foot`, f.at, 1, forward);
-		f.foot.quaternion.copy(f.foot.parent!.getWorldQuaternion(_q).invert().multiply(f.turn));
+		f.foot.quaternion.copy(f.foot.parent!.getWorldQuaternion(parentTurn).invert().multiply(f.turn));
 		f.foot.updateMatrixWorld(true);
 	}
 }

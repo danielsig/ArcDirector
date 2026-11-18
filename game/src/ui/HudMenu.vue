@@ -195,7 +195,7 @@ function fmtSec(n:number):string {
 	return `${Math.round(n)}s`;
 }
 
-function fmtPulse(n:number | null):string {
+function fmtRethink(n:number | null):string {
 	return n === null ? 'off' : fmtSec(n);
 }
 
@@ -346,6 +346,10 @@ function pct(n:number):string {
 								</div>
 							</div>
 							<h3>Minds at work</h3>
+							<div class="set">
+								<span class="name">Thinking bubbles</span>
+								<HudSwitch :on="hud.thinkingBubbles" @toggle="setPrefs({ thinkingBubbles: !hud.thinkingBubbles })" />
+							</div>
 							<div class="set">
 								<span class="name">Show all</span>
 								<HudSwitch :on="hud.mindVisuals" @toggle="setPrefs({ mindVisuals: !hud.mindVisuals })" />
@@ -620,19 +624,19 @@ function pct(n:number):string {
 								<span>{{ hud.inferCalls }} call{{ hud.inferCalls === 1 ? '' : 's' }}</span>
 								<button type="button" class="act" @click.stop="resetInferStats">Reset</button>
 							</div>
-							<table v-if="hud.heartrates.length" class="stats">
+							<table v-if="hud.mindStats.length" class="stats">
 								<thead>
 									<tr>
-										<th>Heartrate</th>
-										<th>Pulse</th>
+										<th>Mind</th>
+										<th>Rethink</th>
 										<th>Ago</th>
 										<th>Think</th>
 									</tr>
 								</thead>
 								<tbody>
-									<tr v-for="row in hud.heartrates" :key="row.id">
+									<tr v-for="row in hud.mindStats" :key="row.id">
 										<td>{{ row.id }}</td>
-										<td>{{ fmtPulse(row.pulse) }}</td>
+										<td>{{ fmtRethink(row.rethink) }}</td>
 										<td>{{ row.thinking ? 'thinking' : fmtAgo(row.ago) }}</td>
 										<td>{{ fmtMs(row.thinkMs || null) }}</td>
 									</tr>
@@ -939,7 +943,6 @@ h3:first-child {
 	cursor: pointer;
 }
 
-/* Switch: a knob that slides right over an ink track when on. Its On/Off text stays for screen readers. */
 /* Segments and steppers: one outlined strip; the picked segment is gold. */
 .seg,
 .stepper {

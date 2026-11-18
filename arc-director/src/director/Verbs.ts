@@ -18,9 +18,10 @@ export class Verbs<TCtx = unknown> extends VerbRegistry {
 
 	/**
 	 * Verb `name` with its schema and, optionally, the host's handler, its `args` typed from `args`. A verb here already
-	 * keeps its schema (a stock verb takes only a handler, typed from its stock args); its handler is bound or replaced.
+	 * keeps its schema (a stock verb takes only a handler, typed from its stock args); its handler is bound or replaced,
+	 * and its `seen` and `impact` change when given.
 	 */
-	public override add<TVerb extends StockVerbName>(name:TVerb, verb:{ help?:string; reply?:boolean; seen?:string; handler:VerbHandler<TCtx, VerbArgs<StockVerbArgs<TVerb>>> }):this;
+	public override add<TVerb extends StockVerbName>(name:TVerb, verb:{ help?:string; reply?:boolean; seen?:string; impact?:number; handler:VerbHandler<TCtx, VerbArgs<StockVerbArgs<TVerb>>> }):this;
 	public override add<const TArgMap extends VerbArgMap = Record<never, never>>(name:string, verb?:Omit<VerbDef, 'args'> & { args?:TArgMap; handler?:VerbHandler<TCtx, VerbArgs<TArgMap>> }):this;
 	public override add(name:string, { handler, ...def }:VerbDef & { handler?:VerbHandler<TCtx, never> } = {}):this {
 		if (handler) {
@@ -49,7 +50,7 @@ export class Verbs<TCtx = unknown> extends VerbRegistry {
 		return super.remove(...names);
 	}
 
-	/** Runs before every host verb. Return a result to refuse the step (a downed character, a cutscene); `undefined` lets it run. */
+	/** Runs before every host verb. Return a result to refuse the step (a fallen character, a cutscene); `undefined` lets it run. */
 	public withGate(gate:VerbGate<TCtx>):this {
 		this._gate = gate;
 		return this;

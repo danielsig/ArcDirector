@@ -2,6 +2,7 @@ import type { GameObject, XZ } from '@arc-director/kindling';
 import { SpeechQueue } from './SpeechQueue';
 import { ThinkShow } from './ThinkShow';
 import {
+	showNamingText,
 	ArcDirector,
 	BrowserProvider,
 	parseArc,
@@ -28,22 +29,23 @@ import {
 } from '../engine/components';
 import type { DemoWorld } from '../engine/demo-world';
 import type { HudAiLogEntry, HudChatLine } from '../ui/hud-model';
+import type { AiLogRun } from '@arc-director/control';
 import { prefs, setPrefs, type Prefs } from '../prefs';
-import { publishAiLog, resetAiLogSink, pushLog, logLook } from './ai-log-sink';
-import { talkFace, canHearClearly, SPEECH_LIFE } from './talk-attend';
+import { aiLogRun, publishAiLog, pushLog, logLook } from './ai-log-sink';
+import { talkFace, SPEECH_LIFE } from './talk-attend';
 import { YOU_SYMBOL } from './map-marks';
 import { snapshotMap } from './map-view';
 import { WORLD_KNOWLEDGE } from './game-knowledge';
 import type { CharacterCtx, SceneHooks } from './game-types';
 import { idOf, findObject, isLiving } from './names';
-import { kernelsOf, scanWorld } from './kernels';
+import { EXPR_STRINGIFIERS, gameFunctions, kernelsOf, scanWorld } from './kernels';
 import { lookWorld, inventoryOf, followedCarry } from './perception';
 import { roomBounds, type RoomDef } from '../world/spawn';
 import { dropDown, verbGate } from './game-verbs';
 import { gameWorld } from './game-world';
-import { LM_STUDIO_ROOT, SKALDIC_LAYA, decisionModelOf, menuModel, showDownload, type SamplingSource } from './inference';
+import { LM_STUDIO_ROOT, SKALDIC_LAYA, decisionModelOf, menuModel, queuesOrders, showDownload, type SamplingSource } from './inference';
 import { HOSTED, defaultSystemOne } from './hosted';
-import { fightExprTags } from './fight';
+import { fightExprTags, isRival } from './fight';
 import {
 	inTalkRange,
 	talkOthers,
@@ -57,14 +59,13 @@ export type { CharacterCtx, SceneHooks };
 const ARC_RETRY_CAP = 1;
 const HUNGRY = 'hungry';
 const FULL = 'full';
-const STALL_VERBS = new Set(['wait', 'wander', 'say', 'set_status']);
 
 /**
  * The menu's chat model three ways, one loaded model under them all: `main`, which every mind thinks with unless a
  * scene assigns another; `quick`, without reasoning, for minds that must answer mid-fight; and `local`, the System
  * One that scores `choose` picks with it, or the menu's decision model. Again on each change, as the menu's roles move
  * between LM Studio and the browser. In the browser, the one model on the GPU answers as many thinks at once as
- * parallel thinkers allows, and adding it starts its download.
+ * parallel thinkers allows, and adding it starts its download. Minds are offered queued orders when it is big enough.
  */
 export function addModels<TCtx>(director:ArcDirector<TCtx>, p:Prefs = prefs(), sampling:SamplingSource = 'menu'):ArcDirector<TCtx> {
 	const browser = p.inference === 'browser' && !!p.browserModel;
@@ -83,7 +84,7 @@ export function addModels<TCtx>(director:ArcDirector<TCtx>, p:Prefs = prefs(), s
 		d => d
 			.addLMStudio({ baseURL: `${LM_STUDIO_ROOT}/v1`, load: LM_STUDIO_LOAD, models: laya ? chat : { ...chat, local } })
 			.if(laya, (l) => l.addWllama({ models: { local } }))
-	);
+	).withMind({ offerAppendedCommands: queuesOrders(main.id) });
 }
 
 /**
@@ -136,6 +137,8 @@ export class GameHost {
 	public logSeq = 0;
 	public readonly chat:HudChatLine[];
 	public readonly log:HudAiLogEntry[];
+	/** This game's run of the AI log: a restart or a new scene logs to a new file, and the last stays whole. */
+	public readonly logRun:AiLogRun;
 	/** The scene's rooms: each with a `memory` puts it on the mind of whoever stands in it. */
 	public readonly rooms:RoomDef[];
 	/** Tags of the player's character, from the scene (a fight role). */
@@ -156,7 +159,11 @@ export class GameHost {
 		this.world = world;
 		world.wentDown = (character) => dropDown(this, character);
 		world.caught = (character, name) => this.caught(character, name);
-		world.enact = (arc) => this.enactPlayer(arc);
+		world.canSeeInventoryOf = (viewer, holder) => !!this.arc?.getWorldVerbs()?.canSeeInventoryOf(idOf(viewer), idOf(holder));
+		world.enact = async (arc) => {
+			const result = await this.enactPlayer(arc);
+			return { ...result, reason: result.reason && showNamingText(result.reason) };
+		};
 		this.chat = chat;
 		this.speech = new SpeechQueue(world);
 		this.thinks = new ThinkShow(world, () => this.hooks.goals?.(this), (id) => this.arc?.collective(id)?.characters);
@@ -165,8 +172,10 @@ export class GameHost {
 		this._playerTags = opts.playerTags ?? [];
 		this.rooms = opts.rooms ?? [];
 		this.ambient = opts.ambient ?? 'A damp stone hall of the dungeon.';
+		// A new game starts with no chat and no AI log on show.
+		this.chat.length = 0;
 		this.log.length = 0;
-		resetAiLogSink();
+		this.logRun = aiLogRun(this.scene);
 	}
 
 	public configure(director:ArcDirector<CharacterCtx, GameObject>):ArcDirector<CharacterCtx, GameObject> {
@@ -176,13 +185,10 @@ export class GameHost {
 		director.models.withDefaultSystemOne(defaultSystemOne(prefs().systemOne));
 		return director
 			.addRegions(roomRegions(this.rooms))
-			.withMind({ currency: 'gold', skipHeartbeat: true, stalled: (result) => result.status !== 'ok' || STALL_VERBS.has(result.verb ?? '') })
-			.withReplaceCheck()
+			.withMind({ currency: 'gold' })
 			.withPriorityThinkQueue({
-				verbScores: { steal: 0.95, equip: 0.5, unequip: 0.5 },
-				// A fallback only: events, watches and an arc's end are what wake a mind.
-				heartbeatStart: 30,
-				heartbeatMin: 30,
+				// Events, watches and an arc's end wake a mind; a rethink only one whose program has little impact (`rethinkingThreshold`: idle, following, waiting).
+				rethinkInterval: 30,
 				mayThink: (ctx) => {
 					if (this.hooks.mayThink?.(this, ctx.mindID, ctx.reason) === false) {
 						return false;
@@ -196,16 +202,8 @@ export class GameHost {
 					if (!isLiving(go) || go?.getComponent(Seated)?.asleep) {
 						return false;
 					}
-					// An idle mind waits for its watches to wake it; one with none has only its heartbeat.
-					if (ctx.reason === 'heartbeat') {
-						// With a book open, only a watch or an event calls it away.
-						if (go?.getComponent(Reading)?.active) {
-							return false;
-						}
-						const persona = this.arc?.character(ctx.mindID)?.persona;
-						return !!ctx.arc || (!!persona && Object.keys({ ...persona.watches, ...persona.pinnedWatches }).length === 0);
-					}
-					return true;
+					// With a book open, only a watch or an event calls it away.
+					return ctx.reason !== 'rethink' || !go?.getComponent(Reading)?.active;
 				},
 			})
 			.withVerbs((v) => v.addStock().addStockCollective().withGate(verbGate(this)))
@@ -215,11 +213,15 @@ export class GameHost {
 			.withSenses((s) => s.add('followed', followedCarry))
 			.withContext(this.context)
 			.withKernels(this.kernels)
+			.withFunctions(gameFunctions(this))
+			.withStringifiers(EXPR_STRINGIFIERS)
+			// Hearing measures each line: its words to about 8 m, muffled farther or through a wall, drowned in a din.
+			.withHearing({})
 			.withTalk({
 				inRange: (speakerID, listenerID) => inTalkRange(this.world, speakerID, listenerID),
 				others: (speakerID) => talkOthers(this.world, speakerID),
-				clearHear: (a, b) => canHearClearly(this.world, a, b),
 				hears: (speakerID, listenerID) => this.mayHear(speakerID, listenerID),
+				addresses: (speakerID, listenerID) => !this.rivals(speakerID, listenerID),
 				names: (id) => talkNames(this, id),
 				face: (who, toward) => talkFace(this.world, who, toward),
 				onSpoke: (utterance) => onSpoke(this, utterance),
@@ -231,6 +233,12 @@ export class GameHost {
 			.onLog((entry) => pushLog(this, entry.name, entry.message, entry))
 			.onStep((call, result) => noteAct(this, call, result))
 			.onThink(this.thinks.handle)
+			// Why each think started, in the full log too, for whoever reads it over the control hub (`read_ai_log`).
+			.onThink((event) => {
+				if (event.kind === 'start' && event.why) {
+					pushLog(this, event.who, `start · why: ${event.why}`);
+				}
+			})
 			// The player's character, for `enactPlayer`. No mind: it never calls the model.
 			.addCharacter({ id: 'Player', tags: this._playerTags });
 	}
@@ -329,7 +337,7 @@ export class GameHost {
 
 	/** `character` landed a fish: everyone hears, and if it is the player, it says so. */
 	private caught(character:GameObject, name:string):void {
-		this.arc?.pushEvent({ kind: 'Caught', text: `{0} caught ${name}`, who: [idOf(character)], tags: ['fish', name], major: false });
+		this.arc?.pushEvent({ kind: 'Caught', text: (who) => `${who(idOf(character))} caught ${name}`, tags: ['fish', name], major: false });
 		if (character.id === 'Player') {
 			this.world.setMessage(`caught ${name}`);
 		}
@@ -420,6 +428,12 @@ export class GameHost {
 			z += go.transform.position.z;
 		}
 		return { x: x / characters.length, z: z / characters.length };
+	}
+
+	/** Whether `aID` and `bID` fight on rival sides. */
+	private rivals(aID:string, bID:string):boolean {
+		const [a, b] = [aID, bID].map((id) => findObject(this.world, id));
+		return !!a && !!b && isRival(this, a, b);
 	}
 
 	private mayHear(speakerID:string, listenerID:string):boolean {

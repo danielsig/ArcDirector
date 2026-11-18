@@ -1,7 +1,8 @@
 import { HttpProvider, type ModelSettings } from './http.js';
 import { ModelDownload, type DownloadProgress } from './download.js';
 import { ggufMetadata } from './gguf.js';
-import type { ChatRequest, ChatResponse, InferenceProvider, SystemOneEndpoint } from './provider.js';
+import type { ChatRequest, ChatResponse, InferenceProvider } from './provider.js';
+import { JevSystemOne } from './system-one.js';
 import { showLoadingBar, type LoadingBarOptions } from './loading-bar.js';
 import type { ModelInfo } from './models.js';
 import type { ArcDirector } from '../director/ArcDirector.js';
@@ -157,7 +158,8 @@ export class BrowserProvider implements InferenceProvider {
 	constructor(opts:BrowserProviderOptions) {
 		this._wasm = opts.wasm;
 		this._fetch = inPageFetch(() => this._current?.ready);
-		this._http = new HttpProvider({ baseURL: IN_PAGE_URL, fetch: this._fetch });
+		// The engine ends a thought at its budget and answers in the same request, so the client never cuts one.
+		this._http = new HttpProvider({ baseURL: IN_PAGE_URL, fetch: this._fetch, budgetField: 'thinking_budget_tokens' });
 	}
 
 	/** The page's engine for chat models, which {@link Wllama} runs them on. The host sets it first. */
@@ -263,11 +265,11 @@ export class BrowserProvider implements InferenceProvider {
 	}
 
 	/**
-	 * For a decision model (a GGUF whose metadata names a decision head, such as Laya's): the System One endpoint the
-	 * page answers it on. Loads it first, in place of the last model, so a decision model gets a provider of its own
+	 * For a decision model (a GGUF whose metadata names a decision head, such as Laya's): the System One the page
+	 * answers it as. Loads it first, in place of the last model, so a decision model gets a provider of its own
 	 * (`new BrowserProvider({ wasm })`) beside the chat model's. Undefined for a chat model.
 	 */
-	public async systemOneEndpoint(model:string):Promise<SystemOneEndpoint | undefined> {
+	public async systemOne(model:string):Promise<JevSystemOne | undefined> {
 		let decides = this._decides.get(model);
 		if (decides === undefined) {
 			decides = hasDecisionHead(await this.load(model));
@@ -277,13 +279,12 @@ export class BrowserProvider implements InferenceProvider {
 			return undefined;
 		}
 		await this.load(model);
-		return { url: `${IN_PAGE_URL}/systemone`, fetch: this._fetch };
+		return new JevSystemOne({ baseURL: `${IN_PAGE_URL}/systemone`, model, fetch: this._fetch });
 	}
 
 	public configureModel(model:string, settings:ModelSettings):void {
 		this._settings.set(model, { ...settings });
-		// The engine ends a thought at its budget and answers in the same request, so the client never cuts one.
-		this._http.configureModel(model, { ...settings, thinkingBudget: undefined });
+		this._http.configureModel(model, settings);
 	}
 
 	public forgetModel(model:string):void {
@@ -489,7 +490,7 @@ export class Wllama extends ModelProvider {
 	constructor(private readonly _config:WllamaConfig = {}) {
 		super(_config.name ?? 'wllama', {
 			chat: (req) => engineFor(req.model).chat(req),
-			systemOneEndpoint: (model) => engineFor(model).systemOneEndpoint(model),
+			systemOne: (model) => engineFor(model).systemOne(model),
 			configureModel: (model, settings) => engineFor(model).configureModel(model, settings),
 			forgetModel: (model) => engineFor(model).forgetModel(model),
 		}, _config);
@@ -507,6 +508,11 @@ export class Wllama extends ModelProvider {
 			}
 		}, () => undefined);
 		return this;
+	}
+
+	/** Each of its parallel thinks gets the whole `contextLength` ({@link BrowserProvider}'s load). */
+	protected override slotContext(contextLength:number):number {
+		return contextLength;
 	}
 
 	protected override catalog():Promise<ModelInfo[]> {
@@ -669,7 +675,7 @@ function modelParts(model:string):string[] {
 		return [model];
 	}
 	const count = Number(split[2]);
-	return Array.from({ length: count }, (_, i) => model.replace(split[0], `-${String(i + 1).padStart(5, '0')}-of-${split[2]}.gguf`));
+	return Array.from({ length: count }, (element, i) => model.replace(split[0], `-${String(i + 1).padStart(5, '0')}-of-${split[2]}.gguf`));
 }
 
 /**

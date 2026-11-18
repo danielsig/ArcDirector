@@ -1,4 +1,4 @@
-import type { Arc } from '../arc/arc-types.js';
+import { arcSteps, type Arc } from '../arc/arc-types.js';
 import { evaluate } from '../expr/eval.js';
 import { clampTrueScore, watchScore } from '../expr/watch-score.js';
 import {
@@ -7,25 +7,28 @@ import {
 	type Catalog,
 	type ScoldReason,
 } from '../expr/expr-types.js';
-import { arcVerbs } from './think-score.js';
+import type { Watches } from '../character/character-types.js';
 
-/** How a mind joins the queue. `skipStart` only counts when it is new. */
-export type EnsureOpts = { skipHeartbeat?:boolean; skipMajor?:boolean; skipStart?:boolean };
+/** How a mind joins the queue. `rethinks`: on the queue's timer (default). `skipStart` only counts when it is new. */
+export type EnsureOpts = { rethinks?:boolean; skipMajor?:boolean; skipStart?:boolean };
 
-/** Why a mind is queued to think. `start`: once, when it joins, so it acts before anything happens to it. */
 /** Each mind's watch views by its id, built only for the minds whose watches are sampled (a `Map` will do). */
 export type WatchCatalogs = { get(mindID:string):Catalog | readonly Catalog[] | undefined };
 
-export type ThinkReason = 'start' | 'watch' | 'major' | 'verb' | 'heartbeat';
+/**
+ * Why a mind is queued to think. `start`: once, when it joins, so it acts before anything happens to it. `arc`: its
+ * Arc ended. `rethink`: the timer that asks it to rethink what it is doing, which wakes it only while its program has
+ * little impact.
+ */
+export type ThinkReason = 'start' | 'watch' | 'major' | 'arc' | 'rethink';
 
 export type ThinkRow = {
 	mindID:string;
 	score:number;
 	reason:ThinkReason;
+	/** What called for it, in a few words for a log (`watch hurt`, `heard speech`, `arc ok at go_to`). */
+	why:string;
 };
-
-/** Keep a fixed interval (`false`, default), or stretch/shrink (`'auto'`), or return seconds. */
-export type HeartbeatAdjust = false | 'auto' | ((mindID:string, stalled:boolean)=>number);
 
 /** Asked before a think starts while an arc may still be running. */
 export type MayThink = {
@@ -43,10 +46,8 @@ export type MindQueueOpts = {
 	trueScore?:number;
 	epsilon?:number;
 	processInterval?:number;
-	heartbeatStart?:number;
-	heartbeatMin?:number;
-	heartbeatMax?:number;
-	heartbeatAdjust?:HeartbeatAdjust;
+	/** Game seconds between the queue asking a mind to rethink. Default 3. */
+	rethinkInterval?:number;
 	/**
 	 * May this mind start a think? Default: yes when idle, no while an arc is live.
 	 * Return true to think (host should abort the arc if it cannot overlap).
@@ -59,7 +60,6 @@ export type MindQueue = {
 	mayThink:((ctx:MayThink)=>boolean) | undefined;
 	readonly inFlight:number;
 	isThinking(mindID:string):boolean;
-	/** A follow-up, watch, or heartbeat is waiting to start. */
 	/** A think queued for `mindID`; with `except`, one for any other reason. */
 	hasPending(mindID:string, except?:ThinkReason):boolean;
 	/** It finished a think since it joined: its opening one, or any after. */
@@ -72,52 +72,65 @@ export type MindQueue = {
 	endArc(mindID:string):void;
 	allowThink(row:ThinkRow):boolean;
 	ensure(mindID:string, opts?:EnsureOpts):void;
-	setWatches(mindID:string, watches:string[]):void;
+	/** A mind's watches, by name: the name is what a think it wakes says woke it. */
+	setWatches(mindID:string, watches:Watches):void;
 	armOnce(mindID:string, expr:string):void;
 	clearOnce(mindID:string):void;
 	setAiOn(mindID:string, on:boolean):void;
 	lastMax(mindID:string):number;
 	scold(mindID:string):ScoldReason | undefined;
 	rankScore(mindID:string, raw:number):number;
-	heartbeatSeconds(mindID:string):number | null;
+	rethinkSeconds(mindID:string):number | null;
 	scoreWatches(mindID:string, catalog:Catalog | readonly Catalog[]):number;
-	enqueueMajor(mindID:string, force?:boolean):void;
-	enqueueVerb(mindID:string, verb:string, ok?:boolean):void;
-	enqueueArc(mindID:string, arc:Arc, ok?:boolean):void;
-	noteResult(mindID:string, stalled:boolean):void;
+	/** `event`: the kind of event that wakes it (`HeardSpeech`), read as its why (`heard speech`). */
+	enqueueMajor(mindID:string, force?:boolean, event?:string):void;
+	/**
+	 * Its Arc ended: it thinks again, at `score`, the impact of what ran (a failed one's at least {@link FAILED_ARC_SCORE}).
+	 * `why`: what came of it, for a log.
+	 */
+	enqueueArcEnd(mindID:string, why:string, score:number):void;
+	/** A think of it ended: its rethink timer and recency count from now. */
+	noteResult(mindID:string):void;
 	/** Time passes; with `catalogs`, every mind's watches are sampled too (the director passes them on its `withIntervals` `think`). */
 	tick(dt:number, catalogs?:WatchCatalogs):ThinkRow[];
 	drop(mindID:string):void;
 };
 
 export type MindState = {
-	watches:string[];
-	skipHeartbeat:boolean;
+	watches:Watches;
+	/** It rethinks on the queue's timer. */
+	rethinks:boolean;
 	skipMajor:boolean;
-	heartbeat:number;
-	sinceBeat:number;
+	sinceRethink:number;
 	lastMax:number;
 	scold?:ScoldReason;
 	thoughtOnce:boolean;
 	sinceThought:number;
 	aiOn:boolean;
 	once?:string;
+	/** Why the watch that scored highest at its last sampling would wake it (`watch hurt`, `until hasHeard`). */
+	topWatch?:string;
 	seq:number;
 };
 
-const HEARTBEAT_SCORE = 0.001;
+/** A watch with no name, in a few words for a log. */
+function shortExpr(expr:string):string {
+	return expr.length > 40 ? `${expr.slice(0, 39)}…` : expr;
+}
+
+/** Below every other reason; the director scales it by how little impact the mind's program has. */
+const RETHINK_SCORE = 0.001;
 const MAJOR_SCORE = 1;
 /** Below a major event, so a scene's opening thinks queue behind anything that already happened. */
 const START_SCORE = 0.5;
+/** The least a failed Arc's think scores, however little ran: as a scene's opening think, well above the queue's epsilon. */
+export const FAILED_ARC_SCORE = 0.5;
 
 export abstract class MindScheduler implements MindQueue {
 	public readonly trueScore:number;
 	public readonly epsilon:number;
 	public readonly processInterval:number;
-	public readonly heartbeatStart:number;
-	public readonly heartbeatMin:number;
-	public readonly heartbeatMax:number;
-	public readonly heartbeatAdjust:HeartbeatAdjust;
+	public readonly rethinkInterval:number;
 	public mayThink:((ctx:MayThink)=>boolean) | undefined;
 	protected processClock = 0;
 	protected rows:ThinkRow[] = [];
@@ -130,10 +143,7 @@ export abstract class MindScheduler implements MindQueue {
 		this.trueScore = clampTrueScore(opts.trueScore ?? DEFAULT_TRUE_SCORE);
 		this.epsilon = opts.epsilon ?? DEFAULT_EPSILON;
 		this.processInterval = opts.processInterval ?? 1;
-		this.heartbeatStart = opts.heartbeatStart ?? 3;
-		this.heartbeatMin = opts.heartbeatMin ?? 3;
-		this.heartbeatMax = opts.heartbeatMax ?? 300;
-		this.heartbeatAdjust = opts.heartbeatAdjust ?? false;
+		this.rethinkInterval = opts.rethinkInterval ?? 3;
 		this.mayThink = opts.mayThink;
 	}
 
@@ -195,7 +205,7 @@ export abstract class MindScheduler implements MindQueue {
 			score: row.score,
 			rankedScore: this.rankScore(row.mindID, row.score),
 			arc,
-			verbs: arc ? arcVerbs(arc) : [],
+			verbs: arc ? arcSteps(arc).map((step) => step.verb) : [],
 		};
 		if (this.mayThink) {
 			return this.mayThink(ctx);
@@ -207,11 +217,10 @@ export abstract class MindScheduler implements MindQueue {
 		let m = this.minds.get(mindID);
 		if (!m) {
 			m = {
-				watches: [],
-				skipHeartbeat: opts?.skipHeartbeat ?? false,
+				watches: {},
+				rethinks: opts?.rethinks ?? true,
 				skipMajor: opts?.skipMajor ?? false,
-				heartbeat: this.heartbeatStart,
-				sinceBeat: 0,
+				sinceRethink: 0,
 				lastMax: 0,
 				thoughtOnce: false,
 				sinceThought: Number.POSITIVE_INFINITY,
@@ -219,13 +228,13 @@ export abstract class MindScheduler implements MindQueue {
 				seq: 0,
 			};
 			this.minds.set(mindID, m);
-			// Heartbeat or not, a new mind thinks once: one that waits for events would otherwise idle until one.
+			// Rethinking on the timer or not, a new mind thinks once: one that waits for events would otherwise idle until one.
 			if (!opts?.skipStart) {
-				this.insert({ mindID, score: START_SCORE, reason: 'start' });
+				this.insert({ mindID, score: START_SCORE, reason: 'start', why: 'start' });
 			}
 		}
-		if (opts?.skipHeartbeat !== undefined) {
-			m.skipHeartbeat = opts.skipHeartbeat;
+		if (opts?.rethinks !== undefined) {
+			m.rethinks = opts.rethinks;
 		}
 		if (opts?.skipMajor !== undefined) {
 			m.skipMajor = opts.skipMajor;
@@ -233,8 +242,8 @@ export abstract class MindScheduler implements MindQueue {
 		return m;
 	}
 
-	public setWatches(mindID:string, watches:string[]):void {
-		this.ensure(mindID).watches = [...watches];
+	public setWatches(mindID:string, watches:Watches):void {
+		this.ensure(mindID).watches = { ...watches };
 	}
 
 	public armOnce(mindID:string, expr:string):void {
@@ -272,22 +281,21 @@ export abstract class MindScheduler implements MindQueue {
 
 	public abstract rankScore(mindID:string, raw:number):number;
 
-	public heartbeatSeconds(mindID:string):number | null {
-		const mind = this.minds.get(mindID);
-		if (mind?.skipHeartbeat) {
-			return null;
-		}
-		return mind?.heartbeat ?? this.heartbeatStart;
+	public rethinkSeconds(mindID:string):number | null {
+		return this.minds.get(mindID)?.rethinks === false ? null : this.rethinkInterval;
 	}
 
 	public scoreWatches(mindID:string, catalog:Catalog | readonly Catalog[]):number {
 		const mind = this.ensure(mindID);
 		let max = 0;
+		let top:string | undefined;
 		let scold:ScoldReason | undefined;
-		const exprs = mind.once ? [...mind.watches, mind.once] : mind.watches;
+		const watches = Object.entries(mind.watches).map(([name, expr]) => ({ expr, why: `watch ${name || shortExpr(expr)}` }));
+		// A wait's until wakes it as a watch does; it has no name.
+		const exprs = mind.once ? [...watches, { expr: mind.once, why: `until ${shortExpr(mind.once)}` }] : watches;
 		const catalogs = Array.isArray(catalog) ? catalog : [catalog];
 		for (const cat of catalogs) {
-			for (const expr of exprs) {
+			for (const { expr, why } of exprs) {
 				const r = evaluate(expr, cat);
 				if (r.error) {
 					scold = r.error.reason;
@@ -298,10 +306,12 @@ export abstract class MindScheduler implements MindQueue {
 				}
 				if (s.score > max) {
 					max = s.score;
+					top = why;
 				}
 			}
 		}
 		mind.lastMax = max;
+		mind.topWatch = top;
 		mind.scold = scold;
 		return max;
 	}
@@ -313,44 +323,30 @@ export abstract class MindScheduler implements MindQueue {
 		}
 		const max = this.scoreWatches(mindID, catalog);
 		if (max > this.epsilon) {
-			this.insert({ mindID, score: max, reason: 'watch' });
+			this.insert({ mindID, score: max, reason: 'watch', why: mind.topWatch ?? 'watch' });
 		}
 	}
 
-	public enqueueMajor(mindID:string, force = false):void {
+	public enqueueMajor(mindID:string, force = false, event?:string):void {
 		const mind = this.ensure(mindID);
 		if (!mind.aiOn || (mind.skipMajor && !force)) {
 			return;
 		}
-		this.insert({ mindID, score: MAJOR_SCORE, reason: 'major' });
+		const why = event ? event.replace(/([a-z])([A-Z])/g, '$1 $2').replace(/_/g, ' ').toLowerCase() : 'major event';
+		this.insert({ mindID, score: MAJOR_SCORE, reason: 'major', why });
 	}
 
-	public enqueueVerb(mindID:string, verb:string, ok = true):void {
-		this.enqueueScore(mindID, this.verbScore(verb, ok));
+	public enqueueArcEnd(mindID:string, why:string, score:number):void {
+		if (this.ensure(mindID).aiOn) {
+			this.insert({ mindID, score, reason: 'arc', why });
+		}
 	}
 
-	public enqueueArc(mindID:string, arc:Arc, ok = true):void {
-		this.enqueueScore(mindID, this.arcScore(arc, ok));
-	}
-
-	public noteResult(mindID:string, stalled:boolean):void {
+	public noteResult(mindID:string):void {
 		const mind = this.ensure(mindID);
 		mind.thoughtOnce = true;
-		mind.sinceBeat = 0;
+		mind.sinceRethink = 0;
 		mind.sinceThought = 0;
-		if (this.heartbeatAdjust === false) {
-			return;
-		}
-		if (typeof this.heartbeatAdjust === 'function') {
-			mind.heartbeat = this.clampBeat(this.heartbeatAdjust(mindID, stalled));
-			return;
-		}
-		if (stalled) {
-			mind.heartbeat = this.clampBeat(mind.heartbeat * 1.25);
-		}
-		else {
-			mind.heartbeat = this.clampBeat(mind.heartbeat * 0.9);
-		}
 	}
 
 	public tick(dt:number, catalogs?:WatchCatalogs):ThinkRow[] {
@@ -363,13 +359,13 @@ export abstract class MindScheduler implements MindQueue {
 				if (Number.isFinite(mind.sinceThought)) {
 					mind.sinceThought += dt;
 				}
-				if (mind.skipHeartbeat) {
+				if (!mind.rethinks) {
 					continue;
 				}
-				mind.sinceBeat += dt;
-				if (mind.sinceBeat >= mind.heartbeat) {
-					this.insert({ mindID: id, score: HEARTBEAT_SCORE, reason: 'heartbeat' });
-					mind.sinceBeat = 0;
+				mind.sinceRethink += dt;
+				if (mind.sinceRethink >= this.rethinkInterval) {
+					this.insert({ mindID: id, score: RETHINK_SCORE, reason: 'rethink', why: 'rethink' });
+					mind.sinceRethink = 0;
 				}
 			}
 		}
@@ -378,7 +374,7 @@ export abstract class MindScheduler implements MindQueue {
 				if (!mind.aiOn) {
 					continue;
 				}
-				if (mind.watches.length === 0 && !mind.once) {
+				if (Object.keys(mind.watches).length === 0 && !mind.once) {
 					mind.lastMax = 0;
 					mind.scold = undefined;
 					continue;
@@ -415,25 +411,8 @@ export abstract class MindScheduler implements MindQueue {
 
 	protected abstract prune():void;
 	protected abstract order():void;
-	protected abstract verbScore(verb:string, ok:boolean):number;
-	protected abstract arcScore(arc:Arc, ok:boolean):number;
-
-	protected enqueueScore(mindID:string, score:number):void {
-		const mind = this.ensure(mindID);
-		if (!mind.aiOn) {
-			return;
-		}
-		if (score <= this.epsilon) {
-			return;
-		}
-		this.insert({ mindID, score, reason: 'verb' });
-	}
 
 	protected insert(row:ThinkRow):void {
 		this.rows.push(row);
-	}
-
-	protected clampBeat(n:number):number {
-		return Math.min(this.heartbeatMax, Math.max(this.heartbeatMin, n));
 	}
 }

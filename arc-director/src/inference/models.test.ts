@@ -63,14 +63,6 @@ describe('pickSingleChatModel', () => {
 		assert.equal(picked, dense);
 	});
 
-	it('does not JIT-load a higher grade over a model that is already in VRAM', () => {
-		const picked = pickSingleChatModel([
-			model(dense, { state: 'loaded' }),
-			model(a4),
-		]);
-		assert.equal(picked, dense);
-	});
-
 	it('picks the higher grade when the server does not report load state', () => {
 		const picked = pickSingleChatModel([
 			model(dense),
@@ -177,8 +169,10 @@ describe('pickReasoningOption', () => {
 		assert.equal(pickReasoningOption(['off', 'on'], false), 'off');
 	});
 
-	it('sends nothing when the catalog has no match', () => {
-		assert.equal(pickReasoningOption(undefined, true, 'low'), undefined);
+	it('asks a model the catalog does not list all the same, and one that cannot turn off nothing', () => {
+		assert.equal(pickReasoningOption(undefined, true, 'low'), 'low');
+		assert.equal(pickReasoningOption(undefined, true), 'on');
+		assert.equal(pickReasoningOption(undefined, false), 'off');
 		assert.equal(pickReasoningOption(['on'], false), undefined);
 	});
 });

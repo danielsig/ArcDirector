@@ -5,8 +5,9 @@ import { lexAt, METERS_HINT, type Tok, type TokKind } from './lex.js';
  * The one grammar of watches and arcs, as JavaScript writes it. Everything is an expression: a verb call acts and is
  * true if it worked; a query returns a value; `&&`, `||` and `;` (or a new line) join them with JavaScript's
  * precedence. A verb whose args hold an arc takes it as a body after its call, `{ … }` or one statement:
- * `command(Archers) { go_to(Wall) }`, `if (isHurt(Mira)) heal(Mira) else say("Fine")`. `else` continues the call
- * before it; `name: statement` labels a choice of `choose`; `let x = step` names a step's result. Named args take `=` or
+ * `command(Archers) { go_to(Wall) }`, `if (isHurt(Mira)) heal(Mira) else say("Fine")`. `A while B` runs B during A,
+ * binding tighter than `&&`, `||` and `;`, and from the right: `A while B while C` is `A while (B while C)`. `else`
+ * continues the call before it; `name: statement` labels a choice of `choose`; `let x = step` names a step's result. Named args take `=` or
  * `:`. Durations are numbers of game seconds: `5s`, `1.5min`, `2h`; `5m` is refused, as sight writes meters so. A
  * watch is one expression that does not act.
  */
@@ -51,7 +52,7 @@ export type VerbHooks = {
 const NO_VERBS:VerbHooks = { argsOf: () => undefined, takesBody: () => false, anyNamed: () => false };
 
 /** Tokens that end a statement, or a body that was never written. */
-const CLOSERS = new Set<TokKind>(['eof', 'rp', 'rbrace', 'semi', 'comma', 'amp', 'pipe']);
+const CLOSERS = new Set<TokKind>(['eof', 'rp', 'rbrace', 'semi', 'comma', 'amp', 'pipe', 'while']);
 
 class Parser {
 	private readonly _toks:Tok[] = [];
@@ -66,7 +67,7 @@ class Parser {
 	private peek(ahead = 0):Tok {
 		while (this._toks.length <= this._i + ahead) {
 			const last = this._toks.at(-1);
-			this._toks.push(last?.kind === 'eof' ? last : lexAt(this._src, last?.end ?? 0));
+			this._toks.push(last?.kind === 'eof' ? last : lexAt(this._src, last?.end ?? 0, last?.kind));
 		}
 		return this._toks[this._i + ahead];
 	}
@@ -89,7 +90,7 @@ class Parser {
 	/** Lex again from source offset `at`: what was lexed past it was read another way. */
 	private resume(at:number):void {
 		this._toks.length = this._i;
-		this._toks.push(lexAt(this._src, at));
+		this._toks.push(lexAt(this._src, at, this._toks.at(-1)?.kind));
 	}
 
 	private node<TNode extends Syntax>(n:TNode):TNode {
@@ -181,10 +182,10 @@ class Parser {
 			const body = this.statement();
 			return this.node({ type: 'label', name: t.raw, body, ...this.span(from) });
 		}
-		if (t.kind === 'lbrace') {
-			return this.block();
+		if (t.kind === 'while') {
+			throw new ExprError('while joins two steps: A while B');
 		}
-		return this.ternary();
+		return t.kind === 'lbrace' ? this.whileClause(this.block()) : this.ternary();
 	}
 
 	/** `{ statements }`. End of input stands for the `}` a model left off. */
@@ -234,10 +235,23 @@ class Parser {
 				this.eat();
 				return left;
 			}
+			if (op === 'while') {
+				return this.whileClause(left);
+			}
 			this.eat();
 			const right = this.binary(level + 1);
 			left = this.node({ type: 'binary', op, left, right, from: left.from, to: right.to });
 		}
+	}
+
+	/** `left while B`, from the right: B is a step or a `{ … }` block, and may have a `while` of its own. */
+	private whileClause(left:Syntax):Syntax {
+		if (this.peek().kind !== 'while') {
+			return left;
+		}
+		this.eat();
+		const right = this.peek().kind === 'lbrace' ? this.whileClause(this.block()) : this.binary(WHILE_LEVEL);
+		return this.node({ type: 'binary', op: 'while', left, right, from: left.from, to: right.to });
 	}
 
 	private unary():Syntax {
@@ -280,14 +294,53 @@ class Parser {
 		const name = callee.name;
 		const args = this.args(name);
 		this.close('rp', this.isVerb(name));
+		this.trailingArg(name, args);
 		return this.bodyOf(name, { type: 'call', callee, args, ...this.span(callee.from) });
 	}
 
+	/**
+	 * `say("Hi") to Bram`, `pick_up(Bread) from Chest` (or `to=Bram`), as a model writes it: an arg name of the verb's
+	 * after the call, on its line, and one plain value (a name or a string) that ends the statement, is that arg, where
+	 * it was not given. A string alone there is its text arg not given: `say(to=Bram, as=whisper) "Quiet"`. Anything else
+	 * stays outside the parentheses, an error.
+	 */
+	private trailingArg(name:string, args:Arg[]):void {
+		const kinds = this._verbs.argsOf(name);
+		const t = this.peek();
+		const text = kinds && t.kind === 'str' && !t.nl && (CLOSERS.has(this.peek(1).kind) || this.peek(1).nl)
+			? Object.keys(kinds).find((key) => isText(kinds[key]) && !argKeys(kinds, args).includes(key))
+			: undefined;
+		if (text) {
+			this.eat();
+			args.push({ name: text, value: this.node({ type: 'lit', value: { kind: 'string', value: t.raw }, from: t.i, to: t.end }) });
+			return;
+		}
+		if (!kinds || t.kind !== 'ident' || t.nl || !Object.hasOwn(kinds, t.raw) || kinds[t.raw].startsWith('arc') || argKeys(kinds, args).includes(t.raw)) {
+			return;
+		}
+		const keyed = this.namedAt(0) ? 2 : 1;
+		const value = this.peek(keyed);
+		const after = this.peek(keyed + 1);
+		if (!['ident', 'str'].includes(value.kind) || value.nl || this.isVerb(value.raw) || !(CLOSERS.has(after.kind) || after.nl)) {
+			return;
+		}
+		for (let n = 0; n < keyed; n++) {
+			this.eat();
+		}
+		this.eat();
+		const lit = value.kind === 'str' ? { type: 'lit' as const, value: { kind: 'string' as const, value: value.raw } } : { type: 'ident' as const, name: value.raw };
+		args.push({ name: t.raw, value: this.node({ ...lit, from: value.i, to: value.end }) });
+	}
+
 	private bodyOf(name:string, call:Syntax & { type:'call' }):Syntax {
-		if (!this.isVerb(name) || !this._verbs.takesBody(name, call.args)) {
+		if (!this.isVerb(name)) {
 			return this.node(call);
 		}
-		const body = this.body();
+		if (!this._verbs.takesBody(name, call.args) && this.peek().kind === 'lbrace' && !this.peek().nl) {
+			const written = this._src.slice(call.from, call.to);
+			throw new ExprError(`to run steps during it, write ${written} while { … }; for after it, put the block on the next line`);
+		}
+		const body = this._verbs.takesBody(name, call.args) ? this.body() : undefined;
 		if (!body) {
 			return this.node(call);
 		}
@@ -534,6 +587,7 @@ class Parser {
 			this.eat();
 			args.push({ value: this.node({ type: 'ident', name: next.raw, from: next.i, to: next.end }) });
 		}
+		this.trailingArg(t.raw, args);
 		return this.bodyOf(t.raw, { type: 'call', callee: ident, args, ...this.span(t.i) });
 	}
 
@@ -590,11 +644,15 @@ const LEVELS:Partial<Record<TokKind, string>>[] = [
 	{ qq: '??' },
 	{ pipe: '||' },
 	{ amp: '&&' },
+	{ while: 'while' },
 	{ eq: '==', neq: '!=', is: 'is', in: 'in' },
 	{ lt: '<', gt: '>', le: '<=', ge: '>=' },
 	{ plus: '+', minus: '-' },
 	{ star: '*', slash: '/' },
 ];
+
+/** Where `while` binds: tighter than `&&`, looser than a comparison. */
+const WHILE_LEVEL = LEVELS.findIndex((level) => level.while);
 
 function isText(kind:string | undefined):boolean {
 	return kind === 'text' || kind === 'text?';

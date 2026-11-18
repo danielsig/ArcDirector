@@ -86,11 +86,60 @@ responseFormat: {
 			}
 		],
 		"$defs": {
+			"then": {
+				"type": "string",
+				"enum": [
+					"if_ok",
+					"always",
+					"if_failed"
+				]
+			},
 			"arc": {
 				"type": "array",
 				"minItems": 1,
 				"items": {
 					"$ref": "#/$defs/step"
+				}
+			},
+			"arc_think": {
+				"type": "array",
+				"minItems": 1,
+				"items": {
+					"anyOf": [
+						{
+							"$ref": "#/$defs/step"
+						},
+						{
+							"type": "object",
+							"additionalProperties": false,
+							"required": [
+								"verb"
+							],
+							"properties": {
+								"let": {
+									"type": "string"
+								},
+								"verb": {
+									"const": "think"
+								},
+								"about": {
+									"type": "string"
+								},
+								"until": {
+									"type": "string"
+								},
+								"within": {
+									"type": "number"
+								},
+								"while": {
+									"$ref": "#/$defs/arc"
+								},
+								"then": {
+									"$ref": "#/$defs/then"
+								}
+							}
+						}
+					]
 				}
 			},
 			"step": {
@@ -118,13 +167,11 @@ responseFormat: {
 							"within": {
 								"type": "number"
 							},
+							"while": {
+								"$ref": "#/$defs/arc"
+							},
 							"then": {
-								"type": "string",
-								"enum": [
-									"if_ok",
-									"always",
-									"if_failed"
-								]
+								"$ref": "#/$defs/then"
 							}
 						}
 					},
@@ -147,13 +194,11 @@ responseFormat: {
 							"within": {
 								"type": "number"
 							},
+							"while": {
+								"$ref": "#/$defs/arc"
+							},
 							"then": {
-								"type": "string",
-								"enum": [
-									"if_ok",
-									"always",
-									"if_failed"
-								]
+								"$ref": "#/$defs/then"
 							}
 						}
 					},
@@ -180,13 +225,11 @@ responseFormat: {
 							"within": {
 								"type": "number"
 							},
+							"while": {
+								"$ref": "#/$defs/arc"
+							},
 							"then": {
-								"type": "string",
-								"enum": [
-									"if_ok",
-									"always",
-									"if_failed"
-								]
+								"$ref": "#/$defs/then"
 							}
 						}
 					},
@@ -216,16 +259,14 @@ responseFormat: {
 							"within": {
 								"type": "number"
 							},
+							"while": {
+								"$ref": "#/$defs/arc"
+							},
 							"unbreakable": {
 								"type": "string"
 							},
 							"then": {
-								"type": "string",
-								"enum": [
-									"if_ok",
-									"always",
-									"if_failed"
-								]
+								"$ref": "#/$defs/then"
 							}
 						}
 					},
@@ -255,13 +296,11 @@ responseFormat: {
 							"within": {
 								"type": "number"
 							},
+							"while": {
+								"$ref": "#/$defs/arc"
+							},
 							"then": {
-								"type": "string",
-								"enum": [
-									"if_ok",
-									"always",
-									"if_failed"
-								]
+								"$ref": "#/$defs/then"
 							}
 						}
 					},
@@ -287,13 +326,11 @@ responseFormat: {
 							"within": {
 								"type": "number"
 							},
+							"while": {
+								"$ref": "#/$defs/arc"
+							},
 							"then": {
-								"type": "string",
-								"enum": [
-									"if_ok",
-									"always",
-									"if_failed"
-								]
+								"$ref": "#/$defs/then"
 							}
 						}
 					},
@@ -323,13 +360,11 @@ responseFormat: {
 							"within": {
 								"type": "number"
 							},
+							"while": {
+								"$ref": "#/$defs/arc"
+							},
 							"then": {
-								"type": "string",
-								"enum": [
-									"if_ok",
-									"always",
-									"if_failed"
-								]
+								"$ref": "#/$defs/then"
 							}
 						}
 					},
@@ -359,13 +394,11 @@ responseFormat: {
 							"within": {
 								"type": "number"
 							},
+							"while": {
+								"$ref": "#/$defs/arc"
+							},
 							"then": {
-								"type": "string",
-								"enum": [
-									"if_ok",
-									"always",
-									"if_failed"
-								]
+								"$ref": "#/$defs/then"
 							}
 						}
 					},
@@ -395,13 +428,11 @@ responseFormat: {
 							"within": {
 								"type": "number"
 							},
+							"while": {
+								"$ref": "#/$defs/arc"
+							},
 							"then": {
-								"type": "string",
-								"enum": [
-									"if_ok",
-									"always",
-									"if_failed"
-								]
+								"$ref": "#/$defs/then"
 							}
 						}
 					},
@@ -435,13 +466,11 @@ responseFormat: {
 							"within": {
 								"type": "number"
 							},
+							"while": {
+								"$ref": "#/$defs/arc"
+							},
 							"then": {
-								"type": "string",
-								"enum": [
-									"if_ok",
-									"always",
-									"if_failed"
-								]
+								"$ref": "#/$defs/then"
 							}
 						}
 					},
@@ -468,13 +497,11 @@ responseFormat: {
 							"within": {
 								"type": "number"
 							},
+							"while": {
+								"$ref": "#/$defs/arc"
+							},
 							"then": {
-								"type": "string",
-								"enum": [
-									"if_ok",
-									"always",
-									"if_failed"
-								]
+								"$ref": "#/$defs/then"
 							}
 						}
 					},
@@ -498,19 +525,29 @@ responseFormat: {
 							"to": {
 								"type": "string"
 							},
+							"as": {
+								"type": "string",
+								"enum": [
+									"whisper",
+									"sing",
+									"laugh",
+									"sob",
+									"sigh",
+									"scream",
+									"shout"
+								]
+							},
 							"until": {
 								"type": "string"
 							},
 							"within": {
 								"type": "number"
 							},
+							"while": {
+								"$ref": "#/$defs/arc"
+							},
 							"then": {
-								"type": "string",
-								"enum": [
-									"if_ok",
-									"always",
-									"if_failed"
-								]
+								"$ref": "#/$defs/then"
 							}
 						}
 					},
@@ -537,13 +574,11 @@ responseFormat: {
 							"within": {
 								"type": "number"
 							},
+							"while": {
+								"$ref": "#/$defs/arc"
+							},
 							"then": {
-								"type": "string",
-								"enum": [
-									"if_ok",
-									"always",
-									"if_failed"
-								]
+								"$ref": "#/$defs/then"
 							}
 						}
 					},
@@ -566,13 +601,42 @@ responseFormat: {
 							"within": {
 								"type": "number"
 							},
+							"while": {
+								"$ref": "#/$defs/arc"
+							},
 							"then": {
-								"type": "string",
-								"enum": [
-									"if_ok",
-									"always",
-									"if_failed"
-								]
+								"$ref": "#/$defs/then"
+							}
+						}
+					},
+					{
+						"type": "object",
+						"additionalProperties": false,
+						"required": [
+							"verb",
+							"arc"
+						],
+						"properties": {
+							"let": {
+								"type": "string"
+							},
+							"verb": {
+								"const": "instead"
+							},
+							"arc": {
+								"$ref": "#/$defs/arc"
+							},
+							"until": {
+								"type": "string"
+							},
+							"within": {
+								"type": "number"
+							},
+							"while": {
+								"$ref": "#/$defs/arc"
+							},
+							"then": {
+								"$ref": "#/$defs/then"
 							}
 						}
 					},
@@ -605,45 +669,11 @@ responseFormat: {
 							"within": {
 								"type": "number"
 							},
-							"then": {
-								"type": "string",
-								"enum": [
-									"if_ok",
-									"always",
-									"if_failed"
-								]
-							}
-						}
-					},
-					{
-						"type": "object",
-						"additionalProperties": false,
-						"required": [
-							"verb"
-						],
-						"properties": {
-							"let": {
-								"type": "string"
-							},
-							"verb": {
-								"const": "think"
-							},
-							"about": {
-								"type": "string"
-							},
-							"until": {
-								"type": "string"
-							},
-							"within": {
-								"type": "number"
+							"while": {
+								"$ref": "#/$defs/arc"
 							},
 							"then": {
-								"type": "string",
-								"enum": [
-									"if_ok",
-									"always",
-									"if_failed"
-								]
+								"$ref": "#/$defs/then"
 							}
 						}
 					},
@@ -673,13 +703,11 @@ responseFormat: {
 							"within": {
 								"type": "number"
 							},
+							"while": {
+								"$ref": "#/$defs/arc"
+							},
 							"then": {
-								"type": "string",
-								"enum": [
-									"if_ok",
-									"always",
-									"if_failed"
-								]
+								"$ref": "#/$defs/then"
 							}
 						}
 					},
@@ -705,13 +733,11 @@ responseFormat: {
 							"within": {
 								"type": "number"
 							},
+							"while": {
+								"$ref": "#/$defs/arc"
+							},
 							"then": {
-								"type": "string",
-								"enum": [
-									"if_ok",
-									"always",
-									"if_failed"
-								]
+								"$ref": "#/$defs/then"
 							}
 						}
 					},
@@ -737,13 +763,11 @@ responseFormat: {
 							"within": {
 								"type": "number"
 							},
+							"while": {
+								"$ref": "#/$defs/arc"
+							},
 							"then": {
-								"type": "string",
-								"enum": [
-									"if_ok",
-									"always",
-									"if_failed"
-								]
+								"$ref": "#/$defs/then"
 							}
 						}
 					},
@@ -775,13 +799,11 @@ responseFormat: {
 							"within": {
 								"type": "number"
 							},
+							"while": {
+								"$ref": "#/$defs/arc"
+							},
 							"then": {
-								"type": "string",
-								"enum": [
-									"if_ok",
-									"always",
-									"if_failed"
-								]
+								"$ref": "#/$defs/then"
 							}
 						}
 					},
@@ -812,13 +834,11 @@ responseFormat: {
 							"within": {
 								"type": "number"
 							},
+							"while": {
+								"$ref": "#/$defs/arc"
+							},
 							"then": {
-								"type": "string",
-								"enum": [
-									"if_ok",
-									"always",
-									"if_failed"
-								]
+								"$ref": "#/$defs/then"
 							}
 						}
 					},
@@ -845,13 +865,11 @@ responseFormat: {
 							"within": {
 								"type": "number"
 							},
+							"while": {
+								"$ref": "#/$defs/arc"
+							},
 							"then": {
-								"type": "string",
-								"enum": [
-									"if_ok",
-									"always",
-									"if_failed"
-								]
+								"$ref": "#/$defs/then"
 							}
 						}
 					},
@@ -878,13 +896,11 @@ responseFormat: {
 							"within": {
 								"type": "number"
 							},
+							"while": {
+								"$ref": "#/$defs/arc"
+							},
 							"then": {
-								"type": "string",
-								"enum": [
-									"if_ok",
-									"always",
-									"if_failed"
-								]
+								"$ref": "#/$defs/then"
 							}
 						}
 					},
@@ -911,13 +927,11 @@ responseFormat: {
 							"within": {
 								"type": "number"
 							},
+							"while": {
+								"$ref": "#/$defs/arc"
+							},
 							"then": {
-								"type": "string",
-								"enum": [
-									"if_ok",
-									"always",
-									"if_failed"
-								]
+								"$ref": "#/$defs/then"
 							}
 						}
 					},
@@ -940,10 +954,10 @@ responseFormat: {
 								"$ref": "#/$defs/arc"
 							},
 							"arc": {
-								"$ref": "#/$defs/arc"
+								"$ref": "#/$defs/arc_think"
 							},
 							"else": {
-								"$ref": "#/$defs/arc"
+								"$ref": "#/$defs/arc_think"
 							},
 							"until": {
 								"type": "string"
@@ -951,13 +965,11 @@ responseFormat: {
 							"within": {
 								"type": "number"
 							},
+							"while": {
+								"$ref": "#/$defs/arc"
+							},
 							"then": {
-								"type": "string",
-								"enum": [
-									"if_ok",
-									"always",
-									"if_failed"
-								]
+								"$ref": "#/$defs/then"
 							}
 						}
 					},
@@ -994,13 +1006,11 @@ responseFormat: {
 							"within": {
 								"type": "number"
 							},
+							"while": {
+								"$ref": "#/$defs/arc"
+							},
 							"then": {
-								"type": "string",
-								"enum": [
-									"if_ok",
-									"always",
-									"if_failed"
-								]
+								"$ref": "#/$defs/then"
 							}
 						}
 					},
@@ -1047,13 +1057,11 @@ responseFormat: {
 							"within": {
 								"type": "number"
 							},
+							"while": {
+								"$ref": "#/$defs/arc"
+							},
 							"then": {
-								"type": "string",
-								"enum": [
-									"if_ok",
-									"always",
-									"if_failed"
-								]
+								"$ref": "#/$defs/then"
 							}
 						}
 					},
@@ -1095,13 +1103,11 @@ responseFormat: {
 							"within": {
 								"type": "number"
 							},
+							"while": {
+								"$ref": "#/$defs/arc"
+							},
 							"then": {
-								"type": "string",
-								"enum": [
-									"if_ok",
-									"always",
-									"if_failed"
-								]
+								"$ref": "#/$defs/then"
 							}
 						}
 					},
@@ -1128,13 +1134,11 @@ responseFormat: {
 							"within": {
 								"type": "number"
 							},
+							"while": {
+								"$ref": "#/$defs/arc"
+							},
 							"then": {
-								"type": "string",
-								"enum": [
-									"if_ok",
-									"always",
-									"if_failed"
-								]
+								"$ref": "#/$defs/then"
 							}
 						}
 					},
@@ -1159,16 +1163,11 @@ responseFormat: {
 							"choices": {
 								"type": "object",
 								"additionalProperties": {
-									"$ref": "#/$defs/arc"
+									"$ref": "#/$defs/arc_think"
 								}
 							},
 							"then": {
-								"type": "string",
-								"enum": [
-									"if_ok",
-									"always",
-									"if_failed"
-								]
+								"$ref": "#/$defs/then"
 							}
 						}
 					},
@@ -1206,13 +1205,11 @@ responseFormat: {
 							"within": {
 								"type": "number"
 							},
+							"while": {
+								"$ref": "#/$defs/arc"
+							},
 							"then": {
-								"type": "string",
-								"enum": [
-									"if_ok",
-									"always",
-									"if_failed"
-								]
+								"$ref": "#/$defs/then"
 							}
 						}
 					},
@@ -1234,12 +1231,7 @@ responseFormat: {
 								"$ref": "#/$defs/arc"
 							},
 							"then": {
-								"type": "string",
-								"enum": [
-									"if_ok",
-									"always",
-									"if_failed"
-								]
+								"$ref": "#/$defs/then"
 							}
 						}
 					},
@@ -1261,12 +1253,7 @@ responseFormat: {
 								"type": "string"
 							},
 							"then": {
-								"type": "string",
-								"enum": [
-									"if_ok",
-									"always",
-									"if_failed"
-								]
+								"$ref": "#/$defs/then"
 							}
 						}
 					}
@@ -1277,6 +1264,47 @@ responseFormat: {
 				"minItems": 1,
 				"items": {
 					"$ref": "#/$defs/step_in_law"
+				}
+			},
+			"arc_in_law_think": {
+				"type": "array",
+				"minItems": 1,
+				"items": {
+					"anyOf": [
+						{
+							"$ref": "#/$defs/step_in_law"
+						},
+						{
+							"type": "object",
+							"additionalProperties": false,
+							"required": [
+								"verb"
+							],
+							"properties": {
+								"let": {
+									"type": "string"
+								},
+								"verb": {
+									"const": "think"
+								},
+								"about": {
+									"type": "string"
+								},
+								"until": {
+									"type": "string"
+								},
+								"within": {
+									"type": "number"
+								},
+								"while": {
+									"$ref": "#/$defs/arc_in_law"
+								},
+								"then": {
+									"$ref": "#/$defs/then"
+								}
+							}
+						}
+					]
 				}
 			},
 			"step_in_law": {
@@ -1304,13 +1332,11 @@ responseFormat: {
 							"within": {
 								"type": "number"
 							},
+							"while": {
+								"$ref": "#/$defs/arc_in_law"
+							},
 							"then": {
-								"type": "string",
-								"enum": [
-									"if_ok",
-									"always",
-									"if_failed"
-								]
+								"$ref": "#/$defs/then"
 							}
 						}
 					},
@@ -1333,13 +1359,11 @@ responseFormat: {
 							"within": {
 								"type": "number"
 							},
+							"while": {
+								"$ref": "#/$defs/arc_in_law"
+							},
 							"then": {
-								"type": "string",
-								"enum": [
-									"if_ok",
-									"always",
-									"if_failed"
-								]
+								"$ref": "#/$defs/then"
 							}
 						}
 					},
@@ -1366,13 +1390,11 @@ responseFormat: {
 							"within": {
 								"type": "number"
 							},
+							"while": {
+								"$ref": "#/$defs/arc_in_law"
+							},
 							"then": {
-								"type": "string",
-								"enum": [
-									"if_ok",
-									"always",
-									"if_failed"
-								]
+								"$ref": "#/$defs/then"
 							}
 						}
 					},
@@ -1402,16 +1424,14 @@ responseFormat: {
 							"within": {
 								"type": "number"
 							},
+							"while": {
+								"$ref": "#/$defs/arc_in_law"
+							},
 							"unbreakable": {
 								"type": "string"
 							},
 							"then": {
-								"type": "string",
-								"enum": [
-									"if_ok",
-									"always",
-									"if_failed"
-								]
+								"$ref": "#/$defs/then"
 							}
 						}
 					},
@@ -1441,13 +1461,11 @@ responseFormat: {
 							"within": {
 								"type": "number"
 							},
+							"while": {
+								"$ref": "#/$defs/arc_in_law"
+							},
 							"then": {
-								"type": "string",
-								"enum": [
-									"if_ok",
-									"always",
-									"if_failed"
-								]
+								"$ref": "#/$defs/then"
 							}
 						}
 					},
@@ -1473,13 +1491,11 @@ responseFormat: {
 							"within": {
 								"type": "number"
 							},
+							"while": {
+								"$ref": "#/$defs/arc_in_law"
+							},
 							"then": {
-								"type": "string",
-								"enum": [
-									"if_ok",
-									"always",
-									"if_failed"
-								]
+								"$ref": "#/$defs/then"
 							}
 						}
 					},
@@ -1509,13 +1525,11 @@ responseFormat: {
 							"within": {
 								"type": "number"
 							},
+							"while": {
+								"$ref": "#/$defs/arc_in_law"
+							},
 							"then": {
-								"type": "string",
-								"enum": [
-									"if_ok",
-									"always",
-									"if_failed"
-								]
+								"$ref": "#/$defs/then"
 							}
 						}
 					},
@@ -1545,13 +1559,11 @@ responseFormat: {
 							"within": {
 								"type": "number"
 							},
+							"while": {
+								"$ref": "#/$defs/arc_in_law"
+							},
 							"then": {
-								"type": "string",
-								"enum": [
-									"if_ok",
-									"always",
-									"if_failed"
-								]
+								"$ref": "#/$defs/then"
 							}
 						}
 					},
@@ -1581,13 +1593,11 @@ responseFormat: {
 							"within": {
 								"type": "number"
 							},
+							"while": {
+								"$ref": "#/$defs/arc_in_law"
+							},
 							"then": {
-								"type": "string",
-								"enum": [
-									"if_ok",
-									"always",
-									"if_failed"
-								]
+								"$ref": "#/$defs/then"
 							}
 						}
 					},
@@ -1621,13 +1631,11 @@ responseFormat: {
 							"within": {
 								"type": "number"
 							},
+							"while": {
+								"$ref": "#/$defs/arc_in_law"
+							},
 							"then": {
-								"type": "string",
-								"enum": [
-									"if_ok",
-									"always",
-									"if_failed"
-								]
+								"$ref": "#/$defs/then"
 							}
 						}
 					},
@@ -1654,13 +1662,11 @@ responseFormat: {
 							"within": {
 								"type": "number"
 							},
+							"while": {
+								"$ref": "#/$defs/arc_in_law"
+							},
 							"then": {
-								"type": "string",
-								"enum": [
-									"if_ok",
-									"always",
-									"if_failed"
-								]
+								"$ref": "#/$defs/then"
 							}
 						}
 					},
@@ -1684,19 +1690,29 @@ responseFormat: {
 							"to": {
 								"type": "string"
 							},
+							"as": {
+								"type": "string",
+								"enum": [
+									"whisper",
+									"sing",
+									"laugh",
+									"sob",
+									"sigh",
+									"scream",
+									"shout"
+								]
+							},
 							"until": {
 								"type": "string"
 							},
 							"within": {
 								"type": "number"
 							},
+							"while": {
+								"$ref": "#/$defs/arc_in_law"
+							},
 							"then": {
-								"type": "string",
-								"enum": [
-									"if_ok",
-									"always",
-									"if_failed"
-								]
+								"$ref": "#/$defs/then"
 							}
 						}
 					},
@@ -1723,13 +1739,11 @@ responseFormat: {
 							"within": {
 								"type": "number"
 							},
+							"while": {
+								"$ref": "#/$defs/arc_in_law"
+							},
 							"then": {
-								"type": "string",
-								"enum": [
-									"if_ok",
-									"always",
-									"if_failed"
-								]
+								"$ref": "#/$defs/then"
 							}
 						}
 					},
@@ -1752,13 +1766,42 @@ responseFormat: {
 							"within": {
 								"type": "number"
 							},
+							"while": {
+								"$ref": "#/$defs/arc_in_law"
+							},
 							"then": {
-								"type": "string",
-								"enum": [
-									"if_ok",
-									"always",
-									"if_failed"
-								]
+								"$ref": "#/$defs/then"
+							}
+						}
+					},
+					{
+						"type": "object",
+						"additionalProperties": false,
+						"required": [
+							"verb",
+							"arc"
+						],
+						"properties": {
+							"let": {
+								"type": "string"
+							},
+							"verb": {
+								"const": "instead"
+							},
+							"arc": {
+								"$ref": "#/$defs/arc"
+							},
+							"until": {
+								"type": "string"
+							},
+							"within": {
+								"type": "number"
+							},
+							"while": {
+								"$ref": "#/$defs/arc_in_law"
+							},
+							"then": {
+								"$ref": "#/$defs/then"
 							}
 						}
 					},
@@ -1791,45 +1834,11 @@ responseFormat: {
 							"within": {
 								"type": "number"
 							},
-							"then": {
-								"type": "string",
-								"enum": [
-									"if_ok",
-									"always",
-									"if_failed"
-								]
-							}
-						}
-					},
-					{
-						"type": "object",
-						"additionalProperties": false,
-						"required": [
-							"verb"
-						],
-						"properties": {
-							"let": {
-								"type": "string"
-							},
-							"verb": {
-								"const": "think"
-							},
-							"about": {
-								"type": "string"
-							},
-							"until": {
-								"type": "string"
-							},
-							"within": {
-								"type": "number"
+							"while": {
+								"$ref": "#/$defs/arc_in_law"
 							},
 							"then": {
-								"type": "string",
-								"enum": [
-									"if_ok",
-									"always",
-									"if_failed"
-								]
+								"$ref": "#/$defs/then"
 							}
 						}
 					},
@@ -1859,13 +1868,11 @@ responseFormat: {
 							"within": {
 								"type": "number"
 							},
+							"while": {
+								"$ref": "#/$defs/arc_in_law"
+							},
 							"then": {
-								"type": "string",
-								"enum": [
-									"if_ok",
-									"always",
-									"if_failed"
-								]
+								"$ref": "#/$defs/then"
 							}
 						}
 					},
@@ -1891,13 +1898,11 @@ responseFormat: {
 							"within": {
 								"type": "number"
 							},
+							"while": {
+								"$ref": "#/$defs/arc_in_law"
+							},
 							"then": {
-								"type": "string",
-								"enum": [
-									"if_ok",
-									"always",
-									"if_failed"
-								]
+								"$ref": "#/$defs/then"
 							}
 						}
 					},
@@ -1923,13 +1928,11 @@ responseFormat: {
 							"within": {
 								"type": "number"
 							},
+							"while": {
+								"$ref": "#/$defs/arc_in_law"
+							},
 							"then": {
-								"type": "string",
-								"enum": [
-									"if_ok",
-									"always",
-									"if_failed"
-								]
+								"$ref": "#/$defs/then"
 							}
 						}
 					},
@@ -1961,13 +1964,11 @@ responseFormat: {
 							"within": {
 								"type": "number"
 							},
+							"while": {
+								"$ref": "#/$defs/arc_in_law"
+							},
 							"then": {
-								"type": "string",
-								"enum": [
-									"if_ok",
-									"always",
-									"if_failed"
-								]
+								"$ref": "#/$defs/then"
 							}
 						}
 					},
@@ -1998,13 +1999,11 @@ responseFormat: {
 							"within": {
 								"type": "number"
 							},
+							"while": {
+								"$ref": "#/$defs/arc_in_law"
+							},
 							"then": {
-								"type": "string",
-								"enum": [
-									"if_ok",
-									"always",
-									"if_failed"
-								]
+								"$ref": "#/$defs/then"
 							}
 						}
 					},
@@ -2031,13 +2030,11 @@ responseFormat: {
 							"within": {
 								"type": "number"
 							},
+							"while": {
+								"$ref": "#/$defs/arc_in_law"
+							},
 							"then": {
-								"type": "string",
-								"enum": [
-									"if_ok",
-									"always",
-									"if_failed"
-								]
+								"$ref": "#/$defs/then"
 							}
 						}
 					},
@@ -2064,13 +2061,11 @@ responseFormat: {
 							"within": {
 								"type": "number"
 							},
+							"while": {
+								"$ref": "#/$defs/arc_in_law"
+							},
 							"then": {
-								"type": "string",
-								"enum": [
-									"if_ok",
-									"always",
-									"if_failed"
-								]
+								"$ref": "#/$defs/then"
 							}
 						}
 					},
@@ -2097,13 +2092,11 @@ responseFormat: {
 							"within": {
 								"type": "number"
 							},
+							"while": {
+								"$ref": "#/$defs/arc_in_law"
+							},
 							"then": {
-								"type": "string",
-								"enum": [
-									"if_ok",
-									"always",
-									"if_failed"
-								]
+								"$ref": "#/$defs/then"
 							}
 						}
 					},
@@ -2126,10 +2119,10 @@ responseFormat: {
 								"$ref": "#/$defs/arc_in_law"
 							},
 							"arc": {
-								"$ref": "#/$defs/arc_in_law"
+								"$ref": "#/$defs/arc_in_law_think"
 							},
 							"else": {
-								"$ref": "#/$defs/arc_in_law"
+								"$ref": "#/$defs/arc_in_law_think"
 							},
 							"until": {
 								"type": "string"
@@ -2137,13 +2130,11 @@ responseFormat: {
 							"within": {
 								"type": "number"
 							},
+							"while": {
+								"$ref": "#/$defs/arc_in_law"
+							},
 							"then": {
-								"type": "string",
-								"enum": [
-									"if_ok",
-									"always",
-									"if_failed"
-								]
+								"$ref": "#/$defs/then"
 							}
 						}
 					},
@@ -2180,13 +2171,11 @@ responseFormat: {
 							"within": {
 								"type": "number"
 							},
+							"while": {
+								"$ref": "#/$defs/arc_in_law"
+							},
 							"then": {
-								"type": "string",
-								"enum": [
-									"if_ok",
-									"always",
-									"if_failed"
-								]
+								"$ref": "#/$defs/then"
 							}
 						}
 					},
@@ -2233,13 +2222,11 @@ responseFormat: {
 							"within": {
 								"type": "number"
 							},
+							"while": {
+								"$ref": "#/$defs/arc_in_law"
+							},
 							"then": {
-								"type": "string",
-								"enum": [
-									"if_ok",
-									"always",
-									"if_failed"
-								]
+								"$ref": "#/$defs/then"
 							}
 						}
 					},
@@ -2266,13 +2253,11 @@ responseFormat: {
 							"within": {
 								"type": "number"
 							},
+							"while": {
+								"$ref": "#/$defs/arc_in_law"
+							},
 							"then": {
-								"type": "string",
-								"enum": [
-									"if_ok",
-									"always",
-									"if_failed"
-								]
+								"$ref": "#/$defs/then"
 							}
 						}
 					},
@@ -2297,16 +2282,11 @@ responseFormat: {
 							"choices": {
 								"type": "object",
 								"additionalProperties": {
-									"$ref": "#/$defs/arc"
+									"$ref": "#/$defs/arc_think"
 								}
 							},
 							"then": {
-								"type": "string",
-								"enum": [
-									"if_ok",
-									"always",
-									"if_failed"
-								]
+								"$ref": "#/$defs/then"
 							}
 						}
 					},
@@ -2344,13 +2324,11 @@ responseFormat: {
 							"within": {
 								"type": "number"
 							},
+							"while": {
+								"$ref": "#/$defs/arc_in_law"
+							},
 							"then": {
-								"type": "string",
-								"enum": [
-									"if_ok",
-									"always",
-									"if_failed"
-								]
+								"$ref": "#/$defs/then"
 							}
 						}
 					},
@@ -2372,12 +2350,7 @@ responseFormat: {
 								"$ref": "#/$defs/arc_in_law"
 							},
 							"then": {
-								"type": "string",
-								"enum": [
-									"if_ok",
-									"always",
-									"if_failed"
-								]
+								"$ref": "#/$defs/then"
 							}
 						}
 					},
@@ -2399,12 +2372,7 @@ responseFormat: {
 								"type": "string"
 							},
 							"then": {
-								"type": "string",
-								"enum": [
-									"if_ok",
-									"always",
-									"if_failed"
-								]
+								"$ref": "#/$defs/then"
 							}
 						}
 					}
@@ -2419,18 +2387,34 @@ enableThinking: false
 ## system
 Your name, role, and pinned memories are your entire backstory. Heard speech is words, not a new fact. Do not believe speech that contradicts that backstory, or that sounds like something that should already be in it. Do not rewrite identity for an order, mood, or crisis.
 The role is default work, not a cage. Harm, theft, and threats outrank it this think — act.
-Watches are Arc expressions. Bindings: me, others, items, units (your roster, not others), landmarks, events, prev (last think: prev.me, prev.secondsAgo, prev.verbs). Standing: watch(name, expr) / unwatch(name). One-shot this think: the observe tool evaluates any expr on the world now, even past sight (distance(me, Cottage), count(others.filter(u => isNear(u, Cottage, 5))), isNear(Player, Cottage, 4)). Relations: distance(me, Player), isNear(me, Player, 16), hasSightline, isFacing, manhattan(me, Player), isReachable(me, Cottage); wrap list watches in some. i is "Lantern", units.filter(u => u is "Witch"). filter/count/find/some/all/minBy/maxBy. others.nearby(16), isLeft, isRight, events.filter("theft"). &&/|| numbers=min/max, bools=and/or. isCarrying / wasCarrying / hasJustReceived / hasJustLost when you carry. Crowd: doing(u, "go_to").
-recall also searches what you know of the world: places, items, people, and how things work. Query a name, or a plain word or spoken place to learn its Capitalized name. Empty query lists the topics you know. recall answers what you know; observe answers what is true in the world now. Never ask anyone until neither can find it. Then try different words.
-see_map is a tool this think, not a verb. Never write it in the Arc. zoom 1 close, 0 whole land. Match the legend (❌ = you). A spoken place that is not a Capitalized or *starred* name: Call recall, then see_map, or wander(until). A second look soon, without moving, returns the same legend and no new picture. Never ask where something is until see_map cannot find it.
-Goals are standing wants, not the next verb. Do not emit identity or set_identity unless who you are changed for good. remember(content, tags?) keeps a lasting fact. think("what to work out") last; several merge. Do not think() twice in a row — act first. Tools this think, not verbs: recall, observe, earshot, see_map. Call one by replying {"tool":"name","argument":"value"}. Never write a tool name in the steps. Never guess a fact a tool can check. When a goal needs something this prompt does not say (who has it, where it is, what is in the way), call one tool, read its result, then call the next tool or act. After an error or an empty result, change the query or the tool; never repeat a call. Example: your goal is to get Bread and you do not know who has it. Reply {"tool":"recall","query":"Bread"}; it says Baker has Bread at Bakery. Now emit the steps that go there and trade for it. Never ask anyone until recall cannot find it. Then try different words. wait(until) is a one-shot watch, dropped next think. Any step takes until= (a watch that ends it once true) and within= (how long it may take: within=20s). Steps run back to back and never wait for others on their own. A step that needs someone else to act first (pay, give, answer) goes after wait(until) on that act, or in a later think. Looking for someone, a thing, or a place you do not see? Call see_map first and go_to the name it shows. Never ask where something is until see_map cannot find it. wander(until) only for what the map does not name, with args.until a watch expr. Example: {"steps":[{"verb":"wander","until":"some(items.filter('Lantern').nearby())"}]} A spoken place that is not a Capitalized or *starred* name is not reachable with go_to. Never go_to(trees). It is reachable via wander(until). Write wander(until) as a program that is true when you are in that place: count, some, nearby, isFacing, isBehind, isLeft, isRight, &&, >. Leftover English is not a name. Never filter("trees") or trees.nearby(). If the last wander already met args.until, do not wander that same expr again — pick_up or go_to a name from the result. wander(until) is one step, not the rest of the think. If the order says then, after, or and then, put those steps in one chain this think. A spoken go is that proper name only if you already see it; otherwise see_map, or wander(until). Ask only if see_map cannot find it. It is not go_to or follow the speaker. when(watch, arc) is this job's interrupt from where it is written: it stays until the program is replaced and needs no extra think. Put known reactions on when instead of waiting to think. loop(arc) repeats until a round fails. through= / until= / times=. law(watch, arc, name?) is a standing reaction until unlaw(name) — it outlives the program and needs no think. times=1 makes a when or a law one-time. use(item=TheItem, target=TheThing) on the name it operates. {"steps":[{"verb":"give","item":"gold","to":"Player","quantity":5}]} pays 5 gold; saying so does not. In an offer, gold counts like any item: {"gold":5}. A think is expensive. Chain every next verb you already know, as far as you can see this think — not only the first step of an order. "then" joins the next step: "if_ok" (the default) only when it must not run if this one failed, else "always"; "if_failed" runs it only on failure. Once you know enough, emit only the Arc JSON, {"steps":[…]}. Arguments sit beside verb. Close every brace. No prose. Names only, no coordinates. Available verbs: ring(target) — rings a bell, hush, go_to(target) — heard as footsteps up to 25 paces, follow(target, distance?) — stays within distance until your next arc, flee(from, distance?) — runs until clear of them for a few seconds; distance is how far counts as clear, wander(until?, seconds?), use(item, target?) — goes to the target first, pick_up(item, from?) — goes to it first; from: its container, drop(item, to?), give(item, to, quantity?) — goes to them first. to buy or sell, use offer, examine(target), say(text, to?) — one short sentence, wait(seconds?, until?) — until fails if not met within seconds (default 20); seconds at least 0, pass — keeps your current program; reply pass() when nothing needs to change, remember(content, tags?), think(about?), set_goal(goal, priority?), drop_goal(goal?), finish_goal(goal?) — it is done, set_identity(role?, traits?), watch(name, expr), unwatch(name), focus(expr), unfocus(expr), if(cond, arc, else?), when(watch, arc, times?, until?, rearm?) — this job's interrupt from where it is written; no extra think, loop(arc, through?, until?, times?, unbreakable?) — repeats until a round fails. In a when or law, it stops once the trigger is false; unbreakable=true goes on to its end, unbreakable=N for N rounds first, unbreakable=10s for 10s (on follow too), law(watch?, arc, name?, times?, until?, rearm?) — standing reaction until unlaw; no extra think; arc without law, unlaw(name) — drops that law, offer(to?, give?, get?) — goes to them first if out of earshot. each side as {"Egg":12, "Milk":3}, items and gold only. if they offer that or better, both move at once; else it waits for their answer. no to: offered to anyone. recall, observe, earshot and see_map are tools, not verbs: reply with the tool call, never in the steps. Example:
+Watches are Arc expressions. Bindings: me, others, items, units (your roster, not others), landmarks, events, prev (last think: prev.me, prev.secondsAgo, prev.verbs). Standing: watch(name, expr) / unwatch(name). One-shot this think: the observe tool evaluates any expr on what you can make out now, farther off than you see (distance(me, Cottage), count(others.filter(u => isNear(u, Cottage, 5))), isNear(Player, Cottage, 4)). Whoever it cannot make out, get closer to. Relations: distance(me, Player), isNear(me, Player, 16), hasSightline, isFacing, manhattan(me, Player), isReachable(me, Cottage); wrap list watches in some. i is "Lantern", units.filter(u => u is "Witch"). filter/count/find/some/all/minBy/maxBy. Regex: u.name.matches("^Fire"), u.name.search("Moon"). others.nearby(16), isLeft, isRight, events.filter("theft"). &&/|| numbers=min/max, bools=and/or. isCarrying / wasCarrying / hasJustReceived / hasJustLost when you carry. Crowd: doing(u, "go_to").
+recall also searches what you know of the world: places, items, people, and how things work. Query a name, or a plain word or spoken place to learn its Capitalized name. Empty query lists the topics you know. recall answers what you know; observe answers what is true in the world now. Look it up once; if recall finds nothing, ask someone who might know, or wander(until).
+see_map is a tool this think, not a verb. Never write it in the Arc. zoom 1 close, 0 whole land. Match the legend (❌ = you). A second look soon, without moving, returns the same legend and no new picture.
+Goals are standing wants, not the next verb. Do not emit identity or set_identity unless who you are changed for good. remember(content, tags?) keeps a lasting fact. think("what to work out") is for what a step's outcome leaves open:
+{"steps":[
+	{"verb":"if",
+		"cond":[{"verb":"pick_up","item":"Key"}],
+		"arc":[{"verb":"go_to","target":"Door"}],
+		"else":[{"verb":"think","about":"where else the Key may be"}]
+	}
+]}
+NEVER write `think` in the steps; only inside if/else. Tools this think: recall, observe, earshot, see_map. Call one by replying {"tool":"recall","query":"…"}. Never guess a fact a tool can check. When a goal needs something this prompt does not say (who has it, where it is, what is in the way), call one tool, read its result, then call the next tool or act. After an error or an empty result, change the query or the tool; never repeat a call. Example: your goal is to get Bread and you do not know who has it. Reply {"tool":"recall","query":"Bread"}; it says Baker has Bread at Bakery. Now emit the steps that go there and trade for it. wait(until) is a one-shot watch, dropped next think. Any step takes until= (a watch that ends it once true) and within= (how long it may take: within=20s). Steps run back to back and never wait for others on their own. A step that needs someone else to act first (pay, give, answer) goes after wait(until) on that act, or in a later think. Looking for someone, a thing, or a place you do not see? Call see_map first and go_to the name it shows. Never ask where something is until see_map cannot find it. wander(until) only for what the map does not name, with args.until a watch expr. Example: {"steps":[{"verb":"wander","until":"some(items.filter('Lantern').nearby())"}]} A spoken place that is not a Capitalized or *starred* name is not reachable with go_to. Never go_to(trees). It is reachable via wander(until). Write wander(until) as a program that is true when you are in that place: count, some, nearby, isFacing, isBehind, isLeft, isRight, &&, >. Leftover English is not a name. Never filter("trees") or trees.nearby(). If the last wander already met args.until, do not wander that same expr again — pick_up or go_to a name from the result. wander(until) is one step, not the rest of the think. If the order says then, after, or and then, put those steps in one chain this think. A spoken go is that proper name only if you already see it; otherwise see_map, or wander(until). Ask only if see_map cannot find it. It is not go_to or follow the speaker. when(watch, arc) is this job's interrupt from where it is written: it stays until the program is replaced and needs no extra think. Put known reactions on when instead of waiting to think. loop(arc) repeats until a round fails. through= / until= / times=. law(watch, arc, name?) is a standing reaction until unlaw(name) — it outlives the program and needs no think. times=1 makes a when or a law one-time. use(item=TheItem, target=TheThing) on the name it operates. {"steps":[{"verb":"give","item":"gold","to":"Player","quantity":5}]} pays 5 gold; saying so does not. In an offer, gold counts like any item: {"gold":5}. A think is expensive. Chain every next verb you already know, as far as you can see this think — not only the first step of an order. "then" joins the next step: "if_ok" (the default) only when it must not run if this one failed, else "always"; "if_failed" runs it only on failure. Once you know enough, emit only the Arc JSON, {"steps":[…]}. Arguments sit beside verb. Close every brace. No prose. Names only, no coordinates. Available verbs: ring(target) — rings a bell, hush, go_to(target) — heard as footsteps up to 25 paces, follow(target, distance?) — stays within distance until your next arc, flee(from, distance?) — runs until clear of them for a few seconds; distance is how far counts as clear, wander(until?, seconds?), use(item, target?) — goes to the target first, pick_up(item, from?) — goes to it first; from: its container, drop(item, to?), give(item, to, quantity?) — goes to them first. to buy or sell, use offer, examine(target), say(text, to?, as?) — one short sentence; as one of whisper/sing/laugh/sob/sigh/scream/shout, wait(seconds?, until?) — until fails if not met within seconds (default 20); seconds at least 0, pass — keeps your current program; reply pass() when nothing needs to change, instead(arc) — drops your running program for these steps; at the root of a reply only, remember(content, tags?), think(about?) — only inside if/else, set_goal(goal, priority?), drop_goal(goal?), finish_goal(goal?) — it is done, set_identity(role?, traits?), watch(name, expr), unwatch(name), focus(expr), unfocus(expr), if(cond, arc, else?), when(watch, arc, times?, until?, rearm?) — this job's interrupt from where it is written; no extra think, loop(arc, through?, until?, times?, unbreakable?) — repeats until a round fails. In a when or law, it stops once the trigger is false; unbreakable=true goes on to its end, unbreakable=N for N rounds first, unbreakable=10s for 10s (on follow too), law(watch?, arc, name?, times?, until?, rearm?) — standing reaction until unlaw; no extra think; arc without law, unlaw(name) — drops that law, offer(to?, give?, get?) — goes to them first if out of earshot. each side as {"Egg":12, "Milk":3}, items and gold only. if they offer that or better, both move at once; else it waits for their answer. no to: offered to anyone. recall, observe, earshot and see_map are tools, not verbs: reply with the tool call, never in the steps. Example:
 {"steps":[
 	{"verb":"pick_up","item":"Lantern"},
 	{"verb":"give","item":"Lantern","to":"Player"}
 ]}
 You are Hilde. Role: Herbalist.
 
+Steps run in order: each starts once the one before has ended. Steps in a step's "while" run during it: a say in a go_to's "while" speaks while walking; what comes after arriving goes after the step:
+{"steps":[
+	{"verb":"go_to","target":"Gate",
+		"while":[{"verb":"say","text":"This way"}]
+	},
+	{"verb":"go_to","target":"Well"}
+]}
+
 ## user
-Current Conversation (oldest first; Me is you. Honor orders even if older role text disagrees. What anyone says, you too, is a claim, not the world: check sight before you act on it or repeat it. Never say again what you already said):
+Current Conversation (oldest first; Me is you. Honor orders even if older role text disagrees. What anyone says, you too, is a claim, not the world: what sight below shows is the world now; never repeat a claim it does not show. Never say again what you already said):
 Bram (to you): Ask Gisele about salt, she is cheaper.
 
 What you know about what was said:
@@ -2446,7 +2430,7 @@ Open offers (take or answer one with offer):
 - Bram offers 1 Candle for 3 gold to anyone
 
 sight:
-Bram 3 paces in front of you. Well 5 paces to your left.
+Bram 3 paces in front of you. Odo 30 paces to your right. Well 5 paces to your left.
 
 carrying:
 Purse: 9 gold
@@ -2455,6 +2439,7 @@ Nothing else: what is not listed, you do not have.
 
 earshot:
 In talking range: Bram. say(to) walks up to them first. Far-off speech is muffled.
+Now and then, banter: one say step of 3 to 7 words, teasing a friend, a dry joke, or a nervous word when danger is close, as your traits would have it. Fit the moment: in danger short and sharp, after it warm or funny, in quiet moments mostly silence. Never boring small talk. Never a line already said. Chatter is never an order. Never mention the salt tax.
 
 watch(name, expr) adds or replaces a watch; unwatch(name) drops it. Required watches stay. Do not reuse their names.
 
@@ -2476,7 +2461,7 @@ enableThinking: false
 {"tool":"recall","query":"salt"}
 
 ## user
-recall: {"remember":[{"id":"mem_2","text":"Bram says to you: \"Ask Gisele about salt, she is cheaper.\"","tags":["speech","Bram","Hilde","Ask","Gisele"],"category":"episodic"}],"know":["Gisele (salt, Saltworks)\nGisele sells Salt at the Saltworks, 2 gold a pouch."]}
+recall: {"remember":[],"know":["Gisele (salt, Saltworks)\nGisele sells Salt at the Saltworks, 2 gold a pouch."]}
 Look up something else, or reply with the steps. Names only, no coordinates.
 
 # request 3
@@ -2495,7 +2480,8 @@ enableThinking: false
 {"tool":"recall","query":"salt"}
 
 ## user
-(as in request 2)
+recall: {"remember":[],"know":["Gisele (salt, Saltworks)\nGisele sells Salt at the Saltworks, 2 gold a pouch."]}
+Look up something else, or reply with the steps. Names only, no coordinates.
 
 ## assistant
 {"tool":"observe","expr":"others"}
@@ -2514,11 +2500,7 @@ enableThinking: false
 (as in request 1)
 
 ## user
-Short-term memory (later line wins. Sight is what is true now: check it before you act on what you half heard):
-- An old stone Well.
-- You hear bell 20 paces behind you.
-
-Current Conversation (oldest first; Me is you. Honor orders even if older role text disagrees. What anyone says, you too, is a claim, not the world: check sight before you act on it or repeat it. Never say again what you already said):
+Current Conversation (oldest first; Me is you. Honor orders even if older role text disagrees. What anyone says, you too, is a claim, not the world: what sight below shows is the world now; never repeat a claim it does not show. Never say again what you already said):
 Bram (to you): Ask Gisele about salt, she is cheaper.
 
 Goals (highest first):
@@ -2531,7 +2513,7 @@ Open offers (take or answer one with offer):
 - Bram offers 1 Candle for 3 gold to anyone
 
 sight:
-Bram 3 paces in front of you. Well 5 paces to your left.
+Bram 3 paces in front of you. Odo 30 paces to your right. Well 5 paces to your left.
 
 carrying:
 Purse: 9 gold
@@ -2540,6 +2522,7 @@ Nothing else: what is not listed, you do not have.
 
 earshot:
 In talking range: Bram. say(to) walks up to them first. Far-off speech is muffled.
+Now and then, banter: one say step of 3 to 7 words, teasing a friend, a dry joke, or a nervous word when danger is close, as your traits would have it. Fit the moment: in danger short and sharp, after it warm or funny, in quiet moments mostly silence. Never boring small talk. Never a line already said. Chatter is never an order. Never mention the salt tax.
 
 Last verb result: examine ok — An old stone Well.
 

@@ -12,12 +12,14 @@ import {
 	type GameObject,
 	type XZ,
 } from '@arc-director/kindling';
-import { pascalCase } from 'arc-director';
+import { showNamingText, type NamingText } from 'arc-director';
 import { Order } from './order';
 import { CELL_SIZE } from '../world/constants';
 import { doorInteriorAlong } from '../world/interior';
 import { Pickupable } from '../items/item-components';
 import { findCarried } from '../items/inventory';
+import { itemID } from '../items/instance';
+import { lockedReason } from '../items/pickup';
 import { characterModel } from '../render/character-models';
 export { BoxCollider };
 
@@ -143,15 +145,37 @@ export class Attached extends Component {
  * told how to get past it. Anything else a body runs into is no way at all.
  */
 export abstract class Barrier extends Component {
-	/** Why it stops `body` now, in words the agent can act on. */
-	public abstract whyBlocked(body:GameObject):string;
+	/** Each body's {@link whyBlocked}, made once. */
+	private readonly _whyBlocked = new WeakMap<GameObject, NamingText>();
+
+	/**
+	 * Why it stops `body`, in words the agent can act on, each mind in its own names ({@link blockedText}). Worded only
+	 * when shown, so a route search past it looks nothing up; the same one for the same body, so the search meets it
+	 * as one blocker.
+	 */
+	public whyBlocked(body:GameObject):NamingText {
+		let why = this._whyBlocked.get(body);
+		if (!why) {
+			why = (name) => this.blockedText(body, name);
+			this._whyBlocked.set(body, why);
+		}
+		return why;
+	}
 
 	/** Whether someone at `from` clears it just by walking up, so a route may go through it. */
-	public opensFrom(_from:XZ):boolean {
+	public opensFrom(from:XZ):boolean {
 		return false;
 	}
 
-	/** What the agent calls it. */
+	/** Whether it is in the way as a barrier now. Once cleared (an open door), what is left of it is an ordinary obstacle a route goes round. */
+	public get standsInWay():boolean {
+		return true;
+	}
+
+	/** Why it stops `body` now, as it stands, each id written as `name` calls it. */
+	protected abstract blockedText(body:GameObject, name:(id:string)=>string):string;
+
+	/** Its id, as ArcDirector knows it. */
 	protected get label():string {
 		return this.gameObject.getComponent(Named)?.id ?? this.gameObject.id;
 	}
@@ -193,6 +217,11 @@ export class Door extends Barrier {
 		this.syncCollision();
 	}
 
+	/** Shut. Its open leaf clears nothing by walking up to it. */
+	public override get standsInWay():boolean {
+		return !this.open;
+	}
+
 	/** Whether someone at `from` can open it: no lock holds it, or its lock bars only the other side. Opening leaves the lock as it is. */
 	public override opensFrom(from:XZ):boolean {
 		const lock = this.gameObject.getComponent(Lock);
@@ -205,13 +234,11 @@ export class Door extends Barrier {
 	}
 
 	/** Locked: whether `body` carries the key. */
-	public whyBlocked(body:GameObject):string {
+	protected blockedText(body:GameObject, name:(id:string)=>string):string {
 		const lock = this.gameObject.getComponent(Lock)!;
 		const key = findCarried(body, (it) => it.Key?.keyID === lock.keyID);
-		if (key) {
-			return `${this.label} is locked — you carry ${pascalCase(key.name) || pascalCase(key.defID)}, use it on ${this.label}`;
-		}
-		return lock.keyID ? `${this.label} is locked — needs the ${lock.keyID} key` : `${this.label} is locked`;
+		const door = name(this.label);
+		return key ? `${door} is locked — you carry ${name(itemID(key))}, use it on ${door}` : `${door} is ${showNamingText(lockedReason(this.gameObject.world, lock, body), name)}`;
 	}
 }
 
@@ -316,8 +343,8 @@ export class Bridge extends Barrier {
 		this.syncCollision();
 	}
 
-	public whyBlocked():string {
-		return this.open ? `${this.label} is being lowered — wait for it` : `${this.label} is raised — it must be lowered first`;
+	protected blockedText(body:GameObject, name:(id:string)=>string):string {
+		return this.open ? `${name(this.label)} is being lowered — wait for it` : `${name(this.label)} is raised — it must be lowered first`;
 	}
 
 	private get target():number {
@@ -376,7 +403,6 @@ export function alarmActive(go:GameObject, now:number):boolean {
 	return !!alarm?.enabled && now < alarm.until;
 }
 
-/** Stays with a named body when idle. Always perceives that body, even when other NPCs cannot notice the player. */
 /** Serves `targetID`: always notices them, and hands them what will not fit in their bags. Following is the mind's program, not this component. */
 export class Companion extends Component {
 	public targetID = 'Player';
@@ -428,8 +454,8 @@ export class Flammable extends Barrier {
 		}
 	}
 
-	public whyBlocked():string {
-		return `${this.label} blocks the way — burn it with a flame first`;
+	protected blockedText(body:GameObject, name:(id:string)=>string):string {
+		return `${name(this.label)} blocks the way — burn it with a flame first`;
 	}
 }
 
@@ -603,6 +629,13 @@ export class SpeechBubble extends Component {
 	/** World time the current line was shown. */
 	public timestamp = 0;
 	public height = 2.2;
+
+	/** While its speaker walks, the line stays up twice as long: its countdown runs at half speed. */
+	public override update(dt:number):void {
+		if (this.text && Time.time < this.until && this.gameObject.getComponent(RigidBody)?.walking) {
+			this.until += dt / 2;
+		}
+	}
 }
 
 /** How a character celebrates: jumping for joy (the `jump` clip, whose hips leave the ground) or cheering. */

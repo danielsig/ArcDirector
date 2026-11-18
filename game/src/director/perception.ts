@@ -2,6 +2,7 @@ import { BoxCollider, Time, yawToForward, distanceXZ, type GameObject } from '@a
 import {
 	pascalCase,
 	RESERVED_TAGS,
+	showNamingText,
 	type ArcResult,
 	type Inventory,
 	type SeenObject,
@@ -332,23 +333,6 @@ export function lookWorld(character:GameObject, ambient:string, host?:GameHost):
 			row.attachMode = 'on';
 		}
 		objects.push(row);
-		const chest = go.getComponent(Chest);
-		const bag = go.getComponent(Container);
-		const lock = go.getComponent(Lock);
-		if (chest?.open && bag && !lock?.locked) {
-			for (const it of bag.contents) {
-				objects.push({
-					id: pascalCase(it.name) || pascalCase(it.defID) || it.id,
-					point: row.point,
-					tags: ['item'],
-					interesting: 1,
-					interactable: true,
-					movable: true,
-					attachedTo: row.id,
-					attachMode: 'in',
-				});
-			}
-		}
 	}
 	return { self, ambient: place || undefined, objects };
 }
@@ -403,7 +387,7 @@ export function followedCarry(ctx:CharacterCtx):string {
 export function doExamine(world:DemoWorld, character:GameObject, name:string):ArcResult {
 	const held = findCarried(character, (it) => itemMatchesName(it, name));
 	if (held) {
-		return { status: 'ok', verb: 'examine', reason: examineItem(world, held) };
+		return { status: 'ok', verb: 'examine', reason: (name) => examineItem(world, held, name) };
 	}
 	const go = world.findNamed(name);
 	if (!go) {
@@ -415,7 +399,7 @@ export function doExamine(world:DemoWorld, character:GameObject, name:string):Ar
 	if (!seen) {
 		return { status: 'failed', verb: 'examine', reason: `${name} is not in sight` };
 	}
-	return { status: 'ok', verb: 'examine', reason: examineWorld(go) };
+	return { status: 'ok', verb: 'examine', reason: (name) => examineWorld(go, character, name) };
 }
 
 /** `A, B and C`, or `nothing`. */
@@ -430,12 +414,12 @@ function locksFor(world:DemoWorld, keyID:string):string[] {
 		.map((go) => go.getComponent(Named)?.id ?? go.id);
 }
 
-/** What `examine` tells about an item you carry, in sentences. */
-function examineItem(world:DemoWorld, item:ItemInstance):string {
+/** What `examine` tells about an item you carry, in sentences, naming as `nameOf` does. */
+function examineItem(world:DemoWorld, item:ItemInstance, nameOf:(id:string)=>string):string {
 	const id = pascalCase(item.name) || pascalCase(item.defID);
 	return [
-		item.count > 1 ? `You carry ${item.count} ${id}.` : `You carry ${id}.`,
-		item.Key && `It opens ${listed(locksFor(world, item.Key.keyID))}.`,
+		item.count > 1 ? `You carry ${item.count} ${nameOf(id)}.` : `You carry ${nameOf(id)}.`,
+		item.Key && `It opens ${listed(locksFor(world, item.Key.keyID).map(nameOf))}.`,
 		item.Equipable && (item.Equipable.hands === 2 ? 'You can equip it, with both hands.' : 'You can equip it.'),
 		item.Container && `It holds ${item.Container.size}: ${listed(item.Container.contents.map(itemLabel))}.`,
 		item.Ingredient && `${item.Ingredient.brewer} brews ${item.Ingredient.yield} ${item.Ingredient.brew} from it, for ${item.Ingredient.fee}.`,
@@ -447,11 +431,15 @@ function saleLine(name:string, shop:Merchant):string | false {
 	return shop.goods.length > 0 ? `${name} trades in ${listed(shop.goods)}.` : false;
 }
 
-/** What `examine` tells about something in sight, in sentences. The player's E reads the same. */
-export function examineWorld(go:GameObject):string {
-	const name = go.getComponent(Named)?.id ?? go.id;
+/**
+ * What `examine` tells about something in sight, in sentences. The player's E reads the same, with what everyone
+ * carries and every open chest holds; a `viewer`'s examine is told that as far as it knows (ArcDirector's
+ * `canSeeInventoryOf`). Whoever it names is named as `nameOf` does: a mind's own names.
+ */
+export function examineWorld(go:GameObject, viewer?:GameObject, nameOf:(id:string)=>string = (id) => id):string {
+	const name = nameOf(idOf(go));
 	const lock = go.getComponent(Lock);
-	const locked = lock?.locked ? ` and locked${lock.keyID ? `; it needs ${keyNameFor(go.world, lock)}` : ''}` : '';
+	const locked = lock?.locked ? ` and locked${lock.keyID ? `; it needs ${showNamingText(keyNameFor(go.world, lock, viewer), nameOf)}` : ''}` : '';
 	const door = go.getComponent(Door);
 	const bridge = go.getComponent(Bridge);
 	const chest = go.getComponent(Chest);
@@ -463,7 +451,7 @@ export function examineWorld(go:GameObject):string {
 	const furniture = go.getComponent(Furniture);
 	if (furniture) {
 		const taken = occupantName(go);
-		lines.push(`${name} is a ${furniture.kind}${taken ? `, and ${taken} is on it` : ''}.`);
+		lines.push(`${name} is a ${furniture.kind}${taken ? `, and ${nameOf(taken)} is on it` : ''}.`);
 	}
 	const carved = go.getComponent(Inscription);
 	if (carved) {
@@ -485,7 +473,7 @@ export function examineWorld(go:GameObject):string {
 	}
 	if (chest) {
 		const bag = go.getComponent(Container);
-		const inside = chest.open && !lock?.locked && bag ? ` It holds ${listed(bag.contents.map((it) => pascalCase(it.name) || it.name))}.` : '';
+		const inside = !viewer && chest.open && !lock?.locked && bag ? ` It holds ${listed(bag.contents.map((it) => pascalCase(it.name) || it.name))}.` : '';
 		lines.push(go.getComponent(Bookshelf) ? `${name} is a bookshelf.${inside}` : `${name} is a chest, ${chest.open ? 'open' : 'shut'}${locked}.${inside}`);
 	}
 	if (go.getComponent(MarketNPC) || go.getComponent(HumanBody)) {
@@ -495,7 +483,7 @@ export function examineWorld(go:GameObject):string {
 		lines.push(
 			npc && `${name} is a ${npc.kind}${npc.wants.length > 0 ? ` who wants ${listed(npc.wants)}` : ''}.`,
 			shop && saleLine(name, shop),
-			`${name} carries ${listed(carriedLabels(go))} and ${coinsOf(go)} gold.`,
+			viewer ? `${name} has ${coinsOf(go)} gold.` : `${name} carries ${listed(carriedLabels(go))} and ${coinsOf(go)} gold.`,
 			mark?.enabled && `${name} is wanted for ${mark.reason || 'theft'}${mark.items.length > 0 ? `: ${listed(mark.items)}` : ''}.`,
 		);
 	}

@@ -75,6 +75,25 @@ describe('mind ids', () => {
 		assert.equal(mapExpr('isNear(me, "Old Tom")', namesOf(names)), 'isNear(me, "Tom")');
 	});
 
+	it('labels the vague by kind and letters, A to Z then AA, for arcs only, until made out', () => {
+		const names = book();
+		const labels = Array.from({ length: 28 }, (unused, n) => names.vague(`Stranger${n}`, 'Figure'));
+		assert.deepEqual([labels[0], labels[25], labels[26], labels[27]], ['FigureA', 'FigureZ', 'FigureAA', 'FigureAB']);
+		assert.equal(names.vague('Stranger0', 'Figure'), 'FigureA', 'the same while it stays vague');
+		names.vague('Ash', 'Figure');
+		assert.equal(mapExpr('isNear(me, FigureAC)', idsOf(names)), 'isNear(me, Ash)');
+		assert.equal(mapExpr('isNear(me, Ash)', namesOf(names)), 'isNear(me, FigureAC)', 'an arc shows its label, never its name');
+		assert.equal(namesOf(names, false)('Ash'), 'EnemyWitch', 'what it knows of Ash keeps its name');
+		assert.equal(idsOf(names, false)('FigureAC'), 'FigureAC', 'and never learns who the label is');
+		const saved = new NameBook();
+		saved.load(JSON.parse(JSON.stringify(names)));
+		assert.equal(saved.peek('Ash'), 'FigureAC');
+		names.name('Ash', 'EnemyWitch', { seen: true });
+		assert.equal(names.peek('Ash'), 'EnemyWitch');
+		assert.equal(names.resolve('FigureAC'), 'FigureAC', 'made out, its label names no one');
+		assert.equal(names.vague('Nyx', 'Figure'), 'FigureAC', 'and its letters are free again');
+	});
+
 	it('leaves remember tags and prose alone', () => {
 		const reply:Arc = [{ verb: 'remember', args: { content: 'EnemyWitch2 hides by the well', tags: ['EnemyWitch2'] } }];
 		assert.deepEqual(mapArc(reply, verbs, idsOf(book())), reply);

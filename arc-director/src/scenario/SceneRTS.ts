@@ -140,7 +140,7 @@ export class SceneRTS implements RTSHost {
 	private next(kind:string):string {
 		this._made += 1;
 		let n = 1;
-		while (this._world.getPose(`${kind}${n}`) || this._world.isDown(`${kind}${n}`)) {
+		while (this._world.getPose(`${kind}${n}`) || this._world.hasFallen(`${kind}${n}`)) {
 			n += 1;
 		}
 		return `${kind}${n}`;

@@ -1,5 +1,5 @@
 import { envGet } from '../env.js';
-import { extractJson, isRecord } from '../json.js';
+import { isRecord } from '../json.js';
 import {
 	alwaysThinks,
 	asModelList,
@@ -7,6 +7,7 @@ import {
 	modelIDsMatch,
 	pickReasoningOption,
 	thinkOffMode,
+	thoughtTagsOf,
 	type ReasoningOption,
 } from './models.js';
 import {
@@ -18,15 +19,9 @@ import {
 	type ChatResponse,
 	type InferenceProvider,
 	type Sampling,
-	type ToolCall,
-	type ToolDef,
 } from './provider.js';
 import {
-	ALWAYS_THINKS_PREFILL,
-	EMPTY_THINK_PREFILL,
-	fallbackThoughtPrefill,
 	resolveAssistantPrefill,
-	resolveThoughtPrefill,
 	withAssistantPrefill,
 	type ApplyPromptTemplate,
 } from './assistant-think.js';
@@ -36,79 +31,17 @@ import {
 	type ThreadSnapshot,
 } from './thread-cache.js';
 import { sleep } from '../turn.js';
+import { LMStudioLoader, type HttpLoadConfig } from './LMStudioLoader.js';
+import { chatWire, cleanThought, loops, REASONING_EFFORT, responsesWire, thoughtStream, type Wire, type WireAsk } from './wire-formats.js';
+
+export { loadConfigFits, type HttpLoadConfig } from './LMStudioLoader.js';
 
 export const REASONING_EFFORTS = ['low', 'medium', 'xhigh'] as const;
 export type ReasoningEffort = typeof REASONING_EFFORTS[number];
 
-export type HttpLoadConfig = {
-	flashAttention?:boolean;
-	offloadKvCacheToGpu?:boolean;
-	evalBatchSize?:number;
-	parallel?:number;
-	/** LM Studio `context_length` (`n_ctx`). An idle instance with any other length is reloaded. */
-	contextLength?:number;
-};
-
-type LoadedInstance = {
-	id:string;
-	key:string;
-	type:string;
-	config:Record<string, unknown>;
-};
-
-export function loadConfigFits(got:Record<string, unknown>, want:HttpLoadConfig):boolean {
-	if (want.flashAttention !== false && got['flash_attention'] === false) {
-		return false;
-	}
-	if (want.offloadKvCacheToGpu !== false && got['offload_kv_cache_to_gpu'] === false) {
-		return false;
-	}
-	const batch = want.evalBatchSize ?? 512;
-	if (typeof got['eval_batch_size'] === 'number' && got['eval_batch_size'] < batch) {
-		return false;
-	}
-	if (want.parallel !== undefined && typeof got['parallel'] === 'number' && got['parallel'] < want.parallel) {
-		return false;
-	}
-	if (want.contextLength !== undefined) {
-		const gotCtx = instanceContextLength(got);
-		if (gotCtx !== undefined && gotCtx !== want.contextLength) {
-			return false;
-		}
-	}
-	return true;
-}
-
 function isVramError(msg:string):boolean {
 	return /vram|out of memory|\boom\b|not enough memory|failed to allocate|cuda.*alloc|insufficient.*(memory|vram)|ggml.*alloc|metal.*oom|no extra buffer/i.test(msg);
 }
-
-function readLoadedInstances(models:unknown[]):LoadedInstance[] {
-	const out:LoadedInstance[] = [];
-	for (const row of models) {
-		if (!isRecord(row)) {
-			continue;
-		}
-		const key = typeof row.key === 'string' ? row.key
-			: typeof row.id === 'string' ? row.id : '';
-		const type = typeof row.type === 'string' ? row.type : 'llm';
-		const instances = Array.isArray(row.loaded_instances) ? row.loaded_instances : [];
-		for (const inst of instances) {
-			if (!isRecord(inst) || typeof inst.id !== 'string' || !inst.id) {
-				continue;
-			}
-			out.push({
-				id: inst.id,
-				key: key || inst.id,
-				type,
-				config: isRecord(inst.config) ? inst.config : {},
-			});
-		}
-	}
-	return out;
-}
-
-
 
 /** What one model on a server runs with. Unset fields fall back to the provider's own config. */
 export type ModelSettings = {
@@ -116,10 +49,19 @@ export type ModelSettings = {
 	enableThinking?:boolean;
 	reasoningEffort?:ReasoningEffort;
 	/**
-	 * Most tokens a thought may run before it is cut off. The reply then comes back `truncated`, with no content and
-	 * the thought so far as its `reasoning`, for the caller to answer from. Default: no limit.
+	 * Most tokens a think may think, its requests together (`ChatRequest.thinkingSpent`). The first may think all of it;
+	 * after that (after a tool call, say) each is capped at what is left, but the cap drops by at most half each time and
+	 * never below `thinkingFloor`. At 256 with the floor at 64: 256, then at least 128, then at least 64.
+	 * The reply then comes back `truncated`, with no content and the thought so far as its `reasoning`, for the caller
+	 * to answer from, as it does when the server stops it at the reply's cap (its allowance, plus room to answer).
+	 * Default: no limit. A turn that does not think is cut the same way past a few tokens.
 	 */
 	thinkingBudget?:number;
+	/**
+	 * The lowest the thinking cap may go after a tool call: each later request may think at least this much. Clamped to
+	 * `thinkingBudget` (under a budget of 32 the floor is 32). Default 64; 0 lets a think run out of thought.
+	 */
+	thinkingFloor?:number;
 	/** How it picks each token. Default {@link DEFAULT_SAMPLING}. */
 	sampling?:Sampling;
 	/** Thinks it answers at once. A server that loads models itself runs that many side by side. */
@@ -154,6 +96,11 @@ export type HttpProviderConfig = {
 	 * When a turn asks for a canned thought, used to wrap it in the model's think tokens.
 	 */
 	applyPromptTemplate?:ApplyPromptTemplate;
+	/**
+	 * The body field a server that ends a thought at its budget itself takes it in (llama.cpp's `thinking_budget_tokens`):
+	 * each request is sent what its think has left, and its stream is not cut.
+	 */
+	budgetField?:string;
 };
 
 function withNoThink(messages:ChatMessage[]):ChatMessage[] {
@@ -191,89 +138,29 @@ function appendNoThink(content:Exclude<ChatContent, null>):Exclude<ChatContent, 
 	return parts;
 }
 
-function messageReasoning(message:Record<string, unknown>):string | undefined {
-	return cleanThought(textFrom(message['reasoning_content']));
-}
-
-function setTemplateKwargs(body:Record<string, unknown>, patch:Record<string, unknown>):void {
-	const prev = isRecord(body['chat_template_kwargs']) ? body['chat_template_kwargs'] : {};
-	body['chat_template_kwargs'] = { ...prev, ...patch };
-}
-
-function preferReasoning(effort:ReasoningEffort | undefined):ReasoningOption {
-	if (effort === 'xhigh') {
-		return 'high';
-	}
-	return effort ?? 'low';
-}
-
-/**
- * Both endpoints take an effort in OpenAI's words: the responses API as `reasoning: { effort }` (a bare option is a
- * 400), chat completions as `reasoning_effort` (a bare `reasoning` is ignored, so only this turns reasoning off).
- */
-const REASONING_EFFORT:Record<ReasoningOption, string> = { off: 'none', on: 'medium', low: 'low', medium: 'medium', high: 'high' };
-
-function setReasoningOption(body:Record<string, unknown>, option:ReasoningOption, responses:boolean):void {
-	if (responses) {
-		body.reasoning = { effort: REASONING_EFFORT[option] };
-		return;
-	}
-	body['reasoning_effort'] = REASONING_EFFORT[option];
-	if (option === 'low') {
-		setTemplateKwargs(body, { reasoning_strength: 'low' });
-	}
+function preferReasoning(effort:ReasoningEffort | undefined):ReasoningOption | undefined {
+	return effort === 'xhigh' ? 'high' : effort;
 }
 
 function defaultBaseURL():string {
 	return 'http://127.0.0.1:1234/v1';
 }
 
+/** What a server's error body says: its `error.message`, else its first 240 letters. */
+function errorText(text:string):string {
+	let parsed:unknown;
+	try {
+		parsed = text ? JSON.parse(text) : {};
+	}
+	catch {
+		parsed = {};
+	}
+	const err = isRecord(parsed) && isRecord(parsed.error) ? parsed.error : parsed;
+	return isRecord(err) && typeof err.message === 'string' ? err.message : text.slice(0, 240);
+}
+
 function joinURL(base:string, path:string):string {
 	return `${base.replace(/\/+$/, '')}/${path.replace(/^\/+/, '')}`;
-}
-
-/** `req.responseFormat` as a JSON schema the server must follow. Chat completions only: see `dispatchChat`. */
-function applyResponseFormat(req:ChatRequest, body:Record<string, unknown>):void {
-	const format = req.responseFormat;
-	if (format) {
-		body['response_format'] = { type: 'json_schema', json_schema: { name: format.name, schema: format.schema, strict: format.strict ?? false } };
-	}
-}
-
-/** `req.topLogprobs` in the shape each endpoint asks for it. */
-function applyLogprobs(req:ChatRequest, body:Record<string, unknown>, responses:boolean):void {
-	if (!req.topLogprobs) {
-		return;
-	}
-	body['top_logprobs'] = req.topLogprobs;
-	if (responses) {
-		body['include'] = ['message.output_text.logprobs'];
-	}
-	else {
-		body['logprobs'] = true;
-	}
-}
-
-/** The first answer token's top candidates from a responses or chat completions reply, or undefined without them. */
-function firstLogprobs(json:Record<string, unknown>):Record<string, number> | undefined {
-	const choice = Array.isArray(json.choices) && isRecord(json.choices[0]) ? json.choices[0] : undefined;
-	const tokens = choice
-		? (isRecord(choice.logprobs) ? choice.logprobs.content : undefined)
-		: (Array.isArray(json.output) ? json.output : [])
-			.flatMap((item) => (isRecord(item) && item.type === 'message' && Array.isArray(item.content) ? item.content : []))
-			.flatMap((part) => (isRecord(part) && Array.isArray(part.logprobs) ? part.logprobs : []));
-	const first = Array.isArray(tokens) && isRecord(tokens[0]) ? tokens[0] : undefined;
-	if (!first || !Array.isArray(first['top_logprobs'])) {
-		return undefined;
-	}
-	const out:Record<string, number> = {};
-	for (const top of first['top_logprobs']) {
-		if (isRecord(top) && typeof top.token === 'string' && typeof top.logprob === 'number') {
-			const token = top.token.trim();
-			out[token] = Math.max(out[token] ?? -Infinity, top.logprob);
-		}
-	}
-	return out;
 }
 
 /** Native `fetch` throws if invoked as a method (`this.fetchImpl()`). */
@@ -287,26 +174,20 @@ function isContextOverflow(msg:string):boolean {
 
 const THINK_OUT = 4096;
 const OVERFLOW_OUT = 512;
+/** Tokens a reply that thinks on a budget may answer in past it: a long Arc runs a few hundred. */
+const ANSWER_ROOM = 512;
+/** Most tokens a reply asked not to think may think anyway, before it is cut and handed back as a budget cut is. */
+const THINK_OFF_BUDGET = 32;
+/** `ModelSettings.thinkingFloor`'s default: room for a short thought on what a tool answered. */
+const DEFAULT_THINKING_FLOOR = 64;
+/** What a reply stuck saying one thing over (`loops`) fails with. One stuck in its thought is asked again without one. */
+const LOOPING = / repeats itself in its (thought|answer)/;
 
 /** A request body's prompt tokens, roughly. `response_format` is grammar the server compiles, not prompt. */
 function promptTokens(body:Record<string, unknown>):number {
 	const prompt = { ...body };
 	delete prompt['response_format'];
 	return Math.max(1, Math.ceil(JSON.stringify(prompt).length / 4));
-}
-
-function configNumber(config:Record<string, unknown>, ...keys:string[]):number | undefined {
-	for (const key of keys) {
-		const n = config[key];
-		if (typeof n === 'number' && Number.isFinite(n) && n > 0) {
-			return n;
-		}
-	}
-	return undefined;
-}
-
-function instanceContextLength(config:Record<string, unknown>):number | undefined {
-	return configNumber(config, 'context_length', 'contextLength', 'n_ctx', 'max_context_length');
 }
 
 function shrinkForOverflow(body:Record<string, unknown>):boolean {
@@ -358,269 +239,9 @@ export function serverRoot(baseURL:string):string {
 	return baseURL.replace(/\/+$/, '').replace(/\/v1$/i, '');
 }
 
-function toChatMessages(messages:ChatMessage[]):unknown[] {
-	return messages.map((m) => {
-		const row:Record<string, unknown> = { role: m.role };
-		if (m.content !== null) {
-			row.content = m.content;
-		}
-		if (m.name) {
-			row.name = m.name;
-		}
-		if (m.toolCallID) {
-			row['tool_call_id'] = m.toolCallID;
-		}
-		if (m.toolCalls && m.toolCalls.length > 0) {
-			row['tool_calls'] = m.toolCalls.map((c) => ({
-				id: c.id,
-				type: 'function',
-				function: { name: c.name, arguments: c.arguments },
-			}));
-		}
-		return row;
-	});
-}
-
-function textFrom(value:unknown):string | null {
-	if (typeof value === 'string' && value.trim().length > 0) {
-		return value;
-	}
-	if (!Array.isArray(value)) {
-		return null;
-	}
-	const parts:string[] = [];
-	for (const item of value) {
-		if (typeof item === 'string') {
-			parts.push(item);
-		}
-		else if (isRecord(item) && typeof item.text === 'string') {
-			parts.push(item.text);
-		}
-	}
-	const joined = parts.join('').trim();
-	return joined.length > 0 ? joined : null;
-}
-
-/** Chat-template tokens a model leaks into content: `<|x|>`, `<|x>`, `<x|>`, or a dangling `<|x` at the end. */
-const TEMPLATE_TOKENS = /<\|[\w-]+\|?>|<[\w-]+\|>|<\|[\w-]*$/g;
-
-/** `text` without leaked chat-template tokens (see `TEMPLATE_TOKENS`), trimmed; `null` when nothing is left. */
-export function stripTemplateTokens(text:string | null):string | null {
-	return text?.replace(TEMPLATE_TOKENS, '').trim() || null;
-}
-
-/** The channel header a model may leak at the start of its thought: Gemma 4's `<|channel>thought`, Harmony's `<|channel|>analysis`. */
-const THOUGHT_HEADER = /^\s*<\|channel\|?>\w*/;
-
-/** A thought without a leaked channel header or template tokens, untrimmed. */
-function untagged(thought:string):string {
-	return thought.replace(THOUGHT_HEADER, '').replace(TEMPLATE_TOKENS, '');
-}
-
-/** A thought as shown: no leaked channel header or template tokens, trimmed; `undefined` when nothing is left. */
-export function cleanThought(text:string | null | undefined):string | undefined {
-	return (text && untagged(text).trim()) || undefined;
-}
-
-/**
- * Streams a thought clean: given the whole thought so far, emits only its new clean text. A header or token still
- * arriving (`<|chan`, a last `<`) is held back until it is whole and dropped, or turns out to be text.
- */
-function thoughtStream(emit:(text:string)=>void):(soFar:string)=>void {
-	let shown = '';
-	return (soFar) => {
-		const clean = untagged(soFar).trimStart().replace(/<$/, '');
-		if (clean.length > shown.length && clean.startsWith(shown)) {
-			emit(clean.slice(shown.length));
-			shown = clean;
-		}
-	};
-}
-
-function messageText(message:Record<string, unknown>):string | null {
-	const content = stripTemplateTokens(textFrom(message.content));
-	if (content) {
-		return content;
-	}
-	const reasoning = textFrom(message['reasoning_content']);
-	if (!reasoning) {
-		return null;
-	}
-	try {
-		extractJson(reasoning);
-		return reasoning;
-	}
-	catch {
-		return null;
-	}
-}
-
 /** A reply the thinking budget cut off: no answer yet, only the thought so far. */
 function cutThoughtReply(got:Got):ChatResponse {
 	return { content: null, reasoning: cleanThought(got.cutThought), toolCalls: [], truncated: true, generateMs: got.wallMs };
-}
-
-/** A chat completions reply's answer, without timings: those depend on how it was sent. */
-function parseChatCompletion(json:Record<string, unknown>):ChatResponse {
-	const choices = Array.isArray(json.choices) ? json.choices : [];
-	const first = isRecord(choices[0]) ? choices[0] : {};
-	const message = isRecord(first.message) ? first.message : isRecord(first.delta) ? first.delta : {};
-	return {
-		content: messageText(message),
-		reasoning: messageReasoning(message),
-		toolCalls: parseToolCalls(message['tool_calls'] ?? message['toolCalls']),
-		truncated: first['finish_reason'] === 'length',
-		logprobs: firstLogprobs(json),
-	};
-}
-
-function mergeArgFragments(prev:string, next:string):string {
-	if (!next) {
-		return prev;
-	}
-	if (!prev) {
-		return next;
-	}
-	if (next.startsWith(prev) || prev.startsWith(next)) {
-		return next.length >= prev.length ? next : prev;
-	}
-	return prev + next;
-}
-
-/** OpenAI streams `tool_calls` as per-index fragments. Replacing the array drops the name. */
-function mergeToolCallDeltas(acc:unknown, delta:unknown):unknown[] {
-	const out:unknown[] = Array.isArray(acc)
-		? acc.map((row) => {
-			if (!isRecord(row)) {
-				return row;
-			}
-			const fn = isRecord(row.function) ? row.function : undefined;
-			return fn ? { ...row, function: { ...fn } } : { ...row };
-		})
-		: [];
-	if (!Array.isArray(delta)) {
-		return out;
-	}
-	for (const item of delta) {
-		if (!isRecord(item)) {
-			continue;
-		}
-		const index = typeof item.index === 'number' ? item.index : out.length;
-		while (out.length <= index) {
-			out.push({});
-		}
-		const prev = isRecord(out[index]) ? out[index] : {};
-		const prevFn = isRecord(prev.function) ? prev.function : {};
-		const nextFn = isRecord(item.function) ? item.function : {};
-		const prevArgs = typeof prevFn.arguments === 'string' ? prevFn.arguments : '';
-		const nextArgs = typeof nextFn.arguments === 'string' ? nextFn.arguments : '';
-		const name = typeof nextFn.name === 'string' && nextFn.name
-			? nextFn.name
-			: typeof prevFn.name === 'string' ? prevFn.name : '';
-		const id = typeof item.id === 'string' && item.id
-			? item.id
-			: typeof prev.id === 'string' ? prev.id : undefined;
-		out[index] = {
-			...prev,
-			...item,
-			index,
-			...(id ? { id } : {}),
-			type: typeof item.type === 'string' ? item.type : (typeof prev.type === 'string' ? prev.type : 'function'),
-			function: {
-				...prevFn,
-				...nextFn,
-				name,
-				arguments: mergeArgFragments(prevArgs, nextArgs),
-			},
-		};
-	}
-	return out;
-}
-
-function parseToolCalls(raw:unknown):ToolCall[] {
-	if (!Array.isArray(raw)) {
-		return [];
-	}
-	const out:ToolCall[] = [];
-	for (const item of raw) {
-		if (!isRecord(item)) {
-			continue;
-		}
-		const fn = isRecord(item.function) ? item.function : {};
-		const id = typeof item.id === 'string'
-			? item.id
-			: typeof item['call_id'] === 'string' ? item['call_id'] : `call_${out.length}`;
-		const name = typeof fn.name === 'string'
-			? fn.name
-			: typeof item.name === 'string' ? item.name : '';
-		const args = typeof fn.arguments === 'string'
-			? fn.arguments
-			: typeof item.arguments === 'string'
-				? item.arguments
-				: JSON.stringify(fn.arguments ?? item.arguments ?? {});
-		if (name) {
-			out.push({ id, name, arguments: args });
-		}
-	}
-	return out;
-}
-
-function responseTools(tools:ToolDef[] | undefined):unknown[] | undefined {
-	if (!tools || tools.length === 0) {
-		return undefined;
-	}
-	return tools.map((t) => ({
-		type: 'function',
-		name: t.name,
-		description: t.description,
-		parameters: t.parameters,
-	}));
-}
-
-function contentToInput(content:Exclude<ChatContent, null>):unknown {
-	if (typeof content === 'string') {
-		return content;
-	}
-	return content.map((p) => {
-		if (p.type === 'text') {
-			return { type: 'input_text', text: p.text };
-		}
-		return { type: 'input_image', image_url: p.image_url.url };
-	});
-}
-
-function messagesToInput(messages:ChatMessage[]):unknown[] {
-	const out:unknown[] = [];
-	for (const m of messages) {
-		if (m.role === 'tool') {
-			out.push({
-				type: 'function_call_output',
-				call_id: m.toolCallID ?? '',
-				output: typeof m.content === 'string' ? m.content : JSON.stringify(m.content ?? ''),
-			});
-			continue;
-		}
-		if (m.role === 'assistant' && m.toolCalls && m.toolCalls.length > 0) {
-			for (const call of m.toolCalls) {
-				out.push({
-					type: 'function_call',
-					call_id: call.id,
-					name: call.name,
-					arguments: call.arguments,
-				});
-			}
-			continue;
-		}
-		if (m.content === null) {
-			continue;
-		}
-		out.push({
-			type: 'message',
-			role: m.role,
-			content: contentToInput(m.content),
-		});
-	}
-	return out;
 }
 
 function asMs(value:unknown, unit:'ms' | 's' | 'ns'):number | undefined {
@@ -705,30 +326,8 @@ function mergeClientTimings(
 	return { promptMs, generateMs };
 }
 
-function isFirstTokenEvent(ev:Record<string, unknown>):boolean {
-	const type = typeof ev.type === 'string' ? ev.type : '';
-	if (type.endsWith('.delta') && !type.includes('logprob')) {
-		if (typeof ev.delta === 'string') {
-			return ev.delta.length > 0;
-		}
-		return true;
-	}
-	const choices = Array.isArray(ev.choices) ? ev.choices : [];
-	const first = isRecord(choices[0]) ? choices[0] : {};
-	const delta = isRecord(first.delta) ? first.delta : {};
-	if (typeof delta.content === 'string' && delta.content.length > 0) {
-		return true;
-	}
-	if (Array.isArray(delta['tool_calls']) && delta['tool_calls'].length > 0) {
-		return true;
-	}
-	if (typeof delta['reasoning_content'] === 'string' && delta['reasoning_content'].length > 0) {
-		return true;
-	}
-	return false;
-}
-
-function parseSseData(block:string):Record<string, unknown> | 'done' | undefined {
+/** One SSE block's JSON event, typed by its `event:` line when the JSON has no `type`; undefined for `[DONE]` and junk. */
+function parseSseData(block:string):Record<string, unknown> | undefined {
 	let eventName = '';
 	const lines:string[] = [];
 	for (const line of block.split(/\r?\n/)) {
@@ -739,12 +338,8 @@ function parseSseData(block:string):Record<string, unknown> | 'done' | undefined
 			lines.push(line.slice(5).trimStart());
 		}
 	}
-	const data = lines.join('\n').trim();
-	if (!data || data === '[DONE]') {
-		return data === '[DONE]' || eventName === 'done' ? 'done' : undefined;
-	}
 	try {
-		const json:unknown = JSON.parse(data);
+		const json:unknown = JSON.parse(lines.join('\n'));
 		if (!isRecord(json)) {
 			return undefined;
 		}
@@ -758,27 +353,11 @@ function parseSseData(block:string):Record<string, unknown> | 'done' | undefined
 	}
 }
 
-function takeSseBlocks(buf:string):{ events:Array<Record<string, unknown> | 'done'>; rest:string } {
+/** The whole events in `buf`, and the unfinished rest. */
+function takeSseBlocks(buf:string):{ events:Record<string, unknown>[]; rest:string } {
 	const parts = buf.split(/\r?\n\r?\n/);
 	const rest = parts.pop() ?? '';
-	const events:Array<Record<string, unknown> | 'done'> = [];
-	for (const block of parts) {
-		if (!block.trim()) {
-			continue;
-		}
-		const ev = parseSseData(block);
-		if (ev) {
-			events.push(ev);
-		}
-	}
-	return { events, rest };
-}
-
-function flushSse(buf:string):Array<Record<string, unknown> | 'done'> {
-	if (!buf.trim()) {
-		return [];
-	}
-	return takeSseBlocks(`${buf.replace(/\s+$/, '')}\n\n`).events;
+	return { events: parts.map(parseSseData).filter((ev) => ev !== undefined), rest };
 }
 
 function streamErrorMessage(ev:Record<string, unknown>):string | undefined {
@@ -800,104 +379,6 @@ function streamErrorMessage(ev:Record<string, unknown>):string | undefined {
 	return type;
 }
 
-function sidecarOnto(target:Record<string, unknown>, ev:Record<string, unknown>):void {
-	for (const key of ['usage', 'timings', 'stats'] as const) {
-		if (target[key] === undefined && ev[key] !== undefined) {
-			target[key] = ev[key];
-		}
-	}
-}
-
-function terminalResponse(ev:Record<string, unknown>):Record<string, unknown> | undefined {
-	const type = typeof ev.type === 'string' ? ev.type : '';
-	if (type !== 'response.completed' && type !== 'response.incomplete') {
-		return undefined;
-	}
-	const base = isRecord(ev.response)
-		? { ...ev.response }
-		: Array.isArray(ev.output) ? { ...ev } : undefined;
-	if (!base) {
-		return undefined;
-	}
-	sidecarOnto(base, ev);
-	return base;
-}
-
-function noteFunctionItem(
-	item:Record<string, unknown>,
-	funcs:Map<string, { id:string; name:string; arguments:string }>,
-):void {
-	const type = typeof item.type === 'string' ? item.type : '';
-	if (type !== 'function_call' && type !== 'tool_call') {
-		return;
-	}
-	const callID = typeof item['call_id'] === 'string'
-		? item['call_id']
-		: typeof item.id === 'string' ? item.id : `call_${funcs.size}`;
-	const key = typeof item.id === 'string' ? item.id : callID;
-	const prev = funcs.get(key);
-	funcs.set(key, {
-		id: callID,
-		name: typeof item.name === 'string' && item.name ? item.name : (prev?.name ?? ''),
-		arguments: typeof item.arguments === 'string' ? item.arguments : (prev?.arguments ?? ''),
-	});
-}
-
-function responsesFromStream(args:{
-	id:string | undefined;
-	usage:Record<string, unknown> | undefined;
-	timings:Record<string, unknown> | undefined;
-	stats:Record<string, unknown> | undefined;
-	doneItems:Record<string, unknown>[];
-	text:string;
-	reasoning:string;
-	funcs:Map<string, { id:string; name:string; arguments:string }>;
-}):Record<string, unknown> | undefined {
-	const output:Record<string, unknown>[] = args.doneItems.length > 0 ? [...args.doneItems] : [];
-	if (output.length === 0) {
-		if (args.reasoning) {
-			output.push({
-				type: 'reasoning',
-				content: [{ type: 'reasoning_text', text: args.reasoning }],
-			});
-		}
-		if (args.text) {
-			output.push({
-				type: 'message',
-				content: [{ type: 'output_text', text: args.text }],
-			});
-		}
-		for (const fc of args.funcs.values()) {
-			if (!fc.name) {
-				continue;
-			}
-			output.push({
-				type: 'function_call',
-				call_id: fc.id,
-				name: fc.name,
-				arguments: fc.arguments,
-			});
-		}
-	}
-	if (output.length === 0) {
-		return undefined;
-	}
-	const json:Record<string, unknown> = { output };
-	if (args.id) {
-		json.id = args.id;
-	}
-	if (args.usage) {
-		json.usage = args.usage;
-	}
-	if (args.timings) {
-		json.timings = args.timings;
-	}
-	if (args.stats) {
-		json.stats = args.stats;
-	}
-	return json;
-}
-
 function parseJsonRecord(text:string, url:string, status:number):Record<string, unknown> {
 	let parsed:unknown;
 	try {
@@ -912,146 +393,61 @@ function parseJsonRecord(text:string, url:string, status:number):Record<string, 
 	return parsed;
 }
 
+/** Fields a server may send beside the reply, in any event: what it counted and timed. */
+const SIDECARS = ['usage', 'timings', 'stats'] as const;
+
+/**
+ * Reads a reply whole, or as it streams in: each SSE event goes to `wire`'s fold, which says what it held. Stops a
+ * thought past `thinkingBudget` before any answer, and hands the thought back instead. Fails a reply stuck repeating
+ * itself, in its thought or its answer.
+ */
 async function readInferenceResponse(
 	res:Response,
 	url:string,
+	wire:Wire,
 	t0:number,
 	thinkingBudget?:number,
 	onDelta?:ChatRequest['onDelta'],
 ):Promise<Got> {
 	const reader = res.body?.getReader();
 	if (!reader) {
-		const text = await res.text();
-		return { json: parseJsonRecord(text, url, res.status), wallMs: nowMs() - t0 };
+		return { json: parseJsonRecord(await res.text(), url, res.status), wallMs: nowMs() - t0 };
 	}
 	const decoder = new TextDecoder();
+	let answer = '';
+	/** The thought or the answer ends in one short run said over and over, checked as each piece comes. */
+	let looped = false;
+	const fold = wire.fold((content) => {
+		answer += content;
+		looped ||= loops(answer);
+		onDelta?.({ content });
+	});
+	const showThought = thoughtStream((reasoning) => onDelta?.({ reasoning }));
+	const sidecars:Record<string, unknown> = {};
 	let buf = '';
 	let mode:'unknown' | 'json' | 'sse' = 'unknown';
 	let firstMs:number | undefined;
-	let completed:Record<string, unknown> | undefined;
-	let lastChunk:Record<string, unknown> | undefined;
-	let lastType = '';
-	let responseID:string | undefined;
-	let usage:Record<string, unknown> | undefined;
-	let timings:Record<string, unknown> | undefined;
-	let stats:Record<string, unknown> | undefined;
+	let last:Record<string, unknown> | undefined;
 	let streamErr:string | undefined;
-	let assembledContent = '';
-	let assembledReasoning = '';
-	let assembledTools:unknown = undefined;
-	let finishReason:unknown = undefined;
-	let assembledText = '';
-	let responsesReasoning = '';
 	/** Streamed thought pieces so far: a server sends one per token. */
 	let thoughtTokens = 0;
-	const showThought = thoughtStream((reasoning) => onDelta?.({ reasoning }));
-	const doneItems:Record<string, unknown>[] = [];
-	const funcs = new Map<string, { id:string; name:string; arguments:string }>();
-	const ingest = (raw:Record<string, unknown> | 'done'):void => {
-		if (raw === 'done') {
-			return;
+	const take = (ev:Record<string, unknown>):void => {
+		last = ev;
+		streamErr = streamErrorMessage(ev) ?? streamErr;
+		for (const key of SIDECARS) {
+			sidecars[key] = isRecord(ev[key]) ? ev[key] : sidecars[key];
 		}
-		const ev = raw;
-		lastChunk = ev;
-		const type = typeof ev.type === 'string' ? ev.type : '';
-		if (type) {
-			lastType = type;
-		}
-		if (isFirstTokenEvent(ev) && firstMs === undefined) {
-			firstMs = nowMs() - t0;
-		}
-		const err = streamErrorMessage(ev);
-		if (err) {
-			streamErr = err;
-		}
-		const term = terminalResponse(ev);
-		if (term) {
-			completed = term;
-			if (typeof term.id === 'string') {
-				responseID = term.id;
-			}
-		}
-		if (isRecord(ev.response) && typeof ev.response.id === 'string') {
-			responseID = responseID ?? ev.response.id;
-		}
-		if (isRecord(ev.usage)) {
-			usage = ev.usage;
-		}
-		if (isRecord(ev.timings)) {
-			timings = ev.timings;
-		}
-		if (isRecord(ev.stats)) {
-			stats = ev.stats;
-		}
-		if (type === 'response.output_item.done' && isRecord(ev.item)) {
-			doneItems.push(ev.item);
-			noteFunctionItem(ev.item, funcs);
-		}
-		else if (type === 'response.output_item.added' && isRecord(ev.item)) {
-			noteFunctionItem(ev.item, funcs);
-		}
-		else if (type === 'response.function_call_arguments.delta' && typeof ev.delta === 'string') {
-			const key = typeof ev.item_id === 'string' ? ev.item_id : '_';
-			const prev = funcs.get(key) ?? {
-				id: typeof ev['call_id'] === 'string' ? ev['call_id'] : key,
-				name: '',
-				arguments: '',
-			};
-			prev.arguments += ev.delta;
-			funcs.set(key, prev);
-		}
-		else if (type === 'response.output_text.delta' && typeof ev.delta === 'string') {
-			assembledText += ev.delta;
-			onDelta?.({ content: ev.delta });
-		}
-		else if (type === 'response.output_text.done' && typeof ev.text === 'string') {
-			assembledText = ev.text;
-		}
-		else if (
-			(type === 'response.reasoning_text.delta' || type === 'response.reasoning.delta')
-			&& typeof ev.delta === 'string'
-		) {
-			responsesReasoning += ev.delta;
+		const piece = fold.take(ev);
+		firstMs ??= piece ? nowMs() - t0 : undefined;
+		if (piece === 'thought') {
 			thoughtTokens += 1;
-			showThought(responsesReasoning);
-		}
-		const choices = Array.isArray(ev.choices) ? ev.choices : [];
-		const choice = isRecord(choices[0]) ? choices[0] : {};
-		if (isRecord(choice.message)) {
-			const msg = choice.message;
-			if (typeof msg.content === 'string') {
-				assembledContent = msg.content;
-			}
-			if (typeof msg['reasoning_content'] === 'string') {
-				assembledReasoning = msg['reasoning_content'];
-			}
-			if (msg['tool_calls'] !== undefined) {
-				assembledTools = msg['tool_calls'];
-			}
-		}
-		finishReason = choice['finish_reason'] ?? finishReason;
-		const delta = isRecord(choice.delta) ? choice.delta : {};
-		if (typeof delta.content === 'string') {
-			assembledContent += delta.content;
-			onDelta?.({ content: delta.content });
-		}
-		if (typeof delta['reasoning_content'] === 'string') {
-			assembledReasoning += delta['reasoning_content'];
-			thoughtTokens += 1;
-			showThought(assembledReasoning);
-		}
-		if (delta['tool_calls'] !== undefined) {
-			assembledTools = mergeToolCallDeltas(assembledTools, delta['tool_calls']);
+			looped ||= loops(fold.thought);
+			showThought(fold.thought);
 		}
 	};
 	for (;;) {
 		const { done, value } = await reader.read();
-		if (value) {
-			buf += decoder.decode(value, { stream: !done });
-		}
-		else if (done) {
-			buf += decoder.decode();
-		}
+		buf += value ? decoder.decode(value, { stream: !done }) : done ? decoder.decode() : '';
 		if (mode === 'unknown') {
 			const start = buf.trimStart();
 			// A server that thinks long may open with comments (`: keepalive`) before its first event (xAI).
@@ -1063,16 +459,17 @@ async function readInferenceResponse(
 			}
 		}
 		if (mode === 'sse') {
-			const split = takeSseBlocks(buf);
+			const split = takeSseBlocks(done ? `${buf}\n\n` : buf);
 			buf = split.rest;
-			for (const ev of split.events) {
-				ingest(ev);
+			split.events.forEach(take);
+			if (looped) {
+				await reader.cancel().catch(() => undefined);
+				throw new Error(`inference ${url} repeats itself in its ${fold.answering ? 'answer' : 'thought'}`);
 			}
 			// Still thinking past the budget: stop generating, and hand back the thought for an answer without one.
-			const answering = assembledContent || assembledText || assembledTools !== undefined || funcs.size > 0;
-			if (thinkingBudget !== undefined && thoughtTokens > thinkingBudget && !answering) {
+			if (thinkingBudget !== undefined && thoughtTokens > thinkingBudget && !fold.answering) {
 				await reader.cancel().catch(() => undefined);
-				return { json: {}, firstMs, wallMs: nowMs() - t0, cutThought: assembledReasoning || responsesReasoning };
+				return { json: {}, firstMs, wallMs: nowMs() - t0, cutThought: fold.thought };
 			}
 		}
 		if (done) {
@@ -1080,129 +477,21 @@ async function readInferenceResponse(
 		}
 	}
 	const wallMs = nowMs() - t0;
-	if (mode === 'sse') {
-		for (const ev of flushSse(buf)) {
-			ingest(ev);
-		}
-		if (streamErr) {
-			throw new Error(`inference ${url} ${streamErr}`);
-		}
-		if (completed) {
-			sidecarOnto(completed, { usage, timings, stats });
-			return { json: completed, firstMs, wallMs };
-		}
-		const fromResponses = responsesFromStream({
-			id: responseID,
-			usage,
-			timings,
-			stats,
-			doneItems,
-			text: assembledText,
-			reasoning: responsesReasoning,
-			funcs,
-		});
-		if (fromResponses) {
-			return { json: fromResponses, firstMs, wallMs };
-		}
-		if (assembledContent || assembledReasoning || assembledTools !== undefined) {
-			const message:Record<string, unknown> = { role: 'assistant', content: assembledContent };
-			if (assembledReasoning) {
-				message['reasoning_content'] = assembledReasoning;
-			}
-			if (assembledTools !== undefined) {
-				message['tool_calls'] = assembledTools;
-			}
-			return {
-				json: {
-					choices: [{ message, finish_reason: finishReason }],
-					usage: usage ?? lastChunk?.usage,
-				},
-				firstMs,
-				wallMs,
-			};
-		}
-		if (lastChunk && (Array.isArray(lastChunk.choices) || Array.isArray(lastChunk.output))) {
-			return { json: lastChunk, firstMs, wallMs };
-		}
-		if (
-			isRecord(lastChunk?.response)
-			&& Array.isArray(lastChunk.response.output)
-			&& lastChunk.response.output.length > 0
-		) {
-			return { json: lastChunk.response, firstMs, wallMs };
-		}
-		const hint = lastType ? ` (last event: ${lastType})` : '';
+	if (mode !== 'sse') {
+		return { json: parseJsonRecord(buf, url, res.status), firstMs, wallMs };
+	}
+	if (streamErr) {
+		throw new Error(`inference ${url} ${streamErr}`);
+	}
+	const json = fold.reply(last);
+	if (!json) {
+		const hint = typeof last?.type === 'string' ? ` (last event: ${last.type})` : '';
 		throw new Error(`inference ${url} stream ended without a response${hint}`);
 	}
-	return { json: parseJsonRecord(buf, url, res.status), firstMs, wallMs };
-}
-
-function parseResponsesOutput(json:Record<string, unknown>):{
-	content:string | null;
-	reasoning:string | undefined;
-	toolCalls:ToolCall[];
-	id:string | undefined;
-	truncated:boolean;
-	cachedTokens:number | undefined;
-	promptMs:number | undefined;
-	generateMs:number | undefined;
-} {
-	const id = typeof json.id === 'string'
-		? json.id
-		: typeof json['response_id'] === 'string' ? json['response_id'] : undefined;
-	const stats = parseChatTimings(json);
-	const cached = stats.cachedTokens;
-	const output = Array.isArray(json.output) ? json.output : [];
-	const toolCalls:ToolCall[] = [];
-	const texts:string[] = [];
-	const thoughts:string[] = [];
-	for (const item of output) {
-		if (!isRecord(item)) {
-			continue;
-		}
-		const type = typeof item.type === 'string' ? item.type : '';
-		if (type === 'function_call' || type === 'tool_call') {
-			const name = typeof item.name === 'string'
-				? item.name
-				: typeof item.tool === 'string' ? item.tool : '';
-			const callID = typeof item['call_id'] === 'string'
-				? item['call_id']
-				: typeof item.id === 'string' ? item.id : `call_${toolCalls.length}`;
-			const args = typeof item.arguments === 'string'
-				? item.arguments
-				: JSON.stringify(item.arguments ?? {});
-			if (name) {
-				toolCalls.push({ id: callID, name, arguments: args });
-			}
-			continue;
-		}
-		if (type === 'message' || type === 'reasoning') {
-			const text = textFrom(item.content) ?? (typeof item.content === 'string' ? item.content : null);
-			if (text && type !== 'reasoning') {
-				texts.push(text);
-			}
-			else if (text && type === 'reasoning') {
-				thoughts.push(text);
-				try {
-					extractJson(text);
-					texts.push(text);
-				}
-				catch {
-					// chain-of-thought, not an arc
-				}
-			}
-		}
+	for (const key of SIDECARS) {
+		json[key] ??= sidecars[key];
 	}
-	return {
-		content: stripTemplateTokens(texts.length > 0 ? texts.join('\n') : null),
-		reasoning: cleanThought(thoughts.join('\n')),
-		toolCalls,
-		id,
-		truncated: json.status === 'incomplete',
-		cachedTokens: cached,
-		promptMs: stats.promptMs,
-		generateMs: stats.generateMs,
-	};
+	return { json, firstMs, wallMs };
 }
 
 function assistantFromResponse(res:ChatResponse):ChatMessage {
@@ -1222,23 +511,18 @@ export class HttpProvider implements InferenceProvider {
 	private readonly _maxTokens:number | undefined;
 	private readonly _loadOpts:HttpLoadConfig;
 	private readonly _applyPromptTemplateFn:ApplyPromptTemplate | undefined;
+	private readonly _budgetField:string | undefined;
 	private readonly _reasoningByModel = new Map<string, ReasoningOption[]>();
 	/** Each catalog model's most context. A load asking for more gets less, and must still count as fitting. */
 	private readonly _maxContextByModel = new Map<string, number>();
-	/** Slots a model got when it was loaded with fewer than asked: the most the server gives it, so it is not loaded again for more. */
-	private readonly _maxParallelByModel = new Map<string, number>();
 	/** Models the host configured on this server: each loads with its own settings, and none unloads another. */
 	private readonly _models = new Map<string, ModelSettings>();
 	private readonly _threads = new Map<string, ThreadSnapshot[]>();
 	private _enableThinking:boolean;
 	private _reasoningEffort:ReasoningEffort | undefined;
 	private _responses:boolean | undefined;
-	private _loadEndpoint = false;
-	private _probed = false;
-	private _instances:LoadedInstance[] = [];
-	/** In-flight chats and embeds per model. The catalog does not say which instance is generating, so none of that model is unloaded until these finish. */
-	private readonly _inFlight = new Map<string, number>();
-	private _readyChain:Promise<void> = Promise.resolve();
+	/** LM Studio's own model management, when the server has it. */
+	private readonly _loader:LMStudioLoader;
 	private _jitFirst:Promise<ChatResponse> | null = null;
 	private _jitModel = '';
 
@@ -1259,11 +543,23 @@ export class HttpProvider implements InferenceProvider {
 			contextLength: config.load?.contextLength,
 		};
 		this._applyPromptTemplateFn = config.applyPromptTemplate;
+		this._budgetField = config.budgetField;
+		this._loader = new LMStudioLoader({
+			url: (path) => joinURL(this.rootURL, path),
+			fetch: this._fetchImpl,
+			timeoutMs: this._timeoutMs,
+			headers: () => this.headers(),
+			post: (url, body) => this.post(url, body),
+			loadOf: (model) => this.loadOf(model),
+			load: this._loadOpts,
+			configured: () => [...this._models.keys()],
+			catalog: (models) => this.rememberReasoning(models),
+		});
 	}
 
 	/**
 	 * Run `model` with `settings` from now on, and keep it loaded beside the other configured models. The next
-	 * `ensureLoaded` reloads it if a loaded copy no longer fits.
+	 * request reloads it if a loaded copy no longer fits.
 	 */
 	public configureModel(model:string, settings:ModelSettings):void {
 		this._models.set(model, { ...settings });
@@ -1274,26 +570,22 @@ export class HttpProvider implements InferenceProvider {
 		this._models.delete(model);
 	}
 
-	/** Load one copy of `model` that fits its settings (and eject extras). */
-	public async ensureLoaded(model:string):Promise<void> {
-		if (this._jitModel !== model) {
-			this._jitFirst = null;
-			this._jitModel = model;
-		}
-		await this.ensureReady(model);
-	}
-
 	public async chat(req:ChatRequest):Promise<ChatResponse> {
-		await this.ensureReady(req.model);
-		this.hold(req.model);
+		await this._loader.ensureReady(req.model);
+		this._loader.hold(req.model);
+		const send = (ask:ChatRequest):Promise<ChatResponse> => (this._loader.present ? this.dispatchChat(ask) : this.chatJit(ask));
 		try {
-			if (!this._loadEndpoint) {
-				return await this.chatJit(req);
-			}
-			return await this.dispatchChat(req);
+			return await send(req).catch((err:unknown) => {
+				// Stuck repeating its thought: that turn failed, and is asked once more without thinking. One stuck in its
+				// answer has already handed the caller that much of it, so it fails.
+				if (!(err instanceof Error) || LOOPING.exec(err.message)?.[1] !== 'thought') {
+					throw err;
+				}
+				return send({ ...req, enableThinking: false });
+			});
 		}
 		finally {
-			this.release(req.model);
+			this._loader.release(req.model);
 		}
 	}
 
@@ -1302,13 +594,13 @@ export class HttpProvider implements InferenceProvider {
 		if (!name) {
 			throw new Error('embed: no model id (refusing to load a second embedding model)');
 		}
-		await this.ensureReady(name);
-		this.hold(name);
+		await this._loader.ensureReady(name);
+		this._loader.hold(name);
 		try {
 			return await this.embedReady(texts, name);
 		}
 		finally {
-			this.release(name);
+			this._loader.release(name);
 		}
 	}
 
@@ -1364,7 +656,7 @@ export class HttpProvider implements InferenceProvider {
 		const want = settings.contextLength ?? this._loadOpts.contextLength;
 		const max = [...this._maxContextByModel].find(([id]) => modelIDsMatch(id, model))?.[1];
 		const slots = settings.maxParallel ?? this._loadOpts.parallel;
-		const maxSlots = this._maxParallelByModel.get(model);
+		const maxSlots = this._loader.maxParallel.get(model);
 		return {
 			...this._loadOpts,
 			parallel: slots !== undefined && maxSlots !== undefined ? Math.min(slots, maxSlots) : slots,
@@ -1372,8 +664,24 @@ export class HttpProvider implements InferenceProvider {
 		};
 	}
 
+	/** Whether `req` thinks: as asked, else as its model or this provider says, and only while its think allows it some. */
 	private thinkingOn(req:ChatRequest):boolean {
-		return req.enableThinking ?? this.settingsOf(req.model).enableThinking ?? this._enableThinking;
+		return (req.enableThinking ?? this.settingsOf(req.model).enableThinking ?? this._enableThinking) && this.thinkingAllowance(req) !== 0;
+	}
+
+	/**
+	 * Most tokens `req` may think on its model's budget (`ModelSettings.thinkingBudget`): what its think has left, or half
+	 * what the think's last thinking request was allowed when that is more, and never under the floor; undefined with no
+	 * budget.
+	 */
+	private thinkingAllowance(req:ChatRequest):number | undefined {
+		const { thinkingBudget: budget, thinkingFloor: floor = DEFAULT_THINKING_FLOOR } = this.settingsOf(req.model);
+		return budget === undefined ? undefined : Math.max(budget - (req.thinkingSpent ?? 0), Math.floor((req.lastThinkingAllowance ?? 0) / 2), Math.min(floor, budget));
+	}
+
+	/** Most tokens `req` may think before it is cut: its allowance, or a little when off. */
+	private thinkingBudget(req:ChatRequest):number | undefined {
+		return !this.thinkingOn(req) ? THINK_OFF_BUDGET : this._budgetField ? undefined : this.thinkingAllowance(req);
 	}
 
 	private async thinkOffPrefill(model:string, thinkingOn:boolean):Promise<string | null> {
@@ -1389,14 +697,7 @@ export class HttpProvider implements InferenceProvider {
 				return derived;
 			}
 		}
-		return alwaysThinks(model) ? ALWAYS_THINKS_PREFILL : EMPTY_THINK_PREFILL;
-	}
-
-	private async thoughtDonePrefill(model:string):Promise<string> {
-		if (this._applyPromptTemplateFn) {
-			return resolveThoughtPrefill(this._applyPromptTemplateFn, model);
-		}
-		return fallbackThoughtPrefill();
+		return thoughtTagsOf(model).thought('');
 	}
 
 	private async prepareMessages(req:ChatRequest):Promise<ChatMessage[]> {
@@ -1406,9 +707,6 @@ export class HttpProvider implements InferenceProvider {
 		// llama.cpp feeds a trailing assistant message to the JSON-schema grammar.
 		// A think-tag or Harmony prefill starts with `<`, which empties that stack.
 		const grammar = req.responseFormat !== undefined;
-		if (req.fakeThought && thinkingOn && !grammar && (thinkingModel || thinkOffMode(req.model))) {
-			return withAssistantPrefill(messages, await this.thoughtDonePrefill(req.model));
-		}
 		if (thinkingOn && thinkingModel) {
 			return messages;
 		}
@@ -1426,162 +724,75 @@ export class HttpProvider implements InferenceProvider {
 		return messages;
 	}
 
-	private async chatCompletions(req:ChatRequest, messages:ChatMessage[]):Promise<ChatResponse> {
-		const body = this.completionBody(req, messages);
-		const got = await this.postChat(joinURL(this.baseURL, 'chat/completions'), body, true, req);
+	/** A reply over `wire`, and the whole reply's JSON for its id. `extra` adds fields to the request. */
+	private async chatVia(
+		wire:Wire,
+		req:ChatRequest,
+		messages:ChatMessage[],
+		extra:Record<string, unknown> = {},
+	):Promise<{ res:ChatResponse; json:Record<string, unknown> }> {
+		const body:Record<string, unknown> = { model: req.model, ...wire.body(req, messages, this.wireAsk(req)), ...extra, ...this.samplingBody(req) };
+		const allowance = this.thinkingAllowance(req);
+		if (this._budgetField && allowance !== undefined) {
+			body[this._budgetField] = allowance;
+		}
+		const cap = this.outputCap(req, body);
+		if (cap !== undefined) {
+			body[wire.capField] = cap;
+		}
+		const got = await this.postChat(wire, body, req);
+		const allowed = this.thinkingOn(req) && allowance !== undefined ? { thinkingAllowance: allowance } : {};
 		if (got.cutThought !== undefined) {
-			return cutThoughtReply(got);
+			return { res: { ...cutThoughtReply(got), ...allowed }, json: got.json };
 		}
 		const timings = parseChatTimings(got.json);
-		const split = mergeClientTimings(timings, got.firstMs, got.wallMs);
-		return {
-			...parseChatCompletion(got.json),
-			cachedTokens: timings.cachedTokens,
-			promptMs: split.promptMs,
-			generateMs: split.generateMs,
-			outputTokens: timings.outputTokens,
-		};
+		return { res: { ...wire.parse(got.json), ...timings, ...mergeClientTimings(timings, got.firstMs, got.wallMs), ...allowed }, json: got.json };
 	}
 
+	/** Over the responses API, continuing the request's thread from the stored reply it best extends. */
 	private async chatResponses(req:ChatRequest, messages:ChatMessage[]):Promise<ChatResponse> {
 		const key = req.thread?.trim() || '';
 		const stored = key ? (this._threads.get(key) ?? []) : [];
 		const hit = key ? pickBestThread(stored, messages) : undefined;
 		const suffix = hit ? messages.slice(hit.prefixLen) : messages;
-		const body:Record<string, unknown> = {
-			model: req.model,
-			input: messagesToInput(suffix),
-			store: true,
-			...this.samplingBody(req),
-		};
-		if (hit) {
-			body['previous_response_id'] = hit.id;
-		}
-		this.applyThinkFields(req, body, true);
-		const tools = responseTools(req.tools);
-		if (tools) {
-			body.tools = tools;
-			if (req.toolChoice) {
-				body['tool_choice'] = req.toolChoice;
-			}
-		}
-		this.applyOutputCap(req, body, true);
-		applyLogprobs(req, body, true);
-		let got:Got;
-		try {
-			got = await this.postChat(joinURL(this.baseURL, 'responses'), body, false, req);
-		}
-		catch (err) {
-			const msg = err instanceof Error ? err.message : String(err);
-			if (/ 404:| 405:/.test(msg)) {
-				this._responses = false;
-				throw err;
-			}
-			throw err;
-		}
+		const { res, json } = await this.chatVia(responsesWire, req, suffix, hit ? { previous_response_id: hit.id } : {});
 		this._responses = true;
-		if (got.cutThought !== undefined) {
-			return cutThoughtReply(got);
-		}
-		const parsed = parseResponsesOutput(got.json);
-		const split = mergeClientTimings(
-			{ promptMs: parsed.promptMs, generateMs: parsed.generateMs },
-			got.firstMs,
-			got.wallMs,
-		);
-		const res:ChatResponse = {
-			content: parsed.content,
-			reasoning: parsed.reasoning,
-			toolCalls: parsed.toolCalls,
-			truncated: parsed.truncated,
-			cachedTokens: parsed.cachedTokens,
-			promptMs: split.promptMs,
-			generateMs: split.generateMs,
-			logprobs: firstLogprobs(got.json),
-		};
-		if (key && parsed.id) {
-			this._threads.set(key, rememberThread(stored, {
-				id: parsed.id,
-				messages: [...messages, assistantFromResponse(res)],
-			}));
+		const id = json.id ?? json['response_id'];
+		if (key && typeof id === 'string') {
+			this._threads.set(key, rememberThread(stored, { id, messages: [...messages, assistantFromResponse(res)] }));
 		}
 		return res;
 	}
 
-	private completionBody(req:ChatRequest, messages:ChatMessage[]):Record<string, unknown> {
-		const body:Record<string, unknown> = {
-			model: req.model,
-			messages: toChatMessages(messages),
-			...this.samplingBody(req),
+	/** What `req` runs with: the reasoning option its model takes, and a `/no_think` model's template switch. */
+	private wireAsk(req:ChatRequest):WireAsk {
+		const thinkingOn = this.thinkingOn(req);
+		const prefer = thinkingOn ? preferReasoning(this.settingsOf(req.model).reasoningEffort ?? this._reasoningEffort) : undefined;
+		const noThink = thinkOffMode(req.model) === 'no_think';
+		return {
+			reasoning: pickReasoningOption(this.allowedReasoning(req.model), thinkingOn, prefer),
+			templateThinking: !noThink ? undefined : thinkingOn ? (isThinkingModel(req.model) || undefined) : false,
 		};
-		this.applyThinkFields(req, body, false);
-		applyResponseFormat(req, body);
-		applyLogprobs(req, body, false);
-		if (req.tools && req.tools.length > 0) {
-			body.tools = req.tools.map((t) => ({
-				type: 'function',
-				function: {
-					name: t.name,
-					description: t.description,
-					parameters: t.parameters,
-				},
-			}));
-			if (req.toolChoice) {
-				body['tool_choice'] = req.toolChoice;
-			}
-		}
-		this.applyOutputCap(req, body, false);
-		return body;
 	}
 
-	private applyThinkFields(req:ChatRequest, body:Record<string, unknown>, responses:boolean):void {
-		const thinkingOn = this.thinkingOn(req);
-		const thinkingModel = isThinkingModel(req.model);
-		const off = thinkOffMode(req.model);
-		const option = pickReasoningOption(
-			this.allowedReasoning(req.model),
-			thinkingOn,
-			thinkingOn ? preferReasoning(this.settingsOf(req.model).reasoningEffort ?? this._reasoningEffort) : undefined,
-		);
-		if (option) {
-			setReasoningOption(body, option, responses);
+	/**
+	 * The most tokens the reply may run, within what its slot's context leaves; undefined leaves it to the server. A
+	 * thought on a budget gets its allowance and room to answer: the stream is cut at the allowance, but the server goes
+	 * on generating until it hits this, and a stalled page reads the whole backlog before it can cut.
+	 */
+	private outputCap(req:ChatRequest, body:Record<string, unknown>):number | undefined {
+		const thinking = this.thinkingOn(req);
+		const allowance = this.thinkingAllowance(req);
+		let want = req.maxTokens ?? this._maxTokens ?? (thinking ? THINK_OUT : undefined);
+		if (thinking && allowance !== undefined) {
+			want = Math.min(want ?? THINK_OUT, allowance + ANSWER_ROOM);
 		}
-		if (thinkingOn) {
-			if (thinkingModel && off === 'no_think' && !responses) {
-				body['enable_thinking'] = true;
-				setTemplateKwargs(body, { enable_thinking: true });
-			}
-			return;
-		}
-		if (off === 'no_think' && !responses) {
-			body['enable_thinking'] = false;
-			body['chat_template_kwargs'] = { enable_thinking: false };
-		}
-	}
-
-	private slotContext(model:string):number | undefined {
-		const inst = this._instances.find((row) => this.instanceMatches(row, model));
-		return inst ? instanceContextLength(inst.config) : undefined;
-	}
-
-	private applyOutputCap(req:ChatRequest, body:Record<string, unknown>, responses:boolean):void {
-		const thinkingOn = this.thinkingOn(req);
-		const want = req.maxTokens ?? this._maxTokens ?? (thinkingOn ? THINK_OUT : undefined);
-		const slot = this.slotContext(req.model);
+		const slot = this._loader.slotContext(req.model);
 		if (want === undefined && slot === undefined) {
-			return;
+			return undefined;
 		}
-		const prompt = promptTokens(body);
-		let cap = want ?? THINK_OUT;
-		if (slot !== undefined) {
-			cap = Math.min(cap, Math.max(1, slot - prompt - 32));
-		}
-		if (responses) {
-			body['max_output_tokens'] = cap;
-		}
-		else {
-			body['max_tokens'] = cap;
-		}
+		const cap = want ?? THINK_OUT;
+		return slot === undefined ? cap : Math.min(cap, Math.max(1, slot - promptTokens(body) - 32));
 	}
 
 	private allowedReasoning(model:string):ReasoningOption[] | undefined {
@@ -1609,22 +820,26 @@ export class HttpProvider implements InferenceProvider {
 	private async dispatchChat(req:ChatRequest):Promise<ChatResponse> {
 		const messages = await this.prepareMessages(req);
 		// LM Studio's responses API ignores `text.format`, so a schema the answer must follow goes to chat completions.
-		if (!req.responseFormat && (this._responses === true || (this._responses !== false && this._loadEndpoint))) {
+		if (!req.responseFormat && (this._responses === true || (this._responses !== false && this._loader.present))) {
 			try {
 				return await this.chatResponses(req, messages);
 			}
 			catch (err) {
-				if (this._responses === true) {
-					const msg = err instanceof Error ? err.message : String(err);
-					if (/stream ended without a response/.test(msg)) {
-						return this.chatCompletions(req, messages);
-					}
+				const msg = err instanceof Error ? err.message : String(err);
+				// A reply stuck repeating itself came from the endpoint. A server without it is not asked again; one with it falls
+				// back for a reply it lost.
+				if (LOOPING.test(msg)) {
 					throw err;
 				}
-				this._responses = false;
+				if (this._responses !== true || / 404:| 405:/.test(msg)) {
+					this._responses = false;
+				}
+				else if (!/stream ended without a response/.test(msg)) {
+					throw err;
+				}
 			}
 		}
-		return this.chatCompletions(req, messages);
+		return (await this.chatVia(chatWire, req, messages)).res;
 	}
 
 	/**
@@ -1636,19 +851,12 @@ export class HttpProvider implements InferenceProvider {
 			this._jitFirst = null;
 			this._jitModel = req.model;
 		}
-		if (this.hasReusable(req.model)) {
+		if (this._loader.hasReusable(req.model)) {
 			return this.dispatchChat(req);
 		}
 		if (!this._jitFirst) {
 			this._jitFirst = this.dispatchChat(req).then((res) => {
-				if (!this._instances.some((inst) => this.instanceMatches(inst, req.model))) {
-					this._instances.push({
-						id: req.model,
-						key: req.model,
-						type: 'llm',
-						config: {},
-					});
-				}
+				this._loader.loadedByRequest(req.model);
 				return res;
 			}, (err:unknown) => {
 				this._jitFirst = null;
@@ -1658,233 +866,6 @@ export class HttpProvider implements InferenceProvider {
 		}
 		await this._jitFirst;
 		return this.dispatchChat(req);
-	}
-
-	private async ensureReady(model:string):Promise<void> {
-		const run = this._readyChain.then(() => this.ensureReadyLocked(model));
-		this._readyChain = run.then(() => undefined, () => undefined);
-		await run;
-	}
-
-	private async ensureReadyLocked(model:string):Promise<void> {
-		if (!this._probed) {
-			await this.probe();
-		}
-		if (!this._loadEndpoint) {
-			return;
-		}
-		if (this.hasReusable(model)) {
-			await this.keepOneInstance(model);
-			return;
-		}
-		await this.loadModel(model);
-	}
-
-	private hasReusable(model:string):boolean {
-		return this._instances.some((inst) => this.instanceMatches(inst, model) && loadConfigFits(inst.config, this.loadOf(model)));
-	}
-
-	private instanceMatches(inst:LoadedInstance, model:string):boolean {
-		return modelIDsMatch(inst.id, model) || modelIDsMatch(inst.key, model);
-	}
-
-	private async probe():Promise<void> {
-		this._probed = true;
-		try {
-			await this.refreshInstances();
-			this._loadEndpoint = true;
-		}
-		catch {
-			this._loadEndpoint = false;
-		}
-	}
-
-	private async refreshInstances():Promise<void> {
-		const res = await this._fetchImpl(joinURL(this.rootURL, 'api/v1/models'), {
-			method: 'GET',
-			headers: this.headers(),
-			signal: AbortSignal.timeout(Math.min(4000, this._timeoutMs)),
-		});
-		if (!res.ok) {
-			throw new Error(`inference models ${res.status}`);
-		}
-		const json:unknown = await res.json();
-		if (!isRecord(json) || !Array.isArray(json.models)) {
-			throw new Error('inference models: no catalog');
-		}
-		this._instances = readLoadedInstances(json.models);
-		this.rememberReasoning(json.models);
-	}
-
-	private async loadModel(model:string):Promise<void> {
-		try {
-			await this.refreshInstances();
-		}
-		catch {
-			// keep whatever probe already saw
-		}
-		if (this.hasReusable(model)) {
-			await this.keepOneInstance(model);
-			return;
-		}
-		const same = this._instances.filter((inst) => this.instanceMatches(inst, model));
-		if (same.length > 0 && this.isBusy(model)) {
-			return;
-		}
-		const stale = same.filter((inst) => !loadConfigFits(inst.config, this.loadOf(model)));
-		for (const inst of stale) {
-			await this.unloadInstance(inst.id);
-		}
-		await this.freeVram(model);
-		const body = this.loadBody(model);
-		let lastErr:unknown;
-		for (let round = 0; round < 4; round++) {
-			try {
-				await this.postLoad(model, body);
-				await this.keepOneInstance(model);
-				return;
-			}
-			catch (err) {
-				lastErr = err;
-				const msg = err instanceof Error ? err.message : String(err);
-				if (round === 0 && body.parallel !== undefined && / 400:/.test(msg)) {
-					delete body.parallel;
-					continue;
-				}
-				if (/ 404:| 405:/.test(msg)) {
-					this._loadEndpoint = false;
-					return;
-				}
-				try {
-					await this.refreshInstances();
-				}
-				catch {
-					// still use the in-memory list
-				}
-				if (await this.freeVram(model)) {
-					continue;
-				}
-				throw err;
-			}
-		}
-		throw lastErr instanceof Error ? lastErr : new Error(String(lastErr));
-	}
-
-	private loadBody(model:string):Record<string, unknown> {
-		const load = this.loadOf(model);
-		const body:Record<string, unknown> = {
-			model,
-			flash_attention: this._loadOpts.flashAttention !== false,
-			offload_kv_cache_to_gpu: this._loadOpts.offloadKvCacheToGpu !== false,
-			eval_batch_size: this._loadOpts.evalBatchSize ?? 512,
-			echo_load_config: true,
-		};
-		if (load.parallel !== undefined) {
-			body.parallel = load.parallel;
-		}
-		if (load.contextLength !== undefined) {
-			body.context_length = load.contextLength;
-		}
-		return body;
-	}
-
-	private async postLoad(model:string, body:Record<string, unknown>):Promise<void> {
-		const json = await this.post(joinURL(this.rootURL, 'api/v1/models/load'), body);
-		const id = typeof json['instance_id'] === 'string' ? json['instance_id'] : model;
-		const config = isRecord(json['load_config']) ? json['load_config'] : {};
-		if (typeof config['parallel'] === 'number' && typeof body.parallel === 'number' && config['parallel'] < body.parallel) {
-			this._maxParallelByModel.set(model, config['parallel']);
-		}
-		this.forgetInstance(id);
-		this._instances.push({
-			id,
-			key: model,
-			type: typeof json.type === 'string' ? json.type : 'llm',
-			config,
-		});
-	}
-
-	/** Unload what is in the way of `keep`: anything loaded that is neither it nor another configured model. */
-	private async freeVram(keep:string):Promise<boolean> {
-		const configured = [...this._models.keys()];
-		const victims = this._instances.filter((inst) => !this.instanceMatches(inst, keep)
-			&& !configured.some((model) => this.instanceMatches(inst, model))
-			&& !this.isBusy(inst.key) && !this.isBusy(inst.id));
-		if (victims.length === 0) {
-			return false;
-		}
-		for (const inst of victims) {
-			await this.unloadInstance(inst.id);
-		}
-		return true;
-	}
-
-	private async keepOneInstance(model:string):Promise<void> {
-		const remembered = this._instances.filter((inst) => this.instanceMatches(inst, model));
-		try {
-			await this.refreshInstances();
-		}
-		catch {
-			// keep remembered
-		}
-		const seen = new Set(this._instances.map((inst) => inst.id));
-		for (const inst of remembered) {
-			if (!seen.has(inst.id)) {
-				this._instances.push(inst);
-				seen.add(inst.id);
-			}
-		}
-		const same = this._instances.filter((inst) => this.instanceMatches(inst, model));
-		const want = this.loadOf(model);
-		const fitting = same.filter((inst) => loadConfigFits(inst.config, want));
-		const exact = want.contextLength === undefined ? undefined : fitting.find((inst) => instanceContextLength(inst.config) === want.contextLength);
-		const keep = exact ?? fitting[0];
-		if (!keep || this.isBusy(model)) {
-			return;
-		}
-		for (const extra of same) {
-			if (extra.id !== keep.id) {
-				await this.unloadInstance(extra.id);
-			}
-		}
-	}
-
-	private hold(model:string):void {
-		this._inFlight.set(model, (this._inFlight.get(model) ?? 0) + 1);
-	}
-
-	private release(model:string):void {
-		const left = (this._inFlight.get(model) ?? 1) - 1;
-		if (left <= 0) {
-			this._inFlight.delete(model);
-		}
-		else {
-			this._inFlight.set(model, left);
-		}
-	}
-
-	/** A chat or embed on `model` has passed `ensureReady` and not finished. */
-	private isBusy(model:string):boolean {
-		for (const [id, n] of this._inFlight) {
-			if (n > 0 && modelIDsMatch(id, model)) {
-				return true;
-			}
-		}
-		return false;
-	}
-
-	private async unloadInstance(instanceID:string):Promise<void> {
-		try {
-			await this.post(joinURL(this.rootURL, 'api/v1/models/unload'), { instance_id: instanceID });
-		}
-		catch {
-			// already gone
-		}
-		this.forgetInstance(instanceID);
-	}
-
-	private forgetInstance(instanceID:string):void {
-		this._instances = this._instances.filter((inst) => inst.id !== instanceID);
 	}
 
 	private headers():Record<string, string> {
@@ -1897,14 +878,10 @@ export class HttpProvider implements InferenceProvider {
 		return headers;
 	}
 
-	private async postChat(
-		url:string,
-		body:Record<string, unknown>,
-		completions:boolean,
-		req:ChatRequest,
-	):Promise<Got> {
+	private async postChat(wire:Wire, body:Record<string, unknown>, req:ChatRequest):Promise<Got> {
+		const url = joinURL(this.baseURL, wire.path);
 		let lastErr:Error | null = null;
-		const thinkingBudget = this.thinkingOn(req) ? this.settingsOf(req.model).thinkingBudget : undefined;
+		const thinkingBudget = this.thinkingBudget(req);
 		// Streamed logprobs come in pieces; a scored answer is one token anyway.
 		let stream = !req.topLogprobs;
 		for (let attempt = 0; attempt < 4; attempt++) {
@@ -1914,10 +891,7 @@ export class HttpProvider implements InferenceProvider {
 			if (attempt > 0) {
 				await sleep(350 * attempt);
 			}
-			const payload:Record<string, unknown> = { ...body, stream };
-			if (stream && completions) {
-				payload['stream_options'] = { include_usage: true };
-			}
+			const payload:Record<string, unknown> = { ...body, stream, ...stream ? wire.streamFields : {} };
 			req.onRequest?.({ body: payload, path: url });
 			const t0 = nowMs();
 			const res = await this._fetchImpl(url, {
@@ -1929,17 +903,7 @@ export class HttpProvider implements InferenceProvider {
 			});
 			if (!res.ok) {
 				const text = await res.text();
-				let parsed:unknown;
-				try {
-					parsed = text ? JSON.parse(text) : {};
-				}
-				catch {
-					parsed = {};
-				}
-				const err = isRecord(parsed) && isRecord(parsed.error) ? parsed.error : parsed;
-				const msg = isRecord(err) && typeof err.message === 'string'
-					? err.message
-					: text.slice(0, 240);
+				const msg = errorText(text);
 				lastErr = new Error(`inference ${url} ${res.status}: ${msg}`);
 				if (stream && (res.status === 400 || res.status === 415) && /stream/i.test(`${msg} ${text}`)) {
 					stream = false;
@@ -1948,13 +912,19 @@ export class HttpProvider implements InferenceProvider {
 				if (isContextOverflow(`${msg} ${text}`) && shrinkForOverflow(body) && attempt < 3) {
 					continue;
 				}
+				// Every turn names its effort, so a server or model that takes none says so: it is asked again without one.
+				if (res.status === 400 && /reasoning/i.test(msg) && ('reasoning' in body || 'reasoning_effort' in body)) {
+					delete body.reasoning;
+					delete body['reasoning_effort'];
+					continue;
+				}
 				if (shouldRetry(res.status, text) && attempt < 3) {
 					continue;
 				}
 				throw lastErr;
 			}
 			try {
-				return await readInferenceResponse(res, url, t0, thinkingBudget, req.onDelta);
+				return await readInferenceResponse(res, url, wire, t0, thinkingBudget, req.onDelta);
 			}
 			catch (err) {
 				lastErr = err instanceof Error ? err : new Error(String(err));
@@ -1987,28 +957,14 @@ export class HttpProvider implements InferenceProvider {
 				signal: AbortSignal.timeout(this._timeoutMs),
 			});
 			const text = await res.text();
-			let parsed:unknown;
-			try {
-				parsed = text ? JSON.parse(text) : {};
-			}
-			catch {
-				throw new Error(`inference ${url} returned non-JSON (${res.status}): ${text.slice(0, 240)}`);
-			}
 			if (!res.ok) {
-				const err = isRecord(parsed) && isRecord(parsed.error) ? parsed.error : parsed;
-				const msg = isRecord(err) && typeof err.message === 'string'
-					? err.message
-					: text.slice(0, 240);
-				lastErr = new Error(`inference ${url} ${res.status}: ${msg}`);
+				lastErr = new Error(`inference ${url} ${res.status}: ${errorText(text)}`);
 				if (!url.includes('/models/load') && shouldRetry(res.status, text) && attempt < 3) {
 					continue;
 				}
 				throw lastErr;
 			}
-			if (!isRecord(parsed)) {
-				throw new Error(`inference ${url} returned a non-object`);
-			}
-			return parsed;
+			return parseJsonRecord(text, url, res.status);
 		}
 		throw lastErr ?? new Error(`inference ${url} failed`);
 	}

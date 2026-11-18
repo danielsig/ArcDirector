@@ -18,43 +18,50 @@ import {
 } from './expr-types.js';
 import { bindCarry, bindRoster, asEntityVal } from './me.js';
 import { bindPrev, cloneEntity, freezeMe, type PrevSpec } from './prev.js';
+import type { Vec } from '../world/world-types.js';
 
 /** Below this share of its health, someone is badly hurt. */
 const BADLY_HURT = 0.35;
 
-export type HostKernels = {
+/**
+ * What an expression catalog is built from ({@link buildCatalog}): the host's view (`withKernels`: who and what a
+ * character sees, health, carried things), the geometry the director measures from `withWorld`, the host's own
+ * functions and stringifiers (`withFunctions`, `withStringifiers`), each feature's, and the director's cache and
+ * memory of the last think. Internal: hosts give its parts through those builder methods.
+ */
+export type CatalogInputs = {
 	me:ExprEntity;
 	others:ExprEntity[];
 	items:ExprEntity[];
-	cache:SampleCache;
 	bindings?:Record<string, ExprVal>;
 	/**
 	 * A name no binding gives, built the first time a watch reads it: the places and landmarks of a big world, which most
 	 * watches never name. Absent: no such name.
 	 */
 	lookup?:(name:string)=>ExprVal | undefined;
-	hostFns?:Record<string, NativeFn>;
-	distance?:(a:ExprEntity, b:ExprEntity)=>number | undefined;
 	nearRadius?:number;
+	inventory?:(who:ExprEntity)=>ExprEntity[];
+	hp?:(who:ExprEntity)=>{ hp:number; maxHP:number } | undefined;
+	isOpen?:(who:ExprEntity)=>boolean | undefined;
+	/** Whether `who` may `verb` now, its cooldown over; undefined (ready) for a verb with none. A `choose` leaves out a choice whose first verb is not ready. */
+	isReady?:(who:ExprEntity, verb:string)=>boolean | undefined;
+	cache:SampleCache;
+	/** Functions of the host's own (`withFunctions`) and of features (`feeling(u)`), over the built-in ones. */
+	functions?:Record<string, NativeFn>;
+	distance?:(a:ExprEntity, b:ExprEntity)=>number | undefined;
 	/** Length of the route a character would take; undefined = no way there. */
 	pathDistance?:(a:ExprEntity, b:ExprEntity)=>number | undefined;
 	canSee?:(a:ExprEntity, b:ExprEntity)=>boolean;
 	facing?:(a:ExprEntity, b:ExprEntity)=>number;
 	/** Signed left/right of a's facing toward b (−1 left … +1 right). */
 	side?:(a:ExprEntity, b:ExprEntity)=>number;
-	isFacing?:(a:ExprEntity, b:ExprEntity)=>boolean;
-	inventory?:(who:ExprEntity)=>ExprEntity[];
-	hp?:(who:ExprEntity)=>{ hp:number; maxHP:number } | undefined;
-	isOpen?:(who:ExprEntity)=>boolean | undefined;
-	/** Whether `who` may `verb` now, its cooldown over; undefined (ready) for a verb with none. A `choose` leaves out a choice whose first verb is not ready. */
-	isReady?:(who:ExprEntity, verb:string)=>boolean | undefined;
-	/** Director fills from unabsorbed `HeardSpeech`. Standalone `buildCatalog` may set it. */
+	/** Whether there is speech its mind has not taken in (`HeardSpeech`), as the director fills it; unset, no `hasHeard`. */
 	hasHeard?:boolean;
-	/** Last-think freeze. Director injects; standalone may omit (then `prev.me` is this catalog's `me`). */
+	/** Last-think freeze, as the director fills it; unset, `prev.me` is this catalog's `me`. */
 	prev?:PrevSpec;
 	stringifiers?:Stringifiers;
 	/** Position for manhattan / chebyshev / inSquare. */
-	point?:(who:ExprEntity)=>number[] | undefined;
+	point?:(who:ExprEntity)=>Vec | undefined;
 	/** Override watch LIST_CAP (a collective's `who` uses its roster size). */
 	listCap?:number;
 	/** The mind's watches by name, read as values where an expression names one (`Catalog.watches`). */
@@ -94,76 +101,76 @@ function anyPair(args:ExprVal[], pred:(a:ExprEntity, b:ExprEntity)=>boolean):boo
 	return pairsOf(args).some(([a, b]) => pred(a, b));
 }
 
-function distOf(host:HostKernels, a:ExprEntity, b:ExprEntity):number | undefined {
-	if (!host.distance) {
+function distOf(inputs:CatalogInputs, a:ExprEntity, b:ExprEntity):number | undefined {
+	if (!inputs.distance) {
 		return undefined;
 	}
-	const d = host.distance(a, b);
+	const d = inputs.distance(a, b);
 	if (d === undefined || !Number.isFinite(d)) {
 		return undefined;
 	}
 	return d;
 }
 
-function nearAny(host:HostKernels, a:ExprVal | undefined, b:ExprVal | undefined, r:number):boolean {
+function nearAny(inputs:CatalogInputs, a:ExprVal | undefined, b:ExprVal | undefined, r:number):boolean {
 	if (!a || !b) {
 		return false;
 	}
 	if (a.kind === 'list') {
-		return a.value.some((row) => nearAny(host, row, b, r));
+		return a.value.some((row) => nearAny(inputs, row, b, r));
 	}
 	if (b.kind === 'list') {
-		return b.value.some((row) => nearAny(host, a, row, r));
+		return b.value.some((row) => nearAny(inputs, a, row, r));
 	}
 	if (a.kind !== 'entity' || b.kind !== 'entity') {
 		return false;
 	}
-	const d = distOf(host, a.value, b.value);
+	const d = distOf(inputs, a.value, b.value);
 	return d !== undefined && d <= r;
 }
 
-function pathOf(host:HostKernels, a:ExprEntity, b:ExprEntity):number | undefined {
-	const d = host.pathDistance?.(a, b);
+function pathOf(inputs:CatalogInputs, a:ExprEntity, b:ExprEntity):number | undefined {
+	const d = inputs.pathDistance?.(a, b);
 	if (d === undefined || !Number.isFinite(d)) {
 		return undefined;
 	}
-	host.cache.rememberPath(a.id, b.id, d);
+	inputs.cache.rememberPath(a.id, b.id, d);
 	return d;
 }
 
-export function buildCatalog(host:HostKernels):Catalog {
+export function buildCatalog(inputs:CatalogInputs):Catalog {
 	const names = new Names();
 	const fns = new Map<string, NativeFn>(Object.entries(builtins));
-	bindRoster(names, host);
-	if (host.hasHeard !== undefined) {
-		names.set('hasHeard', { kind: 'bool', value: host.hasHeard });
+	bindRoster(names, inputs);
+	if (inputs.hasHeard !== undefined) {
+		names.set('hasHeard', { kind: 'bool', value: inputs.hasHeard });
 	}
-	for (const [k, v] of Object.entries(host.bindings ?? {})) {
+	for (const [k, v] of Object.entries(inputs.bindings ?? {})) {
 		if (!names.bound(k)) {
 			names.set(k, v);
 		}
 	}
 
-	if (host.inventory) {
-		const pack = host.inventory;
-		const prevMe = host.prev?.me ?? freezeMe(host);
-		bindCarry({ me: host.me, inventory: pack }, prevMe, names, fns);
+	if (inputs.inventory) {
+		const pack = inputs.inventory;
+		const prevMe = inputs.prev?.me ?? freezeMe(inputs);
+		bindCarry({ me: inputs.me, inventory: pack }, prevMe, names, fns);
 		bindPrev(names, {
-			secondsAgo: host.prev?.secondsAgo,
+			secondsAgo: inputs.prev?.secondsAgo,
 			me: prevMe,
-			verbs: host.prev?.verbs ?? [],
+			verbs: inputs.prev?.verbs ?? [],
 		});
 	}
 	else {
 		bindPrev(names, {
-			secondsAgo: host.prev?.secondsAgo,
-			me: host.prev?.me ?? cloneEntity(host.me),
-			verbs: host.prev?.verbs ?? [],
+			secondsAgo: inputs.prev?.secondsAgo,
+			me: inputs.prev?.me ?? cloneEntity(inputs.me),
+			verbs: inputs.prev?.verbs ?? [],
 		});
 	}
 
-	if (host.hp) {
-		const read = host.hp;
+	if (inputs.hp) {
+		const read = inputs.hp;
 		const attach = (who:ExprEntity):void => {
 			const v = read(who);
 			if (!v) {
@@ -174,17 +181,17 @@ export function buildCatalog(host:HostKernels):Catalog {
 				hp: { kind: 'number', value: v.hp },
 				maxHP: { kind: 'number', value: v.maxHP },
 			};
-			host.cache.rememberHP(who.id, v.hp);
+			inputs.cache.rememberHP(who.id, v.hp);
 		};
-		attach(host.me);
+		attach(inputs.me);
 		// Whoever a binding holds too, unless it says its own: a collective's `units`, so `units.minBy(u => u.hp)` reads their health.
-		const bound = Object.values(host.bindings ?? {}).flatMap(entitiesOf).filter((o) => !o.fields?.hp);
-		for (const o of [...host.others, ...bound]) {
+		const bound = Object.values(inputs.bindings ?? {}).flatMap(entitiesOf).filter((o) => !o.fields?.hp);
+		for (const o of [...inputs.others, ...bound]) {
 			attach(o);
 		}
-		names.set('me', asEntityVal(host.me));
+		names.set('me', asEntityVal(inputs.me));
 		// Of whoever the arg names (a bare name or a list: any of them), else of `me`.
-		const whoOf = (args:ExprVal[]):ExprEntity[] => (args[0] ? entitiesOf(args[0]) : [host.me]);
+		const whoOf = (args:ExprVal[]):ExprEntity[] => (args[0] ? entitiesOf(args[0]) : [inputs.me]);
 		fns.set('isHurt', (args) => ({ kind: 'bool', value: whoOf(args).some((who) => {
 			const v = read(who) ?? hpFromFields(who);
 			return !!v && v.hp > 0 && v.hp < v.maxHP;
@@ -196,54 +203,52 @@ export function buildCatalog(host:HostKernels):Catalog {
 		// Each one's health is remembered, so none is checked against an old reading next time.
 		fns.set('isHPFalling', (args) => ({ kind: 'bool', value: whoOf(args).map((who) => {
 			const v = read(who);
-			const prev = v && host.cache.rememberHP(who.id, v.hp);
+			const prev = v && inputs.cache.rememberHP(who.id, v.hp);
 			return !!v && prev !== undefined && v.hp < prev - 0.0001;
 		}).some(Boolean) }));
 	}
 
-	bindChange(host, fns);
-	if (host.distance) {
-		bindDistance(host, fns);
+	bindChange(inputs, fns);
+	if (inputs.distance) {
+		bindDistance(inputs, fns);
 	}
-	if (host.point) {
-		bindGrid(host, fns);
+	if (inputs.point) {
+		bindGrid(inputs, fns);
 	}
-	if (host.pathDistance) {
-		bindPath(host, fns);
+	if (inputs.pathDistance) {
+		bindPath(inputs, fns);
 	}
-	if (host.canSee) {
-		bindSight(host, fns);
+	if (inputs.canSee) {
+		bindSight(inputs, fns);
 	}
-	if (host.facing) {
-		bindFacingNumber(host, fns);
+	if (inputs.facing) {
+		bindFacingNumber(inputs, fns);
 	}
-	else if (host.isFacing) {
-		bindFacingBool(host, fns);
+	if (inputs.isOpen) {
+		bindOpen(inputs, fns);
 	}
-	if (host.isOpen) {
-		bindOpen(host, fns);
-	}
-	if (host.isReady) {
-		bindReady(host, fns);
+	if (inputs.isReady) {
+		bindReady(inputs, fns);
 	}
 	bindBusy(fns);
-	for (const [k, fn] of Object.entries(host.hostFns ?? {})) {
+	for (const [k, fn] of Object.entries(inputs.functions ?? {})) {
 		fns.set(k, fn);
 	}
 
-	names.lookup = host.lookup;
+	names.lookup = inputs.lookup;
 	return {
 		names,
 		fns,
-		me: host.me,
-		cache: host.cache,
-		stringifiers: host.stringifiers,
-		listCap: host.listCap,
-		...host.watches ? { watches: host.watches } : {},
+		me: inputs.me,
+		cache: inputs.cache,
+		stringifiers: inputs.stringifiers,
+		point: inputs.point,
+		listCap: inputs.listCap,
+		...inputs.watches ? { watches: inputs.watches } : {},
 	};
 }
 
-function bindDistance(host:HostKernels, fns:Map<string, NativeFn>):void {
+function bindDistance(inputs:CatalogInputs, fns:Map<string, NativeFn>):void {
 	// Between lists, how far the closest two are: distance(me, others.filter(o => o.foe)) is the nearest foe's.
 	fns.set('distance', (args) => {
 		const pairs = pairsOf(args);
@@ -252,9 +257,9 @@ function bindDistance(host:HostKernels, fns:Map<string, NativeFn>):void {
 		}
 		let best:number | undefined;
 		for (const [a, b] of pairs) {
-			const d = distOf(host, a, b);
+			const d = distOf(inputs, a, b);
 			if (d !== undefined) {
-				host.cache.rememberDist(a.id, b.id, d);
+				inputs.cache.rememberDist(a.id, b.id, d);
 				best = Math.min(best ?? d, d);
 			}
 		}
@@ -269,35 +274,35 @@ function bindDistance(host:HostKernels, fns:Map<string, NativeFn>):void {
 	 */
 	const closedIn = (args:ExprVal[]):number | undefined => {
 		const pair = twoEnt(args);
-		const d = pair && distOf(host, pair[0], pair[1]);
+		const d = pair && distOf(inputs, pair[0], pair[1]);
 		if (!pair || d === undefined) {
 			return undefined;
 		}
-		const before = host.cache.rememberDist(pair[0].id, pair[1].id, d);
-		const at = host.point?.(pair[0]);
-		const there = host.point?.(pair[1]);
+		const before = inputs.cache.rememberDist(pair[0].id, pair[1].id, d);
+		const at = inputs.point?.(pair[0]);
+		const there = inputs.point?.(pair[1]);
 		if (!at || !there) {
 			return before === undefined ? undefined : before - d;
 		}
-		const was = host.cache.rememberPoint(pair[0].id, at);
+		const was = inputs.cache.rememberPoint(pair[0].id, at);
 		return was && Math.hypot(...was.map((v, i) => v - (there[i] ?? 0))) - d;
 	};
 	fns.set('isApproaching', (args) => ({ kind: 'bool', value: (closedIn(args) ?? 0) > DIST_EPS }));
 	fns.set('isDeparting', (args) => ({ kind: 'bool', value: (closedIn(args) ?? 0) < -DIST_EPS }));
-	fns.set('approaching', (args, ctx) => filterMotion(host, args, ctx.catalog.me, true, fns));
-	fns.set('departing', (args, ctx) => filterMotion(host, args, ctx.catalog.me, false, fns));
-	if (host.nearRadius !== undefined) {
-		const r0 = host.nearRadius;
+	fns.set('approaching', (args, ctx) => filterMotion(inputs, args, ctx.catalog.me, true, fns));
+	fns.set('departing', (args, ctx) => filterMotion(inputs, args, ctx.catalog.me, false, fns));
+	if (inputs.nearRadius !== undefined) {
+		const r0 = inputs.nearRadius;
 		fns.set('isNear', (args) => {
 			const r = asNum(args[2]) ?? r0;
-			return { kind: 'bool', value: nearAny(host, args[0], args[1], r) };
+			return { kind: 'bool', value: nearAny(inputs, args[0], args[1], r) };
 		});
-		fns.set('nearby', (args, ctx) => nearbyList(host, args, ctx.catalog.me, r0));
+		fns.set('nearby', (args, ctx) => nearbyList(inputs, args, ctx.catalog.me, r0));
 	}
 }
 
 function filterMotion(
-	host:HostKernels,
+	inputs:CatalogInputs,
 	args:ExprVal[],
 	me:ExprEntity,
 	closing:boolean,
@@ -314,15 +319,15 @@ function filterMotion(
 		if (row.kind !== 'entity') {
 			continue;
 		}
-		const hit = pred([row, { kind: 'entity', value: target }], { catalog: { names: new Map(), fns, me, cache: host.cache }, env: new Map(), nodes: 0 });
+		const hit = pred([row, { kind: 'entity', value: target }], { catalog: { names: new Map(), fns, me, cache: inputs.cache }, env: new Map(), nodes: 0 });
 		if (hit.kind === 'bool' && hit.value) {
 			out.push(row);
 		}
 	}
-	return capList(out, host.listCap ?? LIST_CAP);
+	return capList(out, inputs.listCap ?? LIST_CAP);
 }
 
-function nearbyList(host:HostKernels, args:ExprVal[], me:ExprEntity, defaultR:number):ExprVal {
+function nearbyList(inputs:CatalogInputs, args:ExprVal[], me:ExprEntity, defaultR:number):ExprVal {
 	const rows = args[0]?.kind === 'list' ? args[0].value : undefined;
 	if (!rows) {
 		throw new ExprError('nearby needs a list');
@@ -348,35 +353,35 @@ function nearbyList(host:HostKernels, args:ExprVal[], me:ExprEntity, defaultR:nu
 		if (row.kind !== 'entity') {
 			continue;
 		}
-		const d = distOf(host, target, row.value);
+		const d = distOf(inputs, target, row.value);
 		if (d === undefined) {
 			continue;
 		}
-		host.cache.rememberDist(target.id, row.value.id, d);
-		if (d <= r && inSight(host, target, row.value)) {
+		inputs.cache.rememberDist(target.id, row.value.id, d);
+		if (d <= r && inSight(inputs, target, row.value)) {
 			out.push(row);
 		}
 	}
-	return capList(out, host.listCap ?? LIST_CAP);
+	return capList(out, inputs.listCap ?? LIST_CAP);
 }
 
 /** No `canSee` means the host has no sight test, so distance is the whole check. */
-function inSight(host:HostKernels, from:ExprEntity, to:ExprEntity):boolean {
-	return host.canSee ? host.canSee(from, to) : true;
+function inSight(inputs:CatalogInputs, from:ExprEntity, to:ExprEntity):boolean {
+	return inputs.canSee ? inputs.canSee(from, to) : true;
 }
 
-function bindPath(host:HostKernels, fns:Map<string, NativeFn>):void {
+function bindPath(inputs:CatalogInputs, fns:Map<string, NativeFn>):void {
 	fns.set('isReachable', (args) => {
 		const pair = twoEnt(args);
 		if (!pair) {
 			return { kind: 'bool', value: false };
 		}
-		return { kind: 'bool', value: pathOf(host, pair[0], pair[1]) !== undefined };
+		return { kind: 'bool', value: pathOf(inputs, pair[0], pair[1]) !== undefined };
 	});
-	fns.set('reachable', (args, ctx) => reachableList(host, args, ctx.catalog.me));
+	fns.set('reachable', (args, ctx) => reachableList(inputs, args, ctx.catalog.me));
 }
 
-function reachableList(host:HostKernels, args:ExprVal[], me:ExprEntity):ExprVal {
+function reachableList(inputs:CatalogInputs, args:ExprVal[], me:ExprEntity):ExprVal {
 	const rows = args[0]?.kind === 'list' ? args[0].value : undefined;
 	if (!rows) {
 		throw new ExprError('reachable needs a list');
@@ -387,25 +392,25 @@ function reachableList(host:HostKernels, args:ExprVal[], me:ExprEntity):ExprVal 
 		if (row.kind !== 'entity') {
 			continue;
 		}
-		const d = pathOf(host, from, row.value);
+		const d = pathOf(inputs, from, row.value);
 		if (d === undefined) {
 			continue;
 		}
 		ranked.push({ row, d });
 	}
 	ranked.sort((a, b) => a.d - b.d);
-	return { kind: 'list', value: ranked.slice(0, host.listCap ?? LIST_CAP).map((r) => r.row) };
+	return { kind: 'list', value: ranked.slice(0, inputs.listCap ?? LIST_CAP).map((r) => r.row) };
 }
 
-function bindSight(host:HostKernels, fns:Map<string, NativeFn>):void {
-	const see = host.canSee!;
+function bindSight(inputs:CatalogInputs, fns:Map<string, NativeFn>):void {
+	const see = inputs.canSee!;
 	fns.set('hasSightline', (args) => {
 		const pair = twoEnt(args);
 		if (!pair) {
 			return { kind: 'bool', value: false };
 		}
 		const v = !!see(pair[0], pair[1]);
-		host.cache.rememberSeen(pair[0].id, pair[1].id, v);
+		inputs.cache.rememberSeen(pair[0].id, pair[1].id, v);
 		return { kind: 'bool', value: v };
 	});
 	fns.set('hasJustSeen', (args) => {
@@ -414,7 +419,7 @@ function bindSight(host:HostKernels, fns:Map<string, NativeFn>):void {
 			return { kind: 'bool', value: false };
 		}
 		const v = !!see(pair[0], pair[1]);
-		const prev = host.cache.rememberSeen(pair[0].id, pair[1].id, v);
+		const prev = inputs.cache.rememberSeen(pair[0].id, pair[1].id, v);
 		return { kind: 'bool', value: v && prev === false };
 	});
 	fns.set('hasLostSight', (args) => {
@@ -423,27 +428,27 @@ function bindSight(host:HostKernels, fns:Map<string, NativeFn>):void {
 			return { kind: 'bool', value: false };
 		}
 		const v = !!see(pair[0], pair[1]);
-		const prev = host.cache.rememberSeen(pair[0].id, pair[1].id, v);
+		const prev = inputs.cache.rememberSeen(pair[0].id, pair[1].id, v);
 		return { kind: 'bool', value: !v && prev === true };
 	});
 }
 
-function bindFacingNumber(host:HostKernels, fns:Map<string, NativeFn>):void {
-	const read = host.facing!;
+function bindFacingNumber(inputs:CatalogInputs, fns:Map<string, NativeFn>):void {
+	const read = inputs.facing!;
 	fns.set('facing', (args) => {
 		const pair = twoEnt(args);
 		if (!pair) {
 			throw new ExprError('facing needs two people');
 		}
 		const v = read(pair[0], pair[1]);
-		host.cache.rememberFacing(pair[0].id, pair[1].id, v);
+		inputs.cache.rememberFacing(pair[0].id, pair[1].id, v);
 		return { kind: 'number', value: v };
 	});
 	fns.set('isFacing', (args) => ({
 		kind: 'bool',
 		value: anyPair(args, (a, b) => {
 			const v = read(a, b);
-			host.cache.rememberFacing(a.id, b.id, v);
+			inputs.cache.rememberFacing(a.id, b.id, v);
 			return v > FACING_COS;
 		}),
 	}));
@@ -451,8 +456,8 @@ function bindFacingNumber(host:HostKernels, fns:Map<string, NativeFn>):void {
 		kind: 'bool',
 		value: anyPair(args, (a, b) => read(a, b) < 0),
 	}));
-	if (host.side) {
-		const sideOf = host.side;
+	if (inputs.side) {
+		const sideOf = inputs.side;
 		fns.set('isLeft', (args) => ({
 			kind: 'bool',
 			value: anyPair(args, (a, b) => {
@@ -475,43 +480,14 @@ function bindFacingNumber(host:HostKernels, fns:Map<string, NativeFn>):void {
 		}
 		const v = read(pair[0], pair[1]);
 		const now = v > FACING_COS;
-		const prev = host.cache.rememberFacing(pair[0].id, pair[1].id, v);
+		const prev = inputs.cache.rememberFacing(pair[0].id, pair[1].id, v);
 		const was = typeof prev === 'number' ? prev > FACING_COS : prev === true;
 		return { kind: 'bool', value: now && !was && prev !== undefined };
 	});
 }
 
-function bindFacingBool(host:HostKernels, fns:Map<string, NativeFn>):void {
-	const read = host.isFacing!;
-	fns.set('isFacing', (args) => {
-		const pair = twoEnt(args);
-		if (!pair) {
-			return { kind: 'bool', value: false };
-		}
-		const v = !!read(pair[0], pair[1]);
-		host.cache.rememberFacing(pair[0].id, pair[1].id, v);
-		return { kind: 'bool', value: v };
-	});
-	fns.set('isBehind', (args) => {
-		const pair = twoEnt(args);
-		if (!pair) {
-			return { kind: 'bool', value: false };
-		}
-		return { kind: 'bool', value: !read(pair[0], pair[1]) };
-	});
-	fns.set('wasJustFacing', (args) => {
-		const pair = twoEnt(args);
-		if (!pair) {
-			return { kind: 'bool', value: false };
-		}
-		const v = !!read(pair[0], pair[1]);
-		const prev = host.cache.rememberFacing(pair[0].id, pair[1].id, v);
-		return { kind: 'bool', value: v && prev === false };
-	});
-}
-
-function bindGrid(host:HostKernels, fns:Map<string, NativeFn>):void {
-	const atOf = host.point!;
+function bindGrid(inputs:CatalogInputs, fns:Map<string, NativeFn>):void {
+	const atOf = inputs.point!;
 	/** Per-axis gaps between two entities, or undefined when either has no position. */
 	const gaps = (args:ExprVal[]):number[] | undefined => {
 		const pair = twoEnt(args);
@@ -538,7 +514,7 @@ function bindGrid(host:HostKernels, fns:Map<string, NativeFn>):void {
 		if (!g) {
 			return { kind: 'bool', value: false };
 		}
-		const r = asNum(args[2]) ?? host.nearRadius ?? 0;
+		const r = asNum(args[2]) ?? inputs.nearRadius ?? 0;
 		return { kind: 'bool', value: Math.max(0, ...g) <= r };
 	});
 }
@@ -547,11 +523,11 @@ function bindGrid(host:HostKernels, fns:Map<string, NativeFn>):void {
  * `hasRisen("name", n)` and `hasFallen("name", n)`. A watch stays true as long as what it reads does, and a true watch
  * keeps a mind thinking: these are true once, at the sample where the number they name changed.
  */
-function bindChange(host:HostKernels, fns:Map<string, NativeFn>):void {
+function bindChange(inputs:CatalogInputs, fns:Map<string, NativeFn>):void {
 	const changed = (args:ExprVal[], by:(now:number, was:number)=>boolean):ExprVal => {
 		const key = args[0]?.kind === 'string' ? args[0].value : '';
 		const now = args[1]?.kind === 'number' ? args[1].value : Number.NaN;
-		const was = host.cache.rememberCount(key, now);
+		const was = inputs.cache.rememberCount(key, now);
 		return { kind: 'bool', value: was !== undefined && by(now, was) };
 	};
 	fns.set('hasRisen', (args) => changed(args, (now, was) => now > was));
@@ -586,8 +562,8 @@ function bindBusy(fns:Map<string, NativeFn>):void {
 	});
 }
 
-function bindOpen(host:HostKernels, fns:Map<string, NativeFn>):void {
-	const read = host.isOpen!;
+function bindOpen(inputs:CatalogInputs, fns:Map<string, NativeFn>):void {
+	const read = inputs.isOpen!;
 	const whoOf = (args:ExprVal[]):ExprEntity | undefined => {
 		if (args[0]?.kind === 'entity') {
 			return args[0].value;
@@ -603,7 +579,7 @@ function bindOpen(host:HostKernels, fns:Map<string, NativeFn>):void {
 			return { kind: 'bool', value: false };
 		}
 		const v = !!read(who);
-		host.cache.rememberOpen(who.id, v);
+		inputs.cache.rememberOpen(who.id, v);
 		return { kind: 'bool', value: v };
 	});
 	fns.set('hasJustOpened', (args) => {
@@ -612,16 +588,16 @@ function bindOpen(host:HostKernels, fns:Map<string, NativeFn>):void {
 			return { kind: 'bool', value: false };
 		}
 		const v = !!read(who);
-		const prev = host.cache.rememberOpen(who.id, v);
+		const prev = inputs.cache.rememberOpen(who.id, v);
 		return { kind: 'bool', value: v && prev === false };
 	});
 }
 
 /** `isReady(me, "block")`, or `isReady("block")` for `me`: the verb's cooldown is over. */
-function bindReady(host:HostKernels, fns:Map<string, NativeFn>):void {
-	const read = host.isReady!;
+function bindReady(inputs:CatalogInputs, fns:Map<string, NativeFn>):void {
+	const read = inputs.isReady!;
 	fns.set('isReady', (args) => {
-		const who = args[0]?.kind === 'entity' ? args[0].value : host.me;
+		const who = args[0]?.kind === 'entity' ? args[0].value : inputs.me;
 		const verb = args.at(-1);
 		if (verb?.kind !== 'string') {
 			throw new ExprError('isReady needs a verb, as isReady(me, "block")');

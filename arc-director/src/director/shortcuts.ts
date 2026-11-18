@@ -1,3 +1,4 @@
+import { withFeelings, FeelingFeature } from '../character/FeelingFeature.js';
 import { withGoals, GoalsFeature } from '../character/GoalsFeature.js';
 import { withHandover, HandoverFeature } from '../collective/HandoverFeature.js';
 import { withMOBA, withRPG, GenreFeature } from '../genre/genre.js';
@@ -13,6 +14,7 @@ import { withHearing, HearingFeature } from '../perception/HearingFeature.js';
 import { withSight, SightFeature } from '../perception/SightFeature.js';
 import { withRTS, RTSFeature } from '../rts/RTSFeature.js';
 import { withSimpleThinkQueue, withPriorityThinkQueue } from '../think/queue.js';
+import { withStealing, StealingFeature } from '../world/StealingFeature.js';
 import { withWorldVerbs, WorldVerbsFeature } from '../world/WorldVerbsFeature.js';
 import { ArcDirector } from './ArcDirector.js';
 import { featureGetter } from './Feature.js';
@@ -30,6 +32,8 @@ Object.assign(ArcDirector.prototype, {
 	getHandover: featureGetter(HandoverFeature),
 	withWorldVerbs,
 	getWorldVerbs: featureGetter(WorldVerbsFeature),
+	withStealing,
+	getStealing: featureGetter(StealingFeature),
 	addRegions,
 	getRegions: featureGetter(RegionsFeature),
 	withSight,
@@ -40,6 +44,8 @@ Object.assign(ArcDirector.prototype, {
 	getHearing: featureGetter(HearingFeature),
 	withTalk,
 	getTalk: featureGetter(TalkFeature),
+	withFeelings,
+	getFeelings: featureGetter(FeelingFeature),
 	withMap,
 	getMap: featureGetter(MapFeature),
 	withKnowledge,

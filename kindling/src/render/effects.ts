@@ -241,7 +241,7 @@ export type StarburstLook = { spikes:number; length:[number, number]; out:number
 
 /** A starburst at `at` (world): sharp spikes of uneven length, rimmed in ink, flat to the eye. */
 export function starburst(scene:THREE.Object3D, at:THREE.Vector3, look:StarburstLook):void {
-	const lengths = Array.from({ length: look.spikes }, (_, i) => THREE.MathUtils.lerp(look.length[0], look.length[1], i % 3 === 0 ? 0.7 + 0.3 * Math.random() : 0.4 * Math.random()));
+	const lengths = Array.from({ length: look.spikes }, (element, i) => THREE.MathUtils.lerp(look.length[0], look.length[1], i % 3 === 0 ? 0.7 + 0.3 * Math.random() : 0.4 * Math.random()));
 	const star = new THREE.Group();
 	const ink = new THREE.MeshBasicMaterial({ color: look.ink, transparent: true, depthWrite: false, side: THREE.DoubleSide, toneMapped: false });
 	const fill = new THREE.MeshBasicMaterial({ color: look.color, transparent: true, depthWrite: false, side: THREE.DoubleSide, toneMapped: false });
@@ -251,7 +251,7 @@ export function starburst(scene:THREE.Object3D, at:THREE.Vector3, look:Starburst
 	star.add(back, front);
 	star.position.copy(at);
 	// Always flat to the camera.
-	back.onBeforeRender = (_renderer, _scene, camera):void => {
+	back.onBeforeRender = (renderer, scene, camera):void => {
 		star.quaternion.copy(camera.quaternion);
 		star.updateMatrixWorld(true);
 	};

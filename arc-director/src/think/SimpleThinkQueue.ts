@@ -1,5 +1,3 @@
-import type { Arc } from '../arc/arc-types.js';
-import { verbThinkScore, arcScore } from './think-score.js';
 import { MindScheduler, type MindQueueOpts, type ThinkRow } from './scheduler.js';
 
 export type SimpleThinkQueueOpts = MindQueueOpts;
@@ -36,13 +34,5 @@ export class SimpleThinkQueue extends MindScheduler {
 			const sb = this.minds.get(b.mindID)?.seq ?? 0;
 			return sa - sb;
 		});
-	}
-
-	protected override verbScore(verb:string, ok:boolean):number {
-		return verbThinkScore(verb, ok);
-	}
-
-	protected override arcScore(arc:Arc, ok:boolean):number {
-		return arcScore(arc, ok);
 	}
 }

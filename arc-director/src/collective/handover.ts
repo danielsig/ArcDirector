@@ -89,31 +89,17 @@ function personaBlock({ id, persona }:Owner):string {
 	return [`## ${id}${who ? ` (${who})` : ''}`, ...(memories.length > 0 ? memories : ['(no memories)'])].join('\n');
 }
 
-/** Characters the personas call by different names, so an added or rewritten memory uses its reader's own. */
-function nameLines(owners:Owner[]):string[] {
-	const ids = new Set(owners.flatMap((o) => o.persona.names.ids()));
-	const lines:string[] = [];
-	for (const id of ids) {
-		const names = owners.map((o) => `${o.id} calls them ${o.persona.names.peek(id) ?? id}`);
-		if (new Set(owners.map((o) => o.persona.names.peek(id) ?? id)).size > 1) {
-			lines.push(`- ${id}: ${names.join('; ')}.`);
-		}
-	}
-	return lines;
-}
-
 function handoverPrompt<TCtx>(journeys:Journey<TCtx>[], owners:Owner[]):string {
-	const names = nameLines(owners);
 	return [
 		`Moves:\n${journeys.map(moveLine).join('\n')}`,
 		`Memories (pinned ones are not shown and stay):\n${owners.map(personaBlock).join('\n\n')}`,
-		...(names.length > 0 ? [`Names that differ:\n${names.join('\n')}`] : []),
 		[
 			'For each of them: remove memories that are wrong now or no longer useful, rewrite ones that need new wording,',
 			'and add a few short memories the moves teach them: who left or joined, and what a character who left still needs to know.',
-			'Write each memory as plain text in its owner\'s voice, calling others by the names it uses.',
-			`Reply as JSON keyed by id: {"${owners[0]?.id ?? 'Id'}": {"remove": ["mem_1"], "rewrite": [{"id": "mem_2", "text": "..."}], "add": ["..."]}}. Leave out anyone with nothing to change.`,
-		].join(' '),
+			'Write each memory as plain text in its owner\'s voice, calling others by their ids, as the memories do.',
+			'Leave out anyone with nothing to change. Reply as JSON keyed by id:',
+			// Indented, as every nested example a model sees.
+		].join(' ') + `\n{\n\t"${owners[0]?.id ?? 'Id'}":{\n\t\t"remove":["mem_1"],\n\t\t"rewrite":[\n\t\t\t{"id":"mem_2","text":"..."}\n\t\t],\n\t\t"add":["..."]\n\t}\n}`,
 	].join('\n\n');
 }
 

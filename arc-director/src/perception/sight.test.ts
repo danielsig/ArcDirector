@@ -1,12 +1,17 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { doingOf } from '../arc/stock-verbs.js';
-import { formatSight, formatSightClauses, joinSightClauses, orderSightClauses } from './sight.js';
+import { Axes } from '../world/axes.js';
+import { asMadeOut, formatSight, formatSightClauses, joinSightClauses, orderSightClauses, sightClarityAt, sightTier } from './sight.js';
 import { groundAndFigure } from './ground.js';
 import { builtinStringifiers, basicPluralize } from './stringifiers.js';
-import type { SeenObject, Sight, RelationshipStringifier } from './perception-types.js';
+import type { SeenObject, Sight, SightOpts, RelationshipStringifier } from './perception-types.js';
 import { formatInventory } from './carrying.js';
 import { sightSalience } from './salience.js';
+
+/** Sight as a 2D `[x, z]` game words it. */
+const planeSight = (sight:Sight, opts:SightOpts = {}):string => formatSight(sight, { axes: Axes.Plane, ...opts });
+const planeClauses = (sight:Sight, opts:SightOpts = {}):ReturnType<typeof formatSightClauses> => formatSightClauses(sight, { axes: Axes.Plane, ...opts });
 
 function seen(
 	id:string,
@@ -78,7 +83,7 @@ const HALL:Sight = {
 	],
 };
 
-const HALL_GOLDEN = 'A damp stone hall of the dungeon. boxes. Alchemist 3 paces in front of you. Herbalist 4 paces to your left. *ArmoryChest* 4 paces in front of you. *BrewHearth* 10 paces in front of you. *EastGate* 5 paces to your right. *LinaCot* 10 paces to your right. *NollCot* 10 paces to your right. *Pillar* 5 paces in front of you. *WestGate* 10 paces to your left. Bitterroot 15 paces in front of you. BrassKey 5 paces in front of you. Broom 10 paces to your left. Bucket 5 paces to your left. ChestKey 2 paces behind you. GoldCoin 4 paces to your right. Lantern 4 paces behind you. LeatherGlove 2 paces to your right. Rag 10 paces to your right. TorchA 5 paces to your left. TorchB 5 paces to your right. WorkGlove 2 paces to your left.';
+const HALL_GOLDEN = 'A damp stone hall of the dungeon. boxes. Alchemist 3 paces in front of you. Herbalist 4 paces to your left. *ArmoryChest* 4 paces ahead to your right. *BrewHearth* 10 paces ahead to your right. *EastGate* 5 paces to your right. *LinaCot* 10 paces to your right. *NollCot* 10 paces ahead to your right. *Pillar* 5 paces in front of you. *WestGate* 10 paces to your left. Bitterroot 15 paces in front of you. BrassKey 5 paces ahead to your right. Broom 10 paces to your left. Bucket 5 paces behind you to the left. ChestKey 2 paces behind you to the right. GoldCoin 4 paces behind you to the right. Lantern 4 paces behind you to the left. LeatherGlove 2 paces to your right. Rag 10 paces ahead to your right. TorchA 5 paces ahead to your left. TorchB 5 paces behind you to the right. WorkGlove 2 paces to your left.';
 
 const GLEN:Sight = {
 	self: { id: 'Forager', point: [7, 8], facing: [1, 0] },
@@ -157,37 +162,44 @@ describe('basicPluralize', () => {
 	});
 });
 
+describe('sightClarityAt', () => {
+	it('makes a thing out clearly to 20 paces, dimly to 35, vaguely to 50, then not at all', () => {
+		assert.deepEqual([0, 20, 21, 35, 36, 50, 51].map((d) => sightTier(sightClarityAt(d))), ['clear', 'clear', 'dim', 'dim', 'vague', 'vague', 'none']);
+		assert.equal(sightTier(sightClarityAt(30, { clear: 30, dim: 40, vague: 60 })), 'clear', 'a game sets its own');
+	});
+});
+
 describe('formatSight', () => {
 	it('hall: ids, bearings, glove leftovers, far Bitterroot without hedge', () => {
-		const paragraph = formatSight(HALL);
+		const paragraph = planeSight(HALL);
 		assert.equal(paragraph.includes('what seems to be'), false);
 		assert.equal(paragraph.includes('cluster of'), false);
 		assert.equal(paragraph, HALL_GOLDEN);
 	});
 
 	it('glen: people with bearing, CottageKey 1 pace, no agent crowd', () => {
-		const paragraph = formatSight(GLEN);
+		const paragraph = planeSight(GLEN);
 		assert.equal(paragraph.includes('cluster of'), false);
 		assert.equal(/\bagents\b/.test(paragraph), false);
 		assert.equal(
 			paragraph,
-			'A windy river glen. Angler 15 paces to your right. Assistant 5 paces in front of you. BridgeKeeper 10 paces in front of you. *Bridge* 10 paces to your right. *BridgeLever* 5 paces in front of you. *BridgeStone* 10 paces in front of you. *Cottage* 5 paces to your right. *CottageDoor* 3 paces to your right. *Falls* 15 paces in front of you. *OakA* 5 paces behind you. *OakB* 10 paces to your right. Basket 2 paces behind you. CottageKey 1 pace in front of you. FireMushroom 5 paces behind you. Net 15 paces to your right. Oar 15 paces in front of you. Pebble 2 paces to your left. ReedA 10 paces to your right. ReedB 10 paces to your right. SilverTrout 20 paces in front of you. Stick 3 paces in front of you.',
+			'A windy river glen. Angler 15 paces ahead to your right. Assistant 5 paces ahead to your right. BridgeKeeper 10 paces in front of you. *Bridge* 10 paces ahead to your right. *BridgeLever* 5 paces in front of you. *BridgeStone* 10 paces in front of you. *Cottage* 5 paces to your right. *CottageDoor* 3 paces to your right. *Falls* 15 paces in front of you. *OakA* 5 paces behind you to the left. *OakB* 10 paces behind you to the right. Basket 2 paces behind you to the right. CottageKey 1 pace in front of you. FireMushroom 5 paces behind you to the left. Net 15 paces ahead to your right. Oar 15 paces ahead to your right. Pebble 2 paces ahead to your left. ReedA 10 paces ahead to your right. ReedB 10 paces ahead to your right. SilverTrout 20 paces ahead to your right. Stick 3 paces ahead to your right.',
 		);
 	});
 
 	it('street: Potter next to PotterStall, distinct stalls, no agent crowd', () => {
-		const paragraph = formatSight(STREET);
+		const paragraph = planeSight(STREET);
 		assert.equal(paragraph.includes('Potter next to *PotterStall*'), true);
 		assert.equal(paragraph.includes('cluster of'), false);
 		assert.equal(/\bagents\b/.test(paragraph), false);
 		assert.equal(
 			paragraph,
-			'A busy street flea market. boxes. Cutler next to *CutlerStall*. Weaver next to *WeaverStall*. Baker next to *BakerStall*. Potter next to *PotterStall*. Brant 15 paces in front of you. Cass 15 paces in front of you. Pike 2 paces to your right. VisitorA 10 paces in front of you. VisitorB 10 paces in front of you. VisitorC 5 paces to your right. *EastGate* 20 paces in front of you. *WestGate* 4 paces behind you. Apple 5 paces in front of you. Bowl 15 paces in front of you. Candle 10 paces in front of you. Knife 15 paces in front of you. Loaf 5 paces in front of you. Scarf 5 paces in front of you.',
+			'A busy street flea market. boxes. Cutler next to *CutlerStall*. Weaver next to *WeaverStall*. Baker next to *BakerStall*. Potter next to *PotterStall*. Brant 15 paces in front of you. Cass 15 paces in front of you. Pike 2 paces to your right. VisitorA 10 paces in front of you. VisitorB 10 paces ahead to your right. VisitorC 5 paces ahead to your right. *EastGate* 20 paces in front of you. *WestGate* 4 paces behind you. Apple 5 paces in front of you. Bowl 15 paces in front of you. Candle 10 paces in front of you. Knife 15 paces in front of you. Loaf 5 paces ahead to your left. Scarf 5 paces ahead to your right.',
 		);
 	});
 
 	it('keeps health and notes on two characters named in one clause', () => {
-		const paragraph = formatSight({
+		const paragraph = planeSight({
 			self: { id: 'Cleric', point: [0, 0], facing: [0, -1] },
 			objects: [
 				seen('Rosa', [0, -5], { tags: ['character'], hp: 16, maxHP: 28, note: 'ally Knight, rooted' }),
@@ -199,17 +211,15 @@ describe('formatSight', () => {
 		assert.match(paragraph, /Calla \(40\/40 hp, foe Brute\)/);
 	});
 
-	it('keeps an always object past the sight radius, with its note', () => {
-		const paragraph = formatSight({
+	it('tells an always object far off, with its note', () => {
+		const paragraph = planeSight({
 			self: { id: 'Forager', point: [0, 0], facing: [0, -1] },
 			ambient: 'A windy river glen.',
 			objects: [
-				seen('Bridge', [0, -40], { tags: ['bridge', 'landmark'], movable: false, note: 'raised', always: true }),
-				seen('Lantern', [0, -40], { tags: ['item'] }),
+				seen('Bridge', [0, -60], { tags: ['bridge', 'landmark'], movable: false, note: 'raised', always: true }),
 			],
 		});
-		assert.match(paragraph, /\*Bridge\* \(raised\) 40 paces in front of you/);
-		assert.equal(paragraph.includes('Lantern'), false);
+		assert.match(paragraph, /\*Bridge\* \(raised\) 60 paces in front of you/);
 	});
 
 	it('sightLimit keeps people when trees would crowd the cap', () => {
@@ -218,7 +228,7 @@ describe('formatSight', () => {
 			trees.push(seen(`tree_oak_${i}`, [i * 1.1, -1], { tags: ['tree'] }));
 			trees.push(seen(`tree_pine_${i}`, [i * 1.1 + 0.4, -1.2], { tags: ['tree'] }));
 		}
-		const clauses = formatSightClauses({
+		const clauses = planeClauses({
 			self: { id: 'Dawn', point: [0, 0], facing: [0, -1] },
 			ambient: 'A ruined colonnade.',
 			objects: [
@@ -237,7 +247,7 @@ describe('formatSight', () => {
 	});
 
 	it('appends hp and a nearby-threat note on leftover people', () => {
-		const paragraph = formatSight({
+		const paragraph = planeSight({
 			self: { id: 'Dawn', point: [0, 0], facing: [0, -1] },
 			objects: [
 				seen('Healer', [0, -3], {
@@ -255,7 +265,7 @@ describe('formatSight', () => {
 	});
 
 	it('sticks a 1-char unit to the number and keeps bearing as a heading', () => {
-		const paragraph = formatSight({
+		const paragraph = planeSight({
 			self: { id: 'Assistant', point: [0, 0], facing: [0, -1] },
 			objects: [person('Player', [-4, 0])],
 		}, { unitName: 'm', relationships: [] });
@@ -263,7 +273,7 @@ describe('formatSight', () => {
 	});
 
 	it('keeps a space before a long unit', () => {
-		const paragraph = formatSight({
+		const paragraph = planeSight({
 			self: { id: 'Assistant', point: [0, 0], facing: [0, -1] },
 			objects: [seen('Table', [0, -4], { tags: ['landmark'], movable: false })],
 		}, { relationships: [] });
@@ -271,7 +281,7 @@ describe('formatSight', () => {
 	});
 
 	it('pluralizes foot and can count leftovers', () => {
-		const paragraph = formatSight({
+		const paragraph = planeSight({
 			self: { id: 'Assistant', point: [0, 0], facing: [0, -1] },
 			objects: [seen('tree', [0, 20], { tags: ['plant'], count: 3 })],
 		}, { unitName: 'foot', relationships: [] });
@@ -279,7 +289,7 @@ describe('formatSight', () => {
 	});
 
 	it('PascalCases an interactable leftover', () => {
-		const paragraph = formatSight({
+		const paragraph = planeSight({
 			self: { id: 'Watcher', point: [0, 0] },
 			ambient: 'damp stone hall',
 			objects: [
@@ -315,7 +325,7 @@ describe('formatSight', () => {
 				};
 			},
 		};
-		const paragraph = formatSight({
+		const paragraph = planeSight({
 			self: { id: 'Watcher', point: [0, 0] },
 			ambient: 'a dusty room',
 			objects: [
@@ -369,7 +379,7 @@ describe('formatSight', () => {
 			tags: ['box'],
 			movable: true,
 		}));
-		const paragraph = formatSight({
+		const paragraph = planeSight({
 			self: { id: 'Watcher', point: [0, 0] },
 			ambient: 'green grass as far as the eye can see',
 			objects: boxes,
@@ -383,7 +393,7 @@ describe('formatSight', () => {
 			tags: ['sheep'],
 			movable: true,
 		}));
-		const paragraph = formatSight({
+		const paragraph = planeSight({
 			self: { id: 'Watcher', point: [0, 0] },
 			ambient: 'green grass as far as the eye can see',
 			objects: herd,
@@ -398,7 +408,7 @@ describe('formatSight', () => {
 
 	it('names everyone on one ground in one clause, keeping the ground\'s note', () => {
 		const on = { attachedTo: 'Bridge', attachMode: 'on' as const };
-		const paragraph = formatSight({
+		const paragraph = planeSight({
 			self: { id: 'BridgeKeeper', point: [0, 0], facing: [0, -1] },
 			objects: [
 				seen('Bridge', [0, -5], { tags: ['bridge', 'landmark'], note: 'it is lowered', movable: false }),
@@ -490,5 +500,19 @@ describe('doingOf', () => {
 			['fire', 'revive', 'stab', 'shoot', 'see', 'die', 'open', 'hex', 'go_to', 'pick_up'].map(doingOf),
 			['firing', 'reviving', 'stabbing', 'shooting', 'seeing', 'dying', 'opening', 'hexing', 'going to', 'picking up'],
 		);
+	});
+});
+
+describe('how clearly a thing is made out', () => {
+	it('words each tier: clear whole, dim without health or doing, vague by its kind only, none left out', () => {
+		assert.deepEqual([1, 0.5, 0.3, 0.2, 0.1, 0.05, 0.01].map((c) => sightTier(c)), ['clear', 'clear', 'dim', 'dim', 'vague', 'vague', 'none']);
+		const mira = { ...person('Mira', [0, -3]), hp: 4, maxHP: 12, doing: 'buying bread' };
+		const look = (clarity:number):string => planeSight({ self: { id: 'Me', point: [0, 0], facing: [0, -1] }, objects: [asMadeOut({ ...mira, clarity }, true)] });
+		assert.match(look(1), /Mira \(4\/12 hp, buying bread\) 3 paces in front of you/);
+		assert.match(look(0.3), /Mira 3 paces in front of you/);
+		assert.match(look(0.1), /^Figure 3 paces in front of you/);
+		assert.doesNotMatch(look(0.1), /Mira/);
+		assert.match(planeSight({ self: { id: 'Me', point: [0, 0], facing: [0, -1] }, objects: [asMadeOut(seen('Crate', [0, -3], { clarity: 0.1 }), false)] }), /^Something 3 paces/);
+		assert.match(planeSight({ self: { id: 'Me', point: [0, 0], facing: [0, -1] }, objects: [asMadeOut(seen('RedTome', [0, -3], { clarity: 0.1, kind: 'Book' }), false)] }), /^Book 3 paces/, 'its kind, never its title');
 	});
 });

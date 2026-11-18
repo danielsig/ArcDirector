@@ -58,7 +58,7 @@ export function findBuildings(chunks:Iterable<DemoChunk>):Building[] {
 				}
 			}
 			// A side is stone when its own line is not all thin wall and stone runs the whole way along past it.
-			const span = (a:number, b:number):number[] => Array.from({ length: b - a + 1 }, (_, i) => a + i);
+			const span = (a:number, b:number):number[] => Array.from({ length: b - a + 1 }, (element, i) => a + i);
 			const stoneX = (lx:number, past:number):boolean => span(minLZ, maxLZ).some((lz) => !wallAt(lx, lz)) && span(minLZ, maxLZ).every((lz) => stoneAt(past, lz));
 			const stoneZ = (lz:number, past:number):boolean => span(minLX, maxLX).some((lx) => !wallAt(lx, lz)) && span(minLX, maxLX).every((lx) => stoneAt(lx, past));
 			// Each side: how far past its cells' middle the wall stands (a stone face is at their edge), and how far in from there the inner face is.

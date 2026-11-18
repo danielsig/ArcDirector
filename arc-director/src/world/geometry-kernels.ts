@@ -1,11 +1,13 @@
-import type { HostKernels } from '../expr/natives.js';
+import type { NamingText } from '../character/text-with-ids.js';
+import type { CatalogInputs } from '../expr/natives.js';
 import type { ExprEntity } from '../expr/expr-types.js';
-import { blockedReason, findRoute, hasRoutes, memoWorld, pointGoal } from './route.js';
-import { poseOf } from './lookup.js';
+import { blockedReason, findRoute, memoWorld, pointGoal } from './route.js';
+import { rightOf } from './axes.js';
+import { axesOf, edgeDistance, poseOf, reachTo } from './lookup.js';
 import type { HostWorld, Pose, Vec } from './world-types.js';
 import { cosToward, distance } from './vec.js';
 
-type GeometryKernels = Pick<HostKernels, 'point' | 'distance' | 'facing' | 'side' | 'pathDistance'>;
+type GeometryKernels = Pick<CatalogInputs, 'point' | 'distance' | 'facing' | 'side' | 'pathDistance'>;
 
 /**
  * Watch geometry from the host's poses. `poses` overrides where some ids are (`me` standing somewhere
@@ -23,12 +25,13 @@ export function geometryKernels(
 		return pa && pb ? [pa, pb] : undefined;
 	};
 	const character = characterID === undefined ? undefined : world.find(characterID);
-	const routes = character !== undefined && hasRoutes(world) ? world : undefined;
+	const routes = character !== undefined ? world.routes : undefined;
+	const axes = axesOf(world);
 	return {
 		point: (who) => whereIs(who)?.point,
 		distance: (a, b) => {
 			const p = pair(a, b);
-			return p ? distance(p[0].point, p[1].point) : undefined;
+			return p && edgeDistance(p[0], p[1]);
 		},
 		facing: (a, b) => {
 			const p = pair(a, b);
@@ -36,7 +39,8 @@ export function geometryKernels(
 		},
 		side: (a, b) => {
 			const p = pair(a, b);
-			return p?.[0].right ? cosToward(p[0].right, p[0].point, p[1].point) : 0;
+			const right = p?.[0].facing && axes && rightOf(p[0].facing, axes, p[0].up);
+			return right ? cosToward(right, p[0].point, p[1].point) : 0;
 		},
 		pathDistance: routes
 			? (a, b) => {
@@ -45,7 +49,7 @@ export function geometryKernels(
 					return undefined;
 				}
 				const target = world.find(b.id);
-				const near = target === undefined ? 1 : world.getReach?.(character, target) ?? 1;
+				const near = target === undefined ? 1 : reachTo(world, character, target);
 				const route = findRoute(routes, character, p[0].point, pointGoal(p[1].point, near));
 				return route && 'points' in route ? routeLength(p[0].point, route.points) : undefined;
 			}
@@ -58,17 +62,17 @@ export function geometryKernels(
  * nothing names one. Undefined where there is a way, or when the world has no routes to ask. One look at the world:
  * its searches share what it said.
  */
-export function wayBlocked(world:HostWorld<unknown>, characterID:string, targetIDs:readonly string[]):(string | undefined)[] {
+export function wayBlocked(world:HostWorld<unknown>, characterID:string, targetIDs:readonly string[]):(NamingText | undefined)[] {
 	const character = world.find(characterID);
 	const from = poseOf(world, characterID)?.point;
-	const routes = hasRoutes(world) ? memoWorld(world) : undefined;
+	const routes = world.routes && memoWorld(world.routes);
 	return targetIDs.map((targetID) => {
 		const target = world.find(targetID);
 		const to = poseOf(world, targetID)?.point;
 		if (!routes || character === undefined || target === undefined || !from || !to) {
 			return undefined;
 		}
-		const route = findRoute(routes, character, from, pointGoal(to, world.getReach?.(character, target) ?? 1));
+		const route = findRoute(routes, character, from, pointGoal(to, reachTo(world, character, target)));
 		if (!route) {
 			return '';
 		}
