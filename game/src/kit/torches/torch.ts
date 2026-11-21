@@ -90,7 +90,7 @@ export class Torch extends Component {
 
 	/** Seen as a torch on a wall or a pole; one carried as an item is an item. */
 	public sense():Sense {
-		return { tags: this.gameObject.getComponent(Item) ? [] : ['torch'] };
+		return this.gameObject.getComponent(Item) ? { tags: [] } : { tags: ['torch'], state: { flame: this.lit ? 'lit' : 'out' } };
 	}
 }
 

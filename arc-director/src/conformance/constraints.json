@@ -120,7 +120,7 @@
 				]
 			],
 			"text": "loop { say(\"hi\") }",
-			"problem": "loop's arc may hold only go_to, wait; not say"
+			"problem": "loop's arc may contain only go_to, wait; not say"
 		},
 		{
 			"constrain": [
@@ -168,7 +168,7 @@
 				]
 			],
 			"text": "law(name=hide, watch=isHurt(me), arc=go_to(Keep) ; wait(1) ; go_to(Gate))",
-			"problem": "law's arc may hold at most 2 steps; it has 3"
+			"problem": "law's arc may contain at most 2 steps; it has 3"
 		},
 		{
 			"constrain": [
@@ -185,7 +185,7 @@
 				]
 			],
 			"text": "law(name=hide, watch=isHurt(me), arc=say(\"ow\"))",
-			"problem": "law's arc may not hold say"
+			"problem": "law's arc may not contain say"
 		},
 		{
 			"constrain": [
@@ -202,7 +202,7 @@
 				]
 			],
 			"text": "law(name=hide, watch=isHurt(me), arc=loop { loop { wait(1) } })",
-			"problem": "loop's arc may hold no arc inside it; loop holds one"
+			"problem": "loop's arc may contain no arc inside it; loop contains one"
 		},
 		{
 			"constrain": [
@@ -272,7 +272,7 @@
 		{
 			"constrain": [],
 			"text": "law(name=a, watch=isHurt(me), arc=law(name=b, watch=true, arc=wait(1)))",
-			"problem": "law's arc may not hold law"
+			"problem": "law's arc may not contain law"
 		},
 		{
 			"constrain": [],

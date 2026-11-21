@@ -8,7 +8,7 @@ import { SampleCache } from '../expr/expr-types.js';
 import { buildCatalog } from '../expr/natives.js';
 import { evaluate } from '../expr/eval.js';
 import { VerbRegistry } from '../arc/stock-verbs.js';
-import type { ArcResult } from '../arc/arc-types.js';
+import type { ArcResult, CountMap } from '../arc/arc-types.js';
 import type { MindEvent } from '../mind/mind-types.js';
 import { geometryKernels } from './geometry-kernels.js';
 import { Mover, type Crowd, type ServingSpot } from './mover.js';
@@ -1035,7 +1035,7 @@ describe('stock world verbs', () => {
 				others: GROUP,
 				before: (d) => d.withVerbs((v) => v.add('rally', {
 					args: { to: 'id' },
-					group: 'to',
+					groupArg: 'to',
 					handler: (call) => {
 						got.push(call.args.to, distance(grid.point.get('Ann')!, [10, 0]) <= SPREAD + 0.01);
 						return { status: 'ok', verb: 'rally' };
@@ -1070,7 +1070,7 @@ describe('stock world verbs', () => {
 		});
 
 		it('refuses a group arg that is no id arg', () => {
-			assert.throws(() => new VerbRegistry().add('rally', { args: { text: 'text' }, group: 'text' }), /group arg/);
+			assert.throws(() => new VerbRegistry().add('rally', { args: { text: 'text' }, groupArg: 'text' }), /group arg/);
 		});
 	});
 
@@ -1090,16 +1090,38 @@ describe('stock world verbs', () => {
 		const { director } = await run(grid, 'offer(to=Mira, give={"gold":5}, get={"Bread":1})', {
 			kit: ['offer', 'wait'],
 			before: (d) => {
+				d.withMind({ currency: 'gold' });
 				d.offers.post({ from: 'Mira', give: { Bread: 1 }, get: { gold: 5 } });
 				spyTellAll(d, told);
 			},
 		});
 		assert.equal(grid.carry.get('Bread'), 'Ann');
-		assert.deepEqual(told.map((e) => [typeof e.text === 'string' ? e.text : e.text((id) => `<${id}>`), e.tags]), [['<Ann> traded 5 gold to <Mira> for 1 Bread.', ['ledger', 'trade', 'Bread']]]);
+		assert.deepEqual(told.map((e) => [typeof e.text === 'string' ? e.text : e.text((id) => `<${id}>`), e.tags]), [['<Ann> bought 1 Bread from <Mira> for 5 gold.', ['ledger', 'trade', 'Bread']]]);
 		assert.ok(distance(grid.point.get('Ann')!, [4, 0]) <= 1.3);
 		assert.equal(showNamingText(director.character('Ann')!.lastResult?.reason ?? ''), 'traded 5 gold for 1 Bread with Mira');
 		assert.equal(director.offers.all.length, 1, 'a standing offer stays');
 		director.dispose();
+	});
+
+	it('words a trade in the ledger by who sold: sold for money, traded goods for goods', async () => {
+		const ledger = async (give:CountMap, get:CountMap):Promise<string[]> => {
+			const grid = new Grid().place('Ann', [0, 0]).place('Mira', [1, 0]).place('Bread', [0, 0]).place('Ale', [1, 0]);
+			grid.carry.set('Bread', 'Ann');
+			grid.carry.set('Ale', 'Mira');
+			const told:MindEvent[] = [];
+			const { director } = await run(grid, `offer(to=Mira, give=${JSON.stringify(give)}, get=${JSON.stringify(get)})`, {
+				kit: ['offer', 'wait'],
+				before: (d) => {
+					d.withMind({ currency: 'gold' });
+					d.offers.post({ from: 'Mira', give: get, get: give });
+					spyTellAll(d, told);
+				},
+			});
+			director.dispose();
+			return told.map((e) => (typeof e.text === 'string' ? e.text : e.text((id) => `<${id}>`)));
+		};
+		assert.deepEqual(await ledger({ Bread: 1 }, { gold: 5 }), ['<Ann> sold 1 Bread to <Mira> for 5 gold.']);
+		assert.deepEqual(await ledger({ Bread: 1 }, { Ale: 1 }), ['<Ann> traded 1 Bread to <Mira> for 1 Ale.']);
 	});
 
 	it('does not trade across a wall while farther than reach, even when nearby', async () => {

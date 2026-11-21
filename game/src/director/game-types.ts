@@ -4,12 +4,12 @@ import type { NPCInput } from '../characters/NPCInput';
 import type { DemoWorld } from '../engine/demo-world';
 import type { HudGoalSide } from '../ui/hud-model';
 
-export type CharacterCtx = {
+export interface CharacterCtx {
 	world:DemoWorld;
 	character:GameObject;
 	/** Where ArcDirector steers this character, and its cooldowns. Every character ArcDirector drives has one. */
 	npc:NPCInput;
-};
+}
 
 export type SceneHooks<H> = {
 	afterPickUp?:(host:H, character:GameObject, name:string)=>void;

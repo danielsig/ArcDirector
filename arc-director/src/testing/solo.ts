@@ -1,6 +1,7 @@
 import { Character, type CharacterJSON, type CharacterOptions } from '../character/Character.js';
 import { Persona, type PersonaSpec } from '../character/Persona.js';
 import { internalsOf } from '../internals.js';
+import { MemoryPool } from '../memory/store.js';
 import type { InferenceProvider } from '../inference/provider.js';
 import { ModelSlots } from '../director/ModelSlots.js';
 import { isVisionModel } from '../inference/models.js';
@@ -9,7 +10,13 @@ import type { TalkFeature } from '../mind/TalkFeature.js';
 
 /** What a solo character takes: its own options, its persona, its mind's settings and services, and the one model it thinks with. */
 export type SoloOptions<TCtx> = Omit<CharacterOptions<TCtx>, 'talk'> & Omit<MindDeps<TCtx>, 'thinksWith'> & PersonaSpec & MindSettings
-	& Partial<Omit<MindModel, 'run'>> & { provider:InferenceProvider; modelID?:string; talk?:TalkFeature<TCtx> };
+	& Partial<Omit<MindModel, 'run'>> & {
+		provider:InferenceProvider;
+		modelID?:string;
+		talk?:TalkFeature<TCtx>;
+		/** The pool its memories are kept in, for a caller that saves it (`MemoryPool.toJSON`). Default: one of its own. */
+		pool?:MemoryPool;
+	};
 
 /**
  * A character with a mind of its own, wired without a director: for tests and scripts. It has every mind's own tools
@@ -18,7 +25,8 @@ export type SoloOptions<TCtx> = Omit<CharacterOptions<TCtx>, 'talk'> & Omit<Mind
  * unless set), since no think queue does. `json` restores a saved character.
  */
 export function soloCharacter<TCtx>(opts:SoloOptions<TCtx>, json?:CharacterJSON):Character<TCtx> {
-	const persona = opts.persona ?? (json ? Persona.fromJSON(json.persona, opts) : new Persona(opts));
+	const memory = (opts.pool ?? new MemoryPool()).view(opts.id);
+	const persona = opts.persona ?? (json ? Persona.fromJSON(json.persona, opts, memory) : new Persona(opts, memory));
 	const fail = ():never => {
 		throw new Error('ArcDirector: a solo character has no director to move it');
 	};

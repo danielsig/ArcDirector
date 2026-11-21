@@ -2,7 +2,7 @@ import { allocID } from '@arc-director/kindling';
 import { pascalCase } from 'arc-director';
 import type { ItemDef } from './defs';
 
-export type ItemInstance = {
+export interface ItemInstance {
 	id:string;
 	defID:string;
 	name:string;
@@ -21,7 +21,7 @@ export type ItemInstance = {
 	Consumable?:{ effect:string; amount:number; consumeOnUse:boolean };
 	Torch?:{ lit:boolean };
 	Flame?:{ canIgnite:boolean };
-};
+}
 
 /** What ArcDirector calls a carried `item` (`BrassKey`): what the watch kernels list it as, and what its minds name. */
 export function itemID(item:ItemInstance):string {

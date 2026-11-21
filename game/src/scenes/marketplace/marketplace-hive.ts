@@ -51,7 +51,8 @@ export const SELLER_MEMORIES:MemoryDraft[] = SELLERS.flatMap((seller) => {
 		tags: ['backstory', seller.post, ...seller.wares.map((ware) => ware.name)],
 		pinned: true,
 	}, {
-		text: `${seller.vendor}: ${seller.manner}`,
+		// Told of them by name: lines of their own are lines the hive recites.
+		text: `${seller.vendor} ${seller.manner}`,
 		tags: ['manner', seller.vendor],
 		pinned: true,
 	}];

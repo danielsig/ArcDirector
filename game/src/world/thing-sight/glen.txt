@@ -1,11 +1,11 @@
-Bridge [bridge landmark] {"id":"Bridge","tags":["bridge","landmark"],"interactable":true,"interesting":1,"note":"it is raised","always":true,"movable":false} Bridge is a bridge, raised: no one can cross until it is lowered.
+Bridge [bridge landmark] {"id":"Bridge","tags":["bridge","landmark"],"interactable":true,"interesting":1,"note":"it is raised","state":{"position":"raised"},"always":true,"movable":false} Bridge is a bridge, raised: no one can cross until it is lowered.
 BridgeLever [sluice landmark] {"id":"BridgeLever","tags":["sluice","landmark"],"interactable":true,"interesting":1,"movable":false} BridgeLever is the fixed lever that raises and lowers the bridge. Working it again does the other.
 Cottage [building house landmark] {"id":"Cottage","tags":["building","house","landmark"],"interactable":true,"interesting":1,"movable":false} Cottage is nothing out of the ordinary.
 CottageBed [furniture bed] {"id":"CottageBed","tags":["furniture","bed"],"interactable":true,"interesting":1,"movable":false} CottageBed is a bed.
-CottageBookshelf [chest furniture] {"id":"CottageBookshelf","tags":["chest","furniture"],"interactable":true,"interesting":1,"movable":false} CottageBookshelf is a bookshelf.
+CottageBookshelf [chest furniture] {"id":"CottageBookshelf","tags":["chest","furniture"],"interactable":true,"interesting":1,"state":{"lid":"open"},"movable":false} CottageBookshelf is a bookshelf.
 CottageChair [furniture chair] {"id":"CottageChair","tags":["furniture","chair"],"interactable":true,"interesting":1,"movable":false} CottageChair is a chair.
-CottageDoor [door landmark] {"id":"CottageDoor","tags":["door","landmark"],"interactable":true,"interesting":1,"note":"shut","movable":false} CottageDoor is a door, shut and locked; it needs SpareKey.
-CottageHearth [torch] {"id":"CottageHearth","tags":["torch"]} CottageHearth is nothing out of the ordinary.
+CottageDoor [door landmark] {"id":"CottageDoor","tags":["door","landmark"],"interactable":true,"interesting":1,"note":"shut","state":{"door":"shut"},"movable":false} CottageDoor is a door, shut and locked; it needs SpareKey.
+CottageHearth [torch] {"id":"CottageHearth","tags":["torch"],"state":{"flame":"lit"}} CottageHearth is nothing out of the ordinary.
 Falls [waterfall river water] {"id":"Falls","tags":["waterfall","river","water"]} Falls is nothing out of the ordinary.
 FireMushroom [wild item] {"id":"FireMushroom","tags":["wild","item"],"interactable":true,"interesting":1,"movable":true} FireMushroom lies here. An orange cap, warm to the touch, smelling of smoke. They say it lightens the feet.
 FireMushroom [wild item] {"id":"FireMushroom","tags":["wild","item"],"interactable":true,"interesting":1,"movable":true} FireMushroom lies here. An orange cap, warm to the touch, smelling of smoke. They say it lightens the feet.
@@ -13,7 +13,7 @@ FireMushroom [wild item] {"id":"FireMushroom","tags":["wild","item"],"interactab
 Hut [building house landmark] {"id":"Hut","tags":["building","house","landmark"],"interactable":true,"interesting":1,"movable":false} Hut is nothing out of the ordinary.
 HutBed [furniture bed] {"id":"HutBed","tags":["furniture","bed"],"interactable":true,"interesting":1,"movable":false} HutBed is a bed.
 HutChair [furniture chair] {"id":"HutChair","tags":["furniture","chair"],"interactable":true,"interesting":1,"movable":false} HutChair is a chair.
-HutDoor [door landmark] {"id":"HutDoor","tags":["door","landmark"],"interactable":true,"interesting":1,"note":"shut","movable":false} HutDoor is a door, shut.
+HutDoor [door landmark] {"id":"HutDoor","tags":["door","landmark"],"interactable":true,"interesting":1,"note":"shut","state":{"door":"shut"},"movable":false} HutDoor is a door, shut.
 MoonMushroom [wild item] {"id":"MoonMushroom","tags":["wild","item"],"interactable":true,"interesting":1,"movable":true} MoonMushroom lies here. A blue cap, cool and faintly glowing. They say whoever eats one has luck for a while.
 MoonMushroom [wild item] {"id":"MoonMushroom","tags":["wild","item"],"interactable":true,"interesting":1,"movable":true} MoonMushroom lies here. A blue cap, cool and faintly glowing. They say whoever eats one has luck for a while.
 MoonMushroom [wild item] {"id":"MoonMushroom","tags":["wild","item"],"interactable":true,"interesting":1,"movable":true} MoonMushroom lies here. A blue cap, cool and faintly glowing. They say whoever eats one has luck for a while.

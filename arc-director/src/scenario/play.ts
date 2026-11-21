@@ -12,6 +12,7 @@ import { STOCK_ECONOMY_VERBS, STOCK_UNIT_VERBS } from '../rts/rts-verbs.js';
 import { searchTool, type SearchSpec } from '../search/search.js';
 import { settleDeal } from '../world/deal.js';
 import type { Sound } from '../perception/hearing.js';
+import type { SightField } from '../perception/sight.js';
 import type { Offer } from '../world/offers.js';
 import type { Outcome, Vec } from '../world/world-types.js';
 import { nextTurn } from '../turn.js';
@@ -59,6 +60,8 @@ export type Scenario = Scene & SceneRules & {
 	noise?:Record<string, Sound>;
 	/** Every sound made, as the scene's mindless fighters may hear it: whom it draws, and where. `heardBy` gives how loud it is at a fighter, 0 unheard. */
 	onSound?:(world:SceneWorld, from:string | Vec, sound:Sound, heardBy:(id:string)=>number)=>void;
+	/** How wide a look is (`withSight`'s `fieldOfView`); `me` faces north. Default: all around. */
+	fieldOfView?:SightField;
 };
 
 /** A scenario's look-ahead tool, made on its world. */
@@ -121,7 +124,7 @@ const RTS_ECONOMY:readonly string[] = [...STOCK_ECONOMY_VERBS, 'tribute', 'keep_
 const RTS_TACTICS:readonly string[] = ['keep_distance', 'pull_back', 'spread_out'];
 
 /** What a squad's commander knows of how its squad fights when nobody tells it to. */
-const SQUAD_IDLE = 'When my units or I have nothing to do or are only waiting, we strike back at any foe in reach on our own, without moving. An order or reaction takes over from that.';
+const SQUAD_IDLE = 'When you or your units have nothing to do or are only waiting, you all strike back at any foe in reach on your own, without moving. An order or reaction takes over from that.';
 
 /** The collective `s`'s character commands, when it has a squad. */
 function squadOf(s:Scenario):string {
@@ -159,7 +162,7 @@ function stage(director:ArcDirector<SceneCtx>, s:Scenario, world:SceneWorld):Arc
 		.withPriorityThinkQueue({ mayThink: () => false })
 		.withWorld(world)
 		.withKernels(({ id }) => world.kernels(id))
-		.withSight({ look: ({ id }) => world.sight(id) })
+		.withSight({ look: ({ id }) => world.sight(id), fieldOfView: s.fieldOfView })
 		.withInventory(({ id }) => world.inventory(id))
 		.withTalk({
 			inRange: (a, b) => world.distance(a, b) <= TALK_RANGE,

@@ -80,12 +80,13 @@ describe('FeelingFeature', () => {
 		director.getTalk()!.say('Wolf', 'Leave my den.', 'Ash', director.time, 'growl');
 		assert.equal(spoken[0]?.as, 'growl');
 		assert.equal(spoken[0]?.feeling, 'angry');
-		assert.deepEqual(director.character('Ash')!.mind!.events().map((e) => e.text), ['Wolf growls angrily to you: "Leave my den."']);
+		// Out of its sight: a voice it does not know yet.
+		assert.deepEqual(director.character('Ash')!.mind!.events().map((e) => e.text), ['VoiceA growls angrily to you: "Leave my den."']);
 		director.getTalk()!.say('Angler', 'Go away.', 'Ash', director.time);
 		director.tick(1);
 		const prompt = await firstPrompt(prompts);
 		assert.match(prompt, /Angler \(3\/12 hp, looking angry\)/);
-		assert.match(prompt, /Wolf \(growls angrily, to you\): Leave my den\./);
+		assert.match(prompt, /VoiceA \(growls angrily, to you\): Leave my den\./);
 		assert.match(prompt, /Angler \(says angrily, to you\): Go away\./, 'a feeling with no tone is said');
 		assert.match(prompt, /When something moves you, show it: express\(feeling\)\./);
 		assert.match(prompt, /one of happy\/sad\/angry\/afraid\/surprised\/disgusted/);
@@ -114,14 +115,14 @@ describe('FeelingFeature', () => {
 		const feelings = director.getFeelings()!;
 		feelings.express('Angler', 'afraid', 10);
 		assert.equal(feelings.of('Angler'), 'afraid');
-		assert.ok(director.holds('Ash', 'feeling(Angler) == "afraid"'));
+		assert.ok(director.isMet('Ash', 'feeling(Angler) == "afraid"'));
 		director.tick(4);
 		feelings.express('Angler', 'surprised', 10);
 		director.tick(8);
 		assert.equal(feelings.of('Angler'), 'surprised');
 		director.tick(3);
 		assert.equal(feelings.of('Angler'), undefined);
-		assert.ok(director.holds('Ash', 'feeling(Angler) == ""'));
+		assert.ok(director.isMet('Ash', 'feeling(Angler) == ""'));
 		assert.deepEqual(told, [['Angler', 'afraid'], ['Angler', 'surprised'], ['Angler', undefined]]);
 		director.dispose();
 	});

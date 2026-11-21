@@ -8,6 +8,7 @@ import type { NameTarget } from '../character/NameBook.js';
 import type { PersonaSpec } from '../character/Persona.js';
 import type { Goal, KitSource } from '../character/character-types.js';
 import type { LawSpec } from '../arc/laws.js';
+import type { MemoryRecord, MemorySharing } from '../memory/store.js';
 import type { ExprEntity, ExprVal } from '../expr/expr-types.js';
 import type { MindSettings } from '../mind/mind.js';
 import type { TalkStyle } from '../mind/talk.js';
@@ -53,7 +54,7 @@ export type CharacterSpec<TCtx = unknown> = RunnerSpec<TCtx> & {
 	talk?:TalkStyle;
 	/**
 	 * Act without a mind: a System One model keeps picking one of its `choices` by name for `goal`. `until` is a watch
-	 * that ends the picking while it holds. Runs whenever the character is idle and the director has a System One; in a
+	 * that ends the picking while it is true. Runs whenever the character is idle and the director has a System One; in a
 	 * collective, that is whenever its commander has issued it nothing.
 	 */
 	choose?:StandingChoice;
@@ -90,16 +91,24 @@ export type CollectiveSpec<TCtx = unknown> = RunnerSpec<TCtx> & {
 	commander?:string;
 	/** Most units one `command` may address at once. Unset to allow command to address all units. */
 	maxUnitsPerCommand?:number;
+	/** What a character of it reads while it thinks for itself: what it witnessed (the default), or what any of them knows. */
+	sharing?:MemorySharing;
+	/**
+	 * Of what a `Shared` collective knows that `character` did not witness, whether it keeps `record` when it leaves
+	 * for good. Asked once a record. Default: it keeps only what it witnessed.
+	 */
+	leaverKeepsMemory?:(record:MemoryRecord, character:Character<TCtx>)=>boolean;
 };
 
 type ArgValue<TArg> = ArgKindValue<TArg extends { kind:infer TKind } ? TKind : TArg>;
 
 type ArgKindValue<TKind> = TKind extends `number${'' | '?'}` ? number
-	: TKind extends `count${'' | '?'}` ? number | true
-		: TKind extends `bundle${'' | '?'}` ? Record<string, number>
-			: TKind extends `string[]${'' | '?'}` ? string[]
-				: TKind extends `arc${'' | '?'}` ? Arc
-					: string;
+	: TKind extends `bool${'' | '?'}` ? boolean
+		: TKind extends `duration${'' | '?'}` ? true | number | string
+			: TKind extends `bundle${'' | '?'}` ? Record<string, number>
+				: TKind extends `string[]${'' | '?'}` ? string[]
+					: TKind extends `arc${'' | '?'}` ? Arc
+						: string;
 
 /** Whether an arg as declared, a kind or an `ArgSpec`, may be left out. */
 type Optional<TArg> = (TArg extends { kind:infer TKind } ? TKind : TArg) extends `${string}?` ? true : false;
@@ -119,7 +128,7 @@ export type StockVerbName = keyof StockDefs;
 /** Arg map of a stock verb. */
 export type StockVerbArgs<TVerb extends StockVerbName> = StockDefs[TVerb] extends { args:infer TArgMap extends VerbArgMap } ? TArgMap : Record<never, never>;
 
-export type VerbCall<TCtx = unknown, TArgs = Record<string, unknown>> = {
+export interface VerbCall<TCtx = unknown, TArgs = Record<string, unknown>> {
 	verb:string;
 	/** Checked against the verb's arg map before the handler runs. */
 	args:TArgs;
@@ -127,14 +136,14 @@ export type VerbCall<TCtx = unknown, TArgs = Record<string, unknown>> = {
 	character:Character<TCtx>;
 	ctx:TCtx;
 	/**
-	 * Aborts when the step's `until` holds (reason `'until'`) or its `within` runs out (`'within'`). Its moves and waits
+	 * Aborts when the step's `until` is met (reason `'until'`) or its `within` runs out (`'within'`). Its moves and waits
 	 * end then on their own; a verb that can still say how it went returns that (`wander`: what it saw).
 	 */
 	signal:AbortSignal;
 	/** How well a `watch` arg fits right now, 0–1, or as if this character stood at `point`. Missing arg: 0. */
 	score(arg:keyof TArgs & string, point?:Vec):number;
-	/** `score(arg, point) > 0`. */
-	holds(arg:keyof TArgs & string, point?:Vec):boolean;
+	/** Whether a `watch` arg is met now, or would be were this character at `point`: `score(arg, point) > 0`. */
+	isMet(arg:keyof TArgs & string, point?:Vec):boolean;
 	/** `score(arg, point)` for a graded `watch` arg (a number here: a `count`, a `distance`); none for a yes/no one. */
 	grader(arg:keyof TArgs & string):((point:Vec)=>number) | undefined;
 	/**
@@ -146,7 +155,7 @@ export type VerbCall<TCtx = unknown, TArgs = Record<string, unknown>> = {
 	goToPoint(point:Vec, opts?:MoveOpts):Promise<ArcResult>;
 	/** Let game time pass. Ends early, stopped, when the step is aborted. */
 	wait(seconds:number):Promise<ArcResult>;
-};
+}
 
 /** An alias verb's arc, watch or who: a template with `{arg}` holes, or made from its args. */
 export type AliasPart = string | ((args:Readonly<Record<string, StepArg>>)=>string);

@@ -1,11 +1,12 @@
 import type { RoomDef } from '../../world/spawn';
 
 /**
- * A named area of the combat map, corner cell to corner cell. Whoever stands in it has it on its side's mind
- * (`Brune: at WestInnerWall`), its commander is told `You are in WestInnerWall.`, and it is somewhere to go_to.
+ * A named area of the combat map, corner cell to corner cell. Whoever stands in it has it on its side's mind, its own
+ * note (`Brune is at WestInnerWall.`, `You are at WestInnerWall.` to the commander standing there), and it is somewhere
+ * to go_to.
  */
 function place(name:string, from:[number, number], to:[number, number]):RoomDef {
-	return { name, from, to, memory: `at ${name}` };
+	return { name, from, to, memory: `I am at ${name}.` };
 }
 
 /**

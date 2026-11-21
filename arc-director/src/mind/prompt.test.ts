@@ -214,7 +214,7 @@ describe('prompt split', () => {
 	it('tells a bodiless mind that a verb of its units runs through command', () => {
 		const hive = new VerbRegistry().addAll(STOCK_VERB_DEFS).addAll(STOCK_COLLECTIVE_VERB_DEFS, 'command').view(['command', 'wait']);
 		const hint = arcRepairHint("unknown verb 'say'", 'json', [], hive);
-		assert.match(hint, /say is for your units, run through a command whose arc holds say/);
+		assert.match(hint, /say is for your units, run through a command whose arc contains say/);
 		assert.match(arcRepairHint("unknown verb 'dance'", 'json', [], hive), /not a valid Arc/);
 	});
 
@@ -286,7 +286,6 @@ describe('prompt split', () => {
 				text: 'the key is hidden',
 				tags: [],
 				timestamp: 0,
-				lastAccessed: 0,
 				pinned: true,
 			}],
 		});
@@ -304,11 +303,11 @@ describe('prompt split', () => {
 			senses: { environment: 'a hall' },
 			recalled: [{
 				id: 'mem_2',
+				knownBy: [],
 				category: 'episodic',
 				text: 'BridgeKeeper wants FireMushroom for the bridge fee',
 				tags: ['BridgeKeeper'],
 				timestamp: 0,
-				lastAccessed: 0,
 			}],
 		});
 		assert.match(user, /You remember:/);

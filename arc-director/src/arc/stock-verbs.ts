@@ -2,17 +2,19 @@ import type { Step, StepArg } from './arc-types.js';
 import { STOCK_COLLECTIVE_VERB_DEFS, type StockCollectiveVerb } from '../collective/collective-verbs.js';
 import { meet, type ArgConstraint, type ArgPath } from './constraints.js';
 import { SayTone } from '../mind/talk.js';
+import { Channel } from './Channel.js';
 
 /**
  * `id` is a character, thing or place; the host always receives a real id, even when the model wrote its own name for it
  * or an expression that picks one. `text` is prose: unquoted, it runs to the closing `)` or the next `, key=`.
- * `watch` is a watch-language expression; the host reads it through `VerbCall.holds` / `score`.
+ * `watch` is a watch-language expression; the host reads it through `VerbCall.isMet` / `score`.
  * `expr` is any other expression (`units.filter("Archer")`), and `law` a law's name.
- * `bundle` is `{ [item: string]: number }` (how many of each thing). `count` is a whole number, or `true` for no limit.
- * `bool` is `true` or `false`.
+ * `bundle` is `{ [item: string]: number }` (how many of each thing). `bool` is `true` or `false`.
+ * `duration` is how long a step goes on unbroken: `true` to its end, a whole number of rounds (not seconds, as a
+ * number is elsewhere), or a time (`10s`).
  * A mind stores every `id`, `watch`, `expr`, `law` and `arc` arg in ids, and shows them to its model in its names. Bundle keys are item ids.
  */
-export type VerbArgKind = 'id' | 'id?' | 'string' | 'string?' | 'text' | 'text?' | 'watch' | 'watch?' | 'expr' | 'expr?' | 'law' | 'law?' | 'number' | 'number?' | 'string[]' | 'string[]?' | 'bundle' | 'bundle?' | 'arc' | 'arc?' | 'hold' | 'hold?' | 'bool' | 'bool?';
+export type VerbArgKind = 'id' | 'id?' | 'string' | 'string?' | 'text' | 'text?' | 'watch' | 'watch?' | 'expr' | 'expr?' | 'law' | 'law?' | 'number' | 'number?' | 'string[]' | 'string[]?' | 'bundle' | 'bundle?' | 'arc' | 'arc?' | 'duration' | 'duration?' | 'bool' | 'bool?';
 
 /**
  * One arg of a verb: its kind, and what it may hold beyond that. `ignoreUnknown`: an `id` that names nothing is no fault
@@ -39,15 +41,16 @@ export function isOptional(arg:ArgSpec):boolean {
  */
 export const WHILE_ARG = 'while';
 
+
 /**
  * Args the runtime gives every verb, so no verb declares them unless it reads them itself (`wander` steers by its
- * `until`): `until` stops the step once its watch holds, `within` once that many game seconds have passed, and
+ * `until`): `until` stops the step once its watch is met, `within` once that many game seconds have passed, and
  * {@link WHILE_ARG} runs during it.
  */
 export const RUNTIME_ARGS:Readonly<Record<string, ArgSpec>> = { until: { kind: 'watch?' }, within: { kind: 'number?' }, [WHILE_ARG]: { kind: 'arc?' } };
 
 /** And to an endless verb: `unbreakable=10s` keeps it going that long whatever its reaction's trigger does. */
-const ENDLESS_ARGS:Readonly<Record<string, ArgSpec>> = { ...RUNTIME_ARGS, unbreakable: { kind: 'hold?' } };
+const ENDLESS_ARGS:Readonly<Record<string, ArgSpec>> = { ...RUNTIME_ARGS, unbreakable: { kind: 'duration?' } };
 
 function runtimeArgs(spec:VerbSpec):Readonly<Record<string, ArgSpec>> {
 	return spec.endless ? ENDLESS_ARGS : RUNTIME_ARGS;
@@ -96,9 +99,9 @@ export function stepDoing(step:Step, verbs:VerbRegistry, show:(id:string)=>strin
 	return seen ? fillHoles(seen, step.args, (value) => (typeof value === 'string' ? show(value) : String(value))) : doingOf(step.verb);
 }
 
-/** The ids `step` is aimed at when its group arg ({@link VerbDef.group}) holds a list; none for a single name. */
+/** The ids `step` is aimed at when its group arg ({@link VerbDef.groupArg}) holds a list; none for a single name. */
 export function groupTargets(step:Step, verbs:VerbRegistry):string[] | undefined {
-	const key = verbs.get(step.verb)?.group;
+	const key = verbs.get(step.verb)?.groupArg;
 	const value = key ? step.args[key] : undefined;
 	return Array.isArray(value) ? value as string[] : undefined;
 }
@@ -114,26 +117,26 @@ export const GROUP_VERB = 'group';
 
 /**
  * A statement that asks instead of acting, `isHurt(Mira)` or a name a `let` gave, is the step
- * `{ verb: 'test', args: { watch } }`: it succeeds while its watch holds. Every registry reads it; none lists it.
+ * `{ verb: 'test', args: { watch } }`: it succeeds while its watch is true. Every registry reads it; none lists it.
  */
 export const TEST_VERB = 'test';
 
 /** The channel `spec` holds while it runs: `body` unless it says. */
-export function channelOf(spec:Pick<VerbDef, 'channel'> | undefined):string {
-	return spec?.channel ?? 'body';
+export function channelOf(spec:Pick<VerbDef, 'channel'> | undefined):Channel {
+	return spec?.channel ?? Channel.Body;
 }
 
 /** How much a step of `spec` changes the world ({@link VerbDef.impact}). A step no registry lists (a group) adds none. */
 export function impactOf(spec:VerbSpec | undefined):number {
-	return !spec ? 0 : spec.impact ?? (spec.endless ? 0.1 : channelOf(spec) === '' ? 0 : 0.5);
+	return !spec ? 0 : spec.impact ?? (spec.endless ? 0.1 : channelOf(spec) === Channel.None ? 0 : 0.5);
 }
 
 /** Whether `verb` runs without the body: free, beside a program under way. `when` only sets a reaction. */
 export function isFree(verbs:VerbRegistry, verb:string):boolean {
-	return verb === 'when' || (!!verbs.get(verb) && channelOf(verbs.get(verb)) !== 'body');
+	return verb === 'when' || (!!verbs.get(verb) && channelOf(verbs.get(verb)) !== Channel.Body);
 }
 
-const TEST_SPEC:VerbSpec = { name: TEST_VERB, args: { watch: { kind: 'watch' } }, channel: '' };
+const TEST_SPEC:VerbSpec = { name: TEST_VERB, args: { watch: { kind: 'watch' } }, channel: Channel.None };
 
 /** `if (cond) { arc } else { else }`: its arcs are part of the program it is in, as a group's are. */
 export const IF_VERB = 'if';
@@ -141,32 +144,16 @@ export const IF_VERB = 'if';
 /** A step is `{ let, verb, …args, then }` and a requirement `{ verb, …args, condition, reason }`: no arg is any of these. */
 const RESERVED_ARGS:readonly string[] = ['verb', 'then', 'let', 'condition', 'reason'];
 
-export type VerbSpec = {
+/** A verb as a registry holds it ({@link VerbRegistry.add}): named, and each arg an {@link ArgSpec}. */
+export interface VerbSpec extends Omit<VerbDef, 'args'> {
 	name:string;
 	args:Record<string, ArgSpec>;
-	/** One line shown after the verb in the prompt's verb list. */
-	help?:string;
-	/** This verb expects an answer from the character it names. After the arc, the actor waits for them if they are still nearby. Default: do not wait. */
-	reply?:boolean;
-	/** What one seen running it is doing, with `{arg}` holes: `going to {target}`. Default: the verb with `-ing` (`firing`). */
-	seen?:string;
-	/** The channel it holds while it runs. See {@link VerbDef.channel}. */
-	channel?:string;
-	/** The `id` arg that may take several at once. See {@link VerbDef.group}. */
-	group?:string;
-	/** It has no end of its own. See {@link VerbDef.endless}. */
-	endless?:boolean;
-	/** See {@link VerbDef.impact}. */
-	impact?:number;
-	/** See {@link VerbDef.whenInside}. */
-	whenInside?:WhenInside;
-	/** See {@link VerbDef.cooldown}. */
-	cooldown?:number;
-};
+}
 
-/** What `VerbRegistry.add` takes. */
-export type VerbDef = {
+/** What `VerbRegistry.add` takes: args written short (`'id?'`) or in full. */
+export interface VerbDef {
 	args?:VerbArgMap;
+	/** One line shown after the verb in the prompt's verb list. */
 	help?:string;
 	/** This verb expects an answer from the character it names. After the arc, the actor waits for them if they are still nearby. Default: do not wait. */
 	reply?:boolean;
@@ -174,17 +161,30 @@ export type VerbDef = {
 	seen?:string;
 	/**
 	 * The channel it holds while it runs: `body` (default: moving, fighting, using things), `voice` (`say`), one the game
-	 * adds (`hands`, to drink while walking), or `''` for none (it ends at once: `remember`, `law`). A verb that
+	 * adds (`hands`, to drink while walking), or none (`Channel.None`: `remember`, `law`, `wait`). A verb that
 	 * holds no body is free: an Arc of only such verbs runs beside the program under way, instead of replacing it. Steps
 	 * that run at once (`A while B`) take turns on a channel: one waits while another holds it.
 	 */
-	channel?:string;
+	channel?:Channel;
 	/**
 	 * The `id` arg that may take several at once: a name as ever, or an expression that picks a list (`units`,
 	 * `others.nearby()`). For a list, the character first walks near the group (`withWorldVerbs` `groupWalk`) and then acts once, and the
 	 * handler receives the ids as `string[]`, without the character itself or anyone fallen.
 	 */
-	group?:string;
+	groupArg?:string;
+	/**
+	 * An arg that takes only certain `names`, each of which a model may write as a verb of its own: a shorthand for this
+	 * verb with that arg set to it. Small models do this unasked: told to scream, they write `scream("Help!")` where they
+	 * meant `say("Help!", as=scream)`. `say` declares `shorthandArg: 'as'`, so its every tone reads so; a game's
+	 * `emote(action)` that declares `shorthandArg: 'action'` reads `wave()` as `emote(action=wave)`.
+	 *
+	 * It only forgives what a reply writes: models are never shown the shorthands, and the step is the real verb from the
+	 * moment it is read, so every check and handler sees `say`, never `scream`. A verb alias (`addAlias`) is the opposite:
+	 * a verb of its own that models see and that runs an arc when it starts. A name is a shorthand only written as a call
+	 * (`scream(`); alone it stays a word (`say(to=Bram) shout if you need me`), and a name two verbs' shorthand args take
+	 * is a shorthand for neither ({@link VerbRegistry.findShorthand}).
+	 */
+	shorthandArg?:string;
 	/**
 	 * It has no end of its own (`follow`, `hold`): it runs until stopped. In a `when` or a law it is a loop's equal, and
 	 * stops once the trigger is no longer true.
@@ -194,7 +194,7 @@ export type VerbDef = {
 	 * How much a step of it changes the world, 0–1: how unsafe it is to replace that step mid-run. A rethink may wake a
 	 * mind only while what remains of its program has little impact (`rethinkingThreshold`), and an Arc whose steps had
 	 * much brings a think at once (`retrospectThreshold`). Default ({@link impactOf}): 0.1 for an endless verb, 0 for one
-	 * that ends at once (`channel: ''`), else 0.5.
+	 * that ends at once (`channel: Channel.None`), else 0.5.
 	 */
 	impact?:number;
 	/** Its args, narrowed further where it is written inside the arc arg a key names (the nearest enclosing one; `*.arc`, any). */
@@ -204,7 +204,7 @@ export type VerbDef = {
 	 * it sooner fails, saying how long is left; `isReady(me, verb)` reads it, and `choose` leaves out a choice it begins.
 	 */
 	cooldown?:number;
-};
+}
 
 /** The verbs arcs may name: each one's args, help, and how others see it run. A director's own adds what runs each one. */
 export class VerbRegistry {
@@ -260,10 +260,13 @@ export class VerbRegistry {
 		return this;
 	}
 
-	private define(name:string, { args = {}, help, reply, seen, channel, group, endless, impact, whenInside, cooldown }:VerbDef):void {
+	private define(name:string, { args = {}, help, reply, seen, channel, groupArg, shorthandArg, endless, impact, whenInside, cooldown }:VerbDef):void {
 		const specs = Object.fromEntries(Object.entries(args).map(([key, arg]) => [key, typeof arg === 'string' ? { kind: arg } : arg]));
-		if (group && argBase(specs[group]?.kind) !== 'id') {
-			throw new Error(`verb ${name}: group arg '${group}' is not an id arg`);
+		if (groupArg && argBase(specs[groupArg]?.kind) !== 'id') {
+			throw new Error(`verb ${name}: group arg '${groupArg}' is not an id arg`);
+		}
+		if (shorthandArg && !specs[shorthandArg]?.names) {
+			throw new Error(`verb ${name}: shorthand arg '${shorthandArg}' takes no names`);
 		}
 		if (name === GROUP_VERB || name === TEST_VERB) {
 			throw new Error(`verb ${name}: '${name}' is how an Arc writes ${name === GROUP_VERB ? '( … )' : 'a query as a step'}, not a verb`);
@@ -280,7 +283,7 @@ export class VerbRegistry {
 				throw new Error(`verb ${name}: arg '${key}' is the runtime's, a ${argBase(runtime.kind)}`);
 			}
 		}
-		this._verbs.set(name, { name, args: specs, help, ...(reply ? { reply } : {}), ...(seen ? { seen } : {}), ...(channel !== undefined ? { channel } : {}), ...(group ? { group } : {}), ...(endless ? { endless } : {}), ...(impact !== undefined ? { impact } : {}), ...(whenInside ? { whenInside } : {}), ...(cooldown ? { cooldown } : {}) });
+		this._verbs.set(name, { name, args: specs, help, ...(reply ? { reply } : {}), ...(seen ? { seen } : {}), ...(channel !== undefined ? { channel } : {}), ...(groupArg ? { groupArg } : {}), ...(shorthandArg ? { shorthandArg } : {}), ...(endless ? { endless } : {}), ...(impact !== undefined ? { impact } : {}), ...(whenInside ? { whenInside } : {}), ...(cooldown ? { cooldown } : {}) });
 	}
 
 	/** Full catalog. Nested unit / loop / law arcs may name verbs this kit does not grant the thinker. */
@@ -369,6 +372,24 @@ export class VerbRegistry {
 		return this.get(name) ?? this.nested().get(name);
 	}
 
+	/**
+	 * The verb a call to `name`, which is no verb, stands for: the one whose {@link VerbDef.shorthandArg} takes `name`
+	 * among its `names`, looked up as {@link find} does (`sob("Why me!")` is `say("Why me!", as=sob)`). None when two
+	 * verbs' take it.
+	 */
+	public findShorthand(name:string):VerbSpec | undefined {
+		if (this.find(name)) {
+			return undefined;
+		}
+		for (const source of new Set([this, this.nested()])) {
+			const taking = source.list().filter((spec) => spec.shorthandArg && spec.args[spec.shorthandArg]?.names?.includes(name));
+			if (taking.length > 0) {
+				return taking.length === 1 ? taking[0] : undefined;
+			}
+		}
+		return undefined;
+	}
+
 	public has(name:string):boolean {
 		return this._verbs.has(name);
 	}
@@ -431,25 +452,25 @@ export const STOCK_VERB_DEFS = {
 	drop: { args: { item: 'id', to: 'id?' }, impact: 0.8 },
 	give: { args: { item: 'id', to: 'id', quantity: 'number?' }, help: 'goes to them first. to buy or sell, use offer', reply: true, seen: 'giving {item} to {to}', impact: 0.8 },
 	examine: { args: { target: 'id' } },
-	say: { args: { text: 'text', to: 'id?', as: { kind: 'string?', names: Object.values(SayTone) } }, help: 'one short sentence', reply: true, channel: 'voice', group: 'to', impact: 0.3 },
-	wait: { args: { seconds: { kind: 'number?', min: 0 }, until: 'watch?' }, help: 'until fails if not met within seconds (default 20)', channel: '', impact: 0.2 },
-	pass: { args: {}, help: 'keeps your current program; reply pass() when nothing needs to change', channel: '' },
+	say: { args: { text: 'text', to: 'id?', as: { kind: 'string?', names: Object.values(SayTone) } }, help: 'one short sentence', reply: true, channel: Channel.Voice, groupArg: 'to', shorthandArg: 'as', impact: 0.3 },
+	wait: { args: { seconds: { kind: 'number?', min: 0 }, until: 'watch?' }, help: 'until fails if not met within seconds (default 20)', channel: Channel.None, impact: 0.2 },
+	pass: { args: {}, help: 'keeps your current program; reply pass() when nothing needs to change', channel: Channel.None },
 	instead: { args: { arc: 'arc' }, help: 'drops your running program for these steps; at the root of a reply only' },
-	remember: { args: { content: 'text', tags: 'string[]?' }, channel: '' },
-	think: { args: { about: 'text?' }, channel: '' },
-	set_goal: { args: { goal: 'text', priority: 'number?' }, seen: 'thinking', channel: '' },
-	drop_goal: { args: { goal: 'text?' }, seen: 'thinking', channel: '' },
-	finish_goal: { args: { goal: 'text?' }, help: 'it is done', seen: 'thinking', channel: '' },
-	set_identity: { args: { role: 'string?', traits: 'string[]?' }, seen: 'thinking', channel: '' },
-	watch: { args: { name: 'string', expr: 'expr' }, channel: '' },
-	unwatch: { args: { name: 'string' }, channel: '' },
-	focus: { args: { expr: 'expr' }, channel: '' },
-	unfocus: { args: { expr: 'expr' }, channel: '' },
+	remember: { args: { content: 'text', tags: 'string[]?' }, channel: Channel.None },
+	think: { args: { about: 'text?' }, channel: Channel.None },
+	set_goal: { args: { goal: 'text', priority: 'number?' }, seen: 'thinking', channel: Channel.None },
+	drop_goal: { args: { goal: 'text?' }, seen: 'thinking', channel: Channel.None },
+	finish_goal: { args: { goal: 'text?' }, help: 'it is done', seen: 'thinking', channel: Channel.None },
+	set_identity: { args: { role: 'string?', traits: 'string[]?' }, seen: 'thinking', channel: Channel.None },
+	watch: { args: { name: 'string', expr: 'expr' }, channel: Channel.None },
+	unwatch: { args: { name: 'string' }, channel: Channel.None },
+	focus: { args: { expr: 'expr' }, channel: Channel.None },
+	unfocus: { args: { expr: 'expr' }, channel: Channel.None },
 	if: { args: { cond: 'arc', arc: 'arc', else: 'arc?' }, impact: 0 },
 	when: { args: { watch: 'watch', arc: 'arc', times: 'number?', until: 'watch?', rearm: 'number?' }, help: `this job's interrupt from where it is written; no extra think`, impact: 0 },
-	loop: { args: { arc: 'arc', through: 'watch?', until: 'watch?', times: 'number?', unbreakable: 'hold?' }, help: 'repeats until a round fails. In a when or law, it stops once the trigger is false; unbreakable=true goes on to its end, unbreakable=N for N rounds first, unbreakable=10s for 10s (on follow too)', impact: 0.1 },
-	law: { args: { who: 'expr?', watch: 'watch', arc: { kind: 'arc', not: ['law'] }, name: 'law?', times: 'number?', until: 'watch?', rearm: 'number?' }, help: 'standing reaction until unlaw; no extra think', channel: '' },
-	unlaw: { args: { name: 'law' }, help: 'drops that law', channel: '' },
+	loop: { args: { arc: 'arc', through: 'watch?', until: 'watch?', times: 'number?', unbreakable: 'duration?' }, help: 'repeats until a round fails. In a when or law, it stops once the trigger is false; unbreakable=true goes on to its end, unbreakable=N for N rounds first, unbreakable=10s for 10s (on follow too)', impact: 0.1 },
+	law: { args: { who: 'expr?', watch: 'watch', arc: { kind: 'arc', not: ['law'] }, name: 'law?', times: 'number?', until: 'watch?', rearm: 'number?' }, help: 'standing reaction until unlaw; no extra think', channel: Channel.None },
+	unlaw: { args: { name: 'law' }, help: 'drops that law', channel: Channel.None },
 	// Its choices are named args of their own; `arc/choose.ts` reads them.
 	choose: { args: { goal: 'text' }, help: 'a fast model picks one by name each run; loop it to keep picking', impact: 0 },
 	offer: { args: { to: 'id?', give: 'bundle?', get: 'bundle?' }, help: 'goes to them first if out of earshot. each side as {"Egg":12, "Milk":3}, items and gold only. if they offer that or better, both move at once; else it waits for their answer. no to: offered to anyone', reply: true, impact: 0.8 },

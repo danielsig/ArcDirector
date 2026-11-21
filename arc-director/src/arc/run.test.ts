@@ -881,8 +881,8 @@ describe('unbreakable', () => {
 		const loop = (text:string) => parseArcText(text, verbs)[0].args.unbreakable;
 		assert.deepEqual([loop('loop(unbreakable=10s) { wait() }'), loop('loop(unbreakable=2) { wait() }'), loop('loop(unbreakable=true) { wait() }')], ['10s', 2, true]);
 		assert.equal(parseArcText('follow(Tom, unbreakable=1.5min)', verbs)[0].args.unbreakable, '1.5min');
-		assert.throws(() => parseArcText('follow(Tom, unbreakable=true)', verbs), /follow holds for seconds: unbreakable=10s; true would never let it end/);
-		assert.throws(() => parseArcText('follow(Tom, unbreakable=3)', verbs), /follow holds for seconds: unbreakable=10s$/);
+		assert.throws(() => parseArcText('follow(Tom, unbreakable=true)', verbs), /follow is unbreakable for seconds only: unbreakable=10s; true would never let it end/);
+		assert.throws(() => parseArcText('follow(Tom, unbreakable=3)', verbs), /follow is unbreakable for seconds only: unbreakable=10s$/);
 		assert.throws(() => parseArcText('go_to(Keep, unbreakable=3s)', verbs), /no arg 'unbreakable'/);
 		const json = '{"steps":[{"verb":"loop","arc":[{"verb":"wait"}],"times":3,"unbreakable":2},{"verb":"follow","target":"Tom","unbreakable":"10s"}]}';
 		assert.deepEqual(parseArc(json, verbs).map((step) => step.args.unbreakable), [2, '10s'], 'Arc JSON writes both');

@@ -22,23 +22,32 @@ function isQueryName(name:string):boolean {
 	return QUERY_NAMES.has(name) || /^(is|has|was|can)[A-Z]/.test(name);
 }
 
+/** The args a call to `name` takes as written: its verb's, or for a shorthand ({@link VerbRegistry.findShorthand}), the rest of its verb's. */
+function writtenKinds(registry:VerbRegistry, name:string):Record<string, string> | undefined {
+	const spec = registry.find(name);
+	if (spec) {
+		return argKinds(spec);
+	}
+	const by = registry.findShorthand(name);
+	const kinds = by && argKinds(by);
+	delete kinds?.[by?.shorthandArg ?? ''];
+	return kinds;
+}
+
 /** What the parser needs to know of `registry`'s verbs, nested arcs' included. */
 function hooksOf(registry:VerbRegistry):VerbHooks {
 	return {
-		argsOf: (name) => {
-			const spec = registry.find(name);
-			return spec && argKinds(spec);
-		},
+		argsOf: (name) => writtenKinds(registry, name),
 		takesBody: (name, args) => {
 			if (name === CHOOSE_VERB) {
 				return args.every((arg) => arg.name === 'goal' || (arg.name === undefined && (arg.value.type === 'lit' || arg.value.type === 'text')));
 			}
-			const spec = registry.find(name);
-			const kinds = spec ? argKinds(spec) : {};
+			const kinds = writtenKinds(registry, name) ?? {};
 			const given = new Set(argKeys(kinds, args));
 			return Object.entries(kinds).some(([key, kind]) => kind === 'arc' && !given.has(key));
 		},
 		anyNamed: (name) => name === CHOOSE_VERB,
+		isVerb: (name) => !!registry.find(name),
 	};
 }
 
@@ -95,7 +104,7 @@ class Reader {
 				return { verb: GROUP_VERB, args: { arc: this.chain(node.expr, verbs, cond) } };
 			case 'block':
 				if (!node.body) {
-					throw new ArcError('{ } holds no step');
+					throw new ArcError('{ } contains no step');
 				}
 				return { verb: GROUP_VERB, args: { arc: this.chain(node.body, verbs, cond) } };
 			case 'let':
@@ -106,6 +115,10 @@ class Reader {
 				const name = node.callee.type === 'ident' || node.callee.type === 'member' ? node.callee.name : '';
 				if (verbs.find(name)) {
 					return this.verb(node, name, verbs);
+				}
+				const by = verbs.findShorthand(name);
+				if (by) {
+					return this.verb(node, by.name, verbs, name);
 				}
 				if (!cond && !isQueryName(name)) {
 					throw new ArcError(`unknown verb '${name}'`, name);
@@ -140,7 +153,7 @@ class Reader {
 		return { ...step, args: { ...step.args, [WHILE_ARG]: this.chain(b.type === 'block' ? b.body ?? b : b, verbs, cond) } };
 	}
 
-	/** A statement that asks rather than acts: it succeeds while it holds. */
+	/** A statement that asks rather than acts: it succeeds while it is true. */
 	private test(node:Syntax, verbs:VerbRegistry):Step {
 		if (hasVerbCall(node, hooksOf(verbs))) {
 			throw new ArcError(`${this.text(node)}: a verb inside an expression; join steps with &&, || or ;, or branch with if`);
@@ -155,7 +168,8 @@ class Reader {
 		return { ...step, let: name };
 	}
 
-	private verb(node:Syntax & { type:'call' }, name:string, verbs:VerbRegistry):Step {
+	/** Step `name` as `node` calls it; `shorthand`, the name it was called by in its stead ({@link VerbDef.shorthandArg}: `sob("…")`). */
+	private verb(node:Syntax & { type:'call' }, name:string, verbs:VerbRegistry, shorthand?:string):Step {
 		const spec = verbs.find(name)!;
 		// Method syntax is call syntax: `Wolf.attack()` is `attack(Wolf)`.
 		const written:Arg[] = node.callee.type === 'member' ? [{ value: node.callee.recv }, ...node.args] : node.args;
@@ -163,11 +177,15 @@ class Reader {
 			return this.choose(written, node.body, verbs.nested());
 		}
 		const kinds = argKinds(spec);
-		const keys = argKeys(kinds, written);
-		const args:Record<string, StepArg> = {};
+		const keys = argKeys(writtenKinds(verbs, shorthand ?? name)!, written);
+		const args:Record<string, StepArg> = shorthand === undefined ? {} : { [spec.shorthandArg!]: shorthand };
 		const put = (key:string | undefined, value:Syntax, cond = false):void => {
 			if (key === undefined) {
 				throw new ArcError(`verb '${name}' got an unexpected positional arg`);
+			}
+			// `scream("Help!", as=scream)` says it twice alike: once.
+			if (shorthand !== undefined && key === spec.shorthandArg && this.text(value).replace(/^["']|["']$/g, '') === shorthand) {
+				return;
 			}
 			if (key in args) {
 				throw new ArcError(`${name}(...) got ${key}= twice; give it once`);
@@ -248,11 +266,11 @@ class Reader {
 			return number;
 		}
 		// A duration keeps its unit, so seconds and rounds stay apart: `10s`, `2`.
-		if (base === 'hold' && number !== undefined) {
+		if (base === 'duration' && number !== undefined) {
 			const raw = this.text(node);
 			return /\d$/.test(raw) ? number : raw;
 		}
-		if ((base === 'hold' || base === 'bool') && literal?.kind === 'bool') {
+		if ((base === 'duration' || base === 'bool') && literal?.kind === 'bool') {
 			return literal.value;
 		}
 		if (base === 'string[]') {

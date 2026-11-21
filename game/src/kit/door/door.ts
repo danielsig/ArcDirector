@@ -142,6 +142,7 @@ export class Door extends Barrier {
 			interactable: true,
 			movable: false,
 			note: state,
+			state: { door: state },
 			examine: (name, nameOf, viewer) => `${name} is a door, ${state}${lockedNote(this.gameObject, nameOf, viewer)}.`,
 		};
 	}

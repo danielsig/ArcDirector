@@ -120,6 +120,7 @@ export class Bridge extends Barrier {
 			interactable: true,
 			movable: false,
 			note: `it is ${this.moving ? 'being ' : ''}${this.open ? 'lowered' : 'raised'}`,
+			state: { position: this.open ? 'lowered' : 'raised' },
 			always: true,
 			examine: (name) => (this.open
 				? `${name} is a bridge, lowered: you can cross. Working the sluice raises it.`

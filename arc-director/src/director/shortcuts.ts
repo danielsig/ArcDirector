@@ -1,6 +1,7 @@
+import { withAcquaintance, AcquaintanceFeature } from '../character/AcquaintanceFeature.js';
 import { withFeelings, FeelingFeature } from '../character/FeelingFeature.js';
 import { withGoals, GoalsFeature } from '../character/GoalsFeature.js';
-import { withHandover, HandoverFeature } from '../collective/HandoverFeature.js';
+import { withOwnMind, OwnMindFeature } from '../collective/OwnMindFeature.js';
 import { withMOBA, withRPG, GenreFeature } from '../genre/genre.js';
 import { addWllama, getWllama } from '../inference/browser.js';
 import { addFake, getFake } from '../inference/fake.js';
@@ -29,8 +30,8 @@ import { withRequirements, RequirementsFeature } from './RequirementsFeature.js'
 Object.assign(ArcDirector.prototype, {
 	withGoals,
 	getGoals: featureGetter(GoalsFeature),
-	withHandover,
-	getHandover: featureGetter(HandoverFeature),
+	withOwnMind,
+	getOwnMind: featureGetter(OwnMindFeature),
 	withWorldVerbs,
 	getWorldVerbs: featureGetter(WorldVerbsFeature),
 	withStealing,
@@ -49,6 +50,8 @@ Object.assign(ArcDirector.prototype, {
 	getTalk: featureGetter(TalkFeature),
 	withFeelings,
 	getFeelings: featureGetter(FeelingFeature),
+	withAcquaintance,
+	getAcquaintance: featureGetter(AcquaintanceFeature),
 	withMap,
 	getMap: featureGetter(MapFeature),
 	withKnowledge,

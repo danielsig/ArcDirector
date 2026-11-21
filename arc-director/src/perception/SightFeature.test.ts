@@ -7,6 +7,8 @@ import type { FakeChatFn } from '../inference/fake.js';
 import { OPEN_WORLD } from '../testing/open-world.js';
 import { Axes } from '../world/axes.js';
 import type { Vec } from '../world/world-types.js';
+import { internalsOf } from '../internals.js';
+import type { MemoryRecord } from '../memory/store.js';
 import type { SeenObject } from './perception-types.js';
 
 type Ctx = { id:string };
@@ -21,7 +23,6 @@ function scene(points:Record<string, Vec> = { Ada: [0, 0], Bo: [0, -3], Cy: [0, 
 		.addFake(chat ? { chat } : {})
 		.withVerbs((v) => v.addStock().addStockCollective())
 		.withDefaultKit({ verbs: ['wait', 'say'] })
-		.withHandover({ handover: false })
 		.withWorld({ ...OPEN_WORLD, geometry: { axes: Axes.Plane, getPose: (id) => ({ point: points[String(id)] ?? [0, 0], facing: [0, -1] }) } })
 		.withContext((id) => (points[id] ? { id } : undefined))
 		.withSight({ look: ({ id }) => ({ self: { id, point: points[id], facing: [0, -1] }, objects: [...others(id).map((other) => ({ id: other, point: points[other], tags: ['character'] })), ...things] }) })
@@ -41,7 +42,7 @@ describe('what sight makes out', () => {
 		await mind.memory.remember('FigureA is watching me');
 		const kept = director.character('Ada')!.persona.memory.all();
 		assert.deepEqual(kept.flatMap((r) => r.tags.filter((t) => t.startsWith('seen:'))).sort(), ['seen:Bo', 'seen:Cy']);
-		assert.ok(kept.some((r) => r.text === 'FigureA is watching me'), 'a label is kept as a word, never as who it is');
+		assert.ok(kept.some((r) => r.text === 'FigureA is watching Ada'), 'a label is kept as a word, never as who it is');
 		assert.ok(kept.every((r) => !r.text.includes('Ivo')), kept.map((r) => r.text).join('\n'));
 		director.dispose();
 	});
@@ -104,15 +105,112 @@ describe('what sight makes out', () => {
 		own.memory.noteSeen();
 		await own.memory.remember('Hooded owes me a loaf');
 		const kept = ():string[] => ada.persona.memory.all().map((r) => r.text);
-		assert.ok(kept().includes('Bo owes me a loaf'), kept().join('\n'));
-		assert.ok(kept().some((text) => text.startsWith('Last I saw Bo: Bo ')), kept().join('\n'));
-		assert.deepEqual((await own.memory.recall({ query: 'loaf' })).map((r) => r.text), ['Hooded owes me a loaf']);
+		assert.ok(kept().includes('Bo owes Ada a loaf'), kept().join('\n'));
+		assert.ok(kept().some((text) => text.startsWith('Ada last saw Bo: Bo ')), kept().join('\n'));
+		assert.deepEqual(await own.memory.recall({ query: 'loaf' }), ['moments ago: Hooded owes you a loaf']);
 		ada.collective = director.collective('Watch')!;
-		assert.ok(kept().includes('Bo owes me a loaf'), 'its own memory is untouched by the move');
+		assert.ok(kept().includes('Bo owes Ada a loaf'), 'its own memory is untouched by the move');
 		const watch = director.collective('Watch')!;
 		watch.mind!.seen({ id: 'Bo' });
 		watch.persona.memory.add({ category: 'semantic', text: (name) => `${name('Bo')} owes Ada a loaf`, tags: [], timestamp: 0 }, 0);
-		assert.deepEqual((await watch.mind!.memory.recall({ query: 'loaf' })).map((r) => r.text), ['Smith owes Ada a loaf']);
+		assert.deepEqual(await watch.mind!.memory.recall({ query: 'loaf' }), ['moments ago: Smith owes Ada a loaf', 'moments ago: Smith owes Ada a loaf'], 'its own record, and Ada\'s note, which it reads since she joined');
+		director.dispose();
+	});
+
+	it('teaches each character\'s own book what its collective\'s mind makes out through its eyes, as the rule names it for that character', async () => {
+		const director = await scene()
+			.withNames((observer, target) => (target.id !== 'Bo' ? target.id : observer.id === 'Cy' ? 'Smith' : 'Hooded'))
+			.addCollective({ id: 'Watch', mind: { rethinkingThreshold: 0 }, characters: [{ id: 'Cy' }] })
+			.connect();
+		const watch = director.collective('Watch')!;
+		assert.match(String(director.senses.all.sight({ id: 'Cy' }, watch.mind)), /Hooded/);
+		assert.equal(watch.persona.names.peek('Bo'), 'Hooded');
+		assert.equal(director.character('Cy')!.persona.names.peek('Bo'), 'Smith');
+		director.dispose();
+	});
+
+	it('remembers the state it saw a thing in, says once what changed, and changed() holds until it has seen it', async () => {
+		const bridge:SeenObject = { id: 'Bridge', point: [0, -5], tags: [], state: { position: 'raised' } };
+		const director = await scene(undefined, [bridge]).addCharacter({ id: 'Ada', mind: { rethinkingThreshold: 0 } }).connect();
+		const mind = director.character('Ada')!.mind!;
+		const look = ():void => {
+			director.senses.all.sight({ id: 'Ada' }, mind);
+		};
+		const changed = ():boolean => {
+			const { value } = director.evaluate('Ada', 'changed("Bridge")');
+			return value.kind === 'bool' && value.value;
+		};
+		// A think that ends well keeps what it saw.
+		const thought = ():void => internalsOf(mind.memory).commitSeen();
+		const sighting = ():MemoryRecord | undefined => mind.persona.memory.all().find((r) => r.tags.includes('seen:Bridge'));
+		look();
+		assert.deepEqual(mind.memory.noteSeen(), [], 'nothing seen before');
+		thought();
+		bridge.state = { position: 'lowered' };
+		director.tick(0.1);
+		assert.equal(changed(), true);
+		look();
+		assert.deepEqual(mind.memory.noteSeen(), ['Bridge was raised when you last saw it. Now it is lowered.']);
+		internalsOf(mind).stamp(7);
+		look();
+		assert.deepEqual(mind.memory.noteSeen(), ['Bridge was raised when you last saw it. Now it is lowered.'], 'its think failed: told again');
+		assert.equal(sighting()?.timestamp, 7, 'last seen now');
+		thought();
+		look();
+		assert.deepEqual(mind.memory.noteSeen(), [], 'said once');
+		director.tick(0.1);
+		assert.equal(changed(), false);
+		director.dispose();
+	});
+
+	it('sees within a field of view where one is set, a character\'s own over the director\'s; all around without', async () => {
+		// Facing north (-z): Bo ahead, Ivo to the side, Kim a little behind the side, Eda behind.
+		const points:Record<string, Vec> = { Ada: [0, 0], Owl: [0.5, 0], Cat: [0, 0.2], Bo: [0, -3], Ivo: [3, 0], Kim: [-3, 0.8], Eda: [0, 3] };
+		const director = await scene(points)
+			.withSight({ fieldOfView: { clear: 120, dim: 180, vague: 220 } })
+			.addCharacter({ id: 'Ada', mind: { rethinkingThreshold: 0 } })
+			.addCharacter({ id: 'Owl', mind: { rethinkingThreshold: 0 }, fieldOfView: 360 })
+			.addCharacter({ id: 'Cat', mind: { rethinkingThreshold: 0 }, fieldOfView: 180 })
+			.connect();
+		const sight = (id:string):string => String(director.senses.all.sight({ id }, director.character(id)!.mind!));
+		assert.match(sight('Ada'), /Bo 3 paces/);
+		assert.doesNotMatch(sight('Ada'), /Eda/, 'nothing behind it');
+		assert.match(sight('Ada'), /Ivo 3 paces to your right/, 'to its side: dim, by name');
+		assert.match(sight('Ada'), /FigureA/, 'a little behind: vague');
+		assert.doesNotMatch(sight('Ada'), /Kim/);
+		assert.match(sight('Owl'), /Eda/, 'its own field, all around');
+		assert.match(sight('Cat'), /Ivo 3 paces to your right/, 'a cone 180 across: its sides whole');
+		assert.doesNotMatch(sight('Cat'), /Eda|Kim|FigureA/, 'nothing past them, not even vaguely');
+		director.dispose();
+	});
+
+	it('sees one exactly beside it in a cone 180 across, whichever way it faces', async () => {
+		let yaw = 0;
+		const way = ():Vec => [Math.sin(yaw), -Math.cos(yaw)];
+		const director = await new ArcDirector<Ctx>()
+			.addFake({})
+			.withVerbs((v) => v.addStock())
+			.withDefaultKit({ verbs: ['wait'] })
+			.withContext((id) => ({ id }))
+			.withSight({ fieldOfView: 180, look: ({ id }) => ({ self: { id, point: [0, 0], facing: way() }, objects: [{ id: 'Bo', point: [-way()[1] * 3, way()[0] * 3], tags: [] }] }) })
+			.addCharacter({ id: 'Ada', mind: { rethinkingThreshold: 0 } })
+			.connect();
+		const missed = [...Array(360).keys()].filter((deg) => {
+			yaw = deg * Math.PI / 180;
+			return !director.getSight()!.sees('Ada', 'Bo');
+		});
+		assert.deepEqual(missed, []);
+		director.dispose();
+	});
+
+	it('says who perceives an event: whoever makes out one it is about, not one too far to', async () => {
+		const director = await scene()
+			.addCharacter({ id: 'Ada', mind: { rethinkingThreshold: 0 } })
+			.addCharacter({ id: 'Far', mind: { rethinkingThreshold: 0 } })
+			.connect();
+		director.pushEvent({ kind: 'Theft', text: (who) => `${who('Bo')} stole a loaf` });
+		assert.equal(director.character('Ada')!.mind!.events().length, 1, 'Bo is 3 paces from Ada');
+		assert.equal(director.character('Far')!.mind!.events().length, 0, 'and 117 from Far');
 		director.dispose();
 	});
 
@@ -127,25 +225,35 @@ describe('what sight makes out', () => {
 });
 
 describe('earshot by what a mind can tell', () => {
-	it('names whom it sees or whose voice it knows; anyone else it cannot make out, and say(to) them fails', async () => {
+	it('names whom it sees, and a voice it cannot place by a name of its own it can answer; seen speaking, the voice is theirs', async () => {
 		const points:Record<string, Vec> = { Ada: [0, 0], Bo: [0, -3], Cy: [0, -30], Ivo: [0, -45], Eda: [0, -80], Far: [0, -120] };
 		const director = await scene(points).addCharacter({ id: 'Ada', mind: { rethinkingThreshold: 0 } }).connect();
 		const mind = director.character('Ada')!.mind!;
+		const talk = director.getTalk()!;
 		const earshot = ():string => String(director.senses.all.earshot({ id: 'Ada' }, mind));
-		assert.match(earshot(), /In talking range: Bo, Cy, someone you cannot make out\./);
-		assert.deepEqual(director.getTalk()!.canSay('Ada', 'Ivo'), { ok: false, reason: 'no one you can make out here answers to Ivo; get closer first', nearby: ['Bo', 'Cy', 'Ivo'] });
-		mind.memory.noteConversation({ speakerID: 'Ivo', text: 'Who goes there?' });
-		assert.match(earshot(), /someone you cannot make out/, 'a voice it never saw is no one it knows');
+		const heard = ():string[] => mind.events().map((e) => e.text);
+		director.senses.all.sight({ id: 'Ada' }, mind);
+		assert.match(earshot(), /In talking range: Bo, Cy, someone you cannot make out\./, 'Ivo, vague and silent');
+		assert.equal(talk.canSay('Ada', 'Ivo').ok, false);
+		talk.say('Ivo', 'Who goes there?', 'Ada', 1);
+		assert.deepEqual(heard(), ['VoiceA says to you: "Who goes there?"'], 'heard, not made out: a voice of its own');
+		assert.match(earshot(), /In talking range: Bo, Cy, VoiceA\./);
+		assert.equal(talk.canSay('Ada', mind.persona.names.resolve('VoiceA')).ok, true, 'a voice it heard, it can answer');
+		points.Bo = [0, -45];
+		talk.say('Bo', 'Over here.', 'Ada', 2);
+		assert.equal(heard().at(-1), 'VoiceB says to you: "Over here."', 'one it saw, silent, heard out of sight: not by the face');
+		points.Bo = [0, -3];
+		// Everyone faces north: Ivo just north of Ada turns his back on her, just south of her his face.
 		points.Ivo = [0, -3];
-		director.senses.all.sight({ id: 'Ada' }, mind);
+		talk.say('Ivo', 'It is me.', 'Ada', 3);
+		assert.equal(heard().at(-1), 'VoiceA says to you: "It is me."', 'seen speaking with his back to her: no face to tie the voice to');
+		points.Ivo = [0, 3];
+		talk.say('Ivo', 'Behind you.', 'Ada', 3.5);
 		points.Ivo = [0, -45];
-		assert.match(earshot(), /In talking range: Bo, Cy, Ivo\./, 'a voice it knows');
-		assert.equal(director.getTalk()!.canSay('Ada', 'Ivo').ok, true);
-		director.senses.all.sight({ id: 'Ada' }, mind);
-		const label = mind.persona.names.peek('Ivo')!;
-		assert.match(label, /^Figure[A-Z]+$/);
-		assert.match(earshot(), /In talking range: Bo, Cy, someone you cannot make out\./, 'seen again but not made out, a voice it knows is no one it can tell');
-		assert.deepEqual(director.getTalk()!.canSay('Ada', mind.persona.names.resolve(label)), { ok: false, reason: `no one you can make out here answers to ${label}; get closer first`, nearby: ['Bo', 'Cy', 'Ivo'] });
+		assert.deepEqual(heard().slice(0, 1), ['Ivo says to you: "Who goes there?"'], 'seen speaking face on: its voice is theirs, back to its first line');
+		talk.say('Ivo', 'Still here.', 'Ada', 4);
+		assert.equal(heard().at(-1), 'Ivo says to you: "Still here."', 'a voice it knows, out of sight');
+		assert.match(earshot(), /In talking range: Bo, Cy, Ivo\./);
 		director.dispose();
 	});
 });

@@ -1,5 +1,6 @@
 import type { Collective } from '../collective/Collective.js';
 import type { Mind, MindJSON, MindSettings } from '../mind/mind.js';
+import type { MindEvent } from '../mind/mind-types.js';
 import { lawGroup, type Law, type LawSpec } from '../arc/laws.js';
 import { hand } from '../internals.js';
 import { ArcRunner, type ArcRunnerJSON, type RunnerFields, type RunnerOptions } from './arc-runner.js';
@@ -82,9 +83,17 @@ export class Character<TCtx = unknown> extends ArcRunner<TCtx> {
 		} satisfies Omit<CharacterFields<TCtx>, keyof RunnerFields<TCtx>>);
 	}
 
-	/** Its own mind, or its collective's. Null when the host drives it. */
+	/** The mind that thinks for it: its own while it has one, in a collective too, else its collective's. Null when the host drives it. */
 	public get mind():Mind<TCtx> | null {
-		return this._collective?.mind ?? this._mind;
+		return this._mind ?? this._collective?.mind ?? null;
+	}
+
+	/**
+	 * Whether it thinks with a mind of its own. In a collective that is for now: it stays one of its characters, but
+	 * the collective's mind does not order it, pool its sight or hear through it until it gives its mind up.
+	 */
+	public get thinksForItself():boolean {
+		return this._mind !== null;
 	}
 
 	/**
@@ -119,7 +128,7 @@ export class Character<TCtx = unknown> extends ArcRunner<TCtx> {
 	}
 
 	public get owner():ArcRunner<TCtx> | undefined {
-		return this._collective ?? (this._mind ? this : undefined);
+		return this._mind ? this : this._collective ?? undefined;
 	}
 
 	public get embodied():boolean {
@@ -134,6 +143,11 @@ export class Character<TCtx = unknown> extends ArcRunner<TCtx> {
 		}
 		const own = home.laws.filter((law) => lawGroup(law.name) === this.id).length;
 		return home.addLaw({ ...spec, who: 'me', name: `${this.id}.${spec.name ?? `law_${own + 1}`}` }, pinned);
+	}
+
+	/** Its mind is told `event`, known by this character unless the event says who perceived it. */
+	public override tell(event:MindEvent):void {
+		super.tell({ ...event, knownBy: event.knownBy === undefined ? [this.id] : event.knownBy });
 	}
 
 	public override removeLaw(name:string):void {

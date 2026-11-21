@@ -27,6 +27,8 @@ export type Sense = {
 	movable?:boolean;
 	/** Said beside it in sight ("open", "it is raised"); the first one wins. */
 	note?:string;
+	/** What of it lasts until something changes it (`SeenObject.state`): a mind that finds it changed is told so. */
+	state?:Readonly<Record<string, string>>;
 	/** Aimed at before what stands near it (a door, a chest, a web, the bridge and its lever). */
 	prominent?:true;
 	/** Seen however far off (the bridge). */

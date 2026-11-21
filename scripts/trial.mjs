@@ -110,8 +110,8 @@ console.log(`out: ${out}`);
 const PASS = { text: 'pass()', json: '{"steps":[{"verb":"pass"}]}', schema: '{"steps":[{"verb":"pass"}]}' };
 const of = (x, ...args) => (typeof x === 'function' ? x(...args) : x);
 
-/** A think's request, not a `choose` pick's (log probabilities) or a handover's. */
-const isThink = (req) => req.topLogprobs === undefined && !!req.thread && !req.thread.startsWith('handover');
+/** A think's request, not a `choose` pick's (log probabilities). */
+const isThink = (req) => req.topLogprobs === undefined && !!req.thread;
 
 /** `messages` with each of `patches` applied to the message (and text part) it names. */
 function patch(messages, patches, format) {
@@ -143,7 +143,7 @@ let requests = 0;
 let stopped = '';
 const dumped = new Set();
 
-/** The fake provider's replies for `task`: its `fake` lines in turn, then `pass`. Picks get `A`, handovers `{}`. */
+/** The fake provider's replies for `task`: its `fake` lines in turn, then `pass`. Picks get `A`. */
 function fakeChat(task, format) {
 	let n = 0;
 	const replies = format === 'text' ? task.fake ?? [] : [];

@@ -47,9 +47,11 @@ export type VerbHooks = {
 	takesBody(name:string, args:readonly Arg[]):boolean;
 	/** Whether verb `name` takes named args of any name (`choose`'s choices), so any `, name=` ends its prose. */
 	anyNamed(name:string):boolean;
+	/** Whether `name` written alone, not called, is a verb: a name `argsOf` knows only as called (a shorthand, `sob(…)`) is a word. */
+	isVerb(name:string):boolean;
 };
 
-const NO_VERBS:VerbHooks = { argsOf: () => undefined, takesBody: () => false, anyNamed: () => false };
+const NO_VERBS:VerbHooks = { argsOf: () => undefined, takesBody: () => false, anyNamed: () => false, isVerb: () => false };
 
 /** Tokens that end a statement, or a body that was never written. */
 const CLOSERS = new Set<TokKind>(['eof', 'rp', 'rbrace', 'semi', 'comma', 'amp', 'pipe', 'while']);
@@ -146,7 +148,7 @@ class Parser {
 
 	/** Two statements on one line with nothing between: only verb calls may (`think(…)use(…)`). */
 	private checkSameLine(t:Tok):void {
-		if (t.kind === 'lp' || t.kind === 'lbrace' || (t.kind === 'ident' && (this.isVerb(t.raw) || t.raw === 'let'))) {
+		if (t.kind === 'lp' || t.kind === 'lbrace' || (t.kind === 'ident' && (this.isVerb(t.raw, this.peek(1).kind === 'lp') || t.raw === 'let'))) {
 			return;
 		}
 		// Words after words are prose, not an arg that slipped out of its call.
@@ -159,8 +161,9 @@ class Parser {
 		throw new ExprError(`unexpected ${t.raw || t.kind}`);
 	}
 
-	private isVerb(name:string):boolean {
-		return this._verbs.argsOf(name) !== undefined;
+	/** Whether `name` is a verb, `called` (written `name(`) or alone. */
+	private isVerb(name:string, called = false):boolean {
+		return called ? this._verbs.argsOf(name) !== undefined : this._verbs.isVerb(name);
 	}
 
 	private statement():Syntax {
@@ -299,29 +302,86 @@ class Parser {
 		this.eat('lp');
 		const name = callee.name;
 		const args = this.args(name);
-		this.close('rp', this.isVerb(name));
+		this.close('rp', this.isVerb(name, true));
 		this.trailingArg(name, args);
 		return this.bodyOf(name, { type: 'call', callee, args, ...this.span(callee.from) });
 	}
 
 	/**
-	 * `say("Hi") to Bram`, `pick_up(Bread) from Chest` (or `to=Bram`), as a model writes it: an arg name of the verb's
-	 * after the call, on its line, and one plain value (a name or a string) that ends the statement, is that arg, where
-	 * it was not given. A string alone there is its text arg not given: `say(to=Bram, as=whisper) "Quiet"`. Anything else
-	 * stays outside the parentheses, an error.
+	 * Args a model writes after the call, on its line, where it did not give them inside. An arg name of the verb's with
+	 * one plain value (a name or a string) that ends the statement is that arg: `say("Hi") to Bram`, `pick_up(Bread)
+	 * from Chest` (or `to=Bram`). Else words to the end of the line, or a quote, are its text arg:
+	 * `say(to=Bram, as=whisper) Keep your voice down.`, `say(to=Bram) "Quiet"`; not where they start a join (`&&`), a
+	 * block or `else`, or call a verb. Anything else stays outside the parentheses, an error.
 	 */
 	private trailingArg(name:string, args:Arg[]):void {
 		const kinds = this._verbs.argsOf(name);
 		const t = this.peek();
-		const text = kinds && t.kind === 'str' && !t.nl && (CLOSERS.has(this.peek(1).kind) || this.peek(1).nl)
-			? Object.keys(kinds).find((key) => isText(kinds[key]) && !argKeys(kinds, args).includes(key))
-			: undefined;
-		if (text) {
+		if (!kinds || t.nl) {
+			return;
+		}
+		const text = Object.keys(kinds).find((key) => isText(kinds[key]) && !argKeys(kinds, args).includes(key));
+		if (text && t.kind === 'str' && (CLOSERS.has(this.peek(1).kind) || this.peek(1).nl)) {
 			this.eat();
 			args.push({ name: text, value: this.node({ type: 'lit', value: { kind: 'string', value: t.raw }, from: t.i, to: t.end }) });
 			return;
 		}
-		if (!kinds || t.kind !== 'ident' || t.nl || !Object.hasOwn(kinds, t.raw) || kinds[t.raw].startsWith('arc') || argKeys(kinds, args).includes(t.raw)) {
+		if (t.kind === 'ident' && Object.hasOwn(kinds, t.raw)) {
+			this.ownArg(t, kinds, args);
+		}
+		else if (text) {
+			this.trailingText(text, kinds, args);
+		}
+	}
+
+	/** Words after a call that are its text arg `key`, to the end of the line or a closing bracket it did not open. */
+	private trailingText(key:string, kinds:Readonly<Record<string, string>>, args:Arg[]):void {
+		const t = this.peek();
+		if (!['ident', 'str', 'num'].includes(t.kind) || t.raw === 'else' || this.isVerb(t.raw)) {
+			return;
+		}
+		// What ends the words before their line does: a join, a comment, an `else` or `;` before a step, an arg of its own.
+		const verbAt = (j:number):boolean => {
+			const word = /^\s*([A-Za-z_]\w*)(\s*\()?/.exec(this._src.slice(j));
+			return this.isVerb(word?.[1] ?? '', !!word?.[2]) || /^\s*\{/.test(this._src.slice(j));
+		};
+		const ownAt = (j:number):string | undefined => {
+			const named = /^,\s*([A-Za-z_]\w*)\s*[=:](?!=)/.exec(this._src.slice(j))?.[1];
+			return named && Object.hasOwn(kinds, named) && !argKeys(kinds, args).includes(named) ? named : undefined;
+		};
+		let depth = 0;
+		let i = t.i;
+		for (; i < this._src.length && this._src[i] !== '\n'; i++) {
+			const c = this._src[i];
+			const rest = this._src.slice(i, i + 2);
+			if (depth === 0 && (rest === '&&' || rest === '||' || rest === '//' || (c === ';' && verbAt(i + 1)) || (/^\selse\b/.test(this._src.slice(i, i + 6)) && verbAt(i + 5)) || ownAt(i))) {
+				break;
+			}
+			depth += '([{'.includes(c) ? 1 : 0;
+			if (')]}'.includes(c) && depth-- === 0) {
+				break;
+			}
+		}
+		const words = this._src.slice(t.i, i).trim();
+		if ([...words.matchAll(/([A-Za-z_]\w*)\s*\(/g)].some((call) => this.isVerb(call[1], true))) {
+			return;
+		}
+		// A quoted line, its last mark after the quote: `"Quiet".`
+		const quoted = /^(["'])(.*)\1([.!?]?)$/.exec(words);
+		this.resume(i);
+		args.push({ name: key, value: this.node({ type: 'text', value: quoted ? quoted[2] + quoted[3] : words, from: t.i, to: i }) });
+		// Its own args after the words: `say(as=whisper) Keep quiet, to=Bram`.
+		for (let own = ownAt(i); own; own = ownAt(this.peek().i)) {
+			this.eat();
+			this.eat();
+			this.eat();
+			args.push({ name: own, value: this.argValue(true) });
+		}
+	}
+
+	/** `to Bram` or `to=Bram` after the call: an arg of the verb's own it was not given, and one plain value that ends the statement. */
+	private ownArg(t:Tok, kinds:Readonly<Record<string, string>>, args:Arg[]):void {
+		if (kinds[t.raw].startsWith('arc') || argKeys(kinds, args).includes(t.raw)) {
 			return;
 		}
 		const keyed = this.namedAt(0) ? 2 : 1;
@@ -339,7 +399,7 @@ class Parser {
 	}
 
 	private bodyOf(name:string, call:Syntax & { type:'call' }):Syntax {
-		if (!this.isVerb(name)) {
+		if (!this.isVerb(name, true)) {
 			return this.node(call);
 		}
 		if (!this._verbs.takesBody(name, call.args) && this.peek().kind === 'lbrace' && !this.peek().nl) {

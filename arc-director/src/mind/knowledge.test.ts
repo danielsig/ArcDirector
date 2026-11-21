@@ -48,7 +48,7 @@ describe('crowdKnowledge', () => {
 });
 
 describe('knowledgeFor', () => {
-	const know = (query:string):string => knowledgeFor(PAGES, query, ASKS).join('\n\n');
+	const know = (query:string):string => [knowledgeFor(PAGES, query, ASKS)].flat().join('\n\n');
 
 	it('lists topics on an empty query', () => {
 		assert.match(know(''), /Topics: Tree, Cottage/);

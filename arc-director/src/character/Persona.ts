@@ -1,8 +1,9 @@
 import { parseTextWithIDs } from './text-with-ids.js';
 import { internalsOf } from '../internals.js';
 import { isRecord } from '../json.js';
-import { MemoryStore, nameTags, type MemoryDraft, type MemoryJSON, type MemoryRecord } from '../memory/store.js';
-import { NameBook, type NameBookJSON } from './NameBook.js';
+import { MemoryStore, nameTags, type MemoryDraft } from '../memory/store.js';
+import { NameBook, type Knows, type NameBookJSON } from './NameBook.js';
+import type { SightField } from '../perception/sight.js';
 import { GOAL_PINNED_THINKS, type Identity, type Goal, type WatchInput, type Watches } from './character-types.js';
 import {
 	applyWatchOps,
@@ -42,6 +43,14 @@ export type PersonaSpec = {
 	sightFocusWritable?:boolean;
 	maxSightFocus?:number;
 	sightLimit?:number;
+	/** How wide its look is, over the director's (`withSight({ fieldOfView })`); from the host's spec, never saved. */
+	fieldOfView?:SightField;
+	/**
+	 * Whom it knows from the start, and what of them, where who knows whom is the game's (`withAcquaintance`): by a
+	 * character's id, a collective's (its characters) or a tag; `true` for all of it. `{ Bram: true, Hooded: [Knows.Look] }`.
+	 * What it learns in play is saved with its names; this is from the host's spec, never saved.
+	 */
+	knows?:Readonly<Record<string, readonly Knows[] | true>>;
 };
 
 export type PersonaJSON = {
@@ -49,7 +58,7 @@ export type PersonaJSON = {
 	/** Their `until` tests are not saved: a load takes them from the host's spec again, by the goal's text. */
 	goals:Goal<never>[];
 	maxGoals:number;
-	memories:MemoryJSON[];
+	/** Its owner's cap on plain episodic memories. The memories themselves are the cast's (`CastJSON.memories`). */
 	maxEpisodic:number;
 	names?:NameBookJSON;
 	watches?:WatchInput;
@@ -82,15 +91,18 @@ export class Persona {
 	public sightFocusWritable:boolean;
 	public maxSightFocus:number;
 	public sightLimit:number | undefined;
+	public fieldOfView:SightField | undefined;
+	public knows:PersonaSpec['knows'];
 
-	constructor(spec:PersonaSpec = {}, memory = new MemoryStore()) {
+	constructor(spec:PersonaSpec, memory:MemoryStore) {
 		this.identity = spec.identity
 			? { ...spec.identity, traits: spec.identity.traits ? [...spec.identity.traits] : undefined }
 			: {};
 		this.goals = spec.goals ? spec.goals.map((g) => ({ ...g })) : [];
 		this.maxGoals = spec.maxGoals ?? 5;
 		this.memory = memory;
-		this.addSpecMemories(spec.memories ?? [], memory.all().length === 0);
+		// Every caller with spec memories builds it fresh: a loaded persona adds its pinned ones itself (`fromJSON`).
+		this.addSpecMemories(spec.memories ?? [], true);
 		this.pinnedWatches = asWatches(spec.pinnedWatches);
 		this.watches = extrasWithoutPins(asWatches(spec.watches), this.pinnedWatches);
 		this.watchesWritable = spec.watchesWritable ?? true;
@@ -99,21 +111,25 @@ export class Persona {
 		this.sightFocus = extrasWithoutPinnedFocus(asFocusList(spec.sightFocus, this.maxSightFocus), this.pinnedSightFocus);
 		this.sightFocusWritable = spec.sightFocusWritable ?? true;
 		this.sightLimit = spec.sightLimit;
+		this.fieldOfView = spec.fieldOfView;
+		this.knows = spec.knows;
 		if (spec.maxGoals !== undefined) {
 			this.trimGoals();
 		}
 	}
 
 	/**
-	 * The host's memories. Pinned ones replace the pinned memory with the same first two tags, or are added;
-	 * the rest are added only to a `fresh` persona, not to a loaded one.
+	 * The host's memories, notes of whose they are (`writer`, else this persona's owner): their words for that one, `I`
+	 * or `you`, kept as its id. Pinned ones replace the pinned memory with the same first two tags, or are
+	 * added; the rest are added only to a `fresh` persona, not to a loaded one.
 	 */
 	public addSpecMemories(drafts:readonly MemoryDraft[], fresh:boolean):void {
 		for (const mem of drafts) {
 			const tags = mem.tags ?? [];
+			const kept = { category: mem.category ?? 'episodic', text: mem.text, knownBy: mem.knownBy, writer: mem.writer ?? this.memory.owner, tags, weight: mem.weight };
 			if (!mem.pinned) {
 				if (fresh) {
-					this.memory.add({ category: mem.category ?? 'episodic', text: mem.text, tags, pinned: false }, mem.timestamp ?? 0);
+					this.memory.add({ ...kept, pinned: false }, mem.timestamp ?? 0);
 				}
 				continue;
 			}
@@ -122,11 +138,13 @@ export class Persona {
 				keyTags.length > 0 && keyTags.every((tag) => row.tags.includes(tag))
 			));
 			if (existing) {
-				this.memory.rewrite(existing.id, mem.text);
-				existing.tags = [...tags];
+				const row = this.memory.rewrite(existing.id, mem.text);
+				if (row) {
+					row.tags = [...tags];
+				}
 				continue;
 			}
-			this.memory.add({ category: mem.category ?? 'episodic', text: mem.text, tags, pinned: true }, mem.timestamp ?? 0);
+			this.memory.add({ ...kept, pinned: true }, mem.timestamp ?? 0);
 		}
 	}
 
@@ -238,12 +256,14 @@ export class Persona {
 		return changed;
 	}
 
-	/** It is reached: no longer a goal, pinned for a few thinks, and after that only `recall` finds it. */
-	public finishGoal(goal:Goal<never>, now:number):void {
+	/** It is reached: no longer a goal, pinned for a few thinks, and after that only `recall` finds it. Known by `knownBy`, by default the owner. */
+	public finishGoal(goal:Goal<never>, now:number, knownBy?:string[], writer = this.memory.owner):void {
 		this.goals = this.goals.filter((g) => g !== goal);
 		internalsOf(this.memory).add({
-			// The goal is in its mind's words: kept by id, as every memory.
+			// The goal is in its mind's words, a note of its writer's: kept by id, as every memory.
 			text: parseTextWithIDs(`Goal reached: ${goal.text}`, (word) => this.names.idOf(word)),
+			knownBy,
+			writer,
 			tags: ['goal', ...nameTags(goal.text)],
 			pinned: true,
 			pinnedThinks: GOAL_PINNED_THINKS,
@@ -274,15 +294,16 @@ export class Persona {
 	}
 
 	private stampIdentity(id:string, now:number):void {
-		const text = this.identity.role ? `I am ${id}. Role: ${this.identity.role}.` : `I am ${id}.`;
+		// Kept by id, read as `You are Bob.` by its own mind.
+		const text = (name:(id:string)=>string):string => `${name(id)} is ${id}.${this.identity.role ? ` Role: ${this.identity.role}.` : ''}`;
 		const existing = this.memory.pinned().find((row) => (
 			row.category === 'identity' || row.tags.includes('identity')
 		));
 		if (existing) {
-			this.memory.rewrite(existing.id, text);
-			existing.category = 'identity';
-			if (!existing.tags.includes('identity')) {
-				existing.tags = [...existing.tags, 'identity'];
+			const row = this.memory.rewrite(existing.id, text)!;
+			row.category = 'identity';
+			if (!row.tags.includes('identity')) {
+				row.tags = [...row.tags, 'identity'];
 			}
 			return;
 		}
@@ -299,7 +320,6 @@ export class Persona {
 			identity: { ...this.identity, traits: this.identity.traits ? [...this.identity.traits] : undefined },
 			goals: this.goals.map(({ until, ...goal }) => (typeof until === 'string' ? { ...goal, until } : goal)),
 			maxGoals: this.maxGoals,
-			memories: this.memory.toJSON(),
 			maxEpisodic: this.memory.maxEpisodic,
 			names: this.names.toJSON(),
 			watches: copyWatches(this.watches),
@@ -314,16 +334,17 @@ export class Persona {
 	}
 
 	/**
-	 * A saved persona under the host's current spec: its pins come first (saved pins that repeat them are
-	 * dropped), its pinned memories are refreshed, and its writable flags and sight limit win when set.
+	 * A saved persona under the host's current spec, with `memory` (its view of the cast's pool, read back): its pins
+	 * come first (saved pins that repeat them are dropped), its pinned memories are refreshed, and its writable flags
+	 * and sight limit win when set.
 	 */
-	public static fromJSON(json:PersonaJSON, host:PersonaSpec = {}):Persona {
+	public static fromJSON(json:PersonaJSON, host:PersonaSpec, memory:MemoryStore):Persona {
 		const test = (goal:Goal<never>):Goal<never>['until'] => goal.until ?? host.goals?.find((g) => g.text === goal.text)?.until;
 		const goals = json.goals.map((goal) => {
 			const until = test(goal);
 			return until ? { ...goal, until } : goal;
 		});
-		const persona = new Persona({ identity: json.identity, goals }, MemoryStore.fromJSON(json.memories));
+		const persona = new Persona({ identity: json.identity, goals }, memory);
 		persona.addSpecMemories(host.memories ?? [], false);
 		persona.memory.maxEpisodic = json.maxEpisodic;
 		persona.maxGoals = json.maxGoals;
@@ -342,6 +363,8 @@ export class Persona {
 		);
 		persona.sightFocusWritable = host.sightFocusWritable ?? json.sightFocusWritable ?? true;
 		persona.sightLimit = host.sightLimit ?? json.sightLimit;
+		persona.fieldOfView = host.fieldOfView;
+		persona.knows = host.knows;
 		persona.trimGoals();
 		return persona;
 	}

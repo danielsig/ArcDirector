@@ -8,7 +8,8 @@ import { hand, internalsOf } from '../internals.js';
 import { Mind, type MindJSON } from '../mind/mind.js';
 import { programFilesSection, type ProgramFile } from '../mind/prompt.js';
 import type { ArcDirector } from '../director/ArcDirector.js';
-import type { CharacterSpec } from '../director/director-types.js';
+import type { CharacterSpec, CollectiveSpec } from '../director/director-types.js';
+import { MemorySharing } from '../memory/store.js';
 import { squadTag, isSquadTag, shortTag, shortTags } from './tags.js';
 import { CHOOSE_VERB, MIND_ONLY_VERBS, PASS_VERB, STOCK_ARC_VERBS, stepDoing, type VerbRegistry } from '../arc/stock-verbs.js';
 import { isFormationVerb, STOCK_COLLECTIVE_VERBS } from './collective-verbs.js';
@@ -71,6 +72,10 @@ export class Collective<TCtx = unknown> extends ArcRunner<TCtx> {
 	public readonly mind:Mind<TCtx>;
 	/** Most units one `command` may address at once. Unset to allow command to address all units. */
 	public maxUnitsPerCommand?:number;
+	/** What a character of it reads while it thinks for itself (`CollectiveSpec.sharing`). */
+	public sharing = MemorySharing.PerCharacter;
+	/** What one that leaves it for good keeps of what it did not witness (`CollectiveSpec.leaverKeepsMemory`). */
+	public leaverKeepsMemory?:CollectiveSpec<TCtx>['leaverKeepsMemory'];
 	private _characters:Character<TCtx>[] = [];
 	private _commander:Character<TCtx> | null = null;
 	/** The characters each was last issued a program with. */
@@ -152,14 +157,19 @@ export class Collective<TCtx = unknown> extends ArcRunner<TCtx> {
 		}
 		const catalog = arc.length > 0 && arc.every((step) => step.verb === 'command') ? internalsOf(this._director).watches.catalog(this.voice) : undefined;
 		return !!catalog && arc.every((step) => {
-			const units = typeof step.args.who === 'string' ? evaluateWho(step.args.who, catalog, this).filter((c) => c !== this._commander) : [];
+			const units = typeof step.args.who === 'string' ? evaluateWho(step.args.who, catalog, this).filter((c) => this.takesOrders(c)) : [];
 			return isArc(step.args.arc) && units.length > 0 && units.every((c) => c.runs(step.args.arc as Arc));
 		});
 	}
 
-	/** Whether any of its characters but the commander runs a program: waiting then is supervising. */
+	/** Whether any of its characters that take its orders runs a program: waiting then is supervising. */
 	public working():boolean {
-		return this._characters.some((c) => c !== this._commander && c.busy);
+		return this._characters.some((c) => this.takesOrders(c) && c.busy);
+	}
+
+	/** Whether `character` takes orders from its mind: not its commander, nor one thinking for itself for now. */
+	private takesOrders(character:Character<TCtx>):boolean {
+		return character !== this._commander && !character.thinksForItself;
 	}
 
 	/**
@@ -260,7 +270,7 @@ export class Collective<TCtx = unknown> extends ArcRunner<TCtx> {
 	 * The group's name, if they are one.
 	 */
 	public command(characters:readonly Character<TCtx>[], arc:Arc, group?:string, append = false):string | undefined {
-		const troops = characters.filter((character) => character !== this._commander);
+		const troops = characters.filter((character) => this.takesOrders(character));
 		const squad = troops.map((character) => character.id);
 		const name = troops.length >= 2 ? this.groupFor(troops, group?.trim() || undefined) : undefined;
 		for (const character of troops) {
@@ -397,15 +407,17 @@ export class Collective<TCtx = unknown> extends ArcRunner<TCtx> {
 		if (laws) {
 			parts.push(laws);
 		}
+		// Its laws above hold for all its characters; the programs here and below are its orders', which one thinking for
+		// itself does not take.
 		const records = this.standing
-			.filter((character) => character !== this._commander && character.busy && character.arc && !character.record.empty)
+			.filter((character) => this.takesOrders(character) && character.busy && character.arc && !character.record.empty)
 			.map((character) => `- ${mind.nameOf(character.id)}: ${character.record.toString((id) => mind.nameOf(id))}`);
 		if (records.length > 0) {
 			parts.push(`How each program is going (latest steps; failures say why; picked counts its choose picks). Reprogram what keeps failing, and keep what works:\n${records.join('\n')}`);
 		}
 		const commander = this._commander ?? this;
 		const keep = commander.activeVerbs().has(PASS_VERB) ? mind.shownSteps([{ verb: PASS_VERB, args: {} }], commander.verbs, mind.arcFormat) : undefined;
-		const files = programFilesSection(this.programFiles(programs, mind), keep);
+		const files = programFilesSection(this.programFiles(programs.filter(({ character }) => this.takesOrders(character)), mind), keep);
 		if (files) {
 			parts.push(files);
 		}
@@ -522,7 +534,7 @@ export class Collective<TCtx = unknown> extends ArcRunner<TCtx> {
 	private rosterRows(standing:readonly Character<TCtx>[], mind:Mind<TCtx>):string[][] {
 		const groups = new Map<string, Character<TCtx>[]>();
 		for (const character of standing) {
-			const name = character === this._commander ? undefined : this._groupOf.get(character);
+			const name = this.takesOrders(character) ? this._groupOf.get(character) : undefined;
 			if (name !== undefined) {
 				groups.set(name, [...groups.get(name) ?? [], character]);
 			}
@@ -530,7 +542,7 @@ export class Collective<TCtx = unknown> extends ArcRunner<TCtx> {
 		const rows:string[][] = [];
 		const shown = new Set<string>();
 		for (const character of standing) {
-			const name = this._groupOf.get(character);
+			const name = character.thinksForItself ? undefined : this._groupOf.get(character);
 			const members = name === undefined ? undefined : groups.get(name);
 			if (name !== undefined && members && members.length >= 2) {
 				if (!shown.has(name)) {
@@ -539,7 +551,8 @@ export class Collective<TCtx = unknown> extends ArcRunner<TCtx> {
 				}
 				continue;
 			}
-			rows.push(this.groupRow(`${mind.nameOf(character.id)}${character === this._commander ? ' (you)' : ''}`, [character], mind));
+			const mark = character === this._commander ? ' (you)' : character.thinksForItself ? ' (on its own)' : '';
+			rows.push(this.groupRow(`${mind.nameOf(character.id)}${mark}`, [character], mind));
 		}
 		return rows;
 	}

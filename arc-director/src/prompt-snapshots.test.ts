@@ -7,7 +7,6 @@ import { parseArcText } from './arc/arc-parse.js';
 import { STOCK_VERB_DEFS, STOCK_VERBS, VerbRegistry } from './arc/stock-verbs.js';
 import { arcJSONText } from './arc/wire.js';
 import { STOCK_COLLECTIVE_VERB_DEFS } from './collective/collective-verbs.js';
-import { HANDOVER_THREAD } from './collective/handover.js';
 import { ArcDirector } from './director/ArcDirector.js';
 import './director/shortcuts.js';
 import { FakeProvider } from './inference/fake.js';
@@ -119,7 +118,7 @@ function scriptedModel<TCtx>(format:ArcFormat, style:PromptStyle, replies:Reply[
 		if (req.topLogprobs !== undefined) {
 			return { content: 'A', toolCalls: [] };
 		}
-		return req.thread && req.thread !== HANDOVER_THREAD ? answer(replies[Math.min(n++, replies.length - 1)]) : { content: '{}', toolCalls: [] };
+		return req.thread ? answer(replies[Math.min(n++, replies.length - 1)]) : { content: '{}', toolCalls: [] };
 	};
 	return (director) => director
 		.withMind({ arcFormat: format })
@@ -333,19 +332,5 @@ describe('prompt snapshots', () => {
 		await waitFor(() => sent.count >= 1);
 		built.dispose();
 		matchesSnapshot('system-one', `# choiceQuestion ${JSON.stringify(question, null, 2)}\n\n${String(sent)}`);
-	});
-
-	it('the memory handover', async () => {
-		const sent = new Sent();
-		const member = (id:string, role:string) => ({ id, identity: { role } });
-		const built = await director('text', ['wait(seconds=1)'], sent)
-			.addCollective({ id: 'Watch', mind: { rethinkingThreshold: 0, skipStart: true }, identity: { role: 'The night watch' }, characters: [member('Ada', 'Watchman'), member('Bo', 'Watchman')], memories: [{ text: 'Ada keeps the keys.' }] })
-			.addCollective({ id: 'Smiths', mind: { rethinkingThreshold: 0, skipStart: true }, identity: { role: 'The smithy' }, characters: [member('Cy', 'Smith')] })
-			.connect();
-		built.character('Ada')!.collective = built.collective('Smiths')!;
-		built.tick(1);
-		await waitFor(() => sent.count >= 1);
-		built.dispose();
-		matchesSnapshot('handover', String(sent));
 	});
 });

@@ -2,6 +2,7 @@ import { formatArc } from '../arc/arc-format.js';
 import { parseArcText } from '../arc/arc-parse.js';
 import { ArcError, arcSteps, BlockedArcError, eachStep, firstStep, isCountMap, sameProgram, type Arc, type ArcResult, type Step } from '../arc/arc-types.js';
 import { lawGroup } from '../arc/laws.js';
+import type { ArgPath } from '../arc/constraints.js';
 import { createArcSession } from '../arc/run.js';
 import { runArc } from '../arc/arc-machine.js';
 import { argKind, argOf } from '../arc/stock-verbs.js';
@@ -16,6 +17,7 @@ import { ABSENT, SampleCache, type Catalog, type ExprEntity, type ExprVal } from
 import { lambdaParams, lex } from '../expr/lex.js';
 import { internalsOf } from '../internals.js';
 import { mapExpr, namesOf } from '../mind/ids.js';
+import { seenTag } from '../mind/MindMemory.js';
 import { bareName } from '../perception/lod.js';
 import { Mover, type Crowd, type MoveOpts } from '../world/mover.js';
 import { reachTo } from '../world/lookup.js';
@@ -79,7 +81,7 @@ export class Dispatcher<TCtx> {
 	}
 
 	/**
-	 * One host step, acted by `runner` itself. When `signal` aborts (its `until` held, its `within` ran out, a reaction
+	 * One host step, acted by `runner` itself. When `signal` aborts (its `until` was met, its `within` ran out, a reaction
 	 * took over, a new program came), what the host does for `runner` stops, as `abortArc` stops it.
 	 */
 	public async dispatch(runner:ArcRunner<TCtx>, step:Step, ctx:TCtx | undefined, signal:AbortSignal = NEVER):Promise<ArcResult> {
@@ -149,13 +151,13 @@ export class Dispatcher<TCtx> {
 	}
 
 	/**
-	 * `step` with its group arg read as `runner` sees it (`VerbDef.group`). A name stays, for what names do. An expression
+	 * `step` with its group arg read as `runner` sees it (`VerbDef.groupArg`). A name stays, for what names do. An expression
 	 * that picks a list becomes its ids, without `runner` or anyone fallen or gone; one that picks one becomes that id.
 	 * The result is why it picks no one, when it does not.
 	 */
 	public aimGroup(runner:ArcRunner<TCtx>, step:Step):Step | ArcResult {
 		const director = this._director;
-		const key = director.verbs.get(step.verb)?.group;
+		const key = director.verbs.get(step.verb)?.groupArg;
 		const value = key ? step.args[key] : undefined;
 		const word = typeof value === 'string' ? value.trim() : '';
 		if (!key || (!word && !Array.isArray(value)) || director.character(word) || director.world?.find(word) !== undefined) {
@@ -232,12 +234,12 @@ export class Dispatcher<TCtx> {
 		}
 		const gated = this.unmet(call) ?? director.verbs.gate?.(call);
 		if (!gated) {
-			features.forEach((feature) => feature.stepStarted(call));
+			features.forEach((feature) => feature.hostVerbStarted(call));
 		}
 		const out = gated ?? handler(call);
 		if (!gated && features.length > 0) {
 			const ended = (result:ArcResult):void => {
-				features.forEach((feature) => feature.stepEnded(call, result));
+				features.forEach((feature) => feature.hostVerbEnded(call, result));
 			};
 			void Promise.resolve(out).then(ended, (err:unknown) => ended({ status: 'failed', verb: step.verb, reason: err instanceof Error ? err.message : String(err) }));
 		}
@@ -307,7 +309,7 @@ export class Dispatcher<TCtx> {
 			ctx,
 			signal,
 			score,
-			holds: (arg, point) => score(arg, point) > 0,
+			isMet: (arg, point) => score(arg, point) > 0,
 			grader: (arg) => (valueOf(arg).kind === 'number' ? (point) => score(arg, point) : undefined),
 			goTo: async (target, opts) => stopped() ?? this.goTo(character.id, step.verb, { target }, { using, ...opts }),
 			goToPoint: async (point, opts) => stopped() ?? this.goTo(character.id, step.verb, { point }, opts),
@@ -439,37 +441,41 @@ export class Dispatcher<TCtx> {
 				bound.add(named);
 			}
 		});
-		const known = (name:string):boolean => bound.has(name) || name === currency || !!catalog?.names.has(name)
+		// A name its mind could not tell (`$Bram`) is a name all the same: who it is, the step finds as it runs.
+		const known = (name:string):boolean => (name.startsWith('$') ? known(name.slice(1)) : bound.has(name)) || name === currency || !!catalog?.names.has(name)
 			|| !!director.character(name) || !!director.collective(name) || !world || internalsOf(director).features.some((feature) => feature.knows(name)) || world.find(name) !== undefined || !!world.isItem?.(name);
 		let problem:string | undefined;
 		/** The text of the reply the problem is about. */
 		let at:string | undefined;
-		const fault = (why:string | undefined, where:string):void => {
+		/** The arg that holds it. */
+		let arg:ArgPath | undefined;
+		const fault = (why:string | undefined, where:string, path:ArgPath):void => {
 			if (problem === undefined && why) {
-				[problem, at] = [why, where];
+				[problem, at, arg] = [why, where, path];
 			}
 		};
 		eachStep(arc, director.verbs, (step, verbs) => {
 			const spec = verbs.get(step.verb);
 			for (const [key, value] of Object.entries(step.args)) {
 				const kind = argKind(spec, key);
+				const path:ArgPath = `${step.verb}.${key}`;
 				if (typeof value === 'string' && (kind === 'watch' || kind === 'expr' || (kind === 'id' && /[(.]|=>/.test(value)))) {
-					fault(this.exprProblem(value, catalog, known), value);
+					fault(this.exprProblem(value, catalog, known), value, path);
 				}
-				// Only the step that runs next, of a stock verb: something can come to be by a later one, and a host's own verb may
-				// aim at what only it knows.
-				else if (kind === 'id' && typeof value === 'string' && step === firstStep(arc) && !!internalsOf(director).worldVerbs.handler(step.verb) && !argOf(spec, key)?.ignoreUnknown && !known(bareName(value))) {
+				// Only the step that runs next, of a stock verb (`say`, or one the world runs): something can come to be by a later
+				// one, and a host's own verb may aim at what only it knows.
+				else if (kind === 'id' && typeof value === 'string' && step === firstStep(arc) && (step.verb === 'say' || !!internalsOf(director).worldVerbs.handler(step.verb)) && !argOf(spec, key)?.ignoreUnknown && !known(bareName(value))) {
 					gone ??= problem === undefined ? this.goneSince(voice, bareName(value)) : undefined;
-					fault(gone ?? `there is no ${bareName(value)}`, bareName(value));
+					fault(gone ?? `there is no ${bareName(value)}`, bareName(value), path);
 				}
 				else if (kind === 'bundle' && isCountMap(value)) {
 					const notItem = world?.isItem && Object.keys(value).find((name) => name !== currency && !world.isItem!(name));
-					fault(notItem ? `'${notItem}' is not an item: the terms of a trade are {"ItemName":count}` : undefined, notItem || '');
+					fault(notItem ? `'${notItem}' is not an item: the terms of a trade are {"ItemName":count}` : undefined, notItem || '', path);
 				}
 			}
 		});
 		const reason = problem ?? this.lawProblem(owner, arc) ?? this.commandProblem(owner, arc);
-		return reason === undefined ? undefined : reason === gone ? new BlockedArcError(reason, at) : new ArcError(reason, reason === problem ? at : undefined);
+		return reason === undefined ? undefined : reason === gone ? new BlockedArcError(reason, at, arg) : reason === problem ? new ArcError(reason, at, arg) : new ArcError(reason);
 	}
 
 	/**
@@ -478,7 +484,7 @@ export class Dispatcher<TCtx> {
 	 */
 	private goneSince(voice:ArcRunner<TCtx>, id:string):string | undefined {
 		const name = voice.mind?.nameOf(id) ?? id;
-		return voice.persona.memory.all().some((row) => row.tags.includes(`seen:${id}`)) ? `${name} is gone since you looked` : undefined;
+		return voice.persona.memory.all().some((row) => row.tags.includes(seenTag(id))) ? `${name} is gone since you looked` : undefined;
 	}
 
 	/** Why `expr` can never work: it does not read, misuses the language, or names what is not in this world. */

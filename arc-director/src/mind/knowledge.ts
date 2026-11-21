@@ -109,11 +109,11 @@ export function knowledgePages<TCtx>(
 }
 
 /**
- * What `recall` knows for `query`: the best `cap` articles by name, alias, or word, each `Name (aliases)` over its
- * text. An empty query lists the topics instead, and one that matches nothing says a plain word is not a name.
- * `[]` when there is nothing to know.
+ * What `recall` knows for `query`: the best `cap` articles by name, alias, or word, each `Name (aliases): text`. An
+ * empty query lists the topics instead, and one that matches nothing says a plain word is not a name: a note, no
+ * article. `[]` when there is nothing to know.
  */
-export function knowledgeFor(entries:readonly KnowledgeEntry[], query:string, verbs:{ has(name:string):boolean }, cap = KNOW_CAP):string[] {
+export function knowledgeFor(entries:readonly KnowledgeEntry[], query:string, verbs:{ has(name:string):boolean }, cap = KNOW_CAP):string[] | string {
 	const q = query.replace(/\s+/g, ' ').trim();
 	if (!q || q === '*' || /^list$/i.test(q)) {
 		const names = entries.map((e) => e.name.trim()).filter(Boolean);
@@ -121,7 +121,7 @@ export function knowledgeFor(entries:readonly KnowledgeEntry[], query:string, ve
 			return [];
 		}
 		const more = names.length > INDEX_CAP ? '…' : '';
-		return [`Topics: ${names.slice(0, INDEX_CAP).join(', ')}${more}. Recall one for more.`];
+		return `Topics: ${names.slice(0, INDEX_CAP).join(', ')}${more}. Recall one for more.`;
 	}
 	if (entries.length === 0) {
 		return [];
@@ -133,7 +133,7 @@ export function knowledgeFor(entries:readonly KnowledgeEntry[], query:string, ve
 		.sort((a, b) => b.score - a.score || a.entry.name.localeCompare(b.entry.name))
 		.slice(0, cap);
 	if (hits.length === 0) {
-		return [`Nothing you know is called "${q}". A plain word is not a name: recall its Capitalized name if you know it, else ${nothingFoundThen(verbs)}.`];
+		return `Nothing you know is called "${q}". A plain word is not a name: recall its Capitalized name if you know it, else ${nothingFoundThen(verbs)}.`;
 	}
 	return hits.map((row) => formatEntry(row.entry));
 }
@@ -141,7 +141,7 @@ export function knowledgeFor(entries:readonly KnowledgeEntry[], query:string, ve
 function formatEntry(entry:KnowledgeEntry):string {
 	const aka = (entry.aliases ?? []).map((a) => a.trim()).filter(Boolean);
 	const head = aka.length > 0 ? `${entry.name} (${aka.join(', ')})` : entry.name;
-	return `${head}\n${entry.text.trim()}`;
+	return `${head}: ${entry.text.trim()}`;
 }
 
 function tokenize(query:string):string[] {

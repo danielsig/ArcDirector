@@ -2,7 +2,7 @@ import type { ArcResult } from '../arc/arc-types.js';
 import type { Feeling } from '../character/feeling.js';
 import { SPEAKING, type Sound } from '../perception/hearing.js';
 import type { ArcRunner } from '../character/arc-runner.js';
-import { joinTextWithIDs, listIDs, showTextWithIDs, type TextWithIDs } from '../character/text-with-ids.js';
+import { joinTextWithIDs, listIDs, showTextWithIDs, type TextSegment, type TextWithIDs } from '../character/text-with-ids.js';
 
 /**
  * How a line may be said, `say(as)`: declared by the speaker, never read off the text; without `as`, plainly. The
@@ -141,7 +141,7 @@ export type SpeechUtterance = {
 	/** The line as a screen shows it, in its speaker's names: `Old Bram` for a character, `silver trout` for a thing. */
 	text:string;
 	/** {@link text} in pieces, each naming someone or something by `id` apart from plain text. Built when asked. */
-	segments():{ text:string; id?:string }[];
+	segments():TextSegment[];
 	to?:SayTo;
 	heardBy:string[];
 	timestamp:number;
@@ -222,12 +222,12 @@ export function uniqueNames(names:readonly string[]):string[] {
 }
 
 /**
- * A line as heard clearly, told as it was said (`manner`): `Ann shouts angrily to you: "Run!"`, plainly `says`. Speaker,
- * listeners and whom the line names are ids, for each listener to name.
+ * A line as heard clearly, told as it was said (`manner`): `[Ann] shouts angrily to [Bob]: "Run!"`, plainly `says`.
+ * Speaker, listeners and whom the line names are ids, for each reader to name: Bob reads `to you`.
  */
-export function saysLine(speaker:string, spoken:TextWithIDs, addressed:boolean, to:readonly string[], tail = '', manner?:string):TextWithIDs {
+export function saysLine(speaker:string, spoken:TextWithIDs, to:readonly string[], tail = '', manner?:string):TextWithIDs {
 	const says = manner ?? 'says';
-	const toWhom = addressed ? ' to you' : to.length > 0 ? joinTextWithIDs(' to ', listIDs(to)) : '';
+	const toWhom = to.length > 0 ? joinTextWithIDs(' to ', listIDs(to)) : '';
 	return joinTextWithIDs(listIDs([speaker]), ` ${says}`, toWhom, `${tail}: "`, spoken, '"');
 }
 
@@ -242,7 +242,7 @@ export function heardLine(
 	manner?:string,
 ):TextWithIDs {
 	if (clear) {
-		return saysLine(speaker, spoken, addressed, to, '', manner);
+		return saysLine(speaker, spoken, to, '', manner);
 	}
 	const muff = muffleSpeech(showTextWithIDs(spoken));
 	const who = listIDs([speaker]);

@@ -7,7 +7,7 @@ import type { Vec } from './world-types.js';
  * `right` is `forward × up`; left-handed, `up × forward`); 2D gives `forward` and `right`; 1D `forward` alone. Checked as
  * the world is wired (`withWorld`): at right angles, or it throws. Presets for common engines: {@link Axes}.
  */
-export type Axes = { forward:Vec; right?:Vec; up?:Vec; handed?:'left' | 'right' };
+export interface Axes { forward:Vec; right?:Vec; up?:Vec; handed?:'left' | 'right' }
 
 /** Flat 2D: ahead down the second coordinate, right up the first. */
 const FLAT:Axes = { forward: [0, -1], right: [1, 0] };

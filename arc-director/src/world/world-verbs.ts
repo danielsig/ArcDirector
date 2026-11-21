@@ -203,8 +203,8 @@ export function worldVerbs<TCtx>(on:On<TCtx>):Handlers<TCtx> {
 					return outcome('offer', done);
 				}
 				director.offers.live().settle(me, match);
-				ledger((who) => `${who(me)} traded ${bundleText(match.pay)} to ${who(to)} for ${bundleText(match.receive)}.`, ['trade', tradeLabel(director.mindDefaults.currency, match.receive, match.pay)]);
-				director.character(to)?.tell({ kind: 'Traded', text: (who) => `${who(me)} took your offer: you gave ${bundleText(match.receive)} for ${bundleText(match.pay)}`, tags: ['trade'] });
+				ledger(tradeLine(director.mindDefaults.currency, me, to, match.pay, match.receive), ['trade', tradeLabel(director.mindDefaults.currency, match.receive, match.pay)]);
+				director.character(to)?.tell({ kind: 'Traded', text: (who) => `${who(me)} took ${who(to)}'s offer: ${who(to)} gave ${bundleText(match.receive)} for ${bundleText(match.pay)}`, tags: ['trade'] });
 				return { status: 'ok', verb: 'offer', reason: (name) => `traded ${bundleText(match.pay)} for ${bundleText(match.receive)} with ${name(to)}` };
 			}
 		}
@@ -379,6 +379,18 @@ export function worldVerbs<TCtx>(on:On<TCtx>):Handlers<TCtx> {
 /** Whether `name` is the host's currency, in any case. */
 function isCurrency(name:string, currency:string | undefined):boolean {
 	return currency !== undefined && name.toLowerCase() === currency.toLowerCase();
+}
+
+/**
+ * A trade as the ledger words it, by who sold: `Cy sold Boots to Odo for 5 gold.` where goods went for money, `bought …
+ * from … for` where money went for goods, `traded … to … for` for goods against goods. "Traded" alone is read as the
+ * other side's sale (14 of 52 thinks on Qwen 9B, against 3 with "sold").
+ */
+function tradeLine(currency:string | undefined, me:string, to:string, pay:CountMap, receive:CountMap):(who:(id:string)=>string)=>string {
+	const money = (bundle:CountMap):boolean => Object.keys(bundle).length > 0 && Object.keys(bundle).every((name) => isCurrency(name, currency));
+	return money(receive) && !money(pay) ? (who) => `${who(me)} sold ${bundleText(pay)} to ${who(to)} for ${bundleText(receive)}.`
+		: money(pay) && !money(receive) ? (who) => `${who(me)} bought ${bundleText(receive)} from ${who(to)} for ${bundleText(pay)}.`
+			: (who) => `${who(me)} traded ${bundleText(pay)} to ${who(to)} for ${bundleText(receive)}.`;
 }
 
 /** What a trade is remembered by: its first goods that are not money. */

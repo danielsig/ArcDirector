@@ -23,7 +23,7 @@ import {
 	runTest,
 	startRunning,
 	stopRunning,
-	triggerHolds,
+	triggerIsTrue,
 	type ArcHandler,
 	type ArcSession,
 	type Race,
@@ -51,10 +51,10 @@ function held(session:ArcSession, unbreakable:StepArg | undefined, round:number,
 		|| (typeof unbreakable === 'string' && session.now() < since + (durationSeconds(unbreakable) ?? 0));
 }
 
-/** Whether a loop goes round: outside a reaction always; in one when the round is `held`, or its trigger holds. */
+/** Whether a loop goes round: outside a reaction always; in one when the round is `held`, or its trigger is true. */
 function goesRound(session:ArcSession, hold:boolean):boolean {
 	const reaction = session.running.at(-1);
-	return !reaction || hold || triggerHolds(reaction, session);
+	return !reaction || hold || triggerIsTrue(reaction, session);
 }
 
 /**
@@ -897,7 +897,7 @@ class ChooseFrame extends Frame {
 
 /**
  * `loop`: its arc round and round, `times` at most, or once per item `through` names; in a reaction only while the
- * reaction's trigger holds, unless a round is unbreakable. A failed round ends it, unless it says going round again may
+ * reaction's trigger is true, unless a round is unbreakable. A failed round ends it, unless it says going round again may
  * help (`retry`): then up to {@link LOOP_RETRIES} more, a second apart. A round that took no game time waits for it to move.
  */
 class LoopFrame extends Frame {

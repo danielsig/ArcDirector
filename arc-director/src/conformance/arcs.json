@@ -270,6 +270,61 @@
 			"error": "to is outside the parentheses. Put every argument inside its verb's parentheses, as in say(text=Hi, to=Name)"
 		},
 		{
+			"text": "say(to=Player, as=sigh) Cy owes you the gold, for those boots.\nwait(2)",
+			"arc": [
+				{
+					"verb": "say",
+					"args": {
+						"to": "Player",
+						"as": "sigh",
+						"text": "Cy owes you the gold, for those boots."
+					},
+					"then": "always"
+				},
+				{
+					"verb": "wait",
+					"args": {
+						"seconds": 2
+					}
+				}
+			],
+			"back": "say(to=Player, as=sigh, text=\"Cy owes you the gold, for those boots.\") ; wait(2)",
+			"json": "{\"steps\":[{\"verb\":\"say\",\"to\":\"Player\",\"as\":\"sigh\",\"text\":\"Cy owes you the gold, for those boots.\",\"then\":\"always\"},{\"verb\":\"wait\",\"seconds\":2}]}"
+		},
+		{
+			"text": "loop { say(to=Bram) Hold the line (all of it) }",
+			"arc": [
+				{
+					"verb": "loop",
+					"args": {
+						"arc": [
+							{
+								"verb": "say",
+								"args": {
+									"to": "Bram",
+									"text": "Hold the line (all of it)"
+								}
+							}
+						]
+					}
+				}
+			],
+			"back": "loop { say(to=Bram, text=\"Hold the line (all of it)\") }",
+			"json": "{\"steps\":[{\"verb\":\"loop\",\"arc\":[{\"verb\":\"say\",\"to\":\"Bram\",\"text\":\"Hold the line (all of it)\"}]}]}"
+		},
+		{
+			"text": "say(to=Bram) Come and go_to(Gate)",
+			"error": "Come is outside the parentheses. Put every argument inside its verb's parentheses, as in say(text=Hi, to=Name)"
+		},
+		{
+			"text": "say(to=Bram, text=Hi) Come along",
+			"error": "Come is outside the parentheses. Put every argument inside its verb's parentheses, as in say(text=Hi, to=Name)"
+		},
+		{
+			"text": "go_to(Keep) at once",
+			"error": "at is outside the parentheses. Put every argument inside its verb's parentheses, as in say(text=Hi, to=Name)"
+		},
+		{
 			"text": "go_to BridgeKeeper",
 			"arc": [
 				{
@@ -493,7 +548,7 @@
 		},
 		{
 			"text": "loop(times=2, arc=loop(times=2, arc=loop(times=2, arc=loop(times=2, arc=loop(times=2, arc=wait())))))",
-			"error": "loop's arc may hold no arc inside it; loop holds one"
+			"error": "loop's arc may contain no arc inside it; loop contains one"
 		},
 		{
 			"text": "follow(Bo) ; say(\"a\")",

@@ -3,7 +3,7 @@
  * ports implement this file; `index.ts` exports it with the rest of the library.
  *
  * Where TypeScript takes either a value or a function, a port offers one form, the one named here: a kit, a goal's
- * `until` and a region's `memory` / `who` are functions of the context (a watch string is `ctx => holds(watch, ctx)`
+ * `until` and a region's `memory` / `who` are functions of the context (a watch string is `ctx => isMet(watch, ctx)`
  * on the port side); a hearing range is the object of numbers; a genre verb is `{ help?, handler }`; a `NamingText` is
  * the function of `name` (a plain string is one that calls it for no one).
  */

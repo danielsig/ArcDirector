@@ -1222,7 +1222,7 @@ export class RTS<TCtx> {
 		const container = str(call.args.in);
 		const holds = this.spec(this.kindOf(container))?.holds;
 		if (!holds) {
-			return fail('garrison', `${container} holds no one`);
+			return fail('garrison', `${container} has no one inside`);
 		}
 		const inside = this._inside.get(container) ?? new Set<string>();
 		const kind = this.kindOf(me) ?? '';
@@ -1391,7 +1391,7 @@ export class RTS<TCtx> {
 		for (;;) {
 			if (keep !== undefined && (this.host.holding?.(to, what) ?? 0) >= keep) {
 				this.clearDoing(call);
-				return ok('haul', `${to} holds ${keep} ${what}`);
+				return ok('haul', `${to} has ${keep} ${what}`);
 			}
 			const there = await this.reach(call, from);
 			if (there) {
@@ -1427,7 +1427,7 @@ export class RTS<TCtx> {
 				gathering[resource] = (gathering[resource] ?? 0) + 1;
 			}
 		}
-		// Every resource reads 0 until there is some, so `gathering.Wood < 4` holds with no one on it.
+		// Every resource reads 0 until there is some, so `gathering.Wood < 4` is true with no one on it.
 		const resources = Object.values(this.host.kinds).flatMap((s) => s.tags ?? []).filter((t) => t.startsWith('Node:')).map((t) => t.slice(5));
 		const zero = Object.fromEntries(resources.map((r) => [r, 0]));
 		return {

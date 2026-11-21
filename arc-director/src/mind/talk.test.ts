@@ -202,8 +202,8 @@ describe('TalkFeature', () => {
 		const ok = talk.say('Player', 'Which of you sells swords?', ['Guard', 'Baker']);
 		assert.equal(ok.status === 'ok', true);
 		assert.equal(showNamingText(ok.reason ?? ''), 'to Guard, Baker');
-		assert.match(guard.events[0].text, /says to you/);
-		assert.match(baker.events[0].text, /says to you/);
+		assert.match(guard.events[0].text, /says to you, Baker:/);
+		assert.match(baker.events[0].text, /says to Guard, you:/);
 		assert.equal(far.events.length, 0);
 	});
 
@@ -503,12 +503,12 @@ describe('withTalk onHeard', () => {
 		director.getTalk()!.say('Wolf', 'Run!', 'Ash', director.time, 'shout');
 		const by = (id:string):Heard | undefined => heard.find((row) => row.id === id);
 		assert.deepEqual(heard.map((row) => row.id).sort(), ['Ash', 'Cy', 'Dee', 'Player']);
-		assert.deepEqual(by('Ash'), { id: 'Ash', text: 'Grey Wolf shouts to you: "Run!"', clarity: 'clear', segments: [{ text: 'Grey Wolf', id: 'Wolf' }, { text: ' shouts to you: "Run!"' }] });
+		assert.deepEqual(by('Ash'), { id: 'Ash', text: 'Grey Wolf shouts to you: "Run!"', clarity: 'clear', segments: [{ text: 'Grey Wolf', id: 'Wolf', voice: true }, { text: ' shouts to ' }, { text: 'you', id: 'Ash' }, { text: ': "Run!"' }] });
 		assert.equal(by('Player')?.text, 'Wolf shouts to Ash: "Run!"');
 		assert.equal(by('Cy')?.clarity, 'muffled');
 		assert.equal(by('Cy')?.text, 'Wolf shouts nearby. You catch: "R——!". Get closer to Wolf to hear clearly.');
 		assert.equal(by('Dee')?.text, 'Someone shouts to Ash: "Run!"');
-		assert.deepEqual(by('Dee')?.segments[0], { text: 'Someone', id: 'Wolf' });
+		assert.deepEqual(by('Dee')?.segments[0], { text: 'Someone', id: 'Wolf', voice: true });
 		director.dispose();
 	});
 

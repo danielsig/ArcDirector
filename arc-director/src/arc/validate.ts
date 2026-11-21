@@ -21,14 +21,14 @@ import { formatStep } from './arc-format.js';
 const COORD_KEYS = new Set(['x', 'z', 'y', 'xz', 'xy', 'pos', 'position']);
 
 /** Every `watch` and `expr` arg in `arc`, nested arcs and choices too, in the order written. */
-export function exprArgs(arc:Arc, verbs:VerbRegistry):string[] {
-	const out:string[] = [];
+export function exprArgs(arc:Arc, verbs:VerbRegistry):{ expr:string; arg:ArgPath }[] {
+	const out:{ expr:string; arg:ArgPath }[] = [];
 	eachStep(arc, verbs, (step, registry) => {
 		const spec = registry.get(step.verb);
 		for (const [key, value] of Object.entries(step.args)) {
 			const kind = argKind(spec, key);
 			if ((kind === 'watch' || kind === 'expr') && typeof value === 'string' && value.trim()) {
-				out.push(value);
+				out.push({ expr: value, arg: `${step.verb}.${key}` });
 			}
 		}
 	});
@@ -75,7 +75,7 @@ function into(step:Step, spec:VerbSpec, key:string, at:Place):Place {
 		return { ...at, opened: true };
 	}
 	if (at.arc.depth === 0) {
-		throw new ArcError(`${arcOf(at)} may hold no arc inside it; ${step.verb} holds one`);
+		throw new ArcError(`${arcOf(at)} may contain no arc inside it; ${step.verb} contains one`);
 	}
 	const { subverbs, not, depth } = at.arc;
 	return { path: `${step.verb}.${key}`, arc: meet(constraintAt(spec, key, at.path), { subverbs, not, depth: depth === undefined ? undefined : depth - 1 }) };
@@ -104,10 +104,10 @@ function validateStep(step:Step, registry:VerbRegistry, at:Place):void {
 	}
 	const { subverbs, not } = at.arc;
 	if (step.verb !== TEST_VERB && subverbs && !subverbs.includes(step.verb)) {
-		throw new ArcError(`${arcOf(at)} may hold only ${subverbs.join(', ')}; not ${step.verb}`, step.verb);
+		throw new ArcError(`${arcOf(at)} may contain only ${subverbs.join(', ')}; not ${step.verb}`, step.verb);
 	}
 	if (not?.includes(step.verb)) {
-		throw new ArcError(`${arcOf(at)} may not hold ${step.verb}`, step.verb);
+		throw new ArcError(`${arcOf(at)} may not contain ${step.verb}`, step.verb);
 	}
 	rejectMigrationArgs(step.verb, step.args);
 	if (step.verb === CHOOSE_VERB) {
@@ -138,11 +138,11 @@ function validateStep(step:Step, registry:VerbRegistry, at:Place):void {
 		if (base === 'bool' && typeof value !== 'boolean') {
 			throw new ArcError(`verb '${step.verb}' arg '${key}' is true or false`);
 		}
-		const seconds = base === 'hold' && typeof value === 'string' ? durationSeconds(value) : undefined;
-		if (base === 'hold' && spec.endless && seconds === undefined) {
-			throw new ArcError(`${step.verb} holds for seconds: unbreakable=10s${value === true ? '; true would never let it end' : ''}`);
+		const seconds = base === 'duration' && typeof value === 'string' ? durationSeconds(value) : undefined;
+		if (base === 'duration' && spec.endless && seconds === undefined) {
+			throw new ArcError(`${step.verb} is unbreakable for seconds only: unbreakable=10s${value === true ? '; true would never let it end' : ''}`);
 		}
-		if (base === 'hold' && seconds === undefined && value !== true && !(Number.isInteger(value) && (value as number) >= 0)) {
+		if (base === 'duration' && seconds === undefined && value !== true && !(Number.isInteger(value) && (value as number) >= 0)) {
 			throw new ArcError(`verb '${step.verb}' arg '${key}' is true, a whole number of rounds, or seconds (10s)`);
 		}
 		if (key === 'times' && (!Number.isInteger(value) || (value as number) < 1)) {
@@ -204,13 +204,13 @@ function validateChoose(step:Step, registry:VerbRegistry, inside:Place):void {
 	}
 }
 
-/** `at`: where this arc is; the Arc's own root unless it is held inside another verb's step. */
+/** `at`: where this arc is; the Arc's own root unless it sits inside another verb's step. */
 export function validateArc(arc:Arc, registry:VerbRegistry, at = ROOT):void {
 	if (arc.length === 0) {
 		throw new ArcError('the arc is empty: give it at least one step');
 	}
 	if (arc.length > (at.arc.maxSteps ?? arc.length)) {
-		throw new ArcError(`${arcOf(at)} may hold at most ${at.arc.maxSteps} steps; it has ${arc.length}`);
+		throw new ArcError(`${arcOf(at)} may contain at most ${at.arc.maxSteps} steps; it has ${arc.length}`);
 	}
 	for (const step of arc) {
 		if (step.then !== undefined && !JOINS.includes(step.then)) {

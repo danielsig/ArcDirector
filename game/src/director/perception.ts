@@ -181,6 +181,10 @@ function seenOf(go:GameObject, observer?:GameObject, host?:GameHost):SeenObject 
 	if (note) {
 		row.note = note;
 	}
+	const state = Object.assign({}, ...sensed.map((s) => s.state ?? {})) as Record<string, string>;
+	if (Object.keys(state).length > 0) {
+		row.state = state;
+	}
 	if (sensed.some((s) => s.always)) {
 		row.always = true;
 	}
@@ -325,7 +329,7 @@ function examineItem(world:DemoWorld, item:ItemInstance, nameOf:(id:string)=>str
 		item.count > 1 ? `You carry ${item.count} ${nameOf(id)}.` : `You carry ${nameOf(id)}.`,
 		item.Key && `It opens ${nameList(locksFor(world, item).map(nameOf), 'nothing')}.`,
 		item.Equipable && (item.Equipable.hands === 2 ? 'You can equip it, with both hands.' : 'You can equip it.'),
-		item.Container && `It holds ${item.Container.size}: ${nameList(item.Container.contents.map(itemLabel), 'nothing')}.`,
+		item.Container && `It contains ${item.Container.size}: ${nameList(item.Container.contents.map(itemLabel), 'nothing')}.`,
 		getDef(item.defID).about,
 	].filter(Boolean).join(' ');
 }

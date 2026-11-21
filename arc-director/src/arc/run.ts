@@ -24,7 +24,7 @@ export type Reaction = {
 	arc:Arc;
 	/** It starts at most this many times, and is then finished. */
 	times?:number;
-	/** A watch: once it holds, a run under way stops, and the reaction is finished. */
+	/** A watch: once it is met, a run under way stops, and the reaction is finished. */
 	until?:string;
 	/** Game seconds its watch must have been false before it may start again. None: the session's (`withRearm`). */
 	rearm?:number;
@@ -43,10 +43,10 @@ export function reactionOf(args:Readonly<Record<string, StepArg>>):Partial<React
 	};
 }
 
-/** How a reaction with an exit has gone: the times it has started, and whether its `until` has held. */
+/** How a reaction with an exit has gone: the times it has started, and whether its `until` has been met. */
 export type ReactionProgress = { runs:number; ended?:boolean };
 
-/** Whether a reaction has run out its `times`, or its `until` has held. It may still be running its last run. */
+/** Whether a reaction has run out its `times`, or its `until` has been met. It may still be running its last run. */
 export function reactionFinished(times:number | undefined, progress:ReactionProgress | undefined):boolean {
 	return !!progress && (!!progress.ended || (times !== undefined && progress.runs >= times));
 }
@@ -223,7 +223,7 @@ function allHandlers(session:ArcSession):ArcHandler[] {
 
 /**
  * Notes how each of `handlers` stands now, and returns those that may start: unfinished, armed, and watch true. An
- * `until` that holds finishes its reaction for good; a watch false for a reaction's `rearm` arms it again.
+ * `until` that is met finishes its reaction for good; a watch false for a reaction's `rearm` arms it again.
  */
 function startable(session:ArcSession, handlers:ArcHandler[], catalog:Catalog):ArcHandler[] {
 	return handlers.filter((h) => {
@@ -234,9 +234,9 @@ function startable(session:ArcSession, handlers:ArcHandler[], catalog:Catalog):A
 	});
 }
 
-/** Notes whether `h`'s watch holds now, so it re-arms once it has been false for its `rearm`; gives it back. */
-function noteTrigger(session:ArcSession, h:ArcHandler, holds:boolean):boolean {
-	if (holds) {
+/** Notes whether `h`'s watch is true now, so it re-arms once it has been false for its `rearm`; gives it back. */
+function noteTrigger(session:ArcSession, h:ArcHandler, isTrue:boolean):boolean {
+	if (isTrue) {
 		h.arm.falseSince = undefined;
 		return true;
 	}
@@ -269,7 +269,7 @@ export function stopRunning(session:ArcSession):void {
 }
 
 /**
- * Director tick: stop the running reaction once its own `until` holds, or let a reaction that may start take over from
+ * Director tick: stop the running reaction once its own `until` is met, or let a reaction that may start take over from
  * one of strictly lower rank (the program counts as lowest). One reaction starts per moment.
  */
 export function pollArcSession(session:ArcSession):void {
@@ -377,9 +377,9 @@ export function interpolateStep(step:Step, session:ArcSession):Step {
 const REACTION_VERBS:ReadonlySet<string> = new Set(['when', 'law']);
 
 /**
- * A step racing the args the runtime gives every verb: `until`, a watch that stops it once it holds, and `within`,
+ * A step racing the args the runtime gives every verb: `until`, a watch that stops it once it is met, and `within`,
  * game seconds after which it stops; and, for an endless verb in a reaction, that `reaction`'s trigger, which stops it
- * once it no longer holds. `cause` is what stopped it; `stop` aborts the signal its verb was handed.
+ * once it is no longer true. `cause` is what stopped it; `stop` aborts the signal its verb was handed.
  */
 export type Race = {
 	until:string;
@@ -409,7 +409,7 @@ export function raceOf(step:Step, session:ArcSession):Race | undefined {
 	return { until, within, deadline: within === undefined ? Infinity : now + within, reaction, endless, holdUntil: now + hold, stop: new AbortController() };
 }
 
-/** Whether `race` is over now: its time is up, its `until` holds, or its reaction's trigger does not. It notes which. */
+/** Whether `race` is over now: its time is up, its `until` is met, or its reaction's trigger is not true. It notes which. */
 export function raceOver(race:Race, session:ArcSession):boolean {
 	if (!race.cause && session.now() >= race.deadline) {
 		race.cause = 'within';
@@ -420,7 +420,7 @@ export function raceOver(race:Race, session:ArcSession):boolean {
 		return !!race.cause;
 	}
 	race.watchedAt = watchedAt;
-	if (race.reaction && session.shields === 0 && session.now() >= race.holdUntil && !triggerHolds(race.reaction, session)) {
+	if (race.reaction && session.shields === 0 && session.now() >= race.holdUntil && !triggerIsTrue(race.reaction, session)) {
 		race.cause = 'trigger';
 	}
 	if (!race.cause && race.until) {
@@ -434,7 +434,7 @@ export function raceOver(race:Race, session:ArcSession):boolean {
 
 /**
  * How a step its race stopped ends: as its verb ended it, when that still worked (`wander` with what it saw); else
- * done when its `until` held or its trigger went, failed when its time ran out, unless it is endless: then that is
+ * done when its `until` was met or its trigger went, failed when its time ran out, unless it is endless: then that is
  * how it ends.
  */
 export function raceResult(race:Race, step:Step, result?:ArcResult):ArcResult {
@@ -447,7 +447,7 @@ export function raceResult(race:Race, step:Step, result?:ArcResult):ArcResult {
 	return { status: 'failed', verb: step.verb, reason: race.until ? `until not met after ${race.within}s` : `not done after ${race.within}s` };
 }
 
-/** A query as a step: it worked while its watch holds. A `let` on it names the value, not only whether it held. */
+/** A query as a step: it worked while its watch is true. A `let` on it names the value, not only whether it was true. */
 export function runTest(step:Step, session:ArcSession):ArcResult {
 	const watch = String(step.args.watch ?? '');
 	const catalog = liveCatalog(session);
@@ -462,11 +462,11 @@ export function runTest(step:Step, session:ArcSession):ArcResult {
 }
 
 /**
- * Whether the trigger of `reaction` still holds. In a reaction's arc, at any depth, what would otherwise go on and on
+ * Whether the trigger of `reaction` is still true. In a reaction's arc, at any depth, what would otherwise go on and on
  * goes on only while it does: a loop asks before each round, and an endless verb (`VerbDef.endless`) stops once it no
- * longer holds.
+ * longer true.
  */
-export function triggerHolds(reaction:ArcHandler, session:ArcSession):boolean {
+export function triggerIsTrue(reaction:ArcHandler, session:ArcSession):boolean {
 	const catalog = liveCatalog(session);
 	return !catalog || watchIsTrue(reaction.watch, catalog);
 }

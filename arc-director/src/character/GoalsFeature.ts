@@ -11,7 +11,7 @@ export type GoalsOptions<TCtx = unknown> = {
 };
 
 /**
- * Goals reached: each goal whose `until` holds, asked as often as minds' watches are sampled (a view per character is not
+ * Goals reached: each goal whose `until` is met, asked as often as minds' watches are sampled (a view per character is not
  * cheap), and each a mind finishes by its own word. Every director has it; `withGoals({ onReached })` listens.
  */
 export class GoalsFeature<TCtx = unknown> extends Feature<TCtx> {
@@ -41,10 +41,10 @@ export class GoalsFeature<TCtx = unknown> extends Feature<TCtx> {
 		}
 	}
 
-	/** Whether `until` holds for character `id`, as it sees the world. One without a context yet is not asked. */
+	/** Whether `until` is met for character `id`, as it sees the world. One without a context yet is not asked. */
 	private met(id:string, until:NonNullable<Goal<TCtx>['until']>):boolean {
 		if (typeof until === 'string') {
-			return this.director.holds(id, until);
+			return this.director.isMet(id, until);
 		}
 		const ctx = this.director.contextOf(id);
 		return ctx !== undefined && until(ctx);

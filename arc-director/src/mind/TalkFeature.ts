@@ -6,11 +6,13 @@ import { callEach } from '../director/director-types.js';
 import { Feature, type FeatureFields, type FeatureTick } from '../director/Feature.js';
 import type { Feeling } from '../character/feeling.js';
 import { isRecord } from '../json.js';
-import { showNamingText, textSegments, parseTextWithIDs, showTextWithIDs, type NamingText, type TextWithIDs } from '../character/text-with-ids.js';
+import { idsIn, namedText, personOf, showNamingText, textSegments, parseTextWithIDs, showTextWithIDs, voiceOf, type NamingText, type TextWithIDs } from '../character/text-with-ids.js';
+import { personSegments, showInPerson } from '../character/person.js';
 import { wayBlocked } from '../world/geometry-kernels.js';
 import { poseOf } from '../world/lookup.js';
 import { noWayTo } from '../world/route.js';
-import { cosToward, distance } from '../world/vec.js';
+import { cosToward, distance, showsFace } from '../world/vec.js';
+import { Knows, type NameBook } from '../character/NameBook.js';
 import type { Mind } from './mind.js';
 import type { ArcFormat, HeldTurn, Manner, MindEvent, Sense, ToolSpec } from './mind-types.js';
 import { hand, internalsOf } from '../internals.js';
@@ -68,6 +70,14 @@ function shown(mind:Pick<Mind<unknown>, 'nameOf'>, text:NamingText):string {
 }
 
 /** What `withTalk` takes: who is in range and how speakers and listeners act (its sense), and who hears every line. */
+/** A label of the speaker's, as `TalkOptions.labelAloud` is asked to say it: whose it is, and whether it is said to them. */
+export type SpokenLabel = { kind:'stranger' | 'voice' | 'figure'; addressed:boolean; speakerID:string; id:string };
+
+/** {@link TalkOptions.labelAloud}'s default. */
+function labelAloud({ kind, addressed }:SpokenLabel):string {
+	return addressed ? (kind === 'stranger' ? 'stranger' : 'you there') : `that ${kind}`;
+}
+
 export type TalkOptions = TalkSense & Partial<TalkConfig> & {
 	/** Every line said, as it is said: a bubble, a voice. Adds a listener. */
 	onSpoke?:(utterance:SpeechUtterance)=>void;
@@ -81,6 +91,12 @@ export type TalkOptions = TalkSense & Partial<TalkConfig> & {
 	onHeard?:(listenerID:string, line:Omit<SpeechUtterance, 'heardBy'> & { clarity:'clear' | 'muffled' })=>void;
 	/** Tones of the host's own, by name (`growl: { says: 'growls', words: 0.3 }`). Adds to the stock ones ({@link SAY_TONES}) and those set before. */
 	tones?:Readonly<Record<string, SayToneDef>>;
+	/**
+	 * How a label the speaker's mind has for someone (`StrangerA`, `VoiceA`, `FigureA`) is said aloud, for it is no name
+	 * anyone else knows: to the one it stands for, and of anyone else. Default: `stranger` / `that stranger`, `you there` /
+	 * `that voice` / `that figure`. A game says it its own way (`the woman in red`), or in another language.
+	 */
+	labelAloud?:(label:SpokenLabel)=>string;
 };
 
 /** What talk's constructor hands the library besides a feature's own. */
@@ -111,6 +127,7 @@ export class TalkFeature<TCtx = unknown> extends Feature<TCtx> {
 	private readonly _minds = new WeakMap<Mind<TCtx>, Spoken>();
 	private readonly _onSpoke:((utterance:SpeechUtterance)=>void)[] = [];
 	private readonly _onHeard:NonNullable<TalkOptions['onHeard']>[] = [];
+	private _labelAloud:NonNullable<TalkOptions['labelAloud']> = labelAloud;
 	private readonly _tones = new Map<string, SayToneDef>(Object.entries(SAY_TONES));
 	public readonly config:TalkConfig = { ...DEFAULT_TALK_CONFIG };
 
@@ -133,9 +150,11 @@ export class TalkFeature<TCtx = unknown> extends Feature<TCtx> {
 	}
 
 	/** Talk through this sense from now on; the config it names is set, its tones added, and its listener added once. */
-	public configure({ onSpoke, onHeard, tones, ...options }:TalkOptions):this {
+	public configure({ onSpoke, onHeard, tones, labelAloud, ...options }:TalkOptions):this {
+		this._labelAloud = labelAloud ?? this._labelAloud;
 		const config = Object.keys(DEFAULT_TALK_CONFIG);
-		this._sense = Object.fromEntries(Object.entries(options).filter(([key]) => !config.includes(key))) as TalkSense;
+		// A second call adds to the first, as every `with*` does: `withTalk({ onSpoke })` keeps the range given before.
+		this._sense = { ...this._sense, ...Object.fromEntries(Object.entries(options).filter(([key, value]) => !config.includes(key) && value !== undefined)) } as TalkSense;
 		Object.assign(this.config, Object.fromEntries(Object.entries(options).filter(([key, value]) => config.includes(key) && value !== undefined)));
 		if (onSpoke && !this._onSpoke.includes(onSpoke)) {
 			this._onSpoke.push(onSpoke);
@@ -233,13 +252,93 @@ export class TalkFeature<TCtx = unknown> extends Feature<TCtx> {
 
 	/**
 	 * Whether character `from` can tell who `id` is: it makes them out by sight now (or nothing sees), or they spoke
-	 * within hearing of its `mind` lately and it knows them (its name book has them): a voice it knows. Not while the book
-	 * holds a vague label for them (`FigureA`): talked to under it, they would answer to who they are.
+	 * within hearing of its `mind` lately, a voice it can answer by its name for that voice ({@link NameBook.hear}).
 	 */
 	private canTell(from:string, id:string, mind?:Mind<TCtx>):boolean {
-		const names = mind?.persona.names;
-		return this.director.getSight()?.sees(from, id) !== false
-			|| (names?.peek(id, false) !== undefined && names.peek(id) === names.peek(id, false) && !!mind?.memory.heardFrom(id));
+		return this.sees(from, id) || !!mind?.memory.heardFrom(id);
+	}
+
+	/** Whether `from` makes `id` out by sight now; where nothing sees, yes. */
+	private sees(from:string, id:string):boolean {
+		return !this.attached || this.director.getSight()?.sees(from, id) !== false;
+	}
+
+	/** `id` in talking range of `mind`'s voice, as it names them: by sight while it makes them out, else by their voice. */
+	private nameIn(mind:Mind<TCtx>, id:string):string {
+		return mind.nameOf(this.sees(mind.thinkThread(), id) ? id : voiceOf(id));
+	}
+
+	/**
+	 * `spoken` with each label of `book`'s (the speaker's) as it is said aloud ({@link TalkOptions.labelAloud}): no one else
+	 * knows it. `StrangerA, meet Joe.` said to StrangerA is `Stranger, meet Joe.`; capitalized where a sentence starts.
+	 */
+	private aloud(speakerID:string, spoken:string, book:NameBook, targets:readonly string[]):string {
+		return spoken.replace(/[A-Za-z_][A-Za-z0-9_]*/g, (word:string, at:number) => {
+			const label = book.labelOf(word);
+			if (!label) {
+				return word;
+			}
+			const said = this._labelAloud({ ...label, addressed: targets.includes(label.id), speakerID });
+			return /(^|[.!?])\s*$/.test(spoken.slice(0, at)) ? said.charAt(0).toUpperCase() + said.slice(1) : said;
+		});
+	}
+
+	/** `line`, by id from the words of the speaker whose book is `book`, as `listener` takes it (`AcquaintanceFields.hearsay`). */
+	private saidTo(listener:ArcRunner<TCtx>, line:TextWithIDs, book:NameBook | undefined):TextWithIDs {
+		const acquaintance = this.attached ? this.director.getAcquaintance() : undefined;
+		const hears = listener.mind?.persona.names;
+		return acquaintance && hears && book ? internalsOf(acquaintance).hearsay(line, book, hears) : line;
+	}
+
+	/**
+	 * Whether `from` sees `id`'s face: makes them out by sight while they face it (or which way they face is unknown).
+	 * Where nothing sees, yes.
+	 */
+	private seesFace(from:string, id:string):boolean {
+		const world = this.attached && this.director.getSight() ? this.director.world : undefined;
+		const [them, me] = world ? [poseOf(world, id), poseOf(world, from)] : [];
+		return this.sees(from, id) && (!them || !me || showsFace(them.facing, them.point, me.point));
+	}
+
+	/**
+	 * What each mind that hears `speakerID` (through `heardBy`), and each of its characters that does, makes of the voice
+	 * ({@link NameBook.hear}): its own character's, always theirs; another's, tied to their look where it sees their face,
+	 * and to their name where the line introduces them (`introduced`) and that one made out the words (`clear`); others the
+	 * line introduces, it learns by name where it also sees their face. What each mind is to be told of a name it learned,
+	 * once, after the line (`AcquaintanceFields.learning`).
+	 */
+	private place(speakerID:string, heardBy:readonly string[], clear:(id:string)=>boolean = () => false, introduced:readonly string[] = []):(()=>void)[] {
+		const acquaintance = this.attached ? this.director.getAcquaintance() : undefined;
+		const tells:(()=>void)[] = [];
+		const hear = (book:NameBook, by:readonly string[], own:boolean, learner:string):(()=>void)[] => {
+			const heard = by.filter(clear);
+			const learn = ():Knows[] => book.hear(speakerID, { face: own || by.some((id) => this.seesFace(id, speakerID)), named: !own && heard.length > 0 && introduced.includes(speakerID) });
+			if (!acquaintance) {
+				learn();
+				return [];
+			}
+			// Others it introduces: whoever made out the words, and sees their face, learns their name, tied to it.
+			const others = introduced.filter((other) => other !== speakerID && !by.includes(other) && heard.some((id) => this.seesFace(id, other)));
+			return [
+				internalsOf(acquaintance).learning(learner, book, speakerID, learn),
+				...others.map((other) => internalsOf(acquaintance).learning(learner, book, other, () => book.learn(other, [Knows.Name, Knows.Look]))),
+			].filter((tell) => tell !== undefined);
+		};
+		for (const listener of new Set(heardBy.map((id) => this.listenerFor(id)))) {
+			const its = heardBy.filter((id) => this.listenerFor(id) === listener);
+			// A character no mind listens through is no one's own.
+			const own = !!listener && this.listenerFor(speakerID) === listener;
+			if (listener?.mind) {
+				tells.push(...hear(listener.mind.persona.names, its, own, listener.id));
+			}
+			for (const id of its) {
+				const persona = (this.attached ? this.director.character(id) : this._listeners.get(id))?.persona;
+				if (persona && persona !== listener?.mind?.persona) {
+					hear(persona.names, [id], own, id);
+				}
+			}
+		}
+		return tells;
 	}
 
 	/** Who of `nearby` (in talking range of `mind`'s voice) it can tell, and how many more it cannot make out, in words. */
@@ -302,16 +401,21 @@ export class TalkFeature<TCtx = unknown> extends Feature<TCtx> {
 		const how = { ...tone ? { as } : {}, ...feeling ? { feeling } : {} };
 		// Kept by id from the speaker's words once: each listener hears its own names, a screen the speaker's.
 		const book = this.attached ? this.director.character(speakerID)?.mind?.persona.names : undefined;
-		const line = book ? parseTextWithIDs(spoken, (word) => book.idOf(word)) : [spoken];
+		// A voice's name stays a word: said aloud, it names no one the listener could tell.
+		const line = book ? parseTextWithIDs(this.aloud(speakerID, spoken, book, targets), (word) => [book.idOf(word)].find((id) => id === undefined || personOf(id) === id)) : [spoken];
 		const display = (id:string):string => book?.display(id) ?? id;
 		const utterance:SpeechUtterance = {
 			speakerID, text: showTextWithIDs(line, display), segments: () => textSegments(line, display), to: targets.length > 1 ? targets : targets[0], heardBy, timestamp, ...how,
 		};
 		this.attend(utterance);
+		const clearness = new Map(heardBy.map((id) => [id, this.clear(speakerID, id, as)]));
+		// Whom the line introduces, its speaker or others it points out: whoever makes out the words learns their names.
+		const acquaintance = this.attached ? this.director.getAcquaintance() : undefined;
+		const introduced = acquaintance ? internalsOf(acquaintance).introduced(speakerID, spoken, targets) : [];
+		const tells = this.place(speakerID, heardBy, (id) => clearness.get(id) === true, introduced);
 		callEach('onSpoke', this._onSpoke, [utterance], this.attached ? (entry) => this.director.log(entry) : undefined);
 		const clearly:string[] = [];
 		const reached = new Set<ArcRunner<TCtx>>();
-		const clearness = new Map(heardBy.map((id) => [id, this.clear(speakerID, id, as)]));
 		// Clear hearers first, so a mind listening through several characters takes the clearest.
 		for (const id of [...heardBy].sort((a, b) => Number(clearness.get(b)) - Number(clearness.get(a)))) {
 			const clear = clearness.get(id) === true;
@@ -329,16 +433,22 @@ export class TalkFeature<TCtx = unknown> extends Feature<TCtx> {
 			const names = this.namesFor(listener);
 			const mentioned = speechMentionsName(spoken, names.ours);
 			const addressed = isNamed(targets, names.you);
-			const heard = heardLine(speakerID, line, addressed, targets, clear, mentioned, this.mannerOf(how));
+			const said = this.saidTo(listener, line, book);
+			const heard = heardLine(voiceOf(speakerID), said, addressed, targets, clear, mentioned, this.mannerOf(how));
 			// Said to any of its characters, it is meant for this mind, though only its voice is "you".
 			const meant = addressed || mentioned || isNamed(targets, names.ours) || !!tone?.wakes || facing.includes(id);
-			this.hear(listener, speakerID, targets, heard, this.wakes(listener, meant, targets, clear, timestamp), timestamp, clear ? { speakerID, to: targets, text: line, ...how } : undefined);
+			// Its characters that heard it as this one did, clearly or muffled, and its speaker, when it is one of them and the
+			// line is clear: what others caught of it muffled is never what it said.
+			const knownBy = [...clear && this.listenerFor(speakerID) === listener ? [speakerID] : [], ...heardBy.filter((other) => other !== speakerID && clearness.get(other) === clear && this.listenerFor(other) === listener)];
+			this.hear(listener, knownBy, speakerID, targets, heard, this.wakes(listener, meant, targets, clear, timestamp), timestamp, clear ? { speakerID, to: targets, text: said, ...how } : undefined);
 			if (!clear && this.config.rehear > 0) {
 				const list = this._muffled.get(id) ?? [];
 				list.push({ speakerID, spoken, said: line, targets, until: timestamp + this.config.rehear, ...how });
 				this._muffled.set(id, list);
 			}
 		}
+		// Told after the line that taught it.
+		tells.forEach((tell) => tell());
 		this.hearing()?.spoke(speakerID, spoken, tone);
 		const words = wordsOf(spoken);
 		this._lastSaid.set(speakerID, words);
@@ -362,13 +472,21 @@ export class TalkFeature<TCtx = unknown> extends Feature<TCtx> {
 	public offered(speakerID:string, to:string | undefined, event:MindEvent, timestamp = 0):void {
 		const targets = to === undefined ? [] : [to];
 		const reached = new Set<ArcRunner<TCtx>>();
-		for (const id of to === undefined ? this.hearers(speakerID, []).filter((id) => this.clear(speakerID, id)) : targets) {
+		const hearers = to === undefined ? this.hearers(speakerID, []).filter((id) => this.clear(speakerID, id)) : targets;
+		// Said aloud: its speaker by voice, as a line names them; whom it is about stays who they are.
+		const tells = this.place(speakerID, hearers);
+		const text:NamingText = (name) => showNamingText(event.text, (id) => name(id === speakerID ? voiceOf(id) : id));
+		const who = event.who ?? [...new Set(idsIn(namedText(event.text)))];
+		for (const id of hearers) {
 			const listener = this.listenerFor(id);
 			if (listener?.mind && !reached.has(listener) && !saidBy(listener, speakerID)) {
 				reached.add(listener);
-				listener.mind.pushEvent({ ...event, timestamp, major: this.wakes(listener, targets.length > 0, targets, true, timestamp) });
+				// Every character of its that heard it.
+				const knownBy = hearers.filter((other) => this.listenerFor(other) === listener);
+				listener.mind.pushEvent({ ...event, text, who, knownBy, timestamp, major: this.wakes(listener, targets.length > 0, targets, true, timestamp) });
 			}
 		}
+		tells.forEach((tell) => tell());
 	}
 
 	/**
@@ -417,11 +535,15 @@ export class TalkFeature<TCtx = unknown> extends Feature<TCtx> {
 		const { speakerID } = said;
 		const targets = addressees(said.to);
 		const own = this.namesOf([id]);
-		const heard = heardLine(speakerID, line, isNamed(targets, own), targets, clear, speechMentionsName(spoken, own), this.mannerOf(said));
+		const heard = heardLine(voiceOf(speakerID), line, isNamed(targets, own), targets, clear, speechMentionsName(spoken, own), this.mannerOf(said));
 		const thinker = runner.owner ?? runner;
-		const known = !this.attached || this.canTell(id, speakerID, thinker.mind ?? undefined);
-		const name = (who:string, start:boolean):string => (who !== speakerID || known ? thinker.persona.names.display(who) : start ? 'Someone' : 'someone');
-		const made = { ...said, text: showTextWithIDs(heard, name), segments: () => textSegments(heard, name), clarity: clear ? 'clear' as const : 'muffled' as const };
+		// A mind's book names the voice; with none, a voice is someone unless it sees them.
+		const shown = (who:string):string | undefined => (thinker.mind || personOf(who) === who ? who : this.sees(id, speakerID) ? speakerID : undefined);
+		const name = (who:string, start:boolean):string => {
+			const as = shown(who);
+			return as === undefined ? (start ? 'Someone' : 'someone') : thinker.persona.names.display(as);
+		};
+		const made = { ...said, text: showInPerson(heard, (who) => who === id, name), segments: () => personSegments(heard, (who) => who === id, name), clarity: clear ? 'clear' as const : 'muffled' as const };
 		callEach('onHeard', this._onHeard, [id, made], this.attached ? (entry) => this.director.log(entry) : undefined);
 	}
 
@@ -443,8 +565,13 @@ export class TalkFeature<TCtx = unknown> extends Feature<TCtx> {
 				const addressed = isNamed(row.targets, names.you);
 				const meant = addressed || isNamed(row.targets, names.ours) || speechMentionsName(row.spoken, names.ours) || !!this.toneOf(row.as)?.wakes || this.faceToFace(row.speakerID, id);
 				this._lastHeard.set(id, { speakerID: row.speakerID, words: wordsOf(row.spoken), at: now });
-				const text = saysLine(row.speakerID, row.said, addressed, row.targets, ', now clear', this.mannerOf(row));
-				this.hear(listener, row.speakerID, row.targets, text, this.wakes(listener, meant, row.targets, true, now), now, { speakerID: row.speakerID, to: row.targets, text: row.said, ...row.as ? { as: row.as } : {}, ...row.feeling ? { feeling: row.feeling } : {} });
+				const acquaintance = this.attached ? this.director.getAcquaintance() : undefined;
+				const book = this.attached ? this.director.character(row.speakerID)?.mind?.persona.names : undefined;
+				const tells = this.place(row.speakerID, [id], () => true, acquaintance ? internalsOf(acquaintance).introduced(row.speakerID, row.spoken, row.targets) : []);
+				const said = this.saidTo(listener, row.said, book);
+				const text = saysLine(voiceOf(row.speakerID), said, row.targets, ', now clear', this.mannerOf(row));
+				this.hear(listener, [id], row.speakerID, row.targets, text, this.wakes(listener, meant, row.targets, true, now), now, { speakerID: row.speakerID, to: row.targets, text: said, ...row.as ? { as: row.as } : {}, ...row.feeling ? { feeling: row.feeling } : {} });
+				tells.forEach((tell) => tell());
 				return false;
 			});
 			if (keep.length > 0) {
@@ -486,10 +613,10 @@ export class TalkFeature<TCtx = unknown> extends Feature<TCtx> {
 		return uniqueNames(ids.flatMap((id) => [id, ...listenerNames(this.sense, id)]));
 	}
 
-	/** Tell `listener`'s mind a line it heard, kept by id as the library keeps it. */
-	private hear(listener:ArcRunner<TCtx>, speakerID:string, targets:string[], text:TextWithIDs, major:boolean, timestamp:number, turn?:HeldTurn):void {
+	/** Tell `listener`'s mind a line its characters `knownBy` heard, kept by id as the library keeps it. */
+	private hear(listener:ArcRunner<TCtx>, knownBy:string[], speakerID:string, targets:string[], text:TextWithIDs, major:boolean, timestamp:number, turn?:HeldTurn):void {
 		if (listener.mind) {
-			internalsOf(listener.mind).hold({ kind: 'HeardSpeech', text, who: [speakerID, ...targets], tags: ['speech'], major, timestamp, remember: true, turn });
+			internalsOf(listener.mind).hold({ kind: 'HeardSpeech', text, who: [speakerID, ...targets], knownBy, tags: ['speech'], major, timestamp, remember: true, turn });
 		}
 	}
 
@@ -539,7 +666,7 @@ export class TalkFeature<TCtx = unknown> extends Feature<TCtx> {
 			handler: (ctx, args, mind) => {
 				const to = isRecord(args) && typeof args.to === 'string' ? args.to.trim() : '';
 				const { known, strangers } = this.named(mind, this.nearby(mind.thinkThread()));
-				const nearby = [...known.map((id) => mind.nameOf(id)), ...strangers];
+				const nearby = [...known.map((id) => this.nameIn(mind, id)), ...strangers];
 				if (!to) {
 					return nearby.length > 0 ? nearby : 'No one in talking range.';
 				}
@@ -634,7 +761,7 @@ export class TalkFeature<TCtx = unknown> extends Feature<TCtx> {
 				!this.clear(voiceID, id) && 'too far to make out your words',
 				blocked !== undefined && (blocked ? `unreachable, blocked on the way: ${shown(mind, blocked)}` : 'unreachable'),
 			].filter(Boolean);
-			return marks.length > 0 ? `${mind.nameOf(id)} (${marks.join('; ')})` : mind.nameOf(id);
+			return marks.length > 0 ? `${this.nameIn(mind, id)} (${marks.join('; ')})` : this.nameIn(mind, id);
 		}), ...strangers];
 		// Where the world can tell whether there is a way, say(to) walks up to them first.
 		const walks = ways !== undefined;
@@ -689,7 +816,7 @@ export class TalkFeature<TCtx = unknown> extends Feature<TCtx> {
 			return undefined;
 		}
 		const { known, strangers } = this.named(mind, check.nearby);
-		const nearby = [...known.map((id) => mind.nameOf(id)), ...strangers];
+		const nearby = [...known.map((id) => this.nameIn(mind, id)), ...strangers];
 		const ids = [to ?? []].flat();
 		const ways = to !== undefined && !ids.includes(voiceID) ? this.ways(voiceID, ids) : undefined;
 		if (ways) {

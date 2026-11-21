@@ -5,7 +5,7 @@ import type { VerbSpec } from './stock-verbs.js';
 
 /** A rule on one arg the fields of {@link ArgConstraint} cannot say. */
 export type ArgCheck = {
-	/** Why `value` breaks it, or `undefined` when it holds. */
+	/** Why `value` breaks it, or `undefined` when it is met. */
 	check:(value:StepArg)=>string | undefined;
 	/** Its words in the verb's help line. */
 	help?:string;
@@ -34,7 +34,10 @@ export type ArgConstraint = {
 	custom?:readonly ArgCheck[];
 };
 
-/** Where a step is: the nearest enclosing verb and its arc arg, `law.arc`. As a `whenInside` key, `*.arc` is any verb's. */
+/**
+ * A verb's arg: the one at fault (`wait.until`), or where a step is, the nearest enclosing verb and its arc arg
+ * (`law.arc`). As a `whenInside` key, `*.arc` is any verb's.
+ */
 export type ArgPath = `${string}.${string}`;
 
 type Meet = { [K in keyof ArgConstraint]-?:(a:NonNullable<ArgConstraint[K]>, b:NonNullable<ArgConstraint[K]>)=>ArgConstraint[K] };
@@ -95,7 +98,7 @@ function bounds(c:ArgConstraint):string[] {
 	return [c.integer && 'a whole number', c.min !== undefined && `at least ${c.min}`, c.max !== undefined && `at most ${c.max}`].filter((part):part is string => !!part);
 }
 
-/** Why `value` of arg `key` breaks `c`, said of the arg (`seconds is at most 10`); none when it holds. */
+/** Why `value` of arg `key` breaks `c`, said of the arg (`seconds is at most 10`); none when it is met. */
 export function argProblem(key:string, value:StepArg, c:ArgConstraint):string | undefined {
 	if (typeof value === 'string' && c.names && !c.names.includes(value)) {
 		return `${key} is one of ${c.names.join(', ')}; ${value} is not`;

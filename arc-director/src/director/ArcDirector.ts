@@ -9,6 +9,7 @@ import { Character, type CharacterJSON } from '../character/Character.js';
 import type { KitSource } from '../character/character-types.js';
 import type { NameTarget } from '../character/NameBook.js';
 import { Collective, type CollectiveJSON } from '../collective/Collective.js';
+import { idsIn, namedText } from '../character/text-with-ids.js';
 import { hand, internalsOf } from '../internals.js';
 import { Mind, mindTools, type MindSettings } from '../mind/mind.js';
 import type { MindEvent, Sense, ThinkEvent, ToolSpec } from '../mind/mind-types.js';
@@ -16,14 +17,14 @@ import { buildCatalog } from '../expr/natives.js';
 import { evaluate, type EvalResult } from '../expr/eval.js';
 import { ABSENT, ExprError, SampleCache, type Catalog, type NativeFn, type Stringifiers } from '../expr/expr-types.js';
 import { evaluateWho, lawMatches } from '../collective/who.js';
-import { HandoverFeature } from '../collective/HandoverFeature.js';
 import { createArcSession, DEFAULT_REARM, firstStartable, pollArcSession, reactionOf, watchIsTrue, type ArcHandler, type ArcPick, type ArcSession, type LastChoice } from '../arc/run.js';
-import { PriorityThinkQueue, type MindQueue, type ThinkRow } from '../think/queue.js';
+import { PriorityThinkQueue, type MindQueue, type ThinkReason, type ThinkRow } from '../think/queue.js';
 import { FAILED_ARC_SCORE } from '../think/scheduler.js';
 import { callEach, type CharacterSpec, type CollectiveSpec, type DirectorLog, type KernelSource, type SeenName, type VerbCall, type VerbHandler } from './director-types.js';
 import { ModelRegistry, type LiveModel } from './model-registry.js';
 import type { ModelProvider } from './ModelProvider.js';
 import type { JsonValue } from '../json.js';
+import type { MemoryJSON } from '../memory/store.js';
 import { checkAxes } from '../world/axes.js';
 import { OffersFeature } from '../world/OffersFeature.js';
 import type { HostWorld } from '../world/world-types.js';
@@ -43,6 +44,8 @@ const RETRY_SECONDS = 3;
 export type CastJSON = {
 	characters:Record<string, CharacterJSON>;
 	collectives:Record<string, CollectiveJSON>;
+	/** Every memory of the cast, once each, with who knows it. */
+	memories:MemoryJSON[];
 	/** Each feature's own state, by its `saveKey` (`Feature.toJSON`): the open offers, the feelings shown. */
 	features?:Record<string, JsonValue>;
 	/** The director's `time`, which every time in the cast is on. */
@@ -58,6 +61,8 @@ export type DirectorFields<TCtx> = {
 	dispatcher:Dispatcher<TCtx>;
 	/** Thinks ready to start: a mind that leaves the cast leaves them. */
 	readyThink:ThinkRow[];
+	/** Whether a think of mind `mindID` is due: queued, or ready and waiting for a slot of its model; with `except`, one for another reason. */
+	thinkDue:(mindID:string, except?:ThinkReason)=>boolean;
 	/** A runner's System One pick, while it has one. */
 	pick:(runner:ArcRunner<TCtx>)=>ArcPick | undefined;
 	/** What each `on*` added. */
@@ -258,7 +263,7 @@ export class ArcDirector<TCtx = unknown, TEntity = unknown> {
 	private readonly _watches = new Watches<TCtx>(this);
 	private readonly _dispatcher = new Dispatcher<TCtx>(this);
 
-	/** Every director has every mind's own tools, goals reached, the memory handover, offers and the world verbs. */
+	/** Every director has every mind's own tools, goals reached, offers and the world verbs. */
 	constructor() {
 		hand(this, {
 			features: this._features,
@@ -267,6 +272,7 @@ export class ArcDirector<TCtx = unknown, TEntity = unknown> {
 			watches: this._watches,
 			dispatcher: this._dispatcher,
 			readyThink: this._readyThink,
+			thinkDue: (mindID, except) => this.thinkDue(mindID, except),
 			pick: (runner) => this.pickFor(runner),
 			listeners: this._listeners,
 			tell: (on, ...args) => this.tell(on, ...args),
@@ -274,7 +280,7 @@ export class ArcDirector<TCtx = unknown, TEntity = unknown> {
 			watchedAt: () => this._watchedAt,
 		} satisfies DirectorFields<TCtx>);
 		Object.entries(mindTools<TCtx>()).forEach(([name, tool]) => this.tools.add(name, tool));
-		this.addFeature(new GoalsFeature<TCtx>()).addFeature(new HandoverFeature<TCtx>()).addFeature(this.offers).addFeature(this._worldVerbs);
+		this.addFeature(new GoalsFeature<TCtx>()).addFeature(this.offers).addFeature(this._worldVerbs);
 	}
 
 	/**
@@ -407,7 +413,7 @@ export class ArcDirector<TCtx = unknown, TEntity = unknown> {
 		return choicePrompt({ id: runner.id, verb, last, catalog: runner.catalog?.(), choices: withLoneWait(choices), verbs: this.verbs });
 	}
 
-	/** Start a character's standing `choose` while it is idle, System One is on, and its `until` does not hold. */
+	/** Start a character's standing `choose` while it is idle, System One is on, and its `until` is not met. */
 	private tickStanding(character:Character<TCtx>):void {
 		const standing = this._cast.standing.get(character);
 		if (!standing || character.arcSession || this._time < standing.restUntil || !this.pickFor(character)) {
@@ -607,7 +613,7 @@ export class ArcDirector<TCtx = unknown, TEntity = unknown> {
 		return { status: 'ok', verb: 'law' };
 	}
 
-	/** `then(this)` when `condition` holds, else `otherwise(this)`, so a condition need not break the chain. */
+	/** `then(this)` when `condition` is true, else `otherwise(this)`, so a condition need not break the chain. */
 	public if(condition:unknown, then:(director:this)=>void, otherwise?:(director:this)=>void):this {
 		(condition ? then : otherwise)?.(this);
 		return this;
@@ -664,8 +670,8 @@ export class ArcDirector<TCtx = unknown, TEntity = unknown> {
 		return catalog ? evaluate(expr, catalog) : { value: ABSENT, error: new ExprError(`${id} has no view of the world`) };
 	}
 
-	/** Whether watch `watch` holds for character or collective `id`, as it sees the world now: false where it does not evaluate. */
-	public holds(id:string, watch:string):boolean {
+	/** Whether watch `watch` is met for character or collective `id`, as it sees the world now: false where it does not evaluate. */
+	public isMet(id:string, watch:string):boolean {
 		const r = this.evaluate(id, watch);
 		return !r.error && fit(r.value) > 0;
 	}
@@ -742,7 +748,7 @@ export class ArcDirector<TCtx = unknown, TEntity = unknown> {
 		return this;
 	}
 
-	// ---- Cast (specs, rows, wiring, membership, handover, save) ----
+	// ---- Cast (specs, rows, wiring, membership, save) ----
 
 	/** Game seconds a standing `choose` rests after a failed pick, for every runner without its own. Default 8. */
 	public withCooldown(seconds:number):this {
@@ -881,7 +887,7 @@ export class ArcDirector<TCtx = unknown, TEntity = unknown> {
 				features[feature.saveKey!] = json;
 			}
 		}
-		return { characters, collectives, features, time: this._time };
+		return { characters, collectives, memories: this._cast.pool.toJSON(), features, time: this._time };
 	}
 
 	/**
@@ -898,10 +904,29 @@ export class ArcDirector<TCtx = unknown, TEntity = unknown> {
 		this._cast.wireAll(cast);
 	}
 
-	/** Tell every mind once. */
+	/**
+	 * Tell `event` to those who perceive it, each mind once, known by those of its characters who do: whom `knownBy`
+	 * names; every character for `'everyone'` or an event about no one (`who: []`, or a text that names no one); else
+	 * the ones it is about and those any feature says perceive one of them (`Feature.perceives`), everyone where no
+	 * feature has a say. Stamped with the director's time once, so every mind keeps it as the same event.
+	 */
 	public pushEvent(event:MindEvent):void {
+		const timestamp = event.timestamp ?? this._time;
+		const who = event.who ?? [...new Set(idsIn(namedText(event.text)))];
+		const all = event.knownBy === 'everyone' || (event.knownBy === undefined && who.length === 0);
+		const perceives = (id:string):boolean => {
+			if (all || Array.isArray(event.knownBy)) {
+				return all || event.knownBy!.includes(id);
+			}
+			const character = this.character(id);
+			const says = character ? this._features.map((feature) => feature.perceives(character, event, who)).filter((say) => say !== undefined) : [false];
+			return who.includes(id) || says.length === 0 || says.includes(true);
+		};
 		for (const mind of this.minds()) {
-			mind.pushEvent(event);
+			const knownBy = mind.thinksFor().filter(perceives);
+			if (knownBy.length > 0) {
+				mind.pushEvent({ ...event, timestamp, knownBy });
+			}
 		}
 	}
 
@@ -992,13 +1017,16 @@ export class ArcDirector<TCtx = unknown, TEntity = unknown> {
 		if (!this._queue.hasThought(mindID)) {
 			return false;
 		}
-		return (this._queue.isThinking(mindID) && !this._rethinks.has(mindID))
-			|| this._queue.hasPending(mindID, 'rethink')
-			|| this._readyThink.some((row) => row.mindID === mindID && row.reason !== 'rethink');
+		return (this._queue.isThinking(mindID) && !this._rethinks.has(mindID)) || this.thinkDue(mindID, 'rethink');
+	}
+
+	/** A think of `mindID` queued, or ready and waiting for a slot of its model; with `except`, one for another reason. */
+	private thinkDue(mindID:string, except?:ThinkReason):boolean {
+		return this._queue.hasPending(mindID, except) || this._readyThink.some((row) => row.mindID === mindID && row.reason !== except);
 	}
 
 	/**
-	 * Poll `runner`'s live session, or start the first law that holds. A voice waits for its mind's think, except a
+	 * Poll `runner`'s live session, or start the first law whose watch is true. A voice waits for its mind's think, except a
 	 * party's commander: that think is mostly orders for others, and its own laws (heal, keep back) cannot wait.
 	 */
 	private pollRunner(runner:ArcRunner<TCtx>, lawHandlers:()=>ArcHandler[], catalog:ArcSession['catalog']):void {

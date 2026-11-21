@@ -19,8 +19,8 @@ function argSchema(kind:VerbArgKind, c:ArgConstraint, arc:JsonSchema, endless?:b
 	if (base === 'number') {
 		return { type: c.integer ? 'integer' : 'number', ...(c.min === undefined ? {} : { minimum: c.min }), ...(c.max === undefined ? {} : { maximum: c.max }) };
 	}
-	// True, rounds or seconds; an endless verb holds for seconds only.
-	if (base === 'hold') {
+	// True, rounds or seconds; an endless verb is unbreakable for seconds only.
+	if (base === 'duration') {
 		return endless ? { type: 'string' } : { anyOf: [{ const: true }, { type: 'integer', minimum: 0 }, { type: 'string' }] };
 	}
 	if (base === 'bool') {

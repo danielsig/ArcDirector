@@ -1,15 +1,15 @@
 ApothecaryCounter [] {"id":"ApothecaryCounter","tags":[]} ApothecaryCounter is nothing out of the ordinary.
 ApothecaryCounterBench [furniture chair] {"id":"ApothecaryCounterBench","tags":["furniture","chair"],"interactable":true,"interesting":1,"movable":false} ApothecaryCounterBench is a bench.
 ApothecaryShop [building house landmark] {"id":"ApothecaryShop","tags":["building","house","landmark"],"interactable":true,"interesting":1,"movable":false} ApothecaryShop is nothing out of the ordinary.
-ApothecaryShopDoor [door landmark] {"id":"ApothecaryShopDoor","tags":["door","landmark"],"interactable":true,"interesting":1,"note":"open","movable":false} ApothecaryShopDoor is a door, open.
+ApothecaryShopDoor [door landmark] {"id":"ApothecaryShopDoor","tags":["door","landmark"],"interactable":true,"interesting":1,"note":"open","state":{"door":"open"},"movable":false} ApothecaryShopDoor is a door, open.
 BakerStall [] {"id":"BakerStall","tags":[]} BakerStall is nothing out of the ordinary.
 CutlerStall [] {"id":"CutlerStall","tags":[]} CutlerStall is nothing out of the ordinary.
-EastGate [door landmark] {"id":"EastGate","tags":["door","landmark"],"interactable":true,"interesting":1,"note":"open","movable":false} EastGate is a door, open.
+EastGate [door landmark] {"id":"EastGate","tags":["door","landmark"],"interactable":true,"interesting":1,"note":"open","state":{"door":"open"},"movable":false} EastGate is a door, open.
 PotterStall [] {"id":"PotterStall","tags":[]} PotterStall is nothing out of the ordinary.
 SushiStall [] {"id":"SushiStall","tags":[]} SushiStall is nothing out of the ordinary.
 SushiStallBench [furniture chair] {"id":"SushiStallBench","tags":["furniture","chair"],"interactable":true,"interesting":1,"movable":false} SushiStallBench is a bench.
 ToyCounter [] {"id":"ToyCounter","tags":[]} ToyCounter is nothing out of the ordinary.
 ToyShop [building house landmark] {"id":"ToyShop","tags":["building","house","landmark"],"interactable":true,"interesting":1,"movable":false} ToyShop is nothing out of the ordinary.
-ToyShopDoor [door landmark] {"id":"ToyShopDoor","tags":["door","landmark"],"interactable":true,"interesting":1,"note":"open","movable":false} ToyShopDoor is a door, open.
+ToyShopDoor [door landmark] {"id":"ToyShopDoor","tags":["door","landmark"],"interactable":true,"interesting":1,"note":"open","state":{"door":"open"},"movable":false} ToyShopDoor is a door, open.
 WeaverStall [] {"id":"WeaverStall","tags":[]} WeaverStall is nothing out of the ordinary.
-WestGate [door landmark] {"id":"WestGate","tags":["door","landmark"],"interactable":true,"interesting":1,"note":"open","movable":false} WestGate is a door, open.
+WestGate [door landmark] {"id":"WestGate","tags":["door","landmark"],"interactable":true,"interesting":1,"note":"open","state":{"door":"open"},"movable":false} WestGate is a door, open.

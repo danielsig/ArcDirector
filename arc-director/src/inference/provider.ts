@@ -84,7 +84,7 @@ export function thoughtTokens(thought:string | undefined):number {
 	return Math.ceil((thought?.match(/\S+/g)?.length ?? 0) * 1.3);
 }
 
-export type ChatRequest = {
+export interface ChatRequest {
 	model:string;
 	messages:ChatMessage[];
 	tools?:ToolDef[];
@@ -117,7 +117,7 @@ export type ChatRequest = {
 	onDelta?:(delta:ChatDelta)=>void;
 	/** The body as it is sent and where, when the server sends one: what a log shows. */
 	onRequest?:(sent:{ body:Record<string, unknown>; path:string })=>void;
-};
+}
 
 /** A piece of a reply still being written: its answer, or its reasoning. */
 export type ChatDelta = { content?:string; reasoning?:string };

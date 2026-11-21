@@ -1,10 +1,10 @@
 import { hand } from '../internals.js';
-import type { Arc, ArcResult } from '../arc/arc-types.js';
+import type { Arc, ArcResult, Step } from '../arc/arc-types.js';
 import type { ArcRunner } from '../character/arc-runner.js';
 import type { Character } from '../character/Character.js';
 import type { Collective } from '../collective/Collective.js';
 import type { Mind } from '../mind/mind.js';
-import type { ArcFormat, Manner } from '../mind/mind-types.js';
+import type { ArcFormat, Manner, MindEvent } from '../mind/mind-types.js';
 import type { ExprVal, NativeFn } from '../expr/expr-types.js';
 import type { Goal, KitSource } from '../character/character-types.js';
 import type { JsonValue } from '../json.js';
@@ -159,6 +159,14 @@ export abstract class Feature<TCtx = unknown> {
 		return undefined;
 	}
 
+	/**
+	 * Whether `character` perceives `event`, about the characters and things `who`, as it happens (`ArcDirector.pushEvent`).
+	 * Undefined: this feature has no say.
+	 */
+	public perceives(character:Character<TCtx>, event:MindEvent, who:readonly string[]):boolean | undefined {
+		return undefined;
+	}
+
 	/** What `selfID` sees from `ctx` (`SightFeature.seenBy`), with what it adds: `objects` as they are by default. */
 	public seen(ctx:TCtx, selfID:string, objects:SeenObject[]):SeenObject[] {
 		return objects;
@@ -182,10 +190,12 @@ export abstract class Feature<TCtx = unknown> {
 		return undefined;
 	}
 
+	/** `runner` is about to run `step`, any verb (`say` and a mind's own too), its group aimed. */
+	public stepStarts(runner:ArcRunner<TCtx>, step:Step):void {}
 	/** A host verb passed the gate and its handler starts. */
-	public stepStarted(call:VerbCall<TCtx>):void {}
-	/** A host verb {@link stepStarted} told of ended, how it went; a handler that threw ended `failed`. */
-	public stepEnded(call:VerbCall<TCtx>, result:ArcResult):void {}
+	public hostVerbStarted(call:VerbCall<TCtx>):void {}
+	/** A host verb {@link hostVerbStarted} told of ended, how it went; a handler that threw ended `failed`. */
+	public hostVerbEnded(call:VerbCall<TCtx>, result:ArcResult):void {}
 }
 
 /** Feature `type`'s `get*` shortcut, which its file declares on `ArcDirector` typed with the director's context and `shortcuts.ts` builds. */

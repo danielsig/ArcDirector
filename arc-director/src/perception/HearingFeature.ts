@@ -161,7 +161,7 @@ export class HearingFeature<TCtx = unknown> extends Feature<TCtx> {
 	}
 
 	/** A verb's sound goes on while it runs, unless it says how long it lasts itself. */
-	public override stepStarted(call:VerbCall<TCtx>):void {
+	public override hostVerbStarted(call:VerbCall<TCtx>):void {
 		const noise = this._noise.get(call.verb);
 		if (!noise) {
 			return;
@@ -172,7 +172,7 @@ export class HearingFeature<TCtx = unknown> extends Feature<TCtx> {
 		}
 	}
 
-	public override stepEnded(call:VerbCall<TCtx>):void {
+	public override hostVerbEnded(call:VerbCall<TCtx>):void {
 		this._hushes.get(call)?.();
 	}
 
@@ -316,7 +316,7 @@ export class HearingFeature<TCtx = unknown> extends Feature<TCtx> {
 			made.told.set(owner, step);
 			const pose = poseOf(world, id)!;
 			const text = heardText(made.sound, level, pose.point, source.point, { facing: pose.facing, axes: axesOf(world), up: pose.up, bearing: sight?.bearing, muffled, unitName: sight?.unitName, via, length });
-			owner.tell({ kind: 'sound', text, tags: ['sound'], timestamp: this.director.time, key, cap: this._limit, weight: level, ...level >= LOUD ? { major: true } : {} });
+			owner.tell({ kind: 'sound', text, knownBy: [id], tags: ['sound'], timestamp: this.director.time, key, cap: this._limit, weight: level, ...level >= LOUD ? { major: true } : {} });
 		}
 	}
 }

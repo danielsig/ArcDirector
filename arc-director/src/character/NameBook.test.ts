@@ -69,3 +69,36 @@ describe('NameBook.inCode', () => {
 		assert.equal(book.inCode('OssuaryChest'), 'OssuaryChest', 'the word it wrote last counts');
 	});
 });
+
+describe('NameBook voices', () => {
+	it('names a voice it cannot place apart from the face, acts on it as the person, and once seen speaking reads it as them', () => {
+		const book = new NameBook();
+		book.name('Wynn', 'Woman', { seen: true, character: true });
+		book.hear('Wynn');
+		assert.equal(book.peek('voice:Wynn'), 'VoiceA', 'heard, not seen: its own label');
+		assert.equal(book.peek('Wynn'), 'Woman', 'the face keeps its name');
+		assert.equal(book.resolve('VoiceA'), 'Wynn', 'acted on, the person');
+		assert.equal(book.idOf('VoiceA'), 'voice:Wynn', 'kept in notes, the voice');
+		assert.equal(book.peek('voice:Wynn'), 'VoiceA');
+		book.read('VoiceA');
+		assert.equal(book.inCode('Wynn'), 'VoiceA', 'code shows what the mind wrote');
+		assert.equal(book.peek('Wynn'), 'VoiceA', 'last named by voice');
+		const saved = new NameBook();
+		saved.load(JSON.parse(JSON.stringify(book.toJSON())));
+		assert.equal(saved.peek('voice:Wynn'), 'VoiceA', 'saved');
+		book.hear('Wynn', { face: true });
+		assert.equal(book.peek('voice:Wynn'), 'Woman', 'seen speaking: the voice is the face');
+		assert.equal(book.resolve('VoiceA'), 'Wynn');
+		book.hear('Wynn');
+		assert.equal(book.peek('voice:Wynn'), 'Woman', 'a voice it knows stays known');
+		assert.equal(book.resolve('VoiceA'), 'Wynn', 'the old label still resolves');
+	});
+
+	it('gives each voice it cannot place its own letters, apart from figure labels', () => {
+		const book = new NameBook();
+		book.vague('Ann', 'Figure', true);
+		book.hear('Ann');
+		book.hear('Bob');
+		assert.deepEqual([book.peek('Ann'), book.peek('voice:Ann'), book.peek('voice:Bob')], ['FigureA', 'VoiceA', 'VoiceB']);
+	});
+});

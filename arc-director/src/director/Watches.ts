@@ -29,7 +29,7 @@ export function fit(value:ExprVal):number {
 	return value.kind === 'entity' ? 1 : watchScore(value).score;
 }
 
-/** Why a watch expression can never hold (bad syntax, leftover English, a function there is none of), as opposed to false right now. */
+/** Why a watch expression can never be true (bad syntax, leftover English, a function there is none of), as opposed to false right now. */
 export function watchProblem(expr:string, catalog:Catalog | undefined):string | undefined {
 	try {
 		parse(expr);
@@ -171,6 +171,8 @@ export class Watches<TCtx> {
 			stringifiers: this.stringifiers,
 			// Its watches by name, so `wait(until=fallen || idle)` reads them.
 			watches: listener?.persona.watchList(),
+			// A name its mind wrote of one it could not tell finds them once it can.
+			unmark: (word) => ((runner.owner ?? runner).mind?.persona.names ?? runner.persona.names).unmark(word),
 			cache,
 			hasHeard: mind?.hasHeard() ?? false,
 			prev: {
@@ -215,15 +217,16 @@ export class Watches<TCtx> {
 
 	/** The host naming policy as one mind sees it: by its owner's id, from its voice's context. */
 	public seenAs(mind:Mind<TCtx>):((target:NameTarget)=>string) | undefined {
+		return this.namesAs(mind, () => this._director.contextOf(mind.thinkThread()));
+	}
+
+	/** The host naming policy as `viewer` sees it, from the context `ctx` gives: both read when it is asked. */
+	public namesAs(viewer:{ readonly id:string }, ctx:()=>TCtx | undefined):((target:NameTarget)=>string) | undefined {
 		const seen = this.names;
-		if (!seen) {
-			return undefined;
-		}
 		// Its context only when the policy reads it: a kernel set names every entity in it, many times a frame.
-		const tryCtx = ():TCtx | undefined => this._director.contextOf(mind.thinkThread());
-		return (target) => seen({ id: mind.id, get ctx() {
-			return tryCtx();
-		} }, target);
+		return seen && ((target) => seen({ id: viewer.id, get ctx() {
+			return ctx();
+		} }, target));
 	}
 
 	/** The view of a collective with no commander: its first living character's kernels, measured from the middle of them all. */

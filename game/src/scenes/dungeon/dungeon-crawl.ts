@@ -198,13 +198,16 @@ const STEPS:Step[] = [
 const NEAREST_FOE = 'others.filter("enemy").minBy(u => distance(me, u))';
 
 /** Alone with monsters: cry for help and run to the nearest ally, wherever they are. */
-const HELP_LAW = `law(name=help, watch=some(others.filter("enemy").nearby(9)) && !some(${ALLIES}.nearby(8)), arc=say(text="Help! Monsters!") && go_to(${ALLIES}.minBy(u => distance(me, u))))`;
+const HELP_LAW = `law(name=help, watch=some(others.filter("enemy").nearby(9)) && !some(${ALLIES}.nearby(8))) {
+	say(text="Help! Monsters!", as=scream)
+	go_to(${ALLIES}.minBy(u => distance(me, u)))
+}`;
 
 /** How `id` meets danger: a choose law of its own, and one for being caught alone, set before it comes. */
 function dangerGoal(id:string):Goal {
 	const shield = id === KNIGHT.id ? ' Draw their fire and shield the others: protect the weakest, block, strike.' : '';
 	return {
-		text: `Set two laws for danger before it comes, and keep them; your laws act without a think. One to fight it, a choose law.${shield} Like: ${DANGER_LAWS[id]} And one for when you see monsters but none of your allies: scream for help and run to the nearest ally. Like: ${HELP_LAW}`,
+		text: `Set two laws for danger before it comes, and keep them; your laws act without a think. One to fight it, a choose law.${shield} Like:\n${DANGER_LAWS[id]}\nAnd one for when you see monsters but none of your allies: scream for help and run to the nearest ally. Like:\n${HELP_LAW}`,
 		priority: 3,
 	};
 }
@@ -216,7 +219,7 @@ const TALK:TalkStyle = { instructions: TalkInstructions.Banter, avoid: ['the cro
 function healGoal(leader:string):Goal {
 	const keep = HEAL.range - 2;
 	return {
-		text: `Always heal whoever has the lowest health first, yourself included, but do not heal anyone who already has full health like 50/50. Right before you heal, stay within heal reach (${HEAL.range}m): follow with a distance, and let a when heal from there. Like: when(isHurt(me) || some(${ALLIES}.filter(u => isHurt(u)).nearby(${HEAL.range}))) { heal(target=${LOWEST}) } ; follow(${leader}, distance=${keep})`,
+		text: `Always heal whoever has the lowest health first, yourself included, but do not heal anyone who already has full health like 50/50. Right before you heal, stay within heal reach (${HEAL.range}m): follow with a distance, and let a when heal from there. Like:\nwhen(isHurt(me) || some(${ALLIES}.filter(u => isHurt(u)).nearby(${HEAL.range}))) {\n\theal(target=${LOWEST})\n}\nfollow(${leader}, distance=${keep})`,
 		priority: 3,
 	};
 }
@@ -415,10 +418,15 @@ const LEADERS = [KNIGHT.id, WITCH.id];
 
 /** The choose law each companion is asked to set for danger, in its own idiom: the fast model picks each reaction. */
 const DANGER_LAWS:Record<string, string> = {
-	[KNIGHT.id]: `law(name=shield, watch=${FOES_NEAR}, arc=loop(choose(goal="Draw their fire off my friends", guard=protect(), block=block(), strike=attack())))`,
-	[HEALER.id]: `law(name=mend, watch=${FOES_NEAR}, arc=loop(choose(goal="Keep everyone alive", heal=heal(), back_off=flee(${NEAREST_FOE}, distance=6), strike=attack())))`,
-	[WITCH.id]: `law(name=burn, watch=${FOES_NEAR}, arc=loop(choose(goal="Burn them from behind Valerius", weakest=hex(others.filter("enemy").minBy(u => u.hp)), nearest=hex(${NEAREST_FOE}), back_off=flee(${NEAREST_FOE}, distance=6))))`,
+	[KNIGHT.id]: dangerLaw('shield', 'Draw their fire off my friends', ['guard: protect()', 'block: block()', 'strike: attack()']),
+	[HEALER.id]: dangerLaw('mend', 'Keep everyone alive', ['heal: heal()', `back_off: flee(${NEAREST_FOE}, distance=6)`, 'strike: attack()']),
+	[WITCH.id]: dangerLaw('burn', 'Burn them from behind Valerius', ['weakest: hex(others.filter("enemy").minBy(u => u.hp))', `nearest: hex(${NEAREST_FOE})`, `back_off: flee(${NEAREST_FOE}, distance=6)`]),
 };
+
+/** A law `name` that keeps choosing among `choices` while foes are near, laid out in indented blocks. */
+function dangerLaw(name:string, goal:string, choices:string[]):string {
+	return `law(name=${name}, watch=${FOES_NEAR}) {\n\tloop {\n\t\tchoose("${goal}") {\n${choices.map((choice) => `\t\t\t${choice}\n`).join('')}\t\t}\n\t}\n}`;
+}
 
 /** Everyone in the crypt but Kaelen: the party, each set on the first step behind its leader, and the Horde. */
 export const DUNGEON_CAST:SceneCast = [

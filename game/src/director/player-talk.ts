@@ -135,10 +135,11 @@ export function playerSay(host:GameHost, text:string):void {
 	const directed = parseDirectedLine(spoken, talkOthers(host.world, 'Player'));
 	const line = directed?.text ?? spoken;
 	const to = directed?.to ?? (peers.length <= 1 ? peers[0] : peers);
-	const result = host.arc?.getTalk()?.say('Player', line, to, host.arc.time);
-	if (result?.status !== 'ok') {
-		host.world.setMessage(showNamingText(result?.reason ?? 'no one heard'));
-	}
+	// A step, as a slash command is: a character of a crowd it names thinks for itself to answer (`withOwnMind`).
+	host.enactPlayer([{ verb: 'say', args: { text: line, ...to === undefined ? {} : { to } } }]).then(
+		(result) => result.status !== 'ok' && host.world.setMessage(showNamingText(result.reason ?? 'no one heard')),
+		(err:unknown) => host.world.setMessage(err instanceof Error ? err.message : String(err)),
+	);
 }
 
 export function playerSlash(host:GameHost, slash:ParsedSlash):void {

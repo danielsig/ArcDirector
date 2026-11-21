@@ -29,7 +29,7 @@ const BADLY_HURT = 0.35;
  * functions and stringifiers (`withFunctions`, `withStringifiers`), each feature's, and the director's cache and
  * memory of the last think. Internal: hosts give its parts through those builder methods.
  */
-export type CatalogInputs = {
+export type CatalogInputs = Pick<Catalog, 'unmark'> & {
 	me:ExprEntity;
 	others:ExprEntity[];
 	items:ExprEntity[];
@@ -96,7 +96,7 @@ function pairsOf(args:ExprVal[]):[ExprEntity, ExprEntity][] {
 	return entitiesOf(args[0]).flatMap((x) => right.map((y):[ExprEntity, ExprEntity] => [x, y]));
 }
 
-/** True if pred holds for any entity pair; lists expand. */
+/** True if pred is true for any entity pair; lists expand. */
 function anyPair(args:ExprVal[], pred:(a:ExprEntity, b:ExprEntity)=>boolean):boolean {
 	return pairsOf(args).some(([a, b]) => pred(a, b));
 }
@@ -245,6 +245,7 @@ export function buildCatalog(inputs:CatalogInputs):Catalog {
 		point: inputs.point,
 		listCap: inputs.listCap,
 		...inputs.watches ? { watches: inputs.watches } : {},
+		...inputs.unmark ? { unmark: inputs.unmark } : {},
 	};
 }
 

@@ -31,6 +31,7 @@ export {
 export type { Arc, CountMap, Step } from './arc/arc-types.js';
 export { arcSteps, firstStep, isArc } from './arc/arc-types.js';
 export { ArcError, BlockedArcError } from './arc/arc-types.js';
+export { Channel } from './arc/Channel.js';
 export { VerbRegistry, STOCK_VERBS, STOCK_MOVE_VERBS, STOCK_ITEM_VERBS, STOCK_TRADE_VERBS, STOCK_MIND_VERBS, STOCK_ARC_VERBS, CHOOSE_VERB, GROUP_VERB, PASS_VERB, STOCK_VERB_DEFS, MIND_ONLY_VERBS, type StockVerb, type VerbArgMap } from './arc/stock-verbs.js';
 export type { ArgCheck, ArgConstraint, ArgPath } from './arc/constraints.js';
 export { replySchema, verbHelp } from './arc/schema.js';
@@ -40,7 +41,7 @@ export { formatArc, formatArcBlocks, formatStep } from './arc/arc-format.js';
 export { arcFromJSON, arcJSONText, arcToJSON, parseArc } from './arc/wire.js';
 
 export {
-	MemoryStore, defaultRecallScore, type MemoryCategory, type MemoryDraft, type MemoryRecord, type RecallScoreFn,
+	MemoryPool, MemorySharing, MemoryStore, type MemoryCategory, type MemoryDraft, type MemoryJSON, type MemoryRecord, type Meaning,
 } from './memory/store.js';
 
 export type {
@@ -51,13 +52,14 @@ export { bareName, builtinLodLayers } from './perception/lod.js';
 export {
 	attachmentStringifier, basicPluralize, builtinStringifiers, proximityPairStringifier, tagCrowdStringifier,
 } from './perception/stringifiers.js';
-export { formatSight, bearingOf, sightingOf, DEFAULT_SIGHT, DEFAULT_SIGHT_RANGE, sightClarityAt, type SightRange } from './perception/sight.js';
+export { formatSight, bearingOf, sightingOf, DEFAULT_SIGHT, DEFAULT_SIGHT_RANGE, sightClarityAt, type SightField, type SightRange } from './perception/sight.js';
 export { AUDIBLE, DEFAULT_HEARING, LOUD, loudnessFor, type SoundListener, type SoundSource } from './perception/hearing.js';
 export { formatInventory, InventoryFeature } from './perception/carrying.js';
 
 export type { ConversationTurn } from './mind/mind-types.js';
 export { GOAL_PINNED_THINKS, type Identity, type WatchInput, type Watches } from './character/character-types.js';
-export { NameBook, type NameBookJSON, type Naming } from './character/NameBook.js';
+export { Knows, KNOWS_ALL, NameBook, STRANGER, type Heard, type NameBookJSON, type Naming } from './character/NameBook.js';
+export type { TextSegment } from './character/text-with-ids.js';
 export { Persona, type PersonaJSON, type PersonaSpec } from './character/Persona.js';
 export { ArcRunner, type ArcRunnerJSON, type Holder, type ProgramMark, type ProgramState, type RunnerDeps, type RunnerOptions } from './character/arc-runner.js';
 export { Character, type CharacterJSON, type CharacterOptions } from './character/Character.js';
@@ -91,8 +93,7 @@ export {
 	type MayThink, type MindQueue, type MindQueueOpts,
 } from './think/queue.js';
 export {
-	Collective, STOCK_COLLECTIVE_VERBS, STOCK_COLLECTIVE_VERB_DEFS, STOCK_FORMATION_VERBS, shortTag, HandoverFeature,
-	type HandoverOptions, HANDOVER_MEMORY_CAP, type Handover, type Journey, type MemoryEdit, type CollectiveJSON,
+	Collective, STOCK_COLLECTIVE_VERBS, STOCK_COLLECTIVE_VERB_DEFS, STOCK_FORMATION_VERBS, shortTag, OwnMindFeature, type OwnMindCase, type OwnMindOptions, type CollectiveJSON,
 	type CollectiveOptions, type StockCollectiveVerb,
 } from './collective/index.js';
 export { DEFAULT_MAX_LAWS, lawGroup, type Law } from './arc/laws.js';
@@ -101,6 +102,7 @@ export { Ticker } from './director/Ticker.js';
 export { Feature, type FeatureTick, type WatchKernels } from './director/Feature.js';
 export { GoalsFeature, type GoalsOptions } from './character/GoalsFeature.js';
 export { FeelingFeature, type FeelingsOptions } from './character/FeelingFeature.js';
+export { AcquaintanceFeature, type AcquaintanceOptions } from './character/AcquaintanceFeature.js';
 export { FEELINGS, Feeling, type FeelingDef } from './character/feeling.js';
 export { RegionsFeature, type RegionShape } from './director/RegionsFeature.js';
 export { RequirementsFeature } from './director/RequirementsFeature.js';
@@ -109,7 +111,7 @@ export { HearingFeature, type HearingOptions } from './perception/HearingFeature
 export { MapFeature } from './mind/MapFeature.js';
 export { RTSFeature } from './rts/RTSFeature.js';
 export { KnowledgeFeature, DEFAULT_MENTION_CAP, type KnowledgeOptions } from './mind/KnowledgeFeature.js';
-export { TalkFeature, type TalkOptions } from './mind/TalkFeature.js';
+export { TalkFeature, type SpokenLabel, type TalkOptions } from './mind/TalkFeature.js';
 export { OffersFeature } from './world/OffersFeature.js';
 export { WorldVerbsFeature, type WorldVerbsOptions } from './world/WorldVerbsFeature.js';
 export { StealingFeature, STEAL_VERB_DEF } from './world/StealingFeature.js';

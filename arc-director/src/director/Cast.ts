@@ -9,6 +9,7 @@ import type { ArcRunner, RunnerOptions } from '../character/arc-runner.js';
 import { Character, type CharacterJSON } from '../character/Character.js';
 import type { Goal, Kit, KitSource } from '../character/character-types.js';
 import { Persona } from '../character/Persona.js';
+import { MemoryPool, MemorySharing } from '../memory/store.js';
 import { Collective, type CollectiveFields } from '../collective/Collective.js';
 import { usesCollective } from '../collective/who.js';
 import { parse } from '../expr/expr-parse.js';
@@ -46,9 +47,9 @@ export function collectiveOf<TCtx>(runner:ArcRunner<TCtx>):Collective<TCtx> | nu
 	return runner instanceof Collective ? runner : runner instanceof Character ? runner.collective : null;
 }
 
-/** A character's own mind: none while it is in a collective, whose mind it thinks with. */
+/** The mind a character thinks for itself with (in a collective too); null while its collective's thinks for it. */
 export function ownMindOf<TCtx>(character:Character<TCtx> | undefined):Mind<TCtx> | null {
-	return character && !character.collective ? character.mind : null;
+	return character?.thinksForItself ? character.mind : null;
 }
 
 /** Remove the spec with `id` from `specs`, and return it. */
@@ -89,8 +90,20 @@ export class Cast<TCtx> {
 	public readonly rows = new Map<string, Row<TCtx>>();
 	/** Each character's standing `choose`. */
 	public readonly standing = new WeakMap<Character<TCtx>, Standing>();
+	/** Every memory of the cast, once each: each persona's memory is a view of it. */
+	public pool = new MemoryPool();
 
 	constructor(private readonly _director:ArcDirector<TCtx>) {}
+
+	/**
+	 * Whose memories `id`'s persona reads, asked when it is read: a collective's, what it and its characters know; a
+	 * character of a `Shared` collective's, the same; any other character's, its own.
+	 */
+	private holdersOf(id:string):readonly string[] {
+		const runner = this.rows.get(id)?.runner;
+		const home = runner ? collectiveOf(runner) : null;
+		return home && (runner === home || home.sharing === MemorySharing.Shared) ? [home.id, ...home.characters.map((c) => c.id)] : [id];
+	}
 
 	/** The minds of the cast wired so far: characters' own, then collectives'. */
 	public minds():Mind<TCtx>[] {
@@ -148,7 +161,8 @@ export class Cast<TCtx> {
 		const spec = kind ? { ...given, tags: kind.tags } : given;
 		this.checkNames(spec);
 		const standing = this.standingChoice(spec);
-		const persona = json ? Persona.fromJSON(json.persona, spec) : new Persona(spec);
+		const memory = this.pool.view(spec.id, () => this.holdersOf(spec.id));
+		const persona = json ? Persona.fromJSON(json.persona, spec, memory) : new Persona(spec, memory);
 		const kit = this.kitFor(spec);
 		const character:Character<TCtx> = new Character<TCtx>({
 			...this.runnerDeps(spec, kit, () => character),
@@ -178,6 +192,10 @@ export class Cast<TCtx> {
 			internalsOf(into).setCharacters([...into.characters, character]);
 			fields.setCollective(into);
 			moveLawsInto(character, internalsOf(into));
+			// Saved while it thought for itself in its collective.
+			if (json?.mind) {
+				this.attachMind(character, Mind.fromJSON(json.mind));
+			}
 		}
 		else if (json?.mind || spec.mind) {
 			this.attachMind(character, json?.mind ? Mind.fromJSON(json.mind) : new Mind(spec.mind));
@@ -199,7 +217,9 @@ export class Cast<TCtx> {
 		const director = this._director;
 		this.checkNames(spec);
 		const json = cast?.collectives[spec.id];
-		const persona = json ? Persona.fromJSON(json.persona, spec) : new Persona(spec);
+		// What it and its characters know between them, its characters as they are when it is read.
+		const memory = this.pool.view(spec.id, () => this.holdersOf(spec.id));
+		const persona = json ? Persona.fromJSON(json.persona, spec, memory) : new Persona(spec, memory);
 		const mind = json ? Mind.fromJSON<TCtx>(json.mind) : new Mind<TCtx>(spec.mind);
 		const collective:Collective<TCtx> = new Collective<TCtx>({
 			...this.runnerDeps(spec, this.kitFor(spec, true), () => collective),
@@ -210,6 +230,8 @@ export class Cast<TCtx> {
 			director,
 		});
 		collective.maxUnitsPerCommand = spec.maxUnitsPerCommand;
+		collective.sharing = spec.sharing ?? MemorySharing.PerCharacter;
+		collective.leaverKeepsMemory = spec.leaverKeepsMemory;
 		this.rows.set(spec.id, { spec, runner: collective, cache: new SampleCache() });
 		const ids = json ? json.characters : (spec.characters ?? []).map((c) => c.id);
 		const chiefID = json ? json.commander : spec.commander;
@@ -243,6 +265,7 @@ export class Cast<TCtx> {
 	public wireAll(cast?:CastJSON):void {
 		if (cast) {
 			this.loadFeatures(cast.features);
+			this.pool = MemoryPool.fromJSON(cast.memories);
 		}
 		const members = new Set(Object.values(cast?.collectives ?? {}).flatMap((c) => c.characters));
 		const solo = new Set(this.solo.map((spec) => spec.id));
@@ -273,6 +296,7 @@ export class Cast<TCtx> {
 			}
 		}
 		this.rows.clear();
+		this.pool = new MemoryPool();
 		this.loadFeatures(undefined);
 	}
 
@@ -475,6 +499,7 @@ export class Cast<TCtx> {
 			walkToGroup: (verb, ids, opts) => worldVerbs.walkToGroup(runner(), verb, ids, opts),
 			talk: () => director.getFeature(TalkFeature<TCtx>),
 			catalog: watches.kernels ? () => watches.catalog(runner()) : undefined,
+			stepStarts: (step) => internalsOf(director).features.forEach((feature) => feature.stepStarts(runner(), step)),
 			kit,
 			laws: spec.laws,
 			maxLaws: spec.maxLaws,
@@ -507,6 +532,7 @@ export class Cast<TCtx> {
 			arcProblem: (arc) => dispatcher.arcProblem(owner, arc),
 			queue: director.queue,
 			embed: (texts) => director.models.embed(texts),
+			mood: () => director.getFeelings()?.moodOf(owner.voice.id),
 			features,
 			seenAs: watches.seenAs(mind),
 			worldContext: () => director.contextOf(owner.voice.id) ?? (owner instanceof Collective ? watches.present(owner)?.ctx : undefined),
@@ -528,12 +554,14 @@ export class Cast<TCtx> {
 			throw new Error(`ArcDirector: that mind thinks for '${mind.id}', not '${character.id}'`);
 		}
 		const from = character.collective;
+		const had = character.mind;
 		const { dropped } = from ? this.leave(character, from) : { dropped: [] };
 		this.dropOwnMind(character);
 		character.mindSettings = mind ? { ...mind.settings } : undefined;
 		if (mind) {
 			this.attachMind(character, mind);
 		}
+		this.handOver(character, had);
 		if (from) {
 			this.moved(character, from, null, dropped);
 		}
@@ -548,14 +576,53 @@ export class Cast<TCtx> {
 		if (to && this.rows.get(to.id)?.runner !== to) {
 			throw new Error(`ArcDirector: '${to.id}' is not a collective here`);
 		}
+		const had = character.mind;
 		const { kept, dropped } = from ? this.leave(character, from, to) : { kept: [], dropped: [] };
 		if (to) {
 			this.join(character, to, kept);
 		}
-		else if (character.mindSettings) {
-			this.attachMind(character, new Mind(character.mindSettings));
+		else if (!character.thinksForItself && character.mindSettings) {
+			// On its own now: a fresh mind. One that thought for itself in `from` goes on with that mind.
+			this.attachMind(character, new Mind<TCtx>(character.mindSettings));
 		}
+		this.handOver(character, had);
 		this.moved(character, from, to, dropped);
+	}
+
+	/** The mind that thinks for `character` now takes what `had`, the one that did, held for it for the moment (`MindFields.adopt`). */
+	private handOver(character:Character<TCtx>, had:Mind<TCtx> | null):void {
+		const has = character.mind;
+		if (had && has && has !== had) {
+			internalsOf(has).adopt(had, character.id);
+		}
+	}
+
+	/**
+	 * `character` thinks with a mind of its own for now (`settings`, else its own), still one of its collective's
+	 * characters: what its collective's mind held for it moves to that mind. Returns that mind, or the one it has already.
+	 */
+	public giveOwnMind(character:Character<TCtx>, settings = character.mindSettings):Mind<TCtx> | null {
+		const home = character.collective;
+		if (!home || character.thinksForItself) {
+			return ownMindOf(character);
+		}
+		const mind = new Mind<TCtx>(settings);
+		if (home.sharing === MemorySharing.Shared) {
+			character.persona.names.takeNames(home.persona.names);
+		}
+		this.attachMind(character, mind);
+		this.handOver(character, home.mind);
+		return mind;
+	}
+
+	/** `character` gives up the mind it thought with on its own in its collective, whose mind takes what that one held for it. */
+	public takeOwnMind(character:Character<TCtx>):void {
+		const own = ownMindOf(character);
+		const home = character.collective;
+		if (own && home) {
+			this.dropOwnMind(character);
+			this.handOver(character, own);
+		}
 	}
 
 	/**
@@ -564,6 +631,7 @@ export class Cast<TCtx> {
 	 * prefix and come home, but laws that only work in a collective (`units`, `allUnits`) are `dropped`.
 	 */
 	private leave(character:Character<TCtx>, from:Collective<TCtx>, to:Collective<TCtx> | null = null):{ kept:Law[]; dropped:Law[] } {
+		this.takeAlong(character, from);
 		internalsOf(from).setCharacters(from.characters.filter((c) => c !== character));
 		internalsOf(character).setCollective(null);
 		character.tags = character.tags.filter((t) => !from.ownsTag(t));
@@ -581,7 +649,26 @@ export class Cast<TCtx> {
 		return { kept: [], dropped };
 	}
 
-	/** Put `character` in `to`: its own mind goes (its settings are kept), and its laws move in as its own there. */
+	/**
+	 * What `character` takes from a `Shared` collective it leaves, beside what it witnessed, which is its own anyway:
+	 * the collective's names, and what `leaverKeepsMemory` picks of the rest.
+	 */
+	private takeAlong(character:Character<TCtx>, from:Collective<TCtx>):void {
+		// A street never asks: there a character only ever has what it witnessed (owner, proposal 18).
+		const keeps = from.sharing === MemorySharing.Shared ? from.leaverKeepsMemory : undefined;
+		if (from.sharing === MemorySharing.Shared) {
+			character.persona.names.takeNames(from.persona.names);
+		}
+		for (const record of keeps ? from.persona.memory.all() : []) {
+			if (!record.knownBy.includes(character.id) && keeps!(record, character)) {
+				record.knownBy.push(character.id);
+			}
+		}
+	}
+
+	/**
+	 * Put `character` in `to`: its own mind goes (its settings are kept), and its laws move in as its own there.
+	 */
 	private join(character:Character<TCtx>, to:Collective<TCtx>, carried:Law[]):void {
 		const own = ownMindOf(character);
 		if (own) {
@@ -606,18 +693,19 @@ export class Cast<TCtx> {
 		if (from) {
 			// The name it went by there: once gone, the policy may call it something else (an enemy, say).
 			const name = from.mind.nameOf(character.id);
-			tell(from.mind, { kind: 'Left', text: `${name} left`, tags: [name], major: true });
+			tell(from.mind, { kind: 'Left', text: `${name} left`, tags: [name], major: true, remember: true });
 		}
 		if (to) {
-			tell(to.mind, { kind: 'Joined', text: (who) => `${who(character.id)} joined`, major: true });
+			tell(to.mind, { kind: 'Joined', text: (who) => `${who(character.id)} joined`, major: true, remember: true });
 		}
 		const own = ownMindOf(character);
 		if (from && own) {
-			const doing = (who:(id:string)=>string):string => (character.arc ? ` You are still doing what ${who(from.id)} gave you: ${own.namedArc(character.arc)}.` : '');
-			const gone = dropped.length > 0
-				? ` Your laws that only work in a group are gone: ${dropped.map((law) => law.name.slice(character.id.length + 1)).join(', ')}.`
-				: '';
-			tell(own, { kind: 'Left', text: (who) => `You left ${who(from.id)}.${doing(who)}${gone}`, major: true });
+			// Kept by id, as it is remembered: its own mind reads "You left …".
+			const me = (who:(id:string)=>string):string => who(character.id);
+			const doing = (who:(id:string)=>string):string => (character.arc ? ` ${me(who)} is still doing what ${who(from.id)} gave ${me(who)}: ${own.namedArc(character.arc)}.` : '');
+			const gone = (who:(id:string)=>string):string => (dropped.length === 0 ? ''
+				: ` ${me(who)}'s laws that only work in a group are gone: ${dropped.map((law) => law.name.slice(character.id.length + 1)).join(', ')}.`);
+			tell(own, { kind: 'Left', text: (who) => `${me(who)} left ${who(from.id)}.${doing(who)}${gone(who)}`, major: true, remember: true });
 		}
 		internalsOf(this._director).features.forEach((feature) => feature.characterMoved(character, from, to));
 	}

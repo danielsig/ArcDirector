@@ -26,7 +26,7 @@ export type WorldVerbsOptions<TCtx = unknown> = {
 	 */
 	crowd?:CrowdSettings;
 	/**
-	 * Whether `character` walks near a group before `verb` acts on it (`VerbDef.group`), given the ids of `targets`. Default:
+	 * Whether `character` walks near a group before `verb` acts on it (`VerbDef.groupArg`), given the ids of `targets`. Default:
 	 * it walks. If not, it acts from where it stands, and `say` reaches whoever of them is in earshot. Asked on the fly, and
 	 * more than once a step, so a program knows whether a line would take its body: keep it cheap and free of side effects.
 	 */
@@ -36,7 +36,7 @@ export type WorldVerbsOptions<TCtx = unknown> = {
 /**
  * What characters do in the game's world (`withWorld`), which every director has: the stock world verbs (`go_to`,
  * `pick_up`, `offer`, …) for the parts the world has, a host handler of the same name winning; how characters bound for
- * the same one share it; and the walk near a group that a verb aims at (`VerbDef.group`). `withWorldVerbs({ crowd })`.
+ * the same one share it; and the walk near a group that a verb aims at (`VerbDef.groupArg`). `withWorldVerbs({ crowd })`.
  */
 export class WorldVerbsFeature<TCtx = unknown> extends Feature<TCtx> {
 	private readonly _options:WorldVerbsOptions<TCtx> = {};

@@ -11,8 +11,49 @@ import { plainTagTests } from '../expr/tag-tests.js';
 import { extractJson, isRecord } from '../json.js';
 import { mapArc, type WordMap } from '../mind/ids.js';
 
-/** A part of a reply that did not stand, in words its writer can act on: which step, why, and the text at fault. */
-export type Rejected = { label:string; reason:string; at?:string };
+/**
+ * A part of a reply that did not stand: its steps (none for what is left of a reply that does not read), why, the text
+ * at fault and the arg that holds it.
+ */
+export type Rejected = { steps:readonly Pick<Step, 'verb' | 'args'>[]; reason:string; at?:string; arg?:ArgPath };
+
+/** `part` as the repair turn names it: `law named Gate`, `go_to then say`, or `the rest of your reply`. */
+export function partLabel(part:Rejected):string {
+	const labelOf = (step:Pick<Step, 'verb' | 'args'>):string => {
+		const name = typeof step.args.name === 'string' ? ` named ${step.args.name}` : typeof step.args.who === 'string' ? ` for ${step.args.who}` : '';
+		return `${step.verb}${name}`;
+	};
+	return part.steps.length > 0 ? part.steps.map(labelOf).join(' then ') : 'the rest of your reply';
+}
+
+/** What is left of a reply `err` refused, as a part: no steps, its reason, and the text and arg at fault. */
+export function restOfReply(err:Error):Rejected {
+	return err instanceof ArcError ? { steps: [], reason: err.message, at: err.at, arg: err.arg } : { steps: [], reason: err.message };
+}
+
+/** Each of `parts` by its label and why: `law named Gate: no such verb; the rest of your reply: …`. */
+export function partsText(parts:readonly Rejected[]):string {
+	return parts.map((part) => `${partLabel(part)}: ${part.reason}`).join('; ');
+}
+
+/** The parts of a reply still refused when no repair is left. */
+export class RejectedParts extends ArcError {
+	constructor(public readonly parts:readonly Rejected[]) {
+		super(partsText(parts));
+	}
+
+	/**
+	 * What did not run, by verb and the arg at fault (`its wait(until) could not be read`), never by what is written in
+	 * them: a model shown its mistake in the next think writes it again.
+	 */
+	public get note():string {
+		return this.parts.map((part) => {
+			const [verb, key] = part.arg?.split('.') ?? [];
+			const which = key ? `${verb}(${key})` : part.steps.map((step) => step.verb).join(' then ');
+			return `${which ? `its ${which}` : 'the rest of your reply'} could not be read`;
+		}).join('; ');
+	}
+}
 
 /** What a reply is read against: the verbs it may use, the world its watches ask, and whom its names mean. */
 export type ReplyContext = {
@@ -38,7 +79,7 @@ export type ReplyContext = {
 export class ReplyReader {
 	constructor(private readonly _ctx:ReplyContext) {}
 
-	/** The reply as an arc in ids. Throws on a watch that calls a function the watch language does not have: it could never hold. */
+	/** The reply as an arc in ids. Throws on a watch that calls a function the watch language does not have: it could never be true. */
 	public read(content:string):Arc {
 		const arc = this.inIDs(parseArc(content, this._ctx.verbs));
 		const problem = this.problemIn(arc);
@@ -97,17 +138,13 @@ export class ReplyReader {
 		const good:Arc = [];
 		const bad = [...unread];
 		const chain = steps.filter((step, i) => !alone(step, i));
-		const labelOf = (step:Step):string => {
-			const name = typeof step.args.name === 'string' ? ` named ${step.args.name}` : typeof step.args.who === 'string' ? ` for ${step.args.who}` : '';
-			return `${step.verb}${name}`;
-		};
 		steps.forEach((step) => {
 			if (chain.includes(step)) {
 				return;
 			}
 			const problem = this.problemIn([...kept, ...good, step]);
 			if (problem) {
-				bad.push({ label: labelOf(step), reason: problem.message, at: problem.at });
+				bad.push({ steps: [step], reason: problem.message, at: problem.at, arg: problem.arg });
 			}
 			else {
 				good.push(step);
@@ -116,7 +153,7 @@ export class ReplyReader {
 		if (chain.length > 0) {
 			const problem = this.problemIn([...kept, ...good, ...chain]);
 			if (problem) {
-				bad.push({ label: chain.map(labelOf).join(' then '), reason: problem.message, at: problem.at });
+				bad.push({ steps: chain, reason: problem.message, at: problem.at, arg: problem.arg });
 			}
 			else {
 				good.push(...chain);
@@ -139,13 +176,14 @@ export class ReplyReader {
 	private problemIn(arc:Arc):ArcError | undefined {
 		const { verbs } = this._ctx;
 		const catalog = this._ctx.catalog?.();
-		const unbound = catalog ? exprArgs(arc, verbs).flatMap((expr) => unboundCalls(expr, catalog)) : [];
+		const unbound = catalog ? exprArgs(arc, verbs).flatMap(({ expr, arg }) => unboundCalls(expr, catalog).map((name) => ({ name, arg }))) : [];
 		// The observe tool takes a watch, so a model wraps its watches in it.
-		if (unbound.includes('observe')) {
-			return new ArcError('observe is a tool, not a function: write the expression itself, e.g. until=isNear(me, Well, 3)', 'observe');
+		const observe = unbound.find(({ name }) => name === 'observe');
+		if (observe) {
+			return new ArcError('observe is a tool, not a function: write the expression itself, e.g. until=isNear(me, Well, 3)', 'observe', observe.arg);
 		}
 		if (unbound.length > 0) {
-			return new ArcError(`${unbound.map((name) => `${name}()`).join(', ')} is not a watch function`, unbound[0]);
+			return new ArcError(`${unbound.map(({ name }) => `${name}()`).join(', ')} is not a watch function`, unbound[0].name, unbound[0].arg);
 		}
 		// Steps kept from earlier turns and those of a later one are judged as one program: none may follow one that never ends.
 		return endlessProblem(arc, verbs) ?? misplacedThink(arc, this._ctx.explicitThinkAllowedInside) ?? (this._ctx.repairs ? this.fewChoices(arc) ?? this._ctx.problem?.(arc) : undefined);
@@ -191,7 +229,7 @@ export class ReplyReader {
 					steps.push(...parseArc(JSON.stringify({ steps: [step] }), verbs));
 				}
 				catch (bad) {
-					unread.push({ label: isRecord(step) && typeof step.verb === 'string' ? step.verb : 'a step', reason: bad instanceof Error ? bad.message : String(bad), at: bad instanceof ArcError ? bad.at : undefined });
+					unread.push({ steps: isRecord(step) && typeof step.verb === 'string' ? [{ verb: step.verb, args: {} }] : [], reason: bad instanceof Error ? bad.message : String(bad), at: bad instanceof ArcError ? bad.at : undefined, arg: bad instanceof ArcError ? bad.arg : undefined });
 				}
 			}
 			// Read one by one, the steps that read are still one arc, checked as Arc text is (`follow` then more never runs).

@@ -16,13 +16,13 @@ export class ExprError extends Error {
 	}
 }
 
-export type ExprEntity = {
+export interface ExprEntity {
 	id:string;
 	/** The observer's label for `id` (`EnemyWitch`). Only the library's naming writes it; hosts give `id`. */
 	name?:string;
 	tags:string[];
 	fields?:Record<string, ExprVal>;
-};
+}
 
 export type ExprVal =
 	| { kind:'absent' }
@@ -96,8 +96,13 @@ export class Names extends Map<string, ExprVal> {
 	}
 }
 
-export type Catalog = {
+export interface Catalog {
 	names:Map<string, ExprVal>;
+	/**
+	 * Who a name its mind wrote of one it could not tell stands for (`$Bram`, `NameBook.unknownName`), once it can; none
+	 * before, so the name finds no one.
+	 */
+	unmark?:(word:string)=>string | undefined;
 	fns:Map<string, NativeFn>;
 	me:ExprEntity;
 	cache:SampleCache;
@@ -111,7 +116,7 @@ export type Catalog = {
 	 * the catalog binds (a `let`, `me`, a host binding) or an entity's name wins over it.
 	 */
 	watches?:Readonly<Record<string, string>>;
-};
+}
 
 export type EvalCtx = {
 	catalog:Catalog;

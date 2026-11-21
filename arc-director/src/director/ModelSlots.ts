@@ -10,7 +10,7 @@ export type ModelChat = (req:Omit<ChatRequest, 'model'>)=>Promise<ChatResponse>;
 export type ModelRun = <T>(priority:number, work:(chat:ModelChat)=>Promise<T>, signal?:AbortSignal)=>Promise<T>;
 
 /**
- * The priority of a System One's pick, `thinkNow`, `warmUp` and the memory handover: above every think, whose scores run
+ * The priority of a System One's pick, `thinkNow` and `warmUp`: above every think, whose scores run
  * up to 1. Such a lease starts at once while a slot is free, and is never held for a wave.
  */
 export const URGENT = 2;

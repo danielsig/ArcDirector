@@ -1,8 +1,8 @@
 import type { Character } from '../character/Character.js';
-import type { Persona } from '../character/Persona.js';
 import type { Vec } from '../world/world-types.js';
 import { distance } from '../world/vec.js';
 import { poseOf } from '../world/lookup.js';
+import { internalsOf } from '../internals.js';
 import type { ArcDirector } from './ArcDirector.js';
 import { Feature, type FeatureTick } from './Feature.js';
 
@@ -67,8 +67,8 @@ const SWEEP_FROM = 2000;
 
 type Placed<TCtx> = readonly [Character<TCtx>, Vec];
 
-/** One character inside a region: when it entered, its context as last seen, the persona holding its memory, and its text as last pinned. */
-type Pinned<TCtx> = { since:number; ctx:TCtx; persona:Persona; text?:string };
+/** A character in a region: since when, its context as last seen, and the text pinned now with the collective that knows it too. */
+type Pinned<TCtx> = { since:number; ctx:TCtx; text?:string; group?:string };
 
 type Region<TCtx> = {
 	name:string;
@@ -202,36 +202,38 @@ export class RegionsFeature<TCtx = unknown> extends Feature<TCtx> {
 	}
 
 	private admits({ who }:RegionSpec<TCtx>, character:Character<TCtx>, ctx:TCtx):boolean {
-		return who === undefined || (typeof who === 'string' ? this.director.holds(character.id, who) : who(ctx));
+		return who === undefined || (typeof who === 'string' ? this.director.isMet(character.id, who) : who(ctx));
 	}
 
 	private enter(region:Region<TCtx>, character:Character<TCtx>, ctx:TCtx, now:number):void {
-		const pinned:Pinned<TCtx> = { since: now, ctx, persona: (character.collective ?? character).persona };
+		const pinned:Pinned<TCtx> = { since: now, ctx };
 		this.pin(region, character, pinned, now);
 		region.inside.set(character, pinned);
 		region.spec.onEnter?.(ctx);
 	}
 
-	/** Pin the memory as `spec.memory` reads now (once): added, replaced when it changed, dropped when it is empty. */
+	/**
+	 * Pin the memory as `spec.memory` reads now (once): added, replaced when it or who knows it changed, dropped when it
+	 * is empty. It is the character's note, known by it and the collective that thinks for it, which reads it with the
+	 * character's name in front (`Tom: This room smells of flowers.`); a move pins it again for the new one.
+	 */
 	private pin({ name, spec }:Region<TCtx>, character:Character<TCtx>, pinned:Pinned<TCtx>, now:number):void {
 		const read = spec.memory;
-		const memory = typeof read === 'function' ? read(pinned.ctx) : read;
-		const text = memory && (pinned.persona === character.persona ? memory : `${character.id}: ${memory}`);
-		if (text === pinned.text) {
+		const text = typeof read === 'function' ? read(pinned.ctx) : read;
+		const group = character.collective?.id;
+		if (text === pinned.text && group === pinned.group) {
 			return;
 		}
 		const id = memoryID(name, character);
-		if (pinned.text) {
-			pinned.persona.memory.remove(id);
-		}
+		internalsOf(character.persona.memory).drop(id);
 		if (text) {
-			pinned.persona.memory.add({ id, category: 'semantic', text, tags: ['region', name], pinned: true }, now);
+			character.persona.memory.add({ id, category: 'semantic', text, knownBy: [character.id, ...group ? [group] : []], writer: character.id, tags: ['region', name], pinned: true }, now);
 		}
-		pinned.text = text;
+		Object.assign(pinned, { text, group });
 	}
 
-	private leave({ name, spec, inside }:Region<TCtx>, character:Character<TCtx>, { since, ctx, persona }:Pinned<TCtx>, now:number):void {
-		persona.memory.remove(memoryID(name, character));
+	private leave({ name, spec, inside }:Region<TCtx>, character:Character<TCtx>, { since, ctx }:Pinned<TCtx>, now:number):void {
+		internalsOf(character.persona.memory).drop(memoryID(name, character));
 		inside.delete(character);
 		spec.onExit?.(ctx, now - since);
 	}
@@ -277,10 +279,10 @@ function sweep<TCtx>(byLo:readonly Region<TCtx>[], placed:readonly Placed<TCtx>[
  * This makes sure a character restored from a save drops the region lines its save kept and re-pins the right ones.
  */
 function forgetRegions<TCtx>(character:Character<TCtx>):void {
-	const { memory } = (character.collective ?? character).persona;
+	const { memory } = character.persona;
 	const suffix = `:${character.id}`;
 	for (const record of memory.all().filter((r) => r.id.startsWith('region:') && r.id.endsWith(suffix))) {
-		memory.remove(record.id);
+		internalsOf(memory).drop(record.id);
 	}
 }
 

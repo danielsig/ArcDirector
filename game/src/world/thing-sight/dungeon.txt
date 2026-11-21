@@ -1,10 +1,10 @@
 Cobweb [flammable obstacle] {"id":"Cobweb","tags":["flammable","obstacle"],"interactable":true,"interesting":1,"note":"it blocks the way; dry as tinder","movable":false} Cobweb blocks the way. It is old and dry as tinder.
-CryptGate [door landmark] {"id":"CryptGate","tags":["door","landmark"],"interactable":true,"interesting":1,"note":"shut","movable":false} CryptGate is a door, shut and locked; it needs CryptKey.
+CryptGate [door landmark] {"id":"CryptGate","tags":["door","landmark"],"interactable":true,"interesting":1,"note":"shut","state":{"door":"shut"},"movable":false} CryptGate is a door, shut and locked; it needs CryptKey.
 Health potion [item] {"id":"Health potion","tags":["item"],"interactable":true,"interesting":1,"movable":true} 2 Health potion lie here.
 Health potion [item] {"id":"Health potion","tags":["item"],"interactable":true,"interesting":1,"movable":true} 2 Health potion lie here.
-HoardChest [chest furniture] {"id":"HoardChest","tags":["chest","furniture"],"interactable":true,"interesting":1,"movable":false} HoardChest is a chest, shut.
-HoardGate [door landmark] {"id":"HoardGate","tags":["door","landmark"],"interactable":true,"interesting":1,"note":"shut","movable":false} HoardGate is a door, shut and locked.
-OssuaryChest [chest furniture] {"id":"OssuaryChest","tags":["chest","furniture"],"interactable":true,"interesting":1,"movable":false} OssuaryChest is a chest, shut.
+HoardChest [chest furniture] {"id":"HoardChest","tags":["chest","furniture"],"interactable":true,"interesting":1,"state":{"lid":"shut"},"movable":false} HoardChest is a chest, shut.
+HoardGate [door landmark] {"id":"HoardGate","tags":["door","landmark"],"interactable":true,"interesting":1,"note":"shut","state":{"door":"shut"},"movable":false} HoardGate is a door, shut and locked.
+OssuaryChest [chest furniture] {"id":"OssuaryChest","tags":["chest","furniture"],"interactable":true,"interesting":1,"state":{"lid":"shut"},"movable":false} OssuaryChest is a chest, shut.
 RiddleStone [inscription landmark] {"id":"RiddleStone","tags":["inscription","landmark"],"interactable":true,"interesting":1,"note":"carved: \"The more of me you take, the more of me you leave behind. Speak my name and pass.\"","movable":false} Carved on RiddleStone: "The more of me you take, the more of me you leave behind. Speak my name and pass."
-SealedDoor [door landmark] {"id":"SealedDoor","tags":["door","landmark"],"interactable":true,"interesting":1,"note":"shut","movable":false} SealedDoor is a door, shut and locked.
+SealedDoor [door landmark] {"id":"SealedDoor","tags":["door","landmark"],"interactable":true,"interesting":1,"note":"shut","state":{"door":"shut"},"movable":false} SealedDoor is a door, shut and locked.
 WoodenTorch [item] {"id":"WoodenTorch","tags":["item"],"interactable":true,"interesting":1,"movable":true} WoodenTorch lies here.

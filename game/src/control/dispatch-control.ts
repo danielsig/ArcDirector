@@ -69,9 +69,9 @@ function setCamera(session:Session, { focus, zoom, view }:Extract<Command, { op:
 	return { focus: camera.expr, picks: camera.expr ? camera.picks() : [] };
 }
 
-/** Who thinks for `character`: its collective, its own mind, or no one. */
-function mindKind(character:{ collective:object | null; mind:object | null }):CharacterRow['mind'] {
-	return character.collective ? 'collective' : character.mind ? 'own' : 'none';
+/** Who thinks for `character`: its own mind (in a collective too), its collective's, or no one. */
+function mindKind(character:{ mind:object | null; thinksForItself:boolean }):CharacterRow['mind'] {
+	return character.thinksForItself ? 'own' : character.mind ? 'collective' : 'none';
 }
 
 function listCharacters(session:Session):CastRows {

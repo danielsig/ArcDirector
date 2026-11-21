@@ -2440,7 +2440,8 @@ enableThinking: false
 {"tool":"recall","query":"salt"}
 
 ## user
-recall: {"remember":[],"know":["Gisele (salt, Saltworks)\nGisele sells Salt at the Saltworks, 2 gold a pouch."]}
+recall:
+- Gisele (salt, Saltworks): Gisele sells Salt at the Saltworks, 2 gold a pouch.
 
 # request 3
 model: "fake"
@@ -2458,7 +2459,8 @@ enableThinking: false
 {"tool":"recall","query":"salt"}
 
 ## user
-recall: {"remember":[],"know":["Gisele (salt, Saltworks)\nGisele sells Salt at the Saltworks, 2 gold a pouch."]}
+recall:
+- Gisele (salt, Saltworks): Gisele sells Salt at the Saltworks, 2 gold a pouch.
 
 ## assistant
 {"tool":"observe","expr":"others"}

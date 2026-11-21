@@ -62,14 +62,15 @@ export class Chest extends Component {
 			prominent: true,
 			interactable: true,
 			movable: false,
+			state: { lid: this.open ? 'open' : 'shut' },
 			examine: (name, nameOf, viewer) => `${name} is a chest, ${this.open ? 'open' : 'shut'}${lockedNote(this.gameObject, nameOf, viewer)}.${this.inside(viewer)}`,
 		};
 	}
 
-	/** What the player's E finds in it open and unlocked (` It holds Almanac.`); a mind's `examine` is told nothing of it. */
+	/** What the player's E finds in it open and unlocked (` It contains Almanac.`); a mind's `examine` is told nothing of it. */
 	protected inside(viewer?:GameObject):string {
 		const bag = this.gameObject.getComponent(Container);
-		return !viewer && this.open && !this.gameObject.getComponent(Lock)?.locked && bag ? ` It holds ${nameList(bag.contents.map((it) => pascalCase(it.name) || it.name)) || 'nothing'}.` : '';
+		return !viewer && this.open && !this.gameObject.getComponent(Lock)?.locked && bag ? ` It contains ${nameList(bag.contents.map((it) => pascalCase(it.name) || it.name)) || 'nothing'}.` : '';
 	}
 }
 

@@ -1,7 +1,7 @@
 import type { Arc } from '../arc/arc-types.js';
 import type { Feeling } from '../character/feeling.js';
 import type { Mind } from './mind.js';
-import type { NamingText, TextWithIDs } from '../character/text-with-ids.js';
+import type { NamingText, TextSegment, TextWithIDs } from '../character/text-with-ids.js';
 import type { SayTone } from './talk.js';
 import type { ModelChat } from '../director/ModelSlots.js';
 import type { JsonSchema, JsonValue } from '../json.js';
@@ -55,6 +55,8 @@ export interface MindEvent {
 	remember?:boolean;
 	/** The ids it is about: each listener gets its names for them as tags. Default: the ids its text names. */
 	who?:string[];
+	/** The characters that perceived it, or `'everyone'`. Default: who perceives it (`ArcDirector.pushEvent`), or every character the mind told of it thinks for then. */
+	knownBy?:string[] | 'everyone';
 	/** Clear speech, for Current Conversation. Without it, the event is only in short-term memory. */
 	turn?:TurnDraft;
 	/** Replaces a waiting event with the same key: a sound heard again, louder. */
@@ -65,8 +67,8 @@ export interface MindEvent {
 	weight?:number;
 };
 
-/** A {@link MindEvent} as a mind holds it: its text by id, and whom it is about. */
-export type HeldEvent = Omit<MindEvent, 'text' | 'turn'> & { text:TextWithIDs; who:string[]; turn?:HeldTurn };
+/** A {@link MindEvent} as a mind holds it: its text by id, whom it is about, and who perceived it. */
+export type HeldEvent = Omit<MindEvent, 'text' | 'turn' | 'knownBy'> & { text:TextWithIDs; who:string[]; knownBy:string[]; turn?:HeldTurn };
 
 /** How a line was said, which each feature words its own way (`Feature.manner`): its tone and its speaker's feeling. */
 export type Manner = Pick<ConversationTurn, 'as' | 'feeling'>;
@@ -81,7 +83,7 @@ export type HeldTurn = Omit<ConversationTurn, 'text' | 'segments'> & { text:Text
 export type Saved<T extends { text:unknown }> = Omit<T, 'text' | 'segments'> & { text:JsonValue };
 
 /** A held event as a save keeps it. */
-export type HeldEventJSON = Omit<MindEvent, 'text' | 'turn'> & { text:JsonValue; who:string[]; turn?:Saved<ConversationTurn> };
+export type HeldEventJSON = Omit<MindEvent, 'text' | 'turn' | 'knownBy'> & { text:JsonValue; who:string[]; knownBy:string[]; turn?:Saved<ConversationTurn> };
 
 /** One clearly heard line. Ids are real; each mind names them its own way when it shows the line. */
 export interface ConversationTurn {
@@ -92,7 +94,7 @@ export interface ConversationTurn {
 	/** What was said, each one it names written as its id. */
 	readonly text:string;
 	/** What was said in pieces, each one it names a piece with its id, so a host can name it its own way. */
-	segments():{ text:string; id?:string }[];
+	segments():TextSegment[];
 	/** The tone it was said in (`say(as)`); plainly without one. */
 	as?:SayTone;
 	/** The feeling its speaker showed as it was said (`withFeelings`). */

@@ -42,9 +42,15 @@ export type DescribeCtx = {
 	bearing:Bearing;
 };
 
-export type SeenObject = {
+export interface SeenObject {
 	id:string;
 	point:Vec;
+	/**
+	 * What is so of it until something changes it, each in plain words, no ids, that read after "is": a bridge's
+	 * `{ position: 'lowered' }`, a torch's `{ flame: 'out' }`. A mind that finds it changed since it last saw it is told
+	 * so, once. What changes all the time (where it stands, what it does) is no state.
+	 */
+	state?:Readonly<Record<string, string>>;
 	facing?:Vec;
 	tags:string[];
 	count?:number;
@@ -90,7 +96,7 @@ export type SeenObject = {
 	 * size, camouflage, fast movement, and the looker's state (blinded, waking, drunk, wounded).
 	 */
 	clarity?:number;
-};
+}
 
 /** One irreducible phrase `formatSight` cannot union further. */
 export type SightClause = {
@@ -99,6 +105,8 @@ export type SightClause = {
 	ambient?:boolean;
 	/** Keep ahead of scenery when `sightLimit` slices. People, not trees. */
 	prefer?:boolean;
+	/** The characters whose look showed it, where a collective pools what several see. Unset: its mind's voice. */
+	knownBy?:string[];
 };
 
 export type Sight = {

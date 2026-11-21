@@ -10,6 +10,7 @@ import { formatSight, formatSightClauses } from '../perception/sight.js';
 import type { SeenObject } from '../perception/perception-types.js';
 import { soloCharacter, type SoloOptions } from '../testing/solo.js';
 import { internalsOf } from '../internals.js';
+import { MemoryPool } from '../memory/store.js';
 import { refusedCall } from './prompt.js';
 import type { Character, CharacterJSON } from '../character/Character.js';
 
@@ -22,6 +23,7 @@ import { TalkFeature } from './TalkFeature.js';
 import type { TalkSense } from './talk.js';
 import { MapFeature } from './MapFeature.js';
 import { KnowledgeFeature } from './KnowledgeFeature.js';
+import { mindTools } from './mind.js';
 import type { MindEvent, Sense, ThinkEvent, ToolSpec } from './mind-types.js';
 import { PriorityThinkQueue } from '../think/queue.js';
 import { buildCatalog, dummyEntity, SampleCache } from '../expr/index.js';
@@ -151,36 +153,6 @@ describe('Agent', () => {
 		assert.equal(restored.persona.goals[0].text, 'Go to EastGate');
 	});
 
-	it('a saved memory with a legacy ID key loads', () => {
-		const restored = restore(JSON.parse(`{
-			"id": "Guard",
-			"persona": {
-				"identity": { "role": "guard" },
-				"goals": [],
-				"memories": [{
-					"ID": "mem_1",
-					"category": "episodic",
-					"text": "a gate",
-					"tags": [],
-					"timestamp": 0,
-					"lastAccessed": 0
-				}],
-				"maxGoals": 4,
-				"maxEpisodic": 256
-			},
-			"tags": [],
-			"liveArc": false
-		}`), {
-			provider: new FakeProvider(goToNamedInteractable()),
-			...stockVerbs(),
-			...perception(),
-			context: () => ({ paragraph: '' }),
-			model: 'fake',
-		});
-		assert.equal(restored.id, 'Guard');
-		assert.equal(restored.persona.memory.all()[0].id, 'mem_1');
-	});
-
 	it('can tool-call recall before the arc', async () => {
 		let sawRecall = false;
 		const scene = paragraph();
@@ -290,13 +262,13 @@ describe('Agent', () => {
 		});
 		internalsOf(agent.mind!).sighted(formatSightClauses(sight));
 		await agent.mind!.tick(1);
-		assert.equal((users[0] ?? '').includes('Last I saw Forager'), false);
+		assert.equal((users[0] ?? '').includes('You last saw Forager'), false);
 		scene = 'empty grass.';
 		users.length = 0;
 		await agent.mind!.tick(2);
-		assert.match(users[0] ?? '', /Last I saw Forager/);
+		assert.match(users[0] ?? '', /You last saw Forager/);
 		const seen = agent.persona.memory.all().filter((r) => r.tags.includes('seen')).map((r) => r.text);
-		assert.deepEqual(seen.map((text) => text.split(':')[0]), ['Last I saw Forager']);
+		assert.deepEqual(seen.map((text) => text.split(':')[0]), [`${agent.id} last saw Forager`]);
 	});
 
 	it('remembers no sighting of what it could not make out, and forgets where it last saw one who has fallen', async () => {
@@ -323,7 +295,7 @@ describe('Agent', () => {
 			{ text: 'FigureA 9 paces to your left', claimedIDs: [] },
 		]);
 		await agent.mind!.tick(1);
-		assert.deepEqual(seen(), ['Last I saw Reaver: Reaver (1/14 hp, foe Knight) 2 paces in front of you'], 'nothing of what it could not make out');
+		assert.deepEqual(seen(), [`${agent.id} last saw Reaver: Reaver (1/14 hp, foe Knight) 2 paces in front of you`], 'nothing of what it could not make out');
 		fallen = true;
 		await agent.mind!.tick(2);
 		assert.deepEqual(seen(), [], 'its stale health is gone with it');
@@ -350,7 +322,7 @@ describe('Agent', () => {
 		assert.deepEqual(await agent.mind!.memory.recall({ query: 'Reaver1' }), [], 'its last result is on screen, as a fact kept too');
 		assert.equal(agent.mind!.memory.nothingMore({ query: 'Reaver1' }), 'Nothing more on "Reaver1" than what you see and hear above. Do not recall it again: ask someone who might know, or wander(until).');
 		await agent.mind!.memory.remember('Reaver1 hid a key under the well');
-		assert.deepEqual((await agent.mind!.memory.recall({ query: 'Reaver1' })).map((r) => r.text), ['Reaver1 hid a key under the well']);
+		assert.deepEqual(await agent.mind!.memory.recall({ query: 'Reaver1' }), ['moments ago: Reaver1 hid a key under the well'], 'how long ago, then what');
 	});
 
 	it('says its last result once, as Last verb result, not again among the recent lines', async () => {
@@ -1385,7 +1357,7 @@ describe('Agent', () => {
 		assert.equal(foragerPrompt.includes('- You gave FireMushroom'), false);
 		assert.match(anglerPrompt, /- Forager gave FireMushroom to BridgeKeeper/);
 		assert.equal(anglerPrompt.includes('Current Conversation'), false);
-		assert.equal(forager.persona.memory.all().some((row) => row.text === 'You gave FireMushroom to BridgeKeeper'), true);
+		assert.equal(forager.persona.memory.all().some((row) => row.text === 'Forager gave FireMushroom to BridgeKeeper'), true);
 		assert.doesNotMatch(foragerPrompt, /You remember:[\s\S]*gave FireMushroom/);
 		// A passing deed, a blow in a fight, is short-term memory, not conversation.
 		const cade = agentOf('Cade');
@@ -1955,7 +1927,7 @@ describe('Agent', () => {
 		assert.equal(ok.status === 'ok', true);
 		assert.equal(agent.id, 'Fern');
 		assert.equal(agent.persona.identity.role, 'Watchman');
-		assert.ok(agent.persona.memory.pinned().some((m) => m.text === 'I am Fern. Role: Watchman.'));
+		assert.ok(agent.mind!.memory.pinned().some((m) => m.text === 'You are Fern. Role: Watchman.'));
 	});
 
 	it('revises identity on a major event even when strategicInterval is 0', async () => {
@@ -2156,10 +2128,9 @@ describe('Agent', () => {
 			}] })),
 		});
 		await agent.mind!.tick(1);
-		const { remember, know } = JSON.parse(grepped) as { remember:unknown[]; know:string[] };
-		assert.ok(Array.isArray(remember));
-		assert.match(know[0] ?? '', /^Tree \(trees\)/);
-		assert.match(know[0] ?? '', /not reachable with go_to/);
+		// One row per article, as memories are shown.
+		assert.match(grepped, /^- Tree \(trees\): /);
+		assert.match(grepped, /not reachable with go_to/);
 	});
 
 	it('omits see_map when the host has no map or the model cannot see', async () => {
@@ -2580,7 +2551,7 @@ describe('Agent', () => {
 		});
 		const arc = await agent.mind!.tick(1);
 		assert.deepEqual(arc?.map((step) => step.verb), ['go_to'], 'the step it began stands');
-		assert.match(agent.mind!.events().find((e) => e.kind === 'dropped')?.text ?? '', /did not run: .*think\(\) only inside if\/else or a choose choice/);
+		assert.match(agent.mind!.events().find((e) => e.kind === 'dropped')?.text ?? '', /did not run: its think could not be read\.$/);
 		assert.equal(agent.toJSON().mind!.thinkAbout, undefined);
 	});
 
@@ -3038,18 +3009,22 @@ describe('repairs, mind verbs, and names', () => {
 
 	it('remembers its own words by id once, keeps a word that is only an id a word, and a save keeps both', async () => {
 		const provider = new FakeProvider(() => ({ content: 'wait()', toolCalls: [] }));
-		const agent = agentOf(provider, { seenAs: (target) => (target.id === 'Helms' ? 'OldKnight' : target.id) });
+		const pool = new MemoryPool();
+		const agent = agentOf(provider, { seenAs: (target) => (target.id === 'Helms' ? 'OldKnight' : target.id), pool });
 		agent.mind!.seen({ id: 'Helms', tags: ['character'] });
 		agent.mind!.seen({ id: 'Rook', tags: ['character'] });
 		const kept = await agent.mind!.memory.remember('OldKnight guards the Helms gate');
 		assert.deepEqual(kept.segments(), [{ text: 'Helms', id: 'Helms' }, { text: ' guards the Helms gate' }]);
-		const shown = async (memory:{ recall(args:unknown):Promise<{ text:string }[]> }):Promise<string[]> => (await memory.recall({ query: 'gate' })).map((r) => r.text);
-		assert.deepEqual(await shown(agent.mind!.memory), ['OldKnight guards the Helms gate']);
+		const shown = async (memory:{ recall(args:unknown):Promise<string[]> }):Promise<string[]> => memory.recall({ query: 'gate' });
+		assert.deepEqual(await shown(agent.mind!.memory), ['moments ago: OldKnight guards the Helms gate']);
+		// recall asks no model: no chat for it.
+		const answer = await mindTools<Ctx>().recall.handler({ paragraph: '' }, { query: 'gate' }, agent.mind!, undefined as never);
+		assert.equal(answer, '- moments ago: OldKnight guards the Helms gate', 'the tool answers in rows: no id, tag or category');
 		agent.mind!.pruneNames();
 		assert.equal(agent.persona.names.peek('Helms'), 'OldKnight', 'a memory names it');
-		const restored = restore(agent.toJSON(), { provider, ...stockVerbs(), context: () => ({ paragraph: paragraph() }) });
+		const restored = restore(agent.toJSON(), { provider, ...stockVerbs(), context: () => ({ paragraph: paragraph() }), pool: MemoryPool.fromJSON(pool.toJSON()) });
 		assert.deepEqual(restored.persona.memory.all().find((r) => r.id === kept.id)?.text, kept.text);
-		assert.deepEqual(await shown(restored.mind!.memory), ['OldKnight guards the Helms gate']);
+		assert.deepEqual(await shown(restored.mind!.memory), ['moments ago: OldKnight guards the Helms gate']);
 	});
 });
 

@@ -1,5 +1,6 @@
 import { namedText, namingText, readTextWithIDs, type NamingText } from '../character/text-with-ids.js';
 import type { JsonValue } from '../json.js';
+import type { ArgPath } from './constraints.js';
 import { isRecord } from '../json.js';
 import { argKind, GROUP_VERB, IF_VERB, INSTEAD_VERB, WHILE_ARG, type VerbRegistry } from './stock-verbs.js';
 
@@ -19,7 +20,7 @@ export function isCountMap(v:unknown):v is CountMap {
 
 export type StepArg = string | number | boolean | string[] | CountMap | Arc;
 
-export type Step = {
+export interface Step {
 	verb:string;
 	args:Record<string, StepArg>;
 	/** How this step's result gates the next one. Missing: `if_ok`. Ignored on the last step. */
@@ -31,7 +32,7 @@ export type Step = {
 	 * or a query's value. Given once in its arc and the arcs inside it, and gone when its arc ends.
 	 */
 	let?:string;
-};
+}
 
 /** Steps in order. A group is the step `{ verb: 'group', args: { arc } }`, written `( … )`. */
 export type Arc = Step[];
@@ -43,7 +44,7 @@ export type Arc = Step[];
  */
 export type ArcStatus = 'ok' | 'failed' | 'stopped';
 
-export type ArcResult = {
+export interface ArcResult {
 	status:ArcStatus;
 	/** Why, naming characters and things by id ({@link NamingText}): each mind reads it in its own names. */
 	reason?:NamingText;
@@ -54,7 +55,7 @@ export type ArcResult = {
 	blockedBy?:string[];
 	/** It failed for now, and going round again may go otherwise (the target moved): a `loop` does not stop at it. */
 	retry?:boolean;
-};
+}
 
 /** An {@link ArcResult} as a save keeps it. */
 export type ArcResultJSON = Omit<ArcResult, 'reason'> & { reason?:JsonValue };
@@ -70,9 +71,12 @@ export function resultFromJSON({ reason, ...result }:ArcResultJSON):ArcResult {
 	return { ...result, ...text ? { reason: text.length === 1 ? text[0] : namingText(text) } : {} };
 }
 
-/** Why an arc is refused, and the text of the reply it is about (`at`) when one piece of it is at fault. */
+/**
+ * Why an arc is refused, the text of the reply it is about (`at`) when one piece of it is at fault, and the arg that
+ * holds it (`wait.until`), where one does.
+ */
 export class ArcError extends Error {
-	constructor(message:string, public readonly at?:string) {
+	constructor(message:string, public readonly at?:string, public readonly arg?:ArgPath) {
 		super(message);
 		this.name = 'ArcError';
 	}
@@ -80,8 +84,8 @@ export class ArcError extends Error {
 
 /** A well-formed arc the world rules out: a step that already failed and still would, or speech no one is near enough to hear. */
 export class BlockedArcError extends ArcError {
-	constructor(message:string, at?:string) {
-		super(message, at);
+	constructor(message:string, at?:string, arg?:ArgPath) {
+		super(message, at, arg);
 		this.name = 'BlockedArcError';
 	}
 }

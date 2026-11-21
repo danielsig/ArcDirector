@@ -169,7 +169,7 @@ function takeRefusal(character:GameObject, thing:string, from:GameObject):Naming
 	if (from.getComponent(Chest)) {
 		const held = chestHolding(from, thing);
 		if (!held) {
-			return (name) => `${name(fromID)} holds no ${name(thing)}`;
+			return (name) => `${name(fromID)} has no ${name(thing)}`;
 		}
 		// Shut is no bar: the lid is lifted to take it. Locked is.
 		if (from.getComponent(Lock)?.locked) {

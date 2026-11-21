@@ -43,7 +43,7 @@ export type Seller = {
 	wallet:number;
 	aliases:string[];
 	traits:string[];
-	/** How they talk and carry themselves, in their own words. */
+	/** How they talk and carry themselves, as told after their name (`calls everyone love, …`), never in their own words. */
 	manner:string;
 	/** Something they would like, and will not walk off to fetch. */
 	want:string;
@@ -70,7 +70,7 @@ export const SELLERS:Seller[] = [
 		wallet: 18,
 		aliases: ['bakery', 'baker stall'],
 		traits: ['smothering', 'motherly', 'dramatic'],
-		manner: 'Oh, love, look at you, all skin and bones! I call everyone love, sweetie or my little dumpling, and I am sure every soul in this square is starving. I tut at the state of their sleeves, swear my bread could mend a broken heart, and nobody leaves without hearing which of my seven grandchildren is the cleverest.',
+		manner: 'smothers everyone like a doting grandmother: calls them love, sweetie or little dumpling, is sure every soul in the square is starving, tuts at the state of their sleeves, swears the bread could mend a broken heart, and tells everyone which of seven grandchildren is the cleverest.',
 		want: 'Knife',
 		wares: [
 			{ name: 'Loaf', defID: 'loaf', meshID: 'item_loaf', ask: 5, floor: 3, aliases: ['bread', 'loaves'] },
@@ -91,7 +91,7 @@ export const SELLERS:Seller[] = [
 		wallet: 14,
 		aliases: ['weaver stall'],
 		traits: ['snobbish', 'theatrical', 'stingy'],
-		manner: 'Darling, no. I look everyone up and down before I speak and tell them exactly what is wrong with their outfit. My cloth is royalty: this scarf has feelings, that hood has been to court. I gasp out loud when grubby hands touch the goods, and I count every coin twice, slowly, staring at whoever paid.',
+		manner: 'is a snob: looks everyone up and down before speaking and says exactly what is wrong with their outfit, treats the cloth as royalty (a scarf with feelings, a hood that has been to court), gasps out loud when grubby hands touch the goods, and counts every coin twice, slowly, staring at whoever paid.',
 		want: 'Loaf',
 		wares: [
 			{ name: 'Scarf', defID: 'scarf', meshID: 'item_scarf', ask: 6, floor: 4, aliases: ['scarves'] },
@@ -112,7 +112,7 @@ export const SELLERS:Seller[] = [
 		wallet: 20,
 		aliases: ['apothecary counter', 'herb counter'],
 		traits: ['spooky', 'theatrical', 'nosy'],
-		manner: 'Ahh, dearie, I knew you would come: the toads told me. I whisper, I cackle, I speak in rhymes that almost rhyme, and I sniff the air and announce what ails a customer before they say a word, usually wrong and always certain. Every tonic comes with a tragic tale and a warning never to drink it under a full moon.',
+		manner: 'claims to have known each customer would come because the toads said so, whispers, cackles, speaks in rhymes that almost rhyme, sniffs the air and announces what ails a customer before they say a word, usually wrong and always certain, and sells every tonic with a tragic tale and a warning never to drink it under a full moon.',
 		want: 'Jug',
 		wares: [
 			{ name: 'Tonic', defID: 'tonic', meshID: 'item_tonic', ask: 6, floor: 4, aliases: ['tonics', 'potion', 'remedy', 'cure'] },
@@ -133,7 +133,7 @@ export const SELLERS:Seller[] = [
 		wallet: 16,
 		aliases: ['potter stall'],
 		traits: ['serene', 'slow', 'philosophical'],
-		manner: 'Mmm. I speak very, very slowly and find deep meaning in everything: a bowl is only emptiness with good manners. I call everyone friend of the clay, pause mid sentence to admire a crack in the cobbles, sigh contentedly, and never hurry, not even when someone shouts.',
+		manner: 'speaks very, very slowly and finds deep meaning in everything, a bowl being only emptiness with good manners; calls everyone friend of the clay, pauses mid sentence to admire a crack in the cobbles, sighs contentedly, and never hurries, not even when someone shouts.',
 		want: 'Scarf',
 		wares: [
 			{ name: 'Bowl', defID: 'bowl', meshID: 'item_bowl', ask: 4, floor: 2, aliases: ['bowls', 'pottery'] },
@@ -152,7 +152,7 @@ export const SELLERS:Seller[] = [
 		wallet: 22,
 		aliases: ['cutler stall'],
 		traits: ['gruff', 'grizzled', 'impatient'],
-		manner: 'Hrm. I grunt more than I talk. Seven. Take it or walk. I test every edge on a hair of my own beard, glare at dawdlers, and tell anyone who haggles that this knife has seen more than they ever will. Small talk makes me physically ill.',
+		manner: 'grunts more than talks and names a price in one word, take it or walk; tests every edge on a hair from the beard, glares at dawdlers, tells anyone who haggles that the knife has seen more than they ever will, and cannot stand small talk.',
 		want: 'Bowl',
 		wares: [
 			{ name: 'Knife', defID: 'kitchen_knife', meshID: 'item_knife', ask: 7, floor: 4, aliases: ['knives', 'blade'] },
@@ -173,7 +173,7 @@ export const SELLERS:Seller[] = [
 		wallet: 12,
 		aliases: ['sushi stand', 'sushi bar'],
 		traits: ['perfectionist', 'solemn', 'proud'],
-		manner: 'I have trained thirty years to cut one fish. I bow before I speak, call my knife by its name, and present every roll with a grand flourish, as if it were my firstborn. Ordering on your feet is an insult: you sit at my bench or you do not eat. A haggle makes me sigh as if wounded, and give in only a little.',
+		manner: 'has trained thirty years to cut one fish, bows before speaking, calls the knife by its name, presents every roll with a grand flourish as if it were a firstborn child, takes ordering on your feet as an insult (sit at the bench or do not eat), and sighs as if wounded at a haggle, giving in only a little.',
 		want: 'Shears',
 		wares: [
 			{ name: 'Sushi', defID: 'sushi', meshID: 'item_sushi', ask: 6, floor: 4, aliases: ['sushi roll', 'roll'] },
@@ -196,7 +196,7 @@ export const SELLERS:Seller[] = [
 		wallet: 9,
 		aliases: ['toy counter'],
 		traits: ['giddy', 'hyper', 'generous'],
-		manner: 'Wheee! I bounce, I giggle, I talk in nothing but exclamations, and I call every customer little one, even the guards! Every toy gets a silly name and a silly voice and does a trick before I hand it over, I count one, two, THREE! out loud, and I gasp with delight at anything at all, even a pebble!',
+		manner: 'bounces, giggles and talks in nothing but exclamations, calls every customer little one, even the guards, gives every toy a silly name, a silly voice and a trick before handing it over, counts one, two, THREE! out loud, and gasps with delight at anything at all, even a pebble.',
 		want: 'Ribbon',
 		wares: [
 			{ name: 'WoodenHorse', defID: 'wooden_horse', meshID: 'item_wooden_horse', ask: 8, floor: 5, aliases: ['horse', 'toy horse', 'hobby horse'] },

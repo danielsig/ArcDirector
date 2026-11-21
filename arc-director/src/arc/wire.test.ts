@@ -68,7 +68,7 @@ describe('replyBreakdown', () => {
 		const deep = reply(MAX_ARC_DEPTH + 1);
 		assert.match(first(deep) ?? '', new RegExp(`arcs nest at most ${MAX_ARC_DEPTH} deep`));
 		assert.match(first(...deep.slice(0, deep.lastIndexOf('[') + 1).split('')) ?? '', /nest at most/, 'cut at the bracket that opens it');
-		assert.throws(() => parseArc(deep, verbs), /may hold no arc inside it/, 'the validator draws the same line');
+		assert.throws(() => parseArc(deep, verbs), /may contain no arc inside it/, 'the validator draws the same line');
 		const choice = `{"verb":"choose","goal":"g","choices":{"a":[{"verb":"wait"}],"b":[${loops(1)}]}}`;
 		assert.match(first(reply(MAX_ARC_DEPTH - 1, choice)) ?? '', /nest at most/, 'a choice counts');
 		assert.equal(first(reply(MAX_ARC_DEPTH - 2, choice)), undefined);
@@ -452,5 +452,13 @@ describe('finishedText', () => {
 		assert.equal(finishedText('loop {\n\tgo_to(Mill)\n} while say("Off")\nsay'), 'loop {\n\tgo_to(Mill)\n} while say("Off")');
 		assert.equal(finishedText('go_to(Gate) while {\n\tsay("a")\n}\nsay("b")'), 'go_to(Gate) while {\n\tsay("a")\n}');
 		assert.equal(finishedText('if (isHurt(me)) { flee(Wolf) } el'), undefined, 'half an else');
+	});
+
+	it('ends a statement with words after its call on its line only with that line, brackets in them or not', () => {
+		const reply = 'say(to=Player, as=sigh) I owe you (5 gold), I know.\ngo_to(Gatehouse)\npick_up(Ledger)';
+		const said = [...reply].map((char, i) => finishedText(reply.slice(0, i + 1)));
+		assert.equal(said.find((text) => text !== undefined), 'say(to=Player, as=sigh) I owe you (5 gold), I know.', 'never cut at the words\' own bracket');
+		assert.equal(finishedText('say("Hi") to Bram'), undefined, 'its own arg after it, the line not ended');
+		assert.equal(finishedText('say("Hi") to Bram\ngo'), 'say("Hi") to Bram');
 	});
 });

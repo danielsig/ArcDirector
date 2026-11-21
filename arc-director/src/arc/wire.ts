@@ -134,6 +134,14 @@ function readStep(raw:unknown, verbs:VerbRegistry):Step {
 	if (typeof raw.verb !== 'string') {
 		throw new ArcError('step.verb must be a string');
 	}
+	const by = verbs.findShorthand(raw.verb);
+	if (by) {
+		const said = raw[by.shorthandArg!];
+		if (said !== undefined && said !== raw.verb) {
+			throw new ArcError(`${by.name}(...) got ${by.shorthandArg}= twice; give it once`);
+		}
+		return readStep({ ...raw, verb: by.name, [by.shorthandArg!]: raw.verb }, verbs);
+	}
 	const step:Step = { verb: raw.verb, args: {} };
 	if (typeof raw.let === 'string' && raw.let.trim()) {
 		step.let = raw.let.trim();
@@ -469,6 +477,16 @@ export function finishedText(reply:string):string | undefined {
 		const after = reply.slice(i + 1).trimStart();
 		// Still the same statement: its body, an `else`, a `while`, a member, or a word yet to be written in full.
 		if (/^(else\b|while\b|\.|\{)/.test(after) || (/^\w*$/.test(after) && ['else', 'while'].some((word) => word.startsWith(after)))) {
+			continue;
+		}
+		// Words after a call on its line (its text, `to Bram`) are its own: it ends with the line, once that is written.
+		if (/^[ \t]+["'\w]/.test(reply.slice(i + 1))) {
+			const newline = reply.indexOf('\n', i);
+			if (newline < 0) {
+				break;
+			}
+			end = newline;
+			i = newline;
 			continue;
 		}
 		end = i + 1;

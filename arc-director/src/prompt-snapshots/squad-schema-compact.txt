@@ -2739,7 +2739,7 @@ Goals (highest first):
 - Hold the line
 
 Pinned memories:
-- When my units or I have nothing to do or are only waiting, we strike back at any foe in reach on our own, without moving. An order or reaction takes over from that.
+- When you or your units have nothing to do or are only waiting, you all strike back at any foe in reach on your own, without moving. An order or reaction takes over from that.
 
 sight:
 Kell (10/10 hp, ally Rifleman) 1 pace to your left. Mira (10/10 hp, ally Rifleman) 1 pace to your right. Raider (20/20 hp) 10 paces in front of you.

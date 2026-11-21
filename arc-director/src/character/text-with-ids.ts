@@ -1,12 +1,37 @@
 /**
  * Text that names characters, things and places by id, as memories, heard lines, results and events keep it: even
- * entries are plain text, odd entries ids (`['Last I saw ', 'npc_17', ' at the ', 'well_2', '.']`). The library builds
- * its own lines so ({@link joinTextWithIDs}); a host's event, a verb's reason and a memory name ids through a text
- * function ({@link NamingText}), read once where it enters the library ({@link namedText}). Each mind shows it in its own names by joining it ({@link showTextWithIDs}). Only text a model
- * wrote in its names is read for them, once, as it is kept ({@link parseTextWithIDs}). Internal: hosts write
+ * entries are plain text, odd entries ids (`['', 'npc_3', ' last saw ', 'npc_17', ' at the ', 'well_2', '.']`). The
+ * library builds its own lines so ({@link joinTextWithIDs}); a host's event, a verb's reason and a memory name ids
+ * through a text function ({@link NamingText}), read once where it enters the library ({@link namedText}). Each mind
+ * shows it in its own names by joining it ({@link showTextWithIDs}). Only text a model wrote in its names is read for
+ * them, once, as it is kept ({@link parseTextWithIDs}). Internal: hosts write
  * {@link NamingText} and read display strings and `segments()`.
  */
 export type TextWithIDs = string[];
+
+const VOICE = 'voice:';
+
+/**
+ * The id a heard voice goes by in text: its own, so each reader tells it apart from the one it is of until it sees them
+ * speak ({@link NameBook.hear}). A host never gets it: segments give the person's id.
+ */
+export function voiceOf(id:string):string {
+	return VOICE + id;
+}
+
+/** Whom an id is of: the person a voice is ({@link voiceOf}); any other id itself. */
+export function personOf(id:string):string {
+	return id.startsWith(VOICE) ? id.slice(VOICE.length) : id;
+}
+
+/** A piece of text as a host reads it: plain, or naming `id`, with `voice` where the one named was heard, not seen. */
+export type TextSegment = { text:string; id?:string; voice?:true };
+
+/** The piece `text` naming `id`: a voice's, by its person ({@link TextSegment}). */
+export function idSegment(text:string, id:string):TextSegment {
+	const person = personOf(id);
+	return person === id ? { text, id } : { text, id: person, voice: true };
+}
 
 /**
  * Text that names characters, things and places by id, as a host or a verb writes it: a plain string names no one; a
@@ -77,12 +102,12 @@ export function showTextWithIDs(text:TextWithIDs, name:(id:string, start:boolean
 }
 
 /** `text` in pieces for a host, each id's piece written by `name`; `start` says whether nothing comes before it. */
-export function textSegments(text:TextWithIDs, name:(id:string, start:boolean)=>string):{ text:string; id?:string }[] {
+export function textSegments(text:TextWithIDs, name:(id:string, start:boolean)=>string):TextSegment[] {
 	let before = '';
 	return text.flatMap((part, i) => {
 		const piece = i % 2 === 1 ? name(part, before.trim() === '') : part;
 		before += piece;
-		return i % 2 === 1 ? [{ text: piece, id: part }] : part ? [{ text: part }] : [];
+		return i % 2 === 1 ? [idSegment(piece, part)] : part ? [{ text: part }] : [];
 	});
 }
 

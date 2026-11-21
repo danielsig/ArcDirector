@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { displayName, idsIn, listIDs, namedText, namingText, parseTextWithIDs, showNamingText, showTextWithIDs, textSegments, type NamingText } from './text-with-ids.js';
-import { keptText, MemoryStore } from '../memory/store.js';
+import { keptText, MemoryPool } from '../memory/store.js';
 import { NameBook } from './NameBook.js';
 
 /** Two minds that name Helms and Ash each their own way. */
@@ -36,12 +36,13 @@ describe('TextWithIDs', () => {
 		assert.equal(showNamingText(reason, (id) => bo.peek(id) ?? id), 'EnemyKnight blocked Ash, the EnemyWitch');
 		assert.equal(showNamingText(reason), 'Helms blocked Ash, the EnemyWitch', 'a host reads ids');
 		assert.deepEqual(namedText(namingText(kept)), kept, 'handed on as a host\'s text, it keeps its ids');
-		const memory = new MemoryStore();
+		const pool = new MemoryPool();
+		const memory = pool.view('');
 		const record = memory.add({ text: reason });
 		assert.equal(record.text, 'Helms blocked Ash, the EnemyWitch');
 		assert.deepEqual(record.segments(), [{ text: 'Helms', id: 'Helms' }, { text: ' blocked ' }, { text: 'Ash', id: 'Ash' }, { text: ', the EnemyWitch' }]);
 		assert.deepEqual(keptText({ ...record }), kept, 'a copy keeps the ids');
-		assert.deepEqual(MemoryStore.fromJSON(JSON.parse(JSON.stringify(memory.toJSON()))).all()[0].segments(), record.segments(), 'a save keeps the ids');
+		assert.deepEqual(MemoryPool.fromJSON(JSON.parse(JSON.stringify(pool.toJSON()))).view('').all()[0].segments(), record.segments(), 'a save keeps the ids');
 	});
 
 	it('leaves a word that is an id but no name it gave as a word', () => {

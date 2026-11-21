@@ -1,3 +1,4 @@
+import { Channel } from '../arc/Channel.js';
 import type { ArcRunner } from './arc-runner.js';
 import type { ArcDirector } from '../director/ArcDirector.js';
 import { callEach } from '../director/director-types.js';
@@ -5,7 +6,7 @@ import { Feature, type FeatureTick, type WatchKernels } from '../director/Featur
 import { isRecord, type JsonValue } from '../json.js';
 import type { SeenObject } from '../perception/perception-types.js';
 import type { Manner } from '../mind/mind-types.js';
-import { FEELINGS, type Feeling, type FeelingDef } from './feeling.js';
+import { FEELINGS, type Feeling, type FeelingDef, type Mood } from './feeling.js';
 
 /** Game seconds a feeling shows before it fades, by default. */
 const FEELING_SECONDS = 120;
@@ -62,7 +63,7 @@ export class FeelingFeature<TCtx = unknown> extends Feature<TCtx> {
 		this.director.withVerbs((v) => v.add('express', {
 			args: { feeling: 'string' },
 			help: 'shows on your face and body until it fades',
-			channel: '',
+			channel: Channel.None,
 			handler: ({ character, args }) => (this.express(character.id, args.feeling)
 				? { status: 'ok', verb: 'express' }
 				: { status: 'failed', verb: 'express', reason: `no feeling called ${args.feeling}` }),
@@ -88,6 +89,16 @@ export class FeelingFeature<TCtx = unknown> extends Feature<TCtx> {
 	public of(id:string):Feeling | undefined {
 		const shown = this._shown.get(id);
 		return shown && shown.until > this.director.time ? shown.feeling : undefined;
+	}
+
+	/**
+	 * `id`'s mood, as recall reads it: the feeling it shows now, with every feeling's `memories` (`FeelingDef.memories`) to
+	 * tell that one's by. None while it shows none, or its feeling has no memories, or no other feeling has any.
+	 */
+	public moodOf(id:string):Mood | undefined {
+		const feeling = this.of(id);
+		const memories = Object.fromEntries([...this._feelings].filter(([, def]) => (def.memories?.length ?? 0) > 0).map(([name, def]) => [name, def.memories!]));
+		return feeling !== undefined && memories[feeling] && Object.keys(memories).length > 1 ? { feeling, memories } : undefined;
 	}
 
 	/** What `feeling` is in words, if there is such a feeling. */

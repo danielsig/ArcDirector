@@ -282,7 +282,7 @@ describe('arc bench play', () => {
 		}));
 		assert.match(prompt, /fire\(target\)/);
 		assert.doesNotMatch(prompt, /shoot\(target\)|Nested arc verbs/);
-		assert.match(prompt, /strike back at any foe in reach on our own/);
+		assert.match(prompt, /strike back at any foe in reach on your own/);
 	});
 
 	it('hides what is out of sight from the prompt, so only a lookup finds it', async () => {

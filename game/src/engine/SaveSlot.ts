@@ -39,7 +39,7 @@ export class SaveSlot extends Component {
 			scene: structuredClone(this.director.sceneState()),
 			pose,
 			world: saveWorld(world, this._fresh),
-			cast: this.director.arc?.exportCast() ?? { characters: {}, collectives: {} },
+			cast: this.director.arc?.exportCast() ?? { characters: {}, collectives: {}, memories: [] },
 		};
 		if (!save || !writeSave(this.sceneID, save)) {
 			this.hud.menuNotice = 'Save failed';

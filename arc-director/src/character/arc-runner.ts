@@ -1,5 +1,6 @@
 import { showNamingText } from './text-with-ids.js';
-import { channelOf, CHOOSE_VERB, impactOf, FOCUS_EDIT_VERBS, groupTargets, INSTEAD_VERB, isFree, MIND_ONLY_VERBS, PASS_VERB, STOCK_MOVE_VERBS, WATCH_EDIT_VERBS, WHILE_ARG, type VerbRegistry } from '../arc/stock-verbs.js';
+import { Channel } from '../arc/Channel.js';
+import { argKind, channelOf, CHOOSE_VERB, impactOf, FOCUS_EDIT_VERBS, groupTargets, INSTEAD_VERB, isFree, MIND_ONLY_VERBS, PASS_VERB, STOCK_MOVE_VERBS, WATCH_EDIT_VERBS, WHILE_ARG, type VerbRegistry } from '../arc/stock-verbs.js';
 import { formatStep } from '../arc/arc-format.js';
 import { arcSteps, insteadOf, isArc, resultFromJSON, resultToJSON, sameProgram, type Arc, type ArcResult, type ArcResultJSON, type Step } from '../arc/arc-types.js';
 import { hand, internalsOf } from '../internals.js';
@@ -31,6 +32,7 @@ import type { Mind } from '../mind/mind.js';
 import type { MindEvent } from '../mind/mind-types.js';
 import { ArcRecord } from './ArcRecord.js';
 import { Persona, type PersonaJSON } from './Persona.js';
+import { MemoryStore } from '../memory/store.js';
 import type { SayResult, SayTo, SayTone } from '../mind/talk.js';
 import type { TalkFeature } from '../mind/TalkFeature.js';
 import type { Kit, KitSource } from './character-types.js';
@@ -61,7 +63,7 @@ export type RunnerDeps<TCtx = unknown> = {
 	talk?:()=>TalkFeature<TCtx> | undefined;
 	/** Walk this runner up to `target`, as `VerbCall.goTo` does. */
 	goTo?:(target:string, opts?:MoveOpts)=>Promise<ArcResult>;
-	/** `step` with its group arg read (`VerbDef.group`): the ids of a list, the id of one, as it was for a name, or why it picks no one. */
+	/** `step` with its group arg read (`VerbDef.groupArg`): the ids of a list, the id of one, as it was for a name, or why it picks no one. */
 	aimGroup?:(step:Step)=>Step | ArcResult;
 	/** The walk that takes this runner near the group `ids` for `verb`, or undefined when it is near already or the host says not to. */
 	walkToGroup?:(verb:string, ids:readonly string[], opts?:MoveOpts)=>(()=>Promise<ArcResult>) | undefined;
@@ -71,6 +73,8 @@ export type RunnerDeps<TCtx = unknown> = {
 	kit:KitSource<TCtx>;
 	/** Its System One pick now, or undefined while it has none; without one, `choose` is withheld. */
 	pick?:()=>ArcPick | undefined;
+	/** Told each step it is about to run, any verb, its group aimed (`Feature.stepStarts`). */
+	stepStarts?:(step:Step)=>void;
 };
 
 export type RunnerOptions<TCtx = unknown> = RunnerDeps<TCtx> & {
@@ -156,6 +160,7 @@ export abstract class ArcRunner<TCtx = unknown> {
 	private readonly _talk:RunnerDeps<TCtx>['talk'];
 	private readonly _goTo:RunnerDeps['goTo'];
 	private readonly _aimGroup:RunnerDeps['aimGroup'];
+	private readonly _stepStarts:RunnerDeps['stepStarts'];
 	private readonly _walkToGroup:RunnerDeps['walkToGroup'];
 	public catalog?:()=>Catalog | undefined;
 	/** Object or callback. Assign a new one any time. Fetched every tick. */
@@ -221,7 +226,7 @@ export abstract class ArcRunner<TCtx = unknown> {
 
 	constructor(opts:RunnerOptions<TCtx>) {
 		this.id = opts.id;
-		this.persona = opts.persona ?? new Persona();
+		this.persona = opts.persona ?? new Persona({}, new MemoryStore(opts.id));
 		this.verbs = opts.verbs;
 		this.context = opts.context;
 		this.execute = opts.execute;
@@ -233,6 +238,7 @@ export abstract class ArcRunner<TCtx = unknown> {
 		this._talk = opts.talk;
 		this._goTo = opts.goTo;
 		this._aimGroup = opts.aimGroup;
+		this._stepStarts = opts.stepStarts;
 		this._walkToGroup = opts.walkToGroup;
 		this.catalog = opts.catalog;
 		this.kit = opts.kit;
@@ -766,7 +772,7 @@ export abstract class ArcRunner<TCtx = unknown> {
 		});
 	}
 
-	/** Whether `step` walks before it acts: over to a group (`VerbDef.group`), or to someone out of earshot of a line. */
+	/** Whether `step` walks before it acts: over to a group (`VerbDef.groupArg`), or to someone out of earshot of a line. */
 	public walksFirst(step:Step):boolean {
 		const aimed = this.aimGroup(step);
 		// It picks no one: it fails where it stands.
@@ -782,10 +788,10 @@ export abstract class ArcRunner<TCtx = unknown> {
 
 	/** The channels `step` holds beside its verb's `channel`: the body too while a free one walks first (`A while B`'s lanes). */
 	private extraLanes(step:Step, channel:string):string[] {
-		return channel !== 'body' && this.walksFirst(step) ? ['body'] : [];
+		return channel !== Channel.Body && this.walksFirst(step) ? [Channel.Body] : [];
 	}
 
-	/** `step` with its group arg read (`VerbDef.group`): ids for a list, or why it picks no one. Any other step comes back as it is. */
+	/** `step` with its group arg read (`VerbDef.groupArg`): ids for a list, or why it picks no one. Any other step comes back as it is. */
 	public aimGroup(step:Step):Step | ArcResult {
 		return this._aimGroup?.(step) ?? step;
 	}
@@ -1026,10 +1032,15 @@ export abstract class ArcRunner<TCtx = unknown> {
 		if (wait > 0) {
 			return { status: 'failed', verb: step.verb, reason: `ready again in ${Math.ceil(wait)}s` };
 		}
-		const aimed = this.aimGroup(step);
+		const named = this.unmarked(step);
+		if ('status' in named) {
+			return named;
+		}
+		const aimed = this.aimGroup(named);
 		if ('status' in aimed) {
 			return aimed;
 		}
+		this._stepStarts?.(aimed);
 		const done = await this.mind?.perform(aimed, this);
 		const talk = aimed.verb === 'say' ? this.talk() : undefined;
 		const out = done ?? (talk ? await talk.speak(this, aimed) : await this.hostStep(aimed, ctx, signal));
@@ -1043,6 +1054,29 @@ export abstract class ArcRunner<TCtx = unknown> {
 			this.talk()?.noteReply(this, aimed);
 		}
 		return out;
+	}
+
+	/**
+	 * `step` with each name its mind wrote of one it could not tell (`$Bram`, `NameBook.unknownName`) as whom it names, now
+	 * that it would know them; else why it cannot run: it does not know which one that is yet.
+	 */
+	private unmarked(step:Step):Step | ArcResult {
+		const spec = this.verbs.find(step.verb);
+		const marked = Object.entries(step.args).filter(([key, value]) => typeof value === 'string' && value.startsWith('$') && argKind(spec, key) === 'id');
+		if (marked.length === 0) {
+			return step;
+		}
+		const book = (this.owner ?? this).mind?.persona.names ?? this.persona.names;
+		const args = { ...step.args };
+		for (const [key, value] of marked) {
+			const id = book.unmark(value as string);
+			if (id === undefined) {
+				// The name as it wrote it: who that is, it does not know.
+				return { status: 'failed', verb: step.verb, reason: `you do not know which one is ${(value as string).slice(1)} yet: ask who people are` };
+			}
+			args[key] = id;
+		}
+		return { ...step, args };
 	}
 
 	/** Game seconds before it may run `verb` again, from when it last did: its kit's cooldown for it, else the verb's (`VerbDef.cooldown`). */

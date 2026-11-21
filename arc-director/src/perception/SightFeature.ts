@@ -1,22 +1,24 @@
 import { stepDoing } from '../arc/stock-verbs.js';
 import type { ArcRunner } from '../character/arc-runner.js';
+import type { Character } from '../character/Character.js';
 import { Collective } from '../collective/Collective.js';
 import type { ArcDirector } from '../director/ArcDirector.js';
-import { Feature } from '../director/Feature.js';
+import { Feature, type WatchKernels } from '../director/Feature.js';
 import { buildCatalog, dummyEntity } from '../expr/natives.js';
 import { evaluate } from '../expr/eval.js';
 import { watchScore } from '../expr/watch-score.js';
 import { internalsOf } from '../internals.js';
 import { isRecord } from '../json.js';
 import { mindTools, type Mind } from '../mind/mind.js';
-import type { ToolSpec } from '../mind/mind-types.js';
-import { distance } from '../world/vec.js';
+import { ownSighting } from '../mind/MindMemory.js';
+import type { MindEvent, ToolSpec } from '../mind/mind-types.js';
+import { cosToward, distance, showsFace } from '../world/vec.js';
 import { axesOf, blocksLines, clarityOf, inLineOfSight, inReach, poseOf } from '../world/lookup.js';
 import { Medium, RESERVED_TAGS, type Vec } from '../world/world-types.js';
 import { InventoryFeature } from './carrying.js';
 import { BearingMode, type SeenObject, type Sight, type SightClause, type SightOpts } from './perception-types.js';
 import { CARRIED_SALIENCE, sightSalience } from './salience.js';
-import { asMadeOut, DEFAULT_SIGHT, DEFAULT_SIGHT_RANGE, sightingOf, formatMeasure, formatSightClauses, joinSightClauses, madeOut, mergeHiveClauses, orderSightClauses, quantizeDistance, sightClarityAt, sightTier, type SightRange, type SightTier } from './sight.js';
+import { asMadeOut, DEFAULT_SIGHT, DEFAULT_SIGHT_RANGE, sightingOf, formatMeasure, formatSightClauses, joinSightClauses, madeOut, mergeHiveClauses, orderSightClauses, quantizeDistance, sightClarityAt, sightTier, type SightField, type SightRange, type SightTier } from './sight.js';
 
 /** What `withSight` takes. */
 export type SightOptions<TCtx = unknown> = {
@@ -41,6 +43,8 @@ export type SightOptions<TCtx = unknown> = {
 	 * dim and vague (`sightClarityAt`), or the game's own `(ctx, seen) => 0–1`. Default `{ clear: 20, dim: 35, vague: 50 }`.
 	 */
 	range?:SightRange | ((ctx:TCtx, seen:SeenObject)=>number);
+	/** How wide a character's look is (`PersonaSpec.fieldOfView` wins). Unset: all around. `observe` looks all around. */
+	fieldOfView?:SightField;
 	/**
 	 * How many times sight's `range` the `observe` tool makes things out at, by the same clear, dim and vague tiers.
 	 * Default 2.
@@ -55,6 +59,8 @@ export type SightOptions<TCtx = unknown> = {
  */
 export class SightFeature<TCtx = unknown> extends Feature<TCtx> {
 	private readonly _options:SightOptions<TCtx> = {};
+	/** Each character's look this watch tick, for `changed`. */
+	private readonly _looks = new Map<string, Sight | undefined>();
 
 	public configure(options:SightOptions<TCtx>):this {
 		Object.assign(this._options, options);
@@ -88,7 +94,7 @@ export class SightFeature<TCtx = unknown> extends Feature<TCtx> {
 
 	/**
 	 * What a character sees from `ctx`, each row's `clarity` the host's times distance's (`range`) times what its
-	 * medium lets through (`castRay`, `getClarity`), less what is too dim to make out at all but what everyone sees
+	 * medium lets through (`castRay`, `getClarity`) times its field of view's, less what is too dim to make out at all but what everyone sees
 	 * (`always`), with what features add to what it sees (`Feature.seen`); none without a look.
 	 */
 	public seenBy(ctx:TCtx):Sight | undefined {
@@ -96,7 +102,18 @@ export class SightFeature<TCtx = unknown> extends Feature<TCtx> {
 			return undefined;
 		}
 		const snap = this._options.look(ctx);
-		const objects = snap.objects.map((o) => (o.always ? o : { ...o, clarity: this.clarity(ctx, snap.self.point, o) }));
+		const field = this.director.character(snap.self.id)?.persona.fieldOfView ?? this._options.fieldOfView;
+		const tiers = typeof field === 'number' ? { clear: field, dim: field, vague: field } : field;
+		const { point, facing } = snap.self;
+		const inField = (o:SeenObject):number => {
+			if (!tiers || !facing) {
+				return 1;
+			}
+			// Degrees across, so twice the angle off the way it faces; rounded, so one exactly beside it is at 180, not past.
+			const across = Math.acos(cosToward(facing, point, o.point)) * 360 / Math.PI;
+			return sightClarityAt(Math.round(across * 1e6) / 1e6, tiers);
+		};
+		const objects = snap.objects.map((o) => (o.always ? o : { ...o, clarity: this.clarity(ctx, point, o) * inField(o) }));
 		const seen = objects.filter((o) => o.always || sightTier(o.clarity) !== 'none');
 		return { ...snap, objects: internalsOf(this.director).features.reduce((list, feature) => feature.seen(ctx, snap.self.id, list), seen) };
 	}
@@ -120,6 +137,57 @@ export class SightFeature<TCtx = unknown> extends Feature<TCtx> {
 		const ctx = this._options.look ? this.director.contextOf(fromID) : undefined;
 		const snap = ctx === undefined ? undefined : this.seenBy(ctx);
 		return snap?.objects.some((o) => o.id === toID && madeOut(o));
+	}
+
+	public override beforeWatches():void {
+		this._looks.clear();
+	}
+
+	/**
+	 * `changed(thing)` in the watch language: whether one it looks through (a collective: its characters) makes `thing`
+	 * out now in a state other than its last sighting of it recorded. Nothing changed is told by itself: a watch on this
+	 * wakes a think, a law answers with none.
+	 */
+	public override watchKernels(runner:ArcRunner<TCtx>):WatchKernels {
+		return { functions: { changed: ([what]) => {
+			const one = what?.kind === 'list' ? what.value[0] : what;
+			const id = one?.kind === 'entity' ? one.value.id : one?.kind === 'string' ? one.value : undefined;
+			const seers = runner instanceof Collective ? runner.characters.filter((c) => !c.thinksForItself) : [runner];
+			return { kind: 'bool', value: id !== undefined && seers.some((seer) => this.changed(seer, id)) };
+		} } };
+	}
+
+	/** Whether `seer` makes `id` out now in a state its last sighting of it does not hold. */
+	private changed(seer:ArcRunner<TCtx>, id:string):boolean {
+		const ctx = this.director.contextOf(seer.id);
+		if (ctx === undefined) {
+			return false;
+		}
+		if (!this._looks.has(seer.id)) {
+			this._looks.set(seer.id, this.seenBy(ctx));
+		}
+		const now = this._looks.get(seer.id)?.objects.find((o) => o.id === id && madeOut(o))?.state;
+		const was = ownSighting(seer.persona.memory, id, seer.id)?.state;
+		return !!now && !!was && Object.keys(was).some((field) => now[field] !== undefined && now[field] !== was[field]);
+	}
+
+	/**
+	 * Sight's say in who perceives an event: whether `character` makes out one of `who` now. Only one that stands
+	 * within sight's farthest reach of them is looked for, where the world says where they stand; no say without a look.
+	 */
+	public override perceives(character:Character<TCtx>, event:MindEvent, who:readonly string[]):boolean | undefined {
+		if (!this._options.look) {
+			return undefined;
+		}
+		const world = this.director.world;
+		const range = this._options.range;
+		const reach = typeof range === 'function' ? Infinity : (range ?? DEFAULT_SIGHT_RANGE).vague;
+		const at = world && poseOf(world, character.id)?.point;
+		const near = (id:string):boolean => {
+			const there = at && world && poseOf(world, id)?.point;
+			return !there || distance(at!, there) <= reach;
+		};
+		return who.some((id) => near(id) && this.sees(character.id, id) === true);
 	}
 
 	/** Whether `o` is a character: tagged one, or one the director runs. */
@@ -158,16 +226,21 @@ export class SightFeature<TCtx = unknown> extends Feature<TCtx> {
 		const limit = mind.persona.sightLimit ?? this._options.limit;
 		const scores = new Map<string, number>();
 		const salience = new Map<string, number>();
+		// What of each thing it makes out lasts, by id: what its memory compares with what it last saw.
+		const states = new Map<string, Readonly<Record<string, string>>>();
+		const keep = (sight:Sight):void => sight.objects.forEach((o) => o.state && states.set(mind.persona.names.resolve(o.id), o.state));
 		const format = this.format;
 		const owner = mind.owner;
 		if (owner instanceof Collective && owner.characters.length > 0 && !this.director.contextOf(mind.thinkThread())) {
 			const groups:{ unitID:string; clauses:ReturnType<typeof formatSightClauses> }[] = [];
 			for (const character of owner.characters) {
 				const memberCtx = this.director.contextOf(character.id);
-				if (!memberCtx) {
+				// One thinking for itself looks for its own mind.
+				if (!memberCtx || character.thinksForItself) {
 					continue;
 				}
-				const snap = this.see(mind, memberCtx);
+				const snap = this.see(mind, memberCtx, character);
+				keep(snap);
 				sightSalience(snap, salience);
 				groups.push({ unitID: character.id, clauses: formatSightClauses(snap, { ...format, fromName: character.id, skipAmbient: groups.length > 0 }) });
 				if (focus.length > 0) {
@@ -175,9 +248,11 @@ export class SightFeature<TCtx = unknown> extends Feature<TCtx> {
 				}
 			}
 			const merged = mergeHiveClauses(groups, focus.length > 0 ? scores : undefined);
-			return this.shown(mind, orderSightClauses(merged, scores, limit, focus.length > 0), salience);
+			return this.shown(mind, orderSightClauses(merged, scores, limit, focus.length > 0), salience, states);
 		}
-		const snap = this.see(mind, ctx);
+		// A commander's own book learns what the collective's mind makes out through its eyes.
+		const snap = this.see(mind, ctx, mind.voice.persona === mind.persona ? undefined : mind.voice);
+		keep(snap);
 		sightSalience(snap, salience);
 		const bag = this.director.getFeature(InventoryFeature)?.inventoryOf(ctx);
 		for (const item of [...bag?.pockets ?? [], ...bag?.pack?.items ?? [], ...Object.values(bag?.worn ?? {})]) {
@@ -187,21 +262,23 @@ export class SightFeature<TCtx = unknown> extends Feature<TCtx> {
 		if (focus.length > 0) {
 			this.score(snap.objects, focus, ctx, mind.voice, scores);
 		}
-		return this.shown(mind, orderSightClauses(clauses, scores, limit, focus.length > 0), salience);
+		return this.shown(mind, orderSightClauses(clauses, scores, limit, focus.length > 0), salience, states);
 	}
 
 	/**
 	 * What `mind` sees from `ctx`, each thing as clearly as it is made out: under its name for it, each character with
 	 * what it is seen doing and how it looks; dim, without health, doing or looks; vague, by its kind only, under the
 	 * mind's label for it (`FigureA`, its {@link NameBook.vague}), which tells no one's name and is never remembered (its
-	 * clause claims no id).
+	 * clause claims no id). When these are the `eyes` of a character a collective's mind looks through, that character's
+	 * own book learns each name too, as the naming rule names it for that character.
 	 */
-	private see(mind:Mind<TCtx>, ctx:TCtx):Sight {
+	private see(mind:Mind<TCtx>, ctx:TCtx, eyes?:ArcRunner<TCtx>):Sight {
 		const seen = this.seenBy(ctx)!;
 		const world = this.director.world;
 		const up = seen.self.up ?? (world && poseOf(world, seen.self.id)?.up);
 		const snap = up ? { ...seen, self: { ...seen.self, up } } : seen;
 		const axes = axesOf(world);
+		const namesAs = eyes && internalsOf(this.director).watches.namesAs(eyes, () => ctx);
 		return {
 			...snap,
 			objects: snap.objects.map((seen) => {
@@ -212,7 +289,11 @@ export class SightFeature<TCtx = unknown> extends Feature<TCtx> {
 					return { ...o, id: label, label };
 				}
 				const doing = o === seen ? o.doing ?? this.seenDoing(o.id, mind) : undefined;
-				return { ...o, id: mind.seen({ ...o, sighting: sightingOf(snap.self, o, axes, this.bearing) }), ...doing ? { doing } : {} };
+				const target = { ...o, sighting: sightingOf(snap.self, o, axes, this.bearing) };
+				// Only a face teaches a look.
+				const faced = showsFace(o.facing, o.point, snap.self.point);
+				eyes?.persona.names.name(o.id, namesAs?.(target) ?? o.id, { seen: true, faced, character });
+				return { ...o, id: mind.seen(target, faced), ...doing ? { doing } : {} };
 			}),
 		};
 	}
@@ -228,9 +309,9 @@ export class SightFeature<TCtx = unknown> extends Feature<TCtx> {
 	 * The sight text `mind` is shown, in its names; it remembers each one in it by id as last seen there, and recalls by
 	 * what is salient.
 	 */
-	private shown(mind:Mind<TCtx>, clauses:SightClause[], salience:ReadonlyMap<string, number>):string {
+	private shown(mind:Mind<TCtx>, clauses:SightClause[], salience:ReadonlyMap<string, number>, states:ReadonlyMap<string, Readonly<Record<string, string>>>):string {
 		const id = (name:string):string => mind.persona.names.resolve(name);
-		internalsOf(mind).sighted(clauses.map((c) => ({ ...c, claimedIDs: c.claimedIDs.map(id) })), new Map([...salience].map(([name, weight]) => [id(name), weight])));
+		internalsOf(mind).sighted(clauses.map((c) => ({ ...c, claimedIDs: c.claimedIDs.map(id) })), new Map([...salience].map(([name, weight]) => [id(name), weight])), states);
 		return joinSightClauses(clauses);
 	}
 

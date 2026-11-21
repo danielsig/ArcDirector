@@ -28,7 +28,18 @@ const RELATIONS = new Set([
 	'manhattan', 'chebyshev', 'inSquare',
 ]);
 
+/** A name its mind could not tell (`"$Bram"`), as the name it now can, or as no one's. */
+function unmarked(value:ExprVal & { kind:'string' }, ctx:EvalCtx):ExprVal {
+	const id = value.value.startsWith('$') ? ctx.catalog.unmark?.(value.value) : undefined;
+	return id === undefined ? value : { kind: 'string', value: id };
+}
+
 function identLookup(name:string, ctx:EvalCtx):ExprVal {
+	// A name its mind could not tell (`$Bram`): who that is, once it can; no one till then.
+	if (name.startsWith('$')) {
+		const id = ctx.catalog.unmark?.(name);
+		return id === undefined ? ABSENT : identLookup(id, ctx);
+	}
 	const local = ctx.env.get(name);
 	if (local) {
 		return local;
@@ -208,7 +219,7 @@ function fieldOf(recv:ExprVal, name:string, ctx:EvalCtx):ExprVal {
 
 /**
  * Functions `src` calls by name that `catalog` does not have. A call to one throws whenever it is reached, so a watch
- * holding one can never hold. Methods (`others.filter(...)`) are not names. `[]` when `src` does not parse.
+ * containing one can never be true. Methods (`others.filter(...)`) are not names. `[]` when `src` does not parse.
  */
 export function unboundCalls(src:string, catalog:Catalog):string[] {
 	const out = new Set<string>();
@@ -268,7 +279,7 @@ function callFn(name:string, args:ExprVal[], ctx:EvalCtx):ExprVal {
 function evalAst(ast:Ast, ctx:EvalCtx):ExprVal {
 	switch (ast.type) {
 		case 'lit':
-			return ast.value;
+			return ast.value.kind === 'string' ? unmarked(ast.value, ctx) : ast.value;
 		case 'ident':
 			return identLookup(ast.name, ctx);
 		case 'array': {
@@ -389,7 +400,7 @@ function evalBinary(op:string, leftAst:Ast, rightAst:Ast, ctx:EvalCtx):ExprVal {
 	throw new ExprError(`unknown op ${op}`);
 }
 
-/** A thing found holds, and nothing found does not (`some(others) && …`); any other value is itself. */
+/** A thing found is true, and nothing found is not (`some(others) && …`); any other value is itself. */
 function asLogic(v:ExprVal):ExprVal {
 	return v.kind === 'entity' || v.kind === 'absent' ? { kind: 'bool', value: isTruthy(v) } : v;
 }
@@ -443,7 +454,7 @@ function predOrNeedle(list:ExprVal[], arg:ExprVal | undefined, ctx:EvalCtx):Expr
 	throw new ExprError('predicate or needle expected');
 }
 
-/** The rows of `list` that `arg` picks, a predicate or a needle; without one, those that hold (a number above 0). */
+/** The rows of `list` that `arg` picks, a predicate or a needle; without one, those that are true (a number above 0). */
 function picked(list:ExprVal[], arg:ExprVal | undefined, ctx:EvalCtx):ExprVal[] {
 	return arg ? predOrNeedle(list, arg, ctx) : list.filter((x) => (x.kind === 'number' ? x.value > 0 : isTruthy(x)));
 }

@@ -2390,7 +2390,7 @@ The role is default work, not a cage. Harm, theft, and threats outrank it this t
 Watches are Arc expressions. Bindings: me, others, items, units (your roster, not others), landmarks, events, prev (last think: prev.me, prev.secondsAgo, prev.verbs). Standing: watch(name, expr) / unwatch(name). One-shot this think: the observe tool evaluates any expr on what you can make out now, farther off than you see (distance(me, Cottage), count(others.filter(u => isNear(u, Cottage, 5))), isNear(Player, Cottage, 4)). Whoever it cannot make out, get closer to. Relations: distance(me, Player), isNear(me, Player, 16), hasSightline, isFacing, manhattan(me, Player), isReachable(me, Cottage); wrap list watches in some. i is "Lantern", units.filter(u => u is "Witch"). filter/count/find/some/all/minBy/maxBy. Regex: u.name.matches("^Fire"), u.name.search("Moon"). others.nearby(16), isLeft, isRight, events.filter("theft"). &&/|| numbers=min/max, bools=and/or. isCarrying / wasCarrying / hasJustReceived / hasJustLost when you carry. Crowd: doing(u, "go_to").
 recall also searches what you know of the world: places, items, people, and how things work. Query a name, or a plain word or spoken place to learn its Capitalized name. Empty query lists the topics you know. recall answers what you know; observe answers what is true in the world now. Look it up once; if recall finds nothing, ask someone who might know, or wander(until).
 see_map is a tool this think, not a verb. Never write it in the Arc. zoom 1 close, 0 whole land. Match the legend (❌ = you). A second look soon, without moving, returns the same legend and no new picture.
-Goals are standing wants, not the next verb. Do not emit identity or set_identity unless who you are changed for good. remember(content, tags?) keeps a lasting fact. think("what to work out") is for what a step's outcome leaves open:
+Goals are standing wants, not the next verb. Do not emit identity or set_identity unless who you are changed for good. remember(content, tags?) keeps a lasting fact. Write it as "I", as in "I lent Odo my cart". think("what to work out") is for what a step's outcome leaves open:
 {"steps":[
 	{"verb":"if",
 		"cond":[{"verb":"pick_up","item":"Key"}],
@@ -2461,7 +2461,8 @@ enableThinking: false
 {"tool":"recall","query":"salt"}
 
 ## user
-recall: {"remember":[],"know":["Gisele (salt, Saltworks)\nGisele sells Salt at the Saltworks, 2 gold a pouch."]}
+recall:
+- Gisele (salt, Saltworks): Gisele sells Salt at the Saltworks, 2 gold a pouch.
 Look up something else, or reply with the steps. Names only, no coordinates.
 
 # request 3
@@ -2480,7 +2481,8 @@ enableThinking: false
 {"tool":"recall","query":"salt"}
 
 ## user
-recall: {"remember":[],"know":["Gisele (salt, Saltworks)\nGisele sells Salt at the Saltworks, 2 gold a pouch."]}
+recall:
+- Gisele (salt, Saltworks): Gisele sells Salt at the Saltworks, 2 gold a pouch.
 Look up something else, or reply with the steps. Names only, no coordinates.
 
 ## assistant

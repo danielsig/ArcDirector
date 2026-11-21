@@ -22,6 +22,13 @@ const ATTACH_BONUS = 8;
 /** How far distance alone lets a thing be made out: clear up to `clear`, dim up to `dim`, vague up to `vague`, then not at all. */
 export type SightRange = { clear:number; dim:number; vague:number };
 
+/**
+ * How wide a look is, in degrees across, centered on where the looker faces: a cone (`180`), within which distance
+ * alone says how clearly a thing is made out and past which nothing is; or by the same tiers as {@link SightRange},
+ * whole within `clear`, down to dim at `dim`, gone past `vague` (`{ clear: 120, dim: 180, vague: 220 }`).
+ */
+export type SightField = number | SightRange;
+
 /** Clear up to 20 paces, dim up to 35, vague up to 50. */
 export const DEFAULT_SIGHT_RANGE:SightRange = { clear: 20, dim: 35, vague: 50 };
 
@@ -498,9 +505,11 @@ function dedupIntersectingClauses(
 			continue;
 		}
 		const prev = out[idx];
-		if (clauseScore(clause, objectScores) > clauseScore(prev, objectScores)) {
-			out[idx] = clause;
-		}
+		const kept = clauseScore(clause, objectScores) > clauseScore(prev, objectScores) ? clause : prev;
+		// Known by both only where both claim the same ids: else the clause kept says what only its own seers saw.
+		const same = prev.claimedIDs.length === clause.claimedIDs.length && prev.claimedIDs.every((id) => set.has(id));
+		const knownBy = [...new Set([...prev.knownBy ?? [], ...clause.knownBy ?? []])];
+		out[idx] = same && knownBy.length > 0 ? { ...kept, knownBy } : kept;
 	}
 	return out;
 }
@@ -550,7 +559,7 @@ export function mergeHiveClauses(
 				}
 				continue;
 			}
-			merged.push(clause);
+			merged.push({ ...clause, knownBy: [group.unitID] });
 		}
 	}
 	const rows = ambient ? [ambient, ...merged] : merged;

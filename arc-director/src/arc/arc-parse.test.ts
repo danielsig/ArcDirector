@@ -105,6 +105,33 @@ describe('Arc args written as numbers', () => {
 	});
 });
 
+describe('a name an as arg takes, called as a verb', () => {
+	it('runs the verb whose as takes it, in Arc text and in JSON', () => {
+		assert.deepEqual(parseArcText('scream("Help!") ; sob("Why me?", Bram) ; laugh(to=Bram) Got you!', verbs()), [
+			{ verb: 'say', args: { as: 'scream', text: 'Help!' }, then: 'always' },
+			{ verb: 'say', args: { as: 'sob', text: 'Why me?', to: 'Bram' }, then: 'always' },
+			{ verb: 'say', args: { as: 'laugh', to: 'Bram', text: 'Got you!' } },
+		]);
+		assert.deepEqual(parseArc('{"steps":[{"verb":"sigh","text":"Fine."}]}', verbs()), [{ verb: 'say', args: { as: 'sigh', text: 'Fine.' } }]);
+	});
+
+	it('takes a host verb\'s as names, and none two verbs share', () => {
+		const registry = verbs().add('create', { args: { at: 'id', as: { kind: 'string', names: ['Rock', 'Tree', 'laugh'] } }, shorthandArg: 'as' });
+		assert.deepEqual(parseArcText('Rock(Well)', registry), [{ verb: 'create', args: { as: 'Rock', at: 'Well' } }]);
+		assert.throws(() => parseArcText('laugh("Ha")', registry), /unknown verb 'laugh'/);
+		assert.throws(() => parseArcText('sob("No", as=sigh)', registry), /as= twice/);
+		assert.deepEqual(parseArcText('scream("Help!", as=scream)', registry), [{ verb: 'say', args: { as: 'scream', text: 'Help!' } }], 'the same tone twice is once');
+		assert.throws(() => parseArc('{"steps":[{"verb":"sob","text":"No","as":"whisper"}]}', registry), /as= twice/, 'in JSON as in text');
+	});
+
+	it('is a word, not a verb, unless called', () => {
+		const registry = verbs().add('create', { args: { at: 'id', kind: { kind: 'string', names: ['Rock'] } }, shorthandArg: 'kind' });
+		assert.deepEqual(parseArcText('say(to=Bram) shout if you need me', registry), [{ verb: 'say', args: { to: 'Bram', text: 'shout if you need me' } }]);
+		assert.deepEqual(parseArcText('go_to Rock', registry), [{ verb: 'go_to', args: { target: 'Rock' } }]);
+		assert.deepEqual(parseArcText('say("Hi") to Rock', registry), [{ verb: 'say', args: { text: 'Hi', to: 'Rock' } }]);
+	});
+});
+
 describe('isArc', () => {
 	it('is a non-empty list of { verb, args } steps', () => {
 		assert.equal(isArc([{ verb: 'wait', args: {} }]), true);
@@ -223,6 +250,28 @@ describe('kit views and command(who)', () => {
 		assert.deepEqual(parseArcText('say(to=Bram, as=whisper) "Quiet now" && wait(2)', verbs), [quiet, { verb: 'wait', args: { seconds: 2 } }]);
 		assert.throws(() => parseArcText('say("Hi") "Bye"', verbs), 'text given already');
 		assert.throws(() => parseArcText('go_to(Keep) "Bye"', verbs), 'go_to takes no text');
+	});
+
+	it('reads words after a call, to the end of the line, as its text arg not given', () => {
+		const verbs = new VerbRegistry().addAll(STOCK_VERB_DEFS);
+		const sigh = { verb: 'say', args: { to: 'Player', as: 'sigh', text: 'Cy owes you the gold, for those boots.' } };
+		assert.deepEqual(parseArcText('say(to=Player, as=sigh) Cy owes you the gold, for those boots.\nwait(2)', verbs), [{ ...sigh, then: 'always' }, { verb: 'wait', args: { seconds: 2 } }]);
+		assert.deepEqual(parseArcText('say(to=Bram) It\'s cold (very).', verbs), [{ verb: 'say', args: { to: 'Bram', text: 'It\'s cold (very).' } }]);
+		assert.deepEqual(parseArcText('say(to=Bram) \'Quiet now\'', verbs), [{ verb: 'say', args: { to: 'Bram', text: 'Quiet now' } }]);
+		assert.deepEqual(parseArcText('loop { say(to=Bram) Hold the line }', verbs), [{ verb: 'loop', args: { arc: [{ verb: 'say', args: { to: 'Bram', text: 'Hold the line' } }] } }], 'up to a bracket it did not open');
+		assert.deepEqual(parseArcText('say Hold the line', verbs), [{ verb: 'say', args: { text: 'Hold the line' } }]);
+		assert.throws(() => parseArcText('say(to=Bram) Come and go_to(Gate)', verbs), /Come is outside the parentheses/, 'calls a verb');
+		assert.throws(() => parseArcText('say(to=Bram, text=Hi) Come along', verbs), /Come is outside the parentheses/, 'text given already');
+		assert.throws(() => parseArcText('go_to(Keep) at once', verbs), /at is outside the parentheses/, 'no text arg');
+		assert.throws(() => parseArcText('say(to=Bram) && wait(2)', verbs), /missing required arg 'text'/, 'a join is no text');
+		const read = (text:string):string => formatArc(parseArcText(text, verbs), verbs).replace(/\n/g, ' / ');
+		assert.equal(read('if (isNear(Bram)) say(to=Bram) Hello there else wander'), 'if (isNear(Bram)) { say(to=Bram, text="Hello there") } else { wander() }');
+		assert.equal(read('say(to=Bram) Come with me && wander'), 'say(to=Bram, text="Come with me") && wander()');
+		assert.equal(read('say(to=Bram) Come with me; wander'), 'say(to=Bram, text="Come with me") ; wander()');
+		assert.equal(read('say(as=whisper) Keep quiet, to=Bram'), 'say(as=whisper, text="Keep quiet", to=Bram)', 'an arg of its own after the words');
+		assert.equal(read('say(to=Bram) Hi // greet'), 'say(to=Bram, text=Hi)');
+		assert.equal(read('say(to=Bram) "Quiet".'), 'say(to=Bram, text=Quiet.)');
+		assert.equal(read('say(to=Bram) Leave, or else you will see; I mean it.'), 'say(to=Bram, text="Leave, or else you will see; I mean it.")', 'speech holds an else or a ; before no step');
 	});
 
 	it('names an argument written after the closing parenthesis', () => {
@@ -353,7 +402,7 @@ describe('small-model slips from the AI logs', () => {
 		assert.doesNotThrow(() => parseArcText(real, verbs().add('protect', { args: {} })));
 		const loops = (n:number):string => (n === 0 ? 'wait()' : `loop(times=2) {\n${loops(n - 1).replace(/^/gm, '\t')}\n}`);
 		assert.doesNotThrow(() => parseArcText(loops(MAX_ARC_DEPTH), verbs()));
-		assert.throws(() => parseArcText(loops(MAX_ARC_DEPTH + 1), verbs()), /loop's arc may hold no arc inside it; loop holds one/);
+		assert.throws(() => parseArcText(loops(MAX_ARC_DEPTH + 1), verbs()), /loop's arc may contain no arc inside it; loop contains one/);
 		const where = `if (danger) {\n\tsay("a") while loop(times=2) {\n\t\twait()\n\t}\n}`;
 		assert.doesNotThrow(() => parseArcText(loops(MAX_ARC_DEPTH - 1).replace('wait()', where), verbs()), 'an if and a while are where their step is');
 	});
@@ -719,18 +768,18 @@ describe('constraints', () => {
 			assert.throws(() => read('go_to(Well)', registry), /^ArcError: go_to: target is one of (Keep, Gate|Gate, Keep); Well is not$/);
 			assert.throws(() => read('wait(seconds=11)', registry), /seconds is a whole number and at least 2 and at most 10/);
 			assert.throws(() => read('wait(seconds=2.5)', registry), /seconds is a whole number/);
-			assert.throws(() => read('loop { say(Hi) }', registry), /^ArcError: loop's arc may not hold say$/);
-			assert.throws(() => read('loop { give(item=Egg, to=Mira) }', registry), /may not hold give/);
-			assert.throws(() => read('loop { wander() }', registry), /^ArcError: loop's arc may hold only .+; not wander$/);
+			assert.throws(() => read('loop { say(Hi) }', registry), /^ArcError: loop's arc may not contain say$/);
+			assert.throws(() => read('loop { give(item=Egg, to=Mira) }', registry), /may not contain give/);
+			assert.throws(() => read('loop { wander() }', registry), /^ArcError: loop's arc may contain only .+; not wander$/);
 			read('go_to(Keep) && wait(seconds=4) && loop { go_to(Gate) ; wait() ; isHurt(me) }', registry);
 		}
 	});
 
 	it('bounds an arc: its steps, its verbs inside it at any depth, and how deep it nests', () => {
 		const registry = verbs().constrain('law', 'arc', { maxSteps: 2, not: ['say'], depth: 1 });
-		assert.throws(() => read('law(watch=isHurt(me)) { go_to(Keep) ; wait() ; wait() }', registry), /^ArcError: law's arc may hold at most 2 steps; it has 3$/);
-		assert.throws(() => read('law(watch=isHurt(me)) { loop { say(Help) } }', registry), /loop's arc may not hold say/);
-		assert.throws(() => read('law(watch=isHurt(me)) { loop { loop { wait() } } }', registry), /^ArcError: loop's arc may hold no arc inside it; loop holds one$/);
+		assert.throws(() => read('law(watch=isHurt(me)) { go_to(Keep) ; wait() ; wait() }', registry), /^ArcError: law's arc may contain at most 2 steps; it has 3$/);
+		assert.throws(() => read('law(watch=isHurt(me)) { loop { say(Help) } }', registry), /loop's arc may not contain say/);
+		assert.throws(() => read('law(watch=isHurt(me)) { loop { loop { wait() } } }', registry), /^ArcError: loop's arc may contain no arc inside it; loop contains one$/);
 		read('law(watch=isHurt(me)) { loop { wait() } }', registry);
 		read('say(Hi) ; loop { say(Hi) ; wait() ; wait() }', registry);
 	});

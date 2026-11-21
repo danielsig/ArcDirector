@@ -1,7 +1,7 @@
 import type { GameObject } from './GameObject.js';
 
 /** A point or direction on the ground, in world meters. A `Transform.position` is one too (its `y` is ignored). */
-export type XZ = { x:number; z:number };
+export interface XZ { x:number; z:number }
 
 /** Straight-line distance on the ground between two points or GameObjects (a GameObject counts at its position). */
 export function distanceXZ(a:XZ | GameObject, b:XZ | GameObject):number {

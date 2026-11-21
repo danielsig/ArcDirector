@@ -13,6 +13,7 @@ import type { ShownMemory } from './MindMemory.js';
 import { DEFAULT_YOU_SYMBOL } from './map.js';
 import type { Identity, Goal, Watches } from '../character/character-types.js';
 import { extrasWithoutPins, formatWatches, watchCount, watchNames } from '../character/watch.js';
+import { writtenNames } from '../character/NameBook.js';
 import type { ArcFormat } from './mind-types.js';
 
 /**
@@ -264,7 +265,8 @@ function arcInstructions(
 	return joinSentences([
 		'Goals are standing wants, not the next verb.',
 		has('set_identity') && 'Do not emit identity or set_identity unless who you are changed for good.',
-		has('remember') && 'remember(content, tags?) keeps a lasting fact.',
+		// Arc JSON shows only the content: a whole step would be a nested example on one line.
+		has('remember') && `remember(content, tags?) keeps a lasting fact. Write it as "I"${arcText ? ': remember("I lent Odo my cart")' : ', as in "I lent Odo my cart"'}.`,
 		has('think') && thinkSentence(verbs, format, lines.explicitThinkAllowedInside),
 		toolInstructions(verbs, toolNames, format, lines.toolArgs, lines.recallKnows),
 		has('wait') && 'wait(until) is a one-shot watch, dropped next think.',
@@ -376,7 +378,7 @@ function emitSentence(format:ArcFormat, tools:boolean):string {
  * Arc text layout: a verb's steps in braces after its call, a tab deeper, with `}` alone. On one line a small model
  * miscounts a run of `)))))`, nests the next command inside the last, or ends the run with a Python-style `:`.
  */
-const BLOCK_LAYOUT = 'A verb that holds steps takes them after its call in { }, one per line a tab deeper, and } alone: when(isHurt(me)) { … }, if (watch) { … } else { … }. let name = step keeps its result for a later if (name).';
+const BLOCK_LAYOUT = 'A verb that contains steps takes them after its call in { }, one per line a tab deeper, and } alone: when(isHurt(me)) { … }, if (watch) { … } else { … }. let name = step keeps its result for a later if (name).';
 
 /** Last in the prefix so a copied Example is valid Arc, with no trailing sentence. */
 function arcExample(verbs:VerbRegistry, format:ArcFormat, chain:boolean):string | false {
@@ -575,6 +577,8 @@ function stringifySense(value:unknown):string {
 export function volatileBlock(opts:{
 	senses?:Record<string, unknown>;
 	intrusion?:string;
+	/** What it finds changed since it last saw it (`MindMemory.changes`), each where a memory comes to mind. */
+	changes?:readonly string[];
 	lastResult?:ArcResult;
 	/** Articles for the names in a failed last result, shown under it. */
 	lastResultArticles?:string;
@@ -620,7 +624,8 @@ export function volatileBlock(opts:{
 	}
 	if (opts.goals && opts.goals.length > 0) {
 		const sorted = [...opts.goals].sort((a, b) => (b.priority ?? 0) - (a.priority ?? 0));
-		parts.push(`Goals (highest first):\n${sorted.map((g) => `- ${g.text}`).join('\n')}`);
+		// A goal's later lines (an example in blocks) a tab in, under its bullet.
+		parts.push(`Goals (highest first):\n${sorted.map((g) => `- ${g.text.replaceAll('\n', '\n\t')}`).join('\n')}`);
 	}
 	if (opts.pinned && opts.pinned.length > 0) {
 		parts.push(`Pinned memories:\n${opts.pinned.map((m) => `- ${m.text}`).join('\n')}`);
@@ -638,8 +643,8 @@ export function volatileBlock(opts:{
 		}
 		parts.push(`${name}:\n${text}`);
 	}
-	if (opts.intrusion) {
-		parts.push(`[unbidden: ${opts.intrusion}]`);
+	for (const line of [...opts.intrusion ? [opts.intrusion] : [], ...opts.changes ?? []]) {
+		parts.push(`[unbidden: ${line}]`);
 	}
 	if (opts.lastResult) {
 		const r = opts.lastResult;
@@ -862,7 +867,9 @@ export function failedPart(reply:string | null | undefined, at?:string):string {
 }
 
 /** What to do with a reply that could not be read for `reason`; `bodied`, the mind acts in a body of its own too (a commander). */
-export function arcRepairHint(reason:string, format:ArcFormat = 'json', tools:string[] = [], verbs?:VerbRegistry, line = '', bodied = false):string {
+export function arcRepairHint(fault:string, format:ArcFormat = 'json', tools:string[] = [], verbs?:VerbRegistry, line = '', bodied = false):string {
+	// Names as its mind wrote them, never as kept (`$Joe`).
+	const reason = writtenNames(fault);
 	const asVerb = reason.match(/unknown verb '([^']+)'/);
 	const name = asVerb?.[1];
 	const schema = format === 'schema';
@@ -875,7 +882,7 @@ export function arcRepairHint(reason:string, format:ArcFormat = 'json', tools:st
 			: `${name} is a tool, not a verb. Call the tool. Never write ${name}(...) in the Arc. Keep this conversation. ${thenEmit(format)}`;
 	}
 	if (name && verbs?.has('command') && !verbs.has(name) && verbs.nested().has(name)) {
-		const through = format === 'text' ? `command(who) { ${name}(…) }` : `a command whose arc holds ${name}`;
+		const through = format === 'text' ? `command(who) { ${name}(…) }` : `a command whose arc contains ${name}`;
 		return `${bodied ? `${name} is your units' verb, not yours: ${through}` : `You have no body of your own: ${name} is for your units, run through ${through}`}. Keep this conversation. ${emit}`;
 	}
 	const toolNote = (tools.length > 0
@@ -921,6 +928,12 @@ function callText(name:string, rawArgs:string):string {
 	}
 }
 
+/** How long ago `seconds` of game time were, in words: `moments ago`, `a minute ago`, `20 minutes ago`, `an hour ago`, `3 days ago`. */
+export function ago(seconds:number):string {
+	const [n, unit] = seconds < 60 ? [0, ''] : seconds < 3600 ? [Math.round(seconds / 60), 'minute'] : seconds < 86400 ? [Math.round(seconds / 3600), 'hour'] : [Math.round(seconds / 86400), 'day'];
+	return n === 0 ? 'moments ago' : n === 1 ? `${unit === 'hour' ? 'an' : 'a'} ${unit} ago` : `${n} ${unit}s ago`;
+}
+
 /** What `recall` answers for `query` when it finds nothing the prompt does not show already. */
 export function nothingRecalled(query:string, verbs:{ has(name:string):boolean }):string {
 	const q = query.replace(/\s+/g, ' ').trim();
@@ -936,13 +949,24 @@ export function writtenToolsHint(results:string[], format:ArcFormat = 'json', la
 	return `Those were tools written as text; they ran anyway:\n${results.join('\n')}\n${last ? NO_LOOKUPS_LEFT : `${how} ${thenEmit(format)}`}`;
 }
 
+/** `rows` as a tool answers a list: a `- ` row each, as the prompt shows memories. */
+export function listAnswer(rows:readonly string[]):string {
+	return rows.map((row) => `- ${row}`).join('\n');
+}
+
+/** What tool `name` answered, `result`: a list on lines of its own. */
+export function toolAnswer(name:string, result:string):string {
+	return result.startsWith('- ') ? `${name}:\n${result}` : `${name}: ${result}`;
+}
+
 /** After a tool the model called in its reply: what it said, and what is left to do. */
 export function toolResultHint(name:string, result:string, last:boolean, compact = false):string {
+	const answer = toolAnswer(name, result);
 	if (compact) {
-		return last ? `${name}: ${result}\nThat was your last lookup; reply with the steps now.` : `${name}: ${result}`;
+		return last ? `${answer}\nThat was your last lookup; reply with the steps now.` : answer;
 	}
 	const next = last ? 'That was your last lookup; reply with the steps now.' : 'Look up something else, or reply with the steps.';
-	return `${name}: ${result}\n${next} Names only, no coordinates.`;
+	return `${answer}\n${next} Names only, no coordinates.`;
 }
 
 /** Follow-up after a say arc whose audience is out of range. Speech did not happen. */

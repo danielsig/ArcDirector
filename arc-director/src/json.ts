@@ -176,15 +176,3 @@ function parseLooseObject(body:string):unknown {
 export function isRecord(v:unknown):v is Record<string, unknown> {
 	return typeof v === 'object' && v !== null && !Array.isArray(v);
 }
-
-/** Current `id`, or a saved blob that still uses `ID`. */
-export function readID(row:unknown):string | undefined {
-	if (!isRecord(row)) {
-		return undefined;
-	}
-	if (typeof row.id === 'string') {
-		return row.id;
-	}
-	const legacy = row['ID'];
-	return typeof legacy === 'string' ? legacy : undefined;
-}

@@ -27,8 +27,12 @@ import { Mind } from '../mind/mind.js';
 import { TalkFeature } from '../mind/TalkFeature.js';
 import { KnowledgeFeature } from '../mind/KnowledgeFeature.js';
 import { InventoryFeature } from '../perception/carrying.js';
-import type { ThinkEvent } from '../mind/mind-types.js';
+import type { MindEvent, ThinkEvent } from '../mind/mind-types.js';
+import { Feature } from '../director/Feature.js';
+import type { Character } from '../character/Character.js';
 import { sleep } from '../turn.js';
+import { internalsOf } from '../internals.js';
+import { MemorySharing } from '../memory/store.js';
 import { stablePrefix } from '../mind/prompt.js';
 
 type Ctx = { id:string };
@@ -234,9 +238,9 @@ describe('Collective chain', () => {
 	it('evaluate and holds take a collective id, seeing as its laws do', async () => {
 		const director = await hiveOf();
 		assert.equal(director.evaluate('Hive', 'units').error, undefined);
-		assert.equal(director.holds('Hive', 'units.filter("Pike")'), false);
+		assert.equal(director.isMet('Hive', 'units.filter("Pike")'), false);
 		hive(director).addCharacter({ id: 'Pike', tags: ['Flank'] });
-		assert.equal(director.holds('Hive', 'units.filter("Flank")'), true);
+		assert.equal(director.isMet('Hive', 'units.filter("Flank")'), true);
 		director.dispose();
 	});
 
@@ -735,6 +739,12 @@ describe('commander and sightFocus', () => {
 			{ unitID: 'Tomas', clauses: [{ text: 'Mira nearby', claimedIDs: ['Mira'] }] },
 		]);
 		assert.equal(overlap.length, 1);
+		assert.deepEqual(overlap[0].knownBy, ['Mira'], 'Tomas saw Mira but not her loaf: the clause kept is Mira\'s alone');
+		assert.deepEqual(mergeHiveClauses([
+			{ unitID: 'Mira', clauses: [{ text: 'Bo by the well', claimedIDs: ['Bo'] }] },
+			{ unitID: 'Tomas', clauses: [{ text: 'Bo by the gate', claimedIDs: ['Bo'] }] },
+		])[0].knownBy, ['Mira', 'Tomas'], 'the same one seen by both');
+		assert.deepEqual(merged.find((clause) => clause.text.includes('EastStall'))?.knownBy, ['Tomas']);
 	});
 
 	it('keeps each unit\'s vague sightings when it pools their sight, each under a label of its own', async () => {
@@ -1768,7 +1778,7 @@ describe('transfers', () => {
 			.withWorld({ find: () => undefined, geometry: { axes: Axes.Plane, getPose: () => undefined }, transfers: { transfer: () => undefined }, routes: { getNeighbors: () => [], steerToward: () => true } } as never)
 			.withKernels(kernels())
 			.withContext((id) => ({ id }))
-			.addCharacter({ id: 'Mira', mind: { rethinkingThreshold: 0 }, memories: [{ text: 'Last I saw Cobweb: Cobweb 5m in front of you', tags: ['seen:Cobweb', 'Cobweb', 'seen'], category: 'semantic' }] })
+			.addCharacter({ id: 'Mira', mind: { rethinkingThreshold: 0 }, memories: [{ text: 'I last saw Cobweb: 5m in front of me', tags: ['seen:Cobweb', 'Cobweb', 'seen'], category: 'semantic' }] })
 			.connect();
 		await assert.rejects(director.character('Mira')!.mind!.thinkNow({ enact: false }), (err:Error) => err instanceof BlockedArcError && /Cobweb is gone since you looked/.test(err.message));
 		assert.equal(asked.length, 1, 'no repair turn on the old sight');
@@ -1783,6 +1793,7 @@ describe('transfers', () => {
 			'law(watch=some_condition, arc=wait())',
 			'command(who=units.filter("Nobody"), arc=wait())',
 			'go_to(Nowhere)',
+			'say("Hi", to=Nobody)',
 			'law(watch=count(others) > 5, arc=wait(), name=two)',
 			'law(watch=count(others) > 6, arc=wait(), name=three)',
 			'wait()',
@@ -1795,11 +1806,11 @@ describe('transfers', () => {
 			} })
 			.withVerbs((v) => v.addStock()
 				.addStockCollective())
-			.withDefaultKit({ verbs: ['command', 'law', 'wait', 'go_to'], tools: [] })
+			.withDefaultKit({ verbs: ['command', 'law', 'wait', 'go_to', 'say'], tools: [] })
 			.withWorld({ find: (id:string) => (['Mira', 'Tomas', 'Keep'].includes(id) ? id : undefined), geometry: { axes: Axes.Plane, getPose: () => undefined }, routes: { getNeighbors: () => [], steerToward: () => true } } as never)
 			.withKernels(kernels())
 			.withContext((id) => ({ id }))
-			.addCollective({ id: 'Hive', mind: { rethinkingThreshold: 0 }, kit: { verbs: ['command', 'law', 'wait', 'go_to'], tools: [] }, commander: 'Mira', maxLaws: 1, characters: [{ id: 'Mira' }, { id: 'Tomas' }] })
+			.addCollective({ id: 'Hive', mind: { rethinkingThreshold: 0 }, kit: { verbs: ['command', 'law', 'wait', 'go_to', 'say'], tools: [] }, commander: 'Mira', maxLaws: 1, characters: [{ id: 'Mira' }, { id: 'Tomas' }] })
 			.connect();
 		const hive = director.collective('Hive')!;
 		// The first law goes in by hand, to be the twin and to fill the cap.
@@ -1811,6 +1822,7 @@ describe('transfers', () => {
 		assert.match(said, /there is no some_condition/);
 		assert.match(said, /picks no unit/);
 		assert.match(said, /there is no Nowhere/);
+		assert.match(said, /there is no Nobody/);
 		assert.match(said, /that is your law one already/);
 		assert.match(said, /unlaw one first/);
 		director.dispose();
@@ -1888,7 +1900,7 @@ describe('transfers', () => {
 
 		const out = await stage([`${good} ; ${bad}`, bad], 1);
 		assert.deepEqual(out.arc!.map((step) => step.verb), ['command'], 'out of tries, what is good runs');
-		assert.match(out.hive.mind.events().map((event) => event.text).join('\n'), /did not run.*needs a call/);
+		assert.match(out.hive.mind.events().map((event) => event.text).join('\n'), /did not run: its law\(watch\) could not be read\.$/m, 'by verb and arg, never by what is written');
 		out.director.dispose();
 
 		const none = await stage([bad, 'wait()'], 1);
@@ -2160,6 +2172,325 @@ describe('hearing', () => {
 		const result = await hive.enact(parseArc('say(text=hi)', hive.verbs));
 		assert.equal(result.status === 'ok', false);
 		assert.match(showNamingText(result.reason ?? ''), /not a character in this scene; command one of your characters to say/);
+		director.dispose();
+	});
+});
+
+/**
+ * What each character knows, in and out of a collective (brainstorming/refactor/18-character-memory.md).
+ */
+describe('what each character knows', () => {
+	/**
+	 * Hive `Street` (Ann, Bob), Dee with a mind of her own, and Joe, whom the game's naming rule calls HoodedPerson for
+	 * everyone. Talk carries between the pairs `near` lists, muffled from speaker to hearer for the pairs `muffled` lists.
+	 */
+	async function stage(near:string[], muffled:string[] = []) {
+		const threads:string[] = [];
+		const quiet = { rethinkingThreshold: 0, skipMajor: true };
+		const talk = new TalkFeature<Ctx>({
+			inRange: (a, b) => near.includes(`${a}|${b}`) || near.includes(`${b}|${a}`),
+			others: (speaker) => ['Joe', 'Ann', 'Bob', 'Dee'].filter((id) => id !== speaker),
+			heardAs: (speaker, hearer) => (muffled.includes(`${speaker}|${hearer}`) ? 'muffled' : 'words'),
+		});
+		const director = await new ArcDirector<Ctx>()
+			.addFake({ chat: (req) => {
+				threads.push(req.thread ?? '');
+				return { content: req.thread === 'Street' || req.thread === 'Ann' || req.thread === 'Bob' || req.thread === 'Dee' ? 'wait()' : '{}', toolCalls: [] };
+			} })
+			.withMind({ arcFormat: 'text' })
+			.withVerbs((v) => v.addStock()
+				.addStockCollective())
+			.withDefaultKit(COLLECTIVE_KIT)
+			.withKernels((ctx) => ({ me: dummyEntity(ctx.id), others: [], items: [] }))
+			.withContext((id) => ({ id }))
+			.withNames((viewer, target) => (target.id === 'Joe' ? 'HoodedPerson' : target.id))
+			.onVerb(({ verb }) => ({ status: 'ok', verb }))
+			.addFeature(talk)
+			.addCharacter({ id: 'Joe' })
+			.addCharacter({ id: 'Dee', mind: quiet, identity: { role: 'Fishmonger' } })
+			.addCollective({
+				id: 'Street',
+				mind: quiet,
+				kit: COLLECTIVE_KIT,
+				identity: { role: 'The people of Mill Street.' },
+				characters: [{ id: 'Ann', mind: quiet, identity: { role: 'Baker' } }, { id: 'Bob', mind: quiet, identity: { role: 'Cobbler' } }],
+			})
+			.connect();
+		/** The lines of what `id`'s prompt would show of `about` (recent lines, the conversation, what it recalls) that hold `word`. */
+		const knows = (id:string, about:string, word:string):string[] => {
+			const { recalled, recent, conversation } = director.character(id)!.mind!.memory.lines('', about);
+			return [...recent, ...conversation, ...recalled.map((r) => r.text)].filter((line) => line.includes(word));
+		};
+		return { director, talk, threads, knows };
+	}
+
+	it('keeps who perceived each memory: the hearer, the character told, every character of the mind told', async () => {
+		const { director, talk } = await stage(['Joe|Bob', 'Joe|Dee']);
+		const street = director.collective('Street')!;
+		talk.say('Joe', 'The vault key is under the third stone.', 'Bob', 1);
+		director.character('Ann')!.tell({ kind: 'Bell', text: 'The bell rang twice.', remember: true });
+		street.mind.pushEvent({ kind: 'Rain', text: 'It rains on Mill Street.', remember: true });
+		await street.mind.thinkNow({ now: 2, enact: false });
+		const knownBy = (text:string):string[] | undefined => street.persona.memory.all().find((r) => r.text.includes(text))?.knownBy;
+		assert.deepEqual(knownBy('vault key'), ['Bob'], 'only Bob was in earshot');
+		assert.deepEqual(knownBy('bell'), ['Ann']);
+		assert.deepEqual(knownBy('rains'), ['Ann', 'Bob']);
+		assert.deepEqual(street.mind.toJSON().conversation?.map((turn) => turn.knownBy), [['Bob']]);
+		const dee = director.character('Dee')!;
+		await dee.mind!.thinkNow({ now: 2, enact: false });
+		assert.deepEqual(dee.persona.memory.all().find((r) => r.text.includes('vault key'))?.knownBy, ['Bob', 'Dee'], 'one record of the line, overheard by a mind of her own too');
+		director.dispose();
+	});
+
+	it('keeps one last sighting per seer: Ann\'s moves on, Bob\'s stays', async () => {
+		const { director } = await stage([]);
+		const street = director.collective('Street')!;
+		const sight = (text:string, knownBy:string[]):void => {
+			internalsOf(street.mind).sighted([{ text, claimedIDs: ['Joe'], knownBy }]);
+			street.mind.memory.noteSeen();
+		};
+		sight('Joe by the well', ['Ann', 'Bob']);
+		sight('Joe by the mill', ['Ann']);
+		const seen = street.persona.memory.all().filter((r) => r.tags.includes('seen:Joe')).map((r) => [r.text, r.knownBy]);
+		assert.deepEqual(seen, [['Ann last saw Joe: Joe by the mill', ['Ann']], ['Bob last saw Joe: Joe by the well', ['Bob']]]);
+		director.dispose();
+	});
+
+	it('lets a character think for itself in its collective: the line waiting for it moves with it, and back', async () => {
+		const { director, talk } = await stage(['Joe|Bob']);
+		const street = director.collective('Street')!;
+		const bob = director.character('Bob')!;
+		const cast = internalsOf(director).cast;
+		talk.say('Joe', 'The vault key is under the third stone.', 'Bob', 1);
+		const own = cast.giveOwnMind(bob)!;
+		assert.equal(bob.collective, street, 'still one of its characters');
+		assert.equal(bob.mind, own);
+		assert.equal(bob.thinksForItself, true);
+		assert.match(own.events().map((e) => e.text).join('\n'), /vault key/);
+		assert.doesNotMatch(street.mind.events().map((e) => e.text).join('\n'), /vault key/, 'only Bob heard it');
+		talk.say('Joe', 'Tell no one.', 'Bob', 2);
+		assert.match(own.events().map((e) => e.text).join('\n'), /Tell no one/, 'it hears for itself now');
+		assert.equal(street.mind.events().some((e) => /Tell no one/.test(e.text)), false);
+		street.command([bob, director.character('Ann')!], [{ verb: 'wait', args: { seconds: 5 } }]);
+		assert.equal(bob.arc, null, 'its collective orders it no more');
+		assert.match(street.promptSection?.(street.mind) ?? '', /Bob \(on its own\)/);
+		await own.thinkNow({ now: 3, enact: false });
+		cast.takeOwnMind(bob);
+		assert.equal(bob.mind, street.mind);
+		assert.deepEqual(street.mind.toJSON().conversation?.map((turn) => turn.knownBy), [['Bob'], ['Bob']], 'what it heard comes back');
+		director.dispose();
+	});
+
+	it('keeps a muffled line known by those who caught it, never by its speaker, who knows what it said', async () => {
+		const { director, talk } = await stage(['Ann|Bob'], ['Ann|Bob']);
+		const street = director.collective('Street')!;
+		talk.say('Ann', 'Meet me at the mill.', undefined, 1);
+		assert.deepEqual(street.mind.events().map((e) => e.knownBy), [['Bob']]);
+		director.dispose();
+	});
+
+	it('brings back once what went with a character that thought for itself, known by both', async () => {
+		const { director, talk } = await stage(['Joe|Ann', 'Joe|Bob']);
+		const street = director.collective('Street')!;
+		const bob = director.character('Bob')!;
+		const cast = internalsOf(director).cast;
+		talk.say('Joe', 'The vault key is under the third stone.', undefined, 1);
+		street.mind.pushEvent({ kind: 'Rain', text: 'It rains on Mill Street.', remember: true });
+		await street.mind.thinkNow({ now: 2, enact: false });
+		cast.giveOwnMind(bob);
+		cast.takeOwnMind(bob);
+		assert.deepEqual(street.mind.toJSON().conversation?.map((turn) => turn.knownBy), [['Ann', 'Bob']]);
+		assert.deepEqual(street.mind.memory.lines().recent.filter((line) => line.includes('rains')).length, 1);
+		director.dispose();
+	});
+
+	it('keeps once what both its collective and a character on its own were told, when that one comes back before it thinks', async () => {
+		const { director } = await stage([]);
+		const street = director.collective('Street')!;
+		const bob = director.character('Bob')!;
+		const cast = internalsOf(director).cast;
+		cast.giveOwnMind(bob);
+		director.pushEvent({ kind: 'Arrived', text: 'A cart arrived from the street.', knownBy: 'everyone' });
+		await street.mind.thinkNow({ now: 2, enact: false });
+		street.mind.pushEvent({ kind: 'Rain', text: 'It rains on Mill Street.' });
+		cast.takeOwnMind(bob);
+		await street.mind.thinkNow({ now: 3, enact: false });
+		assert.deepEqual(street.mind.toJSON().recent?.filter((line) => JSON.stringify(line.text).includes('cart')).map((line) => line.knownBy), [['Ann', 'Bob']], 'not the last line, still the same one');
+		director.dispose();
+	});
+
+	it('shares as the collective says: a character reads its own, or all of them, and a leaver keeps what the game picks', async () => {
+		const pool = await stage([]);
+		const street = pool.director.collective('Street')!;
+		street.persona.memory.add({ text: 'Ann saw the thief at the mill', knownBy: ['Ann'], timestamp: 1 });
+		const bob = pool.director.character('Bob')!;
+		internalsOf(pool.director).cast.giveOwnMind(bob);
+		assert.equal(bob.persona.memory.all().some((r) => r.text.includes('thief')), false, 'per character: its own only');
+		pool.director.dispose();
+
+		const kept:string[] = [];
+		const borg = await new ArcDirector<Ctx>()
+			.addFake({ chat: () => ({ content: 'wait()', toolCalls: [] }) })
+			.withVerbs((v) => v.addStock()
+				.addStockCollective())
+			.withDefaultKit(COLLECTIVE_KIT)
+			.withContext((id) => ({ id }))
+			.onVerb(({ verb }) => ({ status: 'ok', verb }))
+			.addCollective({
+				id: 'Cube',
+				kit: COLLECTIVE_KIT,
+				sharing: MemorySharing.Shared,
+				leaverKeepsMemory: (record) => record.pinned === true,
+				characters: [{ id: 'Seven', mind: { rethinkingThreshold: 0 } }, { id: 'Nine' }],
+			})
+			.connect();
+		const cube = borg.collective('Cube')!;
+		cube.persona.memory.add({ text: 'Resistance is futile', knownBy: ['Cube'], pinned: true });
+		cube.persona.memory.add({ text: 'Nine saw a shuttle', knownBy: ['Nine'], timestamp: 2 });
+		const seven = borg.character('Seven')!;
+		internalsOf(borg).cast.giveOwnMind(seven);
+		assert.ok(seven.persona.memory.all().some((r) => r.text.includes('shuttle')), 'shared: what any of them knows');
+		seven.collective = null;
+		kept.push(...seven.persona.memory.all().map((r) => r.text));
+		assert.deepEqual(kept, ['Resistance is futile'], 'leaving, the doctrine the game picked, and not the shuttle');
+		borg.dispose();
+	});
+
+	it('tells an event to who perceives it: those it is about, those a feature says see them, all of an event about no one', async () => {
+		const { director } = await stage([]);
+		// Only Ann looks toward the square, where Joe is.
+		director.addFeature(new class extends Feature<Ctx> {
+			public override perceives(character:Character<Ctx>, event:MindEvent, who:readonly string[]):boolean | undefined {
+				return character.id === 'Ann' && who.includes('Joe');
+			}
+		}());
+		const heard = (id:string):string[] => (director.character(id)?.thinksForItself ? director.character(id)!.mind! : director.collective(id)!.mind).events().map((e) => `${e.text} ${JSON.stringify(e.knownBy ?? null)}`);
+		director.pushEvent({ kind: 'Theft', text: (who) => `${who('Joe')} stole a loaf` });
+		director.pushEvent({ kind: 'Bell', text: 'The bell rings.' });
+		director.pushEvent({ kind: 'Rumor', text: (who) => `${who('Joe')} is a thief`, knownBy: ['Dee'] });
+		assert.deepEqual(heard('Street'), ['HoodedPerson stole a loaf ["Ann"]', 'The bell rings. ["Ann","Bob"]']);
+		assert.deepEqual(heard('Dee'), ['The bell rings. ["Dee"]', 'HoodedPerson is a thief ["Dee"]']);
+		director.dispose();
+	});
+
+	it('keeps every name inside what was said, and never searches its own name', async () => {
+		const { director, talk } = await stage(['Joe|Dee']);
+		const dee = director.character('Dee')!;
+		talk.say('Joe', 'Dee, the trout costs 5 gold today.', 'Dee', 1);
+		await dee.mind!.thinkNow({ now: 2, enact: false });
+		assert.ok(dee.mind!.memory.talkedOf().includes('HoodedPerson (to you): Dee, the trout costs 5 gold today.'), dee.mind!.memory.talkedOf().join('\n'));
+		for (const note of ['I lent Odo my cart.', 'I like my tea strong.', 'I owe Ann my thanks.', 'I keep my boots dry.']) {
+			await dee.mind!.memory.remember(note);
+		}
+		await dee.mind!.memory.remember('Bread is 2 gold at the Mill stall.');
+		dee.mind!.settings.recallK = 1;
+		assert.deepEqual(dee.mind!.memory.lines('', 'what does bread cost').recalled.map((r) => r.text), ['moments ago: Bread is 2 gold at the Mill stall.'], 'its own name finds none of its notes');
+		director.dispose();
+	});
+
+	it('keeps a unit\'s note as that unit\'s', async () => {
+		const { director } = await stage([]);
+		const street = director.collective('Street')!;
+		await street.mind.perform({ verb: 'remember', args: { content: 'I twisted my ankle at the mill.' } }, director.character('Bob')!);
+		const note = street.persona.memory.all().find((r) => r.text.includes('ankle'))!;
+		assert.deepEqual([note.text, note.knownBy], ['Bob twisted Bob\'s ankle at the mill.', ['Bob', 'Street']]);
+		director.dispose();
+	});
+
+	it('gives a character of a collective a mind of its own while a verb the game picked names it, and takes it back once quiet', async () => {
+		const { director } = await stage(['Joe|Bob']);
+		director.withOwnMind({ on: { say: 'to' }, when: ({ by }) => by.id === 'Joe', quiet: 5 });
+		const bob = director.character('Bob')!;
+		const joe = director.character('Joe')!;
+		await director.character('Ann')!.enact(parseArc('say(text="Hi", to=Bob)', director.verbs));
+		assert.equal(bob.thinksForItself, false, 'only Joe, as when says');
+		await joe.enact(parseArc('say(text="A word, Bob.", to=Bob)', director.verbs));
+		assert.equal(bob.thinksForItself, true);
+		assert.equal(bob.collective, director.collective('Street'));
+		assert.match(bob.mind!.events().map((e) => e.text).join('\n'), /A word, Bob/, 'the line arrives at its own mind');
+		director.tick(3);
+		assert.equal(bob.thinksForItself, true, 'not quiet long enough');
+		// Its think about the line ends first: a mind thinking is never taken.
+		await waitFor(() => !director.queue.isThinking('Bob'), 2000);
+		director.tick(3);
+		assert.equal(bob.thinksForItself, false, 'quiet: its mind goes');
+		assert.equal(bob.mind, director.collective('Street')!.mind);
+		director.dispose();
+	});
+
+	it('keeps a character on its own past quiet while a think of it waits its turn', async () => {
+		const { director } = await stage(['Joe|Bob']);
+		director.withOwnMind({ on: { say: 'to' }, when: ({ by }) => by.id === 'Joe', quiet: 5 });
+		const bob = director.character('Bob')!;
+		await director.character('Joe')!.enact(parseArc('say(text="A word, Bob.", to=Bob)', director.verbs));
+		await waitFor(() => !director.queue.isThinking('Bob'), 2000);
+		// Every model busy: its reply to Joe waits in line.
+		director.queue.mayThink = () => false;
+		director.queue.enqueueMajor('Bob', true, 'HeardSpeech');
+		director.tick(6);
+		assert.equal(bob.thinksForItself, true, 'its think is due: it stays');
+		director.queue.mayThink = undefined;
+		director.dispose();
+	});
+
+	it('a character that leaves its collective knows what it witnessed there, and only that', async () => {
+		const { director, talk, knows } = await stage(['Joe|Bob']);
+		talk.say('Joe', 'The vault key is under the third stone.', 'Bob', 1);
+		await director.collective('Street')!.mind.thinkNow({ now: 2, enact: false });
+		director.character('Bob')!.collective = null;
+		director.character('Ann')!.collective = null;
+		assert.notDeepEqual(knows('Bob', 'the vault key', 'vault'), [], 'Bob heard it');
+		assert.deepEqual(knows('Ann', 'the vault key', 'vault'), [], 'Ann was out of earshot');
+		director.dispose();
+	});
+
+	it('asks no model who knows what when characters leave', async () => {
+		const { director, talk, threads } = await stage(['Joe|Bob']);
+		talk.say('Joe', 'The vault key is under the third stone.', 'Bob', 1);
+		await director.collective('Street')!.mind.thinkNow({ now: 2, enact: false });
+		director.character('Bob')!.collective = null;
+		director.character('Ann')!.collective = null;
+		for (let i = 0; i < 8; i++) {
+			director.tick(1);
+			await sleep(10);
+		}
+		assert.deepEqual(threads.filter((thread) => !['Street', 'Ann', 'Bob', 'Dee'].includes(thread)), []);
+		director.dispose();
+	});
+
+	it('recalls a line in the names the naming rule gives, never by a real id', async () => {
+		const { director, talk, knows } = await stage(['Joe|Dee']);
+		const dee = director.character('Dee')!;
+		talk.say('Joe', 'Meet me at the mill at dusk.', 'Dee', 1);
+		await dee.mind!.thinkNow({ now: 2, enact: false });
+		// Scrolled out of the conversation, the line comes back from long-term memory.
+		dee.mind!.settings.conversationCap = 1;
+		const lines = knows('Dee', 'the mill at dusk', 'Meet me');
+		assert.notDeepEqual(lines, []);
+		assert.ok(lines.every((line) => line.includes('HoodedPerson') && !/\bJoe\b/.test(line)), lines.join('\n'));
+		director.dispose();
+	});
+
+	it('recalls what a figure it saw only vaguely said without telling who it is', async () => {
+		const { director, talk, knows } = await stage(['Joe|Dee']);
+		const dee = director.character('Dee')!;
+		dee.persona.names.vague('Joe', 'Figure', true);
+		talk.say('Joe', 'Meet me at the mill at dusk.', 'Dee', 1);
+		await dee.mind!.thinkNow({ now: 2, enact: false });
+		dee.mind!.settings.conversationCap = 1;
+		const lines = knows('Dee', 'the mill at dusk', 'Meet me');
+		assert.notDeepEqual(lines, []);
+		assert.ok(lines.every((line) => !/\bJoe\b/.test(line)), lines.join('\n'));
+		director.dispose();
+	});
+
+	it('says "you" with the verb agreeing, where an event names its reader', async () => {
+		const { director } = await stage([]);
+		const dee = director.character('Dee')!;
+		dee.mind!.pushEvent({ kind: 'Miss', text: (name) => `${name('Dee')} has no shot at ${name('Joe')}`, remember: true });
+		await dee.mind!.thinkNow({ now: 1, enact: false });
+		const line = dee.mind!.memory.talkedOf().find((text) => text.includes('no shot')) ?? '';
+		assert.match(line, /^You have no shot at HoodedPerson/);
 		director.dispose();
 	});
 });

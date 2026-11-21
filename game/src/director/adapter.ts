@@ -7,6 +7,7 @@ import {
 	BrowserProvider,
 	parseArc,
 	LM_STUDIO_LOAD,
+	type Arc,
 	type ArcResult,
 	type Character,
 	type Collective,
@@ -369,14 +370,14 @@ export class GameHost {
 		}
 	}
 
-	/** Run one arc on the player character. Mind verbs are rejected; a canvas click aborts it. */
-	public async enactPlayer(text:string):Promise<ArcResult> {
+	/** Run one arc on the player character, Arc text or steps. Mind verbs are rejected; a canvas click aborts it. */
+	public async enactPlayer(program:string | Arc):Promise<ArcResult> {
 		const player = this.arc?.character('Player');
 		const pilot = this.world.findByID('Player')?.getComponent(PlayerPilot);
 		if (!player || !pilot) {
 			throw new Error('ArcDirector is not running');
 		}
-		const arc = parseArc(text, player.activeVerbs());
+		const arc = typeof program === 'string' ? parseArc(program, player.activeVerbs()) : program;
 		const release = pilot.claim(() => player.replaceProgram());
 		try {
 			return await player.enact(arc);

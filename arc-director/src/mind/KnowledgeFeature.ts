@@ -7,7 +7,7 @@ import { mindTools, type Mind } from './mind.js';
 import { recallQuery } from './MindMemory.js';
 import type { ToolSpec } from './mind-types.js';
 import { articlesNamedIn, isAboutItem, knowledgeFor, knowledgePages, mentionedArticles, receivedArticles, type KnowledgeSource } from './knowledge.js';
-import { nothingFoundThen } from './prompt.js';
+import { listAnswer, nothingFoundThen } from './prompt.js';
 
 /** Articles shown per think for names said or heard. */
 export const DEFAULT_MENTION_CAP = 2;
@@ -78,7 +78,10 @@ export class KnowledgeFeature<TCtx = unknown> extends Feature<TCtx> {
 			handler: async (ctx, args, mind) => {
 				const remember = await mind.memory.recall(args);
 				const know = knowledgeFor(knowledgePages(this._pages, ctx), recallQuery(args), mind.owner.activeVerbs());
-				return remember.length + know.length > 0 ? { remember, know } : mind.memory.nothingMore(args);
+				// Articles are rows as memories are; a note (topics, no such name) is a line of its own.
+				const rows = [...remember, ...typeof know === 'string' ? [] : know];
+				const note = typeof know === 'string' ? know : undefined;
+				return rows.length > 0 ? [listAnswer(rows), note].filter(Boolean).join('\n') : note ?? mind.memory.nothingMore(args);
 			},
 		};
 	}

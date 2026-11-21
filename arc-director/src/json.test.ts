@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { extractJson, readID } from './json.js';
+import { extractJson } from './json.js';
 
 describe('extractJson', () => {
 	it('parses a complete object', () => {
@@ -47,14 +47,5 @@ describe('extractJson', () => {
 			'}',
 		].join('\n');
 		assert.deepEqual(extractJson(raw), { steps: [{ verb: 'say', text: 'see http://x // here /* too */' }, { verb: 'wait' }] });
-	});
-});
-
-describe('readID', () => {
-	it('prefers id and falls back to ID', () => {
-		assert.equal(readID({ id: 'a' }), 'a');
-		assert.equal(readID(JSON.parse('{"ID":"b"}')), 'b');
-		assert.equal(readID(JSON.parse('{"id":"a","ID":"b"}')), 'a');
-		assert.equal(readID({}), undefined);
 	});
 });

@@ -124,7 +124,7 @@ function aimStep(step:Step, verbs:VerbRegistry, catalog:Catalog, first:boolean):
 			}
 			args[key] = inner;
 		}
-		else if (argKind(spec, key) === 'id' && key !== spec?.group && typeof value === 'string' && /[(.]/.test(value)) {
+		else if (argKind(spec, key) === 'id' && key !== spec?.groupArg && typeof value === 'string' && /[(.]/.test(value)) {
 			const target = nearestOf(value, catalog);
 			if (!target && first) {
 				return undefined;
@@ -196,11 +196,11 @@ function placeOf(entity:ExprEntity | undefined, catalog:Catalog):Place | undefin
 	if (distance.error || distance.value.kind !== 'number') {
 		return undefined;
 	}
-	const holds = (expr:string):boolean => {
+	const isMet = (expr:string):boolean => {
 		const r = evaluate(expr, at);
 		return !r.error && r.value.kind === 'bool' && r.value.value;
 	};
-	const side = holds('isBehind(me, it)') ? 'behind' : holds('isLeft(me, it)') ? 'left' : holds('isRight(me, it)') ? 'right' : 'ahead';
+	const side = isMet('isBehind(me, it)') ? 'behind' : isMet('isLeft(me, it)') ? 'left' : isMet('isRight(me, it)') ? 'right' : 'ahead';
 	return { distance: distance.value.value, side, hp: hpOf(entity) };
 }
 

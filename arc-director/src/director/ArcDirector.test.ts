@@ -40,6 +40,7 @@ import { formatStep } from '../arc/arc-format.js';
 import type { Character } from '../character/Character.js';
 import { nextTurn, sleep } from '../turn.js';
 import { internalsOf } from '../internals.js';
+import { Feeling, FEELINGS } from '../character/feeling.js';
 
 type Ctx = { paragraph:string; id:string };
 
@@ -809,7 +810,7 @@ describe('ArcDirector', () => {
 			.addFake({ chat: (req) => {
 				const user = String(req.messages[1]?.content);
 				users.push(user);
-				return { content: user.includes('did not run: ') ? 'wait()' : 'say(text=Hi) loudly', toolCalls: [] };
+				return { content: user.includes('did not run: ') ? 'wait()' : 'say(text=Hi)\nwait(5m)', toolCalls: [] };
 			}, models: { fake: { maxParallel: 1 } } })
 			.withMind({ arcFormat: 'text' })
 			.withVerbs((v) => v.addStock())
@@ -820,10 +821,10 @@ describe('ArcDirector', () => {
 			.addCharacter({ id: 'Npc', mind: { rethinkingThreshold: 0 }, identity: { role: 'Talks.' } })
 			.connect();
 		director.queue!.enqueueMajor('Npc');
-		// Its finished first step (say(text=Hi)) has run, streamed; the prose after it is what failed.
+		// Its finished first step (say(text=Hi)) has run, streamed; the step on the next line is what failed (meters, no duration).
 		await waitFor(() => {
 			director.tick(1);
-			return users.some((user) => /Part of your last reply did not run: .*loudly is outside the parentheses/.test(user));
+			return users.some((user) => user.includes('Part of your last reply did not run: the rest of your reply could not be read.'));
 		});
 		director.dispose();
 	});
@@ -2007,7 +2008,8 @@ describe('regions', () => {
 		.withContext((id) => ({ paragraph: scene(), id }))
 		.addCharacter({ id: 'Keeper', mind: { rethinkingThreshold: 0 }, kit: KIT })
 		.addCollective({ id: 'Hive', mind: { rethinkingThreshold: 0 }, kit: KIT, characters: [{ id: 'Tom', kit: KIT }] });
-	const pinned = (d:ArcDirector<Ctx>, id:string) => (d.character(id) ?? d.collective(id))!.persona.memory.pinned()
+	// What its mind reads, as a prompt pins it.
+	const pinned = (d:ArcDirector<Ctx>, id:string) => (d.character(id) ?? d.collective(id))!.mind!.memory.pinned()
 		.filter((m) => m.tags.includes('region')).map((m) => m.text);
 
 	it('pins its memory while a character is inside, and runs enter, stay and exit', async () => {
@@ -2106,7 +2108,7 @@ describe('regions', () => {
 		const d = await director().addRegions({ Hall: { from: [-1, -1], to: [1, 1], memory: ({ id }) => (id === 'Tom' ? 'My old cell.' : undefined) } }).connect();
 		d.tick(1);
 		assert.deepEqual(pinned(d, 'Keeper'), []);
-		assert.deepEqual(pinned(d, 'Hive'), ['Tom: My old cell.']);
+		assert.deepEqual(pinned(d, 'Hive'), ['Tom\'s old cell.'], 'a note in "my" is its character\'s');
 		d.dispose();
 	});
 
@@ -2758,6 +2760,58 @@ describe('models', () => {
 		const record = await director.character('Able')!.mind!.memory.remember('EastGate is locked');
 		assert.deepEqual(record.embedding, [1, 0]);
 		assert.deepEqual(asked, ['nomic-embed']);
+		director.dispose();
+	});
+
+	it('brings memories of its mood to mind more readily: sad, the grave over the fair', async () => {
+		// Each feeling's memories one way, plain memories another; the grave leans sad, the fair happy.
+		const meaning = (text:string):number[] => (FEELINGS.sad.memories!.includes(text) ? [0, 1, 0, 0]
+			: FEELINGS.happy.memories!.includes(text) ? [0, 0, 1, 0]
+				: Object.values(FEELINGS).some((def) => def.memories?.includes(text)) ? [0, 0.5, 0.5, 0]
+					: /^I (remember|once|met|used|sold|talked)/.test(text) ? [0, 0, 0, 1]
+						: /grave/.test(text) ? [1, 0.5, 0, 0] : /fair/.test(text) ? [1, 0, 0.5, 0] : [1, 0.2, 0.3, 0]);
+		const unbidden = async (sad:boolean):Promise<string> => {
+			const prompts:string[] = [];
+			const director = await new ArcDirector<Ctx>()
+				.addFake({ chat: (req) => {
+					prompts.push(String(req.messages.at(-1)?.content));
+					return WAIT_REPLY;
+				}, embed: (texts) => texts.map(meaning), models: { main: 'fake', embed: { id: 'embed', embedding: true } } })
+				.withVerbs((v) => v.addStock())
+				.withDefaultKit(KIT)
+				.withFeelings()
+				.withSenses((s) => s.add('sight', () => 'A churchyard beside the fairground.'))
+				.onVerb((call) => ({ status: 'ok', verb: call.verb }))
+				.addCharacter({ id: 'Able', mind: {}, memories: [{ text: 'I wept at my mother\'s grave.' }, { text: 'I won a ribbon at the fair.' }] })
+				.connect();
+			if (sad) {
+				director.getFeelings()!.express('Able', Feeling.Sad);
+			}
+			await director.character('Able')!.mind!.thinkNow({ enact: false });
+			director.dispose();
+			return /\[unbidden: ([^\]]*)\]/.exec(prompts[0])?.[1] ?? '';
+		};
+		assert.match(await unbidden(false), /fair/, 'the fair is nearer what it sees');
+		assert.match(await unbidden(true), /grave/, 'sad, the grave comes instead');
+	});
+
+	it('brings a heavy memory to mind unbidden by meaning alone, above what a plain memory comes to', async () => {
+		const prompts:string[] = [];
+		// Fire is one meaning, a plain memory another, the rest a third.
+		const meaning = (text:string):number[] => (/fire|flame/i.test(text) ? [1, 0, 0] : /^I (remember|once|met|used|sold|talked)/.test(text) ? [0, 1, 0] : [0, 0, 1]);
+		const director = await new ArcDirector<Ctx>()
+			.addFake({ chat: (req) => {
+				prompts.push(String(req.messages.at(-1)?.content));
+				return WAIT_REPLY;
+			}, embed: (texts) => texts.map(meaning), models: { main: 'fake', embed: { id: 'embed', embedding: true } } })
+			.withVerbs((v) => v.addStock())
+			.withDefaultKit(KIT)
+			.withSenses((s) => s.add('sight', () => 'Barn 20 paces to your left: flames pour from its roof.'))
+			.onVerb((call) => ({ status: 'ok', verb: call.verb }))
+			.addCharacter({ id: 'Able', mind: {}, memories: [{ text: 'The fire took my brother.', weight: 3 }, { text: 'My cousin stole the fire iron.' }] })
+			.connect();
+		await director.character('Able')!.mind!.thinkNow({ enact: false });
+		assert.match(prompts[0], /\[unbidden: .*The fire took your brother\./);
 		director.dispose();
 	});
 

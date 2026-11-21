@@ -42,6 +42,11 @@ export function cosToward(dir:Vec, from:Vec, to:Vec):number {
 	return way && d ? Math.max(-1, Math.min(1, dot(d, way))) : 1;
 }
 
+/** Whether one at `from`, facing `dir`, shows its face to one at `to`: `to` is before it, or which way it faces is unknown. */
+export function showsFace(dir:Vec | undefined, from:Vec, to:Vec):boolean {
+	return !dir?.length || cosToward(dir, from, to) > 0;
+}
+
 export function centroid(points:Vec[]):Vec | undefined {
 	if (points.length === 0) {
 		return undefined;

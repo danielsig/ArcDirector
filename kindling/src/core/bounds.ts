@@ -1,7 +1,7 @@
 import type { XZ } from './xz.js';
 
 /** An axis-aligned box on the ground, world meters: a chunk, a collider's footprint, a thin wall's board. */
-export type Bounds = { minX:number; maxX:number; minZ:number; maxZ:number };
+export interface Bounds { minX:number; maxX:number; minZ:number; maxZ:number }
 
 /** The box round `points`, `pad` wider on every side. */
 export function boundsOf(points:Iterable<XZ>, pad = 0):Bounds {
