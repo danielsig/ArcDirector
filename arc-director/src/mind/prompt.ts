@@ -132,7 +132,7 @@ const ORDER = 'Steps run in order: each starts once the one before has ended.';
 
 /**
  * Last for a mind that commands: it is slow, and each order starts as its text closes (16 step 3). Picked from seven
- * wordings at the system prompt's end: the saving order first 100% (one in trouble) and 58% (four) on Gemma 12B,
+ * wordings at the system prompt's end: the saving order first 100% (one in trouble) and 58% (four) on a 12B model,
  * against 85% and 33% without, with calm plans unharmed.
  */
 function slowLine(verbs:VerbRegistry, opts:StablePrefixOpts):string[] {
@@ -295,7 +295,7 @@ function arcInstructions(
 
 /**
  * Where `think` goes: `inside` the arcs it lists of verbs the kit has (if/else, a choice), for what a step's outcome
- * leaves open. Said as a ban on the steps, the place small models put it anyway, mid-Arc as narration (Gemma 4 12B).
+ * leaves open. Said as a ban on the steps, the place small models put it anyway, mid-Arc as narration.
  */
 function thinkSentence(verbs:VerbRegistry, format:ArcFormat, inside:readonly ArgPath[]):string {
 	const rule = 'think("what to work out") is for what a step\'s outcome leaves open';
@@ -575,8 +575,11 @@ function stringifySense(value:unknown):string {
 }
 
 export function volatileBlock(opts:{
+	/** How it feels now, first of all (`withFeelings`' `feel`). */
+	feeling?:string;
 	senses?:Record<string, unknown>;
-	intrusion?:string;
+	/** What comes to mind unbidden: a line each. */
+	intrusions?:readonly string[];
 	/** What it finds changed since it last saw it (`MindMemory.changes`), each where a memory comes to mind. */
 	changes?:readonly string[];
 	lastResult?:ArcResult;
@@ -611,6 +614,9 @@ export function volatileBlock(opts:{
 	compact?:boolean;
 }):string {
 	const parts:string[] = [];
+	if (opts.feeling?.trim()) {
+		parts.push(opts.feeling.trim());
+	}
 	const recent = shortTermBlock(opts.recentSummary ?? '', opts.recent ?? [], opts.compact);
 	if (recent) {
 		parts.push(recent);
@@ -643,7 +649,7 @@ export function volatileBlock(opts:{
 		}
 		parts.push(`${name}:\n${text}`);
 	}
-	for (const line of [...opts.intrusion ? [opts.intrusion] : [], ...opts.changes ?? []]) {
+	for (const line of [...opts.intrusions ?? [], ...opts.changes ?? []]) {
 		parts.push(`[unbidden: ${line}]`);
 	}
 	if (opts.lastResult) {
@@ -702,7 +708,7 @@ export const BESIDE_VERBS:readonly string[] = ['law', 'watch', 'remember'];
 
 /**
  * What runs beside the program: one example reply that speaks (`say`, as the reply writes it), then the other free
- * verbs the kit has (`beside`). Said once: told as a rule and an example both, Gemma 4 12B weighed one against the
+ * verbs the kit has (`beside`). Said once: told as a rule and an example both, a 12B model weighed one against the
  * other. On the dungeon after a fight this form spoke in 6 of 8 thinks against none (256 thinking tokens), and
  * unbounded thoughts ran a fifth shorter.
  */
@@ -841,7 +847,7 @@ export function repeatOutputHint(times:number, format:ArcFormat = 'json'):string
 
 /**
  * The line of `reply` a refusal is about, as the model wrote it: the one holding `at`, else a reply of one line. Shown
- * with the reason, it lifts repairs about 20 points on Gemma 12B and Qwen 9B (12 step 8); the whole reply is still
+ * with the reason, it lifts repairs about 20 points on 9B and 12B models (12 step 8); the whole reply is still
  * left out, so it is not copied back.
  */
 export function faultLine(reply:string | null | undefined, at?:string):string {
@@ -909,7 +915,7 @@ export function partRepairHint(failed:readonly { label:string; reason:string; li
 
 /**
  * A tool's answer to a call made before in the same think (`repeat`), or to any call of a tool refused for one: refused,
- * and the tool no longer offered this think. A mild "see above" was called again and again (Gemma 4 12B).
+ * and the tool no longer offered this think. A mild "see above" was called again and again.
  */
 export function refusedCall(name:string, rawArgs:string, repeat:boolean, canAsk = true):string {
 	const why = repeat ? `you already called ${callText(name, rawArgs)} in this think and got its answer above. Repeating a call is a mistake. ` : '';

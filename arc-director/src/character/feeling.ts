@@ -3,8 +3,14 @@
  * carries it. The stock feelings are {@link FEELINGS}; a game that shows feelings its own way names exactly the ones it
  * can show with `withFeelings({ feelings })`, which replace them, and `express` lists those.
  */
-export const Feeling = { Happy: 'happy', Sad: 'sad', Angry: 'angry', Afraid: 'afraid', Surprised: 'surprised', Disgusted: 'disgusted' } as const;
+export const Feeling = { Happy: 'happy', Sad: 'sad', Angry: 'angry', Afraid: 'afraid', Surprised: 'surprised', Disgusted: 'disgusted', Stressed: 'stressed', Loving: 'loving' } as const;
 export type Feeling = (typeof Feeling)[keyof typeof Feeling] | (string & {});
+
+/**
+ * How strongly each feeling is felt, 0 to 1, by name: several at once (a surprise gift, happy and surprised; a roller
+ * coaster, happy and stressed; paranoia, afraid and stressed).
+ */
+export type FeelingLevels = Readonly<Record<string, number>>;
 
 /**
  * What a feeling is in words: how one showing it looks to onlookers (`looking angry`), and how its voice says a line
@@ -18,9 +24,9 @@ export interface FeelingDef {
 	memories?:readonly string[];
 }
 
-/** A character's mood, as recall reads it: the feeling it shows, and every feeling's `memories` to tell its own by. */
+/** A character's mood, as recall reads it: how strongly it feels each feeling, and every feeling's `memories` to tell its own by. */
 export interface Mood {
-	feeling:Feeling;
+	levels:FeelingLevels;
 	memories:Readonly<Record<string, readonly string[]>>;
 }
 
@@ -95,6 +101,37 @@ export const FEELINGS:Readonly<Record<(typeof Feeling)[keyof typeof Feeling], Fe
 			'The filth on the floor turned my stomach.',
 			'I spat it out; it was foul.',
 			'Just thinking of it makes my skin crawl.',
+		],
+	},
+	// Told apart from the rest as well as they are from each other, afraid and surprised too, on three embedding models.
+	// Arousal under pressure, thrilling as well as grim, and the keyed-up watchfulness of a sentry. A gun at the chest is
+	// left to afraid: with it, stress swallowed fear's memories. Two watchful anchors in four of stress catch watches 23
+	// times in 30 (stress alone, 11) and leave the other seven as they were, on three embedding models.
+	stressed: {
+		looking: 'stressed',
+		adverb: 'tensely',
+		memories: [
+			'My heart hammered on the roller coaster and I screamed the whole way down.',
+			'I stood before the whole hall to give my speech, my hands shaking.',
+			'Steel rang as we fought, and there was no time to think.',
+			'I had far too much to do and no time to do it.',
+			'I stood the night watch with every sound sharp in my ears.',
+			'I held my breath and listened for the footsteps again.',
+		],
+	},
+	// Warmth and care toward someone, a stranger and an enemy too (compassion, sympathy), apart from happy: told apart from
+	// the rest on three embedding models, it tells compassion from emptiness and resignation, and affection from joy. With
+	// the strangers in, care for strangers read as loving 3 to 7 times in 8 (family and friends alone, 1 to 3).
+	loving: {
+		looking: 'fond',
+		adverb: 'warmly',
+		memories: [
+			'I held her hand and never wanted to let go.',
+			'I would give my life for my children.',
+			'She was my dearest friend, and I trusted her with everything.',
+			'I gave my only coat to a shivering stranger and walked home in the snow, glad of it.',
+			'I nursed a wounded enemy soldier back to health, because no one should die alone.',
+			'I sat with the grieving widow all night and felt her sorrow as if it were my own.',
 		],
 	},
 };

@@ -867,7 +867,23 @@ export class ArcDirector<TCtx = unknown, TEntity = unknown> {
 		return this._cast.minds();
 	}
 
-	/** Every character and collective, as a save, each name book pruned first. Restore it with `restoreCast`. */
+	/**
+	 * What sleep does, for the whole cast at once: every holder of every memory forgets what has faded for it (its mind's
+	 * `forgetfulness`), memories told alike fold into one, and every mind's name book drops whom nothing names any more. A
+	 * character far off that thinks no more forgets too. One mind alone: `mind.forgetFaded()`.
+	 */
+	public forgetFaded():void {
+		this.wire();
+		this._cast.pool.forgetFaded(this._time);
+		for (const mind of this._cast.minds()) {
+			mind.pruneNames();
+		}
+	}
+
+	/**
+	 * Every character and collective, as a save, each name book pruned first. Restore it with `restoreCast`. As JSON holds
+	 * it: ±Infinity as the largest number (a memory that never fades still never fades), NaN as null (unset).
+	 */
 	public exportCast():CastJSON {
 		for (const runner of [...this.characters(), ...this.collectives()]) {
 			runner.mind?.pruneNames();
@@ -887,7 +903,8 @@ export class ArcDirector<TCtx = unknown, TEntity = unknown> {
 				features[feature.saveKey!] = json;
 			}
 		}
-		return { characters, collectives, memories: this._cast.pool.toJSON(), features, time: this._time };
+		const cast:CastJSON = { characters, collectives, memories: this._cast.pool.toJSON(), features, time: this._time };
+		return JSON.parse(JSON.stringify(cast, (key, value:unknown) => (value === Infinity ? Number.MAX_VALUE : value === -Infinity ? -Number.MAX_VALUE : value))) as CastJSON;
 	}
 
 	/**

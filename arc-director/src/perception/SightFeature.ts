@@ -10,7 +10,8 @@ import { watchScore } from '../expr/watch-score.js';
 import { internalsOf } from '../internals.js';
 import { isRecord } from '../json.js';
 import { mindTools, type Mind } from '../mind/mind.js';
-import { ownSighting } from '../mind/MindMemory.js';
+import { ownSighting, placedSightings, type Sighted } from '../mind/MindMemory.js';
+import type { MemoryRecord } from '../memory/store.js';
 import type { MindEvent, ToolSpec } from '../mind/mind-types.js';
 import { cosToward, distance, showsFace } from '../world/vec.js';
 import { axesOf, blocksLines, clarityOf, inLineOfSight, inReach, poseOf } from '../world/lookup.js';
@@ -102,20 +103,35 @@ export class SightFeature<TCtx = unknown> extends Feature<TCtx> {
 			return undefined;
 		}
 		const snap = this._options.look(ctx);
-		const field = this.director.character(snap.self.id)?.persona.fieldOfView ?? this._options.fieldOfView;
-		const tiers = typeof field === 'number' ? { clear: field, dim: field, vague: field } : field;
-		const { point, facing } = snap.self;
-		const inField = (o:SeenObject):number => {
-			if (!tiers || !facing) {
-				return 1;
-			}
-			// Degrees across, so twice the angle off the way it faces; rounded, so one exactly beside it is at 180, not past.
-			const across = Math.acos(cosToward(facing, point, o.point)) * 360 / Math.PI;
-			return sightClarityAt(Math.round(across * 1e6) / 1e6, tiers);
-		};
-		const objects = snap.objects.map((o) => (o.always ? o : { ...o, clarity: this.clarity(ctx, point, o) * inField(o) }));
+		const objects = snap.objects.map((o) => (o.always ? o : { ...o, clarity: this.clarity(ctx, snap.self.point, o) * this.inField(snap.self, o.point) }));
 		const seen = objects.filter((o) => o.always || sightTier(o.clarity) !== 'none');
 		return { ...snap, objects: internalsOf(this.director).features.reduce((list, feature) => feature.seen(ctx, snap.self.id, list), seen) };
+	}
+
+	/** How clearly its field of view lets `self` make out what is at `point`: 1 all around, where it has none. */
+	private inField(self:Sight['self'], point:Vec):number {
+		const field = this.director.character(self.id)?.persona.fieldOfView ?? this._options.fieldOfView;
+		const tiers = typeof field === 'number' ? { clear: field, dim: field, vague: field } : field;
+		if (!tiers || !self.facing) {
+			return 1;
+		}
+		// Degrees across, so twice the angle off the way it faces; rounded, so one exactly beside it is at 180, not past.
+		const across = Math.acos(cosToward(self.facing, self.point, point)) * 360 / Math.PI;
+		return sightClarityAt(Math.round(across * 1e6) / 1e6, tiers);
+	}
+
+	/**
+	 * Of `seer`'s sightings of things that are no character, those `snap` (`mind`'s look from `ctx`) shows nothing of and
+	 * `seer` does not carry, where it makes out clearly the spot they were seen at: gone from there. Each once, till it is
+	 * seen again.
+	 */
+	private goneFrom(mind:Mind<TCtx>, ctx:TCtx, snap:Sight, seer:string):MemoryRecord[] {
+		const found = new Set([...snap.objects.map((o) => o.id), ...this.director.getFeature(InventoryFeature)?.carried(ctx) ?? []].map((id) => mind.persona.names.resolve(id)));
+		const range = this._options.range ?? DEFAULT_SIGHT_RANGE;
+		// Only spots within clear range cost a look along the line (`castRay`).
+		const near = (at:Vec):boolean => typeof range === 'function' || distance(at, snap.self.point) <= range.clear;
+		const clear = (id:string, at:Vec):boolean => near(at) && sightTier(this.clarity(ctx, snap.self.point, { id, point: at, tags: [] }) * this.inField(snap.self, at)) === 'clear';
+		return placedSightings(mind.persona.memory, seer).filter(({ id, at }) => !found.has(id) && clear(id, at)).map(({ record }) => record);
 	}
 
 	/**
@@ -228,7 +244,27 @@ export class SightFeature<TCtx = unknown> extends Feature<TCtx> {
 		const salience = new Map<string, number>();
 		// What of each thing it makes out lasts, by id: what its memory compares with what it last saw.
 		const states = new Map<string, Readonly<Record<string, string>>>();
-		const keep = (sight:Sight):void => sight.objects.forEach((o) => o.state && states.set(mind.persona.names.resolve(o.id), o.state));
+		// Where each thing that is no character was made out, and what each seer finds gone from where it last saw it.
+		const points = new Map<string, Vec>();
+		const gone:MemoryRecord[] = [];
+		const keep = (sight:Sight, from:TCtx, seer:string):void => {
+			for (const o of sight.objects) {
+				const id = mind.persona.names.resolve(o.id);
+				if (o.state) {
+					states.set(id, o.state);
+				}
+				if (madeOut(o) && !this.isCharacter({ id, tags: o.tags })) {
+					points.set(id, o.point);
+				}
+			}
+			gone.push(...this.goneFrom(mind, from, sight, seer));
+			// What stands before this seer, by id: its own, and the mind's as the most of any of its eyes.
+			const own = new Map<string, number>();
+			sightSalience(sight, own);
+			const before = new Map([...own].map(([name, weight]) => [mind.persona.names.resolve(name), weight] as const));
+			own.forEach((weight, name) => salience.set(name, Math.max(weight, salience.get(name) ?? 0)));
+			internalsOf(this.director).features.forEach((feature) => feature.looked(seer, before));
+		};
 		const format = this.format;
 		const owner = mind.owner;
 		if (owner instanceof Collective && owner.characters.length > 0 && !this.director.contextOf(mind.thinkThread())) {
@@ -240,29 +276,26 @@ export class SightFeature<TCtx = unknown> extends Feature<TCtx> {
 					continue;
 				}
 				const snap = this.see(mind, memberCtx, character);
-				keep(snap);
-				sightSalience(snap, salience);
+				keep(snap, memberCtx, character.id);
 				groups.push({ unitID: character.id, clauses: formatSightClauses(snap, { ...format, fromName: character.id, skipAmbient: groups.length > 0 }) });
 				if (focus.length > 0) {
 					this.score(snap.objects, focus, memberCtx, character, scores);
 				}
 			}
 			const merged = mergeHiveClauses(groups, focus.length > 0 ? scores : undefined);
-			return this.shown(mind, orderSightClauses(merged, scores, limit, focus.length > 0), salience, states);
+			return this.shown(mind, orderSightClauses(merged, scores, limit, focus.length > 0), { salience, states, points, gone });
 		}
 		// A commander's own book learns what the collective's mind makes out through its eyes.
 		const snap = this.see(mind, ctx, mind.voice.persona === mind.persona ? undefined : mind.voice);
-		keep(snap);
-		sightSalience(snap, salience);
-		const bag = this.director.getFeature(InventoryFeature)?.inventoryOf(ctx);
-		for (const item of [...bag?.pockets ?? [], ...bag?.pack?.items ?? [], ...Object.values(bag?.worn ?? {})]) {
+		keep(snap, ctx, mind.thinkThread());
+		for (const item of this.director.getFeature(InventoryFeature)?.carried(ctx) ?? []) {
 			salience.set(item, CARRIED_SALIENCE);
 		}
 		const clauses = formatSightClauses(snap, format);
 		if (focus.length > 0) {
 			this.score(snap.objects, focus, ctx, mind.voice, scores);
 		}
-		return this.shown(mind, orderSightClauses(clauses, scores, limit, focus.length > 0), salience, states);
+		return this.shown(mind, orderSightClauses(clauses, scores, limit, focus.length > 0), { salience, states, points, gone });
 	}
 
 	/**
@@ -309,9 +342,9 @@ export class SightFeature<TCtx = unknown> extends Feature<TCtx> {
 	 * The sight text `mind` is shown, in its names; it remembers each one in it by id as last seen there, and recalls by
 	 * what is salient.
 	 */
-	private shown(mind:Mind<TCtx>, clauses:SightClause[], salience:ReadonlyMap<string, number>, states:ReadonlyMap<string, Readonly<Record<string, string>>>):string {
+	private shown(mind:Mind<TCtx>, clauses:SightClause[], { salience, ...seen }:Sighted & { salience:ReadonlyMap<string, number> }):string {
 		const id = (name:string):string => mind.persona.names.resolve(name);
-		internalsOf(mind).sighted(clauses.map((c) => ({ ...c, claimedIDs: c.claimedIDs.map(id) })), new Map([...salience].map(([name, weight]) => [id(name), weight])), states);
+		internalsOf(mind).sighted(clauses.map((c) => ({ ...c, claimedIDs: c.claimedIDs.map(id) })), { ...seen, salience: new Map([...salience].map(([name, weight]) => [id(name), weight])) });
 		return joinSightClauses(clauses);
 	}
 

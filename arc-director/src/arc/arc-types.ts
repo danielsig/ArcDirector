@@ -1,5 +1,6 @@
 import { namedText, namingText, readTextWithIDs, type NamingText } from '../character/text-with-ids.js';
 import type { JsonValue } from '../json.js';
+import type { RestsOn } from '../memory/store.js';
 import type { ArgPath } from './constraints.js';
 import { isRecord } from '../json.js';
 import { argKind, GROUP_VERB, IF_VERB, INSTEAD_VERB, WHILE_ARG, type VerbRegistry } from './stock-verbs.js';
@@ -55,6 +56,8 @@ export interface ArcResult {
 	blockedBy?:string[];
 	/** It failed for now, and going round again may go otherwise (the target moved): a `loop` does not stop at it. */
 	retry?:boolean;
+	/** The fact it is true only while it is so: its mind's memory of it goes once it is not (`MemoryRecord.restsOn`). */
+	restsOn?:RestsOn;
 }
 
 /** An {@link ArcResult} as a save keeps it. */

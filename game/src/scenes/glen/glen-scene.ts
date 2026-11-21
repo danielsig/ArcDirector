@@ -9,7 +9,7 @@ import { BODY_VERBS, BUILDING_VERB_INSTRUCTIONS, doClose, doRead, FISH_VERB, GAM
 import { withReceived, type CharacterCtx, type SceneGoals } from '../../director/game-types';
 import { glenTheme } from '../../audio/songs';
 import { GLEN_LOOK } from '../../render/look';
-import type { CastMember, Scene } from '../scene';
+import { lived, type CastMember, type Scene } from '../scene';
 import { GLEN_CHUNKS } from './glen-map';
 import { GLEN_KNOWLEDGE } from './glen-knowledge';
 import { compactName, findCarried, itemMatchesName, listCarried } from '../../items/inventory';
@@ -81,6 +81,11 @@ const FORAGER:CastMember = {
 			text: 'I last saw Angler on the other side of the river.',
 			tags: ['Angler', 'river'],
 		},
+		lived('I ate a deathcap by mistake as a child, and my mother sat up with me all night, singing until the cramps passed.', { afraid: 0.6, loving: 0.7 }),
+		lived((name) => `${name('BridgeKeeper')} shouted at me the first time I tried to cross without paying. My heart still jumps at that voice.`, { afraid: 0.5 }),
+		lived((name) => `When ${name('BridgeKeeper')} lay sick with fever I left MoonMushroom broth on the doorstep. He grumbled, and ate every drop.`, { happy: 0.5, loving: 0.3 }),
+		lived((name) => `${name('Angler')} gave me the first fish I ever ate in the glen and roared with laughter at the face I made.`, { happy: 0.6, loving: 0.3 }),
+		lived((name) => `I once found a ring of ${name('FireMushroom')} by moonlight, glowing like coals. I have never seen anything so lovely.`, { happy: 0.8, surprised: 0.6 }),
 	],
 	pinnedWatches: {
 		gotMushroom: GOT_MUSHROOM,
@@ -142,6 +147,10 @@ const BRIDGE_KEEPER:CastMember = {
 			tags: ['home', 'Cottage'],
 			pinned: true,
 		},
+		lived((name) => `My father kept this ${name('Bridge')} before me. He died the winter the river froze, and I took up the crank the next morning.`, { sad: 0.6, loving: 0.6 }),
+		lived((name) => `I read ${name('RiverTales')} aloud to my wife every evening until she passed. Some nights I still read it aloud.`, { sad: 0.6, loving: 0.7 }),
+		lived((name) => `${name('Forager')} left broth on my doorstep when I lay sick and would not take a coin for it. Good sort, ${name('Forager')}.`, { loving: 0.6, happy: 0.4 }),
+		lived((name) => `${name('Angler')} banged on BridgeLever at dawn three days running to cross, singing. I have not forgiven it.`, { angry: 0.6 }),
 	],
 	pinnedWatches: { looksUp: LOOKS_UP },
 };
@@ -184,6 +193,10 @@ const ANGLER:CastMember = {
 			tags: ['home', 'Hut'],
 			pinned: true,
 		},
+		lived('My brother Jory drowned in the spring flood. I fish the same water to feel near him.', { sad: 0.8, loving: 0.6 }),
+		lived('The great pike at the river bend broke my line and grinned at me. One day he is mine.', { angry: 0.5, stressed: 0.5 }),
+		lived((name) => `${name('BridgeKeeper')} made me pay the full fee in a thunderstorm with my net full. Stiff old post.`, { angry: 0.6 }),
+		lived((name) => `${name('Forager')} laughed at one of my stories once, a real laugh. The best catch of my year, and I have told no one.`, { happy: 0.8, loving: 0.6 }),
 	],
 	watches: { bridge: 'hasJustOpened(Bridge)' },
 	pinnedWatches: { gotMushroom: GOT_MUSHROOM, looksUp: LOOKS_UP },

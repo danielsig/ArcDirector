@@ -8,7 +8,7 @@ import '../director/shortcuts.js';
 import { dummyEntity } from '../expr/natives.js';
 import type { SpeechUtterance } from '../mind/talk.js';
 import { sleep } from '../turn.js';
-import type { Feeling, FeelingDef } from './feeling.js';
+import { Feeling, type FeelingDef } from './feeling.js';
 
 type Ctx = { id:string };
 
@@ -124,6 +124,90 @@ describe('FeelingFeature', () => {
 		assert.equal(feelings.of('Angler'), undefined);
 		assert.ok(director.isMet('Ash', 'feeling(Angler) == ""'));
 		assert.deepEqual(told, [['Angler', 'afraid'], ['Angler', 'surprised'], ['Angler', undefined]]);
+		director.dispose();
+	});
+
+	it('tells a mind first of all how its character feels, as feel words it, and nothing while it shows none', async () => {
+		const { director, prompts } = await staged();
+		director.getFeelings()!.express('Ash', 'sad');
+		director.tick(1);
+		assert.match(await firstPrompt(prompts), /\nYou feel sad: say any line in that mood, and do as you would anyway\.\n/);
+		director.getFeelings()!.configure({ feel: (id, feeling) => (feeling === 'sad' ? undefined : `${id} is ${feeling}.`) });
+		prompts.length = 0;
+		await director.character('Ash')!.mind!.thinkNow({ enact: false });
+		assert.doesNotMatch(prompts[0], /You feel/, 'spared');
+		director.dispose();
+	});
+
+	it('shows the feeling a verb stirs as a character starts it, as when decides for each', async () => {
+		const told:[string, Feeling | undefined][] = [];
+		const director = await new ArcDirector<Ctx>()
+			.addFake({ chat: () => ({ content: '', toolCalls: [] }) })
+			.withVerbs((v) => v.addStock().add('read', { args: {} }))
+			.withDefaultKit({ verbs: ['wait', 'read'] })
+			.withContext((id) => ({ id }))
+			.withFeelings({
+				on: { read: Feeling.Happy },
+				when: ({ character }, feeling) => ({ Ash: feeling, Wolf: Feeling.Disgusted })[character.id],
+				onFeeling: (id, feeling) => told.push([id, feeling]),
+			})
+			.onVerb((call) => ({ status: 'ok', verb: call.verb }))
+			.addCharacter({ id: 'Ash' })
+			.addCharacter({ id: 'Wolf' })
+			.addCharacter({ id: 'Angler' })
+			.connect();
+		for (const id of CAST) {
+			assert.equal((await director.character(id)!.enact([{ verb: 'read', args: {} }])).status, 'ok');
+		}
+		assert.deepEqual(told, [['Ash', 'happy'], ['Wolf', 'disgusted']], 'Angler: when said none');
+		director.dispose();
+	});
+
+	it('feels several feelings at once, shows the strongest stirred, and never fades below a standing one, which shows only once stirred', async () => {
+		const director = await new ArcDirector<Ctx>()
+			.addFake({ chat: () => ({ content: '', toolCalls: [] }) })
+			.withVerbs((v) => v.addStock())
+			.withDefaultKit({ verbs: ['wait'] })
+			.withContext((id) => ({ id }))
+			.withFeelings({ seconds: 10 })
+			.addCharacter({ id: 'Ash', disposition: { afraid: 0.3, stressed: 0.3 } })
+			.connect();
+		const feelings = director.getFeelings()!;
+		assert.deepEqual(feelings.levelsOf('Ash'), { afraid: 0.3, stressed: 0.3 });
+		assert.equal(feelings.of('Ash'), undefined, 'a paranoid one does not look afraid all day');
+		feelings.stir('Ash', { happy: 0.6, stressed: 0.4 });
+		assert.deepEqual(feelings.levelsOf('Ash'), { happy: 0.6, stressed: 0.7, afraid: 0.3 });
+		assert.equal(feelings.of('Ash'), 'stressed', 'the strongest');
+		const stirred = feelings.stirredOf('Ash');
+		assert.deepEqual(Object.keys(stirred), ['happy', 'stressed']);
+		assert.ok(Math.abs(stirred.stressed - 0.4) < 1e-9, 'what a memory kept now is kept with: not the standing part');
+		director.tick(20);
+		assert.deepEqual(feelings.levelsOf('Ash'), { afraid: 0.3, stressed: 0.3 }, 'faded back to standing');
+		assert.equal(feelings.of('Ash'), undefined);
+		director.dispose();
+	});
+
+	it('stirs each character as its temperament lets it, shows in full what it expresses, and stirs one with no feelings not at all', async () => {
+		const director = await new ArcDirector<Ctx>()
+			.addFake({ chat: () => ({ content: '', toolCalls: [] }) })
+			.withVerbs((v) => v.addStock())
+			.withDefaultKit({ verbs: ['wait'] })
+			.withContext((id) => ({ id }))
+			.withFeelings({ hasFeelings: (id) => id !== 'Golem' })
+			.addCharacter({ id: 'Hot', temperament: { angry: 2 } })
+			.addCharacter({ id: 'Stoic', temperament: 0.3 })
+			.addCharacter({ id: 'Golem' })
+			.connect();
+		const feelings = director.getFeelings()!;
+		for (const id of ['Hot', 'Stoic', 'Golem']) {
+			feelings.stir(id, { angry: 0.3, sad: 0.5 });
+		}
+		assert.deepEqual(feelings.levelsOf('Hot'), { angry: 0.6, sad: 0.5 }, 'quick to anger');
+		assert.ok(Math.abs(feelings.levelOf('Stoic', 'sad') - 0.15) < 1e-9, 'stoic');
+		assert.deepEqual(feelings.levelsOf('Golem'), {});
+		assert.equal(feelings.express('Golem', 'angry'), false);
+		assert.equal(feelings.express('Stoic', 'angry'), true);
+		assert.equal(feelings.levelOf('Stoic', 'angry'), 1, 'what it chooses to show, it shows in full');
 		director.dispose();
 	});
 

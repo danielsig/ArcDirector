@@ -1,4 +1,5 @@
 import type { ToolSpec } from '../mind/mind-types.js';
+import { seeded } from '../random.js';
 
 /** One move out of a state: its name as the model writes it (`c3-e5`, `Barracks`), and the state it leads to. */
 export type SearchMove<TState> = { name:string; next:TState };
@@ -67,17 +68,6 @@ const LINE_VISITS = 4;
 const ALSO_GAP = 0.05;
 const SOLO = 'you';
 
-/** Mulberry32: the same moves played out each search, so a result can be made again. */
-function seeded(seed:number):()=>number {
-	let a = seed;
-	return () => {
-		a = (a + 0x6D2B79F5) | 0;
-		let t = Math.imul(a ^ (a >>> 15), 1 | a);
-		t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
-		return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-	};
-}
-
 /** Win share of `node` for whoever moved into it from `parent`. */
 function winFor<TState>(node:Node<TState>, mover:string, root:string):number {
 	const q = node.value / node.visits;
@@ -91,6 +81,7 @@ function winFor<TState>(node:Node<TState>, mover:string, root:string):number {
 export function search<TState>(root:TState, spec:Omit<SearchSpec<unknown, TState>, 'help' | 'state'>):SearchResult {
 	const who = (state:TState):string => spec.toMove?.(state) ?? SOLO;
 	const player = who(root);
+	// The same moves played out each search, so a result can be made again.
 	const random = seeded(1);
 	const top:Node<TState> = { state: root, move: '', mover: player, visits: 0, value: 0 };
 	const evaluate = (state:TState):number => {

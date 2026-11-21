@@ -59,6 +59,12 @@ export class InventoryFeature<TCtx = unknown> extends Feature<TCtx> {
 	public inventoryOf(ctx:TCtx):Inventory {
 		return this._look(ctx);
 	}
+
+	/** Everything the character whose context is `ctx` wears and carries, its purse aside. */
+	public carried(ctx:TCtx):string[] {
+		const bag = this.inventoryOf(ctx);
+		return [...bag.pockets ?? [], ...bag.pack?.items ?? [], ...Object.values(bag.worn ?? {})];
+	}
 }
 
 declare module '../director/ArcDirector.js' {

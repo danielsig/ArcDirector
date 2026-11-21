@@ -2795,6 +2795,255 @@ describe('models', () => {
 		assert.match(await unbidden(true), /grave/, 'sad, the grave comes instead');
 	});
 
+	it('brings back the feeling a memory was kept with as it comes to mind: eggs dropped in tears', async () => {
+		const prompts:string[] = [];
+		const director = await new ArcDirector<Ctx>()
+			.addFake({ chat: (req) => {
+				prompts.push(JSON.stringify(req.messages));
+				return WAIT_REPLY;
+			} })
+			.withVerbs((v) => v.addStock())
+			.withDefaultKit(KIT)
+			.withFeelings()
+			.withSenses((s) => s.add('sight', () => 'Eggs 2 paces in front of you.'))
+			.onVerb((call) => ({ status: 'ok', verb: call.verb }))
+			.addCharacter({ id: 'Able', mind: {} })
+			.connect();
+		const feelings = director.getFeelings()!;
+		const memory = director.character('Able')!.persona.memory;
+		feelings.express('Able', Feeling.Sad);
+		const eggs = memory.add({ text: 'I dropped a whole basket of Eggs.', tags: ['Eggs'] });
+		assert.deepEqual(eggs.felt, { Able: { sad: 1 } }, 'kept with what it felt then');
+		director.tick(200);
+		assert.equal(feelings.of('Able'), undefined, 'the tears dried');
+		await director.character('Able')!.mind!.thinkNow({ enact: false });
+		assert.equal(feelings.of('Able'), 'sad', 'the eggs bring them back');
+		assert.equal(feelings.levelOf('Able', 'sad'), 0.5);
+		assert.match(prompts.at(-1)!, /You feel sad/, 'in the very think they came back in');
+		director.dispose();
+	});
+
+	it('feels toward whom it sees what it felt in its memories of them, as near as they stand, one way only', async () => {
+		const points:Record<string, [number, number]> = { Ann: [0, 0], Bram: [0, -3] };
+		const director = await new ArcDirector<Ctx>()
+			.addFake({ chat: () => WAIT_REPLY })
+			.withVerbs((v) => v.addStock())
+			.withDefaultKit(KIT)
+			.withFeelings()
+			.withContext((id) => ({ id, paragraph: '' }))
+			.withSight({ look: ({ id }) => ({ self: { id, point: points[id], facing: [0, id === 'Ann' ? -1 : 1] }, objects: Object.keys(points).filter((o) => o !== id).map((o) => ({ id: o, point: points[o], tags: ['character'] })) }) })
+			.onVerb((call) => ({ status: 'ok', verb: call.verb }))
+			// No memory comes unbidden: only seeing him stirs it.
+			.addCharacter({ id: 'Ann', mind: { intrusionThreshold: 99 }, memories: [{ text: (name) => `${name('Bram')} carried me home through the snow.`, feelings: { loving: 0.9 } }] })
+			.addCharacter({ id: 'Bram', mind: {} })
+			.connect();
+		const feelings = director.getFeelings()!;
+		assert.deepEqual(director.character('Ann')!.persona.memory.feelingsToward(director.time).get('Bram'), { loving: 0.9 });
+		await director.character('Ann')!.mind!.thinkNow({ enact: false });
+		assert.equal(feelings.of('Ann'), 'loving');
+		assert.ok(Math.abs(feelings.levelOf('Ann', 'loving') - 0.6) < 1e-9, `loving 0.9, 3 paces ahead: two thirds as salient, not ${feelings.levelOf('Ann', 'loving')}`);
+		await director.character('Bram')!.mind!.thinkNow({ enact: false });
+		assert.equal(feelings.of('Bram'), undefined, 'he feels nothing for her');
+		const toward = ():number => director.character('Ann')!.persona.memory.feelingsToward(director.time).get('Bram')!.loving;
+		assert.ok(toward() > 0.89, 'where she saw him is kept with no feeling of the moment');
+		director.tick(100);
+		await director.character('Ann')!.mind!.thinkNow({ enact: false });
+		assert.equal(feelings.of('Ann'), undefined, 'at her side all along, he is no news: it fades');
+		// How much of what she feels for him, two thirds as salient, seeing him stirs.
+		const awayFor = async (seconds:number):Promise<number> => {
+			points.Bram = [0, -300];
+			await director.character('Ann')!.mind!.thinkNow({ enact: false });
+			director.tick(seconds);
+			points.Bram = [0, -3];
+			await director.character('Ann')!.mind!.thinkNow({ enact: false });
+			return feelings.levelOf('Ann', 'loving') / (toward() * 2 / 3);
+		};
+		assert.ok(Math.abs(await awayFor(60) - 0.25) < 1e-9, 'back after a minute, a quarter as much');
+		assert.ok(Math.abs(await awayFor(200) - 1) < 1e-9, 'back after a while, all of it');
+		director.dispose();
+	});
+
+	it('stirs each character of a collective by what it feels toward whom it sees, not the collective\'s mind', async () => {
+		const points:Record<string, [number, number]> = { Ann: [0, 0], Cy: [2, 0], Bram: [0, -3] };
+		const director = await new ArcDirector<Ctx>()
+			.addFake({ chat: () => WAIT_REPLY })
+			.withVerbs((v) => v.addStock().addStockCollective())
+			.withDefaultKit(KIT)
+			.withFeelings()
+			.withContext((id) => (points[id] ? { id, paragraph: '' } : undefined))
+			.withSight({ look: ({ id }) => ({ self: { id, point: points[id], facing: [0, -1] }, objects: Object.keys(points).filter((o) => o !== id).map((o) => ({ id: o, point: points[o], tags: ['character'] })) }) })
+			.onVerb((call) => ({ status: 'ok', verb: call.verb }))
+			.addCharacter({ id: 'Bram' })
+			.addCollective({ id: 'Hive', mind: { intrusionThreshold: 99 }, characters: [
+				{ id: 'Ann', memories: [{ text: (name) => `${name('Bram')} carried me home through the snow.`, feelings: { loving: 0.9 } }] },
+				{ id: 'Cy', memories: [{ text: (name) => `${name('Bram')} burned my barn.`, feelings: { angry: 0.8 } }] },
+			] })
+			.connect();
+		const feelings = director.getFeelings()!;
+		await director.collective('Hive')!.mind!.thinkNow({ enact: false });
+		assert.equal(feelings.of('Ann'), 'loving');
+		assert.equal(feelings.of('Cy'), 'angry');
+		assert.equal(feelings.levelOf('Ann', 'angry'), 0, 'each its own');
+		director.dispose();
+	});
+
+	it('brings a collective with no commander a memory of each of three of its characters, the one feeling most first', async () => {
+		const prompts:string[] = [];
+		const director = await new ArcDirector<Ctx>()
+			.addFake({ chat: (req) => {
+				prompts.push(String(req.messages.at(-1)?.content));
+				return WAIT_REPLY;
+			} })
+			.withVerbs((v) => v.addStock().addStockCollective())
+			.withDefaultKit(KIT)
+			.withFeelings()
+			.withSenses((s) => s.add('sight', () => 'Well 3 paces in front of you.'))
+			.onVerb((call) => ({ status: 'ok', verb: call.verb }))
+			.addCollective({ id: 'Hive', mind: {}, characters: [
+				{ id: 'Bo', memories: [{ text: 'I fetched water from the Well.', tags: ['Well'] }] },
+				{ id: 'Cy', memories: [{ text: 'I lost my ring down the Well.', tags: ['Well'] }] },
+				{ id: 'Ann', memories: [{ text: 'I nearly drowned in the Well.', tags: ['Well'] }] },
+			] })
+			.connect();
+		director.getFeelings()!.stir('Ann', { afraid: 0.9 });
+		director.getFeelings()!.stir('Bo', { happy: 0.3 });
+		await director.collective('Hive')!.mind!.thinkNow({ enact: false });
+		const unbidden = [...prompts[0].matchAll(/\[unbidden: ([^\]]*)\]/g)].map((m) => m[1]);
+		assert.deepEqual(unbidden, ['Ann nearly drowned in the Well.', 'Bo fetched water from the Well.', 'Cy lost Cy\'s ring down the Well.'], prompts[0]);
+		director.dispose();
+	});
+
+	it('brings to mind most readily a memory felt as the mood blends: a surprise gift in a happy surprise', async () => {
+		const unbidden = async (levels:Record<string, number>):Promise<string> => {
+			const prompts:string[] = [];
+			const director = await new ArcDirector<Ctx>()
+				.addFake({ chat: (req) => {
+					prompts.push(String(req.messages.at(-1)?.content));
+					return WAIT_REPLY;
+				} })
+				.withVerbs((v) => v.addStock())
+				.withDefaultKit(KIT)
+				.withFeelings()
+				.withSenses((s) => s.add('sight', () => 'Fiddle 2 paces in front of you.'))
+				.onVerb((call) => ({ status: 'ok', verb: call.verb }))
+				.addCharacter({ id: 'Able', mind: {}, memories: [
+					{ text: 'I played the Fiddle at the fair.', tags: ['Fiddle'], feelings: { happy: 0.9 } },
+					{ text: 'I got the Fiddle as a gift out of the blue.', tags: ['Fiddle'], feelings: { happy: 0.9, surprised: 0.6 } },
+				] })
+				.connect();
+			director.getFeelings()!.stir('Able', levels);
+			await director.character('Able')!.mind!.thinkNow({ enact: false });
+			director.dispose();
+			return /\[unbidden: ([^\]]*)\]/.exec(prompts[0])?.[1] ?? '';
+		};
+		assert.match(await unbidden({ happy: 1 }), /at the fair/, 'happy alone: as alike, the first');
+		assert.match(await unbidden({ happy: 1, surprised: 1 }), /gift/);
+	});
+
+	it('brings to mind more readily a memory of what it cares about', async () => {
+		// Fishing one way, a plain memory another, the trout toward fishing and the swim away, both as near what it sees.
+		const meaning = (text:string):number[] => (text === 'I love fishing.' ? [1, 0, 0] : /^I (remember|once|met|used|sold|talked)/.test(text) ? [0, 1, 0]
+			: /trout/.test(text) ? [1, 0, 1] : /swam/.test(text) ? [-1, 0, 1] : [0, 0, 1]);
+		const unbidden = async (interests:string[], inHive = false):Promise<string> => {
+			const prompts:string[] = [];
+			const able = { id: 'Able', interests, memories: [{ text: 'I swam in the Pond.', tags: ['Pond'] }, { text: 'I caught a trout in the Pond.', tags: ['Pond'] }] };
+			const director = new ArcDirector<Ctx>()
+				.addFake({ chat: (req) => {
+					prompts.push(String(req.messages.at(-1)?.content));
+					return WAIT_REPLY;
+				}, embed: (texts) => texts.map(meaning), models: { main: 'fake', embed: { id: 'embed', embedding: true } } })
+				.withVerbs((v) => v.addStock().addStockCollective())
+				.withDefaultKit(KIT)
+				.withSenses((s) => s.add('sight', () => 'Pond 5 paces in front of you.'))
+				.onVerb((call) => ({ status: 'ok', verb: call.verb }));
+			await (inHive ? director.addCollective({ id: 'Hive', mind: {}, characters: [able] }) : director.addCharacter({ ...able, mind: {} })).connect();
+			await (inHive ? director.collective('Hive') : director.character('Able'))!.mind!.thinkNow({ enact: false });
+			director.dispose();
+			return /\[unbidden: ([^\]]*)\]/.exec(prompts[0])?.[1] ?? '';
+		};
+		assert.match(await unbidden([]), /swam/, 'as alike, the first');
+		assert.match(await unbidden(['I love fishing.']), /trout/);
+		assert.match(await unbidden(['I love fishing.'], true), /trout/, 'a collective\'s character, by its own interests');
+	});
+
+	it('shows what was always so with no age, and brings nothing to mind unbidden that is still in its conversation', async () => {
+		const prompts:string[] = [];
+		const director = await new ArcDirector<Ctx>()
+			.addFake({ chat: (req) => {
+				prompts.push(String(req.messages.at(-1)?.content));
+				return WAIT_REPLY;
+			} })
+			.withVerbs((v) => v.addStock())
+			.withDefaultKit(KIT)
+			.withSenses((s) => s.add('sight', () => 'Well 3 paces in front of you.'))
+			.onVerb((call) => ({ status: 'ok', verb: call.verb }))
+			.addCharacter({ id: 'Able', mind: { intrusionThreshold: 0.1 }, memories: [{ text: 'My father dug this Well.', timestamp: -Infinity }] })
+			.connect();
+		const mind = director.character('Able')!.mind!;
+		assert.deepEqual(await mind.memory.recall({ query: 'Well' }), ['Your father dug this Well.']);
+		mind.pushEvent({ kind: 'HeardSpeech', text: (name) => `${name('Bo')} says: "The Well is dry."`, who: ['Bo'], tags: ['speech', 'Well'], remember: true, turn: { speakerID: 'Bo', text: 'The Well is dry.' } });
+		await mind.thinkNow({ enact: false });
+		director.tick(50);
+		await mind.thinkNow({ enact: false });
+		assert.doesNotMatch(prompts.join('\n'), /\[unbidden: [^\]]*dry/, 'said a moment ago, it is before it already');
+		director.dispose();
+	});
+
+	it('counts each prompt a pinned memory is in as a use, so once its pin runs out it fades from then', async () => {
+		const director = await new ArcDirector<Ctx>()
+			.addFake({ chat: () => WAIT_REPLY })
+			.withVerbs((v) => v.addStock())
+			.withDefaultKit(KIT)
+			.onVerb((call) => ({ status: 'ok', verb: call.verb }))
+			.addCharacter({ id: 'Able', mind: {} })
+			.connect();
+		const goal = director.character('Able')!.persona.memory.add({ text: 'Goal reached: bought Bread.', pinned: true, pinnedThinks: 2, timestamp: 0 });
+		director.tick(300);
+		await director.character('Able')!.mind!.thinkNow({ enact: false });
+		assert.equal(goal.usedAt, director.time);
+		director.dispose();
+	});
+
+	it('saves a memory that never fades as one that never fades, and a broken number as unset', async () => {
+		const director = await new ArcDirector<Ctx>()
+			.addFake({ chat: () => WAIT_REPLY })
+			.withVerbs((v) => v.addStock())
+			.withDefaultKit(KIT)
+			.onVerb((call) => ({ status: 'ok', verb: call.verb }))
+			.addCharacter({ id: 'Ann', memories: [{ text: 'I married Bram.', stability: Infinity }, { text: 'A cart passed.', weight: NaN }] })
+			.connect();
+		director.restoreCast(JSON.parse(JSON.stringify(director.exportCast())));
+		const [vow, cart] = director.character('Ann')!.persona.memory.all();
+		assert.ok(director.character('Ann')!.persona.memory.recallChanceOf(vow, 100 * 365 * 86_400) > 0.99, 'a century on');
+		assert.equal(cart.weight, null, 'unset: as heavy as any');
+		director.dispose();
+	});
+
+	it('forgets what faded for the whole cast at once, a character with no mind too, as fast as the director says', async () => {
+		const director = await new ArcDirector<Ctx>()
+			.addFake({ chat: () => WAIT_REPLY })
+			.withVerbs((v) => v.addStock())
+			.withDefaultKit(KIT)
+			// A day of memory a second, and room for two plain memories.
+			.withMind({ forgetfulness: 86_400, maxEpisodic: 2 })
+			.onVerb((call) => ({ status: 'ok', verb: call.verb }))
+			.addCharacter({ id: 'Able', mind: { forgetfulness: 0 } })
+			.addCharacter({ id: 'Bo' })
+			.connect();
+		const [able, bo] = ['Able', 'Bo'].map((id) => director.character(id)!.persona.memory);
+		for (const text of ['A cart passed.', 'A dog barked.', 'It rained.']) {
+			able.add({ text });
+			bo.add({ text });
+		}
+		assert.equal(bo.all().length, 2, 'the director\'s cap');
+		// About two months on: an episode never used again is forgotten.
+		director.tick(70);
+		director.forgetFaded();
+		assert.deepEqual(bo.all(), [], 'faded, with no mind to sleep');
+		assert.equal(able.all().length, 2, 'its own mind forgets nothing');
+		director.dispose();
+	});
+
 	it('brings a heavy memory to mind unbidden by meaning alone, above what a plain memory comes to', async () => {
 		const prompts:string[] = [];
 		// Fire is one meaning, a plain memory another, the rest a third.

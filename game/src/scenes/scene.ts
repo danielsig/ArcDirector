@@ -1,5 +1,5 @@
 import type { GameObject, RendererLook, Score, Track, XZ } from '@arc-director/kindling';
-import type { ArcDirector, CharacterSpec, KnowledgeEntry, Requirement } from 'arc-director';
+import type { ArcDirector, CharacterSpec, FeelingLevels, KnowledgeEntry, MemoryDraft, NamingText, Requirement } from 'arc-director';
 import type { ChunkFile } from '../world/decode-glyph-chunk';
 import type { CameraLook, NPCSpawnDef, RoomDef } from '../world/spawn';
 import type { OutskirtHeights, Surface } from '../kit/land/land';
@@ -14,6 +14,15 @@ export type CastMember = CharacterSpec<CharacterCtx> & { body:Omit<NPCSpawnDef, 
 
 /** A scene's characters, one record each: the bodies spawned, the minds and the collectives' units come from it. */
 export type SceneCast = readonly CastMember[];
+
+/**
+ * A memory of a character's life, steeped in `feelings`: a lasting fact from before the scene, so shown with no age and
+ * never pushed out by what happens, it lasts years of memory and comes to mind readily. Whom its text names
+ * (`(name) => \`${name('Bram')} …\``), it feels that way toward, and seeing them stirs it.
+ */
+export function lived(text:NamingText, feelings:FeelingLevels):MemoryDraft {
+	return { text, feelings, category: 'semantic', weight: 2, stability: 3650, timestamp: -Infinity };
+}
 
 /** What spawns for `member`. */
 export function bodyOf(member:CastMember):NPCSpawnDef {

@@ -68,8 +68,8 @@ export type CharacterSpec<TCtx = unknown> = RunnerSpec<TCtx> & {
 
 /**
  * What doing `verb` needs of whoever does it: other fields are its args, matched by id or tag; `condition` a watch on
- * `me`, the doer; `reason` what it is told while that fails (else `needs <condition>`), ids in its own names. Gemma 4
- * E4B writes `{ [reason]: { 'use.item': 'Sushi', condition } }` better (72/72 to 58, 2026-11-20): kept for Skaldic Edda.
+ * `me`, the doer; `reason` what it is told while that fails (else `needs <condition>`), ids in its own names. A small
+ * model writes `{ [reason]: { 'use.item': 'Sushi', condition } }` better (72/72 to 58, 2026-11-20): kept for the models trained on it.
  */
 export type Requirement = { verb:string; condition:string; reason?:NamingText; [arg:string]:NamingText | undefined };
 

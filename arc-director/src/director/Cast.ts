@@ -9,7 +9,7 @@ import type { ArcRunner, RunnerOptions } from '../character/arc-runner.js';
 import { Character, type CharacterJSON } from '../character/Character.js';
 import type { Goal, Kit, KitSource } from '../character/character-types.js';
 import { Persona } from '../character/Persona.js';
-import { MemoryPool, MemorySharing } from '../memory/store.js';
+import { FORGETFULNESS, MAX_EPISODIC, MemoryPool, MemorySharing, type MemoryHolding } from '../memory/store.js';
 import { Collective, type CollectiveFields } from '../collective/Collective.js';
 import { usesCollective } from '../collective/who.js';
 import { parse } from '../expr/expr-parse.js';
@@ -90,8 +90,17 @@ export class Cast<TCtx> {
 	public readonly rows = new Map<string, Row<TCtx>>();
 	/** Each character's standing `choose`. */
 	public readonly standing = new WeakMap<Character<TCtx>, Standing>();
+	/**
+	 * How each holder of the cast's memories keeps them: its cap and forgetfulness are its mind's settings (its own mind's,
+	 * else its spec's `mind`, else the director's, else the library's), and it keeps with each what it is stirred to.
+	 */
+	private readonly _holding:MemoryHolding = {
+		maxEpisodic: (holder) => this.settingOf(holder, 'maxEpisodic') ?? MAX_EPISODIC,
+		forgetfulness: (holder) => this.settingOf(holder, 'forgetfulness') ?? FORGETFULNESS,
+		feelings: (holder) => this._director.getFeelings()?.stirredOf(holder),
+	};
 	/** Every memory of the cast, once each: each persona's memory is a view of it. */
-	public pool = new MemoryPool();
+	public pool = new MemoryPool(this._holding);
 
 	constructor(private readonly _director:ArcDirector<TCtx>) {}
 
@@ -103,6 +112,12 @@ export class Cast<TCtx> {
 		const runner = this.rows.get(id)?.runner;
 		const home = runner ? collectiveOf(runner) : null;
 		return home && (runner === home || home.sharing === MemorySharing.Shared) ? [home.id, ...home.characters.map((c) => c.id)] : [id];
+	}
+
+	/** Setting `key` of holder `id`'s mind: its own mind's, else its spec's `mind`, else the director's; unset in all, none. */
+	private settingOf<K extends 'maxEpisodic' | 'forgetfulness'>(id:string, key:K):MindSettings[K] {
+		const runner = this.rows.get(id)?.runner;
+		return runner?.mind?.settings[key] ?? (runner instanceof Character ? runner.mindSettings?.[key] : undefined) ?? this._director.mindDefaults[key];
 	}
 
 	/** The minds of the cast wired so far: characters' own, then collectives'. */
@@ -265,7 +280,7 @@ export class Cast<TCtx> {
 	public wireAll(cast?:CastJSON):void {
 		if (cast) {
 			this.loadFeatures(cast.features);
-			this.pool = MemoryPool.fromJSON(cast.memories);
+			this.pool = MemoryPool.fromJSON(cast.memories, this._holding);
 		}
 		const members = new Set(Object.values(cast?.collectives ?? {}).flatMap((c) => c.characters));
 		const solo = new Set(this.solo.map((spec) => spec.id));
@@ -296,7 +311,7 @@ export class Cast<TCtx> {
 			}
 		}
 		this.rows.clear();
-		this.pool = new MemoryPool();
+		this.pool = new MemoryPool(this._holding);
 		this.loadFeatures(undefined);
 	}
 
@@ -532,7 +547,8 @@ export class Cast<TCtx> {
 			arcProblem: (arc) => dispatcher.arcProblem(owner, arc),
 			queue: director.queue,
 			embed: (texts) => director.models.embed(texts),
-			mood: () => director.getFeelings()?.moodOf(owner.voice.id),
+			moodOf: (id) => director.getFeelings()?.moodOf(id),
+			stir: (id, levels) => director.getFeelings()?.stir(id, levels),
 			features,
 			seenAs: watches.seenAs(mind),
 			worldContext: () => director.contextOf(owner.voice.id) ?? (owner instanceof Collective ? watches.present(owner)?.ctx : undefined),

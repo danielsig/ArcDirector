@@ -233,6 +233,8 @@ export function directMarketplace(host:GameHost, director:ArcDirector<CharacterC
 		.withStealing()
 		.withSight({ limit: 16 })
 		.withMind({ systemNote: LEDGER_NOTE })
+		// What each of them lived stirs as they see each other, and colors what comes back to them.
+		.withFeelings()
 		// A shopper the player talks to, pays or offers to answers with a mind of its own, still one of the hive.
 		.withOwnMind({ on: { say: 'to', offer: 'to', give: 'to' }, when: ({ by, character }) => by.id === 'Player' && character.collective?.id === 'MarketplaceHive' })
 		// What each shopper walked in with. Read again every tick, so a purchase shows, and only while they are in the square.

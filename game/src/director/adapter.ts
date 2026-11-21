@@ -347,10 +347,10 @@ export class GameHost {
 	/** `hungry` or `full` among the traits of whoever has a belly, as it says. */
 	private syncHunger():void {
 		this.world.forEachComponent(Belly, (belly, go) => {
-			const identity = this.arc?.character(idOf(go))?.persona.identity;
+			const persona = this.arc?.character(idOf(go))?.persona;
 			const state = belly.hungry ? HUNGRY : FULL;
-			if (identity && !identity.traits?.includes(state)) {
-				identity.traits = [...(identity.traits ?? []).filter((trait) => trait !== HUNGRY && trait !== FULL), state];
+			if (persona && !persona.identity.traits?.includes(state)) {
+				persona.setIdentity({ traits: [...(persona.identity.traits ?? []).filter((trait) => trait !== HUNGRY && trait !== FULL), state] }, this.arc!.time);
 			}
 		});
 	}

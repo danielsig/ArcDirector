@@ -384,7 +384,7 @@ function isCurrency(name:string, currency:string | undefined):boolean {
 /**
  * A trade as the ledger words it, by who sold: `Cy sold Boots to Odo for 5 gold.` where goods went for money, `bought …
  * from … for` where money went for goods, `traded … to … for` for goods against goods. "Traded" alone is read as the
- * other side's sale (14 of 52 thinks on Qwen 9B, against 3 with "sold").
+ * other side's sale (14 of 52 thinks on a 9B model, against 3 with "sold").
  */
 function tradeLine(currency:string | undefined, me:string, to:string, pay:CountMap, receive:CountMap):(who:(id:string)=>string)=>string {
 	const money = (bundle:CountMap):boolean => Object.keys(bundle).length > 0 && Object.keys(bundle).every((name) => isCurrency(name, currency));

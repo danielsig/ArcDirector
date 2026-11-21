@@ -384,7 +384,7 @@ export class BrowserProvider implements InferenceProvider {
 			kv_unified: false,
 			n_batch: 2 * PROMPT_CHUNK,
 			n_ubatch: PROMPT_CHUNK,
-			// Sliding-window layers (Gemma's) keep only their last few hundred tokens, so a cached prompt could not be
+			// Sliding-window layers keep only their last few hundred tokens, so a cached prompt could not be
 			// taken up again once a reply ran past them: every think read its whole prompt anew. Keeping them whole lets
 			// each think reuse what an earlier one read, at more cache memory.
 			swa_full: true,
@@ -641,7 +641,7 @@ function tooSlow(perSecond:number):string {
  * The most tokens one think's cache may hold, from a model's GGUF metadata, or null when it does not say: past it,
  * moving a reused cached chunk re-ropes the cache in one ggml-webgpu dispatch of more workgroups than WebGPU allows
  * (`Dispatch workgroup count X (65536) exceeds max compute workgroups per dimension (65535)`), which kills the engine.
- * ggml-webgpu does not split that dispatch (wllama 3.8.1). A whole number of reuse chunks: 16 128 for Gemma 4 E4B.
+ * ggml-webgpu does not split that dispatch (wllama 3.8.1). A whole number of reuse chunks: 16 128 for the default browser model.
  */
 export function contextCap(meta:ReadonlyMap<string, string | number>):number | null {
 	const arch = meta.get('general.architecture');

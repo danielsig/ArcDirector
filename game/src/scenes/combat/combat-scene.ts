@@ -14,7 +14,7 @@ import { COMBAT_CHUNKS } from './combat-map';
 import { COMBAT_KNOWLEDGE } from './combat-knowledge';
 import { HEROS_MIGHT } from '../../audio/songs';
 import { GLEN_LOOK } from '../../render/look';
-import { BOW, STAFF, SWORD, SWORD_KEYS, mindsOf, type CastMember, type Scene, type SceneCast } from '../scene';
+import { BOW, STAFF, SWORD, SWORD_KEYS, lived, mindsOf, type CastMember, type Scene, type SceneCast } from '../scene';
 
 /** Whether its character sees an enemy: in sight range with nothing in the way. `others` alone is everyone on the map. */
 const ENEMY_IN_SIGHT = `some(others.filter("enemy").nearby(${SIGHT}))`;
@@ -98,7 +98,7 @@ const HURT_ENEMIES = 'others.filter(u => u is "enemy" && isHurt(u))';
 
 /**
  * A change of tactics in the units' own idiom, laid out as blocks: one program for the whole squad now (`attack` is
- * each unit's own blow) and a law for the next likely turn. Gemma copies this; keep it short.
+ * each unit's own blow) and a law for the next likely turn. Small models copy this; keep it short.
  */
 const FIGHT_EXAMPLE = `
 command(who=units, group=Vanguard) {
@@ -158,6 +158,23 @@ const DAWN_COLORS = { band: 0xf2c14e, rim: 0xb3262e };
 const DUSK_COLORS = { band: 0x2bb3a6, rim: 0x3b2a8c };
 
 /**
+ * What each fighter has lived, and how it felt. Dawn and Dusk were comrades once; Cinder and Nyx were apprentices of one
+ * tower; Wisp and Ash are cousins on opposite sides, and neither aims at the other.
+ */
+const LIVES:Record<string, MemoryDraft[]> = {
+	Dawn: [lived((name) => `${name('Dusk')} and I trained under the same master and were inseparable, until the night I left ${name('Dusk')} to hold the Ember Gate alone.`, { sad: 0.5, loving: 0.4, angry: 0.3 })],
+	Dusk: [lived((name) => `${name('Dawn')} left me to hold the Ember Gate alone. I lived. I have not forgiven it, and I never will.`, { angry: 0.8, sad: 0.5 })],
+	Cinder: [lived((name) => `${name('Nyx')} and I were apprentices of the same tower until she stole my spellbook and ran off to ${name('Dusk')}.`, { angry: 0.7, sad: 0.3 })],
+	Nyx: [lived((name) => `I left ${name('Cinder')} at the tower without a word, and her spellbook with me. I still read her notes in the margins.`, { sad: 0.5, loving: 0.4, stressed: 0.3 })],
+	Brune: [lived((name) => `${name('Dawn')} pulled me out of the river at Calder when my armor dragged me under.`, { loving: 0.7, afraid: 0.4 })],
+	Helms: [lived((name) => `${name('Brune')} broke my shield arm at the tourney of Halde, and laughed while I lay in the sand.`, { angry: 0.6 })],
+	Wisp: [lived((name) => `${name('Ash')} is my cousin. We swore as children never to aim at each other, whatever banner we fought under.`, { loving: 0.6, stressed: 0.5 })],
+	Ash: [lived((name) => `${name('Wisp')} is my cousin, and I would sooner break my bow than loose an arrow at ${name('Wisp')}.`, { loving: 0.6, stressed: 0.5 })],
+	Cade: [lived((name) => `I forged ${name('Brune')}'s sword myself, folded a hundred times, and it has never failed in a fight.`, { happy: 0.6, loving: 0.3 })],
+	Flint: [lived((name) => `${name('Dusk')} found me starving in a gutter and gave me a blade and a name.`, { loving: 0.7, happy: 0.3 })],
+};
+
+/**
  * A fighter in the temple at map cell `x`, `z`, with `equip` in hand: Dawn's party on the west half, Dusk's on the
  * east. A captain keeps its own laws; a unit defends on its own (`roleChoice`) whenever its captain has issued it
  * nothing: it holds its line and blocks, and attacks only on its orders.
@@ -166,7 +183,7 @@ function fighter(id:string, role:'Captain' | 'Witch' | 'Knight' | 'Archer' | 'Bl
 	const dawn = x < 32;
 	const mind = role === 'Captain' ? { tags: ['Captain', 'Healer'], laws: CAPTAIN_LAWS } : { tags: [role], kit: ROLE_KITS[role], choose: roleChoice(role) };
 	const body = { meshID, cell: [x, z] as [number, number], yaw: dawn ? -Math.PI / 2 : Math.PI / 2, equip, hp, team: dawn ? DAWN_COLORS : DUSK_COLORS };
-	return { id, ...mind, of: dawn ? 'DawnParty' : 'DuskParty', body };
+	return { id, ...mind, of: dawn ? 'DawnParty' : 'DuskParty', body, memories: LIVES[id] ?? [] };
 }
 
 /**
@@ -390,6 +407,8 @@ If a captain dies, someone else in the squad takes over. It ends when one squad 
 		// Each of its own side is marked; its commander's roster says who is in reach of whose attack (`getReach`).
 		.withSight({ limit: 16, look: (ctx) => markSides(host, ctx.character, lookWorld(ctx.character, host.scene.ambient, host)) })
 		.withNames(seenInFight)
+		// What each fighter lived stirs as it sees old friends and foes across the line, and shows in its face and voice.
+		.withFeelings()
 		.withMind({
 			thinkInstructions: { off: NO_THINK },
 			verbInstructions: `${DEFAULT_VERB_INSTRUCTIONS} ${FIGHT_DOCTRINE}`,

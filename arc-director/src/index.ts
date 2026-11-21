@@ -41,7 +41,7 @@ export { formatArc, formatArcBlocks, formatStep } from './arc/arc-format.js';
 export { arcFromJSON, arcJSONText, arcToJSON, parseArc } from './arc/wire.js';
 
 export {
-	MemoryPool, MemorySharing, MemoryStore, type MemoryCategory, type MemoryDraft, type MemoryJSON, type MemoryRecord, type Meaning,
+	FORGETFULNESS, MAX_EPISODIC, MemoryPool, MemorySharing, MemoryStore, recallChance, FORGOTTEN, type MemoryCategory, type MemoryDraft, type MemoryHolding, type MemoryJSON, type MemoryRecord, type Meaning, type RestsOn,
 } from './memory/store.js';
 
 export type {
@@ -101,9 +101,9 @@ export { ArcDirector, type CastJSON } from './director/ArcDirector.js';
 export { Ticker } from './director/Ticker.js';
 export { Feature, type FeatureTick, type WatchKernels } from './director/Feature.js';
 export { GoalsFeature, type GoalsOptions } from './character/GoalsFeature.js';
-export { FeelingFeature, type FeelingsOptions } from './character/FeelingFeature.js';
+export { FeelingFeature, feelLine, type FeelingCase, type FeelingsOptions } from './character/FeelingFeature.js';
 export { AcquaintanceFeature, type AcquaintanceOptions } from './character/AcquaintanceFeature.js';
-export { FEELINGS, Feeling, type FeelingDef } from './character/feeling.js';
+export { FEELINGS, Feeling, type FeelingDef, type FeelingLevels, type Mood } from './character/feeling.js';
 export { RegionsFeature, type RegionShape } from './director/RegionsFeature.js';
 export { RequirementsFeature } from './director/RequirementsFeature.js';
 export { SightFeature, type SightOptions } from './perception/SightFeature.js';

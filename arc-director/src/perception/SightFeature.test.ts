@@ -163,6 +163,48 @@ describe('what sight makes out', () => {
 		director.dispose();
 	});
 
+	it('tells once that a thing is gone from where it last saw it, only where it makes that spot out clearly', async () => {
+		const cart:SeenObject = { id: 'Cart', point: [0, -5], tags: [] };
+		const barrel:SeenObject = { id: 'Barrel', point: [0, -30], tags: [] };
+		const things = [cart, barrel];
+		const director = await scene(undefined, things).addCharacter({ id: 'Ada', mind: { rethinkingThreshold: 0 } }).connect();
+		const mind = director.character('Ada')!.mind!;
+		const look = ():string[] => {
+			director.senses.all.sight({ id: 'Ada' }, mind);
+			const told = mind.memory.noteSeen();
+			internalsOf(mind.memory).commitSeen();
+			return told;
+		};
+		const sighting = (id:string):MemoryRecord | undefined => mind.persona.memory.all().find((r) => r.tags.includes(`seen:${id}`));
+		assert.deepEqual(look(), []);
+		assert.deepEqual(sighting('Cart')?.at, [0, -5]);
+		assert.equal(sighting('Bo')?.at, undefined, 'a character moves: none kept');
+		things.length = 0;
+		assert.deepEqual(look(), ['Cart is gone from where you last saw it.'], 'the barrel stood too far to tell');
+		assert.match(sighting('Cart')!.text, /Later it was gone from there\.$/);
+		assert.deepEqual(look(), [], 'said once');
+		things.push(cart);
+		look();
+		assert.equal(sighting('Cart')?.tags.includes('gone'), false, 'seen again');
+		director.dispose();
+	});
+
+	it('finds nothing gone that it carries off itself', async () => {
+		const things:SeenObject[] = [{ id: 'Lute', point: [0, -2], tags: [] }];
+		const pockets:string[] = [];
+		const director = await scene(undefined, things).withInventory(() => ({ pockets })).addCharacter({ id: 'Ada', mind: { rethinkingThreshold: 0 } }).connect();
+		const mind = director.character('Ada')!.mind!;
+		const look = ():string[] => {
+			director.senses.all.sight({ id: 'Ada' }, mind);
+			return mind.memory.noteSeen();
+		};
+		look();
+		things.length = 0;
+		pockets.push('Lute');
+		assert.deepEqual(look(), []);
+		director.dispose();
+	});
+
 	it('sees within a field of view where one is set, a character\'s own over the director\'s; all around without', async () => {
 		// Facing north (-z): Bo ahead, Ivo to the side, Kim a little behind the side, Eda behind.
 		const points:Record<string, Vec> = { Ada: [0, 0], Owl: [0.5, 0], Cat: [0, 0.2], Bo: [0, -3], Ivo: [3, 0], Kim: [-3, 0.8], Eda: [0, 3] };

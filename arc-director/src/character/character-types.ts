@@ -1,8 +1,9 @@
 /** A character's id is its name. `role` is an optional plain tag others may also address it by (`Herbalist`). */
-export type Identity = {
+export interface Identity {
 	role?:string;
+	/** Shown to its mind beside the role; change them with `Persona.setIdentity`. */
 	traits?:string[];
-};
+}
 
 /**
  * Something a character or collective wants. Once reached it stops being a goal: it stays pinned as a memory for

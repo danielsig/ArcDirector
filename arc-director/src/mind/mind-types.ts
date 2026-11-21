@@ -5,6 +5,7 @@ import type { NamingText, TextSegment, TextWithIDs } from '../character/text-wit
 import type { SayTone } from './talk.js';
 import type { ModelChat } from '../director/ModelSlots.js';
 import type { JsonSchema, JsonValue } from '../json.js';
+import type { RestsOn } from '../memory/store.js';
 
 /**
  * What a mind is doing as it thinks, for a host to show; none of it reaches a prompt. `who` is the character acting
@@ -65,6 +66,8 @@ export interface MindEvent {
 	cap?:number;
 	/** How much it matters next to others of its {@link kind}, e.g. a sound's loudness. Affects what is dropped when {@link cap} is reached. Default: 0. */
 	weight?:number;
+	/** The fact it is true only while it is so: once it is not, a mind forgets it, from short-term memory too (`MemoryRecord.restsOn`). */
+	restsOn?:RestsOn;
 };
 
 /** A {@link MindEvent} as a mind holds it: its text by id, whom it is about, and who perceived it. */

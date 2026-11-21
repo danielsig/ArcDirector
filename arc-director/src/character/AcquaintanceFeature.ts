@@ -147,6 +147,10 @@ export class AcquaintanceFeature<TCtx = unknown> extends Feature<TCtx> {
 		const name = book.knownName(ofID);
 		const was = look !== undefined && book.tells(ofID) ? look : voice !== undefined && book.ties(ofID, Knows.Voice, Knows.Name) ? voice : undefined;
 		const mind = (this.director.character(learnerID) ?? this.director.collective(learnerID))?.mind;
+		// What held only while it could not tell them by name (`you do not know which one is Bram yet`) holds no more.
+		if (book.knowsByName(ofID)) {
+			mind?.forgetRestingOn({ unknown: ofID });
+		}
 		// Plain words, as told: it is the label that is now that name, wherever else it reads them still.
 		return mind && was && name && was !== name ? () => mind.pushEvent({ kind: 'learned', text: `You learned that ${was} is ${name}.`, knownBy: [learnerID], tags: ['learned'] }) : undefined;
 	}

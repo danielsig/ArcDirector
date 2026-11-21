@@ -10,7 +10,7 @@ import { observeExpr } from '../expr/stringify.js';
 import { cloneEntity } from '../expr/prev.js';
 import type { ChatContentPart, ChatDelta, ChatMessage, ChatResponse, JsonSchemaResponseFormat, ToolDef } from '../inference/provider.js';
 import { extractJson, isRecord, type JsonSchema } from '../json.js';
-import { mergeTags } from '../memory/store.js';
+import { mergeTags, restsOnFact, type RestsOn } from '../memory/store.js';
 import type { ArcFormat, ConversationTurn, HeldEvent, HeldEventJSON, MindEvent, Saved, Sense, ThinkEvent, ToolSpec } from './mind-types.js';
 import { DEFAULT_YOU_SYMBOL } from './map.js';
 import type { Feature, PromptPart } from '../director/Feature.js';
@@ -19,7 +19,7 @@ import { arcRepairHint, BESIDE_VERBS, failedPart, faultLine, heardMidThinkHint, 
 import type { SightClause } from '../perception/perception-types.js';
 import { idsOf, mapArc, mapExpr, mapLawName, namesOf } from './ids.js';
 import type { NameTarget } from '../character/NameBook.js';
-import type { Mood } from '../character/feeling.js';
+import type { FeelingLevels, Mood } from '../character/feeling.js';
 import { idsIn, joinTextWithIDs, namedText, namingText, personOf, readTextWithIDs, showNamingText, showTextWithIDs, type TextWithIDs } from '../character/text-with-ids.js';
 import { RESERVED_TAGS } from '../world/world-types.js';
 import type { Persona } from '../character/Persona.js';
@@ -37,7 +37,7 @@ import { hasWatch, watchCount } from '../character/watch.js';
 import { asFocusList } from '../character/focus.js';
 import { hand, internalsOf } from '../internals.js';
 import { partLabel, partsText, RejectedParts, ReplyReader, restOfReply, type Rejected } from '../arc/compile.js';
-import { MindMemory, takeOut, type KeptLineJSON } from './MindMemory.js';
+import { MindMemory, takeOut, type KeptLineJSON, type Sighted } from './MindMemory.js';
 import { showInPerson } from '../character/person.js';
 import { URGENT, type ModelChat, type ModelRun } from '../director/ModelSlots.js';
 
@@ -145,6 +145,21 @@ export type MindSettings = {
 	 * rest wait for the next. Higher catches up faster after a load or a burst of events, at a bigger request. Default 64.
 	 */
 	embedBatch?:number;
+	/**
+	 * The most plain episodic memories its owner keeps: past it the weakest go, the oldest of as weak first. A character of
+	 * a collective with no mind of its own reads its spec's `mind`, then the director's. Default 256.
+	 */
+	maxEpisodic?:number;
+	/**
+	 * How fast its owner forgets: how many times as fast time passes for its memories as for `director.time`, so a day of
+	 * memory is 24 hours of `director.time` over it. Default 60 (`FORGETFULNESS`): a day of memory per 24 minutes, as in
+	 * games with days and nights; an episode never used again is still 90% likely after 24 minutes and forgotten after about
+	 * a day of play. Set it to how many of the world's days pass per real day (72 for 20-minute days); twice it for an old
+	 * man who forgets; 0 forgets nothing but what `maxEpisodic` pushes out.
+	 */
+	forgetfulness?:number;
+	/** Thinks between two {@link Mind.forgetFaded} of its own; 0 never (sleep or the host does it). Default 50. */
+	forgetEvery?:number;
 	/** Memories brought into each prompt, and the most `recall` returns. Default 5. */
 	recallK?:number;
 	/** No `observe` tool. */
@@ -194,6 +209,7 @@ const MIND_DEFAULTS = {
 	intrusionThreshold: 0.55,
 	intrusionCooldown: 45,
 	embedBatch: 64,
+	forgetEvery: 50,
 	recallK: 5,
 	hideObserve: false,
 	offerAppendedCommands: false,
@@ -268,8 +284,13 @@ export type MindDeps<TCtx = unknown> = {
 	queue?:MindQueue;
 	/** Vectors for memories and recall queries. Omit to recall by text alone. */
 	embed?:(texts:string[])=>Promise<number[][]>;
-	/** Its voice's mood, as recall reads it (`FeelingFeature.moodOf`): memories of it come unbidden more readily. */
-	mood?:()=>Mood | undefined;
+	/**
+	 * Character `id`'s mood, as recall reads it (`FeelingFeature.moodOf`): its voice's, or one of its collective's
+	 * characters'. Memories steeped in it come unbidden more readily.
+	 */
+	moodOf?:(id:string)=>Mood | undefined;
+	/** Character `id` feels each of `levels` that much more (`FeelingFeature.stir`): what a memory that comes back stirs. */
+	stir?:(id:string, levels:FeelingLevels)=>void;
 	/** Host naming policy seen from this mind: the base name for a character. Omit to use ids. */
 	seenAs?:(target:NameTarget)=>string;
 	/** The context its tools and articles look from. Default: its voice's. */
@@ -344,8 +365,6 @@ const GOALS_SCHEMA:JsonSchema = {
 
 /** Thinks in a row that only talk or wait before the next one is told to stop talking and act. */
 const TALK_STREAK = 3;
-/** Thinks between prunes of its name book ({@link Mind.pruneNames}). */
-export const NAME_PRUNE_THINKS = 50;
 /** Verbs that change nothing in the world. An arc of only these is talk. */
 const TALK_VERBS = new Set(['say', 'wait', 'think', 'examine', 'remember']);
 /** What a mind hears said to it, which a think under way may take in (`maxInterruptionsPerThink`): lines, and offers. */
@@ -382,10 +401,10 @@ export type MindFields<TCtx> = {
 	/** How one of its own laws went, for its next prompt to pin. */
 	ingestLawResult(law:string, result:ArcResult):void;
 	/**
-	 * What its sight showed this think, each clause with the names of what it saw: its sightings to remember. With
-	 * `salience`, how much each name it sees or carries should bring its memories to mind (0–1).
+	 * What its sight showed this think, each clause with the names of what it saw: its sightings to remember; and by id,
+	 * what else the look found (`seen`): what should bring memories to mind, each thing's state and point, what is gone.
 	 */
-	sighted(clauses:readonly SightClause[], salience?:ReadonlyMap<string, number>, states?:ReadonlyMap<string, Readonly<Record<string, string>>>):void;
+	sighted(clauses:readonly SightClause[], seen?:Sighted):void;
 	/**
 	 * Takes from `from` what character `id` knows of what that mind holds for the moment: its waiting events, recent
 	 * lines and conversation. `from` keeps what others of its still know.
@@ -463,7 +482,7 @@ export class Mind<TCtx = unknown> {
 
 	constructor(settings:MindSettings = {}) {
 		this.settings = { ...settings };
-		this.memory = new MindMemory(this, { events: () => this._pendingEvents, isSelf: (id) => this.isSelf(id), ownKnowers: () => this.ownKnowers(), group: () => this.group(), controls: (id) => this.controls(id), embed: () => this._deps.embed, mood: () => this._deps.mood?.(),
+		this.memory = new MindMemory(this, { events: () => this._pendingEvents, isSelf: (id) => this.isSelf(id), ownKnowers: () => this.ownKnowers(), group: () => this.group(), controls: (id) => this.controls(id), embed: () => this._deps.embed, moodOf: (id) => this._deps.moodOf?.(id), stir: (id, levels) => this._deps.stir?.(id, levels),
 			hasFallen: (id) => this._deps.hasFallen?.(id) ?? false,
 			manner: (turn) => (this._deps.features ?? []).map((feature) => feature.manner(turn)).filter(Boolean).join(' ') });
 		hand(this, {
@@ -483,7 +502,7 @@ export class Mind<TCtx = unknown> {
 			arcStarted: (arc) => this._deps.queue?.beginArc(this.id, arc),
 			arcEnded: () => this._deps.queue?.endArc(this.id),
 			ingestLawResult: (law, result) => this.ingestLawResult(law, result),
-			sighted: (clauses, salience, states) => this.memory.sighted(clauses, salience, states),
+			sighted: (clauses, seen) => this.memory.sighted(clauses, seen),
 			adopt: (from, id) => this.adopt(from, id),
 		} satisfies MindFields<TCtx>);
 	}
@@ -714,6 +733,7 @@ export class Mind<TCtx = unknown> {
 				remember: result.verb !== 'think' && result.verb !== 'say' && !result.unreachable,
 				who: [],
 				knownBy: this.ownKnowers(),
+				...result.restsOn ? { restsOn: result.restsOn } : {},
 			});
 		}
 		if (wake) {
@@ -747,7 +767,7 @@ export class Mind<TCtx = unknown> {
 	/**
 	 * Drops the names its book holds for anyone nothing it still uses names: its memories, conversation, what it heard,
 	 * goals, watches, laws, sight focus, the program it runs, and its last prompt (sight, earshot, roster). Every
-	 * {@link NAME_PRUNE_THINKS} thinks, and before its persona is saved. See {@link NameBook.prune} for what stays anyway.
+	 * `forgetEvery` thinks ({@link forgetFaded}), and before its persona is saved. See {@link NameBook.prune} for what stays anyway.
 	 */
 	public pruneNames():void {
 		const used = new Set([...this.memory.ids(), ...this._named, ...this._lastNamed]);
@@ -779,6 +799,28 @@ export class Mind<TCtx = unknown> {
 		// A voice it knows reads as its person: that name is in use too.
 		[...used].forEach((id) => used.add(personOf(id)));
 		persona.names.prune(used);
+	}
+
+	/**
+	 * What sleep does: its persona forgets what has faded and folds memories told the same way into one
+	 * (`MemoryStore.forgetFaded`), then its name book drops whom nothing names any more ({@link pruneNames}). Call it as its
+	 * character falls asleep, or `director.forgetFaded()` for everyone; every mind does it every `forgetEvery` thinks too.
+	 */
+	public forgetFaded():void {
+		this.persona.memory.forgetFaded(this._now);
+		this.pruneNames();
+	}
+
+	/**
+	 * It forgets what rests on `fact` (`RestsOn`), now that it is so no more: the events it has yet to think over, its last
+	 * result, its recent lines and its memories (`you do not know which one is Bram yet`, once it can tell Bram).
+	 */
+	public forgetRestingOn(fact:RestsOn):void {
+		this._pendingEvents.splice(0, Infinity, ...this._pendingEvents.filter((event) => !restsOnFact(event, fact)));
+		if (this.lastResult && restsOnFact(this.lastResult, fact)) {
+			this.lastResult = undefined;
+		}
+		internalsOf(this.memory).forgetRestingOn(fact);
 	}
 
 	/** The voice's id: the character that acts and speaks for this mind, or the collective's own id while it has no commander. */
@@ -1062,7 +1104,7 @@ export class Mind<TCtx = unknown> {
 				return;
 			}
 			if (raw.identity !== undefined) {
-				this.persona.applyIdentityPatch(raw.identity, this.id, this._now);
+				this.persona.applyIdentityPatch(raw.identity, this._now);
 			}
 			if (Array.isArray(raw.goals)) {
 				this.persona.applyGoalList(raw.goals);
@@ -1087,6 +1129,7 @@ export class Mind<TCtx = unknown> {
 		const parts:PromptPart = {};
 		const join = (a:string | undefined, b:string | undefined, by:string):string | undefined => [a, b].filter(Boolean).join(by) || a || b;
 		for (const part of (this._deps.features ?? []).map((feature) => feature.promptPart(this))) {
+			parts.feeling = join(parts.feeling, part?.feeling, '\n');
 			parts.mentioned = join(parts.mentioned, part?.mentioned, '\n');
 			parts.lastResultArticles = join(parts.lastResultArticles, part?.lastResultArticles, '\n');
 			parts.offers = join(parts.offers, part?.offers, '\n');
@@ -1214,21 +1257,24 @@ export class Mind<TCtx = unknown> {
 		return sensed;
 	}
 
-	private async volatileUser(sensed:Record<string, unknown>, parts:PromptPart, extra?:string):Promise<string> {
+	/** Its prompt's changing part, and what every feature puts in this think's prompt, asked once what came back stirred it. */
+	private async volatileUser(sensed:Record<string, unknown>, extra?:string):Promise<{ user:string; parts:PromptPart }> {
 		const perceptionText = Object.values(sensed)
 			.map((v) => typeof v === 'string' ? v : JSON.stringify(v))
 			.join('\n');
 		const meaning = await this.memory.meanings(perceptionText, this._pendingAbout);
-		const intrusion = this.memory.intrude(perceptionText, this._pendingEvents.flatMap((e) => mergeTags(e.tags, e.who)), meaning.seen, meaning.mood);
+		const intrusions = this.memory.intrude(perceptionText, this._pendingEvents.flatMap((e) => mergeTags(e.tags, e.who)), meaning.seen, meaning.lens);
+		const parts = this.promptParts();
 		const changes = this.memory.noteSeen();
-		const { recalled, ...lines } = this.memory.lines(perceptionText, this._pendingAbout, meaning.recalled);
+		const { recalled, ...lines } = this.memory.lines(perceptionText, this._pendingAbout, meaning.recalled, meaning.lens);
 		// Its last result is said once, as Last verb result, not again among the recent lines.
 		const last = this.lastResult && resultLine(this.lastResult);
 		const lastLine = last && showTextWithIDs(last, (id) => this.nameOf(id)).trim();
 		lines.recent = lines.recent.filter((line) => line.trim() !== lastLine);
-		return [extra, volatileBlock({
+		const user = [extra, volatileBlock({
+			feeling: parts.feeling,
 			senses: sensed,
-			intrusion,
+			intrusions,
 			changes,
 			lastResult: this.lastResult && { ...this.lastResult, reason: this.lastResult.reason && showNamingText(this.lastResult.reason, (id) => this.nameOf(id)) },
 			lastResultArticles: parts.lastResultArticles,
@@ -1248,6 +1294,7 @@ export class Mind<TCtx = unknown> {
 			program: this.ownProgram(),
 			compact: this.compact,
 		}), this.extraVolatile(parts), thinkLine(this.thinksWith.thinking, this.setting('thinkInstructions'), this.compact)].filter(Boolean).join('\n\n');
+		return { user, parts };
 	}
 
 	private namedWatches(watches:Watches):Watches {
@@ -1293,8 +1340,9 @@ export class Mind<TCtx = unknown> {
 	/** Asks the model until it has an Arc. `kept` collects the steps of a reply that stand while others go back. */
 	private async writeArc(kept:Arc, chat:ModelChat, rethink = false):Promise<Arc | null> {
 		this._thinks += 1;
-		if (this._thinks % NAME_PRUNE_THINKS === 0) {
-			this.pruneNames();
+		const every = this.setting('forgetEvery');
+		if (every > 0 && this._thinks % every === 0) {
+			this.forgetFaded();
 		}
 		this._lastNamed = this._named;
 		this._named = new Set();
@@ -1304,7 +1352,10 @@ export class Mind<TCtx = unknown> {
 		// A repeat after new input (speech, an interruption, a nudge) can be right; without any, the model is stuck.
 		const freshInput = this.hasFreshInput();
 		const sensed = this.gatherSensed();
-		const parts = this.promptParts();
+		// Talking in circles: characters who hear each other keep answering, so a streak of talk ends in a deed.
+		const { user, parts } = await this.volatileUser(sensed, this._talkStreak >= TALK_STREAK
+			? `You have only talked or waited for ${this._talkStreak} thinks. Stop talking: take the next step toward your goal with a verb that does something. Look up what you lack with a tool instead of asking again.`
+			: undefined);
 		const verbs = this.owner.activeVerbs();
 		const format = this.arcFormat;
 		let reply = this.replyFormat(verbs, format);
@@ -1334,10 +1385,6 @@ export class Mind<TCtx = unknown> {
 			toolArgs: toolFirstArgs(offered),
 			style: this.thinksWith.promptStyle,
 		});
-		// Talking in circles: characters who hear each other keep answering, so a streak of talk ends in a deed.
-		const user = await this.volatileUser(sensed, parts, this._talkStreak >= TALK_STREAK
-			? `You have only talked or waited for ${this._talkStreak} thinks. Stop talking: take the next step toward your goal with a verb that does something. Look up what you lack with a tool instead of asking again.`
-			: undefined);
 		// This think has read its laws' results: from now on they are only remembered.
 		this.rememberLaws(this._lawResults);
 		this._lawResults = [];
@@ -1891,7 +1938,7 @@ export class Mind<TCtx = unknown> {
 			return { status: 'ok', verb: 'drop_goal' };
 		}
 		if (step.verb === 'set_identity') {
-			const changed = this.persona.applyIdentityPatch(step.args, this.id, this._now);
+			const changed = this.persona.applyIdentityPatch(step.args, this._now);
 			return { status: changed ? 'ok' : 'failed', verb: 'set_identity', reason: changed ? undefined : 'nothing to change' };
 		}
 		return undefined;

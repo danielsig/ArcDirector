@@ -1071,8 +1071,9 @@ export abstract class ArcRunner<TCtx = unknown> {
 		for (const [key, value] of marked) {
 			const id = book.unmark(value as string);
 			if (id === undefined) {
-				// The name as it wrote it: who that is, it does not know.
-				return { status: 'failed', verb: step.verb, reason: `you do not know which one is ${(value as string).slice(1)} yet: ask who people are` };
+				// The name as it wrote it: who that is, it does not know, until it learns.
+				const name = (value as string).slice(1);
+				return { status: 'failed', verb: step.verb, reason: `you do not know which one is ${name} yet: ask who people are`, restsOn: { unknown: name } };
 			}
 			args[key] = id;
 		}

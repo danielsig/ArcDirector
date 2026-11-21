@@ -4,6 +4,7 @@ import { isRecord } from '../json.js';
 import { MemoryStore, nameTags, type MemoryDraft } from '../memory/store.js';
 import { NameBook, type Knows, type NameBookJSON } from './NameBook.js';
 import type { SightField } from '../perception/sight.js';
+import type { FeelingLevels } from './feeling.js';
 import { GOAL_PINNED_THINKS, type Identity, type Goal, type WatchInput, type Watches } from './character-types.js';
 import {
 	applyWatchOps,
@@ -35,6 +36,22 @@ export type PersonaSpec = {
 	maxGoals?:number;
 	/** Pinned ones are kept up to date from the spec, matched by their first two tags. */
 	memories?:MemoryDraft[];
+	/**
+	 * What it cares about, in its own words (`I love fishing.`, `Old books are my passion.`): where the director has an
+	 * embedding model, memories like these come to mind unbidden more readily, as a mood's do. From the host's spec.
+	 */
+	interests?:readonly string[];
+	/**
+	 * What it feels whatever happens, 0 to 1 (`withFeelings`): its feelings never fade below these, which color what comes
+	 * to mind without showing on its face. A paranoid one `{ afraid: 0.3, stressed: 0.3 }`. From the host's spec.
+	 */
+	disposition?:FeelingLevels;
+	/**
+	 * How strongly it is stirred (`withFeelings`): what memories, sightings, verbs and `stir` do to it is multiplied by
+	 * this, per feeling (`{ angry: 2, loving: 0.3 }`: quick to anger, cold) or all at once (`0.3` stoic, `2` emotional); 1
+	 * by default. Not what it shows by `express`. From the host's spec.
+	 */
+	temperament?:number | FeelingLevels;
 	watches?:WatchInput;
 	pinnedWatches?:WatchInput;
 	watchesWritable?:boolean;
@@ -53,13 +70,12 @@ export type PersonaSpec = {
 	knows?:Readonly<Record<string, readonly Knows[] | true>>;
 };
 
+/** A persona as a save keeps it. Its memories are the cast's (`CastJSON.memories`). */
 export type PersonaJSON = {
 	identity:Identity;
 	/** Their `until` tests are not saved: a load takes them from the host's spec again, by the goal's text. */
 	goals:Goal<never>[];
 	maxGoals:number;
-	/** Its owner's cap on plain episodic memories. The memories themselves are the cast's (`CastJSON.memories`). */
-	maxEpisodic:number;
 	names?:NameBookJSON;
 	watches?:WatchInput;
 	pinnedWatches?:WatchInput;
@@ -93,6 +109,9 @@ export class Persona {
 	public sightLimit:number | undefined;
 	public fieldOfView:SightField | undefined;
 	public knows:PersonaSpec['knows'];
+	public interests:readonly string[];
+	public disposition:FeelingLevels | undefined;
+	public temperament:number | FeelingLevels | undefined;
 
 	constructor(spec:PersonaSpec, memory:MemoryStore) {
 		this.identity = spec.identity
@@ -101,6 +120,9 @@ export class Persona {
 		this.goals = spec.goals ? spec.goals.map((g) => ({ ...g })) : [];
 		this.maxGoals = spec.maxGoals ?? 5;
 		this.memory = memory;
+		this.interests = spec.interests ?? [];
+		this.disposition = spec.disposition;
+		this.temperament = spec.temperament;
 		// Every caller with spec memories builds it fresh: a loaded persona adds its pinned ones itself (`fromJSON`).
 		this.addSpecMemories(spec.memories ?? [], true);
 		this.pinnedWatches = asWatches(spec.pinnedWatches);
@@ -126,7 +148,7 @@ export class Persona {
 	public addSpecMemories(drafts:readonly MemoryDraft[], fresh:boolean):void {
 		for (const mem of drafts) {
 			const tags = mem.tags ?? [];
-			const kept = { category: mem.category ?? 'episodic', text: mem.text, knownBy: mem.knownBy, writer: mem.writer ?? this.memory.owner, tags, weight: mem.weight };
+			const kept = { category: mem.category ?? 'episodic', text: mem.text, knownBy: mem.knownBy, writer: mem.writer ?? this.memory.owner, tags, weight: mem.weight, stability: mem.stability, feelings: mem.feelings };
 			if (!mem.pinned) {
 				if (fresh) {
 					this.memory.add({ ...kept, pinned: false }, mem.timestamp ?? 0);
@@ -233,27 +255,38 @@ export class Persona {
 			.slice(0, this.maxGoals);
 	}
 
-	/** A model's `{ role, traits }`. Returns whether anything changed; a change restamps the identity memory. */
-	public applyIdentityPatch(raw:unknown, id:string, now:number):boolean {
-		if (!isRecord(raw)) {
-			return false;
-		}
-		const nextRole = typeof raw.role === 'string' ? raw.role.trim() : '';
+	/**
+	 * Change who it is, the host's way and a model's (`set_identity`) alike: a new `role`, new `traits` (`[]` clears
+	 * them), or both; what is left out stays. Returns whether anything changed. A change restamps the identity memory at
+	 * `now` (`director.time`).
+	 */
+	public setIdentity(identity:Identity, now:number):boolean {
+		const role = identity.role?.trim();
+		const traits = identity.traits?.map((t) => t.trim()).filter((t) => t.length > 0);
 		let changed = false;
-		if (nextRole.length > 0 && nextRole !== this.identity.role) {
-			this.identity.role = nextRole;
+		if (role && role !== this.identity.role) {
+			this.identity.role = role;
 			changed = true;
 		}
-		if (Array.isArray(raw.traits)) {
-			this.identity.traits = raw.traits.filter((x):x is string => (
-				typeof x === 'string' && x.trim().length > 0
-			));
+		if (traits && traits.join('\n') !== (this.identity.traits ?? []).join('\n')) {
+			this.identity.traits = traits;
 			changed = true;
 		}
 		if (changed) {
-			this.stampIdentity(id, now);
+			this.stampIdentity(now);
 		}
 		return changed;
+	}
+
+	/** A model's `{ role, traits }`, read as {@link setIdentity} takes it. Returns whether anything changed. */
+	public applyIdentityPatch(raw:unknown, now:number):boolean {
+		if (!isRecord(raw)) {
+			return false;
+		}
+		return this.setIdentity({
+			role: typeof raw.role === 'string' ? raw.role : undefined,
+			traits: Array.isArray(raw.traits) ? raw.traits.filter((x):x is string => typeof x === 'string') : undefined,
+		}, now);
 	}
 
 	/** It is reached: no longer a goal, pinned for a few thinks, and after that only `recall` finds it. Known by `knownBy`, by default the owner. */
@@ -293,8 +326,9 @@ export class Persona {
 		}
 	}
 
-	private stampIdentity(id:string, now:number):void {
+	private stampIdentity(now:number):void {
 		// Kept by id, read as `You are Bob.` by its own mind.
+		const id = this.memory.owner;
 		const text = (name:(id:string)=>string):string => `${name(id)} is ${id}.${this.identity.role ? ` Role: ${this.identity.role}.` : ''}`;
 		const existing = this.memory.pinned().find((row) => (
 			row.category === 'identity' || row.tags.includes('identity')
@@ -320,7 +354,6 @@ export class Persona {
 			identity: { ...this.identity, traits: this.identity.traits ? [...this.identity.traits] : undefined },
 			goals: this.goals.map(({ until, ...goal }) => (typeof until === 'string' ? { ...goal, until } : goal)),
 			maxGoals: this.maxGoals,
-			maxEpisodic: this.memory.maxEpisodic,
 			names: this.names.toJSON(),
 			watches: copyWatches(this.watches),
 			pinnedWatches: copyWatches(this.pinnedWatches),
@@ -344,9 +377,8 @@ export class Persona {
 			const until = test(goal);
 			return until ? { ...goal, until } : goal;
 		});
-		const persona = new Persona({ identity: json.identity, goals }, memory);
+		const persona = new Persona({ identity: json.identity, goals, interests: host.interests, disposition: host.disposition, temperament: host.temperament }, memory);
 		persona.addSpecMemories(host.memories ?? [], false);
-		persona.memory.maxEpisodic = json.maxEpisodic;
 		persona.maxGoals = json.maxGoals;
 		persona.names.load(json.names);
 		persona.pinnedWatches = mergePinnedWatches(asWatches(host.pinnedWatches), asWatches(json.pinnedWatches));

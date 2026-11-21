@@ -10,7 +10,7 @@ import { findObject, isLiving } from '../../director/names';
 import { BODY_VERBS, BUILDING_VERB_INSTRUCTIONS, GAME_VERBS } from '../../director/game-verbs';
 import { fightVerbs } from '../../director/fight-verbs';
 import { roomBounds, type NPCSpawnDef } from '../../world/spawn';
-import { STAFF, SWORD, mindsOf, type CastMember, type SceneCast } from '../scene';
+import { STAFF, SWORD, lived, mindsOf, type CastMember, type SceneCast } from '../scene';
 import type { CharacterCtx, SceneGoals, SceneHooks } from '../../director/game-types';
 import { Door } from '../../kit/door/door';
 import { Inscription } from '../../kit/inscription/inscription';
@@ -350,7 +350,10 @@ function forgetTeam(host:GameHost):void {
 	}
 }
 
-/** The party, in the Gatehouse. Their goals come with the cast (`DUNGEON_CAST`). */
+/**
+ * The party, in the Gatehouse. Their goals come with the cast (`DUNGEON_CAST`). Seraphine has loved Valerius for years; he
+ * has not the faintest idea, and Morrigan has noticed. Kaelen, the party's archer, is the player.
+ */
 export const KNIGHT:CastMember = {
 	id: 'Valerius',
 	body: delver('KnightMale', 8, 40.9, 90, { yaw: 0, streams: true, equip: SWORD, moves: ['cleave'] }),
@@ -367,6 +370,11 @@ export const KNIGHT:CastMember = {
 			pinned: true,
 		},
 		...QUEST_MEMORIES,
+		lived((name) => `I held the hand of ${name('Morrigan')}'s mother as she died, and I swore on my sword I would keep her girl alive.`, { loving: 0.8, sad: 0.6 }),
+		lived((name) => `A cave spider as big as a hound dragged my squire Tobin into the dark at Blackmere, and my legs would not move. Every ${name('Cobweb')} brings back his call.`, { afraid: 0.9, sad: 0.7 }),
+		lived((name) => `${name('Seraphine')} sat up with me three nights when the marsh fever took me. A truer friend I never had.`, { loving: 0.5, happy: 0.4 }),
+		lived((name) => `${name('Seraphine')} tucked a sprig of heather into my glove before the Ashford fight. Healers and their herbs: it kept the moths off, I suppose.`, { happy: 0.3 }),
+		lived((name) => `${name('Player')} and I held the old bridge at Farrow a whole night, back to back, and laughed about it at dawn.`, { loving: 0.5, stressed: 0.6 }),
 	],
 	laws: [RALLY, GUARD, STRIKE, REGROUP],
 };
@@ -386,6 +394,11 @@ export const HEALER:CastMember = {
 			pinned: true,
 		},
 		...QUEST_MEMORIES,
+		lived((name) => `${name('Valerius')} gave me his cloak in the snow at Harrowpass and never asked for it back. I still sleep under it.`, { loving: 0.9 }),
+		lived((name) => `I tucked a sprig of heather into ${name('Valerius')}'s glove before the Ashford fight, and he thanked me for keeping the moths off. He has no idea.`, { loving: 0.8, sad: 0.3 }),
+		lived((name) => `When ${name('Valerius')} fell at the ford, my hands shook for the first time in six years of healing.`, { afraid: 0.8, loving: 0.7 }),
+		lived((name) => `${name('Morrigan')} set my apron alight with her very first hex and laughed until she cried. So did I.`, { happy: 0.8, loving: 0.4 }),
+		lived('I lost a little girl to the gray fever at the chapel, and no prayer of mine could hold her.', { sad: 0.8 }),
 	],
 	laws: [FLEE, MEND, STRIKE, REGROUP],
 };
@@ -406,6 +419,11 @@ export const WITCH:CastMember = {
 		},
 		SUCCESSION,
 		...QUEST_MEMORIES,
+		lived('My mother taught me witchfire by candlelight, the winter before the sickness took her.', { sad: 0.6, loving: 0.8 }),
+		lived((name) => `${name('Valerius')} once fled from a spider the size of a coin, and I will never let him forget it.`, { happy: 0.8, loving: 0.4 }),
+		lived((name) => `${name('Seraphine')} hums louder whenever ${name('Valerius')} walks past. She is sweet on him, and the great oaf has not noticed a thing.`, { happy: 0.6 }),
+		lived('I burned down the old library at Vell showing off a hex. Nobody knows it was me.', { sad: 0.6, stressed: 0.6 }),
+		lived((name) => `${name('Player')} shot an apple off my head on a dare, and I never told anyone my knees were shaking.`, { stressed: 0.6, happy: 0.6 }),
 	],
 	// No GUARD: protect pulled her into the melee, behind Valerius. She hexes from where she stands.
 	laws: [RALLY, STRIKE, REGROUP],
@@ -694,6 +712,8 @@ export function directDungeon(host:GameHost, director:ArcDirector<CharacterCtx, 
 		})
 		// A law's watch is false this long before it starts again: a foe just at the edge of a watch no longer flips them.
 		.withRearm(1.5)
+		// What they lived stirs as they see each other (and the cobwebs), and shows in their faces and voices.
+		.withFeelings()
 		.withDefaultKit({ verbs: [...GAME_VERBS, 'set_status', 'rest', 'attack', 'block', 'heal', 'protect', ...Object.keys(ATTACKS)] })
 		// Monsters go by what they are; the player goes by the scene's name for them, the party's archer.
 		.withNames((observer, target) => (target.id === 'Player' ? host.scene.player?.name ?? target.id : target.id))

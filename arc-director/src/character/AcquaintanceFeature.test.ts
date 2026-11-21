@@ -214,6 +214,32 @@ describe('who knows whom', () => {
 		assert.deepEqual(waved, ['Bram'], 'once she knows him, the host gets him');
 		director.dispose();
 	});
+
+	it('forgets that it could not tell someone by name once it can: its memory, recent lines, last result and waiting events', async () => {
+		const director = await scene({}, {}, {}, () => ({ content: 'wave(Bram)', toolCalls: [] }))
+			.withVerbs((v) => v.add('wave', { args: { target: 'id' } }))
+			.withDefaultKit({ verbs: ['wait', 'say', 'wave'] })
+			.onVerb((call) => ({ status: 'ok', verb: call.verb }))
+			.connect();
+		const ada = director.character('Ada')!;
+		const mind = ada.mind!;
+		sight(director, 'Ada');
+		const failed = await ada.enact((await mind.thinkNow({ enact: false }))!);
+		const notYet = /do not know which one is Bram yet/;
+		const kept = ():string[] => ada.persona.memory.all().map((r) => r.text).filter((text) => notYet.test(text));
+		mind.ingestResult(failed);
+		internalsOf(mind.memory).absorb();
+		assert.equal(kept().length, 1, 'a failure is kept');
+		assert.ok(mind.memory.talkedOf().some((line) => notYet.test(line)));
+		mind.ingestResult(failed);
+		director.getTalk()!.say('Bram', 'I\'m Bram.', 'Ada', 1);
+		assert.deepEqual(kept(), []);
+		assert.ok(!mind.memory.talkedOf().some((line) => notYet.test(line)));
+		assert.equal(mind.lastResult, undefined);
+		assert.ok(!mind.events().some((e) => notYet.test(e.text)), 'the one it had yet to think over too');
+		assert.ok(mind.events().some((e) => e.text === 'You learned that StrangerA is Bram.'));
+		director.dispose();
+	});
 });
 
 describe('introductions', () => {

@@ -35,6 +35,8 @@ export type FeatureTick = {
  * words their headers, so the prompt reads the same whichever features fill it).
  */
 export type PromptPart = {
+	/** How the mind feels now, first in its prompt's changing part. */
+	feeling?:string;
 	/** Lines for what was said and heard lately, under short-term memory. */
 	mentioned?:string;
 	/** Lines for the names in a failed last result, under it. */
@@ -171,6 +173,12 @@ export abstract class Feature<TCtx = unknown> {
 	public seen(ctx:TCtx, selfID:string, objects:SeenObject[]):SeenObject[] {
 		return objects;
 	}
+
+	/**
+	 * Character `id` looked, for a mind that thinks through its eyes, and made out each of `salience` by id, with how much
+	 * it stands before it (0–1: close and ahead most).
+	 */
+	public looked(id:string, salience:ReadonlyMap<string, number>):void {}
 
 	/** How `turn` was said, in the word Current Conversation shows it with (`growls`, `angrily`); features' words join in order. */
 	public manner(turn:Manner):string | undefined {

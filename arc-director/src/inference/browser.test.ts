@@ -155,7 +155,7 @@ describe('browser', () => {
 		}));
 		assert.equal(meta.get('gemma4.attention.key_length'), 512);
 		assert.equal(meta.has('tokenizer.ggml.tokens'), false, 'arrays of strings are skipped');
-		// Gemma 4 E4B: 16 384 tokens x 2 heads x 512 is 65 536 workgroups of 256, one past WebGPU's most.
+		// The default browser model: 16 384 tokens x 2 heads x 512 is 65 536 workgroups of 256, one past WebGPU's most.
 		assert.equal(contextCap(meta), 16128);
 		assert.equal(contextCap(new Map([['general.architecture', 'gemma4']])), null, 'a header that names no heads caps nothing');
 	});

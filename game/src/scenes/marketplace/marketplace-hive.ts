@@ -4,7 +4,7 @@ import { MarketplaceNPC, Named, idOf } from '../../engine/components';
 import { DemoMeshRenderer } from '../../engine/demo-mesh-renderer';
 import type { DemoWorld } from '../../engine/demo-world';
 import { spawnNPC, type NPCSpawnDef } from '../../world/spawn';
-import { SWORD, type CastMember, type SceneCast } from '../scene';
+import { SWORD, lived, type CastMember, type SceneCast } from '../scene';
 import { SELLERS, type Seller } from './wares';
 import { Door } from '../../kit/door/door';
 
@@ -124,6 +124,74 @@ function shopper(id:string, meshID:string, cell:[number, number], wallet:number,
 	return { id, tags: shopperTags(wants, gate), of: 'MarketplaceHive', body };
 }
 
+/**
+ * What the square's people have lived, and how it felt. Nell came for a Scarf for Rook, who has no idea she is sweet on
+ * him; Baker caught Rook stealing a Loaf as a boy and gave him a second one.
+ */
+const LIVES:Record<string, MemoryDraft[]> = {
+	Mira: [
+		lived((name) => `${name('Baker')} gave me a warm ${name('Bun')} every morning the winter my father lost his work, and never let me pay.`, { loving: 0.6, sad: 0.4 }),
+		lived('I won the spring footrace along the canal, barefoot, and the whole square cheered.', { happy: 0.8, stressed: 0.4 }),
+	],
+	Tomas: [
+		lived('Bandits took my whole caravan on the north road last spring. I walked home with nothing but my boots.', { sad: 0.6, afraid: 0.5, stressed: 0.5 }),
+		lived((name) => `${name('Cutler')} and I have haggled over knives for twenty years, and I have never once won.`, { happy: 0.5, angry: 0.2 }),
+	],
+	Nell: [
+		lived((name) => `${name('Rook')} carried my basket all the way home in the rain once, and did not say a word. I have thought of little else since.`, { loving: 0.9, happy: 0.4 }),
+		lived((name) => `${name('Rook')} is off to the watch at Saltmere before winter. I mean to give him a ${name('Scarf')} to remember me by, and I will not cry.`, { loving: 0.8, sad: 0.5 }),
+	],
+	Rook: [
+		lived((name) => `I stole a ${name('Loaf')} from ${name('Baker')} when I was eight. She caught me, gave me a second one, and I have paid for my bread ever since.`, { loving: 0.5, sad: 0.4 }),
+		lived((name) => `${name('Nell')} keeps giving me apples for no reason. Odd girl. Kind, though.`, { happy: 0.3 }),
+		lived('I lost my sister in the crowd at the harvest fair and found her three days later, asleep in a hay cart.', { afraid: 0.7, happy: 0.6 }),
+	],
+	Ferris: [
+		lived((name) => `My little brother lies sick with the cough at home, and ${name('Apothecary')}'s ${name('Tonic')} is the only thing that eases it.`, { sad: 0.6, loving: 0.7, stressed: 0.4 }),
+		lived((name) => `${name('Brant')} and I trained as squires together. I beat him at the tourney, and he has never lived it down.`, { happy: 0.6, loving: 0.3 }),
+	],
+	Lisa: [
+		lived((name) => `My little boy has asked for a ${name('WoodenHorse')} every night since his birthday.`, { loving: 0.8, happy: 0.4 }),
+		lived((name) => `${name('Toymaker')} carved my very first doll when I was small enough to sit on the counter.`, { happy: 0.6, loving: 0.4 }),
+	],
+	Holt: [
+		lived('A thief slipped past me last market day, and the whole square laughed. Never again.', { angry: 0.5, stressed: 0.6 }),
+		lived((name) => `${name('Brant')} covered for me the night I fell asleep at my post, and never told a soul.`, { loving: 0.5, happy: 0.3 }),
+	],
+	Brant: [
+		lived((name) => `${name('Ferris')} beat me at the squires' tourney, fair and square. I still say the sun was in my eyes.`, { happy: 0.4, stressed: 0.3 }),
+		lived('I pulled a drowning boy out of the canal in my full mail, and could not stop shaking afterwards.', { afraid: 0.7, happy: 0.5 }),
+	],
+	Baker: [
+		lived('I lost my own boy to the sea forty years ago, so I feed every child in the square.', { sad: 0.6, loving: 0.8 }),
+		lived((name) => `${name('Rook')} stole a Loaf from me at eight; I gave him another. He turned out all right, that one.`, { loving: 0.5, happy: 0.4 }),
+	],
+	Weaver: [
+		lived((name) => `The Duchess of Vell once wore my ${name('Hood')} to court. Nobody else in this square has ever dressed nobility.`, { happy: 0.8 }),
+		lived((name) => `${name('Potter')}'s clumsy apprentice spilled glaze on my finest silk, and I have not spoken to ${name('Potter')} since.`, { angry: 0.7, disgusted: 0.4 }),
+	],
+	Apothecary: [
+		lived('My Tonic could not save the miller\'s wife, and the toads were silent for a month.', { sad: 0.7 }),
+		lived((name) => `${name('Ferris')} buys Tonic for her sick brother every week, and counts her coins twice. Brave girl.`, { loving: 0.5, sad: 0.3 }),
+	],
+	Potter: [
+		lived('My kiln cracked the night my daughter was born, and I laughed: an empty vessel, a full home.', { happy: 0.7, loving: 0.6 }),
+		lived((name) => `${name('Weaver')} will not speak to me over a little glaze. Silence, too, is a vessel, friend.`, { sad: 0.4 }),
+	],
+	Cutler: [
+		lived('My master broke three blades over the anvil before he let me sell one.', { angry: 0.4, stressed: 0.5 }),
+		lived((name) => `${name('Tomas')} has haggled with me for twenty years and never won. Good man. Do not tell him.`, { happy: 0.5, loving: 0.3 }),
+	],
+	SushiChef: [
+		lived('My master in the east gave me his knife on his deathbed. I have never once let it go dull.', { loving: 0.7, sad: 0.5 }),
+		lived('The first time I served the harbor lord, my hands shook so hard the fish nearly slipped.', { stressed: 0.8, happy: 0.4 }),
+	],
+	Toymaker: [
+		lived((name) => `I carved ${name('Lisa')}'s very first doll, and now she buys for her own little boy!`, { happy: 0.9, loving: 0.6 }),
+		lived('A fire took my whole workshop once, every toy, and the children of the square brought me their own to sell.', { sad: 0.6, loving: 0.8, surprised: 0.5 }),
+	],
+};
+
 /** The sellers at their posts, the shoppers in the square at the start, and one guard at each gate. */
 export const MARKETPLACE_CAST:SceneCast = [
 	...SELLERS.map(vendor),
@@ -135,7 +203,7 @@ export const MARKETPLACE_CAST:SceneCast = [
 	shopper('Lisa', 'VillagerFemale', [3, 10], 9, ['WoodenHorse'], 'WestGate'),
 	guard('Holt', 'WestGate', [1, 8], -Math.PI / 2),
 	guard('Brant', 'EastGate', [30, 22], Math.PI / 2),
-];
+].map((member) => ({ ...member, memories: [...member.memories ?? [], ...LIVES[member.id] ?? []] }));
 
 const POOL_NAMES = ['Pip', 'Gwen', 'Cal', 'Ivo', 'Bess', 'Quin', 'Odo', 'Faye', 'Lars', 'Nia', 'Wim', 'Tess', 'Juno', 'Brack', 'Marlow', 'Emry'];
 /** Who can walk in to shop. Picked least-used first, so the square stays varied. */
