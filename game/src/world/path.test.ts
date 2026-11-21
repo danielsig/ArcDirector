@@ -1,30 +1,28 @@
-import { GameObject, stepPhysics, type XZ } from '@arc-director/kindling';
+import { GameObject, stepPhysics, Rigidbody, type XZ } from '@arc-director/kindling';
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { findRoute, pointGoal, type Vec } from 'arc-director';
 import { DemoWorld } from '../engine/demo-world';
-import { BoxCollider, Door, Lock, RigidBody } from '../engine/components';
+import { BoxCollider, Lock } from '../engine/components';
 import { CharacterMotor } from '../characters/CharacterMotor';
 import { NPCInput } from '../characters/NPCInput';
-import { glen_0_0 } from '../data/chunks/glen-0-0';
-import { glen_0_1 } from '../data/chunks/glen-0-1';
-import { glen_1_0 } from '../data/chunks/glen-1-0';
-import { glen_1_1 } from '../data/chunks/glen-1-1';
-import { market_1_0 } from '../data/chunks/market-1-0';
-import { RUINS_CHUNKS } from '../scenes/ruins/ruins-map';
-import { DUNGEON_CHUNKS } from '../scenes/dungeon-vault/dungeon-vault-map';
+import { GLEN_CHUNKS } from '../scenes/glen/glen-map';
+import { MARKETPLACE_CHUNKS } from '../scenes/marketplace/marketplace-map';
+import { COMBAT_CHUNKS } from '../scenes/combat/combat-map';
+import { DUNGEON_CHUNKS } from '../scenes/dungeon/dungeon-map';
 import { USE_RANGE } from '../items/pickup';
 import { decodeGlyphChunk } from './decode-glyph-chunk';
 import { spawnChunkEntities } from './spawn';
-import { syncDressingColliders } from './dressing-colliders';
+import { syncDressingColliders } from '../kit/props/dressing-colliders';
 import { cellWays, standableNear, walkClear } from './path';
+import { Door } from '../kit/door/door';
 
-test('in the ruins, no route ends inside a wall or a pillar, yet a pillar is reached from beside it', () => {
+test('in the combat scene, no route ends inside a wall or a pillar, yet a pillar is reached from beside it', () => {
 	const world = new DemoWorld();
-	for (const file of RUINS_CHUNKS) {
+	for (const file of COMBAT_CHUNKS) {
 		const chunk = decodeGlyphChunk(file).chunk;
 		spawnChunkEntities(world, chunk);
-		world.addChunk(chunk);
+		world.terrain.register(chunk);
 	}
 	syncDressingColliders(world);
 	world.reindex();
@@ -40,17 +38,17 @@ test('in the ruins, no route ends inside a wall or a pillar, yet a pillar is rea
 	assert.ok(beside && 'points' in beside, 'no way to stand beside the pillar');
 	// A spot worked out by geometry moves off the wall onto the floor beside it, and from there a route ends on it.
 	const off = standableNear(world, walker, { x: 27.5, z: 9.5 });
-	assert.deepEqual(world.tileCoordAt(off.x, off.z), { tx: 26, tz: 9 });
+	assert.deepEqual(world.terrain.tileCoordAt(off.x, off.z), { tx: 26, tz: 9 });
 	assert.ok('points' in findRoute(ways, walker, start, pointGoal([off.x, off.z]))!);
 	assert.deepEqual(standableNear(world, walker, { x: 25.3, z: 9.6 }), { x: 25.3, z: 9.6 });
 });
 
 test('off the middle of a cell, a route does not leave through what stands in that cell', () => {
 	const world = new DemoWorld();
-	for (const file of [glen_0_0, glen_0_1, glen_1_0, glen_1_1]) {
+	for (const file of GLEN_CHUNKS) {
 		const chunk = decodeGlyphChunk(file).chunk;
 		spawnChunkEntities(world, chunk);
-		world.addChunk(chunk);
+		world.terrain.register(chunk);
 	}
 	syncDressingColliders(world);
 	world.reindex();
@@ -73,8 +71,8 @@ test('off the middle of a cell, a route does not leave through what stands in th
 
 test('a stair is stepped on and off only along its climb, not from the side', () => {
 	const world = new DemoWorld();
-	const chunk = decodeGlyphChunk(market_1_0).chunk;
-	world.addChunk(chunk);
+	const chunk = decodeGlyphChunk(MARKETPLACE_CHUNKS.find((file) => file.id === 'marketplace_1_0')!).chunk;
+	world.terrain.register(chunk);
 	const ways = cellWays(world);
 	const walker = new GameObject('Walker', 'Person');
 	// The shop steps: a row of stair cells, the raised floor south of them, open ground north and east.
@@ -93,17 +91,17 @@ test('a stair is stepped on and off only along its climb, not from the side', ()
 
 test('a walk along a wall and past its corner is clear, one through the wall is not', () => {
 	const world = new DemoWorld();
-	for (const file of RUINS_CHUNKS) {
-		world.addChunk(decodeGlyphChunk(file).chunk);
+	for (const file of COMBAT_CHUNKS) {
+		world.terrain.register(decodeGlyphChunk(file).chunk);
 	}
 	world.reindex();
 	const walker = new GameObject('Walker', 'Person');
 	walker.addComponent(BoxCollider, { size: { x: 0.45, y: 1.1, z: 0.45 }, pad: 0.36 });
-	// Glyph row 8 of the ruins: a low wall from column 27 to 30, its west end a corner where it turns south. Row 7
+	// Glyph row 8 of the combat map: a low wall from column 27 to 30, its west end a corner where it turns south. Row 7
 	// above it is open floor. Each step is checked from cell center to cell center, half a meter from the wall's face;
 	// a probe half a meter off the center, toward the wall, would stand on that face.
-	assert.equal(world.tileAtWorld(27.5, 8.5)?.blocked, true);
-	assert.equal(world.tileAtWorld(27.5, 7.5)?.blocked, false);
+	assert.equal(world.terrain.tileAtWorld(27.5, 8.5)?.blocked, true);
+	assert.equal(world.terrain.tileAtWorld(27.5, 7.5)?.blocked, false);
 	assert.ok(walkClear(world, walker, { x: 24.5, z: 7.5 }, { x: 33.5, z: 7.5 }), 'stopped walking along the wall');
 	assert.ok(walkClear(world, walker, { x: 26.5, z: 9.5 }, { x: 25.5, z: 6.5 }), 'stopped walking past its corner');
 	assert.equal(walkClear(world, walker, { x: 25.5, z: 9.5 }, { x: 28.5, z: 9.5 }), false, 'walked through the wall');
@@ -114,7 +112,7 @@ test('a walker gets past an open door\'s leaf instead of pressing against it', (
 	for (const file of DUNGEON_CHUNKS) {
 		const chunk = decodeGlyphChunk(file).chunk;
 		spawnChunkEntities(world, chunk);
-		world.addChunk(chunk);
+		world.terrain.register(chunk);
 	}
 	const doorGo = world.findNamed('SealedDoor')!;
 	const door = doorGo.getComponent(Door)!;
@@ -126,7 +124,7 @@ test('a walker gets past an open door\'s leaf instead of pressing against it', (
 	walker.transform.localPosition = { x: 19.5, y: 0, z: 17.5 };
 	const npc = walker.addComponent(NPCInput);
 	const motor = walker.addComponent(CharacterMotor);
-	walker.addComponent(RigidBody, { kinematic: true });
+	walker.addComponent(Rigidbody, { kinematic: true });
 	walker.addComponent(BoxCollider, { size: { x: 0.45, y: 1.1, z: 0.45 }, pad: 0.36 });
 	world.add(walker);
 	world.reindex();

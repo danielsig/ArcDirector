@@ -21,7 +21,6 @@ export type ItemInstance = {
 	Consumable?:{ effect:string; amount:number; consumeOnUse:boolean };
 	Torch?:{ lit:boolean };
 	Flame?:{ canIgnite:boolean };
-	Ingredient?:{ brewer:string; fee:string; brew:string; yield:number };
 };
 
 /** What ArcDirector calls a carried `item` (`BrassKey`): what the watch kernels list it as, and what its minds name. */
@@ -93,9 +92,6 @@ export function instantiateDef(def:ItemDef, count?:number):ItemInstance {
 	}
 	if (c.Flame) {
 		inst.Flame = { canIgnite: c.Flame.canIgnite };
-	}
-	if (c.Ingredient) {
-		inst.Ingredient = { ...c.Ingredient };
 	}
 	return inst;
 }

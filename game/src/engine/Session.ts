@@ -1,120 +1,83 @@
-import { AudioSource, Camera, Component } from '@arc-director/kindling';
-import { Camera as FollowCamera, Appearance, BoxCollider, RigidBody } from './components';
+import { AudioSource, ChunkStreamer, Component } from '@arc-director/kindling';
+import { Appearance, BoxCollider, FollowCamera } from './components';
 import { DemoMeshRenderer } from './demo-mesh-renderer';
-import { Order } from './order';
 import { PlayerInput } from '../characters/PlayerInput';
 import { PlayerPilot } from '../characters/PlayerPilot';
-import type { SceneDef } from '../data/scenes';
+import type { Scene } from '../scenes/scene';
 import { GameHost, addModels } from '../director/adapter';
 import { playerSay, playerSayCatalog } from '../director/player-talk';
 import { dumpLookMaps } from '../director/ai-log-sink';
-import { patchInfer } from './patch-hud';
-import type { HudModel } from '../ui/hud-model';
-import {
-	contextLabel,
-	prefs,
-	prefsDetached,
-	setPrefs,
-	watchPrefs,
-	type PlayerMode,
-	type Prefs,
-} from '../prefs';
+import type { HudUI } from '../ui/hud-model';
+import { flagsFromURL, prefs, setPrefs, watchPrefs, type PlayerMode, type Prefs } from '../prefs';
 import { defaultSystemOne } from '../director/hosted';
-import { listLMStudioModels, lmStudio } from '../director/inference';
 import { quickBenchRunning } from '../director/quick-bench';
-import { captureWorld, diffWorld, resetTime, restoreWorld, Time, type WorldState } from '@arc-director/kindling';
-import { readSave, respawn, writeSave, type GameSave } from './game-save';
-import {
-	packViewPose,
-	saveViewPose,
-	type ViewPose,
-} from './view-persist';
-import {
-	applyURLView,
-	writeURLView,
-	type URLView,
-} from './url-view';
-import type { Hud, WorldStream, WorldView } from './systems';
+import { readSave } from './game-save';
+import { readURLCamera, readURLFlags, readURLView } from './url-view';
+import type { PlayerPose } from './PlayerPose';
+import type { SaveSlot } from './SaveSlot';
 import { characterLabel, characterModel, characterOptions, resolvePlayerKind } from '../render/character-models';
 import { bindArcControl } from '../control/bind';
 
-/** Host session: Vue calls say / save / load; Kindling runs keys, flags, persist. */
+/** Host session: Vue calls say and the menu's buttons; Kindling runs keys, flags and prefs. */
 export class Session extends Component {
-	public static override order = Order.persist;
-	public hud!:HudModel;
+	public hud!:HudUI;
 	public director!:GameHost;
-	public scene!:SceneDef;
-	public stream!:WorldStream;
-	public view!:WorldView;
-	public hudView!:Hud;
-	public getCanvas:()=>HTMLCanvasElement | null = () => null;
-	public getRunning:()=>boolean = () => false;
-	public homePose:ViewPose = {
-		x: 0,
-		y: 0,
-		z: 0,
-		yaw: 0,
-		camYaw: 0,
-		pitch: 40 * Math.PI / 180,
-		distance: Math.hypot(11, 7.4),
-	};
-	/** The scene as built, before play. Saves are a diff against it. */
-	public fresh:WorldState = {};
-	private _persistAcc = 0;
-	private _lastViewPacked = '';
+	public scene!:Scene;
+	public pose!:PlayerPose;
+	public slot!:SaveSlot;
 	private _unbindControl = ():void => undefined;
 	private _unwatchPrefs = ():void => undefined;
 	/** Whether a bench ran last frame: one sets the shared model up its own way, so play's settings come back after. */
 	private _benching = false;
 
 	public override awake():void {
-		this.getCanvas()?.addEventListener('click', this._onClick);
-		const lookHost = window as unknown as { setLook?:(yaw:number, pitch:number)=>void };
-		lookHost.setLook = (yaw:number, pitch:number):void => {
-			const world = this.gameObject.world;
-			if (!world) {
-				return;
-			}
-			const cam = world.findByID('MainCamera')?.getComponent(FollowCamera);
-			const player = world.findByID('Player');
-			if (cam) {
-				cam.yaw = yaw;
-				cam.orbitYaw = yaw;
-				cam.pitch = pitch;
-				cam.lateUpdate(8);
-			}
-			if (player) {
-				player.transform.yaw = yaw;
-			}
-			world.forEachComponent(PlayerInput, (c) => {
-				c.lookYaw = yaw;
-			});
-			const stateHost = window as unknown as { lookState?:{ yaw:number; pitch:number } };
-			stateHost.lookState = { yaw, pitch };
-		};
+		this.gameObject.world?.renderer?.canvas.addEventListener('click', this._onClick);
 		this._unwatchPrefs = watchPrefs((next, prev) => {
 			this.applyPrefs(next, prev);
 		});
 		this._unbindControl = bindArcControl(this);
 	}
 
-	public override lateUpdate(dt:number):void {
-		this._persistAcc += dt;
-		if (this._persistAcc < 0.3) {
-			return;
-		}
-		this._persistAcc = 0;
-		this.persistView();
-		this.syncURLView();
-	}
-
 	public override onDestroy():void {
-		this.getCanvas()?.removeEventListener('click', this._onClick);
+		this.gameObject.world?.renderer?.canvas.removeEventListener('click', this._onClick);
 		this.director.dispose();
 		this._unwatchPrefs();
 		this._unbindControl();
-		const lookHost = window as unknown as { setLook?:(yaw:number, pitch:number)=>void };
-		lookHost.setLook = undefined;
+	}
+
+	/** Starts the scene built: prefs from the URL, then the save (Load), the last pose or the spawn, then the URL's `view` and `zoom`. */
+	public boot():void {
+		// Read the shot before any pref change rewrites the URL with the spawn pose.
+		const shot = readURLView();
+		setPrefs(flagsFromURL(readURLFlags()));
+		this.applyPrefs(prefs());
+		this.pose.home = this.pose.read();
+		if (!this.slot.boot() && this.hud.bootFrom === 'pose') {
+			this.pose.applyLast();
+		}
+		this.hud.bootFrom = 'pose';
+		this.pose.snapTo(shot);
+		const { zoom } = readURLCamera();
+		const cam = this.gameObject.world?.findByID('MainCamera')?.getComponent(FollowCamera);
+		if (cam && zoom !== undefined) {
+			cam.distance = zoom;
+		}
+		this.gameObject.getComponent(ChunkStreamer)?.stream();
+		this.hud.menuOpen = false;
+		this.hud.minimapFollow = this.scene.minimapFollow !== false;
+		this.pose.persist();
+		this.pose.syncURL();
+	}
+
+	/** Boots a fresh Game from the scene's save (false, with a notice, when it has none) or at its spawn. */
+	public reboot(from:'save' | 'spawn'):boolean {
+		if (from === 'save' && !readSave(this.scene.id)) {
+			this.hud.menuNotice = 'No save';
+			return false;
+		}
+		this.hud.bootFrom = from;
+		this.hud.boots += 1;
+		return true;
 	}
 
 	/** Runs every frame, including while the menu pauses simulation. */
@@ -123,53 +86,28 @@ export class Session extends Component {
 		if (!world) {
 			return;
 		}
-		world.sayOpen = this.hud.sayOpen;
 		// A bench holds the model while it runs, so NPCs stop thinking until it is done; the `ai` setting is untouched.
 		const benching = this.hud.benchRunning || quickBenchRunning();
-		world.arcDirectorOn = this.hud.arcDirectorOn && !benching;
+		world.arcDirectorOn = prefs().ai && !benching;
 		if (this._benching && !benching && this.director.arc) {
 			addModels(this.director.arc, prefs());
 		}
 		this._benching = benching;
-		if (this.hud.menuOpen && world.input.pointerLocked) {
-			this.dropPointerLock();
-		}
 		if (this.hud.menuOpen) {
-			this.hudKeys();
-			return;
+			world.input.releaseLock();
 		}
-		if (this.hud.sayOpen) {
+		else if (this.hud.sayOpen) {
 			this.patchSayCatalog();
-			world.sayOpen = true;
 		}
 		else if (!this.hud.guideOpen && (world.input.pressed('Enter') || world.input.pressed('NumpadEnter'))) {
 			this.openSay();
 		}
-		else {
-			world.sayOpen = false;
+		const guiding = this.hud.guideOpen && !this.hud.menuOpen;
+		if (guiding) {
+			world.input.releaseLock();
 		}
-		if (this.hud.guideOpen) {
-			world.sayOpen = true;
-			if (world.input.pointerLocked) {
-				this.dropPointerLock();
-			}
-		}
+		world.sayOpen = this.hud.sayOpen || guiding;
 		this.hudKeys();
-	}
-
-	public pausePresent():void {
-		const world = this.gameObject.world;
-		if (!world) {
-			return;
-		}
-		world.forEachComponent(PlayerInput, (c) => {
-			c.moveX = 0;
-			c.moveZ = 0;
-		});
-		world.forEachComponent(DemoMeshRenderer, (c) => c.update(0));
-		world.forEachComponent(Camera, (c) => c.update(0));
-		this.view.sync();
-		this.hudView.sync();
 	}
 
 	/** Opens the say box and the chat over it. */
@@ -182,7 +120,7 @@ export class Session extends Component {
 		world.sayOpen = true;
 		this.patchSayCatalog();
 		world.input.keys.clear();
-		this.dropPointerLock();
+		world.input.releaseLock();
 		this.hud.chatOpen = true;
 	}
 
@@ -199,247 +137,43 @@ export class Session extends Component {
 		playerSay(this.director, spoken);
 	}
 
-	public save():GameSave | null {
-		const world = this.gameObject.world;
-		const pose = this.readPose();
-		if (!world || !pose) {
-			this.hud.menuNotice = 'Save failed';
-			return null;
-		}
-		this.stream.loadAll();
-		const save:GameSave = {
-			savedUTC: new Date().toISOString(),
-			time: Time.time,
-			bargainDone: this.director.bargainDone,
-			pose,
-			world: diffWorld(this.fresh, captureWorld(world)),
-			cast: this.director.arc?.exportCast() ?? { characters: {}, collectives: {} },
-		};
-		if (!writeSave(this.scene.id, save)) {
-			this.hud.menuNotice = 'Save failed';
-			return null;
-		}
-		this.hud.savedUTC = save.savedUTC;
-		this.hud.menuNotice = 'Saved';
-		return save;
-	}
-
-	/** Boot a fresh Game that restores this scene's save. */
-	public load():boolean {
-		if (!readSave(this.scene.id)) {
-			this.hud.menuNotice = 'No save';
-			return false;
-		}
-		this.hud.bootFrom = 'save';
-		this.hud.boots += 1;
-		return true;
-	}
-
-	/** Boot a fresh Game with the player at the scene's spawn. */
-	public restart():void {
-		this.hud.bootFrom = 'spawn';
-		this.hud.boots += 1;
-	}
-
-	/** Apply `save` to the scene just built. Minds restore when ArcDirector starts. */
-	public restore(save:GameSave):void {
-		const world = this.gameObject.world;
-		if (!world) {
-			return;
-		}
-		restoreWorld(world, save.world, (recipe) => respawn(world, recipe));
-		resetTime(save.time);
-		this.director.bargainDone = save.bargainDone;
-		this.director.arc?.restoreCast(save.cast);
-		this.applyPose(save.pose);
-	}
-
-	/** Mirror every pref into the HUD, world, and ArcDirector. Called once at boot; changes arrive through `watchPrefs`. */
-	public syncPrefs():void {
-		this.applyPrefs(prefs());
-	}
-
-	public applyModel():void {
-		const name = this.hud.model.trim();
-		if (name) {
-			setPrefs({ model: name });
-		}
-		this.hud.menuNotice = name || 'No model';
-	}
-
 	public applyPlayerKind():void {
 		const kind = resolvePlayerKind(this.hud.playerKind);
 		setPrefs({ playerKind: kind });
 		this.hud.menuNotice = characterLabel(kind);
 	}
 
-	public setMaxParallel(n:number):void {
-		const next = setPrefs({ maxParallel: n }).maxParallel;
-		this.hud.menuNotice = `${next} thinker${next === 1 ? '' : 's'}`;
-	}
-
-	public setContextLength(n:number):void {
-		this.hud.menuNotice = `${contextLabel(setPrefs({ contextLength: n }).contextLength)} context`;
-	}
-
 	public resetInferStats():void {
 		this.director.arc?.models.resetInferStats();
-		patchInfer(this.director, this.hud);
 	}
 
 	public async dumpNPCMaps():Promise<void> {
 		const n = await dumpLookMaps(this.director);
 		this.hud.menuOpen = false;
 		this.hud.aiLogOpen = true;
-		this.dropPointerLock();
+		setPrefs({ aiLogFull: true });
+		this.gameObject.world?.input.releaseLock();
 		this.hud.menuNotice = n > 0 ? `Logged ${n} NPC maps` : 'No NPC maps';
-	}
-
-	public resetLocation():void {
-		this.applyPose(this.homePose);
-		this._lastViewPacked = '';
-		this._persistAcc = 0;
-		this.persistView();
-		this.stream.stream();
-		this.syncURLView();
-		this.hud.menuNotice = 'Location reset';
 	}
 
 	public onMenuOpened():void {
 		this.hud.menuNotice = '';
-		this.persistView();
-		this.dropPointerLock();
-		this.hud.model = this.director.arc?.getModel()?.id || prefs().model || this.hud.model;
+		this.pose.persist();
+		this.gameObject.world?.input.releaseLock();
 		this.hud.playerKinds = characterOptions();
 		const liveKind = this.gameObject.world?.findByID('Player')?.getComponent(DemoMeshRenderer)?.meshID;
 		this.hud.playerKind = resolvePlayerKind(liveKind || this.hud.playerKind || prefs().playerKind);
-		// Listed whether or not ArcDirector runs, so a model can be picked before turning it on.
-		void listLMStudioModels().then(() => {
-			this.hud.model ||= lmStudio.models.find((m) => !m.decision)?.id ?? '';
-		});
 	}
 
 	public onMenuClosed():void {
-		this.getCanvas()?.focus();
+		this.gameObject.world?.renderer?.canvas.focus();
 		this.gameObject.world?.input.requestLock();
-	}
-
-	public applyShot(shot:URLView | null):void {
-		if (!shot) {
-			return;
-		}
-		const pose = this.readPose();
-		if (!pose) {
-			return;
-		}
-		this.applyPose(applyURLView(pose, shot));
-	}
-
-	public readPose():ViewPose | null {
-		const world = this.gameObject.world;
-		const player = world?.findByID('Player');
-		const cam = world?.findByID('MainCamera')?.getComponent(FollowCamera);
-		if (!world || !player || !cam) {
-			return null;
-		}
-		const look = player.getComponent(PlayerInput);
-		return {
-			x: player.transform.position.x,
-			y: player.transform.position.y,
-			z: player.transform.position.z,
-			yaw: look?.lookYaw ?? player.transform.yaw,
-			camYaw: cam.yaw,
-			pitch: cam.pitch,
-			distance: cam.distance,
-		};
-	}
-
-	public applyPose(pose:ViewPose):void {
-		const world = this.gameObject.world;
-		const player = world?.findByID('Player');
-		const cam = world?.findByID('MainCamera')?.getComponent(FollowCamera);
-		if (!world || !player || !cam) {
-			return;
-		}
-		player.transform.position.x = pose.x;
-		player.transform.position.y = pose.y;
-		player.transform.position.z = pose.z;
-		player.transform.yaw = pose.yaw;
-		const look = player.getComponent(PlayerInput);
-		if (look) {
-			look.lookYaw = pose.yaw;
-			look.moveX = 0;
-			look.moveZ = 0;
-		}
-		const rb = player.getComponent(RigidBody);
-		if (rb) {
-			rb.velocity.x = 0;
-			rb.velocity.z = 0;
-			rb.prevX = pose.x;
-			rb.prevZ = pose.z;
-		}
-		cam.yaw = pose.camYaw;
-		cam.orbitYaw = pose.yaw;
-		cam.pitch = pose.pitch;
-		cam.distance = Math.max(cam.minDistance, Math.min(cam.maxDistance, pose.distance));
-		cam.lateUpdate(8);
-	}
-
-	public persistView():void {
-		const pose = this.readPose();
-		if (!pose) {
-			return;
-		}
-		const packed = packViewPose(pose);
-		if (packed === this._lastViewPacked) {
-			return;
-		}
-		this._lastViewPacked = packed;
-		saveViewPose(this.scene.id, packed);
-	}
-
-	public syncURLView():void {
-		const pose = this.readPose();
-		if (pose) {
-			writeURLView(pose, prefs());
-		}
 	}
 
 	/** No `prev` applies everything; otherwise only what changed reaches ArcDirector and the character. */
 	private applyPrefs(next:Prefs, prev?:Prefs):void {
 		const changed = (key:keyof Prefs):boolean => !prev || prev[key] !== next[key];
-		const hud = this.hud;
-		hud.player = next.player;
-		hud.arcDirectorOn = next.ai;
-		hud.detailMaps = next.detailMaps;
-		hud.shadows = next.shadows;
-		hud.fpsCounter = next.fpsCounter;
-		hud.thinkingBubbles = next.thinkingBubbles;
-		hud.mindVisuals = next.mindVisuals;
-		hud.arcSlates = next.arcSlates;
-		hud.orderArcs = next.orderArcs;
-		hud.toolIcons = next.toolIcons;
-		hud.toolPoses = next.toolPoses;
-		hud.toolFx = next.toolFx;
-		hud.musicVolume = next.music;
-		hud.sfxVolume = next.sfx;
-		hud.voices = next.voices;
-		hud.audioMuted = next.muted;
-		hud.musicMuted = next.musicMuted;
-		hud.maxParallel = next.maxParallel;
-		hud.contextLength = next.contextLength;
-		hud.batchThinks = next.batchThinks;
-		hud.thinkingBudget = next.thinkingBudget;
-		hud.temperature = next.temperature;
-		hud.arcFormat = next.arcFormat;
-		hud.systemOne = next.systemOne;
-		hud.decisionModel = next.decisionModel;
-		hud.prefsDetached = prefsDetached();
-		const arc = this.director.arc;
-		if (next.model && changed('model')) {
-			hud.model = next.model;
-		}
-		arc
+		this.director.arc
 			?.if((['inference', 'model', 'browserModel', 'maxParallel', 'batchThinks', 'contextLength', 'thinkingBudget', 'temperature', 'decisionModel'] as const).some((key) => changed(key)), (d) => addModels(d, next))
 			.if(changed('arcFormat'), (d) => d.withMind({ arcFormat: next.arcFormat }))
 			.if(changed('systemOne'), (d) => d.models.withDefaultSystemOne(defaultSystemOne(next.systemOne)));
@@ -451,23 +185,18 @@ export class Session extends Component {
 		}
 		const world = this.gameObject.world;
 		if (world) {
-			world.playerInperceivable = next.player !== 'participant';
+			world.playerImperceptible = next.player !== 'participant';
 		}
 		if (changed('player')) {
 			this.applyPlayerModeToBody(next.player);
 		}
 		if (changed('player') || changed('ai')) {
-			this.syncURLView();
+			this.pose.syncURL();
 		}
 	}
 
 	private patchSayCatalog():void {
-		const world = this.gameObject.world;
-		if (!world) {
-			return;
-		}
 		const cat = playerSayCatalog(this.director);
-		this.hud.sayTo = cat.peers.join(', ');
 		this.hud.sayPeers = cat.peers;
 		this.hud.sayItems = cat.items;
 		this.hud.sayOffers = cat.offers;
@@ -490,7 +219,7 @@ export class Session extends Component {
 		if (!this.hud.sayOpen && world.input.pressed('Backquote')) {
 			this.hud.aiLogOpen = !this.hud.aiLogOpen;
 			if (this.hud.aiLogOpen) {
-				this.dropPointerLock();
+				world.input.releaseLock();
 			}
 		}
 		if (this.hud.menuOpen && world.input.pressed('Escape')) {
@@ -509,14 +238,7 @@ export class Session extends Component {
 	private toggleChat():void {
 		this.hud.chatOpen = !this.hud.chatOpen;
 		if (this.hud.chatOpen) {
-			this.dropPointerLock();
-		}
-	}
-
-	private dropPointerLock():void {
-		const canvas = this.getCanvas();
-		if (document.pointerLockElement === canvas) {
-			document.exitPointerLock();
+			this.gameObject.world?.input.releaseLock();
 		}
 	}
 
@@ -525,7 +247,7 @@ export class Session extends Component {
 			return;
 		}
 		this.gameObject.world?.findByID('Player')?.getComponent(PlayerPilot)?.interrupt();
-		this.getCanvas()?.focus();
+		this.gameObject.world?.renderer?.canvas.focus();
 		this.gameObject.world?.input.requestLock();
 		void this.gameObject.world?.audio.resume();
 	};

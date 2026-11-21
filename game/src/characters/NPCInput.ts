@@ -8,7 +8,6 @@ export class NPCInput extends Component {
 	public destinationPoint:XZ | null = null;
 	public faceName:string | null = null;
 	public faceUntil = 0;
-	public aiOn = true;
 	/** Next time `Time.time` this body may start a cast. */
 	public attackReadyTimestamp = 0;
 	/** Next time `Time.time` this body may start a heal. */
@@ -28,11 +27,5 @@ export class NPCInput extends Component {
 	public faceToward(name:string, until = Number.POSITIVE_INFINITY):void {
 		this.faceName = name;
 		this.faceUntil = until;
-	}
-
-	public override update():void {
-		if (!this.aiOn) {
-			this.destinationPoint = null;
-		}
 	}
 }

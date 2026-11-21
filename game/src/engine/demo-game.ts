@@ -1,28 +1,27 @@
-import { Game, captureWorld, resetAllocID, resetTime, type ShadowMode, GameObject } from '@arc-director/kindling';
-import { gpuMemory } from 'arc-director';
-import { resetHudPatch } from './patch-hud';
+import { ChunkStreamer, Game, register, resetAllocID, resetTime, type ShadowMode, GameObject } from '@arc-director/kindling';
+import { ArcDirector, gpuMemory } from 'arc-director';
 import { DemoWorld } from './demo-world';
 import { Wallet, Named } from './components';
 import { GameHost } from '../director/adapter';
-import { rendererLook } from '../render/look';
 import { loadNature } from '../render/nature';
 import { loadSpritesheet } from '../render/spritesheet';
 import type { HudModel } from '../ui/hud-model';
-import { flagsFromURL, prefs, setPrefs, type ShadowTier } from '../prefs';
+import { prefs, type ShadowTier } from '../prefs';
 import { decodeGlyphChunk } from '../world/decode-glyph-chunk';
 import { getDef } from '../items/defs';
 import { equipItem } from '../items/equip';
 import { instantiateDef } from '../items/instance';
 import { spawnCamera, spawnRaven, spawnNPC, spawnPlayer, spawnRoom } from '../world/spawn';
-import { DEFAULT_SCENE_ID, sceneByID, type PlayerDef, type SceneDef } from '../data/scenes';
+import { THINGS } from '../kit/thing-registry';
+import { DEFAULT_SCENE_ID, sceneByID } from '../scenes/scene-registry';
+import { bodyOf, type PlayerDef, type Scene } from '../scenes/scene';
 import { loadCharacterModels } from '../render/character-models';
-import { DirectorPulse, GroundPick, Hud, MapPan, WorldStream, WorldView } from './systems';
+import { DirectorPulse, GroundPick, Hud, MapPan, WorldView } from './systems';
 import { Session } from './Session';
-import { readSave } from './game-save';
-import { loadViewPose } from './view-persist';
-import { readURLCamera, readURLFlags, readURLMinFps, readURLView } from './url-view';
+import { PlayerPose } from './PlayerPose';
+import { SaveSlot } from './SaveSlot';
+import { readURLCamera, readURLMinFps } from './url-view';
 import { CameraFocus } from './CameraFocus';
-import { startSceneMusic } from '../audio/songs';
 import { syncWaterAudio } from '../audio/water';
 import { autoShadowTier } from './auto-shadows';
 
@@ -63,34 +62,44 @@ function dressPlayer(world:DemoWorld, def:PlayerDef | undefined):void {
 	}
 }
 
-/** The scene's chunks, player, cast, rooms, ravens and camera into `world`; returns its decoded chunks. */
-export function spawnScene(world:DemoWorld, scene:SceneDef):ReturnType<typeof decodeGlyphChunk>[] {
-	world.daylight = rendererLook(scene.look).sun !== undefined;
+/**
+ * The scene on a fresh clock: its chunks, player, cast, rooms, ravens and camera into `world`, its things' meshes ready to draw, lit
+ * by its look. Returns its `Systems` object (not yet in the world, the land's view on it) and the chunk streamer.
+ */
+export function spawnScene(world:DemoWorld, scene:Scene):{ systems:GameObject; stream:ChunkStreamer } {
+	resetTime();
+	resetAllocID();
+	for (const thing of THINGS) {
+		Object.entries(thing.meshes ?? {}).forEach(([id, make]) => register(id, make));
+	}
+	world.daylight = scene.look.sun !== undefined;
 	world.lightLevel = scene.lightLevel ?? 1;
 	const decoded = scene.chunks.map(decodeGlyphChunk);
+	decoded.forEach((d) => world.terrain.register(d.chunk));
 	const startDecoded = decoded.find((d) => d.playerStart) ?? decoded[0];
 	if (!startDecoded) {
 		throw new Error(`scene ${scene.id} has no chunks`);
 	}
 	spawnPlayer(world, startDecoded.playerStart, startDecoded.chunk);
 	dressPlayer(world, scene.player);
-	const decodedByID = new Map(decoded.map((d) => [d.chunk.id, d]));
-	for (const npc of scene.npcs) {
-		spawnNPC(world, (decodedByID.get(npc.chunkID) ?? startDecoded).chunk, npc);
-	}
+	scene.cast.forEach((member) => spawnNPC(world, bodyOf(member)));
 	scene.rooms?.forEach((room) => spawnRoom(world, room));
 	scene.ravens?.forEach((r, i) => spawnRaven(world, `Raven${i + 1}`, r.x, r.z, r.yaw));
 	spawnCamera(world, scene.camera);
-	return decoded;
+	world.renderer?.applyLook(scene.look);
+	const systems = new GameObject('Systems', 'Systems');
+	systems.addComponent(WorldView, { ground: scene.ground, outskirts: scene.outskirts });
+	return { systems, stream: systems.addComponent(ChunkStreamer) };
 }
 
 /** Models and art a scene draws with; cached, so a second scene loads at once. */
-export async function loadSceneArt(scene:SceneDef):Promise<void> {
+export async function loadSceneArt(scene:Scene):Promise<void> {
 	const jobs:Promise<unknown>[] = [
 		loadSpritesheet(),
 		loadCharacterModels(),
 	];
-	if (scene.look === 'glen' || scene.look === 'market') {
+	// Sunlit scenes have trees.
+	if (scene.look.sun) {
 		jobs.push(loadNature());
 	}
 	try {
@@ -104,7 +113,7 @@ export async function loadSceneArt(scene:SceneDef):Promise<void> {
 export class DemoGame extends Game<DemoWorld> {
 	public readonly session:Session;
 	private readonly _hud:HudModel;
-	private readonly _scene:SceneDef;
+	private readonly _scene:Scene;
 	/** What `auto` shadows run as on this GPU. */
 	private readonly _autoShadows = autoShadowTier(gpuMemory());
 
@@ -120,78 +129,25 @@ export class DemoGame extends Game<DemoWorld> {
 		}
 		this._hud = hud;
 		this._scene = sceneByID(sceneID);
-		resetTime();
-		resetAllocID();
 		this.syncDisplay();
 		this.world.input.captures = (code) => GAME_KEYS.has(code) || code.startsWith('Digit');
-		const decoded = spawnScene(this.world, this._scene);
-		this.renderer?.applyLook(rendererLook(this._scene.look));
-		const host = new GameHost(this.world, hud.chat, hud.aiLog, {
-			ambient: this._scene.ambient,
-			scene: this._scene.id,
-			playerTags: this._scene.player?.tags,
-			rooms: this._scene.rooms,
-		});
-		const director = this._scene.createDirector(host);
-		host.bind(director);
-		this.world.pickedUp = (character, name) => {
-			host.hooks.afterPickUp?.(host, character, name);
-		};
-		const systems = new GameObject('Systems', 'Systems');
-		const getRenderer = () => this.renderer;
-		const view = systems.addComponent(WorldView, { getRenderer, ground: this._scene.ground, outskirts: this._scene.outskirts });
-		systems.addComponent(GroundPick, { getRenderer });
-		systems.addComponent(MapPan, { getRenderer });
-		const hudView = systems.addComponent(Hud, {
-			model: this._hud,
+		const { systems } = spawnScene(this.world, this._scene);
+		const host = new GameHost(this.world, hud.chat, hud.aiLog, this._scene);
+		host.bind(this._scene.direct(host, host.configure(new ArcDirector())));
+		systems.addComponent(GroundPick);
+		systems.addComponent(MapPan);
+		systems.addComponent(Hud, {
+			model: hud,
 			director: host,
-			getRenderer,
 			overheads: { healthBars: this._scene.healthBars ?? false, carried: this._scene.carried, inspect: this._scene.inspect },
 		});
-		const stream = systems.addComponent(WorldStream, { chunks: decoded.map((d) => d.chunk) });
 		systems.addComponent(DirectorPulse, { director: host });
-		const camera = readURLCamera();
-		const focus = systems.addComponent(CameraFocus, { director: host, expr: camera.focus });
-		this.session = systems.addComponent(Session, {
-			hud: this._hud,
-			director: host,
-			scene: this._scene,
-			stream,
-			view,
-			hudView,
-			getCanvas: () => this.canvas,
-			getRunning: () => this.running,
-		});
+		systems.addComponent(CameraFocus, { director: host, expr: readURLCamera().focus });
+		const pose = systems.addComponent(PlayerPose, { sceneID: this._scene.id });
+		const slot = systems.addComponent(SaveSlot, { hud, director: host, sceneID: this._scene.id, pose });
+		this.session = systems.addComponent(Session, { hud, director: host, scene: this._scene, pose, slot });
 		this.world.add(systems);
-		stream.loadAll();
-		this.session.fresh = captureWorld(this.world);
-		// Read the shot before any pref change rewrites the URL with the spawn pose.
-		const shot = readURLView();
-		setPrefs(flagsFromURL(readURLFlags()));
-		this.session.syncPrefs();
-		this.session.homePose = this.session.readPose() ?? this.session.homePose;
-		const save = readSave(this._scene.id);
-		this._hud.savedUTC = save?.savedUTC ?? '';
-		if (save && this._hud.bootFrom === 'save') {
-			this.session.restore(save);
-		}
-		else if (this._hud.bootFrom === 'pose') {
-			const pose = loadViewPose(this._scene.id);
-			if (pose) {
-				this.session.applyPose(pose);
-			}
-		}
-		this._hud.bootFrom = 'pose';
-		this.session.applyShot(shot);
-		if (camera.zoom !== undefined) {
-			focus.zoom = camera.zoom;
-		}
-		stream.stream();
-		this._hud.menuOpen = false;
-		this._hud.minimap.follow = this._scene.minimapFollow !== false;
-		this._hud.model = host.arc?.getModel()?.id || prefs().model;
-		this.session.persistView();
-		this.session.syncURLView();
+		this.session.boot();
 	}
 
 	protected override onStart():void {
@@ -200,16 +156,13 @@ export class DemoGame extends Game<DemoWorld> {
 			this.world.audio.connectUnlock(this.canvas);
 		}
 		this.syncAudio();
-		startSceneMusic(this.world.audio, this._scene.id);
+		void this.world.audio.playMusic(this._scene.music);
 		void this.world.audio.resume();
 		void loadSceneArt(this._scene);
 	}
 
 	public override dispose():void {
-		this.session.persistView();
-		this.session.view.present.dispose();
-		resetHudPatch();
-		this.session.onDestroy();
+		this.session.pose.persist();
 		super.dispose();
 	}
 
@@ -222,9 +175,6 @@ export class DemoGame extends Game<DemoWorld> {
 		const director = perf.totalMS.director;
 		super.tick(dt);
 		perf.add('simulate', performance.now() - start - (perf.totalMS.director - director));
-		if (this.paused) {
-			this.session.pausePresent();
-		}
 		this.syncAudio();
 	}
 
@@ -240,8 +190,9 @@ export class DemoGame extends Game<DemoWorld> {
 		if (!this.renderer) {
 			return;
 		}
-		const shadows = SHADOWS[this._hud.shadows === 'auto' ? this._autoShadows : this._hud.shadows];
-		this.renderer.detailMaps = this._hud.detailMaps;
+		const display = prefs();
+		const shadows = SHADOWS[display.shadows === 'auto' ? this._autoShadows : display.shadows];
+		this.renderer.detailMaps = display.detailMaps;
 		this.renderer.shadows = shadows.mode;
 		this.renderer.pointShadowMapSize = shadows.point;
 		this.renderer.directionalShadowMapSize = shadows.sun;
@@ -250,9 +201,10 @@ export class DemoGame extends Game<DemoWorld> {
 
 	private syncAudio():void {
 		this.world.audio.duck = this._hud.menuOpen ? 0.2 : 1;
-		this.world.audio.musicVolume = this._hud.musicMuted ? 0 : this._hud.musicVolume;
-		this.world.audio.sfxVolume = this._hud.sfxVolume;
-		this.world.audio.muted = this._hud.audioMuted;
+		const sound = prefs();
+		this.world.audio.musicVolume = sound.musicMuted ? 0 : sound.music;
+		this.world.audio.sfxVolume = sound.sfx;
+		this.world.audio.muted = sound.muted;
 		const player = this.world.findByID('Player');
 		if (!player) {
 			return;

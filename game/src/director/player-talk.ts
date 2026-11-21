@@ -1,11 +1,11 @@
 import { Time, distanceXZ, type GameObject } from '@arc-director/kindling';
 import { showNamingText, type ArcResult, type SpeechUtterance, type VerbCall } from 'arc-director';
-import { HumanBody, Named } from '../engine/components';
+import { HumanBody, Named, idOf } from '../engine/components';
 import type { DemoWorld } from '../engine/demo-world';
 import { coinsOf } from '../items/wallet';
 import { parseSlash, type ParsedSlash, type SayCatalog } from '../ui/say-commands';
 import type { GameHost } from './adapter';
-import { idOf, findObject, isLiving } from './names';
+import { findObject, isLiving } from './names';
 import type { CharacterCtx } from './game-types';
 import { carriedLabels } from './perception';
 import { talkNotices, CLEAR_RANGE, HEAR_RANGE } from './talk-attend';

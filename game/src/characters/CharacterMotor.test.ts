@@ -1,30 +1,28 @@
-import { GameObject, stepPhysics } from '@arc-director/kindling';
+import { GameObject, stepPhysics, Rigidbody } from '@arc-director/kindling';
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { BoxCollider, Bridge, RigidBody } from '../engine/components';
+import { BoxCollider } from '../engine/components';
 import { DemoWorld } from '../engine/demo-world';
-import { RUINS_CHUNKS } from '../scenes/ruins/ruins-map';
-import { glen_0_0 } from '../data/chunks/glen-0-0';
-import { glen_0_1 } from '../data/chunks/glen-0-1';
-import { glen_1_0 } from '../data/chunks/glen-1-0';
-import { glen_1_1 } from '../data/chunks/glen-1-1';
+import { COMBAT_CHUNKS } from '../scenes/combat/combat-map';
+import { GLEN_CHUNKS } from '../scenes/glen/glen-map';
 import { decodeGlyphChunk } from '../world/decode-glyph-chunk';
 import { spawnChunkEntities } from '../world/spawn';
 import { CharacterMotor } from './CharacterMotor';
 import { NPCInput } from './NPCInput';
+import { Bridge } from '../kit/bridge/bridge';
 
 test('two walkers meeting head-on each step to their right and pass', () => {
 	const world = new DemoWorld();
-	for (const file of RUINS_CHUNKS) {
-		world.addChunk(decodeGlyphChunk(file).chunk);
+	for (const file of COMBAT_CHUNKS) {
+		world.terrain.register(decodeGlyphChunk(file).chunk);
 	}
-	// Glyph row 7 of the ruins, open floor from column 24 to 39, with room to either side where they meet.
+	// Glyph row 7 of the combat map, open floor from column 24 to 39, with room to either side where they meet.
 	const walker = (id:string, x:number, toX:number) => {
 		const go = new GameObject(id, 'NPC');
 		go.transform.localPosition = { x, y: 0, z: 7.5 };
 		go.addComponent(NPCInput).destinationPoint = { x: toX, z: 7.5 };
 		const motor = go.addComponent(CharacterMotor);
-		go.addComponent(RigidBody, { kinematic: true });
+		go.addComponent(Rigidbody, { kinematic: true });
 		go.addComponent(BoxCollider, { size: { x: 0.45, y: 1.1, z: 0.45 }, pad: 0.36 });
 		world.add(go);
 		return { go, motor, swerve: 0 };
@@ -50,10 +48,10 @@ test('two walkers meeting head-on each step to their right and pass', () => {
 test('a walker crosses the glen river on the lowered drawbridge, and not while it is raised', () => {
 	const cross = (lowered:boolean):number => {
 		const world = new DemoWorld();
-		for (const file of [glen_0_0, glen_0_1, glen_1_0, glen_1_1]) {
+		for (const file of GLEN_CHUNKS) {
 			const chunk = decodeGlyphChunk(file).chunk;
 			spawnChunkEntities(world, chunk);
-			world.addChunk(chunk);
+			world.terrain.register(chunk);
 		}
 		const bridge = world.findNamed('Bridge')!.getComponent(Bridge)!;
 		bridge.open = lowered;
@@ -63,7 +61,7 @@ test('a walker crosses the glen river on the lowered drawbridge, and not while i
 		go.transform.localPosition = { x: 13.5, y: 0, z: 18.5 };
 		go.addComponent(NPCInput).destinationPoint = { x: 13.5, z: 24.5 };
 		const motor = go.addComponent(CharacterMotor);
-		go.addComponent(RigidBody, { kinematic: true });
+		go.addComponent(Rigidbody, { kinematic: true });
 		go.addComponent(BoxCollider, { size: { x: 0.45, y: 1.1, z: 0.45 }, pad: 0.36 });
 		world.add(go);
 		world.reindex();

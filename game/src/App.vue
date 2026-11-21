@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, reactive, ref, shallowRef, provide, watch, onMounted, onUnmounted } from 'vue';
+import { computed, reactive, ref, shallowRef, provide, watch, onUnmounted } from 'vue';
 import type { Audio } from '@arc-director/kindling';
 import KindlingView from './ui/KindlingView.vue';
 import HudPickup from './ui/HudPickup.vue';
@@ -13,11 +13,12 @@ import { inferenceSetup } from './director/inference';
 import { emptyHud } from './ui/hud-model';
 import { sessionKey } from './ui/session-key';
 import type { Session } from './engine/Session';
-import { SCENES } from './data/scenes';
+import { SCENES } from './scenes/scene-registry';
 import { clearURLView } from './engine/url-view';
 import { preloadArt } from './render/preload-art';
 import { startMenuAudio, type MenuAudioHandle } from './audio/menu';
-import { prefs, setMusicMuted, watchPrefs } from './prefs';
+import { setMusicMuted } from './prefs';
+import { usePrefs } from './ui/use-prefs';
 
 preloadArt();
 
@@ -38,19 +39,15 @@ watch(() => inferenceSetup.resumed, (resumed) => {
 	}
 }, { immediate: true });
 const picker = ref<HTMLElement | null>(null);
-const musicMuted = ref(prefs().musicMuted);
+const live = usePrefs();
 const menuHandle = shallowRef<MenuAudioHandle | null>(null);
 
 /**
- * The demos on the main menu, in order, with a line on each. Card screenshots are `public/menu/<id>.jpg`, full-screen stills of
- * where each backdrop starts circling `public/menu/backdrop/<id>.jpg`; `pnpm --filter @arc-director/game backdrops` shoots both.
+ * The demos on the main menu, in the registry's order, each with its blurb. Card screenshots are `public/menu/<id>.jpg`,
+ * full-screen stills of where each backdrop starts circling `public/menu/backdrop/<id>.jpg`; `pnpm --filter @arc-director/game
+ * backdrops` shoots both.
  */
-const CARDS:{ id:string; blurb:string }[] = [
-	{ id: 'ruins', blurb: 'Two squads of five. Each captain thinks; the rest follow orders.' },
-	{ id: 'marketplace', blurb: 'Seven sellers with minds of their own, and shoppers who keep coming.' },
-	{ id: 'glen', blurb: 'Three strangers, one errand, and a bridge that costs gold.' },
-	{ id: 'dungeon_vault', blurb: 'A company of three works its way through a five-room crypt.' },
-];
+const CARDS = Object.values(SCENES);
 /**
  * Seconds the hovered card's still takes to spread from the card over the screen. Its scene goes live behind the menu only after,
  * since booting one stalls a frame or two.
@@ -88,25 +85,11 @@ function unpreview():void {
 	backdrop.value = null;
 }
 
-let stopPrefs:(()=>void) | null = null;
-
 watch(picker, (el) => {
 	menuHandle.value?.stop();
 	menuHandle.value = el ? startMenuAudio(el) : null;
-	if (el) {
-		musicMuted.value = prefs().musicMuted;
-	}
-});
-onMounted(() => {
-	stopPrefs = watchPrefs((p) => {
-		musicMuted.value = p.musicMuted;
-		if (!sceneID.value) {
-			hud.musicVolume = p.music;
-		}
-	});
 });
 onUnmounted(() => {
-	stopPrefs?.();
 	window.clearTimeout(backdropTimer);
 	menuHandle.value?.stop();
 	menuHandle.value = null;
@@ -128,7 +111,7 @@ function kickLive():void {
 }
 
 function toggleMenuMusic():void {
-	menuHandle.value?.setMuted(setMusicMuted(!musicMuted.value).musicMuted);
+	menuHandle.value?.setMuted(setMusicMuted(!live.musicMuted).musicMuted);
 }
 
 function sceneHref(id:string):string {
@@ -196,7 +179,7 @@ function leave():void {
 						:key="card.id"
 						class="card"
 						:href="sceneHref(card.id)"
-						:aria-label="SCENES[card.id]?.title"
+						:aria-label="card.title"
 						@mouseenter="preview(card.id, $event.currentTarget)"
 						@focus="preview(card.id, $event.currentTarget)"
 						@blur="unpreview"
@@ -207,7 +190,7 @@ function leave():void {
 				</div>
 				<div class="details" :class="{ shown: hoveredCard }" aria-live="polite">
 					<template v-if="hoveredCard">
-						<b>{{ SCENES[hoveredCard.id]?.title }}</b>
+						<b>{{ hoveredCard.title }}</b>
 						<span>{{ hoveredCard.blurb }}</span>
 					</template>
 				</div>
@@ -234,15 +217,15 @@ function leave():void {
 		<button
 			type="button"
 			class="music"
-			:aria-label="musicMuted ? 'Music off (click to play)' : 'Music on (click to mute)'"
-			:title="musicMuted ? 'Music off' : 'Music on'"
-			:aria-pressed="!musicMuted"
+			:aria-label="live.musicMuted ? 'Music off (click to play)' : 'Music on (click to mute)'"
+			:title="live.musicMuted ? 'Music off' : 'Music on'"
+			:aria-pressed="!live.musicMuted"
 			@click="toggleMenuMusic"
 		>
 			<svg viewBox="0 0 24 24" aria-hidden="true">
 				<path fill="currentColor" d="M4 9v6h4l5 4V5L8 9H4z" />
 				<path
-					v-if="!musicMuted"
+					v-if="!live.musicMuted"
 					fill="currentColor"
 					d="M15.5 12c0-1.8-1-3.3-2.5-4.1v8.2c1.5-.8 2.5-2.3 2.5-4.1zM14 3.2v2.1c2.9.9 5 3.5 5 6.7s-2.1 5.8-5 6.7v2.1c4-.9 7-4.5 7-8.8S18 4.1 14 3.2z"
 				/>

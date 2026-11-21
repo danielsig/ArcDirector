@@ -724,7 +724,7 @@ function flatten(events:Event[]):{ bars:Bar[]; cues:{ beat:number; fn:()=>void }
 
 /** Compile bars into a looping `Score`. `loops` is `-1` (forever, default) or a count. `callback(fn)` in the event list runs at that beat. Throws if an instrument is unknown or a part overruns its bar. */
 export function piece(
-	opts:{ bpm:number; gain?:number; id?:string; loops?:number; filters?:SoundFilter[] },
+	opts:{ bpm:number; gain?:number; id?:string; title?:string; loops?:number; filters?:SoundFilter[] },
 	events:Event[],
 ):Score {
 	const loops = opts.loops ?? -1;
@@ -782,6 +782,7 @@ export function piece(
 		gain: opts.gain,
 		voices,
 		id: opts.id,
+		title: opts.title,
 		...(loops !== -1 ? { loops } : {}),
 		...(cues.length ? { cues } : {}),
 		...(opts.filters?.length ? { filters: opts.filters } : {}),

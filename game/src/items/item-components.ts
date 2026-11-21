@@ -1,4 +1,5 @@
 import { Component } from '@arc-director/kindling';
+import type { Sense } from '../kit/thing';
 import type { ItemInstance } from './instance';
 
 export class Item extends Component {
@@ -9,7 +10,14 @@ export class Item extends Component {
 	public maxStack = 1;
 }
 
-export class Pickupable extends Component {}
+export class Pickupable extends Component {
+	/** Growing where the map put it (a mushroom), so tagged `wild` for the scene's rules until someone picks it. */
+	public wild = false;
+
+	public sense():Sense {
+		return { tags: this.wild ? ['wild'] : [] };
+	}
+}
 
 export class Equipable extends Component {
 	public slots:string[] = [];
@@ -44,8 +52,4 @@ export class Consumable extends Component {
 
 export class Key extends Component {
 	public keyID = '';
-}
-
-export class Harvest extends Component {
-	public harvester = 'Herbalist';
 }

@@ -4,19 +4,22 @@ import { CharacterMotor } from '../characters/CharacterMotor';
 import { Reading } from '../characters/Reading';
 import { Seated } from '../characters/Seated';
 import { NPCInput } from '../characters/NPCInput';
-import { BoxCollider, Chest, HumanBody, Interior, Lock, MarketNPC } from '../engine/components';
+import { BoxCollider, HumanBody, Lock, MarketplaceNPC, idOf } from '../engine/components';
+import { Interior } from '../kit/houses/interior';
 import { ITEM_DEFS } from '../items/defs';
 import { listCarried, itemMatchesName } from '../items/inventory';
 import type { ItemInstance } from '../items/instance';
-import { chestHolding, findChestHolding, openDoorAhead, USE_RANGE } from '../items/pickup';
+import { USE_RANGE } from '../items/pickup';
 import { cellWays, type Cell } from '../world/path';
 import type { GameHost } from './adapter';
 import { thiefOf } from './kernels';
-import { findObject, idOf, isLiving } from './names';
+import { findObject, isLiving } from './names';
 import { markThief } from './game-verbs';
 import { doExamine } from './perception';
 import { doTransfer, transferRefusal, useOn } from './items';
 import { attackFor, attackVerbFor, fightRole } from './fight';
+import { Chest, chestHolding, findChestHolding } from '../kit/chests/chest';
+import { openDoorAhead } from '../kit/door/door';
 
 /** How close a character comes to act on something, and to count as there. */
 const REACH = USE_RANGE * 0.55;
@@ -35,7 +38,7 @@ function poseOf(host:GameHost, go:GameObject):Pose {
 
 /** The stall or counter a vendor serves from. */
 function stallOf(host:GameHost, go:GameObject):GameObject | undefined {
-	const npc = go.getComponent(MarketNPC);
+	const npc = go.getComponent(MarketplaceNPC);
 	return npc?.kind === 'vendor' && npc.post ? findObject(host.world, npc.post) : undefined;
 }
 
@@ -88,7 +91,7 @@ export function gameWorld(host:GameHost):HostWorld<GameObject, Cell> {
 					return attackFor(attackVerbFor(role), role).range;
 				}
 				// Shoppers walk right into where they go, a gate's opening too: stopping short leaves them standing in the frame.
-				return using === 'go_to' && character.getComponent(MarketNPC)?.kind === 'customer' ? 0.45 : REACH;
+				return using === 'go_to' && character.getComponent(MarketplaceNPC)?.kind === 'customer' ? 0.45 : REACH;
 			},
 		},
 		routes: {

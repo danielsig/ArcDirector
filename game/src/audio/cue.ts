@@ -1,13 +1,13 @@
 import { AudioSource, Speaker, type SfxHandle, type SfxPatch, type GameObject, type XZ } from '@arc-director/kindling';
 import type { DemoWorld } from '../engine/demo-world';
 import { CELL_SIZE } from '../world/constants';
-import { allRoadCells } from '../world/dressing-plan';
+import { allRoadCells } from '../kit/houses/roads';
 import { SFX, type SfxName } from './sfx';
 
-/** One take of `name` (a random one, if it has several). */
-function take(name:SfxName):SfxPatch {
-	const sound:SfxPatch | readonly SfxPatch[] = SFX[name];
-	return 'layers' in sound ? sound : sound[Math.floor(Math.random() * sound.length)]!;
+/** One take of `sound`, a shared one by name or a thing's own patch (a random take, if it has several). */
+function take(sound:SfxName | SfxPatch):SfxPatch {
+	const patch:SfxPatch | readonly SfxPatch[] = typeof sound === 'string' ? SFX[sound] : sound;
+	return 'layers' in patch ? patch : patch[Math.floor(Math.random() * patch.length)]!;
 }
 
 /**
@@ -15,7 +15,7 @@ function take(name:SfxName):SfxPatch {
  * cut to `dur` s (every layer). Through `go`'s `AudioSource` when it has one (characters do: their
  * `Speaker`), so a disabled source keeps it silent. Returns a handle to stop it early, or null when it is not playing.
  */
-export function cueAt(world:DemoWorld | null | undefined, name:SfxName, go:GameObject, gain?:number, dur?:number):SfxHandle | null {
+export function cueAt(world:DemoWorld | null | undefined, name:SfxName | SfxPatch, go:GameObject, gain?:number, dur?:number):SfxHandle | null {
 	if (!world) {
 		return null;
 	}
@@ -47,7 +47,7 @@ export function cueVoice(world:DemoWorld | null | undefined, name:SfxName, go:Ga
 }
 
 /** Play a sound effect at the point `at` (world), as {@link cueAt} does at an object. */
-export function cueAtPoint(world:DemoWorld | null | undefined, name:SfxName, at:{ x:number; y:number; z:number }, gain?:number, dur?:number):SfxHandle | null {
+export function cueAtPoint(world:DemoWorld | null | undefined, name:SfxName | SfxPatch, at:{ x:number; y:number; z:number }, gain?:number, dur?:number):SfxHandle | null {
 	return world?.audio.playSfx(take(name), { x: at.x, y: at.y, z: at.z, gain, dur }) ?? null;
 }
 
@@ -57,7 +57,7 @@ const roads = new WeakMap<DemoWorld, XZ[]>();
 function onRoad(world:DemoWorld, x:number, z:number):boolean {
 	let cells = roads.get(world);
 	if (!cells) {
-		cells = allRoadCells(world.chunks.values());
+		cells = allRoadCells(world.terrain);
 		roads.set(world, cells);
 	}
 	return cells.some((c) => Math.abs(c.x - x) <= CELL_SIZE / 2 && Math.abs(c.z - z) <= CELL_SIZE / 2);
@@ -68,11 +68,11 @@ export function stepKind(world:DemoWorld, x:number, z:number):'stepStone' | 'ste
 	if (onRoad(world, x, z)) {
 		return 'stepStone';
 	}
-	const def = world.tileAtWorld(x, z)?.def;
-	if (def === 'grass' || def === 'dirt' || def === 'path' || def === 'sand') {
+	const surface = world.terrain.tileAtWorld(x, z)?.surface;
+	if (surface === 'meadow' || surface === 'forest' || surface === 'trail') {
 		return 'stepGrass';
 	}
-	if (def === 'plank' || def === 'wood' || def === 'wood_wall' || def === 'bridge' || def === 'water') {
+	if (surface === 'wood' || surface === 'water') {
 		return 'stepWood';
 	}
 	return 'stepStone';

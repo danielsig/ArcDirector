@@ -18,10 +18,10 @@ const sharp = createRequire(join(here, '../../kindling/package.json'))('sharp');
 
 /** Where each card looks from (`ShowcaseView` in `Showcase.ts`). */
 const CARDS = {
-	ruins: { x: 32, z: 12, yaw: 0, zoom: 10 },
+	combat: { x: 32, z: 12, yaw: 0, zoom: 10 },
 	marketplace: { x: 16, z: 20, yaw: 0 },
 	glen: { x: 7.5, z: 12, yaw: Math.PI / 2 },
-	dungeon_vault: { x: 8, z: 40, yaw: 0 },
+	dungeon: { x: 8, z: 40, yaw: 0 },
 };
 
 /** `STILL_ASPECT` in `Showcase.ts` for backdrops; the `.card img` aspect in `App.vue` for cards, shot at twice the size and halved. */

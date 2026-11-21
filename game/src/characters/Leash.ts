@@ -1,11 +1,11 @@
-import { Component, distanceXZ, type GameObject } from '@arc-director/kindling';
-import { RigidBody } from '../engine/components';
+import { Component, distanceXZ, Rigidbody, type GameObject } from '@arc-director/kindling';
+
 import { Order } from '../engine/order';
 import { walkClear } from '../world/path';
 
 /**
  * Keeps a character from walking alone where foes are: while one is within `wary` of it with a walkable straight line
- * between them, and it is farther than `reach` from all of its company, it is held. Held, it may only step toward the
+ * between them, and it is farther than `reach` from all of its party, it is held. Held, it may only step toward the
  * nearest of them, until it is back within `regroup` of one: the gap between the two keeps it from flickering on and
  * off at the edge. A foe seen through a web or a shut door does not count. Away from foes it walks free. It never
  * stands stuck, since the way back is open.
@@ -19,7 +19,7 @@ export class Leash extends Component {
 	/** Meters from a foe with a walkable line here within which the leash holds. */
 	public wary = 14;
 	/** Its living companions now, itself among them or not. None: it walks free. */
-	public company:()=>GameObject[] = () => [];
+	public party:()=>GameObject[] = () => [];
 	/** The living foes now. */
 	public foes:()=>GameObject[] = () => [];
 	private _held = false;
@@ -31,7 +31,7 @@ export class Leash extends Component {
 			return;
 		}
 		this._held ||= nearest.d > this.reach;
-		const rb = this.gameObject.getComponent(RigidBody);
+		const rb = this.gameObject.getComponent(Rigidbody);
 		if (this._held && rb && rb.velocity.x * nearest.dx + rb.velocity.z * nearest.dz <= 0) {
 			rb.velocity.x = 0;
 			rb.velocity.z = 0;
@@ -41,7 +41,7 @@ export class Leash extends Component {
 	private nearestCompanion():{ dx:number; dz:number; d:number } | undefined {
 		const p = this.gameObject.transform.position;
 		let nearest:{ dx:number; dz:number; d:number } | undefined;
-		for (const go of this.company()) {
+		for (const go of this.party()) {
 			if (go === this.gameObject) {
 				continue;
 			}

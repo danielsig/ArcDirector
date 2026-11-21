@@ -1,30 +1,36 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
+import * as THREE from 'three';
+import { Camera } from '../render/Camera.js';
 import { Chunk } from './Chunk.js';
 import { ChunkBound, ChunkStreamer, StreamingAnchor } from './ChunkStreamer.js';
 import { GameObject } from './GameObject.js';
+import { Terrain } from './Terrain.js';
 import { World } from './World.js';
 
 /** Four 4×4 chunks of 1 m tiles in a row along +X; each spawns one bound crate. */
 function scene():{ world:World; streamer:ChunkStreamer; anchor:GameObject; spawns:string[] } {
-	const world = new World();
-	world.tileSize = 1;
-	world.chunkSize = 4;
 	const spawns:string[] = [];
-	class Streamer extends ChunkStreamer {
-		public override spawn(chunk:Chunk):void {
+	class Ground extends Terrain {
+		protected override spawn(chunk:Chunk):void {
 			spawns.push(chunk.id);
 			const crate = new GameObject(`crate_${chunk.id}`);
 			crate.addComponent(ChunkBound).chunkID = chunk.id;
 			const c = chunk.worldCellCenter(1, 1);
 			crate.transform.position.x = c.x;
 			crate.transform.position.z = c.z;
-			world.add(crate);
+			this.world.add(crate);
 		}
 	}
+	class StreamWorld extends World {
+		public override readonly terrain:Ground = new Ground(this);
+	}
+	const world = new StreamWorld();
+	world.terrain.tileSize = 1;
+	world.terrain.chunkSize = 4;
+	[0, 1, 2, 3].forEach((cx) => world.terrain.register(new Chunk(`c${cx}`, { cx, cz: 0 }, 4, 1, Array.from({ length: 16 }, (element, i) => cx * 100 + i))));
 	const host = new GameObject('Streamer');
-	const streamer = host.addComponent(Streamer);
-	streamer.chunks = [0, 1, 2, 3].map((cx) => new Chunk(`c${cx}`, { cx, cz: 0 }, 4, 1, Array.from({ length: 16 }, (element, i) => cx * 100 + i)));
+	const streamer = host.addComponent(ChunkStreamer);
 	world.add(host);
 	const anchor = new GameObject('Anchor');
 	const a = anchor.addComponent(StreamingAnchor);
@@ -37,7 +43,7 @@ function scene():{ world:World; streamer:ChunkStreamer; anchor:GameObject; spawn
 }
 
 function loaded(world:World):string[] {
-	return [...world.chunks.values()].map((c) => c.id).sort();
+	return [...world.terrain.loaded].map((c) => c.id).sort();
 }
 
 describe('Chunk', () => {
@@ -59,40 +65,12 @@ describe('Chunk', () => {
 	});
 });
 
-describe('World chunks', () => {
-	it('finds loaded chunks and tiles by world point', () => {
-		const world = new World();
-		world.tileSize = 1;
-		world.chunkSize = 4;
-		const chunk = new Chunk('c', { cx: -1, cz: 0 }, 4, 1, Array.from({ length: 16 }, (element, i) => i));
-		world.addChunk(chunk);
-		assert.deepEqual(world.chunkCoordAt(-0.5, 3.5), { cx: -1, cz: 0 });
-		assert.equal(world.chunkAtWorld(-0.5, 3.5), chunk);
-		assert.equal(world.tileAtWorld(-0.5, 3.5), 15);
-		assert.equal(world.chunkAtWorld(0.5, 3.5), undefined);
-		world.addChunk(new Chunk('d', { cx: 1, cz: 2 }, 4, 1, []));
-		assert.deepEqual(world.chunkBounds(), { minX: -4, minZ: 0, maxX: 8, maxZ: 12 });
-		assert.deepEqual(world.tileCoordAt(-0.5, 3.5), { tx: -1, tz: 3 });
-		assert.deepEqual(world.tileCenter(-1, 3), { x: -0.5, z: 3.5 });
-		world.removeChunk(chunk);
-		assert.equal(world.chunks.size, 1);
-		assert.equal(new World().chunkBounds(), undefined);
-	});
-
-	it('rejects a chunk whose size does not match the world', () => {
-		const world = new World();
-		world.chunkSize = 4;
-		assert.throws(() => world.addChunk(new Chunk('c', { cx: 0, cz: 0 }, 8, 1, [])));
-	});
-});
-
 describe('ChunkStreamer', () => {
 	it('loads near anchors, parks far chunk objects, and brings the same ones back', () => {
 		const { world, streamer, anchor, spawns } = scene();
 		streamer.stream();
 		assert.deepEqual(loaded(world), ['c0', 'c1']);
-		assert.deepEqual(world.chunkBounds(), { minX: 0, minZ: 0, maxX: 8, maxZ: 4 });
-		assert.deepEqual(streamer.bounds(), { minX: 0, minZ: 0, maxX: 16, maxZ: 4 }, 'the whole scene, loaded or not');
+		assert.equal(world.terrain.tileAtWorld(12.5, 0.5), 300, 'a chunk not loaded still has its tiles');
 		const crate = world.findByID('crate_c0')!;
 
 		anchor.transform.position.x = 12;
@@ -116,12 +94,23 @@ describe('ChunkStreamer', () => {
 		assert.deepEqual(loaded(world), ['c0', 'c1', 'c3']);
 	});
 
+	it('loads every chunk a camera could show, out to its fog', () => {
+		const { world, streamer, anchor } = scene();
+		anchor.getComponent(StreamingAnchor)!.enabled = false;
+		world.native.fog = new THREE.Fog(0, 1, 4);
+		const eye = new GameObject('Eye');
+		eye.addComponent(Camera, { fov: 90 });
+		world.add(eye);
+		streamer.stream();
+		assert.deepEqual(loaded(world), ['c0', 'c1'], 'fog at 4 m, widened to the corners of a square 90° view: about 6.9 m');
+	});
+
 	it('changes nothing without anchors, and loadAll brings everything in', () => {
 		const { world, streamer, anchor } = scene();
 		anchor.getComponent(StreamingAnchor)!.enabled = false;
 		streamer.stream();
-		assert.equal(world.chunks.size, 0);
-		streamer.loadAll();
+		assert.equal(world.terrain.loaded.size, 0);
+		world.terrain.loadAll();
 		assert.deepEqual(loaded(world), ['c0', 'c1', 'c2', 'c3']);
 		assert.ok(world.findByID('crate_c3'));
 	});

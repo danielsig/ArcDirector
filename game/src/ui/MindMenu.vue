@@ -3,7 +3,8 @@ import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue';
 import { trainedOnArcDirector } from 'arc-director';
 import { HOSTED } from '../director/hosted';
 import { SKALDIC_LAYA, decisionChoice, decisionModelName, inferenceSetup, listLMStudioModels, lmStudio, pickDecisionChoice, thinksWith } from '../director/inference';
-import { prefs, setPrefs, watchPrefs } from '../prefs';
+import { setPrefs } from '../prefs';
+import { usePrefs } from './use-prefs';
 import type { BenchKind } from '../director/bench';
 import { quickBench, quickBenchCurrent } from '../director/quick-bench';
 import type { HudModelOption } from './hud-model';
@@ -27,23 +28,25 @@ const emit = defineEmits<{
 }>();
 
 const root = ref<HTMLElement | null>(null);
+const pop = ref<HTMLElement | null>(null);
 const open = ref(false);
-const live = ref(prefs());
-const stopPrefs = watchPrefs((next) => {
-	live.value = next;
-});
+/** Least width that opens the drop-up left of the row rather than over or under it (px). */
+const SIDE_WIDTH = 560;
+/** Where the drop-up stands, over the row: fixed on the body, so no scrolling box around the row cuts it off. */
+const place = ref<Record<string, string>>({});
+const live = usePrefs();
 
-const onLMStudio = computed(() => live.value.inference === 'lmstudio');
+const onLMStudio = computed(() => live.inference === 'lmstudio');
 /** The chat model picked, or else the one LM Studio picked itself: a separate decision model is any other. */
-const main = computed(() => live.value.model || props.active);
-const name = computed(() => thinksWith(props.active || live.value.model));
-const decider = computed(() => decisionModelName(live.value));
+const main = computed(() => live.model || props.active);
+const name = computed(() => thinksWith(props.active || live.model));
+const decider = computed(() => decisionModelName(live));
 /** The browser model NPCs think with, while it downloads or loads: how far, as the picker shows it. */
 const preparing = computed(() => {
-	const state = live.value.inference === 'browser' ? inferenceSetup.models[live.value.browserModel] : undefined;
+	const state = live.inference === 'browser' ? inferenceSetup.models[live.browserModel] : undefined;
 	return state?.progress == null ? '' : `${state.cached ? 'Loading' : 'Downloading'} ${Math.round(state.progress * 100)}%`;
 });
-const decision = computed(() => decisionChoice(live.value, main.value));
+const decision = computed(() => decisionChoice(live, main.value));
 
 /** A model LM Studio did not list, as a row of its own: it is still what was picked. */
 function unlisted(id:string):HudModelOption {
@@ -52,7 +55,7 @@ function unlisted(id:string):HudModelOption {
 
 const chatModels = computed(() => {
 	const listed = lmStudio.models.filter((m) => !m.decision);
-	const picked = live.value.model;
+	const picked = live.model;
 	return picked && !listed.some((m) => m.id === picked) ? [unlisted(picked), ...listed] : listed;
 });
 
@@ -70,7 +73,7 @@ watch(query, (now, was) => {
 });
 
 function lists():HTMLElement[] {
-	return [...root.value?.querySelectorAll<HTMLElement>('.list') ?? []];
+	return [...pop.value?.querySelectorAll<HTMLElement>('.list') ?? []];
 }
 
 /** Marks the lists that scroll, which alone fade at their edges. */
@@ -126,6 +129,7 @@ function toggle():void {
 	}
 	open.value = !open.value;
 	if (open.value) {
+		measure();
 		query.value = '';
 		void nextTick(revealPicked);
 		void listLMStudioModels().then(() => nextTick(revealPicked));
@@ -134,8 +138,35 @@ function toggle():void {
 
 /** Scrolls each list to its picked model, which may sit far down a long one. */
 function revealPicked():void {
-	root.value?.querySelectorAll('.list .row.on').forEach((row) => row.scrollIntoView({ block: 'nearest' }));
+	pop.value?.querySelectorAll('.list .row.on').forEach((row) => row.scrollIntoView({ block: 'nearest' }));
 	markScrolling();
+}
+
+/** Left of the row when there is room, else over or under it, wherever has more (the menu scrolls the row up first); kept on screen. */
+function measure():void {
+	if (!props.compact) {
+		root.value?.scrollIntoView({ block: 'start', behavior: 'instant' });
+	}
+	const row = root.value?.getBoundingClientRect();
+	if (!row) {
+		return;
+	}
+	if (!props.compact && row.left - 30 >= SIDE_WIDTH) {
+		const width = Math.min(800, row.left - 30);
+		place.value = { left: `${row.left - 14 - width}px`, width: `${width}px`, top: '16px', bottom: '16px', height: 'fit-content', margin: 'auto 0' };
+		return;
+	}
+	const width = Math.min(800, window.innerWidth - 32);
+	const left = props.compact ? row.left + (row.width - width) / 2 : row.left;
+	const above = row.top - 30;
+	const below = window.innerHeight - row.bottom - 30;
+	place.value = {
+		left: `${Math.max(16, Math.min(left, window.innerWidth - 16 - width))}px`,
+		width: `${width}px`,
+		...(above >= below
+			? { bottom: `${window.innerHeight - row.top + 14}px`, maxHeight: `${above}px` }
+			: { top: `${row.bottom + 14}px`, maxHeight: `${below}px` }),
+	};
 }
 
 function change():void {
@@ -148,7 +179,7 @@ function pickMain(id:string):void {
 }
 
 function onPointer(ev:PointerEvent):void {
-	if (open.value && !root.value?.contains(ev.target as Node)) {
+	if (open.value && !root.value?.contains(ev.target as Node) && !pop.value?.contains(ev.target as Node)) {
 		open.value = false;
 	}
 }
@@ -162,143 +193,146 @@ function onKey(ev:KeyboardEvent):void {
 onMounted(() => {
 	document.addEventListener('pointerdown', onPointer, true);
 	document.addEventListener('keydown', onKey);
+	window.addEventListener('resize', measure);
 });
 onUnmounted(() => {
-	stopPrefs();
 	document.removeEventListener('pointerdown', onPointer, true);
 	document.removeEventListener('keydown', onKey);
+	window.removeEventListener('resize', measure);
 });
 </script>
 
 <template>
 	<div ref="root" class="mind-menu" :class="{ compact, open }">
-		<Transition name="pop">
-			<div v-if="open" class="pop" role="menu" aria-label="Models NPCs think with">
-				<header class="server">
-					<img src="/lmstudio/logo.png" alt="">
-					<span class="who">
-						<b>LM Studio</b>
-						<span v-if="lmStudio.listing && !lmStudio.listed">Looking…</span>
-						<span v-else-if="offline">Not answering on port 1234</span>
-						<span v-else>{{ chatModels.length }} model{{ chatModels.length === 1 ? '' : 's' }} · {{ loadedCount }} loaded</span>
-					</span>
-					<label v-if="lmStudio.models.length > 6" class="filter">
-						<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6" /><path d="M15 15l5 5" /></svg>
-						<input v-model="query" type="search" placeholder="Find a model" aria-label="Find a model">
-					</label>
-					<button type="button" class="refresh" :class="{ spinning: lmStudio.listing }" title="Ask LM Studio again" aria-label="Ask LM Studio again" @click="listLMStudioModels()">
-						<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 12a8 8 0 1 1-2.4-5.7M20 4v5h-5" /></svg>
-					</button>
-				</header>
-
-				<div class="columns">
-					<section>
-						<div class="head">
-							<h3>
-								<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 2.5l1.9 5.6 5.6 1.9-5.6 1.9L10 17.5l-1.9-5.6L2.5 10l5.6-1.9z" /></svg>
-								Thinks with
-							</h3>
-							<QuickRank kind="arc" />
-						</div>
-						<button type="button" class="row" role="menuitemradio" :aria-checked="!live.model" :class="{ on: !live.model }" @click="pickMain('')">
-							<span class="tick" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7" /></svg></span>
-							<span class="id">
-								<b>LM Studio's pick</b>
-								<span class="by">{{ active ? parts(active).name : 'Whichever model it has loaded' }}</span>
-							</span>
+		<Teleport to="body">
+			<Transition name="pop">
+				<div v-if="open" ref="pop" class="pop" :class="{ compact }" :style="place" role="menu" aria-label="Models NPCs think with">
+					<header class="server">
+						<img src="/lmstudio/logo.png" alt="">
+						<span class="who">
+							<b>LM Studio</b>
+							<span v-if="lmStudio.listing && !lmStudio.listed">Looking…</span>
+							<span v-else-if="offline">Not answering on port 1234</span>
+							<span v-else>{{ chatModels.length }} model{{ chatModels.length === 1 ? '' : 's' }} · {{ loadedCount }} loaded</span>
+						</span>
+						<label v-if="lmStudio.models.length > 6" class="filter">
+							<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6" /><path d="M15 15l5 5" /></svg>
+							<input v-model="query" type="search" placeholder="Find a model" aria-label="Find a model">
+						</label>
+						<button type="button" class="refresh" :class="{ spinning: lmStudio.listing }" title="Ask LM Studio again" aria-label="Ask LM Studio again" @click="listLMStudioModels()">
+							<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 12a8 8 0 1 1-2.4-5.7M20 4v5h-5" /></svg>
 						</button>
-						<div class="list">
+					</header>
+
+					<div class="columns">
+						<section>
+							<div class="head">
+								<h3>
+									<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 2.5l1.9 5.6 5.6 1.9-5.6 1.9L10 17.5l-1.9-5.6L2.5 10l5.6-1.9z" /></svg>
+									Thinks with
+								</h3>
+								<QuickRank kind="arc" />
+							</div>
+							<button type="button" class="row" role="menuitemradio" :aria-checked="!live.model" :class="{ on: !live.model }" @click="pickMain('')">
+								<span class="tick" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7" /></svg></span>
+								<span class="id">
+									<b>LM Studio's pick</b>
+									<span class="by">{{ active ? parts(active).name : 'Whichever model it has loaded' }}</span>
+								</span>
+							</button>
+							<div class="list">
+								<button
+									v-for="m in ranked('arc', shown(chatModels))"
+									:key="m.id"
+									type="button"
+									class="row"
+									role="menuitemradio"
+									:aria-checked="m.id === live.model"
+									:class="{ on: m.id === live.model, skaldic: trainedOnArcDirector(m.id), testing: quickBenchCurrent('arc') === m.id }"
+									:title="m.id"
+									@click="pickMain(m.id)"
+								>
+									<span class="tick" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7" /></svg></span>
+									<span class="id">
+										<b>{{ parts(m.id).name }}</b>
+										<span v-if="parts(m.id).by" class="by">{{ parts(m.id).by }}</span>
+									</span>
+									<span v-if="m.devices > 1" class="tag">×{{ m.devices }}</span>
+									<span v-if="m.loaded" class="loaded" title="Loaded in LM Studio: answers at once"><i />Loaded</span>
+									<QuickScoreBadge kind="arc" :id="m.id" />
+								</button>
+								<p v-if="!shown(chatModels).length && !lmStudio.listing" class="empty">{{ query ? 'No model by that name.' : 'No chat models yet. Load one in LM Studio.' }}</p>
+							</div>
+						</section>
+
+						<section>
+							<div class="head">
+								<h3>
+									<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M13 2 4 14h7l-1 8 9-12h-7z" /></svg>
+									Quick decisions
+								</h3>
+								<QuickRank kind="decision" />
+							</div>
+							<button type="button" class="row" role="menuitemradio" :aria-checked="decision === 'model:'" :class="{ on: decision === 'model:' }" @click="pickDecisionChoice('model:')">
+								<span class="tick" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7" /></svg></span>
+								<span class="id">
+									<b>Same as thinking</b>
+									<span class="by">The main model scores its own choices</span>
+								</span>
+							</button>
 							<button
-								v-for="m in ranked('arc', shown(chatModels))"
-								:key="m.id"
 								type="button"
-								class="row"
+								class="row skaldic laya"
 								role="menuitemradio"
-								:aria-checked="m.id === live.model"
-								:class="{ on: m.id === live.model, skaldic: trainedOnArcDirector(m.id), testing: quickBenchCurrent('arc') === m.id }"
-								:title="m.id"
-								@click="pickMain(m.id)"
+								:aria-checked="decision === `model:${SKALDIC_LAYA.model}`"
+								:class="{ on: decision === `model:${SKALDIC_LAYA.model}` }"
+								:disabled="!!inferenceSetup.unsupported || inferenceSetup.laya.progress !== null"
+								:title="inferenceSetup.unsupported || undefined"
+								@click="pickDecisionChoice(`model:${SKALDIC_LAYA.model}`)"
 							>
 								<span class="tick" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7" /></svg></span>
 								<span class="id">
-									<b>{{ parts(m.id).name }}</b>
-									<span v-if="parts(m.id).by" class="by">{{ parts(m.id).by }}</span>
+									<span class="eyebrow">Trained for ArcDirector</span>
+									<b>{{ SKALDIC_LAYA.label }} · in your browser</b>
+									<span class="by">{{ browserLayaNote }}</span>
 								</span>
-								<span v-if="m.devices > 1" class="tag">×{{ m.devices }}</span>
-								<span v-if="m.loaded" class="loaded" title="Loaded in LM Studio: answers at once"><i />Loaded</span>
-								<QuickScoreBadge kind="arc" :id="m.id" />
 							</button>
-							<p v-if="!shown(chatModels).length && !lmStudio.listing" class="empty">{{ query ? 'No model by that name.' : 'No chat models yet. Load one in LM Studio.' }}</p>
-						</div>
-					</section>
+							<div class="list">
+								<button
+									v-for="m in ranked('decision', shown(deciders))"
+									:key="m.id"
+									type="button"
+									class="row"
+									role="menuitemradio"
+									:aria-checked="decision === `model:${m.id}`"
+									:class="{ on: decision === `model:${m.id}`, skaldic: trainedOnArcDirector(m.id), laya: m.decision, testing: quickBenchCurrent('decision') === m.id }"
+									:title="m.id"
+									@click="pickDecisionChoice(`model:${m.id}`)"
+								>
+									<span class="tick" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7" /></svg></span>
+									<span class="id">
+										<span v-if="m.decision" class="eyebrow">Decision model</span>
+										<b>{{ parts(m.id).name }}</b>
+										<span v-if="parts(m.id).by" class="by">{{ parts(m.id).by }}</span>
+									</span>
+									<span v-if="m.loaded" class="loaded" title="Loaded in LM Studio: answers at once"><i />Loaded</span>
+									<QuickScoreBadge kind="decision" :id="m.id" />
+								</button>
+								<p v-if="!shown(deciders).length && query && !lmStudio.listing" class="empty">No model by that name.</p>
+							</div>
+							<div class="quiet">
+								<button v-if="HOSTED.jev" type="button" role="menuitemradio" :aria-checked="decision === 'jev'" :class="{ on: decision === 'jev' }" @click="pickDecisionChoice('jev')">Jev (hosted)</button>
+								<button type="button" role="menuitemradio" :aria-checked="decision === 'off'" :class="{ on: decision === 'off' }" @click="pickDecisionChoice('off')">Off</button>
+							</div>
+						</section>
+					</div>
 
-					<section>
-						<div class="head">
-							<h3>
-								<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M13 2 4 14h7l-1 8 9-12h-7z" /></svg>
-								Quick decisions
-							</h3>
-							<QuickRank kind="decision" />
-						</div>
-						<button type="button" class="row" role="menuitemradio" :aria-checked="decision === 'model:'" :class="{ on: decision === 'model:' }" @click="pickDecisionChoice('model:')">
-							<span class="tick" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7" /></svg></span>
-							<span class="id">
-								<b>Same as thinking</b>
-								<span class="by">The main model scores its own choices</span>
-							</span>
-						</button>
-						<button
-							type="button"
-							class="row skaldic laya"
-							role="menuitemradio"
-							:aria-checked="decision === `model:${SKALDIC_LAYA.model}`"
-							:class="{ on: decision === `model:${SKALDIC_LAYA.model}` }"
-							:disabled="!!inferenceSetup.unsupported || inferenceSetup.laya.progress !== null"
-							:title="inferenceSetup.unsupported || undefined"
-							@click="pickDecisionChoice(`model:${SKALDIC_LAYA.model}`)"
-						>
-							<span class="tick" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7" /></svg></span>
-							<span class="id">
-								<span class="eyebrow">Trained for ArcDirector</span>
-								<b>{{ SKALDIC_LAYA.label }} · in your browser</b>
-								<span class="by">{{ browserLayaNote }}</span>
-							</span>
-						</button>
-						<div class="list">
-							<button
-								v-for="m in ranked('decision', shown(deciders))"
-								:key="m.id"
-								type="button"
-								class="row"
-								role="menuitemradio"
-								:aria-checked="decision === `model:${m.id}`"
-								:class="{ on: decision === `model:${m.id}`, skaldic: trainedOnArcDirector(m.id), laya: m.decision, testing: quickBenchCurrent('decision') === m.id }"
-								:title="m.id"
-								@click="pickDecisionChoice(`model:${m.id}`)"
-							>
-								<span class="tick" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7" /></svg></span>
-								<span class="id">
-									<span v-if="m.decision" class="eyebrow">Decision model</span>
-									<b>{{ parts(m.id).name }}</b>
-									<span v-if="parts(m.id).by" class="by">{{ parts(m.id).by }}</span>
-								</span>
-								<span v-if="m.loaded" class="loaded" title="Loaded in LM Studio: answers at once"><i />Loaded</span>
-								<QuickScoreBadge kind="decision" :id="m.id" />
-							</button>
-							<p v-if="!shown(deciders).length && query && !lmStudio.listing" class="empty">No model by that name.</p>
-						</div>
-						<div class="quiet">
-							<button v-if="HOSTED.jev" type="button" role="menuitemradio" :aria-checked="decision === 'jev'" :class="{ on: decision === 'jev' }" @click="pickDecisionChoice('jev')">Jev (hosted)</button>
-							<button type="button" role="menuitemradio" :aria-checked="decision === 'off'" :class="{ on: decision === 'off' }" @click="pickDecisionChoice('off')">Off</button>
-						</div>
-					</section>
+					<footer>
+						<button type="button" class="elsewhere" @click="change">Think somewhere else<span aria-hidden="true"> ›</span></button>
+					</footer>
 				</div>
-
-				<footer>
-					<button type="button" class="elsewhere" @click="change">Think somewhere else<span aria-hidden="true"> ›</span></button>
-				</footer>
-			</div>
-		</Transition>
+			</Transition>
+		</Teleport>
 
 		<button type="button" class="trigger" :aria-expanded="onLMStudio ? open : undefined" :aria-haspopup="onLMStudio ? 'menu' : undefined" @click="toggle">
 			<svg class="spark" viewBox="0 0 24 24" aria-hidden="true">
@@ -322,11 +356,11 @@ onUnmounted(() => {
 </template>
 
 <style scoped>
-.mind-menu {
+.mind-menu,
+.pop {
 	/* Skaldic models under their gold, as in the inference picker: midnight blue, crimson for a decision model. */
 	--skaldic-bg: linear-gradient(135deg, #24345a, #0f1626);
 	--laya-bg: linear-gradient(135deg, #5c1d26, #24090e);
-	position: relative;
 	font-family: var(--font);
 	color: var(--ink);
 }
@@ -529,11 +563,8 @@ button:focus-visible {
 
 /* The drop-up: a parchment panel over the row, with a tail pointing down at it. */
 .pop {
-	position: absolute;
-	z-index: 10;
-	left: 0;
-	bottom: calc(100% + 14px);
-	width: min(800px, calc(100vw - 32px));
+	position: fixed;
+	z-index: 1000;
 	display: flex;
 	flex-direction: column;
 	gap: 12px;
@@ -545,9 +576,7 @@ button:focus-visible {
 	transform-origin: 40px calc(100% + 14px);
 }
 
-.compact .pop {
-	left: 50%;
-	translate: -50% 0;
+.pop.compact {
 	transform-origin: 50% calc(100% + 14px);
 }
 
@@ -555,8 +584,13 @@ button:focus-visible {
 .columns {
 	display: grid;
 	grid-template-columns: 1fr 1fr;
+	grid-template-rows: minmax(0, 1fr);
 	gap: 16px;
 	min-height: 0;
+	/* The lists shrink first to fit; on a screen too short for the rest, this scrolls. Room for their scrollbars beside. */
+	overflow: hidden auto;
+	margin: 0 -6px;
+	padding: 0 6px;
 }
 
 .list {
@@ -564,6 +598,7 @@ button:focus-visible {
 	flex-direction: column;
 	gap: 6px;
 	max-height: min(44vh, 400px);
+	min-height: 0;
 	margin: 0 -6px;
 	padding: 4px 6px;
 	overflow-y: auto;
@@ -717,6 +752,7 @@ button:focus-visible {
 
 section {
 	min-width: 0;
+	min-height: 0;
 	display: flex;
 	flex-direction: column;
 	gap: 6px;

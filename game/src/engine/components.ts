@@ -8,36 +8,29 @@ import {
 	Rigidbody,
 	Time,
 	Component,
-	type Bounds,
 	type GameObject,
+	type SfxPatch,
 	type XZ,
 } from '@arc-director/kindling';
 import { showNamingText, type NamingText } from 'arc-director';
 import { Order } from './order';
-import { CELL_SIZE } from '../world/constants';
-import { doorInteriorAlong } from '../world/interior';
-import { Pickupable } from '../items/item-components';
-import { findCarried } from '../items/inventory';
-import { itemID } from '../items/instance';
-import { lockedReason } from '../items/pickup';
+import { cueAt } from '../audio/cue';
+import type { DemoWorld } from './demo-world';
+import { Item } from '../items/item-components';
+import { getDef } from '../items/defs';
+import { equipItem } from '../items/equip';
+import { findCarried, findReady, inBackpack, removeFromBags } from '../items/inventory';
+import { itemID, type ItemInstance } from '../items/instance';
+import type { UseResult } from '../items/use';
 import { characterModel } from '../render/character-models';
 export { BoxCollider };
 
 /** Ground speed (m/s) below which a character stands. */
 const WALKING_SPEED = 0.35;
 
-export class RigidBody extends Rigidbody {
-	public useGravity = false;
-
-	/** Ground speed in m/s. */
-	public get speed():number {
-		return Math.hypot(this.velocity.x, this.velocity.z);
-	}
-
-	/** Moving fast enough to walk rather than stand. */
-	public get walking():boolean {
-		return this.speed > WALKING_SPEED;
-	}
+/** Whether `go` moves fast enough to walk rather than stand. */
+export function isWalking(go:GameObject):boolean {
+	return (go.getComponent(Rigidbody)?.speed ?? 0) > WALKING_SPEED;
 }
 
 export class Light extends KindlingLight {
@@ -135,6 +128,11 @@ export class Named extends Component {
 	public aliases:string[] | undefined;
 }
 
+/** `go`'s id as minds know it: its `Named` id, else its own. */
+export function idOf(go:GameObject):string {
+	return go.getComponent(Named)?.id || go.id;
+}
+
 export class Attached extends Component {
 	public toID = '';
 	public mode:'on' | 'in' | 'worn' | 'held' = 'on';
@@ -177,76 +175,8 @@ export abstract class Barrier extends Component {
 
 	/** Its id, as ArcDirector knows it. */
 	protected get label():string {
-		return this.gameObject.getComponent(Named)?.id ?? this.gameObject.id;
+		return idOf(this.gameObject);
 	}
-}
-
-export class Door extends Barrier {
-	public static override order = Order.door;
-	public static override saved = ['open'];
-	public open = false;
-	public axis:'x' | 'z' = 'x';
-	public blockedWhenClosed = true;
-	public closedYaw = 0;
-	public openYaw = 0;
-	public size = { x: 0, y: 0, z: 0 };
-	public panel:GameObject | null = null;
-	public flipped = false;
-	/** Named building this door opens into, if any. */
-	public buildingID = '';
-
-	/** Keep the AABB in sync the moment the leaf moves — do not wait for the next tick. */
-	public syncCollision():void {
-		if (!this.panel) {
-			return;
-		}
-		const yaw = this.open ? this.openYaw : this.closedYaw;
-		this.panel.transform.localYaw = yaw;
-		const offset = Math.sin(yaw) * 0.5;
-		this.panel.transform.localPosition.z = this.flipped ? -offset : offset;
-		this.panel.transform.localPosition.x = offset;
-		const collider = this.panel.getComponent(BoxCollider);
-		if (collider) {
-			collider.size = this.open
-				? { x: this.size.z, y: this.size.y, z: this.size.x }
-				: this.size;
-		}
-	}
-
-	public override update(dt:number):void {
-		this.syncCollision();
-	}
-
-	/** Shut. Its open leaf clears nothing by walking up to it. */
-	public override get standsInWay():boolean {
-		return !this.open;
-	}
-
-	/** Whether someone at `from` can open it: no lock holds it, or its lock bars only the other side. Opening leaves the lock as it is. */
-	public override opensFrom(from:XZ):boolean {
-		const lock = this.gameObject.getComponent(Lock);
-		if (!lock?.locked) {
-			return true;
-		}
-		const p = this.gameObject.transform.position;
-		const inward = doorInteriorAlong(this.gameObject);
-		return lock.lockedFrom === 'outside' && inward !== 0 && (this.axis === 'x' ? from.x - p.x : from.z - p.z) * inward >= 0;
-	}
-
-	/** Locked: whether `body` carries the key. */
-	protected blockedText(body:GameObject, name:(id:string)=>string):string {
-		const lock = this.gameObject.getComponent(Lock)!;
-		const key = findCarried(body, (it) => it.Key?.keyID === lock.keyID);
-		const door = name(this.label);
-		return key ? `${door} is locked — you carry ${name(itemID(key))}, use it on ${door}` : `${door} is ${showNamingText(lockedReason(this.gameObject.world, lock, body), name)}`;
-	}
-}
-
-/** A named building, or a `room`: the walkable box inside it (walls excluded). */
-export class Interior extends Component {
-	public bounds:Bounds = { minX: 0, maxX: 0, minZ: 0, maxZ: 0 };
-	/** A room of a larger place (a crypt hall), not a building with an outdoors around it. */
-	public room = false;
 }
 
 export class Lock extends Component {
@@ -255,104 +185,103 @@ export class Lock extends Component {
 	public locked = true;
 	/** Which side of a door the lock bars opening from. From `outside`, anyone inside opens it, and it stays locked. */
 	public lockedFrom:'both' | 'outside' = 'both';
-}
 
-export class Chest extends Component {
-	public static override saved = ['open'];
-	public open = false;
-}
+	/** Its key turns, with its sound: it unlocks, unless it bars one side only (`lockedFrom`), which stays locked for the next one out there. */
+	public turnKey():void {
+		if (this.locked) {
+			this.locked = this.lockedFrom === 'outside';
+			cueAt(this.gameObject.world, 'unlock', this.gameObject);
+		}
+	}
 
-/** Seconds the span takes to swing between raised and lowered. */
-export const BRIDGE_SWING_SECONDS = 1;
+	/** Whether `item` (or an item def) is its key. */
+	public fits(item:{ Key?:{ keyID:string } }):boolean {
+		return item.Key?.keyID === this.keyID;
+	}
 
-/** World height of the lowered span's planks, where whoever crosses stands. Matches `createBridgeMesh`. */
-export const BRIDGE_DECK_Y = 0.22;
+	/** Why `character` cannot open it by hand, or nothing: unlocked, or its key ready in a hand. One in the pack has to come out first. */
+	public refusal(character:GameObject):string | undefined {
+		if (!this.locked || findReady(character, (it) => this.fits(it))) {
+			return undefined;
+		}
+		return findCarried(character, (it) => this.fits(it)) ? 'the key is in your pack' : showNamingText(lockedReason(this.gameObject.world, this, character));
+	}
 
-/** Drawbridge over water. When raised (`open` false), the river cannot be crossed. */
-export class Bridge extends Barrier {
-	public static override saved = ['open'];
-	/** Where the span is headed: lowered (open) or raised. */
-	public open = false;
-	/** While it holds, a lowered span may not be raised: someone has paid for it to stay down. A scene sets it. */
-	public paidDown:()=>boolean = () => false;
-	public cells:XZ[] = [];
-	/** Mid-swing lift; undefined when the span rests where `open` says. */
-	private _swing:number | undefined;
-
-	public override start():void {
+	/**
+	 * `character` uses `item` on what it holds shut: its key, taken into a hand from the pack if need be, turns and
+	 * `open`s it; a wrong key, or anything else while it is locked, says what it needs. Nothing for anything else.
+	 */
+	public useKey(character:GameObject, item:ItemInstance, open:()=>void):UseResult | undefined {
 		const world = this.gameObject.world;
-		if (!world || this.cells.length === 0) {
-			return;
+		if (!item.Key) {
+			return this.locked ? { ok: false, reason: lockedReason(world, this, character) } : undefined;
 		}
-		const xs = this.cells.map((c) => c.x);
-		const zs = this.cells.map((c) => c.z);
-		world.addStepOn({
-			bounds: {
-				minX: Math.min(...xs) - CELL_SIZE / 2,
-				maxX: Math.max(...xs) + CELL_SIZE / 2,
-				minZ: Math.min(...zs) - CELL_SIZE / 2,
-				maxZ: Math.max(...zs) + CELL_SIZE / 2,
-			},
-			sample: (x, z) => this.enabled && this.open && this.cells.some((c) => Math.abs(c.x - x) < 0.55 && Math.abs(c.z - z) < 0.55) ? BRIDGE_DECK_Y : undefined,
-		});
-	}
-
-	/** How far up the span is: 0 lowered, 1 raised. */
-	public get lift():number {
-		return this._swing ?? this.target;
-	}
-
-	/** Swinging between raised and lowered. */
-	public get moving():boolean {
-		return this._swing !== undefined;
-	}
-
-	/** Work the lever: swing to the other state over {@link BRIDGE_SWING_SECONDS}. Setting `open` (a load) snaps instead. */
-	public toggle():void {
-		this._swing = this.lift;
-		this.open = !this.open;
-		this.syncCollision();
-	}
-
-	/** Bodies and loose things standing on the span. */
-	public occupants():GameObject[] {
-		const half = CELL_SIZE / 2;
-		return (this.gameObject.world?.objects ?? []).filter((go) => (
-			(go.getComponent(HumanBody) || go.getComponent(Pickupable))
-			&& this.cells.some((c) => Math.abs(go.transform.position.x - c.x) <= half && Math.abs(go.transform.position.z - c.z) <= half)
-		));
-	}
-
-	/** Walkable only once fully lowered; anything else blocks. */
-	public syncCollision():void {
-		const col = this.gameObject.getComponent(BoxCollider);
-		if (!col) {
-			return;
+		if (world && inBackpack(character, item)) {
+			const err = equipItem(character, item, world);
+			if (err) {
+				return { ok: false, reason: err };
+			}
+			removeFromBags(character, item);
 		}
-		const down = this.open && this.lift === 0;
-		col.solid = !down;
-		col.isTrigger = down;
-	}
-
-	public override update(dt:number):void {
-		if (this._swing !== undefined) {
-			const step = dt / BRIDGE_SWING_SECONDS;
-			const lift = this._swing < this.target ? Math.min(this.target, this._swing + step) : Math.max(this.target, this._swing - step);
-			this._swing = lift === this.target ? undefined : lift;
+		if (!this.fits(item)) {
+			const id = this.gameObject.getComponent(Named)?.id;
+			return { ok: false, reason: (name) => `wrong key — ${id ? name(id) : 'it'} needs ${showNamingText(keyNameFor(world, this, character), name)}` };
 		}
-		this.syncCollision();
-	}
-
-	protected blockedText(body:GameObject, name:(id:string)=>string):string {
-		return this.open ? `${name(this.label)} is being lowered — wait for it` : `${name(this.label)} is raised — it must be lowered first`;
-	}
-
-	private get target():number {
-		return this.open ? 0 : 1;
+		open();
+		return { ok: true, reason: this.locked ? 'opened' : 'unlocked' };
 	}
 }
 
-export class BridgeLever extends Component {}
+/** A door's or chest's: open or not, with the sounds it makes either way. */
+type Openable = Component & { open:boolean };
+
+/** Opens or shuts `c` with its `sfx`; `unlock` turns its lock's key first ({@link Lock.turnKey}). Whether it moved. */
+export function setOpen(c:Openable, open:boolean, unlock:boolean, sfx:{ open:SfxPatch; close:SfxPatch }):boolean {
+	if (unlock) {
+		c.gameObject.getComponent(Lock)?.turnKey();
+	}
+	if (open === c.open) {
+		return false;
+	}
+	c.open = open;
+	cueAt(c.gameObject.world, open ? sfx.open : sfx.close, c.gameObject);
+	return true;
+}
+
+/**
+ * The key that opens `lock`, wherever it lies, so a locked thing says `BrassKey` and not just "a brass key"; with who
+ * carries it or what holds it, where `viewer` knows (`BrassKey, carried by William`, `BrassKey; it's in CellarChest`).
+ * Each mind reads it in its own names, and the key is looked for only then: a route search past locked doors only
+ * holds it.
+ */
+export function keyNameFor(world:DemoWorld | null, lock:Lock, viewer?:GameObject):NamingText {
+	return (name) => {
+		for (const go of world?.objects ?? []) {
+			const id = idOf(go);
+			const item = go.getComponent(Item);
+			if (item && lock.fits(getDef(item.defID).components)) {
+				return name(id);
+			}
+			const held = findCarried(go, (it) => lock.fits(it));
+			if (held) {
+				const known = viewer && go !== viewer && world!.canSeeInventoryOf(viewer, go);
+				return !known ? name(itemID(held)) : `${name(itemID(held))}${go.getComponent(HumanBody) ? ', carried by' : "; it's in"} ${name(id)}`;
+			}
+		}
+		return `a ${lock.keyID} key`;
+	};
+}
+
+/** `locked — needs BrassKey`, the one failure every locked door and chest gives, worded for `viewer` ({@link keyNameFor}). */
+export function lockedReason(world:DemoWorld | null, lock:Lock, viewer?:GameObject):NamingText {
+	return lock.keyID ? (name) => `locked — needs ${showNamingText(keyNameFor(world, lock, viewer), name)}` : 'locked';
+}
+
+/** What `examine` adds of `go`'s lock while it holds (` and locked; it needs BrassKey`), worded for `viewer`. */
+export function lockedNote(go:GameObject, nameOf:(id:string)=>string, viewer?:GameObject):string {
+	const lock = go.getComponent(Lock);
+	return lock?.locked ? ` and locked${lock.keyID ? `; it needs ${showNamingText(keyNameFor(go.world, lock, viewer), nameOf)}` : ''}` : '';
+}
 
 /** Coins on a person — not an inventory stack. */
 export class Wallet extends Component {
@@ -366,12 +295,12 @@ export class Merchant extends Component {
 	public goods:string[] = [];
 }
 
-export type MarketNPCKind = 'vendor' | 'customer' | 'guard';
+export type MarketplaceNPCKind = 'vendor' | 'customer' | 'guard';
 
-/** Flea-market role: vendors stay; customers leave through a gate when satisfied. */
-export class MarketNPC extends Component {
+/** Flea-marketplace role: vendors stay; customers leave through a gate when satisfied. */
+export class MarketplaceNPC extends Component {
 	public static override saved = ['wants', 'leaveGate', 'leaving', 'postX', 'postZ', 'post'];
-	public kind:MarketNPCKind = 'customer';
+	public kind:MarketplaceNPCKind = 'customer';
 	public wants:string[] = [];
 	public leaveGate = '';
 	public leaving = false;
@@ -382,9 +311,9 @@ export class MarketNPC extends Component {
 }
 
 /** Walking into this doorway despawns a customer who is leaving through it. */
-export class MarketGate extends Component {}
+export class MarketplaceGate extends Component {}
 
-/** Marked for the market watch — stolen goods, unpaid take. */
+/** Marked for the marketplace watch — stolen goods, unpaid take. */
 export class Wanted extends Component {
 	public reason = '';
 	public items:string[] = [];
@@ -413,50 +342,8 @@ export class HearOnly extends Component {
 	public from:string[] = [];
 }
 
-export class BrewHearth extends Component {}
-
-/** A chest with no lid: what it holds stands in plain sight, for anyone to take down. */
-export class Bookshelf extends Chest {
-	public override open = true;
-}
-
-/** Something to rest on, drawn with the chunk's dressing: a `chair` to sit on or a `bed` to sleep in. One body at a time. */
-export class Furniture extends Component {
-	public kind:'chair' | 'bed' = 'chair';
-	public occupant:GameObject | null = null;
-}
-
-export class Sickbed extends Component {
-	public static override saved = ['tended'];
-	public caretaker = '';
-	public tended = false;
-}
-
 export class Flame extends Component {
 	public canIgnite = true;
-}
-
-/** Set alight with a flame, it burns for `burnSeconds` and is gone, and whatever it blocked with it. */
-export class Flammable extends Barrier {
-	public static override saved = ['burning', 'spread'];
-	public burning = false;
-	public spread = false;
-	public burnSeconds = 1.6;
-	private _burnt = 0;
-
-	public override update(dt:number):void {
-		if (!this.burning) {
-			return;
-		}
-		this._burnt += dt;
-		if (this._burnt >= this.burnSeconds) {
-			this.gameObject.world?.destroy(this.gameObject);
-		}
-	}
-
-	protected blockedText(body:GameObject, name:(id:string)=>string):string {
-		return `${name(this.label)} blocks the way — burn it with a flame first`;
-	}
 }
 
 /** Hurt `times` over by the attacks in `to` (a fight verb, such as hex), and `others` times by every other blow. */
@@ -469,14 +356,6 @@ export class Weakness extends Component {
 /** Attacks it can make beyond its fight role's own (a Blade who can also cleave). */
 export class Moves extends Component {
 	public extra:string[] = [];
-}
-
-/** Words carved on it. Sight and `examine` read them out. */
-export class Inscription extends Component {
-	public static override saved = ['answered'];
-	public text = '';
-	/** Once its riddle is answered, what sight and `examine` say instead of the carving ("answered: SealedDoor stands open"). */
-	public answered = '';
 }
 
 export const BODY_SLOTS = [
@@ -497,7 +376,7 @@ export type OccupiedRef = {
 	occupiedBy:BodySlot;
 };
 
-export type SlotFill = import('../items/instance').ItemInstance | OccupiedRef | null;
+export type SlotFill = ItemInstance | OccupiedRef | null;
 
 /** A pose the character holds for a moment instead of standing or walking. */
 export type PoseClip = 'auto' | 'walk' | 'take' | 'give';
@@ -602,7 +481,7 @@ export class HurtFlash extends Component {
 
 	public override update(dt:number):void {
 		const world = this.gameObject.world;
-		const rb = this.gameObject.getComponent(RigidBody);
+		const rb = this.gameObject.getComponent(Rigidbody);
 		if (!world || !rb || Time.time >= this.until) {
 			this.enabled = false;
 			if ((this.gameObject.getComponent(Vitals)?.hp ?? 1) <= 0) {
@@ -632,7 +511,7 @@ export class SpeechBubble extends Component {
 
 	/** While its speaker walks, the line stays up twice as long: its countdown runs at half speed. */
 	public override update(dt:number):void {
-		if (this.text && Time.time < this.until && this.gameObject.getComponent(RigidBody)?.walking) {
+		if (this.text && Time.time < this.until && isWalking(this.gameObject)) {
 			this.until += dt / 2;
 		}
 	}
@@ -655,10 +534,16 @@ export class Celebrating extends Component {
 	public style:CelebrationStyle = 'cheer';
 	private _wasWalking = false;
 
-	/** Celebrates about `count` jumps long (a cheer lasts a few seconds instead). */
-	public beginHops(time:number, count:number):void {
+	/** Celebrates `seconds` long. */
+	public celebrateFor(seconds:number):void {
 		this.enabled = true;
-		this.until = time + (this.style === 'jump' ? count * JUMP_PERIOD : CHEER_SECONDS);
+		this.until = Time.time + seconds;
+	}
+
+	/** Celebrates about `count` jumps long (a cheer lasts a few seconds instead). */
+	public beginHops(count:number):void {
+		this.enabled = true;
+		this.until = Time.time + (this.style === 'jump' ? count * JUMP_PERIOD : CHEER_SECONDS);
 	}
 
 	public override onEnable():void {
@@ -683,7 +568,7 @@ export class Celebrating extends Component {
 	}
 
 	private walking():boolean {
-		return this.gameObject.getComponent(RigidBody)?.walking === true;
+		return isWalking(this.gameObject);
 	}
 
 	public stop():void {
@@ -692,39 +577,12 @@ export class Celebrating extends Component {
 	}
 }
 
-export class Torch extends Component {
-	public static override order = Order.torch;
-	public static override saved = ['lit'];
-	public lit = true;
-	public baseIntensity = 48;
-	public baseDecay = 2;
-	/** `baseDecay` scale. 0.5 is inverse-linear; 1 is inverse-square. */
-	public static decayScale = 0.65;
-	/** 0–1 start phase so flame loops are not globally synced. */
-	public animOffset = Math.random();
-	/** Frames per second for the flame sprite. */
-	public flickerRate = 7.2 + Math.random() * 6.5;
-
-	public override update(dt:number):void {
-		const light = this.gameObject.getComponent(Light);
-		if (!light) {
-			return;
-		}
-		light.enabled = this.lit;
-		if (!this.lit) {
-			return;
-		}
-		light.intensity = this.baseIntensity * light.pulse(dt);
-		light.decay = this.baseDecay * Torch.decayScale;
-	}
-}
-
 const CAMERA_HEIGHT = 11;
 const CAMERA_BEHIND = 7.4;
 /** The camera's default distance from its target, in meters. */
 export const CAMERA_DISTANCE = Math.hypot(CAMERA_HEIGHT, CAMERA_BEHIND);
 
-export class Camera extends Component {
+export class FollowCamera extends Component {
 	public static override order = Order.camera;
 	public targetID = 'Player';
 	public height = CAMERA_HEIGHT;
@@ -746,29 +604,33 @@ export class Camera extends Component {
 	public lookHeight = 2.0;
 
 	public override lateUpdate(dt:number):void {
-		const world = this.gameObject.world;
-		if (!world) {
+		const input = this.gameObject.world?.input;
+		if (!input) {
 			return;
 		}
-		const input = world.input;
 		const dolly = input.wheelDelta * this.wheelSens + input.lookDeltaY * this.dollySens;
 		this.distance = clamp(
 			(this.distance + dolly) / input.pinch,
 			this.minDistance,
 			this.maxDistance,
 		);
+		this.yaw = lerpAngle(this.yaw, this.orbitYaw, 1 - Math.exp(-this.easeBehind * dt));
+		this.place();
+	}
+
+	/** Jumps to where the camera eases to: behind its target at `orbitYaw`, `distance` away. */
+	public snap():void {
+		this.yaw = this.orbitYaw;
+		this.place();
+	}
+
+	private place():void {
 		this.behind = this.distance * Math.cos(this.pitch);
 		this.height = this.distance * Math.sin(this.pitch);
-
-		const target = world.findByID(this.targetID);
+		const target = this.gameObject.world?.findByID(this.targetID);
 		if (!target) {
 			return;
 		}
-		this.yaw = lerpAngle(
-			this.yaw,
-			this.orbitYaw,
-			1 - Math.exp(-this.easeBehind * dt),
-		);
 		const t = target.transform.position;
 		const body = target.getComponent(Appearance);
 		const lookAt = body ? body.height * 0.82 : this.lookHeight;

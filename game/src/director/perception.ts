@@ -2,40 +2,16 @@ import { BoxCollider, Time, yawToForward, distanceXZ, type GameObject } from '@a
 import {
 	pascalCase,
 	RESERVED_TAGS,
-	showNamingText,
 	type ArcResult,
 	type Inventory,
 	type SeenObject,
 	type Sight,
 } from 'arc-director';
-import {
-	BODY_SLOTS,
-	BrewHearth,
-	Chest,
-	Door,
-	HumanBody,
-	Lock,
-	Named,
-	Sickbed,
-	Vitals,
-	Torch,
-	Bridge,
-	BridgeLever,
-	Bookshelf,
-	Flammable,
-	Furniture,
-	Inscription,
-	Wallet,
-	Merchant,
-	MarketNPC,
-	Companion,
-	Wanted,
-	alarmActive,
-	Interior,
-} from '../engine/components';
+import { BODY_SLOTS, HumanBody, Lock, Named, Vitals, Wallet, Merchant, MarketplaceNPC, Companion, Wanted, alarmActive, idOf } from '../engine/components';
+import { Interior } from '../kit/houses/interior';
 import type { DemoWorld } from '../engine/demo-world';
 import { DemoMeshRenderer } from '../engine/demo-mesh-renderer';
-import { Container, Item, Pickupable } from '../items/item-components';
+import { Item, Pickupable } from '../items/item-components';
 import {
 	findCarried,
 	isOccupied,
@@ -46,23 +22,19 @@ import {
 } from '../items/inventory';
 import type { ItemInstance } from '../items/instance';
 import { coinsOf } from '../items/wallet';
-import { keyNameFor } from '../items/pickup';
 import { getDef, worthOf } from '../items/defs';
-import { whereabouts } from '../world/interior';
+import { whereabouts } from '../kit/houses/interior';
 import { passageDoors } from '../world/passages';
-import { lineClear } from '../world/path';
+import { inLineOfSight } from '../world/path';
 import { CELL_SIZE } from '../world/constants';
 import { talkNotices } from './talk-attend';
-import { idOf, isLiving } from './names';
+import { isLiving, nameList } from './names';
 import type { CharacterCtx } from './game-types';
 import type { GameHost } from './adapter';
 import { fightExprTags, fightProximityNote, fightRole } from './fight';
-import { Reading } from '../characters/Reading';
-import { occupantName, Seated } from '../characters/Seated';
 import { isFood } from '../items/use';
-
-/** The tag of whoever has a book open, as a watch reads it (`me is "reading"`), and how others see them. */
-export const READING = 'reading';
+import { Bridge } from '../kit/bridge/bridge';
+import { sensesOf } from '../kit/thing';
 
 /** How far a character sees, in meters, where nothing stands in the way. */
 export const SIGHT = 24;
@@ -102,39 +74,9 @@ export function tagsOf(go:GameObject):string[] {
 }
 
 function tagsNow(go:GameObject):string[] {
-	const tags:string[] = [];
 	const interior = go.getComponent(Interior);
-	if (interior) {
-		tags.push(...(interior.room ? ['room'] : ['building', 'house']), 'landmark');
-	}
-	if (go.getComponent(Door)) {
-		tags.push('door', 'landmark');
-	}
-	if (go.getComponent(Bridge)) {
-		tags.push('bridge', 'landmark');
-	}
-	if (go.getComponent(BridgeLever)) {
-		tags.push('sluice', 'landmark');
-	}
-	if (go.getComponent(Chest)) {
-		tags.push('chest', 'furniture');
-	}
-	if (go.getComponent(Reading)?.active) {
-		tags.push(READING);
-	}
-	if (go.getComponent(Inscription)) {
-		tags.push('inscription', 'landmark');
-	}
-	if (go.getComponent(Flammable)) {
-		tags.push('flammable', 'obstacle');
-	}
-	if (go.getComponent(BrewHearth) || go.getComponent(Sickbed)) {
-		tags.push('furniture', 'landmark');
-	}
-	const furniture = go.getComponent(Furniture);
-	if (furniture) {
-		tags.push('furniture', furniture.kind);
-	}
+	const tags = interior ? [...(interior.room ? ['room'] : ['building', 'house']), 'landmark'] : [];
+	tags.push(...sensesOf(go).flatMap((s) => s.tags ?? []));
 	if (go.getComponent(Pickupable) || go.getComponent(Item)) {
 		tags.push('item');
 	}
@@ -146,9 +88,6 @@ function tagsNow(go:GameObject):string[] {
 	}
 	if (alarmActive(go, Time.time)) {
 		tags.push('alarm');
-	}
-	if (go.getComponent(Torch) && !go.getComponent(Item)) {
-		tags.push('torch');
 	}
 	const mesh = go.getComponent(DemoMeshRenderer)?.meshID ?? '';
 	if (mesh === 'tree_oak' || mesh === 'tree_pine') {
@@ -171,6 +110,12 @@ function poseXZ(go:GameObject):{ point:number[]; facing:number[] } {
 	const f = yawToForward(go.transform.yaw);
 	return { point: [p.x, p.z], facing: [f.x, f.z] };
 }
+
+/**
+ * Between the notes of two things one is doing at once (`sitting while reading`). Which joint small models read best
+ * (` while `, ` and `, `, `) is still to be trialed.
+ */
+const NOTE_JOIN = ' while ';
 
 /** Meters in from a wide thing's ends, and out from its face, where it is seen from. */
 const SEEN_INSET = 0.25;
@@ -202,23 +147,16 @@ function seenPoint(go:GameObject, observer?:GameObject):number[] {
 function seenOf(go:GameObject, observer?:GameObject, host?:GameHost):SeenObject {
 	const tags = host && observer ? [...tagsOf(go), ...fightExprTags(host, observer, go)] : tagsOf(go);
 	const isCharacter = tags.includes(RESERVED_TAGS.character);
+	const sensed = sensesOf(go);
 	const interactable = isCharacter
-		|| !!go.getComponent(Door)
-		|| !!go.getComponent(Chest)
+		|| sensed.some((s) => s.interactable)
 		|| !!go.getComponent(Pickupable)
-		|| !!go.getComponent(BrewHearth)
-		|| !!go.getComponent(Sickbed)
-		|| !!go.getComponent(Inscription)
-		|| !!go.getComponent(Flammable)
-		|| !!go.getComponent(Furniture)
-		|| go.id === 'BridgeLever'
-		|| go.id === 'Bridge'
-		|| !!go.getComponent(MarketNPC)
+		|| !!go.getComponent(MarketplaceNPC)
 		|| !!go.getComponent(Merchant)
 		|| !!go.getComponent(Interior);
 	const pose = poseXZ(go);
 	const row:SeenObject = {
-		id: go.getComponent(Named)?.id || go.id,
+		id: idOf(go),
 		point: seenPoint(go, observer),
 		facing: pose.facing,
 		tags,
@@ -237,45 +175,16 @@ function seenOf(go:GameObject, observer?:GameObject, host?:GameHost):SeenObject 
 		if (note) {
 			row.note = note;
 		}
-		const seated = go.getComponent(Seated);
-		if (go.getComponent(Reading)?.active && !row.note) {
-			row.note = READING;
-		}
-		if (seated?.resting && !row.note) {
-			row.note = seated.doing;
-		}
 	}
-	const carved = go.getComponent(Inscription);
-	if (carved?.text && !row.note) {
-		row.note = carved.answered || `carved: "${carved.text}"`;
+	// A fight comes first; then everything its components tell.
+	const note = row.note || sensed.flatMap((s) => (s.note ? [s.note] : [])).join(NOTE_JOIN);
+	if (note) {
+		row.note = note;
 	}
-	const door = go.getComponent(Door);
-	if (door && !row.note) {
-		row.note = door.open ? 'open' : 'shut';
-	}
-	const fuel = go.getComponent(Flammable);
-	if (fuel && !row.note) {
-		row.note = fuel.burning ? 'burning away' : 'it blocks the way; dry as tinder';
-	}
-	const taken = go.getComponent(Furniture) && occupantName(go);
-	if (taken) {
-		row.note = `${taken} is on it`;
-	}
-	const span = go.getComponent(Bridge);
-	if (span && !row.note) {
-		row.note = `it is ${span.moving ? 'being ' : ''}${span.open ? 'lowered' : 'raised'}`;
+	if (sensed.some((s) => s.always)) {
 		row.always = true;
 	}
-	if (
-		go.getComponent(Door)
-		|| go.getComponent(Chest)
-		|| go.getComponent(Furniture)
-		|| go.getComponent(Interior)
-		|| span
-		|| go.getComponent(BridgeLever)
-		|| carved
-		|| fuel
-	) {
+	if (sensed.some((s) => s.movable === false) || go.getComponent(Interior)) {
 		row.movable = false;
 	}
 	else if (go.getComponent(Pickupable)) {
@@ -286,7 +195,7 @@ function seenOf(go:GameObject, observer?:GameObject, host?:GameHost):SeenObject 
 
 export function lookWorld(character:GameObject, ambient:string, host?:GameHost):Sight {
 	const pose = poseXZ(character);
-	const self = { id: character.getComponent(Named)?.id ?? character.id, point: pose.point, facing: pose.facing };
+	const self = { id: idOf(character), point: pose.point, facing: pose.facing };
 	const place = [whereabouts(character), ambient].filter(Boolean).join(' ');
 	const world = character.world;
 	const objects:SeenObject[] = [];
@@ -317,7 +226,7 @@ export function lookWorld(character:GameObject, ambient:string, host?:GameHost):
 		}
 		const gp = go.transform.position;
 		const ours = passageDoorSet.has(go);
-		if (!go.getComponent(Bridge) && !ours && Math.hypot(gp.x - ax, gp.z - az) > SIGHT) {
+		if (!ours && Math.hypot(gp.x - ax, gp.z - az) > SIGHT && !sensesOf(go).some((s) => s.always)) {
 			continue;
 		}
 		const row = seenOf(go, character, host);
@@ -393,25 +302,20 @@ export function doExamine(world:DemoWorld, character:GameObject, name:string):Ar
 	if (!go) {
 		return { status: 'failed', verb: 'examine', reason: `unknown name ${name}` };
 	}
-	// Everyone sees the bridge; anything else is seen where light reaches it from near enough.
-	const seen = !!go.getComponent(Bridge)
-		|| (talkNotices(character, go) && distanceXZ(character, go) <= SIGHT && lineClear(world, 'light', character.transform.position, go.transform.position));
+	// Everyone sees what is seen from afar (the bridge); anything else is seen where light reaches it from near enough.
+	const seen = sensesOf(go).some((s) => s.always)
+		|| (talkNotices(character, go) && distanceXZ(character, go) <= SIGHT && inLineOfSight(world, 'light', character.transform.position, go.transform.position));
 	if (!seen) {
 		return { status: 'failed', verb: 'examine', reason: `${name} is not in sight` };
 	}
 	return { status: 'ok', verb: 'examine', reason: (name) => examineWorld(go, character, name) };
 }
 
-/** `A, B and C`, or `nothing`. */
-function listed(names:string[]):string {
-	return names.length === 0 ? 'nothing' : names.length === 1 ? names[0] : `${names.slice(0, -1).join(', ')} and ${names.at(-1)}`;
-}
-
-/** The named doors and chests a key with `keyID` opens. */
-function locksFor(world:DemoWorld, keyID:string):string[] {
+/** The named doors and chests `key` opens. */
+function locksFor(world:DemoWorld, key:ItemInstance):string[] {
 	return world.objects
-		.filter((go) => go.getComponent(Lock)?.keyID === keyID && go.getComponent(Named))
-		.map((go) => go.getComponent(Named)?.id ?? go.id);
+		.filter((go) => go.getComponent(Lock)?.fits(key) && go.getComponent(Named))
+		.map((go) => idOf(go));
 }
 
 /** What `examine` tells about an item you carry, in sentences, naming as `nameOf` does. */
@@ -419,16 +323,15 @@ function examineItem(world:DemoWorld, item:ItemInstance, nameOf:(id:string)=>str
 	const id = pascalCase(item.name) || pascalCase(item.defID);
 	return [
 		item.count > 1 ? `You carry ${item.count} ${nameOf(id)}.` : `You carry ${nameOf(id)}.`,
-		item.Key && `It opens ${listed(locksFor(world, item.Key.keyID).map(nameOf))}.`,
+		item.Key && `It opens ${nameList(locksFor(world, item).map(nameOf), 'nothing')}.`,
 		item.Equipable && (item.Equipable.hands === 2 ? 'You can equip it, with both hands.' : 'You can equip it.'),
-		item.Container && `It holds ${item.Container.size}: ${listed(item.Container.contents.map(itemLabel))}.`,
-		item.Ingredient && `${item.Ingredient.brewer} brews ${item.Ingredient.yield} ${item.Ingredient.brew} from it, for ${item.Ingredient.fee}.`,
+		item.Container && `It holds ${item.Container.size}: ${nameList(item.Container.contents.map(itemLabel), 'nothing')}.`,
 		getDef(item.defID).about,
 	].filter(Boolean).join(' ');
 }
 
 function saleLine(name:string, shop:Merchant):string | false {
-	return shop.goods.length > 0 ? `${name} trades in ${listed(shop.goods)}.` : false;
+	return shop.goods.length > 0 ? `${name} trades in ${nameList(shop.goods)}.` : false;
 }
 
 /**
@@ -438,53 +341,20 @@ function saleLine(name:string, shop:Merchant):string | false {
  */
 export function examineWorld(go:GameObject, viewer?:GameObject, nameOf:(id:string)=>string = (id) => id):string {
 	const name = nameOf(idOf(go));
-	const lock = go.getComponent(Lock);
-	const locked = lock?.locked ? ` and locked${lock.keyID ? `; it needs ${showNamingText(keyNameFor(go.world, lock, viewer), nameOf)}` : ''}` : '';
-	const door = go.getComponent(Door);
-	const bridge = go.getComponent(Bridge);
-	const chest = go.getComponent(Chest);
 	const item = go.getComponent(Item);
-	const lines:(string | false | undefined)[] = [];
-	if (door) {
-		lines.push(`${name} is a door, ${door.open ? 'open' : 'shut'}${locked}.`);
-	}
-	const furniture = go.getComponent(Furniture);
-	if (furniture) {
-		const taken = occupantName(go);
-		lines.push(`${name} is a ${furniture.kind}${taken ? `, and ${nameOf(taken)} is on it` : ''}.`);
-	}
-	const carved = go.getComponent(Inscription);
-	if (carved) {
-		lines.push(carved.answered ? `${name}: ${carved.answered}.` : `Carved on ${name}: "${carved.text}"`);
-	}
-	if (go.getComponent(Flammable)) {
-		lines.push(`${name} blocks the way. It is old and dry as tinder.`);
-	}
-	if (go.getComponent(BridgeLever)) {
-		lines.push(`${name} is the fixed lever that raises and lowers the bridge. Working it again does the other.`);
-	}
-	if (bridge) {
-		lines.push(bridge.open
-			? `${name} is a bridge, lowered: you can cross. Working the sluice raises it.`
-			: `${name} is a bridge, raised: no one can cross until it is lowered.`);
-	}
+	const lines:(string | false | undefined)[] = sensesOf(go).map((s) => s.examine?.(name, nameOf, viewer));
 	if (item) {
 		lines.push(item.count > 1 ? `${item.count} ${name} lie here.` : `${name} lies here.`, getDef(item.defID).about);
 	}
-	if (chest) {
-		const bag = go.getComponent(Container);
-		const inside = !viewer && chest.open && !lock?.locked && bag ? ` It holds ${listed(bag.contents.map((it) => pascalCase(it.name) || it.name))}.` : '';
-		lines.push(go.getComponent(Bookshelf) ? `${name} is a bookshelf.${inside}` : `${name} is a chest, ${chest.open ? 'open' : 'shut'}${locked}.${inside}`);
-	}
-	if (go.getComponent(MarketNPC) || go.getComponent(HumanBody)) {
-		const npc = go.getComponent(MarketNPC);
+	if (go.getComponent(MarketplaceNPC) || go.getComponent(HumanBody)) {
+		const npc = go.getComponent(MarketplaceNPC);
 		const shop = go.getComponent(Merchant);
 		const mark = go.getComponent(Wanted);
 		lines.push(
-			npc && `${name} is a ${npc.kind}${npc.wants.length > 0 ? ` who wants ${listed(npc.wants)}` : ''}.`,
+			npc && `${name} is a ${npc.kind}${npc.wants.length > 0 ? ` who wants ${nameList(npc.wants)}` : ''}.`,
 			shop && saleLine(name, shop),
-			viewer ? `${name} has ${coinsOf(go)} gold.` : `${name} carries ${listed(carriedLabels(go))} and ${coinsOf(go)} gold.`,
-			mark?.enabled && `${name} is wanted for ${mark.reason || 'theft'}${mark.items.length > 0 ? `: ${listed(mark.items)}` : ''}.`,
+			viewer ? `${name} has ${coinsOf(go)} gold.` : `${name} carries ${nameList(carriedLabels(go), 'nothing')} and ${coinsOf(go)} gold.`,
+			mark?.enabled && `${name} is wanted for ${mark.reason || 'theft'}${mark.items.length > 0 ? `: ${nameList(mark.items)}` : ''}.`,
 		);
 	}
 	const text = lines.filter(Boolean).join(' ');

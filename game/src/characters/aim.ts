@@ -1,8 +1,9 @@
 import { distanceXZ, type GameObject, type XZ } from '@arc-director/kindling';
-import { Bookshelf, Door, Flammable, Furniture, HumanBody, Inscription, Lock, Vitals } from '../engine/components';
+import { HumanBody, Vitals } from '../engine/components';
 import type { DemoWorld } from '../engine/demo-world';
 import { Pickupable } from '../items/item-components';
 import { USE_RANGE } from '../items/pickup';
+import { sensesOf } from '../kit/thing';
 
 /** How far off the line straight ahead someone may stand and still be aimed at along it (m). */
 const AIM_WIDTH = 2;
@@ -35,30 +36,18 @@ export function aimTarget(world:DemoWorld, character:GameObject):GameObject | nu
 	let best:GameObject | null = null;
 	let bestScore = Infinity;
 	for (const go of world.objects) {
-		if (go === character) {
-			continue;
-		}
-		// Doors, chests and webs: things your hands or a held item act on, and they win close calls.
-		const door = go.getComponent(Door) || go.getComponent(Lock) || go.getComponent(Flammable);
-		const loot = go.getComponent(Pickupable);
+		const near = distanceXZ(character, go);
 		const human = go.getComponent(HumanBody);
-		if (human && (go.getComponent(Vitals)?.hp ?? 1) <= 0) {
+		if (go === character || near > USE_RANGE || (human && (go.getComponent(Vitals)?.hp ?? 1) <= 0)) {
 			continue;
 		}
-		if (!door && !loot && !human && !go.getComponent(Inscription) && !go.getComponent(Furniture) && !go.getComponent(Bookshelf)) {
+		// Things that tell minds they can be acted on; the prominent ones win close calls.
+		const sensed = sensesOf(go);
+		const thing = sensed.some((s) => s.interactable);
+		if (!thing && !human && !go.getComponent(Pickupable)) {
 			continue;
 		}
-		if (distanceXZ(character, go) > USE_RANGE) {
-			continue;
-		}
-		let score = distanceXZ(character, go);
-		if (hit) {
-			const p = go.transform.position;
-			score = distanceXZ(p, hit) + score * 0.25;
-		}
-		if (door) {
-			score -= 0.8;
-		}
+		const score = (hit ? distanceXZ(go.transform.position, hit) + near * 0.25 : near) - (sensed.some((s) => s.prominent) ? 0.8 : 0);
 		if (score < bestScore) {
 			bestScore = score;
 			best = go;

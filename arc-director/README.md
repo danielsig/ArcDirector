@@ -80,7 +80,7 @@ It also gives you:
 
 - **Talk:** hearing range, muffled speech, line of sight, and waiting for an answer. NPCs overhear each other without being woken by it.
 - **Names per observer:** An NPC with the ID "Bob" can appear to another NPC as `MerchantWithBlueHat` until Bob introduces himself. Game code only ever sees real IDs, but NPCs wouldn't be very realistic if they magically knew everyone's name.
-- **Collectives:** One LLM commands a squad or a whole market crowd, gives orders by tag, and moves NPCs in formation. NPCs can join, leave and change sides, and their memories are updated to match.
+- **Collectives:** One LLM commands a squad or a whole marketplace crowd, gives orders by tag, and moves NPCs in formation. NPCs can join, leave and change sides, and their memories are updated to match.
 - **Save / load:** `exportCast()` and `restoreCast()` save and restore every NPC's memories, goals, names and laws, the director's `time`, and each feature's own state (open offers, feelings shown).
 - **Full visibility:** `onLog` shows every prompt, tool call, reply and System One pick, so you can see why your blacksmith thought it could make a wooden spoon out of steel.
 
@@ -642,7 +642,7 @@ const director = await new ArcDirector<CharacterCtx>()
 	.withSight({ look: (ctx) => host.look(ctx), limit: 16 })
 	.withContext((id) => host.ctx(id))
 	.addCollective({
-		id: 'MarketHive',
+		id: 'MarketplaceHive',
 		identity: { role: 'Hive' },
 		pinnedSightFocus: ['isHurt(it)', 'isNear(it, Player)'],
 		kit: { verbs: [...STOCK_VERBS, ...STOCK_COLLECTIVE_VERBS] },
@@ -651,7 +651,7 @@ const director = await new ArcDirector<CharacterCtx>()
 	})
 	.connect();
 
-const hive = director.collective('MarketHive')!;
+const hive = director.collective('MarketplaceHive')!;
 const tomas = hive.addCharacter({ id: 'Tomas', tags: ['Shopper'] }).character('Tomas'); // a new character, in the hive
 hive.removeCharacter('Tomas'); // gone for good, as director.removeCharacter
 ```

@@ -66,8 +66,11 @@ export type Command =
 	| { op:'renderStats' }
 	| { op:'saveGame' }
 	| { op:'loadGame' }
-	/** Camera follows whom `focus` (watch syntax, as the player sees them) picks; `''` stops. `zoom` is the distance in meters. */
-	| { op:'setCamera'; focus?:string; zoom?:number };
+	/**
+	 * Camera follows whom `focus` (watch syntax, as the player sees them) picks; `''` stops. `zoom` is the distance in meters.
+	 * `view` puts the player, the camera's rig, at x, y, z facing yaw, as the URL `view` does.
+	 */
+	| { op:'setCamera'; focus?:string; zoom?:number; view?:{ x:number; y:number; z:number; yaw:number } };
 
 /** Who thinks for a character: its own mind, its collective's, or none when the host drives it (the Player). */
 export type CharacterRow = {

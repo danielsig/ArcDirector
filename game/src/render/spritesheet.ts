@@ -465,6 +465,17 @@ export function loadSpritesheet():Promise<SheetTextures> {
 	return pending;
 }
 
+/** Shows on `mat` the flame's frame at time `t` (s), the flame playing `fps` frames a second from `phase` (0–1) of the way through its loop. */
+export function showFlameFrame(mat:THREE.MeshBasicMaterial, t:number, fps:number, phase = 0):void {
+	const frames = getSheet().flame;
+	const n = frames.length;
+	const map = frames[((Math.floor(t * fps + phase * n) % n) + n) % n];
+	if (map && mat.map !== map) {
+		mat.map = map;
+		mat.needsUpdate = true;
+	}
+}
+
 export function getSheet():SheetTextures {
 	if (!textures) {
 		throw new Error('spritesheet not loaded');

@@ -35,10 +35,10 @@ describe('MemoryStore', () => {
 
 	it('never brings a pinned memory to mind unbidden: it is in every prompt already', () => {
 		const store = new MemoryStore();
-		store.add({ text: 'I am the canal-market hive', tags: ['market'], pinned: true, timestamp: 1 });
-		assert.equal(store.intrusion({ query: 'the canal market hive', now: 2, tags: ['market'], threshold: 0 }), null);
-		store.add({ text: 'A thief ran through the canal market', tags: ['market'], timestamp: 1 });
-		assert.equal(store.intrusion({ query: 'the canal market hive', now: 2, tags: ['market'], threshold: 0 })?.text, 'A thief ran through the canal market');
+		store.add({ text: 'I am the canal-marketplace hive', tags: ['marketplace'], pinned: true, timestamp: 1 });
+		assert.equal(store.intrusion({ query: 'the canal marketplace hive', now: 2, tags: ['marketplace'], threshold: 0 }), null);
+		store.add({ text: 'A thief ran through the canal marketplace', tags: ['marketplace'], timestamp: 1 });
+		assert.equal(store.intrusion({ query: 'the canal marketplace hive', now: 2, tags: ['marketplace'], threshold: 0 })?.text, 'A thief ran through the canal marketplace');
 	});
 
 	it('recalls by cosine when embeddings exist', () => {

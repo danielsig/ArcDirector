@@ -4,6 +4,7 @@ import type { HudModel } from './hud-model';
 import HudDialog from './HudDialog.vue';
 import InferencePicker from './InferencePicker.vue';
 import MindMenu from './MindMenu.vue';
+import { usePrefs } from './use-prefs';
 
 defineProps<{
 	hud:HudModel;
@@ -11,10 +12,11 @@ defineProps<{
 
 /** Where NPCs think, picked over the game at the init screen's size. */
 const pickerOpen = ref(false);
+const live = usePrefs();
 </script>
 
 <template>
-	<div v-if="hud.arcDirectorOn" class="hud-model-name">
+	<div v-if="live.ai" class="hud-model-name">
 		<MindMenu compact :active="hud.activeModel" @change="pickerOpen = true" />
 	</div>
 	<HudDialog :open="pickerOpen" title="Where should NPCs think?" close-label="Done" @close="pickerOpen = false">

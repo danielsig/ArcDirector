@@ -1,16 +1,18 @@
 import type { Chunk } from './Chunk.js';
 import type { Component } from './Component.js';
+import type { Terrain } from './Terrain.js';
 import type { World } from './World.js';
 
 /**
- * The host's own subclasses, filled in once so Kindling hands them back typed (`go.world`, `world.chunks`,
- * `chunkAtWorld`, `tileAtWorld`). Each key is optional; left out, it stays Kindling's class.
+ * The host's own subclasses, filled in once so Kindling hands them back typed (`go.world`, `world.terrain`, its
+ * `chunks` and `tileAtWorld`). Each key is optional; left out, it stays Kindling's class.
  *
  * ```ts
  * declare module '@arc-director/kindling' {
  * 	interface KindlingTypes {
  * 		world:MyWorld;
  * 		chunk:MyChunk;
+ * 		terrain:MyTerrain;
  * 	}
  * }
  * ```
@@ -22,6 +24,8 @@ export interface KindlingTypes {}
 export type WorldType = KindlingTypes extends { world:infer W } ? W : World;
 /** The host's `Chunk` subclass, or `Chunk`. */
 export type ChunkType = KindlingTypes extends { chunk:infer C } ? C : Chunk;
+/** The host's `Terrain` subclass, or `Terrain`. */
+export type TerrainType = KindlingTypes extends { terrain:infer T } ? T : Terrain;
 /** What the host's chunks hold per tile. */
 export type TileType = ChunkType extends Chunk<infer T> ? T : unknown;
 

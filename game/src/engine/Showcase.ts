@@ -1,11 +1,10 @@
-import { Component, Game, GameObject, Camera as RenderCamera, resetAllocID, resetTime } from '@arc-director/kindling';
+import { Component, Game, Camera } from '@arc-director/kindling';
 import { DemoWorld } from './demo-world';
-import { CAMERA_DISTANCE, Camera } from './components';
+import { CAMERA_DISTANCE, FollowCamera } from './components';
 import { PlayerInput } from '../characters/PlayerInput';
-import { rendererLook } from '../render/look';
-import { sceneByID, type SceneDef } from '../data/scenes';
+import { sceneByID } from '../scenes/scene-registry';
+import type { Scene } from '../scenes/scene';
 import { SHADOWS, loadSceneArt, spawnScene } from './demo-game';
-import { WorldStream, WorldView } from './systems';
 
 /** Radians a second the camera circles. */
 const ORBIT_SPEED = 0.06;
@@ -25,7 +24,7 @@ export type ShowcaseView = { x:number; z:number; yaw:number; zoom?:number };
 /** Turns the main camera slowly round its target (the hidden player). */
 class Orbit extends Component {
 	public override update(dt:number):void {
-		const cam = this.gameObject.world?.findByID('MainCamera')?.getComponent(Camera);
+		const cam = this.gameObject.world?.findByID('MainCamera')?.getComponent(FollowCamera);
 		if (cam) {
 			cam.orbitYaw += dt * ORBIT_SPEED;
 		}
@@ -41,10 +40,9 @@ class Orbit extends Component {
 export class Showcase extends Game<DemoWorld> {
 	/** Resolves once the scene's art has loaded and a few frames are drawn; the camera starts circling then. */
 	public readonly ready:Promise<void>;
-	private readonly _scene:SceneDef;
-	private readonly _view:WorldView;
+	private readonly _scene:Scene;
 	private readonly _orbit:Orbit;
-	private readonly _lens:RenderCamera | null;
+	private readonly _lens:Camera | null;
 	private readonly _fov:number;
 	private _artLoaded = false;
 	private _settleFrames = SETTLE_FRAMES;
@@ -55,12 +53,9 @@ export class Showcase extends Game<DemoWorld> {
 		// The menu stays smooth beside another window.
 		this.unfocusedHz = Infinity;
 		this._scene = sceneByID(sceneID);
-		resetTime();
-		resetAllocID();
-		const decoded = spawnScene(this.world, this._scene);
+		const { systems, stream } = spawnScene(this.world, this._scene);
 		const renderer = this.renderer;
 		if (renderer) {
-			renderer.applyLook(rendererLook(this._scene.look));
 			// Baked shadows: a backdrop should cost little.
 			renderer.shadows = SHADOWS.simple.mode;
 			renderer.pointShadowMapSize = SHADOWS.simple.point;
@@ -75,33 +70,29 @@ export class Showcase extends Game<DemoWorld> {
 			}
 		}
 		const camera = this.world.findByID('MainCamera');
-		const cam = camera?.getComponent(Camera);
+		const cam = camera?.getComponent(FollowCamera);
 		if (cam) {
 			cam.distance = _fixed ? _fixed.zoom ?? CAMERA_DISTANCE : ORBIT_DISTANCE;
 			if (_fixed) {
 				cam.yaw = cam.orbitYaw = _fixed.yaw;
 			}
 		}
-		this._lens = camera?.getComponent(RenderCamera) ?? null;
+		this._lens = camera?.getComponent(Camera) ?? null;
 		this._fov = this._lens?.fov ?? 0;
 		this.ready = new Promise((resolve) => {
 			this._settled = resolve;
 		});
-		const systems = new GameObject('Systems', 'Systems');
-		this._view = systems.addComponent(WorldView, { getRenderer: () => this.renderer, ground: this._scene.ground, outskirts: this._scene.outskirts });
-		const stream = systems.addComponent(WorldStream, { chunks: decoded.map((d) => d.chunk) });
 		this._orbit = systems.addComponent(Orbit, { enabled: false });
 		this.world.add(systems);
-		stream.loadAll();
-		stream.stream();
 		const at = _fixed ?? this._scene.orbit;
 		if (player && at) {
 			// The camera follows the player, so the hidden player stands where it looks from.
 			const p = player.transform.position;
 			p.x = at.x;
 			p.z = at.z;
-			p.y = this.world.sampleTerrain(at.x, at.z)?.worldY ?? p.y;
+			p.y = this.world.terrain.sample(at.x, at.z)?.worldY ?? p.y;
 		}
+		stream.stream();
 		this.world.audio.muted = true;
 	}
 
@@ -132,10 +123,5 @@ export class Showcase extends Game<DemoWorld> {
 		const aspect = canvas.clientWidth / canvas.clientHeight;
 		const half = this._fov * Math.PI / 360;
 		this._lens.fov = aspect > STILL_ASPECT ? Math.atan(Math.tan(half) * STILL_ASPECT / aspect) * 360 / Math.PI : this._fov;
-	}
-
-	public override dispose():void {
-		this._view.present.dispose();
-		super.dispose();
 	}
 }

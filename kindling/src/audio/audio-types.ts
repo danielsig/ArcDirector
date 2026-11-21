@@ -58,6 +58,8 @@ export type Score = {
 	voices:Voice[];
 	gain?:number;
 	id?:string;
+	/** What a player shows it as; its `id` when unset. */
+	title?:string;
 	/** Play this many times. Omit or `-1` for forever. */
 	loops?:number;
 	/** `callback(fn)` marks; `beat` is in `[0, loop]` (`loop` is the end of a cycle). */
@@ -65,6 +67,13 @@ export type Score = {
 	/** Insert in front of the music-bus room, after each voice's own filters. */
 	filters?:SoundFilter[];
 };
+
+/**
+ * A finished audio file played as music: a URL to fetch, or its bytes. It plays from 0 until `end` (seconds;
+ * default: the end of the file), then jumps back to `start` (default: 0) and repeats that span, `gain` (default 1)
+ * loud. `title` is what a player shows it as (its `id` when unset).
+ */
+export type Track = { recording:string | ArrayBuffer; id?:string; title?:string; start?:number; end?:number; gain?:number };
 
 /**
  * `creak` is wood straining: stick-slip clicks `freq` to `freqTo` a second (slow groans, fast squeals) ringing a

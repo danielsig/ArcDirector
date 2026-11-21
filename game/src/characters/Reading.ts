@@ -3,6 +3,7 @@ import * as THREE from 'three';
 import { Order } from '../engine/order';
 import { getDef } from '../items/defs';
 import { toon } from '../render/toon';
+import type { Sense } from '../kit/thing';
 import { Seated } from './Seated';
 
 /** How long a sitting with a book lasts, game seconds. */
@@ -82,6 +83,11 @@ export class Reading extends Component {
 
 	public get active():boolean {
 		return !!this.defID;
+	}
+
+	/** Seen reading while it reads, and tagged so for watches (`me is "reading"`). */
+	public sense():Sense {
+		return this.active ? { tags: ['reading'], note: 'reading' } : {};
 	}
 
 	/** Where its eyes rest, while they do. */

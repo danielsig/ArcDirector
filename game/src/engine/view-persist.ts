@@ -11,61 +11,25 @@ export type ViewPose = {
 };
 
 const PREFIX = 'arc-director.view.v1.';
-
-function storageKey(sceneID:string):string {
-	return PREFIX + sceneID;
-}
-
-function finite(n:unknown):n is number {
-	return typeof n === 'number' && Number.isFinite(n);
-}
+/** Each field, in the order it is kept, and the decimals it keeps. */
+const DECIMALS:Record<keyof ViewPose, number> = { x: 3, y: 3, z: 3, yaw: 4, camYaw: 4, pitch: 4, distance: 3 };
+const FIELDS = Object.keys(DECIMALS) as (keyof ViewPose)[];
 
 export function packViewPose(pose:ViewPose):string {
-	return JSON.stringify({
-		x: Math.round(pose.x * 1000) / 1000,
-		y: Math.round(pose.y * 1000) / 1000,
-		z: Math.round(pose.z * 1000) / 1000,
-		yaw: Math.round(pose.yaw * 10000) / 10000,
-		camYaw: Math.round(pose.camYaw * 10000) / 10000,
-		pitch: Math.round(pose.pitch * 10000) / 10000,
-		distance: Math.round(pose.distance * 1000) / 1000,
-	});
+	return JSON.stringify(Object.fromEntries(FIELDS.map((k) => [k, Math.round(pose[k] * 10 ** DECIMALS[k]) / 10 ** DECIMALS[k]])));
 }
 
-export function parseViewPose(raw:string):ViewPose | null {
+/** The pose last kept for `sceneID`; null when none, or not every field is a finite number. */
+export function loadViewPose(sceneID:string):ViewPose | null {
 	try {
-		const data = JSON.parse(raw) as Partial<ViewPose>;
-		if (
-			!finite(data.x)
-			|| !finite(data.y)
-			|| !finite(data.z)
-			|| !finite(data.yaw)
-			|| !finite(data.camYaw)
-			|| !finite(data.pitch)
-			|| !finite(data.distance)
-		) {
-			return null;
-		}
-		return {
-			x: data.x,
-			y: data.y,
-			z: data.z,
-			yaw: data.yaw,
-			camYaw: data.camYaw,
-			pitch: data.pitch,
-			distance: data.distance,
-		};
+		const data = JSON.parse(lsGet(PREFIX + sceneID) ?? 'null') as Partial<ViewPose> | null;
+		return data && FIELDS.every((k) => Number.isFinite(data[k])) ? Object.fromEntries(FIELDS.map((k) => [k, data[k]])) as ViewPose : null;
 	}
 	catch {
 		return null;
 	}
 }
 
-export function loadViewPose(sceneID:string):ViewPose | null {
-	const raw = lsGet(storageKey(sceneID));
-	return raw ? parseViewPose(raw) : null;
-}
-
 export function saveViewPose(sceneID:string, packed:string):void {
-	lsSet(storageKey(sceneID), packed);
+	lsSet(PREFIX + sceneID, packed);
 }

@@ -2,7 +2,7 @@ import { BoxCollider, Component, MeshRenderer, Time, closeHand, create, crouch, 
 import { findRoute, pointGoal } from 'arc-director';
 import * as THREE from 'three';
 import { Belly } from '../engine/Belly';
-import { Furniture, Named, Vitals } from '../engine/components';
+import { isLiving } from '../director/names';
 import { bindMesh } from '../engine/demo-mesh-renderer';
 import { Order } from '../engine/order';
 import { getDef } from '../items/defs';
@@ -10,7 +10,9 @@ import { instantiateDef } from '../items/instance';
 import { tryInsert } from '../items/inventory';
 import { dropItem } from '../items/pickup';
 import { canStand, cellWays } from '../world/path';
-import { showsWater } from '../world/sand';
+import { Furniture } from '../kit/furniture/furniture';
+import type { Sense } from '../kit/thing';
+import { TERRAIN } from '../world/terrain-kinds';
 
 /** Hip joint height over the floor when sat (a chair seat is about 0.47 m, a mattress 0.39 m), and how far ahead of the seat's middle it sits, so the seat of the trousers clears the backrest. */
 const HIP_SEAT = 0.65;
@@ -62,6 +64,12 @@ function spotsBeside(seat:GameObject, side:number, body:GameObject):XZ[] {
 		.filter((p) => !!body.world && canStand(body.world, body, p.x, p.z));
 }
 
+/** Where a body stands behind place `at` of a bench `seat`: its places sit side by side, and what they face (a counter) is no way in. */
+function spotBehind(seat:GameObject, at:XZ):XZ {
+	const out = yawToForward(seat.transform.yaw);
+	return { x: at.x + out.x * STEP_ASIDE, z: at.z + out.z * STEP_ASIDE };
+}
+
 /** The side of `seat` nearer `body`: 1 its right, -1 its left. */
 function nearerSide(seat:GameObject, body:GameObject):number {
 	const s = seat.transform.position;
@@ -71,8 +79,9 @@ function nearerSide(seat:GameObject, body:GameObject):number {
 }
 
 /**
- * Where `body` goes to sit on or lie in `seat`: beside it on its nearer side, or the other when it cannot get there. None
- * when it cannot get to either: a chair in a tight corner, or a house it is locked out of.
+ * Where `body` goes to sit on or lie in `seat`: beside it on its nearer side, or the other when it cannot get there; behind
+ * its place on a bench. None when it cannot get to any: a chair in a tight corner, or a
+ * house it is locked out of.
  */
 export function approachSpot(seat:GameObject, body:GameObject):XZ | undefined {
 	const world = body.world;
@@ -81,7 +90,9 @@ export function approachSpot(seat:GameObject, body:GameObject):XZ | undefined {
 	}
 	const p = body.transform.position;
 	const side = nearerSide(seat, body);
-	return [...spotsBeside(seat, side, body), ...spotsBeside(seat, -side, body)].find((spot) => {
+	const furniture = seat.getComponent(Furniture)!;
+	const spots = furniture.places > 1 ? [spotBehind(seat, furniture.placeAt(Math.max(0, furniture.placeFor(body))))] : [...spotsBeside(seat, side, body), ...spotsBeside(seat, -side, body)];
+	return spots.find((spot) => {
 		const route = findRoute(cellWays(world), body, [p.x, p.z], pointGoal([spot.x, spot.z]));
 		return !!route && 'points' in route;
 	});
@@ -91,7 +102,8 @@ export function approachSpot(seat:GameObject, body:GameObject):XZ | undefined {
 export function overWater(seat:GameObject):boolean {
 	const p = seat.transform.position;
 	const f = yawToForward(seat.transform.yaw + Math.PI);
-	return showsWater(seat.world?.tileAtWorld(p.x + f.x * CAST, p.z + f.z * CAST)?.def);
+	const tile = seat.world?.terrain.tileAtWorld(p.x + f.x * CAST, p.z + f.z * CAST);
+	return !!(tile && TERRAIN[tile.def].water);
 }
 
 /**
@@ -103,10 +115,12 @@ export function overWater(seat:GameObject):boolean {
 export class Seated extends Component {
 	// After the clip and the hands' props, before `CharacterPose` turns the head.
 	public static override order = Order.present - 1.5;
-	public static override saved = ['seatID', 'rod', 'wakeAt', 'side'];
+	public static override saved = ['seatID', 'place', 'rod', 'wakeAt', 'side'];
 
 	/** The id of the `Furniture` it rests on; '' on its feet. */
 	public seatID = '';
+	/** Which of its seat's places it rests on: a bench has more than one. */
+	public place = 0;
 	public rod = false;
 	/** When a sleeper wakes by itself; 0 sleeps until woken. */
 	public wakeAt = 0;
@@ -143,6 +157,11 @@ export class Seated extends Component {
 		return this.asleep ? 'asleep' : this.rod ? 'fishing' : 'sitting';
 	}
 
+	/** Seen {@link doing} it while it rests, and tagged so (`me is "sitting"`). */
+	public sense():Sense {
+		return this.resting ? { tags: [this.doing], note: this.doing } : {};
+	}
+
 	private seat():GameObject | undefined {
 		return this.gameObject.world?.findByID(this.seatID);
 	}
@@ -165,10 +184,12 @@ export class Seated extends Component {
 			const nearer = nearerSide(seat, this.gameObject);
 			this.side = spotsBeside(seat, nearer, this.gameObject).length > 0 ? nearer : -nearer;
 		}
+		const furniture = seat.getComponent(Furniture)!;
+		this.place = Math.max(0, furniture.placeFor(this.gameObject));
+		furniture.occupants[this.place] = this.gameObject;
 		this.seatID = seat.id;
 		this.rod = rod;
 		this.wakeAt = seconds > 0 ? Time.time + seconds : 0;
-		seat.getComponent(Furniture)!.occupant = this.gameObject;
 		this.setSolid(false);
 	}
 
@@ -203,8 +224,8 @@ export class Seated extends Component {
 		this._time += dt;
 		const furniture = seat.getComponent(Furniture)!;
 		// A body that starts or is restored on its seat claims it.
-		if (!furniture.occupant) {
-			furniture.occupant = this.gameObject;
+		if (!furniture.occupants[this.place]) {
+			furniture.occupants[this.place] = this.gameObject;
 			this.setSolid(false);
 		}
 		const model = this.gameObject.getComponent(MeshRenderer)?.mesh;
@@ -229,14 +250,14 @@ export class Seated extends Component {
 			this.poseLying(model, seat, THREE.MathUtils.smoothstep(this._sit, 0.5, 1));
 		}
 		else {
-			this.poseSitting(model, seat.transform.position, HIP_SEAT, THREE.MathUtils.smoothstep(this._sit, 0, 1));
+			this.poseSitting(model, furniture.placeAt(this.place), HIP_SEAT, THREE.MathUtils.smoothstep(this._sit, 0, 1));
 		}
 	}
 
 	/** The body between where it stands and `seat`, facing out from it: in a bed by way of its edge, and there once settled. */
 	private moveOnto(seat:GameObject):void {
 		const t = this.gameObject.transform;
-		const s = seat.transform.position;
+		const s = seat.getComponent(Furniture)!.placeAt(this.place);
 		const bed = seat.getComponent(Furniture)!.kind === 'bed';
 		const rest = { x: s.x, z: s.z, yaw: bed ? this.lyingYaw(seat, this.side) : seat.transform.yaw + Math.PI };
 		const from = this._from ?? rest;
@@ -280,8 +301,8 @@ export class Seated extends Component {
 
 	private vacate():void {
 		const furniture = this.furniture();
-		if (furniture?.occupant === this.gameObject) {
-			furniture.occupant = null;
+		if (furniture?.occupants[this.place] === this.gameObject) {
+			furniture.occupants[this.place] = null;
 		}
 	}
 
@@ -310,7 +331,8 @@ export class Seated extends Component {
 			this._outYaw = this.lyingYaw(seat, side);
 			return { ...spotsBeside(seat, side, this.gameObject)[0]!, yaw: this._outYaw };
 		}
-		const turns = bed ? [-this.side * Math.PI / 2] : [-Math.PI / 2, Math.PI / 2, 0];
+		// Off a bench backward, the way it came: others may sit either side.
+		const turns = bed ? [-this.side * Math.PI / 2] : seat.getComponent(Furniture)!.places > 1 ? [Math.PI] : [-Math.PI / 2, Math.PI / 2, 0];
 		const yaw = t.yaw + (turns.find((turn) => this.isClear(seat, t.yaw + turn)) ?? turns[0]!);
 		const out = this.stepOff(seat, yaw);
 		if (bed) {
@@ -492,13 +514,7 @@ export class Seated extends Component {
 	private setSolid(solid:boolean):void {
 		const col = this.gameObject.getComponent(BoxCollider);
 		if (col) {
-			col.enabled = solid && (this.gameObject.getComponent(Vitals)?.hp ?? 1) > 0;
+			col.enabled = solid && isLiving(this.gameObject);
 		}
 	}
-}
-
-/** The name of whoever rests on `seat`, for the words about it. */
-export function occupantName(seat:GameObject):string | undefined {
-	const occupant = seat.getComponent(Furniture)?.occupant;
-	return occupant ? occupant.getComponent(Named)?.id ?? occupant.id : undefined;
 }

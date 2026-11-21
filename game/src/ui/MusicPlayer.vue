@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { onMounted, onUnmounted, ref, watch } from 'vue';
 import type { Audio } from '@arc-director/kindling';
-import { prefs, setPrefs, watchPrefs } from '../prefs';
+import { usePref } from './use-prefs';
 
 const props = defineProps<{
 	audio:Audio | null;
@@ -9,7 +9,7 @@ const props = defineProps<{
 	blocked?:boolean;
 }>();
 
-const open = ref(prefs().musicPlayerOpen);
+const open = usePref('musicPlayerOpen');
 const beat = ref(0);
 const loop = ref(0);
 const bpm = ref(0);
@@ -17,20 +17,6 @@ const paused = ref(true);
 const title = ref('—');
 const dragging = ref(false);
 let raf = 0;
-let stopPrefs:(()=>void) | null = null;
-
-const TITLES:Record<string, string> = {
-	pretty_harm: 'Harmonics',
-	menu_orch: 'Menu',
-	heros_path: "Hero's Path",
-	menu: 'Hymn',
-	dungeon_vault: 'Dungeon Crawl',
-	glen: 'River Glen',
-	marketplace: 'Marketplace',
-	heros_tale: "Hero's Tale",
-	ruins: '5v5 Combat',
-	heros_might: "Hero's Might",
-};
 
 function isTyping(target:EventTarget | null):boolean {
 	if (!(target instanceof HTMLElement)) {
@@ -53,17 +39,12 @@ function snap():void {
 	}
 	loop.value = music?.loop ?? 0;
 	bpm.value = music?.bpm ?? 0;
-	title.value = music?.id ? (TITLES[music.id] ?? music.id) : '—';
+	title.value = music?.title || '—';
 	paused.value = !music || !!a?.musicPaused;
 }
 
-function setOpen(next:boolean):void {
-	open.value = next;
-	setPrefs({ musicPlayerOpen: next });
-}
-
 function toggleOpen():void {
-	setOpen(!open.value);
+	open.value = !open.value;
 }
 
 async function togglePlay():Promise<void> {
@@ -157,9 +138,6 @@ watch(open, (next) => {
 });
 
 onMounted(() => {
-	stopPrefs = watchPrefs((p) => {
-		open.value = p.musicPlayerOpen;
-	});
 	const tick = ():void => {
 		snap();
 		raf = requestAnimationFrame(tick);
@@ -169,7 +147,6 @@ onMounted(() => {
 });
 
 onUnmounted(() => {
-	stopPrefs?.();
 	cancelAnimationFrame(raf);
 	window.removeEventListener('keydown', onKey);
 });
@@ -215,7 +192,7 @@ onUnmounted(() => {
 			@input="onSeek"
 		>
 		<span class="hint">P</span>
-		<button type="button" class="icon close" title="Hide player" @click="setOpen(false)">✕</button>
+		<button type="button" class="icon close" title="Hide player" @click="open = false">✕</button>
 	</section>
 </template>
 

@@ -2,7 +2,7 @@ import { distanceXZ, type XZ } from '@arc-director/kindling';
 import { DemoMeshRenderer } from '../engine/demo-mesh-renderer';
 import type { DemoWorld } from '../engine/demo-world';
 import { SFX } from './sfx';
-import { showsWater } from '../world/sand';
+import { TERRAIN } from '../world/terrain-kinds';
 
 const RIVER_HEAR = 7;
 const FALLS_HEAR = 12;
@@ -57,9 +57,9 @@ function nearestRiver(
 ):XZ | null {
 	let best:XZ | null = null;
 	let bestScore = RIVER_HEAR;
-	for (const chunk of world.chunks.values()) {
+	for (const chunk of world.terrain.chunks) {
 		chunk.forEachTile((tile, lx, lz) => {
-			if (!showsWater(tile.def)) {
+			if (!TERRAIN[tile.def].water) {
 				return;
 			}
 			const c = chunk.worldCellCenter(lx, lz);

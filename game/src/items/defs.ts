@@ -7,6 +7,8 @@ export type ItemDef = {
 	color?:number;
 	/** What looking it over tells, beyond its name. */
 	about?:string;
+	/** What else it is called, lying about. */
+	aliases?:string[];
 	components:{
 		Key?:{ keyID:string };
 		Equipable?:{ slots:string[]; hands:0 | 1 | 2 };
@@ -18,7 +20,6 @@ export type ItemDef = {
 		Consumable?:{ effect:string; amount:number; consumeOnUse:boolean };
 		Torch?:{ lit:boolean };
 		Flame?:{ canIgnite:boolean };
-		Ingredient?:{ brewer:string; fee:string; brew:string; yield:number };
 		Goods?:{ ask:number };
 		/** What reading it may turn up, a page at a time. */
 		Book?:{ pages:string[] };
@@ -62,17 +63,6 @@ export const ITEM_DEFS:Record<string, ItemDef> = {
 		color: 0xc23b4a,
 		components: {
 			Consumable: { effect: 'heal', amount: 2, consumeOnUse: true },
-		},
-	},
-	magic_potion: {
-		id: 'magic_potion',
-		name: 'Magic potion',
-		stackable: true,
-		maxStack: 9,
-		meshID: 'item_potion',
-		color: 0x7b3cc2,
-		components: {
-			Consumable: { effect: 'heal', amount: 3, consumeOnUse: true },
 		},
 	},
 	bomb: {
@@ -186,6 +176,7 @@ export const ITEM_DEFS:Record<string, ItemDef> = {
 	},
 	gold_coin: {
 		id: 'gold_coin',
+		aliases: ['Gold Coin', 'coin'],
 		name: 'Gold coin',
 		stackable: true,
 		maxStack: 9,
@@ -272,6 +263,7 @@ export const ITEM_DEFS:Record<string, ItemDef> = {
 	},
 	bridge_crank: {
 		id: 'bridge_crank',
+		aliases: ['Bridge Crank', 'crank'],
 		name: 'Bridge crank',
 		meshID: 'item_key',
 		color: 0x8a5a32,
@@ -281,6 +273,7 @@ export const ITEM_DEFS:Record<string, ItemDef> = {
 	},
 	fire_mushroom: {
 		id: 'fire_mushroom',
+		aliases: ['Fire Mushroom', 'mushroom'],
 		name: 'FireMushroom',
 		stackable: true,
 		maxStack: 9,
@@ -291,6 +284,7 @@ export const ITEM_DEFS:Record<string, ItemDef> = {
 	},
 	moon_mushroom: {
 		id: 'moon_mushroom',
+		aliases: ['Moon Mushroom', 'blue mushroom'],
 		name: 'MoonMushroom',
 		stackable: true,
 		maxStack: 9,
@@ -301,6 +295,7 @@ export const ITEM_DEFS:Record<string, ItemDef> = {
 	},
 	silver_trout: {
 		id: 'silver_trout',
+		aliases: ['Silver Trout', 'trout', 'fish'],
 		name: 'Silver trout',
 		stackable: true,
 		maxStack: 9,
@@ -309,16 +304,15 @@ export const ITEM_DEFS:Record<string, ItemDef> = {
 		about: 'Bright scales and clear eyes: fresh from the river.',
 		components: { Goods: { ask: 5 }, Consumable: { effect: 'food', amount: 0, consumeOnUse: true } },
 	},
-	bitterroot: {
-		id: 'bitterroot',
-		name: 'Bitterroot',
+	sushi: {
+		id: 'sushi',
+		name: 'Sushi',
 		stackable: true,
 		maxStack: 9,
-		meshID: 'item_potion',
-		color: 0x4a8f4a,
-		components: {
-			Ingredient: { brewer: 'Alchemist', fee: 'gold_coin', brew: 'magic_potion', yield: 2 },
-		},
+		meshID: 'item_sushi',
+		color: 0xf3efe4,
+		about: 'Rice and raw fish, rolled tight: eaten at the stall, sitting down.',
+		components: { Goods: { ask: 6 }, Consumable: { effect: 'food', amount: 0, consumeOnUse: true } },
 	},
 	loaf: {
 		id: 'loaf',

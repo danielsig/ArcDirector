@@ -19,7 +19,7 @@ const NAMED:Record<string, string> = {
 	Apothecary: '🧪',
 	Potter: '🏺',
 	Cutler: '🔪',
-	Grocer: '🍏',
+	SushiChef: '🍣',
 	Toymaker: '🪀',
 	Mira: '🎀',
 	Tomas: '🧢',

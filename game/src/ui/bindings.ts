@@ -1,4 +1,4 @@
-import type { SceneKey } from '../data/scenes';
+import type { SceneKey } from '../scenes/scene';
 
 type LayoutKeyboard = {
 	getLayoutMap?:()=>Promise<{ get(code:string):string | undefined }>;

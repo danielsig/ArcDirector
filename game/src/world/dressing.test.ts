@@ -5,29 +5,24 @@ import { formatSight } from 'arc-director';
 import { Named } from '../engine/components';
 import { DemoWorld } from '../engine/demo-world';
 import { lookWorld } from '../director/perception';
-import { glen_0_0 } from '../data/chunks/glen-0-0';
-import { glen_0_1 } from '../data/chunks/glen-0-1';
-import { glen_1_0 } from '../data/chunks/glen-1-0';
-import { glen_1_1 } from '../data/chunks/glen-1-1';
-import { market_0_0 } from '../data/chunks/market-0-0';
-import { market_0_1 } from '../data/chunks/market-0-1';
-import { market_1_0 } from '../data/chunks/market-1-0';
-import { market_1_1 } from '../data/chunks/market-1-1';
-import { RUINS_CHUNKS } from '../scenes/ruins/ruins-map';
-import { DUNGEON_CHUNKS } from '../scenes/dungeon-vault/dungeon-vault-map';
+import { GLEN_CHUNKS } from '../scenes/glen/glen-map';
+import { MARKETPLACE_CHUNKS } from '../scenes/marketplace/marketplace-map';
+import { COMBAT_CHUNKS } from '../scenes/combat/combat-map';
+import { DUNGEON_CHUNKS } from '../scenes/dungeon/dungeon-map';
 import { decodeGlyphChunk, type ChunkFile } from './decode-glyph-chunk';
 import { spawnChunkEntities } from './spawn';
-import { syncDressingColliders } from './dressing-colliders';
-import { DRESSING_SIGHT_WORDS, planProps, PROP_IDS } from './dressing-plan';
+import { syncDressingColliders } from '../kit/props/dressing-colliders';
+import { DRESSING_SIGHT_WORDS, planProps, PROP_IDS } from '../kit/props/dressing-plan';
 import { cellWays } from './path';
-import { solidAt, THIN_WALLS } from './thin-wall';
+import { solidAt } from '../kit/walls/thin-wall';
 
 import type { DemoChunk } from './demo-chunk';
+import { TERRAIN } from './terrain-kinds';
 
 const SCENE_MAPS:Record<string, ChunkFile[]> = {
-	glen: [glen_0_0, glen_0_1, glen_1_0, glen_1_1],
-	marketplace: [market_0_0, market_0_1, market_1_0, market_1_1],
-	ruins: RUINS_CHUNKS,
+	glen: GLEN_CHUNKS,
+	marketplace: MARKETPLACE_CHUNKS,
+	combat: COMBAT_CHUNKS,
 	dungeon: DUNGEON_CHUNKS,
 };
 
@@ -36,13 +31,13 @@ const decode = (files:ChunkFile[]):DemoChunk[] => files.map((file) => decodeGlyp
 test('dressing stands on open ground, and every prop is used somewhere', () => {
 	const placed = new Set<string>();
 	for (const [scene, files] of Object.entries(SCENE_MAPS)) {
-		const chunks = decode(files);
-		for (const spot of planProps(chunks)) {
+		const { terrain } = new DemoWorld();
+		decode(files).forEach((chunk) => terrain.register(chunk));
+		for (const spot of planProps(terrain)) {
 			placed.add(spot.prop);
-			const chunk = chunks.find((c) => c.tileAtWorld(spot.x, spot.z));
-			const tile = chunk?.tileAtWorld(spot.x, spot.z);
+			const tile = terrain.tileAtWorld(spot.x, spot.z);
 			// Against a thin wall a prop may stand in the open half of the wall's cell.
-			const open = !!tile && (!tile.blocked || (THIN_WALLS.has(tile.def) && !solidAt(chunk!, spot.x, spot.z)));
+			const open = !!tile && (!tile.blocked || (TERRAIN[tile.def].thin && !solidAt(terrain, spot.x, spot.z)));
 			assert.ok(open, `${scene}: ${spot.prop} sits on ${tile?.def ?? 'nothing'} at ${spot.x}, ${spot.z}`);
 		}
 	}
@@ -54,7 +49,7 @@ test('in the glen, dressing blocks walking when solid, and never reaches sight',
 	const world = new DemoWorld();
 	for (const chunk of chunks) {
 		spawnChunkEntities(world, chunk);
-		world.addChunk(chunk);
+		world.terrain.register(chunk);
 	}
 	syncDressingColliders(world);
 	world.reindex();
@@ -74,9 +69,9 @@ test('in the glen, dressing blocks walking when solid, and never reaches sight',
 
 	/** Whether a route steps onto a prop's tile from any side. */
 	const stepsOnto = (prop:string):boolean => {
-		const spot = planProps(chunks).find((s) => s.prop === prop)!;
-		const tile = world.tileCoordAt(spot.x, spot.z);
-		const onto = world.tileCenter(tile.tx, tile.tz);
+		const spot = planProps(world.terrain).find((s) => s.prop === prop)!;
+		const tile = world.terrain.tileCoordAt(spot.x, spot.z);
+		const onto = world.terrain.tileCenter({ tx: tile.tx, tz: tile.tz });
 		const ways = cellWays(world);
 		const at = ways.createAt([onto.x, onto.z]);
 		return ways.getNeighbors(at).some((from) => ways.getPassage(npc, from, at) !== undefined);
@@ -85,34 +80,34 @@ test('in the glen, dressing blocks walking when solid, and never reaches sight',
 	assert.equal(stepsOnto('bucket'), true, 'routes skip the bucket tile');
 });
 
-test('in the ruins, no route steps onto a cell a fallen column lies across', () => {
-	const chunks = decode(SCENE_MAPS.ruins!);
+test('in the combat scene, no route steps onto a cell a fallen column lies across', () => {
+	const chunks = decode(SCENE_MAPS.combat!);
 	const world = new DemoWorld();
 	for (const chunk of chunks) {
 		spawnChunkEntities(world, chunk);
-		world.addChunk(chunk);
+		world.terrain.register(chunk);
 	}
 	syncDressingColliders(world);
 	world.reindex();
 	const walker = new GameObject('Walker', 'Person');
 	const ways = cellWays(world);
-	const columns = planProps(chunks).filter((spot) => spot.prop === 'fallenColumn');
-	assert.ok(columns.length > 0, 'the ruins have no fallen columns');
+	const columns = planProps(world.terrain).filter((spot) => spot.prop === 'fallenColumn');
+	assert.ok(columns.length > 0, 'the combat map has no fallen columns');
 	for (const column of columns) {
 		const along = Math.abs(Math.sin(column.yaw)) > 0.5 ? { x: 0, z: 1 } : { x: 1, z: 0 };
-		const tile = world.tileCoordAt(column.x, column.z);
+		const tile = world.terrain.tileCoordAt(column.x, column.z);
 		for (const reach of [-1, 0, 1]) {
 			const under = { tx: tile.tx + along.x * reach, tz: tile.tz + along.z * reach };
 			for (const [dx, dz] of [[along.z, along.x], [-along.z, -along.x]]) {
-				const beside = world.tileCenter(under.tx + dx!, under.tz + dz!);
-				const middle = world.tileCenter(under.tx, under.tz);
+				const beside = world.terrain.tileCenter({ tx: under.tx + dx!, tz: under.tz + dz! });
+				const middle = world.terrain.tileCenter({ tx: under.tx, tz: under.tz });
 				const onto = ways.getPassage(walker, ways.createAt([beside.x, beside.z]), ways.createAt([middle.x, middle.z])) !== undefined;
 				assert.equal(onto, false, `a step lands on the fallen column at ${column.x}, ${column.z} (cell ${under.tx}, ${under.tz})`);
 			}
 		}
 	}
-	for (const brazier of planProps(chunks).filter((spot) => spot.prop === 'brazier')) {
-		const { x, z } = world.tileCenter(world.tileCoordAt(brazier.x, brazier.z).tx, world.tileCoordAt(brazier.x, brazier.z).tz);
+	for (const brazier of planProps(world.terrain).filter((spot) => spot.prop === 'brazier')) {
+		const { x, z } = world.terrain.tileCenter(world.terrain.tileCoordAt(brazier.x, brazier.z));
 		const at = ways.createAt([x, z]);
 		const into = ways.getNeighbors(at).filter((from) => ways.getPassage(walker, from, at) !== undefined);
 		assert.deepEqual(into, [], `a step lands in the brazier at ${brazier.x}, ${brazier.z}`);

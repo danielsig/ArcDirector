@@ -268,6 +268,9 @@ export function worldVerbs<TCtx>(on:On<TCtx>):Handlers<TCtx> {
 			// A `from` that names nothing is left out: it is looked for where it lies, and told so.
 			const unknown = call.args.from && world.find(call.args.from) === undefined ? call.args.from : undefined;
 			const from = unknown ? undefined : call.args.from;
+			if (from === call.character.id) {
+				return fail('pick_up', `you carry no ${item}`);
+			}
 			if (from && director.character(from)) {
 				return fail('pick_up', (name) => `${name(from)} carries it; only they can give it to you`);
 			}
@@ -310,6 +313,9 @@ export function worldVerbs<TCtx>(on:On<TCtx>):Handlers<TCtx> {
 			const found = resolveCharacter(call, to);
 			if (failed(found)) {
 				return found;
+			}
+			if (found.target === found.character) {
+				return fail('give', 'cannot give to yourself');
 			}
 			const hand = [{ verb: 'give', thing: item, from: found.character, to: found.target, quantity: call.args.quantity }];
 			const refused = checkDeal(world, hand);

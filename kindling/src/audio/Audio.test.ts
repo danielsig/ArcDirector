@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { Audio, noteIsDue, placeRecording } from './Audio.js';
+import { Audio, noteIsDue } from './Audio.js';
 import { AudioSource } from './AudioSource.js';
 import { overdriveSample, reverbTapTimes } from './filters.js';
 import { Speaker } from './Speaker.js';
@@ -99,24 +99,9 @@ describe('Audio', () => {
 		assert.ok(distanceGain(8, 0.32) < 0.15);
 	});
 
-	it('plays an intro once, then loops a later span', () => {
-		const at = (position:number, expect:number):void => {
-			assert.ok(Math.abs(placeRecording(position, 7.2, 115.8) - expect) < 1e-9);
-		};
-		at(0, 0);
-		at(7.2, 7.2);
-		at(115.8, 7.2);
-		at(115.8 + 10, 17.2);
-		at(50 + 70, 11.4);
-		at(115.8 + (115.8 - 7.2), 7.2);
-		assert.equal(placeRecording(10, 0, 100), 10);
-		assert.equal(placeRecording(100, 0, 100), 0);
-		assert.equal(placeRecording(250, 0, 100), 50);
-	});
-
 	it('queues a recording when there is no AudioContext', async () => {
 		const audio = new Audio();
-		await audio.playRecording(new Uint8Array(8).buffer, 1, 'clip');
+		await audio.playMusic({ recording: new Uint8Array(8).buffer, id: 'clip' });
 		assert.equal(audio.playing, null);
 		assert.equal(audio.music?.id, 'clip');
 		assert.equal(audio.music?.bpm, 60);

@@ -105,6 +105,19 @@ describe('component loop', () => {
 		assert.ok(Probe.log.includes('update'));
 	});
 
+	it('forEachComponent skips disabled components', () => {
+		const game = new Game();
+		const on = new GameObject('on');
+		const off = new GameObject('off');
+		on.addComponent(Probe);
+		off.addComponent(Probe).enabled = false;
+		game.world.add(on);
+		game.world.add(off);
+		const seen:string[] = [];
+		game.world.forEachComponent(Probe, (c, go) => seen.push(go.id));
+		assert.deepEqual(seen, ['on']);
+	});
+
 	it('destroys at end of frame and removes from World', () => {
 		const game = new Game();
 		const parent = new GameObject('parent');

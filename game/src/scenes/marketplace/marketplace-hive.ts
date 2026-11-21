@@ -1,11 +1,12 @@
-import { type GameObject, type XZ } from '@arc-director/kindling';
-import type { CharacterSpec, MemoryDraft } from 'arc-director';
-import { Door, MarketNPC, Named } from '../../engine/components';
+import { yawToForward, type GameObject, type XZ } from '@arc-director/kindling';
+import type { MemoryDraft } from 'arc-director';
+import { MarketplaceNPC, Named, idOf } from '../../engine/components';
 import { DemoMeshRenderer } from '../../engine/demo-mesh-renderer';
 import type { DemoWorld } from '../../engine/demo-world';
-import { idOf } from '../../director/names';
-import { spawnNPC, type NPCSpawnOpts } from '../../world/spawn';
-import { SELLERS, type Seller } from '../../items/wares';
+import { spawnNPC, type NPCSpawnDef } from '../../world/spawn';
+import { SWORD, type CastMember, type SceneCast } from '../scene';
+import { SELLERS, type Seller } from './wares';
+import { Door } from '../../kit/door/door';
 
 /** Where `seller` serves from, and what they sell at what price. */
 function stallOf(seller:Seller):{ place:string; prices:string } {
@@ -13,17 +14,34 @@ function stallOf(seller:Seller):{ place:string; prices:string } {
 	return { place, prices: seller.wares.map((ware) => `${ware.name} for ${ware.ask} gold, never under ${ware.floor}`).join('; ') };
 }
 
+/** How far a stall's seller stands forward of their cell's middle, up to the counter's back (meters). */
+const UP_TO_COUNTER = 0.45;
+
 /**
- * The sellers, units of the `Sellers` hive: each at their post, each ware's posted offer standing, serving one buyer
- * at a time at their serving spot while the rest line up behind.
+ * A seller, a unit of the `Sellers` hive: at their post with every ware in their pack, each ware's posted offer
+ * standing, serving one buyer at a time at their serving spot while the rest line up behind.
  */
-export const SELLER_UNITS:Pick<CharacterSpec, 'id' | 'tags' | 'offers' | 'crowd' | 'servingSpot'>[] = SELLERS.map((seller) => ({
-	id: seller.vendor,
-	tags: ['Seller', seller.post],
-	offers: seller.wares.map((ware) => ({ give: { [ware.name]: 1 }, get: { gold: ware.ask } })),
-	crowd: 'line',
-	servingSpot: seller.servingSpot,
-}));
+function vendor(seller:Seller):CastMember {
+	return {
+		id: seller.vendor,
+		tags: ['Seller', seller.post],
+		offers: seller.wares.map((ware) => ({ give: { [ware.name]: 1 }, get: { gold: ware.ask } })),
+		crowd: 'line',
+		servingSpot: seller.servingSpot,
+		of: 'Sellers',
+		body: {
+			meshID: seller.model,
+			cell: seller.cell,
+			offset: seller.offset ?? (seller.shop ? undefined : { x: yawToForward(seller.yaw).x * UP_TO_COUNTER, z: yawToForward(seller.yaw).z * UP_TO_COUNTER }),
+			yaw: seller.yaw,
+			voice: seller.voice,
+			packLoot: seller.wares.map((ware) => ({ defID: ware.defID, name: ware.name, count: 99 })),
+			wallet: seller.wallet,
+			merchant: { goods: seller.wares.map((ware) => ware.name) },
+			marketplaceNPC: { kind: 'vendor', wants: [seller.want], post: seller.post },
+		},
+	};
+}
 
 /** What the `Sellers` hive knows of each seller: their place, their prices, and how they talk. */
 export const SELLER_MEMORIES:MemoryDraft[] = SELLERS.flatMap((seller) => {
@@ -44,7 +62,7 @@ export const SELLER_MEMORIES:MemoryDraft[] = SELLERS.flatMap((seller) => {
  * door. The opening itself stays clear for people walking out.
  */
 export function guardPost(world:DemoWorld, guard:GameObject):XZ | undefined {
-	const npc = guard.getComponent(MarketNPC);
+	const npc = guard.getComponent(MarketplaceNPC);
 	if (npc?.kind !== 'guard' || !npc.leaveGate) {
 		return undefined;
 	}
@@ -53,7 +71,7 @@ export function guardPost(world:DemoWorld, guard:GameObject):XZ | undefined {
 		return undefined;
 	}
 	const mates:GameObject[] = [];
-	world.forEachComponent(MarketNPC, (other, go) => {
+	world.forEachComponent(MarketplaceNPC, (other, go) => {
 		if (other.kind === 'guard' && other.leaveGate === npc.leaveGate) {
 			mates.push(go);
 		}
@@ -65,7 +83,7 @@ export function guardPost(world:DemoWorld, guard:GameObject):XZ | undefined {
 	const p = gate.transform.position;
 	const passageX = gate.getComponent(Door)?.axis === 'z' ? 0 : 1;
 	const passageZ = passageX === 0 ? 1 : 0;
-	const clear = (sign:number) => world.sampleTerrain(p.x + passageX * sign, p.z + passageZ * sign)?.blocked === false;
+	const clear = (sign:number) => world.terrain.sample(p.x + passageX * sign, p.z + passageZ * sign)?.blocked === false;
 	const inward = clear(1) ? 1 : -1;
 	return {
 		x: p.x + passageX * inward + passageZ * side * span,
@@ -73,11 +91,16 @@ export function guardPost(world:DemoWorld, guard:GameObject):XZ | undefined {
 	};
 }
 
-/** Hold the gate until a thief or a security cry shows. A law on the Guards collective outranks this and runs first. */
-function guard(id:string, gate:string):Pick<CharacterSpec, 'id' | 'tags' | 'choose'> {
+/**
+ * A guard of the `Guards`, at map cell `cell` by `gate`: it holds the gate until a thief or a security cry shows. A law
+ * on the Guards collective outranks this and runs first.
+ */
+function guard(id:string, gate:string, cell:[number, number], yaw:number):CastMember {
 	return {
 		id,
 		tags: ['Guard', gate],
+		of: 'Guards',
+		body: { meshID: 'KnightMale', cell, yaw, marketplaceNPC: { kind: 'guard', wants: [], leaveGate: gate }, equip: SWORD },
 		choose: {
 			goal: `Guard ${gate} from beside the doorway, never in it. A thief outranks a cry. Chase a thief you see, else run to whoever cried a security word, else hold`,
 			choices: {
@@ -89,19 +112,28 @@ function guard(id:string, gate:string):Pick<CharacterSpec, 'id' | 'tags' | 'choo
 	};
 }
 
-export const HIVE_UNITS:Pick<CharacterSpec, 'id' | 'tags'>[] = [
-	{ id: 'Mira', tags: ['Shopper', 'wanting', 'Loaf', 'EastGate'] },
-	{ id: 'Tomas', tags: ['Shopper', 'wanting', 'Knife', 'Bowl', 'WestGate'] },
-	{ id: 'Nell', tags: ['Shopper', 'wanting', 'Scarf', 'WestGate'] },
-	{ id: 'Rook', tags: ['Shopper', 'wanting', 'Loaf', 'WestGate'] },
-	{ id: 'Ferris', tags: ['Shopper', 'wanting', 'Tonic', 'EastGate'] },
-	{ id: 'Lisa', tags: ['Shopper', 'wanting', 'WoodenHorse', 'WestGate'] },
-];
+/** A shopper's tags: wanting each of `wants` until bought, and leaving by `gate`. */
+function shopperTags(wants:string[], gate:string):string[] {
+	return ['Shopper', 'wanting', ...wants, gate];
+}
 
-/** One guard holds each gate; a thief or a cry still pulls them off post. */
-export const GUARD_UNITS:Pick<CharacterSpec, 'id' | 'tags' | 'choose'>[] = [
-	guard('Holt', 'WestGate'),
-	guard('Brant', 'EastGate'),
+/** A shopper of the `MarketplaceHive` at map cell `cell` with `wallet` gold, come for `wants`, who leaves by `gate`. */
+function shopper(id:string, meshID:string, cell:[number, number], wallet:number, wants:string[], gate:string, extra:Partial<NPCSpawnDef> = {}):CastMember {
+	const body:Omit<NPCSpawnDef, 'id'> = { meshID, cell, wallet, marketplaceNPC: { kind: 'customer', wants, leaveGate: gate }, ...extra };
+	return { id, tags: shopperTags(wants, gate), of: 'MarketplaceHive', body };
+}
+
+/** The sellers at their posts, the shoppers in the square at the start, and one guard at each gate. */
+export const MARKETPLACE_CAST:SceneCast = [
+	...SELLERS.map(vendor),
+	shopper('Mira', 'Scout', [9, 13], 6, ['Loaf'], 'EastGate'),
+	shopper('Tomas', 'Merchant', [22, 12], 15, ['Knife', 'Bowl'], 'WestGate', { yaw: Math.PI / 2 }),
+	shopper('Nell', 'VillagerFemale', [9, 20], 7, ['Scarf'], 'WestGate', { yaw: -Math.PI / 2, packLoot: [{ defID: 'apple', name: 'Apple', count: 2 }] }),
+	shopper('Rook', 'Rogue', [24, 20], 8, ['Loaf'], 'WestGate'),
+	shopper('Ferris', 'KnightFemale', [28, 20], 7, ['Tonic'], 'EastGate'),
+	shopper('Lisa', 'VillagerFemale', [3, 10], 9, ['WoodenHorse'], 'WestGate'),
+	guard('Holt', 'WestGate', [1, 8], -Math.PI / 2),
+	guard('Brant', 'EastGate', [30, 22], Math.PI / 2),
 ];
 
 const POOL_NAMES = ['Pip', 'Gwen', 'Cal', 'Ivo', 'Bess', 'Quin', 'Odo', 'Faye', 'Lars', 'Nia', 'Wim', 'Tess', 'Juno', 'Brack', 'Marlow', 'Emry'];
@@ -145,8 +177,7 @@ const TEMPLATES:CustomerTemplate[] = [
 	{ wants: ['Tonic'] },
 	{ wants: ['Salve'] },
 	{ wants: ['Lavender', 'Soap'] },
-	{ wants: ['Apple'] },
-	{ wants: ['Pear', 'Plum'] },
+	{ wants: ['Sushi'] },
 	{ wants: ['WoodenHorse'] },
 	{ wants: ['Doll'] },
 	{ wants: ['Whistle', 'SpinningTop'] },
@@ -173,7 +204,7 @@ function purseFor(wants:readonly string[]):[number, number] {
 
 export function customerCount(world:DemoWorld):number {
 	let n = 0;
-	world.forEachComponent(MarketNPC, (npc) => {
+	world.forEachComponent(MarketplaceNPC, (npc) => {
 		if (npc.kind === 'customer') {
 			n += 1;
 		}
@@ -213,31 +244,24 @@ export function spawnRandomCustomer(world:DemoWorld):{ go:GameObject; id:string;
 		return null;
 	}
 	const leaveGate = spawnGate.getComponent(Named)?.id === 'WestGate' ? 'EastGate' : 'WestGate';
-	const chunk = world.chunkAtWorld(spawnGate.transform.position.x, spawnGate.transform.position.z);
-	if (!chunk) {
-		return null;
-	}
-	const local = chunk.worldToLocal(spawnGate.transform.position.x, spawnGate.transform.position.z);
+	const { tx, tz } = world.terrain.tileCoordAt(spawnGate.transform.position.x, spawnGate.transform.position.z);
 	// Past the jamb and the guards. The opening is a passage, not a lobby.
 	const inward = spawnGate.getComponent(Named)?.id === 'WestGate' ? 4 : -4;
 	const template = TEMPLATES[Math.floor(Math.random() * TEMPLATES.length)];
 	const [low, high] = purseFor(template.wants);
 	const wallet = low + Math.floor(Math.random() * (high - low + 1));
-	const opts:NPCSpawnOpts = {
+	const go = spawnNPC(world, {
 		id,
 		meshID: pickMesh(world),
-		localX: local.localX + inward,
-		localZ: local.localZ,
+		cell: [tx + inward, tz],
 		yaw: inward > 0 ? Math.PI / 2 : -Math.PI / 2,
-		pack: true,
 		packLoot: template.loot ? [template.loot] : undefined,
 		wallet,
-		marketNPC: { kind: 'customer', wants: [...template.wants], leaveGate },
-	};
-	const go = spawnNPC(world, chunk, opts);
+		marketplaceNPC: { kind: 'customer', wants: [...template.wants], leaveGate },
+	});
 	return {
 		go,
 		id,
-		tags: ['Shopper', 'wanting', ...template.wants, leaveGate],
+		tags: shopperTags(template.wants, leaveGate),
 	};
 }

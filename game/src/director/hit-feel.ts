@@ -1,6 +1,6 @@
-import { Camera as RenderCamera, resolveBody, Time, yawToForward, type GameObject } from '@arc-director/kindling';
+import { Camera, resolveBody, Time, yawToForward, Rigidbody, type GameObject } from '@arc-director/kindling';
 import * as THREE from 'three';
-import { Appearance, HurtFlash, RigidBody, Vitals } from '../engine/components';
+import { Appearance, HurtFlash, Vitals } from '../engine/components';
 import type { DemoWorld } from '../engine/demo-world';
 import { cueAt, cueVoice } from '../audio/cue';
 import { dustKick, fallDust, heavyWave, impactBurst } from '../render/fight-fx';
@@ -39,7 +39,7 @@ export function applyHit(world:DemoWorld, striker:GameObject, hurt:GameObject, k
 	const scale = Math.max(0.2, knock);
 	const shove = KNOCK_SHOVE * scale;
 	const speed = KNOCK_SPEED * scale;
-	const rb = hurt.getComponent(RigidBody);
+	const rb = hurt.getComponent(Rigidbody);
 	if (rb) {
 		rb.prevX = b.x;
 		rb.prevZ = b.z;
@@ -85,7 +85,7 @@ function feel(world:DemoWorld, striker:GameObject, hurt:GameObject, away:THREE.V
 		});
 	}
 	const view = world.findByID('MainCamera');
-	const camera = view?.getComponent(RenderCamera);
+	const camera = view?.getComponent(Camera);
 	if (!camera || !heavy || view!.transform.object3D.getWorldPosition(new THREE.Vector3()).distanceTo(feet) > FEEL_RANGE) {
 		return;
 	}

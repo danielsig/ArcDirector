@@ -1,52 +1,50 @@
 import * as THREE from 'three';
-import { patchShader } from '@arc-director/kindling';
+import { NEIGHBORS4, patchShader, type TileCoord } from '@arc-director/kindling';
 import { CELL_SIZE, CHUNK_SIZE } from '../world/constants';
-import type { DemoChunk } from '../world/demo-chunk';
+import type { DemoChunk, Tile } from '../world/demo-chunk';
+import type { GlyphTerrain } from '../world/GlyphTerrain';
 import { trackNature } from './nature';
-import { LANDFORMS } from '../world/land';
-import { showsWater } from '../world/sand';
+import { TERRAIN } from '../world/terrain-kinds';
 
 const RES = CHUNK_SIZE * 4;
 const AO_MIN = 0.42;
 
-function wallAt(chunk:DemoChunk, lx:number, lz:number):boolean {
-	const t = chunk.tile(lx, lz);
-	return !!t?.blocked && t.def !== 'water';
-}
-
-function sample(chunk:DemoChunk, wx:number, wz:number):number {
-	const ox = chunk.worldOriginX();
-	const oz = chunk.worldOriginZ();
-	const lx = Math.floor((wx - ox) / CELL_SIZE);
-	const lz = Math.floor((wz - oz) / CELL_SIZE);
-	const self = chunk.tile(lx, lz);
+/** How the ground of a tile is shaded by the tiles round it, read across chunk borders. */
+function sample(terrain:GlyphTerrain, { tx, tz }:TileCoord):number {
+	const tile = (dx:number, dz:number):Tile | undefined => terrain.tileAt({ tx: tx + dx, tz: tz + dz });
+	const wallAt = (dx:number, dz:number):boolean => {
+		const t = tile(dx, dz);
+		return !!t?.blocked && t.def !== 'water';
+	};
+	const self = tile(0, 0);
 	// The top of a landform (forest floor, a trail, a clifftop) is open ground, as the outskirts past it are.
-	if (self && LANDFORMS.has(self.def)) {
+	if (self && TERRAIN[self.def].land) {
 		return 1;
 	}
 	const h = self?.height ?? 0;
 	let ao = 1;
-	const n = wallAt(chunk, lx, lz - 1);
-	const s = wallAt(chunk, lx, lz + 1);
-	const e = wallAt(chunk, lx + 1, lz);
-	const w = wallAt(chunk, lx - 1, lz);
+	const n = wallAt(0, -1);
+	const s = wallAt(0, 1);
+	const e = wallAt(1, 0);
+	const w = wallAt(-1, 0);
 	const walls = (n ? 1 : 0) + (s ? 1 : 0) + (e ? 1 : 0) + (w ? 1 : 0);
 	ao -= walls * 0.11;
 	if ((n && e) || (n && w) || (s && e) || (s && w)) {
 		ao -= 0.1;
 	}
-	for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]] as const) {
-		const nb = chunk.tile(lx + dx, lz + dz);
+	for (const [dx, dz] of NEIGHBORS4) {
+		const nb = tile(dx, dz);
 		if (nb && nb.height > h) {
 			ao -= 0.08;
 		}
 	}
-	if (showsWater(self?.def)) {
+	if (self && TERRAIN[self.def].water) {
 		ao -= 0.18;
 	}
 	else {
-		for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]] as const) {
-			if (showsWater(chunk.tile(lx + dx, lz + dz)?.def)) {
+		for (const [dx, dz] of NEIGHBORS4) {
+			const nb = tile(dx, dz);
+			if (nb && TERRAIN[nb.def].water) {
 				ao -= 0.06;
 				break;
 			}
@@ -55,17 +53,14 @@ function sample(chunk:DemoChunk, wx:number, wz:number):number {
 	return ao;
 }
 
-function splatTrees(data:Uint8Array, chunk:DemoChunk):void {
+/** The shade under trees, those of the chunks round it too. */
+function splatTrees(data:Uint8Array, chunk:DemoChunk, terrain:GlyphTerrain):void {
 	const ox = chunk.worldOriginX();
 	const oz = chunk.worldOriginZ();
 	const radius = 1.5;
 	const texR = radius * 4;
-	for (const ent of chunk.entities) {
-		if (ent.def !== 'tree') {
-			continue;
-		}
-		const tx = ox + (ent.localX + 0.5) * CELL_SIZE;
-		const tz = oz + (ent.localZ + 0.5) * CELL_SIZE;
+	const near = [-1, 0, 1].flatMap((dx) => [-1, 0, 1].map((dz) => terrain.chunkAt(chunk.origin.cx + dx, chunk.origin.cz + dz)));
+	for (const { x: tx, z: tz } of near.flatMap((c) => c?.entities.filter((e) => e.def === 'tree').map((e) => c.worldCellCenter(e.localX, e.localZ)) ?? [])) {
 		const cx = ((tx - ox) / CELL_SIZE) * 4 - 0.5;
 		const cz = ((tz - oz) / CELL_SIZE) * 4 - 0.5;
 		const x0 = Math.max(0, Math.floor(cx - texR));
@@ -91,23 +86,22 @@ function splatTrees(data:Uint8Array, chunk:DemoChunk):void {
 	}
 }
 
-export function bakeChunkAo(chunk:DemoChunk):THREE.DataTexture {
+export function bakeChunkAo(chunk:DemoChunk, terrain:GlyphTerrain):THREE.DataTexture {
 	const data = new Uint8Array(RES * RES * 4);
-	const ox = chunk.worldOriginX();
-	const oz = chunk.worldOriginZ();
-	for (let z = 0; z < RES; z++) {
-		for (let x = 0; x < RES; x++) {
-			const wx = ox + (x + 0.5) * CELL_SIZE / 4;
-			const wz = oz + (z + 0.5) * CELL_SIZE / 4;
-			const v = Math.round(THREE.MathUtils.clamp(sample(chunk, wx, wz), AO_MIN, 1) * 255);
-			const i = (z * RES + x) * 4;
-			data[i] = v;
-			data[i + 1] = v;
-			data[i + 2] = v;
-			data[i + 3] = 255;
+	// A tile's shade fills its 4 × 4 texels.
+	for (let lz = 0; lz < CHUNK_SIZE; lz++) {
+		for (let lx = 0; lx < CHUNK_SIZE; lx++) {
+			const v = Math.round(THREE.MathUtils.clamp(sample(terrain, chunk.tileCoord(lx, lz)), AO_MIN, 1) * 255);
+			for (let z = lz * 4; z < lz * 4 + 4; z++) {
+				for (let x = lx * 4; x < lx * 4 + 4; x++) {
+					const i = (z * RES + x) * 4;
+					data.fill(v, i, i + 3);
+					data[i + 3] = 255;
+				}
+			}
 		}
 	}
-	splatTrees(data, chunk);
+	splatTrees(data, chunk, terrain);
 	const tex = new THREE.DataTexture(data, RES, RES, THREE.RGBAFormat);
 	tex.magFilter = THREE.LinearFilter;
 	tex.minFilter = THREE.LinearFilter;
@@ -165,28 +159,31 @@ export function injectAo(
 	});
 }
 
-export function attachChunkAo(group:THREE.Group, chunk:DemoChunk):void {
-	const tex = bakeChunkAo(chunk);
+export function attachChunkAo(group:THREE.Group, chunk:DemoChunk, terrain:GlyphTerrain):void {
+	const tex = bakeChunkAo(chunk, terrain);
 	group.userData.aoMap = tex;
 	const ox = chunk.worldOriginX();
 	const oz = chunk.worldOriginZ();
 	const size = CHUNK_SIZE * CELL_SIZE;
+	// One AO copy per material, shared by every mesh of the chunk drawn with it.
+	const clones = new Map<THREE.Material, THREE.Material>();
 	group.traverse((node) => {
 		const mesh = node as THREE.Mesh;
 		if (!mesh.isMesh) {
 			return;
 		}
 		const wrap = (m:THREE.Material):THREE.Material => {
-			const c = m.clone();
-			c.onBeforeCompile = m.onBeforeCompile;
-			const key = m.customProgramCacheKey.bind(m);
-			c.customProgramCacheKey = () => key();
-			c.userData = { ...m.userData, shared: false };
-			if (m.userData.uTime) {
-				c.userData.uTime = m.userData.uTime;
+			let c = clones.get(m);
+			if (!c) {
+				c = m.clone();
+				c.onBeforeCompile = m.onBeforeCompile;
+				const key = m.customProgramCacheKey.bind(m);
+				c.customProgramCacheKey = () => key();
+				c.userData = { ...m.userData, shared: false };
+				injectAo(c, tex, ox, oz, size);
+				trackNature(c);
+				clones.set(m, c);
 			}
-			injectAo(c, tex, ox, oz, size);
-			trackNature(c);
 			return c;
 		};
 		if (Array.isArray(mesh.material)) {

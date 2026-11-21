@@ -1,6 +1,6 @@
-import { Animator, Component, MeshRenderer, Time, toonClip, type GameObject } from '@arc-director/kindling';
+import { Animator, Component, MeshRenderer, Time, toonClip, Rigidbody, type GameObject } from '@arc-director/kindling';
 import * as THREE from 'three';
-import { Appearance, Celebrating, HurtFlash, RigidBody, SpeechBubble, Vitals } from '../engine/components';
+import { Appearance, Celebrating, HurtFlash, SpeechBubble, Vitals, isWalking } from '../engine/components';
 import { Order } from '../engine/order';
 import { characterModel } from '../render/character-models';
 import { CharacterPose } from './CharacterPose';
@@ -106,10 +106,10 @@ export class CharacterAnimation extends Component {
 	public strike(verb:string, windUp:number, target?:GameObject):void {
 		const pose = this.gameObject.getComponent(CharacterPose);
 		if (verb === 'shoot' && target) {
-			pose?.shoot(target, windUp);
+			pose?.bow.shoot(target, windUp);
 			return;
 		}
-		if (pose?.swing(verb, windUp, target ?? null) || (target && pose?.cast(verb, windUp, target))) {
+		if (pose?.sword.swing(verb, windUp, target ?? null) || (target && pose?.spell.cast(verb, windUp, target))) {
 			return;
 		}
 		const move = STRIKES[verb];
@@ -118,7 +118,7 @@ export class CharacterAnimation extends Component {
 		}
 		const rate = (move.hit - move.from) / Math.max(windUp, 0.1);
 		this.gameObject.getComponent(Animator)?.playOnce(move.clip, { from: move.from, to: move.to, rate });
-		pose?.clipStrike(verb, windUp, (move.to - move.from) / rate);
+		pose?.clipStrike.play(verb, windUp, (move.to - move.from) / rate);
 	}
 
 	public override update(dt:number):void {
@@ -126,8 +126,7 @@ export class CharacterAnimation extends Component {
 		if (!animator) {
 			return;
 		}
-		const rb = this.gameObject.getComponent(RigidBody);
-		const speed = rb?.speed ?? 0;
+		const speed = this.gameObject.getComponent(Rigidbody)?.speed ?? 0;
 		const pose = this.gameObject.getComponent(Appearance)?.clip ?? 'auto';
 		const hurt = this.gameObject.getComponent(HurtFlash)?.active === true;
 		const root = this.gameObject.getComponent(MeshRenderer)?.mesh;
@@ -155,7 +154,7 @@ export class CharacterAnimation extends Component {
 			clip = ASLEEP.clip;
 			rate = ASLEEP.rate;
 		}
-		else if (rb?.walking || pose === 'walk') {
+		else if (isWalking(this.gameObject) || pose === 'walk') {
 			clip = 'walk';
 			rate = Math.max(speed, 1) / WALK_PACE;
 		}

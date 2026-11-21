@@ -2,10 +2,12 @@
 import { computed, ref, watch } from 'vue';
 import { MINIMAP_SIZE, type HudModel } from './hud-model';
 import HudKey from './HudKey.vue';
+import { usePrefs } from './use-prefs';
 
 const props = defineProps<{
 	hud:HudModel;
 }>();
+const live = usePrefs();
 
 type KeyHint = { key:string; label:string; when:(hud:HudModel) => boolean };
 
@@ -14,8 +16,8 @@ const calm = (h:HudModel):boolean => !h.sayOpen && !h.menuOpen && !h.guideOpen;
 
 /** Every key hint the strip can show, in order. Adding a hint is one line. */
 const HINTS:KeyHint[] = [
-	{ key: 'Enter', label: 'Talk', when: (h) => h.player !== 'camera' && calm(h) },
-	{ key: 'Tab', label: 'Chat', when: (h) => h.player === 'camera' && calm(h) },
+	{ key: 'Enter', label: 'Talk', when: (h) => live.player !== 'camera' && calm(h) },
+	{ key: 'Tab', label: 'Chat', when: (h) => live.player === 'camera' && calm(h) },
 	{ key: 'Esc', label: 'Close', when: (h) => h.sayOpen },
 	{ key: 'Esc', label: 'Free cursor', when: (h) => h.pointerLocked && !h.sayOpen },
 ];

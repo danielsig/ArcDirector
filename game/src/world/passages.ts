@@ -1,7 +1,9 @@
-import { inBounds, type GameObject } from '@arc-director/kindling';
-import { Door, Interior, Lock, Named } from '../engine/components';
+import { inBounds, NEIGHBORS4, type GameObject } from '@arc-director/kindling';
+import { Lock, Named, idOf } from '../engine/components';
+import { Interior } from '../kit/houses/interior';
 import type { DemoWorld } from '../engine/demo-world';
 import { CELL_SIZE } from './constants';
+import { Door } from '../kit/door/door';
 
 /**
  * A passage: open floor between the rooms of a place (a crypt), every cell of it joined to the next. Where it opens
@@ -17,47 +19,47 @@ type Passage = {
 
 const key = (tx:number, tz:number):string => `${tx},${tz}`;
 const unkey = (k:string):[number, number] => k.split(',').map(Number) as [number, number];
-const STEPS:[number, number][] = [[1, 0], [-1, 0], [0, 1], [0, -1]];
 
-/** The world's passages, by cell; rebuilt when its chunks change. */
-const built = new WeakMap<DemoWorld, { chunks:number; byCell:Map<string, Passage> }>();
+/** The world's passages, by cell; rebuilt when its loaded chunks or their tiles change. */
+const built = new WeakMap<DemoWorld, { stamp:string; byCell:Map<string, Passage> }>();
 
 function passages(world:DemoWorld):Map<string, Passage> {
+	const stamp = `${world.terrain.revision()}|${[...world.terrain.loaded].map((c) => c.id).join()}`;
 	const cached = built.get(world);
-	if (cached?.chunks === world.chunks.size) {
+	if (cached?.stamp === stamp) {
 		return cached.byCell;
 	}
 	const byCell = new Map<string, Passage>();
-	built.set(world, { chunks: world.chunks.size, byCell });
+	built.set(world, { stamp, byCell });
 	const rooms:GameObject[] = [];
 	world.forEachComponent(Interior, (box, go) => {
 		if (box.room) {
 			rooms.push(go);
 		}
 	});
-	const bounds = world.chunkBounds();
+	const bounds = world.terrain.bounds();
 	if (rooms.length === 0 || !bounds) {
 		return byCell;
 	}
 	const roomAt = (tx:number, tz:number):string | undefined => {
-		const { x, z } = world.tileCenter(tx, tz);
+		const { x, z } = world.terrain.tileCenter({ tx, tz });
 		const room = rooms.find((go) => {
 			return inBounds(go.getComponent(Interior)!.bounds, x, z);
 		});
-		return room && (room.getComponent(Named)?.id ?? room.id);
+		return room && idOf(room);
 	};
 	const open = (tx:number, tz:number):boolean => {
-		const { x, z } = world.tileCenter(tx, tz);
-		const tile = world.tileAtWorld(x, z);
+		const { x, z } = world.terrain.tileCenter({ tx, tz });
+		const tile = world.terrain.tileAtWorld(x, z);
 		return !!tile && !tile.blocked;
 	};
 	const doorsAt = new Map<string, GameObject>();
 	world.forEachComponent(Door, (door, go) => {
-		const { tx, tz } = world.tileCoordAt(go.transform.position.x, go.transform.position.z);
+		const { tx, tz } = world.terrain.tileCoordAt(go.transform.position.x, go.transform.position.z);
 		doorsAt.set(key(tx, tz), go);
 	});
-	const lo = world.tileCoordAt(bounds.minX, bounds.minZ);
-	const hi = world.tileCoordAt(bounds.maxX - CELL_SIZE * 0.5, bounds.maxZ - CELL_SIZE * 0.5);
+	const lo = world.terrain.tileCoordAt(bounds.minX, bounds.minZ);
+	const hi = world.terrain.tileCoordAt(bounds.maxX - CELL_SIZE * 0.5, bounds.maxZ - CELL_SIZE * 0.5);
 	for (let tz = lo.tz; tz <= hi.tz; tz++) {
 		for (let tx = lo.tx; tx <= hi.tx; tx++) {
 			if (byCell.has(key(tx, tz)) || !open(tx, tz) || roomAt(tx, tz)) {
@@ -75,7 +77,7 @@ function passages(world:DemoWorld):Map<string, Passage> {
 				if (here) {
 					passage.doors.set(here, at);
 				}
-				for (const [dx, dz] of STEPS) {
+				for (const [dx, dz] of NEIGHBORS4) {
 					const nx = cx + dx;
 					const nz = cz + dz;
 					const next = key(nx, nz);
@@ -108,7 +110,7 @@ function stepsFrom(passage:Passage, from:string):Map<string, number> {
 	for (let i = 0; i < todo.length; i++) {
 		const at = todo[i]!;
 		const [cx, cz] = unkey(at);
-		for (const [dx, dz] of STEPS) {
+		for (const [dx, dz] of NEIGHBORS4) {
 			const next = key(cx + dx, cz + dz);
 			if (passage.cells.has(next) && !steps.has(next)) {
 				steps.set(next, steps.get(at)! + 1);
@@ -121,7 +123,7 @@ function stepsFrom(passage:Passage, from:string):Map<string, number> {
 
 /** What is said of a door: its name, and whether it stands open, shut, or locked. */
 function doorWord(go:GameObject):string {
-	const name = go.getComponent(Named)?.id ?? go.id;
+	const name = idOf(go);
 	const state = go.getComponent(Door)?.open ? 'open' : go.getComponent(Lock)?.locked ? 'shut and locked' : 'shut';
 	return `${name} (${state})`;
 }
@@ -131,7 +133,7 @@ const meters = (cells:number):number => Math.round(cells * CELL_SIZE);
 
 /** The passage at `x`, `z`, if any: who stands there is in it. */
 function passageAt(world:DemoWorld, x:number, z:number):{ passage:Passage; cell:string } | undefined {
-	const { tx, tz } = world.tileCoordAt(x, z);
+	const { tx, tz } = world.terrain.tileCoordAt(x, z);
 	const cell = key(tx, tz);
 	const passage = passages(world).get(cell);
 	return passage && { passage, cell };

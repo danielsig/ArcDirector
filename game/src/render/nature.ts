@@ -80,11 +80,6 @@ export const CLIFF_TILE = { up: 2.45, across: 2.45 * 576 / 988 };
  */
 export const SAND_TILE = 0.5;
 
-export const GRASS_Y = 0.012;
-/** A river's surface: its current lines, foam and ripples. */
-export const WATER_UPPER_Y = GRASS_Y - 0.12;
-/** A river's bed: just under its surface, so ripples lie on the water and no bank shows through it. */
-export const WATER_LOWER_Y = WATER_UPPER_Y - 0.01;
 export const GRASS_UV_REP = 4;
 /**
  * A river's surface draws after the see-through things under it, so they still show through, and before a waterfall's

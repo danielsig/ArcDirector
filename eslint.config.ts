@@ -55,7 +55,7 @@ const commonRules = {
 			message: "Never Utc. Use UTC (toUTC, savedUTC).",
 		},
 		{
-			selector: "Identifier[name=/^(created|updated|started|ended|deleted|noted|saved|loaded|modified|accessed|ready|fade|last)At$|[A-Za-z](Tactical|Strategic|Intrusion|Ready|Held|Message|Try|MarketNPC)At$/]",
+			selector: "Identifier[name=/^(created|updated|started|ended|deleted|noted|saved|loaded|modified|accessed|ready|fade|last)At$|[A-Za-z](Tactical|Strategic|Intrusion|Ready|Held|Message|Try|MarketplaceNPC)At$/]",
 			message: "Game time fields/variables are named timestamp or *Timestamp. UTC fields/variables end with UTC (savedUTC). Not At.",
 		},
 		{

@@ -1,22 +1,24 @@
 import { Time, distanceXZ, type GameObject } from '@arc-director/kindling';
-import { parseArc, pascalCase, STOCK_COLLECTIVE_VERBS, STOCK_FORMATION_VERBS, ArcDirector, type Kit, type RegionSpec } from 'arc-director';
-import { MarketNPC, MarketGate, Merchant, Wanted } from '../../engine/components';
+import { parseArc, pascalCase, STOCK_COLLECTIVE_VERBS, STOCK_FORMATION_VERBS, type ArcDirector, type Kit } from 'arc-director';
+import { MarketplaceNPC, MarketplaceGate, Merchant, Wanted, idOf } from '../../engine/components';
 import { CharacterMotor } from '../../characters/CharacterMotor';
-import { NPCInput } from '../../characters/NPCInput';
 import { compactName, findCarried, itemMatchesName, tryInsert } from '../../items/inventory';
 import { dropItem, USE_RANGE } from '../../items/pickup';
 import type { GameHost, CharacterCtx } from '../../director/adapter';
-import { customerCount, guardPost, spawnRandomCustomer, HIVE_UNITS, GUARD_UNITS, SELLER_MEMORIES, SELLER_UNITS } from './marketplace-hive';
-import { squareList } from '../../items/wares';
+import type { SceneHooks } from '../../director/game-types';
+import { customerCount, guardPost, spawnRandomCustomer, MARKETPLACE_CAST, SELLER_MEMORIES } from './marketplace-hive';
+import { squareList } from './wares';
+import { mindsOf } from '../scene';
 import { coinsOf } from '../../items/wallet';
-import { idOf, findObject } from '../../director/names';
+import { findObject } from '../../director/names';
 import { takeSome } from '../../director/items';
-import { BODY_VERBS, GAME_VERBS, markThief } from '../../director/game-verbs';
+import { BODY_VERBS, GAME_VERBS, markThief, REST_VERBS } from '../../director/game-verbs';
 import { showSpeech } from '../../director/player-talk';
-import { answerCries, noteSecurityCry } from '../../director/alarm';
+import { answerCries, noteSecurityCry } from './marketplace-alarm';
 import { Alarm } from '../../engine/components';
 
-const nextMarketNPCTimestamp = new WeakMap<GameHost, number>();
+/** What the marketplace keeps as it runs, saved with the game: when the next shopper may walk in. */
+type Marketplace = { nextCustomerAt:number };
 
 /** How close to the gate counts as having walked out. A plain go_to stops about a meter short, and a new arrival stands four meters inside. */
 const DOORWAY = 1.2;
@@ -28,7 +30,7 @@ const BROWSE = 16;
 const IDLE_FOR = [5, 14];
 
 /** A stroll through the square. Default CharacterMotor is 3.4. */
-const MARKET_WALK = 1.7;
+const MARKETPLACE_WALK = 1.7;
 
 function stallOwner(host:GameHost, itemName:string):GameObject | undefined {
 	let owner:GameObject | undefined;
@@ -57,7 +59,7 @@ function despawn(host:GameHost, go:GameObject):void {
 		text: `${id} left through the gate`,
 		tags: [id, 'gate'],
 	});
-	host.world.setMessage(`${id} left the market`);
+	host.world.setMessage(`${id} left the marketplace`);
 }
 
 function catchThief(host:GameHost, guard:GameObject, thief:GameObject):void {
@@ -100,7 +102,7 @@ function catchThief(host:GameHost, guard:GameObject, thief:GameObject):void {
 		major: true,
 	});
 	host.world.setMessage(`${watch} caught ${who} stealing`);
-	const npc = thief.getComponent(MarketNPC);
+	const npc = thief.getComponent(MarketplaceNPC);
 	if (npc?.kind === 'customer') {
 		npc.wants = [];
 		npc.leaving = true;
@@ -112,7 +114,7 @@ function catchThief(host:GameHost, guard:GameObject, thief:GameObject):void {
 }
 
 function seizeNearby(host:GameHost):void {
-	host.world.forEachComponent(MarketNPC, (npc, guard) => {
+	host.world.forEachComponent(MarketplaceNPC, (npc, guard) => {
 		if (npc.kind !== 'guard') {
 			return;
 		}
@@ -127,51 +129,28 @@ function seizeNearby(host:GameHost):void {
 	});
 }
 
-const gated = new WeakSet<GameHost>();
-
 /**
- * Each gate's threshold, a region: any shopper is gone the moment it steps onto it. On the threshold, not merely near
- * it: a new arrival stands four meters inside. A wanted thief is stopped there, beside the guard, until caught. Once,
- * as soon as the gates have loaded with their chunks.
+ * Any shopper on a gate's threshold is gone: on it, not merely near it, since a new arrival stands four meters inside.
+ * A wanted thief is stopped there, beside the guard, until caught.
  */
-function addGateExits(host:GameHost):void {
-	const director = host.arc;
-	if (!director || gated.has(host)) {
-		return;
-	}
-	const thresholds:Record<string, RegionSpec<CharacterCtx>> = {};
-	host.world.forEachComponent(MarketGate, (exit, gate) => {
-		gated.add(host);
-		const { x, z } = gate.transform.position;
-		thresholds[`${idOf(gate)}Threshold`] = {
-			center: [x, z],
-			radius: DOORWAY,
-			who: ({ character }) => character.getComponent(MarketNPC)?.kind === 'customer' && !character.getComponent(Wanted)?.enabled,
-			onEnter: ({ character }) => despawn(host, character),
-		};
-	});
-	// What each shopper walked in with. Read again every tick, so a purchase shows, and only while they are in the square.
-	director.addRegions({ purses: {
-		from: [-Infinity, -Infinity],
-		to: [Infinity, Infinity],
-		who: ({ character }) => character.getComponent(MarketNPC)?.kind === 'customer',
-		memory: ({ character }) => {
-			const wants = character.getComponent(MarketNPC)?.wants ?? [];
-			const gold = `${coinsOf(character)} gold`;
-			return wants.length > 0 ? `carrying ${gold}, looking for ${wants.join(' and ')}` : `carrying ${gold}, done looking`;
-		},
-	}, ...thresholds });
+function exitGates(host:GameHost):void {
+	const gone:GameObject[] = [];
+	host.world.forEachComponent(MarketplaceGate, (exit, gate) => host.world.forEachComponent(MarketplaceNPC, (npc, go) => {
+		if (npc.kind === 'customer' && !go.getComponent(Wanted)?.enabled && distanceXZ(go, gate) <= DOORWAY) {
+			gone.push(go);
+		}
+	}));
+	gone.forEach((go) => despawn(host, go));
 }
-
-/** CharacterMotor's own walk, m/s. NPCs in this scene use {@link MARKET_WALK} instead. */
+/** CharacterMotor's own walk, m/s. NPCs in this scene use {@link MARKETPLACE_WALK} instead. */
 const PLAYER_WALK = 3.4;
 
 /** Shoppers, sellers and guards, every tick, so a new arrival is paced on the next one. The player keeps the normal walk. */
-function paceMarket(host:GameHost):void {
+function paceMarketplace(host:GameHost):void {
 	for (const go of host.world.objects) {
 		const motor = go.getComponent(CharacterMotor);
 		if (motor) {
-			motor.maxSpeed = go.id === 'Player' ? PLAYER_WALK : MARKET_WALK;
+			motor.maxSpeed = go.id === 'Player' ? PLAYER_WALK : MARKETPLACE_WALK;
 		}
 	}
 }
@@ -182,7 +161,7 @@ function paceMarket(host:GameHost):void {
  * stall order back.
  */
 function browse(host:GameHost):void {
-	host.world.forEachComponent(MarketNPC, (npc, go) => {
+	host.world.forEachComponent(MarketplaceNPC, (npc, go) => {
 		if (npc.kind !== 'customer' || npc.wants.length === 0) {
 			return;
 		}
@@ -196,17 +175,17 @@ function browse(host:GameHost):void {
 	});
 }
 
-function tickMarketNPC(host:GameHost):void {
-	paceMarket(host);
-	addGateExits(host);
+function tickMarketplaceNPC(host:GameHost):void {
+	paceMarketplace(host);
+	exitGates(host);
 	browse(host);
 	seizeNearby(host);
 	answerCries(host);
-	const due = nextMarketNPCTimestamp.get(host) ?? 12;
-	if (Time.time < due) {
+	const state = host.sceneState<Marketplace>();
+	if (Time.time < (state.nextCustomerAt ?? 12)) {
 		return;
 	}
-	nextMarketNPCTimestamp.set(host, Time.time + 1 + Math.random() * 2);
+	state.nextCustomerAt = Time.time + 1 + Math.random() * 2;
 	if (customerCount(host.world) >= 14) {
 		return;
 	}
@@ -220,44 +199,51 @@ function tickMarketNPC(host:GameHost):void {
 	host.arc?.pushEvent({
 		kind: 'Arrived',
 		text: `${spawned.id} arrived from the street`,
-		tags: [spawned.id, 'market'],
+		tags: [spawned.id, 'marketplace'],
 	});
 	if (!host.arc) {
 		return;
 	}
-	host.arc.collective('MarketHive')?.addCharacter({ id: spawned.id, tags: spawned.tags, kit: HIVE_KIT });
-	spawned.go.getComponent(NPCInput)!.aiOn = true;
+	host.arc.collective('MarketplaceHive')?.addCharacter({ id: spawned.id, tags: spawned.tags, kit: HIVE_KIT });
 }
 
-/** The market's laws are the scene's: its minds step in with orders, and nobody writes laws. */
-const MARKET_VERBS = GAME_VERBS.filter((verb) => verb !== 'law' && verb !== 'unlaw');
+/** The marketplace's laws are the scene's: its minds step in with orders, and nobody writes laws. */
+const MARKETPLACE_VERBS = GAME_VERBS.filter((verb) => verb !== 'law' && verb !== 'unlaw');
 
 /** Shoppers walk, buy, and leave. No formations: a crowd verb is how a whole stall gets mobbed. */
-const HIVE_KIT:Kit = { verbs: [...MARKET_VERBS, 'offer', 'steal'] };
+const HIVE_KIT:Kit = { verbs: [...MARKETPLACE_VERBS, 'offer', 'steal', 'sit'] };
 
-/** What the market's minds order their people with. No formations: neither shoppers nor guards march. */
+/** What the marketplace's minds order their people with. No formations: neither shoppers nor guards march. */
 const ORDERS = STOCK_COLLECTIVE_VERBS.filter((verb) => !(STOCK_FORMATION_VERBS as readonly string[]).includes(verb));
 
 /** Guards walk, talk, and wait. They do not trade or steal. `stand` is their post beside the door. */
-const GUARD_KIT:Kit = { verbs: [...MARKET_VERBS, 'stand'] };
+const GUARD_KIT:Kit = { verbs: [...MARKETPLACE_VERBS, 'stand'] };
 
-/** Every market mind. Recall is how it reads the trade ledger. */
+/** Every marketplace mind. Recall is how it reads the trade ledger. */
 const LEDGER_NOTE = 'The ledger of who gave or traded what, from whom, to whom, in what quantity, and for what, is your memory. Whenever any of that is in doubt, call recall. That is how you read the ledger. Never guess a trade.';
 
-export function createDirector(host:GameHost):ArcDirector<CharacterCtx, GameObject> {
-	host.hooks = {
-		allowTheft: true,
-		afterPickUp,
-		tickMarketNPC,
-		onSpoke: noteSecurityCry,
-	};
-	const hiveKit = { verbs: [...MARKET_VERBS, ...ORDERS, 'offer', 'steal'] };
-	const guardVoice = { verbs: [...MARKET_VERBS, ...ORDERS] };
-	const d = host.configure(new ArcDirector<CharacterCtx, GameObject>())
-		.withRPG(BODY_VERBS)
+export const MARKETPLACE_HOOKS:SceneHooks<GameHost> = { allowTheft: true, afterPickUp, tick: tickMarketplaceNPC, onSpoke: noteSecurityCry };
+
+/** The sellers', the hive's and the guards' minds, their verbs and the gates' regions, onto the host's director. */
+export function directMarketplace(host:GameHost, director:ArcDirector<CharacterCtx, GameObject>):ArcDirector<CharacterCtx, GameObject> {
+	const hiveKit = { verbs: [...MARKETPLACE_VERBS, ...ORDERS, 'offer', 'steal', 'sit'] };
+	const guardVoice = { verbs: [...MARKETPLACE_VERBS, ...ORDERS] };
+	const d = director
+		.withRPG({ ...BODY_VERBS, ...REST_VERBS })
 		.withStealing()
 		.withSight({ limit: 16 })
 		.withMind({ systemNote: LEDGER_NOTE })
+		// What each shopper walked in with. Read again every tick, so a purchase shows, and only while they are in the square.
+		.addRegions({ purses: {
+			from: [-Infinity, -Infinity],
+			to: [Infinity, Infinity],
+			who: ({ character }) => character.getComponent(MarketplaceNPC)?.kind === 'customer',
+			memory: ({ character }) => {
+				const wants = character.getComponent(MarketplaceNPC)?.wants ?? [];
+				const gold = `${coinsOf(character)} gold`;
+				return wants.length > 0 ? `carrying ${gold}, looking for ${wants.join(' and ')}` : `carrying ${gold}, done looking`;
+			},
+		} })
 		.withVerbs((v) => v.add('stand', {
 			args: {},
 			help: 'a guard walks to their side of the gate, beside the doorway',
@@ -270,7 +256,7 @@ export function createDirector(host:GameHost):ArcDirector<CharacterCtx, GameObje
 			},
 		}))
 		.addCollective({
-			id: 'MarketHive',
+			id: 'MarketplaceHive',
 			kit: hiveKit,
 			// One shopper per order. A filter such as units.filter("Shopper") would march the whole square.
 			maxUnitsPerCommand: 1,
@@ -281,13 +267,13 @@ export function createDirector(host:GameHost):ArcDirector<CharacterCtx, GameObje
 				text: 'Shoppers look around and buy what they came for when the price suits them, then leave by their own gate.',
 				priority: 2,
 			}, {
-				text: 'Shoppers talk with each other as they browse. When two stand near each other, order one to say a line to the other, and the other to answer it a little later, both in the same think. They talk as townsfolk of a fantasy market would: prices and haggling, the harvest, the weather on the canal, news off the road, a guild quarrel, a rumor from the keep. One plain sentence each, in their own voice, never about the hive.',
+				text: 'Shoppers talk with each other as they browse. When two stand near each other, order one to say a line to the other, and the other to answer it a little later, both in the same think. They talk as townsfolk of a fantasy marketplace would: prices and haggling, the harvest, the weather on the canal, news off the road, a guild quarrel, a rumor from the keep. One plain sentence each, in their own voice, never about the hive.',
 				priority: 1,
 			}],
 			// A pinned memory replaces the one with its first two tags: each line its own second tag.
 			memories: Object.entries({
-				self: 'I am the canal-market hive, the shoppers\' one mind, not a person in the square.',
-				canal: 'A canal runs east to west through the middle of the market, crossed by three footbridges.',
+				self: 'I am the canal-marketplace hive, the shoppers\' one mind, not a person in the square.',
+				canal: 'A canal runs east to west through the middle of the marketplace, crossed by three footbridges.',
 				squares: `${squareList()}.`,
 				tags: 'Each shopper is tagged Shopper and wanting, with each good it still wants and the gate it leaves by. The wanting tag comes off with the last of those, and then they walk to that gate on their own.',
 				others: 'The sellers keep their own stalls and have their own mind, the Sellers; the Guards hold the gates. A seller answers a low offer themselves.',
@@ -296,7 +282,7 @@ export function createDirector(host:GameHost):ArcDirector<CharacterCtx, GameObje
 			pinnedWatches: {
 				theft: 'some(events.filter("theft"))',
 			},
-			characters: HIVE_UNITS.map((unit) => ({ ...unit, kit: HIVE_KIT })),
+			characters: mindsOf(MARKETPLACE_CAST, 'MarketplaceHive').map((unit) => ({ ...unit, kit: HIVE_KIT })),
 			laws: [{
 				name: 'flee',
 				who: 'units.filter("Shopper")',
@@ -324,15 +310,15 @@ export function createDirector(host:GameHost):ArcDirector<CharacterCtx, GameObje
 			mind: { skipMajor: true },
 			identity: { role: 'Watch', traits: ['stern', 'alert'] },
 			goals: [{
-				text: 'Keep the market safe: thieves caught, cries answered, gates held.',
+				text: 'Keep the marketplace safe: thieves caught, cries answered, gates held.',
 				priority: 2,
 			}],
 			memories: Object.entries({
-				self: 'I am the market watch, the guards\' one mind, not a person in the square.',
+				self: 'I am the marketplace watch, the guards\' one mind, not a person in the square.',
 				gates: 'Holt keeps WestGate and Brant keeps EastGate, each beside the doorway so the way through stays clear.',
 				cries: 'A guard who reaches someone who cried out asks what happened before doing anything else.',
 			}).map(([key, text]) => ({ text, tags: ['backstory', key], pinned: true })),
-			characters: GUARD_UNITS.map((unit) => ({ ...unit, kit: GUARD_KIT })),
+			characters: mindsOf(MARKETPLACE_CAST, 'Guards').map((unit) => ({ ...unit, kit: GUARD_KIT })),
 			laws: [{
 				name: 'chase',
 				who: 'units',
@@ -349,7 +335,7 @@ export function createDirector(host:GameHost):ArcDirector<CharacterCtx, GameObje
 		});
 	return d.addCollective({
 		id: 'Sellers',
-		kit: { verbs: [...MARKET_VERBS, ...ORDERS, 'offer'] },
+		kit: { verbs: [...MARKETPLACE_VERBS, ...ORDERS, 'offer'] },
 		// One seller per order: each answers the offers made to them.
 		maxUnitsPerCommand: 1,
 		identity: { role: 'Hive', traits: ['shrewd', 'fair', 'proud of their wares'] },
@@ -364,6 +350,6 @@ export function createDirector(host:GameHost):ArcDirector<CharacterCtx, GameObje
 			{ text: 'I am the sellers\' one mind, not a person in the square: each seller keeps their own stall, and I answer for them.', tags: ['backstory', 'self'], pinned: true },
 			...SELLER_MEMORIES,
 		],
-		characters: SELLER_UNITS.map((unit) => ({ ...unit, kit: { verbs: [...MARKET_VERBS, 'offer'] } })),
+		characters: mindsOf(MARKETPLACE_CAST, 'Sellers').map((unit) => ({ ...unit, kit: { verbs: [...MARKETPLACE_VERBS, 'offer'] } })),
 	});
 }

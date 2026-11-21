@@ -3,6 +3,7 @@
 // Two names are the same when they match ignoring case and `-` (`npc-input.ts`, `NPCInput.ts`). `index.ts`, `index.html` and config files are exempt.
 // Whether a PascalCase file really holds one class is a review rule, not checked here.
 import { execSync } from 'node:child_process';
+import { existsSync } from 'node:fs';
 
 const PASCAL = /^[A-Z][A-Za-z0-9]*$/;
 const KEBAB = /^[a-z0-9]+(-[a-z0-9]+)*$/;
@@ -10,7 +11,8 @@ const SKIP = /^(brainstorming|training)\/|(^|\/)(node_modules|dist)\//;
 const CONFIG = /\.config\.[cm]?[jt]s$|\.d\.ts$/;
 
 const listed = execSync('git ls-files --cached --others --exclude-standard -- "*.ts" "*.tsx" "*.vue" "*.mjs" "*.js" "*.html"', { encoding: 'utf8' });
-const files = listed.split('\n').filter((file) => file && !SKIP.test(file));
+// A file deleted but not yet staged is still listed: only what is on disk counts.
+const files = listed.split('\n').filter((file) => file && !SKIP.test(file) && existsSync(file));
 const problems = [];
 const folders = new Set();
 const byName = new Map();

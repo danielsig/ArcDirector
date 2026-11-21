@@ -9,7 +9,7 @@ const HERBALIST = {
 	role: 'Herbalist',
 	carrying: ['Basket'],
 	gold: 9,
-	memories: [{ text: 'You have sold herbs at this market for twenty years.', pinned: true, tags: ['backstory'] }],
+	memories: [{ text: 'You have sold herbs at this marketplace for twenty years.', pinned: true, tags: ['backstory'] }],
 	goal: 'Tend your herb stall',
 };
 
@@ -29,7 +29,7 @@ export default {
 				role: 'Town guard',
 				memories: [{ text: 'Last night someone stole the Mayor\'s Seal from the Townhall. Nobody saw the thief.', pinned: true, tags: ['backstory'] }],
 				goal: 'Find out who stole the Mayor\'s Seal',
-				things: { Townhall: { away: 20, side: 'ahead' }, Market: { away: 40, side: 'left' }, Tavern: { away: 35, side: 'right' } },
+				things: { Townhall: { away: 20, side: 'ahead' }, Marketplace: { away: 40, side: 'left' }, Tavern: { away: 35, side: 'right' } },
 			},
 			// For --fake: a root think the library turns down, then a valid reply.
 			fake: ['think("who stole the Seal")', 'go_to(Townhall)'],

@@ -76,37 +76,6 @@ export const SFX = {
 			{ kind: 'click', dur: 0.015, freq: 320, cutoff: 1400, gain: 0.15 },
 		],
 	},
-	doorOpen: {
-		gain: 0.9,
-		layers: [
-			{ kind: 'creak', dur: 0.62, freq: 38, freqTo: 22, cutoff: 260, q: 5, gain: 0.8 },
-			{ kind: 'creak', dur: 0.4, when: 0.12, freq: 70, freqTo: 45, cutoff: 480, q: 7, gain: 0.35 },
-			{ kind: 'thump', dur: 0.12, freq: 90, when: 0.02, gain: 0.35 },
-		],
-	},
-	doorClose: {
-		gain: 0.95,
-		layers: [
-			{ kind: 'creak', dur: 0.24, freq: 45, freqTo: 30, cutoff: 280, q: 5, gain: 0.5 },
-			{ kind: 'thump', dur: 0.14, freq: 78, when: 0.08, gain: 0.8 },
-			{ kind: 'click', dur: 0.04, freq: 280, when: 0.16, gain: 0.35 },
-		],
-	},
-	chestOpen: {
-		gain: 0.88,
-		layers: [
-			{ kind: 'creak', dur: 0.32, freq: 60, freqTo: 38, cutoff: 420, q: 6, gain: 0.55 },
-			{ kind: 'thump', dur: 0.1, freq: 120, gain: 0.4 },
-			{ kind: 'click', dur: 0.05, freq: 880, when: 0.12, cutoff: 2400, gain: 0.5 },
-		],
-	},
-	chestClose: {
-		gain: 0.9,
-		layers: [
-			{ kind: 'thump', dur: 0.16, freq: 95, gain: 0.75 },
-			{ kind: 'noise', dur: 0.08, cutoff: 500, gain: 0.35 },
-		],
-	},
 	unlock: {
 		gain: 0.8,
 		layers: [
@@ -460,14 +429,6 @@ export const SFX = {
 			{ kind: 'noise', dur: 0.7, when: 0.05, cutoff: 5000, filter: 'highpass', attack: 0.03, gain: 0.12 },
 			{ kind: 'noise', dur: 0.55, when: 1.05, cutoff: 700, cutoffTo: 400, filter: 'bandpass', q: 2, attack: 0.08, gain: 0.3 },
 			{ kind: 'formant', dur: 0.55, when: 1.1, freq: 140, freqTo: 95, vowel: 'o', attack: 0.06, rate: 5, gain: 0.2 },
-		],
-	},
-	/** A brazier burning (a loop): a low roar of flame with a crackle of wood through it. */
-	brazier: {
-		gain: 0.15,
-		layers: [
-			{ kind: 'noise', dur: 1, cutoff: 500, gain: 0.4 },
-			{ kind: 'crackle', dur: 1, rate: 25, cutoff: 2200, q: 0.8, gain: 0.9 },
 		],
 	},
 } as const satisfies Record<string, SfxPatch | readonly SfxPatch[]>;

@@ -27,7 +27,7 @@ export type { TalkSense } from './mind/talk.js';
 export type { ExprEntity, ExprVal, NativeFn } from './expr/index.js';
 
 // Specs: who is in the cast, and what they may do.
-export type { CharacterSpec, CollectiveSpec, StandingChoice } from './director/director-types.js';
+export type { CharacterSpec, CollectiveSpec, Requirement, StandingChoice } from './director/director-types.js';
 export type { Goal, Kit, KitSource } from './character/character-types.js';
 export type { LawSpec } from './arc/laws.js';
 export type { RegionSpec } from './director/RegionsFeature.js';

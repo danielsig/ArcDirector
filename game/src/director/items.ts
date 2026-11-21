@@ -1,21 +1,8 @@
 import { Time, type GameObject } from '@arc-director/kindling';
 import { showNamingText, type Deal, type NamingText, type Outcome, type Transfer } from 'arc-director';
+import { BODY_SLOTS, Companion, HumanBody, Appearance, Lock, MarketplaceNPC, Named, idOf } from '../engine/components';
+import { Pickupable } from '../items/item-components';
 import {
-	BODY_SLOTS,
-	Bridge,
-	BridgeLever,
-	Chest,
-	Companion,
-	Door,
-	HumanBody,
-	Appearance,
-	Lock,
-	MarketNPC,
-	Named,
-} from '../engine/components';
-import { Harvest, Pickupable } from '../items/item-components';
-import {
-	characterIs,
 	compactName,
 	findCarried,
 	hasRoom,
@@ -26,12 +13,15 @@ import {
 } from '../items/inventory';
 import { cloneItem, isBackpack, itemID, type ItemInstance } from '../items/instance';
 import { coinsOf, noteWant, transferCoins } from '../items/wallet';
-import { chestHolding, dropItem, pickup, takeFromChest } from '../items/pickup';
+import { dropItem, pickup } from '../items/pickup';
 import { cueAt } from '../audio/cue';
-import { useItem } from '../items/use';
+import { isFood, useItem } from '../items/use';
 import { captureItem } from '../world/spawn-item';
 import type { GameHost } from './adapter';
-import { findObject, idOf } from './names';
+import { findObject } from './names';
+import { Bridge, BridgeLever } from '../kit/bridge/bridge';
+import { Chest, chestHolding, takeFromChest } from '../kit/chests/chest';
+import { Door } from '../kit/door/door';
 
 /** The want is met, and the tag that would send them back for the same good comes off. */
 function dropBoughtTag(host:GameHost, buyer:GameObject, label:string):void {
@@ -41,7 +31,7 @@ function dropBoughtTag(host:GameHost, buyer:GameObject, label:string):void {
 		return;
 	}
 	const key = compactName(label);
-	const stillLooking = (buyer.getComponent(MarketNPC)?.wants.length ?? 0) > 0;
+	const stillLooking = (buyer.getComponent(MarketplaceNPC)?.wants.length ?? 0) > 0;
 	mind.tags = mind.tags.filter((tag) => compactName(tag) !== key && (stillLooking || tag !== 'wanting'));
 }
 
@@ -65,9 +55,12 @@ export function useOn(host:GameHost, character:GameObject, itemName:string, targ
 	// Used on oneself is simply used.
 	const target = named === character ? undefined : named;
 	const result = useItem(character, item, target ?? null);
-	const targetName = target ? target.getComponent(Named)?.id ?? target.id : undefined;
+	const targetName = target ? idOf(target) : undefined;
 	if (result.ok && (result.reason === 'unlocked' || result.reason === 'opened') && target?.getComponent(Door) && targetName) {
 		host.doorOpen.set(targetName, true);
+	}
+	if (result.ok && isFood(item) && !target) {
+		dropBoughtTag(host, character, itemID(item));
 	}
 	if (result.ok) {
 		// Everyone learns what changed, as with a give or a pick-up: "BridgeKeeper used BridgeCrank on BridgeLever: raised Bridge".
@@ -135,11 +128,8 @@ export function transferRefusal(move:Transfer<GameObject>, deal?:Deal<GameObject
 	if (verb === 'pick_up') {
 		return takeRefusal(to!, thing, from);
 	}
-	if (verb === 'steal' && to?.getComponent(MarketNPC)?.kind === 'guard') {
+	if (verb === 'steal' && to?.getComponent(MarketplaceNPC)?.kind === 'guard') {
 		return 'the watch does not steal';
-	}
-	if (to === from) {
-		return 'cannot give to yourself';
 	}
 	if (verb === 'drop') {
 		// Coins have no body to put down or put away; only a hand takes them.
@@ -192,23 +182,16 @@ function takeRefusal(character:GameObject, thing:string, from:GameObject):Naming
 		if (fromID !== thing && !itemMatchesName(inst, thing)) {
 			return (name) => `${name(fromID)} is not ${name(thing)}`;
 		}
-		const crop = from.getComponent(Harvest);
-		if (crop && !characterIs(character, crop.harvester)) {
-			return `only ${crop.harvester} can harvest that`;
-		}
 		if (isBackpack(inst)) {
 			return character.getComponent(HumanBody) ? undefined : 'cannot equip that';
 		}
 		return hasRoom(character, inst, inst.count) ? undefined : 'no room';
 	}
 	if (from.getComponent(BridgeLever)) {
-		return (name) => `${name(thing)} is a sluice, not loot. Only ${name('BridgeKeeper')} uses ${name('BridgeCrank')} on ${name('BridgeLever')}`;
+		return (name) => `${name(thing)} is a sluice, not loot. Use ${name('BridgeCrank')} on ${name(idOf(from))}`;
 	}
-	if (from === character) {
-		return (name) => `you already carry ${name(thing)}`;
-	}
-	if (from.getComponent(HumanBody) || from.getComponent(MarketNPC)) {
-		// Someone has it: it is theirs to hand over, and saying where it is beats "no such item".
+	if (from.getComponent(HumanBody)) {
+		// A fallen body (the library refuses the living ones): what it carries stays its own, and saying so beats "no such item".
 		return findCarried(from, (it) => itemMatchesName(it, thing))
 			? (name) => `${name(fromID)} carries ${name(thing)}. You cannot take it; ${name(fromID)} must give it to you`
 			: (name) => `cannot pick up ${name(fromID)}`;
@@ -245,7 +228,8 @@ export function doTransfer(host:GameHost, move:Transfer<GameObject>):()=>void {
 	}
 	handOver(verb, from, to);
 	// Put in a chest, it is stored, not bought.
-	if (verb !== 'drop') {
+	// Food is wanted until it is eaten (`useOn`).
+	if (verb !== 'drop' && !isFood(gift)) {
 		dropBoughtTag(host, to, thing);
 	}
 	return () => {

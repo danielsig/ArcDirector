@@ -55,6 +55,7 @@ const WORDS:Record<string, TokKind> = {
 	null: 'null',
 	undefined: 'undefined',
 	is: 'is',
+	not: 'not',
 	in: 'in',
 	while: 'while',
 };

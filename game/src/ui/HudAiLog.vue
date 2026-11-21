@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, ref, watch } from 'vue';
-import { prefs, setPrefs } from '../prefs';
+import { usePref } from './use-prefs';
 import { arcLines, thinkTime, thoughtTail } from './arc-text';
 import HudArcLine from './HudArcLine.vue';
 import type { HudModel } from './hud-model';
@@ -12,10 +12,10 @@ const props = defineProps<{
 }>();
 
 const logEl = ref<HTMLElement | null>(null);
-const source = ref(prefs().aiLogSource);
+const source = usePref('aiLogSource');
 const query = ref('');
 /** On: every prompt and reply. Off: only what the slates show. */
-const full = ref(prefs().aiLogFull);
+const full = usePref('aiLogFull');
 const opened = new Set<number>();
 
 const sources = computed(() => {
@@ -51,14 +51,6 @@ const thinks = computed(() => {
 		return !q || [think.name, think.why, think.arc, think.thought, think.error].some((text) => text.toLowerCase().includes(q));
 	});
 });
-
-function pickFull():void {
-	setPrefs({ aiLogFull: full.value });
-}
-
-function pickSource():void {
-	setPrefs({ aiLogSource: source.value });
-}
 
 function onToggle(seq:number, e:Event):void {
 	if ((e.currentTarget as HTMLDetailsElement).open) {
@@ -132,7 +124,6 @@ watch(
 				<select
 					v-model="source"
 					aria-label="Source"
-					@change.stop="pickSource"
 				>
 					<option value="">All</option>
 					<option :value="ERRORS">Errors</option>
@@ -161,7 +152,7 @@ watch(
 					>×</button>
 				</label>
 				<label class="full" title="Off: only what the floating think windows show. On: every prompt and reply.">
-					<input v-model="full" type="checkbox" @change="pickFull">
+					<input v-model="full" type="checkbox">
 					Full log
 				</label>
 				<span class="hint">~ to close</span>

@@ -138,8 +138,8 @@ const TEST_SPEC:VerbSpec = { name: TEST_VERB, args: { watch: { kind: 'watch' } }
 /** `if (cond) { arc } else { else }`: its arcs are part of the program it is in, as a group's are. */
 export const IF_VERB = 'if';
 
-/** In an Arc's JSON a step is `{ let, verb, …args, then }`, so no arg may be called any of these. */
-const RESERVED_ARGS:readonly string[] = ['verb', 'then', 'let'];
+/** A step is `{ let, verb, …args, then }` and a requirement `{ verb, …args, condition, reason }`: no arg is any of these. */
+const RESERVED_ARGS:readonly string[] = ['verb', 'then', 'let', 'condition', 'reason'];
 
 export type VerbSpec = {
 	name:string;

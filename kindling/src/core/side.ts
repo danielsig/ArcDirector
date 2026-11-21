@@ -14,6 +14,9 @@ export const SIDE_OFFSETS:Readonly<Record<Side, TileCoord>> = {
 	west: { tx: -1, tz: 0 },
 };
 
+/** One step to each of the four sides as `[dx, dz]`: east, west, south, north. */
+export const NEIGHBORS4:readonly (readonly [number, number])[] = [[1, 0], [-1, 0], [0, 1], [0, -1]];
+
 export function opposite(side:Side):Side {
 	return SIDES[(SIDES.indexOf(side) + 2) % 4]!;
 }

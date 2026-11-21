@@ -239,8 +239,14 @@ class Parser {
 				return this.whileClause(left);
 			}
 			this.eat();
+			// `a is not b` is `!(a is b)`, as models write it.
+			const negated = op === 'is' && this.peek().kind === 'not';
+			if (negated) {
+				this.eat();
+			}
 			const right = this.binary(level + 1);
-			left = this.node({ type: 'binary', op, left, right, from: left.from, to: right.to });
+			const node = this.node({ type: 'binary', op, left, right, from: left.from, to: right.to });
+			left = negated ? this.node({ type: 'unary', op: '!', expr: node, from: node.from, to: node.to }) : node;
 		}
 	}
 

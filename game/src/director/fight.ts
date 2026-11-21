@@ -1,10 +1,12 @@
 import { Time, distanceXZ, type GameObject, type XZ } from '@arc-director/kindling';
 import { shortTag, type Collective, type SeenName } from 'arc-director';
 import type { GameHost, CharacterCtx } from './adapter';
-import { Guard, HumanBody, Interior, Vitals, Weakness } from '../engine/components';
-import { enclosureAt } from '../world/interior';
-import { idOf, isLiving } from './names';
+import { Guard, HumanBody, Vitals, Weakness, idOf } from '../engine/components';
+import { enclosureAt, Interior } from '../kit/houses/interior';
+import { isLiving } from './names';
 import { standableNear } from '../world/path';
+import { cueAt } from '../audio/cue';
+import { applyHit } from './hit-feel';
 
 export type FightRole = 'Witch' | 'Knight' | 'Archer' | 'Blade' | 'Healer';
 
@@ -13,7 +15,7 @@ export const FIGHT_ROLES:readonly FightRole[] = ['Witch', 'Knight', 'Archer', 'B
 /** Hex and heal reach, meters. Wounded troops hold this close to a Healer. */
 export const SPELL_RANGE = 8;
 
-/** Ruins 5v5 motor speed. Default CharacterMotor is 4.2. */
+/** Combat scene motor speed. Default CharacterMotor is 4.2. */
 export const FIGHT_WALK = 2.2;
 
 /** Spawn maxHP by role. */
@@ -59,6 +61,11 @@ export type AttackKind = {
 /** Damage and accuracy multiplier when a `soften` attack has no clear shot. */
 export const COVER_SOFTEN = 0.4;
 
+/** `n` (damage, a heal) softened by cover, still at least 1. */
+export function softened(n:number):number {
+	return Math.max(1, Math.round(n * COVER_SOFTEN));
+}
+
 export const ATTACKS:Record<string, AttackKind> = {
 	stab: { roles: ['Blade', 'Knight'], range: 1.6, damage: 1, word: 'stabbed', castTime: 0.2, cooldown: 0.55, accuracy: 0.92, by: { Knight: { castTime: 0.36, cooldown: 1 } } },
 	slice: { roles: ['Blade'], range: 1.9, damage: 2, word: 'sliced', castTime: 0.4, cooldown: 0.95, accuracy: 0.84, dodge: 0.5, knock: 1.4 },
@@ -101,6 +108,14 @@ export function guardStops(target:GameObject, attacker:GameObject):boolean {
 	return true;
 }
 
+/** A blow's or a weapon's numbers. */
+type Reach = { damage:number; range:number };
+
+/** A blow of `spec` with `weapon` (either may be none): the better of each's damage and range, so a bow's own count for whoever shoots it. */
+export function weaponed(spec?:Reach, weapon?:Reach):Reach {
+	return { damage: Math.max(spec?.damage ?? 0, weapon?.damage ?? 0), range: Math.max(spec?.range ?? 0, weapon?.range ?? 0) };
+}
+
 /** Damage after the target's weakness, if it has one, and whether the blow found it. Never below 1. */
 export function weaknessDamage(target:GameObject, verb:string | undefined, damage:number):{ damage:number; weak:boolean } {
 	const weakness = target.getComponent(Weakness);
@@ -109,6 +124,35 @@ export function weaknessDamage(target:GameObject, verb:string | undefined, damag
 	}
 	const weak = !!verb && weakness.to.includes(verb);
 	return { damage: Math.max(1, Math.round(damage * (weak ? weakness.times : weakness.others))), weak };
+}
+
+/**
+ * How a blow of `verb` by `by` at `target` went, for the minds (`DemoWorld.struck`): it struck home (`weak` when it found
+ * a weakness, `down` when it felled), a guard stopped it, it went wide, or there was no clear shot. `covered`: through cover.
+ */
+export type Struck = { by:GameObject; target:GameObject; verb:string; how:'hit' | 'blocked' | 'missed' | 'no shot'; covered?:boolean; weak?:boolean; down?:boolean };
+
+/** A blow that did not land, told to the host: a guard's clash rings out. */
+export function miss(by:GameObject, target:GameObject, verb:string, how:Exclude<Struck['how'], 'hit'>, covered = false):void {
+	if (how === 'blocked') {
+		cueAt(target.world!, 'clash', target);
+	}
+	target.world?.struck({ by, target, verb, how, covered });
+}
+
+/** `damage` of `verb` from `by` lands on `target`, living: its weakness, the wound, the knock and its feel, the player's grudge, and the report to the host. */
+export function wound(by:GameObject, target:GameObject, verb:string, damage:number, knock = 1, covered = false):Struck {
+	const world = target.world!;
+	const vitals = target.getComponent(Vitals)!;
+	const struck = weaknessDamage(target, verb, damage);
+	vitals.hp = Math.max(0, vitals.hp - struck.damage);
+	if (by.id === 'Player') {
+		world.playerHits.add(idOf(target));
+	}
+	applyHit(world, by, target, knock);
+	const blow:Struck = { by, target, verb, how: 'hit', covered, weak: struck.weak, down: vitals.hp <= 0 };
+	world.struck(blow);
+	return blow;
 }
 
 /** Combat verb for this fight role. Healer smites; heal is separate. */
@@ -168,14 +212,14 @@ export function agilityOf(host:GameHost, character:GameObject):number {
 	return role ? ROLE_AGILITY[role] : 0.1;
 }
 
-/** Fighters outside every collective who still have a fight role fight together, as the company. */
-const COMPANY = 'company';
+/** Fighters outside every collective who still have a fight role fight together, as the party. */
+const PARTY = 'party';
 
 
-/** Who a fighter stands with: its collective's id, or the company. None for non-fighters. */
+/** Who a fighter stands with: its collective's id, or the party. None for non-fighters. */
 function sideOf(host:GameHost, character:GameObject):string | undefined {
 	return fightRole(host, character)
-		? fightParty(host, character)?.id ?? COMPANY
+		? fightParty(host, character)?.id ?? PARTY
 		: undefined;
 }
 

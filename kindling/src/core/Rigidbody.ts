@@ -6,6 +6,11 @@ export class Rigidbody extends Component {
 	public kinematic = false;
 	public prevX = 0;
 	public prevZ = 0;
-	/** Snap Y to `World.sampleTerrain` worldY. */
+	/** Snap Y to `world.terrain.sample` worldY. */
 	public grounded = false;
+
+	/** Ground speed in m/s. */
+	public get speed():number {
+		return Math.hypot(this.velocity.x, this.velocity.z);
+	}
 }

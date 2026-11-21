@@ -1,17 +1,12 @@
-import { ChunkStreamer, chunkBounds, type Renderer, Time, Component } from '@arc-director/kindling';
+import { type Renderer, Time, Component } from '@arc-director/kindling';
 import { Order } from './order';
 import { patchGoals, patchInspect, patchHud, patchInfer, patchSlates, patchThinks, statusLabels, type Overheads } from './patch-hud';
-import { syncHeldTorchLight } from '../items/held-light';
 import type { GameHost } from '../director/adapter';
 import { WorldPresent } from '../render/WorldPresent';
-import type { OutskirtHeights, Surface } from '../world/land';
-import type { HudModel } from '../ui/hud-model';
-import type { DemoChunk } from '../world/demo-chunk';
-import { spawnChunkEntities } from '../world/spawn';
-import { syncDressingColliders, syncDressingFlies, syncFurniture } from '../world/dressing-colliders';
-import { syncRoadStep } from '../world/dressing-plan';
+import type { OutskirtHeights, Surface } from '../kit/land/land';
+import type { HudView } from '../ui/hud-model';
 import type { DemoWorld } from './demo-world';
-import { Camera } from './components';
+import { FollowCamera } from './components';
 import { CELL_SIZE, CHUNK_SIZE } from '../world/constants';
 import { PlayerInput } from '../characters/PlayerInput';
 
@@ -30,29 +25,12 @@ export class DirectorPulse extends Component {
 	}
 }
 
-export class WorldStream extends ChunkStreamer {
-	public static override order = Order.streaming;
-
-	public override spawn(chunk:DemoChunk):void {
-		const world = this.gameObject.world!;
-		spawnChunkEntities(world, chunk);
-		syncDressingColliders(world);
-		syncDressingFlies(world);
-		syncFurniture(world);
-	}
-}
-
 export class GroundPick extends Component {
 	public static override order = Order.pick;
-	public getRenderer:()=>Renderer | null = () => null;
 
 	public override update(dt:number):void {
-		this.pickGround();
-	}
-
-	public pickGround():void {
 		const world = this.gameObject.world;
-		const renderer = this.getRenderer();
+		const renderer = world?.renderer;
 		if (!world || !renderer) {
 			if (world) {
 				world.groundHit = null;
@@ -75,14 +53,13 @@ export class GroundPick extends Component {
  */
 export class MapPan extends Component {
 	public static override order = Order.pick;
-	public getRenderer:()=>Renderer | null = () => null;
 
 	public override update(dt:number):void {
 		const world = this.gameObject.world;
 		const input = world?.input;
 		const player = world?.findByID('Player');
-		const cam = world?.findByID('MainCamera')?.getComponent(Camera);
-		const view = this.getRenderer();
+		const cam = world?.findByID('MainCamera')?.getComponent(FollowCamera);
+		const view = world?.renderer;
 		const fov = view?.findCamera()?.fov;
 		if (!input?.touch || !player || !cam || !view || !fov || player.getComponent(PlayerInput)?.embodied !== false) {
 			return;
@@ -109,28 +86,22 @@ const MOVER_SIDE = { near: CHUNK_SIZE * CELL_SIZE, far: 4 * CHUNK_SIZE * CELL_SI
 export class WorldView extends Component {
 	public static override order = Order.present;
 	public present = new WorldPresent();
-	public getRenderer:()=>Renderer | null = () => null;
-	/** The scene's land behind its walls (`SceneDef.ground`). */
+	/** The scene's land behind its walls (`Scene.ground`). */
 	public ground?:Surface;
-	/** Heights past the map's edge (`SceneDef.outskirts`). */
+	/** Heights past the map's edge (`Scene.outskirts`). */
 	public outskirts?:OutskirtHeights;
 
 	public override lateUpdate(dt:number):void {
-		this.sync();
-	}
-
-	public sync():void {
 		const world = this.gameObject.world;
-		const renderer = this.getRenderer();
+		const renderer = world?.renderer;
 		if (!world || !renderer) {
 			return;
 		}
 		this.present.detailMaps = renderer.detailMaps;
 		this.present.syncChunks(world);
-		const chunks = this.gameObject.getComponent(WorldStream)?.chunks ?? [];
-		this.present.mountOutskirts(world, chunks, this.ground, this.outskirts);
+		this.present.mountOutskirts(world, this.ground, this.outskirts);
 		// The sun's shadows cover the map and a margin; the woods past it are shaded by the outskirts' own shade.
-		const map = chunkBounds(chunks);
+		const map = world.terrain.bounds();
 		renderer.sunArea = map && { minX: map.minX - SUN_MARGIN, maxX: map.maxX + SUN_MARGIN, minZ: map.minZ - SUN_MARGIN, maxZ: map.maxZ + SUN_MARGIN };
 		this.syncSunParts(world, renderer);
 		const cam = renderer.findCamera();
@@ -140,13 +111,17 @@ export class WorldView extends Component {
 		this.present.tickNature(Time.time);
 	}
 
+	public override onDestroy():void {
+		this.present.dispose();
+	}
+
 	/**
 	 * The square moving things cast the sun's shadow in follows the player, wider as the camera pulls back. It stays
 	 * set (on the map's middle without a player), so its light never comes and goes and shaders never recompile.
 	 */
 	private syncSunParts(world:DemoWorld, renderer:Renderer):void {
 		const player = world.findByID('Player');
-		const cam = world.findByID('MainCamera')?.getComponent(Camera);
+		const cam = world.findByID('MainCamera')?.getComponent(FollowCamera);
 		const area = renderer.sunArea;
 		const { x, z } = player?.transform.position ?? (area ? { x: (area.minX + area.maxX) / 2, z: (area.minZ + area.maxZ) / 2 } : { x: 0, z: 0 });
 		const t = cam ? (cam.distance - cam.minDistance) / Math.max(1e-3, cam.maxDistance - cam.minDistance) : 0.5;
@@ -154,38 +129,27 @@ export class WorldView extends Component {
 	}
 }
 
-/** Writes HudModel after present. Vue SFCs only read that model. */
+/** Writes the HUD's frame after present; reads the UI's state only to skip what no panel shows. */
 export class Hud extends Component {
 	public static override order = Order.hud;
-	public model!:HudModel;
+	public model!:HudView;
 	public director!:GameHost;
-	public getRenderer:()=>Renderer | null = () => null;
-	/** Health bars and carried things over the characters (`SceneDef`). */
+	/** Health bars and carried things over the characters (`Scene`). */
 	public overheads:Overheads = { healthBars: false };
+	/** What the minimap and the goal track last showed. */
+	private readonly _shown = { minimapStamp: '', goalsSwapped: false };
 
 	public override lateUpdate(dt:number):void {
-		this.sync();
-	}
-
-	public sync():void {
 		const world = this.gameObject.world;
-		const renderer = this.getRenderer();
+		const renderer = world?.renderer;
 		if (!world || !renderer) {
 			return;
 		}
-		patchHud(world, this.model, renderer, statusLabels(this.director), this.overheads);
+		patchHud(world, this.model, renderer, statusLabels(this.director), this.overheads, this._shown);
 		patchSlates(world, this.model, renderer, this.director);
 		patchThinks(this.model, this.director);
 		patchInfer(this.director, this.model);
-		patchGoals(world, this.model, renderer, this.director.hooks.goals?.(this.director));
+		patchGoals(world, this.model, renderer, this.director.hooks.goals?.(this.director), this._shown);
 		patchInspect(world, this.model, renderer, this.director, this.overheads.inspect ?? false);
-	}
-}
-
-export class HeldTorchLight extends Component {
-	public static override order = Order.heldTorch;
-
-	public override update(dt:number):void {
-		syncHeldTorchLight(this.gameObject, dt);
 	}
 }

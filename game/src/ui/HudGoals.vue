@@ -2,10 +2,12 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import type { GoalColor, HudModel } from './hud-model';
 import HudBurst from './HudBurst.vue';
+import { usePrefs } from './use-prefs';
 
 const props = defineProps<{
 	hud:HudModel;
 }>();
+const live = usePrefs();
 
 type Side = 'left' | 'right';
 
@@ -145,7 +147,7 @@ function layout():void {
 const relayout = ():void => void nextTick(layout);
 let observer:ResizeObserver | undefined;
 
-watch(() => [orbs.value.length, props.hud.player, props.hud.maxHP], relayout);
+watch(() => [orbs.value.length, live.player, props.hud.maxHP], relayout);
 
 onMounted(() => {
 	observer = new ResizeObserver(relayout);

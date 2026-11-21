@@ -3,7 +3,7 @@ import * as THREE from 'three';
 import { markRaw } from 'vue';
 import { PlayerInput } from '../characters/PlayerInput';
 import { Seated } from '../characters/Seated';
-import { HumanBody, Appearance, Camera, Merchant, Named, SpeechBubble, Vitals, Wallet } from './components';
+import { HumanBody, Appearance, FollowCamera, Merchant, Named, SpeechBubble, Vitals, Wallet, idOf } from './components';
 import type { DemoWorld } from './demo-world';
 import { CELL_SIZE, CHUNK_SIZE } from '../world/constants';
 import { Container, Item } from '../items/item-components';
@@ -11,30 +11,22 @@ import { allEquipped, countDef, listCarried, slotItem } from '../items/inventory
 import { coinsOf } from '../items/wallet';
 import { isBackpack, type ItemInstance } from '../items/instance';
 import { nearestPickup, pickupLabel } from '../items/pickup';
-import { CARRY_ICONS, SLATE_WIDTH, noGoals, type HudGoalSide, type HudInspect, type HudModel, type HudThink, type MinimapCell } from '../ui/hud-model';
+import { CARRY_ICONS, SLATE_WIDTH, noGoals, type HudGoalSide, type HudInspect, type HudFrame, type HudThink, type HudView, type MinimapCell } from '../ui/hud-model';
 import type { SceneGoalSide, SceneGoals } from '../director/game-types';
-import type { CarriedOverhead } from '../data/scenes';
+import type { CarriedOverhead } from '../scenes/scene';
 import type { GameHost } from '../director/adapter';
 import type { ThinkSlate } from '../director/ThinkShow';
 import type { Stance } from '../render/spell-fx';
-import { idOf, findObject, isLiving } from '../director/names';
+import { findObject, isLiving } from '../director/names';
+import { prefs } from '../prefs';
 
 function chunkStamp(world:DemoWorld):string {
 	let s = '';
-	for (const chunk of world.chunks.values()) {
+	for (const chunk of world.terrain.loaded) {
 		s += chunk.id;
 		s += ';';
 	}
 	return s;
-}
-
-let lastMinimapStamp = '';
-/** Whether the goal track's two sides are drawn swapped, to match where their people stand on screen. */
-let goalsSwapped = false;
-
-export function resetHudPatch():void {
-	lastMinimapStamp = '';
-	goalsSwapped = false;
 }
 
 function voidCell():MinimapCell {
@@ -42,7 +34,7 @@ function voidCell():MinimapCell {
 }
 
 function fillTile(world:DemoWorld, x:number, z:number):MinimapCell {
-	const tile = world.tileAtWorld(x, z);
+	const tile = world.terrain.tileAtWorld(x, z);
 	if (!tile) {
 		return voidCell();
 	}
@@ -57,12 +49,12 @@ function minimapStamp(world:DemoWorld, follow:boolean, x:number, z:number):strin
 		const oz = Math.floor((z - half) / CELL_SIZE);
 		return `f:${ox}:${oz}:${chunks}`;
 	}
-	const { cx, cz } = world.chunkCoordAt(x, z);
+	const { cx, cz } = world.terrain.chunkCoordAt(x, z);
 	return `c:${cx}:${cz}:${chunks}`;
 }
 
-function rebuildMinimap(world:DemoWorld, hud:HudModel, x:number, z:number):void {
-	const follow = hud.minimap.follow;
+function rebuildMinimap(world:DemoWorld, hud:HudView, x:number, z:number):void {
+	const follow = hud.minimapFollow;
 	let originX:number;
 	let originZ:number;
 	let width:number;
@@ -75,7 +67,7 @@ function rebuildMinimap(world:DemoWorld, hud:HudModel, x:number, z:number):void 
 		height = CHUNK_SIZE + 1;
 	}
 	else {
-		const chunk = world.chunkAtWorld(x, z);
+		const chunk = world.terrain.chunkAtWorld(x, z);
 		originX = chunk?.worldOriginX()
 			?? Math.floor(x / (CHUNK_SIZE * CELL_SIZE)) * CHUNK_SIZE * CELL_SIZE;
 		originZ = chunk?.worldOriginZ()
@@ -131,11 +123,11 @@ export type OverheadNote = { id:string; text:string; thinking?:boolean; tool?:st
 
 /** What a scene shows over the characters' heads besides speech and status. */
 export type Overheads = {
-	/** `SceneDef.healthBars`. */
+	/** `Scene.healthBars`. */
 	healthBars:boolean;
-	/** `SceneDef.carried`. */
+	/** `Scene.carried`. */
 	carried?:CarriedOverhead;
-	/** `SceneDef.inspect`. */
+	/** `Scene.inspect`. */
 	inspect?:boolean;
 };
 
@@ -165,7 +157,7 @@ function carriedIcons(go:GameObject):string[] {
 
 function patchOverhead(
 	world:DemoWorld,
-	hud:HudModel,
+	hud:HudFrame,
 	view:Renderer,
 	npcNotes:OverheadNote[],
 	overheads:Overheads,
@@ -187,6 +179,7 @@ function patchOverhead(
 		row.text = bubble.text;
 		row.timestamp = bubble.timestamp;
 	});
+	const bubbles = prefs().thinkingBubbles;
 	for (const note of npcNotes) {
 		if (!note.text && !note.thinking && !note.tool) {
 			continue;
@@ -197,7 +190,7 @@ function patchOverhead(
 		}
 		const row = rowOf(go);
 		row.status = note.text;
-		row.thinking = hud.thinkingBubbles && (note.thinking ?? false);
+		row.thinking = bubbles && (note.thinking ?? false);
 		row.tool = note.tool ?? '';
 	}
 	world.forEachComponent(HumanBody, (body, go) => {
@@ -272,7 +265,7 @@ function patchOverhead(
 	}
 }
 
-function patchHotbar(hud:HudModel, bar:{ name:string; count:number }[], sel:number):void {
+function patchHotbar(hud:HudFrame, bar:{ name:string; count:number }[], sel:number):void {
 	const prev = hud.hotbar;
 	const len = bar.length;
 	if (prev.length !== len) {
@@ -356,10 +349,12 @@ function sceneHasGold(world:DemoWorld):boolean {
 
 export function patchHud(
 	world:DemoWorld,
-	hud:HudModel,
+	hud:HudView,
 	view:Renderer,
-	npcNotes:OverheadNote[] = [],
-	overheads:Overheads = { healthBars: false },
+	npcNotes:OverheadNote[],
+	overheads:Overheads,
+	/** The stamp of what the minimap shows: rebuilt when it changes. */
+	shown:{ minimapStamp:string },
 ):void {
 	const player = world.findByID('Player');
 	const vitals = player?.getComponent(Vitals);
@@ -373,7 +368,7 @@ export function patchHud(
 	if (hud.statsOverlay || (hud.menuOpen && hud.menuPage === 'testing')) {
 		hud.renderStats = { ...view.stats(), ...world.perf.stats() };
 	}
-	if (hud.fpsCounter) {
+	if (prefs().fpsCounter) {
 		const ms = view.frameMS(1000);
 		hud.fps = ms > 0 ? Math.round(1000 / ms) : 0;
 	}
@@ -412,9 +407,9 @@ export function patchHud(
 	const p = player?.transform.position;
 	const px = p?.x ?? 0;
 	const pz = p?.z ?? 0;
-	const stamp = minimapStamp(world, hud.minimap.follow, px, pz);
-	if (stamp !== lastMinimapStamp) {
-		lastMinimapStamp = stamp;
+	const stamp = minimapStamp(world, hud.minimapFollow, px, pz);
+	if (stamp !== shown.minimapStamp) {
+		shown.minimapStamp = stamp;
 		rebuildMinimap(world, hud, px, pz);
 	}
 	hud.minimap.playerX = px;
@@ -478,7 +473,7 @@ function thinkRow(think:ThinkSlate):HudThink {
 }
 
 /** The AI log's list of thinks, while it is open. */
-export function patchThinks(hud:HudModel, host:GameHost):void {
+export function patchThinks(hud:HudView, host:GameHost):void {
 	if (!hud.aiLogOpen) {
 		return;
 	}
@@ -518,7 +513,7 @@ function emptierSide(world:DemoWorld, view:Renderer, go:GameObject | undefined, 
  * from their head, on whichever side of them has fewer characters. Rows are reused, so a slate stays one element while
  * it is up.
  */
-export function patchSlates(world:DemoWorld, hud:HudModel, view:Renderer, host:GameHost):void {
+export function patchSlates(world:DemoWorld, hud:HudFrame, view:Renderer, host:GameHost):void {
 	host.thinks.update();
 	const up = [...host.thinks.slates.values()];
 	hud.slates.length = Math.min(hud.slates.length, up.length);
@@ -543,12 +538,16 @@ export function patchSlates(world:DemoWorld, hud:HudModel, view:Renderer, host:G
 	});
 }
 
-export function patchInfer(host:GameHost, hud:HudModel):void {
+export function patchInfer(host:GameHost, hud:HudView):void {
+	hud.activeModel = host.arc?.getModel()?.id ?? '';
+	// Only the menu's Arc Director page shows the model's clocks and each mind's heartrate.
+	if (!hud.menuOpen || hud.menuPage !== 'testing') {
+		return;
+	}
 	const infer = host.arc?.models.infer;
 	const queue = host.arc?.queue;
 	const now = Time.time;
-	const rows = host.arc?.minds() ?? [];
-	const next = rows.map((mind) => {
+	hud.mindStats = (host.arc?.minds() ?? []).map((mind) => {
 		const last = mind.lastTacticalTimestamp;
 		return {
 			id: mind.id,
@@ -557,20 +556,10 @@ export function patchInfer(host:GameHost, hud:HudModel):void {
 			thinking: queue?.isThinking(mind.id) ?? false,
 			thinkMs: infer?.thinkMs[mind.id] ?? 0,
 		};
-	});
-	next.sort((a, b) => a.id.localeCompare(b.id));
-	hud.mindStats = next;
-	hud.activeModel = host.arc?.getModel()?.id ?? '';
-
-	if (!infer) return;
-	hud.inferCalls = infer.calls;
-	hud.inferContextMs = infer.contextMs;
-	hud.inferGenerateMs = infer.generateMs;
-	hud.inferWallMs = infer.wallMs;
-	hud.inferContextKnown = infer.contextKnown;
-	hud.inferLastContextMs = infer.lastContextMs;
-	hud.inferLastGenerateMs = infer.lastGenerateMs;
-	hud.inferLastWallMs = infer.lastWallMs;
+	}).sort((a, b) => a.id.localeCompare(b.id));
+	if (infer) {
+		hud.infer = { ...infer };
+	}
 }
 
 /** Progress steps the track shows; finer changes wait, so the HUD is not rewritten every frame. */
@@ -608,18 +597,21 @@ function hudSide(side:SceneGoalSide | undefined):HudGoalSide {
 	};
 }
 
-/** The scene's goal track, its sides on the ends their people stand nearest on screen, written only when it changes. */
-export function patchGoals(world:DemoWorld, hud:HudModel, view:Renderer, goals?:SceneGoals):void {
+/**
+ * The scene's goal track, its sides on the ends their people stand nearest on screen, written only when it changes.
+ * `shown.goalsSwapped`: whether its two sides are drawn swapped.
+ */
+export function patchGoals(world:DemoWorld, hud:HudFrame, view:Renderer, goals:SceneGoals | undefined, shown:{ goalsSwapped:boolean }):void {
 	const left = screenX(world, view, goals?.left);
 	const right = screenX(world, view, goals?.right);
 	if (left !== undefined && right !== undefined) {
-		const lead = goalsSwapped ? left - right : right - left;
+		const lead = shown.goalsSwapped ? left - right : right - left;
 		if (lead < -SWAP_APART * view.canvas.clientWidth) {
-			goalsSwapped = !goalsSwapped;
+			shown.goalsSwapped = !shown.goalsSwapped;
 		}
 	}
 	const next = goals ? { left: hudSide(goals.left), right: hudSide(goals.right) } : noGoals();
-	if (goalsSwapped) {
+	if (shown.goalsSwapped) {
 		[next.left, next.right] = [next.right, next.left];
 	}
 	if (JSON.stringify(next) !== JSON.stringify(hud.goals)) {
@@ -647,7 +639,7 @@ function lookYaw(world:DemoWorld, player:GameObject):number {
 		return player.transform.yaw;
 	}
 	let yaw = player.transform.yaw;
-	world.forEachComponent(Camera, (cam) => {
+	world.forEachComponent(FollowCamera, (cam) => {
 		yaw = cam.yaw;
 	});
 	return yaw;
@@ -729,8 +721,8 @@ function carriedList(go:GameObject):HudInspect['items'] {
 }
 
 /** The card beside whoever the player points at or stands close to, in scenes that have it. */
-export function patchInspect(world:DemoWorld, hud:HudModel, view:Renderer, host:GameHost, enabled:boolean):void {
-	const go = enabled ? inspectTarget(world, view) : undefined;
+export function patchInspect(world:DemoWorld, hud:HudFrame, view:Renderer, host:GameHost, enabled:boolean):void {
+	const go = enabled && prefs().characterTooltips ? inspectTarget(world, view) : undefined;
 	const p = go?.transform.position;
 	const screen = go && p ? view.projectToCanvas(p.x, p.y + (go.getComponent(Appearance)?.height ?? 1.7) * 0.6, p.z) : undefined;
 	if (!go || !screen?.visible) {

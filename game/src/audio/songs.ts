@@ -1,4 +1,4 @@
-import type { Audio, Score } from '@arc-director/kindling';
+import type { Score, Track } from '@arc-director/kindling';
 import type { Dyn } from '@arc-director/kindling/score';
 import MIGHT_TRACK from './herosMight.mp3';
 import TALE_TRACK from './herosTale.mp3';
@@ -150,7 +150,7 @@ function bariolage([b, t, a, s]:Voicing):string {
  * a free episode before the climax. Well-Tempered broken chords, cello string crossing with a
  * descant, the episode, a florid full climax, then the strings sinking home.
  */
-function dungeonTheme():Score {
+export function dungeonTheme():Score {
 	const strings = track(cello, { gain: 0.5, dynamic: mp });
 	const voices = track(choir, { gain: 0.5, dynamic: p });
 	const twelve = track(twelveString, { gain: 0.72, dynamic: p });
@@ -169,7 +169,7 @@ function dungeonTheme():Score {
 		);
 	});
 
-	return piece({ bpm: 60, gain: 0.9, id: 'dungeon_vault', filters: [reverb({ mix: 0.36, decay: 0.52, tone: 1900 })] }, [
+	return piece({ bpm: 60, gain: 0.9, id: 'dungeon', title: 'Dungeon Crawl', filters: [reverb({ mix: 0.36, decay: 0.52, tone: 1900 })] }, [
 		// I. The twelve-string breaks the chords.
 		...variation({ cello: pp, choir: p, chorale: true, guitar: mp }),
 		// II. Cello string crossing and a descant.
@@ -299,7 +299,7 @@ const GLEN_HOME:GlenBar[] = [['G'], ['D']];
  * the theme, the theme again with guitar, a climbing bridge, the summit, then the theme softly
  * and home.
  */
-function glenTheme():Score {
+export function glenTheme():Score {
 	const strings = track(koto, { gain: 0.8 });
 	const whistle = track(flute, { gain: 0.8, dynamic: mf });
 	const strum = track(guitar, { gain: 0.55, dynamic: mp });
@@ -316,7 +316,7 @@ function glenTheme():Score {
 		);
 	});
 
-	return piece({ bpm: 96, gain: 0.9, id: 'glen', filters: [reverb({ mix: 0.4, decay: 0.3, size: 0.8 })] }, [
+	return piece({ bpm: 96, gain: 0.9, id: 'glen', title: 'River Glen', filters: [reverb({ mix: 0.4, decay: 0.3, size: 0.8 })] }, [
 		...strain(GLEN_INTRO, { koto: 'pluck', touch: f }),
 		...strain(GLEN_THEME, { koto: 'rock', touch: mf, flute: true }),
 		...strain(GLEN_THEME, { koto: 'rock', touch: mf, flute: true, guitar: true }),
@@ -339,20 +339,5 @@ function hush(base:Dyn, lines:string[], beats:number):Dyn {
 	return LOUDNESS[Math.max(0, LOUDNESS.indexOf(base) - softer)] ?? pp;
 }
 
-export const SONGS:Record<string, Score> = {
-	dungeon_vault: dungeonTheme(),
-	glen: glenTheme(),
-};
-
-/** 5v5 Combat plays the Hero's Might recording. Other scenes play a score. */
-export function startSceneMusic(audio:Audio, sceneID:string):void {
-	if (sceneID === 'ruins') {
-		void audio.playRecording(MIGHT_TRACK, 1, 'heros_might', { start: 7.35, end: 115.8 });
-		return;
-	}
-	if (sceneID === 'marketplace') {
-		void audio.playRecording(TALE_TRACK, 1, 'heros_tale', { start: 24.6, end: 168 });
-		return;
-	}
-	void audio.playMusic(SONGS[sceneID] ?? SONGS.dungeon_vault);
-}
+export const HEROS_MIGHT:Track = { recording: MIGHT_TRACK, id: 'heros_might', title: "Hero's Might", start: 7.35, end: 115.8 };
+export const HEROS_TALE:Track = { recording: TALE_TRACK, id: 'heros_tale', title: "Hero's Tale", start: 24.6, end: 168 };

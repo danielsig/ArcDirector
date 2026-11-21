@@ -1,4 +1,4 @@
-import type { ChunkCoord, LocalCoord } from './tile-coord.js';
+import type { ChunkCoord, LocalCoord, TileCoord } from './tile-coord.js';
 import type { XZ } from './xz.js';
 
 /** A square of `size` × `size` tiles at chunk coordinate `origin`. Tiles are row-major (`localZ * size + localX`). */
@@ -37,9 +37,25 @@ export class Chunk<T = unknown> {
 		}
 	}
 
+	/** The local coordinates of every tile `keep` takes, row by row. */
+	public cellsWhere(keep:(tile:T)=>boolean):LocalCoord[] {
+		const cells:LocalCoord[] = [];
+		this.forEachTile((tile, localX, localZ) => {
+			if (keep(tile)) {
+				cells.push({ localX, localZ });
+			}
+		});
+		return cells;
+	}
+
 	public tileAtWorld(x:number, z:number):T | undefined {
 		const { localX, localZ } = this.worldToLocal(x, z);
 		return this.tile(localX, localZ);
+	}
+
+	/** The tile coordinate of a local one, the whole map over. */
+	public tileCoord(localX:number, localZ:number):TileCoord {
+		return { tx: this.origin.cx * this.size + localX, tz: this.origin.cz * this.size + localZ };
 	}
 
 	public worldCellCenter(localX:number, localZ:number):XZ {

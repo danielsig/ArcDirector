@@ -83,6 +83,13 @@ export class Input {
 		}
 	}
 
+	/** Lets the pointer go, if this canvas holds it. */
+	public releaseLock():void {
+		if (this._canvas && document.pointerLockElement === this._canvas) {
+			document.exitPointerLock();
+		}
+	}
+
 	/** Clears this frame's deltas and presses. */
 	public endFrame():void {
 		this.lookDeltaX = 0;
@@ -133,9 +140,7 @@ export class Input {
 		window.removeEventListener('blur', this._onBlur);
 		document.removeEventListener('pointerlockchange', this._onPointerLockChange);
 		canvas.removeEventListener('wheel', this._onWheel);
-		if (document.pointerLockElement === canvas) {
-			document.exitPointerLock();
-		}
+		this.releaseLock();
 		this._canvas = null;
 		this.pointerLocked = false;
 		this.keys.clear();

@@ -142,6 +142,14 @@ describe('evaluate', () => {
 		assert.equal(bool('some([0, 0], x => x)'), false);
 	});
 
+	it('is a name, is not, and not: as models write them', () => {
+		assert.equal(bool('Lantern is "key"'), true, 'a name is the one it picks');
+		assert.equal(bool('Lantern is not "key"'), false);
+		assert.equal(bool('me is not "nobody"'), true);
+		assert.equal(bool('not (Lantern is "key")'), false);
+		assert.equal(bool('Lantern is not "key" || me is not "nobody"'), true, 'binds as tight as is');
+	});
+
 	it('absent find, ??, == null; bool relations false; distance type error', () => {
 		assert.equal(val('items.find("nope")').value.kind, 'absent');
 		assert.equal(val('items.find("nope") ?? items.find("Lantern")').value.kind, 'entity');

@@ -1,5 +1,5 @@
 import { type GameObject } from '@arc-director/kindling';
-import { MarketNPC, Wallet } from '../engine/components';
+import { MarketplaceNPC, Wallet } from '../engine/components';
 import { compactName } from './inventory';
 
 export function coinsOf(go:GameObject):number {
@@ -21,7 +21,7 @@ export function transferCoins(from:GameObject, to:GameObject, amount:number):str
 }
 
 export function noteWant(character:GameObject, itemName:string):boolean {
-	const npc = character.getComponent(MarketNPC);
+	const npc = character.getComponent(MarketplaceNPC);
 	if (!npc) {
 		return false;
 	}

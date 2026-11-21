@@ -3,7 +3,16 @@ import { describe, it } from 'node:test';
 import { BoxCollider } from './BoxCollider.js';
 import { GameObject, resetAllocID } from './GameObject.js';
 import { Rigidbody } from './Rigidbody.js';
-import { World, type TerrainSample } from './World.js';
+import { World } from './World.js';
+import type { TerrainSample } from './Terrain.js';
+
+/** A world of 1 m tiles whose ground is `at`: flat, open and dry where it says no more. */
+function tiled(at:(x:number, z:number)=>Partial<TerrainSample>):World {
+	const world = new World();
+	world.terrain.tileSize = 1;
+	world.terrain.sample = (x, z) => ({ surface: undefined, height: 0, worldY: 0, blocked: false, climbable: false, wade: false, ...at(x, z) });
+	return world;
+}
 import { canOccupy, resolveBody, stepPhysics } from './physics.js';
 
 describe('stepPhysics', () => {
@@ -113,16 +122,13 @@ describe('stepPhysics', () => {
 		assert.equal(idle.go.transform.position.x, 0);
 	});
 
-	class WallWorld extends World {
-		public override sampleTerrain(x:number, z:number):TerrainSample | undefined {
-			return { height: 0, worldY: 0, blocked: x >= 2, climbable: false };
-		}
-	}
+	const WallWorld = ():World => tiled((x:number, z:number) => {
+		return { height: 0, worldY: 0, blocked: x >= 2, climbable: false };
+	});
 
 	it('resolveBody does not push a body through a blocked tile', () => {
 		resetAllocID();
-		const world = new WallWorld();
-		world.tileSize = 1;
+		const world = WallWorld();
 		const go = new GameObject('hurt');
 		go.transform.position.x = 1.4;
 		const rb = go.addComponent(Rigidbody);
@@ -136,16 +142,13 @@ describe('stepPhysics', () => {
 		assert.ok(go.transform.position.x + col.size.x * 0.5 <= 2 + 1e-6, `through wall at ${go.transform.position.x}`);
 	});
 
-	class CellWorld extends World {
-		public override sampleTerrain(x:number, z:number):TerrainSample | undefined {
-			return { height: 0, worldY: 0, blocked: x >= 2 && x < 3, climbable: false };
-		}
-	}
+	const CellWorld = ():World => tiled((x:number, z:number) => {
+		return { height: 0, worldY: 0, blocked: x >= 2 && x < 3, climbable: false };
+	});
 
 	it('resolveBody does not eject a body through a blocked cell', () => {
 		resetAllocID();
-		const world = new CellWorld();
-		world.tileSize = 1;
+		const world = CellWorld();
 		const go = new GameObject('hurt');
 		go.transform.position.x = 1.4;
 		const rb = go.addComponent(Rigidbody);
@@ -180,23 +183,18 @@ describe('stepPhysics', () => {
 		assert.ok(gap >= (1 + 0.45) * 0.5 - 1e-6, `inside wall gap ${gap}`);
 	});
 
-	class RowWorld extends World {
-		public override sampleTerrain(x:number, z:number):TerrainSample | undefined {
-			return { height: 0, worldY: 0, blocked: z < 0, climbable: false };
-		}
-	}
+	const RowWorld = ():World => tiled((x:number, z:number) => {
+		return { height: 0, worldY: 0, blocked: z < 0, climbable: false };
+	});
 
-	class StepWorld extends World {
-		public override sampleTerrain(x:number, z:number):TerrainSample | undefined {
-			const high = x >= 2 && x < 3;
-			return { height: high ? 1 : 0, worldY: high ? 0.7 : 0, blocked: false, climbable: false };
-		}
-	}
+	const StepWorld = ():World => tiled((x:number, z:number) => {
+		const high = x >= 2 && x < 3;
+		return { height: high ? 1 : 0, worldY: high ? 0.7 : 0, blocked: false, climbable: false };
+	});
 
 	it('stops a body at higher ground before its middle gets there', () => {
 		resetAllocID();
-		const world = new StepWorld();
-		world.tileSize = 1;
+		const world = StepWorld();
 		const go = new GameObject('walker');
 		go.transform.position.x = 1.9;
 		go.transform.position.z = 0.5;
@@ -210,10 +208,30 @@ describe('stepPhysics', () => {
 		assert.ok(go.transform.position.x + col.size.x * 0.5 <= 2 + 1e-6, `inside the step at ${go.transform.position.x}`);
 	});
 
+	it('lets a body in a river wade out, and stops one on the bank from walking in', () => {
+		resetAllocID();
+		const world = tiled((x) => (x >= 2 ? { blocked: true, wade: true, worldY: -0.1 } : {}));
+		const walker = (x:number, vx:number, z:number):GameObject => {
+			const go = new GameObject(`walker${x}`);
+			go.transform.position.x = x;
+			go.transform.position.z = z;
+			go.addComponent(Rigidbody).velocity.x = vx;
+			go.addComponent(BoxCollider).size = { x: 0.45, y: 1.1, z: 0.45 };
+			world.add(go);
+			return go;
+		};
+		const wader = walker(2.6, -1, 0.5);
+		const dry = walker(1.5, 1, 3.5);
+		for (let i = 0; i < 20; i++) {
+			stepPhysics(world, 0.1);
+		}
+		assert.ok(wader.transform.position.x < 1.5, `still wading at ${wader.transform.position.x}`);
+		assert.ok(dry.transform.position.x + 0.225 <= 2 + 1e-6, `walked in at ${dry.transform.position.x}`);
+	});
+
 	it('lets a body stand on the higher ground', () => {
 		resetAllocID();
-		const world = new StepWorld();
-		world.tileSize = 1;
+		const world = StepWorld();
 		const go = new GameObject('walker');
 		go.transform.position.x = 2.5;
 		go.transform.position.z = 0.5;
@@ -226,24 +244,21 @@ describe('stepPhysics', () => {
 		assert.ok(Math.abs(go.transform.position.x - 2.5) < 1e-6, `shoved off to ${go.transform.position.x}`);
 	});
 
-	class StairSideWorld extends World {
-		public override sampleTerrain(x:number, z:number):TerrainSample | undefined {
-			const flight = x >= 1 && x < 2;
-			const landing = x >= 2 && x < 3;
-			return {
-				height: flight || landing ? 1 : 0,
-				worldY: flight ? 0.35 : landing ? 0.7 : 0,
-				blocked: false,
-				climbable: flight,
-				solids: flight ? [{ minX: 1, maxX: 1.16, minZ: 0, maxZ: 1 }, { minX: 1.84, maxX: 2, minZ: 0, maxZ: 1 }] : undefined,
-			};
-		}
-	}
+	const StairSideWorld = ():World => tiled((x:number, z:number) => {
+		const flight = x >= 1 && x < 2;
+		const landing = x >= 2 && x < 3;
+		return {
+			height: flight || landing ? 1 : 0,
+			worldY: flight ? 0.35 : landing ? 0.7 : 0,
+			blocked: false,
+			climbable: flight,
+			solids: flight ? [{ minX: 1, maxX: 1.16, minZ: 0, maxZ: 1 }, { minX: 1.84, maxX: 2, minZ: 0, maxZ: 1 }] : undefined,
+		};
+	});
 
 	it('stops a body at a stair side and leaves the climb open', () => {
 		resetAllocID();
-		const world = new StairSideWorld();
-		world.tileSize = 1;
+		const world = StairSideWorld();
 		const go = new GameObject('walker');
 		go.transform.position.x = 0.9;
 		go.transform.position.z = 0.5;
@@ -269,8 +284,7 @@ describe('stepPhysics', () => {
 
 	it('pushes a body out of a wall row it walks into, not along it', () => {
 		resetAllocID();
-		const world = new RowWorld();
-		world.tileSize = 1;
+		const world = RowWorld();
 		const go = new GameObject('walker');
 		go.transform.position.x = 0.5;
 		go.transform.position.z = 0.4;
@@ -283,18 +297,15 @@ describe('stepPhysics', () => {
 		assert.ok(Math.abs(go.transform.position.z - 0.225) < 1e-9, `z ${go.transform.position.z}`);
 	});
 
-	class ThinWallWorld extends World {
-		public override sampleTerrain(x:number, z:number):TerrainSample | undefined {
-			// The row z in [-1, 0) is blocked for routes; bodies meet only the 16 cm wall through its middle.
-			const inRow = z >= -1 && z < 0;
-			return { height: 0, worldY: 0, blocked: inRow, climbable: false, solids: inRow ? [{ minX: -10, maxX: 10, minZ: -0.58, maxZ: -0.42 }] : undefined };
-		}
-	}
+	const ThinWallWorld = ():World => tiled((x:number, z:number) => {
+		// The row z in [-1, 0) is blocked for routes; bodies meet only the 16 cm wall through its middle.
+		const inRow = z >= -1 && z < 0;
+		return { height: 0, worldY: 0, blocked: inRow, climbable: false, solids: inRow ? [{ minX: -10, maxX: 10, minZ: -0.58, maxZ: -0.42 }] : undefined };
+	});
 
 	it('lets a body stand up against a thin wall inside a blocked cell', () => {
 		resetAllocID();
-		const world = new ThinWallWorld();
-		world.tileSize = 1;
+		const world = ThinWallWorld();
 		const go = new GameObject('walker');
 		go.transform.position.x = 0.5;
 		go.transform.position.z = 0.1;
@@ -309,10 +320,10 @@ describe('stepPhysics', () => {
 	});
 
 	it('canOccupy climbs one stair and refuses a raised floor', () => {
-		const ground = { height: 0, worldY: 0, blocked: false, climbable: false };
-		const stair = { height: 1, worldY: 0.7, blocked: false, climbable: true };
-		const dais = { height: 1, worldY: 0.7, blocked: false, climbable: false };
-		const wall = { height: 1, worldY: 0.7, blocked: true, climbable: false };
+		const ground = { surface: undefined, wade: false, height: 0, worldY: 0, blocked: false, climbable: false };
+		const stair = { surface: undefined, wade: false, height: 1, worldY: 0.7, blocked: false, climbable: true };
+		const dais = { surface: undefined, wade: false, height: 1, worldY: 0.7, blocked: false, climbable: false };
+		const wall = { surface: undefined, wade: false, height: 1, worldY: 0.7, blocked: true, climbable: false };
 		assert.equal(canOccupy(ground, stair), true);
 		assert.equal(canOccupy(stair, dais), true);
 		assert.equal(canOccupy(ground, dais), false);
@@ -338,17 +349,14 @@ describe('stepPhysics', () => {
 
 describe('World.blocker', () => {
 	/** A wall at x 3 and up, and a step at z 3 and up: 1 high from z 3, 2 high from z 4. */
-	class StepWorld extends World {
-		public override sampleTerrain(x:number, z:number):TerrainSample | undefined {
-			const height = z >= 4 ? 2 : z >= 3 ? 1 : 0;
-			return { height, worldY: height, blocked: x >= 3, climbable: false };
-		}
-	}
+	const StepWorld = ():World => tiled((x:number, z:number) => {
+		const height = z >= 4 ? 2 : z >= 3 ? 1 : 0;
+		return { height, worldY: height, blocked: x >= 3, climbable: false };
+	});
 
 	it('says what a body would run into: a collider that never moves, then the ground', () => {
 		resetAllocID();
-		const world = new StepWorld();
-		world.tileSize = 1;
+		const world = StepWorld();
 		// A log 2.5 m long, 0.5 m deep, lying east–west, and a post 0.4 m across.
 		const log = new GameObject('log');
 		log.transform.position.x = 1.5;
@@ -379,8 +387,6 @@ describe('World.blocker', () => {
 		assert.equal(world.blocker(null, 2.9, 1.5), undefined, 'a point short of the wall');
 		assert.equal(world.blocker(walker, 1.5, 2.5, { from: { x: 1.5, z: 3.5 } }), undefined, 'a step of 1 down');
 		assert.equal(world.blocker(walker, 1.5, 4.5, { from: { x: 1.5, z: 2.5 } }), 'terrain', 'too high to step to');
-		assert.equal(world.blocker(null, 1.5, 0.5, { above: 1.5 }), undefined, 'one sees over the log');
-		assert.equal(world.blocker(null, 0.5, 2.5, { above: 1.5 }), post, 'not over the post');
 		// A step counts the whole way, and what it already touches it may leave.
 		assert.equal(world.blocker(walker, 1.5, -0.5, { from: { x: 1.5, z: 1.5 } }), log, 'a step across the log');
 		assert.equal(world.blocker(walker, 1.5, 1.5, { from: { x: 1.5, z: 0.9 } }), undefined, 'a step away from the log');
@@ -391,14 +397,11 @@ describe('World.blocker', () => {
 	});
 
 	it('counts a blocked tile anywhere on the way of a step', () => {
-		class TrenchWorld extends World {
-			public override sampleTerrain(x:number):TerrainSample | undefined {
-				return { height: 0, worldY: 0, blocked: x >= 1 && x < 2, climbable: false };
-			}
-		}
+		const TrenchWorld = ():World => tiled((x:number) => {
+			return { height: 0, worldY: 0, blocked: x >= 1 && x < 2, climbable: false };
+		});
 		resetAllocID();
-		const world = new TrenchWorld();
-		world.tileSize = 1;
+		const world = TrenchWorld();
 		const walker = new GameObject('walker');
 		walker.addComponent(BoxCollider).size = { x: 0.4, y: 1, z: 0.4 };
 		assert.equal(world.blocker(walker, 2.5, 0.5, { from: { x: 0.5, z: 0.5 } }), 'terrain');

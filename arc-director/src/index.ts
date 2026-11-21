@@ -103,6 +103,7 @@ export { GoalsFeature, type GoalsOptions } from './character/GoalsFeature.js';
 export { FeelingFeature, type FeelingsOptions } from './character/FeelingFeature.js';
 export { FEELINGS, Feeling, type FeelingDef } from './character/feeling.js';
 export { RegionsFeature, type RegionShape } from './director/RegionsFeature.js';
+export { RequirementsFeature } from './director/RequirementsFeature.js';
 export { SightFeature, type SightOptions } from './perception/SightFeature.js';
 export { HearingFeature, type HearingOptions } from './perception/HearingFeature.js';
 export { MapFeature } from './mind/MapFeature.js';
@@ -122,6 +123,7 @@ export { GenreFeature, STOCK_MOBA_VERB_DEFS, STOCK_RPG_VERB_DEFS } from './genre
 export { ModelRegistry, type LiveModel } from './director/model-registry.js';
 export { DEFAULT_BATCH_WAIT, DEFAULT_MAX_PARALLEL, ModelProvider, type ModelSpec, type ProvidedModel, type ProviderConfig } from './director/ModelProvider.js';
 export { ModelSlots, URGENT, type ModelChat, type ModelRun } from './director/ModelSlots.js';
+export { emptyInferClock } from './director/director-types.js';
 export type {
 	InferClock, KernelSource, StockVerbArgs, StockVerbName, VerbArgs, VerbGate, AliasPart, VerbAlias,
 } from './director/director-types.js';

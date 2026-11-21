@@ -23,6 +23,11 @@ export class MeshRenderer extends Component {
 		this.syncMesh();
 	}
 
+	/** Again after `update`, so a mesh swapped late in the frame, or while paused, shows in this one. */
+	public override lateUpdate(dt:number):void {
+		this.syncMesh();
+	}
+
 	public override onEnable():void {
 		if (this.mesh) {
 			this.mesh.visible = this.visible;
@@ -39,7 +44,8 @@ export class MeshRenderer extends Component {
 		this.dropMesh();
 	}
 
-	private syncMesh():void {
+	/** Builds the mesh `meshID` names once it is ready, and keeps its visibility and color. */
+	protected syncMesh():void {
 		if (this._builtID !== this.meshID) {
 			this.dropMesh();
 		}

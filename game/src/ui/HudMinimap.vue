@@ -48,7 +48,7 @@ function paint():void {
 
 const mapShift = computed(() => {
 	const m = props.hud.minimap;
-	if (!m.follow) {
+	if (!props.hud.minimapFollow) {
 		return 'none';
 	}
 	const tx = Math.round(view / 2 - (m.playerX - m.originX) * cell);
@@ -59,7 +59,7 @@ const mapShift = computed(() => {
 const playerPx = computed(() => {
 	const m = props.hud.minimap;
 	const deg = -(m.playerYaw * 180) / Math.PI;
-	if (m.follow) {
+	if (props.hud.minimapFollow) {
 		return { x: view / 2, y: view / 2, deg };
 	}
 	return {

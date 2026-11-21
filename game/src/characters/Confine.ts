@@ -1,5 +1,5 @@
-import { Component, type Bounds } from '@arc-director/kindling';
-import { RigidBody } from '../engine/components';
+import { Component, Rigidbody, type Bounds } from '@arc-director/kindling';
+
 import { Order } from '../engine/order';
 
 /**
@@ -13,7 +13,7 @@ export class Confine extends Component {
 	public margin = 0.5;
 
 	public override update():void {
-		const rb = this.gameObject.getComponent(RigidBody);
+		const rb = this.gameObject.getComponent(Rigidbody);
 		if (!rb) {
 			return;
 		}

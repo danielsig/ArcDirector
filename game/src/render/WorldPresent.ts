@@ -1,43 +1,49 @@
 import { Time, underInk, type GameObject } from '@arc-director/kindling';
 import * as THREE from 'three';
-import { Chest, Door, Torch, Bridge } from '../engine/components';
 import { DemoMeshRenderer } from '../engine/demo-mesh-renderer';
 import type { DemoWorld } from '../engine/demo-world';
-import { buildChunkMesh, CHUNK_MESH_REV } from './build-chunk-mesh';
-import { getSheet, sheetReady } from './spritesheet';
+import { buildChunkMesh } from './build-chunk-mesh';
+import { sheetReady, showFlameFrame } from './spritesheet';
 import { natureReady, tickNature, untrackNature } from './nature';
-import { createOutskirts } from './land-mesh';
-import { LANDFORMS, planOutskirts, type OutskirtHeights, type Surface } from '../world/land';
-import type { DemoChunk } from '../world/demo-chunk';
-import { disposeGrassBatch, syncGrassBatch } from './grass-batch';
+import { createOutskirts } from '../kit/land/land-mesh';
+import { planOutskirts, type OutskirtHeights, type Surface } from '../kit/land/land';
+import { disposeGrassBatch, syncGrassBatch } from '../kit/land/grass-batch';
 import { nearestPickup } from '../items/pickup';
-import { THIN_WALLS } from '../world/thin-wall';
+import { TERRAIN } from '../world/terrain-kinds';
+import type { DemoChunk } from '../world/demo-chunk';
+import { Torch } from '../kit/torches/torch';
 
 const worldPos = new THREE.Vector3();
 const camPos = new THREE.Vector3();
 const camQuat = new THREE.Quaternion();
+const camEuler = new THREE.Euler();
 
-/** Door, chunk, torch, item, and glow presentation on Kindling's scene graph. */
+/** Chunk, item and glow presentation on Kindling's scene graph. Things present themselves, in their own `lateUpdate`. */
 export class WorldPresent {
 	public detailMaps = true;
 	private _camera:THREE.Camera = new THREE.PerspectiveCamera();
 	private _host:THREE.Scene | null = null;
 	private readonly _chunkMeshes = new Map<string, THREE.Group>();
 	private readonly _liveChunks = new Set<string>();
-	private _chunkMeshRev = CHUNK_MESH_REV;
-	private _outskirtsHadNature = false;
+	/** What the outskirts were built from: the nature art, and the revisions of the chunks on the map's edge. */
+	private _outskirtsKey = '';
 	private _outskirts:THREE.Group | null = null;
 	private _pickupGlow:THREE.Mesh | null = null;
 	private _pickupGlowMap:THREE.CanvasTexture | null = null;
 	private _camPitch = 0;
 
-	/** The land past the map's edge, once (again when the river art arrives); `chunks` is every chunk of the scene, loaded or not. */
-	public mountOutskirts(world:DemoWorld, chunks:DemoChunk[], ground:Surface = 'meadow', heights?:OutskirtHeights):void {
-		if (!sheetReady() || chunks.length === 0) {
+	/** The land past the map's edge, every chunk of the scene's, loaded or not: again when the river art arrives or an edge chunk changes. */
+	public mountOutskirts(world:DemoWorld, ground:Surface = 'meadow', heights?:OutskirtHeights):void {
+		const map = world.terrain.bounds();
+		if (!sheetReady() || !map) {
 			return;
 		}
-		const nature = natureReady();
-		if (this._outskirts && this._outskirtsHadNature === nature) {
+		const onEdge = (c:DemoChunk):boolean => {
+			const [x, z, span] = [c.worldOriginX(), c.worldOriginZ(), c.size * c.cellSize];
+			return x === map.minX || z === map.minZ || x + span === map.maxX || z + span === map.maxZ;
+		};
+		const key = `${natureReady()} ${world.terrain.chunks.filter(onEdge).map((c) => world.terrain.revision(c)).join(',')}`;
+		if (this._outskirts && this._outskirtsKey === key) {
 			return;
 		}
 		if (this._outskirts) {
@@ -46,8 +52,8 @@ export class WorldPresent {
 		}
 		// Out as far as the fog lets anyone see.
 		const fog = world.native.fog as THREE.Fog | null;
-		this._outskirts = createOutskirts(planOutskirts(chunks, ground, heights, fog?.far));
-		this._outskirtsHadNature = nature;
+		this._outskirts = createOutskirts(planOutskirts(world.terrain, ground, heights, fog?.far));
+		this._outskirtsKey = key;
 		world.native.add(this._outskirts);
 	}
 
@@ -55,21 +61,18 @@ export class WorldPresent {
 		if (!sheetReady()) {
 			return;
 		}
-		if (worldNeedsNature(world) && !natureReady()) {
+		if (!natureReady() && worldNeedsNature(world)) {
 			return;
 		}
-		if (this._chunkMeshRev !== CHUNK_MESH_REV) {
-			for (const mesh of this._chunkMeshes.values()) {
-				this.releaseObject(mesh);
-			}
-			this._chunkMeshes.clear();
-			this._chunkMeshRev = CHUNK_MESH_REV;
-		}
 		this._liveChunks.clear();
-		for (const chunk of world.chunks.values()) {
+		for (const chunk of world.terrain.loaded) {
 			this._liveChunks.add(chunk.id);
-			if (!this._chunkMeshes.has(chunk.id)) {
-				const mesh = buildChunkMesh(chunk, world.chunks.values());
+			const built = this._chunkMeshes.get(chunk.id);
+			if (built?.userData.revision !== world.terrain.revision(chunk)) {
+				if (built) {
+					this.releaseObject(built);
+				}
+				const mesh = buildChunkMesh(chunk, world.terrain);
 				world.native.add(mesh);
 				this._chunkMeshes.set(chunk.id, mesh);
 			}
@@ -88,8 +91,7 @@ export class WorldPresent {
 		this._camera = camera;
 		this._camera.getWorldPosition(camPos);
 		this._camera.getWorldQuaternion(camQuat);
-		const e = new THREE.Euler().setFromQuaternion(camQuat, 'YXZ');
-		this._camPitch = e.x;
+		this._camPitch = camEuler.setFromQuaternion(camQuat, 'YXZ').x;
 		const player = world.findByID('Player');
 		const focus = player ? nearestPickup(player) : null;
 		let focusObj:THREE.Object3D | null = null;
@@ -99,56 +101,9 @@ export class WorldPresent {
 			if (!mv || !mv.visible || !obj) {
 				continue;
 			}
-			const kind = obj.userData.kind as string | undefined;
-			const yaw = go.transform.yaw;
-			if (kind === 'torch') {
-				obj.rotation.y = -yaw;
-				this.syncTorch(obj, go);
-			}
-			else if (kind === 'item') {
-				obj.rotation.y = -yaw;
+			if (obj.userData.kind === 'item') {
+				obj.rotation.y = -go.transform.yaw;
 				this.syncItem(obj, go, go === focus, Time.time);
-			}
-			else if (kind === 'door') {
-				obj.rotation.y = 0;
-				const door = go.getComponent(Door);
-				const hinge = obj.userData.hinge as THREE.Object3D | undefined;
-				if (hinge && door) {
-					hinge.rotation.y = door.open ? door.openYaw : door.closedYaw;
-				}
-				// A gate's second leaf swings the other way on its own pier.
-				const hinge2 = obj.userData.hinge2 as THREE.Object3D | undefined;
-				if (hinge2 && door) {
-					hinge2.rotation.y = -(door.open ? door.openYaw : door.closedYaw);
-				}
-				const occ = obj.getObjectByName('doorOccluder');
-				if (occ && door) {
-					occ.visible = !door.open;
-				}
-			}
-			else if (kind === 'bridge') {
-				obj.rotation.y = 0;
-				const span = go.getComponent(Bridge);
-				const setLift = obj.userData.setLift as ((lift:number)=>void) | undefined;
-				if (setLift && span) {
-					setLift(span.lift);
-				}
-			}
-			else if (kind === 'house') {
-				obj.rotation.y = 0;
-				this.syncRoof(obj, go, world);
-			}
-			else if (kind === 'chest') {
-				obj.rotation.y = 0;
-				const chest = go.getComponent(Chest);
-				// Open, the lid swings up and back on its hinge, a little past upright.
-				const lid = obj.getObjectByName('lid');
-				if (lid && chest) {
-					lid.rotation.x = chest.open ? 1.9 : 0;
-				}
-			}
-			else {
-				obj.rotation.y = 0;
 			}
 			if (go === focus) {
 				focusObj = obj;
@@ -186,7 +141,6 @@ export class WorldPresent {
 			ao.dispose();
 			obj.userData.aoMap = undefined;
 		}
-		this._host?.remove(obj);
 		obj.removeFromParent();
 		obj.traverse((node) => {
 			if (node instanceof THREE.Light) {
@@ -211,39 +165,6 @@ export class WorldPresent {
 		});
 	}
 
-	private syncRoof(obj:THREE.Object3D, go:GameObject, world:DemoWorld):void {
-		const roof = obj.userData.roof as THREE.Object3D | undefined;
-		if (!roof) {
-			return;
-		}
-		const player = world.findByID('Player');
-		const hw = (obj.userData.roofHalfW as number | undefined) ?? 2.5;
-		const hd = (obj.userData.roofHalfD as number | undefined) ?? 2;
-		const p = go.transform.position;
-		const under = !!player
-			&& Math.abs(player.transform.position.x - p.x) <= hw
-			&& Math.abs(player.transform.position.z - p.z) <= hd;
-		const opacity = under ? 0.08 : 1;
-		roof.traverse((child) => {
-			if (!(child instanceof THREE.Mesh)) {
-				return;
-			}
-			const mat = child.material;
-			if (Array.isArray(mat)) {
-				return;
-			}
-			if (child.name === 'ceiling') {
-				mat.colorWrite = !under;
-				mat.depthWrite = !under;
-				return;
-			}
-			const fade = opacity < 1;
-			mat.transparent = fade;
-			mat.opacity = opacity;
-			mat.depthWrite = !fade;
-		});
-	}
-
 	private billboardY(obj:THREE.Object3D | undefined | null):void {
 		if (!obj) {
 			return;
@@ -254,47 +175,9 @@ export class WorldPresent {
 
 	private playHeldFlame(flame:THREE.Mesh, lit:boolean, t:number):void {
 		flame.visible = lit;
-		if (!lit || !sheetReady()) {
-			return;
+		if (lit && sheetReady()) {
+			showFlameFrame(flame.material as THREE.MeshBasicMaterial, t, 10);
 		}
-		const frames = getSheet().flame;
-		const n = frames.length;
-		const map = frames[(Math.floor(t * 10) % n + n) % n];
-		const mat = flame.material as THREE.MeshBasicMaterial;
-		if (mat.map !== map) {
-			mat.map = map;
-			mat.needsUpdate = true;
-		}
-	}
-
-	private syncTorch(obj:THREE.Object3D, go:GameObject):void {
-		const holster = obj.getObjectByName('holsterRig');
-		if (holster) {
-			holster.rotation.y = go.transform.yaw;
-		}
-		const torch = go.getComponent(Torch);
-		const flame = obj.userData.flame as THREE.Mesh | undefined;
-		if (!flame) {
-			return;
-		}
-		flame.visible = !torch || torch.lit;
-		if (!flame.visible) {
-			return;
-		}
-		const sheet = getSheet();
-		const n = sheet.flame.length;
-		const t = Time.time;
-		const rate = torch?.flickerRate ?? 10;
-		const offset = torch?.animOffset ?? 0;
-		const frame = Math.floor(t * rate + offset * n) % n;
-		const map = sheet.flame[(frame + n) % n];
-		const mat = flame.material as THREE.MeshBasicMaterial;
-		if (mat.map !== map) {
-			mat.map = map;
-			mat.needsUpdate = true;
-		}
-		this.billboardY(flame);
-		this.billboardY(obj.getObjectByName('stick'));
 	}
 
 	private syncItem(obj:THREE.Object3D, go:GameObject, highlighted:boolean, t:number):void {
@@ -389,20 +272,7 @@ export class WorldPresent {
 }
 
 function worldNeedsNature(world:DemoWorld):boolean {
-	for (const chunk of world.chunks.values()) {
-		for (const tile of chunk.tiles) {
-			if (
-				tile.def === 'grass'
-				|| tile.def === 'water'
-				|| THIN_WALLS.has(tile.def)
-				|| LANDFORMS.has(tile.def)
-				|| tile.def === 'plank'
-			) {
-				return true;
-			}
-		}
-	}
-	return false;
+	return world.terrain.chunks.some((chunk) => chunk.tiles.some((tile) => TERRAIN[tile.def].nature));
 }
 
 function makePickupGlowMap():THREE.CanvasTexture {

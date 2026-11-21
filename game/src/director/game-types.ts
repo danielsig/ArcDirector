@@ -9,15 +9,13 @@ export type CharacterCtx = {
 	character:GameObject;
 	/** Where ArcDirector steers this character, and its cooldowns. Every character ArcDirector drives has one. */
 	npc:NPCInput;
-	/** Scene id from the game host. ArcDirector does not interpret it. */
-	scene:string;
 };
 
 export type SceneHooks<H> = {
 	afterPickUp?:(host:H, character:GameObject, name:string)=>void;
-	tickMarketNPC?:(host:H)=>void;
 	onSpoke?:(host:H, utterance:SpeechUtterance)=>void;
-	checkBargain?:(host:H)=>void;
+	/** Every observe, after the world scan: the scene's own rules (who has won, who comes and goes). */
+	tick?:(host:H)=>void;
 	/** May this mind think now? Held thinks wait in the queue until it may. Default: yes. */
 	mayThink?:(host:H, mindID:string, reason:ThinkReason)=>boolean;
 	allowTheft?:boolean;
@@ -38,6 +36,6 @@ export type SceneGoals = { left:SceneGoalSide; right?:SceneGoalSide };
 
 const RECEIVED = 'count(me.inventory) > count(prev.me.inventory) || me.gold > prev.me.gold';
 
-export function withReceived<T>(spec:CharacterSpec<T>):CharacterSpec<T> {
+export function withReceived<S extends CharacterSpec<CharacterCtx>>(spec:S):S {
 	return { ...spec, watches: { received: RECEIVED, ...spec.watches } };
 }

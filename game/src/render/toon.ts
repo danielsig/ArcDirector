@@ -1,7 +1,8 @@
 import * as THREE from 'three';
 import { patchShader, ToonMaterial, type ToonMaterialParameters, type XZ } from '@arc-director/kindling';
-import { getNature, WATER_UPPER_Y } from './nature';
+import { getNature } from './nature';
 import { CELL_SIZE, MOON_BLUE, TILE_HEIGHT } from '../world/constants';
+import { WATER_UPPER_Y } from '../world/terrain-kinds';
 
 /** Base colors of the world. Scene lights and ink (`look.ts`) set the mood per scene. */
 export const PALETTE = {

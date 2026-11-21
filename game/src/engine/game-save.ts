@@ -3,23 +3,25 @@ import type { WorldSave } from '@arc-director/kindling';
 import type { CastJSON } from 'arc-director';
 import type { ItemInstance } from '../items/instance';
 import { lsGet, lsSet } from '../prefs';
-import { spawnNPC, type NPCSpawnOpts } from '../world/spawn';
+import { spawnNPC, type NPCSpawnDef } from '../world/spawn';
 import { spawnWorldItem } from '../world/spawn-item';
 import type { ViewPose } from './view-persist';
 import type { DemoWorld } from './demo-world';
+import type { SceneState } from '../director/adapter';
 
 /** One save per scene: the world as a diff of the fresh scene, the cast, and the camera. */
 export type GameSave = {
 	savedUTC:string;
 	time:number;
-	bargainDone:boolean;
+	/** The scene's own state (`GameHost.sceneState`). */
+	scene:SceneState;
 	pose:ViewPose;
 	world:WorldSave;
 	cast:CastJSON;
 };
 
 /** What `spawnWorldItem` / `spawnNPC` stamp on `GameObject.recipe`. */
-type Recipe = { item:ItemInstance; chunkID?:string } | { npc:NPCSpawnOpts; chunkID:string };
+type Recipe = { item:ItemInstance; chunkID?:string } | { npc:NPCSpawnDef };
 
 const key = (sceneID:string):string => `arc-director.save.${sceneID}`;
 
@@ -42,6 +44,5 @@ export function respawn(world:DemoWorld, raw:unknown):GameObject | undefined {
 	if ('item' in recipe) {
 		return spawnWorldItem(world, recipe.item, 0, 0, 0, recipe.chunkID);
 	}
-	const chunk = [...world.chunks.values()].find((c) => c.id === recipe.chunkID);
-	return chunk && spawnNPC(world, chunk, recipe.npc);
+	return spawnNPC(world, recipe.npc);
 }

@@ -130,7 +130,7 @@ function scriptedModel<TCtx>(format:ArcFormat, style:PromptStyle, replies:Reply[
  * One character with everything on: sight, carrying, talk (in a style of its own), hearing (with a noisy verb), the map, knowledge mentions,
  * offers, currency, a pinned memory, a host verb and an alias with a watch (which makes `law`'s own watch optional).
  */
-const MARKET:Scenario = {
+const MARKETPLACE:Scenario = {
 	me: { id: 'Hilde', hp: [8, 12] },
 	role: 'Herbalist',
 	gold: 9,
@@ -167,7 +167,7 @@ const MARKET:Scenario = {
 };
 
 /** The first think looks everything up (as tool calls, or written in the reply), then sets a law; the second says a line no one can hear, then trades. */
-function marketReplies(format:ArcFormat):Reply[] {
+function marketplaceReplies(format:ArcFormat):Reply[] {
 	const lookUps:Reply[] = format === 'text'
 		? [{ tools: { recall: { query: 'salt' }, observe: { expr: 'others' }, earshot: {}, see_map: {} } }, 'recall(query=Candle)']
 		: ['{"tool":"recall","query":"salt"}', '{"tool":"observe","expr":"others"}'];
@@ -242,8 +242,8 @@ describe('prompt snapshots', () => {
 	for (const [format, style] of [['text', 'full'], ['json', 'full'], ['schema', 'full'], ['schema', 'compact']] as const) {
 		it(`a character with everything on, ${format} ${style}`, async () => {
 			const sent = new Sent();
-			await playScenario(MARKET, scriptedModel(format, style, marketReplies(format), sent));
-			matchesSnapshot(`market-${format}-${style}`, String(sent));
+			await playScenario(MARKETPLACE, scriptedModel(format, style, marketplaceReplies(format), sent));
+			matchesSnapshot(`marketplace-${format}-${style}`, String(sent));
 		});
 	}
 

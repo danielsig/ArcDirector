@@ -58,6 +58,8 @@ const DEFAULT = {
 	fpsCounter: false,
 	/** Dots over the head of a mind thinking. Apart from the minds at work below, which it outlasts. */
 	thinkingBubbles: true,
+	/** The card beside a character the player points at (`Scene.inspect`). Apart from the minds at work below. */
+	characterTooltips: true,
 	/** Everything below at once; each keeps its own setting while this is off. */
 	mindVisuals: true,
 	/** A slate by a thinking mind's head, writing its Arc as the model does. */
@@ -101,7 +103,7 @@ const DEFAULT = {
 
 export type Prefs = typeof DEFAULT;
 
-type PrefsWatch = (next:Prefs, prev:Prefs)=>void;
+type PrefsWatch = (next:Readonly<Prefs>, prev:Readonly<Prefs>)=>void;
 
 /** How each field is read from untrusted input. `fallback` is the value kept when `v` is unusable. */
 const FIELDS:{ [K in keyof Prefs]:(v:unknown, fallback:Prefs[K])=>Prefs[K] } = {
@@ -111,6 +113,7 @@ const FIELDS:{ [K in keyof Prefs]:(v:unknown, fallback:Prefs[K])=>Prefs[K] } = {
 	shadows: (v, fallback) => SHADOW_QUALITIES.find((q) => q === v) ?? fallback,
 	fpsCounter: bool,
 	thinkingBubbles: bool,
+	characterTooltips: bool,
 	mindVisuals: bool,
 	arcSlates: bool,
 	orderArcs: bool,
@@ -140,7 +143,7 @@ const FIELDS:{ [K in keyof Prefs]:(v:unknown, fallback:Prefs[K])=>Prefs[K] } = {
 	aiLogFull: bool,
 };
 
-let live:Prefs | null = null;
+let live:Readonly<Prefs> | null = null;
 /** This page no longer writes prefs to storage, so test pages can differ. Cleared by a reload. */
 let detached = false;
 const watches = new Set<PrefsWatch>();
@@ -178,11 +181,9 @@ function loadStored():Prefs {
 	}
 }
 
-export function prefs():Prefs {
-	if (!live) {
-		live = loadStored();
-	}
-	return { ...live };
+/** The prefs now. Never changed in place: `setPrefs` puts a new object in its stead. */
+export function prefs():Readonly<Prefs> {
+	return live ??= loadStored();
 }
 
 export function prefsDetached():boolean {
@@ -203,7 +204,7 @@ export function watchPrefs(fn:PrefsWatch):()=>void {
 }
 
 /** `persist: false` detaches this page: from then on no pref change here reaches storage. */
-export function setPrefs(patch:Partial<Prefs>, persist = true):Prefs {
+export function setPrefs(patch:Partial<Prefs>, persist = true):Readonly<Prefs> {
 	const prev = prefs();
 	if (!persist) {
 		detached = true;
@@ -214,9 +215,9 @@ export function setPrefs(patch:Partial<Prefs>, persist = true):Prefs {
 		lsSet(KEY, JSON.stringify(next));
 	}
 	for (const fn of watches) {
-		fn({ ...next }, prev);
+		fn(next, prev);
 	}
-	return { ...next };
+	return next;
 }
 
 /** URL query wins when present; otherwise the stored player mode (default observer) and ai (default on). */
@@ -232,12 +233,12 @@ export function flagsFromURL(url:{ player?:PlayerMode; ai?:boolean }):Pick<Prefs
  * Music at zero volume is music off. Turning it up turns it on; turning it to zero turns it off and keeps `restore`
  * (the volume before the slider went down) for turning it back on.
  */
-export function setMusicVolume(music:number, restore:number):Prefs {
+export function setMusicVolume(music:number, restore:number):Readonly<Prefs> {
 	return setPrefs(music > 0 ? { music, musicMuted: false } : { music: restore, musicMuted: true });
 }
 
 /** Music on or off, with `patch`. Turned on at zero volume, it comes back at half. */
-export function setMusicMuted(musicMuted:boolean, patch:Partial<Prefs> = {}):Prefs {
+export function setMusicMuted(musicMuted:boolean, patch:Partial<Prefs> = {}):Readonly<Prefs> {
 	const silent = !musicMuted && prefs().music === 0;
 	return setPrefs({ ...patch, musicMuted, ...(silent ? { music: MUSIC_ON_VOLUME } : {}) });
 }

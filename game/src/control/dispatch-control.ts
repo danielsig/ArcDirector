@@ -1,12 +1,13 @@
 import { Time } from '@arc-director/kindling';
 import { formatArc, parseArc, showNamingText, type ArcResult } from 'arc-director';
-import { filterAiLog, type AiLogQuery, type AiLogRow, type CastRows, type Command, type ReconnectResult } from '@arc-director/control';
+import { filterAiLog, type AiLogQuery, type AiLogRow, type CastRows, type CharacterRow, type Command, type ReconnectResult } from '@arc-director/control';
 import type { Session } from '../engine/Session';
 import { coercePrefsPatch, prefs, setPrefs } from '../prefs';
 import { PlayerPilot } from '../characters/PlayerPilot';
 import { findObject } from '../director/names';
 import { aiLogRow } from '../director/ai-log-sink';
 import { CameraFocus } from '../engine/CameraFocus';
+import { FollowCamera } from '../engine/components';
 
 export async function dispatchControl(session:Session, command:Command):Promise<unknown> {
 	switch (command.op) {
@@ -25,41 +26,52 @@ export async function dispatchControl(session:Session, command:Command):Promise<
 		case 'readAiLog':
 			return { entries: logEntries(session, command) };
 		case 'renderStats':
-			return { scene: session.scene.id, ...session.hudView.getRenderer()?.stats(), ...session.gameObject.world?.perf.stats() };
+			return { scene: session.scene.id, ...session.gameObject.world?.renderer?.stats(), ...session.gameObject.world?.perf.stats() };
 		case 'saveGame': {
-			const save = session.save();
+			const save = session.slot.save();
 			if (!save) {
 				throw new Error('Save failed');
 			}
 			return { savedUTC: save.savedUTC };
 		}
 		case 'loadGame': {
-			if (!session.load()) {
+			if (!session.reboot('save')) {
 				throw new Error('No save');
 			}
 			const reconnect:ReconnectResult = { reconnect: true };
 			return reconnect;
 		}
 		case 'setCamera':
-			return setCamera(session, command.focus, command.zoom);
+			return setCamera(session, command);
 		default:
 			throw new Error('unknown command');
 	}
 }
 
-/** Sets what the camera follows and how far back it sits; answers whom the focus picks now. */
-function setCamera(session:Session, focus?:string, zoom?:number):{ focus:string; picks:string[] | { error:string } } {
+/** Puts the camera at `view`, sets what it follows and how far back it sits; answers whom the focus picks now. */
+function setCamera(session:Session, { focus, zoom, view }:Extract<Command, { op:'setCamera' }>):{ focus:string; picks:string[] | { error:string } } {
 	const camera = session.gameObject.getComponent(CameraFocus);
 	if (!camera) {
 		throw new Error('no camera focus in this scene');
 	}
+	if (view) {
+		// The call boot makes for `?view=`. A focus left on would glide the rig off it again.
+		session.pose.snapTo(view);
+		camera.expr = '';
+	}
 	if (focus !== undefined) {
 		camera.expr = focus.trim();
 	}
-	if (zoom !== undefined) {
-		camera.zoom = zoom;
+	const rig = session.gameObject.world?.findByID('MainCamera')?.getComponent(FollowCamera);
+	if (rig && zoom !== undefined) {
+		rig.distance = zoom;
 	}
 	return { focus: camera.expr, picks: camera.expr ? camera.picks() : [] };
+}
+
+/** Who thinks for `character`: its collective, its own mind, or no one. */
+function mindKind(character:{ collective:object | null; mind:object | null }):CharacterRow['mind'] {
+	return character.collective ? 'collective' : character.mind ? 'own' : 'none';
 }
 
 function listCharacters(session:Session):CastRows {
@@ -72,7 +84,7 @@ function listCharacters(session:Session):CastRows {
 			const pos = findObject(session.director.world, character.id)?.transform.position;
 			return {
 				id: character.id,
-				mind: collective ? 'collective' : character.mind ? 'own' : 'none',
+				mind: mindKind(character),
 				collective: collective?.id,
 				tags: tags.length > 0 ? tags : undefined,
 				arc: character.arc ? formatArc(character.arc) : undefined,
@@ -123,7 +135,7 @@ function setCollective(session:Session, id:string, to:string | null):unknown {
 	return {
 		character: character.id,
 		collective: character.collective?.id ?? null,
-		mind: character.collective ? 'collective' : character.mind ? 'own' : 'none',
+		mind: mindKind(character),
 	};
 }
 

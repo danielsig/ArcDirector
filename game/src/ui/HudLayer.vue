@@ -21,6 +21,7 @@ import HudToast from './HudToast.vue';
 import HudStats from './HudStats.vue';
 import HudFPS from './HudFPS.vue';
 import HudKeyHints from './HudKeyHints.vue';
+import { usePrefs } from './use-prefs';
 
 defineProps<{
 	hud:HudModel;
@@ -30,18 +31,20 @@ defineProps<{
 const emit = defineEmits<{
 	scenes: [];
 }>();
+
+const live = usePrefs();
 </script>
 
 <template>
 	<div class="hud-layer">
 		<HudSpeech :hud="hud" />
 		<HudSlates :hud="hud" />
-		<HudHearts v-if="hud.player === 'participant'" :hud="hud" />
+		<HudHearts v-if="live.player === 'participant'" :hud="hud" />
 		<HudGoals :hud="hud" />
 		<HudInspect :hud="hud" />
-		<HudCounts v-if="hud.player === 'participant'" :hud="hud" />
+		<HudCounts v-if="live.player === 'participant'" :hud="hud" />
 		<HudInventory :hud="hud" />
-		<HudTouch v-if="hud.touch && hud.player !== 'camera' && !hud.menuOpen" :hud="hud" />
+		<HudTouch v-if="hud.touch && live.player !== 'camera' && !hud.menuOpen" :hud="hud" />
 		<HudMessage :hud="hud" />
 		<HudModelName :hud="hud" />
 		<HudChat :hud="hud" />

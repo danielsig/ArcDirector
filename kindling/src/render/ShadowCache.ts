@@ -33,7 +33,7 @@ export type ShadowSettings = {
  * casters, and a dark helper light the cache adds beside it (which casts but gives no light) keeps the moving
  * casters' map; outside its own area a map reads as unshadowed, so together they shadow the sun as one map would.
  */
-THREE.ShaderChunk.lights_fragment_begin = THREE.ShaderChunk.lights_fragment_begin
+const sunShadowed = THREE.ShaderChunk.lights_fragment_begin
 	.replace('#if ( NUM_DIR_LIGHTS > 0 ) && defined( RE_Direct )', `#if defined( USE_SHADOWMAP ) && NUM_DIR_LIGHT_SHADOWS > 0
 	float sunShadow = 1.0;
 	DirectionalLightShadow sunPart;
@@ -50,6 +50,12 @@ THREE.ShaderChunk.lights_fragment_begin = THREE.ShaderChunk.lights_fragment_begi
 		'directLight.color *= ( directLight.visible && receiveShadow ) ? getShadow( directionalShadowMap[ i ], directionalLightShadow.shadowMapSize, directionalLightShadow.shadowIntensity, directionalLightShadow.shadowBias, directionalLightShadow.shadowRadius, vDirectionalShadowCoord[ i ] ) : 1.0;',
 		'directLight.color *= directLight.visible ? sunShadow : 1.0;',
 	);
+// A dark point light (a spare, or a lamp turned all the way down) costs one branch, not its light and shadow.
+const darkPointsSkipped = sunShadowed.replace(/(pointLight = pointLights\[ i \];)([\s\S]*?RE_Direct\([^;]*;)/, '$1\n\t\tif ( pointLight.color != vec3( 0.0 ) ) {$2\n\t\t}');
+if (darkPointsSkipped === sunShadowed) {
+	throw new Error('ShadowCache: three.js lights_fragment_begin changed');
+}
+THREE.ShaderChunk.lights_fragment_begin = darkPointsSkipped;
 
 /** How far below and above the ground the mover map reaches, in meters. */
 const MOVER_DEPTH = { below: 3, above: 12 };
@@ -76,6 +82,11 @@ const MOVING_LAYER = 31;
 const SUN_DIR = new THREE.Vector3(12, 24, 8).normalize();
 /** Meters nearer another lamp must be before it takes a casting lamp's place. */
 const LAMP_STAY = 3;
+/**
+ * Dark point lights kept beyond the most the scene has had. Each costs a branch in every lit pixel and a little shader
+ * compile time, and spares a recompile when a lamp is lit.
+ */
+const SPARE_LIGHTS = 2;
 /** Meters a lamp moves before its still map bakes again. */
 const LAMP_MOVED = 0.1;
 /** Meters of slack around the still scene in the sun's map. */
@@ -442,15 +453,18 @@ export class ShadowCache {
 	}
 
 	/**
-	 * Keeps the scene's point lights at the most it has had (`points` real ones now), and its shadowed point lights at
-	 * the most it has had up to `limit` (`casting` real ones now), with spare dark lights far below the world: three
-	 * compiles every lit shader for these counts, so a count that drops and rises again freezes the game while it
-	 * recompiles. A spare that casts bakes its empty map once.
+	 * Keeps the scene's point lights at the most it has had (`points` real ones now) and {@link SPARE_LIGHTS} more, and
+	 * its shadowed point lights at the most it has had up to `limit` (`casting` real ones now), with spare dark lights
+	 * far below the world: three compiles every lit shader for these counts, so a count that changes freezes the game
+	 * while it recompiles (seconds on a laptop). The spares ahead let a torch be lit, or a fire catch, without it. A
+	 * spare that casts bakes its empty map once.
 	 */
 	private padLights(scene:THREE.Scene, points:number, casting:number, limit:number, frame:number, bake:ShadowLight[]):void {
 		this._shadowHigh = Math.min(limit, Math.max(this._shadowHigh, casting));
 		const shadowPad = this._shadowHigh - casting;
-		this._pointHigh = Math.max(this._pointHigh, points + shadowPad);
+		if (points + shadowPad > this._pointHigh) {
+			this._pointHigh = points + shadowPad + SPARE_LIGHTS;
+		}
 		const spares = this._pointHigh - points;
 		while (this._spares.length < spares) {
 			const spare = new THREE.PointLight(0x000000, 0, 1);

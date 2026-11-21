@@ -79,6 +79,8 @@ try {
 	const { sessionId } = await send('Target.attachToTarget', { targetId, flatten: true });
 	await send('Emulation.setDeviceMetricsOverride', { width: Number(w), height: Number(h), deviceScaleFactor: 1, mobile: false }, sessionId);
 	await send('Runtime.enable', {}, sessionId);
+	// Pointer lock in a headless page on Windows traps the real cursor in its hidden window: never let a page take it.
+	await send('Page.addScriptToEvaluateOnNewDocument', { source: 'Element.prototype.requestPointerLock = function () { return Promise.resolve(); };' }, sessionId);
 	await send('Page.navigate', { url }, sessionId);
 	const deadline = Date.now() + 60000;
 	if (process.env.WAIT) {

@@ -1,9 +1,11 @@
-import type { XZ, ChunkCoord } from '@arc-director/kindling';
+import type { Component, XZ, ChunkCoord } from '@arc-director/kindling';
+import type { BesideProp } from '../kit/props/dressing-plan';
 import { CHUNK_SIZE } from './constants';
 import { DemoChunk, type ChunkEntity, type Tile } from './demo-chunk';
+import { TERRAIN, type TerrainDef } from './terrain-kinds';
 
 export type TerrainLegend = {
-	def:string;
+	def:TerrainDef;
 	height:number;
 	blocked?:boolean;
 	flow?:XZ;
@@ -19,7 +21,10 @@ export type EntityLegend = {
 	/** Which side a locked door cannot be opened from without its key: see `Lock.lockedFrom`. Both when unset. */
 	lockedFrom?:'both' | 'outside';
 	open?:boolean;
-	exit?:boolean;
+	/** What it works, by id: a lever's bridge. */
+	works?:string;
+	/** Components its object gets besides its kind's own (a marketplace gate's `MarketplaceGate`). */
+	components?:(new ()=>Component)[];
 	/** A door's house: what its roof is made of. Thatch when unset. */
 	roof?:RoofStyle;
 	/** A door's house: `false` for no chimney. Houses 5 m wide or more have one when unset. */
@@ -30,12 +35,18 @@ export type EntityLegend = {
 	offset?:{ x:number; z:number, y?:number };
 	/** A rock in water: how its ripples trail. Omitted, the current draws them, or in still water they spread all round. */
 	wake?:Wake;
-	/** Props set on top of a prop glyph (a plate on a table), at its `PROP_TOP` height. */
+	/** Props set on top of a prop glyph (a plate on a table), at its `PROP_TOP` height; the wares (mesh ids) on a stall's counter. */
 	on?:string[];
+	/** Props standing beside a stall, never in front of it where customers stand. */
+	beside?:BesideProp[];
 	/** What reading or examining it says (an inscription). */
 	text?:string;
 	/** What a chest holds. */
 	contents?:LootSpec[];
+	/** An item lying about: how many. One when unset. */
+	count?:number;
+	/** An item lying about where it grows: tagged `wild` until picked, for the scene's rules. */
+	wild?:boolean;
 };
 
 /**
@@ -62,11 +73,11 @@ function isEntity(spec:TerrainLegend | EntityLegend):spec is EntityLegend {
 	return 'kind' in spec && spec.kind === 'entity';
 }
 
-const impliedFloor:Tile = {
-	def: 'floor',
-	height: 0,
-	blocked: false,
-};
+/** A legend's tile as decoded: its def's kind copied on, blocked by default when it is a block (no deck). */
+function tileOf(spec:TerrainLegend):Tile {
+	const { surface, deck, wade, climb } = TERRAIN[spec.def];
+	return { def: spec.def, height: spec.height, flow: spec.flow, surface, deck, wade, climb, blocked: spec.blocked ?? deck === undefined };
+}
 
 export type DecodedChunk = {
 	chunk:DemoChunk;
@@ -97,53 +108,18 @@ export function decodeGlyphChunk(file:ChunkFile):DecodedChunk {
 				throw new Error(`chunk ${file.id}: unknown glyph '${glyph}' at ${localX},${localZ}`);
 			}
 			if (isEntity(spec)) {
-				const overGlyph = spec.over ?? '.';
-				const overSpec = file.legend[overGlyph];
-				if (overSpec && !isEntity(overSpec)) {
-					tiles.push({
-						def: overSpec.def,
-						height: overSpec.height,
-						blocked: overSpec.blocked ?? overSpec.def === 'wall',
-						flow: overSpec.flow,
-					});
-				}
-				else {
-					tiles.push({ ...impliedFloor });
-				}
+				const { kind, over = '.', ...legend } = spec;
+				const overSpec = file.legend[over];
+				tiles.push(tileOf(overSpec && !isEntity(overSpec) ? overSpec : { def: 'floor', height: 0 }));
 				if (spec.def === 'player_start') {
 					playerStart = chunk.worldCellCenter(localX, localZ);
 				}
 				else {
-					entities.push({
-						def: spec.def,
-						localX,
-						localZ,
-						glyph,
-						axis: spec.axis,
-						name: file.names?.[glyph],
-						keyID: spec.keyID,
-						locked: spec.locked,
-						lockedFrom: spec.lockedFrom,
-						open: spec.open,
-						exit: spec.exit,
-						roof: spec.roof,
-						chimney: spec.chimney,
-						yaw: spec.yaw,
-						offset: spec.offset,
-						wake: spec.wake,
-						on: spec.on,
-						text: spec.text,
-						contents: spec.contents,
-					});
+					entities.push({ ...legend, localX, localZ, glyph, name: file.names?.[glyph] });
 				}
 			}
 			else {
-				tiles.push({
-					def: spec.def,
-					height: spec.height,
-					blocked: spec.blocked ?? spec.def === 'wall',
-					flow: spec.flow,
-				});
+				tiles.push(tileOf(spec));
 			}
 		}
 	}
@@ -182,13 +158,4 @@ export function splitGlyphMap(
 
 function chunkName(prefix:string, cx:number, cz:number):string {
 	return `${prefix}_${cx}_${cz}`;
-}
-
-/** Where map cell `x`, `z` of a {@link splitGlyphMap} map lands: for an NPC spawn. */
-export function mapCell(prefix:string, x:number, z:number):{ chunkID:string; localX:number; localZ:number } {
-	return {
-		chunkID: chunkName(prefix, Math.floor(x / CHUNK_SIZE), Math.floor(z / CHUNK_SIZE)),
-		localX: x % CHUNK_SIZE,
-		localZ: z % CHUNK_SIZE,
-	};
 }

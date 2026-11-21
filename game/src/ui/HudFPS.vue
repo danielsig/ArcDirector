@@ -1,13 +1,16 @@
 <script setup lang="ts">
 import type { HudModel } from './hud-model';
+import { usePrefs } from './use-prefs';
 
 defineProps<{
 	hud:HudModel;
 }>();
+
+const live = usePrefs();
 </script>
 
 <template>
-	<div v-if="hud.fpsCounter" class="hud-fps">{{ hud.fps }} FPS</div>
+	<div v-if="live.fpsCounter" class="hud-fps">{{ hud.fps }} FPS</div>
 </template>
 
 <style scoped>

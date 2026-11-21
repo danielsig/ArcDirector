@@ -1,8 +1,8 @@
 import * as THREE from 'three';
-import { hash, distanceXZ, type Bounds, type XZ } from '@arc-director/kindling';
+import { distanceXZ, type Bounds, type XZ } from '@arc-director/kindling';
 import { CELL_SIZE } from '../world/constants';
-import { CLIFF_TILE, GRASS_UV_REP, GRASS_Y } from './nature';
-import type { Flow } from './water-flow';
+import { CLIFF_TILE, GRASS_UV_REP } from './nature';
+import { GRASS_Y } from '../world/terrain-kinds';
 
 /** Flat ground and water sheets, built triangle by triangle (with water's `flow` and `shore` attributes). */
 
@@ -28,9 +28,9 @@ export function pushYTri(
 	cz:number,
 	y:Height,
 	rep:number,
-	fa?:Flow,
-	fb?:Flow,
-	fc?:Flow,
+	fa?:XZ,
+	fb?:XZ,
+	fc?:XZ,
 	sa?:number,
 	sb?:number,
 	sc?:number,
@@ -60,13 +60,13 @@ export function pushYPoly(
 	pts:XZ[],
 	y:Height,
 	rep:number,
-	flowAt?:(x:number, z:number)=>Flow,
+	flowAt?:(x:number, z:number)=>XZ,
 	shoreAt?:(x:number, z:number)=>number,
 ):void {
 	if (pts.length < 3) {
 		return;
 	}
-	const at = (x:number, z:number):Flow | undefined => flowAt?.(x, z);
+	const at = (x:number, z:number):XZ | undefined => flowAt?.(x, z);
 	const sh = (x:number, z:number):number | undefined => shoreAt?.(x, z);
 	const cx = pts.reduce((s, p) => s + p.x, 0) / pts.length;
 	const cz = pts.reduce((s, p) => s + p.z, 0) / pts.length;
@@ -242,7 +242,7 @@ export function bankUV(buf:YBuf, from:number, tile:number, wetAt:(x:number, z:nu
  * `land` says what is not water, so the banks get their edge line wherever the box meets it. Half-meter quads across
  * the box, so a narrow river is deep between its banks; longer ones down a long box.
  */
-export function pushWaterBox(lower:YBuf, upper:YBuf, box:Bounds, bedY:number, linesY:number, flow:Flow, land:(x:number, z:number)=>boolean):void {
+export function pushWaterBox(lower:YBuf, upper:YBuf, box:Bounds, bedY:number, linesY:number, flow:XZ, land:(x:number, z:number)=>boolean):void {
 	const shore = (x:number, z:number):number => [[-0.3, -0.3], [0.3, -0.3], [-0.3, 0.3], [0.3, 0.3]]
 		.filter(([dx, dz]) => land(x + dx!, z + dz!)).length / 4;
 	const quads = (span:number):number => Math.max(1, Math.round(span / (span > 4 ? 2 : 0.5)));

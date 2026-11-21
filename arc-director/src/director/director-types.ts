@@ -3,6 +3,7 @@ import type { STOCK_VERB_DEFS, VerbArgMap } from '../arc/stock-verbs.js';
 import type { Arc, StepArg } from '../arc/arc-types.js';
 import type { STOCK_COLLECTIVE_VERB_DEFS } from '../collective/collective-verbs.js';
 import type { Character } from '../character/Character.js';
+import type { NamingText } from '../character/text-with-ids.js';
 import type { NameTarget } from '../character/NameBook.js';
 import type { PersonaSpec } from '../character/Persona.js';
 import type { Goal, KitSource } from '../character/character-types.js';
@@ -64,6 +65,13 @@ export type CharacterSpec<TCtx = unknown> = RunnerSpec<TCtx> & {
 	servingSpot?:ServingSpot;
 };
 
+/**
+ * What doing `verb` needs of whoever does it: other fields are its args, matched by id or tag; `condition` a watch on
+ * `me`, the doer; `reason` what it is told while that fails (else `needs <condition>`), ids in its own names. Gemma 4
+ * E4B writes `{ [reason]: { 'use.item': 'Sushi', condition } }` better (72/72 to 58, 2026-11-20): kept for Skaldic Edda.
+ */
+export type Requirement = { verb:string; condition:string; reason?:NamingText; [arg:string]:NamingText | undefined };
+
 /** A character spec's `choose`: `{ goal, until?, choices: { hold: 'go_to(EastGate) && wait()', … } }`. */
 export type StandingChoice = {
 	goal:string;
@@ -78,7 +86,7 @@ export type CollectiveSpec<TCtx = unknown> = RunnerSpec<TCtx> & {
 	mind?:MindSettings;
 	/** Its characters. Each runs steps with its own kit, or the director's default. */
 	characters?:CharacterSpec<TCtx>[];
-	/** The character the mind acts through. Omit for a collective without one, like a market hive. */
+	/** The character the mind acts through. Omit for a collective without one, like a marketplace hive. */
 	commander?:string;
 	/** Most units one `command` may address at once. Unset to allow command to address all units. */
 	maxUnitsPerCommand?:number;

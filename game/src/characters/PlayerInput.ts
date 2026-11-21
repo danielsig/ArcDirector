@@ -1,21 +1,25 @@
 import { MOUSE_LEFT, TOUCH_TAP, Time, yawToForward, yawToward, Component, type GameObject, type XZ } from '@arc-director/kindling';
 import * as THREE from 'three';
-import { showNamingText } from 'arc-director';
-import { Camera, Chest, Door, Furniture, Guard, HumanBody, Appearance, Named, Vitals, type BodySlot } from '../engine/components';
+import { pascalCase } from 'arc-director';
+import { FollowCamera, Guard, HumanBody, Appearance, Named, Vitals, idOf } from '../engine/components';
 import { attackFor } from '../director/fight';
-import { inReach, strikeWith, useItem } from '../items/use';
+import { inReach, strikeWith } from '../items/use';
 import { CharacterAnimation } from './CharacterAnimation';
 import { CharacterPose } from './CharacterPose';
 import { Order } from '../engine/order';
 import { aimAlong, aimTarget } from './aim';
 import { carryBags, slotItem } from '../items/inventory';
-import type { ItemInstance } from '../items/instance';
+import { itemID, type ItemInstance } from '../items/instance';
 import { itemInHeldSlot, swapHeldHands, toggleHeld } from '../items/equip';
-import { dropItem, interactChest, interactDoor, nearestPickup, pickup } from '../items/pickup';
+import { nearestPickup } from '../items/pickup';
 import { PlayerPilot } from './PlayerPilot';
 import { Reading } from './Reading';
-import { occupantName, overWater, Seated } from './Seated';
+import { overWater, Seated } from './Seated';
 import { examineWorld } from '../director/perception';
+import { Chest, interactChest } from '../kit/chests/chest';
+import { Door, interactDoor } from '../kit/door/door';
+import { Furniture, occupantNames } from '../kit/furniture/furniture';
+import { nameList } from '../director/names';
 
 const YAW_SENS = 0.0024;
 /** A held guard: renewed this far ahead each frame Shift is down; the pose holds it up this long at most. */
@@ -46,7 +50,7 @@ export class PlayerInput extends Component {
 			this.moveZ = 0;
 			return;
 		}
-		const cam = world.findByID('MainCamera')?.getComponent(Camera);
+		const cam = world.findByID('MainCamera')?.getComponent(FollowCamera);
 		if (world.sayOpen) {
 			this.moveX = 0;
 			this.moveZ = 0;
@@ -143,8 +147,7 @@ export class PlayerInput extends Component {
 		else if (clicked) {
 			const item = this.activeItem();
 			if (item) {
-				const result = useItem(this.gameObject, item, aimed);
-				world.setMessage(showNamingText(result.reason));
+				this.act(`use(item=${itemID(item)}${aimed ? `, target=${idOf(aimed)}` : ''})`);
 			}
 			else if (aimed?.getComponent(Door)) {
 				world.setMessage(interactDoor(this.gameObject, aimed));
@@ -165,14 +168,16 @@ export class PlayerInput extends Component {
 			world.setMessage(swapHeldHands(this.gameObject));
 		}
 
-		if (input.pressed('KeyG')) {
-			const item = this.activeItem();
-			if (item) {
-				this.takeActive();
-				dropItem(this.gameObject, item);
-				world.setMessage(`dropped ${item.name}`);
-			}
+		const dropped = input.pressed('KeyG') && this.activeItem();
+		if (dropped) {
+			this.act(`drop(item=${itemID(dropped)})`);
 		}
+	}
+
+	/** Does `arc` as the player's own steps, by the rules every character keeps, and says what came of it. */
+	private act(arc:string):void {
+		const world = this.gameObject.world;
+		void world?.enact(arc).then((result) => world.setMessage(result.reason ?? result.status), (err:Error) => world.setMessage(err.message));
 	}
 
 	/**
@@ -190,13 +195,7 @@ export class PlayerInput extends Component {
 			seated.stand();
 		}
 		else if (loot) {
-			const lootName = loot.getComponent(Named)?.id ?? loot.name;
-			const msg = pickup(this.gameObject, loot);
-			world.setMessage(msg);
-			if (msg.startsWith('picked up') || msg.startsWith('equipped')) {
-				this.gameObject.getComponent(Appearance)?.playClip('take', Time.time, loot);
-				world.pickedUp(this.gameObject, lootName);
-			}
+			this.act(`pick_up(item=${pascalCase(idOf(loot))})`);
 		}
 		else if (aimed?.getComponent(Chest)) {
 			const msg = interactChest(this.gameObject, aimed);
@@ -225,9 +224,9 @@ export class PlayerInput extends Component {
 	/** Walks to beside `seat` and sits on it or lies down in it, as an NPC would, unless someone already has. With no director to walk it, it settles from where it stands. */
 	private restOn(seat:GameObject):void {
 		const world = this.gameObject.world;
-		const taken = occupantName(seat);
-		if (!world || taken) {
-			world?.setMessage(`${taken} is there`);
+		const on = occupantNames(seat);
+		if (!world || seat.getComponent(Furniture)!.placeFor(this.gameObject) < 0) {
+			world?.setMessage(`${nameList(on)} ${on.length > 1 ? 'are' : 'is'} there`);
 			return;
 		}
 		const verb = seat.getComponent(Furniture)?.kind === 'bed' ? 'sleep' : 'sit';
@@ -288,10 +287,10 @@ export class PlayerInput extends Component {
 		this.face(target);
 		if (!this._draw) {
 			this._draw = { t0: Time.time, released: false };
-			pose?.shoot(target, castTime, true);
+			pose?.bow.shoot(target, castTime, true);
 			return;
 		}
-		pose?.aimShot(target);
+		pose?.bow.aim(target);
 		this._draw.released ||= !held;
 		if (this._draw.released && Time.time >= this._draw.t0 + castTime) {
 			this._draw = null;
@@ -342,7 +341,7 @@ export class PlayerInput extends Component {
 		const p = this.gameObject.transform.position;
 		const x = p.x + forward.x * range;
 		const z = p.z + forward.z * range;
-		return new THREE.Vector3(x, this.gameObject.world?.sampleTerrain(x, z)?.worldY ?? p.y, z);
+		return new THREE.Vector3(x, this.gameObject.world?.terrain.sample(x, z)?.worldY ?? p.y, z);
 	}
 
 	/** Keeps the guard up while `up`, and lowers it when not. */
@@ -352,7 +351,7 @@ export class PlayerInput extends Component {
 		}
 		if (up !== this._guarding) {
 			this._guarding = up;
-			this.gameObject.getComponent(CharacterPose)?.guard(up ? GUARD_HELD : 0);
+			this.gameObject.getComponent(CharacterPose)?.sword.guard(up ? GUARD_HELD : 0);
 		}
 	}
 
@@ -397,28 +396,5 @@ export class PlayerInput extends Component {
 			return null;
 		}
 		return bar[this.selected % bar.length] ?? bar[0];
-	}
-
-	private takeActive():void {
-		const item = this.activeItem();
-		if (!item) {
-			return;
-		}
-		const body = this.gameObject.getComponent(HumanBody);
-		if (body) {
-			for (const slot of ['hands.left.held', 'hands.right.held'] as BodySlot[]) {
-				if (slotItem(body, slot) === item) {
-					body.slots[slot] = null;
-					return;
-				}
-			}
-		}
-		for (const bag of carryBags(this.gameObject)) {
-			const i = bag.contents.indexOf(item);
-			if (i >= 0) {
-				bag.contents.splice(i, 1);
-				return;
-			}
-		}
 	}
 }

@@ -1,13 +1,14 @@
 <script setup lang="ts">
-import { computed, inject, ref, watch } from 'vue';
-import { fmtMem, modelLabel, type HudModel, type MenuPage } from './hud-model';
+import { inject, ref, watch } from 'vue';
+import { fmtMem, type HudModel, type MenuPage } from './hud-model';
 import { sessionKey } from './session-key';
 import HudBench from './HudBench.vue';
 import HudDialog from './HudDialog.vue';
 import HudSwitch from './HudSwitch.vue';
 import InferencePicker from './InferencePicker.vue';
-import { HOSTED } from '../director/hosted';
-import { SKALDIC_LAYA, decisionChoice, inferenceSetup, listLMStudioModels, lmStudio, mainModelName, pickDecisionChoice, thinksWith } from '../director/inference';
+import MindMenu from './MindMenu.vue';
+import { usePref, usePrefs } from './use-prefs';
+import { inferenceSetup } from '../director/inference';
 import {
 	MAX_CONTEXT_LENGTH,
 	MAX_PARALLEL_THINKERS,
@@ -32,6 +33,10 @@ const emit = defineEmits<{
 }>();
 
 const session = inject(sessionKey);
+const live = usePrefs();
+const player = usePref('player');
+const shadows = usePref('shadows');
+const arcFormat = usePref('arcFormat');
 
 /** Where NPCs think, picked over the menu at the init screen's size. */
 const pickerOpen = ref(false);
@@ -70,35 +75,20 @@ function go(page:MenuPage):void {
 }
 
 function reset():void {
-	session?.value?.resetLocation();
+	session?.value?.pose.reset();
+	props.hud.menuNotice = 'Location reset';
 }
 
 function save():void {
-	session?.value?.save();
+	session?.value?.slot.save();
 }
 
 function load():void {
-	session?.value?.load();
-}
-
-function pickPlayer():void {
-	setPrefs({ player: props.hud.player });
-}
-
-function toggleArcDirector():void {
-	setPrefs({ ai: !props.hud.arcDirectorOn });
+	session?.value?.reboot('save');
 }
 
 function setMinimapFollow(follow:boolean):void {
-	props.hud.minimap.follow = follow;
-}
-
-function toggleDetailMaps():void {
-	setPrefs({ detailMaps: !props.hud.detailMaps });
-}
-
-function toggleFPSCounter():void {
-	setPrefs({ fpsCounter: !props.hud.fpsCounter });
+	props.hud.minimapFollow = follow;
 }
 
 /** What shows of minds at work, each with its own switch. */
@@ -110,24 +100,17 @@ const MIND_VISUALS = [
 	{ key: 'toolFx', name: 'Tool effects' },
 ] as const;
 
-function pickShadows():void {
-	setPrefs({ shadows: props.hud.shadows });
-}
-
-function pickModel():void {
-	session?.value?.applyModel();
-}
-
 function pickCharacter():void {
 	session?.value?.applyPlayerKind();
 }
 
 function nudgeParallel(delta:number):void {
-	session?.value?.setMaxParallel(props.hud.maxParallel + delta);
+	const next = setPrefs({ maxParallel: live.maxParallel + delta }).maxParallel;
+	props.hud.menuNotice = `${next} thinker${next === 1 ? '' : 's'}`;
 }
 
 function nudgeContext(delta:number):void {
-	session?.value?.setContextLength(nudgeContextLength(props.hud.contextLength, delta));
+	props.hud.menuNotice = `${contextLabel(setPrefs({ contextLength: nudgeContextLength(live.contextLength, delta) }).contextLength)} context`;
 }
 
 function onRange(ev:Event):number {
@@ -138,24 +121,14 @@ function onRange(ev:Event):number {
 let musicBefore = 0;
 
 function holdMusicVolume():void {
-	if (!props.hud.musicMuted) {
-		musicBefore = props.hud.musicVolume;
+	if (!live.musicMuted) {
+		musicBefore = live.music;
 	}
 }
 
-function toggleBatchThinks():void {
-	setPrefs({ batchThinks: !props.hud.batchThinks });
-}
-
 function nudgeThinking(delta:number):void {
-	setPrefs({ thinkingBudget: nudgeThinkingBudget(props.hud.thinkingBudget, delta) });
+	setPrefs({ thinkingBudget: nudgeThinkingBudget(live.thinkingBudget, delta) });
 }
-
-function pickArcFormat():void {
-	setPrefs({ arcFormat: props.hud.arcFormat });
-}
-
-const decision = computed(() => decisionChoice({ inference: inferenceSetup.inference, systemOne: props.hud.systemOne, decisionModel: props.hud.decisionModel }, props.hud.activeModel));
 
 function dumpNPCMaps():void {
 	void session?.value?.dumpNPCMaps();
@@ -282,9 +255,8 @@ function pct(n:number):string {
 							<label class="set">
 								<span class="name">Player</span>
 								<select
-									v-model="hud.player"
+									v-model="player"
 									title="Participant: NPCs notice you. Observer: they never do. Camera: no body at all, for screenshots"
-									@change.stop="pickPlayer"
 								>
 									<option value="participant">Participant</option>
 									<option value="observer">Observer</option>
@@ -304,14 +276,13 @@ function pct(n:number):string {
 						<template v-else-if="hud.menuPage === 'display'">
 							<div class="set">
 								<span class="name">Maps</span>
-								<HudSwitch :on="hud.detailMaps" @toggle="toggleDetailMaps" />
+								<HudSwitch :on="live.detailMaps" @toggle="setPrefs({ detailMaps: !live.detailMaps })" />
 							</div>
 							<label class="set">
 								<span class="name">Shadows</span>
 								<select
-									v-model="hud.shadows"
+									v-model="shadows"
 									title="Auto: picked from your graphics card, as the model suggestion is (never Off). Simple: baked scene shadows, soft capsules for characters. Low and High: realtime."
-									@change.stop="pickShadows"
 								>
 									<option value="auto">Auto</option>
 									<option value="off">Off</option>
@@ -322,23 +293,23 @@ function pct(n:number):string {
 							</label>
 							<div class="set">
 								<span class="name">FPS counter</span>
-								<HudSwitch :on="hud.fpsCounter" @toggle="toggleFPSCounter" />
+								<HudSwitch :on="live.fpsCounter" @toggle="setPrefs({ fpsCounter: !live.fpsCounter })" />
 							</div>
 							<div class="set">
 								<span class="name">Minimap</span>
 								<div class="seg" role="group" aria-label="Minimap">
 									<button
 										type="button"
-										:class="{ on: hud.minimap.follow }"
-										:aria-pressed="hud.minimap.follow"
+										:class="{ on: hud.minimapFollow }"
+										:aria-pressed="hud.minimapFollow"
 										@click.stop="setMinimapFollow(true)"
 									>
 										Follow
 									</button>
 									<button
 										type="button"
-										:class="{ on: !hud.minimap.follow }"
-										:aria-pressed="!hud.minimap.follow"
+										:class="{ on: !hud.minimapFollow }"
+										:aria-pressed="!hud.minimapFollow"
 										@click.stop="setMinimapFollow(false)"
 									>
 										Chunk
@@ -348,33 +319,37 @@ function pct(n:number):string {
 							<h3>Minds at work</h3>
 							<div class="set">
 								<span class="name">Thinking bubbles</span>
-								<HudSwitch :on="hud.thinkingBubbles" @toggle="setPrefs({ thinkingBubbles: !hud.thinkingBubbles })" />
+								<HudSwitch :on="live.thinkingBubbles" @toggle="setPrefs({ thinkingBubbles: !live.thinkingBubbles })" />
+								</div>
+								<div class="set">
+									<span class="name">Character tooltips</span>
+									<HudSwitch :on="live.characterTooltips" @toggle="setPrefs({ characterTooltips: !live.characterTooltips })" />
 							</div>
 							<div class="set">
 								<span class="name">Show all</span>
-								<HudSwitch :on="hud.mindVisuals" @toggle="setPrefs({ mindVisuals: !hud.mindVisuals })" />
+								<HudSwitch :on="live.mindVisuals" @toggle="setPrefs({ mindVisuals: !live.mindVisuals })" />
 							</div>
-							<div v-for="visual in MIND_VISUALS" :key="visual.key" class="set" :class="{ dim: !hud.mindVisuals }">
+							<div v-for="visual in MIND_VISUALS" :key="visual.key" class="set" :class="{ dim: !live.mindVisuals }">
 								<span class="name">{{ visual.name }}</span>
-								<HudSwitch :on="hud[visual.key]" @toggle="setPrefs({ [visual.key]: !hud[visual.key] })" />
+								<HudSwitch :on="live[visual.key]" @toggle="setPrefs({ [visual.key]: !live[visual.key] })" />
 							</div>
 						</template>
 						<template v-else-if="hud.menuPage === 'audio'">
 							<div class="set">
 								<span class="name">Mute</span>
-								<HudSwitch :on="hud.audioMuted" @toggle="setPrefs({ muted: !hud.audioMuted })" />
+								<HudSwitch :on="live.muted" @toggle="setPrefs({ muted: !live.muted })" />
 							</div>
-							<div class="set" :class="{ dim: hud.audioMuted }">
+							<div class="set" :class="{ dim: live.muted }">
 								<span class="name">Music</span>
-								<HudSwitch :on="!hud.musicMuted" @toggle="setMusicMuted(!hud.musicMuted)" />
+								<HudSwitch :on="!live.musicMuted" @toggle="setMusicMuted(!live.musicMuted)" />
 							</div>
-							<label class="set stack" :class="{ dim: hud.audioMuted || hud.musicMuted }">
+							<label class="set stack" :class="{ dim: live.muted || live.musicMuted }">
 								<span class="name">
 									Music volume
-									<span class="readout">{{ pct(hud.musicMuted ? 0 : hud.musicVolume) }}%</span>
+									<span class="readout">{{ pct(live.musicMuted ? 0 : live.music) }}%</span>
 								</span>
 								<input
-									:value="hud.musicMuted ? 0 : hud.musicVolume"
+									:value="live.musicMuted ? 0 : live.music"
 									type="range"
 									min="0"
 									max="1"
@@ -384,13 +359,13 @@ function pct(n:number):string {
 									@input="setMusicVolume(onRange($event), musicBefore)"
 								>
 							</label>
-							<label class="set stack" :class="{ dim: hud.audioMuted }">
+							<label class="set stack" :class="{ dim: live.muted }">
 								<span class="name">
 									SFX
-									<span class="readout">{{ pct(hud.sfxVolume) }}%</span>
+									<span class="readout">{{ pct(live.sfx) }}%</span>
 								</span>
 								<input
-									:value="hud.sfxVolume"
+									:value="live.sfx"
 									type="range"
 									min="0"
 									max="1"
@@ -398,69 +373,34 @@ function pct(n:number):string {
 									@input="setPrefs({ sfx: onRange($event) })"
 								>
 							</label>
-							<div class="set" :class="{ dim: hud.audioMuted }">
+							<div class="set" :class="{ dim: live.muted }">
 								<span class="name">Voices</span>
-								<HudSwitch :on="hud.voices" @toggle="setPrefs({ voices: !hud.voices })" />
+								<HudSwitch :on="live.voices" @toggle="setPrefs({ voices: !live.voices })" />
 							</div>
 						</template>
 						<template v-else>
-							<p v-if="hud.prefsDetached" class="readout">Prefs not saved (MCP)</p>
+							<p v-if="live.detached" class="readout">Prefs not saved (MCP)</p>
 							<h3>World</h3>
 							<div class="set">
 								<span class="name">Arc Director</span>
-								<HudSwitch :on="hud.arcDirectorOn" @toggle="toggleArcDirector" />
+								<HudSwitch :on="live.ai" @toggle="setPrefs({ ai: !live.ai })" />
 							</div>
 							<h3>Thinking</h3>
-							<div class="set">
-								<span class="name">Model</span>
-								<span class="thinks-with">
-									<span class="readout">{{ thinksWith(hud.activeModel) }}</span>
-									<button type="button" class="act" @click.stop="pickerOpen = true">Change</button>
-								</span>
-							</div>
-							<label v-if="inferenceSetup.inference === 'lmstudio'" class="set">
-								<span class="name">LM Studio model</span>
-								<select
-									v-model="hud.model"
-									@mousedown="listLMStudioModels()"
-									@change.stop="pickModel"
-								>
-									<option
-										v-if="lmStudio.models.length === 0 && !hud.model"
-										value=""
-										disabled
-									>
-										No models found
-									</option>
-									<option
-										v-if="hud.model && !lmStudio.models.some((m) => m.id === hud.model)"
-										:value="hud.model"
-									>
-										{{ hud.model }}
-									</option>
-									<option
-										v-for="m in lmStudio.models.filter((m) => !m.decision)"
-										:key="m.id"
-										:value="m.id"
-									>
-										{{ modelLabel(m) }}
-									</option>
-								</select>
-							</label>
+							<MindMenu :active="hud.activeModel" @change="pickerOpen = true" />
 							<div class="set">
 								<span class="name">Context window</span>
 								<div class="stepper">
 									<button
 										type="button"
-										:disabled="hud.contextLength <= MIN_CONTEXT_LENGTH"
+										:disabled="live.contextLength <= MIN_CONTEXT_LENGTH"
 										@click.stop="nudgeContext(-1)"
 									>
 										−
 									</button>
-									<span>{{ contextLabel(hud.contextLength) }}</span>
+									<span>{{ contextLabel(live.contextLength) }}</span>
 									<button
 										type="button"
-										:disabled="hud.contextLength >= MAX_CONTEXT_LENGTH"
+										:disabled="live.contextLength >= MAX_CONTEXT_LENGTH"
 										@click.stop="nudgeContext(1)"
 									>
 										+
@@ -470,10 +410,10 @@ function pct(n:number):string {
 							<label class="set stack">
 								<span class="name" title="How freely NPCs pick each word. 0 always takes the likeliest, which can repeat a thought forever. Gemma is made for 1 and Qwen for 0.6; past 1, replies get wild.">
 									Temperature
-									<span class="readout">{{ (temperatureDraft ?? hud.temperature).toFixed(2) }}</span>
+									<span class="readout">{{ (temperatureDraft ?? live.temperature).toFixed(2) }}</span>
 								</span>
 								<input
-									:value="temperatureDraft ?? hud.temperature"
+									:value="temperatureDraft ?? live.temperature"
 									type="range"
 									min="0"
 									max="2"
@@ -487,37 +427,36 @@ function pct(n:number):string {
 								<div class="stepper">
 									<button
 										type="button"
-										:disabled="hud.thinkingBudget === THINKING_BUDGETS[0]"
+										:disabled="live.thinkingBudget === THINKING_BUDGETS[0]"
 										@click.stop="nudgeThinking(-1)"
 									>
 										−
 									</button>
-									<span>{{ thinkingLabel(hud.thinkingBudget) }}</span>
+									<span>{{ thinkingLabel(live.thinkingBudget) }}</span>
 									<button
 										type="button"
-										:disabled="hud.thinkingBudget === THINKING_BUDGETS[THINKING_BUDGETS.length - 1]"
+										:disabled="live.thinkingBudget === THINKING_BUDGETS[THINKING_BUDGETS.length - 1]"
 										@click.stop="nudgeThinking(1)"
 									>
 										+
 									</button>
 								</div>
 							</div>
-							<p v-if="inferenceSetup.inference === 'lmstudio' && hud.thinkingBudget !== 0" class="tip">
+							<p v-if="inferenceSetup.inference === 'lmstudio' && live.thinkingBudget !== 0" class="tip">
 								Set LM Studio's own <i>Reasoning Budget</i> too (the model's settings, <i>Inference</i>), so thoughts end on their own instead of being cut off.
 							</p>
 							<label class="set">
 								<span class="name">Arc format</span>
 								<select
-									v-model="hud.arcFormat"
+									v-model="arcFormat"
 									title="How NPCs write their Arc: text, JSON, or JSON the server must follow (schema)"
-									@change.stop="pickArcFormat"
 								>
 									<option value="text">Text</option>
 									<option value="json">JSON</option>
 									<option value="schema">Schema</option>
 								</select>
 							</label>
-							<p v-if="hud.arcFormat !== 'schema'" class="tip">
+							<p v-if="live.arcFormat !== 'schema'" class="tip">
 								&ldquo;Schema&rdquo; is the recommended Arc format. It keeps NPCs from writing plans the game can't read, so they don't waste time correcting their mistakes.
 							</p>
 							<h3>Scheduling</h3>
@@ -526,55 +465,28 @@ function pct(n:number):string {
 								<div class="stepper">
 									<button
 										type="button"
-										:disabled="hud.maxParallel <= MIN_PARALLEL_THINKERS"
+										:disabled="live.maxParallel <= MIN_PARALLEL_THINKERS"
 										@click.stop="nudgeParallel(-1)"
 									>
 										−
 									</button>
-									<span>{{ hud.maxParallel }}</span>
+									<span>{{ live.maxParallel }}</span>
 									<button
 										type="button"
-										:disabled="hud.maxParallel >= MAX_PARALLEL_THINKERS[inferenceSetup.inference]"
+										:disabled="live.maxParallel >= MAX_PARALLEL_THINKERS[inferenceSetup.inference]"
 										@click.stop="nudgeParallel(1)"
 									>
 										+
 									</button>
 								</div>
 							</div>
-							<div class="set" :class="{ dim: hud.maxParallel <= 1 }">
-								<span class="name" :title="hud.maxParallel <= 1 ? 'Only matters with more than one parallel thinker' : 'Start NPCs’ thinks together once the model is free'">Wait for idle</span>
-								<HudSwitch :on="hud.batchThinks" :disabled="hud.maxParallel <= 1" @toggle="toggleBatchThinks" />
+							<div class="set" :class="{ dim: live.maxParallel <= 1 }">
+								<span class="name" :title="live.maxParallel <= 1 ? 'Only matters with more than one parallel thinker' : 'Start NPCs’ thinks together once the model is free'">Wait for idle</span>
+								<HudSwitch :on="live.batchThinks" :disabled="live.maxParallel <= 1" @toggle="setPrefs({ batchThinks: !live.batchThinks })" />
 							</div>
-							<p v-if="!hud.batchThinks && hud.maxParallel > 1" class="tip">
+							<p v-if="!live.batchThinks && live.maxParallel > 1" class="tip">
 								We recommend keeping this on. When it's off, NPCs pause their thinking every time a new NPC starts thinking.
 							</p>
-							<h3>System One</h3>
-							<label class="set">
-								<span class="name" title="The System One: what scores the choices of a choose, a hosted decision model or a model you run. Off keeps choose from NPCs.">Model</span>
-								<select
-									:value="decision"
-									@mousedown="listLMStudioModels()"
-									@change.stop="pickDecisionChoice(($event.target as HTMLSelectElement).value)"
-								>
-									<option value="off">Off</option>
-									<option v-if="HOSTED.jev" value="jev">Jev (hosted)</option>
-									<option value="model:">{{ mainModelName(hud.activeModel) || 'Main model' }}</option>
-									<option :value="`model:${SKALDIC_LAYA.model}`">
-										{{ SKALDIC_LAYA.label }} · in your browser{{ inferenceSetup.laya.cached ? '' : ` (download ${SKALDIC_LAYA.sizeGB} GB)` }}
-									</option>
-									<template v-if="inferenceSetup.inference === 'lmstudio'">
-										<option
-											v-if="decision !== 'model:' && decision.startsWith('model:') && !lmStudio.models.some((m) => `model:${m.id}` === decision)"
-											:value="decision"
-										>
-											{{ hud.decisionModel }}
-										</option>
-										<option v-for="m in lmStudio.models.filter((m) => m.id !== hud.activeModel)" :key="m.id" :value="`model:${m.id}`">
-											{{ modelLabel(m) }}
-										</option>
-									</template>
-								</select>
-							</label>
 							<h3>Benchmarks</h3>
 							<div class="set">
 								<span class="name">ArcDirector Bench</span>
@@ -601,27 +513,27 @@ function pct(n:number):string {
 								<tbody>
 									<tr>
 										<td>Context load</td>
-										<td>{{ fmtMs(hud.inferLastContextMs) }}</td>
-										<td>{{ fmtMs(avg(hud.inferContextMs, hud.inferContextKnown)) }}</td>
-										<td>{{ fmtMs(hud.inferContextKnown > 0 ? hud.inferContextMs : null) }}</td>
+										<td>{{ fmtMs(hud.infer.lastContextMs) }}</td>
+										<td>{{ fmtMs(avg(hud.infer.contextMs, hud.infer.contextKnown)) }}</td>
+										<td>{{ fmtMs(hud.infer.contextKnown > 0 ? hud.infer.contextMs : null) }}</td>
 									</tr>
 									<tr>
 										<td>Thinking</td>
-										<td>{{ fmtMs(hud.inferLastGenerateMs) }}</td>
-										<td>{{ fmtMs(avg(hud.inferGenerateMs, hud.inferCalls)) }}</td>
-										<td>{{ fmtMs(hud.inferCalls > 0 ? hud.inferGenerateMs : null) }}</td>
+										<td>{{ fmtMs(hud.infer.lastGenerateMs) }}</td>
+										<td>{{ fmtMs(avg(hud.infer.generateMs, hud.infer.calls)) }}</td>
+										<td>{{ fmtMs(hud.infer.calls > 0 ? hud.infer.generateMs : null) }}</td>
 									</tr>
 									<tr>
 										<td>Round trip</td>
-										<td>{{ fmtMs(hud.inferLastWallMs) }}</td>
-										<td>{{ fmtMs(avg(hud.inferWallMs, hud.inferCalls)) }}</td>
-										<td>{{ fmtMs(hud.inferCalls > 0 ? hud.inferWallMs : null) }}</td>
+										<td>{{ fmtMs(hud.infer.lastWallMs) }}</td>
+										<td>{{ fmtMs(avg(hud.infer.wallMs, hud.infer.calls)) }}</td>
+										<td>{{ fmtMs(hud.infer.calls > 0 ? hud.infer.wallMs : null) }}</td>
 									</tr>
 								</tbody>
 							</table>
 							<div class="stats-foot">
 								<span>Graphics memory {{ fmtMem(hud.renderStats.framebufferMemory + hud.renderStats.sceneMemory) }}</span>
-								<span>{{ hud.inferCalls }} call{{ hud.inferCalls === 1 ? '' : 's' }}</span>
+								<span>{{ hud.infer.calls }} call{{ hud.infer.calls === 1 ? '' : 's' }}</span>
 								<button type="button" class="act" @click.stop="resetInferStats">Reset</button>
 							</div>
 							<table v-if="hud.mindStats.length" class="stats">
@@ -1003,19 +915,6 @@ h3:first-child {
 	line-height: 1.35;
 	opacity: 0.75;
 	border-bottom: 1px solid var(--ink-soft);
-}
-
-.thinks-with {
-	display: flex;
-	align-items: center;
-	gap: 12px;
-	min-width: 0;
-}
-
-.thinks-with .readout {
-	overflow: hidden;
-	text-overflow: ellipsis;
-	white-space: nowrap;
 }
 
 .page-actions {

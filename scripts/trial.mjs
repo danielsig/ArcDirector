@@ -12,7 +12,8 @@
 //             request: `append` (a line at the end), `replace: [pattern, text]` (must match). Which message: `in`
 //             (its role, default system), `at` (the nth of that role, default 0, negative from the end), and in a
 //             message of parts, `part` (the nth text part, default 0). `verbs`: scene verbs added, so the parser and
-//             schema know them. Texts may be `(format) => text`.
+//             schema know them. `responseFormat`: a JSON schema every think request is held to instead of the
+//             library's, with no tools offered. Texts may be `(format) => text`.
 //   score     (run, task) => { name: count or boolean }: a task's own `score` wins. `run` holds `arc` (Arc text, block
 //             layout, or null), `steps` (the Arc), `valid` (an Arc with no repair), `reply` (the last reply text that
 //             carried no tool call, raw), `replies` (every think turn's text), `repairs` (the library's reasons),
@@ -187,7 +188,8 @@ async function think({ model, task, variant, format, s }) {
 		requests++;
 		turns += isTurn ? 1 : 0;
 		// A copy: the library adds the next turns to its own list.
-		const call = { thread: req.thread, think: isTurn, messages: [...messages], tools: req.tools?.map((t) => t.name), toolChoice: req.toolChoice, schema: !!req.responseFormat };
+		const forced = isTurn ? patches.find((p) => p.responseFormat)?.responseFormat : undefined;
+		const call = { thread: req.thread, think: isTurn, messages: [...messages], tools: forced ? undefined : req.tools?.map((t) => t.name), toolChoice: req.toolChoice, schema: !!(forced ?? req.responseFormat) };
 		run.calls.push(call);
 		const name = join(out, `prompt-${format}-${variant}-${task.id}.txt`);
 		if (isTurn && !dumped.has(name)) {
@@ -195,7 +197,7 @@ async function think({ model, task, variant, format, s }) {
 			writeFileSync(name, messages.map((m) => `===== ${m.role}\n${typeof m.content === 'string' ? m.content : JSON.stringify(m.content, null, '\t')}`).join('\n'));
 		}
 		const t0 = Date.now();
-		const res = await chat({ ...req, messages, onRequest: (sent) => {
+		const res = await chat({ ...req, messages, ...forced && { responseFormat: forced, tools: undefined, toolChoice: undefined }, onRequest: (sent) => {
 			Object.assign(call, { path: sent.path, settings: Object.fromEntries(Object.entries(sent.body).filter(([k]) => !BULK.has(k))) });
 			req.onRequest?.(sent);
 		} });

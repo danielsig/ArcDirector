@@ -1,10 +1,10 @@
-import { GameObject } from '@arc-director/kindling';
+import { GameObject, Rigidbody } from '@arc-director/kindling';
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { ArcDirector, showNamingText, type ArcResult } from 'arc-director';
 import { CharacterMotor } from '../characters/CharacterMotor';
 import { NPCInput } from '../characters/NPCInput';
-import { BoxCollider, HumanBody, Lock, Named, RigidBody } from '../engine/components';
+import { BoxCollider, HumanBody, Lock, Named, lockedReason, idOf } from '../engine/components';
 import { DemoWorld } from '../engine/demo-world';
 import { Container } from '../items/item-components';
 import { getDef } from '../items/defs';
@@ -14,8 +14,6 @@ import type { GameHost } from './adapter';
 import type { CharacterCtx } from './game-types';
 import { gameWorld } from './game-world';
 import { kernelsOf } from './kernels';
-import { idOf } from './names';
-import { lockedReason } from '../items/pickup';
 
 function body(world:DemoWorld, id:string, x:number):GameObject {
 	const go = new GameObject(id, 'Person');
@@ -23,14 +21,14 @@ function body(world:DemoWorld, id:string, x:number):GameObject {
 	go.addComponent(Named, { id });
 	go.addComponent(NPCInput);
 	go.addComponent(CharacterMotor);
-	go.addComponent(RigidBody, { kinematic: true });
+	go.addComponent(Rigidbody, { kinematic: true });
 	go.addComponent(BoxCollider, { size: { x: 0.45, y: 1.1, z: 0.45 }, pad: 0.36 });
 	go.addComponent(HumanBody, { pockets: go.addComponent(Container, { size: 8 }) });
 	world.add(go);
 	return go;
 }
 
-test('a market thief steals what it sees in reach on someone, by the library\'s default alone', async () => {
+test('a marketplace thief steals what it sees in reach on someone, by the library\'s default alone', async () => {
 	const world = new DemoWorld();
 	const thief = body(world, 'Thief', 0);
 	const bram = body(world, 'Bram', 1);
@@ -40,7 +38,7 @@ test('a market thief steals what it sees in reach on someone, by the library\'s 
 	assert.equal(geography.transfers!.canPickUp!(thief, 'Apple', bram), undefined, 'no rule of the game\'s on picking pockets');
 	const ctxOf = (id:string):CharacterCtx | undefined => {
 		const go = world.findNamed(id);
-		return go && { world, character: go, npc: go.getComponent(NPCInput)!, scene: 'marketplace' };
+		return go && { world, character: go, npc: go.getComponent(NPCInput)! };
 	};
 	const director = new ArcDirector<CharacterCtx, GameObject>()
 		.withVerbs((v) => v.addStock())

@@ -157,7 +157,7 @@ export class Mover {
 		}
 		return new Promise((done) => {
 			const now = this._now();
-			this._errands.set(characterID, {
+			const errand:Errand = {
 				verb,
 				dest,
 				opts,
@@ -171,7 +171,13 @@ export class Mover {
 				crowd: opts.crowd ?? ('target' in dest ? this._crowdOf(verb, dest.target) : 'none'),
 				toPlace: false,
 				done,
-			});
+			};
+			this._errands.set(characterID, errand);
+			// Its first step now, not at the next tick: one already in reach is there, whether ticks run or not.
+			const result = this.step(characterID, errand);
+			if (result !== undefined) {
+				this.stop(characterID, result);
+			}
 		});
 	}
 
@@ -224,17 +230,15 @@ export class Mover {
 		// In reach counts only in its turn, and with a place of its own, once there: else it stops wherever reach begins,
 		// on top of the last to get there. In reach before its first step, it stays put.
 		const settled = !place || e.plannedAt === -Infinity || distance(me, place.point) <= this._spacing() / 2;
-		if (!place?.waiting && settled) {
-			if (e.opts.check && now - e.checkedAt >= CHECK_EVERY) {
-				e.checkedAt = now;
-				const met = e.opts.check();
-				if (met !== undefined) {
-					return { status: 'ok', verb: e.verb, reason: met };
-				}
+		if (e.opts.check && now - e.checkedAt >= CHECK_EVERY) {
+			e.checkedAt = now;
+			const met = e.opts.check();
+			if (met !== undefined) {
+				return { status: 'ok', verb: e.verb, reason: met };
 			}
-			if (goal.reached(me)) {
-				return this.arrive(id, e, character, now);
-			}
+		}
+		if (!place?.waiting && settled && goal.reached(me)) {
+			return this.arrive(id, e, character, now);
 		}
 		if (e.front === 'stepping') {
 			return this.stepIn(id, e, character, me, dest!, now);

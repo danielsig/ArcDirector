@@ -230,7 +230,7 @@ export class Dispatcher<TCtx> {
 		if (!('character' in call)) {
 			return call;
 		}
-		const gated = director.verbs.gate?.(call);
+		const gated = this.unmet(call) ?? director.verbs.gate?.(call);
 		if (!gated) {
 			features.forEach((feature) => feature.stepStarted(call));
 		}
@@ -248,6 +248,11 @@ export class Dispatcher<TCtx> {
 			internalsOf(director).tell('onStep', call, result);
 			return result;
 		});
+	}
+
+	/** Why `call` may not run: the first feature's refusal (`Feature.refuses`), such as an unmet requirement. */
+	public unmet(call:VerbCall<TCtx>):ArcResult | undefined {
+		return internalsOf(this._director).features.reduce<ArcResult | undefined>((refused, feature) => refused ?? feature.refuses(call), undefined);
 	}
 
 	/**

@@ -13,9 +13,8 @@ function canUseCanvas():boolean {
 /** Kindling owns the canvas, the renderer, and the frame loop. Hosts subclass and override `tick`. */
 export class Game<W extends World = World> {
 	public readonly world:W;
-	public readonly renderer:Renderer | null;
 	public running = false;
-	/** Frames still tick and draw, but `Time` stands still and no component runs. */
+	/** Frames still tick and draw, but `Time` stands still and components only present: `lateUpdate` runs, with `dt` 0. */
 	public paused = false;
 	/** Canvas draws per second while `document` is unfocused. Simulation still runs every RAF. */
 	public unfocusedHz = 3;
@@ -25,10 +24,15 @@ export class Game<W extends World = World> {
 
 	constructor(world?:W) {
 		this.world = world ?? (new World() as W);
-		this.renderer = canUseCanvas() ? new Renderer(this.world) : null;
+		this.world.renderer = canUseCanvas() ? new Renderer(this.world) : null;
 		if (this.renderer) {
 			this.world.input.attach(this.renderer.canvas);
 		}
+	}
+
+	/** `world.renderer`. */
+	public get renderer():Renderer | null {
+		return this.world.renderer;
 	}
 
 	public get canvas():HTMLCanvasElement | null {
@@ -64,12 +68,14 @@ export class Game<W extends World = World> {
 		}
 	}
 
-	/** One frame: advance `Time` and simulate, unless `paused`. Hosts override to work around it and call `super.tick`. */
+	/** One frame: advance `Time` and simulate, or only present while `paused`. Hosts override to work around it and call `super.tick`. */
 	public tick(dt:number):void {
 		if (dt > MAX_DT) {
 			dt = MAX_DT;
 		}
 		if (this.paused) {
+			dispatch(this.world, 'lateUpdate', 0);
+			updateEffects();
 			return;
 		}
 		Time.deltaTime = dt;
@@ -104,8 +110,11 @@ export class Game<W extends World = World> {
 		this.world.destroy(go);
 	}
 
+	/** Stops, destroys every object (`onDisable`, `onDestroy`), then lets go of input, audio and the renderer. */
 	public dispose():void {
 		this.stop();
+		this.world.objects.filter((go) => !go.parent).forEach((go) => this.world.destroy(go));
+		this.world.flushDestroy();
 		this.world.input.detach();
 		this.world.audio.dispose();
 		this.renderer?.dispose();

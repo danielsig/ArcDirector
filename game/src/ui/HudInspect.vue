@@ -41,7 +41,7 @@ defineProps<{
 </template>
 
 <style scoped>
-/* A parchment card beside the character (`SceneDef.inspect`), vertically centered on them, on the side away from the middle. */
+/* A parchment card beside the character (`Scene.inspect`), vertically centered on them, on the side away from the middle. */
 .hud-inspect {
 	position: absolute;
 	width: max-content;

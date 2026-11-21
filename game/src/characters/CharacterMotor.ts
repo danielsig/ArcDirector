@@ -1,9 +1,8 @@
-import { lerpAngle, yawToward, Component, type XZ } from '@arc-director/kindling';
+import { lerpAngle, yawToward, Component, Rigidbody, type XZ } from '@arc-director/kindling';
 import { Belly } from '../engine/Belly';
-import { RigidBody, Appearance, Vitals } from '../engine/components';
+import { Appearance, Vitals } from '../engine/components';
 import { Order } from '../engine/order';
 import { facePeer } from '../director/talk-attend';
-import { TILE_HEIGHT } from '../world/constants';
 import { cueAt, stepKind } from '../audio/cue';
 import { WALK_STRIDE } from './CharacterAnimation';
 import { NPCInput } from './NPCInput';
@@ -49,7 +48,7 @@ export class CharacterMotor extends Component {
 	}
 
 	public override awake():void {
-		const rb = this.gameObject.getComponent(RigidBody);
+		const rb = this.gameObject.getComponent(Rigidbody);
 		if (!rb) {
 			return;
 		}
@@ -57,7 +56,7 @@ export class CharacterMotor extends Component {
 	}
 
 	public override update(dt:number):void {
-		const rb = this.gameObject.getComponent(RigidBody);
+		const rb = this.gameObject.getComponent(Rigidbody);
 		if (!rb) {
 			return;
 		}
@@ -92,7 +91,7 @@ export class CharacterMotor extends Component {
 		}
 
 		const p = this.gameObject.transform.position;
-		if (!this.gameObject.world?.tileAtWorld(p.x, p.z)) {
+		if (!this.gameObject.world?.terrain.tileAtWorld(p.x, p.z)) {
 			rb.velocity.x = 0;
 			rb.velocity.z = 0;
 			return;
@@ -105,7 +104,7 @@ export class CharacterMotor extends Component {
 			facePeer(this.gameObject, dt);
 			return;
 		}
-		if (!this.gameObject.world?.tileAtWorld(dest.x, dest.z)) {
+		if (!this.gameObject.world?.terrain.tileAtWorld(dest.x, dest.z)) {
 			rb.velocity.x = 0;
 			rb.velocity.z = 0;
 			return;
@@ -131,7 +130,7 @@ export class CharacterMotor extends Component {
 
 	public override lateUpdate(dt:number):void {
 		const world = this.gameObject.world;
-		const rb = this.gameObject.getComponent(RigidBody);
+		const rb = this.gameObject.getComponent(Rigidbody);
 		if (!world || !rb) {
 			return;
 		}
@@ -150,7 +149,7 @@ export class CharacterMotor extends Component {
 	}
 
 	/** Whether to step right this frame: held in place with someone in the way walking the other way, until clear of them. */
-	private passing(rb:RigidBody, ux:number, uz:number, dt:number):boolean {
+	private passing(rb:Rigidbody, ux:number, uz:number, dt:number):boolean {
 		const p = this.gameObject.transform.position;
 		const moved = Math.hypot(p.x - rb.prevX, p.z - rb.prevZ);
 		this._heldFor = moved < HELD_SPEED * this.speed * dt ? this._heldFor + dt : 0;

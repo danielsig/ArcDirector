@@ -1,23 +1,19 @@
-import { MeshRenderer, register } from '@arc-director/kindling';
+import { MeshRenderer, meshReady, register } from '@arc-director/kindling';
 import { isModel } from '../render/character-models';
-import { createMesh, meshReady as artReady } from '../render/mesh-registry';
+import { createMesh, meshReady as artReady } from '../items/item-meshes';
 import { Order } from './order';
 
-const boundMeshes = new Set<string>();
-
 export function bindMesh(meshID:string):void {
-	// Built models register themselves with Kindling (`loadCharacterModels`).
-	if (boundMeshes.has(meshID) || isModel(meshID)) {
-		return;
+	// Built models register themselves with Kindling (`loadCharacterModels`), and things' meshes at boot (`THINGS`).
+	if (!meshReady(meshID) && !isModel(meshID)) {
+		register(meshID, () => (artReady(meshID) ? createMesh(meshID) : undefined));
 	}
-	boundMeshes.add(meshID);
-	register(meshID, () => (artReady(meshID) ? createMesh(meshID) : undefined));
 }
 
 export class DemoMeshRenderer extends MeshRenderer {
 	public static override order = Order.mesh;
-	public override update(dt:number):void {
+	protected override syncMesh():void {
 		bindMesh(this.meshID);
-		super.update(dt);
+		super.syncMesh();
 	}
 }

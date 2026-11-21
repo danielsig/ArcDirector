@@ -3,8 +3,9 @@ import { computed, inject } from 'vue';
 import type { HudModel } from './hud-model';
 import { sessionKey } from './session-key';
 import { setMusicMuted, setPrefs } from '../prefs';
+import { usePrefs } from './use-prefs';
 
-const props = defineProps<{
+defineProps<{
 	hud:HudModel;
 }>();
 
@@ -13,9 +14,10 @@ const emit = defineEmits<{
 }>();
 
 const session = inject(sessionKey);
+const live = usePrefs();
 
 /** What the sound button shows: everything on, music muted, or everything muted. */
-const sound = computed(() => (props.hud.audioMuted ? 'muted' : props.hud.musicMuted ? 'music-muted' : 'on'));
+const sound = computed(() => (live.muted ? 'muted' : live.musicMuted ? 'music-muted' : 'on'));
 
 const SOUND_LABEL = {
 	'on': 'Sound on (click to mute music)',
@@ -23,7 +25,7 @@ const SOUND_LABEL = {
 	'muted': 'All muted (click to unmute)',
 } as const;
 
-const mindsLabel = computed(() => `Minds at work: ${props.hud.mindVisuals ? 'shown (click to hide)' : 'hidden (click to show)'}`);
+const mindsLabel = computed(() => `Minds at work: ${live.mindVisuals ? 'shown (click to hide)' : 'hidden (click to show)'}`);
 
 /** On, then music muted, then all muted, then on again. */
 function cycleSound():void {
@@ -59,7 +61,7 @@ function cycleSound():void {
 			:class="{ away: hud.menuOpen }"
 			aria-label="Restart scene"
 			title="Restart scene"
-			@click.stop="session?.restart()"
+			@click.stop="session?.reboot('spawn')"
 		>
 			<svg viewBox="0 0 24 24" aria-hidden="true">
 				<path
@@ -96,14 +98,14 @@ function cycleSound():void {
 			class="quick-btn minds"
 			:class="{ away: hud.menuOpen }"
 			:aria-label="mindsLabel"
-			:aria-pressed="hud.mindVisuals"
+			:aria-pressed="live.mindVisuals"
 			:title="mindsLabel"
-			@click.stop="setPrefs({ mindVisuals: !hud.mindVisuals })"
+			@click.stop="setPrefs({ mindVisuals: !live.mindVisuals })"
 		>
 			<!-- A head, a spark of thought in it, struck through when hidden. -->
 			<svg viewBox="0 0 24 24" aria-hidden="true">
 				<path fill="currentColor" d="M11.5 2.5a7.5 7.5 0 0 1 7.5 7.5c0 2.2-.9 4-2.3 5.3V21.5H8.3V19H6.5a2 2 0 0 1-2-2v-2.6l-1.7-.8 1.8-3.5A7.4 7.4 0 0 1 11.5 2.5z" />
-				<path v-if="hud.mindVisuals" fill="var(--parchment)" d="M12 5.2l1.3 3.6 3.6 1.3-3.6 1.3L12 15l-1.3-3.6-3.6-1.3 3.6-1.3z" />
+				<path v-if="live.mindVisuals" fill="var(--parchment)" d="M12 5.2l1.3 3.6 3.6 1.3-3.6 1.3L12 15l-1.3-3.6-3.6-1.3 3.6-1.3z" />
 				<template v-else>
 					<path d="M3.5 3.5l17 17" stroke="var(--parchment)" stroke-width="4.5" stroke-linecap="round" />
 					<path d="M3.5 3.5l17 17" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" />

@@ -1,17 +1,13 @@
-import { Time, type GameObject, type XZ } from '@arc-director/kindling';
+import { Time, type Component, type GameObject, type XZ } from '@arc-director/kindling';
 import type { MapMark, MapPrev, MapSnapshot } from 'arc-director';
-import {
-	Bridge,
-	BridgeLever,
-	Chest,
-	Door,
-	HumanBody,
-	Named,
-} from '../engine/components';
+import { HumanBody, Named, idOf } from '../engine/components';
 import type { DemoWorld } from '../engine/demo-world';
 import { CELL_SIZE } from '../world/constants';
 import { tileFill } from '../world/tile-fill';
 import { markSymbol, YOU_SYMBOL } from './map-marks';
+import { Bridge, BridgeLever } from '../kit/bridge/bridge';
+import { Chest } from '../kit/chests/chest';
+import { Door } from '../kit/door/door';
 
 const VOID = '#141018';
 const CLOSE_RADIUS = 12;
@@ -103,7 +99,7 @@ function holdLastPicture(now:number, prev:MapPrev, zoom:number, x:number, y:numb
 }
 
 function worldBounds(world:DemoWorld):Bounds | null {
-	const b = world.chunkBounds();
+	const b = world.terrain.bounds();
 	if (!b) {
 		return null;
 	}
@@ -117,7 +113,7 @@ function worldBounds(world:DemoWorld):Bounds | null {
 
 function nearBounds(world:DemoWorld, npcID:string, origin?:XZ):Bounds | null {
 	const p = origin ?? world.findByID(npcID)?.transform.position;
-	if (!p || world.chunks.size === 0) {
+	if (!p || world.terrain.chunks.length === 0) {
 		return null;
 	}
 	const originX = Math.floor(p.x / CELL_SIZE) * CELL_SIZE - CLOSE_RADIUS * CELL_SIZE;
@@ -168,7 +164,7 @@ function paintTiles(world:DemoWorld, bounds:Bounds, px:number):{ image:string; w
 		for (let col = 0; col < bounds.cols; col++) {
 			const x = bounds.originX + (col + 0.5) * CELL_SIZE;
 			const y = bounds.originY + (row + 0.5) * CELL_SIZE;
-			const tile = world.tileAtWorld(x, y);
+			const tile = world.terrain.tileAtWorld(x, y);
 			ctx.fillStyle = tile
 				? tileFill(tile.def, tile.blocked, tile.height)
 				: VOID;
@@ -242,18 +238,9 @@ function collectMarks(
 	}
 
 	if (detail) {
-		world.forEachComponent(Door, (c, go) => {
-			add(go, markName(go));
-		});
-		world.forEachComponent(Chest, (c, go) => {
-			add(go, markName(go));
-		});
-		world.forEachComponent(Bridge, (c, go) => {
-			add(go, markName(go));
-		});
-		world.forEachComponent(BridgeLever, (c, go) => {
-			add(go, markName(go));
-		});
+		for (const kind of [Door, Chest, Bridge, BridgeLever]) {
+			world.forEachComponent<Component>(kind, (c, go) => add(go, markName(go)));
+		}
 	}
 
 	return out;
@@ -272,7 +259,7 @@ function markName(go:GameObject | undefined):string {
 	if (!go) {
 		return '';
 	}
-	return go.getComponent(Named)?.id || go.id || go.name;
+	return idOf(go) || go.name;
 }
 
 function inView(x:number, y:number, bounds:Bounds):boolean {

@@ -1,7 +1,8 @@
 import { BoxCollider } from './BoxCollider.js';
 import { Rigidbody } from './Rigidbody.js';
 import type { GameObject } from './GameObject.js';
-import type { TerrainSample, World } from './World.js';
+import type { World } from './World.js';
+import type { TerrainSample } from './Terrain.js';
 import { inBounds, type Bounds } from './bounds.js';
 import type { XZ } from './xz.js';
 
@@ -69,18 +70,18 @@ function applyMtv(pos:XZ, hit:Mtv, invert:boolean):void {
  * instead of walking into it.
  */
 function tileSolids(world:World, a:Bounds, stand?:TerrainSample):Bounds[] {
-	const size = world.tileSize;
+	const size = world.terrain.tileSize;
 	const boxes:Bounds[] = [];
 	for (let tz = Math.floor(a.minZ / size); tz <= Math.floor((a.maxZ - 1e-6) / size); tz++) {
 		for (let tx = Math.floor(a.minX / size); tx <= Math.floor((a.maxX - 1e-6) / size); tx++) {
-			const hit = world.sampleTerrain((tx + 0.5) * size, (tz + 0.5) * size);
+			const hit = world.terrain.sample((tx + 0.5) * size, (tz + 0.5) * size);
 			const cell = { minX: tx * size, maxX: (tx + 1) * size, minZ: tz * size, maxZ: (tz + 1) * size };
 			// On the flight, or up on its landing, the side strips would block the way on and off.
 			const onFlight = !!hit?.climbable && !!stand && (stand.climbable || stand.height >= hit.height);
 			if (hit?.solids && !onFlight) {
 				boxes.push(...hit.solids);
 			}
-			else if (!hit?.solids && (hit?.blocked || (hit && stand && !canOccupy(stand, hit)))) {
+			else if (hit && !hit.solids && (stand ? !canOccupy(stand, hit) : hit.blocked)) {
 				boxes.push(cell);
 			}
 		}
@@ -95,7 +96,7 @@ function tileSolids(world:World, a:Bounds, stand?:TerrainSample):Bounds[] {
  * of one wall never catches it.
  */
 function resolveAgainstTiles(go:GameObject, col:BoxCollider, world:World, rb?:Rigidbody):void {
-	if (world.tileSize <= 0) {
+	if (world.terrain.tileSize <= 0) {
 		return;
 	}
 	const pos = go.transform.position;
@@ -124,7 +125,7 @@ function resolveAgainstTiles(go:GameObject, col:BoxCollider, world:World, rb?:Ri
 
 /** The ground at a point for a body standing there: a tile with `solids` is blocked only inside them. */
 function groundAt(world:World, x:number, z:number):TerrainSample | undefined {
-	const s = world.sampleTerrain(x, z);
+	const s = world.terrain.sample(x, z);
 	return s?.solids && !s.solids.some((b) => inBounds(b, x, z))
 		? { ...s, blocked: false }
 		: s;
@@ -328,8 +329,6 @@ export type BlockerOpts = {
 	 * end, and ground too high or too low to step to from there is `'terrain'`.
 	 */
 	from?:XZ;
-	/** Only colliders standing taller than this, in meters: what one sees or hears past. */
-	above?:number;
 };
 
 /**
@@ -355,7 +354,7 @@ export function blockerAt(world:World, body:GameObject | null, x:number, z:numbe
 	let hit:GameObject | undefined;
 	world.forEachNear(way, (go) => {
 		const other = go.getComponent(BoxCollider);
-		if (hit || go === body || !other?.enabled || !other.solid || other.isTrigger || go.getComponent(Rigidbody) || other.size.y <= (opts.above ?? -Infinity)) {
+		if (hit || go === body || !other?.enabled || !other.solid || other.isTrigger || go.getComponent(Rigidbody)) {
 			return;
 		}
 		if (other.shape === 'cylinder' ? crossesCylinder(other, from, x, z) : runsInto(start, end, actorAABB(go, other))) {
@@ -366,15 +365,15 @@ export function blockerAt(world:World, body:GameObject | null, x:number, z:numbe
 		return hit;
 	}
 	const stand = groundAt(world, from.x, from.z);
-	if (world.tileSize > 0 && tileSolids(world, way, stand).some((b) => runsInto(start, end, b))) {
+	if (world.terrain.tileSize > 0 && tileSolids(world, way, stand).some((b) => runsInto(start, end, b))) {
 		return 'terrain';
 	}
 	return opts.from && !canOccupy(stand, groundAt(world, x, z)) ? 'terrain' : undefined;
 }
 
-/** Same rule as walking: up only on climbable steps of 1, down at most 1, never onto blocked. */
+/** Same rule as walking: up only on climbable steps of 1, down at most 1, never onto blocked but from wading into wading. */
 export function canOccupy(from:TerrainSample | undefined, to:TerrainSample | undefined):boolean {
-	if (!to || to.blocked) {
+	if (!to || (to.blocked && !(to.wade && from?.wade))) {
 		return false;
 	}
 	const ph = from?.height ?? 0;
@@ -386,7 +385,7 @@ export function canOccupy(from:TerrainSample | undefined, to:TerrainSample | und
 }
 
 function blockCliffs(go:GameObject, rb:Rigidbody, world:World):void {
-	if (world.tileSize <= 0) {
+	if (world.terrain.tileSize <= 0) {
 		return;
 	}
 	const pos = go.transform.position;
@@ -411,9 +410,6 @@ function blockCliffs(go:GameObject, rb:Rigidbody, world:World):void {
 
 function integrate(world:World, dt:number):void {
 	world.forEachComponent(Rigidbody, (rb, go) => {
-		if (!rb.enabled) {
-			return;
-		}
 		const p = go.transform.position;
 		rb.prevX = p.x;
 		rb.prevZ = p.z;
@@ -424,7 +420,7 @@ function integrate(world:World, dt:number):void {
 
 function resolveCollisions(world:World, dt:number):void {
 	world.forEachComponent(BoxCollider, (col, go) => {
-		if (!col.enabled || !col.solid || col.isTrigger) {
+		if (!col.solid || col.isTrigger) {
 			return;
 		}
 		const rb = go.getComponent(Rigidbody);
@@ -437,7 +433,7 @@ function resolveCollisions(world:World, dt:number):void {
 	});
 	resolveShove(world, dt);
 	world.forEachComponent(BoxCollider, (col, go) => {
-		if (!col.enabled || !col.solid || col.isTrigger) {
+		if (!col.solid || col.isTrigger) {
 			return;
 		}
 		const rb = go.getComponent(Rigidbody);
@@ -450,7 +446,7 @@ function resolveCollisions(world:World, dt:number):void {
 
 function snapGround(world:World, dt:number):void {
 	world.forEachComponent(Rigidbody, (rb, go) => {
-		if (!rb.enabled || !rb.grounded) {
+		if (!rb.grounded) {
 			return;
 		}
 		const p = go.transform.position;

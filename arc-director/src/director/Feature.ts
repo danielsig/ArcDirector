@@ -177,6 +177,11 @@ export abstract class Feature<TCtx = unknown> {
 	/** `mind` reached `goal`, by its `until` or its own word: it is a goal no more. */
 	public goalReached(mind:Mind<TCtx>, goal:Goal<never>):void {}
 
+	/** Why `call`, a host verb about to start, may not (its reason), or nothing: the first feature that refuses ends it. */
+	public refuses(call:VerbCall<TCtx>):ArcResult | undefined {
+		return undefined;
+	}
+
 	/** A host verb passed the gate and its handler starts. */
 	public stepStarted(call:VerbCall<TCtx>):void {}
 	/** A host verb {@link stepStarted} told of ended, how it went; a handler that threw ended `failed`. */

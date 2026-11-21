@@ -2,8 +2,8 @@ import * as THREE from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 
 /**
- * Mesh-kit primitives for toon props. Geometry only: the host picks materials
- * and draws them instanced. Profiles and paths are in meters, Y up.
+ * Mesh-kit primitives for toon props, and `instanced` to draw many of one. The host picks materials. Profiles and
+ * paths are in meters, Y up.
  */
 
 export type ProfilePoint = { r:number; y:number };
@@ -147,4 +147,46 @@ export function mergeParts(parts:PosedPart[]):THREE.BufferGeometry {
 	}
 	out.computeBoundingSphere();
 	return out;
+}
+
+/** A mesh that receives shadows, and casts them unless `cast` is false. */
+export function solidMesh(geo:THREE.BufferGeometry, mat:THREE.Material | THREE.Material[], cast = true):THREE.Mesh {
+	const mesh = new THREE.Mesh(geo, mat);
+	mesh.castShadow = cast;
+	mesh.receiveShadow = true;
+	return mesh;
+}
+
+const pose = new THREE.Object3D();
+
+/**
+ * One instanced mesh in `parent` drawing `geom` once per item, each posed by `place` on an object reset to identity
+ * (rotation order XYZ); none for no items. It receives shadows, and casts them when `castShadow`.
+ */
+export function instanced<T>(
+	parent:THREE.Object3D,
+	geom:THREE.BufferGeometry,
+	mat:THREE.Material | THREE.Material[],
+	items:readonly T[],
+	castShadow:boolean,
+	place:(item:T, pose:THREE.Object3D)=>void,
+):THREE.InstancedMesh | undefined {
+	if (items.length === 0) {
+		return undefined;
+	}
+	const mesh = new THREE.InstancedMesh(geom, mat, items.length);
+	mesh.castShadow = castShadow;
+	mesh.receiveShadow = true;
+	items.forEach((item, i) => {
+		pose.position.set(0, 0, 0);
+		pose.rotation.set(0, 0, 0, 'XYZ');
+		pose.scale.set(1, 1, 1);
+		place(item, pose);
+		pose.updateMatrix();
+		mesh.setMatrixAt(i, pose.matrix);
+	});
+	mesh.instanceMatrix.needsUpdate = true;
+	mesh.computeBoundingSphere();
+	parent.add(mesh);
+	return mesh;
 }

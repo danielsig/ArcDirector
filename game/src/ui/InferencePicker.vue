@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onUnmounted, ref } from 'vue';
+import { computed, ref } from 'vue';
 import { fetchModelCatalog, modelIDsMatch, trainedOnArcDirector } from 'arc-director';
 import {
 	BROWSER_MODELS,
@@ -16,7 +16,8 @@ import {
 	useBrowserModel,
 	type BrowserModel,
 } from '../director/inference';
-import { prefs, setPrefs, watchPrefs } from '../prefs';
+import { setPrefs } from '../prefs';
+import { usePrefs } from './use-prefs';
 import HudSwitch from './HudSwitch.vue';
 
 const emit = defineEmits<{
@@ -96,16 +97,10 @@ function inUse(id:string):boolean {
 	return inferenceSetup.inference === 'browser' && inferenceSetup.browserModel === id;
 }
 
-/** The System One the menu picked, kept in step with the menu. */
-const systemOne = ref(prefs().systemOne);
-const decisionModel = ref(prefs().decisionModel);
-onUnmounted(watchPrefs((next) => {
-	systemOne.value = next.systemOne;
-	decisionModel.value = next.decisionModel;
-}));
+const live = usePrefs();
 
 /** Skaldic Laya makes the quick decisions now, in the browser beside whichever main model NPCs think with. */
-const layaOn = computed(() => decisionModelOf({ inference: inferenceSetup.inference, systemOne: systemOne.value, decisionModel: decisionModel.value }) === SKALDIC_LAYA.model);
+const layaOn = computed(() => decisionModelOf({ inference: inferenceSetup.inference, systemOne: live.systemOne, decisionModel: live.decisionModel }) === SKALDIC_LAYA.model);
 const layaDownloading = computed(() => inferenceSetup.laya.progress !== null);
 const layaReady = computed(() => !inferenceSetup.unsupported && !layaDownloading.value);
 

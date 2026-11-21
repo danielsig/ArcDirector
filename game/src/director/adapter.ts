@@ -26,8 +26,10 @@ import {
 	Named,
 	Companion,
 	HearOnly,
+	idOf,
 } from '../engine/components';
 import type { DemoWorld } from '../engine/demo-world';
+import { mindsOf, type Scene } from '../scenes/scene';
 import type { HudAiLogEntry, HudChatLine } from '../ui/hud-model';
 import type { AiLogRun } from '@arc-director/control';
 import { prefs, setPrefs, type Prefs } from '../prefs';
@@ -35,13 +37,13 @@ import { aiLogRun, publishAiLog, pushLog, logLook } from './ai-log-sink';
 import { talkFace, SPEECH_LIFE } from './talk-attend';
 import { YOU_SYMBOL } from './map-marks';
 import { snapshotMap } from './map-view';
-import { WORLD_KNOWLEDGE } from './game-knowledge';
 import type { CharacterCtx, SceneHooks } from './game-types';
-import { idOf, findObject, isLiving } from './names';
+import { findObject, isLiving } from './names';
 import { EXPR_STRINGIFIERS, gameFunctions, kernelsOf, scanWorld } from './kernels';
 import { lookWorld, inventoryOf, followedCarry } from './perception';
 import { roomBounds, type RoomDef } from '../world/spawn';
-import { dropDown, verbGate } from './game-verbs';
+import { verbGate } from './game-verbs';
+import { onStruck } from './fight-verbs';
 import { gameWorld } from './game-world';
 import { LM_STUDIO_ROOT, SKALDIC_LAYA, decisionModelOf, menuModel, queuesOrders, showDownload, type SamplingSource } from './inference';
 import { HOSTED, defaultSystemOne } from './hosted';
@@ -120,14 +122,15 @@ function roomRegions(rooms:RoomDef[]):Record<string, RegionSpec<CharacterCtx>> {
 	}));
 }
 
+/** What every scene keeps as it runs, saved with the game: whether it is won. Each scene adds its own fields. */
+export type SceneState = { bargainDone:boolean };
+
 export class GameHost {
 	public readonly world:DemoWorld;
 	/** Bubbles and voices, one speaker at a time. */
 	public readonly speech:SpeechQueue;
-	public ambient:string;
-	public bargainDone = false;
-	public readonly scene:string;
-	public hooks:SceneHooks<GameHost> = {};
+	public readonly scene:Scene;
+	public readonly hooks:SceneHooks<GameHost>;
 	public arc:ArcDirector<CharacterCtx, GameObject> | null = null;
 	public readonly doorOpen = new Map<string, boolean>();
 	public readonly chestOpen = new Map<string, boolean>();
@@ -139,25 +142,17 @@ export class GameHost {
 	public readonly log:HudAiLogEntry[];
 	/** This game's run of the AI log: a restart or a new scene logs to a new file, and the last stays whole. */
 	public readonly logRun:AiLogRun;
-	/** The scene's rooms: each with a `memory` puts it on the mind of whoever stands in it. */
-	public readonly rooms:RoomDef[];
-	/** Tags of the player's character, from the scene (a fight role). */
-	private readonly _playerTags:string[];
+	private readonly _sceneState:SceneState = { bargainDone: false };
 	private _disposed = false;
 
 	constructor(
 		world:DemoWorld,
 		chat:HudChatLine[],
 		log:HudAiLogEntry[],
-		opts:{
-			ambient?:string;
-			scene?:string;
-			playerTags?:string[];
-			rooms?:RoomDef[];
-		} = {},
+		scene:Scene,
 	) {
 		this.world = world;
-		world.wentDown = (character) => dropDown(this, character);
+		world.struck = (blow) => onStruck(this, blow);
 		world.caught = (character, name) => this.caught(character, name);
 		world.canSeeInventoryOf = (viewer, holder) => !!this.arc?.getWorldVerbs()?.canSeeInventoryOf(idOf(viewer), idOf(holder));
 		world.enact = async (arc) => {
@@ -168,14 +163,12 @@ export class GameHost {
 		this.speech = new SpeechQueue(world);
 		this.thinks = new ThinkShow(world, () => this.hooks.goals?.(this), (id) => this.arc?.collective(id)?.characters);
 		this.log = log;
-		this.scene = opts.scene ?? '';
-		this._playerTags = opts.playerTags ?? [];
-		this.rooms = opts.rooms ?? [];
-		this.ambient = opts.ambient ?? 'A damp stone hall of the dungeon.';
+		this.scene = scene;
+		this.hooks = scene.hooks ?? {};
 		// A new game starts with no chat and no AI log on show.
 		this.chat.length = 0;
 		this.log.length = 0;
-		this.logRun = aiLogRun(this.scene);
+		this.logRun = aiLogRun(scene.id);
 	}
 
 	public configure(director:ArcDirector<CharacterCtx, GameObject>):ArcDirector<CharacterCtx, GameObject> {
@@ -183,8 +176,8 @@ export class GameHost {
 		// only with its key on the dev server (`HOSTED`).
 		addThinking(director).if(HOSTED.jev, (d) => d.addJev());
 		director.models.withDefaultSystemOne(defaultSystemOne(prefs().systemOne));
-		return director
-			.addRegions(roomRegions(this.rooms))
+		director
+			.addRegions(roomRegions(this.scene.rooms ?? []))
 			.withMind({ currency: 'gold' })
 			.withPriorityThinkQueue({
 				// Events, watches and an arc's end wake a mind; a rethink only one whose program has little impact (`rethinkingThreshold`: idle, following, waiting).
@@ -207,8 +200,9 @@ export class GameHost {
 				},
 			})
 			.withVerbs((v) => v.addStock().addStockCollective().withGate(verbGate(this)))
+			.withRequirements(this.scene.requirements ?? [])
 			.withWorld(gameWorld(this))
-			.withSight({ look: (ctx) => lookWorld(ctx.character, this.ambient, this), unitName: 'm' })
+			.withSight({ look: (ctx) => lookWorld(ctx.character, this.scene.ambient, this), unitName: 'm' })
 			.withInventory((ctx) => inventoryOf(ctx.character))
 			.withSenses((s) => s.add('followed', followedCarry))
 			.withContext(this.context)
@@ -226,9 +220,11 @@ export class GameHost {
 				face: (who, toward) => talkFace(this.world, who, toward),
 				onSpoke: (utterance) => onSpoke(this, utterance),
 				rehear: SPEECH_LIFE,
+				// The no-parrot refusal is written for a model, so the player is never shown it: the player may repeat.
+				repeats: (speakerID) => speakerID === 'Player',
 			})
 			.withMap(this._mapSense)
-			.withKnowledge({ pages: (ctx) => WORLD_KNOWLEDGE[ctx.scene] ?? [] })
+			.withKnowledge({ pages: () => this.scene.knowledge })
 			.onAbortArc(this.abortArc)
 			.onLog((entry) => pushLog(this, entry.name, entry.message, entry))
 			.onStep((call, result) => noteAct(this, call, result))
@@ -240,7 +236,10 @@ export class GameHost {
 				}
 			})
 			// The player's character, for `enactPlayer`. No mind: it never calls the model.
-			.addCharacter({ id: 'Player', tags: this._playerTags });
+			.addCharacter({ id: 'Player', tags: this.scene.player?.tags ?? [] });
+		// The cast's minds of their own; the scene adds its collectives.
+		mindsOf(this.scene.cast).forEach((spec) => director.addCharacter(spec));
+		return director;
 	}
 
 	public bind(director:ArcDirector<CharacterCtx, GameObject>):void {
@@ -253,11 +252,16 @@ export class GameHost {
 		if (!isLiving(character) || !npc) {
 			return undefined;
 		}
-		return { world: this.world, character: character, npc, scene: this.scene };
+		return { world: this.world, character: character, npc };
 	};
 
+	/** The scene's state as it runs, `S` the scene's own fields (each optional until set). The save holds it whole. */
+	public sceneState<S extends object = object>():SceneState & Partial<S> {
+		return this._sceneState as SceneState & Partial<S>;
+	}
+
 	public abortArc = (id:string):void => {
-		if (this.bargainDone) {
+		if (this._sceneState.bargainDone) {
 			return;
 		}
 		(this.world.findByID(id) ?? findObject(this.world, id))?.getComponent(Celebrating)?.stop();
@@ -326,10 +330,6 @@ export class GameHost {
 		if (named && role) {
 			named.aliases = [...new Set([...(named.aliases ?? []), role])];
 		}
-		const npc = character.getComponent(NPCInput);
-		if (npc) {
-			npc.aiOn = true;
-		}
 		if (character.getComponent(Companion)) {
 			mind.settings.strategicInterval = 0;
 		}
@@ -358,8 +358,7 @@ export class GameHost {
 		this.speech.update();
 		scanWorld(this);
 		this.syncHunger();
-		this.hooks.checkBargain?.(this);
-		this.hooks.tickMarketNPC?.(this);
+		this.hooks.tick?.(this);
 		publishAiLog(this.log);
 	}
 

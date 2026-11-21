@@ -1,11 +1,12 @@
-import { MeshRenderer, Time, closeHand, create, holdInHand, type Grip, type Hand, Component } from '@arc-director/kindling';
+import { MeshRenderer, Time, closeHand, create, holdInHand, otherHand, type Grip, type Hand, Component } from '@arc-director/kindling';
 import * as THREE from 'three';
-import { HumanBody } from '../engine/components';
+import { HumanBody, Light } from '../engine/components';
 import { bindMesh } from '../engine/demo-mesh-renderer';
 import { Order } from '../engine/order';
 import { slotItem } from '../items/inventory';
 import type { ItemInstance } from '../items/instance';
-import { getSheet } from '../render/spritesheet';
+import { showFlameFrame } from '../render/spritesheet';
+import { addFlameLight } from '../kit/torches/torch';
 
 /**
  * What an item looks like in the hand, by item def: its model, how the fist holds it, the hand it
@@ -27,7 +28,7 @@ const FLAME_FPS = 10;
 
 type Held = { item:ItemInstance; prop:THREE.Object3D; mount:{ quaternion:THREE.Quaternion; position:THREE.Vector3 } };
 
-/** Shows the items in a character's hands on its model's hand bones, fists closed round them, and keeps held torches burning. */
+/** Shows the items in a character's hands on its model's hand bones, fists closed round them, and keeps held torches burning and lighting the way. */
 export class HeldProps extends Component {
 	// Before `CharacterPose`, which poses held things further (a bow drawn from this carry).
 	public static override order = Order.present - 2;
@@ -51,9 +52,25 @@ export class HeldProps extends Component {
 		return prop.localToWorld(new THREE.Vector3(0, top, 0));
 	}
 
-	/** The item def shown in `hand`. */
-	public defID(hand:Hand):string | undefined {
-		return this._held[hand]?.item.defID;
+	/** The item shown in `hand`. */
+	public item(hand:Hand):ItemInstance | undefined {
+		return this._held[hand]?.item;
+	}
+
+	/** The hand holding a lit torch, if one does. */
+	public litHand():Hand | undefined {
+		return (['right', 'left'] as const).find((hand) => this.item(hand)?.Torch?.lit);
+	}
+
+	/** A lit torch in either hand lights its holder's way: a flickering light by that hand (host-local +X is body-right). */
+	public override update(dt:number):void {
+		const hand = this.litHand();
+		const light = this.gameObject.getComponent(Light) ?? (hand ? addFlameLight(this.gameObject, { range: 9, decay: 1, offsetY: 0.5, offsetZ: 0.3 }) : undefined);
+		if (light) {
+			light.enabled = !!hand;
+			light.intensity = 32 * light.pulse(dt);
+			light.offsetX = hand === 'right' ? 0.4 : -0.4;
+		}
 	}
 
 	public override lateUpdate():void {
@@ -67,12 +84,15 @@ export class HeldProps extends Component {
 		if (!root || !body) {
 			return;
 		}
+		// What one hand must grip (a bow, the left) takes it first; anything else its own hand, or the other one if taken.
 		const want:Partial<Record<Hand, ItemInstance>> = {};
-		for (const hand of ['left', 'right'] as const) {
-			const item = slotItem(body, `hands.${hand}.held`);
-			const look = item && HELD[item.defID];
-			if (item && look) {
-				want[look.hand ?? hand] = item;
+		for (const fixed of [true, false]) {
+			for (const hand of ['left', 'right'] as const) {
+				const item = slotItem(body, `hands.${hand}.held`);
+				const look = item && HELD[item.defID];
+				if (item && look && !!look.hand === fixed) {
+					want[look.hand ?? (want[hand] ? otherHand(hand) : hand)] ??= item;
+				}
 			}
 		}
 		for (const hand of ['left', 'right'] as const) {
@@ -149,11 +169,6 @@ function burn(prop:THREE.Object3D, lit:boolean):void {
 	}
 	flame.visible = lit;
 	if (lit) {
-		const frames = getSheet().flame;
-		const map = frames[Math.floor(Time.time * FLAME_FPS) % frames.length];
-		if (map && mat.map !== map) {
-			mat.map = map;
-			mat.needsUpdate = true;
-		}
+		showFlameFrame(mat, Time.time, FLAME_FPS);
 	}
 }

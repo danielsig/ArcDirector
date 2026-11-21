@@ -19,10 +19,10 @@ Every screenshot below is a live session: no scripted moves, nothing staged. Eac
 
 | Scene | | |
 | ----- | - | - |
-| **5v5 Combat** | ![Two squads at either end of a ruined temple](branding/screenshots/ruins-1.png) | ![A knight cleaves in the middle of the melee](branding/screenshots/ruins-2.png) |
-| **Marketplace** | ![Sellers at their stalls as the first shoppers arrive](branding/screenshots/market-1.png) | ![A shopper buys from the baker](branding/screenshots/market-2.png) |
+| **5v5 Combat** | ![Two squads at either end of a ruined temple](branding/screenshots/combat-1.png) | ![A knight cleaves in the middle of the melee](branding/screenshots/combat-2.png) |
+| **Marketplace** | ![Sellers at their stalls as the first shoppers arrive](branding/screenshots/marketplace-1.png) | ![A shopper buys from the baker](branding/screenshots/marketplace-2.png) |
 | **River Glen** | ![The glen with the bridge raised](branding/screenshots/glen-1.png) | ![The bridge is down and the forager crosses](branding/screenshots/glen-2.png) |
-| **Dungeon Crawl** | ![The company in the Gatehouse](branding/screenshots/dungeon-1.jpg) | ![The company presses into the crypt](branding/screenshots/dungeon-2.jpg) |
+| **Dungeon Crawl** | ![The party in the Gatehouse](branding/screenshots/dungeon-1.jpg) | ![The party presses into the crypt](branding/screenshots/dungeon-2.jpg) |
 
 ## What a plan looks like
 
@@ -39,7 +39,7 @@ when(some(units.filter(u => isBadlyHurt(u)))) {
 }
 ```
 
-That is an **Arc**: a tiny program of verbs, conditions and loops that the model writes and ArcDirector runs at a fixed interval in your game. The model is only called when someone has something to decide, so a single consumer GPU can keep a whole squad, a crowded market, or a dungeon party busy.
+That is an **Arc**: a tiny program of verbs, conditions and loops that the model writes and ArcDirector runs at a fixed interval in your game. The model is only called when someone has something to decide, so a single consumer GPU can keep a whole squad, a crowded marketplace, or a dungeon party busy.
 
 ## Why use ArcDirector
 

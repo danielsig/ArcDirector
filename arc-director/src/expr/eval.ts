@@ -340,7 +340,8 @@ function evalBinary(op:string, leftAst:Ast, rightAst:Ast, ctx:EvalCtx):ExprVal {
 		return { kind: 'bool', value: !sameVal(left, right) };
 	}
 	if (op === 'is') {
-		const e = asEntity(left);
+		// A name picks a list, so a list of one entity reads as that entity, as in `Tom.hp`: `Tom is "guard"`.
+		const e = asEntity(left.kind === 'list' && left.value.length === 1 ? left.value[0] : left);
 		if (!e) {
 			return { kind: 'bool', value: false };
 		}

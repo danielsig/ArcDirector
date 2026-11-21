@@ -144,14 +144,18 @@ async function main():Promise<void> {
 		description: 'Point the camera of a connected client. It glides to the middle of the characters `focus` picks, '
 			+ 'asked every half second as the player sees them, in watch-expression syntax: '
 			+ '`others.filter(u => doing(u, "cleave"))`, `others.filter("Knight")`, `[Forager, Angler]`. '
-			+ 'Use with the player setting `camera` (no body to block it). Empty focus stops following. Answers whom the focus picks now.',
+			+ 'Use with the player setting `camera` (no body to block it). Empty focus stops following. '
+			+ '`view` puts the camera at a spot, as the URL view parameter does, and stops following unless focus is set too. Answers whom the focus picks now.',
 		inputSchema: {
 			session: sessionField,
 			focus: z.string().optional().describe('Watch expression whose characters the camera follows; empty to stop'),
 			zoom: z.number().positive().optional().describe('Camera distance from its target in meters (3 to 24)'),
+			view: z.object({ x: z.number(), y: z.number(), z: z.number(), yaw: z.number() }).optional()
+				.describe('Move the player (the camera\'s rig) and turn the camera: x and z in meters on the ground, y height, '
+					+ 'yaw in radians (0 north, 1.5708 west, 3.1416 south)'),
 		},
-	}, async ({ session, focus, zoom }) => {
-		return text(await hub.call(session, { op: 'setCamera', focus, zoom }));
+	}, async ({ session, focus, zoom, view }) => {
+		return text(await hub.call(session, { op: 'setCamera', focus, zoom, view }));
 	});
 
 	server.registerTool('save_game', {

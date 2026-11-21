@@ -62,7 +62,7 @@ export class Raven extends Component {
 			const reach = FLY_MIN + Math.random() * (FLY_MAX - FLY_MIN);
 			const x = p.x + Math.cos(turn) * reach;
 			const z = p.z + Math.sin(turn) * reach;
-			const ground = world?.sampleTerrain(x, z);
+			const ground = world?.terrain.sample(x, z);
 			if (ground && !ground.blocked) {
 				to = new THREE.Vector3(x, ground.worldY, z);
 				break;
@@ -121,7 +121,7 @@ export class Raven extends Component {
 		if (roll < 0.6) {
 			const yaw = this.gameObject.transform.yaw + (Math.random() - 0.5) * 1.6;
 			const to = from.clone().add(new THREE.Vector3(-Math.sin(yaw), 0, -Math.cos(yaw)).multiplyScalar(0.18));
-			const ground = this.gameObject.world?.sampleTerrain(to.x, to.z);
+			const ground = this.gameObject.world?.terrain.sample(to.x, to.z);
 			if (ground && !ground.blocked) {
 				to.y = ground.worldY;
 				return { kind: 'hop', t0: now, seconds: 0.22, from, to, yaw };

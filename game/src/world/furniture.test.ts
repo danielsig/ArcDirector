@@ -1,43 +1,44 @@
-import { GameObject, resetTime, stepPhysics, Time, distanceXZ } from '@arc-director/kindling';
+import { GameObject, resetTime, stepPhysics, Time, distanceXZ, Rigidbody } from '@arc-director/kindling';
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { findRoute, pointGoal, showNamingText } from 'arc-director';
 import { CharacterMotor } from '../characters/CharacterMotor';
 import { NPCInput } from '../characters/NPCInput';
 import { approachSpot, overWater, Seated } from '../characters/Seated';
-import { glen_0_0 } from '../data/chunks/glen-0-0';
-import { glen_0_1 } from '../data/chunks/glen-0-1';
-import { glen_1_0 } from '../data/chunks/glen-1-0';
-import { glen_1_1 } from '../data/chunks/glen-1-1';
-import { DUNGEON_CHUNKS } from '../scenes/dungeon-vault/dungeon-vault-map';
-import { RIVER_GLEN } from '../data/scenes';
+import { GLEN_CHUNKS } from '../scenes/glen/glen-map';
+import { DUNGEON_CHUNKS } from '../scenes/dungeon/dungeon-map';
+import { GLEN, mealProgress } from '../scenes/glen/glen-scene';
 import { Belly } from '../engine/Belly';
-import { BoxCollider, Door, Furniture, HumanBody, Lock, Named, RigidBody, Vitals } from '../engine/components';
+import { BoxCollider, HumanBody, HurtFlash, Lock, Named, Vitals } from '../engine/components';
 import { DemoWorld } from '../engine/demo-world';
 import { Container, Item } from '../items/item-components';
 import { getDef } from '../items/defs';
 import { equipItem } from '../items/equip';
 import { instantiateDef } from '../items/instance';
 import { findCarried, tryInsert } from '../items/inventory';
-import { chestHolding, interactDoor, openDoorAhead, takeFromChest, USE_RANGE } from '../items/pickup';
+import { USE_RANGE } from '../items/pickup';
 import { Reading } from '../characters/Reading';
 import { isFood, readPage, useItem } from '../items/use';
 import type { GameHost } from '../director/adapter';
-import { dropDown, FISH_VERB } from '../director/game-verbs';
-import { mealProgress } from '../director/scenes/glen';
+import { FISH_VERB } from '../director/game-verbs';
+import { onStruck } from '../director/fight-verbs';
 import { examineWorld, tagsOf } from '../director/perception';
 import { decodeGlyphChunk, type ChunkFile } from './decode-glyph-chunk';
-import { syncDressingColliders, syncFurniture } from './dressing-colliders';
-import { planProps, roadLines } from './dressing-plan';
+import { syncDressingColliders } from '../kit/props/dressing-colliders';
+import { planProps } from '../kit/props/dressing-plan';
+import { roadLines } from '../kit/houses/roads';
 import { cellWays } from './path';
 import { spawnChunkEntities } from './spawn';
+import { Door, interactDoor, openDoorAhead } from '../kit/door/door';
+import { Furniture, syncFurniture } from '../kit/furniture/furniture';
+import { chestHolding, takeFromChest } from '../kit/chests/chest';
 
 function built(files:readonly ChunkFile[]):DemoWorld {
 	const world = new DemoWorld();
 	for (const file of files) {
 		const chunk = decodeGlyphChunk(file).chunk;
 		spawnChunkEntities(world, chunk);
-		world.addChunk(chunk);
+		world.terrain.register(chunk);
 	}
 	syncDressingColliders(world);
 	syncFurniture(world);
@@ -45,7 +46,7 @@ function built(files:readonly ChunkFile[]):DemoWorld {
 	return world;
 }
 
-const glen = ():DemoWorld => built([glen_0_0, glen_0_1, glen_1_0, glen_1_1]);
+const glen = ():DemoWorld => built(GLEN_CHUNKS);
 
 function body(world:DemoWorld, id:string, x:number, z:number):GameObject {
 	const go = new GameObject(id, 'Person');
@@ -53,7 +54,7 @@ function body(world:DemoWorld, id:string, x:number, z:number):GameObject {
 	go.addComponent(Named, { id });
 	go.addComponent(NPCInput);
 	go.addComponent(CharacterMotor);
-	go.addComponent(RigidBody, { kinematic: true });
+	go.addComponent(Rigidbody, { kinematic: true });
 	go.addComponent(BoxCollider, { size: { x: 0.45, y: 1.1, z: 0.45 }, pad: 0.36 });
 	go.addComponent(HumanBody, { pockets: go.addComponent(Container, { size: 8 }) });
 	go.addComponent(Seated);
@@ -228,20 +229,19 @@ test('a door locked from both sides still takes its key, and comes unlocked by i
 
 test('BridgeKeeper carries one key, and the spare lies hidden by the woodpile', () => {
 	const world = glen();
-	const keeper = RIVER_GLEN.npcs.find((npc) => npc.id === 'BridgeKeeper')!;
-	assert.ok(keeper.packLoot?.some((loot) => loot.name === 'CottageKey' && loot.defID === 'brass_key'));
+	const keeper = GLEN.cast.find((member) => member.id === 'BridgeKeeper')!;
+	assert.ok(keeper.body.packLoot?.some((loot) => loot.name === 'CottageKey' && loot.defID === 'brass_key'));
 	const spare = world.findNamed('SpareKey')!.transform.position;
-	const pile = planProps([...world.chunks.values()]).find((spot) => spot.prop === 'woodpile')!;
+	const pile = planProps(world.terrain).find((spot) => spot.prop === 'woodpile')!;
 	assert.ok(distanceXZ(spare, pile) < 1.2, `the spare is not by the woodpile: ${spare.x}, ${spare.z} and ${pile.x}, ${pile.z}`);
 	assert.equal(world.objects.filter((go) => go.getComponent(Named)?.id === 'CottageKey').length, 0, 'only the spare lies about');
 });
 
 test('the forager starts on the T where the trail meets the road to the bridge, on the keeper\'s bank', () => {
-	const chunks = [glen_0_0, glen_0_1, glen_1_0, glen_1_1].map((file) => decodeGlyphChunk(file).chunk);
-	const spawn = RIVER_GLEN.npcs.find((npc) => npc.id === 'Forager')!;
-	const chunk = chunks.find((c) => c.id === spawn.chunkID)!;
-	const at = chunk.worldCellCenter(spawn.localX, spawn.localZ);
-	const lines = roadLines(chunks);
+	const terrain = glen().terrain;
+	const [tx, tz] = GLEN.cast.find((member) => member.id === 'Forager')!.body.cell;
+	const at = terrain.tileCenter({ tx, tz });
+	const lines = roadLines(terrain);
 	const meeting = lines.filter((l) => {
 		const dx = Math.max(Math.min(l.a.x, l.b.x) - at.x, 0, at.x - Math.max(l.a.x, l.b.x));
 		const dz = Math.max(Math.min(l.a.z, l.b.z) - at.z, 0, at.z - Math.max(l.a.z, l.b.z));
@@ -258,7 +258,7 @@ test('someone settled holds the seat and is not solid; getting up frees both', (
 	const go = body(world, 'Angler', seat.transform.position.x + 0.6, seat.transform.position.z + 0.6);
 	const seated = go.getComponent(Seated)!;
 	seated.settle(seat);
-	assert.equal(seat.getComponent(Furniture)?.occupant, go);
+	assert.deepEqual(seat.getComponent(Furniture)?.occupants, [go]);
 	assert.equal(go.getComponent(BoxCollider)?.enabled, false);
 	assert.equal(seated.resting, true);
 	assert.equal(seated.asleep, false);
@@ -273,7 +273,7 @@ test('someone settled holds the seat and is not solid; getting up frees both', (
 		seated.lateUpdate(0.02);
 	}
 	assert.equal(seated.held, false);
-	assert.equal(seat.getComponent(Furniture)?.occupant, null);
+	assert.deepEqual(seat.getComponent(Furniture)?.occupants, [null]);
 	assert.equal(go.getComponent(BoxCollider)?.enabled, true);
 	assert.equal(world.blocker(go, go.transform.position.x, go.transform.position.z), undefined, 'stood up inside something');
 });
@@ -434,7 +434,8 @@ test('a meal\'s orb fills by walking to the seller, then having the food, then e
 	const eater = body(world, 'Forager', 18.5, 14.5);
 	body(world, 'Angler', 27.5, 14.5);
 	const goals:unknown[] = [{ until: () => false }];
-	const host = { world, arc: { character: () => ({ persona: { goals } }) } } as unknown as GameHost;
+	const state = { bargainDone: false };
+	const host = { world, arc: { character: () => ({ persona: { goals } }) }, sceneState: () => state } as unknown as GameHost;
 	const progress = ():number => mealProgress(host, 'Forager', 'Angler', 'SilverTrout');
 	assert.equal(progress(), 0, 'it has not set out');
 	eater.transform.position.x = 23;
@@ -492,7 +493,7 @@ test('a fire mushroom makes a body walk 25% faster', () => {
 	const world = glen();
 	const go = body(world, 'Forager', 18.5, 14.5);
 	const motor = go.getComponent(CharacterMotor)!;
-	const rb = go.getComponent(RigidBody)!;
+	const rb = go.getComponent(Rigidbody)!;
 	const stride = ():number => {
 		go.getComponent(NPCInput)!.destinationPoint = { x: 18.5, z: 2.5 };
 		motor.update(0.02);
@@ -516,7 +517,7 @@ test('fishing again from the chair it already holds keeps it there, rod out', as
 	assert.equal(seated.rod, true);
 });
 
-test('going down leaves the seat and shuts the book, and leaves the body not solid', () => {
+test('a felling blow leaves the seat and shuts the book, and leaves the body not solid', () => {
 	const world = glen();
 	const seat = world.findByID('HutChair')!;
 	const go = body(world, 'Angler', seat.transform.position.x, seat.transform.position.z);
@@ -524,13 +525,17 @@ test('going down leaves the seat and shuts the book, and leaves the body not sol
 	seated.settle(seat);
 	go.addComponent(Reading).open('almanac');
 	go.addComponent(Vitals, { hp: 0, maxHP: 10 });
-	dropDown({ world, arc: null } as never, go);
+	// As `wound` leaves it: the knock's flash running, the host told.
+	go.addComponent(HurtFlash).strike(0, 0, Time.time);
+	onStruck({ world, arc: null } as never, { by: go, target: go, verb: 'stab', how: 'hit', down: true });
+	resetTime(Time.time + 1);
+	go.getComponent(HurtFlash)!.update(0);
 	assert.equal(go.getComponent(Reading)!.active, false);
 	for (let i = 0; i < 100; i++) {
 		seated.lateUpdate(0.02);
 	}
 	assert.equal(seated.held, false);
-	assert.equal(seat.getComponent(Furniture)?.occupant, null);
+	assert.ok(!seat.getComponent(Furniture)?.occupants.some((go) => go));
 	assert.equal(go.getComponent(BoxCollider)?.enabled, false);
 });
 

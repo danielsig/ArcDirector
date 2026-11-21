@@ -46,6 +46,17 @@ export class Camera extends Component {
 		this._impact = { at: at.clone(), t0: Time.time, seconds };
 	}
 
+	/**
+	 * Meters along the ground from the camera, whichever way it turns, within which it can show anything: out to the
+	 * scene's fog, where everything has faded (else `far`), at the corners of the view, which reach farthest.
+	 */
+	public get sight():number {
+		const fog = this.gameObject.world?.native.fog;
+		const depth = Math.min(this.far, fog instanceof THREE.Fog ? fog.far : Infinity);
+		const tan = Math.tan(this.fov * Math.PI / 360);
+		return depth * Math.hypot(1, tan, tan * this.native.aspect);
+	}
+
 	/** The impact frame to draw now, or null. */
 	public get impactFrame():ImpactFrame | null {
 		const { at, t0, seconds } = this._impact;

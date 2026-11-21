@@ -1,4 +1,5 @@
-import { prefs, type ArcFormatPref, type PlayerMode, type ShadowQuality, type SystemOneKind } from '../prefs';
+import { emptyInferClock, type InferClock } from 'arc-director';
+import { prefs } from '../prefs';
 import { characterOptions, resolvePlayerKind } from '../render/character-models';
 import type { RenderStats } from '@arc-director/kindling';
 import type { PerfStats } from '../engine/PerfHistory';
@@ -42,7 +43,7 @@ export type HudSpeech = {
 	timestamp:number;
 };
 
-/** Item defs drawn as tiny icons over the heads of whoever carries them (`SceneDef.carried`). */
+/** Item defs drawn as tiny icons over the heads of whoever carries them (`Scene.carried`). */
 export const CARRY_ICONS = ['fire_mushroom', 'moon_mushroom', 'silver_trout', 'brass_key', 'iron_key'] as const;
 
 export type HudPickup = {
@@ -142,7 +143,7 @@ export function noGoals():HudGoals {
 	return { left: { color: 'gold', goals: [] }, right: { color: 'gold', goals: [] } };
 }
 
-/** The card beside a character the player points at or stands close to (`SceneDef.inspect`). */
+/** The card beside a character the player points at or stands close to (`Scene.inspect`). */
 export type HudInspect = {
 	id:string;
 	name:string;
@@ -202,7 +203,8 @@ export const MINIMAP_SIZE = CHUNK_SIZE * 7;
 
 export type MenuPage = 'game' | 'display' | 'audio' | 'testing';
 
-export type HudModel = {
+/** What the game shows: written by the `Hud` component each frame (the chat and the AI log by the director). Vue only reads it. */
+export type HudFrame = {
 	hp:number;
 	maxHP:number;
 	gold:number;
@@ -223,14 +225,40 @@ export type HudModel = {
 	heldRight:string;
 	back:string;
 	speech:HudSpeech[];
-	chatOpen:boolean;
 	chat:HudChatLine[];
-	aiLogOpen:boolean;
 	aiLog:HudAiLogEntry[];
 	/** The latest thinks, oldest first; kept up only while the AI log is open. */
 	thinks:HudThink[];
+	/** Updated only while the overlay or the Testing page shows it (reading it walks the scene). */
+	renderStats:RenderStats & PerfStats;
+	/** Frames per second over the last second. Updated only while the FPS counter pref is on. */
+	fps:number;
+	/** Minds at work, each on its slate. */
+	slates:HudSlate[];
+	/** The model NPCs think with, as the director resolved it; empty until it has. */
+	activeModel:string;
+	/** The model's clocks. Updated only while the menu's Arc Director page shows them. */
+	infer:InferClock;
+	mindStats:HudMindStats[];
+	minimap:{
+		originX:number;
+		originZ:number;
+		width:number;
+		height:number;
+		/** Bumps only when the tile grid is rebuilt — not every frame. */
+		tileRev:number;
+		cells:MinimapCell[];
+		playerX:number;
+		playerZ:number;
+		playerYaw:number;
+	};
+};
+
+/** The HUD's own state: owned by Vue, read and set by `Session`, read by the frame. */
+export type HudUI = {
+	chatOpen:boolean;
+	aiLogOpen:boolean;
 	sayOpen:boolean;
-	sayTo:string;
 	sayPeers:string[];
 	sayItems:string[];
 	/** What each person offers the player, by lowercase name. */
@@ -247,30 +275,6 @@ export type HudModel = {
 	bootFrom:'pose' | 'save' | 'spawn';
 	/** Bump to boot a new Game (load, restart). */
 	boots:number;
-	/** Who the player is: participant, observer (unnoticed by NPCs) or camera (no body). Default observer. */
-	player:PlayerMode;
-	/** ArcDirector ticks and NPC motors. Default on. */
-	arcDirectorOn:boolean;
-	/** Chat model id currently in use / selected in the menu. */
-	model:string;
-	/** PriorityThinkQueue slots (HTTP in flight). Menu + localStorage. */
-	maxParallel:number;
-	/** LM Studio `context_length` when loading the chat model. Menu + localStorage. */
-	contextLength:number;
-	/** This page stopped writing prefs to storage (MCP `set_pref` with `persist: false`). Cleared by a reload. */
-	prefsDetached:boolean;
-	/** Hold new NPC thinks until the model is idle (or batchWait), then start a wave. Menu + localStorage. */
-	batchThinks:boolean;
-	/** CoT on. Menu + localStorage. */
-	thinkingBudget:number;
-	/** Sampling temperature, 0 to 2. Menu + localStorage. */
-	temperature:number;
-	/** How NPCs write an Arc: text, JSON, or JSON the server must follow. Menu + localStorage. Testing. */
-	arcFormat:ArcFormatPref;
-	/** The System One behind `choose`. Menu + localStorage. */
-	systemOne:SystemOneKind;
-	/** The local System One's model; empty is the main model. Menu + localStorage. */
-	decisionModel:string;
 	/** The bench whose window is open over the menu, or null. */
 	bench:BenchKind | null;
 	/** Candidates ticked, per bench. */
@@ -285,58 +289,17 @@ export type HudModel = {
 	playerKinds:{ id:string; label:string }[];
 	/** Testing-only overlay (`stats=1`). */
 	statsOverlay:boolean;
-	/** Updated only while the overlay or the Testing page shows it (reading it walks the scene). */
-	renderStats:RenderStats & PerfStats;
-	detailMaps:boolean;
-	shadows:ShadowQuality;
-	fpsCounter:boolean;
-	/** Frames per second over the last second. Updated only while {@link fpsCounter} is on. */
-	fps:number;
-	/** Minds at work, each on its slate. */
-	slates:HudSlate[];
-	/** Dots over the head of a mind thinking. */
-	thinkingBubbles:boolean;
-	mindVisuals:boolean;
-	arcSlates:boolean;
-	orderArcs:boolean;
-	toolIcons:boolean;
-	toolPoses:boolean;
-	toolFx:boolean;
-	/** The model NPCs think with, as the director resolved it; empty until it has. */
-	activeModel:string;
-	inferCalls:number;
-	inferContextMs:number;
-	inferGenerateMs:number;
-	inferWallMs:number;
-	inferContextKnown:number;
-	inferLastContextMs:number | null;
-	inferLastGenerateMs:number | null;
-	inferLastWallMs:number | null;
-	mindStats:HudMindStats[];
-	musicVolume:number;
-	sfxVolume:number;
-	voices:boolean;
-	audioMuted:boolean;
-	/** Music off; its volume is kept. */
-	musicMuted:boolean;
-	minimap:{
-		originX:number;
-		originZ:number;
-		width:number;
-		height:number;
-		/** Bumps only when the tile grid is rebuilt — not every frame. */
-		tileRev:number;
-		cells:MinimapCell[];
-		playerX:number;
-		playerZ:number;
-		playerYaw:number;
-		/** Centered player, scrolling map. False = current-chunk map, moving arrow. */
-		follow:boolean;
-	};
+	/** Centered player, scrolling minimap. False = current-chunk map, moving arrow. */
+	minimapFollow:boolean;
 };
 
+/** The HUD's one reactive object, both halves. */
+export type HudModel = HudFrame & HudUI;
+
+/** The HUD as the frame sees it: its own half to write, the UI's to read. */
+export type HudView = HudFrame & Readonly<HudUI>;
+
 export function emptyHud():HudModel {
-	const p = prefs();
 	return {
 		hp: 5,
 		maxHP: 5,
@@ -359,70 +322,15 @@ export function emptyHud():HudModel {
 		heldRight: '',
 		back: '',
 		speech: [],
-		chatOpen: false,
 		chat: [],
-		aiLogOpen: false,
 		aiLog: [],
 		thinks: [],
-		sayOpen: false,
-		sayTo: '',
-		sayPeers: [],
-		sayItems: [],
-		sayOffers: {},
-		menuOpen: false,
-		guideOpen: false,
-		menuPage: 'testing',
-		menuNotice: '',
-		savedUTC: '',
-		bootFrom: 'pose',
-		boots: 0,
-		player: p.player,
-		arcDirectorOn: p.ai,
-		model: p.model,
-		maxParallel: p.maxParallel,
-		contextLength: p.contextLength,
-		prefsDetached: false,
-		batchThinks: p.batchThinks,
-		thinkingBudget: p.thinkingBudget,
-		temperature: p.temperature,
-		arcFormat: p.arcFormat,
-		systemOne: p.systemOne,
-		decisionModel: p.decisionModel,
-		bench: null,
-		benchPick: { decision: [], arc: [] },
-		benchRows: { decision: [], arc: [] },
-		benchRunning: false,
-		playerKind: resolvePlayerKind(p.playerKind),
-		playerKinds: characterOptions(),
-		statsOverlay: readURLStats(),
 		renderStats: { calls: 0, triangles: 0, geometries: 0, textures: 0, framebufferMemory: 0, sceneMemory: 0, frameMS: 0, frameMSNow: 0, fps: [], phaseMS: { director: 0, simulate: 0, render: 0 }, heapMB: undefined },
-		detailMaps: p.detailMaps,
-		shadows: p.shadows,
-		fpsCounter: p.fpsCounter,
 		fps: 0,
 		slates: [],
-		thinkingBubbles: p.thinkingBubbles,
-		mindVisuals: p.mindVisuals,
-		arcSlates: p.arcSlates,
-		orderArcs: p.orderArcs,
-		toolIcons: p.toolIcons,
-		toolPoses: p.toolPoses,
-		toolFx: p.toolFx,
 		activeModel: '',
-		inferCalls: 0,
-		inferContextMs: 0,
-		inferGenerateMs: 0,
-		inferWallMs: 0,
-		inferContextKnown: 0,
-		inferLastContextMs: null,
-		inferLastGenerateMs: null,
-		inferLastWallMs: null,
+		infer: emptyInferClock(),
 		mindStats: [],
-		musicVolume: p.music,
-		sfxVolume: p.sfx,
-		voices: p.voices,
-		audioMuted: p.muted,
-		musicMuted: p.musicMuted,
 		minimap: {
 			originX: 0,
 			originZ: 0,
@@ -433,7 +341,27 @@ export function emptyHud():HudModel {
 			playerX: 0,
 			playerZ: 0,
 			playerYaw: 0,
-			follow: true,
 		},
+		chatOpen: false,
+		aiLogOpen: false,
+		sayOpen: false,
+		sayPeers: [],
+		sayItems: [],
+		sayOffers: {},
+		menuOpen: false,
+		guideOpen: false,
+		menuPage: 'testing',
+		menuNotice: '',
+		savedUTC: '',
+		bootFrom: 'pose',
+		boots: 0,
+		bench: null,
+		benchPick: { decision: [], arc: [] },
+		benchRows: { decision: [], arc: [] },
+		benchRunning: false,
+		playerKind: resolvePlayerKind(prefs().playerKind),
+		playerKinds: characterOptions(),
+		statsOverlay: readURLStats(),
+		minimapFollow: true,
 	};
 }

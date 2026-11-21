@@ -1,7 +1,8 @@
 import { Time, type GameObject } from '@arc-director/kindling';
 import type { ThinkEvent } from 'arc-director';
 import { cueAt, cueAtPoint } from '../audio/cue';
-import { CharacterPose, stanceOf } from '../characters/CharacterPose';
+import { CharacterPose } from '../characters/CharacterPose';
+import { stanceOf } from '../characters/moves/pose-body';
 import type { DemoWorld } from '../engine/demo-world';
 import type { SfxName } from '../audio/sfx';
 import { prefs } from '../prefs';
@@ -9,8 +10,9 @@ import { orderArcs } from '../render/arc-fx';
 import type { Stance } from '../render/spell-fx';
 import { toolFx } from '../render/tool-fx';
 import type { GoalColor, SlateState } from '../ui/hud-model';
-import { findObject, idOf, isLiving } from './names';
+import { findObject, isLiving } from './names';
 import type { SceneGoals } from './game-types';
+import { idOf } from '../engine/components';
 
 /** How long a slate stays once its think is over (s): an Arc chosen, an error to read, or cut short by a newer think. */
 const HOLD_DONE = 2;
@@ -259,7 +261,7 @@ export class ThinkShow {
 			this._tools.set(anchor.name, { tool, until: Time.time + TOOL_SECONDS });
 		}
 		if (pose) {
-			go.getComponent(CharacterPose)?.useTool(tool, TOOL_SECONDS);
+			go.getComponent(CharacterPose)?.tool.show(tool, TOOL_SECONDS);
 		}
 		if (fx) {
 			toolFx(this._world.native, tool, () => this.anchorOf(who)?.stance ?? null, TOOL_SECONDS);

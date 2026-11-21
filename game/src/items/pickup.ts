@@ -1,50 +1,17 @@
-import { distanceXZ, type GameObject, type XZ } from '@arc-director/kindling';
-import { showNamingText, type NamingText } from 'arc-director';
-import { Chest, Door, Lock, Named, TAKE_REACHED } from '../engine/components';
+import { distanceXZ, yawToForward, type GameObject } from '@arc-director/kindling';
+import { Named, TAKE_REACHED } from '../engine/components';
 import type { DemoWorld } from '../engine/demo-world';
-import { idOf } from '../director/names';
-import { Container, Harvest, Item, Pickupable } from './item-components';
-import { getDef } from './defs';
+import { Item, Pickupable } from './item-components';
+import { getDef, ITEM_DEFS } from './defs';
 import { equipItem } from './equip';
-import { characterIs, findCarried, findReady, itemMatchesName, tryInsert } from './inventory';
+import { tryInsert } from './inventory';
 import { instantiateDef, isBackpack, itemID, type ItemInstance } from './instance';
-import { nearestDoorway } from '../world/interior';
 import { captureItem, spawnWorldItem } from '../world/spawn-item';
 import { cueAt } from '../audio/cue';
+import { entityPoint, type Thing } from '../kit/thing';
 
 export const PICKUP_RANGE = 1.7;
 export const USE_RANGE = 2.2;
-/** How near a walker comes to a shut door before it reaches out and opens it. */
-const DOOR_REACH = 1.2;
-
-/**
- * The key that opens `lock`, wherever it lies, so a locked thing says `BrassKey` and not just "a brass key"; with who
- * carries it or what holds it, where `viewer` knows (`BrassKey, carried by William`, `BrassKey; it's in CellarChest`).
- * Each mind reads it in its own names, and the key is looked for only then: a route search past locked doors only
- * holds it.
- */
-export function keyNameFor(world:DemoWorld | null, lock:Lock, viewer?:GameObject):NamingText {
-	return (name) => {
-		const fits = (it:ItemInstance) => it.Key?.keyID === lock.keyID;
-		for (const go of world?.objects ?? []) {
-			const item = go.getComponent(Item);
-			if (item && getDef(item.defID).components.Key?.keyID === lock.keyID) {
-				return name(idOf(go));
-			}
-			const held = findCarried(go, fits);
-			if (held) {
-				const known = viewer && go !== viewer && world!.canSeeInventoryOf(viewer, go);
-				return !known ? name(itemID(held)) : `${name(itemID(held))}${go.getComponent(Chest) ? "; it's in" : ', carried by'} ${name(idOf(go))}`;
-			}
-		}
-		return `a ${lock.keyID} key`;
-	};
-}
-
-/** `locked — needs BrassKey`, the one failure every locked door and chest gives, worded for `viewer` ({@link keyNameFor}). */
-export function lockedReason(world:DemoWorld | null, lock:Lock, viewer?:GameObject):NamingText {
-	return lock.keyID ? (name) => `locked — needs ${showNamingText(keyNameFor(world, lock, viewer), name)}` : 'locked';
-}
 
 export function nearestPickup(character:GameObject):GameObject | null {
 	const world = character.world;
@@ -80,10 +47,6 @@ export function pickup(character:GameObject, loot:GameObject):string {
 	if (!world) {
 		return 'no world';
 	}
-	const crop = loot.getComponent(Harvest);
-	if (crop && !characterIs(character, crop.harvester)) {
-		return `only ${crop.harvester} can harvest that`;
-	}
 	const inst = captureItem(loot);
 	if (isBackpack(inst)) {
 		const err = equipItem(character, inst, world, 'back');
@@ -109,13 +72,13 @@ function takeAway(world:DemoWorld, character:GameObject, loot:GameObject):void {
 	});
 }
 
-export function dropItem(character:GameObject, item:import('./instance').ItemInstance):void {
+export function dropItem(character:GameObject, item:ItemInstance):void {
 	const world = character.world;
 	if (!world) {
 		return;
 	}
 	const p = character.transform.position;
-	const fwd = { x: -Math.sin(character.transform.yaw), z: -Math.cos(character.transform.yaw) };
+	const fwd = yawToForward(character.transform.yaw);
 	spawnWorldItem(world, item, p.x + fwd.x * 0.7, p.y, p.z + fwd.z * 0.7);
 	cueAt(world, 'drop', character);
 }
@@ -150,147 +113,11 @@ export function spawnDefAt(
 	return spawnWorldItem(world, inst, x, y, z, chunkID);
 }
 
-/** A walker heading for `to` through a shut door no lock holds, and within arm's reach of it, opens it. */
-export function openDoorAhead(character:GameObject, to:XZ):void {
-	const p = character.transform.position;
-	const doorGo = character.world && nearestDoorway(character.world, p.x, p.z, DOOR_REACH);
-	const door = doorGo?.getComponent(Door);
-	if (!doorGo || !door || door.open || !door.opensFrom(p)) {
-		return;
-	}
-	const d = doorGo.transform.position;
-	const ahead = (to.x - p.x) * (d.x - p.x) + (to.z - p.z) * (d.z - p.z);
-	if (ahead > 0) {
-		interactDoor(character, doorGo);
-	}
-}
-
-export function interactDoor(character:GameObject, doorGo:GameObject):string {
-	const world = character.world;
-	const lock = doorGo.getComponent(Lock);
-	const door = doorGo.getComponent(Door);
-	if (!door) {
-		return 'not a door';
-	}
-	// Anyone can close a door; a lock only has a say in opening it.
-	if (!door.open && lock?.locked && !door.opensFrom(character.transform.position)) {
-		if (!findReady(character, (it) => it.Key?.keyID === lock.keyID)) {
-			if (findCarried(character, (it) => it.Key?.keyID === lock.keyID)) {
-				return 'the key is in your pack';
-			}
-			return showNamingText(lockedReason(character.world, lock, character));
-		}
-		lock.locked &&= lock.lockedFrom === 'outside';
-		door.open = true;
-		door.syncCollision();
-		if (world) {
-			cueAt(world, 'unlock', doorGo);
-			cueAt(world, 'doorOpen', doorGo);
-		}
-		return lock.locked ? 'opened' : 'unlocked';
-	}
-	door.open = !door.open;
-	door.syncCollision();
-	if (world) {
-		cueAt(world, door.open ? 'doorOpen' : 'doorClose', doorGo);
-	}
-	return door.open ? 'opened' : 'closed';
-}
-
-export type ChestHold = {
-	chest:GameObject;
-	item:ItemInstance;
-	bag:Container;
+/** An item a map lays on the floor, as a dropped one lands: as many as its legend's `count`, `wild` where it grows. */
+export const looseItem:Thing = {
+	defs: Object.keys(ITEM_DEFS),
+	spawn: (world, chunk, ents) => ents.forEach((ent) => {
+		const { x, y, z } = entityPoint(chunk, ent);
+		spawnDefAt(world, ent.def, x, y, z, chunk.id, ent.count, ent.name).getComponent(Pickupable)!.wild = !!ent.wild;
+	}),
 };
-
-/** `name` in `chest`, or nothing. */
-export function chestHolding(chest:GameObject, name:string):ChestHold | null {
-	const bag = chest.getComponent(Chest) ? chest.getComponent(Container) : undefined;
-	const item = bag?.contents.find((it) => itemMatchesName(it, name));
-	return bag && item ? { chest, item, bag } : null;
-}
-
-export function findChestHolding(world:DemoWorld, name:string):ChestHold | null {
-	for (const go of world.objects) {
-		const held = chestHolding(go, name);
-		if (held) {
-			return held;
-		}
-	}
-	return null;
-}
-
-/** Walk target for a name: floor object, or the open unlocked chest that holds it. */
-export function resolveNamedTarget(world:DemoWorld, name:string):GameObject | undefined {
-	const go = world.findNamed(name);
-	if (go) {
-		return go;
-	}
-	const held = findChestHolding(world, name);
-	if (!held) {
-		return undefined;
-	}
-	const lock = held.chest.getComponent(Lock);
-	const chest = held.chest.getComponent(Chest);
-	if (lock?.locked || (chest && !chest.open)) {
-		return undefined;
-	}
-	return held.chest;
-}
-
-/** `character` takes `held` out of its chest: `took Almanac from CottageBookshelf`, or why not, naming by id. */
-export function takeFromChest(character:GameObject, held:ChestHold):NamingText {
-	const lock = held.chest.getComponent(Lock);
-	const chest = held.chest.getComponent(Chest);
-	const chestID = idOf(held.chest);
-	if (lock?.locked) {
-		return (name) => `${name(chestID)} is locked`;
-	}
-	if (!tryInsert(character, held.item)) {
-		return 'no room';
-	}
-	// A shut chest's lid is lifted to take from it.
-	if (chest && !chest.open) {
-		chest.open = true;
-		cueAt(character.world, 'chestOpen', held.chest);
-	}
-	const i = held.bag.contents.indexOf(held.item);
-	if (i >= 0) {
-		held.bag.contents.splice(i, 1);
-	}
-	character.world?.after(TAKE_REACHED, () => cueAt(character.world, 'take', character));
-	return (name) => `took ${name(itemID(held.item))} from ${name(chestID)}`;
-}
-
-export function interactChest(character:GameObject, chestGo:GameObject):string {
-	const chest = chestGo.getComponent(Chest);
-	const bag = chestGo.getComponent(Container);
-	const lock = chestGo.getComponent(Lock);
-	const name = chestGo.getComponent(Named)?.id ?? chestGo.id;
-	if (!chest || !bag) {
-		return 'not a chest';
-	}
-	if (lock?.locked) {
-		if (!findReady(character, (it) => it.Key?.keyID === lock.keyID)) {
-			if (findCarried(character, (it) => it.Key?.keyID === lock.keyID)) {
-				return 'the key is in your pack';
-			}
-			return showNamingText(lockedReason(character.world, lock, character));
-		}
-		lock.locked = false;
-		chest.open = true;
-		cueAt(character.world, 'unlock', chestGo);
-		cueAt(character.world, 'chestOpen', chestGo);
-		return 'unlocked';
-	}
-	if (!chest.open) {
-		chest.open = true;
-		cueAt(character.world, 'chestOpen', chestGo);
-		return 'opened';
-	}
-	const first = bag.contents[0];
-	if (!first) {
-		return `${name} is empty`;
-	}
-	return showNamingText(takeFromChest(character, { chest: chestGo, item: first, bag }));
-}

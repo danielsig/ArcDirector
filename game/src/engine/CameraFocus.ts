@@ -1,6 +1,5 @@
 import { Component, type XZ } from '@arc-director/kindling';
 import type { ExprVal } from 'arc-director';
-import { Camera } from './components';
 import { Order } from './order';
 import type { GameHost } from '../director/adapter';
 
@@ -20,14 +19,6 @@ export class CameraFocus extends Component {
 	public expr = '';
 	private _goal:XZ | null = null;
 	private _wait = 0;
-
-	/** Camera distance from the rig, in meters (clamped to the camera's range). */
-	public set zoom(distance:number) {
-		const cam = this.gameObject.world?.findByID('MainCamera')?.getComponent(Camera);
-		if (cam) {
-			cam.distance = Math.min(cam.maxDistance, Math.max(cam.minDistance, distance));
-		}
-	}
 
 	/** Whom `expr` picks now, by id, or why it cannot say. */
 	public picks(expr = this.expr):string[] | { error:string } {

@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, useTemplateRef, watch } from 'vue';
-import { SCENES } from '../data/scenes';
+import { SCENE_KEYS } from '../scenes/scene';
+import { SCENES } from '../scenes/scene-registry';
 import type { HudModel } from './hud-model';
 import { readBackquoteGlyph, universalKeys } from './bindings';
 import { briefSeen, markBriefSeen } from './briefs';
@@ -102,7 +103,7 @@ onUnmounted(() => {
 			<section class="column keys">
 				<h3>Keys</h3>
 				<dl>
-					<div v-for="row in [...rows, ...(scene?.keys ?? [])]" :key="row.action" class="row">
+					<div v-for="row in [...rows, ...SCENE_KEYS, ...(scene?.keys ?? [])]" :key="row.action" class="row">
 						<dt>{{ row.action }}</dt>
 						<dd>{{ row.key }}</dd>
 					</div>

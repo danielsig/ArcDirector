@@ -3,7 +3,8 @@ import { scoreProblems } from './midi.js';
 import { distanceGain, forceStereo, heardAt, makePanner, placePanner, poseListener } from './spatial.js';
 import { playVoiceNote } from './instruments.js';
 import { disconnectSoon, makeNoise, patchSeconds, pitched, playLayer, startLoopLayers, varied, type LoopNodes } from './synth.js';
-import type { ListenerPose, Score, SfxHandle, SfxOpts, SfxPatch } from './audio-types.js';
+import { Recording } from './Recording.js';
+import type { ListenerPose, Score, SfxHandle, SfxOpts, SfxPatch, Track } from './audio-types.js';
 
 function audioCtor():(new (opts?:AudioContextOptions)=>AudioContext) | undefined {
 	const g = globalThis as typeof globalThis & {
@@ -18,39 +19,6 @@ const HEAR = 22;
 const AHEAD = 0.008;
 /** First beat after play/resume. Lets the context wake so beat 0 is not skipped. */
 const START_LEAD = 0.18;
-
-function wrap(value:number, span:number):number {
-	if (!(span > 0)) {
-		return 0;
-	}
-	const w = value % span;
-	return w < 0 ? w + span : w;
-}
-
-/**
- * Where a recording playhead sits. `position` is the unwrapped start plus
- * elapsed seconds. Playback runs up to `loopEnd`, then jumps to `loopStart`.
- */
-export function placeRecording(position:number, loopStart:number, loopEnd:number):number {
-	if (!(loopEnd > 0)) {
-		return 0;
-	}
-	if (position < loopEnd) {
-		return position < 0 ? 0 : position;
-	}
-	const span = loopEnd - loopStart;
-	if (!(span > 0)) {
-		return loopStart;
-	}
-	let into = (position - loopEnd) % span;
-	if (into < 0) {
-		into += span;
-	}
-	if (into > span - 1e-4) {
-		into = 0;
-	}
-	return loopStart + into;
-}
 
 /** True when a note should be sent to Web Audio this frame. */
 export function noteIsDue(t:number, now:number, lookahead = LOOKAHEAD):boolean {
@@ -86,8 +54,8 @@ type LoopVoice = {
 };
 
 /**
- * Mixer. Scores are procedural. `playRecording` plays a finished file on the
- * music output, dry, so a mastered track is not sent through the synth room.
+ * Mixer. Scores are procedural. `playMusic` also plays a finished file (a `Track`)
+ * on the music output, dry, so a mastered track is not sent through the synth room.
  * Headless (no AudioContext) is a silent no-op.
  *
  * ```ts
@@ -124,18 +92,7 @@ export class Audio {
 	private _noise:AudioBuffer | null = null;
 	private _playing:Score | null = null;
 	/** Finished file on the music output. Loops. Not sent through the synth room. */
-	private _recording:AudioBufferSourceNode | null = null;
-	private _recordingBuffer:AudioBuffer | null = null;
-	private _recordingGain = 1;
-	private _recordingToken = 0;
-	private _recordingOffset = 0;
-	private _recordingOrigin = 0;
-	private _recordingID:string | null = null;
-	/** Seconds. 0 means the start of the file. */
-	private _recordingLoopStart = 0;
-	/** Seconds. 0 means the end of the file. */
-	private _recordingLoopEnd = 0;
-	private _pendingRecording:{ bytes:ArrayBuffer; gain:number } | null = null;
+	private _recording:Recording | null = null;
 	private _origin = 0;
 	private _musicHold = 0;
 	private _musicPaused = false;
@@ -174,32 +131,23 @@ export class Audio {
 	 * What the transport is driving. A recording uses 60 BPM so one beat is one
 	 * second and `loop` is where playback jumps back (`end`, or the file length).
 	 */
-	public get music():{ id:string; bpm:number; loop:number } | null {
+	public get music():{ id:string; title:string; bpm:number; loop:number } | null {
 		if (this._playing) {
-			return {
-				id: this._playing.id ?? '',
-				bpm: this._playing.bpm,
-				loop: this._playing.loop,
-			};
+			const id = this._playing.id ?? '';
+			return { id, title: this._playing.title ?? id, bpm: this._playing.bpm, loop: this._playing.loop };
 		}
-		if (!this._recordingID) {
-			return null;
-		}
-		return {
-			id: this._recordingID,
-			bpm: 60,
-			loop: this.recordingBounds().end,
-		};
+		const rec = this._recording;
+		return rec && { id: rec.id, title: rec.title, bpm: 60, loop: rec.bounds.end };
 	}
 
 	public get musicPaused():boolean {
-		return this._musicPaused;
+		return this._recording?.paused ?? this._musicPaused;
 	}
 
 	/** Beats from loop start, in `[0, loop)`. */
 	public musicBeat():number {
-		if (this._recordingID) {
-			return this.recordingSec();
+		if (this._recording) {
+			return this._recording.sec();
 		}
 		const score = this._playing;
 		if (!score) {
@@ -212,13 +160,8 @@ export class Audio {
 	}
 
 	public pauseMusic():void {
-		if (this._recordingID) {
-			if (this._musicPaused) {
-				return;
-			}
-			this._recordingOffset = this.recordingSec();
-			this._musicPaused = true;
-			this.releaseRecordingNode();
+		if (this._recording) {
+			this._recording.pause();
 			this.applyMix(true);
 			return;
 		}
@@ -231,12 +174,8 @@ export class Audio {
 	}
 
 	public unpauseMusic():void {
-		if (this._recordingID) {
-			if (!this._musicPaused) {
-				return;
-			}
-			this._musicPaused = false;
-			this.startRecordingNode();
+		if (this._recording) {
+			this._recording.unpause();
 			this.applyMix(true);
 			this.armPump();
 			return;
@@ -253,13 +192,8 @@ export class Audio {
 	}
 
 	public seekMusic(beat:number):void {
-		if (this._recordingID) {
-			const { end } = this.recordingBounds();
-			this._recordingOffset = end > 0 ? wrap(beat, end) : 0;
-			if (!this._musicPaused) {
-				this.releaseRecordingNode();
-				this.startRecordingNode();
-			}
+		if (this._recording) {
+			this._recording.seek(beat);
 			return;
 		}
 		const score = this._playing;
@@ -304,7 +238,6 @@ export class Audio {
 		this.applyMix(true);
 		this.armPendingLoops();
 		this.flushPendingSfx();
-		this.flushPendingRecording();
 		if (this._playing && this._clockDirty) {
 			this.armClock();
 		}
@@ -331,62 +264,57 @@ export class Audio {
 	}
 
 	/**
-	 * Loop a finished recording on the music output (volume, mute, duck).
-	 * Dry: it does not pass through the synth room. A string is fetched;
-	 * an `ArrayBuffer` is decoded. Headless queues nothing audible.
-	 *
-	 * Playback starts at 0. It runs until `loop.end` (default: the end of the
-	 * file), then jumps to `loop.start` (default: 0) and repeats that span.
+	 * Plays `music` on the music output (volume, mute, duck) in place of what played: a `Score`, or a `Track`, which
+	 * plays dry (not through the synth room). Resolves once it plays: a `Track` is fetched and decoded first.
+	 * Throws on an invalid `Score`. Headless, nothing sounds.
 	 */
-	public async playRecording(
-		src:string | ArrayBuffer,
-		gain = 1,
-		id = 'recording',
-		loop?:{ start?:number; end?:number },
-	):Promise<void> {
-		const token = ++this._recordingToken;
-		this._pendingRecording = null;
-		this.releaseRecordingNode();
-		this._recordingBuffer = null;
-		this._recordingOffset = 0;
-		this._recordingLoopStart = loop?.start ?? 0;
-		this._recordingLoopEnd = loop?.end ?? 0;
-		this._recordingID = id;
-		this._playing = null;
-		this._musicPaused = false;
-		this._musicHold = 0;
-		this._clockDirty = true;
-		this._firedCues.clear();
-		this.cutMusicVoices();
+	public playMusic(music:Score | Track):Promise<void> {
+		if ('recording' in music) {
+			return this.playTrack(music);
+		}
+		const bad = scoreProblems(music);
+		if (bad.length) {
+			throw new Error(`${music.id ?? 'score'}: ${bad.join(', ')}`);
+		}
 		const ctx = this.ensure();
-		let bytes:ArrayBuffer;
-		if (typeof src === 'string') {
-			const res = await fetch(src);
-			if (!res.ok) {
-				throw new Error(`recording: HTTP ${res.status}`);
-			}
-			bytes = await res.arrayBuffer();
+		this.cue(music);
+		this.armPump();
+		if (ctx) {
+			this.applyMix(true);
+			this.update();
 		}
-		else {
-			bytes = src.slice(0);
-		}
-		if (token !== this._recordingToken) {
-			return;
-		}
-		if (!ctx) {
-			this._pendingRecording = { bytes, gain };
-			return;
-		}
-		await this.attachRecording(ctx, bytes, gain, token);
+		return Promise.resolve();
 	}
 
-	public playMusic(score:Score):void {
-		const bad = scoreProblems(score);
-		if (bad.length) {
-			throw new Error(`${score.id ?? 'score'}: ${bad.join(', ')}`);
-		}
-		this.stopRecording();
+	private async playTrack(track:Track):Promise<void> {
+		this.cue(null);
+		const rec = new Recording(track.id ?? 'recording', track.gain ?? 1, track, track.title);
+		this._recording = rec;
 		const ctx = this.ensure();
+		if (!ctx) {
+			return;
+		}
+		const res = typeof track.recording === 'string' ? await fetch(track.recording) : null;
+		if (res && !res.ok) {
+			throw new Error(`recording: HTTP ${res.status}`);
+		}
+		const bytes = res ? await res.arrayBuffer() : track.recording as ArrayBuffer;
+		if (this._recording !== rec) {
+			return;
+		}
+		const buffer = await ctx.decodeAudioData(bytes.slice(0));
+		if (this._recording !== rec || this._ctx !== ctx || !this._musicGain) {
+			return;
+		}
+		rec.attach(ctx, this._musicGain, buffer);
+		this.applyMix(true);
+		this.armPump();
+	}
+
+	/** Drops what plays (the recording, the score's notes) and sets the score clock to `score`'s start. */
+	private cue(score:Score | null):void {
+		this._recording?.stop();
+		this._recording = null;
 		this._playing = score;
 		this._musicPaused = false;
 		this._musicHold = 0;
@@ -395,12 +323,6 @@ export class Audio {
 		this._pruneCycle = -1;
 		this._clockDirty = true;
 		this.cutMusicVoices();
-		this.armPump();
-		if (!ctx) {
-			return;
-		}
-		this.applyMix(true);
-		this.update();
 	}
 
 	private elapsedSec():number {
@@ -498,123 +420,8 @@ export class Audio {
 		this._clockDirty = false;
 	}
 
-	private stopRecording():void {
-		this._recordingToken += 1;
-		this._pendingRecording = null;
-		this._recordingBuffer = null;
-		this._recordingOffset = 0;
-		this._recordingLoopStart = 0;
-		this._recordingLoopEnd = 0;
-		this._recordingID = null;
-		this.releaseRecordingNode();
-	}
-
-	/** Playable span. `end` is 0 until a buffer is decoded. */
-	private recordingBounds():{ start:number; end:number } {
-		const dur = this._recordingBuffer?.duration ?? 0;
-		if (!(dur > 0)) {
-			return { start: 0, end: 0 };
-		}
-		let end = this._recordingLoopEnd > 0 ? Math.min(this._recordingLoopEnd, dur) : dur;
-		let start = this._recordingLoopStart;
-		if (!(start >= 0) || !(end > start)) {
-			start = 0;
-			end = dur;
-		}
-		return { start, end };
-	}
-
-	/** Seconds into the file. One beat on the transport. */
-	private recordingSec():number {
-		const { start, end } = this.recordingBounds();
-		let sec = this._recordingOffset;
-		if (!this._musicPaused && this._recording && this._ctx) {
-			sec += this._ctx.currentTime - this._recordingOrigin;
-		}
-		return placeRecording(sec, start, end);
-	}
-
-	private startRecordingNode():void {
-		const ctx = this._ctx;
-		const buffer = this._recordingBuffer;
-		const dest = this._musicGain;
-		if (!ctx || !buffer || !dest || this._musicPaused) {
-			return;
-		}
-		const { start, end } = this.recordingBounds();
-		let offset = end > 0 ? wrap(this._recordingOffset, end) : 0;
-		if (offset >= end - 0.001) {
-			offset = start;
-		}
-		const node = ctx.createBufferSource();
-		node.buffer = buffer;
-		node.loop = true;
-		if (start > 0 || end < buffer.duration - 0.0005) {
-			node.loopStart = start;
-			node.loopEnd = end;
-		}
-		node.connect(dest);
-		const when = ctx.currentTime;
-		node.start(when, offset);
-		this._recording = node;
-		this._recordingOrigin = when;
-		this._recordingOffset = offset;
-	}
-
-	private releaseRecordingNode():void {
-		const node = this._recording;
-		this._recording = null;
-		if (!node) {
-			return;
-		}
-		try {
-			node.stop();
-			node.disconnect();
-		}
-		catch {
-			// already stopped
-		}
-	}
-
-	private async attachRecording(
-		ctx:AudioContext,
-		bytes:ArrayBuffer,
-		gain:number,
-		token:number,
-	):Promise<void> {
-		const buffer = await ctx.decodeAudioData(bytes.slice(0));
-		if (token !== this._recordingToken || this._ctx !== ctx || !this._musicGain) {
-			return;
-		}
-		this.releaseRecordingNode();
-		this._recordingBuffer = buffer;
-		this._recordingGain = gain;
-		this._recordingOffset = 0;
-		if (!this._musicPaused) {
-			this.startRecordingNode();
-		}
-		this.applyMix(true);
-		this.armPump();
-	}
-
-	private flushPendingRecording():void {
-		const pending = this._pendingRecording;
-		const ctx = this._ctx;
-		if (!pending || !ctx) {
-			return;
-		}
-		this._pendingRecording = null;
-		void this.attachRecording(ctx, pending.bytes, pending.gain, this._recordingToken);
-	}
-
 	public stopMusic():void {
-		this.stopRecording();
-		this._playing = null;
-		this._musicPaused = false;
-		this._musicHold = 0;
-		this._clockDirty = true;
-		this._firedCues.clear();
-		this.cutMusicVoices();
+		this.cue(null);
 		const ctx = this._ctx;
 		const g = this._musicGain;
 		if (ctx && g) {
@@ -982,7 +789,8 @@ export class Audio {
 	}
 
 	public dispose():void {
-		this.stopRecording();
+		this._recording?.stop();
+		this._recording = null;
 		this.releaseMusicFilters();
 		this._playing = null;
 		if (this._pump) {
@@ -1065,7 +873,7 @@ export class Audio {
 	}
 
 	private applyMix(force:boolean):void {
-		const key = `${this.muted ? 1 : 0}:${this.musicVolume}:${this.sfxVolume}:${this.duck}:${this._playing ? 1 : 0}:${this._recording ? 1 : 0}:${this._recordingGain}`;
+		const key = `${this.muted ? 1 : 0}:${this.musicVolume}:${this.sfxVolume}:${this.duck}:${this._playing ? 1 : 0}:${this._recording?.sounding ? 1 : 0}:${this._recording?.gain}`;
 		if (!force && key === this._lastMix) {
 			return;
 		}
@@ -1076,8 +884,9 @@ export class Audio {
 		}
 		const now = ctx.currentTime;
 		this._master.gain.setTargetAtTime(this.muted ? 0.0001 : 1, now, 0.04);
-		const musicOn = !!this._playing || !!this._recording;
-		const gain = this._playing?.gain ?? (this._recording ? this._recordingGain : 1);
+		const sounding = this._recording?.sounding ? this._recording : null;
+		const musicOn = !!this._playing || !!sounding;
+		const gain = this._playing?.gain ?? sounding?.gain ?? 1;
 		const music = musicOn ? this.musicVolume * this.duck * gain : 0.0001;
 		this._musicGain.gain.setTargetAtTime(Math.max(0.0001, music), now, 0.08);
 		this._sfxGain.gain.setTargetAtTime(Math.max(0.0001, this.sfxVolume), now, 0.04);
@@ -1100,7 +909,7 @@ export class Audio {
 			if (!this._ctx) {
 				return;
 			}
-			const busy = !!this._playing || !!this._recordingID || this._loops.size > 0 || this._pendingLoops.size > 0;
+			const busy = !!this._playing || !!this._recording || this._loops.size > 0 || this._pendingLoops.size > 0;
 			if (!busy) {
 				return;
 			}

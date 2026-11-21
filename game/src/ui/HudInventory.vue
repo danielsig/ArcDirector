@@ -2,12 +2,14 @@
 import { inject } from 'vue';
 import type { HudModel } from './hud-model';
 import { sessionKey } from './session-key';
+import { usePrefs } from './use-prefs';
 
 defineProps<{
 	hud:HudModel;
 }>();
 
 const session = inject(sessionKey);
+const live = usePrefs();
 </script>
 
 <template>
@@ -19,7 +21,7 @@ const session = inject(sessionKey);
 		</div>
 		<div class="bar">
 			<button
-				v-if="hud.touch && hud.player !== 'camera'"
+				v-if="hud.touch && live.player !== 'camera'"
 				type="button"
 				class="slot swap"
 				aria-label="Swap hands"

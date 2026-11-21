@@ -8,6 +8,11 @@ import { humanBone, restTurn } from './toon-model.js';
 
 export type Hand = 'left' | 'right';
 
+/** The hand that `hand` is not. */
+export function otherHand(hand:Hand):Hand {
+	return hand === 'right' ? 'left' : 'right';
+}
+
 /**
  * How a prop sits in a hand. Props stand up their long axis (+Y of the prop's root); the fist
  * closes around it. Angles are for a hand at rest (the T-pose: palm down, fist pointing ahead).

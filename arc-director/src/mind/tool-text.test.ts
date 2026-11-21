@@ -19,7 +19,7 @@ describe('writtenToolCalls', () => {
 			'the chat template\'s own quote tokens',
 		);
 		assert.deepEqual(read('call:recall{query:<|"|>Town Guard HQ<|"|>}').calls, [{ name: 'recall', args: { query: 'Town Guard HQ' } }], 'Gemma 4 12B, out of tool rounds');
-		assert.deepEqual(read('say("Wait.")\ncall recall(query="Market")').calls, [{ name: 'recall', args: { query: 'Market' } }]);
+		assert.deepEqual(read('say("Wait.")\ncall recall(query="Marketplace")').calls, [{ name: 'recall', args: { query: 'Marketplace' } }]);
 		assert.deepEqual(read('call: recall(query=Captain)').calls, [{ name: 'recall', args: { query: 'Captain' } }]);
 	});
 

@@ -74,7 +74,7 @@ Creates a `World` (or uses the one you pass in) and, when there is a `document`,
 | `tick(dt)` | Clamps `dt`, advances `Time` and calls `simulate`. Does nothing while `paused`. |
 | `simulate(dt)` | Runs the component loop (protected). |
 | `destroy(go)` | Queues `world.destroy(go)`. |
-| `dispose()` | Stops the loop and disposes of the renderer. |
+| `dispose()` | Stops the loop, destroys every object (`onDisable`, `onDestroy`), then lets go of input, audio and the renderer. |
 
 `unfocusedHz` (default `3`) caps how often the canvas is drawn while the page is not focused. Set it on your `Game` instance.
 
@@ -88,19 +88,16 @@ Override `onStart` for one-off setup when the loop begins.
 |--|--|
 | `objects` | A flat list of every registered GameObject, children included. |
 | `native` | The `THREE.Scene`. |
-| `tileSize` | The side of one tile. `0` means no tile collision. If you use a grid, set it to your cell size. |
-| `sampleTerrain(x, z)` | Override it to supply the height, and whether the ground is blocked or climbable, at a point. Returns `undefined` by default. |
-| `chunkSize` / `chunks` | The number of tiles along a chunk's side (`0` means no chunks), and the loaded `Chunk`s. See [Chunks](#chunks). |
-| `addChunk` / `removeChunk` / `chunkAt(cx, cz)` / `chunkAtWorld(x, z)` / `chunkCoordAt(x, z)` / `tileAtWorld(x, z)` / `chunkBounds()` | The chunk registry and its lookups. `chunkBounds` is the XZ box around every loaded chunk; the exported `chunkBounds(chunks)` boxes any list (a whole scene, loaded or not). |
+| `terrain` | The ground: chunks, tiles and what stands where. See [Terrain and chunks](#terrain-and-chunks). |
 | `add(go)` | Registers the whole tree, parents its root to the scene and runs `awakeAll`. |
 | `remove(go)` | Unregisters **this** object right away. `onDestroy` is not called, and its children stay. |
 | `destroy(go)` | Queues the object to be destroyed at the end of `simulate`. Its children go with it. |
 | `findByID(id)` | The first object in `objects` with that ID. |
 | `forEachComponent(ctor, fn)` | Calls `fn` with one component per object, disabled ones included. |
-| `tileCoordAt(x, z)` / `tileCenter(tx, tz)` | Converts between world XZ and tile coordinates (using `tileSize`, or 1 when it is 0). |
 | `objectsInTile(tx, tz)` | Spatial hash lookup: the objects whose position falls in that tile (using `tileSize`, or 1 when it is 0). |
 | `forEachNear(area, fn)` | Broad phase: every object whose `BoxCollider` may overlap `area` (a `Bounds`). Check the exact overlap yourself. |
-| `blocker(body, x, z, { from?, above? })` | What `body` would run into standing at that point, by the same tests physics pushes bodies out with: a solid collider with no `Rigidbody`, else `'terrain'` (a blocked tile's solids, or ground it cannot step to `from` where it is), else nothing. With `from`, whatever it would run into on the straight way from there counts too, except what it already touches, which it may leave. Plan routes with it and they are walkable. Bodies slide around a cylinder, so it stops one only over the body's middle. With `body` null, what stands at the point itself; `above` keeps to colliders taller than that (what one sees past). |
+| `blocker(body, x, z, { from? })` | What `body` would run into standing at that point, by the same tests physics pushes bodies out with: a solid collider with no `Rigidbody`, else `'terrain'` (a blocked tile's solids, or ground it cannot step to `from` where it is), else nothing. With `from`, whatever it would run into on the straight way from there counts too, except what it already touches, which it may leave. Plan routes with it and they are walkable. Bodies slide around a cylinder, so it stops one only over the body's middle. With `body` null, what stands at the point itself. |
+| `linecast(from, to, { filter? })` | The first thing on the straight line between two 3D points (Unity's `Physics.Linecast`), as a `LineHit` (`hit`: the object or `'terrain'`, `t` along the line, `point`): a solid collider (a box or upright cylinder from its object's Y up `size.y`), a block (a blocked tile with no `deck`, `top` meters above its height, `terrain.blockHeight` by default) or a blocked tile's `solids` (as tall), or the ground where the line dips under the top of a tile's floor. What either end is inside never stops it, so a line from one body's eyes to another's passes out of the first and into the second. `filter` picks the colliders that count. It walks the tiles with `tilesAlong(terrain, a, b, visit)`, exported: each tile the line from `a` to `b` crosses, in order, with the stretch of the line in it (`t0` to `t1`), stepping diagonally through a corner, until `visit` returns `false`. |
 | `reindex()` | Rebuilds the spatial hash. Physics does this once per step, after moving things, so queries see positions (and added or removed objects) as they were at that step. |
 
 A GameObject can belong to only one World.
@@ -147,9 +144,9 @@ The ground is XZ, and these name its shapes. A function that only reads a point 
 | | |
 |--|--|
 | `XZ`, `distanceXZ(a, b)` | A point or direction on the ground, `{ x, z }`, and the ground distance between two points or GameObjects (a GameObject counts at its position). A `Transform.position` is an `XZ` too. |
-| `Bounds`, `inBounds(box, x, z)` | A box on the ground, `{ minX, maxX, minZ, maxZ }`: a chunk, a collider's footprint, `TerrainSample.solids`. `inBounds` holds `min` up to, not at, `max`. |
+| `Bounds`, `inBounds(box, x, z)`, `boundsOf(points, pad)` | A box on the ground, `{ minX, maxX, minZ, maxZ }`: a chunk, a collider's footprint, `TerrainSample.solids`. `inBounds` holds `min` up to, not at, `max`. `boundsOf` is the box round some points, `pad` wider each side. |
 | `TileCoord`, `ChunkCoord`, `LocalCoord` | A tile `{ tx, tz }`, a chunk `{ cx, cz }`, a tile inside its chunk `{ localX, localZ }`. Not points: `tileCenter` and `worldCellCenter` make one. |
-| `Side`, `SIDES`, `SIDE_OFFSETS`, `opposite(side)` | A side of a tile (`north` is −Z), the four clockwise from north, one tile toward each as a `TileCoord`, and the side across. |
+| `Side`, `SIDES`, `SIDE_OFFSETS`, `opposite(side)`, `NEIGHBORS4` | A side of a tile (`north` is −Z), the four clockwise from north, one tile toward each as a `TileCoord`, the side across, and the four steps as `[dx, dz]` (east, west, south, north). |
 
 ---
 
@@ -232,43 +229,41 @@ Instance hooks get `dt` multiplied by their object's `timeRate` (see `GameObject
 
 1. **Move.** Every enabled `Rigidbody` moves by `velocity * dt` on XZ, keeping its previous position in `prevX` / `prevZ`. Then `World.reindex()` runs, so collision pairs come from the spatial hash instead of testing every pair of objects.
 2. **Collide.** Every enabled, solid, non-trigger `BoxCollider` on an object that also has a `Rigidbody` is checked against:
-   - the tile grid, through `World.sampleTerrain`, when `tileSize > 0`: it is pushed out of `blocked` cells back the way it came in (along Z out of a cell it walked into head-on, never sideways along a wall), or only out of the cell's `solids` when it lists them;
+   - the tile grid, through `world.terrain.sample`, when `terrain.tileSize > 0`: it is pushed out of `blocked` cells back the way it came in (along Z out of a cell it walked into head-on, never sideways along a wall), or only out of the cell's `solids` when it lists them;
    - other solid boxes (it is pushed out along X or Z);
    - static round obstacles: a `shape: 'cylinder'` collider (diameter `size.x`) pushes the box straight out from its axis, so bodies slide around barrels and wells instead of snapping to one side;
    - other padded bodies: when both colliders have `pad > 0`, they **shove** each other along the walking direction (`SHOVE_YIELD`) instead of blocking;
-   - cliffs: `sampleTerrain`'s `height` and `climbable` decide whether the step was allowed, and if not, the body goes back to its previous XZ position.
-3. **Ground.** A `Rigidbody` with `grounded` enabled always snaps its Y to `sampleTerrain`'s `worldY`.
+   - cliffs: the sample's `height` and `climbable` decide whether the step was allowed, and if not, the body goes back to its previous XZ position.
+3. **Ground.** A `Rigidbody` with `grounded` enabled always snaps its Y to the sample's `worldY`.
 
-`World.sampleTerrain` returns `{ height, worldY, blocked, climbable, solids? }` or `undefined`. Override it if you have a heightfield or a grid; by default there is no terrain. `solids` (world XZ boxes) makes a blocked tile only partly solid, as for a wall one board thick down its middle: bodies collide with the boxes and stand in the rest of the cell, while routes and sight that go by `blocked` still treat the cell as a wall.
+`Terrain.sample` returns `{ surface, height, worldY, blocked, climbable, wade, solids? }`, or `undefined` off the map. A body already in a `wade` tile (a river) walks on through others and out; none walks in. `solids` (world XZ boxes) makes a blocked tile only partly solid, as for a wall one board thick down its middle: bodies collide with the boxes and stand in the rest of the cell, while routes and sight that go by `blocked` still treat the cell as a wall.
 
 `Rigidbody` has `kinematic` and `mass`, but `stepPhysics` does not use them yet.
 
 ---
 
-## Chunks
+## Terrain and chunks
 
-A tile grid can be split into square `Chunk<T>`s. Each chunk holds `size` × `size` tiles, each `cellSize` meters wide, stored row by row, and sits at chunk coordinate `origin`. `T` is the host's own tile type: Kindling never looks inside a tile, and `sampleTerrain` is still up to the host.
+`world.terrain` is a `Terrain`: the tile grid, split into square `Chunk<T>`s. Each chunk holds `size` × `size` tiles, each `cellSize` meters wide, stored row by row, and sits at chunk coordinate `origin`. A tile is a `TileSpec` plus the host's own fields: `surface` (the host's word for its top, never read here), `height` in whole tile heights, `deck` (meters feet stand above that: a floor sheet, a riverbed), `blocked`, `wade`, `top` (how tall a block stands, for `linecast`), and `climb`.
+
+**Climbs.** A tile with a `climb` is a stair or slope: its head at its own height, its foot `rise` lower (one `tileHeight` by default), in `steps` (`terrain.steps`, 4, by default; 0 is a smooth slope). Its `flights` (tile-local `foot` → `head`, each with an optional `width`, `from` / `to` share of the rise and `steps`) may turn a corner or start mid-tile; left out, it is one straight flight up toward `climbAt(tile)`: the open floor at its height among its neighbors (across chunk borders), else a higher climb, else away from lower ground. `sample` puts feet on the highest flight over a point (the foot where none is), `flightsAt(tile)` spells the shorthand out, `climbEnds(tile)` names the sides a route may step on and off by, and the default `solidsOf` stands side strips (`stairSide`, kept `stairMouth` back from an open end) along each flight rising more than `stepOver`.
 
 ```ts
-world.tileSize = 1;
-world.chunkSize = 16;
-world.addChunk(new Chunk('meadow', { cx: 0, cz: 0 }, 16, 1, tiles)); // must match chunkSize / tileSize
-world.tileAtWorld(3.5, 7.5); // tiles[7 * 16 + 3]
+world.terrain.tileSize = 1;
+world.terrain.chunkSize = 16;
+world.terrain.tileHeight = 0.7;
+world.terrain.register(new Chunk('meadow', { cx: 0, cz: 0 }, 16, 1, tiles)); // must match chunkSize / tileSize
+world.terrain.tileAtWorld(3.5, 7.5); // tiles[7 * 16 + 3]
+world.terrain.sample(3.5, 7.5);      // feet at height * tileHeight + deck
 ```
+
+Every registered chunk's tiles answer, whether its objects are in the world or not; a chunk asked for that is not registered comes from `fetch(cx, cz)` once (override it to decode or download on demand; a miss is remembered). `addCover({ bounds, sample })` lays a surface feet rest on over tiles (a lowered drawbridge, a road): where it answers, its height wins and the tile is not blocked. A host subclasses `Terrain` to override `spawn(chunk)` (a chunk's objects, the first time it loads), `solidsOf` (boxes inside a blocked tile: a wall one board thick) or `sample`, and names the subclass in `KindlingTypes.terrain` and as its world's `terrain` field. Lookups: `chunkAt(cx, cz)`, `chunkAtWorld(x, z)`, `chunkCoordAt(x, z)`, `tileCoordAt(x, z)`, `tileCenter({ tx, tz })`, `bounds()` (every registered chunk; the exported `chunkBounds(chunks)` boxes any list).
 
 Chunk helpers: `tile(localX, localZ)`, `forEachTile((tile, localX, localZ) => …)`, `tileAtWorld`, `worldToLocal`, `worldCellCenter`, `worldOriginX/Z`, `distanceTo(x, z)`.
 
-**Streaming.** Put a `ChunkStreamer` on one object and give it every chunk in the scene. On each `lateUpdate` it loads the chunks within `viewRadius` of an enabled `StreamingAnchor` (measured in meters to the chunk's edge), and unloads the ones farther away than `viewRadius + hysteresis`. Without any anchors, nothing changes.
+**Streaming.** Put a `ChunkStreamer` on one object. On each `lateUpdate` it loads (`terrain.load`) the chunks within `viewRadius` of an enabled `StreamingAnchor` (measured in meters to the chunk's edge), and unloads the ones farther away than `viewRadius + hysteresis`. An enabled `Camera` is an anchor too, of its `sight` (how far along the ground it can show anything: the scene fog's far end, else `far`, at the corners of the view), so nothing the camera could show is missing whichever way it turns. Without any anchors or cameras, nothing changes.
 
-```ts
-class Stream extends ChunkStreamer<MyChunk> {
-	override spawn(chunk: MyChunk): void { /* first load only: add its objects */ }
-}
-const stream = systems.addComponent(Stream, { chunks: allChunks });
-stream.loadAll(); // load the whole scene, e.g. before captureWorld
-```
-
-Unloading a chunk **parks** every object whose `ChunkBound.chunkID` is that chunk's `id` (with `World.remove`). Loading the chunk again adds the same objects back exactly as they were, so `spawn` never runs twice for one chunk. Parked objects are not in `world.objects`, so call `loadAll()` before `captureWorld` or `restoreWorld`. The next `stream()` parks the far ones again.
+Unloading a chunk **parks** every object whose `ChunkBound.chunkID` is that chunk's `id` (with `World.remove`). Loading the chunk again adds the same objects back exactly as they were, so `spawn` never runs twice for one chunk; `terrain.objectsOf(chunk)` is its objects, in the world or parked. `terrain.loadAll()` loads everything.
 
 ---
 
@@ -282,10 +277,12 @@ class Door extends Component {
 	open = false;
 }
 
-const fresh = captureWorld(world);              // right after building the scene
-const save = diffWorld(fresh, captureWorld(world)); // later: changed fields, removed IDs, the allocID counter
+const fresh = captureWorld(world);  // right after building the scene, before any chunk loads
+const save = saveWorld(world, fresh); // later: changed fields, removed IDs, each chunk's own, the allocID counter
 restoreWorld(rebuilt, save, (recipe) => spawn(rebuilt, recipe));
 ```
+
+- **Chunks.** `captureWorld` keeps the world's own objects (those with no `ChunkBound`). Each chunk's objects are captured by `Terrain.load` the first time it loads, and `saveWorld` takes `Terrain.save()`: each chunk that has loaded against that, parked ones included, and the restored slices still waiting for a chunk that has not, so nothing has to load to be saved. `restoreWorld` applies a chunk's part when it loads (at once if it already has).
 
 - **`static saved`** lists the fields a component keeps. `saveState()` and `loadState()` read and write them. Override those two for state that is not a plain field: `Transform` saves its world pose, and `BoxCollider` its `solid` and `isTrigger`.
 - **Diffs.** Objects are matched by `id`, and components by class name (a second component of the same class on one object is `Name#1`). Only the fields that changed are stored. Class names must survive minification (`esbuild.keepNames`).
@@ -303,6 +300,8 @@ restoreWorld(rebuilt, save, (recipe) => spawn(rebuilt, recipe));
 - `off` frees the shadow maps.
 - `static` uses the still maps only. Skinned models cast soft capsule shadows instead: one upright capsule each, taken from the bind pose, for the 16 models nearest the camera. These block every point and directional light on `ToonMaterial` surfaces.
 - `dynamic` (the default) copies the still maps into live ones each frame and draws only the moving casters on top, for the sun and for the `maxMovingShadows` nearest point lights with moving casters.
+
+**Point lights.** Three.js builds every lit shader for how many point lights the scene has and how many of them cast shadows, and builds them all again when either count changes, which freezes the game (for seconds on a laptop). So the counts only grow: dark spare lights far below the world keep the scene at the most point lights it has had, and two more, and at the most shadowed ones it has had (up to `maxPointShadows`). A lamp put out, or streamed out with its chunk, leaves a spare in its place, and a torch lit or a fire catching takes one, so neither recompiles. A dark point light costs every lit pixel one branch, not its light and shadow.
 
 The look's sun frames every still caster from a fixed direction. `pointShadowMapSize` (default 256) and `directionalShadowMapSize` (default 1024) set the size of the maps, clamped to the GPU's largest texture size.
 
@@ -336,7 +335,7 @@ A pattern's `patternScale` is the height of one course in meters on the sides, a
 
 `outline: false` draws no ink for a surface's own edges, such as grass or water; an inked surface in front of it still draws its full line over it. Opaque surfaces write alpha -1 as the mask; transparent ones keep their alpha for blending and leave the mask beneath them untouched (set `transparent` before `outline`).
 
-The mesh kit (`lathe`, `bevelBox`, `tube`, `blob`, `ribbon`) builds prop geometry in meters, with Y up. The host supplies the materials and any instancing.
+The mesh kit (`lathe`, `bevelBox`, `tube`, `blob`, `ribbon`) builds prop geometry in meters, with Y up; `solidMesh(geo, mat, cast = true)` is a mesh that receives shadows and casts them. The host supplies the materials and any instancing.
 
 `Renderer.outline` (an `OutlinePass`) draws ink lines from the scene's depth in a single fullscreen pass, with no extra draw calls per object. Set its `color` per scene with `RendererLook.ink`, and its `width`, how far ink reaches to each side of an edge, in pixels at 1080p with the camera 10 meters up; lines thin with the square root of camera height, down to one pixel. Set `enabled = false` to render straight to the canvas. The ink is drawn after everything else, transparent objects included; `overInk(material)` lets an effect (a flame, a glow, a trail) wipe out the ink beneath it, in proportion to how much it covers. Other see-through materials need `underInk(material)` so that ink falls on them as on whatever is behind them; ToonMaterial's `outline: false` does this for its transparent surfaces.
 
@@ -357,15 +356,15 @@ The mesh kit (`lathe`, `bevelBox`, `tube`, `blob`, `ribbon`) builds prop geometr
 
 `world.audio` is a Web Audio mixer. Its music scores are procedural.
 
-`playRecording` plays a finished audio file (a URL or an `ArrayBuffer`) on the music output, so music volume, mute and duck apply, but it plays dry, without the music bus's room reverb. By default it plays from 0 to the end of the file and then repeats. Pass `{ start, end }` in seconds to play from 0 until `end`, then jump back to `start` and repeat that span. Pause, seek and the beat clock work on a recording the same way they do on a score (at 60 BPM, so one beat is one second; the bar ends at `end`).
+`playMusic` plays a `Score` or a `Track`: a finished audio file (`recording`, a URL or an `ArrayBuffer`) on the music output, so music volume, mute and duck apply, but dry, without the music bus's room reverb. By default a track plays from 0 to the end of the file and then repeats. Give `start` and `end` in seconds to play from 0 until `end`, then jump back to `start` and repeat that span; `id` names it and `gain` scales it. The promise `playMusic` returns resolves once the music plays (a track is fetched and decoded first). Pause, seek and the beat clock work on a track the same way they do on a score (at 60 BPM, so one beat is one second; the bar ends at `end`).
 
-Without an `AudioContext` (in Node tests, or headless) the mixer does nothing and stays silent. While a score, recording or loop is playing, the mixer schedules itself, so you only call `update()` yourself when headless.
+Without an `AudioContext` (in Node tests, or headless) the mixer does nothing and stays silent. While a score, track or loop is playing, the mixer schedules itself, so you only call `update()` yourself when headless.
 
 ```ts
 world.audio.connectUnlock(canvas); // click / key / touch → resume
 await world.audio.resume();
 world.audio.playMusic(score);
-await world.audio.playRecording('/theme.mp3'); // finished file, dry, loops
+await world.audio.playMusic({ recording: '/theme.mp3', start: 8, end: 120 }); // finished file, dry, loops 8–120 s
 world.audio.playSfx(patch, { x, z }); // optional world position
 world.audio.playLoop('river', patch, { x, z, hear: 16 });
 world.audio.stopLoop('river');
@@ -483,7 +482,7 @@ await registerGltf('tri', '/triangle.gltf');
 - turn the hand so a held prop points the right way (a sword's tip and its flat) with `aimHeld(mesh, 'right', prop, axis, side, point, facing, weight)`;
 - draw a rigged bow's string with `drawBow(bow, nock)`.
 
-`humanBone(mesh, 'head')` and `restTurn(mesh, bone)` give you the bones. `scripts/shoot.mjs <url> <out.png>` screenshots a page in headless Chrome once the page's title is `ready` (the playground's `character.html?shot=turnaround|faces` works this way).
+`humanBone(mesh, 'head')` and `restTurn(mesh, bone)` give you the bones. `otherHand(hand)` is the hand a `Hand` is not. `scripts/shoot.mjs <url> <out.png>` screenshots a page in headless Chrome once the page's title is `ready` (the playground's `character.html?shot=turnaround|faces` works this way).
 
 ---
 
@@ -492,8 +491,8 @@ await registerGltf('tri', '/triangle.gltf');
 A typical host:
 
 - `class MyGame extends Game<MyWorld>` passes in its own `World`, sets `paused` to pause, and overrides `tick` (calling `super.tick`) for extra work each frame.
-- `class MyWorld extends World` sets `tileSize`, overrides `sampleTerrain` and adds its own queries.
-- It fills in `KindlingTypes` once, and from then on `go.world`, `world.chunks`, `chunkAtWorld` and `tileAtWorld` return its own types everywhere. `GameObject` and `Component` need no subclass for that:
+- `class MyTerrain extends Terrain` sets `tileSize` and `chunkSize`, overrides `spawn` and what else it needs; `class MyWorld extends World` sets `override readonly terrain:MyTerrain = new MyTerrain(this)` and adds its own queries.
+- It fills in `KindlingTypes` once, and from then on `go.world`, `world.terrain`, its `chunks` and `tileAtWorld` return its own types everywhere. `GameObject` and `Component` need no subclass for that:
 
 ```ts
 declare module '@arc-director/kindling' {

@@ -19,6 +19,7 @@ import { withWorldVerbs, WorldVerbsFeature } from '../world/WorldVerbsFeature.js
 import { ArcDirector } from './ArcDirector.js';
 import { featureGetter } from './Feature.js';
 import { addRegions, RegionsFeature } from './RegionsFeature.js';
+import { withRequirements, RequirementsFeature } from './RequirementsFeature.js';
 
 /**
  * The one place the built-in features', queues' and providers' shortcuts go onto `ArcDirector`: each `with*` / `add*`
@@ -36,6 +37,8 @@ Object.assign(ArcDirector.prototype, {
 	getStealing: featureGetter(StealingFeature),
 	addRegions,
 	getRegions: featureGetter(RegionsFeature),
+	withRequirements,
+	getRequirements: featureGetter(RequirementsFeature),
 	withSight,
 	getSight: featureGetter(SightFeature),
 	withInventory,

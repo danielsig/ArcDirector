@@ -7,29 +7,22 @@ import {
 	type NativeFn,
 	type Stringifiers,
 } from 'arc-director';
-import {
-	Bridge,
-	Celebrating,
-	Chest,
-	Door,
-	Interior,
-	Named,
-	SpeechBubble,
-	Vitals,
-	Wanted,
-	alarmActive,
-} from '../engine/components';
+import { Celebrating, Named, SpeechBubble, Vitals, Wanted, alarmActive, idOf } from '../engine/components';
+import { Interior } from '../kit/houses/interior';
 import type { DemoWorld } from '../engine/demo-world';
 import { NPCInput } from '../characters/NPCInput';
 import { Pickupable } from '../items/item-components';
 import { listCarried } from '../items/inventory';
 import { itemID, type ItemInstance } from '../items/instance';
 import { coinsOf } from '../items/wallet';
-import { enclosureAt } from '../world/interior';
+import { enclosureAt } from '../kit/houses/interior';
 import { CLEAR_RANGE } from './talk-attend';
-import { idOf, isLiving } from './names';
+import { isLiving } from './names';
 import { tagsOf } from './perception';
 import type { GameHost } from './adapter';
+import { Bridge } from '../kit/bridge/bridge';
+import { Chest } from '../kit/chests/chest';
+import { Door } from '../kit/door/door';
 
 /** Id of the open theft `thief` is wanted for, as watches see it in `events`. */
 export function theftID(thief:GameObject):string {
@@ -176,7 +169,7 @@ export function kernelsOf(
 	here?:XZ,
 	extraTags?:(go:GameObject)=>string[],
 ) {
-	const hidePlayer = world.playerInperceivable && world.playerHits.size === 0;
+	const hidePlayer = world.playerImperceptible && world.playerHits.size === 0;
 	const me = entityOf(character);
 	me.fields = { gold: { kind: 'number', value: coinsOf(character) } };
 	const scan = scanOf(world);
@@ -233,22 +226,7 @@ export function kernelsOf(
 		},
 		isOpen: (who:ExprEntity) => {
 			const go = lookupGo(world, who.id);
-			if (!go) {
-				return undefined;
-			}
-			const door = go.getComponent(Door);
-			if (door) {
-				return door.open;
-			}
-			const bridge = go.getComponent(Bridge);
-			if (bridge) {
-				return bridge.open;
-			}
-			const chest = go.getComponent(Chest);
-			if (chest) {
-				return chest.open;
-			}
-			return undefined;
+			return (go?.getComponent(Door) ?? go?.getComponent(Bridge) ?? go?.getComponent(Chest))?.open;
 		},
 		isReady: (who:ExprEntity, verb:string) => lookupGo(world, who.id)?.getComponent(NPCInput)?.isReady(verb),
 	};
@@ -298,7 +276,7 @@ export function gameFunctions(host:GameHost):Record<string, NativeFn> {
 
 export function scanWorld(host:GameHost):void {
 	host.world.forEachComponent(Door, (door, go) => {
-		const name = go.getComponent(Named)?.id ?? go.id;
+		const name = idOf(go);
 		const was = host.doorOpen.get(name);
 		if (was === undefined) {
 			host.doorOpen.set(name, door.open);
@@ -315,7 +293,7 @@ export function scanWorld(host:GameHost):void {
 		host.doorOpen.set(name, door.open);
 	});
 	host.world.forEachComponent(Chest, (chest, go) => {
-		const name = go.getComponent(Named)?.id ?? go.id;
+		const name = idOf(go);
 		const was = host.chestOpen.get(name);
 		if (was === undefined) {
 			host.chestOpen.set(name, chest.open);

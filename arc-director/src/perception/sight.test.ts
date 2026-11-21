@@ -115,7 +115,7 @@ const GLEN:Sight = {
 
 const STREET:Sight = {
 	self: { id: 'Holt', point: [4, 8], facing: [1, 0] },
-	ambient: 'A busy street flea market.',
+	ambient: 'A busy street marketplace.',
 	objects: [
 		person('Potter', [16.2, 8]),
 		seen('PotterStall', [16.6, 8], { tags: ['landmark'], interactable: true, movable: false }),
@@ -194,7 +194,7 @@ describe('formatSight', () => {
 		assert.equal(/\bagents\b/.test(paragraph), false);
 		assert.equal(
 			paragraph,
-			'A busy street flea market. boxes. Cutler next to *CutlerStall*. Weaver next to *WeaverStall*. Baker next to *BakerStall*. Potter next to *PotterStall*. Brant 15 paces in front of you. Cass 15 paces in front of you. Pike 2 paces to your right. VisitorA 10 paces in front of you. VisitorB 10 paces ahead to your right. VisitorC 5 paces ahead to your right. *EastGate* 20 paces in front of you. *WestGate* 4 paces behind you. Apple 5 paces in front of you. Bowl 15 paces in front of you. Candle 10 paces in front of you. Knife 15 paces in front of you. Loaf 5 paces ahead to your left. Scarf 5 paces ahead to your right.',
+			'A busy street marketplace. boxes. Cutler next to *CutlerStall*. Weaver next to *WeaverStall*. Baker next to *BakerStall*. Potter next to *PotterStall*. Brant 15 paces in front of you. Cass 15 paces in front of you. Pike 2 paces to your right. VisitorA 10 paces in front of you. VisitorB 10 paces ahead to your right. VisitorC 5 paces ahead to your right. *EastGate* 20 paces in front of you. *WestGate* 4 paces behind you. Apple 5 paces in front of you. Bowl 15 paces in front of you. Candle 10 paces in front of you. Knife 15 paces in front of you. Loaf 5 paces ahead to your left. Scarf 5 paces ahead to your right.',
 		);
 	});
 

@@ -1,4 +1,5 @@
 import type { Component, ComponentState } from './Component.js';
+import { ChunkBound } from './ChunkStreamer.js';
 import { allocSerial, resetAllocID, type GameObject } from './GameObject.js';
 import type { World } from './World.js';
 
@@ -8,11 +9,15 @@ export type ObjectState = { recipe?:unknown; components:Record<string, Component
 /** Every object's state, by id. */
 export type WorldState = Record<string, ObjectState>;
 
+/** What differs from fresh among some objects: changed fields by id (whole state, with its `recipe`, for an object fresh lacked) and ids that are gone. */
+export type ChunkSave = { changed:WorldState; removed:string[] };
+
 /**
- * What differs from a fresh world: changed fields by id (whole state for objects
- * the fresh world does not have), ids that are gone, and the `allocID` serial.
+ * What differs from a fresh world: the scene's own objects (no `ChunkBound`) against its boot state, each chunk that
+ * has loaded against its own fresh state or the restored slice still waiting for it (a chunk with nothing changed is
+ * left out), and the `allocID` serial.
  */
-export type WorldSave = { changed:WorldState; removed:string[]; serial:number };
+export type WorldSave = ChunkSave & { chunks:Record<string, ChunkSave>; serial:number };
 
 /** `Container`, then `Container#1` for a second one on the same object. */
 function keyed(go:GameObject):[string, Component][] {
@@ -25,10 +30,10 @@ function keyed(go:GameObject):[string, Component][] {
 	});
 }
 
-/** Saved state of every object in `world`. */
-export function captureWorld(world:World):WorldState {
+/** Saved state of `objects`. */
+export function captureObjects(objects:Iterable<GameObject>):WorldState {
 	const out:WorldState = {};
-	for (const go of world.objects) {
+	for (const go of objects) {
 		const components:Record<string, ComponentState> = {};
 		for (const [key, c] of keyed(go)) {
 			const state = c.saveState();
@@ -41,8 +46,18 @@ export function captureWorld(world:World):WorldState {
 	return out;
 }
 
-/** What `now` changed against `fresh` (a `captureWorld` of the same scene, just built). */
-export function diffWorld(fresh:WorldState, now:WorldState):WorldSave {
+/** The world's own objects: those bound to no chunk (the player, the cast, the systems). */
+function sceneObjects(world:World):GameObject[] {
+	return world.objects.filter((go) => !go.getComponent(ChunkBound));
+}
+
+/** Saved state of the world's own objects, the boot baseline `saveWorld` diffs against (chunks take their own). */
+export function captureWorld(world:World):WorldState {
+	return captureObjects(sceneObjects(world));
+}
+
+/** What `now` changed against `fresh`. */
+export function diffState(fresh:WorldState, now:WorldState):ChunkSave {
 	const changed:WorldState = {};
 	for (const [id, state] of Object.entries(now)) {
 		const was = fresh[id];
@@ -66,19 +81,31 @@ export function diffWorld(fresh:WorldState, now:WorldState):WorldSave {
 			changed[id] = { components };
 		}
 	}
-	return { changed, removed: Object.keys(fresh).filter((id) => !now[id]), serial: allocSerial() };
+	return { changed, removed: Object.keys(fresh).filter((id) => !now[id]) };
 }
 
-/** Apply `save` to a freshly built world. `spawn` rebuilds (and adds) an object from its `recipe`. */
+/** The world against `fresh` (its `captureWorld` at boot), and its chunks (`Terrain.save`). */
+export function saveWorld(world:World, fresh:WorldState):WorldSave {
+	return { ...diffState(fresh, captureWorld(world)), chunks: world.terrain.save(), serial: allocSerial() };
+}
+
+/** Apply `save` to a freshly built world; its chunks' slices apply as each loads. `spawn` rebuilds (and adds) an object from its `recipe`. */
 export function restoreWorld(world:World, save:WorldSave, spawn:(recipe:unknown)=>GameObject | undefined):void {
-	const byID = new Map(world.objects.map((go) => [go.id, go]));
+	applyState(world, sceneObjects(world), save, spawn);
+	world.terrain.restore(save.chunks, spawn);
+	world.flushDestroy();
+	resetAllocID(save.serial);
+}
+
+/** Apply `save` to `objects`: destroy the removed, load the changed, and rebuild with `spawn` what `objects` lacks. */
+export function applyState(world:World, objects:readonly GameObject[], save:ChunkSave, spawn:(recipe:unknown)=>GameObject | undefined):void {
+	const byID = new Map(objects.map((go) => [go.id, go]));
 	for (const id of save.removed) {
 		const go = byID.get(id);
 		if (go) {
 			world.destroy(go);
 		}
 	}
-	world.flushDestroy();
 	for (const [id, state] of Object.entries(save.changed)) {
 		const go = byID.get(id) ?? (state.recipe === undefined ? undefined : spawn(state.recipe));
 		if (!go) {
@@ -89,5 +116,4 @@ export function restoreWorld(world:World, save:WorldSave, spawn:(recipe:unknown)
 			components.get(key)?.loadState(fields);
 		}
 	}
-	resetAllocID(save.serial);
 }

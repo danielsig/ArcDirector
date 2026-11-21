@@ -355,7 +355,7 @@ function onPick(row:SaySuggestion, e:MouseEvent):void {
 <template>
 	<div v-if="hud.sayOpen" ref="root" class="hud-say" aria-label="say">
 		<label class="who" for="hud-say-input">
-			<template v-if="hud.sayTo">To {{ hud.sayTo }}</template>
+			<template v-if="hud.sayPeers.length">To {{ hud.sayPeers.join(', ') }}</template>
 			<template v-else>No one in earshot</template>
 			<span class="hint">Enter send · Tab complete · / commands · @Name</span>
 		</label>

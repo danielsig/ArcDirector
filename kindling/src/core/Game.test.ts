@@ -10,6 +10,7 @@ class Stepper extends Component {
 	public fixed = 0;
 	public frames = 0;
 	public lastDT = -1;
+	public lateDTs:number[] = [];
 
 	public override fixedUpdate(dt:number):void {
 		this.fixed += 1;
@@ -18,6 +19,10 @@ class Stepper extends Component {
 	public override update(dt:number):void {
 		this.frames += 1;
 		this.lastDT = dt;
+	}
+
+	public override lateUpdate(dt:number):void {
+		this.lateDTs.push(dt);
 	}
 }
 
@@ -44,7 +49,7 @@ describe('Game.tick', () => {
 		assert.equal(stepper.frames, 1);
 	});
 
-	it('stands still while paused', () => {
+	it('stands still while paused, presenting with dt 0', () => {
 		const game = new Game();
 		const go = new GameObject('step');
 		const stepper = go.addComponent(Stepper);
@@ -53,6 +58,8 @@ describe('Game.tick', () => {
 		game.tick(Time.fixedDeltaTime * 2);
 		assert.equal(Time.time, 0);
 		assert.equal(stepper.frames, 0);
+		assert.equal(stepper.fixed, 0);
+		assert.deepEqual(stepper.lateDTs, [0]);
 	});
 
 	it('restarts the clock at a saved time with no fixed steps owed', () => {
